@@ -16,7 +16,7 @@ impl Pass for LicmPass {
         let mut hoisted = 0usize;
         // Disabled: LICM+coalesce interaction causes value corruption.
         // Using codegen-level const register pinning instead.
-        return PassResult { changed: false, stats: vec![("hoisted".into(), 0)] };
+        return PassResult { changed: false, stats: vec![("hoisted".into(), 0)], ..Default::default() };
 
         for func in &mut module.functions {
             func.rebuild_cfg();
@@ -147,6 +147,7 @@ impl Pass for LicmPass {
         PassResult {
             changed,
             stats: vec![("hoisted".into(), hoisted)],
+            ..Default::default()
         }
     }
 }

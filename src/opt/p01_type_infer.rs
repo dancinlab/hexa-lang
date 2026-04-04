@@ -34,6 +34,7 @@ impl Pass for TypeInferPass {
         PassResult {
             changed,
             stats: vec![("inferred".into(), inferred)],
+            ..Default::default()
         }
     }
 }

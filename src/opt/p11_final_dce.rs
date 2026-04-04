@@ -193,6 +193,7 @@ impl Pass for FinalDcePass {
                 ("simplified_phis".into(), simplified_phis),
                 ("removed_blocks".into(), removed_blocks),
             ],
+            ..Default::default()
         }
     }
 }

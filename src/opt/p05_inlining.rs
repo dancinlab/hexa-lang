@@ -32,6 +32,7 @@ impl Pass for InliningPass {
                 ("inlined".into(), inlined),
                 ("threshold".into(), INLINE_THRESHOLD),
             ],
+            ..Default::default()
         }
     }
 }

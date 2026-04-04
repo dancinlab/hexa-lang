@@ -173,6 +173,7 @@ impl Pass for StrengthReductionPass {
         PassResult {
             changed,
             stats: vec![("reduced".into(), reduced)],
+            ..Default::default()
         }
     }
 }

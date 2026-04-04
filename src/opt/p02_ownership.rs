@@ -33,6 +33,7 @@ impl Pass for OwnershipProofPass {
         PassResult {
             changed,
             stats: vec![("promoted".into(), promoted)],
+            ..Default::default()
         }
     }
 }
@@ -219,12 +220,164 @@ fn promote_allocas(func: &mut IrFunction) -> usize {
         }
     }
 
-    // Rebuild CFG after Phase 2 modifications before running Phase 1
+    // Rebuild CFG after Phase 2 modifications
     if promoted > 0 {
         func.rebuild_cfg();
     }
 
-    // Phase 1: Same-block forwarding (runs after Phase 2 so phi nodes are
+    // ── Phase 3: Cross-block forwarding for diamond/triangle CFGs ──
+    // For each promotable alloca, propagate reaching definitions through
+    // the CFG. At merge points where predecessors disagree, insert phi.
+    {
+        let promotable_vec: Vec<ValueId> = promotable.iter().copied().collect();
+        for alloca_id in &promotable_vec {
+            let has_cross_block_load = func.blocks.iter().any(|b| {
+                b.instructions.iter().any(|i| {
+                    i.op == OpCode::Load
+                        && matches!(i.operands.first(), Some(Operand::Value(v)) if v == alloca_id)
+                })
+            });
+            if !has_cross_block_load { continue; }
+
+            // Compute reaching definition at exit of each block
+            let block_ids: Vec<BlockId> = func.blocks.iter().map(|b| b.id).collect();
+            let mut reaching_at_exit: HashMap<BlockId, Option<ValueId>> = HashMap::new();
+
+            for &bid in &block_ids {
+                let block = func.block(bid).unwrap();
+                let incoming_def: Option<ValueId> = if block.preds.is_empty() {
+                    None
+                } else if block.preds.len() == 1 {
+                    reaching_at_exit.get(&block.preds[0]).copied().flatten()
+                } else {
+                    let pred_defs: Vec<Option<ValueId>> = block.preds.iter()
+                        .filter_map(|p| reaching_at_exit.get(p))
+                        .copied()
+                        .collect();
+                    if pred_defs.len() != block.preds.len() {
+                        None
+                    } else {
+                        let defined: Vec<ValueId> = pred_defs.iter().filter_map(|d| *d).collect();
+                        if defined.is_empty() {
+                            None
+                        } else if defined.iter().all(|d| *d == defined[0]) {
+                            Some(defined[0])
+                        } else {
+                            None // conflict — will insert phi in second pass
+                        }
+                    }
+                };
+
+                let mut current_def = incoming_def;
+                for instr in &block.instructions {
+                    if instr.op == OpCode::Store {
+                        if let Some(Operand::Value(ptr)) = instr.operands.get(0) {
+                            if ptr == alloca_id {
+                                if let Some(Operand::Value(val)) = instr.operands.get(1) {
+                                    current_def = Some(*val);
+                                }
+                            }
+                        }
+                    }
+                }
+                reaching_at_exit.insert(bid, current_def);
+            }
+
+            // Second pass: insert phis at merge points and replace loads
+            for &bid in &block_ids {
+                let preds = func.block(bid).map(|b| b.preds.clone()).unwrap_or_default();
+                if preds.len() < 2 { continue; }
+
+                let pred_defs: Vec<(BlockId, Option<ValueId>)> = preds.iter()
+                    .map(|p| (*p, reaching_at_exit.get(p).copied().flatten()))
+                    .collect();
+                if !pred_defs.iter().all(|(_, d)| d.is_some()) { continue; }
+
+                let defined_vals: Vec<(BlockId, ValueId)> = pred_defs.iter()
+                    .map(|(p, d)| (*p, d.unwrap()))
+                    .collect();
+                if defined_vals.iter().all(|(_, v)| *v == defined_vals[0].1) { continue; }
+
+                let phi_vid = func.fresh_value(IrType::I64);
+                let phi_instr = Instruction {
+                    result: phi_vid,
+                    op: OpCode::Phi,
+                    operands: defined_vals.iter()
+                        .map(|(b, v)| Operand::PhiEntry(*b, *v))
+                        .collect(),
+                    ty: IrType::I64,
+                };
+
+                if let Some(block) = func.block_mut(bid) {
+                    block.instructions.insert(0, phi_instr);
+                }
+
+                let mut current_val = phi_vid;
+                if let Some(block) = func.block_mut(bid) {
+                    for instr in &mut block.instructions {
+                        if instr.op == OpCode::Store {
+                            if let Some(Operand::Value(ptr)) = instr.operands.get(0) {
+                                if *ptr == *alloca_id {
+                                    if let Some(Operand::Value(val)) = instr.operands.get(1) {
+                                        current_val = *val;
+                                    }
+                                }
+                            }
+                        }
+                        if instr.op == OpCode::Load {
+                            if let Some(Operand::Value(ptr)) = instr.operands.first() {
+                                if *ptr == *alloca_id {
+                                    instr.op = OpCode::Copy;
+                                    instr.operands = vec![Operand::Value(current_val)];
+                                    promoted += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                reaching_at_exit.insert(bid, Some(current_val));
+            }
+
+            // Third pass: forward single-reaching-def to single-predecessor blocks
+            for &bid in &block_ids {
+                let preds = func.block(bid).map(|b| b.preds.clone()).unwrap_or_default();
+                if preds.len() != 1 { continue; }
+                let pred_def = reaching_at_exit.get(&preds[0]).copied().flatten();
+                if pred_def.is_none() { continue; }
+                let fwd_val = pred_def.unwrap();
+
+                let mut cur = fwd_val;
+                if let Some(block) = func.block_mut(bid) {
+                    for instr in &mut block.instructions {
+                        if instr.op == OpCode::Store {
+                            if let Some(Operand::Value(ptr)) = instr.operands.get(0) {
+                                if *ptr == *alloca_id {
+                                    if let Some(Operand::Value(val)) = instr.operands.get(1) {
+                                        cur = *val;
+                                    }
+                                }
+                            }
+                        }
+                        if instr.op == OpCode::Load {
+                            if let Some(Operand::Value(ptr)) = instr.operands.first() {
+                                if *ptr == *alloca_id {
+                                    instr.op = OpCode::Copy;
+                                    instr.operands = vec![Operand::Value(cur)];
+                                    promoted += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if promoted > 0 {
+            func.rebuild_cfg();
+        }
+    }
+
+    // Phase 1: Same-block forwarding (runs after Phase 2+3 so phi nodes are
     // already placed and cross-block dataflow is captured)
     for block in &mut func.blocks {
         let mut last_stored: HashMap<ValueId, ValueId> = HashMap::new();

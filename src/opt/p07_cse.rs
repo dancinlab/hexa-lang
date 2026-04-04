@@ -87,6 +87,7 @@ impl Pass for CsePass {
         PassResult {
             changed,
             stats: vec![("eliminated".into(), eliminated)],
+            ..Default::default()
         }
     }
 }
@@ -120,6 +121,7 @@ enum OpKey {
     ImmF64Bits(u64),
     Value(u32),
     Block(u32),
+    Param(usize),
     Other,
 }
 
@@ -130,6 +132,7 @@ fn operand_key(op: &Operand) -> OpKey {
         Operand::ImmBool(b) => OpKey::ImmBool(*b),
         Operand::ImmF64(f) => OpKey::ImmF64Bits(f.to_bits()),
         Operand::Block(b) => OpKey::Block(b.0),
+        Operand::Param(i) => OpKey::Param(*i),
         _ => OpKey::Other,
     }
 }

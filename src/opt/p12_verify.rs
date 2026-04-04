@@ -100,6 +100,7 @@ impl Pass for VerifyPass {
         PassResult {
             changed: false, // verify never mutates
             stats: vec![("errors".into(), errors)],
+            ..Default::default()
         }
     }
 }

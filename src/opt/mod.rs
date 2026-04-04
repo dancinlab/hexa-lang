@@ -30,6 +30,7 @@ pub trait Pass {
 pub struct PassResult {
     pub changed: bool,
     pub stats: Vec<(String, usize)>,
+    pub elapsed_ns: u128,
 }
 
 /// Run the full σ=12 optimization pipeline.
@@ -56,7 +57,9 @@ pub fn run_pipeline(module: &mut IrModule) -> PipelineResult {
 
     let mut results = Vec::new();
     for pass in &passes {
-        let result = pass.run(module);
+        let start = std::time::Instant::now();
+        let mut result = pass.run(module);
+        result.elapsed_ns = start.elapsed().as_nanos();
         results.push((pass.name().to_string(), result));
     }
 
@@ -98,6 +101,16 @@ mod tests {
         let mut module = IrModule::new("test");
         let result = run_pipeline(&mut module);
         assert_eq!(result.pass_results.len(), 12);
+    }
+
+    #[test]
+    fn test_pass_result_has_elapsed_ns() {
+        let mut module = IrModule::new("test");
+        let result = run_pipeline(&mut module);
+        for (_name, pr) in &result.pass_results {
+            // elapsed_ns must exist and be >= 0
+            let _: u128 = pr.elapsed_ns;
+        }
     }
 
     #[test]

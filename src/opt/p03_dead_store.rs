@@ -88,6 +88,7 @@ impl Pass for DeadStoreElimPass {
                 ("eliminated".into(), eliminated),
                 ("forwarded".into(), forwarded),
             ],
+            ..Default::default()
         }
     }
 }

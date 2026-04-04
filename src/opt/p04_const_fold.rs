@@ -86,6 +86,7 @@ impl Pass for ConstFoldPass {
         PassResult {
             changed: changed_any,
             stats: vec![("folded".into(), total_folded)],
+            ..Default::default()
         }
     }
 }

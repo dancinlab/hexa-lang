@@ -57,6 +57,7 @@ impl Pass for CoalescePass {
         PassResult {
             changed,
             stats: vec![("coalesced".into(), coalesced)],
+            ..Default::default()
         }
     }
 }

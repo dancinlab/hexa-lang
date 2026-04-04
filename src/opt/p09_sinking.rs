@@ -39,6 +39,7 @@ impl Pass for CodeSinkingPass {
         PassResult {
             changed,
             stats: vec![("sunk".into(), sunk)],
+            ..Default::default()
         }
     }
 }
