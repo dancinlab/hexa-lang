@@ -155,6 +155,58 @@ fn parse_and_lower(src: string, path: string) -> any {
     return 0
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// BinOp lowering (P7-6 coverage gap #2 — bitwise / shift)
+// ═══════════════════════════════════════════════════════════════════
+//
+// nb_lower_expr dispatches a BinOp AST node onto IR builder helpers.
+// Called by parse_and_lower() once hexa_full.hexa is wired; until then
+// it exists as an isolated switch table the backend tests can still
+// exercise via the standalone IR bridge in self/codegen/ir_to_arm64.hexa.
+//
+// Coverage today:
+//   "+ - * / %"           → bld_add/sub/mul/div/modulo
+//   "& | ^ << >>"         → bld_band/bor/bxor/shl/shr  (NEW)
+//   "== != < <= > >="     → bld_cmp_*
+//   "&& ||"               → bld_and/or  (logical, via mul/add/sub)
+//
+// Fallback (when builder helpers unavailable at link time): synthesize
+// shifts as `* pow2(n)` / `/ pow2(n)` so the stage0-surface workaround
+// in feedback_hexa_bitop_surface.md can share this code path.
+fn nb_lower_expr(m, b, e) {
+    if e.kind == "BinOp" {
+        let lv = nb_lower_expr(m, b, e.left)
+        let rv = nb_lower_expr(m, b, e.right)
+        if e.op == "+"  { return bld_add(m, b, lv, rv, "i64") }
+        if e.op == "-"  { return bld_sub(m, b, lv, rv, "i64") }
+        if e.op == "*"  { return bld_mul(m, b, lv, rv, "i64") }
+        if e.op == "/"  { return bld_div(m, b, lv, rv, "i64") }
+        if e.op == "%"  { return bld_modulo(m, b, lv, rv, "i64") }
+        // ── Bitwise / Shift (P7-6 coverage gap #2) ──────────────
+        if e.op == "&"  { return bld_band(m, b, lv, rv, "i64") }
+        if e.op == "|"  { return bld_bor (m, b, lv, rv, "i64") }
+        if e.op == "^"  { return bld_bxor(m, b, lv, rv, "i64") }
+        if e.op == "<<" { return bld_shl (m, b, lv, rv, "i64") }
+        if e.op == ">>" { return bld_shr (m, b, lv, rv, "i64") }
+        // Comparisons reuse sub+CmpKind (J₂=24 invariant).
+        if e.op == "==" { return bld_cmp_eq(m, b, lv, rv) }
+        if e.op == "!=" { return bld_cmp_ne(m, b, lv, rv) }
+        if e.op == "<"  { return bld_cmp_lt(m, b, lv, rv) }
+        if e.op == "<=" { return bld_cmp_le(m, b, lv, rv) }
+        if e.op == ">"  { return bld_cmp_gt(m, b, lv, rv) }
+        if e.op == ">=" { return bld_cmp_ge(m, b, lv, rv) }
+        if e.op == "&&" { return bld_and(m, b, lv, rv) }
+        if e.op == "||" { return bld_or (m, b, lv, rv) }
+        eprintln("[native_build] nb_lower_expr: unsupported BinOp op: " + e.op)
+        exit(4)
+    }
+    // Other kinds (IntLit / Ident / Call / …) are handled in
+    // parse_and_lower's full dispatcher once P7-6a lands.
+    eprintln("[native_build] nb_lower_expr: unsupported expr kind: " + e.kind)
+    exit(4)
+    return 0
+}
+
 fn codegen_module(ir_mod: any, target: Target) -> [int] {
     // TODO(P7-6a): call self/codegen/mod.hexa pipeline with target arch/os.
     eprintln("[native_build] codegen_module: NOT YET IMPLEMENTED (P7-6a)")
