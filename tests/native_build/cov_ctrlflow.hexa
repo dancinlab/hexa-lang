@@ -1,0 +1,56 @@
+// tests/native_build/cov_ctrlflow.hexa — P7-6 coverage test
+//
+// Minimal example exercising if / while / for desugar through the
+// scripts/native_build.hexa orchestrator (nb_lower_stmt control-flow
+// cases). Exits with a computed int — any nonzero exit != expected
+// value signals a regression.
+//
+// Expected exit code: 42
+//
+//   if_sum      = 5        (cond true → 5, else → 10)
+//   while_sum   = 10       (0 + 1 + 2 + 3 + 4)
+//   for_sum     = 10       (0 + 1 + 2 + 3 + 4)   via Range 0..5
+//   total       = if_sum + while_sum + for_sum + 17 = 42
+//
+// No stdlib / runtime calls — pure arithmetic + control flow so the
+// native_build pipeline (parse → IR → codegen) stays on its minimum
+// AST subset (IntLit, BinOp, Ident, LetMut, Assign, If, While, For).
+//
+// Usage:
+//   hexa scripts/native_build.hexa tests/native_build/cov_ctrlflow.hexa
+//   ./build/cov_ctrlflow_darwin-arm64 ; echo $?   # → 42
+
+fn cov_if(x) {
+    let mut r = 0
+    if x < 10 {
+        r = 5
+    } else {
+        r = 10
+    }
+    return r
+}
+
+fn cov_while() {
+    let mut i = 0
+    let mut sum = 0
+    while i < 5 {
+        sum = sum + i
+        i = i + 1
+    }
+    return sum
+}
+
+fn cov_for() {
+    let mut sum = 0
+    for i in 0..5 {
+        sum = sum + i
+    }
+    return sum
+}
+
+fn main() {
+    let a = cov_if(3)         // 5
+    let b = cov_while()       // 10
+    let c = cov_for()         // 10
+    return a + b + c + 17     // 42
+}
