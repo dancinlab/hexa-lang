@@ -114,9 +114,17 @@ fn main() {
     let code_bytes = codegen_module(ir_mod, target)
 
     // ── Wrap in executable format ──────────────────────────────────
+    //
+    // native_build always produces a LOADABLE binary (target.kind == exec).
+    // Mach-O → MH_EXECUTE via macho_exec_wrap (entryoff = default CODE_OFF).
+    //   The relocatable-object path (MH_OBJECT / macho_obj_wrap) stays
+    //   available in self/codegen/macho.hexa for future `-c` style linker
+    //   input generation but is NOT reached from this driver.
+    // ELF  → ET_EXEC via elf_wrap_machine (existing P7-5 implementation).
     let bin_bytes = []
     if target.format == 0 {
-        bin_bytes = macho_wrap(code_bytes, target.arch)
+        let CODE_OFF = 768   // must match macho_exec_wrap internal constant
+        bin_bytes = macho_exec_wrap(code_bytes, CODE_OFF)
     } else {
         bin_bytes = elf_wrap(code_bytes, target.arch)
     }
@@ -162,12 +170,9 @@ fn codegen_module(ir_mod: any, target: Target) -> [int] {
     return []
 }
 
-fn macho_wrap(code: [int], arch: int) -> [int] {
-    // delegates to self/codegen/macho.hexa
-    return []
-}
-
-fn elf_wrap(code: [int], arch: int) -> [int] {
-    // delegates to self/codegen/elf.hexa
-    return []
-}
+// NOTE: macho_exec_wrap and elf_wrap are provided by self/codegen/macho.hexa
+// and self/codegen/elf.hexa respectively when this driver is linked against
+// the full codegen module. The stub wrappers that used to live here (returning
+// []) have been removed so the real implementations are reached at link time.
+// macho_obj_wrap remains exposed by self/codegen/macho.hexa for any future
+// `-c` / object-file target.
