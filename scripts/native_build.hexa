@@ -171,3 +171,35 @@ fn elf_wrap(code: [int], arch: int) -> [int] {
     // delegates to self/codegen/elf.hexa
     return []
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// nb_lower_expr (P7-6 hook) — expression lowering entrypoint
+// ═══════════════════════════════════════════════════════════════════
+//
+// Until parse_and_lower is wired end-to-end (P7-6a), this is a
+// documentation-only hook describing how the driver threads an AST
+// Call node into the shared IR lowering pipeline.
+//
+//   Call(callee, args)
+//     → recursively lower each arg via nb_lower_expr
+//     → collect arg_vids
+//     → dispatch via lower_call_by_name(m, b, callee_name, arg_vids, ret_ty)
+//
+// lower_call_by_name (self/ir/lowering.hexa) routes 11 builtins before
+// falling back to user-fn resolution:
+//
+//   syscall / print / println / exit / len / abs / min / max
+//   assert / assert_eq / push_method
+//
+// P7-6 Coverage #3 (this round) implements the IR-level emit for all
+// 11. Backend (ir_to_arm64 / ir_to_x86) lowers the resulting sequences
+// without needing new opcodes.
+fn nb_lower_expr(m: any, b: any, e: any, env: any) -> int {
+    // TODO(P7-6a): real AST walk here; for now the PoC path in
+    // self/native_compile_poc.hexa covers end-to-end with its own
+    // poc_lower_expr. This hook stays a stub so the scale-up work
+    // (hexa_full.hexa) has a named integration point.
+    eprintln("[native_build] nb_lower_expr: NOT YET IMPLEMENTED (P7-6a)")
+    exit(3)
+    return -1
+}
