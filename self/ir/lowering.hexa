@@ -197,9 +197,10 @@ fn lower_expr(m, b, e, env) {
     }
     if k == "call" {
         // Caller convention: e.name = callee, e.args = array of Expr children.
-        // Resolve fid by name; lower each arg recursively. Unknown callee → -1.
-        let fid = module_find_function(m, e.name)
-        if fid < 0 { return -1 }
+        // Lower each arg recursively; then route through lower_call_by_name
+        // which dispatches the 11 builtins (print/println/exit/len/abs/min/
+        // max/assert/assert_eq/syscall/push_method) before falling back to
+        // user-fn resolution via module_find_function.
         let arg_vids = []
         let i = 0
         while i < len(e.args) {
@@ -208,7 +209,7 @@ fn lower_expr(m, b, e, env) {
             push(arg_vids, av)
             i = i + 1
         }
-        return bld_call(m, b, fid, arg_vids, "i64")
+        return lower_call_by_name(m, b, e.name, arg_vids, "i64")
     }
     // TODO: lower Expr kind (k) — if/match/block/lambda/array etc.
     return -1
@@ -231,14 +232,213 @@ fn lower_array_from_vids(m, b, elem_vids, elem_ty) {
 // ── Call lowering (from resolved callee + arg vids) ────────
 // Caller resolves the callee name via module_find_function and lowers each
 // arg via lower_expr. Unknown callee → -1 (caller may emit placeholder).
+//
+// Builtin routing (P7-6 Coverage #3 — 11 builtins):
+//   print / println / exit / len / abs / min / max
+//   assert / assert_eq / syscall / push_method
+//
+// Each builtin is dispatched to a `lower_builtin_*` helper that emits IR
+// primitives only (no target-specific knowledge — backends lower the
+// resulting IR sequence on both ARM64 and x86_64). Control-flow builtins
+// (assert, assert_eq, abs, min, max) emit branch/phi sequences via the
+// existing lower_if_* skeletons, so they compose with the rest of the
+// lowering pipeline without needing new IR opcodes.
 fn lower_call_by_name(m, b, callee_name, arg_vids, ret_ty) {
-    // P7-7a: syscall builtin — direct to OP_SYSCALL, no fid resolution.
-    if callee_name == "syscall" {
-        return bld_syscall(m, b, arg_vids, ret_ty)
-    }
+    // ── Builtin dispatch ────────────────────────────────────────
+    if callee_name == "syscall"      { return lower_builtin_syscall(m, b, arg_vids, ret_ty) }
+    if callee_name == "print"        { return lower_builtin_print(m, b, arg_vids) }
+    if callee_name == "println"      { return lower_builtin_println(m, b, arg_vids) }
+    if callee_name == "exit"         { return lower_builtin_exit(m, b, arg_vids) }
+    if callee_name == "len"          { return lower_builtin_len(m, b, arg_vids) }
+    if callee_name == "abs"          { return lower_builtin_abs(m, b, arg_vids) }
+    if callee_name == "min"          { return lower_builtin_min(m, b, arg_vids) }
+    if callee_name == "max"          { return lower_builtin_max(m, b, arg_vids) }
+    if callee_name == "assert"       { return lower_builtin_assert(m, b, arg_vids) }
+    if callee_name == "assert_eq"    { return lower_builtin_assert_eq(m, b, arg_vids) }
+    if callee_name == "push_method"  { return lower_builtin_push_method(m, b, arg_vids) }
+    // ── User fn fallback ────────────────────────────────────────
     let fid = module_find_function(m, callee_name)
     if fid < 0 { return -1 }
     return bld_call(m, b, fid, arg_vids, ret_ty)
+}
+
+// ═══════════════════════════════════════════════════════════
+// Builtin helpers (P7-6 Coverage #3)
+// ═══════════════════════════════════════════════════════════
+//
+// Inputs are pre-lowered `arg_vids` (array of ValueId). Each helper
+// returns a ValueId (the expression's result — 0 for void-ish builtins).
+// Target-specific syscall numbers follow the PoC convention (Darwin
+// ABI). The native_build driver will later thread a `target` handle
+// so we can pick linux vs darwin numbers; for now we use Darwin since
+// native_compile_poc already validates this path end-to-end.
+//
+// Darwin syscall numbers:
+//   SYS_exit   = 33554433  (0x02000001)
+//   SYS_write  = 33554436  (0x02000004)
+
+// Syscall number helpers — centralised so the target-aware rewrite later
+// only has to touch these two constants.
+fn _bi_darwin_sys_exit()  { return 33554433 }
+fn _bi_darwin_sys_write() { return 33554436 }
+
+// syscall(num, ...) — pass-through to bld_syscall. Already special but
+// wrapped for parity with the other builtin helpers.
+fn lower_builtin_syscall(m, b, arg_vids, ret_ty) {
+    return bld_syscall(m, b, arg_vids, ret_ty)
+}
+
+// print(ptr, len) — write(fd=1, ptr, len) to stdout.
+// Convention: caller has pre-lowered the string literal to [ptr_vid, len_vid]
+// (native_compile_poc does this via mn_str_addr + load_imm). If only one
+// vid is supplied we treat it as a runtime-sized string pointer and emit a
+// placeholder len load from its header — the backend pass can lower this
+// to a strlen call or reject.
+fn lower_builtin_print(m, b, arg_vids) {
+    if len(arg_vids) < 1 { return -1 }
+    let fd   = bld_const_i64(m, b, 1)
+    let nr   = bld_const_i64(m, b, _bi_darwin_sys_write())
+    let ptr  = arg_vids[0]
+    let n_v  = 0
+    if len(arg_vids) >= 2 {
+        n_v = arg_vids[1]
+    } else {
+        // Runtime-sized: length prefix at offset 0 (matches array layout;
+        // string-literal caller should supply [ptr, len] explicitly).
+        n_v = bld_struct_field(m, b, ptr, 0, "i64")
+    }
+    return bld_syscall(m, b, [nr, fd, ptr, n_v], "i64")
+}
+
+// println(ptr, len) — write(1, ptr, len) but len is expected to already
+// include the trailing newline. Identical opcode shape to print; the
+// caller (parser/lowering) is responsible for having appended "\n" to
+// the literal and its length when producing arg_vids.
+fn lower_builtin_println(m, b, arg_vids) {
+    return lower_builtin_print(m, b, arg_vids)
+}
+
+// exit(code) — syscall(SYS_exit, code).
+fn lower_builtin_exit(m, b, arg_vids) {
+    if len(arg_vids) < 1 { return -1 }
+    let nr = bld_const_i64(m, b, _bi_darwin_sys_exit())
+    return bld_syscall(m, b, [nr, arg_vids[0]], "i64")
+}
+
+// len(arr) / len(str) — load length prefix at offset 0.
+// PoC differentiates StringLit (compile-time len) vs Ident array vs
+// string ident vs Field access. At IR-level we only have the base vid,
+// so we always emit the offset-0 struct-field load; the compile-time
+// constant folding for string literals is a *pre-lowering* pass that
+// replaces the call with an IntLit before it reaches here.
+fn lower_builtin_len(m, b, arg_vids) {
+    if len(arg_vids) < 1 { return -1 }
+    return bld_struct_field(m, b, arg_vids[0], 0, "i64")
+}
+
+// abs(x) — emitted as value-producing if: (x >= 0) ? x : -x.
+// Uses lower_if_expr_skeleton + phi merge at end.
+fn lower_builtin_abs(m, b, arg_vids) {
+    if len(arg_vids) < 1 { return -1 }
+    let x = arg_vids[0]
+    let zero = bld_const_i64(m, b, 0)
+    let cond = bld_cmp_ge(m, b, x, zero)
+    let blks = lower_if_expr_skeleton(m, b, cond)
+    let then_bb = blks[0]
+    let else_bb = blks[1]
+    let end_bb  = blks[2]
+    builder_switch_to(b, then_bb)
+    // then: use x as-is
+    bld_jump(m, b, end_bb)
+    builder_switch_to(b, else_bb)
+    // else: neg
+    let neg = bld_neg(m, b, x, "i64")
+    bld_jump(m, b, end_bb)
+    return lower_if_expr_close(m, b, end_bb, then_bb, x, else_bb, neg, "i64")
+}
+
+// min(a, b) — value-producing if: (a <= b) ? a : b.
+fn lower_builtin_min(m, b, arg_vids) {
+    if len(arg_vids) < 2 { return -1 }
+    let a = arg_vids[0]
+    let bb_v = arg_vids[1]
+    let cond = bld_cmp_le(m, b, a, bb_v)
+    let blks = lower_if_expr_skeleton(m, b, cond)
+    let then_bb = blks[0]
+    let else_bb = blks[1]
+    let end_bb  = blks[2]
+    builder_switch_to(b, then_bb)
+    bld_jump(m, b, end_bb)
+    builder_switch_to(b, else_bb)
+    bld_jump(m, b, end_bb)
+    return lower_if_expr_close(m, b, end_bb, then_bb, a, else_bb, bb_v, "i64")
+}
+
+// max(a, b) — value-producing if: (a >= b) ? a : b.
+fn lower_builtin_max(m, b, arg_vids) {
+    if len(arg_vids) < 2 { return -1 }
+    let a = arg_vids[0]
+    let bb_v = arg_vids[1]
+    let cond = bld_cmp_ge(m, b, a, bb_v)
+    let blks = lower_if_expr_skeleton(m, b, cond)
+    let then_bb = blks[0]
+    let else_bb = blks[1]
+    let end_bb  = blks[2]
+    builder_switch_to(b, then_bb)
+    bld_jump(m, b, end_bb)
+    builder_switch_to(b, else_bb)
+    bld_jump(m, b, end_bb)
+    return lower_if_expr_close(m, b, end_bb, then_bb, a, else_bb, bb_v, "i64")
+}
+
+// assert(cond) — if !cond: syscall(SYS_exit, 1); continue.
+// Control-flow builtin; returns 0 (void sentinel).
+fn lower_builtin_assert(m, b, arg_vids) {
+    if len(arg_vids) < 1 { return -1 }
+    let cond = arg_vids[0]
+    let fail_bb = builder_create_block(m, b, "assert.fail")
+    let cont_bb = builder_create_block(m, b, "assert.cont")
+    bld_branch(m, b, cond, cont_bb, fail_bb)
+    builder_switch_to(b, fail_bb)
+    let one = bld_const_i64(m, b, 1)
+    let nr  = bld_const_i64(m, b, _bi_darwin_sys_exit())
+    bld_syscall(m, b, [nr, one], "i64")
+    // Post-syscall fallthrough jump — SYS_exit never returns, but IR
+    // blocks must be terminated.
+    bld_jump(m, b, cont_bb)
+    builder_switch_to(b, cont_bb)
+    return bld_const_i64(m, b, 0)
+}
+
+// assert_eq(a, b) — if a != b: syscall(SYS_exit, 1); continue.
+fn lower_builtin_assert_eq(m, b, arg_vids) {
+    if len(arg_vids) < 2 { return -1 }
+    let a = arg_vids[0]
+    let bb_v = arg_vids[1]
+    let eq = bld_cmp_eq(m, b, a, bb_v)
+    return lower_builtin_assert(m, b, [eq])
+}
+
+// push_method(arr, x) — equivalent of arr.push(x).
+// IR shape (matches PoC `mn_*` sequence in self/poc/builtin/push_method.hexa):
+//   old_len = arr[0]                    ← load length prefix
+//   arr[old_len] = x                    ← store via array_store (elem slot)
+//   arr[0] = old_len + 1                ← bump length
+//
+// Returns the array base vid so `arr = arr.push(x)` re-binds the same
+// pointer (in-place push). The PoC uses byte-offset arithmetic for the
+// store; we use the IR-level bld_array_store which lets backends lower
+// it via their preferred addressing mode.
+fn lower_builtin_push_method(m, b, arg_vids) {
+    if len(arg_vids) < 2 { return -1 }
+    let arr = arg_vids[0]
+    let x   = arg_vids[1]
+    let old_len = bld_struct_field(m, b, arr, 0, "i64")
+    bld_array_store(m, b, arr, old_len, x)
+    let one = bld_const_i64(m, b, 1)
+    let new_len = bld_add(m, b, old_len, one, "i64")
+    bld_struct_store_field(m, b, arr, 0, new_len)
+    return arr
 }
 
 // ── UnaryOp lowering (standalone entrypoint) ────────────────
@@ -1068,6 +1268,188 @@ fn _lowering_test_array_from_vids() {
     assert _ops_eq(got, ["load", "load", "load", "alloc", "load", "store", "load", "store", "load", "store", "ret"])
 }
 
+// ═══════════════════════════════════════════════════════════
+// P7-6 Coverage #3 — Builtin routing tests
+// ═══════════════════════════════════════════════════════════
+//
+// Each test asserts the opcode sequence emitted by a builtin. We care
+// about the *shape* (mix of load/sub/syscall/branch/phi) — not the
+// exact ValueId wiring, since the lowering helpers compose other IR
+// builders.
+
+// BI-1: syscall — passthrough to bld_syscall.
+fn _lowering_test_bi_syscall() {
+    let m = make_ir_module("bi1")
+    let skel = lower_fn_decl_skeleton(m, "bi_sc", [], "i64")
+    let b = skel[1]
+    let nr = bld_const_i64(m, b, 33554433)
+    let code = bld_const_i64(m, b, 0)
+    let r = lower_call_by_name(m, b, "syscall", [nr, code], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    assert _ops_eq(got, ["load", "load", "syscall", "ret"])
+}
+
+// BI-2: exit(code) — emits load(SYS_exit) + syscall.
+fn _lowering_test_bi_exit() {
+    let m = make_ir_module("bi2")
+    let skel = lower_fn_decl_skeleton(m, "bi_ex", [], "i64")
+    let b = skel[1]
+    let code = bld_const_i64(m, b, 42)
+    let r = lower_call_by_name(m, b, "exit", [code], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    // load(42), load(SYS_exit), syscall, ret
+    assert _ops_eq(got, ["load", "load", "syscall", "ret"])
+}
+
+// BI-3: print(ptr,len) — syscall(write,1,ptr,len).
+fn _lowering_test_bi_print() {
+    let m = make_ir_module("bi3")
+    let skel = lower_fn_decl_skeleton(m, "bi_pr", [], "i64")
+    let b = skel[1]
+    let ptr = bld_const_i64(m, b, 0x1000)
+    let n_v = bld_const_i64(m, b, 5)
+    let r = lower_call_by_name(m, b, "print", [ptr, n_v], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    // load(ptr), load(len), load(fd=1), load(SYS_write), syscall, ret
+    assert _ops_eq(got, ["load", "load", "load", "load", "syscall", "ret"])
+}
+
+// BI-4: println(ptr,len) — same shape as print.
+fn _lowering_test_bi_println() {
+    let m = make_ir_module("bi4")
+    let skel = lower_fn_decl_skeleton(m, "bi_pl", [], "i64")
+    let b = skel[1]
+    let ptr = bld_const_i64(m, b, 0x2000)
+    let n_v = bld_const_i64(m, b, 6)
+    let r = lower_call_by_name(m, b, "println", [ptr, n_v], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    assert _ops_eq(got, ["load", "load", "load", "load", "syscall", "ret"])
+}
+
+// BI-5: len(arr) — single struct_field load off offset 0.
+fn _lowering_test_bi_len() {
+    let m = make_ir_module("bi5")
+    let skel = lower_fn_decl_skeleton(m, "bi_ln", [], "i64")
+    let b = skel[1]
+    let arr = bld_const_i64(m, b, 0x3000)
+    let r = lower_call_by_name(m, b, "len", [arr], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    // load(arr), load(field0=len), ret
+    assert _ops_eq(got, ["load", "load", "ret"])
+}
+
+// BI-6: abs(x) — value-producing if: (x>=0) ? x : -x.
+// Shape: load(x), load(0), sub(cmp_ge), branch, jump, sub(neg), jump, phi, ret.
+fn _lowering_test_bi_abs() {
+    let m = make_ir_module("bi6")
+    let skel = lower_fn_decl_skeleton(m, "bi_ab", [], "i64")
+    let b = skel[1]
+    let x = bld_const_i64(m, b, -7)
+    let r = lower_call_by_name(m, b, "abs", [x], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    // load(-7), load(0), sub(cmp_ge), branch, jump, sub(neg), jump, phi, ret
+    assert _ops_eq(got, ["load", "load", "sub", "branch", "jump", "sub", "jump", "phi", "ret"])
+}
+
+// BI-7: min(a,b) — value-producing if: (a<=b) ? a : b.
+fn _lowering_test_bi_min() {
+    let m = make_ir_module("bi7")
+    let skel = lower_fn_decl_skeleton(m, "bi_mn", [], "i64")
+    let b = skel[1]
+    let a = bld_const_i64(m, b, 3)
+    let bb_v = bld_const_i64(m, b, 5)
+    let r = lower_call_by_name(m, b, "min", [a, bb_v], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    // load(a), load(b), sub(cmp_le), branch, jump, jump, phi, ret
+    assert _ops_eq(got, ["load", "load", "sub", "branch", "jump", "jump", "phi", "ret"])
+}
+
+// BI-8: max(a,b).
+fn _lowering_test_bi_max() {
+    let m = make_ir_module("bi8")
+    let skel = lower_fn_decl_skeleton(m, "bi_mx", [], "i64")
+    let b = skel[1]
+    let a = bld_const_i64(m, b, 9)
+    let bb_v = bld_const_i64(m, b, 2)
+    let r = lower_call_by_name(m, b, "max", [a, bb_v], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    assert _ops_eq(got, ["load", "load", "sub", "branch", "jump", "jump", "phi", "ret"])
+}
+
+// BI-9: assert(cond) — if !cond: syscall(exit, 1); continue.
+fn _lowering_test_bi_assert() {
+    let m = make_ir_module("bi9")
+    let skel = lower_fn_decl_skeleton(m, "bi_as", [], "i64")
+    let b = skel[1]
+    let cond = bld_const_i64(m, b, 1)    // truthy
+    let r = lower_call_by_name(m, b, "assert", [cond], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    // entry: load(cond), branch
+    // fail:  load(1), load(SYS_exit), syscall, jump
+    // cont:  load(0-sentinel), ret
+    assert _ops_eq(got, ["load", "branch", "load", "load", "syscall", "jump", "load", "ret"])
+}
+
+// BI-10: assert_eq(a,b) — cmp_eq then assert.
+fn _lowering_test_bi_assert_eq() {
+    let m = make_ir_module("biA")
+    let skel = lower_fn_decl_skeleton(m, "bi_ae", [], "i64")
+    let b = skel[1]
+    let a = bld_const_i64(m, b, 42)
+    let bb_v = bld_const_i64(m, b, 42)
+    let r = lower_call_by_name(m, b, "assert_eq", [a, bb_v], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    // load(a), load(b), sub(cmp_eq), branch, load(1), load(SYS_exit), syscall, jump, load(0), ret
+    assert _ops_eq(got, ["load", "load", "sub", "branch", "load", "load", "syscall", "jump", "load", "ret"])
+}
+
+// BI-11: push_method(arr, x) — load length, array_store, bump length.
+fn _lowering_test_bi_push_method() {
+    let m = make_ir_module("biB")
+    let skel = lower_fn_decl_skeleton(m, "bi_pm", [], "i64")
+    let b = skel[1]
+    let arr = bld_const_i64(m, b, 0x4000)
+    let x   = bld_const_i64(m, b, 7)
+    let r = lower_call_by_name(m, b, "push_method", [arr, x], "i64")
+    assert r >= 0
+    lower_return(m, b, r)
+    let got = _collect_opcodes(m.functions[skel[0]])
+    // load(arr), load(x), load(old_len=field0), store(array_store), load(1), add, store(struct_store), ret
+    assert _ops_eq(got, ["load", "load", "load", "store", "load", "add", "store", "ret"])
+}
+
+// BI-12: unknown builtin name falls through to user-fn resolution (-1 if
+// not found) — guarantees we don't shadow user-defined fns.
+fn _lowering_test_bi_unknown_fallthrough() {
+    let m = make_ir_module("biC")
+    let skel = lower_fn_decl_skeleton(m, "bi_uk", [], "i64")
+    let b = skel[1]
+    let x = bld_const_i64(m, b, 1)
+    // "printf" is NOT in the builtin list → should return -1 (no fid).
+    let r = lower_call_by_name(m, b, "printf", [x], "i64")
+    assert r == -1
+}
+
 fn lowering_run_tests() {
     _lowering_test_int_return()
     _lowering_test_add()
@@ -1094,5 +1476,18 @@ fn lowering_run_tests() {
     _lowering_test_string_lit()
     _lowering_test_index_dispatcher()
     _lowering_test_array_from_vids()
-    println("lowering: 25 tests PASS")
+    // ── P7-6 Coverage #3: builtin routing ─────────────────────
+    _lowering_test_bi_syscall()
+    _lowering_test_bi_exit()
+    _lowering_test_bi_print()
+    _lowering_test_bi_println()
+    _lowering_test_bi_len()
+    _lowering_test_bi_abs()
+    _lowering_test_bi_min()
+    _lowering_test_bi_max()
+    _lowering_test_bi_assert()
+    _lowering_test_bi_assert_eq()
+    _lowering_test_bi_push_method()
+    _lowering_test_bi_unknown_fallthrough()
+    println("lowering: 37 tests PASS")
 }
