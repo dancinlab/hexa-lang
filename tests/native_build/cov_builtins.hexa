@@ -1,0 +1,359 @@
+// ═══════════════════════════════════════════════════════════
+//  tests/native_build/cov_builtins.hexa — P7-6 Coverage #3
+//
+//  Verifies the 11-builtin routing added to
+//  self/ir/lowering.hexa::lower_call_by_name:
+//
+//    print / println / exit / len / abs / min / max
+//    assert / assert_eq / syscall / push_method
+//
+//  Test strategy: we replicate the minimal shape of
+//  self/ir/builder.hexa so this file is standalone (no
+//  concat-link required), then call mock lower_builtin_*
+//  helpers whose bodies mirror the real ones in lowering.hexa.
+//  The opcode-sequence asserts are the contract — any change
+//  to the real helpers must update both files in lock-step.
+//
+//  Run: hexa tests/native_build/cov_builtins.hexa
+// ═══════════════════════════════════════════════════════════
+
+// ── Mock Instr / Func / Module ────────────────────────────────
+
+struct Instr {
+    op: string,
+    ty: string
+}
+
+struct MockFunc {
+    name: string,
+    ret_type: string,
+    instrs: array,
+    next_vid: int,
+    next_block: int
+}
+
+struct MockModule {
+    name: string,
+    functions: array,
+    string_pool: array,
+    next_func: int
+}
+
+struct MockBuilder {
+    func_idx: int,
+    current_block: int
+}
+
+fn mk_module(name) {
+    return MockModule { name: name, functions: [], string_pool: [], next_func: 0 }
+}
+
+fn mk_func_new(m, name, ret_type) {
+    let id = m.next_func
+    m.next_func = m.next_func + 1
+    let f = MockFunc { name: name, ret_type: ret_type, instrs: [], next_vid: 0, next_block: 1 }
+    m.functions = m.functions.push(f)
+    return id
+}
+
+fn mk_builder(func_idx) {
+    return MockBuilder { func_idx: func_idx, current_block: 0 }
+}
+
+fn mk_emit(m, b, op, ty) {
+    let f = m.functions[b.func_idx]
+    let vid = f.next_vid
+    f.instrs = f.instrs.push(Instr { op: op, ty: ty })
+    f.next_vid = vid + 1
+    m.functions[b.func_idx] = f
+    return vid
+}
+
+fn mk_create_block(m, b) {
+    let f = m.functions[b.func_idx]
+    let id = f.next_block
+    f.next_block = f.next_block + 1
+    m.functions[b.func_idx] = f
+    return id
+}
+
+fn mk_switch_to(b, blk) {
+    b.current_block = blk
+}
+
+// ── Mock IR primitives ──────────────────────────────────────
+fn mk_const_i64(m, b, val) { return mk_emit(m, b, "load", "i64") }
+fn mk_add(m, b, lhs, rhs, ty) { return mk_emit(m, b, "add", ty) }
+fn mk_sub(m, b, lhs, rhs, ty) { return mk_emit(m, b, "sub", ty) }
+fn mk_neg(m, b, v, ty) { return mk_emit(m, b, "sub", ty) }   // matches real bld_neg via synth
+fn mk_cmp_eq(m, b, a, c) { return mk_emit(m, b, "sub", "bool") }
+fn mk_cmp_le(m, b, a, c) { return mk_emit(m, b, "sub", "bool") }
+fn mk_cmp_ge(m, b, a, c) { return mk_emit(m, b, "sub", "bool") }
+fn mk_struct_field(m, b, obj, idx, ty) { return mk_emit(m, b, "load", ty) }
+fn mk_struct_store_field(m, b, obj, idx, val) { return mk_emit(m, b, "store", "void") }
+fn mk_array_store(m, b, arr, idx, val) { return mk_emit(m, b, "store", "void") }
+fn mk_branch(m, b, cond, then_bb, else_bb) { return mk_emit(m, b, "branch", "void") }
+fn mk_jump(m, b, target) { return mk_emit(m, b, "jump", "void") }
+fn mk_syscall(m, b, args, ret_ty) { return mk_emit(m, b, "syscall", ret_ty) }
+fn mk_phi(m, b, incoming, ty) { return mk_emit(m, b, "phi", ty) }
+fn mk_ret(m, b, v) { return mk_emit(m, b, "ret", "void") }
+
+fn mk_if_expr_skeleton(m, b, cond) {
+    let then_bb = mk_create_block(m, b)
+    let else_bb = mk_create_block(m, b)
+    let end_bb  = mk_create_block(m, b)
+    mk_branch(m, b, cond, then_bb, else_bb)
+    return [then_bb, else_bb, end_bb]
+}
+
+fn mk_if_expr_close(m, b, end_bb, tbb, tv, ebb, ev, ty) {
+    mk_switch_to(b, end_bb)
+    return mk_phi(m, b, [], ty)
+}
+
+// ── Mock lower_builtin_* (mirrors self/ir/lowering.hexa) ─────
+fn mock_builtin_syscall(m, b, arg_vids) {
+    return mk_syscall(m, b, arg_vids, "i64")
+}
+
+fn mock_builtin_exit(m, b, arg_vids) {
+    let nr = mk_const_i64(m, b, 33554433)
+    return mk_syscall(m, b, [nr, arg_vids[0]], "i64")
+}
+
+fn mock_builtin_print(m, b, arg_vids) {
+    let fd = mk_const_i64(m, b, 1)
+    let nr = mk_const_i64(m, b, 33554436)
+    let ptr = arg_vids[0]
+    let n_v = arg_vids[1]
+    return mk_syscall(m, b, [nr, fd, ptr, n_v], "i64")
+}
+
+fn mock_builtin_println(m, b, arg_vids) {
+    return mock_builtin_print(m, b, arg_vids)
+}
+
+fn mock_builtin_len(m, b, arg_vids) {
+    return mk_struct_field(m, b, arg_vids[0], 0, "i64")
+}
+
+fn mock_builtin_abs(m, b, arg_vids) {
+    let x = arg_vids[0]
+    let zero = mk_const_i64(m, b, 0)
+    let cond = mk_cmp_ge(m, b, x, zero)
+    let blks = mk_if_expr_skeleton(m, b, cond)
+    let tbb = blks[0]
+    let ebb = blks[1]
+    let end_bb = blks[2]
+    mk_switch_to(b, tbb)
+    mk_jump(m, b, end_bb)
+    mk_switch_to(b, ebb)
+    let neg = mk_neg(m, b, x, "i64")
+    mk_jump(m, b, end_bb)
+    return mk_if_expr_close(m, b, end_bb, tbb, x, ebb, neg, "i64")
+}
+
+fn mock_builtin_min(m, b, arg_vids) {
+    let a = arg_vids[0]
+    let c = arg_vids[1]
+    let cond = mk_cmp_le(m, b, a, c)
+    let blks = mk_if_expr_skeleton(m, b, cond)
+    mk_switch_to(b, blks[0])
+    mk_jump(m, b, blks[2])
+    mk_switch_to(b, blks[1])
+    mk_jump(m, b, blks[2])
+    return mk_if_expr_close(m, b, blks[2], blks[0], a, blks[1], c, "i64")
+}
+
+fn mock_builtin_max(m, b, arg_vids) {
+    let a = arg_vids[0]
+    let c = arg_vids[1]
+    let cond = mk_cmp_ge(m, b, a, c)
+    let blks = mk_if_expr_skeleton(m, b, cond)
+    mk_switch_to(b, blks[0])
+    mk_jump(m, b, blks[2])
+    mk_switch_to(b, blks[1])
+    mk_jump(m, b, blks[2])
+    return mk_if_expr_close(m, b, blks[2], blks[0], a, blks[1], c, "i64")
+}
+
+fn mock_builtin_assert(m, b, arg_vids) {
+    let cond = arg_vids[0]
+    let fail_bb = mk_create_block(m, b)
+    let cont_bb = mk_create_block(m, b)
+    mk_branch(m, b, cond, cont_bb, fail_bb)
+    mk_switch_to(b, fail_bb)
+    let one = mk_const_i64(m, b, 1)
+    let nr  = mk_const_i64(m, b, 33554433)
+    mk_syscall(m, b, [nr, one], "i64")
+    mk_jump(m, b, cont_bb)
+    mk_switch_to(b, cont_bb)
+    return mk_const_i64(m, b, 0)
+}
+
+fn mock_builtin_assert_eq(m, b, arg_vids) {
+    let a = arg_vids[0]
+    let c = arg_vids[1]
+    let eq = mk_cmp_eq(m, b, a, c)
+    return mock_builtin_assert(m, b, [eq])
+}
+
+fn mock_builtin_push_method(m, b, arg_vids) {
+    let arr = arg_vids[0]
+    let x   = arg_vids[1]
+    let old_len = mk_struct_field(m, b, arr, 0, "i64")
+    mk_array_store(m, b, arr, old_len, x)
+    let one = mk_const_i64(m, b, 1)
+    let new_len = mk_add(m, b, old_len, one, "i64")
+    mk_struct_store_field(m, b, arr, 0, new_len)
+    return arr
+}
+
+// ── Dispatcher (mirrors lower_call_by_name) ─────────────────
+fn mock_lower_call_by_name(m, b, callee, arg_vids) {
+    if callee == "syscall"     { return mock_builtin_syscall(m, b, arg_vids) }
+    if callee == "print"       { return mock_builtin_print(m, b, arg_vids) }
+    if callee == "println"     { return mock_builtin_println(m, b, arg_vids) }
+    if callee == "exit"        { return mock_builtin_exit(m, b, arg_vids) }
+    if callee == "len"         { return mock_builtin_len(m, b, arg_vids) }
+    if callee == "abs"         { return mock_builtin_abs(m, b, arg_vids) }
+    if callee == "min"         { return mock_builtin_min(m, b, arg_vids) }
+    if callee == "max"         { return mock_builtin_max(m, b, arg_vids) }
+    if callee == "assert"      { return mock_builtin_assert(m, b, arg_vids) }
+    if callee == "assert_eq"   { return mock_builtin_assert_eq(m, b, arg_vids) }
+    if callee == "push_method" { return mock_builtin_push_method(m, b, arg_vids) }
+    return -1
+}
+
+// ── Test helpers ────────────────────────────────────────────
+fn collect_ops(f) {
+    let out = []
+    let i = 0
+    while i < len(f.instrs) {
+        out = out.push(f.instrs[i].op)
+        i = i + 1
+    }
+    return out
+}
+
+fn ops_eq(a, b) {
+    if len(a) != len(b) { return false }
+    let i = 0
+    while i < len(a) {
+        if a[i] != b[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn ops_to_str(a) {
+    let out = "["
+    let i = 0
+    while i < len(a) {
+        if i > 0 { out = out + "," }
+        out = out + a[i]
+        i = i + 1
+    }
+    return out + "]"
+}
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, got, expected) {
+    if ops_eq(got, expected) {
+        pass_count = pass_count + 1
+        println("  [PASS] " + name)
+    } else {
+        fail_count = fail_count + 1
+        println("  [FAIL] " + name)
+        println("    got     : " + ops_to_str(got))
+        println("    expected: " + ops_to_str(expected))
+    }
+}
+
+fn run_case(name, callee, n_args, expected) {
+    let m = mk_module("cov")
+    let fid = mk_func_new(m, "t_" + name, "i64")
+    let b = mk_builder(fid)
+    let args = []
+    let i = 0
+    while i < n_args {
+        args = args.push(mk_const_i64(m, b, i))
+        i = i + 1
+    }
+    let r = mock_lower_call_by_name(m, b, callee, args)
+    if r < 0 {
+        fail_count = fail_count + 1
+        println("  [FAIL] " + name + " — dispatcher returned -1")
+        return
+    }
+    mk_ret(m, b, r)
+    check(name, collect_ops(m.functions[fid]), expected)
+}
+
+fn main() {
+    println("=== P7-6 Coverage #3 — 11 builtin routing ===")
+
+    // 1. syscall(num, code) → load×2, syscall, ret
+    run_case("syscall", "syscall", 2,
+             ["load", "load", "syscall", "ret"])
+
+    // 2. exit(code) → load(arg), load(SYS_exit), syscall, ret
+    run_case("exit", "exit", 1,
+             ["load", "load", "syscall", "ret"])
+
+    // 3. print(ptr, len) → load×2(args), load(fd=1), load(SYS_write), syscall, ret
+    run_case("print", "print", 2,
+             ["load", "load", "load", "load", "syscall", "ret"])
+
+    // 4. println(ptr, len) — same shape as print
+    run_case("println", "println", 2,
+             ["load", "load", "load", "load", "syscall", "ret"])
+
+    // 5. len(arr) → load(arr), load(field0=len), ret
+    run_case("len", "len", 1,
+             ["load", "load", "ret"])
+
+    // 6. abs(x) → load(x), load(0), sub(cmp_ge), branch, jump, sub(neg), jump, phi, ret
+    run_case("abs", "abs", 1,
+             ["load", "load", "sub", "branch", "jump", "sub", "jump", "phi", "ret"])
+
+    // 7. min(a,b) → load×2, sub(cmp_le), branch, jump, jump, phi, ret
+    run_case("min", "min", 2,
+             ["load", "load", "sub", "branch", "jump", "jump", "phi", "ret"])
+
+    // 8. max(a,b)
+    run_case("max", "max", 2,
+             ["load", "load", "sub", "branch", "jump", "jump", "phi", "ret"])
+
+    // 9. assert(cond) → load(cond), branch, load(1), load(SYS_exit), syscall, jump, load(0), ret
+    run_case("assert", "assert", 1,
+             ["load", "branch", "load", "load", "syscall", "jump", "load", "ret"])
+
+    // 10. assert_eq(a,b) → load×2, sub(cmp_eq), branch, load(1), load(SYS_exit), syscall, jump, load(0), ret
+    run_case("assert_eq", "assert_eq", 2,
+             ["load", "load", "sub", "branch", "load", "load", "syscall", "jump", "load", "ret"])
+
+    // 11. push_method(arr, x) → load×2(args), load(old_len), store(array_store), load(1), add, store(struct_store), ret
+    run_case("push_method", "push_method", 2,
+             ["load", "load", "load", "store", "load", "add", "store", "ret"])
+
+    // 12. unknown builtin name → dispatcher returns -1 (no fallthrough to user fn here; that's the real lower_call_by_name path)
+    let m = mk_module("unk")
+    let fid = mk_func_new(m, "t_unk", "i64")
+    let b = mk_builder(fid)
+    let x = mk_const_i64(m, b, 1)
+    let r = mock_lower_call_by_name(m, b, "printf", [x])
+    if r == -1 {
+        pass_count = pass_count + 1
+        println("  [PASS] unknown_fallthrough")
+    } else {
+        fail_count = fail_count + 1
+        println("  [FAIL] unknown_fallthrough — expected -1, got " + str(r))
+    }
+
+    println("")
+    println("=== result: " + str(pass_count) + " PASS / " + str(fail_count) + " FAIL ===")
+    if fail_count > 0 { exit(1) }
+}
