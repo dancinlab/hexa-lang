@@ -312,6 +312,9 @@ fn nb_lower_stmt(m, b, s, env, loop_stack) -> int {
     if k == "LoopStmt" {
         return nb_lower_loop(m, b, s, env, loop_stack)
     }
+    if k == "ForStmt" {
+        return nb_lower_for(m, b, s, env, loop_stack)
+    }
     if k == "BreakStmt" {
         if len(loop_stack) == 0 { return -1 }
         let top = loop_stack[len(loop_stack) - 1]
@@ -403,6 +406,72 @@ fn nb_lower_while(m, b, s, env, loop_stack) -> int {
     if !body_term {
         bld_jump(m, b, header_bb)   // backedge
     }
+
+    builder_switch_to(b, end_bb)
+    return 0
+}
+
+// ── For lowering (desugars to while over Range) ──────────────────
+// Supported form: `for NAME in START..END { body }` (exclusive Range).
+// Inclusive (..=) switches cmp_lt → cmp_le. Step ranges and non-Range
+// iterables (arrays, iterators) are coverage gaps this round.
+//
+// Layout:
+//   current    → (init slot, store start)
+//   header     → load cur, cmp vs end, branch body/end
+//   body       → user stmts → JUMP cont (continue target)
+//   cont       → load cur, inc, store, JUMP header
+//   end        → caller continues here
+fn nb_lower_for(m, b, s, env, loop_stack) -> int {
+    let iter_e = s.iter_expr
+    if iter_e.kind != "Range" { return -1 }
+    let start_vid = nb_lower_expr(m, b, iter_e.left, env)
+    if start_vid < 0 { return -1 }
+    let end_vid = nb_lower_expr(m, b, iter_e.right, env)
+    if end_vid < 0 { return -1 }
+    let inclusive = iter_e.value == "inclusive"
+
+    // Allocate mut slot for loop var and initialize to start. Env bind
+    // makes `i` readable in body via lower_ident_by_name (emits LOAD).
+    let slot = bld_alloc(m, b, "i64")
+    bld_store(m, b, slot, start_vid)
+    lower_env_bind_mut(env, s.name, slot)
+
+    // While-skeleton (jumps into header). We pick lt / le on inclusive.
+    let blks = lower_while_skeleton(m, b)
+    let header_bb = blks[0]
+    let body_bb   = blks[1]
+    let end_bb    = blks[2]
+
+    builder_switch_to(b, header_bb)
+    let cur_h = bld_load(m, b, slot, "i64")
+    let mut cmp_vid = 0
+    if inclusive {
+        cmp_vid = bld_cmp_le(m, b, cur_h, end_vid)
+    } else {
+        cmp_vid = bld_cmp_lt(m, b, cur_h, end_vid)
+    }
+    bld_branch(m, b, cmp_vid, body_bb, end_bb)
+
+    // Continue block holds the increment — placed AFTER body to match
+    // control-flow: body → cont → header (backedge).
+    let cont_bb = builder_create_block(m, b, "for.cont")
+
+    builder_switch_to(b, body_bb)
+    push(loop_stack, [cont_bb, end_bb])   // continue → cont, break → end
+    let body_term = nb_lower_block(m, b, s.body, env, loop_stack)
+    loop_stack.truncate(len(loop_stack) - 1)
+    if !body_term {
+        bld_jump(m, b, cont_bb)
+    }
+
+    // cont: increment slot by 1, back-edge JUMP header.
+    builder_switch_to(b, cont_bb)
+    let cur_c = bld_load(m, b, slot, "i64")
+    let one = bld_const_i64(m, b, 1)
+    let next_vid = bld_add(m, b, cur_c, one, "i64")
+    bld_store(m, b, slot, next_vid)
+    bld_jump(m, b, header_bb)
 
     builder_switch_to(b, end_bb)
     return 0
