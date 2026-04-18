@@ -309,6 +309,9 @@ fn nb_lower_stmt(m, b, s, env, loop_stack) -> int {
     if k == "WhileStmt" {
         return nb_lower_while(m, b, s, env, loop_stack)
     }
+    if k == "LoopStmt" {
+        return nb_lower_loop(m, b, s, env, loop_stack)
+    }
     // Unsupported stmt kind — flag coverage gap.
     return -1
 }
@@ -385,6 +388,32 @@ fn nb_lower_while(m, b, s, env, loop_stack) -> int {
     loop_stack.truncate(len(loop_stack) - 1)
     if !body_term {
         bld_jump(m, b, header_bb)   // backedge
+    }
+
+    builder_switch_to(b, end_bb)
+    return 0
+}
+
+// ── Loop (infinite) lowering ──────────────────────────────────────
+// `loop { body }` is while-true. We reuse lower_while_skeleton for the
+// three-block layout, but the header block trivially JUMPs into body
+// (no cond evaluation). The end block is only reachable via `break`
+// (→ lower_break emits JUMP end_bb).
+fn nb_lower_loop(m, b, s, env, loop_stack) -> int {
+    let blks = lower_while_skeleton(m, b)
+    let header_bb = blks[0]
+    let body_bb   = blks[1]
+    let end_bb    = blks[2]
+
+    builder_switch_to(b, header_bb)
+    bld_jump(m, b, body_bb)
+
+    builder_switch_to(b, body_bb)
+    push(loop_stack, [header_bb, end_bb])
+    let body_term = nb_lower_block(m, b, s.body, env, loop_stack)
+    loop_stack.truncate(len(loop_stack) - 1)
+    if !body_term {
+        bld_jump(m, b, header_bb)
     }
 
     builder_switch_to(b, end_bb)
