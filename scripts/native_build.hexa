@@ -312,6 +312,20 @@ fn nb_lower_stmt(m, b, s, env, loop_stack) -> int {
     if k == "LoopStmt" {
         return nb_lower_loop(m, b, s, env, loop_stack)
     }
+    if k == "BreakStmt" {
+        if len(loop_stack) == 0 { return -1 }
+        let top = loop_stack[len(loop_stack) - 1]
+        let ctx = loop_ctx_new(top[0], top[1])
+        lower_break(m, b, ctx)
+        return 1
+    }
+    if k == "ContinueStmt" {
+        if len(loop_stack) == 0 { return -1 }
+        let top = loop_stack[len(loop_stack) - 1]
+        let ctx = loop_ctx_new(top[0], top[1])
+        lower_continue(m, b, ctx)
+        return 1
+    }
     // Unsupported stmt kind — flag coverage gap.
     return -1
 }
