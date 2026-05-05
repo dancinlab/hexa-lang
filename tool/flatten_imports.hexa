@@ -23,14 +23,14 @@
 // file_exists, argv, println, exit. High-level string ops (.split / .trim /
 // .starts_with / .substring / .index_of) are used to keep parsing O(N).
 
-use "self/stdlib/law_io"
-
-// Inline safe_write_file fallback — interp bootstrap path cannot always resolve
-// `use "self/stdlib/law_io"` before flatten_imports itself runs (observed:
-// 2026-04-21 hexa build pipeline — flatten fails with "undefined function:
-// safe_write_file" even though law_io exports it). Matches the same pattern
-// used in self/module_loader.hexa:32 for identical reasons.
-fn safe_write_file(path, content) {
+// 2026-05-05 fix — `use "self/stdlib/law_io"` removed because the interp
+// path now successfully resolves law_io.safe_write_file, so the local fallback
+// `fn safe_write_file` (originally added 2026-04-21 for bootstrap robustness)
+// causes a C-level redefinition error when both bundle into one TU. flatten
+// is an internal pipeline tool that intentionally bypasses law_io path/tmp
+// checks (writes to absolute paths under /tmp), so we keep ONLY the local
+// thin wrapper, renamed to `fl_write_out` to remove the colliding identifier.
+fn fl_write_out(path, content) {
     return write_file(path, content)
 }
 
@@ -701,7 +701,7 @@ fn flatten_main() {
     // processes write to the same output file simultaneously (observed
     // PIDs 3521 + 5087). `mv` on the same filesystem is atomic on POSIX.
     let tmp_output = output + ".tmp." + exec("echo $$").trim()
-    safe_write_file(tmp_output, flat_str)
+    fl_write_out(tmp_output, flat_str)
     exec("mv -f '" + tmp_output + "' '" + output + "'")
     println("[flatten_imports] wrote " + output + " (" + str(m) + " files, atomic)")
 
