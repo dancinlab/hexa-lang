@@ -1,0 +1,117 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/uart.hexa — STM32H7 (Cortex-M7) UART/USART backend
+//                                        — paper skeleton.
+//
+// Phase: skeleton / stub. Real MMIO will go here once Cortex-M
+// cross-compile lands. Sim-first invariant preserved (uart.hexa sim
+// backend ships before this; this file is a HW-backend addition, not
+// a sim replacement).
+//
+// Target:    STMicroelectronics STM32H7 family (Cortex-M7 @ 480 MHz).
+// Chip ref:  RM0433 reference manual, USART/UART peripheral §51.
+// Surface:   stm32h7_uart_{configure,write,read}(port, ...)
+// Dispatch:  v0.2.0+ — uart.hexa selects this via cfg-flag.
+//
+// MMIO layout (sketch):
+//
+//   USART1 base: 0x40011000   (synchronous / async)
+//   USART2 base: 0x40004400
+//   USART3 base: 0x40004800
+//   UART4  base: 0x40004C00   (async only)
+//   UART5  base: 0x40005000   (async only)
+//   USART6 base: 0x40011400
+//   UART7  base: 0x40007800   (async only)
+//   UART8  base: 0x40007C00   (async only)
+//
+//   Per-port registers (offsets):
+//     CR1     0x00   UE / TE / RE / parity / wordlen
+//     CR2     0x04   STOP bits / addr / clock-on-USART
+//     CR3     0x08   DMA enable / hw-flow ctl
+//     BRR     0x0C   baud rate divisor (16-bit fractional)
+//     ISR     0x1C   status: TXE / RXNE / TC / IDLE
+//     RDR     0x24   RX data
+//     TDR     0x28   TX data
+
+// ─── port table ──────────────────────────────────────────────────────
+
+let PORT_COUNT = 8
+let PORT_NAMES = [
+    "USART1", "USART2", "USART3",
+    "UART4",  "UART5",
+    "USART6",
+    "UART7",  "UART8"
+]
+
+// 1 = USART (full-duplex, sync-capable), 0 = UART (async only).
+let PORT_KIND = [1, 1, 1, 0, 0, 1, 0, 0]
+
+let PORT_BASES = [
+    "0x40011000",   // USART1
+    "0x40004400",   // USART2
+    "0x40004800",   // USART3
+    "0x40004C00",   // UART4
+    "0x40005000",   // UART5
+    "0x40011400",   // USART6
+    "0x40007800",   // UART7
+    "0x40007C00"    // UART8
+]
+
+// Default-AF TX/RX pin pairs (Nucleo-H7 conventional).
+// Encoded bank*16 + offset; PA=0, PB=1, PC=2, PD=3, PE=4, PG=6.
+let PORT_TX = [9,  37, 26, 12, 28, 38, 7,  86]   // PA9, PD5, PB10, PA12, PB12... (sample mapping)
+let PORT_RX = [10, 38, 27, 13, 29, 39, 8,  87]
+
+// ─── parity / stop constants (mirror stdlib/hal/uart.hexa) ──────────
+
+let PARITY_NONE = 0
+let PARITY_EVEN = 1
+let PARITY_ODD  = 2
+
+let STOP_1   = 0
+let STOP_0_5 = 1
+let STOP_2   = 2
+let STOP_1_5 = 3
+
+// ─── stub surface ────────────────────────────────────────────────────
+
+fn stm32h7_uart_configure(port: int, baud: int, data_bits: int, parity: int, stop: int) -> int {
+    if port < 0 || port >= PORT_COUNT { return -1 }
+    if baud <= 0 || baud > 12500000 { return -2 }
+    if data_bits != 7 && data_bits != 8 && data_bits != 9 { return -3 }
+    if parity < PARITY_NONE || parity > PARITY_ODD { return -4 }
+    if stop < STOP_1 || stop > STOP_1_5 { return -5 }
+    let name = PORT_NAMES[port]
+    println("[stm32h7 uart] configure " + name +
+            " tx=pin" + str(PORT_TX[port]) +
+            " rx=pin" + str(PORT_RX[port]) +
+            " baud=" + str(baud) +
+            " " + str(data_bits) + "N" + str(stop) +
+            " parity=" + str(parity) +
+            "  // TODO: write CR1/CR2/CR3/BRR")
+    return port
+}
+
+fn stm32h7_uart_write(port: int, data: [int]) -> int {
+    if port < 0 || port >= PORT_COUNT { return -1 }
+    let name = PORT_NAMES[port]
+    println("[stm32h7 uart] write " + name +
+            " bytes=" + str(data.len()) +
+            "  // TODO: poll TXE, write TDR")
+    return data.len()
+}
+
+fn stm32h7_uart_read(port: int, n: int) -> int {
+    if port < 0 || port >= PORT_COUNT { return -1 }
+    if n <= 0 { return -2 }
+    let name = PORT_NAMES[port]
+    println("[stm32h7 uart] read " + name +
+            " n=" + str(n) +
+            "  // TODO: poll RXNE, read RDR")
+    return 0
+}
+
+// ─── self-introspection ──────────────────────────────────────────────
+
+fn stm32h7_uart_backend_meta() -> [str] {
+    return ["stm32h7", "uart", "skeleton", str(PORT_COUNT)]
+}

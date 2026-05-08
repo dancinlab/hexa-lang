@@ -1,0 +1,102 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/i2c.hexa — STM32H7 (Cortex-M7) I²C backend
+//                                       — paper skeleton.
+//
+// Phase: skeleton / stub. Real MMIO will go here once Cortex-M
+// cross-compile lands. Sim-first invariant preserved (i2c.hexa sim
+// backend ships before this; this file is a HW-backend addition, not
+// a sim replacement).
+//
+// Target:    STMicroelectronics STM32H7 family (Cortex-M7 @ 480 MHz).
+// Chip ref:  RM0433 reference manual, I²C peripheral §52.
+// Surface:   stm32h7_i2c_{configure,write,read}(bus, ...)
+// Dispatch:  v0.2.0+ — i2c.hexa selects this via cfg-flag.
+//
+// MMIO layout (sketch; real impl writes registers):
+//
+//   I2C1 base:   0x40005400
+//   I2C2 base:   0x40005800
+//   I2C3 base:   0x40005C00
+//   I2C4 base:   0x58001C00   (D3 domain — BDMA-capable)
+//
+//   Per-bus registers (offsets):
+//     CR1     0x00   control 1: PE / interrupt enables
+//     CR2     0x04   control 2: NBYTES / SADD / RD_WRN
+//     TIMINGR 0x10   timing prescaler / SCL low+high count
+//     TXDR    0x28   8-bit TX data
+//     RXDR    0x24   8-bit RX data
+//     ISR     0x18   status (TXIS/RXNE/STOPF/...)
+//
+// Pin assignments (Nucleo-H7 default AF; multiplexed):
+//
+//   I2C1: PB6 (SCL) / PB7 (SDA)
+//   I2C2: PB10 (SCL) / PB11 (SDA)
+//   I2C3: PA8 (SCL) / PC9 (SDA)
+//   I2C4: PD12 (SCL) / PD13 (SDA)
+
+// ─── bus → (scl_pin, sda_pin) table ──────────────────────────────────
+
+let BUS_COUNT = 4
+let BUS_NAMES = ["I2C1", "I2C2", "I2C3", "I2C4"]
+
+// Pins encoded as bank*16 + offset (matches gpio.hexa convention).
+// PA=0, PB=1, PC=2, PD=3, ... — so PB6 = 1*16+6 = 22, PB7 = 23, etc.
+let BUS_SCL = [22, 26, 8,  60]   // PB6, PB10, PA8, PD12
+let BUS_SDA = [23, 27, 41, 61]   // PB7, PB11, PC9, PD13
+
+let BUS_BASES = [
+    "0x40005400",   // I2C1
+    "0x40005800",   // I2C2
+    "0x40005C00",   // I2C3
+    "0x58001C00"    // I2C4
+]
+
+// ─── speed grades (mirror stdlib/hal/i2c.hexa) ───────────────────────
+
+let SPEED_STANDARD  = 100000
+let SPEED_FAST      = 400000
+let SPEED_FAST_PLUS = 1000000
+let SPEED_HIGH      = 3400000
+
+// ─── stub surface (placeholder MMIO writes) ──────────────────────────
+
+fn stm32h7_i2c_configure(bus: int, speed_hz: int) -> int {
+    if bus < 0 || bus >= BUS_COUNT { return -1 }
+    if speed_hz < 1000 || speed_hz > 5000000 { return -2 }
+    let name = BUS_NAMES[bus]
+    println("[stm32h7 i2c] configure " + name +
+            " scl=pin" + str(BUS_SCL[bus]) +
+            " sda=pin" + str(BUS_SDA[bus]) +
+            " speed=" + str(speed_hz) +
+            "  // TODO: write CR1/CR2/TIMINGR")
+    return bus
+}
+
+fn stm32h7_i2c_write(bus: int, addr: int, data: [int]) -> int {
+    if bus < 0 || bus >= BUS_COUNT { return -1 }
+    if addr < 0 || addr > 127 { return -2 }
+    let name = BUS_NAMES[bus]
+    println("[stm32h7 i2c] write " + name +
+            " addr=0x" + str(addr) +
+            " bytes=" + str(data.len()) +
+            "  // TODO: load TXDR, set START, poll TXIS")
+    return 0
+}
+
+fn stm32h7_i2c_read(bus: int, addr: int, n: int) -> int {
+    if bus < 0 || bus >= BUS_COUNT { return -1 }
+    if addr < 0 || addr > 127 { return -2 }
+    if n <= 0 { return -3 }
+    let name = BUS_NAMES[bus]
+    println("[stm32h7 i2c] read " + name +
+            " addr=0x" + str(addr) +
+            " n=" + str(n) +
+            "  // TODO: set RD_WRN, START, poll RXNE")
+    return 0
+}
+
+// ─── self-introspection ──────────────────────────────────────────────
+
+fn stm32h7_i2c_backend_meta() -> [str] {
+    return ["stm32h7", "i2c", "skeleton", str(BUS_COUNT)]
+}

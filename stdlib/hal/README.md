@@ -87,6 +87,11 @@ modules in v0.2.0+.
 | F-HAL-4 | ≤ J₂/n = 4 concurrent handles per module (intr/dma extend)  |
 | F-HAL-5 | sim backend before any HW backend                           |
 
+T2 (numerical) progression — `numerics_module_topology.hexa` and
+`numerics_lifecycle_dispatch.hexa` close the T2 tier of F-HAL-1 and
+F-HAL-2 respectively, advancing both falsifiers from 33% (T1 only)
+to 67% closure. F-HAL-3/4/5 still T1-only at v0.2.0.
+
 ## Tests
 
 - `stdlib/hal/lattice_test.hexa` — F-HAL-1/3 invariants
