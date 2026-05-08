@@ -1,5 +1,30 @@
 # stdlib/hal CHANGELOG
 
+## [1.24.0] - 2026-05-09
+
+### Added — `numerics_ai_native_bt_coverage.hexa` F-AI-NATIVE-5 T2 numerical (lifts to 67%)
+- `numerics_ai_native_bt_coverage.hexa` (~165 lines) — fifth T2 fixture
+  for AI-native axis. Cross-checks BT_COVERAGE = sopfr(n)+φ = 7 audit
+  coverage + BT_RESERVED..BT_547 = 0..7 enumeration against on-disk
+  ai.hexa source.
+
+  7 BTs (Clay Math Millennium Prize Problems + Riemann zeros):
+    BT_541 Riemann zeros / BT_542 P vs NP / BT_543 Yang-Mills /
+    BT_544 Navier-Stokes / BT_545 Hodge / BT_546 BSD /
+    BT_547 Poincaré
+
+  8 numerical checks: ai.hexa present / SOPFR_N=5 / PHI=2 /
+  BT_COVERAGE=7 / sopfr(n)+φ=BT_COVERAGE algebraic identity / BT_*
+  contiguous 0..7 (1 reserved + 7 named, no gaps/dupes).
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_BT_COVERAGE__ PASS`.
+  Pattern: numerics_ai_native_lattice.hexa (sister; algebraic identity
+  + enumeration check).
+
+  **F-AI-NATIVE-5 closure lifted: 33% → 67%**. 5/6 T2 fixtures landed
+  for AI-native axis (83%); only F-AI-NATIVE-6 pdk_set remaining
+  (planned v1.25.0). Phase G iter 9+5+12.
+
 ## [1.23.0] - 2026-05-09
 
 ### Added — `numerics_ai_native_tile_count.hexa` F-AI-NATIVE-4 T2 numerical (lifts to 67%)
