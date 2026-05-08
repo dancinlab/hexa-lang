@@ -1,5 +1,57 @@
 # stdlib/hal CHANGELOG
 
+## [1.9.0] - 2026-05-08
+
+### Added — `backend/ai_native/sky130.hexa` SKY130 PDK paper-tier backend (1st PDK)
+- `backend/ai_native/sky130.hexa` (~165 lines) — SkyWater SKY130 PDK
+  silicon backend stub for the AI-native (Beyond-GPU) axis. Per-PDK
+  paper-tier metadata (NO synthesis, NO P&R, NO tape-out).
+
+  **Pattern**: mirrors `backend/cuda/compute.hexa` shape (per-vendor stub
+  documenting API surface mapping) but for the AI-native silicon axis
+  (per-PDK area / freq / voltage table, not per-vendor IR mapping).
+
+  **PDK metadata** (web-searched 2026-05-08):
+    SkyWater SKY130 (sky130A high-density library);
+    130 nm bulk CMOS, 5-metal-layer standard option;
+    Vcore 1.8V; freq band [200, 400] MHz typical;
+    density ~0.5 M-gate/mm² (sky130_fd_sc_hd, ~50% post-P&R utilisation);
+    Efabless MPW shuttle ~$25-50K, 6 mm² ceiling.
+
+  **AI-native primitive area placeholders** (canon
+  `analysis/btAI3_rtl_design.md` §6 + hexa-chip
+  `ai_native_arch/doc/datasheet_ai_native_arch.md` §6 row "SKY130"):
+    MAC array (σ²=144):  ~2.0 mm²    (dominant)
+    prov_regfile:        ~0.042 mm²
+    promotion_counter_mmu: ~0.018 mm²
+    bt_id_decoder:       ~0.0009 mm²
+    TILE TOTAL:          ~2.061 mm²
+    chip (n_tiles=6):    ~12.37 mm²  (EXCEEDS Efabless 6 mm² ceiling;
+                                       first MPW path: n_tiles=2 stripped chip)
+
+  Surface (paper-tier; FFI to OpenLane2/Yosys/OpenROAD downstream):
+    sky130_tile_area(block_id) -> int     (μ-mm², block 0..4)
+    sky130_chip_area() -> int             (μ-mm²)
+    sky130_overhead_bp() -> int           (= 278 bp, φ/σ_n = 1/36)
+    sky130_freq_band() -> [int]
+    sky130_vcore_mv() -> int
+    sky130_fits_mpw_shuttle() -> bool     (false at n_tiles=6)
+    sky130_max_tiles_in_mpw() -> int
+    sky130_module_meta() / sky130_pdk_meta() -> [str]
+    sky130_invariant_{n_tiles, overhead_bp, node_nm}() -> int
+
+  **Architectural guard** (canon §7.5 + roadmap §G.5):
+    paper-spec only — NOT FFI to SiliconCompiler / OpenLane2 / Yosys /
+    OpenROAD. Real synthesis + P&R + tape-out is downstream scope.
+
+  **Per-PDK split commit policy** (memory note from v1.7.0
+  retrospective): v1.9.0+ adopts 1-commit-per-PDK split. SKY130 chosen
+  first because it's the open-source PDK and Efabless MPW shuttle makes
+  it the most actionable foundry candidate. v1.10.0 = TSMC N5;
+  v1.11.0 = Samsung SF3P (per-PDK iteration sequence).
+
+  Phase G iter 9+1; first PDK paper backend on the AI-native axis.
+
 ## [1.8.0] - 2026-05-08
 
 ### Added — `stdlib/hal/ai.hexa` host-side AI-native dispatch primitive
