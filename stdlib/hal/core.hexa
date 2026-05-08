@@ -1,0 +1,63 @@
+#!hexa strict
+// stdlib/hal/core/core.hexa — σ-slot 0: runtime · panic · time.
+//
+// Provides the always-available primitives every other module depends on:
+// time (sleep/now), panic (halt + msg), critical-section guard.
+//
+// import:  use "stdlib/hal/core"
+// φ:       digital
+// τ:       lifecycle stages on this module are degenerate (always-on);
+//          configure/start/serve/report act as no-ops on the runtime.
+
+let MODULE_NAME = "core"
+let SIGMA_SLOT  = 0
+let PHI_KIND    = "digital"
+let LIFECYCLE_STAGES = ["configure", "start", "serve", "report"]
+
+// ── time primitives (sim backend uses host clock) ─────────────────────
+
+fn now_us() -> int {
+    // microseconds since boot.  sim backend = wall clock.
+    let s = exec("date +%s%N").trim()
+    if s.len() == 0 { return 0 }
+    return int(s) / 1000
+}
+
+fn sleep_us(us: int) {
+    // sim backend = host sleep
+    exec("sleep " + str(us) + "e-6 2>/dev/null || sleep 0")
+}
+
+fn sleep_ms(ms: int) { sleep_us(ms * 1000) }
+fn sleep_s(s: int)   { sleep_us(s * 1000 * 1000) }
+
+// ── panic ─────────────────────────────────────────────────────────────
+
+fn panic(msg: str) {
+    println("__HEXA_HAL_PANIC__ " + msg)
+    exit(1)
+}
+
+// ── critical-section guard (sim no-op) ───────────────────────────────
+
+fn cs_enter() -> int {
+    // returns saved IRQ state.  sim = 0.
+    return 0
+}
+
+fn cs_exit(saved: int) {
+    // sim no-op
+}
+
+// ── τ-lifecycle (degenerate for runtime) ──────────────────────────────
+
+fn core_configure() -> bool { return true }
+fn core_start()     -> bool { return true }
+fn core_serve()     -> bool { return true }
+fn core_report()    -> str  { return "core: ok (sim backend)" }
+
+// ── self-introspection ────────────────────────────────────────────────
+
+fn core_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, str(LIFECYCLE_STAGES.len())]
+}

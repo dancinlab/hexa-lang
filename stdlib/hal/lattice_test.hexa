@@ -1,0 +1,45 @@
+#!hexa strict
+// stdlib/hal/tests/test_n6_lattice.hexa — F-EMB-1/3 invariant check.
+
+let SIGMA_6 = 12
+let TAU_6   = 4
+let PHI_6   = 2
+let J2      = 24
+
+let DIGITAL_MODULES = ["core", "gpio", "i2c", "spi", "uart", "pwm", "timer", "intr", "dma", "rtc"]
+let ANALOG_MODULES  = ["adc", "dac"]
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn main() {
+    println("=== test_n6_lattice ===")
+
+    let total = DIGITAL_MODULES.len() + ANALOG_MODULES.len()
+    _check(total == SIGMA_6, "σ(6) = " + str(SIGMA_6) + ": total module count", "got " + str(total))
+    _check(ANALOG_MODULES.len() == PHI_6, "φ(6) = " + str(PHI_6) + ": analog module count", "got " + str(ANALOG_MODULES.len()))
+
+    // master identity:  σ · φ = n · τ = J₂ = 24
+    let lhs = SIGMA_6 * PHI_6
+    let mid = 6 * TAU_6
+    _check(lhs == J2 && mid == J2,
+           "σ·φ = n·τ = J₂ = " + str(J2),
+           "σ·φ=" + str(lhs) + " n·τ=" + str(mid))
+
+    _check(J2 / 6 == TAU_6, "J₂ / n = τ(6) = 4", "")
+
+    if FAIL > 0 {
+        println("__HEXA_HAL_TEST_N6_LATTICE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_HAL_TEST_N6_LATTICE__ PASS")
+    exit(0)
+}

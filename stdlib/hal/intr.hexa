@@ -1,0 +1,60 @@
+#!hexa strict
+// stdlib/hal/intr/intr.hexa — σ-slot 9: interrupts.
+//
+// import:  use "stdlib/hal/intr"
+// φ:       digital
+// handles: ≤ J₂=24 IRQ vectors (cortex-m baseline NVIC).
+
+let MODULE_NAME = "intr"
+let SIGMA_SLOT  = 9
+let PHI_KIND    = "digital"
+
+// ── IRQ priority levels (τ=4 nested levels typical) ───────────────────
+let PRIO_HIGH    = 0   // crit: thermal trip / fault
+let PRIO_REAL_T  = 1   // realtime: motor / sensor fusion
+let PRIO_NORMAL  = 2   // serial / dma-done
+let PRIO_LOW     = 3   // background / housekeeping
+
+fn intr_configure(vector: int, priority: int) -> int {
+    if vector < 0 || vector > 23 { return -1 }   // J₂=24 max
+    if priority < 0 || priority > 3 { return -2 }
+    return vector
+}
+
+fn intr_attach(handle: int, name: str) -> bool {
+    if handle < 0 { return false }
+    println("[intr sim] vec " + str(handle) + " <- callback '" + name + "'")
+    return true
+}
+
+fn intr_enable(handle: int)  -> bool { return handle >= 0 }
+fn intr_disable(handle: int) -> bool { return handle >= 0 }
+fn intr_clear(handle: int)   -> bool { return handle >= 0 }
+
+fn intr_global_enable()  -> bool { return true }
+fn intr_global_disable() -> bool { return true }
+
+fn intr_pending(handle: int) -> bool {
+    if handle < 0 { return false }
+    return false   // sim: nothing pending
+}
+
+fn intr_report(handle: int) -> str {
+    if handle < 0 { return "intr: invalid" }
+    return "intr: vec " + str(handle) + " ok (sim)"
+}
+
+fn intr_open(vector: int, priority: int, name: str) -> int {
+    let h = intr_configure(vector, priority)
+    if h < 0 { return h }
+    if !intr_attach(h, name) { return -3 }
+    if !intr_enable(h) { return -4 }
+    return h
+}
+
+fn intr_close(handle: int) -> bool {
+    intr_disable(handle)
+    return handle >= 0
+}
+
+fn intr_module_meta() -> [str] { return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "24"] }

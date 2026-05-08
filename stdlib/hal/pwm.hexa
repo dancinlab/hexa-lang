@@ -1,0 +1,49 @@
+#!hexa strict
+// stdlib/hal/pwm/pwm.hexa — σ-slot 7: duty-cycle generator.
+//
+// import:  use "stdlib/hal/pwm"
+// φ:       digital  (duty-cycle is digital high/low ratio; analog look)
+// handles: ≤ 4 generators × σ=12 channels each.
+
+let MODULE_NAME = "pwm"
+let SIGMA_SLOT  = 7
+let PHI_KIND    = "digital"
+
+fn pwm_configure(gen: int, channel: int, freq_hz: int) -> int {
+    if gen < 0 || gen > 3 { return -1 }
+    if channel < 0 || channel > 11 { return -2 }
+    if freq_hz < 1 || freq_hz > 1000000 { return -3 }
+    return gen * 12 + channel
+}
+
+fn pwm_start(handle: int) -> bool { return handle >= 0 }
+
+fn pwm_set_duty(handle: int, duty_x100: int) -> bool {
+    if handle < 0 { return false }
+    if duty_x100 < 0 || duty_x100 > 10000 { return false }   // 0-100.00%
+    println("[pwm sim] ch " + str(handle) + " duty=" + str(duty_x100) + "/10000")
+    return true
+}
+
+fn pwm_set_freq(handle: int, freq_hz: int) -> bool {
+    if handle < 0 || freq_hz < 1 { return false }
+    return true
+}
+
+fn pwm_stop(handle: int) -> bool { return handle >= 0 }
+
+fn pwm_report(handle: int) -> str {
+    if handle < 0 { return "pwm: invalid" }
+    return "pwm: ch " + str(handle) + " ok (sim)"
+}
+
+fn pwm_open(gen: int, channel: int, freq_hz: int, duty_x100: int) -> int {
+    let h = pwm_configure(gen, channel, freq_hz)
+    if h < 0 { return h }
+    if !pwm_start(h) { return -4 }
+    if !pwm_set_duty(h, duty_x100) { return -5 }
+    return h
+}
+
+fn pwm_close(handle: int) -> bool { return handle >= 0 }
+fn pwm_module_meta() -> [str] { return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"] }

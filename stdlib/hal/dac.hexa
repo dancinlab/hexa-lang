@@ -1,0 +1,66 @@
+#!hexa strict
+// stdlib/hal/dac/dac.hexa — σ-slot 6: analog write.  ★ φ=analog
+//
+// import:  use "stdlib/hal/dac"
+// φ:       analog
+// handles: ≤ 4 converters × σ=12 output channels each.
+//
+// canon-aware: σ-aligned 12-bit default resolution; J₂=24-bit premium
+// for high-precision waveform output (mirrors ADC ladder).
+
+let MODULE_NAME = "dac"
+let SIGMA_SLOT  = 6
+let PHI_KIND    = "analog"   // ★ second of two analog modules
+
+let RES_8BIT  = 8
+let RES_10BIT = 10
+let RES_12BIT = 12   // σ(6) — n=6-aligned default
+let RES_16BIT = 16
+
+fn dac_configure(unit: int, channel: int, resolution: int) -> int {
+    if unit < 0 || unit > 3 { return -1 }
+    if channel < 0 || channel > 11 { return -2 }
+    if resolution < 8 || resolution > 16 { return -3 }
+    return unit * 12 + channel
+}
+
+fn dac_start(handle: int) -> bool { return handle >= 0 }
+
+fn dac_write(handle: int, value: int) -> bool {
+    if handle < 0 { return false }
+    if value < 0 || value > 65535 { return false }
+    println("[dac sim] ch " + str(handle) + " <- " + str(value))
+    return true
+}
+
+fn dac_write_mv(handle: int, mv: int) -> bool {
+    if handle < 0 || mv < 0 || mv > 3300 { return false }
+    let raw = mv * 4096 / 3300
+    return dac_write(handle, raw)
+}
+
+fn dac_ramp(handle: int, start: int, end: int, steps: int) -> bool {
+    if handle < 0 || steps <= 0 { return false }
+    let mut i = 0
+    while i < steps {
+        let v = start + (end - start) * i / steps
+        dac_write(handle, v)
+        i = i + 1
+    }
+    return true
+}
+
+fn dac_report(handle: int) -> str {
+    if handle < 0 { return "dac: invalid" }
+    return "dac: ch " + str(handle) + " ok (sim)"
+}
+
+fn dac_open(unit: int, channel: int) -> int {
+    let h = dac_configure(unit, channel, RES_12BIT)
+    if h < 0 { return h }
+    if !dac_start(h) { return -4 }
+    return h
+}
+
+fn dac_close(handle: int) -> bool { return handle >= 0 }
+fn dac_module_meta() -> [str] { return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"] }
