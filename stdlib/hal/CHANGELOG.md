@@ -1,5 +1,38 @@
 # stdlib/hal CHANGELOG
 
+## [1.13.0] - 2026-05-09
+
+### Added — `numerics_gpgpu_lattice.hexa` F-GPGPU-1 T2 numerical (lifts to 67%)
+- `numerics_gpgpu_lattice.hexa` (~210 lines) — first T2 fixture for the
+  GPGPU axis. Cross-checks the σ=12 = 6 vendors × 2 IRs lattice
+  cardinality against the on-disk backend table.
+
+  9 numerical checks:
+    1. 6 vendor roster cardinality (cuda/hip/sycl/opencl/metal/webgpu)
+    2. 2 IR roster cardinality (spirv/ptx)
+    3. 6 backend/<vendor>/compute.hexa files present on disk
+    4. 2 backend/<ir>/compute.hexa files present on disk
+    5. compute.hexa host primitive present at stdlib/hal root
+    6. σ_gpgpu = 6·2 = 12 (algebraic re-assert)
+    7. J₂′ = σ·τ = 12·4 = 48 (algebraic re-assert)
+    8. axis distinct from HW-12 (no vendor/IR name collides with
+       core/gpio/i2c/spi/uart/adc/dac/pwm/timer/intr/dma/rtc)
+    9. every vendor backend's compute.hexa references ≥1 IR substrate
+       (paper-tier mapping check via "PTX"/"SPIR-V" string scan)
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_GPGPU_LATTICE__ PASS`.
+
+  Pattern: numerics_module_topology.hexa (sister F-HAL-1 T2 fixture).
+  Same _check / RUN / FAIL harness, same root resolution, same PASS/FAIL
+  sentinel scheme.
+
+  **F-GPGPU-1 closure lifted: 33% → 67%** (T1 ✓ + T2 ✓; T3 deferred per
+  canon §7.5 FFI-downstream rule). 1st of 6 T2 fixtures committed in the
+  preregister at v1.12.0; remaining 5 (numerics_gpgpu_{lifecycle,
+  ir_dichotomy, dispatch, mem_tiers, barriers}.hexa) planned v1.14.0+.
+
+  Phase G iter 9+5+1.
+
 ## [1.12.0] - 2026-05-08
 
 ### Added — `falsifier_gpgpu_check.hexa` F-GPGPU axis falsifier preregister + tracker
