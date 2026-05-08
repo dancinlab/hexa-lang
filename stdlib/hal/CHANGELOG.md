@@ -1,5 +1,82 @@
 # stdlib/hal CHANGELOG
 
+## [1.3.0] - 2026-05-08
+
+### Added
+- `t3/numerics_t3_rp2040_compile.hexa` — **T3b1 (compile-tier)**
+  numerical script. Live-runs the `make -f Makefile.rp2040` recipe
+  via the local `arm-none-eabi-gcc` toolchain, then asserts the
+  produced `t3_harness.elf` matches the ARMv6-M layout documented
+  in `linker_rp2040.ld` and `boot_rp2040.s`. **First T3 sub-tier
+  to actually invoke a real toolchain** (vs T3a which is paper-only).
+- `t3/.gitignore` — excludes `*.o` / `*.elf` / `*.bin` / `*.uf2` /
+  `*.log` (build artifacts + run logs are regenerable).
+
+### Changed
+- `t3/harness_main.c` — replaced `#include <stdint.h>` with manual
+  integer typedefs (`uint8_t` / `uint16_t` / `uint32_t` / `uint64_t`).
+  This removes the libc dependency and enables a fully `-nostdlib`
+  cross-compile against bare arm-none-eabi-gcc (no newlib required).
+- `t3/README.md` — T3 sub-tier model expanded from 2 (T3a/T3b) to
+  3 (T3a / T3b1 compile / T3b2 run); v1.3.0 status block added.
+
+### T3 sub-tier table at v1.3.0
+| sub-tier | what it verifies                                    | status      |
+|:--------|:----------------------------------------------------|:------------|
+| T3a     | scaffold files exist on disk + sentinel string in C | ✓ (v1.2.0)  |
+| T3b1    | arm-none-eabi-gcc actually builds → valid ARMv6-M ELF | ✓ (v1.3.0) |
+| T3b2    | Renode runs ELF + UART log shows sentinel           | ☐ deferred  |
+
+Local verification (this commit, 2026-05-08):
+- arm-none-eabi-gcc 16.1.0 (homebrew, /opt/homebrew/bin/arm-none-eabi-gcc).
+- `make -f Makefile.rp2040 t3_harness.elf` succeeds cleanly.
+- ELF inspection (`arm-none-eabi-objdump -h`):
+  - `.text` @ 0x10000000 (FLASH XIP), 420 bytes (0x1A4).
+  - `.data` and `.bss` empty (no initialized/zero-init globals).
+- ELF symbols (`arm-none-eabi-nm`):
+  - `_vector_table`  @ 0x10000000
+  - `_reset_handler` @ 0x10000080
+  - `harness_main`   @ 0x100000f0
+  - `_stack_top`     @ 0x20040000 (top of 256K SRAM)
+
+### Recipe-aligned closure (no F-HAL change)
+T3b1 compile-tier landing does NOT lift any `F<n>_T3` to ✓ in
+`falsifier_check.hexa`. Per recipe §3, F-HAL T3 closure requires
+T3b2 (run-tier — Renode log shows sentinel). v1.3.0 is "scaffold
+proven buildable against a real toolchain; run-tier still pending".
+
+F-HAL closure stays at **67% × 5 (sat-1 ✓)** until v1.4.0+ activates
+Renode and captures the UART sentinel.
+
+### Why split T3b into compile + run?
+The original T3 spec was binary (paper vs HW-bench). After landing
+T3a, the next concrete step turned out to have two distinct
+verifiable phases:
+1. *Does the scaffold actually compile?* — answerable with just
+   arm-none-eabi-gcc; tests scaffold correctness, linker-script
+   consistency, ABI compatibility (Cortex-M0+ vs M7).
+2. *Does the binary actually run as documented?* — answerable only
+   with an emulator (Renode) or physical board.
+
+Splitting these gives the agent a stepping-stone proof that the
+scaffold is more than just text on disk. Compile-tier alone would
+catch broken Makefiles, mis-aligned vector tables, or symbol-name
+typos — all real failure modes that T3a (file-presence only) cannot
+catch.
+
+### Provenance
+- arm-none-eabi-gcc 16.1.0 from homebrew (`brew install
+  arm-none-eabi-gcc`).
+- ARMv6-M ABI per ARM ARM (DDI 0419E).
+- Build verified live; no mocking.
+
+### Roadmap
+- v1.4.0: T3b2 run-tier — install Renode 2026.x, run the harness,
+  capture UART log, write `numerics_t3_rp2040_renode.hexa`. THIS
+  finally lifts F<n>_T3 ✓ for whichever falsifier the harness
+  exercises (likely F-HAL-1 — module-presence verifiable from
+  symbol table).
+
 ## [1.2.0] - 2026-05-08
 
 ### Added

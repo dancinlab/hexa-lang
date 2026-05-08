@@ -17,7 +17,13 @@
  * stdlib/hal/t3/harness_main.hexa (sim-mirror).
  */
 
-#include <stdint.h>
+/* Manual integer typedefs — avoids depending on a hosted libc/newlib
+ * for the cross-compile (the harness is fully -nostdlib, fully bare-
+ * metal; only the gcc-internal builtins are needed). */
+typedef unsigned char       uint8_t;
+typedef unsigned short      uint16_t;
+typedef unsigned int        uint32_t;
+typedef unsigned long long  uint64_t;
 
 /* RP2040 register addresses (subset; full list in
  * stdlib/hal/backend/rp2040/gpio.hexa + uart.hexa). */
