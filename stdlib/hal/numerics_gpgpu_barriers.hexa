@@ -1,0 +1,238 @@
+#!hexa strict
+// stdlib/hal/numerics_gpgpu_barriers.hexa — F-GPGPU-6 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-GPGPU-6
+// (4 barrier scopes: subgroup / workgroup / cluster / grid; falsifier_
+// gpgpu_check.hexa registry).
+//
+// **LAST T2 fixture in the F-GPGPU axis set.** Lifts F-GPGPU-6 closure
+// from 33% → 67% and reaches the **sat-1 milestone** (all 6 F-GPGPU
+// falsifiers at ≥67% closure) for the GPGPU axis ledger.
+//
+// T1 (compute.hexa internal asserts: SCOPE_* constants 0..3) closes the
+// algebraic identity:
+//
+//   |barrier_scopes| = τ = 4 ∧ SCOPE_SUBGROUP/WORKGROUP/CLUSTER/GRID = 0/1/2/3
+//
+// T2 (this script) cross-checks the scope table NUMERICALLY by reading
+// every vendor backend's source and verifying:
+//
+//   1. compute.hexa root declares all 4 SCOPE_* with values 0..3.
+//   2. every vendor backend declares all 4 SCOPE_* with values 0..3
+//      (no gaps, no duplicates, consistent with root).
+//   3. SCOPE_* values are CONSISTENT across all 6 vendors.
+//   4. 4-scope table cardinality = τ_gpgpu = 4 (algebraic re-assert).
+//
+// Barrier-scope name mapping (paper-tier; canon §4 axis 4):
+//   SCOPE_SUBGROUP   → warp / wavefront / simdgroup / __syncwarp
+//   SCOPE_WORKGROUP  → block / threadgroup / __syncthreads / barrier()
+//   SCOPE_CLUSTER    → CUDA Hopper SM 9.0+ thread block cluster /
+//                       cluster.sync (newest scope; emerged 2022 with H100)
+//   SCOPE_GRID       → grid-wide / cooperative_groups::grid_group::sync
+//
+// PASS = all identities hold against on-disk backend table.
+// FAIL = any scope missing OR value drift OR cardinality drift.
+//
+// Run:
+//   hexa run stdlib/hal/numerics_gpgpu_barriers.hexa
+//
+// Cost: $0 (file-reads + grep; no compilation).
+//
+// Phase G iter 9+5+6; F-GPGPU-6 closure 33% → 67%; sat-1 milestone
+// reached for F-GPGPU axis (all 6 falsifiers ≥ 67%). T3 (HW-bench)
+// remains deferred per canon §7.5 — cross-vendor SAXPY benchmark
+// blocked on actual GPU runtime FFI.
+//
+// Pattern: numerics_gpgpu_mem_tiers.hexa (sister F-GPGPU-5 T2 fixture
+// — both check 4-tier cardinality + cross-vendor agreement).
+
+// ─── n=6 lattice constants ────────────────────────────────────────────
+
+let TAU_GPGPU         = 4
+let GPGPU_VENDORS_N   = 6
+
+// Canonical scope order + values (compute.hexa convention).
+// Index = expected numeric scope value.
+let SCOPE_NAMES = [
+    "SCOPE_SUBGROUP",   // 0 — warp / wavefront / simdgroup
+    "SCOPE_WORKGROUP",  // 1 — block / threadgroup
+    "SCOPE_CLUSTER",    // 2 — Hopper SM 9.0+ thread-block cluster
+    "SCOPE_GRID"        // 3 — grid-wide cooperative groups
+]
+
+// Vendor backend roster (canonical 6).
+let VENDORS = [
+    "cuda", "hip", "sycl", "opencl", "metal", "webgpu"
+]
+
+// ─── check harness ───────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// Extract numeric value of `let <name> = <int>` from source.
+fn _extract_let_int(src: str, name: str) -> int {
+    let pat = "let " + name
+    let idx = src.index_of(pat)
+    if idx < 0 { return -1 }
+    let mut i = idx + pat.len()
+    while i < src.len() && src.char_at(i) != "=" { i = i + 1 }
+    if i >= src.len() { return -1 }
+    i = i + 1
+    while i < src.len() && (src.char_at(i) == " " || src.char_at(i) == "\t") { i = i + 1 }
+    let mut digits = ""
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch >= "0" && ch <= "9" { digits = digits + ch } else { break }
+        i = i + 1
+    }
+    if digits.len() == 0 { return -1 }
+    return int(digits)
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_root_compute_scopes(root: str) {
+    let p = root + "/stdlib/hal/compute.hexa"
+    if !_exists(p) {
+        _check(false, "compute.hexa root declares 4 SCOPE_* with values 0..3", "compute.hexa missing")
+        return
+    }
+    let src = read_file(p)
+    let mut bad = ""
+    let mut detail = ""
+    let mut idx = 0
+    while idx < SCOPE_NAMES.len() {
+        let name = SCOPE_NAMES[idx]
+        let v = _extract_let_int(src, name)
+        if v != idx {
+            bad = bad + name + "(=" + str(v) + ",want=" + str(idx) + ") "
+        } else {
+            detail = detail + name + "=" + str(v) + " "
+        }
+        idx = idx + 1
+    }
+    _check(bad.len() == 0,
+           "compute.hexa root declares all 4 SCOPE_* with values 0..3",
+           if bad.len() > 0 { "issues: " + bad } else { detail })
+}
+
+fn check_per_vendor_scopes(root: str) {
+    let mut bad = ""
+    let mut detail = ""
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if !_exists(p) { bad = bad + v + "(missing) "; continue }
+        let src = read_file(p)
+        let mut vendor_ok = true
+        let mut idx = 0
+        while idx < SCOPE_NAMES.len() {
+            let name = SCOPE_NAMES[idx]
+            let val = _extract_let_int(src, name)
+            if val != idx {
+                vendor_ok = false
+                bad = bad + v + "." + name + "(=" + str(val) + ",want=" + str(idx) + ") "
+            }
+            idx = idx + 1
+        }
+        if vendor_ok { detail = detail + v + "=ok " }
+    }
+    _check(bad.len() == 0,
+           "every vendor backend declares all 4 SCOPE_* with values 0..3",
+           if bad.len() > 0 { "issues: " + bad } else { detail })
+}
+
+fn check_scope_value_consistency(root: str) {
+    let mut bad = ""
+    let mut idx = 0
+    while idx < SCOPE_NAMES.len() {
+        let name = SCOPE_NAMES[idx]
+        let mut first_val = -2   // -2 = unset sentinel
+        let mut scope_bad = ""
+        for v in VENDORS {
+            let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+            if !_exists(p) { continue }
+            let src = read_file(p)
+            let val = _extract_let_int(src, name)
+            if first_val == -2 { first_val = val }
+            else if val != first_val {
+                scope_bad = scope_bad + v + "(=" + str(val) + ") "
+            }
+        }
+        if scope_bad.len() > 0 {
+            bad = bad + name + "(reference=" + str(first_val) + ",dissent: " + scope_bad + ") "
+        }
+        idx = idx + 1
+    }
+    _check(bad.len() == 0,
+           "SCOPE_* values are CONSISTENT across all 6 vendor backends",
+           if bad.len() > 0 { "issues: " + bad } else { "all 4 scope values stable across all vendors" })
+}
+
+fn check_cardinality_eq_4() {
+    _check(SCOPE_NAMES.len() == 4 && TAU_GPGPU == 4,
+           "|barrier_scopes| = τ = 4 (cardinality re-assert)",
+           "got |SCOPE_NAMES|=" + str(SCOPE_NAMES.len()) + " τ=" + str(TAU_GPGPU))
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_gpgpu_barriers: F-GPGPU-6 T2 numerical")
+    println("========================================================================")
+    println("  vendors: " + str(VENDORS))
+    println("  scope names (canonical order; index = value):")
+    let mut idx = 0
+    while idx < SCOPE_NAMES.len() {
+        println("    " + str(idx) + " " + SCOPE_NAMES[idx])
+        idx = idx + 1
+    }
+    println("")
+
+    let root = _root()
+
+    check_cardinality_eq_4()
+    check_root_compute_scopes(root)
+    check_per_vendor_scopes(root)
+    check_scope_value_consistency(root)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-GPGPU-6: 4 barrier scopes subgroup/workgroup/cluster/grid (cross-checked numerically)")
+    println("")
+    println("  ★ MILESTONE: F-GPGPU axis sat-1 reached when this script PASSES (all 6 ≥ 67%)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_GPGPU_BARRIERS__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_GPGPU_BARRIERS__ PASS")
+    exit(0)
+}
+
+main()

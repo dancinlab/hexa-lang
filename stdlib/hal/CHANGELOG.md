@@ -1,5 +1,45 @@
 # stdlib/hal CHANGELOG
 
+## [1.18.0] - 2026-05-09
+
+### Added — `numerics_gpgpu_barriers.hexa` F-GPGPU-6 T2 numerical (★ F-GPGPU sat-1 milestone)
+- `numerics_gpgpu_barriers.hexa` (~190 lines) — **sixth + last T2
+  fixture for the GPGPU axis**. Cross-checks the 4 barrier scopes
+  (subgroup / workgroup / cluster / grid) against on-disk vendor
+  backend SCOPE_* declarations.
+
+  Barrier-scope name mapping (canon §4 axis 4):
+    SCOPE_SUBGROUP   → warp / wavefront / simdgroup / __syncwarp
+    SCOPE_WORKGROUP  → block / threadgroup / __syncthreads / barrier()
+    SCOPE_CLUSTER    → CUDA Hopper SM 9.0+ cluster.sync (newest;
+                        emerged 2022 with H100)
+    SCOPE_GRID       → cooperative_groups::grid_group::sync
+
+  4 numerical checks:
+    1. |barrier_scopes| = τ = 4 cardinality re-assert
+    2. compute.hexa root declares all 4 SCOPE_* with values 0..3
+    3. every vendor backend declares all 4 SCOPE_* with values 0..3
+    4. SCOPE_* values are CONSISTENT across all 6 vendor backends
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_GPGPU_BARRIERS__ PASS`.
+
+  Pattern: numerics_gpgpu_mem_tiers.hexa (sister F-GPGPU-5 T2 — both
+  check 4-tier cardinality + cross-vendor agreement on integer ID
+  consistency).
+
+  **F-GPGPU-6 closure lifted: 33% → 67%** (T1 ✓ + T2 ✓; T3 deferred
+  per canon §7.5 FFI-downstream rule).
+
+  ★ **F-GPGPU axis sat-1 milestone REACHED** ★ — all 6 F-GPGPU
+  falsifiers now at 67% closure (T1+T2 ✓ across the board). 6/6 T2
+  fixtures landed (100%). T3 (cross-vendor SAXPY benchmark) remains
+  blocked on GPU runtime FFI; lifts each F-GPGPU 67% → 100% when it
+  lands. The F-GPGPU ledger now mirrors F-HAL's sat-1 milestone
+  (reached at v0.3.0 fc2eeb2f for the embedded HW-12 axis) on the
+  separate GPGPU axis.
+
+  Phase G iter 9+5+6.
+
 ## [1.17.0] - 2026-05-09
 
 ### Added — `numerics_gpgpu_mem_tiers.hexa` F-GPGPU-5 T2 numerical (lifts to 67%)
