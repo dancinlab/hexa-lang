@@ -1,0 +1,79 @@
+#!hexa strict
+// stdlib/hal/backend/esp32s3/pwm.hexa — ESP32-S3 PWM backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-S3 Xtensa LX7 dual-core @ 240 MHz.
+// Chip ref:  ESP32-S3 TRM §13 LED_PWM (LEDC) — 8 channels × 4 timers;
+//            §16 MCPWM — 2 modules × 3 operators (out of scope).
+// Surface:   esp32s3_pwm_{configure,start,set_duty,set_freq,stop}(...)
+// Dispatch:  pwm.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   LEDC:  base = DR_REG_LEDC_BASE = 0x60019000  (same offset as C3)
+//
+//   LEDC_CH<n>_CONF0_REG      0x000 + 0x14·n   channel n config (n=0..7)
+//   LEDC_CH<n>_HPOINT_REG     0x004 + 0x14·n
+//   LEDC_CH<n>_DUTY_REG       0x008 + 0x14·n
+//   LEDC_CH<n>_CONF1_REG      0x00C + 0x14·n
+//   LEDC_TIMER<n>_CONF_REG    0x0A0 + 0x08·n   (n=0..3)
+//
+// 8 channels × 4 timers on S3 (vs C3's 6 channels × 4 timers).
+// No HS/LS distinction (same as C3, simpler than ESP32).
+// Resolution: 1..20-bit duty.
+
+let MODULE_NAME = "esp32s3_pwm"
+let SIGMA_SLOT  = 7
+let PHI_KIND    = "digital"
+
+let DR_REG_LEDC_BASE = 0x60019000
+
+let LEDC_CH0_CONF0_REG  = 0x000
+let LEDC_CH0_DUTY_REG   = 0x008
+let LEDC_TIMER0_CONF_REG = 0x0A0
+
+let APB_CLK_HZ = 80000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32s3_pwm_configure(gen: int, channel: int, freq_hz: int) -> int {
+    if gen < 0 || gen > 7 { return -1 }       // 8 channels on S3
+    if channel < 0 || channel > 0 { return -2 }
+    if freq_hz < 1 || freq_hz > 40000000 { return -3 }
+    return gen * 12 + channel
+}
+
+fn esp32s3_pwm_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32s3_pwm_set_duty(handle: int, duty_x100: int) -> bool {
+    if handle < 0 { return false }
+    if duty_x100 < 0 || duty_x100 > 10000 { return false }
+    return true
+}
+
+fn esp32s3_pwm_set_freq(handle: int, freq_hz: int) -> bool {
+    if handle < 0 || freq_hz < 1 { return false }
+    return true
+}
+
+fn esp32s3_pwm_stop(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32s3_pwm_report(handle: int) -> str {
+    return "[esp32s3_pwm sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32s3_pwm_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32s3_pwm sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  LEDC=" + str(DR_REG_LEDC_BASE) + "  (8 channels × 4 timers; 1..20-bit duty)")
+}

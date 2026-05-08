@@ -1,0 +1,103 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/pwm.hexa — RP2040 PWM backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    Raspberry Pi RP2040 dual Cortex-M0+ @ 133 MHz.
+// Chip ref:  RP2040 Datasheet §4.5 PWM (8 slices × 2 channels A/B =
+//            16 PWM outputs; each slice has its own counter/compare).
+// Surface:   rp2040_pwm_{configure,start,set_duty,set_freq,stop}(...)
+// Dispatch:  pwm.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   PWM:  base = 0x40050000   (8 slices, 0..7)
+//
+//   CH<n>_CSR                  0x000 + 0x14·n   slice control + status
+//                                                EN bit 0 (slice enable)
+//                                                PH_CORRECT bit 1 (centre-aligned)
+//                                                A_INV bit 2 / B_INV bit 3
+//                                                DIVMODE bits 5:4 (free-run/level/rising/falling)
+//   CH<n>_DIV                  0x004 + 0x14·n   8.4 fractional divider
+//                                                INT bits 11:4 (1..255)
+//                                                FRAC bits 3:0 (0..15)
+//   CH<n>_CTR                  0x008 + 0x14·n   16-bit counter
+//   CH<n>_CC                   0x00C + 0x14·n   compare values:
+//                                                A bits 15:0
+//                                                B bits 31:16
+//   CH<n>_TOP                  0x010 + 0x14·n   counter wrap (period)
+//   EN                         0x0A0   bit n = enable slice n (atomic)
+//   INTR                       0x0A4   raw wrap interrupts
+//   INTE                       0x0A8   interrupt enable
+//
+// Frequency = sys_clk / (DIV · (TOP+1)). At 125 MHz with DIV=1 and
+// TOP=65535, f_min = 1.9 kHz. With DIV=255.9375 (max), f_min ≈ 7 Hz.
+// Duty A = CC_A / (TOP+1). Duty B = CC_B / (TOP+1).
+//
+// Pin mapping: GPIO<n> maps to slice (n/2) channel (n%2).
+// Even GPIO → channel A; odd GPIO → channel B.
+
+let MODULE_NAME = "rp2040_pwm"
+let SIGMA_SLOT  = 7
+let PHI_KIND    = "digital"
+
+let PWM_BASE = 0x40050000
+
+let CH0_CSR = 0x000
+let CH0_DIV = 0x004
+let CH0_CTR = 0x008
+let CH0_CC  = 0x00C
+let CH0_TOP = 0x010
+let PWM_EN  = 0x0A0
+
+let SYS_CLK_HZ = 125000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn rp2040_pwm_configure(gen: int, channel: int, freq_hz: int) -> int {
+    if gen < 0 || gen > 7 { return -1 }       // 8 slices
+    if channel < 0 || channel > 1 { return -2 }   // A or B
+    if freq_hz < 7 || freq_hz > 10000000 { return -3 }
+    // STUB: write CH<gen>_DIV from sys_clk / (TOP·freq_hz);
+    //       set CH<gen>_TOP; configure GPIO function PWM via IO_BANK0
+    return gen * 12 + channel
+}
+
+fn rp2040_pwm_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: write EN.bit(slice_index) = 1 (atomic enable)
+    return true
+}
+
+fn rp2040_pwm_set_duty(handle: int, duty_x100: int) -> bool {
+    if handle < 0 { return false }
+    if duty_x100 < 0 || duty_x100 > 10000 { return false }
+    // STUB: CH<slice>_CC.A or .B = (TOP+1) * duty_x100 / 10000
+    return true
+}
+
+fn rp2040_pwm_set_freq(handle: int, freq_hz: int) -> bool {
+    if handle < 0 || freq_hz < 7 { return false }
+    // STUB: recompute DIV + TOP; preserve CC ratio
+    return true
+}
+
+fn rp2040_pwm_stop(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: clear EN.bit(slice_index)
+    return true
+}
+
+fn rp2040_pwm_report(handle: int) -> str {
+    return "[rp2040_pwm sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn rp2040_pwm_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_pwm sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  PWM=" + str(PWM_BASE) + "  (8 slices × 2 channels = 16 PWM outputs)")
+    println("  freq range: ~7 Hz .. ~10 MHz (sys_clk=125 MHz / (DIV·(TOP+1)))")
+}

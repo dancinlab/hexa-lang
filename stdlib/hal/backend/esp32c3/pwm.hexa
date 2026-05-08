@@ -1,0 +1,81 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/pwm.hexa — ESP32-C3 PWM backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C3 RV32IMC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C3 TRM §13 LED_PWM (LEDC) — 6 channels × 4 timers
+//            (smaller than ESP32's 16-ch); §16 MCPWM — 1 module × 3
+//            operators (out of scope).
+// Surface:   esp32c3_pwm_{configure,start,set_duty,set_freq,stop}(...)
+// Dispatch:  pwm.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   LEDC:  base = DR_REG_LEDC_BASE = 0x60019000
+//
+//   LEDC_CH<n>_CONF0_REG      0x000 + 0x14·n   channel n config (n=0..5)
+//   LEDC_CH<n>_HPOINT_REG     0x004 + 0x14·n   high point
+//   LEDC_CH<n>_DUTY_REG       0x008 + 0x14·n   duty value (Q.4)
+//   LEDC_CH<n>_CONF1_REG      0x00C + 0x14·n   fading config
+//   LEDC_TIMER<n>_CONF_REG    0x0A0 + 0x08·n   timer config (n=0..3)
+//
+// 6 channels × 4 timers (vs ESP32's 16-ch × 8 timer split into HS/LS).
+// No HS/LS distinction on C3 — single LEDC instance.
+// Frequency = LEDC_clk / (DIV · 2^DUTY_RESOLUTION); 1..14-bit duty.
+
+let MODULE_NAME = "esp32c3_pwm"
+let SIGMA_SLOT  = 7
+let PHI_KIND    = "digital"
+
+let DR_REG_LEDC_BASE = 0x60019000
+
+let LEDC_CH0_CONF0_REG  = 0x000
+let LEDC_CH0_DUTY_REG   = 0x008
+let LEDC_TIMER0_CONF_REG = 0x0A0
+
+let APB_CLK_HZ = 80000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_pwm_configure(gen: int, channel: int, freq_hz: int) -> int {
+    if gen < 0 || gen > 5 { return -1 }       // 6 channels on C3
+    if channel < 0 || channel > 0 { return -2 }
+    if freq_hz < 1 || freq_hz > 40000000 { return -3 }
+    return gen * 12 + channel
+}
+
+fn esp32c3_pwm_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c3_pwm_set_duty(handle: int, duty_x100: int) -> bool {
+    if handle < 0 { return false }
+    if duty_x100 < 0 || duty_x100 > 10000 { return false }
+    return true
+}
+
+fn esp32c3_pwm_set_freq(handle: int, freq_hz: int) -> bool {
+    if handle < 0 || freq_hz < 1 { return false }
+    return true
+}
+
+fn esp32c3_pwm_stop(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c3_pwm_report(handle: int) -> str {
+    return "[esp32c3_pwm sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c3_pwm_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_pwm sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  LEDC=" + str(DR_REG_LEDC_BASE) + "  (6 channels × 4 timers; 1..14-bit duty)")
+    println("  no HS/LS split (single LEDC instance vs ESP32's dual)")
+}

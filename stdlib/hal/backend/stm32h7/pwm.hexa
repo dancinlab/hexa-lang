@@ -1,0 +1,111 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/pwm.hexa — STM32H7 PWM backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved (pwm.hexa
+// sim ships first; this is HW-backend addition).
+//
+// Target:    STMicroelectronics STM32H7 Cortex-M7 @ 480 MHz.
+// Chip ref:  RM0433 §40 Advanced-control timers (TIM1/TIM8 — full
+//            complementary PWM with break inputs); §39 General-purpose
+//            timers (TIM2-5 PWM mode 1/2); §41 LP timer PWM.
+// Surface:   stm32h7_pwm_{configure,start,set_duty,set_freq,stop}(...)
+// Dispatch:  pwm.hexa selects this via cfg-flag.
+//
+// MMIO layout — PWM is a TIM mode (no separate IP; reuse timer base):
+//
+//   TIM1: 0x40010000   advanced (4 channels + 3 complementary, dead-time)
+//   TIM8: 0x40010400   advanced (mirror of TIM1)
+//   TIM2: 0x40000000   GP 32-bit (4 channels)
+//   TIM3: 0x40000400   GP 16-bit (4 channels)
+//
+//   TIM_CR1                    0x000   CEN bit 0 (counter enable)
+//   TIM_CCMR1                  0x018   capture/compare mode regs:
+//                                       OCxM bits 6:4 (PWM mode 1 = 0b110,
+//                                       PWM mode 2 = 0b111)
+//                                       OCxPE bit 3 (preload enable)
+//   TIM_CCMR2                  0x01C   channels 3/4
+//   TIM_CCER                   0x020   capture/compare enable register
+//                                       CC<n>E bit 4·(n-1) (output enable)
+//                                       CC<n>P bit 4·(n-1)+1 (polarity)
+//   TIM_CNT                    0x024
+//   TIM_PSC                    0x028   prescaler
+//   TIM_ARR                    0x02C   auto-reload (period)
+//   TIM_CCR1..4                0x034..0x040   compare values (duty)
+//   TIM_BDTR                   0x044   break + dead-time register (TIM1/8 only)
+//                                       MOE bit 15 (master output enable)
+//                                       DTG bits 7:0 (dead-time generator)
+//
+// PWM mode 1: output high while CNT < CCRn; PWM mode 2: inverse.
+// Frequency = TIMCLK / ((PSC+1)·(ARR+1)). Duty = CCRn / (ARR+1).
+
+let MODULE_NAME = "stm32h7_pwm"
+let SIGMA_SLOT  = 7
+let PHI_KIND    = "digital"
+
+let TIM1_BASE = 0x40010000
+let TIM8_BASE = 0x40010400
+let TIM2_BASE = 0x40000000
+let TIM3_BASE = 0x40000400
+
+let TIM_CR1   = 0x000
+let TIM_CCMR1 = 0x018
+let TIM_CCER  = 0x020
+let TIM_CNT   = 0x024
+let TIM_PSC   = 0x028
+let TIM_ARR   = 0x02C
+let TIM_CCR1  = 0x034
+let TIM_BDTR  = 0x044
+
+let APB_TIM_HZ = 200000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn stm32h7_pwm_configure(gen: int, channel: int, freq_hz: int) -> int {
+    if gen < 0 || gen > 3 { return -1 }       // gen 0=TIM1, 1=TIM8, 2=TIM2, 3=TIM3
+    if channel < 0 || channel > 3 { return -2 }   // 4 channels per TIM
+    if freq_hz < 1 || freq_hz > 1000000 { return -3 }
+    // STUB: enable RCC.APB2ENR.TIMxEN; CCMRn.OCxM=0b110 (PWM mode 1);
+    //       CCMRn.OCxPE=1; CCER.CCxE=1; PSC + ARR from freq_hz; for TIM1/8
+    //       set BDTR.MOE=1 to gate the output stage.
+    return gen * 12 + channel
+}
+
+fn stm32h7_pwm_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: set TIM_CR1.CEN = 1 on the host TIM
+    return true
+}
+
+fn stm32h7_pwm_set_duty(handle: int, duty_x100: int) -> bool {
+    if handle < 0 { return false }
+    if duty_x100 < 0 || duty_x100 > 10000 { return false }
+    // STUB: CCR<channel> = (ARR+1) * duty_x100 / 10000
+    return true
+}
+
+fn stm32h7_pwm_set_freq(handle: int, freq_hz: int) -> bool {
+    if handle < 0 || freq_hz < 1 { return false }
+    // STUB: re-program PSC + ARR from freq_hz; preserve CCR/duty ratio
+    return true
+}
+
+fn stm32h7_pwm_stop(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: clear CCER.CCxE; or clear CR1.CEN to stop all channels of the TIM
+    return true
+}
+
+fn stm32h7_pwm_report(handle: int) -> str {
+    return "[stm32h7_pwm sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn stm32h7_pwm_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[stm32h7_pwm sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  TIM1=" + str(TIM1_BASE) + " TIM8=" + str(TIM8_BASE) +
+            " TIM2=" + str(TIM2_BASE) + " TIM3=" + str(TIM3_BASE))
+    println("  PWM via TIM mode 1; TIM1/8 add complementary + dead-time + break")
+}

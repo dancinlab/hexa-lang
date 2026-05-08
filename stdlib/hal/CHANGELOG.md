@@ -1,5 +1,73 @@
 # stdlib/hal CHANGELOG
 
+## [0.9.0] - 2026-05-08
+
+### Added
+- `backend/{stm32h7,rp2040,esp32,esp32c3,esp32s3}/pwm.hexa` —
+  σ-slot 7 (pwm) HW-backend stubs added for ALL 5 vendors. Per-vendor
+  coverage moves from 6/12 → 7/12. Total backend stub count: 30 → 35.
+  - `stm32h7/pwm.hexa`  — TIM-PWM via TIM1/8 advanced (complementary +
+                          dead-time + break) and TIM2/3 GP; PWM mode 1/2
+                          via CCMRn.OCxM; freq = TIMCLK/((PSC+1)·(ARR+1));
+                          duty = CCRn / (ARR+1).
+  - `rp2040/pwm.hexa`   — dedicated PWM block at 0x40050000; 8 slices ×
+                          2 channels (A/B) = 16 PWM outputs; 8.4-bit
+                          fractional divider; freq range ~7 Hz .. ~10 MHz.
+  - `esp32/pwm.hexa`    — LEDC at 0x3FF59000; 16 channels (8 HS + 8 LS) ×
+                          8 timers (4 HS + 4 LS); 1..20-bit duty; MCPWM
+                          motor-control out of scope.
+  - `esp32c3/pwm.hexa`  — LEDC at 0x60019000; 6 channels × 4 timers
+                          (smaller than ESP32; no HS/LS split); 1..14-bit duty.
+  - `esp32s3/pwm.hexa`  — LEDC at 0x60019000; 8 channels × 4 timers;
+                          1..20-bit duty.
+
+  Surface (mirrors `stdlib/hal/pwm.hexa` sim):
+    pwm_configure(gen, channel, freq_hz) -> int
+    pwm_start(handle) / pwm_stop(handle) -> bool
+    pwm_set_duty(handle, duty_x100) -> bool   (0..10000 = 0..100.00%)
+    pwm_set_freq(handle, freq_hz) -> bool
+    pwm_report(handle) -> str
+
+  Each stub correctly maps the σ-slot 7 sim handle calculation
+  (gen × 12 + channel) to vendor-specific channel limits:
+    - stm32h7: 4 generators (TIM1/8/2/3) × 4 channels = 16 outputs.
+    - rp2040:  8 slices × 2 (A/B)        = 16 outputs.
+    - esp32:   8 HS channels × 1         = 8  (with 8 more LS available).
+    - esp32c3: 6 channels  × 1           = 6.
+    - esp32s3: 8 channels  × 1           = 8.
+
+### Changed
+- HW-backend stub file count: 30 → 35 (5 vendors × 7 peripherals).
+- Per-vendor peripheral coverage: 6/12 → 7/12 across all 5 vendors.
+- F-HAL closure unchanged at 67% × 5 (sat-1 ✓ holds).
+
+### IP-cell observations
+- STM32H7: PWM is a TIM mode (no separate IP) — same register cluster
+  as timer.hexa backend, different OCxM bit-pattern.
+- RP2040: dedicated PWM block (separate from TIMER block); cleaner
+  decoupling but consumes its own MMIO region.
+- ESP32 family: LEDC (LED PWM Controller) + MCPWM (Motor Control PWM)
+  are 2 distinct IPs; this stub covers LEDC only — MCPWM would be a
+  separate σ-slot extension if added.
+
+### Provenance
+- Register sketches from each vendor's reference manual via web-search
+  + training data cross-reference (per autonomy directive web-search
+  mandate). Base addresses confirmed:
+    - STM32H7 TIM1/8/2/3 from RM0433 §39/40.
+    - RP2040 PWM 0x40050000 from RP2040 Datasheet §4.5.
+    - ESP32 LEDC 0x3FF59000 from ESP32 TRM §13.
+    - ESP32-C3 LEDC 0x60019000 from ESP32-C3 TRM §13.
+    - ESP32-S3 LEDC 0x60019000 from ESP32-S3 TRM §13.
+
+### Roadmap
+- v0.10.0 candidate: dac (σ-slot 6) — STM32H7 + ESP32 have native
+  hardware DAC; rp2040 + ESP32-C3 + ESP32-S3 use PWM + RC filter
+  emulation. Stubs will document the fallback path.
+- v0.11.0 candidate: intr (σ-slot 9), dma (σ-slot 10), rtc (σ-slot 11)
+  — last 3 missing peripherals to reach 12/12 per vendor.
+- v0.12.0 candidate: esp32c6 sub-vendor (WiFi 6 / Zigbee / Thread, RV32IMAC).
+
 ## [0.8.0] - 2026-05-08
 
 ### Added
