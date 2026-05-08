@@ -1,5 +1,36 @@
 # stdlib/hal CHANGELOG
 
+## [1.20.0] - 2026-05-09
+
+### Added — `numerics_ai_native_lattice.hexa` F-AI-NATIVE-1 T2 numerical (lifts to 67%)
+- `numerics_ai_native_lattice.hexa` (~175 lines) — first T2 fixture for
+  the AI-native silicon axis. Cross-checks J₂ = σ·φ = 24 lattice
+  cardinality against on-disk ai.hexa source.
+
+  9 numerical checks:
+    1. ai.hexa present at stdlib/hal/ai.hexa
+    2. ai.hexa declares SIGMA = 12
+    3. ai.hexa declares PHI = 2
+    4. ai.hexa declares J2 = 24
+    5. ai.hexa declares MACS_PER_TILE = 24 (= J₂)
+    6. ai.hexa declares MACS_PER_ARRAY = 288 (= σ²·φ)
+    7. σ · φ = J₂ algebraic identity from on-disk values
+    8. σ² · φ = MACS_PER_ARRAY chip-level peak identity
+    9. ai.hexa declares fn ai_invariant_macs_per_tile / per_array accessors
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_LATTICE__ PASS`.
+
+  Pattern: numerics_gpgpu_lattice.hexa (sister F-GPGPU-1 T2). Same
+  _check/RUN/FAIL harness, same _extract_let_int helper, same
+  algebraic-identity-on-disk-values check.
+
+  **F-AI-NATIVE-1 closure lifted: 33% → 67%** (T1 ✓ + T2 ✓; T3 deferred).
+  1/6 T2 fixtures landed; remaining 5 (numerics_ai_native_{lifecycle,
+  prov_dichotomy, tile_count, bt_coverage, pdk_set}.hexa) planned
+  v1.21.0+.
+
+  Phase G iter 9+5+8.
+
 ## [1.19.0] - 2026-05-09
 
 ### Added — `falsifier_ai_native_check.hexa` F-AI-NATIVE axis preregister + tracker
