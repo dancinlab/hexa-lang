@@ -1,0 +1,271 @@
+#!hexa strict
+// stdlib/hal/falsifier_ai_native_check.hexa — AI-native axis falsifier
+//                                                preregister + closure tracker.
+//
+// Companion to:
+//   • stdlib/hal/falsifier_check.hexa       — embedded HW-12 axis (F-HAL-1..5)
+//   • stdlib/hal/falsifier_gpgpu_check.hexa — GPGPU axis (F-GPGPU-1..6)
+//
+// This file preregisters F-AI-NATIVE-1..6 — the falsifiers for the
+// **3rd separate axis** introduced at v1.8.0 (ai.hexa) + populated at
+// v1.9.0 / v1.10.0 / v1.11.0 (3-PDK paper backends sky130 / tsmc_n5 /
+// samsung_sf3p).
+//
+// **Lattice axis** (canon ~/core/canon/domains/compute/ai-native-architecture/
+// ai-native-architecture.md @c0f1f570): AI-native is independent of both
+// HW-12 (embedded peripheral) and GPGPU σ=12 axes. Its invariants:
+//
+//   J₂ = σ·φ = 24    (native MAC slots × provenance kinds per tile)
+//   τ = 4            (configure / start / serve / report)
+//   φ = 2            (FACT / HYPOTHESIS provenance bit kinds)
+//   σ_n = 72         (provenance overhead denominator: φ/σ_n = 1/36)
+//   n_tiles = σ/φ = 6  (native tiles per HEXA-AI chip)
+//   MACS_PER_ARRAY = σ²·φ = 288  (peak MAC/cycle at array level)
+//   BT_COVERAGE = sopfr(n)+φ = 7  (BT_541..BT_547 audit coverage)
+//
+// Closure formula (recipe §3 — same as F-HAL / F-GPGPU):
+//   closure_pct(t1, t2, t3) = 0/33/67/100 by tier count.
+//
+// Status (v1.19.0 — 2026-05-09):
+//
+//   F-AI-NATIVE-1  T1 ✓ (ai.hexa J₂ assert)        T2 ☐  T3 ☐    33%
+//   F-AI-NATIVE-2  T1 ✓ (ai.hexa STAGE_* const)    T2 ☐  T3 ☐    33%
+//   F-AI-NATIVE-3  T1 ✓ (ai.hexa PROV_* const)     T2 ☐  T3 ☐    33%
+//   F-AI-NATIVE-4  T1 ✓ (ai.hexa N_TILES=6)        T2 ☐  T3 ☐    33%
+//   F-AI-NATIVE-5  T1 ✓ (ai.hexa BT_RESERVED..547) T2 ☐  T3 ☐    33%
+//   F-AI-NATIVE-6  T1 ✓ (3 PDK backend.hexa files) T2 ☐  T3 ☐    33%
+//
+// **sat-2 (every F-AI-NATIVE has ≥1 T1 satisfier on disk): EXPECTED PASS**
+// **sat-1 (every F-AI-NATIVE ≥ 67% closure): NOT YET** — needs T2 numerics
+// (planned v1.20.0+: numerics_ai_native_{lattice, lifecycle, prov_dichotomy,
+// tile_count, bt_coverage, pdk_set}.hexa).
+//
+// T3 deferred per canon §7.5 + roadmap §G.5: silicon-tier RTL benchmarks
+// (refuse_event silicon trace + BT ledger silicon mirror + per-PDK
+// place-and-route + tape-out) are downstream. Lifts each F-AI-NATIVE
+// 67% → 100% only when actual tape-out lands.
+//
+// Run:
+//   hexa run stdlib/hal/falsifier_ai_native_check.hexa
+//
+// Cost: $0 (file-existence checks only).
+
+// ─── falsifier registry (F-AI-NATIVE-1..6) ────────────────────────────
+
+let FALSIFIERS = [
+    ["F-AI-NATIVE-1", "J₂ = σ·φ = 24 native MAC slots × provenance kinds per tile"],
+    ["F-AI-NATIVE-2", "4-stage τ-lifecycle: configure / start / serve / report"],
+    ["F-AI-NATIVE-3", "φ=2 provenance kinds: FACT / HYPOTHESIS"],
+    ["F-AI-NATIVE-4", "n_tiles = σ/φ = 6 native tiles per HEXA-AI chip"],
+    ["F-AI-NATIVE-5", "BT_COVERAGE = sopfr(n)+φ = 7 (BT_541..BT_547)"],
+    ["F-AI-NATIVE-6", "3-PDK paper backend set: sky130 + tsmc_n5 + samsung_sf3p"]
+]
+
+// T1 tier-stacks (algebraic — satisfied by ai.hexa internal asserts +
+// 3 PDK backends; constants are EXACT and re-assertable).
+let F1_T1 = ["ai.hexa"]
+let F2_T1 = ["ai.hexa"]
+let F3_T1 = ["ai.hexa"]
+let F4_T1 = ["ai.hexa"]
+let F5_T1 = ["ai.hexa"]
+let F6_T1 = [
+    "backend/ai_native/sky130.hexa",
+    "backend/ai_native/tsmc_n5.hexa",
+    "backend/ai_native/samsung_sf3p.hexa"
+]
+
+// T2 tier-stacks (numerical / fixture — planned v1.20.0+; preregister
+// the file names so future iters can drop them in without renaming).
+let F1_T2: [str] = ["numerics_ai_native_lattice.hexa"]
+let F2_T2: [str] = ["numerics_ai_native_lifecycle.hexa"]
+let F3_T2: [str] = ["numerics_ai_native_prov_dichotomy.hexa"]
+let F4_T2: [str] = ["numerics_ai_native_tile_count.hexa"]
+let F5_T2: [str] = ["numerics_ai_native_bt_coverage.hexa"]
+let F6_T2: [str] = ["numerics_ai_native_pdk_set.hexa"]
+
+// T3 tier-stacks (silicon-tier RTL bench; blocked on actual tape-out
+// per canon §7.5 — refuse_event silicon trace + BT ledger silicon
+// mirror + per-PDK P&R + tape-out is downstream).
+let F1_T3: [str] = []
+let F2_T3: [str] = []
+let F3_T3: [str] = []
+let F4_T3: [str] = []
+let F5_T3: [str] = []
+let F6_T3: [str] = []
+
+// ─── helpers (mirror falsifier_check.hexa / falsifier_gpgpu_check.hexa) ─
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _stack_ok(root: str, stack: [str]) -> bool {
+    if stack.len() == 0 { return false }
+    for s in stack {
+        if !_exists(root + "/stdlib/hal/" + s) { return false }
+    }
+    return true
+}
+
+fn _stack_present_count(root: str, stack: [str]) -> int {
+    let mut n = 0
+    for s in stack {
+        if _exists(root + "/stdlib/hal/" + s) { n = n + 1 }
+    }
+    return n
+}
+
+fn closure_pct(t1: bool, t2: bool, t3: bool) -> int {
+    let mut n = 0
+    if t1 { n = n + 1 }
+    if t2 { n = n + 1 }
+    if t3 { n = n + 1 }
+    if n == 0 { return 0 }
+    if n == 1 { return 33 }
+    if n == 2 { return 67 }
+    return 100
+}
+
+fn _bool_str(b: bool) -> str { if b { return "✓" }; return "✗" }
+
+fn _registered_missing(root: str, stack: [str]) -> int {
+    let mut n = 0
+    for s in stack {
+        if s.len() > 0 && !_exists(root + "/stdlib/hal/" + s) { n = n + 1 }
+    }
+    return n
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    let root = _root()
+
+    let f1_t1 = _stack_ok(root, F1_T1)
+    let f2_t1 = _stack_ok(root, F2_T1)
+    let f3_t1 = _stack_ok(root, F3_T1)
+    let f4_t1 = _stack_ok(root, F4_T1)
+    let f5_t1 = _stack_ok(root, F5_T1)
+    let f6_t1 = _stack_ok(root, F6_T1)
+
+    let f1_t2 = _stack_ok(root, F1_T2)
+    let f2_t2 = _stack_ok(root, F2_T2)
+    let f3_t2 = _stack_ok(root, F3_T2)
+    let f4_t2 = _stack_ok(root, F4_T2)
+    let f5_t2 = _stack_ok(root, F5_T2)
+    let f6_t2 = _stack_ok(root, F6_T2)
+
+    let f1_t3 = _stack_ok(root, F1_T3)
+    let f2_t3 = _stack_ok(root, F2_T3)
+    let f3_t3 = _stack_ok(root, F3_T3)
+    let f4_t3 = _stack_ok(root, F4_T3)
+    let f5_t3 = _stack_ok(root, F5_T3)
+    let f6_t3 = _stack_ok(root, F6_T3)
+
+    let f1_pct = closure_pct(f1_t1, f1_t2, f1_t3)
+    let f2_pct = closure_pct(f2_t1, f2_t2, f2_t3)
+    let f3_pct = closure_pct(f3_t1, f3_t2, f3_t3)
+    let f4_pct = closure_pct(f4_t1, f4_t2, f4_t3)
+    let f5_pct = closure_pct(f5_t1, f5_t2, f5_t3)
+    let f6_pct = closure_pct(f6_t1, f6_t2, f6_t3)
+
+    let f1_t1_n = _stack_present_count(root, F1_T1)
+    let f2_t1_n = _stack_present_count(root, F2_T1)
+    let f3_t1_n = _stack_present_count(root, F3_T1)
+    let f4_t1_n = _stack_present_count(root, F4_T1)
+    let f5_t1_n = _stack_present_count(root, F5_T1)
+    let f6_t1_n = _stack_present_count(root, F6_T1)
+
+    let miss = _registered_missing(root, F1_T1) +
+               _registered_missing(root, F2_T1) +
+               _registered_missing(root, F3_T1) +
+               _registered_missing(root, F4_T1) +
+               _registered_missing(root, F5_T1) +
+               _registered_missing(root, F6_T1)
+    let ok = miss == 0
+
+    let sat_1 = (f1_pct >= 67) && (f2_pct >= 67) && (f3_pct >= 67) &&
+                (f4_pct >= 67) && (f5_pct >= 67) && (f6_pct >= 67)
+    let sat_2 = (f1_t1_n >= 1) && (f2_t1_n >= 1) && (f3_t1_n >= 1) &&
+                (f4_t1_n >= 1) && (f5_t1_n >= 1) && (f6_t1_n >= 1)
+
+    println("========================================================================")
+    println("  stdlib/hal — F-AI-NATIVE axis closure tracker (preregister + check)")
+    println("========================================================================")
+    println("")
+    println("  per-falsifier closure (T1 algebraic / T2 numerical / T3 silicon-bench):")
+    println("    id              T1   T2   T3   closure")
+    let f1_t2_lbl = "  " + _bool_str(f1_t2) + "  "
+    let f2_t2_lbl = "  " + _bool_str(f2_t2) + "  "
+    let f3_t2_lbl = "  " + _bool_str(f3_t2) + "  "
+    let f4_t2_lbl = "  " + _bool_str(f4_t2) + "  "
+    let f5_t2_lbl = "  " + _bool_str(f5_t2) + "  "
+    let f6_t2_lbl = "  " + _bool_str(f6_t2) + "  "
+    let f1_t3_lbl = "  " + _bool_str(f1_t3) + "  "
+    let f2_t3_lbl = "  " + _bool_str(f2_t3) + "  "
+    let f3_t3_lbl = "  " + _bool_str(f3_t3) + "  "
+    let f4_t3_lbl = "  " + _bool_str(f4_t3) + "  "
+    let f5_t3_lbl = "  " + _bool_str(f5_t3) + "  "
+    let f6_t3_lbl = "  " + _bool_str(f6_t3) + "  "
+    println("    F-AI-NATIVE-1    " + _bool_str(f1_t1) + f1_t2_lbl + f1_t3_lbl + " " + str(f1_pct) + "%")
+    println("    F-AI-NATIVE-2    " + _bool_str(f2_t1) + f2_t2_lbl + f2_t3_lbl + " " + str(f2_pct) + "%")
+    println("    F-AI-NATIVE-3    " + _bool_str(f3_t1) + f3_t2_lbl + f3_t3_lbl + " " + str(f3_pct) + "%")
+    println("    F-AI-NATIVE-4    " + _bool_str(f4_t1) + f4_t2_lbl + f4_t3_lbl + " " + str(f4_pct) + "%")
+    println("    F-AI-NATIVE-5    " + _bool_str(f5_t1) + f5_t2_lbl + f5_t3_lbl + " " + str(f5_pct) + "%")
+    println("    F-AI-NATIVE-6    " + _bool_str(f6_t1) + f6_t2_lbl + f6_t3_lbl + " " + str(f6_pct) + "%")
+    println("")
+
+    println("  registered claims:")
+    let mut idx = 1
+    while idx <= FALSIFIERS.len() {
+        let f = FALSIFIERS[idx - 1]
+        println("    " + f[0] + ":  " + f[1])
+        idx = idx + 1
+    }
+    println("")
+
+    println("  T1 stack inventory (ai.hexa + 3 PDK paper backends):")
+    println("    F-AI-NATIVE-1 → " + str(F1_T1))
+    println("    F-AI-NATIVE-2 → " + str(F2_T1))
+    println("    F-AI-NATIVE-3 → " + str(F3_T1))
+    println("    F-AI-NATIVE-4 → " + str(F4_T1))
+    println("    F-AI-NATIVE-5 → " + str(F5_T1))
+    println("    F-AI-NATIVE-6 → " + str(F6_T1))
+    println("")
+
+    println("  T2 stack preregister (planned v1.20.0+ numerics_ai_native_*.hexa):")
+    println("    F-AI-NATIVE-1 → " + str(F1_T2))
+    println("    F-AI-NATIVE-2 → " + str(F2_T2))
+    println("    F-AI-NATIVE-3 → " + str(F3_T2))
+    println("    F-AI-NATIVE-4 → " + str(F4_T2))
+    println("    F-AI-NATIVE-5 → " + str(F5_T2))
+    println("    F-AI-NATIVE-6 → " + str(F6_T2))
+    println("")
+
+    println("  saturation status:")
+    println("    sat-1 (all 6 F-AI-NATIVE ≥ 67% closure):                 " + _bool_str(sat_1))
+    println("    sat-2 (every F-AI-NATIVE has ≥ 1 T1 satisfier on disk):  " + _bool_str(sat_2))
+    println("")
+
+    println("========================================================================")
+
+    if !ok {
+        println("  FAIL — " + str(miss) + " registered T1 satisfier(s) missing from disk")
+        println("__HEXA_LANG_HAL_FALSIFIER_AI_NATIVE_CHECK__ FAIL")
+        exit(1)
+    }
+    println("  PASS — every registered T1 satisfier present on disk")
+    if sat_1 { println("    ★ sat-1 milestone reached: all 6 F-AI-NATIVE ≥ 67%") }
+    if sat_2 { println("    ★ sat-2 milestone reached: every F-AI-NATIVE has ≥ 1 T1 satisfier") }
+    println("__HEXA_LANG_HAL_FALSIFIER_AI_NATIVE_CHECK__ PASS")
+    exit(0)
+}
+
+main()

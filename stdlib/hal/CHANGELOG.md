@@ -1,5 +1,60 @@
 # stdlib/hal CHANGELOG
 
+## [1.19.0] - 2026-05-09
+
+### Added — `falsifier_ai_native_check.hexa` F-AI-NATIVE axis preregister + tracker
+- `falsifier_ai_native_check.hexa` (~280 lines) — third axis closure
+  tracker. Companion to:
+    `falsifier_check.hexa`        (HW-12 axis F-HAL-1..5)
+    `falsifier_gpgpu_check.hexa`  (GPGPU axis F-GPGPU-1..6)
+
+  Preregisters **F-AI-NATIVE-1..6** for the AI-native silicon axis
+  introduced at v1.8.0 (ai.hexa) + populated at v1.9.0 / v1.10.0 /
+  v1.11.0 (3-PDK paper backends sky130 / tsmc_n5 / samsung_sf3p).
+
+  **Falsifiers registered**:
+    F-AI-NATIVE-1: J₂ = σ·φ = 24 native MAC slots × prov kinds per tile
+    F-AI-NATIVE-2: 4-stage τ-lifecycle (configure/start/serve/report)
+    F-AI-NATIVE-3: φ=2 provenance kinds (FACT / HYPOTHESIS)
+    F-AI-NATIVE-4: n_tiles = σ/φ = 6 native tiles per HEXA-AI chip
+    F-AI-NATIVE-5: BT_COVERAGE = sopfr(n)+φ = 7 (BT_541..BT_547)
+    F-AI-NATIVE-6: 3-PDK paper backend set (sky130+tsmc_n5+samsung_sf3p)
+
+  **T1 satisfiers** (all on disk now): ai.hexa + 3 PDK backend.hexa
+  files. F-AI-NATIVE-6 specifically requires ALL 3 PDK paper backends
+  present; F-AI-NATIVE-1..5 each reuse ai.hexa (different invariant
+  consumed per falsifier).
+
+  **T2 preregister** (planned v1.20.0+, file names committed):
+    numerics_ai_native_lattice.hexa
+    numerics_ai_native_lifecycle.hexa
+    numerics_ai_native_prov_dichotomy.hexa
+    numerics_ai_native_tile_count.hexa
+    numerics_ai_native_bt_coverage.hexa
+    numerics_ai_native_pdk_set.hexa
+
+  **T3 deferred** (canon §7.5 + roadmap §G.5): silicon-tier RTL bench
+  (refuse_event silicon trace + BT ledger silicon mirror + per-PDK
+  P&R + tape-out) is downstream. Lifts each F-AI-NATIVE 67% → 100%
+  only when actual tape-out lands (post-foundry-MOU territory).
+
+  **Closure status at v1.19.0**:
+    sat-2 (every F-AI-NATIVE has ≥1 T1 satisfier): EXPECTED PASS
+    sat-1 (every F-AI-NATIVE ≥ 67% closure): NOT YET (pending T2)
+
+  PASS sentinel: `__HEXA_LANG_HAL_FALSIFIER_AI_NATIVE_CHECK__ PASS`.
+
+  Pattern: falsifier_gpgpu_check.hexa (sister GPGPU axis tracker).
+  Same closure_pct formula (0/33/67/100), same sat_1/sat_2 saturation
+  milestones, same regression-gate semantics.
+
+  **Three-axis closure ledger now formalized**:
+    F-HAL-1..5         HW-12 axis        sat-1 ✓ since v0.3.0 (fc2eeb2f)
+    F-GPGPU-1..6       GPGPU axis        sat-1 ✓ since v1.18.0 (198ca58b)
+    F-AI-NATIVE-1..6   AI-native axis    sat-1 pending (T2 fixtures)
+
+  Phase G iter 9+5+7.
+
 ## [1.18.0] - 2026-05-09
 
 ### Added — `numerics_gpgpu_barriers.hexa` F-GPGPU-6 T2 numerical (★ F-GPGPU sat-1 milestone)
