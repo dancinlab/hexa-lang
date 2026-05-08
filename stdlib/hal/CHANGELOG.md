@@ -1,5 +1,43 @@
 # stdlib/hal CHANGELOG
 
+## [1.10.0] - 2026-05-08
+
+### Added — `backend/ai_native/tsmc_n5.hexa` TSMC N5 PDK paper-tier backend (2nd PDK)
+- `backend/ai_native/tsmc_n5.hexa` (~165 lines) — TSMC N5 5nm FinFET
+  PDK silicon backend stub for the AI-native (Beyond-GPU) axis. Per-PDK
+  paper-tier metadata (NO synthesis, NO P&R, NO tape-out).
+
+  **Pattern**: same as v1.9.0 sky130.hexa, mirrors `backend/cuda/compute.hexa`
+  shape but for AI-native silicon axis (per-PDK area / freq / voltage table).
+
+  **PDK metadata** (web-searched 2026-05-08):
+    TSMC N5 (5nm FinFET, EUV-multipatterned; production node since 2020);
+    HD 6T standard cell; Vcore 0.75V; freq band [1500, 2000] MHz;
+    density ~8 M-gate/mm² (~16x SKY130 from foundry public density
+    disclosure ~173 M-tx/mm² Apple A14, gate-equiv ~22T/cell);
+    TSMC MPW shuttle ~$3M MOU + foundry licence + IP audit gating.
+
+  **AI-native primitive area placeholders** (canon §6 + hexa-chip §6 row "TSMC N5"):
+    MAC array (σ²=144):   ~0.050 mm²    (dominant; 40x shrink vs SKY130)
+    prov_regfile:         ~0.0011 mm²
+    promotion_counter_mmu:~0.00045 mm²
+    bt_id_decoder:        ~0.000025 mm²
+    TILE TOTAL:           ~0.052 mm²
+    chip (n_tiles=6):     ~0.31 mm²    (FITS TSMC MPW 5 mm² ceiling
+                                          comfortably; ~96 tiles theoretical max)
+
+  Surface: tsmc_n5_{tile_area, chip_area, overhead_bp, freq_band, vcore_mv,
+  fits_mpw_shuttle, max_tiles_in_mpw, module_meta, pdk_meta, invariant_*}.
+
+  **Architectural guard** (canon §7.5 + roadmap §G.5): paper-spec only —
+  NOT FFI to Synopsys DC / Cadence Genus / Innovus / ICC2. Real synthesis
+  + P&R + tape-out is downstream scope; gated on TSMC PDK licence +
+  foundry MOU + IP audit + ~$3M MPW slot.
+
+  **Per-PDK split policy** continues from v1.9.0: 1 commit per PDK.
+  Sequence: SKY130 (v1.9.0 35b14035) → **TSMC N5 (v1.10.0 — this iter)**
+  → Samsung SF3P (v1.11.0 next). Phase G iter 9+2.
+
 ## [1.9.0] - 2026-05-08
 
 ### Added — `backend/ai_native/sky130.hexa` SKY130 PDK paper-tier backend (1st PDK)
