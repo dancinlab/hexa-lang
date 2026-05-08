@@ -1,5 +1,47 @@
 # stdlib/hal CHANGELOG
 
+## [1.15.0] - 2026-05-09
+
+### Added — `numerics_gpgpu_ir_dichotomy.hexa` F-GPGPU-3 T2 numerical (lifts to 67%)
+- `numerics_gpgpu_ir_dichotomy.hexa` (~225 lines) — third T2 fixture
+  for the GPGPU axis. Cross-checks the φ=2 IR substrates dichotomy
+  (SPIR-V ∥ PTX) against on-disk vendor backend IR_PRIMARY/IR_FALLBACK
+  declarations.
+
+  Vendor-IR consumption mapping (canon §3 + 2026-05-08 web-search):
+    cuda    → ptx primary, spirv fallback (clspv)            [PTX, SPIR-V]
+    hip     → amdgcn primary, ptx fallback (HIP-on-NV)       [PTX]
+    sycl    → spirv primary, ptx fallback (DPC++ NV path)    [PTX, SPIR-V]
+    opencl  → spirv primary (OpenCL 3.0+ baseline)           [SPIR-V]
+    metal   → msl_air primary, spirv fallback                [SPIR-V]
+    webgpu  → wgsl primary, spirv fallback (Tint)            [SPIR-V]
+
+  Native IRs (amdgcn/msl_air/wgsl) NOT counted toward φ=2; vendor-internal
+  lowering targets only. φ=2 is strictly {SPIR-V, PTX} per canon §3.
+
+  6 numerical checks:
+    1. φ_gpgpu = 2 algebraic re-assert + |CANONICAL_IRS| = 2
+    2. both IRs have ≥1 vendor consumer (no orphan IR)
+    3. every vendor has ≥1 IR consumer (no orphan vendor)
+    4. Σ (vendor, IR) edges ≥ 6 (6 vendors × 1 IR floor)
+    5. cuda anchors PTX (canonical PTX-native vendor)
+    6. opencl anchors SPIR-V (canonical OpenCL 3.0+ baseline)
+
+  Expected (vendor, IR) edges sum: 8 (cuda+sycl have both; hip has PTX
+  only; opencl/metal/webgpu have SPIR-V only).
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_GPGPU_IR_DICHOTOMY__ PASS`.
+
+  Pattern: numerics_phi_dichotomy.hexa (sister F-HAL-3 T2 fixture).
+  Same _check / RUN / FAIL harness, same orphan-detection scheme,
+  same PASS/FAIL sentinel.
+
+  **F-GPGPU-3 closure lifted: 33% → 67%** (T1 ✓ + T2 ✓; T3 deferred).
+  3/6 T2 fixtures landed; remaining 3 (numerics_gpgpu_{dispatch,
+  mem_tiers, barriers}.hexa) planned v1.16.0+.
+
+  Phase G iter 9+5+3.
+
 ## [1.14.0] - 2026-05-09
 
 ### Added — `numerics_gpgpu_lifecycle.hexa` F-GPGPU-2 T2 numerical (lifts to 67%)
