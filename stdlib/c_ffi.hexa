@@ -1,0 +1,379 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/c_ffi.hexa — C Foreign Function Interface (dlopen / dlsym / extern fn)
+//
+//  @module(slug="c_ffi", desc="dlopen/dlsym handles + extern-fn-as-canonical-surface for libc-ABI shared libraries")
+//  @usage(import "stdlib/c_ffi" as ff; let h = ff.c_dlopen("m"); let p = ff.c_dlsym(h, "sqrt"))
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [c_dlopen, c_dlsym, c_dlclose, c_ptr_null, c_ptr_is_null,
+//                 c_lib_loadable, c_libname_for, c_lib_suffix, c_lib_prefix,
+//                 c_strerror, c_dlerror, c_ret_kind, c_float_mask]
+//  @stability preview
+//  @since 2026-05-08
+//  @maintainer anima-core
+//  @priority P1
+//
+//  ── FFI STRATEGY ──────────────────────────────────────────────────────────
+//
+//  HEXA HAS C FFI. THIS MODULE IS THE STDLIB-LEVEL DOCUMENTATION + WRAPPER.
+//
+//  NOTE (2026-05-08): the historical claim in stdlib/sqlite.hexa header
+//  (lines 14-31) — "Hexa's stdlib does NOT have a dlopen/extern fn FFI
+//  surface" — is OUTDATED. The pieces below have been working for some time
+//  and are battle-tested against Accelerate (cblas_sgemm), CUDA (cuBLAS),
+//  Metal (objc_msgSend), libpython, libregex, libm, libc:
+//
+//    1.  `extern fn` declaration syntax (parser.hexa::parse_extern_fn,
+//        codegen_c2.hexa::gen2_extern_static_decl + gen2_extern_wrapper)
+//    2.  `@symbol("c_name")` — map a Hexa identifier to a different C symbol
+//    3.  `@link("libname")`  — runtime dlopen target (libname → libname.dylib
+//        on Mac, libname.so on Linux, framework auto-detect on Mac)
+//    4.  Runtime dispatch via `hexa_ffi_dlopen` / `hexa_ffi_dlsym` /
+//        `hexa_extern_call` / `hexa_extern_call_typed` (self/runtime.c:5444+)
+//    5.  Self-host VM dispatch via `host_ffi_open` / `host_ffi_sym` /
+//        `host_ffi_call_6` builtins (used by self/vm.hexa, self/hexa_full.hexa)
+//
+//  THIS MODULE adds:
+//    a.  The `c_dlopen` / `c_dlsym` / `c_dlclose` triplet as STDLIB-LEVEL
+//        helpers (bootstrapped via `extern fn` against libc itself —
+//        ironclad self-hosting: no new runtime symbols needed).
+//    b.  Documented constants + portability helpers (Mac vs Linux library
+//        suffix, framework path translation, `RTLD_*` mode constants).
+//    c.  A `c_ret_kind` / `c_float_mask` doc table for callers wiring into
+//        `host_ffi_call_6`.
+//    d.  Self-test (stdlib/test/test_c_ffi.hexa) that loads libm and calls
+//        sqrt(2.0) by both routes (extern-fn AND c_dlopen+c_dlsym).
+//
+//  ── CANONICAL USAGE (the >95% path) ───────────────────────────────────────
+//
+//  Just declare `extern fn` at the top of your module. Hexa's runtime
+//  dlopen+dlsym fires automatically at first call. No FFI boilerplate.
+//
+//      @link("m")
+//      extern fn sqrt(x: float) -> float
+//
+//      @link("m")
+//      extern fn pow(base: float, exp: float) -> float
+//
+//      let r = sqrt(2.0)             // r ≈ 1.41421
+//      let p = pow(2.0, 10.0)         // p == 1024.0
+//
+//  Use `@symbol("c_name")` when the C symbol differs from the Hexa name
+//  (or collides with a Hexa keyword / builtin):
+//
+//      @symbol("strlen")
+//      @link("c")
+//      extern fn c_strlen(s: str) -> int
+//
+//  ── ESCAPE HATCH USAGE (when extern fn is not enough) ─────────────────────
+//
+//  Use the runtime triplet `c_dlopen` / `c_dlsym` / `c_dlclose` (this module)
+//  when:
+//    1. The C symbol is determined at runtime (e.g. plugin loader).
+//    2. You need to query *whether* a library is available before binding.
+//    3. The function pointer needs to be passed as data (callback table).
+//
+//      let h = c_dlopen("llama")          // 0 on failure
+//      if h == 0 {
+//          println("libllama not found — install instructions ...")
+//          return
+//      }
+//      let p = c_dlsym(h, "llama_load_model_from_file")
+//      // ... pass p to extern fn taking *Void ...
+//      c_dlclose(h)
+//
+//  Address note: `c_dlopen`/`c_dlsym` return a Hexa `int` containing the
+//  raw pointer address (uintptr_t). 0 means failure. Hexa has no first-class
+//  function-pointer type — the standard pattern is to declare an `extern fn`
+//  with a matching signature and let the runtime resolve the symbol at first
+//  call. The `c_dlsym` int is for opaque *Void hand-off ONLY.
+//
+//  ── ABI SAFETY (read this before binding new libraries) ───────────────────
+//
+//  ✅ Supported argument types (statically-typed extern fn):
+//        int (i64)         — passed as long long in GPR x0..x7
+//        float (f64)       — passed as double in SIMD d0..d7
+//        str (char*)       — UTF-8 NUL-terminated C string (zero-copy view)
+//        bool              — passed as int (0/1)
+//        *Void / Ptr       — passed as void* in GPR
+//        void              — return only
+//
+//  ⚠️  Argument-count limits:
+//        Native (AOT) compile path  : up to 12 positional args (gen2_extern_wrapper)
+//        Self-host interpreter      : up to 6 positional args (host_ffi_call_6)
+//                                    + overflow protocol up to 14 (g_ffi_overflow)
+//
+//  ❌ NOT supported (intentional gaps — caller must wrap):
+//      • Variadic functions (printf, execl)
+//          → wrap each invocation in a non-variadic C shim and bind THAT.
+//      • Struct-by-value pass/return (POSIX `struct timespec`, NSRect)
+//          → use a pointer-to-struct wrapper helper in self/native/<lib>.c.
+//          → existing pattern: self/ml/hxflash.hexa "struct-args ABI" — pass
+//            struct address via *Void, accessor extern fns for fields.
+//      • Function-pointer callbacks INTO Hexa (qsort comparator, signal
+//        handlers) — the C side calls back into Hexa, which is impossible
+//        because Hexa frames are not C-ABI compatible. Use a C trampoline.
+//      • i32 / f32 (only i64 / f64 marshalling is wired) — for f32 tensor
+//        data, pass as raw pointer and let C dereference.
+//      • String return ownership: `extern fn foo() -> str` returns a
+//        `char*`; the runtime DOES NOT take ownership. If C malloc'd it,
+//        leak unless caller free()s explicitly via another extern fn.
+//
+//  ── LIBRARY RESOLUTION (runtime hexa_ffi_dlopen) ──────────────────────────
+//
+//  For `@link("foo")` the runtime tries (in order):
+//    macOS:
+//      1.  /System/Library/Frameworks/foo.framework/foo
+//      2.  /usr/lib/libfoo.dylib
+//      3.  libfoo.dylib  (DYLD_LIBRARY_PATH searched)
+//      4.  ${HEXA_LANG}/self/native/build/libfoo.dylib
+//      5.  ./self/native/build/libfoo.dylib  +  build/libfoo.dylib
+//    Linux:
+//      1.  libfoo.so          (LD_LIBRARY_PATH searched)
+//      2.  /usr/local/cuda/lib64/libfoo.so{,.12,.11}  (CUDA path)
+//      3.  libfoo.so.{12,11}  (soname version sweep)
+//      4.  Bare lib_name (raw dlopen).
+//
+//  Pass an absolute path explicitly when in doubt:
+//      @link("/opt/homebrew/lib/libsqlite3.dylib")
+//      extern fn sqlite3_open(...)
+//
+//  ── HEXA-ONLY PHILOSOPHY (raw#9 disposition) ──────────────────────────────
+//
+//  raw#9 says "stdlib should be hexa-only". C FFI is the ONE explicit
+//  escape hatch — and even then, the surface is implemented in HEXA (this
+//  file is .hexa, not .c). The C side is just runtime.c (already shipped),
+//  which is itself part of the bootstrap kernel — not a per-module shim.
+//  Any new library binding (libllama, libsqlite3 native, libonnx, ...)
+//  is pure-hexa: just declare extern fn + import this module for helpers.
+//
+//  ── BG-KM PHASE 3 (anima chat libllama bindings — driving use case) ──────
+//
+//  Phase 3 of /Users/ghost/core/anima needs libllama bindings to talk to a
+//  local 3B parameter model without subprocess'ing llama-server. Expected
+//  symbols (~10-20):
+//      llama_model_default_params, llama_load_model_from_file,
+//      llama_context_default_params, llama_new_context_with_model,
+//      llama_n_ctx, llama_token_bos, llama_token_eos, llama_tokenize,
+//      llama_kv_cache_clear, llama_decode, llama_get_logits,
+//      llama_sample_token_greedy, llama_token_get_text,
+//      llama_free, llama_free_model
+//
+//  All fit in 12-arg AOT or 6-arg interp call (the largest is `llama_decode`
+//  at 2 args). Several take struct-by-value (`llama_model_params`,
+//  `llama_context_params`) — wrap via a tiny C shim (self/native/hxllama.c)
+//  exposing flat-arg constructors:
+//      hxllama_ctx_params_new(n_ctx, n_threads, ...) -> *Void
+//  Then bind those flat shims as `extern fn` here.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── RTLD mode constants (POSIX dlopen) ────────────────────────────────────
+//
+// Both macOS and Linux use the same numeric values for the common modes.
+// macOS exposes RTLD_LAZY=1 + RTLD_NOW=2 + RTLD_LOCAL=4 + RTLD_GLOBAL=8.
+// Linux glibc agrees on RTLD_LAZY=1, RTLD_NOW=2; differs on RTLD_GLOBAL
+// (0x100) but since the runtime always uses RTLD_LAZY internally, callers
+// using c_dlopen() get RTLD_LAZY by default which is correct on both.
+
+pub fn c_rtld_lazy()   -> int { return 1 }
+pub fn c_rtld_now()    -> int { return 2 }
+pub fn c_rtld_local()  -> int { return 4 }
+pub fn c_rtld_global() -> int { return 8 }
+
+// ── Internal extern bindings (libc / libdl) ───────────────────────────────
+//
+// On Linux dlopen lives in libdl; on macOS it's in libc (libSystem). The
+// runtime hexa_ffi_dlopen handles both — when @link("c") fails to locate
+// the symbol, the dispatcher falls back through additional search paths.
+// dlopen / dlsym / dlclose / dlerror are part of POSIX and present on
+// both systems.
+
+@symbol("dlopen")
+@link("c")
+extern fn _ff_dlopen(path: str, mode: int) -> int
+
+@symbol("dlsym")
+@link("c")
+extern fn _ff_dlsym(h: int, sym: str) -> int
+
+@symbol("dlclose")
+@link("c")
+extern fn _ff_dlclose(h: int) -> int
+
+@symbol("dlerror")
+@link("c")
+extern fn _ff_dlerror() -> str
+
+// ── Public dlopen/dlsym/dlclose triplet ───────────────────────────────────
+
+// c_dlopen — open a shared library for symbol resolution.
+//
+// `name` is the platform-portable library basename WITHOUT the lib prefix
+// or .dylib/.so suffix. e.g. pass "m" not "libm.dylib".
+//
+// You may also pass an absolute path; it will be opened verbatim.
+//
+// Returns: opaque int handle (uintptr_t cast). 0 == failure.
+//   Use c_dlerror() to get the system error message after a 0 return.
+pub fn c_dlopen(name: string) -> int {
+    let resolved = c_libname_for(name)
+    return _ff_dlopen(resolved, c_rtld_lazy())
+}
+
+// c_dlopen_path — open a shared library at an exact path (no resolution).
+//
+// Use this when you have a known absolute path (typically from an
+// environment variable). Returns 0 on failure.
+pub fn c_dlopen_path(absolute_path: string) -> int {
+    return _ff_dlopen(absolute_path, c_rtld_lazy())
+}
+
+// c_dlsym — resolve a C symbol from an open handle to a function pointer.
+//
+// Returns: int containing the raw uintptr_t address. 0 == failure (symbol
+// not present in any of the loaded objects reachable from the handle).
+//
+// The returned address is opaque; you cannot call it directly from Hexa.
+// The intended pattern is to use it as an OPAQUE *Void argument passed to
+// other extern fn calls (callback registration, ABI bridge tables). For
+// direct calls, prefer declaring `extern fn` with a matching signature and
+// let the runtime resolve via dlsym at first call.
+pub fn c_dlsym(h: int, symbol: string) -> int {
+    if h == 0 { return 0 }
+    return _ff_dlsym(h, symbol)
+}
+
+// c_dlclose — release a library handle (decrements refcount, may unmap).
+//
+// Returns: true on success (POSIX dlclose returned 0), false on failure.
+// After this call, any function pointers obtained via c_dlsym(handle, ...)
+// are dangling. The runtime's @link-driven extern fn handles are independent
+// (they cache their own dlopen handle), so this won't unload them.
+pub fn c_dlclose(h: int) -> bool {
+    if h == 0 { return false }
+    let rc = _ff_dlclose(h)
+    return rc == 0
+}
+
+// c_dlerror — get the last dynamic-linker error message as a string.
+//
+// Returns "" if the last operation succeeded. Calling this clears the
+// error state, so cache the result if you need it twice.
+pub fn c_dlerror() -> string {
+    let s = _ff_dlerror()
+    if s == "" { return "" }
+    return s
+}
+
+// ── Library-name helpers (cross-platform paths) ───────────────────────────
+
+// c_lib_suffix — return the platform shared-library suffix.
+//
+//   macOS  → ".dylib"
+//   Linux  → ".so"
+//
+// We probe via `uname -s` (one shell-out, cached on first call would be
+// nicer but stdlib has no module-level mut state for FFI yet; an extra
+// process spawn per c_dlopen call is acceptable since dlopen itself is
+// a high-cost operation).
+pub fn c_lib_suffix() -> string {
+    let raw = exec("uname -s 2>/dev/null").trim()
+    if raw == "Darwin" { return ".dylib" }
+    return ".so"
+}
+
+// c_lib_prefix — return the platform shared-library filename prefix.
+//
+// Always "lib" on POSIX. Defined as a function (not a constant) for
+// future Windows support where the prefix is empty.
+pub fn c_lib_prefix() -> string {
+    return "lib"
+}
+
+// c_libname_for — convert a bare library name to its on-disk filename.
+//
+//   c_libname_for("m")     → "libm.dylib" (Mac) / "libm.so" (Linux)
+//   c_libname_for("/abs/p") → "/abs/p"  (absolute paths pass through)
+//   c_libname_for("libm.so") → "libm.so" (already-formed names pass through)
+//
+// This is used internally by c_dlopen() but exposed for callers that want
+// to construct a path themselves (e.g., glob-search a plugin directory).
+pub fn c_libname_for(name: string) -> string {
+    if name == "" { return "" }
+    // Absolute path: pass through.
+    if name.starts_with("/") { return name }
+    // Already has a known suffix: pass through.
+    if name.ends_with(".dylib") { return name }
+    if name.ends_with(".so") { return name }
+    // Likely a versioned soname (libfoo.so.N): pass through if it contains ".so."
+    if name.contains(".so.") { return name }
+    // Otherwise: prefix + name + suffix.
+    return c_lib_prefix() + name + c_lib_suffix()
+}
+
+// c_lib_loadable — predicate: can this library be opened on this host?
+//
+// Cheap availability check used to gate optional bindings (e.g. don't
+// declare CUDA externs if libcudart isn't present). Implemented as:
+// dlopen + dlclose; succeeds iff dlopen returns non-zero.
+//
+// NOTE: a successful dlopen consumes a refcount; we immediately dlclose
+// to balance. If the library has a destructor it WILL run after the
+// dlclose. Don't use this for libraries with global init side effects.
+pub fn c_lib_loadable(name: string) -> bool {
+    let h = c_dlopen(name)
+    if h == 0 { return false }
+    c_dlclose(h)
+    return true
+}
+
+// ── ret_kind / float_mask documentation helpers ───────────────────────────
+//
+// These are constants for callers that want to invoke host_ffi_call_6
+// directly (e.g. plugin loader where the signature is determined at
+// runtime). Most users never need this — declare extern fn instead.
+//
+// ret_kind values (matched in self/runtime.c::hexa_extern_call):
+//   0 = void           — no return value (C function returns void)
+//   1 = int            — int / long long return (cast to HexaVal int)
+//   2 = float          — double return (HexaVal float)
+//   3 = bool           — int return interpreted as 0/non-0
+//   4 = pointer        — void* return as int (uintptr_t)
+
+pub fn c_ret_void()    -> int { return 0 }
+pub fn c_ret_int()     -> int { return 1 }
+pub fn c_ret_float()   -> int { return 2 }
+pub fn c_ret_bool()    -> int { return 3 }
+pub fn c_ret_pointer() -> int { return 4 }
+
+// c_float_mask_for — build the float_mask bitfield used by host_ffi_call_6.
+//
+// Bit i is set => arg i is a double (passed in SIMD register on ARM64).
+// All other bits => arg i is an int / pointer / bool (passed in GPR).
+//
+// Example: a function `f(int, double, double) -> double` has mask 0b110 = 6.
+pub fn c_float_mask_for(arg_is_float: array) -> int {
+    let mut mask = 0
+    let mut i = 0
+    while i < len(arg_is_float) {
+        if arg_is_float[i] {
+            mask = mask | (1 << i)
+        }
+        i = i + 1
+    }
+    return mask
+}
+
+// ── Pointer helpers ───────────────────────────────────────────────────────
+
+// c_ptr_null — symbolic NULL pointer (== 0 as int).
+//
+// Returned for "no value" / "absent" args. extern fn parameters typed
+// *Void accept this directly.
+pub fn c_ptr_null() -> int { return 0 }
+
+// c_ptr_is_null — predicate.
+pub fn c_ptr_is_null(p: int) -> bool { return p == 0 }
+
+// ── End of module ─────────────────────────────────────────────────────────

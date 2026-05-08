@@ -1,0 +1,191 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/test/test_c_ffi.hexa
+//
+//  Selftest for stdlib/c_ffi — the C FFI surface.
+//
+//  Validates:
+//    1. Direct extern fn route — sqrt / pow / strlen via @link("m") + @link("c").
+//       This is the canonical (>95%) FFI usage pattern.
+//    2. Manual dlopen/dlsym/dlclose route — verifies the module exposes
+//       the runtime triplet correctly via libc dlopen.
+//    3. c_libname_for cross-platform path construction.
+//    4. c_lib_loadable predicate (gating optional bindings).
+//    5. ret_kind and float_mask utility constants for advanced callers.
+//
+//  Run:
+//      $HOME/.hx/bin/hexa_real run stdlib/test/test_c_ffi.hexa
+//
+//  Exit semantics:
+//    * all asserts pass → prints "PASS: c_ffi stdlib selftest N/N"
+//    * any assert fails → prints FAIL lines (continues — no early exit)
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/c_ffi"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk_eq_int(tag, got, want) {
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=" + to_string(got) + " want=" + to_string(want))
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_eq_str(tag, got, want) {
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=" + got + " want=" + want)
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_true(tag, cond) {
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " (cond was false)")
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_close_float(tag, got, want, eps) {
+    let d = if got > want { got - want } else { want - got }
+    if d < eps {
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=" + to_string(got) + " want=" + to_string(want) + " (eps=" + to_string(eps) + ")")
+        fail_count = fail_count + 1
+    }
+}
+
+// ── Direct extern fn declarations (canonical FFI surface) ─────────────────
+
+@link("m")
+extern fn sqrt(x: float) -> float
+
+@link("m")
+extern fn pow(base: float, exp: float) -> float
+
+@symbol("strlen")
+@link("c")
+extern fn c_strlen(s: str) -> int
+
+// ── Test 1: extern fn — sqrt(2.0) ≈ 1.41421 ───────────────────────────────
+let r1 = sqrt(2.0)
+chk_close_float("sqrt(2.0)", r1, 1.41421356, 0.0001)
+
+// ── Test 2: extern fn — pow(2.0, 10.0) == 1024.0 ──────────────────────────
+let r2 = pow(2.0, 10.0)
+chk_close_float("pow(2.0, 10.0)", r2, 1024.0, 0.0001)
+
+// ── Test 3: extern fn — sqrt of a perfect square ──────────────────────────
+let r3 = sqrt(144.0)
+chk_close_float("sqrt(144.0)", r3, 12.0, 0.0001)
+
+// ── Test 4: extern fn — strlen via @symbol alias + @link("c") ─────────────
+let n = c_strlen("hello")
+chk_eq_int("strlen('hello')", n, 5)
+
+let n2 = c_strlen("")
+chk_eq_int("strlen('')", n2, 0)
+
+// ── Test 5: c_libname_for cross-platform path construction ────────────────
+let suf = c_lib_suffix()
+let want_libm = "lib" + "m" + suf
+chk_eq_str("libname_for('m')", c_libname_for("m"), want_libm)
+
+chk_eq_str("libname_for(absolute) passthrough",
+    c_libname_for("/usr/lib/libfoo.so"), "/usr/lib/libfoo.so")
+
+chk_eq_str("libname_for(.dylib) passthrough",
+    c_libname_for("libbar.dylib"), "libbar.dylib")
+
+chk_eq_str("libname_for(.so) passthrough",
+    c_libname_for("libbaz.so"), "libbaz.so")
+
+chk_eq_str("libname_for(.so.N) passthrough",
+    c_libname_for("libssl.so.1"), "libssl.so.1")
+
+// ── Test 6: c_dlopen + c_dlsym + c_dlclose triplet ────────────────────────
+let h = c_dlopen("m")
+chk_true("c_dlopen('m') != 0", h != 0)
+
+let p_sqrt = c_dlsym(h, "sqrt")
+chk_true("c_dlsym(h, 'sqrt') != 0", p_sqrt != 0)
+
+let p_missing = c_dlsym(h, "no_such_symbol_xxx_42")
+chk_eq_int("c_dlsym(missing) == 0", p_missing, 0)
+
+let closed = c_dlclose(h)
+chk_true("c_dlclose(h) == true", closed)
+
+// ── Test 7: c_dlopen with bad name returns 0 ──────────────────────────────
+let h_bad = c_dlopen("xxx_nonexistent_lib_42")
+chk_eq_int("c_dlopen(missing) == 0", h_bad, 0)
+
+let closed_bad = c_dlclose(0)
+chk_true("c_dlclose(0) == false", !closed_bad)
+
+// ── Test 8: c_lib_loadable predicate ──────────────────────────────────────
+chk_true("c_lib_loadable('m')", c_lib_loadable("m"))
+chk_true("!c_lib_loadable('xxx_nonexistent_42')",
+    !c_lib_loadable("xxx_nonexistent_42"))
+
+// ── Test 9: c_dlopen_path with a known-good absolute path ─────────────────
+// On macOS /usr/lib/libSystem.B.dylib always exists. On Linux skip via
+// platform check (loadable predicate handles negative case below).
+let suf2 = c_lib_suffix()
+if suf2 == ".dylib" {
+    let h_sys = c_dlopen_path("/usr/lib/libSystem.B.dylib")
+    chk_true("c_dlopen_path(/usr/lib/libSystem.B.dylib)", h_sys != 0)
+    if h_sys != 0 {
+        let _ = c_dlclose(h_sys)
+    }
+} else {
+    // Linux: try libc.so.6 (universal glibc soname)
+    let h_libc = c_dlopen_path("libc.so.6")
+    chk_true("c_dlopen_path(libc.so.6)", h_libc != 0)
+    if h_libc != 0 {
+        let _ = c_dlclose(h_libc)
+    }
+}
+
+// ── Test 10: ret_kind + float_mask utility constants ──────────────────────
+chk_eq_int("c_ret_void",    c_ret_void(),    0)
+chk_eq_int("c_ret_int",     c_ret_int(),     1)
+chk_eq_int("c_ret_float",   c_ret_float(),   2)
+chk_eq_int("c_ret_bool",    c_ret_bool(),    3)
+chk_eq_int("c_ret_pointer", c_ret_pointer(), 4)
+
+// float_mask: f(int, double, double) → mask 0b110 = 6
+let mask = c_float_mask_for([false, true, true])
+chk_eq_int("float_mask_for([F,T,T])", mask, 6)
+
+let mask0 = c_float_mask_for([false, false, false])
+chk_eq_int("float_mask_for([F,F,F])", mask0, 0)
+
+let mask_all = c_float_mask_for([true, true, true])
+chk_eq_int("float_mask_for([T,T,T])", mask_all, 7)
+
+// ── Test 11: c_ptr_null + c_ptr_is_null ───────────────────────────────────
+chk_eq_int("c_ptr_null", c_ptr_null(), 0)
+chk_true("c_ptr_is_null(0)", c_ptr_is_null(0))
+chk_true("!c_ptr_is_null(1)", !c_ptr_is_null(1))
+
+// ── Test 12: RTLD_* constants ─────────────────────────────────────────────
+chk_eq_int("c_rtld_lazy",   c_rtld_lazy(),   1)
+chk_eq_int("c_rtld_now",    c_rtld_now(),    2)
+chk_eq_int("c_rtld_local",  c_rtld_local(),  4)
+chk_eq_int("c_rtld_global", c_rtld_global(), 8)
+
+// ── Summary ───────────────────────────────────────────────────────────────
+let total = pass_count + fail_count
+if fail_count == 0 {
+    println("PASS: c_ffi stdlib selftest " + to_string(pass_count) + "/" + to_string(total))
+} else {
+    println("FAIL: c_ffi stdlib selftest " + to_string(pass_count) + "/" + to_string(total) + " (" + to_string(fail_count) + " failed)")
+}
