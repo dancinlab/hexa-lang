@@ -1,0 +1,97 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/dac.hexa — RP2040 DAC backend — paper skeleton.
+//
+// Phase: skeleton / stub. **NO native DAC on RP2040.** This stub
+// documents the PWM-emulation fallback path (PWM + RC low-pass filter
+// → DC-equivalent analog output) per Raspberry Pi reference designs.
+// Sim-first invariant preserved (dac.hexa sim ships first; this is
+// HW-backend "no-native + emulation note" addition).
+//
+// Target:    Raspberry Pi RP2040 dual Cortex-M0+ @ 133 MHz.
+// Chip ref:  RP2040 Datasheet — no §DAC; emulation via §4.5 PWM block.
+// Surface:   rp2040_dac_{configure,write,close}(...)
+// Dispatch:  dac.hexa selects this via cfg-flag. Routes to internal
+//            PWM-emulation path; consumer code is unchanged.
+//
+// PWM-emulation strategy:
+//
+//   Use rp2040_pwm_configure/start/set_duty (backend/rp2040/pwm.hexa)
+//   with a PWM frequency well above the desired analog bandwidth, then
+//   pass the output through an external RC low-pass filter (or sigma-
+//   delta software bit-banging for higher SNR).
+//
+//   Recommended PWM cfg:
+//     - PWM frequency: ≥ 100 kHz (for analog bandwidth ≤ 10 kHz with
+//       1 kΩ + 1 nF RC filter; -3 dB at 1/(2π·R·C) ≈ 159 kHz, but
+//       practical f_3dB ≈ 0.16 × f_PWM = 16 kHz at 100 kHz)
+//     - Resolution: PWM TOP+1 = 2^N for N-bit equivalent (e.g. 8-bit
+//       → TOP=255; 10-bit → TOP=1023; 12-bit → TOP=4095 at 30 kHz max).
+//   Output: GP0..GP29 routable to PWM slice (slice = GP/2, channel = GP%2).
+//
+//   Trade-off vs native DAC:
+//     - Resolution × bandwidth product is fixed: f_PWM × 2^N ≤ sys_clk.
+//       At sys_clk=125 MHz: 12-bit PWM → max 30 kHz f_PWM; 10-bit → 122 kHz.
+//     - Settling time = ~5·R·C for monotonic step response.
+//     - For ≥ 16-bit equivalent: use external SPI DAC (e.g. AD5675R) via
+//       stdlib/hal/spi.
+//
+// External SPI DAC alternative: rp2040_spi_xfer can drive AD5675R / MCP4922
+// for higher precision (≥ 16-bit, lower noise) — out of v0.10.0 scope.
+//
+// This stub returns success but does not actually emulate; real impl
+// would internally call rp2040_pwm_* helpers.
+
+let MODULE_NAME = "rp2040_dac"
+let SIGMA_SLOT  = 6
+let PHI_KIND    = "analog"   // ★ analog by σ-slot convention even though emulated
+
+// "Virtual unit" mapping to PWM slice/channel. Not tied to fixed pins.
+let VIRTUAL_UNIT_MIN = 0
+let VIRTUAL_UNIT_MAX = 7   // 8 PWM slices available
+
+// Practical resolution ceiling for usable bandwidth.
+let RES_8BIT  = 8     // up to 488 kHz f_PWM (good)
+let RES_10BIT = 10    // up to 122 kHz
+let RES_12BIT = 12    // up to 30 kHz (low-bandwidth only)
+
+// ── stub handlers (route to PWM emulation) ────────────────────────────
+
+fn rp2040_dac_configure(unit: int, channel: int, resolution: int) -> int {
+    if unit < VIRTUAL_UNIT_MIN || unit > VIRTUAL_UNIT_MAX { return -1 }
+    if channel < 0 || channel > 1 { return -2 }    // PWM slice has 2 ch (A/B)
+    if resolution != 8 && resolution != 10 && resolution != 12 { return -3 }
+    // STUB: real impl would invoke rp2040_pwm_configure(unit, channel,
+    //       freq_hz=high) with TOP = (1 << resolution) - 1.
+    //       Pin = (unit*2 + channel); user must add external RC filter.
+    return unit * 12 + channel
+}
+
+fn rp2040_dac_write(handle: int, value: int) -> bool {
+    if handle < 0 { return false }
+    if value < 0 || value > 0xFFFF { return false }
+    // STUB: real impl maps value → PWM duty:
+    //       duty_x100 = value · 10000 / (2^resolution)
+    //       then rp2040_pwm_set_duty(handle, duty_x100).
+    return true
+}
+
+fn rp2040_dac_close(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: real impl invokes rp2040_pwm_stop(handle).
+    return true
+}
+
+fn rp2040_dac_report(handle: int) -> str {
+    return "[rp2040_dac sim] handle=" + str(handle) + " (PWM-emulation; no native DAC; TODO routing)"
+}
+
+fn rp2040_dac_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_dac sim] STUB skeleton — sim-first; PWM-emulation (no native DAC)")
+    println("  strategy: rp2040_pwm + external RC low-pass filter (1 kΩ + 1 nF typ)")
+    println("  res × bw: 12-bit @ ≤30 kHz | 10-bit @ ≤122 kHz | 8-bit @ ≤488 kHz")
+    println("  for ≥ 16-bit precision: use external SPI DAC (AD5675R / MCP4922)")
+}

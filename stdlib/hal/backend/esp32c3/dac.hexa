@@ -1,0 +1,83 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/dac.hexa — ESP32-C3 DAC backend — paper skeleton.
+//
+// Phase: skeleton / stub. **NO native DAC on ESP32-C3.** This stub
+// documents the LEDC-PWM emulation fallback path (analogous to the
+// rp2040/dac.hexa approach). Sim-first invariant preserved.
+//
+// Target:    ESP32-C3 RV32IMC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C3 TRM — no DAC peripheral; emulation via §13 LEDC.
+// Surface:   esp32c3_dac_{configure,write,close}(...)
+// Dispatch:  dac.hexa selects this via cfg-flag.
+//
+// LEDC-emulation strategy:
+//
+//   Use esp32c3_pwm_configure/start/set_duty (backend/esp32c3/pwm.hexa)
+//   with a PWM frequency well above the desired analog bandwidth, then
+//   pass the output through an external RC low-pass filter.
+//
+//   Recommended cfg:
+//     - LEDC frequency: ≥ 80 kHz (typ; LEDC supports up to APB_CLK/2)
+//     - Resolution: 1..14-bit (LEDC duty resolution; res × freq has
+//       LEDC_clk / freq_hz ≥ 2^res constraint per ESP32-C3 TRM §13.2.3)
+//     - 6 LEDC channels available — 6 simultaneous "DAC" outputs.
+//
+//   Trade-off vs native DAC:
+//     - Same constraint as RP2040: f_PWM × 2^N ≤ APB_CLK.
+//       At APB=80 MHz: 12-bit → ≤ 19.5 kHz; 10-bit → ≤ 78 kHz.
+//     - For ≥ 16-bit precision: external SPI DAC (AD5675R / MCP4922).
+//
+// External SPI DAC alternative: esp32c3_spi_xfer can drive AD5675R for
+// higher precision — out of v0.10.0 scope.
+
+let MODULE_NAME = "esp32c3_dac"
+let SIGMA_SLOT  = 6
+let PHI_KIND    = "analog"   // ★ analog by σ-slot convention (emulated)
+
+// Virtual unit mapping to LEDC channel (6 channels on C3).
+let VIRTUAL_UNIT_MIN = 0
+let VIRTUAL_UNIT_MAX = 5
+
+let RES_8BIT  = 8
+let RES_10BIT = 10
+let RES_12BIT = 12   // up to ~19.5 kHz LEDC freq
+
+// ── stub handlers (route to LEDC PWM emulation) ───────────────────────
+
+fn esp32c3_dac_configure(unit: int, channel: int, resolution: int) -> int {
+    if unit < VIRTUAL_UNIT_MIN || unit > VIRTUAL_UNIT_MAX { return -1 }
+    if channel != 0 { return -2 }   // LEDC channel is 1-output (no A/B split)
+    if resolution != 8 && resolution != 10 && resolution != 12 { return -3 }
+    // STUB: real impl invokes esp32c3_pwm_configure(unit, 0, freq=high)
+    //       with LEDC duty resolution = `resolution`.
+    return unit * 12 + channel
+}
+
+fn esp32c3_dac_write(handle: int, value: int) -> bool {
+    if handle < 0 { return false }
+    if value < 0 || value > 0xFFFF { return false }
+    // STUB: duty_x100 = value · 10000 / (1 << resolution); then
+    //       esp32c3_pwm_set_duty(handle, duty_x100).
+    return true
+}
+
+fn esp32c3_dac_close(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: esp32c3_pwm_stop(handle)
+    return true
+}
+
+fn esp32c3_dac_report(handle: int) -> str {
+    return "[esp32c3_dac sim] handle=" + str(handle) + " (LEDC-emulation; no native DAC)"
+}
+
+fn esp32c3_dac_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_dac sim] STUB skeleton — sim-first; LEDC-emulation (no native DAC)")
+    println("  strategy: esp32c3_pwm (LEDC) + external RC low-pass filter")
+    println("  res × bw: 12-bit @ ≤19.5 kHz | 10-bit @ ≤78 kHz | 8-bit @ ≤312 kHz")
+    println("  for ≥ 16-bit: external SPI DAC (AD5675R / MCP4922)")
+}

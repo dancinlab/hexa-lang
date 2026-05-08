@@ -1,5 +1,74 @@
 # stdlib/hal CHANGELOG
 
+## [0.10.0] - 2026-05-08
+
+### Added
+- `backend/{stm32h7,rp2040,esp32,esp32c3,esp32s3}/dac.hexa` —
+  σ-slot 6 (dac, analog) HW-backend stubs across ALL 5 vendors.
+  First peripheral with **non-uniform native support**: 2 of 5 vendors
+  have native DAC, 3 of 5 use PWM-emulation fallback. Per-vendor
+  coverage 7/12 → 8/12. Total backend stub count: 35 → 40.
+
+  Native hardware DAC:
+  - `stm32h7/dac.hexa`  — DAC1 0x40007400 (+ optional DAC2 0x58003400);
+                          dual-channel **12-bit native**; output PA4/PA5;
+                          ≤ 1 MSPS via DMA + TIM trigger; cosine /
+                          triangle / noise wave generators built-in.
+  - `esp32/dac.hexa`    — RTC_IO 0x3FF48400 + SENS 0x3FF48800;
+                          2 channels × **8-bit native** (GPIO25/26);
+                          ≤ 1 MSPS via I2S DMA "DAC mode"; cosine wave
+                          generator (CW) via SAR_DAC_CTRL1.SW_TONE_EN.
+
+  PWM-emulation fallback (no native DAC; LEDC/PWM + RC filter):
+  - `rp2040/dac.hexa`   — routes to `rp2040_pwm` + external RC LPF;
+                          8 PWM slices = 8 virtual DAC units; achievable
+                          res × bw: 12b @ ≤30 kHz / 10b @ ≤122 kHz /
+                          8b @ ≤488 kHz @ sys_clk=125 MHz. For ≥ 16-bit
+                          precision: external SPI DAC (AD5675R / MCP4922).
+  - `esp32c3/dac.hexa`  — routes to `esp32c3_pwm` (LEDC); 6 channels;
+                          1..14-bit LEDC duty resolution; res × bw:
+                          12b @ ≤19.5 kHz at APB=80 MHz.
+  - `esp32s3/dac.hexa`  — routes to `esp32s3_pwm` (LEDC); 8 channels;
+                          1..20-bit LEDC duty (highest of 5 vendors) →
+                          can emulate **16-bit DAC** at ≤ 1.2 kHz BW
+                          without dither (S3-specific advantage).
+
+  Surface (mirrors `stdlib/hal/dac.hexa` sim):
+    dac_configure(unit, channel, resolution) -> int
+    dac_write(handle, value) -> bool
+    dac_close(handle) -> bool
+    dac_report(handle) -> str
+
+### IP-cell observations / vendor pivot note
+- The DAC peripheral was native on the original ESP32 (8-bit) but
+  **dropped** by Espressif starting with ESP32-S2 / S3 / C3 — Espressif
+  positions LEDC + RC filter as the recommended emulation path.
+- STM32H7 has the strongest native DAC: 12-bit, dual-channel, hardware
+  waveform generators (cosine/triangle/noise), DMA-driven up to 1 MSPS.
+- RP2040 has no native DAC at all; relies entirely on PWM emulation
+  or external SPI DAC ICs.
+
+### Changed
+- HW-backend stub file count: 35 → 40 (5 vendors × 8 peripherals).
+- Per-vendor coverage: 7/12 → 8/12 across all 5 vendors.
+- F-HAL closure unchanged at 67% × 5 (sat-1 ✓ holds).
+
+### Provenance
+- Register sketches per vendor TRM cross-reference:
+    - STM32H7 DAC1 0x40007400 from RM0433 §29.
+    - ESP32 RTC_IO + SENS DAC regs from ESP32 TRM §5.13 + §31.
+    - RP2040: no DAC §; emulation strategy per Pico SDK examples.
+    - ESP32-C3 / S3: no DAC §; LEDC §13 cross-reference.
+
+### Roadmap
+- v0.11.0: intr (σ-slot 9) — NVIC table on ARM (stm32h7, rp2040),
+  RV interrupt controller on RISC-V (esp32c3), Xtensa intr matrix on
+  esp32 / esp32s3.
+- v0.12.0: dma (σ-slot 10) — MDMA/BDMA on STM32H7, 12-channel DMA on
+  RP2040, GDMA on ESP32 family.
+- v0.13.0: rtc (σ-slot 11) — final missing peripheral to reach 11/12
+  per vendor (core σ-slot 0 is partially trivial; covered by sim).
+
 ## [0.9.0] - 2026-05-08
 
 ### Added
