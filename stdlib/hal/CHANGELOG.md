@@ -1,5 +1,42 @@
 # stdlib/hal CHANGELOG
 
+## [0.13.0] - 2026-05-08
+
+### Added
+- `compute.hexa` — host-side GPGPU dispatch primitive. **Outside the
+  embedded σ=12 peripheral lattice** — GPGPU is a separate axis with its
+  own n=6 invariant (σ=12 = 6 vendors × 2 IR substrates · τ=4 lifecycle
+  · φ=2 mode · J₂′=48). Canon SSOT:
+  `~/core/canon/domains/compute/gpgpu/gpgpu.md` @47c70cbf (2026-05-08).
+
+  Surface:
+    compute_buffer_alloc(tier, n_bytes) -> int    (TIER_PRIVATE/GROUP/DEVICE/CONSTANT)
+    compute_buffer_h2d / d2h / free
+    compute_kernel_compile(ir, n_bytes) -> int    (IR_SPIRV ‖ IR_PTX)
+    compute_kernel_release(handle) -> bool
+    compute_dispatch(vendor, kern, grid_xyz, wg_xyz, scope, dep, sg_w) -> event
+    compute_event_wait(event) -> bool
+    compute_event_release(event) -> bool
+
+  Constants:
+    TIER_{PRIVATE, GROUP, DEVICE, CONSTANT}      (τ=4)
+    SCOPE_{SUBGROUP, WORKGROUP, CLUSTER, GRID}   (4 barrier scopes)
+    IR_{SPIRV, PTX}                              (φ=2)
+    VENDOR_{CUDA, HIP, SYCL, OPENCL, METAL, WEBGPU}  (6 backends)
+
+  Invariant ledger:
+    compute_invariant_axes()      -> 6
+    compute_invariant_tiers()     -> 4
+    compute_invariant_irs()       -> 2
+    compute_invariant_vendors()   -> 6
+    compute_invariant_J2_prime()  -> 48
+
+  First consumer: `hexa-chip/firmware/mcu/npu_host.hexa` (Phase F iter 5)
+  uses compute_dispatch to run NPU layer descriptor as GPGPU kernel.
+
+  Web-search 2026-05-08 spec table (canon §2): CUDA 13.2, HIP 7.2.53211,
+  SYCL 2020 rev 11, OpenCL 3.1.0, Metal 4 (MSL 2025-10-23), WebGPU CR Draft.
+
 ## [0.12.0] - 2026-05-08
 
 ### Added

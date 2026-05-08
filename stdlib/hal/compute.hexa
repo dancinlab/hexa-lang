@@ -1,0 +1,173 @@
+#!hexa strict
+// stdlib/hal/compute.hexa — host-side GPGPU dispatch primitive.
+//
+// import:  use "stdlib/hal/compute"
+// φ:       digital (compute pipeline; analog/graphics-interop is φ=1)
+// lattice: NOT in the embedded σ=12 peripheral list (gpio/i2c/spi/...).
+//          GPGPU is a separate axis: σ=12 (6 vendors × 2 IR substrates),
+//          τ=4 (compile/enqueue/dispatch/retire), φ=2 (compute/graphics),
+//          J₂′=48.
+//
+// canon-aware (~/core/canon/domains/compute/gpgpu/gpgpu.md @47c70cbf):
+//   - 6 invariant axes per kernel launch (grid / workgroup / mem-tier /
+//     barrier-scope / launch-dep / sub-group-width).
+//   - τ=4 memory tiers (private / group / device / constant).
+//   - φ=2 IR substrates (SPIR-V ‖ PTX); 6 vendor backends consume one or
+//     both. See projection layer in hexa-chip/gpgpu_n6/projection/*.hexa.
+//
+// Phase F iter 2 of hexa-chip Phase F (vendor-agnostic GPGPU programming
+// model). First .hexa MCU consumer landing in iter 5 — NPU host layer
+// dispatch via KernelDescriptor instead of inline SPI loop.
+
+let MODULE_NAME = "compute"
+let PHI_KIND    = "digital"
+
+// ── memory tiers (τ=4, canon §4.2) ────────────────────────────────────
+let TIER_PRIVATE  = 0   // register / per-thread
+let TIER_GROUP    = 1   // shared / threadgroup / workgroup / local
+let TIER_DEVICE   = 2   // global / storage
+let TIER_CONSTANT = 3   // constant / uniform (read-only, cached)
+
+// ── barrier scopes (axis 4) ───────────────────────────────────────────
+let SCOPE_SUBGROUP  = 0   // warp / wavefront / simdgroup
+let SCOPE_WORKGROUP = 1   // block / threadgroup
+let SCOPE_CLUSTER   = 2   // CC≥9.0 thread-block cluster (CUDA Hopper+)
+let SCOPE_GRID      = 3   // grid-wide (cooperative groups)
+
+// ── IR substrates (φ=2, canon §3) ─────────────────────────────────────
+let IR_SPIRV = 0   // SYCL, OpenCL, WebGPU(via Tint), HIP(via translator), Metal(via translator)
+let IR_PTX   = 1   // CUDA; SYCL/DPC++ NV path
+
+// ── vendor backends (6 ecosystems, canon §2) ──────────────────────────
+let VENDOR_CUDA   = 0
+let VENDOR_HIP    = 1
+let VENDOR_SYCL   = 2
+let VENDOR_OPENCL = 3
+let VENDOR_METAL  = 4
+let VENDOR_WEBGPU = 5
+
+// Default sub-group widths per vendor (canon §2.2):
+//   warp(NV)=32, wavefront(AMD)=32 or 64, simdgroup(Apple)=32, sg(Khronos)=hw,
+//   subgroup(WebGPU)=hw. Programs may query and adapt.
+fn _vendor_default_subgroup_w(vendor: int) -> int {
+    if vendor == VENDOR_CUDA   { return 32 }
+    if vendor == VENDOR_HIP    { return 64 }   // CDNA wavefront default
+    if vendor == VENDOR_SYCL   { return 32 }
+    if vendor == VENDOR_OPENCL { return 32 }
+    if vendor == VENDOR_METAL  { return 32 }
+    if vendor == VENDOR_WEBGPU { return 32 }
+    return 0
+}
+
+fn _vendor_name(vendor: int) -> str {
+    if vendor == VENDOR_CUDA   { return "CUDA" }
+    if vendor == VENDOR_HIP    { return "HIP" }
+    if vendor == VENDOR_SYCL   { return "SYCL" }
+    if vendor == VENDOR_OPENCL { return "OpenCL" }
+    if vendor == VENDOR_METAL  { return "Metal" }
+    if vendor == VENDOR_WEBGPU { return "WebGPU" }
+    return "?"
+}
+
+fn _ir_name(ir: int) -> str {
+    if ir == IR_SPIRV { return "SPIR-V" }
+    if ir == IR_PTX   { return "PTX" }
+    return "?"
+}
+
+// ── handle pools (sim) ────────────────────────────────────────────────
+let mut _next_buf_h = 0
+let mut _next_kern_h = 0
+let mut _next_event_h = 0
+
+// ── buffer (axis 3 — memory-tier-typed) ───────────────────────────────
+fn compute_buffer_alloc(tier: int, n_bytes: int) -> int {
+    if tier < 0 || tier > 3 { return -1 }
+    if n_bytes <= 0 { return -2 }
+    let h = _next_buf_h
+    _next_buf_h = _next_buf_h + 1
+    println("[compute sim] buf_alloc tier=" + str(tier) + " bytes=" + str(n_bytes) + " -> h=" + str(h))
+    return h
+}
+
+fn compute_buffer_h2d(buf: int, _src_addr: int, n_bytes: int) -> bool {
+    if buf < 0 || n_bytes <= 0 { return false }
+    return true
+}
+
+fn compute_buffer_d2h(buf: int, _dst_addr: int, n_bytes: int) -> bool {
+    if buf < 0 || n_bytes <= 0 { return false }
+    return true
+}
+
+fn compute_buffer_free(buf: int) -> bool { return buf >= 0 }
+
+// ── kernel (IR-substrate-tagged source) ───────────────────────────────
+fn compute_kernel_compile(ir: int, _kernel_bytes_len: int) -> int {
+    if ir != IR_SPIRV && ir != IR_PTX { return -1 }
+    if _kernel_bytes_len <= 0 { return -2 }
+    let h = _next_kern_h
+    _next_kern_h = _next_kern_h + 1
+    println("[compute sim] kernel_compile ir=" + _ir_name(ir) + " bytes=" + str(_kernel_bytes_len) + " -> h=" + str(h))
+    return h
+}
+
+fn compute_kernel_release(kern: int) -> bool { return kern >= 0 }
+
+// ── descriptor (6 invariant axes) ─────────────────────────────────────
+//   axis 1: grid_x, grid_y, grid_z
+//   axis 2: workgroup_x, workgroup_y, workgroup_z
+//   axis 3: encoded in buffer tier (per-buffer)
+//   axis 4: barrier_scope
+//   axis 5: launch_dep_event (-1 = no dep)
+//   axis 6: subgroup_w (0 = use vendor default)
+//
+// Returned dispatch event (axis 5 substrate for downstream launch).
+fn compute_dispatch(
+    vendor: int,
+    kern: int,
+    grid_x: int, grid_y: int, grid_z: int,
+    workgroup_x: int, workgroup_y: int, workgroup_z: int,
+    barrier_scope: int,
+    launch_dep_event: int,
+    subgroup_w: int
+) -> int {
+    if vendor < 0 || vendor > 5 { return -1 }
+    if kern < 0 { return -2 }
+    if grid_x <= 0 || grid_y <= 0 || grid_z <= 0 { return -3 }
+    if workgroup_x <= 0 || workgroup_y <= 0 || workgroup_z <= 0 { return -4 }
+    if barrier_scope < 0 || barrier_scope > 3 { return -5 }
+    let sg = if subgroup_w > 0 { subgroup_w } else { _vendor_default_subgroup_w(vendor) }
+    let h = _next_event_h
+    _next_event_h = _next_event_h + 1
+    println("[compute sim] dispatch vendor=" + _vendor_name(vendor) +
+            " kern=" + str(kern) +
+            " grid=(" + str(grid_x) + "," + str(grid_y) + "," + str(grid_z) + ")" +
+            " wg=(" + str(workgroup_x) + "," + str(workgroup_y) + "," + str(workgroup_z) + ")" +
+            " scope=" + str(barrier_scope) +
+            " sg=" + str(sg) +
+            " dep=" + str(launch_dep_event) +
+            " -> ev=" + str(h))
+    return h
+}
+
+fn compute_event_wait(event: int) -> bool {
+    if event < 0 { return false }
+    return true   // sim: instant
+}
+
+fn compute_event_release(event: int) -> bool { return event >= 0 }
+
+// ── invariant ledger (n=6 axis count, τ=4 tier count, φ=2 IR count) ───
+fn compute_invariant_axes() -> int { return 6 }
+fn compute_invariant_tiers() -> int { return 4 }
+fn compute_invariant_irs() -> int { return 2 }
+fn compute_invariant_vendors() -> int { return 6 }
+fn compute_invariant_J2_prime() -> int { return 6 * 4 * 2 }   // 48
+
+fn compute_module_meta() -> [str] {
+    return [
+        MODULE_NAME, "n/a-σslot", PHI_KIND,
+        str(compute_invariant_J2_prime())
+    ]
+}
