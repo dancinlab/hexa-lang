@@ -1,0 +1,140 @@
+#!hexa strict
+// stdlib/hal/backend/metal/compute.hexa — Apple Metal backend
+//                                          — paper skeleton.
+//
+// Phase: skeleton / stub. Real Metal runtime integration is downstream
+// FFI scope (Metal.framework via Objective-C/Swift bridge).
+//
+// Target:    Metal 4 (canon §2 web-search 2026-05-08; MSL 2025-10-23).
+// Runtime:   Metal.framework (Apple proprietary; MTLDevice / MTLCommand-
+//            Queue / MTLComputePipelineState).
+// IR:        AIR (Apple Intermediate Representation; LLVM-derived) —
+//            input via MSL (Metal Shading Language; C++14-derived) OR
+//            SPIR-V → AIR via SPIRV-Cross translator (one-way).
+// Hardware:  Apple Silicon (M-series + A-series) + Intel/AMD discrete
+//            GPUs on Intel Macs (legacy; Apple deprecating).
+// Surface:   metal_{buffer_alloc,...,event_release}
+//
+// Memory tier mapping (compute.hexa TIER_* → Metal storage modes):
+//   TIER_PRIVATE  → MTLStorageModePrivate  (GPU-only; not host-mappable)
+//   TIER_GROUP    → threadgroup memory (per-MTLComputeCommandEncoder)
+//   TIER_DEVICE   → MTLStorageModeShared OR MTLStorageModeManaged
+//                    (M-series unifies on Shared; older Intel discrete
+//                     GPUs use Managed for explicit transfer)
+//   TIER_CONSTANT → constant address space (set via setBuffer:offset:atIndex:)
+//
+// Barrier scope mapping:
+//   SCOPE_SUBGROUP   → simdgroup_barrier(mem_flags::mem_threadgroup)
+//                       (SIMD-group = 32 on Apple Silicon GPUs)
+//   SCOPE_WORKGROUP  → threadgroup_barrier(mem_flags::mem_threadgroup)
+//   SCOPE_CLUSTER    → no native primitive; emulate via persistent kernel
+//   SCOPE_GRID       → no native; same
+//
+// SIMD-group width: Apple Silicon GPU = 32 threads (consistent across
+// M1/M2/M3/M4 generations). Apple Intel-Mac discrete cards followed
+// the AMD/Nvidia 64/32 convention but those Macs are EOL.
+//
+// Note: Metal accepts SPIR-V only via offline translation (SPIRV-Cross
+// or moltenvk shim). Online compile from MSL source is the canonical
+// path; runtime SPIR-V → AIR translation is an extra hop.
+
+let MODULE_NAME = "metal_compute"
+let VENDOR_NAME = "metal"
+
+let METAL_VERSION = 4
+let MSL_DATE = "2025-10-23"
+
+// AIR is internal IR; SPIR-V via SPIRV-Cross is the cross-vendor entry.
+let IR_PRIMARY  = "msl_air"
+let IR_FALLBACK = "spirv"
+
+let SIMD_GROUP_WIDTH = 32   // Apple Silicon GPU constant
+
+let TIER_PRIVATE  = 0
+let TIER_GROUP    = 1
+let TIER_DEVICE   = 2
+let TIER_CONSTANT = 3
+
+let SCOPE_SUBGROUP  = 0
+let SCOPE_WORKGROUP = 1
+let SCOPE_CLUSTER   = 2
+let SCOPE_GRID      = 3
+
+// Storage mode flags (paper-tier).
+let MTLStorageModePrivate = 0
+let MTLStorageModeShared  = 1
+let MTLStorageModeManaged = 2
+let MTLStorageModeMemoryless = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn metal_buffer_alloc(tier: int, n_bytes: int) -> int {
+    if tier < 0 || tier > 3 { return -1 }
+    if n_bytes <= 0 { return -2 }
+    // STUB: [device newBufferWithLength:n_bytes options:MTLStorageMode<X>]
+    return 0
+}
+
+fn metal_buffer_h2d(handle: int, src_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    // STUB: memcpy([buffer contents], host, n_bytes) (Shared mode)
+    //       OR [blitEncoder copyFromBuffer:srcHost ...] (Managed mode)
+    return true
+}
+
+fn metal_buffer_d2h(handle: int, dst_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    // STUB: memcpy(host, [buffer contents], n_bytes) after blitEncoder synchronizes
+    return true
+}
+
+fn metal_buffer_free(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: ARC release; or [buffer release] in MRC
+    return true
+}
+
+fn metal_kernel_compile(ir: int, n_bytes: int) -> int {
+    if ir < 0 || n_bytes <= 0 { return -1 }
+    // STUB: [device newLibraryWithSource:msl_src options:opts error:&err]
+    //       + [library newFunctionWithName:@"kernel_name"]
+    //       + [device newComputePipelineStateWithFunction:fn error:&err]
+    return 0
+}
+
+fn metal_kernel_release(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn metal_dispatch(kern: int, gx: int, gy: int, gz: int,
+                  wx: int, wy: int, wz: int,
+                  scope: int, dep: int, sg_w: int) -> int {
+    if kern < 0 { return -1 }
+    if scope < 0 || scope > 3 { return -2 }
+    // STUB: [encoder dispatchThreadgroups:MTLSize{gx,gy,gz}
+    //                    threadsPerThreadgroup:MTLSize{wx,wy,wz}]
+    return 0
+}
+
+fn metal_event_wait(event: int) -> bool {
+    if event < 0 { return false }
+    // STUB: [commandBuffer waitUntilCompleted]
+    return true
+}
+
+fn metal_event_release(event: int) -> bool {
+    if event < 0 { return false }
+    return true
+}
+
+fn metal_module_meta() -> [str] {
+    return [MODULE_NAME, VENDOR_NAME, IR_PRIMARY, "4"]
+}
+
+fn main() {
+    println("[metal_compute sim] STUB skeleton — sim-first; FFI to Metal.framework TODO")
+    println("  Metal " + str(METAL_VERSION) + " (MSL " + MSL_DATE + ")")
+    println("  IR: MSL → AIR (primary) | SPIR-V via SPIRV-Cross (offline)")
+    println("  Apple Silicon SIMD-group = " + str(SIMD_GROUP_WIDTH) + " threads")
+}

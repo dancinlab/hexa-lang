@@ -1,0 +1,146 @@
+#!hexa strict
+// stdlib/hal/backend/cuda/compute.hexa — NVIDIA CUDA backend
+//                                        — paper skeleton.
+//
+// Phase: skeleton / stub. Real CUDA Driver API / NVRTC integration
+// is downstream FFI scope (libcuda.so + libnvrtc.so). Paper-tier
+// stub documents the API surface mapping. Sim-first invariant
+// preserved (compute.hexa sim ships first; this is HW-vendor backend).
+//
+// Target:    NVIDIA CUDA 13.2 (current as of 2026-05-08; canon §2).
+// Runtime:   libcuda.so (Driver API; cuModuleLoad / cuLaunchKernel)
+//            + libnvrtc.so (NVRTC for runtime PTX compile from C++).
+// IR:        PTX (preferred; native NVIDIA backend) OR SPIR-V via
+//            NVPTX translator (clang -target spir-v).
+// Hardware:  NVIDIA GPUs (sm_50 Maxwell → sm_120 Blackwell).
+// Surface:   cuda_{buffer_alloc,buffer_h2d,buffer_d2h,buffer_free,
+//            kernel_compile,kernel_release,dispatch,event_wait,event_release}
+// Dispatch:  compute.hexa selects this via cfg-flag (`cfg gpgpu = "cuda"`).
+//
+// IR mapping: PTX preferred (native to NVIDIA assembler `ptxas`;
+// driver API consumes either PTX text or pre-compiled cubin via
+// cuModuleLoad). SPIR-V → translates via Khronos clspv / SPIRV-LLVM
+// upstream tools first (out of vendor backend scope).
+//
+// Memory tier mapping (compute.hexa TIER_* → CUDA address space):
+//   TIER_PRIVATE  → .local  (per-thread local memory; register spill)
+//   TIER_GROUP    → .shared (per-block shared memory; CUDA __shared__)
+//   TIER_DEVICE   → .global (cuMemAlloc; main GPU DRAM)
+//   TIER_CONSTANT → .const  (cuModuleGetGlobal of __constant__)
+//
+// Barrier scope mapping (compute.hexa SCOPE_* → CUDA semantics):
+//   SCOPE_SUBGROUP   → __syncwarp (warp = 32 threads on NVIDIA)
+//   SCOPE_WORKGROUP  → __syncthreads (per-block sync)
+//   SCOPE_CLUSTER    → cluster.sync (Hopper SM 9.0+ thread block clusters)
+//   SCOPE_GRID       → cooperative_groups::grid_group::sync (CG API; SM 6.0+)
+//
+// Compile flow (paper-tier; FFI not implemented):
+//   1. nvrtcCreateProgram(src, name, headers, includes)
+//   2. nvrtcCompileProgram(opts: --gpu-architecture=sm_<n>)
+//   3. nvrtcGetPTX(out_ptx) → CUDA driver loads via cuModuleLoadData
+//   4. cuModuleGetFunction(module, kernel_name) → CUfunction handle
+//
+// Dispatch flow:
+//   1. cuLaunchKernel(fn, grid_x, grid_y, grid_z, wg_x, wg_y, wg_z,
+//                     shared_mem_bytes, stream, args[], extra)
+//   2. returns CUresult; non-zero → fail; event_wait via cuStreamSynchronize.
+
+let MODULE_NAME = "cuda_compute"
+let VENDOR_NAME = "cuda"
+
+// CUDA Toolkit version target (canon §2 web-search 2026-05-08: 13.2).
+let CUDA_VERSION_MAJOR = 13
+let CUDA_VERSION_MINOR = 2
+
+// SM architecture range (Maxwell 5.0 → Blackwell B100 12.0).
+let CUDA_SM_MIN = 50    // Maxwell baseline
+let CUDA_SM_MAX = 120   // Blackwell
+
+// IR substrate.
+let IR_PRIMARY = "ptx"           // native PTX consumption
+let IR_FALLBACK = "spirv"        // via clang spir-v target → translator
+
+// τ=4 memory tier IDs (mirror compute.hexa TIER_*).
+let TIER_PRIVATE  = 0
+let TIER_GROUP    = 1
+let TIER_DEVICE   = 2
+let TIER_CONSTANT = 3
+
+// τ=4 barrier scope IDs (mirror compute.hexa SCOPE_*).
+let SCOPE_SUBGROUP  = 0    // → __syncwarp
+let SCOPE_WORKGROUP = 1    // → __syncthreads
+let SCOPE_CLUSTER   = 2    // → cluster.sync (SM 9.0+)
+let SCOPE_GRID      = 3    // → cooperative_groups::grid_group::sync
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn cuda_buffer_alloc(tier: int, n_bytes: int) -> int {
+    if tier < 0 || tier > 3 { return -1 }
+    if n_bytes <= 0 { return -2 }
+    // STUB: TIER_DEVICE → cuMemAlloc(devptr, n_bytes); TIER_CONSTANT →
+    //       cuModuleGetGlobal lookup; TIER_GROUP/PRIVATE → kernel-local.
+    return 0
+}
+
+fn cuda_buffer_h2d(handle: int, src_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    // STUB: cuMemcpyHtoDAsync(devptr, host, n_bytes, stream)
+    return true
+}
+
+fn cuda_buffer_d2h(handle: int, dst_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    // STUB: cuMemcpyDtoHAsync; sync on event_wait
+    return true
+}
+
+fn cuda_buffer_free(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: cuMemFree(devptr)
+    return true
+}
+
+fn cuda_kernel_compile(ir: int, n_bytes: int) -> int {
+    if ir < 0 || n_bytes <= 0 { return -1 }
+    // STUB: nvrtcCreateProgram + nvrtcCompileProgram + nvrtcGetPTX
+    //       OR cuModuleLoadData (if PTX is already compiled).
+    return 0
+}
+
+fn cuda_kernel_release(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: cuModuleUnload(module)
+    return true
+}
+
+fn cuda_dispatch(kern: int, gx: int, gy: int, gz: int,
+                 wx: int, wy: int, wz: int,
+                 scope: int, dep: int, sg_w: int) -> int {
+    if kern < 0 { return -1 }
+    if scope < 0 || scope > 3 { return -2 }
+    // STUB: cuLaunchKernel(fn, gx, gy, gz, wx, wy, wz, shared, stream, args, extra)
+    return 0
+}
+
+fn cuda_event_wait(event: int) -> bool {
+    if event < 0 { return false }
+    // STUB: cuStreamSynchronize(stream) OR cuEventSynchronize(event)
+    return true
+}
+
+fn cuda_event_release(event: int) -> bool {
+    if event < 0 { return false }
+    // STUB: cuEventDestroy(event)
+    return true
+}
+
+fn cuda_module_meta() -> [str] {
+    return [MODULE_NAME, VENDOR_NAME, IR_PRIMARY, "4"]
+}
+
+fn main() {
+    println("[cuda_compute sim] STUB skeleton — sim-first; FFI to libcuda.so + libnvrtc.so TODO")
+    println("  CUDA " + str(CUDA_VERSION_MAJOR) + "." + str(CUDA_VERSION_MINOR) + ", SM " + str(CUDA_SM_MIN) + "..." + str(CUDA_SM_MAX))
+    println("  IR: PTX (primary) | SPIR-V (via clspv translator)")
+    println("  scopes: __syncwarp / __syncthreads / cluster.sync (SM 9.0+) / grid_group::sync")
+}

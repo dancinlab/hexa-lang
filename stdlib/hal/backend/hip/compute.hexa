@@ -1,0 +1,135 @@
+#!hexa strict
+// stdlib/hal/backend/hip/compute.hexa — AMD HIP backend
+//                                       — paper skeleton.
+//
+// Phase: skeleton / stub. Real HIP runtime + HIPRTC integration is
+// downstream FFI scope (libamdhip64.so + libhiprtc.so).
+//
+// Target:    AMD HIP 7.2.53211 (canon §2 web-search 2026-05-08).
+// Runtime:   libamdhip64.so (HIP runtime; hipModuleLoad / hipLaunchKernel)
+//            + libhiprtc.so (HIPRTC for runtime AMDGCN/PTX compile).
+// IR:        PTX (NVIDIA-targeted; HIP can run on Nvidia via PTX trans-
+//            lation) OR SPIR-V → AMD GCN (via amdgpu LLVM backend).
+// Hardware:  AMD GPUs (gfx900 Vega → gfx1201 RDNA4 / gfx1100 RDNA3 /
+//            gfx9 CDNA / Instinct MI300).
+// Surface:   hip_{buffer_alloc,buffer_h2d,buffer_d2h,buffer_free,
+//            kernel_compile,kernel_release,dispatch,event_wait,event_release}
+//
+// IR mapping: AMD GCN/RDNA preferred (native ISA via LLVM amdgpu);
+// PTX accepted (cross-vendor mode; HIP-on-Nvidia path uses CUDA
+// runtime under the hood). SPIR-V via clspv → amdgpu translator.
+//
+// Memory tier mapping (compute.hexa TIER_* → HIP address space):
+//   TIER_PRIVATE  → __private  (per-work-item; register/scratch)
+//   TIER_GROUP    → __shared   (per-workgroup LDS; AMD Local Data Share)
+//   TIER_DEVICE   → hipMalloc  (HBM2/HBM3/GDDR6 main DRAM)
+//   TIER_CONSTANT → __constant (read-only LDS or scalar cache)
+//
+// Barrier scope mapping (compute.hexa SCOPE_* → HIP/AMD semantics):
+//   SCOPE_SUBGROUP   → __builtin_amdgcn_s_barrier (wave = 32 or 64)
+//   SCOPE_WORKGROUP  → __syncthreads (per-workgroup; LDS sync)
+//   SCOPE_CLUSTER    → not natively supported on AMD GCN/RDNA
+//                       (multi-block cluster equivalent via persistent
+//                        kernel + global atomic flag)
+//   SCOPE_GRID       → cooperative_groups::grid_group::sync (HIP CG)
+//
+// Wavefront width: AMD GCN = 64; AMD RDNA = 32 (WGP-mode) or 64 (CU-mode).
+//   Compute.hexa SUBGROUP scope → __builtin_amdgcn_s_barrier handles
+//   either width transparently; sg_w=32 or 64 should match the actual
+//   target ISA's default to avoid stall.
+
+let MODULE_NAME = "hip_compute"
+let VENDOR_NAME = "hip"
+
+let HIP_VERSION_MAJOR = 7
+let HIP_VERSION_MINOR = 2
+let HIP_VERSION_PATCH = 53211
+
+// gfx range — Vega gfx900 → RDNA4 gfx1201 / CDNA MI300.
+let HIP_GFX_MIN = 900    // Vega 10
+let HIP_GFX_MAX = 1201   // RDNA4 / Navi 4
+
+// Wavefront widths.
+let WAVE_GCN_WIDTH  = 64
+let WAVE_RDNA_WIDTH = 32
+
+let IR_PRIMARY  = "amdgcn"   // native AMD ISA via LLVM amdgpu
+let IR_FALLBACK = "ptx"      // for HIP-on-Nvidia + cross-vendor mode
+
+let TIER_PRIVATE  = 0
+let TIER_GROUP    = 1
+let TIER_DEVICE   = 2
+let TIER_CONSTANT = 3
+
+let SCOPE_SUBGROUP  = 0
+let SCOPE_WORKGROUP = 1
+let SCOPE_CLUSTER   = 2
+let SCOPE_GRID      = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn hip_buffer_alloc(tier: int, n_bytes: int) -> int {
+    if tier < 0 || tier > 3 { return -1 }
+    if n_bytes <= 0 { return -2 }
+    // STUB: TIER_DEVICE → hipMalloc(&p, n_bytes); etc.
+    return 0
+}
+
+fn hip_buffer_h2d(handle: int, src_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    // STUB: hipMemcpyHtoDAsync(devptr, host, n_bytes, stream)
+    return true
+}
+
+fn hip_buffer_d2h(handle: int, dst_host: int, n_bytes: int) -> bool {
+    if handle < 0 || n_bytes <= 0 { return false }
+    return true
+}
+
+fn hip_buffer_free(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: hipFree(devptr)
+    return true
+}
+
+fn hip_kernel_compile(ir: int, n_bytes: int) -> int {
+    if ir < 0 || n_bytes <= 0 { return -1 }
+    // STUB: hiprtcCreateProgram + hiprtcCompileProgram → AMDGCN ELF or PTX
+    return 0
+}
+
+fn hip_kernel_release(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn hip_dispatch(kern: int, gx: int, gy: int, gz: int,
+                wx: int, wy: int, wz: int,
+                scope: int, dep: int, sg_w: int) -> int {
+    if kern < 0 { return -1 }
+    if scope < 0 || scope > 3 { return -2 }
+    // STUB: hipLaunchKernel(fn, dim3(gx,gy,gz), dim3(wx,wy,wz), shared, stream, args)
+    return 0
+}
+
+fn hip_event_wait(event: int) -> bool {
+    if event < 0 { return false }
+    // STUB: hipStreamSynchronize OR hipEventSynchronize
+    return true
+}
+
+fn hip_event_release(event: int) -> bool {
+    if event < 0 { return false }
+    return true
+}
+
+fn hip_module_meta() -> [str] {
+    return [MODULE_NAME, VENDOR_NAME, IR_PRIMARY, "4"]
+}
+
+fn main() {
+    println("[hip_compute sim] STUB skeleton — sim-first; FFI to libamdhip64.so + libhiprtc.so TODO")
+    println("  HIP " + str(HIP_VERSION_MAJOR) + "." + str(HIP_VERSION_MINOR) + "." + str(HIP_VERSION_PATCH) + "; gfx" + str(HIP_GFX_MIN) + "...gfx" + str(HIP_GFX_MAX))
+    println("  IR: amdgcn (primary; LLVM amdgpu) | PTX (HIP-on-Nvidia)")
+    println("  wavefront: GCN=64, RDNA=32 (WGP-mode) or 64 (CU-mode)")
+}

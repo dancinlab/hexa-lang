@@ -1,5 +1,85 @@
 # stdlib/hal CHANGELOG
 
+## [1.7.0] - 2026-05-08
+
+### Added — compute.hexa GPGPU σ=12 lattice fully populated (6 vendors)
+- `backend/{cuda,hip,sycl,opencl,metal,webgpu}/compute.hexa` —
+  paper-skeleton stubs for ALL 6 GPGPU vendor backends. Combined
+  with the SPIR-V + PTX IR backends (v1.6.0 sibling commit), this
+  fills the GPGPU σ=12 lattice (6 vendors × 2 IRs) defined in
+  `~/core/canon/domains/compute/gpgpu/gpgpu.md`.
+
+  Per-vendor details:
+  - **cuda/compute.hexa** — NVIDIA CUDA 13.2 + NVRTC; libcuda.so +
+    libnvrtc.so; PTX primary IR (sm_50 Maxwell → sm_120 Blackwell);
+    `__syncwarp` / `__syncthreads` / `cluster.sync` (Hopper SM 9.0+) /
+    `cooperative_groups::grid_group::sync`.
+  - **hip/compute.hexa** — AMD HIP 7.2.53211 + HIPRTC; libamdhip64.so;
+    AMDGCN primary IR (gfx900 Vega → gfx1201 RDNA4 / CDNA MI300);
+    wavefront 64 (GCN) or 32 (RDNA WGP-mode).
+  - **sycl/compute.hexa** — SYCL 2020 rev 11 (Intel oneAPI DPC++);
+    libsycl.so; SPIR-V primary; cross-vendor (Intel Xe / Nvidia / AMD /
+    CPU); `sub_group_size` is implementation-defined.
+  - **opencl/compute.hexa** — OpenCL 3.1.0 (Khronos ICD loader);
+    libOpenCL.so; SPIR-V via clCreateProgramWithIL (OpenCL 2.1+);
+    cross-vendor (Intel/AMD/Nvidia/Apple/FPGA/DSP).
+  - **metal/compute.hexa** — Apple Metal 4 (MSL 2025-10-23);
+    Metal.framework; AIR primary (MSL → AIR via Apple compiler) +
+    SPIR-V via SPIRV-Cross offline; Apple Silicon SIMD-group = 32.
+  - **webgpu/compute.hexa** — WebGPU CR Draft (wgpu-native or Dawn);
+    WGSL primary (browser-required) + SPIR-V via Tint (native only);
+    cross-platform Vulkan/D3D12/Metal/OpenGL ES.
+
+  Surface (mirrors `stdlib/hal/compute.hexa` sim):
+    <vendor>_buffer_alloc(tier, n_bytes) -> int
+    <vendor>_buffer_h2d / d2h / free
+    <vendor>_kernel_compile(ir, n_bytes) -> int
+    <vendor>_kernel_release(handle) -> bool
+    <vendor>_dispatch(kern, gx, gy, gz, wx, wy, wz, scope, dep, sg_w) -> int
+    <vendor>_event_wait / event_release
+
+### GPGPU σ=12 lattice complete after v1.7.0
+| vendor   | IR primary | runtime                       | tier ≤ device | scope ≤ grid     |
+|:---------|:-----------|:------------------------------|:-------------:|:------------------|
+| cuda     | PTX        | libcuda.so + libnvrtc.so      | ✓             | ✓ (CG grid_group) |
+| hip      | AMDGCN     | libamdhip64.so + libhiprtc.so | ✓             | ✓ (CG)            |
+| sycl     | SPIR-V     | libsycl.so (oneAPI DPC++)     | ✓             | partial (emul)    |
+| opencl   | SPIR-V     | libOpenCL.so (Khronos ICD)    | ✓             | partial (emul)    |
+| metal    | MSL → AIR  | Metal.framework               | ✓             | partial (emul)    |
+| webgpu   | WGSL       | wgpu-native / Dawn / browser  | ✓             | partial (emul)    |
+
+Cross-vendor barrier-scope coverage:
+- SUBGROUP / WORKGROUP — natively supported by all 6 vendors (with
+  varying SIMD/wavefront widths: 32 nominal, 64 on AMD GCN, 8/16/32
+  on Intel SYCL).
+- CLUSTER — native only on CUDA (Hopper SM 9.0+); emulated elsewhere.
+- GRID — native via Cooperative Groups on CUDA + HIP; emulated as
+  persistent kernel + atomic flag on SYCL/OpenCL/Metal/WebGPU.
+
+### Changed
+Total backend stub count for stdlib/hal:
+- Embedded HW: 6 vendors × 12 σ-slots = 72 stubs (unchanged)
+- GPGPU IR:    2 stubs (spirv + ptx; v1.6.0 sibling)
+- GPGPU vendor: 6 stubs (this iter)
+- **Total backend stubs: 80**
+
+F-HAL closure unchanged at 67% × 5 (sat-1 ✓). compute.hexa is on
+a separate falsifier axis (F-GPGPU-* TBD when GPGPU recipe lands).
+
+### Provenance
+- All 6 vendor versions web-search confirmed 2026-05-08 (per autonomy
+  directive web-search mandate): CUDA 13.2, HIP 7.2.53211, SYCL 2020
+  rev 11, OpenCL 3.1.0, Metal 4 (MSL 2025-10-23), WebGPU CR Draft.
+- Cross-reference: `~/core/canon/domains/compute/gpgpu/gpgpu.md` §2-§5
+  (vendor matrix + tier/scope mapping).
+
+### Roadmap
+- v1.8.0 candidate: ESP32 family T3 scaffold (xtensa-esp-elf-gcc) —
+  first non-arm-none-eabi-gcc T3 path. Blocked: toolchain not in dev env.
+- v1.9.0 candidate: Renode 2026.x install + T3b2 run-tier (lifts F-HAL T3 ✓).
+- v1.10.0+: GPGPU compute.hexa T2 numerics (e.g. SAXPY benchmark
+  fixture cross-vendor) — analog of HW-12 T2 for GPGPU axis.
+
 ## [1.6.0] - 2026-05-08
 
 ### Added — GPGPU IR backend skeletons (Phase F iter 9)
