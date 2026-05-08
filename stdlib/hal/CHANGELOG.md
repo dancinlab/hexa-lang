@@ -1,5 +1,59 @@
 # stdlib/hal CHANGELOG
 
+## [0.7.0] - 2026-05-08
+
+### Added
+- `backend/esp32s3/{gpio,i2c,spi,uart,adc}.hexa` — fifth hardware
+  vendor backend. Espressif ESP32-S3 Xtensa LX7 dual-core @ 240 MHz +
+  ULP-RISC-V coprocessor + AI vector accelerator + USB-OTG.
+  Peripheral region 0x6000xxxx (same family as C3; not the 0x3FF
+  range of original ESP32).
+  - `esp32s3/gpio.hexa`  — DR_REG_GPIO_BASE 0x60004000 + IO_MUX 0x60009000;
+                           45-pin envelope (GPIO0..21 + GPIO26..48; gap at
+                           22..25 reserved for flash/PSRAM); dual-bank
+                           (OUT/OUT1, IN/IN1, ENABLE/ENABLE1); GPIO19/20
+                           = USB-OTG D-/D+.
+  - `esp32s3/i2c.hexa`   — I2C0 0x60013000 / I2C1 0x60027000; same
+                           command-queue architecture as ESP32 / C3.
+  - `esp32s3/spi.hexa`   — SPI2 0x60024000 / SPI3 0x60025000 (both
+                           user-accessible; SPI0/1 reserved for flash+PSRAM);
+                           same 16 × 32-bit shift buffer; max 80 MHz.
+  - `esp32s3/uart.hexa`  — UART0/1/2 (0x60000000 / 0x60010000 / 0x6002E000);
+                           same fractional divisor as ESP32 family;
+                           built-in USB-Serial-JTAG on GPIO19/20.
+  - `esp32s3/adc.hexa`   — APB_SARADC 0x60040000; 12-bit fixed; ADC1
+                           10-ch (GPIO1..10) + ADC2 10-ch (GPIO11..20);
+                           **no WiFi conflict on S3** (improvement vs ESP32).
+
+### Changed
+- `numerics_sim_marker_density.hexa` `CANONICAL_VENDORS` now 5 entries
+  (stm32h7, rp2040, esp32, esp32c3, esp32s3). Expected backend stub
+  count = 5 × 5 = 25.
+- v0.7.0 vendor list: + esp32s3 (this).
+
+### ISA family + variant coverage milestone
+- v0.7.0 introduces the **second Xtensa variant** (LX7 vs LX6). Vendors
+  now span 4 distinct CPU classes:
+    - ARM Cortex-M7 (stm32h7)
+    - ARM Cortex-M0+ (rp2040)
+    - Xtensa LX6 (esp32)
+    - Xtensa LX7 + ULP-RISC-V (esp32s3) ← new
+    - RISC-V RV32IMC (esp32c3)
+  ESP32-S3 is notable as the first vendor with a **secondary ULP
+  coprocessor** (ULP-RISC-V) — opens a v1.0+ design question of
+  whether ULP-class peripherals deserve their own σ-slot extension.
+
+### Provenance
+- ESP32-S3 register addresses confirmed via web-search + ESP32-S3 TRM.
+  GPIO_BASE = 0x60004000 (matches C3 — same peri region; offsets
+  differ per peripheral type/count).
+- Pin envelope: 45 pins (GPIO0..21 + GPIO26..48, gap at 22..25).
+- IP cells: GPIO Matrix S3-specific (45 pins, dual-bank); I2C / SPI /
+  UART / SAR ADC IP cells reused from ESP32 family with bus / ch
+  count adjustments.
+- ULP-RISC-V coprocessor + AI accelerator + USB-OTG noted but their
+  HW backends are out of v0.7.0 scope (would extend σ-slot table).
+
 ## [0.6.0] - 2026-05-08
 
 ### Added

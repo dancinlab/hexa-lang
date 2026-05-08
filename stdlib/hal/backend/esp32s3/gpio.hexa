@@ -1,0 +1,105 @@
+#!hexa strict
+// stdlib/hal/backend/esp32s3/gpio.hexa — ESP32-S3 GPIO backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    Espressif ESP32-S3 Xtensa LX7 dual-core @ 240 MHz +
+//            ULP-RISC-V coprocessor + AI vector accelerator + USB-OTG.
+// Chip ref:  ESP32-S3 Technical Reference Manual §5 IO MUX and GPIO Matrix.
+// Surface:   esp32s3_gpio_{configure,write,read,toggle}(pin, ...)
+// Dispatch:  gpio.hexa selects this via cfg-flag (e.g. `cfg target =
+//            "esp32s3"`). v0.7.0+ fifth vendor.
+//
+// MMIO layout (peripheral region 0x6000xxxx, same as ESP32-C3):
+//
+//   GPIO Matrix:   DR_REG_GPIO_BASE   = 0x60004000
+//     GPIO_OUT_REG               0x004   GPIO 0..31 output value
+//     GPIO_OUT_W1TS_REG          0x008
+//     GPIO_OUT_W1TC_REG          0x00C
+//     GPIO_OUT1_REG              0x010   GPIO 32..48 output value (dual-bank)
+//     GPIO_OUT1_W1TS_REG         0x014
+//     GPIO_OUT1_W1TC_REG         0x018
+//     GPIO_ENABLE_REG            0x020
+//     GPIO_ENABLE1_REG           0x02C
+//     GPIO_IN_REG                0x03C
+//     GPIO_IN1_REG               0x040
+//
+//   IO_MUX:        DR_REG_IO_MUX_BASE = 0x60009000
+//
+// 45-pin envelope: GPIO0..GPIO21 and GPIO26..GPIO48 (gap at 22..25 —
+// internal flash/PSRAM use; not bonded as GPIO). Pin count: 22 + 23 = 45.
+// Compared to ESP32 (40-pin): more pins, dual-bank like ESP32 (vs C3
+// single-bank). GPIO19/20 = USB-OTG D+/D-.
+
+let MODULE_NAME = "esp32s3_gpio"
+let SIGMA_SLOT  = 1
+let PHI_KIND    = "digital"
+
+let DR_REG_GPIO_BASE     = 0x60004000
+let DR_REG_IO_MUX_BASE   = 0x60009000
+
+let GPIO_OUT_REG         = 0x004
+let GPIO_OUT_W1TS_REG    = 0x008
+let GPIO_OUT_W1TC_REG    = 0x00C
+let GPIO_OUT1_REG        = 0x010
+let GPIO_OUT1_W1TS_REG   = 0x014
+let GPIO_OUT1_W1TC_REG   = 0x018
+let GPIO_ENABLE_REG      = 0x020
+let GPIO_ENABLE1_REG     = 0x02C
+let GPIO_IN_REG          = 0x03C
+let GPIO_IN1_REG         = 0x040
+
+let ESP32S3_GPIO_MIN = 0
+let ESP32S3_GPIO_MAX = 48     // GPIO22..25 internally reserved (not exposed)
+
+let MCU_SEL_GPIO = 1
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32s3_gpio_configure(pin: int, mode: int) -> int {
+    if pin < ESP32S3_GPIO_MIN || pin > ESP32S3_GPIO_MAX { return -1 }
+    if pin >= 22 && pin <= 25 { return -1 }   // reserved gap (flash/PSRAM)
+    if mode < 0 || mode > 5 { return -2 }
+    // STUB: real impl writes IO_MUX MCU_SEL=1 + GPIO_ENABLE/ENABLE1 W1TS for output
+    return pin
+}
+
+fn esp32s3_gpio_write(pin: int, val: bool) -> int {
+    if pin < ESP32S3_GPIO_MIN || pin > ESP32S3_GPIO_MAX { return -1 }
+    if pin >= 22 && pin <= 25 { return -1 }
+    // STUB:
+    //   if pin <= 31 { use GPIO_OUT_W1TS/W1TC with (1 << pin) }
+    //   else         { use GPIO_OUT1_W1TS/W1TC with (1 << (pin-32)) }
+    return 0
+}
+
+fn esp32s3_gpio_read(pin: int) -> int {
+    if pin < ESP32S3_GPIO_MIN || pin > ESP32S3_GPIO_MAX { return -1 }
+    if pin >= 22 && pin <= 25 { return -1 }
+    // STUB:
+    //   if pin <= 31 { return (*(BASE + GPIO_IN_REG)  >> pin)       & 1 }
+    //   else         { return (*(BASE + GPIO_IN1_REG) >> (pin - 32)) & 1 }
+    return 0
+}
+
+fn esp32s3_gpio_toggle(pin: int) -> int {
+    if pin < ESP32S3_GPIO_MIN || pin > ESP32S3_GPIO_MAX { return -1 }
+    if pin >= 22 && pin <= 25 { return -1 }
+    // STUB: ESP32-S3 has no atomic XOR; sw RMW.
+    return 0
+}
+
+fn esp32s3_gpio_report(pin: int) -> str {
+    return "[esp32s3_gpio sim] pin=" + str(pin) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32s3_gpio_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32s3_gpio sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  DR_REG_GPIO_BASE=" + str(DR_REG_GPIO_BASE) +
+            " DR_REG_IO_MUX_BASE=" + str(DR_REG_IO_MUX_BASE))
+    println("  GPIO0..21 + GPIO26..48 = 45 pins (gap at 22..25 reserved); GPIO19/20 = USB-OTG")
+}

@@ -66,8 +66,9 @@ let CANONICAL_HW_5 = ["gpio", "i2c", "spi", "uart", "adc"]
 //   v0.4.0: + rp2040
 //   v0.5.0: + esp32
 //   v0.6.0: + esp32c3 (first RISC-V vendor)
-let CANONICAL_VENDORS = ["stm32h7", "rp2040", "esp32", "esp32c3"]
-let CANONICAL_VENDOR_COUNT = 4
+//   v0.7.0: + esp32s3 (Xtensa LX7 dual-core, 45 GPIO, AI accelerator)
+let CANONICAL_VENDORS = ["stm32h7", "rp2040", "esp32", "esp32c3", "esp32s3"]
+let CANONICAL_VENDOR_COUNT = 5
 
 let HW_BACKEND_USE_PATTERN = "use \"stdlib/hal/backend/"
 let SIM_MARKER_BRACKET = "[sim"

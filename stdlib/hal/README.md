@@ -127,6 +127,11 @@ Subsequent versions add paper-skeleton stubs for the canonical HW-5
   0x6000 range + 22-pin single-bank GPIO + same command-queue I2C +
   same SPI/UART IP as ESP32 + 12-bit fixed SAR ADC). **First RISC-V
   vendor** — validates multi-ISA-family cfg-flag dispatch.
+- `backend/esp32s3/<peripheral>.hexa` — Espressif ESP32-S3 dual-core
+  Xtensa LX7 + ULP-RISC-V + AI vector accelerator + USB-OTG (v0.7.0 —
+  paper skeleton; 0x6000 region + 45-pin envelope GPIO0..21 ∪ GPIO26..48
+  + 2 I2C + 2 user SPI + 3 UART + USB-Serial-JTAG bridge + 12-bit ADC
+  20-ch with no WiFi conflict).
 
 cfg-flag dispatch in each top-level module (gpio.hexa etc.) selects
 the correct backend at compile time. Sim backend is always-available
