@@ -111,16 +111,21 @@ v0.4.0+ second hardware backend (rp2040 or esp32).
 
 Per-vendor HW impls live under `stdlib/hal/backend/<vendor>/`. v0.0.1
 ships sim backend only (per F-HAL-5 invariant — sim before HW).
-v0.1.0+ adds:
+Subsequent versions add paper-skeleton stubs for the canonical HW-5
+(gpio/i2c/spi/uart/adc — every vendor must cover all 5):
 
-- `backend/stm32h7/<peripheral>.hexa` — STM32H7 Cortex-M7 480 MHz
-  (paper skeleton; real MMIO TBD).
-- `backend/rp2040/<peripheral>.hexa` — Raspberry Pi RP2040 (planned).
-- `backend/esp32/<peripheral>.hexa` — Espressif ESP32 (planned).
+- `backend/stm32h7/<peripheral>.hexa` — ST STM32H7 Cortex-M7 @ 480 MHz
+  (v0.1.0–v0.2.0 — paper skeleton; real MMIO TBD).
+- `backend/rp2040/<peripheral>.hexa` — Raspberry Pi RP2040 dual
+  Cortex-M0+ @ 133 MHz (v0.4.0 — paper skeleton; SIO/IO_BANK0/
+  PADS_BANK0 + PL011 UART + PL022 SSP + DesignWare I2C + 12-bit ADC).
+- `backend/esp32/<peripheral>.hexa` — Espressif ESP32 (planned, v0.5.0).
 
 cfg-flag dispatch in each top-level module (gpio.hexa etc.) selects
 the correct backend at compile time. Sim backend is always-available
-fallback.
+fallback. The `numerics_sim_marker_density.hexa` (F-HAL-5 T2) numerical
+script enforces vendor parity: every registered vendor MUST cover the
+full HW-5, otherwise T2 fails.
 
 ## Provenance
 

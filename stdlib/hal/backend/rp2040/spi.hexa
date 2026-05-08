@@ -1,0 +1,120 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/spi.hexa — RP2040 SPI backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    RP2040 dual Cortex-M0+ @ 133 MHz.
+// Chip ref:  RP2040 Datasheet §4.4 SSP / PrimeCell PL022 SSP.
+// Surface:   rp2040_spi_{configure,xfer,close}(...)
+// Dispatch:  spi.hexa selects this via cfg-flag.
+//
+// MMIO layout (PL022 SSP IP):
+//
+//   SPI0:  base = 0x4003C000
+//   SPI1:  base = 0x40040000
+//
+//   SSPCR0                        0x000   data size (4..16 bits), CPOL/CPHA, SCR
+//                                          DSS bits 3:0 (0xF = 16-bit)
+//                                          FRF bits 5:4 (0=SPI, 1=TI, 2=Microwire)
+//                                          SPO bit 6 (CPOL)
+//                                          SPH bit 7 (CPHA)
+//                                          SCR bits 15:8 (clock rate divider)
+//   SSPCR1                        0x004   master/slave, enable, loopback
+//                                          LBM bit 0 (loopback)
+//                                          SSE bit 1 (enable)
+//                                          MS  bit 2 (0=master, 1=slave)
+//   SSPDR                         0x008   data tx/rx fifo
+//   SSPSR                         0x00C   status: TFE/TNF/RNE/RFF/BSY
+//   SSPCPSR                       0x010   prescaler (even, 2..254)
+//   SSPIMSC                       0x014   intr mask
+//   SSPRIS                        0x018   raw intr status
+//   SSPMIS                        0x01C   masked intr status
+//   SSPDMACR                      0x024   DMA control
+//
+// SPI clock: f_spi = peri_clk / (CPSDVR * (1 + SCR))
+//   peri_clk = 125 MHz default → max f_spi ≈ 62.5 MHz (CPSDVR=2, SCR=0)
+//
+// CPOL/CPHA modes (SPI mode 0..3):
+//   mode 0: CPOL=0 CPHA=0   sample on rising edge, idle low (most common)
+//   mode 1: CPOL=0 CPHA=1   sample on falling edge, idle low
+//   mode 2: CPOL=1 CPHA=0   sample on falling edge, idle high
+//   mode 3: CPOL=1 CPHA=1   sample on rising edge, idle high
+//
+// Data size: 4..16 bits per frame (8-bit most common).
+//
+// TODO:
+//   1. cfg-flag dispatch from stdlib/hal/spi.hexa.
+//   2. clock divider calc (CPSDVR + SCR) from target Hz.
+//   3. fifo drain with TFE/RNE polling (or DMA path for high-throughput).
+//   4. CS pin manual control (PL022 SSP doesn't auto-toggle CS).
+//   5. multi-slave addressing helper (CS-mux off external GPIO).
+
+let MODULE_NAME = "rp2040_spi"
+let SIGMA_SLOT  = 3
+let PHI_KIND    = "digital"
+
+let SPI0_BASE = 0x4003C000
+let SPI1_BASE = 0x40040000
+
+// SSPCR0 / SSPCR1 / SSPDR / SSPSR offsets.
+let SSPCR0  = 0x000
+let SSPCR1  = 0x004
+let SSPDR   = 0x008
+let SSPSR   = 0x00C
+let SSPCPSR = 0x010
+
+// Default frame: 8-bit data.
+let DEFAULT_DSS = 8
+
+// SPI modes.
+let MODE_0 = 0
+let MODE_1 = 1
+let MODE_2 = 2
+let MODE_3 = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn rp2040_spi_configure(unit: int, speed_hz: int, mode: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    if speed_hz < 1000 || speed_hz > 62500000 { return -2 }
+    if mode < 0 || mode > 3 { return -3 }
+    // STUB: real impl would
+    //   1. release reset on spi<unit> (RESETS bit 16/17)
+    //   2. clear SSPCR1.SSE
+    //   3. set SSPCR0: DSS=8 (=0x07), SPO/SPH from mode, SCR from divider
+    //   4. set SSPCR1: MS=0 (master), LBM=0
+    //   5. set SSPCPSR (even prescaler)
+    //   6. set SSPCR1.SSE = 1
+    return unit
+}
+
+fn rp2040_spi_xfer(unit: int, tx: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    if tx < 0 || tx > 0xFFFF { return -2 }
+    // STUB: real impl would
+    //   1. spin until SSPSR.TNF (tx FIFO not full)
+    //   2. write SSPDR = tx
+    //   3. spin until SSPSR.RNE (rx FIFO not empty)
+    //   4. return SSPDR (full-duplex)
+    return 0
+}
+
+fn rp2040_spi_close(unit: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    // STUB: clear SSPCR1.SSE, hold reset on spi<unit>
+    return 0
+}
+
+fn rp2040_spi_report(unit: int) -> str {
+    return "[rp2040_spi sim] unit=" + str(unit) + " (skeleton stub — TODO MMIO)"
+}
+
+fn rp2040_spi_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_spi sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  SPI0=" + str(SPI0_BASE) + " SPI1=" + str(SPI1_BASE))
+    println("  max f_spi ≈ 62.5 MHz (peri_clk=125 MHz)")
+}

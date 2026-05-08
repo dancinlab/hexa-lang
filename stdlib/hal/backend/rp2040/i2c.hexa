@@ -1,0 +1,118 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/i2c.hexa — RP2040 I2C backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    RP2040 dual Cortex-M0+ @ 133 MHz.
+// Chip ref:  RP2040 Datasheet §4.3 I2C controller (Synopsys DesignWare-class).
+// Surface:   rp2040_i2c_{configure,start,write,read,stop}(...)
+// Dispatch:  i2c.hexa selects this via cfg-flag.
+//
+// MMIO layout (sketch):
+//
+//   I2C0:  base = 0x40044000
+//   I2C1:  base = 0x40048000
+//
+//   IC_CON                         0x00   master/slave/speed cfg
+//                                          MASTER_MODE bit 0
+//                                          SPEED bits 2:1 (1=std 100k, 2=fast 400k)
+//                                          IC_SLAVE_DISABLE bit 6
+//   IC_TAR                         0x04   target slave address
+//   IC_DATA_CMD                    0x10   tx fifo + cmd (RESTART, STOP bits)
+//   IC_SS_SCL_HCNT                 0x14   std-mode high count
+//   IC_SS_SCL_LCNT                 0x18   std-mode low count
+//   IC_FS_SCL_HCNT                 0x1C   fast-mode high count
+//   IC_FS_SCL_LCNT                 0x20   fast-mode low count
+//   IC_INTR_STAT                   0x2C
+//   IC_INTR_MASK                   0x30
+//   IC_RAW_INTR_STAT               0x34
+//   IC_RX_TL                       0x38   rx fifo threshold
+//   IC_TX_TL                       0x3C   tx fifo threshold
+//   IC_ENABLE                      0x6C   bit 0 ENABLE
+//   IC_STATUS                      0x70   bit 0 ACTIVITY, bit 1 TFNF, bit 2 TFE,
+//                                          bit 3 RFNE, bit 4 RFF
+//
+// Speed grades (§4.3.4): std 100 kbit/s, fast 400 kbit/s, fast-plus
+// 1 Mbit/s, high-speed 3.4 Mbit/s. RP2040 supports up to FM+ on
+// suitable pads (≥ 3 mA drive).
+//
+// 7-bit + 10-bit addressing both supported (IC_CON.IC_10BITADDR_MASTER).
+// Multi-master arbitration handled by IP; clock stretching on slave
+// side automatic.
+//
+// TODO:
+//   1. cfg-flag dispatch from stdlib/hal/i2c.hexa.
+//   2. clock divider calc from peri_clk → SS/FS counts.
+//   3. write/read fifo drain with timeout (typ 1 ms per byte at 100k).
+//   4. RESTART handling for repeated-start protocols (e.g. SHT4x temp).
+//   5. error handling: NACK, arbitration loss, abort source register.
+
+let MODULE_NAME = "rp2040_i2c"
+let SIGMA_SLOT  = 2
+let PHI_KIND    = "digital"
+
+let I2C0_BASE = 0x40044000
+let I2C1_BASE = 0x40048000
+
+// IC_* register offsets.
+let IC_CON           = 0x00
+let IC_TAR           = 0x04
+let IC_DATA_CMD      = 0x10
+let IC_ENABLE        = 0x6C
+let IC_STATUS        = 0x70
+
+// Speed presets (Hz at peri_clk = 125 MHz default).
+let SPEED_STD_100K   = 100000
+let SPEED_FAST_400K  = 400000
+let SPEED_FASTP_1M   = 1000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn rp2040_i2c_configure(unit: int, speed_hz: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    if speed_hz < 1000 || speed_hz > 3400000 { return -2 }
+    // STUB: real impl would
+    //   1. release reset on i2c<unit> (RESETS bit 12/13)
+    //   2. disable IC_ENABLE
+    //   3. set IC_CON: MASTER_MODE=1, IC_SLAVE_DISABLE=1, SPEED=preset
+    //   4. compute SS/FS HCNT/LCNT from peri_clk and target speed
+    //   5. enable IC_ENABLE
+    return unit
+}
+
+fn rp2040_i2c_start(unit: int, addr: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    if addr < 0 || addr > 0x7F { return -2 }
+    // STUB: write IC_TAR = addr
+    return 0
+}
+
+fn rp2040_i2c_write(handle: int, byte: int) -> int {
+    if byte < 0 || byte > 255 { return -1 }
+    // STUB: write IC_DATA_CMD = byte
+    return 0
+}
+
+fn rp2040_i2c_read(handle: int) -> int {
+    // STUB: write IC_DATA_CMD with CMD_READ bit, then read IC_DATA_CMD
+    return -1
+}
+
+fn rp2040_i2c_stop(handle: int) -> int {
+    // STUB: write IC_DATA_CMD with STOP bit; spin on IC_STATUS.ACTIVITY=0
+    return 0
+}
+
+fn rp2040_i2c_report(handle: int) -> str {
+    return "[rp2040_i2c sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn rp2040_i2c_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_i2c sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  I2C0=" + str(I2C0_BASE) + " I2C1=" + str(I2C1_BASE))
+    println("  speeds: 100k / 400k / 1M (fast-mode-plus on FM+ pads)")
+}

@@ -17,15 +17,16 @@
 //
 //   1. 12 of 12 modules contain ≥ 1 sim marker (`[sim` OR `(sim`).
 //   2. No module imports `use "stdlib/hal/backend/...`.
-//   3. The backend/ dir contains exactly 1 vendor subdir (stm32h7)
-//      at v0.2.0+; v0.3.0 introduces no new vendor.
-//   4. The stm32h7 backend covers 5 of 12 peripherals (gpio, i2c,
-//      spi, uart, adc) — the canonical "sim-first 5" set.
+//   3. The backend/ dir contains EXACTLY the registered vendor subdirs
+//      (stm32h7 at v0.2.0+; rp2040 at v0.4.0+). New vendor additions
+//      must update CANONICAL_VENDORS — the test forbids drift.
+//   4. Each registered vendor backend covers 5 of 12 peripherals
+//      (gpio, i2c, spi, uart, adc) — the canonical "sim-first 5" set.
 //   5. Each backend stub file contains an explicit stub marker
 //      ("STUB" OR "skeleton" OR "TODO" OR "sim-first" — case-
 //      insensitive substring scan).
-//   6. Sim coverage ratio (12/12 = 100%) ≥ HW coverage ratio
-//      (5/12 ≈ 42%) — sim is always a superset of HW.
+//   6. Sim coverage ratio (12/12 = 100%) ≥ per-vendor HW coverage
+//      ratio (5/12 ≈ 42%) — sim is always a superset of HW.
 //   7. Total sim-marker occurrences across the 12 modules ≥ σ = 12
 //      (density floor — every module has at least one marker, on
 //      average ≥ 1 per module).
@@ -56,12 +57,15 @@ let MODULES = [
     "pwm", "timer", "intr", "dma", "rtc"
 ]
 
-// Canonical "sim-first 5" set covered by stm32h7 stubs at v0.2.0+.
+// Canonical "sim-first 5" set — every vendor backend must cover these.
 let CANONICAL_HW_5 = ["gpio", "i2c", "spi", "uart", "adc"]
 
-// At v0.2.0+, exactly 1 vendor (stm32h7); v0.3.0 must not add vendors.
-let CANONICAL_VENDOR_COUNT = 1
-let CANONICAL_VENDOR = "stm32h7"
+// Registered vendors (additions land in this list with the bump-version
+// commit; drift between this list and the on-disk backend/ dir fails T2).
+//   v0.2.0: stm32h7
+//   v0.4.0: + rp2040
+let CANONICAL_VENDORS = ["stm32h7", "rp2040"]
+let CANONICAL_VENDOR_COUNT = 2
 
 let HW_BACKEND_USE_PATTERN = "use \"stdlib/hal/backend/"
 let SIM_MARKER_BRACKET = "[sim"
@@ -170,61 +174,94 @@ fn check_no_backend_import(root: str) {
            if bad.len() > 0 { "issues: " + bad } else { str(n_clean) + "/12" })
 }
 
-fn check_vendor_count(root: str) {
-    // backend/ dir must contain exactly CANONICAL_VENDOR_COUNT vendor subdirs.
-    let backend_dir = root + "/stdlib/hal/backend"
-    let entries = _ls_dirs(backend_dir)
-    let n = entries.len()
-    let mut found_canonical = false
-    for e in entries {
-        if e == CANONICAL_VENDOR { found_canonical = true }
+fn _vendor_registered(v: str) -> bool {
+    for x in CANONICAL_VENDORS {
+        if x == v { return true }
     }
-    _check(n == CANONICAL_VENDOR_COUNT && found_canonical,
-           "backend/ has exactly " + str(CANONICAL_VENDOR_COUNT) + " vendor (" + CANONICAL_VENDOR + ")",
-           "found " + str(n) + ": " + str(entries))
+    return false
 }
 
-fn check_canonical_5(root: str) {
-    // stm32h7 backend covers exactly the 5 canonical peripherals.
-    let mut n_present = 0
+fn check_vendor_count(root: str) {
+    // backend/ dir must contain EXACTLY the registered vendor subdirs —
+    // no missing, no unregistered drift.
+    let backend_dir = root + "/stdlib/hal/backend"
+    let entries = _ls_dirs(backend_dir)
     let mut bad = ""
-    for h in CANONICAL_HW_5 {
-        let p = root + "/stdlib/hal/backend/" + CANONICAL_VENDOR + "/" + h + ".hexa"
-        if _exists(p) { n_present = n_present + 1 }
-        else { bad = bad + h + "(missing) " }
+    let mut n_registered = 0
+    for e in entries {
+        if !_vendor_registered(e) { bad = bad + e + "(unregistered) " }
+        else { n_registered = n_registered + 1 }
     }
-    _check(n_present == CANONICAL_HW_5.len(),
-           "stm32h7 backend covers canonical 5 peripherals: " + str(CANONICAL_HW_5),
-           if bad.len() > 0 { "issues: " + bad } else { str(n_present) + "/5" })
+    let mut missing = 0
+    for v in CANONICAL_VENDORS {
+        let mut found = false
+        for e in entries {
+            if e == v { found = true }
+        }
+        if !found { bad = bad + v + "(missing) "; missing = missing + 1 }
+    }
+    let ok = (entries.len() == CANONICAL_VENDOR_COUNT) && (bad.len() == 0)
+    _check(ok,
+           "backend/ has exactly " + str(CANONICAL_VENDOR_COUNT) +
+              " registered vendor(s): " + str(CANONICAL_VENDORS),
+           if bad.len() > 0 { "issues: " + bad }
+           else { "found " + str(entries.len()) + " entries: " + str(entries) })
+}
+
+fn check_canonical_5_per_vendor(root: str) {
+    // Every registered vendor must cover the canonical HW-5 set.
+    let mut bad = ""
+    let mut total_present = 0
+    let expected = CANONICAL_HW_5.len() * CANONICAL_VENDORS.len()
+    for v in CANONICAL_VENDORS {
+        let mut n_v = 0
+        for h in CANONICAL_HW_5 {
+            let p = root + "/stdlib/hal/backend/" + v + "/" + h + ".hexa"
+            if _exists(p) {
+                n_v = n_v + 1
+                total_present = total_present + 1
+            } else {
+                bad = bad + v + "/" + h + "(missing) "
+            }
+        }
+    }
+    _check(total_present == expected,
+           "each registered vendor covers canonical HW-5: " + str(CANONICAL_HW_5),
+           if bad.len() > 0 { "issues: " + bad }
+           else { str(total_present) + "/" + str(expected) })
 }
 
 fn check_stub_markers(root: str) {
-    // Every backend stub file must contain at least one stub marker.
+    // Every backend stub file (across all registered vendors) must
+    // contain at least one stub marker.
     let mut n_with = 0
     let mut bad = ""
-    for h in CANONICAL_HW_5 {
-        let p = root + "/stdlib/hal/backend/" + CANONICAL_VENDOR + "/" + h + ".hexa"
-        if !_exists(p) { bad = bad + h + "(missing) "; continue }
-        let src = read_file(p)
-        if _has_any_marker(src, STUB_MARKERS) {
-            n_with = n_with + 1
-        } else {
-            bad = bad + h + "(no-stub-marker) "
+    let expected = CANONICAL_HW_5.len() * CANONICAL_VENDORS.len()
+    for v in CANONICAL_VENDORS {
+        for h in CANONICAL_HW_5 {
+            let p = root + "/stdlib/hal/backend/" + v + "/" + h + ".hexa"
+            if !_exists(p) { bad = bad + v + "/" + h + "(missing) "; continue }
+            let src = read_file(p)
+            if _has_any_marker(src, STUB_MARKERS) {
+                n_with = n_with + 1
+            } else {
+                bad = bad + v + "/" + h + "(no-stub-marker) "
+            }
         }
     }
-    _check(n_with == CANONICAL_HW_5.len(),
-           "every backend stub contains a stub marker (STUB|skeleton|TODO|sim-first)",
-           if bad.len() > 0 { "issues: " + bad } else { str(n_with) + "/5" })
+    _check(n_with == expected,
+           "every backend stub (" + str(expected) + " files) contains a stub marker (STUB|skeleton|TODO|sim-first)",
+           if bad.len() > 0 { "issues: " + bad } else { str(n_with) + "/" + str(expected) })
 }
 
 fn check_coverage_ratio() {
-    // sim coverage = 12/12 = 100% ; HW coverage = 5/12 ≈ 42%.
-    // Sim must be a strict superset of HW (sim_count ≥ HW_count).
+    // sim coverage = 12/12 = 100% ; per-vendor HW coverage = 5/12 ≈ 42%.
+    // Sim must be a strict superset of any single vendor's HW coverage.
     let sim_count = SIGMA_6
     let hw_count  = CANONICAL_HW_5.len()
     _check(sim_count >= hw_count,
-           "sim coverage (12/12 = σ) ≥ HW coverage (5/12) — sim is always superset",
-           "sim=" + str(sim_count) + " hw=" + str(hw_count))
+           "sim coverage (12/12 = σ) ≥ per-vendor HW coverage (5/12) — sim is always superset",
+           "sim=" + str(sim_count) + " hw_per_vendor=" + str(hw_count))
 }
 
 fn check_marker_density(root: str) {
@@ -250,7 +287,7 @@ fn main() {
     println("========================================================================")
     println("  σ-slot order: " + str(MODULES))
     println("  canonical HW-5: " + str(CANONICAL_HW_5))
-    println("  canonical vendor: " + CANONICAL_VENDOR + " (count=" + str(CANONICAL_VENDOR_COUNT) + ")")
+    println("  canonical vendors: " + str(CANONICAL_VENDORS) + " (count=" + str(CANONICAL_VENDOR_COUNT) + ")")
     println("")
 
     let root = _root()
@@ -259,7 +296,7 @@ fn main() {
     check_strict_sim_markers(root)
     check_no_backend_import(root)
     check_vendor_count(root)
-    check_canonical_5(root)
+    check_canonical_5_per_vendor(root)
     check_stub_markers(root)
     check_coverage_ratio()
     check_marker_density(root)

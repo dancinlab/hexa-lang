@@ -1,5 +1,54 @@
 # stdlib/hal CHANGELOG
 
+## [0.4.0] - 2026-05-08
+
+### Added
+- `backend/rp2040/{gpio,i2c,spi,uart,adc}.hexa` — second hardware
+  vendor backend, paper-skeleton stubs covering the canonical HW-5.
+  Targets the Raspberry Pi RP2040 dual Cortex-M0+ @ 133 MHz; each
+  stub documents the relevant MMIO base address, key register offsets,
+  default speed/clock, and `STUB`/`TODO` markers for cross-compile
+  follow-on:
+  - `rp2040/gpio.hexa`  — SIO 0xD0000000, IO_BANK0 0x40014000,
+                          PADS_BANK0 0x4001C000; 30-pin envelope (GP0..GP29);
+                          atomic SET/CLR/XOR aliases sketched.
+  - `rp2040/i2c.hexa`   — I2C0 0x40044000 / I2C1 0x40048000 (DesignWare-class IP);
+                          std/fast/fast-plus speed grades (100k/400k/1M).
+  - `rp2040/spi.hexa`   — SPI0 0x4003C000 / SPI1 0x40040000 (PL022 SSP IP);
+                          max f_spi ≈ 62.5 MHz @ peri_clk=125 MHz; 4 SPI modes.
+  - `rp2040/uart.hexa`  — UART0 0x40034000 / UART1 0x40038000 (PL011 UART IP);
+                          baud-divisor formula (IBRD/FBRD); 5..8-bit word length.
+  - `rp2040/adc.hexa`   — ADC 0x4004C000; 12-bit, 4 ext channels (AIN0..3
+                          on GP26..29) + 1 on-die T sensor (AIN4); max 500 kSPS.
+
+### Changed
+- `numerics_sim_marker_density.hexa` (F-HAL-5 T2) made parametric over
+  the registered vendor set:
+  - `CANONICAL_VENDORS` array (was scalar `CANONICAL_VENDOR`) — vendors
+    must appear in this list AND on disk; drift in either direction
+    fails T2.
+  - `check_canonical_5_per_vendor()` (was `check_canonical_5`) — verifies
+    every registered vendor covers the full HW-5; total expected file
+    count = 5 × |vendors|.
+  - `check_stub_markers()` extended to scan all registered vendors.
+  - `check_coverage_ratio()` framed as "per-vendor HW coverage" since the
+    sim/HW comparison is per-vendor.
+
+  Result: the F-HAL-5 closure stays at 67% (T1 ✓ + T2 ✓), but the T2 now
+  enforces a stricter invariant — every additional vendor must ship the
+  HW-5 set, otherwise sim-first is violated by partial coverage.
+
+- v0.4.0 vendor list: stm32h7 (v0.2.0) + rp2040 (this).
+
+### Provenance
+- RP2040 register addresses + IP cell info pulled via
+  web-search + RP2040 Datasheet (datasheets.raspberrypi.com/rp2040)
+  cross-reference (per autonomy directive web-search mandate).
+- IP cells reused: PL011 UART (UART0/1), PL022 SSP (SPI0/1),
+  Synopsys DesignWare-class I2C (I2C0/1) — all standard ARM PrimeCell
+  / DW peripherals; offsets match published RP2040 datasheet §4.2/§4.3/§4.4/§4.9.
+- No HW physically tested; this is paper-skeleton parity with stm32h7.
+
 ## [0.3.0] - 2026-05-08
 
 ### Added
