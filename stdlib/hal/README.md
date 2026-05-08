@@ -122,6 +122,11 @@ Subsequent versions add paper-skeleton stubs for the canonical HW-5
 - `backend/esp32/<peripheral>.hexa` — Espressif ESP32 dual Xtensa LX6
   @ 240 MHz (v0.5.0 — paper skeleton; DR_REG_*_BASE in 0x3FF range +
   GPIO Matrix + command-queue I2C + 80 MHz SPI + 9..12-bit SAR ADC).
+- `backend/esp32c3/<peripheral>.hexa` — Espressif ESP32-C3 single-core
+  RV32IMC RISC-V @ 160 MHz (v0.6.0 — paper skeleton; DR_REG_*_BASE in
+  0x6000 range + 22-pin single-bank GPIO + same command-queue I2C +
+  same SPI/UART IP as ESP32 + 12-bit fixed SAR ADC). **First RISC-V
+  vendor** — validates multi-ISA-family cfg-flag dispatch.
 
 cfg-flag dispatch in each top-level module (gpio.hexa etc.) selects
 the correct backend at compile time. Sim backend is always-available

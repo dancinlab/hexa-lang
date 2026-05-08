@@ -1,0 +1,98 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/adc.hexa — ESP32-C3 ADC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved. ★ analog
+//
+// Target:    ESP32-C3 RV32IMC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C3 Technical Reference Manual §29 SAR ADC Controller
+//            (2 SAR ADCs on C3: ADC1 has 5 channels, ADC2 has 1 channel,
+//            both share the same APB_SARADC controller).
+// Surface:   esp32c3_adc_{configure,read,close}(...)
+// Dispatch:  adc.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   APB_SARADC base = DR_REG_APB_SARADC_BASE = 0x60040000
+//
+//   APB_SARADC_CTRL_REG       0x000   start trigger, sample mode, work mode
+//   APB_SARADC_CTRL2_REG      0x004   meas done flag, EOF
+//   APB_SARADC_FILTER_CTRL_REG 0x008  IIR filter config
+//   APB_SARADC_FSM_REG        0x010
+//   APB_SARADC_FSM_WAIT_REG   0x014
+//   APB_SARADC_SAR1_STATUS_REG 0x018   ADC1 result (12-bit, 0..4095)
+//   APB_SARADC_SAR2_STATUS_REG 0x01C   ADC2 result
+//   APB_SARADC_INT_RAW_REG    0x030
+//   APB_SARADC_INT_CLR_REG    0x038
+//   APB_SARADC_DMA_CONF_REG   0x03C   DMA continuous-mode config
+//   APB_SARADC_APB_CTRL_REG   0x048   work mode select (single / continuous)
+//
+// Channels:
+//   ADC1: 5 channels — pads GPIO0..GPIO4 (CH0..CH4).
+//   ADC2: 1 channel  — pad GPIO5 (CH0).
+//
+// Resolution:    12-bit (fixed on C3 — vs 9..12-bit programmable on ESP32).
+// Reference:     V_REF nominally 1.1 V (per-chip eFuse calibration);
+//                attenuation 0/2.5/6/11 dB.
+// Sample rate:   up to 100 kSPS in continuous DMA mode.
+//
+// Note: ADC2 on ESP32-C3 does NOT conflict with WiFi (unlike ESP32) —
+// only ADC2 of the original ESP32 had the RF arbitration issue.
+
+let MODULE_NAME = "esp32c3_adc"
+let SIGMA_SLOT  = 5
+let PHI_KIND    = "analog"
+
+let DR_REG_APB_SARADC_BASE = 0x60040000
+
+let APB_SARADC_CTRL_REG        = 0x000
+let APB_SARADC_CTRL2_REG       = 0x004
+let APB_SARADC_SAR1_STATUS_REG = 0x018
+let APB_SARADC_SAR2_STATUS_REG = 0x01C
+let APB_SARADC_APB_CTRL_REG    = 0x048
+
+let RES_12BIT = 12   // C3 fixed at 12-bit
+
+let ATTEN_0DB     = 0
+let ATTEN_2_5DB   = 1
+let ATTEN_6DB     = 2
+let ATTEN_11DB    = 3
+
+let ADC1_CH_MIN = 0
+let ADC1_CH_MAX = 4   // GPIO0..4
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_adc_configure(channel: int, atten: int) -> int {
+    if channel < ADC1_CH_MIN || channel > ADC1_CH_MAX { return -1 }
+    if atten < 0 || atten > 3 { return -2 }
+    // STUB: enable SARADC peri clock, set per-ch attenuation, work mode = single
+    return channel
+}
+
+fn esp32c3_adc_read(channel: int) -> int {
+    if channel < ADC1_CH_MIN || channel > ADC1_CH_MAX { return -1 }
+    // STUB: trigger CTRL.START_FORCE+START, spin on CTRL2.MEAS1_DONE,
+    //       read SAR1_STATUS_REG (12-bit, 0..4095)
+    return 0
+}
+
+fn esp32c3_adc_close(channel: int) -> int {
+    if channel < ADC1_CH_MIN || channel > ADC1_CH_MAX { return -1 }
+    // STUB: disable peri clock
+    return 0
+}
+
+fn esp32c3_adc_report(channel: int) -> str {
+    return "[esp32c3_adc sim] channel=" + str(channel) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c3_adc_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_adc sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  APB_SARADC=" + str(DR_REG_APB_SARADC_BASE))
+    println("  ADC1: 5 channels (GPIO0..4); ADC2: 1 channel (GPIO5; no WiFi conflict on C3)")
+    println("  resolution: 12-bit fixed; atten 0/2.5/6/11 dB")
+}

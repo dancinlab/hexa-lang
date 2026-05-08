@@ -65,8 +65,9 @@ let CANONICAL_HW_5 = ["gpio", "i2c", "spi", "uart", "adc"]
 //   v0.2.0: stm32h7
 //   v0.4.0: + rp2040
 //   v0.5.0: + esp32
-let CANONICAL_VENDORS = ["stm32h7", "rp2040", "esp32"]
-let CANONICAL_VENDOR_COUNT = 3
+//   v0.6.0: + esp32c3 (first RISC-V vendor)
+let CANONICAL_VENDORS = ["stm32h7", "rp2040", "esp32", "esp32c3"]
+let CANONICAL_VENDOR_COUNT = 4
 
 let HW_BACKEND_USE_PATTERN = "use \"stdlib/hal/backend/"
 let SIM_MARKER_BRACKET = "[sim"

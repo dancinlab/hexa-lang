@@ -1,0 +1,96 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/spi.hexa — ESP32-C3 SPI backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C3 RV32IMC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C3 Technical Reference Manual §28 GP-SPI Controller.
+// Surface:   esp32c3_spi_{configure,xfer,close}(...)
+// Dispatch:  spi.hexa selects this via cfg-flag.
+//
+// MMIO layout (single user SPI on C3 — vs 2 on ESP32):
+//
+//   SPI0/SPI1 (flash):  0x60003000 / 0x60002000  (DO NOT USE — flash)
+//   SPI2 (GP-SPI):      DR_REG_SPI2_BASE = 0x60024000  (user-accessible)
+//
+//   SPI_CMD_REG               0x00   USR bit 18 trigger user-defined
+//                                      transaction (kick-off)
+//   SPI_ADDR_REG              0x04
+//   SPI_CTRL_REG              0x08
+//   SPI_CLOCK_REG             0x18   clock divider:
+//                                      CLKDIV_PRE bits 13:0
+//                                      CLKCNT_N    bits 19:14
+//                                      CLKCNT_H    bits 25:20
+//                                      CLKCNT_L    bits 31:26
+//                                      CLK_EQU_SYSCLK bit (=80 MHz)
+//   SPI_USER_REG              0x1C   USR_COMMAND/USR_ADDR/USR_DUMMY/
+//                                      USR_MOSI/USR_MISO/CK_OUT_EDGE/
+//                                      CK_I_EDGE  (CPHA/CPOL effective)
+//                                      DOUTDIN bit 0 (full-duplex)
+//   SPI_USER1_REG             0x20
+//   SPI_USER2_REG             0x24
+//   SPI_MOSI_DLEN_REG         0x28   bits-1 inclusive (e.g. 7 for 8-bit)
+//   SPI_MISO_DLEN_REG         0x2C
+//   SPI_W0_REG..SPI_W15_REG   0x80..0xBC   16 × 32-bit shift buffer
+//
+// Clock: f_spi = APB_CLK / ((CLKDIV_PRE+1)·(CLKCNT_N+1))
+//        or APB_CLK directly when CLK_EQU_SYSCLK=1 (80 MHz)
+// Max user f_spi: 80 MHz (with CLK_EQU_SYSCLK), 40 MHz comfortable.
+
+let MODULE_NAME = "esp32c3_spi"
+let SIGMA_SLOT  = 3
+let PHI_KIND    = "digital"
+
+let DR_REG_SPI2_BASE = 0x60024000   // GP-SPI (only user SPI on C3)
+
+let SPI_CMD_REG       = 0x00
+let SPI_CLOCK_REG     = 0x18
+let SPI_USER_REG      = 0x1C
+let SPI_MOSI_DLEN_REG = 0x28
+let SPI_MISO_DLEN_REG = 0x2C
+let SPI_W0_REG        = 0x80
+
+let APB_CLK_HZ = 80000000
+
+let MODE_0 = 0
+let MODE_1 = 1
+let MODE_2 = 2
+let MODE_3 = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_spi_configure(unit: int, speed_hz: int, mode: int) -> int {
+    // unit: 2 = GP-SPI (only user-accessible)
+    if unit != 2 { return -1 }
+    if speed_hz < 1000 || speed_hz > 80000000 { return -2 }
+    if mode < 0 || mode > 3 { return -3 }
+    // STUB: enable SPI2 peri clock, set SPI_CLOCK_REG divider, set SPI_USER_REG
+    return unit
+}
+
+fn esp32c3_spi_xfer(unit: int, tx: int) -> int {
+    if unit != 2 { return -1 }
+    if tx < 0 || tx > 0xFFFF { return -2 }
+    // STUB: set MOSI_DLEN/MISO_DLEN, write W0, set CMD.USR=1, spin to done, read W0
+    return 0
+}
+
+fn esp32c3_spi_close(unit: int) -> int {
+    if unit != 2 { return -1 }
+    // STUB: clear SPI_USER_REG enables, disable peri clock
+    return 0
+}
+
+fn esp32c3_spi_report(unit: int) -> str {
+    return "[esp32c3_spi sim] unit=" + str(unit) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c3_spi_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_spi sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  GP-SPI (SPI2)=" + str(DR_REG_SPI2_BASE) + "  (single user SPI on C3)")
+    println("  max f_spi = APB_CLK = 80 MHz (CLK_EQU_SYSCLK)")
+}

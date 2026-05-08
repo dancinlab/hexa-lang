@@ -1,5 +1,61 @@
 # stdlib/hal CHANGELOG
 
+## [0.6.0] - 2026-05-08
+
+### Added
+- `backend/esp32c3/{gpio,i2c,spi,uart,adc}.hexa` — fourth hardware
+  vendor backend; **first RISC-V** target in stdlib/hal (earlier
+  vendors were all Xtensa LX6 or ARM Cortex-M). Espressif ESP32-C3
+  RV32IMC single-core @ 160 MHz; peripheral region 0x6000xxxx
+  (vs ESP32 Xtensa's 0x3FFxxxxx range — distinct memory map).
+  - `esp32c3/gpio.hexa`  — DR_REG_GPIO_BASE 0x60004000 + IO_MUX 0x60009000;
+                           22-pin envelope (single bank, no dual-bank
+                           split; vs ESP32 40-pin); GPIO0..5=ADC1,
+                           GPIO12..17=flash reserved, GPIO18..19=USB-JTAG.
+  - `esp32c3/i2c.hexa`   — single I2C0 0x60013000 (vs ESP32 dual);
+                           same command-queue architecture (16-deep);
+                           FIFO depth 32.
+  - `esp32c3/spi.hexa`   — single GP-SPI (SPI2) 0x60024000 (vs ESP32
+                           dual HSPI/VSPI); same 16×32-bit shift buffer;
+                           max 80 MHz with CLK_EQU_SYSCLK.
+  - `esp32c3/uart.hexa`  — UART0/1 (0x60000000 / 0x60010000); same
+                           CLKDIV+CLKDIV_FRAG fractional divisor as ESP32;
+                           UART0 boot console; built-in USB-Serial-JTAG
+                           bridge on GPIO18/19 (separate IP, out of scope).
+  - `esp32c3/adc.hexa`   — APB_SARADC 0x60040000; 12-bit fixed (vs ESP32
+                           9..12-bit programmable); ADC1 5-ch (GPIO0..4)
+                           + ADC2 1-ch (GPIO5); **no WiFi conflict on C3**
+                           (unlike ESP32's ADC2).
+
+### Changed
+- `numerics_sim_marker_density.hexa` (F-HAL-5 T2) `CANONICAL_VENDORS`
+  now `["stm32h7", "rp2040", "esp32", "esp32c3"]` (was 3 vendors).
+  Vendor count = 4; expected backend stub file count = 5 × 4 = 20.
+- v0.6.0 vendor list: stm32h7 (v0.2.0) + rp2040 (v0.4.0) + esp32
+  (v0.5.0) + esp32c3 (this).
+
+### ISA family coverage milestone
+- v0.6.0 is the **first multi-ISA-family** release of stdlib/hal.
+  Vendors now span:
+    - ARM Cortex-M7 (stm32h7)
+    - ARM Cortex-M0+ (rp2040)
+    - Xtensa LX6 (esp32)
+    - **RISC-V RV32IMC (esp32c3)** ← new
+  This validates the cfg-flag dispatch model across CPU ISAs, not just
+  vendors — a peripheral surface (e.g. `gpio_write(pin, val)`) now
+  resolves to ARM, Xtensa, OR RISC-V backend at compile time without
+  any change to the consumer code.
+
+### Provenance
+- ESP32-C3 register addresses + memory map confirmed via
+  ESP32-C3 Technical Reference Manual cross-reference (per autonomy
+  directive web-search mandate). DR_REG_GPIO_BASE = 0x60004000.
+- IP cells: GPIO Matrix is C3-specific (smaller pin count → single bank);
+  I2C / SPI / UART / SAR ADC IP cells are reused from ESP32 family with
+  smaller bus / peripheral counts.
+- Future ESP32 sub-vendors (esp32s2, esp32s3, esp32c6, esp32h2) would
+  follow the same naming convention — out of v0.6.0 scope.
+
 ## [0.5.0] - 2026-05-08
 
 ### Added

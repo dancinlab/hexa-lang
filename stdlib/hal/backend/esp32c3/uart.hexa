@@ -1,0 +1,111 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/uart.hexa — ESP32-C3 UART backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C3 RV32IMC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C3 Technical Reference Manual §16 UART Controller
+//            (2 UARTs on C3: UART0 boot console + UART1).
+// Surface:   esp32c3_uart_{configure,write_byte,read_byte,close}(...)
+// Dispatch:  uart.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   UART0:  base = DR_REG_UART_BASE  = 0x60000000   (boot console)
+//   UART1:  base = DR_REG_UART1_BASE = 0x60010000
+//
+//   UART_FIFO_REG             0x000   FIFO data port
+//   UART_INT_RAW_REG          0x004
+//   UART_INT_ST_REG           0x008
+//   UART_INT_ENA_REG          0x00C
+//   UART_INT_CLR_REG          0x010
+//   UART_CLKDIV_REG           0x014   integer + fractional baud divisor:
+//                                       CLKDIV    bits 19:0
+//                                       CLKDIV_FRAG bits 23:20
+//   UART_AUTOBAUD_REG         0x018
+//   UART_STATUS_REG           0x01C
+//   UART_CONF0_REG            0x020   PARITY / BIT_NUM / STOP_BIT_NUM
+//   UART_CONF1_REG            0x024
+//   ...
+//
+// Baud rate (when not in auto-baud):
+//   APB_CLK = 80 MHz default
+//   CLKDIV = floor(APB_CLK / baud)
+//   CLKDIV_FRAG = ((APB_CLK * 16 / baud) - CLKDIV * 16) & 0xF
+//
+//   e.g. 115200 baud:
+//     ratio = 80e6 / 115200 = 694.444
+//     CLKDIV = 694, CLKDIV_FRAG = 7
+//     actual ≈ 115173 (0.02% error)
+//
+// Word length: 5..8 bits via CONF0_REG.BIT_NUM (0..3 maps to 5..8).
+// Same encoding as ESP32 (Xtensa) — IP cell is reused on C3.
+//
+// USB Serial JTAG: ESP32-C3 also has a built-in USB-CDC + JTAG bridge
+// at GPIO18/19 — independent of UART0/1. Out of v0.6.0 scope.
+
+let MODULE_NAME = "esp32c3_uart"
+let SIGMA_SLOT  = 4
+let PHI_KIND    = "digital"
+
+let DR_REG_UART_BASE  = 0x60000000   // UART0
+let DR_REG_UART1_BASE = 0x60010000   // UART1
+
+let UART_FIFO_REG    = 0x000
+let UART_CLKDIV_REG  = 0x014
+let UART_STATUS_REG  = 0x01C
+let UART_CONF0_REG   = 0x020
+let UART_CONF1_REG   = 0x024
+
+let APB_CLK_HZ = 80000000
+
+let WLEN_5 = 0
+let WLEN_6 = 1
+let WLEN_7 = 2
+let WLEN_8 = 3
+
+let BAUD_9600   = 9600
+let BAUD_115200 = 115200
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_uart_configure(unit: int, baud: int, word_bits: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    if baud < 110 || baud > 5000000 { return -2 }
+    if word_bits < 5 || word_bits > 8 { return -3 }
+    // STUB: enable peri clock, write CLKDIV+CLKDIV_FRAG, write CONF0_REG
+    return unit
+}
+
+fn esp32c3_uart_write_byte(unit: int, byte: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    if byte < 0 || byte > 255 { return -2 }
+    // STUB: spin on TXFIFO_CNT < 128; write UART_FIFO_REG = byte
+    return 0
+}
+
+fn esp32c3_uart_read_byte(unit: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    // STUB: spin on RXFIFO_CNT > 0; read UART_FIFO_REG & 0xFF
+    return 0
+}
+
+fn esp32c3_uart_close(unit: int) -> int {
+    if unit < 0 || unit > 1 { return -1 }
+    // STUB: don't close UART0 (boot console)
+    return 0
+}
+
+fn esp32c3_uart_report(unit: int) -> str {
+    return "[esp32c3_uart sim] unit=" + str(unit) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c3_uart_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_uart sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  UART0=" + str(DR_REG_UART_BASE) + " UART1=" + str(DR_REG_UART1_BASE))
+    println("  default 115200 8N1 (APB=80 MHz; CLKDIV=694, FRAG=7)")
+}
