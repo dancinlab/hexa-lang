@@ -1,9 +1,9 @@
 {
   "schema": "hexa-lang/hx_meta_gap/1",
-  "ts": "2026-05-08T11:41:43Z",
+  "ts": "2026-05-08T12:21:52Z",
   "status": "real-v1",
   "since_range": "30.days.ago",
-  "commit_sample_size": 2848,
+  "commit_sample_size": 2819,
   "signals": {"workaround": 6, "hotfix": 0, "emergency": 9, "regression": 31, "sed_patch": 32, "revert": 11, "raw_audit_forced": 5},
   "gaps": [
     {"category":"bypass_lint","signal_count":6,"evidence":"git log subjects with 'workaround'/'hotfix' in last 30.days.ago"},
