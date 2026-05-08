@@ -1,6 +1,6 @@
 {
   "schema": "hexa-lang/hx_bench_drift/1",
-  "ts": "2026-05-08T03:37:19Z",
+  "ts": "2026-05-08T04:14:56Z",
   "status": "real-v1",
   "threshold_pct": 10,
   "bench_file_count": 30,
