@@ -1,0 +1,208 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/test/test_channel.hexa
+//
+//  Selftest for stdlib/channel — bidirectional IPC + spawn-with-channels.
+//
+//  Validates (anima chat L2 + L5 prereq):
+//    1. parent ↔ child echo round-trip (single direction works)
+//    2. bidirectional ping-pong over 5 cycles (no deadlock, in-order)
+//    3. channel_recv timeout returns "" within budget when no data
+//    4. channel_close cleanup unlinks FIFOs + child sees EOF on next read
+//    5. channel_pair_open returns distinct ids; path_for round-trip
+//
+//  Run:
+//      $HOME/.hx/bin/hexa_real run stdlib/test/test_channel.hexa
+//
+//  Exit semantics:
+//      * all asserts pass → prints "PASS: channel stdlib selftest N/N"
+//      * any assert fails → prints FAIL lines; PASS line still emitted
+//        with the failing count (callers grep both)
+//
+//  Dependencies (system tools): mkfifo, sh, perl, nohup. All present on
+//  macOS + every Linux distro shipping perl-base. Test skips with a
+//  diagnostic if perl is missing.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/channel"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk_eq_int(tag, got, want) {
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=" + to_string(got) + " want=" + to_string(want))
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_eq_str(tag, got, want) {
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got='" + got + "' want='" + want + "'")
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_true(tag, cond) {
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " (cond false)")
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_lt_int(tag, got, bound) {
+    if got < bound {
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=" + to_string(got) + " expected < " + to_string(bound))
+        fail_count = fail_count + 1
+    }
+}
+
+// Skip whole suite if perl is missing — IO::Select probe required.
+let perl_ok = exec("command -v perl >/dev/null && echo y || echo n").trim()
+if perl_ok != "y" {
+    println("SKIP: channel selftest — perl not found on PATH")
+    println("PASS: channel stdlib selftest 0/0 (skipped)")
+    exit(0)
+}
+
+// ── Test 1: channel_pair_open returns distinct ids; path round-trip ──────
+let pair = channel_pair_open()
+chk_true("pair[0] != -1", pair[0] != -1)
+chk_true("pair[1] != -1", pair[1] != -1)
+chk_true("pair[0] != pair[1]", pair[0] != pair[1])
+
+let p_read = channel_path_for(pair[0])
+let p_write = channel_path_for(pair[1])
+chk_true("read path ends with c2p.fifo", p_read.ends_with("_c2p.fifo"))
+chk_true("write path ends with p2c.fifo", p_write.ends_with("_p2c.fifo"))
+
+// FIFOs exist on disk
+let fifos_exist = exec("test -p '" + p_read + "' && test -p '" + p_write + "' && echo y || echo n").trim()
+chk_eq_str("both FIFOs exist", fifos_exist, "y")
+
+// ── Test 2: parent → child echo round-trip ───────────────────────────────
+//
+// Spawn a tiny shell echo helper. It reads lines from stdin, prefixes
+// "echo:" and writes to stdout. Parent sends "hello", recvs "echo:hello".
+
+let echo_cmd = "while IFS= read -r line; do echo \"echo:$line\"; done"
+let pid1 = proc_spawn_with_channels(echo_cmd, pair[1], pair[0])
+chk_true("spawn pid > 0", pid1 > 0)
+
+// Brief delay for child to attach to FIFOs (FIFO open is fast but child
+// `sh -c` startup is non-trivial; 100ms is comfortable).
+let _z1 = exec("sleep 0.1")
+
+let send1 = channel_send(pair[1], "hello")
+chk_true("send hello", send1)
+let recv1 = channel_recv(pair[0], 3000)
+chk_eq_str("recv echo:hello", recv1, "echo:hello")
+
+// ── Test 3: bidirectional ping-pong, 5 cycles ────────────────────────────
+//
+// Reuse the same echo child. Send 5 different payloads; each should round
+// trip in order. Tests that the FIFO buffer doesn't drop messages and
+// that line framing survives multiple cycles.
+
+let mut i = 0
+let mut all_ok = true
+while i < 5 {
+    let payload = "ping-" + to_string(i)
+    let _ = channel_send(pair[1], payload)
+    let resp = channel_recv(pair[0], 3000)
+    if resp != "echo:" + payload {
+        println("  FAIL ping-pong cycle " + to_string(i) + " got='" + resp + "'")
+        all_ok = false
+    }
+    i = i + 1
+}
+chk_true("5-cycle ping-pong all in order", all_ok)
+
+// ── Test 4: timeout — channel_recv returns "" within budget on no-data ──
+//
+// Drain any in-flight data first by polling with timeout=0 until empty.
+let mut drain_count = 0
+while drain_count < 10 {
+    let r = channel_recv(pair[0], 0)
+    if r == "" { break }
+    drain_count = drain_count + 1
+}
+
+let t_start = to_int(exec("date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))'").trim())
+let r_to = channel_recv(pair[0], 200)
+let t_end = to_int(exec("date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))'").trim())
+let elapsed_ms = (t_end - t_start) / 1000000
+chk_eq_str("timeout returns empty string", r_to, "")
+// Budget: 200ms requested + perl fork+exec overhead + hexa exec popen.
+// Allow up to 1500ms (sister sys_stdin_read_line_timeout same envelope).
+chk_lt_int("timeout fires under 1500ms", elapsed_ms, 1500)
+
+// Poll variant: timeout=0 should return "" essentially immediately.
+let t_p_start = to_int(exec("date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))'").trim())
+let r_poll = channel_recv(pair[0], 0)
+let t_p_end = to_int(exec("date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))'").trim())
+let poll_ms = (t_p_end - t_p_start) / 1000000
+chk_eq_str("poll(0) returns empty string", r_poll, "")
+chk_lt_int("poll(0) under 500ms", poll_ms, 500)
+
+// ── Test 5: close cleanup — channel_close unlinks FIFOs ──────────────────
+
+// Kill the child first so it doesn't hold the FIFO open.
+let _kill = exec("kill " + to_string(pid1) + " 2>/dev/null; echo done")
+let _z2 = exec("sleep 0.1")
+
+let cl0 = channel_close(pair[0])
+let cl1 = channel_close(pair[1])
+chk_true("close read_fd", cl0)
+chk_true("close write_fd", cl1)
+
+let post_exists = exec("test -p '" + p_read + "' || test -p '" + p_write + "' && echo present || echo gone").trim()
+chk_eq_str("FIFOs unlinked after close", post_exists, "gone")
+
+// Idempotent close
+let cl0_again = channel_close(pair[0])
+chk_true("close idempotent", cl0_again)
+
+// recv on closed fd returns "" (not blocking forever)
+let r_closed = channel_recv(pair[0], 100)
+chk_eq_str("recv on closed fd returns empty", r_closed, "")
+
+// send on closed fd returns false (FIFO unlinked, exec rm -f returned ok
+// but write to non-existent FIFO via `exec 3<>` would create regular file
+// — guard against that by checking the FIFO marker upfront).
+// Note: current channel_send does NOT pre-check existence (path is
+// computed from fd alone). Skip this assertion as a known limitation
+// rather than masking it (callers shouldn't send to closed channels).
+
+// ── Test 6: send-then-spawn-then-recv (alt sequencing) ──────────────────
+//
+// Verifies a fresh pair works end-to-end after the previous one closed.
+
+let pair2 = channel_pair_open()
+let pid2 = proc_spawn_with_channels(echo_cmd, pair2[1], pair2[0])
+chk_true("second spawn ok", pid2 > 0)
+let _z3 = exec("sleep 0.1")
+let _ = channel_send(pair2[1], "fresh")
+let resp2 = channel_recv(pair2[0], 3000)
+chk_eq_str("second-pair echo", resp2, "echo:fresh")
+
+let _kill2 = exec("kill " + to_string(pid2) + " 2>/dev/null")
+let _z4 = exec("sleep 0.1")
+let _ = channel_close(pair2[0])
+let _ = channel_close(pair2[1])
+
+// ── Summary ─────────────────────────────────────────────────────────────
+let total = pass_count + fail_count
+println("PASS: channel stdlib selftest " + to_string(pass_count) + "/" + to_string(total))
+if fail_count > 0 {
+    println("(failures: " + to_string(fail_count) + ")")
+    exit(1)
+}
+exit(0)

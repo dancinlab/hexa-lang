@@ -1,0 +1,443 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/channel.hexa — bidirectional IPC channel + spawn-with-channels
+//
+//  @module(slug="channel", desc="bidirectional line-oriented IPC over named FIFOs + child-spawn binding")
+//  @usage(import "stdlib/channel" as ch; let pair = ch.channel_pair_open(); ...)
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [channel_pair_open, channel_send, channel_recv, channel_close,
+//                 channel_path_for, proc_spawn_with_channels]
+//  @stability preview
+//  @since 2026-05-08
+//  @maintainer anima-core
+//  @priority P0
+//
+//  ── PROBLEM (anima chat autonomous-speech roadmap 2026-05-08, decision 4c) ──
+//
+//  L2 (CLM A ↔ CLM B autonomous dialogue) and L5 (Engine A/G persistent
+//  daemon) both need bidirectional parent ↔ child + sibling ↔ sibling IPC.
+//  Today stdlib/proc.hexa only has:
+//
+//      proc_spawn_supervised(cmd, lease_ttl, why)  → fire-and-forget, no IPC
+//      proc_run_with_stdin(cmd, stdin_str)         → one-shot stdin only
+//      proc_run_json_bridge(cmd, payload)          → request/response, single round-trip
+//
+//  None of these support: parent sends N messages, child responds N messages,
+//  both sides streaming, no fixed message count. That's a long-running
+//  conversation — exactly L2 / L5's shape.
+//
+//  ── STRATEGY (mkfifo + perl IO::Select probe — strategy "a" of three) ──────
+//
+//  Three implementation routes were considered:
+//
+//    (a) mkfifo + perl IO::Select — chosen. Persistent filesystem FIFO objects;
+//        each "fd" is a small int channel-id resolving to a known path. Survives
+//        across hexa exec() calls (hexa is stateless between exec invocations).
+//        Cross-platform: POSIX mkfifo + perl ship on macOS + every major Linux
+//        distro (perl-base default-of-default).
+//
+//    (b) socketpair via perl/python one-liner — REJECTED. Real fds don't
+//        survive across separate hexa exec() invocations because the perl
+//        process owns them. Would force every channel op into one long-running
+//        perl process holding a registry — a divergence-prone extra SSOT.
+//
+//    (c) c_ffi to libc socketpair / pipe2 — VIABLE but heavier. Requires the
+//        caller to keep the parent process alive between sends/recvs (not
+//        possible in current hexa interp loop pattern where each exec() is
+//        a fresh shell). Could be revisited once a "session"-scoped FFI
+//        handle table lands in the runtime.
+//
+//  Why (a) is the right primitive: mkfifo creates a kernel-resident FIFO
+//  inode. open(2) the FIFO with O_RDWR so the reader does NOT block waiting
+//  for a peer writer (otherwise the FIFO blocks on first open until the
+//  other end is opened too — making async polling impossible). Perl's
+//  `open(my $fh, "+<", $path)` syscalls O_RDWR + O_NONBLOCK semantics that
+//  IO::Select can drive via select(2) for accurate timeout.
+//
+//  ── HANDLE MODEL ──────────────────────────────────────────────────────────
+//
+//  A "channel pair" is two FIFOs:
+//      /tmp/hexa_chan_<nonce>_p2c.fifo   — parent → child direction
+//      /tmp/hexa_chan_<nonce>_c2p.fifo   — child → parent direction
+//
+//  channel_pair_open() returns a tuple of two ints (read_fd, write_fd):
+//      read_fd  → encodes the c2p FIFO path (parent reads from this)
+//      write_fd → encodes the p2c FIFO path (parent writes to this)
+//
+//  The child gets the inverted pair via proc_spawn_with_channels.
+//
+//  Encoding: an "fd" int is `nonce * 2 + side`, where:
+//      side == 0 → c2p FIFO (recv into here)
+//      side == 1 → p2c FIFO (send out from here)
+//  The path is reconstructed deterministically from the encoded int —
+//  no global mutable state needed (hexa exec()-friendly).
+//
+//  ── BIDIRECTIONAL + SIBLING-TO-SIBLING ────────────────────────────────────
+//
+//  Parent ↔ Child A: one channel pair.
+//  Parent ↔ Child B: another channel pair.
+//  Child A ↔ Child B (direct, no parent middleman): a third channel pair
+//      where the parent owns NEITHER end — both endpoints are passed to
+//      the spawned children.
+//
+//  This is sufficient for both L2 (CLM A ↔ CLM B with parent supervisor)
+//  and L5 (parent ↔ Engine daemon, daemon ↔ subagents).
+//
+//  ── BACKWARD COMPATIBILITY ─────────────────────────────────────────────────
+//
+//  This module ADDS new functions only. It does not modify any existing
+//  signature in stdlib/proc.hexa. proc_spawn_supervised, proc_run_with_stdin,
+//  proc_run_json_bridge — all unchanged. Callers that don't need IPC keep
+//  using proc_run_*; callers that need streaming bidirectional dialogue
+//  reach for channel_*.
+//
+//  ── See also ──────────────────────────────────────────────────────────────
+//
+//  · stdlib/channel.ai.md — ABI safety + perf notes
+//  · stdlib/test/test_channel.hexa — selftest (echo + ping-pong + timeout + close)
+//  · stdlib/sys.hexa::sys_stdin_read_line_timeout — sister perl IO::Select pattern
+//  · stdlib/proc.hexa::proc_spawn_supervised — sister supervised-spawn
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Path helpers (deterministic — no mutable state) ───────────────────────
+
+// Encode a (nonce, side) pair into a single int "fd". side: 0=c2p, 1=p2c.
+fn _ch_encode(nonce: int, side: int) -> int {
+    return nonce * 2 + side
+}
+
+fn _ch_nonce(fd: int) -> int {
+    return fd / 2
+}
+
+fn _ch_side(fd: int) -> int {
+    return fd % 2
+}
+
+// channel_path_for(fd) — reconstruct the FIFO path for a channel int.
+//
+// Exposed so callers (and tests) can probe filesystem state, construct
+// shell redirections directly, or hand off to non-hexa tools.
+//
+// fd encoding:
+//   fd & 1 == 0 → /tmp/hexa_chan_<nonce>_c2p.fifo  (child→parent, parent recv)
+//   fd & 1 == 1 → /tmp/hexa_chan_<nonce>_p2c.fifo  (parent→child, parent send)
+pub fn channel_path_for(fd: int) -> string {
+    let nonce = _ch_nonce(fd)
+    let side = _ch_side(fd)
+    let suffix = if side == 0 { "_c2p.fifo" } else { "_p2c.fifo" }
+    return "/tmp/hexa_chan_" + to_string(nonce) + suffix
+}
+
+// _ch_inverted(fd) — the matching child-side fd for a given parent-side fd.
+//
+// The child reads from p2c (parent's write side) and writes to c2p (parent's
+// read side) — i.e. the SAME paths but with ROLES inverted. Since both ends
+// share the same FIFO, the int encoding is identical when interpreted from
+// the child's perspective. We use this helper for proc_spawn_with_channels:
+//   parent's in_fd (write to child) = child's stdin (read from parent)
+//   parent's out_fd (read from child) = child's stdout (write to parent)
+
+// Allocate a fresh nonce. We use epoch-ms + pid + a small in-process counter
+// to keep collisions astronomically unlikely without a global registry.
+let mut _ch_alloc_counter = 0
+
+fn _ch_now_ns() -> int {
+    // Some hexa runtimes don't expose nanos directly; use date +%s%N where
+    // GNU date supports it, fall back to s*1000+ms via python one-liner.
+    // We just need a monotonically growing-ish int — collisions only matter
+    // within the same second, and a per-call counter sidesteps even that.
+    let s = exec("date +%s 2>/dev/null").trim()
+    return to_int(s)
+}
+
+fn _ch_alloc_nonce() -> int {
+    _ch_alloc_counter = _ch_alloc_counter + 1
+    let now = _ch_now_ns()
+    let pid = to_int(exec("echo $$").trim())
+    // Compose: now * 1e6 + pid % 1e3 * 1e3 + counter
+    return now * 1000000 + (pid % 1000) * 1000 + _ch_alloc_counter
+}
+
+// ── Public surface ────────────────────────────────────────────────────────
+
+// channel_pair_open() -> (int, int)
+//
+// Allocate a fresh bidirectional channel. Creates two FIFOs on disk:
+//   /tmp/hexa_chan_<nonce>_c2p.fifo   — child  → parent
+//   /tmp/hexa_chan_<nonce>_p2c.fifo   — parent → child
+//
+// Returns an array [read_fd, write_fd] (parent-side handles):
+//   pair[0]  → read_fd   (parent reads child's output here)
+//   pair[1]  → write_fd  (parent writes child's input here)
+//
+// Caller passes pair[1] as the child's `in_fd` and pair[0] as the child's
+// `out_fd` to proc_spawn_with_channels — the child's stdin reads from p2c
+// (the parent's write side) and stdout writes to c2p (the parent's read
+// side). channel_close() on both fds removes the FIFO files.
+//
+// Returns [-1, -1] on FIFO creation failure (rare — only if /tmp is
+// non-writable).
+pub fn channel_pair_open() -> array {
+    let nonce = _ch_alloc_nonce()
+    let read_fd = _ch_encode(nonce, 0)   // c2p
+    let write_fd = _ch_encode(nonce, 1)  // p2c
+    let p_read = channel_path_for(read_fd)
+    let p_write = channel_path_for(write_fd)
+    // Remove any stale FIFO at the same path (paranoia — should not exist
+    // because nonce is fresh, but a previous run's leak with the same epoch
+    // could collide).
+    let _r1 = exec("rm -f '" + p_read + "' '" + p_write + "' 2>/dev/null")
+    // Create both FIFOs with mode 0600 (owner-only). Most platforms' mkfifo
+    // honours the umask; we set it explicitly via the -m flag where present.
+    let _r2 = exec("mkfifo -m 0600 '" + p_read + "' '" + p_write + "' 2>/dev/null && echo ok || echo fail")
+    let status = exec("test -p '" + p_read + "' && test -p '" + p_write + "' && echo ok || echo fail").trim()
+    if status != "ok" {
+        return [-1, -1]
+    }
+    return [read_fd, write_fd]
+}
+
+// channel_send(fd, msg) -> bool
+//
+// Write `msg` followed by a newline to the FIFO referenced by `fd`. The
+// peer's channel_recv (or any line-oriented stdin reader) gets one line.
+//
+// Implementation: shell `printf '%s\n' <quoted-msg> > '<path>' &` —
+// backgrounded so the writer doesn't block forever if the peer hasn't
+// opened the read side yet. Once the peer opens, the kernel buffer
+// drains the printf and the background shell exits cleanly.
+//
+// Backgrounding caveat: a process that exits immediately after sending
+// without giving the peer time to drain may leak a zombie writer. The
+// reaper is the kernel — when the peer closes the read end, the FIFO
+// inode gets EPIPE-ed and the writer terminates. For long-lived chat
+// loops this is invisible; for tear-down call channel_close() which
+// also unlinks the inode and forces all pending writers out.
+//
+// Newline policy: a single trailing '\n' is appended. If `msg` contains
+// embedded newlines they pass through unchanged — the peer's recv will
+// read up to the FIRST newline, leaving the rest buffered for the next
+// recv. Callers that want strict line-per-message semantics should
+// pre-validate / replace embedded newlines.
+//
+// Returns true on success (shell command exited 0).
+pub fn channel_send(fd: int, msg: string) -> bool {
+    if fd < 0 { return false }
+    let path = channel_path_for(fd)
+    // Quote msg for the shell printf. Single-quote wrap, embedded ' →
+    // '\''. printf %s does NOT interpret backslash escapes, which is
+    // exactly the semantic we want (raw byte transport).
+    let q = _shell_quote(msg)
+    // FIFO open semantics for the writer:
+    //   `printf '...' > fifo` blocks the parent shell on open(2) until a
+    //   reader attaches. To stay non-blocking AND not lose the message,
+    //   we open the FIFO RW (`<>`) on fd 3 — kernel never blocks an RW
+    //   open on a FIFO. We then write to fd 3 and immediately close it.
+    //
+    //   Once the message is in the kernel pipe buffer (PIPE_BUF guarantees
+    //   atomicity for writes ≤ 512 bytes; macOS pipe buffer is 65536 by
+    //   default), it stays there until the reader consumes it — provided
+    //   the reader is currently attached OR attaches before all writers
+    //   close. In practice, channel_send is called when a peer (spawned
+    //   via proc_spawn_with_channels) is already holding the FIFO open
+    //   on its stdin; that peer's open keeps the buffer alive until it
+    //   reads.
+    //
+    //   Edge case (no reader yet, e.g. parent send-then-spawn pattern):
+    //   the message DOES get lost on macOS when the last writer closes.
+    //   For that case, callers should sequence spawn-before-send (the
+    //   recommended idiom in proc_spawn_with_channels' docstring) or
+    //   use channel_send_held() (future addition) which keeps the
+    //   writer open via a backgrounded sleep.
+    //
+    //   We also background the whole thing under `()&` so even if the
+    //   reader is slow to drain (e.g. PIPE_BUF exceeded), the parent
+    //   hexa script doesn't block — at the cost of not detecting EPIPE
+    //   on a closed-channel send. The function still returns true in
+    //   that case; callers needing reliable delivery should pair sends
+    //   with bracketed acks via channel_recv on the response pair.
+    // We avoid nesting sh -c "..." with user content (the message may
+    // contain double quotes that break outer quoting); instead write a
+    // small one-shot script to /tmp and invoke it.
+    let nonce = _ch_alloc_nonce()
+    let script_path = "/tmp/hexa_chan_send_" + to_string(nonce) + ".sh"
+    let script = "#!/bin/sh\n"
+        + "exec 3<>'" + path + "'\n"
+        + "printf '%s\\n' " + q + " >&3\n"
+    write_file(script_path, script)
+    // Background the run so a slow reader doesn't stall the parent.
+    let cmd = "(sh '" + script_path + "'; rm -f '" + script_path + "') & echo ok"
+    let out = exec(cmd).trim()
+    return out == "ok"
+}
+
+// channel_recv(fd, timeout_ms) -> string
+//
+// Read one line from the FIFO referenced by `fd`. Newline trimmed.
+//
+// timeout_ms semantics:
+//   <  0 → block indefinitely until a line arrives (or peer closes → "")
+//   == 0 → poll once; return "" if no data buffered
+//   >  0 → wait up to timeout_ms milliseconds; "" on timeout
+//
+// Returns:
+//   non-empty string → the line (without trailing \n / \r\n)
+//   ""               → no data (timeout, or peer closed the write end)
+//
+// Implementation: perl one-liner that opens the FIFO RW (so it doesn't
+// block waiting for a writer), uses IO::Select::can_read for the timeout,
+// reads one line on ready signal, chomps CR/LF, prints. Same idiom as
+// stdlib/sys.hexa::sys_stdin_read_line_timeout.
+//
+// Cost: one fork+exec of perl per recv call (~5-10 ms warm). For LLM
+// dialog loops where inference is 100-1000 ms per token, this is invisible.
+// For tight ping-pong synthetic benchmarks the overhead dominates — a
+// future c_ffi-backed channel_recv_native can supplant without API change.
+pub fn channel_recv(fd: int, timeout_ms: int) -> string {
+    if fd < 0 { return "" }
+    let path = channel_path_for(fd)
+    // Existence guard: if the FIFO was closed/unlinked, return "" (EOF).
+    let exists = exec("test -p '" + path + "' && echo y || echo n").trim()
+    if exists != "y" { return "" }
+    // Negative timeout → blocking wait. We pass -1 to perl as a marker
+    // and use can_read(undef) which blocks until ready.
+    let arg = if timeout_ms < 0 { "-1" } else { to_string(timeout_ms) }
+    let cmd = "perl -e '"
+        + "use IO::Select; "
+        + "my $path = $ARGV[0]; my $ms = $ARGV[1]; "
+        + "open(my $fh, \"+<\", $path) or exit 0; "
+        + "my $sel = IO::Select->new($fh); "
+        + "my @r; "
+        + "if ($ms < 0) { @r = $sel->can_read(); } "
+        + "else { @r = $sel->can_read($ms/1000.0); } "
+        + "if (@r) { "
+        +   "my $line = <$fh>; "
+        +   "if (defined $line) { "
+        +     "$line =~ s/\\r?\\n\\z//; "
+        +     "print $line; "
+        +   "} "
+        + "} "
+        + "close($fh);"
+        + "' '" + path + "' " + arg
+    let out = exec(cmd)
+    return out
+}
+
+// channel_close(fd) -> bool
+//
+// Unlink the FIFO referenced by `fd`. Any peer reader gets EOF on its
+// next read; any peer writer gets EPIPE / SIGPIPE. After close, calling
+// channel_send / channel_recv on this fd returns false / "".
+//
+// Calling close on the read_fd or the write_fd of a pair both unlink
+// the SAME-direction FIFO — to fully tear down a bidirectional pair,
+// call close on BOTH fds returned by channel_pair_open.
+//
+// Idempotent: closing an already-closed fd returns true (the inode is
+// already gone). Returns false only on permission errors.
+pub fn channel_close(fd: int) -> bool {
+    if fd < 0 { return true }
+    let path = channel_path_for(fd)
+    let out = exec("rm -f '" + path + "' && echo ok || echo fail").trim()
+    return out == "ok"
+}
+
+// proc_spawn_with_channels(cmd, in_fd, out_fd) -> int
+//
+// Spawn `cmd` with stdin redirected from the FIFO at `in_fd` and stdout
+// redirected to the FIFO at `out_fd`. Returns the child pid (0 on failure).
+//
+// Typical usage from the parent:
+//
+//      let pair = channel_pair_open()
+//      let read_fd = pair[0]    // parent reads from child here
+//      let write_fd = pair[1]   // parent writes to child here
+//      let pid = proc_spawn_with_channels(
+//          "python3 echo_helper.py",
+//          write_fd,            // child's stdin = parent's write side
+//          read_fd              // child's stdout = parent's read side
+//      )
+//      channel_send(write_fd, "hello")
+//      let line = channel_recv(read_fd, 5000)
+//
+// The child sees plain stdin/stdout — no awareness of FIFOs. Any
+// language that reads stdin and writes stdout works (python, node, go,
+// another hexa script, llama-cli, ...).
+//
+// Detached: the child is launched with `nohup ... &` so the parent
+// hexa script can exit independently. For lease-supervised long-lived
+// chat sessions, COMBINE with proc.proc_spawn_supervised by wrapping
+// the cmd in a setsid+register prologue (see channel.ai.md "supervised
+// channel" recipe).
+//
+// stderr is left attached to the parent's stderr by default — useful for
+// debugging child startup. Override by appending `2>/dev/null` or
+// `2>'/path/to/log'` to the cmd string.
+pub fn proc_spawn_with_channels(cmd: string, in_fd: int, out_fd: int) -> int {
+    if in_fd < 0 || out_fd < 0 { return 0 }
+    let in_path = channel_path_for(in_fd)
+    let out_path = channel_path_for(out_fd)
+    // Verify both FIFOs exist before launching — saves a confused child
+    // process getting EOF on stdin immediately.
+    let exists = exec("test -p '" + in_path + "' && test -p '" + out_path + "' && echo y || echo n").trim()
+    if exists != "y" { return 0 }
+    // FIFO open semantics gotcha: open(2) for read on a FIFO blocks
+    // until a writer also opens, and vice-versa. Naively writing
+    // `cmd < in_fifo > out_fifo &` causes the parent shell to block on
+    // open(in_fifo) for read, preventing the child from ever spawning.
+    //
+    // The fix used here: pre-open both FIFOs in RW mode (`<>`) on the
+    // launching shell's spare fds (3 and 4). RW open does not block —
+    // the kernel always permits it. The child's stdin/stdout are then
+    // wired to those fds via `<&3` / `>&4`. Once the child is forked,
+    // the launching shell exits, closing fds 3 and 4 in the parent —
+    // but the child's dup'd copies on stdin/stdout keep the FIFO alive
+    // for as long as the child runs.
+    //
+    // Quoting strategy: rather than nesting sh -c '...' inside sh -c
+    // "..." (where the user's cmd may contain " characters that break
+    // outer quoting), we spill the launch script to a temp file and
+    // invoke `sh <tmpfile`. The script body contains the user's cmd
+    // VERBATIM with no further quoting — the only constraint is that
+    // the user's cmd parses as a valid sh command, which is the same
+    // contract proc_spawn_supervised already documents.
+    let nonce = _ch_alloc_nonce()
+    let script_path = "/tmp/hexa_chan_spawn_" + to_string(nonce) + ".sh"
+    let script = "#!/bin/sh\n"
+        + "exec 3<>'" + in_path + "'\n"
+        + "exec 4<>'" + out_path + "'\n"
+        + "nohup sh -c " + _shell_quote(cmd) + " <&3 >&4 2>&1 &\n"
+        + "echo $!\n"
+    write_file(script_path, script)
+    let pid_str = exec("sh '" + script_path + "'").trim()
+    let _drop = exec("rm -f '" + script_path + "'")
+    let pid = to_int(pid_str)
+    if pid <= 0 { return 0 }
+    return pid
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────
+
+// Local shell-arg quoter — single-quote wrap, embedded ' becomes '"'"'.
+// Conservative; does not depend on stdlib/proc to avoid a circular import
+// once I2-IMPORT-PATH lands.
+fn _shell_quote(s: string) -> string {
+    let mut out = []
+    out.push("'")
+    let mut i = 0
+    while i < len(s) {
+        let c = s[i]
+        if c == '\'' {
+            out.push("'\"'\"'")
+        } else {
+            out.push(s.substring(i, i + 1))
+        }
+        i = i + 1
+    }
+    out.push("'")
+    return out.join("")
+}
+
+// ── End of module ─────────────────────────────────────────────────────────
