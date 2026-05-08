@@ -1,5 +1,51 @@
 # stdlib/hal CHANGELOG
 
+## [0.5.0] - 2026-05-08
+
+### Added
+- `backend/esp32/{gpio,i2c,spi,uart,adc}.hexa` — third hardware
+  vendor backend, paper-skeleton stubs covering the canonical HW-5.
+  Targets the Espressif ESP32 dual Xtensa LX6 @ 240 MHz (original).
+  Each stub documents the relevant DR_REG_*_BASE (0x3FF range) +
+  key register offsets:
+  - `esp32/gpio.hexa`  — DR_REG_GPIO_BASE 0x3FF44000 + IO_MUX 0x3FF49000;
+                         40-pin envelope (GPIO0..39) with caveats: GPIO34..39
+                         input-only, GPIO6..11 reserved for SPI flash;
+                         dual-bank registers (OUT/OUT1, IN/IN1) for pins ≤31
+                         vs ≥32; W1TS/W1TC atomic helpers (no XOR — sw RMW).
+  - `esp32/i2c.hexa`   — I2C0 0x3FF53000 / I2C1 0x3FF67000; programmable
+                         16-deep command queue (RSTART/WRITE/READ/STOP/END
+                         opcodes) — distinct from DesignWare-class
+                         fire-and-forget FIFO; std/fast/fast-plus.
+  - `esp32/spi.hexa`   — HSPI 0x3FF64000 (SPI2) + VSPI 0x3FF65000 (SPI3)
+                         user-accessible; SPI0/SPI1 reserved for flash;
+                         16 × 32-bit shift buffer (W0..W15); max f_spi
+                         = APB_CLK = 80 MHz with CLK_EQU_SYSCLK; CPOL/CPHA
+                         encoded as CK_OUT_EDGE/CK_I_EDGE per TRM matrix.
+  - `esp32/uart.hexa`  — UART0/1/2 (0x3FF40000 / 0x3FF50000 / 0x3FF6E000);
+                         IBRD/FBRD-style baud divisor (CLKDIV + CLKDIV_FRAG
+                         /16); UART0 boot-console safety note.
+  - `esp32/adc.hexa`   — SAR_ADC 0x3FF48800; 9..12-bit programmable; 8-ch
+                         ADC1 (GPIO32..39) + 10-ch ADC2 (WiFi-conflicted);
+                         per-channel attenuation 0/2.5/6/11 dB.
+
+### Changed
+- `numerics_sim_marker_density.hexa` (F-HAL-5 T2) `CANONICAL_VENDORS`
+  now `["stm32h7", "rp2040", "esp32"]` (was `["stm32h7", "rp2040"]`).
+  Vendor count = 3; expected backend stub file count = 5 × 3 = 15.
+- v0.5.0 vendor list: stm32h7 (v0.2.0) + rp2040 (v0.4.0) + esp32 (this).
+
+### Provenance
+- ESP32 register addresses pulled from web-search + ESP32 Technical
+  Reference Manual cross-reference (per autonomy directive web-search
+  mandate). DR_REG_GPIO_BASE = 0x3FF44000 confirmed.
+- IP cells: ESP32 has its own GPIO Matrix (no PrimeCell reuse), custom
+  command-queue I2C, custom 80-MHz SPI master, and custom UART with
+  fractional divisor.
+- ESP32-S2/S3 (Xtensa LX7) and ESP32-C3/C6 (RISC-V) variants would be
+  separate sub-vendors (esp32s3, esp32c3) — out of v0.5.0 scope.
+- No HW physically tested; paper-skeleton parity with stm32h7 + rp2040.
+
 ## [0.4.0] - 2026-05-08
 
 ### Added

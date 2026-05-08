@@ -119,7 +119,9 @@ Subsequent versions add paper-skeleton stubs for the canonical HW-5
 - `backend/rp2040/<peripheral>.hexa` — Raspberry Pi RP2040 dual
   Cortex-M0+ @ 133 MHz (v0.4.0 — paper skeleton; SIO/IO_BANK0/
   PADS_BANK0 + PL011 UART + PL022 SSP + DesignWare I2C + 12-bit ADC).
-- `backend/esp32/<peripheral>.hexa` — Espressif ESP32 (planned, v0.5.0).
+- `backend/esp32/<peripheral>.hexa` — Espressif ESP32 dual Xtensa LX6
+  @ 240 MHz (v0.5.0 — paper skeleton; DR_REG_*_BASE in 0x3FF range +
+  GPIO Matrix + command-queue I2C + 80 MHz SPI + 9..12-bit SAR ADC).
 
 cfg-flag dispatch in each top-level module (gpio.hexa etc.) selects
 the correct backend at compile time. Sim backend is always-available

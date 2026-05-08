@@ -1,0 +1,130 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/spi.hexa — ESP32 SPI backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz.
+// Chip ref:  ESP32 Technical Reference Manual §7 SPI Controller
+//            (4 SPI peripherals: SPI0/SPI1 are flash-internal; HSPI=SPI2,
+//            VSPI=SPI3 are user-accessible).
+// Surface:   esp32_spi_{configure,xfer,close}(...)
+// Dispatch:  spi.hexa selects this via cfg-flag.
+//
+// MMIO layout (HSPI=SPI2 + VSPI=SPI3 user-accessible):
+//
+//   SPI0 (flash):  base = 0x3FF42000   (DO NOT USE — bound to ext flash)
+//   SPI1 (flash):  base = 0x3FF43000   (DO NOT USE — internal)
+//   SPI2 / HSPI:   base = 0x3FF64000
+//   SPI3 / VSPI:   base = 0x3FF65000
+//
+//   SPI_CMD_REG                  0x00   USR bit 18 trigger user-defined
+//                                         transaction (kick-off)
+//   SPI_ADDR_REG                 0x04   addr for SPI flash transactions
+//   SPI_CTRL_REG                 0x08   bit-order, dummy cycles, etc.
+//   SPI_CTRL1_REG                0x0C   SPI_CS_HOLD_DELAY (4 bits)
+//   SPI_RD_STATUS_REG            0x10
+//   SPI_CTRL2_REG                0x14   setup/hold/CS delay timing
+//   SPI_CLOCK_REG                0x18   clock divider + CPOL/CPHA implicit
+//                                         CLKDIV_PRE bits 13:0
+//                                         CLKCNT_N    bits 19:14
+//                                         CLKCNT_H    bits 25:20
+//                                         CLKCNT_L    bits 31:26
+//                                         CLK_EQU_SYSCLK bit (=80 MHz when set)
+//   SPI_USER_REG                 0x1C   USR_COMMAND/USR_ADDR/USR_DUMMY/
+//                                         USR_MOSI/USR_MISO/CK_OUT_EDGE/
+//                                         CK_I_EDGE  (CPHA/CPOL effective)
+//                                         CS_SETUP/CS_HOLD bits
+//                                         DOUTDIN bit 0 (full-duplex)
+//   SPI_USER1_REG                0x20   USR_ADDR_BITLEN / USR_DUMMY_CYCLELEN
+//   SPI_USER2_REG                0x24   USR_COMMAND_BITLEN / VALUE
+//   SPI_MOSI_DLEN_REG            0x28   MOSI bit-length (bits-1 inclusive)
+//   SPI_MISO_DLEN_REG            0x2C   MISO bit-length
+//   SPI_W0_REG..SPI_W15_REG      0x80..0xBC   16-deep × 32-bit shift
+//                                                buffer (full-duplex, shared
+//                                                MOSI tx + MISO rx)
+//
+// Clock divider: f_spi = APB_CLK / ((CLKDIV_PRE+1)·(CLKCNT_N+1))
+//                or = APB_CLK directly when CLK_EQU_SYSCLK=1 (80 MHz)
+// Max user f_spi: 80 MHz (with CLK_EQU_SYSCLK), or 40 MHz comfortable.
+//
+// CPOL/CPHA: encoded as CK_OUT_EDGE + CK_I_EDGE (per TRM §7.4.4 table).
+//
+// TODO:
+//   1. cfg-flag dispatch from stdlib/hal/spi.hexa.
+//   2. divider calc from APB_CLK to target Hz; CLK_EQU_SYSCLK fastpath.
+//   3. SPI_W0..W15 buffer fill / drain helpers (16 × 32-bit = 64 bytes max).
+//   4. CPOL/CPHA encoding from SPI mode 0..3.
+//   5. CS pin route via GPIO matrix (HSPI default GPIO15; VSPI default GPIO5).
+
+let MODULE_NAME = "esp32_spi"
+let SIGMA_SLOT  = 3
+let PHI_KIND    = "digital"
+
+// User-accessible SPI bases.
+let DR_REG_SPI2_BASE = 0x3FF64000   // HSPI
+let DR_REG_SPI3_BASE = 0x3FF65000   // VSPI
+
+// Key register offsets.
+let SPI_CMD_REG       = 0x00
+let SPI_CLOCK_REG     = 0x18
+let SPI_USER_REG      = 0x1C
+let SPI_MOSI_DLEN_REG = 0x28
+let SPI_MISO_DLEN_REG = 0x2C
+let SPI_W0_REG        = 0x80
+
+let APB_CLK_HZ = 80000000
+
+// SPI modes.
+let MODE_0 = 0
+let MODE_1 = 1
+let MODE_2 = 2
+let MODE_3 = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_spi_configure(unit: int, speed_hz: int, mode: int) -> int {
+    // unit: 2 = HSPI, 3 = VSPI (only user-accessible)
+    if unit < 2 || unit > 3 { return -1 }
+    if speed_hz < 1000 || speed_hz > 80000000 { return -2 }
+    if mode < 0 || mode > 3 { return -3 }
+    // STUB: real impl would
+    //   1. enable SPI<unit> peri clock (DPORT_PERIP_CLK_EN)
+    //   2. set SPI_CLOCK_REG: divider OR CLK_EQU_SYSCLK if 80 MHz
+    //   3. set SPI_USER_REG: USR_MOSI=1, USR_MISO=1, DOUTDIN=1 (full-duplex);
+    //      CK_OUT_EDGE/CK_I_EDGE per CPOL/CPHA matrix
+    //   4. configure CS via GPIO matrix
+    return unit
+}
+
+fn esp32_spi_xfer(unit: int, tx: int) -> int {
+    if unit < 2 || unit > 3 { return -1 }
+    if tx < 0 || tx > 0xFFFF { return -2 }
+    // STUB: real impl would
+    //   1. set SPI_MOSI_DLEN_REG = bits-1 (e.g. 7 for 8-bit)
+    //   2. set SPI_MISO_DLEN_REG = bits-1
+    //   3. write tx into SPI_W0_REG (low bits)
+    //   4. set SPI_CMD_REG.USR = 1 (trigger)
+    //   5. spin on SPI_CMD_REG.USR == 0 (done)
+    //   6. return SPI_W0_REG (rx data, full-duplex)
+    return 0
+}
+
+fn esp32_spi_close(unit: int) -> int {
+    if unit < 2 || unit > 3 { return -1 }
+    // STUB: clear SPI_USER_REG enables, disable peri clock
+    return 0
+}
+
+fn esp32_spi_report(unit: int) -> str {
+    return "[esp32_spi sim] unit=" + str(unit) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32_spi_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_spi sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  HSPI(SPI2)=" + str(DR_REG_SPI2_BASE) + " VSPI(SPI3)=" + str(DR_REG_SPI3_BASE))
+    println("  max f_spi = APB_CLK = 80 MHz (CLK_EQU_SYSCLK)")
+}

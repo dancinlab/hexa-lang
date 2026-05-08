@@ -1,0 +1,137 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/gpio.hexa — ESP32 (Tensilica Xtensa LX6) GPIO backend
+//                                      — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved (gpio.hexa
+// sim backend ships before this; this file is HW-backend addition).
+//
+// Target:    Espressif ESP32 dual Xtensa LX6 @ 240 MHz (original).
+//            ESP32-S2 / S3 (Xtensa LX7), ESP32-C3 / C6 (RISC-V) use
+//            similar IP but different base addresses — out of scope
+//            for v0.5.0 stub (would be esp32s3 / esp32c3 sub-vendors).
+// Chip ref:  ESP32 Technical Reference Manual §IV (GPIO Matrix and IO_MUX),
+//            §III (System & Memory).
+// Surface:   esp32_gpio_{configure,write,read,toggle}(pin, ...)
+// Dispatch:  gpio.hexa selects this via cfg-flag (e.g. `cfg target =
+//            "esp32"`). v0.5.0+ third vendor (after stm32h7 + rp2040).
+//
+// MMIO layout (sketch; real impl writes registers):
+//
+//   GPIO Matrix (DR_REG_GPIO_BASE = 0x3FF44000):
+//     GPIO_OUT_REG                0x004   GPIO 0..31 output value
+//     GPIO_OUT_W1TS_REG           0x008   write-1-to-set
+//     GPIO_OUT_W1TC_REG           0x00C   write-1-to-clear
+//     GPIO_OUT1_REG               0x010   GPIO 32..39 output value
+//     GPIO_OUT1_W1TS_REG          0x014
+//     GPIO_OUT1_W1TC_REG          0x018
+//     GPIO_ENABLE_REG             0x020   GPIO 0..31 output enable
+//     GPIO_ENABLE_W1TS_REG        0x024
+//     GPIO_ENABLE_W1TC_REG        0x028
+//     GPIO_ENABLE1_REG            0x02C   GPIO 32..39 output enable
+//     GPIO_IN_REG                 0x03C   GPIO 0..31 input value
+//     GPIO_IN1_REG                0x040   GPIO 32..39 input value
+//     GPIO_PIN<n>_REG             0x088 + 4·n   per-pin config (intr/wakeup)
+//     GPIO_FUNC<n>_OUT_SEL_CFG    0x530 + 4·n   GPIO matrix output route
+//     GPIO_FUNC<n>_IN_SEL_CFG     0x130 + 4·n   GPIO matrix input route
+//
+//   IO_MUX (DR_REG_IO_MUX_BASE = 0x3FF49000):
+//     IO_MUX_GPIO<n>_REG          per-pin pad config (drive, pull, IE/OE,
+//                                  function select). Pin numbering NOT
+//                                  contiguous — uses chip-level GPIO_n
+//                                  to MUX bank mapping (per TRM Table 10).
+//
+// 40-pin envelope (GPIO0..GPIO39; with caveats: GPIO34..39 input-only,
+// GPIO20/24 not bonded on most packages, GPIO6..11 reserved for SPI
+// flash on most modules).
+//
+// TODO:
+//   1. cfg-flag dispatch from stdlib/hal/gpio.hexa.
+//   2. mmio_w32/r32 abstraction over volatile pointer (esp-idf style).
+//   3. dual-bank handling: GPIO0..31 vs GPIO32..39 (separate registers).
+//   4. GPIO matrix routing (FUNC<n>_OUT_SEL_CFG) for non-pad-mux signals.
+//   5. RTC GPIO domain (separate RTC_IO controller, addresses in
+//      0x3FF48400..0x3FF48800 region) — out of v0.5.0 scope.
+
+let MODULE_NAME = "esp32_gpio"
+let SIGMA_SLOT  = 1               // matches stdlib/hal/gpio.hexa σ-slot
+let PHI_KIND    = "digital"
+
+// DR_REG_GPIO_BASE + key offsets (read-only constants).
+let DR_REG_GPIO_BASE         = 0x3FF44000
+let GPIO_OUT_REG             = 0x004
+let GPIO_OUT_W1TS_REG        = 0x008
+let GPIO_OUT_W1TC_REG        = 0x00C
+let GPIO_OUT1_REG            = 0x010
+let GPIO_ENABLE_REG          = 0x020
+let GPIO_ENABLE_W1TS_REG     = 0x024
+let GPIO_IN_REG              = 0x03C
+let GPIO_IN1_REG             = 0x040
+
+let DR_REG_IO_MUX_BASE       = 0x3FF49000
+
+// Pin envelope.
+let ESP32_GPIO_MIN  = 0
+let ESP32_GPIO_MAX  = 39      // GPIO34..39 input-only; flash pins 6..11
+
+// IO_MUX function values (pin-specific in TRM; common ones):
+let MCU_SEL_GPIO   = 2        // standard digital GPIO
+let FUN_DRV_X1     = 0        // ~5 mA drive
+let FUN_DRV_X2     = 1        // ~10 mA drive (default)
+let FUN_DRV_X3     = 2        // ~20 mA drive
+let FUN_DRV_X4     = 3        // ~40 mA drive
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_gpio_configure(pin: int, mode: int) -> int {
+    if pin < ESP32_GPIO_MIN || pin > ESP32_GPIO_MAX { return -1 }
+    if mode < 0 || mode > 5 { return -2 }
+    // STUB: real impl would
+    //   1. set IO_MUX_GPIO<pin>_REG.MCU_SEL = MCU_SEL_GPIO (=2)
+    //   2. set IO_MUX_GPIO<pin>_REG.FUN_IE for input modes
+    //   3. write GPIO_ENABLE_W1TS for output (or W1TC for input)
+    //   4. for pins 32..39 use GPIO_ENABLE1_REG / GPIO_OUT1_REG
+    return pin
+}
+
+fn esp32_gpio_write(pin: int, val: bool) -> int {
+    if pin < ESP32_GPIO_MIN || pin > ESP32_GPIO_MAX { return -1 }
+    // STUB: real impl writes
+    //   if pin <= 31 {
+    //     if val { *(BASE + GPIO_OUT_W1TS_REG) = (1 << pin) }
+    //     else   { *(BASE + GPIO_OUT_W1TC_REG) = (1 << pin) }
+    //   } else {
+    //     // GPIO_OUT1_W1TS_REG / W1TC_REG with pin-32 shift
+    //   }
+    return 0
+}
+
+fn esp32_gpio_read(pin: int) -> int {
+    if pin < ESP32_GPIO_MIN || pin > ESP32_GPIO_MAX { return -1 }
+    // STUB: real impl reads
+    //   if pin <= 31 { return (*(BASE + GPIO_IN_REG) >> pin) & 1 }
+    //   else         { return (*(BASE + GPIO_IN1_REG) >> (pin-32)) & 1 }
+    return 0
+}
+
+fn esp32_gpio_toggle(pin: int) -> int {
+    if pin < ESP32_GPIO_MIN || pin > ESP32_GPIO_MAX { return -1 }
+    // STUB: ESP32 has no atomic XOR; impl reads OUT_REG, XORs bit, writes back.
+    return 0
+}
+
+fn esp32_gpio_report(pin: int) -> str {
+    return "[esp32_gpio sim] pin=" + str(pin) + " (skeleton stub — TODO MMIO)"
+}
+
+// ── module meta (matches σ-slot pattern) ──────────────────────────────
+
+fn esp32_gpio_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_gpio sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  DR_REG_GPIO_BASE=" + str(DR_REG_GPIO_BASE) +
+            " DR_REG_IO_MUX_BASE=" + str(DR_REG_IO_MUX_BASE))
+    println("  GPIO0..GPIO39 envelope (40 pins; 34..39 input-only; 6..11 SPI flash)")
+}
