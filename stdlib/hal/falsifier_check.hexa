@@ -1,0 +1,238 @@
+#!hexa strict
+// stdlib/hal/falsifier_check.hexa — closure-pct tracker (recipe §3).
+//
+// Tracks T1 (algebraic) / T2 (numerical) / T3 (empirical/HW-bench)
+// closure for each falsifier registered in stdlib/hal/README.md
+// "Falsifier preregister". This is the canonical RSC progress meter
+// for the HAL module.
+//
+// Closure formula (recipe §3):
+//
+//   closure_pct(t1, t2, t3)
+//     = 0   if  no tier closed
+//     = 33  if  any single tier closed
+//     = 67  if  two tiers closed
+//     = 100 if  all three tiers closed
+//
+// Per recipe §3, T2 / T3 closure means **every script in the
+// falsifier's tier-stack array exists on disk** (not just one).
+//
+// Status (v0.0.1 scaffold — 2026-05-08):
+//
+//   F-HAL-1  T1 ✓  (calc_peripherals.hexa)        T2 ☐ T3 ☐
+//   F-HAL-2  T1 ✓  (calc_lifecycle.hexa)          T2 ☐ T3 ☐
+//   F-HAL-3  T1 ✓  (calc_peripherals.hexa)        T2 ☐ T3 ☐
+//   F-HAL-4  T1 ☐  (handle-pool sat. — v0.1.0+)   T2 ☐ T3 ☐
+//   F-HAL-5  T1 ☐  (sim-before-HW — v0.1.0+)      T2 ☐ T3 ☐
+//
+// T2 = numerical / fixture tier (v0.1.0+ — sim-driver fixtures).
+// T3 = HW-bench tier (v0.2.0+ — stm32h7 / rp2040 / esp32 backends).
+//
+// Outputs:
+//   • per-falsifier table: T1 ✓/✗, T2 ✓/✗ (×N), T3 ✓/✗ (×N), pct
+//   • saturation verdicts:
+//       sat-1 = all 5 falsifiers ≥ 67% closure
+//       sat-2 = every falsifier has ≥ 1 T1 script registered AND on disk
+//
+// PASS = every registered T1 script (non-empty registry entry) is
+//        present on disk. Falsifiers with empty T1 registry (F-HAL-4/5)
+//        are reported informationally as 0% — not regressions.
+// FAIL = any registered T1 script is declared but missing.
+//
+// Run:
+//   hexa run stdlib/hal/falsifier_check.hexa
+//
+// Cost: $0 (file existence checks only).
+
+// ─── falsifier registry ──────────────────────────────────────────────
+//
+// Entry: [id, claim_summary]
+
+let FALSIFIERS = [
+    ["F-HAL-1", "12 modules == σ(6)"],
+    ["F-HAL-2", "4-stage τ-lifecycle per peripheral"],
+    ["F-HAL-3", "exact 10 digital + 2 analog = φ=2 dichotomy"],
+    ["F-HAL-4", "≤ J₂/n = 4 concurrent handles per module (intr/dma extend)"],
+    ["F-HAL-5", "sim backend before any HW backend"]
+]
+
+// T1 tier-stacks (calc_*.hexa per falsifier; "" element ⇒ none yet).
+let F1_T1 = ["calc_peripherals.hexa"]
+let F2_T1 = ["calc_lifecycle.hexa"]
+let F3_T1 = ["calc_peripherals.hexa"]   // φ-dichotomy is a calc_peripherals sub-claim
+let F4_T1: [str] = []                    // handle-pool saturation T1 deferred v0.1.0+
+let F5_T1: [str] = []                    // sim-before-HW T1 deferred v0.1.0+
+
+// T2 tier-stacks (numerical / fixture — none yet at v0.0.1).
+let F1_T2: [str] = []
+let F2_T2: [str] = []
+let F3_T2: [str] = []
+let F4_T2: [str] = []
+let F5_T2: [str] = []
+
+// T3 tier-stacks (HW-bench backend — Stage-1+ scope, v0.2.0+).
+let F1_T3: [str] = []
+let F2_T3: [str] = []
+let F3_T3: [str] = []
+let F4_T3: [str] = []
+let F5_T3: [str] = []
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// stack closed iff non-empty AND every script exists on disk.
+fn _stack_ok(root: str, stack: [str]) -> bool {
+    if stack.len() == 0 { return false }
+    for s in stack {
+        if !_exists(root + "/stdlib/hal/" + s) { return false }
+    }
+    return true
+}
+
+fn _stack_present_count(root: str, stack: [str]) -> int {
+    let mut n = 0
+    for s in stack {
+        if _exists(root + "/stdlib/hal/" + s) { n = n + 1 }
+    }
+    return n
+}
+
+fn closure_pct(t1: bool, t2: bool, t3: bool) -> int {
+    let mut n = 0
+    if t1 { n = n + 1 }
+    if t2 { n = n + 1 }
+    if t3 { n = n + 1 }
+    if n == 0 { return 0 }
+    if n == 1 { return 33 }
+    if n == 2 { return 67 }
+    return 100
+}
+
+fn _bool_str(b: bool) -> str { if b { return "✓" }; return "✗" }
+
+// Detect missing-but-registered T1 scripts (regression gate).
+fn _registered_missing(root: str, stack: [str]) -> int {
+    let mut n = 0
+    for s in stack {
+        if s.len() > 0 && !_exists(root + "/stdlib/hal/" + s) { n = n + 1 }
+    }
+    return n
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    let root = _root()
+
+    let f1_t1 = _stack_ok(root, F1_T1)
+    let f2_t1 = _stack_ok(root, F2_T1)
+    let f3_t1 = _stack_ok(root, F3_T1)
+    let f4_t1 = _stack_ok(root, F4_T1)
+    let f5_t1 = _stack_ok(root, F5_T1)
+
+    let f1_t2 = _stack_ok(root, F1_T2)
+    let f2_t2 = _stack_ok(root, F2_T2)
+    let f3_t2 = _stack_ok(root, F3_T2)
+    let f4_t2 = _stack_ok(root, F4_T2)
+    let f5_t2 = _stack_ok(root, F5_T2)
+
+    let f1_t3 = _stack_ok(root, F1_T3)
+    let f2_t3 = _stack_ok(root, F2_T3)
+    let f3_t3 = _stack_ok(root, F3_T3)
+    let f4_t3 = _stack_ok(root, F4_T3)
+    let f5_t3 = _stack_ok(root, F5_T3)
+
+    let f1_pct = closure_pct(f1_t1, f1_t2, f1_t3)
+    let f2_pct = closure_pct(f2_t1, f2_t2, f2_t3)
+    let f3_pct = closure_pct(f3_t1, f3_t2, f3_t3)
+    let f4_pct = closure_pct(f4_t1, f4_t2, f4_t3)
+    let f5_pct = closure_pct(f5_t1, f5_t2, f5_t3)
+
+    let f1_t1_n = _stack_present_count(root, F1_T1)
+    let f2_t1_n = _stack_present_count(root, F2_T1)
+    let f3_t1_n = _stack_present_count(root, F3_T1)
+    let f4_t1_n = _stack_present_count(root, F4_T1)
+    let f5_t1_n = _stack_present_count(root, F5_T1)
+
+    // Regression gate: any registered T1 script missing from disk?
+    let miss = _registered_missing(root, F1_T1) +
+               _registered_missing(root, F2_T1) +
+               _registered_missing(root, F3_T1) +
+               _registered_missing(root, F4_T1) +
+               _registered_missing(root, F5_T1)
+    let ok = miss == 0
+
+    // Saturation milestones.
+    let sat_1 = (f1_pct >= 67) && (f2_pct >= 67) && (f3_pct >= 67) &&
+                (f4_pct >= 67) && (f5_pct >= 67)
+    let sat_2 = (f1_t1_n >= 1) && (f2_t1_n >= 1) && (f3_t1_n >= 1) &&
+                (f4_t1_n >= 1) && (f5_t1_n >= 1)
+
+    println("========================================================================")
+    println("  stdlib/hal — falsifier closure tracker (recipe §3)")
+    println("========================================================================")
+    println("")
+    println("  per-falsifier closure (T1 algebraic / T2 numerical / T3 HW-bench):")
+    println("    id        T1   T2   T3   closure")
+    let f1_t2_lbl = "  " + _bool_str(f1_t2) + "  "
+    let f2_t2_lbl = "  " + _bool_str(f2_t2) + "  "
+    let f3_t2_lbl = "  " + _bool_str(f3_t2) + "  "
+    let f4_t2_lbl = "  " + _bool_str(f4_t2) + "  "
+    let f5_t2_lbl = "  " + _bool_str(f5_t2) + "  "
+    let f1_t3_lbl = "  " + _bool_str(f1_t3) + "  "
+    let f2_t3_lbl = "  " + _bool_str(f2_t3) + "  "
+    let f3_t3_lbl = "  " + _bool_str(f3_t3) + "  "
+    let f4_t3_lbl = "  " + _bool_str(f4_t3) + "  "
+    let f5_t3_lbl = "  " + _bool_str(f5_t3) + "  "
+    println("    F-HAL-1    " + _bool_str(f1_t1) + f1_t2_lbl + f1_t3_lbl + " " + str(f1_pct) + "%")
+    println("    F-HAL-2    " + _bool_str(f2_t1) + f2_t2_lbl + f2_t3_lbl + " " + str(f2_pct) + "%")
+    println("    F-HAL-3    " + _bool_str(f3_t1) + f3_t2_lbl + f3_t3_lbl + " " + str(f3_pct) + "%")
+    println("    F-HAL-4    " + _bool_str(f4_t1) + f4_t2_lbl + f4_t3_lbl + " " + str(f4_pct) + "%")
+    println("    F-HAL-5    " + _bool_str(f5_t1) + f5_t2_lbl + f5_t3_lbl + " " + str(f5_pct) + "%")
+    println("")
+
+    println("  registered claims:")
+    let mut idx = 1
+    while idx <= FALSIFIERS.len() {
+        let f = FALSIFIERS[idx - 1]
+        println("    " + f[0] + ":  " + f[1])
+        idx = idx + 1
+    }
+    println("")
+
+    println("  T1 stack inventory:")
+    println("    F-HAL-1 → " + str(F1_T1))
+    println("    F-HAL-2 → " + str(F2_T1))
+    println("    F-HAL-3 → " + str(F3_T1))
+    println("    F-HAL-4 → " + str(F4_T1) + "   (deferred v0.1.0+)")
+    println("    F-HAL-5 → " + str(F5_T1) + "   (deferred v0.1.0+)")
+    println("")
+
+    println("  saturation status:")
+    println("    sat-1 (all 5 falsifiers ≥ 67% closure):              " + _bool_str(sat_1))
+    println("    sat-2 (every falsifier has ≥ 1 T1 script on disk):   " + _bool_str(sat_2))
+    println("")
+
+    println("========================================================================")
+
+    if !ok {
+        println("  FAIL — " + str(miss) + " registered T1 script(s) missing from disk")
+        println("__HEXA_LANG_HAL_FALSIFIER_CHECK__ FAIL")
+        exit(1)
+    }
+    println("  PASS — every registered T1 script present on disk")
+    if sat_1 { println("    ★ sat-1 milestone reached: all 5 falsifiers ≥ 67%") }
+    if sat_2 { println("    ★ sat-2 milestone reached: every falsifier has ≥ 1 T1 script") }
+    println("__HEXA_LANG_HAL_FALSIFIER_CHECK__ PASS")
+    exit(0)
+}
