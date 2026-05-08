@@ -1,5 +1,36 @@
 # stdlib/hal CHANGELOG
 
+## [1.16.0] - 2026-05-09
+
+### Added — `numerics_gpgpu_dispatch.hexa` F-GPGPU-4 T2 numerical (lifts to 67%)
+- `numerics_gpgpu_dispatch.hexa` (~250 lines) — fourth T2 fixture for
+  the GPGPU axis. Cross-checks J₂′ = σ·τ = 48 dispatch-state combination
+  ceiling against the on-disk backend table.
+
+  6 numerical checks:
+    1. J₂′ = σ·τ = 12·4 = 48 algebraic re-assert
+    2. compute.hexa declares fn compute_invariant_J2_prime() returning 48
+    3. per-vendor stage score ≥ 3-of-4; Σ stage_count ≥ 18 floor
+    4. Σ (vendor, canonical-IR) edges ≥ 6 (φ-axis projection cross-check)
+    5. Σ (vendor·stage·IR) reachable states ≥ 18 floor (≤ J₂′=48 ceiling)
+    6. every vendor with native IR_PRIMARY (amdgcn/msl_air/wgsl) ALSO
+       declares canonical IR_FALLBACK in {ptx, spirv} — guards the
+       φ=2 dichotomy projection from being undermined by native-only
+       vendor backends.
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_GPGPU_DISPATCH__ PASS`.
+
+  Pattern: numerics_handle_dispatch.hexa (sister F-HAL-4 T2 fixture —
+  it scores J₂/n=4 handle-pool; this scores J₂′=48 dispatch-state
+  space). Same _check/RUN/FAIL harness, same per-cell scoring + aggregate
+  threshold.
+
+  **F-GPGPU-4 closure lifted: 33% → 67%** (T1 ✓ + T2 ✓; T3 deferred).
+  4/6 T2 fixtures landed; remaining 2 (numerics_gpgpu_{mem_tiers,
+  barriers}.hexa) planned v1.17.0+.
+
+  Phase G iter 9+5+4.
+
 ## [1.15.0] - 2026-05-09
 
 ### Added — `numerics_gpgpu_ir_dichotomy.hexa` F-GPGPU-3 T2 numerical (lifts to 67%)
