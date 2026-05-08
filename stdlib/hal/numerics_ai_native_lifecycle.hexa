@@ -1,0 +1,147 @@
+#!hexa strict
+// stdlib/hal/numerics_ai_native_lifecycle.hexa — F-AI-NATIVE-2 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-AI-NATIVE-2
+// (4-stage τ-lifecycle: configure / start / serve / report; falsifier_
+// ai_native_check.hexa registry).
+//
+// T1 (ai.hexa internal asserts: STAGE_CONFIGURE/START/SERVE/REPORT = 0/1/2/3
+// + TAU = 4) closes the algebraic identity:
+//
+//   |stages| = τ = 4 ∧ STAGE_CONFIGURE/START/SERVE/REPORT = 0/1/2/3
+//
+// T2 (this script) cross-checks the τ-lifecycle stage table NUMERICALLY
+// by reading ai.hexa source.
+//
+// Identities checked:
+//   1. ai.hexa exists at stdlib/hal/ai.hexa.
+//   2. ai.hexa declares TAU = 4.
+//   3. STAGE_CONFIGURE = 0.
+//   4. STAGE_START     = 1.
+//   5. STAGE_SERVE     = 2.
+//   6. STAGE_REPORT    = 3.
+//   7. STAGE values are CONTIGUOUS 0..3 with no gaps/dupes.
+//
+// PASS = every identity holds; FAIL = any drift.
+//
+// Phase G iter 9+5+9; F-AI-NATIVE-2 closure 33% → 67%.
+// Pattern: numerics_gpgpu_mem_tiers.hexa (cardinality + value enumeration).
+
+let EXPECTED_TAU = 4
+let STAGE_NAMES = [
+    "STAGE_CONFIGURE",   // 0
+    "STAGE_START",       // 1
+    "STAGE_SERVE",       // 2
+    "STAGE_REPORT"       // 3
+]
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _extract_let_int(src: str, name: str) -> int {
+    let pat = "let " + name
+    let idx = src.index_of(pat)
+    if idx < 0 { return -1 }
+    let mut i = idx + pat.len()
+    while i < src.len() && src.char_at(i) != "=" { i = i + 1 }
+    if i >= src.len() { return -1 }
+    i = i + 1
+    while i < src.len() && (src.char_at(i) == " " || src.char_at(i) == "\t") { i = i + 1 }
+    let mut digits = ""
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch >= "0" && ch <= "9" { digits = digits + ch } else { break }
+        i = i + 1
+    }
+    if digits.len() == 0 { return -1 }
+    return int(digits)
+}
+
+fn check_ai_hexa_present(root: str) -> bool {
+    let p = root + "/stdlib/hal/ai.hexa"
+    let ok = _exists(p)
+    _check(ok, "ai.hexa present at stdlib/hal/ai.hexa",
+           if ok { "found" } else { "MISSING" })
+    return ok
+}
+
+fn check_const(src: str, name: str, expected: int) {
+    let v = _extract_let_int(src, name)
+    let ok = v == expected
+    _check(ok,
+           "ai.hexa declares " + name + " = " + str(expected),
+           "got " + str(v))
+}
+
+fn check_contiguous(src: str) {
+    // Verify STAGE_NAMES values are exactly 0,1,2,3 (no gaps/dupes/reorder).
+    let mut bad = ""
+    let mut idx = 0
+    while idx < STAGE_NAMES.len() {
+        let name = STAGE_NAMES[idx]
+        let v = _extract_let_int(src, name)
+        if v != idx { bad = bad + name + "(=" + str(v) + ",want=" + str(idx) + ") " }
+        idx = idx + 1
+    }
+    _check(bad.len() == 0,
+           "STAGE_* values are CONTIGUOUS 0..3 (no gaps/dupes)",
+           if bad.len() > 0 { "issues: " + bad } else { "configure=0 start=1 serve=2 report=3" })
+}
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_ai_native_lifecycle: F-AI-NATIVE-2 T2 numerical")
+    println("========================================================================")
+    println("  expected: τ=" + str(EXPECTED_TAU) + " STAGE_NAMES=" + str(STAGE_NAMES))
+    println("")
+
+    let root = _root()
+    if !check_ai_hexa_present(root) {
+        println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_LIFECYCLE__ FAIL")
+        exit(1)
+    }
+    let p = root + "/stdlib/hal/ai.hexa"
+    let src = read_file(p)
+
+    check_const(src, "TAU", EXPECTED_TAU)
+    check_const(src, "STAGE_CONFIGURE", 0)
+    check_const(src, "STAGE_START",     1)
+    check_const(src, "STAGE_SERVE",     2)
+    check_const(src, "STAGE_REPORT",    3)
+    check_contiguous(src)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-AI-NATIVE-2: 4-stage τ-lifecycle configure/start/serve/report (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_LIFECYCLE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_LIFECYCLE__ PASS")
+    exit(0)
+}
+
+main()

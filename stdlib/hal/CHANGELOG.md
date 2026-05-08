@@ -1,5 +1,23 @@
 # stdlib/hal CHANGELOG
 
+## [1.21.0] - 2026-05-09
+
+### Added — `numerics_ai_native_lifecycle.hexa` F-AI-NATIVE-2 T2 numerical (lifts to 67%)
+- `numerics_ai_native_lifecycle.hexa` (~135 lines) — second T2 fixture
+  for AI-native axis. Cross-checks the τ=4 lifecycle stage table
+  (configure/start/serve/report = 0/1/2/3) against on-disk ai.hexa.
+
+  7 numerical checks: ai.hexa present / TAU=4 / STAGE_CONFIGURE=0 /
+  STAGE_START=1 / STAGE_SERVE=2 / STAGE_REPORT=3 / contiguous 0..3
+  no-gaps-no-dupes.
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_LIFECYCLE__ PASS`.
+  Pattern: numerics_gpgpu_mem_tiers.hexa (cardinality + value enumeration).
+
+  **F-AI-NATIVE-2 closure lifted: 33% → 67%**. 2/6 T2 fixtures landed
+  for AI-native axis; remaining 4 (prov_dichotomy/tile_count/bt_coverage/
+  pdk_set) planned v1.22.0+. Phase G iter 9+5+9.
+
 ## [1.20.0] - 2026-05-09
 
 ### Added — `numerics_ai_native_lattice.hexa` F-AI-NATIVE-1 T2 numerical (lifts to 67%)
