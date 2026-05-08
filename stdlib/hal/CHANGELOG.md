@@ -1,5 +1,24 @@
 # stdlib/hal CHANGELOG
 
+## [1.23.0] - 2026-05-09
+
+### Added — `numerics_ai_native_tile_count.hexa` F-AI-NATIVE-4 T2 numerical (lifts to 67%)
+- `numerics_ai_native_tile_count.hexa` (~155 lines) — fourth T2 fixture
+  for AI-native axis. Cross-checks n_tiles = σ/φ = 6 native tiles per
+  HEXA-AI chip + provenance overhead denominator σ_n = σ·n_tiles = 72
+  against on-disk ai.hexa source.
+
+  8 numerical checks: ai.hexa present / SIGMA=12 / PHI=2 / N_TILES=6 /
+  SIGMA_N=72 / σ/φ=N_TILES (algebraic identity) / σ·n_tiles=σ_n
+  (overhead denom identity) / fn ai_invariant_n_tiles accessor present.
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_TILE_COUNT__ PASS`.
+  Pattern: numerics_ai_native_lattice.hexa (sister F-AI-NATIVE-1 T2).
+
+  **F-AI-NATIVE-4 closure lifted: 33% → 67%**. 4/6 T2 fixtures landed
+  for AI-native axis (67%); remaining 2 (bt_coverage/pdk_set) planned
+  v1.24.0+. Phase G iter 9+5+11.
+
 ## [1.22.0] - 2026-05-09
 
 ### Added — `numerics_ai_native_prov_dichotomy.hexa` F-AI-NATIVE-3 T2 numerical (lifts to 67%)
