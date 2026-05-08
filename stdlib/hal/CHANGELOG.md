@@ -1,5 +1,46 @@
 # stdlib/hal CHANGELOG
 
+## [1.0.0] - 2026-05-08 — ★ MILESTONE RELEASE ★
+
+### Tagged
+After 16 incremental releases (v0.0.1 → v0.15.0) reached **HW-12 /
+100% per-vendor paper-tier coverage** in v0.15.0, this release tags
+the milestone as the formal v1.0.0:
+
+- **5 vendors × 12 σ-slots = 60 backend stub files** (all paper-tier;
+  no HW physically tested).
+- **5 distinct CPU classes** (ARM Cortex-M7, Cortex-M0+, Xtensa LX6,
+  Xtensa LX7, RISC-V RV32IMC) unified behind one peripheral surface.
+- **sat-1 ✓** (every F-HAL falsifier ≥ 67%; reached v0.3.0).
+- **sat-2 ✓** (every F-HAL has ≥ 1 T1 script; reached v0.1.0).
+- **sat-3 ✗** — T3 HW-bench tier deferred to v2.0.0 (requires cross-
+  compile + emulation harness).
+- Plus separate axis: `compute.hexa` GPGPU host primitive (added v0.13.0;
+  6 vendors × 2 IRs × τ=4 × φ=2 × J₂′=48 lattice; vendor backends to come).
+
+### Added
+- `RELEASE_NOTES.md` — full v1.0.0 milestone summary including the
+  60-stub coverage matrix, CPU class diversity, falsifier closure
+  table, full release sequence (v0.0.1 → v1.0.0), and roadmap
+  post-v1.0.0 (esp32c6 sub-vendor, T3 cross-compile harness,
+  compute.hexa first vendor backend).
+- `README.md` updated with v1.0.0 status callout, full per-vendor
+  matrix table, GPGPU axis section, and provenance notes including
+  the v1.0.0 milestone.
+
+### Changed
+- README "Hardware backends" section restructured from per-vendor
+  bulleted list to a 5-row × HW-12 coverage table.
+- Module-version in CHANGELOG header bumps from [0.15.0] → [1.0.0].
+
+### Roadmap (post-milestone)
+- v1.1.0 — esp32c6 sub-vendor (RV32IMAC, WiFi 6 / Zigbee / Thread /
+  Matter); 6th vendor + 2nd RISC-V variant; 12 stubs to maintain HW-12.
+- v1.2.0 — T3 MMIO cross-compile harness (rp2040 open toolchain +
+  Renode emulation); lifts F-HAL closure 67% → 100% for that vendor.
+- v1.3.0 — compute.hexa first vendor backend (CUDA / WebGPU); begins
+  filling GPGPU σ=12 lattice.
+
 ## [0.15.0] - 2026-05-08 — **HW-12 / 100% per-vendor coverage milestone**
 
 ### Added

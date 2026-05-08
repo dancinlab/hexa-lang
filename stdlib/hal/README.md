@@ -6,6 +6,12 @@
 >
 > "HAL" mirrors Rust `embedded-hal` / ARM CMSIS / ST HAL convention —
 > same crate-name in the embedded ecosystem.
+>
+> **Status: v1.0.0** (2026-05-08) — HW-12 / 100% per-vendor paper-tier
+> coverage milestone. 5 vendors × 12 σ-slots = 60 backend stubs;
+> 5 distinct CPU classes (ARM Cortex-M7 / Cortex-M0+ / Xtensa LX6 / LX7 /
+> RISC-V RV32IMC) unified behind one peripheral surface. See
+> [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
 
 ## Quick start
 
@@ -110,34 +116,49 @@ v0.4.0+ second hardware backend (rp2040 or esp32).
 ## Hardware backends
 
 Per-vendor HW impls live under `stdlib/hal/backend/<vendor>/`. v0.0.1
-ships sim backend only (per F-HAL-5 invariant — sim before HW).
-Subsequent versions add paper-skeleton stubs for the canonical HW-5
-(gpio/i2c/spi/uart/adc — every vendor must cover all 5):
+ships sim backend only (per F-HAL-5 invariant — sim before HW). v1.0.0
+reaches **HW-12 / 100% per-vendor coverage** — all 5 registered vendors
+have paper-skeleton stubs for ALL 12 σ-slots:
 
-- `backend/stm32h7/<peripheral>.hexa` — ST STM32H7 Cortex-M7 @ 480 MHz
-  (v0.1.0–v0.2.0 — paper skeleton; real MMIO TBD).
-- `backend/rp2040/<peripheral>.hexa` — Raspberry Pi RP2040 dual
-  Cortex-M0+ @ 133 MHz (v0.4.0 — paper skeleton; SIO/IO_BANK0/
-  PADS_BANK0 + PL011 UART + PL022 SSP + DesignWare I2C + 12-bit ADC).
-- `backend/esp32/<peripheral>.hexa` — Espressif ESP32 dual Xtensa LX6
-  @ 240 MHz (v0.5.0 — paper skeleton; DR_REG_*_BASE in 0x3FF range +
-  GPIO Matrix + command-queue I2C + 80 MHz SPI + 9..12-bit SAR ADC).
-- `backend/esp32c3/<peripheral>.hexa` — Espressif ESP32-C3 single-core
-  RV32IMC RISC-V @ 160 MHz (v0.6.0 — paper skeleton; DR_REG_*_BASE in
-  0x6000 range + 22-pin single-bank GPIO + same command-queue I2C +
-  same SPI/UART IP as ESP32 + 12-bit fixed SAR ADC). **First RISC-V
-  vendor** — validates multi-ISA-family cfg-flag dispatch.
-- `backend/esp32s3/<peripheral>.hexa` — Espressif ESP32-S3 dual-core
-  Xtensa LX7 + ULP-RISC-V + AI vector accelerator + USB-OTG (v0.7.0 —
-  paper skeleton; 0x6000 region + 45-pin envelope GPIO0..21 ∪ GPIO26..48
-  + 2 I2C + 2 user SPI + 3 UART + USB-Serial-JTAG bridge + 12-bit ADC
-  20-ch with no WiFi conflict).
+| vendor   | CPU                              | clock     | HW-12 | first cut | notes                                 |
+|:---------|:---------------------------------|:----------|:------|:----------|:--------------------------------------|
+| stm32h7  | ARM Cortex-M7 + FPU + L1 cache   | 480 MHz   | ✓     | v0.1.0    | DSP-ext; MPU; TIM-PWM via OCxM        |
+| rp2040   | ARM Cortex-M0+ × 2               | 133 MHz   | ✓     | v0.4.0    | no cache / no FPU / no MPU; PIO blocks|
+| esp32    | Xtensa LX6 × 2 + FPU + cache     | 240 MHz   | ✓     | v0.5.0    | command-queue I2C; LEDC PWM; native DAC|
+| esp32c3  | RV32IMC (RISC-V)                 | 160 MHz   | ✓     | v0.6.0    | first RISC-V vendor; standard CSRs    |
+| esp32s3  | Xtensa LX7 + ULP-RISC-V + PIE    | 240 MHz   | ✓     | v0.7.0    | 128-bit vector ops; PSRAM ≤ 32 MB     |
 
-cfg-flag dispatch in each top-level module (gpio.hexa etc.) selects
-the correct backend at compile time. Sim backend is always-available
-fallback. The `numerics_sim_marker_density.hexa` (F-HAL-5 T2) numerical
-script enforces vendor parity: every registered vendor MUST cover the
-full HW-5, otherwise T2 fails.
+5 × 12 = **60 backend stubs**. cfg-flag dispatch in each top-level
+module (gpio.hexa etc.) selects the correct backend at compile time;
+sim backend is always-available fallback.
+
+Per-σ-slot release sequence:
+- v0.1.0 → v0.7.0 — vendor axis (stm32h7 → rp2040 → esp32 → esp32c3 → esp32s3)
+- v0.8.0 — peripheral axis open: timer (σ=8) across all 5 vendors
+- v0.9.0 — pwm (σ=7); v0.10.0 — dac (σ=6, 2 native + 3 PWM-emul);
+- v0.11.0 — intr (σ=9); v0.12.0 — dma (σ=10); v0.14.0 — rtc (σ=11);
+- v0.15.0 — core (σ=0) → **HW-12 milestone** ✓
+
+The `numerics_sim_marker_density.hexa` (F-HAL-5 T2) numerical script
+enforces vendor parity: every registered vendor MUST cover the canonical
+HW-5 (gpio/i2c/spi/uart/adc), otherwise T2 fails. The full HW-12
+coverage is documentation-tier (additive beyond F-HAL-5's strict floor).
+
+## GPGPU axis (separate from σ=12 peripheral lattice)
+
+`stdlib/hal/compute.hexa` (added v0.13.0) — host-side GPGPU dispatch
+primitive on a **separate axis** with its own n=6 invariant:
+
+```
+σ=12 = 6 vendors × 2 IR substrates · τ=4 lifecycle · φ=2 mode · J₂′=48
+```
+
+- `VENDOR_{CUDA, HIP, SYCL, OPENCL, METAL, WEBGPU}` (6 backends)
+- `IR_{SPIRV, PTX}` (φ=2 IR substrates)
+- `TIER_{PRIVATE, GROUP, DEVICE, CONSTANT}` (τ=4 memory tiers)
+- `SCOPE_{SUBGROUP, WORKGROUP, CLUSTER, GRID}` (4 barrier scopes)
+
+First consumer: `hexa-chip/firmware/mcu/npu_host.hexa` (Phase F iter 5).
 
 ## Provenance
 
@@ -145,3 +166,4 @@ full HW-5, otherwise T2 fails.
 - Design rationale: `~/core/hexa-chip/.roadmap.hexa_chip §A.6.2`.
 - Recipe alignment: `~/core/bedrock/docs/runnable_surface_recipe.md`.
 - First downstream consumer: `hexa-chip` Phase D MCU controllers.
+- v1.0.0 milestone: HW-12 / 100% paper-tier coverage achieved 2026-05-08.
