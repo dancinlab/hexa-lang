@@ -1,0 +1,120 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/core.hexa — ESP32 core backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved. ★ FINAL per-vendor
+// peripheral — completes HW-12 coverage for esp32.
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz with FPU + cache (32 KB
+//            instruction-cache shared, plus per-core 32 KB data-cache via
+//            DPORT cache-MMU).
+// Chip ref:  ESP32 TRM §3 (system & memory) + §13 (cache MMU) + §28
+//            (RTC_CNTL sleep) + Xtensa LX6 ISA Reference §4.7 (interrupts /
+//            sleep modes) + Xtensa SR/CSR specials (CCOUNT / CCOMPARE0..2 /
+//            INTENABLE / INTERRUPT / RSIL).
+// Surface:   esp32_core_{now_us,sleep_us,panic,critical_enter,critical_exit,
+//            cache_invalidate,reset}(...)
+// Dispatch:  core.hexa selects this via cfg-flag.
+//
+// Architecture-specific (Xtensa LX6):
+//
+//   Xtensa special registers (accessed via RSR/WSR opcodes):
+//     CCOUNT                      cycle counter (32-bit, free-running)
+//     CCOMPARE0..2                3 timer-compare regs (auto-fire interrupt)
+//     INTENABLE                   interrupt enable mask (32 bits)
+//     INTERRUPT                   pending interrupts (set via WSR)
+//     INTCLEAR                    write to clear edge-triggered IRQs
+//     PS                          processor state (PS.INTLEVEL = current
+//                                                    interrupt threshold)
+//
+//   Cache MMU (in DPORT @ 0x3FF00000):
+//     DPORT_PRO_CACHE_CTRL_REG    PRO_CPU cache enable + invalidate
+//     DPORT_APP_CACHE_CTRL_REG    APP_CPU cache enable + invalidate
+//     DPORT_PRO_CACHE_INVALIDATE_REG   write 1 to flush
+//
+//   RTC_CNTL @ 0x3FF48000 — sleep modes + reset cause:
+//     RTC_CNTL_OPTIONS0_REG       SW_SYS_RST bit 31 → soft reset
+//     RTC_CNTL_RESET_STATE_REG    cause of last reset (per CPU)
+//     RTC_CNTL_DSLEEP_TIMER0/1    deep-sleep wake target
+//
+// Critical section: RSIL <new_level> = read PS.INTLEVEL into reg, then set
+// PS.INTLEVEL = new_level. Returns the old level for restoration.
+//
+// Sleep modes (RTC_CNTL controlled):
+//   - WAIT (light): WFI-equivalent, CPU clock-gated, RAM retained
+//   - DEEP-SLEEP: CPU power-gated, RTC alive, wake from RTC alarm /
+//                 ULP coprocessor / GPIO
+//
+// Reset: RTC_CNTL_OPTIONS0_REG.SW_SYS_RST = 1 forces full system reset.
+
+let MODULE_NAME = "esp32_core"
+let SIGMA_SLOT  = 0
+let PHI_KIND    = "digital"
+
+let DR_REG_DPORT_BASE   = 0x3FF00000
+let DR_REG_RTCCNTL_BASE = 0x3FF48000
+
+// Xtensa special-register numbers (used with RSR/WSR opcodes).
+let SR_CCOUNT     = 234
+let SR_CCOMPARE0  = 240
+let SR_INTENABLE  = 228
+let SR_INTERRUPT  = 226
+let SR_INTCLEAR   = 227
+let SR_PS         = 230
+
+// DPORT cache control offsets.
+let DPORT_PRO_CACHE_CTRL_REG       = 0x040
+let DPORT_PRO_CACHE_INVALIDATE_REG = 0x024
+
+// RTC_CNTL reset trigger.
+let RTC_CNTL_OPTIONS0_REG = 0x000
+
+let SYSCLK_HZ = 240000000   // 240 MHz CPU max
+let APB_CLK_HZ = 80000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_core_now_us() -> int {
+    // STUB: rsr.ccount → cycles; divide by (SYSCLK_HZ / 1e6) for µs.
+    //       For longer-term: use RTC_CNTL counter (esp32_rtc backend).
+    return 0
+}
+
+fn esp32_core_sleep_us(us: int) {
+    if us <= 0 { return }
+    // STUB: program CCOMPARE0 = CCOUNT + us·(SYSCLK/1e6); waiti 0
+    //       (Xtensa wait-for-interrupt; clock-gates CPU).
+}
+
+fn esp32_core_panic(msg: str) {
+    println("[esp32_core PANIC] " + msg)
+    // STUB: write msg via UART0; trigger break.n (Xtensa breakpoint)
+}
+
+fn esp32_core_critical_enter() -> int {
+    // STUB: rsil reg, 3 (raise INTLEVEL to 3, return prior PS.INTLEVEL)
+    return 0
+}
+
+fn esp32_core_critical_exit(prior: int) {
+    // STUB: wsr.ps prior; rsync
+}
+
+fn esp32_core_cache_invalidate() -> bool {
+    // STUB: write DPORT_PRO_CACHE_INVALIDATE_REG = 1; spin on completion bit
+    return true
+}
+
+fn esp32_core_reset() {
+    // STUB: write RTC_CNTL_OPTIONS0_REG with SW_SYS_RST bit 31 = 1
+}
+
+fn esp32_core_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_core sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  Xtensa LX6 dual @ " + str(SYSCLK_HZ) + " Hz; FPU + cache (32K I + 32K D)")
+    println("  CCOUNT/CCOMPARE for cycle timing; RSIL for critical section")
+    println("  cache mgmt via DPORT @ " + str(DR_REG_DPORT_BASE) + "; reset via RTC_CNTL")
+}

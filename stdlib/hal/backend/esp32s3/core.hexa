@@ -1,0 +1,113 @@
+#!hexa strict
+// stdlib/hal/backend/esp32s3/core.hexa — ESP32-S3 core backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved. ★ FINAL per-vendor
+// peripheral — completes HW-12 coverage for esp32s3 (and last vendor in
+// the v0.15.0 batch → reaches 12/12 = 100% per-vendor across all 5 vendors).
+//
+// Target:    ESP32-S3 Xtensa LX7 dual-core @ 240 MHz + ULP-RISC-V
+//            coprocessor + AI vector accelerator (LX7's PIE — Processor
+//            Instruction Extension). 32 KB I-cache + 32 KB D-cache (per
+//            core) via EXT_MEM. Octal SPI / Quad SPI external PSRAM
+//            up to 32 MB.
+// Chip ref:  ESP32-S3 TRM §3 + §10 (RTC_CNTL) + §11 (cache) +
+//            §15 (ULP-RISC-V) + Xtensa LX7 ISA Reference + Xtensa
+//            PIE ext for vector ops.
+// Surface:   esp32s3_core_{now_us,sleep_us,panic,critical_enter,critical_exit,
+//            cache_invalidate,cache_clean,reset}(...)
+// Dispatch:  core.hexa selects this via cfg-flag.
+//
+// Architecture-specific (Xtensa LX7):
+//
+//   Same special-register set as ESP32 LX6 (CCOUNT, CCOMPARE0..2,
+//   INTENABLE, INTERRUPT, INTCLEAR, PS) but LX7 adds:
+//   - **PIE registers** for SIMD/vector ops (Q0..Q7 = 128-bit; FFT/CNN ops)
+//   - **MISC0..MISC1** vendor SR for prefetch hints
+//
+//   Cache (EXT_MEM @ 0x600C4000) — distinct from C3 layout:
+//     EXTMEM_DCACHE_CTRL_REG     bit DCACHE_ENABLE (separate enable)
+//     EXTMEM_DCACHE_PRELOAD_*    pre-fetch control
+//     EXTMEM_DCACHE_AUTOLOAD_*   auto-fetch on PSRAM access
+//     EXTMEM_DCACHE_TAG_POWER_*  cache RAM power control
+//
+//   PSRAM caveat: ESP32-S3 supports up to 32 MB external PSRAM mapped at
+//   0x3C000000..0x3FFFFFFF (cached). DMA from cached PSRAM requires
+//   Cache_WriteBack_Addr() flush before issuing.
+//
+//   RTC_CNTL @ 0x60008000 — same pattern as C3, plus ULP-RISC-V control:
+//     RTC_CNTL_ULP_CP_TIMER_REG   ULP-RISC-V wake timer
+//     RTC_CNTL_ULP_CP_CTRL_REG    ULP-RISC-V program counter / start
+//
+// LX7 vs LX6: LX7 adds PIE (vector ops) and slightly different cache
+// management offsets, but the high-level surface is unchanged.
+
+let MODULE_NAME = "esp32s3_core"
+let SIGMA_SLOT  = 0
+let PHI_KIND    = "digital"
+
+let DR_REG_DPORT_BASE    = 0x600C0000   // S3 SYSTEM registers (replaces ESP32 DPORT)
+let DR_REG_RTCCNTL_BASE  = 0x60008000
+let DR_REG_EXTMEM_BASE   = 0x600C4000
+
+// Xtensa special-register numbers (same as LX6).
+let SR_CCOUNT    = 234
+let SR_CCOMPARE0 = 240
+let SR_INTENABLE = 228
+let SR_PS        = 230
+
+let RTC_CNTL_OPTIONS0_REG = 0x000
+
+let SYSCLK_HZ = 240000000   // 240 MHz LX7 max
+let PSRAM_BASE = 0x3C000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32s3_core_now_us() -> int {
+    // STUB: rsr.ccount → cycles / (SYSCLK / 1e6); same as ESP32 LX6 path
+    return 0
+}
+
+fn esp32s3_core_sleep_us(us: int) {
+    if us <= 0 { return }
+    // STUB: program CCOMPARE0; waiti 0
+}
+
+fn esp32s3_core_panic(msg: str) {
+    println("[esp32s3_core PANIC] " + msg)
+    // STUB: write msg via UART0 + USB-Serial-JTAG; trigger break.n
+}
+
+fn esp32s3_core_critical_enter() -> int {
+    // STUB: rsil reg, 3 (raise INTLEVEL to 3, return prior)
+    return 0
+}
+
+fn esp32s3_core_critical_exit(prior: int) {
+    // STUB: wsr.ps prior; rsync
+}
+
+fn esp32s3_core_cache_invalidate() -> bool {
+    // STUB: clear EXTMEM_DCACHE_PRELOAD valid bit; write invalidate trigger
+    return true
+}
+
+fn esp32s3_core_cache_clean() -> bool {
+    // STUB: ESP32-S3 supports separate WB (writeback) + INV; for PSRAM
+    //       coherency, call cache_clean before DMA writes from cache.
+    return true
+}
+
+fn esp32s3_core_reset() {
+    // STUB: write RTC_CNTL_OPTIONS0_REG with SW_SYS_RST bit
+}
+
+fn esp32s3_core_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32s3_core sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  Xtensa LX7 dual @ " + str(SYSCLK_HZ) + " Hz + ULP-RISC-V; PIE 128-bit vector")
+    println("  cache: 32K I + 32K D per core; PSRAM @ " + str(PSRAM_BASE) + " (up to 32 MB)")
+    println("  cache_clean for PSRAM-DMA coherency; ULP-RISC-V via RTC_CNTL_ULP_CP_*")
+}

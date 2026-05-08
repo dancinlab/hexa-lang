@@ -1,5 +1,111 @@
 # stdlib/hal CHANGELOG
 
+## [0.15.0] - 2026-05-08 — **HW-12 / 100% per-vendor coverage milestone**
+
+### Added
+- `backend/{stm32h7,rp2040,esp32,esp32c3,esp32s3}/core.hexa` —
+  σ-slot 0 (core: runtime · panic · time · critical-section · cache)
+  HW-backend stubs across ALL 5 vendors. **Final per-vendor peripheral
+  gap closed**; per-vendor coverage now 12/12 = 100% across all 5
+  vendors. Total embedded backend stub count: 55 → 60.
+
+  This iter spans 4 distinct CPU-level architectures (each with its
+  own special-register / CSR / SR / SCB convention):
+
+  - **stm32h7/core.hexa** — ARM Cortex-M7 with FPU + L1 cache
+    (16 KB I + 16 KB D). System Control Block at architectural
+    0xE000ED00 (CPUID/VTOR/AIRCR/SCR/CCR); DWT_CYCCNT @ 0xE0001004
+    for sub-µs cycle timing; cache mgmt via SCB_ICIALLU + DCISW
+    set/way; reset via SCB_AIRCR.SYSRESETREQ (key 0x05FA).
+    Critical section: CPSID i / MSR PRIMASK.
+
+  - **rp2040/core.hexa** — ARM Cortex-M0+ NO cache / NO FPU / NO MPU.
+    Same SCB layout but simpler. NO DWT cycle counter — uses RP2040
+    TIMER block (0x40054000, 64-bit µs) for now_us. RESETS @
+    0x4000C000 + WATCHDOG @ 0x40058000 (preferred reset path,
+    preserves SCRATCH boot reason). 8 × 32-bit WATCHDOG_SCRATCHn
+    survive reset.
+
+  - **esp32/core.hexa** — Xtensa LX6 dual-core @ 240 MHz with FPU +
+    32 KB I-cache + 32 KB D-cache. Special registers via RSR/WSR
+    opcodes: CCOUNT (cycle ctr) / CCOMPARE0..2 (timer compares) /
+    INTENABLE / INTERRUPT / INTCLEAR / PS (intlevel). Critical
+    section via RSIL <new_level> (atomic raise + return prior).
+    Cache mgmt via DPORT_PRO_CACHE_CTRL_REG @ 0x3FF00000. Reset
+    via RTC_CNTL_OPTIONS0_REG.SW_SYS_RST.
+
+  - **esp32c3/core.hexa** — RV32IMC RISC-V single-core @ 160 MHz NO FPU.
+    Standard RV CSRs (mhartid/mstatus/mie/mtvec/mcycle/mcycleh).
+    Critical section via csrrci mstatus, 0x8 (clear MIE, return prior).
+    Sleep via wfi (RISC-V wait-for-interrupt). Cache via EXT_MEM @
+    0x600C4000 (16 KB I + 16 KB D). SYSTIMER block @ 0x60023000 for
+    long-term µs (52-bit @ 16 MHz).
+
+  - **esp32s3/core.hexa** — Xtensa LX7 dual-core @ 240 MHz + ULP-
+    RISC-V coprocessor + **PIE (Processor Instruction Extension)** —
+    128-bit vector ops (Q0..Q7 registers) for FFT / CNN inference.
+    Same SR set as LX6 (CCOUNT/CCOMPARE0..2/INTENABLE/PS). Cache
+    layout DISTINCT from C3: EXTMEM_DCACHE_PRELOAD_* + AUTOLOAD_* +
+    TAG_POWER_*; supports cache_clean (writeback) separately from
+    invalidate for PSRAM-DMA coherency. PSRAM @ 0x3C000000..0x3FFFFFFF
+    (up to 32 MB).
+
+  Surface (mirrors `stdlib/hal/core.hexa` sim):
+    core_now_us() -> int
+    core_sleep_us(us: int)
+    core_panic(msg: str)
+    core_critical_enter() -> int     (returns prior IRQ mask)
+    core_critical_exit(prior: int)
+    core_cache_invalidate() -> bool  (where applicable)
+    core_cache_clean() -> bool       (esp32s3 + stm32h7 only)
+    core_reset()
+
+### MILESTONE: HW-12 = 100% per-vendor coverage
+
+After v0.15.0, every registered vendor (stm32h7 / rp2040 / esp32 /
+esp32c3 / esp32s3) has paper-skeleton stubs for ALL 12 σ-slots:
+
+  σ=0  core    σ=1  gpio    σ=2  i2c    σ=3  spi
+  σ=4  uart    σ=5  adc     σ=6  dac    σ=7  pwm
+  σ=8  timer   σ=9  intr    σ=10 dma    σ=11 rtc
+
+Total 5 × 12 = **60 embedded backend stub files** in
+`stdlib/hal/backend/<vendor>/<peripheral>.hexa`.
+
+ISA family + variant coverage at v0.15.0:
+  - ARM Cortex-M7 (stm32h7) — FPU + cache + MPU + DSP-extensions
+  - ARM Cortex-M0+ (rp2040) — minimal: no cache / no FPU / no MPU
+  - Xtensa LX6 (esp32) — FPU + cache + dual-core
+  - Xtensa LX7 (esp32s3) — FPU + cache + dual-core + ULP-RISC-V
+                            coprocessor + PIE 128-bit vector ops
+  - RISC-V RV32IMC (esp32c3) — no FPU + cache, single-core
+
+5 distinct CPU classes, 4 ISAs (ARM × 2, Xtensa × 2, RISC-V × 1),
+unified behind one stdlib/hal surface.
+
+### Changed
+- HW-backend stub file count: 55 → 60 (5 vendors × 12 peripherals).
+- Per-vendor coverage: 11/12 → 12/12 = **100%** across all 5 vendors.
+- F-HAL closure unchanged at 67% × 5 (sat-1 ✓ holds).
+
+### Provenance
+- STM32H7 SCB / DWT / cache from RM0433 §11.4-5 + Cortex-M7 TRM.
+- RP2040 SCB / TIMER / WATCHDOG from RP2040 Datasheet §2.6/2.8/4.6.
+- ESP32 LX6 SR set from ESP32 TRM §3 + Xtensa LX6 ISA Reference §4.7.
+- ESP32-C3 RV CSRs + EXT_MEM from ESP32-C3 TRM §11 + RISC-V Privileged ISA.
+- ESP32-S3 LX7 + PIE + EXT_MEM from ESP32-S3 TRM §11 + Xtensa LX7 ISA.
+
+### Roadmap (post-12/12 milestone)
+- v1.0.0 release candidate: full HW-12 + sat-1 + multi-ISA validated +
+  GPGPU axis (compute.hexa from v0.13.0). Tag the milestone.
+- v0.16.0+ — esp32c6 sub-vendor (WiFi 6 / Zigbee / Thread / Matter,
+  RV32IMAC) for **6th vendor** + 2nd RISC-V variant (different intr ctrl).
+- T3 tier — actual MMIO cross-compile harness (Cortex-M0+/M7 binary
+  out + Renode emulation OR QEMU + DAP debug). Lifts F-HAL closure
+  from 67% × 5 → 100% × 5.
+- compute.hexa first vendor backend (CUDA / WebGPU) — fills GPGPU
+  σ=12 lattice.
+
 ## [0.14.0] - 2026-05-08
 
 ### Added
