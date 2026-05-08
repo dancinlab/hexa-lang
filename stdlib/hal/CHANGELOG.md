@@ -1,5 +1,26 @@
 # stdlib/hal CHANGELOG
 
+## [1.22.0] - 2026-05-09
+
+### Added — `numerics_ai_native_prov_dichotomy.hexa` F-AI-NATIVE-3 T2 numerical (lifts to 67%)
+- `numerics_ai_native_prov_dichotomy.hexa` (~140 lines) — third T2
+  fixture for AI-native axis. Cross-checks the φ=2 provenance dichotomy
+  (FACT / HYPOTHESIS) + promotion-counter-MMU threshold range
+  [φ²=4, σ=12] against on-disk ai.hexa source.
+
+  8 numerical checks: ai.hexa present / PHI=2 / PROV_FACT=0 /
+  PROV_HYPOTHESIS=1 / strict dichotomy (distinct values) / THRESHOLD_MIN=4
+  (= φ²) / THRESHOLD_MAX=12 (= σ) / THRESHOLD_MIN = φ² algebraic identity
+  from on-disk PHI.
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_PROV_DICHOTOMY__ PASS`.
+  Pattern: numerics_gpgpu_ir_dichotomy.hexa (sister φ=2 dichotomy
+  fixture for GPGPU axis).
+
+  **F-AI-NATIVE-3 closure lifted: 33% → 67%**. 3/6 T2 fixtures landed
+  for AI-native axis (50%); remaining 3 (tile_count/bt_coverage/pdk_set)
+  planned v1.23.0+. Phase G iter 9+5+10.
+
 ## [1.21.0] - 2026-05-09
 
 ### Added — `numerics_ai_native_lifecycle.hexa` F-AI-NATIVE-2 T2 numerical (lifts to 67%)

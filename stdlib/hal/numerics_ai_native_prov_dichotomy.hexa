@@ -1,0 +1,151 @@
+#!hexa strict
+// stdlib/hal/numerics_ai_native_prov_dichotomy.hexa — F-AI-NATIVE-3 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-AI-NATIVE-3
+// (φ=2 provenance kinds: FACT / HYPOTHESIS; falsifier_ai_native_check
+// .hexa registry).
+//
+// T1 (ai.hexa internal asserts: PHI=2, PROV_FACT=0, PROV_HYPOTHESIS=1)
+// closes the algebraic identity:
+//
+//   |provenance_kinds| = φ = 2 ∧ PROV_FACT/HYPOTHESIS = 0/1
+//
+// T2 (this script) cross-checks the φ-dichotomy NUMERICALLY by reading
+// ai.hexa source. Also cross-checks the promotion-counter-MMU threshold
+// range [φ²=4, σ=12] consistency.
+//
+// Identities checked:
+//   1. ai.hexa exists at stdlib/hal/ai.hexa.
+//   2. ai.hexa declares PHI = 2.
+//   3. ai.hexa declares PROV_FACT       = 0.
+//   4. ai.hexa declares PROV_HYPOTHESIS = 1.
+//   5. PROV values are CONTIGUOUS 0..1 (no gaps, no dupes — strict dichotomy).
+//   6. ai.hexa declares THRESHOLD_MIN = 4 (= φ²).
+//   7. ai.hexa declares THRESHOLD_MAX = 12 (= σ).
+//   8. THRESHOLD_MIN = φ² (algebraic identity from on-disk PHI value).
+//
+// PASS = every identity holds; FAIL = any drift.
+//
+// Phase G iter 9+5+10; F-AI-NATIVE-3 closure 33% → 67%.
+// Pattern: numerics_gpgpu_ir_dichotomy.hexa (sister φ=2 dichotomy
+// fixture for the GPGPU axis; this is the AI-native equivalent for
+// the prov-bit dichotomy).
+
+let EXPECTED_PHI         = 2
+let EXPECTED_PROV_FACT       = 0
+let EXPECTED_PROV_HYPOTHESIS = 1
+let EXPECTED_THRESHOLD_MIN   = 4    // φ²
+let EXPECTED_THRESHOLD_MAX   = 12   // σ
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _extract_let_int(src: str, name: str) -> int {
+    let pat = "let " + name
+    let idx = src.index_of(pat)
+    if idx < 0 { return -1 }
+    let mut i = idx + pat.len()
+    while i < src.len() && src.char_at(i) != "=" { i = i + 1 }
+    if i >= src.len() { return -1 }
+    i = i + 1
+    while i < src.len() && (src.char_at(i) == " " || src.char_at(i) == "\t") { i = i + 1 }
+    let mut digits = ""
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch >= "0" && ch <= "9" { digits = digits + ch } else { break }
+        i = i + 1
+    }
+    if digits.len() == 0 { return -1 }
+    return int(digits)
+}
+
+fn check_const(src: str, name: str, expected: int) -> int {
+    let v = _extract_let_int(src, name)
+    let ok = v == expected
+    _check(ok,
+           "ai.hexa declares " + name + " = " + str(expected),
+           "got " + str(v))
+    return v
+}
+
+fn check_phi_squared_eq_threshold_min(phi: int, thresh_min: int) {
+    let lhs = phi * phi
+    let ok = lhs == thresh_min
+    _check(ok,
+           "THRESHOLD_MIN = φ² (algebraic identity from on-disk PHI value)",
+           str(phi) + "²=" + str(lhs) + " want " + str(thresh_min))
+}
+
+fn check_dichotomy_strict(src: str) {
+    // PROV_FACT = 0 ∧ PROV_HYPOTHESIS = 1 — exactly 2 distinct values.
+    let f = _extract_let_int(src, "PROV_FACT")
+    let h = _extract_let_int(src, "PROV_HYPOTHESIS")
+    let ok = (f == 0) && (h == 1) && (f != h)
+    _check(ok,
+           "PROV values are STRICT DICHOTOMY (FACT=0, HYPOTHESIS=1, distinct)",
+           "FACT=" + str(f) + " HYPOTHESIS=" + str(h))
+}
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_ai_native_prov_dichotomy: F-AI-NATIVE-3 T2 numerical")
+    println("========================================================================")
+    println("  expected: φ=" + str(EXPECTED_PHI) + " PROV_FACT=" + str(EXPECTED_PROV_FACT) +
+            " PROV_HYPOTHESIS=" + str(EXPECTED_PROV_HYPOTHESIS) +
+            " THRESHOLD_MIN=" + str(EXPECTED_THRESHOLD_MIN) + " (φ²) THRESHOLD_MAX=" + str(EXPECTED_THRESHOLD_MAX) + " (σ)")
+    println("")
+
+    let root = _root()
+    let p = root + "/stdlib/hal/ai.hexa"
+    if !_exists(p) {
+        _check(false, "ai.hexa present at stdlib/hal/ai.hexa", "MISSING")
+        println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_PROV_DICHOTOMY__ FAIL")
+        exit(1)
+    }
+    _check(true, "ai.hexa present at stdlib/hal/ai.hexa", "found")
+
+    let src = read_file(p)
+
+    let phi          = check_const(src, "PHI",            EXPECTED_PHI)
+    check_const(src, "PROV_FACT",       EXPECTED_PROV_FACT)
+    check_const(src, "PROV_HYPOTHESIS", EXPECTED_PROV_HYPOTHESIS)
+    check_dichotomy_strict(src)
+    let thresh_min   = check_const(src, "THRESHOLD_MIN",  EXPECTED_THRESHOLD_MIN)
+    check_const(src, "THRESHOLD_MAX",   EXPECTED_THRESHOLD_MAX)
+    check_phi_squared_eq_threshold_min(phi, thresh_min)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-AI-NATIVE-3: φ=2 provenance kinds FACT/HYPOTHESIS (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_PROV_DICHOTOMY__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_PROV_DICHOTOMY__ PASS")
+    exit(0)
+}
+
+main()
