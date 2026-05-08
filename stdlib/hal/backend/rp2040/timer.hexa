@@ -1,0 +1,115 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/timer.hexa — RP2040 timer backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    Raspberry Pi RP2040 dual Cortex-M0+ @ 133 MHz.
+// Chip ref:  RP2040 Datasheet §4.6 Timer (single 64-bit time counter
+//            + 4 alarms; system tick).
+// Surface:   rp2040_timer_{configure,start,stop,now_ticks,set_callback}(...)
+// Dispatch:  timer.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   TIMER:  base = 0x40054000   (single instance, 4 alarms)
+//
+//     TIMEHW                    0x000   write-high-half (high 32 bits)
+//     TIMELW                    0x004   write-low-half  (low 32 bits)
+//     TIMEHR                    0x008   read-high-half
+//     TIMELR                    0x00C   read-low-half (atomic snapshot)
+//     ALARM0                    0x010   alarm 0 trigger value (low 32 bits)
+//     ALARM1                    0x014
+//     ALARM2                    0x018
+//     ALARM3                    0x01C
+//     ARMED                     0x020   bits 0..3 = alarm armed flags
+//     TIMERAWH                  0x024   raw read high
+//     TIMERAWL                  0x028   raw read low
+//     INTR                      0x034   raw interrupt
+//     INTE                      0x038   interrupt enable
+//     INTF                      0x03C   force interrupt
+//     INTS                      0x040   masked interrupt status
+//
+// Tick rate: 1 µs (counter increments once per microsecond, sourced
+// from the watchdog tick generator). 64-bit counter never wraps in
+// realistic time (584,000+ years).
+//
+// 4 alarms map naturally to the 4-handle ceiling per stdlib/hal
+// convention. Each alarm can be programmed to fire once at a future
+// time value; periodic mode is implemented by re-arming in the ISR.
+
+let MODULE_NAME = "rp2040_timer"
+let SIGMA_SLOT  = 8
+let PHI_KIND    = "digital"
+
+let TIMER_BASE = 0x40054000
+
+let TIMEHW   = 0x000
+let TIMELW   = 0x004
+let TIMEHR   = 0x008
+let TIMELR   = 0x00C
+let ALARM0   = 0x010
+let ARMED    = 0x020
+let TIMERAWL = 0x028
+let INTR     = 0x034
+let INTE     = 0x038
+let INTS     = 0x040
+
+let MODE_ONESHOT  = 0
+let MODE_PERIODIC = 1
+let MODE_CAPTURE  = 2
+let MODE_PWM      = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn rp2040_timer_configure(idx: int, mode: int, period_us: int) -> int {
+    if idx < 0 || idx > 3 { return -1 }
+    if mode < 0 || mode > 3 { return -2 }
+    if period_us < 1 { return -3 }
+    // STUB: alarm idx programmed to fire at TIMERAWL + period_us;
+    //       periodic = re-arm in ISR; capture not directly supported (use PWM block).
+    return idx
+}
+
+fn rp2040_timer_start(handle: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    // STUB: set ARMED.bit(handle)
+    return true
+}
+
+fn rp2040_timer_stop(handle: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    // STUB: write ARMED with bit(handle) clear
+    return true
+}
+
+fn rp2040_timer_now_ticks(handle: int) -> int {
+    if handle < 0 { return -1 }
+    // STUB: read TIMELR (snapshot of low 32 bits, 1-µs resolution)
+    return 0
+}
+
+fn rp2040_timer_set_callback(handle: int, period_us: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    // STUB: set INTE.bit(handle); install NVIC IRQ_TIMER_<handle>
+    return true
+}
+
+fn rp2040_timer_clear(handle: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    // STUB: write INTR.bit(handle) (W1C)
+    return true
+}
+
+fn rp2040_timer_report(handle: int) -> str {
+    return "[rp2040_timer sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn rp2040_timer_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_timer sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  TIMER=" + str(TIMER_BASE) + " (4 alarms, 64-bit µs counter)")
+    println("  tick rate: 1 µs; counter never wraps in realistic time")
+}

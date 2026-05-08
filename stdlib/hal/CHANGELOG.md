@@ -1,5 +1,75 @@
 # stdlib/hal CHANGELOG
 
+## [0.8.0] - 2026-05-08
+
+### Added
+- `backend/{stm32h7,rp2040,esp32,esp32c3,esp32s3}/timer.hexa` —
+  σ-slot 8 (timer) HW-backend stubs added for ALL 5 registered
+  vendors simultaneously. First **peripheral-axis expansion** in
+  the backend tree (prior iters expanded the vendor axis); per-vendor
+  coverage moves from 5/12 (HW-5 only) to 6/12 across all 5 vendors.
+  - `stm32h7/timer.hexa` — TIM2 0x40000000 + TIM3 0x40000400 + TIM6
+                            0x40001000 + TIM1 0x40010000 (selected
+                            representatives from 16 timers in H7).
+                            APB_TIM=200 MHz; period = (PSC+1)·(ARR+1)/200.
+  - `rp2040/timer.hexa`  — TIMER 0x40054000 (single instance, 4 alarms,
+                            64-bit µs counter; tick = 1 µs; never wraps
+                            in realistic time).
+  - `esp32/timer.hexa`   — TIMG0 0x3FF5F000 + TIMG1 0x3FF60000
+                            (4 × 64-bit GP timers across 2 groups).
+  - `esp32c3/timer.hexa` — TIMG0 0x6001F000 + TIMG1 0x60020000
+                            (2 × 54-bit GP timers; smaller than ESP32).
+  - `esp32s3/timer.hexa` — TIMG0 0x6001F000 + TIMG1 0x60020000
+                            (4 × 54-bit GP timers; same family as ESP32-C3).
+
+  Surface (mirrors `stdlib/hal/timer.hexa` sim):
+    timer_configure(idx, mode, period_us) -> int
+    timer_start(handle) -> bool
+    timer_stop(handle)  -> bool
+    timer_now_ticks(handle) -> int
+    timer_set_callback(handle, period_us) -> bool
+    timer_clear(handle) -> bool
+    timer_report(handle) -> str
+
+  4 modes per sim convention: ONESHOT / PERIODIC / CAPTURE / PWM.
+  ≤ 4 timer handles per process (matches J₂/n = 4 default ceiling).
+
+### Changed
+- HW-backend stub file count: 25 (5 vendors × HW-5) → 30 (5 × 6 stubs).
+- Per-vendor peripheral coverage: 5/12 → 6/12 across all 5 vendors.
+- The numerics_sim_marker_density.hexa F-HAL-5 T2 ENFORCES that every
+  registered vendor covers the canonical HW-5; timer is **outside**
+  the canonical HW-5 set, so the stubs are documentation-tier
+  additions that expand the per-vendor footprint without changing
+  the falsifier-bound invariant. F-HAL closure unchanged at 67% × 5.
+
+### ISA / vendor coverage retained
+- All 5 vendors (stm32h7, rp2040, esp32, esp32c3, esp32s3) covered
+  uniformly. The 4 distinct CPU classes (ARM Cortex-M7, ARM Cortex-M0+,
+  Xtensa LX6, Xtensa LX7+ULP-RISC-V, RISC-V RV32IMC) all gain timer
+  support in this iter.
+
+### Provenance
+- Register sketches pulled from each vendor's reference manual /
+  datasheet via web-search + training data cross-reference (per
+  autonomy directive web-search mandate). Base addresses confirmed:
+    - STM32H7 TIM2/3/6/1 from RM0433 §39/40/43.
+    - RP2040 TIMER 0x40054000 from RP2040 Datasheet §4.6.
+    - ESP32 TIMG0/1 0x3FF5F000/0x3FF60000 from ESP32 TRM §17.
+    - ESP32-C3 TIMG0/1 0x6001F000/0x60020000 from ESP32-C3 TRM §15.
+    - ESP32-S3 TIMG0/1 0x6001F000/0x60020000 from ESP32-S3 TRM §15.
+- IP cells: STM32H7 has the most varied (TIM advanced/general/basic);
+  RP2040 has a single distinctive 64-bit-counter+4-alarm IP; the
+  3 ESP32 family chips share the same Timer Group IP cell scaled per
+  variant (4 × 64-bit on ESP32, 2 × 54-bit on C3, 4 × 54-bit on S3).
+
+### Roadmap
+- v0.9.0 candidate: extend to dac/pwm/intr/dma/rtc — picking 1 peripheral
+  per iter × 5 vendors. Next likely target: pwm (motor / LED control,
+  universally supported).
+- v1.0.0 candidate: complete per-vendor HW-12 coverage AND first T3-tier
+  cross-compile (Cortex-M0+ binary for rp2040 with Renode emulation).
+
 ## [0.7.0] - 2026-05-08
 
 ### Added

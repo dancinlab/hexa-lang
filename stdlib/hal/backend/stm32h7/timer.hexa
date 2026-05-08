@@ -1,0 +1,116 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/timer.hexa — STM32H7 timer backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved (timer.hexa
+// sim backend ships before this; this is HW-backend addition).
+//
+// Target:    STMicroelectronics STM32H7 Cortex-M7 @ 480 MHz.
+// Chip ref:  RM0433 reference manual §39 General-purpose timers (TIM2-5),
+//            §40 Advanced-control timers (TIM1, TIM8), §43 Basic timers
+//            (TIM6, TIM7), §44 Low-power timer (LPTIM1-5).
+// Surface:   stm32h7_timer_{configure,start,stop,now_ticks,set_callback}(...)
+// Dispatch:  timer.hexa selects this via cfg-flag.
+//
+// MMIO layout (sketch — selected representative timers):
+//
+//   TIM2:  base = 0x40000000   (32-bit GP timer)
+//   TIM3:  base = 0x40000400   (16-bit GP)
+//   TIM4:  base = 0x40000800   (16-bit GP)
+//   TIM5:  base = 0x40000C00   (32-bit GP)
+//   TIM6:  base = 0x40001000   (16-bit basic, DAC trigger)
+//   TIM7:  base = 0x40001400   (16-bit basic)
+//   TIM1:  base = 0x40010000   (16-bit advanced, complementary outputs)
+//   TIM8:  base = 0x40010400   (16-bit advanced)
+//
+//   TIM_CR1                    0x000   CEN bit 0 (counter enable),
+//                                       DIR bit 4, OPM bit 3 (one-pulse)
+//   TIM_DIER                   0x00C   UIE bit 0 (update interrupt enable)
+//   TIM_SR                     0x010   UIF bit 0 (update flag)
+//   TIM_CNT                    0x024   counter value
+//   TIM_PSC                    0x028   prescaler (16-bit)
+//   TIM_ARR                    0x02C   auto-reload register (period - 1)
+//   TIM_CCMR1                  0x018   capture/compare mode regs
+//   TIM_CCR1..4                0x034..0x040   compare values per channel
+//
+// Period calc: t_tick = (PSC+1) / f_clk ; period_total = (ARR+1) * t_tick.
+// e.g. f_APB1_TIM = 200 MHz, PSC = 199 → t_tick = 1 µs;
+//      ARR = 999 → period = 1000 µs = 1 kHz.
+
+let MODULE_NAME = "stm32h7_timer"
+let SIGMA_SLOT  = 8
+let PHI_KIND    = "digital"
+
+let TIM2_BASE = 0x40000000
+let TIM3_BASE = 0x40000400
+let TIM6_BASE = 0x40001000
+let TIM1_BASE = 0x40010000
+
+let TIM_CR1   = 0x000
+let TIM_DIER  = 0x00C
+let TIM_SR    = 0x010
+let TIM_CNT   = 0x024
+let TIM_PSC   = 0x028
+let TIM_ARR   = 0x02C
+
+let MODE_ONESHOT  = 0
+let MODE_PERIODIC = 1
+let MODE_CAPTURE  = 2
+let MODE_PWM      = 3
+
+let APB_TIM_HZ = 200000000   // typ STM32H7 APB1 timer clock
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn stm32h7_timer_configure(idx: int, mode: int, period_us: int) -> int {
+    if idx < 0 || idx > 3 { return -1 }
+    if mode < 0 || mode > 3 { return -2 }
+    if period_us < 1 { return -3 }
+    // STUB: pick TIM2/3/6/1 by idx; set RCC clock-enable; compute PSC + ARR
+    //       from period_us; CR1.OPM=1 if oneshot; DIER.UIE=1; do not start yet.
+    return idx
+}
+
+fn stm32h7_timer_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: set TIM_CR1.CEN = 1
+    return true
+}
+
+fn stm32h7_timer_stop(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: clear TIM_CR1.CEN
+    return true
+}
+
+fn stm32h7_timer_now_ticks(handle: int) -> int {
+    if handle < 0 { return -1 }
+    // STUB: return TIM_CNT
+    return 0
+}
+
+fn stm32h7_timer_set_callback(handle: int, period_us: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: install ISR via NVIC (TIM<n>_IRQn), set DIER.UIE
+    return true
+}
+
+fn stm32h7_timer_clear(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: write 0 to TIM_CNT
+    return true
+}
+
+fn stm32h7_timer_report(handle: int) -> str {
+    return "[stm32h7_timer sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn stm32h7_timer_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[stm32h7_timer sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  TIM2=" + str(TIM2_BASE) + " TIM3=" + str(TIM3_BASE) +
+            " TIM6=" + str(TIM6_BASE) + " TIM1=" + str(TIM1_BASE))
+    println("  APB_TIM=200 MHz; period_us = (PSC+1)·(ARR+1)/200")
+}

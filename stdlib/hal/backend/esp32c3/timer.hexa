@@ -1,0 +1,98 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/timer.hexa — ESP32-C3 timer backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C3 RV32IMC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C3 TRM §15 Timer Group (2 groups × 1 timer each
+//            = 2 × 54-bit GP timers; smaller than ESP32's 4).
+// Surface:   esp32c3_timer_{configure,start,stop,now_ticks,set_callback}(...)
+// Dispatch:  timer.hexa selects this via cfg-flag.
+//
+// MMIO layout (peripheral region 0x6000xxxx, RISC-V):
+//
+//   TIMG0:  base = DR_REG_TIMERGROUP0_BASE = 0x6001F000
+//   TIMG1:  base = DR_REG_TIMERGROUP1_BASE = 0x60020000
+//
+//   TIMG_T0CONFIG_REG          0x000   T0_EN/INCREASE/AUTORELOAD/DIVIDER/
+//                                       EDGE_INT_EN/LEVEL_INT_EN/ALARM_EN
+//   TIMG_T0LO_REG              0x004   counter low 32 bits (read)
+//   TIMG_T0HI_REG              0x008   counter high 22 bits (54-bit total)
+//   TIMG_T0UPDATE_REG          0x00C
+//   TIMG_T0ALARMLO_REG         0x010
+//   TIMG_T0ALARMHI_REG         0x014
+//   TIMG_T0LOAD_LO_REG         0x018
+//   TIMG_T0LOAD_REG            0x020
+//
+// Same IP family as ESP32 / S3 timers, scaled down: 1 timer per group
+// (vs 2 in ESP32), 54-bit (vs 64-bit). At 160 MHz with DIVIDER=160,
+// tick = 1 µs; 54-bit counter wraps after ~571 years.
+
+let MODULE_NAME = "esp32c3_timer"
+let SIGMA_SLOT  = 8
+let PHI_KIND    = "digital"
+
+let DR_REG_TIMERGROUP0_BASE = 0x6001F000
+let DR_REG_TIMERGROUP1_BASE = 0x60020000
+
+let TIMG_T0CONFIG_REG  = 0x000
+let TIMG_T0LO_REG      = 0x004
+let TIMG_T0HI_REG      = 0x008
+let TIMG_T0UPDATE_REG  = 0x00C
+let TIMG_T0ALARMLO_REG = 0x010
+let TIMG_T0LOAD_REG    = 0x020
+
+let APB_CLK_HZ = 80000000   // C3 APB derived from 160-MHz core
+
+let MODE_ONESHOT  = 0
+let MODE_PERIODIC = 1
+let MODE_CAPTURE  = 2
+let MODE_PWM      = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_timer_configure(idx: int, mode: int, period_us: int) -> int {
+    if idx < 0 || idx > 1 { return -1 }   // only 2 timers on C3
+    if mode < 0 || mode > 3 { return -2 }
+    if period_us < 1 { return -3 }
+    return idx
+}
+
+fn esp32c3_timer_start(handle: int) -> bool {
+    if handle < 0 || handle > 1 { return false }
+    return true
+}
+
+fn esp32c3_timer_stop(handle: int) -> bool {
+    if handle < 0 || handle > 1 { return false }
+    return true
+}
+
+fn esp32c3_timer_now_ticks(handle: int) -> int {
+    if handle < 0 { return -1 }
+    return 0
+}
+
+fn esp32c3_timer_set_callback(handle: int, period_us: int) -> bool {
+    if handle < 0 || handle > 1 { return false }
+    return true
+}
+
+fn esp32c3_timer_clear(handle: int) -> bool {
+    if handle < 0 || handle > 1 { return false }
+    return true
+}
+
+fn esp32c3_timer_report(handle: int) -> str {
+    return "[esp32c3_timer sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c3_timer_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_timer sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  TIMG0=" + str(DR_REG_TIMERGROUP0_BASE) + " TIMG1=" + str(DR_REG_TIMERGROUP1_BASE))
+    println("  2 × 54-bit GP timers (smaller than ESP32's 4)")
+}

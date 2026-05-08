@@ -1,0 +1,112 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/timer.hexa — ESP32 timer backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz.
+// Chip ref:  ESP32 Technical Reference Manual §17 Timer Group
+//            (2 timer groups × 2 timers each = 4 × 64-bit GP timers).
+// Surface:   esp32_timer_{configure,start,stop,now_ticks,set_callback}(...)
+// Dispatch:  timer.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   TIMG0:  base = DR_REG_TIMERGROUP0_BASE = 0x3FF5F000
+//   TIMG1:  base = DR_REG_TIMERGROUP1_BASE = 0x3FF60000
+//
+//   TIMG_T0CONFIG_REG          0x000   timer 0 config:
+//                                       T0_EN bit 31 (enable)
+//                                       T0_INCREASE bit 30 (count up)
+//                                       T0_AUTORELOAD bit 29 (periodic)
+//                                       T0_DIVIDER bits 28:13 (16-bit prescale)
+//                                       T0_EDGE_INT_EN bit 12
+//                                       T0_LEVEL_INT_EN bit 11
+//                                       T0_ALARM_EN bit 10
+//   TIMG_T0LO_REG              0x004   counter low 32 bits (read)
+//   TIMG_T0HI_REG              0x008   counter high 32 bits (read)
+//   TIMG_T0UPDATE_REG          0x00C   write any to latch HI/LO
+//   TIMG_T0ALARMLO_REG         0x010   alarm value low
+//   TIMG_T0ALARMHI_REG         0x014   alarm value high
+//   TIMG_T0LOAD_LO_REG         0x018   reload value low
+//   TIMG_T0LOAD_HI_REG         0x01C   reload value high
+//   TIMG_T0LOAD_REG            0x020   write any to apply reload
+//   TIMG_T1*                   0x024..0x044   (timer 1 of the group, same layout)
+//
+// Counter source: APB_CLK (80 MHz default) / DIVIDER (16-bit, 1..65535).
+// e.g. DIVIDER=80 → 1 µs tick; counter is 64-bit so essentially no wrap.
+
+let MODULE_NAME = "esp32_timer"
+let SIGMA_SLOT  = 8
+let PHI_KIND    = "digital"
+
+let DR_REG_TIMERGROUP0_BASE = 0x3FF5F000
+let DR_REG_TIMERGROUP1_BASE = 0x3FF60000
+
+let TIMG_T0CONFIG_REG  = 0x000
+let TIMG_T0LO_REG      = 0x004
+let TIMG_T0HI_REG      = 0x008
+let TIMG_T0UPDATE_REG  = 0x00C
+let TIMG_T0ALARMLO_REG = 0x010
+let TIMG_T0LOAD_REG    = 0x020
+
+let APB_CLK_HZ = 80000000
+
+let MODE_ONESHOT  = 0
+let MODE_PERIODIC = 1
+let MODE_CAPTURE  = 2
+let MODE_PWM      = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_timer_configure(idx: int, mode: int, period_us: int) -> int {
+    if idx < 0 || idx > 3 { return -1 }   // 4 timers across 2 groups
+    if mode < 0 || mode > 3 { return -2 }
+    if period_us < 1 { return -3 }
+    // STUB: pick (group, timer) = (idx/2, idx%2); set DIVIDER = 80 (→ 1 µs);
+    //       ALARMLO/HI = period_us; AUTORELOAD = (mode == PERIODIC); EN = 1.
+    return idx
+}
+
+fn esp32_timer_start(handle: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    // STUB: set CONFIG.T0_EN=1
+    return true
+}
+
+fn esp32_timer_stop(handle: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    // STUB: clear CONFIG.T0_EN
+    return true
+}
+
+fn esp32_timer_now_ticks(handle: int) -> int {
+    if handle < 0 { return -1 }
+    // STUB: write TIMG_T0UPDATE_REG, read TIMG_T0LO_REG (1-µs resolution if DIV=80)
+    return 0
+}
+
+fn esp32_timer_set_callback(handle: int, period_us: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    // STUB: set EDGE_INT_EN + ALARM_EN; route to peripheral interrupt matrix
+    return true
+}
+
+fn esp32_timer_clear(handle: int) -> bool {
+    if handle < 0 || handle > 3 { return false }
+    // STUB: write TIMG_T0LOAD_LO_REG = 0; LOAD_REG triggers reload
+    return true
+}
+
+fn esp32_timer_report(handle: int) -> str {
+    return "[esp32_timer sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32_timer_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_timer sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  TIMG0=" + str(DR_REG_TIMERGROUP0_BASE) + " TIMG1=" + str(DR_REG_TIMERGROUP1_BASE))
+    println("  4 × 64-bit GP timers; tick = APB_CLK(80MHz) / DIVIDER")
+}
