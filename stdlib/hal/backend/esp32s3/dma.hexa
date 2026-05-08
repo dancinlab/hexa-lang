@@ -1,0 +1,110 @@
+#!hexa strict
+// stdlib/hal/backend/esp32s3/dma.hexa — ESP32-S3 DMA backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-S3 Xtensa LX7 dual-core @ 240 MHz + ULP-RISC-V.
+// Chip ref:  ESP32-S3 TRM §3 GDMA Controller (5 channel pairs;
+//            strict superset of ESP32-C3's GDMA register layout).
+// Surface:   esp32s3_dma_{configure,start,wait,abort}(...)
+// Dispatch:  dma.hexa selects this via cfg-flag.
+//
+// Architecture: same GDMA IP family as ESP32-C3, scaled to 5 channel
+// pairs (vs C3's 3). ESP32-S3 also adds support for **bus-2 mode**
+// (cache-coherent DMA) and external PSRAM access.
+//
+// MMIO layout (matches ESP32-C3 layout, more channels):
+//
+//   GDMA:  base = DR_REG_GDMA_BASE = 0x6003F000   (same offset as C3)
+//
+//   GDMA_IN_CONF0_CHn_REG     0x000 + 0xC0·n   (n=0..4 on S3)
+//   GDMA_IN_LINK_CHn_REG      0x024 + 0xC0·n
+//   GDMA_IN_PERI_SEL_CHn_REG  0x044 + 0xC0·n
+//   GDMA_OUT_CONF0_CHn_REG    0x048 + 0xC0·n
+//   GDMA_OUT_LINK_CHn_REG     0x06C + 0xC0·n
+//   GDMA_OUT_PERI_SEL_CHn_REG 0x08C + 0xC0·n
+//
+// 5 channel pairs (CH0..CH4), each with independent IN (RX) + OUT (TX)
+// engines. Total 10 directional channels.
+//
+// PERIPHERAL_SEL values (S3-specific, more sources than C3):
+//   0  SPI2     1  SPI3     2  UHCI0   3  I2S0
+//   4  I2S1     5  LCD_CAM  6  AES     7  SHA
+//   8  ADC      9  RMT      10 PARLIO  ...
+//
+// S3-specific feature: external PSRAM (Octal SPI / Quad SPI) is a
+// valid DMA target when configured via the EXT_MEM controller. PSRAM
+// addresses are in 0x3C000000..0x3FFFFFFF range (cached) — DMA must
+// flush cache lines via Cache_WriteBack_Addr() before issuing.
+//
+// Descriptor format: same 12-byte LL_DMA inherited from ESP32 family.
+
+let MODULE_NAME = "esp32s3_dma"
+let SIGMA_SLOT  = 10
+let PHI_KIND    = "digital"
+
+let DR_REG_GDMA_BASE = 0x6003F000
+
+let GDMA_IN_CONF0_REG     = 0x000
+let GDMA_IN_LINK_REG      = 0x024
+let GDMA_IN_PERI_SEL_REG  = 0x044
+let GDMA_OUT_CONF0_REG    = 0x048
+let GDMA_OUT_LINK_REG     = 0x06C
+let GDMA_OUT_PERI_SEL_REG = 0x08C
+let GDMA_CH_STRIDE        = 0xC0
+
+let MAX_CHAN_PAIRS = 5   // 5 RX/TX pairs on S3 (vs 3 on C3)
+
+// PERIPHERAL_SEL (from S3 TRM §3.4).
+let PERI_SPI2    = 0
+let PERI_SPI3    = 1
+let PERI_UHCI0   = 2
+let PERI_I2S0    = 3
+let PERI_I2S1    = 4
+let PERI_LCD_CAM = 5
+let PERI_AES     = 6
+let PERI_SHA     = 7
+let PERI_ADC     = 8
+let PERI_RMT     = 9
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32s3_dma_configure(channel: int, direction: int, width: int) -> int {
+    if channel < 0 || channel > 9 { return -1 }   // 5 RX + 5 TX = 10
+    if direction < 0 || direction > 3 { return -2 }
+    if width != 1 && width != 2 && width != 4 { return -3 }
+    return channel
+}
+
+fn esp32s3_dma_start(handle: int, src: int, dst: int, n_bytes: int) -> bool {
+    if handle < 0 || handle > 9 { return false }
+    if n_bytes <= 0 { return false }
+    // STUB: build LL_DMA descriptor; if src/dst is in PSRAM range, flush
+    //       cache (Cache_WriteBack_Addr equivalent) before arming DMA.
+    return true
+}
+
+fn esp32s3_dma_wait(handle: int) -> bool {
+    if handle < 0 || handle > 9 { return false }
+    return true
+}
+
+fn esp32s3_dma_abort(handle: int) -> bool {
+    if handle < 0 || handle > 9 { return false }
+    return true
+}
+
+fn esp32s3_dma_report(handle: int) -> str {
+    return "[esp32s3_dma sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32s3_dma_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32s3_dma sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  GDMA=" + str(DR_REG_GDMA_BASE) + " (5 RX/TX pairs; PSRAM-DMA support)")
+    println("  PERI_SEL: SPI2/3, UHCI0, I2S0/1, LCD_CAM, AES, SHA, ADC, RMT")
+    println("  PSRAM caveat: cache flush required before DMA from cached region")
+}

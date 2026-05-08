@@ -1,0 +1,130 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/dma.hexa — ESP32 DMA backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz.
+// Chip ref:  ESP32 TRM §10 SPI DMA + §11 I2S DMA + §16 UART DMA — the
+//            ORIGINAL ESP32 has **per-peripheral DMA** rather than a
+//            general-purpose GDMA controller (that came with ESP32-S2+).
+// Surface:   esp32_dma_{configure,start,wait,abort}(...)
+// Dispatch:  dma.hexa selects this via cfg-flag.
+//
+// Architecture: distinct from STM32H7 / RP2040 / ESP32-C3+ — original
+// ESP32 ships per-peripheral DMA blocks instead of one GDMA. This stub
+// abstracts the per-peripheral DMAs behind the unified surface, mapping
+// channel 0..2 to:
+//   ch 0: SPI DMA (HSPI/VSPI)
+//   ch 1: I2S DMA (audio + ADC continuous mode)
+//   ch 2: UART DMA (UHCI controller)
+// Channels beyond 2 return -1 (no GDMA on original ESP32).
+//
+// MMIO layout (per peripheral):
+//
+//   SPI DMA (in HSPI/VSPI register block):
+//     SPI_DMA_CONF_REG          0x100 + base   DMA continue / RESET bits
+//     SPI_DMA_OUT_LINK_REG      0x104          out link descriptor list head
+//     SPI_DMA_IN_LINK_REG       0x108          in  link descriptor list head
+//     SPI_DMA_STATUS_REG        0x10C
+//     SPI_DMA_INT_*             ...
+//
+//   I2S DMA (in I2S register block):
+//     I2S_FIFO_CONF_REG         0x18   FIFO config + DMA mode bit
+//     I2S_DOUT_LINK_REG         0x40   out link
+//     I2S_DIN_LINK_REG          0x48   in link
+//
+//   UHCI DMA (UART DMA controller, base 0x3FF54000):
+//     UHCI_CONF0_REG            0x000  TX/RX_LINK_EN bits enable DMA
+//     UHCI_HUNG_CONF_REG        ...
+//
+// Descriptor format ("LL_DMA" linked-list, ESP32 standard):
+//   each descriptor is 12 bytes (3 × 32-bit words):
+//     word 0: bits 11:0 size (bytes; multi-of-4 for non-last)
+//             bits 23:12 length (bytes actually transferred)
+//             bit 30 EOF (last descriptor)
+//             bit 31 OWNER (0=CPU, 1=DMA)
+//     word 1: buffer address (mem)
+//     word 2: next descriptor pointer (NULL for last when not circular)
+//
+// All 3 ch operate on the same descriptor format (no GDMA ABI, but
+// the LL_DMA descriptor ABI was the predecessor that ESP32-C3+'s GDMA
+// inherited and centralized).
+
+let MODULE_NAME = "esp32_dma"
+let SIGMA_SLOT  = 10
+let PHI_KIND    = "digital"
+
+let DR_REG_UHCI0_BASE = 0x3FF54000   // UART DMA controller
+let DR_REG_HSPI_BASE  = 0x3FF64000   // SPI2 (HSPI) — DMA in same block
+let DR_REG_VSPI_BASE  = 0x3FF65000   // SPI3 (VSPI)
+let DR_REG_I2S0_BASE  = 0x3FF4F000   // I2S0
+let DR_REG_I2S1_BASE  = 0x3FF6D000   // I2S1
+
+// SPI DMA register offsets within HSPI/VSPI block.
+let SPI_DMA_CONF_REG     = 0x100
+let SPI_DMA_OUT_LINK_REG = 0x104
+let SPI_DMA_IN_LINK_REG  = 0x108
+let SPI_DMA_STATUS_REG   = 0x10C
+
+// I2S DMA register offsets within I2S block.
+let I2S_FIFO_CONF_REG    = 0x18
+let I2S_OUT_LINK_REG     = 0x40
+let I2S_IN_LINK_REG      = 0x48
+
+// UHCI DMA register offsets.
+let UHCI_CONF0_REG       = 0x000
+
+// Descriptor flags (bit 30 EOF, bit 31 OWNER).
+let DESC_EOF_BIT         = 30
+let DESC_OWNER_BIT       = 31
+
+let MAX_CHAN = 3   // SPI, I2S, UHCI (no GDMA on original ESP32)
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_dma_configure(channel: int, direction: int, width: int) -> int {
+    if channel < 0 || channel > 2 { return -1 }   // SPI / I2S / UHCI only
+    if direction < 0 || direction > 3 { return -2 }
+    if width != 1 && width != 2 && width != 4 { return -3 }
+    // STUB: select per-peripheral DMA enable bit + reset; pre-allocate
+    //       a 12-byte LL_DMA descriptor in DRAM (cache-aligned for DMA
+    //       coherency; ESP32 cache is mostly not coherent w/ DMA).
+    return channel
+}
+
+fn esp32_dma_start(handle: int, src: int, dst: int, n_bytes: int) -> bool {
+    if handle < 0 || handle > 2 { return false }
+    if n_bytes <= 0 { return false }
+    // STUB: fill descriptor word 0 (size + length + EOF + OWNER=DMA);
+    //       word 1 = src or dst (mem side); link descriptor at appropriate
+    //       *_LINK register; set DMA continue bit (e.g. SPI_DMA_CONF.DMA_CONTINUE).
+    return true
+}
+
+fn esp32_dma_wait(handle: int) -> bool {
+    if handle < 0 || handle > 2 { return false }
+    // STUB: spin on per-peripheral DMA_DONE intr bit OR descriptor's
+    //       OWNER bit reverting to CPU (0).
+    return true
+}
+
+fn esp32_dma_abort(handle: int) -> bool {
+    if handle < 0 || handle > 2 { return false }
+    // STUB: assert per-peripheral DMA RESET bit; clear link reg.
+    return true
+}
+
+fn esp32_dma_report(handle: int) -> str {
+    return "[esp32_dma sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32_dma_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_dma sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  per-peripheral DMA: SPI (in HSPI/VSPI block) + I2S + UHCI (UART DMA)")
+    println("  3 channels max (no GDMA on original ESP32; GDMA arrived in ESP32-S2+)")
+    println("  LL_DMA 12-byte descriptor format (predecessor to GDMA descriptor ABI)")
+}

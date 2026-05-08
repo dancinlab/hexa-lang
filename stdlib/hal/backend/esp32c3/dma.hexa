@@ -1,0 +1,116 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/dma.hexa — ESP32-C3 DMA backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C3 RV32IMC RISC-V single-core @ 160 MHz.
+// Chip ref:  ESP32-C3 TRM §3 GDMA Controller (general-purpose DMA;
+//            replaces per-peripheral DMA blocks of original ESP32).
+// Surface:   esp32c3_dma_{configure,start,wait,abort}(...)
+// Dispatch:  dma.hexa selects this via cfg-flag.
+//
+// Architecture: GDMA = unified DMA controller, distinct from original
+// ESP32's per-peripheral DMA. C3 has 3 channel pairs (TX + RX = 6
+// directional channels, OR 3 bidirectional pairs). Each channel
+// connects to peripherals via PERIPHERAL_SEL register field.
+//
+// MMIO layout:
+//
+//   GDMA:  base = DR_REG_GDMA_BASE = 0x6003F000
+//
+//   GDMA_IN_CONF0_CHn_REG     0x000 + 0xC0·n   per-RX-channel config
+//   GDMA_IN_CONF1_CHn_REG     0x004 + 0xC0·n
+//   GDMA_IN_INT_RAW_CHn_REG   0x008 + 0xC0·n
+//   GDMA_IN_INT_ST_CHn_REG    0x00C + 0xC0·n
+//   GDMA_IN_INT_ENA_CHn_REG   0x010 + 0xC0·n
+//   GDMA_IN_INT_CLR_CHn_REG   0x014 + 0xC0·n
+//   GDMA_IN_LINK_CHn_REG      0x024 + 0xC0·n   IN descriptor link addr
+//   GDMA_IN_PERI_SEL_CHn_REG  0x044 + 0xC0·n   peripheral request select
+//
+//   GDMA_OUT_CONF0_CHn_REG    0x048 + 0xC0·n   per-TX-channel config
+//   GDMA_OUT_LINK_CHn_REG     0x06C + 0xC0·n   OUT descriptor link addr
+//   GDMA_OUT_PERI_SEL_CHn_REG 0x08C + 0xC0·n
+//
+//   GDMA_AHB_TEST             ... debug
+//   GDMA_MISC_CONF            global config
+//
+// 3 channel pairs (CH0/1/2). RX (IN) and TX (OUT) are independent
+// engines per channel but share the MMIO block stride 0xC0.
+//
+// Descriptor format: same 12-byte LL_DMA inherited from original ESP32
+// (size + length + EOF + OWNER + buffer ptr + next ptr). Re-used across
+// all ESP32 family variants from ESP32-S2 onward.
+//
+// PERIPHERAL_SEL values (selected): SPI2 = 0, UART0 = 2, UART1 = 3,
+// I2S0 = 4, ADC = 5, AES = 6, SHA = 7, ... up to 16 sources.
+
+let MODULE_NAME = "esp32c3_dma"
+let SIGMA_SLOT  = 10
+let PHI_KIND    = "digital"
+
+let DR_REG_GDMA_BASE = 0x6003F000
+
+let GDMA_IN_CONF0_REG     = 0x000
+let GDMA_IN_LINK_REG      = 0x024
+let GDMA_IN_PERI_SEL_REG  = 0x044
+let GDMA_OUT_CONF0_REG    = 0x048
+let GDMA_OUT_LINK_REG     = 0x06C
+let GDMA_OUT_PERI_SEL_REG = 0x08C
+let GDMA_CH_STRIDE        = 0xC0
+
+let MAX_CHAN_PAIRS = 3   // 3 RX/TX pairs on C3
+
+// PERIPHERAL_SEL values (from TRM §3.4).
+let PERI_SPI2  = 0
+let PERI_UART0 = 2
+let PERI_UART1 = 3
+let PERI_I2S0  = 4
+let PERI_ADC   = 5
+let PERI_AES   = 6
+let PERI_SHA   = 7
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_dma_configure(channel: int, direction: int, width: int) -> int {
+    if channel < 0 || channel > 5 { return -1 }   // 3 RX + 3 TX = 6 directional
+    if direction < 0 || direction > 3 { return -2 }
+    if width != 1 && width != 2 && width != 4 { return -3 }
+    // STUB: pick CHn (n=channel/2); use IN regs if channel%2==0 (RX),
+    //       OUT regs if odd (TX); set PERI_SEL based on caller's intent.
+    return channel
+}
+
+fn esp32c3_dma_start(handle: int, src: int, dst: int, n_bytes: int) -> bool {
+    if handle < 0 || handle > 5 { return false }
+    if n_bytes <= 0 { return false }
+    // STUB: build 12-byte LL_DMA descriptor; write IN_LINK or OUT_LINK
+    //       with descriptor address; set CONF0.START bit.
+    return true
+}
+
+fn esp32c3_dma_wait(handle: int) -> bool {
+    if handle < 0 || handle > 5 { return false }
+    // STUB: spin on IN_INT_ST.IN_DONE or OUT_INT_ST.OUT_DONE
+    return true
+}
+
+fn esp32c3_dma_abort(handle: int) -> bool {
+    if handle < 0 || handle > 5 { return false }
+    // STUB: write IN_LINK.RESTART = 0; clear CONF0.START
+    return true
+}
+
+fn esp32c3_dma_report(handle: int) -> str {
+    return "[esp32c3_dma sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c3_dma_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_dma sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  GDMA=" + str(DR_REG_GDMA_BASE) + " (general-purpose; 3 RX/TX pairs)")
+    println("  PERI_SEL: SPI2/UART0/1/I2S0/ADC/AES/SHA + more (16 sources)")
+    println("  shared LL_DMA 12-byte descriptor format with ESP32 family")
+}

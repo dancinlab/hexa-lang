@@ -1,5 +1,77 @@
 # stdlib/hal CHANGELOG
 
+## [0.12.0] - 2026-05-08
+
+### Added
+- `backend/{stm32h7,rp2040,esp32,esp32c3,esp32s3}/dma.hexa` —
+  σ-slot 10 (dma) HW-backend stubs across ALL 5 vendors. Per-vendor
+  coverage 9/12 → 10/12. Total backend stub count: 45 → 50.
+
+  4 distinct DMA architectures abstracted under one surface:
+  - **STM32H7 multi-DMA** — 3 DMA peripherals on one chip:
+    MDMA (Master DMA, 16 ch, AHB+AXI master, all 7 bus masters)
+    + BDMA (Basic DMA, 8 ch, D3 domain only)
+    + DMA1/2 (8 streams each, multiplexed via DMAMUX1).
+    Total HW envelope: 40 channels (sim caps at J₂=24).
+  - **RP2040 control-block DMA** — single 12-channel controller @
+    0x50000000. Distinctive features: control-block chaining
+    (CHAIN_TO field — channels can program each other for arbitrary
+    scatter-gather without CPU); sniff mode (CRC32/CRC16/parity sum
+    computed during transfer); pacing timers for bandwidth-limited
+    transfers (e.g. video timing). 41 DREQ sources.
+  - **ESP32 per-peripheral DMA** — original ESP32 has NO general-
+    purpose GDMA. Instead, separate DMA blocks live inside
+    SPI / I2S / UART(UHCI) peripherals. The stub abstracts these as
+    3 channels (SPI/I2S/UHCI). Linked-list "LL_DMA" 12-byte
+    descriptor format introduced here became the ABI for all later
+    ESP32 family GDMA controllers.
+  - **ESP32-C3/S3 GDMA (general-purpose DMA)** — unified DMA
+    controller @ 0x6003F000 with peripheral selector (PERI_SEL).
+    C3: 3 RX/TX pairs (6 directional ch); S3: 5 RX/TX pairs (10 ch)
+    plus PSRAM-DMA support. Both inherit the LL_DMA descriptor format
+    from original ESP32.
+
+  Surface (mirrors `stdlib/hal/dma.hexa` sim):
+    dma_configure(channel, direction, width) -> int  (channel ≤ 23 = J₂)
+    dma_start(handle, src, dst, n_bytes) -> bool
+    dma_wait(handle) -> bool
+    dma_abort(handle) -> bool
+    dma_report(handle) -> str
+
+  Channel envelope per vendor:
+    - stm32h7: 40 HW (MDMA 16 + BDMA 8 + DMA1 8 + DMA2 8); sim sees ≤24
+    - rp2040:  12 HW (single DMA block)
+    - esp32:   3 HW (SPI + I2S + UHCI; no GDMA)
+    - esp32c3: 6 HW (3 RX + 3 TX; GDMA)
+    - esp32s3: 10 HW (5 RX + 5 TX; GDMA + PSRAM support)
+
+### Architecture diversity milestone
+- v0.12.0 covers 4 distinct DMA architectures under one surface:
+    1. STM32H7 stream-based multi-DMA (3 DMA peripherals)
+    2. RP2040 control-block-chained DMA (12 ch + sniff mode)
+    3. ESP32 per-peripheral DMA (no central controller)
+    4. ESP32 family GDMA (unified, LL_DMA descriptors, scaled per chip)
+  Combined with v0.11.0's 4-architecture interrupt controller test,
+  stdlib/hal now demonstrates that fundamentally different controller
+  IPs can be unified behind a stable peripheral surface across 5 vendors.
+
+### Changed
+- HW-backend stub file count: 45 → 50 (5 vendors × 10 peripherals).
+- Per-vendor coverage: 9/12 → 10/12 across all 5 vendors.
+- F-HAL closure unchanged at 67% × 5 (sat-1 ✓).
+
+### Provenance
+- STM32H7 MDMA / BDMA / DMA1/2 from RM0433 §15/16/17.
+- RP2040 DMA 0x50000000 from RP2040 Datasheet §2.5.
+- ESP32 SPI / I2S / UHCI DMAs from ESP32 TRM §10/11/16.
+- ESP32-C3 GDMA 0x6003F000 from ESP32-C3 TRM §3.
+- ESP32-S3 GDMA 0x6003F000 from ESP32-S3 TRM §3.
+
+### Roadmap
+- v0.13.0: rtc (σ-slot 11) — STM32 RTC + RP2040 RTC + ESP32 RTC_CNTL.
+- v0.14.0: core (σ-slot 0) — last per-vendor gap (cache mgmt / sleep
+  modes / clock tree). Reaches **12/12 = 100%** per-vendor coverage.
+
 ## [0.11.0] - 2026-05-08
 
 ### Added
