@@ -1,5 +1,84 @@
 # stdlib/hal CHANGELOG
 
+## [1.8.0] - 2026-05-08
+
+### Added — `stdlib/hal/ai.hexa` host-side AI-native dispatch primitive
+- `ai.hexa` (~155 lines) — host-side AI-native dispatch surface for
+  the **Beyond-GPU** silicon-tier verb (hexa-chip Phase G iter 7).
+  Mirror of `compute.hexa` shape (host-side dispatch primitive on a
+  separate axis from the σ=12 embedded peripheral lattice), but for
+  the provenance-aware AI accelerator class.
+
+  **Lattice axis**: NOT σ=12 peripheral (gpio/i2c/...). NOT σ=12 GPGPU
+  vendor × IR. AI-native is a **third axis**:
+    σ=12 native MAC slots per tile (σ·φ = J₂ = 24 MAC/cycle)
+    τ=4 pipeline stages
+    φ=2 provenance kinds (FACT / HYPOTHESIS)
+    σ_n=72 → provenance overhead φ/σ_n = 1/36
+    n_tiles = σ/φ = 6 native tiles per HEXA-AI chip
+    peak σ²·φ = 288 MAC/cycle
+    bt_coverage = sopfr(n)+φ = 7 (BT_541..BT_547)
+
+  **canon-aware** (`~/core/canon/domains/compute/ai-native-architecture/`):
+    - 3 silicon primitives: provenance-bit (1-bit FACT/HYPOTHESIS,
+      OR-propagated) / promotion-counter-MMU (write-barrier;
+      (prov, grade) check) / bt-id-isa (3-bit ISA opcode field).
+    - 4 falsifiers (F-AI1 / F-AI2-A / F-AI2-B / F-AI2c-A) + 3 RTL
+      silicon-tier (F-AI3-A/B/C).
+
+  Surface (paper-tier; FFI to silicon backend is downstream):
+    ai_configure_tile(tile_id, threshold) -> int
+    ai_dispatch_with_provenance(handle, prov_in, grade, bt_id) -> int
+    ai_register_bt_audit(bt_id, callback_name) -> bool
+    ai_query_refuse_count() -> int
+    ai_clear_refuse_count() -> bool
+    ai_set_threshold(tile_id, threshold) -> bool
+    ai_peak_macs_per_cycle() -> int
+    ai_module_meta() -> [str]
+    ai_invariant_{n_tiles, macs_per_tile, macs_per_array, bt_coverage,
+                  threshold_max, threshold_min}() -> int
+
+  Constants exported:
+    PROV_FACT / PROV_HYPOTHESIS                        (φ=2)
+    THRESHOLD_MIN=4 / THRESHOLD_DEFAULT=8 / THRESHOLD_MAX=12  ([φ², σ])
+    BT_RESERVED..BT_547                                (3-bit ISA field)
+    STAGE_CONFIGURE / START / SERVE / REPORT           (τ=4)
+    SIGMA / PHI / TAU / SIGMA_N / J2 / SOPFR_N         (n=6 axiom)
+    N_TILES=6 / MACS_PER_TILE=24 / MACS_PER_ARRAY=288  (derived)
+    BT_COVERAGE=7                                      (sopfr(n)+φ)
+    DEFAULT_HANDLE_CEILING=4                            (J₂/n)
+
+### First downstream consumer
+hexa-chip `firmware/mcu/ai_native_host.hexa` (Phase G iter 6, commit
+`9cff041`) currently uses `core+gpio+intr+timer+uart` directly with
+TODO placeholders. Once this `ai.hexa` surface lands, the MCU host
+will refactor to use `hal::ai::dispatch_with_provenance()` etc.
+
+### F-HAL closure (no change)
+This module is on a separate falsifier axis (F-AI* in canon ai-native-
+architecture); it does NOT extend the F-HAL embedded peripheral
+lattice. F-HAL closure stays at 67% × 5 (sat-1 ✓).
+
+### Architectural guard reaffirmed
+Per canon §7.5 + roadmap §F.6 + §G.5: **paper-spec only**, no FFI to
+vendor silicon runtime. Silicon backend FFI (when it lands) lives
+downstream of stdlib/hal — same architectural rule as compute.hexa
+vendor backends (cuda/hip/sycl/...) and IR backends (spirv/ptx).
+
+### Provenance
+- canon SSOT: `~/core/canon/domains/compute/ai-native-architecture/
+  ai-native-architecture.md` (1420 lines, parent omega-cycle 2026-04-26).
+- canon RTL design notes: `analysis/btAI3_rtl_design.md` (264 lines).
+- All 10 EXACT n=6 constants traceable to atlas line 526 / atlas master.
+
+### Roadmap
+- v1.9.0 candidate: `stdlib/hal/backend/ai_native/<vendor>.hexa` —
+  per-foundry AI-native backend stubs (SKY130 / TSMC N5 / Samsung SF3P
+  candidates per canon `target_pdk_candidates`). Paper-spec only;
+  FFI/synthesis is downstream.
+- v1.10.0 candidate: ESP32 family T3 scaffold (xtensa-esp-elf-gcc).
+- v1.11.0 candidate: Renode 2026.x install + T3b2 run-tier.
+
 ## [1.7.0] - 2026-05-08
 
 ### Added — compute.hexa GPGPU σ=12 lattice fully populated (6 vendors)
