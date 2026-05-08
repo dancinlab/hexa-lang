@@ -1,18 +1,24 @@
 // HEXA Standard Library — sys
 //
-// @version 0.1.0
+// @version 0.1.1
 // @capabilities [io]
 //
 // Closes S-NEW-SYS (.roadmap.stdlib, 2026-05-07). Mirrors Python `sys`
 // for drop-in migration of self-host CLI tools that today reach for
 // builtins ad-hoc.
 //
+// 2026-05-08 — added sys_stdin_read_line_timeout(ms) for non-blocking
+// stdin (anima chat Phase 2 own 34 mandate-4 prerequisite). Backward
+// compat: sys_stdin_read_line() unchanged.
+//
 // Surface:
 //   pub fn sys_argv() -> [string]            // includes argv[0]
 //   pub fn sys_exit(code: int)               // never returns
 //   pub fn sys_stderr_println(msg: string)   // stderr + newline
 //   pub fn sys_stdout_println(msg: string)   // stdout + newline (= println)
-//   pub fn sys_stdin_read_line() -> string   // one line from stdin
+//   pub fn sys_stdin_read_line() -> string   // one line from stdin (blocking)
+//   pub fn sys_stdin_read_line_timeout(ms) -> string
+//                                            // non-blocking variant; "" = no data
 //   pub fn sys_version() -> string           // hexa-lang version string
 //   pub fn sys_platform() -> string          // "darwin" / "linux" / ...
 //   pub fn sys_env(name: string) -> string   // "" if unset
@@ -42,6 +48,53 @@ pub fn sys_stdin_read_line() -> string {
     // shell `read` (limited to one line, no escapes — suitable for
     // CLI prompts only).
     return read_line()
+}
+
+// sys_stdin_read_line_timeout(ms) — non-blocking stdin variant.
+//
+// Semantics:
+//   ms <  0  → blocking; equivalent to sys_stdin_read_line().
+//   ms == 0  → poll once; returns immediately. "" if no data buffered.
+//   ms >  0  → wait up to ms milliseconds; returns the line if input
+//              arrives, "" if the timeout fires first.
+// Return value is the line WITHOUT the trailing newline. Empty string
+// ("") signals "no data" (also EOF) — mirrors sys_stdin_read_line()
+// EOF convention.
+//
+// Implementation choice (a): pure-hexa via `exec()` of a one-liner perl
+// IO::Select probe (perl is mandatory on macOS + every distro shipped
+// with `perl-base`; bash 3.2 on macOS does not support `read -t 0` nor
+// fractional `-t` seconds, ruling out the bash-only path). Cost: one
+// fork+exec per call (~5-10 ms on a warm host). For the anima chat
+// autonomous-speech loop this is dwarfed by the model inference budget.
+//
+// Cross-link: anima `own 34` mandate-4 (autonomous speech without an
+// empty Enter), .roadmap.stdlib 2026-05-08 follow-on to S-NEW-SYS.
+pub fn sys_stdin_read_line_timeout(ms: int) -> string {
+    if ms < 0 { return sys_stdin_read_line() }
+    // Convert ms → seconds (decimal) for IO::Select::can_read. The
+    // probe path is line-buffered: we read one full line on a successful
+    // ready signal, chomp the trailing \n (and any preceding \r), and
+    // return the result. On timeout the probe prints nothing → "".
+    //
+    // Quoting: the perl source is single-quoted to the host shell, and
+    // the timeout value is passed via $ARGV[0] so the script body itself
+    // contains no untrusted interpolation.
+    let cmd = "perl -e '"
+        + "use IO::Select; "
+        + "my $s = IO::Select->new(); "
+        + "$s->add(\\*STDIN); "
+        + "my @r = $s->can_read($ARGV[0]/1000.0); "
+        + "if (@r) { "
+        +   "my $l = <STDIN>; "
+        +   "if (defined $l) { "
+        +     "$l =~ s/\\r?\\n\\z//; "
+        +     "print $l; "
+        +   "} "
+        + "}"
+        + "' " + to_string(ms)
+    let out = exec(cmd)
+    return out
 }
 
 pub fn sys_version() -> string {
