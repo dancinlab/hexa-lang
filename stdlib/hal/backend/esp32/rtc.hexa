@@ -1,0 +1,120 @@
+#!hexa strict
+// stdlib/hal/backend/esp32/rtc.hexa — ESP32 RTC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32 dual Xtensa LX6 @ 240 MHz.
+// Chip ref:  ESP32 TRM §28 RTC Controller (RTC_CNTL) — combined sleep
+//            controller + low-power domain manager + 64-bit RTC
+//            slow-clock timer. Note: ESP32 RTC is NOT a calendar IP
+//            like STM32 RTC — it's a free-running counter; calendar
+//            arithmetic happens in software.
+// Surface:   esp32_rtc_{configure,start,set_time,get_time,set_alarm,clear,report}(...)
+// Dispatch:  rtc.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   RTC_CNTL:  base = DR_REG_RTCCNTL_BASE = 0x3FF48000
+//
+//   RTC_CNTL_TIME_UPDATE_REG       0x010   write any to latch counter
+//   RTC_CNTL_TIME0_REG             0x014   counter low 32 bits (read)
+//   RTC_CNTL_TIME1_REG             0x018   counter high 16 bits (48-bit total HW)
+//   RTC_CNTL_SLP_TIMER0_REG        0x008   sleep wake target low
+//   RTC_CNTL_SLP_TIMER1_REG        0x00C   sleep wake target high + main_timer_alarm_en
+//   RTC_CNTL_INT_RAW_REG           0x074   raw IRQ
+//   RTC_CNTL_INT_ENA_REG           0x078   IRQ enable
+//   RTC_CNTL_INT_CLR_REG           0x07C   IRQ clear (W1C)
+//   RTC_CNTL_STORE0..3_REG         0x030..0x03C   4 × 32-bit "always-on"
+//                                                   regs surviving deep-sleep
+//
+// Slow-clock options (per RTC_CNTL §28.2):
+//   - RTC_FAST_CLK: 8 MHz internal (fast)
+//   - RTC_SLOW_CLK: 150 kHz internal RC (default; ±5% accuracy)
+//                   OR 32.768 kHz external XTAL_32K (better accuracy)
+//                   OR 8 MHz / 256 = 31.25 kHz "8MD256"
+//
+// Time semantics: counter = number of RTC_SLOW_CLK ticks since power-on.
+// To get wall-clock time, software must add a UNIX-epoch base (typically
+// stored in RTC_STORE0..3 across deep-sleep boots).
+//
+// Compared to STM32 RTC: ESP32 RTC has no native calendar / BCD encoding.
+// Software computes year/month/day from epoch_base + counter*period.
+
+let MODULE_NAME = "esp32_rtc"
+let SIGMA_SLOT  = 11
+let PHI_KIND    = "digital"
+
+let DR_REG_RTCCNTL_BASE = 0x3FF48000
+
+let RTC_CNTL_TIME_UPDATE_REG = 0x010
+let RTC_CNTL_TIME0_REG       = 0x014
+let RTC_CNTL_TIME1_REG       = 0x018
+let RTC_CNTL_SLP_TIMER0_REG  = 0x008
+let RTC_CNTL_SLP_TIMER1_REG  = 0x00C
+let RTC_CNTL_INT_ENA_REG     = 0x078
+let RTC_CNTL_INT_CLR_REG     = 0x07C
+let RTC_CNTL_STORE0_REG      = 0x030
+let RTC_CNTL_STORE3_REG      = 0x03C
+
+let SLOW_CLK_INTERNAL_HZ  = 150000     // 150 kHz internal RC default
+let SLOW_CLK_XTAL32K_HZ   = 32768      // optional external 32 kHz crystal
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32_rtc_configure(idx: int) -> int {
+    if idx != 0 { return -1 }   // single RTC controller
+    // STUB: select slow-clock source via RTC_CNTL.ANA_CONF; calibrate
+    //       via TIMG-based RTC_CALIB to get actual tick rate.
+    return idx
+}
+
+fn esp32_rtc_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: counter is always running once slow-clock is enabled
+    return true
+}
+
+fn esp32_rtc_set_time(handle: int, year: int, month: int, day: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    if year < 1970 || year > 2100 { return false }
+    // STUB: convert (y/m/d/h/m/s) → UNIX epoch seconds via mktime() equivalent;
+    //       store epoch_base in RTC_CNTL_STORE0/1_REG (lo/hi 32 bits);
+    //       ESP32 RTC counter itself just counts ticks since power-on,
+    //       so software adds (counter / tick_rate) to epoch_base for wall time.
+    return true
+}
+
+fn esp32_rtc_get_time(handle: int) -> str {
+    if handle < 0 { return "rtc: invalid" }
+    // STUB: write TIME_UPDATE; read TIME0+TIME1 (48-bit ticks); divide
+    //       by slow-clock rate; add epoch_base from STORE0/1.
+    return "[esp32_rtc sim] time read TODO"
+}
+
+fn esp32_rtc_set_alarm(handle: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: compute target tick = current + (h·3600 + m·60 + s)·tick_rate;
+    //       write SLP_TIMER0/1; set MAIN_TIMER_ALARM_EN; INT_ENA bit 8.
+    return true
+}
+
+fn esp32_rtc_clear(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: write 1 to RTC_CNTL_INT_CLR_REG.MAIN_TIMER_INT_CLR
+    return true
+}
+
+fn esp32_rtc_report(handle: int) -> str {
+    return "[esp32_rtc sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32_rtc_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32_rtc sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  RTC_CNTL=" + str(DR_REG_RTCCNTL_BASE) + " (48-bit counter; NOT a calendar IP)")
+    println("  slow-clock: 150 kHz internal RC OR 32.768 kHz XTAL32K OR 8MHz/256")
+    println("  4 × 32-bit always-on STOREn regs survive deep-sleep")
+}

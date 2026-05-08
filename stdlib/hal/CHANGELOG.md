@@ -1,5 +1,80 @@
 # stdlib/hal CHANGELOG
 
+## [0.14.0] - 2026-05-08
+
+### Added
+- `backend/{stm32h7,rp2040,esp32,esp32c3,esp32s3}/rtc.hexa` —
+  σ-slot 11 (rtc) HW-backend stubs across ALL 5 vendors. Per-vendor
+  coverage 10/12 → 11/12. Total embedded backend stub count: 50 → 55
+  (compute.hexa from v0.13.0 is on a separate axis, not counted here).
+
+  3 distinct RTC architectural patterns:
+  - **STM32H7 calendar RTC** (stm32h7/rtc.hexa) — full hardware
+    calendar IP at 0x58004000 (D3 / VBAT domain): TR + DR registers
+    with BCD-encoded year/month/day/hour/min/sec; 2 alarms (A/B);
+    wakeup timer; 32 × 32-bit backup registers; tamper detection;
+    LSE 32.768 kHz / 128 / 256 = 1 Hz baseline. Lock/unlock via WPR
+    key sequence (0xCA, 0x53). Survives main reset.
+  - **RP2040 calendar RTC** (rp2040/rtc.hexa) — single instance at
+    0x4005C000 with calendar (year/month/day/dotw/hour/min/sec) +
+    1 match alarm + IRQ output. Programmable CLK_RTC source (typ
+    XOSC=12 MHz / 256 = 46875 Hz, then /M to 1 Hz internally). Setup
+    requires CTRL.RTC_ENABLE=0 → write SETUP_0/1 → CTRL.LOAD pulse.
+  - **ESP32 family counter RTC** (esp32/, esp32c3/, esp32s3/rtc.hexa)
+    — 48-bit free-running counter at RTC_CNTL block; **NOT a calendar
+    IP**. Calendar arithmetic happens in software using epoch_base
+    stored in RTC_CNTL_STOREn regs. Slow-clock sources: 150 kHz
+    internal RC (default ±5%) / 32.768 kHz XTAL32K / 8 MHz ÷ 256.
+    Per-variant differences:
+      - esp32:    base 0x3FF48000 (DPORT region); 4 STOREn regs.
+      - esp32c3:  base 0x60008000 (peri region 0x6000); 4 STOREn regs.
+      - esp32s3:  base 0x60008000; **8 STOREn regs** + **ULP-RISC-V
+                  coprocessor** in RTC domain (8 KB SLOW_MEM for
+                  sleep-time RV firmware).
+    Register OFFSETS within RTC_CNTL also shifted between ESP32
+    (0x010/0x014/0x018) and ESP32-C3/S3 (0x0AC/0x0B0/0x0B4) — stubs
+    reflect per-variant offset changes.
+
+  Surface (mirrors `stdlib/hal/rtc.hexa` sim):
+    rtc_configure(idx) -> int          (idx ≤ 3)
+    rtc_start(handle) -> bool
+    rtc_set_time(handle, y, m, d, h, mi, s) -> bool
+    rtc_get_time(handle) -> str
+    rtc_set_alarm(handle, h, m, s) -> bool
+    rtc_clear(handle) -> bool
+    rtc_report(handle) -> str
+
+### Architecture observation: calendar IP vs counter IP
+- **Calendar-class RTCs** (STM32H7 / RP2040): hardware decodes BCD
+  fields directly; firmware reads y/m/d/h/m/s registers; mature MCU
+  vendor pattern.
+- **Counter-class RTCs** (ESP32 family): hardware just counts ticks;
+  software synthesizes calendar via epoch_base + counter*period.
+  Trade-off: simpler hardware (less silicon area in RTC domain) at
+  the cost of ~1 KB of firmware code for calendar conversion.
+- The unified `stdlib/hal/rtc.hexa` surface hides this distinction
+  behind set_time / get_time wrappers.
+
+### Changed
+- HW-backend stub file count: 50 → 55 (5 vendors × 11 peripherals).
+- Per-vendor coverage: 10/12 → 11/12 across all 5 vendors.
+- F-HAL closure unchanged at 67% × 5 (sat-1 ✓).
+
+### Provenance
+- STM32H7 RTC 0x58004000 from RM0433 §51.
+- RP2040 RTC 0x4005C000 from RP2040 Datasheet §4.8.
+- ESP32 RTC_CNTL 0x3FF48000 from ESP32 TRM §28.
+- ESP32-C3 RTC_CNTL 0x60008000 from ESP32-C3 TRM §10.
+- ESP32-S3 RTC_CNTL 0x60008000 from ESP32-S3 TRM §10.
+
+### Roadmap
+- v0.15.0 (next, final per-vendor): **core (σ-slot 0)** — last gap
+  to reach **12/12 = 100%** per-vendor HW coverage. CPU-level cache
+  management / sleep modes / clock tree configuration.
+- v1.0.0 milestone candidate: full HW-12 across 5 vendors + sat-1
+  + multi-ISA-family validated (ARM M7 / M0+ / Xtensa LX6 / LX7 /
+  RISC-V) + GPGPU axis (compute.hexa).
+
 ## [0.13.0] - 2026-05-08
 
 ### Added

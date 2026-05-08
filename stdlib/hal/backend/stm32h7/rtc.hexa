@@ -1,0 +1,119 @@
+#!hexa strict
+// stdlib/hal/backend/stm32h7/rtc.hexa — STM32H7 RTC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    STMicroelectronics STM32H7 Cortex-M7 @ 480 MHz.
+// Chip ref:  RM0433 §51 RTC — calendar + 2 alarms (A/B) + wakeup timer
+//            + tamper detection + 32 × 32-bit backup registers + 1Hz
+//            sub-second tracking (15-bit prescaler).
+// Surface:   stm32h7_rtc_{configure,start,set_time,get_time,set_alarm,clear,report}(...)
+// Dispatch:  rtc.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   RTC:  base = 0x58004000   (in D3 / VBAT domain — survives main reset)
+//
+//   RTC_TR                     0x000   time register (BCD: SU/ST/MNU/MNT/HU/HT + PM)
+//   RTC_DR                     0x004   date register (BCD: YU/YT/MU/MT/DU/DT + WDU)
+//   RTC_CR                     0x008   control: WUTE bit 10, ALRAE bit 8, ALRBE bit 9
+//                                      FMT bit 6 (24/12 hr), BYPSHAD bit 5
+//   RTC_ISR                    0x00C   init/status: INITF bit 6 (entered init mode),
+//                                      RSF bit 5 (reg synchro flag)
+//   RTC_PRER                   0x010   prescaler: PREDIV_A bits 22:16 (7-bit),
+//                                      PREDIV_S bits 14:0 (15-bit synchronous)
+//                                      Default 32.768 kHz / (128 × 256) = 1 Hz.
+//   RTC_WUTR                   0x014   wakeup timer (16-bit auto-reload)
+//   RTC_ALRMAR / RTC_ALRMBR    0x040 / 0x044   alarm A/B regs
+//   RTC_WPR                    0x024   write-protection key (0xCA, 0x53)
+//   RTC_BKPxR                  0x050..0x0CC   backup registers (32 × 32-bit)
+//
+// Init sequence (per RM0433 §51.6):
+//   1. PWR_CR1.DBP=1 to enable backup-domain write
+//   2. Configure RCC_BDCR.RTCSEL (LSE / LSI / HSE/32 source)
+//   3. Write RTC_WPR with 0xCA, then 0x53 to unlock
+//   4. Set RTC_ISR.INIT=1; spin until INITF=1
+//   5. Program RTC_PRER, RTC_TR, RTC_DR
+//   6. Clear RTC_ISR.INIT
+//   7. Lock RTC_WPR by writing 0xFF
+//
+// Backup registers survive VBAT power; useful for storing wake reason
+// across deep-sleep / power-down.
+
+let MODULE_NAME = "stm32h7_rtc"
+let SIGMA_SLOT  = 11
+let PHI_KIND    = "digital"
+
+let RTC_BASE   = 0x58004000
+
+let RTC_TR     = 0x000
+let RTC_DR     = 0x004
+let RTC_CR     = 0x008
+let RTC_ISR    = 0x00C
+let RTC_PRER   = 0x010
+let RTC_ALRMAR = 0x040
+let RTC_WPR    = 0x024
+let RTC_BKP0R  = 0x050
+
+let WPR_KEY1 = 0xCA
+let WPR_KEY2 = 0x53
+
+// LSE / LSI prescalers for 1 Hz tick.
+let PREDIV_A_LSE = 127     // (32.768 kHz / 128)
+let PREDIV_S_LSE = 255     // / 256 → 1 Hz
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn stm32h7_rtc_configure(idx: int) -> int {
+    if idx < 0 || idx > 0 { return -1 }   // STM32H7 has 1 RTC
+    // STUB: enable LSE, set RCC_BDCR.RTCSEL = LSE, unlock WPR, enter init
+    //       mode, set PRER, exit init, lock WPR.
+    return idx
+}
+
+fn stm32h7_rtc_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: RTC starts automatically once init-mode exited; no separate start
+    return true
+}
+
+fn stm32h7_rtc_set_time(handle: int, year: int, month: int, day: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    if year < 1970 || year > 2100 { return false }
+    // STUB: encode each field as BCD; unlock WPR + enter init mode + write
+    //       RTC_TR (hour/min/sec) + RTC_DR (year-2000/month/day/weekday) +
+    //       exit init + lock WPR.
+    return true
+}
+
+fn stm32h7_rtc_get_time(handle: int) -> str {
+    if handle < 0 { return "rtc: invalid" }
+    // STUB: read RTC_TR + RTC_DR; decode BCD; return formatted string
+    return "[stm32h7_rtc sim] time read TODO"
+}
+
+fn stm32h7_rtc_set_alarm(handle: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: clear ALRAE; write RTC_ALRMAR with BCD-encoded fields; set ALRAE
+    return true
+}
+
+fn stm32h7_rtc_clear(handle: int) -> bool {
+    if handle < 0 { return false }
+    // STUB: clear RTC_ISR.ALRAF / ALRBF flags
+    return true
+}
+
+fn stm32h7_rtc_report(handle: int) -> str {
+    return "[stm32h7_rtc sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn stm32h7_rtc_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[stm32h7_rtc sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  RTC=" + str(RTC_BASE) + " (D3 / VBAT domain; calendar + 2 alarms + 32 backup regs)")
+    println("  source: LSE 32.768 kHz / 128 / 256 = 1 Hz; BCD-encoded TR/DR")
+}

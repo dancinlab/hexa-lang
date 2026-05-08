@@ -1,0 +1,103 @@
+#!hexa strict
+// stdlib/hal/backend/esp32s3/rtc.hexa — ESP32-S3 RTC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-S3 Xtensa LX7 dual-core @ 240 MHz + ULP-RISC-V.
+// Chip ref:  ESP32-S3 TRM §10 RTC Controller — same family as C3,
+//            with additional ULP-RISC-V wake-from-sleep coprocessor
+//            integration.
+// Surface:   esp32s3_rtc_{configure,start,set_time,get_time,set_alarm,clear,report}(...)
+// Dispatch:  rtc.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   RTC_CNTL:  base = DR_REG_RTCCNTL_BASE = 0x60008000
+//
+//   RTC_CNTL_TIME_UPDATE_REG     0x0AC
+//   RTC_CNTL_TIME_LOW0_REG       0x0B0
+//   RTC_CNTL_TIME_HIGH0_REG      0x0B4
+//   RTC_CNTL_SLP_TIMER0_REG      0x09C
+//   RTC_CNTL_SLP_TIMER1_REG      0x0A0
+//   RTC_CNTL_INT_ENA_REG         0x040
+//   RTC_CNTL_INT_CLR_REG         0x044
+//   RTC_CNTL_STORE0..7           0x130..0x14C   8 × 32-bit always-on
+//                                                  (vs C3's 4)
+//   RTC_CNTL_ULP_CP_TIMER_REG    ...   ULP-RISC-V wake timer config
+//   RTC_CNTL_ULP_CP_CTRL_REG     ...   ULP-RISC-V program counter / start
+//
+// S3-specific: ULP-RISC-V coprocessor lives in the RTC domain. It can
+// run minimal RV32 firmware while the main CPUs are deep-asleep, and
+// signal wake events back to the main cores via the RTC_CNTL_INT block.
+// The ULP firmware is loaded into RTC_SLOW_MEM (8 KB) and triggered
+// either by RTC_TIMER alarm or by sensor-threshold events.
+//
+// 8 × 32-bit STOREn registers (vs C3's 4) give more space for state
+// preservation across deep-sleep cycles.
+
+let MODULE_NAME = "esp32s3_rtc"
+let SIGMA_SLOT  = 11
+let PHI_KIND    = "digital"
+
+let DR_REG_RTCCNTL_BASE = 0x60008000
+
+let RTC_CNTL_TIME_UPDATE_REG = 0x0AC
+let RTC_CNTL_TIME_LOW0_REG   = 0x0B0
+let RTC_CNTL_TIME_HIGH0_REG  = 0x0B4
+let RTC_CNTL_SLP_TIMER0_REG  = 0x09C
+let RTC_CNTL_SLP_TIMER1_REG  = 0x0A0
+let RTC_CNTL_INT_ENA_REG     = 0x040
+let RTC_CNTL_INT_CLR_REG     = 0x044
+let RTC_CNTL_STORE0_REG      = 0x130
+
+let SLOW_CLK_INTERNAL_HZ = 150000
+let SLOW_CLK_XTAL32K_HZ  = 32768
+
+let ULP_SLOW_MEM_SIZE = 8192   // 8 KB ULP-RISC-V firmware space
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32s3_rtc_configure(idx: int) -> int {
+    if idx != 0 { return -1 }
+    return idx
+}
+
+fn esp32s3_rtc_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32s3_rtc_set_time(handle: int, year: int, month: int, day: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    if year < 1970 || year > 2100 { return false }
+    return true
+}
+
+fn esp32s3_rtc_get_time(handle: int) -> str {
+    if handle < 0 { return "rtc: invalid" }
+    return "[esp32s3_rtc sim] time read TODO"
+}
+
+fn esp32s3_rtc_set_alarm(handle: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32s3_rtc_clear(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32s3_rtc_report(handle: int) -> str {
+    return "[esp32s3_rtc sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32s3_rtc_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32s3_rtc sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  RTC_CNTL=" + str(DR_REG_RTCCNTL_BASE) + " (Xtensa LX7 + ULP-RISC-V coprocessor)")
+    println("  8 × STOREn regs (vs C3's 4); ULP-RISC-V 8KB SLOW_MEM for sleep firmware")
+}

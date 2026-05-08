@@ -1,0 +1,103 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/rtc.hexa — ESP32-C3 RTC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C3 RV32IMC RISC-V single-core @ 160 MHz.
+// Chip ref:  ESP32-C3 TRM §10 RTC Controller — same family as ESP32 RTC,
+//            adapted for RISC-V wake interrupt routing.
+// Surface:   esp32c3_rtc_{configure,start,set_time,get_time,set_alarm,clear,report}(...)
+// Dispatch:  rtc.hexa selects this via cfg-flag.
+//
+// MMIO layout (peripheral region 0x6000xxxx):
+//
+//   RTC_CNTL:  base = DR_REG_RTCCNTL_BASE = 0x60008000
+//
+//   RTC_CNTL_TIME_UPDATE_REG     0x0AC   write any to latch counter
+//   RTC_CNTL_TIME_LOW0_REG       0x0B0   counter low 32 bits
+//   RTC_CNTL_TIME_HIGH0_REG      0x0B4   counter high 16 bits
+//   RTC_CNTL_SLP_TIMER0_REG      0x09C   sleep wake target low
+//   RTC_CNTL_SLP_TIMER1_REG      0x0A0   sleep wake target high + EN
+//   RTC_CNTL_INT_ENA_REG         0x040   IRQ enable
+//   RTC_CNTL_INT_CLR_REG         0x044   IRQ clear (W1C)
+//   RTC_CNTL_STORE0..3           0x130..0x13C   4 × 32-bit always-on
+//
+// Slow-clock sources (per TRM §10.2):
+//   - RTC_FAST_CLK: 17.5 MHz / 8 MHz
+//   - RTC_SLOW_CLK: 150 kHz internal RC (default)
+//                   OR 32.768 kHz external XTAL32K
+//                   OR 8 MHz / 256 = 31.25 kHz
+//
+// Same calendar-via-software approach as original ESP32: hardware
+// counter only; (year/month/day/hour/min/sec) reconstructed in firmware
+// using epoch_base stored in STOREn.
+//
+// Note: register OFFSETS within the RTC_CNTL block changed between
+// ESP32 (0x010 / 0x014 / 0x018) and ESP32-C3 (0x0AC / 0x0B0 / 0x0B4)
+// even though the BASE address moved peripheral region. Stub layouts
+// reflect this per-variant offset shift.
+
+let MODULE_NAME = "esp32c3_rtc"
+let SIGMA_SLOT  = 11
+let PHI_KIND    = "digital"
+
+let DR_REG_RTCCNTL_BASE = 0x60008000
+
+let RTC_CNTL_TIME_UPDATE_REG = 0x0AC
+let RTC_CNTL_TIME_LOW0_REG   = 0x0B0
+let RTC_CNTL_TIME_HIGH0_REG  = 0x0B4
+let RTC_CNTL_SLP_TIMER0_REG  = 0x09C
+let RTC_CNTL_SLP_TIMER1_REG  = 0x0A0
+let RTC_CNTL_INT_ENA_REG     = 0x040
+let RTC_CNTL_INT_CLR_REG     = 0x044
+let RTC_CNTL_STORE0_REG      = 0x130
+
+let SLOW_CLK_INTERNAL_HZ = 150000
+let SLOW_CLK_XTAL32K_HZ  = 32768
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_rtc_configure(idx: int) -> int {
+    if idx != 0 { return -1 }
+    return idx
+}
+
+fn esp32c3_rtc_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c3_rtc_set_time(handle: int, year: int, month: int, day: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    if year < 1970 || year > 2100 { return false }
+    return true
+}
+
+fn esp32c3_rtc_get_time(handle: int) -> str {
+    if handle < 0 { return "rtc: invalid" }
+    return "[esp32c3_rtc sim] time read TODO"
+}
+
+fn esp32c3_rtc_set_alarm(handle: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c3_rtc_clear(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c3_rtc_report(handle: int) -> str {
+    return "[esp32c3_rtc sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c3_rtc_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_rtc sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  RTC_CNTL=" + str(DR_REG_RTCCNTL_BASE) + " (same family as ESP32; calendar in software)")
+    println("  slow-clock: 150 kHz RC / 32.768 kHz XTAL32K / 8MHz÷256; STOREn survives deep-sleep")
+}
