@@ -1,0 +1,198 @@
+#!hexa strict
+// stdlib/hal/backend/ai_native/samsung_sf3p.hexa — Samsung SF3P PDK
+//                                                   AI-native silicon backend
+//                                                   — paper skeleton.
+//
+// Phase: skeleton / stub. Real synthesis (Synopsys DC / Cadence Genus) +
+// place-and-route (Innovus / ICC2) + tape-out are downstream scope and
+// require an active Samsung Foundry PDK licence + MOU + Korea fab
+// partner. Paper-tier stub documents area/timing/power surface mapping
+// for the 3 AI-native silicon primitives on the Samsung SF3P 3nm GAA
+// node. Sim-first invariant preserved (ai.hexa sim ships first; this
+// is per-PDK silicon backend metadata).
+//
+// Target:    Samsung Foundry SF3P (3nm Gate-All-Around MBCFET; production
+//            since 2023 Q4; current as of 2026-05-08).
+// Process:   3 nm GAA MBCFET (Multi-Bridge-Channel FET; world-first GAA
+//            production node). EUV-multipatterned BEOL. Vcore band ~0.65-0.75V.
+// Density:   ~22 M-gate/mm² (Samsung public density disclosure;
+//            web-searched 2026-05-08; ~2.7x TSMC N5; ~44x SKY130).
+// Tape-out:  Samsung MPW shuttle ~$5-10M MOU per project; needs Korea
+//            fab partner (e.g., Hwaseong S5 line); IP audit; first
+//            silicon ~12-15 months from tape-out.
+// IR:        none (this is a per-PDK silicon backend, not a compute IR;
+//            consumes RTL Verilog from ai_native_arch/doc/datasheet_*.md
+//            §6 [prov_regfile, promotion_counter_mmu, bt_id_decoder]).
+// Surface:   samsung_sf3p_{tile_area, prov_regfile_area, mmu_area,
+//            bt_decoder_area, frequency_max, voltage_core,
+//            tile_meta, pdk_meta}.
+// Dispatch:  ai.hexa selects this via cfg-flag (`cfg ai_native_pdk = "samsung_sf3p"`);
+//            paper-tier dispatch returns symbolic area/freq numbers.
+//
+// canon-aware (~/core/canon/domains/compute/ai-native-architecture/
+// analysis/btAI3_rtl_design.md §6 row "Samsung SF3P 3 nm" + hexa-chip
+// ai_native_arch/doc/datasheet_ai_native_arch.md §6 PDK area table).
+//
+// Korea-fab heritage tone: Samsung·SK·Hynix·DRAM/HBM lineage frames the
+// editorial choice of this backend. NO proprietary data, NDA content, or
+// trade-secret material is included — only public foundry density/voltage
+// disclosures. (See hexa-chip cli caveat row 5.)
+//
+// Phase G iter 9+3 / stdlib/hal v1.11.0 (per-PDK ai_native split,
+// Samsung SF3P third — completes the **3-PDK ai_native paper backend
+// set**: SKY130 (open-source baseline, 35b14035) → TSMC N5 (production,
+// f11c560a) → Samsung SF3P (advanced-node production, this iter).
+//
+// Architectural guard: paper-spec only — NOT FFI to Synopsys DC /
+// Cadence Genus / Innovus / ICC2 / Samsung-specific tools. canon §7.5
+// ("FFI는 downstream") + roadmap §G.5. Per-PDK split commit policy
+// continues from v1.9.0 / v1.10.0.
+
+let MODULE_NAME = "ai_native_samsung_sf3p"
+let PDK_NAME    = "samsung_sf3p"
+let PDK_TIER    = "proprietary"   // open-source / proprietary
+let PDK_NODE_NM = 3                // process node (nanometres)
+
+// ── PDK density disclosures (web-searched 2026-05-08) ────────────────
+// Samsung public SF3P density: ~178 M-tx/mm² (Samsung Foundry Forum 2023
+// disclosure; SF3P = "Performance" variant of 3GAP family vs SF3E
+// "Early"). Gate-equivalent ~22 M-gate/mm² post-P&R at typical
+// utilisation. World-first GAA production node as of late 2023.
+let DENSITY_KGATE_PER_MM2  = 22000  // K-gates/mm² (~2.7x TSMC N5)
+let DENSITY_UTIL_BP        = 7000   // 70% basis-point post-P&R utilisation
+
+// ── core voltage / frequency band (Samsung SF3P nominal LVT/RVT) ─────
+let VCORE_MV      = 650    // 0.65V core (SF3P low-voltage band)
+let FREQ_MIN_MHZ  = 2000   // SF3P typical floor for AI accelerator
+let FREQ_MAX_MHZ  = 2500   // SF3P typical ceiling without aggressive DVFS
+
+// ── tile-level area placeholders (canon §6 + datasheet §6) ────────────
+// All in micro-mm² (μ-mm²) integer units to avoid float; divide by 1000
+// to get mm². Per-tile, σ²=144-entry MAC array dominant.
+// ~2.7x area shrink vs TSMC N5 (5 nm → 3 nm GAA scaling).
+let MAC_ARRAY_AREA_UMM2     =   18000   // ~0.018 mm² (σ²=144 8b MACs at SF3P)
+let PROV_REGFILE_AREA_UMM2  =     400   // ~0.0004 mm² (144 SFF + OR-tree)
+let MMU_AREA_UMM2           =     170   // ~0.00017 mm² (τ=4-bit × 144 ctr)
+let BT_DECODER_AREA_UMM2    =       9   // ~0.000009 mm² (3b → 7 one-hot, 5 gates)
+let TILE_AREA_UMM2          =   18579   // sum
+
+// ── chip-level area (n_tiles=6 from ai.hexa N_TILES) ──────────────────
+let N_TILES               = 6
+let CHIP_AREA_UMM2        = 111474      // 6 × 0.0186 mm² ≈ 0.111 mm²
+
+// ── overhead ratio (φ/σ_n = 1/36 = ~2.78% basis-point form 278) ──────
+let OVERHEAD_BP           = 278   // basis-points (1/36 ≈ 2.78%)
+
+// ── max die area constraint (Samsung MPW shuttle typical) ────────────
+// Samsung MPW shuttle slot: typically 4-25 mm² for SF3P. At ~0.111 mm²
+// for n_tiles=6, FITS very comfortably.
+let SAMSUNG_MPW_LIMIT_UMM2 = 4000000    // 4 mm² typical SF3P MPW slot (~36x our chip)
+
+// ── stub handlers ────────────────────────────────────────────────────
+
+// Returns per-tile area in micro-mm² for the requested block.
+// Tier IDs:
+//   0 = MAC array (σ²)
+//   1 = prov_regfile
+//   2 = promotion_counter_mmu
+//   3 = bt_id_decoder
+//   4 = whole tile
+fn samsung_sf3p_tile_area(block_id: int) -> int {
+    if block_id == 0 { return MAC_ARRAY_AREA_UMM2 }
+    if block_id == 1 { return PROV_REGFILE_AREA_UMM2 }
+    if block_id == 2 { return MMU_AREA_UMM2 }
+    if block_id == 3 { return BT_DECODER_AREA_UMM2 }
+    if block_id == 4 { return TILE_AREA_UMM2 }
+    return -1
+}
+
+// Returns whole-chip area in μ-mm² (n_tiles × tile_area).
+fn samsung_sf3p_chip_area() -> int {
+    return CHIP_AREA_UMM2
+}
+
+// Returns provenance overhead in basis-points (1/36 ≈ 278 bp).
+fn samsung_sf3p_overhead_bp() -> int {
+    return OVERHEAD_BP
+}
+
+// Returns max frequency band [min, max] MHz.
+fn samsung_sf3p_freq_band() -> [int] {
+    return [FREQ_MIN_MHZ, FREQ_MAX_MHZ]
+}
+
+// Returns core voltage in millivolts.
+fn samsung_sf3p_vcore_mv() -> int {
+    return VCORE_MV
+}
+
+// Returns true if chip area fits the Samsung MPW shuttle.
+// At 0.111 mm² for n_tiles=6, comfortably under 4 mm² ceiling.
+fn samsung_sf3p_fits_mpw_shuttle() -> bool {
+    return CHIP_AREA_UMM2 <= SAMSUNG_MPW_LIMIT_UMM2
+}
+
+// Suggest a tape-out tile-count that fits MPW shuttle.
+// Returns max n_tiles such that n_tiles × TILE_AREA_UMM2 ≤ MPW_LIMIT.
+fn samsung_sf3p_max_tiles_in_mpw() -> int {
+    return SAMSUNG_MPW_LIMIT_UMM2 / TILE_AREA_UMM2
+}
+
+// Returns module metadata.
+fn samsung_sf3p_module_meta() -> [str] {
+    return [MODULE_NAME, PDK_NAME, PDK_TIER, str(PDK_NODE_NM)]
+}
+
+// Returns PDK metadata (node + density + voltage).
+fn samsung_sf3p_pdk_meta() -> [str] {
+    return [
+        PDK_NAME,
+        str(PDK_NODE_NM) + "nm GAA MBCFET",
+        str(DENSITY_KGATE_PER_MM2) + "K-gates/mm²",
+        str(VCORE_MV) + "mV"
+    ]
+}
+
+// ── invariant ledger (cross-check against canon §6 + datasheet §6) ────
+
+fn samsung_sf3p_invariant_n_tiles() -> int { return N_TILES }
+fn samsung_sf3p_invariant_overhead_bp() -> int { return OVERHEAD_BP }
+fn samsung_sf3p_invariant_node_nm() -> int { return PDK_NODE_NM }
+
+// ── sim-first: report path ───────────────────────────────────────────
+
+fn samsung_sf3p_report() -> str {
+    return "[ai_native samsung_sf3p sim] tile=" + str(TILE_AREA_UMM2) +
+           " μ-mm² · chip=" + str(CHIP_AREA_UMM2) +
+           " μ-mm² · freq=" + str(FREQ_MIN_MHZ) + "-" + str(FREQ_MAX_MHZ) + " MHz"
+}
+
+// ── bench / sim main ────────────────────────────────────────────────
+
+fn main() {
+    println("[ai_native samsung_sf3p] stdlib/hal/backend/ai_native/samsung_sf3p.hexa — paper-tier Samsung SF3P backend")
+    println("  PDK: " + PDK_NAME + " (" + PDK_TIER + ", " + str(PDK_NODE_NM) + " nm GAA MBCFET — world-first 3GAP)")
+    println("  density: " + str(DENSITY_KGATE_PER_MM2) + " K-gates/mm² (Samsung public, util " + str(DENSITY_UTIL_BP) + " bp)")
+    println("  Vcore: " + str(VCORE_MV) + " mV")
+    println("  freq band: [" + str(FREQ_MIN_MHZ) + ", " + str(FREQ_MAX_MHZ) + "] MHz")
+    println("  area per tile (μ-mm²):")
+    println("    MAC array (σ²=144): " + str(MAC_ARRAY_AREA_UMM2))
+    println("    prov_regfile      : " + str(PROV_REGFILE_AREA_UMM2))
+    println("    promotion_mmu     : " + str(MMU_AREA_UMM2))
+    println("    bt_id_decoder     : " + str(BT_DECODER_AREA_UMM2))
+    println("    TILE TOTAL        : " + str(TILE_AREA_UMM2) + " (~0.0186 mm²)")
+    println("  chip area (n_tiles=" + str(N_TILES) + "): " + str(CHIP_AREA_UMM2) + " μ-mm² (~0.111 mm²)")
+    println("  overhead φ/σ_n: " + str(OVERHEAD_BP) + " bp (1/36 ≈ 2.78%)")
+    println("  Samsung MPW shuttle: " + str(SAMSUNG_MPW_LIMIT_UMM2) + " μ-mm² (~4 mm² typical SF3P slot)")
+    let fits = samsung_sf3p_fits_mpw_shuttle()
+    if fits {
+        println("  fits MPW shuttle: YES at n_tiles=" + str(N_TILES) + " (max fits ≈ " + str(samsung_sf3p_max_tiles_in_mpw()) + " tiles)")
+    } else {
+        println("  fits MPW shuttle: NO at n_tiles=" + str(N_TILES))
+    }
+    println("  arch guard: paper-spec only; FFI to Synopsys DC / Cadence Genus / Innovus downstream (canon §7.5).")
+    println("  gating: Samsung Foundry PDK licence + Korea fab partner MOU + IP audit + ~$5-10M MPW slot.")
+    println("  set: 3rd / 3 — completes ai_native PDK paper backend triplet (SKY130 + TSMC N5 + Samsung SF3P).")
+}
+
+main()

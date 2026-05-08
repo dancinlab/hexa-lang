@@ -1,5 +1,57 @@
 # stdlib/hal CHANGELOG
 
+## [1.11.0] - 2026-05-08
+
+### Added — `backend/ai_native/samsung_sf3p.hexa` Samsung SF3P PDK paper-tier backend (3rd / last PDK)
+- `backend/ai_native/samsung_sf3p.hexa` (~175 lines) — Samsung Foundry
+  SF3P 3nm GAA MBCFET PDK silicon backend stub for the AI-native
+  (Beyond-GPU) axis. **Completes the 3-PDK ai_native paper backend
+  set**: SKY130 (open-source baseline) → TSMC N5 (production) →
+  Samsung SF3P (advanced-node production).
+
+  **Pattern**: same as v1.9.0 (sky130) and v1.10.0 (tsmc_n5), mirrors
+  `backend/cuda/compute.hexa` shape but for AI-native silicon axis
+  (per-PDK area / freq / voltage table).
+
+  **PDK metadata** (web-searched 2026-05-08):
+    Samsung Foundry SF3P (3nm GAA MBCFET; world-first GAA production
+    node, since late 2023; "Performance" variant of 3GAP family);
+    EUV-multipatterned BEOL; Vcore 0.65V; freq band [2000, 2500] MHz;
+    density ~22 M-gate/mm² (Samsung public ~178 M-tx/mm² disclosure;
+    ~2.7x TSMC N5; ~44x SKY130);
+    Samsung MPW shuttle ~$5-10M MOU + Korea fab partner (Hwaseong S5
+    line) + IP audit gating.
+
+  **AI-native primitive area placeholders** (canon §6 + hexa-chip §6 row "Samsung SF3P"):
+    MAC array (σ²=144):   ~0.018 mm²    (dominant; ~2.7x shrink vs N5)
+    prov_regfile:         ~0.0004 mm²
+    promotion_counter_mmu:~0.00017 mm²
+    bt_id_decoder:        ~0.000009 mm²
+    TILE TOTAL:           ~0.0186 mm²
+    chip (n_tiles=6):     ~0.111 mm²    (FITS Samsung MPW 4 mm² ceiling
+                                          comfortably; ~215 tiles theoretical max)
+
+  Surface: samsung_sf3p_{tile_area, chip_area, overhead_bp, freq_band, vcore_mv,
+  fits_mpw_shuttle, max_tiles_in_mpw, module_meta, pdk_meta, invariant_*}.
+
+  **Architectural guard** (canon §7.5 + roadmap §G.5): paper-spec only —
+  NOT FFI to Synopsys DC / Cadence Genus / Innovus / ICC2 / Samsung
+  proprietary tools. Real synthesis + P&R + tape-out is downstream
+  scope; gated on Samsung Foundry PDK licence + Korea fab partner MOU +
+  IP audit + ~$5-10M MPW slot.
+
+  **Per-PDK split policy** completes from v1.9.0 / v1.10.0: 1 commit per
+  PDK. Sequence done: SKY130 (v1.9.0 35b14035) → TSMC N5
+  (v1.10.0 f11c560a) → Samsung SF3P (v1.11.0 — this iter).
+  3-PDK ai_native paper backend set: **complete**.
+
+  Korea-fab heritage tone (Samsung·SK·Hynix·DRAM/HBM lineage) is
+  editorial framing only; no proprietary data, NDA content, or
+  trade-secret material is included — only public foundry density /
+  voltage disclosures.
+
+  Phase G iter 9+3.
+
 ## [1.10.0] - 2026-05-08
 
 ### Added — `backend/ai_native/tsmc_n5.hexa` TSMC N5 PDK paper-tier backend (2nd PDK)
