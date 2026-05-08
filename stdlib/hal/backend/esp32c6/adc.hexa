@@ -1,0 +1,72 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/adc.hexa — ESP32-C6 ADC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved. ★ analog
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM v1.2 §27 SAR ADC (single ADC1 with 7 channels;
+//            no ADC2 on C6 — simplification vs C3's 5+1 split).
+// Surface:   esp32c6_adc_{configure,read,close}(...)
+// Dispatch:  adc.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   APB_SARADC base = DR_REG_APB_SARADC_BASE = 0x6000E000
+//
+// Channels:
+//   ADC1: 7 channels — pads GPIO0..GPIO6 (CH0..CH6).
+//   No ADC2 on C6.
+//
+// Resolution: 12-bit fixed. Attenuation 0/2.5/6/11 dB (same as ESP32-C3).
+
+let MODULE_NAME = "esp32c6_adc"
+let SIGMA_SLOT  = 5
+let PHI_KIND    = "analog"
+
+let DR_REG_APB_SARADC_BASE = 0x6000E000
+
+let APB_SARADC_CTRL_REG     = 0x000
+let APB_SARADC_CTRL2_REG    = 0x004
+let APB_SARADC_SAR1_STATUS  = 0x018
+
+let RES_12BIT = 12
+
+let ATTEN_0DB     = 0
+let ATTEN_2_5DB   = 1
+let ATTEN_6DB     = 2
+let ATTEN_11DB    = 3
+
+let ADC1_CH_MIN = 0
+let ADC1_CH_MAX = 6   // GPIO0..GPIO6
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_adc_configure(channel: int, atten: int) -> int {
+    if channel < ADC1_CH_MIN || channel > ADC1_CH_MAX { return -1 }
+    if atten < 0 || atten > 3 { return -2 }
+    return channel
+}
+
+fn esp32c6_adc_read(channel: int) -> int {
+    if channel < ADC1_CH_MIN || channel > ADC1_CH_MAX { return -1 }
+    return 0
+}
+
+fn esp32c6_adc_close(channel: int) -> int {
+    if channel < ADC1_CH_MIN || channel > ADC1_CH_MAX { return -1 }
+    return 0
+}
+
+fn esp32c6_adc_report(channel: int) -> str {
+    return "[esp32c6_adc sim] channel=" + str(channel) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c6_adc_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_adc sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  APB_SARADC=" + str(DR_REG_APB_SARADC_BASE))
+    println("  ADC1: 7 channels (GPIO0..6); 12-bit fixed; atten 0/2.5/6/11 dB; no ADC2")
+}

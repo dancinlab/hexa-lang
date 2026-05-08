@@ -1,5 +1,78 @@
 # stdlib/hal CHANGELOG
 
+## [1.1.0] - 2026-05-08
+
+### Added
+- `backend/esp32c6/{core,gpio,i2c,spi,uart,adc,dac,pwm,timer,intr,dma,rtc}.hexa`
+  — **6th vendor**, full HW-12 in a single iter. Espressif ESP32-C6
+  RV32IMAC RISC-V single-core @ 160 MHz + LP_CPU (low-power RISC-V
+  coprocessor) + WiFi 6 (802.11ax) + BLE 5.0 + 802.15.4 (Zigbee /
+  Thread / Matter). 12 paper-skeleton stubs maintain the HW-12
+  invariant.
+
+  Per-stub highlights (RV32IMAC vs RV32IMC C3 — Atomic ext added):
+  - `core.hexa`  — HP_CPU + LP_CPU (vs C3's single CPU); LP_RTC moved
+                   to dedicated LP_AONCLKRST block @ 0x600B0000.
+  - `gpio.hexa`  — DR_REG_GPIO_BASE 0x60091000 (moved vs C3 0x60004000);
+                   31-pin envelope (GPIO0..GPIO30); GPIO0..7 are
+                   **LP_GPIO** (accessible via LP controller during deep
+                   sleep — new on C6).
+  - `i2c.hexa`   — HP I2C @ 0x60004000 + **LP I2C @ 0x600B1000** (new
+                   on C6; LP_APB domain — sensor reads w/o HP wake).
+  - `spi.hexa`   — single GP-SPI (SPI2) @ 0x60080000; AES-128 HW-accel
+                   for encrypted SPI flash.
+  - `uart.hexa`  — HP UART0 @ 0x60000000 + UART1 + **LP UART0 @
+                   0x600B1400** (new on C6; wake HP on RX threshold).
+  - `adc.hexa`   — APB_SARADC @ 0x6000E000; **single ADC1 with 7
+                   channels** (GPIO0..6); no ADC2 (simplification vs
+                   C3's 5+1).
+  - `dac.hexa`   — no native DAC; LEDC-emulation (same as C3/S3).
+  - `pwm.hexa`   — LEDC @ 0x60007000; 6 channels × 4 timers.
+  - `timer.hexa` — TIMG0/1 @ 0x6000A000/0x6000B000; 2 × 54-bit GP
+                   timers; SYSTIMER @ 0x60023000 (52-bit, 16 MHz).
+  - `intr.hexa`  — **PLIC-compatible programming model** (HP_INTPRI @
+                   0x600C5000; PLIC_MX @ 0x20001000) — distinct from
+                   both C3's custom matrix AND vanilla RISC-V PLIC.
+                   First PLIC-class controller in stdlib/hal.
+  - `dma.hexa`   — GDMA @ 0x60080800; 3 RX/TX pairs (same as C3 family).
+  - `rtc.hexa`   — LP_RTC @ 0x600B0000 + LP_TIMER @ 0x600B0C00;
+                   counter-class (NOT calendar); LP_CPU coprocessor
+                   access during sleep (extends S3's ULP-RISC-V pattern).
+
+### Changed
+- `numerics_sim_marker_density.hexa` `CANONICAL_VENDORS` extended to 6
+  entries: + esp32c6. Expected backend stub count: 5 × 12 = 60 → 6 × 12 = **72**.
+- v1.1.0 vendor list: stm32h7, rp2040, esp32, esp32c3, esp32s3, **esp32c6**.
+
+### CPU class diversity at v1.1.0
+- ARM Cortex-M7 (stm32h7)
+- ARM Cortex-M0+ (rp2040)
+- Xtensa LX6 (esp32)
+- Xtensa LX7 + ULP-RISC-V (esp32s3)
+- RISC-V RV32IMC (esp32c3)
+- **RISC-V RV32IMAC (esp32c6)** ← new (Atomic ext) + HP/LP_CPU split
+- 6 distinct CPU classes / 4 ISAs (ARM × 2, Xtensa × 2, RISC-V × 2 variants).
+
+### ESP32-C6 distinctive features (vs C3)
+1. **LP domain peripherals**: LP_I2C, LP_UART, LP_GPIO 0..7, LP_RTC,
+   LP_TIMER — all accessible during deep sleep without waking HP_CPU.
+2. **WiFi 6** (802.11ax) + **802.15.4** (Zigbee / Thread / Matter) +
+   BLE 5.0 — first stdlib/hal vendor with 802.15.4.
+3. **PLIC-compatible interrupt model** — first vendor with standard-RV-
+   adjacent interrupt controller (vs C3's custom matrix).
+4. **HP_APB / LP_APB peripheral split** — most peripheral base addresses
+   moved compared to C3.
+
+### Provenance
+- ESP32-C6 register layout from ESP32-C6 TRM v1.2 (web-search
+  confirmed RV32IMAC; GPIO base + LP_RTC moved to LP_AON region).
+- Same web-search mandate per autonomy directive memory.
+
+### Roadmap
+- v1.2.0: T3 MMIO cross-compile harness (rp2040 + Renode emulation).
+- v1.3.0: compute.hexa first vendor backend (CUDA / WebGPU).
+- v1.4.0+: additional sub-vendors (esp32c2 / esp32h2 / esp32p4).
+
 ## [1.0.0] - 2026-05-08 — ★ MILESTONE RELEASE ★
 
 ### Tagged

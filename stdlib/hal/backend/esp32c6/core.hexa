@@ -1,0 +1,88 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/core.hexa — ESP32-C6 core backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    Espressif ESP32-C6 RV32IMAC RISC-V single-core @ 160 MHz +
+//            HP_CPU (high-perf RISC-V) + LP_CPU (low-power RISC-V)
+//            coprocessor + WiFi 6 + BLE 5.0 + 802.15.4 (Zigbee/Thread/Matter).
+// Chip ref:  ESP32-C6 TRM v1.2 §3 + RISC-V Privileged ISA + RV32IMAC
+//            (note Atomic ext vs C3's RV32IMC).
+// Surface:   esp32c6_core_{now_us,sleep_us,panic,critical_enter,critical_exit,
+//            cache_invalidate,reset}(...)
+// Dispatch:  core.hexa selects this via cfg-flag.
+//
+// Architecture:
+//   - HP_CPU (high-power RISC-V RV32IMAC @ 160 MHz, primary)
+//   - LP_CPU (low-power RISC-V coprocessor — runs in LP domain)
+//   - 32 KB I-cache + 16 KB cached SRAM via EXT_MEM controller
+//   - HP_APB (high-power) and LP_APB (low-power) peripheral domains
+//
+// Standard RV32IMAC CSRs (same as C3 + Atomic):
+//   mhartid 0xF14 / mstatus 0x300 / mie 0x304 / mip 0x344
+//   mtvec 0x305 / mcause 0x342 / mepc 0x341
+//   mcycle 0xB00 / mcycleh 0xB80
+//
+// LP_RTC + reset:
+//   LP_RTC base = 0x600B0000 (vs C3's 0x60008000 — moved on C6)
+//   LP_AONCLKRST_BASE = 0x600B0000 + offset for SW_SYS_RST.
+
+let MODULE_NAME = "esp32c6_core"
+let SIGMA_SLOT  = 0
+let PHI_KIND    = "digital"
+
+let DR_REG_LP_RTC_BASE = 0x600B0000
+let DR_REG_EXTMEM_BASE = 0x600C4000
+
+let CSR_MSTATUS = 0x300
+let CSR_MIE     = 0x304
+let CSR_MTVEC   = 0x305
+let CSR_MCYCLE  = 0xB00
+
+let SYSCLK_HZ = 160000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_core_now_us() -> int {
+    // STUB: csrr mcycle / (SYSCLK / 1e6); RV32IMAC adds atomic LR/SC for
+    //       lock-free counter sampling.
+    return 0
+}
+
+fn esp32c6_core_sleep_us(us: int) {
+    if us <= 0 { return }
+    // STUB: program SYSTIMER alarm, csrsi mie, ...; wfi
+}
+
+fn esp32c6_core_panic(msg: str) {
+    println("[esp32c6_core PANIC] " + msg)
+    // STUB: ebreak after UART0 / USB-Serial-JTAG msg
+}
+
+fn esp32c6_core_critical_enter() -> int {
+    // STUB: csrrci a0, mstatus, 0x8 (clear MIE; return prior)
+    return 0
+}
+
+fn esp32c6_core_critical_exit(prior: int) {
+    // STUB: csrw mstatus, prior
+}
+
+fn esp32c6_core_cache_invalidate() -> bool {
+    // STUB: write EXTMEM cache invalidate trigger
+    return true
+}
+
+fn esp32c6_core_reset() {
+    // STUB: write LP_RTC SW_SYS_RST bit
+}
+
+fn esp32c6_core_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_core sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  RV32IMAC @ " + str(SYSCLK_HZ) + " Hz; HP_CPU + LP_CPU coprocessor")
+    println("  WiFi 6 + BLE 5.0 + 802.15.4 (Zigbee/Thread/Matter); HP_APB + LP_APB split")
+}

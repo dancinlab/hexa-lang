@@ -1,0 +1,91 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/intr.hexa — ESP32-C6 IRQ backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM v1.2 §8 Interrupt Matrix + RISC-V Privileged
+//            ISA + **PLIC (Platform-Level Interrupt Controller)** — first
+//            ESP32 variant with standard RISC-V PLIC semantics (vs C3's
+//            custom Espressif matrix).
+// Surface:   esp32c6_intr_{configure,attach,enable,disable,clear}(...)
+// Dispatch:  intr.hexa selects this via cfg-flag.
+//
+// Architecture: ESP32-C6 uses an **interrupt matrix with PLIC-compatible
+// programming model** for HP_CPU + a separate matrix for LP_CPU. This
+// is a NEW pattern in stdlib/hal — distinct from:
+//   - C3 custom matrix (15 priority levels, vendor-specific)
+//   - Vanilla RISC-V PLIC (256 sources, 7 priority levels)
+//
+// MMIO layout:
+//
+//   HP_INTPRI:   base = DR_REG_HP_INTPRI_BASE = 0x600C5000
+//   PLIC_MX:     base = DR_REG_PLIC_MX_BASE   = 0x20001000   (RISC-V PLIC region)
+//
+//   PLIC_MXINT_ENABLE_REG       0x000   per-source enable mask
+//   PLIC_MXINT_TYPE_REG         0x004   level / edge type
+//   PLIC_MXINT_CLEAR_REG        0x008   clear pending edge IRQs
+//   PLIC_MXINT0..31_PRI_REG     0x010 + 4·n   priority per source (1..7)
+//   PLIC_MXINT_THRESH_REG       0x090   priority threshold for HP_CPU
+
+let MODULE_NAME = "esp32c6_intr"
+let SIGMA_SLOT  = 9
+let PHI_KIND    = "digital"
+
+let DR_REG_HP_INTPRI_BASE = 0x600C5000
+let DR_REG_PLIC_MX_BASE   = 0x20001000
+
+let PLIC_MXINT_ENABLE_REG    = 0x000
+let PLIC_MXINT_TYPE_REG      = 0x004
+let PLIC_MXINT_CLEAR_REG     = 0x008
+let PLIC_MXINT_PRI_REG_BASE  = 0x010
+let PLIC_MXINT_THRESH_REG    = 0x090
+
+let CSR_MIE    = 0x304
+let CSR_MTVEC  = 0x305
+
+let MAX_PERIPHERAL_IRQ = 31
+let MAX_PRIO           = 7
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_intr_configure(vector: int, priority: int) -> int {
+    if vector < 0 || vector > 23 { return -1 }
+    if priority < 0 || priority > 3 { return -2 }
+    // STUB: write PLIC_MXINTn_PRI = sim_to_plic(priority); set MXINT_ENABLE bit
+    return vector
+}
+
+fn esp32c6_intr_attach(handle: int, name: str) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c6_intr_enable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    return true
+}
+
+fn esp32c6_intr_disable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    return true
+}
+
+fn esp32c6_intr_clear(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    return true
+}
+
+fn esp32c6_intr_report(handle: int) -> str {
+    return "[esp32c6_intr sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c6_intr_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_intr sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  HP_INTPRI=" + str(DR_REG_HP_INTPRI_BASE) + " PLIC_MX=" + str(DR_REG_PLIC_MX_BASE))
+    println("  PLIC-compatible programming model (vs C3 custom matrix); 31 sources × 7 prio")
+}

@@ -1,0 +1,73 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/pwm.hexa — ESP32-C6 PWM backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM v1.2 §11 LEDC + §13 MCPWM (motor control,
+//            same as ESP32 family; out of LEDC scope).
+// Surface:   esp32c6_pwm_{configure,start,set_duty,set_freq,stop}(...)
+// Dispatch:  pwm.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   LEDC:  base = DR_REG_LEDC_BASE = 0x60007000
+//
+//   Same channel/timer register pattern as ESP32-C3 (6 channels × 4
+//   timers, 1..14-bit duty). LEDC clock source: APB_CLK (80 MHz) or
+//   XTAL_CLK (40 MHz).
+
+let MODULE_NAME = "esp32c6_pwm"
+let SIGMA_SLOT  = 7
+let PHI_KIND    = "digital"
+
+let DR_REG_LEDC_BASE = 0x60007000
+
+let LEDC_CH0_CONF0_REG  = 0x000
+let LEDC_CH0_DUTY_REG   = 0x008
+let LEDC_TIMER0_CONF_REG = 0x0A0
+
+let APB_CLK_HZ = 80000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_pwm_configure(gen: int, channel: int, freq_hz: int) -> int {
+    if gen < 0 || gen > 5 { return -1 }   // 6 LEDC channels
+    if channel != 0 { return -2 }
+    if freq_hz < 1 || freq_hz > 40000000 { return -3 }
+    return gen * 12 + channel
+}
+
+fn esp32c6_pwm_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c6_pwm_set_duty(handle: int, duty_x100: int) -> bool {
+    if handle < 0 { return false }
+    if duty_x100 < 0 || duty_x100 > 10000 { return false }
+    return true
+}
+
+fn esp32c6_pwm_set_freq(handle: int, freq_hz: int) -> bool {
+    if handle < 0 || freq_hz < 1 { return false }
+    return true
+}
+
+fn esp32c6_pwm_stop(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c6_pwm_report(handle: int) -> str {
+    return "[esp32c6_pwm sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c6_pwm_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_pwm sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  LEDC=" + str(DR_REG_LEDC_BASE) + " (6 channels × 4 timers; 1..14-bit duty)")
+}

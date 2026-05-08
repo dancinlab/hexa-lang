@@ -1,0 +1,84 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/gpio.hexa — ESP32-C6 GPIO backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM v1.2 §6 IO MUX and GPIO Matrix.
+// Surface:   esp32c6_gpio_{configure,write,read,toggle}(pin, ...)
+// Dispatch:  gpio.hexa selects this via cfg-flag.
+//
+// MMIO layout (HP_APB region; addresses moved vs C3):
+//
+//   GPIO Matrix:   DR_REG_GPIO_BASE   = 0x60091000
+//     GPIO_OUT_REG               0x004   GPIO 0..30 output (single bank)
+//     GPIO_OUT_W1TS_REG          0x008
+//     GPIO_OUT_W1TC_REG          0x00C
+//     GPIO_ENABLE_REG            0x020
+//     GPIO_ENABLE_W1TS_REG       0x024
+//     GPIO_ENABLE_W1TC_REG       0x028
+//     GPIO_IN_REG                0x03C
+//
+//   IO_MUX:        DR_REG_IO_MUX_BASE = 0x60090000
+//
+// 31-pin envelope (GPIO0..GPIO30; vs C3's 22 and S3's 45). Single bank
+// (fits in 32-bit register). GPIO12..17 reserved for SPI flash. GPIO18..19
+// available for USB-Serial-JTAG. New on C6: GPIO0..7 are LP_GPIO (low-
+// power domain) — accessible via LP_GPIO controller in LP domain even
+// during deep sleep.
+
+let MODULE_NAME = "esp32c6_gpio"
+let SIGMA_SLOT  = 1
+let PHI_KIND    = "digital"
+
+let DR_REG_GPIO_BASE     = 0x60091000
+let DR_REG_IO_MUX_BASE   = 0x60090000
+
+let GPIO_OUT_REG         = 0x004
+let GPIO_OUT_W1TS_REG    = 0x008
+let GPIO_OUT_W1TC_REG    = 0x00C
+let GPIO_ENABLE_REG      = 0x020
+let GPIO_ENABLE_W1TS_REG = 0x024
+let GPIO_IN_REG          = 0x03C
+
+let ESP32C6_GPIO_MIN = 0
+let ESP32C6_GPIO_MAX = 30
+
+let MCU_SEL_GPIO = 1
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_gpio_configure(pin: int, mode: int) -> int {
+    if pin < ESP32C6_GPIO_MIN || pin > ESP32C6_GPIO_MAX { return -1 }
+    if mode < 0 || mode > 5 { return -2 }
+    return pin
+}
+
+fn esp32c6_gpio_write(pin: int, val: bool) -> int {
+    if pin < ESP32C6_GPIO_MIN || pin > ESP32C6_GPIO_MAX { return -1 }
+    return 0
+}
+
+fn esp32c6_gpio_read(pin: int) -> int {
+    if pin < ESP32C6_GPIO_MIN || pin > ESP32C6_GPIO_MAX { return -1 }
+    return 0
+}
+
+fn esp32c6_gpio_toggle(pin: int) -> int {
+    if pin < ESP32C6_GPIO_MIN || pin > ESP32C6_GPIO_MAX { return -1 }
+    return 0
+}
+
+fn esp32c6_gpio_report(pin: int) -> str {
+    return "[esp32c6_gpio sim] pin=" + str(pin) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c6_gpio_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_gpio sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  GPIO=" + str(DR_REG_GPIO_BASE) + " IO_MUX=" + str(DR_REG_IO_MUX_BASE))
+    println("  31 pins (GPIO0..30); LP_GPIO 0..7 in LP domain; flash 12..17; USB-JTAG 18..19")
+}

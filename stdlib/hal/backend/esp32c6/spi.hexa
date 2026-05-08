@@ -1,0 +1,67 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/spi.hexa — ESP32-C6 SPI backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM v1.2 §31 GP-SPI Controller (single user SPI;
+//            same as C3, with MCU_RAM coupling for AES-128 hardware
+//            acceleration on encrypted SPI flash).
+// Surface:   esp32c6_spi_{configure,xfer,close}(...)
+// Dispatch:  spi.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   SPI2 (GP-SPI, only user SPI):  DR_REG_SPI2_BASE = 0x60080000
+//
+//   Same SPI_USER / SPI_CLOCK / SPI_W0..W15 layout as ESP32-C3.
+//   Max f_spi = APB_CLK = 80 MHz with CLK_EQU_SYSCLK.
+
+let MODULE_NAME = "esp32c6_spi"
+let SIGMA_SLOT  = 3
+let PHI_KIND    = "digital"
+
+let DR_REG_SPI2_BASE = 0x60080000
+
+let SPI_CMD_REG       = 0x00
+let SPI_CLOCK_REG     = 0x18
+let SPI_USER_REG      = 0x1C
+let SPI_MOSI_DLEN_REG = 0x28
+let SPI_MISO_DLEN_REG = 0x2C
+let SPI_W0_REG        = 0x80
+
+let APB_CLK_HZ = 80000000
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_spi_configure(unit: int, speed_hz: int, mode: int) -> int {
+    if unit != 2 { return -1 }
+    if speed_hz < 1000 || speed_hz > 80000000 { return -2 }
+    if mode < 0 || mode > 3 { return -3 }
+    return unit
+}
+
+fn esp32c6_spi_xfer(unit: int, tx: int) -> int {
+    if unit != 2 { return -1 }
+    if tx < 0 || tx > 0xFFFF { return -2 }
+    return 0
+}
+
+fn esp32c6_spi_close(unit: int) -> int {
+    if unit != 2 { return -1 }
+    return 0
+}
+
+fn esp32c6_spi_report(unit: int) -> str {
+    return "[esp32c6_spi sim] unit=" + str(unit) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c6_spi_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_spi sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  GP-SPI (SPI2)=" + str(DR_REG_SPI2_BASE))
+    println("  max f_spi = APB_CLK = 80 MHz; AES-128 HW-accel for encrypted flash")
+}

@@ -1,0 +1,85 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/timer.hexa — ESP32-C6 timer backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM v1.2 §17 Timer Group + §16 SYSTIMER.
+// Surface:   esp32c6_timer_{configure,start,stop,now_ticks,set_callback}(...)
+// Dispatch:  timer.hexa selects this via cfg-flag.
+//
+// MMIO layout:
+//
+//   TIMG0:  base = DR_REG_TIMERGROUP0_BASE = 0x6000A000
+//   TIMG1:  base = DR_REG_TIMERGROUP1_BASE = 0x6000B000
+//
+// 2 × 54-bit GP timers (1 timer per group on C6, like C3).
+// SYSTIMER block at 0x60023000 (52-bit, 16 MHz fixed) for high-res µs.
+
+let MODULE_NAME = "esp32c6_timer"
+let SIGMA_SLOT  = 8
+let PHI_KIND    = "digital"
+
+let DR_REG_TIMERGROUP0_BASE = 0x6000A000
+let DR_REG_TIMERGROUP1_BASE = 0x6000B000
+let DR_REG_SYSTIMER_BASE    = 0x60023000
+
+let TIMG_T0CONFIG_REG  = 0x000
+let TIMG_T0LO_REG      = 0x004
+let TIMG_T0HI_REG      = 0x008
+let TIMG_T0UPDATE_REG  = 0x00C
+let TIMG_T0ALARMLO_REG = 0x010
+let TIMG_T0LOAD_REG    = 0x020
+
+let MODE_ONESHOT  = 0
+let MODE_PERIODIC = 1
+let MODE_CAPTURE  = 2
+let MODE_PWM      = 3
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_timer_configure(idx: int, mode: int, period_us: int) -> int {
+    if idx < 0 || idx > 1 { return -1 }   // 2 timers on C6
+    if mode < 0 || mode > 3 { return -2 }
+    if period_us < 1 { return -3 }
+    return idx
+}
+
+fn esp32c6_timer_start(handle: int) -> bool {
+    if handle < 0 || handle > 1 { return false }
+    return true
+}
+
+fn esp32c6_timer_stop(handle: int) -> bool {
+    if handle < 0 || handle > 1 { return false }
+    return true
+}
+
+fn esp32c6_timer_now_ticks(handle: int) -> int {
+    if handle < 0 { return -1 }
+    return 0
+}
+
+fn esp32c6_timer_set_callback(handle: int, period_us: int) -> bool {
+    if handle < 0 || handle > 1 { return false }
+    return true
+}
+
+fn esp32c6_timer_clear(handle: int) -> bool {
+    if handle < 0 || handle > 1 { return false }
+    return true
+}
+
+fn esp32c6_timer_report(handle: int) -> str {
+    return "[esp32c6_timer sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c6_timer_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_timer sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  TIMG0=" + str(DR_REG_TIMERGROUP0_BASE) + " TIMG1=" + str(DR_REG_TIMERGROUP1_BASE))
+    println("  2 × 54-bit GP timers; SYSTIMER=" + str(DR_REG_SYSTIMER_BASE) + " (52-bit, 16 MHz)")
+}

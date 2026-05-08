@@ -1,0 +1,90 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c6/rtc.hexa — ESP32-C6 RTC backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C6 RV32IMAC RISC-V @ 160 MHz.
+// Chip ref:  ESP32-C6 TRM v1.2 §35 LP_AONCLKRST (RTC counter moved to
+//            LP_AON domain) + §36 LP_TIMER (RTC alarm).
+// Surface:   esp32c6_rtc_{configure,start,set_time,get_time,set_alarm,clear,report}(...)
+// Dispatch:  rtc.hexa selects this via cfg-flag.
+//
+// MMIO layout (peripheral region 0x600B0000 = LP domain — distinct from
+// C3's 0x60008000 — Espressif moved RTC to dedicated LP_AON block on C6):
+//
+//   LP_RTC:   base = DR_REG_LP_RTC_BASE   = 0x600B0000
+//   LP_TIMER: base = DR_REG_LP_TIMER_BASE = 0x600B0C00   (alarm)
+//
+//   LP_TIMER_LO_REG / HI_REG    counter low/high (52-bit)
+//   LP_TIMER_TARGET_LO/HI       alarm target value
+//   LP_TIMER_ALRM_EN_REG        enable bits
+//
+// Same counter-class architecture as ESP32 family (NOT calendar IP).
+// Calendar arithmetic in software using epoch_base in LP_RTC retention regs.
+//
+// LP_CPU access: ESP32-C6's LP_CPU coprocessor (RISC-V in LP domain) can
+// read/write LP_TIMER directly during deep sleep — extends ULP-RISC-V
+// pattern from S3.
+
+let MODULE_NAME = "esp32c6_rtc"
+let SIGMA_SLOT  = 11
+let PHI_KIND    = "digital"
+
+let DR_REG_LP_RTC_BASE   = 0x600B0000
+let DR_REG_LP_TIMER_BASE = 0x600B0C00
+
+let LP_TIMER_LO_REG       = 0x004
+let LP_TIMER_HI_REG       = 0x008
+let LP_TIMER_TARGET_LO    = 0x010
+let LP_TIMER_TARGET_HI    = 0x014
+let LP_TIMER_ALRM_EN_REG  = 0x020
+
+let SLOW_CLK_INTERNAL_HZ = 150000
+let SLOW_CLK_XTAL32K_HZ  = 32768
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c6_rtc_configure(idx: int) -> int {
+    if idx != 0 { return -1 }
+    return idx
+}
+
+fn esp32c6_rtc_start(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c6_rtc_set_time(handle: int, year: int, month: int, day: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    if year < 1970 || year > 2100 { return false }
+    return true
+}
+
+fn esp32c6_rtc_get_time(handle: int) -> str {
+    if handle < 0 { return "rtc: invalid" }
+    return "[esp32c6_rtc sim] time read TODO"
+}
+
+fn esp32c6_rtc_set_alarm(handle: int, hour: int, minute: int, second: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c6_rtc_clear(handle: int) -> bool {
+    if handle < 0 { return false }
+    return true
+}
+
+fn esp32c6_rtc_report(handle: int) -> str {
+    return "[esp32c6_rtc sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c6_rtc_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c6_rtc sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  LP_RTC=" + str(DR_REG_LP_RTC_BASE) + " LP_TIMER=" + str(DR_REG_LP_TIMER_BASE))
+    println("  counter-class (calendar in software); LP_CPU coprocessor access during sleep")
+}
