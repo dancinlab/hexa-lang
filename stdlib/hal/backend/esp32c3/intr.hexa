@@ -1,0 +1,110 @@
+#!hexa strict
+// stdlib/hal/backend/esp32c3/intr.hexa — ESP32-C3 IRQ backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    ESP32-C3 RV32IMC RISC-V single-core @ 160 MHz.
+// Chip ref:  ESP32-C3 TRM §8 Interrupt Matrix; RISC-V Privileged ISA
+//            §3 Machine-mode CSRs (MIE, MIP, MTVEC, MEPC, MCAUSE).
+// Surface:   esp32c3_intr_{configure,attach,enable,disable,clear}(...)
+// Dispatch:  intr.hexa selects this via cfg-flag.
+//
+// Architecture: ESP32-C3 uses a custom Espressif **interrupt matrix**
+// (NOT a standard PLIC). 31 peripheral IRQ lines route to 1..31 CPU
+// IRQs via per-source enable + priority registers. Differs from
+// vanilla RISC-V PLIC layout but conceptually similar (priority +
+// claim/complete pattern adapted to Espressif's matrix scheme).
+//
+// MMIO layout:
+//
+//   INTERRUPT base = 0x600C2000
+//
+//   INTERRUPT_CORE0_<peripheral>_MAP_REG   per-source CPU IRQ # mapping
+//                                           (e.g. INTERRUPT_CORE0_GPIO_INT_MAP_REG)
+//   INTERRUPT_CORE0_INTR_PRIO_REG_<n>      per-CPU-IRQ priority (1..15)
+//   INTERRUPT_CORE0_CPU_INT_ENABLE_REG     bitmap of enabled CPU IRQs
+//   INTERRUPT_CORE0_CPU_INT_THRESH_REG     priority threshold
+//   INTERRUPT_CORE0_CPU_INT_CLEAR_REG      clear pending edge IRQs
+//
+// RISC-V CSRs (CPU-side):
+//   MIE     (Machine Interrupt Enable)        0x304
+//   MIP     (Machine Interrupt Pending)       0x344
+//   MTVEC   (Machine Trap Vector Base)        0x305   handler base
+//   MCAUSE  (Machine Cause)                   0x342   trap reason
+//   MEPC    (Machine Exception PC)            0x341   return PC
+//
+// Custom Espressif CSRs (vendor-specific):
+//   MEIE    (Machine External Interrupt Enable) — partial mask
+//   MEIP    (Machine External Interrupt Pending)
+//
+// Priority: 15 levels (1..15; sim's 4-level maps to {1, 4, 8, 14}).
+
+let MODULE_NAME = "esp32c3_intr"
+let SIGMA_SLOT  = 9
+let PHI_KIND    = "digital"
+
+let DR_REG_INTERRUPT_BASE = 0x600C2000
+
+let INTERRUPT_CORE0_INTR_PRIO_REG_BASE = 0x114
+let INTERRUPT_CORE0_CPU_INT_ENABLE_REG = 0x104
+let INTERRUPT_CORE0_CPU_INT_THRESH_REG = 0x108
+let INTERRUPT_CORE0_CPU_INT_CLEAR_REG  = 0x10C
+
+let CSR_MIE    = 0x304
+let CSR_MIP    = 0x344
+let CSR_MTVEC  = 0x305
+let CSR_MCAUSE = 0x342
+
+let MAX_PERIPHERAL_IRQ = 31
+let MAX_PRIO           = 15
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn esp32c3_intr_configure(vector: int, priority: int) -> int {
+    if vector < 0 || vector > 23 { return -1 }
+    if priority < 0 || priority > 3 { return -2 }
+    // STUB: write INTERRUPT_CORE0_<peri>_MAP_REG = vector;
+    //       set INTERRUPT_CORE0_INTR_PRIO_REG_<vector> = mapped priority
+    //       (sim 0..3 → matrix 14..1, inverted because matrix uses higher = higher prio)
+    return vector
+}
+
+fn esp32c3_intr_attach(handle: int, name: str) -> bool {
+    if handle < 0 { return false }
+    // STUB: write MTVEC base + handler offset (vectored mode supported);
+    //       Espressif typically uses single trap entry + dispatcher.
+    return true
+}
+
+fn esp32c3_intr_enable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: set INTERRUPT_CORE0_CPU_INT_ENABLE_REG bit (handle); CSRSI MIE
+    return true
+}
+
+fn esp32c3_intr_disable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: clear INTERRUPT_CORE0_CPU_INT_ENABLE_REG bit
+    return true
+}
+
+fn esp32c3_intr_clear(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: write INTERRUPT_CORE0_CPU_INT_CLEAR_REG = (1 << handle)
+    return true
+}
+
+fn esp32c3_intr_report(handle: int) -> str {
+    return "[esp32c3_intr sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn esp32c3_intr_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[esp32c3_intr sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  INTERRUPT base=" + str(DR_REG_INTERRUPT_BASE) + " (Espressif RISC-V matrix)")
+    println("  31 peripheral IRQs → 31 CPU IRQs; 15 priority levels")
+    println("  CSRs: MIE/MIP/MTVEC/MCAUSE — RV32IMC standard")
+}

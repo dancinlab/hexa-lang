@@ -1,5 +1,81 @@
 # stdlib/hal CHANGELOG
 
+## [0.11.0] - 2026-05-08
+
+### Added
+- `backend/{stm32h7,rp2040,esp32,esp32c3,esp32s3}/intr.hexa` —
+  σ-slot 9 (intr) HW-backend stubs across ALL 5 vendors. Per-vendor
+  coverage 8/12 → 9/12. Total backend stub count: 40 → 45.
+
+  This iter spans **4 distinct interrupt controller architectures**:
+  - **ARM NVIC (M7)** in stm32h7/intr.hexa — Cortex-M7 240-IRQ NVIC
+    at architectural 0xE000E100 + EXTI ext-line gating; 16 priority
+    levels (4-bit NVIC_PRIO_BITS); STM32H7 maps ~150 peripheral IRQs.
+  - **ARM NVIC (M0+)** in rp2040/intr.hexa — Cortex-M0+ simpler NVIC
+    (32 IRQs, 2-bit priority = 4 levels matching sim exactly); dual-core
+    cross-routing via SIO PROC<n>_INTR (separate NVIC per core).
+  - **Xtensa LX6 interrupt matrix** in esp32/intr.hexa — DPORT-based
+    matrix at 0x3FF00000; 70 peripheral sources route through per-core
+    MAP regs to 32 CPU IRQ × 7 priority levels; PRO + APP CPU separate
+    matrices; vector entries in IRAM @ Xtensa-level offsets (0x40000180+).
+  - **RISC-V (custom Espressif matrix)** in esp32c3/intr.hexa — INTERRUPT
+    block at 0x600C2000; 31 peripheral IRQs × 15 priority levels;
+    standard RV32IMC CSRs (MIE/MIP/MTVEC/MCAUSE) + Espressif vendor
+    extensions (MEIE/MEIP partial mask).
+  - **Xtensa LX7 interrupt matrix** in esp32s3/intr.hexa — INTERRUPT
+    block at 0x600C2000 (moved from DPORT vs LX6); ~99 peripheral
+    sources (vs 70 on LX6); same 32 × 7 envelope; LX7-specific vector
+    levels including NMI@0x40000380.
+
+  Surface (mirrors `stdlib/hal/intr.hexa` sim):
+    intr_configure(vector, priority) -> int      (vector ≤ 23 = J₂)
+    intr_attach(handle, name) -> bool
+    intr_enable(handle) -> bool
+    intr_disable(handle) -> bool
+    intr_clear(handle) -> bool
+    intr_report(handle) -> str
+
+  Sim's 4-level priority (PRIO_HIGH/REAL_T/NORMAL/LOW) maps onto each
+  vendor's native scheme:
+    - stm32h7: 4 of 16 NVIC levels (PRIO_HIGH=0, LOW=3, low-bit-only used)
+    - rp2040:  4 = exact match (Cortex-M0+ has 2-bit = 4 levels)
+    - esp32 / esp32s3: 4 of 7 Xtensa levels (HIGH→4, REAL_T→3, NORMAL→1, LOW→1)
+    - esp32c3: 4 of 15 matrix levels (inverted: matrix high # = high prio)
+
+### Changed
+- HW-backend stub file count: 40 → 45 (5 vendors × 9 peripherals).
+- Per-vendor coverage: 8/12 → 9/12 across all 5 vendors.
+- F-HAL closure unchanged at 67% × 5 (sat-1 ✓ holds).
+
+### Architecture coverage milestone
+- v0.11.0 is the **most architecturally diverse** iter so far. Single
+  σ-slot (intr) requires 4 distinct controller IPs covered:
+    1. ARM Cortex-M7 NVIC (architectural SCS, 16 prio)
+    2. ARM Cortex-M0+ NVIC (architectural SCS, 4 prio)
+    3. Xtensa LX6/LX7 interrupt matrix (vendor-custom, 7 levels)
+    4. Espressif custom RISC-V matrix (vendor-custom, 15 levels;
+       NOT a standard RV-PLIC layout)
+  This validates that the cfg-flag dispatch model can map a single
+  surface (intr_configure / intr_enable / ...) onto fundamentally
+  different controller architectures — the strongest cross-ISA
+  abstraction test in stdlib/hal so far.
+
+### Provenance
+- Register sketches per vendor reference manual cross-reference:
+    - STM32H7 NVIC from ARMv7-M PM0214 §4.3 + RM0433 §11.
+    - RP2040 NVIC from ARMv6-M PM0223 §4.3 + RP2040 Datasheet §2.3.2.
+    - ESP32 DPORT intr matrix from ESP32 TRM §6.
+    - ESP32-C3 INTERRUPT block from ESP32-C3 TRM §8 + RV ISA.
+    - ESP32-S3 INTERRUPT block from ESP32-S3 TRM §6.
+
+### Roadmap
+- v0.12.0: dma (σ-slot 10) — STM32H7 MDMA/BDMA + RP2040 12-channel DMA
+  + ESP32 family GDMA. Different DMA architectures per vendor (channel
+  count + descriptor format + chaining model).
+- v0.13.0: rtc (σ-slot 11) — STM32 RTC peripheral + RP2040 RTC + ESP32
+  RTC_CNTL.
+- v0.14.0: core (σ-slot 0) — last gap; CPU-level cache / sleep / clock.
+
 ## [0.10.0] - 2026-05-08
 
 ### Added

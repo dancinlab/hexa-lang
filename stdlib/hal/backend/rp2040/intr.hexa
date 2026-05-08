@@ -1,0 +1,103 @@
+#!hexa strict
+// stdlib/hal/backend/rp2040/intr.hexa — RP2040 IRQ backend — paper skeleton.
+//
+// Phase: skeleton / stub. Sim-first invariant preserved.
+//
+// Target:    Raspberry Pi RP2040 dual Cortex-M0+ @ 133 MHz.
+// Chip ref:  ARMv6-M PM0223 §4.3 NVIC + RP2040 Datasheet §2.3.2 IRQ
+//            mapping (32 IRQs per core, dual-core but separate NVICs).
+// Surface:   rp2040_intr_{configure,attach,enable,disable,clear}(...)
+// Dispatch:  intr.hexa selects this via cfg-flag.
+//
+// MMIO layout (NVIC — same architectural address as Cortex-M7, but
+// Cortex-M0+ NVIC is simpler):
+//
+//   NVIC base = 0xE000E100   (architectural System Control Space)
+//
+//   NVIC_ISER                 0x000   set-enable (single 32-bit, 32 IRQs)
+//   NVIC_ICER                 0x080   clear-enable
+//   NVIC_ISPR                 0x100   set-pending
+//   NVIC_ICPR                 0x180   clear-pending
+//   NVIC_IPR<n>               0x300 + 4·n   priority (n=0..7, 4 IRQs/word)
+//
+// Cortex-M0+ has only 32 external IRQs (vs 240 on M7), 2-bit priority
+// encoding (4 levels — exactly matches sim's 4-level scheme), no
+// preemption/sub-priority split (no AIRCR.PRIGROUP).
+//
+// Dual-core caveat: RP2040 has TWO Cortex-M0+ cores, each with its
+// own NVIC. Each peripheral IRQ can be routed to core 0, core 1, or
+// both. The RP2040 PROC0_INTR / PROC1_INTR registers live in the
+// SIO block (0xD0000000) for cross-core interrupt routing.
+//
+// IRQ table (per RP2040 §2.3.2):
+//   0  TIMER_IRQ_0   1  TIMER_IRQ_1   2  TIMER_IRQ_2   3  TIMER_IRQ_3
+//   4  PWM_IRQ_WRAP  5  USBCTRL_IRQ   6  XIP_IRQ       7  PIO0_IRQ_0
+//   ...up to 31. Exact mapping in pico-sdk's hardware/regs/intctrl.h.
+
+let MODULE_NAME = "rp2040_intr"
+let SIGMA_SLOT  = 9
+let PHI_KIND    = "digital"
+
+let NVIC_BASE     = 0xE000E100
+let NVIC_ISER     = 0x000
+let NVIC_ICER     = 0x080
+let NVIC_ISPR     = 0x100
+let NVIC_ICPR     = 0x180
+let NVIC_IPR      = 0x300
+
+let MAX_IRQ_NUM   = 32        // Cortex-M0+ ceiling
+let NVIC_PRIO_BITS = 2        // 4 priority levels (matches sim)
+
+// IRQ table excerpts (per pico-sdk).
+let TIMER_IRQ_0 = 0
+let PWM_IRQ_WRAP = 4
+let USBCTRL_IRQ = 5
+let PIO0_IRQ_0 = 7
+
+// ── stub handlers ─────────────────────────────────────────────────────
+
+fn rp2040_intr_configure(vector: int, priority: int) -> int {
+    if vector < 0 || vector > 23 { return -1 }
+    if priority < 0 || priority > 3 { return -2 }
+    // STUB: NVIC_IPR[vector/4] byte (vector%4) = priority << 6 (2-bit field)
+    return vector
+}
+
+fn rp2040_intr_attach(handle: int, name: str) -> bool {
+    if handle < 0 { return false }
+    // STUB: copy current vector table to SRAM via VTOR; patch entry
+    //       at offset (16 + handle) * 4 with the ISR address.
+    return true
+}
+
+fn rp2040_intr_enable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: NVIC_ISER = 1 << handle (single 32-bit register on M0+)
+    return true
+}
+
+fn rp2040_intr_disable(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: NVIC_ICER = 1 << handle
+    return true
+}
+
+fn rp2040_intr_clear(handle: int) -> bool {
+    if handle < 0 || handle > 23 { return false }
+    // STUB: NVIC_ICPR = 1 << handle
+    return true
+}
+
+fn rp2040_intr_report(handle: int) -> str {
+    return "[rp2040_intr sim] handle=" + str(handle) + " (skeleton stub — TODO MMIO)"
+}
+
+fn rp2040_intr_module_meta() -> [str] {
+    return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "4"]
+}
+
+fn main() {
+    println("[rp2040_intr sim] STUB skeleton — sim-first; HW MMIO TODO")
+    println("  NVIC=" + str(NVIC_BASE) + " (Cortex-M0+; 32 IRQs; 2-bit prio = 4 levels)")
+    println("  dual-core: each core has its own NVIC; cross-core route via SIO PROC<n>_INTR")
+}
