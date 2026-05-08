@@ -1,0 +1,96 @@
+#!hexa strict
+// stdlib/hal/backend/ptx/compute.hexa — NVIDIA PTX GPU IR backend
+//                                        — paper skeleton (validation only).
+//
+// Phase: skeleton / stub. Real LLVM nvptx + ptxas integration is
+// downstream FFI scope (out of stdlib). This file vendors the PTX
+// directive vocabulary and provides paper-only validators that
+// operate on PTX assembly *strings*. Sim-first invariant preserved.
+//
+// Target:    PTX 8.5 (NVIDIA, in lock-step with CUDA Toolkit 13.2,
+//            web-search 2026-05-08 — CUDA Programming Guide release
+//            13.2 dated 2026-03-04).
+// Spec ref:  docs.nvidia.com/cuda/parallel-thread-execution/
+// Surface:   ptx_{validate_directive_header, state_space_to_tier, meta}
+// Consumers: stdlib/hal/compute.hexa (φ=1 IR_PTX codepath).
+//
+// canon: ~/core/canon/domains/compute/gpgpu/gpgpu.md §3 (φ=2 IR
+// substrate, PTX is the NVIDIA-native lower target) + §4.2 (τ=4
+// memory tier mapping).
+
+// ─── PTX version + target (CUDA 13.2 baseline) ────────────────────────
+
+let PTX_VERSION_MAJOR = 8
+let PTX_VERSION_MINOR = 5
+let PTX_VERSION_STRING = "8.5"
+
+// SM target values per CUDA 13 capability matrix:
+//   sm_75 = Turing (T4, RTX 20)
+//   sm_80 = Ampere baseline (A100)
+//   sm_86 = Ampere consumer (RTX 30)
+//   sm_89 = Ada (RTX 40, L40)
+//   sm_90 = Hopper (H100, H200)  — thread-block clusters land here
+//   sm_100 = Blackwell (B100, B200, GB200) — current top end 2026-05-08
+let PTX_TARGET_DEFAULT = "sm_90"           // Hopper baseline (CC ≥ 9.0 cluster)
+let PTX_TARGET_LATEST  = "sm_100"          // Blackwell top end
+
+// ─── State spaces (PTX ISA spec §5.1) ────────────────────────────────
+//
+// PTX's 6 declared state spaces map onto the τ=4 GPGPU memory tier
+// model (compute.hexa TIER_*). .reg and .local both reside in
+// per-thread space; .param is read-only inputs (typically TIER_DEVICE
+// for kernel params, TIER_CONSTANT-like cached per-thread for func params).
+
+let PTX_SS_REG    = ".reg"      // ↔ TIER_PRIVATE  (registers)
+let PTX_SS_LOCAL  = ".local"    // ↔ TIER_PRIVATE  (per-thread spill)
+let PTX_SS_SHARED = ".shared"   // ↔ TIER_GROUP    (CTA-shared SRAM)
+let PTX_SS_GLOBAL = ".global"   // ↔ TIER_DEVICE   (HBM)
+let PTX_SS_PARAM  = ".param"    // ↔ TIER_DEVICE   (kernel param, read-only)
+let PTX_SS_CONST  = ".const"    // ↔ TIER_CONSTANT (cached, read-only)
+
+// τ=4 tier IDs mirror compute.hexa TIER_PRIVATE/GROUP/DEVICE/CONSTANT
+let TIER_PRIVATE_LOCAL  = 0
+let TIER_GROUP_LOCAL    = 1
+let TIER_DEVICE_LOCAL   = 2
+let TIER_CONSTANT_LOCAL = 3
+
+// ─── validators (paper-only; operate on PTX strings) ─────────────────
+
+fn ptx_validate_directive_header(s: str) -> bool {
+    // PTX module preamble must declare both .version and .target before
+    // any function body. Validator checks for the textual presence of
+    // the two directives.
+    if s.contains(".version") == false { return false }
+    if s.contains(".target") == false { return false }
+    return true
+}
+
+fn ptx_state_space_to_tier(name: str) -> int {
+    if name == PTX_SS_REG    { return TIER_PRIVATE_LOCAL }
+    if name == PTX_SS_LOCAL  { return TIER_PRIVATE_LOCAL }
+    if name == PTX_SS_SHARED { return TIER_GROUP_LOCAL }
+    if name == PTX_SS_GLOBAL { return TIER_DEVICE_LOCAL }
+    if name == PTX_SS_PARAM  { return TIER_DEVICE_LOCAL }
+    if name == PTX_SS_CONST  { return TIER_CONSTANT_LOCAL }
+    return -1   // unknown / unmapped state space
+}
+
+// PTX 8.5 sub-group width on NVIDIA GPUs is fixed at 32 (warp size)
+// across all sm_75+ targets. Programs may use the .sync variants of
+// shfl/vote/match for warp-level cooperation.
+fn ptx_warp_size() -> int { return 32 }
+
+fn ptx_state_space_count() -> int { return 6 }
+
+fn ptx_tier_count() -> int { return 4 }   // mirrors τ=4
+
+// ─── meta ─────────────────────────────────────────────────────────────
+
+fn ptx_meta() -> [str] {
+    return [
+        "PTX",
+        PTX_VERSION_STRING,
+        PTX_TARGET_DEFAULT,
+        str(ptx_state_space_count())
+    ]
+}

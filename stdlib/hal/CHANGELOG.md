@@ -1,5 +1,75 @@
 # stdlib/hal CHANGELOG
 
+## [1.6.0] - 2026-05-08
+
+### Added — GPGPU IR backend skeletons (Phase F iter 9)
+
+GPU IR substrate backends mirroring the per-vendor embedded backend pattern.
+Outside the embedded σ=12 peripheral lattice — these target GPU IR consumers
+of `stdlib/hal/compute.hexa` (host-side GPGPU dispatch primitive previously
+landed under the prior versioning scheme; commit ba859275).
+
+- `backend/spirv/compute.hexa` — SPIR-V GPU IR backend (paper skeleton).
+  φ=0 (digital) IR substrate. Validation only; spirv-tools / spirv-val /
+  spirv-opt FFI is downstream.
+
+  Constants:
+    SPIRV_MAGIC = 0x07230203
+    SPIRV_HEADER_WORDS = 5
+    SPIRV_VERSION_{1_0..1_6}, SPIRV_VERSION_MIN/MAX
+    SPIRV_SC_{UNIFORM_CONSTANT, INPUT, UNIFORM, OUTPUT, WORKGROUP,
+              CROSS_WORKGROUP, PRIVATE, FUNCTION, PUSH_CONSTANT,
+              STORAGE_BUFFER}  (10-class subset mapped to τ=4)
+
+  Surface:
+    spirv_validate_magic(first_word: int) -> bool
+    spirv_validate_version(version_word: int) -> bool
+    spirv_validate_header(words: [int]) -> bool   (5-word header)
+    spirv_storage_class_to_tier(sc: int) -> int   (-1 if unmapped)
+    spirv_meta() -> [str]                         ([name, ver, magic, count])
+
+  Storage class → τ-tier mapping (canon §4.2 alignment):
+    Private/Function       → TIER_PRIVATE
+    Workgroup              → TIER_GROUP
+    CrossWorkgroup/Storage/Input/Output → TIER_DEVICE
+    UniformConstant/Uniform/PushConstant → TIER_CONSTANT
+
+  Web-search 2026-05-08: SPIR-V 1.6 current; consumed by SYCL 2020 rev 11,
+  OpenCL 3.1.0, WebGPU (via Tint), HIP (via translator), Metal (via translator).
+
+- `backend/ptx/compute.hexa` — NVIDIA PTX GPU IR backend (paper skeleton).
+  φ=1 IR substrate. Validation only on PTX assembly strings; LLVM nvptx +
+  ptxas FFI is downstream.
+
+  Constants:
+    PTX_VERSION_MAJOR = 8 / MINOR = 5     (lock-step with CUDA 13.2)
+    PTX_TARGET_DEFAULT = "sm_90"          (Hopper baseline, CC ≥ 9.0 cluster)
+    PTX_TARGET_LATEST  = "sm_100"         (Blackwell top end 2026-05-08)
+    PTX_SS_{REG, LOCAL, SHARED, GLOBAL, PARAM, CONST}  (6 state spaces)
+
+  Surface:
+    ptx_validate_directive_header(s: str) -> bool   (.version + .target present)
+    ptx_state_space_to_tier(name: str) -> int       (-1 if unmapped)
+    ptx_warp_size() -> int                          (= 32, sm_75+ baseline)
+    ptx_meta() -> [str]                             ([name, ver, target, count])
+
+  State space → τ-tier mapping:
+    .reg / .local           → TIER_PRIVATE
+    .shared                 → TIER_GROUP
+    .global / .param        → TIER_DEVICE
+    .const                  → TIER_CONSTANT
+
+  Web-search 2026-05-08: PTX 8.5 in lock-step with CUDA Toolkit 13.2
+  (Programming Guide release 2026-03-04). Hopper sm_90 = thread-block
+  cluster baseline; Blackwell sm_100 = current top end.
+
+### Cross-link
+
+Phase F iter 9 of hexa-chip GPGPU verb. canon SSOT:
+`~/core/canon/domains/compute/gpgpu/gpgpu.md` @47c70cbf.
+First consumer of these IR backends will be `stdlib/hal/compute.hexa`'s
+`compute_kernel_compile()` once codegen FFI lands (separate iter, downstream).
+
 ## [1.5.0] - 2026-05-08
 
 (v1.4.0 — T3b2 run-tier — deferred: Renode 2026.x not in current dev

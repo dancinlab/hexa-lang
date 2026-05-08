@@ -1,0 +1,113 @@
+#!hexa strict
+// stdlib/hal/backend/spirv/compute.hexa — SPIR-V GPU IR backend
+//                                          — paper skeleton (validation only).
+//
+// Phase: skeleton / stub. Real spirv-tools / spirv-val / spirv-opt
+// integration is downstream FFI scope (out of stdlib). This file
+// vendors the SPIR-V binary format constants and provides paper-only
+// validators that operate on pre-parsed input. Sim-first invariant
+// preserved (compute.hexa sim backend ships before this; this file
+// is a HW-IR backend addition, not a sim replacement).
+//
+// Target:    SPIR-V 1.6 (Khronos unified spec, current as of 2026-05-08).
+// Spec ref:  registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+// Surface:   spirv_{validate_magic, validate_header, storage_class_to_tier, meta}
+// Consumers: stdlib/hal/compute.hexa (φ=0 IR_SPIRV codepath).
+//
+// Web-search 2026-05-08: SPIR-V 1.6 with KHR_cooperative_matrix +
+// KHR_subgroup_rotate + KHR_quad_control extensions; consumed by
+// SYCL 2020 rev 11, OpenCL 3.1.0, WebGPU (via Tint), HIP (via
+// translator), and Metal (via translator).
+//
+// canon: ~/core/canon/domains/compute/gpgpu/gpgpu.md §3 (φ=2 IR
+// substrate) + §4.2 (τ=4 memory tier mapping).
+
+// ─── SPIR-V binary format (spec §2.3) ────────────────────────────────
+
+let SPIRV_MAGIC = 0x07230203          // little-endian magic word
+let SPIRV_HEADER_WORDS = 5            // magic + version + generator + id_bound + schema
+
+// SPIR-V version is encoded as major:minor in word 1: 0xMM_mm_PP_00.
+// Current version constants (Khronos registry):
+let SPIRV_VERSION_1_0 = 0x00010000
+let SPIRV_VERSION_1_1 = 0x00010100
+let SPIRV_VERSION_1_2 = 0x00010200
+let SPIRV_VERSION_1_3 = 0x00010300
+let SPIRV_VERSION_1_4 = 0x00010400
+let SPIRV_VERSION_1_5 = 0x00010500
+let SPIRV_VERSION_1_6 = 0x00010600
+let SPIRV_VERSION_MIN = 0x00010000    // any 1.x accepted (1.0 baseline)
+let SPIRV_VERSION_MAX = 0x00010600    // 1.6 ceiling at 2026-05-08
+
+// ─── Storage classes (spec §3.7) ─────────────────────────────────────
+//
+// Subset of the 13 SPIR-V storage classes that map onto the τ=4 GPGPU
+// memory tier model (compute.hexa TIER_*).
+
+let SPIRV_SC_UNIFORM_CONSTANT = 0   // ↔ TIER_CONSTANT
+let SPIRV_SC_INPUT            = 1   // ↔ TIER_DEVICE (read-only input bind)
+let SPIRV_SC_UNIFORM          = 2   // ↔ TIER_CONSTANT (UBO)
+let SPIRV_SC_OUTPUT           = 3   // ↔ TIER_DEVICE
+let SPIRV_SC_WORKGROUP        = 4   // ↔ TIER_GROUP
+let SPIRV_SC_CROSS_WORKGROUP  = 5   // ↔ TIER_DEVICE (OpenCL global)
+let SPIRV_SC_PRIVATE          = 6   // ↔ TIER_PRIVATE
+let SPIRV_SC_FUNCTION         = 7   // ↔ TIER_PRIVATE
+let SPIRV_SC_PUSH_CONSTANT    = 9   // ↔ TIER_CONSTANT
+let SPIRV_SC_STORAGE_BUFFER   = 12  // ↔ TIER_DEVICE (SSBO)
+
+// τ=4 tier IDs mirror compute.hexa TIER_PRIVATE/GROUP/DEVICE/CONSTANT
+let TIER_PRIVATE_LOCAL  = 0
+let TIER_GROUP_LOCAL    = 1
+let TIER_DEVICE_LOCAL   = 2
+let TIER_CONSTANT_LOCAL = 3
+
+// ─── validators (paper-only; operate on pre-parsed inputs) ───────────
+
+fn spirv_validate_magic(first_word: int) -> bool {
+    return first_word == SPIRV_MAGIC
+}
+
+fn spirv_validate_version(version_word: int) -> bool {
+    return version_word >= SPIRV_VERSION_MIN && version_word <= SPIRV_VERSION_MAX
+}
+
+// words = [magic, version, generator, id_bound, schema]; PASS iff all 5
+// present + magic OK + version in [1.0, 1.6] + id_bound > 0 + schema = 0.
+fn spirv_validate_header(words: [int]) -> bool {
+    if words.len() != SPIRV_HEADER_WORDS { return false }
+    if !spirv_validate_magic(words[0]) { return false }
+    if !spirv_validate_version(words[1]) { return false }
+    // words[2] (generator) is informational; any value accepted.
+    if words[3] <= 0 { return false }   // id_bound must be positive
+    if words[4] != 0 { return false }   // schema reserved = 0
+    return true
+}
+
+fn spirv_storage_class_to_tier(sc: int) -> int {
+    if sc == SPIRV_SC_PRIVATE          { return TIER_PRIVATE_LOCAL }
+    if sc == SPIRV_SC_FUNCTION         { return TIER_PRIVATE_LOCAL }
+    if sc == SPIRV_SC_WORKGROUP        { return TIER_GROUP_LOCAL }
+    if sc == SPIRV_SC_CROSS_WORKGROUP  { return TIER_DEVICE_LOCAL }
+    if sc == SPIRV_SC_STORAGE_BUFFER   { return TIER_DEVICE_LOCAL }
+    if sc == SPIRV_SC_INPUT            { return TIER_DEVICE_LOCAL }
+    if sc == SPIRV_SC_OUTPUT           { return TIER_DEVICE_LOCAL }
+    if sc == SPIRV_SC_UNIFORM_CONSTANT { return TIER_CONSTANT_LOCAL }
+    if sc == SPIRV_SC_UNIFORM          { return TIER_CONSTANT_LOCAL }
+    if sc == SPIRV_SC_PUSH_CONSTANT    { return TIER_CONSTANT_LOCAL }
+    return -1   // unknown / unmapped storage class
+}
+
+fn spirv_tier_count() -> int { return 4 }   // mirrors τ=4
+
+fn spirv_storage_class_count() -> int { return 10 }   // mapped subset
+
+// ─── meta ─────────────────────────────────────────────────────────────
+
+fn spirv_meta() -> [str] {
+    return [
+        "SPIR-V",
+        "1.6",
+        "0x07230203",
+        str(spirv_storage_class_count())
+    ]
+}
