@@ -1,5 +1,51 @@
 # stdlib/hal CHANGELOG
 
+## [1.12.0] - 2026-05-08
+
+### Added — `falsifier_gpgpu_check.hexa` F-GPGPU axis falsifier preregister + tracker
+- `falsifier_gpgpu_check.hexa` (~245 lines) — companion to
+  `falsifier_check.hexa` (the embedded HW-12 closure tracker).
+  Preregisters **F-GPGPU-1..6** for the GPGPU axis introduced at
+  v0.13.0 (compute.hexa) + populated at v1.6.0 (SPIR-V/PTX IR) +
+  v1.7.0 (6 vendor backends).
+
+  **Falsifiers registered**:
+    F-GPGPU-1: σ=12 = 6 vendors × 2 IRs (lattice cardinality)
+    F-GPGPU-2: 4-stage τ-lifecycle (compile/enqueue/dispatch/retire)
+    F-GPGPU-3: φ=2 IR substrates (SPIR-V ∥ PTX); every vendor ≥1
+    F-GPGPU-4: J₂′ = σ·τ = 48 dispatch-state combinations
+    F-GPGPU-5: 4 memory tiers (private/group/device/constant)
+    F-GPGPU-6: 4 barrier scopes (subgroup/workgroup/cluster/grid)
+
+  **T1 satisfiers** (algebraic, on disk now): compute.hexa internal
+  asserts + 6 backend/{cuda,hip,sycl,opencl,metal,webgpu}/compute.hexa
+  files. F-GPGPU-3 specifically requires ALL 6 vendor backends present;
+  the rest reuse compute.hexa.
+
+  **T2 preregister** (planned v1.12.0+ — file names committed so future
+  iters can drop them in without renaming):
+    numerics_gpgpu_lattice.hexa
+    numerics_gpgpu_lifecycle.hexa
+    numerics_gpgpu_ir_dichotomy.hexa
+    numerics_gpgpu_dispatch.hexa
+    numerics_gpgpu_mem_tiers.hexa
+    numerics_gpgpu_barriers.hexa
+
+  **T3 deferred**: cross-vendor SAXPY benchmark fixture is blocked on
+  actual GPU runtime FFI (canon §7.5 — FFI is downstream).
+
+  **Closure status at v1.12.0**:
+    sat-2 (every F-GPGPU has ≥ 1 T1 satisfier on disk): EXPECTED PASS
+    sat-1 (every F-GPGPU ≥ 67% closure): NOT YET (pending T2 numerics)
+
+  PASS sentinel: `__HEXA_LANG_HAL_FALSIFIER_GPGPU_CHECK__ PASS`.
+
+  Pattern: falsifier_check.hexa (sibling for HW-12 axis). Same
+  closure_pct formula (0/33/67/100), same sat_1/sat_2 saturation
+  milestones, same regression-gate semantics.
+
+  Phase G iter 9+5 (after 3-PDK ai_native set + 2 cross-repo consumers).
+
 ## [1.11.0] - 2026-05-08
 
 ### Added — `backend/ai_native/samsung_sf3p.hexa` Samsung SF3P PDK paper-tier backend (3rd / last PDK)
