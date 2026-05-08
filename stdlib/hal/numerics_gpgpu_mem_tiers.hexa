@@ -1,0 +1,245 @@
+#!hexa strict
+// stdlib/hal/numerics_gpgpu_mem_tiers.hexa — F-GPGPU-5 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-GPGPU-5
+// (4 memory tiers: private / group / device / constant; falsifier_gpgpu
+// _check.hexa registry).
+//
+// T1 (compute.hexa internal asserts: TIER_* constants 0..3 + accessor
+// compute_invariant_tiers() = 4) closes the algebraic identity:
+//
+//   |memory_tiers| = τ = 4 ∧ TIER_PRIVATE/GROUP/DEVICE/CONSTANT = 0/1/2/3
+//
+// T2 (this script) cross-checks the tier table NUMERICALLY by reading
+// every vendor backend's source and verifying:
+//
+//   1. compute.hexa root declares all 4 TIER_* with values 0..3 + the
+//      accessor compute_invariant_tiers() = 4.
+//   2. every vendor backend declares all 4 TIER_* (or TIER_*_LOCAL for
+//      IR backends) with values 0..3 (no gaps, no duplicates).
+//   3. tier values are CONSISTENT across all 6 vendors:
+//        TIER_PRIVATE  ≡ 0
+//        TIER_GROUP    ≡ 1
+//        TIER_DEVICE   ≡ 2
+//        TIER_CONSTANT ≡ 3
+//      (vendor backends may rename to native equivalents but the
+//      numeric ID must stay consistent).
+//   4. 4-tier table cardinality = τ_gpgpu = 4 (algebraic re-assert).
+//
+// Memory-tier name mapping (paper-tier; canon §4.2):
+//   TIER_PRIVATE  → register / per-thread / .local (NVPTX) / private (SPIR-V)
+//   TIER_GROUP    → shared / threadgroup / workgroup / local (OpenCL)
+//   TIER_DEVICE   → global / storage / .global (NVPTX) / StorageBuffer (SPIR-V)
+//   TIER_CONSTANT → constant / uniform (read-only, cached)
+//
+// PASS = all identities hold against on-disk backend table.
+// FAIL = any tier missing OR value drift OR cardinality drift.
+//
+// Run:
+//   hexa run stdlib/hal/numerics_gpgpu_mem_tiers.hexa
+//
+// Cost: $0 (file-reads + grep; no compilation).
+//
+// Phase G iter 9+5+5; F-GPGPU-5 closure 33% → 67% (T1+T2 ✓; T3 deferred).
+// Pattern: numerics_phi_dichotomy.hexa (sister F-HAL-3 T2 fixture for
+// the φ-dichotomy axis-cardinality check).
+
+// ─── n=6 lattice constants ────────────────────────────────────────────
+
+let TAU_GPGPU         = 4
+let GPGPU_VENDORS_N   = 6
+
+// Canonical tier order + values (compute.hexa convention).
+// Index = expected numeric tier value.
+let TIER_NAMES = [
+    "TIER_PRIVATE",   // 0 — register / per-thread
+    "TIER_GROUP",     // 1 — shared / threadgroup / workgroup
+    "TIER_DEVICE",    // 2 — global / storage
+    "TIER_CONSTANT"   // 3 — constant / uniform
+]
+
+// Vendor backend roster (canonical 6).
+let VENDORS = [
+    "cuda", "hip", "sycl", "opencl", "metal", "webgpu"
+]
+
+// ─── check harness ───────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+// Extract numeric value of `let <name> = <int>` from source.
+// Returns -1 if not found or value isn't a non-negative integer.
+fn _extract_let_int(src: str, name: str) -> int {
+    let pat = "let " + name
+    let idx = src.index_of(pat)
+    if idx < 0 { return -1 }
+    let mut i = idx + pat.len()
+    // skip past '='
+    while i < src.len() && src.char_at(i) != "=" { i = i + 1 }
+    if i >= src.len() { return -1 }
+    i = i + 1
+    // skip whitespace
+    while i < src.len() && (src.char_at(i) == " " || src.char_at(i) == "\t") { i = i + 1 }
+    // collect digits
+    let mut digits = ""
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch >= "0" && ch <= "9" { digits = digits + ch } else { break }
+        i = i + 1
+    }
+    if digits.len() == 0 { return -1 }
+    return int(digits)
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_root_compute_tiers(root: str) {
+    let p = root + "/stdlib/hal/compute.hexa"
+    if !_exists(p) {
+        _check(false, "compute.hexa root declares 4 TIER_* with values 0..3", "compute.hexa missing")
+        return
+    }
+    let src = read_file(p)
+    let mut bad = ""
+    let mut detail = ""
+    let mut idx = 0
+    while idx < TIER_NAMES.len() {
+        let name = TIER_NAMES[idx]
+        let v = _extract_let_int(src, name)
+        if v != idx {
+            bad = bad + name + "(=" + str(v) + ",want=" + str(idx) + ") "
+        } else {
+            detail = detail + name + "=" + str(v) + " "
+        }
+        idx = idx + 1
+    }
+    // Also check the invariant accessor
+    let has_accessor = src.contains("fn compute_invariant_tiers")
+    _check(bad.len() == 0 && has_accessor,
+           "compute.hexa root declares all 4 TIER_* (0..3) + invariant_tiers() accessor",
+           if bad.len() > 0 { "issues: " + bad } else { detail + (if has_accessor { "+ accessor" } else { "(MISSING accessor)" }) })
+}
+
+fn check_per_vendor_tiers(root: str) {
+    // Each vendor backend must declare TIER_PRIVATE..TIER_CONSTANT = 0..3.
+    let mut bad = ""
+    let mut detail = ""
+    for v in VENDORS {
+        let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+        if !_exists(p) { bad = bad + v + "(missing) "; continue }
+        let src = read_file(p)
+        let mut vendor_ok = true
+        let mut idx = 0
+        while idx < TIER_NAMES.len() {
+            let name = TIER_NAMES[idx]
+            let val = _extract_let_int(src, name)
+            if val != idx {
+                vendor_ok = false
+                bad = bad + v + "." + name + "(=" + str(val) + ",want=" + str(idx) + ") "
+            }
+            idx = idx + 1
+        }
+        if vendor_ok { detail = detail + v + "=ok " }
+    }
+    _check(bad.len() == 0,
+           "every vendor backend declares all 4 TIER_* with consistent values 0..3",
+           if bad.len() > 0 { "issues: " + bad } else { detail })
+}
+
+fn check_tier_value_consistency(root: str) {
+    // For each tier name, verify it has the SAME value across all 6 vendors
+    // (this is a stronger cross-check than per-vendor 0..3; it catches
+    // a vendor that re-orders consistently within itself but disagrees
+    // with the canonical layout).
+    let mut bad = ""
+    let mut idx = 0
+    while idx < TIER_NAMES.len() {
+        let name = TIER_NAMES[idx]
+        let mut first_val = -2   // -2 = unset sentinel
+        let mut tier_bad = ""
+        for v in VENDORS {
+            let p = root + "/stdlib/hal/backend/" + v + "/compute.hexa"
+            if !_exists(p) { continue }
+            let src = read_file(p)
+            let val = _extract_let_int(src, name)
+            if first_val == -2 { first_val = val }
+            else if val != first_val {
+                tier_bad = tier_bad + v + "(=" + str(val) + ") "
+            }
+        }
+        if tier_bad.len() > 0 {
+            bad = bad + name + "(reference=" + str(first_val) + ",dissent: " + tier_bad + ") "
+        }
+        idx = idx + 1
+    }
+    _check(bad.len() == 0,
+           "TIER_* values are CONSISTENT across all 6 vendor backends",
+           if bad.len() > 0 { "issues: " + bad } else { "all 4 tier values stable across all vendors" })
+}
+
+fn check_cardinality_eq_4() {
+    _check(TIER_NAMES.len() == 4 && TAU_GPGPU == 4,
+           "|memory_tiers| = τ = 4 (cardinality re-assert)",
+           "got |TIER_NAMES|=" + str(TIER_NAMES.len()) + " τ=" + str(TAU_GPGPU))
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_gpgpu_mem_tiers: F-GPGPU-5 T2 numerical")
+    println("========================================================================")
+    println("  vendors: " + str(VENDORS))
+    println("  tier names (canonical order; index = value):")
+    let mut idx = 0
+    while idx < TIER_NAMES.len() {
+        println("    " + str(idx) + " " + TIER_NAMES[idx])
+        idx = idx + 1
+    }
+    println("")
+
+    let root = _root()
+
+    check_cardinality_eq_4()
+    check_root_compute_tiers(root)
+    check_per_vendor_tiers(root)
+    check_tier_value_consistency(root)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-GPGPU-5: 4 memory tiers private/group/device/constant (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_GPGPU_MEM_TIERS__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_GPGPU_MEM_TIERS__ PASS")
+    exit(0)
+}
+
+main()

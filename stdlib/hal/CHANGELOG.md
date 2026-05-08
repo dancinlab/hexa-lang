@@ -1,5 +1,38 @@
 # stdlib/hal CHANGELOG
 
+## [1.17.0] - 2026-05-09
+
+### Added — `numerics_gpgpu_mem_tiers.hexa` F-GPGPU-5 T2 numerical (lifts to 67%)
+- `numerics_gpgpu_mem_tiers.hexa` (~190 lines) — fifth T2 fixture for
+  the GPGPU axis. Cross-checks the 4 memory tiers (private / group /
+  device / constant) against on-disk vendor backend TIER_* declarations.
+
+  Memory-tier name mapping (canon §4.2):
+    TIER_PRIVATE  → register / per-thread / .local / private (SPIR-V)
+    TIER_GROUP    → shared / threadgroup / workgroup / local (OpenCL)
+    TIER_DEVICE   → global / storage / .global / StorageBuffer
+    TIER_CONSTANT → constant / uniform (read-only, cached)
+
+  4 numerical checks:
+    1. |memory_tiers| = τ = 4 cardinality re-assert
+    2. compute.hexa root declares all 4 TIER_* with values 0..3
+       AND fn compute_invariant_tiers() accessor is present
+    3. every vendor backend declares all 4 TIER_* with values 0..3
+    4. TIER_* values are CONSISTENT across all 6 vendor backends
+       (same numeric ID for same tier name; catches re-ordered drift)
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_GPGPU_MEM_TIERS__ PASS`.
+
+  Pattern: numerics_phi_dichotomy.hexa (sister F-HAL-3 T2 fixture for
+  the φ-dichotomy axis-cardinality check). Same _check/RUN/FAIL
+  harness, same per-cell consistency scan + cross-vendor agreement check.
+
+  **F-GPGPU-5 closure lifted: 33% → 67%** (T1 ✓ + T2 ✓; T3 deferred).
+  5/6 T2 fixtures landed (83%); only numerics_gpgpu_barriers.hexa
+  remaining for F-GPGPU-6 (planned v1.18.0).
+
+  Phase G iter 9+5+5.
+
 ## [1.16.0] - 2026-05-09
 
 ### Added — `numerics_gpgpu_dispatch.hexa` F-GPGPU-4 T2 numerical (lifts to 67%)
