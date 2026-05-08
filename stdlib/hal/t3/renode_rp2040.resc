@@ -1,0 +1,50 @@
+// stdlib/hal/t3/renode_rp2040.resc — Renode platform script for RP2040 T3 harness.
+//
+// Phase: paper-tier scaffold. Not executed in v1.2.0.
+//
+// Loads the cross-compiled t3_harness.elf onto a Renode-modeled
+// rp2040 and captures UART0 output to t3_rp2040_run.log. Used by
+// numerics_t3_rp2040_renode.hexa (v1.3.0+) to assert the
+// "__T3_RP2040__ PASS gpio_toggle_5x_observed" sentinel landed.
+//
+// Renode version target: 2024.10+ (rp2040 platform spec ships
+// upstream as @platforms/cpus/rp2040.repl).
+//
+// Usage:
+//   renode -e "include @stdlib/hal/t3/renode_rp2040.resc; start"
+//
+// Console log redirect for headless capture:
+//   renode -e "include @stdlib/hal/t3/renode_rp2040.resc; start" \
+//          --console-log t3_rp2040_run.log
+
+mach create "rp2040_t3"
+machine LoadPlatformDescription @platforms/cpus/rp2040.repl
+
+# Load the cross-compiled harness ELF.
+sysbus LoadELF @stdlib/hal/t3/t3_harness.elf
+
+# Wire UART0 to a TerminalAnalyzer that mirrors all bytes to stdout.
+# (TerminalAnalyzer is Renode's standard log-everything-to-console widget.)
+showAnalyzer uart0
+
+# Optional: also write to a file via Renode's logger.
+logFile @t3_rp2040_run.log
+
+# Force fast simulation (no real-time pacing).
+emulation SetGlobalSerialExecution true
+
+# Set quantum to a small value so UART writes flush quickly.
+emulation SetGlobalQuantum "0.001"
+
+# Boot.
+cpu PerformanceInMips 100
+start
+
+# Auto-pause once the sentinel is observed (CPython-side regex hook
+# would do this; in pure .resc it's just a long enough run window).
+pause @ 5000  # milliseconds of simulated time
+
+# At this point t3_rp2040_run.log should contain the sentinel.
+quit
+
+// End of renode_rp2040.resc — paper-tier; binary path resolved at run time.

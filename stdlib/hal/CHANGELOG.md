@@ -1,5 +1,87 @@
 # stdlib/hal CHANGELOG
 
+## [1.2.0] - 2026-05-08
+
+### Added
+- `stdlib/hal/t3/` — T3 (HW-bench) tier **scaffold** for the rp2040
+  cross-compile harness. v1.2.0 lands the scaffold-tier (T3a) only;
+  the run-tier (T3b) — actual Renode emulation + UART log capture —
+  is gated on dev-env availability of arm-none-eabi-gcc + Renode and
+  scheduled for v1.3.0+.
+
+  T3 is the third closure tier (per recipe §3): T1 algebraic, T2
+  numerical / on-disk fixture, **T3 HW-bench** (actual code execution
+  against documented MMIO behavior). Lifting F-HAL closure 67% → 100%
+  requires T3 ✓ for each falsifier.
+
+  Files added:
+  - `t3/README.md` — T3 tier philosophy + roadmap (T3a scaffold-tier
+    vs T3b run-tier split); rp2040 chosen as first vendor (open
+    toolchain, no NDA, Renode upstream support since 2024).
+  - `t3/Makefile.rp2040` — arm-none-eabi-gcc cross-compile recipe
+    targeting Cortex-M0+; produces `t3_harness.elf` (and `.uf2` via
+    pico-sdk elf2uf2 for physical Pico flash, deferred).
+  - `t3/linker_rp2040.ld` — minimal ARMv6-M linker script declaring
+    FLASH @ 0x10000000 / 2 MB (XIP) + RAM @ 0x20000000 / 256 KB (6
+    striped banks) + scratch X/Y; ENTRY(_reset_handler).
+  - `t3/boot_rp2040.s` — ARMv6-M vector table + reset handler:
+    sets MSP, copies .data from FLASH to RAM, zeros .bss, calls
+    `harness_main()`. Cortex-M0+ specific (no Thumb-2; no nested IT).
+  - `t3/harness_main.c` — minimal harness exercising
+    `stdlib/hal/backend/rp2040/{gpio,uart}.hexa` MMIO contracts:
+    configures GP25 as output (Pico LED), toggles 5 times, emits
+    UART0 sentinel `__T3_RP2040__ PASS gpio_toggle_5x_observed`.
+    Written in C because hexa-lang ARMv6-M backend doesn't exist
+    yet (will convert to `harness_main.hexa` once it does).
+  - `t3/renode_rp2040.resc` — Renode 2024.10+ platform script:
+    loads `t3_harness.elf` onto rp2040, attaches UART0 to
+    TerminalAnalyzer, redirects to `t3_rp2040_run.log`, runs for
+    5000 ms simulated time then quits.
+  - `t3/numerics_t3_rp2040_scaffold.hexa` — T3a scaffold-tier
+    verification script. Asserts:
+      1. all 6 scaffold files present on disk
+      2. harness_main.c contains the T3 sentinel string
+      3. Makefile targets `arm-none-eabi-` + `cortex-m0plus`
+      4. linker_rp2040.ld declares FLASH @ 0x10000000 + RAM @ 0x20000000
+      5. boot_rp2040.s declares .thumb + cortex-m0plus + _reset_handler
+      6. Renode .resc declares LoadELF + uart0 + logFile
+
+### T3 closure semantics (recipe-aligned)
+Per recipe §3 closure_pct, T3 ✓ requires actual run-tier verification
+(T3b — Renode log shows expected sentinel). The T3a scaffold-tier
+script lands in v1.2.0 as a **precondition** but does NOT lift any
+F<n>_T3 entry to ✓ in `falsifier_check.hexa`. Falsifier closure stays
+at **67% × 5 (sat-1 ✓)** until v1.3.0+ when T3b run-tier activates.
+
+This split is intentional: scaffold-tier proves the path is
+**buildable on paper**; run-tier proves it's **executable in reality**.
+Conflating them would falsely claim closure on un-executed code.
+
+### Build flow (paper-tier; not yet executed)
+```bash
+make -f Makefile.rp2040 t3_harness.elf
+renode -e "include @t3/renode_rp2040.resc; start" \
+       --console-log t3_rp2040_run.log
+grep -E "__T3_RP2040__ PASS" t3_rp2040_run.log
+```
+
+### Provenance
+- RP2040 register addresses (SIO 0xD0000000, UART0 0x40034000) match
+  `backend/rp2040/{gpio,uart}.hexa` v0.4.0+ documentation.
+- ARMv6-M boot flow per ARM ARMv6-M Architecture Reference Manual
+  (DDI 0419E) §B1.5.1.
+- Renode rp2040 platform spec from upstream Renode 2024.10+.
+
+### Roadmap
+- v1.3.0: T3b run-tier — invoke arm-none-eabi-gcc + Renode in CI
+  (or a one-off run); capture UART log; add
+  `numerics_t3_rp2040_renode.hexa` that asserts log contains sentinel.
+  THIS lifts F-HAL-1 (or whichever falsifier the harness is wired to)
+  closure 67% → 100%.
+- v1.4.0+: replicate T3 scaffold for stm32h7 (`Makefile.stm32h7` +
+  `boot_stm32h7.s` + Renode platform); progressively add per-vendor
+  T3 paths.
+
 ## [1.1.0] - 2026-05-08
 
 ### Added
