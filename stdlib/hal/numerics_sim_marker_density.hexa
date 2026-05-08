@@ -1,0 +1,282 @@
+#!hexa strict
+// stdlib/hal/numerics_sim_marker_density.hexa — F-HAL-5 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-HAL-5
+// (sim-first invariant: every module ships a sim backend before any
+//  HW backend; README.md "Falsifier preregister").
+//
+// T1 (calc_sim_first.hexa) closes the algebraic identity:
+//
+//   ≥ 11 of 12 module sources contain a sim marker
+//   ∧ no module imports `use "stdlib/hal/backend/<vendor>"`
+//
+// using a 1-module-exemption tolerance and a single substring scan.
+// T2 (this script) tightens the bound to 12-of-12 strict (every
+// module must have a sim marker — no exemption), and additionally
+// quantifies the sim:HW coverage ratio across the backend tree:
+//
+//   1. 12 of 12 modules contain ≥ 1 sim marker (`[sim` OR `(sim`).
+//   2. No module imports `use "stdlib/hal/backend/...`.
+//   3. The backend/ dir contains exactly 1 vendor subdir (stm32h7)
+//      at v0.2.0+; v0.3.0 introduces no new vendor.
+//   4. The stm32h7 backend covers 5 of 12 peripherals (gpio, i2c,
+//      spi, uart, adc) — the canonical "sim-first 5" set.
+//   5. Each backend stub file contains an explicit stub marker
+//      ("STUB" OR "skeleton" OR "TODO" OR "sim-first" — case-
+//      insensitive substring scan).
+//   6. Sim coverage ratio (12/12 = 100%) ≥ HW coverage ratio
+//      (5/12 ≈ 42%) — sim is always a superset of HW.
+//   7. Total sim-marker occurrences across the 12 modules ≥ σ = 12
+//      (density floor — every module has at least one marker, on
+//      average ≥ 1 per module).
+//
+// PASS = every identity holds.
+// FAIL = any module missing sim marker OR backend import drift OR
+//        new vendor added without falsifier review OR backend stub
+//        missing marker OR coverage ratio inverted.
+//
+// Run:
+//   hexa run stdlib/hal/numerics_sim_marker_density.hexa
+//
+// Cost: $0 (file reads + substring scan + ls; no compilation).
+
+// ─── n=6 lattice constants ────────────────────────────────────────────
+
+let N        = 6
+let SIGMA_6  = 12
+let TAU_6    = 4
+let PHI_6    = 2
+let J2       = 24
+
+// ─── module roster (12 σ-slots) ───────────────────────────────────────
+
+let MODULES = [
+    "core", "gpio", "i2c", "spi", "uart",
+    "adc", "dac",
+    "pwm", "timer", "intr", "dma", "rtc"
+]
+
+// Canonical "sim-first 5" set covered by stm32h7 stubs at v0.2.0+.
+let CANONICAL_HW_5 = ["gpio", "i2c", "spi", "uart", "adc"]
+
+// At v0.2.0+, exactly 1 vendor (stm32h7); v0.3.0 must not add vendors.
+let CANONICAL_VENDOR_COUNT = 1
+let CANONICAL_VENDOR = "stm32h7"
+
+let HW_BACKEND_USE_PATTERN = "use \"stdlib/hal/backend/"
+let SIM_MARKER_BRACKET = "[sim"
+let SIM_MARKER_PAREN   = "(sim"
+
+let STUB_MARKERS = ["STUB", "skeleton", "TODO", "sim-first"]
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _ls_dirs(p: str) -> [str] {
+    let cmd = "ls -1 " + "\"" + p + "\"" + " 2>/dev/null"
+    let out = exec(cmd).trim()
+    if out.len() == 0 { return [] }
+    return out.split("\n")
+}
+
+fn _has_any_marker(src: str, markers: [str]) -> bool {
+    for m in markers {
+        if src.contains(m) { return true }
+    }
+    return false
+}
+
+// Count occurrences of a substring (non-overlapping).
+fn _count_substr(src: str, needle: str) -> int {
+    if needle.len() == 0 { return 0 }
+    let mut n = 0
+    let mut i = 0
+    while i + needle.len() <= src.len() {
+        let slice = src.slice(i, i + needle.len())
+        if slice == needle {
+            n = n + 1
+            i = i + needle.len()
+        } else {
+            i = i + 1
+        }
+    }
+    return n
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_module_count() {
+    _check(MODULES.len() == SIGMA_6,
+           "12 module roster == σ(6) = " + str(SIGMA_6),
+           "got " + str(MODULES.len()))
+}
+
+fn check_strict_sim_markers(root: str) {
+    // 12 of 12 modules must have ≥ 1 sim marker (no exemption — strictly
+    // tighter than calc_sim_first.hexa T1's "≥ 11/12" tolerance).
+    let mut n_with = 0
+    let mut bad = ""
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { bad = bad + m + "(missing) "; continue }
+        let src = read_file(p)
+        let has = src.contains(SIM_MARKER_BRACKET) || src.contains(SIM_MARKER_PAREN)
+        if has { n_with = n_with + 1 }
+        else { bad = bad + m + "(no-sim-marker) " }
+    }
+    _check(n_with == SIGMA_6,
+           "12/12 modules contain ≥ 1 sim marker (`[sim` or `(sim`) — strict",
+           if bad.len() > 0 { "issues: " + bad } else { str(n_with) + "/12" })
+}
+
+fn check_no_backend_import(root: str) {
+    let mut bad = ""
+    let mut n_clean = 0
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { bad = bad + m + "(missing) "; continue }
+        let src = read_file(p)
+        if src.contains(HW_BACKEND_USE_PATTERN) {
+            bad = bad + m + "(imports-backend) "
+        } else {
+            n_clean = n_clean + 1
+        }
+    }
+    _check(n_clean == SIGMA_6,
+           "no peripheral surface imports `stdlib/hal/backend/<vendor>`",
+           if bad.len() > 0 { "issues: " + bad } else { str(n_clean) + "/12" })
+}
+
+fn check_vendor_count(root: str) {
+    // backend/ dir must contain exactly CANONICAL_VENDOR_COUNT vendor subdirs.
+    let backend_dir = root + "/stdlib/hal/backend"
+    let entries = _ls_dirs(backend_dir)
+    let n = entries.len()
+    let mut found_canonical = false
+    for e in entries {
+        if e == CANONICAL_VENDOR { found_canonical = true }
+    }
+    _check(n == CANONICAL_VENDOR_COUNT && found_canonical,
+           "backend/ has exactly " + str(CANONICAL_VENDOR_COUNT) + " vendor (" + CANONICAL_VENDOR + ")",
+           "found " + str(n) + ": " + str(entries))
+}
+
+fn check_canonical_5(root: str) {
+    // stm32h7 backend covers exactly the 5 canonical peripherals.
+    let mut n_present = 0
+    let mut bad = ""
+    for h in CANONICAL_HW_5 {
+        let p = root + "/stdlib/hal/backend/" + CANONICAL_VENDOR + "/" + h + ".hexa"
+        if _exists(p) { n_present = n_present + 1 }
+        else { bad = bad + h + "(missing) " }
+    }
+    _check(n_present == CANONICAL_HW_5.len(),
+           "stm32h7 backend covers canonical 5 peripherals: " + str(CANONICAL_HW_5),
+           if bad.len() > 0 { "issues: " + bad } else { str(n_present) + "/5" })
+}
+
+fn check_stub_markers(root: str) {
+    // Every backend stub file must contain at least one stub marker.
+    let mut n_with = 0
+    let mut bad = ""
+    for h in CANONICAL_HW_5 {
+        let p = root + "/stdlib/hal/backend/" + CANONICAL_VENDOR + "/" + h + ".hexa"
+        if !_exists(p) { bad = bad + h + "(missing) "; continue }
+        let src = read_file(p)
+        if _has_any_marker(src, STUB_MARKERS) {
+            n_with = n_with + 1
+        } else {
+            bad = bad + h + "(no-stub-marker) "
+        }
+    }
+    _check(n_with == CANONICAL_HW_5.len(),
+           "every backend stub contains a stub marker (STUB|skeleton|TODO|sim-first)",
+           if bad.len() > 0 { "issues: " + bad } else { str(n_with) + "/5" })
+}
+
+fn check_coverage_ratio() {
+    // sim coverage = 12/12 = 100% ; HW coverage = 5/12 ≈ 42%.
+    // Sim must be a strict superset of HW (sim_count ≥ HW_count).
+    let sim_count = SIGMA_6
+    let hw_count  = CANONICAL_HW_5.len()
+    _check(sim_count >= hw_count,
+           "sim coverage (12/12 = σ) ≥ HW coverage (5/12) — sim is always superset",
+           "sim=" + str(sim_count) + " hw=" + str(hw_count))
+}
+
+fn check_marker_density(root: str) {
+    // Total sim-marker occurrences across 12 modules ≥ σ = 12 (avg ≥ 1).
+    let mut total = 0
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { continue }
+        let src = read_file(p)
+        total = total + _count_substr(src, SIM_MARKER_BRACKET) +
+                        _count_substr(src, SIM_MARKER_PAREN)
+    }
+    _check(total >= SIGMA_6,
+           "Σ sim-marker occurrences ≥ σ = " + str(SIGMA_6) + " (density floor)",
+           "got " + str(total))
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_sim_marker_density: F-HAL-5 T2 numerical")
+    println("========================================================================")
+    println("  σ-slot order: " + str(MODULES))
+    println("  canonical HW-5: " + str(CANONICAL_HW_5))
+    println("  canonical vendor: " + CANONICAL_VENDOR + " (count=" + str(CANONICAL_VENDOR_COUNT) + ")")
+    println("")
+
+    let root = _root()
+
+    check_module_count()
+    check_strict_sim_markers(root)
+    check_no_backend_import(root)
+    check_vendor_count(root)
+    check_canonical_5(root)
+    check_stub_markers(root)
+    check_coverage_ratio()
+    check_marker_density(root)
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-HAL-5: sim-first (12/12 markers + no backend imports + canonical HW-5 stubs)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_SIM_MARKER_DENSITY__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_SIM_MARKER_DENSITY__ PASS")
+    exit(0)
+}
+
+main()

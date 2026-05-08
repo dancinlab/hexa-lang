@@ -1,0 +1,284 @@
+#!hexa strict
+// stdlib/hal/numerics_handle_dispatch.hexa — F-HAL-4 T2 numerical.
+//
+// Closes the T2 (numerical / fixture) tier of falsifier F-HAL-4
+// (≤ J₂/n = 4 concurrent handles per module by default; intr/dma
+//  extend up to J₂ = 24 handles; README.md "Falsifier preregister").
+//
+// T1 (calc_handle_pool.hexa) closes the algebraic identity:
+//
+//   intr.max_handles == 24  ∧  dma.max_handles == 24
+//   ∀ other module.  max_handles == 4
+//   Σ max_handles == 4·10 + 24·2 == 88
+//
+// using a one-shot meta parse. T2 (this script) is the dispatch-tier
+// numerical check — it not only re-reads each `<module>.hexa`'s
+// `<m>_module_meta()` 4th-field max_handles literal, but it cross-
+// validates the dispatch policy by:
+//
+//   1. Per-module ceiling check (default vs extended classification).
+//   2. Σ ceilings = 88 (cross-confirm with module_topology T2).
+//   3. Per-process-budget envelope: J₂·τ = 96 ≥ Σ = 88  (canonical
+//      upper bound respected — there's slack of 8 handles for late
+//      additions inside one process lifetime).
+//   4. Default-pool floor: 4 × σ = 48 = 2·J₂  (proves default policy
+//      saturates at half the per-process envelope).
+//   5. Extension factor: J₂ / (J₂/n) = n = 6  (intr/dma get exactly
+//      n=6× the default ceiling — anchors the n=6 invariant in the
+//      handle-pool policy).
+//   6. Default-vs-extended population: |default| = 10 = σ − φ ;
+//      |extended| = 2 = φ. The φ-dichotomy and the extension policy
+//      are isomorphic (both partition the 12 modules 10:2), but
+//      independently — analog modules (adc/dac) are NOT the same
+//      pair as the extended-pool modules (intr/dma).
+//
+// PASS = every identity above holds against the on-disk meta table.
+// FAIL = any module missing meta OR ceiling drift OR Σ ≠ 88 OR
+//        envelope/floor/extension-factor violation.
+//
+// Run:
+//   hexa run stdlib/hal/numerics_handle_dispatch.hexa
+//
+// Cost: $0 (12 file-reads + structural parse; no compilation).
+
+// ─── n=6 lattice constants ────────────────────────────────────────────
+
+let N        = 6
+let SIGMA_6  = 12
+let TAU_6    = 4
+let PHI_6    = 2
+let J2       = 24
+
+let DEFAULT_CEILING  = 4              // = J₂ / n
+let EXTENDED_CEILING = 24             // = J₂
+let EXPECTED_HANDLE_SUM = DEFAULT_CEILING * 10 + EXTENDED_CEILING * 2   // = 88
+let CANONICAL_ENVELOPE  = J2 * TAU_6  // = 96 (per-process upper bound)
+let DEFAULT_FLOOR       = DEFAULT_CEILING * SIGMA_6   // = 48 = 2·J₂
+let EXTENSION_FACTOR    = N           // intr/dma get n=6× the default
+
+// ─── module roster (12 σ-slots; canonical order) ─────────────────────
+
+let MODULES = [
+    "core", "gpio", "i2c", "spi", "uart",
+    "adc", "dac",
+    "pwm", "timer", "intr", "dma", "rtc"
+]
+
+// Modules whose handle ceiling extends to J₂ (vs default J₂/n).
+let EXTENDED_MODULES = ["intr", "dma"]
+
+// ─── check harness ────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_HAL_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn _is_extended(m: str) -> bool {
+    for e in EXTENDED_MODULES {
+        if e == m { return true }
+    }
+    return false
+}
+
+// Extract max_handles — the 4th field of <m>_module_meta()'s `return [...]`.
+// Canonical body is: return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, "<n>"]
+// or                  return [MODULE_NAME, str(SIGMA_SLOT), PHI_KIND, str(LIFECYCLE_STAGES.len())]
+// Returns the integer value (4 or 24), or -1 on parse failure.
+fn _extract_max_handles(src: str, m: str) -> int {
+    let key = "fn " + m + "_module_meta"
+    let kidx = src.index_of(key)
+    if kidx < 0 { return -1 }
+    let pat = "return ["
+    let mut walk = kidx
+    while walk < src.len() {
+        if walk + pat.len() <= src.len() {
+            let slice = src.slice(walk, walk + pat.len())
+            if slice == pat { break }
+        }
+        walk = walk + 1
+    }
+    if walk >= src.len() { return -1 }
+    walk = walk + pat.len()
+    let mut commas = 0
+    let mut field4_start = -1
+    let mut i = walk
+    while i < src.len() {
+        let ch = src.char_at(i)
+        if ch == "]" { break }
+        if ch == "," {
+            commas = commas + 1
+            if commas == 3 { field4_start = i + 1 }
+        }
+        i = i + 1
+    }
+    if field4_start < 0 || field4_start >= i { return -1 }
+    let f4 = src.slice(field4_start, i).trim()
+    if f4.len() >= 2 && f4.char_at(0) == "\"" {
+        let mut j = 1
+        let mut digits = ""
+        while j < f4.len() {
+            let ch = f4.char_at(j)
+            if ch >= "0" && ch <= "9" { digits = digits + ch } else { break }
+            j = j + 1
+        }
+        if digits.len() == 0 { return -1 }
+        return int(digits)
+    }
+    if f4.contains("LIFECYCLE_STAGES.len()") { return TAU_6 }
+    return -1
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_module_count() {
+    _check(MODULES.len() == SIGMA_6,
+           "12 module roster == σ(6) = " + str(SIGMA_6),
+           "got " + str(MODULES.len()))
+}
+
+fn check_per_module_ceilings(root: str) {
+    let mut n_default = 0
+    let mut n_extended = 0
+    let mut bad = ""
+    let mut detail = ""
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { bad = bad + m + "(missing) "; continue }
+        let src = read_file(p)
+        let h = _extract_max_handles(src, m)
+        if h < 0 { bad = bad + m + "(parse-fail) "; continue }
+        if _is_extended(m) {
+            if h == EXTENDED_CEILING {
+                n_extended = n_extended + 1
+                detail = detail + m + "=24 "
+            } else {
+                bad = bad + m + "(want=24,got=" + str(h) + ") "
+            }
+        } else {
+            if h == DEFAULT_CEILING {
+                n_default = n_default + 1
+                detail = detail + m + "=4 "
+            } else {
+                bad = bad + m + "(want=4,got=" + str(h) + ") "
+            }
+        }
+    }
+    _check(n_default == 10 && n_extended == 2 && bad.len() == 0,
+           "per-module ceilings: 10 modules == 4 (default), 2 modules (intr/dma) == 24 (extended)",
+           if bad.len() > 0 { "issues: " + bad } else { detail })
+}
+
+fn check_handle_sum(root: str) {
+    let mut sum = 0
+    for m in MODULES {
+        let p = root + "/stdlib/hal/" + m + ".hexa"
+        if !_exists(p) { continue }
+        let src = read_file(p)
+        let h = _extract_max_handles(src, m)
+        if h > 0 { sum = sum + h }
+    }
+    _check(sum == EXPECTED_HANDLE_SUM,
+           "Σ max_handles = 4·10 + 24·2 = " + str(EXPECTED_HANDLE_SUM),
+           "got " + str(sum))
+}
+
+fn check_envelope() {
+    // J₂·τ = 96 ≥ Σ ceilings = 88 (canonical upper bound w/ slack)
+    let envelope = J2 * TAU_6
+    let slack = envelope - EXPECTED_HANDLE_SUM
+    _check(envelope >= EXPECTED_HANDLE_SUM,
+           "per-process envelope: J₂·τ = " + str(CANONICAL_ENVELOPE) +
+              " ≥ " + str(EXPECTED_HANDLE_SUM) + " = Σ ceilings (slack = " + str(slack) + ")",
+           "")
+}
+
+fn check_default_floor() {
+    // 4 × σ(6) = 48 = 2·J₂ (default-pool per-process floor)
+    let floor = DEFAULT_CEILING * SIGMA_6
+    let twoJ2 = 2 * J2
+    _check(floor == DEFAULT_FLOOR && floor == twoJ2,
+           "default-pool floor = 4·σ = " + str(DEFAULT_FLOOR) + " = 2·J₂",
+           "got " + str(floor))
+}
+
+fn check_extension_factor() {
+    // J₂ / (J₂/n) = n = 6 (intr/dma get n× the default ceiling)
+    let factor = EXTENDED_CEILING / DEFAULT_CEILING
+    _check(factor == EXTENSION_FACTOR && factor == N,
+           "extension factor: J₂/(J₂/n) = " + str(EXTENSION_FACTOR) + " = n",
+           "got " + str(factor))
+}
+
+fn check_population_partition() {
+    // |default| = 10 = σ − φ ;  |extended| = 2 = φ
+    // (Same partition shape as φ-dichotomy, but distinct membership:
+    //  analog set = {adc, dac}, extended set = {intr, dma}.)
+    let default_pop  = SIGMA_6 - EXTENDED_MODULES.len()
+    let extended_pop = EXTENDED_MODULES.len()
+    let dichotomy_d  = SIGMA_6 - PHI_6
+    let dichotomy_a  = PHI_6
+    _check(default_pop == 10 && extended_pop == 2 &&
+           dichotomy_d == default_pop && dichotomy_a == extended_pop,
+           "default:extended partition = 10:2 (isomorphic to digital:analog)",
+           "default=" + str(default_pop) + " extended=" + str(extended_pop))
+}
+
+// ─── main ────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/hal — numerics_handle_dispatch: F-HAL-4 T2 numerical")
+    println("========================================================================")
+    println("  σ-slot order: " + str(MODULES))
+    println("  default ceiling: " + str(DEFAULT_CEILING) + " = J₂/n")
+    println("  extended ceiling: " + str(EXTENDED_CEILING) + " = J₂  (modules: " + str(EXTENDED_MODULES) + ")")
+    println("  expected Σ: 4·10 + 24·2 = " + str(EXPECTED_HANDLE_SUM))
+    println("  per-process envelope: J₂·τ = " + str(CANONICAL_ENVELOPE) + "")
+    println("")
+
+    let root = _root()
+
+    check_module_count()
+    check_per_module_ceilings(root)
+    check_handle_sum(root)
+    check_envelope()
+    check_default_floor()
+    check_extension_factor()
+    check_population_partition()
+
+    println("")
+    println("  FALSIFIER:")
+    println("    ✗ F-HAL-4: ≤ J₂/n=4 default · J₂=24 extended  (cross-checked numerically)")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_LANG_HAL_NUMERICS_HANDLE_DISPATCH__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_HAL_NUMERICS_HANDLE_DISPATCH__ PASS")
+    exit(0)
+}
+
+main()

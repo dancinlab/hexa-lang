@@ -87,10 +87,20 @@ modules in v0.2.0+.
 | F-HAL-4 | ≤ J₂/n = 4 concurrent handles per module (intr/dma extend)  |
 | F-HAL-5 | sim backend before any HW backend                           |
 
-T2 (numerical) progression — `numerics_module_topology.hexa` and
-`numerics_lifecycle_dispatch.hexa` close the T2 tier of F-HAL-1 and
-F-HAL-2 respectively, advancing both falsifiers from 33% (T1 only)
-to 67% closure. F-HAL-3/4/5 still T1-only at v0.2.0.
+T2 (numerical) progression — at v0.3.0 every F-HAL falsifier has a T2
+script and is at 67% closure (T1 ✓ + T2 ✓):
+
+| id      | T1                            | T2                                       | closure |
+|:--------|:------------------------------|:-----------------------------------------|:-------:|
+| F-HAL-1 | calc_peripherals.hexa         | numerics_module_topology.hexa            | 67%     |
+| F-HAL-2 | calc_lifecycle.hexa           | numerics_lifecycle_dispatch.hexa         | 67%     |
+| F-HAL-3 | calc_peripherals.hexa         | numerics_phi_dichotomy.hexa              | 67%     |
+| F-HAL-4 | calc_handle_pool.hexa         | numerics_handle_dispatch.hexa            | 67%     |
+| F-HAL-5 | calc_sim_first.hexa           | numerics_sim_marker_density.hexa         | 67%     |
+
+Saturation signals: **sat-1 ✓** (every falsifier ≥ 67%), **sat-2 ✓**
+(every falsifier has ≥ 1 T1 script). T3 (HW-bench) tier opens with
+v0.4.0+ second hardware backend (rp2040 or esp32).
 
 ## Tests
 
