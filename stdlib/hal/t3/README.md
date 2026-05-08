@@ -39,20 +39,39 @@ Other vendors will follow:
 ```
 stdlib/hal/t3/
 ├── README.md                        # this file
-├── .gitignore                       # excludes *.o / *.elf / *.bin / *.log
-├── Makefile.rp2040                  # arm-none-eabi-gcc build recipe
-├── linker_rp2040.ld                 # minimal linker script
-├── boot_rp2040.s                    # ARMv6-M vector table + reset
-├── harness_main.c                   # T3 harness — exercises GPIO + UART
-├── renode_rp2040.resc               # Renode platform + log capture
-├── numerics_t3_rp2040_scaffold.hexa # T3a scaffold-presence check (v1.2.0)
-└── numerics_t3_rp2040_compile.hexa  # T3b1 compile-tier check (v1.3.0; LIVE)
+├── .gitignore                         # excludes *.o / *.elf / *.bin / *.log
+│
+├── Makefile.rp2040                    # rp2040 build (Cortex-M0+)
+├── linker_rp2040.ld                   # ARMv6-M linker script
+├── boot_rp2040.s                      # ARMv6-M vector + reset
+├── harness_main.c                     # rp2040 GPIO + UART harness
+├── renode_rp2040.resc                 # Renode platform spec
+├── numerics_t3_rp2040_scaffold.hexa   # T3a scaffold check (v1.2.0)
+├── numerics_t3_rp2040_compile.hexa    # T3b1 compile check (v1.3.0; LIVE)
+│
+├── Makefile.stm32h7                   # stm32h7 build (Cortex-M7 + FPv5-D16)
+├── linker_stm32h7.ld                  # ARMv7-M linker script
+├── boot_stm32h7.s                     # ARMv7-M vector + reset + FPU enable
+├── harness_stm32h7_main.c             # stm32h7 GPIO + USART3 harness
+└── numerics_t3_stm32h7_compile.hexa   # T3b1 compile check (v1.5.0; LIVE)
 ```
 
-Build artifacts (`.o`, `.elf`, `.bin`, `.uf2`) are gitignored — they
-are regenerable via `make -f Makefile.rp2040`. The
-`numerics_t3_rp2040_compile.hexa` script invokes `make` itself and
-verifies the produced ELF, so committing the ELF is unnecessary.
+Build artifacts are gitignored — they are regenerable via
+`make -f Makefile.<vendor>`. The `numerics_t3_<vendor>_compile.hexa`
+scripts invoke `make` themselves.
+
+## Vendor coverage at v1.5.0
+
+| vendor   | CPU class             | T3a scaffold | T3b1 compile (live) | T3b2 run        |
+|:---------|:----------------------|:------------:|:-------------------:|:----------------|
+| rp2040   | Cortex-M0+ (ARMv6-M)  | ✓ v1.2.0     | ✓ v1.3.0            | ☐ Renode pending |
+| stm32h7  | Cortex-M7 (ARMv7-M+FPU)| ✓ v1.5.0    | ✓ v1.5.0            | ☐ Renode pending |
+| esp32 / c3 / s3 / c6 | Xtensa / RISC-V | —      | —                   | —               |
+
+Both arm-none-eabi-gcc-based vendors share the same toolchain;
+they differ only in linker.ld + boot.s + harness_main.c MMIO
+addresses. ESP32 family T3 scaffold (xtensa-esp-elf-gcc / RISC-V
+variants) is a separate v1.7.0+ track.
 
 ## T3 closure roadmap (per recipe §3 closure-pct)
 

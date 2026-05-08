@@ -1,5 +1,63 @@
 # stdlib/hal CHANGELOG
 
+## [1.5.0] - 2026-05-08
+
+(v1.4.0 — T3b2 run-tier — deferred: Renode 2026.x not in current dev
+env; brew has no formula. v1.5.0 picks up stm32h7 T3 scaffold +
+compile-tier; doesn't depend on Renode.)
+
+### Added — STM32H7 T3 scaffold + compile-tier (LIVE)
+- `t3/Makefile.stm32h7`             — arm-none-eabi-gcc → Cortex-M7
+                                       + FPv5-D16 hard-float.
+- `t3/linker_stm32h7.ld`            — STM32H7 memory map per RM0433
+                                       §2.4: FLASH 0x08000000 / 2 MB
+                                       + ITCMRAM + DTCMRAM (stack
+                                       here) + AXI SRAM + SRAM_D2/D3.
+- `t3/boot_stm32h7.s`               — ARMv7-M reset handler with
+                                       SCB_CPACR FPU enable (CP10+11
+                                       full access; dsb/isb fence).
+- `t3/harness_stm32h7_main.c`       — Nucleo-H743 harness: PB0 LED
+                                       toggle 5x via BSRR atomic;
+                                       USART3 sentinel
+                                       __T3_STM32H7__ PASS gpio_toggle_5x_observed.
+- `t3/numerics_t3_stm32h7_compile.hexa` — T3b1 numerical check;
+                                       live-runs make + objdump + nm.
+
+Verified live: `make` succeeds; `.text` @ 0x08000000, 1372 bytes;
+boot symbols at expected offsets (_vector_table 0x08000000,
+_reset_handler 0x08000400, harness_main 0x08000480, _stack_top
+0x20020000 = top of 128K DTCMRAM).
+
+### T3 vendor coverage at v1.5.0
+| vendor   | CPU                  | T3a | T3b1 | T3b2  |
+|:---------|:---------------------|:---:|:----:|:------|
+| rp2040   | Cortex-M0+           | ✓   | ✓    | ☐     |
+| stm32h7  | Cortex-M7 + FPv5-D16 | ✓   | ✓    | ☐     |
+
+Same arm-none-eabi-gcc 16.1.0 toolchain across both vendors. The
+ARMv6-M → ARMv7-M shift is handled entirely via:
+1. `-mcpu / -mfpu / -mfloat-abi` flag triplet
+2. linker.ld memory regions (FLASH 0x08000000 vs 0x10000000)
+3. boot.s vector table size + FPU enable (M7 only)
+4. harness_main.c peripheral MMIO addresses
+
+No shared-toolchain hacks needed — scaffold model is portable.
+
+### Updated
+- `t3/README.md` — file layout reorganized for both vendor groups;
+  v1.5.0 vendor coverage table added.
+
+### Recipe-aligned closure (no F-HAL change)
+F-HAL closure stays at **67% × 5 (sat-1 ✓)**. v1.5.0 doubles
+compile-tier vendor count (rp2040 → +stm32h7) as evidence the model
+generalizes; remaining gap is Renode (or hardware), not toolchain.
+
+### Roadmap
+- v1.6.0+: install Renode 2026.x (upstream .dmg/.pkg, not homebrew);
+  run both harnesses; capture sentinels. Lifts F-HAL T3 ✓.
+- v1.7.0+: ESP32 family T3 scaffold (xtensa-esp-elf-gcc — first
+  non-arm-none-eabi-gcc T3 path).
+
 ## [1.3.0] - 2026-05-08
 
 ### Added
