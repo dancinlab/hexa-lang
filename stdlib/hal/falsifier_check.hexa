@@ -17,13 +17,13 @@
 // Per recipe §3, T2 / T3 closure means **every script in the
 // falsifier's tier-stack array exists on disk** (not just one).
 //
-// Status (v0.0.1 scaffold — 2026-05-08):
+// Status (v0.1.0 — 2026-05-08):
 //
 //   F-HAL-1  T1 ✓  (calc_peripherals.hexa)        T2 ☐ T3 ☐
 //   F-HAL-2  T1 ✓  (calc_lifecycle.hexa)          T2 ☐ T3 ☐
 //   F-HAL-3  T1 ✓  (calc_peripherals.hexa)        T2 ☐ T3 ☐
-//   F-HAL-4  T1 ☐  (handle-pool sat. — v0.1.0+)   T2 ☐ T3 ☐
-//   F-HAL-5  T1 ☐  (sim-before-HW — v0.1.0+)      T2 ☐ T3 ☐
+//   F-HAL-4  T1 ✓  (calc_handle_pool.hexa)        T2 ☐ T3 ☐
+//   F-HAL-5  T1 ✓  (calc_sim_first.hexa)          T2 ☐ T3 ☐
 //
 // T2 = numerical / fixture tier (v0.1.0+ — sim-driver fixtures).
 // T3 = HW-bench tier (v0.2.0+ — stm32h7 / rp2040 / esp32 backends).
@@ -60,8 +60,8 @@ let FALSIFIERS = [
 let F1_T1 = ["calc_peripherals.hexa"]
 let F2_T1 = ["calc_lifecycle.hexa"]
 let F3_T1 = ["calc_peripherals.hexa"]   // φ-dichotomy is a calc_peripherals sub-claim
-let F4_T1: [str] = []                    // handle-pool saturation T1 deferred v0.1.0+
-let F5_T1: [str] = []                    // sim-before-HW T1 deferred v0.1.0+
+let F4_T1 = ["calc_handle_pool.hexa"]    // handle-pool saturation T1 (v0.1.0)
+let F5_T1 = ["calc_sim_first.hexa"]      // sim-before-HW T1 (v0.1.0)
 
 // T2 tier-stacks (numerical / fixture — none yet at v0.0.1).
 let F1_T2: [str] = []
@@ -214,8 +214,8 @@ fn main() {
     println("    F-HAL-1 → " + str(F1_T1))
     println("    F-HAL-2 → " + str(F2_T1))
     println("    F-HAL-3 → " + str(F3_T1))
-    println("    F-HAL-4 → " + str(F4_T1) + "   (deferred v0.1.0+)")
-    println("    F-HAL-5 → " + str(F5_T1) + "   (deferred v0.1.0+)")
+    println("    F-HAL-4 → " + str(F4_T1))
+    println("    F-HAL-5 → " + str(F5_T1))
     println("")
 
     println("  saturation status:")

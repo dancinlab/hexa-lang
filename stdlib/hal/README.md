@@ -92,6 +92,21 @@ modules in v0.2.0+.
 - `stdlib/hal/lattice_test.hexa` — F-HAL-1/3 invariants
 - `stdlib/hal/selftest_test.hexa` — module file presence
 
+## Hardware backends
+
+Per-vendor HW impls live under `stdlib/hal/backend/<vendor>/`. v0.0.1
+ships sim backend only (per F-HAL-5 invariant — sim before HW).
+v0.1.0+ adds:
+
+- `backend/stm32h7/<peripheral>.hexa` — STM32H7 Cortex-M7 480 MHz
+  (paper skeleton; real MMIO TBD).
+- `backend/rp2040/<peripheral>.hexa` — Raspberry Pi RP2040 (planned).
+- `backend/esp32/<peripheral>.hexa` — Espressif ESP32 (planned).
+
+cfg-flag dispatch in each top-level module (gpio.hexa etc.) selects
+the correct backend at compile time. Sim backend is always-available
+fallback.
+
 ## Provenance
 
 - Born from hexa-chip Phase C.5 pivot (2026-05-08).
