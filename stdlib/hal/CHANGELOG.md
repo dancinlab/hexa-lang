@@ -1,5 +1,40 @@
 # stdlib/hal CHANGELOG
 
+## [1.14.0] - 2026-05-09
+
+### Added — `numerics_gpgpu_lifecycle.hexa` F-GPGPU-2 T2 numerical (lifts to 67%)
+- `numerics_gpgpu_lifecycle.hexa` (~210 lines) — second T2 fixture for
+  the GPGPU axis. Cross-checks the τ=4 lifecycle (compile/enqueue/
+  dispatch/retire) against the on-disk vendor backend table by scoring
+  each backend's lifecycle-fn surface.
+
+  τ=4 stage → archetypal fn-suffix:
+    compile  → `*_kernel_compile`
+    enqueue  → `*_buffer_h2d` ∥ `*_buffer_alloc`
+    dispatch → `*_dispatch`
+    retire   → `*_event_wait` ∥ `*_event_release`
+
+  6 numerical checks:
+    1. 6 vendor roster cardinality
+    2. τ_gpgpu = 4 stages algebraic re-assert
+    3. per-vendor lifecycle score ≥ 3 of 4 stages
+    4. Σ stage_count over 6 vendors ≥ 18 (= 6·3 floor)
+    5. *_dispatch present on EVERY vendor backend (100% dispatch coverage)
+    6. *_event_wait OR *_event_release present on EVERY backend (100%
+       retire coverage)
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_GPGPU_LIFECYCLE__ PASS`.
+
+  Pattern: numerics_lifecycle_dispatch.hexa (sister F-HAL-2 T2 fixture).
+  Same _check / RUN / FAIL harness, same per-module-then-aggregate
+  scoring, same PASS/FAIL sentinel scheme.
+
+  **F-GPGPU-2 closure lifted: 33% → 67%** (T1 ✓ + T2 ✓; T3 deferred).
+  2/6 T2 fixtures landed; remaining 4 (numerics_gpgpu_{ir_dichotomy,
+  dispatch, mem_tiers, barriers}.hexa) planned v1.15.0+.
+
+  Phase G iter 9+5+2.
+
 ## [1.13.0] - 2026-05-09
 
 ### Added — `numerics_gpgpu_lattice.hexa` F-GPGPU-1 T2 numerical (lifts to 67%)
