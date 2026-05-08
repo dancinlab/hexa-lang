@@ -1,5 +1,47 @@
 # stdlib/hal CHANGELOG
 
+## [1.25.0] - 2026-05-09
+
+### Added — `numerics_ai_native_pdk_set.hexa` F-AI-NATIVE-6 T2 (★ triple-axis sat-1 milestone)
+- `numerics_ai_native_pdk_set.hexa` (~225 lines) — **6th + LAST T2
+  fixture for AI-native axis**. Cross-checks the 3-PDK paper backend
+  set (sky130 / tsmc_n5 / samsung_sf3p) against on-disk
+  backend/ai_native/<pdk>.hexa files.
+
+  6 numerical checks:
+    1. all 3 backend/ai_native/<pdk>.hexa files present
+    2. each declares PDK_NODE_NM with expected values (130 / 5 / 3)
+    3. OVERHEAD_BP = 278 consistent across all 3 PDKs (φ/σ_n=1/36 ≈ 2.78%)
+    4. N_TILES = 6 consistent across all 3 PDKs (mirror of ai.hexa)
+    5. node sizes monotonic descending: SKY130 > TSMC N5 > SF3P
+    6. PDK_NAME strings match canonical (sky130/tsmc_n5/samsung_sf3p)
+
+  PASS sentinel: `__HEXA_LANG_HAL_NUMERICS_AI_NATIVE_PDK_SET__ PASS`.
+
+  Pattern: numerics_gpgpu_lattice.hexa (multi-backend on-disk check).
+
+  **F-AI-NATIVE-6 closure lifted: 33% → 67%** (T1 ✓ + T2 ✓; T3 deferred
+  per canon §7.5).
+
+  ★ **F-AI-NATIVE axis sat-1 milestone REACHED** ★ — all 6
+  F-AI-NATIVE falsifiers now at 67% closure (T1+T2 ✓ across the board).
+  6/6 T2 fixtures landed (100%). T3 (silicon RTL bench + actual
+  per-PDK tape-out) blocked on foundry MOU + downstream FFI;
+  lifts each F-AI-NATIVE 67% → 100% only when tape-out lands.
+
+  ★★ **TRIPLE-AXIS 3/3 SAT-1 LEDGER COMPLETE** ★★ —
+    F-HAL-1..5         HW-12 axis        sat-1 ✓ since v0.3.0  (fc2eeb2f)
+    F-GPGPU-1..6       GPGPU axis        sat-1 ✓ since v1.18.0 (198ca58b)
+    F-AI-NATIVE-1..6   AI-native axis    sat-1 ✓ since v1.25.0 (this iter)
+
+  Total: **17 falsifiers** across 3 independent lattice axes, all at
+  ≥ 67% closure (T1+T2 ✓), every T2 fixture either on disk or formally
+  preregistered. T3 universally deferred per canon §7.5 FFI-downstream
+  rule (HW-12 needs Renode silicon emulator; GPGPU needs GPU runtime
+  FFI; AI-native needs RTL synthesis + tape-out).
+
+  Phase G iter 9+5+13.
+
 ## [1.24.0] - 2026-05-09
 
 ### Added — `numerics_ai_native_bt_coverage.hexa` F-AI-NATIVE-5 T2 numerical (lifts to 67%)
