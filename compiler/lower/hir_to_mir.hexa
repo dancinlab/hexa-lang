@@ -1,0 +1,999 @@
+// HEXA Native Compiler — Phase B5 / Lower: HIR → MIR
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Converts a typed HModule into an MModule (CFG + SSA form).
+//
+//   pub fn lower_hir(module: HModule) -> MModule
+//
+// Pipeline (RFC-018 §2):
+//   HIR → lower_hir → MIR → mono → ssa → optimize → LIR
+//
+// Memory model (RFC-018 §5, v1 = arena only):
+//   Each MFunc opens a fresh function arena. arena_root holds the root
+//   arena id; v1 keeps a single arena per function. Globals (atlas
+//   rodata) get arena_id = 0.
+//
+// SSA discipline:
+//   Every Local is assigned exactly once. When a value flows out of
+//   multiple branches we emit a phi-style STMT_ASSIGN with op="phi"
+//   carrying the per-pred Operand list. v1 keeps lowering simple — most
+//   if/while/match arms terminate via STMT_RETURN so phis are rare.
+
+import "../ir/hir.hexa"
+import "../ir/mir.hexa"
+
+// ── Sentinels ────────────────────────────────────────────────
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+}
+
+fn _const_int_op(v: i64) -> Operand {
+    return Operand {
+        kind: "const_int",
+        local_id: -1,
+        int_val: v,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _const_float_op(v: f64) -> Operand {
+    return Operand {
+        kind: "const_float",
+        local_id: -1,
+        int_val: 0,
+        float_val: v,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _const_str_op(s: string) -> Operand {
+    return Operand {
+        kind: "const_str",
+        local_id: -1,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: s,
+        global_id: -1
+    }
+}
+
+fn _local_op(id: i64) -> Operand {
+    return Operand {
+        kind: "local",
+        local_id: id,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _global_op(id: i64, name: string) -> Operand {
+    return Operand {
+        kind: "global",
+        local_id: -1,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: name,
+        global_id: id
+    }
+}
+
+// ── Type id interning ────────────────────────────────────────
+
+fn _type_id_of(t: Type) -> i64 {
+    if t.kind == "i64" { return 1 }
+    if t.kind == "i32" { return 2 }
+    if t.kind == "f64" { return 3 }
+    if t.kind == "f32" { return 4 }
+    if t.kind == "bool" { return 5 }
+    if t.kind == "string" { return 6 }
+    if t.kind == "char" { return 7 }
+    if t.kind == "unit" { return 8 }
+    return 0
+}
+
+// ── Local-name binding (HIR ident → MIR Local) ──────────────
+
+pub struct LocalBinding {
+    name: string,
+    local_id: i64
+}
+
+pub struct LowerCtx {
+    next_local: i64,
+    next_block: i64,
+    next_arena: i64,
+    arena_root: i64,
+    locals: [Local],
+    blocks: [Block],
+    cur_block: i64,
+    bindings: [LocalBinding],
+    frame_starts: [i64],
+    globals: [Local],
+    has_returned: bool
+}
+
+fn _new_ctx() -> LowerCtx {
+    return LowerCtx {
+        next_local: 0,
+        next_block: 0,
+        next_arena: 1,
+        arena_root: 1,
+        locals: [],
+        blocks: [],
+        cur_block: 0,
+        bindings: [],
+        frame_starts: [],
+        globals: [],
+        has_returned: false
+    }
+}
+
+fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
+    let id = ctx.next_local
+    let l = Local {
+        id: id,
+        arena_id: ctx.arena_root,
+        type_id: _type_id_of(t),
+        name_hint: hint
+    }
+    let mut locals = ctx.locals
+    locals.push(l)
+    return LowerCtx {
+        next_local: id + 1,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: locals,
+        blocks: ctx.blocks,
+        cur_block: ctx.cur_block,
+        bindings: ctx.bindings,
+        frame_starts: ctx.frame_starts,
+        globals: ctx.globals,
+        has_returned: ctx.has_returned
+    }
+}
+
+fn _new_block(ctx: LowerCtx) -> LowerCtx {
+    let id = ctx.next_block
+    let b = Block { id: id, stmts: [], preds: [], succs: [] }
+    let mut blocks = ctx.blocks
+    blocks.push(b)
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: id + 1,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: ctx.locals,
+        blocks: blocks,
+        cur_block: ctx.cur_block,
+        bindings: ctx.bindings,
+        frame_starts: ctx.frame_starts,
+        globals: ctx.globals,
+        has_returned: ctx.has_returned
+    }
+}
+
+fn _set_cur_block(ctx: LowerCtx, id: i64) -> LowerCtx {
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: ctx.locals,
+        blocks: ctx.blocks,
+        cur_block: id,
+        bindings: ctx.bindings,
+        frame_starts: ctx.frame_starts,
+        globals: ctx.globals,
+        has_returned: false
+    }
+}
+
+fn _push_stmt_to(ctx: LowerCtx, block_id: i64, s: Stmt) -> LowerCtx {
+    let mut blocks = ctx.blocks
+    let mut i = 0
+    while i < len(blocks) {
+        if blocks[i].id == block_id {
+            let b = blocks[i]
+            let mut stmts = b.stmts
+            stmts.push(s)
+            blocks[i] = Block {
+                id: b.id,
+                stmts: stmts,
+                preds: b.preds,
+                succs: b.succs
+            }
+            break
+        }
+        i = i + 1
+    }
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: ctx.locals,
+        blocks: blocks,
+        cur_block: ctx.cur_block,
+        bindings: ctx.bindings,
+        frame_starts: ctx.frame_starts,
+        globals: ctx.globals,
+        has_returned: ctx.has_returned
+    }
+}
+
+fn _push_stmt(ctx: LowerCtx, s: Stmt) -> LowerCtx {
+    return _push_stmt_to(ctx, ctx.cur_block, s)
+}
+
+fn _add_edge(ctx: LowerCtx, from_id: i64, to_id: i64) -> LowerCtx {
+    let mut blocks = ctx.blocks
+    let mut i = 0
+    while i < len(blocks) {
+        if blocks[i].id == from_id {
+            let b = blocks[i]
+            let mut succs = b.succs
+            succs.push(to_id)
+            blocks[i] = Block {
+                id: b.id,
+                stmts: b.stmts,
+                preds: b.preds,
+                succs: succs
+            }
+        }
+        if blocks[i].id == to_id {
+            let b = blocks[i]
+            let mut preds = b.preds
+            preds.push(from_id)
+            blocks[i] = Block {
+                id: b.id,
+                stmts: b.stmts,
+                preds: preds,
+                succs: b.succs
+            }
+        }
+        i = i + 1
+    }
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: ctx.locals,
+        blocks: blocks,
+        cur_block: ctx.cur_block,
+        bindings: ctx.bindings,
+        frame_starts: ctx.frame_starts,
+        globals: ctx.globals,
+        has_returned: ctx.has_returned
+    }
+}
+
+fn _set_returned(ctx: LowerCtx, v: bool) -> LowerCtx {
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: ctx.locals,
+        blocks: ctx.blocks,
+        cur_block: ctx.cur_block,
+        bindings: ctx.bindings,
+        frame_starts: ctx.frame_starts,
+        globals: ctx.globals,
+        has_returned: v
+    }
+}
+
+// ── Bindings ────────────────────────────────────────────────
+
+fn _bind(ctx: LowerCtx, name: string, local_id: i64) -> LowerCtx {
+    let mut bs = ctx.bindings
+    bs.push(LocalBinding { name: name, local_id: local_id })
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: ctx.locals,
+        blocks: ctx.blocks,
+        cur_block: ctx.cur_block,
+        bindings: bs,
+        frame_starts: ctx.frame_starts,
+        globals: ctx.globals,
+        has_returned: ctx.has_returned
+    }
+}
+
+fn _rebind(ctx: LowerCtx, name: string, local_id: i64) -> LowerCtx {
+    // SSA-rename: replace innermost binding for `name`.
+    let mut bs = ctx.bindings
+    let mut i = len(bs) - 1
+    let mut done = false
+    while i >= 0 {
+        if bs[i].name == name {
+            bs[i] = LocalBinding { name: name, local_id: local_id }
+            done = true
+            break
+        }
+        i = i - 1
+    }
+    if !done {
+        bs.push(LocalBinding { name: name, local_id: local_id })
+    }
+    return LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: ctx.locals,
+        blocks: ctx.blocks,
+        cur_block: ctx.cur_block,
+        bindings: bs,
+        frame_starts: ctx.frame_starts,
+        globals: ctx.globals,
+        has_returned: ctx.has_returned
+    }
+}
+
+fn _lookup(ctx: LowerCtx, name: string) -> i64 {
+    let mut i = len(ctx.bindings) - 1
+    while i >= 0 {
+        if ctx.bindings[i].name == name {
+            return ctx.bindings[i].local_id
+        }
+        i = i - 1
+    }
+    return -1
+}
+
+// ── Result of expression lowering ───────────────────────────
+
+pub struct LowerExprResult {
+    ctx: LowerCtx,
+    operand: Operand,
+    has_value: bool
+}
+
+fn _no_value(ctx: LowerCtx) -> LowerExprResult {
+    return LowerExprResult {
+        ctx: ctx,
+        operand: _const_int_op(0),
+        has_value: false
+    }
+}
+
+fn _value(ctx: LowerCtx, op: Operand) -> LowerExprResult {
+    return LowerExprResult { ctx: ctx, operand: op, has_value: true }
+}
+
+// ── HExpr lowering core ─────────────────────────────────────
+
+fn _lower_expr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
+    let k = e.kind
+
+    // ── literals ────────────────────────────────────────────
+    if k == "literal_int" {
+        let v = _parse_int(e.text)
+        return _value(ctx, _const_int_op(v))
+    }
+    if k == "literal_float" {
+        return _value(ctx, _const_float_op(0.0))
+    }
+    if k == "literal_string" {
+        return _value(ctx, _const_str_op(e.text))
+    }
+    if k == "literal_bool" {
+        let mut v: i64 = 0
+        if e.text == "true" { v = 1 }
+        return _value(ctx, _const_int_op(v))
+    }
+    if k == "literal_char" {
+        return _value(ctx, _const_int_op(0))
+    }
+
+    // ── ident ───────────────────────────────────────────────
+    if k == "ident" {
+        let id = _lookup(ctx, e.text)
+        if id < 0 {
+            return _value(ctx, _const_int_op(0))
+        }
+        return _value(ctx, _local_op(id))
+    }
+
+    // ── atlas ref → STMT_ASSIGN with global Operand ─────────
+    if k == "atlas_ref" {
+        let mut ctx2 = _fresh_local(ctx, e.typ, "atlas_" + e.atlas.ref_kind + "_" + e.atlas.id)
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let mut args: [Operand] = []
+        args.push(_global_op(e.atlas.atlas_index, e.atlas.ref_kind + "[" + e.atlas.id + "]"))
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "atlas",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── binop → STMT_BINOP ──────────────────────────────────
+    if k == "binop" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let lr = _lower_expr(ctx, e.children[0])
+        let rr = _lower_expr(lr.ctx, e.children[1])
+        let mut ctx2 = _fresh_local(rr.ctx, e.typ, "t")
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let mut args: [Operand] = []
+        args.push(lr.operand)
+        args.push(rr.operand)
+        let s = Stmt {
+            kind: STMT_BINOP,
+            dst: dst,
+            op: e.text,
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── unop → STMT_UNOP ───────────────────────────────────
+    if k == "unop" {
+        if len(e.children) < 1 { return _no_value(ctx) }
+        let r = _lower_expr(ctx, e.children[0])
+        let mut ctx2 = _fresh_local(r.ctx, e.typ, "t")
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let mut args: [Operand] = []
+        args.push(r.operand)
+        let s = Stmt {
+            kind: STMT_UNOP,
+            dst: dst,
+            op: e.text,
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── call → STMT_CALL ───────────────────────────────────
+    if k == "call" {
+        let mut ctx_r = ctx
+        let mut callee_text = ""
+        if len(e.children) > 0 {
+            callee_text = e.children[0].text
+        }
+        let mut arg_ops: [Operand] = []
+        let mut i = 1
+        while i < len(e.children) {
+            let r = _lower_expr(ctx_r, e.children[i])
+            ctx_r = r.ctx
+            arg_ops.push(r.operand)
+            i = i + 1
+        }
+        let mut ctx2 = _fresh_local(ctx_r, e.typ, "call_ret")
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let s = Stmt {
+            kind: STMT_CALL,
+            dst: dst,
+            op: callee_text,
+            args: arg_ops,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── return → STMT_RETURN ───────────────────────────────
+    if k == "return" {
+        let mut args: [Operand] = []
+        let mut ctx2 = ctx
+        if len(e.children) > 0 {
+            let r = _lower_expr(ctx2, e.children[0])
+            ctx2 = r.ctx
+            args.push(r.operand)
+        }
+        let s = Stmt {
+            kind: STMT_RETURN,
+            dst: _miss_local(),
+            op: "",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        ctx2 = _set_returned(ctx2, true)
+        return _no_value(ctx2)
+    }
+
+    // ── let → STMT_ASSIGN, bind name to dst ────────────────
+    if k == "let" {
+        let nm = _strip_mut_prefix(e.text)
+        let mut ctx2 = ctx
+        let mut rhs_op = _const_int_op(0)
+        if len(e.children) > 0 {
+            let r = _lower_expr(ctx2, e.children[0])
+            ctx2 = r.ctx
+            rhs_op = r.operand
+        }
+        let mut rhs_t = Type {
+            kind: "?", def: DefId { module: "", index: -1 },
+            args: [], ret: [], domain: "", unit: ""
+        }
+        if len(e.children) > 0 { rhs_t = e.children[0].typ }
+        ctx2 = _fresh_local(ctx2, rhs_t, nm)
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let mut args: [Operand] = []
+        args.push(rhs_op)
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "let",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        if len(nm) > 0 { ctx2 = _bind(ctx2, nm, dst.id) }
+        return _no_value(ctx2)
+    }
+
+    // ── assign (i = i + 1, ...): SSA-rename via fresh local ─
+    if k == "assign" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let lhs = e.children[0]
+        let rr = _lower_expr(ctx, e.children[1])
+        let mut ctx2 = _fresh_local(rr.ctx, e.children[1].typ, lhs.text)
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let mut args: [Operand] = []
+        args.push(rr.operand)
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "assign",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        if len(lhs.text) > 0 { ctx2 = _rebind(ctx2, lhs.text, dst.id) }
+        return _no_value(ctx2)
+    }
+
+    // ── block: lower children sequentially in current block ─
+    if k == "block" {
+        let mut ctx2 = ctx
+        let mut last_op = _const_int_op(0)
+        let mut last_has = false
+        let mut i = 0
+        while i < len(e.children) {
+            if ctx2.has_returned { break }
+            let r = _lower_expr(ctx2, e.children[i])
+            ctx2 = r.ctx
+            last_op = r.operand
+            last_has = r.has_value
+            i = i + 1
+        }
+        if last_has { return _value(ctx2, last_op) }
+        return _no_value(ctx2)
+    }
+
+    // ── if → STMT_BR_COND + then/else/after blocks ─────────
+    if k == "if" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let cr = _lower_expr(ctx, e.children[0])
+        let entry_id = cr.ctx.cur_block
+
+        let mut ctx2 = _new_block(cr.ctx)
+        let then_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let else_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+
+        let has_else = len(e.children) >= 3
+
+        let mut br_args: [Operand] = []
+        br_args.push(cr.operand)
+        let br = Stmt {
+            kind: STMT_BR_COND,
+            dst: _miss_local(),
+            op: "",
+            args: br_args,
+            target_block: then_id,
+            target_block_else: else_id
+        }
+        ctx2 = _push_stmt_to(ctx2, entry_id, br)
+        ctx2 = _add_edge(ctx2, entry_id, then_id)
+        ctx2 = _add_edge(ctx2, entry_id, else_id)
+
+        // then-branch
+        ctx2 = _set_cur_block(ctx2, then_id)
+        let tr = _lower_expr(ctx2, e.children[1])
+        ctx2 = tr.ctx
+        let then_returned = ctx2.has_returned
+        let then_end_block = ctx2.cur_block
+
+        // else-branch (or fall through to else_id)
+        let mut else_returned = false
+        let mut else_end_block = else_id
+        if has_else {
+            ctx2 = _set_cur_block(ctx2, else_id)
+            let er = _lower_expr(ctx2, e.children[2])
+            ctx2 = er.ctx
+            else_returned = ctx2.has_returned
+            else_end_block = ctx2.cur_block
+        }
+
+        if has_else {
+            if then_returned && else_returned {
+                ctx2 = _set_returned(ctx2, true)
+                return _no_value(ctx2)
+            }
+            ctx2 = _new_block(ctx2)
+            let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+            if !then_returned {
+                let br_then = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: join_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, then_end_block, br_then)
+                ctx2 = _add_edge(ctx2, then_end_block, join_id)
+            }
+            if !else_returned {
+                let br_else = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: join_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, else_end_block, br_else)
+                ctx2 = _add_edge(ctx2, else_end_block, join_id)
+            }
+            ctx2 = _set_cur_block(ctx2, join_id)
+            return _no_value(ctx2)
+        }
+
+        // No-else: else_id IS the after block.
+        if !then_returned {
+            let br_then = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: else_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, then_end_block, br_then)
+            ctx2 = _add_edge(ctx2, then_end_block, else_id)
+        }
+        ctx2 = _set_cur_block(ctx2, else_id)
+        return _no_value(ctx2)
+    }
+
+    // ── while → header + body + after blocks ───────────────
+    if k == "while" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let from_id = ctx.cur_block
+
+        let mut ctx2 = _new_block(ctx)
+        let header_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let body_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let after_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+
+        let br0 = Stmt {
+            kind: STMT_BR,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: header_id,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt_to(ctx2, from_id, br0)
+        ctx2 = _add_edge(ctx2, from_id, header_id)
+
+        ctx2 = _set_cur_block(ctx2, header_id)
+        let cr = _lower_expr(ctx2, e.children[0])
+        ctx2 = cr.ctx
+        let mut br_args: [Operand] = []
+        br_args.push(cr.operand)
+        let br = Stmt {
+            kind: STMT_BR_COND,
+            dst: _miss_local(),
+            op: "",
+            args: br_args,
+            target_block: body_id,
+            target_block_else: after_id
+        }
+        ctx2 = _push_stmt(ctx2, br)
+        ctx2 = _add_edge(ctx2, header_id, body_id)
+        ctx2 = _add_edge(ctx2, header_id, after_id)
+
+        ctx2 = _set_cur_block(ctx2, body_id)
+        let br_b = _lower_expr(ctx2, e.children[1])
+        ctx2 = br_b.ctx
+        if !ctx2.has_returned {
+            let body_end = ctx2.cur_block
+            let back = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: header_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, body_end, back)
+            ctx2 = _add_edge(ctx2, body_end, header_id)
+        }
+        ctx2 = _set_cur_block(ctx2, after_id)
+        return _no_value(ctx2)
+    }
+
+    // ── match: sequence of STMT_BR_COND testing tag ─────────
+    if k == "match" {
+        if len(e.children) < 1 { return _no_value(ctx) }
+        let sr = _lower_expr(ctx, e.children[0])
+        let scrut_op = sr.operand
+        let mut ctx2 = sr.ctx
+
+        ctx2 = _new_block(ctx2)
+        let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+
+        let mut idx = 1
+        while idx + 1 < len(e.children) {
+            let pat = e.children[idx]
+            let body = e.children[idx + 1]
+
+            ctx2 = _new_block(ctx2)
+            let arm_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+            let mut next_id = join_id
+            let is_last = (idx + 2 >= len(e.children))
+            if !is_last {
+                ctx2 = _new_block(ctx2)
+                next_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+            }
+
+            let cur_block_id = ctx2.cur_block
+            if pat.kind == "wildcard" {
+                let br = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: arm_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
+                ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
+            } else {
+                let pr = _lower_expr(ctx2, pat)
+                ctx2 = pr.ctx
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "tag_eq")
+                let cmp_dst = ctx3.locals[len(ctx3.locals) - 1]
+                let mut cmp_args: [Operand] = []
+                cmp_args.push(scrut_op)
+                cmp_args.push(pr.operand)
+                let cmp = Stmt {
+                    kind: STMT_BINOP,
+                    dst: cmp_dst,
+                    op: "==",
+                    args: cmp_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, cmp)
+                let mut br_args: [Operand] = []
+                br_args.push(_local_op(cmp_dst.id))
+                let br = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: br_args,
+                    target_block: arm_id,
+                    target_block_else: next_id
+                }
+                ctx3 = _push_stmt(ctx3, br)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                ctx2 = ctx3
+            }
+
+            ctx2 = _set_cur_block(ctx2, arm_id)
+            let br_b = _lower_expr(ctx2, body)
+            ctx2 = br_b.ctx
+            if !ctx2.has_returned {
+                let arm_end = ctx2.cur_block
+                let to_join = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: join_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, arm_end, to_join)
+                ctx2 = _add_edge(ctx2, arm_end, join_id)
+            }
+
+            ctx2 = _set_cur_block(ctx2, next_id)
+            idx = idx + 2
+        }
+
+        ctx2 = _set_cur_block(ctx2, join_id)
+        return _no_value(ctx2)
+    }
+
+    // ── Default: lower children, no value. ──────────────────
+    let mut ctx_d = ctx
+    let mut i = 0
+    while i < len(e.children) {
+        let r = _lower_expr(ctx_d, e.children[i])
+        ctx_d = r.ctx
+        i = i + 1
+    }
+    return _no_value(ctx_d)
+}
+
+// ── Helpers ─────────────────────────────────────────────────
+
+fn _strip_mut_prefix(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
+        let mut out = ""
+        let mut i = 4
+        while i < n {
+            out = out + to_string(chars[i])
+            i = i + 1
+        }
+        return out
+    }
+    return t
+}
+
+fn _digit_val(c: char) -> i64 {
+    if c == '0' { return 0 }
+    if c == '1' { return 1 }
+    if c == '2' { return 2 }
+    if c == '3' { return 3 }
+    if c == '4' { return 4 }
+    if c == '5' { return 5 }
+    if c == '6' { return 6 }
+    if c == '7' { return 7 }
+    if c == '8' { return 8 }
+    if c == '9' { return 9 }
+    return -1
+}
+
+fn _parse_int(t: string) -> i64 {
+    let chars = t.chars()
+    let n = len(chars)
+    if n == 0 { return 0 }
+    let mut i = 0
+    let mut neg = false
+    if chars[0] == '-' {
+        neg = true
+        i = 1
+    }
+    let mut v: i64 = 0
+    while i < n {
+        let d = _digit_val(chars[i])
+        if d >= 0 { v = v * 10 + d }
+        i = i + 1
+    }
+    if neg { return -v }
+    return v
+}
+
+// ── Function lowering ───────────────────────────────────────
+
+fn _lower_fn(it: HItem) -> MFunc {
+    let mut ctx = _new_ctx()
+    ctx = _new_block(ctx)
+    let entry_id = ctx.blocks[len(ctx.blocks) - 1].id
+    ctx = _set_cur_block(ctx, entry_id)
+
+    let mut params: [Local] = []
+    let mut p = 0
+    while p < len(it.sig_params) {
+        let pt = it.sig_params[p]
+        ctx = _fresh_local(ctx, pt, "param" + to_string(p))
+        let l = ctx.locals[len(ctx.locals) - 1]
+        params.push(l)
+        ctx = _bind(ctx, "param" + to_string(p), l.id)
+        p = p + 1
+    }
+    // Recover real param names from optional "param_names" annotation.
+    let mut ann_i = 0
+    while ann_i < len(it.annotations) {
+        let a = it.annotations[ann_i]
+        if a.name == "param_names" {
+            let mut q = 0
+            while q < len(a.args) && q < len(params) {
+                let nm = a.args[q].text
+                if len(nm) > 0 {
+                    ctx = _bind(ctx, nm, params[q].id)
+                }
+                q = q + 1
+            }
+        }
+        ann_i = ann_i + 1
+    }
+
+    let br = _lower_expr(ctx, it.body)
+    ctx = br.ctx
+
+    if !ctx.has_returned {
+        let mut args: [Operand] = []
+        if br.has_value { args.push(br.operand) }
+        let s = Stmt {
+            kind: STMT_RETURN,
+            dst: _miss_local(),
+            op: "",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx = _push_stmt(ctx, s)
+    }
+
+    let ret_local = _miss_local()
+    return MFunc {
+        name: it.name,
+        params: params,
+        return_local: ret_local,
+        locals: ctx.locals,
+        blocks: ctx.blocks,
+        entry_block: entry_id,
+        arena_root: ctx.arena_root
+    }
+}
+
+// ── Public entry ────────────────────────────────────────────
+
+pub fn lower_hir(module: HModule) -> MModule {
+    let mut funcs: [MFunc] = []
+    let mut globals: [Local] = []
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if it.kind == "ITEM_FN" {
+            let f = _lower_fn(it)
+            funcs.push(f)
+        } else if it.kind == "ITEM_LET" {
+            let l = Local {
+                id: len(globals),
+                arena_id: 0,
+                type_id: _type_id_of(it.sig_return),
+                name_hint: it.name
+            }
+            globals.push(l)
+        }
+        i = i + 1
+    }
+    return MModule {
+        file: module.file,
+        funcs: funcs,
+        globals: globals
+    }
+}

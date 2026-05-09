@@ -1,0 +1,437 @@
+// HEXA Native Compiler — Phase B5 / Lower: HIR → MIR smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds three small HModules, runs lower_hir, and prints a
+// summary of each produced MFunc. Exits 0 only if every assertion holds.
+//
+// Cases:
+//   (a) fn add(x:Int, y:Int) -> Int { return x + y }
+//       expect: 1 block, ≥3 locals, last stmt = STMT_RETURN, contains BINOP.
+//   (b) fn abs(x: Int) -> Int { if x < 0 { return -x } return x }
+//       expect: ≥3 blocks, entry has STMT_BR_COND with both target ids set.
+//   (c) fn loop_sum() { let mut i = 0; while i < 10 { i = i + 1 } }
+//       expect: header + body + after blocks (≥4 blocks), SSA-renamed locals
+//       on each i = i + 1 (multiple Locals share name_hint "i").
+//
+// Run:
+//   hexa run compiler/lower/mir_test.hexa
+
+import "../parse/ast.hexa"
+import "../ir/hir.hexa"
+import "../ir/mir.hexa"
+import "../lex/tokens.hexa"
+import "./hir_to_mir.hexa"
+
+// ── HExpr/HItem builders ─────────────────────────────────────
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_span() -> Span { return _span("", 0, 0, 0) }
+
+fn _miss_def() -> DefId { return DefId { module: "", index: -1 } }
+
+fn _empty_atlas_binding() -> AtlasBinding {
+    return AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" }
+}
+
+fn _t(kind: string) -> Type {
+    return Type {
+        kind: kind, def: _miss_def(),
+        args: [], ret: [],
+        domain: "", unit: ""
+    }
+}
+
+fn _t_i64()  -> Type { return _t("i64") }
+fn _t_bool() -> Type { return _t("bool") }
+fn _t_unit() -> Type { return _t("unit") }
+
+fn _hexpr(kind: string, typ: Type, text: string, kids: [HExpr]) -> HExpr {
+    return HExpr {
+        kind: kind,
+        span: _empty_span(),
+        typ: typ,
+        text: text,
+        children: kids,
+        atlas: _empty_atlas_binding(),
+        def: _miss_def()
+    }
+}
+
+fn _ident(name: string, typ: Type) -> HExpr {
+    return _hexpr("ident", typ, name, [])
+}
+
+fn _lit_int(text: string) -> HExpr {
+    return _hexpr("literal_int", _t_i64(), text, [])
+}
+
+fn _binop(op: string, lhs: HExpr, rhs: HExpr, typ: Type) -> HExpr {
+    let mut k = []
+    k.push(lhs)
+    k.push(rhs)
+    return _hexpr("binop", typ, op, k)
+}
+
+fn _unop(op: string, x: HExpr, typ: Type) -> HExpr {
+    let mut k = []
+    k.push(x)
+    return _hexpr("unop", typ, op, k)
+}
+
+fn _ret(value: HExpr) -> HExpr {
+    let mut k = []
+    k.push(value)
+    return _hexpr("return", _t_unit(), "", k)
+}
+
+fn _block(kids: [HExpr]) -> HExpr {
+    return _hexpr("block", _t_unit(), "", kids)
+}
+
+fn _hif(cond: HExpr, then_branch: HExpr) -> HExpr {
+    let mut k = []
+    k.push(cond)
+    k.push(then_branch)
+    return _hexpr("if", _t_unit(), "", k)
+}
+
+fn _hwhile(cond: HExpr, body: HExpr) -> HExpr {
+    let mut k = []
+    k.push(cond)
+    k.push(body)
+    return _hexpr("while", _t_unit(), "", k)
+}
+
+fn _hlet(name: string, rhs: HExpr) -> HExpr {
+    let mut k = []
+    k.push(rhs)
+    return _hexpr("let", _t_unit(), name, k)
+}
+
+fn _hassign(lhs: HExpr, rhs: HExpr) -> HExpr {
+    let mut k = []
+    k.push(lhs)
+    k.push(rhs)
+    return _hexpr("assign", _t_unit(), "", k)
+}
+
+// HItem builder with optional param_names annotation.
+fn _hfn(name: string, param_names: [string], param_types: [Type], ret: Type, body: HExpr) -> HItem {
+    let mut anns: [Annotation] = []
+    let mut name_args: [Expr] = []
+    let mut p = 0
+    while p < len(param_names) {
+        name_args.push(Expr {
+            kind: ExprKind::Ident,
+            span: _empty_span(),
+            text: param_names[p],
+            children: [],
+            atlas_ref: AtlasRef { kind: "", id: "", span: _empty_span() }
+        })
+        p = p + 1
+    }
+    anns.push(Annotation { name: "param_names", args: name_args, span: _empty_span() })
+    return HItem {
+        kind: "ITEM_FN",
+        def: _miss_def(),
+        name: name,
+        span: _empty_span(),
+        annotations: anns,
+        sig_params: param_types,
+        sig_return: ret,
+        body: body,
+        is_pub: false,
+        discoverable: false,
+        proof_hash: "",
+        verifier_version: ""
+    }
+}
+
+// ── Pretty-print ─────────────────────────────────────────────
+
+fn _kind_count(blocks: [Block], target: string) -> i64 {
+    let mut n: i64 = 0
+    let mut i = 0
+    while i < len(blocks) {
+        let b = blocks[i]
+        let mut j = 0
+        while j < len(b.stmts) {
+            if b.stmts[j].kind == target { n = n + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return n
+}
+
+fn _total_stmts(blocks: [Block]) -> i64 {
+    let mut n: i64 = 0
+    let mut i = 0
+    while i < len(blocks) {
+        n = n + len(blocks[i].stmts)
+        i = i + 1
+    }
+    return n
+}
+
+fn _last_stmt_kind(blocks: [Block]) -> string {
+    if len(blocks) == 0 { return "" }
+    let last = blocks[len(blocks) - 1]
+    if len(last.stmts) == 0 { return "" }
+    return last.stmts[len(last.stmts) - 1].kind
+}
+
+fn _print_mfunc_summary(label: string, mf: MFunc) {
+    let total = _total_stmts(mf.blocks)
+    let n_assign = _kind_count(mf.blocks, STMT_ASSIGN)
+    let n_binop  = _kind_count(mf.blocks, STMT_BINOP)
+    let n_unop   = _kind_count(mf.blocks, STMT_UNOP)
+    let n_call   = _kind_count(mf.blocks, STMT_CALL)
+    let n_ret    = _kind_count(mf.blocks, STMT_RETURN)
+    let n_br     = _kind_count(mf.blocks, STMT_BR)
+    let n_brc    = _kind_count(mf.blocks, STMT_BR_COND)
+    println("  " + label + " " + mf.name +
+            " blocks=" + to_string(len(mf.blocks)) +
+            " locals=" + to_string(len(mf.locals)) +
+            " stmts=" + to_string(total) +
+            " entry=" + to_string(mf.entry_block) +
+            " arena_root=" + to_string(mf.arena_root))
+    println("    kinds: assign=" + to_string(n_assign) +
+            " binop=" + to_string(n_binop) +
+            " unop=" + to_string(n_unop) +
+            " call=" + to_string(n_call) +
+            " return=" + to_string(n_ret) +
+            " br=" + to_string(n_br) +
+            " br_cond=" + to_string(n_brc))
+    let mut i = 0
+    while i < len(mf.blocks) {
+        let b = mf.blocks[i]
+        let mut succ = ""
+        let mut k = 0
+        while k < len(b.succs) {
+            if k > 0 { succ = succ + "," }
+            succ = succ + to_string(b.succs[k])
+            k = k + 1
+        }
+        println("    blk[" + to_string(b.id) + "] stmts=" + to_string(len(b.stmts)) +
+                " preds=" + to_string(len(b.preds)) +
+                " succs=[" + succ + "]")
+        i = i + 1
+    }
+}
+
+// ── Cases ────────────────────────────────────────────────────
+
+// (a) fn add(x:Int, y:Int) -> Int { return x + y }
+fn _build_case_a() -> HModule {
+    let x = _ident("x", _t_i64())
+    let y = _ident("y", _t_i64())
+    let plus = _binop("+", x, y, _t_i64())
+    let body = _block([_ret(plus)])
+    let mut pn: [string] = []
+    pn.push("x")
+    pn.push("y")
+    let mut pt: [Type] = []
+    pt.push(_t_i64())
+    pt.push(_t_i64())
+    let it = _hfn("add", pn, pt, _t_i64(), body)
+    let mut items: [HItem] = []
+    items.push(it)
+    return HModule { file: "case_a.hexa", items: items }
+}
+
+// (b) fn abs(x: Int) -> Int { if x < 0 { return -x } return x }
+fn _build_case_b() -> HModule {
+    let x_for_cond = _ident("x", _t_i64())
+    let zero = _lit_int("0")
+    let cond = _binop("<", x_for_cond, zero, _t_bool())
+    let x_for_neg = _ident("x", _t_i64())
+    let neg_x = _unop("-", x_for_neg, _t_i64())
+    let then_blk = _block([_ret(neg_x)])
+    let if_e = _hif(cond, then_blk)
+    let x_tail = _ident("x", _t_i64())
+    let body = _block([if_e, _ret(x_tail)])
+    let mut pn: [string] = []
+    pn.push("x")
+    let mut pt: [Type] = []
+    pt.push(_t_i64())
+    let it = _hfn("abs", pn, pt, _t_i64(), body)
+    let mut items: [HItem] = []
+    items.push(it)
+    return HModule { file: "case_b.hexa", items: items }
+}
+
+// (c) fn loop_sum() { let mut i = 0; while i < 10 { i = i + 1 } }
+fn _build_case_c() -> HModule {
+    let init = _lit_int("0")
+    let let_i = _hlet("mut:i", init)
+    let i_in_cond = _ident("i", _t_i64())
+    let ten = _lit_int("10")
+    let cond = _binop("<", i_in_cond, ten, _t_bool())
+    let i_lhs = _ident("i", _t_i64())
+    let i_rhs = _ident("i", _t_i64())
+    let one = _lit_int("1")
+    let inc = _binop("+", i_rhs, one, _t_i64())
+    let assign = _hassign(i_lhs, inc)
+    let body_blk = _block([assign])
+    let while_e = _hwhile(cond, body_blk)
+    let body = _block([let_i, while_e])
+    let it = _hfn("loop_sum", [], [], _t_unit(), body)
+    let mut items: [HItem] = []
+    items.push(it)
+    return HModule { file: "case_c.hexa", items: items }
+}
+
+// ── Driver ───────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Lower (HIR→MIR) Smoke Test (B5)")
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+
+    // (a)
+    println("")
+    println("── (a) add(x,y) = x + y ──")
+    let m_a = lower_hir(_build_case_a())
+    if len(m_a.funcs) != 1 {
+        println("  FAIL: case (a) expected 1 MFunc, got " + to_string(len(m_a.funcs)))
+        ok = false
+    } else {
+        let mf = m_a.funcs[0]
+        _print_mfunc_summary("(a)", mf)
+        if mf.name != "add" {
+            println("  FAIL: case (a) expected name=add, got " + mf.name)
+            ok = false
+        }
+        if len(mf.blocks) != 1 {
+            println("  FAIL: case (a) expected 1 block, got " + to_string(len(mf.blocks)))
+            ok = false
+        }
+        if len(mf.locals) < 3 {
+            println("  FAIL: case (a) expected >=3 locals, got " + to_string(len(mf.locals)))
+            ok = false
+        }
+        if len(mf.params) != 2 {
+            println("  FAIL: case (a) expected 2 params, got " + to_string(len(mf.params)))
+            ok = false
+        }
+        if _last_stmt_kind(mf.blocks) != STMT_RETURN {
+            println("  FAIL: case (a) expected last stmt=return, got " + _last_stmt_kind(mf.blocks))
+            ok = false
+        }
+        if _kind_count(mf.blocks, STMT_BINOP) < 1 {
+            println("  FAIL: case (a) expected >=1 binop")
+            ok = false
+        }
+    }
+
+    // (b)
+    println("")
+    println("── (b) abs(x) ──")
+    let m_b = lower_hir(_build_case_b())
+    if len(m_b.funcs) != 1 {
+        println("  FAIL: case (b) expected 1 MFunc")
+        ok = false
+    } else {
+        let mf = m_b.funcs[0]
+        _print_mfunc_summary("(b)", mf)
+        if len(mf.blocks) < 3 {
+            println("  FAIL: case (b) expected >=3 blocks (entry+then+after), got " + to_string(len(mf.blocks)))
+            ok = false
+        }
+        if _kind_count(mf.blocks, STMT_BR_COND) < 1 {
+            println("  FAIL: case (b) expected >=1 br_cond")
+            ok = false
+        }
+        if _kind_count(mf.blocks, STMT_RETURN) < 2 {
+            println("  FAIL: case (b) expected >=2 return (one per arm/path), got " + to_string(_kind_count(mf.blocks, STMT_RETURN)))
+            ok = false
+        }
+        // Verify entry block has a br_cond with both targets set.
+        let entry = mf.blocks[0]
+        let mut found_brc = false
+        let mut s = 0
+        while s < len(entry.stmts) {
+            let st = entry.stmts[s]
+            if st.kind == STMT_BR_COND {
+                if st.target_block >= 0 && st.target_block_else >= 0 {
+                    found_brc = true
+                }
+            }
+            s = s + 1
+        }
+        if !found_brc {
+            println("  FAIL: case (b) entry block missing br_cond w/ both targets")
+            ok = false
+        }
+        if len(entry.succs) < 2 {
+            println("  FAIL: case (b) entry expected >=2 succs, got " + to_string(len(entry.succs)))
+            ok = false
+        }
+    }
+
+    // (c)
+    println("")
+    println("── (c) loop_sum() ──")
+    let m_c = lower_hir(_build_case_c())
+    if len(m_c.funcs) != 1 {
+        println("  FAIL: case (c) expected 1 MFunc")
+        ok = false
+    } else {
+        let mf = m_c.funcs[0]
+        _print_mfunc_summary("(c)", mf)
+        if len(mf.blocks) < 4 {
+            println("  FAIL: case (c) expected >=4 blocks (entry+header+body+after), got " + to_string(len(mf.blocks)))
+            ok = false
+        }
+        if _kind_count(mf.blocks, STMT_BR_COND) < 1 {
+            println("  FAIL: case (c) expected >=1 br_cond (loop header)")
+            ok = false
+        }
+        if _kind_count(mf.blocks, STMT_BR) < 2 {
+            println("  FAIL: case (c) expected >=2 br (entry→header, body→header), got " + to_string(_kind_count(mf.blocks, STMT_BR)))
+            ok = false
+        }
+        // Count locals named "i" — let-binding + assign rebind => >=2
+        let mut n_i: i64 = 0
+        let mut k = 0
+        while k < len(mf.locals) {
+            if mf.locals[k].name_hint == "i" { n_i = n_i + 1 }
+            k = k + 1
+        }
+        if n_i < 2 {
+            println("  FAIL: case (c) expected >=2 SSA-renamed locals 'i', got " + to_string(n_i))
+            ok = false
+        }
+        // Every Local should have arena_id == arena_root
+        let mut bad_arena = false
+        let mut q = 0
+        while q < len(mf.locals) {
+            if mf.locals[q].arena_id != mf.arena_root {
+                bad_arena = true
+            }
+            q = q + 1
+        }
+        if bad_arena {
+            println("  FAIL: case (c) some local has arena_id != arena_root")
+            ok = false
+        }
+    }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: hir_to_mir lowers HIR → MIR per contract.")
+    } else {
+        println("FAIL: hir_to_mir contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}
