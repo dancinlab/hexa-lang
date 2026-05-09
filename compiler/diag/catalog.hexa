@@ -1,0 +1,91 @@
+// HEXA Native Compiler — Diagnostic Catalog (Phase A0 skeleton)
+//
+// All compiler errors and warnings are described here. Per RFC-019:
+//   - error code = HX[CCCC] (4 digits)
+//   - groups by stage:
+//       HX0xxx parse/lex     (S0)
+//       HX1xxx atlas resolve (S1)
+//       HX2xxx bind/scope    (S2)
+//       HX3xxx type          (S3)
+//       HX4xxx domain        (S4)
+//       HX5xxx units         (S5)
+//       HX6xxx equational    (S6)
+//       HX7xxx proof         (S7)
+//       HX8xxx citation      (S8)
+//       HX9xxx codegen/link/runtime
+//
+// English only (Decision 3). No i18n. messages.hexa holds templates.
+
+import "../lex/tokens.hexa"
+
+// ── Severity ──────────────────────────────────────────────────
+
+pub let SEV_ERROR = "error"
+pub let SEV_WARN  = "warning"
+pub let SEV_NOTE  = "note"
+
+// ── FixIt action ──────────────────────────────────────────────
+
+pub struct FixIt {
+    kind: string,        // "replace" | "insert" | "delete" | "multi"
+    span: Span,
+    new_text: string
+}
+
+// ── Diagnostic instance (per error site) ─────────────────────
+
+pub struct Diagnostic {
+    code: string,        // "HX1042"
+    severity: string,    // SEV_*
+    stage: string,       // "S0".."S8" | "codegen" | "link" | "runtime"
+    span: Span,
+    message: string,     // rendered template (English)
+    note: string,
+    suggest: string,     // did-you-mean candidate
+    fixit: FixIt,
+    related: [string]    // other HX codes
+}
+
+// ── Catalog entry (compile-time table) ────────────────────────
+
+pub struct DiagSpec {
+    code: string,
+    title: string,        // "atlas node not found"
+    severity: string,
+    stage: string,
+    template: string,     // "atlas {atlas_hash} has no {kind} node `{node_id}`"
+    explain: string,      // long form for `hexa explain`
+    fix_it_kind: string   // "replace" | "" if no automated fix
+}
+
+// ── Initial catalog (will grow with each phase) ──────────────
+
+pub let CATALOG: [DiagSpec] = [
+    DiagSpec {
+        code: "HX0001",
+        title: "unexpected character",
+        severity: "error",
+        stage: "S0",
+        template: "unexpected character `{ch}`",
+        explain: "The lexer encountered a character outside of any valid token.",
+        fix_it_kind: ""
+    },
+    DiagSpec {
+        code: "HX1042",
+        title: "atlas node not found",
+        severity: "error",
+        stage: "S1",
+        template: "atlas {atlas_hash} has no {kind} node `{node_id}`",
+        explain: "The identifier was used as a P/C/L/E token, but no such node exists in the atlas snapshot pinned by hexa.toml. This is usually a typo or a missing atlas update.",
+        fix_it_kind: "replace"
+    },
+    DiagSpec {
+        code: "HX9001",
+        title: "@grace expired",
+        severity: "error",
+        stage: "runtime",
+        template: "@grace for {error_code} expired on {until}; fix or extend",
+        explain: "An @grace annotation past its `until` date no longer suppresses the underlying diagnostic. Either fix the issue or update `until` (and `reason`).",
+        fix_it_kind: ""
+    }
+]

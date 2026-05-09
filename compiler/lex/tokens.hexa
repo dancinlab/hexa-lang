@@ -1,0 +1,82 @@
+// HEXA Native Compiler — Tokens (Phase A0 skeleton)
+//
+// Lexer output. Token kinds are modeled with a string `kind` discriminator
+// since hexa stage0 lacks native sum types; tagged structs serve the role.
+//
+// Atlas reference tokens (TK_P_NODE / TK_C_NODE / TK_L_NODE / TK_E_NODE)
+// are first-class — RFC-017 S1 (atlas resolve) consumes them directly.
+
+// ── Span ──────────────────────────────────────────────────────
+
+pub struct Span {
+    file: string,
+    line: i64,
+    col: i64,
+    len: i64
+}
+
+// ── Token ─────────────────────────────────────────────────────
+
+pub struct Token {
+    kind: string,
+    text: string,
+    span: Span
+}
+
+// ── Token kind constants ──────────────────────────────────────
+// Lexical
+pub let TK_IDENT      = "ident"
+pub let TK_NUMBER     = "number"
+pub let TK_STRING     = "string"
+pub let TK_LPAREN     = "lparen"
+pub let TK_RPAREN     = "rparen"
+pub let TK_LBRACE     = "lbrace"
+pub let TK_RBRACE     = "rbrace"
+pub let TK_LBRACKET   = "lbracket"
+pub let TK_RBRACKET   = "rbracket"
+pub let TK_COMMA      = "comma"
+pub let TK_SEMICOLON  = "semicolon"
+pub let TK_COLON      = "colon"
+pub let TK_ARROW      = "arrow"
+pub let TK_FAT_ARROW  = "fat_arrow"
+pub let TK_EQ         = "eq"
+pub let TK_EQEQ       = "eqeq"
+pub let TK_NEQ        = "neq"
+pub let TK_LT         = "lt"
+pub let TK_LE         = "le"
+pub let TK_GT         = "gt"
+pub let TK_GE         = "ge"
+pub let TK_PLUS       = "plus"
+pub let TK_MINUS      = "minus"
+pub let TK_STAR       = "star"
+pub let TK_SLASH      = "slash"
+pub let TK_PERCENT    = "percent"
+pub let TK_AT         = "at"
+pub let TK_DOT        = "dot"
+
+// Keywords
+pub let TK_KW_FN      = "kw_fn"
+pub let TK_KW_LET     = "kw_let"
+pub let TK_KW_MUT     = "kw_mut"
+pub let TK_KW_RETURN  = "kw_return"
+pub let TK_KW_IF      = "kw_if"
+pub let TK_KW_ELSE    = "kw_else"
+pub let TK_KW_WHILE   = "kw_while"
+pub let TK_KW_FOR     = "kw_for"
+pub let TK_KW_IN      = "kw_in"
+pub let TK_KW_STRUCT  = "kw_struct"
+pub let TK_KW_PUB     = "kw_pub"
+pub let TK_KW_IMPORT  = "kw_import"
+pub let TK_KW_AS      = "kw_as"
+pub let TK_KW_TRUE    = "kw_true"
+pub let TK_KW_FALSE   = "kw_false"
+
+// Atlas tokens (RFC-017)
+pub let TK_P_NODE     = "p_node"      // P[id]
+pub let TK_C_NODE     = "c_node"      // C[id]
+pub let TK_L_NODE     = "l_node"      // L[id]
+pub let TK_E_NODE     = "e_node"      // E[id]
+
+// Terminals
+pub let TK_NEWLINE    = "newline"
+pub let TK_EOF        = "eof"

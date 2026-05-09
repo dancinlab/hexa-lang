@@ -1,0 +1,63 @@
+// HEXA Native Compiler — LIR (Low-level IR / target instructions)  [Phase A0 skeleton]
+//
+// LIR = post-regalloc, target-specific machine instructions ready for emit.
+// Lowered from MIR by codegen/<target>.hexa.
+//
+// Targets (Decision 1):
+//   arm64-apple-darwin      → AAPCS64 ABI
+//   x86_64-linux-gnu        → System V AMD64 ABI
+//
+// Each target emits its own LIR opcode set. This file defines the shared
+// LInstr struct; per-target opcode tables live in codegen/<target>.hexa.
+
+// ── Physical register (post-regalloc) ─────────────────────────
+
+pub struct PReg {
+    name: string,        // "x0", "rax", etc.
+    kind: string         // "gpr" | "fpr" | "vec"
+}
+
+// ── Operand ───────────────────────────────────────────────────
+
+pub struct LOperand {
+    kind: string,        // "reg" | "imm" | "mem" | "label"
+    reg: PReg,
+    imm: i64,
+    mem_base: PReg,
+    mem_offset: i64,
+    label: string
+}
+
+// ── Instruction ───────────────────────────────────────────────
+
+pub struct LInstr {
+    op: string,          // target-specific mnemonic ("mov", "add", "ldr", "ret", ...)
+    args: [LOperand],
+    comment: string      // optional, for asm-text output / debug
+}
+
+// ── Function (post-regalloc) ─────────────────────────────────
+
+pub struct LFunc {
+    name: string,
+    target: string,      // "arm64-apple-darwin" | "x86_64-linux-gnu"
+    instrs: [LInstr],
+    frame_size: i64,
+    callee_saved: [PReg]
+}
+
+// ── Module ────────────────────────────────────────────────────
+
+pub struct LModule {
+    file: string,
+    target: string,
+    funcs: [LFunc],
+    rodata: [LSection],  // atlas const, string literals, etc.
+    bss: [LSection]
+}
+
+pub struct LSection {
+    name: string,        // ".rodata.atlas", ".rodata.str", ".bss", ".hexa.atlas", etc.
+    bytes: string,       // hex-encoded payload
+    align: i64
+}

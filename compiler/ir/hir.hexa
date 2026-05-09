@@ -1,0 +1,81 @@
+// HEXA Native Compiler — HIR (High-level IR)  [Phase A0 skeleton]
+//
+// HIR = AST + types resolved + atlas refs validated.
+//
+// Produced by:
+//   resolve pass (S1)   — atlas P/C/L/E nodes pinned to atlas indices
+//   bind pass    (S2)   — every identifier mapped to a unique DefId
+//   type pass    (S3-4) — every Expr has a Type
+//   units pass   (S5)   — every numeric Expr has a Unit (or Unitless)
+//   citation     (S8)   — @law/@implements references to atlas L are recorded
+//
+// Consumed by: lower pass → MIR.
+//
+// Invariant: HIR is well-typed by construction. If checker rejected anything,
+// the compiler aborted before producing HIR (RFC-017 strict, no binary out).
+
+import "../parse/ast.hexa"
+
+// ── Identity ──────────────────────────────────────────────────
+
+pub struct DefId {
+    module: string,      // "self/main" or "stdlib/json" etc.
+    index: i64           // dense per-module index
+}
+
+// ── Types (typed, unlike TypeRef in AST) ─────────────────────
+
+pub struct Type {
+    kind: string,        // "i32" | "i64" | "f32" | "f64" | "bool" | "string" | "unit" | "fn" | "struct" | "atlas_p" | ...
+    def: DefId,          // for struct/named types
+    args: [Type],        // generics, fn params
+    ret: [Type],         // fn return (1-elem for now)
+    domain: string,      // "real" | "natural" | "integer" | "complex" | "" — RFC-017 S4
+    unit: string         // dimensional unit string e.g. "kg.m/s^2" — RFC-017 S5
+}
+
+// ── Atlas binding (S1 result) ─────────────────────────────────
+
+pub struct AtlasBinding {
+    ref_kind: string,    // "P" | "C" | "L" | "E"
+    id: string,
+    atlas_index: i64,    // pointer into compile-time atlas const
+    atlas_hash: string   // recorded for retroactive sweep (Decision 5e)
+}
+
+// ── HIR expressions (typed) ──────────────────────────────────
+
+pub struct HExpr {
+    kind: string,        // mirrors EXPR_* but every node carries Type
+    span: Span,
+    type: Type,
+    text: string,
+    children: [HExpr],
+    atlas: AtlasBinding,
+    def: DefId           // for ident/call resolved to a definition
+}
+
+// ── HIR items (typed) ─────────────────────────────────────────
+
+pub struct HItem {
+    kind: string,        // ITEM_FN | ITEM_STRUCT | ITEM_LET | ...
+    def: DefId,
+    name: string,
+    span: Span,
+    annotations: [Annotation],   // preserved from AST for prover/citation
+    sig_params: [Type],
+    sig_return: Type,
+    body: HExpr,
+    is_pub: bool,
+    // ε self-discovery (RFC-017 § 5b/c) — populated by prover pass
+    discoverable: bool,          // function shape eligible (no IO/side-effect)
+    proof_hash: string,          // when registered as atlas L
+    verifier_version: string
+}
+
+// ── HIR module ────────────────────────────────────────────────
+
+pub struct HModule {
+    file: string,
+    items: [HItem]
+}

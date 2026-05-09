@@ -1,0 +1,83 @@
+// HEXA Native Compiler — MIR (Mid-level IR)  [Phase A0 skeleton]
+//
+// MIR = control-flow graph in SSA form.
+// Lowered from HIR; consumed by optimizer + regalloc.
+//
+// Pipeline (RFC-018 §2):
+//   HIR → lower → MIR → mono → ssa → optimize → LIR
+//
+// Memory model (Decision 6, v1 = arena only):
+//   Every Local has an arena_id; arena lifetime is implicit per function.
+//   Long-lived objects (atlas, rodata) are Global with arena_id = 0.
+
+// ── Local + arena ─────────────────────────────────────────────
+
+pub struct Local {
+    id: i64,
+    arena_id: i64,       // 0 = global/static, >0 = function-local arena
+    type_id: i64,        // index into type interning table
+    name_hint: string    // optional, for debug
+}
+
+// ── Operands ──────────────────────────────────────────────────
+
+pub struct Operand {
+    kind: string,        // "local" | "const_int" | "const_float" | "const_str" | "global"
+    local_id: i64,
+    int_val: i64,
+    float_val: f64,
+    str_val: string,
+    global_id: i64
+}
+
+// ── Statements (one per SSA assignment or side-effect) ───────
+
+pub struct Stmt {
+    kind: string,        // STMT_ASSIGN | STMT_BINOP | STMT_CALL | STMT_RETURN | STMT_BR | STMT_BR_COND
+    dst: Local,          // assignment target (if applicable)
+    op: string,          // binop/unop opcode
+    args: [Operand],
+    target_block: i64,   // for branches
+    target_block_else: i64
+}
+
+pub let STMT_ASSIGN   = "assign"
+pub let STMT_BINOP    = "binop"
+pub let STMT_UNOP     = "unop"
+pub let STMT_CALL     = "call"
+pub let STMT_RETURN   = "return"
+pub let STMT_BR       = "br"
+pub let STMT_BR_COND  = "br_cond"
+pub let STMT_LOAD     = "load"
+pub let STMT_STORE    = "store"
+pub let STMT_ARENA_NEW   = "arena_new"   // memory model: open arena
+pub let STMT_ARENA_DROP  = "arena_drop"  // memory model: drop arena (auto at fn exit)
+
+// ── Basic block ───────────────────────────────────────────────
+
+pub struct Block {
+    id: i64,
+    stmts: [Stmt],
+    preds: [i64],
+    succs: [i64]
+}
+
+// ── Function ──────────────────────────────────────────────────
+
+pub struct MFunc {
+    name: string,
+    params: [Local],
+    return_local: Local,
+    locals: [Local],
+    blocks: [Block],
+    entry_block: i64,
+    arena_root: i64      // function's owning arena id
+}
+
+// ── Module ────────────────────────────────────────────────────
+
+pub struct MModule {
+    file: string,
+    funcs: [MFunc],
+    globals: [Local]     // statics + atlas rodata refs
+}

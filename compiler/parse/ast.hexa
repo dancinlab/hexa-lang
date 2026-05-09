@@ -1,0 +1,99 @@
+// HEXA Native Compiler — AST (Phase A0 skeleton)
+//
+// Untyped abstract syntax tree produced by the parser. Atlas refs (P/C/L/E)
+// carry AtlasRef so the resolve pass (S1) can validate against the embedded
+// atlas const without re-lexing.
+//
+// All node kinds use string discriminators (`kind` field) — same convention
+// as Token. Stage0 has no enum/sum types, but the structure mirrors the
+// future enum form 1:1.
+
+import "../lex/tokens.hexa"
+
+// ── Atlas refs ────────────────────────────────────────────────
+
+pub struct AtlasRef {
+    kind: string,        // "P" | "C" | "L" | "E"
+    id: string,
+    span: Span
+}
+
+// ── Annotations (e.g. @law, @grace, @units, @discover) ────────
+
+pub struct Annotation {
+    name: string,        // "law" | "implements" | "units" | "verify" | "prove" | "grace" | "discover"
+    args: [Expr],
+    span: Span
+}
+
+// ── Types ─────────────────────────────────────────────────────
+
+pub struct TypeRef {
+    kind: string,        // "named" | "generic" | "fn" | "tuple" | "atlas_kind"
+    name: string,
+    args: [TypeRef],
+    span: Span
+}
+
+// ── Patterns (function params, let bindings) ─────────────────
+
+pub struct Param {
+    name: string,
+    type: TypeRef,
+    span: Span
+}
+
+// ── Expressions ──────────────────────────────────────────────
+// children[] is heterogeneous by `kind`; resolve pass interprets shape.
+
+pub struct Expr {
+    kind: string,        // see EXPR_* constants below
+    span: Span,
+    text: string,
+    children: [Expr],
+    atlas_ref: AtlasRef
+}
+
+pub let EXPR_LITERAL_INT     = "literal_int"
+pub let EXPR_LITERAL_FLOAT   = "literal_float"
+pub let EXPR_LITERAL_STRING  = "literal_string"
+pub let EXPR_LITERAL_BOOL    = "literal_bool"
+pub let EXPR_IDENT           = "ident"
+pub let EXPR_ATLAS_REF       = "atlas_ref"
+pub let EXPR_CALL            = "call"
+pub let EXPR_BINOP           = "binop"
+pub let EXPR_UNOP            = "unop"
+pub let EXPR_BLOCK           = "block"
+pub let EXPR_IF              = "if"
+pub let EXPR_WHILE           = "while"
+pub let EXPR_RETURN          = "return"
+pub let EXPR_LET             = "let"
+pub let EXPR_ASSIGN          = "assign"
+pub let EXPR_FIELD           = "field"
+pub let EXPR_INDEX           = "index"
+
+// ── Items ─────────────────────────────────────────────────────
+
+pub struct Item {
+    kind: string,        // ITEM_FN | ITEM_LET | ITEM_STRUCT | ITEM_IMPORT
+    name: string,
+    span: Span,
+    annotations: [Annotation],
+    params: [Param],
+    return_type: TypeRef,
+    body: Expr,
+    is_pub: bool
+}
+
+pub let ITEM_FN     = "fn"
+pub let ITEM_LET    = "let"
+pub let ITEM_STRUCT = "struct"
+pub let ITEM_IMPORT = "import"
+
+// ── Module (top-level) ────────────────────────────────────────
+
+pub struct Module {
+    file: string,
+    items: [Item],
+    imports: [string]
+}

@@ -1,0 +1,63 @@
+// HEXA Native Compiler — Entry Point
+//
+// Phase A0 skeleton. Authoritative design: SPEC.yaml + RFC-018.
+//
+// Pipeline (RFC-018 §2):
+//   lex → parse → resolve → check → lower → mono → ssa → optimize → regalloc → emit → link
+//
+// Stage0 invocation (interpreted by hexa_interp until stage1 native settles):
+//   hexa run compiler/main.hexa [-o OUT] SOURCE.hexa
+//
+// Targets (Decision 1, parallel dual):
+//   arm64-apple-darwin     (primary dev environment)
+//   x86_64-linux-gnu       (CI / docker / runners)
+//
+// Output (M0 milestone goal):
+//   native binary at ./a.out (or specified by -o)
+//
+// Status: skeleton only — no parse, no codegen, no link yet.
+
+let HOME = env("HOME")
+let REPO_ROOT = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
+
+let argv = args()
+
+fn print_usage() {
+    eprintln("hexa-compiler (phase A0 skeleton)")
+    eprintln("")
+    eprintln("usage: hexa run compiler/main.hexa [-o OUT] SOURCE.hexa")
+    eprintln("")
+    eprintln("flags:")
+    eprintln("  -o OUT          output binary path (default: a.out)")
+    eprintln("  --target=TRIPLE  arm64-apple-darwin | x86_64-linux-gnu")
+    eprintln("  --emit=KIND      asm | obj | exec   (default: exec)")
+    eprintln("  --error-format   pretty | short | json | github")
+    eprintln("  --linker=KIND    hexa | system     (default: hexa, fallback system)")
+    eprintln("")
+    eprintln("status: skeleton — no compilation yet, prints stub diagnostics only.")
+}
+
+fn detect_default_target() -> string {
+    let uname = exec("uname -sm 2>/dev/null").trim()
+    if uname == "Darwin arm64" { return "arm64-apple-darwin" }
+    if uname == "Linux x86_64" { return "x86_64-linux-gnu" }
+    if uname == "Linux aarch64" { return "arm64-linux-gnu" }
+    return "unknown"
+}
+
+if argv.len() < 2 {
+    print_usage()
+    exit(2)
+}
+
+let source_path = argv[1]
+let target = detect_default_target()
+
+eprintln("hexa-compiler: phase A0 skeleton")
+eprintln("  source: " + source_path)
+eprintln("  target: " + target)
+eprintln("")
+eprintln("note: parse/check/codegen/link not implemented yet.")
+eprintln("      see SPEC.yaml roadmap.phases for implementation order:")
+eprintln("        A0 → A1 → A2 → A3 → A4 → B1 → B2 → B3 → B4 → C1 → C2 → D1 → D2 → E1 → E2")
+exit(0)
