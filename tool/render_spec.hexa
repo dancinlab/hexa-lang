@@ -1,0 +1,96 @@
+// render_spec.hexa — regenerate SPEC.md from SPEC.yaml
+//
+// SPEC.yaml is the SSOT for hexa-lang language/toolchain decisions.
+// SPEC.md is the human-readable rendering of the same data.
+//
+// Status: STUB
+//   - hexa stdlib does not yet provide a YAML parser
+//   - full structural rendering deferred until stdlib/yaml.hexa exists
+//     OR SPEC.yaml is migrated to JSON / hexa.toml format
+//
+// Current behavior:
+//   - reads SPEC.yaml, extracts schema_version + last_updated + status
+//   - verifies SPEC.md header matches; warns on drift
+//   - exits 1 on drift so CI can flag desync
+//
+// Future behavior (when yaml parser lands):
+//   - full SPEC.md regeneration from SPEC.yaml
+//   - structural diff against current SPEC.md
+//   - --write to apply changes
+//
+// Usage:
+//   hexa tool/render_spec.hexa             # check drift, exit 1 if drift
+//   hexa tool/render_spec.hexa --update    # update SPEC.md header (limited)
+
+let HOME = env("HOME")
+let REPO_ROOT = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
+let SPEC_YAML = REPO_ROOT + "/SPEC.yaml"
+let SPEC_MD = REPO_ROOT + "/SPEC.md"
+
+fn read_file(path: string) -> string {
+    return exec("cat \"" + path + "\" 2>/dev/null").trim()
+}
+
+fn extract_yaml_scalar(yaml: string, key: string) -> string {
+    let prefix = key + ":"
+    let lines = yaml.split("\n")
+    for line in lines {
+        let trimmed = line.trim()
+        if trimmed.starts_with(prefix) {
+            let val = trimmed.substring(prefix.len(), trimmed.len()).trim()
+            if val.starts_with("\"") && val.ends_with("\"") {
+                return val.substring(1, val.len() - 1)
+            }
+            if val.starts_with("'") && val.ends_with("'") {
+                return val.substring(1, val.len() - 1)
+            }
+            return val
+        }
+    }
+    return ""
+}
+
+fn check_drift() -> i64 {
+    let yaml = read_file(SPEC_YAML)
+    let md = read_file(SPEC_MD)
+
+    if yaml == "" {
+        eprintln("error: SPEC.yaml not found at " + SPEC_YAML)
+        return 1
+    }
+    if md == "" {
+        eprintln("error: SPEC.md not found at " + SPEC_MD)
+        return 1
+    }
+
+    let yaml_version = extract_yaml_scalar(yaml, "schema_version")
+    let yaml_updated = extract_yaml_scalar(yaml, "last_updated")
+    let yaml_status = extract_yaml_scalar(yaml, "status")
+
+    let mut drift = 0
+    if !md.contains("Schema version**: " + yaml_version) {
+        eprintln("drift: SPEC.md schema_version != SPEC.yaml (" + yaml_version + ")")
+        drift = drift + 1
+    }
+    if !md.contains("Last updated**: " + yaml_updated) {
+        eprintln("drift: SPEC.md last_updated != SPEC.yaml (" + yaml_updated + ")")
+        drift = drift + 1
+    }
+    if !md.contains("Status**: " + yaml_status) {
+        eprintln("drift: SPEC.md status != SPEC.yaml (" + yaml_status + ")")
+        drift = drift + 1
+    }
+
+    if drift > 0 {
+        eprintln("")
+        eprintln("drift detected. see warnings above.")
+        eprintln("full structural regeneration is deferred until stdlib/yaml.hexa exists.")
+        eprintln("for now, please manually update SPEC.md to match SPEC.yaml.")
+        return 1
+    }
+    println("ok: SPEC.yaml and SPEC.md headers match (schema_version=" + yaml_version + ")")
+    return 0
+}
+
+let exit_code = check_drift()
+exit(exit_code)

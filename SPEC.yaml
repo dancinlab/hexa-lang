@@ -1,0 +1,343 @@
+# SPEC.yaml — hexa-lang authoritative decision record (SSOT)
+#
+# This file is the single source of truth for hexa-lang language/toolchain
+# decisions. SPEC.md is auto-generated from this file via tool/render_spec.hexa.
+#
+# Schema version is incremented on breaking shape changes only.
+
+schema_version: 1
+title: hexa-lang specification
+status: directional (decisions locked, implementation not started)
+last_updated: 2026-05-09
+authoritative_rfcs:
+  - proposals/rfc_017_atlas_n6_embedding_and_strict_lint.md
+  - proposals/rfc_018_native_codegen_spec.md
+  - proposals/rfc_019_error_diagnostics_spec.md
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Foundational decisions (from RFC-017/018)
+# ─────────────────────────────────────────────────────────────────────────────
+foundation:
+  language_kind:
+    decision: native_compiled
+    rationale: |
+      hexa-lang transitions from interpreter (hexa_interp) to a native compiler.
+      Interpreter remains only as bootstrap stage0.
+    rejected:
+      - interpreter_only           # too slow for CI/LSP at atlas size 4.2 MB
+      - interpreter_with_cache     # still per-process overhead, not zero
+    references: [RFC-017]
+
+  atlas_embedding:
+    decision: static_baked_into_compiler
+    rationale: |
+      atlas.n6 + atlas.append.*.n6 are merged at compiler build time and
+      embedded as a packed const into the compiler binary (rodata section).
+      Hash pinned via ATLAS_HASH constant.
+    properties:
+      runtime_cost_ms: 0
+      compiler_binary_overhead_mb: 1_to_2
+      drift_handling: ci_auto_rebuild_compiler
+      override: hexa.toml [atlas] path = "..." (rebuilds compiler)
+    rejected:
+      - read_atlas_at_runtime      # 200ms per invocation on 4.2 MB atlas
+      - mtime_disk_cache           # acceptable but inferior to static
+    references: [RFC-017 §4.5]
+
+  execution_blocking_lint:
+    decision: strict_compile_time_fatal
+    rationale: |
+      Python SyntaxError + TypeScript strict model. No binary is produced when
+      any S0–S5 or S8 check fails. S6/S7 only fatal when annotated.
+    stages:
+      S0_parse:        { fatal: true,  description: "syntax / lex" }
+      S1_resolve:      { fatal: true,  description: "atlas P/C/L/E node existence" }
+      S2_bind:         { fatal: true,  description: "scope / variable binding" }
+      S3_type:         { fatal: true,  description: "nominal types, generics" }
+      S4_domain:       { fatal: true,  description: "ℝ/ℕ/ℤ/ℂ domain consistency" }
+      S5_units:        { fatal: true,  description: "dimensional analysis" }
+      S6_equational:   { fatal: opt_in_via_at_verify, description: "LHS=RHS canonical, sample counter-example" }
+      S7_proof:        { fatal: opt_in_via_at_prove,  description: "self-prover only (no Z3)" }
+      S8_citation:     { fatal: true,  description: "atlas L[*] citation present where required" }
+    references: [RFC-017 §3.1]
+
+  codegen_strategy:
+    decision: direct_codegen
+    rationale: |
+      No LLVM, no C-transpile. Direct source → mach pipeline keeps every IR
+      stage atlas-aware and removes external toolchain dependencies.
+    pipeline:
+      - lex
+      - parse
+      - resolve     # S0–S2
+      - check       # S3–S5, S8
+      - lower       # AST → HIR
+      - mono        # generic monomorphization
+      - ssa         # MIR (CFG, SSA)
+      - optimize    # const-fold, dce, conservative inline
+      - regalloc    # LIR (target-specific)
+      - emit        # asm or machine code
+      - link        # ELF / Mach-O
+    references: [RFC-018]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Targets (Decision 1)
+# ─────────────────────────────────────────────────────────────────────────────
+targets:
+  decision: parallel_dual
+  rationale: User runs both Apple Silicon and Linux; both must work from day one.
+  tier_0_concurrent:
+    - triple: arm64-apple-darwin
+      role: primary dev environment
+    - triple: x86_64-linux-gnu
+      role: CI / docker / runners
+  tier_1_followup:
+    - triple: arm64-linux-gnu       # ARM containers
+  tier_2_later:
+    - triple: wasm32-unknown-unknown
+    - triple: riscv64-linux-gnu
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bootstrap (Decision 2)
+# ─────────────────────────────────────────────────────────────────────────────
+bootstrap:
+  stage0:
+    decision: existing_hexa_interp
+    rationale: |
+      Existing build/hexa_interp.* interpreter executes hexa-written native
+      compiler source to produce stage1. Zero new external dependencies.
+    accepts_temporary_external: system_as_and_ld_during_stage0_to_stage1_only
+  stages:
+    stage_0: { tool: hexa_interp, output: "stage1 native compiler binary" }
+    stage_1: { tool: stage_0,     output: "stage2 compiler (self-compiled by stage1)" }
+    stage_2: { tool: stage_1,     output: "stage3 compiler" }
+    stage_3: { tool: stage_2,     fixed_point: "byte-equal to stage2" }
+  retire_interpreter_after: stage3_settled
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Language for diagnostics (Decision 3)
+# ─────────────────────────────────────────────────────────────────────────────
+diagnostics_language:
+  decision: english_only
+  rationale: |
+    User explicitly fixed ENGLISH ONLY. Korean i18n option closed permanently.
+    Catalog message keys, templates, explain output all English.
+  no_i18n: true
+  applies_to:
+    - compiler diagnostics
+    - hexa explain output
+    - error catalog templates
+    - stdlib documentation
+  excludes:
+    - design RFCs and meta documents (may remain in author's preferred language)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Opt-out grace label (Decision 4)
+# ─────────────────────────────────────────────────────────────────────────────
+opt_out:
+  decision: at_grace_annotation_only
+  syntax: '@grace(HXCODE, until="YYYY-MM-DD", reason="...")'
+  required_fields: [error_code, until, reason]
+  forbidden:
+    - cli_flag_to_disable_strict     # --unsafe etc. rejected
+    - environment_variable_override  # HEXA_STRICT=0 rejected
+  scope_rule: applies_to_immediately_following_item_only
+  expiry_behavior: |
+    On `until` date pass, compiler emits HX9001 and refuses to build until
+    @grace is removed (item fixed) or `until` extended (which is itself a
+    deliberate decision visible in PR review).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Atlas self-discovery system (Decision 5: ε)
+# ─────────────────────────────────────────────────────────────────────────────
+atlas_self_discovery:
+  decision: epsilon_self_proof
+  rationale: |
+    Verified hexa code automatically registers as atlas L[*] (theorem) nodes.
+    Atlas becomes a living theorem library that grows as the codebase grows.
+
+  prover_engine:
+    decision: in_house_prover_only         # Sub 5a
+    rationale: User mandate — zero external dependency, no Z3/CVC5.
+    initial_capabilities:
+      - equational_rewrite
+      - constant_folding
+      - sample_eval_counter_example
+      - unit_propagation
+      - atlas_graph_consistency
+    deferred_capabilities:
+      - linear_arithmetic
+      - non_linear_arithmetic
+      - quantifiers
+      - real_number_induction
+
+  registration_authority:
+    decision: fully_automatic              # Sub 5b
+    rationale: User chose auto-register on prover pass; safety net is sub 5e.
+    safeguards_baked_in:
+      - record_verifier_version
+      - record_proof_hash
+      - retroactive_revalidation_on_prover_upgrade
+
+  verification_timing:
+    decision: every_compile_every_function # Sub 5c
+    rationale: User chose maximum coverage; performance handled by caching.
+    mandatory_optimizations:
+      - hash_keyed_skip_for_unchanged_functions
+      - early_reject_for_non_theorem_shapes  # side-effect, IO, mutation
+    cost_model: prover_runs_for_every_function_in_every_compile
+
+  conflict_resolution:
+    decision: fingerprint_dedup_plus_id_first_wins   # Sub 5d
+    rules:
+      same_canonical_form: register_under_existing_L_with_alias
+      same_explicit_id_different_meaning: first_wins_with_warning
+      anonymous_auto_id: derived_from_fingerprint_so_collision_implies_dedup
+
+  invalidation:
+    decision: tombstone_plus_retroactive_sweep        # Sub 5e
+    mechanism:
+      manual_tombstone: "hexa atlas tombstone L[id] --reason=\"...\""
+      automatic_sweep: |
+        On prover version upgrade, CI nightly job re-verifies every registered
+        L node. Failing nodes are auto-tombstoned with PR open for human review.
+      dependency_tracking: |
+        proof-hash records lemmas used. When a lemma is tombstoned, dependent
+        L nodes auto re-verify; failures cascade-tombstone.
+    citing_tombstoned_l_emits: HX1099_compile_fail
+    history_kept_in: atlas.tombstones.n6
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Memory model (Decision 6)
+# ─────────────────────────────────────────────────────────────────────────────
+memory_model:
+  decision: arena_v1_borrow_check_v2
+  current_phase: v1_arena_only
+  rationale: |
+    1.x sticks to arena/region allocation — short-lived processes (compiler,
+    verification, tools) cover 99% of cases. 2.x adds borrow check for
+    long-lived objects without breaking arena code.
+  v1_design:
+    primary: function_local_arena
+    secondary: request_scoped_arena_for_long_running   # LSP, daemon
+    static: compile_time_const_in_rodata               # atlas
+    user_heap: arena_only_no_manual                    # 1.x explicitly forbids manual free
+  v2_design:
+    add: borrow_checker_with_explicit_arena_lifetime_handles
+    add: limited_manual_escape_hatch_for_systems_code
+    keep: gc_will_never_be_added                        # rejected permanently
+  rejected:
+    - tracing_gc          # runtime weight, pause times, dependency surface
+    - ref_counting        # cycle handling burden, atomic costs
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Linker (Decision 7)
+# ─────────────────────────────────────────────────────────────────────────────
+linker:
+  decision: hexa_ld_primary_with_system_fallback
+  primary: hexa_ld
+  fallback: system_ld_or_lld
+  fallback_triggers:
+    - hexa_ld_binary_missing
+    - hexa_ld_runtime_failure
+    - explicit_flag: "--linker=system"
+  hexa_ld_v1_scope:
+    formats: [ELF, Mach-O_arm64]
+    capabilities:
+      - static_linking_only
+      - symbol_resolution
+      - basic_relocations
+      - dwarf_debug_section_emit_basic
+    deferred:
+      - dynamic_linking
+      - link_time_optimization
+      - section_dead_code_elim
+  bootstrap_carve_out:
+    rule: system_ld_temporarily_permitted_during_stage0_to_stage1
+    expires_after: stage1_native_compiler_settled
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Migration policy (Decision 8)
+# ─────────────────────────────────────────────────────────────────────────────
+migration:
+  decision: big_bang
+  rationale: |
+    User chose to fix all violations in a coordinated PR series and enable
+    strict checks at once, rather than phased grace-based rollout.
+  procedure:
+    - stage1_native_compiler_settled_first
+    - run_full_tree_lint_dump_on_existing_hexa_files
+    - coordinated_pr_series_to_fix_all_violations
+    - flip_strict_globally_in_one_commit
+  fallback_for_unfixable:
+    rule: explicit_at_grace_annotation_per_site
+    note: |
+      If a violation cannot be fixed in the migration window, an EXPLICIT
+      @grace label must be added by the author with reason and until — not
+      auto-generated by tooling.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Diagnostic system (RFC-019, English-only adjusted)
+# ─────────────────────────────────────────────────────────────────────────────
+diagnostics:
+  code_format: 'HX[CCCC]'
+  groups:
+    HX0xxx: parse_lex                # S0
+    HX1xxx: atlas_resolve            # S1
+    HX2xxx: bind_scope               # S2
+    HX3xxx: type                     # S3
+    HX4xxx: domain                   # S4
+    HX5xxx: units                    # S5
+    HX6xxx: equational               # S6
+    HX7xxx: proof                    # S7
+    HX8xxx: citation                 # S8
+    HX9xxx: codegen_link_runtime     # RFC-018
+  catalog_location: stdlib/diagnostics/catalog.hexa
+  message_templates: stdlib/diagnostics/messages.hexa  # English
+  output_modes: [pretty, short, json, github]
+  features:
+    - error_code
+    - precise_span
+    - did_you_mean   # Levenshtein over atlas trie + scope identifiers
+    - fix_it
+    - hexa_explain_subcommand
+    - multi_error_collector_with_cascade_compression
+    - snapshot_regression_tests
+  references: [RFC-019]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Roadmap phases (rough)
+# ─────────────────────────────────────────────────────────────────────────────
+roadmap:
+  notes: |
+    T = stage1 native compiler settled. Months are relative.
+  phases:
+    A0: { effort: L,  goal: backend skeleton + IR types }
+    A1: { effort: L,  goal: parser + AST atlas tagging }
+    A2: { effort: M,  goal: atlas n6 + append merger inside compiler }
+    A3: { effort: M,  goal: atlas packed const codegen + static embed }
+    A4: { effort: S,  goal: ATLAS_HASH pin + drift CI }
+    B1: { effort: M,  goal: S0–S2 fatal at compile time }
+    B2: { effort: M,  goal: S3–S4 type/domain }
+    B3: { effort: M,  goal: '@units + S5' }
+    B4: { effort: M,  goal: '@law / @implements + S8 citation' }
+    C1: { effort: L,  goal: in-house prover v0 (equational + sample-eval) }
+    C2: { effort: L,  goal: prover atlas auto-register + tombstone sweep (Decision 5) }
+    D1: { effort: M,  goal: hexa_ld v1 (static link, ELF + Mach-O) }
+    D2: { effort: M,  goal: LSP using compiler in-process index }
+    E1: { effort: L,  goal: full big-bang migration of existing .hexa tree }
+    E2: { effort: M,  goal: retire hexa_interp after stage3 fixed point }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Open questions (NOT decisions)
+# ─────────────────────────────────────────────────────────────────────────────
+open_questions:
+  - inline_asm_syntax
+  - generic_monomorphization_vs_dyn_dispatch_default
+  - async_runtime_model
+  - effect_system_link_to_atlas_L
+  - linker_self_assembler_vs_external_as
+  - wasm32_priority
+  - python_ffi_native_path  # RFC-016 import py + native
+  - prover_v2_capability_targets
+  - migration_window_duration_estimate
