@@ -1,0 +1,743 @@
+// HEXA Native Compiler — Phase B2 / S2: bind / scope resolve
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Walks a parsed Module and resolves every identifier reference to a unique
+// DefId. Per RFC-017 §3.1 S2 is fatal — undefined names abort compilation.
+// Per RFC-019 §6 we collect every miss (no early-stop) and surface them as
+// HX2001 diagnostics with did-you-mean suggestions (Levenshtein ≤ 2 over
+// every identifier currently in visible scope, mirroring resolve.hexa S1).
+//
+// Scope shape (flat, stage0-friendly):
+//   ScopeFrame { defs: [string], def_ids: [DefId] }   — parallel arrays
+//   Scopes     { frames: [ScopeFrame], next_index }   — explicit stack
+//
+// Pre-pass: every Module.items[*] takes a top-level DefId in frames[0] so
+// fn / struct / enum / let can reference each other freely (forward refs).
+// Then we walk each item's body in a fresh function scope (params first).
+//
+// Notes:
+//   - This is COMPILER-side binding. Independent of self/type_checker.hexa's
+//     enum_all_variant_payload_types (RFC-020 in self/ tree).
+//   - DefId.module = Module.file (per the compiler entry contract).
+//   - 100% enum match — no string compares against ItemKind/ExprKind tags.
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../ir/hir.hexa"
+import "../lex/tokens.hexa"
+import "./resolve.hexa"
+
+// ── Scope structures ─────────────────────────────────────────
+
+pub struct ScopeFrame {
+    defs: [string],
+    def_ids: [DefId]
+}
+
+pub struct Scopes {
+    frames: [ScopeFrame],
+    next_index: i64
+}
+
+// ── Helpers ──────────────────────────────────────────────────
+
+fn _empty_fixit() -> FixIt {
+    return FixIt {
+        kind: FixItKind::None,
+        span: Span { file: "", line: 0, col: 0, len: 0 },
+        new_text: ""
+    }
+}
+
+fn _miss_def_id() -> DefId {
+    return DefId { module: "", index: -1 }
+}
+
+// ── Scope helpers ────────────────────────────────────────────
+
+fn _new_scopes() -> Scopes {
+    return Scopes { frames: [], next_index: 0 }
+}
+
+fn _push_scope(scope: Scopes) -> Scopes {
+    let frame = ScopeFrame { defs: [], def_ids: [] }
+    let mut frames = scope.frames
+    frames.push(frame)
+    return Scopes { frames: frames, next_index: scope.next_index }
+}
+
+fn _pop_scope(scope: Scopes) -> Scopes {
+    let mut frames = scope.frames
+    let n = len(frames)
+    if n == 0 { return scope }
+    // pop last frame — stage0 array has no `pop` so build a smaller copy.
+    let mut next_frames = []
+    let mut i = 0
+    while i < n - 1 {
+        next_frames.push(frames[i])
+        i = i + 1
+    }
+    return Scopes { frames: next_frames, next_index: scope.next_index }
+}
+
+// Define `name` in the topmost frame and return the freshly allocated DefId.
+// The caller is responsible for module attribution — DefId.module is filled
+// by the bind() entry point; here we only mint the dense index.
+fn _define(scope: Scopes, name: string, mod_file: string) -> Scopes {
+    let n = len(scope.frames)
+    if n == 0 { return scope }
+    let mut frames = scope.frames
+    let top = frames[n - 1]
+    let mut new_defs = top.defs
+    let mut new_ids = top.def_ids
+    new_defs.push(name)
+    new_ids.push(DefId { module: mod_file, index: scope.next_index })
+    frames[n - 1] = ScopeFrame { defs: new_defs, def_ids: new_ids }
+    return Scopes { frames: frames, next_index: scope.next_index + 1 }
+}
+
+// Look up `name` walking the frame stack from innermost to outermost. Returns
+// a DefId with index=-1 on miss so callers can branch without exceptions.
+fn _lookup(scope: Scopes, name: string) -> DefId {
+    let n = len(scope.frames)
+    let mut i = n - 1
+    while i >= 0 {
+        let frame = scope.frames[i]
+        let m = len(frame.defs)
+        let mut j = 0
+        while j < m {
+            if frame.defs[j] == name {
+                return frame.def_ids[j]
+            }
+            j = j + 1
+        }
+        i = i - 1
+    }
+    return _miss_def_id()
+}
+
+// Collect every visible identifier across all frames — used for did-you-mean.
+fn _all_visible(scope: Scopes) -> [string] {
+    let mut out = []
+    let mut i = 0
+    while i < len(scope.frames) {
+        let frame = scope.frames[i]
+        let mut j = 0
+        while j < len(frame.defs) {
+            out.push(frame.defs[j])
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Closest-name suggestion within Levenshtein cutoff. Mirrors resolve.hexa
+// _suggest_for but over plain string list rather than AtlasIndex.
+fn _suggest_name(scope: Scopes, name: string, cutoff: i64) -> string {
+    let cands = _all_visible(scope)
+    let mut best = ""
+    let mut best_d = cutoff + 1
+    let mut i = 0
+    while i < len(cands) {
+        let cand = cands[i]
+        if cand != name {
+            let d = levenshtein(name, cand)
+            if d < best_d {
+                best_d = d
+                best = cand
+            }
+        }
+        i = i + 1
+    }
+    if best_d <= cutoff { return best }
+    return ""
+}
+
+// ── ExprKind probes ──────────────────────────────────────────
+// Stage0 cannot derive Eq for enums — pattern-match like resolve.hexa.
+
+fn _is_ident_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Ident -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_block_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Block -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_for_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::For -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_let_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Let -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_match_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Match -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_field_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Field -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_enum_path_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::EnumPath -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_struct_lit_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::StructLit -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_wildcard_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Wildcard -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false
+    }
+}
+
+// ── Diagnostic emit ──────────────────────────────────────────
+
+fn _emit_hx2001(name: string, span: Span, suggest: string, out: array) {
+    let msg = "undefined name `" + name + "`"
+    let d = Diagnostic {
+        code: "HX2001",
+        severity: Severity::Error,
+        stage: "S2",
+        span: span,
+        message: msg,
+        note: "",
+        suggest: suggest,
+        fixit: _empty_fixit(),
+        related: []
+    }
+    out.push(d)
+}
+
+// ── `let` text decoder ──────────────────────────────────────
+// parse_let_expr stashes the binding name in `text`, prefixed with
+// "mut:" if it was declared mutable. Strip the prefix for binding.
+
+fn _let_name(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
+        let mut out = ""
+        let mut i = 4
+        while i < n {
+            out = out + to_string(chars[i])
+            i = i + 1
+        }
+        return out
+    }
+    return t
+}
+
+// EnumPath text encodes "Enum::Variant"; we only need the "Enum" prefix to
+// look up — the variant is intra-enum and not a free identifier.
+fn _enum_head(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    let mut out = ""
+    while i < n - 1 {
+        if chars[i] == ':' && chars[i + 1] == ':' {
+            return out
+        }
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    if i < n {
+        out = out + to_string(chars[i])
+    }
+    return out
+}
+
+// ── Walker (collect-don't-stop) ──────────────────────────────
+//
+// Returns an updated Scopes (since stage0 has no by-reference structs we
+// thread state through return values). `out` is an `array` — Diagnostic
+// pushes mutate the underlying buffer the caller passed in.
+
+fn _walk_expr(e: Expr, scope: Scopes, mod_file: string, out: array) -> Scopes {
+    let mut sc = scope
+
+    if _is_ident_kind(e.kind) {
+        if len(e.text) > 0 && e.text != "_" {
+            let hit = _lookup(sc, e.text)
+            if hit.index < 0 {
+                let suggest = _suggest_name(sc, e.text, 2)
+                _emit_hx2001(e.text, e.span, suggest, out)
+            }
+        }
+        return sc
+    }
+
+    if _is_wildcard_kind(e.kind) {
+        return sc
+    }
+
+    if _is_field_kind(e.kind) {
+        // Field access: child[0] is the receiver; field name is `text` and
+        // is NOT a free identifier — skip it.
+        if len(e.children) > 0 {
+            sc = _walk_expr(e.children[0], sc, mod_file, out)
+        }
+        return sc
+    }
+
+    if _is_struct_lit_kind(e.kind) {
+        // Resolve the struct type name (text) at top level …
+        if len(e.text) > 0 {
+            let hit = _lookup(sc, e.text)
+            if hit.index < 0 {
+                let suggest = _suggest_name(sc, e.text, 2)
+                _emit_hx2001(e.text, e.span, suggest, out)
+            }
+        }
+        // … and the field VALUES. The field-name child wraps the value as
+        // its only sub-child (parse_struct_lit_after_name). Field names are
+        // NOT free identifiers, so we descend into child.children only.
+        let mut i = 0
+        while i < len(e.children) {
+            let f = e.children[i]
+            let mut j = 0
+            while j < len(f.children) {
+                sc = _walk_expr(f.children[j], sc, mod_file, out)
+                j = j + 1
+            }
+            i = i + 1
+        }
+        return sc
+    }
+
+    if _is_enum_path_kind(e.kind) {
+        let head = _enum_head(e.text)
+        if len(head) > 0 {
+            let hit = _lookup(sc, head)
+            if hit.index < 0 {
+                let suggest = _suggest_name(sc, head, 2)
+                _emit_hx2001(head, e.span, suggest, out)
+            }
+        }
+        // Payload children (when used as an expression, not pattern).
+        let mut i = 0
+        while i < len(e.children) {
+            sc = _walk_expr(e.children[i], sc, mod_file, out)
+            i = i + 1
+        }
+        return sc
+    }
+
+    if _is_let_kind(e.kind) {
+        // Walk RHS first (let x = RHS) — RHS cannot reference `x`.
+        let mut i = 0
+        while i < len(e.children) {
+            sc = _walk_expr(e.children[i], sc, mod_file, out)
+            i = i + 1
+        }
+        let nm = _let_name(e.text)
+        if len(nm) > 0 {
+            sc = _define(sc, nm, mod_file)
+        }
+        return sc
+    }
+
+    if _is_block_kind(e.kind) {
+        sc = _push_scope(sc)
+        let mut i = 0
+        while i < len(e.children) {
+            sc = _walk_expr(e.children[i], sc, mod_file, out)
+            i = i + 1
+        }
+        sc = _pop_scope(sc)
+        return sc
+    }
+
+    if _is_for_kind(e.kind) {
+        // children[0] = iter, children[1] = body. Iter binding is on `text`.
+        if len(e.children) >= 1 {
+            sc = _walk_expr(e.children[0], sc, mod_file, out)
+        }
+        sc = _push_scope(sc)
+        if len(e.text) > 0 {
+            sc = _define(sc, e.text, mod_file)
+        }
+        if len(e.children) >= 2 {
+            sc = _walk_expr(e.children[1], sc, mod_file, out)
+        }
+        sc = _pop_scope(sc)
+        return sc
+    }
+
+    if _is_match_kind(e.kind) {
+        // children layout: [scrutinee, pat0, body0, pat1, body1, ...]
+        if len(e.children) >= 1 {
+            sc = _walk_expr(e.children[0], sc, mod_file, out)
+        }
+        let mut i = 1
+        while i + 1 < len(e.children) {
+            let pat = e.children[i]
+            let body = e.children[i + 1]
+            sc = _push_scope(sc)
+            sc = _bind_pattern(pat, sc, mod_file, out)
+            sc = _walk_expr(body, sc, mod_file, out)
+            sc = _pop_scope(sc)
+            i = i + 2
+        }
+        return sc
+    }
+
+    // Generic recurse (Call, BinOp, UnOp, If, While, Return, Assign, Index,
+    // literals — all delegate to children).
+    let mut i = 0
+    while i < len(e.children) {
+        sc = _walk_expr(e.children[i], sc, mod_file, out)
+        i = i + 1
+    }
+    return sc
+}
+
+// Bind pattern variables (binders + EnumPath payload binders). Pattern shape
+// from parse_match_pattern:
+//   - Wildcard          : binds nothing
+//   - LiteralInt/Bool/… : binds nothing (constant compare)
+//   - Ident             : a fresh binder for the whole scrutinee
+//   - EnumPath          : Variant or Variant(arg) — child Idents are binders
+fn _bind_pattern(p: Expr, scope: Scopes, mod_file: string, out: array) -> Scopes {
+    let mut sc = scope
+
+    if _is_wildcard_kind(p.kind) { return sc }
+
+    if _is_ident_kind(p.kind) {
+        if len(p.text) > 0 && p.text != "_" {
+            sc = _define(sc, p.text, mod_file)
+        }
+        return sc
+    }
+
+    if _is_enum_path_kind(p.kind) {
+        // We DON'T resolve the enum head here — pattern context permits
+        // unresolved nominal types in stage0 (S3 will type-check them).
+        // Instead bind every Ident-like payload child as a fresh binder.
+        let mut i = 0
+        while i < len(p.children) {
+            let c = p.children[i]
+            if _is_ident_kind(c.kind) {
+                if len(c.text) > 0 && c.text != "_" {
+                    sc = _define(sc, c.text, mod_file)
+                }
+            } else {
+                // Nested patterns aren't produced by parse_match_pattern
+                // today, but be defensive — recurse so we don't drop binders.
+                sc = _bind_pattern(c, sc, mod_file, out)
+            }
+            i = i + 1
+        }
+        return sc
+    }
+
+    // Literal / arbitrary expr pattern — no binders, but still walk so that
+    // any `Ident` references inside (rare) get checked against scope.
+    sc = _walk_expr(p, sc, mod_file, out)
+    return sc
+}
+
+// ── ItemKind probes ──────────────────────────────────────────
+
+fn _is_fn_kind(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Fn -> true,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false,
+        ItemKind::Import -> false
+    }
+}
+
+fn _is_let_item_kind(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Let -> true,
+        ItemKind::Fn -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false,
+        ItemKind::Import -> false
+    }
+}
+
+fn _is_import_kind(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Import -> true,
+        ItemKind::Fn -> false,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false
+    }
+}
+
+// ── Public entry ─────────────────────────────────────────────
+
+pub fn bind(module: Module) -> array {
+    let mut out = []
+    let mod_file = module.file
+
+    // ── Pre-pass: top-level item names into the module-level scope.
+    let mut sc = _push_scope(_new_scopes())
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if !_is_import_kind(it.kind) {
+            if len(it.name) > 0 {
+                sc = _define(sc, it.name, mod_file)
+            }
+        }
+        i = i + 1
+    }
+
+    // ── Main walk
+    let mut k = 0
+    while k < len(module.items) {
+        let it = module.items[k]
+        if _is_fn_kind(it.kind) {
+            // Function body lives in its own scope with params first.
+            sc = _push_scope(sc)
+            let mut p = 0
+            while p < len(it.params) {
+                let par = it.params[p]
+                if len(par.name) > 0 {
+                    sc = _define(sc, par.name, mod_file)
+                }
+                p = p + 1
+            }
+            sc = _walk_expr(it.body, sc, mod_file, out)
+            sc = _pop_scope(sc)
+        } else if _is_let_item_kind(it.kind) {
+            // Top-level let: walk RHS in module scope. The name is already
+            // visible from the pre-pass; that matches "let foo = foo" being
+            // legal-but-silly across forward refs (the resolver doesn't try
+            // to enforce initialization order at S2).
+            sc = _walk_expr(it.body, sc, mod_file, out)
+        } else {
+            // Struct / Enum / Import — body is the empty placeholder Expr
+            // (parse path). Nothing to walk.
+        }
+        k = k + 1
+    }
+
+    return out
+}

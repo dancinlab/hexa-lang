@@ -1,0 +1,339 @@
+// HEXA Native Compiler — Phase B2 / S2: bind smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds three small Modules and exercises the bind pass:
+//
+//   (a) PASS:
+//       fn add(x: Int, y: Int) -> Int { return x + y }
+//       fn main() { add(1, 2) }
+//       — expect 0 diagnostics
+//
+//   (b) FAIL (no near match):
+//       fn main() { return zzz }
+//       — expect 1 HX2001 for `zzz`, suggest=""
+//
+//   (c) FAIL (with did-you-mean suggestion):
+//       fn helper() {}
+//       fn main() { helpr() }
+//       — expect 1 HX2001 for `helpr`, suggest="helper"
+//
+// Run:
+//   hexa run compiler/check/bind_test.hexa
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../lex/tokens.hexa"
+import "../ir/hir.hexa"
+import "./bind.hexa"
+
+// ── AST construction helpers ─────────────────────────────────
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_span() -> Span {
+    return _span("", 0, 0, 0)
+}
+
+fn _empty_atlas_ref() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _empty_span() }
+}
+
+fn _empty_type() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: _empty_span() }
+}
+
+fn _named_type(name: string) -> TypeRef {
+    return TypeRef { kind: "named", name: name, args: [], span: _empty_span() }
+}
+
+fn _empty_expr() -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _empty_span(),
+        text: "",
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _int_expr(text: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralInt,
+        span: _span(file, line, col, len(text)),
+        text: text,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _bin_expr(op: string, lhs: Expr, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(lhs)
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::BinOp,
+        span: _span(file, line, col, len(op)),
+        text: op,
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _call_expr(callee: Expr, args: [Expr], file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(callee)
+    let mut i = 0
+    while i < len(args) {
+        kids.push(args[i])
+        i = i + 1
+    }
+    return Expr {
+        kind: ExprKind::Call,
+        span: _span(file, line, col, 1),
+        text: "",
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _return_expr(value: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(value)
+    return Expr {
+        kind: ExprKind::Return,
+        span: _span(file, line, col, 6),
+        text: "",
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _span(file, line, col, 1),
+        text: "",
+        children: children,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _fn_item(name: string, params: [Param], body: Expr, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: [],
+        params: params,
+        return_type: _empty_type(),
+        body: body,
+        is_pub: false
+    }
+}
+
+fn _param(name: string, typ_name: string, file: string, line: i64, col: i64) -> Param {
+    return Param {
+        name: name,
+        typ: _named_type(typ_name),
+        span: _span(file, line, col, len(name))
+    }
+}
+
+// ── Pretty-print ─────────────────────────────────────────────
+
+fn _sev_str(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "error",
+        Severity::Warning -> "warning",
+        Severity::Note -> "note"
+    }
+}
+
+fn _print_diag(idx: i64, d: Diagnostic) {
+    let sp = d.span
+    let loc = sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+    println("    [" + to_string(idx) + "] " + d.code + " (" + _sev_str(d.severity) + " " + d.stage + ") @ " + loc)
+    println("          msg:     " + d.message)
+    if len(d.suggest) > 0 {
+        println("          suggest: " + d.suggest)
+    } else {
+        println("          suggest: (none)")
+    }
+}
+
+// ── Cases ────────────────────────────────────────────────────
+
+// (a) PASS: fn add(x,y){ return x+y } fn main(){ add(1,2) }
+fn _build_case_a() -> Module {
+    let f = "case_a.hexa"
+
+    // fn add
+    let mut params_add = []
+    params_add.push(_param("x", "Int", f, 1, 8))
+    params_add.push(_param("y", "Int", f, 1, 16))
+    let x_ref = _ident_expr("x", f, 1, 35)
+    let y_ref = _ident_expr("y", f, 1, 39)
+    let add_body_expr = _bin_expr("+", x_ref, y_ref, f, 1, 37)
+    let add_ret = _return_expr(add_body_expr, f, 1, 28)
+    let mut add_block_kids = []
+    add_block_kids.push(add_ret)
+    let add_body = _block(add_block_kids, f, 1, 26)
+    let item_add = _fn_item("add", params_add, add_body, f, 1)
+
+    // fn main
+    let add_callee = _ident_expr("add", f, 2, 14)
+    let lit1 = _int_expr("1", f, 2, 18)
+    let lit2 = _int_expr("2", f, 2, 21)
+    let mut call_args = []
+    call_args.push(lit1)
+    call_args.push(lit2)
+    let call = _call_expr(add_callee, call_args, f, 2, 17)
+    let mut main_kids = []
+    main_kids.push(call)
+    let main_body = _block(main_kids, f, 2, 12)
+    let item_main = _fn_item("main", [], main_body, f, 2)
+
+    let mut items = []
+    items.push(item_add)
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (b) FAIL (no near match): fn main() { return zzz }
+fn _build_case_b() -> Module {
+    let f = "case_b.hexa"
+    let zzz = _ident_expr("zzz", f, 1, 20)
+    let ret = _return_expr(zzz, f, 1, 13)
+    let mut kids = []
+    kids.push(ret)
+    let body = _block(kids, f, 1, 11)
+    let item_main = _fn_item("main", [], body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (c) FAIL with suggest: fn helper(){} fn main(){ helpr() }
+fn _build_case_c() -> Module {
+    let f = "case_c.hexa"
+    let helper_body = _block([], f, 1, 13)
+    let item_helper = _fn_item("helper", [], helper_body, f, 1)
+
+    let helpr_ref = _ident_expr("helpr", f, 2, 14)
+    let mut empty_args = []
+    let call = _call_expr(helpr_ref, empty_args, f, 2, 19)
+    let mut main_kids = []
+    main_kids.push(call)
+    let main_body = _block(main_kids, f, 2, 12)
+    let item_main = _fn_item("main", [], main_body, f, 2)
+
+    let mut items = []
+    items.push(item_helper)
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// ── Driver ───────────────────────────────────────────────────
+
+fn _run_case(label: string, m: Module) -> array {
+    println("")
+    println("── " + label + " ──")
+    println("  module: " + m.file + " (items=" + to_string(len(m.items)) + ")")
+    let diags = bind(m)
+    println("  diagnostics: " + to_string(len(diags)))
+    let mut i = 0
+    while i < len(diags) {
+        _print_diag(i, diags[i])
+        i = i + 1
+    }
+    return diags
+}
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Bind Smoke Test (B2/S2)")
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+
+    // (a)
+    let diags_a = _run_case("(a) PASS — add(x,y) called from main", _build_case_a())
+    if len(diags_a) != 0 {
+        println("  FAIL: case (a) expected 0 diagnostics, got " + to_string(len(diags_a)))
+        ok = false
+    } else {
+        println("  ok: 0 diagnostics")
+    }
+
+    // (b)
+    let diags_b = _run_case("(b) FAIL — undefined `zzz`, no suggestion", _build_case_b())
+    if len(diags_b) != 1 {
+        println("  FAIL: case (b) expected 1 diagnostic, got " + to_string(len(diags_b)))
+        ok = false
+    } else {
+        let d = diags_b[0]
+        if d.code != "HX2001" {
+            println("  FAIL: case (b) code was " + d.code)
+            ok = false
+        }
+        if len(d.suggest) != 0 {
+            println("  FAIL: case (b) expected empty suggest, got '" + d.suggest + "'")
+            ok = false
+        }
+        if d.message != "undefined name `zzz`" {
+            println("  FAIL: case (b) message was '" + d.message + "'")
+            ok = false
+        }
+        if ok {
+            println("  ok: 1 HX2001 for zzz, suggest empty")
+        }
+    }
+
+    // (c)
+    let diags_c = _run_case("(c) FAIL — `helpr()` suggests `helper`", _build_case_c())
+    if len(diags_c) != 1 {
+        println("  FAIL: case (c) expected 1 diagnostic, got " + to_string(len(diags_c)))
+        ok = false
+    } else {
+        let d = diags_c[0]
+        if d.code != "HX2001" {
+            println("  FAIL: case (c) code was " + d.code)
+            ok = false
+        }
+        if d.suggest != "helper" {
+            println("  FAIL: case (c) expected suggest='helper', got '" + d.suggest + "'")
+            ok = false
+        }
+        if d.message != "undefined name `helpr`" {
+            println("  FAIL: case (c) message was '" + d.message + "'")
+            ok = false
+        }
+        if ok {
+            println("  ok: 1 HX2001 for helpr, suggest=helper")
+        }
+    }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: all bind cases match contract.")
+    } else {
+        println("FAIL: bind contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}

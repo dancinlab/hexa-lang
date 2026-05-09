@@ -94,6 +94,69 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
+        code: "HX2001",
+        title: "undefined name",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "undefined name `{name}`",
+        explain: "The identifier was used in an expression but no binding for it exists in any visible scope (function parameters, let bindings, top-level items, match arm patterns). Common causes: typo, missing import, name out of scope.",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
+        code: "HX3001",
+        title: "type mismatch",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "type mismatch: expected `{expected}`, got `{actual}`",
+        explain: "A binary operator, assignment, or other expression site received an operand whose static type does not match the expected type. Insert an explicit cast or fix the producing expression.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3002",
+        title: "wrong number of arguments",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "wrong number of arguments to `{name}`: expected {expected}, got {actual}",
+        explain: "The call site supplies a different number of arguments than the callee's signature declares. Add or remove arguments to match the function definition.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3003",
+        title: "argument type mismatch",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "argument {pos} of `{name}`: expected `{expected}`, got `{actual}`",
+        explain: "A call argument's static type does not match the corresponding parameter type. Fix the argument expression or change the call target.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3004",
+        title: "return type mismatch",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "return type mismatch: function `{name}` returns `{expected}`, got `{actual}`",
+        explain: "A `return` expression yields a value whose static type does not match the enclosing function's declared return type.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3005",
+        title: "match arms have different types",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "match arms have different types: expected `{expected}`, got `{actual}` on arm {pos}",
+        explain: "All arms of a `match` used as an expression must produce the same type. Adjust the divergent arm to match the first arm's result type.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX4001",
+        title: "integer division domain narrow",
+        severity: Severity::Warning,
+        stage: "S4",
+        template: "integer division narrows the real domain to integers; use `//` (floor) or cast to f64 to silence",
+        explain: "Dividing two integer operands with `/` silently truncates the real-number result. RFC-017 S4 surfaces this as a domain hint so the author confirms the narrowing was intentional.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX9001",
         title: "@grace expired",
         severity: Severity::Error,
