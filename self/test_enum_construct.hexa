@@ -1,6 +1,7 @@
-// RFC-020 stage A1: parse-only test, runtime success not guaranteed yet
-// Verifies that `EnumName::Variant(expr)` parses as a payload construction
-// (rather than failing as a bare EnumPath followed by an unexpected `(`).
+// RFC-020 stage A1+A2+A3: enum payload construction, typecheck registry, and
+// pattern binding. Verifies that `EnumName::Variant(expr)` parses as a payload
+// construction, that the typechecker (when invoked) accepts the payload, and
+// that match-arm payload patterns introduce a binding usable in the arm body.
 
 enum Shape {
     Circle(Int),
@@ -14,8 +15,9 @@ fn main() {
     let u = Shape::Unit
 
     let msg = match s {
-        Shape::Circle(r) -> "circle: " + to_string(r),
+        Shape::Circle(r) -> "circle: " + to_string(r * 2),
         Shape::Rect(side) -> "rect",
         Shape::Unit -> "unit"
     }
+    println(msg)
 }
