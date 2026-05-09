@@ -1,0 +1,382 @@
+// HEXA Native Compiler — Lexer (Phase A1)
+//
+// Source bytes → [Token] using TokenKind enum from tokens.hexa.
+// Atlas refs P[id] / C[id] / L[id] / E[id] are first-class tokens whose
+// `text` carries the inner identifier (RFC-017 S1). On unknown chars the
+// lexer emits a one-char Ident token so the parser can still synchronize;
+// the checker can lift those into HX0001 diagnostics later.
+
+import "./tokens.hexa"
+
+// Builders --------------------------------------------------------
+
+fn mk_span(file: string, line: i64, col: i64, len: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: len }
+}
+
+fn mk_tok(kind: TokenKind, text: string, span: Span) -> Token {
+    return Token { kind: kind, text: text, span: span }
+}
+
+// Char classification --------------------------------------------
+
+fn is_digit_ch(c) -> bool {
+    if c == '0' { return true }
+    if c == '1' { return true }
+    if c == '2' { return true }
+    if c == '3' { return true }
+    if c == '4' { return true }
+    if c == '5' { return true }
+    if c == '6' { return true }
+    if c == '7' { return true }
+    if c == '8' { return true }
+    if c == '9' { return true }
+    return false
+}
+
+fn is_ident_start(c) -> bool {
+    if is_alpha(c) { return true }
+    if c == '_' { return true }
+    return false
+}
+
+fn is_ident_cont(c) -> bool {
+    if is_alphanumeric(c) { return true }
+    if c == '_' { return true }
+    return false
+}
+
+fn is_atlas_kind_ch(c) -> bool {
+    if c == 'P' { return true }
+    if c == 'C' { return true }
+    if c == 'L' { return true }
+    if c == 'E' { return true }
+    return false
+}
+
+// Keyword lookup --------------------------------------------------
+// Match the keyword spelling and return the matching TokenKind variant
+// or TokenKind::Ident for non-keywords. Mirrors the kw set declared in
+// tokens.hexa (intentional subset of the full hexa grammar — RFC-018 §A1).
+
+fn keyword_kind(word: string) -> TokenKind {
+    if word == "fn" { return TokenKind::KwFn }
+    if word == "let" { return TokenKind::KwLet }
+    if word == "mut" { return TokenKind::KwMut }
+    if word == "return" { return TokenKind::KwReturn }
+    if word == "if" { return TokenKind::KwIf }
+    if word == "else" { return TokenKind::KwElse }
+    if word == "while" { return TokenKind::KwWhile }
+    if word == "for" { return TokenKind::KwFor }
+    if word == "in" { return TokenKind::KwIn }
+    if word == "struct" { return TokenKind::KwStruct }
+    if word == "pub" { return TokenKind::KwPub }
+    if word == "import" { return TokenKind::KwImport }
+    if word == "as" { return TokenKind::KwAs }
+    if word == "true" { return TokenKind::KwTrue }
+    if word == "false" { return TokenKind::KwFalse }
+    return TokenKind::Ident
+}
+
+// Main entry ------------------------------------------------------
+// `lex` walks `source` once and emits a flat token stream terminated by
+// TokenKind::Eof. Newlines are dropped — the parser uses braces/semicolons
+// for statement framing (matches RFC-018 grammar style, not self/parser).
+
+pub fn lex(source: string, file: string) -> [Token] {
+    let mut tokens = []
+    let chars = source.chars()
+    let n = len(chars)
+    let mut pos = 0
+    let mut line = 1
+    let mut col = 1
+
+    while pos < n {
+        let ch = chars[pos]
+
+        // whitespace
+        if ch == ' ' || ch == '\t' || ch == '\r' {
+            pos = pos + 1
+            col = col + 1
+        } else if ch == '\n' {
+            pos = pos + 1
+            line = line + 1
+            col = 1
+        } else if ch == '/' && pos + 1 < n && chars[pos + 1] == '/' {
+            // // line comment — skip to end of line
+            pos = pos + 2
+            col = col + 2
+            while pos < n && chars[pos] != '\n' {
+                pos = pos + 1
+                col = col + 1
+            }
+        } else if ch == '/' && pos + 1 < n && chars[pos + 1] == '*' {
+            // /* block comment */ — supports nesting
+            pos = pos + 2
+            col = col + 2
+            let mut depth = 1
+            while depth > 0 && pos < n {
+                if pos + 1 < n && chars[pos] == '/' && chars[pos + 1] == '*' {
+                    depth = depth + 1
+                    pos = pos + 2
+                    col = col + 2
+                } else if pos + 1 < n && chars[pos] == '*' && chars[pos + 1] == '/' {
+                    depth = depth - 1
+                    pos = pos + 2
+                    col = col + 2
+                } else if chars[pos] == '\n' {
+                    pos = pos + 1
+                    line = line + 1
+                    col = 1
+                } else {
+                    pos = pos + 1
+                    col = col + 1
+                }
+            }
+        } else if is_atlas_kind_ch(ch) && pos + 1 < n && chars[pos + 1] == '[' {
+            // P[id] / C[id] / L[id] / E[id] atlas refs (RFC-017)
+            let start_col = col
+            let kind_ch = ch
+            pos = pos + 2
+            col = col + 2
+            let mut id_parts = []
+            while pos < n && chars[pos] != ']' {
+                id_parts.push(to_string(chars[pos]))
+                pos = pos + 1
+                col = col + 1
+            }
+            if pos < n && chars[pos] == ']' {
+                pos = pos + 1
+                col = col + 1
+            }
+            let id = join(id_parts, "")
+            let span = mk_span(file, line, start_col, col - start_col)
+            let mut atlas_kind = TokenKind::PNode
+            if kind_ch == 'P' { atlas_kind = TokenKind::PNode }
+            if kind_ch == 'C' { atlas_kind = TokenKind::CNode }
+            if kind_ch == 'L' { atlas_kind = TokenKind::LNode }
+            if kind_ch == 'E' { atlas_kind = TokenKind::ENode }
+            tokens.push(mk_tok(atlas_kind, id, span))
+        } else if is_ident_start(ch) {
+            // identifier / keyword
+            let start_col = col
+            let mut parts = []
+            while pos < n && is_ident_cont(chars[pos]) {
+                parts.push(to_string(chars[pos]))
+                pos = pos + 1
+                col = col + 1
+            }
+            let word = join(parts, "")
+            let span = mk_span(file, line, start_col, col - start_col)
+            let kind = keyword_kind(word)
+            tokens.push(mk_tok(kind, word, span))
+        } else if is_digit_ch(ch) {
+            // integer / float literal — accepts 1_000 and 1.5e+3 forms
+            let start_col = col
+            let mut parts = []
+            let mut is_float = false
+            while pos < n && is_digit_ch(chars[pos]) {
+                parts.push(to_string(chars[pos]))
+                pos = pos + 1
+                col = col + 1
+                if pos < n && chars[pos] == '_' && pos + 1 < n && is_digit_ch(chars[pos + 1]) {
+                    pos = pos + 1
+                    col = col + 1
+                }
+            }
+            if pos < n && chars[pos] == '.' && pos + 1 < n && is_digit_ch(chars[pos + 1]) {
+                is_float = true
+                parts.push(".")
+                pos = pos + 1
+                col = col + 1
+                while pos < n && is_digit_ch(chars[pos]) {
+                    parts.push(to_string(chars[pos]))
+                    pos = pos + 1
+                    col = col + 1
+                }
+            }
+            if pos < n && (chars[pos] == 'e' || chars[pos] == 'E') {
+                let mut ep = pos + 1
+                if ep < n && (chars[ep] == '+' || chars[ep] == '-') { ep = ep + 1 }
+                if ep < n && is_digit_ch(chars[ep]) {
+                    is_float = true
+                    parts.push(to_string(chars[pos]))
+                    pos = pos + 1
+                    col = col + 1
+                    if pos < n && (chars[pos] == '+' || chars[pos] == '-') {
+                        parts.push(to_string(chars[pos]))
+                        pos = pos + 1
+                        col = col + 1
+                    }
+                    while pos < n && is_digit_ch(chars[pos]) {
+                        parts.push(to_string(chars[pos]))
+                        pos = pos + 1
+                        col = col + 1
+                    }
+                }
+            }
+            let text = join(parts, "")
+            let span = mk_span(file, line, start_col, col - start_col)
+            tokens.push(mk_tok(TokenKind::Number, text, span))
+        } else if ch == '"' {
+            // string literal with \n \t \r \\ \" \0 escapes
+            let start_col = col
+            pos = pos + 1
+            col = col + 1
+            let mut parts = []
+            let mut done = false
+            while pos < n && !done {
+                let c = chars[pos]
+                if c == '"' {
+                    done = true
+                    pos = pos + 1
+                    col = col + 1
+                } else if c == '\\' && pos + 1 < n {
+                    let e = chars[pos + 1]
+                    if e == 'n' { parts.push("\n") }
+                    else if e == 't' { parts.push("\t") }
+                    else if e == 'r' { parts.push("\r") }
+                    else if e == '\\' { parts.push("\\") }
+                    else if e == '"' { parts.push("\"") }
+                    else if e == '0' { parts.push("\0") }
+                    else { parts.push(to_string(e)) }
+                    pos = pos + 2
+                    col = col + 2
+                } else if c == '\n' {
+                    parts.push("\n")
+                    pos = pos + 1
+                    line = line + 1
+                    col = 1
+                } else {
+                    parts.push(to_string(c))
+                    pos = pos + 1
+                    col = col + 1
+                }
+            }
+            let s = join(parts, "")
+            let span = mk_span(file, line, start_col, col - start_col)
+            tokens.push(mk_tok(TokenKind::String, s, span))
+        } else {
+            // operators / punctuation — multi-char checked before single
+            let start_col = col
+            if ch == '-' && pos + 1 < n && chars[pos + 1] == '>' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::Arrow, "->", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '=' && pos + 1 < n && chars[pos + 1] == '>' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::FatArrow, "=>", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '=' && pos + 1 < n && chars[pos + 1] == '=' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::EqEq, "==", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '!' && pos + 1 < n && chars[pos + 1] == '=' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::Neq, "!=", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '<' && pos + 1 < n && chars[pos + 1] == '=' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::Le, "<=", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '>' && pos + 1 < n && chars[pos + 1] == '=' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::Ge, ">=", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '(' {
+                tokens.push(mk_tok(TokenKind::LParen, "(", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == ')' {
+                tokens.push(mk_tok(TokenKind::RParen, ")", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '{' {
+                tokens.push(mk_tok(TokenKind::LBrace, "{", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '}' {
+                tokens.push(mk_tok(TokenKind::RBrace, "}", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '[' {
+                tokens.push(mk_tok(TokenKind::LBracket, "[", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == ']' {
+                tokens.push(mk_tok(TokenKind::RBracket, "]", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == ',' {
+                tokens.push(mk_tok(TokenKind::Comma, ",", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == ';' {
+                tokens.push(mk_tok(TokenKind::Semicolon, ";", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == ':' {
+                tokens.push(mk_tok(TokenKind::Colon, ":", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '=' {
+                tokens.push(mk_tok(TokenKind::Eq, "=", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '<' {
+                tokens.push(mk_tok(TokenKind::Lt, "<", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '>' {
+                tokens.push(mk_tok(TokenKind::Gt, ">", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '+' {
+                tokens.push(mk_tok(TokenKind::Plus, "+", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '-' {
+                tokens.push(mk_tok(TokenKind::Minus, "-", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '*' {
+                tokens.push(mk_tok(TokenKind::Star, "*", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '/' {
+                tokens.push(mk_tok(TokenKind::Slash, "/", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '%' {
+                tokens.push(mk_tok(TokenKind::Percent, "%", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '@' {
+                tokens.push(mk_tok(TokenKind::At, "@", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '.' {
+                tokens.push(mk_tok(TokenKind::Dot, ".", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else {
+                // unknown char — emit as one-char Ident so the parser can resync.
+                // The checker will lift this to HX0001 (unexpected character).
+                let sp = mk_span(file, line, start_col, 1)
+                tokens.push(mk_tok(TokenKind::Ident, to_string(ch), sp))
+                pos = pos + 1
+                col = col + 1
+            }
+        }
+    }
+
+    let eof_span = mk_span(file, line, col, 0)
+    tokens.push(mk_tok(TokenKind::Eof, "", eof_span))
+    return tokens
+}

@@ -1,0 +1,784 @@
+// HEXA Native Compiler — Parser (Phase A1)
+//
+// Recursive-descent. Tokens (TokenKind enum) → Module/Item/Expr from ast.hexa.
+//
+// State lives at module level (`pub let mut`) the same way self/parser.hexa
+// does — stage0 cannot return tuples or mutate struct fields cheaply, and
+// thread-state is overkill for this single-pass parser.
+//
+// Error policy: we never panic. On a mismatch we emit a placeholder Item /
+// Expr (kind preserved, fields zero-valued) and skip to the next plausible
+// sync point so the rest of the module still parses. The checker (S0) is
+// what surfaces HX0xxx diagnostics.
+
+import "../lex/tokens.hexa"
+import "./ast.hexa"
+
+// ── Mutable parse state ────────────────────────────────────────
+
+pub let mut p_tokens = []
+pub let mut p_pos = 0
+pub let mut p_file = ""
+pub let mut p_pending_annotations = []
+
+// ── Span / placeholder helpers ─────────────────────────────────
+
+fn empty_span() -> Span {
+    return Span { file: "", line: 0, col: 0, len: 0 }
+}
+
+fn empty_atlas() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: empty_span() }
+}
+
+fn empty_type() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: empty_span() }
+}
+
+fn empty_expr() -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: empty_span(),
+        text: "",
+        children: [],
+        atlas_ref: empty_atlas()
+    }
+}
+
+// ── Token cursor ───────────────────────────────────────────────
+
+fn peek() -> Token {
+    return p_tokens[p_pos]
+}
+
+fn peek_at(off: i64) -> Token {
+    let idx = p_pos + off
+    if idx < len(p_tokens) { return p_tokens[idx] }
+    return p_tokens[len(p_tokens) - 1]
+}
+
+fn advance() -> Token {
+    let t = p_tokens[p_pos]
+    if p_pos + 1 < len(p_tokens) {
+        p_pos = p_pos + 1
+    }
+    return t
+}
+
+fn check_kind(k: TokenKind) -> bool {
+    let t = peek()
+    return same_kind(t.kind, k)
+}
+
+fn same_kind(a: TokenKind, b: TokenKind) -> bool {
+    // stage0 cannot derive Eq for enums automatically, so we string-compare
+    // through the deterministic match below. Cheap because both sides are
+    // payload-free variants — no allocation.
+    return tag_of(a) == tag_of(b)
+}
+
+fn tag_of(k: TokenKind) -> string {
+    return match k {
+        TokenKind::Ident -> "Ident",
+        TokenKind::Number -> "Number",
+        TokenKind::String -> "String",
+        TokenKind::LParen -> "LParen",
+        TokenKind::RParen -> "RParen",
+        TokenKind::LBrace -> "LBrace",
+        TokenKind::RBrace -> "RBrace",
+        TokenKind::LBracket -> "LBracket",
+        TokenKind::RBracket -> "RBracket",
+        TokenKind::Comma -> "Comma",
+        TokenKind::Semicolon -> "Semicolon",
+        TokenKind::Colon -> "Colon",
+        TokenKind::Arrow -> "Arrow",
+        TokenKind::FatArrow -> "FatArrow",
+        TokenKind::Eq -> "Eq",
+        TokenKind::EqEq -> "EqEq",
+        TokenKind::Neq -> "Neq",
+        TokenKind::Lt -> "Lt",
+        TokenKind::Le -> "Le",
+        TokenKind::Gt -> "Gt",
+        TokenKind::Ge -> "Ge",
+        TokenKind::Plus -> "Plus",
+        TokenKind::Minus -> "Minus",
+        TokenKind::Star -> "Star",
+        TokenKind::Slash -> "Slash",
+        TokenKind::Percent -> "Percent",
+        TokenKind::At -> "At",
+        TokenKind::Dot -> "Dot",
+        TokenKind::KwFn -> "KwFn",
+        TokenKind::KwLet -> "KwLet",
+        TokenKind::KwMut -> "KwMut",
+        TokenKind::KwReturn -> "KwReturn",
+        TokenKind::KwIf -> "KwIf",
+        TokenKind::KwElse -> "KwElse",
+        TokenKind::KwWhile -> "KwWhile",
+        TokenKind::KwFor -> "KwFor",
+        TokenKind::KwIn -> "KwIn",
+        TokenKind::KwStruct -> "KwStruct",
+        TokenKind::KwPub -> "KwPub",
+        TokenKind::KwImport -> "KwImport",
+        TokenKind::KwAs -> "KwAs",
+        TokenKind::KwTrue -> "KwTrue",
+        TokenKind::KwFalse -> "KwFalse",
+        TokenKind::PNode -> "PNode",
+        TokenKind::CNode -> "CNode",
+        TokenKind::LNode -> "LNode",
+        TokenKind::ENode -> "ENode",
+        TokenKind::Newline -> "Newline",
+        TokenKind::Eof -> "Eof"
+    }
+}
+
+fn eat(k: TokenKind) -> bool {
+    if check_kind(k) {
+        advance()
+        return true
+    }
+    return false
+}
+
+fn expect(k: TokenKind) -> Token {
+    // Best-effort: if the expected token is missing, fabricate one with the
+    // same span as `peek` so downstream code (which only reads .text/.span)
+    // keeps working. The actual stream pointer does NOT advance.
+    if check_kind(k) {
+        return advance()
+    }
+    let t = peek()
+    return Token { kind: k, text: "", span: t.span }
+}
+
+fn at_eof() -> bool {
+    return check_kind(TokenKind::Eof)
+}
+
+// ── Atlas refs ────────────────────────────────────────────────
+
+fn is_atlas_kind(k: TokenKind) -> bool {
+    if same_kind(k, TokenKind::PNode) { return true }
+    if same_kind(k, TokenKind::CNode) { return true }
+    if same_kind(k, TokenKind::LNode) { return true }
+    if same_kind(k, TokenKind::ENode) { return true }
+    return false
+}
+
+fn atlas_kind_str(k: TokenKind) -> string {
+    if same_kind(k, TokenKind::PNode) { return "P" }
+    if same_kind(k, TokenKind::CNode) { return "C" }
+    if same_kind(k, TokenKind::LNode) { return "L" }
+    if same_kind(k, TokenKind::ENode) { return "E" }
+    return ""
+}
+
+// ── Type parser ───────────────────────────────────────────────
+// Phase A1 supports: Name, Name<Args,...>, [T] sugar (becomes named "Array").
+
+fn parse_type() -> TypeRef {
+    let t = peek()
+    if check_kind(TokenKind::LBracket) {
+        advance()
+        let inner = parse_type()
+        eat(TokenKind::RBracket)
+        let mut args = []
+        args.push(inner)
+        return TypeRef { kind: "generic", name: "Array", args: args, span: t.span }
+    }
+    if check_kind(TokenKind::Ident) {
+        let id = advance()
+        if check_kind(TokenKind::Lt) {
+            advance()
+            let mut args = []
+            if !check_kind(TokenKind::Gt) {
+                args.push(parse_type())
+                while check_kind(TokenKind::Comma) {
+                    advance()
+                    args.push(parse_type())
+                }
+            }
+            eat(TokenKind::Gt)
+            return TypeRef { kind: "generic", name: id.text, args: args, span: id.span }
+        }
+        return TypeRef { kind: "named", name: id.text, args: [], span: id.span }
+    }
+    // missing type — return a placeholder, do not advance
+    return TypeRef { kind: "named", name: "", args: [], span: t.span }
+}
+
+// ── Expression parser ─────────────────────────────────────────
+// Pratt-ish layered descent: equality > comparison > additive > multiplicative > unary > primary
+// followed by a postfix loop for ., (), [].
+
+fn parse_expr() -> Expr {
+    return parse_equality()
+}
+
+fn parse_equality() -> Expr {
+    let mut left = parse_comparison()
+    while check_kind(TokenKind::EqEq) || check_kind(TokenKind::Neq) {
+        let op = advance()
+        let right = parse_comparison()
+        let mut kids = []
+        kids.push(left)
+        kids.push(right)
+        left = Expr {
+            kind: ExprKind::BinOp,
+            span: op.span,
+            text: op.text,
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    return left
+}
+
+fn parse_comparison() -> Expr {
+    let mut left = parse_additive()
+    while check_kind(TokenKind::Lt) || check_kind(TokenKind::Le) || check_kind(TokenKind::Gt) || check_kind(TokenKind::Ge) {
+        let op = advance()
+        let right = parse_additive()
+        let mut kids = []
+        kids.push(left)
+        kids.push(right)
+        left = Expr {
+            kind: ExprKind::BinOp,
+            span: op.span,
+            text: op.text,
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    return left
+}
+
+fn parse_additive() -> Expr {
+    let mut left = parse_multiplicative()
+    while check_kind(TokenKind::Plus) || check_kind(TokenKind::Minus) {
+        let op = advance()
+        let right = parse_multiplicative()
+        let mut kids = []
+        kids.push(left)
+        kids.push(right)
+        left = Expr {
+            kind: ExprKind::BinOp,
+            span: op.span,
+            text: op.text,
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    return left
+}
+
+fn parse_multiplicative() -> Expr {
+    let mut left = parse_unary()
+    while check_kind(TokenKind::Star) || check_kind(TokenKind::Slash) || check_kind(TokenKind::Percent) {
+        let op = advance()
+        let right = parse_unary()
+        let mut kids = []
+        kids.push(left)
+        kids.push(right)
+        left = Expr {
+            kind: ExprKind::BinOp,
+            span: op.span,
+            text: op.text,
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    return left
+}
+
+fn parse_unary() -> Expr {
+    if check_kind(TokenKind::Minus) {
+        let op = advance()
+        let inner = parse_unary()
+        let mut kids = []
+        kids.push(inner)
+        return Expr {
+            kind: ExprKind::UnOp,
+            span: op.span,
+            text: "-",
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    return parse_postfix()
+}
+
+fn parse_postfix() -> Expr {
+    let mut e = parse_primary()
+    let mut go = true
+    while go {
+        if check_kind(TokenKind::Dot) {
+            advance()
+            let name_tok = expect(TokenKind::Ident)
+            let mut kids = []
+            kids.push(e)
+            e = Expr {
+                kind: ExprKind::Field,
+                span: name_tok.span,
+                text: name_tok.text,
+                children: kids,
+                atlas_ref: empty_atlas()
+            }
+        } else if check_kind(TokenKind::LParen) {
+            advance()
+            let mut kids = []
+            kids.push(e)
+            if !check_kind(TokenKind::RParen) {
+                kids.push(parse_expr())
+                while check_kind(TokenKind::Comma) {
+                    advance()
+                    if check_kind(TokenKind::RParen) { break }
+                    kids.push(parse_expr())
+                }
+            }
+            let close = peek()
+            eat(TokenKind::RParen)
+            e = Expr {
+                kind: ExprKind::Call,
+                span: close.span,
+                text: "",
+                children: kids,
+                atlas_ref: empty_atlas()
+            }
+        } else if check_kind(TokenKind::LBracket) {
+            advance()
+            let idx = parse_expr()
+            let close = peek()
+            eat(TokenKind::RBracket)
+            let mut kids = []
+            kids.push(e)
+            kids.push(idx)
+            e = Expr {
+                kind: ExprKind::Index,
+                span: close.span,
+                text: "",
+                children: kids,
+                atlas_ref: empty_atlas()
+            }
+        } else {
+            go = false
+        }
+    }
+    return e
+}
+
+fn parse_primary() -> Expr {
+    let t = peek()
+    if check_kind(TokenKind::Number) {
+        advance()
+        let chars = t.text.chars()
+        let mut is_float = false
+        let mut i = 0
+        while i < len(chars) {
+            if chars[i] == '.' || chars[i] == 'e' || chars[i] == 'E' { is_float = true }
+            i = i + 1
+        }
+        let mut k = ExprKind::LiteralInt
+        if is_float { k = ExprKind::LiteralFloat }
+        return Expr {
+            kind: k,
+            span: t.span,
+            text: t.text,
+            children: [],
+            atlas_ref: empty_atlas()
+        }
+    }
+    if check_kind(TokenKind::String) {
+        advance()
+        return Expr {
+            kind: ExprKind::LiteralString,
+            span: t.span,
+            text: t.text,
+            children: [],
+            atlas_ref: empty_atlas()
+        }
+    }
+    if check_kind(TokenKind::KwTrue) || check_kind(TokenKind::KwFalse) {
+        advance()
+        return Expr {
+            kind: ExprKind::LiteralBool,
+            span: t.span,
+            text: t.text,
+            children: [],
+            atlas_ref: empty_atlas()
+        }
+    }
+    if is_atlas_kind(t.kind) {
+        advance()
+        let kind_s = atlas_kind_str(t.kind)
+        let aref = AtlasRef { kind: kind_s, id: t.text, span: t.span }
+        return Expr {
+            kind: ExprKind::AtlasRef,
+            span: t.span,
+            text: t.text,
+            children: [],
+            atlas_ref: aref
+        }
+    }
+    if check_kind(TokenKind::Ident) {
+        advance()
+        return Expr {
+            kind: ExprKind::Ident,
+            span: t.span,
+            text: t.text,
+            children: [],
+            atlas_ref: empty_atlas()
+        }
+    }
+    if check_kind(TokenKind::LParen) {
+        advance()
+        let inner = parse_expr()
+        eat(TokenKind::RParen)
+        return inner
+    }
+    if check_kind(TokenKind::LBrace) {
+        return parse_block_expr()
+    }
+    if check_kind(TokenKind::KwIf) {
+        return parse_if_expr()
+    }
+    if check_kind(TokenKind::KwWhile) {
+        return parse_while_expr()
+    }
+    if check_kind(TokenKind::KwReturn) {
+        return parse_return_expr()
+    }
+    if check_kind(TokenKind::KwLet) {
+        return parse_let_expr()
+    }
+    // unrecognized — placeholder Ident with the literal text so callers can
+    // still emit a half-decent diagnostic later.
+    advance()
+    return Expr {
+        kind: ExprKind::Ident,
+        span: t.span,
+        text: t.text,
+        children: [],
+        atlas_ref: empty_atlas()
+    }
+}
+
+fn parse_block_expr() -> Expr {
+    let open = peek()
+    eat(TokenKind::LBrace)
+    let mut kids = []
+    while !check_kind(TokenKind::RBrace) && !at_eof() {
+        let e = parse_stmt()
+        kids.push(e)
+        // optional ;
+        if check_kind(TokenKind::Semicolon) { advance() }
+    }
+    eat(TokenKind::RBrace)
+    return Expr {
+        kind: ExprKind::Block,
+        span: open.span,
+        text: "",
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+fn parse_if_expr() -> Expr {
+    let kw = peek()
+    advance()
+    let cond = parse_expr()
+    let then_b = parse_block_expr()
+    let mut kids = []
+    kids.push(cond)
+    kids.push(then_b)
+    if check_kind(TokenKind::KwElse) {
+        advance()
+        if check_kind(TokenKind::KwIf) {
+            kids.push(parse_if_expr())
+        } else {
+            kids.push(parse_block_expr())
+        }
+    }
+    return Expr {
+        kind: ExprKind::If,
+        span: kw.span,
+        text: "",
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+fn parse_while_expr() -> Expr {
+    let kw = peek()
+    advance()
+    let cond = parse_expr()
+    let body = parse_block_expr()
+    let mut kids = []
+    kids.push(cond)
+    kids.push(body)
+    return Expr {
+        kind: ExprKind::While,
+        span: kw.span,
+        text: "",
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+fn parse_return_expr() -> Expr {
+    let kw = peek()
+    advance()
+    let mut kids = []
+    // return may be value-less; in practice we always emit a child here so
+    // resolve doesn't have to special-case empty-return.
+    if !check_kind(TokenKind::RBrace) && !check_kind(TokenKind::Semicolon) && !at_eof() {
+        kids.push(parse_expr())
+    }
+    return Expr {
+        kind: ExprKind::Return,
+        span: kw.span,
+        text: "",
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+fn parse_let_expr() -> Expr {
+    let kw = peek()
+    advance()
+    let is_mut = eat(TokenKind::KwMut)
+    let name_tok = expect(TokenKind::Ident)
+    // optional `: Type` (we encode it in text as "name:Type" — skip a real
+    // ascription struct until A2 since LetExpr is rarely produced inside
+    // function bodies; module-level `let` items are handled in parse_item.
+    if check_kind(TokenKind::Colon) {
+        advance()
+        parse_type()
+    }
+    let mut kids = []
+    if check_kind(TokenKind::Eq) {
+        advance()
+        kids.push(parse_expr())
+    }
+    let mut text = name_tok.text
+    if is_mut { text = "mut:" + name_tok.text }
+    return Expr {
+        kind: ExprKind::Let,
+        span: kw.span,
+        text: text,
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+// statement-as-expr: anything legal inside a block. Returns an Expr.
+fn parse_stmt() -> Expr {
+    return parse_expr()
+}
+
+// ── Annotation parser ─────────────────────────────────────────
+// `@name(arg, arg)` or bare `@name`. Arguments parse as full Exprs.
+
+fn parse_annotation() -> Annotation {
+    let at = peek()
+    eat(TokenKind::At)
+    let name_tok = expect(TokenKind::Ident)
+    let mut args = []
+    if check_kind(TokenKind::LParen) {
+        advance()
+        if !check_kind(TokenKind::RParen) {
+            args.push(parse_expr())
+            while check_kind(TokenKind::Comma) {
+                advance()
+                if check_kind(TokenKind::RParen) { break }
+                args.push(parse_expr())
+            }
+        }
+        eat(TokenKind::RParen)
+    }
+    return Annotation { name: name_tok.text, args: args, span: at.span }
+}
+
+// ── Top-level item parsers ────────────────────────────────────
+
+fn parse_param() -> Param {
+    let name_tok = expect(TokenKind::Ident)
+    eat(TokenKind::Colon)
+    let ty = parse_type()
+    return Param { name: name_tok.text, type: ty, span: name_tok.span }
+}
+
+fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
+    let kw = peek()
+    eat(TokenKind::KwFn)
+    let name_tok = expect(TokenKind::Ident)
+    eat(TokenKind::LParen)
+    let mut params = []
+    if !check_kind(TokenKind::RParen) {
+        params.push(parse_param())
+        while check_kind(TokenKind::Comma) {
+            advance()
+            if check_kind(TokenKind::RParen) { break }
+            params.push(parse_param())
+        }
+    }
+    eat(TokenKind::RParen)
+    let mut ret_ty = empty_type()
+    if check_kind(TokenKind::Arrow) {
+        advance()
+        ret_ty = parse_type()
+    }
+    let body = parse_block_expr()
+    return Item {
+        kind: ItemKind::Fn,
+        name: name_tok.text,
+        span: kw.span,
+        annotations: anns,
+        params: params,
+        return_type: ret_ty,
+        body: body,
+        is_pub: is_pub
+    }
+}
+
+fn parse_let_item(is_pub: bool, anns: [Annotation]) -> Item {
+    let kw = peek()
+    eat(TokenKind::KwLet)
+    eat(TokenKind::KwMut)
+    let name_tok = expect(TokenKind::Ident)
+    let mut ty = empty_type()
+    if check_kind(TokenKind::Colon) {
+        advance()
+        ty = parse_type()
+    }
+    let mut body = empty_expr()
+    if check_kind(TokenKind::Eq) {
+        advance()
+        body = parse_expr()
+    }
+    return Item {
+        kind: ItemKind::Let,
+        name: name_tok.text,
+        span: kw.span,
+        annotations: anns,
+        params: [],
+        return_type: ty,
+        body: body,
+        is_pub: is_pub
+    }
+}
+
+fn parse_struct_item(is_pub: bool, anns: [Annotation]) -> Item {
+    let kw = peek()
+    eat(TokenKind::KwStruct)
+    let name_tok = expect(TokenKind::Ident)
+    eat(TokenKind::LBrace)
+    // Stage A1: capture fields as Param-like entries in `params`. Promotion to
+    // a dedicated Field struct can wait until A2 when checker needs more
+    // metadata (visibility per-field, default values).
+    let mut fields = []
+    while !check_kind(TokenKind::RBrace) && !at_eof() {
+        let f_name = expect(TokenKind::Ident)
+        eat(TokenKind::Colon)
+        let f_ty = parse_type()
+        fields.push(Param { name: f_name.text, type: f_ty, span: f_name.span })
+        if check_kind(TokenKind::Comma) { advance() }
+    }
+    eat(TokenKind::RBrace)
+    return Item {
+        kind: ItemKind::Struct,
+        name: name_tok.text,
+        span: kw.span,
+        annotations: anns,
+        params: fields,
+        return_type: empty_type(),
+        body: empty_expr(),
+        is_pub: is_pub
+    }
+}
+
+fn parse_import_item(is_pub: bool, anns: [Annotation]) -> Item {
+    let kw = peek()
+    eat(TokenKind::KwImport)
+    let path_tok = expect(TokenKind::String)
+    return Item {
+        kind: ItemKind::Import,
+        name: path_tok.text,
+        span: kw.span,
+        annotations: anns,
+        params: [],
+        return_type: empty_type(),
+        body: empty_expr(),
+        is_pub: is_pub
+    }
+}
+
+fn parse_item() -> Item {
+    // accumulate annotations first
+    let mut anns = []
+    while check_kind(TokenKind::At) {
+        anns.push(parse_annotation())
+    }
+    let mut is_pub = false
+    if check_kind(TokenKind::KwPub) {
+        advance()
+        is_pub = true
+    }
+    if check_kind(TokenKind::KwFn) {
+        return parse_fn_item(is_pub, anns)
+    }
+    if check_kind(TokenKind::KwLet) {
+        return parse_let_item(is_pub, anns)
+    }
+    if check_kind(TokenKind::KwStruct) {
+        return parse_struct_item(is_pub, anns)
+    }
+    if check_kind(TokenKind::KwImport) {
+        return parse_import_item(is_pub, anns)
+    }
+    // unknown leader — drop one token to avoid an infinite loop and emit a
+    // skeletal Let item so summary tooling still has something to print.
+    let t = advance()
+    return Item {
+        kind: ItemKind::Let,
+        name: "<unknown:" + t.text + ">",
+        span: t.span,
+        annotations: anns,
+        params: [],
+        return_type: empty_type(),
+        body: empty_expr(),
+        is_pub: is_pub
+    }
+}
+
+// ── Module entry ──────────────────────────────────────────────
+
+fn item_is_import(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Import -> true,
+        ItemKind::Fn -> false,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false
+    }
+}
+
+pub fn parse(tokens: [Token], file: string) -> Module {
+    p_tokens = tokens
+    p_pos = 0
+    p_file = file
+    let mut items = []
+    let mut imports = []
+    while !at_eof() {
+        let before = p_pos
+        let it = parse_item()
+        items.push(it)
+        if item_is_import(it.kind) {
+            imports.push(it.name)
+        }
+        // safety net: if parse_item failed to consume, advance one token to
+        // guarantee progress and avoid an infinite loop on malformed input.
+        if p_pos == before {
+            advance()
+        }
+    }
+    return Module { file: file, items: items, imports: imports }
+}

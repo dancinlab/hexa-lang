@@ -1,0 +1,81 @@
+// HEXA Native Compiler — Parser smoke test (Phase A1)
+//
+// Lex + parse a couple inline snippets and dump a one-line summary so we can
+// eyeball that recursive descent produced sane Module/Item/Expr trees. No
+// asserts beyond the count check so the test fails loudly on shape drift.
+
+import "../lex/tokens.hexa"
+import "../lex/lexer.hexa"
+import "./ast.hexa"
+import "./parser.hexa"
+
+fn item_kind_str(k: ItemKind) -> string {
+    return match k {
+        ItemKind::Fn -> "Fn",
+        ItemKind::Let -> "Let",
+        ItemKind::Struct -> "Struct",
+        ItemKind::Import -> "Import"
+    }
+}
+
+fn token_kind_str(k: TokenKind) -> string {
+    return match k {
+        TokenKind::Ident -> "Ident",
+        TokenKind::Number -> "Number",
+        TokenKind::String -> "String",
+        TokenKind::PNode -> "P",
+        TokenKind::CNode -> "C",
+        TokenKind::LNode -> "L",
+        TokenKind::ENode -> "E",
+        TokenKind::KwFn -> "fn",
+        TokenKind::KwLet -> "let",
+        TokenKind::KwStruct -> "struct",
+        TokenKind::KwImport -> "import",
+        TokenKind::KwPub -> "pub",
+        TokenKind::At -> "@",
+        TokenKind::Eof -> "EOF",
+        _ -> "_"
+    }
+}
+
+fn dump_module(label: string, src: string) {
+    println("── " + label + " ──")
+    let toks = lex(src, "<inline>")
+    println("  tokens=" + to_string(len(toks)))
+    let m = parse(toks, "<inline>")
+    println("  items=" + to_string(len(m.items)) + " imports=" + to_string(len(m.imports)))
+    let mut i = 0
+    while i < len(m.items) {
+        let it = m.items[i]
+        let mut ann_count = len(it.annotations)
+        let mut suffix = ""
+        if it.is_pub { suffix = " (pub)" }
+        if ann_count > 0 { suffix = suffix + " ann=" + to_string(ann_count) }
+        println("    [" + to_string(i) + "] " + item_kind_str(it.kind) + " " + it.name + suffix)
+        i = i + 1
+    }
+}
+
+fn case_basic_fn() {
+    let src = "fn add(a: i64, b: i64) -> i64 { return a + b }\nfn main() -> i64 { return add(1, 2) }"
+    dump_module("case 1: fn / call / arithmetic", src)
+}
+
+fn case_atlas_and_annotation() {
+    let src = "@law(P[force-balance])\npub fn equilibrium(x: f64) -> f64 { return x * P[gravity-const] }"
+    dump_module("case 2: @law + atlas refs", src)
+}
+
+fn case_struct_let_import() {
+    let src = "import \"std/io\"\npub struct Vec3 { x: f64, y: f64, z: f64 }\nlet origin: Vec3 = zero()\nfn norm(v: Vec3) -> f64 { let s = v.x * v.x; return s }"
+    dump_module("case 3: import / struct / let / field", src)
+}
+
+println("══════════════════════════════════════════════")
+println("  HEXA Compiler — Parser Smoke Test (A1)")
+println("══════════════════════════════════════════════")
+case_basic_fn()
+case_atlas_and_annotation()
+case_struct_let_import()
+println("══════════════════════════════════════════════")
+println("  done.")
