@@ -371,6 +371,16 @@ if as_status != "ok" {
     eprintln("hexa-compiler: assembler failed:")
     eprintln("  command: " + as_cmd)
     eprintln(as_out)
+    // Gap-5 (M0 smoke report b437a77c): stage0 hexa_interp does not
+    // reliably propagate exit(N) through every wrapper — the user-shell
+    // `hexa run` proxy can translate to RC=0, and harness `exec()`
+    // returns only stdout (no .exit_code field). Drop a sentinel next to
+    // OUT so harnesses can detect failure without trusting $?.
+    // Format: <out_path>.compile_failed containing stage tag, the failed
+    // command, and tool stderr. Cheap, idempotent, and survives any RC
+    // translation in the wrapper layer.
+    write_file(out_path + ".compile_failed",
+        "stage=as\ncmd=" + as_cmd + "\n" + as_out + "\n")
     exit(2)
 }
 
@@ -421,6 +431,9 @@ if ld_status != "ok" {
     eprintln(ld_out)
     eprintln("hexa-compiler: hint: linker paths are best-effort. See compiler/main.hexa")
     eprintln("  for the recipe and adjust crt1.o / dynamic-linker / SDK root paths.")
+    // Gap-5 fallback: see assembler-failure path above for full rationale.
+    write_file(out_path + ".compile_failed",
+        "stage=ld\ncmd=" + ld_cmd + "\n" + ld_out + "\n")
     exit(2)
 }
 
