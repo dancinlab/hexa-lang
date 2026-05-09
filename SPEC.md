@@ -10,6 +10,7 @@
   - [RFC-017 — atlas embedding + strict lint](proposals/rfc_017_atlas_n6_embedding_and_strict_lint.md)
   - [RFC-018 — native codegen spec](proposals/rfc_018_native_codegen_spec.md)
   - [RFC-019 — error diagnostics spec](proposals/rfc_019_error_diagnostics_spec.md)
+  - [RFC-020 — enum payload variants](proposals/rfc_020_enum_payload_variants.md)
 
 ---
 
@@ -261,7 +262,38 @@ Features: error code, precise span, did-you-mean (Levenshtein over atlas trie + 
 
 ---
 
-## 12. Open questions (NOT decisions)
+## 12. Tree layout (Decision 2026-05-09)
+
+| Tree | Role | Status |
+|---|---|---|
+| `self/` | Existing self-host upstream — parser, typechecker, IR in hexa; transpiled to `self/native/hexa_cc.c` (~20k LOC C) via `hexa cc --regen` | Active |
+| `compiler/` | New ground-up native compiler (RFC-018) — 5-stage IR, atlas static embed, direct codegen | Phase A0 skeleton |
+
+Both trees coexist. Language-level features (e.g., enum payloads via RFC-020) are added to `self/` upstream first; `compiler/` consumes them.
+
+## 13. Language features (Decision 2026-05-09)
+
+### 13.1 ENUM 100% first
+Wherever payload-free enums suffice, prefer them over string discriminators. Already applied to `compiler/lex/tokens.hexa::TokenKind`, `compiler/parse/ast.hexa::ItemKind/ExprKind`, `compiler/diag/catalog.hexa::Severity/FixItKind`.
+
+### 13.2 hexa-lang upstream first
+When a language gap is hit (e.g., enum payload codegen), fix in `self/` upstream rather than work around downstream. Example: RFC-020.
+
+### 13.3 Enum payload status (current)
+| Aspect | Status |
+|---|---|
+| Variant declaration with single-field payload | ✅ parses |
+| Match pattern binding (interpreter mode) | ✅ |
+| 7 match patterns (wildcard/literal/binding/variant/struct/tuple/guard) | ✅ |
+| `E::Variant(x)` construction syntax | ❌ missing in parser |
+| Typechecker variant payload type registry | ❌ |
+| Typechecker pattern binding — variable scope | ❌ |
+| Native codegen struct/union + extraction | ❌ |
+| Multi-field variants (e.g., `A(int, string)`) | ❌ deferred |
+
+Target design: single-field payload + struct embed (RFC-020). Multi-field deferred to a later RFC.
+
+## 14. Open questions (NOT decisions)
 
 - Inline asm syntax
 - Generic monomorphization vs dyn dispatch default

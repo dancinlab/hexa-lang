@@ -4,9 +4,13 @@
 // carry AtlasRef so the resolve pass (S1) can validate against the embedded
 // atlas const without re-lexing.
 //
-// All node kinds use string discriminators (`kind` field) — same convention
-// as Token. Stage0 has no enum/sum types, but the structure mirrors the
-// future enum form 1:1.
+// Item.kind and Expr.kind use payload-free enums (`ItemKind`, `ExprKind`) —
+// hexa stage0 supports `enum Foo { A, B, C }` + `Foo::Variant` paths. Per-kind
+// payload data lives in the surrounding struct fields (`children`, `text`,
+// `atlas_ref`, etc.) since stage0 enum variants cannot carry payloads yet.
+//
+// AtlasRef.kind and Annotation.name remain `string` — they are more dynamic
+// (e.g. annotation names extend over time per RFC-017 §5) and not exhaustive.
 
 import "../lex/tokens.hexa"
 
@@ -43,39 +47,53 @@ pub struct Param {
     span: Span
 }
 
+// ── Expression kind enum ──────────────────────────────────────
+// Variant-only enum (no payloads) — payload shape lives on Expr fields.
+
+pub enum ExprKind {
+    LiteralInt,
+    LiteralFloat,
+    LiteralString,
+    LiteralBool,
+    Ident,
+    AtlasRef,
+    Call,
+    BinOp,
+    UnOp,
+    Block,
+    If,
+    While,
+    Return,
+    Let,
+    Assign,
+    Field,
+    Index
+}
+
 // ── Expressions ──────────────────────────────────────────────
 // children[] is heterogeneous by `kind`; resolve pass interprets shape.
 
 pub struct Expr {
-    kind: string,        // see EXPR_* constants below
+    kind: ExprKind,
     span: Span,
     text: string,
     children: [Expr],
     atlas_ref: AtlasRef
 }
 
-pub let EXPR_LITERAL_INT     = "literal_int"
-pub let EXPR_LITERAL_FLOAT   = "literal_float"
-pub let EXPR_LITERAL_STRING  = "literal_string"
-pub let EXPR_LITERAL_BOOL    = "literal_bool"
-pub let EXPR_IDENT           = "ident"
-pub let EXPR_ATLAS_REF       = "atlas_ref"
-pub let EXPR_CALL            = "call"
-pub let EXPR_BINOP           = "binop"
-pub let EXPR_UNOP            = "unop"
-pub let EXPR_BLOCK           = "block"
-pub let EXPR_IF              = "if"
-pub let EXPR_WHILE           = "while"
-pub let EXPR_RETURN          = "return"
-pub let EXPR_LET             = "let"
-pub let EXPR_ASSIGN          = "assign"
-pub let EXPR_FIELD           = "field"
-pub let EXPR_INDEX           = "index"
+// ── Item kind enum ────────────────────────────────────────────
+
+pub enum ItemKind {
+    Fn,
+    Let,
+    Struct,
+    Import
+}
 
 // ── Items ─────────────────────────────────────────────────────
 
 pub struct Item {
-    kind: string,        // ITEM_FN | ITEM_LET | ITEM_STRUCT | ITEM_IMPORT
+    kind: ItemKind,
     name: string,
     span: Span,
     annotations: [Annotation],
@@ -84,11 +102,6 @@ pub struct Item {
     body: Expr,
     is_pub: bool
 }
-
-pub let ITEM_FN     = "fn"
-pub let ITEM_LET    = "let"
-pub let ITEM_STRUCT = "struct"
-pub let ITEM_IMPORT = "import"
 
 // ── Module (top-level) ────────────────────────────────────────
 

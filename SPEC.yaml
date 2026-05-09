@@ -13,6 +13,82 @@ authoritative_rfcs:
   - proposals/rfc_017_atlas_n6_embedding_and_strict_lint.md
   - proposals/rfc_018_native_codegen_spec.md
   - proposals/rfc_019_error_diagnostics_spec.md
+  - proposals/rfc_020_enum_payload_variants.md
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tree layout (what trees exist and what each is for)
+# ─────────────────────────────────────────────────────────────────────────────
+tree_layout:
+  decision_2026_05_09: keep_compiler_tree_alongside_self
+  rationale: |
+    self/ is the existing self-host upstream (parser/typechecker/IR in hexa,
+    transpiled to self/native/hexa_cc.c). compiler/ is the new ground-up
+    native compiler per RFC-018 (5-stage IR, atlas static embed, direct
+    codegen). Both trees coexist; compiler/ migrates patterns from self/
+    and shares language upstream features (e.g., enum payloads via RFC-020).
+  trees:
+    self_:
+      role: existing self-host upstream
+      contents:
+        - self/main.hexa            # `hexa` CLI entry
+        - self/lexer.hexa
+        - self/parser.hexa
+        - self/type_checker.hexa
+        - self/ir/                  # self-host IR (instr/types/builder/lowering)
+        - self/native/hexa_cc.c     # transpiled C compiler (~20k lines)
+      regenerate_via: hexa cc --regen
+    compiler_:
+      role: new ground-up native compiler (RFC-018)
+      contents:
+        - compiler/main.hexa
+        - compiler/lex/tokens.hexa
+        - compiler/parse/ast.hexa
+        - compiler/ir/hir.hexa
+        - compiler/ir/mir.hexa
+        - compiler/ir/lir.hexa
+        - compiler/diag/catalog.hexa
+      status: phase A0 skeleton
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Language features — enum / sum types (Decision 2026-05-09)
+# ─────────────────────────────────────────────────────────────────────────────
+language_features:
+  enum_first_principle:
+    decision: enum_100_percent_first
+    rationale: |
+      Wherever payload-free enums (Rust unit-style) suffice, prefer them over
+      string discriminators. Improves type safety, compile-time exhaustiveness,
+      and parity with self/ir/instr.hexa's CmpKind pattern.
+    applies_to:
+      - compiler/lex/tokens.hexa::TokenKind
+      - compiler/parse/ast.hexa::ItemKind, ExprKind
+      - compiler/diag/catalog.hexa::Severity, FixItKind
+    exempted:
+      - structures whose variants need data payloads — until RFC-020 lands
+        and is verified end-to-end (parser→typechecker→codegen)
+  hexa_lang_upstream_first:
+    decision: fix_at_upstream_not_workaround
+    rationale: |
+      When a language gap is hit (e.g., enum payload codegen), fix it in
+      hexa-lang upstream (self/ + self/native/hexa_cc.c) rather than working
+      around in downstream tools. Maintains language-level uniformity.
+    examples:
+      - RFC-020 — enum payload variant support
+  enum_payload_status:
+    summary: partial_working_needs_completion
+    confirmed_working:
+      - 'enum Shape { Circle(Int), Rect(Int), Unit }' parser declaration
+      - 'match s { Shape::Circle(r) -> ... }' pattern binding (interpreter mode)
+      - 7 match patterns: wildcard, literal, binding, variant, struct, tuple, guard
+    confirmed_missing:
+      - 'E::Variant(x)' construction syntax (parse_primary line 3016)
+      - typechecker variant payload type registry
+      - typechecker pattern binding — variable scope introduction
+      - hexa_cc.c struct/union codegen + payload extraction
+      - multi-field variants entirely
+    target_design: single_field_payload_plus_struct_embed
+    rfc: RFC-020
+    multi_field_status: deferred_to_later_rfc
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Foundational decisions (from RFC-017/018)

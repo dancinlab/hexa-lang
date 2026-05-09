@@ -15,19 +15,33 @@
 //       HX9xxx codegen/link/runtime
 //
 // English only (Decision 3). No i18n. messages.hexa holds templates.
+//
+// Severity is a payload-free enum (`Severity`). Stage and code remain strings:
+// stage tags are open-ended ("S0".."S8" | "codegen" | "link" | "runtime") and
+// codes are HX-prefixed numerics that grow with each phase.
 
 import "../lex/tokens.hexa"
 
 // ── Severity ──────────────────────────────────────────────────
 
-pub let SEV_ERROR = "error"
-pub let SEV_WARN  = "warning"
-pub let SEV_NOTE  = "note"
+pub enum Severity {
+    Error,
+    Warning,
+    Note
+}
 
 // ── FixIt action ──────────────────────────────────────────────
 
+pub enum FixItKind {
+    Replace,
+    Insert,
+    Delete,
+    Multi,
+    None
+}
+
 pub struct FixIt {
-    kind: string,        // "replace" | "insert" | "delete" | "multi"
+    kind: FixItKind,
     span: Span,
     new_text: string
 }
@@ -36,7 +50,7 @@ pub struct FixIt {
 
 pub struct Diagnostic {
     code: string,        // "HX1042"
-    severity: string,    // SEV_*
+    severity: Severity,
     stage: string,       // "S0".."S8" | "codegen" | "link" | "runtime"
     span: Span,
     message: string,     // rendered template (English)
@@ -51,11 +65,11 @@ pub struct Diagnostic {
 pub struct DiagSpec {
     code: string,
     title: string,        // "atlas node not found"
-    severity: string,
+    severity: Severity,
     stage: string,
     template: string,     // "atlas {atlas_hash} has no {kind} node `{node_id}`"
     explain: string,      // long form for `hexa explain`
-    fix_it_kind: string   // "replace" | "" if no automated fix
+    fix_it_kind: FixItKind
 }
 
 // ── Initial catalog (will grow with each phase) ──────────────
@@ -64,28 +78,28 @@ pub let CATALOG: [DiagSpec] = [
     DiagSpec {
         code: "HX0001",
         title: "unexpected character",
-        severity: "error",
+        severity: Severity::Error,
         stage: "S0",
         template: "unexpected character `{ch}`",
         explain: "The lexer encountered a character outside of any valid token.",
-        fix_it_kind: ""
+        fix_it_kind: FixItKind::None
     },
     DiagSpec {
         code: "HX1042",
         title: "atlas node not found",
-        severity: "error",
+        severity: Severity::Error,
         stage: "S1",
         template: "atlas {atlas_hash} has no {kind} node `{node_id}`",
         explain: "The identifier was used as a P/C/L/E token, but no such node exists in the atlas snapshot pinned by hexa.toml. This is usually a typo or a missing atlas update.",
-        fix_it_kind: "replace"
+        fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
         code: "HX9001",
         title: "@grace expired",
-        severity: "error",
+        severity: Severity::Error,
         stage: "runtime",
         template: "@grace for {error_code} expired on {until}; fix or extend",
         explain: "An @grace annotation past its `until` date no longer suppresses the underlying diagnostic. Either fix the issue or update `until` (and `reason`).",
-        fix_it_kind: ""
+        fix_it_kind: FixItKind::None
     }
 ]
