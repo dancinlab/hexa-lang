@@ -25,6 +25,7 @@
 
 import "../parse/ast.hexa"
 import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
 import "../ir/hir.hexa"
 import "../lex/tokens.hexa"
 import "./resolve.hexa"
@@ -414,19 +415,11 @@ fn _is_wildcard_kind(k: ExprKind) -> bool {
 // ── Diagnostic emit ──────────────────────────────────────────
 
 fn _emit_hx2001(name: string, span: Span, suggest: string, out: array) {
-    let msg = "undefined name `" + name + "`"
-    let d = Diagnostic {
-        code: "HX2001",
-        severity: Severity::Error,
-        stage: "S2",
-        span: span,
-        message: msg,
-        note: "",
-        suggest: suggest,
-        fixit: _empty_fixit(),
-        related: []
-    }
-    out.push(d)
+    let mut b = diag_new("HX2001")
+    b = diag_span(b, span)
+    b = diag_arg(b, "name", name)
+    if len(suggest) > 0 { b = diag_suggest(b, suggest) }
+    out.push(diag_emit(b))
 }
 
 // ── `let` text decoder ──────────────────────────────────────

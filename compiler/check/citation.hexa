@@ -26,6 +26,7 @@
 
 import "../parse/ast.hexa"
 import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
 import "../atlas/merger.hexa"
 import "../atlas/parser.hexa"
 import "../lex/tokens.hexa"
@@ -164,19 +165,11 @@ fn _check_implements_arg(arg: Expr, atlas: AtlasIndex, out: array) -> string {
 
     if aref.kind != "L" {
         // Wrong kind — HX8002.
-        let msg = _render_hx8002(aref.kind, aref.id)
-        let d = Diagnostic {
-            code: "HX8002",
-            severity: Severity::Error,
-            stage: "S8",
-            span: aref.span,
-            message: msg,
-            note: "",
-            suggest: "",
-            fixit: _empty_fixit(),
-            related: []
-        }
-        out.push(d)
+        let mut b = diag_new("HX8002")
+        b = diag_span(b, aref.span)
+        b = diag_arg(b, "kind", aref.kind)
+        b = diag_arg(b, "node_id", aref.id)
+        out.push(diag_emit(b))
         return ""
     }
 
@@ -185,19 +178,11 @@ fn _check_implements_arg(arg: Expr, atlas: AtlasIndex, out: array) -> string {
         // Missing — HX8001. Note: S1 (resolve) already emits HX1042 for
         // the same span, but S8 is its own pass and emits the citation-
         // specific code so downstream tooling (LSP, gate) can route.
-        let msg = _render_hx8001(atlas.hash, aref.id)
-        let d = Diagnostic {
-            code: "HX8001",
-            severity: Severity::Error,
-            stage: "S8",
-            span: aref.span,
-            message: msg,
-            note: "",
-            suggest: "",
-            fixit: _empty_fixit(),
-            related: []
-        }
-        out.push(d)
+        let mut b = diag_new("HX8001")
+        b = diag_span(b, aref.span)
+        b = diag_arg(b, "atlas_hash", atlas.hash)
+        b = diag_arg(b, "node_id", aref.id)
+        out.push(diag_emit(b))
         return ""
     }
 
@@ -266,19 +251,11 @@ fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
             c = c + 1
         }
         if !covered {
-            let msg = _render_hx8003(it.name, r.id)
-            let d = Diagnostic {
-                code: "HX8003",
-                severity: Severity::Warning,
-                stage: "S8",
-                span: r.span,
-                message: msg,
-                note: "",
-                suggest: "",
-                fixit: _empty_fixit(),
-                related: []
-            }
-            out.push(d)
+            let mut b = diag_new("HX8003")
+            b = diag_span(b, r.span)
+            b = diag_arg(b, "name", it.name)
+            b = diag_arg(b, "node_id", r.id)
+            out.push(diag_emit(b))
             return
         }
         k = k + 1

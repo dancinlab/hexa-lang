@@ -23,6 +23,7 @@
 
 import "../parse/ast.hexa"
 import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
 import "../atlas/merger.hexa"
 import "../atlas/parser.hexa"
 import "../lex/tokens.hexa"
@@ -176,19 +177,13 @@ fn _check_atlas_ref(aref: AtlasRef, atlas: AtlasIndex, out: array) {
     if len(hit.kind) > 0 { return }  // valid — present in index
 
     let suggest = _suggest_for(atlas, aref.kind, aref.id, 2)
-    let msg = render_hx1042(atlas.hash, aref.kind, aref.id)
-    let d = Diagnostic {
-        code: "HX1042",
-        severity: Severity::Error,
-        stage: "S1",
-        span: aref.span,
-        message: msg,
-        note: "",
-        suggest: suggest,
-        fixit: empty_fixit(),
-        related: []
-    }
-    out.push(d)
+    let mut b = diag_new("HX1042")
+    b = diag_span(b, aref.span)
+    b = diag_arg(b, "atlas_hash", atlas.hash)
+    b = diag_arg(b, "kind", aref.kind)
+    b = diag_arg(b, "node_id", aref.id)
+    if len(suggest) > 0 { b = diag_suggest(b, suggest) }
+    out.push(diag_emit(b))
 }
 
 fn _walk_expr(e: Expr, atlas: AtlasIndex, out: array) {

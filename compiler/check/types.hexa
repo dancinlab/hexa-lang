@@ -26,6 +26,7 @@
 
 import "../parse/ast.hexa"
 import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
 import "../ir/hir.hexa"
 import "../lex/tokens.hexa"
 
@@ -702,49 +703,55 @@ pub fn _resolve_ident_to_type(env: TypeEnv, name: string) -> Type {
 
 // ── Diagnostic emit helpers ──────────────────────────────────
 
-fn _emit(code: string, sev: Severity, stage: string, msg: string, sp: Span, out: array) {
-    let d = Diagnostic {
-        code: code,
-        severity: sev,
-        stage: stage,
-        span: sp,
-        message: msg,
-        note: "",
-        suggest: "",
-        fixit: _empty_fixit(),
-        related: []
-    }
-    out.push(d)
-}
-
 fn _emit_hx3001(expected: Type, actual: Type, sp: Span, out: array) {
-    let msg = "type mismatch: expected `" + _type_display(expected) + "`, got `" + _type_display(actual) + "`"
-    _emit("HX3001", Severity::Error, "S3", msg, sp, out)
+    let mut b = diag_new("HX3001")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "expected", _type_display(expected))
+    b = diag_arg(b, "actual", _type_display(actual))
+    out.push(diag_emit(b))
 }
 
 fn _emit_hx3002(name: string, expected: i64, actual: i64, sp: Span, out: array) {
-    let msg = "wrong number of arguments to `" + name + "`: expected " + to_string(expected) + ", got " + to_string(actual)
-    _emit("HX3002", Severity::Error, "S3", msg, sp, out)
+    let mut b = diag_new("HX3002")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "expected", to_string(expected))
+    b = diag_arg(b, "actual", to_string(actual))
+    out.push(diag_emit(b))
 }
 
 fn _emit_hx3003(name: string, pos: i64, expected: Type, actual: Type, sp: Span, out: array) {
-    let msg = "argument " + to_string(pos) + " of `" + name + "`: expected `" + _type_display(expected) + "`, got `" + _type_display(actual) + "`"
-    _emit("HX3003", Severity::Error, "S3", msg, sp, out)
+    let mut b = diag_new("HX3003")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "pos", to_string(pos))
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "expected", _type_display(expected))
+    b = diag_arg(b, "actual", _type_display(actual))
+    out.push(diag_emit(b))
 }
 
 fn _emit_hx3004(name: string, expected: Type, actual: Type, sp: Span, out: array) {
-    let msg = "return type mismatch: function `" + name + "` returns `" + _type_display(expected) + "`, got `" + _type_display(actual) + "`"
-    _emit("HX3004", Severity::Error, "S3", msg, sp, out)
+    let mut b = diag_new("HX3004")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "expected", _type_display(expected))
+    b = diag_arg(b, "actual", _type_display(actual))
+    out.push(diag_emit(b))
 }
 
 fn _emit_hx3005(pos: i64, expected: Type, actual: Type, sp: Span, out: array) {
-    let msg = "match arms have different types: expected `" + _type_display(expected) + "`, got `" + _type_display(actual) + "` on arm " + to_string(pos)
-    _emit("HX3005", Severity::Error, "S3", msg, sp, out)
+    let mut b = diag_new("HX3005")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "expected", _type_display(expected))
+    b = diag_arg(b, "actual", _type_display(actual))
+    b = diag_arg(b, "pos", to_string(pos))
+    out.push(diag_emit(b))
 }
 
 fn _emit_hx4001(sp: Span, out: array) {
-    let msg = "integer division narrows the real domain to integers; use `//` (floor) or cast to f64 to silence"
-    _emit("HX4001", Severity::Warning, "S4", msg, sp, out)
+    let mut b = diag_new("HX4001")
+    b = diag_span(b, sp)
+    out.push(diag_emit(b))
 }
 
 // ── Type equivalence (nominal, structural for primitives) ────

@@ -33,6 +33,7 @@
 
 import "../parse/ast.hexa"
 import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
 import "../ir/hir.hexa"
 import "../lex/tokens.hexa"
 
@@ -850,34 +851,32 @@ fn _empty_fixit() -> FixIt {
     }
 }
 
-fn _emit(code: string, sev: Severity, stage: string, msg: string, sp: Span, out: array) {
-    let d = Diagnostic {
-        code: code,
-        severity: sev,
-        stage: stage,
-        span: sp,
-        message: msg,
-        note: "",
-        suggest: "",
-        fixit: _empty_fixit(),
-        related: []
-    }
-    out.push(d)
-}
-
 fn _emit_hx5001(op: string, lu: Unit, ru: Unit, sp: Span, out: array) {
-    let msg = "unit mismatch in `" + op + "`: lhs is `" + unit_to_string(lu) + "`, rhs is `" + unit_to_string(ru) + "`"
-    _emit("HX5001", Severity::Error, "S5", msg, sp, out)
+    let mut b = diag_new("HX5001")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "op", op)
+    b = diag_arg(b, "lhs", unit_to_string(lu))
+    b = diag_arg(b, "rhs", unit_to_string(ru))
+    out.push(diag_emit(b))
 }
 
 fn _emit_hx5002(name: string, expected: Unit, actual: Unit, sp: Span, out: array) {
-    let msg = "return unit mismatch: function `" + name + "` declares `" + unit_to_string(expected) + "`, body produces `" + unit_to_string(actual) + "`"
-    _emit("HX5002", Severity::Error, "S5", msg, sp, out)
+    let mut b = diag_new("HX5002")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "expected", unit_to_string(expected))
+    b = diag_arg(b, "actual", unit_to_string(actual))
+    out.push(diag_emit(b))
 }
 
 fn _emit_hx5003(name: string, pos: i64, expected: Unit, actual: Unit, sp: Span, out: array) {
-    let msg = "argument " + to_string(pos) + " of `" + name + "`: expected unit `" + unit_to_string(expected) + "`, got `" + unit_to_string(actual) + "`"
-    _emit("HX5003", Severity::Error, "S5", msg, sp, out)
+    let mut b = diag_new("HX5003")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "pos", to_string(pos))
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "expected", unit_to_string(expected))
+    b = diag_arg(b, "actual", unit_to_string(actual))
+    out.push(diag_emit(b))
 }
 
 // ── Walker context ──────────────────────────────────────────
