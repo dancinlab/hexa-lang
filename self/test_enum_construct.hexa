@@ -1,0 +1,21 @@
+// RFC-020 stage A1: parse-only test, runtime success not guaranteed yet
+// Verifies that `EnumName::Variant(expr)` parses as a payload construction
+// (rather than failing as a bare EnumPath followed by an unexpected `(`).
+
+enum Shape {
+    Circle(Int),
+    Rect(Int),
+    Unit
+}
+
+fn main() {
+    let s = Shape::Circle(42)
+    let r = Shape::Rect(7)
+    let u = Shape::Unit
+
+    let msg = match s {
+        Shape::Circle(r) -> "circle: " + to_string(r),
+        Shape::Rect(side) -> "rect",
+        Shape::Unit -> "unit"
+    }
+}
