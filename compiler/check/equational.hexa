@@ -1,0 +1,746 @@
+// HEXA Native Compiler — Phase B5 / S6: equational verify pass
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Walks a parsed Module and runs the in-house equational prover on every
+// fn item carrying an `@verify(...)` annotation. RFC-017 §3.1 lists S6
+// as opt-in fatal — the pass is a no-op for fns lacking `@verify`.
+//
+// Two stages, both deterministic and zero-dependency (RFC-017 §5 — no
+// Z3/CVC5; SPEC.yaml `prover_engine.initial_capabilities` calls out
+// `equational_rewrite`, `constant_folding`, `sample_eval_counter_example`):
+//
+//   (a) Equational rewrite normalization.
+//       Walks the LHS and RHS of the body's main `==` BinOp expression,
+//       rewriting each side to a canonical form:
+//         - constant folding: `2 + 3 -> 5`, `0 + x -> x`, `1 * x -> x`
+//         - associativity: flatten same-op nests (a + b) + c -> a + b + c
+//         - commutativity: sort + and * operand chains lexicographically
+//       If the two normalized strings are equal -> PASS (no diagnostic).
+//       Otherwise emit HX6001 and fall through to (b).
+//
+//   (b) Sample-eval counter-example search.
+//       Enumerates 16 integer assignments (range [-10, 10]) for each free
+//       variable using a deterministic linear-congruential PRNG seeded at
+//       1. Evaluates LHS and RHS; if any sample disagrees, emit HX6002
+//       with the witness.
+//
+// Diagnostics:
+//   HX6001 - equational normalization mismatch
+//   HX6002 - sample-eval counter-example
+//
+// Stage0 caveats:
+//   - Free-variable enumeration is restricted to the function's declared
+//     `Int` parameters (matches the v1 sample-eval scope).
+//   - Floats / booleans / strings inside the equation are evaluated as
+//     opaque - the deterministic PRNG only assigns integers, so non-Int
+//     parameters are skipped from the counter-example search.
+//   - The "main `==` expression" is the first top-level `==` BinOp found
+//     by walking the fn body (most commonly the operand of a `return`).
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
+import "../lex/tokens.hexa"
+
+// -- ExprKind / ItemKind probes -----------------------------
+// Stage0 enums are payload-free; mirror the pattern from types.hexa.
+
+fn _is_lit_int_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralInt -> true,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_ident_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Ident -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_binop_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::BinOp -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_unop_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::UnOp -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_return_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Return -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_block_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Block -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_fn_item(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Fn -> true,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false,
+        ItemKind::Import -> false
+    }
+}
+
+// -- Param-type probe --------------------------------------
+// Only Int-shaped params take part in the sample-eval search. The set of
+// Int aliases mirrors compiler/check/types.hexa _lower_type_ref.
+
+fn _is_int_type_ref(tr: TypeRef) -> bool {
+    if tr.kind != "named" { return false }
+    let n = tr.name
+    if n == "Int"  { return true }
+    if n == "int"  { return true }
+    if n == "i64"  { return true }
+    if n == "i32"  { return true }
+    return false
+}
+
+// -- Integer parsing (digit string -> i64) -----------------
+// Lifted to keep this module self-contained (mirrors hir_to_mir._parse_int).
+
+fn _digit_val(c: char) -> i64 {
+    if c == '0' { return 0 }
+    if c == '1' { return 1 }
+    if c == '2' { return 2 }
+    if c == '3' { return 3 }
+    if c == '4' { return 4 }
+    if c == '5' { return 5 }
+    if c == '6' { return 6 }
+    if c == '7' { return 7 }
+    if c == '8' { return 8 }
+    if c == '9' { return 9 }
+    return -1
+}
+
+fn _parse_int_text(t: string) -> i64 {
+    let chars = t.chars()
+    let n = len(chars)
+    if n == 0 { return 0 }
+    let mut i = 0
+    let mut neg = false
+    if chars[0] == '-' {
+        neg = true
+        i = 1
+    }
+    let mut v: i64 = 0
+    while i < n {
+        let d = _digit_val(chars[i])
+        if d >= 0 { v = v * 10 + d }
+        i = i + 1
+    }
+    if neg { return -v }
+    return v
+}
+
+// -- Lexicographic string compare --------------------------
+
+fn _str_lt(a: string, b: string) -> bool {
+    let ca = a.chars()
+    let cb = b.chars()
+    let na = len(ca)
+    let nb = len(cb)
+    let mut i = 0
+    while i < na && i < nb {
+        let xa = ca[i]
+        let xb = cb[i]
+        if xa < xb { return true }
+        if xa > xb { return false }
+        i = i + 1
+    }
+    return na < nb
+}
+
+// In-place insertion sort on a [string] (stable, deterministic).
+fn _sort_strings(xs: [string]) -> [string] {
+    let mut a = xs
+    let n = len(a)
+    let mut i = 1
+    while i < n {
+        let key = a[i]
+        let mut j = i - 1
+        while j >= 0 && _str_lt(key, a[j]) {
+            a[j + 1] = a[j]
+            j = j - 1
+        }
+        a[j + 1] = key
+        i = i + 1
+    }
+    return a
+}
+
+// -- Op classification for canonical form ------------------
+
+fn _is_commutative_op(op: string) -> bool {
+    if op == "+" { return true }
+    if op == "*" { return true }
+    return false
+}
+
+fn _is_associative_op(op: string) -> bool {
+    if op == "+" { return true }
+    if op == "*" { return true }
+    return false
+}
+
+// -- Canonical normalisation -------------------------------
+// Render the normalised form as a string. Stage0 does not derive Eq for
+// Expr trees; a string canonical form is the cleanest equality substrate
+// and doubles as the diagnostic payload.
+
+fn _i64_to_string(v: i64) -> string {
+    return to_string(v)
+}
+
+fn _flatten_chain(e: Expr, op: string, out: array) {
+    if _is_binop_kind(e.kind) && e.text == op && len(e.children) == 2 {
+        _flatten_chain(e.children[0], op, out)
+        _flatten_chain(e.children[1], op, out)
+    } else {
+        out.push(e)
+    }
+}
+
+// Constant fold a 2-operand integer binop. folded=false signals "no fold
+// available - keep symbolic".
+pub struct FoldResult {
+    folded: bool,
+    value: i64
+}
+
+fn _fold_int_op(op: string, a: i64, b: i64) -> FoldResult {
+    if op == "+" { return FoldResult { folded: true, value: a + b } }
+    if op == "-" { return FoldResult { folded: true, value: a - b } }
+    if op == "*" { return FoldResult { folded: true, value: a * b } }
+    if op == "/" {
+        if b == 0 { return FoldResult { folded: false, value: 0 } }
+        return FoldResult { folded: true, value: a / b }
+    }
+    if op == "%" {
+        if b == 0 { return FoldResult { folded: false, value: 0 } }
+        return FoldResult { folded: true, value: a % b }
+    }
+    return FoldResult { folded: false, value: 0 }
+}
+
+// Build the canonical string of a (possibly nested) expression. Constant
+// folds bottom-up; sorts commutative operand chains; collapses identity
+// laws (0+x -> x, 1*x -> x, x*0 -> 0, x-x -> 0).
+fn _normalize(e: Expr) -> string {
+    if _is_lit_int_kind(e.kind) {
+        let v = _parse_int_text(e.text)
+        return _i64_to_string(v)
+    }
+    if _is_ident_kind(e.kind) {
+        return e.text
+    }
+    if _is_unop_kind(e.kind) {
+        if len(e.children) == 0 { return e.text }
+        let inner = _normalize(e.children[0])
+        if e.text == "-" {
+            let v = _parse_int_text(inner)
+            let s = _i64_to_string(v)
+            if s == inner {
+                return _i64_to_string(-v)
+            }
+            return "(- " + inner + ")"
+        }
+        return "(" + e.text + " " + inner + ")"
+    }
+    if _is_binop_kind(e.kind) {
+        if len(e.children) < 2 {
+            return "(" + e.text + ")"
+        }
+        let op = e.text
+
+        let l_norm = _normalize(e.children[0])
+        let r_norm = _normalize(e.children[1])
+
+        // x - x -> 0 (only when both sides normalise identically)
+        if op == "-" && l_norm == r_norm {
+            return "0"
+        }
+
+        // Pure integer fold.
+        let lv = _parse_int_text(l_norm)
+        let rv = _parse_int_text(r_norm)
+        let l_is_int = _i64_to_string(lv) == l_norm
+        let r_is_int = _i64_to_string(rv) == r_norm
+        if l_is_int && r_is_int {
+            let f = _fold_int_op(op, lv, rv)
+            if f.folded { return _i64_to_string(f.value) }
+        }
+
+        // Identity laws.
+        if op == "+" {
+            if l_is_int && lv == 0 { return r_norm }
+            if r_is_int && rv == 0 { return l_norm }
+        }
+        if op == "-" {
+            if r_is_int && rv == 0 { return l_norm }
+        }
+        if op == "*" {
+            if l_is_int && lv == 0 { return "0" }
+            if r_is_int && rv == 0 { return "0" }
+            if l_is_int && lv == 1 { return r_norm }
+            if r_is_int && rv == 1 { return l_norm }
+        }
+
+        // Associativity: flatten same-op chains.
+        if _is_associative_op(op) {
+            let mut chain: [Expr] = []
+            _flatten_chain(e, op, chain)
+
+            let mut parts: [string] = []
+            let mut acc_set = false
+            let mut acc: i64 = 0
+            let mut k = 0
+            while k < len(chain) {
+                let s = _normalize(chain[k])
+                let pv = _parse_int_text(s)
+                if _i64_to_string(pv) == s {
+                    if !acc_set {
+                        acc = pv
+                        acc_set = true
+                    } else {
+                        let f2 = _fold_int_op(op, acc, pv)
+                        if f2.folded { acc = f2.value }
+                    }
+                } else {
+                    parts.push(s)
+                }
+                k = k + 1
+            }
+
+            if _is_commutative_op(op) {
+                parts = _sort_strings(parts)
+            }
+
+            if acc_set {
+                if op == "*" && acc == 0 { return "0" }
+                let drop_lit_add = op == "+" && acc == 0 && len(parts) > 0
+                let drop_lit_mul = op == "*" && acc == 1 && len(parts) > 0
+                if !drop_lit_add && !drop_lit_mul {
+                    let lit = _i64_to_string(acc)
+                    let mut next: [string] = []
+                    next.push(lit)
+                    let mut q = 0
+                    while q < len(parts) {
+                        next.push(parts[q])
+                        q = q + 1
+                    }
+                    if _is_commutative_op(op) {
+                        parts = _sort_strings(next)
+                    } else {
+                        parts = next
+                    }
+                }
+            }
+
+            if len(parts) == 0 {
+                if acc_set { return _i64_to_string(acc) }
+                return "0"
+            }
+            if len(parts) == 1 { return parts[0] }
+            let mut out = "(" + op
+            let mut q = 0
+            while q < len(parts) {
+                out = out + " " + parts[q]
+                q = q + 1
+            }
+            out = out + ")"
+            return out
+        }
+
+        // Non-associative / non-commutative: keep operand order.
+        return "(" + op + " " + l_norm + " " + r_norm + ")"
+    }
+
+    // Fallback for call / atlas-ref / unsupported kinds.
+    if len(e.text) > 0 { return e.text }
+    return "<expr>"
+}
+
+// -- Locate the body's main `==` BinOp ---------------------
+// Walk the body block / nested return / if-tail looking for the first
+// top-level `BinOp(==)`. For typical `return LHS == RHS` shapes the eq
+// hangs off the Return's first child.
+
+fn _find_eq(e: Expr) -> Expr {
+    if _is_binop_kind(e.kind) && e.text == "==" {
+        return e
+    }
+    if _is_return_kind(e.kind) {
+        if len(e.children) > 0 {
+            let inner = _find_eq(e.children[0])
+            if _is_binop_kind(inner.kind) && inner.text == "==" { return inner }
+        }
+    }
+    if _is_block_kind(e.kind) {
+        let mut i = 0
+        while i < len(e.children) {
+            let inner = _find_eq(e.children[i])
+            if _is_binop_kind(inner.kind) && inner.text == "==" { return inner }
+            i = i + 1
+        }
+    }
+    // Sentinel (kind=Ident, text="") means "not found".
+    return Expr {
+        kind: ExprKind::Ident,
+        span: e.span,
+        text: "",
+        children: [],
+        atlas_ref: AtlasRef { kind: "", id: "", span: e.span }
+    }
+}
+
+fn _is_eq_found(eq: Expr) -> bool {
+    if !_is_binop_kind(eq.kind) { return false }
+    return eq.text == "=="
+}
+
+// -- Sample-eval evaluator ---------------------------------
+// Restricted to pure integer arithmetic over the param env. Returns
+// (ok, value); ok=false means "unevaluable at this layer" and the caller
+// treats the sample as inconclusive.
+
+pub struct EvalResult {
+    ok: bool,
+    value: i64
+}
+
+pub struct Binding {
+    name: string,
+    value: i64
+}
+
+fn _binding_lookup(env: [Binding], name: string) -> EvalResult {
+    let mut i = 0
+    while i < len(env) {
+        if env[i].name == name {
+            return EvalResult { ok: true, value: env[i].value }
+        }
+        i = i + 1
+    }
+    return EvalResult { ok: false, value: 0 }
+}
+
+fn _eval(e: Expr, env: [Binding]) -> EvalResult {
+    if _is_lit_int_kind(e.kind) {
+        return EvalResult { ok: true, value: _parse_int_text(e.text) }
+    }
+    if _is_ident_kind(e.kind) {
+        return _binding_lookup(env, e.text)
+    }
+    if _is_unop_kind(e.kind) {
+        if len(e.children) == 0 { return EvalResult { ok: false, value: 0 } }
+        let inner = _eval(e.children[0], env)
+        if !inner.ok { return inner }
+        if e.text == "-" { return EvalResult { ok: true, value: -inner.value } }
+        if e.text == "+" { return inner }
+        return EvalResult { ok: false, value: 0 }
+    }
+    if _is_binop_kind(e.kind) {
+        if len(e.children) < 2 { return EvalResult { ok: false, value: 0 } }
+        let lr = _eval(e.children[0], env)
+        if !lr.ok { return lr }
+        let rr = _eval(e.children[1], env)
+        if !rr.ok { return rr }
+        let op = e.text
+        if op == "+" { return EvalResult { ok: true, value: lr.value + rr.value } }
+        if op == "-" { return EvalResult { ok: true, value: lr.value - rr.value } }
+        if op == "*" { return EvalResult { ok: true, value: lr.value * rr.value } }
+        if op == "/" {
+            if rr.value == 0 { return EvalResult { ok: false, value: 0 } }
+            return EvalResult { ok: true, value: lr.value / rr.value }
+        }
+        if op == "%" {
+            if rr.value == 0 { return EvalResult { ok: false, value: 0 } }
+            return EvalResult { ok: true, value: lr.value % rr.value }
+        }
+        return EvalResult { ok: false, value: 0 }
+    }
+    return EvalResult { ok: false, value: 0 }
+}
+
+// -- Deterministic LCG (seed=1) ----------------------------
+// Numerical Recipes constants - fold output into [-10, 10].
+
+pub struct Rng {
+    state: i64
+}
+
+fn _rng_new() -> Rng {
+    return Rng { state: 1 }
+}
+
+fn _rng_next(r: Rng) -> Rng {
+    let s = r.state * 1103515245 + 12345
+    let mask: i64 = 2147483647
+    let next = s & mask
+    return Rng { state: next }
+}
+
+fn _rng_in_range(r: Rng) -> i64 {
+    let m = r.state % 21
+    let mut v = m
+    if v < 0 { v = v + 21 }
+    return v - 10
+}
+
+// -- Annotation lookup ------------------------------------
+
+fn _has_verify(it: Item) -> bool {
+    let mut i = 0
+    while i < len(it.annotations) {
+        if it.annotations[i].name == "verify" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// -- Diagnostic emit helpers ------------------------------
+
+fn _emit_hx6001(name: string, lhs: string, rhs: string, sp: Span, out: array) {
+    let mut b = diag_new("HX6001")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "lhs", lhs)
+    b = diag_arg(b, "rhs", rhs)
+    out.push(diag_emit(b))
+}
+
+fn _emit_hx6002(name: string, assignment: string, lhs: i64, rhs: i64, sp: Span, out: array) {
+    let mut b = diag_new("HX6002")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "assignment", assignment)
+    b = diag_arg(b, "lhs", to_string(lhs))
+    b = diag_arg(b, "rhs", to_string(rhs))
+    out.push(diag_emit(b))
+}
+
+// -- Per-fn verification ----------------------------------
+
+fn _format_assignment(env: [Binding]) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < len(env) {
+        if i > 0 { s = s + ", " }
+        s = s + env[i].name + "=" + to_string(env[i].value)
+        i = i + 1
+    }
+    return s
+}
+
+fn _verify_item(it: Item, out: array) {
+    if !_has_verify(it) { return }
+    let eq = _find_eq(it.body)
+    if !_is_eq_found(eq) { return }
+    if len(eq.children) < 2 { return }
+    let lhs_expr = eq.children[0]
+    let rhs_expr = eq.children[1]
+
+    // Stage (a): equational normalization.
+    let lhs_norm = _normalize(lhs_expr)
+    let rhs_norm = _normalize(rhs_expr)
+    let normalized_pass = lhs_norm == rhs_norm
+    if !normalized_pass {
+        _emit_hx6001(it.name, lhs_norm, rhs_norm, eq.span, out)
+    }
+
+    // Stage (b): sample-eval counter-example. Only run when normalization
+    // did not already prove the identity.
+    if normalized_pass { return }
+
+    // Build the param list of Int-typed parameters.
+    let mut params: [Param] = []
+    let mut i = 0
+    while i < len(it.params) {
+        let p = it.params[i]
+        if _is_int_type_ref(p.typ) { params.push(p) }
+        i = i + 1
+    }
+    if len(params) == 0 { return }
+
+    let mut rng = _rng_new()
+    let mut sample = 0
+    while sample < 16 {
+        // Advance RNG once per parameter to collect this sample's bindings.
+        let mut env: [Binding] = []
+        let mut p = 0
+        while p < len(params) {
+            rng = _rng_next(rng)
+            let v = _rng_in_range(rng)
+            env.push(Binding { name: params[p].name, value: v })
+            p = p + 1
+        }
+        let lr = _eval(lhs_expr, env)
+        let rr = _eval(rhs_expr, env)
+        if lr.ok && rr.ok {
+            if lr.value != rr.value {
+                _emit_hx6002(it.name, _format_assignment(env), lr.value, rr.value, eq.span, out)
+                return
+            }
+        }
+        sample = sample + 1
+    }
+}
+
+// -- Public entry -----------------------------------------
+
+pub fn equational_check(module: Module) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if _is_fn_item(it.kind) {
+            _verify_item(it, out)
+        }
+        i = i + 1
+    }
+    return out
+}

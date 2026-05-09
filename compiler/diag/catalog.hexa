@@ -184,6 +184,24 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX6001",
+        title: "equational normalization mismatch",
+        severity: Severity::Error,
+        stage: "S6",
+        template: "@verify equational mismatch in `{name}`: LHS normalizes to `{lhs}`, RHS normalizes to `{rhs}`",
+        explain: "The `@verify` annotation requested an equational check, but after constant folding, commutative operand sorting, and associativity flattening the LHS and RHS of the body's `==` comparison reduce to different canonical forms. RFC-017 §3.1 S6 — the in-house prover's first-line equational rewrite engine cannot prove the stated equality syntactically. Fix the body to express a true identity, or fall back to `@prove` for SMT-class reasoning.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX6002",
+        title: "sample-eval counter-example found",
+        severity: Severity::Error,
+        stage: "S6",
+        template: "@verify counter-example in `{name}`: at {assignment} LHS evaluates to `{lhs}` but RHS evaluates to `{rhs}`",
+        explain: "The sample-eval prover stage exercised the body's `==` comparison at 16 deterministic integer assignments (LCG seed=1, range [-10, 10]) and found at least one input where LHS and RHS disagree. The reported assignment is a concrete witness — the equality cannot hold over Int. Refine the body, narrow domain via `@units`, or upgrade to `@prove` for SMT-grade verification.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX8001",
         title: "atlas L node missing for @implements",
         severity: Severity::Error,

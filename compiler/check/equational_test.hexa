@@ -1,0 +1,359 @@
+// HEXA Native Compiler — Phase B5 / S6: equational verify smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds four small Modules and exercises the equational pass:
+//
+//   (a) PASS - @verify fn comm(a:Int, b:Int) -> Bool {
+//                 return (a + b) == (b + a)
+//             }
+//             commutativity collapses both sides to the same canonical
+//             form -> 0 diagnostics.
+//
+//   (b) PASS - @verify fn assoc(a:Int, b:Int, c:Int) -> Bool {
+//                 return ((a + b) + c) == (a + (b + c))
+//             }
+//             associativity flattens both sides to the same chain ->
+//             0 diagnostics.
+//
+//   (c) FAIL - @verify fn wrong(a:Int, b:Int) -> Bool {
+//                 return (a + b) == (a - b)
+//             }
+//             normal forms differ (HX6001) and the sample-eval search
+//             finds a counter-example (HX6002).
+//
+//   (d) PASS - fn no_verify_annot(a:Int) -> Bool {
+//                 return a == a
+//             }
+//             no @verify annotation -> the pass is a no-op.
+//
+// Run:
+//   hexa run compiler/check/equational_test.hexa
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../lex/tokens.hexa"
+import "./equational.hexa"
+
+// -- AST construction helpers ------------------------------
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_span() -> Span {
+    return _span("", 0, 0, 0)
+}
+
+fn _empty_atlas_ref() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _empty_span() }
+}
+
+fn _empty_type_ref() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: _empty_span() }
+}
+
+fn _named_type_ref(name: string) -> TypeRef {
+    return TypeRef { kind: "named", name: name, args: [], span: _empty_span() }
+}
+
+fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _bin_expr(op: string, lhs: Expr, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(lhs)
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::BinOp,
+        span: _span(file, line, col, len(op)),
+        text: op,
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _return_expr(value: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(value)
+    return Expr {
+        kind: ExprKind::Return,
+        span: _span(file, line, col, 6),
+        text: "",
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _span(file, line, col, 1),
+        text: "",
+        children: children,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _param(name: string, typ_name: string, file: string, line: i64, col: i64) -> Param {
+    return Param {
+        name: name,
+        typ: _named_type_ref(typ_name),
+        span: _span(file, line, col, len(name))
+    }
+}
+
+fn _verify_ann(file: string, line: i64) -> Annotation {
+    return Annotation {
+        name: "verify",
+        args: [],
+        span: _span(file, line, 1, 7)
+    }
+}
+
+fn _fn_item(name: string, anns: [Annotation], params: [Param], ret: TypeRef, body: Expr, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: anns,
+        params: params,
+        return_type: ret,
+        body: body,
+        is_pub: false
+    }
+}
+
+// -- Pretty-print -----------------------------------------
+
+fn _sev_str(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "error",
+        Severity::Warning -> "warning",
+        Severity::Note -> "note"
+    }
+}
+
+fn _print_diag(idx: i64, d: Diagnostic) {
+    let sp = d.span
+    let loc = sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+    println("  [" + to_string(idx) + "] " + d.code + " (" + _sev_str(d.severity) + " " + d.stage + ") @ " + loc)
+    println("        msg:     " + d.message)
+}
+
+fn _run_case(label: string, m: Module) -> array {
+    println("")
+    println("-- case " + label + " --")
+    println("  module: " + m.file + " (items=" + to_string(len(m.items)) + ")")
+    let diags = equational_check(m)
+    println("  diagnostics: " + to_string(len(diags)))
+    let mut i = 0
+    while i < len(diags) {
+        _print_diag(i, diags[i])
+        i = i + 1
+    }
+    return diags
+}
+
+fn _has_code(diags: array, code: string) -> bool {
+    let mut i = 0
+    while i < len(diags) {
+        if diags[i].code == code { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// -- Cases -----------------------------------------------
+
+// (a) @verify fn comm(a:Int, b:Int) -> Bool { return (a + b) == (b + a) }
+fn _build_case_a() -> Module {
+    let f = "case_a.hexa"
+
+    let mut params = []
+    params.push(_param("a", "Int", f, 1, 16))
+    params.push(_param("b", "Int", f, 1, 24))
+
+    let lhs_a = _ident_expr("a", f, 2, 17)
+    let lhs_b = _ident_expr("b", f, 2, 21)
+    let lhs = _bin_expr("+", lhs_a, lhs_b, f, 2, 19)
+
+    let rhs_b = _ident_expr("b", f, 2, 27)
+    let rhs_a = _ident_expr("a", f, 2, 31)
+    let rhs = _bin_expr("+", rhs_b, rhs_a, f, 2, 29)
+
+    let eq = _bin_expr("==", lhs, rhs, f, 2, 24)
+    let ret = _return_expr(eq, f, 2, 5)
+    let mut body_kids = []
+    body_kids.push(ret)
+    let body = _block(body_kids, f, 1, 40)
+
+    let mut anns = []
+    anns.push(_verify_ann(f, 1))
+
+    let item = _fn_item("comm", anns, params, _named_type_ref("Bool"), body, f, 1)
+    let mut items = []
+    items.push(item)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (b) @verify fn assoc(a:Int, b:Int, c:Int) -> Bool {
+//        return ((a + b) + c) == (a + (b + c))
+//     }
+fn _build_case_b() -> Module {
+    let f = "case_b.hexa"
+
+    let mut params = []
+    params.push(_param("a", "Int", f, 1, 17))
+    params.push(_param("b", "Int", f, 1, 25))
+    params.push(_param("c", "Int", f, 1, 33))
+
+    // LHS: (a + b) + c
+    let l_a = _ident_expr("a", f, 2, 18)
+    let l_b = _ident_expr("b", f, 2, 22)
+    let l_inner = _bin_expr("+", l_a, l_b, f, 2, 20)
+    let l_c = _ident_expr("c", f, 2, 27)
+    let lhs = _bin_expr("+", l_inner, l_c, f, 2, 25)
+
+    // RHS: a + (b + c)
+    let r_b = _ident_expr("b", f, 2, 36)
+    let r_c = _ident_expr("c", f, 2, 40)
+    let r_inner = _bin_expr("+", r_b, r_c, f, 2, 38)
+    let r_a = _ident_expr("a", f, 2, 33)
+    let rhs = _bin_expr("+", r_a, r_inner, f, 2, 35)
+
+    let eq = _bin_expr("==", lhs, rhs, f, 2, 30)
+    let ret = _return_expr(eq, f, 2, 5)
+    let mut body_kids = []
+    body_kids.push(ret)
+    let body = _block(body_kids, f, 1, 50)
+
+    let mut anns = []
+    anns.push(_verify_ann(f, 1))
+
+    let item = _fn_item("assoc", anns, params, _named_type_ref("Bool"), body, f, 1)
+    let mut items = []
+    items.push(item)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (c) @verify fn wrong(a:Int, b:Int) -> Bool { return (a + b) == (a - b) }
+fn _build_case_c() -> Module {
+    let f = "case_c.hexa"
+
+    let mut params = []
+    params.push(_param("a", "Int", f, 1, 17))
+    params.push(_param("b", "Int", f, 1, 25))
+
+    let l_a = _ident_expr("a", f, 2, 17)
+    let l_b = _ident_expr("b", f, 2, 21)
+    let lhs = _bin_expr("+", l_a, l_b, f, 2, 19)
+
+    let r_a = _ident_expr("a", f, 2, 27)
+    let r_b = _ident_expr("b", f, 2, 31)
+    let rhs = _bin_expr("-", r_a, r_b, f, 2, 29)
+
+    let eq = _bin_expr("==", lhs, rhs, f, 2, 24)
+    let ret = _return_expr(eq, f, 2, 5)
+    let mut body_kids = []
+    body_kids.push(ret)
+    let body = _block(body_kids, f, 1, 40)
+
+    let mut anns = []
+    anns.push(_verify_ann(f, 1))
+
+    let item = _fn_item("wrong", anns, params, _named_type_ref("Bool"), body, f, 1)
+    let mut items = []
+    items.push(item)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (d) fn no_verify_annot(a:Int) -> Bool { return a == a } -- no @verify
+fn _build_case_d() -> Module {
+    let f = "case_d.hexa"
+
+    let mut params = []
+    params.push(_param("a", "Int", f, 1, 22))
+
+    let l_a = _ident_expr("a", f, 2, 16)
+    let r_a = _ident_expr("a", f, 2, 21)
+    let eq = _bin_expr("==", l_a, r_a, f, 2, 18)
+    let ret = _return_expr(eq, f, 2, 5)
+    let mut body_kids = []
+    body_kids.push(ret)
+    let body = _block(body_kids, f, 1, 35)
+
+    let item = _fn_item("no_verify_annot", [], params, _named_type_ref("Bool"), body, f, 1)
+    let mut items = []
+    items.push(item)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// -- Main ------------------------------------------------
+
+fn main() {
+    println("==============================================")
+    println("  HEXA Compiler - Equational Smoke Test (B5/S6)")
+    println("==============================================")
+
+    let mut ok = true
+
+    // (a) PASS — commutativity
+    let diags_a = _run_case("(a) PASS comm(a,b) (a+b) == (b+a)", _build_case_a())
+    if len(diags_a) != 0 {
+        println("  FAIL: case (a) expected 0 diagnostics, got " + to_string(len(diags_a)))
+        ok = false
+    } else {
+        println("  ok: 0 diagnostics (commutativity)")
+    }
+
+    // (b) PASS — associativity
+    let diags_b = _run_case("(b) PASS assoc(a,b,c) ((a+b)+c) == (a+(b+c))", _build_case_b())
+    if len(diags_b) != 0 {
+        println("  FAIL: case (b) expected 0 diagnostics, got " + to_string(len(diags_b)))
+        ok = false
+    } else {
+        println("  ok: 0 diagnostics (associativity)")
+    }
+
+    // (c) FAIL — wrong identity (HX6001 OR HX6002)
+    let diags_c = _run_case("(c) FAIL wrong(a,b) (a+b) == (a-b)", _build_case_c())
+    let has_6001 = _has_code(diags_c, "HX6001")
+    let has_6002 = _has_code(diags_c, "HX6002")
+    if !has_6001 && !has_6002 {
+        println("  FAIL: case (c) expected at least one of HX6001/HX6002, got total=" + to_string(len(diags_c)))
+        ok = false
+    } else {
+        let mut tag = ""
+        if has_6001 { tag = tag + "HX6001 " }
+        if has_6002 { tag = tag + "HX6002" }
+        println("  ok: emitted " + tag)
+    }
+
+    // (d) PASS — no @verify
+    let diags_d = _run_case("(d) PASS no_verify_annot(a) a == a (no @verify)", _build_case_d())
+    if len(diags_d) != 0 {
+        println("  FAIL: case (d) expected 0 diagnostics (no @verify), got " + to_string(len(diags_d)))
+        ok = false
+    } else {
+        println("  ok: 0 diagnostics (annotation absent)")
+    }
+
+    println("")
+    println("==============================================")
+    if ok {
+        println("PASS: all equational cases match contract.")
+    } else {
+        println("FAIL: equational contract not satisfied.")
+    }
+    println("==============================================")
+    if !ok { exit(1) }
+}
