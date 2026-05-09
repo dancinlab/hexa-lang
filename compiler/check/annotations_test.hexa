@@ -1,0 +1,284 @@
+// HEXA Native Compiler — Phase B4 / S8: annotations smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds Modules whose single Item carries one of the four hexa-lang
+// annotations and asserts the diagnostic counts/codes returned by
+// check_annotations() match the spec.
+//
+// Cases:
+//   (a) @law("E = m * c^2")                                  → 0 diags
+//   (b) @law()                                               → 1 HX8010
+//   (c) @grace(HX1042, until="2025-01-01", reason="x")
+//       with today="2026-05-09"                              → 1 HX9001 (expired)
+//   (d) @grace(HX1042, until="2099-12-31", reason="x")       → 0 diags
+//   (e) @grace(HX1042)  (missing until/reason)               → 1 HX9002
+//   (f1) @discover(kind="L")                                 → 0 diags
+//   (f2) @discover()                                         → 1 HX9003
+//
+// Run:
+//   hexa run compiler/check/annotations_test.hexa
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../lex/tokens.hexa"
+import "./annotations.hexa"
+
+// ── AST construction helpers ─────────────────────────────────
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_span() -> Span {
+    return _span("", 0, 0, 0)
+}
+
+fn _empty_atlas_ref() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _empty_span() }
+}
+
+fn _empty_type() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: _empty_span() }
+}
+
+fn _empty_block(file: string, line: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _span(file, line, 1, 1),
+        text: "",
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _string_expr(s: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralString,
+        span: _span(file, line, col, len(s) + 2),
+        text: s,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// `key="val"` parses as ExprKind::Assign with children [Ident(key), String(val)].
+fn _kwarg_expr(key: string, val: string, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(_ident_expr(key, file, line, col))
+    kids.push(_string_expr(val, file, line, col + len(key) + 1))
+    return Expr {
+        kind: ExprKind::Assign,
+        span: _span(file, line, col + len(key), 1),
+        text: "=",
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _ann(name: string, args: array, file: string, line: i64) -> Annotation {
+    return Annotation {
+        name: name,
+        args: args,
+        span: _span(file, line, 1, 1 + len(name))
+    }
+}
+
+fn _fn_item(name: string, anns: array, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, 2),
+        annotations: anns,
+        params: [],
+        return_type: _empty_type(),
+        body: _empty_block(file, line + 1),
+        is_pub: false
+    }
+}
+
+fn _module_with(item: Item, file: string) -> Module {
+    let mut its = []
+    its.push(item)
+    return Module { file: file, items: its, imports: [] }
+}
+
+// ── Pretty-print ─────────────────────────────────────────────
+
+fn _sev_str(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "error",
+        Severity::Warning -> "warning",
+        Severity::Note -> "note"
+    }
+}
+
+fn _print_diag(idx: i64, d: Diagnostic) {
+    let sp = d.span
+    let loc = sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+    println("  [" + to_string(idx) + "] " + d.code + " (" + _sev_str(d.severity) + " " + d.stage + ") @ " + loc)
+    println("        msg:     " + d.message)
+}
+
+fn _run_case(label: string, m: Module, today: string) -> array {
+    println("")
+    println("── case " + label + " " + "──────────────────────────")
+    let diags = check_annotations(m, today)
+    println("diagnostics: " + to_string(len(diags)))
+    let mut i = 0
+    while i < len(diags) {
+        _print_diag(i, diags[i])
+        i = i + 1
+    }
+    return diags
+}
+
+// ── Main ─────────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Annotations Smoke Test (B4/S8)")
+    println("══════════════════════════════════════════════")
+
+    let f = "test.hexa"
+    let today = "2026-05-09"
+
+    // (a) @law("E = m * c^2") — 0 diags.
+    let mut args_a = []
+    args_a.push(_string_expr("E = m * c^2", f, 1, 7))
+    let ann_a = _ann("law", args_a, f, 1)
+    let mut anns_a = []
+    anns_a.push(ann_a)
+    let item_a = _fn_item("rel_e_a", anns_a, f, 1)
+    let diags_a = _run_case("(a) @law(\"E = m * c^2\")", _module_with(item_a, f), today)
+
+    // (b) @law() — 1 HX8010.
+    let ann_b = _ann("law", [], f, 4)
+    let mut anns_b = []
+    anns_b.push(ann_b)
+    let item_b = _fn_item("rel_e_b", anns_b, f, 4)
+    let diags_b = _run_case("(b) @law()", _module_with(item_b, f), today)
+
+    // (c) @grace(HX1042, until="2025-01-01", reason="x") — expired vs 2026-05-09.
+    let mut args_c = []
+    args_c.push(_ident_expr("HX1042", f, 7, 8))
+    args_c.push(_kwarg_expr("until", "2025-01-01", f, 7, 16))
+    args_c.push(_kwarg_expr("reason", "x", f, 7, 40))
+    let ann_c = _ann("grace", args_c, f, 7)
+    let mut anns_c = []
+    anns_c.push(ann_c)
+    let item_c = _fn_item("graced_c", anns_c, f, 7)
+    let diags_c = _run_case("(c) @grace(HX1042, until=2025-01-01) expired", _module_with(item_c, f), today)
+
+    // (d) @grace(HX1042, until="2099-12-31", reason="x") — 0 diags.
+    let mut args_d = []
+    args_d.push(_ident_expr("HX1042", f, 10, 8))
+    args_d.push(_kwarg_expr("until", "2099-12-31", f, 10, 16))
+    args_d.push(_kwarg_expr("reason", "x", f, 10, 40))
+    let ann_d = _ann("grace", args_d, f, 10)
+    let mut anns_d = []
+    anns_d.push(ann_d)
+    let item_d = _fn_item("graced_d", anns_d, f, 10)
+    let diags_d = _run_case("(d) @grace(HX1042, until=2099-12-31)", _module_with(item_d, f), today)
+
+    // (e) @grace(HX1042) — 1 HX9002 (missing until/reason).
+    let mut args_e = []
+    args_e.push(_ident_expr("HX1042", f, 13, 8))
+    let ann_e = _ann("grace", args_e, f, 13)
+    let mut anns_e = []
+    anns_e.push(ann_e)
+    let item_e = _fn_item("graced_e", anns_e, f, 13)
+    let diags_e = _run_case("(e) @grace(HX1042) missing fields", _module_with(item_e, f), today)
+
+    // (f1) @discover(kind="L") — 0 diags.
+    let mut args_f1 = []
+    args_f1.push(_kwarg_expr("kind", "L", f, 16, 11))
+    let ann_f1 = _ann("discover", args_f1, f, 16)
+    let mut anns_f1 = []
+    anns_f1.push(ann_f1)
+    let item_f1 = _fn_item("disc_ok", anns_f1, f, 16)
+    let diags_f1 = _run_case("(f1) @discover(kind=\"L\")", _module_with(item_f1, f), today)
+
+    // (f2) @discover() — 1 HX9003.
+    let ann_f2 = _ann("discover", [], f, 19)
+    let mut anns_f2 = []
+    anns_f2.push(ann_f2)
+    let item_f2 = _fn_item("disc_bad", anns_f2, f, 19)
+    let diags_f2 = _run_case("(f2) @discover()", _module_with(item_f2, f), today)
+
+    // ── Assertions ───────────────────────────────────────────
+    println("")
+    println("══════════════════════════════════════════════")
+    let mut ok = true
+
+    // (a) 0 diagnostics.
+    if len(diags_a) != 0 {
+        println("FAIL (a): expected 0 diagnostics, got " + to_string(len(diags_a)))
+        ok = false
+    }
+
+    // (b) 1 diagnostic, HX8010.
+    if len(diags_b) != 1 {
+        println("FAIL (b): expected 1 diagnostic, got " + to_string(len(diags_b)))
+        ok = false
+    } else if diags_b[0].code != "HX8010" {
+        println("FAIL (b): expected HX8010, got " + diags_b[0].code)
+        ok = false
+    }
+
+    // (c) 1 diagnostic, HX9001 (expired).
+    if len(diags_c) != 1 {
+        println("FAIL (c): expected 1 diagnostic, got " + to_string(len(diags_c)))
+        ok = false
+    } else if diags_c[0].code != "HX9001" {
+        println("FAIL (c): expected HX9001, got " + diags_c[0].code)
+        ok = false
+    }
+
+    // (d) 0 diagnostics.
+    if len(diags_d) != 0 {
+        println("FAIL (d): expected 0 diagnostics, got " + to_string(len(diags_d)))
+        ok = false
+    }
+
+    // (e) 1 diagnostic, HX9002.
+    if len(diags_e) != 1 {
+        println("FAIL (e): expected 1 diagnostic, got " + to_string(len(diags_e)))
+        ok = false
+    } else if diags_e[0].code != "HX9002" {
+        println("FAIL (e): expected HX9002, got " + diags_e[0].code)
+        ok = false
+    }
+
+    // (f1) 0 diagnostics.
+    if len(diags_f1) != 0 {
+        println("FAIL (f1): expected 0 diagnostics, got " + to_string(len(diags_f1)))
+        ok = false
+    }
+
+    // (f2) 1 diagnostic, HX9003.
+    if len(diags_f2) != 1 {
+        println("FAIL (f2): expected 1 diagnostic, got " + to_string(len(diags_f2)))
+        ok = false
+    } else if diags_f2[0].code != "HX9003" {
+        println("FAIL (f2): expected HX9003, got " + diags_f2[0].code)
+        ok = false
+    }
+
+    if ok {
+        println("PASS: 7 cases — 0 / HX8010×1 / HX9001×1 / 0 / HX9002×1 / 0 / HX9003×1.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}

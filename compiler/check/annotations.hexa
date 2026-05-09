@@ -1,0 +1,406 @@
+// HEXA Native Compiler — Phase B4 / S8: annotation semantics pass
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Walks Item.annotations across a Module and validates the four hexa-lang
+// annotations defined by RFC-017 §3.5 and SPEC.yaml opt_out:
+//
+//   @law(formula_str, units="..."?)        — at least one string-literal
+//                                              positional arg (the formula).
+//   @implements(L[id])                     — owned by citation.hexa (S8).
+//                                              IGNORED here to avoid double-
+//                                              emit of HX8001..HX8003.
+//   @grace(HXcode, until="YYYY-MM-DD",     — opt-out grace label, three
+//          reason="...")                     fields ALL required. Expires
+//                                              when today >= until.
+//   @discover(kind="P"|"C"|"L"|"E")        — discovery hint, kind required.
+//
+// Multi-error policy (RFC-019 §6): every malformed annotation emits its own
+// diagnostic; we never early-stop. Returns array of Diagnostic.
+//
+// Diagnostic codes:
+//   HX8010  @law malformed
+//   HX9001  @grace expired (already in catalog)
+//   HX9002  @grace malformed
+//   HX9003  @discover malformed
+//
+// Public entry:
+//   pub fn check_annotations(module: Module, today: string) -> [Diagnostic]
+//
+// `today` is an ISO-8601 YYYY-MM-DD string; ISO ordering matches lexicographic
+// string comparison so `>=` semantics work without a date parser.
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
+import "../lex/tokens.hexa"
+
+// ── ExprKind probes (stage0 pattern: tag through match) ──────
+
+fn _is_string_lit(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralString -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_assign(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Assign -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_ident(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Ident -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+// ── kwarg lookup ─────────────────────────────────────────────
+// A kwarg in `@name(key="val", ...)` parses as ExprKind::Assign with
+// children[0] = Ident("key") and children[1] = LiteralString. We scan
+// the annotation's positional/kwarg arg list and return the value Expr
+// for `key`, or an empty placeholder when missing.
+
+fn _empty_expr() -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: Span { file: "", line: 0, col: 0, len: 0 },
+        text: "",
+        children: [],
+        atlas_ref: AtlasRef { kind: "", id: "", span: Span { file: "", line: 0, col: 0, len: 0 } }
+    }
+}
+
+// Returns the kwarg value expr, or _empty_expr when absent. The `found`
+// out-param is set true iff the key was located. We use a length-checked
+// children pair so a malformed Assign (e.g. lhs not Ident) is treated as
+// "not present".
+fn _kwarg_lookup(args: [Expr], key: string) -> Expr {
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if _is_assign(a.kind) {
+            if len(a.children) >= 2 {
+                let lhs = a.children[0]
+                if _is_ident(lhs.kind) {
+                    if lhs.text == key {
+                        return a.children[1]
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return _empty_expr()
+}
+
+// True if any kwarg with name `key` is present (even if the value is a
+// non-string-literal — we still want to detect "field provided").
+fn _kwarg_present(args: [Expr], key: string) -> bool {
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if _is_assign(a.kind) {
+            if len(a.children) >= 2 {
+                let lhs = a.children[0]
+                if _is_ident(lhs.kind) {
+                    if lhs.text == key { return true }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// First positional (non-Assign) arg. Returns _empty_expr when none.
+fn _first_positional(args: [Expr]) -> Expr {
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if !_is_assign(a.kind) { return a }
+        i = i + 1
+    }
+    return _empty_expr()
+}
+
+fn _has_positional(args: [Expr]) -> bool {
+    let mut i = 0
+    while i < len(args) {
+        if !_is_assign(args[i].kind) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── String / date validators ─────────────────────────────────
+
+// HX-code shape: "HX" + 4 ASCII digits.
+fn _is_hx_code(s: string) -> bool {
+    if len(s) != 6 { return false }
+    let cs = s.chars()
+    if cs[0] != 'H' { return false }
+    if cs[1] != 'X' { return false }
+    let mut i = 2
+    while i < 6 {
+        let c = cs[i]
+        if c < '0' { return false }
+        if c > '9' { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// ISO-8601 date shape: YYYY-MM-DD. We only validate the surface shape;
+// out-of-range months/days fail the lexical check too because ISO-8601
+// numerics are zero-padded so `13` for month would still be syntactically
+// a valid YYYY-MM-DD string but semantically out of range. Stage0 keeps
+// the validator surface-only — calendar validity is RFC-017 follow-up.
+fn _is_iso_date(s: string) -> bool {
+    if len(s) != 10 { return false }
+    let cs = s.chars()
+    let mut i = 0
+    while i < 10 {
+        let c = cs[i]
+        if i == 4 {
+            if c != '-' { return false }
+        } else if i == 7 {
+            if c != '-' { return false }
+        } else {
+            if c < '0' { return false }
+            if c > '9' { return false }
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// ── Per-annotation validators ────────────────────────────────
+
+fn _check_law(a: Annotation, out: array) {
+    // Need ≥ 1 positional arg, first positional must be a string literal.
+    if !_has_positional(a.args) {
+        let mut b = diag_new("HX8010")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "detail", "missing formula string (expected `@law(\"...\")`)")
+        out.push(diag_emit(b))
+        return
+    }
+    let first = _first_positional(a.args)
+    if !_is_string_lit(first.kind) {
+        let mut b = diag_new("HX8010")
+        b = diag_span(b, first.span)
+        b = diag_arg(b, "detail", "first argument must be a string literal formula")
+        out.push(diag_emit(b))
+    }
+}
+
+fn _check_grace(a: Annotation, today: string, out: array) {
+    // Field 1: positional HX-code.
+    if !_has_positional(a.args) {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "detail", "missing positional HX error code")
+        out.push(diag_emit(b))
+        return
+    }
+    let code_expr = _first_positional(a.args)
+    let code_str = code_expr.text
+    let mut code_ok = false
+    if _is_ident(code_expr.kind) {
+        code_ok = _is_hx_code(code_str)
+    } else if _is_string_lit(code_expr.kind) {
+        code_ok = _is_hx_code(code_str)
+    }
+    if !code_ok {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, code_expr.span)
+        b = diag_arg(b, "detail", "first argument must be an HX error code matching `HX[0-9]{4}`")
+        out.push(diag_emit(b))
+        return
+    }
+
+    // Field 2: until="YYYY-MM-DD".
+    if !_kwarg_present(a.args, "until") {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "detail", "missing required field `until=\"YYYY-MM-DD\"`")
+        out.push(diag_emit(b))
+        return
+    }
+    let until_val = _kwarg_lookup(a.args, "until")
+    if !_is_string_lit(until_val.kind) {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, until_val.span)
+        b = diag_arg(b, "detail", "`until` must be a string literal in YYYY-MM-DD form")
+        out.push(diag_emit(b))
+        return
+    }
+    if !_is_iso_date(until_val.text) {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, until_val.span)
+        b = diag_arg(b, "detail", "`until` value `" + until_val.text + "` is not a valid YYYY-MM-DD date")
+        out.push(diag_emit(b))
+        return
+    }
+
+    // Field 3: reason="...".
+    if !_kwarg_present(a.args, "reason") {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "detail", "missing required field `reason=\"...\"`")
+        out.push(diag_emit(b))
+        return
+    }
+    let reason_val = _kwarg_lookup(a.args, "reason")
+    if !_is_string_lit(reason_val.kind) {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, reason_val.span)
+        b = diag_arg(b, "detail", "`reason` must be a string literal")
+        out.push(diag_emit(b))
+        return
+    }
+    if len(reason_val.text) == 0 {
+        let mut b = diag_new("HX9002")
+        b = diag_span(b, reason_val.span)
+        b = diag_arg(b, "detail", "`reason` must be a non-empty string")
+        out.push(diag_emit(b))
+        return
+    }
+
+    // Expiry check — string compare on ISO-8601 dates is correct.
+    if today >= until_val.text {
+        let mut b = diag_new("HX9001")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "error_code", code_str)
+        b = diag_arg(b, "until", until_val.text)
+        out.push(diag_emit(b))
+    }
+}
+
+fn _check_discover(a: Annotation, out: array) {
+    // kind kwarg required, value ∈ {"P", "C", "L", "E"}.
+    if !_kwarg_present(a.args, "kind") {
+        let mut b = diag_new("HX9003")
+        b = diag_span(b, a.span)
+        b = diag_arg(b, "detail", "missing required `kind=` argument")
+        out.push(diag_emit(b))
+        return
+    }
+    let kind_val = _kwarg_lookup(a.args, "kind")
+    if !_is_string_lit(kind_val.kind) {
+        let mut b = diag_new("HX9003")
+        b = diag_span(b, kind_val.span)
+        b = diag_arg(b, "detail", "`kind` must be a string literal")
+        out.push(diag_emit(b))
+        return
+    }
+    let v = kind_val.text
+    let ok = (v == "P") || (v == "C") || (v == "L") || (v == "E")
+    if !ok {
+        let mut b = diag_new("HX9003")
+        b = diag_span(b, kind_val.span)
+        b = diag_arg(b, "detail", "`kind` value `" + v + "` is not one of \"P\", \"C\", \"L\", \"E\"")
+        out.push(diag_emit(b))
+    }
+}
+
+// ── Per-item walk ────────────────────────────────────────────
+
+fn _walk_item(it: Item, today: string, out: array) {
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if a.name == "law" {
+            _check_law(a, out)
+        } else if a.name == "implements" {
+            // Owned by citation.hexa — skip.
+        } else if a.name == "grace" {
+            _check_grace(a, today, out)
+        } else if a.name == "discover" {
+            _check_discover(a, out)
+        }
+        // Other annotation names (units, verify, prove, …) belong to
+        // their own passes — leave them alone here.
+        i = i + 1
+    }
+}
+
+// ── Public entry ─────────────────────────────────────────────
+
+pub fn check_annotations(module: Module, today: string) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < len(module.items) {
+        _walk_item(module.items[i], today, out)
+        i = i + 1
+    }
+    return out
+}

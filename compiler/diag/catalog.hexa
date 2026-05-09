@@ -218,5 +218,32 @@ pub let CATALOG: [DiagSpec] = [
         template: "@grace for {error_code} expired on {until}; fix or extend",
         explain: "An @grace annotation past its `until` date no longer suppresses the underlying diagnostic. Either fix the issue or update `until` (and `reason`).",
         fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX8010",
+        title: "@law annotation malformed",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "@law annotation malformed: {detail}",
+        explain: "The `@law` annotation must take at least one positional argument: a string literal containing the formula (e.g. `@law(\"E = m * c^2\")`). Optional keyword args such as `units=\"...\"` are also string literals. RFC-017 §3.5.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX9002",
+        title: "@grace annotation malformed",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "@grace annotation malformed: {detail}",
+        explain: "The `@grace` annotation requires three fields: a positional HX error code (matching `HX[0-9]{4}`), `until=\"YYYY-MM-DD\"`, and `reason=\"...\"`. SPEC.yaml opt_out section.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX9003",
+        title: "@discover annotation malformed",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "@discover annotation malformed: {detail}",
+        explain: "The `@discover` annotation requires a `kind=` keyword argument whose value is one of the atlas node-kind strings: `\"P\"`, `\"C\"`, `\"L\"`, or `\"E\"`.",
+        fix_it_kind: FixItKind::None
     }
 ]
