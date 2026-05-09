@@ -135,7 +135,10 @@ pub struct LowerCtx {
     has_returned: bool
 }
 
-fn _new_ctx() -> LowerCtx {
+// Renamed from _new_ctx to avoid stage0 last-import-wins shadow
+// collision with compiler/check/types.hexa::_new_ctx (Gap 4 fix —
+// silenced 211 'map key not found' warnings during M0 smoke).
+fn _new_lower_ctx() -> LowerCtx {
     return LowerCtx {
         next_local: 0,
         next_block: 0,
@@ -923,7 +926,7 @@ fn _parse_int(t: string) -> i64 {
 // ── Function lowering ───────────────────────────────────────
 
 fn _lower_fn(it: HItem) -> MFunc {
-    let mut ctx = _new_ctx()
+    let mut ctx = _new_lower_ctx()
     ctx = _new_block(ctx)
     let entry_id = ctx.blocks[len(ctx.blocks) - 1].id
     ctx = _set_cur_block(ctx, entry_id)
