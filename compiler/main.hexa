@@ -1,63 +1,423 @@
-// HEXA Native Compiler — Entry Point
+// HEXA Native Compiler — Entry Point (Phase A1+B1+B2+B3+B3+B4+lower+codegen+emit)
 //
-// Phase A0 skeleton. Authoritative design: SPEC.yaml + RFC-018.
+// Authoritative design: SPEC.yaml + RFC-018 §2 (pipeline order).
 //
-// Pipeline (RFC-018 §2):
-//   lex → parse → resolve → check → lower → mono → ssa → optimize → regalloc → emit → link
+// Pipeline order (RFC-018 §2):
+//   lex → parse → resolve(S1) → bind(S2) → types(S3) → units(S5) →
+//   citation(S8) → lower(AST→HIR) → lower_hir(HIR→MIR) →
+//   codegen(MIR→LIR target-specific) → emit(LIR→.s) → assemble → link
 //
 // Stage0 invocation (interpreted by hexa_interp until stage1 native settles):
-//   hexa run compiler/main.hexa [-o OUT] SOURCE.hexa
+//   hexa run compiler/main.hexa [flags] SOURCE.hexa
 //
 // Targets (Decision 1, parallel dual):
 //   arm64-apple-darwin     (primary dev environment)
 //   x86_64-linux-gnu       (CI / docker / runners)
 //
-// Output (M0 milestone goal):
-//   native binary at ./a.out (or specified by -o)
-//
-// Status: skeleton only — no parse, no codegen, no link yet.
+// The atlas index is loaded via static_atlas() — empty fallback in v1
+// (Phase A4 will wire the real embedded const arrays). Resolve / citation
+// passes both accept an empty index gracefully.
 
-let HOME = env("HOME")
-let REPO_ROOT = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
+import "./lex/lexer.hexa"
+import "./parse/parser.hexa"
+import "./atlas/static_index.hexa"
+import "./atlas/merger.hexa"
+import "./check/resolve.hexa"
+import "./check/bind.hexa"
+import "./check/types.hexa"
+import "./check/units.hexa"
+import "./check/citation.hexa"
+import "./lower/ast_to_hir.hexa"
+import "./lower/hir_to_mir.hexa"
+import "./codegen/arm64_darwin.hexa"
+import "./codegen/x86_64_linux.hexa"
+import "./emit/asm.hexa"
+import "./diag/catalog.hexa"
+import "./diag/render.hexa"
 
-let argv = args()
+// ── Version / banner ────────────────────────────────────────────
 
-fn print_usage() {
-    eprintln("hexa-compiler (phase A0 skeleton)")
-    eprintln("")
-    eprintln("usage: hexa run compiler/main.hexa [-o OUT] SOURCE.hexa")
-    eprintln("")
-    eprintln("flags:")
-    eprintln("  -o OUT          output binary path (default: a.out)")
-    eprintln("  --target=TRIPLE  arm64-apple-darwin | x86_64-linux-gnu")
-    eprintln("  --emit=KIND      asm | obj | exec   (default: exec)")
-    eprintln("  --error-format   pretty | short | json | github")
-    eprintln("  --linker=KIND    hexa | system     (default: hexa, fallback system)")
-    eprintln("")
-    eprintln("status: skeleton — no compilation yet, prints stub diagnostics only.")
+let HEXA_VERSION = "hexa 0.0.1 (phase A1+B1+B2+B3+B3+B4+lower+codegen+emit)"
+
+// ── argv normalization ─────────────────────────────────────────
+// Hexa stage0 hands us argv shaped one of:
+//   [interp, script.hexa, user...]                (direct invocation)
+//   [interp, "run", script.hexa, user...]         (via `hexa run`)
+//   [interp, "run", "compiler/main.hexa", user...]
+// Strategy: scan the raw argv for the FIRST `*.hexa` token, treat that
+// as the script, and start user args at the very next slot. This mirrors
+// tool/roadmap_auto_dispatch.hexa main() (2026-04-19 fix).
+
+fn _ends_with_hexa(s: string) -> bool {
+    let cs = s.chars()
+    let n = len(cs)
+    if n < 5 { return false }
+    if cs[n - 5] != '.' { return false }
+    if cs[n - 4] != 'h' { return false }
+    if cs[n - 3] != 'e' { return false }
+    if cs[n - 2] != 'x' { return false }
+    if cs[n - 1] != 'a' { return false }
+    return true
 }
+
+fn _normalize_argv() -> [string] {
+    let raw = args()
+    let mut user_start = 1
+    let mut found = false
+    let mut i = 0
+    while i < len(raw) {
+        if _ends_with_hexa(raw[i]) {
+            user_start = i + 1
+            found = true
+            i = len(raw)
+        } else {
+            i = i + 1
+        }
+    }
+    if !found {
+        if len(raw) >= 3 && (raw[1] == "run" || raw[1] == "eval") {
+            user_start = 3
+        } else {
+            user_start = 2
+        }
+    }
+    let mut out: [string] = []
+    let mut j = user_start
+    while j < len(raw) {
+        out.push(raw[j])
+        j = j + 1
+    }
+    return out
+}
+
+// ── Target detection ───────────────────────────────────────────
 
 fn detect_default_target() -> string {
     let uname = exec("uname -sm 2>/dev/null").trim()
     if uname == "Darwin arm64" { return "arm64-apple-darwin" }
     if uname == "Linux x86_64" { return "x86_64-linux-gnu" }
     if uname == "Linux aarch64" { return "arm64-linux-gnu" }
-    return "unknown"
+    return "arm64-apple-darwin"
 }
 
-if argv.len() < 2 {
-    print_usage()
+// ── Help / Version ─────────────────────────────────────────────
+
+fn print_help() {
+    println("hexa-compiler — native compiler driver (RFC-018)")
+    println("")
+    println("usage:")
+    println("  hexa run compiler/main.hexa [FLAGS] SOURCE.hexa")
+    println("")
+    println("flags:")
+    println("  -o OUT                 output binary path (default: a.out)")
+    println("  --target=TRIPLE        arm64-apple-darwin | x86_64-linux-gnu (default: detected)")
+    println("  --emit=KIND            asm | obj | exec   (default: exec)")
+    println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
+    println("  --linker=KIND          hexa | system     (default: system; hexa_ld not yet landed)")
+    println("  --version              print version and exit")
+    println("  --help                 print this help and exit")
+    println("")
+    println("example:")
+    println("  hexa run compiler/main.hexa --emit=exec -o hello src/hello.hexa")
+    println("")
+    println("notes:")
+    println("  * The driver invokes the system `as` and `ld` programs. Linker paths")
+    println("    are best-effort defaults and may need user-side tweaks (see")
+    println("    --linker=system raw-emit comment in compiler/main.hexa).")
+    println("  * `--emit=asm` writes assembly to OUT, `--emit=obj` writes a relocatable")
+    println("    object, `--emit=exec` (default) produces a linked executable.")
+}
+
+fn print_version() {
+    println(HEXA_VERSION)
+}
+
+// ── Diagnostic rendering ──────────────────────────────────────
+
+fn _is_error_severity(s: Severity) -> bool {
+    return match s {
+        Severity::Error -> true,
+        Severity::Warning -> false,
+        Severity::Note -> false
+    }
+}
+
+fn _render_one(d: Diagnostic, mode: string) -> string {
+    if mode == "short" { return render_short(d) }
+    if mode == "json" { return render_json(d) }
+    if mode == "github" { return render_github(d) }
+    return render_pretty(d)
+}
+
+fn _render_all(diags: array, mode: string) {
+    let mut i = 0
+    while i < len(diags) {
+        eprintln(_render_one(diags[i], mode))
+        i = i + 1
+    }
+}
+
+fn _has_errors(diags: array) -> bool {
+    let mut i = 0
+    while i < len(diags) {
+        if _is_error_severity(diags[i].severity) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Filename helpers ──────────────────────────────────────────
+
+fn _basename_no_ext(path: string) -> string {
+    let cs = path.chars()
+    let n = len(cs)
+    let mut start = 0
+    let mut i = 0
+    while i < n {
+        if cs[i] == '/' { start = i + 1 }
+        i = i + 1
+    }
+    let mut end = n
+    let mut j = start
+    while j < n {
+        if cs[j] == '.' { end = j }
+        j = j + 1
+    }
+    let mut out = ""
+    let mut k = start
+    while k < end {
+        out = out + to_string(cs[k])
+        k = k + 1
+    }
+    if len(out) == 0 { return "out" }
+    return out
+}
+
+// ── Atlas v1 (empty fallback) ─────────────────────────────────
+// Phase A4 will replace static_atlas() with the real embedded const
+// arrays; today we accept the empty fallback so unresolved P/C/L/E refs
+// surface as HX1042 diagnostics rather than the driver crashing.
+
+fn _load_atlas() -> AtlasIndex {
+    return static_atlas()
+}
+
+// ── Driver entry ──────────────────────────────────────────────
+
+let user_argv = _normalize_argv()
+
+// Defaults
+let mut out_path = "a.out"
+let mut target = detect_default_target()
+let mut emit_kind = "exec"
+let mut error_format = "pretty"
+let mut linker_kind = "system"
+let mut source_path = ""
+
+// Parse flags. We accept both `-o OUT` (two-arg) and `--target=TRIPLE`
+// (single equals form). Unknown flags are ignored with a warning so future
+// flags don't break old wrappers.
+let mut want_help = false
+let mut want_version = false
+let mut ai = 0
+while ai < len(user_argv) {
+    let a = user_argv[ai]
+    if a == "--help" || a == "-h" {
+        want_help = true
+        ai = ai + 1
+    } else if a == "--version" || a == "-V" {
+        want_version = true
+        ai = ai + 1
+    } else if a == "-o" {
+        if ai + 1 < len(user_argv) {
+            out_path = user_argv[ai + 1]
+            ai = ai + 2
+        } else {
+            eprintln("hexa-compiler: -o requires an argument")
+            exit(2)
+        }
+    } else if len(a) >= 9 && a.substring(0, 9) == "--target=" {
+        target = a.substring(9, len(a))
+        ai = ai + 1
+    } else if len(a) >= 7 && a.substring(0, 7) == "--emit=" {
+        emit_kind = a.substring(7, len(a))
+        ai = ai + 1
+    } else if len(a) >= 15 && a.substring(0, 15) == "--error-format=" {
+        error_format = a.substring(15, len(a))
+        ai = ai + 1
+    } else if len(a) >= 9 && a.substring(0, 9) == "--linker=" {
+        linker_kind = a.substring(9, len(a))
+        ai = ai + 1
+    } else if len(a) >= 1 && a.chars()[0] == '-' {
+        eprintln("hexa-compiler: warning: unknown flag `" + a + "` (ignored)")
+        ai = ai + 1
+    } else {
+        if len(source_path) == 0 {
+            source_path = a
+        } else {
+            eprintln("hexa-compiler: warning: extra positional `" + a + "` (ignored)")
+        }
+        ai = ai + 1
+    }
+}
+
+if want_help { print_help(); exit(0) }
+if want_version { print_version(); exit(0) }
+
+if len(source_path) == 0 {
+    eprintln("hexa-compiler: missing SOURCE.hexa")
+    eprintln("  run `hexa run compiler/main.hexa --help` for usage")
     exit(2)
 }
 
-let source_path = argv[1]
-let target = detect_default_target()
+// ── Read source ──────────────────────────────────────────────
+// Handle file-not-found gracefully. `read_file` raises on miss in stage0,
+// so we probe with file_exists first (matches tool/*.hexa convention).
 
-eprintln("hexa-compiler: phase A0 skeleton")
-eprintln("  source: " + source_path)
-eprintln("  target: " + target)
-eprintln("")
-eprintln("note: parse/check/codegen/link not implemented yet.")
-eprintln("      see SPEC.yaml roadmap.phases for implementation order:")
-eprintln("        A0 → A1 → A2 → A3 → A4 → B1 → B2 → B3 → B4 → C1 → C2 → D1 → D2 → E1 → E2")
+if !file_exists(source_path) {
+    eprintln("hexa-compiler: cannot open `" + source_path + "`: file not found")
+    exit(2)
+}
+
+let source = to_string(read_file(source_path))
+
+// ── Pipeline ─────────────────────────────────────────────────
+
+let tokens = lex(source, source_path)
+let module = parse(tokens, source_path)
+
+// Atlas: empty-fallback v1 (A4 will wire the real index).
+let atlas = _load_atlas()
+
+let mut diags: array = []
+
+let r1 = resolve(module, atlas)
+let mut k = 0
+while k < len(r1) { diags.push(r1[k]); k = k + 1 }
+
+let r2 = bind(module)
+k = 0
+while k < len(r2) { diags.push(r2[k]); k = k + 1 }
+
+let r3 = type_check(module)
+k = 0
+while k < len(r3) { diags.push(r3[k]); k = k + 1 }
+
+let r4 = unit_check(module)
+k = 0
+while k < len(r4) { diags.push(r4[k]); k = k + 1 }
+
+let r5 = citation_check(module, atlas)
+k = 0
+while k < len(r5) { diags.push(r5[k]); k = k + 1 }
+
+// Always render whatever diagnostics we collected (warnings first, then
+// — if errors — bail out before lowering / codegen).
+_render_all(diags, error_format)
+
+if _has_errors(diags) {
+    eprintln("hexa-compiler: " + to_string(len(diags)) + " diagnostic(s); aborting before codegen")
+    exit(1)
+}
+
+// ── Lower → MIR → LIR ────────────────────────────────────────
+
+let hmodule = lower(module, atlas)
+let mmodule = lower_hir(hmodule)
+
+let mut lmodule_target = target
+let mut lmodule = LModule { file: source_path, target: target, funcs: [], rodata: [], bss: [] }
+if target == "arm64-apple-darwin" {
+    lmodule = codegen_arm64_darwin(mmodule)
+} else if target == "x86_64-linux-gnu" {
+    lmodule = codegen_x86_64_linux(mmodule)
+} else {
+    eprintln("hexa-compiler: unsupported --target=" + target)
+    eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu")
+    exit(2)
+}
+
+let asm_text = emit_asm(lmodule)
+
+// ── Emit ASM ─────────────────────────────────────────────────
+
+if emit_kind == "asm" {
+    write_file(out_path, asm_text)
+    exit(0)
+}
+
+let stem = _basename_no_ext(source_path)
+let asm_path = "/tmp/" + stem + ".s"
+let obj_path = "/tmp/" + stem + ".o"
+
+write_file(asm_path, asm_text)
+
+// ── Assemble (system `as`) ───────────────────────────────────
+//
+// Best-effort assembly invocation — the driver delegates target-specific
+// flag selection to the system assembler. On macOS `as` is part of Xcode
+// command-line tools; on Linux it ships with binutils. If `as` isn't on
+// PATH the user sees a non-zero exit from the shell exec wrapper, which
+// we surface verbatim.
+
+let as_cmd = "as " + asm_path + " -o " + obj_path + " 2>&1"
+let as_out = exec(as_cmd)
+let as_status = exec("test -f " + obj_path + " && echo ok || echo fail").trim()
+if as_status != "ok" {
+    eprintln("hexa-compiler: assembler failed:")
+    eprintln("  command: " + as_cmd)
+    eprintln(as_out)
+    exit(2)
+}
+
+if emit_kind == "obj" {
+    exec("cp -f " + obj_path + " " + out_path)
+    exit(0)
+}
+
+// ── Link (system `ld`) ───────────────────────────────────────
+//
+// IMPORTANT: linker invocation is BEST-EFFORT and may need user-side
+// path tweaks. Stage0 has no linker-path discovery, and libc's location
+// varies by distro. The defaults below cover stock macOS (Xcode CLT) and
+// stock Debian/Ubuntu x86_64. If your box differs:
+//   * macOS: ensure `xcrun --show-sdk-path` resolves; otherwise pass
+//     --linker=hexa once that lands, or pre-link the .o yourself.
+//   * Linux: confirm /usr/lib/x86_64-linux-gnu/crt1.o exists; on Alpine
+//     or static-only setups this path will not be present.
+// The --linker=hexa branch is reserved for the in-tree linker (not yet
+// landed); fall back to system in v1.
+
+let mut ld_cmd = ""
+if target == "arm64-apple-darwin" {
+    let sdk = exec("xcrun --show-sdk-path 2>/dev/null").trim()
+    let mut sdk_arg = ""
+    if len(sdk) > 0 { sdk_arg = " -syslibroot " + sdk }
+    ld_cmd = "ld -o " + out_path + " " + obj_path + " -lSystem" + sdk_arg + " -arch arm64 -e _main 2>&1"
+} else if target == "x86_64-linux-gnu" {
+    ld_cmd = "ld -o " + out_path + " " + obj_path
+        + " /usr/lib/x86_64-linux-gnu/crt1.o"
+        + " -lc"
+        + " -dynamic-linker /lib64/ld-linux-x86-64.so.2"
+        + " 2>&1"
+} else {
+    eprintln("hexa-compiler: no linker recipe for target=" + target)
+    exit(2)
+}
+
+if linker_kind == "hexa" {
+    eprintln("hexa-compiler: warning: --linker=hexa not yet implemented; falling back to system")
+}
+
+let ld_out = exec(ld_cmd)
+let ld_status = exec("test -f " + out_path + " && echo ok || echo fail").trim()
+if ld_status != "ok" {
+    eprintln("hexa-compiler: linker failed:")
+    eprintln("  command: " + ld_cmd)
+    eprintln(ld_out)
+    eprintln("hexa-compiler: hint: linker paths are best-effort. See compiler/main.hexa")
+    eprintln("  for the recipe and adjust crt1.o / dynamic-linker / SDK root paths.")
+    exit(2)
+}
+
 exit(0)
