@@ -269,10 +269,45 @@ opt_out:
     language: english     # Decision 3 — ENGLISH ONLY
     message_template: |
       ai-native: @grace at {file}:{line} suppresses {error_code} until
-      {until}. Reason: "{reason}". This is a TEMPORARY debt — the
-      author is responsible for resolving the underlying issue before
-      the expiry date. Reviewer acknowledgement REQUIRED before merge.
+      {until}. Reason: "{reason}".
+
+      Suppressed diagnostic ({error_code} — {suppressed_title}):
+        {suppressed_message}
+        ({suppressed_severity_original}; downgraded by @grace until {until}.)
+
+      This is a TEMPORARY debt — the author is responsible for resolving
+      the underlying issue before the expiry date. Reviewer acknowledgement
+      REQUIRED before merge.
     style: ai_native    # short, specific, actionable; not generic warn
+
+    # Decision 2026-05-09 (refinement): HX9000 must include the FULL rendered
+    # message of the diagnostic it suppresses, not just the HX code. This
+    # gives reviewers (and AI assistants reading the output) immediate
+    # visibility into WHAT is being silenced — not just that something is.
+    #
+    # The check pass that detects a @grace site:
+    #   1. Constructs the diagnostic it would normally emit (real path)
+    #   2. Renders it via render_short / render_pretty
+    #   3. Stuffs the rendered text into HX9000.args.suppressed_message
+    #   4. Passes the original DiagSpec.title and DiagSpec.severity in
+    #      args.suppressed_title / args.suppressed_severity_original
+    #   5. Does NOT emit the original diagnostic (suppression intact)
+    #   6. Emits HX9000 alone with the suppressed-detail block populated
+    #
+    # If the suppressed diagnostic would have produced did-you-mean or
+    # fix-it info, those fields are inlined into suppressed_message too —
+    # the reviewer should see the full picture.
+    suppressed_diagnostic_inlining:
+      args_keys: [suppressed_title, suppressed_message, suppressed_severity_original]
+      render_format: short      # multi-line pretty would clobber HX9000 layout
+      include_did_you_mean: true
+      include_fix_it: true
+      rationale: |
+        AI assistants and human reviewers should not have to guess what
+        @grace is hiding. Inlining the full original message at the
+        suppression site means a single HX9000 diagnostic carries
+        everything needed to evaluate whether the bypass is reasonable.
+
     user_consent_mechanism:
       pr_trailer: 'Acked-grace: HXxxxx by <reviewer-handle>'
       commit_trailer: 'acked-grace: <code> by <author-handle>'
