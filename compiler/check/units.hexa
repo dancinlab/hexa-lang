@@ -116,15 +116,15 @@ fn _push_n(dst: [string], factor: string, count: i64) -> [string] {
 // Parse one factor token like "kg", "m", "s^2", "s^-2".
 // Returns (base, exponent). Negative exponent flags denominator placement
 // at the call site.
-struct _Factor {
+pub struct UnitFactor {
     base: string,
     exp: i64
 }
 
-fn _parse_factor(tok: string) -> _Factor {
+fn _parse_factor(tok: string) -> UnitFactor {
     let t = _trim(tok)
     let n = len(t)
-    if n == 0 { return _Factor { base: "", exp: 0 } }
+    if n == 0 { return UnitFactor { base: "", exp: 0 } }
 
     // Find "^"
     let mut i = 0
@@ -134,7 +134,7 @@ fn _parse_factor(tok: string) -> _Factor {
     }
     if i == n {
         // No exponent — implicit 1.
-        return _Factor { base: t, exp: 1 }
+        return UnitFactor { base: t, exp: 1 }
     }
 
     let base = t.substring(0, i)
@@ -156,7 +156,7 @@ fn _parse_factor(tok: string) -> _Factor {
         j = j + 1
     }
     if acc == 0 { acc = 1 }
-    return _Factor { base: base, exp: sign * acc }
+    return UnitFactor { base: base, exp: sign * acc }
 }
 
 // Add factors from a "."-joined product string into num/den. Negative
@@ -715,23 +715,23 @@ fn _is_fn_item(k: ItemKind) -> bool {
 //   n+1 args (n = fn param count) → param units, last = ret unit.
 //   else   → discard (silent — robust against malformed annotations).
 
-struct _UnitsAnn {
+pub struct UnitsAnn {
     has: bool,
     params: [Unit],   // one Unit per fn param (in order)
     ret: Unit
 }
 
-fn _empty_units_ann(param_count: i64) -> _UnitsAnn {
+fn _empty_units_ann(param_count: i64) -> UnitsAnn {
     let mut params: [Unit] = []
     let mut i = 0
     while i < param_count {
         params.push(unit_empty())
         i = i + 1
     }
-    return _UnitsAnn { has: false, params: params, ret: unit_empty() }
+    return UnitsAnn { has: false, params: params, ret: unit_empty() }
 }
 
-fn _extract_units_ann(it: Item) -> _UnitsAnn {
+fn _extract_units_ann(it: Item) -> UnitsAnn {
     let pc = len(it.params)
     let mut ann = _empty_units_ann(pc)
     let mut i = 0
@@ -772,26 +772,26 @@ fn _extract_units_ann(it: Item) -> _UnitsAnn {
 
 // ── UnitEnv: param name → Unit ───────────────────────────────
 
-struct _UnitBinding {
+pub struct UnitBinding {
     name: string,
     u: Unit
 }
 
-struct _UnitEnv {
-    entries: [_UnitBinding]
+pub struct UnitEnv {
+    entries: [UnitBinding]
 }
 
-fn _env_empty() -> _UnitEnv {
-    return _UnitEnv { entries: [] }
+fn _env_empty() -> UnitEnv {
+    return UnitEnv { entries: [] }
 }
 
-fn _env_define(env: _UnitEnv, name: string, u: Unit) -> _UnitEnv {
+fn _env_define(env: UnitEnv, name: string, u: Unit) -> UnitEnv {
     let mut e = env.entries
-    e.push(_UnitBinding { name: name, u: u })
-    return _UnitEnv { entries: e }
+    e.push(UnitBinding { name: name, u: u })
+    return UnitEnv { entries: e }
 }
 
-fn _env_lookup(env: _UnitEnv, name: string) -> Unit {
+fn _env_lookup(env: UnitEnv, name: string) -> Unit {
     let mut i = 0
     while i < len(env.entries) {
         if env.entries[i].name == name { return env.entries[i].u }
@@ -801,25 +801,25 @@ fn _env_lookup(env: _UnitEnv, name: string) -> Unit {
 }
 
 // Module-level fn signature table for call checking.
-struct _FnSig {
+pub struct FnSig {
     name: string,
     params: [Unit],
     ret: Unit,
     has: bool
 }
 
-struct _SigTable {
-    sigs: [_FnSig]
+pub struct SigTable {
+    sigs: [FnSig]
 }
 
-fn _collect_sigs(module: Module) -> _SigTable {
-    let mut sigs: [_FnSig] = []
+fn _collect_sigs(module: Module) -> SigTable {
+    let mut sigs: [FnSig] = []
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
         if _is_fn_item(it.kind) {
             let ann = _extract_units_ann(it)
-            sigs.push(_FnSig {
+            sigs.push(FnSig {
                 name: it.name,
                 params: ann.params,
                 ret: ann.ret,
@@ -828,16 +828,16 @@ fn _collect_sigs(module: Module) -> _SigTable {
         }
         i = i + 1
     }
-    return _SigTable { sigs: sigs }
+    return SigTable { sigs: sigs }
 }
 
-fn _lookup_sig(table: _SigTable, name: string) -> _FnSig {
+fn _lookup_sig(table: SigTable, name: string) -> FnSig {
     let mut i = 0
     while i < len(table.sigs) {
         if table.sigs[i].name == name { return table.sigs[i] }
         i = i + 1
     }
-    return _FnSig { name: "", params: [], ret: unit_empty(), has: false }
+    return FnSig { name: "", params: [], ret: unit_empty(), has: false }
 }
 
 // ── Diagnostic emit helpers ──────────────────────────────────
@@ -882,11 +882,11 @@ fn _emit_hx5003(name: string, pos: i64, expected: Unit, actual: Unit, sp: Span, 
 
 // ── Walker context ──────────────────────────────────────────
 
-struct _Ctx {
+pub struct UnitCtx {
     fn_name: string,
     fn_ret: Unit,
     has_ret: bool,
-    sigs: _SigTable
+    sigs: SigTable
 }
 
 // Return true iff `a` and `b` are both non-unitless and incompatible.
@@ -900,7 +900,7 @@ fn _incompatible(a: Unit, b: Unit) -> bool {
 
 // ── Expression unit inference ────────────────────────────────
 
-fn _infer(e: Expr, env: _UnitEnv, ctx: _Ctx, out: array) -> Unit {
+fn _infer(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
     if _is_lit_int(e.kind)    { return unit_empty() }
     if _is_lit_float(e.kind)  { return unit_empty() }
     if _is_lit_string(e.kind) { return unit_empty() }
@@ -1005,7 +1005,7 @@ fn _is_compare(op: string) -> bool {
     return false
 }
 
-fn _check_binop(e: Expr, env: _UnitEnv, ctx: _Ctx, out: array) -> Unit {
+fn _check_binop(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
     if len(e.children) < 2 { return unit_empty() }
     let lu = _infer(e.children[0], env, ctx, out)
     let ru = _infer(e.children[1], env, ctx, out)
@@ -1039,7 +1039,7 @@ fn _check_binop(e: Expr, env: _UnitEnv, ctx: _Ctx, out: array) -> Unit {
     return lu
 }
 
-fn _check_call(e: Expr, env: _UnitEnv, ctx: _Ctx, out: array) -> Unit {
+fn _check_call(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
     if len(e.children) == 0 { return unit_empty() }
     let callee = e.children[0]
     let arg_count = len(e.children) - 1
@@ -1079,7 +1079,7 @@ fn _check_call(e: Expr, env: _UnitEnv, ctx: _Ctx, out: array) -> Unit {
 
 // ── Per-fn binding ──────────────────────────────────────────
 
-fn _bind_params(env: _UnitEnv, it: Item, ann: _UnitsAnn) -> _UnitEnv {
+fn _bind_params(env: UnitEnv, it: Item, ann: UnitsAnn) -> UnitEnv {
     let mut e = env
     let mut i = 0
     while i < len(it.params) {
@@ -1107,7 +1107,7 @@ pub fn unit_check(module: Module) -> array {
             // Skip fns without @units annotation entirely (lenient v1 gate).
             if ann.has {
                 let env = _bind_params(_env_empty(), it, ann)
-                let ctx = _Ctx {
+                let ctx = UnitCtx {
                     fn_name: it.name,
                     fn_ret: ann.ret,
                     has_ret: true,

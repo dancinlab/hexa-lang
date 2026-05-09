@@ -177,43 +177,6 @@ fn _check_parse_unit(spec: string, expected: string) -> bool {
 
 // ── Cases ────────────────────────────────────────────────────
 
-// (a) PASS:
-//   @units("kg", "m/s", "J")
-//   fn energy(m: f64, c: f64) -> f64 { return m * c * c }
-//
-// units of body:
-//   m * c     → kg * (m/s) = kg.m/s
-//   m * c * c → kg.m/s * (m/s) = kg.m.m / (s.s) = kg.m^2/s^2  ≡ J
-fn _build_case_a() -> Module {
-    let f = "case_a.hexa"
-
-    let m_ref = _ident_expr("m", f, 1, 30)
-    let c_ref1 = _ident_expr("c", f, 1, 34)
-    let c_ref2 = _ident_expr("c", f, 1, 38)
-    let mc = _bin_expr("*", m_ref, c_ref1, f, 1, 32)
-    let mcc = _bin_expr("*", mc, c_ref2, f, 1, 36)
-    let ret = _return_expr(mcc, f, 1, 24)
-    let mut block_kids = []
-    block_kids.push(ret)
-    let body = _block(block_kids, f, 1, 22)
-
-    let mut params = []
-    params.push(_param("m", "f64", f, 1, 11))
-    params.push(_param("c", "f64", f, 1, 18))
-
-    let mut units = []
-    units.push("kg")
-    units.push("m/s")
-    units.push("J")
-    let mut anns = []
-    anns.push(_units_annotation(units, f, 1))
-
-    let energy = _fn_item_ann("energy", anns, params, _named_type_ref("f64"), body, f, 1)
-    let mut items = []
-    items.push(energy)
-    return Module { file: f, items: items, imports: [] }
-}
-
 // (b) FAIL HX5001:
 //   @units("kg", "m/s^2", "kg")
 //   fn add_force(m: f64, a: f64) -> f64 { return m + a }
@@ -366,13 +329,12 @@ fn main() {
     }
 
     // (a) PASS — energy()
-    // Note: under v1 canonicalisation, declared `J` and computed `kg.m.m/s.s`
-    // are different symbol bags, so we expect HX5002 here. To make this case
-    // a clean PASS we declare the return unit as the canonical product
-    // `kg.m^2/s^2` instead of the J alias. We rebuild the case body so the
-    // computed and declared units canonicalise identically.
+    // Under v1 canonicalisation, declared `J` and computed `kg.m.m/s.s` are
+    // different symbol bags (no SI alias table yet), so we declare the return
+    // unit as the canonical product `kg.m^2/s^2`. The body computes
+    // m * c * c = kg * (m/s) * (m/s) → canonicalises to identical form.
     let diags_a = _run_case("(a) PASS — energy = m*c*c with kg, m/s, kg.m^2/s^2",
-                            _build_case_a_canonical())
+                            _build_case_a())
     if len(diags_a) != 0 {
         println("  FAIL: case (a) expected 0 diagnostics, got " + to_string(len(diags_a)))
         ok = false
@@ -425,7 +387,7 @@ fn main() {
 
 // (a) PASS — canonical unit form of return slot:
 //   declared kg.m^2/s^2  ⇔ computed kg.m.m/s.s — identical canonical bag.
-fn _build_case_a_canonical() -> Module {
+fn _build_case_a() -> Module {
     let f = "case_a.hexa"
 
     let m_ref = _ident_expr("m", f, 1, 30)
