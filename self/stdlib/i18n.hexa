@@ -6,7 +6,7 @@
 //   cycle κ-1 commit 22bf7ac11). cli_mvp 내부 hardcoded mapping → stdlib 추출
 //   (단일 reader 정합 raw 47 cross-repo universal mandate).
 //
-// Cross-repo: hive / nexus / anima / hexa-lang / airgenome / n6-architecture —
+// Cross-repo: hive / nexus / anima / hexa-lang / airgenome / canon —
 // 5 sister repos 공유. Single SSOT, no per-repo duplication.
 //
 // raw 175 carve-out: i18n string-literal content within source code preserved

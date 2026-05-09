@@ -110,7 +110,7 @@ fn _repo_prefix(repo: string) -> string {
     if repo == "nexus"           { return "nxs" }
     if repo == "hexa-lang"       { return "hxa" }
     if repo == "airgenome"       { return "agm" }
-    if repo == "n6-architecture" { return "n6a" }
+    if repo == "canon" { return "n6a" }
     if repo == "void"            { return "vd" }
     if repo == "hexa-os"         { return "hxo" }
     if repo == "papers"          { return "ppr" }
@@ -196,7 +196,7 @@ fn _cmd_submit(args: array) -> int {
     if to_arg == "all" {
         // SSOT: $WS/.workspace member list (10 repos as of 2026-04-23).
         // Update when .workspace member section changes.
-        targets = ["anima", "nexus", "hexa-lang", "airgenome", "n6-architecture",
+        targets = ["anima", "nexus", "hexa-lang", "airgenome", "canon",
                    "void", "hexa-os", "papers", "secret", "contact"]
         // Remove self from broadcast (don't submit advisory to sender)
         let mut filtered = []
@@ -616,7 +616,7 @@ fn _cmd_evolution(args: array) -> int {
 
     // sister inventory paths (공통 10-repo SSOT)
     let mut sister_paths = []
-    let all = ["anima", "nexus", "hexa-lang", "airgenome", "n6-architecture",
+    let all = ["anima", "nexus", "hexa-lang", "airgenome", "canon",
                "void", "hexa-os", "papers", "secret", "contact"]
     for r in all {
         if r == self_repo { continue }

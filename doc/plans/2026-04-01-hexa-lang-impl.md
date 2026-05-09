@@ -20,7 +20,7 @@ hexa-lang/
 ├── CLAUDE.md                    # Build/dev instructions
 ├── docs/
 │   ├── plans/                   # This plan
-│   ├── spec.md                  # Full language spec (from n6-architecture)
+│   ├── spec.md                  # Full language spec (from canon)
 │   └── n6-constants.md          # n=6 constant reference
 ├── src/
 │   ├── main.rs                  # CLI entry point (REPL + file exec)
@@ -654,7 +654,7 @@ git add examples/ && git commit -m "feat: 5 example programs (sopfr=5) — hello
 
 **Files:**
 - Modify: `README.md` (update with DSE v2 results)
-- Create: `docs/spec.md` (copy from n6-architecture, update)
+- Create: `docs/spec.md` (copy from canon, update)
 - Create: `docs/n6-constants.md`
 
 - [ ] **Step 1: Update README.md with DSE v2 results**
@@ -668,7 +668,7 @@ Update DSE section:
 
 Update roadmap checkboxes.
 
-- [ ] **Step 2: Create docs/spec.md from n6-architecture spec**
+- [ ] **Step 2: Create docs/spec.md from canon spec**
 
 Full language specification with v2 updates.
 

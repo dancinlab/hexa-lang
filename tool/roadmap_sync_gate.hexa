@@ -162,7 +162,7 @@ fn gate() {
     let _ = exec("rm -f /tmp/roadmap_sync_gate.dirty")  // @allow-bare-exec
 
     sync_repo(HOME + "/core/hexa-lang",      "roadmaps/")
-    sync_repo(HOME + "/Dev/n6-architecture", "shared/roadmaps/")
+    sync_repo(HOME + "/Dev/canon", "shared/roadmaps/")
     // anima tracks its own roadmaps independently; retain explicit sync.
     sync_repo(HOME + "/Dev/anima",           "shared/roadmaps/")
 

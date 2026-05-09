@@ -223,7 +223,7 @@ Parent roadmap **64** → 5 children **65–69**. 상세 정의 `.roadmap` 64–
 
 ### Core workspace
 - **~/core super-project + .workspace SSOT** · per-project `cli/` convention · ~/shared decommission in progress.
-- **atlas SSOT = ~/core/n6-architecture/atlas/** (owner n6-architecture, 2026-04-21 재결정). `data/n6/` = backward-compat symlink.
+- **atlas SSOT = ~/core/canon/atlas/** (owner canon, 2026-04-21 재결정). `data/n6/` = backward-compat symlink.
 - **nexus canonical** — `~/core/nexus/cli/run.hexa` (`079bc12d`). shim: `~/.hx/bin/nexus` → `.hx/packages/nexus/cli/run.hexa`.
 
 ### Brand

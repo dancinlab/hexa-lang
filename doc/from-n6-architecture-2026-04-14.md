@@ -1,10 +1,10 @@
-# n6-architecture → hexa-lang 전달사항 (2026-04-14)
+# canon → hexa-lang 전달사항 (2026-04-14)
 
-세션 요약: n6-architecture 가 3-트랙(DSE/PAPER/CHIP) × 4-phase(P0~P3) 로드맵의 **P1·P2·P3 전부 완주**(47 tasks done). 이 과정에서 hexa 인터프리터/빌드/런타임 관련 관찰을 hexa-lang 팀에 전달함.
+세션 요약: canon 가 3-트랙(DSE/PAPER/CHIP) × 4-phase(P0~P3) 로드맵의 **P1·P2·P3 전부 완주**(47 tasks done). 이 과정에서 hexa 인터프리터/빌드/런타임 관련 관찰을 hexa-lang 팀에 전달함.
 
 ## 0. 오정보 정정 (중요)
 
-n6-architecture 커밋 메시지 3건(`df783ac1`, `6e340386`, `d494fac6`)에 "hexa runtime.c 누락" 문구가 들어갔음. **이는 오정보**. 실측 결과:
+canon 커밋 메시지 3건(`df783ac1`, `6e340386`, `d494fac6`)에 "hexa runtime.c 누락" 문구가 들어갔음. **이는 오정보**. 실측 결과:
 
 - `self/runtime.c` 3637줄 실존 (152KB)
 - `build/hexa_stage0` (1.8MB, 오늘 rebuild) 빌드·실행 정상
@@ -17,7 +17,7 @@ n6-architecture 커밋 메시지 3건(`df783ac1`, `6e340386`, `d494fac6`)에 "he
 2. parse 통과 시 PASS 로 기록
 3. 보고서에 "runtime.c 누락, parse 전용" 문구 반복
 
-**후속**: n6-architecture 커밋 메시지 주석은 git history 에 남음 — 다음 커밋에서 정정 블록 삽입 예정.
+**후속**: canon 커밋 메시지 주석은 git history 에 남음 — 다음 커밋에서 정정 블록 삽입 예정.
 
 ## 1. P1~P3 신규 .hexa 파일 (13건)
 
@@ -56,7 +56,7 @@ fn main() { println("테스트") }
 main()  // 명시 호출 필수
 ```
 
-n6-architecture 신규·수정 13 파일 전부 최하단 `main()` 호출 패턴 적용. **T23 커밋 "fn main() 본체 호출 누락" 이 auto-call 을 의도했는지, 아니면 함수 body 파싱 버그 수정이었는지 확인 요청**.
+canon 신규·수정 13 파일 전부 최하단 `main()` 호출 패턴 적용. **T23 커밋 "fn main() 본체 호출 누락" 이 auto-call 을 의도했는지, 아니면 함수 body 파싱 버그 수정이었는지 확인 요청**.
 
 ### 2.2 `.substr()` 미지원 — 슬라이스는 정상
 
@@ -66,7 +66,7 @@ s.substr(0, 5)  // Runtime error: unknown method .substr() on str
 s[0..5]         // "hello" — OK
 ```
 
-n6-architecture 에이전트 중 일부는 `.substr()` 미지원 대응으로 `pad_r()` 같은 커스텀 헬퍼를 구현함 (예: `bridge/ecosystem_9projects.hexa`). **슬라이스 문법 `s[a..b]` 가 동작**하므로 차기 리팩터링에서 교체 예정. `.substr()` 메서드를 stdlib 에 추가하는 것이 간단한지는 hexa-lang 팀 판단에 위임.
+canon 에이전트 중 일부는 `.substr()` 미지원 대응으로 `pad_r()` 같은 커스텀 헬퍼를 구현함 (예: `bridge/ecosystem_9projects.hexa`). **슬라이스 문법 `s[a..b]` 가 동작**하므로 차기 리팩터링에서 교체 예정. `.substr()` 메서드를 stdlib 에 추가하는 것이 간단한지는 hexa-lang 팀 판단에 위임.
 
 ### 2.3 `~/.hx/bin/hexa` 심볼릭 링크 — 구 stage1 가리킴
 
@@ -76,12 +76,12 @@ n6-architecture 에이전트 중 일부는 `.substr()` 미지원 대응으로 `p
 
 최신 stage0 (1.8MB, T41/T42/T43 반영) 는 `build/hexa_stage0` 에 있음. **사용자/다른 프로젝트는 구 stage1 을 PATH 에서 사용 중**. 심볼릭 링크 업데이트 필요.
 
-임시 우회 (n6-architecture 측에서):
+임시 우회 (canon 측에서):
 ```bash
 ln -sf /Users/ghost/Dev/hexa-lang/build/hexa_stage0 ~/.hx/bin/hexa
 ```
 
-## 3. 대형 코드 경험 (n6-architecture 가 stress-test 중)
+## 3. 대형 코드 경험 (canon 가 stress-test 중)
 
 | 지표 | 규모 |
 |------|------|
@@ -91,35 +91,35 @@ ln -sf /Users/ghost/Dev/hexa-lang/build/hexa_stage0 ~/.hx/bin/hexa
 | `atlas_promote_7_to_10star.hexa` | atlas.n6 106,496 줄 scan, 40 후보 |
 | `_hypotheses_index.json` | 1009 가설, 249.7 KB |
 
-**T43 `HEXA_VAL_ARENA` default-ON** 이 이 규모 처리에 기여했는지 재현 가능한 비교를 요청. n6-architecture `arch_selforg.hexa` 50 샘플 실행을 bench 타겟으로 제안.
+**T43 `HEXA_VAL_ARENA` default-ON** 이 이 규모 처리에 기여했는지 재현 가능한 비교를 요청. canon `arch_selforg.hexa` 50 샘플 실행을 bench 타겟으로 제안.
 
 ## 4. 협력 요청 체크리스트
 
 | # | 요청 | 긴급도 | 이유 |
 |---|------|--------|------|
-| 1 | `~/.hx/bin/hexa` → stage0 업데이트 | 🔴 높음 | 현재 구 stage1 사용 중, n6-architecture 차기 빌드에서 stage0 필요 |
+| 1 | `~/.hx/bin/hexa` → stage0 업데이트 | 🔴 높음 | 현재 구 stage1 사용 중, canon 차기 빌드에서 stage0 필요 |
 | 2 | `fn main()` 자동 호출 여부 확정 | 🔴 높음 | T23 커밋 의미 명확화 — n6 쪽 파일 13건 패턴 고정 결정 |
 | 3 | `.substr()` stdlib 추가 검토 | 🟡 중간 | 슬라이스로 대체 가능 — 생태계 UX 개선용 |
 | 4 | stage0 에서 `hexa build` runtime.c 경로 수정 | 🟡 중간 | 인터프리터는 정상, build 만 `-I` 경로 이슈 남음 |
-| 5 | n6-architecture arch_* 엔진을 rt#36 bytecode 브릿지 테스트셋 후보로 등록 | 🟢 낮음 | 대형 .hexa 실전 regression 확보 |
+| 5 | canon arch_* 엔진을 rt#36 bytecode 브릿지 테스트셋 후보로 등록 | 🟢 낮음 | 대형 .hexa 실전 regression 확보 |
 
-## 5. n6-architecture → hexa-lang 역방향 기여 가능성
+## 5. canon → hexa-lang 역방향 기여 가능성
 
 - **arch_unified.hexa** 4-mode dispatch 패턴 — hexa-lang 의 첫 번째 공식 "multi-mode 프레임워크" 사례로 등록 가능
 - **ecosystem_9projects.hexa** — 9 프로젝트 append-only `growth_bus.jsonl` 브로드캐스트 — hexa-lang 세션 간 발견 공유 인프라 확장 대상
-- **blowup 엔진 Mk.II** — n6-architecture 기본 엔진, hexa-lang 과 공진화 (memory `project_hexa_coevolution.md` 참조)
+- **blowup 엔진 Mk.II** — canon 기본 엔진, hexa-lang 과 공진화 (memory `project_hexa_coevolution.md` 참조)
 
 ## 6. 세션 handoff 메타
 
-- n6-architecture branch: `main` (HEAD `d494fac6 feat(P3): go — 8 에이전트 병렬`)
+- canon branch: `main` (HEAD `d494fac6 feat(P3): go — 8 에이전트 병렬`)
 - 47 tasks done (P0 14 + P1 12 + P2 12 + P3 9)
 - hexa-lang branch (전달받음): `feat/dict-literal-codegen` HEAD `3ae3d7a`
-- 다음 만남 시점: hexa-lang T43 후속 + n6-architecture P4 (로드맵 확장 미정) 또는 hexa runtime build 경로 재검증
+- 다음 만남 시점: hexa-lang T43 후속 + canon P4 (로드맵 확장 미정) 또는 hexa runtime build 경로 재검증
 
 ## 7. 한계·정직 기록
 
 - 이 문서는 **단방향 관찰 노트** 이며, hexa-lang 측 수정이 완료됐는지 재확인 없음
-- n6-architecture 의 "parse 전용 검증" 기록은 상당수 **인터프리터 run 으로도 가능했으나 에이전트가 보수적으로 parse 만 사용함**. 실제 run 결과와는 다를 수 있음 (재현 가능성은 각 파일 최하단 `main()` 호출로 확보됨)
+- canon 의 "parse 전용 검증" 기록은 상당수 **인터프리터 run 으로도 가능했으나 에이전트가 보수적으로 parse 만 사용함**. 실제 run 결과와는 다를 수 있음 (재현 가능성은 각 파일 최하단 `main()` 호출로 확보됨)
 - T23 auto-call 여부는 stage0 실측상 여전히 **수동 호출 필요**. 본 문서 작성 시점 최선의 이해
 
 문서 끝.

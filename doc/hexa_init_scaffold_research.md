@@ -435,7 +435,7 @@ Thumbs.db
     └── .keep
 ```
 
-**용도**: n6-architecture, anima 같은 논문 + 도메인 중심 프로젝트.
+**용도**: canon, anima 같은 논문 + 도메인 중심 프로젝트.
 **project.hexa 에 자동 포함**: `@doc_rules(type=paper)` (21 섹션), `@domain_rules` (10 축 default), `@publish_rules`.
 **장점**: `hexa doc lint` 즉시 동작. 도메인 scaffold 터가 잡혀 있음.
 **단점**: 빈 디렉토리(`.keep`) 호불호.

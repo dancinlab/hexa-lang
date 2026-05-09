@@ -1,7 +1,7 @@
 // tool/readme_english_audit.hexa — public README English-only audit
 //
 // 목적:
-//   need-singularity org 5개 repo (n6-architecture, nexus, hexa-lang, anima, papers)
+//   need-singularity org 5개 repo (canon, nexus, hexa-lang, anima, papers)
 //   의 루트 README.md 에 CJK (한글 / 일본어 / 중국어) 혼재 여부를 감지.
 //   arXiv 호환 + 국제 기여 우선 정책 (.own #1 doc-english-required) 의 enforce path.
 //
@@ -61,7 +61,7 @@ fn file_exists(path: string) -> bool {
 let HOME = env("HOME")
 let CORE = HOME + "/core"
 let TARGETS = [
-    "n6-architecture",
+    "canon",
     "nexus",
     "hexa-lang",
     "anima",
@@ -209,7 +209,7 @@ if fail_count == 0 {
 } else {
     println("  STATUS      : FAIL")
     println("  remediation : translate remaining fragments and re-run;")
-    println("                for n6-architecture, also regen from n6shared SSOT")
+    println("                for canon, also regen from n6shared SSOT")
     println("                (n6shared/n6/docs/domains.json + readme-data.json)")
     println("═════════════════════════════════════════════")
     exit(1)

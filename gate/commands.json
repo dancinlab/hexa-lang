@@ -37,7 +37,7 @@
           "nexus",
           "hexa-lang",
           "airgenome",
-          "n6-architecture"
+          "canon"
         ],
         "rule_ref": "hexa-lang/tool/proposal_inbox.hexa",
         "description": "모든 repo 에서 'go' 직전 자기 inbox 의 최상위 pending entry 1개 정보 노출 (informational, 블로킹 없음). 사용자가 'next' 로 따로 요청해도 동일. advisory(kind=advisory) 는 최우선 출력.",
@@ -53,7 +53,7 @@
           "anima"
         ],
         "rule_ref": "shared/rules/anima.json#AN9 (level=⛔)",
-        "description": "anima 'go' 시에만 ALM GPU 학습 상태 점검. nexus/n6-architecture/void/papers/hexa-lang/airgenome 등 다른 프로젝트는 이 preflight 적용 금지 — 즉시 loop 위임.",
+        "description": "anima 'go' 시에만 ALM GPU 학습 상태 점검. nexus/canon/void/papers/hexa-lang/airgenome 등 다른 프로젝트는 이 preflight 적용 금지 — 즉시 loop 위임.",
         "steps": [
           "1. (필수) ssh -o ConnectTimeout=3 ubu 'nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits' → gpu_util 숫자 획득",
           "2. (필수) stat -f %m ${ANIMA:-$WS/anima}/checkpoints/animalm_14b_v06/final.pt → now-mtime → age_hours 계산",
@@ -1019,7 +1019,7 @@
       "description": "현재 프로젝트 인프라 ROI 항목 표 출력 — 자기 프로젝트만",
       "category": "core",
       "ssot": "shared/config/roi/{project}.json",
-      "project_detect": "cwd 디렉토리명 = 프로젝트명 (예: $NEXUS → nexus, $N6_ARCH → n6-architecture). 공유 shared/ 내에선 nexus",
+      "project_detect": "cwd 디렉토리명 = 프로젝트명 (예: $NEXUS → nexus, $N6_ARCH → canon). 공유 shared/ 내에선 nexus",
       "action": "⛔ git log/stats/커밋분석/도메인집계 절대 금지 — 이 명령은 JSON 파일 기반 표 출력 전용. 순서: (1) {project} = cwd basename 판별 (2) shared/config/roi/{project}.json Read로 읽기 (3) items 배열에서 status=todo만 필터 (4) roi 필드 내림차순 정렬 (5) ASCII 표 출력",
       "format_rules": [
         "⛔ done + running 항목 표시 금지 — status=todo만 필터링. done/running은 카운트에만 포함",
@@ -1636,7 +1636,7 @@
     "hexa-lang": "shared/hexa-lang/ml-next-level.json",
     "nexus": "shared/config/core.json",
     "anima": "shared/convergence/anima.json",
-    "n6-architecture": "shared/convergence/n6-architecture.json",
+    "canon": "shared/convergence/canon.json",
     "void": "docs/plans/roadmap.md",
     "papers": "README.md",
     "airgenome": "README.md",

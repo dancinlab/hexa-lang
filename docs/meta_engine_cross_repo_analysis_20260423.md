@@ -1,14 +1,14 @@
 # cross-repo 메타 엔진 비교 + gap 분석 + 상호보완 매핑 (2026-04-23)
 
 요청자: user session.
-범위: 5 repo (hexa-lang · airgenome · n6-architecture · anima · nexus) +
+범위: 5 repo (hexa-lang · airgenome · canon · anima · nexus) +
 roadmap meta engine 1 종. 상태 점검 · 비교 매트릭스 · gap · 상호보완 · 고갈
 브레인스토밍.
 
 관련 선행:
 - `docs/hexa_lang_meta_evolution_proposal_20260422.md`
 - `airgenome/docs/airgenome_meta_evolution_proposal_20260423.md`
-- `n6-architecture/docs/n6_meta_evolution_proposal_20260423.md`
+- `canon/docs/n6_meta_evolution_proposal_20260423.md`
 - `docs/roadmap_engine_continuous_meta_proposal_20260422.md`
 
 ---
@@ -19,7 +19,7 @@ roadmap meta engine 1 종. 상태 점검 · 비교 매트릭스 · gap · 상호
 |------|---|---|---|---|
 | **hexa-lang** | **16 / 16 real-v1** (`hx_*` + `proposal_inbox`) | `bin/hx_meta` + `tool/hx_meta.hexa` | `state/proposals/inventory.json` (1 done) | ✓✓✓ |
 | **airgenome** | **4 real + 6 미구현** (`ag_common` · `ag_forge_health` 242L · `ag_ring_divergence` 164L · `ag_ring_integrity` 178L) | `bin/ag_meta` (bash shim 인라인 dispatcher) | `state/proposals/inventory.json` (3 pending) | ✓✓ |
-| **n6-architecture** | **0 / 12** (제안서만 664줄) | 없음 | `state/proposals/inventory.json` (2 pending) | ✓ |
+| **canon** | **0 / 12** (제안서만 664줄) | 없음 | `state/proposals/inventory.json` (2 pending) | ✓ |
 | **anima** | **14 proposal_*** (proposal_cluster/conflict/dashboard/lineage ...) | 없음 (각 tool 단독) | `state/proposals/inventory.json` (45 entries) | ✓✓✓ (별 계열) |
 | **nexus** | **27 roadmap_*** 도구 (다수) | 본래 엔진이었음 | `state/proposals/inventory.json` (6 entries) | ✓✓✓ (roadmap 계열) |
 
@@ -110,7 +110,7 @@ roadmap meta engine scaffolds (hexa-lang 로 이관됨):
 | hexa-lang (proposal 성숙도) | 5 | 1 | 4 (inbox 외 cluster/conflict/lineage/dashboard 가능) |
 | hexa-lang (roadmap engine stubs) | 13 | 0 | **13** |
 | airgenome | 10 | 3 | **7** |
-| n6-architecture | 12 | 0 | **12** (+ Proof Obligation DSL Phase 6.4) |
+| canon | 12 | 0 | **12** (+ Proof Obligation DSL Phase 6.4) |
 | anima (cross-adopt hexa-lang 축) | 16 | 0* | N/A (본질 다름 — 학습/코히어런스) |
 | nexus (이관 완료 후) | — | — | legacy 27 tool 재평가 필요 |
 
@@ -119,7 +119,7 @@ roadmap meta engine scaffolds (hexa-lang 로 이관됨):
 ### 3.2 가장 시급한 구현 3
 
 1. **roadmap meta engine 13 stubs → real-v1** (hexa-lang, SSOT 이관 완료 but 로직 공백)
-2. **n6-architecture 0 → 최소 3** (arithmetic_invariant · loop_rule_exec · external_citation_drift
+2. **canon 0 → 최소 3** (arithmetic_invariant · loop_rule_exec · external_citation_drift
    부터 — 가장 작은 LOC 로 큰 효과)
 3. **airgenome 7 gap** 중 **ag_infra_parity + ag_dispatch_coverage** (3-host parity 실측 요구)
 
@@ -157,7 +157,7 @@ roadmap meta engine scaffolds (hexa-lang 로 이관됨):
 | 스키마 | 현재 상태 | 통일 action |
 |---|---|---|
 | proposal_inventory.v1 | 5 repo 모두 사용 중 (anima 45 entries, 나머지 1-3) | anima 수준까지 필드 확장 (cluster/conflict/lineage 지원) — backward compatible |
-| meta_scanner 출력 | hexa-lang 만 `hexa-lang/<name>/1` 형식 | airgenome/n6 도 `airgenome/<name>/1` / `n6-architecture/<name>/1` 패턴 표준화 (이미 시작) |
+| meta_scanner 출력 | hexa-lang 만 `hexa-lang/<name>/1` 형식 | airgenome/n6 도 `airgenome/<name>/1` / `canon/<name>/1` 패턴 표준화 (이미 시작) |
 | continuous_scan history | hexa-lang 만 존재 | airgenome/n6 도 `state/history/<date>_<ts>/` 관례 적용 |
 | telemetry.jsonl | hexa-lang 만 | 5 repo 공통 append-only 이벤트 |
 | declare_scanner DSL | hexa-lang v1 만 | 5 repo 공통 DSL 초안 합의 필요 |
@@ -191,10 +191,10 @@ proposal_inbox submit --to airgenome --kind tool --priority 70 \
   --prompt-ref "docs/airgenome_meta_evolution_proposal_20260423.md §Phase 3"
 ```
 
-### 5.3 n6-architecture inbox (첫 3 scanner minimum path)
+### 5.3 canon inbox (첫 3 scanner minimum path)
 
 ```
-proposal_inbox submit --to n6-architecture --kind tool --priority 75 \
+proposal_inbox submit --to canon --kind tool --priority 75 \
   --title "최소 3 scanner real-v1: arithmetic_invariant + loop_rule_exec + external_citation_drift" \
   --prompt-ref "docs/n6_meta_evolution_proposal_20260423.md §Phase 3"
 ```
@@ -370,7 +370,7 @@ proposal_inbox advise --title \
 
 1. ✅ **[hexa-lang inbox]** roadmap meta engine 13 stubs real-v1 구현 요청
 2. ✅ **[airgenome inbox]** 남은 7 scanner real-v1 구현 요청
-3. ✅ **[n6-architecture inbox]** 최소 3 scanner (arithmetic + loop_rule + citation) 요청
+3. ✅ **[canon inbox]** 최소 3 scanner (arithmetic + loop_rule + citation) 요청
 4. ✅ **[anima inbox]** proposal_inbox advisory broadcast 흡수 요청
 5. ✅ **[hexa-lang inbox]** anima 14 proposal tool 에서 cluster/conflict/lineage/dashboard 포팅
 6. ✅ **[broadcast advise]** meta scanner 공통 helpers stdlib/meta/helpers.hexa 승격
@@ -390,7 +390,7 @@ proposal_inbox advise --title \
    dispatcher (실제 작동)지만 하위 13 scanner 가 전부 stub.
 4. **hexa-lang 16 hx_* 중 api_drift 102s** — grep 114 회 serial. v2 단일 alternation 최적화
    1순위 (전체 continuous_scan 의 58% 시간 차지).
-5. **n6-architecture 는 0 구현이지만 제안서 664 LOC** — 다른 repo 가 구현하기 쉬운
+5. **canon 는 0 구현이지만 제안서 664 LOC** — 다른 repo 가 구현하기 쉬운
    상태. Proof Obligation DSL (Phase 6.4) 은 n6 외 repo 도 흡수 가치 높음.
 6. **5 repo 전부 proposal_inventory.v1 schema 통일됨** (이번 세션 산출물) —
    cross-repo 메시지 버스 가능.

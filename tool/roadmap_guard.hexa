@@ -6,7 +6,7 @@
 // 대상 (SPA 동기 = 단일 진실):
 //   shared/roadmaps/anima.json
 //   shared/roadmaps/nexus.json
-//   shared/roadmaps/n6-architecture.json
+//   shared/roadmaps/canon.json
 //   shared/roadmaps/zeta-surpass.json   (anima 서브로드맵 — 제타 추월)
 //
 // 서브커맨드:
@@ -17,7 +17,7 @@
 //   all        verify + artifacts + status (리포트 생성)
 //
 // 플래그:
-//   --project <anima|nexus|n6-architecture|zeta-surpass>  단일 프로젝트만 실행
+//   --project <anima|nexus|canon|zeta-surpass>  단일 프로젝트만 실행
 //   --report                                               shared/roadmaps/_report.md 쓰기
 //
 // exit codes:
@@ -43,7 +43,7 @@ fn print_usage() {
     println("  all        verify + artifacts + status + crossref")
     println("")
     println("flags:")
-    println("  --project <anima|nexus|n6-architecture|zeta-surpass>")
+    println("  --project <anima|nexus|canon|zeta-surpass>")
     println("  --report  (all 모드에서 shared/roadmaps/_report.md 생성)")
     println("  --strict  (gap 모드에서 gap 발견 시 exit 3)")
 }
@@ -166,7 +166,7 @@ fn is_ymd(s: str) -> bool {
 
 fn project_base(project: str) -> str {
     if project == "anima" { return HOME + "/Dev/anima" }
-    if project == "n6-architecture" { return HOME + "/Dev/n6-architecture" }
+    if project == "canon" { return HOME + "/Dev/canon" }
     if project == "zeta-surpass" { return HOME + "/Dev/anima" }
     if project == "anima-train" { return HOME + "/Dev/anima" }
     if project == "hexa-lang" { return HEXA_LANG }
@@ -296,7 +296,7 @@ fn run_status(projects: [str]) -> i64 {
 // ─── crossref: 부모↔자식 의존 관계 맵 (hexa-native) ──────────
 fn run_crossref() -> i64 {
     println("=== crossref ===")
-    let candidates = ["anima", "nexus", "n6-architecture", "zeta-surpass", "anima-train", "hexa-lang", "papers", "void", "airgenome"]
+    let candidates = ["anima", "nexus", "canon", "zeta-surpass", "anima-train", "hexa-lang", "papers", "void", "airgenome"]
     // 1st pass: 각 프로젝트의 parent_project 수집
     let mut child_of_anima: [str] = []
     let mut child_of_nexus: [str] = []
@@ -307,11 +307,11 @@ fn run_crossref() -> i64 {
         let pp = jq("._meta.parent_project // \"\"", fp)
         if pp == "anima" { child_of_anima = child_of_anima + [proj] }
         else if pp == "nexus" { child_of_nexus = child_of_nexus + [proj] }
-        else if pp == "n6-architecture" { child_of_n6 = child_of_n6 + [proj] }
+        else if pp == "canon" { child_of_n6 = child_of_n6 + [proj] }
     }
     print_crossref_branch("anima", child_of_anima)
     print_crossref_branch("nexus", child_of_nexus)
-    print_crossref_branch("n6-architecture", child_of_n6)
+    print_crossref_branch("canon", child_of_n6)
     return 0
 }
 
@@ -582,7 +582,7 @@ fn main() {
         }
     }
 
-    let all_projects = ["anima", "nexus", "n6-architecture", "zeta-surpass", "anima-train", "hexa-lang", "papers", "void", "airgenome"]
+    let all_projects = ["anima", "nexus", "canon", "zeta-surpass", "anima-train", "hexa-lang", "papers", "void", "airgenome"]
     let mut projects: [str] = []
     if len(project_filter) > 0 {
         let mut ok = false

@@ -1,4 +1,4 @@
-// tests/doc/verify_n6arch.hexa — n6-architecture 9 paper @own 검증
+// tests/doc/verify_n6arch.hexa — canon 9 paper @own 검증
 
 use "self/attrs/own"
 
@@ -18,8 +18,8 @@ fn _check(p: string) {
 }
 
 fn main() {
-    let base = "/home/aiden/mac_home/dev/n6-architecture/domains/"
-    println("@own 검증 — n6-architecture 9 paper")
+    let base = "/home/aiden/mac_home/dev/canon/domains/"
+    println("@own 검증 — canon 9 paper")
     println("--------------------------------------")
     _check(base + "life/dog-robot-test/dog-robot-test.md")
     _check(base + "compute/sscb/sscb.md")

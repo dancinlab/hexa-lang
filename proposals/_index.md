@@ -58,7 +58,7 @@ Source: hive `packages/coding-agent/hexa/cli_mvp.hexa` 2026-04-30 hot-path scan 
 - **interp builtin (hexa_full.hexa)** — RFC-010 (int_map / sparse_int_array type-tag dispatch + native array backing)
 - **linter / parser_pass** — RFC-007 (exec()==int rule), RFC-011 (exec("date +%s") perf lint)
 - **docs** — RFC-006 (exec() decision tree cheat-sheet), RFC-011 (stdlib_time_quickref + native primitive visibility)
-- **cross-repo migration mandate** — RFC-011 (raw 47 sweep across hive/nexus/anima/airgenome/n6-architecture)
+- **cross-repo migration mandate** — RFC-011 (raw 47 sweep across hive/nexus/anima/airgenome/canon)
 
 ## Cross-cutting recommendations
 

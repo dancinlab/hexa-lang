@@ -1,0 +1,298 @@
+// HEXA Native Compiler — Phase B4 / S8: citation pass
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Walks a parsed Module and validates every `@implements(L[*])` annotation
+// against an in-memory AtlasIndex (Phase A2 — compiler/atlas/merger.hexa).
+// Per RFC-017 §3.1 (S8) citation is fatal: missing or wrong-kind citations
+// abort compilation. Per RFC-019 §6 multi-error policy: we collect every
+// miss and return all diagnostics (no early-stop).
+//
+// Diagnostic codes (catalog: compiler/diag/catalog.hexa):
+//   HX8001  @implements(L[id]) — atlas has no such L node
+//   HX8002  @implements(K[id]) where K != L — wrong-kind citation
+//   HX8003  fn body uses atlas L refs but no @implements citation (Warn)
+//   HX1099  @implements(L[id]) where L exists but is tombstoned (Decision 5e).
+//           Already owned by the tombstone pass — re-emit, do not redefine.
+//
+// `@law(...)` annotations carry only string literals (formula + units) and
+// require no atlas binding here — deeper verification is RFC-017 S6/S7
+// prover territory.
+//
+// pub fn citation_check(module: Module, atlas: AtlasIndex) -> [Diagnostic]
+//
+// 100% enum match on ItemKind / ExprKind (no string compares against tags).
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../atlas/merger.hexa"
+import "../atlas/parser.hexa"
+import "../lex/tokens.hexa"
+
+// ── Helpers ──────────────────────────────────────────────────
+
+fn _empty_fixit() -> FixIt {
+    return FixIt {
+        kind: FixItKind::None,
+        span: Span { file: "", line: 0, col: 0, len: 0 },
+        new_text: ""
+    }
+}
+
+// Render the HX8001 message inline (template lives in catalog as
+// "atlas {atlas_hash} has no L node `{node_id}` cited by @implements").
+fn _render_hx8001(atlas_hash: string, node_id: string) -> string {
+    return "atlas " + atlas_hash + " has no L node `" + node_id + "` cited by @implements"
+}
+
+// Render HX8002 — wrong-kind target ("@implements points at a {K} node;
+// only L nodes may be implemented").
+fn _render_hx8002(node_kind: string, node_id: string) -> string {
+    return "@implements(" + node_kind + "[" + node_id + "]) points at a " + node_kind + " node; only L nodes may be implemented"
+}
+
+// Render HX8003 — fn uses L refs but no @implements citation.
+fn _render_hx8003(fn_name: string, node_id: string) -> string {
+    return "function `" + fn_name + "` references atlas L node `" + node_id + "` in its body but has no @implements citation"
+}
+
+// Render HX1099 — citing a tombstoned L node (per SPEC.md §6.5).
+fn _render_hx1099(node_id: string) -> string {
+    return "atlas L node `" + node_id + "` is tombstoned; @implements citation rejected"
+}
+
+// Tombstone detection — Decision 5e tombstones are recorded in
+// atlas.tombstones.n6 and surface in AtlasNode.raw via a literal
+// "[TOMBSTONED]" marker (mirrors the gate convention). Atlas merger
+// keeps the node but flags raw — citation pass refuses to bind to it.
+fn _is_tombstoned(node: AtlasNode) -> bool {
+    let raw = node.raw
+    let n = len(raw)
+    if n < 12 { return false }
+    let mut i = 0
+    while i + 12 <= n {
+        if raw.substring(i, i + 12) == "[TOMBSTONED]" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── ExprKind / ItemKind probes ────────────────────────────────
+// Stage0 cannot derive Eq for enums; mirror parser.hexa tag_of pattern.
+
+fn _is_atlas_ref_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::AtlasRef -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_fn_item(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Fn -> true,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false,
+        ItemKind::Import -> false
+    }
+}
+
+// ── L-ref collection over an Expr tree ───────────────────────
+// Emits an array of AtlasRef payloads (kind="L") from the body so the
+// citation hint pass (HX8003) can compare against @implements targets.
+
+fn _collect_l_refs(e: Expr, out: array) {
+    if _is_atlas_ref_kind(e.kind) {
+        let aref = e.atlas_ref
+        if aref.kind == "L" { out.push(aref) }
+    } else {
+        // Defensive: Some Exprs may carry a populated atlas_ref even when
+        // their kind isn't AtlasRef (matches resolve.hexa behaviour).
+        let aref = e.atlas_ref
+        if aref.kind == "L" { out.push(aref) }
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        _collect_l_refs(e.children[i], out)
+        i = i + 1
+    }
+}
+
+// ── Annotation classification ────────────────────────────────
+// `@implements` should hold exactly one AtlasRef arg. We check each arg
+// independently (so multi-arg impls are validated arm-by-arm) and emit
+// per-arg diagnostics.
+
+fn _is_implements_ann(name: string) -> bool {
+    return name == "implements"
+}
+
+fn _is_law_ann(name: string) -> bool {
+    return name == "law"
+}
+
+// Validate one @implements arg expression. Returns the cited L id when
+// the arg is a well-formed L[*] (so the caller can record it for the
+// HX8003 gap check); returns "" otherwise.
+fn _check_implements_arg(arg: Expr, atlas: AtlasIndex, out: array) -> string {
+    // Only AtlasRef-shaped args matter — anything else (string lit, ident,
+    // etc.) is silently ignored at S8 (S0/S2 already covers shape errors).
+    let aref = arg.atlas_ref
+    if len(aref.kind) == 0 { return "" }
+
+    if aref.kind != "L" {
+        // Wrong kind — HX8002.
+        let msg = _render_hx8002(aref.kind, aref.id)
+        let d = Diagnostic {
+            code: "HX8002",
+            severity: Severity::Error,
+            stage: "S8",
+            span: aref.span,
+            message: msg,
+            note: "",
+            suggest: "",
+            fixit: _empty_fixit(),
+            related: []
+        }
+        out.push(d)
+        return ""
+    }
+
+    let hit = lookup(atlas, "L", aref.id)
+    if len(hit.kind) == 0 {
+        // Missing — HX8001. Note: S1 (resolve) already emits HX1042 for
+        // the same span, but S8 is its own pass and emits the citation-
+        // specific code so downstream tooling (LSP, gate) can route.
+        let msg = _render_hx8001(atlas.hash, aref.id)
+        let d = Diagnostic {
+            code: "HX8001",
+            severity: Severity::Error,
+            stage: "S8",
+            span: aref.span,
+            message: msg,
+            note: "",
+            suggest: "",
+            fixit: _empty_fixit(),
+            related: []
+        }
+        out.push(d)
+        return ""
+    }
+
+    if _is_tombstoned(hit) {
+        // Tombstoned — HX1099 (SPEC.md §6.5, owned by the tombstone pass).
+        let msg = _render_hx1099(aref.id)
+        let d = Diagnostic {
+            code: "HX1099",
+            severity: Severity::Error,
+            stage: "S8",
+            span: aref.span,
+            message: msg,
+            note: "",
+            suggest: "",
+            fixit: _empty_fixit(),
+            related: []
+        }
+        out.push(d)
+        return ""
+    }
+
+    // Valid citation — record the id for the HX8003 gap check.
+    return aref.id
+}
+
+// ── Per-item walk ────────────────────────────────────────────
+
+fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
+    // Collect every @implements target id into `cited` so we can compare
+    // against the body's L-refs after annotation validation.
+    let mut cited = []
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if _is_implements_ann(a.name) {
+            let mut j = 0
+            while j < len(a.args) {
+                let id = _check_implements_arg(a.args[j], atlas, out)
+                if len(id) > 0 { cited.push(id) }
+                j = j + 1
+            }
+        }
+        // @law args are documentation strings — no atlas binding here.
+        i = i + 1
+    }
+
+    // HX8003 hint: fn bodies that USE L[*] refs but cite none are flagged.
+    // Only fn items have meaningful bodies — let/struct/enum/import bodies
+    // are the empty placeholder (kind=Ident, no atlas refs).
+    if !_is_fn_item(it.kind) { return }
+
+    let mut body_refs = []
+    _collect_l_refs(it.body, body_refs)
+    if len(body_refs) == 0 { return }
+
+    // For each L-ref in the body, check whether some @implements cites it.
+    // We emit at most one HX8003 per item (covers the first uncited ref) —
+    // multi-error collection across items is preserved.
+    let mut k = 0
+    while k < len(body_refs) {
+        let r = body_refs[k]
+        let mut covered = false
+        let mut c = 0
+        while c < len(cited) {
+            if cited[c] == r.id { covered = true; break }
+            c = c + 1
+        }
+        if !covered {
+            let msg = _render_hx8003(it.name, r.id)
+            let d = Diagnostic {
+                code: "HX8003",
+                severity: Severity::Warning,
+                stage: "S8",
+                span: r.span,
+                message: msg,
+                note: "",
+                suggest: "",
+                fixit: _empty_fixit(),
+                related: []
+            }
+            out.push(d)
+            return
+        }
+        k = k + 1
+    }
+}
+
+// ── Public entry ─────────────────────────────────────────────
+
+pub fn citation_check(module: Module, atlas: AtlasIndex) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < len(module.items) {
+        _walk_item(module.items[i], atlas, out)
+        i = i + 1
+    }
+    return out
+}

@@ -6,7 +6,7 @@
 //    _raw_toggles_load_map / _raw_toggles_effective / _raw_toggles_persist).
 //
 // Cross-repo: 5 sister repos (hive / nexus / anima / hexa-lang / airgenome /
-// n6-architecture) — raw 47 cross-repo universal mandate. Single SSOT reader,
+// canon) — raw 47 cross-repo universal mandate. Single SSOT reader,
 // no per-repo duplication.
 //
 // SSOT location:

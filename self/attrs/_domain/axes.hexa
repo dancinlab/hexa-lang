@@ -1,7 +1,7 @@
 // self/attrs/_domain/axes.hexa — 10축 enum + 유효성 + 경로 매핑
 //
 // @domain(axis=...) 에 쓰이는 10개 축 SSOT.
-// n6-architecture 의 domains/<axis>/<id>/ 구조와 정합.
+// canon 의 domains/<axis>/<id>/ 구조와 정합.
 // 새 축 추가 시 이 파일만 수정.
 
 use "self/attrs/core"

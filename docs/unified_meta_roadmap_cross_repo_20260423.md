@@ -22,7 +22,7 @@
 |---|---------|------|-----------|-------------|-----------------|---------------|------------|------|
 | 1 | **nexus** | discovery-engine 🔭 | 27 roadmap_*, atlas_* 다수 ✅ | 본래 엔진 고향 ✅ | ✅ v1 | ✅ (.raw 소유 없음, hexa-lang mirror) | ✅ | 78 pending (창발 활발) |
 | 2 | **anima** | consciousness-engine 🧠 | 14 proposal_* ✅ (cluster/conflict/lineage/dashboard) | ✅ roadmap_ingest + mean_pct 91 | ✅ v1 (45 entries) | 🟡 (.raw-ref mirror) | ✅ | 50 super-proposal done (매우 활발) |
-| 3 | **n6-architecture** | system-design 🏗️ | 0 (제안서만 664L) | 🟡 loop-rules.json | ✅ v1 | ✅ .raw-ref | ✅ | proposal-only 상태 |
+| 3 | **canon** | system-design 🏗️ | 0 (제안서만 664L) | 🟡 loop-rules.json | ✅ v1 | ✅ .raw-ref | ✅ | proposal-only 상태 |
 | 4 | **papers** | paper-distribution 📄 | ❌ | ❌ | ✅ v1 (신규) | ✅ .raw-ref | ✅ 🆕 | Zenodo/DOI 자동화 미연결 |
 | 5 | **hexa-lang** | language ⬡ | **16/16 real-v1** ✅ | 13 stub (nexus 이관) | ✅ v1 | ✅ .raw SSOT | ✅ | 유일 .raw 원본 소유 |
 | 6 | **void** | terminal 🧬 | ❌ | ❌ | ✅ v1 🆕 | ✅ .raw-ref | ✅ 🆕 | ghostty fork, P1 grid-mode |

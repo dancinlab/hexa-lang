@@ -23,7 +23,7 @@ Grep `python3?` on repo (대소문자 무시, .hexa/.json/.md):
 | 2 | `bin/build.hexa:94` | **실 호출** — 동일 | **PURGE** (#1 과 같은 헬퍼 재사용) |
 | 3 | `loop-rules.json:8` (keywords) | **실 호출** — `python3 -c json.loads(...)` grammar.jsonl 파싱 | **PURGE** → `tool/count_grammar_tokens.hexa` |
 | 4 | `loop-rules.json:15` (operators) | **실 호출** — 동일 | **PURGE** (#3 과 같은 스크립트, 인자만 다름) |
-| 5 | `doc/emergence_patterns.json:168` | **실 호출** — `$N6_ARCH/tools/nexus` import (외부 리포) | **보류** — n6-architecture 툴 의존, hexa-lang 범위 밖 |
+| 5 | `doc/emergence_patterns.json:168` | **실 호출** — `$N6_ARCH/tools/nexus` import (외부 리포) | **보류** — canon 툴 의존, hexa-lang 범위 밖 |
 | 6 | `pkg/packages/token-forge/forge.hexa` 주석 3곳 | 역사 주석 (`python3 의존 0` 기록) | **유지** |
 | 7 | `self/raws/hexa_only.hexa`, `self/stdlib/law_io.hexa`, `self/stdlib/module_gate.hexa` | **가드** — `.py` 확장자 금지 목록 | **유지** (언어 순도 강제) |
 | 8 | `self/test_checksum_pure.hexa` 외 16개 테스트/주석 | Reference value 산출 기록 (`python3 -c "..."` 로 계산) | **유지** — 재현 가능성 주석 |
@@ -42,7 +42,7 @@ Grep `python3?` on repo (대소문자 무시, .hexa/.json/.md):
 
 - 스캔된 `python` 매치 라인: 60+ 
 - 실 호출 경로: **5개** (파일 3개)
-- 박멸 대상: **4개** (건별 #1-#4), 5번째 #5 는 외부 리포(n6-architecture) 의존
+- 박멸 대상: **4개** (건별 #1-#4), 5번째 #5 는 외부 리포(canon) 의존
 - 유지: 55+ 매치 (가드/주석/문서/테스트 레퍼런스)
 
 ## 3. 이번 세션 Purge 실행
@@ -61,10 +61,10 @@ Grep `python3?` on repo (대소문자 무시, .hexa/.json/.md):
 ## 4. 남은 작업
 
 **P5: doc/emergence_patterns.json:168 `python3 -c "import sys; ... import nexus; print(nexus.analyze(...))"`**
-- 분류: 외부 n6-architecture 의존 (nexus Python 모듈 import)
-- 조치: n6-architecture 가 hexa self-host 로 가기 전엔 박멸 불가
-- 블로커: n6-architecture repo 의 `tools/nexus` 가 순수 Python
-- 소요: n6-architecture 의존 제거 또는 hexa 포팅 후 처리 (별도 ROI 추천)
+- 분류: 외부 canon 의존 (nexus Python 모듈 import)
+- 조치: canon 가 hexa self-host 로 가기 전엔 박멸 불가
+- 블로커: canon repo 의 `tools/nexus` 가 순수 Python
+- 소요: canon 의존 제거 또는 hexa 포팅 후 처리 (별도 ROI 추천)
 
 **향후 유지보수**
 - 가드 (`raws/hexa_only`, `stdlib/law_io`, `stdlib/module_gate`) 는 그대로 두어 신규 `.py` 유입 차단

@@ -1,6 +1,6 @@
-# n6-architecture regression set (symlink)
+# canon regression set (symlink)
 
-n6-architecture 프로젝트의 P1~P3 작업 산출 .hexa 파일 13건 심볼릭. hexa-lang T44 이후 bench/regression 타겟으로 사용.
+canon 프로젝트의 P1~P3 작업 산출 .hexa 파일 13건 심볼릭. hexa-lang T44 이후 bench/regression 타겟으로 사용.
 
 | 파일 | 원본 경로 | 목적 |
 |------|-----------|------|
@@ -26,6 +26,6 @@ for f in ~/Dev/hexa-lang/examples/regressions/n6/*.hexa; do
 done
 ```
 
-n6-architecture 수정 시 자동으로 반영됨 (심볼릭). 원본 프로젝트: `/Users/ghost/Dev/n6-architecture/`
+canon 수정 시 자동으로 반영됨 (심볼릭). 원본 프로젝트: `/Users/ghost/Dev/canon/`
 
-생성: 2026-04-14 (n6-architecture → hexa-lang 역요청 #5 회신)
+생성: 2026-04-14 (canon → hexa-lang 역요청 #5 회신)

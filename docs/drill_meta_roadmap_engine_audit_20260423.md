@@ -1,7 +1,7 @@
 # drill + @ 토큰 + 메타/로드맵 엔진 전 프로젝트 전수조사 (2026-04-23)
 
 요청자: user session.
-범위: 10 core repo (anima · nexus · hexa-lang · airgenome · n6-architecture · void · hexa-os · papers · secret · contact).
+범위: 10 core repo (anima · nexus · hexa-lang · airgenome · canon · void · hexa-os · papers · secret · contact).
 방법: read-only grep/stat, DESIGNATED_PROJECTS 전체 열거 하에 수집.
 
 > **HISTORICAL NOTE (2026-04-25)**: airgenome hooks (post_tool / pre_tool /
@@ -21,7 +21,7 @@
 | nexus | 0 | 0 | 0 | 1 | 160 | roadmap 엔진 고향 (27 roadmap_*) |
 | **hexa-lang** | **23** | 0 | 1 | 1 | 247 | meta engine 본진 |
 | airgenome | 0 | **18** | 0 | 0 | 21 | ag_* 18 (ring/forge/divergence 등) |
-| n6-architecture | 0 | 0 | **15** | 0 | 17 | n6_* 15 (이미 구현 진행 중!) |
+| canon | 0 | 0 | **15** | 0 | 17 | n6_* 15 (이미 구현 진행 중!) |
 | void | 0 | 0 | 0 | 0 | 2 | terminal repo |
 | hexa-os | 0 | 0 | 0 | 0 | 0 | kernel/boot (tool 없음) |
 | papers | 0 | 0 | 0 | 0 | 0 | paper distribution |
@@ -29,7 +29,7 @@
 | contact | 0 | 0 | 0 | 0 | 0 | private |
 
 **관측**:
-- n6-architecture 에 `n6_*.hexa` **15 개 이미 존재** — 즉 brainstorm 제안서만 있다고 생각했으나 **실제 구현 진행 중**. 이전 분석 문서 (cross_repo_analysis) 가 stale.
+- canon 에 `n6_*.hexa` **15 개 이미 존재** — 즉 brainstorm 제안서만 있다고 생각했으나 **실제 구현 진행 중**. 이전 분석 문서 (cross_repo_analysis) 가 stale.
 - airgenome `ag_*` 18 개 — 내 이전 분석은 4 개로 추정. 누락분 재확인 필요.
 - hexa-lang 23 `hx_*` + 1 n6_* 혼재 (n6 호환성 테스트 도구일 수 있음).
 
@@ -41,7 +41,7 @@
 | nexus | **27** | ✓ | ✗ |
 | **hexa-lang** | **59** | ✓ | **✓** |
 | airgenome | 0 | ✓ | ✗ |
-| n6-architecture | 0 | ✓ | ✗ |
+| canon | 0 | ✓ | ✗ |
 | void | 0 | ✓ | ✗ |
 | hexa-os | 0 | ✓ | ✗ |
 | papers | 0 | ✓ | ✗ |
@@ -59,7 +59,7 @@
 |------|------|
 | hexa-lang | 9 (gate + tool 다수) |
 | nexus | 3 (본래 drill 엔진 소유) |
-| n6-architecture | 1 |
+| canon | 1 |
 | anima · airgenome · void · hexa-os · papers · secret · contact | **0** |
 
 **관측**: drill 은 hexa-lang gate + nexus 엔진 쌍에 집중. anima 등 consumer repo 는 drill 직접 호출 없음 — `~/.hx/bin/nexus drill` 명령어로 간접 사용.
@@ -101,7 +101,7 @@
 | nexus | 82 | 1 (nxs-006 hexa_v2 Linux binary) |
 | hexa-lang | 10 | 0 |
 | **airgenome** | 12 | **3** (agm-003, 006, 008) |
-| n6-architecture | 6 | 1 (n6a-002) |
+| canon | 6 | 1 (n6a-002) |
 | void | 1 | 0 |
 | hexa-os | 1 | 0 |
 | papers | 1 | 0 |
@@ -122,7 +122,7 @@
 | AG15 hard advisory | ✅ 일반 prompt 에도 출력 | prompt_scan.hexa |
 | **메타엔진 hx_\*** (hexa-lang) | **🟡 23 tool 존재** (real vs stub 마킹 일부 누락) | 개별 tool 내부 STATUS 주석 |
 | **메타엔진 ag_\*** (airgenome) | **🟡 18 tool 존재** (내 이전 분석은 4 로 추정 — 재확인 필요) | ag_common/ring/forge/divergence |
-| **메타엔진 n6_\*** (n6-architecture) | **🟡 15 tool 존재** (제안서만 알고 있었음 — 실제 구현 상당 진행) | n6_* prefix |
+| **메타엔진 n6_\*** (canon) | **🟡 15 tool 존재** (제안서만 알고 있었음 — 실제 구현 상당 진행) | n6_* prefix |
 | 메타엔진 기타 8 repo | ❌ 0 | — |
 | 로드맵엔진 ✅ hexa-lang | ✅ `bin/roadmap_engine` shim + 59 tool | — |
 | 로드맵엔진 nexus | 🟡 27 tool 존재 but shim 없음 | 본래 고향 |
@@ -178,7 +178,7 @@
 Audit 수행 환경:
 
 ```
-DESIGNATED_PROJECTS="anima,nexus,hexa-lang,airgenome,n6-architecture,void,hexa-os,papers,secret,contact"
+DESIGNATED_PROJECTS="anima,nexus,hexa-lang,airgenome,canon,void,hexa-os,papers,secret,contact"
 ```
 
 데이터 수집 시각: 2026-04-23.

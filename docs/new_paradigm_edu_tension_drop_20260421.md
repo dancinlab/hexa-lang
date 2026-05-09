@@ -275,7 +275,7 @@ scheduler        : τ_half / ε_mastery 기반 재관측 강제.
 
 EdgeKind ↔ drill 각도 1:1 — 이미 골화된 5 원소가 §2.1 의 EdgeKind 5 원소와 **구조적으로 일치**. 우연 아님 — 둘 다 atlas 위 발산적 탐색의 최소 basis 다.
 
-### 5.4 n6-architecture signals 연동
+### 5.4 canon signals 연동
 
 `shared/n6/atlas.signals.n6` 는 3-repo 신호 SSOT. "tension" 태그를 그 스키마에 추가한다 — 새 도메인 태그 `TENS`.
 

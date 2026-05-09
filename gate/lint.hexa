@@ -948,12 +948,12 @@ fn check_ag5(path: string) -> string {
     return ""
 }
 
-// ─── N62-A (n6-architecture 전용) — 논문 md 에 ```python 검증코드 블록 필수 ───
+// ─── N62-A (canon 전용) — 논문 md 에 ```python 검증코드 블록 필수 ───
 // 원칙: 논문 = 검증 .py 코드를 ```python 코드블록으로 직접 embed. hexa 블록은 무관.
 // Scope: papers/*.md, domains/*/paper/*.md
 // 예외: CLAUDE/README, _index 계열, archive/, // @allow-no-verify
 fn check_n62a(path: string) -> string {
-    if _project_name() != "n6-architecture" { return "" }
+    if _project_name() != "canon" { return "" }
     let e = ext_of(path)
     if e != ".md" { return "" }
     let bn = basename_of(path)
@@ -977,7 +977,7 @@ fn check_n62a(path: string) -> string {
 // ─── N6 논문 canonical 양식 공통 scope 헬퍼 ───
 // True 이면 n6 canonical 검사 대상 (papers/* 또는 domains/* 의 .md, _archive 제외)
 fn _n6_canonical_in_scope(path: string) -> bool {
-    if _project_name() != "n6-architecture" { return false }
+    if _project_name() != "canon" { return false }
     let e = ext_of(path)
     if e != ".md" { return false }
     let bn = basename_of(path)
@@ -999,7 +999,7 @@ fn _n6_canonical_exempt(full: string) -> bool {
     return false
 }
 
-// ─── N61-C1 (n6-architecture) — 7 섹션 헤더 모두 존재 ───
+// ─── N61-C1 (canon) — 7 섹션 헤더 모두 존재 ───
 // §1 WHY / §2 COMPARE / §3 REQUIRES / §4 STRUCT / §5 FLOW / §6 EVOLVE / §7 VERIFY
 fn check_n61_c1(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
@@ -1033,7 +1033,7 @@ fn check_n61_c1(path: string) -> string {
     return "N61-C1|error|논문 7섹션 누락 " + to_string(miss_count) + "건 (WHY/COMPARE/REQUIRES/STRUCT/FLOW/EVOLVE/VERIFY 중" + missing + ") (// @allow-paper-canonical)"
 }
 
-// ─── N61-A1 (n6-architecture) — 모든 ## 섹션 body 비어있지 않음 ───
+// ─── N61-A1 (canon) — 모든 ## 섹션 body 비어있지 않음 ───
 // 각 ## 헤더 후 다음 ## 전까지: 비어있지 않은 줄 ≥ 3 OR 코드/리스트/표/details ≥ 1
 fn check_n61_a1(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
@@ -1050,7 +1050,7 @@ fn check_n61_a1(path: string) -> string {
     return "N61-A1|error|섹션 '" + title + "' (line " + lnum + ") 비어있음 — 3줄 또는 블록/리스트/표 필수 (// @allow-empty-section)"
 }
 
-// ─── N61-B1 (n6-architecture) — ASCII 코드블록에 박스 경계 필수 ───
+// ─── N61-B1 (canon) — ASCII 코드블록에 박스 경계 필수 ───
 // 코드블록 (``` ... ```) 전체에서 ┌└ 또는 ╭╰ 경계가 한 코드블록 단위로 있어야
 // 단순화: ASCII 섹션 (§2/§3/§4) 영역 내 코드블록 ≥1 + 박스 경계 ≥1
 fn check_n61_b1(path: string) -> string {
@@ -1069,7 +1069,7 @@ fn check_n61_b1(path: string) -> string {
     return ""
 }
 
-// ─── N61-B2 (n6-architecture) — §2 COMPARE 에 █ 바 차트 ≥3줄 ───
+// ─── N61-B2 (canon) — §2 COMPARE 에 █ 바 차트 ≥3줄 ───
 fn check_n61_b2(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -1087,7 +1087,7 @@ fn check_n61_b2(path: string) -> string {
     return ""
 }
 
-// ─── N61-B3 (n6-architecture) — §3 STRUCT 에 ├ 또는 ┼ ≥1 ───
+// ─── N61-B3 (canon) — §3 STRUCT 에 ├ 또는 ┼ ≥1 ───
 fn check_n61_b3(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -1102,7 +1102,7 @@ fn check_n61_b3(path: string) -> string {
     return ""
 }
 
-// ─── N61-B4 (n6-architecture) — §4 FLOW 에 ▼ 또는 → ≥3건 ───
+// ─── N61-B4 (canon) — §4 FLOW 에 ▼ 또는 → ≥3건 ───
 fn check_n61_b4(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -1117,7 +1117,7 @@ fn check_n61_b4(path: string) -> string {
     return ""
 }
 
-// ─── N61-Mk1 (n6-architecture) — Mk 진화 섹션 존재 ───
+// ─── N61-Mk1 (canon) — Mk 진화 섹션 존재 ───
 fn check_n61_mk1(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -1129,7 +1129,7 @@ fn check_n61_mk1(path: string) -> string {
     return ""
 }
 
-// ─── N61-Mk3 (n6-architecture) — Mk 진화 §5 내 <details> 래핑 + open 정확 1개 ───
+// ─── N61-Mk3 (canon) — Mk 진화 §5 내 <details> 래핑 + open 정확 1개 ───
 fn check_n61_mk3(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -1156,7 +1156,7 @@ fn check_n61_mk3(path: string) -> string {
     return ""
 }
 
-// ─── N61-Mk4 (n6-architecture) — 첫 <details> 가 open 이어야 (최신이 맨 위) ───
+// ─── N61-Mk4 (canon) — 첫 <details> 가 open 이어야 (최신이 맨 위) ───
 fn check_n61_mk4(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -1173,7 +1173,7 @@ fn check_n61_mk4(path: string) -> string {
     return ""
 }
 
-// ─── N61-R1 (n6-architecture) — §3 REQUIRES body 에 🛸 지수 ≥2 + 도메인 링크 ≥1 ───
+// ─── N61-R1 (canon) — §3 REQUIRES body 에 🛸 지수 ≥2 + 도메인 링크 ≥1 ───
 fn check_n61_r1(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -1203,7 +1203,7 @@ fn check_n61_r1(path: string) -> string {
     return ""
 }
 
-// ─── N61-R2 (n6-architecture) — frontmatter requires ↔ §3 REQUIRES 표 sync ───
+// ─── N61-R2 (canon) — frontmatter requires ↔ §3 REQUIRES 표 sync ───
 fn check_n61_r2(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -1252,7 +1252,7 @@ fn check_n61_r2(path: string) -> string {
     return ""
 }
 
-// ─── N6-DAG-SYNC (n6-architecture) — frontmatter requires(to:) ↔ _dag.json edges sync ───
+// ─── N6-DAG-SYNC (canon) — frontmatter requires(to:) ↔ _dag.json edges sync ───
 // scope: papers/* or domains/* .md (canonical scope)
 // _dag.json 없으면 skip pass (build_dag 미실행 상태). 해당 도메인 노드가 없으면 error.
 fn check_n6_dag_sync(path: string) -> string {
@@ -1291,10 +1291,10 @@ fn check_n6_dag_sync(path: string) -> string {
     return "N6-DAG-SYNC|error|" + domain + ": frontmatter requires [" + fm_disp + "] ≠ _dag.json edges [" + dag_disp + "] — build_dag.hexa 재실행 필요 (// @allow-dag-sync)"
 }
 
-// ─── N6-DAG-DANGLE (n6-architecture) — _dag.json edges.to 가 실재 paper 로 resolve ───
+// ─── N6-DAG-DANGLE (canon) — _dag.json edges.to 가 실재 paper 로 resolve ───
 // scope: papers/_dag.json 이 staged 일 때만
 fn check_n6_dag_dangle(path: string) -> string {
-    if _project_name() != "n6-architecture" { return "" }
+    if _project_name() != "canon" { return "" }
     if path != "papers/_dag.json" { return "" }
     let full = REPO_ROOT + "/" + path
     let mk = _to_int0(_str(exec("grep -c '@allow-dag-dangle' '" + full + "' 2>/dev/null || echo 0")).trim())
@@ -1337,9 +1337,9 @@ fn check_n6_dag_dangle(path: string) -> string {
     return "N6-DAG-DANGLE|error|_dag.json: " + to_string(len(dangling)) + "개 dangling edge → " + disp + " (파일 없음 또는 nodes 누락) (// @allow-dag-dangle)"
 }
 
-// ─── N6-DAG-CYCLE (n6-architecture) — _dag.json edges 에 cycle 금지 ───
+// ─── N6-DAG-CYCLE (canon) — _dag.json edges 에 cycle 금지 ───
 fn check_n6_dag_cycle(path: string) -> string {
-    if _project_name() != "n6-architecture" { return "" }
+    if _project_name() != "canon" { return "" }
     if path != "papers/_dag.json" { return "" }
     let full = REPO_ROOT + "/" + path
     let mk = _to_int0(_str(exec("grep -c '@allow-dag-cycle' '" + full + "' 2>/dev/null || echo 0")).trim())
@@ -1367,7 +1367,7 @@ fn check_n6_dag_cycle(path: string) -> string {
     return "N6-DAG-CYCLE|error|_dag.json: cycle 발견 → " + pair_out.replace("\n", " / ") + " — 의존성 순환 불가 (// @allow-dag-cycle)"
 }
 
-// ─── N61-P1 (n6-architecture) — ```python 블록 SSOT (≥2 금지) ───
+// ─── N61-P1 (canon) — ```python 블록 SSOT (≥2 금지) ───
 // 중복 검증 블록은 drift 유발. 도메인당 1개로 제한.
 fn check_n61_p1(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
@@ -1381,7 +1381,7 @@ fn check_n61_p1(path: string) -> string {
     return ""
 }
 
-// ─── N61-R3 (n6-architecture) — §3 REQUIRES 제너릭 템플릿 금지 ───
+// ─── N61-R3 (canon) — §3 REQUIRES 제너릭 템플릿 금지 ───
 // n6-core + cross-domain 만 있는 placeholder → 도메인 특정 선행 관계 기입 필요
 fn check_n61_r3(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
@@ -1402,7 +1402,7 @@ fn check_n61_r3(path: string) -> string {
     return ""
 }
 
-// ─── N61-W1 (n6-architecture) — §1 WHY body < 10줄 경고 ───
+// ─── N61-W1 (canon) — §1 WHY body < 10줄 경고 ───
 fn check_n61_w1(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -1416,7 +1416,7 @@ fn check_n61_w1(path: string) -> string {
     return ""
 }
 
-// ─── N61-E1 (n6-architecture) — §6 EVOLVE Mk.V boilerplate 금지 ───
+// ─── N61-E1 (canon) — §6 EVOLVE Mk.V boilerplate 금지 ───
 // 'retrofit 단계' + 'lint 전 규칙 PASS' + 'atlas-promotion 자동 승급 후보' 3가지 문구 동시 출현 → template
 fn check_n61_e1(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
@@ -1434,7 +1434,7 @@ fn check_n61_e1(path: string) -> string {
     return ""
 }
 
-// ─── N61-V2 (n6-architecture) — §7 python 이 물리/수학 검증 0건 경고 ───
+// ─── N61-V2 (canon) — §7 python 이 물리/수학 검증 0건 경고 ───
 // sqrt/pi/log/exp/mu_0/mu0/m_e/m_p 등 물리상수/수학함수 0건 → tautological
 fn check_n61_v2(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
@@ -1449,7 +1449,7 @@ fn check_n61_v2(path: string) -> string {
     return ""
 }
 
-// ─── N61-V3 (n6-architecture) — gold standard §7 10 서브섹션 + 반례/falsifier ───
+// ─── N61-V3 (canon) — gold standard §7 10 서브섹션 + 반례/falsifier ───
 // sf.md 전용 strict — §7.0~§7.10 10 서브섹션 헤딩 + COUNTER_EXAMPLES/FALSIFIERS ≥3
 // Why: n=6 끼워맞춤 의심 차단. 수론 유도 + 반례 + χ² 다층 증명 구조 강제.
 fn check_n61_v3(path: string) -> string {
@@ -1468,7 +1468,7 @@ fn check_n61_v3(path: string) -> string {
     return ""
 }
 
-// ─── N61-V4 (n6-architecture) — gold standard §7 정직성 집계 라벨 ───
+// ─── N61-V4 (canon) — gold standard §7 정직성 집계 라벨 ───
 // 끝에 "X/N PASS (...정직성...)" 라벨 출력 강제
 fn check_n61_v4(path: string) -> string {
     if path != "shared/tool/sample.md" { return "" }
@@ -1975,7 +1975,7 @@ fn check_send_guard(path: string) -> string {
     return ""
 }
 
-// ─── N61-NEW (n6-architecture) — 신규 canonical 은 sample.md gold standard 필수 ───
+// ─── N61-NEW (canon) — 신규 canonical 은 sample.md gold standard 필수 ───
 // git untracked .md (domains/ 또는 papers/) 감지 시 V3/V4 수준 strict
 fn check_n61_new(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
@@ -1989,7 +1989,7 @@ fn check_n61_new(path: string) -> string {
     return ""
 }
 
-// ─── N61-GOLD-REF (n6-architecture) — sample.md 참조 마커 권장 ───
+// ─── N61-GOLD-REF (canon) — sample.md 참조 마커 권장 ───
 fn check_n61_gold_ref(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -2000,7 +2000,7 @@ fn check_n61_gold_ref(path: string) -> string {
     return ""
 }
 
-// ─── N61-F1 (n6-architecture) — frontmatter alien_index_* 금지 ───
+// ─── N61-F1 (canon) — frontmatter alien_index_* 금지 ───
 // 전체 canonical 스코프. lint 미사용 키 (alien_index_current/target) 제거 강제.
 // Why: alien_index 는 본문 표기에만 사용. frontmatter 에 두면 machine-parse 오해 + 중복.
 fn check_n61_f1(path: string) -> string {
@@ -2013,7 +2013,7 @@ fn check_n61_f1(path: string) -> string {
     return ""
 }
 
-// ─── N61-V1 (n6-architecture) — §7 python 에 도메인 키워드 없음 경고 ───
+// ─── N61-V1 (canon) — §7 python 에 도메인 키워드 없음 경고 ───
 // frontmatter domain: <name> 이 §7 python 블록 body 내 출현 없음 → canonical 제너릭
 fn check_n61_v1(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
@@ -2031,7 +2031,7 @@ fn check_n61_v1(path: string) -> string {
     return ""
 }
 
-// ─── VP-M1 (n6-architecture) — ```python 블록에 'MISSING DATA' 금지 ───
+// ─── VP-M1 (canon) — ```python 블록에 'MISSING DATA' 금지 ───
 fn check_vp_m1(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -2045,7 +2045,7 @@ fn check_vp_m1(path: string) -> string {
     return ""
 }
 
-// ─── VP-M2 (n6-architecture) — ```python 블록에 (_, None, None, None) 튜플 금지 ───
+// ─── VP-M2 (canon) — ```python 블록에 (_, None, None, None) 튜플 금지 ───
 fn check_vp_m2(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -2097,7 +2097,7 @@ fn _vp_part(res: string, idx: i64) -> string {
     return ""
 }
 
-// ─── VP-M7 (n6-architecture) — python 검증 코드 exit 0 ───
+// ─── VP-M7 (canon) — python 검증 코드 exit 0 ───
 fn check_vp_m7(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -2117,7 +2117,7 @@ fn check_vp_m7(path: string) -> string {
     return "VP-M7|error|python 검증 코드 실행 실패 (exit " + rc + ") / stderr: " + _str(err_first) + " (// @allow-no-runtime)"
 }
 
-// ─── VP-M9 (n6-architecture) — python stdout 에 'SKIP' 단어 차단 ───
+// ─── VP-M9 (canon) — python stdout 에 'SKIP' 단어 차단 ───
 fn check_vp_m9(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -2140,7 +2140,7 @@ fn check_vp_m9(path: string) -> string {
     return "VP-M9|error|python 실행 결과에 'SKIP' 단어 " + to_string(skip_cnt) + "건 / MISSING DATA 잔존 (// @allow-no-runtime)"
 }
 
-// ─── VP-M10 (n6-architecture) — python stdout 에 N/N PASS 형식 요약 필수 ───
+// ─── VP-M10 (canon) — python stdout 에 N/N PASS 형식 요약 필수 ───
 fn check_vp_m10(path: string) -> string {
     if !_n6_canonical_in_scope(path) { return "" }
     let full = REPO_ROOT + "/" + path
@@ -2184,11 +2184,11 @@ fn check_vp_m10(path: string) -> string {
     return "VP-M10|error|python 실행 결과에 'N/N PASS' 형식 요약 누락 (// @allow-no-runtime)"
 }
 
-// ─── N6-JSONPAIR (n6-architecture) — 신규 도메인 문서 추가 시 papers/_registry.json 동반 ───
+// ─── N6-JSONPAIR (canon) — 신규 도메인 문서 추가 시 papers/_registry.json 동반 ───
 // staged 에 papers/n6-*.md 또는 domains/*/*.md (status=A) + papers/_registry.json 미변경 → error
 // 파일별 호출이라 매번 같은 staged 상태를 검사. path 는 트리거 매칭에 사용.
 fn check_n6_jsonpair(path: string) -> string {
-    if _project_name() != "n6-architecture" { return "" }
+    if _project_name() != "canon" { return "" }
     // 트리거: 이 파일이 staged 신규 문서일 때만 한 번 검사
     let bn = basename_of(path)
     if ext_of(path) != ".md" { return "" }
@@ -2501,7 +2501,7 @@ fn check_v_const(path: string) -> string {
 
 
 // ─── ATLAS-GUARD (공통) — atlas.n6 직접 편집 금지 (Phase 1 진입 차단) ───
-// 공리: atlas.n6 은 전 프로젝트 단일 진리 (nexus/anima/n6-architecture/void 등 공용).
+// 공리: atlas.n6 은 전 프로젝트 단일 진리 (nexus/anima/canon/void 등 공용).
 //       편집은 _guarded_append_atlas() 또는 atlas_guard 경유만.
 // L1: .hexa 에서 write_file/append_file 로 atlas.n6 직접 호출
 // L2: shell redirect (>> atlas.n6, > atlas.n6)
@@ -2875,7 +2875,7 @@ fn check_devpath(path: string) -> string {
     // 검출: (~|$HOME|${HOME}|$HOME_DIR|${HOME_DIR}|/Users/<u>|/home/<u>)/Dev/(화이트리스트 프로젝트)
     //   .hexa 코드의 `"/core/nexus/"` string literal 도 /Dev/nexus 로 잡힘
     // 예외: ${NEXUS:-$WS/nexus} 등 canonical fallback 패턴은 허용 (prefer $PROJ, fallback to $WS)
-    let cmd = "grep -nE '(~|/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+|\\$HOME|\\$\\{HOME\\}|\\$HOME_DIR|\\$\\{HOME_DIR\\})/Dev/(nexus|anima|hexa-lang|n6-architecture|airgenome|void|papers)' '" + full + "' 2>/dev/null | grep -vE '@allow-devpath|\\$\\{(NEXUS|ANIMA|HEXA_LANG|N6_ARCH|AIRGENOME|VOID|PAPERS):-' | wc -l"
+    let cmd = "grep -nE '(~|/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+|\\$HOME|\\$\\{HOME\\}|\\$HOME_DIR|\\$\\{HOME_DIR\\})/Dev/(nexus|anima|hexa-lang|canon|airgenome|void|papers)' '" + full + "' 2>/dev/null | grep -vE '@allow-devpath|\\$\\{(NEXUS|ANIMA|HEXA_LANG|N6_ARCH|AIRGENOME|VOID|PAPERS):-' | wc -l"
     let hit = _to_int0(_str(exec(cmd)).trim())
     if hit > 0 {
         return "H-NEXUSPATH|error|hardcoded dev path " + to_string(hit) + "건 — $NEXUS/$ANIMA/$HEXA_LANG/$N6_ARCH/$AIRGENOME/$VOID/$PAPERS 프로젝트 변수 강제. 쉘은 ${NEXUS:-$WS/nexus} fallback (// @allow-devpath 우회)"
@@ -3058,7 +3058,7 @@ fn check_v_parse(files_raw: string, mode: string) -> string {
 }
 
 // ─── 3-project autonomous growth surveillance checkers (7종) ───
-// nexus/n6-architecture/anima 통합 자율 성장 감시 — blowup.hexa + atlas.n6 지속 창발/성능/자원
+// nexus/canon/anima 통합 자율 성장 감시 — blowup.hexa + atlas.n6 지속 창발/성능/자원
 // baseline/feed 파일 미존재 시 silent pass (MVP 안전장치)
 
 // JSON 값 추출: '"key":<digits>' 패턴에서 정수 추출. 미존재 시 -1 반환.
@@ -3985,11 +3985,11 @@ for f in files {
     let v16c = check_ag6(path)
     if v16c != "" { violations = violations.push(path + "|" + v16c) }
 
-    // check_n62a (n6-architecture 전용): 논문 md 에 ```python 블록 필수
+    // check_n62a (canon 전용): 논문 md 에 ```python 블록 필수
     let v16d = check_n62a(path)
     if v16d != "" { violations = violations.push(path + "|" + v16d) }
 
-    // ─── n6 논문 canonical 양식 12 규칙 (n6-architecture 전용) ───
+    // ─── n6 논문 canonical 양식 12 규칙 (canon 전용) ───
     if e == ".md" {
         let n_c1 = check_n61_c1(path)
         if n_c1 != "" { violations = violations.push(path + "|" + n_c1) }

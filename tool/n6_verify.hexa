@@ -4,7 +4,7 @@
 // Can be called from pre-commit hook
 
 let project_root = exec("cd \"$(dirname \"$0\")/..\" && pwd").trim()
-let n6 = env("HOME") + "/Dev/n6-architecture/tools/nexus/target/release/nexus"
+let n6 = env("HOME") + "/Dev/canon/tools/nexus/target/release/nexus"
 let strict = args(1) ?? ""
 let mut errors = 0
 let mut warnings = 0

@@ -95,7 +95,7 @@
 @cf-1 6 downstream witness cycles (one per raw) — each gated by F1..F5 falsifier set declared in this convergence's witness JSON.
 @cf-2 anima DIRECT propagation parallel: r4_raw109to126_anima_propagation_plan_2026_04_28.convergence (13 raws, format anchor) — already created 2026-04-28 (chain ref above).
 @cf-3 airgenome DIRECT propagation parallel: 12 raws have airgenome=DIRECT — separate convergence file r4_raw109to126_airgenome_propagation_plan needs same registration treatment if not already present.
-@cf-4 n6-architecture DIRECT propagation parallel: 13 raws have n6-architecture=DIRECT — separate convergence file r4_raw109to126_n6_architecture_propagation_plan needs same treatment.
+@cf-4 canon DIRECT propagation parallel: 13 raws have canon=DIRECT — separate convergence file r4_raw109to126_n6_architecture_propagation_plan needs same treatment.
 @cf-5 hive DIRECT propagation parallel: 4 raws (117,118,124,126) have hive=DIRECT — small enough for inline treatment in hive/.raw or a 4-row convergence file.
 @cf-6 self/parser.hexa is the central absorption surface (4 of 6 raws) — single-file stress; downstream cycles should sequence header annotations carefully to avoid merge conflicts.
 @cf-7 raw 110 ablation driver requires N×self-host-build invocations (N = parser rule count) — cost analysis required before downstream cycle; consider sub-sample of high-stakes rules first.

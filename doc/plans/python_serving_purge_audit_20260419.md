@@ -9,7 +9,7 @@
 - 완료 범위: **build-time / grammar count 경로 4건 purge**
   - P1/P2: bin/build.hexa realpath (python3 -c os.path.realpath → realpath_posix)
   - P3/P4: loop-rules.json keywords/operators (python3 -c json.loads → tool/count_grammar_tokens.hexa)
-- 보류: doc/emergence_patterns.json:168 (n6-architecture 외부 의존 — 본 repo 밖)
+- 보류: doc/emergence_patterns.json:168 (canon 외부 의존 — 본 repo 밖)
 - **미감사 영역: serving / inference runtime 경로** — 본 문서에서 처음 감사.
 
 ## 2. Serving/Inference Surface (hexa-lang 내)

@@ -86,7 +86,7 @@ attr 선언 문법 (실제 사용례):
 - inherit=false (기본) → project 단독, inherit=true → global ∪ project.
 
 ### 3-3. 현행 project.hexa
-4개 프로젝트(hexa-lang / n6-architecture / anima / nexus) 모두 **동일한 최소 marker** 만 존재:
+4개 프로젝트(hexa-lang / canon / anima / nexus) 모두 **동일한 최소 marker** 만 존재:
 ```hexa
 struct ProjectMeta { name, hexa_lang, ssot_attrs, local_overrides }
 fn project_meta() -> ProjectMeta { ... }
@@ -106,7 +106,7 @@ fn project_meta() -> ProjectMeta { ... }
 
 ```hexa
 // project.hexa
-@project(name="n6-architecture", version="1.0")
+@project(name="canon", version="1.0")
 
 @doc_rules(type="paper") {
     sections = ["WHY", "COMPARE", ..., "IMPACT"]
@@ -180,11 +180,11 @@ precedence: file > project.hexa > global default.
 ### 4-4. 가독성 — 50줄 실제 예시 (A)
 
 ```hexa
-// project.hexa — n6-architecture
+// project.hexa — canon
 // 프로젝트 루트 단일 SSOT. 외부 JSON 0. hexa 파서만.
 
 @project(
-    name = "n6-architecture",
+    name = "canon",
     version = "1.0",
     hexa_lang = "/Users/ghost/Dev/hexa-lang"
 )
@@ -307,7 +307,7 @@ let _<attr>_<suffix> = #{...hexa map literal...}
 과 비호환이므로 공식 예시·preset 은 모두 옵션 β 로 작성한다.
 
 - 4 preset (paper/lang/hub/minimal) 생성물 전부 `hexa parse` OK + parser 블록 추출 OK.
-- 4 예시 파일 (hexa-lang/n6-architecture/anima/project.hexa.example) 전부 `hexa parse` OK.
+- 4 예시 파일 (hexa-lang/canon/anima/project.hexa.example) 전부 `hexa parse` OK.
 
 #### 5-3-4. 로더 API (rules_loader 확장)
 
@@ -338,7 +338,7 @@ pub fn find_attr_rules_v2(source: string, attr: string, selector: map) -> map
 | 프로젝트 | 현재 project.hexa | 신규 project.hexa (예상) |
 |---------|-------------------|-----------------------|
 | hexa-lang | 36 줄 | ~60 줄 (doc/readme 규칙만, 도메인/publish 0) |
-| n6-architecture | 36 줄 | ~130 줄 (5종 전부, 21 섹션 paper) |
+| canon | 36 줄 | ~130 줄 (5종 전부, 21 섹션 paper) |
 | anima | 36 줄 | ~70 줄 (doc/readme/domain, axes=의식 10축) |
 | nexus | 36 줄 | ~80 줄 (허브 역할, 모든 attr) |
 

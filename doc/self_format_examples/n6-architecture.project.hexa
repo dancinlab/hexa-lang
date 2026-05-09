@@ -1,21 +1,21 @@
-// n6-architecture.project.hexa — n6-arch 전용 project.hexa 초안 (옵션 β)
+// canon.project.hexa — n6-arch 전용 project.hexa 초안 (옵션 β)
 //
-// 역할: n6-architecture 는 **논문·도메인 중심** 프로젝트.
+// 역할: canon 는 **논문·도메인 중심** 프로젝트.
 //       §1-§21 full paper + 295 도메인 scaffold + git publish 정책 전부 담김.
 //
 // 문법: self_format_architecture.md §5-3-3 옵션 β 채택.
 //   @<attr>_rules[(selector)]
 //   let _<attr>_<suffix> = #{...hexa map literal...}
 //
-// 배치: /Users/ghost/Dev/n6-architecture/project.hexa (기존 36줄 → 이 내용으로 교체)
+// 배치: /Users/ghost/Dev/canon/project.hexa (기존 36줄 → 이 내용으로 교체)
 
 @project(
-    name      = "n6-architecture",
+    name      = "canon",
     version   = "1.0",
     hexa_lang = "/Users/ghost/Dev/hexa-lang"
 )
 let _project_meta = #{
-    "name": "n6-architecture",
+    "name": "canon",
     "version": "1.0",
     "hexa_lang": "/Users/ghost/Dev/hexa-lang"
 }

@@ -5,7 +5,7 @@
 //   (5 parser fn family).
 //
 // Cross-repo: hive primary consumer; sister repos (nexus / anima / airgenome
-// / n6-architecture)는 동일 SSOT 파일 패턴 (.command / .meta / .roadmap /
+// / canon)는 동일 SSOT 파일 패턴 (.command / .meta / .roadmap /
 // .turn / .end) 사용 시 use 1줄 import 가능.
 //
 // Exports:

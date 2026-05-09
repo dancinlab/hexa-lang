@@ -1,0 +1,95 @@
+// tool/precommit_spawn_lint.hexa — staged-content spawn_lint gate (hexa side)
+//
+// @tool(slug="precommit_spawn_lint", desc="git pre-commit gate: run spawn_lint on staged .hexa/.sh/.bash files; exit 1 on any ERROR")
+// @usage(hexa /Users/ghost/core/hexa-lang/tool/precommit_spawn_lint.hexa)
+// @example(install: ln -s tool/precommit_spawn_lint.hexa .git/hooks/pre-commit-hexa-side, chain from .git/hooks/pre-commit shim)
+// @exit_codes(0=clean, 1=ERROR violations found, 2=git not a repo / missing tool)
+//
+// Why: scripts/safety/staged-scan.sh is uchg-immutable (intentional policy
+// lock for secret/path checks). It does not invoke spawn_lint. After the
+// 2026-05-07 zombie incident (claude-bind bcmd popened hexa_interp without
+// parent-death watchdog → 30+분 PPID=1 매달림) we extended spawn_lint with
+// `unwrapped interp spawn` ERROR rule, but enforcement at commit-time
+// requires a hexa-side gate (cannot edit the locked .sh). This file is
+// that gate. Install via `.git/hooks/pre-commit` shim that chains both
+// the legacy safety chain (if user wired it) and this hexa gate.
+//
+// Policy:
+//   - Reads `git diff --cached --name-only --diff-filter=AM` for staged adds/mods.
+//   - For each .hexa / .sh / .bash file, runs tool/spawn_lint.hexa --path <file>.
+//   - Aggregates lines matching `^.*: ERROR ` (the spawn_lint ERROR format).
+//   - Exit 1 if any ERROR; print all violations to stderr first.
+//   - Bypass: HIVE_SAFETY_ALLOW=<reason> (mirrors staged-scan.sh convention,
+//     audit-logged so silent bypass is impossible).
+
+let toplevel = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
+if toplevel == "" {
+    eprintln("[precommit_spawn_lint] not a git repo — skip")
+    exit(0)
+}
+
+let bypass_reason = env("HIVE_SAFETY_ALLOW")
+if bypass_reason != "" {
+    eprintln("[precommit_spawn_lint] bypassed: " + bypass_reason)
+    let audit_dir = toplevel + "/state/safety_bypass_audit"
+    let _mk = exec("mkdir -p '" + audit_dir + "' 2>/dev/null")
+    let ts = exec("date -u +'%Y-%m-%dT%H:%M:%SZ'").trim()
+    let usr = exec("id -un 2>/dev/null").trim()
+    let branch = exec("git rev-parse --abbrev-ref HEAD 2>/dev/null").trim()
+    let safe_reason = bypass_reason.replace("\"", "\\\"")
+    let row = "{\"ts\":\"" + ts + "\",\"actor\":\"precommit_spawn_lint\",\"kind\":\"bypass\",\"reason\":\"" + safe_reason + "\",\"branch\":\"" + branch + "\",\"scanner_user\":\"" + usr + "\"}\n"
+    let _ap = exec("printf '%s' '" + row.replace("'", "'\\''") + "' >> '" + audit_dir + "/audit.jsonl' 2>/dev/null")
+    exit(0)
+}
+
+let spawn_lint_path = toplevel + "/tool/spawn_lint.hexa"
+let lint_exists = exec("test -f '" + spawn_lint_path + "' && echo y || echo n").trim()
+if lint_exists != "y" {
+    eprintln("[precommit_spawn_lint] tool/spawn_lint.hexa missing at " + spawn_lint_path)
+    exit(2)
+}
+
+let staged_raw = exec("git diff --cached --name-only --diff-filter=AM 2>/dev/null")
+let lines = split(staged_raw, "\n")
+let mut targets = []
+for raw in lines {
+    let f = raw.trim()
+    if f == "" { continue }
+    if f.ends_with(".hexa") || f.ends_with(".sh") || f.ends_with(".bash") {
+        let exists = exec("test -f '" + toplevel + "/" + f + "' && echo y || echo n").trim()
+        if exists == "y" { targets.push(f) }
+    }
+}
+
+if len(targets) == 0 {
+    exit(0)
+}
+
+let mut all_errors = []
+let mut i = 0
+while i < len(targets) {
+    let rel = targets[i]
+    let abs = toplevel + "/" + rel
+    let out = exec("hexa run '" + spawn_lint_path + "' --path '" + abs + "' 2>&1")
+    let olines = split(out, "\n")
+    for ol in olines {
+        if ol.index_of(": ERROR ") >= 0 {
+            all_errors.push(ol)
+        }
+    }
+    i = i + 1
+}
+
+if len(all_errors) > 0 {
+    eprintln("")
+    eprintln("✗ hive safety gate (hexa) — staged files violate spawn_lint policy:")
+    for e in all_errors {
+        eprintln(e)
+    }
+    eprintln("")
+    eprintln("  fix the watchdog wrapper, or rerun commit with HIVE_SAFETY_ALLOW='<reason>' if intentional.")
+    eprintln("  canonical pattern: see self/main.hexa cmd_run rt 37 (line 1318) / hooks/hook_entry.hexa bcmd.")
+    exit(1)
+}
+
+exit(0)

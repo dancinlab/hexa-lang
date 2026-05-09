@@ -113,7 +113,7 @@ Week 3  : fix.txt 시나리오 E2E 테스트 — interrupt 수 측정
 
 1. 사용자 승인 시 anima 레포에서 위 단계 실행
 2. 결과 피드백 → hexa-lang raw 역개선 (dogfood 루프)
-3. 다른 프로젝트 (nexus / n6-architecture / prism) 도 동일 이식
+3. 다른 프로젝트 (nexus / canon / prism) 도 동일 이식
 
 ---
 

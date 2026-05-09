@@ -24,7 +24,7 @@ Reproducer (anima-eeg `electrode_adjustment_helper.hexa`):
 - iter1 used `"\x1b[2J\x1b[H"` → terminal showed literal `\x1b` characters
 - patched to `chr(27)` concatenation form
 
-Additional reproducer (n6-architecture `tool/own1_doc_english_lint.hexa`, 2026-04-29):
+Additional reproducer (canon `tool/own1_doc_english_lint.hexa`, 2026-04-29):
 - Wanted to embed Python regex `[぀-ヿ㐀-䶿一-鿿가-힯]`
   inside a hexa-built `python3 -c '...'` command string for CJK count.
 - hexa lexer mishandled `぀` etc. → forced workaround using literal Unicode

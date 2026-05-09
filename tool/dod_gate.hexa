@@ -74,7 +74,7 @@ fn _env_or_default(key: string, fallback: string) -> string {
 }
 let ANIMA     = _env_or_default("ANIMA",     HOME + "/Dev/anima")       // @allow-devpath
 let HEXA_LANG = _env_or_default("HEXA_LANG", HOME + "/Dev/hexa-lang")   // @allow-devpath
-let N6_ARCH   = _env_or_default("N6_ARCH",   HOME + "/Dev/n6-architecture")  // @allow-devpath
+let N6_ARCH   = _env_or_default("N6_ARCH",   HOME + "/Dev/canon")  // @allow-devpath
 let AIRGENOME = _env_or_default("AIRGENOME", HOME + "/Dev/airgenome")   // @allow-devpath
 let VOID      = _env_or_default("VOID",      HOME + "/Dev/void")        // @allow-devpath
 let PAPERS    = _env_or_default("PAPERS",    HOME + "/Dev/papers")      // @allow-devpath

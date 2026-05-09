@@ -1,0 +1,270 @@
+// HEXA Native Compiler — Phase B4 / S8: citation smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds a fake AtlasIndex (1 L node "valid-law", fixed hash) and a
+// small Module containing four fn items, one per case:
+//   (a) PASS: fn with `@implements(L[valid-law])`             → 0 diagnostics
+//   (b) FAIL: fn with `@implements(L[ghost-law])`             → HX8001 ×1
+//   (c) FAIL: fn with `@implements(P[valid-law])` (wrong-kind) → HX8002 ×1
+//   (d) WARN: fn body has L[valid-law] ref, no annotation     → HX8003 ×1
+//
+// Multi-error collection — every miss is reported, no early-stop.
+//
+// Expected total: 3 diagnostics across 4 cases.
+//
+// Run:
+//   hexa run compiler/check/citation_test.hexa
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../atlas/merger.hexa"
+import "../atlas/parser.hexa"
+import "../lex/tokens.hexa"
+import "./citation.hexa"
+
+// ── Fake AtlasIndex ──────────────────────────────────────────
+
+fn _mk_atlas_node(kind: string, id: string) -> AtlasNode {
+    return AtlasNode {
+        kind: kind,
+        id: id,
+        raw: "@" + kind + " " + id,
+        source_file: "test://atlas.n6",
+        source_line: 1
+    }
+}
+
+fn _mk_fake_atlas() -> AtlasIndex {
+    let mut l = []
+    l.push(_mk_atlas_node("L", "valid-law"))
+    return AtlasIndex {
+        p_nodes: [],
+        c_nodes: [],
+        l_nodes: l,
+        e_nodes: [],
+        hash: "deadbeef",
+        source_count: 1,
+        duplicates: [],
+        skipped_oversize: []
+    }
+}
+
+// ── AST construction helpers ─────────────────────────────────
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_span() -> Span {
+    return _span("", 0, 0, 0)
+}
+
+fn _empty_atlas_ref() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _empty_span() }
+}
+
+fn _empty_type() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: _empty_span() }
+}
+
+fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _atlas_expr(kind: string, id: string, file: string, line: i64, col: i64) -> Expr {
+    let sp = _span(file, line, col, len(id) + 3)  // K[id]
+    let aref = AtlasRef { kind: kind, id: id, span: sp }
+    return Expr {
+        kind: ExprKind::AtlasRef,
+        span: sp,
+        text: id,
+        children: [],
+        atlas_ref: aref
+    }
+}
+
+fn _block_expr(children: array, file: string, line: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _span(file, line, 1, 1),
+        text: "",
+        children: children,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _empty_block(file: string, line: i64) -> Expr {
+    return _block_expr([], file, line)
+}
+
+fn _implements_ann(arg: Expr, file: string, line: i64) -> Annotation {
+    let mut args = []
+    args.push(arg)
+    return Annotation {
+        name: "implements",
+        args: args,
+        span: _span(file, line, 1, 12)
+    }
+}
+
+fn _fn_item(name: string, anns: array, body: Expr, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, 2),
+        annotations: anns,
+        params: [],
+        return_type: _empty_type(),
+        body: body,
+        is_pub: false
+    }
+}
+
+// ── Pretty-print ─────────────────────────────────────────────
+
+fn _sev_str(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "error",
+        Severity::Warning -> "warning",
+        Severity::Note -> "note"
+    }
+}
+
+fn _print_diag(idx: i64, d: Diagnostic) {
+    let sp = d.span
+    let loc = sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+    println("  [" + to_string(idx) + "] " + d.code + " (" + _sev_str(d.severity) + " " + d.stage + ") @ " + loc)
+    println("        msg:     " + d.message)
+}
+
+fn _run_case(label: string, m: Module, atlas: AtlasIndex) -> array {
+    println("")
+    println("── case " + label + " " + "──────────────────────────")
+    let diags = citation_check(m, atlas)
+    println("diagnostics: " + to_string(len(diags)))
+    let mut i = 0
+    while i < len(diags) {
+        _print_diag(i, diags[i])
+        i = i + 1
+    }
+    return diags
+}
+
+// ── Main ─────────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Citation Smoke Test (B4/S8)")
+    println("══════════════════════════════════════════════")
+
+    let atlas = _mk_fake_atlas()
+    println("fake atlas:")
+    println("  hash:    " + atlas.hash)
+    println("  L count: " + to_string(len(atlas.l_nodes)))
+
+    let f = "test.hexa"
+
+    // (a) PASS: fn with @implements(L[valid-law]), empty body — 0 diags.
+    let ann_a = _implements_ann(_atlas_expr("L", "valid-law", f, 1, 14), f, 1)
+    let mut anns_a = []
+    anns_a.push(ann_a)
+    let item_a = _fn_item("ok_law", anns_a, _empty_block(f, 2), f, 2)
+    let mut items_a = []
+    items_a.push(item_a)
+    let mod_a = Module { file: f, items: items_a, imports: [] }
+    let diags_a = _run_case("(a) PASS @implements(L[valid-law])", mod_a, atlas)
+
+    // (b) FAIL: @implements(L[ghost-law]) — HX8001 ×1.
+    let ann_b = _implements_ann(_atlas_expr("L", "ghost-law", f, 4, 14), f, 4)
+    let mut anns_b = []
+    anns_b.push(ann_b)
+    let item_b = _fn_item("ghost_fn", anns_b, _empty_block(f, 5), f, 5)
+    let mut items_b = []
+    items_b.push(item_b)
+    let mod_b = Module { file: f, items: items_b, imports: [] }
+    let diags_b = _run_case("(b) FAIL @implements(L[ghost-law])", mod_b, atlas)
+
+    // (c) FAIL: @implements(P[valid-law]) — HX8002 ×1.
+    let ann_c = _implements_ann(_atlas_expr("P", "valid-law", f, 7, 14), f, 7)
+    let mut anns_c = []
+    anns_c.push(ann_c)
+    let item_c = _fn_item("wrong_kind_fn", anns_c, _empty_block(f, 8), f, 8)
+    let mut items_c = []
+    items_c.push(item_c)
+    let mod_c = Module { file: f, items: items_c, imports: [] }
+    let diags_c = _run_case("(c) FAIL @implements(P[valid-law])", mod_c, atlas)
+
+    // (d) WARN: fn body has L[valid-law] but no annotation — HX8003 ×1.
+    let body_d_ref = _atlas_expr("L", "valid-law", f, 11, 5)
+    let mut body_d_kids = []
+    body_d_kids.push(body_d_ref)
+    let body_d = _block_expr(body_d_kids, f, 10)
+    let item_d = _fn_item("uncited_fn", [], body_d, f, 10)
+    let mut items_d = []
+    items_d.push(item_d)
+    let mod_d = Module { file: f, items: items_d, imports: [] }
+    let diags_d = _run_case("(d) WARN body L[valid-law] no @implements", mod_d, atlas)
+
+    // ── Assertions ───────────────────────────────────────────
+    println("")
+    println("══════════════════════════════════════════════")
+    let mut ok = true
+
+    // (a) 0 diagnostics.
+    if len(diags_a) != 0 {
+        println("FAIL (a): expected 0 diagnostics, got " + to_string(len(diags_a)))
+        ok = false
+    }
+
+    // (b) 1 diagnostic, code HX8001.
+    if len(diags_b) != 1 {
+        println("FAIL (b): expected 1 diagnostic, got " + to_string(len(diags_b)))
+        ok = false
+    } else if diags_b[0].code != "HX8001" {
+        println("FAIL (b): expected code HX8001, got " + diags_b[0].code)
+        ok = false
+    }
+
+    // (c) 1 diagnostic, code HX8002.
+    if len(diags_c) != 1 {
+        println("FAIL (c): expected 1 diagnostic, got " + to_string(len(diags_c)))
+        ok = false
+    } else if diags_c[0].code != "HX8002" {
+        println("FAIL (c): expected code HX8002, got " + diags_c[0].code)
+        ok = false
+    }
+
+    // (d) 1 diagnostic, code HX8003, severity Warning.
+    if len(diags_d) != 1 {
+        println("FAIL (d): expected 1 diagnostic, got " + to_string(len(diags_d)))
+        ok = false
+    } else {
+        if diags_d[0].code != "HX8003" {
+            println("FAIL (d): expected code HX8003, got " + diags_d[0].code)
+            ok = false
+        }
+        let sev_ok = match diags_d[0].severity {
+            Severity::Warning -> true,
+            Severity::Error -> false,
+            Severity::Note -> false
+        }
+        if !sev_ok {
+            println("FAIL (d): expected Severity::Warning")
+            ok = false
+        }
+    }
+
+    if ok {
+        println("PASS: 4 cases — 0 / HX8001×1 / HX8002×1 / HX8003×1 (warn).")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}

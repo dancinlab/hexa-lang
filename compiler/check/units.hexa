@@ -1,0 +1,1126 @@
+// HEXA Native Compiler — Phase B3+ / S5: dimensional analysis (units check)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Walks a parsed Module and validates dimensional consistency in any
+// fn that carries an `@units(...)` annotation. RFC-017 §3.1 lists S5
+// as default-fatal; §3.5 specifies the annotation syntax.
+//
+// Annotation convention (lenient v1, given stage0 parser has no kwarg
+// support): arguments to `@units` are positional string literals.
+//   * 1 arg                                → return unit only
+//   * n+1 args (n = fn param count)        → param units + return unit
+//
+//   @units("J")                            // ret = J, params unitless
+//   @units("kg", "m/s", "J")               // m: kg, v: m/s, ret: J
+//
+// Diagnostics:
+//   HX5001 — binop arithmetic unit mismatch (+, -, comparisons)
+//   HX5002 — fn return unit mismatch
+//   HX5003 — call argument unit mismatch
+//
+// Lenient v1 (per task spec): an unknown / empty unit is treated as
+// "unitless and compatible with anything." S5 only fires when both
+// sides carry concrete units. A future strict v2 will reject mixing.
+//
+// Stage0 caveats:
+//   - Hexa stage0 lacks rich string ops; parse_unit splits on "." and
+//     "/" only. Power notation (`s^2`) is expanded by repeating the
+//     factor (s^2 → ["s","s"]).
+//   - Negative exponents (`s^-2`) are allowed in the denominator slot:
+//     `s^-2` parses as den=["s","s"].
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../ir/hir.hexa"
+import "../lex/tokens.hexa"
+
+// ── Unit canonical form ──────────────────────────────────────
+// Numerator / denominator are sorted string lists. Sorting makes
+// `unit_eq` a simple per-index comparison.
+
+pub struct Unit {
+    num: [string],
+    den: [string]
+}
+
+pub fn unit_empty() -> Unit {
+    return Unit { num: [], den: [] }
+}
+
+pub fn unit_is_empty(u: Unit) -> bool {
+    return len(u.num) == 0 && len(u.den) == 0
+}
+
+// ── String helpers (stage0 has no built-in trim / parseint) ──
+
+fn _is_digit_ch(c: string) -> bool {
+    if c == "0" { return true }
+    if c == "1" { return true }
+    if c == "2" { return true }
+    if c == "3" { return true }
+    if c == "4" { return true }
+    if c == "5" { return true }
+    if c == "6" { return true }
+    if c == "7" { return true }
+    if c == "8" { return true }
+    if c == "9" { return true }
+    return false
+}
+
+fn _digit_val(c: string) -> i64 {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return 0
+}
+
+// Trim ASCII whitespace from both ends.
+fn _trim(s: string) -> string {
+    let n = len(s)
+    if n == 0 { return s }
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c != " " && c != "\t" { break }
+        i = i + 1
+    }
+    let mut j = n
+    while j > i {
+        let c = s.substring(j - 1, j)
+        if c != " " && c != "\t" { break }
+        j = j - 1
+    }
+    return s.substring(i, j)
+}
+
+// Append `count` copies of `factor` to `dst`.
+fn _push_n(dst: [string], factor: string, count: i64) -> [string] {
+    let mut out = dst
+    let mut i = 0
+    while i < count {
+        out.push(factor)
+        i = i + 1
+    }
+    return out
+}
+
+// Parse one factor token like "kg", "m", "s^2", "s^-2".
+// Returns (base, exponent). Negative exponent flags denominator placement
+// at the call site.
+struct _Factor {
+    base: string,
+    exp: i64
+}
+
+fn _parse_factor(tok: string) -> _Factor {
+    let t = _trim(tok)
+    let n = len(t)
+    if n == 0 { return _Factor { base: "", exp: 0 } }
+
+    // Find "^"
+    let mut i = 0
+    while i < n {
+        if t.substring(i, i + 1) == "^" { break }
+        i = i + 1
+    }
+    if i == n {
+        // No exponent — implicit 1.
+        return _Factor { base: t, exp: 1 }
+    }
+
+    let base = t.substring(0, i)
+    // Parse exponent (may have leading "-")
+    let mut j = i + 1
+    let mut sign = 1
+    if j < n && t.substring(j, j + 1) == "-" {
+        sign = -1
+        j = j + 1
+    }
+    if j < n && t.substring(j, j + 1) == "+" {
+        j = j + 1
+    }
+    let mut acc = 0
+    while j < n {
+        let c = t.substring(j, j + 1)
+        if !_is_digit_ch(c) { break }
+        acc = acc * 10 + _digit_val(c)
+        j = j + 1
+    }
+    if acc == 0 { acc = 1 }
+    return _Factor { base: base, exp: sign * acc }
+}
+
+// Add factors from a "."-joined product string into num/den. Negative
+// exponents flip side.
+fn _ingest_product(spec: string, num: [string], den: [string], invert: bool) -> Unit {
+    let mut nums = num
+    let mut dens = den
+    let s = _trim(spec)
+    if len(s) == 0 { return Unit { num: nums, den: dens } }
+    let parts = s.split(".")
+    let mut i = 0
+    while i < len(parts) {
+        let f = _parse_factor(parts[i])
+        if len(f.base) > 0 {
+            let mut e = f.exp
+            if invert { e = -e }
+            if e > 0 {
+                nums = _push_n(nums, f.base, e)
+            } else if e < 0 {
+                dens = _push_n(dens, f.base, -e)
+            }
+            // e == 0 → drop
+        }
+        i = i + 1
+    }
+    return Unit { num: nums, den: dens }
+}
+
+// In-place insertion sort for [string].
+fn _sort_strings(xs: [string]) -> [string] {
+    let mut a = xs
+    let n = len(a)
+    let mut i = 1
+    while i < n {
+        let key = a[i]
+        let mut j = i - 1
+        while j >= 0 && a[j] > key {
+            a[j + 1] = a[j]
+            j = j - 1
+        }
+        a[j + 1] = key
+        i = i + 1
+    }
+    return a
+}
+
+// Cancel matching elements between num and den (e.g. m/m → unitless).
+fn _cancel(u: Unit) -> Unit {
+    let mut num = u.num
+    let mut den = u.den
+    let mut new_num: [string] = []
+    let mut i = 0
+    while i < len(num) {
+        let factor = num[i]
+        // search for factor in den
+        let mut found = -1
+        let mut j = 0
+        while j < len(den) {
+            if den[j] == factor {
+                found = j
+                break
+            }
+            j = j + 1
+        }
+        if found >= 0 {
+            // remove from den
+            let mut new_den: [string] = []
+            let mut k = 0
+            while k < len(den) {
+                if k != found { new_den.push(den[k]) }
+                k = k + 1
+            }
+            den = new_den
+        } else {
+            new_num.push(factor)
+        }
+        i = i + 1
+    }
+    return Unit { num: new_num, den: den }
+}
+
+fn _normalize(u: Unit) -> Unit {
+    let cancelled = _cancel(u)
+    return Unit {
+        num: _sort_strings(cancelled.num),
+        den: _sort_strings(cancelled.den)
+    }
+}
+
+// ── Public unit ops ──────────────────────────────────────────
+
+// Parse a simple unit spec like "kg.m/s^2" / "m" / "s^-2" / "" (unitless).
+//
+// Examples handled:
+//   ""              → unit_empty()
+//   "1"             → unit_empty()  (explicit unitless)
+//   "kg"            → num=[kg]
+//   "m/s"           → num=[m], den=[s]
+//   "kg.m/s^2"      → num=[kg,m], den=[s,s]
+//   "s^-2"          → num=[], den=[s,s]
+//   "m^2/s"         → num=[m,m], den=[s]
+//   "kg.m.m/s.s"    → num=[kg,m,m], den=[s,s]
+pub fn parse_unit(spec: string) -> Unit {
+    let s = _trim(spec)
+    if len(s) == 0 { return unit_empty() }
+    if s == "1" { return unit_empty() }
+
+    // Split on "/" once — left = numerator product, right = denominator product.
+    let n = len(s)
+    let mut slash = -1
+    let mut i = 0
+    while i < n {
+        if s.substring(i, i + 1) == "/" { slash = i; break }
+        i = i + 1
+    }
+
+    let mut num_str = s
+    let mut den_str = ""
+    if slash >= 0 {
+        num_str = s.substring(0, slash)
+        den_str = s.substring(slash + 1, n)
+    }
+
+    let mut nums: [string] = []
+    let mut dens: [string] = []
+    let u1 = _ingest_product(num_str, nums, dens, false)
+    let u2 = _ingest_product(den_str, u1.num, u1.den, true)
+    return _normalize(u2)
+}
+
+pub fn unit_eq(a: Unit, b: Unit) -> bool {
+    let an = _sort_strings(a.num)
+    let ad = _sort_strings(a.den)
+    let bn = _sort_strings(b.num)
+    let bd = _sort_strings(b.den)
+    if len(an) != len(bn) { return false }
+    if len(ad) != len(bd) { return false }
+    let mut i = 0
+    while i < len(an) {
+        if an[i] != bn[i] { return false }
+        i = i + 1
+    }
+    i = 0
+    while i < len(ad) {
+        if ad[i] != bd[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn unit_mul(a: Unit, b: Unit) -> Unit {
+    let mut num: [string] = []
+    let mut i = 0
+    while i < len(a.num) { num.push(a.num[i]); i = i + 1 }
+    i = 0
+    while i < len(b.num) { num.push(b.num[i]); i = i + 1 }
+    let mut den: [string] = []
+    i = 0
+    while i < len(a.den) { den.push(a.den[i]); i = i + 1 }
+    i = 0
+    while i < len(b.den) { den.push(b.den[i]); i = i + 1 }
+    return _normalize(Unit { num: num, den: den })
+}
+
+pub fn unit_div(a: Unit, b: Unit) -> Unit {
+    let mut num: [string] = []
+    let mut i = 0
+    while i < len(a.num) { num.push(a.num[i]); i = i + 1 }
+    i = 0
+    while i < len(b.den) { num.push(b.den[i]); i = i + 1 }
+    let mut den: [string] = []
+    i = 0
+    while i < len(a.den) { den.push(a.den[i]); i = i + 1 }
+    i = 0
+    while i < len(b.num) { den.push(b.num[i]); i = i + 1 }
+    return _normalize(Unit { num: num, den: den })
+}
+
+// Pretty-print canonical unit for diagnostics.
+pub fn unit_to_string(u: Unit) -> string {
+    if unit_is_empty(u) { return "1" }
+    let mut s = ""
+    if len(u.num) == 0 {
+        s = "1"
+    } else {
+        let mut i = 0
+        while i < len(u.num) {
+            if i > 0 { s = s + "." }
+            s = s + u.num[i]
+            i = i + 1
+        }
+    }
+    if len(u.den) > 0 {
+        s = s + "/"
+        let mut j = 0
+        while j < len(u.den) {
+            if j > 0 { s = s + "." }
+            s = s + u.den[j]
+            j = j + 1
+        }
+    }
+    return s
+}
+
+// ── ExprKind probes (mirror types.hexa pattern) ──────────────
+
+fn _is_lit_int(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralInt -> true,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_lit_float(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralFloat -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_lit_string(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralString -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_ident(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Ident -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_call(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Call -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_binop(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::BinOp -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_unop(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::UnOp -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_block(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Block -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_if(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::If -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_while(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::While -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_return(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Return -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_let(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Let -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_fn_item(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Fn -> true,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false,
+        ItemKind::Import -> false
+    }
+}
+
+// ── Annotation extraction ────────────────────────────────────
+// `@units(...)` per-fn: positional string-literal args.
+//   1  arg  → ret unit only.
+//   n+1 args (n = fn param count) → param units, last = ret unit.
+//   else   → discard (silent — robust against malformed annotations).
+
+struct _UnitsAnn {
+    has: bool,
+    params: [Unit],   // one Unit per fn param (in order)
+    ret: Unit
+}
+
+fn _empty_units_ann(param_count: i64) -> _UnitsAnn {
+    let mut params: [Unit] = []
+    let mut i = 0
+    while i < param_count {
+        params.push(unit_empty())
+        i = i + 1
+    }
+    return _UnitsAnn { has: false, params: params, ret: unit_empty() }
+}
+
+fn _extract_units_ann(it: Item) -> _UnitsAnn {
+    let pc = len(it.params)
+    let mut ann = _empty_units_ann(pc)
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if a.name == "units" {
+            // Collect all string-literal args.
+            let mut strs: [string] = []
+            let mut j = 0
+            while j < len(a.args) {
+                let arg = a.args[j]
+                if _is_lit_string(arg.kind) {
+                    strs.push(arg.text)
+                }
+                j = j + 1
+            }
+            let total = len(strs)
+            if total == 1 {
+                ann.has = true
+                ann.ret = parse_unit(strs[0])
+            } else if total == pc + 1 {
+                ann.has = true
+                let mut k = 0
+                let mut new_params: [Unit] = []
+                while k < pc {
+                    new_params.push(parse_unit(strs[k]))
+                    k = k + 1
+                }
+                ann.params = new_params
+                ann.ret = parse_unit(strs[pc])
+            }
+            // Other shapes → leave unitless.
+        }
+        i = i + 1
+    }
+    return ann
+}
+
+// ── UnitEnv: param name → Unit ───────────────────────────────
+
+struct _UnitBinding {
+    name: string,
+    u: Unit
+}
+
+struct _UnitEnv {
+    entries: [_UnitBinding]
+}
+
+fn _env_empty() -> _UnitEnv {
+    return _UnitEnv { entries: [] }
+}
+
+fn _env_define(env: _UnitEnv, name: string, u: Unit) -> _UnitEnv {
+    let mut e = env.entries
+    e.push(_UnitBinding { name: name, u: u })
+    return _UnitEnv { entries: e }
+}
+
+fn _env_lookup(env: _UnitEnv, name: string) -> Unit {
+    let mut i = 0
+    while i < len(env.entries) {
+        if env.entries[i].name == name { return env.entries[i].u }
+        i = i + 1
+    }
+    return unit_empty()
+}
+
+// Module-level fn signature table for call checking.
+struct _FnSig {
+    name: string,
+    params: [Unit],
+    ret: Unit,
+    has: bool
+}
+
+struct _SigTable {
+    sigs: [_FnSig]
+}
+
+fn _collect_sigs(module: Module) -> _SigTable {
+    let mut sigs: [_FnSig] = []
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if _is_fn_item(it.kind) {
+            let ann = _extract_units_ann(it)
+            sigs.push(_FnSig {
+                name: it.name,
+                params: ann.params,
+                ret: ann.ret,
+                has: ann.has
+            })
+        }
+        i = i + 1
+    }
+    return _SigTable { sigs: sigs }
+}
+
+fn _lookup_sig(table: _SigTable, name: string) -> _FnSig {
+    let mut i = 0
+    while i < len(table.sigs) {
+        if table.sigs[i].name == name { return table.sigs[i] }
+        i = i + 1
+    }
+    return _FnSig { name: "", params: [], ret: unit_empty(), has: false }
+}
+
+// ── Diagnostic emit helpers ──────────────────────────────────
+
+fn _empty_fixit() -> FixIt {
+    return FixIt {
+        kind: FixItKind::None,
+        span: Span { file: "", line: 0, col: 0, len: 0 },
+        new_text: ""
+    }
+}
+
+fn _emit(code: string, sev: Severity, stage: string, msg: string, sp: Span, out: array) {
+    let d = Diagnostic {
+        code: code,
+        severity: sev,
+        stage: stage,
+        span: sp,
+        message: msg,
+        note: "",
+        suggest: "",
+        fixit: _empty_fixit(),
+        related: []
+    }
+    out.push(d)
+}
+
+fn _emit_hx5001(op: string, lu: Unit, ru: Unit, sp: Span, out: array) {
+    let msg = "unit mismatch in `" + op + "`: lhs is `" + unit_to_string(lu) + "`, rhs is `" + unit_to_string(ru) + "`"
+    _emit("HX5001", Severity::Error, "S5", msg, sp, out)
+}
+
+fn _emit_hx5002(name: string, expected: Unit, actual: Unit, sp: Span, out: array) {
+    let msg = "return unit mismatch: function `" + name + "` declares `" + unit_to_string(expected) + "`, body produces `" + unit_to_string(actual) + "`"
+    _emit("HX5002", Severity::Error, "S5", msg, sp, out)
+}
+
+fn _emit_hx5003(name: string, pos: i64, expected: Unit, actual: Unit, sp: Span, out: array) {
+    let msg = "argument " + to_string(pos) + " of `" + name + "`: expected unit `" + unit_to_string(expected) + "`, got `" + unit_to_string(actual) + "`"
+    _emit("HX5003", Severity::Error, "S5", msg, sp, out)
+}
+
+// ── Walker context ──────────────────────────────────────────
+
+struct _Ctx {
+    fn_name: string,
+    fn_ret: Unit,
+    has_ret: bool,
+    sigs: _SigTable
+}
+
+// Return true iff `a` and `b` are both non-unitless and incompatible.
+// Lenient v1 — empty unit is compatible with anything.
+fn _incompatible(a: Unit, b: Unit) -> bool {
+    if unit_is_empty(a) { return false }
+    if unit_is_empty(b) { return false }
+    if unit_eq(a, b) { return false }
+    return true
+}
+
+// ── Expression unit inference ────────────────────────────────
+
+fn _infer(e: Expr, env: _UnitEnv, ctx: _Ctx, out: array) -> Unit {
+    if _is_lit_int(e.kind)    { return unit_empty() }
+    if _is_lit_float(e.kind)  { return unit_empty() }
+    if _is_lit_string(e.kind) { return unit_empty() }
+
+    if _is_ident(e.kind) {
+        return _env_lookup(env, e.text)
+    }
+
+    if _is_unop(e.kind) {
+        if len(e.children) == 0 { return unit_empty() }
+        return _infer(e.children[0], env, ctx, out)
+    }
+
+    if _is_binop(e.kind) {
+        return _check_binop(e, env, ctx, out)
+    }
+
+    if _is_call(e.kind) {
+        return _check_call(e, env, ctx, out)
+    }
+
+    if _is_block(e.kind) {
+        let mut last = unit_empty()
+        let mut i = 0
+        while i < len(e.children) {
+            last = _infer(e.children[i], env, ctx, out)
+            i = i + 1
+        }
+        return last
+    }
+
+    if _is_if(e.kind) {
+        let mut i = 0
+        while i < len(e.children) {
+            let _u = _infer(e.children[i], env, ctx, out)
+            i = i + 1
+        }
+        // Use then-branch unit if present.
+        if len(e.children) >= 2 {
+            return _infer(e.children[1], env, ctx, out)
+        }
+        return unit_empty()
+    }
+
+    if _is_while(e.kind) {
+        let mut i = 0
+        while i < len(e.children) {
+            let _u = _infer(e.children[i], env, ctx, out)
+            i = i + 1
+        }
+        return unit_empty()
+    }
+
+    if _is_return(e.kind) {
+        let mut val_u = unit_empty()
+        if len(e.children) > 0 {
+            val_u = _infer(e.children[0], env, ctx, out)
+        }
+        if ctx.has_ret {
+            if _incompatible(ctx.fn_ret, val_u) {
+                _emit_hx5002(ctx.fn_name, ctx.fn_ret, val_u, e.span, out)
+            }
+        }
+        return unit_empty()
+    }
+
+    if _is_let(e.kind) {
+        // Walk children; let bindings don't propagate units in v1.
+        let mut i = 0
+        while i < len(e.children) {
+            let _u = _infer(e.children[i], env, ctx, out)
+            i = i + 1
+        }
+        return unit_empty()
+    }
+
+    // Other kinds — walk for sub-effects, return unitless.
+    let mut i = 0
+    while i < len(e.children) {
+        let _u = _infer(e.children[i], env, ctx, out)
+        i = i + 1
+    }
+    return unit_empty()
+}
+
+fn _is_addsub(op: string) -> bool {
+    if op == "+" { return true }
+    if op == "-" { return true }
+    return false
+}
+
+fn _is_mul(op: string) -> bool { return op == "*" }
+fn _is_div(op: string) -> bool { return op == "/" }
+
+fn _is_compare(op: string) -> bool {
+    if op == "==" { return true }
+    if op == "!=" { return true }
+    if op == "<"  { return true }
+    if op == "<=" { return true }
+    if op == ">"  { return true }
+    if op == ">=" { return true }
+    return false
+}
+
+fn _check_binop(e: Expr, env: _UnitEnv, ctx: _Ctx, out: array) -> Unit {
+    if len(e.children) < 2 { return unit_empty() }
+    let lu = _infer(e.children[0], env, ctx, out)
+    let ru = _infer(e.children[1], env, ctx, out)
+    let op = e.text
+
+    if _is_addsub(op) {
+        if _incompatible(lu, ru) {
+            _emit_hx5001(op, lu, ru, e.span, out)
+        }
+        // Result unit = lhs unit (or rhs if lhs unitless).
+        if !unit_is_empty(lu) { return lu }
+        return ru
+    }
+
+    if _is_compare(op) {
+        if _incompatible(lu, ru) {
+            _emit_hx5001(op, lu, ru, e.span, out)
+        }
+        return unit_empty()
+    }
+
+    if _is_mul(op) {
+        return unit_mul(lu, ru)
+    }
+
+    if _is_div(op) {
+        return unit_div(lu, ru)
+    }
+
+    // Unknown op — fall back to lhs unit.
+    return lu
+}
+
+fn _check_call(e: Expr, env: _UnitEnv, ctx: _Ctx, out: array) -> Unit {
+    if len(e.children) == 0 { return unit_empty() }
+    let callee = e.children[0]
+    let arg_count = len(e.children) - 1
+
+    // Infer arg units (always — sub-expr diagnostics still flow).
+    let mut arg_us: [Unit] = []
+    let mut i = 0
+    while i < arg_count {
+        let au = _infer(e.children[1 + i], env, ctx, out)
+        arg_us.push(au)
+        i = i + 1
+    }
+
+    if !_is_ident(callee.kind) {
+        let _cu = _infer(callee, env, ctx, out)
+        return unit_empty()
+    }
+    let name = callee.text
+    let sig = _lookup_sig(ctx.sigs, name)
+    if !sig.has {
+        // Untyped callee — no constraint.
+        return unit_empty()
+    }
+    if arg_count == len(sig.params) {
+        let mut k = 0
+        while k < arg_count {
+            let want = sig.params[k]
+            let got = arg_us[k]
+            if _incompatible(want, got) {
+                _emit_hx5003(name, k + 1, want, got, e.children[1 + k].span, out)
+            }
+            k = k + 1
+        }
+    }
+    return sig.ret
+}
+
+// ── Per-fn binding ──────────────────────────────────────────
+
+fn _bind_params(env: _UnitEnv, it: Item, ann: _UnitsAnn) -> _UnitEnv {
+    let mut e = env
+    let mut i = 0
+    while i < len(it.params) {
+        let p = it.params[i]
+        let mut u = unit_empty()
+        if i < len(ann.params) {
+            u = ann.params[i]
+        }
+        e = _env_define(e, p.name, u)
+        i = i + 1
+    }
+    return e
+}
+
+// ── Public entry ────────────────────────────────────────────
+
+pub fn unit_check(module: Module) -> array {
+    let mut out = []
+    let sigs = _collect_sigs(module)
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if _is_fn_item(it.kind) {
+            let ann = _extract_units_ann(it)
+            // Skip fns without @units annotation entirely (lenient v1 gate).
+            if ann.has {
+                let env = _bind_params(_env_empty(), it, ann)
+                let ctx = _Ctx {
+                    fn_name: it.name,
+                    fn_ret: ann.ret,
+                    has_ret: true,
+                    sigs: sigs
+                }
+                let body_u = _infer(it.body, env, ctx, out)
+                // Trailing block unit must satisfy ret (when body produced one).
+                if !unit_is_empty(body_u) && _incompatible(ann.ret, body_u) {
+                    _emit_hx5002(it.name, ann.ret, body_u, it.body.span, out)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}

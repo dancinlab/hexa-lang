@@ -22,7 +22,7 @@ In a distroless docker safe-landing build (raw#44 minimal-image invariant), `pyt
 
 ### 1.2 Cross-sister scope
 
-A canonical-tree-only scan (excluding `.claude/worktrees/` and `archive/`) finds **25 hexa source files** with `python3 -c '...json.load|json.dump...'` patterns spread across `nexus/`, `n6-architecture/`, `anima/`, `hive/`, and `papers/`. Each is a structural raw#9 violation that can be retired by `use "self/stdlib/json"`.
+A canonical-tree-only scan (excluding `.claude/worktrees/` and `archive/`) finds **25 hexa source files** with `python3 -c '...json.load|json.dump...'` patterns spread across `nexus/`, `canon/`, `anima/`, `hive/`, and `papers/`. Each is a structural raw#9 violation that can be retired by `use "self/stdlib/json"`.
 
 (Note: a broader `python3 -c` count yields ~2,873 hits — the bulk are `time.time()*1000` shims unrelated to JSON. Those are tracked separately under `goal_hexa_native_time_stdlib`.)
 

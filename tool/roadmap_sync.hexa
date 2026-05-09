@@ -13,7 +13,7 @@
 //
 // 대상 repo:
 //   - nexus              → shared/roadmaps/
-//   - n6-architecture    → shared/roadmaps/ (있으면)
+//   - canon    → shared/roadmaps/ (있으면)
 //   - anima              → shared/roadmaps/ (nexus 심링크, 중복 no-op)
 //
 // 멱등: clean tree → 즉시 return. 충돌/ahead → 로그 후 skip.
@@ -187,7 +187,7 @@ fn main() {
         i = i + 1
     }
     sync_repo(HEXA_LANG,                     "roadmaps/")
-    sync_repo(HOME + "/Dev/n6-architecture", "shared/roadmaps/")
+    sync_repo(HOME + "/Dev/canon", "shared/roadmaps/")
     sync_repo(HOME + "/Dev/anima",           "shared/roadmaps/")
 }
 

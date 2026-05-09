@@ -14,7 +14,7 @@
 //   ctx.prev_tag      string  — update 시 이전 git tag (optional)
 //   ctx.requires      [string]— 선행 도메인 id 목록 (optional)
 //   ctx.repo_owner    string  — github owner (기본 "dancinlife")
-//   ctx.repo_name     string  — github repo (기본 "n6-architecture")
+//   ctx.repo_name     string  — github repo (기본 "canon")
 
 use "self/attrs/core"
 use "self/attrs/_domain/axes"
@@ -33,7 +33,7 @@ fn _ctx_or_default(ctx) {
     m["prev_tag"] = if has_key(ctx, "prev_tag") { ctx["prev_tag"] } else { "" }
     m["requires"] = if has_key(ctx, "requires") { ctx["requires"] } else { [] }
     m["repo_owner"] = if has_key(ctx, "repo_owner") { ctx["repo_owner"] } else { "dancinlife" }
-    m["repo_name"] = if has_key(ctx, "repo_name") { ctx["repo_name"] } else { "n6-architecture" }
+    m["repo_name"] = if has_key(ctx, "repo_name") { ctx["repo_name"] } else { "canon" }
     return m
 }
 

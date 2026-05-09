@@ -381,7 +381,7 @@ fn cmd_verify() {
     }
 
     // INV-006: convergence/ — 7개 프로젝트 JSON + ossified/stable/failed 키
-    let projs6 = ["nexus", "anima", "n6-architecture", "papers", "hexa-lang", "void", "airgenome"]
+    let projs6 = ["nexus", "anima", "canon", "papers", "hexa-lang", "void", "airgenome"]
     let mut ok6 = 0
     for p in projs6 {
         let pf = _shared + "/convergence/" + p + ".json"
@@ -457,7 +457,7 @@ fn cmd_verify() {
     }
 
     // INV-009: loop/ — 3개 JSON + phases 키
-    let projs9 = ["nexus", "anima", "n6-architecture"]
+    let projs9 = ["nexus", "anima", "canon"]
     let mut ok9 = 0
     for p in projs9 {
         let pf = _shared + "/loop/" + p + ".json"

@@ -179,9 +179,9 @@ fn main() {
         }
     }
 
-    // 15~17) 3 예시 파일 (hexa-lang / n6-architecture / anima) — β 형식 변환 후 parse
+    // 15~17) 3 예시 파일 (hexa-lang / canon / anima) — β 형식 변환 후 parse
     case("15~17) 3 예시 파일 parse")
-    let examples = ["hexa-lang", "n6-architecture", "anima"]
+    let examples = ["hexa-lang", "canon", "anima"]
     for ex in examples {
         let path = "/Users/ghost/core/hexa-lang/docs/self_format_examples/" + ex + ".project.hexa"
         let exists = to_string(exec("test -f '" + path + "' && printf 1 || printf 0")).trim()

@@ -1,7 +1,7 @@
 // tool/hexa_ssot_init.hexa — project-level SSOT scaffold (`hexa init <project-path>`).
 //
 // 목적:
-//   hexa-lang 외부 프로젝트 (nexus, anima, n6-architecture, airgenome, contact,
+//   hexa-lang 외부 프로젝트 (nexus, anima, canon, airgenome, contact,
 //   papers, hexa-os, ...) 에 canonical SSOT 골격을 1회 생성한다.
 //
 // 생성 대상 (각각 없을 때만, idempotent):

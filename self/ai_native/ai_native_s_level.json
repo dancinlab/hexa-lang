@@ -1,6 +1,6 @@
 {
   "target": "S-level ai-native enforcement — runtime feedback + cost model + semantic IR + learning",
-  "honest_scope": "months of work spanning hexa-lang + n6-architecture + anima. Not a single-session task.",
+  "honest_scope": "months of work spanning hexa-lang + canon + anima. Not a single-session task.",
   "current_baseline": {
     "rule_1_naming_FGroup": "DONE (F1-F5 + pre-commit enforcer)",
     "rule_2_scope_L1": "DONE (#!hexa strict)",

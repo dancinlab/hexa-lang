@@ -224,7 +224,7 @@ Every design constant in HEXA-LANG is derived from the arithmetic of n=6.
     4. Public   -- visible everywhere (pub)
 ```
 
-## Cross-References to n6-architecture
+## Cross-References to canon
 
 | Constant | HEXA-LANG | Chip Architecture | AI/LLM | Energy |
 |----------|-----------|-------------------|--------|--------|

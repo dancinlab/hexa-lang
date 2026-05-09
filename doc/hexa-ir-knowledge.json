@@ -3,7 +3,7 @@
     "name": "HEXA-LANG Knowledge Base",
     "version": "2.0",
     "date": "2026-04-04",
-    "source_projects": ["n6-architecture"],
+    "source_projects": ["canon"],
     "description": "Consolidated compiler knowledge — memories + source + singularity + blowup",
     "loc": 13288,
     "rs_files": 67,

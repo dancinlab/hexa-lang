@@ -77,7 +77,7 @@ fn _blocker_sub_cats() -> array {
 // 6 sister repos that actually carry inventories (per .workspace — hexa-os,
 // papers, secret, contact are consumers without inbox SSOT yet).
 fn _repos() -> array {
-    return ["nexus", "anima", "hexa-lang", "airgenome", "n6-architecture", "void"]
+    return ["nexus", "anima", "hexa-lang", "airgenome", "canon", "void"]
 }
 
 fn _selftest() -> int {

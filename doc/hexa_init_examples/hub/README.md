@@ -11,7 +11,7 @@
 ## Architecture
 
 - `tool/config/` — 프로젝트 간 공유 설정 (projects.json 등)
-- `shared/rules/` — R0~R27 공통 규칙 + 프로젝트별 규칙 (hexa-lang.json, n6-architecture.json, ...)
+- `shared/rules/` — R0~R27 공통 규칙 + 프로젝트별 규칙 (hexa-lang.json, canon.json, ...)
 - `shared/harness/` — loop / l0_guard 공통 harness hexa 스크립트
 - `docs/` — 허브 수준 문서 (RFC, ADR)
 
@@ -20,7 +20,7 @@
 하위 참조 프로젝트 목록:
 
 - `../hexa-lang/` — HEXA 프로그래밍 언어
-- `../n6-architecture/` — n=6 현실지도 아키텍처
+- `../canon/` — n=6 현실지도 아키텍처
 - `../anima/` — 의식(consciousness) 프로젝트
 - (기타 리포는 tool/config/projects.json 에 등록)
 
@@ -28,7 +28,7 @@
 
 - R0~R27: 전 프로젝트 공통 (`shared/rules/common.json`)
 - HX1~HX11: hexa-lang 전용 (`shared/rules/hexa-lang.json`)
-- N61~N65: n6-architecture 전용 (`shared/rules/n6-architecture.json`)
+- N61~N65: canon 전용 (`shared/rules/canon.json`)
 
 ## Contributing
 

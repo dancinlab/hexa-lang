@@ -1,8 +1,8 @@
 # N6 → HEXA 포팅 블로커 레지스트리
 
 > 최종 갱신: 2026-04-08 (로컬 hexa 실제 테스트 반영)
-> 출처: nexus/n6-architecture 38개 .rs → .hexa 대규모 포팅
-> 원본: n6-architecture/docs/superpowers/specs/2026-04-08-hexa-lang-blockers-for-porting.md
+> 출처: nexus/canon 38개 .rs → .hexa 대규모 포팅
+> 원본: canon/docs/superpowers/specs/2026-04-08-hexa-lang-blockers-for-porting.md
 
 ## 상태 범례
 
@@ -151,7 +151,7 @@ CompoundAssign(+= -= *= /= %=), BreakStmt/ContinueStmt, StructDecl 도 추가.
 
 ## 포팅 통계
 
-- **대상**: n6-architecture tools/ 38개 .rs (nexus/dashboard 제외)
+- **대상**: canon tools/ 38개 .rs (nexus/dashboard 제외)
 - **커밋 완료**: 19개 (.hexa + .rs 삭제)
 - **미커밋**: 17개 (.hexa 생성됨, porting worktree에 대기)
 - **미생성**: 1개 (chip-perf-calc)

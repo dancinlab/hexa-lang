@@ -98,8 +98,8 @@
     {
       "id": "hxa-20260422-008",
       "kind": "cluster",
-      "title": "SANDBOX-WRITE: n6-architecture repo blocks Write/bash of .sh/.py extensions (HEXA-FIRST enforcement). Workaround: extension-less files or .hexa with exec() shims. Clustered: 1 incident — tool/_n6_lib (2026-04-23). Forward any same-class lang_gap here rather than piling per-repo.",
-      "from_repo": "n6-architecture",
+      "title": "SANDBOX-WRITE: canon repo blocks Write/bash of .sh/.py extensions (HEXA-FIRST enforcement). Workaround: extension-less files or .hexa with exec() shims. Clustered: 1 incident — tool/_n6_lib (2026-04-23). Forward any same-class lang_gap here rather than piling per-repo.",
+      "from_repo": "canon",
       "user_status": "done",
       "score_priority": 50,
       "submitted_ts": "2026-04-22T16:11:24Z",
@@ -112,7 +112,7 @@
       "id": "hxa-20260422-009",
       "kind": "cluster",
       "title": "ENGINE-STUB: 7/16 n6 engine/*.hexa tools emit STUB (hexa stage1 regression — no float/try-catch/enum/comptime). List: anima_tension_loss, consciousness_constraints, emergent_n6_trainer, leech24_surface, n6_calculator, phi_efficiency_bridge, test_engine, thermodynamic_frame. Unblocks when T23~T29 restored.",
-      "from_repo": "n6-architecture",
+      "from_repo": "canon",
       "user_status": "done",
       "score_priority": 50,
       "submitted_ts": "2026-04-22T16:11:32Z",
@@ -483,9 +483,9 @@
       "raw_compliance": ["raw 47 cross-repo-trawl-witness", "raw 91 honest C3 in-place scope correction", "raw 159 hexa-lang-upstream-proposal-mandate"],
       "trawl_witness": {
         "ts": "2026-04-30",
-        "repos_surveyed": ["hive", "nexus", "anima", "n6-architecture", "airgenome", "hexa-lang"],
-        "exec_date_live_files": {"hive": 48, "nexus": 114, "anima": 64, "n6-architecture": 2, "airgenome": 14, "hexa-lang": 47},
-        "native_primitive_adoption": {"hive": 1, "nexus": 103, "anima": 2816, "n6-architecture": 0, "airgenome": 0, "hexa-lang": "self-host"}
+        "repos_surveyed": ["hive", "nexus", "anima", "canon", "airgenome", "hexa-lang"],
+        "exec_date_live_files": {"hive": 48, "nexus": 114, "anima": 64, "canon": 2, "airgenome": 14, "hexa-lang": 47},
+        "native_primitive_adoption": {"hive": 1, "nexus": 103, "anima": 2816, "canon": 0, "airgenome": 0, "hexa-lang": "self-host"}
       },
       "honest_c3_disclosures": [
         "Original brief assumed stdlib gap; pre-write fact-check found native time_now/time_now_ms/utc_iso_now/utc_compact_now already extant (runtime.c clock_gettime-backed). Scope re-baselined from add-primitive to document+lint+migrate.",
@@ -511,9 +511,9 @@
         "prefix": "agm",
         "inventory_path": "/Users/ghost/core/airgenome/state/proposals/inventory.json"
       },
-      "n6-architecture": {
+      "canon": {
         "prefix": "n6a",
-        "inventory_path": "/Users/ghost/core/n6-architecture/state/proposals/inventory.json"
+        "inventory_path": "/Users/ghost/core/canon/state/proposals/inventory.json"
       },
       "void": {
         "prefix": "vd",

@@ -402,7 +402,7 @@
         "core_projects": [
           "nexus",
           "anima",
-          "n6-architecture",
+          "canon",
           "papers",
           "hexa-lang",
           "void",
@@ -672,7 +672,7 @@
       "description": "anima 고유 — 감정 factions / 6-phase reflection 정책",
       "rules": []
     },
-    "n6-architecture": {
+    "canon": {
       "description": "n6 arch 고유 — §7 python 10섹션 진화, canonical v2 품질 게이트",
       "rules": []
     }

@@ -157,6 +157,60 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX5001",
+        title: "unit mismatch in arithmetic",
+        severity: Severity::Error,
+        stage: "S5",
+        template: "unit mismatch in `{op}`: lhs is `{lhs}`, rhs is `{rhs}`",
+        explain: "Addition, subtraction, and comparison operators require both sides to share the same dimensional unit (RFC-017 §3.1 S5). Multiplication and division compose units; only +/-/comparisons require equality. Lenient v1: an untyped operand is compatible with any unit.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX5002",
+        title: "fn return unit mismatch",
+        severity: Severity::Error,
+        stage: "S5",
+        template: "return unit mismatch: function `{name}` declares `{expected}`, body produces `{actual}`",
+        explain: "A `return` expression (or a fn's trailing block value) yields a value whose dimensional unit does not match the unit declared in the fn's `@units` annotation.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX5003",
+        title: "call argument unit mismatch",
+        severity: Severity::Error,
+        stage: "S5",
+        template: "argument {pos} of `{name}`: expected unit `{expected}`, got `{actual}`",
+        explain: "A call argument's dimensional unit does not match the corresponding parameter unit declared on the callee's `@units` annotation. Convert the argument or fix the callee declaration.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX8001",
+        title: "atlas L node missing for @implements",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "atlas {atlas_hash} has no L node `{node_id}` cited by @implements",
+        explain: "An `@implements(L[id])` annotation refers to an L node that is not present in the merged atlas snapshot. Either add the L node to atlas.n6 (or an append shard), or fix the citation id.",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
+        code: "HX8002",
+        title: "@implements points at non-L node kind",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "@implements({kind}[{node_id}]) points at a {kind} node; only L nodes may be implemented",
+        explain: "The `@implements` annotation is reserved for citing an L (law) node from the atlas. Citing a P/C/E node is a kind error — use the appropriate annotation or cite the law that governs the node.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX8003",
+        title: "fn uses atlas L refs but has no @implements citation",
+        severity: Severity::Warning,
+        stage: "S8",
+        template: "function `{name}` references atlas L node `{node_id}` in its body but has no @implements citation",
+        explain: "A function body cites one or more L nodes (via L[id] expressions) but the function declares no `@implements` annotation. Adding `@implements(L[id])` records the law-of-record so downstream verification (S6/S7 prover) can attach proofs to the right node.",
+        fix_it_kind: FixItKind::Insert
+    },
+    DiagSpec {
         code: "HX9001",
         title: "@grace expired",
         severity: Severity::Error,
