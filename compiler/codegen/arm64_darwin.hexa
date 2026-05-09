@@ -1,0 +1,312 @@
+// HEXA Native Compiler — Codegen / arm64-apple-darwin (Phase A1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Lowers MIR (SSA CFG) -> LIR (target-specific instructions) for the
+// arm64-apple-darwin target.
+//
+//   pub fn codegen_arm64_darwin(module: MModule) -> LModule
+//
+// ABI: AAPCS64
+//   - Integer args: x0..x7 (overflow on stack — v1 ignored, tiny tests only)
+//   - Integer return: x0
+//   - Frame pointer: x29 (fp), Link register: x30 (lr)
+//   - Stack pointer: 16-byte aligned at function boundaries
+//
+// Per MFunc layout:
+//   prologue:
+//       stp x29, x30, [sp, #-16]!
+//       mov x29, sp
+//   <block instrs>
+//   epilogue:
+//       ldp x29, x30, [sp], #16
+//       ret
+//
+// v1 register policy:
+//   Naive — Local id N -> register x(N % 31).  No spilling, no liveness.
+//   Tier-0 tier verification only; tiny test cases fit in <31 locals.
+//
+// Constraints (from RFC-018 §4):
+//   - struct >16B by reference (not handled v1)
+//   - hidden first arg for >16B return (not handled v1)
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+
+// ── PReg / LOperand helpers ──────────────────────────────────
+
+fn _preg_gpr(name: string) -> PReg {
+    return PReg { name: name, kind: "gpr" }
+}
+
+fn _empty_preg() -> PReg {
+    return PReg { name: "", kind: "" }
+}
+
+fn _op_reg(name: string) -> LOperand {
+    return LOperand {
+        kind: "reg",
+        reg: _preg_gpr(name),
+        imm: 0,
+        mem_base: _empty_preg(),
+        mem_offset: 0,
+        label: ""
+    }
+}
+
+fn _op_imm(value: i64) -> LOperand {
+    return LOperand {
+        kind: "imm",
+        reg: _empty_preg(),
+        imm: value,
+        mem_base: _empty_preg(),
+        mem_offset: 0,
+        label: ""
+    }
+}
+
+fn _op_label(name: string) -> LOperand {
+    return LOperand {
+        kind: "label",
+        reg: _empty_preg(),
+        imm: 0,
+        mem_base: _empty_preg(),
+        mem_offset: 0,
+        label: name
+    }
+}
+
+fn _op_mem(base: string, offset: i64) -> LOperand {
+    return LOperand {
+        kind: "mem",
+        reg: _empty_preg(),
+        imm: 0,
+        mem_base: _preg_gpr(base),
+        mem_offset: offset,
+        label: ""
+    }
+}
+
+fn _instr0(op: string, comment: string) -> LInstr {
+    return LInstr { op: op, args: [], comment: comment }
+}
+
+fn _instr1(op: string, a: LOperand, comment: string) -> LInstr {
+    let mut xs = []
+    xs.push(a)
+    return LInstr { op: op, args: xs, comment: comment }
+}
+
+fn _instr2(op: string, a: LOperand, b: LOperand, comment: string) -> LInstr {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    return LInstr { op: op, args: xs, comment: comment }
+}
+
+fn _instr3(op: string, a: LOperand, b: LOperand, c: LOperand, comment: string) -> LInstr {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    xs.push(c)
+    return LInstr { op: op, args: xs, comment: comment }
+}
+
+// ── Register assignment (naive) ──────────────────────────────
+
+fn _arm64_reg_for_local(local_id: i64) -> string {
+    // x0..x7 already serve params per ABI; for simplicity Local id N maps
+    // to xN (mod 31) — x31 is sp/zr so we cap at 30.
+    let mut idx = local_id
+    if idx < 0 { idx = 0 }
+    let m = idx - (idx / 31) * 31
+    return "x" + to_string(m)
+}
+
+fn _arm64_op_for_operand(o: Operand) -> LOperand {
+    if o.kind == "local" {
+        return _op_reg(_arm64_reg_for_local(o.local_id))
+    }
+    if o.kind == "const_int" {
+        return _op_imm(o.int_val)
+    }
+    if o.kind == "global" {
+        return _op_label("g" + to_string(o.global_id))
+    }
+    if o.kind == "const_str" {
+        return _op_label(o.str_val)
+    }
+    // fallback: treat as imm 0
+    return _op_imm(0)
+}
+
+// ── Block label helper ───────────────────────────────────────
+
+fn _arm64_block_label(fname: string, block_id: i64) -> string {
+    return "L" + fname + "_bb" + to_string(block_id)
+}
+
+// ── Statement lowering ───────────────────────────────────────
+
+fn _emit_arm64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
+    let mut buf = out
+    if s.kind == STMT_ASSIGN {
+        // mov dst, src (single operand expected)
+        let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
+        if len(s.args) >= 1 {
+            let src = _arm64_op_for_operand(s.args[0])
+            buf.push(_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
+        }
+        return buf
+    }
+    if s.kind == STMT_BINOP {
+        let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
+        if len(s.args) >= 2 {
+            let a = _arm64_op_for_operand(s.args[0])
+            let b = _arm64_op_for_operand(s.args[1])
+            let mut mnemonic = "add"
+            if s.op == "add" { mnemonic = "add" }
+            if s.op == "sub" { mnemonic = "sub" }
+            if s.op == "mul" { mnemonic = "mul" }
+            if s.op == "div" { mnemonic = "sdiv" }
+            if s.op == "udiv" { mnemonic = "udiv" }
+            if s.op == "and" { mnemonic = "and" }
+            if s.op == "or"  { mnemonic = "orr" }
+            if s.op == "xor" { mnemonic = "eor" }
+            buf.push(_instr3(mnemonic, dst, a, b, "binop " + s.op))
+        }
+        return buf
+    }
+    if s.kind == STMT_CALL {
+        // bl <label> ; result by ABI in x0, written into dst
+        let target = s.op // call target name carried in s.op
+        buf.push(_instr1("bl", _op_label(target), "call " + target))
+        if s.dst.id >= 0 {
+            let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
+            buf.push(_instr2("mov", dst, _op_reg("x0"), "capture call result"))
+        }
+        return buf
+    }
+    if s.kind == STMT_RETURN {
+        if len(s.args) >= 1 {
+            let src = _arm64_op_for_operand(s.args[0])
+            buf.push(_instr2("mov", _op_reg("x0"), src, "set return value"))
+        }
+        // epilogue
+        buf.push(_instr2("ldp", _op_reg("x29"), _op_reg("x30"), "epilogue: restore fp/lr"))
+        // sp post-increment encoded as comment for now (stage0; emit pass renders)
+        buf.push(_instr0("ret", "return"))
+        return buf
+    }
+    if s.kind == STMT_BR {
+        let lab = _arm64_block_label(fname, s.target_block)
+        buf.push(_instr1("b", _op_label(lab), "branch"))
+        return buf
+    }
+    if s.kind == STMT_BR_COND {
+        // cmp <reg>, #0 ; b.eq <else> ; b <then>
+        if len(s.args) >= 1 {
+            let cond = _arm64_op_for_operand(s.args[0])
+            buf.push(_instr2("cmp", cond, _op_imm(0), "br_cond test"))
+            let else_lab = _arm64_block_label(fname, s.target_block_else)
+            buf.push(_instr1("b.eq", _op_label(else_lab), "branch if zero -> else"))
+        }
+        let then_lab = _arm64_block_label(fname, s.target_block)
+        buf.push(_instr1("b", _op_label(then_lab), "branch -> then"))
+        return buf
+    }
+    // Unhandled (load/store/arena_*) — emit a comment-only nop for v1.
+    buf.push(_instr0("nop", "unhandled stmt kind " + s.kind))
+    return buf
+}
+
+// ── Function lowering ────────────────────────────────────────
+
+fn _arm64_lower_func(mf: MFunc) -> LFunc {
+    let mut instrs = []
+
+    // Prologue
+    // stp x29, x30, [sp, #-16]!  (encoded: dest pair regs, mem base sp, offset -16)
+    instrs.push(_instr3(
+        "stp",
+        _op_reg("x29"),
+        _op_reg("x30"),
+        _op_mem("sp", -16),
+        "prologue: save fp/lr"
+    ))
+    instrs.push(_instr2("mov", _op_reg("x29"), _op_reg("sp"), "prologue: set fp"))
+
+    // Move incoming params x0..x7 into their assigned local registers (if
+    // different). v1 naive: param i has Local id i so x_i -> x_i is a no-op,
+    // but emit explicit mov to make trace inspection clear.
+    let mut p = 0
+    while p < len(mf.params) {
+        if p < 8 {
+            let dst_name = _arm64_reg_for_local(mf.params[p].id)
+            let src_name = "x" + to_string(p)
+            if dst_name != src_name {
+                instrs.push(_instr2("mov", _op_reg(dst_name), _op_reg(src_name), "ingress param"))
+            }
+        }
+        p = p + 1
+    }
+
+    // Lower blocks in order. Emit per-block label as a comment-only marker
+    // (no LInstr.op label representation in v1).
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        instrs.push(_instr0("label", _arm64_block_label(mf.name, blk.id)))
+        let mut si = 0
+        while si < len(blk.stmts) {
+            instrs = _emit_arm64_stmt(instrs, mf.name, blk.stmts[si])
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+
+    // Safety epilogue (in case last block lacks STMT_RETURN)
+    let last_is_ret = false
+    if len(instrs) > 0 {
+        let last = instrs[len(instrs) - 1]
+        if last.op == "ret" {
+            // already terminated
+            return LFunc {
+                name: mf.name,
+                target: "arm64-apple-darwin",
+                instrs: instrs,
+                frame_size: 16,
+                callee_saved: []
+            }
+        }
+    }
+    instrs.push(_instr2("ldp", _op_reg("x29"), _op_reg("x30"), "epilogue: restore fp/lr"))
+    instrs.push(_instr0("ret", "return"))
+
+    return LFunc {
+        name: mf.name,
+        target: "arm64-apple-darwin",
+        instrs: instrs,
+        frame_size: 16,
+        callee_saved: []
+    }
+}
+
+// ── Module entry point ───────────────────────────────────────
+
+pub fn codegen_arm64_darwin(module: MModule) -> LModule {
+    let mut funcs = []
+    let mut i = 0
+    while i < len(module.funcs) {
+        funcs.push(_arm64_lower_func(module.funcs[i]))
+        i = i + 1
+    }
+    return LModule {
+        file: module.file,
+        target: "arm64-apple-darwin",
+        funcs: funcs,
+        rodata: [],
+        bss: []
+    }
+}

@@ -1,0 +1,293 @@
+// HEXA Native Compiler — Codegen / x86_64-linux-gnu (Phase A1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Lowers MIR (SSA CFG) -> LIR (target-specific instructions) for the
+// x86_64-linux-gnu target.
+//
+//   pub fn codegen_x86_64_linux(module: MModule) -> LModule
+//
+// ABI: System V AMD64
+//   - Integer args:    rdi, rsi, rdx, rcx, r8, r9 (overflow on stack)
+//   - Integer return:  rax
+//   - Frame pointer:   rbp (callee-saved)
+//   - Stack alignment: 16 bytes at function boundary (post-call)
+//
+// Per MFunc layout:
+//   prologue:
+//       push rbp
+//       mov  rbp, rsp
+//   <block instrs>
+//   epilogue:
+//       pop  rbp
+//       ret
+//
+// v1 register policy (naive):
+//   Local id N -> physical register from a fixed table:
+//     0->rax, 1->rbx, 2->rcx, 3->rdx, 4->r8, 5->r9, 6->r10, 7->r11,
+//     8->r12, 9->r13, 10->r14, 11->r15, then wrap.
+//   Two-operand x86 form: emit `mov dst, lhs ; <op> dst, rhs`.
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+
+// ── PReg / LOperand helpers ──────────────────────────────────
+
+fn _preg_gpr(name: string) -> PReg {
+    return PReg { name: name, kind: "gpr" }
+}
+
+fn _empty_preg() -> PReg {
+    return PReg { name: "", kind: "" }
+}
+
+fn _op_reg(name: string) -> LOperand {
+    return LOperand {
+        kind: "reg",
+        reg: _preg_gpr(name),
+        imm: 0,
+        mem_base: _empty_preg(),
+        mem_offset: 0,
+        label: ""
+    }
+}
+
+fn _op_imm(value: i64) -> LOperand {
+    return LOperand {
+        kind: "imm",
+        reg: _empty_preg(),
+        imm: value,
+        mem_base: _empty_preg(),
+        mem_offset: 0,
+        label: ""
+    }
+}
+
+fn _op_label(name: string) -> LOperand {
+    return LOperand {
+        kind: "label",
+        reg: _empty_preg(),
+        imm: 0,
+        mem_base: _empty_preg(),
+        mem_offset: 0,
+        label: name
+    }
+}
+
+fn _instr0(op: string, comment: string) -> LInstr {
+    return LInstr { op: op, args: [], comment: comment }
+}
+
+fn _instr1(op: string, a: LOperand, comment: string) -> LInstr {
+    let mut xs = []
+    xs.push(a)
+    return LInstr { op: op, args: xs, comment: comment }
+}
+
+fn _instr2(op: string, a: LOperand, b: LOperand, comment: string) -> LInstr {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    return LInstr { op: op, args: xs, comment: comment }
+}
+
+// ── Register assignment (naive) ──────────────────────────────
+
+fn _x86_64_reg_for_local(local_id: i64) -> string {
+    // 12-slot rotation across general-purpose 64-bit registers.
+    let slots = [
+        "rax", "rbx", "rcx", "rdx",
+        "r8",  "r9",  "r10", "r11",
+        "r12", "r13", "r14", "r15"
+    ]
+    let mut idx = local_id
+    if idx < 0 { idx = 0 }
+    let m = idx - (idx / 12) * 12
+    return slots[m]
+}
+
+fn _x86_64_arg_reg(idx: i64) -> string {
+    // System V integer arg sequence
+    if idx == 0 { return "rdi" }
+    if idx == 1 { return "rsi" }
+    if idx == 2 { return "rdx" }
+    if idx == 3 { return "rcx" }
+    if idx == 4 { return "r8"  }
+    if idx == 5 { return "r9"  }
+    return "rdi" // overflow on stack — v1 stub
+}
+
+fn _x86_64_op_for_operand(o: Operand) -> LOperand {
+    if o.kind == "local" {
+        return _op_reg(_x86_64_reg_for_local(o.local_id))
+    }
+    if o.kind == "const_int" {
+        return _op_imm(o.int_val)
+    }
+    if o.kind == "global" {
+        return _op_label("g" + to_string(o.global_id))
+    }
+    if o.kind == "const_str" {
+        return _op_label(o.str_val)
+    }
+    return _op_imm(0)
+}
+
+// ── Block label helper ───────────────────────────────────────
+
+fn _x86_64_block_label(fname: string, block_id: i64) -> string {
+    return ".L" + fname + "_bb" + to_string(block_id)
+}
+
+// ── Statement lowering ───────────────────────────────────────
+
+fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
+    let mut buf = out
+    if s.kind == STMT_ASSIGN {
+        let dst = _op_reg(_x86_64_reg_for_local(s.dst.id))
+        if len(s.args) >= 1 {
+            let src = _x86_64_op_for_operand(s.args[0])
+            buf.push(_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
+        }
+        return buf
+    }
+    if s.kind == STMT_BINOP {
+        let dst_name = _x86_64_reg_for_local(s.dst.id)
+        let dst = _op_reg(dst_name)
+        if len(s.args) >= 2 {
+            let a = _x86_64_op_for_operand(s.args[0])
+            let b = _x86_64_op_for_operand(s.args[1])
+            // Two-operand form: dst <- a; dst <op>= b
+            buf.push(_instr2("mov", dst, a, "binop lhs into dst"))
+            let mut mnemonic = "add"
+            if s.op == "add" { mnemonic = "add" }
+            if s.op == "sub" { mnemonic = "sub" }
+            if s.op == "mul" { mnemonic = "imul" }
+            if s.op == "div" { mnemonic = "idiv" }   // signed div (special — v1 simplification)
+            if s.op == "and" { mnemonic = "and" }
+            if s.op == "or"  { mnemonic = "or"  }
+            if s.op == "xor" { mnemonic = "xor" }
+            buf.push(_instr2(mnemonic, dst, b, "binop " + s.op))
+        }
+        return buf
+    }
+    if s.kind == STMT_CALL {
+        let target = s.op
+        buf.push(_instr1("call", _op_label(target), "call " + target))
+        if s.dst.id >= 0 {
+            let dst = _op_reg(_x86_64_reg_for_local(s.dst.id))
+            // Result is in rax; move into dst if needed
+            if dst.reg.name != "rax" {
+                buf.push(_instr2("mov", dst, _op_reg("rax"), "capture call result"))
+            }
+        }
+        return buf
+    }
+    if s.kind == STMT_RETURN {
+        if len(s.args) >= 1 {
+            let src = _x86_64_op_for_operand(s.args[0])
+            buf.push(_instr2("mov", _op_reg("rax"), src, "set return value"))
+        }
+        // epilogue
+        buf.push(_instr1("pop", _op_reg("rbp"), "epilogue: restore rbp"))
+        buf.push(_instr0("ret", "return"))
+        return buf
+    }
+    if s.kind == STMT_BR {
+        let lab = _x86_64_block_label(fname, s.target_block)
+        buf.push(_instr1("jmp", _op_label(lab), "branch"))
+        return buf
+    }
+    if s.kind == STMT_BR_COND {
+        if len(s.args) >= 1 {
+            let cond = _x86_64_op_for_operand(s.args[0])
+            buf.push(_instr2("cmp", cond, _op_imm(0), "br_cond test"))
+            let else_lab = _x86_64_block_label(fname, s.target_block_else)
+            buf.push(_instr1("je", _op_label(else_lab), "jump-if-zero -> else"))
+        }
+        let then_lab = _x86_64_block_label(fname, s.target_block)
+        buf.push(_instr1("jmp", _op_label(then_lab), "jump -> then"))
+        return buf
+    }
+    buf.push(_instr0("nop", "unhandled stmt kind " + s.kind))
+    return buf
+}
+
+// ── Function lowering ────────────────────────────────────────
+
+fn _x86_64_lower_func(mf: MFunc) -> LFunc {
+    let mut instrs = []
+
+    // Prologue
+    instrs.push(_instr1("push", _op_reg("rbp"), "prologue: save rbp"))
+    instrs.push(_instr2("mov", _op_reg("rbp"), _op_reg("rsp"), "prologue: set rbp"))
+
+    // Move incoming params (rdi..r9) into local regs (if different)
+    let mut p = 0
+    while p < len(mf.params) {
+        if p < 6 {
+            let dst_name = _x86_64_reg_for_local(mf.params[p].id)
+            let src_name = _x86_64_arg_reg(p)
+            if dst_name != src_name {
+                instrs.push(_instr2("mov", _op_reg(dst_name), _op_reg(src_name), "ingress param"))
+            }
+        }
+        p = p + 1
+    }
+
+    // Lower blocks
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        instrs.push(_instr0("label", _x86_64_block_label(mf.name, blk.id)))
+        let mut si = 0
+        while si < len(blk.stmts) {
+            instrs = _emit_x86_64_stmt(instrs, mf.name, blk.stmts[si])
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+
+    // Safety epilogue
+    if len(instrs) > 0 {
+        let last = instrs[len(instrs) - 1]
+        if last.op == "ret" {
+            return LFunc {
+                name: mf.name,
+                target: "x86_64-linux-gnu",
+                instrs: instrs,
+                frame_size: 0,
+                callee_saved: []
+            }
+        }
+    }
+    instrs.push(_instr1("pop", _op_reg("rbp"), "epilogue: restore rbp"))
+    instrs.push(_instr0("ret", "return"))
+
+    return LFunc {
+        name: mf.name,
+        target: "x86_64-linux-gnu",
+        instrs: instrs,
+        frame_size: 0,
+        callee_saved: []
+    }
+}
+
+// ── Module entry point ───────────────────────────────────────
+
+pub fn codegen_x86_64_linux(module: MModule) -> LModule {
+    let mut funcs = []
+    let mut i = 0
+    while i < len(module.funcs) {
+        funcs.push(_x86_64_lower_func(module.funcs[i]))
+        i = i + 1
+    }
+    return LModule {
+        file: module.file,
+        target: "x86_64-linux-gnu",
+        funcs: funcs,
+        rodata: [],
+        bss: []
+    }
+}

@@ -1,0 +1,392 @@
+// HEXA Native Compiler — Phase A1 / Codegen smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds two tiny MIR modules:
+//   (a) fn id(x: Int) -> Int { return x }
+//   (b) fn add(x: Int, y: Int) -> Int { return x + y }
+//
+// Runs both `codegen_arm64_darwin` and `codegen_x86_64_linux` on each.
+// Prints LFunc summaries (instr count, opcode distribution, prologue /
+// epilogue sentinels) and asserts on key opcode presence.
+//
+// Run:
+//   hexa run compiler/codegen/codegen_test.hexa
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+import "./arm64_darwin.hexa"
+import "./x86_64_linux.hexa"
+
+// ── MIR construction helpers ─────────────────────────────────
+
+fn _local(id: i64, name: string) -> Local {
+    return Local {
+        id: id,
+        arena_id: 1,
+        type_id: 0,
+        name_hint: name
+    }
+}
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local",
+        local_id: local_id,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _stmt_assign(dst: Local, src: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(src)
+    return Stmt {
+        kind: STMT_ASSIGN,
+        dst: dst,
+        op: "",
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _stmt_binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    return Stmt {
+        kind: STMT_BINOP,
+        dst: dst,
+        op: op,
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _stmt_return(src: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(src)
+    return Stmt {
+        kind: STMT_RETURN,
+        dst: _miss_local(),
+        op: "",
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+// ── Cases ────────────────────────────────────────────────────
+
+// (a) fn id(x: Int) -> Int { return x }
+fn _build_case_id() -> MModule {
+    let x = _local(0, "x")
+    let ret_local = _local(1, "ret")
+
+    let mut stmts = []
+    stmts.push(_stmt_return(_op_local(x.id)))
+
+    let mut blocks = []
+    blocks.push(_block(0, stmts))
+
+    let mut params = []
+    params.push(x)
+    let mut locals = []
+    locals.push(x)
+    locals.push(ret_local)
+
+    let mf = MFunc {
+        name: "id",
+        params: params,
+        return_local: ret_local,
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_id.hexa", funcs: fns, globals: [] }
+}
+
+// (b) fn add(x: Int, y: Int) -> Int { return x + y }
+fn _build_case_add() -> MModule {
+    let x = _local(0, "x")
+    let y = _local(1, "y")
+    let t = _local(2, "tmp")
+    let ret_local = _local(3, "ret")
+
+    let mut stmts = []
+    stmts.push(_stmt_binop(t, "add", _op_local(x.id), _op_local(y.id)))
+    stmts.push(_stmt_return(_op_local(t.id)))
+
+    let mut blocks = []
+    blocks.push(_block(0, stmts))
+
+    let mut params = []
+    params.push(x)
+    params.push(y)
+    let mut locals = []
+    locals.push(x)
+    locals.push(y)
+    locals.push(t)
+    locals.push(ret_local)
+
+    let mf = MFunc {
+        name: "add",
+        params: params,
+        return_local: ret_local,
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_add.hexa", funcs: fns, globals: [] }
+}
+
+// ── Inspection helpers ───────────────────────────────────────
+
+fn _count_op(lf: LFunc, mnemonic: string) -> i64 {
+    let mut n = 0
+    let mut i = 0
+    while i < len(lf.instrs) {
+        if lf.instrs[i].op == mnemonic { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _has_op(lf: LFunc, mnemonic: string) -> bool {
+    return _count_op(lf, mnemonic) > 0
+}
+
+fn _has_prologue_arm64(lf: LFunc) -> bool {
+    // First two non-label instrs should be `stp` then `mov`
+    if len(lf.instrs) < 2 { return false }
+    if lf.instrs[0].op != "stp" { return false }
+    if lf.instrs[1].op != "mov" { return false }
+    return true
+}
+
+fn _has_epilogue_arm64(lf: LFunc) -> bool {
+    // ldp ... ; ret near the end
+    if len(lf.instrs) < 2 { return false }
+    let last = lf.instrs[len(lf.instrs) - 1]
+    let prev = lf.instrs[len(lf.instrs) - 2]
+    if last.op != "ret" { return false }
+    if prev.op != "ldp" { return false }
+    return true
+}
+
+fn _has_prologue_x86(lf: LFunc) -> bool {
+    if len(lf.instrs) < 2 { return false }
+    if lf.instrs[0].op != "push" { return false }
+    if lf.instrs[1].op != "mov" { return false }
+    return true
+}
+
+fn _has_epilogue_x86(lf: LFunc) -> bool {
+    if len(lf.instrs) < 2 { return false }
+    let last = lf.instrs[len(lf.instrs) - 1]
+    let prev = lf.instrs[len(lf.instrs) - 2]
+    if last.op != "ret" { return false }
+    if prev.op != "pop" { return false }
+    return true
+}
+
+// Distinct opcode list (very small N — quadratic membership scan ok)
+fn _distinct_ops(lf: LFunc) -> [string] {
+    let mut out = []
+    let mut i = 0
+    while i < len(lf.instrs) {
+        let o = lf.instrs[i].op
+        let mut seen = false
+        let mut j = 0
+        while j < len(out) {
+            if out[j] == o { seen = true }
+            j = j + 1
+        }
+        if !seen { out.push(o) }
+        i = i + 1
+    }
+    return out
+}
+
+fn _print_summary(target: string, case_name: string, lf: LFunc) {
+    println("  [" + target + "] fn " + lf.name + " (" + case_name + ")")
+    println("    instrs=" + to_string(len(lf.instrs)) +
+            "  frame_size=" + to_string(lf.frame_size))
+    let ops = _distinct_ops(lf)
+    let mut s = "    opcodes:"
+    let mut i = 0
+    while i < len(ops) {
+        s = s + " " + ops[i] + "(" + to_string(_count_op(lf, ops[i])) + ")"
+        i = i + 1
+    }
+    println(s)
+}
+
+// ── Driver ───────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Codegen Smoke Test (A1)")
+    println("    targets: arm64-apple-darwin, x86_64-linux-gnu")
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+
+    let mod_id  = _build_case_id()
+    let mod_add = _build_case_add()
+
+    // ── arm64-apple-darwin ───────────────────────────────────
+    println("")
+    println("── target: arm64-apple-darwin ──")
+
+    let l_id_arm  = codegen_arm64_darwin(mod_id)
+    let l_add_arm = codegen_arm64_darwin(mod_add)
+
+    if len(l_id_arm.funcs) != 1 {
+        println("  FAIL: arm64 id expected 1 func, got " + to_string(len(l_id_arm.funcs)))
+        ok = false
+    }
+    if len(l_add_arm.funcs) != 1 {
+        println("  FAIL: arm64 add expected 1 func, got " + to_string(len(l_add_arm.funcs)))
+        ok = false
+    }
+
+    let lf_id_arm  = l_id_arm.funcs[0]
+    let lf_add_arm = l_add_arm.funcs[0]
+    _print_summary("arm64", "id",  lf_id_arm)
+    _print_summary("arm64", "add", lf_add_arm)
+
+    if !_has_prologue_arm64(lf_id_arm) {
+        println("  FAIL: arm64 id missing prologue (stp; mov)")
+        ok = false
+    }
+    if !_has_epilogue_arm64(lf_id_arm) {
+        println("  FAIL: arm64 id missing epilogue (ldp; ret)")
+        ok = false
+    }
+    if !_has_op(lf_id_arm, "mov") {
+        println("  FAIL: arm64 id expected `mov`")
+        ok = false
+    }
+    if !_has_op(lf_id_arm, "ret") {
+        println("  FAIL: arm64 id expected `ret`")
+        ok = false
+    }
+
+    if !_has_prologue_arm64(lf_add_arm) {
+        println("  FAIL: arm64 add missing prologue")
+        ok = false
+    }
+    if !_has_epilogue_arm64(lf_add_arm) {
+        println("  FAIL: arm64 add missing epilogue")
+        ok = false
+    }
+    if !_has_op(lf_add_arm, "add") {
+        println("  FAIL: arm64 add expected `add`")
+        ok = false
+    }
+    if !_has_op(lf_add_arm, "ret") {
+        println("  FAIL: arm64 add expected `ret`")
+        ok = false
+    }
+    if lf_id_arm.target != "arm64-apple-darwin" {
+        println("  FAIL: arm64 id wrong target tag: " + lf_id_arm.target)
+        ok = false
+    }
+    if l_id_arm.target != "arm64-apple-darwin" {
+        println("  FAIL: arm64 module wrong target tag")
+        ok = false
+    }
+
+    // ── x86_64-linux-gnu ─────────────────────────────────────
+    println("")
+    println("── target: x86_64-linux-gnu ──")
+
+    let l_id_x86  = codegen_x86_64_linux(mod_id)
+    let l_add_x86 = codegen_x86_64_linux(mod_add)
+
+    if len(l_id_x86.funcs) != 1 {
+        println("  FAIL: x86 id expected 1 func, got " + to_string(len(l_id_x86.funcs)))
+        ok = false
+    }
+    if len(l_add_x86.funcs) != 1 {
+        println("  FAIL: x86 add expected 1 func, got " + to_string(len(l_add_x86.funcs)))
+        ok = false
+    }
+
+    let lf_id_x86  = l_id_x86.funcs[0]
+    let lf_add_x86 = l_add_x86.funcs[0]
+    _print_summary("x86_64", "id",  lf_id_x86)
+    _print_summary("x86_64", "add", lf_add_x86)
+
+    if !_has_prologue_x86(lf_id_x86) {
+        println("  FAIL: x86 id missing prologue (push; mov)")
+        ok = false
+    }
+    if !_has_epilogue_x86(lf_id_x86) {
+        println("  FAIL: x86 id missing epilogue (pop; ret)")
+        ok = false
+    }
+    if !_has_op(lf_id_x86, "mov") {
+        println("  FAIL: x86 id expected `mov`")
+        ok = false
+    }
+    if !_has_op(lf_id_x86, "ret") {
+        println("  FAIL: x86 id expected `ret`")
+        ok = false
+    }
+
+    if !_has_prologue_x86(lf_add_x86) {
+        println("  FAIL: x86 add missing prologue")
+        ok = false
+    }
+    if !_has_epilogue_x86(lf_add_x86) {
+        println("  FAIL: x86 add missing epilogue")
+        ok = false
+    }
+    if !_has_op(lf_add_x86, "add") {
+        println("  FAIL: x86 add expected `add`")
+        ok = false
+    }
+    if !_has_op(lf_add_x86, "ret") {
+        println("  FAIL: x86 add expected `ret`")
+        ok = false
+    }
+    if lf_id_x86.target != "x86_64-linux-gnu" {
+        println("  FAIL: x86 id wrong target tag: " + lf_id_x86.target)
+        ok = false
+    }
+    if l_id_x86.target != "x86_64-linux-gnu" {
+        println("  FAIL: x86 module wrong target tag")
+        ok = false
+    }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: codegen produced LIR with expected opcodes for both targets.")
+    } else {
+        println("FAIL: codegen contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}
