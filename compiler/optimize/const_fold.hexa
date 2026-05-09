@@ -1,0 +1,159 @@
+// HEXA Native Compiler — Optimizer / Const Folding (Phase Opt-1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Walks each MFunc's blocks/stmts. For STMT_BINOP where both operands are
+// `kind="const_int"` or `kind="const_float"`, evaluate at compile time and
+// replace with a STMT_ASSIGN of the result.
+//
+// Operations supported: + - * / % (signed ints, basic float arithmetic).
+//
+// Pure: returns a fresh MModule. Does not mutate the input.
+//
+// RFC-018 §9 (1차 optimization scope): const folding.
+
+import "../ir/mir.hexa"
+
+// ── Operand builders ─────────────────────────────────────────
+
+fn _cf_const_int(v: i64) -> Operand {
+    return Operand {
+        kind: "const_int",
+        local_id: -1,
+        int_val: v,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _cf_const_float(v: f64) -> Operand {
+    return Operand {
+        kind: "const_float",
+        local_id: -1,
+        int_val: 0,
+        float_val: v,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+// ── Eval ─────────────────────────────────────────────────────
+
+fn _cf_eval_int(op: string, a: i64, b: i64) -> i64 {
+    if op == "+" { return a + b }
+    if op == "-" { return a - b }
+    if op == "*" { return a * b }
+    if op == "/" {
+        if b == 0 { return 0 }
+        return a / b
+    }
+    if op == "%" {
+        if b == 0 { return 0 }
+        return a % b
+    }
+    return 0
+}
+
+fn _cf_eval_float(op: string, a: f64, b: f64) -> f64 {
+    if op == "+" { return a + b }
+    if op == "-" { return a - b }
+    if op == "*" { return a * b }
+    if op == "/" { return a / b }
+    return 0.0
+}
+
+fn _cf_op_supported(op: string) -> bool {
+    if op == "+" { return true }
+    if op == "-" { return true }
+    if op == "*" { return true }
+    if op == "/" { return true }
+    if op == "%" { return true }
+    return false
+}
+
+// ── Stmt-level fold ──────────────────────────────────────────
+
+fn _cf_fold_stmt(s: Stmt) -> Stmt {
+    if s.kind != STMT_BINOP { return s }
+    if !_cf_op_supported(s.op) { return s }
+    if len(s.args) < 2 { return s }
+    let a = s.args[0]
+    let b = s.args[1]
+
+    // Both int constants
+    if a.kind == "const_int" && b.kind == "const_int" {
+        if s.op == "/" && b.int_val == 0 { return s }
+        if s.op == "%" && b.int_val == 0 { return s }
+        let v = _cf_eval_int(s.op, a.int_val, b.int_val)
+        let mut args: [Operand] = []
+        args.push(_cf_const_int(v))
+        return Stmt {
+            kind: STMT_ASSIGN,
+            dst: s.dst,
+            op: "fold",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+    }
+
+    // Both float constants
+    if a.kind == "const_float" && b.kind == "const_float" {
+        if s.op == "%" { return s }
+        let v = _cf_eval_float(s.op, a.float_val, b.float_val)
+        let mut args: [Operand] = []
+        args.push(_cf_const_float(v))
+        return Stmt {
+            kind: STMT_ASSIGN,
+            dst: s.dst,
+            op: "fold",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+    }
+
+    return s
+}
+
+fn _cf_fold_block(b: Block) -> Block {
+    let mut out: [Stmt] = []
+    let mut i = 0
+    while i < len(b.stmts) {
+        out.push(_cf_fold_stmt(b.stmts[i]))
+        i = i + 1
+    }
+    return Block { id: b.id, stmts: out, preds: b.preds, succs: b.succs }
+}
+
+fn _cf_fold_func(f: MFunc) -> MFunc {
+    let mut blocks: [Block] = []
+    let mut i = 0
+    while i < len(f.blocks) {
+        blocks.push(_cf_fold_block(f.blocks[i]))
+        i = i + 1
+    }
+    return MFunc {
+        name: f.name,
+        params: f.params,
+        return_local: f.return_local,
+        locals: f.locals,
+        blocks: blocks,
+        entry_block: f.entry_block,
+        arena_root: f.arena_root
+    }
+}
+
+// ── Public ───────────────────────────────────────────────────
+
+pub fn const_fold(module: MModule) -> MModule {
+    let mut funcs: [MFunc] = []
+    let mut i = 0
+    while i < len(module.funcs) {
+        funcs.push(_cf_fold_func(module.funcs[i]))
+        i = i + 1
+    }
+    return MModule { file: module.file, funcs: funcs, globals: module.globals }
+}

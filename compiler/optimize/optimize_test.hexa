@@ -1,0 +1,433 @@
+// HEXA Native Compiler — Optimizer smoke test (Phase Opt-1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds three small MModules and exercises each optimizer pass:
+//   (a) const_fold:   fn add() -> Int { return 2 + 3 }       → return 5  (binop folded)
+//   (b) dce:          fn unused() { let x = 1 + 2; return 0 } → drops x
+//   (c) inline_small: fn id(x) { return x } + fn use_id() { return id(7) }
+//                     → use_id has the body of id inlined (call removed)
+//
+// Run:
+//   hexa run compiler/optimize/optimize_test.hexa
+
+import "../ir/mir.hexa"
+import "./const_fold.hexa"
+import "./dce.hexa"
+import "./inline.hexa"
+
+// ── MIR construction helpers ─────────────────────────────────
+
+fn _local(id: i64, name: string) -> Local {
+    return Local {
+        id: id,
+        arena_id: 1,
+        type_id: 1,
+        name_hint: name
+    }
+}
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local",
+        local_id: local_id,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _op_int(v: i64) -> Operand {
+    return Operand {
+        kind: "const_int",
+        local_id: -1,
+        int_val: v,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _stmt_binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    let mut xs: [Operand] = []
+    xs.push(a)
+    xs.push(b)
+    return Stmt {
+        kind: STMT_BINOP,
+        dst: dst,
+        op: op,
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _stmt_return(src: Operand) -> Stmt {
+    let mut xs: [Operand] = []
+    xs.push(src)
+    return Stmt {
+        kind: STMT_RETURN,
+        dst: _miss_local(),
+        op: "",
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _stmt_call(dst: Local, callee: string, args: [Operand]) -> Stmt {
+    return Stmt {
+        kind: STMT_CALL,
+        dst: dst,
+        op: callee,
+        args: args,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+fn _mfunc(name: string, params: [Local], locals: [Local], blocks: [Block]) -> MFunc {
+    return MFunc {
+        name: name,
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1
+    }
+}
+
+// ── Inspection helpers ───────────────────────────────────────
+
+fn _kind_count(blocks: [Block], target: string) -> i64 {
+    let mut n: i64 = 0
+    let mut i = 0
+    while i < len(blocks) {
+        let b = blocks[i]
+        let mut j = 0
+        while j < len(b.stmts) {
+            if b.stmts[j].kind == target { n = n + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return n
+}
+
+fn _total_stmts(blocks: [Block]) -> i64 {
+    let mut n: i64 = 0
+    let mut i = 0
+    while i < len(blocks) {
+        n = n + len(blocks[i].stmts)
+        i = i + 1
+    }
+    return n
+}
+
+fn _print_summary(label: string, mf: MFunc) {
+    let total = _total_stmts(mf.blocks)
+    let n_assign = _kind_count(mf.blocks, STMT_ASSIGN)
+    let n_binop  = _kind_count(mf.blocks, STMT_BINOP)
+    let n_call   = _kind_count(mf.blocks, STMT_CALL)
+    let n_ret    = _kind_count(mf.blocks, STMT_RETURN)
+    println("  " + label + " " + mf.name +
+            " blocks=" + to_string(len(mf.blocks)) +
+            " locals=" + to_string(len(mf.locals)) +
+            " stmts=" + to_string(total))
+    println("    kinds: assign=" + to_string(n_assign) +
+            " binop=" + to_string(n_binop) +
+            " call=" + to_string(n_call) +
+            " return=" + to_string(n_ret))
+}
+
+fn _find_func(m: MModule, name: string) -> i64 {
+    let mut i = 0
+    while i < len(m.funcs) {
+        if m.funcs[i].name == name { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Find return stmt and report its operand kind + int value if const_int.
+fn _return_const_int(mf: MFunc) -> i64 {
+    let mut i = 0
+    while i < len(mf.blocks) {
+        let b = mf.blocks[i]
+        let mut j = 0
+        while j < len(b.stmts) {
+            let s = b.stmts[j]
+            if s.kind == STMT_RETURN && len(s.args) > 0 {
+                let a = s.args[0]
+                if a.kind == "const_int" { return a.int_val }
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return -999999
+}
+
+// ── Case (a): const_fold of `return 2 + 3` ───────────────────
+
+fn _build_case_a() -> MModule {
+    let t0 = _local(0, "t")
+    let mut stmts: [Stmt] = []
+    // t0 = 2 + 3
+    stmts.push(_stmt_binop(t0, "+", _op_int(2), _op_int(3)))
+    // return t0
+    stmts.push(_stmt_return(_op_local(t0.id)))
+
+    let mut blocks: [Block] = []
+    blocks.push(_block(0, stmts))
+    let mut locals: [Local] = []
+    locals.push(t0)
+
+    let mut params: [Local] = []
+    let mf = _mfunc("add", params, locals, blocks)
+    let mut funcs: [MFunc] = []
+    funcs.push(mf)
+    return MModule { file: "case_a.hexa", funcs: funcs, globals: [] }
+}
+
+// ── Case (b): dce of `let x = 1 + 2; return 0` ───────────────
+//
+// MIR shape (post-lowering shape):
+//   t0 = 1 + 2
+//   x  = assign t0          (let-binding)
+//   return 0
+// After dce: t0 is unread (only x reads it)? Actually x reads t0 but
+// nothing reads x. So both are dead. Test expects "drop unused x assignment" —
+// any decrease in stmt count is acceptable.
+
+fn _build_case_b() -> MModule {
+    let t0 = _local(0, "t")
+    let x  = _local(1, "x")
+
+    let mut stmts: [Stmt] = []
+    stmts.push(_stmt_binop(t0, "+", _op_int(1), _op_int(2)))
+    // x = t0    (STMT_ASSIGN with op="let")
+    let mut a_args: [Operand] = []
+    a_args.push(_op_local(t0.id))
+    stmts.push(Stmt {
+        kind: STMT_ASSIGN,
+        dst: x,
+        op: "let",
+        args: a_args,
+        target_block: -1,
+        target_block_else: -1
+    })
+    stmts.push(_stmt_return(_op_int(0)))
+
+    let mut blocks: [Block] = []
+    blocks.push(_block(0, stmts))
+    let mut locals: [Local] = []
+    locals.push(t0)
+    locals.push(x)
+    let mut params: [Local] = []
+    let mf = _mfunc("unused", params, locals, blocks)
+    let mut funcs: [MFunc] = []
+    funcs.push(mf)
+    return MModule { file: "case_b.hexa", funcs: funcs, globals: [] }
+}
+
+// ── Case (c): inline_small ───────────────────────────────────
+//
+// fn id(x: Int) -> Int { return x }
+// fn use_id() -> Int { return id(7) }
+//
+// id callee shape:
+//   block 0:
+//     return %x   (param local id 0)
+//   total stmts = 1, single block, no inner CALL → eligible.
+//
+// use_id caller shape:
+//   block 0:
+//     %0 = call id(7)
+//     return %0
+// Post-inline expectation: the call disappears, replaced with an assign of
+// param + assign-from-return. STMT_CALL count drops to 0.
+
+fn _build_case_c() -> MModule {
+    // Callee id
+    let id_param = _local(0, "x")
+    let mut id_stmts: [Stmt] = []
+    id_stmts.push(_stmt_return(_op_local(id_param.id)))
+    let mut id_blocks: [Block] = []
+    id_blocks.push(_block(0, id_stmts))
+    let mut id_params: [Local] = []
+    id_params.push(id_param)
+    let mut id_locals: [Local] = []
+    id_locals.push(id_param)
+    let id_func = _mfunc("id", id_params, id_locals, id_blocks)
+
+    // Caller use_id
+    let call_dst = _local(0, "call_ret")
+    let mut call_args: [Operand] = []
+    call_args.push(_op_int(7))
+    let mut u_stmts: [Stmt] = []
+    u_stmts.push(_stmt_call(call_dst, "id", call_args))
+    u_stmts.push(_stmt_return(_op_local(call_dst.id)))
+    let mut u_blocks: [Block] = []
+    u_blocks.push(_block(0, u_stmts))
+    let mut u_params: [Local] = []
+    let mut u_locals: [Local] = []
+    u_locals.push(call_dst)
+    let use_func = _mfunc("use_id", u_params, u_locals, u_blocks)
+
+    let mut funcs: [MFunc] = []
+    funcs.push(id_func)
+    funcs.push(use_func)
+    return MModule { file: "case_c.hexa", funcs: funcs, globals: [] }
+}
+
+// ── Driver ───────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Optimizer Smoke Test (Opt-1)")
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+
+    // ── (a) const_fold ──
+    println("")
+    println("── (a) const_fold: fn add() -> Int { return 2 + 3 } ──")
+    let m_a = _build_case_a()
+    println("  before:")
+    _print_summary("(a)", m_a.funcs[0])
+    let m_a_opt = const_fold(m_a)
+    println("  after const_fold:")
+    _print_summary("(a)", m_a_opt.funcs[0])
+    let mf_a = m_a_opt.funcs[0]
+    if _kind_count(mf_a.blocks, STMT_BINOP) != 0 {
+        println("  FAIL: case (a) expected binop count = 0 after fold, got " +
+                to_string(_kind_count(mf_a.blocks, STMT_BINOP)))
+        ok = false
+    }
+    // The folded stmt becomes STMT_ASSIGN; total stmts unchanged but binop→assign.
+    if _kind_count(mf_a.blocks, STMT_ASSIGN) < 1 {
+        println("  FAIL: case (a) expected >=1 assign after fold")
+        ok = false
+    }
+    // Ensure assign carries 5 (2+3).
+    let mut found_5 = false
+    let mut bi = 0
+    while bi < len(mf_a.blocks) {
+        let b = mf_a.blocks[bi]
+        let mut si = 0
+        while si < len(b.stmts) {
+            let s = b.stmts[si]
+            if s.kind == STMT_ASSIGN && len(s.args) > 0 {
+                let a0 = s.args[0]
+                if a0.kind == "const_int" && a0.int_val == 5 {
+                    found_5 = true
+                }
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    if !found_5 {
+        println("  FAIL: case (a) folded value 5 not present")
+        ok = false
+    }
+
+    // ── (b) dce ──
+    println("")
+    println("── (b) dce: fn unused() { let x = 1 + 2; return 0 } ──")
+    let m_b = _build_case_b()
+    let before_b = _total_stmts(m_b.funcs[0].blocks)
+    println("  before:")
+    _print_summary("(b)", m_b.funcs[0])
+    let m_b_opt = dce(m_b)
+    println("  after dce:")
+    _print_summary("(b)", m_b_opt.funcs[0])
+    let mf_b = m_b_opt.funcs[0]
+    let after_b = _total_stmts(mf_b.blocks)
+    if after_b >= before_b {
+        println("  FAIL: case (b) dce did not reduce stmt count (" +
+                to_string(before_b) + " -> " + to_string(after_b) + ")")
+        ok = false
+    }
+    if _kind_count(mf_b.blocks, STMT_RETURN) != 1 {
+        println("  FAIL: case (b) return must be preserved")
+        ok = false
+    }
+    // The unused let-assign must be gone.
+    let mut found_x_assign = false
+    let mut bi2 = 0
+    while bi2 < len(mf_b.blocks) {
+        let b = mf_b.blocks[bi2]
+        let mut si = 0
+        while si < len(b.stmts) {
+            if b.stmts[si].kind == STMT_ASSIGN && b.stmts[si].dst.name_hint == "x" {
+                found_x_assign = true
+            }
+            si = si + 1
+        }
+        bi2 = bi2 + 1
+    }
+    if found_x_assign {
+        println("  FAIL: case (b) unused x assignment was not dropped")
+        ok = false
+    }
+
+    // ── (c) inline_small ──
+    println("")
+    println("── (c) inline_small: use_id() { return id(7) } ──")
+    let m_c = _build_case_c()
+    let use_idx_before = _find_func(m_c, "use_id")
+    println("  before (use_id):")
+    _print_summary("(c)", m_c.funcs[use_idx_before])
+    let m_c_opt = inline_small(m_c)
+    let use_idx = _find_func(m_c_opt, "use_id")
+    if use_idx < 0 {
+        println("  FAIL: case (c) use_id missing post-inline")
+        ok = false
+    } else {
+        let mf_c = m_c_opt.funcs[use_idx]
+        println("  after inline_small (use_id):")
+        _print_summary("(c)", mf_c)
+        if _kind_count(mf_c.blocks, STMT_CALL) != 0 {
+            println("  FAIL: case (c) STMT_CALL not removed; got " +
+                    to_string(_kind_count(mf_c.blocks, STMT_CALL)))
+            ok = false
+        }
+        if _kind_count(mf_c.blocks, STMT_RETURN) < 1 {
+            println("  FAIL: case (c) caller's return missing")
+            ok = false
+        }
+    }
+
+    // ── Composition smoke: const_fold(dce(module)) ──
+    println("")
+    println("── (d) composability: const_fold(dce(...)) on case (a) ──")
+    let m_a_chain = const_fold(dce(_build_case_a()))
+    _print_summary("(d)", m_a_chain.funcs[0])
+    if _kind_count(m_a_chain.funcs[0].blocks, STMT_BINOP) != 0 {
+        println("  FAIL: composability — binop survived chained passes")
+        ok = false
+    }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: optimizer (const_fold, dce, inline_small) contracts hold.")
+    } else {
+        println("FAIL: optimizer contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}

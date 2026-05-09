@@ -1,0 +1,147 @@
+// HEXA Native Compiler — Optimizer / Dead Code Elimination (Phase Opt-1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Per-MFunc simple liveness:
+//   * Build the set of Local ids that are READ by any stmt across the
+//     whole function (global "used" set — sufficient for SSA where each
+//     local is assigned once; safe over-approximation otherwise).
+//   * For STMT_ASSIGN / STMT_BINOP / STMT_UNOP / STMT_LOAD whose dst is
+//     never read, drop the stmt.
+//
+// Conservative — we never drop:
+//   * STMT_CALL          (potential side effects)
+//   * STMT_BR / STMT_BR_COND
+//   * STMT_RETURN
+//   * STMT_STORE         (memory side effect)
+//   * STMT_ARENA_NEW / STMT_ARENA_DROP
+//
+// Pure: returns a fresh MModule.
+//
+// RFC-018 §9 (1차 optimization scope): dead code elimination.
+
+import "../ir/mir.hexa"
+
+// ── Live-set (insertion-order list of i64) ───────────────────
+
+fn _dce_contains(xs: [i64], v: i64) -> bool {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _dce_add(xs: [i64], v: i64) -> [i64] {
+    if _dce_contains(xs, v) { return xs }
+    let mut out = xs
+    out.push(v)
+    return out
+}
+
+fn _dce_collect_uses_op(uses: [i64], o: Operand) -> [i64] {
+    if o.kind == "local" {
+        return _dce_add(uses, o.local_id)
+    }
+    return uses
+}
+
+fn _dce_collect_uses_stmt(uses: [i64], s: Stmt) -> [i64] {
+    let mut out = uses
+    let mut i = 0
+    while i < len(s.args) {
+        out = _dce_collect_uses_op(out, s.args[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn _dce_collect_uses(f: MFunc) -> [i64] {
+    let mut uses: [i64] = []
+    let mut bi = 0
+    while bi < len(f.blocks) {
+        let b = f.blocks[bi]
+        let mut si = 0
+        while si < len(b.stmts) {
+            uses = _dce_collect_uses_stmt(uses, b.stmts[si])
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return uses
+}
+
+// ── Stmt classification ──────────────────────────────────────
+
+fn _dce_must_keep(s: Stmt) -> bool {
+    if s.kind == STMT_CALL { return true }
+    if s.kind == STMT_RETURN { return true }
+    if s.kind == STMT_BR { return true }
+    if s.kind == STMT_BR_COND { return true }
+    if s.kind == STMT_STORE { return true }
+    if s.kind == STMT_ARENA_NEW { return true }
+    if s.kind == STMT_ARENA_DROP { return true }
+    return false
+}
+
+fn _dce_has_dst(s: Stmt) -> bool {
+    if s.kind == STMT_ASSIGN { return true }
+    if s.kind == STMT_BINOP { return true }
+    if s.kind == STMT_UNOP { return true }
+    if s.kind == STMT_LOAD { return true }
+    return false
+}
+
+// ── Per-block, per-func ──────────────────────────────────────
+
+fn _dce_filter_block(b: Block, uses: [i64]) -> Block {
+    let mut out: [Stmt] = []
+    let mut i = 0
+    while i < len(b.stmts) {
+        let s = b.stmts[i]
+        let mut keep = true
+        if !_dce_must_keep(s) {
+            if _dce_has_dst(s) {
+                if s.dst.id >= 0 && !_dce_contains(uses, s.dst.id) {
+                    keep = false
+                }
+            }
+        }
+        if keep { out.push(s) }
+        i = i + 1
+    }
+    return Block { id: b.id, stmts: out, preds: b.preds, succs: b.succs }
+}
+
+fn _dce_func(f: MFunc) -> MFunc {
+    let uses = _dce_collect_uses(f)
+    let mut blocks: [Block] = []
+    let mut i = 0
+    while i < len(f.blocks) {
+        blocks.push(_dce_filter_block(f.blocks[i], uses))
+        i = i + 1
+    }
+    return MFunc {
+        name: f.name,
+        params: f.params,
+        return_local: f.return_local,
+        locals: f.locals,
+        blocks: blocks,
+        entry_block: f.entry_block,
+        arena_root: f.arena_root
+    }
+}
+
+// ── Public ───────────────────────────────────────────────────
+
+pub fn dce(module: MModule) -> MModule {
+    let mut funcs: [MFunc] = []
+    let mut i = 0
+    while i < len(module.funcs) {
+        funcs.push(_dce_func(module.funcs[i]))
+        i = i + 1
+    }
+    return MModule { file: module.file, funcs: funcs, globals: module.globals }
+}

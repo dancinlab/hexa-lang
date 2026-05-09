@@ -1,0 +1,408 @@
+// HEXA Native Compiler — Optimizer / Conservative Inlining (Phase Opt-1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Inlines a callee MFunc into its caller IF:
+//   * callee total stmt count ≤ 5
+//   * callee has exactly 1 block (no branches)
+//   * callee has no STMT_CALL itself (no recursion / nested side-effects)
+//
+// Substitutes the call site with the callee body, renaming callee Local ids
+// to fresh ids in the caller. Skips self-recursion (caller calling itself).
+// Skips a callee that's already been inlined more than 3 times in the
+// current caller (size limit).
+//
+// Pure: returns a fresh MModule.
+//
+// RFC-018 §9 (1차 optimization scope): inlining (작은 함수만).
+
+import "../ir/mir.hexa"
+
+// ── Limits ───────────────────────────────────────────────────
+
+fn _inl_max_stmts() -> i64 { return 5 }
+fn _inl_max_per_caller() -> i64 { return 3 }
+
+// ── Eligibility ──────────────────────────────────────────────
+
+fn _inl_total_stmts(f: MFunc) -> i64 {
+    let mut n: i64 = 0
+    let mut i = 0
+    while i < len(f.blocks) {
+        n = n + len(f.blocks[i].stmts)
+        i = i + 1
+    }
+    return n
+}
+
+fn _inl_has_call(f: MFunc) -> bool {
+    let mut i = 0
+    while i < len(f.blocks) {
+        let b = f.blocks[i]
+        let mut j = 0
+        while j < len(b.stmts) {
+            if b.stmts[j].kind == STMT_CALL { return true }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn _inl_eligible(f: MFunc) -> bool {
+    if len(f.blocks) != 1 { return false }
+    if _inl_total_stmts(f) > _inl_max_stmts() { return false }
+    if _inl_has_call(f) { return false }
+    return true
+}
+
+fn _inl_find_callee(module: MModule, name: string) -> i64 {
+    let mut i = 0
+    while i < len(module.funcs) {
+        if module.funcs[i].name == name { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// ── Local-id remap (callee_id -> caller_id) ──────────────────
+
+pub struct InlMap {
+    src: [i64],
+    dst: [i64]
+}
+
+fn _inl_map_lookup(m: InlMap, id: i64) -> i64 {
+    let mut i = 0
+    while i < len(m.src) {
+        if m.src[i] == id { return m.dst[i] }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _inl_map_add(m: InlMap, src_id: i64, dst_id: i64) -> InlMap {
+    let mut s = m.src
+    let mut d = m.dst
+    s.push(src_id)
+    d.push(dst_id)
+    return InlMap { src: s, dst: d }
+}
+
+// ── Operand rewrite ──────────────────────────────────────────
+
+fn _inl_remap_op(o: Operand, m: InlMap) -> Operand {
+    if o.kind != "local" { return o }
+    let nid = _inl_map_lookup(m, o.local_id)
+    if nid < 0 { return o }
+    return Operand {
+        kind: "local",
+        local_id: nid,
+        int_val: o.int_val,
+        float_val: o.float_val,
+        str_val: o.str_val,
+        global_id: o.global_id
+    }
+}
+
+// ── Inlining state for a single caller ───────────────────────
+
+pub struct InlState {
+    next_local: i64,
+    locals: [Local],
+    inline_count_names: [string],
+    inline_count_values: [i64]
+}
+
+fn _inl_count_get(st: InlState, name: string) -> i64 {
+    let mut i = 0
+    while i < len(st.inline_count_names) {
+        if st.inline_count_names[i] == name { return st.inline_count_values[i] }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _inl_count_inc(st: InlState, name: string) -> InlState {
+    let mut names = st.inline_count_names
+    let mut vals = st.inline_count_values
+    let mut i = 0
+    let mut found = false
+    while i < len(names) {
+        if names[i] == name {
+            vals[i] = vals[i] + 1
+            found = true
+            break
+        }
+        i = i + 1
+    }
+    if !found {
+        names.push(name)
+        vals.push(1)
+    }
+    return InlState {
+        next_local: st.next_local,
+        locals: st.locals,
+        inline_count_names: names,
+        inline_count_values: vals
+    }
+}
+
+fn _inl_fresh_local(st: InlState, src: Local) -> InlState {
+    let id = st.next_local
+    let l = Local {
+        id: id,
+        arena_id: src.arena_id,
+        type_id: src.type_id,
+        name_hint: src.name_hint
+    }
+    let mut locals = st.locals
+    locals.push(l)
+    return InlState {
+        next_local: id + 1,
+        locals: locals,
+        inline_count_names: st.inline_count_names,
+        inline_count_values: st.inline_count_values
+    }
+}
+
+// ── Build remap for callee → caller ──────────────────────────
+
+fn _inl_build_remap(callee: MFunc, st_in: InlState, call_args: [Operand], call_dst: Local) -> InlState {
+    // Returns updated InlState; caller will iterate the callee's body
+    // afterwards using a remap built here.
+    return st_in
+}
+
+// Walk callee's params/locals → fresh ids; bind callee return into
+// call_dst. We carry the remap separately (immutable function arg) so the
+// caller can apply it to the body stmts.
+fn _inl_make_state_and_map(
+    callee: MFunc, call_dst: Local, st_in: InlState
+) -> InlPair {
+    let mut st = st_in
+    let mut m = InlMap { src: [], dst: [] }
+    // Map params first — but callee args are passed via call.args so we
+    // emit STMT_ASSIGN per param later. We still need fresh local ids
+    // for them so further uses inside the body resolve.
+    let mut i = 0
+    while i < len(callee.params) {
+        let p = callee.params[i]
+        st = _inl_fresh_local(st, p)
+        let new_id = st.next_local - 1
+        m = _inl_map_add(m, p.id, new_id)
+        i = i + 1
+    }
+    // Map other locals (skip params already mapped).
+    let mut j = 0
+    while j < len(callee.locals) {
+        let l = callee.locals[j]
+        if _inl_map_lookup(m, l.id) < 0 {
+            st = _inl_fresh_local(st, l)
+            let new_id = st.next_local - 1
+            m = _inl_map_add(m, l.id, new_id)
+        }
+        j = j + 1
+    }
+    return InlPair { state: st, map: m }
+}
+
+pub struct InlPair {
+    state: InlState,
+    map: InlMap
+}
+
+// ── Stmt remap for the inlined body ──────────────────────────
+
+fn _inl_remap_args(args: [Operand], m: InlMap) -> [Operand] {
+    let mut out: [Operand] = []
+    let mut i = 0
+    while i < len(args) {
+        out.push(_inl_remap_op(args[i], m))
+        i = i + 1
+    }
+    return out
+}
+
+fn _inl_remap_dst(dst: Local, m: InlMap) -> Local {
+    let nid = _inl_map_lookup(m, dst.id)
+    if nid < 0 { return dst }
+    return Local {
+        id: nid,
+        arena_id: dst.arena_id,
+        type_id: dst.type_id,
+        name_hint: dst.name_hint
+    }
+}
+
+// Convert callee STMT_RETURN → STMT_ASSIGN into call_dst.
+// All non-return stmts: rewrite operand/dst ids via map.
+fn _inl_lower_callee_stmt(s: Stmt, m: InlMap, call_dst: Local) -> Stmt {
+    if s.kind == STMT_RETURN {
+        let mut args: [Operand] = []
+        if len(s.args) > 0 {
+            args.push(_inl_remap_op(s.args[0], m))
+        }
+        return Stmt {
+            kind: STMT_ASSIGN,
+            dst: call_dst,
+            op: "inline_ret",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+    }
+    return Stmt {
+        kind: s.kind,
+        dst: _inl_remap_dst(s.dst, m),
+        op: s.op,
+        args: _inl_remap_args(s.args, m),
+        target_block: s.target_block,
+        target_block_else: s.target_block_else
+    }
+}
+
+// ── Inline a single CALL stmt at a given block position ──────
+//
+// Returns a list of stmts that REPLACE the original STMT_CALL:
+//   1. Per-param STMT_ASSIGN copying call_args[i] into mapped param local.
+//   2. Each callee body stmt (return → STMT_ASSIGN into call_dst).
+fn _inl_expand_call(
+    callee: MFunc, call_args: [Operand], call_dst: Local, m: InlMap
+) -> [Stmt] {
+    let mut out: [Stmt] = []
+    // 1. Param bindings
+    let mut i = 0
+    while i < len(callee.params) {
+        let p = callee.params[i]
+        let dst_id = _inl_map_lookup(m, p.id)
+        let dst = Local {
+            id: dst_id,
+            arena_id: p.arena_id,
+            type_id: p.type_id,
+            name_hint: p.name_hint
+        }
+        let mut a: [Operand] = []
+        if i < len(call_args) {
+            a.push(call_args[i])
+        }
+        out.push(Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "inline_param",
+            args: a,
+            target_block: -1,
+            target_block_else: -1
+        })
+        i = i + 1
+    }
+    // 2. Body stmts (callee has exactly 1 block by eligibility)
+    if len(callee.blocks) >= 1 {
+        let b = callee.blocks[0]
+        let mut j = 0
+        while j < len(b.stmts) {
+            out.push(_inl_lower_callee_stmt(b.stmts[j], m, call_dst))
+            j = j + 1
+        }
+    }
+    return out
+}
+
+// ── Per-block / per-func processing ──────────────────────────
+
+fn _inl_process_block(
+    b: Block, module: MModule, caller_name: string, st_in: InlState
+) -> InlBlockResult {
+    let mut st = st_in
+    let mut new_stmts: [Stmt] = []
+    let mut i = 0
+    while i < len(b.stmts) {
+        let s = b.stmts[i]
+        let mut handled = false
+        if s.kind == STMT_CALL {
+            let callee_name = s.op
+            if callee_name != caller_name {
+                let cidx = _inl_find_callee(module, callee_name)
+                if cidx >= 0 {
+                    let callee = module.funcs[cidx]
+                    if _inl_eligible(callee) {
+                        let count = _inl_count_get(st, callee_name)
+                        if count < _inl_max_per_caller() {
+                            let pair = _inl_make_state_and_map(callee, s.dst, st)
+                            st = pair.state
+                            let m = pair.map
+                            let expanded = _inl_expand_call(callee, s.args, s.dst, m)
+                            let mut k = 0
+                            while k < len(expanded) {
+                                new_stmts.push(expanded[k])
+                                k = k + 1
+                            }
+                            st = _inl_count_inc(st, callee_name)
+                            handled = true
+                        }
+                    }
+                }
+            }
+        }
+        if !handled {
+            new_stmts.push(s)
+        }
+        i = i + 1
+    }
+    let nb = Block { id: b.id, stmts: new_stmts, preds: b.preds, succs: b.succs }
+    return InlBlockResult { block: nb, state: st }
+}
+
+pub struct InlBlockResult {
+    block: Block,
+    state: InlState
+}
+
+fn _inl_max_local_id(f: MFunc) -> i64 {
+    let mut m: i64 = -1
+    let mut i = 0
+    while i < len(f.locals) {
+        if f.locals[i].id > m { m = f.locals[i].id }
+        i = i + 1
+    }
+    return m
+}
+
+fn _inl_func(module: MModule, f: MFunc) -> MFunc {
+    let mut st = InlState {
+        next_local: _inl_max_local_id(f) + 1,
+        locals: f.locals,
+        inline_count_names: [],
+        inline_count_values: []
+    }
+    let mut blocks: [Block] = []
+    let mut i = 0
+    while i < len(f.blocks) {
+        let res = _inl_process_block(f.blocks[i], module, f.name, st)
+        st = res.state
+        blocks.push(res.block)
+        i = i + 1
+    }
+    return MFunc {
+        name: f.name,
+        params: f.params,
+        return_local: f.return_local,
+        locals: st.locals,
+        blocks: blocks,
+        entry_block: f.entry_block,
+        arena_root: f.arena_root
+    }
+}
+
+// ── Public ───────────────────────────────────────────────────
+
+pub fn inline_small(module: MModule) -> MModule {
+    let mut funcs: [MFunc] = []
+    let mut i = 0
+    while i < len(module.funcs) {
+        funcs.push(_inl_func(module, module.funcs[i]))
+        i = i + 1
+    }
+    return MModule { file: module.file, funcs: funcs, globals: module.globals }
+}
