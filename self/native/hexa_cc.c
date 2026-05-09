@@ -5552,7 +5552,40 @@ HexaVal parse_primary(void) {
         if (hexa_truthy(hexa_eq(p_peek_kind(), __hexa_parser_sl_233))) {
             p_advance();
             HexaVal variant = p_expect_ident();
-            return __hexa_fn_arena_return(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_new(), "kind", __hexa_parser_sl_274), "name", name), "value", variant), "op", __hexa_parser_sl_1), "left", __hexa_parser_sl_1), "right", __hexa_parser_sl_1), "cond", __hexa_parser_sl_1), "then_body", __hexa_parser_sl_1), "else_body", __hexa_parser_sl_1), "params", __hexa_parser_sl_1), "body", __hexa_parser_sl_1), "args", __hexa_parser_sl_1), "fields", __hexa_parser_sl_1), "items", __hexa_parser_sl_1), "variants", __hexa_parser_sl_1), "arms", __hexa_parser_sl_1), "iter_expr", __hexa_parser_sl_1), "ret_type", __hexa_parser_sl_1), "target", __hexa_parser_sl_1), "trait_name", __hexa_parser_sl_1), "methods", __hexa_parser_sl_1));
+            /* RFC-020 A1 (forward-port into boot parser image): parse optional
+               payload `(expr)` for enum construction.  Without this the boot
+               hexa_v2 emits EnumPath without `payload_expr`, and the codegen's
+               A4 path can never see a payload at the construction site. */
+            HexaVal _pe = __hexa_parser_sl_1;
+            if (hexa_truthy(hexa_eq(p_peek_kind(), __hexa_parser_sl_113))) {
+                p_advance();
+                _pe = parse_expr();
+                p_expect(__hexa_parser_sl_115);
+            }
+            HexaVal _ep = hexa_map_new();
+            _ep = hexa_map_set(_ep, "kind", __hexa_parser_sl_274);
+            _ep = hexa_map_set(_ep, "name", name);
+            _ep = hexa_map_set(_ep, "value", variant);
+            _ep = hexa_map_set(_ep, "op", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "left", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "right", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "cond", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "then_body", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "else_body", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "params", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "body", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "args", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "fields", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "items", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "variants", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "arms", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "iter_expr", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "ret_type", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "target", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "trait_name", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "methods", __hexa_parser_sl_1);
+            _ep = hexa_map_set(_ep, "payload_expr", _pe);
+            return __hexa_fn_arena_return(_ep);
         }
         HexaVal type_args = hexa_array_new();
         if (hexa_truthy(hexa_eq(p_peek_kind(), __hexa_parser_sl_127))) {
@@ -18053,7 +18086,22 @@ HexaVal gen2_expr(HexaVal node) {
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1260))) {
         HexaVal ename = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_674);
         HexaVal vname = hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_675);
-        return __hexa_fn_arena_return(hexa_add(hexa_add(ename, __hexa_codegen_c2_sl_609), vname));
+        HexaVal _enum_const = hexa_add(hexa_add(ename, __hexa_codegen_c2_sl_609), vname);
+        /* RFC-020 A4: payload variant construction.  When the parser attached a
+           non-empty `payload_expr` (a real AST map node), emit a HexaVal array
+           `[tag, payload]` so the runtime carries the payload alongside the tag.
+           Variants without a payload keep the bare tag macro for backward compat. */
+        HexaVal _payload_expr = hexa_map_get(node, "payload_expr");
+        if (hexa_truthy(hexa_eq(hexa_type_of(_payload_expr), hexa_str("map")))) {
+            HexaVal _pe = gen2_expr(_payload_expr);
+            HexaVal _c = hexa_str("hexa_array_push(hexa_array_push(hexa_array_new(), ");
+            _c = hexa_add(_c, _enum_const);
+            _c = hexa_add(_c, hexa_str("), "));
+            _c = hexa_add(_c, _pe);
+            _c = hexa_add(_c, hexa_str(")"));
+            return __hexa_fn_arena_return(_c);
+        }
+        return __hexa_fn_arena_return(_enum_const);
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_390))) {
         HexaVal c = gen2_expr(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_676));
@@ -18351,6 +18399,30 @@ HexaVal gen2_enum_decl(HexaVal node) {
     if (hexa_truthy(hexa_cmp_lt(tag_bits, hexa_int(8)))) {
         hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1343, hexa_to_string(tag_bits)), __hexa_codegen_c2_sl_1344), gen2_hex_mask(tag_bits)), __hexa_codegen_c2_sl_295));
     }
+    /* RFC-020 A4: detect any variant with a payload type (non-empty `items`).
+       Tag macros stay as `hexa_int(N)` (HexaVal) for both forms; payload-bearing
+       variants are constructed at use-sites as a HexaVal array `[tag, payload]`
+       (see gen2_expr EnumPath emission).  Spec §4.3 lists a typedef struct/union
+       form in C; here we honor that intent within the existing HexaVal runtime,
+       since every generated identifier already has type `HexaVal` and a real
+       struct typedef would not unify with the surrounding code. */
+    HexaVal _has_payload = hexa_bool(0);
+    {
+        HexaVal _vi = hexa_int(0);
+        while (HX_BOOL(hexa_cmp_lt(_vi, vc))) {
+            HexaVal _vn = hexa_index_get(hexa_map_get_ic(node, "variants", &__hexa_codegen_c2_ic_739), _vi);
+            HexaVal _vit = hexa_map_get(_vn, "items");
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(_vit), __hexa_codegen_c2_sl_119))))) {
+                if (hexa_truthy(hexa_cmp_gt(hexa_int(hexa_len(_vit)), hexa_int(0)))) {
+                    _has_payload = hexa_bool(1);
+                }
+            }
+            _vi = hexa_add(_vi, hexa_int(1));
+        }
+    }
+    if (hexa_truthy(_has_payload)) {
+        hexa_array_push(parts, hexa_add(hexa_add(hexa_str("// @payload: enum "), name), hexa_str(" carries single-field payload variants — runtime form is HexaVal array [tag, payload]\n")));
+    }
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, vc))) {
         HexaVal v = hexa_index_get(hexa_map_get_ic(node, "variants", &__hexa_codegen_c2_ic_739), i);
@@ -18432,6 +18504,25 @@ HexaVal gen2_match_stmt(HexaVal node, HexaVal depth) {
             } else {
                 hexa_array_push(chunks, hexa_add(hexa_add(__hexa_codegen_c2_sl_1357, cond), __hexa_codegen_c2_sl_415));
             }
+            /* RFC-020 A4: emit payload binding `HexaVal <var> = hexa_index_get(__match_val, hexa_int(1));`
+               just inside the matching arm's `if` block when the EnumPath
+               pattern carried a binder (single-field payload only). */
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_119))))) {
+                HexaVal _pk = hexa_map_get(pat, "kind");
+                if (hexa_truthy(hexa_eq(_pk, __hexa_codegen_c2_sl_1260))) {
+                    HexaVal _pl = hexa_map_get(pat, "left");
+                    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(_pl), __hexa_codegen_c2_sl_119))))) {
+                        HexaVal _bn = hexa_map_get(_pl, "name");
+                        if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_type_of(_bn), __hexa_codegen_c2_sl_119)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(_bn, __hexa_codegen_c2_sl_143))))))) {
+                            HexaVal _pad3 = gen2_indent(hexa_add(depth, hexa_int(2)));
+                            HexaVal _line = hexa_add(_pad3, hexa_str("HexaVal "));
+                            _line = hexa_add(_line, _hexa_mangle_ident(_bn));
+                            _line = hexa_add(_line, hexa_str(" = hexa_index_get(__match_val, hexa_int(1));\n"));
+                            hexa_array_push(chunks, _line);
+                        }
+                    }
+                }
+            }
         }
         HexaVal bi = hexa_int(0);
         while (HX_BOOL(hexa_cmp_lt(bi, hexa_int(hexa_len(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_746)))))) {
@@ -18473,6 +18564,22 @@ HexaVal gen2_match_cond(HexaVal pat, HexaVal scrutinee_var) {
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1260))) {
         HexaVal enum_const = hexa_add(hexa_add(hexa_map_get_ic(pat, "name", &__hexa_codegen_c2_ic_753), __hexa_codegen_c2_sl_609), hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_754));
+        /* RFC-020 A4: payload-binder pattern (e.g. `Shape::Circle(r)`) — `pat.left`
+           is the inner pattern node (a non-string Ident).  In that case the
+           scrutinee is the runtime array form `[tag, payload]`; gate the tag
+           comparison on `HX_IS_ARRAY` and read tag from index 0.  No-payload
+           variants keep the original equality test. */
+        HexaVal _pl = hexa_map_get(pat, "left");
+        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(_pl), __hexa_codegen_c2_sl_119))))) {
+            HexaVal _r = hexa_str("(HX_IS_ARRAY(");
+            _r = hexa_add(_r, scrutinee_var);
+            _r = hexa_add(_r, hexa_str(") && hexa_truthy(hexa_eq(hexa_index_get("));
+            _r = hexa_add(_r, scrutinee_var);
+            _r = hexa_add(_r, hexa_str(", hexa_int(0)), "));
+            _r = hexa_add(_r, enum_const);
+            _r = hexa_add(_r, hexa_str(")))"));
+            return __hexa_fn_arena_return(_r);
+        }
         return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1358, scrutinee_var), __hexa_codegen_c2_sl_291), enum_const), __hexa_codegen_c2_sl_440));
     }
     return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1358, scrutinee_var), __hexa_codegen_c2_sl_291), gen2_expr(pat)), __hexa_codegen_c2_sl_440));
@@ -18499,6 +18606,28 @@ HexaVal gen2_match_ternary(HexaVal arms, HexaVal scrutinee_c, HexaVal idx) {
     HexaVal pat = hexa_map_get_ic(arm, "left", &__hexa_codegen_c2_ic_757);
     HexaVal is_wildcard = hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_119)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_758), __hexa_codegen_c2_sl_1268)));
     HexaVal val = gen2_arm_value(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_759));
+    /* RFC-020 A4: if the EnumPath pattern carries a payload binder, wrap the
+       arm value in a GCC statement-expression so the binder is visible to
+       `val` while the surrounding ternary chain stays intact. */
+    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_119))))) {
+        HexaVal _pk = hexa_map_get(pat, "kind");
+        if (hexa_truthy(hexa_eq(_pk, __hexa_codegen_c2_sl_1260))) {
+            HexaVal _pl = hexa_map_get(pat, "left");
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(_pl), __hexa_codegen_c2_sl_119))))) {
+                HexaVal _bn = hexa_map_get(_pl, "name");
+                if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_type_of(_bn), __hexa_codegen_c2_sl_119)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(_bn, __hexa_codegen_c2_sl_143))))))) {
+                    HexaVal _w = hexa_str("({ HexaVal ");
+                    _w = hexa_add(_w, _hexa_mangle_ident(_bn));
+                    _w = hexa_add(_w, hexa_str(" = hexa_index_get("));
+                    _w = hexa_add(_w, scrutinee_c);
+                    _w = hexa_add(_w, hexa_str(", hexa_int(1)); ("));
+                    _w = hexa_add(_w, val);
+                    _w = hexa_add(_w, hexa_str("); })"));
+                    val = _w;
+                }
+            }
+        }
+    }
     if (hexa_truthy(hexa_bool(hexa_truthy(is_wildcard) || hexa_truthy(hexa_eq(idx, hexa_sub(hexa_int(hexa_len(arms)), hexa_int(1))))))) {
         if (hexa_truthy(is_wildcard)) {
             return __hexa_fn_arena_return(val);
