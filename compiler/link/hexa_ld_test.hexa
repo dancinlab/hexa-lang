@@ -1,0 +1,210 @@
+// HEXA Native Compiler — link pass: hexa_ld v1 smoke test
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, shell]
+// @allow-bare-exec-file
+// @allow-silent-exit-file
+// @allow-silent-catch-file
+// @allow-relop-banned-file
+//
+// End-to-end test for `compiler/link/hexa_ld.hexa`:
+//
+//   1. Synthesize a hand-written `_start` assembly source that performs
+//      `exit(0)` via the Linux x86_64 syscall ABI:
+//          mov  rax, 60      ; sys_exit
+//          xor  rdi, rdi     ; status = 0
+//          syscall
+//
+//   2. Assemble it with system `as` to /tmp/hexa_ld_smoke.o.
+//      If `as` is unavailable on the host (e.g. macOS without gas, sandboxed
+//      CI, etc.) we report SKIPPED and exit 0.
+//
+//   3. Drive `link()` to produce /tmp/hexa_ld_smoke.exe (a static ELF64).
+//
+//   4. Verify with `file <out>` that the magic+class are reported as
+//      "ELF 64-bit LSB executable" — substring match.
+//
+//   5. If we are running on Linux, `chmod +x <out> && <out>` should exit 0
+//      because the program calls `sys_exit(0)`. On macOS the binary cannot
+//      execute (Mach-O kernel) — we still PASS the format check and report
+//      EXEC_SKIPPED for the run step.
+//
+// Run:
+//   hexa run compiler/link/hexa_ld_test.hexa
+
+import "../../stdlib/portable_fs.hexa"
+import "./hexa_ld.hexa"
+
+// ── tiny string utility (substring match without stdlib regex) ──────
+
+fn _contains(hay: string, needle: string) -> bool {
+    if len(needle) == 0 { return true }
+    let h = hay.chars()
+    let n = needle.chars()
+    let hn = len(h)
+    let nn = len(n)
+    if nn > hn { return false }
+    let mut i = 0
+    while i + nn < hn + 1 {
+        let mut j = 0
+        let mut ok = true
+        while j < nn {
+            if h[i + j] != n[j] {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── env probe: do we have system `as`? ──────────────────────────────
+
+fn _have_system_as() -> bool {
+    let probe = exec("command -v as 2>/dev/null").trim()
+    return len(probe) > 0
+}
+
+fn _is_linux() -> bool {
+    let u = exec("uname -s 2>/dev/null").trim()
+    return u == "Linux"
+}
+
+// ── synthesize the .s source and assemble ──────────────────────────
+
+let _ASM_SOURCE_GAS_INTEL = "" +
+    ".intel_syntax noprefix\n" +
+    ".section .text\n" +
+    ".globl _start\n" +
+    "_start:\n" +
+    "    mov rax, 60\n" +     // sys_exit
+    "    xor rdi, rdi\n" +    // status = 0
+    "    syscall\n"
+
+// AT&T syntax fallback for hosts whose `as` rejects intel_syntax.
+let _ASM_SOURCE_GAS_ATT = "" +
+    ".section .text\n" +
+    ".globl _start\n" +
+    "_start:\n" +
+    "    movq $60, %rax\n" +  // sys_exit
+    "    xorq %rdi, %rdi\n" + // status = 0
+    "    syscall\n"
+
+fn _assemble(s_path: string, o_path: string) -> bool {
+    let cmd = "as --64 -o '" + o_path + "' '" + s_path + "' 2>&1"
+    let out_msg = exec(cmd)
+    let trimmed = out_msg.trim()
+    let sz = pfs_file_size(o_path)
+    if sz < 1 {
+        println("    as failed: " + trimmed)
+        return false
+    }
+    return true
+}
+
+// ── main test driver ───────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  hexa_ld v1 — Static ELF Linker Smoke Test")
+    println("══════════════════════════════════════════════")
+
+    if !_have_system_as() {
+        println("")
+        println("  SKIPPED: system `as` (GNU assembler) not on PATH.")
+        println("  hexa_ld v1 needs an .o input; without `as` we cannot")
+        println("  synthesize a fixture. Format check stands; exec check")
+        println("  also skipped.")
+        println("══════════════════════════════════════════════")
+        exit(0)
+    }
+
+    let s_path = "/tmp/hexa_ld_smoke.s"
+    let o_path = "/tmp/hexa_ld_smoke.o"
+    let exe    = "/tmp/hexa_ld_smoke.exe"
+
+    // Try Intel-syntax first, then AT&T.
+    write_file(s_path, _ASM_SOURCE_GAS_INTEL)
+    let mut asm_ok = _assemble(s_path, o_path)
+    if !asm_ok {
+        println("  retrying with AT&T syntax...")
+        write_file(s_path, _ASM_SOURCE_GAS_ATT)
+        asm_ok = _assemble(s_path, o_path)
+    }
+    if !asm_ok {
+        println("")
+        println("  SKIPPED: system `as` could not assemble the test fixture.")
+        println("  This usually means `as` is the macOS toolchain assembler")
+        println("  which does not target ELF64. Test result: SKIPPED.")
+        println("══════════════════════════════════════════════")
+        exit(0)
+    }
+
+    let osize = pfs_file_size(o_path)
+    println("  fixture: " + o_path + " (" + to_string(osize) + " bytes)")
+
+    // ── drive link() ──
+    let rc = link(o_path, exe)
+    if rc != 0 {
+        println("  FAIL: link() returned non-zero rc=" + to_string(rc))
+        println("        (1=parse-fail, 2=no-entry-symbol, 3=write-fail)")
+        exit(1)
+    }
+    let elf_size = pfs_file_size(exe)
+    println("  emitted: " + exe + " (" + to_string(elf_size) + " bytes)")
+
+    // ── format check ──
+    let file_out = exec("file '" + exe + "' 2>&1").trim()
+    println("  file: " + file_out)
+
+    let mut ok = true
+    if !_contains(file_out, "ELF 64-bit") {
+        // macOS `file` is fine for ELF detection — it prints the same string.
+        println("  FAIL: `file` output does not include `ELF 64-bit`.")
+        ok = false
+    } else {
+        println("  ok: format = ELF 64-bit")
+    }
+    if !_contains(file_out, "LSB") {
+        println("  FAIL: `file` output does not include `LSB`.")
+        ok = false
+    } else {
+        println("  ok: byte order = LSB (little-endian)")
+    }
+    if !_contains(file_out, "executable") {
+        println("  FAIL: `file` output does not include `executable`.")
+        ok = false
+    } else {
+        println("  ok: type = executable")
+    }
+
+    // ── exec check (Linux only — our .text uses Linux syscall numbers) ──
+    if _is_linux() {
+        let chmod_rc = exec("chmod +x '" + exe + "' 2>&1").trim()
+        if len(chmod_rc) > 0 { println("  chmod note: " + chmod_rc) }
+        let probe = exec("'" + exe + "' ; echo __RC=$?").trim()
+        if !_contains(probe, "__RC=0") {
+            println("  FAIL: emitted ELF did not exit 0 — got: " + probe)
+            ok = false
+        } else {
+            println("  ok: emitted ELF executed and returned 0")
+        }
+    } else {
+        println("  EXEC_SKIPPED: non-Linux host — cannot run ELF directly.")
+        println("                (format check stands; runtime check deferred.)")
+    }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: hexa_ld v1 emits a valid static ELF64 executable.")
+    } else {
+        println("FAIL: hexa_ld v1 contract broken — see lines above.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+    exit(0)
+}

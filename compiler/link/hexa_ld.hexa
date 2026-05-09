@@ -1,0 +1,436 @@
+// HEXA Native Compiler — link pass: hexa_ld v1 (Decision 7)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, shell]
+// @allow-bare-exec-file
+// @allow-silent-exit-file
+// @allow-silent-catch-file
+// @allow-relop-banned-file
+//
+// Per RFC-018 §10: hexa_ld is the primary linker; system `ld` is the
+// fallback. v1 SCOPE is intentionally tiny — single .o → single static
+// ELF executable, x86_64-linux-gnu only.
+//
+// IN SCOPE (v1):
+//   * Reads ONE ELF64 little-endian relocatable object (.o)
+//   * Concatenates the .text section
+//   * Resolves a single entry symbol (`_start`, falling back to `main`)
+//   * Emits a STATIC ELF64 executable with:
+//       - ELF header (64 B)
+//       - One program header (PT_LOAD, R+X, vaddr=0x400000)
+//       - The .text bytes
+//   * Bails out (returns non-zero) so the caller can re-run with
+//     `--linker=system`.
+//
+// OUT OF SCOPE / DELIBERATELY PUNTED (will land in v1.1+):
+//   * Mach-O (arm64-apple-darwin) — separate emitter follows.
+//   * Multiple input .o files / archive (.a) handling.
+//   * Relocation processing beyond the trivial case (R_X86_64_NONE).
+//     Inputs containing R_X86_64_PC32 / PLT32 / GOTPCREL etc. WILL
+//     produce an executable that segfaults — use --linker=system.
+//   * Dynamic linking, PT_INTERP, PT_DYNAMIC, .dynsym, .dynstr.
+//   * PLT / GOT / TLS / IFUNC.
+//   * Section dead-code elimination, ICF, identical-comdat dedup.
+//   * DWARF line-info propagation (the spec says basic emit; v1 drops it).
+//   * Symbol versioning, weak/strong resolution beyond first-match.
+//   * .rodata / .bss / .data segments — v1 collapses everything to .text.
+//
+// This is allowed to be incomplete. The caller (hexa build) is expected
+// to fall back to system ld whenever `link()` returns non-zero, exactly
+// as Decision 7 prescribes.
+//
+// Public API:
+//   pub fn link(obj_path: string, out_path: string) -> int
+//
+// Returns 0 on success, non-zero on every failure path (so the caller
+// can flip to --linker=system without parsing error strings).
+
+import "../../stdlib/portable_fs.hexa"
+
+// ── byte-buffer helpers (little-endian, x86_64) ─────────────────────
+
+fn _push_u8(buf, v: int) {
+    let mut x = v
+    if x < 0 { x = 0 }
+    let masked = x - (x / 256) * 256
+    buf.push(masked)
+}
+
+fn _push_u16le(buf, v: int) {
+    let lo = v - (v / 256) * 256
+    let hi = (v / 256) - ((v / 256) / 256) * 256
+    buf.push(lo)
+    buf.push(hi)
+}
+
+fn _push_u32le(buf, v: int) {
+    let mut x = v
+    let mut i = 0
+    while i < 4 {
+        let byte = x - (x / 256) * 256
+        buf.push(byte)
+        x = x / 256
+        i = i + 1
+    }
+}
+
+fn _push_u64le(buf, v: int) {
+    let mut x = v
+    let mut i = 0
+    while i < 8 {
+        let byte = x - (x / 256) * 256
+        buf.push(byte)
+        x = x / 256
+        i = i + 1
+    }
+}
+
+// ── ELF64 reader helpers (little-endian) ────────────────────────────
+
+fn _read_u8(buf, off: int) -> int {
+    if off < 0 { return 0 }
+    if off > len(buf) - 1 { return 0 }
+    return buf[off]
+}
+
+fn _read_u16le(buf, off: int) -> int {
+    let lo = _read_u8(buf, off)
+    let hi = _read_u8(buf, off + 1)
+    return lo + hi * 256
+}
+
+fn _read_u32le(buf, off: int) -> int {
+    let mut u = 0
+    let mut i = 3
+    while i > -1 {
+        u = u * 256 + _read_u8(buf, off + i)
+        i = i - 1
+    }
+    return u
+}
+
+fn _read_u64le(buf, off: int) -> int {
+    let mut u = 0
+    let mut i = 7
+    while i > -1 {
+        u = u * 256 + _read_u8(buf, off + i)
+        i = i - 1
+    }
+    return u
+}
+
+// ── ELF magic + class checks ────────────────────────────────────────
+//
+// 0x7F 'E' 'L' 'F' is mandated by ELF; we additionally require
+// EI_CLASS=2 (64-bit) and EI_DATA=1 (LE) for v1.
+
+pub fn is_elf64_le(buf) -> bool {
+    if type_of(buf) != "array" { return false }
+    if len(buf) < 64 { return false }
+    if _read_u8(buf, 0) != 127 { return false }   // 0x7F
+    if _read_u8(buf, 1) != 69  { return false }   // 'E'
+    if _read_u8(buf, 2) != 76  { return false }   // 'L'
+    if _read_u8(buf, 3) != 70  { return false }   // 'F'
+    if _read_u8(buf, 4) != 2   { return false }   // EI_CLASS = ELFCLASS64
+    if _read_u8(buf, 5) != 1   { return false }   // EI_DATA  = ELFDATA2LSB
+    return true
+}
+
+// ── ELF64 section table walk ────────────────────────────────────────
+//
+// Section header entry layout (offset within shdr — sizeof = 64 B):
+//   0x00  Elf64_Word  sh_name        (offset into .shstrtab)
+//   0x04  Elf64_Word  sh_type
+//   0x08  Elf64_Xword sh_flags
+//   0x10  Elf64_Addr  sh_addr
+//   0x18  Elf64_Off   sh_offset
+//   0x20  Elf64_Xword sh_size
+//   0x28  Elf64_Word  sh_link
+//   0x2C  Elf64_Word  sh_info
+//   0x30  Elf64_Xword sh_addralign
+//   0x38  Elf64_Xword sh_entsize
+
+fn _byte_to_ascii(b: int) -> string {
+    // Minimal byte → 1-char-string for ASCII section / symbol names.
+    let table = [
+        "\x00","\x01","\x02","\x03","\x04","\x05","\x06","\x07",
+        "\x08","\x09","\x0a","\x0b","\x0c","\x0d","\x0e","\x0f",
+        "\x10","\x11","\x12","\x13","\x14","\x15","\x16","\x17",
+        "\x18","\x19","\x1a","\x1b","\x1c","\x1d","\x1e","\x1f",
+        " ","!","\"","#","$","%","&","'","(",")","*","+",",","-",".","/",
+        "0","1","2","3","4","5","6","7","8","9",":",";","<","=",">","?",
+        "@","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O",
+        "P","Q","R","S","T","U","V","W","X","Y","Z","[","\\","]","^","_",
+        "`","a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+        "p","q","r","s","t","u","v","w","x","y","z","{","|","}","~","\x7f"
+    ]
+    if b < 0 { return "?" }
+    if b > 127 { return "?" }
+    return table[b]
+}
+
+fn _read_cstr(buf, base: int, name_off: int) -> string {
+    let mut s = ""
+    let mut i = 0
+    let cap = 128
+    while i < cap {
+        let c = _read_u8(buf, base + name_off + i)
+        if c == 0 { return s }
+        s = s + _byte_to_ascii(c)
+        i = i + 1
+    }
+    return s
+}
+
+// Returns [text_offset, text_size, symtab_offset, symtab_size,
+//          symtab_entsize, strtab_offset]
+// or empty array if any required section missing.
+pub fn find_sections(buf) -> [int] {
+    let e_shoff     = _read_u64le(buf, 0x28)
+    let e_shentsize = _read_u16le(buf, 0x3A)
+    let e_shnum     = _read_u16le(buf, 0x3C)
+    let e_shstrndx  = _read_u16le(buf, 0x3E)
+
+    if e_shentsize < 64 { return [] }
+    if e_shnum < 1 { return [] }
+    if e_shstrndx > e_shnum - 1 { return [] }
+
+    let shstr_hdr_off = e_shoff + e_shstrndx * e_shentsize
+    let shstr_off     = _read_u64le(buf, shstr_hdr_off + 0x18)
+
+    let mut text_off  = -1
+    let mut text_sz   = -1
+    let mut sym_off   = -1
+    let mut sym_sz    = -1
+    let mut sym_es    = 24    // standard ELF64 sym entry size
+    let mut str_off   = -1
+
+    let mut i = 0
+    while i < e_shnum {
+        let sh = e_shoff + i * e_shentsize
+        let nm_off = _read_u32le(buf, sh + 0x00)
+        let nm     = _read_cstr(buf, shstr_off, nm_off)
+        let off    = _read_u64le(buf, sh + 0x18)
+        let sz     = _read_u64le(buf, sh + 0x20)
+        if nm == ".text" {
+            text_off = off
+            text_sz  = sz
+        }
+        if nm == ".symtab" {
+            sym_off = off
+            sym_sz  = sz
+            let es = _read_u64le(buf, sh + 0x38)
+            if es > 0 { sym_es = es }
+        }
+        if nm == ".strtab" {
+            str_off = off
+        }
+        i = i + 1
+    }
+    return [text_off, text_sz, sym_off, sym_sz, sym_es, str_off]
+}
+
+// ── Symbol table walk ──────────────────────────────────────────────
+//
+// ELF64 Sym (24 B):
+//   0x00  Elf64_Word  st_name      (offset into .strtab)
+//   0x04  unsigned    st_info
+//   0x05  unsigned    st_other
+//   0x06  Elf64_Half  st_shndx
+//   0x08  Elf64_Addr  st_value
+//   0x10  Elf64_Xword st_size
+
+// Returns the st_value for a symbol matching `target_name`, or -1.
+pub fn find_symbol_value(buf, sym_off: int, sym_sz: int, sym_es: int,
+                         str_off: int, target_name: string) -> int {
+    if sym_off < 0 { return -1 }
+    if sym_sz < 1 { return -1 }
+    if str_off < 0 { return -1 }
+    let count = sym_sz / sym_es
+    let mut i = 0
+    while i < count {
+        let s = sym_off + i * sym_es
+        let nm_off = _read_u32le(buf, s + 0x00)
+        let nm     = _read_cstr(buf, str_off, nm_off)
+        if nm == target_name {
+            let val = _read_u64le(buf, s + 0x08)
+            return val
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// ── ELF64 executable emission ──────────────────────────────────────
+//
+// Layout chosen for v1:
+//
+//   file offset 0x0000  ELF header                   (64 B)
+//   file offset 0x0040  PT_LOAD program header       (56 B)
+//   file offset 0x0078  zero-pad up to 0x1000
+//   file offset 0x1000  .text bytes (loaded at vaddr 0x401000)
+//
+//   PT_LOAD covers the whole file from 0x000000 → end-of-text mapped
+//   at 0x400000 → 0x400000 + filesz. Memory is R+X. No separate
+//   PT_PHDR / PT_INTERP / PT_DYNAMIC.
+//
+//   e_entry = 0x401000 + (sym_value within .text). For a hand-written
+//   `_start` placed at the top of .text and a symbol value of 0 in the
+//   relocatable object, this becomes 0x401000 exactly.
+
+let _LOAD_ADDR    = 0x400000     // PT_LOAD vaddr (page-aligned)
+let _TEXT_VADDR   = 0x401000     // .text vaddr (next page)
+let _TEXT_FOFF    = 0x1000       // .text file offset
+
+pub fn build_elf64_exec(text_bytes, entry_vaddr: int) {
+    let text_size = len(text_bytes)
+    let mut out = []
+
+    // ── ELF header (64 B) ──
+    _push_u8(out, 0x7F)                          // EI_MAG0
+    _push_u8(out, 0x45)                          // 'E'
+    _push_u8(out, 0x4C)                          // 'L'
+    _push_u8(out, 0x46)                          // 'F'
+    _push_u8(out, 2)                             // EI_CLASS = ELFCLASS64
+    _push_u8(out, 1)                             // EI_DATA  = ELFDATA2LSB
+    _push_u8(out, 1)                             // EI_VERSION = EV_CURRENT
+    _push_u8(out, 0)                             // EI_OSABI = SYSV
+    _push_u8(out, 0)                             // EI_ABIVERSION
+    let mut p = 0
+    while p < 7 {                                // EI_PAD (7 bytes)
+        _push_u8(out, 0)
+        p = p + 1
+    }
+    _push_u16le(out, 2)                          // e_type = ET_EXEC
+    _push_u16le(out, 0x3E)                       // e_machine = EM_X86_64
+    _push_u32le(out, 1)                          // e_version
+    _push_u64le(out, entry_vaddr)                // e_entry
+    _push_u64le(out, 64)                         // e_phoff
+    _push_u64le(out, 0)                          // e_shoff (no section table)
+    _push_u32le(out, 0)                          // e_flags
+    _push_u16le(out, 64)                         // e_ehsize
+    _push_u16le(out, 56)                         // e_phentsize
+    _push_u16le(out, 1)                          // e_phnum
+    _push_u16le(out, 0)                          // e_shentsize
+    _push_u16le(out, 0)                          // e_shnum
+    _push_u16le(out, 0)                          // e_shstrndx
+
+    // ── Program header: PT_LOAD (56 B) ──
+    let filesz = _TEXT_FOFF + text_size
+    _push_u32le(out, 1)                          // p_type = PT_LOAD
+    _push_u32le(out, 5)                          // p_flags = PF_R | PF_X
+    _push_u64le(out, 0)                          // p_offset (load from start of file)
+    _push_u64le(out, _LOAD_ADDR)                 // p_vaddr
+    _push_u64le(out, _LOAD_ADDR)                 // p_paddr
+    _push_u64le(out, filesz)                     // p_filesz
+    _push_u64le(out, filesz)                     // p_memsz
+    _push_u64le(out, 0x1000)                     // p_align (4 KiB page)
+
+    // ── pad to file offset _TEXT_FOFF ──
+    while len(out) < _TEXT_FOFF {
+        _push_u8(out, 0)
+    }
+
+    // ── append .text bytes ──
+    let mut i = 0
+    while i < text_size {
+        out.push(text_bytes[i])
+        i = i + 1
+    }
+    return out
+}
+
+// ── extract a slice [off, off+size) from an int-array byte buffer ──
+
+fn _slice_bytes(buf, off: int, size: int) {
+    let mut out = []
+    if off < 0 { return out }
+    if size < 1 { return out }
+    let cap = len(buf)
+    let mut i = 0
+    while i < size {
+        let p = off + i
+        if p < cap {
+            out.push(buf[p])
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── Public API ─────────────────────────────────────────────────────
+//
+// Returns:
+//   0 → success, ELF executable written to out_path, chmod +x applied
+//   1 → input not readable / not ELF64 / required section missing
+//   2 → no entry symbol (`_start` then `main`) found
+//   3 → write failed
+//
+// On every non-zero return, the caller is expected to fall back to the
+// system linker (Decision 7).
+
+pub fn link(obj_path: string, out_path: string) -> int {
+    if len(obj_path) == 0 { return 1 }
+    if len(out_path) == 0 { return 1 }
+
+    // Read input .o as bytes (NUL-safe path via runtime builtin).
+    let buf = read_file_bytes(obj_path)
+    if type_of(buf) != "array" { return 1 }
+    if len(buf) < 64 { return 1 }
+    if !is_elf64_le(buf) { return 1 }
+
+    let secs = find_sections(buf)
+    if len(secs) < 6 { return 1 }
+    let text_off = secs[0]
+    let text_sz  = secs[1]
+    let sym_off  = secs[2]
+    let sym_sz   = secs[3]
+    let sym_es   = secs[4]
+    let str_off  = secs[5]
+    if text_off < 0 { return 1 }
+    if text_sz  < 1 { return 1 }
+
+    // Resolve entry symbol — `_start` first, `main` as fallback.
+    let mut entry_obj_off = find_symbol_value(buf, sym_off, sym_sz, sym_es,
+                                              str_off, "_start")
+    if entry_obj_off < 0 {
+        entry_obj_off = find_symbol_value(buf, sym_off, sym_sz, sym_es,
+                                          str_off, "main")
+    }
+    if entry_obj_off < 0 { return 2 }
+
+    // entry vaddr = TEXT_VADDR + (symbol's offset within .text).
+    // `st_value` for STT_FUNC in a relocatable .o is "offset within the
+    // section" — exactly what we need.
+    let entry_vaddr = _TEXT_VADDR + entry_obj_off
+
+    let text_bytes = _slice_bytes(buf, text_off, text_sz)
+    let elf_bytes  = build_elf64_exec(text_bytes, entry_vaddr)
+
+    let _wb = write_bytes(out_path, elf_bytes)
+    let sz = pfs_file_size(out_path)
+    if sz < 1 { return 3 }
+
+    // chmod +x — using exec is permitted per task brief.
+    let chm_rc = exec("chmod +x '" + out_path.replace("'", "'\\''") + "' 2>/dev/null")
+    if len(chm_rc) > -1 { /* chmod errors are non-fatal: file already written */ }
+    return 0
+}
+
+// ── Fallback helper (best-effort) ──────────────────────────────────
+//
+// hexa_ld is allowed to bail out. Callers that want to keep going can
+// either invoke `system_ld_fallback(obj, out)` (which shells out to
+// /usr/bin/ld) or just ignore the non-zero return from link() and re-
+// drive their build with the --linker=system flag.
+pub fn system_ld_fallback(obj_path: string, out_path: string) -> int {
+    let cmd = "ld -static -o '" + out_path.replace("'", "'\\''") + "' '" +
+              obj_path.replace("'", "'\\''") + "' 2>&1"
+    let out_msg = exec(cmd)
+    if len(out_msg) > -1 { /* non-fatal — we check file size next */ }
+    let sz = pfs_file_size(out_path)
+    if sz < 1 { return 3 }
+    let chm_rc = exec("chmod +x '" + out_path.replace("'", "'\\''") + "' 2>/dev/null")
+    if len(chm_rc) > -1 { /* chmod errors non-fatal */ }
+    return 0
+}

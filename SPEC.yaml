@@ -318,16 +318,23 @@ linker:
     - hexa_ld_runtime_failure
     - explicit_flag: "--linker=system"
   hexa_ld_v1_scope:
-    formats: [ELF, Mach-O_arm64]
+    # NOTE (2026-05-09): v1 actually ships ELF only — see
+    # compiler/link/hexa_ld.hexa. Mach-O_arm64 is targeted for v1.1
+    # (separate emitter, no shared bytecode). The list below is the
+    # full hexa_ld roadmap; the runnable subset is ELF + single-.o
+    # static link with `_start` / `main` resolution.
+    formats: [ELF, Mach-O_arm64]      # v1 → ELF only; Mach-O_arm64 → v1.1
     capabilities:
       - static_linking_only
-      - symbol_resolution
-      - basic_relocations
-      - dwarf_debug_section_emit_basic
+      - symbol_resolution             # v1: single .o, `_start` then `main` fallback
+      - basic_relocations             # v1: NONE only — PC32/PLT32/GOTPCREL → v1.1
+      - dwarf_debug_section_emit_basic # v1: dropped — emit-only roadmap, lands v1.1
     deferred:
       - dynamic_linking
       - link_time_optimization
       - section_dead_code_elim
+      - mach_o_arm64                  # v1.1
+      - relocation_processing_full    # v1.1
   bootstrap_carve_out:
     rule: system_ld_temporarily_permitted_during_stage0_to_stage1
     expires_after: stage1_native_compiler_settled
