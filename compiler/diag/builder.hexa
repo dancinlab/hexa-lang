@@ -1,0 +1,264 @@
+// HEXA Native Compiler — Diagnostic Builder API (RFC-019 §4.B)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Fluent-style builder for emitting diagnostics. Stage0 lacks method
+// chaining, so the API is exposed as free functions that take and
+// return a DiagBuilder by value:
+//
+//   let mut b = diag_new("HX1042")
+//   b = diag_span(b, span)
+//   b = diag_arg(b, "atlas_hash", "abc123")
+//   b = diag_arg(b, "kind", "P")
+//   b = diag_arg(b, "node_id", "einstien")
+//   b = diag_suggest(b, "einstein")
+//   let d = diag_emit(b)
+//
+// `diag_emit` looks up the code in CATALOG, fetches the DiagSpec,
+// substitutes `{key}` placeholders in `template` from the args list
+// (each entry is a flat `key=val` string), and returns a Diagnostic
+// with severity / stage / fixit copied from the spec (severity may be
+// overridden later by the caller; in stage0 we trust the catalog).
+//
+// Per RFC-019 §6 multi-error policy: emit() returns a single
+// Diagnostic; callers collect them in an array and forward to the
+// renderer of their choice (compiler/diag/render.hexa).
+
+import "./catalog.hexa"
+import "../lex/tokens.hexa"
+
+// ── Builder ───────────────────────────────────────────────────
+
+pub struct DiagBuilder {
+    code: string,
+    span: Span,
+    args: [string],     // entries shaped as "key=val"
+    suggest: string,
+    fixit: FixIt,
+    related: [string]
+}
+
+// ── Helpers ──────────────────────────────────────────────────
+
+fn _empty_span() -> Span {
+    return Span { file: "", line: 0, col: 0, len: 0 }
+}
+
+fn _empty_fixit() -> FixIt {
+    return FixIt {
+        kind: FixItKind::None,
+        span: _empty_span(),
+        new_text: ""
+    }
+}
+
+// Find first '=' in s and return [key, val]. val is "" if no '='.
+fn _split_kv(s: string) -> [string] {
+    let cs = s.chars()
+    let mut i = 0
+    let n = len(cs)
+    while i < n {
+        if cs[i] == '=' {
+            let mut k = ""
+            let mut j = 0
+            while j < i {
+                k = k + to_string(cs[j])
+                j = j + 1
+            }
+            let mut v = ""
+            j = i + 1
+            while j < n {
+                v = v + to_string(cs[j])
+                j = j + 1
+            }
+            return [k, v]
+        }
+        i = i + 1
+    }
+    return [s, ""]
+}
+
+// Look up a value for `key` in the args list ("key=val" entries).
+// Returns "" when the key is not present.
+fn _arg_lookup(args: [string], key: string) -> string {
+    let mut i = 0
+    while i < len(args) {
+        let kv = _split_kv(args[i])
+        if kv[0] == key {
+            return kv[1]
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Walk the template character-by-character; when we see `{`, scan
+// until the matching `}` to capture the placeholder key, then look
+// up the arg and append its value. Unknown keys substitute `{key}`
+// verbatim so missing args are visible in the rendered message.
+fn _interpolate(template: string, args: [string]) -> string {
+    let cs = template.chars()
+    let n = len(cs)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = cs[i]
+        if c == '{' {
+            // scan placeholder
+            let mut j = i + 1
+            let mut key = ""
+            let mut closed = false
+            while j < n {
+                let cj = cs[j]
+                if cj == '}' {
+                    closed = true
+                    break
+                }
+                key = key + to_string(cj)
+                j = j + 1
+            }
+            if closed {
+                let val = _arg_lookup(args, key)
+                if len(val) > 0 {
+                    out = out + val
+                } else {
+                    // pass through verbatim so missing args are visible
+                    out = out + "{" + key + "}"
+                }
+                i = j + 1
+            } else {
+                // unterminated brace — emit literal and continue
+                out = out + to_string(c)
+                i = i + 1
+            }
+        } else {
+            out = out + to_string(c)
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// Catalog lookup. Returns sentinel DiagSpec with empty code on miss.
+fn _spec_for(code: string) -> DiagSpec {
+    let mut i = 0
+    while i < len(CATALOG) {
+        let s = CATALOG[i]
+        if s.code == code {
+            return s
+        }
+        i = i + 1
+    }
+    return DiagSpec {
+        code: "",
+        title: "",
+        severity: Severity::Error,
+        stage: "",
+        template: "",
+        explain: "",
+        fix_it_kind: FixItKind::None
+    }
+}
+
+// ── Public builder API ───────────────────────────────────────
+
+pub fn diag_new(code: string) -> DiagBuilder {
+    return DiagBuilder {
+        code: code,
+        span: _empty_span(),
+        args: [],
+        suggest: "",
+        fixit: _empty_fixit(),
+        related: []
+    }
+}
+
+pub fn diag_span(b: DiagBuilder, span: Span) -> DiagBuilder {
+    return DiagBuilder {
+        code: b.code,
+        span: span,
+        args: b.args,
+        suggest: b.suggest,
+        fixit: b.fixit,
+        related: b.related
+    }
+}
+
+pub fn diag_arg(b: DiagBuilder, key: string, val: string) -> DiagBuilder {
+    let mut next = b.args
+    next.push(key + "=" + val)
+    return DiagBuilder {
+        code: b.code,
+        span: b.span,
+        args: next,
+        suggest: b.suggest,
+        fixit: b.fixit,
+        related: b.related
+    }
+}
+
+pub fn diag_suggest(b: DiagBuilder, s: string) -> DiagBuilder {
+    return DiagBuilder {
+        code: b.code,
+        span: b.span,
+        args: b.args,
+        suggest: s,
+        fixit: b.fixit,
+        related: b.related
+    }
+}
+
+pub fn diag_fixit(b: DiagBuilder, kind: FixItKind, span: Span, text: string) -> DiagBuilder {
+    let f = FixIt { kind: kind, span: span, new_text: text }
+    return DiagBuilder {
+        code: b.code,
+        span: b.span,
+        args: b.args,
+        suggest: b.suggest,
+        fixit: f,
+        related: b.related
+    }
+}
+
+pub fn diag_related(b: DiagBuilder, code: string) -> DiagBuilder {
+    let mut r = b.related
+    r.push(code)
+    return DiagBuilder {
+        code: b.code,
+        span: b.span,
+        args: b.args,
+        suggest: b.suggest,
+        fixit: b.fixit,
+        related: r
+    }
+}
+
+// Resolve template + args against CATALOG, fold into a Diagnostic.
+// On unknown code we still return a Diagnostic so callers don't have
+// to special-case missing catalog entries (message says so plainly).
+pub fn diag_emit(b: DiagBuilder) -> Diagnostic {
+    let spec = _spec_for(b.code)
+    let mut msg = ""
+    let mut stage = ""
+    let mut sev = Severity::Error
+    if len(spec.code) > 0 {
+        msg = _interpolate(spec.template, b.args)
+        stage = spec.stage
+        sev = spec.severity
+    } else {
+        msg = "unknown diagnostic code `" + b.code + "`"
+        stage = "unknown"
+    }
+    return Diagnostic {
+        code: b.code,
+        severity: sev,
+        stage: stage,
+        span: b.span,
+        message: msg,
+        note: "",
+        suggest: b.suggest,
+        fixit: b.fixit,
+        related: b.related
+    }
+}

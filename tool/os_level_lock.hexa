@@ -162,7 +162,7 @@ pub fn _non_critical_targets() -> array {
 // ─── canonical .raw resolution + follower-repo detection ────────
 //
 // 2026-04-26 hive 마이그레이션 이후, follower repo (hexa-lang/anima/
-// airgenome/n6-architecture/...) 의 로컬 `.raw` 는 retired 되고 canonical
+// airgenome/canon/...) 의 로컬 `.raw` 는 retired 되고 canonical
 // L0 SSOT 는 `/Users/ghost/core/hive/.raw` 한 곳에만 존재한다. Follower
 // 들은 `.raw-ref` 로 hive 를 추종한다.
 //

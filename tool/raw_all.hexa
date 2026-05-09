@@ -175,7 +175,7 @@ fn _tmp_init() {
 // ─── canonical .raw resolution (hive-migration, 2026-04-26) ──────
 //
 // 2026-04-26 hive 마이그레이션 이후, follower repo (hexa-lang/anima/
-// airgenome/n6-architecture/...) 의 로컬 `.raw` 는 retired 되고 canonical
+// airgenome/canon/...) 의 로컬 `.raw` 는 retired 되고 canonical
 // L0 SSOT 는 `/Users/ghost/core/hive/.raw` 한 곳에만 존재한다. Follower
 // 들은 `.raw-ref` 로 hive 를 추종한다.
 //
@@ -1523,7 +1523,7 @@ fn main() -> int {
 
     // Walk .raw (L0) — resolve canonical path: cwd .raw → .raw-ref →
     // hive sibling. After 2026-04-26 hive migration, follower repos
-    // (hexa-lang itself, anima, airgenome, n6-architecture, ...) have
+    // (hexa-lang itself, anima, airgenome, canon, ...) have
     // their local .raw retired and resolve through the .raw-ref `source`
     // field to the canonical hive .raw.
     let raw_path = _resolve_canonical_raw_path()
