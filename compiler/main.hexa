@@ -36,6 +36,7 @@ import "./codegen/arm64_darwin.hexa"
 import "./codegen/x86_64_linux.hexa"
 import "./emit/asm.hexa"
 import "./diag/catalog.hexa"
+import "./diag/builder.hexa"
 import "./diag/render.hexa"
 
 // ── Version / banner ────────────────────────────────────────────
@@ -422,12 +423,43 @@ let mut mmodule = lower_hir(hmodule)
 
 // MIR optimizer (RFC-018 §9 v1) — gated by --opt=LEVEL / $HEXA_OPT_LEVEL.
 //   0 none  /  1 const_fold  /  2 const_fold + dce  /  3 inline + 2-pass
+//
+// Pre-opt module shape fingerprint: total stmt count across all funcs.
+// If --opt > 0 changes the shape and -v is set, emit an INFO log line —
+// observability only, no semantic effect (RFC-018 §9 verifiability note).
+fn _mmod_stmt_count(m: MModule) -> i64 {
+    let mut total: i64 = 0
+    let mut fi = 0
+    while fi < len(m.funcs) {
+        let f = m.funcs[fi]
+        let mut bi = 0
+        while bi < len(f.blocks) {
+            total = total + len(f.blocks[bi].stmts)
+            bi = bi + 1
+        }
+        fi = fi + 1
+    }
+    return total
+}
+
+let pre_opt_stmts = _mmod_stmt_count(mmodule)
+
 if opt_level > 0 { mmodule = const_fold(mmodule) }
 if opt_level > 1 { mmodule = dce(mmodule) }
 if opt_level > 2 {
     mmodule = inline_small(mmodule)
     mmodule = const_fold(mmodule)
     mmodule = dce(mmodule)
+}
+
+if opt_level > 0 && verbose {
+    let post_opt_stmts = _mmod_stmt_count(mmodule)
+    if post_opt_stmts != pre_opt_stmts {
+        eprintln("hexa-compiler: --opt=" + to_string(opt_level)
+            + " changed module shape (stmts " + to_string(pre_opt_stmts)
+            + " -> " + to_string(post_opt_stmts)
+            + "); expected if optimization is effective")
+    }
 }
 
 let mut lmodule_target = target
