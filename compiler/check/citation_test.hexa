@@ -4,15 +4,22 @@
 // @capabilities [pure]
 //
 // Hand-builds a fake AtlasIndex (1 L node "valid-law", fixed hash) and a
-// small Module containing four fn items, one per case:
-//   (a) PASS: fn with `@implements(L[valid-law])`             → 0 diagnostics
-//   (b) FAIL: fn with `@implements(L[ghost-law])`             → HX8001 ×1
-//   (c) FAIL: fn with `@implements(P[valid-law])` (wrong-kind) → HX8002 ×1
-//   (d) WARN: fn body has L[valid-law] ref, no annotation     → HX8003 ×1
+// small Module containing five fn items, one per case:
+//   (a) PASS:  fn with `@implements(L[valid-law])`            → 0 diagnostics
+//   (b) FAIL:  fn with `@implements(L[ghost-law])`            → HX8001 ×1
+//   (c) FAIL:  fn with `@implements(P[valid-law])` wrong-kind → HX8002 ×1
+//   (d) MULTI: fn body has L[valid-law] ref, no annotation
+//              → HX8004 ×1 (Error, atlas_citation_strict)
+//                + HX8003 ×1 (Warn, deprecated transitional)
+//   (e) FAIL:  `@verify` fn, no @implements / no @discover     → HX8004 ×1
+//              (formula-bearing without atlas binding)
 //
 // Multi-error collection — every miss is reported, no early-stop.
 //
-// Expected total: 3 diagnostics across 4 cases.
+// SPEC.yaml atlas_citation_strict (Decision 2026-05-09):
+//   formula-bearing functions (@verify / @law / body L[*]) must cite
+//   atlas L via @implements(L[id]) or @discover(kind="L"). HX8004 is
+//   Error severity; HX8003 demoted to deprecated warning.
 //
 // Run:
 //   hexa run compiler/check/citation_test.hexa
@@ -115,6 +122,14 @@ fn _implements_ann(arg: Expr, file: string, line: i64) -> Annotation {
     }
 }
 
+fn _verify_ann(file: string, line: i64) -> Annotation {
+    return Annotation {
+        name: "verify",
+        args: [],
+        span: _span(file, line, 1, 7)
+    }
+}
+
 fn _fn_item(name: string, anns: array, body: Expr, file: string, line: i64) -> Item {
     return Item {
         kind: ItemKind::Fn,
@@ -202,7 +217,8 @@ fn main() {
     let mod_c = Module { file: f, items: items_c, imports: [] }
     let diags_c = _run_case("(c) FAIL @implements(P[valid-law])", mod_c, atlas)
 
-    // (d) WARN: fn body has L[valid-law] but no annotation — HX8003 ×1.
+    // (d) MULTI: fn body has L[valid-law] but no annotation —
+    //     HX8004 ×1 (Error, atlas_citation_strict) + HX8003 ×1 (Warn, deprecated).
     let body_d_ref = _atlas_expr("L", "valid-law", f, 11, 5)
     let mut body_d_kids = []
     body_d_kids.push(body_d_ref)
@@ -211,7 +227,20 @@ fn main() {
     let mut items_d = []
     items_d.push(item_d)
     let mod_d = Module { file: f, items: items_d, imports: [] }
-    let diags_d = _run_case("(d) WARN body L[valid-law] no @implements", mod_d, atlas)
+    let diags_d = _run_case("(d) MULTI body L[valid-law] no @implements / no @discover", mod_d, atlas)
+
+    // (e) FAIL: @verify fn with no @implements and no @discover —
+    //     HX8004 ×1 (formula-bearing without atlas binding).
+    //     Models: `@verify fn comm(a:Int, b:Int) -> Bool { return (a+b)==(b+a) }`.
+    //     Empty body suffices because @verify alone triggers the binding
+    //     requirement per SPEC.yaml atlas_citation_strict.required_when.
+    let mut anns_e = []
+    anns_e.push(_verify_ann(f, 13))
+    let item_e = _fn_item("comm", anns_e, _empty_block(f, 14), f, 14)
+    let mut items_e = []
+    items_e.push(item_e)
+    let mod_e = Module { file: f, items: items_e, imports: [] }
+    let diags_e = _run_case("(e) FAIL @verify with no @implements and no @discover", mod_e, atlas)
 
     // ── Assertions ───────────────────────────────────────────
     println("")
@@ -242,28 +271,65 @@ fn main() {
         ok = false
     }
 
-    // (d) 1 diagnostic, code HX8003, severity Warning.
-    if len(diags_d) != 1 {
-        println("FAIL (d): expected 1 diagnostic, got " + to_string(len(diags_d)))
+    // (d) 2 diagnostics — HX8004 (Error) + HX8003 (Warning, deprecated).
+    // Order is implementation-defined but the citation pass currently
+    // emits HX8004 first (per-item walk), then the per-ref HX8003 hint.
+    if len(diags_d) != 2 {
+        println("FAIL (d): expected 2 diagnostics, got " + to_string(len(diags_d)))
         ok = false
     } else {
-        if diags_d[0].code != "HX8003" {
-            println("FAIL (d): expected code HX8003, got " + diags_d[0].code)
+        // First: HX8004 (Error) from the atlas_citation_strict check.
+        if diags_d[0].code != "HX8004" {
+            println("FAIL (d): expected first code HX8004, got " + diags_d[0].code)
             ok = false
         }
-        let sev_ok = match diags_d[0].severity {
+        let sev0_ok = match diags_d[0].severity {
+            Severity::Error -> true,
+            Severity::Warning -> false,
+            Severity::Note -> false
+        }
+        if !sev0_ok {
+            println("FAIL (d): expected first Severity::Error (HX8004)")
+            ok = false
+        }
+        // Second: HX8003 (Warning) — deprecated transitional emission.
+        if diags_d[1].code != "HX8003" {
+            println("FAIL (d): expected second code HX8003, got " + diags_d[1].code)
+            ok = false
+        }
+        let sev1_ok = match diags_d[1].severity {
             Severity::Warning -> true,
             Severity::Error -> false,
             Severity::Note -> false
         }
+        if !sev1_ok {
+            println("FAIL (d): expected second Severity::Warning (HX8003)")
+            ok = false
+        }
+    }
+
+    // (e) 1 diagnostic, code HX8004, severity Error.
+    if len(diags_e) != 1 {
+        println("FAIL (e): expected 1 diagnostic, got " + to_string(len(diags_e)))
+        ok = false
+    } else {
+        if diags_e[0].code != "HX8004" {
+            println("FAIL (e): expected code HX8004, got " + diags_e[0].code)
+            ok = false
+        }
+        let sev_ok = match diags_e[0].severity {
+            Severity::Error -> true,
+            Severity::Warning -> false,
+            Severity::Note -> false
+        }
         if !sev_ok {
-            println("FAIL (d): expected Severity::Warning")
+            println("FAIL (e): expected Severity::Error")
             ok = false
         }
     }
 
     if ok {
-        println("PASS: 4 cases — 0 / HX8001×1 / HX8002×1 / HX8003×1 (warn).")
+        println("PASS: 5 cases — 0 / HX8001x1 / HX8002x1 / HX8004+HX8003 / HX8004x1.")
     }
     println("══════════════════════════════════════════════")
     if !ok { exit(1) }

@@ -225,8 +225,26 @@ pub let CATALOG: [DiagSpec] = [
         severity: Severity::Warning,
         stage: "S8",
         template: "function `{name}` references atlas L node `{node_id}` in its body but has no @implements citation",
-        explain: "A function body cites one or more L nodes (via L[id] expressions) but the function declares no `@implements` annotation. Adding `@implements(L[id])` records the law-of-record so downstream verification (S6/S7 prover) can attach proofs to the right node.",
+        explain: "A function body cites one or more L nodes (via L[id] expressions) but the function declares no `@implements` annotation. Adding `@implements(L[id])` records the law-of-record so downstream verification (S6/S7 prover) can attach proofs to the right node. DEPRECATED: superseded by HX8004 (Error) per SPEC.yaml atlas_citation_strict; kept transitionally for tooling parity. Will be retired in the next citation pass refresh.",
         fix_it_kind: FixItKind::Insert
+    },
+    DiagSpec {
+        code: "HX8004",
+        title: "formula has no atlas binding",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "formula in `{name}` has no atlas binding — add @implements(L[id]) to cite an existing law, or @discover(kind=\"L\") to register this function as a new one. SPEC.yaml atlas_citation_strict.",
+        explain: "Functions carrying @verify or @law annotations, OR whose body references atlas L[*] nodes, are knowledge-bearing artifacts. They must be bound to atlas L either by citing an existing law (@implements(L[id])) or proposing a new one (@discover(kind=\"L\")). Bypass via @grace(HX8004, until, reason) if migration is in flight; never silently.",
+        fix_it_kind: FixItKind::Insert
+    },
+    DiagSpec {
+        code: "HX9000",
+        title: "@grace requires reviewer acknowledgement",
+        severity: Severity::Warning,
+        stage: "runtime",
+        template: "ai-native: @grace at {file}:{line} suppresses {error_code} until {until}. Reason: \"{reason}\". This is a TEMPORARY debt — the author is responsible for resolving the underlying issue before the expiry date. Reviewer acknowledgement REQUIRED before merge.",
+        explain: "Every @grace site emits this warning to prevent silent strict-lint bypass. The build is gated on explicit user consent at the CI/PR layer: PR description must contain `Acked-grace: HXxxxx by <reviewer>` trailer or commit message must contain `acked-grace: <code> by <author>`. SPEC.yaml opt_out.ai_native_warn_policy.",
+        fix_it_kind: FixItKind::None
     },
     DiagSpec {
         code: "HX9001",

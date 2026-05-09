@@ -13,12 +13,21 @@
 //   HX8001  @implements(L[id]) — atlas has no such L node
 //   HX8002  @implements(K[id]) where K != L — wrong-kind citation
 //   HX8003  fn body uses atlas L refs but no @implements citation (Warn)
+//           DEPRECATED — superseded by HX8004 per SPEC.yaml
+//           atlas_citation_strict (Decision 2026-05-09). Kept transitionally
+//           so downstream tooling can migrate; will be retired in the next
+//           citation pass refresh.
+//   HX8004  formula-bearing item (carries @verify/@law, OR body references
+//           L[*]) has no atlas binding — neither @implements(L[*]) nor
+//           @discover(kind="L"). Error severity, fatal at S8 (SPEC.yaml
+//           atlas_citation_strict.on_missing_binding).
 //   HX1099  @implements(L[id]) where L exists but is tombstoned (Decision 5e).
 //           Already owned by the tombstone pass — re-emit, do not redefine.
 //
 // `@law(...)` annotations carry only string literals (formula + units) and
 // require no atlas binding here — deeper verification is RFC-017 S6/S7
-// prover territory.
+// prover territory. However the PRESENCE of `@law` (or `@verify`) on an
+// item triggers the HX8004 atlas-binding check below.
 //
 // pub fn citation_check(module: Module, atlas: AtlasIndex) -> [Diagnostic]
 //
@@ -154,6 +163,118 @@ fn _is_law_ann(name: string) -> bool {
     return name == "law"
 }
 
+fn _is_verify_ann(name: string) -> bool {
+    return name == "verify"
+}
+
+fn _is_discover_ann(name: string) -> bool {
+    return name == "discover"
+}
+
+fn _is_assign_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Assign -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_ident_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Ident -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_string_lit_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralString -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _check_one_discover_arg(arg: Expr) -> bool {
+    if !_is_assign_kind(arg.kind) { return false }
+    if len(arg.children) < 2 { return false }
+    let lhs = arg.children[0]
+    let rhs = arg.children[1]
+    if !_is_ident_kind(lhs.kind) { return false }
+    if lhs.text != "kind" { return false }
+    if !_is_string_lit_kind(rhs.kind) { return false }
+    return rhs.text == "L"
+}
+
+fn _discover_kind_is_law(a: Annotation) -> bool {
+    let mut i = 0
+    while i < len(a.args) {
+        if _check_one_discover_arg(a.args[i]) { return true }
+        i = i + 1
+    }
+    return false
+}
+
 // Validate one @implements arg expression. Returns the cited L id when
 // the arg is a well-formed L[*] (so the caller can record it for the
 // HX8003 gap check); returns "" otherwise.
@@ -212,8 +333,14 @@ fn _check_implements_arg(arg: Expr, atlas: AtlasIndex, out: array) -> string {
 
 fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
     // Collect every @implements target id into `cited` so we can compare
-    // against the body's L-refs after annotation validation.
+    // against the body's L-refs after annotation validation. Also track
+    // formula-bearing markers (@verify, @law) and @discover(kind="L")
+    // for the HX8004 atlas-binding check (SPEC.yaml atlas_citation_strict).
     let mut cited = []
+    let mut has_verify = false
+    let mut has_law = false
+    let mut has_implements_l = false
+    let mut has_discover_l = false
     let mut i = 0
     while i < len(it.annotations) {
         let a = it.annotations[i]
@@ -221,9 +348,18 @@ fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
             let mut j = 0
             while j < len(a.args) {
                 let id = _check_implements_arg(a.args[j], atlas, out)
-                if len(id) > 0 { cited.push(id) }
+                if len(id) > 0 {
+                    cited.push(id)
+                    has_implements_l = true
+                }
                 j = j + 1
             }
+        } else if _is_verify_ann(a.name) {
+            has_verify = true
+        } else if _is_law_ann(a.name) {
+            has_law = true
+        } else if _is_discover_ann(a.name) {
+            if _discover_kind_is_law(a) { has_discover_l = true }
         }
         // @law args are documentation strings — no atlas binding here.
         i = i + 1
@@ -236,11 +372,34 @@ fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
 
     let mut body_refs = []
     _collect_l_refs(it.body, body_refs)
-    if len(body_refs) == 0 { return }
+    let body_uses_l = len(body_refs) > 0
 
-    // For each L-ref in the body, check whether some @implements cites it.
-    // We emit at most one HX8003 per item (covers the first uncited ref) —
-    // multi-error collection across items is preserved.
+    // ── HX8004: atlas-binding required for formula-bearing items ─────
+    // SPEC.yaml atlas_citation_strict.required_when:
+    //   (a) @verify present, OR (b) @law present, OR (c) body L[*] refs.
+    // Legal bindings: @implements(L[*]) OR @discover(kind="L").
+    // Severity: Error. Multi-error collection — one HX8004 per item.
+    let formula_bearing = has_verify || has_law || body_uses_l
+    let has_binding = has_implements_l || has_discover_l
+    if formula_bearing {
+        if !has_binding {
+            let mut b = diag_new("HX8004")
+            b = diag_span(b, it.span)
+            b = diag_arg(b, "name", it.name)
+            out.push(diag_emit(b))
+        }
+    }
+
+    // ── HX8003 (DEPRECATED, transitional) ─────────────────────────────
+    // Superseded by HX8004 above per SPEC.yaml atlas_citation_strict.
+    // Kept emitting so downstream tooling (LSP, gate) can migrate; will
+    // be retired in the next citation pass refresh. Only fires when the
+    // body uses L[*] refs at all (the original HX8003 trigger).
+    //
+    // For each L-ref in the body, check whether some @implements cites
+    // it. We emit at most one HX8003 per item (covers the first uncited
+    // ref) — multi-error collection across items is preserved.
+    if !body_uses_l { return }
     let mut k = 0
     while k < len(body_refs) {
         let r = body_refs[k]
