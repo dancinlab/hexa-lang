@@ -1,0 +1,309 @@
+// HEXA Native Compiler — Discovery + staging smoke test (RFC-017 §5)
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read, fs_write]
+//
+// Builds a hand-rolled Module with two fns:
+//
+//   (a) @verify @discover(kind="L") fn comm(a:Int, b:Int) -> Bool {
+//          return (a + b) == (b + a)
+//       }
+//       — ε self-proof candidate. Should produce ONE DiscoveryProposal
+//       with normalized_form starting "(== (+ a b)" (commutative sort).
+//
+//   (b) @verify fn local_only(a:Int) -> Bool {
+//          return a == a
+//       }
+//       — verified but no @discover annotation. MUST NOT be staged.
+//
+// Asserts:
+//   - discover_check returns exactly 1 proposal
+//   - the proposal's fn_name is "comm" and kind is "L"
+//   - write_staging emits a file containing "L[comm]" and "(+ a b)"
+//   - write_staging returns 0
+//
+// Run:
+//   hexa run compiler/discover/discover_smoke.hexa
+
+import "../parse/ast.hexa"
+import "../lex/tokens.hexa"
+import "./discover.hexa"
+import "./staging.hexa"
+
+let SMOKE_OUT: string = "/tmp/_discover_test_staging.n6"
+
+// -- AST construction helpers ----------------------------------
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_span() -> Span {
+    return _span("", 0, 0, 0)
+}
+
+fn _empty_atlas_ref() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _empty_span() }
+}
+
+fn _named_type_ref(name: string) -> TypeRef {
+    return TypeRef { kind: "named", name: name, args: [], span: _empty_span() }
+}
+
+fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _string_expr(s: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralString,
+        span: _span(file, line, col, len(s) + 2),
+        text: s,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _kwarg_expr(key: string, val: string, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(_ident_expr(key, file, line, col))
+    kids.push(_string_expr(val, file, line, col + len(key) + 1))
+    return Expr {
+        kind: ExprKind::Assign,
+        span: _span(file, line, col + len(key), 1),
+        text: "=",
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _bin_expr(op: string, lhs: Expr, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(lhs)
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::BinOp,
+        span: _span(file, line, col, len(op)),
+        text: op,
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _return_expr(value: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(value)
+    return Expr {
+        kind: ExprKind::Return,
+        span: _span(file, line, col, 6),
+        text: "",
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _span(file, line, col, 1),
+        text: "",
+        children: children,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _param(name: string, typ_name: string, file: string, line: i64, col: i64) -> Param {
+    return Param {
+        name: name,
+        typ: _named_type_ref(typ_name),
+        span: _span(file, line, col, len(name))
+    }
+}
+
+fn _ann(name: string, args: array, file: string, line: i64) -> Annotation {
+    return Annotation { name: name, args: args, span: _span(file, line, 1, 1 + len(name)) }
+}
+
+fn _fn_item(name: string, anns: [Annotation], params: [Param], ret: TypeRef, body: Expr, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: anns,
+        params: params,
+        return_type: ret,
+        body: body,
+        is_pub: false
+    }
+}
+
+// -- Build the fixture module ----------------------------------
+
+// (a) @verify @discover(kind="L") fn comm(a: Int, b: Int) -> Bool {
+//         return (a + b) == (b + a)
+//     }
+fn _build_fn_comm(file: string) -> Item {
+    let mut params = []
+    params.push(_param("a", "Int", file, 1, 16))
+    params.push(_param("b", "Int", file, 1, 24))
+
+    let lhs = _bin_expr("+",
+        _ident_expr("a", file, 2, 17),
+        _ident_expr("b", file, 2, 21),
+        file, 2, 19)
+    let rhs = _bin_expr("+",
+        _ident_expr("b", file, 2, 27),
+        _ident_expr("a", file, 2, 31),
+        file, 2, 29)
+    let eq = _bin_expr("==", lhs, rhs, file, 2, 24)
+    let ret = _return_expr(eq, file, 2, 5)
+    let mut body_kids = []
+    body_kids.push(ret)
+    let body = _block(body_kids, file, 1, 40)
+
+    let mut verify_args = []
+    let mut disc_args = []
+    disc_args.push(_kwarg_expr("kind", "L", file, 1, 11))
+
+    let mut anns = []
+    anns.push(_ann("verify", verify_args, file, 1))
+    anns.push(_ann("discover", disc_args, file, 1))
+
+    return _fn_item("comm", anns, params, _named_type_ref("Bool"), body, file, 1)
+}
+
+// (b) @verify fn local_only(a: Int) -> Bool { return a == a }   // no @discover
+fn _build_fn_local_only(file: string) -> Item {
+    let mut params = []
+    params.push(_param("a", "Int", file, 5, 22))
+
+    let l_a = _ident_expr("a", file, 6, 16)
+    let r_a = _ident_expr("a", file, 6, 21)
+    let eq = _bin_expr("==", l_a, r_a, file, 6, 18)
+    let ret = _return_expr(eq, file, 6, 5)
+    let mut body_kids = []
+    body_kids.push(ret)
+    let body = _block(body_kids, file, 5, 35)
+
+    let mut anns = []
+    anns.push(_ann("verify", [], file, 5))
+
+    return _fn_item("local_only", anns, params, _named_type_ref("Bool"), body, file, 5)
+}
+
+fn _build_module() -> Module {
+    let f = "discover_smoke.hexa"
+    let mut items = []
+    items.push(_build_fn_comm(f))
+    items.push(_build_fn_local_only(f))
+    return Module { file: f, items: items, imports: [] }
+}
+
+// -- Assertions ------------------------------------------------
+
+fn _contains(haystack: string, needle: string) -> bool {
+    let n = len(haystack)
+    let m = len(needle)
+    if m == 0 { return true }
+    if m > n { return false }
+    let mut i = 0
+    while i + m <= n {
+        if haystack.substring(i, i + m) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// -- Main ------------------------------------------------------
+
+fn main() {
+    println("==============================================")
+    println("  HEXA Compiler — Discovery Staging Smoke Test (RFC-017 §5)")
+    println("==============================================")
+
+    let mut ok = true
+    let m = _build_module()
+    println("module: " + m.file + " (items=" + to_string(len(m.items)) + ")")
+
+    let proposals = discover_check(m)
+    println("proposals: " + to_string(len(proposals)))
+
+    if len(proposals) != 1 {
+        println("  FAIL: expected exactly 1 proposal, got " + to_string(len(proposals)))
+        ok = false
+    } else {
+        let p = proposals[0]
+        println("  [0] kind=" + p.kind + " fn=" + p.fn_name)
+        println("      proof_hash=" + p.proof_hash)
+        println("      verifier_version=" + p.verifier_version)
+        println("      normalized_form=" + p.normalized_form)
+        println("      sorted_param_types=" + p.sorted_param_types)
+
+        if p.fn_name != "comm" {
+            println("  FAIL: expected fn_name=comm, got " + p.fn_name)
+            ok = false
+        }
+        if p.kind != "L" {
+            println("  FAIL: expected kind=L, got " + p.kind)
+            ok = false
+        }
+        if len(p.proof_hash) != 32 {
+            println("  FAIL: expected 32-char proof_hash, got len=" + to_string(len(p.proof_hash)))
+            ok = false
+        }
+        if !_contains(p.normalized_form, "(+ a b)") {
+            println("  FAIL: normalized_form did not contain `(+ a b)`")
+            ok = false
+        }
+    }
+
+    let rc = write_staging(proposals, SMOKE_OUT)
+    println("write_staging: rc=" + to_string(rc) + " path=" + SMOKE_OUT)
+    if rc != 0 {
+        println("  FAIL: write_staging returned non-zero")
+        ok = false
+    }
+
+    let body = read_file(SMOKE_OUT)
+    println("staging file size: " + to_string(len(body)) + " bytes")
+    if len(body) == 0 {
+        println("  FAIL: staging file is empty")
+        ok = false
+    }
+    if !_contains(body, "L[comm]") {
+        println("  FAIL: staging body missing `L[comm]`")
+        ok = false
+    }
+    if !_contains(body, "(+ a b)") {
+        println("  FAIL: staging body missing canonical form `(+ a b)`")
+        ok = false
+    }
+    if !_contains(body, "verifier_version: hexa-prover-v0") {
+        println("  FAIL: staging header missing verifier_version pin")
+        ok = false
+    }
+    if _contains(body, "L[local_only]") || _contains(body, "P[local_only]") {
+        println("  FAIL: local_only (no @discover) was staged")
+        ok = false
+    }
+
+    println("")
+    println("==============================================")
+    if ok {
+        println("PASS: discover_check + write_staging match contract.")
+        println("  proposal_count=" + to_string(len(proposals)))
+        if len(proposals) > 0 {
+            println("  comm.proof_hash=" + proposals[0].proof_hash)
+        }
+    } else {
+        println("FAIL: discovery staging contract not satisfied.")
+    }
+    println("==============================================")
+    if !ok { exit(1) }
+}

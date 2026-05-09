@@ -1,0 +1,691 @@
+// HEXA Native Compiler — Discovery (RFC-017 §5: ε self-proof) — Step 1
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// First step of atlas auto-discovery (RFC-017 decision 5b — fully_automatic).
+// SCOPE OF THIS STEP: STAGING ONLY. We do NOT register live atlas nodes here.
+//
+// Walks Item.annotations across a Module. For every Item that carries BOTH
+//   @discover(kind="L"|"P"|"C"|"E")  AND
+//   @verify
+// we:
+//   (a) compute a canonical normalized_form of the body's main `==` BinOp
+//       (mirrors compiler/check/equational.hexa _normalize, kept inline here
+//        so we don't perturb the verifier module),
+//   (b) compute a 32-char proof_hash = first 32 hex chars of
+//       sha256(normalized_form || "|" || verifier_version || "|" || sorted_param_types),
+//   (c) emit a DiscoveryProposal record.
+//
+// Items lacking `@discover` are skipped — even if `@verify` proves them — so
+// authors retain explicit opt-in until promote_to_atlas() lands.
+//
+// Items lacking `@verify` are skipped — RFC-017 §5 requires the prover signal
+// before staging.
+//
+// Items whose body has no `==` BinOp are skipped — there is nothing to
+// canonicalise.
+//
+// Public surface:
+//   pub struct DiscoveryProposal { ... }
+//   pub fn discover_check(module: Module) -> [DiscoveryProposal]
+//
+// Catalog/diagnostic strings: ENGLISH ONLY (RFC-019 §6 + repo policy).
+
+import "../parse/ast.hexa"
+import "../lex/tokens.hexa"
+import "../../stdlib/hash/sha256.hexa"
+
+// -- verifier version pin ---------------------------------------
+// Matches SPEC.yaml prover_engine.initial_capabilities surface; bumped
+// whenever the canonicalisation rule set changes (retroactive sweep
+// trigger per RFC-017 §5e).
+pub let DISCOVER_VERIFIER_VERSION: string = "hexa-prover-v0"
+
+// -- Public record ---------------------------------------------
+
+pub struct DiscoveryProposal {
+    fn_name: string,
+    kind: string,                 // "P" | "C" | "L" | "E"
+    proof_hash: string,           // 32 hex chars (sha256 prefix)
+    verifier_version: string,     // pinned to DISCOVER_VERIFIER_VERSION
+    normalized_form: string,      // canonical s-expression of LHS == RHS
+    sorted_param_types: string,   // comma-joined sorted Param.typ.name list
+    span: Span                    // span of the `==` BinOp (or item if absent)
+}
+
+// -- ExprKind / ItemKind probes (mirror equational.hexa) -------
+
+fn _is_lit_int_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralInt -> true,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_ident_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Ident -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_binop_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::BinOp -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_unop_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::UnOp -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_return_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Return -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_block_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Block -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_string_lit_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralString -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_assign_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Assign -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _is_fn_item(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Fn -> true,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false,
+        ItemKind::Import -> false
+    }
+}
+
+// -- Integer parsing / utilities -------------------------------
+
+fn _digit_val(c: char) -> i64 {
+    if c == '0' { return 0 }
+    if c == '1' { return 1 }
+    if c == '2' { return 2 }
+    if c == '3' { return 3 }
+    if c == '4' { return 4 }
+    if c == '5' { return 5 }
+    if c == '6' { return 6 }
+    if c == '7' { return 7 }
+    if c == '8' { return 8 }
+    if c == '9' { return 9 }
+    return -1
+}
+
+fn _parse_int_text(t: string) -> i64 {
+    let chars = t.chars()
+    let n = len(chars)
+    if n == 0 { return 0 }
+    let mut i = 0
+    let mut neg = false
+    if chars[0] == '-' {
+        neg = true
+        i = 1
+    }
+    let mut v: i64 = 0
+    while i < n {
+        let d = _digit_val(chars[i])
+        if d >= 0 { v = v * 10 + d }
+        i = i + 1
+    }
+    if neg { return -v }
+    return v
+}
+
+fn _i64_to_string(v: i64) -> string {
+    return to_string(v)
+}
+
+fn _str_lt(a: string, b: string) -> bool {
+    let ca = a.chars()
+    let cb = b.chars()
+    let na = len(ca)
+    let nb = len(cb)
+    let mut i = 0
+    while i < na && i < nb {
+        let xa = ca[i]
+        let xb = cb[i]
+        if xa < xb { return true }
+        if xa > xb { return false }
+        i = i + 1
+    }
+    return na < nb
+}
+
+fn _sort_strings(xs: [string]) -> [string] {
+    let mut a = xs
+    let n = len(a)
+    let mut i = 1
+    while i < n {
+        let key = a[i]
+        let mut j = i - 1
+        while j >= 0 && _str_lt(key, a[j]) {
+            a[j + 1] = a[j]
+            j = j - 1
+        }
+        a[j + 1] = key
+        i = i + 1
+    }
+    return a
+}
+
+fn _is_commutative_op(op: string) -> bool {
+    if op == "+" { return true }
+    if op == "*" { return true }
+    return false
+}
+
+fn _is_associative_op(op: string) -> bool {
+    if op == "+" { return true }
+    if op == "*" { return true }
+    return false
+}
+
+fn _flatten_chain(e: Expr, op: string, out: array) {
+    if _is_binop_kind(e.kind) && e.text == op && len(e.children) == 2 {
+        _flatten_chain(e.children[0], op, out)
+        _flatten_chain(e.children[1], op, out)
+    } else {
+        out.push(e)
+    }
+}
+
+pub struct DiscoverFoldResult {
+    folded: bool,
+    value: i64
+}
+
+fn _fold_int_op(op: string, a: i64, b: i64) -> DiscoverFoldResult {
+    if op == "+" { return DiscoverFoldResult { folded: true, value: a + b } }
+    if op == "-" { return DiscoverFoldResult { folded: true, value: a - b } }
+    if op == "*" { return DiscoverFoldResult { folded: true, value: a * b } }
+    if op == "/" {
+        if b == 0 { return DiscoverFoldResult { folded: false, value: 0 } }
+        return DiscoverFoldResult { folded: true, value: a / b }
+    }
+    if op == "%" {
+        if b == 0 { return DiscoverFoldResult { folded: false, value: 0 } }
+        return DiscoverFoldResult { folded: true, value: a % b }
+    }
+    return DiscoverFoldResult { folded: false, value: 0 }
+}
+
+// Mirror of equational.hexa::_normalize — kept inline so discovery doesn't
+// reach into private symbols of the verifier module. Keep the two in lockstep
+// when canonicalisation rules evolve (RFC-017 §5e retroactive sweep trigger).
+fn _normalize(e: Expr) -> string {
+    if _is_lit_int_kind(e.kind) {
+        let v = _parse_int_text(e.text)
+        return _i64_to_string(v)
+    }
+    if _is_ident_kind(e.kind) {
+        return e.text
+    }
+    if _is_unop_kind(e.kind) {
+        if len(e.children) == 0 { return e.text }
+        let inner = _normalize(e.children[0])
+        if e.text == "-" {
+            let v = _parse_int_text(inner)
+            let s = _i64_to_string(v)
+            if s == inner {
+                return _i64_to_string(-v)
+            }
+            return "(- " + inner + ")"
+        }
+        return "(" + e.text + " " + inner + ")"
+    }
+    if _is_binop_kind(e.kind) {
+        if len(e.children) < 2 {
+            return "(" + e.text + ")"
+        }
+        let op = e.text
+
+        let l_norm = _normalize(e.children[0])
+        let r_norm = _normalize(e.children[1])
+
+        if op == "-" && l_norm == r_norm {
+            return "0"
+        }
+
+        let lv = _parse_int_text(l_norm)
+        let rv = _parse_int_text(r_norm)
+        let l_is_int = _i64_to_string(lv) == l_norm
+        let r_is_int = _i64_to_string(rv) == r_norm
+        if l_is_int && r_is_int {
+            let f = _fold_int_op(op, lv, rv)
+            if f.folded { return _i64_to_string(f.value) }
+        }
+
+        if op == "+" {
+            if l_is_int && lv == 0 { return r_norm }
+            if r_is_int && rv == 0 { return l_norm }
+        }
+        if op == "-" {
+            if r_is_int && rv == 0 { return l_norm }
+        }
+        if op == "*" {
+            if l_is_int && lv == 0 { return "0" }
+            if r_is_int && rv == 0 { return "0" }
+            if l_is_int && lv == 1 { return r_norm }
+            if r_is_int && rv == 1 { return l_norm }
+        }
+
+        if _is_associative_op(op) {
+            let mut chain: [Expr] = []
+            _flatten_chain(e, op, chain)
+
+            let mut parts: [string] = []
+            let mut acc_set = false
+            let mut acc: i64 = 0
+            let mut k = 0
+            while k < len(chain) {
+                let s = _normalize(chain[k])
+                let pv = _parse_int_text(s)
+                if _i64_to_string(pv) == s {
+                    if !acc_set {
+                        acc = pv
+                        acc_set = true
+                    } else {
+                        let f2 = _fold_int_op(op, acc, pv)
+                        if f2.folded { acc = f2.value }
+                    }
+                } else {
+                    parts.push(s)
+                }
+                k = k + 1
+            }
+
+            if _is_commutative_op(op) {
+                parts = _sort_strings(parts)
+            }
+
+            if acc_set {
+                if op == "*" && acc == 0 { return "0" }
+                let drop_lit_add = op == "+" && acc == 0 && len(parts) > 0
+                let drop_lit_mul = op == "*" && acc == 1 && len(parts) > 0
+                if !drop_lit_add && !drop_lit_mul {
+                    let lit = _i64_to_string(acc)
+                    let mut next: [string] = []
+                    next.push(lit)
+                    let mut q = 0
+                    while q < len(parts) {
+                        next.push(parts[q])
+                        q = q + 1
+                    }
+                    if _is_commutative_op(op) {
+                        parts = _sort_strings(next)
+                    } else {
+                        parts = next
+                    }
+                }
+            }
+
+            if len(parts) == 0 {
+                if acc_set { return _i64_to_string(acc) }
+                return "0"
+            }
+            if len(parts) == 1 { return parts[0] }
+            let mut out = "(" + op
+            let mut q = 0
+            while q < len(parts) {
+                out = out + " " + parts[q]
+                q = q + 1
+            }
+            out = out + ")"
+            return out
+        }
+
+        return "(" + op + " " + l_norm + " " + r_norm + ")"
+    }
+
+    if len(e.text) > 0 { return e.text }
+    return "<expr>"
+}
+
+// -- Find body's main `==` BinOp -------------------------------
+
+fn _find_eq(e: Expr) -> Expr {
+    if _is_binop_kind(e.kind) && e.text == "==" {
+        return e
+    }
+    if _is_return_kind(e.kind) {
+        if len(e.children) > 0 {
+            let inner = _find_eq(e.children[0])
+            if _is_binop_kind(inner.kind) && inner.text == "==" { return inner }
+        }
+    }
+    if _is_block_kind(e.kind) {
+        let mut i = 0
+        while i < len(e.children) {
+            let inner = _find_eq(e.children[i])
+            if _is_binop_kind(inner.kind) && inner.text == "==" { return inner }
+            i = i + 1
+        }
+    }
+    return Expr {
+        kind: ExprKind::Ident,
+        span: e.span,
+        text: "",
+        children: [],
+        atlas_ref: AtlasRef { kind: "", id: "", span: e.span }
+    }
+}
+
+fn _is_eq_found(eq: Expr) -> bool {
+    if !_is_binop_kind(eq.kind) { return false }
+    return eq.text == "=="
+}
+
+// -- Annotation lookups ----------------------------------------
+
+fn _has_verify(it: Item) -> bool {
+    let mut i = 0
+    while i < len(it.annotations) {
+        if it.annotations[i].name == "verify" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Returns the discover annotation's `kind=` string ("" if absent / malformed).
+fn _discover_kind(it: Item) -> string {
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if a.name == "discover" {
+            let mut j = 0
+            while j < len(a.args) {
+                let arg = a.args[j]
+                if _is_assign_kind(arg.kind) && len(arg.children) >= 2 {
+                    let lhs = arg.children[0]
+                    let rhs = arg.children[1]
+                    if _is_ident_kind(lhs.kind) && lhs.text == "kind" {
+                        if _is_string_lit_kind(rhs.kind) {
+                            return rhs.text
+                        }
+                    }
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// -- Sorted param-types string ---------------------------------
+
+fn _param_type_label(p: Param) -> string {
+    if len(p.typ.name) > 0 { return p.typ.name }
+    return p.typ.kind
+}
+
+fn _sorted_param_types(it: Item) -> string {
+    let mut labels: [string] = []
+    let mut i = 0
+    while i < len(it.params) {
+        labels.push(_param_type_label(it.params[i]))
+        i = i + 1
+    }
+    labels = _sort_strings(labels)
+    let mut s = ""
+    let mut k = 0
+    while k < len(labels) {
+        if k > 0 { s = s + "," }
+        s = s + labels[k]
+        k = k + 1
+    }
+    return s
+}
+
+// -- Proof hash -----------------------------------------------
+// 32-char prefix of sha256(normalized_form | verifier_version | sorted_params).
+// Truncation to 32 hex chars (128 bits) is the RFC-017 §5b "proof_hash"
+// fingerprint width — collision space is ample for theorem dedup and keeps
+// the staging file readable.
+
+fn _hex32_of(s: string) -> string {
+    let full = sha256_hex(s)
+    if len(full) >= 32 { return full.substring(0, 32) }
+    return full
+}
+
+pub fn discover_proof_hash(normalized_form: string, verifier_version: string, sorted_param_types: string) -> string {
+    let payload = normalized_form + "|" + verifier_version + "|" + sorted_param_types
+    return _hex32_of(payload)
+}
+
+// -- Per-item discovery walk -----------------------------------
+
+fn _consider_item(it: Item, out: array) {
+    if !_is_fn_item(it.kind) { return }
+    let kind = _discover_kind(it)
+    if len(kind) == 0 { return }              // no @discover (or malformed)
+    if !_has_verify(it) { return }            // staging requires verifier signal
+
+    let eq = _find_eq(it.body)
+    if !_is_eq_found(eq) { return }
+    if len(eq.children) < 2 { return }
+
+    let lhs = _normalize(eq.children[0])
+    let rhs = _normalize(eq.children[1])
+    let normalized_form = "(== " + lhs + " " + rhs + ")"
+    let params = _sorted_param_types(it)
+    let hash = discover_proof_hash(normalized_form, DISCOVER_VERIFIER_VERSION, params)
+
+    out.push(DiscoveryProposal {
+        fn_name: it.name,
+        kind: kind,
+        proof_hash: hash,
+        verifier_version: DISCOVER_VERIFIER_VERSION,
+        normalized_form: normalized_form,
+        sorted_param_types: params,
+        span: eq.span
+    })
+}
+
+// -- Public entry ---------------------------------------------
+
+pub fn discover_check(module: Module) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < len(module.items) {
+        _consider_item(module.items[i], out)
+        i = i + 1
+    }
+    return out
+}

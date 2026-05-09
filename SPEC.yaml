@@ -254,6 +254,15 @@ atlas_self_discovery:
       - record_verifier_version
       - record_proof_hash
       - retroactive_revalidation_on_prover_upgrade
+    staging_pipeline:
+      subtree: compiler/discover/          # discover.hexa + staging.hexa
+      step1_writer: write_staging          # emits atlas.proposed.{date}.n6
+      promote_authority: promote_to_atlas  # deferred — folds proposed → live atlas
+      rationale: |
+        Step 1 of ε self-proof writes verified discoveries to a staging
+        atlas.proposed.{date}.n6 file rather than registering live atlas
+        nodes immediately. Auto-registration (sub 5b) lands once
+        promote_to_atlas() and the retroactive sweep (sub 5e) ship.
 
   verification_timing:
     decision: every_compile_every_function # Sub 5c
