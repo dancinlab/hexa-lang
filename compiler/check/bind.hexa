@@ -10,8 +10,12 @@
 // every identifier currently in visible scope, mirroring resolve.hexa S1).
 //
 // Scope shape (flat, stage0-friendly):
-//   ScopeFrame { defs: [string], def_ids: [DefId] }   — parallel arrays
-//   Scopes     { frames: [ScopeFrame], next_index }   — explicit stack
+//   BindFrame { defs: [string], def_ids: [DefId] }   — parallel arrays
+//   BindScope { frames: [BindFrame], next_index }    — explicit stack
+//
+// NOTE: `scope` is a stage0 reserved keyword (gate/HEXA_RESERVED.md §1a),
+// so neither types nor parameter names use the bare word — types are
+// `BindScope` / `BindFrame` and parameters are spelled `sc`.
 //
 // Pre-pass: every Module.items[*] takes a top-level DefId in frames[0] so
 // fn / struct / enum / let can reference each other freely (forward refs).
@@ -32,13 +36,13 @@ import "./resolve.hexa"
 
 // ── Scope structures ─────────────────────────────────────────
 
-pub struct ScopeFrame {
+pub struct BindFrame {
     defs: [string],
     def_ids: [DefId]
 }
 
-pub struct Scopes {
-    frames: [ScopeFrame],
+pub struct BindScope {
+    frames: [BindFrame],
     next_index: i64
 }
 
@@ -58,21 +62,21 @@ fn _miss_def_id() -> DefId {
 
 // ── Scope helpers ────────────────────────────────────────────
 
-fn _new_scopes() -> Scopes {
-    return Scopes { frames: [], next_index: 0 }
+fn _new_scopes() -> BindScope {
+    return BindScope { frames: [], next_index: 0 }
 }
 
-fn _push_scope(scope: Scopes) -> Scopes {
-    let frame = ScopeFrame { defs: [], def_ids: [] }
-    let mut frames = scope.frames
+fn _push_scope(sc: BindScope) -> BindScope {
+    let frame = BindFrame { defs: [], def_ids: [] }
+    let mut frames = sc.frames
     frames.push(frame)
-    return Scopes { frames: frames, next_index: scope.next_index }
+    return BindScope { frames: frames, next_index: sc.next_index }
 }
 
-fn _pop_scope(scope: Scopes) -> Scopes {
-    let mut frames = scope.frames
+fn _pop_scope(sc: BindScope) -> BindScope {
+    let mut frames = sc.frames
     let n = len(frames)
-    if n == 0 { return scope }
+    if n == 0 { return sc }
     // pop last frame — stage0 array has no `pop` so build a smaller copy.
     let mut next_frames = []
     let mut i = 0
@@ -80,37 +84,37 @@ fn _pop_scope(scope: Scopes) -> Scopes {
         next_frames.push(frames[i])
         i = i + 1
     }
-    return Scopes { frames: next_frames, next_index: scope.next_index }
+    return BindScope { frames: next_frames, next_index: sc.next_index }
 }
 
 // Define `name` in the topmost frame and return the freshly allocated DefId.
 // The caller is responsible for module attribution — DefId.module is filled
 // by the bind() entry point; here we only mint the dense index.
-fn _define(scope: Scopes, name: string, mod_file: string) -> Scopes {
-    let n = len(scope.frames)
-    if n == 0 { return scope }
-    let mut frames = scope.frames
+fn _define(sc: BindScope, name: string, mod_file: string) -> BindScope {
+    let n = len(sc.frames)
+    if n == 0 { return sc }
+    let mut frames = sc.frames
     let top = frames[n - 1]
     let mut new_defs = top.defs
     let mut new_ids = top.def_ids
     new_defs.push(name)
-    new_ids.push(DefId { module: mod_file, index: scope.next_index })
-    frames[n - 1] = ScopeFrame { defs: new_defs, def_ids: new_ids }
-    return Scopes { frames: frames, next_index: scope.next_index + 1 }
+    new_ids.push(DefId { module: mod_file, index: sc.next_index })
+    frames[n - 1] = BindFrame { defs: new_defs, def_ids: new_ids }
+    return BindScope { frames: frames, next_index: sc.next_index + 1 }
 }
 
 // Look up `name` walking the frame stack from innermost to outermost. Returns
 // a DefId with index=-1 on miss so callers can branch without exceptions.
-fn _lookup(scope: Scopes, name: string) -> DefId {
-    let n = len(scope.frames)
+fn _lookup(sc: BindScope, name: string) -> DefId {
+    let n = len(sc.frames)
     let mut i = n - 1
     while i >= 0 {
-        let frame = scope.frames[i]
-        let m = len(frame.defs)
+        let fr = sc.frames[i]
+        let m = len(fr.defs)
         let mut j = 0
         while j < m {
-            if frame.defs[j] == name {
-                return frame.def_ids[j]
+            if fr.defs[j] == name {
+                return fr.def_ids[j]
             }
             j = j + 1
         }
@@ -120,14 +124,14 @@ fn _lookup(scope: Scopes, name: string) -> DefId {
 }
 
 // Collect every visible identifier across all frames — used for did-you-mean.
-fn _all_visible(scope: Scopes) -> [string] {
+fn _all_visible(sc: BindScope) -> [string] {
     let mut out = []
     let mut i = 0
-    while i < len(scope.frames) {
-        let frame = scope.frames[i]
+    while i < len(sc.frames) {
+        let fr = sc.frames[i]
         let mut j = 0
-        while j < len(frame.defs) {
-            out.push(frame.defs[j])
+        while j < len(fr.defs) {
+            out.push(fr.defs[j])
             j = j + 1
         }
         i = i + 1
@@ -137,8 +141,8 @@ fn _all_visible(scope: Scopes) -> [string] {
 
 // Closest-name suggestion within Levenshtein cutoff. Mirrors resolve.hexa
 // _suggest_for but over plain string list rather than AtlasIndex.
-fn _suggest_name(scope: Scopes, name: string, cutoff: i64) -> string {
-    let cands = _all_visible(scope)
+fn _suggest_name(sc: BindScope, name: string, cutoff: i64) -> string {
+    let cands = _all_visible(sc)
     let mut best = ""
     let mut best_d = cutoff + 1
     let mut i = 0
@@ -463,12 +467,12 @@ fn _enum_head(t: string) -> string {
 
 // ── Walker (collect-don't-stop) ──────────────────────────────
 //
-// Returns an updated Scopes (since stage0 has no by-reference structs we
+// Returns an updated BindScope (since stage0 has no by-reference structs we
 // thread state through return values). `out` is an `array` — Diagnostic
 // pushes mutate the underlying buffer the caller passed in.
 
-fn _walk_expr(e: Expr, scope: Scopes, mod_file: string, out: array) -> Scopes {
-    let mut sc = scope
+fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindScope {
+    let mut sc = in_sc
 
     if _is_ident_kind(e.kind) {
         if len(e.text) > 0 && e.text != "_" {
@@ -612,8 +616,8 @@ fn _walk_expr(e: Expr, scope: Scopes, mod_file: string, out: array) -> Scopes {
 //   - LiteralInt/Bool/… : binds nothing (constant compare)
 //   - Ident             : a fresh binder for the whole scrutinee
 //   - EnumPath          : Variant or Variant(arg) — child Idents are binders
-fn _bind_pattern(p: Expr, scope: Scopes, mod_file: string, out: array) -> Scopes {
-    let mut sc = scope
+fn _bind_pattern(p: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindScope {
+    let mut sc = in_sc
 
     if _is_wildcard_kind(p.kind) { return sc }
 
