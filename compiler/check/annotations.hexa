@@ -17,10 +17,12 @@
 //   @discover(kind="P"|"C"|"L"|"E")        — discovery hint, kind required.
 //
 // Multi-error policy (RFC-019 §6): every malformed annotation emits its own
-// diagnostic; we never early-stop. Returns array of Diagnostic.
+// diagnostic; we never early-stop. Returns array of Diagnostic. HX9000 is
+// emitted for every well-formed @grace site (SPEC.yaml ai_native_warn_policy).
 //
 // Diagnostic codes:
 //   HX8010  @law malformed
+//   HX9000  @grace ai-native warn (every well-formed @grace site)
 //   HX9001  @grace expired (already in catalog)
 //   HX9002  @grace malformed
 //   HX9003  @discover malformed
@@ -343,6 +345,20 @@ fn _check_grace(a: Annotation, today: string, out: array) {
         b = diag_arg(b, "until", until_val.text)
         out.push(diag_emit(b))
     }
+
+    // HX9000 ai-native warn (SPEC.yaml opt_out.ai_native_warn_policy):
+    // every well-formed @grace site emits this Warning at compile time so
+    // the bypass is visible at every compile. Reviewer acknowledgement is
+    // enforced at the CI/PR layer (Acked-grace trailer); the compiler just
+    // makes sure the warn is emitted. Multi-error collected alongside HX9001.
+    let mut w = diag_new("HX9000")
+    w = diag_span(w, a.span)
+    w = diag_arg(w, "file", a.span.file)
+    w = diag_arg(w, "line", to_string(a.span.line))
+    w = diag_arg(w, "error_code", code_str)
+    w = diag_arg(w, "until", until_val.text)
+    w = diag_arg(w, "reason", reason_val.text)
+    out.push(diag_emit(w))
 }
 
 fn _check_discover(a: Annotation, out: array) {

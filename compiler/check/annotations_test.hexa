@@ -11,11 +11,14 @@
 //   (a) @law("E = m * c^2")                                  → 0 diags
 //   (b) @law()                                               → 1 HX8010
 //   (c) @grace(HX1042, until="2025-01-01", reason="x")
-//       with today="2026-05-09"                              → 1 HX9001 (expired)
-//   (d) @grace(HX1042, until="2099-12-31", reason="x")       → 0 diags
+//       with today="2026-05-09"                              → HX9001 + HX9000
+//   (d) @grace(HX1042, until="2099-12-31", reason="x")       → 1 HX9000 (warn)
 //   (e) @grace(HX1042)  (missing until/reason)               → 1 HX9002
 //   (f1) @discover(kind="L")                                 → 0 diags
 //   (f2) @discover()                                         → 1 HX9003
+//
+// Note: every well-formed @grace site emits HX9000 (Warning) per
+// SPEC.yaml opt_out.ai_native_warn_policy.
 //
 // Run:
 //   hexa run compiler/check/annotations_test.hexa
@@ -237,19 +240,40 @@ fn main() {
         ok = false
     }
 
-    // (c) 1 diagnostic, HX9001 (expired).
-    if len(diags_c) != 1 {
-        println("FAIL (c): expected 1 diagnostic, got " + to_string(len(diags_c)))
+    // (c) 2 diagnostics: HX9001 (expired) + HX9000 (ai-native warn).
+    if len(diags_c) != 2 {
+        println("FAIL (c): expected 2 diagnostics, got " + to_string(len(diags_c)))
         ok = false
-    } else if diags_c[0].code != "HX9001" {
-        println("FAIL (c): expected HX9001, got " + diags_c[0].code)
-        ok = false
+    } else {
+        if diags_c[0].code != "HX9001" {
+            println("FAIL (c): expected HX9001 at index 0, got " + diags_c[0].code)
+            ok = false
+        }
+        if diags_c[1].code != "HX9000" {
+            println("FAIL (c): expected HX9000 at index 1, got " + diags_c[1].code)
+            ok = false
+        }
     }
 
-    // (d) 0 diagnostics.
-    if len(diags_d) != 0 {
-        println("FAIL (d): expected 0 diagnostics, got " + to_string(len(diags_d)))
+    // (d) 1 diagnostic: HX9000 (ai-native warn) only — well-formed, not expired.
+    if len(diags_d) != 1 {
+        println("FAIL (d): expected 1 diagnostic, got " + to_string(len(diags_d)))
         ok = false
+    } else {
+        if diags_d[0].code != "HX9000" {
+            println("FAIL (d): expected HX9000, got " + diags_d[0].code)
+            ok = false
+        }
+        let dsev = diags_d[0].severity
+        let is_warn = match dsev {
+            Severity::Warning -> true,
+            Severity::Error -> false,
+            Severity::Note -> false
+        }
+        if !is_warn {
+            println("FAIL (d): HX9000 expected severity Warning")
+            ok = false
+        }
     }
 
     // (e) 1 diagnostic, HX9002.
@@ -277,7 +301,7 @@ fn main() {
     }
 
     if ok {
-        println("PASS: 7 cases — 0 / HX8010×1 / HX9001×1 / 0 / HX9002×1 / 0 / HX9003×1.")
+        println("PASS: 7 cases — 0 / HX8010×1 / HX9001+HX9000 / HX9000×1 / HX9002×1 / 0 / HX9003×1.")
     }
     println("══════════════════════════════════════════════")
     if !ok { exit(1) }
