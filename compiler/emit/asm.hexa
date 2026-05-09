@@ -1,0 +1,286 @@
+// HEXA Native Compiler — emit pass: LIR → asm text  [Phase B-ish]
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Serializes a post-codegen LModule into native assembly text (.s file
+// content) suitable for the system assembler (`as`). RFC-018 §3 / §10.
+//
+// Pure-text output. No external assembler invocation — that's the linker
+// pass. Output is deterministic: identical LModule yields identical bytes
+// (so file hashing / cache keys remain stable).
+//
+// Targets dispatched on `module.target`:
+//   arm64-apple-darwin → Mach-O / Apple ARM64 syntax
+//                        labels prefixed with '_', ';' comments,
+//                        __TEXT,__text + __TEXT,__const sections
+//   x86_64-linux-gnu   → ELF / GAS Intel syntax (`.intel_syntax noprefix`)
+//                        bare labels, '#' comments, .text + .rodata sections
+//
+// Public API:
+//   pub fn emit_asm(module: LModule) -> string
+//
+// Constraints (per task brief):
+//   - LIR struct shape must not change (no new fields)
+//   - parser/lexer/IR shapes untouched
+//   - emit only — link is a separate pass
+
+import "../ir/lir.hexa"
+
+// ── Target enum (string-tagged for stage0) ───────────────────
+
+pub let TARGET_DARWIN_ARM64 = "arm64-apple-darwin"
+pub let TARGET_LINUX_X86_64 = "x86_64-linux-gnu"
+
+// ── Operand formatting ──────────────────────────────────────
+
+fn _is_darwin(target: string) -> bool {
+    return target == TARGET_DARWIN_ARM64
+}
+
+fn _label_prefix(target: string) -> string {
+    if _is_darwin(target) { return "_" }
+    return ""
+}
+
+fn _comment_marker(target: string) -> string {
+    if _is_darwin(target) { return " ; " }
+    return " # "
+}
+
+// Apple ARM64 uses bare `x0`, `w0`, `sp`, etc.
+// GAS Intel for x86_64 uses bare `rax`, `eax`, etc. (no `%` with intel_syntax noprefix)
+fn _fmt_reg(target: string, reg: PReg) -> string {
+    return reg.name
+}
+
+fn _fmt_imm(target: string, imm: i64) -> string {
+    if _is_darwin(target) {
+        // Apple ARM64 immediates: `#42`
+        return "#" + to_string(imm)
+    }
+    // Intel x86 immediates: bare integer
+    return to_string(imm)
+}
+
+fn _fmt_mem(target: string, op: LOperand) -> string {
+    if _is_darwin(target) {
+        // Apple ARM64 memory: `[base, #offset]`
+        if op.mem_offset == 0 {
+            return "[" + op.mem_base.name + "]"
+        }
+        return "[" + op.mem_base.name + ", #" + to_string(op.mem_offset) + "]"
+    }
+    // Intel x86 memory: `[base + offset]`
+    if op.mem_offset == 0 {
+        return "[" + op.mem_base.name + "]"
+    }
+    if op.mem_offset > 0 {
+        return "[" + op.mem_base.name + " + " + to_string(op.mem_offset) + "]"
+    }
+    // negative offset → `[base - N]`
+    return "[" + op.mem_base.name + " - " + to_string(0 - op.mem_offset) + "]"
+}
+
+fn _fmt_label(target: string, label: string) -> string {
+    // Labels in branch operands: don't prefix here — caller responsible
+    // for already-prefixed names. For raw symbol refs we add the platform
+    // prefix only if the label is a function-like bare identifier (i.e.
+    // doesn't start with '.' or '_' already).
+    let cs = label.chars()
+    if len(cs) == 0 { return label }
+    let first = cs[0]
+    if first == "." { return label }   // already directive-like
+    if first == "_" { return label }   // already prefixed
+    if _is_darwin(target) { return "_" + label }
+    return label
+}
+
+fn _fmt_operand(target: string, op: LOperand) -> string {
+    if op.kind == "reg"   { return _fmt_reg(target, op.reg) }
+    if op.kind == "imm"   { return _fmt_imm(target, op.imm) }
+    if op.kind == "mem"   { return _fmt_mem(target, op) }
+    if op.kind == "label" { return _fmt_label(target, op.label) }
+    // Unknown kind — emit a placeholder so output is still inspectable.
+    return "<?" + op.kind + "?>"
+}
+
+fn _fmt_args(target: string, args: [LOperand]) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(args) {
+        if i > 0 { out = out + ", " }
+        out = out + _fmt_operand(target, args[i])
+        i = i + 1
+    }
+    return out
+}
+
+// ── Instruction line ────────────────────────────────────────
+
+fn _fmt_instr(target: string, instr: LInstr) -> string {
+    let mut line = "    " + instr.op
+    if len(instr.args) > 0 {
+        line = line + " " + _fmt_args(target, instr.args)
+    }
+    if len(instr.comment) > 0 {
+        line = line + _comment_marker(target) + instr.comment
+    }
+    return line
+}
+
+// ── Section directives ──────────────────────────────────────
+
+fn _text_section_directive(target: string) -> string {
+    if _is_darwin(target) {
+        return ".section __TEXT,__text,regular,pure_instructions"
+    }
+    return ".text"
+}
+
+fn _rodata_section_directive(target: string) -> string {
+    if _is_darwin(target) {
+        return ".section __TEXT,__const"
+    }
+    return ".section .rodata"
+}
+
+fn _bss_section_directive(target: string) -> string {
+    if _is_darwin(target) {
+        return ".section __DATA,__bss"
+    }
+    return ".bss"
+}
+
+fn _globl_directive(target: string, sym: string) -> string {
+    return ".globl " + _label_prefix(target) + sym
+}
+
+fn _func_label(target: string, name: string) -> string {
+    return _label_prefix(target) + name + ":"
+}
+
+// ── Section payload (rodata / bss) ──────────────────────────
+//
+// LSection.bytes is hex-encoded payload (per LIR docstring). For
+// stable, assembler-portable output we emit one `.byte 0xNN, 0xNN, ...`
+// line per 16 bytes. Empty bytes string → just emit the label + align.
+
+fn _hex_pair_to_byte(hex: [string], i: i64) -> string {
+    // returns "0xHH" for the i-th byte (i is byte index, hex is char array)
+    let hi = hex[i * 2]
+    let lo = hex[i * 2 + 1]
+    return "0x" + hi + lo
+}
+
+fn _emit_section_bytes(bytes_hex: string) -> string {
+    let cs = bytes_hex.chars()
+    let total_chars = len(cs)
+    // Drop trailing odd char if any (defensive)
+    let usable = total_chars - (total_chars % 2)
+    let nbytes = usable / 2
+    if nbytes == 0 { return "" }
+    let mut out = ""
+    let mut i = 0
+    while i < nbytes {
+        if i % 16 == 0 {
+            if i > 0 { out = out + "\n" }
+            out = out + "    .byte "
+        } else {
+            out = out + ", "
+        }
+        out = out + _hex_pair_to_byte(cs, i)
+        i = i + 1
+    }
+    out = out + "\n"
+    return out
+}
+
+fn _emit_section(target: string, sec: LSection, header: string) -> string {
+    let mut out = ""
+    out = out + header + "\n"
+    if sec.align > 0 {
+        out = out + "    .p2align " + to_string(sec.align) + "\n"
+    }
+    // Section "name" doubles as a local label inside the section.
+    let sym = sec.name
+    if len(sym) > 0 {
+        out = out + sym + ":\n"
+    }
+    out = out + _emit_section_bytes(sec.bytes)
+    return out
+}
+
+// ── Function emission ───────────────────────────────────────
+
+fn _emit_func(target: string, f: LFunc) -> string {
+    let mut out = ""
+    out = out + _globl_directive(target, f.name) + "\n"
+    if _is_darwin(target) {
+        // Apple/Mach-O: .p2align 2 (4-byte) for ARM64
+        out = out + "    .p2align 2\n"
+    } else {
+        // x86_64 ELF: 16-byte function alignment is the System V default
+        out = out + "    .p2align 4\n"
+    }
+    out = out + _func_label(target, f.name) + "\n"
+    let mut i = 0
+    while i < len(f.instrs) {
+        out = out + _fmt_instr(target, f.instrs[i]) + "\n"
+        i = i + 1
+    }
+    return out
+}
+
+// ── Public API ──────────────────────────────────────────────
+
+pub fn emit_asm(module: LModule) -> string {
+    let target = module.target
+    let mut out = ""
+
+    // ---- Header (deterministic, no timestamps) ----
+    out = out + _comment_marker(target).trim() + " hexa-lang emit pass — target=" + target + "\n"
+    out = out + _comment_marker(target).trim() + " source: " + module.file + "\n"
+
+    // x86_64 GAS: select Intel syntax once at the top (RFC-018 §3 note).
+    if !_is_darwin(target) {
+        out = out + ".intel_syntax noprefix\n"
+    }
+
+    // ---- .text ----
+    out = out + _text_section_directive(target) + "\n"
+
+    let mut fi = 0
+    while fi < len(module.funcs) {
+        let f = module.funcs[fi]
+        // Skip funcs that don't match module.target (defensive — LIR
+        // is target-specific, but a mixed module would still be valid
+        // under the struct shape).
+        if f.target == target {
+            out = out + _emit_func(target, f)
+        }
+        fi = fi + 1
+    }
+
+    // ---- .rodata ----
+    if len(module.rodata) > 0 {
+        let header_ro = _rodata_section_directive(target)
+        let mut ri = 0
+        while ri < len(module.rodata) {
+            out = out + _emit_section(target, module.rodata[ri], header_ro)
+            ri = ri + 1
+        }
+    }
+
+    // ---- .bss ----
+    if len(module.bss) > 0 {
+        let header_bss = _bss_section_directive(target)
+        let mut bi = 0
+        while bi < len(module.bss) {
+            out = out + _emit_section(target, module.bss[bi], header_bss)
+            bi = bi + 1
+        }
+    }
+
+    return out
+}

@@ -1,0 +1,286 @@
+// HEXA Native Compiler — emit pass: LIR → asm text smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Builds a tiny LModule containing one function `id` (an identity-style
+// function with mov / add / ret + a trivial prologue/epilogue stand-in)
+// for each target, runs `emit_asm`, prints the first 30 lines, and
+// asserts a few invariants:
+//   - mac:   contains "_id:"
+//   - linux: contains "id:"
+//   - both:  contains "ret"  and ".globl"
+//
+// Both targets exercised in the same run; exits 0 on PASS, 1 on FAIL.
+//
+// Run:
+//   hexa run compiler/emit/asm_test.hexa
+
+import "../ir/lir.hexa"
+import "./asm.hexa"
+
+// ── Substring search (stage0 lacks string.contains on plain string) ─
+
+fn _contains(hay: string, needle: string) -> bool {
+    let h = hay.chars()
+    let n = needle.chars()
+    let hn = len(h)
+    let nn = len(n)
+    if nn == 0 { return true }
+    if nn > hn { return false }
+    let mut i = 0
+    // i + nn must fit within hn → use strict-less form (no `<=`).
+    while i + nn < hn + 1 {
+        let mut j = 0
+        let mut ok = true
+        while j < nn {
+            if h[i + j] != n[j] {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Line counting + first-N-lines preview ───────────────────
+
+fn _count_lines(s: string) -> i64 {
+    let cs = s.chars()
+    let total = len(cs)
+    let mut n = 0
+    let mut i = 0
+    while i < total {
+        if cs[i] == "\n" { n = n + 1 }
+        i = i + 1
+    }
+    // Final line without trailing newline still counts.
+    if total > 0 {
+        let last = cs[total - 1]
+        if last != "\n" { n = n + 1 }
+    }
+    return n
+}
+
+fn _print_first_n_lines(s: string, n: i64) {
+    let cs = s.chars()
+    let total = len(cs)
+    let mut i = 0
+    let mut line_no = 0
+    let mut buf = ""
+    while i < total && line_no < n {
+        let c = cs[i]
+        if c == "\n" {
+            println(buf)
+            buf = ""
+            line_no = line_no + 1
+        } else {
+            buf = buf + c
+        }
+        i = i + 1
+    }
+    if line_no < n && len(buf) > 0 {
+        println(buf)
+    }
+}
+
+// ── LIR construction helpers ────────────────────────────────
+
+fn _reg(name: string) -> PReg {
+    return PReg { name: name, kind: "gpr" }
+}
+
+fn _empty_reg() -> PReg {
+    return PReg { name: "", kind: "" }
+}
+
+fn _op_reg(name: string) -> LOperand {
+    return LOperand {
+        kind: "reg",
+        reg: _reg(name),
+        imm: 0,
+        mem_base: _empty_reg(),
+        mem_offset: 0,
+        label: ""
+    }
+}
+
+fn _op_imm(v: i64) -> LOperand {
+    return LOperand {
+        kind: "imm",
+        reg: _empty_reg(),
+        imm: v,
+        mem_base: _empty_reg(),
+        mem_offset: 0,
+        label: ""
+    }
+}
+
+fn _instr2(op: string, a: LOperand, b: LOperand, comment: string) -> LInstr {
+    let mut args = []
+    args.push(a)
+    args.push(b)
+    return LInstr { op: op, args: args, comment: comment }
+}
+
+fn _instr0(op: string, comment: string) -> LInstr {
+    let args = []
+    return LInstr { op: op, args: args, comment: comment }
+}
+
+// ── Build an `id` function for each target ──────────────────
+
+// arm64-apple-darwin: AAPCS64 — arg in x0, return in x0.
+//   _id:
+//     mov x0, x0       ; identity
+//     add x0, x0, #0   ; no-op add (prologue stand-in)
+//     ret              ; epilogue
+fn _instr_arm_add() -> LInstr {
+    let mut args = []
+    args.push(_op_reg("x0"))
+    args.push(_op_reg("x0"))
+    args.push(_op_imm(0))
+    return LInstr { op: "add", args: args, comment: "no-op add (prologue stand-in)" }
+}
+
+fn _build_func_arm64() -> LFunc {
+    let mut instrs = []
+    instrs.push(_instr2("mov", _op_reg("x0"), _op_reg("x0"), "identity"))
+    instrs.push(_instr_arm_add())
+    instrs.push(_instr0("ret", "epilogue"))
+    return LFunc {
+        name: "id",
+        target: TARGET_DARWIN_ARM64,
+        instrs: instrs,
+        frame_size: 0,
+        callee_saved: []
+    }
+}
+
+// x86_64-linux-gnu: System V — arg in rdi, return in rax.
+//   id:
+//     mov rax, rdi   # identity
+//     add rax, 0     # no-op add (prologue stand-in)
+//     ret            # epilogue
+fn _build_func_x86() -> LFunc {
+    let mut instrs = []
+    instrs.push(_instr2("mov", _op_reg("rax"), _op_reg("rdi"), "identity"))
+    instrs.push(_instr2("add", _op_reg("rax"), _op_imm(0), "no-op add (prologue stand-in)"))
+    instrs.push(_instr0("ret", "epilogue"))
+    return LFunc {
+        name: "id",
+        target: TARGET_LINUX_X86_64,
+        instrs: instrs,
+        frame_size: 0,
+        callee_saved: []
+    }
+}
+
+// ── Module builders ─────────────────────────────────────────
+
+fn _build_module(target: string, f: LFunc) -> LModule {
+    let mut funcs = []
+    funcs.push(f)
+    return LModule {
+        file: "emit_smoke.hexa",
+        target: target,
+        funcs: funcs,
+        rodata: [],
+        bss: []
+    }
+}
+
+// ── Per-target driver ───────────────────────────────────────
+
+fn _run_target(label: string, target: string, expect_label: string) -> bool {
+    println("")
+    println("── " + label + " (" + target + ") ──")
+
+    let mut f = _build_func_arm64()
+    if target == TARGET_LINUX_X86_64 { f = _build_func_x86() }
+    let m = _build_module(target, f)
+
+    let asm = emit_asm(m)
+    let n_lines = _count_lines(asm)
+    println("  emit_asm output: " + to_string(n_lines) + " lines, " +
+            to_string(len(asm.chars())) + " bytes")
+    println("  first 30 lines:")
+    _print_first_n_lines(asm, 30)
+
+    let mut ok = true
+
+    if !_contains(asm, expect_label) {
+        println("  FAIL: missing expected label `" + expect_label + "`")
+        ok = false
+    } else {
+        println("  ok: contains `" + expect_label + "`")
+    }
+
+    if !_contains(asm, "ret") {
+        println("  FAIL: missing `ret`")
+        ok = false
+    } else {
+        println("  ok: contains `ret`")
+    }
+
+    if !_contains(asm, ".globl") {
+        println("  FAIL: missing `.globl` directive")
+        ok = false
+    } else {
+        println("  ok: contains `.globl`")
+    }
+
+    return ok
+}
+
+// ── Determinism check (same input → same bytes) ─────────────
+
+fn _check_deterministic(target: string) -> bool {
+    let mut f = _build_func_arm64()
+    if target == TARGET_LINUX_X86_64 { f = _build_func_x86() }
+    let m1 = _build_module(target, f)
+    let m2 = _build_module(target, f)
+    let s1 = emit_asm(m1)
+    let s2 = emit_asm(m2)
+    if s1 == s2 {
+        println("  ok: deterministic (" + target + ")")
+        return true
+    }
+    println("  FAIL: non-deterministic output for " + target)
+    return false
+}
+
+// ── Main ────────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Emit (LIR→asm) Smoke Test")
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+
+    let ok_mac = _run_target("arm64 / apple-darwin", TARGET_DARWIN_ARM64, "_id:")
+    if !ok_mac { ok = false }
+
+    let ok_linux = _run_target("x86_64 / linux-gnu", TARGET_LINUX_X86_64, "id:")
+    if !ok_linux { ok = false }
+
+    println("")
+    println("── determinism ──")
+    if !_check_deterministic(TARGET_DARWIN_ARM64) { ok = false }
+    if !_check_deterministic(TARGET_LINUX_X86_64) { ok = false }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: emit_asm produces expected text for both targets.")
+    } else {
+        println("FAIL: emit_asm contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+    exit(0)
+}
