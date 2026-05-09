@@ -1,0 +1,423 @@
+// HEXA Native Compiler — Discovery promotion (RFC-017 §5: ε self-proof) — Step 2
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read, fs_write]
+//
+// Second step of atlas auto-discovery (RFC-017 decision 5b — fully_automatic).
+// Folds `atlas.proposed.{date}.n6` staging files (emitted by
+// compiler/discover/staging.hexa::write_staging) into the live atlas as a
+// fresh `atlas.append.{today}.n6` shard, applying the SPEC.yaml decision 5d
+// conflict-resolution rules:
+//
+//   (a) FINGERPRINT DEDUP — same canonical proof_hash as an already-registered
+//       L node:  the proposal is MERGED as an alias (continuation line on the
+//       new append-shard pointing at the existing L). No new L body.
+//   (b) ID FIRST-WINS — proposal's L name collides with an existing L whose
+//       proof_hash is different: the proposal is REJECTED with a warning, but
+//       the rest of the staging file continues to promote.
+//   (c) NEW   — neither id nor proof_hash conflict: the proposal is PROMOTED
+//       as a fresh @L record on the append-shard with full provenance
+//       (proof_hash, verifier_version, normalized_form, params).
+//
+// SCOPE
+//   This is a CLI/tool, NOT a check pass. Nothing here is invoked from the
+//   normal compile loop — `promote_to_atlas` only runs when an explicit
+//   driver calls it (e.g. `hexa atlas promote …`). The retroactive sweep of
+//   §5e (tombstone integration after prover upgrade) is DEFERRED — this
+//   module only handles the forward-promote half of the pipeline.
+//
+// OUTPUT FILES
+//   - atlas.append.{today}.n6   (under `atlas_root`, ISO-8601 date stamp)
+//   - /tmp/_promote_manifest.{date}.txt   (counts: seen / new / merged /
+//                                           rejected, plus per-proposal
+//                                           disposition lines)
+//
+// Public surface:
+//   pub fn promote_to_atlas(staging_path: string, atlas_root: string) -> i64
+//
+// Catalog/diagnostic strings: ENGLISH ONLY (RFC-019 §6 + repo policy).
+
+import "../atlas/parser.hexa"
+import "../atlas/merger.hexa"
+
+// -- ISO-8601 (date only) --------------------------------------
+fn _today_utc() -> string {
+    let s = exec("date -u +%Y-%m-%d").trim()
+    if len(s) == 0 { return "unknown-date" }
+    return s
+}
+
+fn _iso_utc_now() -> string {
+    let s = exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+    return s
+}
+
+// -- Tiny string utilities -------------------------------------
+
+fn _is_ws_char(c: string) -> bool {
+    return c == " " || c == "\t"
+}
+
+fn _ltrim(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if !_is_ws_char(c) { break }
+        i = i + 1
+    }
+    return s.substring(i, n)
+}
+
+fn _rtrim(s: string) -> string {
+    let n = len(s)
+    let mut i = n
+    while i > 0 {
+        let c = s.substring(i - 1, i)
+        if !_is_ws_char(c) && c != "\n" && c != "\r" { break }
+        i = i - 1
+    }
+    return s.substring(0, i)
+}
+
+fn _starts_with(s: string, prefix: string) -> bool {
+    let m = len(prefix)
+    if len(s) < m { return false }
+    return s.substring(0, m) == prefix
+}
+
+// -- Staging file line parser ----------------------------------
+// We only need to recover four pieces of state per proposal block:
+//   kind       — 1 char ("L"|"P"|"C"|"E")
+//   fn_name    — string between "[" and "]"
+//   proof_hash — 32-hex tail after "@ "
+//
+// The staging format (see compiler/discover/staging.hexa) is:
+//   L[<fn_name>] @ <proof_hash>
+//     defined_at: <span.file>:<span.line>
+//     normalized_form: <s-expr>
+//     params: <sorted,types>
+//     verifier: <pinned version>
+// Comment lines start with "#" and are skipped.
+
+pub struct StagingProposal {
+    kind: string,
+    fn_name: string,
+    proof_hash: string,
+    defined_at: string,
+    normalized_form: string,
+    params: string,
+    verifier: string
+}
+
+fn _empty_staging() -> StagingProposal {
+    return StagingProposal {
+        kind: "",
+        fn_name: "",
+        proof_hash: "",
+        defined_at: "",
+        normalized_form: "",
+        params: "",
+        verifier: ""
+    }
+}
+
+// True if `line` looks like a staging header (e.g. "L[comm] @ abc123…").
+fn _is_staging_header(line: string) -> bool {
+    if len(line) < 4 { return false }
+    let c0 = line.substring(0, 1)
+    if c0 != "L" && c0 != "P" && c0 != "C" && c0 != "E" { return false }
+    if line.substring(1, 2) != "[" { return false }
+    return true
+}
+
+// Pulls out the kind + fn_name + proof_hash from a header line.
+fn _parse_header(line: string) -> StagingProposal {
+    let mut p = _empty_staging()
+    p.kind = line.substring(0, 1)
+    let n = len(line)
+    let mut i = 2
+    while i < n {
+        let c = line.substring(i, i + 1)
+        if c == "]" { break }
+        i = i + 1
+    }
+    if i >= n { return p }
+    p.fn_name = line.substring(2, i)
+    let mut j = i + 1
+    while j < n {
+        let c = line.substring(j, j + 1)
+        if c != " " && c != "@" && c != "\t" { break }
+        j = j + 1
+    }
+    p.proof_hash = _rtrim(line.substring(j, n))
+    return p
+}
+
+// Parse the staging file into a list of StagingProposal records.
+pub fn parse_staging_file(path: string) -> array {
+    let out = []
+    let text = read_file(path)
+    if len(text) == 0 { return out }
+    let lines = text.split("\n")
+    let n_lines = len(lines)
+    let mut have_cur = false
+    let mut cur = _empty_staging()
+    let mut i = 0
+    while i < n_lines {
+        let line = lines[i]
+        if len(line) == 0 { i = i + 1; continue }
+        let c0 = line.substring(0, 1)
+        if c0 == "#" { i = i + 1; continue }
+        if _is_staging_header(line) {
+            if have_cur { out.push(cur) }
+            cur = _parse_header(line)
+            have_cur = true
+            i = i + 1
+            continue
+        }
+        if have_cur {
+            let stripped = _ltrim(line)
+            if _starts_with(stripped, "defined_at:") {
+                cur.defined_at = _ltrim(stripped.substring(len("defined_at:"), len(stripped)))
+            } else if _starts_with(stripped, "normalized_form:") {
+                cur.normalized_form = _ltrim(stripped.substring(len("normalized_form:"), len(stripped)))
+            } else if _starts_with(stripped, "params:") {
+                cur.params = _ltrim(stripped.substring(len("params:"), len(stripped)))
+            } else if _starts_with(stripped, "verifier:") {
+                cur.verifier = _ltrim(stripped.substring(len("verifier:"), len(stripped)))
+            }
+        }
+        i = i + 1
+    }
+    if have_cur { out.push(cur) }
+    return out
+}
+
+// -- Atlas-side proof_hash extractor ---------------------------
+// An existing L node may carry its proof_hash on a "proof_hash:"
+// continuation line emitted by an earlier promote. We probe the raw
+// text; absence means "no fingerprint stored yet" and dedup will
+// fail-open (treated as a non-match, i.e. the proposal goes through
+// the id-collision branch instead).
+fn _extract_existing_proof_hash(raw: string) -> string {
+    let lines = raw.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let s = _ltrim(lines[i])
+        if _starts_with(s, "proof_hash:") {
+            return _ltrim(s.substring(len("proof_hash:"), len(s)))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Find an L node whose stored proof_hash matches `hash`; returns the
+// matching node's id ("" if no match).
+fn _find_l_by_hash(idx: AtlasIndex, hash: string) -> string {
+    if len(hash) == 0 { return "" }
+    let mut i = 0
+    while i < len(idx.l_nodes) {
+        let n = idx.l_nodes[i]
+        let h = _extract_existing_proof_hash(n.raw)
+        if len(h) > 0 && h == hash { return n.id }
+        i = i + 1
+    }
+    return ""
+}
+
+// True iff an L node with `id` exists in the index.
+fn _has_l_by_id(idx: AtlasIndex, id: string) -> bool {
+    let mut i = 0
+    while i < len(idx.l_nodes) {
+        if idx.l_nodes[i].id == id { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// -- Append-shard emission -------------------------------------
+
+fn _append_shard_path(atlas_root: string, today: string) -> string {
+    return atlas_root + "/atlas.append." + today + ".n6"
+}
+
+fn _manifest_path(today: string) -> string {
+    return "/tmp/_promote_manifest." + today + ".txt"
+}
+
+// Render a NEW @L record with full provenance.
+fn _render_new_l(p: StagingProposal, parts: array) {
+    parts.push("@L ")
+    parts.push(p.fn_name)
+    parts.push(" :: discovered\n  proof_hash: ")
+    parts.push(p.proof_hash)
+    parts.push("\n  verifier_version: ")
+    parts.push(p.verifier)
+    parts.push("\n  normalized_form: ")
+    parts.push(p.normalized_form)
+    parts.push("\n  params: ")
+    parts.push(p.params)
+    parts.push("\n  defined_at: ")
+    parts.push(p.defined_at)
+    parts.push("\n")
+}
+
+// Render a MERGE alias record — a small @L block whose body points at
+// the canonical existing L. We still emit a node so the line survives
+// the atlas parser; downstream resolves to the alias_of target.
+fn _render_alias(p: StagingProposal, target_id: string, parts: array) {
+    parts.push("@L ")
+    parts.push(p.fn_name)
+    parts.push(" :: discovered_alias\n  alias_of: ")
+    parts.push(target_id)
+    parts.push("\n  proof_hash: ")
+    parts.push(p.proof_hash)
+    parts.push("\n  verifier_version: ")
+    parts.push(p.verifier)
+    parts.push("\n")
+}
+
+// -- Manifest emission -----------------------------------------
+
+fn _render_manifest(seen: i64, promoted: i64, merged: i64, rejected: i64,
+                    dispositions: array, staging_path: string,
+                    append_path: string, today: string) -> string {
+    let parts = []
+    parts.push("# hexa atlas promote manifest — ")
+    parts.push(_iso_utc_now())
+    parts.push("\n# staging: ")
+    parts.push(staging_path)
+    parts.push("\n# append:  ")
+    parts.push(append_path)
+    parts.push("\nproposals_seen: ")
+    parts.push(to_string(seen))
+    parts.push("\npromoted_new:  ")
+    parts.push(to_string(promoted))
+    parts.push("\nmerged_alias:  ")
+    parts.push(to_string(merged))
+    parts.push("\nrejected_collision: ")
+    parts.push(to_string(rejected))
+    parts.push("\n\n# dispositions (one per proposal):\n")
+    let mut i = 0
+    while i < len(dispositions) {
+        parts.push(to_string(dispositions[i]))
+        parts.push("\n")
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// -- Public API ------------------------------------------------
+
+// promote_to_atlas — fold a staging file into the live atlas.
+//
+//   staging_path  path to atlas.proposed.{date}.n6
+//   atlas_root    directory holding atlas.n6 + atlas.append.*.n6 (the
+//                 promoted shard is written here as
+//                 atlas.append.{today}.n6)
+//
+// Returns 0 on success; non-zero if the staging file can't be read.
+// Per-proposal collisions are NOT fatal — they are logged in the
+// manifest under `rejected_collision`.
+pub fn promote_to_atlas(staging_path: string, atlas_root: string) -> i64 {
+    if !file_exists(staging_path) {
+        println("promote_to_atlas: staging file not found: " + staging_path)
+        return 2
+    }
+
+    let proposals = parse_staging_file(staging_path)
+    let idx = load_atlas(atlas_root)
+    let today = _today_utc()
+    let append_path = _append_shard_path(atlas_root, today)
+
+    // Track ids and hashes accumulated in THIS promote run so two
+    // proposals in the same staging file dedup against each other.
+    let run_ids = {}
+    let run_hashes = {}
+
+    let body_parts = []
+    body_parts.push("# auto-generated by hexa atlas promote — do not edit\n")
+    body_parts.push("# generated_at: ")
+    body_parts.push(_iso_utc_now())
+    body_parts.push("\n# staging_source: ")
+    body_parts.push(staging_path)
+    body_parts.push("\n\n")
+
+    let dispositions = []
+    let mut promoted: i64 = 0
+    let mut merged: i64 = 0
+    let mut rejected: i64 = 0
+    let seen: i64 = len(proposals)
+
+    let mut i = 0
+    while i < len(proposals) {
+        let p = proposals[i]
+        // Only L-kind discoveries promote in this phase. P/C/E proposals
+        // pass through unmolested in a future task; for now they are
+        // recorded as rejected with a "kind not supported" reason.
+        if p.kind != "L" {
+            rejected = rejected + 1
+            dispositions.push("REJECT  " + p.kind + "[" + p.fn_name + "] reason=unsupported_kind hash=" + p.proof_hash)
+            i = i + 1
+            continue
+        }
+
+        // Step 1 — fingerprint dedup against existing atlas + this run.
+        let existing_canonical = _find_l_by_hash(idx, p.proof_hash)
+        let same_run_canonical = if has_key(run_hashes, p.proof_hash) { to_string(run_hashes[p.proof_hash]) } else { "" }
+        let canonical = if len(existing_canonical) > 0 { existing_canonical } else { same_run_canonical }
+        if len(canonical) > 0 && canonical != p.fn_name {
+            _render_alias(p, canonical, body_parts)
+            merged = merged + 1
+            dispositions.push("MERGE   L[" + p.fn_name + "] alias_of=" + canonical + " hash=" + p.proof_hash)
+            run_ids[p.fn_name] = "1"
+            i = i + 1
+            continue
+        }
+
+        // Step 2 — id first-wins. Existing L with the same id but a
+        // different proof_hash (or no stored hash) → reject the proposal.
+        let id_taken = _has_l_by_id(idx, p.fn_name) || has_key(run_ids, p.fn_name)
+        if id_taken && len(canonical) == 0 {
+            rejected = rejected + 1
+            dispositions.push("REJECT  L[" + p.fn_name + "] reason=id_collision_first_wins hash=" + p.proof_hash)
+            println("promote_to_atlas: warning — id collision on L[" + p.fn_name + "]; first-wins, proposal rejected.")
+            i = i + 1
+            continue
+        }
+
+        // Step 3 — proposal is fresh; emit a NEW @L record.
+        _render_new_l(p, body_parts)
+        promoted = promoted + 1
+        dispositions.push("PROMOTE L[" + p.fn_name + "] hash=" + p.proof_hash)
+        run_ids[p.fn_name] = "1"
+        run_hashes[p.proof_hash] = p.fn_name
+        i = i + 1
+    }
+
+    // Emit the append shard ONLY if we promoted or merged something —
+    // a no-op promote shouldn't litter the atlas root with empty files.
+    if promoted + merged > 0 {
+        write_file(append_path, body_parts.join(""))
+    }
+
+    // Manifest is always written so dashboards can chart "rejected"
+    // even when nothing landed.
+    let manifest_path = _manifest_path(today)
+    let manifest = _render_manifest(seen, promoted, merged, rejected,
+                                    dispositions, staging_path,
+                                    append_path, today)
+    write_file(manifest_path, manifest)
+
+    println("promote_to_atlas: seen=" + to_string(seen) +
+            " new=" + to_string(promoted) +
+            " merged=" + to_string(merged) +
+            " rejected=" + to_string(rejected))
+    println("promote_to_atlas: manifest=" + manifest_path)
+    if promoted + merged > 0 {
+        println("promote_to_atlas: append=" + append_path)
+    }
+    return 0
+}

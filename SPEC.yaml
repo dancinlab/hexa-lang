@@ -373,14 +373,25 @@ atlas_self_discovery:
       - record_proof_hash
       - retroactive_revalidation_on_prover_upgrade
     staging_pipeline:
-      subtree: compiler/discover/          # discover.hexa + staging.hexa
+      subtree: compiler/discover/          # discover.hexa + staging.hexa + promote.hexa
       step1_writer: write_staging          # emits atlas.proposed.{date}.n6
-      promote_authority: promote_to_atlas  # deferred — folds proposed → live atlas
+      step2_promoter: promote_to_atlas     # ACTIVE — folds proposed → live atlas
+      step2_module: compiler/discover/promote.hexa
+      manifest_path_convention: /tmp/_promote_manifest.{date}.txt   # date = UTC YYYY-MM-DD
+      conflict_rules_applied:
+        - fingerprint_dedup_merges_as_alias        # sub 5d
+        - id_first_wins_rejects_with_warning       # sub 5d
+        - new_emits_full_proof_hash_record         # sub 5d
       rationale: |
         Step 1 of ε self-proof writes verified discoveries to a staging
-        atlas.proposed.{date}.n6 file rather than registering live atlas
-        nodes immediately. Auto-registration (sub 5b) lands once
-        promote_to_atlas() and the retroactive sweep (sub 5e) ship.
+        atlas.proposed.{date}.n6 file. Step 2 (promote_to_atlas) is now
+        ACTIVE: invoked explicitly as a CLI/tool, it loads the live atlas
+        index, applies decision 5d conflict resolution per proposal, and
+        emits a fresh atlas.append.{today}.n6 shard plus a manifest at
+        /tmp/_promote_manifest.{date}.txt summarising counts (seen /
+        promoted_new / merged_alias / rejected_collision) and per-proposal
+        dispositions. The retroactive sweep (sub 5e — tombstone integration
+        on prover upgrade) remains deferred.
 
   verification_timing:
     decision: every_compile_every_function # Sub 5c

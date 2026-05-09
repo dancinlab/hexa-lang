@@ -1,0 +1,336 @@
+// HEXA Native Compiler — Atlas promote smoke test (RFC-017 §5: ε self-proof)
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read, fs_write]
+//
+// Drives compiler/discover/promote.hexa::promote_to_atlas through the four
+// canonical decision-5d cases:
+//
+//   (a) NEW                   comm with proof_hash=abc123…  →  PROMOTED
+//   (b) DUPLICATE FINGERPRINT assoc with proof_hash that matches an
+//                             existing fixture atlas L node →  MERGED (alias)
+//   (c) ID COLLISION          fixture-existing L name re-used with a
+//                             different proof_hash             →  REJECTED
+//   (d) NEW                   distinct fn + distinct hash      →  PROMOTED
+//
+// FIXTURE ATLAS
+//   We fabricate a fresh atlas root under /tmp/_promote_smoke_atlas/ rather
+//   than touching the live ~/core/nexus/n6/ directory. The fixture's L
+//   nodes mirror compiler/atlas/embedded.gen.hexa but with explicit
+//   `proof_hash:` continuation lines so _find_l_by_hash can resolve them.
+//
+// CONTRACT
+//   After promote_to_atlas returns 0, the manifest at
+//   /tmp/_promote_manifest.{date}.txt must report:
+//        proposals_seen:     4
+//        promoted_new:       2
+//        merged_alias:       1
+//        rejected_collision: 1
+//
+// Run:
+//   hexa run compiler/discover/promote_smoke.hexa
+
+import "./promote.hexa"
+
+// ----------------------------------------------------------------
+// Fixture atlas paths
+// ----------------------------------------------------------------
+
+let FIXTURE_ATLAS_ROOT: string = "/tmp/_promote_smoke_atlas"
+let FIXTURE_ATLAS_FILE: string = "/tmp/_promote_smoke_atlas/atlas.n6"
+let FIXTURE_STAGING:    string = "/tmp/_promote_smoke_staging.n6"
+
+// Known proof_hash slots — the fixture L node "addition-commutative" stores
+// EXISTING_HASH; the staging proposal (b) re-uses it to trigger MERGE.
+let EXISTING_HASH: string = "ddddccccbbbbaaaa9999888877776666"
+let HASH_NEW_A:    string = "abc123abc123abc123abc123abc12300"   // (a) new
+let HASH_COLLIDE:  string = "def456def456def456def456def45600"   // (c) collision
+let HASH_NEW_D:    string = "1111222233334444555566667777aaaa"   // (d) new
+
+// ----------------------------------------------------------------
+// Tiny helpers (avoid pulling in compiler/atlas/* directly; we just
+// emit raw .n6 text and let promote_to_atlas->load_atlas read it).
+// ----------------------------------------------------------------
+
+fn _mkdir_p(path: string) {
+    exec("mkdir -p '" + path + "'")
+}
+
+fn _rm_rf(path: string) {
+    exec("rm -rf '" + path + "'")
+}
+
+fn _contains(haystack: string, needle: string) -> bool {
+    let n = len(haystack)
+    let m = len(needle)
+    if m == 0 { return true }
+    if m > n { return false }
+    let mut i = 0
+    while i + m <= n {
+        if haystack.substring(i, i + m) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _today_utc() -> string {
+    let s = exec("date -u +%Y-%m-%d").trim()
+    if len(s) == 0 { return "unknown-date" }
+    return s
+}
+
+// ----------------------------------------------------------------
+// Build the fixture atlas (mirrors embedded.gen.hexa with proof_hash
+// continuation lines on L nodes).
+// ----------------------------------------------------------------
+
+fn _write_fixture_atlas() {
+    _rm_rf(FIXTURE_ATLAS_ROOT)
+    _mkdir_p(FIXTURE_ATLAS_ROOT)
+    let parts = []
+    parts.push("# fixture atlas for promote_smoke — DO NOT use as live atlas\n")
+    parts.push("@P alpha :: foundation [11*]\n  -> beta\n")
+    parts.push("@P beta :: foundation [11*]\n  -> gamma\n")
+    parts.push("@P gamma :: foundation [11*]\n")
+    parts.push("@C alpha-beta = alpha + beta :: foundation\n")
+    parts.push("@C beta-gamma = beta + gamma :: foundation\n")
+    parts.push("@L addition-commutative :: foundation\n")
+    parts.push("  proof_hash: ")
+    parts.push(EXISTING_HASH)
+    parts.push("\n  \"for all a,b: a + b == b + a\"\n")
+    parts.push("@L multiplication-associative :: foundation\n")
+    parts.push("  \"for all a,b,c: (a*b)*c == a*(b*c)\"\n")
+    parts.push("@E invalid-state :: bridge\n")
+    parts.push("  \"marker for E-kind in the fixture\"\n")
+    write_file(FIXTURE_ATLAS_FILE, parts.join(""))
+}
+
+// ----------------------------------------------------------------
+// Build the staging file (4 proposals).
+// ----------------------------------------------------------------
+
+fn _emit_block(parts: array, kind: string, fn_name: string, hash: string,
+               normalized_form: string, params: string) {
+    parts.push(kind)
+    parts.push("[")
+    parts.push(fn_name)
+    parts.push("] @ ")
+    parts.push(hash)
+    parts.push("\n  defined_at: smoke_fixture.hexa:1")
+    parts.push("\n  normalized_form: ")
+    parts.push(normalized_form)
+    parts.push("\n  params: ")
+    parts.push(params)
+    parts.push("\n  verifier: hexa-prover-v0\n")
+}
+
+fn _write_fixture_staging() {
+    let parts = []
+    parts.push("# auto-generated by promote_smoke — do not edit\n")
+    parts.push("# generated_at: 2026-05-09T00:00:00Z\n")
+    parts.push("# verifier_version: hexa-prover-v0\n")
+    parts.push("# proposal_count: 4\n\n")
+
+    // (a) NEW — fresh fn name, fresh hash.
+    _emit_block(parts, "L", "comm", HASH_NEW_A,
+                "(== (+ a b) (+ a b))", "Int,Int")
+    // (b) DUPLICATE FINGERPRINT — different fn name BUT same hash as the
+    //     existing addition-commutative L → MERGE alias.
+    _emit_block(parts, "L", "assoc", EXISTING_HASH,
+                "(== (+ a b) (+ b a))", "Int,Int")
+    // (c) ID COLLISION — fn name re-uses an existing L id with a DIFFERENT
+    //     hash → REJECT (first-wins).
+    _emit_block(parts, "L", "addition-commutative", HASH_COLLIDE,
+                "(== a a)", "Int")
+    // (d) NEW — distinct fn name, distinct hash.
+    _emit_block(parts, "L", "double", HASH_NEW_D,
+                "(== (* 2 x) (+ x x))", "Int")
+
+    write_file(FIXTURE_STAGING, parts.join(""))
+}
+
+// ----------------------------------------------------------------
+// Manifest reader — parse the four counter lines emitted by
+// promote.hexa::_render_manifest.
+// ----------------------------------------------------------------
+
+pub struct ManifestCounts {
+    seen: i64,
+    promoted: i64,
+    merged: i64,
+    rejected: i64
+}
+
+fn _digit_val(c: string) -> i64 {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return -1
+}
+
+fn _to_int(s: string) -> i64 {
+    let n = len(s)
+    let mut i = 0
+    let mut v: i64 = 0
+    while i < n {
+        let d = _digit_val(s.substring(i, i + 1))
+        if d >= 0 { v = v * 10 + d }
+        i = i + 1
+    }
+    return v
+}
+
+fn _starts_with(s: string, prefix: string) -> bool {
+    let m = len(prefix)
+    if len(s) < m { return false }
+    return s.substring(0, m) == prefix
+}
+
+fn _ltrim(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c != " " && c != "\t" { break }
+        i = i + 1
+    }
+    return s.substring(i, n)
+}
+
+fn _parse_counts(text: string) -> ManifestCounts {
+    let mut c = ManifestCounts { seen: -1, promoted: -1, merged: -1, rejected: -1 }
+    let lines = text.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        if _starts_with(line, "proposals_seen:") {
+            c.seen = _to_int(_ltrim(line.substring(len("proposals_seen:"), len(line))))
+        } else if _starts_with(line, "promoted_new:") {
+            c.promoted = _to_int(_ltrim(line.substring(len("promoted_new:"), len(line))))
+        } else if _starts_with(line, "merged_alias:") {
+            c.merged = _to_int(_ltrim(line.substring(len("merged_alias:"), len(line))))
+        } else if _starts_with(line, "rejected_collision:") {
+            c.rejected = _to_int(_ltrim(line.substring(len("rejected_collision:"), len(line))))
+        }
+        i = i + 1
+    }
+    return c
+}
+
+// ----------------------------------------------------------------
+// Main
+// ----------------------------------------------------------------
+
+fn main() {
+    println("==============================================")
+    println("  HEXA Compiler — Atlas Promote Smoke Test (RFC-017 §5b/5d)")
+    println("==============================================")
+
+    _write_fixture_atlas()
+    _write_fixture_staging()
+    println("fixture atlas root: " + FIXTURE_ATLAS_ROOT)
+    println("fixture staging:    " + FIXTURE_STAGING)
+
+    let rc = promote_to_atlas(FIXTURE_STAGING, FIXTURE_ATLAS_ROOT)
+    println("promote_to_atlas rc=" + to_string(rc))
+
+    let mut ok = true
+    if rc != 0 {
+        println("  FAIL: promote_to_atlas returned non-zero")
+        ok = false
+    }
+
+    let today = _today_utc()
+    let manifest_path = "/tmp/_promote_manifest." + today + ".txt"
+    let manifest = read_file(manifest_path)
+    if len(manifest) == 0 {
+        println("  FAIL: manifest empty or missing at " + manifest_path)
+        ok = false
+    }
+
+    println("")
+    println("---- manifest content -------------------------")
+    println(manifest)
+    println("-----------------------------------------------")
+
+    let counts = _parse_counts(manifest)
+    println("counts: seen=" + to_string(counts.seen) +
+            " new=" + to_string(counts.promoted) +
+            " merged=" + to_string(counts.merged) +
+            " rejected=" + to_string(counts.rejected))
+
+    if counts.seen != 4 {
+        println("  FAIL: expected proposals_seen=4, got " + to_string(counts.seen))
+        ok = false
+    }
+    if counts.promoted != 2 {
+        println("  FAIL: expected promoted_new=2, got " + to_string(counts.promoted))
+        ok = false
+    }
+    if counts.merged != 1 {
+        println("  FAIL: expected merged_alias=1, got " + to_string(counts.merged))
+        ok = false
+    }
+    if counts.rejected != 1 {
+        println("  FAIL: expected rejected_collision=1, got " + to_string(counts.rejected))
+        ok = false
+    }
+
+    // Per-disposition assertions: the actual promote/merge/reject ids must
+    // appear in the manifest (proves the right branches fired).
+    if !_contains(manifest, "PROMOTE L[comm]") {
+        println("  FAIL: manifest missing PROMOTE L[comm]")
+        ok = false
+    }
+    if !_contains(manifest, "PROMOTE L[double]") {
+        println("  FAIL: manifest missing PROMOTE L[double]")
+        ok = false
+    }
+    if !_contains(manifest, "MERGE   L[assoc] alias_of=addition-commutative") {
+        println("  FAIL: manifest missing MERGE L[assoc] alias_of=addition-commutative")
+        ok = false
+    }
+    if !_contains(manifest, "REJECT  L[addition-commutative] reason=id_collision_first_wins") {
+        println("  FAIL: manifest missing REJECT L[addition-commutative]")
+        ok = false
+    }
+
+    // Append shard must exist and contain the two NEW @L records + the
+    // alias record.
+    let append_path = FIXTURE_ATLAS_ROOT + "/atlas.append." + today + ".n6"
+    let append_body = read_file(append_path)
+    if !_contains(append_body, "@L comm") {
+        println("  FAIL: append shard missing @L comm")
+        ok = false
+    }
+    if !_contains(append_body, "@L double") {
+        println("  FAIL: append shard missing @L double")
+        ok = false
+    }
+    if !_contains(append_body, "@L assoc :: discovered_alias") {
+        println("  FAIL: append shard missing alias record for assoc")
+        ok = false
+    }
+    if _contains(append_body, "@L addition-commutative :: discovered") {
+        println("  FAIL: append shard wrongly re-emits addition-commutative")
+        ok = false
+    }
+
+    println("")
+    println("==============================================")
+    if ok {
+        println("PASS: promote_to_atlas honors decision 5d (fingerprint dedup + ID first-wins).")
+        println("  seen=4 new=2 merged=1 rejected=1")
+    } else {
+        println("FAIL: promote_to_atlas contract not satisfied.")
+    }
+    println("==============================================")
+    if !ok { exit(1) }
+}
