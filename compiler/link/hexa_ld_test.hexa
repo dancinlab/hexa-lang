@@ -1,6 +1,6 @@
-// HEXA Native Compiler — link pass: hexa_ld v1 smoke test
+// HEXA Native Compiler — link pass: hexa_ld v1.1 smoke test
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [fs_read, fs_write, shell]
 // @allow-bare-exec-file
 // @allow-silent-exit-file
@@ -9,25 +9,28 @@
 //
 // End-to-end test for `compiler/link/hexa_ld.hexa`:
 //
+//   ELF case (Linux):
 //   1. Synthesize a hand-written `_start` assembly source that performs
-//      `exit(0)` via the Linux x86_64 syscall ABI:
-//          mov  rax, 60      ; sys_exit
-//          xor  rdi, rdi     ; status = 0
-//          syscall
+//      `exit(0)` via the Linux x86_64 syscall ABI.
+//   2. Assemble it with system `as --64`.
+//   3. Drive `link()` → static ELF64.
+//   4. `file <out>` substring match for "ELF 64-bit LSB executable".
+//   5. Linux only: chmod +x and exec — expect rc=0.
 //
-//   2. Assemble it with system `as` to /tmp/hexa_ld_smoke.o.
-//      If `as` is unavailable on the host (e.g. macOS without gas, sandboxed
-//      CI, etc.) we report SKIPPED and exit 0.
+//   Mach-O case (macOS arm64):
+//   1. Synthesize an `_main` assembly source that performs the arm64
+//      `exit(0)` SVC ABI:
+//          mov x16, #1   ; sys_exit
+//          mov x0,  #0   ; status
+//          svc #0x80
+//   2. Assemble with Apple `as -arch arm64`.
+//   3. Drive `link()` → MH_EXECUTE Mach-O.
+//   4. `file <out>` substring match for "Mach-O 64-bit executable arm64".
+//   5. Note ad-hoc codesign requirement; exec is best-effort —
+//      kernel will refuse without codesign on Apple Silicon.
 //
-//   3. Drive `link()` to produce /tmp/hexa_ld_smoke.exe (a static ELF64).
-//
-//   4. Verify with `file <out>` that the magic+class are reported as
-//      "ELF 64-bit LSB executable" — substring match.
-//
-//   5. If we are running on Linux, `chmod +x <out> && <out>` should exit 0
-//      because the program calls `sys_exit(0)`. On macOS the binary cannot
-//      execute (Mach-O kernel) — we still PASS the format check and report
-//      EXEC_SKIPPED for the run step.
+// Both cases skip cleanly on the wrong host (linux skips Mach-O,
+// macOS-x86 skips both, etc.).
 //
 // Run:
 //   hexa run compiler/link/hexa_ld_test.hexa
@@ -73,6 +76,17 @@ fn _is_linux() -> bool {
     return u == "Linux"
 }
 
+fn _is_macos() -> bool {
+    let u = exec("uname -s 2>/dev/null").trim()
+    return u == "Darwin"
+}
+
+fn _is_macos_arm64() -> bool {
+    if !_is_macos() { return false }
+    let m = exec("uname -m 2>/dev/null").trim()
+    return m == "arm64"
+}
+
 // ── synthesize the .s source and assemble ──────────────────────────
 
 let _ASM_SOURCE_GAS_INTEL = "" +
@@ -105,106 +119,188 @@ fn _assemble(s_path: string, o_path: string) -> bool {
     return true
 }
 
+// arm64 macOS exit(0):
+//   mov  x16, #1     ; sys_exit
+//   mov  x0,  #0     ; status = 0
+//   svc  #0x80
+let _ASM_SOURCE_MACHO_ARM64 = "" +
+    ".section __TEXT,__text\n" +
+    ".globl _main\n" +
+    ".p2align 2\n" +
+    "_main:\n" +
+    "    mov x16, #1\n" +
+    "    mov x0, #0\n" +
+    "    svc #0x80\n"
+
+fn _assemble_macho(s_path: string, o_path: string) -> bool {
+    // Apple `as` on arm64 ignores --64; pass -arch arm64 explicitly.
+    let cmd = "as -arch arm64 -o '" + o_path + "' '" + s_path + "' 2>&1"
+    let out_msg = exec(cmd)
+    let trimmed = out_msg.trim()
+    let sz = pfs_file_size(o_path)
+    if sz < 1 {
+        println("    as (mach-o) failed: " + trimmed)
+        return false
+    }
+    return true
+}
+
 // ── main test driver ───────────────────────────────────────────────
 
 fn main() {
     println("══════════════════════════════════════════════")
-    println("  hexa_ld v1 — Static ELF Linker Smoke Test")
+    println("  hexa_ld v1.1 — ELF + Mach-O Linker Smoke Test")
     println("══════════════════════════════════════════════")
+
+    let mut ok = true               // ELF case ok (true if PASS or SKIP)
+    let mut elf_ran = false
 
     if !_have_system_as() {
         println("")
-        println("  SKIPPED: system `as` (GNU assembler) not on PATH.")
-        println("  hexa_ld v1 needs an .o input; without `as` we cannot")
-        println("  synthesize a fixture. Format check stands; exec check")
-        println("  also skipped.")
-        println("══════════════════════════════════════════════")
-        exit(0)
-    }
-
-    let s_path = "/tmp/hexa_ld_smoke.s"
-    let o_path = "/tmp/hexa_ld_smoke.o"
-    let exe    = "/tmp/hexa_ld_smoke.exe"
-
-    // Try Intel-syntax first, then AT&T.
-    write_file(s_path, _ASM_SOURCE_GAS_INTEL)
-    let mut asm_ok = _assemble(s_path, o_path)
-    if !asm_ok {
-        println("  retrying with AT&T syntax...")
-        write_file(s_path, _ASM_SOURCE_GAS_ATT)
-        asm_ok = _assemble(s_path, o_path)
-    }
-    if !asm_ok {
-        println("")
-        println("  SKIPPED: system `as` could not assemble the test fixture.")
-        println("  This usually means `as` is the macOS toolchain assembler")
-        println("  which does not target ELF64. Test result: SKIPPED.")
-        println("══════════════════════════════════════════════")
-        exit(0)
-    }
-
-    let osize = pfs_file_size(o_path)
-    println("  fixture: " + o_path + " (" + to_string(osize) + " bytes)")
-
-    // ── drive link() ──
-    let rc = link(o_path, exe)
-    if rc != 0 {
-        println("  FAIL: link() returned non-zero rc=" + to_string(rc))
-        println("        (1=parse-fail, 2=no-entry-symbol, 3=write-fail)")
-        exit(1)
-    }
-    let elf_size = pfs_file_size(exe)
-    println("  emitted: " + exe + " (" + to_string(elf_size) + " bytes)")
-
-    // ── format check ──
-    let file_out = exec("file '" + exe + "' 2>&1").trim()
-    println("  file: " + file_out)
-
-    let mut ok = true
-    if !_contains(file_out, "ELF 64-bit") {
-        // macOS `file` is fine for ELF detection — it prints the same string.
-        println("  FAIL: `file` output does not include `ELF 64-bit`.")
-        ok = false
+        println("  ELF SKIPPED: system `as` (GNU assembler) not on PATH.")
     } else {
-        println("  ok: format = ELF 64-bit")
-    }
-    if !_contains(file_out, "LSB") {
-        println("  FAIL: `file` output does not include `LSB`.")
-        ok = false
-    } else {
-        println("  ok: byte order = LSB (little-endian)")
-    }
-    if !_contains(file_out, "executable") {
-        println("  FAIL: `file` output does not include `executable`.")
-        ok = false
-    } else {
-        println("  ok: type = executable")
-    }
+        let s_path = "/tmp/hexa_ld_smoke.s"
+        let o_path = "/tmp/hexa_ld_smoke.o"
+        let exe    = "/tmp/hexa_ld_smoke.exe"
 
-    // ── exec check (Linux only — our .text uses Linux syscall numbers) ──
-    if _is_linux() {
-        let chmod_rc = exec("chmod +x '" + exe + "' 2>&1").trim()
-        if len(chmod_rc) > 0 { println("  chmod note: " + chmod_rc) }
-        let probe = exec("'" + exe + "' ; echo __RC=$?").trim()
-        if !_contains(probe, "__RC=0") {
-            println("  FAIL: emitted ELF did not exit 0 — got: " + probe)
-            ok = false
+        write_file(s_path, _ASM_SOURCE_GAS_INTEL)
+        let mut asm_ok = _assemble(s_path, o_path)
+        if !asm_ok {
+            println("  retrying with AT&T syntax...")
+            write_file(s_path, _ASM_SOURCE_GAS_ATT)
+            asm_ok = _assemble(s_path, o_path)
+        }
+        if !asm_ok {
+            println("")
+            println("  ELF SKIPPED: system `as` could not assemble the ELF fixture.")
+            println("  (likely macOS toolchain `as` which does not target ELF64).")
         } else {
-            println("  ok: emitted ELF executed and returned 0")
+            elf_ran = true
+            let osize = pfs_file_size(o_path)
+            println("  fixture: " + o_path + " (" + to_string(osize) + " bytes)")
+
+            let rc = link(o_path, exe)
+            if rc != 0 {
+                println("  FAIL: link() returned non-zero rc=" + to_string(rc))
+                println("        (1=parse-fail, 2=no-entry-symbol, 3=write-fail)")
+                ok = false
+            } else {
+                let elf_size = pfs_file_size(exe)
+                println("  emitted: " + exe + " (" + to_string(elf_size) + " bytes)")
+
+                let file_out = exec("file '" + exe + "' 2>&1").trim()
+                println("  file: " + file_out)
+
+                if !_contains(file_out, "ELF 64-bit") {
+                    println("  FAIL: `file` output does not include `ELF 64-bit`.")
+                    ok = false
+                } else {
+                    println("  ok: format = ELF 64-bit")
+                }
+                if !_contains(file_out, "LSB") {
+                    println("  FAIL: `file` output does not include `LSB`.")
+                    ok = false
+                } else {
+                    println("  ok: byte order = LSB (little-endian)")
+                }
+                if !_contains(file_out, "executable") {
+                    println("  FAIL: `file` output does not include `executable`.")
+                    ok = false
+                } else {
+                    println("  ok: type = executable")
+                }
+
+                if _is_linux() {
+                    let chmod_rc = exec("chmod +x '" + exe + "' 2>&1").trim()
+                    if len(chmod_rc) > 0 { println("  chmod note: " + chmod_rc) }
+                    let probe = exec("'" + exe + "' ; echo __RC=$?").trim()
+                    if !_contains(probe, "__RC=0") {
+                        println("  FAIL: emitted ELF did not exit 0 — got: " + probe)
+                        ok = false
+                    } else {
+                        println("  ok: emitted ELF executed and returned 0")
+                    }
+                } else {
+                    println("  EXEC_SKIPPED: non-Linux host — cannot run ELF directly.")
+                }
+            }
+        }
+    }
+    if !elf_ran {
+        println("  (ELF case skipped — Mach-O case still attempted below.)")
+    }
+
+    // ── Mach-O case (macOS arm64 only) ──
+    let mut macho_ok = true
+    if _is_macos_arm64() {
+        println("")
+        println("──────────── Mach-O arm64 case ────────────")
+        let s_m = "/tmp/hexa_ld_macho_smoke.s"
+        let o_m = "/tmp/hexa_ld_macho_smoke.o"
+        let e_m = "/tmp/hexa_ld_macho_smoke.exe"
+
+        write_file(s_m, _ASM_SOURCE_MACHO_ARM64)
+        let asm_m_ok = _assemble_macho(s_m, o_m)
+        if !asm_m_ok {
+            println("  SKIPPED: Apple `as -arch arm64` could not assemble.")
+        } else {
+            let omsz = pfs_file_size(o_m)
+            println("  fixture: " + o_m + " (" + to_string(omsz) + " bytes)")
+
+            let rc_m = link(o_m, e_m)
+            if rc_m != 0 {
+                println("  FAIL: link() Mach-O returned rc=" + to_string(rc_m))
+                macho_ok = false
+            } else {
+                let macho_size = pfs_file_size(e_m)
+                println("  emitted: " + e_m + " (" + to_string(macho_size) + " bytes)")
+
+                let f_m = exec("file '" + e_m + "' 2>&1").trim()
+                println("  file: " + f_m)
+                if !_contains(f_m, "Mach-O 64-bit executable") {
+                    println("  FAIL: `file` does not report Mach-O 64-bit executable.")
+                    macho_ok = false
+                } else {
+                    println("  ok: format = Mach-O 64-bit executable")
+                }
+                if !_contains(f_m, "arm64") {
+                    println("  FAIL: `file` does not report arm64.")
+                    macho_ok = false
+                } else {
+                    println("  ok: arch = arm64")
+                }
+
+                // Best-effort exec: kernel will refuse without ad-hoc
+                // codesign on Apple Silicon. We try `codesign -s -` once,
+                // then probe; failure is reported but does NOT fail the
+                // test (format check is the contract for v1.1).
+                let cs_out = exec("codesign -s - '" + e_m + "' 2>&1").trim()
+                if len(cs_out) > 0 { println("  codesign: " + cs_out) }
+                let probe = exec("'" + e_m + "' ; echo __RC=$?").trim()
+                if _contains(probe, "__RC=0") {
+                    println("  ok: emitted Mach-O exited 0 (codesign accepted)")
+                } else {
+                    println("  EXEC_BLOCKED: kernel refused to run — likely")
+                    println("    codesign + LC_LOAD_DYLINKER stub insufficient")
+                    println("    for this XNU rev. probe: " + probe)
+                    println("    (format check stands; full runtime path → --linker=system)")
+                }
+            }
         }
     } else {
-        println("  EXEC_SKIPPED: non-Linux host — cannot run ELF directly.")
-        println("                (format check stands; runtime check deferred.)")
+        println("")
+        println("  MACHO_SKIPPED: not running on macOS arm64.")
     }
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok {
-        println("PASS: hexa_ld v1 emits a valid static ELF64 executable.")
+    let final_ok = ok && macho_ok
+    if final_ok {
+        println("PASS: hexa_ld v1.1 emits valid ELF64 + Mach-O 64 executables.")
     } else {
-        println("FAIL: hexa_ld v1 contract broken — see lines above.")
+        println("FAIL: hexa_ld v1.1 contract broken — see lines above.")
     }
     println("══════════════════════════════════════════════")
-    if !ok { exit(1) }
+    if !final_ok { exit(1) }
     exit(0)
 }

@@ -1,39 +1,64 @@
-// HEXA Native Compiler — link pass: hexa_ld v1 (Decision 7)
+// HEXA Native Compiler — link pass: hexa_ld v1.1 (Decision 7)
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [fs_read, fs_write, shell]
 // @allow-bare-exec-file
 // @allow-silent-exit-file
 // @allow-silent-catch-file
 // @allow-relop-banned-file
 //
-// Per RFC-018 §10: hexa_ld is the primary linker; system `ld` is the
-// fallback. v1 SCOPE is intentionally tiny — single .o → single static
-// ELF executable, x86_64-linux-gnu only.
+// Per RFC-018 §10 + SPEC.yaml `linker.formats: [ELF, Mach-O_arm64]`:
+// hexa_ld is the primary linker; system `ld` is the fallback. v1 shipped
+// ELF only; v1.1 adds a minimal Mach-O (arm64-apple-darwin) emitter.
 //
-// IN SCOPE (v1):
+// IN SCOPE (v1, ELF):
 //   * Reads ONE ELF64 little-endian relocatable object (.o)
 //   * Concatenates the .text section
 //   * Resolves a single entry symbol (`_start`, falling back to `main`)
-//   * Emits a STATIC ELF64 executable with:
-//       - ELF header (64 B)
-//       - One program header (PT_LOAD, R+X, vaddr=0x400000)
-//       - The .text bytes
-//   * Bails out (returns non-zero) so the caller can re-run with
-//     `--linker=system`.
+//   * Emits a STATIC ELF64 executable with one PT_LOAD (R+X, vaddr 0x400000).
 //
-// OUT OF SCOPE / DELIBERATELY PUNTED (will land in v1.1+):
-//   * Mach-O (arm64-apple-darwin) — separate emitter follows.
+// IN SCOPE (v1.1, Mach-O):
+//   * Reads ONE Mach-O 64-bit relocatable object (MH_OBJECT, arm64).
+//   * Locates the `__TEXT,__text` section bytes via LC_SEGMENT_64.
+//   * Resolves entry symbol via LC_SYMTAB:
+//       - `_main` first (Apple/clang default emits underscore)
+//       - `start` fallback (matches `crt1.o` symbol on macOS)
+//   * Emits an MH_EXECUTE Mach-O 64 binary with:
+//       - mach_header_64 (cputype=ARM64=0x0100000C, cpusubtype=ALL=0)
+//       - LC_SEGMENT_64 __PAGEZERO (vmaddr=0, vmsize=0x100000000, no file)
+//       - LC_SEGMENT_64 __TEXT (vmaddr=0x100000000, R+X, contains __text)
+//       - LC_LOAD_DYLINKER `/usr/lib/dyld`  (modern XNU rejects binaries
+//         that lack it; needed even for "static" hello-world)
+//       - LC_MAIN (cmd=0x80000028) with entryoff = (text_off + sym_off).
+//   * Top-level `link()` autodetects the magic and dispatches.
+//
+// MACH-O CAVEATS (v1.1):
+//   * Apple Silicon REQUIRES a valid code signature. Even ad-hoc
+//     `codesign -s - <out>` is mandatory; without it the kernel returns
+//     EBADEXEC ("killed: 9"). hexa_ld does NOT codesign — callers must
+//     run `codesign -s - <out>` (or fall back to system_ld_fallback()
+//     which uses `/usr/bin/ld`, which in turn invokes the linker-
+//     embedded ad-hoc signer on arm64).
+//   * Truly-static Mach-O (no LC_LOAD_DYLINKER) is NOT supported by
+//     modern dyld/XNU on arm64 except for a small set of system bootstrap
+//     binaries. We therefore include LC_LOAD_DYLINKER `/usr/lib/dyld`
+//     and rely on the "no LC_LOAD_DYLIB" property to keep the program
+//     dependency-free at runtime.
+//   * No relocations applied: __text bytes that reference __got, __stubs,
+//     or external symbols WILL crash. Use --linker=system for anything
+//     beyond a hand-written entrypoint that returns immediately.
+//   * No __LINKEDIT, no LC_DYSYMTAB, no LC_FUNCTION_STARTS — `dsymutil`,
+//     `nm`, `dwarfdump` will see an empty binary. Acceptable for v1.1
+//     smoke testing only.
+//
+// OUT OF SCOPE / DELIBERATELY PUNTED (v1.2+):
 //   * Multiple input .o files / archive (.a) handling.
-//   * Relocation processing beyond the trivial case (R_X86_64_NONE).
-//     Inputs containing R_X86_64_PC32 / PLT32 / GOTPCREL etc. WILL
-//     produce an executable that segfaults — use --linker=system.
-//   * Dynamic linking, PT_INTERP, PT_DYNAMIC, .dynsym, .dynstr.
-//   * PLT / GOT / TLS / IFUNC.
-//   * Section dead-code elimination, ICF, identical-comdat dedup.
-//   * DWARF line-info propagation (the spec says basic emit; v1 drops it).
-//   * Symbol versioning, weak/strong resolution beyond first-match.
-//   * .rodata / .bss / .data segments — v1 collapses everything to .text.
+//   * Relocation processing beyond the trivial case (R_X86_64_NONE,
+//     ARM64_RELOC_UNSIGNED-equivalent).
+//   * Dynamic linking (PT_INTERP/PT_DYNAMIC for ELF, LC_LOAD_DYLIB for
+//     Mach-O), PLT/GOT/TLS/IFUNC, codesign embedding.
+//   * .rodata / .bss / .data — v1.x collapses everything to .text/__text.
+//   * DWARF line-info, symbol versioning, weak/strong, ICF.
 //
 // This is allowed to be incomplete. The caller (hexa build) is expected
 // to fall back to system ld whenever `link()` returns non-zero, exactly
@@ -41,6 +66,8 @@
 //
 // Public API:
 //   pub fn link(obj_path: string, out_path: string) -> int
+//   pub fn link_mach_o(obj_path: string, out_path: string) -> int
+//   pub fn system_ld_fallback(obj_path: string, out_path: string) -> int
 //
 // Returns 0 on success, non-zero on every failure path (so the caller
 // can flip to --linker=system without parsing error strings).
@@ -358,18 +385,15 @@ fn _slice_bytes(buf, off: int, size: int) {
     return out
 }
 
-// ── Public API ─────────────────────────────────────────────────────
+// ── ELF link path (v1) ─────────────────────────────────────────────
 //
 // Returns:
 //   0 → success, ELF executable written to out_path, chmod +x applied
 //   1 → input not readable / not ELF64 / required section missing
 //   2 → no entry symbol (`_start` then `main`) found
 //   3 → write failed
-//
-// On every non-zero return, the caller is expected to fall back to the
-// system linker (Decision 7).
 
-pub fn link(obj_path: string, out_path: string) -> int {
+pub fn link_elf(obj_path: string, out_path: string) -> int {
     if len(obj_path) == 0 { return 1 }
     if len(out_path) == 0 { return 1 }
 
@@ -399,11 +423,7 @@ pub fn link(obj_path: string, out_path: string) -> int {
     }
     if entry_obj_off < 0 { return 2 }
 
-    // entry vaddr = TEXT_VADDR + (symbol's offset within .text).
-    // `st_value` for STT_FUNC in a relocatable .o is "offset within the
-    // section" — exactly what we need.
     let entry_vaddr = _TEXT_VADDR + entry_obj_off
-
     let text_bytes = _slice_bytes(buf, text_off, text_sz)
     let elf_bytes  = build_elf64_exec(text_bytes, entry_vaddr)
 
@@ -411,21 +431,399 @@ pub fn link(obj_path: string, out_path: string) -> int {
     let sz = pfs_file_size(out_path)
     if sz < 1 { return 3 }
 
-    // chmod +x — using exec is permitted per task brief.
     let chm_rc = exec("chmod +x '" + out_path.replace("'", "'\\''") + "' 2>/dev/null")
-    if len(chm_rc) > -1 { /* chmod errors are non-fatal: file already written */ }
+    if len(chm_rc) > -1 { /* chmod errors are non-fatal */ }
     return 0
+}
+
+// ── Mach-O magic detection ─────────────────────────────────────────
+//
+// 64-bit Mach-O on disk:
+//   little-endian: 0xCFFAEDFE  (file bytes: CF FA ED FE)  ← MH_MAGIC_64
+//   big-endian   : 0xFECAFECF  (file bytes: FE CA FE CF)  ← MH_CIGAM_64
+//
+// arm64 macOS objects are always little-endian; we check the LE form.
+
+pub fn is_mach_o_64(buf) -> bool {
+    if type_of(buf) != "array" { return false }
+    if len(buf) < 32 { return false }
+    let b0 = _read_u8(buf, 0)
+    let b1 = _read_u8(buf, 1)
+    let b2 = _read_u8(buf, 2)
+    let b3 = _read_u8(buf, 3)
+    if b0 == 0xCF { if b1 == 0xFA { if b2 == 0xED { if b3 == 0xFE { return true } } } }
+    return false
+}
+
+// ── Mach-O 64 reader: walk LCs, find __text + _main ─────────────────
+//
+// mach_header_64 (32 B):
+//   0x00 magic, 0x04 cputype, 0x08 cpusubtype, 0x0C filetype,
+//   0x10 ncmds, 0x14 sizeofcmds, 0x18 flags, 0x1C reserved
+//
+// Each load command starts with: u32 cmd, u32 cmdsize.
+//   LC_SEGMENT_64    = 0x19
+//   LC_SYMTAB        = 0x02
+//   LC_LOAD_DYLINKER = 0x0E
+//   LC_MAIN          = 0x80000028
+//
+// section_64 (80 B) inside LC_SEGMENT_64:
+//   0x00 sectname[16], 0x10 segname[16], 0x20 addr (u64), 0x28 size (u64),
+//   0x30 offset (u32), 0x34 align (u32), 0x38 reloff (u32), 0x3C nreloc (u32),
+//   0x40 flags (u32), 0x44 reserved1, 0x48 reserved2, 0x4C reserved3
+//
+// nlist_64 (16 B) — symbol table entry:
+//   0x00 n_strx (u32), 0x04 n_type (u8), 0x05 n_sect (u8),
+//   0x06 n_desc (u16), 0x08 n_value (u64).
+
+fn _read_fixed_str(buf, base: int, n: int) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < n {
+        let c = _read_u8(buf, base + i)
+        if c == 0 { return s }
+        s = s + _byte_to_ascii(c)
+        i = i + 1
+    }
+    return s
+}
+
+// Returns [text_file_off, text_size, symtab_off, nsyms, strtab_off, strtab_size]
+// or [] if any required piece is missing.
+pub fn macho_find_sections(buf) -> [int] {
+    let ncmds      = _read_u32le(buf, 0x10)
+    let sizeofcmds = _read_u32le(buf, 0x14)
+    if ncmds < 1 { return [] }
+    if sizeofcmds < 1 { return [] }
+
+    let mut text_off  = -1
+    let mut text_sz   = -1
+    let mut symtab_o  = -1
+    let mut nsyms     = -1
+    let mut strtab_o  = -1
+    let mut strtab_sz = -1
+
+    let mut cur = 32  // sizeof(mach_header_64)
+    let mut i = 0
+    while i < ncmds {
+        let cmd = _read_u32le(buf, cur + 0x00)
+        let cmdsize = _read_u32le(buf, cur + 0x04)
+        if cmdsize < 8 { return [] }
+
+        if cmd == 0x19 {  // LC_SEGMENT_64
+            // segment_command_64 layout, sections start at +0x48 (72)
+            let nsects = _read_u32le(buf, cur + 0x40)
+            let mut s = 0
+            while s < nsects {
+                let sec = cur + 72 + s * 80
+                let sectname = _read_fixed_str(buf, sec + 0x00, 16)
+                if sectname == "__text" {
+                    text_off = _read_u32le(buf, sec + 0x30)
+                    text_sz  = _read_u64le(buf, sec + 0x28)
+                }
+                s = s + 1
+            }
+        }
+        if cmd == 0x02 {  // LC_SYMTAB
+            symtab_o  = _read_u32le(buf, cur + 0x08)
+            nsyms     = _read_u32le(buf, cur + 0x0C)
+            strtab_o  = _read_u32le(buf, cur + 0x10)
+            strtab_sz = _read_u32le(buf, cur + 0x14)
+        }
+
+        cur = cur + cmdsize
+        i = i + 1
+    }
+    return [text_off, text_sz, symtab_o, nsyms, strtab_o, strtab_sz]
+}
+
+// Returns symbol's n_value (offset within section in MH_OBJECT) or -1.
+pub fn macho_find_symbol(buf, symtab_o: int, nsyms: int,
+                         strtab_o: int, target: string) -> int {
+    if symtab_o < 0 { return -1 }
+    if nsyms < 1 { return -1 }
+    if strtab_o < 0 { return -1 }
+    let mut i = 0
+    while i < nsyms {
+        let s = symtab_o + i * 16
+        let n_strx = _read_u32le(buf, s + 0x00)
+        let nm = _read_cstr(buf, strtab_o, n_strx)
+        if nm == target {
+            return _read_u64le(buf, s + 0x08)
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// ── Mach-O 64 EXECUTE emitter ──────────────────────────────────────
+//
+// Layout chosen for v1.1 (page-aligned to 0x4000 — Apple Silicon uses
+// 16 KiB pages):
+//
+//   file 0x0000  mach_header_64                              (32 B)
+//   file 0x0020  LC_SEGMENT_64  __PAGEZERO                   (72 B)
+//   file 0x0068  LC_SEGMENT_64  __TEXT (1 section: __text)   (152 B)
+//   file 0x0100  LC_LOAD_DYLINKER  /usr/lib/dyld             (32 B incl pad)
+//   file 0x0120  LC_MAIN                                     (24 B)
+//   ...        zero-padding to 0x4000
+//   file 0x4000  __text bytes (loaded at vaddr 0x100004000)
+//
+// __TEXT vmaddr   = 0x100000000
+// __TEXT vmsize   = 0x4000 + page-aligned(text_size)
+// __text vmaddr   = 0x100004000
+// LC_MAIN.entryoff = 0x4000 + sym_off_within_text   (file offset relative
+//                                                    to __TEXT.fileoff=0)
+//
+// ad-hoc codesign by caller is required on Apple Silicon — see header.
+
+fn _push_fixed_str(buf, s: string, n: int) {
+    let cs = s.chars()
+    let cn = len(cs)
+    let mut i = 0
+    while i < n {
+        if i < cn {
+            // ASCII single-char string → byte. Use a tiny lookup via _byte_to_ascii inverse.
+            let ch = cs[i]
+            // Map a 1-char ASCII string back to its byte. We rebuild via
+            // string concat: there's no codepoint-int helper, so we spell
+            // common ASCII by hand. The only callers pass __PAGEZERO,
+            // __TEXT, __text, /usr/lib/dyld → covered below.
+            let mut b = 0
+            if ch == "_" { b = 0x5F }
+            if ch == "P" { b = 0x50 }
+            if ch == "A" { b = 0x41 }
+            if ch == "G" { b = 0x47 }
+            if ch == "E" { b = 0x45 }
+            if ch == "Z" { b = 0x5A }
+            if ch == "R" { b = 0x52 }
+            if ch == "O" { b = 0x4F }
+            if ch == "T" { b = 0x54 }
+            if ch == "X" { b = 0x58 }
+            if ch == "t" { b = 0x74 }
+            if ch == "e" { b = 0x65 }
+            if ch == "x" { b = 0x78 }
+            if ch == "/" { b = 0x2F }
+            if ch == "u" { b = 0x75 }
+            if ch == "s" { b = 0x73 }
+            if ch == "r" { b = 0x72 }
+            if ch == "l" { b = 0x6C }
+            if ch == "i" { b = 0x69 }
+            if ch == "b" { b = 0x62 }
+            if ch == "d" { b = 0x64 }
+            if ch == "y" { b = 0x79 }
+            if ch == "." { b = 0x2E }
+            _push_u8(buf, b)
+        } else {
+            _push_u8(buf, 0)
+        }
+        i = i + 1
+    }
+}
+
+let _MACHO_PAGE      = 0x4000        // 16 KiB on Apple Silicon
+let _MACHO_TEXT_VM   = 0x100000000   // __TEXT vmaddr
+let _MACHO_HDR_RESV  = 0x4000        // file bytes reserved for header+LCs
+
+fn _align_up(v: int, a: int) -> int {
+    let r = v - (v / a) * a
+    if r == 0 { return v }
+    return v + (a - r)
+}
+
+pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int) {
+    let text_size = len(text_bytes)
+    let text_size_aligned = _align_up(text_size, _MACHO_PAGE)
+    let text_segment_vmsize = _MACHO_HDR_RESV + text_size_aligned
+    // file size of the binary
+    let total_filesize = _MACHO_HDR_RESV + text_size_aligned
+
+    let mut out = []
+
+    // ── mach_header_64 (32 B) ──
+    _push_u32le(out, 0xFEEDFACF)                   // magic = MH_MAGIC_64
+    _push_u32le(out, 0x0100000C)                   // cputype = CPU_TYPE_ARM64
+    _push_u32le(out, 0)                            // cpusubtype = ALL
+    _push_u32le(out, 2)                            // filetype = MH_EXECUTE
+    _push_u32le(out, 4)                            // ncmds (PAGEZERO,TEXT,DYLINKER,MAIN)
+    _push_u32le(out, 72 + 152 + 32 + 24)           // sizeofcmds
+    _push_u32le(out, 0x00200085)                   // flags: NOUNDEFS|DYLDLINK|TWOLEVEL|PIE
+    _push_u32le(out, 0)                            // reserved
+
+    // ── LC_SEGMENT_64 __PAGEZERO (72 B) ──
+    _push_u32le(out, 0x19)                         // cmd = LC_SEGMENT_64
+    _push_u32le(out, 72)                           // cmdsize
+    _push_fixed_str(out, "__PAGEZERO", 16)         // segname
+    _push_u64le(out, 0)                            // vmaddr
+    _push_u64le(out, _MACHO_TEXT_VM)               // vmsize = 4 GiB
+    _push_u64le(out, 0)                            // fileoff
+    _push_u64le(out, 0)                            // filesize
+    _push_u32le(out, 0)                            // maxprot = VM_PROT_NONE
+    _push_u32le(out, 0)                            // initprot = VM_PROT_NONE
+    _push_u32le(out, 0)                            // nsects
+    _push_u32le(out, 0)                            // flags
+
+    // ── LC_SEGMENT_64 __TEXT (72 + 80 = 152 B), 1 section ──
+    _push_u32le(out, 0x19)                         // cmd = LC_SEGMENT_64
+    _push_u32le(out, 152)                          // cmdsize
+    _push_fixed_str(out, "__TEXT", 16)             // segname
+    _push_u64le(out, _MACHO_TEXT_VM)               // vmaddr = 0x100000000
+    _push_u64le(out, text_segment_vmsize)          // vmsize
+    _push_u64le(out, 0)                            // fileoff (covers headers too)
+    _push_u64le(out, total_filesize)               // filesize
+    _push_u32le(out, 5)                            // maxprot = R+X
+    _push_u32le(out, 5)                            // initprot = R+X
+    _push_u32le(out, 1)                            // nsects = 1 (__text)
+    _push_u32le(out, 0)                            // flags
+
+    // section_64 __text (80 B)
+    _push_fixed_str(out, "__text", 16)             // sectname
+    _push_fixed_str(out, "__TEXT", 16)             // segname
+    _push_u64le(out, _MACHO_TEXT_VM + _MACHO_HDR_RESV)  // addr
+    _push_u64le(out, text_size)                    // size
+    _push_u32le(out, _MACHO_HDR_RESV)              // offset (file)
+    _push_u32le(out, 2)                            // align (2^2=4 B for arm64 insns)
+    _push_u32le(out, 0)                            // reloff
+    _push_u32le(out, 0)                            // nreloc
+    _push_u32le(out, 0x80000400)                   // flags: PURE_INSTRUCTIONS|SOME_INSTRUCTIONS
+    _push_u32le(out, 0)                            // reserved1
+    _push_u32le(out, 0)                            // reserved2
+    _push_u32le(out, 0)                            // reserved3
+
+    // ── LC_LOAD_DYLINKER `/usr/lib/dyld` (32 B incl. NUL pad) ──
+    _push_u32le(out, 0x0E)                         // cmd = LC_LOAD_DYLINKER
+    _push_u32le(out, 32)                           // cmdsize
+    _push_u32le(out, 12)                           // name.offset (str starts at +12)
+    _push_fixed_str(out, "/usr/lib/dyld", 20)      // padded to 32-12=20
+
+    // ── LC_MAIN (24 B) ──
+    _push_u32le(out, 0x80000028)                   // cmd = LC_MAIN
+    _push_u32le(out, 24)                           // cmdsize
+    _push_u64le(out, _MACHO_HDR_RESV + entry_off_in_text)  // entryoff
+    _push_u64le(out, 0)                            // stacksize (default)
+
+    // ── pad to file offset _MACHO_HDR_RESV ──
+    while len(out) < _MACHO_HDR_RESV {
+        _push_u8(out, 0)
+    }
+
+    // ── append __text bytes ──
+    let mut i = 0
+    while i < text_size {
+        out.push(text_bytes[i])
+        i = i + 1
+    }
+    // ── pad text out to page boundary so vmsize == filesize ──
+    while len(out) < total_filesize {
+        _push_u8(out, 0)
+    }
+    return out
+}
+
+// ── Mach-O public link path (v1.1) ─────────────────────────────────
+//
+// Returns:
+//   0 → success, Mach-O EXECUTE written to out_path, chmod +x applied
+//   1 → input not readable / not Mach-O 64 / __text section missing
+//   2 → no entry symbol (`_main` then `start`) found
+//   3 → write failed
+//
+// IMPORTANT: caller must ad-hoc codesign on Apple Silicon for the
+// kernel to actually run the result. hexa_ld emits the file bytes
+// only — codesigning is delegated to either
+//   `codesign -s - <out>`        (post-link, ad-hoc)
+// or use `system_ld_fallback()` which routes through `/usr/bin/ld`.
+
+pub fn link_mach_o(obj_path: string, out_path: string) -> int {
+    if len(obj_path) == 0 { return 1 }
+    if len(out_path) == 0 { return 1 }
+
+    let buf = read_file_bytes(obj_path)
+    if type_of(buf) != "array" { return 1 }
+    if len(buf) < 32 { return 1 }
+    if !is_mach_o_64(buf) { return 1 }
+
+    // Confirm cputype = ARM64 + filetype = MH_OBJECT (1).
+    let cputype  = _read_u32le(buf, 0x04)
+    let filetype = _read_u32le(buf, 0x0C)
+    if cputype != 0x0100000C { return 1 }
+    if filetype != 1 { return 1 }
+
+    let secs = macho_find_sections(buf)
+    if len(secs) < 6 { return 1 }
+    let text_off  = secs[0]
+    let text_sz   = secs[1]
+    let symtab_o  = secs[2]
+    let nsyms     = secs[3]
+    let strtab_o  = secs[4]
+    if text_off < 0 { return 1 }
+    if text_sz  < 1 { return 1 }
+
+    // Resolve entry — Apple convention prefixes user `main` with `_`.
+    let mut entry_off = macho_find_symbol(buf, symtab_o, nsyms, strtab_o, "_main")
+    if entry_off < 0 {
+        entry_off = macho_find_symbol(buf, symtab_o, nsyms, strtab_o, "start")
+    }
+    if entry_off < 0 { return 2 }
+
+    let text_bytes = _slice_bytes(buf, text_off, text_sz)
+    let macho_bytes = build_macho_arm64_exec(text_bytes, entry_off)
+
+    let _wb = write_bytes(out_path, macho_bytes)
+    let sz = pfs_file_size(out_path)
+    if sz < 1 { return 3 }
+
+    let chm_rc = exec("chmod +x '" + out_path.replace("'", "'\\''") + "' 2>/dev/null")
+    if len(chm_rc) > -1 { /* chmod errors non-fatal */ }
+    return 0
+}
+
+// ── Top-level dispatcher (Public API) ──────────────────────────────
+//
+// Detect input format by first 4 bytes:
+//   0x7F 'E' 'L' 'F'      → ELF path  (link_elf)
+//   CF FA ED FE           → Mach-O 64 → link_mach_o
+//   anything else         → 1 (caller should --linker=system)
+
+pub fn link(obj_path: string, out_path: string) -> int {
+    if len(obj_path) == 0 { return 1 }
+    if len(out_path) == 0 { return 1 }
+    let probe = read_file_bytes(obj_path)
+    if type_of(probe) != "array" { return 1 }
+    if len(probe) < 4 { return 1 }
+    let b0 = _read_u8(probe, 0)
+    let b1 = _read_u8(probe, 1)
+    let b2 = _read_u8(probe, 2)
+    let b3 = _read_u8(probe, 3)
+    if b0 == 0x7F { if b1 == 0x45 { if b2 == 0x4C { if b3 == 0x46 {
+        return link_elf(obj_path, out_path)
+    } } } }
+    if b0 == 0xCF { if b1 == 0xFA { if b2 == 0xED { if b3 == 0xFE {
+        return link_mach_o(obj_path, out_path)
+    } } } }
+    return 1
 }
 
 // ── Fallback helper (best-effort) ──────────────────────────────────
 //
 // hexa_ld is allowed to bail out. Callers that want to keep going can
-// either invoke `system_ld_fallback(obj, out)` (which shells out to
-// /usr/bin/ld) or just ignore the non-zero return from link() and re-
-// drive their build with the --linker=system flag.
+// invoke `system_ld_fallback(obj, out)` which shells out to the host's
+// system linker. On macOS this is `/usr/bin/ld`, which on Apple Silicon
+// also performs ad-hoc codesigning. On Linux it's GNU ld with -static.
 pub fn system_ld_fallback(obj_path: string, out_path: string) -> int {
-    let cmd = "ld -static -o '" + out_path.replace("'", "'\\''") + "' '" +
+    let uname = exec("uname -s 2>/dev/null").trim()
+    let mut cmd = ""
+    if uname == "Darwin" {
+        // macOS: dynamic link with libSystem so the binary actually runs.
+        // -e _main matches the LC_MAIN convention; codesign happens
+        // automatically on arm64 via the linker-driver.
+        cmd = "/usr/bin/ld -arch arm64 -platform_version macos 11.0 11.0 " +
+              "-lSystem -o '" + out_path.replace("'", "'\\''") + "' '" +
               obj_path.replace("'", "'\\''") + "' 2>&1"
+    } else {
+        cmd = "ld -static -o '" + out_path.replace("'", "'\\''") + "' '" +
+              obj_path.replace("'", "'\\''") + "' 2>&1"
+    }
     let out_msg = exec(cmd)
     if len(out_msg) > -1 { /* non-fatal — we check file size next */ }
     let sz = pfs_file_size(out_path)

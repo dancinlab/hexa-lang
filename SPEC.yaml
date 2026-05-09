@@ -318,23 +318,25 @@ linker:
     - hexa_ld_runtime_failure
     - explicit_flag: "--linker=system"
   hexa_ld_v1_scope:
-    # NOTE (2026-05-09): v1 actually ships ELF only — see
-    # compiler/link/hexa_ld.hexa. Mach-O_arm64 is targeted for v1.1
-    # (separate emitter, no shared bytecode). The list below is the
-    # full hexa_ld roadmap; the runnable subset is ELF + single-.o
-    # static link with `_start` / `main` resolution.
-    formats: [ELF, Mach-O_arm64]      # v1 → ELF only; Mach-O_arm64 → v1.1
+    # NOTE (2026-05-09): v1.1 adds Mach-O arm64 emitter alongside ELF.
+    # See compiler/link/hexa_ld.hexa: link() autodetects ELF (0x7F ELF)
+    # vs Mach-O 64 (CF FA ED FE) magic and dispatches accordingly.
+    # Mach-O caveats: requires ad-hoc `codesign -s -` on Apple Silicon
+    # for the kernel to accept the binary; LC_LOAD_DYLINKER stub
+    # `/usr/lib/dyld` is included to satisfy modern XNU loader.
+    formats: [ELF, Mach-O_arm64]      # v1 → ELF; v1.1 → ELF + Mach-O_arm64
     capabilities:
       - static_linking_only
-      - symbol_resolution             # v1: single .o, `_start` then `main` fallback
-      - basic_relocations             # v1: NONE only — PC32/PLT32/GOTPCREL → v1.1
-      - dwarf_debug_section_emit_basic # v1: dropped — emit-only roadmap, lands v1.1
+      - symbol_resolution             # ELF: `_start`/`main`; Mach-O: `_main`/`start`
+      - basic_relocations             # v1.1: NONE only — full reloc → v1.2
+      - dwarf_debug_section_emit_basic # v1.1: dropped — lands v1.2
+      - macho_arm64_execute           # v1.1: MH_EXECUTE + LC_MAIN + LC_LOAD_DYLINKER
     deferred:
-      - dynamic_linking
+      - dynamic_linking               # LC_LOAD_DYLIB / PT_DYNAMIC → v1.2+
       - link_time_optimization
       - section_dead_code_elim
-      - mach_o_arm64                  # v1.1
-      - relocation_processing_full    # v1.1
+      - relocation_processing_full    # v1.2
+      - codesign_embedded             # v1.2: emit ad-hoc LC_CODE_SIGNATURE inline
   bootstrap_carve_out:
     rule: system_ld_temporarily_permitted_during_stage0_to_stage1
     expires_after: stage1_native_compiler_settled
