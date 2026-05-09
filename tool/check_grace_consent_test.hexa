@@ -1,0 +1,208 @@
+#!hexa strict
+// @allow-bare-exec-file
+// @allow-silent-exit-file
+// @allow-silent-catch-file
+//
+// tool/check_grace_consent_test.hexa — contract tests for the consent
+// checker.
+//
+// PURPOSE
+//   Synthesize three scenarios in a throwaway git repo and verify that
+//   tool/check_grace_consent.hexa returns the correct exit code for
+//   each.
+//
+// CASES
+//   (a) commit msg has `Acked-grace: HX1042 by alice`,
+//       diff introduces `@grace(HX1042, ...)`           -> expect exit 0
+//   (b) commit msg has no Acked-grace trailer,
+//       diff introduces `@grace(HX1042, ...)`           -> expect exit 2
+//                                                          (HX1042 in stderr)
+//   (c) commit msg has `Acked-grace: HX1042 by bob`,
+//       diff introduces `@grace(HX5001, ...)`           -> expect exit 2
+//                                                          (mismatched code)
+//
+// Each case uses a fresh /tmp directory + `git init`. The checker is
+// run via `hexa tool/check_grace_consent.hexa --commit <sha>` so HEAD
+// of the host repo is irrelevant — we point it at the throwaway commit.
+//
+// ENGLISH ONLY messages.
+
+// ─── helpers ────────────────────────────────────────────────────
+
+fn _shell_quote(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _epoch() -> string {
+    return to_string(exec("date -u +%s 2>/dev/null")).trim()
+}
+
+fn _repo_root() -> string {
+    return to_string(exec("git rev-parse --show-toplevel")).trim()
+}
+
+// run a shell pipeline and return [stdout, exit_code]
+fn _sh(cmd: string) -> array {
+    let r = exec_with_status(cmd)
+    return [to_string(r[0]), r[1]]
+}
+
+// build a throwaway repo and return its absolute path
+fn _make_repo(tag: string) -> string {
+    let dir = "/tmp/grace_consent_test_" + tag + "_" + _epoch()
+    let _r1 = _sh("rm -rf " + _shell_quote(dir))
+    let _r2 = _sh("mkdir -p " + _shell_quote(dir))
+    let init = "cd " + _shell_quote(dir) + " && git init -q -b main"
+            + " && git config user.email 'ci@example.com'"
+            + " && git config user.name 'CI'"
+    let _r3 = _sh(init)
+    // baseline file so the next commit produces a real diff
+    let baseline = "cd " + _shell_quote(dir)
+                 + " && printf '%s\\n' '// baseline' > demo.hexa"
+                 + " && git add demo.hexa"
+                 + " && git commit -q -m 'baseline'"
+    let _r4 = _sh(baseline)
+    return dir
+}
+
+// add a @grace site to demo.hexa, commit with the given message,
+// return the new commit sha.
+fn _commit_grace(dir: string, hx_code: string, message: string) -> string {
+    // Build new file content as base64 to avoid shell-quoting headaches
+    // around backslashes / embedded quotes / heredoc edge cases.
+    let mut content = ""
+    content = content + "// baseline\n"
+    content = content + "fn _f() {\n"
+    content = content + "    @grace(" + hx_code + ", until=\"2099-12-31\", reason=\"test\")\n"
+    content = content + "    let _x = 0\n"
+    content = content + "}\n"
+
+    let b64_raw = to_string(exec(
+        "printf %s " + _shell_quote(content) + " | base64"
+    ))
+    let b64_clean = b64_raw.replace("\n", "").replace("\r", "")
+
+    // Same trick for the commit message.
+    let msg_b64_raw = to_string(exec(
+        "printf %s " + _shell_quote(message) + " | base64"
+    ))
+    let msg_b64 = msg_b64_raw.replace("\n", "").replace("\r", "")
+
+    let cmd = "cd " + _shell_quote(dir)
+            + " && printf %s " + _shell_quote(b64_clean)
+            + " | base64 -d > demo.hexa"
+            + " && printf %s " + _shell_quote(msg_b64)
+            + " | base64 -d > .commit_msg"
+            + " && git add demo.hexa"
+            + " && git commit -q -F .commit_msg"
+            + " && git rev-parse HEAD"
+    let r = _sh(cmd)
+    let code = r[1]
+    if code != 0 { return "" }
+    return r[0].trim()
+}
+
+// run the checker against (dir, sha); return [combined_output, code].
+fn _run_checker(dir: string, script_abs: string, sha: string) -> array {
+    let cmd = "cd " + _shell_quote(dir)
+            + " && hexa " + _shell_quote(script_abs)
+            + " --commit " + _shell_quote(sha) + " 2>&1"
+    let r = exec_with_status(cmd)
+    let code = r[1]
+    return [to_string(r[0]), code]
+}
+
+// ─── case runners ───────────────────────────────────────────────
+
+fn case_a_pass(script: string) -> bool {
+    let dir = _make_repo("a")
+    let msg = "feat: add temporary opt-out\n\nAcked-grace: HX1042 by alice"
+    let sha = _commit_grace(dir, "HX1042", msg)
+    let r = _run_checker(dir, script, sha)
+    let out = r[0]
+    let code = r[1]
+    let ok = code == 0
+    let mentions_ok = out.index_of("OK:") >= 0
+    let pass = ok && mentions_ok
+    let mut tag = "  FAIL"
+    if pass { tag = "  PASS" }
+    println("[A] matching trailer (HX1042 / HX1042) -- exit=" + to_string(code) + tag)
+    if !pass { println("    output: " + out) }
+    return pass
+}
+
+fn case_b_no_trailer(script: string) -> bool {
+    let dir = _make_repo("b")
+    let msg = "feat: add temporary opt-out without consent"
+    let sha = _commit_grace(dir, "HX1042", msg)
+    let r = _run_checker(dir, script, sha)
+    let out = r[0]
+    let code = r[1]
+    let mentions_code = out.index_of("HX1042") >= 0
+    let fail2 = code == 2
+    let pass = fail2 && mentions_code
+    let mut tag = "  FAIL"
+    if pass { tag = "  PASS" }
+    println("[B] no trailer (HX1042 in diff) -- exit=" + to_string(code) + tag)
+    if !pass { println("    output: " + out) }
+    return pass
+}
+
+fn case_c_mismatch(script: string) -> bool {
+    let dir = _make_repo("c")
+    let msg = "feat: opt out a different site\n\nAcked-grace: HX1042 by bob"
+    let sha = _commit_grace(dir, "HX5001", msg)
+    let r = _run_checker(dir, script, sha)
+    let out = r[0]
+    let code = r[1]
+    let mentions_code = out.index_of("HX5001") >= 0
+    let fail2 = code == 2
+    let pass = fail2 && mentions_code
+    let mut tag = "  FAIL"
+    if pass { tag = "  PASS" }
+    println("[C] mismatched trailer (acks HX1042, diff has HX5001) -- exit="
+            + to_string(code) + tag)
+    if !pass { println("    output: " + out) }
+    return pass
+}
+
+// ─── main ───────────────────────────────────────────────────────
+
+pub fn main() {
+    let root = _repo_root()
+    let script = root + "/tool/check_grace_consent.hexa"
+
+    println("check_grace_consent contract tests")
+    println("  checker: " + script)
+    println("")
+
+    let a = case_a_pass(script)
+    let b = case_b_no_trailer(script)
+    let c = case_c_mismatch(script)
+
+    let total = 3
+    let mut passed = 0
+    if a { passed = passed + 1 }
+    if b { passed = passed + 1 }
+    if c { passed = passed + 1 }
+
+    println("")
+    println("contract: " + to_string(passed) + "/" + to_string(total) + " passed")
+
+    if passed == total { exit(0) }
+    exit(1)
+}
+
+// ─── is_main guard ──────────────────────────────────────────────
+
+let _av_top = argv()
+
+fn _is_main() -> bool {
+    if len(_av_top) < 2 { return false }
+    let script = _av_top[1]
+    if script.ends_with("/check_grace_consent_test.hexa") { return true }
+    if script == "check_grace_consent_test.hexa" { return true }
+    return false
+}
+
+if _is_main() { main() }

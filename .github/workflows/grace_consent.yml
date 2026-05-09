@@ -1,0 +1,92 @@
+# grace_consent.yml — CI gate for SPEC.yaml opt_out.ai_native_warn_policy
+#
+# PURPOSE
+#   Enforce the per-site `Acked-grace: HXxxxx by <reviewer>` trailer on
+#   every PR that introduces or modifies an `@grace(HXxxxx, ...)` site
+#   in any `.hexa` source. Fails the PR if at least one site lacks a
+#   matching trailer in the PR body or any of its commit messages.
+#
+#   Source contract: SPEC.yaml `opt_out.ai_native_warn_policy.user_consent_mechanism`
+#   Driver: tool/check_grace_consent.hexa (`--pr <N>` mode preferred,
+#           with a fallback to a base..HEAD diff if `gh` is unavailable).
+#
+# INVOCATION
+#   Per-PR only. Push events are skipped — the trailer is a review-time
+#   contract; commits landing on `main` directly are out of scope here.
+#
+# DEPENDENCIES
+#   git, gh (preinstalled on GitHub-hosted runners), and the in-tree
+#   self-hosted hexa interpreter (`build/hexa_interp.linux`, already
+#   committed). No external installs.
+
+name: grace-consent
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check:
+    name: check @grace consent trailers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v6
+        with:
+          # full history so HEAD..base diff is computable
+          fetch-depth: 0
+
+      - name: Locate hexa interpreter
+        id: hexa
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -x build/hexa_interp.linux ]; then
+            echo "bin=build/hexa_interp.linux" >> "$GITHUB_OUTPUT"
+          elif command -v hexa >/dev/null 2>&1; then
+            echo "bin=hexa" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::no hexa interpreter found (expected build/hexa_interp.linux or PATH:hexa)"
+            exit 1
+          fi
+
+      - name: Run consent checker (PR mode)
+        if: ${{ github.event.pull_request != null }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="${{ steps.hexa.outputs.bin }}"
+          echo "interpreter: $BIN"
+          echo "PR:          #${PR_NUMBER}"
+
+          # Try --pr mode first (richest: covers PR body + every commit msg).
+          # Fall back to the diff-range mode if `gh pr view` fails (e.g. on
+          # a fork without token grants).
+          if "$BIN" tool/check_grace_consent.hexa --pr "$PR_NUMBER"; then
+            echo "::notice::grace-consent OK (PR mode)"
+            exit 0
+          fi
+
+          rc=$?
+          if [ "$rc" -eq 2 ]; then
+            # exit 2 = real consent violation (or hard usage error from
+            # --pr).  If `gh` itself failed, the checker would have printed
+            # a `gh pr view failed` message; in that case retry with
+            # the local diff-range mode using GitHub's BASE_SHA.
+            if "$BIN" tool/check_grace_consent.hexa --pr "$PR_NUMBER" 2>&1 \
+                | grep -q "gh pr view failed"; then
+              echo "::warning::gh pr view unavailable; retrying with --diff"
+              BASE_SHA="${{ github.event.pull_request.base.sha }}"
+              "$BIN" tool/check_grace_consent.hexa --diff "$BASE_SHA"
+              exit $?
+            fi
+          fi
+          exit "$rc"

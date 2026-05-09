@@ -1,0 +1,470 @@
+#!hexa strict
+// tool/check_grace_consent.hexa — CI-side @grace consent checker
+//
+// PURPOSE
+//   Enforces SPEC.yaml `opt_out.ai_native_warn_policy.user_consent_mechanism`.
+//   Every commit/PR that introduces or modifies a `@grace(HXxxxx, ...)` site
+//   MUST carry a matching trailer in the commit message or PR body:
+//
+//       Acked-grace: HXxxxx by <reviewer-handle>
+//
+//   Per-site granularity. CI fails (exit 2) if any HX code in the diff lacks
+//   a matching trailer. This is the "explicit human signoff trail" demanded
+//   by the rationale block in SPEC.yaml (Decision 4).
+//
+// CLI
+//   hexa tool/check_grace_consent.hexa
+//       — diff HEAD~1..HEAD against the HEAD commit message (default).
+//   hexa tool/check_grace_consent.hexa --pr <N>
+//       — fetch PR #N via `gh pr view <N> --json body,commits` and check
+//         the diff produced by its commits against the PR body trailers.
+//   hexa tool/check_grace_consent.hexa --commit <sha>
+//       — diff <sha>~1..<sha> against the message of <sha>.
+//   hexa tool/check_grace_consent.hexa --diff <base>
+//       — diff <base>..HEAD against the HEAD commit message.
+//
+// EXIT CODES
+//   0 — every @grace site in the diff has a matching Acked-grace trailer.
+//   2 — at least one site is unconsented OR usage error.
+//
+// TRAILER FORMAT (case-insensitive, tolerant)
+//   /^[ \t]*acked-grace:[ \t]*HX([0-9]{4,})[ \t]+(by|By|BY)[ \t]+\S+/
+//   Multi-line bodies are scanned line-by-line.
+//
+// DEPENDENCIES
+//   git, gh (only for --pr); pure hexa stdlib otherwise.
+//
+// STYLE
+//   Mirrors tool/raw_sync.hexa: `_shell_quote`, `_rstrip`, exec_with_status,
+//   is_main guard, ENGLISH ONLY messages.
+
+// ─── helpers ────────────────────────────────────────────────────
+
+fn _shell_quote(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _rstrip(s: string) -> string {
+    let mut end = len(s)
+    while end > 0 {
+        let c = s.substring(end - 1, end)
+        if c == " " || c == "\t" || c == "\r" { end = end - 1 } else { break }
+    }
+    return s.substring(0, end)
+}
+
+fn _is_digit(c: string) -> bool {
+    return c == "0" || c == "1" || c == "2" || c == "3" || c == "4"
+        || c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
+}
+
+fn _is_ws(c: string) -> bool {
+    return c == " " || c == "\t"
+}
+
+// case-insensitive ASCII compare (we only deal with ASCII keywords)
+fn _ieq(a: string, b: string) -> bool {
+    return a.to_lower() == b.to_lower()
+}
+
+fn _contains_substr(haystack: string, needle: string) -> bool {
+    return haystack.index_of(needle) >= 0
+}
+
+// ─── HX code extraction from a single source line ───────────────
+//
+// Look for `@grace(HX####` anywhere in the line. Return the 4+ digit
+// numeric tail (e.g. "1042" from "@grace(HX1042, until=..."). Empty
+// string if not present or malformed.
+
+fn _extract_hx_code(line: string) -> string {
+    // search for "@grace(HX"
+    let key = "@grace(HX"
+    let p = line.index_of(key)
+    if p < 0 { return "" }
+    let start = p + len(key)
+    let mut i = start
+    let n = len(line)
+    while i < n {
+        let c = line.substring(i, i + 1)
+        if !_is_digit(c) { break }
+        i = i + 1
+    }
+    if i == start { return "" }
+    let digits = line.substring(start, i)
+    if len(digits) < 4 { return "" }
+    return "HX" + digits
+}
+
+// ─── trailer parsing ────────────────────────────────────────────
+//
+// A line is a valid Acked-grace trailer if (after lowering) it matches:
+//   ^[ \t]*acked-grace:[ \t]*hx<digits>[ \t]+by[ \t]+<handle>...
+//
+// Returns the HX code (e.g. "HX1042") or "" on no-match. Reviewer handle
+// is required to be present (non-whitespace token after `by`).
+
+fn _parse_acked_trailer(raw: string) -> string {
+    let line = _rstrip(raw)
+    let lower = line.to_lower()
+
+    // skip leading whitespace
+    let mut i = 0
+    let n = len(lower)
+    while i < n && _is_ws(lower.substring(i, i + 1)) { i = i + 1 }
+
+    let prefix = "acked-grace:"
+    if i + len(prefix) > n { return "" }
+    if lower.substring(i, i + len(prefix)) != prefix { return "" }
+    i = i + len(prefix)
+
+    // optional whitespace
+    while i < n && _is_ws(lower.substring(i, i + 1)) { i = i + 1 }
+
+    // expect "hx" + digits
+    if i + 2 > n { return "" }
+    if lower.substring(i, i + 2) != "hx" { return "" }
+    i = i + 2
+
+    let dstart = i
+    while i < n && _is_digit(lower.substring(i, i + 1)) { i = i + 1 }
+    if i - dstart < 4 { return "" }
+    let digits = lower.substring(dstart, i)
+
+    // require whitespace then `by` token (case-insensitive)
+    if i >= n { return "" }
+    if !_is_ws(lower.substring(i, i + 1)) { return "" }
+    while i < n && _is_ws(lower.substring(i, i + 1)) { i = i + 1 }
+
+    // word `by`
+    if i + 2 > n { return "" }
+    if lower.substring(i, i + 2) != "by" { return "" }
+    i = i + 2
+
+    // require trailing whitespace then non-empty handle
+    if i >= n { return "" }
+    if !_is_ws(lower.substring(i, i + 1)) { return "" }
+    while i < n && _is_ws(lower.substring(i, i + 1)) { i = i + 1 }
+    if i >= n { return "" }
+    // handle must be at least one non-ws char
+    let h = lower.substring(i, i + 1)
+    if _is_ws(h) { return "" }
+
+    return "HX" + digits
+}
+
+// scan a full multi-line message body and collect the set of acked HX codes
+fn _collect_acked_codes(body: string) -> array {
+    let lines = split(body, "\n")
+    let mut acked = []
+    for raw in lines {
+        let code = _parse_acked_trailer(raw)
+        if code == "" { continue }
+        // de-dup
+        let mut seen = false
+        for e in acked {
+            if e == code { seen = true; break }
+        }
+        if !seen { acked.push(code) }
+    }
+    return acked
+}
+
+// ─── diff scanning ──────────────────────────────────────────────
+//
+// Parse `git diff <range> -- '*.hexa'` output, find ADDED lines starting
+// with '+' (excluding '+++' file headers) that contain `@grace(HX####`,
+// and return an array of [hx_code, file_path] pairs (deduped per code).
+
+fn _hexa_path_only(p: string) -> bool {
+    return p.ends_with(".hexa")
+}
+
+fn _scan_diff_for_grace(diff_text: string) -> array {
+    let lines = split(diff_text, "\n")
+    let mut sites = []
+    let mut cur_file = ""
+
+    for raw in lines {
+        // file boundary marker `+++ b/<path>`
+        if len(raw) >= 6 && raw.substring(0, 4) == "+++ " {
+            // form: "+++ b/path/to/file.hexa" or "+++ /dev/null"
+            let rest = raw.substring(4, len(raw))
+            let mut p = rest
+            if len(p) >= 2 && p.substring(0, 2) == "b/" {
+                p = p.substring(2, len(p))
+            }
+            if p == "/dev/null" {
+                cur_file = ""
+            } else {
+                cur_file = p
+            }
+            continue
+        }
+        // skip other diff metadata
+        if len(raw) >= 4 && raw.substring(0, 4) == "--- " { continue }
+        if len(raw) >= 5 && raw.substring(0, 5) == "diff " { continue }
+        if len(raw) >= 6 && raw.substring(0, 6) == "index " { continue }
+        if len(raw) >= 2 && raw.substring(0, 2) == "@@" { continue }
+
+        // added line: starts with single '+' (not '++' which is the +++ header)
+        if len(raw) == 0 { continue }
+        if raw.substring(0, 1) != "+" { continue }
+        if len(raw) >= 2 && raw.substring(0, 2) == "++" { continue }
+
+        // only consider .hexa files
+        if cur_file == "" { continue }
+        if !_hexa_path_only(cur_file) { continue }
+
+        let body = raw.substring(1, len(raw))
+        let code = _extract_hx_code(body)
+        if code == "" { continue }
+
+        // de-dup per (code, file)
+        let mut seen = false
+        for s in sites {
+            if s[0] == code && s[1] == cur_file { seen = true; break }
+        }
+        if !seen { sites.push([code, cur_file]) }
+    }
+    return sites
+}
+
+// ─── git/gh wrappers ────────────────────────────────────────────
+
+fn _git_diff(base: string, head: string) -> string {
+    let cmd = "git diff " + _shell_quote(base) + ".." + _shell_quote(head)
+            + " -- '*.hexa'"
+    return to_string(exec(cmd))
+}
+
+fn _git_commit_message(sha: string) -> string {
+    // %B = raw body (subject + body, no trailers normalization)
+    let cmd = "git log -1 --format=%B " + _shell_quote(sha)
+    return to_string(exec(cmd))
+}
+
+fn _git_rev_parse(rev: string) -> string {
+    let cmd = "git rev-parse " + _shell_quote(rev) + " 2>/dev/null"
+    return to_string(exec(cmd)).trim()
+}
+
+fn _gh_pr_body(n: string) -> string {
+    // `gh pr view <N> --json body --jq .body` — body field only.
+    let cmd = "gh pr view " + _shell_quote(n) + " --json body --jq .body 2>/dev/null"
+    return to_string(exec(cmd))
+}
+
+fn _gh_pr_base_sha(n: string) -> string {
+    let cmd = "gh pr view " + _shell_quote(n)
+            + " --json baseRefOid --jq .baseRefOid 2>/dev/null"
+    return to_string(exec(cmd)).trim()
+}
+
+fn _gh_pr_head_sha(n: string) -> string {
+    let cmd = "gh pr view " + _shell_quote(n)
+            + " --json headRefOid --jq .headRefOid 2>/dev/null"
+    return to_string(exec(cmd)).trim()
+}
+
+fn _gh_pr_commits_messages(n: string) -> string {
+    // join all commit messages so author-side commit trailers also count
+    let cmd = "gh pr view " + _shell_quote(n)
+            + " --json commits --jq '.commits[].messageBody + \"\\n\" + .commits[].messageHeadline' 2>/dev/null"
+    return to_string(exec(cmd))
+}
+
+// ─── core: run check given a diff range and a message body ──────
+
+fn _check_consent(base: string, head: string, message_body: string) -> int {
+    let diff = _git_diff(base, head)
+    let sites = _scan_diff_for_grace(diff)
+    let acked = _collect_acked_codes(message_body)
+
+    if len(sites) == 0 {
+        println("OK: 0 grace site(s) acknowledged")
+        return 0
+    }
+
+    let mut missing = []
+    for s in sites {
+        let code = s[0]
+        let mut found = false
+        for a in acked {
+            if a == code { found = true; break }
+        }
+        if !found {
+            missing.push(s)
+        }
+    }
+
+    if len(missing) == 0 {
+        println("OK: " + to_string(len(sites)) + " grace site(s) acknowledged")
+        return 0
+    }
+
+    eprintln("FAIL: unconsented @grace site(s) — every @grace introduced or")
+    eprintln("      modified in this diff requires a matching trailer:")
+    eprintln("        Acked-grace: <HXcode> by <reviewer-handle>")
+    eprintln("")
+    eprintln("Per-site report (" + to_string(len(missing)) + " missing of "
+             + to_string(len(sites)) + " total):")
+    for m in missing {
+        eprintln("  - " + m[0] + " in " + m[1] + "  [no matching trailer]")
+    }
+    if len(acked) > 0 {
+        eprintln("")
+        eprintln("Trailers seen in message body:")
+        for a in acked {
+            eprintln("  - Acked-grace: " + a)
+        }
+    } else {
+        eprintln("")
+        eprintln("No Acked-grace trailers were found in the message body.")
+    }
+    eprintln("")
+    eprintln("See SPEC.yaml opt_out.ai_native_warn_policy.user_consent_mechanism")
+    eprintln("and doc/m0_local_bypass.md for trailer format.")
+    return 2
+}
+
+// ─── mode dispatch ──────────────────────────────────────────────
+
+fn run_default() -> int {
+    let head = _git_rev_parse("HEAD")
+    let base = _git_rev_parse("HEAD~1")
+    if head == "" {
+        eprintln("check_grace_consent: cannot resolve HEAD (no git history?)")
+        return 2
+    }
+    if base == "" {
+        // first commit — diff against empty tree
+        let empty = to_string(exec("git hash-object -t tree /dev/null")).trim()
+        let msg = _git_commit_message(head)
+        return _check_consent(empty, head, msg)
+    }
+    let msg = _git_commit_message(head)
+    return _check_consent(base, head, msg)
+}
+
+fn run_commit(sha: string) -> int {
+    let resolved = _git_rev_parse(sha)
+    if resolved == "" {
+        eprintln("check_grace_consent: cannot resolve commit '" + sha + "'")
+        return 2
+    }
+    let parent = _git_rev_parse(resolved + "~1")
+    let msg = _git_commit_message(resolved)
+    if parent == "" {
+        let empty = to_string(exec("git hash-object -t tree /dev/null")).trim()
+        return _check_consent(empty, resolved, msg)
+    }
+    return _check_consent(parent, resolved, msg)
+}
+
+fn run_diff(base: string) -> int {
+    let resolved = _git_rev_parse(base)
+    if resolved == "" {
+        eprintln("check_grace_consent: cannot resolve base '" + base + "'")
+        return 2
+    }
+    let head = _git_rev_parse("HEAD")
+    let msg = _git_commit_message(head)
+    return _check_consent(resolved, head, msg)
+}
+
+fn run_pr(n: string) -> int {
+    let body = _gh_pr_body(n)
+    let commits_msgs = _gh_pr_commits_messages(n)
+    let combined = body + "\n" + commits_msgs
+
+    let base = _gh_pr_base_sha(n)
+    let head = _gh_pr_head_sha(n)
+    if base == "" || head == "" {
+        eprintln("check_grace_consent: gh pr view failed for PR #" + n)
+        eprintln("  is `gh` installed and authenticated? is the PR number valid?")
+        return 2
+    }
+    return _check_consent(base, head, combined)
+}
+
+// ─── usage / entry ──────────────────────────────────────────────
+
+fn _usage() {
+    eprintln("usage: hexa tool/check_grace_consent.hexa [mode]")
+    eprintln("")
+    eprintln("  (default)              check HEAD vs HEAD~1 against HEAD commit message")
+    eprintln("  --commit <sha>         check <sha> vs <sha>~1 against its commit message")
+    eprintln("  --diff <base>          check <base>..HEAD against HEAD commit message")
+    eprintln("  --pr <N>               check PR #N via `gh pr view`")
+    eprintln("")
+    eprintln("Trailer format (case-insensitive, leading whitespace allowed):")
+    eprintln("  Acked-grace: HXxxxx by <reviewer-handle>")
+    eprintln("")
+    eprintln("Exit 0 = all @grace sites acknowledged; exit 2 = missing or usage error.")
+}
+
+pub fn main() {
+    let av = argv()
+    let mut mode = "default"
+    let mut arg = ""
+    let mut i = 2
+    while i < len(av) {
+        let a = av[i]
+        if a == "--pr" {
+            mode = "pr"
+            if i + 1 < len(av) { arg = av[i + 1]; i = i + 1 }
+            else {
+                eprintln("check_grace_consent: --pr requires a PR number")
+                exit(2)
+            }
+        } else if a == "--commit" {
+            mode = "commit"
+            if i + 1 < len(av) { arg = av[i + 1]; i = i + 1 }
+            else {
+                eprintln("check_grace_consent: --commit requires a sha")
+                exit(2)
+            }
+        } else if a == "--diff" {
+            mode = "diff"
+            if i + 1 < len(av) { arg = av[i + 1]; i = i + 1 }
+            else {
+                eprintln("check_grace_consent: --diff requires a base ref")
+                exit(2)
+            }
+        } else if a == "-h" || a == "--help" {
+            _usage()
+            exit(0)
+        } else {
+            eprintln("check_grace_consent: unknown argument '" + a + "'")
+            _usage()
+            exit(2)
+        }
+        i = i + 1
+    }
+
+    let mut rc = 0
+    if mode == "default"     { rc = run_default() }
+    else if mode == "commit" { rc = run_commit(arg) }
+    else if mode == "diff"   { rc = run_diff(arg) }
+    else if mode == "pr"     { rc = run_pr(arg) }
+    else {
+        _usage()
+        exit(2)
+    }
+    exit(rc)
+}
+
+// ─── is_main guard ──────────────────────────────────────────────
+
+let _av_top = argv()
+
+fn _is_main() -> bool {
+    if len(_av_top) < 2 { return false }
+    let script = _av_top[1]
+    if script.ends_with("/check_grace_consent.hexa") { return true }
+    if script == "check_grace_consent.hexa" { return true }
+    return false
+}
+
+if _is_main() { main() }

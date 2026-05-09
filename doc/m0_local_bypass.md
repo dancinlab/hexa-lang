@@ -115,3 +115,49 @@ Two options:
   as a follow-up to Gap 6.
 * Commit a vendored `build/hexa_interp.darwin` so option (2) of the
   probe order works without `self/native/hexa_v2` being present.
+
+## Adding the `Acked-grace` trailer
+
+Unrelated to the M0 bypass above, every `@grace(HXxxxx, ...)` site that
+a commit or PR introduces or modifies must carry a matching consent
+trailer per SPEC.yaml `opt_out.ai_native_warn_policy.user_consent_mechanism`.
+The CI gate is `tool/check_grace_consent.hexa`, wired to PRs by
+`.github/workflows/grace_consent.yml`.
+
+### Trailer format
+
+* In a **commit message body** (one trailer per acknowledged site):
+
+  ```
+  Acked-grace: HX1042 by alice
+  ```
+
+* In a **PR description** (same form; multiple sites use multiple lines):
+
+  ```
+  Acked-grace: HX1042 by alice
+  Acked-grace: HX5001 by bob
+  ```
+
+The match is case-insensitive (`acked-grace:` is fine), tolerates leading
+whitespace, and accepts either ` by ` or ` By ` between the HX code and
+the reviewer handle. Trailing whitespace is allowed; a final newline is
+optional.
+
+### Local pre-flight
+
+Before pushing, you can run the same check the CI runs:
+
+```sh
+# default: HEAD vs HEAD~1 against the HEAD commit message
+hexa tool/check_grace_consent.hexa
+
+# explicit base..HEAD range
+hexa tool/check_grace_consent.hexa --diff origin/main
+
+# specific commit
+hexa tool/check_grace_consent.hexa --commit <sha>
+```
+
+Exit 0 = every `@grace` site has a matching trailer; exit 2 = at least
+one site is unacknowledged (full per-site report on stderr).
