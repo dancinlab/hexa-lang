@@ -29,6 +29,9 @@ import "./check/units.hexa"
 import "./check/citation.hexa"
 import "./lower/ast_to_hir.hexa"
 import "./lower/hir_to_mir.hexa"
+import "./optimize/const_fold.hexa"
+import "./optimize/dce.hexa"
+import "./optimize/inline.hexa"
 import "./codegen/arm64_darwin.hexa"
 import "./codegen/x86_64_linux.hexa"
 import "./emit/asm.hexa"
@@ -37,7 +40,7 @@ import "./diag/render.hexa"
 
 // ── Version / banner ────────────────────────────────────────────
 
-let HEXA_VERSION = "hexa 0.0.1 (phase A1+B1+B2+B3+B3+B4+lower+codegen+emit)"
+let HEXA_VERSION = "hexa 0.0.1 (phase A1+B1+B2+B3+B3+B4+lower+codegen+emit+optimize)"
 
 // ── argv normalization ─────────────────────────────────────────
 // Hexa stage0 hands us argv shaped one of:
@@ -114,13 +117,20 @@ fn print_help() {
     println("  --emit=KIND            asm | obj | exec   (default: exec)")
     println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
     println("  --linker=KIND          hexa | system     (default: system; hexa_ld not yet landed)")
+    println("  --opt=LEVEL            0 | 1 | 2 | 3     (default: 0, or $HEXA_OPT_LEVEL)")
     println("  --keep-temp            do not remove the per-build intermediate dir (default: off)")
     println("  -v, --verbose          print build-temp dir and intermediate paths to stderr")
     println("  --version              print version and exit")
     println("  --help                 print this help and exit")
     println("")
+    println("optimization levels (--opt=LEVEL):")
+    println("  0  none         fastest compile; no MIR optimizations (default)")
+    println("  1  basic        const_fold only")
+    println("  2  default      const_fold + dce")
+    println("  3  aggressive   inline_small + const_fold + dce (2-pass)")
+    println("")
     println("example:")
-    println("  hexa run compiler/main.hexa --emit=exec -o hello src/hello.hexa")
+    println("  hexa run compiler/main.hexa --opt=2 --emit=exec -o hello src/hello.hexa")
     println("")
     println("notes:")
     println("  * The driver invokes the system `as` and `ld` programs. Linker paths")
@@ -279,6 +289,14 @@ let mut source_path = ""
 let mut keep_temp = false
 let mut verbose = false
 
+// --opt=LEVEL default: $HEXA_OPT_LEVEL if set+parseable (0..3), else 0.
+let _opt_env = env("HEXA_OPT_LEVEL")
+let mut opt_level: i64 = 0
+if len(_opt_env) > 0 {
+    let _ev = to_int(_opt_env)
+    if _ev > -1 && _ev < 4 { opt_level = _ev }
+}
+
 // Parse flags. We accept both `-o OUT` (two-arg) and `--target=TRIPLE`
 // (single equals form). Unknown flags are ignored with a warning so future
 // flags don't break old wrappers.
@@ -312,6 +330,9 @@ while ai < len(user_argv) {
         ai = ai + 1
     } else if len(a) >= 9 && a.substring(0, 9) == "--linker=" {
         linker_kind = a.substring(9, len(a))
+        ai = ai + 1
+    } else if len(a) > 5 && a.substring(0, 6) == "--opt=" {
+        opt_level = to_int(a.substring(6, len(a)))
         ai = ai + 1
     } else if a == "--keep-temp" {
         keep_temp = true
@@ -397,7 +418,17 @@ if _has_errors(diags) {
 // ── Lower → MIR → LIR ────────────────────────────────────────
 
 let hmodule = lower(module, atlas)
-let mmodule = lower_hir(hmodule)
+let mut mmodule = lower_hir(hmodule)
+
+// MIR optimizer (RFC-018 §9 v1) — gated by --opt=LEVEL / $HEXA_OPT_LEVEL.
+//   0 none  /  1 const_fold  /  2 const_fold + dce  /  3 inline + 2-pass
+if opt_level > 0 { mmodule = const_fold(mmodule) }
+if opt_level > 1 { mmodule = dce(mmodule) }
+if opt_level > 2 {
+    mmodule = inline_small(mmodule)
+    mmodule = const_fold(mmodule)
+    mmodule = dce(mmodule)
+}
 
 let mut lmodule_target = target
 let mut lmodule = LModule { file: source_path, target: target, funcs: [], rodata: [], bss: [] }
