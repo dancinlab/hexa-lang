@@ -186,6 +186,78 @@ fn _find_l_node(idx: AtlasIndex, id: string) -> AtlasNode {
     }
 }
 
+// File-level @L block extractor. Reads atlas.n6 (and every
+// atlas.append.*.n6 in alpha order) line-by-line, returns the contiguous
+// "@L <id>" block bytes for the requested id (or "" when absent). We
+// bypass compiler/atlas/parser.hexa here because the Stage0 hexa
+// interp's array push semantics drop every-other continuation line out
+// of node.raw; reading the file ourselves keeps the bytes intact.
+fn _extract_l_block_from_file(atlas_root: string, id: string) -> string {
+    // Try the main atlas.n6 first; if not found, scan append shards.
+    let candidates = []
+    candidates.push(atlas_root + "/atlas.n6")
+    let entries = list_dir(atlas_root)
+    if type_of(entries) == "array" {
+        let mut k = 0
+        while k < len(entries) {
+            let name = to_string(entries[k])
+            if len(name) >= 16 && name.substring(0, 13) == "atlas.append." {
+                let tail = name.substring(len(name) - 3, len(name))
+                if tail == ".n6" {
+                    candidates.push(atlas_root + "/" + name)
+                }
+            }
+            k = k + 1
+        }
+    }
+    let mut ci = 0
+    while ci < len(candidates) {
+        let path = candidates[ci]
+        if !file_exists(path) { ci = ci + 1; continue }
+        let text = read_file(path)
+        if len(text) == 0 { ci = ci + 1; continue }
+        let lines = text.split("\n")
+        let n_lines = len(lines)
+        let header_prefix = "@L " + id
+        let mut in_block = false
+        let parts = []
+        let mut i = 0
+        while i < n_lines {
+            let line = lines[i]
+            if len(line) == 0 { i = i + 1; continue }
+            let c0 = line.substring(0, 1)
+            if c0 == "@" {
+                if in_block {
+                    // Hit next @-header → block ended.
+                    return parts.join("\n")
+                }
+                if _starts_with(line, header_prefix) {
+                    let next_after = len(header_prefix)
+                    if next_after >= len(line) {
+                        in_block = true
+                        parts.push(line)
+                    } else {
+                        let nc = line.substring(next_after, next_after + 1)
+                        if _is_ws_char(nc) || nc == "\r" {
+                            in_block = true
+                            parts.push(line)
+                        }
+                    }
+                }
+                i = i + 1
+                continue
+            }
+            if in_block {
+                parts.push(line)
+            }
+            i = i + 1
+        }
+        if in_block { return parts.join("\n") }
+        ci = ci + 1
+    }
+    return ""
+}
+
 // -- Tombstone parser ----------------------------------------------
 // Walks atlas.tombstones.n6 line-by-line, splitting on the literal header
 // prefix "tombstone L[". Each tombstone block ends at the next header line
@@ -309,15 +381,16 @@ pub fn is_tombstoned(atlas_root: string, node_id: string) -> bool {
 // remain intact so promote/merge operations don't reshuffle history.
 pub fn tombstone_node(atlas_root: string, node_id: string, reason: string,
                       replacement: string) -> i64 {
-    let idx = load_atlas(atlas_root)
-    let node = _find_l_node(idx, node_id)
-    if len(node.kind) == 0 {
+    // Read the L block bytes directly from the atlas file -- the merger's
+    // node.raw is unreliable under Stage0 interp (drops continuation lines).
+    let block = _extract_l_block_from_file(atlas_root, node_id)
+    if len(block) == 0 {
         println("tombstone_node: no atlas L node `" + node_id + "` under " + atlas_root)
         return 2
     }
 
-    let prev_hash = _extract_proof_hash(node.raw)
-    let prev_ver = _extract_verifier_version(node.raw)
+    let prev_hash = _extract_proof_hash(block)
+    let prev_ver = _extract_verifier_version(block)
 
     let t = Tombstone {
         node_id: node_id,
@@ -366,15 +439,14 @@ pub fn tombstone_node(atlas_root: string, node_id: string, reason: string,
 pub fn tombstone_node_with_actor(atlas_root: string, node_id: string,
                                  reason: string, replacement: string,
                                  discovered_by: string) -> i64 {
-    let idx = load_atlas(atlas_root)
-    let node = _find_l_node(idx, node_id)
-    if len(node.kind) == 0 {
+    let block = _extract_l_block_from_file(atlas_root, node_id)
+    if len(block) == 0 {
         println("tombstone_node_with_actor: no atlas L node `" + node_id + "` under " + atlas_root)
         return 2
     }
 
-    let prev_hash = _extract_proof_hash(node.raw)
-    let prev_ver = _extract_verifier_version(node.raw)
+    let prev_hash = _extract_proof_hash(block)
+    let prev_ver = _extract_verifier_version(block)
 
     let t = Tombstone {
         node_id: node_id,

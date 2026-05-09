@@ -1,0 +1,347 @@
+// HEXA Native Compiler - Tombstone smoke test (RFC-017 5e)
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read, fs_write]
+//
+// Drives compiler/discover/tombstone.hexa + retroactive_sweep.hexa +
+// compiler/check/citation.hexa::citation_check_with_root through the four
+// canonical Decision 5e cases:
+//
+//   (a) MANUAL TOMBSTONE -- tombstone_node(.., "addition-commutative",
+//        reason="counter-example a=2,b=3 fails", "") on a fresh fixture
+//        atlas. Asserts atlas.tombstones.n6 contains the entry and
+//        is_tombstoned() returns true.
+//
+//   (b) RETROACTIVE SWEEP (PASS) -- reverify_fn that always returns true.
+//        Asserts 0 newly-tombstoned (count == 0).
+//
+//   (c) RETROACTIVE SWEEP (FAIL ONE) -- reverify_fn returns false ONLY for
+//        L[multiplication-associative]. Asserts that node ends up tombstoned,
+//        every other L node does NOT.
+//
+//   (d) CITATION ON TOMBSTONED -- run citation_check_with_root over a fake
+//        Module that cites L[addition-commutative] via @implements; assert
+//        HX1099 is emitted (with the recorded reason).
+//
+// FIXTURE ATLAS
+//   Hand-rolled at /tmp/_tombstone_smoke_atlas/ -- never touches the live
+//   ~/core/nexus/n6/ tree.
+//
+// Run:
+//   hexa run compiler/discover/tombstone_smoke.hexa
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../atlas/merger.hexa"
+import "../atlas/parser.hexa"
+import "../check/citation.hexa"
+import "../lex/tokens.hexa"
+import "./tombstone.hexa"
+import "./retroactive_sweep.hexa"
+
+let FIXTURE_ROOT: string = "/tmp/_tombstone_smoke_atlas"
+let FIXTURE_FILE: string = "/tmp/_tombstone_smoke_atlas/atlas.n6"
+let FIXTURE_TOMBS: string = "/tmp/_tombstone_smoke_atlas/atlas.tombstones.n6"
+
+fn _mkdir_p(path: string) {
+    exec("mkdir -p '" + path + "'")
+}
+
+fn _rm_rf(path: string) {
+    exec("rm -rf '" + path + "'")
+}
+
+fn _contains(haystack: string, needle: string) -> bool {
+    let n = len(haystack)
+    let m = len(needle)
+    if m == 0 { return true }
+    if m > n { return false }
+    let mut i = 0
+    while i + m <= n {
+        if haystack.substring(i, i + m) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ----------------------------------------------------------------
+// Build the fixture atlas. Three L nodes carry full provenance
+// (proof_hash + verifier_version + normalized_form continuation lines)
+// so retroactive_sweep can inspect them.
+// ----------------------------------------------------------------
+
+fn _write_fixture_atlas() {
+    _rm_rf(FIXTURE_ROOT)
+    _mkdir_p(FIXTURE_ROOT)
+    let parts = []
+    parts.push("# fixture atlas for tombstone_smoke -- DO NOT use as live atlas\n")
+    parts.push("@L addition-commutative :: foundation\n")
+    parts.push("  proof_hash: aaaa1111bbbb2222cccc3333dddd4444\n")
+    parts.push("  verifier_version: hexa-prover-v0\n")
+    parts.push("  normalized_form: (== (+ a b) (+ a b))\n")
+    parts.push("@L multiplication-associative :: foundation\n")
+    parts.push("  proof_hash: 5555666677778888aaaabbbbccccdddd\n")
+    parts.push("  verifier_version: hexa-prover-v0\n")
+    parts.push("  normalized_form: (== (* (* a b) c) (* a (* b c)))\n")
+    parts.push("@L distributivity :: foundation\n")
+    parts.push("  proof_hash: 9999aaaabbbbccccddddeeeeffff0000\n")
+    parts.push("  verifier_version: hexa-prover-v0\n")
+    parts.push("  normalized_form: (== (* a (+ b c)) (+ (* a b) (* a c)))\n")
+    write_file(FIXTURE_FILE, parts.join(""))
+}
+
+// ----------------------------------------------------------------
+// AST construction helpers (mirror compiler/check/citation_test.hexa).
+// We hand-roll a Module containing one fn that cites L[addition-commutative]
+// via @implements -- after case (a) tombstones it, this should emit HX1099.
+// ----------------------------------------------------------------
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_span() -> Span {
+    return _span("", 0, 0, 0)
+}
+
+fn _empty_atlas_ref() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _empty_span() }
+}
+
+fn _empty_type() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: _empty_span() }
+}
+
+fn _atlas_expr(kind: string, id: string, file: string, line: i64, col: i64) -> Expr {
+    let sp = _span(file, line, col, len(id) + 3)
+    let aref = AtlasRef { kind: kind, id: id, span: sp }
+    return Expr {
+        kind: ExprKind::AtlasRef,
+        span: sp,
+        text: id,
+        children: [],
+        atlas_ref: aref
+    }
+}
+
+fn _empty_block(file: string, line: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _span(file, line, 1, 1),
+        text: "",
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _implements_ann(arg: Expr, file: string, line: i64) -> Annotation {
+    let mut args = []
+    args.push(arg)
+    return Annotation {
+        name: "implements",
+        args: args,
+        span: _span(file, line, 1, 12)
+    }
+}
+
+fn _fn_item(name: string, anns: array, body: Expr, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, 2),
+        annotations: anns,
+        params: [],
+        return_type: _empty_type(),
+        body: body,
+        is_pub: false
+    }
+}
+
+// ----------------------------------------------------------------
+// reverify_fn closures for cases (b) and (c).
+// ----------------------------------------------------------------
+
+fn _reverify_always_true(node_id: string, normalized_form: string) -> bool {
+    return true
+}
+
+fn _reverify_fail_only_mul_assoc(node_id: string, normalized_form: string) -> bool {
+    if node_id == "multiplication-associative" { return false }
+    return true
+}
+
+// Reset the atlas before sweep cases so we get a clean slate. Note: case
+// (a)'s tombstone IS preserved across (b)/(c) only when we want to test
+// "additional tombstones don't disturb prior ones"; for clarity we
+// rebuild between cases.
+
+fn _bump_verifier_in_atlas(new_ver: string) {
+    // Rewrite the fixture atlas with a stale verifier_version on the L
+    // nodes -- this is what triggers the sweep's reverify_fn call. We use
+    // the existing v0 strings so the sweep sees them as "stale" relative
+    // to new_ver. (Sweep treats stored != current as stale.)
+    _write_fixture_atlas()
+}
+
+// ----------------------------------------------------------------
+// Main
+// ----------------------------------------------------------------
+
+fn main() {
+    println("==============================================")
+    println("  HEXA Compiler -- Tombstone Smoke (RFC-017 5e)")
+    println("==============================================")
+
+    let mut ok = true
+
+    // ── Case (a) MANUAL TOMBSTONE ──────────────────────────
+    println("")
+    println("---- case (a) manual tombstone ---------------")
+    _write_fixture_atlas()
+
+    let rc_a = tombstone_node(FIXTURE_ROOT,
+                              "addition-commutative",
+                              "counter-example a=2,b=3 fails",
+                              "")
+    println("tombstone_node rc=" + to_string(rc_a))
+    if rc_a != 0 {
+        println("  FAIL (a): expected rc=0, got " + to_string(rc_a))
+        ok = false
+    }
+    let tomb_text = read_file(FIXTURE_TOMBS)
+    println("---- atlas.tombstones.n6 ---------------------")
+    println(tomb_text)
+    println("----------------------------------------------")
+    if !_contains(tomb_text, "tombstone L[addition-commutative]") {
+        println("  FAIL (a): tombstones file missing header line")
+        ok = false
+    }
+    if !_contains(tomb_text, "counter-example a=2,b=3 fails") {
+        println("  FAIL (a): tombstones file missing reason text")
+        ok = false
+    }
+    if !is_tombstoned(FIXTURE_ROOT, "addition-commutative") {
+        println("  FAIL (a): is_tombstoned() returned false")
+        ok = false
+    }
+    if is_tombstoned(FIXTURE_ROOT, "multiplication-associative") {
+        println("  FAIL (a): unrelated id reported tombstoned")
+        ok = false
+    }
+    let listed_a = list_tombstones(FIXTURE_ROOT)
+    println("list_tombstones() count=" + to_string(len(listed_a)))
+    if len(listed_a) != 1 {
+        println("  FAIL (a): expected 1 tombstone record, got " + to_string(len(listed_a)))
+        ok = false
+    }
+
+    // ── Case (b) RETROACTIVE SWEEP (always-true) ───────────
+    println("")
+    println("---- case (b) retroactive sweep (PASS) -------")
+    _bump_verifier_in_atlas("hexa-prover-v1")
+    let n_b = retroactive_sweep(FIXTURE_ROOT,
+                                "hexa-prover-v1",
+                                _reverify_always_true)
+    println("retroactive_sweep returned=" + to_string(n_b))
+    if n_b != 0 {
+        println("  FAIL (b): expected 0 newly-tombstoned, got " + to_string(n_b))
+        ok = false
+    }
+    if file_exists(FIXTURE_TOMBS) {
+        let tt_b = read_file(FIXTURE_TOMBS)
+        if _contains(tt_b, "tombstone L[multiplication-associative]") {
+            println("  FAIL (b): unexpected mul-assoc tombstone after PASS sweep")
+            ok = false
+        }
+    }
+
+    // ── Case (c) RETROACTIVE SWEEP (fail one) ──────────────
+    println("")
+    println("---- case (c) retroactive sweep (FAIL one) ---")
+    _bump_verifier_in_atlas("hexa-prover-v1")
+    let n_c = retroactive_sweep(FIXTURE_ROOT,
+                                "hexa-prover-v1",
+                                _reverify_fail_only_mul_assoc)
+    println("retroactive_sweep returned=" + to_string(n_c))
+    if n_c != 1 {
+        println("  FAIL (c): expected 1 newly-tombstoned, got " + to_string(n_c))
+        ok = false
+    }
+    if !is_tombstoned(FIXTURE_ROOT, "multiplication-associative") {
+        println("  FAIL (c): mul-assoc not tombstoned after sweep")
+        ok = false
+    }
+    if is_tombstoned(FIXTURE_ROOT, "distributivity") {
+        println("  FAIL (c): distributivity wrongly tombstoned")
+        ok = false
+    }
+    let manifest_c = read_file("/tmp/_retroactive_sweep_manifest." + exec("date -u +%Y-%m-%d").trim() + ".txt")
+    println("---- retroactive sweep manifest --------------")
+    println(manifest_c)
+    println("----------------------------------------------")
+    if !_contains(manifest_c, "TOMB    L[multiplication-associative]") {
+        println("  FAIL (c): manifest missing TOMB disposition for mul-assoc")
+        ok = false
+    }
+
+    // ── Case (d) CITATION ON TOMBSTONED ────────────────────
+    println("")
+    println("---- case (d) citation on tombstoned ---------")
+    // Re-write the fixture and tombstone addition-commutative again so
+    // the citation pass observes a known tombstone reason.
+    _write_fixture_atlas()
+    let rc_d = tombstone_node(FIXTURE_ROOT,
+                              "addition-commutative",
+                              "counter-example a=2,b=3 fails",
+                              "")
+    if rc_d != 0 {
+        println("  FAIL (d): tombstone_node rc=" + to_string(rc_d))
+        ok = false
+    }
+
+    let f = "smoke.hexa"
+    let ann = _implements_ann(_atlas_expr("L", "addition-commutative", f, 1, 14), f, 1)
+    let mut anns = []
+    anns.push(ann)
+    let item = _fn_item("uses_tombstoned", anns, _empty_block(f, 2), f, 2)
+    let mut items = []
+    items.push(item)
+    let m = Module { file: f, items: items, imports: [] }
+
+    let atlas = load_atlas(FIXTURE_ROOT)
+    let diags = citation_check_with_root(m, atlas, FIXTURE_ROOT)
+    println("citation diagnostics: " + to_string(len(diags)))
+    let mut k = 0
+    while k < len(diags) {
+        let d = diags[k]
+        println("  [" + to_string(k) + "] " + d.code + " : " + d.message)
+        k = k + 1
+    }
+    if len(diags) != 1 {
+        println("  FAIL (d): expected 1 diagnostic, got " + to_string(len(diags)))
+        ok = false
+    } else {
+        if diags[0].code != "HX1099" {
+            println("  FAIL (d): expected HX1099, got " + diags[0].code)
+            ok = false
+        }
+        if !_contains(diags[0].message, "addition-commutative") {
+            println("  FAIL (d): HX1099 message missing node id")
+            ok = false
+        }
+        if !_contains(diags[0].message, "counter-example") {
+            println("  FAIL (d): HX1099 message missing reason text")
+            ok = false
+        }
+    }
+
+    println("")
+    println("==============================================")
+    if ok {
+        println("PASS: 4 cases -- (a) manual / (b) sweep PASS / (c) sweep FAIL one / (d) HX1099")
+    } else {
+        println("FAIL: tombstone smoke contract not satisfied.")
+    }
+    println("==============================================")
+    if !ok { exit(1) }
+}

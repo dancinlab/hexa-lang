@@ -94,6 +94,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
+        code: "HX1099",
+        title: "atlas L node is tombstoned",
+        severity: Severity::Error,
+        stage: "S8",
+        template: "atlas L node `{node_id}` is tombstoned: {reason}",
+        explain: "The cited L node was retroactively retired (RFC-017 §5e tombstone + retroactive sweep). The original record stays in atlas history for provenance, but new code may not cite it. See atlas.tombstones.n6 for the full record (replacement, prev_proof_hash, prev_verifier_version). SPEC.yaml atlas_self_discovery.invalidation pins HX1099 as the compile-fail signal.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX2001",
         title: "undefined name",
         severity: Severity::Error,

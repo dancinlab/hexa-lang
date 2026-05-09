@@ -1,0 +1,257 @@
+// HEXA Native Compiler - retroactive sweep (RFC-017 5e) Step 4
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read, fs_write]
+//
+// Companion to compiler/discover/tombstone.hexa.
+
+import "../atlas/parser.hexa"
+import "../atlas/merger.hexa"
+import "./tombstone.hexa"
+
+fn _today_utc() -> string {
+    let s = exec("date -u +%Y-%m-%d").trim()
+    if len(s) == 0 { return "unknown-date" }
+    return s
+}
+
+fn _iso_utc_now() -> string {
+    let date_part = exec("date -u +%Y-%m-%d").trim()
+    return date_part + "T00:00:00Z"
+}
+
+fn _is_ws_char(c: string) -> bool {
+    return c == " " || c == "\t"
+}
+
+fn _ltrim(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if !_is_ws_char(c) { break }
+        i = i + 1
+    }
+    return s.substring(i, n)
+}
+
+fn _starts_with(s: string, prefix: string) -> bool {
+    let m = len(prefix)
+    if len(s) < m { return false }
+    return s.substring(0, m) == prefix
+}
+
+fn _extract_kv(raw: string, key_with_colon: string) -> string {
+    let lines = raw.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let s = _ltrim(lines[i])
+        if _starts_with(s, key_with_colon) {
+            return _ltrim(s.substring(len(key_with_colon), len(s)))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _extract_verifier_version(raw: string) -> string {
+    return _extract_kv(raw, "verifier_version:")
+}
+
+fn _extract_normalized_form(raw: string) -> string {
+    return _extract_kv(raw, "normalized_form:")
+}
+
+fn _manifest_path(today: string) -> string {
+    return "/tmp/_retroactive_sweep_manifest." + today + ".txt"
+}
+
+// File-level @L scanner. Returns parallel arrays (ids, verifier_versions,
+// normalized_forms) extracted directly from the atlas .n6 source text.
+// We do NOT route through compiler/atlas/parser.hexa here -- that path
+// drops every-other continuation line under the Stage0 hexa interp.
+// Reading the file ourselves keeps the logic deterministic.
+pub struct AtlasFileSweepRow {
+    id: string,
+    verifier_version: string,
+    normalized_form: string
+}
+
+fn _scan_atlas_file_l_nodes(atlas_root: string) -> array {
+    let out = []
+    let main_path = atlas_root + "/atlas.n6"
+    if !file_exists(main_path) { return out }
+    let text = read_file(main_path)
+    if len(text) == 0 { return out }
+    let lines = text.split("\n")
+    let n_lines = len(lines)
+    let mut have_cur = false
+    let mut cur_id = ""
+    let mut cur_ver = ""
+    let mut cur_norm = ""
+    let mut i = 0
+    while i < n_lines {
+        let line = lines[i]
+        if len(line) == 0 { i = i + 1; continue }
+        let c0 = line.substring(0, 1)
+        if c0 == "#" { i = i + 1; continue }
+        if c0 == "@" {
+            // Flush previous L row.
+            if have_cur {
+                out.push(AtlasFileSweepRow {
+                    id: cur_id,
+                    verifier_version: cur_ver,
+                    normalized_form: cur_norm
+                })
+            }
+            // Detect "@L <id>" header (and only @L; other kinds skipped).
+            if len(line) >= 4 && line.substring(0, 3) == "@L " {
+                let rest = line.substring(3, len(line))
+                // id ends at first whitespace, '=', or "::".
+                let m = len(rest)
+                let mut j = 0
+                while j < m {
+                    let c = rest.substring(j, j + 1)
+                    if c == " " || c == "\t" { break }
+                    if c == "=" { break }
+                    if c == ":" {
+                        if j + 1 < m && rest.substring(j + 1, j + 2) == ":" { break }
+                    }
+                    j = j + 1
+                }
+                cur_id = rest.substring(0, j)
+                cur_ver = ""
+                cur_norm = ""
+                have_cur = true
+            } else {
+                have_cur = false
+            }
+            i = i + 1
+            continue
+        }
+        // Continuation line.
+        if have_cur {
+            let s = _ltrim(line)
+            if _starts_with(s, "verifier_version:") {
+                let v = _ltrim(s.substring(len("verifier_version:"), len(s)))
+                if len(cur_ver) == 0 { cur_ver = v }
+            } else if _starts_with(s, "normalized_form:") {
+                let v = _ltrim(s.substring(len("normalized_form:"), len(s)))
+                if len(cur_norm) == 0 { cur_norm = v }
+            }
+        }
+        i = i + 1
+    }
+    if have_cur {
+        out.push(AtlasFileSweepRow {
+            id: cur_id,
+            verifier_version: cur_ver,
+            normalized_form: cur_norm
+        })
+    }
+    return out
+}
+
+fn _render_manifest(seen: i64, passed: i64, skipped: i64, tombstoned: i64,
+                    dispositions: array, atlas_root: string,
+                    current_ver: string) -> string {
+    let parts = []
+    parts.push("# hexa atlas retroactive-sweep manifest -- ")
+    parts.push(_iso_utc_now())
+    parts.push("\n# atlas_root: ")
+    parts.push(atlas_root)
+    parts.push("\n# current_verifier_version: ")
+    parts.push(current_ver)
+    parts.push("\nl_nodes_seen:        ")
+    parts.push(to_string(seen))
+    parts.push("\nl_nodes_passed:      ")
+    parts.push(to_string(passed))
+    parts.push("\nl_nodes_skipped:     ")
+    parts.push(to_string(skipped))
+    parts.push("\nl_nodes_tombstoned:  ")
+    parts.push(to_string(tombstoned))
+    parts.push("\n\n# dispositions (one per L node):\n")
+    let mut i = 0
+    while i < len(dispositions) {
+        parts.push(to_string(dispositions[i]))
+        parts.push("\n")
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// retroactive_sweep -- re-validate every atlas L node whose stored verifier
+// version differs from current_verifier_version. Failures are tombstoned
+// via tombstone_node_with_actor. Returns count of newly-tombstoned nodes.
+//
+// reverify_fn signature: (node_id, normalized_form) -> bool
+pub fn retroactive_sweep(atlas_root: string, current_verifier_version: string,
+                         reverify_fn: (string, string) -> bool) -> i64 {
+    // Walk atlas.n6 directly -- bypass the atlas parser/merger so we don't
+    // inherit the Stage0 interp continuation-line dropout. The file-level
+    // scanner captures each @L node's verifier_version + normalized_form.
+    let rows = _scan_atlas_file_l_nodes(atlas_root)
+
+    let dispositions = []
+    let mut seen: i64 = 0
+    let mut passed: i64 = 0
+    let mut skipped: i64 = 0
+    let mut tombstoned: i64 = 0
+
+    let today = _today_utc()
+
+    let mut i = 0
+    while i < len(rows) {
+        let row = rows[i]
+        seen = seen + 1
+        let stored_ver = row.verifier_version
+        let normalized_form = row.normalized_form
+        let node_id = row.id
+
+        if len(stored_ver) > 0 && stored_ver == current_verifier_version {
+            passed = passed + 1
+            dispositions.push("PASS    L[" + node_id + "] verifier=" + stored_ver + " (already current)")
+            i = i + 1
+            continue
+        }
+
+        if len(stored_ver) == 0 {
+            skipped = skipped + 1
+            dispositions.push("SKIP    L[" + node_id + "] reason=no_stored_verifier_version")
+            i = i + 1
+            continue
+        }
+
+        let ok = reverify_fn(node_id, normalized_form)
+        if ok {
+            passed = passed + 1
+            dispositions.push("PASS    L[" + node_id + "] verifier=" + stored_ver + " -> " + current_verifier_version)
+            i = i + 1
+            continue
+        }
+
+        let reason = "auto-sweep prover-" + current_verifier_version + " failed re-verification"
+        let actor = "auto-sweep " + current_verifier_version
+        let rc = tombstone_node_with_actor(atlas_root, node_id, reason, "", actor)
+        if rc == 0 {
+            tombstoned = tombstoned + 1
+            dispositions.push("TOMB    L[" + node_id + "] verifier=" + stored_ver + " reason=\"" + reason + "\"")
+        } else {
+            dispositions.push("ERROR   L[" + node_id + "] tombstone_rc=" + to_string(rc))
+        }
+        i = i + 1
+    }
+
+    let manifest_path = _manifest_path(today)
+    let manifest = _render_manifest(seen, passed, skipped, tombstoned,
+                                    dispositions, atlas_root,
+                                    current_verifier_version)
+    write_file(manifest_path, manifest)
+
+    println("retroactive_sweep: seen=" + to_string(seen) +
+            " passed=" + to_string(passed) +
+            " skipped=" + to_string(skipped) +
+            " tombstoned=" + to_string(tombstoned))
+    println("retroactive_sweep: manifest=" + manifest_path)
+    return tombstoned
+}

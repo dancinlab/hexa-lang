@@ -21,8 +21,12 @@
 //           L[*]) has no atlas binding — neither @implements(L[*]) nor
 //           @discover(kind="L"). Error severity, fatal at S8 (SPEC.yaml
 //           atlas_citation_strict.on_missing_binding).
-//   HX1099  @implements(L[id]) where L exists but is tombstoned (Decision 5e).
-//           Already owned by the tombstone pass — re-emit, do not redefine.
+//   HX1099  @implements(L[id]) where the id is tombstoned (Decision 5e).
+//           Two detection paths: (1) the legacy `[TOMBSTONED]` raw-marker
+//           on an existing AtlasNode, (2) a record in atlas.tombstones.n6
+//           consulted via citation_check_with_root(.., atlas_root). The
+//           tombstones-file path WINS over HX8001 — a tombstoned id is
+//           fatal even if the L body has been physically removed.
 //
 // `@law(...)` annotations carry only string literals (formula + units) and
 // require no atlas binding here — deeper verification is RFC-017 S6/S7
@@ -30,6 +34,7 @@
 // item triggers the HX8004 atlas-binding check below.
 //
 // pub fn citation_check(module: Module, atlas: AtlasIndex) -> [Diagnostic]
+// pub fn citation_check_with_root(module, atlas, atlas_root) -> [Diagnostic]
 //
 // 100% enum match on ItemKind / ExprKind (no string compares against tags).
 
@@ -39,10 +44,11 @@ import "../diag/builder.hexa"
 import "../atlas/merger.hexa"
 import "../atlas/parser.hexa"
 import "../lex/tokens.hexa"
+import "../discover/tombstone.hexa"
 
 // ── Helpers ──────────────────────────────────────────────────
 
-fn _empty_fixit() -> FixIt {
+fn _citation_empty_fixit() -> FixIt {
     return FixIt {
         kind: FixItKind::None,
         span: Span { file: "", line: 0, col: 0, len: 0 },
@@ -67,9 +73,39 @@ fn _render_hx8003(fn_name: string, node_id: string) -> string {
     return "function `" + fn_name + "` references atlas L node `" + node_id + "` in its body but has no @implements citation"
 }
 
-// Render HX1099 — citing a tombstoned L node (per SPEC.md §6.5).
-fn _render_hx1099(node_id: string) -> string {
+// Render HX1099 — citing a tombstoned L node (RFC-017 §5e, SPEC.md §6.5).
+// Reason text comes from atlas.tombstones.n6 when available; falls back to a
+// generic message when the legacy [TOMBSTONED] raw-marker triggered the
+// detection (no separate reason recorded).
+fn _render_hx1099(node_id: string, reason: string) -> string {
+    if len(reason) > 0 {
+        return "atlas L node `" + node_id + "` is tombstoned: " + reason
+    }
     return "atlas L node `" + node_id + "` is tombstoned; @implements citation rejected"
+}
+
+// Look up a tombstone reason for `node_id` in the supplied tombstone list
+// (parsed from atlas.tombstones.n6 by the caller). Returns "" when no record
+// matches — caller falls back to the legacy generic message.
+fn _tombstone_reason(tombstones: array, node_id: string) -> string {
+    let mut i = 0
+    while i < len(tombstones) {
+        let t = tombstones[i]
+        if t.node_id == node_id { return t.reason }
+        i = i + 1
+    }
+    return ""
+}
+
+// True iff `tombstones` contains a record for `node_id`.
+fn _id_in_tombstones(tombstones: array, node_id: string) -> bool {
+    let mut i = 0
+    while i < len(tombstones) {
+        let t = tombstones[i]
+        if t.node_id == node_id { return true }
+        i = i + 1
+    }
+    return false
 }
 
 // Tombstone detection — Decision 5e tombstones are recorded in
@@ -91,7 +127,7 @@ fn _is_tombstoned(node: AtlasNode) -> bool {
 // ── ExprKind / ItemKind probes ────────────────────────────────
 // Stage0 cannot derive Eq for enums; mirror parser.hexa tag_of pattern.
 
-fn _is_atlas_ref_kind(k: ExprKind) -> bool {
+fn _citation_is_atlas_ref_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::AtlasRef -> true,
         ExprKind::LiteralInt -> false,
@@ -119,7 +155,7 @@ fn _is_atlas_ref_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_fn_item(k: ItemKind) -> bool {
+fn _citation_is_fn_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Fn -> true,
         ItemKind::Let -> false,
@@ -134,7 +170,7 @@ fn _is_fn_item(k: ItemKind) -> bool {
 // citation hint pass (HX8003) can compare against @implements targets.
 
 fn _collect_l_refs(e: Expr, out: array) {
-    if _is_atlas_ref_kind(e.kind) {
+    if _citation_is_atlas_ref_kind(e.kind) {
         let aref = e.atlas_ref
         if aref.kind == "L" { out.push(aref) }
     } else {
@@ -199,7 +235,7 @@ fn _is_assign_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_ident_kind(k: ExprKind) -> bool {
+fn _citation_is_ident_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Ident -> true,
         ExprKind::LiteralInt -> false,
@@ -260,7 +296,7 @@ fn _check_one_discover_arg(arg: Expr) -> bool {
     if len(arg.children) < 2 { return false }
     let lhs = arg.children[0]
     let rhs = arg.children[1]
-    if !_is_ident_kind(lhs.kind) { return false }
+    if !_citation_is_ident_kind(lhs.kind) { return false }
     if lhs.text != "kind" { return false }
     if !_is_string_lit_kind(rhs.kind) { return false }
     return rhs.text == "L"
@@ -278,7 +314,15 @@ fn _discover_kind_is_law(a: Annotation) -> bool {
 // Validate one @implements arg expression. Returns the cited L id when
 // the arg is a well-formed L[*] (so the caller can record it for the
 // HX8003 gap check); returns "" otherwise.
-fn _check_implements_arg(arg: Expr, atlas: AtlasIndex, out: array) -> string {
+//
+// `tombstones` is the parsed atlas.tombstones.n6 list (may be empty). When
+// non-empty, an `@implements(L[id])` whose id is tombstoned emits HX1099
+// EVEN IF the L node has been physically removed from atlas.n6 — the
+// retroactive-sweep contract (RFC-017 §5e) requires the tombstone signal
+// to win over the generic HX8001 "missing" path so authors get a precise
+// "this was retired, see atlas.tombstones.n6" message.
+fn _check_implements_arg(arg: Expr, atlas: AtlasIndex,
+                         tombstones: array, out: array) -> string {
     // Only AtlasRef-shaped args matter — anything else (string lit, ident,
     // etc.) is silently ignored at S8 (S0/S2 already covers shape errors).
     let aref = arg.atlas_ref
@@ -290,6 +334,21 @@ fn _check_implements_arg(arg: Expr, atlas: AtlasIndex, out: array) -> string {
         b = diag_span(b, aref.span)
         b = diag_arg(b, "kind", aref.kind)
         b = diag_arg(b, "node_id", aref.id)
+        out.push(diag_emit(b))
+        return ""
+    }
+
+    // ── HX1099 — atlas.tombstones.n6 wins over HX8001 ────────────
+    // Decision 5e: a tombstoned id is fatal regardless of whether the L
+    // body still lives in atlas.n6 (manual tombstone leaves the body
+    // intact; sweep-driven tombstones likewise — the body is preserved
+    // for provenance, the tombstones file is the single source of truth).
+    if _id_in_tombstones(tombstones, aref.id) {
+        let reason = _tombstone_reason(tombstones, aref.id)
+        let mut b = diag_new("HX1099")
+        b = diag_span(b, aref.span)
+        b = diag_arg(b, "node_id", aref.id)
+        b = diag_arg(b, "reason", reason)
         out.push(diag_emit(b))
         return ""
     }
@@ -308,8 +367,9 @@ fn _check_implements_arg(arg: Expr, atlas: AtlasIndex, out: array) -> string {
     }
 
     if _is_tombstoned(hit) {
-        // Tombstoned — HX1099 (SPEC.md §6.5, owned by the tombstone pass).
-        let msg = _render_hx1099(aref.id)
+        // Legacy [TOMBSTONED] raw-marker path — preserved so existing
+        // fixtures using the marker continue to fail closed.
+        let msg = _render_hx1099(aref.id, "")
         let d = Diagnostic {
             code: "HX1099",
             severity: Severity::Error,
@@ -318,7 +378,7 @@ fn _check_implements_arg(arg: Expr, atlas: AtlasIndex, out: array) -> string {
             message: msg,
             note: "",
             suggest: "",
-            fixit: _empty_fixit(),
+            fixit: _citation_empty_fixit(),
             related: []
         }
         out.push(d)
@@ -331,7 +391,7 @@ fn _check_implements_arg(arg: Expr, atlas: AtlasIndex, out: array) -> string {
 
 // ── Per-item walk ────────────────────────────────────────────
 
-fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
+fn _citation_walk_item(it: Item, atlas: AtlasIndex, tombstones: array, out: array) {
     // Collect every @implements target id into `cited` so we can compare
     // against the body's L-refs after annotation validation. Also track
     // formula-bearing markers (@verify, @law) and @discover(kind="L")
@@ -347,7 +407,7 @@ fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
         if _is_implements_ann(a.name) {
             let mut j = 0
             while j < len(a.args) {
-                let id = _check_implements_arg(a.args[j], atlas, out)
+                let id = _check_implements_arg(a.args[j], atlas, tombstones, out)
                 if len(id) > 0 {
                     cited.push(id)
                     has_implements_l = true
@@ -368,7 +428,7 @@ fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
     // HX8003 hint: fn bodies that USE L[*] refs but cite none are flagged.
     // Only fn items have meaningful bodies — let/struct/enum/import bodies
     // are the empty placeholder (kind=Ident, no atlas refs).
-    if !_is_fn_item(it.kind) { return }
+    if !_citation_is_fn_item(it.kind) { return }
 
     let mut body_refs = []
     _collect_l_refs(it.body, body_refs)
@@ -424,10 +484,30 @@ fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
 // ── Public entry ─────────────────────────────────────────────
 
 pub fn citation_check(module: Module, atlas: AtlasIndex) -> array {
+    // Backward-compatible entrypoint — no tombstone file consulted.
+    let empty_tombs = []
+    return _citation_check_inner(module, atlas, empty_tombs)
+}
+
+// citation_check_with_root — Decision 5e entrypoint. Loads the tombstone
+// list from `atlas_root + "/atlas.tombstones.n6"` (via list_tombstones) and
+// emits HX1099 for any @implements(L[id]) whose id is tombstoned. Falls
+// back to plain `citation_check` semantics when atlas_root is empty.
+pub fn citation_check_with_root(module: Module, atlas: AtlasIndex,
+                                atlas_root: string) -> array {
+    let mut tombstones = []
+    if len(atlas_root) > 0 {
+        tombstones = list_tombstones(atlas_root)
+    }
+    return _citation_check_inner(module, atlas, tombstones)
+}
+
+fn _citation_check_inner(module: Module, atlas: AtlasIndex,
+                         tombstones: array) -> array {
     let mut out = []
     let mut i = 0
     while i < len(module.items) {
-        _walk_item(module.items[i], atlas, out)
+        _citation_walk_item(module.items[i], atlas, tombstones, out)
         i = i + 1
     }
     return out
