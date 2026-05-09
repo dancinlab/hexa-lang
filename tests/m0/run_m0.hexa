@@ -57,22 +57,24 @@ fn _main_label_for(target: string) -> string {
     return "main:"
 }
 
-// Resolve a local hexa interpreter binary. On dev boxes the shell `hexa`
-// wrapper routes `run` to a remote TCP server (resource toolkit), which
-// drops our --target/--emit/-o flags. We prefer a known-local Mach-O / ELF
-// interpreter and fall back to PATH `hexa` only as a last resort.
+// Resolve a local hexa interpreter binary.
+//
+// Background — Gap 6 from M0 smoke report (commit b437a77c):
+//   The shell wrapper at $HOME/.hx/bin/hexa unconditionally routes
+//   `hexa run` to a remote TCP server (resource toolkit hexa-r ubu-1),
+//   dropping --target/--emit/-o and ignoring RESOURCE_LOCAL_HEXA.
+//   $HOME/.hx/packages/hexa/build/hexa_interp.real and the in-tree
+//   build/hexa_interp.real are ALSO routing wrappers, not binaries.
+//
+// Strategy — delegate to tool/find_local_hexa.sh, which probes a known
+// priority list and rejects any candidate whose first 4KB contain the
+// remote-routing marker. See doc/m0_local_bypass.md for full design.
 fn _resolve_hexa_bin() -> string {
-    let env_pick = exec("printenv HEXA_INTERP 2>/dev/null").trim()
-    if len(env_pick) > 0 { return env_pick }
-    let home = exec("printenv HOME 2>/dev/null").trim()
-    let c1 = home + "/.hx/bin/hexa_real"
-    if _exists(c1) { return c1 }
-    let c2 = home + "/.hx/packages/hexa/build/hexa_interp.real"
-    if _exists(c2) { return c2 }
-    let c3 = "build/hexa_interp.real"
-    if _exists(c3) { return c3 }
-    let c4 = "build/hexa_interp"
-    if _exists(c4) { return c4 }
+    let pick = exec("tool/find_local_hexa.sh 2>/dev/null").trim()
+    if len(pick) > 0 && _exists(pick) { return pick }
+    // Last-resort PATH lookup. The harness will fail loudly if PATH
+    // hexa is itself the routing wrapper — that is the signal that
+    // the user must vendor a local binary or set HEXA_INTERP.
     return "hexa"
 }
 
