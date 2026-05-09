@@ -1,0 +1,463 @@
+// HEXA Native Compiler — Phase B4 / Lower: AST → HIR smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds three small Modules, runs the lower pass, and prints a
+// summary of the produced HModule. Asserts via expected-string compares
+// against compact summary lines.
+//
+// Cases:
+//   (a) Simple fn — fn add(x:Int,y:Int)->Int { return x + y }
+//       expect: 1 HItem (ITEM_FN), body root kind="block", inner BinOp
+//       carries Type i64.
+//   (b) Atlas ref — fn use_law() { let l = L[valid-law] }
+//       expect: 1 HItem (ITEM_FN), body block contains a `let` whose
+//       child HExpr is atlas_ref with atlas_hash="deadbeef" and
+//       atlas_index>=0.
+//   (c) Match — fn pick(x:Int)->Int { return match x { 1 -> 10, _ -> 0 } }
+//       expect: HExpr tree contains a `match` node with multiple arm
+//       children lowered.
+//
+// Run:
+//   hexa run compiler/lower/lower_test.hexa
+
+import "../parse/ast.hexa"
+import "../atlas/merger.hexa"
+import "../atlas/parser.hexa"
+import "../ir/hir.hexa"
+import "../lex/tokens.hexa"
+import "./ast_to_hir.hexa"
+
+// ── AST construction helpers ─────────────────────────────────
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_span() -> Span { return _span("", 0, 0, 0) }
+
+fn _empty_atlas_ref() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _empty_span() }
+}
+
+fn _empty_type_ref() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: _empty_span() }
+}
+
+fn _named_type_ref(name: string) -> TypeRef {
+    return TypeRef { kind: "named", name: name, args: [], span: _empty_span() }
+}
+
+fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _int_expr(text: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralInt,
+        span: _span(file, line, col, len(text)),
+        text: text,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _wildcard_expr(file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Wildcard,
+        span: _span(file, line, col, 1),
+        text: "_",
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _bin_expr(op: string, lhs: Expr, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(lhs)
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::BinOp,
+        span: _span(file, line, col, len(op)),
+        text: op,
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _return_expr(value: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(value)
+    return Expr {
+        kind: ExprKind::Return,
+        span: _span(file, line, col, 6),
+        text: "",
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _let_expr(name: string, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::Let,
+        span: _span(file, line, col, 3),
+        text: name,
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _span(file, line, col, 1),
+        text: "",
+        children: children,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _atlas_expr(kind: string, id: string, file: string, line: i64, col: i64) -> Expr {
+    let sp = _span(file, line, col, len(id) + 3)
+    let aref = AtlasRef { kind: kind, id: id, span: sp }
+    return Expr {
+        kind: ExprKind::AtlasRef,
+        span: sp,
+        text: id,
+        children: [],
+        atlas_ref: aref
+    }
+}
+
+fn _match_expr(scrut: Expr, arms: [Expr], file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(scrut)
+    let mut i = 0
+    while i < len(arms) {
+        kids.push(arms[i])
+        i = i + 1
+    }
+    return Expr {
+        kind: ExprKind::Match,
+        span: _span(file, line, col, 5),
+        text: "",
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _fn_item(name: string, params: [Param], ret: TypeRef, body: Expr, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: [],
+        params: params,
+        return_type: ret,
+        body: body,
+        is_pub: false
+    }
+}
+
+fn _param(name: string, typ_name: string, file: string, line: i64, col: i64) -> Param {
+    return Param {
+        name: name,
+        typ: _named_type_ref(typ_name),
+        span: _span(file, line, col, len(name))
+    }
+}
+
+// ── Fake atlas index ─────────────────────────────────────────
+
+fn _mk_atlas_node(kind: string, id: string) -> AtlasNode {
+    return AtlasNode {
+        kind: kind,
+        id: id,
+        raw: "@" + kind + " " + id,
+        source_file: "test://atlas.n6",
+        source_line: 1
+    }
+}
+
+fn _mk_atlas_with_law() -> AtlasIndex {
+    let mut l = []
+    l.push(_mk_atlas_node("L", "valid-law"))
+    return AtlasIndex {
+        p_nodes: [],
+        c_nodes: [],
+        l_nodes: l,
+        e_nodes: [],
+        hash: "deadbeef",
+        source_count: 1,
+        duplicates: [],
+        skipped_oversize: []
+    }
+}
+
+fn _mk_empty_atlas() -> AtlasIndex {
+    return AtlasIndex {
+        p_nodes: [],
+        c_nodes: [],
+        l_nodes: [],
+        e_nodes: [],
+        hash: "empty0",
+        source_count: 0,
+        duplicates: [],
+        skipped_oversize: []
+    }
+}
+
+// ── HExpr/HItem helpers (search by kind) ─────────────────────
+
+fn _find_kind(e: HExpr, target: string) -> HExpr {
+    if e.kind == target { return e }
+    let mut i = 0
+    while i < len(e.children) {
+        let r = _find_kind(e.children[i], target)
+        if r.kind == target { return r }
+        i = i + 1
+    }
+    return HExpr {
+        kind: "",
+        span: _empty_span(),
+        typ: Type {
+            kind: "?",
+            def: DefId { module: "", index: -1 },
+            args: [],
+            ret: [],
+            domain: "",
+            unit: ""
+        },
+        text: "",
+        children: [],
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 }
+    }
+}
+
+// ── Pretty-print ─────────────────────────────────────────────
+
+fn _print_hmodule(m: HModule) {
+    println("  HModule(file=" + m.file + ", items=" + to_string(len(m.items)) + ")")
+    let mut i = 0
+    while i < len(m.items) {
+        let it = m.items[i]
+        println("    [" + to_string(i) + "] " + it.kind + " name=" + it.name +
+                " def=" + to_string(it.def.index) +
+                " body.kind=" + it.body.kind +
+                " body.typ=" + it.body.typ.kind)
+        i = i + 1
+    }
+}
+
+// ── Cases ────────────────────────────────────────────────────
+
+// (a) Simple fn: fn add(x:Int,y:Int)->Int { return x + y }
+fn _build_case_a() -> Module {
+    let f = "case_a.hexa"
+    let mut params_add = []
+    params_add.push(_param("x", "Int", f, 1, 8))
+    params_add.push(_param("y", "Int", f, 1, 16))
+    let x_ref = _ident_expr("x", f, 1, 35)
+    let y_ref = _ident_expr("y", f, 1, 39)
+    let bin = _bin_expr("+", x_ref, y_ref, f, 1, 37)
+    let ret = _return_expr(bin, f, 1, 28)
+    let mut block_kids = []
+    block_kids.push(ret)
+    let body = _block(block_kids, f, 1, 26)
+    let item_add = _fn_item("add", params_add, _named_type_ref("Int"), body, f, 1)
+    let mut items = []
+    items.push(item_add)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (b) Atlas ref: fn use_law() { let l = L[valid-law] }
+fn _build_case_b() -> Module {
+    let f = "case_b.hexa"
+    let aref = _atlas_expr("L", "valid-law", f, 1, 22)
+    let let_e = _let_expr("l", aref, f, 1, 14)
+    let mut block_kids = []
+    block_kids.push(let_e)
+    let body = _block(block_kids, f, 1, 12)
+    let item_use = _fn_item("use_law", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_use)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (c) Match: fn pick(x:Int)->Int { return match x { 1 -> 10, _ -> 0 } }
+fn _build_case_c() -> Module {
+    let f = "case_c.hexa"
+    let mut params_pick = []
+    params_pick.push(_param("x", "Int", f, 1, 8))
+
+    let x_ref = _ident_expr("x", f, 1, 30)
+    let pat1 = _int_expr("1", f, 1, 33)
+    let body1 = _int_expr("10", f, 1, 38)
+    let pat2 = _wildcard_expr(f, 1, 42)
+    let body2 = _int_expr("0", f, 1, 47)
+
+    let mut arms = []
+    arms.push(pat1)
+    arms.push(body1)
+    arms.push(pat2)
+    arms.push(body2)
+    let m_expr = _match_expr(x_ref, arms, f, 1, 27)
+    let ret = _return_expr(m_expr, f, 1, 20)
+    let mut block_kids = []
+    block_kids.push(ret)
+    let body = _block(block_kids, f, 1, 18)
+    let item_pick = _fn_item("pick", params_pick, _named_type_ref("Int"), body, f, 1)
+    let mut items = []
+    items.push(item_pick)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// ── Driver ───────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Lower (AST→HIR) Smoke Test (B4)")
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+
+    // (a)
+    println("")
+    println("── (a) Simple fn add(x,y) ──")
+    let mod_a = _build_case_a()
+    let h_a = lower(mod_a, _mk_empty_atlas())
+    _print_hmodule(h_a)
+    if len(h_a.items) != 1 {
+        println("  FAIL: case (a) expected 1 HItem, got " + to_string(len(h_a.items)))
+        ok = false
+    }
+    let it_a = h_a.items[0]
+    if it_a.kind != "ITEM_FN" {
+        println("  FAIL: case (a) expected ITEM_FN, got " + it_a.kind)
+        ok = false
+    }
+    if it_a.name != "add" {
+        println("  FAIL: case (a) expected name=add, got " + it_a.name)
+        ok = false
+    }
+    if it_a.body.kind != "block" {
+        println("  FAIL: case (a) expected body.kind=block, got " + it_a.body.kind)
+        ok = false
+    }
+    let bin_a = _find_kind(it_a.body, "binop")
+    if bin_a.kind != "binop" {
+        println("  FAIL: case (a) no binop found in body")
+        ok = false
+    } else {
+        println("  binop typ.kind=" + bin_a.typ.kind + " text=" + bin_a.text)
+        if bin_a.typ.kind != "i64" {
+            println("  FAIL: case (a) expected binop typ=i64, got " + bin_a.typ.kind)
+            ok = false
+        }
+    }
+    if it_a.sig_return.kind != "i64" {
+        println("  FAIL: case (a) expected sig_return=i64, got " + it_a.sig_return.kind)
+        ok = false
+    }
+    if len(it_a.sig_params) != 2 {
+        println("  FAIL: case (a) expected 2 sig_params, got " + to_string(len(it_a.sig_params)))
+        ok = false
+    }
+    if ok { println("  ok: (a)") }
+
+    // (b)
+    println("")
+    println("── (b) Atlas ref L[valid-law] ──")
+    let mod_b = _build_case_b()
+    let h_b = lower(mod_b, _mk_atlas_with_law())
+    _print_hmodule(h_b)
+    if len(h_b.items) != 1 {
+        println("  FAIL: case (b) expected 1 HItem")
+        ok = false
+    }
+    let it_b = h_b.items[0]
+    let aref = _find_kind(it_b.body, "atlas_ref")
+    if aref.kind != "atlas_ref" {
+        println("  FAIL: case (b) no atlas_ref found in body")
+        ok = false
+    } else {
+        println("  atlas_ref ref_kind=" + aref.atlas.ref_kind +
+                " id=" + aref.atlas.id +
+                " atlas_index=" + to_string(aref.atlas.atlas_index) +
+                " atlas_hash=" + aref.atlas.atlas_hash +
+                " typ=" + aref.typ.kind)
+        if aref.atlas.atlas_hash != "deadbeef" {
+            println("  FAIL: case (b) expected atlas_hash=deadbeef, got " + aref.atlas.atlas_hash)
+            ok = false
+        }
+        if aref.atlas.atlas_index < 0 {
+            println("  FAIL: case (b) expected atlas_index>=0, got " + to_string(aref.atlas.atlas_index))
+            ok = false
+        }
+        if aref.atlas.ref_kind != "L" {
+            println("  FAIL: case (b) expected ref_kind=L, got " + aref.atlas.ref_kind)
+            ok = false
+        }
+        if aref.atlas.id != "valid-law" {
+            println("  FAIL: case (b) expected id=valid-law, got " + aref.atlas.id)
+            ok = false
+        }
+        if aref.typ.kind != "atlas_L" {
+            println("  FAIL: case (b) expected typ=atlas_L, got " + aref.typ.kind)
+            ok = false
+        }
+    }
+    if ok { println("  ok: (b)") }
+
+    // (c)
+    println("")
+    println("── (c) Match: match x { 1 -> 10, _ -> 0 } ──")
+    let mod_c = _build_case_c()
+    let h_c = lower(mod_c, _mk_empty_atlas())
+    _print_hmodule(h_c)
+    if len(h_c.items) != 1 {
+        println("  FAIL: case (c) expected 1 HItem")
+        ok = false
+    }
+    let it_c = h_c.items[0]
+    let m_node = _find_kind(it_c.body, "match")
+    if m_node.kind != "match" {
+        println("  FAIL: case (c) no match node found in body")
+        ok = false
+    } else {
+        println("  match.children=" + to_string(len(m_node.children)) +
+                " (scrut + 2 arms = 5)" +
+                " typ=" + m_node.typ.kind)
+        // scrut + 2 pat/body = 5 children
+        if len(m_node.children) != 5 {
+            println("  FAIL: case (c) expected 5 match children, got " + to_string(len(m_node.children)))
+            ok = false
+        }
+        // First arm body type
+        if m_node.typ.kind != "i64" {
+            println("  FAIL: case (c) expected match typ=i64, got " + m_node.typ.kind)
+            ok = false
+        }
+    }
+    if ok { println("  ok: (c)") }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: lower pass produces expected HIR.")
+    } else {
+        println("FAIL: lower pass contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}
