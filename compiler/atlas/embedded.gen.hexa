@@ -1,0 +1,51 @@
+// AUTO-GENERATED — do not edit. Regenerate via tool/atlas_embed_gen.hexa
+//
+// Phase A4 of the hexa native compiler: atlas static embed.
+// Source: compiler/atlas/embed.hexa::embed_atlas
+// Spec:   RFC-017 §4.5 / RFC-018 §6 / SPEC.yaml foundation.atlas_embedding
+//
+// NOTE (Phase A4 fixture):
+//   This file is a SMALL synthetic 8-node fixture committed to give a
+//   clean checkout a non-empty, self-consistent atlas without forcing
+//   each developer to spend ~1 hour parsing the live ~/core/nexus/n6/
+//   corpus on hexa_interp (sustained ~9 nodes/sec — Agent A2 measurement,
+//   2026-05-09).
+//
+//   Composition: 3 P  (alpha, beta, gamma)
+//                2 C  (alpha-beta, beta-gamma)
+//                2 L  (addition-commutative, multiplication-associative)
+//                1 E  (invalid-state)
+//                = 8 nodes
+//
+//   ATLAS_GENERATED_AT is the literal string "fixture" — a sentinel that
+//   the drift-detection gate (Phase A4+) uses to distinguish committed
+//   bootstrap data from a real CI regen. Production builds REPLACE this
+//   file via:
+//       hexa run tool/atlas_embed_gen.hexa <atlas-root>
+//   which writes a fresh ATLAS_HASH + ISO-8601 timestamp.
+
+use "compiler/atlas/parser"
+
+pub let ATLAS_HASH: string = "838ba2c6529bf106ea4ac82cf1e9de623bad39aabd4a501c65ae49b2a0ab415c"
+pub let ATLAS_SOURCE_COUNT: i64 = 1
+pub let ATLAS_GENERATED_AT: string = "fixture"
+
+pub let ATLAS_P_NODES: [AtlasNode] = [
+    AtlasNode { kind: "P", id: "alpha", raw: "@P alpha :: foundation [11*]\n  -> beta", source_file: "fixture.n6", source_line: 2 },
+    AtlasNode { kind: "P", id: "beta", raw: "@P beta :: foundation [11*]\n  -> gamma", source_file: "fixture.n6", source_line: 4 },
+    AtlasNode { kind: "P", id: "gamma", raw: "@P gamma :: foundation [11*]", source_file: "fixture.n6", source_line: 6 }
+]
+
+pub let ATLAS_C_NODES: [AtlasNode] = [
+    AtlasNode { kind: "C", id: "alpha-beta", raw: "@C alpha-beta = alpha + beta :: foundation", source_file: "fixture.n6", source_line: 7 },
+    AtlasNode { kind: "C", id: "beta-gamma", raw: "@C beta-gamma = beta + gamma :: foundation", source_file: "fixture.n6", source_line: 8 }
+]
+
+pub let ATLAS_L_NODES: [AtlasNode] = [
+    AtlasNode { kind: "L", id: "addition-commutative", raw: "@L addition-commutative :: foundation\n  \"for all a,b: a + b == b + a\"", source_file: "fixture.n6", source_line: 9 },
+    AtlasNode { kind: "L", id: "multiplication-associative", raw: "@L multiplication-associative :: foundation\n  \"for all a,b,c: (a*b)*c == a*(b*c)\"", source_file: "fixture.n6", source_line: 11 }
+]
+
+pub let ATLAS_E_NODES: [AtlasNode] = [
+    AtlasNode { kind: "E", id: "invalid-state", raw: "@E invalid-state :: bridge\n  \"marker for E-kind in the fixture\"", source_file: "fixture.n6", source_line: 13 }
+]

@@ -193,10 +193,14 @@ fn _basename_no_ext(path: string) -> string {
     return out
 }
 
-// ── Atlas v1 (empty fallback) ─────────────────────────────────
-// Phase A4 will replace static_atlas() with the real embedded const
-// arrays; today we accept the empty fallback so unresolved P/C/L/E refs
-// surface as HX1042 diagnostics rather than the driver crashing.
+// ── Atlas v1 (Phase A4 wired) ─────────────────────────────────
+// Phase A4 wires static_atlas() to the real embedded const arrays from
+// compiler/atlas/embedded.gen.hexa (committed fixture on a clean
+// checkout; replaced by `hexa run tool/atlas_embed_gen.hexa <root>` for
+// production builds). The empty-fallback caveat is gone — atlas.hash is
+// non-empty and source_count > 0 in normal operation. Unresolved
+// P/C/L/E refs still surface as HX1042 diagnostics (atlas miss, not a
+// missing-atlas pseudo-success).
 
 fn _load_atlas() -> AtlasIndex {
     return static_atlas()
@@ -286,7 +290,7 @@ let source = to_string(read_file(source_path))
 let tokens = lex(source, source_path)
 let module = parse(tokens, source_path)
 
-// Atlas: empty-fallback v1 (A4 will wire the real index).
+// Atlas: A4 wired — real index from compiler/atlas/embedded.gen.hexa.
 let atlas = _load_atlas()
 
 let mut diags: array = []

@@ -1,0 +1,109 @@
+// HEXA Native Compiler — Phase A4 static atlas wiring smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Verifies that compiler/atlas/static_index.hexa correctly surfaces the
+// embedded fixture committed at compiler/atlas/embedded.gen.hexa.
+//
+// Asserts:
+//   - static_atlas().hash is non-empty and is not the legacy
+//     all-zeros sentinel (00000000…)
+//   - lookup_static("P", "alpha") returns a node with kind == "P"
+//   - lookup_static("L", "addition-commutative") returns kind == "L"
+//   - lookup_static("P", "ghost") returns kind == "" (sentinel miss)
+//
+// Prints a per-kind count summary + the embedded hash. Exits 0 on PASS,
+// 1 on any FAIL.
+//
+// Run:
+//   hexa run compiler/atlas/static_index_test.hexa
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/static_index"
+
+// All-zeros sentinel: the pre-A4 empty-fallback path used "" but a
+// downstream variant of that fallback could plausibly emit a 64-char
+// zero hex string. Reject both as "not a real atlas hash".
+let _ZERO_HASH_64: string = "0000000000000000000000000000000000000000000000000000000000000000"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn main() {
+    println("phase-a4 static atlas wiring test")
+
+    let idx = static_atlas()
+
+    let p = len(idx.p_nodes)
+    let c = len(idx.c_nodes)
+    let l = len(idx.l_nodes)
+    let e = len(idx.e_nodes)
+
+    println("")
+    println("embedded fixture:")
+    println("  hash:           " + idx.hash)
+    println("  source_count:   " + to_string(idx.source_count))
+    println("  P (primitives): " + to_string(p))
+    println("  C (constants):  " + to_string(c))
+    println("  L (laws):       " + to_string(l))
+    println("  E (edges):      " + to_string(e))
+    println("  total:          " + to_string(p + c + l + e))
+
+    let fails = []
+    println("")
+    println("checks:")
+
+    _check("hash non-empty",                         len(idx.hash) > 0,                                 fails)
+    _check("hash not all-zeros sentinel",            idx.hash != _ZERO_HASH_64,                         fails)
+    _check("source_count > 0",                       idx.source_count > 0,                              fails)
+    _check("at least one P node present",            p > 0,                                             fails)
+    _check("at least one L node present",            l > 0,                                             fails)
+
+    let n_alpha = lookup_static("P", "alpha")
+    _check("lookup_static(P, alpha).kind == P",      n_alpha.kind == "P",                               fails)
+    _check("lookup_static(P, alpha).id == alpha",    n_alpha.id == "alpha",                             fails)
+
+    let n_law = lookup_static("L", "addition-commutative")
+    _check("lookup_static(L, addition-commutative).kind == L",  n_law.kind == "L",                      fails)
+
+    let n_miss = lookup_static("P", "ghost")
+    _check("lookup_static(P, ghost) miss → kind == \"\"",       n_miss.kind == "",                      fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (" + to_string(p + c + l + e) + " nodes, hash=" + idx.hash.substring(0, 12) + "...)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+// --- is_main guard ---------------------------------------------------------
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/static_index_test.hexa") { return true }
+    if script == "static_index_test.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}

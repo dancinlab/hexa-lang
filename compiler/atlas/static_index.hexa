@@ -1,6 +1,6 @@
-// HEXA Native Compiler — Phase A3: static atlas index facade
+// HEXA Native Compiler — Phase A4: static atlas index facade
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [pure]
 //
 // Reads the const arrays produced by compiler/atlas/embed.hexa
@@ -14,50 +14,61 @@
 // already-resident const arrays into a struct. There is NO file I/O,
 // NO parsing, NO hashing — that all happened at compiler-build time.
 //
-// Bootstrap note (RFC-017 §3.6 compatibility):
-//   On a clean checkout `compiler/atlas/embedded.gen.hexa` does not
-//   yet exist (it is a build artifact, not committed). To keep this
-//   file parseable we accept either:
-//     (a) the generated file is present → import its consts directly
-//     (b) the generated file is absent → fall back to an empty index
-//         with a sentinel hash so the rest of the compiler tree still
-//         compiles. tool/atlas_embed_gen.hexa is then the user-facing
-//         remediation.
-//
-// We pick (b) by NOT `use`-ing the generated file from this module.
-// Instead, `static_atlas()` calls a small wrapper `_load_embedded()`
-// that the build process patches: when embedded.gen.hexa exists we
-// rewrite this file (or wire it via a generated indirection module).
-// For Phase A3 we ship the empty-fallback so the smoke test does not
-// require the generated file to be present — Phase A4 wires the pin.
+// Phase A4 wiring (RFC-017 §4.5 / SPEC.yaml foundation.atlas_embedding):
+//   - compiler/atlas/embedded.gen.hexa is COMMITTED as a small synthetic
+//     fixture (8 nodes — 3 P, 2 C, 2 L, 1 E) so that a clean checkout
+//     compiles without an external codegen step.
+//   - Production builds REPLACE that file via:
+//         hexa run tool/atlas_embed_gen.hexa <atlas-root>
+//     which re-emits ATLAS_HASH + ATLAS_SOURCE_COUNT + the per-kind
+//     arrays from the live ~/core/nexus/n6/ corpus. The fixture's
+//     ATLAS_GENERATED_AT == "fixture" sentinel lets drift CI distinguish
+//     bootstrap data from a real regen.
+//   - Stage0 hexa has no real conditional imports, so we just `use` the
+//     generated file directly. If a downstream consumer ever needs the
+//     pre-A4 empty-fallback behavior, they should swap in a stub
+//     embedded.gen.hexa with empty arrays — the surface here stays the
+//     same.
 
 use "compiler/atlas/parser"
 use "compiler/atlas/merger"
+use "compiler/atlas/embedded.gen"
 
-// --- fallback constants (used when embedded.gen.hexa is absent) -----------
-
-// Sentinel hash. The empty-string sha256 is a valid 64-char hex but
-// would collide with a deliberately-empty atlas; using "" is clearer
-// and the A4 drift gate must reject it.
-let _FALLBACK_HASH: string = ""
-let _FALLBACK_SOURCE_COUNT: i64 = 0
+// --- drift-detection placeholders (Phase A4+) ------------------------------
+//
+// ATLAS_HASH_MIN / ATLAS_HASH_MAX bracket the set of atlas hashes the
+// current compiler binary considers "in policy". Empty strings disable
+// the gate. Phase A4 commits the placeholders and ships drift detection
+// via CI in a follow-up phase (CI lands later — see RFC-017 §4.5
+// "atlas mtime → CI rebuild" automation).
+//
+// When wired:
+//   - if ATLAS_HASH < ATLAS_HASH_MIN → compiler is older than required
+//     atlas pin → fail with "compiler stale, rebuild"
+//   - if ATLAS_HASH > ATLAS_HASH_MAX → compiler is newer than supported
+//     atlas pin → fail with "atlas drift, regenerate embedded.gen.hexa"
+//
+// Today these are unenforced sentinels.
+pub let ATLAS_HASH_MIN: string = ""
+pub let ATLAS_HASH_MAX: string = ""
 
 // --- public API ------------------------------------------------------------
 
 // static_atlas — return an AtlasIndex constructed from the embedded
-// const arrays. When embedded.gen.hexa is absent (clean checkout,
-// pre-A4 bootstrap) this returns an empty index with an empty hash;
-// downstream code that REQUIRES a real atlas must check
-//   idx.hash == "" || idx.source_count == 0
-// and fail-loud per RFC-017 §3.2.
+// const arrays declared in compiler/atlas/embedded.gen.hexa. This is the
+// sole runtime path: O(1), zero I/O, zero parse.
+//
+// The duplicates / skipped_oversize fields are always empty in the
+// static path — those are merger-time signals and were resolved at
+// compiler-build time, not preserved across the embed boundary.
 pub fn static_atlas() -> AtlasIndex {
     return AtlasIndex {
-        p_nodes: [],
-        c_nodes: [],
-        l_nodes: [],
-        e_nodes: [],
-        hash: _FALLBACK_HASH,
-        source_count: _FALLBACK_SOURCE_COUNT,
+        p_nodes: ATLAS_P_NODES,
+        c_nodes: ATLAS_C_NODES,
+        l_nodes: ATLAS_L_NODES,
+        e_nodes: ATLAS_E_NODES,
+        hash: ATLAS_HASH,
+        source_count: ATLAS_SOURCE_COUNT,
         duplicates: [],
         skipped_oversize: []
     }
@@ -65,7 +76,7 @@ pub fn static_atlas() -> AtlasIndex {
 
 // lookup_static — same signature as merger.hexa::lookup. Linear scan
 // over the per-kind array; for atlas-resolve typical workloads this
-// is O(unique_id_cites_in_user_program). Phase A3 keeps the linear
+// is O(unique_id_cites_in_user_program). Phase A4 keeps the linear
 // scan; a packed perfect-hash variant lands later if profiling
 // justifies it.
 pub fn lookup_static(kind: string, id: string) -> AtlasNode {
