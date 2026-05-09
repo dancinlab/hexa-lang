@@ -114,6 +114,8 @@ fn print_help() {
     println("  --emit=KIND            asm | obj | exec   (default: exec)")
     println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
     println("  --linker=KIND          hexa | system     (default: system; hexa_ld not yet landed)")
+    println("  --keep-temp            do not remove the per-build intermediate dir (default: off)")
+    println("  -v, --verbose          print build-temp dir and intermediate paths to stderr")
     println("  --version              print version and exit")
     println("  --help                 print this help and exit")
     println("")
@@ -126,6 +128,10 @@ fn print_help() {
     println("    --linker=system raw-emit comment in compiler/main.hexa).")
     println("  * `--emit=asm` writes assembly to OUT, `--emit=obj` writes a relocatable")
     println("    object, `--emit=exec` (default) produces a linked executable.")
+    println("  * Intermediate `.s`/`.o` files go to a per-build dir")
+    println("    `${TMPDIR:-/tmp}/hexa-<pid>-<nanos>/` (Gap-7 collision fix).")
+    println("    The directory is removed on success unless `--keep-temp` is set;")
+    println("    on assembler/linker failure it is kept for triage.")
 }
 
 fn print_version() {
@@ -193,6 +199,59 @@ fn _basename_no_ext(path: string) -> string {
     return out
 }
 
+// ── Build-temp directory helper (Gap-7 fix) ───────────────────
+//
+// Returns a per-build directory for intermediate `.s` / `.o` files,
+// avoiding the prior collision where same-basename sources (e.g.
+// `tests/m0/hello.hexa` and `lib/hello.hexa`) clashed at
+// `/tmp/hello.s`.
+//
+// Naming scheme:
+//   ${TMPDIR:-/tmp}/hexa-<pid>-<nanos>/
+//
+// where <pid> is from `echo $$` (the shell expands the parent shell PID,
+// which is unique per `exec()` invocation in the host hexa process tree)
+// and <nanos> is `date +%s%N` (Linux) with a `%s` + awk-rand fallback
+// for macOS BSD `date` (which lacks %N).
+//
+// POSIX-only: relies on `mkdir -p`, `echo $$`, `date`, and `awk`.
+// No bashisms in any emitted shell command.
+
+fn _build_temp_dir(_source_path: string) -> string {
+    let tdir_env = env("TMPDIR")
+    let mut tbase = "/tmp"
+    if len(tdir_env) > 0 {
+        // Strip a single trailing `/` if present (TMPDIR on macOS ends in `/`).
+        let tcs = tdir_env.chars()
+        let tn = len(tcs)
+        if tn > 0 && tcs[tn - 1] == '/' {
+            let mut tb = ""
+            let mut ti = 0
+            while ti < tn - 1 {
+                tb = tb + to_string(tcs[ti])
+                ti = ti + 1
+            }
+            tbase = tb
+        } else {
+            tbase = tdir_env
+        }
+    }
+    let pid = exec("echo $$").trim()
+    // `date +%s%N` works on Linux; macOS BSD `date` lacks %N and emits
+    // the literal `N`. Detect that and fall back to `%s` + awk-rand.
+    let mut stamp = exec("date +%s%N 2>/dev/null").trim()
+    let scs = stamp.chars()
+    let sn = len(scs)
+    if sn == 0 || scs[sn - 1] == 'N' {
+        let secs = exec("date +%s 2>/dev/null").trim()
+        let rnd = exec("awk 'BEGIN{srand();printf \"%09d\", int(rand()*1000000000)}'").trim()
+        stamp = secs + rnd
+    }
+    let dir = tbase + "/hexa-" + pid + "-" + stamp
+    let _mk = exec("mkdir -p '" + dir + "' 2>/dev/null")
+    return dir
+}
+
 // ── Atlas v1 (Phase A4 wired) ─────────────────────────────────
 // Phase A4 wires static_atlas() to the real embedded const arrays from
 // compiler/atlas/embedded.gen.hexa (committed fixture on a clean
@@ -217,6 +276,8 @@ let mut emit_kind = "exec"
 let mut error_format = "pretty"
 let mut linker_kind = "system"
 let mut source_path = ""
+let mut keep_temp = false
+let mut verbose = false
 
 // Parse flags. We accept both `-o OUT` (two-arg) and `--target=TRIPLE`
 // (single equals form). Unknown flags are ignored with a warning so future
@@ -251,6 +312,15 @@ while ai < len(user_argv) {
         ai = ai + 1
     } else if len(a) >= 9 && a.substring(0, 9) == "--linker=" {
         linker_kind = a.substring(9, len(a))
+        ai = ai + 1
+    } else if a == "--keep-temp" {
+        keep_temp = true
+        ai = ai + 1
+    } else if a == "-v" {
+        verbose = true
+        ai = ai + 1
+    } else if a == "--verbose" {
+        verbose = true
         ai = ai + 1
     } else if len(a) >= 1 && a.chars()[0] == '-' {
         eprintln("hexa-compiler: warning: unknown flag `" + a + "` (ignored)")
@@ -351,8 +421,15 @@ if emit_kind == "asm" {
 }
 
 let stem = _basename_no_ext(source_path)
-let asm_path = "/tmp/" + stem + ".s"
-let obj_path = "/tmp/" + stem + ".o"
+let tmp_dir = _build_temp_dir(source_path)
+let asm_path = tmp_dir + "/" + stem + ".s"
+let obj_path = tmp_dir + "/" + stem + ".o"
+
+if verbose {
+    eprintln("hexa-compiler: build-temp dir: " + tmp_dir)
+    eprintln("hexa-compiler:   asm: " + asm_path)
+    eprintln("hexa-compiler:   obj: " + obj_path)
+}
 
 write_file(asm_path, asm_text)
 
@@ -371,14 +448,10 @@ if as_status != "ok" {
     eprintln("hexa-compiler: assembler failed:")
     eprintln("  command: " + as_cmd)
     eprintln(as_out)
-    // Gap-5 (M0 smoke report b437a77c): stage0 hexa_interp does not
-    // reliably propagate exit(N) through every wrapper — the user-shell
-    // `hexa run` proxy can translate to RC=0, and harness `exec()`
-    // returns only stdout (no .exit_code field). Drop a sentinel next to
-    // OUT so harnesses can detect failure without trusting $?.
-    // Format: <out_path>.compile_failed containing stage tag, the failed
-    // command, and tool stderr. Cheap, idempotent, and survives any RC
-    // translation in the wrapper layer.
+    eprintln("hexa-compiler: build-temp dir kept for triage: " + tmp_dir)
+    // Gap-5 (commit 0c5283ff): wrappers may translate exit(2) to RC=0;
+    // drop a sentinel next to OUT so harnesses can detect failure
+    // independently of $?. See compiler/main.hexa Gap-5 commit message.
     write_file(out_path + ".compile_failed",
         "stage=as\ncmd=" + as_cmd + "\n" + as_out + "\n")
     exit(2)
@@ -386,6 +459,11 @@ if as_status != "ok" {
 
 if emit_kind == "obj" {
     exec("cp -f " + obj_path + " " + out_path)
+    if !keep_temp {
+        exec("rm -rf '" + tmp_dir + "' 2>/dev/null")
+    } else if verbose {
+        eprintln("hexa-compiler: --keep-temp: leaving " + tmp_dir + " in place")
+    }
     exit(0)
 }
 
@@ -431,10 +509,16 @@ if ld_status != "ok" {
     eprintln(ld_out)
     eprintln("hexa-compiler: hint: linker paths are best-effort. See compiler/main.hexa")
     eprintln("  for the recipe and adjust crt1.o / dynamic-linker / SDK root paths.")
-    // Gap-5 fallback: see assembler-failure path above for full rationale.
+    eprintln("hexa-compiler: build-temp dir kept for triage: " + tmp_dir)
+    // Gap-5 (commit 0c5283ff): sentinel for wrapper-RC translation.
     write_file(out_path + ".compile_failed",
         "stage=ld\ncmd=" + ld_cmd + "\n" + ld_out + "\n")
     exit(2)
 }
 
+if !keep_temp {
+    exec("rm -rf '" + tmp_dir + "' 2>/dev/null")
+} else if verbose {
+    eprintln("hexa-compiler: --keep-temp: leaving " + tmp_dir + " in place")
+}
 exit(0)
