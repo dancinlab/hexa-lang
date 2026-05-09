@@ -190,6 +190,40 @@ bootstrap:
     stage_3: { tool: stage_2,     fixed_point: "byte-equal to stage2" }
   retire_interpreter_after: stage3_settled
 
+  # Interpret-mode after stage3 (Decision 2026-05-09 — D+B)
+  #
+  # User wants `hexa run` to keep working as an interpret-style entrypoint
+  # after the standalone interpreter is retired. Two paths chosen:
+  #
+  #   D (default)  `hexa run x.hexa` ≡ build + exec(out_path).
+  #                Zero extra LOC — driver already calls system as/ld and
+  #                the resulting binary. atlas static-embed makes the cold
+  #                path acceptable.
+  #
+  #   B (opt-in)   --interp / `hexa repl`. AST evaluator at
+  #                compiler/eval/ast_eval.hexa walks the typed AST after
+  #                lex/parse/check. Reuses the entire frontend; only adds
+  #                ~200-500 LOC for the per-ExprKind evaluate switch.
+  #                Used for fast startup, REPL, debugging, hot-edit cycles.
+  #
+  # Rejected:
+  #   A — keep a separate ~20k-LOC interpreter alongside the native
+  #       compiler. Two code bases, no.
+  #   C — JIT (in-memory mmap + emit + jump). Deferred; nice-to-have but
+  #       per-platform complexity (page rwx, codesign on macOS).
+  #
+  # No tracing GC interpreter, no separate parser. Both paths share the
+  # compiler/lex + compiler/parse + compiler/check infrastructure.
+  interpret_mode_post_retirement:
+    decision: D_plus_B_combined
+    primary: build_and_exec    # `hexa run x.hexa` ≡ build + system exec
+    optional: ast_evaluator    # `--interp` / `hexa repl` via compiler/eval/
+    rejected: [keep_separate_interpreter, jit_first]
+    notes: |
+      ast_evaluator is implemented post-stage3 inside compiler/eval/ —
+      not a fork of self/ tree, but a thin walker over compiler/parse +
+      compiler/check output.
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Language for diagnostics (Decision 3)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -222,6 +256,90 @@ opt_out:
     On `until` date pass, compiler emits HX9001 and refuses to build until
     @grace is removed (item fixed) or `until` extended (which is itself a
     deliberate decision visible in PR review).
+
+  # AI-native warn + explicit user consent (Decision 2026-05-09)
+  #
+  # @grace is allowed but NEVER silent. Every @grace site emits an
+  # AI-native HX9000 warning at compile time, and the build is gated
+  # on explicit user consent — a CI/PR-level acknowledgement signal.
+  # Compilers/linters that swallow the warning silently are non-conformant.
+  ai_native_warn_policy:
+    diagnostic: HX9000
+    severity: Warning
+    language: english     # Decision 3 — ENGLISH ONLY
+    message_template: |
+      ai-native: @grace at {file}:{line} suppresses {error_code} until
+      {until}. Reason: "{reason}". This is a TEMPORARY debt — the
+      author is responsible for resolving the underlying issue before
+      the expiry date. Reviewer acknowledgement REQUIRED before merge.
+    style: ai_native    # short, specific, actionable; not generic warn
+    user_consent_mechanism:
+      pr_trailer: 'Acked-grace: HXxxxx by <reviewer-handle>'
+      commit_trailer: 'acked-grace: <code> by <author-handle>'
+      ci_check: |
+        CI fails when a commit/PR introduces or modifies a @grace site
+        and no Acked-grace trailer matches the affected HX code(s).
+        Per-site granularity. Covers both new and prior @grace lines.
+    rationale: |
+      User decision: bypassing strict checks must require an explicit
+      human signoff trail. Silent @grace defeats the strict-lint model.
+      The HX9000 warning ensures the bypass is visible at every
+      compile, the consent mechanism ensures it is visible at every
+      review.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Atlas citation strict (Decision 2026-05-09)
+# ─────────────────────────────────────────────────────────────────────────────
+# User decision: "공식 없으면 거절" — formula-bearing functions must be
+# bound to atlas L[*] node, otherwise compile fails. Two legal binding
+# paths; otherwise @grace must be used to opt out per-site.
+atlas_citation_strict:
+  decision: formula_must_cite_atlas_L
+  rationale: |
+    A function carrying a formula annotation (@verify or @law, OR a body
+    that references atlas L[*] nodes) is a knowledge-bearing artifact.
+    The atlas is the single source of truth for theorems / laws; allowing
+    formula code to drift unbound from atlas defeats the SSOT. RFC-017
+    §3.1 S8 already lists citation as fatal "where required"; this
+    decision pins WHERE.
+
+  required_when:
+    - item has '@verify' annotation        # caller declared it a theorem
+    - item has '@law(...)' annotation      # explicit formula docstring
+    - item body references any L[*] node   # implicit formula use
+
+  legal_bindings:
+    - syntax: '@implements(L[<existing-id>])'
+      meaning: cite an already-registered atlas L node
+    - syntax: '@discover(kind="L")'
+      meaning: register THIS function as a NEW atlas L node
+                (RFC-017 §5 ε self-proof; routes through compiler/discover/
+                staging path on prover pass)
+
+  on_missing_binding:
+    diagnostic: HX8004
+    severity: Error
+    template: |
+      formula in `{name}` has no atlas binding — add @implements(L[id]) to
+      cite an existing law, or @discover(kind="L") to register this
+      function as a new one. SPEC.yaml atlas_citation_strict.
+
+  bypass_path:
+    via: '@grace(HX8004, until="YYYY-MM-DD", reason="...")'
+    notes: |
+      Standard @grace machinery (Decision 4) covers HX8004 like any other
+      HX code. Use ONLY when atlas drift / migration is in flight; the
+      until date forces the binding to land before merge.
+
+      EVERY @grace site emits HX9000 ai-native warning — see
+      opt_out.ai_native_warn_policy. Bypass is never silent.
+
+  promotion_from_HX8003:
+    note: |
+      The earlier HX8003 (Warning — "fn uses L refs but no @implements")
+      is superseded by HX8004 (Error). HX8003 demoted or retired in the
+      next citation pass refresh. Tooling should treat both equivalently
+      during transition.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Atlas self-discovery system (Decision 5: ε)
