@@ -1,0 +1,200 @@
+// M0 milestone end-to-end smoke harness.
+//
+// Drives `compiler/main.hexa` over `tests/m0/hello.hexa` for the host
+// target and reports phase-by-phase pass/fail:
+//   1. asm  — driver writes /tmp/m0_hello.s containing a `_main`/`main`
+//             label and a `ret` instruction.
+//   2. obj  — system `as` accepts the asm and produces /tmp/m0_hello.o.
+//   3. exec — system `ld` links a runnable binary, /tmp/m0_hello, that
+//             exits 0.
+//
+// Each phase is independent: a later phase is skipped if the previous
+// phase failed or required tools are missing. The harness never modifies
+// the compiler — it observes the current M0 state for follow-up work.
+//
+// Exit codes:
+//   0 — at least one phase reported PASS (partial pass acceptable)
+//   1 — all phases failed (M0 not yet at smoke-pass)
+
+fn _exists(path: string) -> bool {
+    let r = exec("test -e " + path + " && echo ok || echo no").trim()
+    return r == "ok"
+}
+
+fn _which(name: string) -> bool {
+    let r = exec("command -v " + name + " >/dev/null 2>&1 && echo ok || echo no").trim()
+    return r == "ok"
+}
+
+fn _read(path: string) -> string {
+    if !_exists(path) { return "" }
+    return to_string(read_file(path))
+}
+
+fn _contains(haystack: string, needle: string) -> bool {
+    let n = len(haystack)
+    let m = len(needle)
+    if m == 0 { return true }
+    if m > n { return false }
+    let mut i = 0
+    while i + m <= n {
+        if haystack.substring(i, i + m) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _detect_target() -> string {
+    let u = exec("uname -sm 2>/dev/null").trim()
+    if u == "Darwin arm64" { return "arm64-apple-darwin" }
+    if u == "Linux x86_64" { return "x86_64-linux-gnu" }
+    if u == "Linux aarch64" { return "arm64-linux-gnu" }
+    return "arm64-apple-darwin"
+}
+
+fn _main_label_for(target: string) -> string {
+    if target == "arm64-apple-darwin" { return "_main:" }
+    return "main:"
+}
+
+// Resolve a local hexa interpreter binary. On dev boxes the shell `hexa`
+// wrapper routes `run` to a remote TCP server (resource toolkit), which
+// drops our --target/--emit/-o flags. We prefer a known-local Mach-O / ELF
+// interpreter and fall back to PATH `hexa` only as a last resort.
+fn _resolve_hexa_bin() -> string {
+    let env_pick = exec("printenv HEXA_INTERP 2>/dev/null").trim()
+    if len(env_pick) > 0 { return env_pick }
+    let home = exec("printenv HOME 2>/dev/null").trim()
+    let c1 = home + "/.hx/bin/hexa_real"
+    if _exists(c1) { return c1 }
+    let c2 = home + "/.hx/packages/hexa/build/hexa_interp.real"
+    if _exists(c2) { return c2 }
+    let c3 = "build/hexa_interp.real"
+    if _exists(c3) { return c3 }
+    let c4 = "build/hexa_interp"
+    if _exists(c4) { return c4 }
+    return "hexa"
+}
+
+// Phase 1: asm
+fn _phase_asm(target: string) -> bool {
+    println("==================================================")
+    println("M0 phase 1/3 - asm  (target=" + target + ")")
+    println("==================================================")
+    exec("rm -f /tmp/m0_hello.s")
+    let cmd = _resolve_hexa_bin() + " run compiler/main.hexa --target=" + target + " --emit=asm -o /tmp/m0_hello.s tests/m0/hello.hexa 2>&1"
+    println("$ " + cmd)
+    let out = exec(cmd)
+    if !_exists("/tmp/m0_hello.s") {
+        println("M0_ASM=FAIL  (driver did not write /tmp/m0_hello.s)")
+        println("--- driver output (tail) ---")
+        println(out)
+        return false
+    }
+    let asm = _read("/tmp/m0_hello.s")
+    println("--- /tmp/m0_hello.s (preview, " + to_string(len(asm)) + " bytes) ---")
+    println(asm)
+    println("--- end preview ---")
+    let want_label = _main_label_for(target)
+    let has_label = _contains(asm, want_label)
+    let has_ret = _contains(asm, "ret")
+    if has_label && has_ret {
+        println("M0_ASM=PASS  (found label and ret)")
+        return true
+    }
+    println("M0_ASM=FAIL  (label=" + to_string(has_label) + " ret=" + to_string(has_ret) + ")")
+    return false
+}
+
+// Phase 2: obj
+fn _phase_obj(target: string, asm_ok: bool) -> bool {
+    println("")
+    println("==================================================")
+    println("M0 phase 2/3 - obj")
+    println("==================================================")
+    if !asm_ok {
+        println("M0_OBJ=SKIP  (asm phase failed)")
+        return false
+    }
+    if !_which("as") {
+        println("M0_OBJ=SKIP  (as not on PATH)")
+        return false
+    }
+    exec("rm -f /tmp/m0_hello.o")
+    let cmd = _resolve_hexa_bin() + " run compiler/main.hexa --target=" + target + " --emit=obj -o /tmp/m0_hello.o tests/m0/hello.hexa 2>&1"
+    println("$ " + cmd)
+    let out = exec(cmd)
+    if _exists("/tmp/m0_hello.o") {
+        println("M0_OBJ=PASS  (/tmp/m0_hello.o produced)")
+        return true
+    }
+    println("M0_OBJ=FAIL")
+    println("--- driver output (tail) ---")
+    println(out)
+    return false
+}
+
+// Phase 3: exec
+fn _phase_exec(target: string, obj_ok: bool) -> bool {
+    println("")
+    println("==================================================")
+    println("M0 phase 3/3 - exec")
+    println("==================================================")
+    if !obj_ok {
+        println("M0_EXEC=SKIP  (obj phase failed)")
+        return false
+    }
+    if !_which("ld") {
+        println("M0_EXEC=SKIP  (ld not on PATH)")
+        return false
+    }
+    if target == "arm64-apple-darwin" {
+        let sdk = exec("xcrun --show-sdk-path 2>/dev/null").trim()
+        if len(sdk) == 0 {
+            println("M0_EXEC=SKIP  (no Xcode SDK)")
+            return false
+        }
+    } else if target == "x86_64-linux-gnu" {
+        if !_exists("/usr/lib/x86_64-linux-gnu/crt1.o") {
+            println("M0_EXEC=SKIP  (crt1.o not at expected path)")
+            return false
+        }
+    }
+    exec("rm -f /tmp/m0_hello")
+    let cmd = _resolve_hexa_bin() + " run compiler/main.hexa --target=" + target + " --emit=exec -o /tmp/m0_hello tests/m0/hello.hexa 2>&1"
+    println("$ " + cmd)
+    let out = exec(cmd)
+    if !_exists("/tmp/m0_hello") {
+        println("M0_EXEC=FAIL  (driver did not produce /tmp/m0_hello)")
+        println("--- driver output (tail) ---")
+        println(out)
+        return false
+    }
+    let rc = exec("/tmp/m0_hello; echo RC=$?").trim()
+    println("$ /tmp/m0_hello  -> " + rc)
+    if _contains(rc, "RC=0") {
+        println("M0_EXEC=PASS  (binary exited 0)")
+        return true
+    }
+    println("M0_EXEC=FAIL  (non-zero exit)")
+    return false
+}
+
+fn main() -> i64 {
+    let target = _detect_target()
+    println("M0 smoke harness - host target = " + target)
+    println("source = tests/m0/hello.hexa")
+    println("")
+    let asm_ok = _phase_asm(target)
+    let obj_ok = _phase_obj(target, asm_ok)
+    let exec_ok = _phase_exec(target, obj_ok)
+    println("")
+    println("==================================================")
+    println("M0 SUMMARY")
+    println("==================================================")
+    if asm_ok  { println("  M0_ASM  = PASS") } else { println("  M0_ASM  = FAIL") }
+    if obj_ok  { println("  M0_OBJ  = PASS") } else { println("  M0_OBJ  = FAIL/SKIP") }
+    if exec_ok { println("  M0_EXEC = PASS") } else { println("  M0_EXEC = FAIL/SKIP") }
+    if asm_ok || obj_ok || exec_ok { return 0 }
+    return 1
+}

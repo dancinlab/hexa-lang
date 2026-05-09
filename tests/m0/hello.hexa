@@ -1,0 +1,11 @@
+// M0 milestone smoke-test source.
+//
+// The smallest hexa program the native pipeline can compile end-to-end:
+// a `main` function that returns 0. Exit code 0 == success.
+//
+// Anything richer than this requires lexer/parser features the current
+// stage0-bootstrapped compiler does not yet support. See tests/m0/run_m0.hexa
+// for the harness that drives this through compiler/main.hexa.
+fn main() -> i32 {
+    return 0
+}
