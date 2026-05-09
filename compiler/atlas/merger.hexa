@@ -181,7 +181,10 @@ pub fn load_atlas(root: string) -> AtlasIndex {
         hash_chunks.push("--FILE:" + basename + "--\n")
         hash_chunks.push(raw_bytes)
         let nodes = parse_atlas_file(path, basename)
-        if len(nodes) > 0 {
+        // source_count tracks every readable file under root that we
+        // merged into the hash stream — even append shards whose only
+        // entries are @M/@T (so they contribute 0 to P/C/L/E counts).
+        if len(raw_bytes) > 0 {
             idx.source_count = idx.source_count + 1
         }
         let mut ni = 0

@@ -70,6 +70,8 @@ fn keyword_kind(word: string) -> TokenKind {
     if word == "for" { return TokenKind::KwFor }
     if word == "in" { return TokenKind::KwIn }
     if word == "struct" { return TokenKind::KwStruct }
+    if word == "enum" { return TokenKind::KwEnum }
+    if word == "match" { return TokenKind::KwMatch }
     if word == "pub" { return TokenKind::KwPub }
     if word == "import" { return TokenKind::KwImport }
     if word == "as" { return TokenKind::KwAs }
@@ -218,6 +220,38 @@ pub fn lex(source: string, file: string) -> [Token] {
             let text = join(parts, "")
             let span = mk_span(file, line, start_col, col - start_col)
             tokens.push(mk_tok(TokenKind::Number, text, span))
+        } else if ch == '\'' {
+            // char literal: 'c' or '\n' / '\t' / '\r' / '\\' / '\'' / '\0'
+            // emits TokenKind::Char with text = the (decoded) character body.
+            let start_col = col
+            pos = pos + 1
+            col = col + 1
+            let mut body = ""
+            if pos < n && chars[pos] == '\\' && pos + 1 < n {
+                let e = chars[pos + 1]
+                if e == 'n' { body = "\n" }
+                else if e == 't' { body = "\t" }
+                else if e == 'r' { body = "\r" }
+                else if e == '\\' { body = "\\" }
+                else if e == '\'' { body = "'" }
+                else if e == '"' { body = "\"" }
+                else if e == '0' { body = "\0" }
+                else { body = to_string(e) }
+                pos = pos + 2
+                col = col + 2
+            } else if pos < n && chars[pos] != '\'' {
+                body = to_string(chars[pos])
+                pos = pos + 1
+                col = col + 1
+            }
+            // consume closing quote (best effort — we don't error here, the
+            // checker can lift unterminated char literals into a diagnostic).
+            if pos < n && chars[pos] == '\'' {
+                pos = pos + 1
+                col = col + 1
+            }
+            let span = mk_span(file, line, start_col, col - start_col)
+            tokens.push(mk_tok(TokenKind::Char, body, span))
         } else if ch == '"' {
             // string literal with \n \t \r \\ \" \0 escapes
             let start_col = col
@@ -277,6 +311,31 @@ pub fn lex(source: string, file: string) -> [Token] {
             } else if ch == '!' && pos + 1 < n && chars[pos + 1] == '=' {
                 let sp = mk_span(file, line, start_col, 2)
                 tokens.push(mk_tok(TokenKind::Neq, "!=", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '+' && pos + 1 < n && chars[pos + 1] == '=' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::PlusEq, "+=", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '-' && pos + 1 < n && chars[pos + 1] == '=' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::MinusEq, "-=", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '*' && pos + 1 < n && chars[pos + 1] == '=' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::StarEq, "*=", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '/' && pos + 1 < n && chars[pos + 1] == '=' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::SlashEq, "/=", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == ':' && pos + 1 < n && chars[pos + 1] == ':' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::ColonColon, "::", sp))
                 pos = pos + 2
                 col = col + 2
             } else if ch == '<' && pos + 1 < n && chars[pos + 1] == '=' {

@@ -162,47 +162,67 @@ pub fn parse_atlas_file(path: string, source_file: string) -> array {
 
     let mut i = 0
     while i < n_lines {
-        let line = to_string(lines[i])
+        let line = lines[i]
 
-        if _is_comment(line) {
+        // Fast skip: blank line.
+        if len(line) == 0 {
+            i = i + 1
+            continue
+        }
+        // Fast comment check: peek first char without ltrim when possible.
+        let c0 = line.substring(0, 1)
+        if c0 == "#" {
+            i = i + 1
+            continue
+        }
+        if c0 != "@" {
+            // Either a continuation (leading ws/quote) or a // comment.
+            // Distinguish // comments by ltrim only when needed.
+            if c0 == " " || c0 == "\t" || c0 == "\"" || c0 == "(" {
+                if have_cur {
+                    cur_raw_chunks.push(line)
+                }
+                i = i + 1
+                continue
+            }
+            if _is_comment(line) {
+                i = i + 1
+                continue
+            }
+            // Other unexpected first char — treat as continuation.
+            if have_cur {
+                cur_raw_chunks.push(line)
+            }
             i = i + 1
             continue
         }
 
-        // Header line iff the line itself (no leading ws) starts with @.
-        // Continuation lines either start with ws OR are quoted prose;
-        // both never start with '@' at column 0.
-        let starts_at_col0 = len(line) > 0 && line.substring(0, 1) == "@"
-
-        if starts_at_col0 {
-            let tok = _first_token(line)
-            if _is_header_sigil(tok) {
-                // Flush previous node.
-                if have_cur && cur_kind != "" {
-                    out.push(AtlasNode {
-                        kind: cur_kind,
-                        id: cur_id,
-                        raw: cur_raw_chunks.join("\n"),
-                        source_file: source_file,
-                        source_line: cur_line
-                    })
-                }
-                let k = _kind_of(tok)
-                let rest = line.substring(len(tok), len(line))
-                let id = _extract_id(rest)
-                have_cur = true
-                cur_kind = k
-                cur_id = id
-                cur_raw_chunks = [line]
-                cur_line = i + 1
-                i = i + 1
-                continue
+        // c0 == "@" → potential header line at column 0.
+        let tok = _first_token(line)
+        if _is_header_sigil(tok) {
+            // Flush previous node.
+            if have_cur && cur_kind != "" {
+                out.push(AtlasNode {
+                    kind: cur_kind,
+                    id: cur_id,
+                    raw: cur_raw_chunks.join("\n"),
+                    source_file: source_file,
+                    source_line: cur_line
+                })
             }
-            // @-sigil but not a known header (e.g. unexpected) — treat as
-            // continuation of current node to be safe.
+            let k = _kind_of(tok)
+            let rest = line.substring(len(tok), len(line))
+            let id = _extract_id(rest)
+            have_cur = true
+            cur_kind = k
+            cur_id = id
+            cur_raw_chunks = [line]
+            cur_line = i + 1
+            i = i + 1
+            continue
         }
-
-        // Continuation line: append to current node's raw if we have one.
+        // @-sigil but not a known header (section marker etc.) — treat
+        // as continuation to keep raw intact.
         if have_cur {
             cur_raw_chunks.push(line)
         }

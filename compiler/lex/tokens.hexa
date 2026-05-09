@@ -31,14 +31,20 @@ pub enum TokenKind {
     RBrace,
     LBracket,
     RBracket,
+    Char,          // 'c' / '\n' / etc. — A1.5
     Comma,
     Semicolon,
     Colon,
+    ColonColon,    // :: enum path / module path — A1.5
     Arrow,
     FatArrow,
     Eq,
     EqEq,
     Neq,
+    PlusEq,        // += compound assign — A1.5
+    MinusEq,       // -=
+    StarEq,        // *=
+    SlashEq,       // /=
     Lt,
     Le,
     Gt,
@@ -62,6 +68,8 @@ pub enum TokenKind {
     KwFor,
     KwIn,
     KwStruct,
+    KwEnum,        // enum decl — A1.5
+    KwMatch,       // match expr — A1.5
     KwPub,
     KwImport,
     KwAs,

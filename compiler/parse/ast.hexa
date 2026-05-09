@@ -43,7 +43,7 @@ pub struct TypeRef {
 
 pub struct Param {
     name: string,
-    type: TypeRef,
+    typ: TypeRef,        // `type` is reserved in hexa stage0 → use `typ`
     span: Span
 }
 
@@ -55,6 +55,7 @@ pub enum ExprKind {
     LiteralFloat,
     LiteralString,
     LiteralBool,
+    LiteralChar,     // 'c' / '\n' — A1.5
     Ident,
     AtlasRef,
     Call,
@@ -63,11 +64,16 @@ pub enum ExprKind {
     Block,
     If,
     While,
+    For,             // for x in iter { body } — A1.5
+    Match,           // match expr { pat -> body, ... } — A1.5
     Return,
     Let,
     Assign,
     Field,
-    Index
+    Index,
+    StructLit,       // Foo { x: 1, y: 2 } — A1.5
+    EnumPath,        // Foo::Bar / Foo::Bar(payload) — A1.5
+    Wildcard         // _ pattern — A1.5
 }
 
 // ── Expressions ──────────────────────────────────────────────
@@ -87,6 +93,7 @@ pub enum ItemKind {
     Fn,
     Let,
     Struct,
+    Enum,            // enum Color { Red, Green(i64) } — A1.5
     Import
 }
 

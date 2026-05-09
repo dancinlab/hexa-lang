@@ -144,6 +144,7 @@ fn _is_atlas_ref_kind(k: ExprKind) -> bool {
         ExprKind::LiteralFloat -> false,
         ExprKind::LiteralString -> false,
         ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
         ExprKind::Ident -> false,
         ExprKind::Call -> false,
         ExprKind::BinOp -> false,
@@ -151,11 +152,16 @@ fn _is_atlas_ref_kind(k: ExprKind) -> bool {
         ExprKind::Block -> false,
         ExprKind::If -> false,
         ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
         ExprKind::Return -> false,
         ExprKind::Let -> false,
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
-        ExprKind::Index -> false
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
     }
 }
 

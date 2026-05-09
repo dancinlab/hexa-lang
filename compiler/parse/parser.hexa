@@ -20,6 +20,10 @@ pub let mut p_tokens = []
 pub let mut p_pos = 0
 pub let mut p_file = ""
 pub let mut p_pending_annotations = []
+// While true, an ident-followed-by-LBrace is *not* parsed as a struct literal
+// (so `if cond { body }` doesn't read `cond { ... }` as `StructLit`). The
+// guard parsing functions toggle this around their condition expressions.
+pub let mut p_suppress_struct_lit = false
 
 // ── Span / placeholder helpers ─────────────────────────────────
 
@@ -82,6 +86,7 @@ fn tag_of(k: TokenKind) -> string {
         TokenKind::Ident -> "Ident",
         TokenKind::Number -> "Number",
         TokenKind::String -> "String",
+        TokenKind::Char -> "Char",
         TokenKind::LParen -> "LParen",
         TokenKind::RParen -> "RParen",
         TokenKind::LBrace -> "LBrace",
@@ -91,11 +96,16 @@ fn tag_of(k: TokenKind) -> string {
         TokenKind::Comma -> "Comma",
         TokenKind::Semicolon -> "Semicolon",
         TokenKind::Colon -> "Colon",
+        TokenKind::ColonColon -> "ColonColon",
         TokenKind::Arrow -> "Arrow",
         TokenKind::FatArrow -> "FatArrow",
         TokenKind::Eq -> "Eq",
         TokenKind::EqEq -> "EqEq",
         TokenKind::Neq -> "Neq",
+        TokenKind::PlusEq -> "PlusEq",
+        TokenKind::MinusEq -> "MinusEq",
+        TokenKind::StarEq -> "StarEq",
+        TokenKind::SlashEq -> "SlashEq",
         TokenKind::Lt -> "Lt",
         TokenKind::Le -> "Le",
         TokenKind::Gt -> "Gt",
@@ -117,6 +127,8 @@ fn tag_of(k: TokenKind) -> string {
         TokenKind::KwFor -> "KwFor",
         TokenKind::KwIn -> "KwIn",
         TokenKind::KwStruct -> "KwStruct",
+        TokenKind::KwEnum -> "KwEnum",
+        TokenKind::KwMatch -> "KwMatch",
         TokenKind::KwPub -> "KwPub",
         TokenKind::KwImport -> "KwImport",
         TokenKind::KwAs -> "KwAs",
@@ -211,7 +223,30 @@ fn parse_type() -> TypeRef {
 // followed by a postfix loop for ., (), [].
 
 fn parse_expr() -> Expr {
-    return parse_equality()
+    return parse_assignment()
+}
+
+// Assignment is lowest precedence and right-associative. Both `x = rhs` and
+// the compound forms `x += rhs` / `-=` / `*=` / `/=` produce ExprKind::Assign
+// with `text` set to the operator literal so the checker can distinguish a
+// pure assignment from a read-modify-write later (RFC-018 §A1).
+fn parse_assignment() -> Expr {
+    let lhs = parse_equality()
+    if check_kind(TokenKind::Eq) || check_kind(TokenKind::PlusEq) || check_kind(TokenKind::MinusEq) || check_kind(TokenKind::StarEq) || check_kind(TokenKind::SlashEq) {
+        let op = advance()
+        let rhs = parse_assignment()
+        let mut kids = []
+        kids.push(lhs)
+        kids.push(rhs)
+        return Expr {
+            kind: ExprKind::Assign,
+            span: op.span,
+            text: op.text,
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    return lhs
 }
 
 fn parse_equality() -> Expr {
@@ -397,6 +432,18 @@ fn parse_primary() -> Expr {
             atlas_ref: empty_atlas()
         }
     }
+    if check_kind(TokenKind::Char) {
+        advance()
+        // text holds the (already escape-decoded) single character body so
+        // the checker can read it verbatim — no re-escape pass needed.
+        return Expr {
+            kind: ExprKind::LiteralChar,
+            span: t.span,
+            text: t.text,
+            children: [],
+            atlas_ref: empty_atlas()
+        }
+    }
     if check_kind(TokenKind::KwTrue) || check_kind(TokenKind::KwFalse) {
         advance()
         return Expr {
@@ -421,6 +468,38 @@ fn parse_primary() -> Expr {
     }
     if check_kind(TokenKind::Ident) {
         advance()
+        // EnumName::Variant — also allow Variant(payload) as an Expr.
+        if check_kind(TokenKind::ColonColon) {
+            advance()
+            let v_tok = expect(TokenKind::Ident)
+            let mut kids = []
+            if check_kind(TokenKind::LParen) {
+                advance()
+                if !check_kind(TokenKind::RParen) {
+                    kids.push(parse_expr())
+                    while check_kind(TokenKind::Comma) {
+                        advance()
+                        if check_kind(TokenKind::RParen) { break }
+                        kids.push(parse_expr())
+                    }
+                }
+                eat(TokenKind::RParen)
+            }
+            // text encodes the Enum::Variant path so a single field captures
+            // both halves without needing a dedicated payload struct.
+            return Expr {
+                kind: ExprKind::EnumPath,
+                span: t.span,
+                text: t.text + "::" + v_tok.text,
+                children: kids,
+                atlas_ref: empty_atlas()
+            }
+        }
+        // Foo { x: 1, y: 2 } — only when struct-lit context is permitted, so
+        // `if cond { body }` still reads `cond` as a bare Ident.
+        if check_kind(TokenKind::LBrace) && !p_suppress_struct_lit && is_struct_lit_lookahead() {
+            return parse_struct_lit_after_name(t)
+        }
         return Expr {
             kind: ExprKind::Ident,
             span: t.span,
@@ -444,6 +523,12 @@ fn parse_primary() -> Expr {
     if check_kind(TokenKind::KwWhile) {
         return parse_while_expr()
     }
+    if check_kind(TokenKind::KwFor) {
+        return parse_for_expr()
+    }
+    if check_kind(TokenKind::KwMatch) {
+        return parse_match_expr()
+    }
     if check_kind(TokenKind::KwReturn) {
         return parse_return_expr()
     }
@@ -460,6 +545,126 @@ fn parse_primary() -> Expr {
         children: [],
         atlas_ref: empty_atlas()
     }
+}
+
+// Detect `Ident { Ident :` or `Ident { }` — the empty-fields literal — so we
+// don't accidentally swallow a control-flow body. Position-preserving; the
+// caller has already consumed the leading Ident.
+fn is_struct_lit_lookahead() -> bool {
+    if !check_kind(TokenKind::LBrace) { return false }
+    let n1 = peek_at(1)
+    if same_kind(n1.kind, TokenKind::RBrace) { return true }
+    if !same_kind(n1.kind, TokenKind::Ident) { return false }
+    let n2 = peek_at(2)
+    return same_kind(n2.kind, TokenKind::Colon)
+}
+
+// Caller has already consumed the leading Ident `name_tok`. We're at LBrace.
+// Each field is encoded as a child Expr (kind=Ident, text=field_name,
+// children=[value_expr]) — same shape used for struct decls in self/parser.
+fn parse_struct_lit_after_name(name_tok: Token) -> Expr {
+    eat(TokenKind::LBrace)
+    let mut kids = []
+    while !check_kind(TokenKind::RBrace) && !at_eof() {
+        let f_name = expect(TokenKind::Ident)
+        eat(TokenKind::Colon)
+        let f_val = parse_expr()
+        let mut f_kids = []
+        f_kids.push(f_val)
+        kids.push(Expr {
+            kind: ExprKind::Ident,
+            span: f_name.span,
+            text: f_name.text,
+            children: f_kids,
+            atlas_ref: empty_atlas()
+        })
+        if check_kind(TokenKind::Comma) { advance() }
+    }
+    eat(TokenKind::RBrace)
+    return Expr {
+        kind: ExprKind::StructLit,
+        span: name_tok.span,
+        text: name_tok.text,
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+// for NAME in ITER { BODY }
+// children layout: [iter_expr, body]; binding name is stashed on `text`.
+fn parse_for_expr() -> Expr {
+    let kw = peek()
+    advance()
+    let name_tok = expect(TokenKind::Ident)
+    eat(TokenKind::KwIn)
+    let prev = p_suppress_struct_lit
+    p_suppress_struct_lit = true
+    let it = parse_expr()
+    p_suppress_struct_lit = prev
+    let body = parse_block_expr()
+    let mut kids = []
+    kids.push(it)
+    kids.push(body)
+    return Expr {
+        kind: ExprKind::For,
+        span: kw.span,
+        text: name_tok.text,
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+// match SCRUTINEE { PATTERN -> BODY, ... }
+// children layout: [scrutinee, pat0, body0, pat1, body1, ...].
+fn parse_match_expr() -> Expr {
+    let kw = peek()
+    advance()
+    let prev = p_suppress_struct_lit
+    p_suppress_struct_lit = true
+    let scrut = parse_expr()
+    p_suppress_struct_lit = prev
+    eat(TokenKind::LBrace)
+    let mut kids = []
+    kids.push(scrut)
+    while !check_kind(TokenKind::RBrace) && !at_eof() {
+        let pat = parse_match_pattern()
+        eat(TokenKind::Arrow)
+        let body = parse_expr()
+        kids.push(pat)
+        kids.push(body)
+        if check_kind(TokenKind::Comma) { advance() }
+    }
+    eat(TokenKind::RBrace)
+    return Expr {
+        kind: ExprKind::Match,
+        span: kw.span,
+        text: "",
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+// Patterns: wildcard `_`, literal, ident binding, EnumName::Variant, and
+// EnumName::Variant(binding). The binding form reuses ExprKind::EnumPath
+// with one child Ident expression that names the bound variable.
+fn parse_match_pattern() -> Expr {
+    let t = peek()
+    if check_kind(TokenKind::Ident) && t.text == "_" {
+        advance()
+        return Expr {
+            kind: ExprKind::Wildcard,
+            span: t.span,
+            text: "_",
+            children: [],
+            atlas_ref: empty_atlas()
+        }
+    }
+    // literal patterns / arbitrary expressions delegate to parse_expr below
+    if check_kind(TokenKind::Number) || check_kind(TokenKind::String) || check_kind(TokenKind::Char) || check_kind(TokenKind::KwTrue) || check_kind(TokenKind::KwFalse) {
+        return parse_expr()
+    }
+    // EnumName::Variant patterns are handled via parse_expr's EnumPath path.
+    return parse_expr()
 }
 
 fn parse_block_expr() -> Expr {
@@ -485,7 +690,10 @@ fn parse_block_expr() -> Expr {
 fn parse_if_expr() -> Expr {
     let kw = peek()
     advance()
+    let prev = p_suppress_struct_lit
+    p_suppress_struct_lit = true
     let cond = parse_expr()
+    p_suppress_struct_lit = prev
     let then_b = parse_block_expr()
     let mut kids = []
     kids.push(cond)
@@ -510,7 +718,10 @@ fn parse_if_expr() -> Expr {
 fn parse_while_expr() -> Expr {
     let kw = peek()
     advance()
+    let prev = p_suppress_struct_lit
+    p_suppress_struct_lit = true
     let cond = parse_expr()
+    p_suppress_struct_lit = prev
     let body = parse_block_expr()
     let mut kids = []
     kids.push(cond)
@@ -604,7 +815,7 @@ fn parse_param() -> Param {
     let name_tok = expect(TokenKind::Ident)
     eat(TokenKind::Colon)
     let ty = parse_type()
-    return Param { name: name_tok.text, type: ty, span: name_tok.span }
+    return Param { name: name_tok.text, typ: ty, span: name_tok.span }
 }
 
 fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
@@ -680,7 +891,7 @@ fn parse_struct_item(is_pub: bool, anns: [Annotation]) -> Item {
         let f_name = expect(TokenKind::Ident)
         eat(TokenKind::Colon)
         let f_ty = parse_type()
-        fields.push(Param { name: f_name.text, type: f_ty, span: f_name.span })
+        fields.push(Param { name: f_name.text, typ: f_ty, span: f_name.span })
         if check_kind(TokenKind::Comma) { advance() }
     }
     eat(TokenKind::RBrace)
@@ -690,6 +901,49 @@ fn parse_struct_item(is_pub: bool, anns: [Annotation]) -> Item {
         span: kw.span,
         annotations: anns,
         params: fields,
+        return_type: empty_type(),
+        body: empty_expr(),
+        is_pub: is_pub
+    }
+}
+
+// enum Name { Variant1, Variant2(Type), Variant3 }
+// Each variant is stored as a Param entry — name=variant name, type carries
+// the (optional, single-field) payload type. Multi-field payload deferred per
+// RFC-020 until the checker can model tuple variants.
+fn parse_enum_item(is_pub: bool, anns: [Annotation]) -> Item {
+    let kw = peek()
+    eat(TokenKind::KwEnum)
+    let name_tok = expect(TokenKind::Ident)
+    eat(TokenKind::LBrace)
+    let mut variants = []
+    while !check_kind(TokenKind::RBrace) && !at_eof() {
+        let v_name = expect(TokenKind::Ident)
+        let mut v_ty = empty_type()
+        if check_kind(TokenKind::LParen) {
+            advance()
+            if !check_kind(TokenKind::RParen) {
+                v_ty = parse_type()
+                // RFC-020: multi-field payload deferred — drain trailing
+                // arguments so the brace stream stays balanced.
+                while check_kind(TokenKind::Comma) {
+                    advance()
+                    if check_kind(TokenKind::RParen) { break }
+                    parse_type()
+                }
+            }
+            eat(TokenKind::RParen)
+        }
+        variants.push(Param { name: v_name.text, typ: v_ty, span: v_name.span })
+        if check_kind(TokenKind::Comma) { advance() }
+    }
+    eat(TokenKind::RBrace)
+    return Item {
+        kind: ItemKind::Enum,
+        name: name_tok.text,
+        span: kw.span,
+        annotations: anns,
+        params: variants,
         return_type: empty_type(),
         body: empty_expr(),
         is_pub: is_pub
@@ -732,6 +986,9 @@ fn parse_item() -> Item {
     if check_kind(TokenKind::KwStruct) {
         return parse_struct_item(is_pub, anns)
     }
+    if check_kind(TokenKind::KwEnum) {
+        return parse_enum_item(is_pub, anns)
+    }
     if check_kind(TokenKind::KwImport) {
         return parse_import_item(is_pub, anns)
     }
@@ -757,7 +1014,8 @@ fn item_is_import(k: ItemKind) -> bool {
         ItemKind::Import -> true,
         ItemKind::Fn -> false,
         ItemKind::Let -> false,
-        ItemKind::Struct -> false
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false
     }
 }
 

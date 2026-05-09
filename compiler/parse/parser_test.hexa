@@ -14,6 +14,7 @@ fn item_kind_str(k: ItemKind) -> string {
         ItemKind::Fn -> "Fn",
         ItemKind::Let -> "Let",
         ItemKind::Struct -> "Struct",
+        ItemKind::Enum -> "Enum",
         ItemKind::Import -> "Import"
     }
 }
@@ -71,11 +72,38 @@ fn case_struct_let_import() {
     dump_module("case 3: import / struct / let / field", src)
 }
 
+// A1.5 follow-ups — exercise the extensions added by parser.hexa:
+//   enum decl + match expression / struct literal / for-loop / assignment.
+
+fn case_enum_and_match() {
+    let src = "enum Color { Red, Green(i64), Blue }\nfn describe(c: Color) -> i64 { return match c { Color::Red -> 1, Color::Green(n) -> n, _ -> 0 } }"
+    dump_module("case 4: enum + match", src)
+}
+
+fn case_struct_literal() {
+    let src = "struct Pt { x: i64, y: i64 }\nfn make() -> Pt { return Pt { x: 1, y: 2 } }"
+    dump_module("case 5: struct literal", src)
+}
+
+fn case_for_loop() {
+    let src = "fn sum(xs: [i64]) -> i64 { let mut s = 0; for x in xs { s = s + x }; return s }"
+    dump_module("case 6: for-loop", src)
+}
+
+fn case_assignment() {
+    let src = "fn step() -> i64 { let mut n = 1; n = n + 1; n += 2; return n }"
+    dump_module("case 7: assignment + compound assign", src)
+}
+
 println("══════════════════════════════════════════════")
 println("  HEXA Compiler — Parser Smoke Test (A1)")
 println("══════════════════════════════════════════════")
 case_basic_fn()
 case_atlas_and_annotation()
 case_struct_let_import()
+case_enum_and_match()
+case_struct_literal()
+case_for_loop()
+case_assignment()
 println("══════════════════════════════════════════════")
 println("  done.")

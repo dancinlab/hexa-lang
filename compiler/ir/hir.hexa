@@ -48,7 +48,7 @@ pub struct AtlasBinding {
 pub struct HExpr {
     kind: string,        // mirrors EXPR_* but every node carries Type
     span: Span,
-    type: Type,
+    typ: Type,           // `type` is reserved in hexa stage0 → use `typ`
     text: string,
     children: [HExpr],
     atlas: AtlasBinding,
