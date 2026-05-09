@@ -34,6 +34,18 @@
 import "../ir/mir.hexa"
 import "../ir/lir.hexa"
 
+// ── Local mirror of mir.hexa STMT_* constants ────────────────
+// See note in compiler/lower/hir_to_mir.hexa: stage0's interpreter does
+// not propagate transitive `pub let` bindings, so STMT_* arrive here as
+// the void value. Redeclaring locally keeps codegen dispatch working.
+let _STMT_ASSIGN   = "assign"
+let _STMT_BINOP    = "binop"
+let _STMT_UNOP     = "unop"
+let _STMT_CALL     = "call"
+let _STMT_RETURN   = "return"
+let _STMT_BR       = "br"
+let _STMT_BR_COND  = "br_cond"
+
 // ── PReg / LOperand helpers ──────────────────────────────────
 
 fn _preg_gpr(name: string) -> PReg {
@@ -151,7 +163,7 @@ fn _arm64_block_label(fname: string, block_id: i64) -> string {
 
 fn _emit_arm64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
     let mut buf = out
-    if s.kind == STMT_ASSIGN {
+    if s.kind == _STMT_ASSIGN {
         // mov dst, src (single operand expected)
         let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
         if len(s.args) >= 1 {
@@ -160,7 +172,7 @@ fn _emit_arm64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
         }
         return buf
     }
-    if s.kind == STMT_BINOP {
+    if s.kind == _STMT_BINOP {
         let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
         if len(s.args) >= 2 {
             let a = _arm64_op_for_operand(s.args[0])
@@ -178,7 +190,7 @@ fn _emit_arm64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
         }
         return buf
     }
-    if s.kind == STMT_CALL {
+    if s.kind == _STMT_CALL {
         // bl <label> ; result by ABI in x0, written into dst
         let target = s.op // call target name carried in s.op
         buf.push(_instr1("bl", _op_label(target), "call " + target))
@@ -188,23 +200,24 @@ fn _emit_arm64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
         }
         return buf
     }
-    if s.kind == STMT_RETURN {
+    if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
             let src = _arm64_op_for_operand(s.args[0])
             buf.push(_instr2("mov", _op_reg("x0"), src, "set return value"))
         }
-        // epilogue
-        buf.push(_instr2("ldp", _op_reg("x29"), _op_reg("x30"), "epilogue: restore fp/lr"))
-        // sp post-increment encoded as comment for now (stage0; emit pass renders)
+        // epilogue: ldp x29, x30, [sp], #16  (post-index — symmetric with
+        // the prologue's pre-index `stp x29, x30, [sp, #-16]!`)
+        buf.push(_instr3("ldp", _op_reg("x29"), _op_reg("x30"),
+                         _op_label("[sp], #16"), "epilogue: restore fp/lr"))
         buf.push(_instr0("ret", "return"))
         return buf
     }
-    if s.kind == STMT_BR {
+    if s.kind == _STMT_BR {
         let lab = _arm64_block_label(fname, s.target_block)
         buf.push(_instr1("b", _op_label(lab), "branch"))
         return buf
     }
-    if s.kind == STMT_BR_COND {
+    if s.kind == _STMT_BR_COND {
         // cmp <reg>, #0 ; b.eq <else> ; b <then>
         if len(s.args) >= 1 {
             let cond = _arm64_op_for_operand(s.args[0])
@@ -227,12 +240,13 @@ fn _arm64_lower_func(mf: MFunc) -> LFunc {
     let mut instrs = []
 
     // Prologue
-    // stp x29, x30, [sp, #-16]!  (encoded: dest pair regs, mem base sp, offset -16)
+    // stp x29, x30, [sp, #-16]!  (pre-index — symmetric with the epilogue's
+    // post-index `ldp x29, x30, [sp], #16`)
     instrs.push(_instr3(
         "stp",
         _op_reg("x29"),
         _op_reg("x30"),
-        _op_mem("sp", -16),
+        _op_label("[sp, #-16]!"),
         "prologue: save fp/lr"
     ))
     instrs.push(_instr2("mov", _op_reg("x29"), _op_reg("sp"), "prologue: set fp"))
@@ -266,7 +280,7 @@ fn _arm64_lower_func(mf: MFunc) -> LFunc {
         bi = bi + 1
     }
 
-    // Safety epilogue (in case last block lacks STMT_RETURN)
+    // Safety epilogue (in case last block lacks _STMT_RETURN)
     let last_is_ret = false
     if len(instrs) > 0 {
         let last = instrs[len(instrs) - 1]
@@ -281,7 +295,8 @@ fn _arm64_lower_func(mf: MFunc) -> LFunc {
             }
         }
     }
-    instrs.push(_instr2("ldp", _op_reg("x29"), _op_reg("x30"), "epilogue: restore fp/lr"))
+    instrs.push(_instr3("ldp", _op_reg("x29"), _op_reg("x30"),
+                        _op_label("[sp], #16"), "epilogue: restore fp/lr"))
     instrs.push(_instr0("ret", "return"))
 
     return LFunc {

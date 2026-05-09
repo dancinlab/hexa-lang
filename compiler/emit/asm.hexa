@@ -92,6 +92,7 @@ fn _fmt_label(target: string, label: string) -> string {
     let first = cs[0]
     if first == "." { return label }   // already directive-like
     if first == "_" { return label }   // already prefixed
+    if first == "[" { return label }   // raw addressing-mode literal (e.g. `[sp], #16`)
     if _is_darwin(target) { return "_" + label }
     return label
 }
@@ -119,6 +120,17 @@ fn _fmt_args(target: string, args: [LOperand]) -> string {
 // ── Instruction line ────────────────────────────────────────
 
 fn _fmt_instr(target: string, instr: LInstr) -> string {
+    // Pseudo-op "label": codegen marks block boundaries with op="label" and
+    // the label name in instr.comment (no real arg). Render as a bare
+    // assembler label `Lname:` on its own line — no mnemonic, no comment
+    // marker — so `as` does not see "label" as an instruction.
+    if instr.op == "label" {
+        let mut name = instr.comment
+        if len(name) == 0 && len(instr.args) > 0 {
+            name = instr.args[0].label
+        }
+        return name + ":"
+    }
     let mut line = "    " + instr.op
     if len(instr.args) > 0 {
         line = line + " " + _fmt_args(target, instr.args)
