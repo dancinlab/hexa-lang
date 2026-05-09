@@ -1,0 +1,114 @@
+// tool/atlas_embed_gen.hexa — Phase A3 driver
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Top-level entry point that:
+//   1. reads $1 (atlas root, default ~/core/nexus/n6/) via load_atlas()
+//   2. emits compiler/atlas/embedded.gen.hexa via embed_atlas()
+//   3. prints a summary (sources merged, P/C/L/E counts, output path/size)
+//
+// Run:
+//   hexa run tool/atlas_embed_gen.hexa                # uses ~/core/nexus/n6
+//   hexa run tool/atlas_embed_gen.hexa /alt/atlas     # override root
+//
+// This is the build-time codegen the compiler will invoke before the
+// final link. At hexa_interp's ~9 nodes/sec parse rate, expect ~1 hour
+// on the live 4.2 MB corpus — that's the whole reason A3 exists, so
+// we never re-parse at runtime.
+
+use "compiler/atlas/merger"
+use "compiler/atlas/embed"
+
+// Wall-clock millis (same shape as merger_smoke._now_ms). Portable
+// across darwin (BSD date) and linux (GNU date).
+fn _now_ms() -> int {
+    let py = exec("python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null").trim()
+    if len(py) > 0 { return to_int(py) }
+    let s = exec("date +%s%3N 2>/dev/null").trim()
+    if len(s) > 0 && s.substring(len(s) - 1, len(s)) != "N" {
+        return to_int(s)
+    }
+    let sec = exec("date +%s 2>/dev/null").trim()
+    return to_int(sec) * 1000
+}
+
+// File size for summary print. Returns -1 on error.
+fn _size_of(path: string) -> i64 {
+    return file_size(path)
+}
+
+fn _format_kb(bytes: i64) -> string {
+    if bytes < 0 { return "?" }
+    let kb = bytes / 1024
+    return to_string(kb) + " KB (" + to_string(bytes) + " bytes)"
+}
+
+fn main() {
+    let av = argv()
+    let mut root = ""
+    if len(av) >= 3 {
+        root = to_string(av[2])
+    }
+    if len(root) == 0 {
+        root = env("HOME") + "/core/nexus/n6"
+    }
+    let out_path = DEFAULT_EMBED_OUT_PATH
+
+    println("phase-a3 atlas embed codegen")
+    println("  root:    " + root)
+    println("  out:     " + out_path)
+
+    let t0 = _now_ms()
+    let idx = load_atlas(root)
+    let t1 = _now_ms()
+    embed_atlas(idx, out_path)
+    let t2 = _now_ms()
+
+    let p = len(idx.p_nodes)
+    let c = len(idx.c_nodes)
+    let l = len(idx.l_nodes)
+    let e = len(idx.e_nodes)
+
+    println("")
+    println("merge:")
+    println("  sources merged:     " + to_string(idx.source_count))
+    println("  P (primitives):     " + to_string(p))
+    println("  C (constants):      " + to_string(c))
+    println("  L (laws):           " + to_string(l))
+    println("  E (edges):          " + to_string(e))
+    println("  total:              " + to_string(p + c + l + e))
+    println("  duplicates dropped: " + to_string(len(idx.duplicates)))
+    println("  oversize skipped:   " + to_string(len(idx.skipped_oversize)))
+    println("  sha256:             " + idx.hash)
+
+    let sz = _size_of(out_path)
+    println("")
+    println("emit:")
+    println("  output:             " + out_path)
+    println("  size:               " + _format_kb(sz))
+
+    println("")
+    println("timing:")
+    println("  load_ms:  " + to_string(t1 - t0))
+    println("  emit_ms:  " + to_string(t2 - t1))
+    println("  total_ms: " + to_string(t2 - t0))
+}
+
+// --- is_main guard (matches the project convention so that importing
+// this file from another tool does not trigger the codegen as a side
+// effect of `use`). --------------------------------------------------------
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/atlas_embed_gen.hexa") { return true }
+    if script == "atlas_embed_gen.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}

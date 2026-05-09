@@ -1,0 +1,144 @@
+// HEXA Native Compiler — Phase A3 embed smoke test
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read, fs_write]
+//
+// Structural verification of compiler/atlas/embed.hexa:
+//
+//   1. Build a SMALL synthetic AtlasIndex (3 P, 2 C, 1 L, 1 E nodes).
+//      One node has a `raw` field > 1024 bytes to exercise the
+//      truncation policy. One node has \n / \" / \\ in its raw to
+//      exercise string escaping.
+//   2. Call embed_atlas() to write /tmp/_test_atlas_embed.gen.hexa.
+//   3. Re-read the file and assert:
+//        - file is non-empty
+//        - contains the four `pub let ATLAS_<X>_NODES:` declarations
+//        - contains `pub let ATLAS_HASH:`
+//        - contains `pub let ATLAS_SOURCE_COUNT:`
+//        - the truncation marker " [truncated, full=" appears for the
+//          oversized node
+//        - the escaped backslash/quote appear correctly
+//
+// Why we DO NOT run against the real 4.2 MB atlas here:
+//   hexa_interp parses ~9 atlas nodes/sec (Agent A2 measurement,
+//   2026-05-09). A full corpus run is ~3300 s. The smoke test is
+//   structural only; the full-corpus run is the job of
+//   tool/atlas_embed_gen.hexa, which is intentionally a separate
+//   driver that the user invokes once per compiler rebuild.
+//
+// Run:
+//   hexa run compiler/atlas/embed_smoke.hexa
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/embed"
+
+let SMOKE_OUT: string = "/tmp/_test_atlas_embed.gen.hexa"
+
+// Generate an oversize raw to force the truncation branch. We need
+// > 1024 bytes; build via repeated chunks to keep this file small.
+fn _make_oversize_raw() -> string {
+    let chunk = "lorem ipsum dolor sit amet, consectetur adipiscing elit. "
+    let parts = []
+    let mut i = 0
+    while i < 32 {              // 32 * ~58 = ~1856 bytes > 1024
+        parts.push(chunk)
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// Build the synthetic AtlasIndex. 3 P, 2 C, 1 L, 1 E.
+fn _make_fixture() -> AtlasIndex {
+    let p1 = AtlasNode { kind: "P", id: "alpha", raw: "@P alpha :: foundation", source_file: "fixture.n6", source_line: 1 }
+    // Tricky escapes: backslash, double-quote, newline, tab.
+    let p2 = AtlasNode { kind: "P", id: "beta",  raw: "@P beta\n  \"escape \\ test\"\n  with\ttab", source_file: "fixture.n6", source_line: 5 }
+    let p3 = AtlasNode { kind: "P", id: "gamma", raw: "@P gamma", source_file: "fixture.n6", source_line: 12 }
+    let c1 = AtlasNode { kind: "C", id: "phi_tau", raw: "@C phi_tau = 1.618", source_file: "fixture.n6", source_line: 20 }
+    let c2 = AtlasNode { kind: "C", id: "e_natural", raw: "@C e_natural = 2.71828", source_file: "fixture.n6", source_line: 25 }
+    // Oversize raw → must be truncated by embed_atlas.
+    let l1 = AtlasNode { kind: "L", id: "law_long", raw: _make_oversize_raw(), source_file: "fixture.n6", source_line: 40 }
+    let e1 = AtlasNode { kind: "E", id: "edge_one", raw: "@E edge_one :: bridge", source_file: "fixture.n6", source_line: 80 }
+
+    return AtlasIndex {
+        p_nodes: [p1, p2, p3],
+        c_nodes: [c1, c2],
+        l_nodes: [l1],
+        e_nodes: [e1],
+        hash: "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef",
+        source_count: 1,
+        duplicates: [],
+        skipped_oversize: []
+    }
+}
+
+// Tiny "string contains" helper.
+fn _contains(hay: string, needle: string) -> bool {
+    let nh = len(hay)
+    let nn = len(needle)
+    if nn == 0 { return true }
+    if nn > nh { return false }
+    let mut i = 0
+    let lim = nh - nn
+    while i <= lim {
+        if hay.substring(i, i + nn) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn main() {
+    println("phase-a3 atlas embed smoke")
+    println("  out: " + SMOKE_OUT)
+
+    let idx = _make_fixture()
+    embed_atlas(idx, SMOKE_OUT)
+
+    let body = read_file(SMOKE_OUT)
+    let sz = file_size(SMOKE_OUT)
+    println("")
+    println("emitted:")
+    println("  size_bytes: " + to_string(sz))
+
+    let fails = []
+    println("")
+    println("structural checks:")
+    _check("file non-empty",                     sz > 0,                                                                fails)
+    _check("header banner present",              _contains(body, "AUTO-GENERATED"),                                      fails)
+    _check("ATLAS_HASH declared",                _contains(body, "pub let ATLAS_HASH:"),                                 fails)
+    _check("ATLAS_SOURCE_COUNT declared",        _contains(body, "pub let ATLAS_SOURCE_COUNT:"),                         fails)
+    _check("ATLAS_GENERATED_AT declared",        _contains(body, "pub let ATLAS_GENERATED_AT:"),                         fails)
+    _check("ATLAS_P_NODES declared",             _contains(body, "pub let ATLAS_P_NODES:"),                              fails)
+    _check("ATLAS_C_NODES declared",             _contains(body, "pub let ATLAS_C_NODES:"),                              fails)
+    _check("ATLAS_L_NODES declared",             _contains(body, "pub let ATLAS_L_NODES:"),                              fails)
+    _check("ATLAS_E_NODES declared",             _contains(body, "pub let ATLAS_E_NODES:"),                              fails)
+    _check("AtlasNode literal emitted",          _contains(body, "AtlasNode { kind: \"P\", id: \"alpha\""),              fails)
+    _check("constant phi_tau present",           _contains(body, "id: \"phi_tau\""),                                     fails)
+    _check("law_long present",                   _contains(body, "id: \"law_long\""),                                    fails)
+    _check("truncation marker present",          _contains(body, " [truncated, full="),                                  fails)
+    _check("escaped backslash in raw",           _contains(body, "\\\\"),                                                fails)
+    _check("escaped quote in raw",               _contains(body, "\\\""),                                                fails)
+    _check("escaped newline in raw",             _contains(body, "\\n"),                                                 fails)
+    _check("escaped tab in raw",                 _contains(body, "\\t"),                                                 fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: ok (" + to_string(sz) + " bytes)")
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+    }
+}

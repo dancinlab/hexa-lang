@@ -1,0 +1,195 @@
+// HEXA Native Compiler — Phase A3: atlas static embed codegen
+//
+// @version 0.1.0
+// @capabilities [pure, fs_write]
+//
+// Implements the build-time half of RFC-017 §4.5 / RFC-018 §6:
+// take an in-memory AtlasIndex (from compiler/atlas/merger.hexa) and
+// emit a hexa source file that declares the atlas as static `pub let`
+// constants. The compiler imports that generated file, so the runtime
+// cost of "loading the atlas" becomes a pure const lookup (≈0 ns).
+//
+// Why this matters (Agent A2 measurement, 2026-05-09):
+//   The hexa_interp parser sustains ~9 nodes/sec on the 4.2 MB
+//   ~/core/nexus/n6/ corpus. A 30 000-node atlas would cost ~55 min
+//   per compiler invocation if re-parsed at runtime. Static embed is
+//   therefore mandatory — the parsed index must travel inside the
+//   compiler binary's rodata, not be reconstructed from disk.
+//
+// Output file format (hexa-parseable):
+//
+//   // AUTO-GENERATED — do not edit. Regenerate via tool/atlas_embed_gen.hexa
+//   pub let ATLAS_HASH: string = "<sha256>"
+//   pub let ATLAS_SOURCE_COUNT: i64 = <n>
+//   pub let ATLAS_GENERATED_AT: string = "<iso-8601>"
+//
+//   pub let ATLAS_P_NODES: [AtlasNode] = [
+//       AtlasNode { kind: "P", id: "alpha", raw: "...", source_file: "...", source_line: 1 },
+//       ...
+//   ]
+//   pub let ATLAS_C_NODES: [AtlasNode] = [ ... ]
+//   pub let ATLAS_L_NODES: [AtlasNode] = [ ... ]
+//   pub let ATLAS_E_NODES: [AtlasNode] = [ ... ]
+//
+// Truncation policy
+//   The `raw` field of an AtlasNode is the full header + every
+//   continuation line; for laws with long prose this can exceed 1 KB.
+//   To keep the generated source bounded we truncate any raw whose
+//   byte length exceeds RAW_MAX_BYTES (default 1024). The truncated
+//   form is:
+//       <first 256 bytes> + "..." + " [truncated, full=Nbytes]"
+//   The S1 resolve pass only needs (kind,id) — raw is for reflect /
+//   `hexa explain`, so a marker is sufficient.
+//
+// pub fn embed_atlas(idx: AtlasIndex, out_path: string)
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+
+// --- knobs -----------------------------------------------------------------
+
+// Default cap on the embedded `raw` length per node. Above this we
+// emit the truncation marker (see _truncate_raw below).
+let RAW_MAX_BYTES: i64 = 1024
+
+// Bytes of prefix retained in the truncated form.
+let RAW_KEEP_PREFIX: i64 = 256
+
+// Default destination path (relative to repo root). The driver
+// (tool/atlas_embed_gen.hexa) calls embed_atlas with this when no
+// explicit out_path is provided.
+pub let DEFAULT_EMBED_OUT_PATH: string = "compiler/atlas/embedded.gen.hexa"
+
+// --- string escaping -------------------------------------------------------
+
+// Escape a single character to its hexa string-literal form.
+// We escape the four characters that can break a "..." literal:
+//   \  →  \\
+//   "  →  \"
+//   \n →  \n
+//   \r →  \r
+//   \t →  \t
+// All other bytes pass through verbatim. Atlas content is UTF-8 and
+// hexa string literals are UTF-8, so we don't need \uXXXX escapes
+// for the BMP — the parser will accept the raw bytes.
+fn _escape_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+// Escape an entire string for emission inside `"..."`. Builds an
+// array of chunks and joins once (O(n), not O(n²) like += in a loop).
+fn _escape_string(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        chunks.push(_escape_char(c))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+// --- raw-field truncation --------------------------------------------------
+
+// If raw exceeds RAW_MAX_BYTES, return
+//   <first RAW_KEEP_PREFIX bytes> + "..." + " [truncated, full=Nbytes]"
+// otherwise return raw unchanged.
+fn _truncate_raw(raw: string) -> string {
+    let n = len(raw)
+    if n <= RAW_MAX_BYTES { return raw }
+    let head = raw.substring(0, RAW_KEEP_PREFIX)
+    return head + "..." + " [truncated, full=" + to_string(n) + "bytes]"
+}
+
+// --- node emission ---------------------------------------------------------
+
+// Emit a single `AtlasNode { ... }` literal. Returns the literal as
+// a string with no trailing comma — caller wraps in array syntax.
+fn _emit_node(n: AtlasNode) -> string {
+    let raw_clipped = _truncate_raw(n.raw)
+    let parts = []
+    parts.push("    AtlasNode { kind: \"")
+    parts.push(_escape_string(n.kind))
+    parts.push("\", id: \"")
+    parts.push(_escape_string(n.id))
+    parts.push("\", raw: \"")
+    parts.push(_escape_string(raw_clipped))
+    parts.push("\", source_file: \"")
+    parts.push(_escape_string(n.source_file))
+    parts.push("\", source_line: ")
+    parts.push(to_string(n.source_line))
+    parts.push(" }")
+    return parts.join("")
+}
+
+// Emit one `pub let ATLAS_<X>_NODES: [AtlasNode] = [ ... ]` block.
+fn _emit_array(name: string, arr: array) -> string {
+    let parts = []
+    parts.push("pub let ")
+    parts.push(name)
+    parts.push(": [AtlasNode] = [\n")
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        parts.push(_emit_node(arr[i]))
+        if i + 1 < n {
+            parts.push(",")
+        }
+        parts.push("\n")
+        i = i + 1
+    }
+    parts.push("]\n\n")
+    return parts.join("")
+}
+
+// --- timestamp -------------------------------------------------------------
+
+// ISO-8601 UTC stamp (YYYY-MM-DDTHH:MM:SSZ). Falls back to "" if the
+// runtime can't shell out — the generated file is still valid hexa.
+fn _iso_utc_now() -> string {
+    let s = exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+    return s
+}
+
+// --- public API ------------------------------------------------------------
+
+// embed_atlas — write a hexa source file at `out_path` that statically
+// embeds `idx` as `pub let ATLAS_*_NODES` arrays plus the metadata
+// constants (ATLAS_HASH / ATLAS_SOURCE_COUNT / ATLAS_GENERATED_AT).
+//
+// The generated file `use`s compiler/atlas/parser so AtlasNode is in
+// scope. compiler/atlas/static_index.hexa is the consumer.
+pub fn embed_atlas(idx: AtlasIndex, out_path: string) {
+    let parts = []
+    parts.push("// AUTO-GENERATED — do not edit. Regenerate via tool/atlas_embed_gen.hexa\n")
+    parts.push("//\n")
+    parts.push("// Phase A3 of the hexa native compiler: atlas static embed.\n")
+    parts.push("// Source: compiler/atlas/embed.hexa::embed_atlas\n")
+    parts.push("// Spec:   RFC-017 §4.5 / RFC-018 §6 / SPEC.yaml foundation.atlas_embedding\n")
+    parts.push("\n")
+    parts.push("use \"compiler/atlas/parser\"\n")
+    parts.push("\n")
+    parts.push("pub let ATLAS_HASH: string = \"")
+    parts.push(_escape_string(idx.hash))
+    parts.push("\"\n")
+    parts.push("pub let ATLAS_SOURCE_COUNT: i64 = ")
+    parts.push(to_string(idx.source_count))
+    parts.push("\n")
+    parts.push("pub let ATLAS_GENERATED_AT: string = \"")
+    parts.push(_escape_string(_iso_utc_now()))
+    parts.push("\"\n")
+    parts.push("\n")
+    parts.push(_emit_array("ATLAS_P_NODES", idx.p_nodes))
+    parts.push(_emit_array("ATLAS_C_NODES", idx.c_nodes))
+    parts.push(_emit_array("ATLAS_L_NODES", idx.l_nodes))
+    parts.push(_emit_array("ATLAS_E_NODES", idx.e_nodes))
+
+    let body = parts.join("")
+    write_file(out_path, body)
+}
