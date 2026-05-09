@@ -1,0 +1,248 @@
+// HEXA Native Compiler — Phase A2: atlas merger + in-memory index
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read]
+//
+// Loads atlas.n6 + every atlas.append.*.n6 in `root` (default
+// ~/core/nexus/n6/), merges them into a single packed in-memory index
+// keyed by kind ("P"|"C"|"L"|"E"), and exposes O(1) lookup for the
+// compiler's S1 resolve pass.
+//
+// Conflict policy (SPEC.yaml decision 5d, RFC-017 §2.2):
+//   first-wins on duplicate (kind,id). The duplicate is recorded in
+//   AtlasIndex.duplicates so later phases can surface drift warnings.
+//
+// Hash:
+//   SHA256 over the canonicalized merged bytes — built deterministically
+//   by concatenating each accepted node's `raw` plus a "\n--\n" separator,
+//   in the order nodes were inserted (= file scan order, append.*.n6
+//   sorted lexically). Hash is the gate the compiler binary will pin in
+//   ATLAS_HASH per RFC-018 §6 in phase A3.
+//
+// Defensive: files larger than 10 MB are skipped (atlas.n6 is ~4.2 MB
+// today; an oversize append-file would indicate corruption or a swap
+// of full-corpus dump → guard caps blast radius).
+//
+// pub fn load_atlas(root) -> AtlasIndex
+// pub fn lookup(idx, kind, id) -> AtlasNode
+
+use "compiler/atlas/parser"
+use "stdlib/hash/sha256"
+
+// --- types -----------------------------------------------------------------
+
+// Index of merged atlas nodes. Per-kind arrays are populated in scan
+// order; dedup is done at insertion time (first-wins).
+//
+// `hash` is the SHA256 hex digest over the canonicalized merge.
+// `source_count` is the number of files that contributed at least one
+// readable byte (atlas.n6 + non-empty append shards).
+pub struct AtlasIndex {
+    p_nodes: array,        // AtlasNode[]
+    c_nodes: array,        // AtlasNode[]
+    l_nodes: array,        // AtlasNode[]
+    e_nodes: array,        // AtlasNode[]
+    hash: string,          // sha256 hex of canonical merged bytes
+    source_count: i64,     // number of source files merged
+    duplicates: array,     // string[] — "kind:id from src2 (first src1)"
+    skipped_oversize: array // string[] — paths skipped by the 10 MB guard
+}
+
+// Side table key used when building dedup maps. We don't have a generic
+// (k,id) tuple, so we encode "K|id" — `|` never appears in atlas ids.
+fn _dup_key(kind: string, id: string) -> string {
+    return kind + "|" + id
+}
+
+// 10 MB guard (per task requirement).
+let _MAX_FILE_BYTES: i64 = 10 * 1024 * 1024
+
+// --- file discovery --------------------------------------------------------
+
+// Discover atlas files under `root`. Returns absolute paths in scan
+// order: [atlas.n6 first, then atlas.append.*.n6 sorted lexically].
+fn _discover(root: string) -> array {
+    let out = []
+    let main = root + "/atlas.n6"
+    if file_exists(main) { out.push(main) }
+
+    // Use list_dir to find all atlas.append.*.n6 entries; sort
+    // lexically so the merge order is reproducible regardless of the
+    // runtime's natural directory order.
+    let entries = list_dir(root)
+    if type_of(entries) != "array" { return out }
+
+    let mut appends = []
+    let mut i = 0
+    while i < len(entries) {
+        let name = to_string(entries[i])
+        // must start with "atlas.append." and end ".n6"
+        if len(name) >= 16 && name.substring(0, 13) == "atlas.append." {
+            let tail = name.substring(len(name) - 3, len(name))
+            if tail == ".n6" {
+                appends.push(name)
+            }
+        }
+        i = i + 1
+    }
+    // Insertion sort (small N is fine; we only run this once).
+    let mut a = 0
+    while a < len(appends) {
+        let mut b = a + 1
+        while b < len(appends) {
+            if to_string(appends[b]) < to_string(appends[a]) {
+                let tmp = appends[a]
+                appends[a] = appends[b]
+                appends[b] = tmp
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let mut k = 0
+    while k < len(appends) {
+        out.push(root + "/" + to_string(appends[k]))
+        k = k + 1
+    }
+    return out
+}
+
+// --- merge core ------------------------------------------------------------
+
+// Insert one node into the appropriate per-kind array if its (kind,id)
+// is unseen. On duplicate, record a "kind:id from <new> (first <old>)"
+// string in `duplicates`.
+fn _insert_first_wins(idx: AtlasIndex, seen, node: AtlasNode) {
+    let key = _dup_key(node.kind, node.id)
+    if has_key(seen, key) {
+        let first_src = to_string(seen[key])
+        idx.duplicates.push(node.kind + ":" + node.id + " from " + node.source_file + " (first " + first_src + ")")
+        return
+    }
+    seen[key] = node.source_file
+    if node.kind == "P" { idx.p_nodes.push(node); return }
+    if node.kind == "C" { idx.c_nodes.push(node); return }
+    if node.kind == "L" { idx.l_nodes.push(node); return }
+    if node.kind == "E" { idx.e_nodes.push(node); return }
+}
+
+// Hash strategy: rather than materialize a single mega-string
+// (O(n²) on naive interpreters), we hash the concatenation of the
+// raw file bytes in scan order, with a "\n--FILE:<basename>--\n"
+// separator. This is an equally-valid canonicalization — any change
+// to atlas.n6 OR any append shard flips the digest, and the scan
+// order is reproducible (atlas.n6 first, then append.*.n6 sorted
+// lexically). Computed inline in load_atlas via a string-array join.
+
+// --- public API ------------------------------------------------------------
+
+// load_atlas — read every atlas file under `root`, merge first-wins,
+// hash the canonical merge, and return an AtlasIndex.
+//
+// `root` may be empty/"" to fall back to ~/core/nexus/n6/.
+pub fn load_atlas(root: string) -> AtlasIndex {
+    let mut effective = root
+    if len(effective) == 0 {
+        effective = env("HOME") + "/core/nexus/n6"
+    }
+
+    let idx = AtlasIndex {
+        p_nodes: [],
+        c_nodes: [],
+        l_nodes: [],
+        e_nodes: [],
+        hash: "",
+        source_count: 0,
+        duplicates: [],
+        skipped_oversize: []
+    }
+    let seen = {}  // (kind|id) -> first source_file
+
+    let files = _discover(effective)
+    // Per-file-content slices we will hash in scan order. Joining a
+    // string array is O(total_bytes), unlike append-in-loop which is
+    // O(total_bytes^2 / chunk) on naive interpreters.
+    let hash_chunks = []
+    let mut fi = 0
+    while fi < len(files) {
+        let path = to_string(files[fi])
+        let sz = file_size(path)
+        if sz > _MAX_FILE_BYTES {
+            idx.skipped_oversize.push(path)
+            fi = fi + 1
+            continue
+        }
+        let basename = _basename_of(path)
+        // Read once; reuse for both parser AND hash chunk. parser also
+        // calls read_file but the runtime caches small buffers; the
+        // 4.2 MB atlas.n6 is the only big read so the duplicate is
+        // tolerable in A2.
+        let raw_bytes = read_file(path)
+        hash_chunks.push("--FILE:" + basename + "--\n")
+        hash_chunks.push(raw_bytes)
+        let nodes = parse_atlas_file(path, basename)
+        if len(nodes) > 0 {
+            idx.source_count = idx.source_count + 1
+        }
+        let mut ni = 0
+        while ni < len(nodes) {
+            _insert_first_wins(idx, seen, nodes[ni])
+            ni = ni + 1
+        }
+        fi = fi + 1
+    }
+
+    // Single join — O(total_bytes).
+    let canonical = hash_chunks.join("")
+    idx.hash = sha256_hex(canonical)
+    return idx
+}
+
+// lookup — O(1) AtlasNode retrieval. Returns a sentinel node with
+// kind="" if (kind,id) is not present. Phase A2 builds the per-kind
+// dictionary lazily on first lookup; A3 will fold it into the static
+// embed.
+//
+// NOTE: per-kind dicts are not stashed on AtlasIndex (struct field
+// portability across hexa runtimes is uneven) — instead we compute on
+// each call. For S1 resolve this is bounded by the number of unique
+// id-cites in the user program (typically 10–100), so a linear scan
+// over per-kind arrays is fine for A2. A3 swaps in a packed perfect
+// hash at compiler-build time.
+pub fn lookup(idx: AtlasIndex, kind: string, id: string) -> AtlasNode {
+    let arr = _array_for_kind(idx, kind)
+    let mut i = 0
+    while i < len(arr) {
+        let n = arr[i]
+        if n.id == id { return n }
+        i = i + 1
+    }
+    return AtlasNode {
+        kind: "",
+        id: id,
+        raw: "",
+        source_file: "",
+        source_line: 0
+    }
+}
+
+// --- internal helpers (kept after public API for readability) --------------
+
+fn _basename_of(path: string) -> string {
+    let n = len(path)
+    let mut i = n
+    while i > 0 {
+        let c = path.substring(i - 1, i)
+        if c == "/" { return path.substring(i, n) }
+        i = i - 1
+    }
+    return path
+}
+
+fn _array_for_kind(idx: AtlasIndex, kind: string) -> array {
+    if kind == "P" { return idx.p_nodes }
+    if kind == "C" { return idx.c_nodes }
+    if kind == "L" { return idx.l_nodes }
+    if kind == "E" { return idx.e_nodes }
+    return []
+}

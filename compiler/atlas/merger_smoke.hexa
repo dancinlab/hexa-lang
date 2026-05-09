@@ -1,0 +1,121 @@
+// HEXA Native Compiler — Phase A2 smoke test
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read]
+//
+// Loads ~/core/nexus/n6/, then prints:
+//   - total counts per kind (P/C/L/E)
+//   - SHA256 hash of the canonicalized merge
+//   - source_count (number of files merged, atlas.n6 + non-empty appends)
+//   - top-3 ids per kind (sample, in insertion order)
+//   - elapsed wall-clock ms (load + parse + hash)
+//   - any duplicates / skipped oversize files
+//
+// Run:
+//   hexa run compiler/atlas/merger_smoke.hexa
+
+use "compiler/atlas/merger"
+
+// Wall-clock millis. Prefer python3 (portable across darwin+linux).
+// GNU `date +%s%3N` works on linux but BSD date emits literal "N", so we
+// detect that and fall through.
+fn _now_ms() -> int {
+    let py = exec("python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null").trim()
+    if len(py) > 0 { return to_int(py) }
+    let s = exec("date +%s%3N 2>/dev/null").trim()
+    // BSD/macOS will yield a string ending in "N" — reject it.
+    if len(s) > 0 && s.substring(len(s) - 1, len(s)) != "N" {
+        return to_int(s)
+    }
+    // Last-ditch: seconds × 1000.
+    let sec = exec("date +%s 2>/dev/null").trim()
+    return to_int(sec) * 1000
+}
+
+fn _sample_ids(arr: array, n: int) -> string {
+    let mut out = ""
+    let mut i = 0
+    let lim = if n < len(arr) { n } else { len(arr) }
+    while i < lim {
+        if i > 0 { out = out + ", " }
+        out = out + to_string(arr[i].id)
+        i = i + 1
+    }
+    if len(arr) == 0 { return "(none)" }
+    return out
+}
+
+fn main() {
+    let root = env("HOME") + "/core/nexus/n6"
+    println("phase-a2 atlas merger smoke")
+    println("  root: " + root)
+
+    let t0 = _now_ms()
+    let idx = load_atlas(root)
+    let t1 = _now_ms()
+    let elapsed = t1 - t0
+
+    println("")
+    println("counts:")
+    println("  P (primitives): " + to_string(len(idx.p_nodes)))
+    println("  C (constants):  " + to_string(len(idx.c_nodes)))
+    println("  L (laws):       " + to_string(len(idx.l_nodes)))
+    println("  E (edges):      " + to_string(len(idx.e_nodes)))
+    let total = len(idx.p_nodes) + len(idx.c_nodes) + len(idx.l_nodes) + len(idx.e_nodes)
+    println("  total:          " + to_string(total))
+
+    println("")
+    println("merge:")
+    println("  sources merged:    " + to_string(idx.source_count))
+    println("  duplicates dropped:" + to_string(len(idx.duplicates)))
+    println("  oversize skipped:  " + to_string(len(idx.skipped_oversize)))
+    println("  sha256:            " + idx.hash)
+
+    println("")
+    println("samples (first 3 ids per kind):")
+    println("  P: " + _sample_ids(idx.p_nodes, 3))
+    println("  C: " + _sample_ids(idx.c_nodes, 3))
+    println("  L: " + _sample_ids(idx.l_nodes, 3))
+    println("  E: " + _sample_ids(idx.e_nodes, 3))
+
+    // Report a few duplicates if any (capped to keep output sane).
+    if len(idx.duplicates) > 0 {
+        println("")
+        println("first dup samples (max 5):")
+        let mut i = 0
+        let cap = if 5 < len(idx.duplicates) { 5 } else { len(idx.duplicates) }
+        while i < cap {
+            println("  " + to_string(idx.duplicates[i]))
+            i = i + 1
+        }
+    }
+    if len(idx.skipped_oversize) > 0 {
+        println("")
+        println("oversize-skipped:")
+        let mut i = 0
+        while i < len(idx.skipped_oversize) {
+            println("  " + to_string(idx.skipped_oversize[i]))
+            i = i + 1
+        }
+    }
+
+    // Throughput estimate (lines/ms is informative; we don't have total
+    // bytes without a second pass, so report wall-clock + total nodes).
+    println("")
+    println("timing:")
+    println("  elapsed_ms: " + to_string(elapsed))
+    if elapsed > 0 {
+        let nps = (total * 1000) / elapsed
+        println("  nodes/sec:  " + to_string(nps))
+    }
+
+    // Spot-check lookup() works.
+    println("")
+    println("lookup spot-checks:")
+    let p_n = lookup(idx, "P", "n")
+    println("  lookup(P,n).kind=" + p_n.kind + " line=" + to_string(p_n.source_line))
+    let c_phi_tau = lookup(idx, "C", "phi_tau")
+    println("  lookup(C,phi_tau).kind=" + c_phi_tau.kind + " line=" + to_string(c_phi_tau.source_line))
+    let nope = lookup(idx, "P", "__nonexistent_id__")
+    println("  lookup(P,nope).kind='" + nope.kind + "' (expect empty)")
+}

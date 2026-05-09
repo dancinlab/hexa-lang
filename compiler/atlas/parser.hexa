@@ -1,0 +1,224 @@
+// HEXA Native Compiler — Phase A2: atlas .n6 parser
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read]
+//
+// Tiny line-parser for atlas.n6 / atlas.append.*.n6 files.
+//
+// Format (observed from ~/core/nexus/n6/atlas.n6 — see file header lines 10–22):
+//   @<TYPE> <id> [= <expr>] [:: <domain>] [<grade>]
+//     <- depends_on              (continuation — leading whitespace)
+//     -> derives                 (continuation)
+//     => application             (continuation)
+//     == equivalent              (continuation)
+//     ~> converges_to            (continuation)
+//     |> verified_by script.py   (continuation)
+//     !! breakthrough            (continuation)
+//     "quoted prose"             (continuation)
+//     unit = USD                 (continuation, key=value)
+//
+// Canonical types per RFC-017: @P (primitive) @C (constant) @L (law)
+//                              @F (formula)   @R (relation) @S (symmetry)
+//                              @X (crossing)  @? (unknown)
+// Edge type per atlas.n6 live use: @E (cross-engine bus / bridge)
+//
+// Section markers (NOT real nodes; ignored):
+//   @END, @shard, @META, @D, @H, @M, @T, @N
+//
+// Comments: lines whose first non-space char is `#` or whose first two
+// non-space chars are `//`. Blank lines are skipped.
+//
+// This parser only emits AtlasNodes whose `kind` is one of "P"|"C"|"L"|"E"
+// (the four kinds the resolve pass S1 needs). Other typed lines are
+// counted but not returned.
+//
+// pub fn parse_atlas_file(path, source_file) -> AtlasNode[]
+
+// --- AtlasNode mirror (kept identical to compiler/atlas/merger.hexa) -------
+// We declare it here too so the parser stays standalone-importable.
+pub struct AtlasNode {
+    kind: string,        // "P" | "C" | "L" | "E" | ""  (empty = sentinel)
+    id: string,
+    raw: string,         // header line + every continuation line, joined by \n
+    source_file: string, // basename of the file the node came from
+    source_line: i64     // 1-based line number of the header line
+}
+
+// --- helpers ---------------------------------------------------------------
+
+fn _is_ws(c: string) -> bool {
+    return c == " " || c == "\t"
+}
+
+fn _ltrim(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if !_is_ws(c) { break }
+        i = i + 1
+    }
+    return s.substring(i, n)
+}
+
+fn _basename(path: string) -> string {
+    let n = len(path)
+    let mut i = n
+    while i > 0 {
+        let c = path.substring(i - 1, i)
+        if c == "/" { return path.substring(i, n) }
+        i = i - 1
+    }
+    return path
+}
+
+// Map a raw @-token (e.g. "@P", "@C", "@E") to the canonical compiler
+// resolve kind ("P"|"C"|"L"|"E"). Returns "" for non-resolvable kinds
+// (which are still parsed-as-nodes but excluded from AtlasIndex output).
+fn _kind_of(tok: string) -> string {
+    if tok == "@P" { return "P" }
+    if tok == "@C" { return "C" }
+    if tok == "@L" { return "L" }
+    if tok == "@E" { return "E" }
+    return ""
+}
+
+// True if `tok` looks like a header @-sigil that introduces a node
+// (i.e. a known type or unknown-type fallback). This is how we decide
+// "is this a header line or a continuation/comment?".
+fn _is_header_sigil(tok: string) -> bool {
+    if len(tok) < 2 { return false }
+    if tok.substring(0, 1) != "@" { return false }
+    // Section markers — not real nodes.
+    if tok == "@END" { return false }
+    if tok == "@shard" { return false }
+    if tok == "@META" { return false }
+    return true
+}
+
+// Extract the first whitespace-delimited token from a line.
+fn _first_token(line: string) -> string {
+    let n = len(line)
+    let mut i = 0
+    while i < n {
+        let c = line.substring(i, i + 1)
+        if _is_ws(c) { return line.substring(0, i) }
+        i = i + 1
+    }
+    return line
+}
+
+// Extract the id token. After the @TYPE token we want the next non-ws
+// run, stopping at whitespace OR `=` OR `::`. (The atlas examples show
+// `@P n = 6 :: foundation [11*]` — id = "n".)
+fn _extract_id(rest: string) -> string {
+    let s = _ltrim(rest)
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if _is_ws(c) { break }
+        if c == "=" { break }
+        // ":: " marker — peek 2 chars
+        if c == ":" {
+            if i + 1 < n && s.substring(i + 1, i + 2) == ":" { break }
+        }
+        i = i + 1
+    }
+    return s.substring(0, i)
+}
+
+// Returns true if the line is a comment (`#...` or `//...`) after lstrip.
+fn _is_comment(line: string) -> bool {
+    let s = _ltrim(line)
+    if len(s) == 0 { return true }
+    if s.substring(0, 1) == "#" { return true }
+    if len(s) >= 2 && s.substring(0, 2) == "//" { return true }
+    return false
+}
+
+// --- public surface --------------------------------------------------------
+
+// parse_atlas_file — read `path`, return AtlasNodes whose kind is one of
+// "P"|"C"|"L"|"E". Nodes of other types (@F/@R/@S/@X/@?/@D/@H/@M/@T/@N)
+// are still terminated correctly (so continuation lines don't bleed into
+// the next P/C/L/E node) but are excluded from the returned array.
+//
+// `source_file` is what we record in AtlasNode.source_file — typically
+// the basename, set by the caller (load_atlas).
+pub fn parse_atlas_file(path: string, source_file: string) -> array {
+    let text = read_file(path)
+    let out = []
+    if len(text) == 0 { return out }
+
+    let lines = text.split("\n")
+    let n_lines = len(lines)
+
+    let mut have_cur = false
+    let mut cur_kind = ""           // "P"|"C"|"L"|"E"|"" (empty = non-emitted type)
+    let mut cur_id = ""
+    let mut cur_raw_chunks = []     // string[] — joined on flush (avoids O(n²))
+    let mut cur_line = 0
+
+    let mut i = 0
+    while i < n_lines {
+        let line = to_string(lines[i])
+
+        if _is_comment(line) {
+            i = i + 1
+            continue
+        }
+
+        // Header line iff the line itself (no leading ws) starts with @.
+        // Continuation lines either start with ws OR are quoted prose;
+        // both never start with '@' at column 0.
+        let starts_at_col0 = len(line) > 0 && line.substring(0, 1) == "@"
+
+        if starts_at_col0 {
+            let tok = _first_token(line)
+            if _is_header_sigil(tok) {
+                // Flush previous node.
+                if have_cur && cur_kind != "" {
+                    out.push(AtlasNode {
+                        kind: cur_kind,
+                        id: cur_id,
+                        raw: cur_raw_chunks.join("\n"),
+                        source_file: source_file,
+                        source_line: cur_line
+                    })
+                }
+                let k = _kind_of(tok)
+                let rest = line.substring(len(tok), len(line))
+                let id = _extract_id(rest)
+                have_cur = true
+                cur_kind = k
+                cur_id = id
+                cur_raw_chunks = [line]
+                cur_line = i + 1
+                i = i + 1
+                continue
+            }
+            // @-sigil but not a known header (e.g. unexpected) — treat as
+            // continuation of current node to be safe.
+        }
+
+        // Continuation line: append to current node's raw if we have one.
+        if have_cur {
+            cur_raw_chunks.push(line)
+        }
+        i = i + 1
+    }
+
+    // Flush last node.
+    if have_cur && cur_kind != "" {
+        out.push(AtlasNode {
+            kind: cur_kind,
+            id: cur_id,
+            raw: cur_raw_chunks.join("\n"),
+            source_file: source_file,
+            source_line: cur_line
+        })
+    }
+
+    return out
+}

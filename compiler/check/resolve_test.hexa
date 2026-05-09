@@ -1,0 +1,200 @@
+// HEXA Native Compiler — Phase B1 / S1: resolve smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds a fake AtlasIndex (3 P-nodes, 1 L-node, fixed hash) and a
+// small Module containing three atlas refs:
+//   1. `let p = P[alpha]`   (valid — should produce no diagnostic)
+//   2. `let q = P[alphz]`   (typo — should suggest "alpha", distance=1)
+//   3. `let l = L[unknown]` (no candidate within cutoff=2 — empty suggest)
+//
+// Expected output:
+//   - exactly 2 diagnostics, both HX1042
+//   - first carries suggest="alpha"
+//   - second carries suggest=""
+//
+// Run:
+//   hexa run compiler/check/resolve_test.hexa
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../atlas/merger.hexa"
+import "../atlas/parser.hexa"
+import "../lex/tokens.hexa"
+import "./resolve.hexa"
+
+// ── Fake AtlasIndex ──────────────────────────────────────────
+
+fn _mk_atlas_node(kind: string, id: string) -> AtlasNode {
+    return AtlasNode {
+        kind: kind,
+        id: id,
+        raw: "@" + kind + " " + id,
+        source_file: "test://atlas.n6",
+        source_line: 1
+    }
+}
+
+fn _mk_fake_atlas() -> AtlasIndex {
+    let mut p = []
+    p.push(_mk_atlas_node("P", "alpha"))
+    p.push(_mk_atlas_node("P", "beta"))
+    p.push(_mk_atlas_node("P", "gamma"))
+    let mut l = []
+    l.push(_mk_atlas_node("L", "law-x"))
+    return AtlasIndex {
+        p_nodes: p,
+        c_nodes: [],
+        l_nodes: l,
+        e_nodes: [],
+        hash: "deadbeef",
+        source_count: 1,
+        duplicates: [],
+        skipped_oversize: []
+    }
+}
+
+// ── AST construction helpers ─────────────────────────────────
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_span() -> Span {
+    return _span("", 0, 0, 0)
+}
+
+fn _empty_atlas_ref() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _empty_span() }
+}
+
+fn _empty_type() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: _empty_span() }
+}
+
+fn _empty_expr() -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _empty_span(),
+        text: "",
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _atlas_expr(kind: string, id: string, file: string, line: i64, col: i64) -> Expr {
+    let sp = _span(file, line, col, len(id) + 3)  // P[id]
+    let aref = AtlasRef { kind: kind, id: id, span: sp }
+    return Expr {
+        kind: ExprKind::AtlasRef,
+        span: sp,
+        text: id,
+        children: [],
+        atlas_ref: aref
+    }
+}
+
+fn _let_item(name: string, body: Expr, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Let,
+        name: name,
+        span: _span(file, line, 1, 3),
+        annotations: [],
+        params: [],
+        return_type: _empty_type(),
+        body: body,
+        is_pub: false
+    }
+}
+
+// ── Pretty-print ─────────────────────────────────────────────
+
+fn _sev_str(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "error",
+        Severity::Warning -> "warning",
+        Severity::Note -> "note"
+    }
+}
+
+fn _print_diag(idx: i64, d: Diagnostic) {
+    let sp = d.span
+    let loc = sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+    println("  [" + to_string(idx) + "] " + d.code + " (" + _sev_str(d.severity) + " " + d.stage + ") @ " + loc)
+    println("        msg:     " + d.message)
+    if len(d.suggest) > 0 {
+        println("        suggest: " + d.suggest)
+    } else {
+        println("        suggest: (none)")
+    }
+}
+
+// ── Main ─────────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Resolve Smoke Test (B1/S1)")
+    println("══════════════════════════════════════════════")
+
+    let atlas = _mk_fake_atlas()
+    println("fake atlas:")
+    println("  hash:    " + atlas.hash)
+    println("  P count: " + to_string(len(atlas.p_nodes)))
+    println("  L count: " + to_string(len(atlas.l_nodes)))
+
+    // Build module: three Let items, each whose body is an AtlasRef expr.
+    let f = "test.hexa"
+    let item_p = _let_item("p", _atlas_expr("P", "alpha",   f, 1, 9), f, 1)
+    let item_q = _let_item("q", _atlas_expr("P", "alphz",   f, 2, 9), f, 2)
+    let item_l = _let_item("l", _atlas_expr("L", "unknown", f, 3, 9), f, 3)
+    let mut items = []
+    items.push(item_p)
+    items.push(item_q)
+    items.push(item_l)
+    let module = Module { file: f, items: items, imports: [] }
+
+    println("")
+    println("module:")
+    println("  file:  " + module.file)
+    println("  items: " + to_string(len(module.items)))
+
+    let diags = resolve(module, atlas)
+
+    println("")
+    println("diagnostics: " + to_string(len(diags)))
+    let mut i = 0
+    while i < len(diags) {
+        _print_diag(i, diags[i])
+        i = i + 1
+    }
+
+    println("")
+    // Expectation contract per task:
+    //   exit 0 with exactly 2 diagnostics, both HX1042.
+    let mut ok = true
+    if len(diags) != 2 {
+        println("FAIL: expected 2 diagnostics, got " + to_string(len(diags)))
+        ok = false
+    } else {
+        let d0 = diags[0]
+        let d1 = diags[1]
+        if d0.code != "HX1042" || d1.code != "HX1042" {
+            println("FAIL: codes were " + d0.code + ", " + d1.code)
+            ok = false
+        }
+        if d0.suggest != "alpha" {
+            println("FAIL: expected suggest='alpha' for alphz, got '" + d0.suggest + "'")
+            ok = false
+        }
+        if len(d1.suggest) != 0 {
+            println("FAIL: expected empty suggest for L[unknown], got '" + d1.suggest + "'")
+            ok = false
+        }
+    }
+    if ok {
+        println("PASS: 2 HX1042 diagnostics, suggest contract held.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}

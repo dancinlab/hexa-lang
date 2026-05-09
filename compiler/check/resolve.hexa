@@ -1,0 +1,237 @@
+// HEXA Native Compiler — Phase B1 / S1: atlas resolve
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Walks a parsed Module and validates every atlas reference (P/C/L/E)
+// against an in-memory AtlasIndex (Phase A2 — compiler/atlas/merger.hexa).
+//
+// Per RFC-017 §3.1 the resolve pass is fatal at S1 with code HX1042
+// (catalog: compiler/diag/catalog.hexa). RFC-019 §6 multi-error policy:
+// we collect every miss and return all diagnostics (no early-stop).
+//
+// Did-you-mean (RFC-017 §3.2 example): when an id misses, we suggest
+// the closest id of the same kind whose Levenshtein distance is ≤ 2.
+// On no candidate within cutoff, the suggest field is left empty.
+//
+// pub fn resolve(module: Module, atlas: AtlasIndex) -> [Diagnostic]
+//
+// Stage0 caveats:
+//   - struct field shape uses A2's AtlasIndex (per-kind `array` fields).
+//   - We only key off `atlas_ref.kind/id` populated by parser.hexa
+//     parse_primary, since stage0 ExprKind variants are payload-free.
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../atlas/merger.hexa"
+import "../atlas/parser.hexa"
+import "../lex/tokens.hexa"
+
+// ── helpers ──────────────────────────────────────────────────
+
+fn empty_fixit() -> FixIt {
+    return FixIt {
+        kind: FixItKind::None,
+        span: Span { file: "", line: 0, col: 0, len: 0 },
+        new_text: ""
+    }
+}
+
+// Render the HX1042 message inline (template lives in catalog as
+// "atlas {atlas_hash} has no {kind} node `{node_id}`"). Keep it
+// dependency-free of a templating engine — substitution is one-shot
+// and trivial here.
+fn render_hx1042(atlas_hash: string, kind: string, node_id: string) -> string {
+    return "atlas " + atlas_hash + " has no " + kind + " node `" + node_id + "`"
+}
+
+// ── Levenshtein (small inline) ────────────────────────────────
+// Classic DP, flattened (m+1)×(n+1) matrix into a 1D array. Cutoff
+// lives at the call site — we just return the exact distance.
+
+fn _min2(a: i64, b: i64) -> i64 {
+    if a < b { return a }
+    return b
+}
+
+fn _min3(a: i64, b: i64, c: i64) -> i64 {
+    return _min2(_min2(a, b), c)
+}
+
+pub fn levenshtein(a: string, b: string) -> i64 {
+    let ca = a.chars()
+    let cb = b.chars()
+    let m = len(ca)
+    let n = len(cb)
+    if m == 0 { return n }
+    if n == 0 { return m }
+
+    // dp size = (m+1) * (n+1), row-major: dp[i*(n+1) + j]
+    let stride = n + 1
+    let mut dp = []
+    let total = (m + 1) * stride
+    let mut k = 0
+    while k < total {
+        dp.push(0)
+        k = k + 1
+    }
+    let mut i = 0
+    while i <= m {
+        dp[i * stride + 0] = i
+        i = i + 1
+    }
+    let mut j = 0
+    while j <= n {
+        dp[0 * stride + j] = j
+        j = j + 1
+    }
+
+    i = 1
+    while i <= m {
+        j = 1
+        while j <= n {
+            let mut cost = 1
+            if ca[i - 1] == cb[j - 1] { cost = 0 }
+            let del = dp[(i - 1) * stride + j] + 1
+            let ins = dp[i * stride + (j - 1)] + 1
+            let sub = dp[(i - 1) * stride + (j - 1)] + cost
+            dp[i * stride + j] = _min3(del, ins, sub)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return dp[m * stride + n]
+}
+
+// Pick the closest candidate id (by Levenshtein) within `cutoff`.
+// Returns "" when nothing fits. Iterates the appropriate per-kind
+// array of the AtlasIndex.
+fn _suggest_for(atlas: AtlasIndex, kind: string, id: string, cutoff: i64) -> string {
+    let arr = _array_for_kind_local(atlas, kind)
+    let mut best = ""
+    let mut best_d = cutoff + 1
+    let mut i = 0
+    while i < len(arr) {
+        let cand = arr[i]
+        let d = levenshtein(id, cand.id)
+        if d < best_d {
+            best_d = d
+            best = cand.id
+        }
+        i = i + 1
+    }
+    if best_d <= cutoff { return best }
+    return ""
+}
+
+// Local mirror of merger.hexa's _array_for_kind (private over there,
+// so we re-implement to avoid a cross-module visibility hack).
+fn _array_for_kind_local(atlas: AtlasIndex, kind: string) -> array {
+    if kind == "P" { return atlas.p_nodes }
+    if kind == "C" { return atlas.c_nodes }
+    if kind == "L" { return atlas.l_nodes }
+    if kind == "E" { return atlas.e_nodes }
+    return []
+}
+
+// ── ExprKind probe ───────────────────────────────────────────
+// Stage0 cannot derive Eq for enums; mirror parser.hexa tag_of pattern.
+
+fn _is_atlas_ref_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::AtlasRef -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::Ident -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false
+    }
+}
+
+// ── Walker ────────────────────────────────────────────────────
+// Mutates `out` in place — collect-don't-stop policy (RFC-019 §6).
+
+fn _check_atlas_ref(aref: AtlasRef, atlas: AtlasIndex, out: array) {
+    // Skip empty/sentinel atlas refs (parser may leave kind="" on
+    // non-AtlasRef nodes).
+    if len(aref.kind) == 0 { return }
+    let hit = lookup(atlas, aref.kind, aref.id)
+    if len(hit.kind) > 0 { return }  // valid — present in index
+
+    let suggest = _suggest_for(atlas, aref.kind, aref.id, 2)
+    let msg = render_hx1042(atlas.hash, aref.kind, aref.id)
+    let d = Diagnostic {
+        code: "HX1042",
+        severity: Severity::Error,
+        stage: "S1",
+        span: aref.span,
+        message: msg,
+        note: "",
+        suggest: suggest,
+        fixit: empty_fixit(),
+        related: []
+    }
+    out.push(d)
+}
+
+fn _walk_expr(e: Expr, atlas: AtlasIndex, out: array) {
+    if _is_atlas_ref_kind(e.kind) {
+        _check_atlas_ref(e.atlas_ref, atlas, out)
+    } else {
+        // Some non-AtlasRef Exprs may still carry a populated atlas_ref
+        // (defensive — parser today only sets it on AtlasRef but the
+        // task spec asks us to honour any Expr that carries one).
+        if len(e.atlas_ref.kind) > 0 {
+            _check_atlas_ref(e.atlas_ref, atlas, out)
+        }
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        _walk_expr(e.children[i], atlas, out)
+        i = i + 1
+    }
+}
+
+fn _walk_annotations(anns: array, atlas: AtlasIndex, out: array) {
+    let mut i = 0
+    while i < len(anns) {
+        let a = anns[i]
+        let mut j = 0
+        while j < len(a.args) {
+            _walk_expr(a.args[j], atlas, out)
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
+    _walk_annotations(it.annotations, atlas, out)
+    // Item.body is the only Expr root carried at item level (Fn body,
+    // Let RHS, etc.); Struct fields and Imports leave it as the
+    // empty placeholder (kind=Ident, span zero, no atlas_ref).
+    _walk_expr(it.body, atlas, out)
+}
+
+// ── Public entry ─────────────────────────────────────────────
+
+pub fn resolve(module: Module, atlas: AtlasIndex) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < len(module.items) {
+        _walk_item(module.items[i], atlas, out)
+        i = i + 1
+    }
+    return out
+}
