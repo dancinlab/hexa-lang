@@ -1,0 +1,400 @@
+// M0 milestone — codegen broadening (Gap 15 / C7) many-args spill test.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds the MIR for a 10-arg call (mirrors tests/m0/many_args.hexa)
+// and asserts that both targets emit a real stack-spill block instead of
+// the legacy `nop ; TODO` markers:
+//
+//   arm64-apple-darwin:  expect `sub sp, sp, #` prologue, at least one
+//                        `str x9, [sp, #...]` slot store, the `bl`
+//                        target call, and an `add sp, sp, #` epilogue.
+//   x86_64-linux-gnu:    expect at least one `push ` for spilled args
+//                        in right-to-left order, the `call` to the
+//                        target, and an `add rsp, ` cleanup.
+//
+// Asserts also that no `nop ; TODO: spill arg` lines remain (regression
+// guard against the pre-C7 behaviour) and that the first 8 / 6 args
+// still land in xN / argN registers respectively.
+//
+// Driven by stage0 hexa interpreter:
+//   RESOURCE_LOCAL_HEXA=1 hexa_interp run tests/m0/many_args_test.hexa
+//
+// Exit codes: 0 = PASS, 1 = FAIL.
+
+import "../../compiler/ir/mir.hexa"
+import "../../compiler/ir/lir.hexa"
+import "../../compiler/codegen/arm64_darwin.hexa"
+import "../../compiler/codegen/x86_64_linux.hexa"
+import "../../compiler/emit/asm.hexa"
+
+// ── MIR construction helpers ────────────────────────────────
+
+fn _local(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name }
+}
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+}
+
+fn _op_const_int(v: i64) -> Operand {
+    return Operand {
+        kind: "const_int", local_id: -1,
+        int_val: v, float_val: 0.0, str_val: "", global_id: -1
+    }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local", local_id: local_id,
+        int_val: 0, float_val: 0.0, str_val: "", global_id: -1
+    }
+}
+
+fn _stmt_call_const_args(target: string, dst: Local,
+                         values: [i64]) -> Stmt {
+    let mut xs = []
+    let mut i = 0
+    while i < len(values) {
+        xs.push(_op_const_int(values[i]))
+        i = i + 1
+    }
+    return Stmt {
+        kind: STMT_CALL, dst: dst, op: target,
+        args: xs, target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_return(src: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(src)
+    return Stmt {
+        kind: STMT_RETURN, dst: _miss_local(), op: "",
+        args: xs, target_block: -1, target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+// ── Build caller() MIR — call many_arm(1..10) ───────────────
+//
+// MIR shape:
+//   bb0:
+//     L0 = call many_arm(1,2,3,4,5,6,7,8,9,10)
+//     return L0
+fn _build_caller() -> MModule {
+    let result = _local(0, "result")
+    let retL   = _local(1, "ret")
+
+    let mut values = []
+    values.push(1)
+    values.push(2)
+    values.push(3)
+    values.push(4)
+    values.push(5)
+    values.push(6)
+    values.push(7)
+    values.push(8)
+    values.push(9)
+    values.push(10)
+
+    let mut stmts = []
+    stmts.push(_stmt_call_const_args("many_arm", result, values))
+    stmts.push(_stmt_return(_op_local(result.id)))
+
+    let mut blocks = []
+    blocks.push(_block(0, stmts))
+
+    let mut params = []
+    let mut locals = []
+    locals.push(result)
+    locals.push(retL)
+
+    let mf = MFunc {
+        name: "caller",
+        params: params,
+        return_local: retL,
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "many_args.hexa", funcs: fns, globals: [] }
+}
+
+// ── Substring + count helpers ───────────────────────────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    let h = hay.chars()
+    let n = needle.chars()
+    let hn = len(h)
+    let nn = len(n)
+    if nn == 0 { return true }
+    if nn > hn { return false }
+    let mut i = 0
+    while i + nn < hn + 1 {
+        let mut j = 0
+        let mut ok = true
+        while j < nn {
+            if h[i + j] != n[j] {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _count_occurrences(hay: string, needle: string) -> i64 {
+    let h = hay.chars()
+    let n = needle.chars()
+    let hn = len(h)
+    let nn = len(n)
+    if nn == 0 { return 0 }
+    if nn > hn { return 0 }
+    let mut count = 0
+    let mut i = 0
+    while i + nn < hn + 1 {
+        let mut j = 0
+        let mut ok = true
+        while j < nn {
+            if h[i + j] != n[j] {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+// ── Per-target driver ───────────────────────────────────────
+
+fn _check_arm64(mm: MModule) -> bool {
+    println("")
+    println("── arm64 / apple-darwin (arm64-apple-darwin) ──")
+
+    let lm = codegen_arm64_darwin(mm)
+    let asm = emit_asm(lm)
+    println("  emit_asm output (" + to_string(len(asm.chars())) + " bytes):")
+    println("------ BEGIN .s ------")
+    println(asm)
+    println("------- END .s -------")
+
+    let mut ok = true
+
+    // 1. Spill prologue: `sub sp, sp, #` adjusts the stack for 2
+    //    extra args (10 - 8 = 2 → 16-byte aligned → #16).
+    if !_contains(asm, "sub sp, sp, #16") {
+        println("  FAIL: missing arm64 spill prologue `sub sp, sp, #16`")
+        ok = false
+    } else {
+        println("  ok: arm64 spill prologue present")
+    }
+
+    // 2. At least two `str x9, [sp, #` rows for args 9 and 10.
+    let n_str = _count_occurrences(asm, "str x9, [sp, #")
+    if n_str < 2 {
+        println("  FAIL: expected 2 spill stores, got " +
+                to_string(n_str))
+        ok = false
+    } else {
+        println("  ok: " + to_string(n_str) + " arm64 spill stores")
+    }
+
+    // 3. Slot offsets: 9th arg → [sp, #0], 10th arg → [sp, #8].
+    if !_contains(asm, "[sp, #0]") {
+        println("  FAIL: missing slot 9 store at [sp, #0]")
+        ok = false
+    } else { println("  ok: 9th arg slot at [sp, #0]") }
+    if !_contains(asm, "[sp, #8]") {
+        println("  FAIL: missing slot 10 store at [sp, #8]")
+        ok = false
+    } else { println("  ok: 10th arg slot at [sp, #8]") }
+
+    // 4. The call itself.
+    if !_contains(asm, "bl _many_arm") {
+        println("  FAIL: missing `bl _many_arm` call")
+        ok = false
+    } else { println("  ok: bl _many_arm present") }
+
+    // 5. Spill epilogue.
+    if !_contains(asm, "add sp, sp, #16") {
+        println("  FAIL: missing arm64 spill epilogue `add sp, sp, #16`")
+        ok = false
+    } else { println("  ok: arm64 spill epilogue present") }
+
+    // 6. First 8 args still placed in x0..x7.
+    let mut k = 0
+    while k < 8 {
+        let want = "mov x" + to_string(k) + ", #" + to_string(k + 1)
+        if !_contains(asm, want) {
+            println("  FAIL: missing arg-reg setup `" + want + "`")
+            ok = false
+        }
+        k = k + 1
+    }
+
+    // 7. Regression guard: no leftover `TODO: spill arg` markers.
+    if _contains(asm, "TODO: spill arg") {
+        println("  FAIL: stale `TODO: spill arg` marker present")
+        ok = false
+    } else {
+        println("  ok: no stale spill TODO markers")
+    }
+
+    return ok
+}
+
+fn _check_x86_64(mm: MModule) -> bool {
+    println("")
+    println("── x86_64 / linux-gnu (x86_64-linux-gnu) ──")
+
+    let lm = codegen_x86_64_linux(mm)
+    let asm = emit_asm(lm)
+    println("  emit_asm output (" + to_string(len(asm.chars())) + " bytes):")
+    println("------ BEGIN .s ------")
+    println(asm)
+    println("------- END .s -------")
+
+    let mut ok = true
+
+    // 1. At least 4 `push ` rows for args 7..10 (right-to-left so
+    //    arg 10 is pushed first, arg 7 last).
+    let n_push = _count_occurrences(asm, "push ")
+    if n_push < 4 {
+        println("  FAIL: expected 4 spill pushes, got " +
+                to_string(n_push))
+        ok = false
+    } else {
+        println("  ok: " + to_string(n_push) + " x86_64 spill pushes")
+    }
+
+    // 2. Right-to-left ordering: `push 10` must appear before
+    //    `push 7` in the asm text.
+    let h = asm.chars()
+    let hn = len(h)
+    let mut idx10 = -1
+    let mut idx7  = -1
+    let mut i = 0
+    let needle10 = "push 10".chars()
+    let needle7  = "push 7".chars()
+    while i + 7 < hn + 1 {
+        let mut j10 = 0
+        let mut ok10 = true
+        while j10 < 7 {
+            if h[i + j10] != needle10[j10] { ok10 = false; break }
+            j10 = j10 + 1
+        }
+        if ok10 && idx10 < 0 { idx10 = i }
+        i = i + 1
+    }
+    let mut t = 0
+    while t + 6 < hn + 1 {
+        let mut j7 = 0
+        let mut ok7 = true
+        while j7 < 6 {
+            if h[t + j7] != needle7[j7] { ok7 = false; break }
+            j7 = j7 + 1
+        }
+        if ok7 && idx7 < 0 { idx7 = t }
+        t = t + 1
+    }
+    if idx10 < 0 {
+        println("  FAIL: `push 10` not found")
+        ok = false
+    } else if idx7 < 0 {
+        println("  FAIL: `push 7` not found")
+        ok = false
+    } else if idx10 < idx7 {
+        println("  ok: right-to-left order (push 10 before push 7)")
+    } else {
+        println("  FAIL: push order wrong — `push 10` should precede " +
+                "`push 7` in right-to-left convention")
+        ok = false
+    }
+
+    // 3. The call itself.
+    if !_contains(asm, "call many_arm") {
+        println("  FAIL: missing `call many_arm`")
+        ok = false
+    } else { println("  ok: call many_arm present") }
+
+    // 4. Caller cleanup: `add rsp, 32` (4 spilled args * 8 bytes).
+    if !_contains(asm, "add rsp, 32") {
+        println("  FAIL: missing `add rsp, 32` caller cleanup")
+        ok = false
+    } else { println("  ok: caller cleanup present (add rsp, 32)") }
+
+    // 5. First 6 args still placed in System V arg registers.
+    if !_contains(asm, "mov rdi, 1") {
+        println("  FAIL: missing `mov rdi, 1`")
+        ok = false
+    }
+    if !_contains(asm, "mov rsi, 2") {
+        println("  FAIL: missing `mov rsi, 2`")
+        ok = false
+    }
+    if !_contains(asm, "mov rdx, 3") {
+        println("  FAIL: missing `mov rdx, 3`")
+        ok = false
+    }
+    if !_contains(asm, "mov rcx, 4") {
+        println("  FAIL: missing `mov rcx, 4`")
+        ok = false
+    }
+    if !_contains(asm, "mov r8, 5") {
+        println("  FAIL: missing `mov r8, 5`")
+        ok = false
+    }
+    if !_contains(asm, "mov r9, 6") {
+        println("  FAIL: missing `mov r9, 6`")
+        ok = false
+    }
+
+    // 6. Regression guard: no leftover `TODO: spill arg` markers.
+    if _contains(asm, "TODO: spill arg") {
+        println("  FAIL: stale `TODO: spill arg` marker present")
+        ok = false
+    } else {
+        println("  ok: no stale spill TODO markers")
+    }
+
+    return ok
+}
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  M0 — many-args spill smoke (C7 stack args)")
+    println("══════════════════════════════════════════════")
+
+    let mm = _build_caller()
+
+    let mut ok = true
+    let ok_arm = _check_arm64(mm)
+    if !ok_arm { ok = false }
+    let ok_x86 = _check_x86_64(mm)
+    if !ok_x86 { ok = false }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: stack-spill block emitted on both targets.")
+        println("══════════════════════════════════════════════")
+        exit(0)
+    }
+    println("FAIL: spill block contract not satisfied.")
+    println("══════════════════════════════════════════════")
+    exit(1)
+}
