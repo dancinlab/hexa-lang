@@ -51,6 +51,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 // hxffi_alloc_ptr_slot — return a freshly zero-initialized 8-byte slot.
 // Returns NULL only on allocation failure (extremely rare).

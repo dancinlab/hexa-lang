@@ -7309,6 +7309,62 @@ HexaVal hexa_from_char_code(HexaVal n) {
     return hexa_str_own(out);
 }
 
+// ── A1 (2026-05-10): per-phase arena reset side channel ─────────
+// Stage 0 host (hexa_real / hexa_interp.real) holds every str-arena
+// allocation for the whole process lifetime — there is no per-phase
+// boundary between lex / parse / check / lower / codegen. On the
+// 25,932-line spliced super-module that compiler/main.hexa now
+// produces, this drives RSS past the 2 GB cap before any structured
+// diagnostic surfaces (see doc/stage1_punch_list_v2.md A1, captured
+// 2026-05-10).
+//
+// The fix here is a side-channel that lets compiler/main.hexa drop
+// the str/Val bump arena at known-safe phase boundaries (after
+// parse, after type/citation check, after lower, after codegen).
+// The hexa-side carrier (Module / Diagnostic / HModule / MModule /
+// LModule) is itself heap-resident — it lives in array_store /
+// map_store / struct_store and is unaffected by the arena rewind.
+// What gets reclaimed: the bump-arena strings + struct-literal Vals
+// produced as scratch during the just-finished phase. Empirically
+// these dominate RSS growth on spliced compiles where every
+// _splice_imported_items pass concatenates fresh paths.
+//
+// Hooks (all spelled as `env("__HEXA_ARENA_<OP>__")` for the
+// existing side-channel discipline):
+//
+//   PHASE_RESET__    — reset the bump arena to its first block
+//                      (calls hexa_arena_reset). Safe at phase
+//                      boundaries where no live Hexa-side struct
+//                      points into arena-allocated strings; the
+//                      compiler driver guarantees this by copying
+//                      slim hand-off shapes (see compiler/main.hexa
+//                      `phase_reset` callsites).
+//   RSS_MB__         — return current resident set size in MB
+//                      as a decimal string. Lets compiler/main.hexa
+//                      log per-phase RSS deltas to stderr without a
+//                      transpiler-level builtin.
+//   ARENA_BYTES__    — return total reserved arena bytes (sum of
+//                      block caps), decimal string. Diagnostics.
+//   ARENA_LIVE__     — return currently-used arena bytes (sum of
+//                      block.used), decimal string. Diagnostics.
+//   PHASE_LOG__name  — emit "[hexa-runtime/phase] name rss=NMB
+//                      arena=NMB" to stderr; convenience wrapper
+//                      for compiler/main.hexa --verbose mode.
+static int64_t _hx_arena_total_bytes(void) {
+    int64_t total = 0;
+    for (HexaArenaBlock* b = __hexa_arena.head; b; b = b->next) {
+        total += (int64_t)b->cap;
+    }
+    return total;
+}
+static int64_t _hx_arena_live_bytes(void) {
+    int64_t total = 0;
+    for (HexaArenaBlock* b = __hexa_arena.head; b; b = b->next) {
+        total += (int64_t)b->used;
+    }
+    return total;
+}
+
 HexaVal hexa_env_var(HexaVal name) {
     if (!HX_IS_STR(name) || !HX_STR(name)) return hexa_str("");
     // rt 32-L: side-channel for Val arena scope ops. Hexa-side env_push_scope /
@@ -7338,7 +7394,56 @@ HexaVal hexa_env_var(HexaVal name) {
             snprintf(buf, sizeof(buf), "marks=%d", __hexa_val_mark_top);
             return hexa_str(buf);
         }
+        // A1 (2026-05-10): per-phase arena reset hooks — see comment above.
+        if (strcmp(op, "PHASE_RESET__") == 0) {
+            // Drop all bump-arena allocations. Live blocks stay linked
+            // (ready for reuse on the next phase's allocations) but every
+            // block.used = 0. O(blocks) — typically a handful.
+            hexa_arena_reset();
+            return hexa_str("1");
+        }
+        if (strcmp(op, "RSS_MB__") == 0) {
+            char buf[32];
+            size_t rss = _hx_self_rss_bytes();
+            snprintf(buf, sizeof(buf), "%zu",
+                     (size_t)(rss / (1024ull * 1024ull)));
+            return hexa_str(buf);
+        }
+        if (strcmp(op, "ARENA_BYTES__") == 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%lld",
+                     (long long)_hx_arena_total_bytes());
+            return hexa_str(buf);
+        }
+        if (strcmp(op, "ARENA_LIVE__") == 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%lld",
+                     (long long)_hx_arena_live_bytes());
+            return hexa_str(buf);
+        }
         // Unknown __HEXA_ARENA_* op — fall through to real getenv (returns "").
+    }
+    // A1 (2026-05-10): __HEXA_PHASE_LOG__<name> — single-line per-phase
+    // marker on stderr. Encoded as a name prefix so the call site is
+    // a single env(...) read. Returns the emitted line (sans newline).
+    if (HX_STR(name)[0] == '_' && HX_STR(name)[1] == '_' && HX_STR(name)[2] == 'H' &&
+        strncmp(HX_STR(name), "__HEXA_PHASE_LOG__", 18) == 0) {
+        const char* phase = HX_STR(name) + 18;
+        size_t rss = _hx_self_rss_bytes();
+        size_t arena_live = (size_t)_hx_arena_live_bytes();
+        size_t arena_total = (size_t)_hx_arena_total_bytes();
+        char line[256];
+        int n = snprintf(line, sizeof(line),
+            "[hexa-runtime/phase] %s rss=%zuMB arena_live=%zuKB arena_total=%zuKB",
+            phase,
+            (size_t)(rss / (1024ull * 1024ull)),
+            (size_t)(arena_live / 1024ull),
+            (size_t)(arena_total / 1024ull));
+        if (n > 0) {
+            fputs(line, stderr);
+            fputc('\n', stderr);
+        }
+        return hexa_str(line);
     }
     const char* v = getenv(HX_STR(name));
     return hexa_str(v ? v : "");
