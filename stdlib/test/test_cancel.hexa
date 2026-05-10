@@ -1,0 +1,147 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/test/test_cancel.hexa
+//
+//  Selftest for stdlib/cancel — cooperative cancellation Token.
+//
+//  Validates (wilson core port G3 prereq, RFC-022 §6):
+//    1. token_new — fresh token: not canceled, empty reason, check==true
+//    2. token_cancel — flips canceled, records reason
+//    3. token_cancel monotonic — second cancel keeps first reason
+//    4. token_cancel empty-reason normalisation
+//    5. token_new_canceled — preset constructor
+//    6. token_check polarity — true while alive, false after cancel
+//    7. token_is_canceled inverse of token_check
+//    8. token_reason returns "" before, sticky after
+//    9. concurrent poll pattern — caller polls token in long loop
+//   10. concurrent poll counts — work stops on the iteration cancel fires
+//
+//  Run:
+//      $HOME/.hx/bin/hexa_real run stdlib/test/test_cancel.hexa
+//
+//  Exit semantics:
+//      * all asserts pass → "PASS: stdlib/cancel selftest N/N"
+//      * any assert fails → "FAIL: ..." per case + non-zero pass-count line
+//
+//  No external dependencies (pure-hexa, no perl, no fs, no net).
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/cancel"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk_true(tag, cond) {
+    if cond {
+        println("  PASS " + tag)
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " (cond false)")
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_eq_str(tag, got, want) {
+    if got == want {
+        println("  PASS " + tag)
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got='" + got + "' want='" + want + "'")
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_eq_int(tag, got, want) {
+    if got == want {
+        println("  PASS " + tag + " == " + to_string(want))
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=" + to_string(got) + " want=" + to_string(want))
+        fail_count = fail_count + 1
+    }
+}
+
+fn main() -> void {
+    println("── stdlib/cancel selftest ──")
+
+    // 1. token_new — fresh token state
+    let t0 = token_new()
+    chk_true("01_new_alive", token_check(t0))
+    chk_true("02_new_not_canceled", !token_is_canceled(t0))
+    chk_eq_str("03_new_reason_empty", token_reason(t0), "")
+
+    // 2. token_cancel flips state
+    let t1 = token_cancel(t0, "user_quit")
+    chk_true("04_canceled_after_cancel", token_is_canceled(t1))
+    chk_true("05_check_false_after_cancel", !token_check(t1))
+    chk_eq_str("06_reason_recorded", token_reason(t1), "user_quit")
+
+    // 3. monotonic: second cancel keeps first reason
+    let t2 = token_cancel(t1, "different_reason")
+    chk_true("07_still_canceled", token_is_canceled(t2))
+    chk_eq_str("08_first_reason_wins", token_reason(t2), "user_quit")
+
+    // 4. empty-reason normalisation
+    let t3 = token_cancel(token_new(), "")
+    chk_true("09_empty_reason_canceled", token_is_canceled(t3))
+    chk_eq_str("10_empty_reason_normalised", token_reason(t3), "canceled")
+
+    // 5. preset constructor
+    let tp = token_new_canceled("preset_a")
+    chk_true("11_preset_canceled", token_is_canceled(tp))
+    chk_eq_str("12_preset_reason", token_reason(tp), "preset_a")
+
+    let tp2 = token_new_canceled("")
+    chk_eq_str("13_preset_empty_reason_default", token_reason(tp2), "preset")
+
+    // 6. token_check polarity (explicit double-check)
+    let alive = token_new()
+    let dead  = token_cancel(alive, "x")
+    chk_true("14_check_alive_true",  token_check(alive))
+    chk_true("15_check_dead_false", !token_check(dead))
+
+    // 7. is_canceled inverse
+    chk_true("16_is_canceled_false_alive", !token_is_canceled(alive))
+    chk_true("17_is_canceled_true_dead",   token_is_canceled(dead))
+
+    // 8. reason sticky empty before, value after
+    chk_eq_str("18_reason_alive_empty", token_reason(alive), "")
+    chk_eq_str("19_reason_dead_set",    token_reason(dead),  "x")
+
+    // 9 + 10. concurrent poll pattern — simulate a long-running task that
+    // polls the token every iteration; an "outside" event flips cancel
+    // mid-loop and the work loop must stop *on the next poll*.
+    //
+    // We model "concurrent" cancellation by mutating a shared token
+    // variable from the same thread (hexa stage 1 is single-threaded;
+    // RFC-022 §3 establishes that this is the canonical concurrency
+    // semantic for stage 1 — see concurrent_check_pattern below).
+    let mut shared_t = token_new()
+    let mut iters_done = 0
+    let mut i = 0
+    let cancel_at = 5
+    let max_iters = 20
+    while token_check(shared_t) {
+        if i == cancel_at {
+            shared_t = token_cancel(shared_t, "loop_budget")
+            // do NOT increment iters_done — cancel observed *before*
+            // the work step on this iteration.
+        } else {
+            iters_done = iters_done + 1
+        }
+        i = i + 1
+        if i >= max_iters { break }
+    }
+    chk_true("20_loop_canceled",      token_is_canceled(shared_t))
+    chk_eq_str("21_loop_reason",       token_reason(shared_t), "loop_budget")
+    chk_eq_int("22_loop_iters_done",   iters_done, cancel_at)
+    chk_true("23_loop_did_not_runaway", i <= cancel_at + 1)
+
+    // ── summary ───────────────────────────────────────────────────────
+    let total = pass_count + fail_count
+    println("")
+    if fail_count == 0 {
+        println("PASS: stdlib/cancel selftest " + to_string(pass_count) + "/" + to_string(total))
+    } else {
+        println("FAIL: stdlib/cancel selftest " + to_string(pass_count) + "/" + to_string(total) + " (" + to_string(fail_count) + " failures)")
+    }
+}

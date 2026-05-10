@@ -1,0 +1,154 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/cancel.hexa — cooperative cancellation Token
+//
+//  @module(slug="cancel", desc="cooperative cancellation token for async tasks")
+//  @usage(use "stdlib/cancel"; let t = token_new(); token_cancel(t, "user"); ...)
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [token_new, token_cancel, token_check, token_throw_if_canceled,
+//                 token_reason, token_is_canceled]
+//  @stability preview
+//  @since 2026-05-09
+//  @maintainer hexa-core
+//  @priority P0
+//  @rfc proposals/rfc_022_async_model.md (G3 cancel-token integration)
+//
+//  ── PROBLEM (wilson core port — G3 prereq, 2026-05-09) ────────────────────
+//
+//  wilson core port (incoming/PATCHES.yaml#wilson-pi-port-6-gap-prereq) needs
+//  a cooperative cancellation primitive that callers can poll inside long
+//  loops or pass to async tasks (RFC-022 §6). The hexa async surface today
+//  is cooperative round-robin (see self/async_runtime.hexa); there is no
+//  preemption, no thread interrupt, no signal hand-off. Callers therefore
+//  cancel by *signaling* — flipping a shared bool + reason string that
+//  loops + await sites observe at well-defined poll points.
+//
+//  ── DESIGN ───────────────────────────────────────────────────────────────
+//
+//  A `Token` is a tiny shared-state struct (canceled bool + reason string).
+//  Construction is cheap (one heap object). Cancellation is monotonic —
+//  once flipped, a Token never goes back; the reason is sticky so the
+//  earliest cancel wins.
+//
+//  Polling model (caller responsibility):
+//
+//      let t = token_new()
+//      while !token_check(t) {           // false ⇒ canceled, exit loop
+//          do_one_iteration()
+//      }
+//
+//  Or equivalent panic-on-cancel:
+//
+//      let t = token_new()
+//      while have_more_work() {
+//          token_throw_if_canceled(t)    // panic("canceled: <reason>") if set
+//          do_one_iteration()
+//      }
+//
+//  ── ASYNC INTEGRATION (RFC-022 §6) ────────────────────────────────────────
+//
+//  Async tasks SHOULD accept a Token parameter when they want to be
+//  cancellable. The scheduler does NOT auto-cancel anything; cancellation
+//  is purely cooperative — a task that never polls is never canceled.
+//  This matches stage 1's single-threaded interpreter semantics where
+//  preemption is impossible.
+//
+//  Recommended idiom for await-in-loop:
+//
+//      @async
+//      fn long_pull(t: Token, src: int) -> string {
+//          let mut acc = ""
+//          while !token_check(t) {
+//              let chunk = await read_chunk(src)
+//              if chunk == "" { break }
+//              acc = acc + chunk
+//          }
+//          return acc
+//      }
+//
+//  ── BACKWARD COMPATIBILITY ────────────────────────────────────────────────
+//
+//  This module ADDS a new module file. No existing stdlib signature is
+//  modified. Callers that don't need cancellation simply do not import it.
+//
+//  ── See also ──────────────────────────────────────────────────────────────
+//
+//  · proposals/rfc_022_async_model.md — async model (G2)
+//  · stdlib/cancel.ai.md — usage matrix + safety notes
+//  · stdlib/test/test_cancel.hexa — selftest (basic + concurrent-poll pattern)
+//  · self/async_runtime.hexa — current cooperative scheduler ground truth
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Token struct ──────────────────────────────────────────────────────────
+
+pub struct Token {
+    canceled: bool,
+    reason: string
+}
+
+// ── constructor ───────────────────────────────────────────────────────────
+
+// Create a fresh, non-canceled Token. O(1).
+pub fn token_new() -> Token {
+    return Token { canceled: false, reason: "" }
+}
+
+// Create a Token already in the canceled state. Convenience for callers
+// that want to express "shut down right away" without a separate cancel
+// step (e.g. building a no-op pipeline for tests).
+pub fn token_new_canceled(reason: string) -> Token {
+    let r = if reason == "" { "preset" } else { reason }
+    return Token { canceled: true, reason: r }
+}
+
+// ── mutation ──────────────────────────────────────────────────────────────
+
+// Cancel a Token. Monotonic: once canceled, the reason is sticky — a
+// second cancel call on an already-canceled token is a no-op (the first
+// reason wins). Empty reason is normalised to "canceled" so consumers
+// always get a non-empty message.
+pub fn token_cancel(t: Token, reason: string) -> Token {
+    if t.canceled {
+        return t
+    }
+    let r = if reason == "" { "canceled" } else { reason }
+    return Token { canceled: true, reason: r }
+}
+
+// ── observation ───────────────────────────────────────────────────────────
+
+// Returns true while the token is *still alive* (not canceled).
+// Idiom: `while token_check(t) { ... }` — terminate loop on cancel.
+//
+// Note the polarity: token_check(t) is "may continue?", not "is canceled?".
+// This matches Go's ctx.Err() == nil idiom and reads naturally in a while
+// guard. For "is canceled?" semantics use token_is_canceled.
+pub fn token_check(t: Token) -> bool {
+    return !t.canceled
+}
+
+// Inverse of token_check — true iff cancellation has been signaled.
+pub fn token_is_canceled(t: Token) -> bool {
+    return t.canceled
+}
+
+// Read the cancellation reason. Returns "" while still alive; the
+// recorded reason once canceled (never empty post-cancel — see token_cancel).
+pub fn token_reason(t: Token) -> string {
+    return t.reason
+}
+
+// ── enforcement ───────────────────────────────────────────────────────────
+
+// If canceled, panic with "canceled: <reason>". Use at safe-points
+// inside long loops where unwinding is acceptable. No-op otherwise.
+//
+// Stage 1 note: hexa has no try/catch yet, so this is a hard exit
+// equivalent. Callers that need recoverable cancel must use token_check
+// + an explicit early return path.
+pub fn token_throw_if_canceled(t: Token) {
+    if t.canceled {
+        panic("canceled: " + t.reason)
+    }
+}
