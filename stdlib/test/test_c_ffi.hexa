@@ -182,6 +182,45 @@ chk_eq_int("c_rtld_now",    c_rtld_now(),    2)
 chk_eq_int("c_rtld_local",  c_rtld_local(),  4)
 chk_eq_int("c_rtld_global", c_rtld_global(), 8)
 
+// ── Test 13: out-pointer slot allocator (hxffi_slot shim) ─────────────────
+//
+// These tests depend on self/native/build/libhxffi_slot.{dylib,so} being
+// built. The shim is the orpheus/anima DuckDB FFI enabler — without it,
+// out-parameter C APIs (duckdb_open, sqlite3_open, ...) cannot be bound
+// from hexa code. We probe with c_ptr_slot_loadable() first and skip the
+// runtime exercises if the build artifact is missing (so a fresh checkout
+// without the build step prints a SKIP rather than a FAIL).
+if c_ptr_slot_loadable() {
+    // 13a. Allocate slot — must be non-zero.
+    let slot = c_alloc_ptr_slot()
+    chk_true("c_alloc_ptr_slot != 0", slot != 0)
+
+    // 13b. Empty slot reads back as 0 (calloc zero-init contract).
+    let initial = c_load_ptr(slot)
+    chk_eq_int("c_load_ptr(fresh slot) == 0", initial, 0)
+
+    // 13c. Store + load round-trips a sentinel value.
+    let sentinel = 305419896                  // 0x12345678
+    c_store_ptr(slot, sentinel)
+    let read_back = c_load_ptr(slot)
+    chk_eq_int("c_load_ptr after c_store_ptr", read_back, sentinel)
+
+    // 13d. Free the slot (no return value — must not crash).
+    c_free_ptr_slot(slot)
+    pass_count = pass_count + 1               // tag: c_free_ptr_slot ran
+
+    // 13e. NULL-safe: c_load_ptr(0) returns 0, c_free_ptr_slot(0) no-ops.
+    chk_eq_int("c_load_ptr(0)", c_load_ptr(0), 0)
+    c_free_ptr_slot(0)
+    pass_count = pass_count + 1               // tag: c_free_ptr_slot(0) ran
+
+    // 13f. C-side selftest (alloc → store → load → free roundtrip).
+    let st = _ff_slot_selftest()
+    chk_eq_int("hxffi_slot_selftest", st, 1)
+} else {
+    println("  SKIP test 13: libhxffi_slot not built (cc -O2 -fPIC -shared self/native/hxffi_slot.c -o self/native/build/libhxffi_slot.dylib)")
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────
 let total = pass_count + fail_count
 if fail_count == 0 {

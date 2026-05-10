@@ -376,4 +376,116 @@ pub fn c_ptr_null() -> int { return 0 }
 // c_ptr_is_null — predicate.
 pub fn c_ptr_is_null(p: int) -> bool { return p == 0 }
 
+// ── Out-pointer slot allocator (hxffi_slot shim) ──────────────────────────
+//
+// Many C APIs use the "out-parameter pointer" idiom — the caller allocates
+// an 8-byte slot, passes its address, and the callee writes a handle into
+// it. Examples: duckdb_open(path, *out_db), sqlite3_open(path, *out_db),
+// curl_easy_init() variants, etc.
+//
+// The hexa `extern fn` lane passes pointer args as int (uintptr_t). Until
+// this module landed there was no way to (a) allocate a slot, (b) hand its
+// address to such a C API, and (c) dereference the slot back to an int
+// handle for subsequent calls.
+//
+// The four functions below wrap a tiny C shim (self/native/hxffi_slot.c)
+// that closes that gap. The slot lives on the C heap (calloc'd, so reads
+// before any C-side write return 0/NULL — useful as an "C didn't write"
+// sentinel).
+//
+// CANONICAL USAGE (DuckDB open example):
+//
+//     let slot = c_alloc_ptr_slot()
+//     let s = duckdb_open(path, slot)           // C writes *slot = db
+//     if s != 0 {
+//         c_free_ptr_slot(slot)
+//         return [0, 0, 2]
+//     }
+//     let db = c_load_ptr(slot)                  // *(void**)slot → int
+//     c_free_ptr_slot(slot)                      // free(slot) — db survives
+//     // ... use db ...
+//
+// LIFETIME: the slot itself is only needed across the call that fills it.
+// Once you have loaded the int handle out, free the slot — the handle
+// survives independently (it points into C-managed library memory).
+//
+// SAFETY: c_load_ptr(0) returns 0; c_free_ptr_slot(0) is a no-op. The
+// shim's selftest is exercised by stdlib/test/test_c_ffi.hexa.
+
+@symbol("hxffi_alloc_ptr_slot")
+@link("hxffi_slot")
+extern fn _ff_alloc_ptr_slot() -> int
+
+@symbol("hxffi_load_ptr")
+@link("hxffi_slot")
+extern fn _ff_load_ptr(slot: int) -> int
+
+@symbol("hxffi_store_ptr")
+@link("hxffi_slot")
+extern fn _ff_store_ptr(slot: int, value: int) -> void
+
+@symbol("hxffi_free_ptr_slot")
+@link("hxffi_slot")
+extern fn _ff_free_ptr_slot(slot: int) -> void
+
+@symbol("hxffi_alloc_buf")
+@link("hxffi_slot")
+extern fn _ff_alloc_buf(size: int) -> int
+
+@symbol("hxffi_slot_selftest")
+@link("hxffi_slot")
+extern fn _ff_slot_selftest() -> int
+
+// c_alloc_ptr_slot — allocate a zero-initialized 8-byte slot for an
+// out-pointer C API. Returns the slot address as int (0 on alloc failure).
+//
+// Pair with c_free_ptr_slot(slot) once the slot's value has been loaded.
+pub fn c_alloc_ptr_slot() -> int {
+    return _ff_alloc_ptr_slot()
+}
+
+// c_alloc_buf — allocate a zero-initialized N-byte buffer for C APIs that
+// write into a struct (not just a pointer slot). E.g. duckdb_result is a
+// 48-byte struct — pass c_alloc_buf(64) to duckdb_query as the result_out.
+//
+// Returns the buffer address as int (0 on alloc failure / non-positive size).
+// Free via c_free_ptr_slot.
+pub fn c_alloc_buf(size: int) -> int {
+    if size <= 0 { return 0 }
+    return _ff_alloc_buf(size)
+}
+
+// c_load_ptr — dereference an out-pointer slot.
+//
+// Returns the void* the C side wrote into the slot, as an int (uintptr_t).
+// 0 (NULL) means either the slot is NULL or the C side never wrote (the
+// slot was zero-initialized so an absent write reads as 0).
+pub fn c_load_ptr(slot: int) -> int {
+    if slot == 0 { return 0 }
+    return _ff_load_ptr(slot)
+}
+
+// c_store_ptr — write a value into an out-pointer slot (rarely needed —
+// most callers just let the C API write). Useful for resetting / seeding.
+pub fn c_store_ptr(slot: int, value: int) -> void {
+    if slot == 0 { return }
+    _ff_store_ptr(slot, value)
+}
+
+// c_free_ptr_slot — release a slot allocated by c_alloc_ptr_slot.
+//
+// The handle previously loaded out via c_load_ptr survives — the slot
+// is just transient scratch storage for the address itself.
+pub fn c_free_ptr_slot(slot: int) -> void {
+    if slot == 0 { return }
+    _ff_free_ptr_slot(slot)
+}
+
+// c_ptr_slot_loadable — predicate: is the hxffi_slot shim available on
+// this host? Cheap dlopen probe; gates the c_alloc_ptr_slot path so callers
+// can fall back gracefully on hosts that lack the shim build.
+pub fn c_ptr_slot_loadable() -> bool {
+    return c_lib_loadable("hxffi_slot")
+}
+
 // ── End of module ─────────────────────────────────────────────────────────
