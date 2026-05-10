@@ -402,14 +402,55 @@ if !file_exists(source_path) {
 
 let source = to_string(read_file(source_path))
 
+// ── Stage1 punch list A1: per-phase host arena reset ─────────────
+// Stage 0 host (hexa_real / hexa_interp.real) holds every str-arena
+// allocation for the whole process lifetime, so a 25,932-line spliced
+// super-module from Gap 1 (multi-file load) drives RSS past the 2 GB
+// cap before any structured diagnostic surfaces. Phase boundaries
+// drop the bump-arena scratch via runtime side-channel hooks
+// (see self/runtime.c hexa_env_var "__HEXA_ARENA_PHASE_RESET__"
+// and doc/stage0_arena_phases.md).
+//
+// Hand-off contract: phase N produces a slim heap-resident result
+// (Module / Diagnostic[] / HModule / MModule / LModule / asm_text)
+// that lives in array_store / map_store / struct_store. Bump-arena
+// strings used as scratch during phase N (path concat, diag message
+// fragments, struct-literal __type__ keys, etc.) are reclaimed in
+// O(blocks) by the reset. The hexa-side carrier is unaffected.
+//
+// Best-effort: when running on a stage-0 binary that predates these
+// hooks, the env() lookups return "" and phase_reset becomes a
+// silent no-op — the pipeline still runs, just without the arena
+// reclaim. New stage-0 builds (post-2026-05-10) wire the hooks.
+fn phase_reset(name: string) {
+    let _ = env("__HEXA_ARENA_PHASE_RESET__")
+    if verbose {
+        let _ = env("__HEXA_PHASE_LOG__" + name)
+    }
+}
+
+fn phase_log(name: string) {
+    if verbose {
+        let _ = env("__HEXA_PHASE_LOG__" + name)
+    }
+}
+
 // ── Pipeline ─────────────────────────────────────────────────
 
+phase_log("pipeline_start")
 let tokens = lex(source, source_path)
+phase_log("post_lex")
 let module = parse(tokens, source_path)
 if verbose {
     eprintln("hexa-compiler: parsed " + to_string(len(module.items))
         + " top-level item(s) (multi-file flat-splice; Stage 1 Gap 1)")
 }
+// Phase boundary 1: lex+parse done. `tokens` is local to this scope and
+// becomes unreachable after the next slot is bound; drop the arena scratch
+// (paths, scratch strings) before the analysis passes start allocating
+// their own diagnostic message strings. The Module is a struct in
+// struct_store, immune to bump-arena rewind.
+phase_reset("post_parse")
 
 // Atlas: A4 wired — real index from compiler/atlas/embedded.gen.hexa.
 let atlas = _load_atlas()
@@ -478,6 +519,13 @@ if _has_errors(diags) {
     exit(1)
 }
 
+// Phase boundary 2: parse + all analysis passes done. The Module + diags
+// arrays are slim (heap-resident structs in their own stores). Drop the
+// arena scratch — every diag message fragment, every type-printer string,
+// every citation-key concatenation — before lower starts pumping HIR
+// fragments through the same arena.
+phase_reset("post_check")
+
 // ── Lower → MIR → LIR ────────────────────────────────────────
 
 let hmodule = lower(module, atlas)
@@ -493,7 +541,20 @@ if len(lr_diags) > 0 {
     _render_all(ld, error_format)
 }
 
+// Phase boundary 3: AST→HIR done. The Module (AST) is no longer needed
+// for the rest of the pipeline (lower_hir / opt / codegen / emit work
+// off MModule). The Module struct stays bound for the lifetime of the
+// driver fn but is not walked again — its arena-scratch field strings
+// (label names, lower-internal helper IDs) can be released. HModule is
+// itself heap-resident.
+phase_reset("post_lower_ast_to_hir")
+
 let mut mmodule = lower_hir(hmodule)
+
+// Phase boundary 4: HIR→MIR done. `hmodule` still bound but unread by
+// later phases; arena scratch built during hir_to_mir (block label
+// concat, MIR debug strings) reclaimable.
+phase_reset("post_lower_hir_to_mir")
 
 // MIR optimizer (RFC-018 §9 v1) — gated by --opt=LEVEL / $HEXA_OPT_LEVEL.
 //   0 none  /  1 const_fold  /  2 const_fold + dce  /  3 inline + 2-pass
@@ -548,7 +609,17 @@ if target == "arm64-apple-darwin" {
     exit(2)
 }
 
+// Phase boundary 5: codegen done. MModule no longer read; its block
+// label strings + opcode mnemonics from the per-fn lower can be
+// released before emit_asm allocates the rendered assembly text.
+phase_reset("post_codegen")
+
 let asm_text = emit_asm(lmodule)
+
+// Phase boundary 6: emit done. asm_text is the final bytestring that
+// gets written to disk; reset is safe (nothing downstream of write
+// reads from the arena). Logs the final phase RSS for budget probes.
+phase_reset("post_emit_asm")
 
 // ── Emit ASM ─────────────────────────────────────────────────
 
