@@ -103,6 +103,12 @@ fn _hir_lower_type_ref(tr: TypeRef) -> Type {
     if len(tr.kind) == 0 { return _hir_t_unit() }
     if tr.kind == "named" {
         let n = tr.name
+        // B1 (stage1 punch list v2): kind="named" with empty `name` is a stale
+        // TypeRef shape — degrade to the unknown sentinel rather than falsely
+        // mapping to `unit`. Mirrors the Gap 3 fix in
+        // compiler/check/types.hexa::_types_lower_type_ref so the HIR lower
+        // path does not re-introduce HX3001 cascades when it becomes visible.
+        if len(n) == 0 { return _hir_empty_type() }
         if n == "i8"  { return _hir_t_i8() }
         if n == "i16" { return _hir_t_i16() }
         if n == "i32" { return _hir_t_i32() }
