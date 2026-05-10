@@ -130,7 +130,24 @@ fn _x86_64_arg_reg(idx: i64) -> string {
     return "rdi" // overflow on stack — v1 stub
 }
 
-fn _x86_64_op_for_operand(o: Operand) -> LOperand {
+// String literal → rodata label map. See arm64_darwin.hexa for the
+// equivalent shape; both targets emit ".LCstr<N>" labels in lock-
+// step so a fixed source MIR yields the same per-target label index.
+pub struct X86StrTab {
+    keys: [string],
+    labels: [string]
+}
+
+fn _x86_strtab_lookup(st: X86StrTab, s: string) -> string {
+    let mut i = 0
+    while i < len(st.keys) {
+        if st.keys[i] == s { return st.labels[i] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _x86_64_op_for_operand_st(o: Operand, st: X86StrTab) -> LOperand {
     if o.kind == "local" {
         return _op_reg(_x86_64_reg_for_local(o.local_id))
     }
@@ -141,9 +158,16 @@ fn _x86_64_op_for_operand(o: Operand) -> LOperand {
         return _op_label("g" + to_string(o.global_id))
     }
     if o.kind == "const_str" {
+        let lbl = _x86_strtab_lookup(st, o.str_val)
+        if len(lbl) > 0 { return _op_label(lbl) }
         return _op_label(o.str_val)
     }
     return _op_imm(0)
+}
+
+fn _x86_64_op_for_operand(o: Operand) -> LOperand {
+    let st = X86StrTab { keys: [], labels: [] }
+    return _x86_64_op_for_operand_st(o, st)
 }
 
 // ── Block label helper ───────────────────────────────────────
@@ -152,14 +176,47 @@ fn _x86_64_block_label(fname: string, block_id: i64) -> string {
     return ".L" + fname + "_bb" + to_string(block_id)
 }
 
+// ── Binop classification (mirror of arm64 helper set) ─────────
+
+fn _x86_is_arith_add(op: string) -> bool { return op == "add" || op == "+" }
+fn _x86_is_arith_sub(op: string) -> bool { return op == "sub" || op == "-" }
+fn _x86_is_arith_mul(op: string) -> bool { return op == "mul" || op == "*" }
+fn _x86_is_arith_div(op: string) -> bool { return op == "div" || op == "/" }
+fn _x86_is_bit_and(op: string) -> bool   { return op == "and" || op == "&" }
+fn _x86_is_bit_or(op: string) -> bool    { return op == "or"  || op == "|" }
+fn _x86_is_bit_xor(op: string) -> bool   { return op == "xor" || op == "^" }
+fn _x86_is_concat(op: string) -> bool    { return op == "concat" }
+
+// SETcc suffix for source comparison op. Returns "" if not a
+// comparison.
+fn _x86_setcc_suffix(op: string) -> string {
+    if op == "cmp_eq" || op == "==" { return "e" }
+    if op == "cmp_ne" || op == "!=" { return "ne" }
+    if op == "cmp_lt" || op == "<"  { return "l" }
+    if op == "cmp_le" || op == "<=" { return "le" }
+    if op == "cmp_gt" || op == ">"  { return "g" }
+    if op == "cmp_ge" || op == ">=" { return "ge" }
+    return ""
+}
+
+fn _x86_64_arg_reg_seq(idx: i64) -> string {
+    if idx == 0 { return "rdi" }
+    if idx == 1 { return "rsi" }
+    if idx == 2 { return "rdx" }
+    if idx == 3 { return "rcx" }
+    if idx == 4 { return "r8"  }
+    if idx == 5 { return "r9"  }
+    return "rdi" // overflow → stack (TODO)
+}
+
 // ── Statement lowering ───────────────────────────────────────
 
-fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
+fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt, st: X86StrTab) -> [LInstr] {
     let mut buf = out
     if s.kind == _STMT_ASSIGN {
         let dst = _op_reg(_x86_64_reg_for_local(s.dst.id))
         if len(s.args) >= 1 {
-            let src = _x86_64_op_for_operand(s.args[0])
+            let src = _x86_64_op_for_operand_st(s.args[0], st)
             buf.push(_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
         }
         return buf
@@ -168,28 +225,68 @@ fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
         let dst_name = _x86_64_reg_for_local(s.dst.id)
         let dst = _op_reg(dst_name)
         if len(s.args) >= 2 {
-            let a = _x86_64_op_for_operand(s.args[0])
-            let b = _x86_64_op_for_operand(s.args[1])
+            let a = _x86_64_op_for_operand_st(s.args[0], st)
+            let b = _x86_64_op_for_operand_st(s.args[1], st)
+
+            // String concat → runtime call (System V).
+            if _x86_is_concat(s.op) {
+                buf.push(_instr2("mov", _op_reg("rdi"), a, "concat arg0"))
+                buf.push(_instr2("mov", _op_reg("rsi"), b, "concat arg1"))
+                buf.push(_instr1("call", _op_label("hexa_str_concat"),
+                                 "call runtime: hexa_str_concat"))
+                if dst.reg.name != "rax" {
+                    buf.push(_instr2("mov", dst, _op_reg("rax"), "capture concat result"))
+                }
+                return buf
+            }
+
+            // Comparison → cmp + setcc + movzx (zero-extend to
+            // 64-bit). v0 shortcut: write to `al` then movzx into
+            // dst. TODO: switch to per-reg low-byte aliases (bl,
+            // cl, dl, ...) once regalloc tracks byte aliases.
+            let suf = _x86_setcc_suffix(s.op)
+            if len(suf) > 0 {
+                buf.push(_instr2("cmp", a, b, "binop " + s.op))
+                buf.push(_instr1("set" + suf, _op_reg("al"),
+                                 "binop " + s.op + " → al"))
+                buf.push(_instr2("movzx", dst, _op_reg("al"),
+                                 "zero-extend al into dst"))
+                return buf
+            }
+
             // Two-operand form: dst <- a; dst <op>= b
             buf.push(_instr2("mov", dst, a, "binop lhs into dst"))
             let mut mnemonic = "add"
-            if s.op == "add" { mnemonic = "add" }
-            if s.op == "sub" { mnemonic = "sub" }
-            if s.op == "mul" { mnemonic = "imul" }
-            if s.op == "div" { mnemonic = "idiv" }   // signed div (special — v1 simplification)
-            if s.op == "and" { mnemonic = "and" }
-            if s.op == "or"  { mnemonic = "or"  }
-            if s.op == "xor" { mnemonic = "xor" }
+            if _x86_is_arith_add(s.op) { mnemonic = "add" }
+            if _x86_is_arith_sub(s.op) { mnemonic = "sub" }
+            if _x86_is_arith_mul(s.op) { mnemonic = "imul" }
+            if _x86_is_arith_div(s.op) { mnemonic = "idiv" }
+            if _x86_is_bit_and(s.op)   { mnemonic = "and" }
+            if _x86_is_bit_or(s.op)    { mnemonic = "or"  }
+            if _x86_is_bit_xor(s.op)   { mnemonic = "xor" }
             buf.push(_instr2(mnemonic, dst, b, "binop " + s.op))
         }
         return buf
     }
     if s.kind == _STMT_CALL {
+        // Marshal args into rdi, rsi, rdx, rcx, r8, r9. Args >= 6
+        // spill to stack — TODO (RFC-018 §4 — overflow on stack).
+        let mut i = 0
+        while i < len(s.args) {
+            let src = _x86_64_op_for_operand_st(s.args[i], st)
+            if i < 6 {
+                let dst_reg = _op_reg(_x86_64_arg_reg_seq(i))
+                buf.push(_instr2("mov", dst_reg, src, "arg " + to_string(i)))
+            } else {
+                buf.push(_instr0("nop",
+                    "TODO: spill arg " + to_string(i) + " to stack"))
+            }
+            i = i + 1
+        }
         let target = s.op
         buf.push(_instr1("call", _op_label(target), "call " + target))
         if s.dst.id >= 0 {
             let dst = _op_reg(_x86_64_reg_for_local(s.dst.id))
-            // Result is in rax; move into dst if needed
             if dst.reg.name != "rax" {
                 buf.push(_instr2("mov", dst, _op_reg("rax"), "capture call result"))
             }
@@ -198,7 +295,7 @@ fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
     }
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
-            let src = _x86_64_op_for_operand(s.args[0])
+            let src = _x86_64_op_for_operand_st(s.args[0], st)
             buf.push(_instr2("mov", _op_reg("rax"), src, "set return value"))
         }
         // epilogue
@@ -212,14 +309,31 @@ fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
         return buf
     }
     if s.kind == _STMT_BR_COND {
+        // test <reg>, <reg> ; jz .Lelse ; jmp .Lthen
         if len(s.args) >= 1 {
-            let cond = _x86_64_op_for_operand(s.args[0])
-            buf.push(_instr2("cmp", cond, _op_imm(0), "br_cond test"))
+            let cond = _x86_64_op_for_operand_st(s.args[0], st)
+            buf.push(_instr2("test", cond, cond, "br_cond test"))
             let else_lab = _x86_64_block_label(fname, s.target_block_else)
-            buf.push(_instr1("je", _op_label(else_lab), "jump-if-zero -> else"))
+            buf.push(_instr1("jz", _op_label(else_lab), "jump-if-zero -> else"))
         }
         let then_lab = _x86_64_block_label(fname, s.target_block)
         buf.push(_instr1("jmp", _op_label(then_lab), "jump -> then"))
+        return buf
+    }
+    if s.kind == "load" {
+        let dst = _op_reg(_x86_64_reg_for_local(s.dst.id))
+        if len(s.args) >= 1 {
+            let base_op = _x86_64_op_for_operand_st(s.args[0], st)
+            buf.push(_instr2("mov", dst, base_op, "load"))
+        }
+        return buf
+    }
+    if s.kind == "store" {
+        if len(s.args) >= 2 {
+            let base_op = _x86_64_op_for_operand_st(s.args[0], st)
+            let src = _x86_64_op_for_operand_st(s.args[1], st)
+            buf.push(_instr2("mov", base_op, src, "store"))
+        }
         return buf
     }
     buf.push(_instr0("nop", "unhandled stmt kind " + s.kind))
@@ -228,7 +342,7 @@ fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt) -> [LInstr] {
 
 // ── Function lowering ────────────────────────────────────────
 
-fn _x86_64_lower_func(mf: MFunc) -> LFunc {
+fn _x86_64_lower_func(mf: MFunc, st: X86StrTab) -> LFunc {
     let mut instrs = []
 
     // Prologue
@@ -255,7 +369,7 @@ fn _x86_64_lower_func(mf: MFunc) -> LFunc {
         instrs.push(_instr0("label", _x86_64_block_label(mf.name, blk.id)))
         let mut si = 0
         while si < len(blk.stmts) {
-            instrs = _emit_x86_64_stmt(instrs, mf.name, blk.stmts[si])
+            instrs = _emit_x86_64_stmt(instrs, mf.name, blk.stmts[si], st)
             si = si + 1
         }
         bi = bi + 1
@@ -286,20 +400,220 @@ fn _x86_64_lower_func(mf: MFunc) -> LFunc {
     }
 }
 
+// ── String table collection ─────────────────────────────────
+//
+// Mirror of arm64_darwin.hexa _build_arm_strtab. Both targets keep
+// independent string tables so the per-target codegen does not need
+// cross-target imports, but they use the same label scheme
+// (".LCstr<N>") so a shared MIR yields stable labels.
+
+fn _x86_collect_strs_from_stmt(st: X86StrTab, s: Stmt) -> X86StrTab {
+    let mut out = st
+    let mut i = 0
+    while i < len(s.args) {
+        let o = s.args[i]
+        if o.kind == "const_str" {
+            if len(_x86_strtab_lookup(out, o.str_val)) == 0 {
+                let mut keys = out.keys
+                let mut labs = out.labels
+                let n = len(keys)
+                keys.push(o.str_val)
+                labs.push(".LCstr" + to_string(n))
+                out = X86StrTab { keys: keys, labels: labs }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn _build_x86_strtab(module: MModule) -> X86StrTab {
+    let mut st = X86StrTab { keys: [], labels: [] }
+    let mut fi = 0
+    while fi < len(module.funcs) {
+        let f = module.funcs[fi]
+        let mut bi = 0
+        while bi < len(f.blocks) {
+            let blk = f.blocks[bi]
+            let mut si = 0
+            while si < len(blk.stmts) {
+                st = _x86_collect_strs_from_stmt(st, blk.stmts[si])
+                si = si + 1
+            }
+            bi = bi + 1
+        }
+        fi = fi + 1
+    }
+    return st
+}
+
+fn _x86_hex_nibble(n: i64) -> string {
+    if n == 0  { return "0" }
+    if n == 1  { return "1" }
+    if n == 2  { return "2" }
+    if n == 3  { return "3" }
+    if n == 4  { return "4" }
+    if n == 5  { return "5" }
+    if n == 6  { return "6" }
+    if n == 7  { return "7" }
+    if n == 8  { return "8" }
+    if n == 9  { return "9" }
+    if n == 10 { return "a" }
+    if n == 11 { return "b" }
+    if n == 12 { return "c" }
+    if n == 13 { return "d" }
+    if n == 14 { return "e" }
+    return "f"
+}
+
+fn _x86_byte_to_hex(b: i64) -> string {
+    let hi = b / 16
+    let lo = b - hi * 16
+    return _x86_hex_nibble(hi) + _x86_hex_nibble(lo)
+}
+
+fn _x86_ascii_code(ch: string) -> i64 {
+    if ch == " " { return 32 }
+    if ch == "!" { return 33 }
+    if ch == "\"" { return 34 }
+    if ch == "#" { return 35 }
+    if ch == "$" { return 36 }
+    if ch == "%" { return 37 }
+    if ch == "&" { return 38 }
+    if ch == "'" { return 39 }
+    if ch == "(" { return 40 }
+    if ch == ")" { return 41 }
+    if ch == "*" { return 42 }
+    if ch == "+" { return 43 }
+    if ch == "," { return 44 }
+    if ch == "-" { return 45 }
+    if ch == "." { return 46 }
+    if ch == "/" { return 47 }
+    if ch == "0" { return 48 }
+    if ch == "1" { return 49 }
+    if ch == "2" { return 50 }
+    if ch == "3" { return 51 }
+    if ch == "4" { return 52 }
+    if ch == "5" { return 53 }
+    if ch == "6" { return 54 }
+    if ch == "7" { return 55 }
+    if ch == "8" { return 56 }
+    if ch == "9" { return 57 }
+    if ch == ":" { return 58 }
+    if ch == ";" { return 59 }
+    if ch == "<" { return 60 }
+    if ch == "=" { return 61 }
+    if ch == ">" { return 62 }
+    if ch == "?" { return 63 }
+    if ch == "@" { return 64 }
+    if ch == "A" { return 65 }
+    if ch == "B" { return 66 }
+    if ch == "C" { return 67 }
+    if ch == "D" { return 68 }
+    if ch == "E" { return 69 }
+    if ch == "F" { return 70 }
+    if ch == "G" { return 71 }
+    if ch == "H" { return 72 }
+    if ch == "I" { return 73 }
+    if ch == "J" { return 74 }
+    if ch == "K" { return 75 }
+    if ch == "L" { return 76 }
+    if ch == "M" { return 77 }
+    if ch == "N" { return 78 }
+    if ch == "O" { return 79 }
+    if ch == "P" { return 80 }
+    if ch == "Q" { return 81 }
+    if ch == "R" { return 82 }
+    if ch == "S" { return 83 }
+    if ch == "T" { return 84 }
+    if ch == "U" { return 85 }
+    if ch == "V" { return 86 }
+    if ch == "W" { return 87 }
+    if ch == "X" { return 88 }
+    if ch == "Y" { return 89 }
+    if ch == "Z" { return 90 }
+    if ch == "[" { return 91 }
+    if ch == "\\" { return 92 }
+    if ch == "]" { return 93 }
+    if ch == "^" { return 94 }
+    if ch == "_" { return 95 }
+    if ch == "`" { return 96 }
+    if ch == "a" { return 97 }
+    if ch == "b" { return 98 }
+    if ch == "c" { return 99 }
+    if ch == "d" { return 100 }
+    if ch == "e" { return 101 }
+    if ch == "f" { return 102 }
+    if ch == "g" { return 103 }
+    if ch == "h" { return 104 }
+    if ch == "i" { return 105 }
+    if ch == "j" { return 106 }
+    if ch == "k" { return 107 }
+    if ch == "l" { return 108 }
+    if ch == "m" { return 109 }
+    if ch == "n" { return 110 }
+    if ch == "o" { return 111 }
+    if ch == "p" { return 112 }
+    if ch == "q" { return 113 }
+    if ch == "r" { return 114 }
+    if ch == "s" { return 115 }
+    if ch == "t" { return 116 }
+    if ch == "u" { return 117 }
+    if ch == "v" { return 118 }
+    if ch == "w" { return 119 }
+    if ch == "x" { return 120 }
+    if ch == "y" { return 121 }
+    if ch == "z" { return 122 }
+    if ch == "{" { return 123 }
+    if ch == "|" { return 124 }
+    if ch == "}" { return 125 }
+    if ch == "~" { return 126 }
+    if ch == "\n" { return 10 }
+    if ch == "\t" { return 9 }
+    return 63
+}
+
+fn _x86_str_to_hex_bytes(s: string) -> string {
+    let cs = s.chars()
+    let mut out = ""
+    let mut i = 0
+    while i < len(cs) {
+        out = out + _x86_byte_to_hex(_x86_ascii_code(cs[i]))
+        i = i + 1
+    }
+    out = out + "00"
+    return out
+}
+
+fn _x86_strtab_to_rodata(st: X86StrTab) -> [LSection] {
+    let mut out: [LSection] = []
+    let mut i = 0
+    while i < len(st.keys) {
+        out.push(LSection {
+            name: st.labels[i],
+            bytes: _x86_str_to_hex_bytes(st.keys[i]),
+            align: 0
+        })
+        i = i + 1
+    }
+    return out
+}
+
 // ── Module entry point ───────────────────────────────────────
 
 pub fn codegen_x86_64_linux(module: MModule) -> LModule {
+    let st = _build_x86_strtab(module)
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
-        funcs.push(_x86_64_lower_func(module.funcs[i]))
+        funcs.push(_x86_64_lower_func(module.funcs[i], st))
         i = i + 1
     }
     return LModule {
         file: module.file,
         target: "x86_64-linux-gnu",
         funcs: funcs,
-        rodata: [],
+        rodata: _x86_strtab_to_rodata(st),
         bss: []
     }
 }

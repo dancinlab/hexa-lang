@@ -1,0 +1,242 @@
+// M0 milestone — codegen broadening (Gap 15) concat smoke test.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds the MIR equivalent of:
+//
+//   fn greet(name: string) -> string { return "hi " + name }
+//
+// then runs `codegen_arm64_darwin` + `codegen_x86_64_linux` followed
+// by `emit_asm`. Asserts that the produced .s text contains:
+//   - the `.LCstr0` rodata label (or its content),
+//   - a call to the `hexa_str_concat` runtime stub (`bl _hexa_str_concat`
+//     on darwin, `call hexa_str_concat` on linux),
+//   - arg-marshal mov pairs into the AAPCS64 / System V arg regs,
+//   - both targets produce a non-empty rodata section containing
+//     the bytes 0x68 0x69 0x20 (= "hi ") followed by 0x00 NUL.
+//
+// Driven by stage0 hexa interpreter:
+//   RESOURCE_LOCAL_HEXA=1 hexa_interp run tests/m0/concat_test.hexa
+//
+// Exit codes: 0 = PASS, 1 = FAIL.
+
+import "../../compiler/ir/mir.hexa"
+import "../../compiler/ir/lir.hexa"
+import "../../compiler/codegen/arm64_darwin.hexa"
+import "../../compiler/codegen/x86_64_linux.hexa"
+import "../../compiler/emit/asm.hexa"
+
+// ── MIR construction helpers (mirror codegen_test.hexa style) ─
+
+fn _local(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name }
+}
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local",
+        local_id: local_id,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _op_const_str(s: string) -> Operand {
+    return Operand {
+        kind: "const_str",
+        local_id: -1,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: s,
+        global_id: -1
+    }
+}
+
+fn _stmt_binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: op,
+        args: xs, target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_return(src: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(src)
+    return Stmt {
+        kind: STMT_RETURN, dst: _miss_local(), op: "",
+        args: xs, target_block: -1, target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+// ── Build the greet(name) MIR ───────────────────────────────
+
+fn _build_greet() -> MModule {
+    // Locals: 0=name (param), 1=tmp (concat result), 2=ret_local
+    let name = _local(0, "name")
+    let tmp  = _local(1, "tmp")
+    let retL = _local(2, "ret")
+
+    let mut stmts = []
+    // tmp = "hi " concat name
+    stmts.push(_stmt_binop(tmp, "concat", _op_const_str("hi "), _op_local(name.id)))
+    // return tmp
+    stmts.push(_stmt_return(_op_local(tmp.id)))
+
+    let mut blocks = []
+    blocks.push(_block(0, stmts))
+
+    let mut params = []
+    params.push(name)
+    let mut locals = []
+    locals.push(name)
+    locals.push(tmp)
+    locals.push(retL)
+
+    let mf = MFunc {
+        name: "greet",
+        params: params,
+        return_local: retL,
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "concat.hexa", funcs: fns, globals: [] }
+}
+
+// ── Substring helper (no string.contains in stage0) ─────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    let h = hay.chars()
+    let n = needle.chars()
+    let hn = len(h)
+    let nn = len(n)
+    if nn == 0 { return true }
+    if nn > hn { return false }
+    let mut i = 0
+    while i + nn < hn + 1 {
+        let mut j = 0
+        let mut ok = true
+        while j < nn {
+            if h[i + j] != n[j] {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Per-target driver ───────────────────────────────────────
+
+fn _run_target(label: string, target: string,
+               want_call: string,
+               want_arg0_reg: string, want_arg1_reg: string) -> bool {
+    println("")
+    println("── " + label + " (" + target + ") ──")
+
+    let mm = _build_greet()
+    let mut lm = codegen_arm64_darwin(mm)
+    if target == "x86_64-linux-gnu" { lm = codegen_x86_64_linux(mm) }
+    let asm = emit_asm(lm)
+
+    println("  emit_asm output (" + to_string(len(asm.chars())) + " bytes):")
+    println("------ BEGIN .s ------")
+    println(asm)
+    println("------- END .s -------")
+
+    let mut ok = true
+
+    // 1. Rodata label `.LCstr0` present and a label line.
+    if !_contains(asm, ".LCstr0:") {
+        println("  FAIL: missing `.LCstr0:` rodata label")
+        ok = false
+    } else { println("  ok: rodata label `.LCstr0:` present") }
+
+    // 2. Rodata bytes for "hi " (0x68, 0x69, 0x20) followed by NUL (0x00).
+    if !_contains(asm, "0x68, 0x69, 0x20, 0x00") {
+        println("  FAIL: missing 'hi ' bytes in rodata payload")
+        ok = false
+    } else { println("  ok: rodata bytes for 'hi ' + NUL present") }
+
+    // 3. Concat runtime call.
+    if !_contains(asm, want_call) {
+        println("  FAIL: missing concat call `" + want_call + "`")
+        ok = false
+    } else { println("  ok: concat call present") }
+
+    // 4. Arg-marshal mov-pairs.
+    if !_contains(asm, want_arg0_reg) {
+        println("  FAIL: missing arg0 register `" + want_arg0_reg + "`")
+        ok = false
+    } else { println("  ok: arg0 register write present") }
+    if !_contains(asm, want_arg1_reg) {
+        println("  FAIL: missing arg1 register `" + want_arg1_reg + "`")
+        ok = false
+    } else { println("  ok: arg1 register write present") }
+
+    // 5. .rodata section directive.
+    let rodata_dir_dar = ".section __TEXT,__const"
+    let rodata_dir_lin = ".section .rodata"
+    let rodata_dir = rodata_dir_lin
+    if target == "arm64-apple-darwin" { rodata_dir = rodata_dir_dar }
+    if !_contains(asm, rodata_dir) {
+        println("  FAIL: missing rodata section directive `" + rodata_dir + "`")
+        ok = false
+    } else { println("  ok: rodata section directive present") }
+
+    return ok
+}
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  M0 — concat smoke (Gap 15 codegen broadening)")
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+
+    // arm64-apple-darwin: `bl _hexa_str_concat`, args in x0/x1.
+    let ok_arm = _run_target("arm64 / apple-darwin",
+                             "arm64-apple-darwin",
+                             "bl _hexa_str_concat",
+                             "mov x0,",
+                             "mov x1,")
+    if !ok_arm { ok = false }
+
+    // x86_64-linux-gnu: `call hexa_str_concat`, args in rdi/rsi.
+    let ok_x86 = _run_target("x86_64 / linux-gnu",
+                             "x86_64-linux-gnu",
+                             "call hexa_str_concat",
+                             "mov rdi,",
+                             "mov rsi,")
+    if !ok_x86 { ok = false }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: concat smoke — runtime call + rodata both targets.")
+        exit(0)
+    }
+    println("FAIL: concat smoke contract not satisfied.")
+    println("══════════════════════════════════════════════")
+    exit(1)
+}

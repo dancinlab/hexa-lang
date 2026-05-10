@@ -97,6 +97,20 @@ fn _fmt_label(target: string, label: string) -> string {
     return label
 }
 
+// Some opcodes carry a non-symbol identifier as one of their operands,
+// e.g. arm64 `cset Xd, <cond>` where `<cond>` is `eq`/`ne`/`lt`/.../`ge`.
+// These must render bare — never platform-prefixed — even though they
+// are typed in LIR as `kind="label"`. Centralise the list here so both
+// emit-side and codegen-side stay in sync.
+fn _is_cc_carrying_op(op: string) -> bool {
+    if op == "cset"    { return true }
+    if op == "csel"    { return true }
+    if op == "csinc"   { return true }
+    if op == "csinv"   { return true }
+    if op == "csneg"   { return true }
+    return false
+}
+
 fn _fmt_operand(target: string, op: LOperand) -> string {
     if op.kind == "reg"   { return _fmt_reg(target, op.reg) }
     if op.kind == "imm"   { return _fmt_imm(target, op.imm) }
@@ -106,12 +120,30 @@ fn _fmt_operand(target: string, op: LOperand) -> string {
     return "<?" + op.kind + "?>"
 }
 
+fn _fmt_operand_for_op(target: string, parent_op: string, idx: i64, op: LOperand) -> string {
+    if op.kind == "label" && _is_cc_carrying_op(parent_op) && idx > 0 {
+        return op.label
+    }
+    return _fmt_operand(target, op)
+}
+
 fn _fmt_args(target: string, args: [LOperand]) -> string {
     let mut out = ""
     let mut i = 0
     while i < len(args) {
         if i > 0 { out = out + ", " }
         out = out + _fmt_operand(target, args[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn _fmt_args_for_op(target: string, parent_op: string, args: [LOperand]) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(args) {
+        if i > 0 { out = out + ", " }
+        out = out + _fmt_operand_for_op(target, parent_op, i, args[i])
         i = i + 1
     }
     return out
@@ -133,7 +165,7 @@ fn _fmt_instr(target: string, instr: LInstr) -> string {
     }
     let mut line = "    " + instr.op
     if len(instr.args) > 0 {
-        line = line + " " + _fmt_args(target, instr.args)
+        line = line + " " + _fmt_args_for_op(target, instr.op, instr.args)
     }
     if len(instr.comment) > 0 {
         line = line + _comment_marker(target) + instr.comment
