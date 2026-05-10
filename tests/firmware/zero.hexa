@@ -1,0 +1,9 @@
+// F3 firmware fixture — minimal "return 0" program.
+//
+// Used by tests/firmware/zero_test.hexa to exercise the
+// thumbv7em-none-eabihf codegen + emit asm path. No host-stdlib
+// imports → target_gate_check accepts under --target=thumbv7em-none-eabihf.
+
+fn main() -> i32 {
+    return 0
+}

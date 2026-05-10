@@ -1,0 +1,187 @@
+// F3 firmware test — thumbv7em-none-eabihf asm-only success path.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-builds the MIR for the source-level program
+//
+//     fn main() -> i32 { return 0 }
+//
+// then runs `codegen_thumbv7em_eabihf` followed by `emit_asm` and
+// asserts that the produced .s text contains all of the expected
+// Thumb-2 / Cortex-M4F directives and the zero-return body shape.
+//
+// Driven by stage0 hexa interpreter (no host MCU / qemu required —
+// F3 explicitly defers binary execution):
+//   RESOURCE_LOCAL_HEXA=1 hexa_interp run tests/firmware/zero_test.hexa
+//
+// Exit codes: 0 = PASS, 1 = FAIL.
+
+import "../../compiler/ir/mir.hexa"
+import "../../compiler/ir/lir.hexa"
+import "../../compiler/codegen/thumbv7em_eabihf.hexa"
+import "../../compiler/emit/asm.hexa"
+
+// ── MIR construction helpers ────────────────────────────────
+
+fn _local(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name }
+}
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+}
+
+fn _op_const_int(v: i64) -> Operand {
+    return Operand {
+        kind: "const_int", local_id: -1,
+        int_val: v, float_val: 0.0, str_val: "", global_id: -1
+    }
+}
+
+fn _stmt_return(src: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(src)
+    return Stmt {
+        kind: STMT_RETURN, dst: _miss_local(), op: "",
+        args: xs, target_block: -1, target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+fn _build_main() -> MModule {
+    let retL = _local(0, "ret")
+
+    let mut stmts = []
+    stmts.push(_stmt_return(_op_const_int(0)))
+
+    let mut blocks = []
+    blocks.push(_block(0, stmts))
+
+    let mut params = []
+    let mut locals = []
+    locals.push(retL)
+
+    let mf = MFunc {
+        name: "main",
+        params: params,
+        return_local: retL,
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "tests/firmware/zero.hexa", funcs: fns, globals: [] }
+}
+
+// ── Substring helper ────────────────────────────────────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    let h = hay.chars()
+    let n = needle.chars()
+    let hn = len(h)
+    let nn = len(n)
+    if nn == 0 { return true }
+    if nn > hn { return false }
+    let mut i = 0
+    while i + nn < hn + 1 {
+        let mut j = 0
+        let mut ok = true
+        while j < nn {
+            if h[i + j] != n[j] {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Driver ──────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  F3 — thumbv7em-none-eabihf zero-return smoke")
+    println("══════════════════════════════════════════════")
+
+    let mm = _build_main()
+    let lm = codegen_thumbv7em_eabihf(mm)
+    let asm = emit_asm(lm)
+
+    println("  emit_asm output (" + to_string(len(asm.chars())) + " bytes):")
+    println("------ BEGIN .s ------")
+    println(asm)
+    println("------- END .s -------")
+
+    let mut ok = true
+
+    // Required file-head directives.
+    if !_contains(asm, ".syntax unified") {
+        println("  FAIL: missing `.syntax unified` directive")
+        ok = false
+    } else { println("  ok: .syntax unified present") }
+
+    if !_contains(asm, ".cpu cortex-m4") {
+        println("  FAIL: missing `.cpu cortex-m4` directive")
+        ok = false
+    } else { println("  ok: .cpu cortex-m4 present") }
+
+    if !_contains(asm, ".fpu vfpv4-sp-d16") {
+        println("  FAIL: missing `.fpu vfpv4-sp-d16` directive")
+        ok = false
+    } else { println("  ok: .fpu vfpv4-sp-d16 present") }
+
+    if !_contains(asm, ".thumb") {
+        println("  FAIL: missing `.thumb` directive")
+        ok = false
+    } else { println("  ok: .thumb present") }
+
+    // Function label — Thumb / ELF: bare `main:` (no underscore prefix).
+    if !_contains(asm, "main:") {
+        println("  FAIL: missing `main:` label")
+        ok = false
+    } else { println("  ok: main: label present") }
+
+    // .thumb_func marker on the function symbol.
+    if !_contains(asm, ".thumb_func") {
+        println("  FAIL: missing `.thumb_func` marker on main")
+        ok = false
+    } else { println("  ok: .thumb_func marker present") }
+
+    // Body shape: `mov r0, #0` to set the return value.
+    if !_contains(asm, "mov r0, #0") {
+        println("  FAIL: missing `mov r0, #0` return-value setup")
+        ok = false
+    } else { println("  ok: mov r0, #0 present") }
+
+    // Epilogue: `pop {r4-r11, pc}` returns via pc pop.
+    if !_contains(asm, "pop {r4-r11, pc}") {
+        println("  FAIL: missing `pop {r4-r11, pc}` epilogue")
+        ok = false
+    } else { println("  ok: pop {r4-r11, pc} epilogue present") }
+
+    // Prologue: `push {r4-r11, lr}`.
+    if !_contains(asm, "push {r4-r11, lr}") {
+        println("  FAIL: missing `push {r4-r11, lr}` prologue")
+        ok = false
+    } else { println("  ok: push {r4-r11, lr} prologue present") }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: thumbv7em zero-return asm shape OK.")
+        println("══════════════════════════════════════════════")
+        exit(0)
+    }
+    println("FAIL: thumbv7em zero-return asm shape mismatch.")
+    println("══════════════════════════════════════════════")
+    exit(1)
+}

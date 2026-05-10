@@ -130,6 +130,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX1110",
+        title: "host-stdlib import in embedded target",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "host-stdlib import `{path}` is forbidden under --target=`{target}` (embedded targets only allow stdlib/core, stdlib/alloc, stdlib/hal, stdlib/embedded, stdlib/mcu)",
+        explain: "Targets matching `*-none-*` (e.g. thumbv7em-none-eabihf, riscv32imac-unknown-none-elf, thumbv6m-none-eabi) are bare-metal: they have no host OS, no libc, no syscall surface. Importing modules from the host stdlib (stdlib/io, stdlib/http, stdlib/json, ...) under these targets pulls in symbols the firmware linker cannot resolve and breaks the no_std contract documented in SPEC.yaml firmware_evolution. Allowed embedded-safe paths: `stdlib/core/*` (pure: int, slice, option, result, math), `stdlib/alloc/*` (allocator interface), `stdlib/hal/*` (hardware abstraction layer), `stdlib/embedded/*` (panic handler, no_std prelude), `stdlib/mcu/*` (MCU-specific drivers). Phase F3 deliverable: target_gate_check enforcement at compile time.",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
         code: "HX1099",
         title: "atlas L node is tombstoned",
         severity: Severity::Error,

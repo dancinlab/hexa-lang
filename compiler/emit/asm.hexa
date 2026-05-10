@@ -31,11 +31,16 @@ import "../ir/lir.hexa"
 
 pub let TARGET_DARWIN_ARM64 = "arm64-apple-darwin"
 pub let TARGET_LINUX_X86_64 = "x86_64-linux-gnu"
+pub let TARGET_THUMBV7EM_HF  = "thumbv7em-none-eabihf"
 
 // ── Operand formatting ──────────────────────────────────────
 
 fn _is_darwin(target: string) -> bool {
     return target == TARGET_DARWIN_ARM64
+}
+
+fn _is_thumb(target: string) -> bool {
+    return target == TARGET_THUMBV7EM_HF
 }
 
 fn _label_prefix(target: string) -> string {
@@ -45,6 +50,7 @@ fn _label_prefix(target: string) -> string {
 
 fn _comment_marker(target: string) -> string {
     if _is_darwin(target) { return " ; " }
+    if _is_thumb(target) { return " @ " }   // ARM/Thumb assembler line comment
     return " # "
 }
 
@@ -59,6 +65,10 @@ fn _fmt_imm(target: string, imm: i64) -> string {
         // Apple ARM64 immediates: `#42`
         return "#" + to_string(imm)
     }
+    if _is_thumb(target) {
+        // ARM Thumb-2 immediates: `#42` (same syntax as ARM64 / GAS .arm)
+        return "#" + to_string(imm)
+    }
     // Intel x86 immediates: bare integer
     return to_string(imm)
 }
@@ -66,6 +76,13 @@ fn _fmt_imm(target: string, imm: i64) -> string {
 fn _fmt_mem(target: string, op: LOperand) -> string {
     if _is_darwin(target) {
         // Apple ARM64 memory: `[base, #offset]`
+        if op.mem_offset == 0 {
+            return "[" + op.mem_base.name + "]"
+        }
+        return "[" + op.mem_base.name + ", #" + to_string(op.mem_offset) + "]"
+    }
+    if _is_thumb(target) {
+        // ARM Thumb-2 memory: `[base, #offset]` — same shape as ARM64.
         if op.mem_offset == 0 {
             return "[" + op.mem_base.name + "]"
         }
@@ -93,6 +110,7 @@ fn _fmt_label(target: string, label: string) -> string {
     if first == "." { return label }   // already directive-like
     if first == "_" { return label }   // already prefixed
     if first == "[" { return label }   // raw addressing-mode literal (e.g. `[sp], #16`)
+    if first == "{" { return label }   // ARM register list literal (e.g. `{r4-r11, lr}`)
     if _is_darwin(target) { return "_" + label }
     return label
 }
@@ -179,6 +197,12 @@ fn _text_section_directive(target: string) -> string {
     if _is_darwin(target) {
         return ".section __TEXT,__text,regular,pure_instructions"
     }
+    if _is_thumb(target) {
+        // ELF text section — same as Linux ELF; the `.thumb_func`
+        // marker lives at the function-label site, not the section
+        // header.
+        return ".section .text"
+    }
     return ".text"
 }
 
@@ -263,6 +287,12 @@ fn _emit_func(target: string, f: LFunc) -> string {
     if _is_darwin(target) {
         // Apple/Mach-O: .p2align 2 (4-byte) for ARM64
         out = out + "    .p2align 2\n"
+    } else if _is_thumb(target) {
+        // Thumb-2 (Cortex-M4): 2-byte instruction alignment + the
+        // `.thumb_func` marker so the assembler sets the LSB on the
+        // symbol for branch-with-exchange compatibility.
+        out = out + "    .p2align 1\n"
+        out = out + "    .thumb_func\n"
     } else {
         // x86_64 ELF: 16-byte function alignment is the System V default
         out = out + "    .p2align 4\n"
@@ -286,8 +316,18 @@ pub fn emit_asm(module: LModule) -> string {
     out = out + _comment_marker(target).trim() + " hexa-lang emit pass — target=" + target + "\n"
     out = out + _comment_marker(target).trim() + " source: " + module.file + "\n"
 
-    // x86_64 GAS: select Intel syntax once at the top (RFC-018 §3 note).
-    if !_is_darwin(target) {
+    // Per-target file head directives.
+    if _is_thumb(target) {
+        // Cortex-M4F (armv7e-m / Thumb-2 / VFPv4-SP). The `.thumb`
+        // directive switches the assembler into Thumb mode for the
+        // remainder of the file; without it the default is ARM mode
+        // and every Thumb-only mnemonic (cbz, it, ...) would error.
+        out = out + ".syntax unified\n"
+        out = out + ".cpu cortex-m4\n"
+        out = out + ".fpu vfpv4-sp-d16\n"
+        out = out + ".thumb\n"
+    } else if !_is_darwin(target) {
+        // x86_64 GAS: select Intel syntax once at the top (RFC-018 §3 note).
         out = out + ".intel_syntax noprefix\n"
     }
 

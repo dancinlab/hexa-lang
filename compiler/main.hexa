@@ -36,6 +36,8 @@ import "./optimize/dce.hexa"
 import "./optimize/inline.hexa"
 import "./codegen/arm64_darwin.hexa"
 import "./codegen/x86_64_linux.hexa"
+import "./codegen/thumbv7em_eabihf.hexa"
+import "./check/target_gate.hexa"
 import "./emit/asm.hexa"
 import "./diag/catalog.hexa"
 import "./diag/builder.hexa"
@@ -467,6 +469,15 @@ let r0 = parse_diags()
 let mut k0 = 0
 while k0 < len(r0) { diags.push(r0[k0]); k0 = k0 + 1 }
 
+// F3 — target_gate_check. When --target is `*-none-*` (bare-metal),
+// any host-stdlib import surfaces as HX1110 BEFORE atlas resolve runs
+// so the user gets a clean firmware-ABI signal rather than a cascade
+// of resolve-time misses (host stdlib modules may not even be present
+// in an embedded checkout). See compiler/check/target_gate.hexa.
+let r_gate = target_gate_check(module, target)
+let mut kg = 0
+while kg < len(r_gate) { diags.push(r_gate[kg]); kg = kg + 1 }
+
 let r1 = resolve(module, atlas)
 let mut k = 0
 while k < len(r1) { diags.push(r1[k]); k = k + 1 }
@@ -603,9 +614,14 @@ if target == "arm64-apple-darwin" {
     lmodule = codegen_arm64_darwin(mmodule)
 } else if target == "x86_64-linux-gnu" {
     lmodule = codegen_x86_64_linux(mmodule)
+} else if target == "thumbv7em-none-eabihf" {
+    // F3 — bare-metal Cortex-M4F target (hexa-rtsc, hexa-chip,
+    // hexa-cern firmware boards). Soft-float fallback variant
+    // (`-eabi`) is a tier_2 follow-up; v1 ships hf only.
+    lmodule = codegen_thumbv7em_eabihf(mmodule)
 } else {
     eprintln("hexa-compiler: unsupported --target=" + target)
-    eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu")
+    eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf")
     exit(2)
 }
 

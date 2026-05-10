@@ -824,7 +824,25 @@ firmware_evolution:
       license_preserved: true
       citation_preserved: true
       absorb_date: "2026-05-10"
-    F3: { status: follow-up,     deliverable: thumbv7em-none-eabihf target in compiler/codegen }
+    F3:
+      status: this_commit
+      deliverable: "thumbv7em-none-eabihf target in compiler/codegen + target_gate_check enforcement (HX1110)"
+      codegen: compiler/codegen/thumbv7em_eabihf.hexa
+      gate_check: compiler/check/target_gate.hexa
+      diagnostic: "HX1110 (host-stdlib import in embedded target)"
+      tests:
+        zero_path: tests/firmware/zero_test.hexa            # asm-only success path
+        gate_check: tests/firmware/blink_test.hexa          # HX1110 enforcement
+      opcodes_v1: [mov, add, sub, mul, sdiv, udiv, and, orr, eor, ldr, str, push, pop, b, bl, cbz, cmp, it]
+      arg_pool: "r0..r3 (>=5th spills to stack — TODO marker)"
+      reg_pool: "r4..r6, r8..r11 (r7 reserved as fp)"
+      deferred:
+        - vfpv4_sp_fpu_instructions          # s0..s31 / d0..d15 — F3+ followup
+        - "struct_passing_by_value"          # >16B by reference (RFC-018 §4)
+        - longjmp_setjmp                     # (RFC-022 async path)
+        - large_immediate_literal_pool       # rely on assembler relaxation v1
+        - "fifth_arg_and_beyond_stack_spill" # AAPCS overflow-on-stack — F3+ followup
+      execution: not_attempted_in_F3     # qemu/hardware not required; asm-shape only
     F4:
       status: this_commit
       deliverable: "firmware/boards/{chip,cern,antimatter,space}/ absorptions"

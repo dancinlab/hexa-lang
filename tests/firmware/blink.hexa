@@ -1,0 +1,16 @@
+// F3 firmware fixture — blink program with a deliberately-bad import.
+//
+// `stdlib/core/int` is embedded-safe (target_gate_check accepts).
+// `stdlib/io` is host-only (println / file I/O / syscalls) — under
+// --target=thumbv7em-none-eabihf it MUST surface HX1110 at compile time.
+//
+// The fn body is a placeholder; the test fixture only exercises the
+// gate check, not the GPIO drive logic. A real blink would import
+// `stdlib/hal/gpio` and toggle a pin.
+
+import "stdlib/core/int"      // OK — pure leaf module
+import "stdlib/io"            // SHOULD FAIL with HX1110
+
+fn main() {
+    // placeholder — real blink would call hal/gpio toggle().
+}

@@ -1,0 +1,136 @@
+// HEXA Native Compiler — target_gate_check (Phase F3)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// SPEC.yaml firmware_evolution.target_gate_check: when --target is
+// `*-none-*` or `*-none-eabi*` (bare-metal triple), reject host-stdlib
+// imports. The allowed embedded-safe stdlib roots are:
+//
+//   stdlib/core/      pure leaf modules (int, slice, option, result, math)
+//   stdlib/alloc/     allocator interface (no host syscalls)
+//   stdlib/hal/       hardware abstraction layer
+//   stdlib/embedded/  panic handler, no_std prelude
+//   stdlib/mcu/       MCU-specific drivers
+//
+// Anything else under `stdlib/...` is host-only (io, http, json, ...)
+// and emits HX1110 at compile time so the firmware build cannot
+// silently link against host symbols.
+//
+//   pub fn target_gate_check(mod: Module, target: string) -> [Diagnostic]
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
+
+// Local mirror of parser.hexa::item_is_import — keeps target_gate.hexa
+// independent of the parser symbol surface so unit tests can import this
+// module without dragging the lexer + parser splice into the test
+// process.
+fn _tg_is_import(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Import -> true,
+        ItemKind::Fn -> false,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false
+    }
+}
+
+// ── String helpers (local; stage0 has no slice / starts_with intrinsic) ──
+
+fn _tg_starts_with(s: string, prefix: string) -> bool {
+    let cs = s.chars()
+    let ps = prefix.chars()
+    if len(ps) > len(cs) { return false }
+    let mut i = 0
+    while i < len(ps) {
+        if cs[i] != ps[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _tg_contains(hay: string, needle: string) -> bool {
+    let h = hay.chars()
+    let n = needle.chars()
+    let hn = len(h)
+    let nn = len(n)
+    if nn == 0 { return true }
+    if nn > hn { return false }
+    let mut i = 0
+    while i + nn < hn + 1 {
+        let mut j = 0
+        let mut ok = true
+        while j < nn {
+            if h[i + j] != n[j] { ok = false; break }
+            j = j + 1
+        }
+        if ok { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Public predicates ───────────────────────────────────────
+
+// Triples shaped `*-none-*` (e.g. thumbv7em-none-eabihf,
+// riscv32imac-unknown-none-elf, thumbv6m-none-eabi). The substring
+// `-none-` is the canonical bare-metal marker per LLVM/Rust target
+// triple convention.
+pub fn is_embedded_target(t: string) -> bool {
+    return _tg_contains(t, "-none-")
+}
+
+pub fn is_embedded_safe_stdlib(path: string) -> bool {
+    if _tg_starts_with(path, "stdlib/core/")     { return true }
+    if _tg_starts_with(path, "stdlib/alloc/")    { return true }
+    if _tg_starts_with(path, "stdlib/hal/")      { return true }
+    if _tg_starts_with(path, "stdlib/embedded/") { return true }
+    if _tg_starts_with(path, "stdlib/mcu/")      { return true }
+    // Bare top-level paths (e.g. `stdlib/core` without trailing slash)
+    // — directory-form import is the same root.
+    if path == "stdlib/core"     { return true }
+    if path == "stdlib/alloc"    { return true }
+    if path == "stdlib/hal"      { return true }
+    if path == "stdlib/embedded" { return true }
+    if path == "stdlib/mcu"      { return true }
+    return false
+}
+
+pub fn is_host_stdlib_import(path: string) -> bool {
+    // We only flag imports that *originate* from the stdlib tree. A
+    // user's relative import (./foo, ../bar) or a third-party module
+    // path is the user's responsibility, not the gate's.
+    if !_tg_starts_with(path, "stdlib/") {
+        return false
+    }
+    return !is_embedded_safe_stdlib(path)
+}
+
+// ── Public entry point ──────────────────────────────────────
+//
+// Walk module.items, filter by ItemKind::Import, and emit HX1110 for
+// every host-stdlib import when the target is bare-metal. Empty result
+// when target is non-embedded — the gate is opt-in by triple shape, not
+// a global policy.
+
+pub fn target_gate_check(m: Module, target: string) -> [Diagnostic] {
+    let mut out: [Diagnostic] = []
+    if !is_embedded_target(target) { return out }
+    let mut i = 0
+    while i < len(m.items) {
+        let it = m.items[i]
+        if _tg_is_import(it.kind) {
+            if is_host_stdlib_import(it.name) {
+                let mut b = diag_new("HX1110")
+                b = diag_span(b, it.span)
+                b = diag_arg(b, "path", it.name)
+                b = diag_arg(b, "target", target)
+                out.push(diag_emit(b))
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
