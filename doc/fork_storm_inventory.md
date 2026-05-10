@@ -21,18 +21,26 @@ Total: **1403** `exec()` call sites across **265** files.
 
 ## Category histogram (top-10, by leading command word)
 
-| Rank | Category    | Count | Notes                                        |
-| ---- | ----------- | ----- | -------------------------------------------- |
-| 1    | `date`      | 160   | wall-clock / timestamp formatting            |
-| 2    | `rm`        | 123   | filesystem deletion                          |
-| 3    | `echo`      | 110   | env probe (`echo $HOME`, `echo $$`)          |
-| 4    | `test`      |  85   | path / file existence probes                 |
-| 5    | `uname`     |  84   | host / arch detection                        |
-| 6    | `mkdir`     |  78   | directory creation                           |
-| 7    | `pwd`       |  58   | current working directory                    |
-| 8    | `ls`        |  56   | directory listing                            |
-| 9    | `cd`        |  45   | shell-state path mutation (always paired)    |
-| 10   | `git`       |  38   | repo metadata (rev-parse, log, status)       |
+Status legend: **v0-absorbed** = a `compiler/intrinsics/intrinsics.hexa`
+function exists for this category; bodies still fork once but the surface
+is closed at the call site. **pending** = no intrinsic yet.
+
+| Rank | Category    | Count | Status        | Notes                                        |
+| ---- | ----------- | ----- | ------------- | -------------------------------------------- |
+| 1    | `date`      | 160   | v0-absorbed   | wall-clock / timestamp formatting            |
+| 2    | `rm`        | 123   | v0-absorbed   | filesystem deletion                          |
+| 3    | `echo`      | 110   | v0-absorbed   | env probe (`echo $HOME`, `echo $$`)          |
+| 4    | `test`      |  85   | v0-absorbed   | path / file existence probes                 |
+| 5    | `uname`     |  84   | v0-absorbed   | host / arch detection                        |
+| 6    | `mkdir`     |  78   | v0-absorbed   | directory creation                           |
+| 7    | `pwd`       |  58   | pending       | current working directory                    |
+| 8    | `ls`        |  56   | pending       | directory listing                            |
+| 9    | `cd`        |  45   | pending       | shell-state path mutation (always paired)    |
+| 10   | `git`       |  38   | pending       | repo metadata (rev-parse, log, status)       |
+
+Cumulative v0-absorbed sites: **638** (160 + 123 + 110 + 85 + 84 + 78).
+Pending in top-10: **197** (58 + 56 + 45 + 38). Long-tail commands not
+counted here.
 
 The long tail (wc, grep, cat, cp, basename, dirname, awk, printf, stat, …)
 adds another ~300 calls.
@@ -67,19 +75,19 @@ times in build-hot paths.
 
 | Category | Intrinsic                         | Effort | Notes                                                  |
 | -------- | --------------------------------- | ------ | ------------------------------------------------------ |
-| date     | `now_ns()` + `format_utc(ns,fmt)` | S      | shipped (this RFC) — date-of-day formatter is L1       |
-| uname    | `host_target() -> string`         | S      | shipped — compile-time const at native v1              |
-| mkdir    | `mkdir_p(path)`                   | S      | shipped — libc/syscall at native v1                    |
-| rm       | `rm_rf(path)`                     | M      | recursion in hexa, single syscall trap per inode at v2 |
-| test     | `path_exists`, `is_dir`, `is_file`| S      | three thin wrappers around `stat()`                    |
-| echo     | `getenv(name)`                    | S      | env table lookup; no fork ever needed                  |
-| pwd      | `getcwd()`                        | S      | libc `getcwd()` / Linux 79                             |
-| ls       | `list_dir(path) -> [string]`      | M      | `opendir`/`readdir`; needs allocator integration       |
-| cd       | (call-site rewrite)               | M      | most `cd && X` collapses into absolute paths           |
-| git      | `git_rev_parse_head()` + small    | L      | keep as exec for v0; eventually parse `.git/HEAD`      |
-| cat      | `read_file(path)`                 | S      | already exists in stdlib for most call sites           |
-| cp       | `copy_file(src, dst)`             | S      | read+write; sendfile() at v2 on Linux                  |
-| awk/sed  | (call-site rewrite)               | L      | bring the formatting into hexa                         |
+| date     | `now_ns()` + `format_utc(ns,fmt)` | S      | shipped — v0 fork; v1 clock_gettime FFI; v2 syscall 228|
+| uname    | `host_target() -> string`         | S      | shipped — v0 fork; v1 compile-time constant            |
+| mkdir    | `mkdir_p(path)`                   | S      | shipped — v0 fork; v1 libc walk; v2 mkdirat 258        |
+| rm       | `rm_rf(path)` + `rm_file(path)`   | M      | shipped — v0 fork; v1 opendir/unlink FFI; v2 unlink 87 |
+| test     | `path_exists`, `path_is_dir`      | S      | shipped — v0 fork; v1 libc stat; v2 access 21          |
+| echo     | `getenv(name)`                    | S      | shipped — v0 validates name then forks; v1 libc getenv |
+| pwd      | `getcwd()`                        | S      | pending — libc `getcwd()` / Linux 79                   |
+| ls       | `list_dir(path) -> [string]`      | M      | pending — `opendir`/`readdir`; needs allocator         |
+| cd       | (call-site rewrite)               | M      | pending — most `cd && X` collapses into absolute paths |
+| git      | `git_rev_parse_head()` + small    | L      | pending — keep as exec for v0; eventually parse `.git` |
+| cat      | `read_file(path)`                 | S      | pending — already exists in stdlib for most call sites |
+| cp       | `copy_file(src, dst)`             | S      | pending — read+write; sendfile() at v2 on Linux        |
+| awk/sed  | (call-site rewrite)               | L      | pending — bring the formatting into hexa               |
 
 ## L0 → L3 ladder reference
 
@@ -101,13 +109,17 @@ times in build-hot paths.
 
 ## Migration sequencing
 
-1. Land `compiler/intrinsics/intrinsics.hexa` (this RFC).
-2. Rewrite `compiler/main.hexa`, `compiler/link/hexa_ld.hexa`, and
+1. Land `compiler/intrinsics/intrinsics.hexa` (this RFC). **Done.**
+2. Add `rm_rf`, `rm_file`, `getenv`, `path_exists`, `path_is_dir` as the
+   second batch of intrinsics — covers an additional ~318 sites
+   (rm 123 + echo 110 + test 85). **Done 2026-05-09.**
+3. Rewrite `compiler/main.hexa`, `compiler/link/hexa_ld.hexa`, and
    `compiler/discover/*.hexa` call sites — these are in the build hot
-   path. Estimated 30 sites, S effort.
-3. Add `path_exists`, `read_file`, `getenv` as the next batch of
-   intrinsics — covers ~280 more sites in `tool/`.
-4. Land L2 (libc FFI) bodies once hexa's C-FFI lands cleanly.
-5. Land L3 syscall bodies once the codegen knows the platform's
+   path. Estimated 30 sites, S effort. **Pending (issue #58 + future
+   batches).**
+4. Add `getcwd`, `list_dir` as the third batch of intrinsics — covers
+   the next ~114 sites (pwd 58 + ls 56). **Pending.**
+5. Land L2 (libc FFI) bodies once hexa's C-FFI lands cleanly.
+6. Land L3 syscall bodies once the codegen knows the platform's
    syscall convention. At that point per-build forks = 2 (`as`, `ld`)
    and the goal is met.

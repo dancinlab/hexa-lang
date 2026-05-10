@@ -54,10 +54,59 @@ fn test_mkdir_p() {
     // can confirm. Test does not require teardown.
 }
 
+fn test_rm_file() {
+    // Write a file, rm it, verify gone. We use exec() here only because
+    // the stdlib write_file wrapper isn't reachable from this module yet
+    // in stage0; the point under test is rm_file, not the writer.
+    let path = "/tmp/_hexa_intrinsics_rm_file.txt"
+    let _ = exec("printf hello > '" + path + "' 2>/dev/null")
+    assert(path_exists(path), "rm_file: file written")
+    let rc = rm_file(path)
+    assert(rc == 0, "rm_file rc==0")
+    assert(!path_exists(path), "rm_file: file gone")
+    // Idempotent — removing a missing file is success.
+    let rc2 = rm_file(path)
+    assert(rc2 == 0, "rm_file idempotent on missing")
+    // Empty path rejected.
+    let rc3 = rm_file("")
+    assert(rc3 != 0, "rm_file('') rejected")
+}
+
+fn test_getenv() {
+    // HOME is set in every POSIX shell session.
+    let h = getenv("HOME")
+    assert(h != "", "getenv(HOME) non-empty")
+    // A name that almost certainly does not exist.
+    let none = getenv("HEXA_DEFINITELY_UNSET_VAR_XYZ")
+    assert(none == "", "getenv(unset) empty")
+    // Shell-injection guard — illegal chars must short-circuit to "".
+    let bad = getenv("FOO; rm -rf /")
+    assert(bad == "", "getenv rejects metacharacters")
+    // Lowercase also rejected by the strict charset.
+    let lower = getenv("home")
+    assert(lower == "", "getenv rejects lowercase")
+}
+
+fn test_path_exists_and_is_dir() {
+    // /tmp exists and is a directory on every POSIX host we target.
+    assert(path_exists("/tmp"), "path_exists(/tmp)")
+    assert(path_is_dir("/tmp"), "path_is_dir(/tmp)")
+    // A path that should not exist.
+    let phantom = "/tmp/_hexa_nonexistent_xyz_zzz"
+    assert(!path_exists(phantom), "path_exists(phantom) false")
+    assert(!path_is_dir(phantom), "path_is_dir(phantom) false")
+    // Empty path uniformly false.
+    assert(!path_exists(""), "path_exists('') false")
+    assert(!path_is_dir(""), "path_is_dir('') false")
+}
+
 pub fn main() {
     println("# compiler/intrinsics smoke test (v0)")
     test_now_ns()
     test_host_target()
     test_mkdir_p()
+    test_rm_file()
+    test_getenv()
+    test_path_exists_and_is_dir()
     println("# done")
 }

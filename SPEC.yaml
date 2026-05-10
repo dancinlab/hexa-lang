@@ -661,6 +661,12 @@ fork_storm_prevention:
         - now_ns
         - host_target
         - mkdir_p
+      second_batch:
+        - rm_rf
+        - rm_file
+        - getenv
+        - path_exists
+        - path_is_dir
     L2:
       name: libc_ffi
       meaning: "intrinsic bodies call libc directly via hexa C-FFI; no shell"
@@ -674,16 +680,18 @@ fork_storm_prevention:
     total_call_sites: 1403
     files_touched: 265
     top_categories:
-      - { name: date,   count: 160, intrinsic: now_ns_plus_format,      effort: S }
-      - { name: rm,     count: 123, intrinsic: rm_rf,                   effort: M }
-      - { name: echo,   count: 110, intrinsic: getenv,                  effort: S }
-      - { name: test,   count:  85, intrinsic: path_exists_is_dir_file, effort: S }
-      - { name: uname,  count:  84, intrinsic: host_target,             effort: S }
-      - { name: mkdir,  count:  78, intrinsic: mkdir_p,                 effort: S }
-      - { name: pwd,    count:  58, intrinsic: getcwd,                  effort: S }
-      - { name: ls,     count:  56, intrinsic: list_dir,                effort: M }
-      - { name: cd,     count:  45, intrinsic: call_site_rewrite,       effort: M }
-      - { name: git,    count:  38, intrinsic: keep_exec_v0,            effort: L }
+      - { name: date,   count: 160, intrinsic: now_ns_plus_format,      effort: S, status: PARTIALLY_ABSORBED, v0: shell_fork, v1: clock_gettime_FFI, v2: linux_syscall_228 }
+      - { name: rm,     count: 123, intrinsic: rm_rf_and_rm_file,       effort: M, status: PARTIALLY_ABSORBED, v0: shell_fork, v1: opendir_readdir_unlink_FFI, v2: linux_unlink_87_rmdir_84 }
+      - { name: echo,   count: 110, intrinsic: getenv,                  effort: S, status: PARTIALLY_ABSORBED, v0: shell_fork_with_name_validation, v1: libc_getenv, v2: extern_environ_walk }
+      - { name: test,   count:  85, intrinsic: path_exists_path_is_dir, effort: S, status: PARTIALLY_ABSORBED, v0: shell_fork, v1: libc_stat, v2: linux_access_21_stat_4 }
+      - { name: uname,  count:  84, intrinsic: host_target,             effort: S, status: PARTIALLY_ABSORBED, v0: shell_fork, v1: compile_time_constant, v2: na_already_constant }
+      - { name: mkdir,  count:  78, intrinsic: mkdir_p,                 effort: S, status: PARTIALLY_ABSORBED, v0: shell_fork, v1: libc_mkdir_walk, v2: linux_mkdir_83_mkdirat_258 }
+      - { name: pwd,    count:  58, intrinsic: getcwd,                  effort: S, status: PENDING }
+      - { name: ls,     count:  56, intrinsic: list_dir,                effort: M, status: PENDING }
+      - { name: cd,     count:  45, intrinsic: call_site_rewrite,       effort: M, status: PENDING }
+      - { name: git,    count:  38, intrinsic: keep_exec_v0,            effort: L, status: PENDING }
+    absorbed_site_count_v0: 638  # 160+123+110+85+84+78 — categories with v0 intrinsic shipped
+    pending_site_count:     197  # 58+56+45+38 — categories awaiting future batches
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Open questions (NOT decisions)

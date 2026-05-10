@@ -117,6 +117,123 @@ pub fn mkdir_p(path: string) -> i64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// rm_rf(path)
+//
+// Recursively delete `path` and everything below it. Returns 0 on success,
+// non-zero on error. Refusing to operate on empty / "/" / "." / ".." paths
+// is an explicit hardening choice — those are far more often a bug than an
+// intent.
+//
+// v0 (this file):  forks `rm -rf '<path>' 2>/dev/null` exactly once, after
+//                  rejecting obviously dangerous inputs and shell-quoting
+//                  the path so embedded single quotes cannot break out.
+// v1 (native):     walk the directory with opendir/readdir, unlink files,
+//                  rmdir leaves bottom-up. One libc-FFI call tree per
+//                  inode visited; no shell.
+// v2 (raw):        Linux unlink(2) syscall 87 + rmdir(2) syscall 84 (Darwin
+//                  unlink 10 / rmdir 137). Walks the directory tree in
+//                  hexa, emits the syscall trap inline at each leaf.
+// ─────────────────────────────────────────────────────────────────────────────
+pub fn rm_rf(path: string) -> i64 {
+    if path == "" { return -1 }
+    if path == "/" || path == "." || path == ".." { return -1 }
+    let q = path.replace("'", "'\\''")
+    let _ = exec("rm -rf '" + q + "' 2>/dev/null")
+    // Verify post-condition with one test fork. v1 uses stat(ENOENT) instead.
+    let probe = exec("test -e '" + q + "' && echo y || echo n").trim()
+    if probe == "n" { return 0 }
+    return 1
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// rm_file(path)
+//
+// Delete a single file. Idempotent — missing file is success. Returns 0
+// on success, non-zero on error. Safer than `rm_rf` because it never
+// recurses into a directory.
+//
+// v0 (this file):  forks `rm -f '<path>'` exactly once after shell-quoting.
+// v1 (native):     libc unlink(path); EEXIST/ENOENT both treated as success.
+// v2 (raw):        Linux syscall 87 (unlink) / 263 (unlinkat); Darwin 10
+//                  (unlink). args: (path_ptr: i64); returns 0 on success.
+// ─────────────────────────────────────────────────────────────────────────────
+pub fn rm_file(path: string) -> i64 {
+    if path == "" { return -1 }
+    let q = path.replace("'", "'\\''")
+    let _ = exec("rm -f '" + q + "' 2>/dev/null")
+    let probe = exec("test -e '" + q + "' && echo y || echo n").trim()
+    if probe == "n" { return 0 }
+    return 1
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getenv(name)
+//
+// Return the value of environment variable `name`, or "" if unset / invalid.
+//
+// SECURITY: v0 forks a shell, so an attacker-controlled `name` containing
+// shell metacharacters would be a command-injection vector. We defend by
+// validating `name` against the canonical environment-variable charset
+// `[A-Z_][A-Z0-9_]*` *before* we substitute it into the shell command.
+// Anything outside that charset returns "" without forking.
+//
+// v0 (this file):  validates name, then forks `echo "$<name>"` and trims.
+// v1 (native):     libc getenv(name); pure pointer-table lookup.
+// v2 (raw):        walk the `environ` extern pointer array, comparing
+//                  `<name>=` prefixes; no kernel involvement at all.
+// ─────────────────────────────────────────────────────────────────────────────
+pub fn getenv(name: string) -> string {
+    if name == "" { return "" }
+    let n = name.length
+    var i = 0
+    while i < n {
+        let c = name[i]
+        let ok_first = (c >= "A" && c <= "Z") || c == "_"
+        let ok_rest  = ok_first || (c >= "0" && c <= "9")
+        let allowed = if i == 0 { ok_first } else { ok_rest }
+        if !allowed { return "" }
+        i = i + 1
+    }
+    let v = exec("echo \"$" + name + "\" 2>/dev/null").trim()
+    return v
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// path_exists(path)
+//
+// True iff `path` names an existing filesystem entry (file, directory,
+// symlink, …). Empty path is false.
+//
+// v0 (this file):  forks `test -e '<path>' && echo 1 || echo 0`.
+// v1 (native):     libc stat(path, &st) — true on rc==0.
+// v2 (raw):        Linux access(2) syscall 21 (or faccessat 269) with
+//                  F_OK; Darwin access 33. Returns 0 if entry exists.
+// ─────────────────────────────────────────────────────────────────────────────
+pub fn path_exists(path: string) -> bool {
+    if path == "" { return false }
+    let q = path.replace("'", "'\\''")
+    let r = exec("test -e '" + q + "' && echo 1 || echo 0").trim()
+    return r == "1"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// path_is_dir(path)
+//
+// True iff `path` exists and is a directory.
+//
+// v0 (this file):  forks `test -d '<path>' && echo 1 || echo 0`.
+// v1 (native):     libc stat(path,&st); returns S_ISDIR(st.st_mode).
+// v2 (raw):        Linux stat(2) syscall 4 / newfstatat 262; Darwin 188
+//                  (stat). Reads st_mode and masks against S_IFDIR (0o40000).
+// ─────────────────────────────────────────────────────────────────────────────
+pub fn path_is_dir(path: string) -> bool {
+    if path == "" { return false }
+    let q = path.replace("'", "'\\''")
+    let r = exec("test -d '" + q + "' && echo 1 || echo 0").trim()
+    return r == "1"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Internal helper — minimal numeric parser. Stage0 stdlib `parse_i64`
 // has surface drift across the bootstrap; we vendor a tiny one to keep
 // the intrinsics module self-contained.
