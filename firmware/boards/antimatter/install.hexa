@@ -1,0 +1,66 @@
+// install.hexa — hx build hook for hexa-antimatter.
+//
+// Invoked by `hx install hexa-antimatter` (hexa-lang package manager) right
+// after the GitHub checkout (or symlink from /Users/ghost/core/hexa-antimatter)
+// lands in $HX_PKG_DIR. hx passes:
+//   HX_PKG_DIR     — absolute path to the package root
+//   HX_BIN_DIR     — ~/.hx/bin
+//   HX_PKG_NAME    — "hexa-antimatter"
+//   HX_HOOK_PHASE  — "pre" | "post" | "both" (default: "both")
+//
+// Mirrors hexa-bio/install.hexa pattern (commit 2026-05-04).
+//
+// Responsibilities (each idempotent, raw#9 STRICT — no .py creation):
+//   1. Pre-install: no-op (spec-first; no python deps at v1.0.0).
+//   2. Post-install: run `hexa-antimatter selftest` via the freshly-staged
+//      cli/hexa-antimatter.hexa. Selftest output captured; non-PASS = warn-only
+//      (placeholder CLI always prints sentinels).
+//
+// raw#9 hexa-only, raw#11 snake_case, raw#15 no-hardcode.
+// raw#10 honest C3: see hexa-antimatter/README.md "Status" section.
+
+fn run_quick_selftest(root: str) -> bool {
+    let cli = root + "/cli/hexa-antimatter.hexa"
+    let exists = exec("[ -f \"" + cli + "\" ] && echo y || echo n").trim()
+    if exists != "y" {
+        eprintln("[hexa-antimatter/install] WARN: cli/hexa-antimatter.hexa missing — skip selftest")
+        return false
+    }
+    println("[hexa-antimatter/install] [post] running quick selftest (3-verb sentinel sweep)")
+    let cmd = "HEXA_ANTIMATTER_ROOT=\"" + root + "\" hexa run \"" + cli + "\" selftest 2>&1"
+    let raw = exec(cmd)
+    if raw.contains("__HEXA_ANTIMATTER_SELFTEST__ PASS") {
+        println("[hexa-antimatter/install]   selftest PASS — 3/3 sentinels present")
+        return true
+    }
+    eprintln("[hexa-antimatter/install] WARN: selftest non-PASS (warn-only, not a blocker)")
+    eprintln("  hint: missing module file or sentinel mismatch — see README §Status")
+    return false
+}
+
+fn main() -> void {
+    let mut root = env("HX_PKG_DIR")
+    if root == "" { root = exec("pwd").trim() }
+    let phase = env("HX_HOOK_PHASE")
+    let mut p = phase
+    if p == "" { p = "both" }
+    println("[hexa-antimatter/install] HX_PKG_DIR=" + root + " phase=" + p)
+
+    let entry = root + "/cli/hexa-antimatter.hexa"
+    let entry_ok = exec("[ -f \"" + entry + "\" ] && echo y || echo n").trim()
+    if entry_ok != "y" {
+        eprintln("[hexa-antimatter/install] ERROR: canonical entry missing: " + entry)
+        exit(1)
+    }
+    println("[hexa-antimatter/install] canonical entry OK: cli/hexa-antimatter.hexa")
+
+    if p == "pre" || p == "both" {
+        println("[hexa-antimatter/install] [pre] no-op (spec-first; no python deps at v1.0.0)")
+    }
+
+    if p == "post" || p == "both" {
+        let _ = run_quick_selftest(root)  // warn-only
+    }
+
+    println("[hexa-antimatter/install] done — hx will generate " + env("HX_BIN_DIR") + "/hexa-antimatter shim")
+}

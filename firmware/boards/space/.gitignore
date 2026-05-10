@@ -1,0 +1,4 @@
+# hexa-space gitignore
+
+# Runtime audit log + markers (created by cli/hexa-space.hexa _audit)
+state/

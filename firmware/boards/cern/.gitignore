@@ -1,0 +1,31 @@
+# petite-cern — gitignore
+# Append-only ledger / runtime caches
+**/state/*.log
+**/state/*.jsonl
+**/state/runs/
+**/state/cache/
+**/state/markers/
+**/__pycache__/
+**/*.pyc
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local env
+.env
+.env.local
+
+# Build artifacts (PDFs land in build/out/, .gitignore'd; Makefile + header tracked)
+dist/
+build/out/
+*.pdf
+
+# Rust embedded firmware build artifacts
+firmware/mcu/target/
+firmware/target/
+firmware/mcu/Cargo.lock
+
+# .claude harness scratch
+.claude/

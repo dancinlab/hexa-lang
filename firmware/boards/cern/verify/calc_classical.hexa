@@ -1,0 +1,224 @@
+#!hexa strict
+// hexa-cern/verify/calc_classical.hexa — classical-pillar Lagrange/Hamilton
+// τ=4 phase calculator.
+//
+// Verifies the n=6 derivations declared in
+// classical/doc/classical-mechanics-accelerator.md:
+//
+//   DOF                = n = 6                  (SE(3) = R³ × SO(3))
+//   Phase-space dim    = 2n = σ = 12            (canonical (q,p))
+//   Lagrange ODE order = 2nd-order × n = 6 ODEs
+//   Hamilton ODEs      = σ = 12 first-order
+//   Independent inertia ≈ J₂ - φ = 22 of 36     (M ∈ R^{6x6} symmetry)
+//   Conserved qty      = sopfr + φ = 7          (E + 3 momentum + 3 angular)
+//   Passenger cap      = τ·g = 4g               (Newton F=ma envelope)
+//   Poisson nonzero    = n = 6 diagonal of n²=36
+//
+// τ=4 phase decomposition: laser pump / wakefield bubble / capture / extraction.
+//
+// PASS = all algebraic identities hold + spec anchors present.
+// FAIL = arithmetic mismatch or missing spec anchor.
+//
+// Run:
+//   hexa run verify/calc_classical.hexa
+//
+// @no-lock-needed
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let DOC_CLASSICAL = ROOT + "/classical/doc/classical-mechanics-accelerator.md"
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── n=6 lattice ──────────────────────────────────────────────────────────
+let SIGMA = 12
+let TAU   = 4
+let PHI   = 2
+let SOPFR = 5
+let J2    = 24
+let N     = 6
+
+// ── derived classical quantities ─────────────────────────────────────────
+let DOF              = N                       // 6 SE(3)
+let PHASE_SPACE_DIM  = 2 * N                   // 12 = σ
+let LAG_ODE_COUNT    = N                       // 6 second-order
+let HAM_ODE_COUNT    = SIGMA                   // 12 first-order
+let MASS_MATRIX_IND  = J2 - PHI                // 22 (of 36 inertia comps)
+let MASS_MATRIX_TOT  = N * N                   // 36
+let CONSERVED        = SOPFR + PHI             // 7 (E+3p+3L)
+let PASSENGER_CAP_G  = TAU                     // 4g  Newton envelope
+let POISSON_NONZERO  = N                       // 6 diagonal {q,p}=δ
+
+// τ=4 phase labels
+let PHASES = [
+    "phase 1: laser pump",
+    "phase 2: wakefield bubble",
+    "phase 3: electron capture",
+    "phase 4: extraction",
+]
+
+fn print_table() {
+    println("")
+    println("  ┌─ classical n=6 SE(3) Lagrangian / Hamiltonian shape ──┐")
+    println("  │  DOF                = n = " + str(DOF))
+    println("  │  phase-space dim    = 2n = σ = " + str(PHASE_SPACE_DIM))
+    println("  │  Lagrange 2nd-ODEs  = " + str(LAG_ODE_COUNT))
+    println("  │  Hamilton 1st-ODEs  = σ = " + str(HAM_ODE_COUNT))
+    println("  │  M_indep ≈ J₂-φ      = " + str(MASS_MATRIX_IND) + " of " + str(MASS_MATRIX_TOT))
+    println("  │  conserved qty      = sopfr+φ = " + str(CONSERVED))
+    println("  │  passenger cap      = τg = " + str(PASSENGER_CAP_G) + "g")
+    println("  │  Poisson nonzero    = n diagonal of n² = " + str(POISSON_NONZERO) + "/" + str(MASS_MATRIX_TOT))
+    println("  └────────────────────────────────────────────────────────┘")
+    println("")
+    println("  τ=4 acceleration phases:")
+    for p in PHASES { println("    · " + p) }
+    println("")
+}
+
+// Check 1 — DOF identity
+fn check_dof() {
+    _check(DOF == 6,
+           "DOF = n = 6 (SE(3) = R³ × SO(3))",
+           "")
+}
+
+// Check 2 — phase-space dim closure: 2n = σ
+fn check_phase_space() {
+    _check(PHASE_SPACE_DIM == SIGMA,
+           "phase-space dim 2n = σ = 12",
+           "Hamilton canonical (q,p)")
+}
+
+// Check 3 — mass matrix sparsity ratio (independent / total)
+fn check_mass_sparsity() {
+    let pct = MASS_MATRIX_IND * 100 / MASS_MATRIX_TOT
+    _check(MASS_MATRIX_IND == 22 && MASS_MATRIX_TOT == 36,
+           "M independent ≈ J₂-φ = 22 of n² = 36 (≈ " + str(pct) + "%)",
+           "")
+}
+
+// Check 4 — conserved quantities = sopfr + φ
+fn check_conserved() {
+    _check(CONSERVED == 7,
+           "conserved quantities = sopfr+φ = 7",
+           "energy(1) + linear-p(3) + angular-L(3)")
+}
+
+// Check 5 — passenger cap = τg = 4g (Newton envelope)
+fn check_passenger_cap() {
+    _check(PASSENGER_CAP_G == 4,
+           "passenger acceleration cap = τg = 4g",
+           "Newton F=ma upper bound")
+}
+
+// Check 6 — Poisson bracket diagonal {q_i,p_j}=δ_ij = n nonzero of n²
+fn check_poisson() {
+    let off_diag = MASS_MATRIX_TOT - POISSON_NONZERO
+    _check(POISSON_NONZERO == 6 && off_diag == 30,
+           "Poisson {q,p}: " + str(POISSON_NONZERO) + " diagonal δ + " + str(off_diag) + " zero off-diagonal",
+           "perfect-number sparse structure")
+}
+
+// Check 7 — τ=4 phase count
+fn check_phases() {
+    _check(len(PHASES) == TAU,
+           "τ=4 acceleration phases declared",
+           "len(PHASES) = " + str(len(PHASES)))
+}
+
+// Check 8 — spec anchors DOF=n=6
+fn check_spec_dof() {
+    let txt = _read(DOC_CLASSICAL)
+    let ok = _has(txt, "DOF") && (_has(txt, "= n = 6") || _has(txt, "n=6"))
+    _check(ok, "spec anchors DOF = n = 6", "")
+}
+
+// Check 9 — spec anchors phase-space dim = σ
+fn check_spec_phase_space() {
+    let txt = _read(DOC_CLASSICAL)
+    let ok = _has(txt, "phase-space") && (_has(txt, "= sigma") || _has(txt, "= σ") || _has(txt, "= 12"))
+    _check(ok, "spec anchors Hamilton phase-space dim = σ = 12", "")
+}
+
+// Check 10 — spec mentions Carnot / Lawson upper-bound family
+fn check_carnot_lawson() {
+    let txt = _read(DOC_CLASSICAL)
+    let ok = (_has(txt, "Carnot") || _has(txt, "Lawson"))
+    _check(ok, "spec invokes Carnot/Lawson upper-bound family", "")
+}
+
+// Check 11 — Mk.I 2030~2035 component-phase declaration
+fn check_mk_i_window() {
+    let txt = _read(DOC_CLASSICAL)
+    let ok = _has(txt, "2030") && _has(txt, "2035")
+    _check(ok, "spec declares Mk.I window 2030~2035", "")
+}
+
+let FALSIFIERS = [
+    "DOF observation ≠ 6 in SE(3) rigid body -> classical lattice broken",
+    "phase-space dim ≠ 12 in canonical formulation -> Hamilton structure wrong",
+    "passenger >4g sustained without subjective stress -> τ=4 cap retract",
+    "Lagrange L=T-V fails on accelerator orbit -> conservative-system claim invalid",
+    "Poisson off-diagonal nonzero in canonical (q,p) -> coordinate basis impure",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern classical — Lagrange/Hamilton n=6 derivation")
+    println("========================================================================")
+    print_table()
+
+    check_dof()
+    check_phase_space()
+    check_mass_sparsity()
+    check_conserved()
+    check_passenger_cap()
+    check_poisson()
+    check_phases()
+    println("")
+    check_spec_dof()
+    check_spec_phase_space()
+    check_carnot_lawson()
+    check_mk_i_window()
+
+    println("")
+    println("  FALSIFIERS (" + str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CERN_CLASSICAL__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CERN_CLASSICAL__ PASS")
+    exit(0)
+}

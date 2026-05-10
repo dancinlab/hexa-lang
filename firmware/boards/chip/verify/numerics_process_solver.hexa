@@ -1,0 +1,332 @@
+#!hexa strict
+// hexa-chip/verify/numerics_process_solver.hexa — F-CHIP-1 T2 third-stack.
+//
+// Iterative-solver T2 third stack for falsifier F-CHIP-1.   Adds an
+// independent numerical method (bisection + Newton-Raphson) on top of
+// the closed-form derivations of numerics_process.hexa and the vendor
+// parity of numerics_process_parity.hexa.
+//
+// Method:
+//   Question: at what process node f does transistor density reach
+//             D* = 1000 MTr/mm² ?  (the "1000 MTr/mm² frontier" — a
+//             v2.0+ aspirational hexa-chip target.)
+//
+//   Predictor: D(f) = K / f²  with K = 4325 (calibrated from TSMC 5nm).
+//   Closed-form root: f* = √(K / D*) = √4.325 ≈ 2.0796 nm.
+//
+//   Two solvers, both anchored to math_pure:
+//     • bisection on [f_lo, f_hi] = [1.0, 5.0]
+//         halts when |f_hi − f_lo| < ε = 1e-6
+//     • Newton-Raphson on g(f) = K/f² − D*
+//         g'(f) = −2K/f³;   step  f ← f + g(f) · f / (2(K/f² − D*)) wait —
+//         g'(f) = −2K/f³;   step  f ← f − g(f) / g'(f)   (correct form)
+//
+//   Both should converge to f* within a few iterations and agree with
+//   the closed form to floating-point precision.
+//
+//   Iteration-count anchors:
+//     • bisection rounds  ≈ log2((f_hi − f_lo) / ε) ≈ log2(4 / 1e-6) ≈ 22
+//       which lands inside [σ², σ³] = [144, 1728] only if you square it;
+//       simpler check: bisection_iters / σ ≈ 1.83 → close to √(σ-φ).
+//     • Newton-Raphson iters  ≤ τ + φ = 6 = n   (super-linear convergence
+//       on a smooth quadratic-ish residual).
+//
+// PASS = closed-form root matches both solvers + iteration bounds + final
+//        residual within tolerance + density restoration round-trip.
+// FAIL = either solver diverges or count busts the bounded-iteration claim.
+//
+// Run:
+//   hexa run verify/numerics_process_solver.hexa
+//   hexa run verify/numerics_process_solver.hexa --json
+//
+// Cost: $0 (pure-hexa float math; no FFI).
+
+use "self/runtime/math_pure"
+
+let SIGMA = 12
+let TAU   = 4
+let PHI   = 2
+let N6    = 6
+
+let K       = 4325.0       // K/f² calibration (TSMC 5nm anchor)
+let D_STAR  = 1000.0       // target density (MTr/mm²)
+let F_LO    = 1.0          // search lower bound
+let F_HI    = 5.0          // search upper bound (TSMC N5)
+let EPS     = 0.000001     // 1e-6 convergence tol
+let MAX_IT  = 50           // safety-net iteration cap
+
+// ─── arg helpers ─────────────────────────────────────────────────────
+
+fn _has_flag(a: [str], flag: str) -> bool {
+    for x in a { if x == flag { return true } }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() { out = out + [raw[j]]; j = j + 1 }
+    return out
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── residual + closed form ──────────────────────────────────────────
+
+fn residual(f: float) -> float {
+    return K / (f * f) - D_STAR
+}
+
+fn closed_form_root() -> float {
+    return sqrt_pure(K / D_STAR)
+}
+
+// ─── bisection ──────────────────────────────────────────────────────
+
+fn bisect(f_lo_in: float, f_hi_in: float) -> [float] {
+    // returns [root, iter_count]  (using float for iter_count for unified array)
+    let mut lo = f_lo_in
+    let mut hi = f_hi_in
+    let mut its = 0
+    let mut g_lo = residual(lo)
+    let mut g_hi = residual(hi)
+    while (hi - lo) > EPS {
+        if its >= MAX_IT { break }
+        let mid = (lo + hi) / 2.0
+        let g_mid = residual(mid)
+        // residual decreases monotonically (D(f) = K/f² is decreasing
+        // in f → residual(f) is decreasing).   At f=1 residual=4325-1000=3325
+        // > 0.   At f=5 residual=173-1000=-827 < 0.   So root sits where
+        // residual changes from + to −.
+        if g_lo * g_mid <= 0.0 {
+            hi = mid
+            g_hi = g_mid
+        } else {
+            lo = mid
+            g_lo = g_mid
+        }
+        its = its + 1
+    }
+    let root = (lo + hi) / 2.0
+    return [root, float(its)]
+}
+
+// ─── Newton-Raphson ─────────────────────────────────────────────────
+
+fn newton(f0: float) -> [float] {
+    let mut f = f0
+    let mut its = 0
+    while its < MAX_IT {
+        let g  = residual(f)
+        if abs_pure(g) < EPS { break }
+        let gp = -2.0 * K / (f * f * f)
+        f = f - g / gp
+        its = its + 1
+    }
+    return [f, float(its)]
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_closed_form_value() {
+    let f_star = closed_form_root()
+    let want = sqrt_pure(4.325)
+    let ok = is_close_pure(f_star, want, 1e-9)
+    _check(ok, "closed-form f* = √(K/D*) ≈ 2.0796 nm", "got " + str(f_star))
+}
+
+fn check_residual_sign_change() {
+    // residual(f_lo)>0 and residual(f_hi)<0 — bracketing root.
+    let g_lo = residual(F_LO)
+    let g_hi = residual(F_HI)
+    let ok = (g_lo > 0.0) && (g_hi < 0.0)
+    _check(ok, "residual brackets root: g(1) > 0, g(5) < 0", "g(1)=" + str(g_lo) + ", g(5)=" + str(g_hi))
+}
+
+fn check_bisection_converges() {
+    let r = bisect(F_LO, F_HI)
+    let root = r[0]
+    let want = closed_form_root()
+    let ok = is_close_pure(root, want, 1e-4)
+    _check(ok, "bisection converges to closed-form root within 1e-4", "got " + str(root))
+}
+
+fn check_bisection_iter_bound() {
+    let r = bisect(F_LO, F_HI)
+    let its = int(r[1])
+    // log2((5-1)/1e-6) ≈ 21.93 → 22 iters expected. Bound: ≤ 25.
+    let ok = its <= 25
+    _check(ok, "bisection iter count ≤ 25 (log2 bound)", "got " + str(its))
+}
+
+fn check_newton_converges() {
+    // Newton starting from f=2.0 (close to root) — should land in ≤ 6 iters.
+    let r = newton(2.0)
+    let root = r[0]
+    let want = closed_form_root()
+    let ok = is_close_pure(root, want, 1e-6)
+    _check(ok, "Newton converges to closed-form root within 1e-6", "got " + str(root))
+}
+
+fn check_newton_iter_bound_eq_n() {
+    // Newton-Raphson on smooth quadratic should converge in ≤ n=6 iters.
+    let r = newton(2.0)
+    let its = int(r[1])
+    let ok = its <= N6
+    _check(ok, "Newton iter count ≤ n = 6 (quadratic super-linear)", "got " + str(its))
+}
+
+fn check_newton_iter_bound_far_start() {
+    // Even from f=4.0 (farther), should land in ≤ τ+φ = 6 iters.
+    let r = newton(4.0)
+    let its = int(r[1])
+    let ok = its <= TAU + PHI
+    _check(ok, "Newton from f=4 (far): iters ≤ τ+φ = 6", "got " + str(its))
+}
+
+fn check_two_methods_agree() {
+    let rb = bisect(F_LO, F_HI)
+    let rn = newton(2.0)
+    let ok = is_close_pure(rb[0], rn[0], 1e-3)
+    _check(ok, "bisection root ≡ Newton root within 1e-3", "Δ=" + str(abs_pure(rb[0] - rn[0])))
+}
+
+fn check_round_trip_density() {
+    // D(f*) should equal D* = 1000 within tolerance.
+    let f_star = closed_form_root()
+    let d_back = K / (f_star * f_star)
+    let ok = is_close_pure(d_back, D_STAR, 1e-6)
+    _check(ok, "round-trip: D(f*) = D* = 1000 MTr/mm²", "got " + str(d_back))
+}
+
+fn check_root_below_3nm_above_2nm() {
+    let f_star = closed_form_root()
+    let ok = (f_star > 2.0) && (f_star < 3.0)
+    _check(ok, "root f* ∈ (2nm, 3nm) — sub-σ-frontier node", "got " + str(f_star) + "nm")
+}
+
+fn check_residual_is_strictly_decreasing() {
+    // Sanity: residual(f) = K/f² − D* monotone decreasing on [1, 5].
+    let mut ok = true
+    let mut prev = residual(F_LO)
+    let mut step = 0
+    let n_steps = 20
+    while step < n_steps {
+        let f = F_LO + (F_HI - F_LO) * float(step + 1) / float(n_steps)
+        let cur = residual(f)
+        if cur >= prev { ok = false }
+        prev = cur
+        step = step + 1
+    }
+    _check(ok, "residual strictly decreasing on [1, 5] (mono. precondition)", "")
+}
+
+fn check_iter_ratio_anchor() {
+    // bisection_iters / Newton_iters ≈ σ-class.
+    let rb = bisect(F_LO, F_HI)
+    let rn = newton(2.0)
+    let ratio = rb[1] / rn[1]
+    // Newton ~ 4-5 iters, bisection ~ 22 → ratio ~ 4.5-5.5  ∈ [TAU, SIGMA-φ]
+    let ok = (ratio >= float(TAU)) && (ratio <= float(SIGMA - PHI))
+    _check(ok, "bisection/Newton iter-ratio ∈ [τ, σ-φ] = [4, 10]", "got " + str(ratio))
+}
+
+// ─── falsifiers (informational) ──────────────────────────────────────
+
+let FALSIFIERS = [
+    "F-CHIP-1.T2-solver.a: bisection or Newton diverges on K/f²=1000 → predictor non-monotone retract",
+    "F-CHIP-1.T2-solver.b: methods disagree > 1e-3 → numerical-stability fail",
+    "F-CHIP-1.T2-solver.c: Newton iter count > n on near-start, > τ+φ on far-start → super-linear claim fails",
+    "F-CHIP-1.T2-solver.d: closed-form root falls outside (2nm, 3nm) → sub-σ-frontier prediction retract",
+    "F-CHIP-1.T2-solver.e: bisection-to-Newton iter ratio outside [τ, σ-φ] → solver-class anchor fails"
+]
+
+fn _print_summary() {
+    let f_star = closed_form_root()
+    let rb = bisect(F_LO, F_HI)
+    let rn = newton(2.0)
+    let rn_far = newton(4.0)
+    println("  closed-form root f* = √(K/D*) = " + str(f_star) + " nm")
+    println("  bisection         → root = " + str(rb[0]) + ",  iters = " + str(int(rb[1])))
+    println("  Newton (start 2)  → root = " + str(rn[0]) + ",  iters = " + str(int(rn[1])))
+    println("  Newton (start 4)  → root = " + str(rn_far[0]) + ",  iters = " + str(int(rn_far[1])))
+    println("")
+    println("  predictor: D(f) = K/f²,  K=4325 (TSMC 5nm anchor),  D*=1000 MTr/mm²")
+    println("  ε=1e-6,  search range [1, 5] nm")
+    println("")
+}
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+
+    if !json_mode {
+        println("========================================================================")
+        println("  hexa-chip — numerics_process_solver: F-CHIP-1 T2 third-stack")
+        println("========================================================================")
+        _print_summary()
+    }
+
+    check_closed_form_value()
+    check_residual_sign_change()
+    check_bisection_converges()
+    check_bisection_iter_bound()
+    check_newton_converges()
+    check_newton_iter_bound_eq_n()
+    check_newton_iter_bound_far_start()
+    check_two_methods_agree()
+    check_round_trip_density()
+    check_root_below_3nm_above_2nm()
+    check_residual_is_strictly_decreasing()
+    check_iter_ratio_anchor()
+
+    if !json_mode {
+        println("")
+        println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+        for f in FALSIFIERS { println("    ✗ " + f) }
+    }
+
+    let pass_n = RUN - FAIL
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/numerics_process_solver.hexa\","
+        js = js + "\"schema\":\"hexa-chip/numerics/v1\","
+        js = js + "\"falsifier\":\"F-CHIP-1\","
+        js = js + "\"tier\":\"T2\","
+        js = js + "\"stack\":3,"
+        js = js + "\"run\":" + str(RUN) + ","
+        js = js + "\"pass\":" + str(pass_n) + ","
+        js = js + "\"fail\":" + str(FAIL) + ","
+        js = js + "\"ok\":"
+        if FAIL == 0 { js = js + "true" } else { js = js + "false" }
+        js = js + "}"
+        println(js)
+        if FAIL > 0 { exit(1) }
+        return
+    }
+
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CHIP_NUMERICS_PROCESS_SOLVER__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CHIP_NUMERICS_PROCESS_SOLVER__ PASS")
+    exit(0)
+}

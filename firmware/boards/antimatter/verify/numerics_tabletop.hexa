@@ -1,0 +1,292 @@
+#!hexa strict
+// hexa-antimatter/verify/numerics_tabletop.hexa — tabletop-pillar numerical
+// re-derivation via math_pure.
+//
+// T2 (numerical) closure for F-AM-2 (tabletop p̄ density σ·J₂=288 fit
+// vs CERN AEgIS / ALPHA / GBAR ref).  Companion to verify/calc_tabletop.hexa.
+// Where the calc_ file proved every identity in integer divisor arithmetic,
+// this file re-derives the same numbers through math_pure (sqrt/exp/log/pow)
+// AND closes a handful of float-only chains the calc_ file could not touch:
+//
+//   · σ·J₂ = 288  (BT-401 closure unit, F-AM-2 anchor)
+//   · σ³ × 10⁹ ≈ 1.7×10¹² p̄/s  (terminal-goal production candidate)
+//   · σ⁶ = 2,985,984  (1/σ⁶ cost-reduction chain)
+//   · σ·τ² = 192 months = 16 yr   (192/12 = 16 exact)
+//   · Γ_loss = 10⁻³ / (σ²·τ) ≈ 1.736×10⁻⁶ /s   (trap leakage rate)
+//   · Volume V_TT = V_0 · (σ-φ) / (σ² · σ·τ) ≈ 0.289 m³
+//                = 200 × 10 / (144 × 48) m³  (V_0 = 200 m³ CERN AD/ELENA)
+//   · compact-ring p = 0.3·B·R = 1.44 GeV/c   (float, path-b)
+//   · cost = $_factory / σ⁶ ≈ $2.094×10⁴ /mg   (≈ $2.1e4/mg SSOT spec)
+//   · σ⁶ = σ³ · σ³   (factory × PET cost-split closure)
+//   · log-log scaling σ⁶ vs σ → slope 6.0 (math_pure power-law floor)
+//
+// Plus the standard math_pure floor (sqrt/exp/log/pow self-inverse).
+//
+// Run:
+//     hexa run verify/numerics_tabletop.hexa     # exit 0 = identity holds
+//
+// Sentinel: __HEXA_ANTIMATTER_NUMERICS_TABLETOP__ PASS
+//
+// Authority: tabletop/tabletop-antimatter.md §1 WHY + §4 STRUCT + §5 FLOW ·
+//   .roadmap.hexa_antimatter §A.4 F-AM-2 + §0 terminal-goal 1.7e12 p̄/s.
+// raw#9 hexa-only · raw#10 honest C3: closed-form numerical agreement only —
+//   parity vs published CERN data lives in numerics_tabletop_parity.hexa
+//   (next chunk), empirical Stage-1+ TBD.
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-antimatter"
+}
+
+let ROOT = _root()
+
+fn _int_str(x: int) -> str { return "" + x }
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _approx_eq(a: float, b: float, tol: float) -> bool {
+    let diff = a - b
+    let abs_d = abs_pure(diff)
+    return abs_d <= tol
+}
+
+fn _approx_rel(a: float, b: float, rel_tol: float) -> bool {
+    // Relative tolerance: |a - b| / max(|a|, |b|) <= rel_tol.
+    let aa = abs_pure(a)
+    let ab = abs_pure(b)
+    let denom = if aa > ab { aa } else { ab }
+    if denom == 0.0 { return abs_pure(a - b) <= rel_tol }
+    let rel = abs_pure(a - b) / denom
+    return rel <= rel_tol
+}
+
+// ── n=6 lattice (float-domain copy) ──────────────────────────────────────
+let SIGMA_F = 12.0
+let TAU_F   = 4.0
+let PHI_F   = 2.0
+let N_F     = 6.0
+let J2_F    = 24.0
+let TOL     = 0.000000001       // 1e-9 absolute
+let REL_TOL = 0.001              // 1e-3 relative — enough to absorb SSOT
+                                 // round-off (e.g. 1.728e12 vs cited 1.7e12).
+
+let FALSIFIERS = [
+    "F-AM-2 T2: pow_pure σ·J₂ ≠ 288 → BT-401 density-unit closure broken",
+    "F-AM-2 T2: σ³ × 1e9 ≠ 1.7e12 ± 2% → terminal-goal production retract",
+    "F-AM-2 T2: pow_pure σ⁶ ≠ 2,985,984 → 1/σ⁶ cost chain retract",
+    "F-AM-2 T2: σ·τ² ≠ 192 mo OR 192/12 ≠ 16 yr → storage horizon retract",
+    "F-AM-2 T2: Γ_loss = 1/(σ²·τ) × 1e-3 ≠ 1.7e-6 ± 5% → trap leakage retract",
+    "F-AM-2 T2: V_TT = 200·(σ-φ)/(σ²·σ·τ) ≠ 0.289 m³ ± 5% → tabletop volume retract",
+    "F-AM-2 T2: σ⁶ ≠ σ³·σ³ → factory × PET cost-split closure breaks",
+    "tabletop T2: compact ring p = 0.3·B·R ≠ 1.44 GeV/c ± 1e-9 → path-b retract",
+    "tabletop T2: $_factory/σ⁶ ≠ $2.1e4/mg ± 1% → cost-reduction final $/mg retract",
+    "tabletop T2: log-log σ⁶ vs σ slope ≠ 6.0 ± 0.05 → math_pure power-law floor lost",
+    "math_pure floor: sqrt(144) ≠ 12 ± 1e-9 OR pow(2,10) ≠ 1024 → stability breach",
+]
+
+// ── F-AM-2 anchor: σ·J₂ = 288 ────────────────────────────────────────────
+
+fn check_f_am_2_anchor() {
+    let v = SIGMA_F * J2_F
+    _check(_approx_eq(v, 288.0, TOL),
+           "σ·J₂ = 288  (F-AM-2 BT-401 density-unit closure)",
+           "σ·J₂ = " + ("" + v))
+}
+
+// ── σ³ × 10⁹ = production candidate ──────────────────────────────────────
+
+fn check_production_cascade() {
+    let s3 = pow_pure(SIGMA_F, 3.0)
+    _check(_approx_eq(s3, 1728.0, TOL),
+           "pow_pure(σ, 3) = σ³ = 1728  (production cascade base)", "")
+
+    // σ³ × 10⁹ = 1.728 × 10¹².  SSOT cites 1.7×10¹² (one-sig-fig round).
+    // Use relative tolerance of 2% to absorb the SSOT round.
+    let prod_per_s = s3 * 1000000000.0   // 1.728e12
+    _check(_approx_rel(prod_per_s, 1700000000000.0, 0.02),
+           "σ³ × 10⁹ ≈ 1.7×10¹² p̄/s  (.roadmap §0 terminal goal, ±2%)",
+           "σ³·10⁹ = " + ("" + prod_per_s) + " · cited = 1.7e12")
+}
+
+// ── σ⁶ cost-reduction chain ──────────────────────────────────────────────
+
+fn check_sigma_sixth_chain() {
+    let s3 = pow_pure(SIGMA_F, 3.0)
+    let s6 = pow_pure(SIGMA_F, 6.0)
+    _check(_approx_eq(s6, 2985984.0, TOL),
+           "pow_pure(σ, 6) = σ⁶ = 2,985,984", "")
+    _check(_approx_eq(s6, s3 * s3, TOL),
+           "σ⁶ = σ³ · σ³  (factory × PET cost-split closure)",
+           "s6 = " + ("" + s6) + " · s3² = " + ("" + (s3 * s3)))
+
+    // log-log slope of [σ¹..σ⁶] vs σ should equal 6.0 by definition;
+    // single-pair log ratio: log(σ⁶) / log(σ) = 6.
+    let r = log_pure(s6) / log_pure(SIGMA_F)
+    _check(_approx_eq(r, 6.0, 0.0001),
+           "log(σ⁶) / log(σ) = 6.0  (math_pure power-law floor)",
+           "ratio = " + ("" + r))
+}
+
+// ── σ·τ² = 192 months = 16 yr ────────────────────────────────────────────
+
+fn check_storage_horizon() {
+    let st2 = SIGMA_F * TAU_F * TAU_F
+    _check(_approx_eq(st2, 192.0, TOL),
+           "σ·τ² = 192 months  (cryo-free storage horizon)", "")
+
+    let yrs = st2 / 12.0
+    _check(_approx_eq(yrs, 16.0, TOL),
+           "192 months / 12 = 16 yr  (HEXA-TABLETOP storage candidate)", "")
+}
+
+// ── Γ_loss trap leakage rate ─────────────────────────────────────────────
+
+fn check_gamma_loss() {
+    // SSOT §5: Γ_loss = 10⁻³ / (σ²·τ) /s  →  1/(144·4) × 10⁻³ = 1/576 × 10⁻³
+    //                                       = 1.7361×10⁻⁶ /s
+    let g = (1.0 / (SIGMA_F * SIGMA_F * TAU_F)) * 0.001
+    _check(_approx_rel(g, 0.0000017361, 0.001),
+           "Γ_loss = 1/(σ²·τ) × 10⁻³ ≈ 1.7361×10⁻⁶ /s",
+           "Γ_loss = " + ("" + g))
+    // SSOT cites 1.7×10⁻⁶ — agree within 5% relative.
+    _check(_approx_rel(g, 0.0000017, 0.05),
+           "Γ_loss matches SSOT '1.7×10⁻⁶ /s' within 5%", "")
+}
+
+// ── Volume formula V_TT = 200·(σ-φ)/(σ²·σ·τ) ─────────────────────────────
+
+fn check_volume_formula() {
+    // V_TT = V_0 × (σ-φ)/σ² × 1/(σ·τ)
+    //      = 200 × 10/144 × 1/48
+    //      = 2000 / 6912
+    //      = 0.28935..
+    let V0  = 200.0
+    let sp  = SIGMA_F - PHI_F            // 10
+    let s2  = SIGMA_F * SIGMA_F           // 144
+    let st  = SIGMA_F * TAU_F             // 48
+    let V_TT = V0 * (sp / s2) * (1.0 / st)
+    _check(_approx_rel(V_TT, 0.2894, 0.001),
+           "V_TT = 200·(σ-φ)/(σ²·σ·τ) ≈ 0.2894 m³  (closed-form derivation)",
+           "V_TT = " + ("" + V_TT))
+    _check(_approx_rel(V_TT, 0.29, 0.05),
+           "V_TT matches SSOT '0.29 m³' within 5%", "")
+}
+
+// ── compact-ring momentum p = 0.3·B·R ────────────────────────────────────
+
+fn check_compact_ring_momentum_float() {
+    // p[GeV/c] = 0.3 · B[T] · R[m]
+    let B = SIGMA_F * TAU_F                // 48 T
+    let R_m = (SIGMA_F - PHI_F) / 100.0    // 10 cm = 0.1 m
+    let p = 0.3 * B * R_m                   // 0.3 · 48 · 0.1 = 1.44
+    _check(_approx_eq(p, 1.44, TOL),
+           "compact-ring p = 0.3·B·R = 1.44 GeV/c  (path-b float)", "")
+}
+
+// ── tabletop cost reduction ──────────────────────────────────────────────
+
+fn check_cost_reduction() {
+    // Factory cost candidate: $6.25 × 10¹⁰ /mg.  Tabletop = factory / σ⁶.
+    let factory_per_mg = 62500000000.0       // 6.25e10
+    let s6 = pow_pure(SIGMA_F, 6.0)
+    let tabletop_per_mg = factory_per_mg / s6
+    // Expected ≈ 6.25e10 / 2.985984e6 = 2.0928e4
+    _check(_approx_rel(tabletop_per_mg, 20928.0, 0.001),
+           "tabletop cost = $_factory/σ⁶ ≈ $2.093×10⁴/mg",
+           "tabletop = $" + ("" + tabletop_per_mg) + "/mg")
+    // SSOT cites $2.1×10⁴/mg — agree within 1% relative.
+    _check(_approx_rel(tabletop_per_mg, 21000.0, 0.01),
+           "cost matches SSOT '$2.1×10⁴/mg' within 1%", "")
+}
+
+// ── math_pure stability floor ────────────────────────────────────────────
+
+fn check_math_pure_floor() {
+    let r12 = sqrt_pure(144.0)
+    _check(_approx_eq(r12, 12.0, TOL),
+           "sqrt_pure(144) = 12 ± 1e-9", "got " + ("" + r12))
+    let p = pow_pure(2.0, 10.0)
+    _check(_approx_eq(p, 1024.0, TOL),
+           "pow_pure(2, 10) = 1024  (binary canonical)", "")
+    let log_e = log_pure(e_pure())
+    _check(_approx_eq(log_e, 1.0, TOL),
+           "log_pure(e) = 1  (self-inverse)", "")
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — numerics_tabletop: tabletop-pillar T2 numerics")
+    println("========================================================================")
+    println("  closes:  F-AM-2 (tabletop σ·J₂=288 fit) T2 — first numerical closure")
+    println("  path:    math_pure (sqrt/exp/log/pow) + closed-form chains")
+    println("  abs tol: " + ("" + TOL) + "  · rel tol: " + ("" + REL_TOL))
+    println("")
+
+    println("  -- F-AM-2 anchor (σ·J₂ = 288) --")
+    check_f_am_2_anchor()
+
+    println("")
+    println("  -- production cascade (σ³ × 10⁹ ≈ 1.7×10¹² p̄/s) --")
+    check_production_cascade()
+
+    println("")
+    println("  -- σ⁶ cost-reduction chain --")
+    check_sigma_sixth_chain()
+
+    println("")
+    println("  -- storage horizon (σ·τ² = 192 mo = 16 yr) --")
+    check_storage_horizon()
+
+    println("")
+    println("  -- trap leakage rate (Γ_loss) --")
+    check_gamma_loss()
+
+    println("")
+    println("  -- volume formula (0.289 m³) --")
+    check_volume_formula()
+
+    println("")
+    println("  -- compact-ring momentum (path-b 1.44 GeV/c) --")
+    check_compact_ring_momentum_float()
+
+    println("")
+    println("  -- cost reduction ($2.1e4/mg) --")
+    check_cost_reduction()
+
+    println("")
+    println("  -- math_pure stability floor --")
+    check_math_pure_floor()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_NUMERICS_TABLETOP__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_NUMERICS_TABLETOP__ PASS")
+    exit(0)
+}

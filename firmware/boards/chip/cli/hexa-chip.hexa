@@ -1,0 +1,855 @@
+#!hexa strict
+// hexa-chip/cli/hexa-chip.hexa — standalone hexa-chip CLI router (placeholder)
+//
+// 30-verb / 6-group Chip Substrate router (spec-first v1.1.0):
+//
+//   architecture group  — architecture · isa_n6 · hexa1                (3)
+//   design group        — design · dse_pipeline · rtl_gen · eda
+//                         · verify_test                                (5)
+//   process group       — process · materials · wafer · yield
+//                         · thermal_power                              (5)
+//   packaging group     — packaging · advanced_packaging · chip_3d
+//                         · hbm · interconnect · sc                    (6)
+//   accelerator group   — npu_n6 · pim · photonic · accel · asic
+//                         · hexa_pim · hexa_3d · hexa_wafer
+//                         · hexa_ai_native_n6                          (9)
+//   consciousness group — conscious_chip · conscious_soc               (2)
+//
+// Note: kick-spec one-liner read "28-verb / 7-group"; v1.0.0 honored a 29/6
+// verb map; v1.1.0 (Phase G iter 9) adds hexa_ai_native_n6 as the 30th verb
+// (Beyond-GPU AI-native silicon — provenance-bit / promotion-counter-MMU /
+// bt-id-isa). Total now 30 verbs across 6 group categories.
+//
+// Plus utility subcmds:
+//   status      — verb count + group breakdown
+//   selftest    — verify all 28 verb directories exist
+//   help        — this help
+//   --version   — print version
+//
+// Root resolution: $HEXA_CHIP_ROOT env, else inferred from $0 dirname.
+// Per-verb sub-routers are spec-only at v1.0.0; dispatch echoes spec path.
+//
+// Constraints:
+//   raw#9   — hexa-only orchestration; no Python deps
+//   raw#15  — write-confined (audit log only)
+//   raw#10  — honest C3 caveats embedded
+//
+// Cost: $0 (Mac local; spec-first; no compute invoked).
+
+let VERSION = "1.1.0"
+
+// ─── env / path resolve ───
+
+let HOME = env("HOME")
+let HEXA_CHIP_ROOT_ENV = env("HEXA_CHIP_ROOT")
+
+fn hexa_chip_root() -> str {
+    if HEXA_CHIP_ROOT_ENV.len() > 0 { return HEXA_CHIP_ROOT_ENV }
+    let inferred = exec("dirname \"$(dirname \"$0\")\" 2>/dev/null || true").trim()
+    if inferred.len() > 0 { return inferred }
+    return HOME + "/.hexa-chip"  // @allow-devpath
+}
+
+let HC = hexa_chip_root()
+let LOG_PATH = HC + "/state/hexa_chip_cli.log"
+
+// ─── 7-group / 29-verb registry ───
+
+let GROUP_ARCHITECTURE = ["architecture", "isa_n6", "hexa1"]
+let GROUP_DESIGN       = ["design", "dse_pipeline", "rtl_gen", "eda", "verify_test"]
+let GROUP_PROCESS      = ["process", "materials", "wafer", "yield", "thermal_power"]
+let GROUP_PACKAGING    = ["packaging", "advanced_packaging", "chip_3d", "hbm", "interconnect", "sc"]
+let GROUP_ACCELERATOR  = ["npu_n6", "pim", "photonic", "accel", "asic", "hexa_pim", "hexa_3d", "hexa_wafer", "hexa_ai_native_n6"]
+let GROUP_CONSCIOUSNESS = ["conscious_chip", "conscious_soc"]
+
+let ALL_GROUPS = [
+    "architecture", "design", "process",
+    "packaging",    "accelerator", "consciousness"
+]
+
+fn verbs_for_group(g: str) -> [str] {
+    if g == "architecture"   { return GROUP_ARCHITECTURE }
+    if g == "design"         { return GROUP_DESIGN }
+    if g == "process"        { return GROUP_PROCESS }
+    if g == "packaging"      { return GROUP_PACKAGING }
+    if g == "accelerator"    { return GROUP_ACCELERATOR }
+    if g == "consciousness"  { return GROUP_CONSCIOUSNESS }
+    return []
+}
+
+fn all_verbs() -> [str] {
+    let mut acc: [str] = []
+    for g in ALL_GROUPS {
+        for v in verbs_for_group(g) { acc = acc + [v] }
+    }
+    return acc
+}
+
+// ─── arg helpers ───
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn has_flag(a: [str], flag: str) -> bool {
+    for x in a {
+        if x == flag { return true }
+    }
+    return false
+}
+
+fn json_mode(a: [str]) -> bool {
+    return has_flag(a, "--json")
+}
+
+// ─── audit log (jsonl) ───
+
+fn _ts_now() -> str {
+    return exec("date -u '+%Y-%m-%dT%H:%M:%SZ'").trim()
+}
+
+fn _audit(subcmd: str, args_str: str, exit_code: int) {
+    let line = "{\"ts\":\"" + _ts_now() + "\",\"caller\":\"hexa_chip_standalone\",\"subcmd\":\"hexa-chip " +
+               subcmd + "\",\"args\":\"" + args_str.replace("\"", "\\\"") +
+               "\",\"exit_code\":" + str(exit_code) + ",\"version\":\"" + VERSION + "\"}"
+    exec("mkdir -p " + shq(HC + "/state") + " 2>/dev/null")
+    exec("echo " + shq(line) + " >> " + shq(LOG_PATH) + " 2>/dev/null")
+}
+
+fn _verb_dir_exists(v: str) -> bool {
+    let p = HC + "/" + v
+    let r = exec("[ -d " + shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+// ─── caveat printer (raw#10 honest C3) ───
+
+fn _print_caveats() {
+    println("")
+    println("--- caveats (raw#10 C3) ---")
+    println("  1. v1.1.0 is SPEC-FIRST. 30/30 verbs ship as spec directories;")
+    println("     29 extracted from canon@c0f1f570 + 1 (hexa_ai_native_n6)")
+    println("     added Phase G iter 9. Per-verb working .hexa CLI sandboxes are TBD.")
+    println("  2. n=6 invariant lattice is referenced by ISA/architecture verbs")
+    println("     (isa_n6, hexa1) + ai-native verbs (hexa_ai_native_n6 §5);")
+    println("     process/packaging/accelerator groups inherit the organising")
+    println("     convention without independent invariant-fit verification.")
+    println("     The remaining 27/30 verbs do not pin per-verb invariant fits.")
+    println("  3. No tape-out / GDSII / PDK content vendored. Foundry process")
+    println("     kits (Samsung/SK·Hynix/TSMC) stay proprietary; this repo")
+    println("     ships specs + organising vocabulary only.")
+    println("  4. Cross-link consumers (hexa-rtsc/hexa-codex/anima) reference")
+    println("     individual verb specs; bidirectional propagation needs")
+    println("     manual reconciliation (no cross-repo CI).")
+    println("  5. Korea-fab heritage tone (Samsung·SK·Hynix·DRAM/HBM lineage)")
+    println("     is editorial framing; no proprietary data, NDA content, or")
+    println("     trade-secret material is included.")
+}
+
+// ─── subcommand: status ───
+
+fn cmd_status(a: [str]) {
+    if json_mode(a) {
+        let mut js = "{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"status\","
+        js = js + "\"verbs_total\":30,\"groups_total\":6,\"verdict\":\"SPEC_FIRST\","
+        js = js + "\"groups\":[\"architecture:3\",\"design:5\",\"process:5\",\"packaging:6\",\"accelerator:9\",\"consciousness:2\"]"
+        js = js + "}"
+        println(js)
+        return
+    }
+
+    println("hexa-chip " + VERSION + " status — 30-verb / 6-group Chip Substrate")
+    println("")
+    println("  group           verbs                                                                count")
+    println("  --------------- -------------------------------------------------------------------- -----")
+    println("  architecture    architecture · isa_n6 · hexa1                                            3")
+    println("  design          design · dse_pipeline · rtl_gen · eda · verify_test                     5")
+    println("  process         process · materials · wafer · yield · thermal_power                     5")
+    println("  packaging       packaging · advanced_packaging · chip_3d · hbm · interconnect · sc      6")
+    println("  accelerator     npu_n6 · pim · photonic · accel · asic · hexa_pim · hexa_3d ·            ")
+    println("                  hexa_wafer · hexa_ai_native_n6                                          9")
+    println("  consciousness   conscious_chip · conscious_soc                                          2")
+    println("")
+    println("  total: 30 verbs / 6 groups   verdict: SPEC_FIRST (n6-arch@c0f1f570 + Phase G AI-native)")
+    println("")
+    println("  to inspect a verb spec dir:")
+    println("    ls $HEXA_CHIP_ROOT/<verb>/")
+    println("    hexa-chip show <verb>      (echoes spec path)")
+    println("    hexa-chip selftest         (verify 30/30 dirs present)")
+    _print_caveats()
+}
+
+// ─── subcommand: show ───
+
+fn cmd_show(a: [str]) {
+    if a.len() < 4 {
+        eprintln("usage: hexa-chip show <verb>")
+        eprintln("  e.g. hexa-chip show npu_n6")
+        _audit("show", "", 2)
+        exit(2)
+    }
+    let v = a[3]
+    if _verb_dir_exists(v) == false {
+        eprintln("hexa-chip show: unknown verb '" + v + "'")
+        eprintln("run 'hexa-chip status' for the 29-verb table")
+        _audit("show", v, 2)
+        exit(2)
+    }
+    println("hexa-chip verb spec — " + v)
+    println("  path: " + HC + "/" + v + "/")
+    println("  status: SPEC_FIRST (working .hexa CLI sandbox TBD)")
+    println("  source: canon/domains/compute/<canonical-name> @ c0f1f570")
+    if json_mode(a) {
+        println("{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"show\",\"verb\":\"" + v + "\",\"status\":\"spec_first\"}")
+    }
+    _audit("show", v, 0)
+}
+
+// ─── subcommand: selftest ───
+
+fn cmd_selftest(a: [str]) {
+    let verbs = all_verbs()
+    let mut missing: [str] = []
+    for v in verbs {
+        if _verb_dir_exists(v) == false { missing = missing + [v] }
+    }
+    let total = verbs.len()
+    let present = total - missing.len()
+    println("hexa-chip selftest — verb directory sweep")
+    println("  expected: " + str(total) + " verb dirs across 6 groups")
+    println("  present:  " + str(present) + "/" + str(total))
+    if missing.len() > 0 {
+        println("  MISSING:")
+        for m in missing { println("    - " + m) }
+        println("__HEXA_CHIP_SELFTEST__ FAIL")
+        if json_mode(a) {
+            println("{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"selftest\",\"verdict\":\"FAIL\",\"present\":" + str(present) + ",\"total\":" + str(total) + "}")
+        }
+        _audit("selftest", "", 1)
+        exit(1)
+    }
+    println("__HEXA_CHIP_SELFTEST__ PASS")
+    if json_mode(a) {
+        println("{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"selftest\",\"verdict\":\"PASS\",\"present\":" + str(present) + ",\"total\":" + str(total) + "}")
+    }
+    _print_caveats()
+    _audit("selftest", "", 0)
+}
+
+// ─── verify firmware-mcu / firmware-hdl / board (Phase D + Phase E) ───
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+fn _basename_noext(p: str, ext: str) -> str {
+    let mut s = p
+    let slash = s.last_index_of("/")
+    if slash >= 0 { s = s.slice(slash + 1, s.len()) }
+    if s.ends_with(ext) { s = s.slice(0, s.len() - ext.len()) }
+    return s
+}
+
+fn _to_upper(s: str) -> str {
+    return exec("printf %s " + shq(s) + " | tr '[:lower:]' '[:upper:]'").trim()
+}
+
+// Module-level accumulators set by _run_verify_X helpers so cmd_verify_all
+// can report per-section counts without re-doing the file checks.
+let mut _AGG_MCU_PRESENT = 0
+let mut _AGG_MCU_TOTAL = 0
+let mut _AGG_HDL_PRESENT = 0
+let mut _AGG_HDL_TOTAL = 0
+let mut _AGG_BOARD_PRESENT = 0
+let mut _AGG_BOARD_TOTAL = 0
+let mut _AGG_GPGPU_PRESENT = 0
+let mut _AGG_GPGPU_TOTAL = 0
+let mut _AGG_AI_NATIVE_PRESENT = 0
+let mut _AGG_AI_NATIVE_TOTAL = 0
+
+fn _run_verify_firmware_mcu(a: [str], aggregating: bool) -> str {
+    let dir = HC + "/firmware/mcu"
+    let listing = exec("ls " + shq(dir) + "/*.hexa 2>/dev/null").trim()
+    let mut files: [str] = []
+    if listing.len() > 0 { files = listing.split("\n") }
+
+    let mut present = 0
+    let mut total = files.len()
+    let mut failures: [str] = []
+
+    if json_mode(a) == false {
+        println("hexa-chip verify firmware-mcu — Phase D MCU host controllers")
+        println("  dir: " + dir)
+        println("")
+    }
+
+    for f in files {
+        if _file_exists(f) {
+            present = present + 1
+            let stem = _basename_noext(f, ".hexa")
+            let sentinel = "__HEXA_CHIP_MCU_" + _to_upper(stem) + "__"
+            if json_mode(a) == false {
+                println("  [PASS] " + f)
+                println("         sentinel: " + sentinel)
+            }
+        } else {
+            failures = failures + [f]
+            if json_mode(a) == false {
+                println("  [FAIL] " + f + " (missing)")
+            }
+        }
+    }
+
+    let mut verdict = "PASS"
+    if total == 0 || failures.len() > 0 { verdict = "FAIL" }
+
+    _AGG_MCU_PRESENT = present
+    _AGG_MCU_TOTAL = total
+
+    if json_mode(a) && aggregating == false {
+        let js = "{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"verify-firmware-mcu\",\"present\":" +
+                 str(present) + ",\"total\":" + str(total) + ",\"verdict\":\"" + verdict + "\"}"
+        println(js)
+    } else if json_mode(a) == false {
+        println("")
+        println("  present: " + str(present) + "/" + str(total))
+        if verdict == "PASS" {
+            println("__HEXA_CHIP_VERIFY_FIRMWARE_MCU__ PASS")
+        } else {
+            println("__HEXA_CHIP_VERIFY_FIRMWARE_MCU__ FAIL")
+        }
+    }
+
+    return verdict
+}
+
+fn cmd_verify_firmware_mcu(a: [str]) {
+    let verdict = _run_verify_firmware_mcu(a, false)
+    let mut ec = 0
+    if verdict == "FAIL" { ec = 1 }
+    _audit("verify-firmware-mcu", "", ec)
+    if ec != 0 { exit(ec) }
+}
+
+fn _run_verify_firmware_hdl(a: [str], aggregating: bool) -> str {
+    let dir = HC + "/firmware/hdl"
+    let listing = exec("ls " + shq(dir) + "/*.v 2>/dev/null").trim()
+    let mut files: [str] = []
+    if listing.len() > 0 { files = listing.split("\n") }
+
+    let mut present = 0
+    let mut total = files.len()
+    let mut failures: [str] = []
+
+    if json_mode(a) == false {
+        println("hexa-chip verify firmware-hdl — Phase D Verilog top-levels")
+        println("  dir: " + dir)
+        println("")
+    }
+
+    for f in files {
+        if _file_exists(f) {
+            present = present + 1
+            let mod_line = exec("grep -E '^[[:space:]]*module[[:space:]]+' " + shq(f) +
+                                " 2>/dev/null | head -1").trim()
+            let mut mod_name = "(unparsed)"
+            if mod_line.len() > 0 {
+                let mut t = mod_line.replace("\t", " ")
+                while t.contains("  ") { t = t.replace("  ", " ") }
+                let parts = t.split(" ")
+                if parts.len() >= 2 {
+                    let mut nm = parts[1]
+                    let paren = nm.index_of("(")
+                    if paren > 0 { nm = nm.slice(0, paren) }
+                    let semi = nm.index_of(";")
+                    if semi > 0 { nm = nm.slice(0, semi) }
+                    if nm.len() > 0 { mod_name = nm }
+                }
+            }
+            if json_mode(a) == false {
+                println("  [PASS] " + f)
+                println("         module: " + mod_name)
+            }
+        } else {
+            failures = failures + [f]
+            if json_mode(a) == false {
+                println("  [FAIL] " + f + " (missing)")
+            }
+        }
+    }
+
+    let mut verdict = "PASS"
+    if total == 0 || failures.len() > 0 { verdict = "FAIL" }
+
+    _AGG_HDL_PRESENT = present
+    _AGG_HDL_TOTAL = total
+
+    if json_mode(a) && aggregating == false {
+        let js = "{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"verify-firmware-hdl\",\"present\":" +
+                 str(present) + ",\"total\":" + str(total) + ",\"verdict\":\"" + verdict + "\"}"
+        println(js)
+    } else if json_mode(a) == false {
+        println("")
+        println("  present: " + str(present) + "/" + str(total))
+        if verdict == "PASS" {
+            println("__HEXA_CHIP_VERIFY_FIRMWARE_HDL__ PASS")
+        } else {
+            println("__HEXA_CHIP_VERIFY_FIRMWARE_HDL__ FAIL")
+        }
+    }
+
+    return verdict
+}
+
+fn cmd_verify_firmware_hdl(a: [str]) {
+    let verdict = _run_verify_firmware_hdl(a, false)
+    let mut ec = 0
+    if verdict == "FAIL" { ec = 1 }
+    _audit("verify-firmware-hdl", "", ec)
+    if ec != 0 { exit(ec) }
+}
+
+fn _run_verify_board(a: [str], aggregating: bool) -> str {
+    let board_dir = HC + "/firmware/board"
+
+    // Top-level artifacts (one per repo, not per board).
+    let top_artifacts = ["README.md", "bom_master.csv", "POWER_INTEGRITY.md"]
+
+    // Per-board artifacts (Phase E iter 1 + iter 2).
+    //   iter 1: schematic_paper.md, kicad_project.txt
+    //   iter 2: <id>.kicad_pro, power_chain.md
+    let boards = ["fw01_corner", "fw02_npu", "fw03_hbm"]
+    let board_kicad_pro = ["fw01_corner.kicad_pro", "fw02_npu.kicad_pro", "fw03_hbm.kicad_pro"]
+    let per_board_artifacts = ["schematic_paper.md", "kicad_project.txt", "power_chain.md"]
+
+    let mut present = 0
+    let mut total = top_artifacts.len() + boards.len() * (per_board_artifacts.len() + 1)
+    let mut missing: [str] = []
+
+    if json_mode(a) == false {
+        println("hexa-chip verify board — Phase E iter 1 + iter 2 artifacts")
+        println("  dir: " + board_dir)
+        println("")
+    }
+
+    for art in top_artifacts {
+        let p = board_dir + "/" + art
+        if _file_exists(p) {
+            present = present + 1
+            if json_mode(a) == false { println("  [PASS] " + p) }
+        } else {
+            missing = missing + [p]
+            if json_mode(a) == false { println("  [MISS] " + p) }
+        }
+    }
+
+    let mut bi = 0
+    while bi < boards.len() {
+        let b = boards[bi]
+        for art in per_board_artifacts {
+            let p = board_dir + "/" + b + "/" + art
+            if _file_exists(p) {
+                present = present + 1
+                if json_mode(a) == false { println("  [PASS] " + p) }
+            } else {
+                missing = missing + [p]
+                if json_mode(a) == false { println("  [MISS] " + p) }
+            }
+        }
+        let kp = board_dir + "/" + b + "/" + board_kicad_pro[bi]
+        if _file_exists(kp) {
+            present = present + 1
+            if json_mode(a) == false { println("  [PASS] " + kp) }
+        } else {
+            missing = missing + [kp]
+            if json_mode(a) == false { println("  [MISS] " + kp) }
+        }
+        bi = bi + 1
+    }
+
+    let mut verdict = "PASS"
+    if missing.len() > 0 { verdict = "FAIL" }
+
+    _AGG_BOARD_PRESENT = present
+    _AGG_BOARD_TOTAL = total
+
+    if json_mode(a) && aggregating == false {
+        let js = "{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"verify-board\",\"present\":" +
+                 str(present) + ",\"total\":" + str(total) + ",\"verdict\":\"" + verdict + "\"}"
+        println(js)
+    } else if json_mode(a) == false {
+        println("")
+        println("  present: " + str(present) + "/" + str(total))
+        if verdict == "PASS" {
+            println("__HEXA_CHIP_VERIFY_BOARD__ PASS")
+        } else {
+            println("__HEXA_CHIP_VERIFY_BOARD__ FAIL")
+            println("  note: Phase E artifacts pending; missing files reported above")
+        }
+    }
+
+    return verdict
+}
+
+fn cmd_verify_board(a: [str]) {
+    let verdict = _run_verify_board(a, false)
+    let mut ec = 0
+    if verdict == "FAIL" { ec = 1 }
+    _audit("verify-board", "", ec)
+    // Phase E may legitimately be in-flight; do not exit non-zero solely on missing
+    // board artifacts — emit verdict + audit but return cleanly so dispatcher continues.
+}
+
+// ─── verify gpgpu (Phase F GPGPU programming-model verb) ───
+
+fn _run_verify_gpgpu(a: [str], aggregating: bool) -> str {
+    // Phase F GPGPU verb artifacts: T1 (verb dir verify) + T2 (projection
+    // numerics) + T3 (empirical fixture). Mirrors falsifier-tier pattern
+    // from F-CHIP-1/2/3 closure (T1 + T2 + T3).
+    let artifacts = [
+        HC + "/gpgpu_n6/verify_chip-gpgpu-n6.hexa",          // T1: lattice
+        HC + "/verify/numerics_gpgpu_projection.hexa",       // T2: F-CHIP-5 numerics
+        HC + "/verify/empirical_gpgpu.hexa"                  // T3: F-CHIP-5 empirical
+    ]
+
+    let mut present = 0
+    let total = artifacts.len()
+    let mut failures: [str] = []
+
+    if json_mode(a) == false {
+        println("hexa-chip verify gpgpu — Phase F GPGPU verb (F-CHIP-5 T1+T2+T3)")
+        println("")
+    }
+
+    for f in artifacts {
+        if _file_exists(f) {
+            present = present + 1
+            if json_mode(a) == false { println("  [PASS] " + f) }
+        } else {
+            failures = failures + [f]
+            if json_mode(a) == false { println("  [FAIL] " + f + " (missing)") }
+        }
+    }
+
+    let mut verdict = "PASS"
+    if failures.len() > 0 { verdict = "FAIL" }
+
+    _AGG_GPGPU_PRESENT = present
+    _AGG_GPGPU_TOTAL = total
+
+    if json_mode(a) && aggregating == false {
+        let js = "{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"verify-gpgpu\",\"present\":" +
+                 str(present) + ",\"total\":" + str(total) + ",\"verdict\":\"" + verdict + "\"}"
+        println(js)
+    } else if json_mode(a) == false {
+        println("")
+        println("  present: " + str(present) + "/" + str(total))
+        if verdict == "PASS" {
+            println("__HEXA_CHIP_VERIFY_GPGPU__ PASS")
+        } else {
+            println("__HEXA_CHIP_VERIFY_GPGPU__ FAIL")
+        }
+    }
+
+    return verdict
+}
+
+fn cmd_verify_gpgpu(a: [str]) {
+    let verdict = _run_verify_gpgpu(a, false)
+    let mut ec = 0
+    if verdict == "FAIL" { ec = 1 }
+    _audit("verify-gpgpu", "", ec)
+    if ec != 0 { exit(ec) }
+}
+
+// ─── verify ai-native (Phase G Beyond-GPU AI-native architecture) ───
+
+fn _run_verify_ai_native(a: [str], aggregating: bool) -> str {
+    // Phase G AI-native verb artifacts: design-tier closure (T1+T2+T3) +
+    // chip-projection doc + foundry-pitch datasheet + first stdlib/hal
+    // consumer. 6 artifacts; mirror of verify_gpgpu shape but on the
+    // AI-native silicon axis (provenance-bit / promotion-counter-MMU /
+    // bt-id-isa).
+    let artifacts = [
+        HC + "/ai_native_arch/chip-ai-native-arch.md",                // §1 chip-projection
+        HC + "/ai_native_arch/doc/datasheet_ai_native_arch.md",       // §2 foundry-pitch
+        HC + "/ai_native_arch/verify_ai_native_arch.hexa",            // T1: algebraic
+        HC + "/ai_native_arch/numerics_ai_native_arch.hexa",          // T2: numerical
+        HC + "/ai_native_arch/empirical_ai_native_arch.hexa",         // T3: archival
+        HC + "/firmware/mcu/ai_native_host.hexa"                      // first consumer
+    ]
+
+    let mut present = 0
+    let total = artifacts.len()
+    let mut failures: [str] = []
+
+    if json_mode(a) == false {
+        println("hexa-chip verify ai-native — Phase G AI-native silicon (F-AI1..F-AI2c-A T1+T2+T3)")
+        println("")
+    }
+
+    for f in artifacts {
+        if _file_exists(f) {
+            present = present + 1
+            if json_mode(a) == false { println("  [PASS] " + f) }
+        } else {
+            failures = failures + [f]
+            if json_mode(a) == false { println("  [FAIL] " + f + " (missing)") }
+        }
+    }
+
+    let mut verdict = "PASS"
+    if failures.len() > 0 { verdict = "FAIL" }
+
+    _AGG_AI_NATIVE_PRESENT = present
+    _AGG_AI_NATIVE_TOTAL = total
+
+    if json_mode(a) && aggregating == false {
+        let js = "{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"verify-ai-native\",\"present\":" +
+                 str(present) + ",\"total\":" + str(total) + ",\"verdict\":\"" + verdict + "\"}"
+        println(js)
+    } else if json_mode(a) == false {
+        println("")
+        println("  present: " + str(present) + "/" + str(total))
+        if verdict == "PASS" {
+            println("__HEXA_CHIP_VERIFY_AI_NATIVE__ PASS")
+        } else {
+            println("__HEXA_CHIP_VERIFY_AI_NATIVE__ FAIL")
+        }
+    }
+
+    return verdict
+}
+
+fn cmd_verify_ai_native(a: [str]) {
+    let verdict = _run_verify_ai_native(a, false)
+    let mut ec = 0
+    if verdict == "FAIL" { ec = 1 }
+    _audit("verify-ai-native", "", ec)
+    if ec != 0 { exit(ec) }
+}
+
+// ─── verify all (Phase D + Phase E + Phase F + Phase G aggregator) ───
+
+fn cmd_verify_all(a: [str]) {
+    let json = json_mode(a)
+    let mut overall = "PASS"
+
+    if json == false {
+        println("============================================================")
+        println(" hexa-chip verify all — Phase D + E + F + G sweep")
+        println("============================================================")
+        println("")
+    }
+
+    // Section 1: firmware-mcu
+    let v_mcu = _run_verify_firmware_mcu(a, true)
+    if v_mcu == "FAIL" { overall = "FAIL" }
+
+    if json == false {
+        println("")
+        println("------------------------------------------------------------")
+        println("")
+    }
+
+    // Section 2: firmware-hdl
+    let v_hdl = _run_verify_firmware_hdl(a, true)
+    if v_hdl == "FAIL" { overall = "FAIL" }
+
+    if json == false {
+        println("")
+        println("------------------------------------------------------------")
+        println("")
+    }
+
+    // Section 3: board
+    let v_board = _run_verify_board(a, true)
+    if v_board == "FAIL" { overall = "FAIL" }
+
+    if json == false {
+        println("")
+        println("------------------------------------------------------------")
+        println("")
+    }
+
+    // Section 4: gpgpu (Phase F)
+    let v_gpgpu = _run_verify_gpgpu(a, true)
+    if v_gpgpu == "FAIL" { overall = "FAIL" }
+
+    if json == false {
+        println("")
+        println("------------------------------------------------------------")
+        println("")
+    }
+
+    // Section 5: ai-native (Phase G)
+    let v_ai_native = _run_verify_ai_native(a, true)
+    if v_ai_native == "FAIL" { overall = "FAIL" }
+
+    let total_present = _AGG_MCU_PRESENT + _AGG_HDL_PRESENT + _AGG_BOARD_PRESENT +
+                        _AGG_GPGPU_PRESENT + _AGG_AI_NATIVE_PRESENT
+    let total_total = _AGG_MCU_TOTAL + _AGG_HDL_TOTAL + _AGG_BOARD_TOTAL +
+                      _AGG_GPGPU_TOTAL + _AGG_AI_NATIVE_TOTAL
+
+    if json {
+        let mut js = "{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"verify-all\","
+        js = js + "\"sections\":["
+        js = js + "{\"name\":\"firmware-mcu\",\"verdict\":\"" + v_mcu + "\",\"present\":" + str(_AGG_MCU_PRESENT) + ",\"total\":" + str(_AGG_MCU_TOTAL) + "},"
+        js = js + "{\"name\":\"firmware-hdl\",\"verdict\":\"" + v_hdl + "\",\"present\":" + str(_AGG_HDL_PRESENT) + ",\"total\":" + str(_AGG_HDL_TOTAL) + "},"
+        js = js + "{\"name\":\"board\",\"verdict\":\"" + v_board + "\",\"present\":" + str(_AGG_BOARD_PRESENT) + ",\"total\":" + str(_AGG_BOARD_TOTAL) + "},"
+        js = js + "{\"name\":\"gpgpu\",\"verdict\":\"" + v_gpgpu + "\",\"present\":" + str(_AGG_GPGPU_PRESENT) + ",\"total\":" + str(_AGG_GPGPU_TOTAL) + "},"
+        js = js + "{\"name\":\"ai-native\",\"verdict\":\"" + v_ai_native + "\",\"present\":" + str(_AGG_AI_NATIVE_PRESENT) + ",\"total\":" + str(_AGG_AI_NATIVE_TOTAL) + "}"
+        js = js + "],\"total_present\":" + str(total_present) + ",\"total_total\":" + str(total_total) + ",\"verdict\":\"" + overall + "\"}"
+        println(js)
+    } else {
+        println("")
+        println("============================================================")
+        println(" Aggregate")
+        println("============================================================")
+        println("  firmware-mcu : " + v_mcu + "   (" + str(_AGG_MCU_PRESENT) + "/" + str(_AGG_MCU_TOTAL) + ")")
+        println("  firmware-hdl : " + v_hdl + "   (" + str(_AGG_HDL_PRESENT) + "/" + str(_AGG_HDL_TOTAL) + ")")
+        println("  board        : " + v_board + "   (" + str(_AGG_BOARD_PRESENT) + "/" + str(_AGG_BOARD_TOTAL) + ")")
+        println("  gpgpu        : " + v_gpgpu + "   (" + str(_AGG_GPGPU_PRESENT) + "/" + str(_AGG_GPGPU_TOTAL) + ")")
+        println("  ai-native    : " + v_ai_native + "   (" + str(_AGG_AI_NATIVE_PRESENT) + "/" + str(_AGG_AI_NATIVE_TOTAL) + ")")
+        println("  -----------------------------------")
+        println("  TOTAL        : " + overall + "   (" + str(total_present) + "/" + str(total_total) + ")")
+        if overall == "PASS" {
+            println("__HEXA_CHIP_VERIFY_ALL__ PASS")
+        } else {
+            println("__HEXA_CHIP_VERIFY_ALL__ FAIL")
+        }
+    }
+
+    let mut ec = 0
+    if overall == "FAIL" { ec = 1 }
+    _audit("verify-all", "", ec)
+    if ec != 0 { exit(ec) }
+}
+
+// ─── version ───
+
+fn cmd_version() {
+    println("hexa-chip " + VERSION)
+    println("standalone Chip Substrate (30-verb / 6-group — n6-arch@c0f1f570 + Phase G AI-native iter 9)")
+    println("license: MIT")
+    println("repo:    https://github.com/dancinlab/hexa-chip")
+}
+
+// ─── help ───
+
+fn cmd_help() {
+    println("hexa-chip " + VERSION + " — standalone Chip Substrate CLI")
+    println("")
+    println("usage: hexa-chip <subcmd> [flags...]")
+    println("")
+    println("30-verb / 6-group chip substrate (spec-first v1.1.0)")
+    println("  (kick-spec headline read '28-verb / 7-group'; v1.0.0 was 29/6;")
+    println("   v1.1.0 adds hexa_ai_native_n6 — Beyond-GPU AI-native silicon)")
+    println("")
+    println("  architecture group  (3) : architecture · isa_n6 · hexa1")
+    println("  design group        (5) : design · dse_pipeline · rtl_gen · eda · verify_test")
+    println("  process group       (5) : process · materials · wafer · yield · thermal_power")
+    println("  packaging group     (6) : packaging · advanced_packaging · chip_3d · hbm")
+    println("                            interconnect · sc")
+    println("  accelerator group   (9) : npu_n6 · pim · photonic · accel · asic")
+    println("                            hexa_pim · hexa_3d · hexa_wafer · hexa_ai_native_n6")
+    println("  consciousness group (2) : conscious_chip · conscious_soc")
+    println("")
+    println("utility subcommands:")
+    println("  status          group + verb count table + caveats")
+    println("  show <verb>     echo spec path for a single verb")
+    println("  selftest        verify all 30 verb dirs present")
+    println("")
+    println("verify subcommands (Phase D + Phase E + Phase F artifact sweeps):")
+    println("  verify firmware-mcu    enumerate firmware/mcu/*.hexa controllers")
+    println("  verify firmware-hdl    enumerate firmware/hdl/*.v Verilog top-levels")
+    println("  verify board           Phase E paper schematics + KiCad pro + power chain")
+    println("  verify gpgpu           Phase F GPGPU verb (F-CHIP-5 T1 + T2 + T3)")
+    println("  verify ai-native       Phase G AI-native silicon (F-AI1..F-AI2c-A T1+T2+T3)")
+    println("  verify all             aggregate firmware-mcu + firmware-hdl + board + gpgpu + ai-native")
+    println("  verify <other>         delegated to verify/cli.hexa unified dispatcher")
+    println("")
+    println("global flags:")
+    println("  --version       show version")
+    println("  --json          machine-parseable JSON tail")
+    println("  --help, -h      this help")
+    println("")
+    println("env:")
+    println("  HEXA_CHIP_ROOT          override repo root (default: inferred from $0)")
+    println("")
+    println("cost estimate (Mac local): $0 — spec-first; no compute invoked.")
+    println("                            per-verb working sandboxes deferred to post-v1.0.")
+}
+
+// ─── main ───
+
+fn main() {
+    let _raw = args()
+    let mut _sidx = -1
+    let mut _i = 0
+    while _i < _raw.len() {
+        if _raw[_i].ends_with(".hexa") { _sidx = _i; break }
+        _i = _i + 1
+    }
+    let mut _user_start = 2
+    if _sidx >= 0 { _user_start = _sidx + 1 }
+
+    let mut a: [str] = ["hexa_chip_cli", "hexa_chip_router"]
+    let mut _ua = _user_start
+    while _ua < _raw.len() {
+        a = a + [_raw[_ua]]
+        _ua = _ua + 1
+    }
+    let n = len(a)
+
+    if n < 3 {
+        cmd_help()
+        return
+    }
+
+    let sub = a[2]
+
+    if sub == "--version" || sub == "-V" || sub == "version" {
+        cmd_version()
+        return
+    }
+
+    if has_flag(a, "--help") || has_flag(a, "-h") {
+        cmd_help()
+        return
+    }
+
+    if sub == "help" { cmd_help(); return }
+
+    if sub == "status" {
+        cmd_status(a)
+    } else if sub == "show" {
+        cmd_show(a)
+    } else if sub == "selftest" {
+        cmd_selftest(a)
+    } else if sub == "verify" {
+        if a.len() >= 4 {
+            let target = a[3]
+            if target == "firmware-mcu" { cmd_verify_firmware_mcu(a); return }
+            if target == "firmware-hdl" { cmd_verify_firmware_hdl(a); return }
+            if target == "board"        { cmd_verify_board(a); return }
+            if target == "gpgpu"        { cmd_verify_gpgpu(a); return }
+            if target == "ai-native"    { cmd_verify_ai_native(a); return }
+            if target == "all"          { cmd_verify_all(a); return }
+        }
+        // delegate to existing verify/cli.hexa for other targets
+        let cli = HC + "/verify/cli.hexa"
+        let mut cmd = "HEXA_CHIP_ROOT=" + shq(HC) + " hexa run " + shq(cli)
+        let mut k = 3
+        while k < a.len() { cmd = cmd + " " + shq(a[k]); k = k + 1 }
+        exec(cmd)
+        _audit("verify", "", 0)
+        return
+    } else {
+        eprintln("hexa-chip: unknown subcommand '" + sub + "'")
+        eprintln("run 'hexa-chip help' for usage")
+        _audit(sub, "", 2)
+        exit(2)
+    }
+}

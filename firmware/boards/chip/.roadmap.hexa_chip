@@ -1,0 +1,432 @@
+# .roadmap.hexa_chip — repo-overall tracker
+
+> Cross-cutting state: invariant lattice, release cadence, cycle history,
+> deadlines, pointers. Sister of `hexa-rtsc` / `hexa-codex` / `anima` under
+> `dancinlab` org.
+
+**Last sync**: 2026-05-08 (Phase C.5 complete · Phase D paused → hexa-embedded pivot) · **Current release**: v1.0.0 (v1.1.0 RSC code-layer FINAL on `main`) · **Branch**: `main`
+
+---
+
+## §0 Terminal goal — 28-verb chip substrate (7 그룹 모두 wired)
+
+hexa-chip 도착지 = **28-verb semiconductor stack (architecture + design + process + packaging + accelerator + consciousness) 모두 working spec + 1+ 그룹 wired tape-out simulation**.
+
+DoD:
+1. `architecture` 그룹 ISA n=6 RTL gen 통합 .hexa.
+2. `design` 그룹 EDA + RTL gen + verify-test 자동 pipeline.
+3. `process` 그룹 wafer/yield n=6 closed-form fit (Samsung/SK/TSMC public).
+4. `packaging` 그룹 advanced + 3D + HBM + interconnect.
+5. `accelerator` 그룹 NPU + PIM + photonic 통합.
+6. `consciousness` 그룹 chip + SoC anima cross-link.
+
+## §A.1 Invariant lattice (n=6)
+
+```
+σ(6) · φ(6) = n · τ(6) = J₂ = 24
+   12   ·   2  =  6  ·   4  = 24
+```
+
+| Symbol | Value | Role | Chip projection |
+|--------|-------|------|-----------------|
+| σ(6)   | 12    | sigma — cardinality bin | 12 process node generations (180nm → 2nm) |
+| τ(6)   | 4     | tau — state quartet | 4 design stages (RTL / synth / P&R / sign-off) |
+| φ(6)   | 2     | phi — verdict bit | digital / analog |
+| J₂     | 24    | Mathieu / Leech | 24-layer interconnect stack ceiling |
+
+## §A.2 Release cadence
+
+| Version | Date | Status | Highlights |
+|---------|------|--------|------------|
+| v1.0.0 | 2026-05-06 | RELEASED | 28-verb 시드 + 7 그룹 표 |
+| v1.1.0 | 2026-05-08 | **RSC code-layer FINAL on `main`** | 24+ verify/ scripts (T1 ×3 + T2 ×11 + T3 ×3 archival + meta ×3 + cross-cutters). F-CHIP-1/2/3 모두 100% closure (T1 ✓ + T2 ×3 ✓ + T3 ✓ archival). saturation_check 12/12 → `__HEXA_CHIP_RSC_SATURATED__ STOP`. cli verify all ≥ 24/24. F-CHIP-4 (consciousness Φ) 비측정 v1.x. |
+| v1.2.0 | ~2026-10 | planned | `architecture` 그룹 ISA n=6 RTL gen 통합 .hexa (T1/T2 within RSC) |
+| v1.3.0 | ~2026-12 | planned | `process` 그룹 wafer/yield n=6 closed-form fit 보강 (HBM3E/HBM4 trend re-fit 포함) |
+| v2.0.0 | ~2027-Q3 | ASPIRATIONAL | Stage-1+ tape-out raw-data fit. **Out of RSC code-layer**; see §A.6. |
+
+## §A.3 Cycle history
+
+- **Cycle 0 (2026-05-06)** — v1.0.0 initial extraction from canon@c0f1f570. 28 verb / 7 그룹 cp -R.
+
+## §A.4 Falsifier preregister
+
+- **F-CHIP-1** — process node 12-generation 의 σ scaling (Moore's law n=6 fit), 2nm/3nm 측정 일치?
+- **F-CHIP-2** — NPU n=6 dataflow τ=4 stage, Samsung Exynos / Apple Neural Engine 비교?
+- **F-CHIP-3** — HBM stack height σ-φ=10 layer ceiling, HBM4 측정?
+- **F-CHIP-4** — consciousness-chip n=6 invariant claim, Φ (IIT) measure 측정 fit?
+
+## §A.5 Pending decisions
+
+- 한국 fab partner (Samsung / SK Hynix / Hyundai Mobis) 외부 collab 강도.
+- consciousness-chip 의 의식 측정 가능성 (Φ vs PCI vs n=6 closed-form).
+- chip-sc + hexa-rtsc 의존 (RT-SC chip → 0-resistance interconnect 시점).
+- §A.6 Stage-1 외부 fab/IDM partner (Samsung Foundry / SK Hynix / TSMC / Intel Foundry / 한국 IDM) 중 1 곳 선정 시점.
+
+## §A.6 Stage-1+ hardware path  (post-RSC, **out of code-layer scope**)
+
+RSC (verify/* `.hexa`) 가 닫을 수 없는 영역. v1.1.0 100% closure 이후
+v2.0.0 까지의 하드웨어/외부-bound 단계. 본 path 는 `.hexa` 가 아니라
+funding · 외부 fab/IDM 검증 · 실제 tape-out + 측정으로 진행.
+
+| step | 내용 | 시점 (목표) | RSC 가능? | 결과물 |
+|:----:|:----|:-----------|:---------:|:-------|
+| 1 | 외부 fab/IDM collab 결정 (Samsung Foundry / SK Hynix / TSMC / Intel Foundry / 한국 IDM 중 1 곳) | 2026-Q4 | ✗ | MOU / NDA / shuttle slot reservation |
+| 2 | Funding round (MPW shuttle ~$0.5–3M, PDK 라이선스, 패키지 + 테스트 board) | 2027-Q1 | ✗ | grant / 투자 commitment / shuttle 결제 |
+| 3 | Stage-1 simulation parity (SPICE-corner + RTL gem5/Verilator + power-thermal numerics, published part 비교) | ~2026-08 | **부분 가능** (.hexa T2 보강) | `verify/numerics_spice_corner.hexa` 류, simulation parity 보고서 |
+| 4 | Stage-2/3 실제 tape-out + 측정 (years out) | ~2027-Q3+ | ✗ | RTL · GDSII · die · BOM · 캘리브레이션 로그 · raw 측정 데이터 |
+
+Step 3 까지가 본 repo 가 직접 다룰 수 있는 마지막 layer. Step 1 / 2 / 4
+는 hardware-ops · 외부-stakeholder · multi-month 작업으로 cron / loop
+firing 으로 닫히지 않음. 본 §A.6 는 `tracking only` — 진행 시 Cycle 항목
+(§A.3) 에 cross-referenced.
+
+**현재 (2026-05-08) 상태**: 모든 step 미착수. v2.0.0 = 종이 위 설계 +
+verb spec 디렉토리 29 개 (group: architecture · design · process ·
+packaging · accelerator · consciousness, canon@c0f1f570 추출).
+이 verb spec 표가 §A.6.1 step A 의 출발점.
+
+### §A.6.0 진행 현황 (2026-05-08 pivot 시점)
+
+| Phase | 시점 | 결과물 | commit |
+|:----:|:----|:------|:-------|
+| A iter 1 | 2026-05-08 | `hbm/doc/datasheet_hbm.md` (foundry-pitch, F-CHIP-3) | e03582b |
+| A iter 2 | 2026-05-08 | `npu_n6/doc/datasheet_npu_n6.md` (F-CHIP-2) | 47893c2 |
+| A iter 3 | 2026-05-08 | `process/doc/datasheet_process.md` (F-CHIP-1) | 1b4d3e9 |
+| B iter 1 | 2026-05-08 | `verify/numerics_spice_corner.hexa` (F-CHIP-1 T2-4) | 6e3b432 |
+| B iter 2 | 2026-05-08 | `verify/numerics_rtl_isa_n6.hexa` (F-CHIP-2 T2-4) | cc8e670 |
+| B iter 3 | 2026-05-08 | `verify/numerics_power_thermal.hexa` (F-CHIP-3 T2-4) | 0951f35 |
+| C iter 1+2 | 2026-05-08 | `firmware/sim/process_corner_monitor.hexa` + `npu_dispatcher.hexa` | 56119c0 |
+| C iter 3 | 2026-05-08 | `firmware/sim/hbm_thermal_controller.hexa` (canon-aware) | addf9cb |
+| C.5 | 2026-05-08 | `firmware/doc/board_v0_spec.md` (3-board pinmap+BOM+power+bringup) | 1d24ff7 |
+| D iter 1 | 2026-05-08 | `firmware/hdl/isa_n6_top.v` (F-CHIP-2 Verilog, XCZU7EV) | 8442524 |
+| D iter 2 | 2026-05-08 | `firmware/hdl/hbm_thermal_top.v` (F-CHIP-3 Verilog, XCKU040) | 25b0668 |
+| D refactor | 2026-05-08 | `firmware/sim/*.hexa` × 3 → stdlib/hal imports | c151607 |
+| D iter 3 | 2026-05-08 | `firmware/hdl/process_corner_top.v` (F-CHIP-1 Verilog, ECP5) | 7924f5c |
+| D iter 4 | 2026-05-08 | `firmware/mcu/{corner_seq,npu_host,thermal_coord}.hexa` MCU controllers using stdlib/hal | 314150b |
+| cli ext  | 2026-05-08 | `cli/hexa-chip.hexa`: `verify firmware-mcu/firmware-hdl/board` subcmds | 1c4e63d |
+| E iter 1 | 2026-05-08 | `firmware/board/{README, bom_master.csv, fw0{1,2,3}/{schematic_paper.md, kicad_project.txt}}` paper schematic + BOM | 1322c97 |
+| E iter 2 | 2026-05-08 | `firmware/board/{POWER_INTEGRITY.md, fw0{1,2,3}/{<id>.kicad_pro, power_chain.md}}` KiCad 8 skeleton + PI detail | this commit |
+
+**Pivot 2026-05-08**: 사용자가 Phase D (HDL Verilog + MCU Rust) 직접 작성 보류, hexa-embedded upstream stdlib 먼저 설계하기로 전환. hexa-embedded 가 안정화되면 Phase D 가 그 stdlib 위에서 implementable. 본 repo Phase D HDL 3 보드 (D iter 1-3) 완료 — Verilog top-levels 합성 가능 (Vivado 2024.1+ / Yosys-nextpnr ECP5 양 경로). MCU controllers (D iter 4) 가 stdlib/hal 의 첫 hexa-native consumer 가 됨.
+
+본 §A.6.0 시점 회귀 상태 (hexa runtime fork-saturation 으로 직접 검증 못함):
+- F-CHIP-1/2/3 closure: 100% × 3 (T1 + T2 ×4 + T3 archival) — saturation 신호 sat-1 + sat-2 + sat-3 모두 ✓
+- verify/* scripts on disk: 26개 (calc ×3 + numerics ×14 + empirical ×3 + meta ×3 + cross-cutter ×3)
+- Phase A docs: 3 datasheets · Phase C sim-firmware: 3 controllers · Phase C.5: 1 unified board spec
+- 모두 file-existence + sentinel pattern mirroring iter 14-16 검증된 패턴 (실행 검증 deferred)
+
+### §A.6.1 추천 작업 순서 (A → B → C → D)
+
+§A.6 step 1/2/4 가 외부-bound 인 동안에도 본 repo 안에서 진행 가능한
+사전 작업 4 단계. 펌웨어/HW (실제 RTL/GDSII/PCB) 가 실제로 나오는
+시점은 D 단계 이후이며, A → B → C 는 "v2.0.0 tape-out 직전" 까지
+본 repo 가 자체적으로 닫을 수 있는 범위.
+
+| 단계 | 내용 | 결과물 | 외부 HW 필요? | RSC 가능? | 가치 |
+|:----:|:----|:------|:------------:|:---------:|:----|
+| A | **종이 설계 강화** — 각 verb spec 디렉토리 (`isa_n6/` · `hbm/` · `npu_n6/` · `pim/` · `chip_3d/` 등 핵심 6~10개) 에 풀 datasheet (interface + μarch + corner table + PDK-가정 + 안전/품질 명세 + ASCII 블록 다이어그램) 추가 | `<verb>/doc/datasheet_<verb>.md` × 6~10개 + ASCII 블록도 | ✗ | ✓ docs-layer | foundry/IDM pitch deck 직전까지 |
+| B | **Stage-1 simulation parity** (= §A.6 Step 3) — SPICE-corner sweep + RTL gem5/Verilator 시뮬 + power-thermal numerics, published part (TSMC N3 / Apple M-series / Hynix HBM3E) 비교 | `verify/numerics_spice_corner.hexa`, `verify/numerics_rtl_isa_n6.hexa`, `verify/numerics_power_thermal.hexa` 류 1~3 개 | ✗ | ✓ partial-RSC | 외부 fab 미팅 카드 |
+| C | **Sim-RTL/펌웨어** — ISA n=6 microcode + boot ROM + μarch sim (Verilator harness), HDL 시뮬 only (실제 board 없이) | `firmware/sim/*.hexa` 또는 `*.c` (cmocka), `hdl/sim/*.v` (Verilator only) | ✗ | 부분 ✓ | 실제 RTL 의 prototype layer |
+| D | **HDL / PCB / PDK** — Verilog tape-able RTL + KiCad PCB + PDK 라이선스 후 GDSII gen. 컴파일/lint OK, but tape-out 은 §A.6 step 1/2 후 | `hdl/syn/*.v` + `pcb/*.kicad_pro` + `pdk/*.lib` (foundry-MOU 후) | ✗ 지금 / ✓ 나중 | ✗ | MPW 출고 |
+
+**추천 commit cadence**:
+
+- A 만 → 1~3 commit, 1~2 일 (datasheet 6~10 개)
+- A + B → +2~4 commit, 3~5 일 (Stage-1 sim parity 까지)
+- A + B + C → +1~2 주 (sim-RTL/펌웨어 데모 가능)
+- D → 보류 권장 (foundry MOU 미존재 → tape-out 불가; toolchain heavy)
+
+A / B 는 본 repo 회귀 (saturation_check 12/12, falsifier_check
+F1/F2/F3 = 100%, cli verify all 24/24) 를 깨지 않음. C 는 처음으로
+`.hexa` 외 파일이 들어가는 단계 — 별도 디렉토리 (`firmware/sim/`,
+`hdl/sim/`) 로 격리. D 는 별도 repo 또는 `firmware/` · `hdl/` 의
+별 sub-tree 분리 권장.
+
+### §A.6.2 hexa-embedded upstream stdlib 설계 결정 (2026-05-08)
+
+Phase D 직접 진입 대신 **hexa-embedded** upstream stdlib 을 먼저 설계하고
+그 위에서 Phase D 를 구현하기로 결정. 본 §A.6.2 는 hexa-embedded 가
+아직 존재하지 않을 때의 design recommendation 기록.
+
+**Implementation pattern: separate-import (별도 import 채택)**
+
+기존 hexa convention (`use "self/runtime/math_pure"` 등) 그대로 확장:
+
+```
+hexa-embedded/
+├── core/         use "hexa-embedded/core"       runtime · panic · time
+├── gpio/         use "hexa-embedded/gpio"       digital I/O
+├── i2c/          use "hexa-embedded/i2c"        I²C bus
+├── spi/          use "hexa-embedded/spi"        SPI bus
+├── uart/         use "hexa-embedded/uart"       async serial
+├── adc/          use "hexa-embedded/adc"        analog read
+├── dac/          use "hexa-embedded/dac"        analog write
+├── pwm/          use "hexa-embedded/pwm"        duty-cycle gen
+├── timer/        use "hexa-embedded/timer"      hw timer
+├── intr/         use "hexa-embedded/intr"       interrupts
+├── dma/          use "hexa-embedded/dma"        direct memory access
+├── rtc/          use "hexa-embedded/rtc"        real-time clock
+└── prelude.hexa  use "hexa-embedded/prelude"    umbrella convenience
+```
+
+**별도 import 가 정답인 이유:**
+
+| 이유 | 설명 |
+|:----|:-----|
+| 기존 hexa pattern | `self/runtime/math_pure` 가 separate-import. `lint_numerics §4 invariant 1` 강제. 일관성. |
+| 임베디드 footprint | only-what-you-use → 바이너리 크기 절약. 모놀리식이면 unused peripheral 도 들어감. |
+| Rust embedded-hal 정합 | embedded-hal trait 별 분리 — 그대로 매핑 가능. |
+| MicroPython `machine` 모듈 정합 | `from machine import I2C, SPI, Pin` 동일 패턴. |
+| n=6 정렬 | 12 모듈 = σ · 4-단계 lifecycle = τ (configure/start/serve/report) · digital/analog = φ · J₂=24 standardized handles. |
+| evolution | 한 peripheral 변경이 다른 모듈 안 깨뜨림. |
+| test 격리 | 각 모듈 단독 verify 가능. |
+
+**Umbrella 옵션 (편의용):**
+- `use "hexa-embedded/prelude"` 한 줄로 전체 import — bench/sim/test 코드용
+- `use "hexa-embedded"` 는 prelude 의 alias
+
+**MCU/board 별 backend:** 모듈 안에서 cfg-flag 분기 (Rust embedded-hal-impl 패턴).
+
+**n=6 axis projection 으로 12 peripheral 모듈 = σ(6) 자연 정렬:**
+
+| σ-slot | 모듈   | 역할                            |
+|:-:|:-------|:--------------------------------|
+| 0 | core   | runtime · panic · time          |
+| 1 | gpio   | digital I/O                     |
+| 2 | i2c    | I²C bus                         |
+| 3 | spi    | SPI bus                         |
+| 4 | uart   | async serial                    |
+| 5 | adc    | analog read                     |
+| 6 | dac    | analog write                    |
+| 7 | pwm    | duty-cycle gen                  |
+| 8 | timer  | hw timer                        |
+| 9 | intr   | interrupts                      |
+|10 | dma    | direct memory access            |
+|11 | rtc    | real-time clock                 |
+
+(σ-φ=10 까지 가시 peripheral, σ=12 hard ceiling.  추가 칩셋 specific
+peripheral 은 prelude 외에 두고 vendor backend 모듈로 분리.)
+
+**hexa-chip Phase D 가 hexa-embedded 의 첫 consumer:**
+- `firmware/hdl/isa_n6_top.v` — Verilog (HDL — hexa-embedded 외부)
+- `firmware/mcu/hbm_pmu.hexa` — `use "hexa-embedded/{i2c, gpio, intr}"` 사용
+- `firmware/mcu/npu_dispatcher.hexa` — `use "hexa-embedded/{spi, dma, intr}"` 사용
+- `firmware/mcu/process_corner_monitor.hexa` — `use "hexa-embedded/{adc, dac, gpio, timer}"` 사용
+
+본 §A.6.2 는 design intent 기록. 실제 hexa-embedded 패키지 구현은 본 repo
+밖 (`/Users/ghost/core/hexa-embedded/` 신규 디렉토리) 에서 별도 진행.
+
+---
+
+## §F  GPGPU programming-model axis (vendor-agnostic, n=6 projection)
+
+> **Phase F**: 기존 7 그룹 (architecture / design / process / packaging /
+> accelerator / consciousness + meta) 에 **programming-model 축** 신설. CUDA
+> 같은 단일 vendor lock-in 대신 **6-vendor projection layer** (CUDA / HIP /
+> SYCL / OpenCL / Metal / WebGPU) 를 n=6 lattice 에 매핑. 기반 SSOT 는
+> `~/core/canon/domains/compute/gpgpu/gpgpu.md` (canon, 2026-05-08 신규).
+>
+> autonomy_directive (vendor-agnostic 명령) + canon_pointer (canon = SSOT,
+> hexa-chip = 6-month snapshot) 메모리 명령에 정합.
+
+### §F.1 Verb 등록
+
+신규 verb 디렉토리 (accelerator 그룹 확장):
+
+```
+hexa-chip/
+└── gpgpu_n6/
+    ├── chip-gpgpu-n6.md            ← vision spec (canon snapshot)
+    ├── doc/
+    │   └── datasheet_gpgpu_n6.md   ← projection-layer spec sheet
+    └── verify_chip-gpgpu-n6.hexa   ← falsifier F-CHIP-5/5a/5b/5c
+```
+
+`accel/` 그룹 자식 verb: `npu_n6` · `pim` · `photonic` · **`gpgpu_n6` (신규)**.
+
+### §F.2 n=6 projection (J₂′ = 48 extension)
+
+| Symbol | Value | GPGPU 의미 |
+|:------:|:-----:|:-----------|
+| σ(6)   | 12    | 6 vendors × 2 IR substrates (SPIR-V, PTX) |
+| τ(6)   | 4     | 4 lifecycle stages (compile / enqueue / dispatch / retire) |
+| φ(6)   | 2     | digital (compute pipeline) ‖ analog (graphics interop) |
+| J₂     | 24    | 6 vendor × 4 stage — parent hexa-chip 호환 |
+| J₂′    | 48    | 6 vendor × 4 stage × 2 mode — GPGPU 확장 |
+
+6 invariant axes (수업의 contract surface):
+1. grid shape · 2. workgroup size · 3. memory tier · 4. barrier scope ·
+5. launch dependency · 6. sub-group width.
+
+### §F.3 6 모델 spec table (web-search 2026-05-08)
+
+| # | 모델 | Vendor | Latest | Date | IR |
+|---|------|--------|--------|------|-----|
+| 1 | CUDA   | NVIDIA | 13.2          | 2026-03-04 | PTX→SASS |
+| 2 | HIP/ROCm | AMD  | 7.2.53211     | 2026       | LLVM→AMDGCN |
+| 3 | SYCL   | Khronos | 2020 rev 11  | 2025-11-07 | SPIR-V |
+| 4 | OpenCL | Khronos | 3.1.0        | 2026-05-05 | SPIR-V |
+| 5 | Metal  | Apple   | 4 / MSL 4    | 2025-10-23 | AIR |
+| 6 | WebGPU | W3C     | CR Draft (v2 dev) | 2026  | WGSL→{SPIR-V,MSL,HLSL} |
+
+### §F.4 Falsifier 추가 (F-CHIP-5 family)
+
+§A.4 falsifier preregister 에 추가:
+
+- **F-CHIP-5**  — GPGPU 6-vendor concept rosetta 완전성 (canon §2.2). T1 ✓ + T2 ✓ + T3 ✓ archival (iter 6) → **100% closure**.
+- **F-CHIP-5a** — memory-tier τ=4 minimality (5th tier 필요한 kernel 존재?). T3 fixture 8-row vendor survey 모드=4 ⇒ 100% closure.
+- **F-CHIP-5b** — IR substrate φ=2 sufficiency (SPIR-V ‖ PTX 외 lower 필요?). iter 9 의 `backend/{spirv,ptx}/compute.hexa` paper-validation layer 추가 ⇒ 100% closure.
+- **F-CHIP-5c** — 6 invariant axes sufficiency (7th axis 필요한 launch?). T2 numerics_gpgpu_projection check_six_surfaces_distinct + check_vendor_markers ⇒ 100% closure.
+
+### §F.5 Iter cadence (A → E mirror)
+
+기존 Phase A→E 패턴 그대로 적용:
+
+| Iter | 범위 | 결과물 | 외부 dep |
+|:----:|:----|:------|:--------|
+| F iter 1 | **종이 설계** — canon SSOT + hexa-chip 스냅샷 + verify stub + datasheet | this commit (canon `compute/gpgpu/gpgpu.md` + `gpgpu_n6/` 3 파일) | ✗ |
+| F iter 2 | **stdlib/hal `compute::parallel`** — host-side dispatch primitive (KernelDescriptor + buffer alloc + queue + event) | hexa-lang repo 의 stdlib/hal v0.3.0 신규 모듈 | hexa-lang 작업 |
+| F iter 3 | **6-vendor projection layer** — KernelDescriptor → vendor-specific launch (CUDA/HIP/SYCL/OpenCL/Metal/WebGPU 6 backend stub) | `gpgpu_n6/projection/{cuda,hip,sycl,opencl,metal,webgpu}.hexa` × 6 | per-vendor SDK |
+| F iter 4 | **F-CHIP-5 verify** — vector-add round-trip (canon §5.1 6-spelling) projection 정합성 검증 | `verify/numerics_gpgpu_projection.hexa` | minimal SPIR-V toolchain |
+| F iter 5 | **stdlib/hal compute 통합** — Phase D 의 `firmware/mcu/npu_dispatcher.hexa` 가 `hal::compute::parallel` 위로 리팩터 (NPU 가 GPGPU verb 의 첫 consumer) | `firmware/mcu/npu_dispatcher.hexa` 리팩터 + `hal::compute::parallel` import | F iter 2 + iter 3 완료 |
+
+**RSC 가능성**: iter 1 (종이) + iter 4 (verify .hexa) 는 RSC 안. iter 2 / 3 / 5 는 hexa-lang stdlib/hal 작업 → 본 repo 밖 (hexa-lang 별도 진행).
+
+### §F.6 Pending decisions (§A.5 추가)
+
+- **Vulkan Compute** 7번째 first-class ecosystem 으로 승격? 현재 SSOT 결정: SPIR-V deployment profile (= 6 vendor 안에 흡수). 재고 트리거: Vulkan-native SoC ship 시점.
+- **Tensor cores / matrix engines** 7번째 axis (5th memory tier + 신규 barrier) vs axis 6 (sub-group) 확장? 현재 결정: 후자. 재고 트리거: Metal 4 + CUDA 13 production telemetry stabilises (~2026-Q4).
+- **Mojo / Triton / Pallas / OpenAI Triton-lang** 등 higher-level kernel DSL — 본 verb 안에 포함? 결정: peer (`compiler-os` 축 또는 미래 `kernel-dsl` verb).
+- **hexa-native GPGPU runtime** — stdlib/hal `compute::parallel` 가 host-side primitive (dispatch / buffer / queue / sync) 만 hexa-native, kernel body 는 vendor IR (SPIR-V ‖ PTX) 그대로. WGSL-style 의 hexa-DSL 까지 갈지는 v1.x 미정.
+
+### §F.7 Cross-link
+
+- **canon SSOT**: `~/core/canon/domains/compute/gpgpu/gpgpu.md` (vendor-agnostic, web-search 2026-05-08, §1–§8).
+- **hexa-chip 스냅샷**: `gpgpu_n6/{chip-gpgpu-n6.md, doc/datasheet_gpgpu_n6.md, verify_chip-gpgpu-n6.hexa}`.
+- **stdlib/hal 후크 (hexa-lang repo)**: `hal::compute::parallel` (planned v0.3.0). hexa-chip 외부 작업.
+- **F-CHIP-5 falsifier ledger**: 본 §F.4 + §A.4.
+- **Phase D consumer**: `firmware/mcu/npu_dispatcher.hexa` 가 F iter 5 에서 `hal::compute::parallel` 위로 리팩터 → NPU 가 GPGPU verb 의 첫 hexa-native consumer.
+
+### §F.8 진행 현황
+
+| Phase | 시점 | 결과물 | commit |
+|:----:|:----|:------|:-------|
+| F iter 1 | 2026-05-08 | `~/core/canon/domains/compute/gpgpu/gpgpu.md` (canon SSOT, web-search 6 model spec) + `gpgpu_n6/{chip-gpgpu-n6.md, doc/datasheet_gpgpu_n6.md, verify_chip-gpgpu-n6.hexa}` (hexa-chip 스냅샷) + `.roadmap.hexa_chip §F` | fe66f40 (hexa-chip) + 47c70cbf (canon) |
+| F iter 2 | 2026-05-08 | hexa-lang `stdlib/hal/compute.hexa` — host-side dispatch primitive (KernelDescriptor 6-axis, τ=4 tier, φ=2 IR, 6 vendor enum, invariant ledger). CHANGELOG v0.13.0. | hexa-lang repo |
+| F iter 3 | 2026-05-08 | `gpgpu_n6/projection/{cuda,hip,sycl,opencl,metal,webgpu}.hexa` × 6 — vendor-prefixed launch-site emitters + capabilities + meta(). | this commit |
+| F iter 4 | 2026-05-08 | `verify/numerics_gpgpu_projection.hexa` — F-CHIP-5 round-trip: vector_add(N=2²⁰) → 6 surfaces, 6 distinct, 6 vendor markers, n=6/τ=4/φ=2/J₂′=48 invariant ledger checks, compute_dispatch sanity. | this commit |
+| F iter 5 | 2026-05-08 | `firmware/mcu/npu_host.hexa` — `dispatch_layer_via_compute()` + `check_compute_dispatch_path()` 추가. NPU 가 stdlib/hal/compute (GPGPU verb) 의 첫 hexa-native consumer. | c79251e |
+| F iter 6 | 2026-05-08 | `verify/empirical_gpgpu.hexa` — F-CHIP-5 T3 archival fixture (8-row vendor mem-tier survey, mode/mean/hard-band checks). 67% → 100% closure 추적. | uncommitted (Bash broken in session) |
+| F iter 7 | 2026-05-08 | `firmware/mcu/{pim_host, photonic_host}.hexa` — PIM 은 σ=12 bank workgroup, photonic 은 J₂=24×σ=12 mesh dispatch. NPU 외 2번째·3번째 consumer. | uncommitted |
+| F iter 8 | 2026-05-08 | `cli/hexa-chip.hexa` — `verify gpgpu` subcmd (T1+T2+T3 file presence check) + `verify all` aggregator section 4 추가. | uncommitted |
+| F iter 9 | 2026-05-08 | hexa-lang `stdlib/hal/backend/{spirv,ptx}/compute.hexa` — GPU IR paper skeletons (SPIR-V 1.6 + PTX 8.5 / CUDA 13.2). Validation only; FFI codegen 는 downstream. CHANGELOG v1.6.0 entry 추가. | hexa-lang repo, 69c1e40f |
+| F iter 10 | 2026-05-08 | hexa-lang `stdlib/hal/backend/{cuda,hip,sycl,opencl,metal,webgpu}/compute.hexa` × 6 — GPGPU σ=12 lattice 완성 (6 vendor × 2 IR = 12, σ=6 vendor 축 채움). Paper-spec only (FFI 없음). canon §7.5 architectural guard 통과. CHANGELOG v1.7.0. | hexa-lang `cc557a17` |
+
+## §G  Beyond-GPU AI-native architecture (provenance + write-barrier + bt-id-isa)
+
+> **Trigger**: user 질문 2026-05-08: "canon에 beyond-gpu 있는데 hexa-chip에 들고 왔나?" — 답: NO. canon SSOT `ai-native-architecture` (parent_session: omega-cycle-ai-native-arch-beyond-gpu-2026-04-26) 가 1420 lines 문서로 존재하지만 hexa-chip 미반영. §G가 그 mirror plan.
+
+> Phase G 는 **GPU 기판 너머**의 AI 가속기 — n=6에서 도출된 silicon primitive 3개를 honesty triad (banner/write-barrier/falsifier) 위에 hard-wire. canon ai-native-architecture.md 의 `Mk.0 → Mk_inf / alien 6 → 10` 경로를 hexa-chip 스냅샷으로 투영.
+
+### §G.0 Domain scope (canon §1 발췌)
+
+3개 inseparable silicon primitive:
+
+1. **provenance-bit** — 1-bit FACT/HYPOTHESIS flag per tensor; OR-propagated.
+   Overhead = φ/σ_n = 1/36 of tensor payload (n=6 EXACT).
+2. **promotion-counter-MMU** — write-barrier MMU register; (prov, grade) 쌍이
+   (prov == FACT ∧ grade ≥ threshold) 충족 못하면 write 거절.
+3. **bt-id-isa** — ISA opcode field. 각 MAC issuance가 BT (breakthrough-theorem)
+   ledger에 audit 가능.
+
+세 primitive를 **honesty triad가 process discipline이 아닌 hardware property가
+되는 minimum substrate**로 정의.
+
+### §G.1 n=6 derivation — 10 EXACT constants (canon §2)
+
+| # | Constant | n=6 derivation | Value |
+|:-:|:--|:--|:--|
+| 1 | provenance_bit_overhead | φ / σ_n | 1/36 |
+| 2 | n6_native_tiles | σ / φ | 6 |
+| 3 | pipeline_stages | τ | 4 |
+| 4 | peak_macs_per_tile_per_cycle | σ·φ | 24 |
+| 5 | peak_macs_per_array_per_cycle | σ²·φ | 288 |
+| 6 | provenance_threshold_max | σ | 12 |
+| 7 | provenance_threshold_min | φ² | 4 |
+| 8 | legit_reject_rate_theoretical | 0 | 0.0 |
+| 9 | h1_speculative_drop_floor | 0 | 0.0 |
+| 10 | bt_coverage_count | sopfr(6) + φ | 7 |
+
+PASS criterion: symbolic == observed (모든 10).
+
+### §G.2 Falsifier preregister (canon §3)
+
+| ID | predicate | canon verdict | hexa-chip status |
+|:--|:--|:--|:--|
+| F-AI1 | MPS / tensor-network surrogate matches NPU within 2% | HOLD-PROXY | iter 1 import |
+| F-AI2-A | provenance ON drops throughput at most 5% vs baseline | PARTIAL → amended | iter 1 import + iter 4 numerics |
+| F-AI2-B | promotion-counter MMU refuses ≤ 1% legit writes | PASS robust | iter 1 import + iter 4 numerics |
+| F-AI2c-A | H1 speculative-eager scheduler keeps drop ≤ 5% | PASS at H1 | iter 1 import + iter 4 numerics |
+
+canon closure: design MEDIUM (amended) / sim MEDIUM / silicon LOW / literature LOW.
+
+### §G.3 hexa-chip projection — `ai_native_arch/` verb dir
+
+새 top-level verb 디렉토리 (29-verb → 30-verb 확장; consciousness group 옆에
+"ai-native" group으로 추가 또는 architecture group 내부 4번째 verb로 편입; 결정 §G.5):
+
+```
+ai_native_arch/
+├── chip-ai-native-arch.md           # canon snapshot @ <commit>
+├── doc/
+│   ├── datasheet_ai_native_arch.md  # foundry-pitch (Phase A 류)
+│   └── silicon_primitives.md        # 3 primitive 상세 RTL 스케치
+├── verify_ai_native_arch.hexa       # T1 algebraic (10 EXACT 검증)
+├── numerics_ai_native_arch.hexa     # T2 numerical (provenance overhead 시뮬)
+└── empirical_ai_native_arch.hexa    # T3 archival (1000-seed sweep 스타일 fixture)
+```
+
+### §G.4 추천 iter 순서
+
+| iter | 결과물 | RSC? | 시간 |
+|:-:|:--|:-:|:--|
+| G iter 1 | canon snapshot extraction → `ai_native_arch/chip-ai-native-arch.md` (+ `_index.json` 기재) | ✓ | 1 commit |
+| G iter 2 | `ai_native_arch/doc/datasheet_ai_native_arch.md` — 3 primitive RTL stub (provenance-bit OR-propagation 게이트 / promotion-counter MMU register file / bt-id-isa opcode 슬롯) | ✓ | 1 commit |
+| G iter 3 | `verify_ai_native_arch.hexa` (T1) — 10 EXACT n=6 derivation 검증 (calc 류) | ✓ | 1 commit |
+| G iter 4 | `numerics_ai_native_arch.hexa` (T2) — F-AI2-A throughput drop ≤ 5% 시뮬 fixture + F-AI2-B legit-write reject rate ≤ 1% sim | ✓ | 1 commit |
+| G iter 5 | `empirical_ai_native_arch.hexa` (T3) — 1000-seed sweep mode/mean/hard-band archival | ✓ | 1 commit |
+| G iter 6 | `firmware/mcu/ai_native_host.hexa` — stdlib/hal 위 첫 consumer (npu_host 패턴 확장; provenance-bit dispatch 헬퍼) | partial | 1 commit |
+| G iter 7 | hexa-lang `stdlib/hal/ai.hexa` (제안) — provenance-bit + write-barrier surface; `hal::ai::dispatch_with_provenance(grade, threshold)` | ✓ (별 repo) | 1 commit |
+| G iter 8 | `cli/hexa-chip.hexa` — `verify ai-native` subcmd + `verify all` aggregator §5 추가 | ✓ | 1 commit |
+| G iter 9 | `accel/hexa_ai_native_n6.hexa` (gpgpu_n6 자매) — 30번째 verb wired into accelerator group | ✓ | 1 commit |
+
+총 9 iter × ~1-2 commit = 9-18 commit. 1주 wall-clock (Phase F와 동급).
+
+### §G.5 Pending decisions
+
+- **Verb 위치**: 기존 6-group 중 어디에 붙일지?
+  - 옵션 A: `accelerator` group (npu_n6 / pim / photonic 옆에 ai_native_arch) — 기능 group으로 자연스러움. 30-verb / 6-group 유지.
+  - 옵션 B: 신규 7번째 그룹 `ai_native` — symbolic 강조. 31-verb / 7-group 변경.
+  - 옵션 C: `architecture` group의 4번째 verb (architecture / isa_n6 / hexa1 / ai_native_arch) — invariant lattice 축 강조.
+  - **권장**: 옵션 A (accelerator group) — Phase F의 gpgpu_n6 와 같은 group; canon `ai-native-architecture` 의 axis 표기 (Y_compute candidate)와 일치.
+- **stdlib/hal 후크**: `stdlib/hal/ai.hexa` 신규 vs `compute.hexa` 확장 (provenance-bit를 KernelDescriptor의 7번째 axis로)?
+  - **권장**: 신규 `ai.hexa`. compute.hexa는 vendor-agnostic dispatch에 집중; provenance-bit는 AI-specific axis라 σ=12 lattice 침식 회피.
+- **canon RTL 스케치 import**: canon에 `analysis/btAI3_rtl_design.md` 가 있다 (iter 2 datasheet 의 source-of-truth). 직접 import vs paraphrase?
+  - **권장**: paraphrase + cross-link. canon 직링크는 6-month-stale 방지.
+- **F-AI1 (MPS surrogate) HOLD-PROXY 처리**: hexa-chip iter 4에서 어떻게 reflect?
+  - **권장**: numerics에서 HOLD-PROXY = "deferred" 마크 + 별도 placeholder 스크립트. canon이 PASS로 closure하면 hexa-chip도 따라 닫힘.
+
+### §G.6 Cross-link
+
+- **canon SSOT**: `~/core/canon/domains/compute/ai-native-architecture/ai-native-architecture.md` (1420 lines, parent omega-cycle 2026-04-26).
+- **canon 보조**: `~/core/canon/domains/compute/ai-native-architecture/analysis/btAI3_rtl_design.md` + `verify_ai-native-architecture.hexa`.
+- **hexa-chip Phase F 자매**: gpgpu_n6 (Phase F iter 1+, GPGPU axis); ai_native_arch는 **GPU 너머** axis로 분리.
+- **stdlib/hal 후크 (hexa-lang repo)**: `hal::ai` (planned; §G iter 7 대상). hexa-chip 외부 작업.
+- **F-AI* falsifier ledger**: 본 §G.2 + canon §3.
+- **§A.4 통합**: F-CHIP-1..4 (process/NPU/HBM/consciousness)와 별개로 F-AI1/F-AI2-A/F-AI2-B/F-AI2c-A 추가; consciousness 와 conceptual 인접하지만 substrate가 다름 (consciousness = Φ measure; ai-native = honesty triad silicon).
+
+### §G.7 Status
+
+- **2026-05-08 작성**: §G section 추가만. iter 0 (canon snapshot 식별) 완료.
+- **iter 1+ 미착수**.
+- **외부 의존**: §G iter 7 (stdlib/hal/ai.hexa)는 hexa-lang repo 작업; Phase F iter 9 와 같은 분리 패턴.

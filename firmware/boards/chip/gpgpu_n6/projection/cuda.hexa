@@ -1,0 +1,49 @@
+#!hexa strict
+// gpgpu_n6/projection/cuda.hexa — vendor backend 1/6: NVIDIA CUDA.
+//
+// canon: ~/core/canon/domains/compute/gpgpu/gpgpu.md §5.1 (vector add).
+// IR substrate: PTX (φ=1). Host API: <<<grid, block>>> launch syntax.
+//
+// Phase F iter 3 — projection-layer stub. Takes vendor-agnostic
+// KernelDescriptor (axes 1–6 + IR bytes) and emits the CUDA-specific
+// launch surface as a string (no actual nvrtc / driver call).
+
+use "stdlib/hal/compute"
+
+let CUDA_VENDOR = "CUDA"
+let CUDA_IR     = "PTX"
+let CUDA_LATEST = "13.2 (2026-03-04)"
+
+fn _cuda_wg_total(x: int, y: int, z: int) -> int { return x * y * z }
+
+// 6-axis projection → CUDA host launch site.
+fn cuda_project_launch(
+    kern_name: str,
+    grid_x: int, grid_y: int, grid_z: int,
+    wg_x: int, wg_y: int, wg_z: int,
+    barrier_scope: int,
+    subgroup_w: int
+) -> str {
+    let cluster_note = if barrier_scope >= 2 { " /* CC≥9.0 cluster sync */" } else { "" }
+    let warp_note    = " /* warp = " + str(if subgroup_w > 0 { subgroup_w } else { 32 }) + " */"
+    let grid  = "dim3(" + str(grid_x) + "," + str(grid_y) + "," + str(grid_z) + ")"
+    let block = "dim3(" + str(wg_x)   + "," + str(wg_y)   + "," + str(wg_z)   + ")"
+    return kern_name + "<<<" + grid + ", " + block + ">>>(...);" + warp_note + cluster_note
+}
+
+fn cuda_project_vector_add(n: int) -> str {
+    return cuda_project_launch("add", n / 256, 1, 1, 256, 1, 1, 1, 32)
+}
+
+fn cuda_capabilities() -> [str] {
+    return [
+        "thread-block clusters (CC≥9.0)",
+        "TMA / async-bulk-copy",
+        "cooperative groups",
+        "tensor cores (WMMA / mma.async)",
+        "unified memory (UVM)",
+        "PTX virtual ISA → SASS"
+    ]
+}
+
+fn cuda_meta() -> [str] { return [CUDA_VENDOR, CUDA_IR, CUDA_LATEST, str(cuda_capabilities().len())] }

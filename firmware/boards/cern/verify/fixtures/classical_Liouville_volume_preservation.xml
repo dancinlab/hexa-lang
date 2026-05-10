@@ -1,0 +1,73 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/hnSHC6oXYCNfEdDvyZe313D9D2c</id>
+  <title>arXiv Query: search_query=all:Liouville OR all:volume OR all:preservation&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-05-07T15:25:28Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:Liouville+OR+(all:volume+OR+all:preservation)&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>193443</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/1401.1356v2</id>
+    <title>Symmetric periodic orbits and uniruled real Liouville domains</title>
+    <updated>2014-01-22T14:27:16Z</updated>
+    <link href="https://arxiv.org/abs/1401.1356v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1401.1356v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>A real Liouville domain is a Liouville domain together with an exact anti-symplectic involution. We call a real Liouville domain uniruled if there exists an invariant finite energy plane through every real point. Asymptotically an invariant finite energy plane converges to a symmetric periodic orbit. In this note we work out a criterion which guarantees uniruledness for real Liouville domains.</summary>
+    <category term="math.SG" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2014-01-07T12:32:25Z</published>
+    <arxiv:comment>Corrected the definition of real uniruled Liouville domain</arxiv:comment>
+    <arxiv:primary_category term="math.SG"/>
+    <arxiv:journal_ref>Chin. Ann. Math. Ser. B 37 (2016), no. 4, 607-624</arxiv:journal_ref>
+    <author>
+      <name>Urs Frauenfelder</name>
+    </author>
+    <author>
+      <name>Otto van Koert</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1410.7318v4</id>
+    <title>Liouville Quantum Gravity on the Riemann sphere</title>
+    <updated>2015-06-05T16:36:27Z</updated>
+    <link href="https://arxiv.org/abs/1410.7318v4" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1410.7318v4" rel="related" type="application/pdf" title="pdf"/>
+    <summary>In this paper, we rigorously construct $2d$ Liouville Quantum Field Theory on the Riemann sphere introduced in the 1981 seminal work by Polyakov "Quantum Geometry of bosonic strings". We also establish some of its fundamental properties like conformal covariance under PSL$_2(\mathbb{C})$-action, Seiberg bounds, KPZ scaling laws, KPZ formula and the Weyl anomaly (Polyakov-Ray-Singer) formula for Liouville Quantum Gravity.</summary>
+    <category term="math.PR" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2014-10-27T17:14:03Z</published>
+    <arxiv:comment>Added conjectures relating Liouville quantum field theory to random planar map and optimal conditions in order to ensure existence of the unit volume Liouville measure</arxiv:comment>
+    <arxiv:primary_category term="math.PR"/>
+    <author>
+      <name>François David</name>
+    </author>
+    <author>
+      <name>Antti Kupiainen</name>
+    </author>
+    <author>
+      <name>Rémi Rhodes</name>
+    </author>
+    <author>
+      <name>Vincent Vargas</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2405.14443v3</id>
+    <title>On Liouville's theorem and the Strong Liouville Property</title>
+    <updated>2025-12-15T17:46:38Z</updated>
+    <link href="https://arxiv.org/abs/2405.14443v3" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2405.14443v3" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We explore Liouville's theorem and the Strong Liouville Property (SLP) for harmonic functions on Riemannian cones and surfaces. Our approach recasts the classical Liouville property in terms of the growth of radial eigenfunctions (in the case of manifolds with rotational symmetry), allowing us to recover and sharpen known results under minimal assumptions. We provide explicit estimates for the slowest-growing nonconstant harmonic functions on cones and surfaces, and construct examples where doubling fails but Liouville and SLP still hold. Finally, we prove a nonlinear Liouville theorem for $p$-subharmonic functions, $p\geq 2$, under curvature bounds, in complete Riemannian surfaces with a pole which simultaneously recover Milnor's and Cheng--Yau's theorems as particular cases. This result appears to be new and suggests a unified geometric perspective on linear and nonlinear Liouville phenomena.</summary>
+    <category term="math.AP" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.DG" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2024-05-23T11:22:32Z</published>
+    <arxiv:comment>This new version refines the previous version of the paper titled "On Liouville's theorem". A section has been added where a Liouville-type theorem is shown for the p-Laplacian on a Riemannian surface with a pole with $p\ge 2$ under a curvature condition. The title has changed. Criticisms are welcomed</arxiv:comment>
+    <arxiv:primary_category term="math.AP"/>
+    <author>
+      <name>John E. Bravo</name>
+    </author>
+    <author>
+      <name>Jean C. Cortissoz</name>
+    </author>
+  </entry>
+</feed>

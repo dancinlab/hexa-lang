@@ -1,0 +1,45 @@
+#!hexa strict
+// gpgpu_n6/projection/sycl.hexa — vendor backend 3/6: Khronos SYCL.
+//
+// canon: ~/core/canon/domains/compute/gpgpu/gpgpu.md §5.1 (vector add).
+// IR substrate: SPIR-V (φ=0). Single-source C++17/20 — kernel body
+// is a lambda inside parallel_for. Host = ISO C++.
+//
+// Phase F iter 3 — SYCL queue.parallel_for emission.
+
+use "stdlib/hal/compute"
+
+let SYCL_VENDOR = "SYCL"
+let SYCL_IR     = "SPIR-V"
+let SYCL_LATEST = "2020 rev 11 (2025-11-07)"
+
+fn sycl_project_launch(
+    _kern_name: str,
+    grid_x: int, grid_y: int, grid_z: int,
+    wg_x: int, wg_y: int, wg_z: int,
+    _barrier_scope: int,
+    _subgroup_w: int
+) -> str {
+    let total = grid_x * wg_x * grid_y * wg_y * grid_z * wg_z
+    let nd_range = "sycl::nd_range<3>(sycl::range<3>(" +
+                   str(grid_x * wg_x) + "," + str(grid_y * wg_y) + "," + str(grid_z * wg_z) + "), " +
+                   "sycl::range<3>(" + str(wg_x) + "," + str(wg_y) + "," + str(wg_z) + "))"
+    return "q.parallel_for(" + nd_range + ", [=](sycl::nd_item<3> it) { /* total=" + str(total) + " */ ... });"
+}
+
+fn sycl_project_vector_add(n: int) -> str {
+    return "q.parallel_for(sycl::range<1>{" + str(n) + "}, [=](sycl::id<1> i) { c[i] = a[i] + b[i]; });"
+}
+
+fn sycl_capabilities() -> [str] {
+    return [
+        "single-source C++ (ISO C++17/20)",
+        "SPIR-V default IR + PTX/AMDGCN backends",
+        "khr_default_context (rev 11)",
+        "khr_queue_empty_query (rev 11)",
+        "khr_group_interface (rev 11)",
+        "USM (Unified Shared Memory)"
+    ]
+}
+
+fn sycl_meta() -> [str] { return [SYCL_VENDOR, SYCL_IR, SYCL_LATEST, str(sycl_capabilities().len())] }

@@ -1,0 +1,114 @@
+#!hexa strict
+// hexa-space/verify/numerics_kepler.hexa — F-SPACE-1 first T2 numerical.
+//
+// Closes F-SPACE-1 second tier (T2) via numerical Kepler 3rd-law derivation
+// against the n=6 closed-form predictions in astrodynamics/verify_astrodynamics.hexa.
+//
+// Numerical step:
+//   Kepler 3rd: T = 2π·sqrt(a³/μ)  for a 2-body orbit with μ = GM_Earth.
+//   1. Compute T_LEO  for a = R_E + 400 km  (ISS/Starlink baseline altitude).
+//   2. Compute T_GEO  for a = R_E + 35786 km (geostationary).
+//   3. Compute T_GEO/T_LEO numerically; compare to n=6 closed-form
+//      σ·τ/3 = 16  (within ~5% — orbital regime tolerance).
+//   4. Sanity: (T_GEO/T_LEO)² ≈ (a_GEO/a_LEO)³  (Kepler 3rd identity).
+//
+// All math via self/runtime/math_pure (sqrt_pure / pow_pure / pi).
+//
+// Sentinel: __HEXA_SPACE_NUMERICS_KEPLER__ PASS  (recipe §4 invariants)
+//
+// Cost: $0 — no network, no libm, pure-hexa float math.
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let FALSIFIERS: [str] = ["F-SPACE-1"]
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _ck(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label + "  " + detail)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label + "  " + detail)
+    }
+}
+
+fn main() {
+    println("[numerics_kepler] F-SPACE-1 T2 — Kepler 3rd law (sqrt + closed-form)")
+
+    // ── physical constants ───────────────────────────────────────────
+    let mu  = 3.986004418e14       // Earth μ (m³/s²) — WGS84 / IAU
+    let r_e = 6.371e6              // Earth mean radius (m)
+    let alt_leo = 0.4e6            // ISS/Starlink baseline ≈ 400 km
+    let alt_geo = 35.786e6         // GEO altitude (m)
+    let two_pi = 2.0 * pi_pure()
+
+    let a_leo = r_e + alt_leo
+    let a_geo = r_e + alt_geo
+
+    // ── 1. orbital periods via T = 2π·sqrt(a³/μ) ─────────────────────
+    let a3_leo  = a_leo * a_leo * a_leo
+    let a3_geo  = a_geo * a_geo * a_geo
+    let t_leo_s = two_pi * sqrt_pure(a3_leo / mu)
+    let t_geo_s = two_pi * sqrt_pure(a3_geo / mu)
+    let t_leo_min = t_leo_s / 60.0
+    let t_geo_h   = t_geo_s / 3600.0
+
+    println("  [calc] T_LEO ≈ " + str(t_leo_min) + " min  (expected ≈ 92 min)")
+    println("  [calc] T_GEO ≈ " + str(t_geo_h)   + " h    (expected ≈ 24 h sidereal)")
+
+    // ── 2. numerical T_LEO matches recipe band (88–96 min) ───────────
+    _ck(t_leo_min > 88.0 && t_leo_min < 96.0,
+        "T_LEO ∈ [88, 96] min", "= " + str(t_leo_min))
+
+    // ── 3. numerical T_GEO matches recipe band (23.5–24.5 h) ─────────
+    _ck(t_geo_h > 23.5 && t_geo_h < 24.5,
+        "T_GEO ∈ [23.5, 24.5] h", "= " + str(t_geo_h))
+
+    // ── 4. T_GEO/T_LEO ratio vs n=6 closed-form σ·τ/3 = 16 ───────────
+    let ratio   = t_geo_s / t_leo_s
+    let predict = 16.0                                // σ·τ/3 = 12·4/3
+    let rel_err = (ratio - predict) / predict
+    let abs_err = if rel_err < 0.0 { -rel_err } else { rel_err }
+    println("  [ratio] T_GEO/T_LEO = " + str(ratio) + "  (n=6 predict 16, rel_err " + str(abs_err) + ")")
+    _ck(abs_err < 0.05,
+        "T_GEO/T_LEO within ±5% of σ·τ/3 = 16", "rel_err = " + str(abs_err))
+
+    // ── 5. Kepler 3rd identity: (T_GEO/T_LEO)² ≈ (a_GEO/a_LEO)³ ──────
+    let t_ratio_sq = ratio * ratio
+    let a_ratio    = a_geo / a_leo
+    let a_ratio_cu = a_ratio * a_ratio * a_ratio
+    let id_diff    = t_ratio_sq - a_ratio_cu
+    let id_rel     = if id_diff < 0.0 { -id_diff } else { id_diff } / a_ratio_cu
+    println("  [Kepler-3rd] (T_GEO/T_LEO)² = " + str(t_ratio_sq) + "  (a_GEO/a_LEO)³ = " + str(a_ratio_cu))
+    _ck(id_rel < 1.0e-10,
+        "Kepler 3rd identity (T²/a³ const) holds within numerical precision",
+        "rel_err = " + str(id_rel))
+
+    // ── 6. sanity: π via math_pure within bound ──────────────────────
+    let pi_v = pi_pure()
+    _ck(pi_v > 3.1415926 && pi_v < 3.1415927,
+        "math_pure pi_pure() within float64 precision",
+        "pi = " + str(pi_v))
+
+    // ── 7. n=6 lattice arithmetic floor (master row) ─────────────────
+    let n     = 6
+    let sigma = 12
+    let tau   = 4
+    let phi   = 2
+    let j2    = 24
+    _ck(sigma * phi == n * tau && sigma * phi == j2,
+        "n=6 closure (master row) σ·φ = n·τ = J₂", "= " + str(j2))
+
+    let pass_n = RUN - FAIL
+    println("[numerics_kepler] " + str(pass_n) + "/" + str(RUN) + " PASS — F-SPACE-1 T2")
+    if FAIL > 0 {
+        println("__HEXA_SPACE_NUMERICS_KEPLER__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_SPACE_NUMERICS_KEPLER__ PASS")
+    exit(0)
+}

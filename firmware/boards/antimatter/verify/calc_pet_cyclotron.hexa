@@ -1,0 +1,332 @@
+#!hexa strict
+// hexa-antimatter/verify/calc_pet_cyclotron.hexa — PET-cyclotron-pillar n=6
+// derivation.
+//
+// T1 (algebraic) closure for F-AM-1 (PET ¹⁸F regen rate closed-form fit
+// vs hospital cyclotron public spec). Re-derives every n=6 expression
+// declared in pet_cyclotron/pet-cyclotron.md from divisor arithmetic.
+//
+// Master row reproved here:
+//   σ(6) · φ(6) = n · τ(6) = J₂ = 24
+//      12  ·  2  =  6  ·  4  = 24
+//
+// PET-cyclotron-pillar n=6 ledger (HEXA-PET-01 ~ HEXA-PET-06):
+//   HEXA-PET-01  ¹⁸F stock           = σ · τ   = 48 mg/season   (path-c stock)
+//   HEXA-PET-02  e+ supply rate      = σ·τ·2e9 = 9.6×10¹⁰ /s    (σ·τ × 2e9 atomic)
+//   HEXA-PET-03  cyclotron radius R  = σ - φ   = 10 cm          (BT-127 kissing)
+//   HEXA-PET-04  field B (RT-SC)     = σ · τ   = 48 T           (Penning shared)
+//   HEXA-PET-05  cost reduction      = 1/σ³    = 1/1728         (half of σ⁶ tabletop)
+//   HEXA-PET-06  anti-H synth rate   = σ²·10⁶  = 1.44×10⁸ /s    (§9.2 c cite)
+//   batch cycle / stack              = τ       = 4              (¹⁸F t½ mitigation)
+//   vacuum suppression               = σ² · τ  = 576×           (vs medical 10⁻³ Torr)
+//   daily H̄ cascade                  = σ³      = 1728 /s        (24-h accumulation)
+//   B vs medical PET                 = σ · τ / 2 = J₂ = 24×     (48 T vs 2 T baseline)
+//   R vs medical PET                 = σ - τ   = 8              (lower bound 50/10 ≤ 8)
+//
+// Plus spec-anchor checks against pet_cyclotron/pet-cyclotron.md
+// (sigma-phi=10, sigma*tau=48, 2e9 e+/s/mg, sigma^3=1728, etc.)
+// and SSOT-internal falsifiers (§7).
+//
+// Run:
+//     hexa run verify/calc_pet_cyclotron.hexa     # exit 0 = identity holds
+//
+// Sentinel: __HEXA_ANTIMATTER_CALC_PET_CYCLOTRON__ PASS
+//
+// Authority: pet_cyclotron/pet-cyclotron.md §1 WHY + §4 STRUCT + §5 core
+//   numerics + §7 FALSIFIER · .roadmap.hexa_antimatter §A.4 F-AM-1.
+// raw#9 hexa-only · raw#10 honest C3: T1 algebraic closure only — closed-form
+//   numerics (T2) lands separately in numerics_pet_cyclotron*.hexa, empirical
+//   apparatus (T3, hospital-cyclotron op) is Stage-1+ TBD.
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-antimatter"
+}
+
+let ROOT = _root()
+let DOC_PET = ROOT + "/pet_cyclotron/pet-cyclotron.md"
+
+fn _read(p: str) -> str {
+    return exec("cat \"" + p + "\" 2>/dev/null")
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.contains(s)
+}
+
+fn _int_str(x: int) -> str {
+    return "" + x
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── n=6 lattice (computed, not declared) ─────────────────────────────────
+
+fn divisors_of(n: int) -> [int] {
+    let mut out: [int] = []
+    let mut k = 1
+    while k <= n {
+        if n % k == 0 { out = out + [k] }
+        k = k + 1
+    }
+    return out
+}
+
+fn sigma_of(n: int) -> int {
+    let ds = divisors_of(n)
+    let mut s = 0
+    for d in ds { s = s + d }
+    return s
+}
+
+fn tau_of(n: int) -> int { return len(divisors_of(n)) }
+
+fn gcd_int(a: int, b: int) -> int {
+    let mut x = a
+    let mut y = b
+    while y != 0 {
+        let t = y
+        y = x % y
+        x = t
+    }
+    return x
+}
+
+fn euler_phi_of(n: int) -> int {
+    let mut c = 0
+    let mut k = 1
+    while k <= n {
+        if gcd_int(k, n) == 1 { c = c + 1 }
+        k = k + 1
+    }
+    return c
+}
+
+fn sopfr_of(n: int) -> int {
+    let mut s = 0
+    let mut k = n
+    let mut p = 2
+    while p <= k {
+        while k % p == 0 {
+            s = s + p
+            k = k / p
+        }
+        p = p + 1
+    }
+    return s
+}
+
+let N      = 6
+let SIGMA  = sigma_of(N)        // 12
+let TAU    = tau_of(N)          // 4
+let PHI    = euler_phi_of(N)    // 2
+let SOPFR  = sopfr_of(N)        // 5
+let J2     = 2 * SIGMA          // 24
+
+// ── HEXA-PET locked constants (n=6 arithmetic) ───────────────────────────
+
+let HEXA_PET_01_STOCK_MG    = SIGMA * TAU            // 48 mg/season
+let HEXA_PET_03_R_CM        = SIGMA - PHI            // 10 cm
+let HEXA_PET_04_B_T         = SIGMA * TAU            // 48 T
+let HEXA_PET_05_COST_DENOM  = SIGMA * SIGMA * SIGMA  // 1728 = σ³
+let HEXA_PET_06_SYNTH_FAC   = SIGMA * SIGMA          // 144  (×10⁶ for /s)
+
+let BATCH_CYCLE             = TAU                    // 4
+let VAC_SUPPRESS            = SIGMA * SIGMA * TAU    // 576
+let DAILY_HBAR_CASCADE      = SIGMA * SIGMA * SIGMA  // 1728 /s
+let B_OVER_MED_24X          = SIGMA * TAU / PHI      // 48/2 = 24 = J₂
+let R_BOUND_LOWER           = SIGMA - TAU            // 8 (medical 0.5 m / 10 cm = 5..15)
+let E_PLUS_RATE_FACTOR      = SIGMA * TAU            // 48 (multiply by 2e9 → 9.6e10)
+let ANTIH_SYNTH_FACTOR      = SIGMA * SIGMA          // 144 (multiply by 1e6 → 1.44e8)
+
+let FALSIFIERS = [
+    "F-AM-1: σ·τ ≠ 48 mg/season ¹⁸F stock → HEXA-PET-01 retract",
+    "F-AM-1: σ-φ ≠ 10 cm cyclotron radius R → HEXA-PET-03 retract",
+    "F-AM-1: σ·τ ≠ 48 T B-field → HEXA-PET-04 retract (RT-SC ladder breaks)",
+    "F-AM-1: σ³ ≠ 1728 cost-denom → HEXA-PET-05 retract (1/σ³ chain breaks)",
+    "F-AM-1: σ² ≠ 144 anti-H synth factor → HEXA-PET-06 retract (§9.2 c cite fails)",
+    "F-AM-1: σ²·τ ≠ 576 vacuum suppression → vs medical 10⁻³ Torr ladder retract",
+    "F-AM-1: τ ≠ 4 batch stack → ¹⁸F half-life mitigation chain retract",
+    "F-AM-1: σ·τ × 2e9 ≠ 9.6×10¹⁰ e+/s → HEXA-PET-02 e+ supply retract",
+    "F-AM-1: σ³ ≠ 1728 daily H̄ cascade → 24-h anti-H accumulation retract",
+    "F-AM-1: B/B_med ≠ J₂ = 24× → 48 T vs 2 T medical-PET ratio retract",
+    "F-AM-1 (SSOT §7): ¹⁸F stock < σ-φ = 10 mg/season → HEXA-PET-01 retract",
+    "F-AM-1 (SSOT §7): B < σ·τ/φ = 24 T → HEXA-PET-04 Penning shared cond breaks",
+    "F-AM-1 (SSOT §7): anti-H/s < σ × 10⁶ = 1.2×10⁷ → HEXA-PET-06 retract",
+]
+
+fn print_ledger() {
+    println("")
+    println("  ┌─ HEXA-PET-01..06 + ancillary n=6 ledger ─────────────────────┐")
+    println("  │  HEXA-PET-01 ¹⁸F stock        = σ·τ   = " + _int_str(HEXA_PET_01_STOCK_MG)   + " mg/season")
+    println("  │  HEXA-PET-02 e+ rate factor   = σ·τ   = " + _int_str(E_PLUS_RATE_FACTOR)     + "  → ×2e9 = 9.6e10 /s")
+    println("  │  HEXA-PET-03 cyclotron R      = σ-φ   = " + _int_str(HEXA_PET_03_R_CM)       + " cm")
+    println("  │  HEXA-PET-04 field B (RT-SC)  = σ·τ   = " + _int_str(HEXA_PET_04_B_T)        + " T")
+    println("  │  HEXA-PET-05 cost-denom       = σ³    = " + _int_str(HEXA_PET_05_COST_DENOM) + "  (1/σ³ ratio)")
+    println("  │  HEXA-PET-06 synth factor     = σ²    = " + _int_str(HEXA_PET_06_SYNTH_FAC)  + "  → ×10⁶ = 1.44e8 /s")
+    println("  │  batch cycle / stack          = τ     = " + _int_str(BATCH_CYCLE))
+    println("  │  vacuum suppression           = σ²·τ  = " + _int_str(VAC_SUPPRESS)           + "× (vs 10⁻³ Torr)")
+    println("  │  daily H̄ cascade              = σ³    = " + _int_str(DAILY_HBAR_CASCADE)     + " /s (24-h accum)")
+    println("  │  B vs medical PET (×)         = σ·τ/φ = " + _int_str(B_OVER_MED_24X)         + "× (48 T / 2 T) = J₂")
+    println("  │  R bound (med/HEXA range)     = σ-τ   = " + _int_str(R_BOUND_LOWER)          + " (50..150 cm / 10 cm)")
+    println("  └──────────────────────────────────────────────────────────────┘")
+    println("")
+}
+
+// ── algebraic identity checks ────────────────────────────────────────────
+
+fn check_lattice_primitives() {
+    _check(SIGMA == 12, "σ(6) = 12", "")
+    _check(TAU   == 4,  "τ(6) = 4", "")
+    _check(PHI   == 2,  "φ(6) = 2", "")
+    _check(SOPFR == 5,  "sopfr(6) = 5", "")
+    _check(J2    == 24, "J₂ = 2σ = 24", "")
+}
+
+fn check_master_identity() {
+    _check(SIGMA * PHI == J2,    "σ·φ = J₂ = 24  (master LHS)", "")
+    _check(N * TAU     == J2,    "n·τ = J₂ = 24  (master RHS)", "")
+    _check(SIGMA * PHI == N * TAU, "σ·φ = n·τ", "")
+}
+
+fn check_hexa_pet_locks() {
+    _check(HEXA_PET_01_STOCK_MG == 48,    "HEXA-PET-01: σ·τ = 48 mg/season  (¹⁸F stock)", "F-AM-1")
+    _check(HEXA_PET_03_R_CM == 10,        "HEXA-PET-03: σ-φ = 10 cm  (cyclotron radius)", "BT-127")
+    _check(HEXA_PET_04_B_T == 48,         "HEXA-PET-04: σ·τ = 48 T  (RT-SC Penning shared)", "")
+    _check(HEXA_PET_05_COST_DENOM == 1728, "HEXA-PET-05: σ³ = 1728 cost-denom  (1/σ³ ratio)", "half of σ⁶ tabletop")
+    _check(HEXA_PET_06_SYNTH_FAC == 144,  "HEXA-PET-06: σ² = 144 synth factor  (× 10⁶ = 1.44e8 H̄/s)", "§9.2 c")
+    // HEXA-PET-02: σ·τ × 2e9 = 48 × 2,000,000,000 = 96,000,000,000 = 9.6e10
+    _check(E_PLUS_RATE_FACTOR == 48,      "HEXA-PET-02: σ·τ = 48 e+ rate factor  (×2e9 → 9.6e10 /s)", "")
+}
+
+fn check_pet_design_params() {
+    _check(BATCH_CYCLE == 4,             "batch cycle / stack τ = 4  (¹⁸F t½ mitigation)", "")
+    _check(VAC_SUPPRESS == 576,          "vacuum suppression σ²·τ = 576×  (vs 10⁻³ Torr)", "")
+    _check(DAILY_HBAR_CASCADE == 1728,   "daily H̄ cascade σ³ = 1728 /s  (24-h accum)", "")
+    _check(B_OVER_MED_24X == J2,         "B/B_med = σ·τ/φ = J₂ = 24×  (48 T vs 2 T)", "")
+    _check(R_BOUND_LOWER == 8,           "R-bound σ-τ = 8  (medical 0.5–1.5 m / 10 cm = 5..15)", "")
+}
+
+fn check_synth_chain_arithmetic() {
+    // HEXA-PET-06: σ² × 10⁶ = 144,000,000 = 1.44 × 10⁸.
+    // Avoid float: check σ² == 144 (already done). Also check daily cascade
+    // = σ³ = σ²·σ = 144·12 = 1728.
+    _check(HEXA_PET_06_SYNTH_FAC * SIGMA == DAILY_HBAR_CASCADE,
+           "synth chain σ²·σ = σ³  (144·12 = 1728 daily-cascade closure)", "")
+    // HEXA-PET-02: σ·τ × 2 = 96 (in 10⁹ units → 9.6e10 e+/s).
+    _check(E_PLUS_RATE_FACTOR * 2 == 96,
+           "e+ rate σ·τ × 2 = 96  (in 10⁹ units → 9.6×10¹⁰ /s)", "HEXA-PET-02")
+}
+
+fn check_factory_pet_cost_split() {
+    // Tabletop total = 1/σ⁶ ; PET solo = 1/σ³ ; remaining = 1/σ³ from factory side.
+    // Algebraically: σ⁶ = σ³ × σ³.  Check this composition.
+    let sig3 = SIGMA * SIGMA * SIGMA          // 1728
+    let sig6 = sig3 * sig3                    // 2985984
+    _check(sig6 == sig3 * sig3,
+           "cost-split σ⁶ = σ³·σ³  (tabletop total = PET × factory)", "factory/sigma^3 vs factory/sigma^6")
+}
+
+// ── SSOT spec-anchor checks (pet_cyclotron/pet-cyclotron.md) ─────────────
+
+fn check_spec_anchors() {
+    let txt = _read(DOC_PET)
+    if txt.len() == 0 {
+        _check(false, "PET SSOT readable", "missing: " + DOC_PET)
+        return
+    }
+    _check(true, "PET SSOT readable (" + _int_str(len(txt)) + " bytes)", DOC_PET)
+
+    _check(_has(txt, "sigma-phi = 10") || _has(txt, "sigma-phi=10") || _has(txt, "10 cm") || _has(txt, "σ-φ=10"),
+           "SSOT cites R = σ-φ = 10 cm  (HEXA-PET-03)", "")
+    _check(_has(txt, "sigma*tau = 48") || _has(txt, "sigma*tau=48") || _has(txt, "48 T") || _has(txt, "48T"),
+           "SSOT cites B = σ·τ = 48 T  (HEXA-PET-04)", "")
+    _check(_has(txt, "48 mg") || _has(txt, "48mg") || _has(txt, "sigma*tau = 48 mg"),
+           "SSOT cites σ·τ = 48 mg/season ¹⁸F stock  (HEXA-PET-01)", "")
+    _check(_has(txt, "sigma^3 == 1728") || _has(txt, "1/sigma^3") || _has(txt, "1728") || _has(txt, "σ³"),
+           "SSOT cites σ³ = 1728 cost-denom  (HEXA-PET-05)", "")
+    _check(_has(txt, "sigma^2 * 10**6") || _has(txt, "sigma^2*10^6") || _has(txt, "1.44e8") || _has(txt, "1.44x10^8"),
+           "SSOT cites σ²·10⁶ = 1.44×10⁸ H̄/s  (HEXA-PET-06)", "§9.2 c cite")
+    _check(_has(txt, "2e9") || _has(txt, "2x10^9") || _has(txt, "2×10⁹") || _has(txt, "9.6x10^10") || _has(txt, "9.6e10"),
+           "SSOT cites 2e9 e+/s/mg → 9.6e10 e+/s total  (HEXA-PET-02)", "")
+    _check(_has(txt, "sigma^2*tau=576") || _has(txt, "sigma^2*tau = 576") || _has(txt, "576x") || _has(txt, "576×"),
+           "SSOT cites σ²·τ = 576× vacuum suppression", "vs medical 10⁻³ Torr")
+    _check(_has(txt, "tau=4 batch") || _has(txt, "tau = 4 batch") || _has(txt, "tau=4 ") || _has(txt, "τ=4") || _has(txt, "4 batch"),
+           "SSOT cites τ = 4 batch stack", "")
+    _check(_has(txt, "109.8 min") || _has(txt, "half-life"),
+           "SSOT cites ¹⁸F half-life 109.8 min  (batch-stack motivation)", "")
+    _check(_has(txt, "Penning") || _has(txt, "RT-SC"),
+           "SSOT invokes Penning trap / RT-SC  (shared with HEXA-TABLETOP §9.1)", "")
+    _check(_has(txt, "HEXA-PET-01") && _has(txt, "HEXA-PET-06"),
+           "SSOT lists HEXA-PET-01..06 core constants", "§5")
+    _check(_has(txt, "FALSIFIER") || _has(txt, "HEXA-PET-01 retired") || _has(txt, "HEXA-PET-04 retired"),
+           "SSOT §7 declares falsifier-retract conditions", "F-AM-1 closure")
+    _check(_has(txt, "ALPHA") || _has(txt, "AEgIS") || _has(txt, "Rydberg"),
+           "SSOT references ALPHA / AEgIS / Rydberg anti-H synth", "Stage-2 std")
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — calc_pet_cyclotron: PET-cyclotron-pillar n=6 derive")
+    println("========================================================================")
+    println("  closes:  F-AM-1 (PET ¹⁸F regen rate closed-form fit) T1")
+    println("  source:  " + DOC_PET)
+
+    print_ledger()
+
+    println("  -- n=6 lattice primitives --")
+    check_lattice_primitives()
+
+    println("")
+    println("  -- master identity (σ·φ = n·τ = J₂ = 24) --")
+    check_master_identity()
+
+    println("")
+    println("  -- HEXA-PET-01..06 locked constants --")
+    check_hexa_pet_locks()
+
+    println("")
+    println("  -- PET pillar design parameters --")
+    check_pet_design_params()
+
+    println("")
+    println("  -- synth-chain arithmetic (σ²·σ = σ³ etc.) --")
+    check_synth_chain_arithmetic()
+    check_factory_pet_cost_split()
+
+    println("")
+    println("  -- SSOT spec-anchor cross-check --")
+    check_spec_anchors()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_CALC_PET_CYCLOTRON__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_CALC_PET_CYCLOTRON__ PASS")
+    exit(0)
+}

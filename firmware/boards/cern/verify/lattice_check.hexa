@@ -1,0 +1,273 @@
+#!hexa strict
+// hexa-cern/verify/lattice_check.hexa — n=6 invariant lattice audit.
+//
+// Verifies that σ(6)=12, τ(6)=4, φ(6)=2, J₂=24, the closure
+// σ(6)·φ(6) = n·τ(6) = J₂ = 24, and σ-cascade 6-order coverage hold
+// consistently across the 4 canonical hexa-cern documents:
+//
+//   .roadmap.hexa_cern                  — repo-overall lattice declaration
+//   mini/doc/mini-accelerator.md        — pillar 1 (laser-plasma)
+//   parent/doc/particle-accelerator.md  — pillar 2 (σ-cascade integrator)
+//   classical/doc/classical-mechanics-accelerator.md — pillar 3 (Lagrange)
+//
+// Authority: .roadmap.hexa_cern §A.1; n=6 perfect-number closure.
+//
+// Run:
+//   hexa run verify/lattice_check.hexa            # exit 0 = all invariants hold
+//   hexa run verify/lattice_check.hexa --quiet    # PASS/FAIL line only
+//
+// Cost: $0 (pure file reads + string scan).
+//
+// @no-lock-needed
+// @resolver-bypass(reason="Pure local verifier; reads project docs only.")
+
+let HOME = env("HOME")
+
+fn hexa_cern_root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"  // @allow-devpath
+}
+
+let ROOT = hexa_cern_root()
+
+// ── canonical n=6 lattice values (own 1 of hexa-cern) ────────────────────
+let SIGMA_6   = 12      // σ(6) — sum-of-divisors
+let TAU_6     = 4       // τ(6) — divisor count
+let PHI_6     = 2       // φ(6) — Euler totient
+let SOPFR_6   = 5       // sopfr(6) = 2+3
+let J2        = 24      // 2·σ — quadratic-form min-vector
+let N         = 6       // master row
+let SIGMA_PHI = 10      // σ - φ = 10 (benchtop-cm scale)
+let OMEGA_ACCEL = 1728  // σ³ — FCC envelope
+
+// ── doc paths ────────────────────────────────────────────────────────────
+let DOC_ROADMAP   = ROOT + "/.roadmap.hexa_cern"
+let DOC_MINI      = ROOT + "/mini/doc/mini-accelerator.md"
+let DOC_PARENT    = ROOT + "/parent/doc/particle-accelerator.md"
+let DOC_CLASSICAL = ROOT + "/classical/doc/classical-mechanics-accelerator.md"
+
+// ── helpers ──────────────────────────────────────────────────────────────
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _read(path: str) -> str {
+    if file_exists(path) == false { return "" }
+    return read_file(path)
+}
+
+fn _contains(text: str, needle: str) -> bool {
+    if text.len() == 0 { return false }
+    if needle.len() == 0 { return true }
+    return text.find(needle) >= 0
+}
+
+fn _any_of(text: str, needles: [str]) -> bool {
+    for n in needles { if _contains(text, n) { return true } }
+    return false
+}
+
+// ── audit result accumulator ─────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+let mut WARN = 0
+let mut FAILURES = []
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    } else {
+        FAIL = FAIL + 1
+        FAILURES.push(label + " :: " + detail)
+        println("  [FAIL] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    }
+}
+
+fn _warn(label: str, detail: str) {
+    WARN = WARN + 1
+    println("  [WARN] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── checks ───────────────────────────────────────────────────────────────
+
+// Check 1: arithmetic closure σ(6)·φ(6) = n·τ(6) = J₂ = 24
+fn check_closure() {
+    let lhs = SIGMA_6 * PHI_6
+    let mid = N * TAU_6
+    let ok1 = lhs == J2
+    let ok2 = mid == J2
+    let ok3 = lhs == mid
+    _check(ok1 && ok2 && ok3,
+           "n=6 closure: σ(6)·φ(6) = n·τ(6) = J₂",
+           "12·2 = 6·4 = " + str(J2))
+}
+
+// Check 2: σ-cascade 6-order = (σ-φ)^n = 10^6 (MeV→TeV)
+fn check_sigma_cascade() {
+    // (σ-φ)^n = 10^6 = 1_000_000
+    let mut acc = 1
+    let mut i = 0
+    while i < N { acc = acc * SIGMA_PHI; i = i + 1 }
+    _check(acc == 1000000,
+           "σ-cascade 6-order: (σ-φ)^n = 10^6",
+           "(σ-φ=" + str(SIGMA_PHI) + ")^n=" + str(N) + " = " + str(acc))
+}
+
+// Check 3: σ² = 144 throughput multiplier
+fn check_sigma_squared() {
+    let s2 = SIGMA_6 * SIGMA_6
+    _check(s2 == 144,
+           "σ² = 144x throughput",
+           "σ(6)² = " + str(s2))
+}
+
+// Check 4: Ω_ACCEL = σ³ = 1728 FCC envelope
+fn check_omega_accel() {
+    let s3 = SIGMA_6 * SIGMA_6 * SIGMA_6
+    _check(s3 == OMEGA_ACCEL,
+           "Ω_ACCEL = σ³ = 1728",
+           "σ(6)³ = " + str(s3))
+}
+
+// Check 5: σ·J₂ = 288 (Tevatron seed reuse anchor)
+fn check_tevatron_seed() {
+    let v = SIGMA_6 * J2
+    _check(v == 288,
+           "Tevatron seed: σ·J₂ = 288 GeV",
+           "σ(6)·J₂ = " + str(v))
+}
+
+// Check 6: roadmap declares the lattice values
+fn check_roadmap_declares_lattice() {
+    let txt = _read(DOC_ROADMAP)
+    if txt.len() == 0 {
+        _check(false, "roadmap exists", DOC_ROADMAP + " missing")
+        return
+    }
+    let ok_sigma = _any_of(txt, ["σ(6)", "sigma(6)"]) && _contains(txt, "12")
+    _check(ok_sigma, "roadmap declares σ(6)=12", ".roadmap.hexa_cern §A.1")
+    let ok_tau = _any_of(txt, ["τ(6)", "tau(6)"]) && _contains(txt, "4")
+    _check(ok_tau, "roadmap declares τ(6)=4", ".roadmap.hexa_cern §A.1")
+    let ok_phi = _any_of(txt, ["φ(6)", "phi(6)"]) && _contains(txt, "2")
+    _check(ok_phi, "roadmap declares φ(6)=2", ".roadmap.hexa_cern §A.1")
+    let ok_j2 = _any_of(txt, ["J₂", "J_2"]) && _contains(txt, "24")
+    _check(ok_j2, "roadmap declares J₂=24", ".roadmap.hexa_cern §A.1")
+}
+
+// Check 7: each pillar references the n=6 lattice (σ / τ / phi tokens)
+fn check_pillar_lattice_refs(pillar: str, path: str) {
+    let txt = _read(path)
+    if txt.len() == 0 {
+        _check(false, "pillar present: " + pillar, path + " missing")
+        return
+    }
+    let ok_s = _any_of(txt, ["sigma(6)", "σ(6)", "σ=12", "sigma=12"])
+    _check(ok_s, pillar + ": σ(6)=12 referenced",
+           "expected sigma(6) / σ(6) / σ=12 token in " + pillar)
+    let ok_t = _any_of(txt, ["tau(6)", "τ(6)", "τ=4", "tau=4"])
+    _check(ok_t, pillar + ": τ(6)=4 referenced", "")
+    let ok_p = _any_of(txt, ["phi=2", "φ=2", "phi(6)", "φ(6)"])
+    _check(ok_p, pillar + ": φ(6)=2 referenced", "")
+}
+
+// Check 8: J₂=24 token appears in at least 2 pillars
+fn check_j2_cross_pillar() {
+    let mut hits = 0
+    let txts = [_read(DOC_MINI), _read(DOC_PARENT), _read(DOC_CLASSICAL)]
+    for t in txts {
+        if _any_of(t, ["J_2", "J₂", "= 24"]) { hits = hits + 1 }
+    }
+    _check(hits >= 2,
+           "J₂ token cross-pillar: appears in ≥ 2 pillars",
+           "hits = " + str(hits) + " of 3 pillars")
+}
+
+// Check 9: σ-cascade chain (E_0..E_6) appears in parent pillar
+fn check_parent_cascade_chain() {
+    let txt = _read(DOC_PARENT)
+    if txt.len() == 0 {
+        _warn("parent pillar absent", DOC_PARENT)
+        return
+    }
+    let ok = _contains(txt, "E_0") && _contains(txt, "E_6") &&
+             _contains(txt, "100 TeV") && _contains(txt, "MeV -> TeV")
+    _check(ok, "parent: σ-cascade E_0..E_6 chain present",
+           "(σ-φ)^n = 10^6 MeV→TeV span declared")
+}
+
+// Check 10: classical pillar references DOF=n=6 + phase-space dim=σ
+fn check_classical_phase_space() {
+    let txt = _read(DOC_CLASSICAL)
+    if txt.len() == 0 {
+        _warn("classical pillar absent", DOC_CLASSICAL)
+        return
+    }
+    let ok_dof = _contains(txt, "DOF") && _any_of(txt, ["n=6", "n = 6", "= 6"])
+    _check(ok_dof, "classical: DOF = n = 6 (SE(3))",
+           "Lagrangian 6-DOF lock")
+    let ok_ham = _contains(txt, "phase-space") &&
+                 _any_of(txt, ["sigma=12", "σ=12", "= sigma", "= σ"])
+    _check(ok_ham, "classical: Hamilton phase-space dim = σ = 12", "")
+}
+
+// Check 11: hexa.toml closure honesty (verdict declared)
+fn check_hexa_toml_honesty() {
+    let txt = _read(ROOT + "/hexa.toml")
+    if txt.len() == 0 {
+        _warn("hexa.toml absent", ROOT + "/hexa.toml")
+        return
+    }
+    let ok = _contains(txt, "verdict") && _contains(txt, "SPECS_ONLY")
+    _check(ok, "hexa.toml [closure] verdict = SPECS_ONLY (raw#10 C3)",
+           "honest scope declaration present")
+}
+
+// ── main ─────────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern — n=6 invariant lattice audit")
+    println("  σ(6)=12, τ(6)=4, φ(6)=2, J₂=24 — closure σ·φ = n·τ = J₂")
+    println("========================================================================")
+    println("  root: " + ROOT)
+    println("")
+
+    check_closure()
+    check_sigma_cascade()
+    check_sigma_squared()
+    check_omega_accel()
+    check_tevatron_seed()
+    println("")
+    check_roadmap_declares_lattice()
+    println("")
+    check_pillar_lattice_refs("mini",      DOC_MINI)
+    check_pillar_lattice_refs("parent",    DOC_PARENT)
+    check_pillar_lattice_refs("classical", DOC_CLASSICAL)
+    println("")
+    check_j2_cross_pillar()
+    check_parent_cascade_chain()
+    check_classical_phase_space()
+    check_hexa_toml_honesty()
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed  (" + str(WARN) + " warn)")
+    if FAIL > 0 {
+        println("  FAILURES:")
+        for f in FAILURES { println("    ✗ " + f) }
+        println("__HEXA_CERN_LATTICE__ FAIL")
+        exit(1)
+    }
+    println("  All n=6 invariants hold across roadmap + 3 pillar docs.")
+    println("__HEXA_CERN_LATTICE__ PASS")
+    exit(0)
+}

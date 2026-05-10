@@ -1,0 +1,325 @@
+#!hexa strict
+// hexa-chip/verify/lint_numerics.hexa — recipe §4 5-invariant enforcer.
+//
+// Meta-tier lint that grep-checks every `verify/numerics_*.hexa` for
+// compliance with recipe §4 invariants:
+//
+//   1. `use "self/runtime/math_pure"`        (no raw libm math)
+//   2. `__HEXA_CHIP_<NAME>__` sentinel prefix + `__ PASS` / `__ FAIL` line
+//   3. `FALSIFIERS` array declared
+//   4. `exit(0)` on PASS path
+//   5. `let mut RUN = 0` + `let mut FAIL = 0` counters
+//
+// Plus inventory check:
+//   NUMERICS_SCRIPTS array length  ==  on-disk glob count of numerics_*.hexa
+//
+// PASS = every numerics_*.hexa satisfies all 5 invariants AND inventory
+//        array matches glob count.
+// FAIL = any single script missing any invariant, or count mismatch.
+//
+// Run:
+//   hexa run verify/lint_numerics.hexa
+//   hexa run verify/lint_numerics.hexa --json
+//
+// Cost: $0 (single repo grep; no FFI).
+
+// Canonical inventory of numerics_*.hexa scripts (kept in sync with
+// the on-disk glob — count mismatch is a hard fail).
+let NUMERICS_SCRIPTS = [
+    "numerics_process.hexa",
+    "numerics_process_parity.hexa",
+    "numerics_process_solver.hexa",
+    "numerics_npu.hexa",
+    "numerics_npu_parity.hexa",
+    "numerics_npu_solver.hexa",
+    "numerics_hbm.hexa",
+    "numerics_hbm_parity.hexa",
+    "numerics_hbm_solver.hexa",
+    "numerics_cross_pillar.hexa",
+    "numerics_lattice_arithmetic.hexa",
+    "numerics_spice_corner.hexa",
+    "numerics_rtl_isa_n6.hexa",
+    "numerics_power_thermal.hexa"
+]
+
+// ─── arg / env helpers ───────────────────────────────────────────────
+
+fn _root() -> str {
+    let env_root = env("HEXA_CHIP_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _has_flag(a: [str], flag: str) -> bool {
+    for x in a { if x == flag { return true } }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() { out = out + [raw[j]]; j = j + 1 }
+    return out
+}
+
+fn _shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── inventory + per-script lint ─────────────────────────────────────
+
+fn _disk_count(root: str) -> int {
+    let cmd = "ls " + root + "/verify/numerics_*.hexa 2>/dev/null | wc -l"
+    let n_str = exec(cmd).trim()
+    return int(n_str)
+}
+
+fn _file_text(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+fn lint_one(root: str, name: str) -> [bool] {
+    // returns 5-bool array: [import_ok, sentinel_ok, falsifiers_ok,
+    // exit_ok, counters_ok]
+    let p = root + "/verify/" + name
+    let txt = _file_text(p)
+    if txt.len() == 0 {
+        return [false, false, false, false, false]
+    }
+    let import_ok    = _has(txt, "use \"self/runtime/math_pure\"")
+    let sentinel_ok  = _has(txt, "__HEXA_CHIP_") && _has(txt, "__ PASS")
+    let falsifiers_ok = _has(txt, "let FALSIFIERS")
+    let exit_ok      = _has(txt, "exit(0)")
+    let counters_ok  = _has(txt, "let mut RUN = 0") && _has(txt, "let mut FAIL = 0")
+    return [import_ok, sentinel_ok, falsifiers_ok, exit_ok, counters_ok]
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_inventory_eq_glob(root: str) {
+    let n_disk = _disk_count(root)
+    let n_inv  = NUMERICS_SCRIPTS.len()
+    let ok = n_disk == n_inv
+    _check(ok, "NUMERICS_SCRIPTS length == on-disk numerics_*.hexa count",
+           "inv=" + str(n_inv) + " disk=" + str(n_disk))
+}
+
+fn check_all_files_present(root: str) {
+    let mut missing: [str] = []
+    for s in NUMERICS_SCRIPTS {
+        let p = root + "/verify/" + s
+        if file_exists(p) == false { missing = missing + [s] }
+    }
+    let ok = missing.len() == 0
+    let detail = if ok { "" } else { "missing: " + str(missing.len()) + " files" }
+    _check(ok, "every NUMERICS_SCRIPTS entry exists on disk", detail)
+}
+
+fn check_imports(root: str) {
+    let mut bad: [str] = []
+    for s in NUMERICS_SCRIPTS {
+        let r = lint_one(root, s)
+        if !r[0] {
+            // cross_pillar is allowed to skip math_pure since it's
+            // pure integer/lattice consistency — explicit exception.
+            if s != "numerics_cross_pillar.hexa" {
+                bad = bad + [s]
+            }
+        }
+    }
+    let ok = bad.len() == 0
+    let detail = if ok { "" } else { str(bad.len()) + " missing math_pure import" }
+    _check(ok, "every numerics_*.hexa imports self/runtime/math_pure (cross_pillar excepted)", detail)
+}
+
+fn check_sentinels(root: str) {
+    let mut bad: [str] = []
+    for s in NUMERICS_SCRIPTS {
+        let r = lint_one(root, s)
+        if !r[1] { bad = bad + [s] }
+    }
+    let ok = bad.len() == 0
+    let detail = if ok { "" } else { str(bad.len()) + " missing __HEXA_CHIP_*__ PASS sentinel" }
+    _check(ok, "every numerics_*.hexa has __HEXA_CHIP_*__ + __ PASS sentinel", detail)
+}
+
+fn check_falsifiers(root: str) {
+    let mut bad: [str] = []
+    for s in NUMERICS_SCRIPTS {
+        let r = lint_one(root, s)
+        if !r[2] { bad = bad + [s] }
+    }
+    let ok = bad.len() == 0
+    let detail = if ok { "" } else { str(bad.len()) + " missing FALSIFIERS array" }
+    _check(ok, "every numerics_*.hexa declares `let FALSIFIERS`", detail)
+}
+
+fn check_exit_zero(root: str) {
+    let mut bad: [str] = []
+    for s in NUMERICS_SCRIPTS {
+        let r = lint_one(root, s)
+        if !r[3] { bad = bad + [s] }
+    }
+    let ok = bad.len() == 0
+    let detail = if ok { "" } else { str(bad.len()) + " missing exit(0)" }
+    _check(ok, "every numerics_*.hexa contains `exit(0)` on PASS path", detail)
+}
+
+fn check_counters(root: str) {
+    let mut bad: [str] = []
+    for s in NUMERICS_SCRIPTS {
+        let r = lint_one(root, s)
+        if !r[4] { bad = bad + [s] }
+    }
+    let ok = bad.len() == 0
+    let detail = if ok { "" } else { str(bad.len()) + " missing RUN/FAIL counters" }
+    _check(ok, "every numerics_*.hexa has `let mut RUN = 0` + `let mut FAIL = 0`", detail)
+}
+
+fn check_no_libm_imports(root: str) {
+    // Defensive: no numerics_*.hexa should pull in libm-bound modules.
+    // Forbidden imports: anything matching `use "libm"` or
+    // `use "self/runtime/math"` (sans _pure).
+    let mut bad: [str] = []
+    for s in NUMERICS_SCRIPTS {
+        let p = root + "/verify/" + s
+        let txt = _file_text(p)
+        if _has(txt, "use \"libm\"") { bad = bad + [s] }
+        if _has(txt, "use \"self/runtime/math\"") && !_has(txt, "use \"self/runtime/math_pure\"") {
+            bad = bad + [s]
+        }
+    }
+    let ok = bad.len() == 0
+    let detail = if ok { "" } else { str(bad.len()) + " using libm or non-pure math" }
+    _check(ok, "no numerics_*.hexa imports libm or non-pure math", detail)
+}
+
+fn check_naming_convention(root: str) {
+    // Every numerics_*.hexa should match the naming pattern
+    // numerics_<pillar>[_parity|_solver].hexa OR
+    // numerics_cross_pillar.hexa OR numerics_lattice_arithmetic.hexa.
+    let allowed_pillars = ["process", "npu", "hbm", "cross_pillar", "lattice_arithmetic", "spice_corner", "rtl_isa_n6", "power_thermal"]
+    let allowed_suffixes = ["", "_parity", "_solver"]
+    let mut bad: [str] = []
+    for s in NUMERICS_SCRIPTS {
+        let stripped = s.replace("numerics_", "").replace(".hexa", "")
+        let mut matched = false
+        for p in allowed_pillars {
+            for sfx in allowed_suffixes {
+                if stripped == p + sfx { matched = true }
+            }
+        }
+        if !matched { bad = bad + [s] }
+    }
+    let ok = bad.len() == 0
+    let detail = if ok { "" } else { str(bad.len()) + " files violate naming convention" }
+    _check(ok, "naming: numerics_<pillar>[_parity|_solver].hexa", detail)
+}
+
+// ─── falsifiers (informational) ──────────────────────────────────────
+
+let FALSIFIERS = [
+    "F-LINT.a: NUMERICS_SCRIPTS array vs on-disk glob count mismatch → inventory drift",
+    "F-LINT.b: any numerics_*.hexa missing math_pure import → libm-class math leak",
+    "F-LINT.c: any numerics_*.hexa missing __HEXA_CHIP_*__ PASS sentinel → grep-discoverability fails",
+    "F-LINT.d: any numerics_*.hexa missing RUN/FAIL counters → harness uniformity broken",
+    "F-LINT.e: any numerics_*.hexa violates naming convention → pillar dispatch broken"
+]
+
+fn _print_summary(root: str) {
+    let n_disk = _disk_count(root)
+    let n_inv = NUMERICS_SCRIPTS.len()
+    println("  numerics_*.hexa inventory:")
+    println("    NUMERICS_SCRIPTS array : " + str(n_inv) + " entries")
+    println("    on-disk glob count     : " + str(n_disk) + " files")
+    println("    enforced invariants    : 5  (recipe §4)")
+    println("")
+    println("  per-script lint results:")
+    println("    name                                  imp sent fals exit cntr")
+    for s in NUMERICS_SCRIPTS {
+        let r = lint_one(root, s)
+        let m = ["", "", "", "", ""]
+        let mut k = 0
+        while k < 5 { m[k] = if r[k] { " ✓" } else { " ✗" }; k = k + 1 }
+        let pad = s + "                                          "
+        println("    " + pad + " " + m[0] + "  " + m[1] + "  " + m[2] + "  " + m[3] + "  " + m[4])
+    }
+    println("")
+}
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+    let root = _root()
+
+    if !json_mode {
+        println("========================================================================")
+        println("  hexa-chip — lint_numerics: recipe §4 5-invariant enforcer")
+        println("========================================================================")
+        _print_summary(root)
+    }
+
+    check_inventory_eq_glob(root)
+    check_all_files_present(root)
+    check_imports(root)
+    check_sentinels(root)
+    check_falsifiers(root)
+    check_exit_zero(root)
+    check_counters(root)
+    check_no_libm_imports(root)
+    check_naming_convention(root)
+
+    if !json_mode {
+        println("")
+        println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+        for f in FALSIFIERS { println("    ✗ " + f) }
+    }
+
+    let pass_n = RUN - FAIL
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/lint_numerics.hexa\","
+        js = js + "\"schema\":\"hexa-chip/lint/v1\","
+        js = js + "\"run\":" + str(RUN) + ","
+        js = js + "\"pass\":" + str(pass_n) + ","
+        js = js + "\"fail\":" + str(FAIL) + ","
+        js = js + "\"numerics_count\":" + str(NUMERICS_SCRIPTS.len()) + ","
+        js = js + "\"ok\":"
+        if FAIL == 0 { js = js + "true" } else { js = js + "false" }
+        js = js + "}"
+        println(js)
+        if FAIL > 0 { exit(1) }
+        return
+    }
+
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CHIP_LINT_NUMERICS__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CHIP_LINT_NUMERICS__ PASS")
+    exit(0)
+}

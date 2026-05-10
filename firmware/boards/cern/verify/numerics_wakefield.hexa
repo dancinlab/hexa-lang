@@ -1,0 +1,200 @@
+#!hexa strict
+// hexa-cern/verify/numerics_wakefield.hexa — first numerical solver stub.
+//
+// Beyond `verify/calc_wakefield.hexa` (algebraic n=6 derivation only),
+// this script does the smallest piece of REAL plasma physics: given
+// E_peak, compute the electron number density n_e via the cold-plasma
+// relation E_wb = (m_e c ω_p)/e where ω_p = sqrt(n_e e² / ε_0 m_e),
+// then the dephasing length L_d ∝ ω_0² / ω_p³.
+//
+// This is a **stub** — Stage-1+ benchtop solver is the v1.1.0 target.
+// Here we only confirm:
+//   1. The plasma-frequency relation closes against the n=6 derivation.
+//   2. The resulting n_e (~1.7e18 cm⁻³) is in the published LWFA window
+//      (10¹⁷ – 10¹⁹ cm⁻³ per DESY/SLAC reference data).
+//   3. The dephasing length L_d exceeds the L_acc_req from calc_wakefield.
+//
+// Authority: mini/doc/mini-accelerator.md (E_peak = 120 GV/m anchor) +
+// .roadmap.hexa_cern §A.4 F-PCERN-3 (1 GeV/m wakefield closed-form fit).
+//
+// Run:
+//   hexa run verify/numerics_wakefield.hexa     # exit 0 = closed-form holds
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let DOC_MINI = ROOT + "/mini/doc/mini-accelerator.md"
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── physical constants (SI) ──────────────────────────────────────────────
+let M_E      = 9.10938356e-31   // electron mass (kg)
+let E_CHARGE = 1.602176634e-19  // elementary charge (C)
+let EPS0     = 8.8541878128e-12 // vacuum permittivity (F/m)
+let C_LIGHT  = 2.99792458e8     // speed of light (m/s)
+
+// ── inputs from n=6 derivation (calc_wakefield.hexa) ────────────────────
+let E_PEAK_V_PER_M = 120.0e9    // 120 GV/m   = σ·(σ-φ) GV/m
+let LASER_LAMBDA_M = 800.0e-9   // 800 nm Ti:Sapphire (typical LWFA)
+let A0             = 6.0        // a_0 = n = 6  (n=6 derivation)
+let R_CHAMBER_CM   = 10.0       // benchtop radius
+// L_acc to reach 100 MeV at 120 GV/m  =  100 MeV / 1200 MeV/cm  =  0.083 cm
+// (calc_wakefield.hexa was OFF by 100× before 2026-05-07 — fixed alongside.)
+let L_ACC_REQ_CM   = 0.083      // path required to reach 100 MeV
+
+// ── derived (numerical) ──────────────────────────────────────────────────
+//
+// Cold-plasma wave-breaking field:  E_wb = m_e c ω_p / e
+// Solving for ω_p:                  ω_p  = e E_wb / (m_e c)
+// Plasma frequency identity:        ω_p² = n_e e² / (ε_0 m_e)
+// Therefore:                        n_e  = ε_0 m_e ω_p² / e²
+//                                        = ε_0 E_wb² / (m_e c²)
+
+fn compute_n_e_per_m3(E_peak: float) -> float {
+    let omega_p = E_charge_over_mc(E_peak)
+    return EPS0 * M_E * omega_p * omega_p / (E_CHARGE * E_CHARGE)
+}
+
+fn E_charge_over_mc(E_peak: float) -> float {
+    return (E_CHARGE * E_peak) / (M_E * C_LIGHT)
+}
+
+// Laser angular frequency from λ
+fn omega_0(lambda_m: float) -> float {
+    return 2.0 * pi_pure() * C_LIGHT / lambda_m
+}
+
+// Plasma angular frequency from n_e (m⁻³)
+fn omega_p(n_e_per_m3: float) -> float {
+    let inside = n_e_per_m3 * E_CHARGE * E_CHARGE / (EPS0 * M_E)
+    return sqrt_pure(inside)
+}
+
+// Linear dephasing length (1D limit):
+//   L_d ≈ (ω_0² / ω_p²) · λ_p / 2  where λ_p = 2π c / ω_p
+//        = π c (ω_0/ω_p)² / ω_p
+fn dephasing_length_m(w0: float, wp: float) -> float {
+    let ratio = w0 / wp
+    return pi_pure() * C_LIGHT * ratio * ratio / wp
+}
+
+fn check_n_e_in_lwfa_window(n_e_per_m3: float) {
+    // Convert m⁻³ → cm⁻³  (1 m³ = 10⁶ cm³)
+    let n_e_per_cm3 = n_e_per_m3 * 1.0e-6
+    let lo = 1.0e17
+    let hi = 1.0e19
+    let ok = n_e_per_cm3 >= lo && n_e_per_cm3 <= hi
+    _check(ok,
+           "n_e in DESY/SLAC LWFA window (1e17 – 1e19 cm⁻³)",
+           "n_e = " + str(n_e_per_cm3) + " cm⁻³")
+}
+
+fn check_E_peak_anchored() {
+    let txt = _read(DOC_MINI)
+    let ok = _has(txt, "120 GV/m") || _has(txt, "E=120")
+    _check(ok, "E_peak anchored in mini-accelerator.md (120 GV/m)", "")
+}
+
+fn check_dephasing_exceeds_l_acc(L_d_cm: float) {
+    let ok = L_d_cm >= L_ACC_REQ_CM
+    _check(ok,
+           "L_d ≥ L_acc_req (no premature dephasing)",
+           "L_d = " + str(L_d_cm) + " cm vs L_acc_req = " + str(L_ACC_REQ_CM) + " cm")
+}
+
+fn check_a0_in_blowout_regime(a0: float) {
+    // Blowout / bubble regime: a_0 ≳ 4 (LWFA literature). a_0 = 6 sits well
+    // inside that window. n=6 derivation lands here naturally.
+    let ok = a0 >= 4.0 && a0 <= 12.0
+    _check(ok,
+           "a_0 in blowout / bubble regime (4 ≤ a_0 ≤ 12)",
+           "a_0 = " + str(a0) + " (= n in our derivation)")
+}
+
+let FALSIFIERS = [
+    "computed n_e outside 1e17–1e19 cm⁻³ -> n=6 derivation breaks LWFA reality",
+    "L_d < L_acc_req -> electron loses phase before 100 MeV target",
+    "a_0 outside [4,12] -> blowout regime assumption invalid",
+    "wave-breaking field formula mismatch -> closed-form retract",
+    "real DESY/SLAC LWFA bench data deviates by >2× from L_d -> F-PCERN-3 closed by failure",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern mini — numerical wakefield closed-form check")
+    println("  (Stage-1+ solver target: v1.1.0; this is the algebraic-→-numerical bridge)")
+    println("========================================================================")
+
+    // ── numerical pipeline ─────────────────────────────────────────────
+    let n_e_per_m3 = compute_n_e_per_m3(E_PEAK_V_PER_M)
+    let n_e_per_cm3 = n_e_per_m3 * 1.0e-6
+    let w0 = omega_0(LASER_LAMBDA_M)
+    let wp = omega_p(n_e_per_m3)
+    let L_d_m  = dephasing_length_m(w0, wp)
+    let L_d_cm = L_d_m * 100.0
+
+    println("")
+    println("  inputs:")
+    println("    E_peak       = " + str(E_PEAK_V_PER_M / 1.0e9) + " GV/m   (n=6: σ·(σ-φ))")
+    println("    λ_laser      = " + str(LASER_LAMBDA_M * 1.0e9) + " nm     (Ti:Sapphire LWFA)")
+    println("    a_0          = " + str(A0) + "                 (n=6)")
+    println("")
+    println("  numerical derivation:")
+    println("    ω_p          = " + str(wp) + " rad/s")
+    println("    ω_0          = " + str(w0) + " rad/s")
+    println("    ω_0 / ω_p    = " + str(w0 / wp))
+    println("    n_e          = " + str(n_e_per_m3) + " m⁻³")
+    println("                 = " + str(n_e_per_cm3) + " cm⁻³")
+    println("    L_d (1D)     = " + str(L_d_m * 1000.0) + " mm")
+    println("                 = " + str(L_d_cm) + " cm")
+    println("")
+
+    check_E_peak_anchored()
+    check_a0_in_blowout_regime(A0)
+    check_n_e_in_lwfa_window(n_e_per_m3)
+    check_dephasing_exceeds_l_acc(L_d_cm)
+
+    println("")
+    println("  FALSIFIERS (" + str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CERN_NUMERICS_WAKEFIELD__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CERN_NUMERICS_WAKEFIELD__ PASS")
+    exit(0)
+}

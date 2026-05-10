@@ -1,0 +1,37 @@
+#!hexa strict
+// tests/test_selftest.hexa — 11-verb selftest harness
+//
+// Pass criteria:
+//   1. __HEXA_SPACE_SELFTEST__ PASS sentinel present.
+//   2. cli output reports total=11 found=11 missing=0.
+// Cost: $0 (orchestrates placeholder dispatcher in default path).
+
+fn main() {
+    let mut root = env("HEXA_SPACE_ROOT")
+    if root.len() == 0 {
+        root = exec("pwd").trim()
+    }
+    let cli = root + "/cli/hexa-space.hexa"
+
+    let cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + cli + "\" selftest 2>&1"
+    let raw = exec(cmd)
+
+    let sentinel_ok = raw.contains("__HEXA_SPACE_SELFTEST__ PASS")
+    let total_ok    = raw.contains("total:   11")
+    let found_ok    = raw.contains("found:   11")
+    let missing_ok  = raw.contains("missing: 0")
+
+    if sentinel_ok && total_ok && found_ok && missing_ok {
+        println("test_selftest: PASS  (11/11 verbs / 4 groups)")
+        return
+    }
+
+    println("test_selftest: FAIL")
+    println("  sentinel_ok=" + str(sentinel_ok))
+    println("  total_ok="    + str(total_ok))
+    println("  found_ok="    + str(found_ok))
+    println("  missing_ok="  + str(missing_ok))
+    println("--- raw cli output ---")
+    println(raw.trim())
+    exit(1)
+}

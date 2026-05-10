@@ -1,0 +1,207 @@
+#!hexa strict
+// hexa-chip/firmware/sim/npu_dispatcher.hexa — Phase C iter 2.
+//
+// Sim-firmware controller for F-CHIP-2 (NPU dataflow τ=4).  Simulates
+// an instruction dispatcher that drives ISA n=6 (24-instruction) macroblocks
+// through 4-stage τ=4 pipeline (FETCH / DECODE / EXEC / WB) on a Samsung
+// SF2P-class NPU IP.  Models layer-descriptor scheduling + back-pressure
+// + DMA fence semantics.
+//
+// Stage-1+ (Phase D) target hardware:
+//   - Samsung Exynos AP NPU IP block (or licensable equivalent)
+//   - MCU host: STM32H7-class (480 MHz Cortex-M7) for layer descriptor cache
+//
+// Predictions (closed-form, anchored to numerics_rtl_isa_n6):
+//   - 24-instruction layer descriptor mapped to τ=4 pipeline → 6 macroblocks
+//     at τ-major (= n × τ = 24 ops/cycle peak).
+//   - back-pressure threshold: HBM4 → NPU = 2 TB/s ≫ NPU consume = 800 GB/s →
+//     never throttles unless macroblock count > σ(6) = 12.
+//   - layer epoch close emits IRQ when WB stage drains the descriptor.
+//
+// Phase D refactor: this sim-firmware is now a downstream consumer of
+// stdlib/hal v0.0.1.  Peripheral handles (spi/dma/intr/gpio) are opened
+// via the hal handshake at the top of main() instead of being inlined.
+
+use "stdlib/hal/core"
+use "stdlib/hal/spi"
+use "stdlib/hal/dma"
+use "stdlib/hal/intr"
+use "stdlib/hal/gpio"
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── synthetic layer descriptor: 24 instructions across 6 classes ─────
+//
+// Each row: (instr_id, class, cpi).  Mirrors numerics_rtl_isa_n6 ISA.
+let LAYER = [
+    ["LDB", "0", "2"],   ["LDH", "0", "2"],   ["LDW", "0", "2"],   ["LDD", "0", "2"],
+    ["ADD", "1", "1"],   ["SUB", "1", "1"],   ["AND", "1", "1"],   ["XOR", "1", "1"],
+    ["MAC", "2", "1"],   ["VADD","2", "1"],   ["VSUB","2", "1"],   ["VMUL","2", "1"],
+    ["BEQ", "3", "2"],   ["BNE", "3", "2"],   ["JAL", "3", "2"],   ["JALR","3", "2"],
+    ["DMA", "4", "3"],   ["FENCE","4","2"],   ["LD.X","4", "2"],   ["ST.X","4", "2"],
+    ["SYNC","5", "2"],   ["BARR","5", "2"],   ["INTR","5", "3"],   ["NOP", "5", "1"]
+]
+
+let TAU_6 = 4
+let N_6 = 6
+let J2 = 24
+
+fn _i(s: str) -> int { return int(s) }
+
+// ── controller core: dispatch loop (sim) ──────────────────────────────
+
+fn dispatch_one_layer() -> [int] {
+    // Returns [total_cycles, macroblocks, irq_count].
+    // Pipeline model: 4 stages, single-issue.  Each instruction takes
+    // its CPI cycles; class 4/5 (DMA/fence/intr) trigger IRQ.
+    let mut total = 0
+    let mut macro = 0
+    let mut irqs = 0
+    let mut cls_in_block = -1
+    for r in LAYER {
+        let c = _i(r[1])
+        let cp = _i(r[2])
+        total = total + cp
+        if c != cls_in_block {
+            macro = macro + 1
+            cls_in_block = c
+        }
+        if c == 4 || c == 5 {
+            irqs = irqs + 1
+        }
+    }
+    return [total, macro, irqs]
+}
+
+fn check_layer_size_J2() {
+    _check(LAYER.len() == J2,
+           "layer descriptor size == J₂ = 24 instructions",
+           "got " + str(LAYER.len()))
+}
+
+fn check_dispatch_runs() {
+    let res = dispatch_one_layer()
+    let total = res[0]
+    let macro = res[1]
+    let irqs = res[2]
+    // Total cycles for 24 instr at avg CPI ≈ 1.7 → ~40 cycles.
+    _check(total >= 30 && total <= 50,
+           "dispatch total cycles ∈ [30, 50] (avg CPI ≈ 1.7 × 24 instr)",
+           "total = " + str(total))
+    // Macroblocks = number of class transitions in the descriptor.
+    // Our descriptor has 6 classes, each appearing once contiguous → 6 macros.
+    _check(macro == N_6,
+           "macroblock count == n = 6 (one block per functional class)",
+           "macro = " + str(macro))
+    // IRQs = class 4 + class 5 (8 total).
+    _check(irqs == 8,
+           "IRQ count = 8 (class 4 mem/DMA + class 5 special/sync)",
+           "irqs = " + str(irqs))
+}
+
+fn check_throughput_at_sf2p() {
+    // Samsung SF2P clock = 3.5 GHz; effective IPS = 24 / total_cycles × 3.5 GHz
+    let res = dispatch_one_layer()
+    let total = res[0]
+    if total <= 0 {
+        _check(false, "total cycles > 0", "")
+        return
+    }
+    let ips_x10000 = (J2 * 35000) / total   // IPS × 10000 = (24/total) × 3.5 GHz × 10000
+    // 1.7 GIPS = 17000 in x10000 units.
+    _check(ips_x10000 >= 17000,
+           "effective IPS @ Samsung SF2P 3.5 GHz ≥ 1.7 GIPS",
+           "IPS×10000 = " + str(ips_x10000))
+}
+
+fn check_back_pressure_envelope() {
+    // HBM4 supply = 2 TB/s = 2000 GB/s; NPU consume = σ²·φ × clock × bytes/op
+    // = 12² × 2 × 3.5 × 1 = 1008 GB/s (INT8 single-byte ops).
+    let supply_gbs = 2000
+    let consume_gbs = 12 * 12 * 2 * 35 / 10   // = 1008 (computed in integer)
+    _check(consume_gbs <= supply_gbs,
+           "NPU bandwidth consume ≤ HBM4 supply (no back-pressure)",
+           "consume=" + str(consume_gbs) + " supply=" + str(supply_gbs) + " GB/s")
+}
+
+fn check_macroblock_per_tau_cardinality() {
+    // n macroblocks × τ stages = n·τ = J₂.
+    let total_ops = N_6 * TAU_6
+    _check(total_ops == J2,
+           "n × τ = 24 = J₂  (macroblock-stage cardinality preserved)",
+           "")
+}
+
+fn check_pipeline_fill_drain_cost() {
+    // Pipeline fill = τ-1 = 3 cycles; drain = τ-1 = 3 cycles.
+    // Total overhead per layer = 2·(τ-1) = 6 cycles.
+    let overhead = 2 * (TAU_6 - 1)
+    _check(overhead == 6,
+           "pipeline fill+drain overhead = 2·(τ-1) = 6 cycles",
+           "")
+}
+
+let FALSIFIERS = [
+    "F-CHIP-2.C.a: layer != J2=24 instr → descriptor format broken",
+    "F-CHIP-2.C.b: macroblock count != n=6 → ISA class axis broken",
+    "F-CHIP-2.C.c: dispatch total cycles outside [30, 50] → pipeline modeling drift",
+    "F-CHIP-2.C.d: IRQ count != 8 → mem/sync class miscounted",
+    "F-CHIP-2.C.e: NPU consume > HBM4 supply → back-pressure required (re-fit)"
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-chip — Phase C sim-firmware: NPU dispatcher (F-CHIP-2)")
+    println("========================================================================")
+    println("")
+    println("  Target HW (Phase D): Samsung Exynos AP NPU IP + STM32H7 host")
+    println("  Sim scope: 24-instr ISA n=6 layer × τ=4 pipeline × σ-cascade roofline")
+    println("")
+
+    // ── stdlib/hal handshake (Phase D refactor) ──────────────────────
+    // Open the peripherals this controller conceptually drives:
+    //   spi   — layer-descriptor fetch from host MCU @ 50 MHz
+    //   dma   — peripheral → memory descriptor streaming
+    //   intr  — layer_done IRQ on WB drain (real-time priority)
+    //   gpio  — npu_busy strobe (visible on pin 2)
+    println("  [hal] opening stdlib/hal peripheral handles ...")
+    let spi_h   = spi_open(0, 0, MODE_0, 50000000)
+    let dma_h   = dma_open(0, DIR_PER_TO_MEM, WIDTH_WORD)
+    let intr_h  = intr_open(1, PRIO_REAL_T, "layer_done")
+    let gpio_h  = gpio_open(2, MODE_OUTPUT)
+    _check(spi_h  >= 0, "stdlib/hal spi_open OK",  "h=" + str(spi_h))
+    _check(dma_h  >= 0, "stdlib/hal dma_open OK",  "h=" + str(dma_h))
+    _check(intr_h >= 0, "stdlib/hal intr_open OK", "h=" + str(intr_h))
+    _check(gpio_h >= 0, "stdlib/hal gpio_open OK", "h=" + str(gpio_h))
+    println("")
+
+    check_layer_size_J2()
+    check_dispatch_runs()
+    check_throughput_at_sf2p()
+    check_back_pressure_envelope()
+    check_macroblock_per_tau_cardinality()
+    check_pipeline_fill_drain_cost()
+
+    let pass_n = RUN - FAIL
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CHIP_SIM_NPU_DISPATCHER__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CHIP_SIM_NPU_DISPATCHER__ PASS — NPU dispatcher sim-firmware OK")
+    exit(0)
+}

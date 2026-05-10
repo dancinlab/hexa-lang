@@ -1,0 +1,94 @@
+# hexa.toml — hexa-chip standalone package manifest
+#
+# Spec: shared/hexa-lang/hexa-toml-spec.json (version 1.0.0)
+# Distribution target: hx install hexa-chip
+# Provenance: extracted from canon/domains/compute/ on 2026-05-06
+#             (n6-arch SHA c0f1f570; 28-verb 7-group chip substrate)
+
+[package]
+name = "hexa-chip"
+version = "1.0.0"
+entry = "cli/hexa-chip.hexa"
+description = "Chip substrate — 29-verb semiconductor stack (architecture / design / EDA / process / packaging / NPU / PIM / 3D / photonic / RTL-gen / yield / consciousness-chip)."
+license = "MIT"
+authors = ["박민우 <nerve011235@gmail.com>"]
+repository = "https://github.com/need-singularity/hexa-chip"
+homepage = "https://github.com/need-singularity/hexa-chip"
+readme = "README.md"
+keywords = [
+    "semiconductor", "chip-architecture", "rtl", "eda", "npu", "pim",
+    "photonic", "packaging", "hbm", "advanced-packaging", "yield",
+    "consciousness-chip", "n6-invariant", "korea-fab"
+]
+categories = ["hardware", "compute", "semiconductor", "eda"]
+
+[[bin]]
+name = "hexa-chip"
+path = "cli/hexa-chip.hexa"
+
+[scripts]
+install = "install.hexa"
+
+# ── 6-group / 29-verb manifest ─────────────────────────────
+# Group A — architecture (3 verbs)
+#   architecture · isa_n6 · hexa1
+# Group B — design (5 verbs)
+#   design · dse_pipeline · rtl_gen · eda · verify_test
+# Group C — process (5 verbs)
+#   process · materials · wafer · yield · thermal_power
+# Group D — packaging (6 verbs)
+#   packaging · advanced_packaging · chip_3d · hbm · interconnect · sc
+# Group E — accelerator (8 verbs)
+#   npu_n6 · pim · photonic · accel · asic · hexa_pim · hexa_3d · hexa_wafer
+# Group F — consciousness (2 verbs)
+#   conscious_chip · conscious_soc
+#
+# NOTE — kick-spec one-liner reads "28-verb / 7-group"; the explicit
+# verb_map enumeration totals 29 verbs across 6 group categories (the
+# 7th "group" in the headline does not appear in the line-by-line map).
+# This v1.0.0 honors the line-by-line map → 29 verbs / 6 groups.
+[modules.architecture]
+verbs = ["architecture", "isa_n6", "hexa1"]
+[modules.design]
+verbs = ["design", "dse_pipeline", "rtl_gen", "eda", "verify_test"]
+[modules.process]
+verbs = ["process", "materials", "wafer", "yield", "thermal_power"]
+[modules.packaging]
+verbs = ["packaging", "advanced_packaging", "chip_3d", "hbm", "interconnect", "sc"]
+[modules.accelerator]
+verbs = ["npu_n6", "pim", "photonic", "accel", "asic", "hexa_pim", "hexa_3d", "hexa_wafer"]
+[modules.consciousness]
+verbs = ["conscious_chip", "conscious_soc"]
+
+# ── Dependencies ───────────────────────────────────────────
+# All verbs are spec-first at v1.0.0 — no Python or external deps required.
+[dependencies]
+hexa-lang = ">=1.0.0"
+
+# ── Closure provenance (raw#10 honest C3) ─────────────────
+# v1.0.0 closure: 28-verb spec-first extraction. Working .hexa CLI dispatcher
+# is a placeholder router that lists groups + verbs; per-verb sandboxes are
+# spec-only at this release.
+[closure]
+verbs_total = 29
+groups_total = 6
+verbs_wired = 29       # 2026-05-07 buildout: every verb has verify_<verb>.hexa
+verbs_spec = 29
+verdict = "SPEC_PLUS_RUNNABLE"   # 2026-05-07 — was SPEC_FIRST at v1.0.0
+extracted_from = "canon/domains/compute/ @ c0f1f570"
+spec_count_caveat = "kick-spec one-liner read '28-verb / 7-group'; explicit verb_map enumerated 29 verbs across 6 group categories. v1.0.0 honors the line-by-line map."
+runnable_surface = "verify/cli.hexa (5 checks) + verify/verb_runner.hexa (29 sandboxes) + tests/run_tests.hexa (4 tests) — make ci aggregates"
+
+# ── Scope honesty (raw#10 C3) ─────────────────────────────
+[scope]
+honest_scope = "29-verb 통합 chip substrate (6 그룹: architecture + design + process + packaging + accelerator + consciousness). Spec-first; per-verb working .hexa CLI sandboxes TBD. Korea-fab heritage tone (Samsung·SK·Hynix)."
+not_scope = [
+    "Tape-out / mask-set generation (no GDSII writer)",
+    "Foundry PDK distribution (no proprietary process kits vendored)",
+    "EDA tool replacement (Cadence/Synopsys/Mentor stays canonical)",
+    "Wet-fab calibration (out-of-repo; runs on physical wafers only)"
+]
+n6_lattice_caveat = "n=6 invariant referenced for ISA/architecture decomposition only (isa_n6, hexa1). Process/packaging/accelerator groups inherit organising convention without independent invariant-fit verification."
+
+[cost]
+mac_local_default = "$0 (spec-first; no external tooling invoked)"

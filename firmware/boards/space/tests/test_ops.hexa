@@ -1,0 +1,103 @@
+#!hexa strict
+// tests/test_ops.hexa — operations-group 16-verb verify sweep harness.
+//
+// Pass criteria:
+//   1. Every spec MD exists for the 16 ops verbs.
+//   2. Every verify_*.hexa exists and emits __HEXA_<VERB>_VERIFY__ PASS.
+//   3. cli/hexa-space.hexa `ops verify-all` proxy reports 16/16.
+//
+// raw#10 honest C3:
+//   - PASS = "all 16 ops verbs ship + lattice arithmetic closes" — NOT
+//     a claim about SpaceX physics. The verify scripts test bookkeeping
+//     identities only.
+//
+// Cost: $0 (Mac local, no network).
+
+let OPS_VERBS: [str] = [
+    "spaceship",
+    "satellite",
+    "space_center",
+    "space_ai_center",
+    "space_datacenter",
+    "falcon",
+    "dragon",
+    "recovery",
+    "orbital_depot",
+    "hls",
+    "starlink",
+    "rideshare",
+    "station",
+    "mars_base",
+    "direct_to_cell",
+    "mondaloy",
+]
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn main() {
+    let mut root = env("HEXA_SPACE_ROOT")
+    if root.len() == 0 {
+        root = exec("pwd").trim()
+    }
+    println("test_ops: HEXA_SPACE_ROOT=" + root)
+    println("test_ops: 16 operations-group verb sweep")
+
+    // ─── 0. file presence ───
+    let mut missing_md: [str] = []
+    let mut missing_verify: [str] = []
+    for v in OPS_VERBS {
+        let md_p = root + "/" + v + "/" + v + ".md"
+        let vf_p = root + "/" + v + "/verify_" + v + ".hexa"
+        if !_file_exists(md_p) { missing_md = missing_md + [v] }
+        if !_file_exists(vf_p) { missing_verify = missing_verify + [v] }
+    }
+    if missing_md.len() > 0 {
+        println("test_ops: FAIL — missing MD specs: " + missing_md.join(", "))
+        exit(1)
+    }
+    if missing_verify.len() > 0 {
+        println("test_ops: FAIL — missing verify scripts: " + missing_verify.join(", "))
+        exit(1)
+    }
+    println("  [files] 16 specs + 16 verify scripts present  PASS")
+
+    // ─── 1. each verify_*.hexa emits VERIFY__ PASS ───
+    let mut failed: [str] = []
+    let mut passed = 0
+    for v in OPS_VERBS {
+        let cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + root + "/" + v + "/verify_" + v + ".hexa\" 2>&1"
+        let out = exec(cmd)
+        if out.contains("VERIFY__ PASS") {
+            passed = passed + 1
+        } else {
+            failed = failed + [v]
+        }
+    }
+    println("  [verify] " + str(passed) + "/" + str(OPS_VERBS.len()) + " sentinel PASS")
+
+    // ─── 2. CLI proxy: hexa-space ops verify-all ───
+    let cli = root + "/cli/hexa-space.hexa"
+    let cli_cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + cli + "\" ops verify-all 2>&1"
+    let cli_out = exec(cli_cmd)
+    let cli_ok  = cli_out.contains("ops verify-all: 16/16")
+    println("  [proxy] cli ops verify-all 16/16  " + str(cli_ok))
+
+    let pass = (passed == OPS_VERBS.len()) && cli_ok && (failed.len() == 0)
+    if pass {
+        println("test_ops: PASS  (" + str(OPS_VERBS.len()) + "/" + str(OPS_VERBS.len()) + " ops verbs verified + cli proxy 16/16)")
+        return
+    }
+
+    println("test_ops: FAIL")
+    if failed.len() > 0 {
+        println("  failed verifies: " + failed.join(", "))
+    }
+    if !cli_ok {
+        println("--- cli ops verify-all output ---")
+        println(cli_out.trim())
+    }
+    exit(1)
+}

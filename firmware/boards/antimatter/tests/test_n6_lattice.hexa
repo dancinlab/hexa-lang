@@ -1,0 +1,19 @@
+#!hexa strict
+// tests/test_n6_lattice.hexa — n=6 lattice arithmetic verifier harness.
+//
+// Pass criterion: __HEXA_ANTIMATTER_VERIFY_N6__ PASS sentinel + 12/12 lines.
+
+fn main() {
+    let root = env("HEXA_ANTIMATTER_ROOT")
+    let mut p = "verify/n6_arithmetic.hexa"
+    if root.len() > 0 { p = root + "/verify/n6_arithmetic.hexa" }
+
+    let raw = exec("hexa run " + p + " 2>&1")
+    if raw.contains("__HEXA_ANTIMATTER_VERIFY_N6__ PASS") && raw.contains("12/12 PASS") {
+        println("test_n6_lattice: PASS")
+        return
+    }
+    println("test_n6_lattice: FAIL")
+    println(raw.trim())
+    exit(1)
+}

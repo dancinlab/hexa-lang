@@ -1,0 +1,233 @@
+#!hexa strict
+// hexa-cern/verify/numerics_liouville.hexa — symplectic volume-preservation check.
+//
+// `numerics_classical.hexa` showed that velocity-Verlet (leapfrog)
+// conserves a SHADOW Hamiltonian to O(Δt²). This script demonstrates
+// the deeper invariant: the Jacobian determinant of the discrete flow
+// map is exactly 1, meaning leapfrog preserves phase-space volume
+// (Liouville's theorem at the discrete-time level — the textbook
+// "this is what makes a method symplectic" property).
+//
+// For a 1-DOF harmonic oscillator with leapfrog of step h:
+//   q' = q + h·(p - h·ω²·q/2)
+//   p' = p - h·ω²·q/2 - h·ω²·q'/2
+//
+// The Jacobian J = ∂(q',p')/∂(q,p) has det(J) = 1 algebraically
+// (closed-form), and we verify the same numerically via central
+// finite differences. At each of the τ=4 phase quadrants we recompute
+// the local Jacobian; all four must satisfy |det(J) − 1| < 1e-9.
+//
+// PASS = volume preservation holds across all τ=4 quadrants.
+// FAIL = any quadrant's |det − 1| exceeds the bound.
+//
+// This closes F-PCERN-2's T2 (numerical) tier in parallel to
+// numerics_classical's energy-drift check — together they cover the
+// two characteristic symplectic invariants (energy & volume).
+//
+// Authority: classical/doc/classical-mechanics-accelerator.md
+// (Hamilton phase-space σ = 12 = 2n anchor + Liouville volume mention)
+// + .roadmap.hexa_cern §A.4 F-PCERN-2.
+//
+// Run:
+//   hexa run verify/numerics_liouville.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let DOC_CLASSICAL = ROOT + "/classical/doc/classical-mechanics-accelerator.md"
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── n=6 lattice ──────────────────────────────────────────────────────────
+let TAU = 4
+let SIGMA = 12
+
+// ── leapfrog parameters (must match numerics_classical) ─────────────────
+let OMEGA = 1.0
+let PERIOD = 2.0 * 3.14159265358979323846
+let STEPS_PER_QUADRANT = 64               // 256 total — finite-diff sensitive
+let TOTAL_STEPS = 4 * STEPS_PER_QUADRANT
+
+fn dt() -> float {
+    return PERIOD / (4.0 * 64.0)
+}
+
+// One leapfrog step (velocity Verlet).
+fn leapfrog_step(q: float, p: float, h: float) -> [float] {
+    let half = 0.5 * h
+    let p_half = p - OMEGA * OMEGA * q * half
+    let q_new = q + p_half * h
+    let p_new = p_half - OMEGA * OMEGA * q_new * half
+    return [q_new, p_new]
+}
+
+// Apply N steps.
+fn leapfrog_n(q: float, p: float, h: float, n: int) -> [float] {
+    let mut qq = q
+    let mut pp = p
+    let mut i = 0
+    while i < n {
+        let r = leapfrog_step(qq, pp, h)
+        qq = r[0]
+        pp = r[1]
+        i = i + 1
+    }
+    return [qq, pp]
+}
+
+// abs helper
+fn abs_f(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+// Numerical Jacobian determinant via central finite differences.
+//   det(J) ≈ (∂q'/∂q · ∂p'/∂p) − (∂q'/∂p · ∂p'/∂q)
+// where q' and p' are the propagated coords after `n` leapfrog steps
+// from base (q0, p0).
+fn jacobian_det(q0: float, p0: float, h: float, n: int) -> float {
+    let eps = 1.0e-6
+
+    let qp_plus_q  = leapfrog_n(q0 + eps, p0,       h, n)
+    let qp_minus_q = leapfrog_n(q0 - eps, p0,       h, n)
+    let qp_plus_p  = leapfrog_n(q0,       p0 + eps, h, n)
+    let qp_minus_p = leapfrog_n(q0,       p0 - eps, h, n)
+
+    let dqdq = (qp_plus_q[0] - qp_minus_q[0]) / (2.0 * eps)
+    let dpdq = (qp_plus_q[1] - qp_minus_q[1]) / (2.0 * eps)
+    let dqdp = (qp_plus_p[0] - qp_minus_p[0]) / (2.0 * eps)
+    let dpdp = (qp_plus_p[1] - qp_minus_p[1]) / (2.0 * eps)
+
+    return dqdq * dpdp - dqdp * dpdq
+}
+
+// ── checks ──────────────────────────────────────────────────────────────
+
+let VOLUME_TOL = 1.0e-8     // central-diff truncation noise floor
+
+fn print_header() {
+    println("")
+    println("  Harmonic oscillator H = ½(p² + ω²q²),  ω = 1,  T = 2π.")
+    println("  Leapfrog step h = T / " + str(TOTAL_STEPS) + " = π / 128.")
+    println("  Initial state: (q, p) = (1, 0).")
+    println("  τ=4 phase quadrants: " + str(STEPS_PER_QUADRANT) + " steps each.")
+    println("")
+    println("  Jacobian det(J) computed via central finite differences (ε = 1e-6).")
+    println("  Symplectic property: det(J) = 1 exactly (volume preservation).")
+    println("")
+}
+
+fn check_quadrant(quadrant: int, total_steps: int, label: str) {
+    let h = dt()
+    let q0 = 1.0
+    let p0 = 0.0
+    let det = jacobian_det(q0, p0, h, total_steps)
+    let drift = abs_f(det - 1.0)
+    let ok = drift < VOLUME_TOL
+    _check(ok,
+           "phase " + str(quadrant) + " (" + label + "): det(J) = 1 within " + str(VOLUME_TOL),
+           "det(J) = " + str(det) + ", |det−1| = " + str(drift))
+}
+
+fn check_full_period() {
+    let h = dt()
+    let det = jacobian_det(1.0, 0.0, h, TOTAL_STEPS)
+    let drift = abs_f(det - 1.0)
+    let ok = drift < VOLUME_TOL
+    _check(ok,
+           "full period: det(J) = 1 (volume preserved across all τ=4 quadrants)",
+           "det(J) = " + str(det) + ", |det−1| = " + str(drift))
+}
+
+fn check_offset_initial_conditions() {
+    // Volume preservation must hold for ANY initial point, not just (1, 0).
+    let h = dt()
+    let det = jacobian_det(0.5, 0.7, h, TOTAL_STEPS)
+    let drift = abs_f(det - 1.0)
+    let ok = drift < VOLUME_TOL
+    _check(ok,
+           "offset IC (0.5, 0.7): det(J) = 1 (Liouville is point-independent)",
+           "det(J) = " + str(det) + ", |det−1| = " + str(drift))
+}
+
+fn check_doc_anchors() {
+    let txt = _read(DOC_CLASSICAL)
+    let ok = (_has(txt, "Liouville") || _has(txt, "phase-space") || _has(txt, "phase space")) &&
+             (_has(txt, "Hamilton") || _has(txt, "symplectic"))
+    _check(ok, "classical doc references Liouville / phase-space + Hamilton/symplectic", "")
+}
+
+fn check_tau_quadrants_aligned() {
+    _check(STEPS_PER_QUADRANT * TAU == TOTAL_STEPS,
+           "τ=4 quadrants × " + str(STEPS_PER_QUADRANT) + " steps = " + str(TOTAL_STEPS) + " total",
+           "n=6 phase decomposition aligned with leapfrog grid")
+}
+
+let FALSIFIERS = [
+    "any quadrant det(J) deviates > 1e-8 from 1 -> leapfrog is not exactly symplectic",
+    "full-period det(J) ≠ 1 -> volume leakage across τ=4 boundaries",
+    "offset IC det(J) ≠ 1 -> volume preservation point-dependent (Liouville broken)",
+    "STEPS_PER_QUADRANT × τ ≠ TOTAL_STEPS -> n=6 phase grid misaligned",
+    "classical doc loses Liouville/phase-space anchor -> closure path drifted",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern classical — Liouville volume-preservation check (T2)")
+    println("  (parallel to numerics_classical's energy-drift check; second F-PCERN-2 T2)")
+    println("========================================================================")
+    print_header()
+
+    check_quadrant(1, 1 * STEPS_PER_QUADRANT, "pump")
+    check_quadrant(2, 2 * STEPS_PER_QUADRANT, "bubble")
+    check_quadrant(3, 3 * STEPS_PER_QUADRANT, "capture")
+    check_quadrant(4, 4 * STEPS_PER_QUADRANT, "extract")
+    check_full_period()
+    check_offset_initial_conditions()
+    check_tau_quadrants_aligned()
+    check_doc_anchors()
+
+    println("")
+    println("  FALSIFIERS (" + str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CERN_NUMERICS_LIOUVILLE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CERN_NUMERICS_LIOUVILLE__ PASS — symplectic volume preservation across τ=4")
+    exit(0)
+}

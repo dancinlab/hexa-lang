@@ -1,0 +1,35 @@
+#!hexa strict
+// tests/test_modules_wired.hexa — verify each verb module is invocable
+// from the CLI router (factory / tabletop / pet_cyclotron) and emits its
+// sentinel.
+
+fn root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    return exec("pwd").trim()
+}
+
+fn check_verb(name: str, sentinel: str) -> bool {
+    let cli = root() + "/cli/hexa-antimatter.hexa"
+    let raw = exec("hexa run " + cli + " " + name + " 2>&1")
+    if raw.contains(sentinel) {
+        println("  test_modules_wired[" + name + "]: PASS")
+        return true
+    }
+    println("  test_modules_wired[" + name + "]: FAIL")
+    println(raw.trim())
+    return false
+}
+
+fn main() {
+    let mut ok = true
+    if !check_verb("factory",       "__HEXA_ANTIMATTER_FACTORY__ PASS")       { ok = false }
+    if !check_verb("tabletop",      "__HEXA_ANTIMATTER_TABLETOP__ PASS")      { ok = false }
+    if !check_verb("pet_cyclotron", "__HEXA_ANTIMATTER_PET_CYCLOTRON__ PASS") { ok = false }
+    if ok {
+        println("test_modules_wired: PASS")
+        return
+    }
+    println("test_modules_wired: FAIL")
+    exit(1)
+}

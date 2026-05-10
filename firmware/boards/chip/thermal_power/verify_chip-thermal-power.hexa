@@ -1,0 +1,37 @@
+#!hexa strict
+// thermal_power/verify_chip-thermal-power.hexa — thermal envelope + PDN.
+//
+// τ(6)=4 thermal interfaces: junction → case → TIM → ambient.
+// Tj = Tamb + P · (Rjc + Rcs + Rsa); each interface budgeted independently.
+//
+// Falsifiers:
+//   F-CHIP-T-1: τ(6)=4 thermal stages drift.
+//   F-CHIP-T-2: Tj > Tj_max at nominal P ⇒ thermal envelope violated.
+
+fn _Tj(P_W: f64, Rjc: f64, Rcs: f64, Rsa: f64, Tamb: f64) -> f64 {
+    return Tamb + P_W * (Rjc + Rcs + Rsa)
+}
+
+fn main() {
+    let stages = ["junction", "case", "TIM", "ambient"]
+    if stages.len() != 4 {
+        println("[thermal_power] FAIL — τ(6)=4 thermal stage count drift")
+        exit(1)
+    }
+    println("[thermal_power] τ(6)=4 thermal stages: " + stages[0] + " → " + stages[1] + " → " + stages[2] + " → " + stages[3] + " PASS")
+
+    // Sample: 100W SoC, Rjc=0.3, Rcs=0.2, Rsa=0.2, Tamb=40, Tj_max=110
+    let P = 100.0
+    let Rjc = 0.3
+    let Rcs = 0.2
+    let Rsa = 0.2
+    let Tamb = 40.0
+    let Tj_max = 110.0
+    let Tj = _Tj(P, Rjc, Rcs, Rsa, Tamb)
+    println("[thermal_power] sample: P=100W, Rth_total=0.7 K/W, Tamb=40°C → Tj=" + str(Tj) + "°C")
+    if Tj > Tj_max {
+        println("[thermal_power] FAIL — Tj=" + str(Tj) + " > Tj_max=" + str(Tj_max) + " (F-CHIP-T-2)")
+        exit(1)
+    }
+    println("[thermal_power] Tj ≤ " + str(Tj_max) + " envelope PASS")
+}

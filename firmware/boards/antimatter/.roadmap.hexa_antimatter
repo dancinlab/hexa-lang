@@ -1,0 +1,139 @@
+# .roadmap.hexa_antimatter — repo-overall tracker
+
+> Cross-cutting state: invariant lattice, release cadence, cycle history,
+> deadlines, pointers. Sister of `petite-cern` / `hexa-ufo` / `hexa-fusion`
+> under `dancinlab` org.
+
+**Last sync**: 2026-05-08 · **Current release**: v1.0.0 (v1.1.0 RSC code-layer FINAL on `main`) · **Branch**: `main`
+
+---
+
+## §0 Terminal goal — 탁상 반물질 substrate (1.7×10¹² p̄/s 도달)
+
+hexa-antimatter 도착지 = **탁상 반물질 (factory + tabletop + PET cyclotron) production rate 1.7×10¹² p̄/s 도달 + Dirac-mirror n=6 closed-form 검증**.
+
+DoD:
+1. `pet_cyclotron` ¹⁸F β⁺ on-site regen .hexa 시뮬레이터.
+2. `tabletop` antimatter trap 8.7 kW p-¹¹B 의존 cross-verify with `hexa-fusion`.
+3. `factory` scale-up spec (10¹⁴ p̄/s).
+4. `hexa-ufo` Stage-3 propulsion fuel cross-verify.
+
+## §A.1 Invariant lattice (n=6)
+
+```
+σ(6) · φ(6) = n · τ(6) = J₂ = 24
+   12   ·   2  =  6  ·   4  = 24
+```
+
+| Symbol | Value | Role | Antimatter projection |
+|--------|-------|------|------------------------|
+| σ(6)   | 12    | sigma — cardinality bin | 12 antiparticle species (e⁺ / p̄ / n̄ / Λ̄ / ...) |
+| τ(6)   | 4     | tau — state quartet | 4 trap states (capture / cool / store / extract) |
+| φ(6)   | 2     | phi — verdict bit | matter / antimatter (Dirac mirror) |
+| J₂     | 24    | Mathieu / Leech | σ·φ = J₂ = 24 — Dirac mirror symmetry generators |
+
+## §A.2 Release cadence
+
+| Version | Date | Status | Highlights |
+|---------|------|--------|------------|
+| v1.0.0 | 2026-05-06 | RELEASED | 3 verb 시드 (factory + tabletop + pet_cyclotron) |
+| v1.1.0 | 2026-05-08 | RSC code-layer FINAL on `main` | 25 verify scripts (T1 ×4 + T2 ×14 + T3 ×4 + meta ×3). All 4 falsifiers (F-AM-1/2/3/4) at **100% bookkeeping closure**. saturation_check 22/22 → `__HEXA_ANTIMATTER_RSC_FULL_CLOSURE__ 100%` + `__RSC_SATURATED__ STOP`. cli `verify all` 29/29. |
+| v1.2.0 | ~2026-10 | planned | `tabletop` p̄ trap 8.7 kW p-¹¹B 의존 cross-verify with hexa-fusion (T1/T2 within RSC, T3 paper-feed). |
+| v1.3.0 | ~2026-12 | planned | `factory` scale-up spec (10¹⁴ p̄/s) — RSC-internal 보강. |
+| v2.0.0 | ~2027-Q3 | ASPIRATIONAL | Stage-1+ benchtop raw-data fit. **Out of RSC code-layer**; see §A.6. |
+
+## §A.3 Cycle history
+
+- **Cycle 0 (2026-05-06)** — v1.0.0 initial extraction from canon@c0f1f570.  Commit `f91c153`.  11 files / 2094+ insertions.
+
+- **Cycle 1 (2026-05-08, RSC iter 1–12)** — RSC bootstrap.  4 calc_*.hexa T1 + 9 numerics_*.hexa T2 (basic + parity + solver per pillar) + 3 cross-cutters.  All 3 pillar falsifiers (F-AM-1/2/3) reach T1 + T2 ×3 sat-1 (recipe §7.2).  Commits 7c2dd6b → 65f68c5.
+
+- **Cycle 2 (2026-05-08, RSC iter 13–20)** — strict sat-1 + sat-2 saturation.  +numerics_cross_pillar + numerics_lattice_arithmetic + falsifier_check + lint_numerics + (calc/numerics)_break_even (×3 for F-AM-4) + saturation_check.  All 4 falsifiers at T1+T2×3 (strict).  `__HEXA_ANTIMATTER_RSC_SATURATED__ STOP` emits.  Commits 51d957e → 691006f.
+
+- **Cycle 3 (2026-05-08, RSC iter 21–25)** — T3 paper-feed + 100% closure.  4 empirical_*_inspire.hexa (Inspire-HEP API + 16 cached fixture JSONs) + saturation_check sat-3 condition.  `__HEXA_ANTIMATTER_RSC_FULL_CLOSURE__ 100%` emits.  Commit `e291529`.  → §A.6 + §A.6.1 added (commit `7ff0469`).
+
+- **Cycle 4 (2026-05-08, Phase A → C.5 → D)** — paper firmware surface.
+  - Phase A: 3 pillar `doc/benchtop_v0_design.md` (~$11M abstract BOM).  Commit `3e0a3b2`.
+  - Phase B: 4 numerics_*_*.hexa Stage-1 sim parity (T2 ×4 each).  Commit `2ee9119`.
+  - Phase C: 4 firmware/sim/*.hexa golden behavioral.  Commit `062009f`.
+  - Phase C.5: 4 board_v0_*.md + 4 schematic_v0_*.md + 3 .xdc (Vivado constraints).  Commits `ebe94aa` / `435cdf7` / `7551ed0`.
+  - Phase D: HDL skeletons (`firmware/hdl/`, Vivado-synth) + MCU skeletons (`firmware/mcu/`, cargo-test) + `firmware_phase_d_lint.hexa` drift catcher.  Commits `ebe94aa` / `afd04af`.
+
+- **Cycle 5 (2026-05-08, repo hygiene + Phase E plans)** — top-level docs (CONTRIBUTING / ARCHITECTURE / SECURITY / FAQ / RELEASE_NOTES_v1.1.0) + pillar SSOT §10–§15 fill (RISKS / DEPENDENCIES / TIMELINE / TOOLS / TEAM / REFERENCES) + Phase E plans (PHASE_E_HARDWARE_PATH umbrella + 4 phase_e_*.md detail + firmware/kicad/ project skeleton tree).  Commits `a3c74b0` → `ed4a985`.
+
+**Cumulative state (2026-05-08, post-Cycle 5)**:
+- 25+ verify scripts (38/38 PASS aggregate)
+- 35 markdown files (README + 4 top-level meta + 3 pillar SSOTs + 3 pillar Phase A docs + firmware/{doc,hdl,mcu,kicad}/ READMEs + 8 board+schematic v0 + 5 Phase E plans + 2 release notes)
+- 4 firmware/sim/*.hexa Phase C goldens
+- 4 firmware/hdl/*.v + 3 .xdc + build.tcl Phase D HDL
+- 4 firmware/mcu/*.rs + Cargo.toml + lib.rs Phase D MCU
+- 4 firmware/kicad/<board>/ Phase E skeleton dirs
+- 16 verify/fixtures/*.json T3 paper-feed cache
+- F-AM-1/2/3/4 all at 100% bookkeeping closure
+- `__RSC_FULL_CLOSURE__ 100%` + `__RSC_SATURATED__ STOP` both PASS
+
+**Next code-layer cycle**: none (paper-spec saturated).  **Next hardware-layer cycle**: §A.6 step 1 (external collab decision) → step 2 (funding) → Phase E1 (~$15k pet+atomic_clock proto) → E2/E3.  All gated outside this repo.
+
+## §A.4 Falsifier preregister
+
+- **F-AM-1** — PET ¹⁸F regen rate 측정 (cyclotron 공개 spec) closed-form fit?
+- **F-AM-2** — tabletop p̄ density σ·J₂=288 fit (CERN AEgIS / ALPHA / GBAR ref)?
+- **F-AM-3** — Dirac mirror symmetry 6-fold closed-form, CPT 측정 일치?
+- **F-AM-4** — 탁상 1.7×10¹² p̄/s 도달 시 hexa-ufo Stage-3 propulsion break-even?
+
+## §A.5 Pending decisions
+
+- petite-cern (가속기 cousin) 와의 verb 중복 정리 (PET cyclotron 은 antimatter측에 귀속, accelerator 측은 reference만).
+- 반물질 가격 (현재 ~$62.5조/g) → 탁상 가격 모델.
+- CERN ALPHA collab 외부 partnership 시점.
+- §A.6 Stage-1 외부 collab 후보 선정 (CERN AEgIS / ALPHA / GBAR / BASE — F-AM-2/3 용; 의료 PET 시설 — F-AM-1 용; NASA NIAC / DARPA — F-AM-4 용) 중 우선순위.
+
+## §A.6 Stage-1+ hardware path  (post-RSC, **out of code-layer scope**)
+
+RSC (verify/* `.hexa`) 가 닫을 수 없는 영역. v1.1.0 100% closure 이후
+v2.0.0 까지의 하드웨어/외부-bound 단계. 본 path 는 `.hexa` 가 아니라
+funding · 외부 검증 · 실제 장비 실험으로 진행.
+
+| step | 내용 | 시점 (목표) | RSC 가능? | 결과물 |
+|:----:|:----|:-----------|:---------:|:-------|
+| 1 | 외부 collab 결정 (CERN AEgIS/ALPHA/GBAR/BASE · 의료 PET 시설 · NASA NIAC) | 2026-Q3 | ✗ | MOU / 합의서 |
+| 2 | Funding round (48 T RT-SC + UHV trap chamber + e+ source + 진단계 / 의료 cyclotron 임대 / propulsion bench) | 2026-Q4 | ✗ | grant / 투자 commitment |
+| 3 | Stage-1 시뮬레이션 parity (¹⁸F batch 실측 + p̄ trap density 시뮬 + CPT 정밀 측정 시뮬 + thrust 시뮬) | ~2026-08 | **부분 가능** (.hexa T2 보강) | numerics_*_relativistic.hexa 류, simulation parity 보고서 |
+| 4 | Stage-2/3 실제 benchtop 빌드 + 실증 (years out) | ~2027-Q1+ | ✗ | 펌웨어 · HDL · PCB · BOM · 캘리브레이션 로그 · raw 측정 데이터 |
+
+Step 3 까지가 본 repo 가 직접 다룰 수 있는 마지막 layer. Step 1 / 2 / 4
+는 hardware-ops · 외부-stakeholder · multi-month 작업으로 cron / loop
+firing 으로 닫히지 않음. 본 §A.6 는 `tracking only` — 진행 시 Cycle 항목
+(§A.3) 에 cross-referenced.
+
+**현재 (2026-05-08) 상태**: 모든 step 미착수. v2.0.0 = 종이 위 설계.
+factory/antimatter-factory.md / tabletop/tabletop-antimatter.md /
+pet_cyclotron/pet-cyclotron.md SSOT 가 빌드 후보 BOM 의 출발점.
+
+### §A.6.1 추천 작업 순서 (A → B → C → D)
+
+§A.6 step 1/2/4 가 외부-bound 인 동안에도 본 repo 안에서 진행 가능한
+사전 작업 4 단계. 펌웨어/HW 가 실제로 나오는 시점은 D 단계 이후이며,
+A → B → C 는 "v2.0.0 빌드 직전" 까지 본 repo 가 자체적으로 닫을 수 있는
+범위.
+
+| 단계 | 내용 | 결과물 | 외부 HW? | RSC 가능? | 가치 |
+|:----:|:----|:------|:--------:|:---------:|:----|
+| A | **종이 설계 강화** — `{factory,tabletop,pet_cyclotron}/doc/benchtop_v0_design.md` (4 falsifier 별 풀 BOM + 블록 다이어그램 + 인터페이스 표 + 안전 명세) | `.md` 3~6 개 + ASCII 그림 | ✗ | ✓ docs-layer | funding pitch deck 직전까지 |
+| B | **Stage-1 simulation parity** (= §A.6 Step 3) — 4 falsifier 별 numerical 보강: ¹⁸F batch real-decay sim · p̄ trap density relativistic · CPT precision Penning · thrust ODE | `verify/numerics_*_relativistic.hexa` 류 4~8 개 | ✗ | ✓ partial-RSC | 외부 collab 미팅 카드 (이미 sim-검증 됨) |
+| C | **Sim-펌웨어** — cyclotron 트리거 / Penning RF DAC-ADC 체인 / atomic clock counter / thrust sensor를 sim-only 로 모델링, hardware-in-the-loop 없이 동작 | `firmware/sim/*.hexa` | ✗ | 부분 ✓ | 실제 MCU 펌웨어의 prototype layer |
+| C.5 | **보드-수준 paper spec** — 4 보드 별 핀맵 (53–100+ 핀) + catalog SKU BOM (Digi-Key/Mouser/Avnet) + 전원 버짓 + bring-up 체크리스트 + 블록 schematic | `firmware/doc/board_v0_*.md` + `firmware/doc/schematic_v0_*.md` (8 md files) | ✗ | ✓ docs-layer | KiCad 입력 + 발주 가능 |
+| D | **HDL/MCU skeleton** — Verilog (FPGA 타이밍 컨트롤러 — RF burst / shutter), Rust/C (MCU 트랩 컨트롤러 / cyclotron beam control). 컴파일 가능 + cargo test 통과; flash 할 보드 없음 | `firmware/hdl/{*.v, *.xdc, build.tcl}` + `firmware/mcu/{*.rs, Cargo.toml, lib.rs}` | ✗ (지금) / ✓ (나중) | ✓ skeleton | toolchain 정합성; 보드 사이드 step |
+| **E** | **실제 KiCad / PCB / 보드 검증** — KiCad 8.0+ project source + PCB layout + Gerber + SMT 발주 + 수령 + AOI/X-ray + bring-up + sim parity 측정 | `firmware/kicad/<board>/*.kicad_*` + `firmware/doc/phase_e_*.md` (계획서 4개) | **✓ post-funding** | ✗ | 실제 보드 검증 — Stage-1+ 진입 |
+
+**추천 진행 순서**: A → B → C → C.5 → D → **E (funding gate)**.
+
+- A → D: paper specifications + compilable skeletons. 본 repo 가 자체적으로 닫을 수 있는 범위.
+- E: ~$225k 발주 자금 + 6 person-month 레이아웃 + AT&S/Kimball/PCBWay/JLCPCB 발주.  funding (§A.6 step 2) 합의 후에만 진행.
+
+**scope 옵션**:
+1. **A 만** — funding/collab 미팅 자료 수준. 1 일 작업
+2. **A + B** — Stage-1 sim parity 까지. 외부 collab 미팅 카드 ("이미 simulation 검증됨"). 2~3 일
+3. **A + B + C** — sim-펌웨어까지. 1 주
+4. **A → D 풀** — paper-spec + skeleton 모두 (현재 상태, 2026-05-08).  **funding 직전까지 본 repo 단독 가능**.
+5. **E (실제 보드)** — funding gate 이후.  Phase E1 (~$15k pet+atomic_clock) → E2 (~$30k tabletop) → E3 (~$90k thrust) 단계적 발주.

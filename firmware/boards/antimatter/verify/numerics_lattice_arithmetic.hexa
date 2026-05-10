@@ -1,0 +1,305 @@
+#!hexa strict
+// hexa-antimatter/verify/numerics_lattice_arithmetic.hexa — float ↔ int
+// precision cross-check on the n=6 lattice anchors.
+//
+// `verify/n6_arithmetic.hexa` proves the n=6 closures using INTEGER
+// arithmetic (σ·φ = 12·2 = 24, etc.).  This script repeats the same
+// derivations with `self/runtime/math_pure` floating-point routines
+// (sqrt_pure, pow_pure, log_pure, log10_pure, exp_pure) and asserts
+// they agree with the integer anchors to sub-1e-9 relative error.
+//
+// Why this matters: every per-pillar numerics_*.hexa (factory, tabletop,
+// pet_cyclotron + parity + solver) composes math_pure calls with these
+// same n=6 anchors.  If math_pure drifts on the integer-equivalent
+// anchors (e.g. sqrt(144) ≠ 12), every downstream numeric is contaminated.
+// This script gives that drift its own regression slot — the math_pure
+// stability floor for every other T2 stack.
+//
+// Run: hexa run verify/numerics_lattice_arithmetic.hexa
+// Sentinel: __HEXA_ANTIMATTER_NUMERICS_LATTICE_ARITHMETIC__ PASS
+//
+// Authority: .roadmap.hexa_antimatter §A.1 invariant lattice +
+//   verify/n6_arithmetic.hexa (integer ledger).
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _int_str(x: int) -> str { return "" + x }
+fn _flt_str(x: float) -> str { return "" + x }
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── Integer anchors (canonical n=6 lattice) ──────────────────────────────
+let SIGMA_INT     = 12
+let TAU_INT       = 4
+let PHI_INT       = 2
+let N_INT         = 6
+let J2_INT        = 24
+let SIGMA_SQ_INT  = 144
+let SIGMA_CU_INT  = 1728
+
+// Float counterparts
+let SIGMA = 12.0
+let TAU   = 4.0
+let PHI   = 2.0
+let N     = 6.0
+let J2    = 24.0
+
+let TOL = 1.0e-9
+
+fn rel_err(a: float, b: float) -> float {
+    let d = a - b
+    let abs_d = if d < 0.0 { -d } else { d }
+    let abs_b = if b < 0.0 { -b } else { b }
+    if abs_b == 0.0 { return abs_d }
+    return abs_d / abs_b
+}
+
+let FALSIFIERS = [
+    "rel err > 1e-9 on any n=6 anchor → math_pure precision regression",
+    "int(pow_pure(σ, 2)) ≠ 144 → float→int cast broken on integer anchor",
+    "int(pow_pure(σ, 3)) ≠ 1728 → σ³ float↔int parity broken",
+    "exp_pure(log_pure(σ)) ≠ σ → exp/log roundtrip drifted (numerics tower compromised)",
+    "log10_pure(σ²) ≠ 2·log10_pure(σ) → log homomorphism breaks (not a logarithm)",
+    "sqrt_pure(144) ≠ 12 → sqrt routine broken on most-exercised anchor",
+    "sqrt_pure(σ³) ≠ pow_pure(σ, 1.5) → sqrt/pow cross-consistency lost",
+    "pow_pure(σ-φ, n) ≠ 10⁶ → canonical span statement breaks",
+    "float σ·φ ≠ float n·τ ≠ J₂ → master-identity tower breaks in float",
+    "σ·J₂ ≠ 288 (float) → cross-pillar 288 anchor drift in math_pure",
+]
+
+// ── Check 1: sqrt_pure(σ²) = σ ───────────────────────────────────────────
+
+fn check_sqrt_sigma_squared() {
+    let v = sqrt_pure(SIGMA * SIGMA)
+    let err = rel_err(v, SIGMA)
+    _check(err < TOL,
+           "sqrt_pure(σ²) = σ  (sqrt(144) = 12)",
+           "v = " + _flt_str(v) + ", rel_err = " + _flt_str(err))
+}
+
+// ── Check 2: pow_pure(σ, 2) = 144 ────────────────────────────────────────
+
+fn check_pow_sigma_2() {
+    let v = pow_pure(SIGMA, 2.0)
+    let err = rel_err(v, 144.0)
+    _check(err < TOL,
+           "pow_pure(σ, 2) = 144  (σ-tower, σ²)",
+           "v = " + _flt_str(v) + ", rel_err = " + _flt_str(err))
+}
+
+// ── Check 3: pow_pure(σ, 3) = 1728 ───────────────────────────────────────
+
+fn check_pow_sigma_3() {
+    let v = pow_pure(SIGMA, 3.0)
+    let err = rel_err(v, 1728.0)
+    _check(err < TOL,
+           "pow_pure(σ, 3) = 1728  (factory σ³ envelope)",
+           "v = " + _flt_str(v) + ", rel_err = " + _flt_str(err))
+}
+
+// ── Check 4: pow_pure(σ-φ, n) = 10⁶ (canonical span) ─────────────────────
+
+fn check_pow_span() {
+    let v = pow_pure(SIGMA - PHI, N)
+    let err = rel_err(v, 1.0e6)
+    _check(err < TOL,
+           "pow_pure(σ-φ, n) = 10⁶  (canonical span statement)",
+           "v = " + _flt_str(v) + ", rel_err = " + _flt_str(err))
+}
+
+// ── Check 5: log10_pure(10⁷) = 7 (chain decade ladder) ───────────────────
+
+fn check_log10_chain() {
+    let v = log10_pure(1.0e7)
+    let err = rel_err(v, 7.0)
+    _check(err < TOL,
+           "log10_pure(10⁷) = 7  (decade ladder)",
+           "v = " + _flt_str(v) + ", rel_err = " + _flt_str(err))
+}
+
+// ── Check 6: log10(σ²) = 2·log10(σ)  (log homomorphism) ──────────────────
+
+fn check_log_homomorphism() {
+    let lhs = log10_pure(144.0)
+    let rhs = 2.0 * log10_pure(SIGMA)
+    let err = rel_err(lhs, rhs)
+    _check(err < TOL,
+           "log10(σ²) = 2·log10(σ)  (homomorphism on n=6 anchor)",
+           "lhs = " + _flt_str(lhs) + " · rhs = " + _flt_str(rhs))
+}
+
+// ── Check 7: exp(log(σ)) = σ  (roundtrip stability) ──────────────────────
+
+fn check_exp_log_roundtrip() {
+    let v = exp_pure(log_pure(SIGMA))
+    let err = rel_err(v, SIGMA)
+    _check(err < TOL,
+           "exp_pure(log_pure(σ)) = σ  (inverse roundtrip)",
+           "v = " + _flt_str(v) + ", rel_err = " + _flt_str(err))
+}
+
+// ── Check 8: sqrt(σ³) = σ^(3/2)  (sqrt/pow cross-consistency) ────────────
+
+fn check_sqrt_pow_consistency() {
+    let lhs = sqrt_pure(pow_pure(SIGMA, 3.0))
+    let rhs = pow_pure(SIGMA, 1.5)
+    let err = rel_err(lhs, rhs)
+    _check(err < TOL,
+           "sqrt(σ³) = σ^(3/2)  (sqrt/pow cross)",
+           "lhs = " + _flt_str(lhs) + " · rhs = " + _flt_str(rhs))
+}
+
+// ── Check 9: float n=6 closure σ·φ = n·τ = J₂ = 24 ───────────────────────
+
+fn check_n6_closure_float() {
+    let lhs = SIGMA * PHI
+    let mid = N * TAU
+    _check(lhs == J2 && mid == J2 && lhs == mid,
+           "float n=6 closure: σ·φ = n·τ = J₂ = 24",
+           "lhs = " + _flt_str(lhs) + " · mid = " + _flt_str(mid))
+}
+
+// ── Check 10: float→int parity (anchors round to integer ledger) ─────────
+
+fn check_int_float_parity() {
+    let s2  = pow_pure(SIGMA, 2.0)
+    let s3  = pow_pure(SIGMA, 3.0)
+    let s2i = int(s2 + 0.5)
+    let s3i = int(s3 + 0.5)
+    _check(s2i == SIGMA_SQ_INT && s3i == SIGMA_CU_INT,
+           "round(σ²) == 144 AND round(σ³) == 1728  (float ↔ int parity)",
+           "s2i = " + _int_str(s2i) + " · s3i = " + _int_str(s3i))
+}
+
+// ── Check 11: σ·J₂ = 288 (cross-pillar anchor in float) ──────────────────
+
+fn check_288_anchor_float() {
+    let v = SIGMA * J2
+    let err = rel_err(v, 288.0)
+    _check(err < TOL,
+           "σ·J₂ = 288  (cross-pillar 288 anchor, float path)",
+           "v = " + _flt_str(v) + ", rel_err = " + _flt_str(err))
+}
+
+// ── Check 12: log_pure(e) = 1, exp_pure(0) = 1, pow_pure(σ, 0) = 1 ───────
+
+fn check_floor_identities() {
+    let e  = exp_pure(1.0)
+    let l  = log_pure(e)
+    let e0 = exp_pure(0.0)
+    let p0 = pow_pure(SIGMA, 0.0)
+    _check(rel_err(l,  1.0) < TOL,
+           "log_pure(e) = 1  (log/exp inverse)", "")
+    _check(rel_err(e0, 1.0) < TOL,
+           "exp_pure(0) = 1  (zero exponent)", "")
+    _check(rel_err(p0, 1.0) < TOL,
+           "pow_pure(σ, 0) = 1  (identity exponent)", "")
+}
+
+// ── Check 13: σ⁶ = 2,985,984 (factory cost, tabletop closure) ───────────
+
+fn check_sigma_sixth_float() {
+    let v = pow_pure(SIGMA, 6.0)
+    let err = rel_err(v, 2985984.0)
+    _check(err < 1.0e-7,
+           "pow_pure(σ, 6) = 2,985,984  (factory σ⁶)",
+           "v = " + _flt_str(v) + ", rel_err = " + _flt_str(err))
+}
+
+fn print_header() {
+    println("")
+    println("  Tolerance: rel_err < " + _flt_str(TOL))
+    println("  Anchors checked:")
+    println("    σ = 12 / τ = 4 / φ = 2 / n = 6 / J₂ = 24")
+    println("    σ² = 144 / σ³ = 1728 / σ⁶ = 2,985,984 / σ·J₂ = 288 / (σ-φ)ⁿ = 10⁶")
+    println("")
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — n=6 lattice float ↔ int arithmetic cross-check")
+    println("========================================================================")
+    println("  closes:  math_pure stability floor for every numerics_*.hexa")
+    println("  method:  re-derive every n=6 anchor through math_pure + verify")
+    println("           rel_err < 1e-9 against integer ledger from verify/n6_arithmetic")
+    print_header()
+
+    println("  -- (1) sqrt_pure(σ²) = σ --")
+    check_sqrt_sigma_squared()
+
+    println("")
+    println("  -- (2) pow_pure(σ, 2) = 144 --")
+    check_pow_sigma_2()
+
+    println("")
+    println("  -- (3) pow_pure(σ, 3) = 1728 --")
+    check_pow_sigma_3()
+
+    println("")
+    println("  -- (4) pow_pure(σ-φ, n) = 10⁶ --")
+    check_pow_span()
+
+    println("")
+    println("  -- (5) log10_pure(10⁷) = 7 --")
+    check_log10_chain()
+
+    println("")
+    println("  -- (6) log10(σ²) = 2·log10(σ)  homomorphism --")
+    check_log_homomorphism()
+
+    println("")
+    println("  -- (7) exp_pure(log_pure(σ)) = σ  roundtrip --")
+    check_exp_log_roundtrip()
+
+    println("")
+    println("  -- (8) sqrt(σ³) = σ^(3/2)  cross --")
+    check_sqrt_pow_consistency()
+
+    println("")
+    println("  -- (9) float n=6 closure --")
+    check_n6_closure_float()
+
+    println("")
+    println("  -- (10) float ↔ int parity (round σ² and σ³) --")
+    check_int_float_parity()
+
+    println("")
+    println("  -- (11) σ·J₂ = 288 cross-pillar anchor --")
+    check_288_anchor_float()
+
+    println("")
+    println("  -- (12) math_pure floor identities (log/exp/pow) --")
+    check_floor_identities()
+
+    println("")
+    println("  -- (13) σ⁶ = 2,985,984 --")
+    check_sigma_sixth_float()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_NUMERICS_LATTICE_ARITHMETIC__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_NUMERICS_LATTICE_ARITHMETIC__ PASS")
+    exit(0)
+}

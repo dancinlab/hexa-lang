@@ -1,0 +1,127 @@
+#!hexa strict
+// hexa-space/verify/lint_numerics.hexa — recipe §4 5-invariant lint.
+//
+// Every verify/numerics_*.hexa script must satisfy:
+//   1. `use "self/runtime/math_pure"` import (no raw float-libm).
+//   2. `__HEXA_SPACE_<NAME>__` sentinel prefix + `PASS` suffix.
+//   3. `FALSIFIERS` array declaration.
+//   4. `exit(0)` on PASS path.
+//   5. `let mut RUN  = 0` + `let mut FAIL = 0` counters.
+//
+// Plus inventory-array consistency:
+//   `NUMERICS_SCRIPTS` array length == on-disk `verify/numerics_*.hexa` count.
+//
+// Sentinel: __HEXA_SPACE_LINT_NUMERICS__ PASS  (recipe §4 invariants)
+// Cost: $0 — file reads + grep.
+// @no-lock-needed
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_SPACE_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-space"
+}
+
+let ROOT = _root()
+
+// ── Inventory of numerics_*.hexa scripts (must match on-disk glob) ──────
+let NUMERICS_SCRIPTS: [str] = [
+    "numerics_kepler.hexa",
+    "numerics_falcon.hexa",
+    "numerics_starship.hexa",
+    "numerics_bone_loss.hexa",
+    "numerics_lattice_arithmetic.hexa",
+    "numerics_cross_pillar.hexa",
+]
+
+// ── helpers ─────────────────────────────────────────────────────────────
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+let mut RUN  = 0
+let mut FAIL = 0
+let mut FAILURES = []
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    } else {
+        FAIL = FAIL + 1
+        FAILURES.push(label + " :: " + detail)
+        println("  [FAIL] " + label + "  · " + detail)
+    }
+}
+
+// ── per-script invariant audit ──────────────────────────────────────────
+
+fn _audit(file_rel: str) {
+    let path = ROOT + "/verify/" + file_rel
+    let txt  = _read(path)
+    if txt.len() == 0 {
+        _check(false, file_rel + " present", "missing on disk")
+        return
+    }
+    _check(_has(txt, "use \"self/runtime/math_pure\""),
+           file_rel + " #1 imports self/runtime/math_pure", "")
+    let sent_prefix = "__HEXA_SPACE_"
+    _check(_has(txt, sent_prefix) && _has(txt, "__ PASS"),
+           file_rel + " #2 emits __HEXA_SPACE_<NAME>__ PASS sentinel", "")
+    _check(_has(txt, "FALSIFIERS"),
+           file_rel + " #3 declares FALSIFIERS array", "")
+    _check(_has(txt, "exit(0)"),
+           file_rel + " #4 has exit(0) on PASS path", "")
+    let has_run  = _has(txt, "let mut RUN")
+    let has_fail = _has(txt, "let mut FAIL")
+    _check(has_run && has_fail,
+           file_rel + " #5 has RUN/FAIL counters", "")
+}
+
+// ── inventory-array consistency vs on-disk glob ─────────────────────────
+
+fn _ondisk_count() -> int {
+    let raw = exec("ls " + ROOT + "/verify/numerics_*.hexa 2>/dev/null | wc -l").trim()
+    return int(raw)
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-space — verify/numerics_*.hexa lint (recipe §4 5 invariants)")
+    println("========================================================================")
+    println("  root: " + ROOT)
+    println("  inventory: " + str(NUMERICS_SCRIPTS.len()) + " scripts declared")
+    println("")
+
+    for f in NUMERICS_SCRIPTS { _audit(f) }
+
+    println("")
+    let on_disk = _ondisk_count()
+    _check(on_disk == NUMERICS_SCRIPTS.len(),
+           "NUMERICS_SCRIPTS array length (" + str(NUMERICS_SCRIPTS.len()) +
+             ") == on-disk numerics_*.hexa count (" + str(on_disk) + ")",
+           "")
+
+    let pass_n = RUN - FAIL
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " lint checks pass")
+    if FAIL > 0 {
+        println("  FAILURES:")
+        for f in FAILURES { println("    ✗ " + f) }
+        println("__HEXA_SPACE_LINT_NUMERICS__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_SPACE_LINT_NUMERICS__ PASS")
+    exit(0)
+}

@@ -1,0 +1,115 @@
+# hexa.toml — hexa-space standalone package manifest
+#
+# Spec: shared/hexa-lang/hexa-toml-spec.json (version 1.0.0)
+# Distribution target: hx install hexa-space
+# Provenance: extracted from canon/domains/space/ on 2026-05-06
+#             (sha c0f1f570 — canon sister)
+
+[package]
+name = "hexa-space"
+version = "1.0.0"
+entry = "cli/hexa-space.hexa"
+description = "Space Toolkit (HEXA family): 11-verb substrate (4 groups — core + engineering + observation + life). spec-first standalone extraction; .hexa CLI dispatcher TBD."
+license = "MIT"
+authors = ["박민우 <nerve011235@gmail.com>"]
+repository = "https://github.com/dancinlab/hexa-space"
+homepage = "https://github.com/dancinlab/hexa-space"
+readme = "README.md"
+keywords = ["space-toolkit", "hexa-family", "cosmic", "starship", "aerospace", "astronomy", "astrobiology", "space-medicine", "n6-invariant"]
+categories = ["aerospace", "astronomy", "space-science"]
+
+[[bin]]
+name = "hexa-space"
+path = "cli/hexa-space.hexa"
+
+[test]
+runner = "hexa"
+files = [
+    "tests/test_selftest.hexa",
+    "tests/test_spacex.hexa",
+    "tests/test_ops.hexa",
+    "tests/test_lattice.hexa",
+    "tests/test_firmware.hexa",
+]
+
+# ── hx install hook ───────────────────────────────────────
+# install.hexa runs under hx package manager (hexa-lang) at install time.
+# Phases: post → quick verb-count selftest (warn-only, not a blocker).
+[scripts]
+install = "install.hexa"
+
+# ── Modules manifest (27 verbs / 5 groups) ─────────────────
+# core group (2):         cosmic, starship
+# engineering group (4):  aerospace, aerospace_transport, engineering, systems
+# observation group (3):  astrodynamics, astronomy, obs_astronomy
+# life group (2):         astrobiology, medicine
+# operations group (16):  spaceship, satellite, space_center, space_ai_center,
+#                         space_datacenter, falcon, dragon, recovery,
+#                         orbital_depot, hls, starlink, rideshare, station,
+#                         mars_base, direct_to_cell, mondaloy
+[modules]
+hexa = [
+    # core
+    "cosmic/hexa-cosmic.md",
+    "starship/hexa-starship.md",
+    # engineering
+    "aerospace/aerospace.md",
+    "aerospace_transport/aerospace-transport.md",
+    "engineering/space-engineering.md",
+    "systems/space-systems.md",
+    # observation
+    "astrodynamics/astrodynamics.md",
+    "astronomy/astronomy.md",
+    "obs_astronomy/observational-astronomy.md",
+    # life
+    "astrobiology/astrobiology.md",
+    "medicine/space-medicine.md",
+    # operations (extension verbs — drafted from SpaceX intel 2026-05-07)
+    "spaceship/spaceship.md",
+    "satellite/satellite.md",
+    "space_center/space_center.md",
+    "space_ai_center/space_ai_center.md",
+    "space_datacenter/space_datacenter.md",
+    "falcon/falcon.md",
+    "dragon/dragon.md",
+    "recovery/recovery.md",
+    "orbital_depot/orbital_depot.md",
+    "hls/hls.md",
+    "starlink/starlink.md",
+    "rideshare/rideshare.md",
+    "station/station.md",
+    "mars_base/mars_base.md",
+    "direct_to_cell/direct_to_cell.md",
+    "mondaloy/mondaloy.md",
+    # data feed for ops group
+    "aerospace_transport/spacex_intel_2026.md",
+]
+
+# ── Dependencies ───────────────────────────────────────────
+# spec-first repo: pure-hexa CLI dispatcher (placeholder); zero Python.
+[dependencies]
+hexa-lang = ">=1.0.0"
+
+# ── Closure provenance (raw#10 honest C3) ─────────────────
+# v1.0.0 (canonical): 11/11 verbs spec-only, dispatcher placeholder.
+# v1.1.0-ext (operations): 16/16 ops verbs spec + verify_*.hexa wired
+#   against the n=6 lattice. All 16 emit __HEXA_<VERB>_VERIFY__ PASS.
+[closure]
+verbs_total = 27
+verbs_spec = 27
+verbs_wired = 16          # 16 ops verbs have verify_*.hexa lattice-closure scripts
+verbs_canonical = 11
+verbs_extension = 16
+verdict = "SPEC_PLUS_OPS_LATTICE"
+extracted_from = "canon/domains/space/ @ c0f1f570 (2026-05-06)"
+ops_extension_drafted = "2026-05-07 from spacex_intel_2026.md (no upstream landing yet)"
+
+# ── Scope honesty (raw#10 C3) ─────────────────────────────
+[scope]
+honest_scope = "11-verb spec-first substrate organized in 4 groups (core / engineering / observation / life). All 11 verbs ship as design-doc (.md) only; working .hexa CLI is a placeholder dispatcher (TBD)."
+not_scope = ["working flight-dynamics solver", "working radiation-transport solver", "working life-support sim", "in-flight validation"]
+n6_lattice_caveat = "n=6 invariant lattice (σ(6)=12, τ(6)=4, φ(6)=2, J₂=24) is hypothesized for all 11 verbs; no empirical sandbox in this repo independently verifies the claim."
+
+# ── Cost profile ──────────────────────────────────────────
+[cost]
+mac_local_default = "$0 (spec-only; placeholder dispatcher)"

@@ -1,0 +1,190 @@
+#!hexa strict
+// hexa-chip/verify/n6_arithmetic.hexa — n=6 master-identity arithmetic.
+//
+// Mirrors hexa-sscb/verify/n6_arithmetic.py: validates the four divisor-sum
+// identities that anchor the 28-verb / 6-group decomposition. This is the
+// arithmetic SSOT for hexa-chip — all higher-level checks (cross_doc_audit,
+// inventory_check, mk-ladder) depend on these primitives staying consistent.
+//
+//   σ(6) = 12  — divisor sum         → 12 process node generations / BOM slots
+//   τ(6) = 4   — divisor count       → 4 design stages / 4-foundry stack
+//   φ(6) = 2   — Euler totient       → 2-bit verdict (digital/analog)
+//   J₂   = 24  — σ(6)·φ(6) = n·τ(6)  → 24-layer interconnect ceiling
+//
+// Upstream note: hexa-lang's builtin `phi(n)` returns 0.0 (broken as of
+// 2026-05-07). Workaround = our own euler_phi via gcd loop.
+//
+// Usage:
+//   hexa run verify/n6_arithmetic.hexa             # exit 0 = identity holds
+//   hexa run verify/n6_arithmetic.hexa --json      # machine-readable
+//   hexa run verify/n6_arithmetic.hexa --table     # extended table 1..12
+//
+// Cost: $0 (pure arithmetic, no I/O).
+
+fn _gcd(a: int, b: int) -> int {
+    let mut x = a
+    let mut y = b
+    if x < 0 { x = -x }
+    if y < 0 { y = -y }
+    while y != 0 {
+        let t = y
+        y = x % y
+        x = t
+    }
+    return x
+}
+
+fn divisors_of(n: int) -> [int] {
+    let mut ds: [int] = []
+    let mut k = 1
+    while k <= n {
+        if n % k == 0 { ds = ds + [k] }
+        k = k + 1
+    }
+    return ds
+}
+
+fn sigma_n(n: int) -> int {
+    let ds = divisors_of(n)
+    let mut s = 0
+    for d in ds { s = s + d }
+    return s
+}
+
+fn tau_n(n: int) -> int {
+    return divisors_of(n).len()
+}
+
+fn euler_phi(n: int) -> int {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    let mut count = 0
+    let mut k = 1
+    while k <= n {
+        if _gcd(k, n) == 1 { count = count + 1 }
+        k = k + 1
+    }
+    return count
+}
+
+fn _has_flag(args: [str], flag: str) -> bool {
+    for x in args {
+        if x == flag { return true }
+    }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() {
+        out = out + [raw[j]]
+        j = j + 1
+    }
+    return out
+}
+
+fn print_identity_table() {
+    println("  n   σ(n)  τ(n)  φ(n)   σ·φ   n·τ   ok?")
+    println("  --- ----- ----- ----- ----- ----- -----")
+    let mut n = 1
+    while n <= 12 {
+        let s = sigma_n(n)
+        let t = tau_n(n)
+        let p = euler_phi(n)
+        let lhs = s * p
+        let rhs = n * t
+        let ok = lhs == rhs
+        let mark = "    "
+        if ok { let mark = "   ✓" }
+        let mut row = "  "
+        row = row + str(n) + "    " + str(s) + "    " + str(t) + "    "
+        row = row + str(p) + "    " + str(lhs) + "    " + str(rhs)
+        if ok {
+            row = row + "    OK"
+        } else {
+            row = row + "    --"
+        }
+        println(row)
+        n = n + 1
+    }
+}
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+    let table_mode = _has_flag(ua, "--table")
+
+    let n = 6
+    let s = sigma_n(n)
+    let t = tau_n(n)
+    let p = euler_phi(n)
+    let j2 = s * p
+    let nt = n * t
+
+    let identity_ok = (j2 == nt) && (j2 == 24)
+    let sigma_ok = s == 12
+    let tau_ok = t == 4
+    let phi_ok = p == 2
+
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/n6_arithmetic.hexa\","
+        js = js + "\"schema\":\"hexa-chip/n6/v1\","
+        js = js + "\"n\":" + str(n) + ","
+        js = js + "\"sigma\":" + str(s) + ","
+        js = js + "\"tau\":" + str(t) + ","
+        js = js + "\"phi\":" + str(p) + ","
+        js = js + "\"sigma_phi\":" + str(j2) + ","
+        js = js + "\"n_tau\":" + str(nt) + ","
+        js = js + "\"identity_holds\":"
+        if identity_ok { js = js + "true" } else { js = js + "false" }
+        js = js + ",\"sigma_eq_12\":"
+        if sigma_ok { js = js + "true" } else { js = js + "false" }
+        js = js + ",\"tau_eq_4\":"
+        if tau_ok { js = js + "true" } else { js = js + "false" }
+        js = js + ",\"phi_eq_2\":"
+        if phi_ok { js = js + "true" } else { js = js + "false" }
+        js = js + "}"
+        println(js)
+        if identity_ok && sigma_ok && tau_ok && phi_ok { return }
+        exit(1)
+    }
+
+    println("========================================================================")
+    println("  hexa-chip — n=6 master-identity arithmetic")
+    println("========================================================================")
+    println("")
+    println("  primitives at n=" + str(n) + ":")
+    println("    σ(6) = " + str(s) + "    (expect 12)   " + (if sigma_ok { "PASS" } else { "FAIL" }))
+    println("    τ(6) = " + str(t) + "    (expect  4)   " + (if tau_ok   { "PASS" } else { "FAIL" }))
+    println("    φ(6) = " + str(p) + "    (expect  2)   " + (if phi_ok   { "PASS" } else { "FAIL" }))
+    println("")
+    println("  master identity (own 1):  σ(n)·φ(n) = n·τ(n) = J₂")
+    println("    σ·φ = " + str(j2) + "    n·τ = " + str(nt) + "   " + (if identity_ok { "PASS — both equal 24" } else { "FAIL — mismatch" }))
+    println("")
+    if table_mode {
+        println("  extended table (n=1..12):")
+        print_identity_table()
+        println("")
+    }
+    println("  hexa-chip projection:")
+    println("    σ(6)=12  → 12 process node generations (180nm → 2nm)")
+    println("    τ(6)=4   → 4 design stages (RTL / synth / P&R / sign-off)")
+    println("    φ(6)=2   → digital / analog verdict bit")
+    println("    J₂=24    → 24-layer interconnect stack ceiling")
+    println("========================================================================")
+
+    if !(identity_ok && sigma_ok && tau_ok && phi_ok) {
+        println("  FAIL — n=6 master identity does not hold")
+        exit(1)
+    }
+    println("  PASS — n=6 master identity holds (σ·φ = n·τ = 24)")
+}

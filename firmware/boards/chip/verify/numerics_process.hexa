@@ -1,0 +1,289 @@
+#!hexa strict
+// hexa-chip/verify/numerics_process.hexa — F-CHIP-1 T2 first-stack.
+//
+// Numerical re-derivation of the process-node σ-scaling claim, using
+// float arithmetic (math_pure) rather than the integer surrogates of
+// calc_process.hexa (T1 algebraic).  Closes the first T2 entry of
+// falsifier F-CHIP-1.
+//
+// Method:
+//   1. Predicted geometric ladder
+//        f_k  =  f_0 · r^(k-1)         for k = 1..N,  N = σ(6) = 12
+//      with endpoints f_1 = 180 nm, f_N = 3 nm  →
+//        r    =  (3 / 180)^(1 / 11)   ≈ 0.6873   (per-step shrink)
+//        1/r  ≈ 1.4549                ≈ √2 ± 3%
+//
+//   2. Per-step ratio convergence: 1/r → √2  (tested via is_close_pure).
+//
+//   3. Predicted-vs-commercial parity: |f_k_predicted − node_k_commercial|
+//      ≤ slack(k).  Slack widens for mid-decade gens (45→32→22) where
+//      industry scaling slowed.
+//
+//   4. Closed-form vs cumulative product cross-check: f_N_via_pow ≈ 3 nm
+//      and f_N_via_iterated ≈ 3 nm both within tolerance.
+//
+// PASS = ratio convergence + parity within slack + cross-check + endpoint.
+// FAIL = any numerical drift outside tolerance.
+//
+// Run:
+//   hexa run verify/numerics_process.hexa
+//   hexa run verify/numerics_process.hexa --json
+//
+// Cost: $0 (pure-hexa math; no FFI).
+
+use "self/runtime/math_pure"
+
+// ─── 12-generation commercial ladder (mirrors calc_process.hexa) ─────
+
+let NODE_NM_INT = [180, 130, 90, 65, 45, 32, 22, 14, 10, 7, 5, 3]
+let N_NODES = 12   // = σ(6)
+
+// Per-gen industry slack (nm).  Wider in mid-decade where Moore slowed.
+//                            180  130  90   65   45   32   22   14   10   7    5    3
+let SLACK_NM = [12.0, 12.0, 8.0, 8.0, 12.0, 10.0, 8.0, 4.0, 3.0, 2.0, 1.5, 1.0]
+
+let SQRT2 = 1.41421356237309504880   // _sqrt2 from math_pure
+
+// ─── arg helpers ─────────────────────────────────────────────────────
+
+fn _has_flag(a: [str], flag: str) -> bool {
+    for x in a { if x == flag { return true } }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() { out = out + [raw[j]]; j = j + 1 }
+    return out
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── geometric-ladder predictor ──────────────────────────────────────
+
+fn predicted_node_nm(k: int) -> float {
+    // f_k = 180 · (3/180)^((k-1)/(N-1)),  k = 1..N
+    let f0 = 180.0
+    let fN = 3.0
+    let exp_num = float(k - 1)
+    let exp_den = float(N_NODES - 1)
+    let exponent = exp_num / exp_den
+    let ratio = fN / f0
+    return f0 * pow_pure(ratio, exponent)
+}
+
+fn per_step_inverse_ratio() -> float {
+    // 1/r = (180/3)^(1/11) = 60^(1/11)
+    let exponent = 1.0 / float(N_NODES - 1)
+    return pow_pure(60.0, exponent)
+}
+
+// ─── checks ──────────────────────────────────────────────────────────
+
+fn check_endpoint_head() {
+    let f1 = predicted_node_nm(1)
+    let ok = is_close_pure(f1, 180.0, 1e-9)
+    _check(ok, "predicted f_1 = 180 nm  (ladder head)", "got " + str(f1))
+}
+
+fn check_endpoint_tail() {
+    let fN = predicted_node_nm(N_NODES)
+    let ok = is_close_pure(fN, 3.0, 1e-6)
+    _check(ok, "predicted f_12 = 3 nm  (ladder tail)", "got " + str(fN))
+}
+
+fn check_ratio_close_to_sqrt2() {
+    // 60^(1/11) ≈ 1.4549 — within 3% of √2 ≈ 1.4142
+    let r = per_step_inverse_ratio()
+    let diff = abs_pure(r - SQRT2)
+    let rel = diff / SQRT2
+    let ok = rel < 0.035    // within 3.5% of √2
+    _check(ok, "per-step inverse ratio ≈ √2 ±3.5% (Moore geometric)", "1/r=" + str(r) + ", rel_err=" + str(rel))
+}
+
+fn check_predicted_parity() {
+    // |f_k_predicted − node_k_commercial| ≤ slack_k
+    let mut ok = true
+    let mut worst_k = -1
+    let mut worst_d = 0.0
+    let mut k = 1
+    while k <= N_NODES {
+        let pred = predicted_node_nm(k)
+        let comm = float(NODE_NM_INT[k - 1])
+        let d = abs_pure(pred - comm)
+        if d > SLACK_NM[k - 1] {
+            ok = false
+            if d > worst_d { worst_d = d; worst_k = k }
+        }
+        k = k + 1
+    }
+    let detail = if ok { "" } else { "worst gen " + str(worst_k) + " Δ=" + str(worst_d) + "nm" }
+    _check(ok, "all 12 nodes within industry slack of geometric prediction", detail)
+}
+
+fn check_cumulative_product_consistency() {
+    // f_N via repeated multiply by r should match closed-form pow_pure.
+    let r = 1.0 / per_step_inverse_ratio()      // shrink factor (<1)
+    let mut f = 180.0
+    let mut k = 1
+    while k < N_NODES {
+        f = f * r
+        k = k + 1
+    }
+    let fN_pow = predicted_node_nm(N_NODES)
+    let ok = is_close_pure(f, fN_pow, 1e-6)
+    _check(ok, "cumulative-product vs pow_pure: f_12 agreement", "iter=" + str(f) + ", pow=" + str(fN_pow))
+}
+
+fn check_log_consistency() {
+    // log(180/3) / log(1/r) should equal N-1 = 11.
+    let r_inv = per_step_inverse_ratio()
+    let lhs = log_pure(60.0) / log_pure(r_inv)
+    let ok = is_close_pure(lhs, 11.0, 1e-6)
+    _check(ok, "log(60)/log(60^(1/11)) = 11 = N − 1", "got " + str(lhs))
+}
+
+fn check_no_overshoot_below_2nm() {
+    // No predicted node should drop below 2 nm (the σ+1 frontier marker
+    // for hexa-chip's "13th sub-σ node" outside the v1 ladder).
+    let mut ok = true
+    let mut k = 1
+    while k <= N_NODES {
+        if predicted_node_nm(k) < 2.0 { ok = false }
+        k = k + 1
+    }
+    _check(ok, "no predicted node drops below 2 nm (sub-σ frontier)", "")
+}
+
+fn check_density_quadratic_scaling() {
+    // Transistor-density scales as 1/f². Density(f_1) / Density(f_N)
+    // should equal (180/3)² = 3600.
+    let f1 = predicted_node_nm(1)
+    let fN = predicted_node_nm(N_NODES)
+    let dens_ratio = (f1 * f1) / (fN * fN)
+    let ok = is_close_pure(dens_ratio, 3600.0, 1e-3)
+    _check(ok, "density scaling = (σ-ladder shrink)² = 3600×", "got " + str(dens_ratio))
+}
+
+fn check_log2_endpoint_span() {
+    // log2(180/3) = log2(60) ≈ 5.907.  Industry rule: ≈ 6 binary doublings
+    // across the 12-gen ladder ⇒ matches n=6 (one doubling per n unit).
+    let span_log2 = log2_pure(60.0)
+    let ok = is_close_pure(span_log2, 6.0, 0.1)
+    _check(ok, "log2(180/3) ≈ 6 doublings = n", "got " + str(span_log2))
+}
+
+fn check_geometric_mean_endpoint() {
+    // Geometric mean of (f_1, f_N) ≈ √(180·3) ≈ 23.24 nm — should equal
+    // the median predicted node (k = (N+1)/2 = 6.5) within tolerance.
+    let geomean = sqrt_pure(180.0 * 3.0)
+    let mid_low = predicted_node_nm(6)
+    let mid_high = predicted_node_nm(7)
+    let mid = sqrt_pure(mid_low * mid_high)
+    let ok = is_close_pure(geomean, mid, 1e-6)
+    _check(ok, "geometric-mean of endpoints == √(f_6 · f_7)", "got " + str(geomean))
+}
+
+// ─── falsifiers (informational) ──────────────────────────────────────
+
+let FALSIFIERS = [
+    "F-CHIP-1.T2.a: per-step inverse ratio drifts > 3.5% from √2 → Moore geometric breaks",
+    "F-CHIP-1.T2.b: any commercial node falls outside industry-slack band → ladder fit retract",
+    "F-CHIP-1.T2.c: cumulative-product disagrees with pow_pure → numeric stability fail",
+    "F-CHIP-1.T2.d: density-scaling ratio ≠ (σ-ladder shrink)² → quadratic scaling retract",
+    "F-CHIP-1.T2.e: log2(180/3) drifts from n=6 by > 0.1 → doubling count mismatch"
+]
+
+fn _print_table() {
+    println("  predicted vs commercial node ladder:")
+    println("    k   commercial  predicted   delta    slack")
+    let mut k = 1
+    while k <= N_NODES {
+        let pred = predicted_node_nm(k)
+        let comm = float(NODE_NM_INT[k - 1])
+        let d = abs_pure(pred - comm)
+        let s = SLACK_NM[k - 1]
+        let pad_k = if k < 10 { "    " } else { "   " }
+        println("   " + pad_k + str(k) + "    " + str(comm) + "  " + str(pred) + "    " + str(d) + "     " + str(s))
+        k = k + 1
+    }
+    println("")
+    let r = per_step_inverse_ratio()
+    println("  per-step inverse ratio  1/r = 60^(1/11) = " + str(r))
+    println("  vs √2                   = " + str(SQRT2))
+    println("  log2(180/3)             = " + str(log2_pure(60.0)) + "  (≈ n = 6)")
+    println("")
+}
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+
+    if !json_mode {
+        println("========================================================================")
+        println("  hexa-chip — numerics_process: F-CHIP-1 T2 first-stack")
+        println("========================================================================")
+        _print_table()
+    }
+
+    check_endpoint_head()
+    check_endpoint_tail()
+    check_ratio_close_to_sqrt2()
+    check_predicted_parity()
+    check_cumulative_product_consistency()
+    check_log_consistency()
+    check_no_overshoot_below_2nm()
+    check_density_quadratic_scaling()
+    check_log2_endpoint_span()
+    check_geometric_mean_endpoint()
+
+    if !json_mode {
+        println("")
+        println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+        for f in FALSIFIERS { println("    ✗ " + f) }
+    }
+
+    let pass_n = RUN - FAIL
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/numerics_process.hexa\","
+        js = js + "\"schema\":\"hexa-chip/numerics/v1\","
+        js = js + "\"falsifier\":\"F-CHIP-1\","
+        js = js + "\"tier\":\"T2\","
+        js = js + "\"run\":" + str(RUN) + ","
+        js = js + "\"pass\":" + str(pass_n) + ","
+        js = js + "\"fail\":" + str(FAIL) + ","
+        js = js + "\"ok\":"
+        if FAIL == 0 { js = js + "true" } else { js = js + "false" }
+        js = js + "}"
+        println(js)
+        if FAIL > 0 { exit(1) }
+        return
+    }
+
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CHIP_NUMERICS_PROCESS__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CHIP_NUMERICS_PROCESS__ PASS")
+    exit(0)
+}

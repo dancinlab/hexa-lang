@@ -1,0 +1,166 @@
+#!hexa strict
+// hexa-antimatter/verify/lint_numerics.hexa — meta-lint for numerics scripts.
+//
+// As we accumulate verify/numerics_*.hexa scripts, we want a guarantee
+// that they all follow the same regression-friendly pattern (recipe §4):
+//
+//   1. import `self/runtime/math_pure` (not raw float math)
+//   2. emit a unique `__HEXA_ANTIMATTER_<NAME>__ PASS` sentinel
+//   3. declare a `FALSIFIERS` list (named retract conditions)
+//   4. exit 0 on PASS, non-zero otherwise
+//   5. carry per-section PASS/FAIL accounting (RUN / FAIL counters)
+//
+// PLUS: the explicit NUMERICS_SCRIPTS inventory below must match the
+// on-disk glob count — adding a numerics_*.hexa file without registering
+// it here trips the meta-lint.
+//
+// Run: hexa run verify/lint_numerics.hexa
+// Sentinel: __HEXA_ANTIMATTER_LINT_NUMERICS__ PASS
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-antimatter"
+}
+
+let ROOT = _root()
+let VERIFY_DIR = ROOT + "/verify"
+
+fn _read(p: str) -> str {
+    return exec("cat \"" + p + "\" 2>/dev/null")
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.contains(s)
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _int_str(x: int) -> str { return "" + x }
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── enumerate numerics_*.hexa scripts on disk ───────────────────────────
+//
+// Hand-listed (rather than via list_dir_pure) so the audit itself stays
+// closed-form regression-locked — adding a new numerics_*.hexa requires
+// adding it here, which makes the inventory explicit.
+
+let NUMERICS_SCRIPTS = [
+    "numerics_factory.hexa",
+    "numerics_factory_parity.hexa",
+    "numerics_factory_solver.hexa",
+    "numerics_tabletop.hexa",
+    "numerics_tabletop_parity.hexa",
+    "numerics_tabletop_solver.hexa",
+    "numerics_pet_cyclotron.hexa",
+    "numerics_pet_cyclotron_parity.hexa",
+    "numerics_pet_cyclotron_solver.hexa",
+    "numerics_cross_pillar.hexa",
+    "numerics_lattice_arithmetic.hexa",
+    "numerics_break_even.hexa",
+    "numerics_break_even_parity.hexa",
+    "numerics_break_even_solver.hexa",
+    "numerics_pet_realistic.hexa",
+    "numerics_tabletop_relativistic.hexa",
+    "numerics_dirac_precision.hexa",
+    "numerics_break_even_thrust.hexa",
+]
+
+let REQ_IMPORT_MATH     = "use \"self/runtime/math_pure\""
+let REQ_SENTINEL_PREFIX = "__HEXA_ANTIMATTER_"
+let REQ_SENTINEL_SUFFIX = "__ PASS"
+let REQ_FALSIFIERS_LIST = "FALSIFIERS"
+let REQ_EXIT_0          = "exit(0)"
+let REQ_RUN_COUNTER     = "let mut RUN = 0"
+let REQ_FAIL_COUNTER    = "let mut FAIL = 0"
+
+fn check_script(name: str) {
+    let path = VERIFY_DIR + "/" + name
+    let txt = _read(path)
+    if txt.len() == 0 {
+        _check(false, name + " — file present", path + " missing or empty")
+        return
+    }
+
+    let ok_math       = _has(txt, REQ_IMPORT_MATH)
+    let ok_sentinel_p = _has(txt, REQ_SENTINEL_PREFIX)
+    let ok_sentinel_s = _has(txt, REQ_SENTINEL_SUFFIX)
+    let ok_falsifiers = _has(txt, REQ_FALSIFIERS_LIST)
+    let ok_exit_0     = _has(txt, REQ_EXIT_0)
+    let ok_run        = _has(txt, REQ_RUN_COUNTER)
+    let ok_fail       = _has(txt, REQ_FAIL_COUNTER)
+
+    _check(ok_math,
+           name + " — imports self/runtime/math_pure",
+           if !ok_math { "MISSING: " + REQ_IMPORT_MATH } else { "" })
+    _check(ok_sentinel_p && ok_sentinel_s,
+           name + " — emits __HEXA_ANTIMATTER_<NAME>__ PASS sentinel", "")
+    _check(ok_falsifiers,
+           name + " — declares FALSIFIERS list", "")
+    _check(ok_exit_0,
+           name + " — calls exit(0) on PASS path", "")
+    _check(ok_run && ok_fail,
+           name + " — has RUN / FAIL accounting counters", "")
+}
+
+fn check_inventory_complete() {
+    let cmd = "ls " + VERIFY_DIR + "/numerics_*.hexa 2>/dev/null | wc -l | tr -d ' '"
+    let raw = exec(cmd).trim()
+    let on_disk = int(raw)
+    let listed = NUMERICS_SCRIPTS.len()
+    _check(on_disk == listed,
+           "inventory complete: NUMERICS_SCRIPTS list count == on-disk count",
+           "listed = " + _int_str(listed) + ", on_disk = " + _int_str(on_disk))
+}
+
+let FALSIFIERS = [
+    "any numerics_*.hexa missing math_pure import → raw float math sneaks in",
+    "any numerics_*.hexa missing __HEXA_ANTIMATTER_*__ PASS sentinel → CI can't detect PASS",
+    "any numerics_*.hexa missing FALSIFIERS list → retract conditions undeclared",
+    "any numerics_*.hexa missing exit(0) → shell exit code unreliable",
+    "any numerics_*.hexa missing RUN/FAIL counters → per-section accounting broken",
+    "NUMERICS_SCRIPTS list count diverges from on-disk count → meta-lint stale",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — numerics methodology meta-lint")
+    println("  (every verify/numerics_*.hexa must follow the regression pattern)")
+    println("========================================================================")
+    println("  scanning " + _int_str(NUMERICS_SCRIPTS.len()) + " numerics_*.hexa script(s)")
+    println("")
+
+    for name in NUMERICS_SCRIPTS { check_script(name) }
+    println("")
+    check_inventory_complete()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_LINT_NUMERICS__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_LINT_NUMERICS__ PASS — all " +
+            _int_str(NUMERICS_SCRIPTS.len()) + " numerics scripts conform")
+    exit(0)
+}

@@ -1,0 +1,234 @@
+#!hexa strict
+// hexa-antimatter/verify/saturation_check.hexa — RSC self-stop signal.
+//
+// Recipe §7.4 priority 15 — the optional final script that confirms
+// the closure-depth-accumulation loop has reached saturation.  Once
+// this passes, the RSC loop properly terminates per recipe §7.2
+// sat-1 + sat-2 + §9 saturation handling.
+//
+// Three conditions:
+//   sat-1: every falsifier (F-AM-1/2/3/4) has T2 stack ≥ 3
+//   sat-2: §1 inventory complete + lint_numerics + falsifier_check pass
+//          + every required-backbone script present on disk
+//   sat-3: every falsifier has ≥ 1 T3 (empirical) paper-feed proxy
+//          (strict raw-data fit deferred to v2.0.0 Stage-1+ hardware)
+//
+// PASS (sat-1 + sat-2 + sat-3) → emit `__HEXA_ANTIMATTER_RSC_SATURATED__ STOP`
+//                                + 100% closure marker (full T1+T2+T3 path).
+//                         CI / loop runners parse this and stop the loop.
+// FAIL (any condition unmet) → loop continues with next chunk from §7.4.
+//
+// Note: this script is NOT a numerics_*.hexa (so lint_numerics doesn't
+// audit it for math_pure import etc.).  It's a meta-stop signal.
+//
+// Run: hexa run verify/saturation_check.hexa
+// Sentinel: __HEXA_ANTIMATTER_RSC_SATURATED__ STOP
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-antimatter"
+}
+
+let ROOT = _root()
+let VERIFY_DIR = ROOT + "/verify"
+
+fn _exists(p: str) -> bool {
+    let probe = exec("test -f \"" + p + "\" && echo OK").trim()
+    return probe == "OK"
+}
+
+fn _hexa_bin() -> str {
+    let real = HOME + "/.hx/packages/hexa/build/hexa_interp.real"
+    if _exists(real) { return real }
+    return HOME + "/.hx/bin/hexa"
+}
+
+let HEXA_BIN = _hexa_bin()
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _int_str(x: int) -> str { return "" + x }
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── F-AM T2 stacks (must mirror falsifier_check.hexa) ───────────────────
+let F1_T2 = ["numerics_pet_cyclotron.hexa",
+             "numerics_pet_cyclotron_parity.hexa",
+             "numerics_pet_cyclotron_solver.hexa",
+             "numerics_pet_realistic.hexa"]
+let F2_T2 = ["numerics_tabletop.hexa",
+             "numerics_tabletop_parity.hexa",
+             "numerics_tabletop_solver.hexa",
+             "numerics_tabletop_relativistic.hexa"]
+let F3_T2 = ["numerics_factory.hexa",
+             "numerics_factory_parity.hexa",
+             "numerics_factory_solver.hexa",
+             "numerics_dirac_precision.hexa"]
+let F4_T2 = ["numerics_break_even.hexa",
+             "numerics_break_even_parity.hexa",
+             "numerics_break_even_solver.hexa",
+             "numerics_break_even_thrust.hexa"]
+
+// T3 (empirical paper-feed proxy via Inspire-HEP)
+let F1_T3 = ["empirical_pet_inspire.hexa"]
+let F2_T3 = ["empirical_tabletop_inspire.hexa"]
+let F3_T3 = ["empirical_dirac_inspire.hexa"]
+let F4_T3 = ["empirical_break_even_inspire.hexa"]
+
+fn _all_present(names: [str]) -> bool {
+    for n in names { if _exists(VERIFY_DIR + "/" + n) == false { return false } }
+    return names.len() > 0
+}
+
+// ── sat-1: every F-AM falsifier has T2 ≥ 3 ──────────────────────────────
+
+fn check_sat_1() {
+    let ok1 = _all_present(F1_T2) && F1_T2.len() >= 3
+    let ok2 = _all_present(F2_T2) && F2_T2.len() >= 3
+    let ok3 = _all_present(F3_T2) && F3_T2.len() >= 3
+    let ok4 = _all_present(F4_T2) && F4_T2.len() >= 3
+    _check(ok1, "F-AM-1 T2 ×" + _int_str(F1_T2.len()) + " ≥ 3 (PET ¹⁸F regen)", "")
+    _check(ok2, "F-AM-2 T2 ×" + _int_str(F2_T2.len()) + " ≥ 3 (tabletop σ·J₂)", "")
+    _check(ok3, "F-AM-3 T2 ×" + _int_str(F3_T2.len()) + " ≥ 3 (Dirac mirror)", "")
+    _check(ok4, "F-AM-4 T2 ×" + _int_str(F4_T2.len()) + " ≥ 3 (Stage-3 break-even)", "")
+}
+
+// ── sat-3: every falsifier has ≥ 1 T3 empirical script ─────────────────
+
+fn check_sat_3() {
+    let ok1 = _all_present(F1_T3) && F1_T3.len() >= 1
+    let ok2 = _all_present(F2_T3) && F2_T3.len() >= 1
+    let ok3 = _all_present(F3_T3) && F3_T3.len() >= 1
+    let ok4 = _all_present(F4_T3) && F4_T3.len() >= 1
+    _check(ok1, "F-AM-1 T3 ×" + _int_str(F1_T3.len()) + " ≥ 1 (empirical_pet_inspire)", "")
+    _check(ok2, "F-AM-2 T3 ×" + _int_str(F2_T3.len()) + " ≥ 1 (empirical_tabletop_inspire)", "")
+    _check(ok3, "F-AM-3 T3 ×" + _int_str(F3_T3.len()) + " ≥ 1 (empirical_dirac_inspire)", "")
+    _check(ok4, "F-AM-4 T3 ×" + _int_str(F4_T3.len()) + " ≥ 1 (empirical_break_even_inspire)", "")
+}
+
+// ── sat-2: inventory + lint + falsifier closure all PASS ────────────────
+
+fn check_sat_2_inventory() {
+    let cmd = "ls " + VERIFY_DIR + "/numerics_*.hexa 2>/dev/null | wc -l | tr -d ' '"
+    let raw = exec(cmd).trim()
+    let inv_count = int(raw)
+    _check(inv_count >= 9,
+           "numerics_*.hexa inventory ≥ 9 (recipe §1 minimum)",
+           "on_disk = " + _int_str(inv_count))
+}
+
+fn check_sat_2_lint() {
+    let lint_cmd = "RESOURCE_LOCAL_HEXA=1 " + HEXA_BIN + " " +
+                   VERIFY_DIR + "/lint_numerics.hexa >/dev/null 2>&1 && echo y || echo n"
+    let out = exec(lint_cmd).trim()
+    _check(out == "y",
+           "lint_numerics passes (5 invariants × all numerics scripts)",
+           "")
+}
+
+fn check_sat_2_falsifier() {
+    let f_cmd = "RESOURCE_LOCAL_HEXA=1 " + HEXA_BIN + " " +
+                VERIFY_DIR + "/falsifier_check.hexa >/dev/null 2>&1 && echo y || echo n"
+    let out = exec(f_cmd).trim()
+    _check(out == "y",
+           "falsifier_check passes (4/4 F-AM registered + T1+T2 on disk)",
+           "")
+}
+
+// ── sat-2 backbone: required scripts (recipe §1) ────────────────────────
+
+fn check_required_scripts_present() {
+    let required = [
+        "n6_arithmetic.hexa",
+        "cross_doc_audit.hexa",
+        "release_ladder.hexa",
+        "calc_factory.hexa",
+        "calc_tabletop.hexa",
+        "calc_pet_cyclotron.hexa",
+        "calc_break_even.hexa",
+        "falsifier_check.hexa",
+        "lint_numerics.hexa",
+        "numerics_lattice_arithmetic.hexa",
+        "numerics_cross_pillar.hexa",
+    ]
+    for s in required {
+        _check(_exists(VERIFY_DIR + "/" + s),
+               "required script present: " + s, "")
+    }
+}
+
+let FALSIFIERS = [
+    "any F-AM falsifier T2 < 3 → strict sat-1 not met → loop continues",
+    "numerics inventory < 9 → recipe §1 minimum unmet",
+    "lint_numerics fails → 5-invariant pattern broken in some script",
+    "falsifier_check fails → roadmap drift or T1/T2 missing on disk",
+    "any required backbone script missing → §1 inventory incomplete",
+    "any F-AM falsifier T3 < 1 → sat-3 not met → 100% closure not reached",
+    "STOP signal emission gated on ALL above → false STOP retract",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — RSC saturation check (recipe §7.2 sat-1 + sat-2)")
+    println("========================================================================")
+    println("")
+
+    println("  sat-1 — per-falsifier T2 ≥ 3 (strict sat-1 condition):")
+    check_sat_1()
+
+    println("")
+    println("  sat-2 — inventory + lint_numerics + falsifier_check:")
+    check_sat_2_inventory()
+    check_sat_2_lint()
+    check_sat_2_falsifier()
+
+    println("")
+    println("  sat-2 backbone — required scripts present (recipe §1):")
+    check_required_scripts_present()
+
+    println("")
+    println("  sat-3 — per-falsifier T3 ≥ 1 (paper-feed empirical proxy):")
+    check_sat_3()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("")
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " saturation checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_RSC_SATURATED__ NOT_YET — " +
+                _int_str(FAIL) + " condition(s) unmet")
+        println("  → loop continues. pick next chunk from recipe §7.4 priority table.")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_RSC_SATURATED__ STOP")
+    println("__HEXA_ANTIMATTER_RSC_FULL_CLOSURE__ 100%")
+    println("")
+    println("  Closure-depth accumulation across F-AM-1/2/3/4:")
+    println("    T1 (algebraic)   ✓  via verify/calc_*.hexa  (4 falsifiers)")
+    println("    T2 (numerical)   ✓  via verify/numerics_*.hexa  (×3 each, 12 stacks)")
+    println("    T3 (empirical)   ✓  via verify/empirical_*_inspire.hexa  (Inspire-HEP proxy)")
+    println("")
+    println("  100% closure (book-keeping):  T1 + T2 + T3 paper-existence all PASS.")
+    println("  RSC loop properly terminates.")
+    println("  Strict raw-data fit (Stage-1+ benchtop / clinical) deferred to v2.0.0.")
+    exit(0)
+}

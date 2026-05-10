@@ -1,0 +1,289 @@
+#!hexa strict
+// hexa-antimatter/verify/numerics_break_even_solver.hexa — F-AM-4 T2 ×3
+// Tsiolkovsky / staged-burn ODE solver.  3rd T2 stack for F-AM-4 → strict
+// sat-1 (T2 ≥ 3) closure.
+//
+// Companion to numerics_break_even.hexa (closed-form Tsiolkovsky) and
+// numerics_break_even_parity.hexa (4-program parity).  This file
+// integrates the rocket equation as a forward-Euler ODE on mass and
+// velocity over τ=4 staged burns + asserts that the numerical Δv
+// converges to the analytic c·ln(m₀/m₁) within math_pure floor.
+//
+// Tsiolkovsky ODE (pure form):
+//   dm/dt = -m_dot   (constant burn rate)
+//   dv/dt = v_e · m_dot / m   (acceleration from exhaust)
+//
+// Closed-form analytic:  v(t) = v_e · ln(m₀ / m(t))
+// Numerical: forward-Euler N steps over τ=4 staged burns; compare to analytic.
+//
+// Staged-burn schedule (τ=4 quadrants):
+//   Stage 1 (0 → t/4):    burn σ-φ = 10% of fuel
+//   Stage 2 (t/4 → t/2):  burn σ-φ = 10% of fuel
+//   Stage 3 (t/2 → 3t/4): burn σ-φ = 10% of fuel
+//   Stage 4 (3t/4 → t):   burn σ-φ = 10% of fuel
+//   Total: 40% mass fraction burned → m₁/m₀ = 0.6 → Δv/v_e = ln(1/0.6) ≈ 0.51
+//
+// Run: hexa run verify/numerics_break_even_solver.hexa
+// Sentinel: __HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_SOLVER__ PASS
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _int_str(x: int) -> str { return "" + x }
+fn _flt_str(x: float) -> str { return "" + x }
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _approx_eq(a: float, b: float, tol: float) -> bool {
+    return abs_pure(a - b) <= tol
+}
+
+fn _approx_rel(a: float, b: float, rel_tol: float) -> bool {
+    let aa = abs_pure(a)
+    let ab = abs_pure(b)
+    let denom = if aa > ab { aa } else { ab }
+    if denom == 0.0 { return abs_pure(a - b) <= rel_tol }
+    return abs_pure(a - b) / denom <= rel_tol
+}
+
+// ── n=6 lattice + rocket setup ──────────────────────────────────────────
+let SIGMA = 12.0
+let TAU   = 4.0
+let PHI   = 2.0
+
+let M0       = 1000.0       // initial mass (arbitrary, kg)
+let V_E      = 1.0          // exhaust velocity (normalized to c → "v in units of c")
+let MDOT     = 1.0          // burn rate (mass/time, normalized)
+let T_TOTAL  = 400.0        // 4 stages × 100 mass-time units → 400 mass burned
+                            // per-stage: 100 = σ·τ²·... let's use σ·τ²·5/9.6
+                            // anyway: fraction burned = 400/1000 = 40%.
+let N_STAGES = 4            // τ = 4 staged burns
+
+let FALSIFIERS = [
+    "F-AM-4 T2×3: Euler ODE Δv ≠ analytic v_e·ln(m₀/m₁) ± 0.5% → integrator drift",
+    "F-AM-4 T2×3: m(t) at end ≠ m₀ - m_dot·t ± 1e-9 → mass conservation broken",
+    "F-AM-4 T2×3: 4 staged burns ≠ single-burn Δv ± 1e-3 → linearity broken",
+    "F-AM-4 T2×3: Δv at 50% mass fraction ≠ v_e·ln(2) ≈ 0.693·v_e → analytic anchor breaks",
+    "F-AM-4 T2×3: 1024-step Euler vs 256-step rel error > 0.5% → step-convergence broken",
+    "F-AM-4 T2×3: σ-φ = 10 fuel fraction ≠ analytic m_ratio = 0.9 → fuel-frac math wrong",
+    "F-AM-4 T2×3: τ=4 stages produce identical Δv under symmetric burn → ✗ symmetry retract",
+    "F-AM-4 T2×3: per-stage dv/v_e ≠ ln(m_pre/m_post) ± 0.1% → staged Tsiolkovsky breaks",
+    "math_pure floor: log_pure(m₀/m₁) ≠ analytic value → log_pure compromised",
+]
+
+// ── Forward-Euler integrator: dm/dt = -mdot, dv/dt = v_e · mdot / m ─────
+
+fn euler_burn(m_init: float, v_init: float,
+              v_e: float, mdot: float, t_end: float, n_steps: int) -> [float] {
+    let h = t_end / (1.0 * n_steps)
+    let mut m = m_init
+    let mut v = v_init
+    let mut i = 0
+    while i < n_steps {
+        let dv = v_e * mdot / m * h
+        m = m - mdot * h
+        v = v + dv
+        i = i + 1
+    }
+    return [m, v]
+}
+
+// ── Check 1: single-burn Δv matches analytic Tsiolkovsky ────────────────
+
+fn check_single_burn() {
+    let r = euler_burn(M0, 0.0, V_E, MDOT, T_TOTAL, 4096)
+    let m_final = r[0]
+    let v_final = r[1]
+    let analytic = V_E * log_pure(M0 / m_final)
+    _check(_approx_rel(v_final, analytic, 0.005),
+           "single-burn Euler Δv ≈ v_e · ln(m₀/m₁)  (±0.5%)",
+           "Euler Δv = " + _flt_str(v_final) + " · analytic = " + _flt_str(analytic))
+    _check(_approx_eq(m_final, M0 - MDOT * T_TOTAL, 1.0e-9),
+           "mass conservation: m(T) = m₀ - m_dot · T", "")
+}
+
+// ── Check 2: 4 staged burns sum to single-burn Δv ───────────────────────
+
+fn check_staged_vs_single() {
+    let n_per_stage = 1024
+    let t_per_stage = T_TOTAL / 4.0
+    let mut m = M0
+    let mut v = 0.0
+    let mut s = 0
+    while s < N_STAGES {
+        let r = euler_burn(m, v, V_E, MDOT, t_per_stage, n_per_stage)
+        m = r[0]
+        v = r[1]
+        s = s + 1
+    }
+    let single = euler_burn(M0, 0.0, V_E, MDOT, T_TOTAL, 4 * n_per_stage)
+    _check(_approx_rel(v, single[1], 0.001),
+           "4 staged burns Δv ≈ single-burn Δv  (linearity, ±0.1%)",
+           "staged = " + _flt_str(v) + " · single = " + _flt_str(single[1]))
+}
+
+// ── Check 3: Δv at 50% mass fraction = v_e · ln(2) ──────────────────────
+
+fn check_half_mass_anchor() {
+    let r = euler_burn(M0, 0.0, V_E, MDOT, M0 * 0.5, 4096)
+    let v = r[1]
+    let target = V_E * log_pure(2.0)
+    _check(_approx_rel(v, target, 0.005),
+           "Δv at 50% mass-frac = v_e · ln(2) ≈ 0.693·v_e",
+           "v = " + _flt_str(v) + " · target = " + _flt_str(target))
+}
+
+// ── Check 4: step-convergence (1024 vs 256 step Euler) ──────────────────
+
+fn check_step_convergence() {
+    let coarse = euler_burn(M0, 0.0, V_E, MDOT, T_TOTAL, 256)
+    let fine   = euler_burn(M0, 0.0, V_E, MDOT, T_TOTAL, 4096)
+    let v_c = coarse[1]
+    let v_f = fine[1]
+    _check(_approx_rel(v_c, v_f, 0.005),
+           "256-step vs 4096-step Euler Δv agree (±0.5%)",
+           "coarse = " + _flt_str(v_c) + " · fine = " + _flt_str(v_f))
+}
+
+// ── Check 5: σ-φ fuel-fraction analytic ─────────────────────────────────
+
+fn check_fuel_fraction_analytic() {
+    let m_burn  = (SIGMA - PHI) / 100.0     // 10% mass fraction
+    let m_ratio = 1.0 - m_burn               // m₁/m₀ = 0.9
+    let dv = V_E * log_pure(1.0 / m_ratio)
+    _check(_approx_rel(m_ratio, 0.9, 1.0e-12),
+           "σ-φ = 10 → 10% mass-fraction burn → m_ratio = 0.9", "")
+    _check(_approx_rel(dv, 0.10536, 0.001),
+           "Δv = v_e · ln(1/0.9) ≈ 0.10536·v_e  (analytic)",
+           "Δv = " + _flt_str(dv))
+}
+
+// ── Check 6: τ=4 symmetric stages produce equal per-stage Δv ────────────
+
+fn check_tau_4_symmetric_stages() {
+    // Symmetric == each stage burns same fixed mass (constant m_dot · t/4).
+    // But m decreases each stage so per-stage Δv ≠ equal.  Instead, the
+    // analytic invariant is: per-stage dv = v_e·ln(m_pre/m_post).
+    let n_per_stage = 1024
+    let t_per_stage = T_TOTAL / 4.0
+    let mut m_pre = M0
+    let mut s = 0
+    let mut v_acc = 0.0
+    while s < N_STAGES {
+        let r = euler_burn(m_pre, 0.0, V_E, MDOT, t_per_stage, n_per_stage)
+        let m_post = r[0]
+        let dv_stage = r[1]
+        let dv_anal = V_E * log_pure(m_pre / m_post)
+        let close = _approx_rel(dv_stage, dv_anal, 0.001)
+        if !close { v_acc = v_acc + 1.0 }    // count fails
+        m_pre = m_post
+        s = s + 1
+    }
+    _check(v_acc == 0.0,
+           "per-stage Δv ≈ v_e·ln(m_pre/m_post) for all 4 τ stages (±0.1%)", "")
+}
+
+// ── Check 7: math_pure floor (log/exp inverse) ──────────────────────────
+
+fn check_math_pure_floor() {
+    let l2 = log_pure(2.0)
+    _check(_approx_rel(l2, 0.6931472, 0.0001),
+           "log_pure(2) = 0.6931472", "")
+    let r = exp_pure(l2)
+    _check(_approx_rel(r, 2.0, 0.0001),
+           "exp_pure(log_pure(2)) = 2", "")
+}
+
+// ── Check 8: total Δv at 60% mass fraction (≈0.916·v_e) ─────────────────
+//
+// At m_ratio = 0.6 (40% fuel burned): Δv = v_e·ln(5/3) ≈ 0.5108·v_e.
+// 40% is the recipe scenario from header.
+
+fn check_recipe_scenario() {
+    let m_burn = T_TOTAL    // = 400 of M0=1000 → 40%
+    let m_final = M0 - m_burn
+    let r = euler_burn(M0, 0.0, V_E, MDOT, m_burn, 4096)
+    let v = r[1]
+    let dv_target = V_E * log_pure(M0 / m_final)
+    _check(_approx_rel(v, dv_target, 0.005),
+           "recipe scenario 40% fuel burn → Δv ≈ v_e·ln(5/3) ≈ 0.51·v_e",
+           "v = " + _flt_str(v) + " · target = " + _flt_str(dv_target))
+}
+
+fn print_header() {
+    println("")
+    println("  Tsiolkovsky ODE solver — Stage-3 staged-burn cycle")
+    println("    m₀     = " + _flt_str(M0) + " (arbitrary mass units)")
+    println("    v_e    = " + _flt_str(V_E) + " (normalized to c)")
+    println("    m_dot  = " + _flt_str(MDOT))
+    println("    T      = " + _flt_str(T_TOTAL) + " → 40% mass burned")
+    println("    N_st   = " + _int_str(N_STAGES) + " (τ=4 quadrants)")
+    println("")
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — numerics_break_even_solver: F-AM-4 T2 ×3")
+    println("========================================================================")
+    println("  closes:  F-AM-4 T2 ×3 (Stage-3 Tsiolkovsky ODE, sat-1 strict)")
+    println("  method:  forward-Euler ODE on (m, v); compare to analytic ln(m₀/m₁)")
+    print_header()
+
+    println("  -- (1) single-burn Euler vs analytic Tsiolkovsky --")
+    check_single_burn()
+
+    println("")
+    println("  -- (2) 4 staged burns sum == single-burn Δv --")
+    check_staged_vs_single()
+
+    println("")
+    println("  -- (3) Δv @ 50% mass-frac = v_e · ln(2) --")
+    check_half_mass_anchor()
+
+    println("")
+    println("  -- (4) step-convergence (256 vs 4096) --")
+    check_step_convergence()
+
+    println("")
+    println("  -- (5) σ-φ fuel-fraction analytic check --")
+    check_fuel_fraction_analytic()
+
+    println("")
+    println("  -- (6) τ=4 per-stage Δv = v_e·ln(m_pre/m_post) --")
+    check_tau_4_symmetric_stages()
+
+    println("")
+    println("  -- (7) math_pure log/exp inverse --")
+    check_math_pure_floor()
+
+    println("")
+    println("  -- (8) recipe scenario 40% burn → Δv ≈ 0.51·v_e --")
+    check_recipe_scenario()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_SOLVER__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_SOLVER__ PASS")
+    exit(0)
+}

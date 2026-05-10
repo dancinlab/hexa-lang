@@ -1,0 +1,280 @@
+#!hexa strict
+// hexa-antimatter/verify/numerics_pet_cyclotron.hexa — PET-cyclotron-pillar
+// numerical re-derivation via math_pure.
+//
+// T2 (numerical) closure for F-AM-1 (PET ¹⁸F regen rate closed-form fit).
+// Companion to verify/calc_pet_cyclotron.hexa.  Where the calc_ file proved
+// every HEXA-PET-01..06 identity in integer divisor arithmetic, this file
+// re-derives the float-only chains the calc_ file could not touch:
+//
+//   · HEXA-PET-02  e+ supply: σ·τ × 2×10⁹ = 9.6×10¹⁰ e+/s
+//   · HEXA-PET-06  H̄ synth:    σ² × 10⁶  = 1.44×10⁸ H̄/s
+//   · cost mid-chain: $_factory / σ³ ≈ $3.617×10⁷/mg  (half-step of σ⁶)
+//   · σ³ via σ² · σ  agrees with pow_pure(σ, 3)  (path-independence)
+//   · ¹⁸F decay constant λ = ln(2) / 109.8 min ≈ 6.312×10⁻³ /min  (log_pure)
+//   · τ = 4 batch retention 2^(-1/τ) ≈ 0.841  (within one half-life)
+//   · B/B_med ratio σ·τ / 2 = J₂ = 24  (RT-SC vs medical PET)
+//   · vacuum suppression σ² · τ = 576  (float)
+//   · log-log σ³ vs σ slope = 3.0  (math_pure power-law floor)
+//
+// Plus standard math_pure floor (sqrt/exp/log self-inverse).
+//
+// Run:
+//     hexa run verify/numerics_pet_cyclotron.hexa     # exit 0 = ok
+//
+// Sentinel: __HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON__ PASS
+//
+// Authority: pet_cyclotron/pet-cyclotron.md §1 WHY + §4 STRUCT + §5 core
+//   numerics + §6 VERIFY · .roadmap.hexa_antimatter §A.4 F-AM-1.
+// raw#9 hexa-only · raw#10 honest C3: closed-form numerical only —
+//   parity vs hospital-cyclotron public spec → numerics_pet_cyclotron_parity
+//   (future chunk); empirical Stage-1+ TBD.
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-antimatter"
+}
+
+let ROOT = _root()
+
+fn _int_str(x: int) -> str { return "" + x }
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _approx_eq(a: float, b: float, tol: float) -> bool {
+    return abs_pure(a - b) <= tol
+}
+
+fn _approx_rel(a: float, b: float, rel_tol: float) -> bool {
+    let aa = abs_pure(a)
+    let ab = abs_pure(b)
+    let denom = if aa > ab { aa } else { ab }
+    if denom == 0.0 { return abs_pure(a - b) <= rel_tol }
+    return abs_pure(a - b) / denom <= rel_tol
+}
+
+// ── n=6 lattice (float-domain copy) ──────────────────────────────────────
+let SIGMA_F = 12.0
+let TAU_F   = 4.0
+let PHI_F   = 2.0
+let N_F     = 6.0
+let J2_F    = 24.0
+let TOL     = 0.000000001       // 1e-9 absolute
+
+let FALSIFIERS = [
+    "F-AM-1 T2: σ·τ × 2e9 ≠ 9.6×10¹⁰ e+/s → HEXA-PET-02 closed-form retract",
+    "F-AM-1 T2: σ² × 10⁶ ≠ 1.44×10⁸ H̄/s → HEXA-PET-06 §9.2 c cite retract",
+    "F-AM-1 T2: $_factory/σ³ ≠ $3.617×10⁷/mg ± 1% → PET cost-mid retract",
+    "F-AM-1 T2: σ³ via σ²·σ ≠ pow_pure(σ,3) → arithmetic path divergence",
+    "F-AM-1 T2: ¹⁸F decay λ = ln(2)/109.8 ≠ 6.312×10⁻³ /min → t½ closure breaks",
+    "F-AM-1 T2: 2^(-1/τ) ≠ ~0.841 → τ=4 batch-stack retention retract",
+    "F-AM-1 T2: B/B_med = σ·τ/2 ≠ J₂ = 24 → 48 T vs 2 T ratio retract",
+    "F-AM-1 T2: σ²·τ ≠ 576 → vacuum suppression float retract",
+    "F-AM-1 T2: log-log σ³ vs σ slope ≠ 3.0 ± 0.01 → power-law floor lost",
+    "math_pure floor: sqrt(144) ≠ 12 ± 1e-9 OR pow(2,10) ≠ 1024 → stability breach",
+]
+
+// ── HEXA-PET-02: e+ supply rate ──────────────────────────────────────────
+
+fn check_hexa_pet_02() {
+    // σ·τ mg/season × 2×10⁹ e+/s/mg = 96×10⁹ = 9.6×10¹⁰ e+/s
+    let stock = SIGMA_F * TAU_F                  // 48 mg/season
+    let e_per_s_per_mg = 2000000000.0            // 2e9
+    let total = stock * e_per_s_per_mg           // 9.6e10
+    _check(_approx_eq(total, 96000000000.0, TOL),
+           "HEXA-PET-02: σ·τ × 2×10⁹ = 9.6×10¹⁰ e+/s",
+           "got " + ("" + total))
+    _check(_approx_rel(total, 96000000000.0, 0.000001),
+           "HEXA-PET-02 within 1ppm relative", "")
+}
+
+// ── HEXA-PET-06: anti-H synthesis rate ───────────────────────────────────
+
+fn check_hexa_pet_06() {
+    // σ² × 10⁶ H̄/s = 144×10⁶ = 1.44×10⁸
+    let s2 = pow_pure(SIGMA_F, 2.0)              // 144
+    let synth = s2 * 1000000.0                    // 1.44e8
+    _check(_approx_eq(synth, 144000000.0, TOL),
+           "HEXA-PET-06: σ² × 10⁶ = 1.44×10⁸ H̄/s",
+           "got " + ("" + synth))
+}
+
+// ── PET cost mid-chain (factory $ / σ³) ──────────────────────────────────
+
+fn check_pet_cost_mid() {
+    // Factory: $6.25×10¹⁰ /mg.  PET reduces by 1/σ³ → $/σ³ = $3.617×10⁷/mg.
+    // (Tabletop closes by an additional 1/σ³ → $2.094×10⁴/mg, see numerics_tabletop.)
+    let factory = 62500000000.0                   // 6.25e10
+    let s3 = pow_pure(SIGMA_F, 3.0)               // 1728
+    let pet_mid = factory / s3                    // ≈ 3.6168e7
+    _check(_approx_rel(pet_mid, 36168981.5, 0.0001),
+           "PET cost mid-chain $_factory/σ³ ≈ $3.617×10⁷/mg",
+           "got $" + ("" + pet_mid) + "/mg")
+}
+
+// ── σ³ path-independence: σ² · σ vs pow_pure(σ, 3) ───────────────────────
+
+fn check_sigma_cube_path_independence() {
+    let s2 = pow_pure(SIGMA_F, 2.0)
+    let s3_pow = pow_pure(SIGMA_F, 3.0)
+    let s3_mul = s2 * SIGMA_F                     // independent path
+    _check(_approx_eq(s3_pow, s3_mul, TOL),
+           "σ³ via pow_pure = σ² · σ (path-independence)",
+           "pow=" + ("" + s3_pow) + " · mul=" + ("" + s3_mul))
+    _check(_approx_eq(s3_pow, 1728.0, TOL),
+           "σ³ = 1728  (daily H̄ cascade, HEXA-PET §1 daily scenario)", "")
+}
+
+// ── ¹⁸F decay constant via log_pure(2) ──────────────────────────────────
+
+fn check_18f_decay_constant() {
+    // λ = ln(2) / t½  ;  t½ = 109.8 min  →  λ ≈ 6.312×10⁻³ /min
+    let t_half_min = 109.8
+    let lambda = log_pure(2.0) / t_half_min
+    _check(_approx_rel(lambda, 0.006312, 0.001),
+           "¹⁸F decay λ = ln(2) / 109.8 min ≈ 6.312×10⁻³ /min",
+           "λ = " + ("" + lambda))
+    // Half-life cross-check: ln(2)/λ should give t½ back
+    let t_half_back = log_pure(2.0) / lambda
+    _check(_approx_eq(t_half_back, t_half_min, 0.0001),
+           "λ inversion: ln(2)/λ = 109.8 min  (math_pure self-inverse)", "")
+}
+
+// ── τ = 4 batch retention: 2^(-1/τ) ──────────────────────────────────────
+
+fn check_tau_batch_retention() {
+    // After 1/τ of a half-life, fraction remaining = 2^(-1/τ).
+    // For τ=4 → 2^(-0.25) ≈ 0.8409.
+    // The HEXA-PET batch-stacking strategy mitigates ¹⁸F t½=109.8 min loss.
+    let r = pow_pure(2.0, -0.25)
+    _check(_approx_rel(r, 0.8409, 0.001),
+           "τ=4 batch retention: 2^(-1/τ) ≈ 0.8409  (¹⁸F half-life mitigation)",
+           "retained = " + ("" + r))
+    // Bound: must be > 0.5 (else stacking is pointless).
+    _check(r > 0.5,
+           "batch retention > 0.5  (stacking is meaningful)", "")
+}
+
+// ── B / B_med ratio = σ·τ / 2 = J₂ ──────────────────────────────────────
+
+fn check_b_ratio() {
+    let B_HEXA = SIGMA_F * TAU_F                  // 48 T
+    let B_MED  = 2.0                              // 2 T (medical PET)
+    let ratio  = B_HEXA / B_MED                   // 24 = J₂
+    _check(_approx_eq(ratio, J2_F, TOL),
+           "B/B_med = σ·τ/2 = J₂ = 24×  (RT-SC vs medical PET)", "")
+}
+
+// ── vacuum suppression σ²·τ = 576 (float) ───────────────────────────────
+
+fn check_vacuum_suppression() {
+    let v = SIGMA_F * SIGMA_F * TAU_F             // 576
+    _check(_approx_eq(v, 576.0, TOL),
+           "vacuum suppression σ²·τ = 576×  (vs medical 10⁻³ Torr)", "")
+}
+
+// ── log-log σ³ vs σ slope = 3.0 ──────────────────────────────────────────
+
+fn check_loglog_sigma_cube_slope() {
+    let s3 = pow_pure(SIGMA_F, 3.0)
+    let r = log_pure(s3) / log_pure(SIGMA_F)
+    _check(_approx_eq(r, 3.0, 0.0001),
+           "log(σ³) / log(σ) = 3.0  (math_pure power-law floor, σ³ chain)",
+           "ratio = " + ("" + r))
+}
+
+// ── math_pure stability floor ────────────────────────────────────────────
+
+fn check_math_pure_floor() {
+    let r12 = sqrt_pure(144.0)
+    _check(_approx_eq(r12, 12.0, TOL),
+           "sqrt_pure(144) = 12 ± 1e-9", "got " + ("" + r12))
+    let p = pow_pure(2.0, 10.0)
+    _check(_approx_eq(p, 1024.0, TOL),
+           "pow_pure(2, 10) = 1024  (binary canonical)", "")
+    let log_e = log_pure(e_pure())
+    _check(_approx_eq(log_e, 1.0, TOL),
+           "log_pure(e) = 1  (self-inverse)", "")
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — numerics_pet_cyclotron: PET pillar T2 numerics")
+    println("========================================================================")
+    println("  closes:  F-AM-1 (PET ¹⁸F regen) T2 — first numerical closure")
+    println("  path:    math_pure (sqrt/exp/log/pow) + closed-form chains")
+    println("  abs tol: " + ("" + TOL))
+    println("")
+
+    println("  -- HEXA-PET-02 (e+ supply rate) --")
+    check_hexa_pet_02()
+
+    println("")
+    println("  -- HEXA-PET-06 (anti-H synthesis rate) --")
+    check_hexa_pet_06()
+
+    println("")
+    println("  -- PET cost mid-chain (factory $/σ³) --")
+    check_pet_cost_mid()
+
+    println("")
+    println("  -- σ³ path-independence (σ²·σ vs pow_pure) --")
+    check_sigma_cube_path_independence()
+
+    println("")
+    println("  -- ¹⁸F decay constant via log_pure(2) --")
+    check_18f_decay_constant()
+
+    println("")
+    println("  -- τ=4 batch retention 2^(-1/τ) --")
+    check_tau_batch_retention()
+
+    println("")
+    println("  -- B / B_medical ratio --")
+    check_b_ratio()
+
+    println("")
+    println("  -- vacuum suppression σ²·τ --")
+    check_vacuum_suppression()
+
+    println("")
+    println("  -- log-log σ³ vs σ slope --")
+    check_loglog_sigma_cube_slope()
+
+    println("")
+    println("  -- math_pure stability floor --")
+    check_math_pure_floor()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON__ PASS")
+    exit(0)
+}

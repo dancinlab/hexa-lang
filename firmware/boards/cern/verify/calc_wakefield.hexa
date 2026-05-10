@@ -1,0 +1,180 @@
+#!hexa strict
+// hexa-cern/verify/calc_wakefield.hexa — mini pillar wakefield calculator.
+//
+// Computes the n=6-derived laser-wakefield acceleration parameters for the
+// HEXA-MINI-ACCEL benchtop target (mini/doc/mini-accelerator.md):
+//
+//   E_peak    = σ·(σ-φ) = 12·10 = 120 GV/m   (peak wakefield E-field)
+//   a_0       = n      = 6                    (normalized vector potential)
+//   R_chamber = σ-φ    = 10 cm                (benchtop radius)
+//   L_dephase ≈ R_chamber·σ²/n = 10·144/6 = 240 cm (rough scale)
+//   ΔE_e      ≈ E_peak · L_acc                 (with L_acc << L_dephase)
+//
+// The verifier confirms these algebraic n=6 derivations match the spec.md
+// claims (E=120 GV/m, R=10 cm, a_0=6, 100 MeV target) AND that the energy
+// gain envelope ΔE = 100 MeV is reachable within R_chamber·a_0 ≈ 60 cm
+// path length.
+//
+// PASS = all derivations close + spec values present.
+// FAIL = any algebraic mismatch or missing spec anchor.
+//
+// Run:
+//   hexa run verify/calc_wakefield.hexa
+//
+// @no-lock-needed
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let DOC_MINI = ROOT + "/mini/doc/mini-accelerator.md"
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── n=6 lattice constants ────────────────────────────────────────────────
+let SIGMA = 12
+let TAU   = 4
+let PHI   = 2
+let N     = 6
+let SIGMA_PHI = SIGMA - PHI            // 10
+let SIGMA_SQ  = SIGMA * SIGMA          // 144
+
+// ── derived mini-accelerator parameters ──────────────────────────────────
+let E_PEAK_GV_PER_M = SIGMA * SIGMA_PHI  // 120 GV/m  (σ·(σ-φ))
+let A0_LASER        = N                  // 6  (normalized vector pot.)
+let R_CHAMBER_CM    = SIGMA_PHI          // 10 cm  benchtop radius
+let L_DEPHASE_CM    = R_CHAMBER_CM * SIGMA_SQ / N  // 240 cm rough
+let E_TARGET_MEV    = 100                // mini target (100 MeV)
+
+// Unit chain for energy gain per unit length (electron in E-field):
+//   E_peak [GV/m] = E_peak·10⁹ V/m = E_peak·10⁹ eV/m
+//                 = E_peak·10⁹ · 10⁻⁶ MeV/m = E_peak·10³ MeV/m
+//                 = E_peak·10  MeV/cm
+//   So  ΔE per cm   = E_peak[GV/m] · 10  MeV/cm  = 1200 MeV/cm at 120 GV/m
+//   And L_acc_req   = E_target[MeV] / ΔE_per_cm  = 100/1200 ≈ 0.083 cm
+let DE_PER_CM_MEV   = E_PEAK_GV_PER_M * 10            // 1200 MeV/cm
+// integer-arithmetic trick: store path length in tenths of millimeters
+// (10⁻¹ mm = 10⁻² cm) so we don't lose precision on the 0.083 cm answer.
+let L_ACC_REQ_TENTH_MM = (E_TARGET_MEV * 1000) / DE_PER_CM_MEV   // 100·1000/1200 ≈ 83 (tenths of mm)
+// L_acc_req in mm = above / 10 ≈ 8 mm = 0.83 mm
+// L_acc_req in cm = above / 100 ≈ 0.083 cm
+
+fn print_table() {
+    println("")
+    println("  ┌─ HEXA-MINI-ACCEL n=6 derived parameters ─────────────┐")
+    println("  │  E_peak     σ·(σ-φ)         = 12·10  = " + str(E_PEAK_GV_PER_M) + " GV/m   │")
+    println("  │  a_0        n               = 6                      │")
+    println("  │  R_chamber  σ-φ             = " + str(R_CHAMBER_CM) + " cm                  │")
+    println("  │  L_dephase  R·σ²/n          = " + str(L_DEPHASE_CM) + " cm  (algebraic)     │")
+    println("  │  ΔE_e/cm    E_peak · 10     = " + str(DE_PER_CM_MEV) + " MeV/cm           │")
+    println("  │  L_acc(req) for 100 MeV     ≈ " + str(L_ACC_REQ_TENTH_MM) + " (tenths of mm) ≈ 0.083 cm │")
+    println("  └──────────────────────────────────────────────────────┘")
+    println("")
+}
+
+fn check_e_peak_anchor() {
+    let txt = _read(DOC_MINI)
+    let ok = _has(txt, "120 GV/m") || _has(txt, "120GV/m") || _has(txt, "E=120")
+    _check(ok, "spec anchors E_peak = 120 GV/m",
+           "looking for '120 GV/m' or 'E=120' in mini-accelerator.md")
+}
+
+fn check_a0_anchor() {
+    let txt = _read(DOC_MINI)
+    let ok = _has(txt, "a_0=n") || _has(txt, "a_0 = n") || _has(txt, "a_0=6")
+    _check(ok, "spec anchors a_0 = n = 6", "")
+}
+
+fn check_radius_anchor() {
+    let txt = _read(DOC_MINI)
+    let ok = _has(txt, "R=sigma-phi cm") || _has(txt, "R = 10 cm") ||
+             _has(txt, "10 cm") || _has(txt, "R = sigma-phi")
+    _check(ok, "spec anchors R_chamber = σ-φ = 10 cm", "")
+}
+
+fn check_target_energy() {
+    let txt = _read(DOC_MINI)
+    let ok = _has(txt, "100 MeV") || _has(txt, "100MeV")
+    _check(ok, "spec anchors target = 100 MeV", "")
+}
+
+fn check_path_length_feasible() {
+    // L_acc_req (tenths of mm) must fit inside the benchtop envelope
+    // (10 × R_chamber = 100 cm = 10000 tenths of mm). With E_peak =
+    // 120 GV/m this is trivially true — 100 MeV needs only ~ 0.83 mm.
+    let envelope_tenth_mm = R_CHAMBER_CM * 10 * 100   // 100 cm = 10000 tenth-mm
+    _check(L_ACC_REQ_TENTH_MM <= envelope_tenth_mm,
+           "100 MeV reachable within 10× R_chamber path",
+           "L_acc_req = " + str(L_ACC_REQ_TENTH_MM) + " tenth-mm (≈ 0.083 cm) ≤ envelope " +
+           str(envelope_tenth_mm) + " tenth-mm")
+}
+
+fn check_dephase_overshoot() {
+    // L_dephase (algebraic 240 cm) should exceed L_acc_req with huge margin.
+    // Convert both to tenth-mm for integer arithmetic.
+    let L_d_tenth_mm = L_DEPHASE_CM * 100   // 240 cm = 24000 tenth-mm
+    let margin = L_d_tenth_mm / L_ACC_REQ_TENTH_MM
+    _check(margin >= 10,
+           "L_dephase ≥ 10× L_acc_req (no premature dephasing)",
+           "ratio = " + str(margin) + "× (=L_dephase/L_acc_req)")
+}
+
+let FALSIFIERS = [
+    "measured E_peak < 100 GV/m -> n=6 derivation breaks (revisit σ·(σ-φ))",
+    "L_dephase < L_acc_req -> electron loses phase before 100 MeV",
+    "real LWFA bench produces < 50 MeV at 10 cm -> mini Mk.I infeasible",
+    "a_0 > 10 -> nonlinear regime exceeds n=6 closure",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern mini — wakefield n=6 derived parameters")
+    println("========================================================================")
+    print_table()
+
+    check_e_peak_anchor()
+    check_a0_anchor()
+    check_radius_anchor()
+    check_target_energy()
+    check_path_length_feasible()
+    check_dephase_overshoot()
+
+    println("")
+    println("  FALSIFIERS (" + str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CERN_WAKEFIELD__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CERN_WAKEFIELD__ PASS")
+    exit(0)
+}

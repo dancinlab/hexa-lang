@@ -1,0 +1,238 @@
+#!hexa strict
+// hexa-chip/verify/cli.hexa — unified verification CLI dispatcher.
+//
+// Mirrors hexa-sscb/verify/cli.py: one entry point that runs all verify/
+// scripts as subprocesses and aggregates exit codes. Each check is a
+// stand-alone .hexa script that exits 0 on PASS and non-zero on FAIL.
+//
+// Usage:
+//   hexa run verify/cli.hexa                # run all checks
+//   hexa run verify/cli.hexa all            # same
+//   hexa run verify/cli.hexa n6             # n=6 master identity only
+//   hexa run verify/cli.hexa inventory      # 29-verb / 6-group inventory
+//   hexa run verify/cli.hexa cross-doc      # cross-doc invariant audit
+//   hexa run verify/cli.hexa release        # release cadence + falsifiers
+//   hexa run verify/cli.hexa falsifiers     # F-CHIP-1..4 register dump
+//   hexa run verify/cli.hexa saturation     # RSC self-stop signal (sat-1 + sat-2)
+//   hexa run verify/cli.hexa --list         # list registered checks
+//   hexa run verify/cli.hexa --json         # machine-readable summary
+//
+// Exit code:
+//   0 = every selected check passed
+//   1 = one or more checks failed
+//   2 = invocation error (unknown subcommand)
+//
+// Cost: $0 (each subprocess is a stdlib hexa script).
+
+let CHECKS = [
+    ["n6",            "n6_arithmetic.hexa",     "n=6 master-identity arithmetic"],
+    ["inventory",     "inventory_check.hexa",   "29-verb / 6-group inventory + spec.md presence"],
+    ["cross-doc",     "cross_doc_audit.hexa",   "cross-document n=6 invariant agreement"],
+    ["release",       "release_cadence.hexa",   ".roadmap §A.2 release cadence + §A.4 falsifiers"],
+    ["falsifiers",    "falsifier_check.hexa",   "F-CHIP-1..F-CHIP-4 preregister dump"],
+    ["calc-process",  "calc_process.hexa",      "F-CHIP-1 T1 — process node σ(6)=12 ladder derivation"],
+    ["calc-npu",      "calc_npu.hexa",          "F-CHIP-2 T1 — NPU dataflow τ(6)=4 stage decomposition"],
+    ["calc-hbm",         "calc_hbm.hexa",          "F-CHIP-3 T1 — HBM σ-φ=10 ceiling + σ+τ=16 frontier"],
+    ["numerics-process", "numerics_process.hexa",  "F-CHIP-1 T2 — process node geometric-ladder float re-derive"],
+    ["numerics-npu",     "numerics_npu.hexa",      "F-CHIP-2 T2 — NPU roofline + 4-stage pipeline + commercial parity"],
+    ["numerics-hbm",     "numerics_hbm.hexa",      "F-CHIP-3 T2 — HBM 5-gen bandwidth/capacity + vendor parity"],
+    ["numerics-process-parity", "numerics_process_parity.hexa", "F-CHIP-1 T2-2 — TSMC/Samsung/Intel density vs K/f²"],
+    ["numerics-npu-parity",     "numerics_npu_parity.hexa",     "F-CHIP-2 T2-2 — 6-vendor INT8/FP16 ratio = φ(6)"],
+    ["numerics-hbm-parity",     "numerics_hbm_parity.hexa",     "F-CHIP-3 T2-2 — Hynix/Samsung/Micron HBM3/3E/4 trinity"],
+    ["numerics-process-solver", "numerics_process_solver.hexa", "F-CHIP-1 T2-3 — bisection + Newton root finders"],
+    ["numerics-npu-solver",     "numerics_npu_solver.hexa",     "F-CHIP-2 T2-3 — power iteration on τ×τ stage matrix"],
+    ["numerics-hbm-solver",     "numerics_hbm_solver.hexa",     "F-CHIP-3 T2-3 — Jacobi 1-D Laplace on σ-φ=10 stack"],
+    ["numerics-cross-pillar",   "numerics_cross_pillar.hexa",   "cross-cutter T2 — process/NPU/HBM σ/τ/φ/J₂ agreement"],
+    ["numerics-lattice-arithmetic", "numerics_lattice_arithmetic.hexa", "math_pure floor — int↔float σ/τ/φ + round-trip"],
+    ["numerics-spice-corner",    "numerics_spice_corner.hexa",        "F-CHIP-1 T2-4 — Samsung SF3/SF2/SF2P/SF1.4 PVT corner sweep (Phase B)"],
+    ["numerics-rtl-isa-n6",      "numerics_rtl_isa_n6.hexa",          "F-CHIP-2 T2-4 — ISA n=6 24-instr RTL cycle parity (Samsung SF2P, Phase B)"],
+    ["numerics-power-thermal",   "numerics_power_thermal.hexa",       "F-CHIP-3 T2-4 — SK Hynix HBM4 16-Hi 48GB 2TB/s power-thermal (Phase B)"],
+    ["lint-numerics",            "lint_numerics.hexa",                "meta lint — recipe §4 5-invariant enforcer on numerics_*.hexa"],
+    ["empirical-process",        "empirical_process.hexa",            "F-CHIP-1 T3 — TSMC/Samsung/Intel density vendored fixture"],
+    ["empirical-npu",            "empirical_npu.hexa",                "F-CHIP-2 T3 — NPU dataflow stage-count vendored fixture"],
+    ["empirical-hbm",            "empirical_hbm.hexa",                "F-CHIP-3 T3 — JEDEC HBM2/2E/3/3E stack+bus vendored fixture"],
+    ["saturation",               "saturation_check.hexa",             "RSC self-stop signal — sat-1 + sat-2 (recipe §7.4 #15)"]
+]
+
+fn _root() -> str {
+    let env_root = env("HEXA_CHIP_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _has_flag(args: [str], flag: str) -> bool {
+    for x in args { if x == flag { return true } }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() { out = out + [raw[j]]; j = j + 1 }
+    return out
+}
+
+fn _shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _resolve_check(name: str) -> int {
+    let mut i = 0
+    while i < CHECKS.len() {
+        if CHECKS[i][0] == name { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _run_one(root: str, idx: int, json_mode: bool, quiet: bool) -> bool {
+    let name = CHECKS[idx][0]
+    let script = CHECKS[idx][1]
+    let label = CHECKS[idx][2]
+    let path = root + "/verify/" + script
+    let exists = exec("[ -f " + _shq(path) + " ] && echo y || echo n").trim()
+    if exists != "y" {
+        if !quiet { println("  [MISS] " + name + " — script not found: " + path) }
+        return false
+    }
+    let mut cmd = "HEXA_CHIP_ROOT=" + _shq(root) + " hexa run " + _shq(path)
+    if json_mode { cmd = cmd + " --json" }
+    cmd = cmd + " 2>&1"
+    let out = exec(cmd)
+    let exit_marker = exec("HEXA_CHIP_ROOT=" + _shq(root) + " hexa run " + _shq(path) + " >/dev/null 2>&1; echo $?").trim()
+    let ok = exit_marker == "0"
+    if !quiet {
+        println("========================================================================")
+        println("  ▶ " + name + " — " + label)
+        println("========================================================================")
+        println(out.trim())
+    }
+    let mark = if ok { "PASS" } else { "FAIL" }
+    println("  [" + mark + "] " + name + "  (verify/" + script + ")  " + label)
+    return ok
+}
+
+fn cmd_list() {
+    println("hexa-chip verify/ registered checks:")
+    let mut i = 0
+    while i < CHECKS.len() {
+        let c = CHECKS[i]
+        let path = "verify/" + c[1]
+        let r = exec("[ -f " + _shq(path) + " ] && echo y || echo n").trim()
+        let mark = if r == "y" { "ok " } else { "MISS" }
+        println("  [" + mark + "] " + c[0] + "  →  " + path + "  " + c[2])
+        i = i + 1
+    }
+    println("")
+    println("  total: " + str(CHECKS.len()) + " check(s)")
+}
+
+fn cmd_help() {
+    println("hexa-chip verify/cli.hexa — unified verifier")
+    println("")
+    println("USAGE:")
+    println("  hexa run verify/cli.hexa [TARGET] [--json] [--quiet]")
+    println("")
+    println("TARGETS:")
+    let mut i = 0
+    while i < CHECKS.len() {
+        let c = CHECKS[i]
+        println("  " + c[0] + "    " + c[2])
+        i = i + 1
+    }
+    println("  all            run every registered check (default)")
+    println("")
+    println("FLAGS:")
+    println("  --json         machine-readable JSON summary")
+    println("  --quiet        suppress per-check stdout, keep verdict line only")
+    println("  --list         list registered checks and exit")
+    println("  --help, -h     this help")
+}
+
+fn main() {
+    let ua = _user_args()
+    if _has_flag(ua, "--help") || _has_flag(ua, "-h") {
+        cmd_help()
+        return
+    }
+    if _has_flag(ua, "--list") {
+        cmd_list()
+        return
+    }
+    let json_mode = _has_flag(ua, "--json")
+    let quiet = _has_flag(ua, "--quiet")
+    let root = _root()
+
+    // First non-flag arg is the target; default = "all"
+    let mut target = "all"
+    for a in ua {
+        if !a.starts_with("--") {
+            target = a
+            break
+        }
+    }
+
+    let mut indices: [int] = []
+    if target == "all" {
+        let mut i = 0
+        while i < CHECKS.len() { indices = indices + [i]; i = i + 1 }
+    } else {
+        let idx = _resolve_check(target)
+        if idx < 0 {
+            println("unknown check: " + target)
+            cmd_help()
+            exit(2)
+        }
+        indices = [idx]
+    }
+
+    let mut pass_count = 0
+    let mut fail_count = 0
+    let mut details: [str] = []
+    let mut k = 0
+    while k < indices.len() {
+        let idx = indices[k]
+        let ok = _run_one(root, idx, false, quiet)
+        if ok {
+            pass_count = pass_count + 1
+        } else {
+            fail_count = fail_count + 1
+            details = details + [CHECKS[idx][0]]
+        }
+        k = k + 1
+    }
+
+    let total = pass_count + fail_count
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/cli.hexa\","
+        js = js + "\"schema\":\"hexa-chip/cli/v1\","
+        js = js + "\"target\":\"" + target + "\","
+        js = js + "\"total\":" + str(total) + ","
+        js = js + "\"pass\":" + str(pass_count) + ","
+        js = js + "\"fail\":" + str(fail_count) + ","
+        js = js + "\"ok\":"
+        if fail_count == 0 { js = js + "true" } else { js = js + "false" }
+        js = js + "}"
+        println("")
+        println(js)
+    } else {
+        println("========================================================================")
+        let line = str(pass_count) + "/" + str(total) + " checks PASS"
+        if fail_count == 0 {
+            println("  " + line)
+        } else {
+            println("  " + line + "  — failing:")
+            for d in details { println("    ✗ " + d) }
+        }
+        println("========================================================================")
+    }
+    if fail_count > 0 { exit(1) }
+}

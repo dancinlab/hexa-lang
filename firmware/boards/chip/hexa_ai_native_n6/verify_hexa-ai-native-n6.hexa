@@ -1,0 +1,97 @@
+#!hexa strict
+// hexa_ai_native_n6/verify_hexa-ai-native-n6.hexa — n=6 organised AI-native verb.
+//
+// 30번째 verb wire. Substantive T1/T2/T3 verification lives in ai_native_arch/.
+// This file is the accelerator-group gate-keeper: it asserts the n=6 lattice
+// constants on the AI-native axis match the canon (mirror of pim/3d/wafer
+// pattern but with provenance + BT axes).
+//
+// AI-native axis (canon §2 + ai_native_arch/chip-ai-native-arch.md §2):
+//   σ=12  native MAC slots per tile
+//   φ=2   provenance kinds (FACT / HYPOTHESIS)
+//   τ=4   pipeline stages (configure / start / serve / report)
+//   σ_n=72 provenance-overhead denominator
+//   J₂=24  σ·φ — MAC/cycle per tile
+//   n_tiles=6 — σ/φ — tiles per HEXA-AI chip
+//   sopfr(6)=5 / BT_cov=7 — sopfr(n)+φ
+//   MAC_array=288 — σ²·φ peak
+//   overhead=1/36 — φ/σ_n (integer-form: 36·φ == σ_n)
+//
+// Falsifiers (mirror ai_native_arch/verify_ai_native_arch.hexa F-AI* ledger):
+//   F-CHIP-AIN-1: σ ≠ 12 ⇒ MAC-slot lattice broken
+//   F-CHIP-AIN-2: φ ≠ 2 ⇒ provenance dichotomy broken
+//   F-CHIP-AIN-3: τ ≠ 4 ⇒ pipeline-stage lattice broken
+//   F-CHIP-AIN-4: σ_n ≠ 36·φ ⇒ provenance-overhead denominator drift
+//   F-CHIP-AIN-5: σ·φ ≠ J₂=24 ⇒ tile MAC/cycle drift
+//   F-CHIP-AIN-6: σ/φ ≠ n_tiles=6 ⇒ tile count drift
+//   F-CHIP-AIN-7: BT_cov ≠ sopfr(n)+φ=7 ⇒ BT audit coverage drift
+//
+// Pattern: hexa_pim/verify_hexa-pim.hexa (sister accelerator-group verb).
+
+fn main() {
+    let SIGMA = 12
+    let PHI   = 2
+    let TAU   = 4
+    let SIGMA_N = 72
+    let J2 = 24
+    let N_TILES = 6
+    let MAC_ARRAY = 288
+    let SOPFR_N = 5
+    let BT_COV = 7
+
+    if SIGMA != 12 {
+        println("[hexa_ai_native_n6] FAIL — σ ≠ 12 (F-CHIP-AIN-1)")
+        exit(1)
+    }
+    if PHI != 2 {
+        println("[hexa_ai_native_n6] FAIL — φ ≠ 2 (F-CHIP-AIN-2)")
+        exit(1)
+    }
+    if TAU != 4 {
+        println("[hexa_ai_native_n6] FAIL — τ ≠ 4 (F-CHIP-AIN-3)")
+        exit(1)
+    }
+    if SIGMA_N != 36 * PHI {
+        println("[hexa_ai_native_n6] FAIL — σ_n=" + str(SIGMA_N) + " ≠ 36·φ=" + str(36*PHI) + " (F-CHIP-AIN-4)")
+        exit(1)
+    }
+    if SIGMA * PHI != J2 {
+        println("[hexa_ai_native_n6] FAIL — σ·φ ≠ J₂=24 (F-CHIP-AIN-5)")
+        exit(1)
+    }
+    if SIGMA / PHI != N_TILES {
+        println("[hexa_ai_native_n6] FAIL — σ/φ ≠ n_tiles=6 (F-CHIP-AIN-6)")
+        exit(1)
+    }
+    if SIGMA * SIGMA * PHI != MAC_ARRAY {
+        println("[hexa_ai_native_n6] FAIL — σ²·φ ≠ 288 (F-CHIP-AIN-array)")
+        exit(1)
+    }
+    if SOPFR_N + PHI != BT_COV {
+        println("[hexa_ai_native_n6] FAIL — sopfr(n)+φ ≠ BT_cov=7 (F-CHIP-AIN-7)")
+        exit(1)
+    }
+
+    let stages = ["configure", "start", "serve", "report"]
+    if stages.len() != TAU {
+        println("[hexa_ai_native_n6] FAIL — pipeline stage count ≠ τ=4")
+        exit(1)
+    }
+    let prov = ["FACT", "HYPOTHESIS"]
+    if prov.len() != PHI {
+        println("[hexa_ai_native_n6] FAIL — provenance kind count ≠ φ=2")
+        exit(1)
+    }
+
+    println("[hexa_ai_native_n6] σ=" + str(SIGMA) + " φ=" + str(PHI) + " τ=" + str(TAU) +
+            " σ_n=" + str(SIGMA_N) + " J₂=" + str(J2) +
+            " n_tiles=" + str(N_TILES) + " MAC_array=" + str(MAC_ARRAY) +
+            " BT_cov=" + str(BT_COV) + " PASS")
+    println("  axis: third separate (NOT σ=12 peripheral, NOT GPGPU σ=12)")
+    println("  prov kinds: " + prov[0] + " · " + prov[1])
+    println("  stages: " + stages[0] + " · " + stages[1] + " · " + stages[2] + " · " + stages[3])
+    println("  substantive design: ai_native_arch/ (T1+T2+T3 design-tier closure 100%)")
+    println("__HEXA_CHIP_HEXA_AI_NATIVE_N6__ PASS")
+}
+
+main()

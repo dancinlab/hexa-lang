@@ -1,0 +1,254 @@
+#!hexa strict
+// analyze_spacex.hexa — SpaceX program registry analyzer (status/group filter)
+//
+// Static registry mirrors §3 (CLI-friendly table) of
+// aerospace_transport/spacex_intel_2026.md.
+//
+// Subcmds (via args):
+//   list                       all programs
+//   active                     only active / continuous
+//   upcoming                   only upcoming / development / contracted
+//   group <slug>               filter by group (launch|crew|cargo|rideshare|
+//                              constellation|starship|gov|infra)
+//   show <slug>                detail view by slug
+//   counts                     status histogram
+//   help                       this list
+//
+// Format (one program per line, pipe-separated):
+//   slug|name|status|net|group
+//
+// raw#10: this is a *snapshot* analyzer; refresh entries when the .md
+// updates. The slug is the stable identifier.
+//
+// Cost: $0 (Mac local, stdout only).
+
+let VERSION = "1.0.0"
+
+let PROGRAMS: [str] = [
+    "falcon9|Falcon 9 ops|active|continuous|launch",
+    "falcon-heavy|Falcon Heavy ops|active|continuous|launch",
+    "starlink-v2|Starlink Gen-2 deploy|active|continuous|constellation",
+    "starlink-v3|Starlink V3 (Tbps)|upcoming|1H 2026|constellation",
+    "starlink-dtc|Direct-to-Cell upgrade|active|150Mbps test late 2026|constellation",
+    "crew-12|Crew-12 ISS|active|through Oct 2026|crew",
+    "crew-13|Crew-13 ISS|upcoming|NET mid-Sep 2026|crew",
+    "crs-34|Cargo Dragon CRS-34|upcoming|TBD|cargo",
+    "transporter-17|Transporter-17 rideshare|upcoming|NET 2026-06-30|rideshare",
+    "bandwagon-3-plus|Bandwagon dedicated|recurring|~2/yr|rideshare",
+    "starship-ift-12|Starship V3 Flight 12|upcoming|NET 2026-05-12 22:30Z|starship",
+    "starship-prop-xfer|Orbital prop transfer|upcoming|2026|starship",
+    "starship-hls|Artemis HLS|development|LEO demo NET 2027|starship",
+    "mars-uncrewed-2026|5x Starship to Mars|aspirational|NET 2026-11/12 (50%)|starship",
+    "polaris-2|Polaris II|development|TBD|crew",
+    "polaris-3|Polaris III (Starship crew)|development|TBD|starship",
+    "haven-1|Vast Haven-1 station|upcoming|NET 2026-05|crew",
+    "ax-5|Axiom Ax-5|upcoming|NET 2027-01|crew",
+    "ax-6|Axiom Ax-6|upcoming|TBD|crew",
+    "dragonfly-fh|Dragonfly FH launch|contracted|2028-07|launch",
+    "nssl-phase3-fy26|NSSL Phase 3 FY26|contracted|FY26|gov",
+    "pad-39a-starship|39A Starship pad|infra|NET 2H 2026|infra",
+    "pad-starbase-2|Starbase Pad 2|infra|NET mid-2026|infra",
+]
+
+// ─── helpers ───
+
+fn _split_pipe(s: str) -> [str] {
+    return s.split("|")
+}
+
+fn _is_upcoming_status(st: str) -> bool {
+    if st == "upcoming"     { return true }
+    if st == "development"  { return true }
+    if st == "contracted"   { return true }
+    if st == "infra"        { return true }
+    if st == "aspirational" { return true }
+    return false
+}
+
+fn _is_active_status(st: str) -> bool {
+    if st == "active"    { return true }
+    if st == "recurring" { return true }
+    return false
+}
+
+fn print_row(slug: str, name: str, status: str, net: str, group: str) {
+    println("  " + slug + "  [" + status + "]  " + name + "  · NET: " + net + "  · group: " + group)
+}
+
+// ─── subcommands ───
+
+fn cmd_list() {
+    println("[spacex/analyze] all programs (" + str(PROGRAMS.len()) + ")")
+    for entry in PROGRAMS {
+        let p = _split_pipe(entry)
+        print_row(p[0], p[1], p[2], p[3], p[4])
+    }
+}
+
+fn cmd_active() {
+    let mut count = 0
+    for entry in PROGRAMS {
+        let p = _split_pipe(entry)
+        if _is_active_status(p[2]) {
+            count = count + 1
+        }
+    }
+    println("[spacex/analyze] active programs (" + str(count) + ")")
+    for entry in PROGRAMS {
+        let p = _split_pipe(entry)
+        if _is_active_status(p[2]) {
+            print_row(p[0], p[1], p[2], p[3], p[4])
+        }
+    }
+}
+
+fn cmd_upcoming() {
+    let mut count = 0
+    for entry in PROGRAMS {
+        let p = _split_pipe(entry)
+        if _is_upcoming_status(p[2]) {
+            count = count + 1
+        }
+    }
+    println("[spacex/analyze] upcoming/in-development programs (" + str(count) + ")")
+    for entry in PROGRAMS {
+        let p = _split_pipe(entry)
+        if _is_upcoming_status(p[2]) {
+            print_row(p[0], p[1], p[2], p[3], p[4])
+        }
+    }
+}
+
+fn cmd_group(g: str) {
+    let mut count = 0
+    for entry in PROGRAMS {
+        let p = _split_pipe(entry)
+        if p[4] == g {
+            count = count + 1
+        }
+    }
+    println("[spacex/analyze] group=" + g + " (" + str(count) + ")")
+    if count == 0 {
+        eprintln("  no entries — valid groups: launch, crew, cargo, rideshare,")
+        eprintln("                              constellation, starship, gov, infra")
+        return
+    }
+    for entry in PROGRAMS {
+        let p = _split_pipe(entry)
+        if p[4] == g {
+            print_row(p[0], p[1], p[2], p[3], p[4])
+        }
+    }
+}
+
+fn cmd_show(slug: str) {
+    for entry in PROGRAMS {
+        let p = _split_pipe(entry)
+        if p[0] == slug {
+            println("[spacex/analyze] show " + slug)
+            println("  name:   " + p[1])
+            println("  status: " + p[2])
+            println("  NET:    " + p[3])
+            println("  group:  " + p[4])
+            return
+        }
+    }
+    eprintln("[spacex/analyze] unknown slug: " + slug)
+    eprintln("  run `analyze_spacex list` for all valid slugs")
+    exit(2)
+}
+
+fn cmd_counts() {
+    let mut n_active = 0
+    let mut n_upcoming = 0
+    let mut n_development = 0
+    let mut n_contracted = 0
+    let mut n_infra = 0
+    let mut n_aspirational = 0
+    let mut n_recurring = 0
+    for entry in PROGRAMS {
+        let p = _split_pipe(entry)
+        let st = p[2]
+        if st == "active"       { n_active = n_active + 1 }
+        if st == "upcoming"     { n_upcoming = n_upcoming + 1 }
+        if st == "development"  { n_development = n_development + 1 }
+        if st == "contracted"   { n_contracted = n_contracted + 1 }
+        if st == "infra"        { n_infra = n_infra + 1 }
+        if st == "aspirational" { n_aspirational = n_aspirational + 1 }
+        if st == "recurring"    { n_recurring = n_recurring + 1 }
+    }
+    println("[spacex/analyze] status histogram")
+    println("  active:       " + str(n_active))
+    println("  recurring:    " + str(n_recurring))
+    println("  upcoming:     " + str(n_upcoming))
+    println("  development:  " + str(n_development))
+    println("  contracted:   " + str(n_contracted))
+    println("  infra:        " + str(n_infra))
+    println("  aspirational: " + str(n_aspirational))
+    println("  total:        " + str(PROGRAMS.len()))
+}
+
+fn cmd_help() {
+    println("analyze_spacex " + VERSION + " — SpaceX program registry analyzer")
+    println("")
+    println("usage: analyze_spacex <subcmd> [arg]")
+    println("")
+    println("  list              all programs")
+    println("  active            only active / recurring")
+    println("  upcoming          only upcoming / development / contracted / infra / aspirational")
+    println("  group <slug>      filter by group (launch|crew|cargo|rideshare|")
+    println("                                     constellation|starship|gov|infra)")
+    println("  show <slug>       detail view")
+    println("  counts            status histogram")
+    println("  help              this list")
+}
+
+// ─── main ───
+
+fn main() {
+    let raw = args()
+    // raw[0] = interpreter, raw[1] = script path, raw[2..] = user args
+    let mut user: [str] = []
+    let mut i = 2
+    while i < raw.len() {
+        user = user + [raw[i]]
+        i = i + 1
+    }
+
+    if user.len() == 0 {
+        cmd_help()
+        return
+    }
+
+    let sub = user[0]
+
+    if sub == "help" || sub == "--help" || sub == "-h" {
+        cmd_help()
+        return
+    }
+    if sub == "list"     { cmd_list();     return }
+    if sub == "active"   { cmd_active();   return }
+    if sub == "upcoming" { cmd_upcoming(); return }
+    if sub == "counts"   { cmd_counts();   return }
+
+    if sub == "group" {
+        if user.len() < 2 {
+            eprintln("usage: analyze_spacex group <slug>")
+            exit(2)
+        }
+        cmd_group(user[1])
+        return
+    }
+    if sub == "show" {
+        if user.len() < 2 {
+            eprintln("usage: analyze_spacex show <slug>")
+            exit(2)
+        }
+        cmd_show(user[1])
+        return
+    }
+
+    eprintln("analyze_spacex: unknown subcmd '" + sub + "'")
+    eprintln("run `analyze_spacex help` for usage")
+    exit(2)
+}

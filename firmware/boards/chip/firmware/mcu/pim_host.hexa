@@ -1,0 +1,150 @@
+#!hexa strict
+// hexa-chip/firmware/mcu/pim_host.hexa — Phase F iter 7.
+//
+// Host MCU controller for PIM (Processing-In-Memory) verb consumer of
+// stdlib/hal/compute (GPGPU programming-model verb, Phase F iter 2).
+//
+// Falsifier: F-CHIP-PIM-1 (host-side PIM compute_dispatch loop)
+//          + F-CHIP-5    (Phase F iter 7: cross-verb GPGPU consumer)
+// Board ID:  HEXA-CHIP-FW-PIM (paper design, no physical board yet)
+// Phase:     F iter 7 — second hexa-native consumer of stdlib/hal/compute
+//            after npu_host.hexa (iter 5).
+//
+// stdlib/hal modules used:
+//   core    — sentinel + exit + str runtime
+//   compute — GPGPU programming-model dispatch (Phase F iter 2)
+//   dma     — bank-to-bank descriptor streaming
+//   gpio    — pim_busy strobe pin
+//   i2c     — bank control sideband bus (low-frequency config)
+//   intr    — bank_done IRQ
+//
+// Per canon (~/core/canon/domains/compute/chip-pim) PIM accelerators
+// fold compute into the memory subsystem. The hexa-native dispatch
+// surface treats PIM as a compute target with σ=12 lane workgroup
+// (one per memory bank) executing one descriptor per dispatch.
+
+use "stdlib/hal/core"
+use "stdlib/hal/compute"
+use "stdlib/hal/dma"
+use "stdlib/hal/gpio"
+use "stdlib/hal/i2c"
+use "stdlib/hal/intr"
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── PIM dispatch via stdlib/hal/compute ───────────────────────────────
+//
+// 6-axis projection for PIM in-memory MAC kernel:
+//   axis 1 grid       : (1, 1, 1)        — one bank-array per dispatch
+//   axis 2 workgroup  : (σ=12, 1, 1)     — 12 banks co-scheduled
+//   axis 3 mem-tier   : DEVICE buffers (input/weight/output, all on-die)
+//   axis 4 barrier    : SCOPE_WORKGROUP  — bank-array barrier per kernel
+//   axis 5 launch-dep : -1               — independent dispatch
+//   axis 6 sub-group  : 0                — vendor-default lane
+//
+// IR substrate: SPIR-V proxy via VENDOR_SYCL=2 (canon §3 cross-translation).
+let SIGMA = 12   // n=6 σ — bank lane count
+
+fn dispatch_bank_array_via_compute() -> int {
+    let bank_in  = compute_buffer_alloc(2, SIGMA * 1024)   // TIER_DEVICE
+    let bank_w   = compute_buffer_alloc(2, SIGMA * 1024)
+    let bank_out = compute_buffer_alloc(2, SIGMA * 1024)
+    if bank_in < 0 || bank_w < 0 || bank_out < 0 { return -1 }
+    let kern = compute_kernel_compile(0, 512)              // IR_SPIRV
+    if kern < 0 { return -2 }
+    let ev = compute_dispatch(2, kern, 1, 1, 1, SIGMA, 1, 1, 1, -1, 0)
+    if ev < 0 { return -3 }
+    let _waited = compute_event_wait(ev)
+    compute_event_release(ev)
+    compute_kernel_release(kern)
+    compute_buffer_free(bank_in)
+    compute_buffer_free(bank_w)
+    compute_buffer_free(bank_out)
+    return ev
+}
+
+fn check_compute_dispatch_path() {
+    let ev = dispatch_bank_array_via_compute()
+    _check(ev >= 0,
+           "GPGPU verb consumer: dispatch_bank_array_via_compute returned event",
+           "ev=" + str(ev))
+}
+
+fn check_invariant_ledger() {
+    let n_axes   = compute_invariant_axes()
+    let n_tiers  = compute_invariant_tiers()
+    let n_irs    = compute_invariant_irs()
+    let j2_prime = compute_invariant_J2_prime()
+    _check(n_axes == 6,
+           "compute module reports n=6 invariant axes (PIM consumer)",
+           "got " + str(n_axes))
+    _check(n_tiers == 4,
+           "compute module reports τ=4 memory tiers (PIM consumer)",
+           "got " + str(n_tiers))
+    _check(n_irs == 2,
+           "compute module reports φ=2 IR substrates (PIM consumer)",
+           "got " + str(n_irs))
+    _check(j2_prime == 48,
+           "compute module reports J₂′=48 lattice (PIM consumer)",
+           "got " + str(j2_prime))
+}
+
+fn check_pim_workgroup_sigma() {
+    _check(SIGMA == 12,
+           "PIM workgroup width = σ(6) = 12 banks",
+           "got " + str(SIGMA))
+}
+
+let FALSIFIERS = [
+    "F-CHIP-PIM-1: compute_dispatch returns negative event → bank-array dispatch broken",
+    "F-CHIP-PIM-2: workgroup width != σ(6)=12 → bank-lane axis broken",
+    "F-CHIP-5  (cross-verb): PIM cannot consume the same dispatch surface as NPU"
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-chip — Phase F iter 7 MCU host: pim_host (F-CHIP-PIM-1 + F-CHIP-5)")
+    println("========================================================================")
+    println("")
+    println("  Target HW: PIM array host (paper design — concrete board TBD)")
+    println("  Scope: GPGPU verb cross-consumer (PIM after NPU iter 5)")
+    println("")
+
+    println("  [hal] opening peripheral handles ...")
+    let i2c_h     = i2c_open(1, 0x40, 100000)         // bank ctrl @ 100 kHz
+    let dma_h     = dma_open(1, DIR_MEM_TO_MEM, WIDTH_WORD)
+    let gpio_busy = gpio_open(3, MODE_OUTPUT)
+    let intr_h    = intr_open(2, PRIO_REAL_T, "bank_done")
+    _check(i2c_h     >= 0, "stdlib/hal i2c_open OK", "h=" + str(i2c_h))
+    _check(dma_h     >= 0, "stdlib/hal dma_open OK", "h=" + str(dma_h))
+    _check(gpio_busy >= 0, "stdlib/hal gpio_open OK", "h=" + str(gpio_busy))
+    _check(intr_h    >= 0, "stdlib/hal intr_open OK", "h=" + str(intr_h))
+    println("")
+
+    check_pim_workgroup_sigma()
+    check_invariant_ledger()
+    check_compute_dispatch_path()
+
+    let pass_n = RUN - FAIL
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CHIP_MCU_PIM_HOST__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CHIP_MCU_PIM_HOST__ PASS — PIM bank-array GPGPU consumer OK")
+    exit(0)
+}

@@ -762,11 +762,11 @@ firmware_evolution:
   decision_2026_05_10: option_C_core_alloc_split_plus_firmware_tree
   audit: doc/firmware_audit_2026_05_10.md
   absorption_targets:
-    hexa-rtsc:        { phase: D+ verified, tests: 70/70 PASS, role: reference impl, dest: firmware/boards/rtsc/ }
-    hexa-chip:        { phase: D iter 5,    role: stdlib/hal consumer,                dest: firmware/boards/chip/ }
-    hexa-cern:        { phase: D2 to E,     role: Rust to hexa migrate during Phase E, dest: firmware/boards/cern/ }
-    hexa-antimatter:  { phase: D workspace, role: multi-vendor,                       dest: firmware/boards/antimatter/ }
-    hexa-space:       { phase: E hardware,  role: KiCad first deferred,               dest: firmware/boards/space/ }
+    hexa-rtsc:        { phase: D+ verified, tests: 70/70 PASS, role: reference impl,    dest: firmware/boards/rtsc/,       status: applied, applied_in: F2, applied_date: "2026-05-10" }
+    hexa-chip:        { phase: D iter 5,    role: stdlib/hal consumer,                  dest: firmware/boards/chip/,       status: applied, applied_in: F4, applied_date: "2026-05-10" }
+    hexa-cern:        { phase: D2 to E,     role: Rust to hexa migrate during Phase E,  dest: firmware/boards/cern/,       status: applied, applied_in: F4, applied_date: "2026-05-10" }
+    hexa-antimatter:  { phase: D workspace, role: multi-vendor,                         dest: firmware/boards/antimatter/, status: applied, applied_in: F4, applied_date: "2026-05-10" }
+    hexa-space:       { phase: E hardware,  role: KiCad first deferred,                 dest: firmware/boards/space/,      status: applied, applied_in: F4, applied_date: "2026-05-10" }
   dependency_direction:
     allowed:
       - "firmware/* -> stdlib/core"
@@ -826,9 +826,75 @@ firmware_evolution:
       absorb_date: "2026-05-10"
     F3: { status: follow-up,     deliverable: thumbv7em-none-eabihf target in compiler/codegen }
     F4:
-      status: follow-up
+      status: this_commit
       deliverable: "firmware/boards/{chip,cern,antimatter,space}/ absorptions"
       pattern: "F2 reference (option_A_full_copy)"
+      mechanic: option_A_full_copy
+      batch_strategy: single_commit_four_boards
+      absorb_date: "2026-05-10"
+      sources:
+        chip:       "~/core/hexa-chip"
+        cern:       "~/core/hexa-cern"
+        antimatter: "~/core/hexa-antimatter"
+        space:      "~/core/hexa-space"
+      destinations:
+        chip:       "firmware/boards/chip/"
+        cern:       "firmware/boards/cern/"
+        antimatter: "firmware/boards/antimatter/"
+        space:      "firmware/boards/space/"
+      excluded: [".git/", "build/", "target/", "*.o", "*.elf", "*.bin",
+                 "state/markers/", "state/*.log", ".DS_Store", "*.swp",
+                 "*~", ".claude/"]
+      files_moved:
+        chip: 274
+        cern: 125
+        antimatter: 129
+        space: 113
+        total: 641
+      tree_size_post_absorb:
+        chip: "6.2 MB"
+        cern: "1.8 MB (was 547 MB upstream — 532 MB cargo target/ excluded)"
+        antimatter: "1.1 MB"
+        space: "1.1 MB"
+        total: "~10.2 MB"
+      loc_moved:
+        chip: "~107k total / ~24k hexa / ~2.2k verilog / 0 rust"
+        cern: "~31k total / ~9.5k hexa / ~1.2k verilog / ~430 rust"
+        antimatter: "~18k total / ~11k hexa / ~360 verilog / ~440 rust"
+        space: "~18k total / ~5k hexa / ~390 verilog / 0 rust"
+      license_preserved:
+        chip: true
+        cern: true
+        antimatter: true
+        space: true
+      citation_preserved:
+        chip: true
+        cern: true
+        antimatter: true
+        space: true
+      banner_prepended:
+        chip: true
+        cern: true
+        antimatter: true
+        space: true
+      selftest_post_absorb:
+        chip: "verify/falsifier_check.hexa PASS — sat-1+sat-2+sat-3 met, 31 verify scripts on disk"
+        cern: "verify/falsifier_check.hexa PASS — 21/21, 100% T1+T2+T3 closure"
+        antimatter: "verify/falsifier_check.hexa PASS — 28/28, 4/4 100% closure"
+        space: "verify/falsifier_check.hexa PASS — 4/4 falsifiers ≥ 67% sat-1 floor"
+        hdl: "deferred (iverilog — toolchain gated)"
+        mcu: "deferred (cargo — toolchain gated)"
+      hal_promotion_shortlist:
+        - "stdlib/hal/control.hexa (PID/Kalman/state-estimator: rtsc+cern+space)"
+        - "stdlib/hal/sensor/{adc,dac,telemetry}.hexa (cern+space)"
+        - "stdlib/hal/timing.hexa (antimatter+cern+space multi-channel)"
+        - "stdlib/hal/power/{thermal,corner}.hexa (rtsc+chip)"
+        - "stdlib/hal/regfile.hexa (cern memory-mapped reg pattern)"
+      caveats:
+        chip: "fully hexa-native (no cargo); cleanest absorb; pre-existing CHANGELOG dominates LOC"
+        cern: "Rust hybrid retained (Cargo.toml + memory.x + src/.rs); 532 MB target/ filtered; Phase E migration pending F3"
+        antimatter: "multi-vendor: KiCad + Verilog + Rust + hexa coexist; selftest/selftest.hexa requires HEXA_ANTIMATTER_ROOT (deferred)"
+        space: "KiCad-first lives above firmware/ tier (top-level pcb/engineering); firmware/ subtree is sim+HDL clean 1:1"
     F5: { status: follow-up,     deliverable: RFC-023 firmware linker spec (linker scripts + .bss/.data init) }
   absorption_mechanic:
     decided_2026_05_10: option_A_full_copy
