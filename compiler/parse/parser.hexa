@@ -10,6 +10,13 @@
 // Expr (kind preserved, fields zero-valued) and skip to the next plausible
 // sync point so the rest of the module still parses. The checker (S0) is
 // what surfaces HX0xxx diagnostics.
+//
+// Multi-file (Stage 1 punch-list Gap 1): `parse()` recursively loads files
+// cited by `import "path"` items and SPLICES their top-level items into the
+// importing Module (Option A — flat splice; namespaced WorldModule deferred
+// as a follow-up). Each spliced Item retains its origin `span.file`, so
+// diagnostics still attribute to the correct source file. Cycles are
+// short-circuited via a module-level visited-set (`p_visited_imports`).
 
 import "../lex/tokens.hexa"
 import "./ast.hexa"
@@ -22,11 +29,16 @@ pub let mut p_tokens = []
 pub let mut p_pos = 0
 pub let mut p_file = ""
 pub let mut p_pending_annotations = []
-// Stage1 punch list Gap 5 — parser-stage diagnostics. Filled by the
-// `expect_brace_*` helpers when a `{`/`}` is missing. Drained by
+// Stage1 punch list Gap 5 + Gap 1 — parser-stage diagnostics. Filled by
+// the `expect_brace_*` helpers when a `{`/`}` is missing (HX0011/HX0012),
+// and when an import path resolves to a missing file (HX0010). Drained by
 // `parse_diags()` so main.hexa can fold them into the master diag list
 // ahead of S1+ checks. Reset on every `parse()` entry.
 pub let mut p_diags: array = []
+// Stage1 punch list Gap 1 — recursive-import visited-set. Holds RESOLVED
+// (canonicalized) absolute-or-repo-relative paths so cycles + diamond
+// re-imports terminate after a single load.
+pub let mut p_visited_imports: [string] = []
 // While true, an ident-followed-by-LBrace is *not* parsed as a struct literal
 // (so `if cond { body }` doesn't read `cond { ... }` as `StructLit`). The
 // guard parsing functions toggle this around their condition expressions.
@@ -1138,7 +1150,136 @@ fn item_is_import(k: ItemKind) -> bool {
     }
 }
 
-pub fn parse(tokens: [Token], file: string) -> Module {
+// ── Multi-file loader helpers (Stage 1 Gap 1) ─────────────────
+// These run inside parse() to walk `import "path"` items, lex+parse the
+// referenced files, and splice their top-level items into the importing
+// Module (Option A — flat splice; per-file namespacing is a follow-up). On
+// a read failure we emit HX0010 (Error) so a typo in an import path is
+// visible at parse time instead of cascading into HX2001 floods downstream.
+
+// Return the directory portion of `path` (everything up to the last `/`),
+// or "." when the path has no separator. Behaves like POSIX `dirname` but
+// without the trailing-slash strip — sufficient for join semantics below.
+fn _import_dirname(path: string) -> string {
+    let cs = path.chars()
+    let n = len(cs)
+    let mut last_slash = -1
+    let mut i = 0
+    while i < n {
+        if cs[i] == '/' { last_slash = i }
+        i = i + 1
+    }
+    if last_slash < 0 { return "." }
+    let mut out = ""
+    let mut j = 0
+    while j < last_slash {
+        out = out + to_string(cs[j])
+        j = j + 1
+    }
+    if len(out) == 0 { return "/" }
+    return out
+}
+
+// Append `rel` to `dir` with a single `/` separator (or pass `rel` through
+// if it already starts with `/`). Stage0-portable — no Path object.
+fn _import_join(dir: string, rel: string) -> string {
+    let rcs = rel.chars()
+    if len(rcs) > 0 && rcs[0] == '/' { return rel }
+    if len(dir) == 0 { return rel }
+    if dir == "." { return rel }
+    return dir + "/" + rel
+}
+
+// Collapse `a/b/../c` → `a/c` and drop redundant `./` segments. Stage0
+// `read_file` accepts un-canonicalized paths, but the visited-set MUST
+// canonicalize so `a/../a/x.hexa` and `a/x.hexa` count as one node.
+fn _import_normalize(path: string) -> string {
+    let mut parts: [string] = []
+    let cs = path.chars()
+    let n = len(cs)
+    let leading_slash = (n > 0 && cs[0] == '/')
+    let mut cur = ""
+    let mut i = 0
+    while i < n {
+        if cs[i] == '/' {
+            if len(cur) > 0 { parts.push(cur) }
+            cur = ""
+        } else {
+            cur = cur + to_string(cs[i])
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 { parts.push(cur) }
+    let mut stack: [string] = []
+    let mut k = 0
+    while k < len(parts) {
+        let seg = parts[k]
+        if seg == "." {
+            // skip
+        } else if seg == ".." {
+            if len(stack) > 0 {
+                let mut next: [string] = []
+                let mut q = 0
+                while q < len(stack) - 1 {
+                    next.push(stack[q])
+                    q = q + 1
+                }
+                stack = next
+            } else if !leading_slash {
+                stack.push(seg)
+            }
+        } else {
+            stack.push(seg)
+        }
+        k = k + 1
+    }
+    let mut out = ""
+    if leading_slash { out = "/" }
+    let mut s = 0
+    while s < len(stack) {
+        if s > 0 { out = out + "/" }
+        out = out + stack[s]
+        s = s + 1
+    }
+    if len(out) == 0 { return "." }
+    return out
+}
+
+// Resolve `import_str` (the string literal inside `import "..."`) against
+// the importer's directory. Relative paths are resolved relative to the
+// directory holding the importing file; absolute paths pass through.
+pub fn _resolve_import_path(importer_file: string, import_str: string) -> string {
+    let dir = _import_dirname(importer_file)
+    let joined = _import_join(dir, import_str)
+    return _import_normalize(joined)
+}
+
+fn _visited_contains(path: string) -> bool {
+    let mut i = 0
+    while i < len(p_visited_imports) {
+        if p_visited_imports[i] == path { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _emit_import_not_found(import_span: Span, resolved_path: string, importer: string) {
+    let mut b = diag_new("HX0010")
+    b = diag_span(b, import_span)
+    b = diag_arg(b, "path", resolved_path)
+    b = diag_arg(b, "importer", importer)
+    p_diags.push(diag_emit(b))
+}
+
+// Internal recursive entry: parses `tokens` belonging to `file` into a list
+// of items + the cited (raw) import strings. This helper saves/restores the
+// cursor state (p_tokens/p_pos/p_file) so a recursive call can safely
+// repoint state at the inner file while the outer stack frame still holds
+// its own slice references.
+fn _parse_module_one(tokens: [Token], file: string) -> Module {
+    let save_tokens = p_tokens
+    let save_pos = p_pos
+    let save_file = p_file
     p_tokens = tokens
     p_pos = 0
     p_file = file
@@ -1158,13 +1299,72 @@ pub fn parse(tokens: [Token], file: string) -> Module {
             advance()
         }
     }
+    p_tokens = save_tokens
+    p_pos = save_pos
+    p_file = save_file
     return Module { file: file, items: items, imports: imports }
 }
 
+// Walk newly-parsed items, find each Import, resolve its path, and load the
+// referenced file. Items spliced from imported files keep their origin
+// `span.file` so diagnostics still attribute correctly. Returns the
+// (possibly extended) item list.
+fn _splice_imported_items(items: [Item], importer: string) -> [Item] {
+    let mut out: [Item] = []
+    let mut i = 0
+    while i < len(items) {
+        let it = items[i]
+        out.push(it)
+        if item_is_import(it.kind) {
+            let resolved = _resolve_import_path(importer, it.name)
+            if _visited_contains(resolved) {
+                // already loaded (cycle or diamond) — skip silently.
+            } else {
+                p_visited_imports.push(resolved)
+                if !file_exists(resolved) {
+                    _emit_import_not_found(it.span, resolved, importer)
+                } else {
+                    let src = to_string(read_file(resolved))
+                    let toks = lex(src, resolved)
+                    let inner = _parse_module_one(toks, resolved)
+                    // Recurse into the inner module's imports first so the
+                    // splice order is leaves-first (depends-of-depends loaded
+                    // before their dependents) — matches self/module_loader
+                    // semantics.
+                    let inner_items = _splice_imported_items(inner.items, resolved)
+                    let mut k = 0
+                    while k < len(inner_items) {
+                        out.push(inner_items[k])
+                        k = k + 1
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn parse(tokens: [Token], file: string) -> Module {
+    p_diags = []
+    p_visited_imports = []
+    // Mark the entry file as visited so a self-import does not loop.
+    let entry_resolved = _import_normalize(file)
+    p_visited_imports.push(entry_resolved)
+    let top = _parse_module_one(tokens, file)
+    let merged_items = _splice_imported_items(top.items, file)
+    // `imports` reflects only the entry file's direct imports — used for
+    // diagnostics/UI. The flat-splice pivot puts the actual cross-file items
+    // in `merged_items`.
+    return Module { file: file, items: merged_items, imports: top.imports }
+}
+
 // Drain parser-stage diagnostics emitted during the most recent parse().
-// Stage1 punch list Gap 5 — main.hexa folds these into the master diag
-// list before S1+ runs so block-shape errors surface as HX0011/HX0012
-// rather than as a downstream type-cascade.
+// Stage1 punch list Gap 5 + Gap 1 — main.hexa folds these into the master
+// diag list before S1+ runs so block-shape errors surface as HX0011/HX0012
+// and import-not-found surfaces as HX0010, rather than as a downstream
+// type-cascade or HX2001 floods for every undefined symbol from the
+// missing module.
 pub fn parse_diags() -> array {
     return p_diags
 }

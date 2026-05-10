@@ -406,16 +406,22 @@ let source = to_string(read_file(source_path))
 
 let tokens = lex(source, source_path)
 let module = parse(tokens, source_path)
+if verbose {
+    eprintln("hexa-compiler: parsed " + to_string(len(module.items))
+        + " top-level item(s) (multi-file flat-splice; Stage 1 Gap 1)")
+}
 
 // Atlas: A4 wired — real index from compiler/atlas/embedded.gen.hexa.
 let atlas = _load_atlas()
 
 let mut diags: array = []
 
-// Stage1 punch list Gap 5: drain parser-stage diagnostics (HX0011/HX0012)
-// FIRST so brace-shape errors surface ahead of any downstream cascade. The
-// parser still produces a best-effort Module on miss, so later passes still
-// run — multi-error policy per RFC-019 §6.
+// Stage1 punch list Gap 5 + Gap 1: drain parser-stage diagnostics
+// (HX0011/HX0012 brace-shape, HX0010 import-not-found) FIRST so parse-time
+// errors surface ahead of any downstream cascade. The parser still produces
+// a best-effort Module on miss, so later passes still run — multi-error
+// policy per RFC-019 §6. A missing import surfaces as a precise S0 error
+// instead of cascading into HX2001 floods downstream.
 let r0 = parse_diags()
 let mut k0 = 0
 while k0 < len(r0) { diags.push(r0[k0]); k0 = k0 + 1 }

@@ -85,6 +85,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX0010",
+        title: "import not found",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "import `{path}` not found (resolved from `{importer}`)",
+        explain: "The parser tried to load a file cited by an `import \"path\"` directive but `read_file` reported the resolved path does not exist. Common causes: typo in the path string, missing file, wrong directory level (`../` count off by one). Paths are resolved relative to the file containing the import, then normalized (./, ../ collapsed). Stage1 punch list Gap 1 — added when the parser learned to recursively load imports instead of treating them as opaque names.",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
         code: "HX0011",
         title: "expected opening brace",
         severity: Severity::Error,
