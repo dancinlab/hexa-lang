@@ -1,0 +1,236 @@
+// HEXA Native Compiler — RFC-021 daemon v0 server smoke test
+//
+// @version 0.1.0
+// @capabilities [exec, fs_read, fs_write]
+//
+// End-to-end smoke test for `compiler/daemon/server.hexa`:
+//   1. Spawn `hexa run compiler/main.hexa daemon serve --socket=<tmp>`
+//      as a background process.
+//   2. Wait for the socket to appear.
+//   3. Send `{"op":"atlas.lookup","kind":"P","id":"alpha"}` via `nc -U`.
+//   4. Verify response contains "status":"ok" and the alpha node's kind.
+//   5. Send `{"op":"unknown_thing"}` → expect "status":"error","error":"unknown_op".
+//   6. Send `{"op":"shutdown"}` → expect "status":"ok".
+//   7. Verify daemon process exits cleanly within 5s.
+//   8. exit(0) on PASS, exit(1) on any FAIL.
+//
+// Run:
+//   hexa run compiler/daemon/server_test.hexa
+//
+// This test exercises the v0 socat-shellout path. It requires:
+//   - `socat` on PATH (homebrew on macOS, apt-get on linux)
+//   - `nc -U` (BSD nc on macOS, openbsd-nc on linux)
+//   - `hexa` interpreter on PATH
+
+import "./proto.hexa"
+
+// --- helpers ---------------------------------------------------------------
+
+fn _check_test(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn _tmp_sock_path() -> string {
+    let t = env("TMPDIR")
+    let mut base = "/tmp"
+    if len(t) > 0 {
+        let cs = t.chars()
+        let n = len(cs)
+        if n > 0 && cs[n - 1] == '/' {
+            let mut tb = ""
+            let mut i = 0
+            while i < n - 1 {
+                tb = tb + to_string(cs[i])
+                i = i + 1
+            }
+            base = tb
+        } else {
+            base = t
+        }
+    }
+    let pid = exec("echo $$").trim()
+    let stamp = exec("date +%s").trim()
+    return base + "/hexa_daemon_test_" + pid + "_" + stamp + ".sock"
+}
+
+// _send_one — send a single JSON line to the daemon and return the
+// response body. Uses `nc -U` with a short timeout. The trailing
+// newline is added by `printf` so the daemon's `head -n 1` handler
+// terminates cleanly.
+fn _send_one(sock: string, body: string) -> string {
+    // Escape single quotes in body for shell-safe printf.
+    let cs = body.chars()
+    let n = len(cs)
+    let mut esc = ""
+    let mut i = 0
+    while i < n {
+        let c = cs[i]
+        if c == '\'' {
+            esc = esc + "'\\''"
+        } else {
+            esc = esc + to_string(c)
+        }
+        i = i + 1
+    }
+    // -w 5 caps the wait so a wedged daemon doesn't hang the test.
+    // -q 1 (BSD nc) closes after 1s of stdin EOF, ensuring response is read.
+    let cmd = "printf '" + esc + "\\n' | nc -U -w 5 '" + sock + "'"
+    return exec(cmd)
+}
+
+// _wait_for_socket — poll up to `max_ms` ms for the socket file to
+// appear. Returns true on success.
+fn _wait_for_socket(sock: string, max_ms: i64) -> bool {
+    let mut waited = 0
+    while waited < max_ms {
+        if file_exists(sock) { return true }
+        let _s = exec("sleep 0.1")
+        waited = waited + 100
+    }
+    return false
+}
+
+// _wait_for_socket_gone — poll up to `max_ms` ms for the socket file
+// to disappear. Used after shutdown to verify graceful daemon exit.
+fn _wait_for_socket_gone(sock: string, max_ms: i64) -> bool {
+    let mut waited = 0
+    while waited < max_ms {
+        if !file_exists(sock) { return true }
+        let _s = exec("sleep 0.1")
+        waited = waited + 100
+    }
+    return false
+}
+
+fn main() {
+    println("RFC-021 daemon v0 — server smoke test")
+
+    let fails = []
+
+    // Pre-flight: socat and nc must be on PATH.
+    let socat = exec("command -v socat 2>/dev/null").trim()
+    let nc = exec("command -v nc 2>/dev/null").trim()
+    _check_test("socat on PATH", len(socat) > 0, fails)
+    _check_test("nc on PATH",    len(nc) > 0,    fails)
+    if len(fails) > 0 {
+        println("RESULT: SKIP — required tools missing")
+        exit(0)
+    }
+
+    let sock = _tmp_sock_path()
+    println("  using socket: " + sock)
+
+    // Spawn the daemon. We discover the repo root via pwd; the test is
+    // expected to run from the repo root. We prefer a direct local
+    // hexa_real binary path over the `hexa` shell wrapper to avoid any
+    // remote-dispatcher in dev environments swallowing our flags.
+    let cwd = exec("pwd").trim()
+    let home_dir = env("HOME")
+    let mut hexa_bin = "hexa"
+    let cand_a = home_dir + "/.hx/bin/hexa_real"
+    let cand_b = home_dir + "/.hx/packages/hexa/hexa.real"
+    if file_exists(cand_a) {
+        hexa_bin = cand_a
+    } else if file_exists(cand_b) {
+        hexa_bin = cand_b
+    } else {
+        hexa_bin = "hexa"
+    }
+    let invocation = hexa_bin + " run "
+    let daemon_log = sock + ".daemon.log"
+    let daemon_pid_file = sock + ".test.pid"
+    let spawn_cmd = invocation + cwd + "/compiler/main.hexa "
+        + "daemon serve --socket=" + sock + " --idle=10 "
+        + ">'" + daemon_log + "' 2>&1 & "
+        + "echo $! > '" + daemon_pid_file + "'"
+    let _spawn = exec(spawn_cmd)
+
+    // Wait for socat to bind.
+    let bound = _wait_for_socket(sock, 5000)
+    _check_test("daemon bound socket within 5s", bound, fails)
+    if !bound {
+        println("  daemon log:")
+        if file_exists(daemon_log) {
+            println(to_string(read_file(daemon_log)))
+        }
+        println("RESULT: FAIL — daemon did not start")
+        let _cleanup = exec("rm -f '" + sock + "' '" + daemon_log + "' '" + daemon_pid_file + "' 2>/dev/null")
+        exit(1)
+    }
+
+    // 1) atlas.lookup for "alpha" (present in the embedded fixture).
+    let r1 = _send_one(sock, "{\"op\":\"atlas.lookup\",\"kind\":\"P\",\"id\":\"alpha\"}")
+    println("  resp(atlas.lookup alpha): " + r1.trim())
+    let p1 = decode_response(r1)
+    _check_test("atlas.lookup status==ok",        p1.status == "ok",          fails)
+    _check_test("atlas.lookup result.id==alpha",  p1.result_id == "alpha",    fails)
+    _check_test("atlas.lookup result.kind==P",    p1.result_kind == "P",      fails)
+
+    // 2) atlas.lookup miss — node not present, but daemon still returns ok
+    // (with empty kind/raw). This is the v0 contract.
+    let r2 = _send_one(sock, "{\"op\":\"atlas.lookup\",\"kind\":\"P\",\"id\":\"ghost-noop\"}")
+    println("  resp(atlas.lookup ghost): " + r2.trim())
+    let p2 = decode_response(r2)
+    _check_test("atlas.lookup miss status==ok",   p2.status == "ok",          fails)
+    _check_test("atlas.lookup miss kind==\"\"",   p2.result_kind == "",       fails)
+
+    // 3) unknown op
+    let r3 = _send_one(sock, "{\"op\":\"definitely_not_a_real_op\"}")
+    println("  resp(unknown op): " + r3.trim())
+    let p3 = decode_response(r3)
+    _check_test("unknown_op status==error",       p3.status == "error",       fails)
+    _check_test("unknown_op error==unknown_op",   p3.error == "unknown_op",   fails)
+
+    // 4) shutdown
+    let r4 = _send_one(sock, "{\"op\":\"shutdown\"}")
+    println("  resp(shutdown): " + r4.trim())
+    let p4 = decode_response(r4)
+    _check_test("shutdown status==ok",            p4.status == "ok",          fails)
+
+    // 5) daemon should exit and remove the socket within ~5s.
+    let gone = _wait_for_socket_gone(sock, 5000)
+    _check_test("daemon removed socket on shutdown", gone, fails)
+
+    // Cleanup any straggler files.
+    let _c1 = exec("rm -f '" + sock + "' '" + daemon_log + "' '" + daemon_pid_file + "' '" + sock + ".pid' '" + sock + ".socat.log' '" + sock + ".active' '" + sock + ".shutdown' 2>/dev/null")
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        if file_exists(daemon_log) {
+            println("")
+            println("daemon log:")
+            println(to_string(read_file(daemon_log)))
+        }
+        exit(1)
+    }
+}
+
+// --- is_main guard ---------------------------------------------------------
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/server_test.hexa") { return true }
+    if script == "server_test.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}

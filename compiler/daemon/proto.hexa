@@ -1,0 +1,258 @@
+// HEXA Native Compiler — RFC-021 daemon v0: wire protocol codec
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hand-rolled, dependency-free JSON encode/decode for the v0 daemon
+// message types only. RFC-021 §4.1/§4.2 describes the full v0 schema,
+// but this codec covers JUST the subset needed for the v0 first cut:
+//
+//   Request  : {"op": "atlas.lookup", "kind": "P", "id": "alpha"}
+//   Request  : {"op": "shutdown"}
+//   Response : {"status": "ok", "result": {"kind": "P", "id": "alpha", "raw": "..."}}
+//   Response : {"status": "ok"}                      (shutdown ack)
+//   Response : {"status": "error", "error": "unknown_op"}
+//
+// Why hand-rolled: stdlib/std/json exists but stage0 import resolution
+// across the compiler/ tree is fragile, and v0 only needs three string
+// fields per request and three per response. A 120-LOC scanner is
+// strictly cheaper than dragging in the full JSON implementation, and
+// keeps the daemon module self-contained for the Phase 0 interpreter
+// build (RFC-021 §9 Phase 0).
+//
+// Wire shape: line-delimited JSON, one request per line, one response
+// per line — RFC-021 §4 "no framing layer beyond newline".
+
+// --- types -----------------------------------------------------------------
+
+// Parsed request. Empty-string fields signal "absent". The parser is
+// permissive: unknown keys are silently dropped (clients may ride
+// future ops on the same wire).
+pub struct DaemonRequest {
+    op: string,    // "atlas.lookup" | "shutdown" | other
+    kind: string,  // "P" | "C" | "L" | "E" — atlas.lookup only
+    id: string     // atlas node id — atlas.lookup only
+}
+
+// Response payload — encoded by daemon, decoded by tests/clients.
+// `error` is empty when status == "ok".
+pub struct DaemonResponse {
+    status: string,      // "ok" | "error"
+    error: string,       // populated when status == "error"
+    result_kind: string, // atlas.lookup only — echoes request kind
+    result_id: string,   // atlas.lookup only — echoes request id
+    result_raw: string   // atlas.lookup only — node.raw, possibly ""
+}
+
+// --- JSON string helpers ---------------------------------------------------
+
+fn _json_escape_proto(s: string) -> string {
+    let cs = s.chars()
+    let n = len(cs)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = cs[i]
+        if c == '\\' {
+            out = out + "\\\\"
+        } else if c == '"' {
+            out = out + "\\\""
+        } else if c == '\n' {
+            out = out + "\\n"
+        } else if c == '\r' {
+            out = out + "\\r"
+        } else if c == '\t' {
+            out = out + "\\t"
+        } else {
+            out = out + to_string(c)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// _scan_string — starting at a `"` index, scan a JSON string literal
+// and return the unescaped contents plus the index AFTER the closing
+// `"`. On malformed input returns ("", -1).
+fn _scan_string_proto(cs: array, start: i64) -> array {
+    let n = len(cs)
+    if start >= n { return ["", to_string(-1)] }
+    if cs[start] != '"' { return ["", to_string(-1)] }
+    let mut out = ""
+    let mut i = start + 1
+    while i < n {
+        let c = cs[i]
+        if c == '"' {
+            return [out, to_string(i + 1)]
+        }
+        if c == '\\' {
+            if i + 1 >= n { return ["", to_string(-1)] }
+            let esc = cs[i + 1]
+            if esc == '"' { out = out + "\"" }
+            else if esc == '\\' { out = out + "\\" }
+            else if esc == 'n' { out = out + "\n" }
+            else if esc == 'r' { out = out + "\r" }
+            else if esc == 't' { out = out + "\t" }
+            else if esc == '/' { out = out + "/" }
+            else { out = out + to_string(esc) }
+            i = i + 2
+        } else {
+            out = out + to_string(c)
+            i = i + 1
+        }
+    }
+    return ["", to_string(-1)]
+}
+
+// _skip_ws — advance past JSON whitespace.
+fn _skip_ws_proto(cs: array, start: i64) -> i64 {
+    let n = len(cs)
+    let mut i = start
+    while i < n {
+        let c = cs[i]
+        if c != ' ' && c != '\t' && c != '\n' && c != '\r' { return i }
+        i = i + 1
+    }
+    return i
+}
+
+// --- public: decode request ------------------------------------------------
+
+// decode_request — parse a single JSON object on a line. Returns a
+// DaemonRequest with op="" on malformed input (caller dispatches to the
+// `unknown_op` error path).
+pub fn decode_request(line: string) -> DaemonRequest {
+    let cs = line.chars()
+    let n = len(cs)
+    let mut req = DaemonRequest { op: "", kind: "", id: "" }
+    let mut i = _skip_ws_proto(cs, 0)
+    if i >= n || cs[i] != '{' { return req }
+    i = i + 1
+    while i < n {
+        i = _skip_ws_proto(cs, i)
+        if i >= n { return req }
+        if cs[i] == '}' { return req }
+        let key_pair = _scan_string_proto(cs, i)
+        let key = to_string(key_pair[0])
+        let key_end = to_int(to_string(key_pair[1]))
+        if key_end < 0 { return req }
+        i = _skip_ws_proto(cs, key_end)
+        if i >= n || cs[i] != ':' { return req }
+        i = _skip_ws_proto(cs, i + 1)
+        if i >= n { return req }
+        // For v0 every field we care about is a string.
+        if cs[i] != '"' {
+            // Skip an unknown non-string value defensively (numbers, bools,
+            // objects). We only support string-typed v0 fields.
+            return req
+        }
+        let val_pair = _scan_string_proto(cs, i)
+        let val = to_string(val_pair[0])
+        let val_end = to_int(to_string(val_pair[1]))
+        if val_end < 0 { return req }
+        if key == "op" { req.op = val }
+        else if key == "kind" { req.kind = val }
+        else if key == "id" { req.id = val }
+        i = _skip_ws_proto(cs, val_end)
+        if i < n && cs[i] == ',' { i = i + 1 }
+    }
+    return req
+}
+
+// --- public: encode response -----------------------------------------------
+
+// encode_ok_lookup — atlas.lookup success response.
+pub fn encode_ok_lookup(kind: string, id: string, raw: string) -> string {
+    return "{\"status\":\"ok\",\"result\":{\"kind\":\""
+        + _json_escape_proto(kind)
+        + "\",\"id\":\""
+        + _json_escape_proto(id)
+        + "\",\"raw\":\""
+        + _json_escape_proto(raw)
+        + "\"}}"
+}
+
+// encode_ok_simple — bare {"status":"ok"} for shutdown ack and similar.
+pub fn encode_ok_simple() -> string {
+    return "{\"status\":\"ok\"}"
+}
+
+// encode_error — error response with a machine-readable code.
+pub fn encode_error(err: string) -> string {
+    return "{\"status\":\"error\",\"error\":\""
+        + _json_escape_proto(err)
+        + "\"}"
+}
+
+// --- public: decode response (used by tests) -------------------------------
+
+// decode_response — minimal scanner for the three response shapes the v0
+// daemon emits. Recognised keys: status, error, and the inner result
+// {kind, id, raw}. Returns a DaemonResponse with status="" on malformed.
+pub fn decode_response(line: string) -> DaemonResponse {
+    let cs = line.chars()
+    let n = len(cs)
+    let mut resp = DaemonResponse {
+        status: "",
+        error: "",
+        result_kind: "",
+        result_id: "",
+        result_raw: ""
+    }
+    let mut i = _skip_ws_proto(cs, 0)
+    if i >= n || cs[i] != '{' { return resp }
+    i = i + 1
+    while i < n {
+        i = _skip_ws_proto(cs, i)
+        if i >= n { return resp }
+        if cs[i] == '}' { return resp }
+        let key_pair = _scan_string_proto(cs, i)
+        let key = to_string(key_pair[0])
+        let key_end = to_int(to_string(key_pair[1]))
+        if key_end < 0 { return resp }
+        i = _skip_ws_proto(cs, key_end)
+        if i >= n || cs[i] != ':' { return resp }
+        i = _skip_ws_proto(cs, i + 1)
+        if i >= n { return resp }
+        if cs[i] == '"' {
+            let val_pair = _scan_string_proto(cs, i)
+            let val = to_string(val_pair[0])
+            let val_end = to_int(to_string(val_pair[1]))
+            if val_end < 0 { return resp }
+            if key == "status" { resp.status = val }
+            else if key == "error" { resp.error = val }
+            i = val_end
+        } else if cs[i] == '{' && key == "result" {
+            // Inline scan of the result sub-object — same key/value
+            // shape, three known keys.
+            i = i + 1
+            while i < n {
+                i = _skip_ws_proto(cs, i)
+                if i >= n { return resp }
+                if cs[i] == '}' { i = i + 1; break }
+                let kp = _scan_string_proto(cs, i)
+                let k2 = to_string(kp[0])
+                let ke = to_int(to_string(kp[1]))
+                if ke < 0 { return resp }
+                i = _skip_ws_proto(cs, ke)
+                if i >= n || cs[i] != ':' { return resp }
+                i = _skip_ws_proto(cs, i + 1)
+                if i >= n || cs[i] != '"' { return resp }
+                let vp = _scan_string_proto(cs, i)
+                let v2 = to_string(vp[0])
+                let ve = to_int(to_string(vp[1]))
+                if ve < 0 { return resp }
+                if k2 == "kind" { resp.result_kind = v2 }
+                else if k2 == "id" { resp.result_id = v2 }
+                else if k2 == "raw" { resp.result_raw = v2 }
+                i = _skip_ws_proto(cs, ve)
+                if i < n && cs[i] == ',' { i = i + 1 }
+            }
+        } else {
+            return resp
+        }
+        i = _skip_ws_proto(cs, i)
+        if i < n && cs[i] == ',' { i = i + 1 }
+    }
+    return resp
+}
