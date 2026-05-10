@@ -112,3 +112,12 @@
     Priority ★ (nice-to-have, NOT blocking — wilson works without it via
     `wilson build --with X` static absorption). RFC draft in detail file.
   detail: patches/g7-hexa-ld-dlopen.md
+
+- id: wilson-needs-hexa-real-promotion
+  source: wilson session (ssh mac observation) — RFC-022 G2 landed in source (9210e024) but ~/.hx/bin/hexa_real still the May-2 build; the rebuilt hexa.real OOMs/hangs on test_async_codegen.
+  trees: [build-artifact]
+  compiler_impact: none expected — rebuild + OOM-stabilize + promote ~/.hx/bin/hexa_real. (if the rebuild surfaces a bug, that's the real work.)
+  selftest_delta: 0 (existing self/test_async_codegen.hexa should go 0/4 -> 4/4 once the deployed binary has the AwaitExpr branches)
+  status: pending_external
+  opened: 2026-05-10
+  detail: patches/wilson-needs-hexa-real-promotion.md
