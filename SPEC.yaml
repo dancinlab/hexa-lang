@@ -690,8 +690,88 @@ fork_storm_prevention:
       - { name: ls,     count:  56, intrinsic: list_dir,                effort: M, status: PENDING }
       - { name: cd,     count:  45, intrinsic: call_site_rewrite,       effort: M, status: PENDING }
       - { name: git,    count:  38, intrinsic: keep_exec_v0,            effort: L, status: PENDING }
+      - { name: curl,   count:   "?", intrinsic: http_request_libcurl_FFI, effort: M, status: PENDING_FFI, v0: shell_fork_via_stdlib_http_post_with_headers, v1: libcurl_C_FFI_via_c_ffi_hexa, v2: native_http11_emit_plus_tls_handshake_FFI }
     absorbed_site_count_v0: 638  # 160+123+110+85+84+78 — categories with v0 intrinsic shipped
     pending_site_count:     197  # 58+56+45+38 — categories awaiting future batches
+    note_curl: |
+      curl is added by the stdlib_evolution.http v1.1 patch
+      (http_post_with_headers, JSON-RPC enabler — bitcoind, generic API).
+      v0 is curl shellout (matches existing http_get_with_headers); v1
+      replaces with libcurl C-FFI via stdlib/c_ffi.hexa (depends on
+      stdlib_evolution.c_ffi v1.1 helpers c_alloc_ptr_slot + c_load_ptr).
+      Site count is unknown until http_post_with_headers ships and gets
+      adopted; tracking deferred to next inventory pass.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stdlib evolution policy (Decision 2026-05-09)
+# ─────────────────────────────────────────────────────────────────────────────
+# stdlib modules version independently of the compiler. Each module owns
+# its own backward-compat contract; additive helper APIs are accepted via
+# small focused commits with a selftest delta and an .ai.md doc append.
+# Major rewrites or breaking shape changes require an RFC.
+#
+# Documented patches in flight (2026-05-10) — orpheus key-recovery forge
+# engine downstream consumers; FFI/HTTP enablers usable by any hexa-lang
+# client (not orpheus-specific):
+stdlib_evolution:
+  decision_2026_05_09: separate_per_module_versioning
+  rationale: |
+    The compiler binary versions on the bootstrap stage cycle (stage0 →
+    stage3 fixed-point). stdlib helpers evolve faster — each module gets
+    its own SemVer-light track. Additive helpers land via small commits;
+    breaking shape changes go through an RFC.
+  policy:
+    - additive helpers       — small focused commit, +N selftest, .ai.md append
+    - breaking shape change  — requires RFC
+    - new module             — requires RFC + module .ai.md skeleton
+    - dependency direction   — stdlib MAY depend on stdlib; compiler/ MAY
+                               depend on stdlib; stdlib MUST NOT depend on
+                               compiler/ (avoids bootstrap cycle)
+  modules_in_flight:
+    c_ffi:
+      file: stdlib/c_ffi.hexa
+      planned_version: v1.1
+      planned_additions:
+        - { name: c_alloc_ptr_slot, signature: "() -> int",            purpose: "heap-allocate one void* slot, return address" }
+        - { name: c_load_ptr,       signature: "(slot: int) -> int",   purpose: "read stored void* at slot, return pointer-sized int" }
+      use_case_primary: |
+        Out-pointer C APIs like duckdb_open_ext(path, &db_handle, ...).
+        Without an out-pointer slot, hexa cannot pass a writable address
+        to C; subprocess fallback adds 100ms+ per call.
+      compat: backward 100% (additive helpers, no signature changes)
+      downstream_consumers:
+        - orpheus recovery/module/duckdb_native.hexa (commit ffb184b)
+          — subprocess 136ms → FFI 1-3ms (17-50× speedup)
+      forge_engine_link: forge.cond.NATIVE_DUCKDB
+    http:
+      file: stdlib/http.hexa
+      current_version: v1.0.0 (14 http_* GET symbols)
+      planned_version: v1.1
+      planned_additions:
+        - { name: http_post_with_headers, signature: "(url: str, headers: [str], body: str, timeout_s: int) -> Response", purpose: "POST + JSON body — JSON-RPC enabler" }
+      implementation_path:
+        v0_path_c: shell_fork_curl  # mirrors existing http_get_with_headers
+        v1_path_b: libcurl_C_FFI    # depends on c_ffi v1.1 helpers
+        v2_path_a: native_http_emit # syscall + tls_handshake; defer
+      use_case_primary: |
+        bitcoind RPC (localhost:8332): subprocess bitcoin-cli 15-30ms vs
+        persistent connection 3-7ms (5-10× speedup). Generic JSON-RPC
+        clients benefit symmetrically.
+      compat: backward 100% (additive POST API; GET unchanged)
+      downstream_consumers:
+        - orpheus recovery/module/method_bitcoin_core_rpc.hexa
+      forge_engine_link: forge.cond.NATIVE_BTC_RPC
+      fork_storm_link: |
+        v0 curl shellout incurs +1 fork per call. Tracked in
+        fork_storm_prevention.exec_call_inventory.curl. Migration to
+        v1 libcurl FFI removes the fork (depends on c_ffi v1.1 helpers).
+  selftest_invariant: |
+    Every additive helper bumps the per-module selftest count and
+    keeps overall stdlib selftest exit 0. Example: c_ffi 35 → 36;
+    http 14 → 15.
+  doc_invariant: |
+    Each helper appends a signature + use-case block to the module's
+    .ai.md (e.g., stdlib/c_ffi.ai.md, stdlib/http.ai.md).
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Open questions (NOT decisions)
