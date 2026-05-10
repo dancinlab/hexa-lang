@@ -1,0 +1,238 @@
+// tool/inbox_sync.hexa — verifier for incoming/PATCHES.yaml
+//
+// @tool(slug="inbox_sync", desc="verify incoming/PATCHES.yaml entries — well-formedness + source_files exist")
+// @usage(hexa tool/inbox_sync.hexa)
+// @exit_codes(0=all entries well-formed, 1=at least one entry malformed, 2=manifest missing)
+//
+// PURPOSE
+//   Read incoming/PATCHES.yaml. For each entry, check:
+//     status pending          — well-formed entry; report "head_or_main"
+//                               (no SHA verification — the inbox trusts
+//                                the recorded source_commit at this stage)
+//     status applied          — verify every source_files[] path exists
+//                               on disk; report "source_present" or
+//                               "missing_file"
+//     status pending_external — just report "awaiting"
+//     status archived         — report "archived" (these usually live
+//                               in manifest_log.jsonl, not PATCHES.yaml,
+//                               but tolerate the marker if present)
+//   Print a status table:
+//     id / status / compiler_impact / verdict
+//   Returns 0 if every entry is well-formed (id + status present), 1 if
+//   any entry is missing a required field or any applied entry has a
+//   missing source file, 2 if the manifest itself cannot be read.
+//
+// CONSTRAINTS
+//   This is a CHECK tool. It never writes to PATCHES.yaml or any other
+//   file. Promotion / archival is the job of tool/inbox_promote.hexa.
+
+fn _str(x) -> string {
+    let t = type_of(x)
+    if t == "str" || t == "string" { return x }
+    return to_string(x)
+}
+
+fn _trim_right(s: string) -> string {
+    let mut n = len(s)
+    while n > 0 {
+        let c = s.substring(n - 1, n)
+        if c == " " || c == "\t" || c == "\r" { n = n - 1 } else { break }
+    }
+    return s.substring(0, n)
+}
+
+fn _starts_with(s: string, prefix: string) -> bool {
+    let n = len(prefix)
+    if len(s) < n { return false }
+    return s.substring(0, n) == prefix
+}
+
+fn _file_exists(path: string) -> bool {
+    let r = _str(exec("test -e '" + path + "' && echo y || echo n")).trim()
+    return r == "y"
+}
+
+// _leading_spaces(s) -> count of ASCII space characters at start
+fn _leading_spaces(s: string) -> int {
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        if s.substring(i, i + 1) != " " { break }
+        i = i + 1
+    }
+    return i
+}
+
+// _kv(line) -> ["key", "value"] or [] for non-key-value lines.
+// Expects "  key: value" form with arbitrary leading spaces.
+fn _kv(line: string) -> array {
+    let stripped = line.trim_start()
+    if len(stripped) == 0 { return [] }
+    if _starts_with(stripped, "#") { return [] }
+    let colon = stripped.index_of(":")
+    if colon < 0 { return [] }
+    let k = stripped.substring(0, colon).trim()
+    let v = _trim_right(stripped.substring(colon + 1, len(stripped))).trim_start()
+    return [k, v]
+}
+
+// Parse incoming/PATCHES.yaml into an array of entries.
+// Each entry is a map-like array of [key, value] pairs. Multi-line
+// "source_files" lists ("- path") and pipe-block scalars are flattened
+// into a single comma-joined string for reporting purposes.
+fn _parse_manifest(path: string) -> array {
+    let raw = _str(read_file(path))
+    let lines = split(raw, "\n")
+    let mut entries = []
+    let mut cur = []
+    let mut in_list_key = ""
+    let mut list_buf = ""
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        let t = line.trim_start()
+        if len(t) == 0 || _starts_with(t, "#") {
+            i = i + 1
+            continue
+        }
+        // New entry begins with "- id:" at column 0..2.
+        if _starts_with(t, "- id:") {
+            // flush pending list
+            if in_list_key != "" {
+                cur.push([in_list_key, list_buf])
+                in_list_key = ""
+                list_buf = ""
+            }
+            if len(cur) > 0 { entries.push(cur) }
+            cur = []
+            let v = _trim_right(t.substring(5, len(t))).trim_start()
+            cur.push(["id", v])
+            i = i + 1
+            continue
+        }
+        // List continuation under a "key:" with nested "- value" lines.
+        if _starts_with(t, "- ") && in_list_key != "" {
+            let v = t.substring(2, len(t)).trim()
+            if len(list_buf) > 0 { list_buf = list_buf + ", " }
+            list_buf = list_buf + v
+            i = i + 1
+            continue
+        }
+        // Otherwise: regular key: value within current entry.
+        let kv = _kv(line)
+        if len(kv) == 2 {
+            // flush prior list-key block if we left it
+            if in_list_key != "" {
+                cur.push([in_list_key, list_buf])
+                in_list_key = ""
+                list_buf = ""
+            }
+            let k = kv[0]
+            let v = kv[1]
+            if v == "" {
+                // either start of a list, or a folded/literal block —
+                // record as list-pending; a block scalar will produce
+                // no "- " lines so the buf stays empty.
+                in_list_key = k
+                list_buf = ""
+            } else {
+                cur.push([k, v])
+            }
+        }
+        i = i + 1
+    }
+    if in_list_key != "" { cur.push([in_list_key, list_buf]) }
+    if len(cur) > 0 { entries.push(cur) }
+    return entries
+}
+
+fn _get(entry: array, key: string) -> string {
+    let mut i = 0
+    while i < len(entry) {
+        let kv = entry[i]
+        if kv[0] == key { return kv[1] }
+        i = i + 1
+    }
+    return ""
+}
+
+// Pad-right helper for table formatting.
+fn _pad(s: string, width: int) -> string {
+    let mut out = s
+    while len(out) < width { out = out + " " }
+    return out
+}
+
+fn _truncate(s: string, width: int) -> string {
+    if len(s) <= width { return s }
+    if width <= 3 { return s.substring(0, width) }
+    return s.substring(0, width - 3) + "..."
+}
+
+// ── main ───────────────────────────────────────────────
+let MANIFEST = "incoming/PATCHES.yaml"
+
+if !_file_exists(MANIFEST) {
+    println("inbox_sync: manifest not found: " + MANIFEST)
+    exit(2)
+}
+
+let entries = _parse_manifest(MANIFEST)
+println("inbox_sync — " + to_string(len(entries)) + " entry(ies) in " + MANIFEST)
+println("")
+println(_pad("id", 36) + _pad("status", 20) + _pad("compiler_impact", 48) + "verdict")
+println(_pad("--", 36) + _pad("------", 20) + _pad("---------------", 48) + "-------")
+
+let mut bad = 0
+let mut idx = 0
+while idx < len(entries) {
+    let e = entries[idx]
+    let id = _get(e, "id")
+    let status = _get(e, "status")
+    let impact = _get(e, "compiler_impact")
+    let files_csv = _get(e, "source_files")
+
+    let mut verdict = ""
+    if id == "" || status == "" {
+        verdict = "MALFORMED (missing id or status)"
+        bad = bad + 1
+    } else if status == "applied" {
+        // verify each source_files entry exists
+        let parts = split(files_csv, ", ")
+        let mut missing = ""
+        let mut p = 0
+        while p < len(parts) {
+            let path = parts[p].trim()
+            if path != "" && !_file_exists(path) {
+                if missing != "" { missing = missing + "; " }
+                missing = missing + path
+            }
+            p = p + 1
+        }
+        if missing == "" { verdict = "source_present" }
+        else { verdict = "MISSING: " + missing; bad = bad + 1 }
+    } else if status == "pending" {
+        verdict = "head_or_main (manual SHA check)"
+    } else if status == "pending_external" {
+        verdict = "awaiting (external session)"
+    } else if status == "archived" {
+        verdict = "archived (should live in manifest_log.jsonl)"
+    } else {
+        verdict = "UNKNOWN status: " + status
+        bad = bad + 1
+    }
+
+    println(_pad(_truncate(id, 35), 36) +
+            _pad(_truncate(status, 19), 20) +
+            _pad(_truncate(impact, 47), 48) +
+            verdict)
+    idx = idx + 1
+}
+
+println("")
+if bad > 0 {
+    println("inbox_sync: " + to_string(bad) + " issue(s) found")
+    exit(1)
+}
+println("inbox_sync: all entries well-formed")
+exit(0)

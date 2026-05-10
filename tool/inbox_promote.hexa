@@ -1,0 +1,322 @@
+// tool/inbox_promote.hexa — archiver for matured incoming/PATCHES.yaml entries
+//
+// @tool(slug="inbox_promote", desc="archive applied PATCHES.yaml entries older than N_DAYS into manifest_log.jsonl")
+// @usage(hexa tool/inbox_promote.hexa [--days N] [--dry-run])
+// @exit_codes(0=ok or no-op, 1=error reading/writing inbox files, 2=arg error)
+//
+// PURPOSE
+//   Walks incoming/PATCHES.yaml. For every entry whose status is
+//   `applied` and whose `applied_at` (YYYY-MM-DD) is older than
+//   `today - N_DAYS` (default 14), the tool:
+//     1. appends a JSON line to incoming/manifest_log.jsonl with the
+//        original fields plus status="archived", promoted_at=<today>,
+//     2. removes the matured entry from PATCHES.yaml.
+//
+//   Entries with status pending / pending_external are never touched.
+//   Files outside `incoming/` are never modified.
+//
+// CONSERVATIVE
+//   --dry-run prints the would-archive list and exits 0 without writing
+//   anything. The default mode also performs a single backup of
+//   PATCHES.yaml at incoming/PATCHES.yaml.bak before rewriting.
+
+fn _str(x) -> string {
+    let t = type_of(x)
+    if t == "str" || t == "string" { return x }
+    return to_string(x)
+}
+
+fn _starts_with(s: string, prefix: string) -> bool {
+    let n = len(prefix)
+    if len(s) < n { return false }
+    return s.substring(0, n) == prefix
+}
+
+fn _trim_right(s: string) -> string {
+    let mut n = len(s)
+    while n > 0 {
+        let c = s.substring(n - 1, n)
+        if c == " " || c == "\t" || c == "\r" { n = n - 1 } else { break }
+    }
+    return s.substring(0, n)
+}
+
+fn _file_exists(path: string) -> bool {
+    let r = _str(exec("test -e '" + path + "' && echo y || echo n")).trim()
+    return r == "y"
+}
+
+fn _today() -> string {
+    return _str(exec("date -u +%Y-%m-%d")).trim()
+}
+
+// Parse YYYY-MM-DD into an integer count of days since epoch.
+// Uses `date -j -f` (BSD) with a fallback to `date -d` (GNU).
+fn _date_to_days(d: string) -> int {
+    let bsd = _str(exec("date -j -f '%Y-%m-%d' '" + d + "' +%s 2>/dev/null")).trim()
+    if bsd != "" {
+        let secs = to_int(bsd)
+        return secs / 86400
+    }
+    let gnu = _str(exec("date -d '" + d + "' +%s 2>/dev/null")).trim()
+    if gnu != "" {
+        let secs2 = to_int(gnu)
+        return secs2 / 86400
+    }
+    return -1
+}
+
+// Parse the manifest into an array of entry-records. Each record is
+// itself a struct-like array:
+//   [ "id_value", start_line, end_line_exclusive, [[key,value], ...] ]
+// We track line ranges so we can rewrite the file by skipping ranges
+// for archived entries.
+fn _parse_with_ranges(path: string) -> array {
+    let raw = _str(read_file(path))
+    let lines = split(raw, "\n")
+    let mut entries = []
+    let mut start = -1
+    let mut id = ""
+    let mut kvs = []
+    let mut cur_list_key = ""
+    let mut cur_list_buf = ""
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        let t = line.trim_start()
+        if _starts_with(t, "- id:") {
+            // close previous
+            if start >= 0 {
+                if cur_list_key != "" {
+                    kvs.push([cur_list_key, cur_list_buf])
+                    cur_list_key = ""
+                    cur_list_buf = ""
+                }
+                entries.push([id, to_string(start), to_string(i), kvs])
+            }
+            start = i
+            id = _trim_right(t.substring(5, len(t))).trim_start()
+            kvs = [["id", id]]
+            i = i + 1
+            continue
+        }
+        if start < 0 { i = i + 1; continue }
+        if _starts_with(t, "- ") && cur_list_key != "" {
+            let v = t.substring(2, len(t)).trim()
+            if len(cur_list_buf) > 0 { cur_list_buf = cur_list_buf + ", " }
+            cur_list_buf = cur_list_buf + v
+            i = i + 1
+            continue
+        }
+        if len(t) == 0 || _starts_with(t, "#") {
+            i = i + 1
+            continue
+        }
+        let colon = t.index_of(":")
+        if colon > 0 {
+            if cur_list_key != "" {
+                kvs.push([cur_list_key, cur_list_buf])
+                cur_list_key = ""
+                cur_list_buf = ""
+            }
+            let k = t.substring(0, colon).trim()
+            let v = _trim_right(t.substring(colon + 1, len(t))).trim_start()
+            if v == "" {
+                cur_list_key = k
+                cur_list_buf = ""
+            } else {
+                kvs.push([k, v])
+            }
+        }
+        i = i + 1
+    }
+    if start >= 0 {
+        if cur_list_key != "" { kvs.push([cur_list_key, cur_list_buf]) }
+        entries.push([id, to_string(start), to_string(len(lines)), kvs])
+    }
+    return entries
+}
+
+fn _kv_get(kvs: array, key: string) -> string {
+    let mut i = 0
+    while i < len(kvs) {
+        let p = kvs[i]
+        if p[0] == key { return p[1] }
+        i = i + 1
+    }
+    return ""
+}
+
+// JSON-escape a string for a single jsonl line.
+fn _jq(s: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "\"" { out = out + "\\\"" }
+        else if c == "\\" { out = out + "\\\\" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+fn _entry_to_jsonl(kvs: array, today: string) -> string {
+    let mut out = "{"
+    let mut first = true
+    let mut i = 0
+    while i < len(kvs) {
+        let p = kvs[i]
+        let k = p[0]
+        let v = p[1]
+        if k == "status" {
+            // overwritten below
+            i = i + 1
+            continue
+        }
+        if !first { out = out + "," }
+        out = out + "\"" + _jq(k) + "\":\"" + _jq(v) + "\""
+        first = false
+        i = i + 1
+    }
+    if !first { out = out + "," }
+    out = out + "\"status\":\"archived\",\"promoted_at\":\"" + today + "\"}"
+    return out
+}
+
+// ── CLI parsing ────────────────────────────────────────
+let _raw_args = args()
+let mut cli = []
+let mut _ai = 2
+while _ai < len(_raw_args) {
+    cli.push(_raw_args[_ai])
+    _ai = _ai + 1
+}
+
+let mut n_days = 14
+let mut dry_run = false
+let mut ai = 0
+while ai < len(cli) {
+    let a = cli[ai]
+    if a == "--days" {
+        if ai + 1 >= len(cli) { println("inbox_promote: --days needs value"); exit(2) }
+        n_days = to_int(cli[ai + 1])
+        ai = ai + 1
+    } else if a == "--dry-run" {
+        dry_run = true
+    } else {
+        println("inbox_promote: unknown arg: " + a)
+        exit(2)
+    }
+    ai = ai + 1
+}
+
+let MANIFEST = "incoming/PATCHES.yaml"
+let LOG = "incoming/manifest_log.jsonl"
+
+if !_file_exists(MANIFEST) {
+    println("inbox_promote: manifest not found: " + MANIFEST)
+    exit(1)
+}
+
+let today = _today()
+let today_d = _date_to_days(today)
+let cutoff = today_d - n_days
+
+let entries = _parse_with_ranges(MANIFEST)
+let mut to_archive = []
+let mut e_i = 0
+while e_i < len(entries) {
+    let e = entries[e_i]
+    let kvs = e[3]
+    let status = _kv_get(kvs, "status")
+    let applied_at = _kv_get(kvs, "applied_at")
+    if status == "applied" && applied_at != "" {
+        let d = _date_to_days(applied_at)
+        if d >= 0 && d <= cutoff {
+            to_archive.push(e_i)
+        }
+    }
+    e_i = e_i + 1
+}
+
+println("inbox_promote — today=" + today + " cutoff=" + to_string(n_days) + "d")
+println("inbox_promote — " + to_string(len(to_archive)) + " entry(ies) eligible for archival")
+
+if len(to_archive) == 0 {
+    println("inbox_promote: nothing to do")
+    exit(0)
+}
+
+let mut idx = 0
+while idx < len(to_archive) {
+    let i = to_archive[idx]
+    let e = entries[i]
+    println("  - " + e[0])
+    idx = idx + 1
+}
+
+if dry_run {
+    println("inbox_promote: --dry-run; no files modified")
+    exit(0)
+}
+
+// Build new PATCHES.yaml content by skipping archived line ranges.
+let raw = _str(read_file(MANIFEST))
+let lines = split(raw, "\n")
+
+// Mark archived line ranges.
+let mut skip = []
+let mut s_i = 0
+while s_i < len(lines) { skip.push(false); s_i = s_i + 1 }
+let mut k = 0
+while k < len(to_archive) {
+    let i = to_archive[k]
+    let e = entries[i]
+    let lo = to_int(e[1])
+    let hi = to_int(e[2])
+    let mut j = lo
+    while j < hi {
+        skip[j] = true
+        j = j + 1
+    }
+    k = k + 1
+}
+
+let mut new_lines = []
+let mut li = 0
+while li < len(lines) {
+    if !skip[li] { new_lines.push(lines[li]) }
+    li = li + 1
+}
+
+// Backup once, then write.
+exec("cp '" + MANIFEST + "' '" + MANIFEST + ".bak'")
+
+let mut out = ""
+let mut oi = 0
+while oi < len(new_lines) {
+    if oi > 0 { out = out + "\n" }
+    out = out + new_lines[oi]
+    oi = oi + 1
+}
+write_file(MANIFEST, out)
+
+// Append to manifest_log.jsonl.
+let mut log_append = ""
+let mut a = 0
+while a < len(to_archive) {
+    let i = to_archive[a]
+    let e = entries[i]
+    let kvs = e[3]
+    log_append = log_append + _entry_to_jsonl(kvs, today) + "\n"
+    a = a + 1
+}
+let prior = _str(read_file(LOG))
+write_file(LOG, prior + log_append)
+
+println("inbox_promote: archived " + to_string(len(to_archive)) + " entry(ies); backup at " + MANIFEST + ".bak")
+exit(0)

@@ -755,6 +755,21 @@ stdlib_evolution:
       downstream_consumers:
         - orpheus recovery/module/method_bitcoin_core_rpc.hexa
       forge_engine_link: forge.cond.NATIVE_BTC_RPC
+  inbox_protocol:
+    decision_2026_05_09: incoming_dir_until_native_compiler_v1
+    directory: incoming/
+    manifest: incoming/PATCHES.yaml
+    audit_log: incoming/manifest_log.jsonl
+    sync_tool: tool/inbox_sync.hexa
+    promote_tool: tool/inbox_promote.hexa
+    sunset_trigger: stage_3_fixed_point
+    bedrock_advisory: doc/inbox_for_bedrock.md
+    rationale: |
+      Until the new native compiler reaches stage 3 byte-equal fixed
+      point, two trees (self/ and compiler/) coexist and stdlib
+      patches may need verification across both. The inbox is a
+      temporary staging area; once native compiler is self-hosting,
+      patches flow through normal PR workflow.
   selftest_invariant: |
     Every additive helper bumps the per-module selftest count and
     keeps overall stdlib selftest exit 0. Example: c_ffi 35 → 36;
