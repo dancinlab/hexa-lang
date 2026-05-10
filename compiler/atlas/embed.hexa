@@ -153,7 +153,8 @@ fn _emit_array(name: string, arr: array) -> string {
 // ISO-8601 UTC stamp (YYYY-MM-DDTHH:MM:SSZ). Falls back to "" if the
 // runtime can't shell out — the generated file is still valid hexa.
 fn _iso_utc_now() -> string {
-    let s = exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+    // TODO(L2): replace with intrinsic iso_utc_now() from compiler/intrinsics/intrinsics.hexa (task #56)
+    let s = exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()  // @allow-bare-exec
     return s
 }
 

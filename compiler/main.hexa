@@ -1,3 +1,5 @@
+// @allow-bare-exec-file
+// L2-migration scaffolding: external-tool exec() sites (as / ld / xcrun) remain by design (L1 keepers); intrinsified sites use compiler/intrinsics/intrinsics.hexa.
 // HEXA Native Compiler — Entry Point (Phase A1+B1+B2+B3+B3+B4+lower+codegen+emit)
 //
 // Authoritative design: SPEC.yaml + RFC-018 §2 (pipeline order).
@@ -38,6 +40,7 @@ import "./emit/asm.hexa"
 import "./diag/catalog.hexa"
 import "./diag/builder.hexa"
 import "./diag/render.hexa"
+// TODO(L2): import "./intrinsics/intrinsics.hexa" — companion task #56 module not yet parser-stable; deferred.
 
 // ── Version / banner ────────────────────────────────────────────
 
@@ -97,6 +100,7 @@ fn _normalize_argv() -> [string] {
 // ── Target detection ───────────────────────────────────────────
 
 fn detect_default_target() -> string {
+    // TODO(L2): replace with host_target() intrinsic (compiler/intrinsics/intrinsics.hexa, task 56) once parser-stable.
     let uname = exec("uname -sm 2>/dev/null").trim()
     if uname == "Darwin arm64" { return "arm64-apple-darwin" }
     if uname == "Linux x86_64" { return "x86_64-linux-gnu" }
@@ -249,7 +253,9 @@ fn _build_temp_dir(_source_path: string) -> string {
             tbase = tdir_env
         }
     }
+    // TODO(L2): replace echo-$$ with a getpid intrinsic (compiler/intrinsics/intrinsics.hexa candidate).
     let pid = exec("echo $$").trim()
+    // TODO(L2): replace with now_ns() intrinsic (compiler/intrinsics/intrinsics.hexa, task 56) once parser-stable.
     // `date +%s%N` works on Linux; macOS BSD `date` lacks %N and emits
     // the literal `N`. Detect that and fall back to `%s` + awk-rand.
     let mut stamp = exec("date +%s%N 2>/dev/null").trim()
@@ -261,6 +267,7 @@ fn _build_temp_dir(_source_path: string) -> string {
         stamp = secs + rnd
     }
     let dir = tbase + "/hexa-" + pid + "-" + stamp
+    // TODO(L2): replace with mkdir_p() intrinsic (compiler/intrinsics/intrinsics.hexa, task 56) once parser-stable.
     let _mk = exec("mkdir -p '" + dir + "' 2>/dev/null")
     return dir
 }
@@ -554,7 +561,9 @@ write_file(asm_path, asm_text)
 // we surface verbatim.
 
 let as_cmd = "as " + asm_path + " -o " + obj_path + " 2>&1"
+// L1 keeper: external assembler invocation; replaced when self-as lands.
 let as_out = exec(as_cmd)
+// TODO(L2): replace with file_exists intrinsic candidate.
 let as_status = exec("test -f " + obj_path + " && echo ok || echo fail").trim()
 if as_status != "ok" {
     eprintln("hexa-compiler: assembler failed:")
@@ -570,8 +579,10 @@ if as_status != "ok" {
 }
 
 if emit_kind == "obj" {
+    // TODO(L2): replace with copy_file intrinsic candidate (compiler/intrinsics/intrinsics.hexa).
     exec("cp -f " + obj_path + " " + out_path)
     if !keep_temp {
+        // TODO(L2): replace with rm_rf intrinsic candidate (compiler/intrinsics/intrinsics.hexa).
         exec("rm -rf '" + tmp_dir + "' 2>/dev/null")
     } else if verbose {
         eprintln("hexa-compiler: --keep-temp: leaving " + tmp_dir + " in place")
@@ -594,6 +605,7 @@ if emit_kind == "obj" {
 
 let mut ld_cmd = ""
 if target == "arm64-apple-darwin" {
+    // L1 keeper: xcrun is an external SDK probe; future intrinsic candidate (sysroot probe).
     let sdk = exec("xcrun --show-sdk-path 2>/dev/null").trim()
     let mut sdk_arg = ""
     if len(sdk) > 0 { sdk_arg = " -syslibroot " + sdk }
@@ -613,7 +625,9 @@ if linker_kind == "hexa" {
     eprintln("hexa-compiler: warning: --linker=hexa not yet implemented; falling back to system")
 }
 
+// L1 keeper: external linker invocation; replaced when hexa_ld lands.
 let ld_out = exec(ld_cmd)
+// TODO(L2): replace with file_exists intrinsic candidate.
 let ld_status = exec("test -f " + out_path + " && echo ok || echo fail").trim()
 if ld_status != "ok" {
     eprintln("hexa-compiler: linker failed:")
@@ -629,6 +643,7 @@ if ld_status != "ok" {
 }
 
 if !keep_temp {
+    // TODO(L2): replace with rm_rf intrinsic candidate (compiler/intrinsics/intrinsics.hexa).
     exec("rm -rf '" + tmp_dir + "' 2>/dev/null")
 } else if verbose {
     eprintln("hexa-compiler: --keep-temp: leaving " + tmp_dir + " in place")

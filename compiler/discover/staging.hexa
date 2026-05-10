@@ -33,7 +33,8 @@ import "./discover.hexa"
 // -- ISO-8601 UTC stamp ----------------------------------------
 // Uses `date -u`; falls back to the empty string if exec is unavailable.
 fn _iso_utc_now() -> string {
-    let s = exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+    // TODO(L2): replace with iso_utc_now intrinsic (compiler/intrinsics/intrinsics.hexa, task 56)
+    let s = exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()  // @allow-bare-exec
     return s
 }
 

@@ -12,13 +12,15 @@ import "./cascade.hexa"
 import "../../tool/auto_pr_tombstone_sweep.hexa"
 
 fn _today_utc() -> string {
-    let s = exec("date -u +%Y-%m-%d").trim()
+    // TODO(L2): replace with today_utc intrinsic (compiler/intrinsics/intrinsics.hexa, task 56)
+    let s = exec("date -u +%Y-%m-%d").trim()  // @allow-bare-exec
     if len(s) == 0 { return "unknown-date" }
     return s
 }
 
 fn _iso_utc_now() -> string {
-    let date_part = exec("date -u +%Y-%m-%d").trim()
+    // TODO(L2): replace with today_utc intrinsic (compiler/intrinsics/intrinsics.hexa, task 56)
+    let date_part = exec("date -u +%Y-%m-%d").trim()  // @allow-bare-exec
     return date_part + "T00:00:00Z"
 }
 
