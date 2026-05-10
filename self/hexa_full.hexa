@@ -2930,7 +2930,8 @@ fn parse_match_pattern() {
             "left": data, "right": "", "cond": "", "then_body": "", "else_body": "",
             "params": "", "body": "", "args": "", "fields": "", "items": pat_items,
             "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
-            "target": "", "trait_name": "", "methods": ""
+            "target": "", "trait_name": "", "methods": "",
+            "payload_expr": ""
         }
     }
     // Array pattern: [first, second, ...rest]
@@ -3614,12 +3615,20 @@ fn parse_primary() {
         if p_peek_kind() == "ColonColon" {
             p_advance() // consume ::
             let variant = p_expect_ident()
+            // RFC-020 A1: parse optional payload `(expr)` for enum construction
+            let mut payload_expr = ""
+            if p_peek_kind() == "LParen" {
+                p_advance() // consume '('
+                payload_expr = parse_expr()
+                p_expect("RParen")
+            }
             return #{
                 "kind": "EnumPath", "name": name, "value": variant, "op": "",
                 "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
                 "params": "", "body": "", "args": "", "fields": "", "items": "",
                 "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
-                "target": "", "trait_name": "", "methods": ""
+                "target": "", "trait_name": "", "methods": "",
+                "payload_expr": payload_expr
             }
         }
         // C4: Check for generic struct init: Name<Int, String> { ... }
@@ -7922,11 +7931,21 @@ fn eval_expr_inner(node) {
     }
 
     // ── EnumPath: EnumName::Variant or EnumName::Variant(data) ──
+    // RFC-020 A1+: parser emits payload via `payload_expr` for `E::V(x)` form;
+    // legacy `node.left` path retained for older AST shapes (pattern reuse).
     if kid == NK_ENUM_PATH {
         let data = node.left
         let mut data_val = ""
         if type_of(data) != "string" || data != "" {
             data_val = eval_expr(data)
+        } else {
+            // payload_expr present on all EnumPath construction sites
+            // (parse_primary L3625, parse_match_pattern L2929) — kept "" for
+            // unit variants. type_of guards bare construction `Shape::Unit`.
+            let pe = node.payload_expr
+            if type_of(pe) != "string" || pe != "" {
+                data_val = eval_expr(pe)
+            }
         }
         return val_enum(node.name, node.value, data_val)
     }
@@ -8395,12 +8414,45 @@ fn match_pattern(pattern, scrutinee) {
         // `_` 은 wildcard, 그 외 Ident 는 binding (여기선 단순히 match 만 판정)
         return true
     }
+    // RFC-020 A3: Wildcard pattern (`_`) — explicit always-match. Without this
+    // a Wildcard reaches eval_expr → val_void → returns scrutinee.tag==TAG_VOID
+    // (false for non-void scrutinees), causing nested-payload `Square(_)` arms
+    // to silently miss.
+    if pattern.kind == "Wildcard" {
+        return true
+    }
     // Enum variant: `Color::Red` 패턴과 scrutinee 둘 다 TAG_ENUM 이면
     // struct_name (full "Enum::Variant") 비교. 이전엔 eval_expr 후 tag
     // 분기에 TAG_ENUM 이 없어 항상 false 반환 → match 가 void 로 나옴.
+    //
+    // RFC-020 A3: when the pattern carries a payload binder
+    //   `Shape::Circle(r)` — pattern.left holds the inner pattern (typically
+    //   an Ident) and pattern.items holds multi-field shape (deferred).
+    //   On variant-name match, define the binder in the active arm scope so
+    //   the arm body sees it. Without this the body sees `r` as undefined
+    //   (val_void), and `match s { ... }` returns void.
     if pattern.kind == "EnumPath" && scrutinee.tag == TAG_ENUM {
         let full = pattern.name + "::" + pattern.value
-        return scrutinee.struct_name == full
+        if scrutinee.struct_name != full { return false }
+        // Bind single-field payload (pattern.left is the inner pattern node)
+        let inner = pattern.left
+        if type_of(inner) != "string" || inner != "" {
+            let payload_val = get_enum_data(scrutinee)
+            if inner.kind == "Ident" {
+                if inner.name != "_" {
+                    env_define(inner.name, payload_val)
+                }
+            } else {
+                // Nested pattern (e.g. Circle(0) inside outer match) —
+                // recurse so literal payloads like 0 still gate the arm.
+                if !match_pattern(inner, payload_val) { return false }
+            }
+        }
+        // Multi-field payload binders (pattern.items) — defer to follow-up
+        // (C1 deferred per RFC-020 plan). No-op here; struct-payload single
+        // binder uses the inner-pattern path above with payload_val as the
+        // bound struct value, which is the RFC-020 §3.1 canonical form.
+        return true
     }
     let pv = eval_expr(pattern)
     if pv.tag == TAG_INT && scrutinee.tag == TAG_INT { return pv.int_val == scrutinee.int_val }
