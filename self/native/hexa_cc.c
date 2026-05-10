@@ -2079,6 +2079,10 @@ static HexaVal __hexa_parser_sl_493;
 static HexaVal __hexa_parser_sl_494;
 static HexaVal __hexa_parser_sl_495;
 static HexaVal __hexa_parser_sl_496;
+// RFC-022 §4.3 D5 — parser Await production slots.
+static HexaVal __hexa_parser_sl_497;  // "AwaitExpr" (kind tag)
+static HexaVal __hexa_parser_sl_498;  // "await" (op value)
+static HexaVal __hexa_parser_sl_499;  // "expr" (field name for inner expression)
 static void __hexa_parser_strlit_init(void) {
     __hexa_parser_sl_0 = hexa_str("kind");
     __hexa_parser_sl_1 = hexa_str("");
@@ -2577,6 +2581,10 @@ static void __hexa_parser_strlit_init(void) {
     __hexa_parser_sl_494 = hexa_str("ForDestructStmt((");
     __hexa_parser_sl_495 = hexa_str(") in ");
     __hexa_parser_sl_496 = hexa_str("Unknown(");
+    // RFC-022 §4.3 D5 — Await parser slots
+    __hexa_parser_sl_497 = hexa_str("AwaitExpr");
+    __hexa_parser_sl_498 = hexa_str("await");
+    __hexa_parser_sl_499 = hexa_str("expr");
 }
 static HexaIC __hexa_parser_ic_0 = {0};
 static HexaIC __hexa_parser_ic_1 = {0};
@@ -5326,6 +5334,16 @@ HexaVal parse_unary(void) {
         p_advance();
         operand = parse_unary();
         return __hexa_fn_arena_return(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_new(), "kind", __hexa_parser_sl_313), "name", __hexa_parser_sl_1), "value", __hexa_parser_sl_1), "op", __hexa_parser_sl_315), "left", operand), "right", __hexa_parser_sl_1), "cond", __hexa_parser_sl_1), "then_body", __hexa_parser_sl_1), "else_body", __hexa_parser_sl_1), "params", __hexa_parser_sl_1), "body", __hexa_parser_sl_1), "args", __hexa_parser_sl_1), "fields", __hexa_parser_sl_1), "items", __hexa_parser_sl_1), "variants", __hexa_parser_sl_1), "arms", __hexa_parser_sl_1), "iter_expr", __hexa_parser_sl_1), "ret_type", __hexa_parser_sl_1), "target", __hexa_parser_sl_1), "trait_name", __hexa_parser_sl_1), "methods", __hexa_parser_sl_1));
+    }
+    /* RFC-022 §4.3 D5 — `await <expr>` unary prefix production.
+     * Mirrors self/parser.hexa parse_unary `await` branch. Builds
+     * AwaitExpr node carrying the inner expression in field "expr".
+     * Eval (NK_AWAIT_EXPR) extracts Future.value when present, else
+     * identity passthrough — consistent with codegen hexa_await_unwrap. */
+    if (hexa_truthy(hexa_eq(k, __hexa_parser_sl_109))) {
+        p_advance();
+        operand = parse_unary();
+        return __hexa_fn_arena_return(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_new(), "kind", __hexa_parser_sl_497), "name", __hexa_parser_sl_1), "value", __hexa_parser_sl_1), "op", __hexa_parser_sl_498), "left", __hexa_parser_sl_1), "right", __hexa_parser_sl_1), "cond", __hexa_parser_sl_1), "then_body", __hexa_parser_sl_1), "else_body", __hexa_parser_sl_1), "params", __hexa_parser_sl_1), "body", __hexa_parser_sl_1), "args", __hexa_parser_sl_1), "fields", __hexa_parser_sl_1), "items", __hexa_parser_sl_1), "variants", __hexa_parser_sl_1), "arms", __hexa_parser_sl_1), "iter_expr", __hexa_parser_sl_1), "ret_type", __hexa_parser_sl_1), "target", __hexa_parser_sl_1), "trait_name", __hexa_parser_sl_1), "methods", __hexa_parser_sl_1), "expr", operand));
     }
     return __hexa_fn_arena_return(parse_postfix());
     return __hexa_fn_arena_return(hexa_void());
@@ -11045,6 +11063,11 @@ static HexaVal __hexa_codegen_c2_sl_1451;
 static HexaVal __hexa_codegen_c2_sl_1452;
 static HexaVal __hexa_codegen_c2_sl_1453;
 static HexaVal __hexa_codegen_c2_sl_1454;
+// RFC-022 §4.2 — Await codegen slots (G2 native integration).
+// Mirrors codegen_c2.hexa branch: k=="Await" → "hexa_await_unwrap(" + inner + ")".
+static HexaVal __hexa_codegen_c2_sl_1455;  // "Await"
+static HexaVal __hexa_codegen_c2_sl_1456;  // "AwaitExpr"
+static HexaVal __hexa_codegen_c2_sl_1457;  // "hexa_await_unwrap("
 static void __hexa_codegen_c2_strlit_init(void) {
     __hexa_codegen_c2_sl_0 = hexa_str("TAG_INT");
     __hexa_codegen_c2_sl_1 = hexa_str("TAG_FLOAT");
@@ -12501,6 +12524,10 @@ static void __hexa_codegen_c2_strlit_init(void) {
     __hexa_codegen_c2_sl_1452 = hexa_str("src_bytes ");
     __hexa_codegen_c2_sl_1453 = hexa_str("enum ");
     __hexa_codegen_c2_sl_1454 = hexa_str("comptime ");
+    // RFC-022 §4.2 Await branch slots
+    __hexa_codegen_c2_sl_1455 = hexa_str("Await");
+    __hexa_codegen_c2_sl_1456 = hexa_str("AwaitExpr");
+    __hexa_codegen_c2_sl_1457 = hexa_str("hexa_await_unwrap(");
 }
 static HexaIC __hexa_codegen_c2_ic_0 = {0};
 static HexaIC __hexa_codegen_c2_ic_1 = {0};
@@ -13537,6 +13564,8 @@ static HexaIC __hexa_codegen_c2_ic_1031 = {0};
 static HexaIC __hexa_codegen_c2_ic_1032 = {0};
 static HexaIC __hexa_codegen_c2_ic_1033 = {0};
 static HexaIC __hexa_codegen_c2_ic_1034 = {0};
+// RFC-022 §4.2 — IC slot for Await branch's node.expr lookup.
+static HexaIC __hexa_codegen_c2_ic_1035 = {0};
 
 HexaVal _hexa_name_is_reserved(HexaVal s) {
     __hexa_fn_arena_enter();
@@ -14812,7 +14841,8 @@ HexaVal codegen_c2(HexaVal ast) {
                             hexa_array_push(fwd_parts, hexa_map_get_ic(ib, "forward", &__hexa_codegen_c2_ic_27));
                             hexa_array_push(fn_parts, hexa_map_get_ic(ib, "fn_code", &__hexa_codegen_c2_ic_28));
                         } else {
-                            if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_308))) {
+                            if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_308)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1431))))) {
+                                /* RFC-022 §3.1 / §4.1 D3 — AsyncFnDecl runs sync, treat as PureFnDecl. */
                                 hexa_array_push(fwd_parts, hexa_add(gen2_fn_forward(hexa_index_get(ast, i)), __hexa_codegen_c2_sl_295));
                                 hexa_array_push(fn_parts, hexa_add(gen2_fn_decl(hexa_index_get(ast, i)), __hexa_codegen_c2_sl_322));
                             } else {
@@ -18188,6 +18218,16 @@ HexaVal gen2_expr(HexaVal node) {
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_143))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1266);
     }
+    /* RFC-022 §4.2 — Await branch (G2 codegen integration). Emits
+     * hexa_await_unwrap(<inner>) which checks for Future struct shape
+     * (TAG_MAP + __type__=="Future") and extracts .value, else identity.
+     * Mirrors interp self/hexa_full.hexa:8048-8057 byte-for-byte.
+     * Fires for kind=="Await" or kind=="AwaitExpr". */
+    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1455))
+                            || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1456))))) {
+        HexaVal inner_c = gen2_expr(hexa_map_get_ic(node, "expr", &__hexa_codegen_c2_ic_1035));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1457, inner_c), __hexa_codegen_c2_sl_279));
+    }
     (hexa_eprint_val(hexa_add(__hexa_codegen_c2_sl_1274, k)), fprintf(stderr, "\n"), hexa_void());
     return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1275, k), __hexa_codegen_c2_sl_776));
     return __hexa_fn_arena_return(hexa_void());
@@ -20217,7 +20257,8 @@ HexaVal codegen_c2_full(HexaVal ast) {
                             hexa_array_push(fwd_parts, hexa_map_get_ic(ib, "forward", &__hexa_codegen_c2_ic_975));
                             hexa_array_push(fn_parts, hexa_map_get_ic(ib, "fn_code", &__hexa_codegen_c2_ic_976));
                         } else {
-                            if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_308))) {
+                            if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_308)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1431))))) {
+                                /* RFC-022 §3.1 / §4.1 D3 — AsyncFnDecl runs sync, treat as PureFnDecl. */
                                 hexa_array_push(fwd_parts, hexa_add(gen2_fn_forward(hexa_index_get(ast, i)), __hexa_codegen_c2_sl_295));
                                 hexa_array_push(fn_parts, hexa_add(gen2_fn_decl(hexa_index_get(ast, i)), __hexa_codegen_c2_sl_322));
                             } else {

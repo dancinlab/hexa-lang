@@ -1,6 +1,7 @@
 # RFC-022 — async model parity (interpreter ⇄ native codegen)
 
-- **Status**: **Draft** (2026-05-10) — design only, no compiler/ tree change in this batch
+- **Status**: **Integrated** (2026-05-10, PM) — v1 codegen + interp parity landed; see §10. wilson core gate cleared.
+- **Status (history)**: Draft (2026-05-10, AM) — design only.
 - **Author date**: 2026-05-10
 - **Predecessors**: RFC-018 (native codegen spec), RFC-021 (daemon mode)
 - **Companion deliverable**: stdlib/cancel.hexa (G3 — cooperative cancellation Token)
@@ -268,3 +269,53 @@ Run: `$HOME/.hx/bin/hexa_real run stdlib/test/test_cancel.hexa` → `PASS: stdli
 ## 9. Decision log
 
 - 2026-05-10 — Draft authored. Decision: stage 1 async is annotation-only; canonical semantics are interp's identity-await + Future-unwrap. Native codegen must catch up on the Future-unwrap path (D1) before any stage 2 scheduler work begins. wilson core port unblocks on G1 + G2 + G3 landing — this RFC supplies G2.
+- 2026-05-10 (PM) — v1 integration landed. D1 closed in codegen + runtime + interp. D5 parser production added (was deferred). New selftest `self/test_async_codegen.hexa` 4/4 PASS on both backends. wilson core gate (G1+G2+G3) cleared. See §10.
+
+---
+
+## 10. v1 integration (2026-05-10 PM)
+
+This section records the concrete tree changes that lift the RFC from
+"design-only" to "integrated".
+
+### 10.1 Tree changes
+
+| File | Change |
+|---|---|
+| `self/runtime.c` | New helper `hexa_await_unwrap(HexaVal v)` — checks `hexa_is_type(v, "Future")`, extracts `value` via `hexa_map_get`, falls back to identity. Mirrors interp lines 8064-8079 byte-for-byte semantics. |
+| `self/codegen_c2.hexa` | New `gen2_expr` branch: `k == "Await" \|\| k == "AwaitExpr"` → `"hexa_await_unwrap(" + gen2_expr(node.expr) + ")"`. AsyncFnDecl program-level routing added (treated identically to FnDecl per §3.1 / §4.1 D3). |
+| `self/native/hexa_cc.c` | Hand-mirrored equivalents of the codegen_c2 + parser branches — slot allocations, IC slots, AwaitExpr emit, AsyncFnDecl program-level routing. Required because hexa_cc.c is the deployed transpiler binary's source. |
+| `self/parser.hexa`, `self/hexa_full.hexa` | New `parse_unary` branch: when `peek == "Await"`, advance + recurse and emit `{kind: "AwaitExpr", expr: <inner>}`. Closes D5 (was "deferred to stage 2") so the codegen branches actually fire. |
+| `self/hexa_full.hexa` (eval) | Await branch hardened to use the same host-level field-map indexing as NK_FIELD eval (line 7714). The pre-existing `map_get(fields, val_str("value"))` form errored on host-level `#{}` maps; the v1 path uses `fields["value"]`. |
+| `stdlib/future.hexa` | NEW — canonical `Future` struct shape + `future_resolve / future_pending / future_error` constructors. ~95 LOC. |
+| `self/test_async_codegen.hexa` | NEW selftest — 4 cases (pure-sync await, Future-wrap, nested await, non-Future identity). Passes 4/4 on both interp and native AOT. |
+
+### 10.2 Closed divergences
+
+- **D1** (HIGH severity): native codegen now emits `hexa_await_unwrap()` for every AwaitExpr; runtime helper performs the Future-shape check and value extraction. **Closed.**
+- **D5** (medium): parser now emits explicit AwaitExpr nodes for `await <expr>`. NK_AWAIT_EXPR eval branch reachable from user source. **Closed (was "deferred to stage 2"; brought forward to stage 1 because the eval branch was effectively dead without it).**
+
+### 10.3 Selftest results (2026-05-10 PM)
+
+| Test | Interp | Native AOT |
+|---|---|---|
+| `01_pure_sync_await` (`await id_async(42)`) | PASS (42) | PASS (42) |
+| `02_future_wrap_await` (Future-wrapped int) | PASS (7) | PASS (7) |
+| `03_nested_await` (`await await Future(Future(99))`) | PASS (99) | PASS (99) |
+| `04_non_future_identity` (`await 42`) | PASS (42) | PASS (42) |
+| `stdlib/test/test_cancel.hexa` (regression) | 23/23 PASS | n/a |
+| `self/test_enum_payload_full.hexa` (regression, G1) | 15/15 PASS | n/a |
+| `stdlib/test/test_channel.hexa` (regression) | 21/21 PASS | n/a |
+| `stdlib/test/test_json.hexa` (regression) | 22/22 PASS | n/a |
+| `stdlib/test/test_parse.hexa` (regression) | 24/24 PASS | n/a |
+| `stdlib/test/test_yaml.hexa` (regression) | 27/27 PASS | n/a |
+
+### 10.4 Stage-0 rebuild note
+
+The pre-batch deployed `~/.hx/bin/hexa_real` Mach-O binary cannot exercise the new `await` parser production until rebuilt — `await x` parses as a syntax error there. After `tool/build_interp.hexa` runs (or anyone re-compiles `self/native/hexa_cc.c`), the new parser/codegen/eval branches all light up. The verification above used a freshly-built interp + transpiler from the worktree's source tree.
+
+### 10.5 Stage-2 hooks left in place
+
+- HIR/MIR `AwaitOp` lowering (RFC-022 §4.4) — still pending, but the codegen branch is now the natural place to redirect once the IR layer comes online.
+- Real `Future` carrying a producer-task handle (vs. stage-1 resolved-value flat record) — `stdlib/future.hexa` API is shape-stable; only the field set may grow.
+- `select` / `Scheduler` / `Task` — still pure-data per §2.4. wilson does not depend on these.

@@ -62,21 +62,35 @@
 - id: wilson-pi-port-6-gap-prereq
   source_commit: pending
   source_files:
-    - proposals/rfc_022_async_model.md  # G2
+    - proposals/rfc_022_async_model.md  # G2 (status: Integrated, §10 added)
     - stdlib/cancel.hexa                # G3
     - stdlib/test/test_cancel.hexa
     - stdlib/cancel.ai.md
+    - stdlib/future.hexa                # G2 v1 — Future shape constructors
+    - self/runtime.c                    # G2 v1 — hexa_await_unwrap helper
+    - self/codegen_c2.hexa              # G2 v1 — Await + AsyncFnDecl branches
+    - self/native/hexa_cc.c             # G2 v1 — transpiled mirror of above
+    - self/parser.hexa                  # G2 v1 — parse_unary `await` branch
+    - self/hexa_full.hexa               # G2 v1 — interp parse + eval Await
+    - self/test_async_codegen.hexa      # G2 v1 — 4/4 selftest
   compiler_impact: |
     G1 = RFC-020 A5 (parallel — see entry above)
-    G2 async model parity: spec only, no compiler/ change in this batch
-    G3 cancel token: stdlib-only addition; selftest +1
+    G2 async model parity: v1 INTEGRATED — codegen + runtime + interp
+       parity for `await x`. New runtime helper hexa_await_unwrap()
+       mirrors interp's NK_AWAIT_EXPR eval. New codegen branch in
+       gen2_expr emits the helper call. Parser now emits AwaitExpr
+       nodes (D5 closed). New selftest test_async_codegen.hexa 4/4
+       PASS on both interp + native AOT backends.
+    G3 cancel token: stdlib-only addition; selftest +1 (23/23 PASS)
     G4 jsonschema, G5 fs atomic-append, G6 jsonl_pool — DEFERRED
     (low-risk stdlib follow-ups; out of wilson core gate)
-  selftest_delta: "+1 (cancel token roundtrip)"
+  selftest_delta: "+5 (cancel 23/23 + async 4/4 + stdlib regression intact)"
   downstream_consumer: |
     wilson core port unblocks once G1 + G2 + G3 land; G4-G6 needed
     for full feature parity but not for core start.
-  status: in_progress
+    G2+G3 cleared 2026-05-10 PM; G1 (RFC-020 A5) was already cleared
+    (commit 4ed9966e). wilson core gate (G1+G2+G3) is now PASS.
+  status: applied
   background_task: 73  # wilson G2+G3 agent
 
 - id: g7-hexa-ld-dlopen

@@ -3298,6 +3298,22 @@ fn parse_unary() {
             "target": "", "trait_name": "", "methods": ""
         }
     }
+    // RFC-022 §4.3 (D5) — `await <expr>` as unary prefix. Mirror of the
+    // parser.hexa branch (kept in sync with self/parser.hexa parse_unary).
+    // Builds AwaitExpr; eval_expr (NK_AWAIT_EXPR @ line ~8049) extracts
+    // Future.value when present, else passes through identity.
+    if k == "Await" {
+        p_advance()
+        let operand = parse_unary()
+        return #{
+            "kind": "AwaitExpr", "name": "", "value": "", "op": "await",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": "",
+            "expr": operand
+        }
+    }
     // G37: typeof operator — typeof x returns "int", "str", etc.
     if k == "Typeof" {
         p_advance()
@@ -8046,12 +8062,18 @@ fn eval_expr_inner(node) {
     }
 
     // Await: in single-thread interpreter, await is identity (already-resolved)
+    // RFC-022 §3.2 Rule 2 + §4.2 — mirror of native runtime.c
+    // hexa_await_unwrap. Stage-1 semantic: when v is a Future struct,
+    // extract its `value` field via the same host-level map indexing the
+    // NK_FIELD eval branch (line 7714) uses; else identity passthrough.
     if kid == NK_AWAIT || kid == NK_AWAIT_EXPR {
         let v = eval_expr(node.expr)
-        // If it's a future struct, extract value; else passthrough
-        if v.tag == TAG_STRUCT && v.struct_name == "Future" {
+        if type_of(v) != "string" && v.tag == TAG_STRUCT && v.struct_name == "Future" {
             let fields = get_struct_fields(v)
-            if type_of(fields) == "map" { return map_get(fields, val_str("value")) }
+            if type_of(fields) == "map" {
+                // Same host-level indexing as Field eval at line 7728.
+                return fields["value"]
+            }
         }
         return v
     }

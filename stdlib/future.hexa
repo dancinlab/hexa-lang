@@ -1,0 +1,89 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/future.hexa — stage-1 Future struct shape
+//
+//  @module(slug="future", desc="resolved-value Future shape for await unwrap")
+//  @usage(use "stdlib/future"; let f = future_resolve(42); let v = await f)
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [future_resolve, future_pending, future_error]
+//  @stability preview
+//  @since 2026-05-10
+//  @maintainer hexa-core
+//  @priority P0
+//  @rfc proposals/rfc_022_async_model.md (G2 — Future shape that await unwraps)
+//
+//  ── PROBLEM (wilson core port — G2 codegen integration, 2026-05-10) ───────
+//
+//  RFC-022 §3.2 Rule 2 says: "await x evaluates x and returns its value. If
+//  x is a Future struct (legacy interp shape), the .value field is unwrapped;
+//  otherwise identity." Both interp (hexa_full.hexa:8048-8057) and native
+//  AOT (codegen_c2.hexa Await branch + runtime.c hexa_await_unwrap) detect
+//  the Future shape via the struct's __type__ field. This module provides
+//  the canonical constructors so user code (and wilson plugins) can
+//  participate in the unwrap contract without reinventing the shape.
+//
+//  ── DESIGN ───────────────────────────────────────────────────────────────
+//
+//  Stage 1 Future is a flat record:
+//      pub struct Future { value: any, resolved: bool, error: string }
+//  No scheduler, no continuation, no callback. The value is set at
+//  construction; await is identity on resolved, identity on error
+//  (caller inspects .error post-await). This matches RFC-022 §3.1's
+//  "every async fn runs to completion synchronously" semantic.
+//
+//  Stage 2 (deferred) will replace this shape with a real one carrying a
+//  producer task handle; the API below stays stable so user code does not
+//  need to change.
+//
+//  ── WHY `value: any` ──────────────────────────────────────────────────────
+//
+//  hexa stage 1 has no generics in struct fields; `any` is the closest
+//  surface. The runtime stores whatever HexaVal the producer wrote.
+//  hexa_await_unwrap reads it back via hexa_map_get(v, "value") with no
+//  type check — the caller is responsible for narrowing.
+//
+//  ── BACKWARD COMPATIBILITY ────────────────────────────────────────────────
+//
+//  This module ADDS a new file. No existing stdlib signature is modified.
+//  Pre-existing user code that constructs `Future { value: x, ... }`
+//  literals directly continues to work (hexa_await_unwrap matches by
+//  __type__ == "Future" — it does not care which constructor was used).
+//
+//  ── See also ──────────────────────────────────────────────────────────────
+//
+//  · proposals/rfc_022_async_model.md — async model parity (G2)
+//  · self/runtime.c hexa_await_unwrap — runtime helper (canonical semantic)
+//  · self/codegen_c2.hexa gen2_expr Await branch — native codegen entry
+//  · stdlib/cancel.hexa — companion cancellation token (G3)
+//  · self/test_async_codegen.hexa — selftest (interp + native)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Future struct ────────────────────────────────────────────────────────
+
+pub struct Future {
+    value: any,
+    resolved: bool,
+    error: string
+}
+
+// ── constructors ─────────────────────────────────────────────────────────
+
+// Build a resolved Future carrying `v` as its already-computed value.
+// hexa_await_unwrap(future_resolve(v)) returns v on both backends.
+pub fn future_resolve(v: any) -> Future {
+    return Future { value: v, resolved: true, error: "" }
+}
+
+// Build a Future with no value yet. await on a pending Future returns
+// the placeholder void (interp + AOT identity); callers should poll the
+// `resolved` flag before awaiting in real cooperative-scheduler code.
+pub fn future_pending() -> Future {
+    return Future { value: void, resolved: false, error: "" }
+}
+
+// Build a Future carrying a sticky error message. The `value` field
+// is void; callers must inspect .error after await to detect failure.
+pub fn future_error(msg: string) -> Future {
+    return Future { value: void, resolved: false, error: msg }
+}

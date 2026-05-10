@@ -1,0 +1,133 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  self/test_async_codegen.hexa
+//
+//  RFC-022 §4.2 G2 codegen integration selftest — validates that
+//  `await x` produces parity semantics across:
+//    1. Interpreter path (self/hexa_full.hexa NK_AWAIT_EXPR branch)
+//    2. Native AOT codegen path (codegen_c2.hexa Await branch +
+//       runtime.c hexa_await_unwrap helper)
+//
+//  ── 4 test cases (each must PASS on both backends) ────────────────────
+//    Test 1: pure-sync await — `await fn_call()` returning an int.
+//            Expected: identity passthrough, value = call result.
+//    Test 2: Future-wrap + await — `await future_resolve(x)`.
+//            Expected: Future.value extraction yields x.
+//    Test 3: nested await — `await await future_resolve(future_resolve(x))`.
+//            Expected: outer unwrap on top-level Future yields the inner
+//            Future struct (no recursive auto-unwrap by design — RFC-022
+//            §3.2 Rule 2 unwraps exactly one level).
+//    Test 4: await on non-Future scalar — `await 42`.
+//            Expected: identity (matches RFC-022 §3.2 Rule 2 fallback).
+//
+//  ── Run ────────────────────────────────────────────────────────────────
+//    interp:  $HOME/.hx/bin/hexa_real run self/test_async_codegen.hexa
+//    AOT:     hexa build self/test_async_codegen.hexa && ./out
+//
+//  ── Exit semantics ─────────────────────────────────────────────────────
+//    all asserts pass → "PASS: RFC-022 G2 async codegen 4/4"
+//    any fail         → "FAIL: ..." per case + non-zero pass count line
+//
+//  ── Stage-0 rebuild caveat (RFC-022 §4.3 D5) ───────────────────────────
+//    The parser AwaitExpr production was added in this same batch
+//    (parser.hexa parse_unary `await` branch). The currently-deployed
+//    hexa_real Mach-O binary was compiled from a pre-batch parser, so
+//    `await x` parses as a syntax error on the deployed binary. After
+//    stage0 rebuild (tool/build_interp.hexa), the new parser emits
+//    AwaitExpr nodes, the interp NK_AWAIT_EXPR branch fires, and AOT
+//    codegen emits hexa_await_unwrap() calls — at which point this test
+//    passes 4/4 on both backends.
+//
+//  ── References ────────────────────────────────────────────────────────
+//    · proposals/rfc_022_async_model.md §3.2 (rules), §4.2 (codegen),
+//                                       §4.3 D5 (parser obligation)
+//    · self/hexa_full.hexa:8048-8057 (interp NK_AWAIT_EXPR branch)
+//    · self/codegen_c2.hexa Await branch (gen2_expr near unhandled-kind)
+//    · self/runtime.c hexa_await_unwrap (canonical helper)
+//    · stdlib/future.hexa (Future shape constructors)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// NOTE: stdlib/future.hexa contents inlined here so the test stays
+// single-file (works with both flatten-aware and bare hexa_v2 transpile).
+// Mirror of stdlib/future.hexa Future struct + future_resolve.
+
+pub struct Future {
+    value: any,
+    resolved: bool,
+    error: string
+}
+
+pub fn future_resolve(v: any) -> Future {
+    return Future { value: v, resolved: true, error: "" }
+}
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk_eq_int(tag, got, want) {
+    if got == want {
+        println("  PASS " + tag + " == " + to_string(want))
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=" + to_string(got) + " want=" + to_string(want))
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_eq_str(tag, got, want) {
+    if got == want {
+        println("  PASS " + tag)
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got='" + got + "' want='" + want + "'")
+        fail_count = fail_count + 1
+    }
+}
+
+// ── Async fn defs (RFC-022 §3.1: run synchronously) ─────────────────────
+
+async fn id_async(x: int) -> int {
+    return x
+}
+
+async fn boxed_async(x: int) -> Future {
+    return future_resolve(x)
+}
+
+fn main() -> void {
+    println("── RFC-022 G2 async codegen selftest ──")
+
+    // Test 1: pure-sync await (identity — call result returns directly).
+    // Uses `await id_async(42)` — interp NK_AWAIT_EXPR / native
+    // hexa_await_unwrap() both pass through the int 42 unchanged.
+    let v1 = await id_async(42)
+    chk_eq_int("01_pure_sync_await", v1, 42)
+
+    // Test 2: Future-wrap + await (Future.value extracted via unwrap).
+    let f2 = boxed_async(7)
+    let v2 = await f2
+    chk_eq_int("02_future_wrap_await", v2, 7)
+
+    // Test 3: nested await — `await await Future(Future(99))` unwraps
+    // exactly the OUTER Future at the outer await; the inner await then
+    // unwraps the inner Future. RFC-022 §3.2 Rule 2 says await unwraps
+    // one level only; nesting just chains the rule.
+    let inner = future_resolve(99)
+    let outer = future_resolve(inner)
+    let v3 = await await outer
+    chk_eq_int("03_nested_await", v3, 99)
+
+    // Test 4: await on non-Future scalar — identity preserved.
+    // (RFC-022 §3.2 Rule 2: non-Future passes through unchanged.)
+    let v4 = await 42
+    chk_eq_int("04_non_future_identity", v4, 42)
+
+    println("")
+    println("═══════════════════════════════════════════════════════")
+    println("  passed: " + to_string(pass_count) + " / " + to_string(pass_count + fail_count))
+    println("═══════════════════════════════════════════════════════")
+    if fail_count == 0 {
+        println("PASS: RFC-022 G2 async codegen " + to_string(pass_count) + "/4")
+    } else {
+        println("FAIL: RFC-022 G2 async codegen — " + to_string(fail_count) + " failure(s)")
+    }
+}

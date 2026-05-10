@@ -845,6 +845,14 @@ fn codegen_c2(ast) {
             // Treat pure fn same as regular fn
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
+        } else if k == "AsyncFnDecl" {
+            // RFC-022 §3.1 / §4.1 D3 — `async fn` runs synchronously in
+            // stage 1; treat exactly like a plain FnDecl. The `async`
+            // keyword is annotation-only at codegen time. await-site
+            // unwrap is handled by gen2_expr Await branch + runtime
+            // hexa_await_unwrap (RFC-022 §4.2).
+            fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
+            fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ComptimeConst" || k == "ConstStmt" {
             // Try compile-time const-fold first. On success, register the
             // folded literal in the lookup table and SKIP global emission —
@@ -4367,6 +4375,25 @@ fn gen2_expr(node) {
         let incl = if node.value == "inclusive" { "1" } else { "0" }
         return "hexa_range_array(" + start_c + ", " + end_c + ", " + step_c + ", " + incl + ")"
     }
+    // ── Await: `await x` (RFC-022 §4.2 — G2 codegen integration) ─────────
+    // Mirrors interp self/hexa_full.hexa:8048-8057. Wraps the inner
+    // expression in hexa_await_unwrap() (defined in self/runtime.c) which
+    // checks for a Future struct and extracts `.value`, else identity.
+    //
+    // Per RFC-022 §3.1: stage-1 async is annotation-only — `await` runs
+    // synchronously to completion on the calling task. The unwrap is the
+    // ONLY observable effect. AsyncFnDecl is intentionally treated as a
+    // plain FnDecl elsewhere in this file (line 6359, 6485): the `async`
+    // keyword is a typing/annotation surface, not a codegen transform.
+    //
+    // Parser obligation (RFC-022 §4.3, D5 — deferred): when the parser
+    // begins emitting explicit AwaitExpr nodes for `await <expr>`, this
+    // branch fires automatically and native AOT binaries gain the unwrap
+    // semantic without further codegen change.
+    if k == "Await" || k == "AwaitExpr" {
+        let inner_c = gen2_expr(node.expr)
+        return "hexa_await_unwrap(" + inner_c + ")"
+    }
     if k == "" { return "hexa_map_new()" }
     eprintln("[codegen_c2] ERROR: unhandled expression kind: " + k)
     return "(fprintf(stderr, \"CODEGEN ERROR: unhandled expr kind: " + k + "\\n\"), exit(1), hexa_void())"
@@ -6078,6 +6105,11 @@ fn codegen_c2_full(ast) {
             fn_parts.push(ib.fn_code)
         } else if k == "PureFnDecl" {
             // Treat pure fn same as regular fn
+            fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
+            fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
+        } else if k == "AsyncFnDecl" {
+            // RFC-022 §3.1 / §4.1 D3 — `async fn` runs synchronously in
+            // stage 1 (mirror of the codegen_c2 program loop above).
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ComptimeConst" || k == "ConstStmt" {
