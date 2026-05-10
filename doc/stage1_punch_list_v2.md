@@ -12,6 +12,76 @@
 
 ---
 
+## Update 2026-05-10 (post A1 rebuild — host hooks active)
+
+The A1 host-side arena-reset hooks (commit a0f5cd5d) were inadvertently
+reverted by commit 9210e024 (RFC-022 G2 wilson gate, runtime.c -105/+38)
+on the same day. This update restores them in `self/runtime.c` and
+rebuilds `hexa.real` (clang -O3, 6 s) plus `build/hexa_interp.real`
+(clang -O2 on `/tmp/hexa_full_regen.c`, 1 min 18 s wall, 27 s user CPU).
+The transpile-then-clang pipeline collapses to a clang-only step
+because the cached `hexa_full_regen.c` already `#include`s the
+restored `self/runtime.c`. No retranspile needed, total rebuild ≈ 90 s.
+
+Stage 1 self-compile probe (post A1 hooks live):
+
+| metric                | pre-A1 (cfc883af) | this rebuild (a0f5cd5d + restore) | target |
+|-----------------------|-------------------|------------------------------------|--------|
+| wall                  | ~16 m (OOM @ 2 GB cap, exit 77) | 13 m 55 s (835 s, harness SIGTERM) | < 8 m  |
+| peak RSS              | 2 048 MB (cap)    | **3 510 MB** (`/usr/bin/time -l`)  | < 1 500 MB |
+| observable diags      | 0                 | **14** (parse errors on stdout)    | > 0    |
+| arena reset firings   | n/a               | confirmed (RSS sawtooth: 1 415 → 1 024 MB, 3 331 → 2 046 MB) | n/a |
+
+Hooks proven live by direct probe — `env("__HEXA_ARENA_PHASE_RESET__")`
+returns `"1"`, `env("__HEXA_ARENA_RSS_MB__")` returns numeric MB,
+`env("__HEXA_PHASE_LOG__name")` emits the formatted stderr line.
+
+**Reset works, but it's not enough.** The sawtooth in the RSS log
+shows the bump arena IS being rewound on each `phase_reset` call —
+yet peak still climbs to 3.27 GB. The reclaimable mass (str/Val
+bump-arena scratch) is dwarfed by what A1 explicitly does NOT touch:
+`array_store` / `map_store` / `struct_store` from
+`_splice_imported_items` (every `out.push(it)` allocates a fresh
+`[Item]` and the prior list stays referenced) plus per-fn `_infer_expr`
+type-check intermediates that hold across phases. Diagnostic capture
+crossed the parse boundary — 14 parse errors emitted (vs 0 pre-A1) —
+so we now *can* see the parser's view of the spliced super-module
+even though the run still over-runs the budget downstream.
+
+Baseline tests preserved on the new host (binary at `/tmp/hxA1`,
+deployed to `hexa.real` + `build/hexa_interp.real`):
+
+- `self/test_enum_payload_full.hexa`: 15/15 PASS
+- `stdlib/test/test_cancel.hexa`: 23/23 PASS
+- `self/test_async_codegen.hexa`: 4/4 PASS (RFC-022 G2)
+- `compiler/check/{bind,types,resolve}_test.hexa`: PASS each
+- `compiler/main.hexa --emit=asm tests/m0/hello.hexa`: 377-byte `.s`
+  (matches pre-A1 baseline byte-for-byte; 371 in spec is older).
+
+**Verdict on A1 alone**: P0 partially mitigated. The host hooks are
+necessary but not sufficient. Stage 1 still cannot land via in-process
+super-module compile. The next blockers are:
+
+- **A2** (`_splice_imported_items` in-place accumulator) — eliminates
+  the per-import `[Item]` array growth that dominates `array_store`.
+  Without A2 the array store grows monotonically; A1 only frees the
+  bump-arena strings, not the array carrier.
+- **M4-fix freelist re-enable** — `array_free_list` reclaim is
+  currently disabled (`self/hexa_full.hexa` line ~17993). Once A2
+  reduces the *churn* the freelist needs to *reclaim* the freed slots
+  for the GC effect to surface.
+- **A3** (hash-keyed env in types.hexa) — already landed at
+  `9dfe7bd0`; should reduce the type-check inner-loop wall component
+  but does not affect peak RSS (it was always CPU-bound, not memory).
+
+Estimate: A1 + A2 + freelist together likely bring peak RSS into the
+~1.5 GB target band; without all three, the spliced super-module
+remains beyond the in-process budget. Option (b) — partial self-compile
+mode that emits each leaf module separately and links — remains the
+durable escape valve if A2 proves harder than expected.
+
+---
+
 ## TL;DR
 
 The self-compile **never reaches a structured diagnostic**. The stage0
