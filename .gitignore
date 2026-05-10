@@ -139,6 +139,8 @@ hexa.pre-cc-backup-*
 .roadmap.bak.*
 *.hexa.bak
 Dockerfile.bak.*
+# Timestamped backup snapshots (e.g. hexa.real.bak.1778419304) — local-only
+*.bak.*
 archive/
 
 # Jekyll/static site generator output for docs/ — source is the .md files
