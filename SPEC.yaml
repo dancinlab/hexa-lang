@@ -168,10 +168,15 @@ targets:
     - triple: x86_64-linux-gnu
       role: CI / docker / runners
   tier_1_followup:
-    - triple: arm64-linux-gnu       # ARM containers
+    - triple: arm64-linux-gnu                       # ARM containers
+    - triple: thumbv7em-none-eabihf                 # Cortex-M4F (firmware: hexa-rtsc, hexa-chip)
+    - triple: riscv32imac-unknown-none-elf          # RISC-V 32-bit (firmware)
   tier_2_later:
     - triple: wasm32-unknown-unknown
     - triple: riscv64-linux-gnu
+    - triple: thumbv6m-none-eabi                    # Cortex-M0/M0+
+    - triple: thumbv7m-none-eabi                    # Cortex-M3
+    - triple: xtensa-esp32-none-elf                 # ESP32 (firmware: hexa-antimatter)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # macOS Mach-O gate (Decision 2026-05-09; warn-only Phase B)
@@ -713,6 +718,81 @@ fork_storm_prevention:
 # Documented patches in flight (2026-05-10) — orpheus key-recovery forge
 # engine downstream consumers; FFI/HTTP enablers usable by any hexa-lang
 # client (not orpheus-specific):
+# ─────────────────────────────────────────────────────────────────────────────
+# Stdlib core/alloc split + firmware tree (Decision 2026-05-10 — Option C)
+# ─────────────────────────────────────────────────────────────────────────────
+# Per audit doc/firmware_audit_2026_05_10.md, hexa-lang absorbs five firmware
+# repos (hexa-rtsc/chip/cern/antimatter/space). Rather than mixing host and
+# embedded code in a single stdlib (Option A) or fully separating into a
+# firmware/ tree alone (Option B), Option C splits stdlib into:
+#
+#   stdlib/core/    — target-agnostic primitives (no alloc, no syscall)
+#   stdlib/alloc/   — heap + arena allocators
+#   stdlib/hal/     — hardware abstraction (target-gated impl)
+#   stdlib/embedded/— bare-metal: panic, WFI, intr vectors
+#   stdlib/mcu/     — MCU-specific helpers (cortex_m, riscv, avr, esp32)
+#   stdlib/(host)   — current net/http/fs/process/json/... (host-only)
+#
+# firmware/ tree absorbs per-board code from existing hexa-* repos:
+#   firmware/boards/{rtsc,chip,cern,antimatter,space}/
+#   firmware/bsp/                 board-support packages
+#   firmware/linker_scripts/*.ld  per-MCU memory layouts
+firmware_evolution:
+  decision_2026_05_10: option_C_core_alloc_split_plus_firmware_tree
+  audit: doc/firmware_audit_2026_05_10.md
+  absorption_targets:
+    hexa-rtsc:        { phase: D+ verified, tests: 70/70 PASS, role: reference impl, dest: firmware/boards/rtsc/ }
+    hexa-chip:        { phase: D iter 5,    role: stdlib/hal consumer,                dest: firmware/boards/chip/ }
+    hexa-cern:        { phase: D2 to E,     role: Rust to hexa migrate during Phase E, dest: firmware/boards/cern/ }
+    hexa-antimatter:  { phase: D workspace, role: multi-vendor,                       dest: firmware/boards/antimatter/ }
+    hexa-space:       { phase: E hardware,  role: KiCad first deferred,               dest: firmware/boards/space/ }
+  dependency_direction:
+    allowed:
+      - "firmware/* -> stdlib/core"
+      - "firmware/* -> stdlib/alloc (with embedded allocator)"
+      - "firmware/* -> stdlib/hal"
+      - "firmware/* -> stdlib/mcu"
+      - "firmware/* -> stdlib/embedded"
+      - "compiler/* -> stdlib/core (cross-compile path)"
+      - "compiler/* -> stdlib/alloc"
+    forbidden:
+      - "firmware/* -> stdlib/{net,http,fs,process,...} (host modules)"
+      - "stdlib/* -> compiler/*"
+  target_gate_check:
+    rule: |
+      Compiler rejects host-stdlib imports at compile time when
+      --target=*-none-* is set. Detection by triple suffix.
+  embedded_allocator:
+    default: arena_v1                  # Decision 6 v1 arena-only
+    optional: bump_allocator           # tight-RAM MCUs
+    forbidden: tracing_gc              # Decision 6 permanent reject
+  linker_scripts:
+    location: firmware/linker_scripts/
+    consumed_by: hexa_ld
+    rfc: RFC-023 (planned — extension of RFC-018 §10)
+  roadmap:
+    F0: { status: this_commit,   deliverable: SPEC decisions + firmware/ skeleton }
+    F1: { status: next,          deliverable: stdlib/core/ extraction from current stdlib }
+    F2: { status: next,          deliverable: firmware/boards/rtsc/ reference port }
+    F3: { status: follow-up,     deliverable: thumbv7em-none-eabihf target in compiler/codegen }
+    F4: { status: follow-up,     deliverable: firmware/boards/{chip,cern,antimatter,space}/ absorptions }
+    F5: { status: follow-up,     deliverable: RFC-023 firmware linker spec (linker scripts + .bss/.data init) }
+  open_questions:
+    - which current host modules are target-agnostic enough to move into stdlib/core
+    - in-place via git submodules vs full copy into firmware/boards/*
+    - RFC-023 separate or extension of RFC-018
+    - CI cross-compile to MCU targets via qemu-system-arm — vendored or in CI image
+  biggest_unknown: |
+    hexa-lang ARM Cortex-M native codegen timeline. F3 (thumbv7em
+    target) is not started; firmware/ stays Rust-gated for hexa-cern/
+    hexa-antimatter until F3 + RFC-022 land.
+  mitigation: |
+    Parallel Rust path keeps Phase D extending until 2026-06-30;
+    Phase E hardware commission unblocks once stdlib/hal v1.0.0 lands.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stdlib evolution policy (Decision 2026-05-09)
+# ─────────────────────────────────────────────────────────────────────────────
 stdlib_evolution:
   decision_2026_05_09: separate_per_module_versioning
   rationale: |
