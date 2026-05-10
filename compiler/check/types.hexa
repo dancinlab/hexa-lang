@@ -84,7 +84,11 @@ fn _prim(kind: string, domain: string) -> Type {
     }
 }
 
+fn _types_t_i8()     -> Type { return _prim("i8",     "integer") }
+fn _types_t_i16()    -> Type { return _prim("i16",    "integer") }
+fn _types_t_i32()    -> Type { return _prim("i32",    "integer") }
 fn _types_t_i64()    -> Type { return _prim("i64",    "integer") }
+fn _types_t_f32()    -> Type { return _prim("f32",    "real") }
 fn _types_t_f64()    -> Type { return _prim("f64",    "real") }
 fn _types_t_bool()   -> Type { return _prim("bool",   "") }
 fn _types_t_string() -> Type { return _prim("string", "") }
@@ -655,12 +659,20 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
         // Without this, an unannotated let RHS spuriously raised HX3001
         // "expected unit, got <rhs>".
         if len(n) == 0 { return _types_empty_type() }
+        if n == "i8"  { return _types_t_i8() }
+        if n == "i16" { return _types_t_i16() }
+        if n == "i32" { return _types_t_i32() }
         if n == "i64" || n == "Int" || n == "int" { return _types_t_i64() }
+        if n == "f32" { return _types_t_f32() }
         if n == "f64" || n == "Float" || n == "float" || n == "Real" { return _types_t_f64() }
         if n == "bool" || n == "Bool" { return _types_t_bool() }
         if n == "string" || n == "String" { return _types_t_string() }
         if n == "char" || n == "Char" { return _types_t_char() }
         if n == "unit" || n == "Unit" || n == "()" { return _types_t_unit() }
+        // u8/u16/u32/u64 — deferred: stage0 backend has no unsigned
+        // representation. Fall through to the `named:<n>` sentinel so
+        // downstream layers see the user's spelling without a silent
+        // i64 alias (which would mis-typecheck signed/unsigned mixes).
         return Type {
             kind: "named:" + n,
             def: _types_miss_def_id(),
@@ -770,16 +782,54 @@ fn _types_equal(a: Type, b: Type) -> bool {
 
 fn _types_is_numeric(t: Type) -> bool {
     if len(t.kind) == 0 { return false }
-    if t.kind == "i64" { return true }
-    if t.kind == "f64" { return true }
+    if t.kind == "i8"  { return true }
+    if t.kind == "i16" { return true }
     if t.kind == "i32" { return true }
+    if t.kind == "i64" { return true }
     if t.kind == "f32" { return true }
+    if t.kind == "f64" { return true }
     return false
 }
 
 fn _is_integer_kind(t: Type) -> bool {
-    if t.kind == "i64" { return true }
+    if t.kind == "i8"  { return true }
+    if t.kind == "i16" { return true }
     if t.kind == "i32" { return true }
+    if t.kind == "i64" { return true }
+    return false
+}
+
+fn _is_float_kind(t: Type) -> bool {
+    if t.kind == "f32" { return true }
+    if t.kind == "f64" { return true }
+    return false
+}
+
+// Literal-coercion-aware compatibility check.
+//
+// `_types_equal` is structural on `kind`, which is too strict for the
+// universal-int-literal ergonomics every mainstream language ships:
+// `let x: i32 = 0` should type-check even though `0` is inferred as i64.
+// This helper layers a narrow exception on top:
+//
+//   - if either side is unknown → tolerate (preserves _types_equal policy)
+//   - if both kinds are equal → ok
+//   - if `actual` came from an integer literal AND both kinds are integer
+//     kinds (any of i8/i16/i32/i64) → ok
+//   - if `actual` came from a float literal AND both kinds are float
+//     kinds (f32/f64) → ok
+//
+// Range-fit checking (does the literal value fit in i8?) is deferred to
+// a later pass; v0 trusts the programmer the way Rust's untyped-int
+// literal inference does. Out-of-range fits surface as codegen overflow.
+fn _types_assignable(expected: Type, actual: Type, src: Expr) -> bool {
+    if _types_equal(expected, actual) { return true }
+    if _types_is_lit_int(src.kind) && _is_integer_kind(expected) && _is_integer_kind(actual) {
+        return true
+    }
+    if _types_is_lit_float(src.kind) && _is_float_kind(expected) && _is_float_kind(actual) {
+        return true
+    }
     return false
 }
 
@@ -897,12 +947,16 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 
     if _types_is_return(e.kind) {
         let mut val_t = _types_t_unit()
+        let mut val_src = e
         if len(e.children) > 0 {
             val_t = _infer_expr(e.children[0], env, ctx, out)
+            val_src = e.children[0]
         }
-        // Validate against enclosing fn return type.
+        // Validate against enclosing fn return type. _types_assignable
+        // permits the standard integer-literal coercion (e.g. `return 0`
+        // for an `-> i32` fn) so the M0 baseline type-checks.
         if len(ctx.fn_return.kind) > 0 {
-            if !_types_equal(ctx.fn_return, val_t) {
+            if !_types_assignable(ctx.fn_return, val_t, val_src) {
                 _emit_hx3004(ctx.fn_name, ctx.fn_return, val_t, e.span, out)
             }
         }
@@ -1191,7 +1245,13 @@ pub fn type_check(module: Module) -> array {
             let body_t = _infer_expr(it.body, local, ctx, out)
             // Trailing block expression must also satisfy the return type
             // (when fn was annotated and body produced a value).
-            if len(r.kind) > 0 && !_types_equal(r, body_t) {
+            // Use the block's last child as the literal-coercion source so
+            // `fn f() -> i32 { 0 }` type-checks via _types_assignable.
+            let mut tail_src = it.body
+            if len(it.body.children) > 0 {
+                tail_src = it.body.children[len(it.body.children) - 1]
+            }
+            if len(r.kind) > 0 && !_types_assignable(r, body_t, tail_src) {
                 // Only report if body actually produced something (non-unknown);
                 // unannotated/early-return-only fns still pass cleanly.
                 if len(body_t.kind) > 0 && body_t.kind != "unit" {
@@ -1199,11 +1259,12 @@ pub fn type_check(module: Module) -> array {
                 }
             }
         } else if _types_is_let_item(it.kind) {
-            // RHS type vs declared type.
+            // RHS type vs declared type. _types_assignable lets
+            // `let x: i32 = 0` type-check (literal-int coercion).
             let declared = _types_lower_type_ref(it.return_type)
             let rhs_t = _infer_expr(it.body, env, ctx0, out)
             if len(declared.kind) > 0 && len(rhs_t.kind) > 0 {
-                if !_types_equal(declared, rhs_t) {
+                if !_types_assignable(declared, rhs_t, it.body) {
                     _emit_hx3001(declared, rhs_t, it.body.span, out)
                 }
             }

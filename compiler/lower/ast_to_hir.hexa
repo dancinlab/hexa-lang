@@ -61,7 +61,11 @@ fn _prim_type(kind: string, domain: string) -> Type {
     }
 }
 
+fn _hir_t_i8()     -> Type { return _prim_type("i8",     "integer") }
+fn _hir_t_i16()    -> Type { return _prim_type("i16",    "integer") }
+fn _hir_t_i32()    -> Type { return _prim_type("i32",    "integer") }
 fn _hir_t_i64()    -> Type { return _prim_type("i64",    "integer") }
+fn _hir_t_f32()    -> Type { return _prim_type("f32",    "real") }
 fn _hir_t_f64()    -> Type { return _prim_type("f64",    "real") }
 fn _hir_t_bool()   -> Type { return _prim_type("bool",   "") }
 fn _hir_t_string() -> Type { return _prim_type("string", "") }
@@ -83,12 +87,17 @@ fn _hir_lower_type_ref(tr: TypeRef) -> Type {
     if len(tr.kind) == 0 { return _hir_t_unit() }
     if tr.kind == "named" {
         let n = tr.name
+        if n == "i8"  { return _hir_t_i8() }
+        if n == "i16" { return _hir_t_i16() }
+        if n == "i32" { return _hir_t_i32() }
         if n == "i64" || n == "Int" || n == "int" { return _hir_t_i64() }
+        if n == "f32" { return _hir_t_f32() }
         if n == "f64" || n == "Float" || n == "float" || n == "Real" { return _hir_t_f64() }
         if n == "bool" || n == "Bool" { return _hir_t_bool() }
         if n == "string" || n == "String" { return _hir_t_string() }
         if n == "char" || n == "Char" { return _hir_t_char() }
         if n == "unit" || n == "Unit" || n == "()" || len(n) == 0 { return _hir_t_unit() }
+        // u8/u16/u32/u64 — deferred (mirror compiler/check/types.hexa policy).
         return Type {
             kind: "named:" + n,
             def: _hir_miss_def_id(),
@@ -818,10 +827,12 @@ fn _atlas_kind_type(rk: string) -> Type {
 // ── Numeric promotion helper for binops (same-kind passthrough) ──
 
 fn _hir_is_numeric(t: Type) -> bool {
-    if t.kind == "i64" { return true }
-    if t.kind == "f64" { return true }
+    if t.kind == "i8"  { return true }
+    if t.kind == "i16" { return true }
     if t.kind == "i32" { return true }
+    if t.kind == "i64" { return true }
     if t.kind == "f32" { return true }
+    if t.kind == "f64" { return true }
     return false
 }
 
