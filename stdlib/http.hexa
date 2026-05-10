@@ -8,8 +8,8 @@
 // @usage(import stdlib/http; let body = http_get_with_headers(url, #{"x-api-key": k}, 30))
 //
 // ── module governance metadata (hexa-lang module versioning spec 2026-05-03) ──
-// @version 1.0.0
-// @capabilities [http_get_with_headers, http_get_with_headers_status]
+// @version 1.1.0
+// @capabilities [http_get_with_headers, http_get_with_headers_status, http_post_with_headers, http_post_with_headers_status]
 // @stability stable
 // @since 2026-05-03
 // @maintainer anima-core
@@ -155,4 +155,69 @@ pub fn http_get_with_headers_status(url: string, headers, timeout_sec: int) {
 // preserves it).
 pub fn http_build_header_flags(headers) -> string {
     return _build_header_flags(headers)
+}
+
+// http_post_with_headers — body-only POST with custom headers + body string.
+//
+// JSON-RPC enabler (orpheus bitcoind RPC chokepoint). Mirrors http_get_with_headers
+// failure-mode semantics: returns "" on non-2xx / network / curl-missing.
+//
+// curl options:
+//   -X POST          — explicit method (curl infers POST when -d set, but explicit
+//                       is safer for reverse proxies that strip method-inference).
+//   --data-binary    — preserves body bytes verbatim (no @-prefix interpretation,
+//                       no newline stripping). Critical for JSON-RPC bodies that
+//                       MUST be byte-exact for hash-style auth.
+//   --fail           — 4xx/5xx → exit non-zero → empty body (callers use
+//                       http_post_with_headers_status for diagnostics).
+//
+// Body shell-escape: single-quote wrap (identical pattern to header values).
+// Body containing literal NUL byte unsafe (hexa string truncation; same caveat
+// as http_get_with_headers).
+//
+// raw#9 hexa-only-strict: pure hexa wrapper; exec("curl -X POST ...") shellout.
+pub fn http_post_with_headers(url: string, headers, body: string, timeout_sec: int) -> string {
+    if len(url) == 0 { return "" }
+    let t = if timeout_sec > 0 { timeout_sec } else { 30 }
+    let hflags = _build_header_flags(headers)
+    let cmd = "curl -sSL --fail -X POST --max-time " + to_string(t)
+            + hflags
+            + " --data-binary " + _http_shell_escape(body)
+            + " " + _http_shell_escape(url) + " 2>/dev/null"
+    let response = to_string(exec(cmd))
+    return response
+}
+
+// http_post_with_headers_status — full {status, body, ok} POST variant.
+//
+// Drops `--fail` so 4xx/5xx response bodies are recoverable (JSON-RPC error
+// envelopes carry useful diagnostics even on HTTP 500). Status code peeled
+// from `\n%{http_code}` sentinel via curl -w. status==0 → curl itself failed
+// (DNS / TLS / timeout / connection refused).
+pub fn http_post_with_headers_status(url: string, headers, body: string, timeout_sec: int) {
+    let result = #{}
+    result["status"] = 0
+    result["body"] = ""
+    result["ok"] = false
+
+    if len(url) == 0 { return result }
+    let t = if timeout_sec > 0 { timeout_sec } else { 30 }
+    let hflags = _build_header_flags(headers)
+    let cmd = "curl -sSL -X POST --max-time " + to_string(t)
+            + hflags
+            + " --data-binary " + _http_shell_escape(body)
+            + " -w '\\n%{http_code}' " + _http_shell_escape(url) + " 2>/dev/null"
+    let raw = to_string(exec(cmd))
+    if len(raw) == 0 { return result }
+
+    let nl = _http_last_index_of(raw, "\n")
+    if nl < 0 { return result }
+    let body_resp = raw.substring(0, nl)
+    let status_str = raw.substring(nl + 1, len(raw)).trim()
+    let status = to_int(status_str)
+
+    result["status"] = status
+    result["body"] = body_resp
+    result["ok"] = status >= 200 && status < 300
+    return result
 }

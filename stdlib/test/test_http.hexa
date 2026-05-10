@@ -125,6 +125,54 @@ fn main() -> void {
         println("  -- live probe skipped (ANIMA_HTTP_HEADERS_LIVE!=1) --")
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    //  http_post_with_headers — JSON-RPC enabler (orpheus bitcoind path)
+    // ═══════════════════════════════════════════════════════════════════
+    println("")
+    println("── stdlib/http POST selftest ──")
+
+    // ── 7. empty url POST → "" ─────────────────────────────────────────
+    let post_empty = http_post_with_headers("", #{}, "{}", 5)
+    chk_eq_int("post_empty_url_body_len", len(post_empty), 0)
+
+    // ── 8. empty url POST status → status=0, ok=false ──────────────────
+    let post_r_empty = http_post_with_headers_status("", #{}, "{}", 5)
+    chk_eq_int("post_empty_url_status", post_r_empty["status"], 0)
+    chk_eq_bool("post_empty_url_not_ok", post_r_empty["ok"], false)
+
+    // ── 9. invalid port POST — not ok, no panic ────────────────────────
+    let post_r_bad = http_post_with_headers_status(
+        "http://127.0.0.1:1/no-such-port",
+        #{"Content-Type": "application/json"},
+        "{\"jsonrpc\":\"1.0\",\"id\":\"t\",\"method\":\"ping\",\"params\":[]}",
+        1
+    )
+    chk_eq_bool("post_invalid_port_not_ok", post_r_bad["ok"], false)
+
+    // ── 10. body-with-quotes shell-escape probe ────────────────────────
+    let post_r_tricky = http_post_with_headers_status(
+        "http://127.0.0.1:1/x",
+        #{"Content-Type": "application/json"},
+        "{\"k\":\"v with 'single' quote\"}",
+        1
+    )
+    chk_eq_bool("post_tricky_body_did_not_panic", post_r_tricky["status"] == 0, true)
+
+    // ── 11. live POST probe (opt-in) — httpbin.org/post echoes body ────
+    if live_env == "1" {
+        let post_live = http_post_with_headers_status(
+            "https://httpbin.org/post",
+            #{"Content-Type": "application/json", "x-trace-id": "post-selftest"},
+            "{\"hello\":\"orpheus\",\"jsonrpc\":\"1.0\"}",
+            10
+        )
+        chk_eq_int("post_live_status", post_live["status"], 200)
+        chk_eq_bool("post_live_ok", post_live["ok"], true)
+        chk_contains("post_live_body_echoed", post_live["body"], "\"hello\"")
+        chk_contains("post_live_body_orpheus", post_live["body"], "orpheus")
+        chk_contains("post_live_trace_echoed", post_live["body"], "X-Trace-Id")
+    }
+
     let total = pass_count + fail_count
     println("")
     println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
