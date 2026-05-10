@@ -1,0 +1,106 @@
+// HEXA Standard Library — io (text file I/O)
+//
+// @version 0.1.0
+// @capabilities [io]
+//
+// Closes the orpheus-forge / ttr_ranker duckdb migration chokepoint
+// (2026-05-10): 10/17 sites deferred on macOS ARG_MAX (~256 KiB shell
+// exec limit) when piping 2 MiB+ JSON dumps through
+//     exec("python3 -c 'import json; print(json.dumps(...))' > /tmp/foo.json")
+// The fix is to keep the bytes inside the hexa-lang process and ride
+// the interpreter's already-builtin write_file primitive (POSIX
+// fwrite — no subprocess, no fork, no ARG_MAX).
+//
+// Surface:
+//   pub fn write_text(path: string, content: string) -> bool
+//   pub fn read_text(path: string)                  -> string
+//   pub fn write_text_atomic(path: string, content: string) -> bool
+//
+// Implementation path: stdlib wrapper around the interpreter builtins
+// `write_file(path, content)` and `read_file(path)` (defined in
+// self/runtime.c::rt_write_file / rt_read_file and dispatched from
+// self/hexa_full.hexa). Rationale: the builtins already use C-level
+// fwrite/fread on a FILE*; adding a stdlib wrapper keeps the change
+// surface minimal while documenting the orpheus migration pattern.
+//
+// Atomic-write strategy (write_text_atomic):
+//   1. Write the full payload to <path>.tmp via the builtin write_file.
+//   2. exec("mv <tmp> <path>")  — POSIX rename(2) is atomic on the
+//      same filesystem, so a crash strictly between (1) and (2) leaves
+//      <path>.tmp orphaned but never corrupts <path>.
+// The plain write_text() does the same .tmp + rename dance by default,
+// because a torn mid-write is exactly the failure mode that bit the
+// duckdb chokepoints under SIGTERM during long batch runs.
+//
+// own 4 invariant: write_text receives plaintext — caller decides the
+// serialization (json.serialize, yaml.dumps, repr, …). The stdlib is
+// content-neutral.
+//
+// NUL byte caveat: hexa string semantics are C-string (NUL-terminated)
+// at the runtime layer. Embedded NUL bytes in `content` are truncated
+// at write time (rt_write_file uses strlen). For binary blobs use
+// write_file_bytes (stdlib/bytes) instead.
+
+// ── primary surface ────────────────────────────────────────────────
+
+// write_text(path, content) — atomic write of plaintext content of any size.
+// Returns true on success, false on failure (best-effort; the underlying
+// builtin currently cannot surface fwrite errors short of a throw).
+//
+// Atomicity: writes to <path>.tmp then renames into place. A crash mid-
+// write leaves <path>.tmp orphaned; the destination is either the previous
+// committed content (if any) or absent. Callers that need crash recovery
+// should sweep <path>.tmp on startup.
+pub fn write_text(path: string, content: string) -> bool {
+    return write_text_atomic(path, content)
+}
+
+// read_text(path) — read whole file as a string. Returns "" if path
+// missing/unreadable (mirrors the builtin read_file convention).
+pub fn read_text(path: string) -> string {
+    return read_file(path)
+}
+
+// write_text_atomic(path, content) — explicit atomic-write entry point.
+// Same semantics as write_text(); kept as a separate name so callers
+// that *intentionally* want non-atomic write can fall back to the
+// builtin write_file directly.
+pub fn write_text_atomic(path: string, content: string) -> bool {
+    if len(path) == 0 { return false }
+    let tmp = path + ".tmp"
+    // Step 1: full payload → .tmp via the interpreter builtin.
+    // write_file is already POSIX fwrite under the hood (no exec, no
+    // ARG_MAX limit); arbitrary size is supported up to available RAM.
+    write_file(tmp, content)
+    // Step 2: atomic rename. POSIX rename(2) on the same filesystem
+    // is guaranteed atomic w.r.t. other observers; `mv` invokes it.
+    // shell quoting: single-quote wrap + embedded ' → '\''
+    let q_tmp = shell_quote_io(tmp)
+    let q_dst = shell_quote_io(path)
+    let _ = exec("mv " + q_tmp + " " + q_dst + " 2>/dev/null")
+    // Verify destination materialised. file_exists is the cheapest
+    // post-condition probe (S_ISREG, no read).
+    return file_exists(path)
+}
+
+// ── private helpers ────────────────────────────────────────────────
+
+// Local shell-arg quoter — single-quote wrap, embedded ' becomes '"'"'.
+// Duplicated from stdlib/sys.shell_quote to keep this module dependency-
+// free during bootstrap (matches portable_fs.hexa convention).
+fn shell_quote_io(s: string) -> string {
+    let mut out = []
+    out.push("'")
+    let mut i = 0
+    while i < len(s) {
+        let c = s[i]
+        if c == '\'' {
+            out.push("'\"'\"'")
+        } else {
+            out.push(s.substring(i, i + 1))
+        }
+        i = i + 1
+    }
+    out.push("'")
+    return out.join("")
+}

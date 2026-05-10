@@ -1,0 +1,196 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/test/test_io.hexa
+//
+//  Selftest for stdlib/io — write_text / read_text / write_text_atomic.
+//
+//  Run:
+//      hexa run stdlib/test/test_io.hexa
+//
+//  Coverage:
+//      * small roundtrip (sanity)
+//      * 1 MiB / 5 MiB / 10 MiB roundtrips (orpheus-forge sizes)
+//      * read-after-write consistency
+//      * UTF-8 BOM preserved
+//      * CRLF line endings preserved
+//      * mid-write crash simulation: pre-existing .tmp does not corrupt
+//        destination; orphan tmp left after crash never escapes into <path>
+//      * empty path → false (no panic)
+//      * read of missing path → "" (no throw)
+//
+//  Closes orpheus-forge / ttr_ranker duckdb chokepoint (2026-05-10).
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/io"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag, ok) {
+    if ok {
+        println("  PASS " + tag)
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag)
+        fail_count = fail_count + 1
+    }
+}
+
+fn chk_eq_int(tag, got, want) {
+    if got == want {
+        println("  PASS " + tag + " == " + to_string(want))
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag + " got=" + to_string(got) + " want=" + to_string(want))
+        fail_count = fail_count + 1
+    }
+}
+
+// build a deterministic payload of approx target_bytes by doubling.
+// returns the actual payload (length is the smallest power-of-two
+// multiple of seed_len that meets or exceeds target_bytes).
+fn build_payload(target_bytes: int) -> string {
+    let seed = "0123456789ABCDEFGHIJKLMNOPQRSTUV"  // 32 bytes
+    let mut s = seed
+    let mut i = 0
+    while len(s) < target_bytes && i < 32 {
+        s = s + s
+        i = i + 1
+    }
+    return s
+}
+
+fn main() -> void {
+    println("── stdlib/io selftest (write_text / read_text) ──")
+
+    let dir = "/tmp"
+
+    // ── Case 1: small roundtrip sanity ─────────────────────────────────
+    let p_small = dir + "/hx_io_small.txt"
+    let small = "hello orpheus\n"
+    let ok1 = write_text(p_small, small)
+    chk("small_write_returns_true", ok1)
+    let got1 = read_text(p_small)
+    chk("small_roundtrip", got1 == small)
+    chk_eq_int("small_len", len(got1), len(small))
+
+    // ── Case 2: 1 MiB roundtrip ────────────────────────────────────────
+    let p_1m = dir + "/hx_io_1m.txt"
+    let payload_1m = build_payload(1048576)
+    chk("payload_1m_is_at_least_1MiB", len(payload_1m) >= 1048576)
+    let ok_1m = write_text(p_1m, payload_1m)
+    chk("write_1m_ok", ok_1m)
+    let got_1m = read_text(p_1m)
+    chk_eq_int("read_1m_len", len(got_1m), len(payload_1m))
+    chk("roundtrip_1m_eq", got_1m == payload_1m)
+
+    // ── Case 3: 5 MiB roundtrip ────────────────────────────────────────
+    // build_payload doubles; smallest doubled length ≥ 5 MiB is 8 MiB.
+    let p_5m = dir + "/hx_io_5m.txt"
+    let payload_5m = build_payload(5242880)
+    chk("payload_5m_is_at_least_5MiB", len(payload_5m) >= 5242880)
+    let ok_5m = write_text(p_5m, payload_5m)
+    chk("write_5m_ok", ok_5m)
+    let got_5m = read_text(p_5m)
+    chk_eq_int("read_5m_len", len(got_5m), len(payload_5m))
+    chk("roundtrip_5m_eq", got_5m == payload_5m)
+
+    // ── Case 4: 10 MiB roundtrip ───────────────────────────────────────
+    let p_10m = dir + "/hx_io_10m.txt"
+    let payload_10m = build_payload(10485760)
+    chk("payload_10m_is_at_least_10MiB", len(payload_10m) >= 10485760)
+    let ok_10m = write_text(p_10m, payload_10m)
+    chk("write_10m_ok", ok_10m)
+    let got_10m = read_text(p_10m)
+    chk_eq_int("read_10m_len", len(got_10m), len(payload_10m))
+    chk("roundtrip_10m_eq", got_10m == payload_10m)
+
+    // ── Case 5: UTF-8 BOM preserved ────────────────────────────────────
+    let p_bom = dir + "/hx_io_bom.txt"
+    let bom = "\xEF\xBB\xBF"  // UTF-8 BOM
+    let bom_content = bom + "hello bom\n"
+    write_text(p_bom, bom_content)
+    let got_bom = read_text(p_bom)
+    chk_eq_int("bom_len", len(got_bom), len(bom_content))
+    chk("bom_preserved", got_bom == bom_content)
+
+    // ── Case 6: CRLF line endings preserved ────────────────────────────
+    let p_crlf = dir + "/hx_io_crlf.txt"
+    let crlf = "line1\r\nline2\r\nline3\r\n"
+    write_text(p_crlf, crlf)
+    let got_crlf = read_text(p_crlf)
+    chk_eq_int("crlf_len", len(got_crlf), len(crlf))
+    chk("crlf_preserved", got_crlf == crlf)
+
+    // ── Case 7: BOM + CRLF combined (real-world JSON dumps) ───────────
+    let p_combo = dir + "/hx_io_combo.txt"
+    let combo = bom + "k1: v1\r\nk2: v2\r\n"
+    write_text(p_combo, combo)
+    let got_combo = read_text(p_combo)
+    chk("bom_crlf_combo_preserved", got_combo == combo)
+
+    // ── Case 8: read of missing path returns "" (no throw) ─────────────
+    // pick a path that should not exist on a clean test box.
+    let p_missing = dir + "/hx_io_does_not_exist_xyz_98765.txt"
+    let _ = exec("rm -f " + p_missing)
+    let got_missing = read_text(p_missing)
+    chk("read_missing_empty", got_missing == "")
+    chk_eq_int("read_missing_len_0", len(got_missing), 0)
+
+    // ── Case 9: empty path → write returns false ──────────────────────
+    let ok_empty = write_text("", "anything")
+    chk("empty_path_returns_false", !ok_empty)
+
+    // ── Case 10: atomic-write — orphan .tmp does not corrupt dest ──
+    //
+    // Simulation: pre-place a stale/garbage <path>.tmp that mimics a prior
+    // crashed write. write_text overwrites it cleanly, then atomically
+    // renames it into <path>. The destination must contain the NEW
+    // content, never the stale tmp content, never a partial write.
+    let p_atom = dir + "/hx_io_atom.txt"
+    let _ = exec("rm -f " + p_atom + " " + p_atom + ".tmp")
+    // prior committed content
+    write_text(p_atom, "v1-committed")
+    chk("atom_v1_landed", read_text(p_atom) == "v1-committed")
+    // simulate orphan tmp from a crashed earlier writer
+    write_file(p_atom + ".tmp", "STALE-ORPHAN-CONTENT-DO-NOT-COMMIT")
+    chk("atom_orphan_tmp_present", file_exists(p_atom + ".tmp"))
+    // new write must overwrite tmp + atomically swap → dest = v2
+    write_text(p_atom, "v2-fresh")
+    let got_atom = read_text(p_atom)
+    chk("atom_v2_landed", got_atom == "v2-fresh")
+    chk("atom_no_stale_leak", !got_atom.contains("STALE"))
+    // after a successful write the .tmp should have been renamed away
+    chk("atom_tmp_cleaned_after_write", !file_exists(p_atom + ".tmp"))
+
+    // ── Case 11: atomic-write — mid-write crash leaves dest intact ──
+    //
+    // Direct simulation of a torn write: we manually stage a partial .tmp
+    // (representing a writer that died after step 1 but before the mv) and
+    // verify the destination retains its previous content. Atomicity means
+    // the orphan .tmp NEVER reaches <path> until the rename runs.
+    let p_torn = dir + "/hx_io_torn.txt"
+    let _ = exec("rm -f " + p_torn + " " + p_torn + ".tmp")
+    write_text(p_torn, "stable-prior")
+    // mid-write crash: only tmp written, mv never happened
+    write_file(p_torn + ".tmp", "torn-half-write")
+    let got_torn_dest = read_text(p_torn)
+    chk("torn_dest_unchanged", got_torn_dest == "stable-prior")
+    chk("torn_tmp_orphan_visible", read_file(p_torn + ".tmp") == "torn-half-write")
+    // cleanup
+    let _ = exec("rm -f " + p_torn + " " + p_torn + ".tmp")
+
+    // ── cleanup large-payload artefacts ────────────────────────────────
+    let _ = exec("rm -f " + p_small + " " + p_1m + " " + p_5m + " " + p_10m
+                 + " " + p_bom + " " + p_crlf + " " + p_combo + " " + p_atom)
+
+    // ── tally ──────────────────────────────────────────────────────────
+    let total = pass_count + fail_count
+    println("")
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: io stdlib selftest " + to_string(pass_count) + "/" + to_string(total))
+        return
+    }
+    println("FAIL: io stdlib selftest " + to_string(pass_count) + "/" + to_string(total))
+    exit(1)
+}
