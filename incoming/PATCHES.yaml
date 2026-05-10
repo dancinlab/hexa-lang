@@ -38,3 +38,43 @@
   selftest_delta: "+1 (14 -> 15)"
   downstream_consumer: orpheus recovery/module/method_bitcoin_core_rpc.hexa
   status: pending_external
+
+- id: rfc020-enum-payload-variants
+  source_commit: pending
+  source_files:
+    - self/parser.hexa
+    - self/type_checker.hexa
+    - self/native/hexa_cc.c
+    - self/test_enum_payload_full.hexa
+  compiler_impact: |
+    A1+A2+A3 already landed (commits 3c8be96c + 005d5427 bundled).
+    A4 hexa_cc.c codegen partial (commit a85b8a1c) — match-side
+    payload extraction gap remaining.
+    A5 regression test self/test_enum_payload_full.hexa: 15-case
+    target; stale-build 5/15 → current rebuild target 15/15.
+  selftest_delta: "RFC-020 regression suite (15 cases)"
+  downstream_consumer: |
+    wilson core port G1 gate; RFC-020 stdlib usage across all hexa
+    consumers that adopt sum-type idioms.
+  status: in_progress
+  background_task: 72  # RFC-020 A4/A5 agent
+
+- id: wilson-pi-port-6-gap-prereq
+  source_commit: pending
+  source_files:
+    - proposals/rfc_022_async_model.md  # G2
+    - stdlib/cancel.hexa                # G3
+    - stdlib/test/test_cancel.hexa
+    - stdlib/cancel.ai.md
+  compiler_impact: |
+    G1 = RFC-020 A5 (parallel — see entry above)
+    G2 async model parity: spec only, no compiler/ change in this batch
+    G3 cancel token: stdlib-only addition; selftest +1
+    G4 jsonschema, G5 fs atomic-append, G6 jsonl_pool — DEFERRED
+    (low-risk stdlib follow-ups; out of wilson core gate)
+  selftest_delta: "+1 (cancel token roundtrip)"
+  downstream_consumer: |
+    wilson core port unblocks once G1 + G2 + G3 land; G4-G6 needed
+    for full feature parity but not for core start.
+  status: in_progress
+  background_task: 73  # wilson G2+G3 agent
