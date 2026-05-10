@@ -1,0 +1,45 @@
+#!hexa strict
+// gpgpu_n6/projection/metal.hexa — vendor backend 5/6: Apple Metal.
+//
+// canon: ~/core/canon/domains/compute/gpgpu/gpgpu.md §5.1 (vector add).
+// IR substrate: AIR (Apple Intermediate Representation, ≃ SPIR-V via
+// translator). Host = Objective-C / Swift / C++. Kernel = MSL (C++14
+// dialect). Metal 4 introduces tensors as first-class types.
+//
+// Phase F iter 3 — Metal MTLComputeCommandEncoder dispatch emission.
+
+use "stdlib/hal/compute"
+
+let METAL_VENDOR = "Metal"
+let METAL_IR     = "AIR"
+let METAL_LATEST = "Metal 4 / MSL 4 (2025-10-23)"
+
+fn metal_project_launch(
+    _kern_name: str,
+    grid_x: int, grid_y: int, grid_z: int,
+    wg_x: int, wg_y: int, wg_z: int,
+    _barrier_scope: int,
+    _subgroup_w: int
+) -> str {
+    let grid  = "MTLSizeMake(" + str(grid_x * wg_x) + "," + str(grid_y * wg_y) + "," + str(grid_z * wg_z) + ")"
+    let tg    = "MTLSizeMake(" + str(wg_x) + "," + str(wg_y) + "," + str(wg_z) + ")"
+    return "[encoder dispatchThreads:" + grid + " threadsPerThreadgroup:" + tg + "]; " +
+           "/* simdgroup = 32 (Apple Silicon) */"
+}
+
+fn metal_project_vector_add(n: int) -> str {
+    return "[encoder dispatchThreads:MTLSizeMake(" + str(n) + ",1,1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];"
+}
+
+fn metal_capabilities() -> [str] {
+    return [
+        "Metal 4 unified command encoder",
+        "tensor-typed first-class (API + MSL)",
+        "neural rendering / MetalFX Frame Interpolation",
+        "ray tracing denoiser",
+        "argument buffers (resource binding)",
+        "simdgroup ops + threadgroup memory"
+    ]
+}
+
+fn metal_meta() -> [str] { return [METAL_VENDOR, METAL_IR, METAL_LATEST, str(metal_capabilities().len())] }

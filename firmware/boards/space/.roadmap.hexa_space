@@ -1,0 +1,116 @@
+# .roadmap.hexa_space — repo-overall tracker
+
+> Cross-cutting state: invariant lattice, release cadence, cycle history,
+> deadlines, pointers. Sister of `hexa-cosmos` / `hexa-scope` / `hexa-ufo` /
+> `hexa-rtsc` under `dancinlab` org.
+
+**Last sync**: 2026-05-06 · **Current release**: v1.0.0 · **Branch**: `main`
+
+---
+
+## §0 Terminal goal — 11-verb space substrate (4 그룹 모두 working spec)
+
+hexa-space 도착지 = **11-verb space substrate (core·engineering·observation·life) 모두 working spec + 1+ verb 실증 데이터 cross-link (SpaceX/NASA/ISS public)**.
+
+DoD:
+1. `core` (cosmic + starship) 통합 spec.
+2. `engineering` (aerospace + transport + engineering + systems) Falcon 9 / Starship public data fit.
+3. `observation` (astrodynamics + astronomy + obs_astronomy) Gaia DR3 cross-verify.
+4. `life` (astrobiology + medicine) ISS public health data n=6 fit.
+
+## §A.1 Invariant lattice (n=6)
+
+```
+σ(6) · φ(6) = n · τ(6) = J₂ = 24
+   12   ·   2  =  6  ·   4  = 24
+```
+
+| Symbol | Value | Role | Space projection |
+|--------|-------|------|------------------|
+| σ(6)   | 12    | sigma — cardinality bin | 12-month launch window cadence |
+| τ(6)   | 4     | tau — state quartet | 4 mission phases (design / build / launch / operate) |
+| φ(6)   | 2     | phi — verdict bit | crewed / uncrewed |
+| J₂     | 24    | Mathieu / Leech | 24-hour orbit harmonic (LEO ~ 90 min × σ·τ/2) |
+
+## §A.2 Release cadence
+
+| Version | Date | Status | Highlights |
+|---------|------|--------|------------|
+| v1.0.0 | 2026-05-06 | RELEASED | 11 verb 시드 + 4 그룹 표 |
+| v1.1.0 | ~2026-08 (TARGET) | planned | `astrodynamics` Kepler n=6 orbital mechanics .hexa |
+| v1.2.0 | ~2026-10 | planned | `astronomy` + `obs_astronomy` Gaia DR3 cross-verify |
+| v1.3.0 | ~2026-12 | planned | `aerospace` + `engineering` Falcon 9 / Starship public data fit |
+| v2.0.0 | ~2027-Q3 | ASPIRATIONAL | `astrobiology` + `medicine` ISS public health data n=6 fit |
+
+## §A.3 Cycle history
+
+- **Cycle 0 (2026-05-06)** — v1.0.0 initial extraction from canon@c0f1f570. Commit `dc65652`. 11 verb cp -R.
+
+## §A.4 Falsifier preregister
+
+- **F-SPACE-1** — Kepler 3rd law n=6 corrections 측정 ±0.1% 일치 (Mercury perihelion advance baseline)?
+- **F-SPACE-2** — Falcon 9 9-engine layout (3·3 grid = σ-φ+1) n=6 invariant 분석?
+- **F-SPACE-3** — ISS astronaut bone-loss τ=4 phase 회복 모델 NASA Twin Study fit?
+- **F-SPACE-4** — Starship 33-Raptor cluster (σ·τ-15) n=6 closed-form?
+
+## §A.5 Pending decisions
+
+- 4-그룹 의 .hexa CLI dispatch 우선순위 (observation 먼저 vs engineering 먼저).
+- hexa-scope 와의 obs_astronomy verb 중복 처리 (scope에 specialize fork).
+- ISS health data ToS / privacy issue 사전 확인.
+
+## §A.6 Stage-1+ T3 closure path (post-RSC saturation)
+
+RSC loop saturated 2026-05-08 (recipe §7.2 sat-1 + sat-2 ✓). All four
+preregistered falsifiers (F-SPACE-1/2/3/4) reach 67 % closure (T1 ✓ + T2 ✓).
+T3 (empirical hardware feed) is the only remaining tier — out of recipe
+scope per §9 since it cannot be closed by adding `.hexa` scripts alone.
+
+Path to 100 % closure follows the **hexa-antimatter Phase C/D/E** template:
+
+| Phase | Layer | Artefact | hexa-space scope |
+|:------|:------|:---------|:-----------------|
+| **C** | sim-firmware | `firmware/sim/<name>.hexa` state-machine + DAC/ADC pipeline + safety interlock verification | 4 controllers — one per F-SPACE-N |
+| **D** | HDL skeleton | `firmware/hdl/<name>.v` Verilog top-level (Vivado synthesis OK; not flashable) | 4 FPGA boards (Xilinx UltraScale+ family / STM32H7 MCU) |
+| **E** | physical board | actual silicon (procured / fabricated) + bench validation | ✗ funding-blocked |
+
+### §A.6.1 Stage-1 controller catalog (Phase C/D targets)
+
+- **HEXA-ORBIT-01** (F-SPACE-1) — Mercury perihelion advance pipeline.
+  STM32H7 + USNO MICA ephemeris reader + Kepler integrator. Validates
+  43″/century anomaly via numerical comparison to GR + n=6 closed-form.
+- **HEXA-LAUNCH-01** (F-SPACE-2) — Falcon 9 webcast telemetry capture.
+  Xilinx Zynq UltraScale+ (XCZU7EV) + HDMI 1080p capture + on-screen
+  T+/altitude/velocity OCR + Tsiolkovsky Δv reconstruction.
+- **HEXA-DXA-01** (F-SPACE-3) — bone-density timeseries fitter.
+  STM32H7 + USB DXA scanner data parser + τ=4 phase exp-decay fit
+  (Sibonga 2007 t½ = 6 mo) + NASA Twin Study comparator.
+- **HEXA-RAPTOR-01** (F-SPACE-4) — Starship cluster telemetry ingester.
+  Xilinx Kintex UltraScale (XCKU040) + same OCR pipeline as LAUNCH-01
+  re-targeted to Starship webcast overlay (33-Raptor stage-1 burn) +
+  σ·n/φ−3 = 33 cluster-scaling validation.
+
+Phase C+D land in `firmware/sim/` and `firmware/hdl/` respectively;
+Phase E remains gated on funding (estimated ≈ $25k / board procurement).
+
+### §A.6.2 Phase E procurement-prep (added 2026-05-08)
+
+Each Stage-1 controller ships per-board procurement docs in
+`firmware/board/<slug>/`:
+
+- `SCHEMATIC.md` — block diagram + key net list + power tree + decoupling
+- `BOM.csv` — line-item bill-of-materials with Digi-Key part numbers,
+  qty, unit price, extended price, prototype + qty-5 totals
+- `PCB.md` — stack-up + board outline + routing rules + impedance + EMC
+- `COMMISSIONING.md` — bench bring-up checklist with PASS/FAIL gates
+  and the **F-SPACE-N closure event** that flips T3 from ✗ to ✓
+- `<slug>.kicad_sch` — KiCad 7+ S-expression root-sheet skeleton
+  (opens cleanly; populate from SCHEMATIC.md §2)
+
+Stage-1 program total ≈ **$26 k** (5× boards each + tools, within §A.6
+~$25 k envelope; Vivado license shared across LAUNCH-01 + RAPTOR-01).
+
+Phase E completes the **closure path** documentation; Phase F (physical
+board procurement) remains funding-blocked. Once any single board
+arrives + Phase G commissioning passes its closure-event gate, the
+corresponding F-SPACE-N flips to 100 % closure (T1 ✓ + T2 ✓ + T3 ✓).

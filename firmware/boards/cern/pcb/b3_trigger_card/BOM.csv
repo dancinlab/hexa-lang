@@ -1,0 +1,30 @@
+ref,qty,part_number,description,manufacturer,distributor,distributor_part,unit_price_usd,package,datasheet,notes
+U1,1,STM32H743ZIT6,32-bit MCU 480 MHz Cortex-M7 2 MB Flash 1 MB SRAM,STMicroelectronics,Digi-Key,497-STM32H743ZIT6-ND,15.50,LQFP-144,https://www.st.com/resource/en/datasheet/stm32h743zi.pdf,§3 F2 BOM line — laser-driver MCU
+U2,1,XC7A35T-1FGG484C,Artix-7 FPGA 35K LUTs 484-pin BGA,AMD/Xilinx,Digi-Key,XC7A35T-1FGG484C-ND,72.00,FBGA-484,https://docs.amd.com/v/u/en-US/ds181_Artix_7_Data_Sheet,§3 F1 BOM line — timing controller
+U3,1,LTC2668-16IUFD#PBF,16-channel 16-bit DAC ±10V SPI,Analog Devices,Digi-Key,LTC2668-16IUFD#PBF-ND,38.00,QFN-38,https://www.analog.com/media/en/technical-documentation/data-sheets/2668fb.pdf,DAC chain B10 (HV/coil/pump/valve)
+U4,1,LTC2208IUP#PBF,16-bit 130 MS/s ADC differential,Analog Devices,Digi-Key,LTC2208IUP-ND,75.00,QFN-64,https://www.analog.com/media/en/technical-documentation/data-sheets/2208fa.pdf,BPM ADC (downsampled from 1 GS/s spec for v0)
+U5,1,LTC6655BHMS8-2.5#PBF,2.5V 0.025% precision reference,Analog Devices,Digi-Key,LTC6655BHMS8-2.5-ND,7.50,MSOP-8,https://www.analog.com/media/en/technical-documentation/data-sheets/665512fb.pdf,DAC + ADC reference
+U6,1,SI53301-B-GMR,4-output 100 MHz LVDS clock buffer,Silicon Labs,Digi-Key,336-2641-1-ND,4.50,QFN-20,https://www.silabs.com/documents/public/data-sheets/Si53301-A.pdf,Clock fan-out from OCXO
+U7,1,DSO9SLN-100.000MHz,OCXO 100 MHz ±1 ppm,Connor-Winfield,Digi-Key,CW186-ND,42.00,SMD,https://www.conwin.com/datasheets/cx/cx164.pdf,Master oscillator B1
+U8,1,TPS62932DRLR,Synchronous step-down 3A 12V→5V,TI,Digi-Key,296-TPS62932DRLR-ND,2.40,SOT-583,https://www.ti.com/lit/ds/symlink/tps62932.pdf,12V→5V buck
+U9,1,LP5907MFX-3.3,250 mA LDO 3.3V ultra-low-noise,TI,Digi-Key,296-LP5907MFX-3.3-ND,0.65,SOT-23-5,https://www.ti.com/lit/ds/symlink/lp5907.pdf,3.3V analog rail
+U10,1,LP5907MFX-1.8,250 mA LDO 1.8V ultra-low-noise,TI,Digi-Key,296-LP5907MFX-1.8-ND,0.65,SOT-23-5,https://www.ti.com/lit/ds/symlink/lp5907.pdf,1.8V FPGA aux
+U11,1,LP5907MFX-1.0,250 mA LDO 1.0V ultra-low-noise,TI,Digi-Key,296-LP5907MFX-1.0-ND,0.70,SOT-23-5,https://www.ti.com/lit/ds/symlink/lp5907.pdf,1.0V FPGA core (Artix-7 VCCINT)
+J1,1,1734347-1,Power barrel jack 2.1 mm 12V,TE Connectivity,Digi-Key,A98335-ND,1.20,Through-hole,https://www.te.com/usa-en/product-1734347-1.datasheet.pdf,12V input
+J2,3,5-1437722-7,SMA edge-mount 50 Ω jack,TE Connectivity,Digi-Key,A24489-ND,4.50,Edge-mount,https://www.te.com/usa-en/product-5-1437722-7.datasheet.pdf,Tick / Trigger / Gate outputs (3 ea — one per signal)
+J3,4,SSW-104-01-T-S,Header 4-pin 2.54 mm female (interlock GPIO),Samtec,Digi-Key,SAM1192-04-ND,0.85,Through-hole,https://suddendocs.samtec.com/catalog_english/ssw_th.pdf,Interlock chain hv/vacuum/water/shutter
+J4,1,SAM2102-08-T,Cortex-M JTAG/SWD 10-pin 0.05 mm,Samtec,Digi-Key,SAM10901-ND,3.20,SMT,https://suddendocs.samtec.com/catalog_english/ftsh_th.pdf,SWD debug + RTT
+J5,1,FCI-67996-002LF,USB-C receptacle (UART for boot ROM + RTT),Amphenol/FCI,Digi-Key,609-67996-002LF-ND,1.10,SMT,https://cdn.amphenol-cs.com/media/wysiwyg/files/documentation/datasheet/inputoutput/io_micro_usb-c_lhd_67996.pdf,Boot/log link
+Y1,1,ECS-160-20-3X-DS,16 MHz HSE crystal 18 pF,ECS Inc.,Digi-Key,XC2536CT-ND,0.45,SMT,https://www.ecsxtal.com/store/pdf/ecs-160-20-3x.pdf,HSE for STM32 (replaced by OCXO U7 daughterboard option)
+L1,1,XAL5030-471MEC,4.7 µH 5.4 A power inductor,Coilcraft,Digi-Key,1465-1158-1-ND,1.80,SMD,https://www.coilcraft.com/getmedia/9eb74d0b-3a68-4d5d-a6e3-cc14b9c9eaa4/xal5030.pdf,12V→5V buck inductor
+C_BULK1,4,GRM32EC72A106KE05L,10 µF 100V X7S MLCC,Murata,Digi-Key,490-1740-1-ND,0.85,1210,https://search.murata.co.jp/Ceramy/image/img/A01X/G101/ENG/GRM32EC72A106KE05-01.pdf,12V input bulk
+C_DEC1,40,GRM188C81C475KE21D,4.7 µF 16V X6S MLCC,Murata,Digi-Key,490-13327-1-ND,0.20,0603,https://search.murata.co.jp/Ceramy/image/img/A01X/G101/ENG/GRM188C81C475KE21-01.pdf,Decoupling — 1 per IC supply pin
+C_DEC2,80,GRM155R71C104KA88D,100 nF 16V X7R MLCC,Murata,Digi-Key,490-3261-1-ND,0.05,0402,https://search.murata.co.jp/Ceramy/image/img/A01X/G101/ENG/GRM155R71C104KA88-01.pdf,Decoupling — 1 per IC VCC pin (HF bypass)
+C_DEC3,12,GRM155R71C103KA01D,10 nF 16V X7R MLCC,Murata,Digi-Key,490-3260-1-ND,0.05,0402,https://search.murata.co.jp/Ceramy/image/img/A01X/G101/ENG/GRM155R71C103KA01-01.pdf,Decoupling — analog supply HF bypass
+R_TERM,3,ERJ-3GEYJ510V,51 Ω 0.1W 5%,Panasonic,Digi-Key,P51JTR-ND,0.05,0603,https://industrial.panasonic.com/cdbs/www-data/pdf/RDA0000/AOA0000C20.pdf,SMA termination
+R_PULL,8,ERJ-3GEYJ103V,10 kΩ 0.1W 5%,Panasonic,Digi-Key,P10KJTR-ND,0.05,0603,https://industrial.panasonic.com/cdbs/www-data/pdf/RDA0000/AOA0000C20.pdf,Interlock pull-up (active-high) + JTAG nTRST
+LED1,1,LTST-C190GKT,Green status LED 0805,Lite-On,Digi-Key,160-1819-1-ND,0.10,0805,https://www.liteon.com/upload/download/DS22-2000-218.pdf,Power good indicator
+LED2,4,LTST-C190EKT,Red interlock-fault LED 0805,Lite-On,Digi-Key,160-1830-1-ND,0.10,0805,https://www.liteon.com/upload/download/DS22-2000-218.pdf,One per interlock channel
+SW1,1,KSS221GLFS,Tactile switch 6×6 mm reset,C&K,Digi-Key,401-2096-ND,0.55,SMT,https://www.ckswitches.com/media/2614/ks_kss.pdf,Manual reset (NRST)
+F1,1,0697H6300-02,Polyfuse 6.3A 12V,Bel Fuse,Digi-Key,507-1408-1-ND,0.90,Through-hole,https://belfuse.com/resources/datasheets/circuitprotection/ds-cp-0697h-series.pdf,Power input over-current
+TVS1,1,SMBJ12CA,12V bidirectional TVS 600W,Littelfuse,Digi-Key,507-2110-1-ND,0.45,SMB,https://www.littelfuse.com/~/media/electronics/datasheets/tvs_diodes/littelfuse_tvs_diode_smbj_datasheet.pdf,Power input ESD/transient

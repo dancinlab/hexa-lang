@@ -1,0 +1,152 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/yruHZncoswPmkcjpwh7bg3LgDVA</id>
+  <title>arXiv Query: search_query=all:Hamiltonian OR all:phase OR all:space OR all:conservation&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-05-07T15:25:18Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:Hamiltonian+OR+(all:phase+OR+(all:space+OR+all:conservation))&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>734934</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/0807.4040v2</id>
+    <title>The time horizon and its role in multiple species conservation planning</title>
+    <updated>2008-09-26T14:50:13Z</updated>
+    <link href="https://arxiv.org/abs/0807.4040v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/0807.4040v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>  Survival probability within a certain time horizon T is a common measure of population viability. The choice of T implicitly involves a time preference, similar to economic discounting: Conservation success is evaluated at the time horizon T, while all effects that occur later than T are not considered. Despite the obvious relevance of the time horizon, ecological studies seldom analyze its impact on the evaluation of conservation options. In this paper, we show that, while the choice of T does not change the ranking of conservation options for single species under stationary conditions, it may substantially change conservation decisions for multiple species. We conclude that it is of crucial importance to investigate the sensitivity of model results to the choice of the time horizon or other measures of time preference when prioritizing biodiversity conservation efforts.</summary>
+    <category term="q-bio.PE" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2008-07-25T10:07:52Z</published>
+    <arxiv:comment>8 pages, 5 figures. Minor changes to v1. This version corredponds to the final publication in Biological Conservation</arxiv:comment>
+    <arxiv:primary_category term="q-bio.PE"/>
+    <arxiv:journal_ref>Biological Conservation, 2008, 141, 2625-2631</arxiv:journal_ref>
+    <author>
+      <name>Florian Hartig</name>
+    </author>
+    <author>
+      <name>Martin Drechsler</name>
+    </author>
+    <arxiv:doi>10.1016/j.biocon.2008.07.028</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1016/j.biocon.2008.07.028" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/chao-dyn/9311011v2</id>
+    <title>The Great Inequality In A Hamiltonian Planetary Theory</title>
+    <updated>1993-12-07T04:05:12Z</updated>
+    <link href="https://arxiv.org/abs/chao-dyn/9311011v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/chao-dyn/9311011v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>  The Jupiter-Saturn 2:5 near-commensurability is analyzed in a fully analytic Hamiltonian planetary theory. Computations for the Sun-Jupiter-Saturn system, extending to the third order of the masses and to the 8th degree in the eccentricities and inclinations, reveal an unexpectedly sensitive dependence of the solution on initial data and its likely nonconvergence. The source of the sensitivity and apparent lack of convergence is this near-commensurability, the so-called great inequality. This indicates that simple averaging, still common in current semi-analytic planetary theories, may not be an adequate technique to obtain information on the long-term dynamics of the Solar System.
+  Preliminary results suggest that these difficulties can be overcome by using resonant normal forms.</summary>
+    <category term="nlin.CD" scheme="http://arxiv.org/schemas/atom"/>
+    <published>1993-11-30T04:18:23Z</published>
+    <arxiv:comment>6 pages, PostScript, compressed and uuencoded, 150KB, figures included, hard copy available upon request</arxiv:comment>
+    <arxiv:primary_category term="nlin.CD"/>
+    <author>
+      <name>F. Varadi</name>
+      <arxiv:affiliation>Institute of Geophysics and Planetary Physics University of California, Los Angeles Los Angeles,CA</arxiv:affiliation>
+    </author>
+    <author>
+      <name>M. Ghil</name>
+      <arxiv:affiliation>Institute of Geophysics and Planetary Physics University of California, Los Angeles Los Angeles,CA</arxiv:affiliation>
+    </author>
+    <author>
+      <name>W. M. Kaula</name>
+      <arxiv:affiliation>Institute of Geophysics and Planetary Physics University of California, Los Angeles Los Angeles,CA</arxiv:affiliation>
+    </author>
+    <author>
+      <name> Keywords</name>
+    </author>
+    <author>
+      <name> :</name>
+    </author>
+    <author>
+      <name>Hamiltonian systems</name>
+    </author>
+    <author>
+      <name>planetary motion</name>
+    </author>
+    <author>
+      <name>perturbation theory</name>
+    </author>
+    <author>
+      <name> resonances</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/0804.4433v1</id>
+    <title>SPACE: the SPectroscopic All-sky Cosmic Explorer</title>
+    <updated>2008-04-28T15:53:54Z</updated>
+    <link href="https://arxiv.org/abs/0804.4433v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/0804.4433v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>  We describe the scientific motivations, the mission concept and the instrumentation of SPACE, a class-M mission proposed for concept study at the first call of the ESA Cosmic-Vision 2015-2025 planning cycle. SPACE aims to produce the largest three-dimensional evolutionary map of the Universe over the past 10 billion years by taking near-IR spectra and measuring redshifts for more than half a billion galaxies at 0&lt;z&lt;2 down to AB~23 over 3πsr of the sky. In addition, SPACE will also target a smaller sky field, performing a deep spectroscopic survey of millions of galaxies to AB~26 and at 2&lt;z&lt;10+. These goals are unreachable with ground-based observations due to the ~500 times higher sky background. To achieve the main science objectives, SPACE will use a 1.5m diameter Ritchey-Chretien telescope equipped with a set of arrays of Digital Micro-mirror Devices (DMDs) covering a total field of view of 0.4 deg2, and will perform large-multiplexing multi-object spectroscopy (e.g. ~6000 targets per pointing) at a spectral resolution of R~400 as well as diffraction-limited imaging with continuous coverage from 0.8mum to 1.8mum.</summary>
+    <category term="astro-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2008-04-28T15:53:54Z</published>
+    <arxiv:comment>27 pages, Experimental Astronomy, in press. The SPACE team complete list is available at http://urania.bo.astro.it/cimatti/space . The article with full resolution figures is available at http://urania.bo.astro.it/cimatti/space/publications.htm</arxiv:comment>
+    <arxiv:primary_category term="astro-ph"/>
+    <arxiv:journal_ref>Exper.Astron.23:39-66,2009</arxiv:journal_ref>
+    <author>
+      <name>A. Cimatti</name>
+    </author>
+    <author>
+      <name>M. Robberto</name>
+    </author>
+    <author>
+      <name>C. M. Baugh</name>
+    </author>
+    <author>
+      <name>S. V. W. Beckwith</name>
+    </author>
+    <author>
+      <name>R. Content</name>
+    </author>
+    <author>
+      <name>E. Daddi</name>
+    </author>
+    <author>
+      <name>G. De Lucia</name>
+    </author>
+    <author>
+      <name>B. Garilli</name>
+    </author>
+    <author>
+      <name>L. Guzzo</name>
+    </author>
+    <author>
+      <name>G. Kauffmann</name>
+    </author>
+    <author>
+      <name>M. Lehnert</name>
+    </author>
+    <author>
+      <name>D. Maccagni</name>
+    </author>
+    <author>
+      <name>A. Martinez-Sansigre</name>
+    </author>
+    <author>
+      <name>F. Pasian</name>
+    </author>
+    <author>
+      <name>I. N. Reid</name>
+    </author>
+    <author>
+      <name>P. Rosati</name>
+    </author>
+    <author>
+      <name>R. Salvaterra</name>
+    </author>
+    <author>
+      <name>M. Stiavelli</name>
+    </author>
+    <author>
+      <name>Y. Wang</name>
+    </author>
+    <author>
+      <name>M. Zapatero Osorio</name>
+    </author>
+    <author>
+      <name>the SPACE team</name>
+    </author>
+    <arxiv:doi>10.1007/s10686-008-9096-7</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1007/s10686-008-9096-7" title="doi"/>
+  </entry>
+</feed>

@@ -1,0 +1,165 @@
+#!hexa strict
+// hexa-chip/firmware/mcu/photonic_host.hexa — Phase F iter 7.
+//
+// Host MCU controller for photonic (optical compute) verb consumer of
+// stdlib/hal/compute (GPGPU programming-model verb, Phase F iter 2).
+//
+// Falsifier: F-CHIP-PHO-1 (host-side photonic compute_dispatch loop)
+//          + F-CHIP-5    (Phase F iter 7: cross-verb GPGPU consumer)
+// Board ID:  HEXA-CHIP-FW-PHO (paper design, no physical board yet)
+// Phase:     F iter 7 — third hexa-native consumer of stdlib/hal/compute
+//            after npu_host.hexa (iter 5) and pim_host.hexa (iter 7a).
+//
+// stdlib/hal modules used:
+//   core    — sentinel + exit + str runtime
+//   compute — GPGPU programming-model dispatch (Phase F iter 2)
+//   dma     — modulator-bank descriptor streaming
+//   gpio    — laser_busy / shutter strobe pin
+//   spi     — Mach-Zehnder modulator bias bus
+//   timer   — coherence-window guard timer
+//   intr    — photodetector_done IRQ
+//
+// Per canon (~/core/canon/domains/compute/chip-photonic) photonic
+// engines run wide-parallel matrix products on optical wavelengths.
+// The hexa-native dispatch surface treats photonic as a compute target
+// with grid=J₂=24 wavelength channels × σ=12 lane workgroup, exercised
+// at SCOPE_GRID barrier (whole MZI mesh syncs per dispatch).
+
+use "stdlib/hal/core"
+use "stdlib/hal/compute"
+use "stdlib/hal/dma"
+use "stdlib/hal/gpio"
+use "stdlib/hal/intr"
+use "stdlib/hal/spi"
+use "stdlib/hal/timer"
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── Photonic dispatch via stdlib/hal/compute ──────────────────────────
+//
+// 6-axis projection for photonic MZI-mesh GEMM kernel:
+//   axis 1 grid       : (J₂=24, 1, 1)    — 24 wavelength channels (WDM)
+//   axis 2 workgroup  : (σ=12, 1, 1)     — 12 MZI columns per wavelength
+//   axis 3 mem-tier   : DEVICE buffers (modulator-bank input / output)
+//   axis 4 barrier    : SCOPE_GRID       — grid-wide (whole mesh syncs)
+//   axis 5 launch-dep : -1               — independent dispatch
+//   axis 6 sub-group  : 0                — vendor-default
+//
+// IR substrate: SPIR-V proxy via VENDOR_SYCL=2 (canon §3).
+let SIGMA = 12   // σ — MZI column count per wavelength
+let J2    = 24   // J₂ — WDM wavelength channel count
+let SCOPE_GRID_LOCAL = 3   // matches stdlib/hal/compute SCOPE_GRID
+
+fn dispatch_mzi_mesh_via_compute() -> int {
+    let buf_in  = compute_buffer_alloc(2, J2 * SIGMA * 4)   // TIER_DEVICE, fp32
+    let buf_w   = compute_buffer_alloc(2, J2 * SIGMA * SIGMA * 4)
+    let buf_out = compute_buffer_alloc(2, J2 * SIGMA * 4)
+    if buf_in < 0 || buf_w < 0 || buf_out < 0 { return -1 }
+    let kern = compute_kernel_compile(0, 1024)              // IR_SPIRV
+    if kern < 0 { return -2 }
+    let ev = compute_dispatch(2, kern, J2, 1, 1, SIGMA, 1, 1, SCOPE_GRID_LOCAL, -1, 0)
+    if ev < 0 { return -3 }
+    let _waited = compute_event_wait(ev)
+    compute_event_release(ev)
+    compute_kernel_release(kern)
+    compute_buffer_free(buf_in)
+    compute_buffer_free(buf_w)
+    compute_buffer_free(buf_out)
+    return ev
+}
+
+fn check_compute_dispatch_path() {
+    let ev = dispatch_mzi_mesh_via_compute()
+    _check(ev >= 0,
+           "GPGPU verb consumer: dispatch_mzi_mesh_via_compute returned event",
+           "ev=" + str(ev))
+}
+
+fn check_invariant_ledger() {
+    let n_axes   = compute_invariant_axes()
+    let n_tiers  = compute_invariant_tiers()
+    let n_irs    = compute_invariant_irs()
+    let j2_prime = compute_invariant_J2_prime()
+    _check(n_axes == 6,
+           "compute module reports n=6 invariant axes (photonic consumer)",
+           "got " + str(n_axes))
+    _check(n_tiers == 4,
+           "compute module reports τ=4 memory tiers (photonic consumer)",
+           "got " + str(n_tiers))
+    _check(n_irs == 2,
+           "compute module reports φ=2 IR substrates (photonic consumer)",
+           "got " + str(n_irs))
+    _check(j2_prime == 48,
+           "compute module reports J₂′=48 lattice (photonic consumer)",
+           "got " + str(j2_prime))
+}
+
+fn check_photonic_grid_J2() {
+    _check(J2 == 24,
+           "photonic grid width = J₂ = 24 WDM channels",
+           "got " + str(J2))
+    _check(SIGMA == 12,
+           "photonic workgroup width = σ(6) = 12 MZI columns",
+           "got " + str(SIGMA))
+    let total = J2 * SIGMA
+    _check(total == 288,
+           "σ·J₂ = 12·24 = 288 total active MZIs (canon roofline)",
+           "got " + str(total))
+}
+
+let FALSIFIERS = [
+    "F-CHIP-PHO-1: compute_dispatch returns negative event → MZI mesh dispatch broken",
+    "F-CHIP-PHO-2: grid != J₂=24 wavelength channels → WDM axis broken",
+    "F-CHIP-PHO-3: workgroup != σ(6)=12 MZI columns → mesh-column axis broken",
+    "F-CHIP-5  (cross-verb): photonic cannot consume the same dispatch surface as NPU + PIM"
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-chip — Phase F iter 7 MCU host: photonic_host (F-CHIP-PHO-1 + F-CHIP-5)")
+    println("========================================================================")
+    println("")
+    println("  Target HW: MZI-mesh photonic engine host (paper design — concrete board TBD)")
+    println("  Scope: GPGPU verb cross-consumer (photonic after NPU + PIM)")
+    println("")
+
+    println("  [hal] opening peripheral handles ...")
+    let spi_h     = spi_open(2, 0, MODE_0, 10000000)        // MZI bias @ 10 MHz
+    let dma_h     = dma_open(2, DIR_MEM_TO_PER, WIDTH_WORD)
+    let gpio_busy = gpio_open(4, MODE_OUTPUT)               // laser_busy
+    let intr_h    = intr_open(3, PRIO_REAL_T, "photodet_done")
+    let timer_h   = timer_open(1, MODE_PERIODIC, 50)        // 50 µs coherence guard
+    _check(spi_h     >= 0, "stdlib/hal spi_open (MZI bias) OK", "h=" + str(spi_h))
+    _check(dma_h     >= 0, "stdlib/hal dma_open OK", "h=" + str(dma_h))
+    _check(gpio_busy >= 0, "stdlib/hal gpio_open OK", "h=" + str(gpio_busy))
+    _check(intr_h    >= 0, "stdlib/hal intr_open OK", "h=" + str(intr_h))
+    _check(timer_h   >= 0, "stdlib/hal timer_open OK", "h=" + str(timer_h))
+    println("")
+
+    check_photonic_grid_J2()
+    check_invariant_ledger()
+    check_compute_dispatch_path()
+
+    let pass_n = RUN - FAIL
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CHIP_MCU_PHOTONIC_HOST__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CHIP_MCU_PHOTONIC_HOST__ PASS — MZI mesh GPGPU consumer OK")
+    exit(0)
+}

@@ -1,0 +1,93 @@
+# hexa.toml — hexa-antimatter standalone package manifest
+#
+# Spec: shared/hexa-lang/hexa-toml-spec.json (version 1.0.0)
+# Distribution target: hx install hexa-antimatter
+# Provenance: extracted from canon/domains/physics/ on 2026-05-06
+#             (n6-arch SHA c0f1f570 — sister: hexa-bio cycle 25)
+
+[package]
+name = "hexa-antimatter"
+version = "1.0.0"
+entry = "cli/hexa-antimatter.hexa"
+description = "Antimatter substrate (HEXA family): FACTORY / TABLETOP / PET-CYCLOTRON — n=6 Dirac-mirror lattice (sigma(6)=12, tau(6)=4, phi(6)=2, J2=24). 3-verb spec-first scaffold; .hexa CLI is placeholder. PET-cyclotron 18F beta+ on-site regeneration + tabletop 1.7e12 p-bar/s candidate + antimatter-factory 1e12/hr CERN-scale. Academia-unproven candidate."
+license = "MIT"
+authors = ["박민우 <nerve011235@gmail.com>"]
+repository = "https://github.com/dancinlab/hexa-antimatter"
+homepage = "https://github.com/dancinlab/hexa-antimatter"
+readme = "README.md"
+keywords = ["antimatter", "hexa-family", "factory", "tabletop", "pet-cyclotron", "dirac-mirror", "n6-invariant"]
+categories = ["physics", "particle-physics", "antimatter"]
+
+[lib]
+# Library entry — importable by other hexa packages (placeholder).
+entry = "factory/factory.hexa"
+
+[[bin]]
+name = "hexa-antimatter"
+path = "cli/hexa-antimatter.hexa"
+
+[test]
+runner = "hexa"
+files = [
+    "tests/test_selftest.hexa",
+    "tests/test_n6_lattice.hexa",
+    "tests/test_cross_doc_audit.hexa",
+    "tests/test_release_ladder.hexa",
+    "tests/test_modules_wired.hexa",
+    "tests/test_verify_all.hexa",
+    "tests/test_calculators.hexa",
+]
+
+# ── hx install hook ───────────────────────────────────────
+# install.hexa runs under hx package manager (hexa-lang) at install time.
+# Phases: pre   → no-op (this substrate is spec-first; no python deps)
+#         post  → quick selftest sentinel check (warn-only, not a blocker).
+[scripts]
+install = "install.hexa"
+
+# ── Modules manifest (3 verbs + selftest, all spec-stub) ──
+# factory       — CERN-scale antimatter factory spec (1e12 p-bar/hr design)
+# tabletop      — desktop 1.7e12 p-bar/s candidate (0.29 m^3, RT-SC 48T)
+# pet_cyclotron — 18F beta+ recycling for on-site regeneration
+[modules]
+hexa = [
+    "factory/factory.hexa",
+    "tabletop/tabletop.hexa",
+    "pet_cyclotron/pet_cyclotron.hexa",
+    "selftest/selftest.hexa",
+]
+
+# ── Dependencies ───────────────────────────────────────────
+# hexa stdlib: required for CLI dispatch.
+# No python bridge at v1.0.0 (spec-first — empirical sandboxes deferred).
+
+[dependencies]
+hexa-lang = ">=1.0.0"
+
+# ── Closure provenance (raw#10 honest C3) ─────────────────
+# v1.0.0 closure: 3/3 verbs wired COMPUTATIONALLY (n=6 arithmetic + SSOT
+# text-scan + 4-step verifier orchestrator). 0/3 wired EMPIRICALLY (no
+# apparatus, no clinical operation). The CLI is functional, not placeholder.
+[closure]
+verbs_total = 3
+verbs_wired_computational = 3
+verbs_wired_empirical = 0
+verbs_stub = 0
+verdict = "COMPUTATIONAL_WIRED"
+n6_algebra_proof = "verify/n6_arithmetic.hexa — 12/12 PASS (σ·φ = n·τ = J₂ = 24)"
+verifier_sweep = "verify/all.hexa — 4/4 PASS (n6 + cross-doc + release-ladder + selftest)"
+extracted_from = "canon/domains/physics/ @ 2026-05-06 (SHA c0f1f570)"
+upstream_marker = "canon/domains/physics/{antimatter-factory,tabletop-antimatter,pet-cyclotron}/"
+
+# ── Scope honesty (raw#10 C3) ─────────────────────────────
+[scope]
+honest_scope = "3-verb antimatter substrate, computational-wired. FACTORY / TABLETOP / PET-CYCLOTRON each emit n=6-derived numbers from a working .hexa module; verify/all.hexa orchestrates 4 step verifiers (n6 algebra, cross-doc audit, release ladder, selftest). Working APPARATUS is out of scope."
+not_scope = ["working antiproton production (no facility)", "Penning trap empirical fit (no apparatus)", "PET cyclotron operation (clinical out-of-repo)", "anti-H synthesis (theoretical only)"]
+n6_lattice_caveat = "n=6 Dirac-mirror invariant (sigma(6)=12, tau(6)=4, phi(6)=2, J2=24) is ALGEBRAICALLY proved by verify/n6_arithmetic.hexa (12/12 PASS, divisor enumeration + Euclidean gcd from first principles). Its EMPIRICAL projection onto antimatter axes (1.7e12 p-bar/s, 48 T RT-SC, 16-yr storage) remains an academia-unproven candidate at v1.0.0."
+
+# ── Cost profile ──────────────────────────────────────────
+[cost]
+mac_local_default = "$0 (spec-only; placeholder CLI prints sentinels)"
+factory_full = "$0 (no apparatus; declarative .md only)"
+tabletop_full = "$0 (no apparatus; declarative .md only)"
+pet_cyclotron_full = "$0 (no apparatus; declarative .md only)"

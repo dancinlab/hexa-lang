@@ -1,0 +1,31 @@
+#!hexa strict
+// asic/verify_chip-asic.hexa — hexa-ASIC tape-out reference flow.
+//
+// Tape-out flow: τ(6)=4 stages (RTL → synth → P&R → sign-off), each gated
+// by σ(6)=12 PVT (process-voltage-temperature) corners.
+//
+// Falsifiers:
+//   F-CHIP-AS-1: τ(6)=4 stage count drift.
+//   F-CHIP-AS-2: <12 PVT corners ⇒ σ(6)=12 corner lattice broken.
+
+fn main() {
+    let stages = ["RTL", "synth", "P&R", "sign-off"]
+    if stages.len() != 4 {
+        println("[asic] FAIL — τ(6)=4 stage count drift")
+        exit(1)
+    }
+    // 3 process × 2 voltage × 2 temp = 12 corners (typical-fast-slow / nom-low / nom-hot)
+    // Actually: SS/TT/FF (3) × low/nom (2) × cold/hot (2) = 12
+    let pvt_corners = [
+        "SS_lowV_cold", "SS_lowV_hot", "SS_nomV_cold", "SS_nomV_hot",
+        "TT_lowV_cold", "TT_lowV_hot", "TT_nomV_cold", "TT_nomV_hot",
+        "FF_lowV_cold", "FF_lowV_hot", "FF_nomV_cold", "FF_nomV_hot"
+    ]
+    if pvt_corners.len() != 12 {
+        println("[asic] FAIL — σ(6)=12 PVT corner count drift")
+        exit(1)
+    }
+    println("[asic] τ(6)=4 tape-out stages × σ(6)=12 PVT corners PASS")
+    println("  stages:  " + stages[0] + " → " + stages[1] + " → " + stages[2] + " → " + stages[3])
+    println("  corners: 3(P) × 2(V) × 2(T) = 12")
+}

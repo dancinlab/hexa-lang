@@ -1,0 +1,199 @@
+#!hexa strict
+// hexa-chip/verify/cross_doc_audit.hexa — cross-document n=6 invariant audit.
+//
+// Mirrors hexa-sscb/verify/cross_doc_audit.py: verifies that the canonical
+// docs (hexa.toml manifest, README.md, .roadmap.hexa_chip, cli/hexa-chip.hexa)
+// agree on the n=6 lattice numbers and the 29-verb / 6-group decomposition.
+//
+//   1. hexa.toml:        verbs_total=29, groups_total=6
+//   2. README.md:        "28 verbs / 7 groups" headline OK (kick-spec caveat),
+//                        BUT line-by-line verb_map enumerates 29 verbs.
+//   3. .roadmap:         §A.1 invariant lattice — σ(6)·φ(6) = n·τ(6) = 24
+//   4. cli dispatcher:   `verbs_total=29` claim
+//
+// Exit 0 = invariants hold across all four documents.
+//
+// Cost: $0 (4 file reads, ~50 KB total).
+
+let DOCS = [
+    ["toml",    "hexa.toml"],
+    ["readme",  "README.md"],
+    ["roadmap", ".roadmap.hexa_chip"],
+    ["cli",     "cli/hexa-chip.hexa"]
+]
+
+fn _root() -> str {
+    let env_root = env("HEXA_CHIP_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _read(root: str, rel: str) -> str {
+    let p = root + "/" + rel
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    if r != "y" { return "" }
+    return read_file(p)
+}
+
+fn _has_flag(args: [str], flag: str) -> bool {
+    for x in args { if x == flag { return true } }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() {
+        out = out + [raw[j]]
+        j = j + 1
+    }
+    return out
+}
+
+// ----- check 1: hexa.toml verbs/groups -----
+fn check_hexa_toml(root: str) -> [str] {
+    let txt = _read(root, "hexa.toml")
+    let mut errs: [str] = []
+    if txt.len() == 0 {
+        errs = errs + ["hexa.toml: missing"]
+        return errs
+    }
+    if !txt.contains("verbs_total = 29") {
+        errs = errs + ["hexa.toml: 'verbs_total = 29' not found"]
+    }
+    if !txt.contains("groups_total = 6") {
+        errs = errs + ["hexa.toml: 'groups_total = 6' not found"]
+    }
+    // Each [modules.<group>] block present
+    let groups = ["architecture", "design", "process", "packaging", "accelerator", "consciousness"]
+    for g in groups {
+        let needle = "[modules." + g + "]"
+        if !txt.contains(needle) {
+            errs = errs + ["hexa.toml: missing " + needle]
+        }
+    }
+    return errs
+}
+
+// ----- check 2: README.md verb count -----
+fn check_readme(root: str) -> [str] {
+    let txt = _read(root, "README.md")
+    let mut errs: [str] = []
+    if txt.len() == 0 {
+        errs = errs + ["README.md: missing"]
+        return errs
+    }
+    // Either 28-verb (headline kick-spec) or 29-verb (line-by-line) acceptable.
+    let has28 = txt.contains("28-verb") || txt.contains("28 verbs")
+    let has29 = txt.contains("29-verb") || txt.contains("29 verbs")
+    if !(has28 || has29) {
+        errs = errs + ["README.md: neither 28-verb nor 29-verb headline found"]
+    }
+    // Group headers present
+    let groups = ["architecture", "design", "process", "packaging", "accelerator", "consciousness"]
+    for g in groups {
+        if !txt.contains(g) {
+            errs = errs + ["README.md: group name '" + g + "' not present"]
+        }
+    }
+    return errs
+}
+
+// ----- check 3: .roadmap n=6 lattice -----
+fn check_roadmap(root: str) -> [str] {
+    let txt = _read(root, ".roadmap.hexa_chip")
+    let mut errs: [str] = []
+    if txt.len() == 0 {
+        errs = errs + [".roadmap.hexa_chip: missing"]
+        return errs
+    }
+    // §A.1 must show σ(6)·φ(6) = n·τ(6) = J₂ = 24
+    let needles = ["σ(6)", "τ(6)", "φ(6)", "J₂", "24"]
+    for n in needles {
+        if !txt.contains(n) {
+            errs = errs + [".roadmap.hexa_chip: missing identifier '" + n + "'"]
+        }
+    }
+    return errs
+}
+
+// ----- check 4: CLI dispatcher 29-verb -----
+fn check_cli(root: str) -> [str] {
+    let txt = _read(root, "cli/hexa-chip.hexa")
+    let mut errs: [str] = []
+    if txt.len() == 0 {
+        errs = errs + ["cli/hexa-chip.hexa: missing"]
+        return errs
+    }
+    // CLI source escapes the JSON literal as `\"verbs_total\":29` so a plain
+    // substring match needs the backslash-bytes preserved. We check both the
+    // escaped form (in source) and the prose headline.
+    let has_json_literal = txt.contains("verbs_total") && txt.contains(":29")
+    if !has_json_literal {
+        errs = errs + ["cli/hexa-chip.hexa: 'verbs_total ... :29' literal not found"]
+    }
+    if !(txt.contains("29-verb") || txt.contains("29 verbs")) {
+        errs = errs + ["cli/hexa-chip.hexa: 29-verb prose not found"]
+    }
+    return errs
+}
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+    let root = _root()
+
+    let e1 = check_hexa_toml(root)
+    let e2 = check_readme(root)
+    let e3 = check_roadmap(root)
+    let e4 = check_cli(root)
+    let total = e1.len() + e2.len() + e3.len() + e4.len()
+
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/verify/cross_doc_audit.hexa\","
+        js = js + "\"schema\":\"hexa-chip/cross-doc/v1\","
+        js = js + "\"hexa_toml_errors\":" + str(e1.len()) + ","
+        js = js + "\"readme_errors\":" + str(e2.len()) + ","
+        js = js + "\"roadmap_errors\":" + str(e3.len()) + ","
+        js = js + "\"cli_errors\":" + str(e4.len()) + ","
+        js = js + "\"total\":" + str(total) + ","
+        js = js + "\"ok\":"
+        if total == 0 { js = js + "true" } else { js = js + "false" }
+        js = js + "}"
+        println(js)
+        if total == 0 { return }
+        exit(1)
+    }
+
+    println("========================================================================")
+    println("  hexa-chip — cross-document n=6 invariant audit")
+    println("========================================================================")
+    println("  root: " + root)
+    println("")
+    println("  [check 1] hexa.toml — verbs_total=29 + groups_total=6 + 6 [modules.*]")
+    if e1.len() == 0 { println("    PASS") } else { for e in e1 { println("    FAIL " + e) } }
+    println("")
+    println("  [check 2] README.md — 28/29-verb headline + 6 group names")
+    if e2.len() == 0 { println("    PASS") } else { for e in e2 { println("    FAIL " + e) } }
+    println("")
+    println("  [check 3] .roadmap — §A.1 n=6 lattice (σ/τ/φ/J₂/24)")
+    if e3.len() == 0 { println("    PASS") } else { for e in e3 { println("    FAIL " + e) } }
+    println("")
+    println("  [check 4] cli/hexa-chip.hexa — 29-verb claim")
+    if e4.len() == 0 { println("    PASS") } else { for e in e4 { println("    FAIL " + e) } }
+    println("========================================================================")
+    if total == 0 {
+        println("  PASS — n=6 invariants agree across hexa.toml / README / roadmap / CLI")
+        return
+    }
+    println("  FAIL — " + str(total) + " cross-doc drift(s) detected")
+    exit(1)
+}

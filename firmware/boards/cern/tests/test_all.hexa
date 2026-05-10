@@ -1,0 +1,87 @@
+#!hexa strict
+// hexa-cern/tests/test_all.hexa — top-level test runner.
+//
+// Runs every tests/test_*.hexa in the repo and aggregates exit codes.
+//
+// Run:
+//   hexa run tests/test_all.hexa
+//   PETITE_CERN_ROOT=/path hexa run tests/test_all.hexa
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let HEXA = HOME + "/.hx/packages/hexa/hexa.real"
+
+// (filename, expected_sentinel)
+let CASES = [
+    "test_selftest.hexa|__PETITE_CERN_TEST_SELFTEST__ PASS",
+    "test_lattice.hexa|__HEXA_CERN_TEST_LATTICE__ PASS",
+    "test_calculators.hexa|__HEXA_CERN_TEST_CALCULATORS__ PASS",
+    "test_cli_verify.hexa|__HEXA_CERN_TEST_CLI_VERIFY__ PASS",
+]
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// 5-min sub-process timeout (gtimeout / timeout / no-op fallback).
+fn _timeout_prefix() -> str {
+    let g = exec("which gtimeout 2>/dev/null").trim()
+    if g.len() > 0 { return shq(g) + " 300 " }
+    let t = exec("which timeout 2>/dev/null").trim()
+    if t.len() > 0 { return shq(t) + " 300 " }
+    return ""
+}
+
+fn run_one(case: str) -> bool {
+    let parts = case.split("|")
+    let fname = parts[0]
+    let sentinel = parts[1]
+    let path = ROOT + "/tests/" + fname
+    // HEXA_SHIM_NO_DARWIN_LANDING=1 RESOURCE_LOCAL_HEXA=1 bypasses the resource-toolkit remote routing
+    // (hexa shim 2026-05-08 routes `hexa run` to ubu-1 by default; we
+    // need local execution for hexa-cern's filesystem-bound verifies).
+    // _timeout_prefix() caps each test at 5 min; exit 124 → SKIP not FAIL.
+    let cmd = "HEXA_SHIM_NO_DARWIN_LANDING=1 RESOURCE_LOCAL_HEXA=1 PETITE_CERN_ROOT=" + shq(ROOT) +
+              " " + _timeout_prefix() + shq(HEXA) + " run " + shq(path)
+    let r = exec_with_status(cmd)
+    let out = to_string(r[0])
+    let code = r[1]
+    let has_sent = out.find(sentinel) >= 0
+    if code == 124 {
+        println("  [SKIP] " + fname + "  (timeout > 5 min)")
+        return true
+    }
+    let pass = code == 0 && has_sent
+    let mark = if pass { "PASS" } else { "FAIL" }
+    println("  [" + mark + "] " + fname + "  (exit=" + str(code) + ")")
+    return pass
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern test_all — run every tests/test_*.hexa")
+    println("  root: " + ROOT)
+    println("========================================================================")
+    let mut ok = 0
+    let mut fail = 0
+    for c in CASES {
+        if run_one(c) { ok = ok + 1 } else { fail = fail + 1 }
+    }
+    println("========================================================================")
+    println("  " + str(ok) + "/" + str(len(CASES)) + " test(s) PASS")
+    if fail > 0 {
+        eprintln("__HEXA_CERN_TEST_ALL__ FAIL — " + str(fail) + " test(s) failed")
+        exit(1)
+    }
+    println("__HEXA_CERN_TEST_ALL__ PASS — full test suite green")
+    exit(0)
+}

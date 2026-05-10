@@ -1,0 +1,83 @@
+#!hexa strict
+// tabletop/tabletop.hexa — desktop p̄ factory wired module.
+//
+// Materialises the HEXA-TABLETOP candidate spec (0.29 m³ / 1.7e12 p̄/s /
+// 16-yr storage / $2.1e4·mg⁻¹ / RT-SC σ·τ=48 T) as n=6 arithmetic.
+// SSOT: tabletop/tabletop-antimatter.md.
+//
+// Run:
+//     hexa run tabletop/tabletop.hexa
+//
+// Sentinel: __HEXA_ANTIMATTER_TABLETOP__ PASS
+
+let SIGMA = 12
+let TAU   = 4
+let PHI   = 2
+let N     = 6
+
+// scaling factors used by §1 / §2 of the tabletop SSOT
+let VOLUME_REDUCTION_FACTOR = SIGMA * SIGMA / (SIGMA - PHI)  // σ²/(σ-φ) = 144/10 = 14
+let PRODUCTION_GAIN         = SIGMA * SIGMA * SIGMA           // σ³ = 1728 (~10³x)
+let STORAGE_MONTHS          = SIGMA * TAU * TAU               // σ·τ² = 192 months = 16 yr
+let COST_REDUCTION          = SIGMA * SIGMA * SIGMA * SIGMA * SIGMA * SIGMA  // σ⁶ ≈ 3e6
+let B_FIELD_T               = SIGMA * TAU                     // 48 T (RT-SC)
+let POWER_KW_CAP            = SIGMA - PHI                     // 10 kW indoor cap
+
+// SSOT candidate numbers
+let SSOT_VOLUME_M3        = "0.29 m³"
+let SSOT_PRODUCTION_PS    = "1.7e12 p̄/s"
+let SSOT_COST_PER_MG      = "$2.1e4 / mg"
+let SSOT_PARENT_VOLUME_M3 = "200 m³ (CERN AD/ELENA hall)"
+let SSOT_PARENT_RATE_PS   = "3e7 p̄/s (CERN AD)"
+
+fn json_mode(a: [str]) -> bool {
+    let mut i = 0
+    while i < len(a) {
+        if a[i] == "--json" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn tabletop_run(a: [str]) {
+    if json_mode(a) {
+        let mut js = "{\"verb\":\"tabletop\",\"wired\":true,"
+        js = js + "\"volume_reduction_factor\":" + ("" + VOLUME_REDUCTION_FACTOR) + ","
+        js = js + "\"production_gain\":" + ("" + PRODUCTION_GAIN) + ","
+        js = js + "\"storage_months\":" + ("" + STORAGE_MONTHS) + ","
+        js = js + "\"cost_reduction\":" + ("" + COST_REDUCTION) + ","
+        js = js + "\"b_field_T\":" + ("" + B_FIELD_T) + ","
+        js = js + "\"power_cap_kW\":" + ("" + POWER_KW_CAP) + ","
+        js = js + "\"volume_spec\":\"" + SSOT_VOLUME_M3 + "\","
+        js = js + "\"production_spec\":\"" + SSOT_PRODUCTION_PS + "\""
+        js = js + "}"
+        println(js)
+        println("__HEXA_ANTIMATTER_TABLETOP__ PASS")
+        return
+    }
+    println("hexa-antimatter tabletop — desktop p̄ factory (WIRED)")
+    println("  declarative SSOT: tabletop/tabletop-antimatter.md")
+    println("")
+    println("  scaling factors (n=6 arithmetic):")
+    println("    volume reduction   σ²/(σ-φ) = " + ("" + (SIGMA * SIGMA)) + "/" + ("" + (SIGMA - PHI)) + " = " + ("" + VOLUME_REDUCTION_FACTOR) + "x")
+    println("    production gain    σ³        = " + ("" + PRODUCTION_GAIN) + " (≈10³x SOTA)")
+    println("    storage lifetime   σ·τ²      = " + ("" + STORAGE_MONTHS) + " months (= 16 yr)")
+    println("    cost reduction     σ⁶        ≈ " + ("" + COST_REDUCTION) + " (1/3×10⁶ vs NASA-99)")
+    println("    B field (RT-SC)    σ·τ       = " + ("" + B_FIELD_T) + " T (cryo-free)")
+    println("    indoor power cap   σ-φ       = " + ("" + POWER_KW_CAP) + " kW (wall-outlet)")
+    println("")
+    println("  candidate spec (from tabletop-antimatter.md):")
+    println("    volume         : " + SSOT_VOLUME_M3 + "  (vs " + SSOT_PARENT_VOLUME_M3 + ")")
+    println("    production     : " + SSOT_PRODUCTION_PS + "  (vs " + SSOT_PARENT_RATE_PS + ")")
+    println("    cost           : " + SSOT_COST_PER_MG)
+    println("")
+    println("  honest C3: 0.29 m³ + 1.7×10¹² p̄/s + 16-yr storage are an")
+    println("  *integrated candidate target* sourced from the SSOT — no")
+    println("  apparatus operates these numbers; n=6 arithmetic locks them")
+    println("  to the lattice but does not validate them empirically.")
+    println("__HEXA_ANTIMATTER_TABLETOP__ PASS")
+}
+
+fn main() {
+    tabletop_run(args())
+}

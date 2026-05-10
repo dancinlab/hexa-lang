@@ -1,0 +1,101 @@
+#!hexa strict
+// tests/run_tests.hexa — discovers and runs every tests/test_*.hexa.
+//
+// Mirrors hexa-sscb/tests pytest harness, in pure hexa: walks tests/,
+// runs each test_*.hexa as a subprocess, aggregates exit codes.
+//
+// Usage:
+//   hexa run tests/run_tests.hexa             # human-readable
+//   hexa run tests/run_tests.hexa --quiet     # one line per test
+//   hexa run tests/run_tests.hexa --json      # machine-readable
+
+fn _root() -> str {
+    let env_root = env("HEXA_CHIP_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _has_flag(args: [str], flag: str) -> bool {
+    for x in args { if x == flag { return true } }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() { out = out + [raw[j]]; j = j + 1 }
+    return out
+}
+
+fn _shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn main() {
+    let ua = _user_args()
+    let json_mode = _has_flag(ua, "--json")
+    let quiet = _has_flag(ua, "--quiet")
+    let root = _root()
+    let tests_dir = root + "/tests"
+    // discover test_*.hexa files
+    let raw = exec("ls " + tests_dir + "/test_*.hexa 2>/dev/null").trim()
+    let lines = raw.split("\n")
+    let mut tests: [str] = []
+    for ln in lines {
+        let s = ln.trim()
+        if s.len() > 0 { tests = tests + [s] }
+    }
+    if tests.len() == 0 {
+        println("no tests/test_*.hexa found in " + tests_dir)
+        exit(2)
+    }
+
+    if !quiet && !json_mode {
+        println("========================================================================")
+        println("  hexa-chip — tests/ runner (" + str(tests.len()) + " tests)")
+        println("========================================================================")
+    }
+
+    let mut pass = 0
+    let mut fail = 0
+    let mut fail_names: [str] = []
+    for t in tests {
+        let cmd = "HEXA_CHIP_ROOT=" + _shq(root) + " hexa run " + _shq(t) + " >/dev/null 2>&1; echo $?"
+        let rc = exec(cmd).trim()
+        let ok = rc == "0"
+        if ok { pass = pass + 1 } else { fail = fail + 1; fail_names = fail_names + [t] }
+        if !quiet && !json_mode {
+            let mark = if ok { "PASS" } else { "FAIL" }
+            // shorten path for display
+            let nm = t.replace(root + "/", "")
+            println("  [" + mark + "] " + nm + "  (exit " + rc + ")")
+        }
+    }
+    let total = pass + fail
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/tests/run_tests.hexa\","
+        js = js + "\"schema\":\"hexa-chip/tests/v1\","
+        js = js + "\"total\":" + str(total) + ","
+        js = js + "\"pass\":" + str(pass) + ","
+        js = js + "\"fail\":" + str(fail) + ","
+        js = js + "\"ok\":"
+        if fail == 0 { js = js + "true" } else { js = js + "false" }
+        js = js + "}"
+        println(js)
+        if fail > 0 { exit(1) }
+        return
+    }
+    println("========================================================================")
+    println("  " + str(pass) + "/" + str(total) + " tests PASS")
+    if fail > 0 {
+        for n in fail_names { println("    ✗ " + n.replace(root + "/", "")) }
+        exit(1)
+    }
+    println("========================================================================")
+}

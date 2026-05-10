@@ -1,0 +1,136 @@
+#!hexa strict
+// hexa-space/verify/falsifier_check.hexa — F-SPACE-* closure-progress tracker.
+//
+// Per recipe §3 closure_pct ladder:
+//     0   tier  → 0%
+//     1   tier  → 33%
+//     2   tiers → 67%
+//     3   tiers → 100%
+//
+// T1 = pillar/cross-cutter algebraic .hexa (calc_*) on disk.
+// T2 = numerical .hexa (numerics_*) on disk — list per falsifier.
+// T3 = empirical hardware feed — recipe §9 Stage-1+ (always ✗ here).
+//
+// Per recipe §3, T2 is an ARRAY: a falsifier may stack multiple
+// numerics_*.hexa scripts; closure flips at >=1 entry present.
+//
+// Sentinel: __HEXA_SPACE_FALSIFIER_CHECK__ PASS  (recipe §4 invariants)
+// Cost: $0 — file-existence checks only.
+// @no-lock-needed
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_SPACE_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-space"
+}
+
+let ROOT = _root()
+
+// ── per-falsifier T1 + T2 inventory ─────────────────────────────────────
+//   F-SPACE-1: Kepler 3rd law n=6 corrections (astrodynamics)
+//   F-SPACE-2: Falcon 9 9-engine layout (falcon)
+//   F-SPACE-3: ISS bone-loss τ=4 phase recovery (medicine)
+//   F-SPACE-4: Starship 33-Raptor cluster (spaceship)
+
+let F1_T1: str = "astrodynamics/verify_astrodynamics.hexa"
+let F1_T2: [str] = [
+    "verify/numerics_kepler.hexa",
+]
+
+let F2_T1: str = "falcon/verify_falcon.hexa"
+let F2_T2: [str] = [
+    "verify/numerics_falcon.hexa",
+]
+
+let F3_T1: str = "medicine/verify_space-medicine.hexa"
+let F3_T2: [str] = [
+    "verify/numerics_bone_loss.hexa",
+]
+
+let F4_T1: str = "spaceship/verify_spaceship.hexa"
+let F4_T2: [str] = [
+    "verify/numerics_starship.hexa",
+]
+
+// ── helpers ─────────────────────────────────────────────────────────────
+
+fn _exists(rel: str) -> bool {
+    return file_exists(ROOT + "/" + rel)
+}
+
+fn _t2_count(arr: [str]) -> int {
+    let mut k = 0
+    for p in arr { if _exists(p) { k = k + 1 } }
+    return k
+}
+
+fn closure_pct(t1_ok: bool, t2_ok: bool, t3_ok: bool) -> int {
+    let mut k = 0
+    if t1_ok { k = k + 1 }
+    if t2_ok { k = k + 1 }
+    if t3_ok { k = k + 1 }
+    if k == 0 { return 0 }
+    if k == 1 { return 33 }
+    if k == 2 { return 67 }
+    return 100
+}
+
+fn _report(name: str, t1: str, t2_arr: [str]) -> int {
+    let t1_ok = _exists(t1)
+    let t2_n  = _t2_count(t2_arr)
+    let t2_ok = t2_n >= 1
+    let t3_ok = false
+    let pct   = closure_pct(t1_ok, t2_ok, t3_ok)
+    let t1_mark = if t1_ok { "✓" } else { "✗" }
+    let t2_mark = if t2_ok { "✓" } else { "✗" }
+    println("  " + name + "  T1 " + t1_mark + "   T2 " + t2_mark +
+            "  (×" + str(t2_n) + " stack)   T3 ✗   = " + str(pct) + "%")
+    return pct
+}
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str) {
+    RUN = RUN + 1
+    if ok { println("  [PASS] " + label) }
+    else  { FAIL = FAIL + 1; println("  [FAIL] " + label) }
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-space — falsifier closure-progress tracker (recipe §3)")
+    println("  ladder: T1 + T2 + T3 → 0/33/67/100% — T3 = Stage-1+ hardware (always ✗)")
+    println("========================================================================")
+    println("  root: " + ROOT)
+    println("")
+
+    let f1_pct = _report("F-SPACE-1 (Kepler 3rd)        ", F1_T1, F1_T2)
+    let f2_pct = _report("F-SPACE-2 (Falcon 9-engine)   ", F2_T1, F2_T2)
+    let f3_pct = _report("F-SPACE-3 (ISS bone-loss)     ", F3_T1, F3_T2)
+    let f4_pct = _report("F-SPACE-4 (Starship 33-Raptor)", F4_T1, F4_T2)
+
+    println("")
+    _check(f1_pct >= 67, "F-SPACE-1 ≥ 67% closure")
+    _check(f2_pct >= 67, "F-SPACE-2 ≥ 67% closure")
+    _check(f3_pct >= 67, "F-SPACE-3 ≥ 67% closure")
+    _check(f4_pct >= 67, "F-SPACE-4 ≥ 67% closure")
+
+    let pass_n = RUN - FAIL
+    let min_pct = if f1_pct < f2_pct { f1_pct } else { f2_pct }
+    let min_pct2 = if f3_pct < min_pct { f3_pct } else { min_pct }
+    let min_pct3 = if f4_pct < min_pct2 { f4_pct } else { min_pct2 }
+    println("========================================================================")
+    println("  " + str(pass_n) + "/" + str(RUN) + " falsifiers reach the recipe sat-1 floor (≥ 67%)")
+    println("  min closure across F-SPACE-1..4 = " + str(min_pct3) + "%")
+    if FAIL > 0 {
+        println("__HEXA_SPACE_FALSIFIER_CHECK__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_SPACE_FALSIFIER_CHECK__ PASS")
+    exit(0)
+}

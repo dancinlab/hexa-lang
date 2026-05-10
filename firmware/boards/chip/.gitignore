@@ -1,0 +1,17 @@
+# hexa-chip — repo-local ignores
+
+# CLI audit log + scratch state
+state/
+
+# hexa cache
+.hexa-cache/
+.aot-cache/
+
+# pdf build output (parallel to hexa-sscb convention)
+build/out/
+*.pdf
+
+# editor / OS
+.DS_Store
+*.swp
+*~

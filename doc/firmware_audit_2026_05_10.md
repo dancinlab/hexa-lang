@@ -106,7 +106,7 @@ Add to `targets.tier_1_followup` and `tier_2_later`:
 | F1 | next | `stdlib/core/` extraction (split from current stdlib) |
 | F2 | this commit | `firmware/boards/rtsc/` reference port (absorbed 2026-05-10, Option A full copy, 112 files, 4 sim suites PASS post-absorb) |
 | F3 | follow-up | `thumbv7em-none-eabihf` target in compiler/codegen |
-| F4 | follow-up | `firmware/boards/{chip,cern,antimatter,space}/` absorptions |
+| F4 | this commit | `firmware/boards/{chip,cern,antimatter,space}/` absorptions (batch 2026-05-10, Option A full copy, 641 files combined, falsifier_check PASS for all 4) |
 | F5 | follow-up | RFC-023 firmware linker spec (linker scripts + `.bss/.data` init) |
 
 ## F2 absorption record (2026-05-10)
@@ -143,6 +143,163 @@ Add to `targets.tier_1_followup` and `tier_2_later`:
   - `thumbv7em-none-eabihf` native codegen (F3) so MCU layer doesn't need cargo
   - `firmware/linker_scripts/stm32f407.ld` extraction from `firmware/mcu/memory.x` (F5 / RFC-023)
   - `firmware/bsp/stm32f4/` board-support shim (F4)
+
+## F4 absorption record (2026-05-10, batch)
+
+Single-batch absorption of the remaining four firmware repos following
+the F2 (`rtsc`) pattern. One commit covers all four boards. Upstream
+repos (`~/core/hexa-{chip,cern,antimatter,space}`) were not modified.
+
+**Mechanic:** Option A full-copy via rsync. Excludes (matching F2):
+`.git/`, `build/`, `target/`, `*.o`, `*.elf`, `*.bin`, `state/markers/`,
+`state/*.log`, `.DS_Store`, `*.swp`, `*~`, `.claude/`.
+
+**Aggregate:** 641 files / ~10.2 MB across the four boards. `cern`
+shrank from 547 MB upstream to 1.8 MB absorbed (cargo `target/` =
+532 MB filtered out — biggest single-board savings).
+
+### F4.chip — `firmware/boards/chip/`
+
+- **Source:** `~/core/hexa-chip` (Phase D iter 5, `stdlib/hal` consumer)
+- **Files moved:** 274 (size 6.2 MB) — largest of the four
+- **LOC moved:** ~107k total (incl. CHANGELOG/README); ~24k `.hexa` +
+  ~2.2k Verilog; no Rust upstream
+- **License/Citation:** MIT LICENSE + CITATION.cff verified byte-identical
+- **Banner:** prepended (F4 batch tag) to `README.md`
+- **Selftest delta:** `verify/falsifier_check.hexa` — **PASS**
+  (4/4 falsifiers F-CHIP-1..4, sat-1/sat-2/sat-3 all met,
+  31 verify/*.hexa scripts on disk vs floor of 16)
+- **HAL patterns flagged for stdlib/hal promotion:**
+  - HBM thermal controller (`firmware/sim/hbm_thermal_controller.hexa`)
+    — thermal coordination loop reusable via `stdlib/hal/power/`
+  - NPU dispatcher (`firmware/sim/npu_dispatcher.hexa`) — dataflow
+    queue arbitration; candidate for `stdlib/hal/sensor/` companion
+  - Process corner monitor (`firmware/sim/process_corner_monitor.hexa`)
+    — voltage/temp/freq corner sweep, candidate `stdlib/hal/power/`
+  - AI-native host bridge (`firmware/mcu/ai_native_host.hexa`) — only
+    pure-hexa MCU host in the four boards (no Rust); reference impl
+    for `stdlib/mcu/cortex_m/` once F3 lands
+  - Photonic + PIM hosts (`firmware/mcu/{photonic,pim}_host.hexa`) —
+    novel target shapes, postpone to stdlib/hal v1.1
+- **Caveats:** None — fully hexa-native firmware tree (no cargo);
+  cleanest of the four absorbs. Pre-existing rich CHANGELOG/CHANGE
+  history dominates LOC count.
+
+### F4.cern — `firmware/boards/cern/`
+
+- **Source:** `~/core/hexa-cern` (Phase D2/3 → E, Rust + hexa hybrid)
+- **Files moved:** 125 (size 1.8 MB after excludes; upstream 547 MB
+  with `firmware/mcu/target/` cargo cache — 532 MB filtered out)
+- **LOC moved:** ~31k total; ~9.5k `.hexa` + ~1.2k Verilog + ~430 Rust
+- **License/Citation:** MIT LICENSE + CITATION.cff verified byte-identical
+- **Banner:** prepended (F4 batch tag) to `README.md`
+- **Selftest delta:** `verify/falsifier_check.hexa` — **PASS**
+  (3/3 preregistered, 21/21 checks, 100% T1+T2+T3 closure)
+- **HAL patterns flagged for stdlib/hal promotion:**
+  - ADC + DAC chain pair (`firmware/sim/{adc,dac}_chain.hexa`) —
+    paired analog frontend; promote to `stdlib/hal/sensor/adc.hexa`
+    and `stdlib/hal/sensor/dac.hexa`
+  - Control loop (`firmware/sim/control_loop.hexa`) — generic PID
+    counterpart to rtsc's; merge into `stdlib/hal/control.hexa`
+  - Timing chain (`firmware/sim/timing_chain.hexa`) — beam-trigger
+    sequencer; candidate for `stdlib/hal/timing.hexa`
+  - Verilog timing controller + register file
+    (`firmware/hdl/timing_ctrl{,_top,_regs}.v`) — accelerator
+    bus-interface pattern; HDL stays in firmware/, but the regfile
+    layout suggests `stdlib/hal/regfile.hexa` describing
+    memory-mapped register conventions
+- **Caveats:** **Rust hybrid** — `firmware/mcu/Cargo.{toml,lock}`,
+  `memory.x`, `src/` retained. `target/` excluded as planned;
+  cargo cache is the 532 MB → 1.8 MB compaction. Phase E plan is
+  to migrate Rust → hexa once `thumbv7em` codegen (F3) lands.
+
+### F4.antimatter — `firmware/boards/antimatter/`
+
+- **Source:** `~/core/hexa-antimatter` (Phase D workspace, multi-vendor)
+- **Files moved:** 129 (size 1.1 MB)
+- **LOC moved:** ~18k total; ~11k `.hexa` + ~360 Verilog + ~440 Rust +
+  KiCad assets
+- **License/Citation:** MIT LICENSE + CITATION.cff verified byte-identical
+- **Banner:** prepended (F4 batch tag) to `README.md`
+- **Selftest delta:** `verify/falsifier_check.hexa` — **PASS**
+  (4/4 preregistered, 28/28 checks, 4/4 at 100% T1+T2+T3 proxy
+  closure). `selftest/selftest.hexa` requires `HEXA_ANTIMATTER_ROOT`
+  + sub-shell `hexa run`; deferred (env-driven harness, not an
+  absorb regression).
+- **HAL patterns flagged for stdlib/hal promotion:**
+  - Atomic clock counter (`firmware/sim/atomic_clock_counter.hexa`) —
+    high-precision timebase; candidate `stdlib/hal/timing.hexa`
+  - Cyclotron trigger (`firmware/sim/cyclotron_trigger.hexa`) —
+    pulsed-RF gating; reuses control_loop pattern from cern
+  - Multi-vendor KiCad workflow (`firmware/kicad/{atomic_clock,
+    pet_cyclotron, tabletop_penning, thrust_acquisition}/`) — first
+    real KiCad multi-board layout in the absorbed tree (rtsc had
+    one); informs `firmware/eda/` BOM conventions
+  - Rust dual-mode (`firmware/mcu/{cpt_bench,pet_cyclotron,tabletop,
+    thrust_bench}.rs`) — same `cfg_attr(no_std)` shape as rtsc
+- **Caveats:** Multi-vendor firmware — KiCad + Verilog + Rust + hexa
+  all coexist. LOC sits between cern and space. Same Rust → hexa
+  Phase E migration applies.
+
+### F4.space — `firmware/boards/space/`
+
+- **Source:** `~/core/hexa-space` (Phase E hardware, KiCad-first)
+- **Files moved:** 113 (size 1.1 MB) — smallest of the four
+- **LOC moved:** ~18k total; ~5k `.hexa` + ~390 Verilog; no Rust upstream
+- **License/Citation:** MIT LICENSE + CITATION.cff verified byte-identical
+- **Banner:** prepended (F4 batch tag) to `README.md`
+- **Selftest delta:** `verify/falsifier_check.hexa` — **PASS**
+  (4/4 falsifiers F-SPACE-1..4 each at 67% sat-1 floor)
+- **HAL patterns flagged for stdlib/hal promotion:**
+  - Launch telemetry pipeline (`firmware/sim/launch_telemetry.hexa`) —
+    high-rate streaming sensor capture; candidate `stdlib/hal/sensor/
+    telemetry.hexa`
+  - Orbit pipeline (`firmware/sim/orbit_pipeline.hexa`) — Kalman /
+    state-estimator skeleton; promotes to `stdlib/hal/control.hexa`
+  - Raptor cluster + DXA pipeline (`firmware/sim/{raptor_cluster,
+    dxa_pipeline}.hexa`) — multi-engine fan-out; informs
+    `stdlib/hal/timing.hexa` multi-channel pattern
+  - Verilog mirrors (`firmware/hdl/{launch_telemetry,orbit_pipeline,
+    raptor_cluster,dxa_pipeline}.v`) — clean 1:1 sim/HDL
+    correspondence (cleanest of the four)
+- **Caveats:** **KiCad-first** is reflected upstream in the
+  top-level `pcb/` and `engineering/` trees, but the `firmware/`
+  subtree itself is KiCad-light (no `firmware/kicad/` directory —
+  hardware drawings live above the firmware tier). Phase E hardware
+  commission still gates HDL-to-silicon; sim layer is fully
+  exercisable today.
+
+### F4 aggregate selftest delta
+
+| Board       | Test invoked                | Result | Notes                              |
+|-------------|-----------------------------|--------|------------------------------------|
+| chip        | verify/falsifier_check.hexa | PASS   | sat-1+sat-2+sat-3 all met, 31 scripts |
+| cern        | verify/falsifier_check.hexa | PASS   | 21/21, 100% T1+T2+T3 closure       |
+| antimatter  | verify/falsifier_check.hexa | PASS   | 28/28, 4/4 100%                    |
+| space       | verify/falsifier_check.hexa | PASS   | 4/4 falsifiers ≥ 67% (sat-1 floor) |
+
+HDL (iverilog) + MCU (cargo) layers deferred per F2 convention —
+toolchain-gated; sources copied byte-identical to upstream verified
+state, so prior pass matrices are preserved.
+
+### F4 stdlib/hal promotion shortlist (consolidated)
+
+Promote in F4+ small commits, not this batch:
+
+1. `stdlib/hal/control.hexa` — PID / Kalman / state-estimator
+   (consolidates rtsc synthesis_ctrl + cern control_loop +
+   space orbit_pipeline)
+2. `stdlib/hal/sensor/{adc,dac,telemetry}.hexa` — analog frontend +
+   high-rate streaming (consolidates cern adc_chain/dac_chain +
+   space launch_telemetry)
+3. `stdlib/hal/timing.hexa` — multi-channel time base / pulsed gating
+   (consolidates antimatter atomic_clock_counter + cern timing_chain
+   + space raptor_cluster fan-out)
+4. `stdlib/hal/power/{thermal,corner}.hexa` — thermal + process-corner
+   monitoring (consolidates rtsc calorimetry + chip hbm_thermal +
+   chip process_corner_monitor)
+5. `stdlib/hal/regfile.hexa` — memory-mapped regfile conventions
+   (informed by cern timing_ctrl_regs.v register layout)
 
 ## Open questions
 

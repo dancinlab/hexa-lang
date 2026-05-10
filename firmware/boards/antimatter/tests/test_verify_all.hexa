@@ -1,0 +1,19 @@
+#!hexa strict
+// tests/test_verify_all.hexa — orchestrator-level harness.
+//
+// Pass criterion: verify/all.hexa exits 0 + emits __HEXA_ANTIMATTER_VERIFY_ALL__ PASS.
+
+fn main() {
+    let root = env("HEXA_ANTIMATTER_ROOT")
+    let mut p = "verify/all.hexa"
+    if root.len() > 0 { p = root + "/verify/all.hexa" }
+
+    let raw = exec("hexa run " + p + " --quiet 2>&1")
+    if raw.contains("__HEXA_ANTIMATTER_VERIFY_ALL__ PASS") && raw.contains("38/38 verifiers PASS") {
+        println("test_verify_all: PASS")
+        return
+    }
+    println("test_verify_all: FAIL")
+    println(raw.trim())
+    exit(1)
+}

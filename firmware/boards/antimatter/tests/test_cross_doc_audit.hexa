@@ -1,0 +1,19 @@
+#!hexa strict
+// tests/test_cross_doc_audit.hexa — n=6 invariant audit harness.
+//
+// Pass criterion: __HEXA_ANTIMATTER_VERIFY_DOCS__ PASS sentinel.
+
+fn main() {
+    let root = env("HEXA_ANTIMATTER_ROOT")
+    let mut p = "verify/cross_doc_audit.hexa"
+    if root.len() > 0 { p = root + "/verify/cross_doc_audit.hexa" }
+
+    let raw = exec("hexa run " + p + " 2>&1")
+    if raw.contains("__HEXA_ANTIMATTER_VERIFY_DOCS__ PASS") {
+        println("test_cross_doc_audit: PASS")
+        return
+    }
+    println("test_cross_doc_audit: FAIL")
+    println(raw.trim())
+    exit(1)
+}

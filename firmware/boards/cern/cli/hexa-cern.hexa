@@ -1,0 +1,522 @@
+#!hexa strict
+// hexa-cern/cli/hexa-cern.hexa — standalone hexa-cern CLI router (placeholder)
+//
+// 3-pillar hexa-cern bundle (HEXA family) router:
+//   mini        — HEXA-MINI-ACCEL (benchtop laser-plasma 100 MeV / 1 GeV/m)  [SPEC-ONLY]
+//   parent      — HEXA-PACCEL (integrated parent particle accelerator)        [SPEC-ONLY]
+//   classical   — HEXA-CLASSIC-ACCEL (classical-mechanics baseline)            [SPEC-ONLY]
+//
+// Plus utility subcmds:
+//   status      — pillar status table (0/3 wired, 3/3 spec-only)
+//   selftest    — verify all 3 pillar dispatchers present + count
+//   help        — this help
+//   --version   — print version
+//
+// Root resolution: $PETITE_CERN_ROOT env, else inferred from $0 dirname.
+//
+// Constraints:
+//   raw#9   — hexa-only orchestration
+//   raw#10  — honest C3 (specs only, .hexa CLI TBD)
+//
+// Cost: $0 (Mac local; placeholder dispatcher only).
+//
+// @no-lock-needed
+// @resolver-bypass(reason="Pure local CLI placeholder; pillar specs are .md only at v1.0.0.")
+
+let VERSION = "1.1.0-pre"
+
+// ─── env / path resolve ───
+
+let HOME = env("HOME")
+let PETITE_CERN_ROOT_ENV = env("PETITE_CERN_ROOT")
+
+fn hexa_cern_root() -> str {
+    if PETITE_CERN_ROOT_ENV.len() > 0 { return PETITE_CERN_ROOT_ENV }
+    let inferred = exec("dirname \"$(dirname \"$0\")\" 2>/dev/null || true").trim()
+    if inferred.len() > 0 { return inferred }
+    return HOME + "/.hexa-cern"  // @allow-devpath
+}
+
+let PC = hexa_cern_root()
+
+let DOC_MINI      = PC + "/mini/doc/mini-accelerator.md"
+let DOC_PARENT    = PC + "/parent/doc/particle-accelerator.md"
+let DOC_CLASSICAL = PC + "/classical/doc/classical-mechanics-accelerator.md"
+
+let LOG_PATH = PC + "/state/hexa_cern_cli.log"
+
+// ─── arg helpers ───
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn has_flag(a: [str], flag: str) -> bool {
+    for x in a {
+        if x == flag { return true }
+    }
+    return false
+}
+
+fn json_mode(a: [str]) -> bool {
+    return has_flag(a, "--json")
+}
+
+// ─── audit log (jsonl) ───
+
+fn _ts_now() -> str {
+    return exec("date -u '+%Y-%m-%dT%H:%M:%SZ'").trim()
+}
+
+fn _audit(subcmd: str, args_str: str, exit_code: int) {
+    let line = "{\"ts\":\"" + _ts_now() + "\",\"caller\":\"hexa_cern_standalone\",\"subcmd\":\"hexa-cern " +
+               subcmd + "\",\"args\":\"" + args_str.replace("\"", "\\\"") +
+               "\",\"exit_code\":" + str(exit_code) + ",\"version\":\"" + VERSION + "\"}"
+    exec("mkdir -p " + shq(PC + "/state") + " 2>/dev/null")
+    exec("echo " + shq(line) + " >> " + shq(LOG_PATH) + " 2>/dev/null")
+}
+
+// ─── doc presence check ───
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+// ─── caveat printer (raw#10 honest C3) ───
+
+fn _print_caveats() {
+    println("")
+    println("--- caveats (raw#10 C3) ---")
+    println("  1. v1.0.0 ships specs-only (3 pillar .md docs). .hexa CLI dispatchers TBD.")
+    println("  2. n=6 sigma-cascade 6-order claim (precision ×10, throughput ×144,")
+    println("     energy ÷12, size ÷10, error ÷144, lifetime ×48) is design-target ceiling,")
+    println("     NOT empirically validated. Stage-1+ benchtop build required.")
+    println("  3. Comparison vs LHC 7 TeV/27km + DESY 1 GeV/m baseline is paper-only.")
+    println("  4. Mini pillar SC magnet substrate depends on dancinlab/hexa-rtsc.")
+    println("  5. Stage-3 propulsion crosslink to dancinlab/hexa-ufo not wired here.")
+}
+
+// ─── subcommand: mini ───
+
+fn cmd_mini(a: [str]) {
+    println("hexa-cern mini — HEXA-MINI-ACCEL (benchtop laser-plasma 100 MeV / 1 GeV/m)")
+    println("  status: spec frozen v1.0 · .hexa calc lands v1.1.0-pre · empirical Stage-1+ TBD")
+    let exists = _file_exists(DOC_MINI)
+    if exists {
+        println("  spec:   " + DOC_MINI)
+    } else {
+        println("  spec:   MISSING — expected at " + DOC_MINI)
+    }
+    println("")
+    println("  n=6 derivation (verify with: hexa-cern verify wakefield)")
+    println("    E_peak    = σ·(σ-φ) = 12·10  = 120 GV/m   (peak wakefield)")
+    println("    a_0       = n               = 6           (normalized vec. pot.)")
+    println("    R_chamber = σ-φ             = 10 cm       (benchtop radius)")
+    println("    target    = 100 MeV reachable in ~ 8 cm of L_acc")
+    if json_mode(a) {
+        println("{\"hexa_cern\":\"" + VERSION + "\",\"subcmd\":\"mini\",\"status\":\"spec_only\",\"spec_present\":" + (if exists { "true" } else { "false" }) + ",\"E_peak_GV_per_m\":120,\"a0\":6,\"R_chamber_cm\":10,\"target_MeV\":100}")
+    }
+    _audit("mini", "", 0)
+}
+
+// ─── subcommand: parent ───
+
+fn cmd_parent(a: [str]) {
+    println("hexa-cern parent — HEXA-PACCEL (integrated parent particle accelerator)")
+    println("  status: spec frozen v1.0 · .hexa cascade calc lands v1.1.0-pre · numerical solver TBD")
+    let exists = _file_exists(DOC_PARENT)
+    if exists {
+        println("  spec:   " + DOC_PARENT)
+    } else {
+        println("  spec:   MISSING — expected at " + DOC_PARENT)
+    }
+    println("")
+    println("  σ-cascade chain (verify with: hexa-cern verify sigma)")
+    println("    E_0 = 10 MeV       (seed = sopfr·φ)            ")
+    println("    E_1 = 100 MeV      (LWFA / mini target)        ")
+    println("    E_4 = 1 TeV        (Tevatron, σ·J₂ = 288 GeV)  ")
+    println("    E_6 = 100 TeV      (FCC envelope, σ³ = 1728)   ")
+    println("    span = E_6/E_0 = 10⁷  · σ² = 144x throughput")
+    if json_mode(a) {
+        println("{\"hexa_cern\":\"" + VERSION + "\",\"subcmd\":\"parent\",\"status\":\"spec_only\",\"spec_present\":" + (if exists { "true" } else { "false" }) + ",\"E_0_MeV\":10,\"E_6_TeV\":100,\"sigma_squared\":144,\"sigma_cubed\":1728}")
+    }
+    _audit("parent", "", 0)
+}
+
+// ─── subcommand: classical ───
+
+fn cmd_classical(a: [str]) {
+    println("hexa-cern classical — HEXA-CLASSIC-ACCEL (classical-mechanics baseline)")
+    println("  status: spec frozen v1.0 · .hexa Lagrange/Hamilton calc lands v1.1.0-pre · numerics TBD")
+    let exists = _file_exists(DOC_CLASSICAL)
+    if exists {
+        println("  spec:   " + DOC_CLASSICAL)
+    } else {
+        println("  spec:   MISSING — expected at " + DOC_CLASSICAL)
+    }
+    println("")
+    println("  Lagrange / Hamilton n=6 shape (verify with: hexa-cern verify classical)")
+    println("    DOF                 = n  = 6              (SE(3) = R³ × SO(3))")
+    println("    phase-space dim     = 2n = σ = 12         (canonical (q, p))")
+    println("    conserved qty       = sopfr+φ = 7         (E + 3p + 3L)")
+    println("    passenger cap       = τ·g = 4g            (Newton F = ma envelope)")
+    println("    τ=4 phases          = pump · bubble · capture · extract")
+    if json_mode(a) {
+        println("{\"hexa_cern\":\"" + VERSION + "\",\"subcmd\":\"classical\",\"status\":\"spec_only\",\"spec_present\":" + (if exists { "true" } else { "false" }) + ",\"DOF\":6,\"phase_space_dim\":12,\"conserved\":7,\"passenger_cap_g\":4}")
+    }
+    _audit("classical", "", 0)
+}
+
+// ─── subcommand: verify ───
+//
+// Dispatches the verify/*.hexa runners. Each is a stand-alone script that
+// reads project docs and exits 0 on PASS, 1 on FAIL. `verify all` runs the
+// full sweep and aggregates exit codes (non-zero if any sub-verifier fails).
+//
+// Each verifier runs in its own `hexa run` invocation via exec(),
+// keeping stdout bit-identical to direct invocations. Exit codes
+// aggregate cleanly (any non-zero in `verify all` → exit 1).
+
+let VERIFY_DIR = PC + "/verify"
+
+let VERIFY_SUBS = [
+    "lattice",
+    "cross-doc",
+    "wakefield",
+    "numerics-wakefield",
+    "numerics-solver",
+    "numerics-relativistic",
+    "numerics-beam",
+    "numerics-scaling",
+    "sigma",
+    "numerics-sigma",
+    "numerics-bending",
+    "classical",
+    "numerics-classical",
+    "numerics-liouville",
+    "numerics-se3",
+    "numerics-cross",
+    "numerics-lhc",
+    "numerics-lwfa",
+    "numerics-lattice",
+    "lint-numerics",
+    "saturation",
+    "empirical-lhc",
+    "empirical-lwfa",
+    "empirical-classical",
+    "falsifier",
+    "firmware-timing",
+    "firmware-dac",
+    "firmware-adc",
+    "firmware-control",
+]
+
+fn _verify_script(sub: str) -> str {
+    if sub == "lattice"            { return VERIFY_DIR + "/lattice_check.hexa" }
+    if sub == "cross-doc"          { return VERIFY_DIR + "/cross_doc_audit.hexa" }
+    if sub == "wakefield"          { return VERIFY_DIR + "/calc_wakefield.hexa" }
+    if sub == "numerics-wakefield" { return VERIFY_DIR + "/numerics_wakefield.hexa" }
+    if sub == "numerics-solver"    { return VERIFY_DIR + "/numerics_lwfa_solver.hexa" }
+    if sub == "numerics-relativistic" { return VERIFY_DIR + "/numerics_lwfa_relativistic.hexa" }
+    if sub == "numerics-beam"      { return VERIFY_DIR + "/numerics_beam_dynamics.hexa" }
+    if sub == "numerics-scaling"   { return VERIFY_DIR + "/numerics_lwfa_scaling.hexa" }
+    if sub == "sigma"              { return VERIFY_DIR + "/calc_sigma_cascade.hexa" }
+    if sub == "numerics-sigma"     { return VERIFY_DIR + "/numerics_sigma_cascade.hexa" }
+    if sub == "numerics-bending"   { return VERIFY_DIR + "/numerics_bending.hexa" }
+    if sub == "classical"          { return VERIFY_DIR + "/calc_classical.hexa" }
+    if sub == "numerics-classical" { return VERIFY_DIR + "/numerics_classical.hexa" }
+    if sub == "numerics-liouville" { return VERIFY_DIR + "/numerics_liouville.hexa" }
+    if sub == "numerics-se3"       { return VERIFY_DIR + "/numerics_se3_partial.hexa" }
+    if sub == "numerics-cross"     { return VERIFY_DIR + "/numerics_cross_pillar.hexa" }
+    if sub == "numerics-lhc"       { return VERIFY_DIR + "/numerics_lhc_parity.hexa" }
+    if sub == "numerics-lwfa"      { return VERIFY_DIR + "/numerics_lwfa_parity.hexa" }
+    if sub == "numerics-lattice"   { return VERIFY_DIR + "/numerics_lattice_arithmetic.hexa" }
+    if sub == "lint-numerics"      { return VERIFY_DIR + "/lint_numerics.hexa" }
+    if sub == "saturation"         { return VERIFY_DIR + "/saturation_check.hexa" }
+    if sub == "empirical-lhc"      { return VERIFY_DIR + "/empirical_lhc_api.hexa" }
+    if sub == "empirical-lwfa"     { return VERIFY_DIR + "/empirical_lwfa_hepdata.hexa" }
+    if sub == "empirical-classical"{ return VERIFY_DIR + "/empirical_classical_arxiv.hexa" }
+    if sub == "falsifier"          { return VERIFY_DIR + "/falsifier_check.hexa" }
+    if sub == "firmware-timing"    { return PC + "/firmware/sim/timing_chain.hexa" }
+    if sub == "firmware-dac"       { return PC + "/firmware/sim/dac_chain.hexa" }
+    if sub == "firmware-adc"       { return PC + "/firmware/sim/adc_chain.hexa" }
+    if sub == "firmware-control"   { return PC + "/firmware/sim/control_loop.hexa" }
+    return ""
+}
+
+fn _hexa_bin() -> str {
+    // Use hexa.real directly: ~/.hx/bin/hexa (and the `which hexa` alias) is
+    // a wrapper that routes through the resource-toolkit TCP shim, which is
+    // unreachable in offline / CI environments. hexa.real is the local
+    // interpreter binary and works regardless of shim state.
+    let real = HOME + "/.hx/packages/hexa/hexa.real"  // @allow-devpath
+    if _file_exists(real) { return real }
+    let h = exec("which hexa 2>/dev/null").trim()
+    if h.len() > 0 { return h }
+    return HOME + "/.hx/bin/hexa"  // @allow-devpath
+}
+
+fn _run_one_verifier(sub: str) -> int {
+    let path = _verify_script(sub)
+    if path.len() == 0 {
+        eprintln("hexa-cern verify: unknown sub '" + sub + "'")
+        return 2
+    }
+    if _file_exists(path) == false {
+        eprintln("hexa-cern verify: script missing: " + path)
+        return 2
+    }
+    let cmd = "HEXA_SHIM_NO_DARWIN_LANDING=1 RESOURCE_LOCAL_HEXA=1 PETITE_CERN_ROOT=" + shq(PC) + " " +
+              shq(_hexa_bin()) + " run " + shq(path)
+    let result = exec_with_status(cmd)
+    let stdout = to_string(result[0])
+    let code = result[1]
+    println(stdout)
+    return code
+}
+
+fn cmd_verify(a: [str]) {
+    // a = ["hexa_cern_cli", "hexa_cern_router", "verify", <maybe sub>...]
+    let n = len(a)
+    let mut sub = "all"
+    if n > 3 { sub = a[3] }
+
+    if sub == "--help" || sub == "-h" || sub == "help" {
+        println("hexa-cern verify — n=6 invariant + per-pillar calculator audits")
+        println("")
+        println("usage: hexa-cern verify [<sub>]")
+        println("")
+        println("sub:")
+        println("  all                 run every verifier in sequence (default)")
+        println("  lattice             n=6 σ(6)·φ(6) = n·τ(6) = J₂ = 24 closure")
+        println("  cross-doc           cross-pillar consistency audit")
+        println("  wakefield           mini pillar — laser-wakefield n=6 derivation")
+        println("  numerics-wakefield  mini pillar — closed-form plasma numerics (n_e, L_d)")
+        println("  numerics-solver     mini pillar — Verlet LWFA ODE solver (electron in wakefield)")
+        println("  numerics-relativistic mini pillar — KDK leapfrog relativistic LWFA (γ → 200, §A.6.1 step B)")
+        println("  numerics-beam       mini pillar — LWFA betatron + emittance preservation (§A.6.1 step B 2/3)")
+        println("  numerics-scaling    mini pillar — Lu/Esarey/TD scaling-law parity (§A.6.1 step B 3/3)")
+        println("  sigma               parent pillar — σ-cascade chain (E_0..E_6)")
+        println("  numerics-sigma      parent pillar — relativistic γ progression numerics")
+        println("  numerics-bending    parent pillar — collider bending-radius R = E/(ecB)")
+        println("  classical           classical pillar — Lagrange/Hamilton τ=4 phase")
+        println("  numerics-classical  classical pillar — symplectic leapfrog (τ=4 quadrants)")
+        println("  numerics-liouville  classical pillar — Liouville volume preservation (det(J)=1)")
+        println("  numerics-se3        classical pillar — 2-DOF symplectic (1-DOF→2-DOF→6-DOF)")
+        println("  numerics-cross      cross-pillar numerical consistency (mini ↔ parent ↔ classical)")
+        println("  numerics-lhc        F-PCERN-1 collider parity numerics (LEP/Tevatron/LHC/FCC)")
+        println("  numerics-lwfa       F-PCERN-3 LWFA parity numerics (BELLA/FACET/ATHENA/FLASHFwd)")
+        println("  numerics-lattice    n=6 lattice float-arithmetic cross-check (math_pure stability)")
+        println("  lint-numerics       meta-lint: every numerics_*.hexa follows regression conventions")
+        println("  saturation          RSC saturation check (sat-1 + sat-2 → STOP signal)")
+        println("  empirical-lhc       F-PCERN-1 T3 partial: CERN Open Data API archival feed")
+        println("  empirical-lwfa      F-PCERN-3 T3 partial: Inspire-HEP LWFA paper milestones")
+        println("  empirical-classical F-PCERN-2 T3 partial: arXiv classical-mechanics milestones")
+        println("  falsifier           F-PCERN-1/2/3 preregister checklist")
+        println("  firmware-timing     §A.6.1 step C 1/4 — firmware/sim master clock + trigger sim")
+        println("  firmware-dac        §A.6.1 step C 2/4 — firmware/sim 16-bit DAC chain (HV/coil/pump/valve)")
+        println("  firmware-adc        §A.6.1 step C 3/4 — firmware/sim ADC chain (BPM 16b/1GS/s + diamond 14b/100MS/s)")
+        println("  firmware-control    §A.6.1 step C 4/4 — firmware/sim closed PID loop (setpoint + disturbance)")
+        println("")
+        println("exit:")
+        println("  0  all selected verifiers PASS")
+        println("  1  ≥ 1 verifier FAIL")
+        println("  2  bad sub / missing script")
+        return
+    }
+
+    if sub == "all" {
+        let mut pass = 0
+        let mut fail = 0
+        let mut bad = 0
+        for s in VERIFY_SUBS {
+            let code = _run_one_verifier(s)
+            if code == 0 { pass = pass + 1 }
+            else if code == 1 { fail = fail + 1 }
+            else { bad = bad + 1 }
+        }
+        let total = pass + fail + bad
+        println("")
+        println("========================================================================")
+        println("  hexa-cern verify all — aggregate")
+        println("    PASS:  " + str(pass) + "/" + str(total))
+        println("    FAIL:  " + str(fail) + "/" + str(total))
+        println("    ERROR: " + str(bad)  + "/" + str(total))
+        println("========================================================================")
+        if fail + bad > 0 {
+            _audit("verify all", "", 1)
+            exit(1)
+        }
+        _audit("verify all", "", 0)
+        return
+    }
+
+    let code = _run_one_verifier(sub)
+    _audit("verify " + sub, "", code)
+    if code != 0 { exit(code) }
+}
+
+// ─── subcommand: status ───
+
+fn cmd_status(a: [str]) {
+    if json_mode(a) {
+        let mut js = "{\"hexa_cern\":\"" + VERSION + "\",\"subcmd\":\"status\","
+        js = js + "\"pillars_total\":3,\"pillars_wired\":0,\"pillars_spec_only\":3,"
+        js = js + "\"verdict\":\"SPECS_ONLY\","
+        js = js + "\"pillars\":[\"mini:spec_only\",\"parent:spec_only\",\"classical:spec_only\"]"
+        js = js + "}"
+        println(js)
+        return
+    }
+
+    println("hexa-cern " + VERSION + " status — 3-pillar hexa-cern bundle (HEXA family)")
+    println("")
+    println("  pillar       status              n=6 lattice              empirical sandbox")
+    println("  ------------ ------------------- ------------------------ --------------------------")
+    println("  mini         SPEC-ONLY v1.0.0    σ-φ=10 GeV/m design       deferred (Stage-1+)")
+    println("  parent       SPEC-ONLY v1.0.0    integrated design         deferred (Stage-2+)")
+    println("  classical    SPEC-ONLY v1.0.0    baseline reference        deferred (Stage-1+)")
+    println("")
+    println("  verdict: SPECS_ONLY (3/3 pillar specs imported; .hexa CLI TBD)")
+    println("")
+    println("  to inspect a pillar:")
+    println("    hexa-cern mini       (HEXA-MINI-ACCEL spec)")
+    println("    hexa-cern parent     (HEXA-PACCEL spec)")
+    println("    hexa-cern classical  (HEXA-CLASSIC-ACCEL spec)")
+    println("    hexa-cern selftest   (3-pillar sentinel sweep)")
+    println("    hexa-cern verify     (n=6 invariant + calculator audits)")
+    _print_caveats()
+}
+
+// ─── subcommand: selftest ───
+
+fn cmd_selftest(a: [str]) {
+    println("hexa-cern selftest — 3-pillar sentinel sweep")
+    let mut count = 0
+    if _file_exists(DOC_MINI)      { println("  [PASS] mini      spec present");      count = count + 1 } else { println("  [FAIL] mini      spec MISSING") }
+    if _file_exists(DOC_PARENT)    { println("  [PASS] parent    spec present");      count = count + 1 } else { println("  [FAIL] parent    spec MISSING") }
+    if _file_exists(DOC_CLASSICAL) { println("  [PASS] classical spec present");     count = count + 1 } else { println("  [FAIL] classical spec MISSING") }
+    let pass_overall = count == 3
+    if pass_overall {
+        println("__PETITE_CERN_SELFTEST__ PASS — 3/3 pillar specs detected")
+    } else {
+        println("__PETITE_CERN_SELFTEST__ FAIL — " + str(count) + "/3 pillar specs detected")
+    }
+    if json_mode(a) {
+        println("{\"hexa_cern\":\"" + VERSION + "\",\"subcmd\":\"selftest\",\"verdict\":\"" + (if pass_overall { "PASS" } else { "FAIL" }) + "\",\"pillars_present\":" + str(count) + "}")
+    }
+    _print_caveats()
+    _audit("selftest", "", if pass_overall { 0 } else { 1 })
+    if pass_overall == false { exit(1) }
+}
+
+// ─── version ───
+
+fn cmd_version() {
+    println("hexa-cern " + VERSION)
+    println("standalone hexa-cern benchtop accelerator bundle (HEXA family — extracted from canon@c0f1f570 on 2026-05-06)")
+    println("license: MIT")
+    println("repo:    https://github.com/dancinlab/hexa-cern")
+}
+
+// ─── help ───
+
+fn cmd_help() {
+    println("hexa-cern " + VERSION + " — standalone hexa-cern CLI (placeholder dispatcher)")
+    println("")
+    println("usage: hexa-cern <subcmd> [flags...]")
+    println("")
+    println("pillar subcommands (3-pillar bundle — n=6 σ-cascade 6-order):")
+    println("  mini            HEXA-MINI-ACCEL (benchtop laser-plasma 100 MeV / 1 GeV/m)  [SPEC-ONLY]")
+    println("  parent          HEXA-PACCEL (integrated parent accelerator)                [SPEC-ONLY]")
+    println("  classical       HEXA-CLASSIC-ACCEL (classical-mechanics baseline)          [SPEC-ONLY]")
+    println("")
+    println("utility subcommands:")
+    println("  status          0/3-wired pillar table + verdict + caveats")
+    println("  selftest        full 3-pillar sentinel sweep")
+    println("  verify [<sub>]  n=6 invariant + per-pillar calculators")
+    println("                    sub: all (default) | lattice | cross-doc")
+    println("                       | wakefield | numerics-wakefield | numerics-solver | numerics-relativistic | numerics-beam | numerics-scaling")
+    println("                       | sigma | numerics-sigma | numerics-bending")
+    println("                       | classical | numerics-classical | numerics-liouville")
+    println("                       | numerics-se3 | numerics-cross | numerics-lhc | numerics-lwfa")
+    println("                       | numerics-lattice | lint-numerics | saturation")
+    println("                       | empirical-lhc | empirical-lwfa | empirical-classical")
+    println("                       | falsifier | firmware-timing | firmware-dac | firmware-adc | firmware-control")
+    println("")
+    println("global flags:")
+    println("  --version       show version")
+    println("  --json          machine-parseable JSON tail")
+    println("  --help, -h      this help")
+    println("")
+    println("env:")
+    println("  PETITE_CERN_ROOT       override repo root (default: inferred from $0)")
+    println("")
+    println("cost estimate (Mac local): $0 — placeholder dispatcher; specs-only at v1.0.0.")
+    println("")
+    println("backend specs: " + PC)
+}
+
+// ─── main ───
+
+fn main() {
+    let _raw = args()
+    let mut _sidx = -1
+    let mut _i = 0
+    while _i < _raw.len() {
+        if _raw[_i].ends_with(".hexa") { _sidx = _i; break }
+        _i = _i + 1
+    }
+    let mut _user_start = 2
+    if _sidx >= 0 { _user_start = _sidx + 1 }
+
+    let mut a: [str] = ["hexa_cern_cli", "hexa_cern_router"]
+    let mut _ua = _user_start
+    while _ua < _raw.len() {
+        a = a + [_raw[_ua]]
+        _ua = _ua + 1
+    }
+    let n = len(a)
+
+    if n < 3 {
+        cmd_help()
+        return
+    }
+
+    let sub = a[2]
+
+    if sub == "--version" || sub == "-V" || sub == "version" {
+        cmd_version()
+        return
+    }
+
+    // Only trigger global --help when the FIRST token is --help/-h.
+    // Sub-positioned flags (e.g. `verify --help`) are forwarded to the
+    // subcommand's own help handler.
+    if sub == "--help" || sub == "-h" {
+        cmd_help()
+        return
+    }
+
+    if sub == "help" { cmd_help(); return }
+
+    if sub == "status" {
+        cmd_status(a)
+    } else if sub == "mini" {
+        cmd_mini(a)
+    } else if sub == "parent" {
+        cmd_parent(a)
+    } else if sub == "classical" {
+        cmd_classical(a)
+    } else if sub == "selftest" {
+        cmd_selftest(a)
+    } else if sub == "verify" {
+        cmd_verify(a)
+    } else {
+        eprintln("hexa-cern: unknown subcommand '" + sub + "'")
+        eprintln("run 'hexa-cern help' for usage")
+        _audit(sub, "", 2)
+        exit(2)
+    }
+}

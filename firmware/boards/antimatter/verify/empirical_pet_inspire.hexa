@@ -1,0 +1,227 @@
+#!hexa strict
+// hexa-antimatter/verify/empirical_pet_inspire.hexa — F-AM-1 T3 closure.
+//
+// Confirms that the published empirical PET ¹⁸F-cyclotron literature
+// is real and findable via Inspire-HEP API.  Paper-existence proxy for
+// the empirical tier — strict raw-data fit (clinical batch logs, real
+// 109.8-min decay measurements) deferred to v2.0.0 Stage-1+ build.
+//
+// Policy (per recipe §9 + hexa-cern v1.1.0 pattern): API-first,
+// fixture-fallback, both compared when available.
+//   1. Try live Inspire-HEP query for each PET-cyclotron milestone.
+//   2. Always fall back to bundled fixture under verify/fixtures/.
+//   3. If both reachable, assert API total ≥ fixture total
+//      (papers monotonically accumulate; never disappear).
+//
+// PASS = ≥ 3 of 4 milestones return ≥ 1 paper (proves PET ¹⁸F empirical
+//        territory is real and indexed).
+//
+// Queries:
+//   - 18F PET cyclotron               (general production review)
+//   - fluorine-18 production cyclotron (yield-paper class)
+//   - fluorine-18 target yield        (target-engineering class)
+//   - F-18 positron emission tomography (medical-PET class)
+//
+// Run: hexa run verify/empirical_pet_inspire.hexa
+// Sentinel: __HEXA_ANTIMATTER_EMPIRICAL_PET_INSPIRE__ PASS
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-antimatter"
+}
+
+let ROOT = _root()
+let FIXTURE_DIR = ROOT + "/verify/fixtures"
+let DOC_PILLAR  = ROOT + "/pet_cyclotron/pet-cyclotron.md"
+
+fn _read(p: str) -> str {
+    return exec("cat \"" + p + "\" 2>/dev/null")
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.contains(s)
+}
+
+fn _exists(p: str) -> bool {
+    let probe = exec("test -f \"" + p + "\" && echo OK").trim()
+    return probe == "OK"
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _int_str(x: int) -> str { return "" + x }
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn _info(label: str, detail: str) {
+    println("  [INFO] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── milestone registry ──────────────────────────────────────────────────
+let M_LABEL    = ["18F PET cyclotron",
+                  "fluorine-18 production cyclotron",
+                  "fluorine-18 target yield",
+                  "F-18 positron emission tomography"]
+let M_QUERY    = ["18F+PET+cyclotron",
+                  "fluorine-18+production+cyclotron",
+                  "fluorine-18+target+yield",
+                  "F-18+positron+emission+tomography"]
+let M_FIXTURE  = ["pet_18F_PET_cyclotron.json",
+                  "pet_fluorine-18_production_cyclotron.json",
+                  "pet_fluorine-18_target_yield.json",
+                  "pet_F-18_positron_emission_tomography.json"]
+let M_MIN_PAPERS = [1, 1, 1, 1]
+
+// ── API ─────────────────────────────────────────────────────────────────
+let API_BASE = "https://inspirehep.net/api/literature?q="
+let API_TAIL = "&size=3&fields=titles,publication_info"
+
+fn fetch_api(query: str) -> str {
+    let url = API_BASE + query + API_TAIL
+    let cmd = "curl -s --max-time 10 '" + url + "' 2>/dev/null"
+    return exec(cmd)
+}
+
+// Parse "total":N  (Inspire-HEP returns hits.total = number)
+fn parse_total(json: str) -> int {
+    let needle = "\"total\":"
+    let idx = json.find(needle)
+    if idx < 0 { return -1 }
+    let n = json.len()
+    let mut i = idx + needle.len()
+    let mut digits = ""
+    while i < n {
+        let c = json[i]
+        let is_digit = (c == "0" || c == "1" || c == "2" || c == "3" || c == "4" ||
+                        c == "5" || c == "6" || c == "7" || c == "8" || c == "9")
+        if is_digit { digits = digits + c; i = i + 1 } else { break }
+    }
+    if digits.len() == 0 { return -1 }
+    return int(digits)
+}
+
+fn check_network_reachable() -> bool {
+    let probe = exec("curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://inspirehep.net/ 2>/dev/null").trim()
+    let ok = probe == "200" || probe == "301" || probe == "302"
+    if !ok {
+        _info("network unreachable to inspirehep.net  (offline mode)",
+              "fixture-only path; API totals not compared")
+    } else {
+        _info("network reachable to inspirehep.net  (api-vs-fixture compare engaged)",
+              "http_code = " + probe)
+    }
+    return ok
+}
+
+fn check_milestone(idx: int, net_up: bool) -> bool {
+    let label    = M_LABEL[idx]
+    let query    = M_QUERY[idx]
+    let fixture  = M_FIXTURE[idx]
+    let min_pap  = M_MIN_PAPERS[idx]
+
+    let fix_path = FIXTURE_DIR + "/" + fixture
+    let fix_text = _read(fix_path)
+    let fix_total = if fix_text.len() > 0 { parse_total(fix_text) } else { -1 }
+
+    let mut api_total = -1
+    if net_up {
+        let api_text = fetch_api(query)
+        if api_text.len() > 0 { api_total = parse_total(api_text) }
+    }
+
+    let fix_ok = fix_total >= min_pap
+    let api_ok = api_total >= min_pap
+    let either_ok = fix_ok || api_ok
+    _check(either_ok,
+           label + ": ≥ " + _int_str(min_pap) + " paper(s) on Inspire-HEP",
+           "fixture total = " + _int_str(fix_total) +
+           ", API total = " + _int_str(api_total))
+
+    if api_total >= 0 && fix_total >= 0 {
+        let monotone = api_total >= fix_total
+        _check(monotone,
+               label + ": API total ≥ fixture total  (literature monotone)",
+               "Δ = " + _int_str(api_total - fix_total))
+    }
+
+    return either_ok
+}
+
+fn check_at_least_three_milestones(hits: int) {
+    _check(hits >= 3,
+           "≥ 3 of 4 PET-cyclotron milestones present in Inspire-HEP",
+           "milestone hits = " + _int_str(hits) + " of 4")
+}
+
+fn check_pillar_doc_anchor() {
+    let txt = _read(DOC_PILLAR)
+    let ok = _has(txt, "18F") || _has(txt, "PET") || _has(txt, "cyclotron")
+    _check(ok, "pet_cyclotron/pet-cyclotron.md references 18F / PET / cyclotron", "")
+}
+
+let FALSIFIERS = [
+    "fewer than 3 of 4 PET milestones return papers → public PET ¹⁸F literature thinner than n=6 derivation assumes",
+    "API total < fixture total → Inspire-HEP literature shrank (record withdrawn or feed broken)",
+    "no fixture present + no network → T3 cannot close (offline + cold)",
+    "pet-cyclotron.md loses 18F / PET / cyclotron anchor → empirical motivation broken",
+    "API timeout > 10s on every query → Inspire-HEP unreachable from project network",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — F-AM-1 T3 closure (PET ¹⁸F via Inspire-HEP)")
+    println("  (paper-existence proxy; raw-data fit deferred to v2.0.0 Stage-1+)")
+    println("========================================================================")
+    println("")
+    println("  policy: API-first, fixture-fallback, compare both when available")
+    println("  fixture dir: " + FIXTURE_DIR)
+    println("")
+
+    let offline = env("HEXA_ANTIMATTER_OFFLINE") == "1"
+    if offline {
+        _info("HEXA_ANTIMATTER_OFFLINE=1 → fixture-only mode (Inspire-HEP API skipped)", "")
+    }
+    let net_up = if offline { false } else { check_network_reachable() }
+
+    let mut hits = 0
+    let mut i = 0
+    while i < M_LABEL.len() {
+        let ok = check_milestone(i, net_up)
+        if ok { hits = hits + 1 }
+        i = i + 1
+    }
+
+    println("")
+    check_at_least_three_milestones(hits)
+    check_pillar_doc_anchor()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_EMPIRICAL_PET_INSPIRE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_EMPIRICAL_PET_INSPIRE__ PASS — F-AM-1 T3 (PET paper feed) closes")
+    exit(0)
+}

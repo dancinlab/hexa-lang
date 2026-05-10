@@ -1,0 +1,12 @@
+# KiCad project stub — fw02_npu
+# Phase E G1: actual `.kicad_pro` / `.kicad_sch` to land after MOU + funding.
+# See ../../doc/board_v0_spec.md §2 for pinmap.
+# See schematic_paper.md for paper-tier net list.
+# File extensions reserved:
+#   fw02_npu.kicad_pro        project
+#   fw02_npu.kicad_sch        schematic
+#   fw02_npu.kicad_pcb        PCB layout
+#   fw02_npu-bom.csv          BOM export
+#   fw02_npu.kicad_prl        project local prefs
+# KiCad version target: 8.0+ (s-expression file format).
+# 8-layer stack-up requires impedance-controlled fab quote (JLC7628 class).

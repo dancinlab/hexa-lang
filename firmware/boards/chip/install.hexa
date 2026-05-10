@@ -1,0 +1,62 @@
+// install.hexa — hx build hook for hexa-chip.
+//
+// Invoked by `hx install hexa-chip` (hexa-lang package manager) right after
+// the GitHub checkout (or symlink from /Users/ghost/core/hexa-chip) lands in
+// $HX_PKG_DIR. hx passes:
+//   HX_PKG_DIR     — absolute path to the package root
+//   HX_BIN_DIR     — ~/.hx/bin
+//   HX_PKG_NAME    — "hexa-chip"
+//   HX_HOOK_PHASE  — "pre" | "post" | "both" (default: "both")
+//
+// Mirrors hexa-bio/install.hexa (sister, 2026-05-04) — adapted for the
+// 28-verb 7-group spec-first chip substrate. Pre-install is a no-op
+// (no Python aux deps); post-install runs a quick selftest counting
+// verb directories.
+//
+// raw#9 hexa-only, raw#11 snake_case, raw#15 no-hardcode, raw#10 honest C3.
+
+fn run_quick_selftest(root: str) -> bool {
+    let cli = root + "/cli/hexa-chip.hexa"
+    let exists = exec("[ -f \"" + cli + "\" ] && echo y || echo n").trim()
+    if exists != "y" {
+        eprintln("[hexa-chip/install] WARN: cli/hexa-chip.hexa missing — skip selftest")
+        return false
+    }
+    println("[hexa-chip/install] [post] running quick selftest (28-verb directory sweep)")
+    let cmd = "HEXA_CHIP_ROOT=\"" + root + "\" hexa run \"" + cli + "\" selftest 2>&1"
+    let raw = exec(cmd)
+    if raw.contains("__HEXA_CHIP_SELFTEST__ PASS") {
+        println("[hexa-chip/install]   selftest PASS — 28/28 verb dirs present")
+        return true
+    }
+    eprintln("[hexa-chip/install] WARN: selftest non-PASS (warn-only, not a blocker)")
+    eprintln("  hint: missing verb dir or counter mismatch — see README §Status")
+    return false
+}
+
+fn main() -> void {
+    let mut root = env("HX_PKG_DIR")
+    if root == "" { root = exec("pwd").trim() }
+    let phase = env("HX_HOOK_PHASE")
+    let mut p = phase
+    if p == "" { p = "both" }
+    println("[hexa-chip/install] HX_PKG_DIR=" + root + " phase=" + p)
+
+    let entry = root + "/cli/hexa-chip.hexa"
+    let entry_ok = exec("[ -f \"" + entry + "\" ] && echo y || echo n").trim()
+    if entry_ok != "y" {
+        eprintln("[hexa-chip/install] ERROR: canonical entry missing: " + entry)
+        exit(1)
+    }
+    println("[hexa-chip/install] canonical entry OK: cli/hexa-chip.hexa")
+
+    if p == "pre" || p == "both" {
+        println("[hexa-chip/install] [pre] no external deps required (spec-first)")
+    }
+
+    if p == "post" || p == "both" {
+        let _ = run_quick_selftest(root)  // warn-only
+    }
+
+    println("[hexa-chip/install] done — hx will generate " + env("HX_BIN_DIR") + "/hexa-chip shim")
+}

@@ -41,10 +41,25 @@ The compiler enforces this at compile time via target-gate check
 |---|---|---|
 | F0 | SPEC decisions + `firmware/` skeleton | done |
 | F1 | `stdlib/core/` extraction from current stdlib | next |
-| F2 | `firmware/boards/rtsc/` reference port | this commit |
+| F2 | `firmware/boards/rtsc/` reference port | done (2026-05-10) |
 | F3 | `thumbv7em-none-eabihf` target in compiler/codegen | follow-up |
-| F4 | `firmware/boards/{chip,cern,antimatter,space}/` absorptions | follow-up |
+| F4 | `firmware/boards/{chip,cern,antimatter,space}/` absorptions | this commit (batch, 2026-05-10) |
 | F5 | RFC-023 firmware linker spec | follow-up |
+
+## F4 batch absorb (2026-05-10) — per-board notes
+
+| Board | Files | Size | Selftest | Caveat |
+|---|---|---|---|---|
+| `chip/`       | 274 | 6.2 MB | `verify/falsifier_check.hexa` PASS | fully hexa-native (no cargo); largest LOC |
+| `cern/`       | 125 | 1.8 MB | `verify/falsifier_check.hexa` PASS | Rust hybrid retained (532 MB cargo `target/` excluded) |
+| `antimatter/` | 129 | 1.1 MB | `verify/falsifier_check.hexa` PASS | multi-vendor (KiCad+Verilog+Rust+hexa) |
+| `space/`      | 113 | 1.1 MB | `verify/falsifier_check.hexa` PASS | KiCad-first hardware sits above the firmware/ tier |
+
+Aggregate: 641 files / ~10.2 MB. All four LICENSE + CITATION.cff
+verified byte-identical. F4 absorption record (HAL promotion
+shortlist, full LOC counts, Phase E migration plan) lives in
+`doc/firmware_audit_2026_05_10.md`. F2 (`rtsc/`) tree was not
+touched during F4.
 
 ## Reference impl
 

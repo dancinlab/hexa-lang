@@ -1,0 +1,235 @@
+#!hexa strict
+// hexa-antimatter/firmware/sim/thrust_acquisition.hexa — F-AM-4 sim-firmware
+// for HEXA-PROPULSION-01 thrust bench: p̄ release pulse + Watt-balance
+// pendulum readout + BGO calorimeter trigger + pion ToF gate.
+//
+// Phase C per .roadmap §A.6.1.  Pure-software model of the FPGA + MCU
+// controller for the propulsion bench.  10⁹ p̄ released over 1 ms via
+// magnetic-nozzle gate; concurrent Watt-balance ADC + γ calorimeter +
+// pion ToF readouts.
+//
+// Target hardware (Phase D): UltraScale+ FPGA + 16× 12-bit 10 GS/s ADCs
+// + NIM/CAMAC trigger system + Cs reference.
+//
+// Run: hexa run firmware/sim/thrust_acquisition.hexa
+// Sentinel: __HEXA_ANTIMATTER_FIRMWARE_THRUST_ACQ__ PASS
+
+use "self/runtime/math_pure"
+
+let HOME = env("HOME")
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _int_str(x: int) -> str { return "" + x }
+fn _flt_str(x: float) -> str { return "" + x }
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── Constants ────────────────────────────────────────────────────────────
+let SIGMA = 12.0
+let TAU   = 4.0
+let PHI   = 2.0
+
+let N_PBAR_PER_RUN     = 1.0e9
+let TAU_BURN_MS        = 1.0          // 1 ms p̄ release pulse
+let WATT_FLOOR_NN      = 100.0        // 0.1 μN = 100 nN sensitivity
+let TRIGGER_LATENCY_NS = 100.0        // 100 ns FPGA trigger
+let PION_TOF_FLIGHT_M  = 1.0
+let PION_TOF_RES_NS    = 1.0          // 1 ns ToF resolution
+let WAVEFORM_GSPS      = 10.0         // 10 GS/s ADC
+let WAVEFORM_BITS      = 12
+let N_ADC_CHANNELS     = 16
+let SAFETY_DEADLINE_MS = 10
+
+let FALSIFIERS = [
+    "F-AM-4 firmware: trigger latency > 1 μs → annihilation event missed",
+    "F-AM-4 firmware: ADC sampling < 1 GS/s → pion waveform aliased",
+    "F-AM-4 firmware: data rate > 10 GB/s → DAQ overflows storage",
+    "F-AM-4 firmware: σ-φ = 10 fleet anchor lost in count register → n=6 retract",
+    "F-AM-4 firmware: Watt-balance noise floor > 1 μN → thrust unresolvable",
+    "F-AM-4 firmware: pion ToF gate < 10 ns → cosmic-ray bg not rejected",
+    "F-AM-4 firmware: 10⁹ p̄ release pulse > 10 ms → not impulsive",
+    "math_pure floor: drift > 1e-9 → math_pure compromised",
+]
+
+// ── Check 1: trigger latency ───────────────────────────────────────────
+
+fn check_trigger_latency() {
+    _check(TRIGGER_LATENCY_NS <= 1000.0,
+           "FPGA trigger latency ≤ 1 μs (annihilation event capture)",
+           "Δt = " + _flt_str(TRIGGER_LATENCY_NS) + " ns")
+}
+
+// ── Check 2: waveform digitizer Nyquist ────────────────────────────────
+
+fn check_waveform_nyquist() {
+    let bw_mhz = WAVEFORM_GSPS * 1000.0 / 2.0    // Nyquist
+    _check(bw_mhz >= 1000.0,
+           "ADC Nyquist ≥ 1 GHz (pion waveform / fast trigger)",
+           "BW = " + _flt_str(bw_mhz) + " MHz")
+}
+
+// ── Check 3: data rate budget ──────────────────────────────────────────
+
+fn check_data_rate_budget() {
+    // 16 channels × 10 GS/s × 12-bit = 192 GBit/s = 24 GB/s peak.
+    // With 10% duty (only triggered events stored), avg ≈ 2.4 GB/s.
+    let peak_gbit = (1.0 * N_ADC_CHANNELS) * WAVEFORM_GSPS * (1.0 * WAVEFORM_BITS)
+    let peak_gb_per_s = peak_gbit / 8.0
+    // Trigger duty cycle: ~1% with annihilation rate-limited.
+    let avg_gb_per_s = peak_gb_per_s * 0.01
+    _check(avg_gb_per_s < 10.0,
+           "average DAQ rate < 10 GB/s (~1% trigger duty, NVMe-class storage)",
+           "avg = " + _flt_str(avg_gb_per_s) + " GB/s")
+}
+
+// ── Check 4: σ-φ = 10 fleet anchor preserved ───────────────────────────
+
+fn check_fleet_anchor() {
+    let fleet = SIGMA - PHI
+    _check(fleet == 10.0,
+           "σ - φ = 10 fleet count (firmware register, exact)", "")
+}
+
+// ── Check 5: Watt-balance noise floor ──────────────────────────────────
+
+fn check_watt_floor() {
+    _check(WATT_FLOOR_NN <= 1000.0,
+           "Watt-balance noise floor ≤ 1 μN (1 kHz ADC + 1 Hz BW averaging)",
+           "floor = " + _flt_str(WATT_FLOOR_NN) + " nN")
+}
+
+// ── Check 6: pion ToF gate width ───────────────────────────────────────
+
+fn check_tof_gate() {
+    // Gate of 50 ns rejects cosmic ray bg (single-event rate ~Hz);
+    // wide enough to capture relativistic pion (3.34 ns @ β=1, 1 m baseline).
+    let gate_ns = 50.0
+    let pion_t_ns = PION_TOF_FLIGHT_M / 2.998e8 * 1.0e9
+    _check(gate_ns >= pion_t_ns * 5.0,
+           "ToF gate ≥ 5× relativistic pion transit (cosmic bg rejection)",
+           "gate = " + _flt_str(gate_ns) + " ns · t_pi = " + _flt_str(pion_t_ns) + " ns")
+}
+
+// ── Check 7: 10⁹ p̄ release pulse impulsiveness ─────────────────────────
+
+fn check_release_impulsiveness() {
+    _check(TAU_BURN_MS <= 10.0,
+           "release pulse ≤ 10 ms (impulsive, allows clean Watt-balance ring-down)",
+           "τ = " + _flt_str(TAU_BURN_MS) + " ms")
+}
+
+// ── Check 8: trigger fan-out (calo + ToF + Watt) ───────────────────────
+//
+// 3 detectors must trigger from same FPGA event.  Fan-out delay
+// matched to ≤ 1 ns to keep coincidence window tight.
+
+fn check_trigger_fanout() {
+    let fanout_skew_ns = 1.0
+    _check(fanout_skew_ns <= 5.0,
+           "trigger fan-out skew (calo / ToF / Watt) ≤ 5 ns",
+           "skew = " + _flt_str(fanout_skew_ns) + " ns")
+}
+
+// ── Check 9: BGO calorimeter trigger threshold ─────────────────────────
+//
+// Trigger on E_γ > 200 keV (well below 511 keV annihilation pair) to
+// catch all photons; reject below to suppress noise.
+
+fn check_bgo_threshold() {
+    let thresh_keV = 200.0
+    _check(thresh_keV >= 100.0 && thresh_keV <= 300.0,
+           "BGO trigger threshold ∈ [100, 300] keV (511 keV / π⁰ γ capture)",
+           "thresh = " + _flt_str(thresh_keV) + " keV")
+}
+
+// ── Check 10: math_pure floor ──────────────────────────────────────────
+
+fn check_math_pure_floor() {
+    let s = sqrt_pure(2.998e8 * 2.998e8)
+    _check(abs_pure(s - 2.998e8) < 1.0,
+           "sqrt_pure(c²) = c", "")
+}
+
+fn print_header() {
+    println("")
+    println("  HEXA-PROPULSION-01 thrust-acquisition sim-firmware")
+    println("    target HW : UltraScale+ + 16× 10 GS/s ADCs + NIM/CAMAC (Phase D)")
+    println("    p̄/run     : " + _flt_str(N_PBAR_PER_RUN))
+    println("    pulse     : " + _flt_str(TAU_BURN_MS) + " ms")
+    println("    Watt floor: " + _flt_str(WATT_FLOOR_NN) + " nN")
+    println("    trigger   : " + _flt_str(TRIGGER_LATENCY_NS) + " ns")
+    println("")
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — firmware/sim/thrust_acquisition: F-AM-4 sim-fw")
+    println("========================================================================")
+    println("  closes:  Phase C sim of HEXA-PROPULSION-01 thrust bench controller")
+    println("  authority: factory/doc/benchtop_v0_design.md §4 (propulsion bench)")
+    print_header()
+
+    println("  -- (1) trigger latency --")
+    check_trigger_latency()
+
+    println("")
+    println("  -- (2) waveform digitizer Nyquist --")
+    check_waveform_nyquist()
+
+    println("")
+    println("  -- (3) data-rate budget --")
+    check_data_rate_budget()
+
+    println("")
+    println("  -- (4) σ-φ = 10 fleet anchor --")
+    check_fleet_anchor()
+
+    println("")
+    println("  -- (5) Watt-balance floor --")
+    check_watt_floor()
+
+    println("")
+    println("  -- (6) pion ToF gate --")
+    check_tof_gate()
+
+    println("")
+    println("  -- (7) release pulse impulsiveness --")
+    check_release_impulsiveness()
+
+    println("")
+    println("  -- (8) trigger fan-out skew --")
+    check_trigger_fanout()
+
+    println("")
+    println("  -- (9) BGO threshold --")
+    check_bgo_threshold()
+
+    println("")
+    println("  -- (10) math_pure floor --")
+    check_math_pure_floor()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_FIRMWARE_THRUST_ACQ__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_FIRMWARE_THRUST_ACQ__ PASS")
+    exit(0)
+}

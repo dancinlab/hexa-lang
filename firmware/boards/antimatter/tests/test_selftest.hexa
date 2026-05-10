@@ -1,0 +1,20 @@
+#!hexa strict
+// tests/test_selftest.hexa — full 3-verb selftest harness
+//
+// Pass criterion: __HEXA_ANTIMATTER_SELFTEST__ PASS sentinel present.
+// Cost: $0 (placeholder CLI; all 3 verbs are SPEC stubs).
+
+fn main() {
+    let root = env("HEXA_ANTIMATTER_ROOT")
+    let mut p = "cli/hexa-antimatter.hexa"
+    if root.len() > 0 { p = root + "/cli/hexa-antimatter.hexa" }
+
+    let raw = exec("hexa run " + p + " selftest 2>&1")
+    if raw.contains("__HEXA_ANTIMATTER_SELFTEST__ PASS") {
+        println("test_selftest: PASS")
+        return
+    }
+    println("test_selftest: FAIL")
+    println(raw.trim())
+    exit(1)
+}

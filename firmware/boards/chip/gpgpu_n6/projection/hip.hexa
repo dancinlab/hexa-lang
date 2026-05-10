@@ -1,0 +1,46 @@
+#!hexa strict
+// gpgpu_n6/projection/hip.hexa — vendor backend 2/6: AMD HIP/ROCm.
+//
+// canon: ~/core/canon/domains/compute/gpgpu/gpgpu.md §5.1 (vector add).
+// IR substrate: LLVM IR → AMDGCN (φ=0 via SPIR-V translator,
+// φ=1 indirectly when targeting NVIDIA via HIP-NVCC).
+//
+// Phase F iter 3 — HIP host launch site emission. Source-compatible
+// with CUDA modulo namespace, but launch macro is hipLaunchKernelGGL.
+
+use "stdlib/hal/compute"
+
+let HIP_VENDOR = "HIP"
+let HIP_IR     = "LLVM→AMDGCN"
+let HIP_LATEST = "7.2.53211 / ROCm 7.2.3 (2026)"
+
+fn hip_project_launch(
+    kern_name: str,
+    grid_x: int, grid_y: int, grid_z: int,
+    wg_x: int, wg_y: int, wg_z: int,
+    _barrier_scope: int,
+    subgroup_w: int
+) -> str {
+    let wf = if subgroup_w > 0 { subgroup_w } else { 64 }
+    let wf_note = " /* wavefront = " + str(wf) + " (CDNA: 64, RDNA: 32) */"
+    let grid  = "dim3(" + str(grid_x) + "," + str(grid_y) + "," + str(grid_z) + ")"
+    let block = "dim3(" + str(wg_x)   + "," + str(wg_y)   + "," + str(wg_z)   + ")"
+    return "hipLaunchKernelGGL(" + kern_name + ", " + grid + ", " + block + ", 0, 0, ...);" + wf_note
+}
+
+fn hip_project_vector_add(n: int) -> str {
+    return hip_project_launch("add", n / 256, 1, 1, 256, 1, 1, 1, 64)
+}
+
+fn hip_capabilities() -> [str] {
+    return [
+        "CUDA-source-compatible (HIPify)",
+        "cooperative groups",
+        "matrix cores (MFMA on CDNA, WMMA on RDNA3+)",
+        "ROCm-compatible runtime",
+        "AMDGCN backend",
+        "NVCC backend (re-target NVIDIA)"
+    ]
+}
+
+fn hip_meta() -> [str] { return [HIP_VENDOR, HIP_IR, HIP_LATEST, str(hip_capabilities().len())] }

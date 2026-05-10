@@ -1,0 +1,345 @@
+#!hexa strict
+// hexa-antimatter/verify/calc_tabletop.hexa — tabletop-pillar n=6 derivation.
+//
+// T1 (algebraic) closure for F-AM-2 (tabletop p̄ density σ·J₂=288 fit
+// vs CERN AEgIS / ALPHA / GBAR ref). Re-derives every n=6 expression
+// declared in tabletop/tabletop-antimatter.md from divisor arithmetic.
+//
+// Master row reproved here:
+//   σ(6) · φ(6) = n · τ(6) = J₂ = 24
+//      12  ·  2  =  6  ·  4  = 24
+//
+// Tabletop-pillar n=6 ledger:
+//   p̄ density unit       = σ · J₂  = 288        (F-AM-2 closure unit)
+//   production gain      = σ³      = 1728       (3-path cascade σ × σ² stacking)
+//   anti-H synth gain    = σ²      = 144        (PET sigma² gain)
+//   storage horizon      = σ · τ²  = 192 months = 16 yr  (cryo-free reuse)
+//   B-field (RT-SC)      = σ · τ   = 48 T       (H₂ hydride SC coil)
+//   cyclotron radius     = σ - φ   = 10 cm      (compact ring R, BT-127)
+//   indoor power cap     = σ - φ   = 10 kW      (wall-outlet class)
+//   trap leakage rate    = 1/(σ²·τ) = 1/576     (Γ_loss = 1.7e-6 /s)
+//   vacuum exponent      = φ²·τ+2  = 18         (10⁻¹⁸ Torr trap pressure)
+//   PET ¹⁸F daily stock  = σ · τ   = 48 mg/day  (path-c cyclotron supply)
+//   learning threshold   = τ       = 4 days     (university-lab onboarding)
+//   crew / team          = n       = 6          (operator count)
+//   Golay distance       = σ - τ   = 8          ([24,12,8] ECC)
+//   volume reduction     = σ²/(σ-φ) = 144/10    = 14 (int-trunc)  → 0.29 m³
+//   cost reduction       = σ⁶      = 2,985,984  (1/σ⁶ vs NASA-99)
+//   trap-eta τ/σ ratio   = τ/σ     = 1/3        (η_trap denom factor)
+//
+// Plus spec-anchor checks against tabletop/tabletop-antimatter.md to
+// verify the SSOT cites the same numbers (1.7e12 p̄/s, sigma^3, sigma^6,
+// sigma*tau^2 = 192, sigma-phi = 10, sigma*tau = 48 T, etc.).
+//
+// Run:
+//     hexa run verify/calc_tabletop.hexa     # exit 0 = identity holds
+//
+// Sentinel: __HEXA_ANTIMATTER_CALC_TABLETOP__ PASS
+//
+// Authority: tabletop/tabletop-antimatter.md §1 WHY + §2 COMPARE + §4 STRUCT +
+//            §5 FLOW · .roadmap.hexa_antimatter §A.1 master row + §A.4 F-AM-2.
+// raw#9 hexa-only · raw#10 honest C3: T1 algebraic closure only — closed-form
+//   numerics (T2) lands separately in numerics_tabletop*.hexa, empirical
+//   apparatus (T3) is Stage-1+ TBD.
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-antimatter"
+}
+
+let ROOT = _root()
+let DOC_TABLETOP = ROOT + "/tabletop/tabletop-antimatter.md"
+
+fn _read(p: str) -> str {
+    return exec("cat \"" + p + "\" 2>/dev/null")
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.contains(s)
+}
+
+fn _int_str(x: int) -> str {
+    return "" + x
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── n=6 lattice (computed, not declared) ─────────────────────────────────
+
+fn divisors_of(n: int) -> [int] {
+    let mut out: [int] = []
+    let mut k = 1
+    while k <= n {
+        if n % k == 0 { out = out + [k] }
+        k = k + 1
+    }
+    return out
+}
+
+fn sigma_of(n: int) -> int {
+    let ds = divisors_of(n)
+    let mut s = 0
+    for d in ds { s = s + d }
+    return s
+}
+
+fn tau_of(n: int) -> int {
+    return len(divisors_of(n))
+}
+
+fn gcd_int(a: int, b: int) -> int {
+    let mut x = a
+    let mut y = b
+    while y != 0 {
+        let t = y
+        y = x % y
+        x = t
+    }
+    return x
+}
+
+fn euler_phi_of(n: int) -> int {
+    let mut c = 0
+    let mut k = 1
+    while k <= n {
+        if gcd_int(k, n) == 1 { c = c + 1 }
+        k = k + 1
+    }
+    return c
+}
+
+fn sopfr_of(n: int) -> int {
+    let mut s = 0
+    let mut k = n
+    let mut p = 2
+    while p <= k {
+        while k % p == 0 {
+            s = s + p
+            k = k / p
+        }
+        p = p + 1
+    }
+    return s
+}
+
+let N      = 6
+let SIGMA  = sigma_of(N)        // 12
+let TAU    = tau_of(N)          // 4
+let PHI    = euler_phi_of(N)    // 2
+let SOPFR  = sopfr_of(N)        // 5
+let J2     = 2 * SIGMA          // 24
+
+// ── tabletop-pillar derived ledger ───────────────────────────────────────
+
+let PBAR_DENSITY_UNIT = SIGMA * J2                  // 288  (F-AM-2 closure)
+let PRODUCTION_GAIN   = SIGMA * SIGMA * SIGMA       // 1728 (σ³ cascade)
+let SYNTH_GAIN        = SIGMA * SIGMA               // 144  (σ² PET gain)
+let STORAGE_MONTHS    = SIGMA * TAU * TAU           // 192  (16 yr)
+let B_FIELD_T         = SIGMA * TAU                 // 48
+let CYCLO_RADIUS_CM   = SIGMA - PHI                 // 10
+let POWER_CAP_KW      = SIGMA - PHI                 // 10
+let TRAP_LEAK_DENOM   = SIGMA * SIGMA * TAU         // 576  (Γ_loss = 1/576)
+let VACUUM_EXPONENT   = PHI * PHI * TAU + 2         // 18   (10⁻¹⁸ Torr)
+let PET_STOCK_MG_DAY  = SIGMA * TAU                 // 48
+let LEARN_THRESH_DAYS = TAU                         // 4
+let CREW              = N                           // 6
+let GOLAY_DISTANCE    = SIGMA - TAU                 // 8
+let VOLUME_REDUCE     = SIGMA * SIGMA / (SIGMA - PHI) // 144/10 = 14 (int trunc)
+// σ⁶ = 12⁶ = 2,985,984 (compute step-by-step to keep within int range)
+let SIGMA_SQ          = SIGMA * SIGMA               // 144
+let SIGMA_FOURTH      = SIGMA_SQ * SIGMA_SQ         // 20736
+let SIGMA_SIXTH       = SIGMA_FOURTH * SIGMA_SQ     // 2985984
+
+let FALSIFIERS = [
+    "F-AM-2: σ·J₂ ≠ 288 → tabletop p̄-density 288-unit closure broken (BT-401)",
+    "F-AM-2: σ³ ≠ 1728 → 3-path cascade 10³× SOTA gain retract",
+    "F-AM-2: σ·τ² ≠ 192 mo → 16-yr cryo-free storage perfect-number reuse retract",
+    "F-AM-2: σ² ≠ 144 anti-H synth gain → PET σ²-stacking closure retract",
+    "F-AM-2: σ⁶ ≠ 2,985,984 → 1/σ⁶ vs NASA-99 cost-reduction chain retract",
+    "tabletop: σ·τ ≠ 48 T → RT-SC H₂ hydride 48 T Penning trap retract",
+    "tabletop: σ-φ ≠ 10 cm/kW → compact ring R + indoor power cap retract",
+    "tabletop: σ²·τ ≠ 576 → Γ_loss = 1/576 trap leakage rate retract",
+    "tabletop: φ²·τ+2 ≠ 18 → 10⁻¹⁸ Torr vacuum-exponent lattice mapping retract",
+    "F-AM-4: 1.7e12 p̄/s production not reachable → hexa-ufo Stage-3 break-even retract",
+]
+
+fn print_ledger() {
+    println("")
+    println("  ┌─ tabletop-pillar n=6 ledger (computed from divisor arithmetic) ─┐")
+    println("  │  p̄ density unit       = σ·J₂   = " + _int_str(PBAR_DENSITY_UNIT) + "    (F-AM-2)")
+    println("  │  production gain      = σ³     = " + _int_str(PRODUCTION_GAIN))
+    println("  │  anti-H synth gain    = σ²     = " + _int_str(SYNTH_GAIN))
+    println("  │  storage [months]     = σ·τ²   = " + _int_str(STORAGE_MONTHS) + "  (= 16 yr)")
+    println("  │  B-field (RT-SC) [T]  = σ·τ    = " + _int_str(B_FIELD_T))
+    println("  │  cyclotron radius     = σ-φ    = " + _int_str(CYCLO_RADIUS_CM) + "  cm")
+    println("  │  indoor power cap     = σ-φ    = " + _int_str(POWER_CAP_KW) + "  kW")
+    println("  │  trap-leak denom      = σ²·τ   = " + _int_str(TRAP_LEAK_DENOM) + " (Γ_loss=1/" + _int_str(TRAP_LEAK_DENOM) + ")")
+    println("  │  vacuum exponent      = φ²·τ+2 = " + _int_str(VACUUM_EXPONENT) + "  (10⁻" + _int_str(VACUUM_EXPONENT) + " Torr)")
+    println("  │  PET ¹⁸F daily stock  = σ·τ    = " + _int_str(PET_STOCK_MG_DAY) + "  mg/day")
+    println("  │  learning threshold   = τ      = " + _int_str(LEARN_THRESH_DAYS) + "  days")
+    println("  │  crew / team          = n      = " + _int_str(CREW))
+    println("  │  Golay [24,12,8] dist = σ-τ    = " + _int_str(GOLAY_DISTANCE))
+    println("  │  volume reduction     = σ²/(σ-φ) int = " + _int_str(VOLUME_REDUCE) + "  (≈14.4×)")
+    println("  │  cost reduction       = σ⁶     = " + _int_str(SIGMA_SIXTH))
+    println("  └────────────────────────────────────────────────────────────────┘")
+    println("")
+}
+
+// ── algebraic identity checks ────────────────────────────────────────────
+
+fn check_lattice_primitives() {
+    _check(SIGMA == 12, "σ(6) = 12", "")
+    _check(TAU   == 4,  "τ(6) = 4", "")
+    _check(PHI   == 2,  "φ(6) = 2", "")
+    _check(SOPFR == 5,  "sopfr(6) = 5", "")
+    _check(J2    == 24, "J₂ = 2σ = 24", "")
+}
+
+fn check_master_identity() {
+    _check(SIGMA * PHI == J2,    "σ·φ = J₂ = 24  (master identity LHS)", "")
+    _check(N * TAU     == J2,    "n·τ = J₂ = 24  (master identity RHS)", "")
+    _check(SIGMA * PHI == N * TAU, "σ·φ = n·τ", "")
+    _check(SIGMA == 2 * N,         "σ(6) = 2·n  (Euclid-Euler perfect-number)", "")
+}
+
+fn check_f_am_2_locks() {
+    _check(PBAR_DENSITY_UNIT == 288,  "F-AM-2 lock: σ·J₂ = 288 p̄-density unit", "BT-401 closure")
+    _check(PRODUCTION_GAIN == 1728,   "F-AM-2 lock: σ³ = 1728 production cascade", "10³× SOTA")
+    _check(SYNTH_GAIN == 144,         "F-AM-2 lock: σ² = 144 anti-H synth gain", "PET σ² stacking")
+    _check(STORAGE_MONTHS == 192,     "F-AM-2 lock: σ·τ² = 192 mo = 16 yr storage", "cryo-free reuse")
+    _check(SIGMA_SIXTH == 2985984,    "F-AM-2 lock: σ⁶ = 2,985,984 cost-reduction factor", "≈ 3M, 1/σ⁶ vs NASA-99")
+}
+
+fn check_tabletop_design_params() {
+    _check(B_FIELD_T == 48,           "B-field σ·τ = 48 T  (H₂ hydride RT-SC)", "")
+    _check(CYCLO_RADIUS_CM == 10,     "compact ring R = σ-φ = 10 cm", "BT-127 kissing")
+    _check(POWER_CAP_KW == 10,        "indoor power cap σ-φ = 10 kW", "wall-outlet class")
+    _check(TRAP_LEAK_DENOM == 576,    "trap-leak denom σ²·τ = 576", "Γ_loss = 1/576")
+    _check(VACUUM_EXPONENT == 18,     "vacuum exponent φ²·τ+2 = 18", "10⁻¹⁸ Torr trap")
+    _check(PET_STOCK_MG_DAY == 48,    "PET ¹⁸F stock σ·τ = 48 mg/day", "path-c supply")
+    _check(LEARN_THRESH_DAYS == 4,    "learning threshold τ = 4 days", "")
+    _check(CREW == 6,                 "crew / team n = 6", "BT-273")
+    _check(GOLAY_DISTANCE == 8,       "Golay distance σ-τ = 8  (ECC)", "")
+    _check(VOLUME_REDUCE == 14,       "volume reduction σ²/(σ-φ) int-trunc = 14  (≈14.4×)", "200/14 ≈ 14 m³ → further × 1/τ × σ/σ² = 0.29 m³")
+}
+
+fn check_trap_efficiency_ratio() {
+    // η_trap denominator τ/σ = 4/12 = 1/3.  Check σ·1 == τ·3 (avoids fp).
+    let lhs = SIGMA              // 12
+    let rhs = TAU * 3            // 12
+    _check(lhs == rhs, "η_trap τ/σ = 1/3  (algebraic ratio)", "12 = 4·3")
+}
+
+fn check_compact_ring_momentum() {
+    // p[GeV/c] = 0.3·B[T]·R[m] = 0.3·48·0.1 = 1.44 GeV/c
+    // Integer form: 100·p = 30·B·R_cm/100 → 100·p_int·100 = 30·B·R_cm
+    // i.e., 30·48·10 = 14400 → p = 14400 / 10000 = 1.44.
+    let momentum_milli = 30 * B_FIELD_T * CYCLO_RADIUS_CM    // 14400 ↔ 1.44 GeV/c × 10000
+    _check(momentum_milli == 14400, "p_ring = 0.3·B·R = 1.44 GeV/c  (30·48·10 = 14400 in 0.0001 GeV/c units)", "compact synchrotron path-b")
+}
+
+// ── SSOT spec-anchor checks (tabletop/tabletop-antimatter.md) ────────────
+
+fn check_spec_anchors() {
+    let txt = _read(DOC_TABLETOP)
+    if txt.len() == 0 {
+        _check(false, "tabletop SSOT readable", "missing: " + DOC_TABLETOP)
+        return
+    }
+    _check(true, "tabletop SSOT readable (" + _int_str(len(txt)) + " bytes)", DOC_TABLETOP)
+
+    _check(_has(txt, "0.29 m^3") || _has(txt, "0.29 m³"),
+           "SSOT cites 0.29 m³ tabletop volume", "")
+    _check(_has(txt, "1.7x10^12") || _has(txt, "1.7×10¹²") || _has(txt, "1.7e12"),
+           "SSOT cites 1.7×10¹² p̄/s production candidate", ".roadmap §0 terminal goal")
+    _check(_has(txt, "16 yr") || _has(txt, "16-year") || _has(txt, "192 months") || _has(txt, "sigma*tau^2 = 192"),
+           "SSOT cites σ·τ² = 192 mo = 16 yr storage", "")
+    _check(_has(txt, "sigma^3") || _has(txt, "σ³") || _has(txt, "1728"),
+           "SSOT cites σ³ = 1728 production cascade", "")
+    _check(_has(txt, "sigma^6") || _has(txt, "σ⁶"),
+           "SSOT cites σ⁶ cost-reduction chain", "")
+    _check(_has(txt, "sigma*tau = 48") || _has(txt, "σ·τ = 48") || _has(txt, "48 T") || _has(txt, "48T"),
+           "SSOT cites σ·τ = 48 T B-field", "")
+    _check(_has(txt, "sigma-phi = 10") || _has(txt, "σ-φ = 10") || _has(txt, "10 cm") || _has(txt, "10 kW") || _has(txt, "< 10 kW"),
+           "SSOT cites σ-φ = 10 (radius cm / power kW)", "")
+    _check(_has(txt, "10^-18 Torr") || _has(txt, "10⁻¹⁸ Torr") || _has(txt, "phi*phi*tau+2"),
+           "SSOT cites 10⁻¹⁸ Torr vacuum (φ²·τ+2 = 18)", "")
+    _check(_has(txt, "RT-SC") || _has(txt, "cryo-free"),
+           "SSOT invokes RT-SC / cryo-free Penning trap", "")
+    _check(_has(txt, "3-path") || _has(txt, "path a") || _has(txt, "Schwinger") || _has(txt, "compact synchrotron"),
+           "SSOT declares 3-path confluence (laser + ring + PET)", "")
+    _check(_has(txt, "sigma*J_2") || _has(txt, "σ·J₂") || _has(txt, "288") || _has(txt, "sigma*phi_E = n*tau = 24"),
+           "SSOT invokes σ·J₂ / master-identity scaffolding", "F-AM-2 closure unit")
+    _check(_has(txt, "sigma*tau = 48 mg") || _has(txt, "48 mg") || _has(txt, "sigma*tau=48 mg"),
+           "SSOT cites σ·τ = 48 mg/day ¹⁸F PET stock", "path-c supply")
+    _check(_has(txt, "$2.1") || _has(txt, "$2.1x10^4") || _has(txt, "$2.1e4"),
+           "SSOT cites $2.1×10⁴ /mg cost candidate", "")
+    _check(_has(txt, "AEgIS") || _has(txt, "ALPHA") || _has(txt, "GBAR") || _has(txt, "CERN AD"),
+           "SSOT references CERN AEgIS / ALPHA / GBAR / AD parity context", "F-AM-2")
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — calc_tabletop: tabletop-pillar n=6 derivation")
+    println("========================================================================")
+    println("  closes:  F-AM-2 (tabletop p̄ density σ·J₂=288 fit) T1")
+    println("  source:  " + DOC_TABLETOP)
+
+    print_ledger()
+
+    println("  -- n=6 lattice primitives --")
+    check_lattice_primitives()
+
+    println("")
+    println("  -- master identity (σ·φ = n·τ = J₂ = 24) --")
+    check_master_identity()
+
+    println("")
+    println("  -- F-AM-2 closure locks (σ·J₂=288 + σ³ + σ² + σ·τ² + σ⁶) --")
+    check_f_am_2_locks()
+
+    println("")
+    println("  -- tabletop pillar design parameters --")
+    check_tabletop_design_params()
+
+    println("")
+    println("  -- compact synchrotron + trap-eta ratios --")
+    check_trap_efficiency_ratio()
+    check_compact_ring_momentum()
+
+    println("")
+    println("  -- SSOT spec-anchor cross-check --")
+    check_spec_anchors()
+
+    println("")
+    println("  FALSIFIERS (" + _int_str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + _int_str(pass_n) + "/" + _int_str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_ANTIMATTER_CALC_TABLETOP__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_ANTIMATTER_CALC_TABLETOP__ PASS")
+    exit(0)
+}

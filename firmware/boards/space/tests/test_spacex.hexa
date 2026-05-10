@@ -1,0 +1,117 @@
+#!hexa strict
+// tests/test_spacex.hexa — SpaceX-track smoke harness (verify + analyze + CLI)
+//
+// Companion to tests/test_selftest.hexa.
+// Pass criteria (all five must hold):
+//   1. verify_spacex.hexa emits __HEXA_SPACEX_VERIFY__ PASS
+//   2. verify_mk_ladder.hexa emits __HEXA_SPACEX_MK_LADDER__ PASS
+//   3. analyze_spacex.hexa counts subcmd reports total=23 programs
+//   4. cli/hexa-space.hexa `spacex counts` proxy returns the same total
+//   5. cli/hexa-space.hexa selftest still reports 11/11 (regression guard
+//      after the substr→split fix in _split_pipe)
+//
+// raw#10 honest C3:
+//   - This is a smoke test, not a coverage test. It catches sentinel
+//     drift, not subtle off-by-one in the registry.
+//   - Total=23 is the snapshot baseline (2026-05-07). Bump when the
+//     registry grows.
+//
+// Cost: $0 (Mac local, no network).
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f \"" + p + "\" ] && echo y || echo n").trim()
+    return r == "y"
+}
+
+fn main() {
+    let mut root = env("HEXA_SPACE_ROOT")
+    if root.len() == 0 {
+        root = exec("pwd").trim()
+    }
+
+    let verify_path  = root + "/aerospace_transport/verify_spacex.hexa"
+    let mk_path      = root + "/aerospace_transport/verify_mk_ladder.hexa"
+    let analyze_path = root + "/aerospace_transport/analyze_spacex.hexa"
+    let cli_path     = root + "/cli/hexa-space.hexa"
+    let intel_path   = root + "/aerospace_transport/spacex_intel_2026.md"
+
+    println("test_spacex: HEXA_SPACE_ROOT=" + root)
+
+    // ─── 0. file presence ───
+    let f1 = _file_exists(verify_path)
+    let f2 = _file_exists(mk_path)
+    let f3 = _file_exists(analyze_path)
+    let f4 = _file_exists(cli_path)
+    let f5 = _file_exists(intel_path)
+    let files_ok = f1 && f2 && f3 && f4 && f5
+    if !files_ok {
+        println("test_spacex: FAIL — companion file missing")
+        println("  verify_spacex.hexa     " + str(f1))
+        println("  verify_mk_ladder.hexa  " + str(f2))
+        println("  analyze_spacex.hexa    " + str(f3))
+        println("  cli/hexa-space.hexa    " + str(f4))
+        println("  spacex_intel_2026.md   " + str(f5))
+        exit(1)
+    }
+    println("  [files] 5/5 present  PASS")
+
+    // ─── 1. verify_spacex sentinel ───
+    let v1_cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + verify_path + "\" 2>&1"
+    let v1_out = exec(v1_cmd)
+    let v1_ok  = v1_out.contains("__HEXA_SPACEX_VERIFY__ PASS")
+
+    // ─── 2. verify_mk_ladder sentinel ───
+    let v2_cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + mk_path + "\" 2>&1"
+    let v2_out = exec(v2_cmd)
+    let v2_ok  = v2_out.contains("__HEXA_SPACEX_MK_LADDER__ PASS")
+
+    // ─── 3. analyze counts total=23 ───
+    let a1_cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + analyze_path + "\" counts 2>&1"
+    let a1_out = exec(a1_cmd)
+    let a1_ok  = a1_out.contains("total:        23")
+
+    // ─── 4. unified CLI proxy: spacex counts → total=23 ───
+    let c1_cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + cli_path + "\" spacex counts 2>&1"
+    let c1_out = exec(c1_cmd)
+    let c1_ok  = c1_out.contains("total:        23")
+
+    // ─── 5. selftest regression (11/11) ───
+    let s1_cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + cli_path + "\" selftest 2>&1"
+    let s1_out = exec(s1_cmd)
+    let s1_ok  = s1_out.contains("__HEXA_SPACE_SELFTEST__ PASS")
+
+    println("  [1] verify_spacex sentinel    " + str(v1_ok))
+    println("  [2] verify_mk_ladder sentinel " + str(v2_ok))
+    println("  [3] analyze counts total=23   " + str(a1_ok))
+    println("  [4] cli proxy counts=23       " + str(c1_ok))
+    println("  [5] selftest 11/11 regression " + str(s1_ok))
+
+    let pass = v1_ok && v2_ok && a1_ok && c1_ok && s1_ok
+    if pass {
+        println("test_spacex: PASS  (5/5 spacex-track checks)")
+        return
+    }
+
+    println("test_spacex: FAIL")
+    if !v1_ok {
+        println("--- verify_spacex output ---")
+        println(v1_out.trim())
+    }
+    if !v2_ok {
+        println("--- verify_mk_ladder output ---")
+        println(v2_out.trim())
+    }
+    if !a1_ok {
+        println("--- analyze counts output ---")
+        println(a1_out.trim())
+    }
+    if !c1_ok {
+        println("--- cli proxy counts output ---")
+        println(c1_out.trim())
+    }
+    if !s1_ok {
+        println("--- selftest output ---")
+        println(s1_out.trim())
+    }
+    exit(1)
+}

@@ -1,0 +1,169 @@
+#!hexa strict
+// hexa-cern/verify/lint_numerics.hexa — meta-lint for numerics scripts.
+// (renamed from numerics_methodology.hexa so the file doesn't trip its own
+// numerics_*.hexa inventory check — this is a LINT, not a numerical solver.)
+//
+// As we accumulate verify/numerics_*.hexa scripts, we want a guarantee
+// that they all follow the same regression-friendly pattern:
+//
+//   1. import `self/runtime/math_pure` (not raw math primitives or `exec`)
+//   2. emit a unique `__HEXA_CERN_<NAME>__ PASS` sentinel
+//   3. declare a `FALSIFIERS` list (named conditions that would retract claims)
+//   4. exit 0 on PASS, non-zero otherwise
+//   5. carry per-section PASS/FAIL accounting (RUN / FAIL counters)
+//
+// This script grep-audits every verify/numerics_*.hexa for those
+// invariants. PASS = all 5 invariants hold across every numerics
+// script on disk; FAIL = any invariant missing in any script.
+//
+// Run:
+//   hexa run verify/numerics_methodology.hexa
+//
+// @no-lock-needed
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("PETITE_CERN_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-cern"
+}
+
+let ROOT = _root()
+let VERIFY_DIR = ROOT + "/verify"
+
+fn _read(p: str) -> str {
+    if file_exists(p) == false { return "" }
+    return read_file(p)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── enumerate numerics_*.hexa scripts on disk ───────────────────────────
+//
+// We hand-list them here (rather than use list_dir_pure) so the audit
+// itself stays a closed-form regression target — adding a new
+// numerics_* file means adding it to this list, which makes the
+// inventory explicit. (Drift surface: someone adds numerics_foo.hexa
+// without registering it here -> audit silently misses it. Small price
+// for zero-dependency clarity.)
+
+let NUMERICS_SCRIPTS = [
+    "numerics_wakefield.hexa",
+    "numerics_lwfa_parity.hexa",
+    "numerics_sigma_cascade.hexa",
+    "numerics_lhc_parity.hexa",
+    "numerics_classical.hexa",
+    "numerics_cross_pillar.hexa",
+    "numerics_lattice_arithmetic.hexa",
+    "numerics_liouville.hexa",
+    "numerics_lwfa_solver.hexa",
+    "numerics_lwfa_relativistic.hexa",
+    "numerics_beam_dynamics.hexa",
+    "numerics_lwfa_scaling.hexa",
+    "numerics_se3_partial.hexa",
+    "numerics_bending.hexa",
+]
+
+// Required substrings that every numerics_*.hexa file must contain.
+let REQ_IMPORT_MATH     = "use \"self/runtime/math_pure\""
+let REQ_SENTINEL_PREFIX = "__HEXA_CERN_"
+let REQ_SENTINEL_SUFFIX = "__ PASS"
+let REQ_FALSIFIERS_LIST = "FALSIFIERS"
+let REQ_EXIT_0          = "exit(0)"
+let REQ_RUN_COUNTER     = "let mut RUN ="
+let REQ_FAIL_COUNTER    = "let mut FAIL ="
+
+fn check_script(name: str) {
+    let path = VERIFY_DIR + "/" + name
+    let txt = _read(path)
+    if txt.len() == 0 {
+        _check(false, name + " — file present", path + " missing or empty")
+        return
+    }
+
+    let ok_math       = _has(txt, REQ_IMPORT_MATH)
+    let ok_sentinel_p = _has(txt, REQ_SENTINEL_PREFIX)
+    let ok_sentinel_s = _has(txt, REQ_SENTINEL_SUFFIX)
+    let ok_falsifiers = _has(txt, REQ_FALSIFIERS_LIST)
+    let ok_exit_0     = _has(txt, REQ_EXIT_0)
+    let ok_run        = _has(txt, REQ_RUN_COUNTER)
+    let ok_fail       = _has(txt, REQ_FAIL_COUNTER)
+
+    _check(ok_math,
+           name + " — imports self/runtime/math_pure",
+           if !ok_math { "MISSING: " + REQ_IMPORT_MATH } else { "" })
+    _check(ok_sentinel_p && ok_sentinel_s,
+           name + " — emits __HEXA_CERN_<NAME>__ PASS sentinel",
+           "")
+    _check(ok_falsifiers,
+           name + " — declares FALSIFIERS list",
+           "")
+    _check(ok_exit_0,
+           name + " — calls exit(0) on PASS path",
+           "")
+    _check(ok_run && ok_fail,
+           name + " — has RUN / FAIL accounting counters",
+           "")
+}
+
+fn check_inventory_complete() {
+    let cmd = "ls " + VERIFY_DIR + "/numerics_*.hexa 2>/dev/null | wc -l | tr -d ' '"
+    let raw = exec(cmd).trim()
+    let on_disk = int(raw)
+    let listed = NUMERICS_SCRIPTS.len()
+    _check(on_disk == listed,
+           "inventory complete: NUMERICS_SCRIPTS list count == on-disk count",
+           "listed = " + str(listed) + ", on disk = " + str(on_disk))
+}
+
+let FALSIFIERS = [
+    "any numerics_*.hexa missing math_pure import -> raw float math sneaks in",
+    "any numerics_*.hexa missing __HEXA_CERN_*__ PASS sentinel -> CI cannot detect PASS",
+    "any numerics_*.hexa missing FALSIFIERS list -> retract conditions undeclared",
+    "any numerics_*.hexa missing exit(0) -> shell exit code unreliable",
+    "any numerics_*.hexa missing RUN/FAIL counters -> per-section accounting broken",
+    "NUMERICS_SCRIPTS list count diverges from on-disk count -> meta-lint stale",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-cern — numerics methodology meta-lint")
+    println("  (every verify/numerics_*.hexa must follow the regression pattern)")
+    println("========================================================================")
+    println("  scanning " + str(NUMERICS_SCRIPTS.len()) + " numerics_*.hexa script(s)")
+    println("")
+
+    for name in NUMERICS_SCRIPTS { check_script(name) }
+    println("")
+    check_inventory_complete()
+
+    println("")
+    println("  FALSIFIERS (" + str(len(FALSIFIERS)) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_CERN_LINT_NUMERICS__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_CERN_LINT_NUMERICS__ PASS — all " + str(NUMERICS_SCRIPTS.len()) + " numerics scripts conform")
+    exit(0)
+}

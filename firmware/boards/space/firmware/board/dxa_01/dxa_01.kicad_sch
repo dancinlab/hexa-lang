@@ -1,0 +1,23 @@
+(kicad_sch (version 20231120) (generator eeschema)
+
+  (uuid "0a1b2c3d-dxa-0001-fsp3-000000000003")
+
+  (paper "A4")
+
+  (title_block
+    (title "HEXA-DXA-01 — F-SPACE-3 (root sheet)")
+    (date "2026-05-08")
+    (rev "Phase-E-skeleton")
+    (company "hexa-space (dancinlab/hexa-space)")
+    (comment 1 "STM32H743ZI + USB host + 16-b DAC + microSD + 5\" TFT LCD")
+    (comment 2 "Spec: firmware/sim/dxa_pipeline.hexa (11/11 PASS)")
+    (comment 3 "Net list: firmware/board/dxa_01/SCHEMATIC.md §2")
+    (comment 4 "BOM: firmware/board/dxa_01/BOM.csv (~$178 prototype)")
+  )
+
+  (lib_symbols)
+
+  (sheet_instances
+    (path "/" (page "1"))
+  )
+)

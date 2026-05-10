@@ -1,0 +1,157 @@
+#!hexa strict
+// verify/n6_arithmetic.hexa — n=6 Dirac-mirror lattice arithmetic proof.
+//
+// Standalone arithmetic verifier for the n=6 lattice declared in
+// README.md §Why and .roadmap.hexa_antimatter §A.1. Holds NO doc
+// dependency — proves the identity holds by construction at the math level
+// (divisor enumeration + Euclidean gcd), then cross-checks each lattice
+// identifier matches the value used downstream by factory / tabletop /
+// pet_cyclotron modules.
+//
+// Master identity:
+//     σ(6) · φ(6) = n · τ(6) = J₂ = 24
+//        12  ·  2  =  6  ·  4 = 24
+//
+// Run:
+//     hexa run verify/n6_arithmetic.hexa     # exit 0 = identity holds
+//
+// Authority: README §Why, .roadmap §A.1, hexa.toml [scope] n6_lattice_caveat.
+// raw#9 hexa-only, raw#10 honest C3 (lattice is algebraic conjecture for any
+// antimatter axis — this verifier proves it for the integer 6 only, not
+// for the empirical antimatter substrate).
+
+let N        = 6
+let SIGMA_N  = 12      // expected σ(6)
+let TAU_N    = 4       // expected τ(6)
+let PHI_N    = 2       // expected φ(6)
+let J2       = 24      // master-identity invariant
+
+// ─── primitives (computed, not declared) ───
+
+fn divisors_of_n(n: int) -> [int] {
+    let mut out: [int] = []
+    let mut k = 1
+    while k <= n {
+        if n % k == 0 {
+            out = out + [k]
+        }
+        k = k + 1
+    }
+    return out
+}
+
+fn sigma_of(n: int) -> int {
+    let ds = divisors_of_n(n)
+    let mut s = 0
+    for d in ds {
+        s = s + d
+    }
+    return s
+}
+
+fn tau_of(n: int) -> int {
+    return len(divisors_of_n(n))
+}
+
+fn gcd_int(a: int, b: int) -> int {
+    let mut x = a
+    let mut y = b
+    while y != 0 {
+        let t = y
+        y = x % y
+        x = t
+    }
+    return x
+}
+
+fn euler_phi_of(n: int) -> int {
+    let mut count = 0
+    let mut k = 1
+    while k <= n {
+        if gcd_int(k, n) == 1 {
+            count = count + 1
+        }
+        k = k + 1
+    }
+    return count
+}
+
+// ─── checks ───
+
+let mut PASS_COUNT = 0
+let mut TOTAL = 0
+
+fn record(label: str, ok: bool) {
+    TOTAL = TOTAL + 1
+    if ok {
+        PASS_COUNT = PASS_COUNT + 1
+        println("  [PASS] " + label)
+    } else {
+        println("  [FAIL] " + label)
+    }
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — n=6 Dirac-mirror lattice arithmetic proof")
+    println("========================================================================")
+
+    let s = sigma_of(N)
+    let t = tau_of(N)
+    let p = euler_phi_of(N)
+    println("  divisors of 6        : " + repr_list(divisors_of_n(N)))
+    println("  σ(6)=" + str(s) + "  τ(6)=" + str(t) + "  φ(6)=" + str(p))
+    println("")
+
+    record("σ(6) = 12  (sum of divisors)",         s == SIGMA_N)
+    record("τ(6) = 4   (number of divisors)",      t == TAU_N)
+    record("φ(6) = 2   (Euler totient)",           p == PHI_N)
+    record("σ·φ = J₂ = 24 (master identity LHS)",  s * p == J2)
+    record("n·τ = J₂ = 24 (master identity RHS)",  N * t == J2)
+    record("σ·φ = n·τ (master identity)",          s * p == N * t)
+    record("σ(6) = 2·6 (perfect-number check)",    s == 2 * N)
+    record("φ(6)+τ(6) = 6 (lattice depth)",        p + t == N)
+    record("Dirac-mirror dichotomy φ=2",           p == 2)
+    record("4 trap states τ=4",                    t == 4)
+    record("12 antiparticle bins σ=12",            s == 12)
+    record("J₂=24 octahedral O ⊂ icosahedral I",   J2 == 24)
+
+    println("")
+    println("  derived design parameters (from divisor arithmetic, not from docs):")
+    println("    sigma_x_tau          = " + str(s * t) + "        (B-field 48 T benchmark)")
+    println("    sigma_x_phi          = " + str(s * p) + "        (J₂ master invariant)")
+    println("    sigma_squared        = " + str(s * s) + "      (gate / SM count benchmark)")
+    println("    sigma_minus_phi      = " + str(s - p) + "        (R cyclotron / Mach 10 benchmark)")
+    println("    sigma_minus_tau      = " + str(s - t) + "         (Golay [24,12,8] code distance)")
+    println("    sigma_x_tau_squared  = " + str(s * t * t) + "      (16-yr storage = 192 months)")
+    println("    n_div_phi            = " + str(N / p) + "          (triple redundancy)")
+
+    println("========================================================================")
+    println("  " + str(PASS_COUNT) + "/" + str(TOTAL) + " PASS  —  n=6 arithmetic identity")
+    println("  master row: σ(6)·φ(6) = n·τ(6) = J₂ = 24")
+    println("  no external inputs — algebraic identity is self-proving")
+    if PASS_COUNT == TOTAL {
+        println("__HEXA_ANTIMATTER_VERIFY_N6__ PASS")
+    } else {
+        println("__HEXA_ANTIMATTER_VERIFY_N6__ FAIL")
+        exit(1)
+    }
+}
+
+// ─── small helpers (str() / repr_list() polyfill) ───
+
+fn str(x: int) -> str {
+    return "" + x
+}
+
+fn repr_list(xs: [int]) -> str {
+    let mut s = "["
+    let mut i = 0
+    while i < len(xs) {
+        if i > 0 { s = s + ", " }
+        s = s + str(xs[i])
+        i = i + 1
+    }
+    return s + "]"
+}
+

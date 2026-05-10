@@ -1,0 +1,6 @@
+# transient runtime markers (selftest run logs / nexus dispatcher artifacts)
+state/
+
+# editor / OS noise
+.DS_Store
+*.swp

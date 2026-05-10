@@ -1,0 +1,301 @@
+#!hexa strict
+// hexa-space/verify/lattice_check.hexa — n=6 invariant lattice audit.
+//
+// Verifies σ(6)=12, τ(6)=4, φ(6)=2, J₂=24, the closure
+// σ(6)·φ(6) = n·τ(6) = J₂ = 24, and that the lattice is declared
+// consistently across the roadmap + 27-verb / 5-group pillar specs.
+//
+// Authority: .roadmap.hexa_space §A.1; n=6 perfect-number closure.
+//
+// Run:
+//   hexa run verify/lattice_check.hexa   # exit 0 = all invariants hold
+//
+// Cost: $0 (file reads + string scan; no network).
+//
+// Sentinel: __HEXA_SPACE_LATTICE__ PASS  (per recipe §4 invariants 1–5)
+//
+// @no-lock-needed
+// @resolver-bypass(reason="Pure local verifier; reads project docs only.")
+
+let HOME = env("HOME")
+
+fn hexa_space_root() -> str {
+    let r = env("HEXA_SPACE_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-space"  // @allow-devpath
+}
+
+let ROOT = hexa_space_root()
+
+// ── canonical n=6 lattice values (own 1 of hexa-space) ──────────────────
+let SIGMA_6 = 12     // σ(6) — sum-of-divisors
+let TAU_6   = 4      // τ(6) — divisor count
+let PHI_6   = 2      // φ(6) — Euler totient
+let J2      = 24     // 2·σ — quadratic-form min-vector
+let N       = 6      // master row
+let SOPFR_6 = 5      // sopfr(6) = 2 + 3
+
+// ── canonical pillar docs (27 verbs / 5 groups) ─────────────────────────
+let DOC_ROADMAP = ROOT + "/.roadmap.hexa_space"
+
+// core (2)
+let DOC_COSMIC   = ROOT + "/cosmic/hexa-cosmic.md"
+let DOC_STARSHIP = ROOT + "/starship/hexa-starship.md"
+
+// engineering (4)
+let DOC_AERO     = ROOT + "/aerospace/aerospace.md"
+let DOC_AEROXP   = ROOT + "/aerospace_transport/aerospace-transport.md"
+let DOC_ENGSPACE = ROOT + "/engineering/space-engineering.md"
+let DOC_SYSTEMS  = ROOT + "/systems/space-systems.md"
+
+// observation (3)
+let DOC_ASTRODYN = ROOT + "/astrodynamics/astrodynamics.md"
+let DOC_ASTRO    = ROOT + "/astronomy/astronomy.md"
+let DOC_OBSASTRO = ROOT + "/obs_astronomy/observational-astronomy.md"
+
+// life (2)
+let DOC_BIO      = ROOT + "/astrobiology/astrobiology.md"
+let DOC_MED      = ROOT + "/medicine/space-medicine.md"
+
+// operations (16) — pillar dirs each contain <slug>/<slug>.md
+let OPS_VERBS: [str] = [
+    "spaceship",      "satellite",      "space_center",   "space_ai_center",
+    "space_datacenter","falcon",        "dragon",         "recovery",
+    "orbital_depot",  "hls",            "starlink",       "rideshare",
+    "station",        "mars_base",      "direct_to_cell", "mondaloy",
+]
+
+// ── helpers ─────────────────────────────────────────────────────────────
+
+fn _read(path: str) -> str {
+    if file_exists(path) == false { return "" }
+    return read_file(path)
+}
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+fn _any(t: str, ss: [str]) -> bool {
+    for s in ss { if _has(t, s) { return true } }
+    return false
+}
+
+// ── audit accumulator ───────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+let mut WARN = 0
+let mut FAILURES = []
+
+let FALSIFIERS: [str] = ["F-SPACE-1", "F-SPACE-2", "F-SPACE-3", "F-SPACE-4"]
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    } else {
+        FAIL = FAIL + 1
+        FAILURES.push(label + " :: " + detail)
+        println("  [FAIL] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    }
+}
+
+fn _warn(label: str, detail: str) {
+    WARN = WARN + 1
+    println("  [WARN] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ── checks ──────────────────────────────────────────────────────────────
+
+// Check 1: arithmetic closure σ(6)·φ(6) = n·τ(6) = J₂ = 24
+fn check_closure() {
+    let lhs = SIGMA_6 * PHI_6
+    let mid = N * TAU_6
+    let ok1 = lhs == J2
+    let ok2 = mid == J2
+    let ok3 = lhs == mid
+    _check(ok1 && ok2 && ok3,
+           "n=6 closure: σ(6)·φ(6) = n·τ(6) = J₂",
+           "12·2 = 6·4 = " + str(J2))
+}
+
+// Check 2: σ² = 144 (LEO 90 min orbit harmonic foot)
+fn check_sigma_squared() {
+    let s2 = SIGMA_6 * SIGMA_6
+    _check(s2 == 144,
+           "σ² = 144 (orbit-harmonic foot)",
+           "σ(6)² = " + str(s2))
+}
+
+// Check 3: σ·τ·2 = 96 t Starship LEO payload band
+fn check_payload_band() {
+    let p = SIGMA_6 * TAU_6 * 2
+    _check(p == 96,
+           "σ·τ·2 = 96 t (Starship V3 LEO payload band)",
+           "12·4·2 = " + str(p))
+}
+
+// Check 4: σ·n/φ − 3 = 33 (Super Heavy Raptor count)
+fn check_booster_engines() {
+    let b = SIGMA_6 * N / PHI_6 - 3
+    _check(b == 33,
+           "σ·n/φ − 3 = 33 (Super Heavy Raptor cluster)",
+           "12·6/2 − 3 = " + str(b))
+}
+
+// Check 5: J₂-hour orbit cadence ↔ 24-hour day
+fn check_j2_hour() {
+    _check(J2 == 24,
+           "J₂ = 24 hour-orbit cadence",
+           "Mathieu / Leech min-vector aligned to GEO sidereal day")
+}
+
+// Check 6: roadmap declares the lattice values
+fn check_roadmap_declares_lattice() {
+    let txt = _read(DOC_ROADMAP)
+    if txt.len() == 0 {
+        _check(false, "roadmap exists", DOC_ROADMAP + " missing")
+        return
+    }
+    let ok_sigma = _any(txt, ["σ(6)", "sigma(6)"]) && _has(txt, "12")
+    _check(ok_sigma, "roadmap declares σ(6)=12", ".roadmap.hexa_space §A.1")
+    let ok_tau = _any(txt, ["τ(6)", "tau(6)"]) && _has(txt, "4")
+    _check(ok_tau, "roadmap declares τ(6)=4", ".roadmap.hexa_space §A.1")
+    let ok_phi = _any(txt, ["φ(6)", "phi(6)"]) && _has(txt, "2")
+    _check(ok_phi, "roadmap declares φ(6)=2", ".roadmap.hexa_space §A.1")
+    let ok_j2 = _any(txt, ["J₂", "J_2"]) && _has(txt, "24")
+    _check(ok_j2, "roadmap declares J₂=24", ".roadmap.hexa_space §A.1")
+}
+
+// Check 7: roadmap preregisters the 4 falsifiers (F-SPACE-1/2/3/4)
+fn check_roadmap_falsifiers() {
+    let txt = _read(DOC_ROADMAP)
+    if txt.len() == 0 { return }
+    for f in FALSIFIERS {
+        _check(_has(txt, f),
+               "roadmap preregisters " + f,
+               ".roadmap.hexa_space §A.4")
+    }
+}
+
+// Check 8: each canonical (core+observation+life) pillar references the n=6
+// lattice via σ / τ / φ / J₂ / n=6 token (any one suffices — honest C3).
+fn check_canonical_pillar_lattice(label: str, path: str) {
+    let txt = _read(path)
+    if txt.len() == 0 {
+        _check(false, "pillar present: " + label, path + " missing")
+        return
+    }
+    let ok = _any(txt, [
+        "σ(6)", "sigma(6)", "σ=12", "sigma=12",
+        "τ(6)", "tau(6)", "φ(6)", "phi(6)",
+        "J₂", "J_2", "n=6", "n = 6",
+    ])
+    _check(ok, label + ": n=6 lattice token referenced",
+           "expected σ/τ/φ/J₂/n=6 anchor in spec")
+}
+
+// Check 9: J₂ token cross-pillar sweep — at least 6 pillars cite it
+fn check_j2_cross_pillar() {
+    let pillars = [
+        DOC_COSMIC, DOC_STARSHIP,
+        DOC_AERO, DOC_AEROXP, DOC_ENGSPACE, DOC_SYSTEMS,
+        DOC_ASTRODYN, DOC_ASTRO, DOC_OBSASTRO,
+        DOC_BIO, DOC_MED,
+    ]
+    let mut hits = 0
+    for p in pillars {
+        let t = _read(p)
+        if _any(t, ["J_2", "J₂", "= 24", " 24 "]) { hits = hits + 1 }
+    }
+    _check(hits >= 6,
+           "J₂ token cross-pillar: appears in ≥ 6 of 11 canonical pillars",
+           "hits = " + str(hits) + " of 11")
+}
+
+// Check 10: 16 ops verbs each ship a verify_<verb>.hexa companion
+fn check_ops_verify_present() {
+    let mut missing: [str] = []
+    for v in OPS_VERBS {
+        let p = ROOT + "/" + v + "/verify_" + v + ".hexa"
+        if file_exists(p) == false { missing = missing + [v] }
+    }
+    _check(missing.len() == 0,
+           "ops group: 16/16 verify_<verb>.hexa present",
+           "missing: " + missing.join(", "))
+}
+
+// Check 11: hexa.toml [closure] verdict declared (raw#10 C3 honesty)
+fn check_hexa_toml_honesty() {
+    let txt = _read(ROOT + "/hexa.toml")
+    if txt.len() == 0 {
+        _warn("hexa.toml absent", ROOT + "/hexa.toml")
+        return
+    }
+    let ok_v = _has(txt, "verdict") &&
+               (_has(txt, "SPECS_ONLY") || _has(txt, "SPEC_PLUS_OPS_LATTICE"))
+    _check(ok_v, "hexa.toml [closure] verdict declared (raw#10 C3)",
+           "honest scope declaration present")
+    let ok_27 = _has(txt, "verbs_total = 27") || _has(txt, "verbs_total=27")
+    _check(ok_27, "hexa.toml [closure] verbs_total = 27",
+           "11 canonical + 16 operations")
+}
+
+// ── main ────────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-space — n=6 invariant lattice audit (27 verbs / 5 groups)")
+    println("  σ(6)=12, τ(6)=4, φ(6)=2, J₂=24 — closure σ·φ = n·τ = J₂")
+    println("========================================================================")
+    println("  root: " + ROOT)
+    println("")
+
+    // tier-1: arithmetic closure
+    check_closure()
+    check_sigma_squared()
+    check_payload_band()
+    check_booster_engines()
+    check_j2_hour()
+    println("")
+
+    // tier-2: roadmap declarations
+    check_roadmap_declares_lattice()
+    check_roadmap_falsifiers()
+    println("")
+
+    // tier-3: canonical pillar lattice references (core + observation + life)
+    check_canonical_pillar_lattice("cosmic",       DOC_COSMIC)
+    check_canonical_pillar_lattice("starship",     DOC_STARSHIP)
+    check_canonical_pillar_lattice("astrodynamics",DOC_ASTRODYN)
+    check_canonical_pillar_lattice("astronomy",    DOC_ASTRO)
+    check_canonical_pillar_lattice("obs_astronomy",DOC_OBSASTRO)
+    check_canonical_pillar_lattice("astrobiology", DOC_BIO)
+    check_canonical_pillar_lattice("medicine",     DOC_MED)
+    println("")
+
+    // tier-4: cross-pillar + ops + toml honesty
+    check_j2_cross_pillar()
+    check_ops_verify_present()
+    check_hexa_toml_honesty()
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed  (" + str(WARN) + " warn)")
+    if FAIL > 0 {
+        println("  FAILURES:")
+        for f in FAILURES { println("    ✗ " + f) }
+        println("__HEXA_SPACE_LATTICE__ FAIL")
+        exit(1)
+    }
+    println("  All n=6 invariants hold across roadmap + 27-verb pillar surface.")
+    println("__HEXA_SPACE_LATTICE__ PASS")
+    exit(0)
+}

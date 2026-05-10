@@ -1,0 +1,76 @@
+#!hexa strict
+// tests/test_lattice.hexa — regression for top-level verify/ cross-cutters.
+//
+// Covers:
+//   1. verify/lattice_check.hexa  → __HEXA_SPACE_LATTICE__ PASS
+//   2. verify/cross_doc_audit.hexa → __HEXA_SPACE_CROSSDOC__ PASS
+// Each is checked both via direct invocation and via the
+// `hexa-space verify <slug>` cli proxy.
+//
+// Cost: $0 (Mac local; pure file reads + arithmetic).
+
+fn _check_pair(label: str, root: str, script_rel: str, slug: str, sentinel: str) -> bool {
+    let direct_p   = root + "/" + script_rel
+    let direct_cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + direct_p + "\" 2>&1"
+    let direct_out = exec(direct_cmd)
+    let direct_ok  = direct_out.contains(sentinel)
+    println("  [direct] " + script_rel + "  " + str(direct_ok))
+
+    let cli       = root + "/cli/hexa-space.hexa"
+    let proxy_cmd = "HEXA_SPACE_ROOT=\"" + root + "\" hexa run \"" + cli + "\" verify " + slug + " 2>&1"
+    let proxy_out = exec(proxy_cmd)
+    let proxy_ok  = proxy_out.contains(sentinel)
+    println("  [proxy]  hexa-space verify " + slug + "  " + str(proxy_ok))
+
+    let ok = direct_ok && proxy_ok
+    if !ok {
+        if !direct_ok {
+            println("--- " + label + " direct output ---")
+            println(direct_out.trim())
+        }
+        if !proxy_ok {
+            println("--- " + label + " proxy output ---")
+            println(proxy_out.trim())
+        }
+    }
+    return ok
+}
+
+fn main() {
+    let mut root = env("HEXA_SPACE_ROOT")
+    if root.len() == 0 {
+        root = exec("pwd").trim()
+    }
+    println("test_lattice: HEXA_SPACE_ROOT=" + root)
+
+    let pairs: [[str]] = [
+        ["lattice",                     "verify/lattice_check.hexa",                    "lattice",                     "__HEXA_SPACE_LATTICE__ PASS"],
+        ["cross-doc",                   "verify/cross_doc_audit.hexa",                  "cross-doc",                   "__HEXA_SPACE_CROSSDOC__ PASS"],
+        ["numerics-kepler",             "verify/numerics_kepler.hexa",                  "numerics-kepler",             "__HEXA_SPACE_NUMERICS_KEPLER__ PASS"],
+        ["numerics-falcon",             "verify/numerics_falcon.hexa",                  "numerics-falcon",             "__HEXA_SPACE_NUMERICS_FALCON__ PASS"],
+        ["numerics-starship",           "verify/numerics_starship.hexa",                "numerics-starship",           "__HEXA_SPACE_NUMERICS_STARSHIP__ PASS"],
+        ["numerics-bone-loss",          "verify/numerics_bone_loss.hexa",               "numerics-bone-loss",          "__HEXA_SPACE_NUMERICS_BONE_LOSS__ PASS"],
+        ["numerics-lattice-arithmetic", "verify/numerics_lattice_arithmetic.hexa",      "numerics-lattice-arithmetic", "__HEXA_SPACE_NUMERICS_LATTICE_ARITHMETIC__ PASS"],
+        ["numerics-cross-pillar",       "verify/numerics_cross_pillar.hexa",            "numerics-cross-pillar",       "__HEXA_SPACE_NUMERICS_CROSS_PILLAR__ PASS"],
+        ["falsifier",                   "verify/falsifier_check.hexa",                  "falsifier",                   "__HEXA_SPACE_FALSIFIER_CHECK__ PASS"],
+        ["lint-numerics",               "verify/lint_numerics.hexa",                    "lint-numerics",               "__HEXA_SPACE_LINT_NUMERICS__ PASS"],
+        ["saturation",                  "verify/saturation_check.hexa",                 "saturation",                  "__HEXA_SPACE_SATURATION_CHECK__ PASS"],
+    ]
+
+    let mut all_ok = true
+    let mut n_ok   = 0
+    for p in pairs {
+        let ok = _check_pair(p[0], root, p[1], p[2], p[3])
+        if ok { n_ok = n_ok + 1 }
+        if !ok { all_ok = false }
+    }
+
+    let total = pairs.len()
+    if all_ok {
+        println("test_lattice: PASS  (" + str(n_ok) + "/" + str(total) +
+                " cross-cutter sentinels + cli proxies green)")
+        return
+    }
+    println("test_lattice: FAIL  (" + str(n_ok) + "/" + str(total) + ")")
+    exit(1)
+}

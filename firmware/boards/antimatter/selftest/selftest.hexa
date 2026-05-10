@@ -1,0 +1,86 @@
+#!hexa strict
+// selftest/selftest.hexa — full hexa-antimatter selftest sweep.
+//
+// Referenced from hexa.toml [modules.hexa]. Runs the 3 verb modules + the
+// n=6 lattice arithmetic verifier in sequence, asserts every sentinel
+// PASS, and emits __HEXA_ANTIMATTER_SELFTEST__ PASS.
+//
+// Exits non-zero if any sub-sentinel is missing.
+//
+// Run:
+//     hexa run selftest/selftest.hexa
+//
+// raw#9 hexa-only · raw#10 honest C3: PASS sentinels reflect lattice
+// arithmetic + module wiring, NOT empirical antimatter validation.
+
+fn root() -> str {
+    let env_root = env("HEXA_ANTIMATTER_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _hexa_bin() -> str {
+    // Mac dispatch shim sometimes refuses bare-host exec; prefer the
+    // real interpreter binary when present.
+    let direct = env("HOME") + "/.hx/packages/hexa/build/hexa_interp.real"
+    let probe = exec("test -x \"" + direct + "\" && echo OK").trim()
+    if probe == "OK" { return direct }
+    return "HEXA_SHIM_NO_DARWIN_LANDING=1 RESOURCE_LOCAL_HEXA=1 hexa run"
+}
+
+let HEXA_BIN = _hexa_bin()
+
+fn run_module(name: str, path: str, sentinel: str) -> bool {
+    println("  -- " + name + " --")
+    let raw = exec(HEXA_BIN + " " + path + " 2>&1")
+    let last_lines = raw.trim()
+    println(last_lines)
+    println("")
+    return raw.contains(sentinel)
+}
+
+fn main() {
+    let r = root()
+    println("========================================================================")
+    println("  hexa-antimatter — selftest sweep (3 verbs + n=6 lattice)")
+    println("  root: " + r)
+    println("========================================================================")
+
+    let mut ok = true
+
+    if !run_module("verify/n6_arithmetic", r + "/verify/n6_arithmetic.hexa",
+                   "__HEXA_ANTIMATTER_VERIFY_N6__ PASS") {
+        eprintln("  selftest: n6_arithmetic FAIL")
+        ok = false
+    }
+
+    if !run_module("factory", r + "/factory/factory.hexa",
+                   "__HEXA_ANTIMATTER_FACTORY__ PASS") {
+        eprintln("  selftest: factory FAIL")
+        ok = false
+    }
+
+    if !run_module("tabletop", r + "/tabletop/tabletop.hexa",
+                   "__HEXA_ANTIMATTER_TABLETOP__ PASS") {
+        eprintln("  selftest: tabletop FAIL")
+        ok = false
+    }
+
+    if !run_module("pet_cyclotron", r + "/pet_cyclotron/pet_cyclotron.hexa",
+                   "__HEXA_ANTIMATTER_PET_CYCLOTRON__ PASS") {
+        eprintln("  selftest: pet_cyclotron FAIL")
+        ok = false
+    }
+
+    println("========================================================================")
+    if ok {
+        println("  3/3 verb modules wired · 1/1 lattice verifier · selftest")
+        println("__HEXA_ANTIMATTER_SELFTEST__ PASS")
+        println("  honest C3: sentinel PASS reflects module wiring + n=6 arithmetic;")
+        println("  empirical antimatter claims (1.7e12 p̄/s, 48 T RT-SC, 16-yr storage)")
+        println("  are NOT validated by this selftest — see README §Status.")
+    } else {
+        println("__HEXA_ANTIMATTER_SELFTEST__ FAIL")
+        exit(1)
+    }
+}

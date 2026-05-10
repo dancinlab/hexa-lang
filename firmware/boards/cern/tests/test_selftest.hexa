@@ -1,0 +1,77 @@
+#!hexa strict
+// hexa-cern/tests/test_selftest.hexa — 3-pillar verb count smoke check
+//
+// Verifies that the placeholder CLI dispatcher exposes the 3 expected pillar
+// verbs (mini / parent / classical) and that each pillar spec .md is present.
+//
+// PASS = 3/3 pillars detected.
+// FAIL = anything less.
+//
+// Cost: $0 (filesystem checks only).
+//
+// raw#10 C3: this is a verb-count check — it does NOT validate empirical
+// claims, only that the v1.0.0 spec extraction landed.
+
+let HOME = env("HOME")
+let PETITE_CERN_ROOT_ENV = env("PETITE_CERN_ROOT")
+
+fn hexa_cern_root() -> str {
+    if PETITE_CERN_ROOT_ENV.len() > 0 { return PETITE_CERN_ROOT_ENV }
+    let inferred = exec("pwd").trim()
+    if inferred.len() > 0 { return inferred }
+    return HOME + "/.hexa-cern"
+}
+
+let PC = hexa_cern_root()
+
+let DOC_MINI      = PC + "/mini/doc/mini-accelerator.md"
+let DOC_PARENT    = PC + "/parent/doc/particle-accelerator.md"
+let DOC_CLASSICAL = PC + "/classical/doc/classical-mechanics-accelerator.md"
+let CLI_DISPATCH  = PC + "/cli/hexa-cern.hexa"
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+fn _grep_count(file: str, needle: str) -> int {
+    let cmd = "grep -c " + shq(needle) + " " + shq(file) + " 2>/dev/null || echo 0"
+    let raw = exec(cmd).trim()
+    return int(raw)
+}
+
+fn main() {
+    println("[test_selftest] hexa-cern 3-pillar verb-count check")
+    println("[test_selftest] root: " + PC)
+
+    let mut spec_count = 0
+    if _file_exists(DOC_MINI)      { spec_count = spec_count + 1 } else { eprintln("  MISSING: " + DOC_MINI) }
+    if _file_exists(DOC_PARENT)    { spec_count = spec_count + 1 } else { eprintln("  MISSING: " + DOC_PARENT) }
+    if _file_exists(DOC_CLASSICAL) { spec_count = spec_count + 1 } else { eprintln("  MISSING: " + DOC_CLASSICAL) }
+    println("[test_selftest] pillar specs present: " + str(spec_count) + "/3")
+
+    if _file_exists(CLI_DISPATCH) == false {
+        eprintln("[test_selftest] FAIL — CLI dispatcher missing: " + CLI_DISPATCH)
+        exit(1)
+    }
+
+    // verify the dispatcher declares the 3 expected pillar subcommands
+    let mut verb_count = 0
+    if _grep_count(CLI_DISPATCH, "fn cmd_mini")      > 0 { verb_count = verb_count + 1 }
+    if _grep_count(CLI_DISPATCH, "fn cmd_parent")    > 0 { verb_count = verb_count + 1 }
+    if _grep_count(CLI_DISPATCH, "fn cmd_classical") > 0 { verb_count = verb_count + 1 }
+    println("[test_selftest] pillar verbs declared in CLI: " + str(verb_count) + "/3")
+
+    let pass = spec_count == 3 && verb_count == 3
+    if pass {
+        println("__PETITE_CERN_TEST_SELFTEST__ PASS — 3/3 pillars + 3/3 verbs detected")
+        exit(0)
+    } else {
+        eprintln("__PETITE_CERN_TEST_SELFTEST__ FAIL — specs=" + str(spec_count) + "/3 verbs=" + str(verb_count) + "/3")
+        exit(1)
+    }
+}

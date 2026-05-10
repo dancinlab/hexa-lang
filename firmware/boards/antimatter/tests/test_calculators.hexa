@@ -1,0 +1,117 @@
+#!hexa strict
+// tests/test_calculators.hexa — calc_*.hexa + numerics_*.hexa harness.
+//
+// Drives every algebraic-tier (calc_*) and numerical-tier (numerics_*)
+// script that has been wired so far, and asserts:
+//   1. the script exits PASS,
+//   2. its sentinel string is present in stdout,
+//   3. its declared check count line ("N/N checks passed") matches.
+//
+// Pattern mirrors hexa-cern/tests/test_calculators.hexa — single harness,
+// one row per (filename, sentinel) tuple. Adding a new calc_* / numerics_*
+// script = add one line here.
+//
+// Pass criterion: every wired script PASSes its sentinel.
+
+let HOME = env("HOME")
+
+fn _root() -> str {
+    let r = env("HEXA_ANTIMATTER_ROOT")
+    if r.len() > 0 { return r }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-antimatter"
+}
+
+let ROOT = _root()
+
+// (script-relative-path, expected-sentinel-prefix)
+//
+// Each row: ["verify/<file>.hexa", "__HEXA_ANTIMATTER_<NAME>__"]
+// The harness checks the script emits "<sentinel> PASS".
+let SCRIPTS = [
+    ["verify/calc_factory.hexa",            "__HEXA_ANTIMATTER_CALC_FACTORY__"],
+    ["verify/calc_tabletop.hexa",           "__HEXA_ANTIMATTER_CALC_TABLETOP__"],
+    ["verify/calc_pet_cyclotron.hexa",      "__HEXA_ANTIMATTER_CALC_PET_CYCLOTRON__"],
+    ["verify/numerics_factory.hexa",        "__HEXA_ANTIMATTER_NUMERICS_FACTORY__"],
+    ["verify/numerics_tabletop.hexa",       "__HEXA_ANTIMATTER_NUMERICS_TABLETOP__"],
+    ["verify/numerics_pet_cyclotron.hexa",  "__HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON__"],
+    ["verify/numerics_factory_parity.hexa",  "__HEXA_ANTIMATTER_NUMERICS_FACTORY_PARITY__"],
+    ["verify/numerics_tabletop_parity.hexa",      "__HEXA_ANTIMATTER_NUMERICS_TABLETOP_PARITY__"],
+    ["verify/numerics_pet_cyclotron_parity.hexa", "__HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON_PARITY__"],
+    ["verify/numerics_factory_solver.hexa",       "__HEXA_ANTIMATTER_NUMERICS_FACTORY_SOLVER__"],
+    ["verify/numerics_tabletop_solver.hexa",      "__HEXA_ANTIMATTER_NUMERICS_TABLETOP_SOLVER__"],
+    ["verify/numerics_pet_cyclotron_solver.hexa", "__HEXA_ANTIMATTER_NUMERICS_PET_CYCLOTRON_SOLVER__"],
+    ["verify/numerics_cross_pillar.hexa",          "__HEXA_ANTIMATTER_NUMERICS_CROSS_PILLAR__"],
+    ["verify/numerics_lattice_arithmetic.hexa",    "__HEXA_ANTIMATTER_NUMERICS_LATTICE_ARITHMETIC__"],
+    ["verify/falsifier_check.hexa",                "__HEXA_ANTIMATTER_FALSIFIER__"],
+    ["verify/lint_numerics.hexa",                  "__HEXA_ANTIMATTER_LINT_NUMERICS__"],
+    ["verify/calc_break_even.hexa",                "__HEXA_ANTIMATTER_CALC_BREAK_EVEN__"],
+    ["verify/numerics_break_even.hexa",            "__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN__"],
+    ["verify/numerics_break_even_parity.hexa",     "__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_PARITY__"],
+    ["verify/numerics_break_even_solver.hexa",     "__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_SOLVER__"],
+    ["verify/empirical_pet_inspire.hexa",          "__HEXA_ANTIMATTER_EMPIRICAL_PET_INSPIRE__"],
+    ["verify/empirical_tabletop_inspire.hexa",     "__HEXA_ANTIMATTER_EMPIRICAL_TABLETOP_INSPIRE__"],
+    ["verify/empirical_dirac_inspire.hexa",        "__HEXA_ANTIMATTER_EMPIRICAL_DIRAC_INSPIRE__"],
+    ["verify/empirical_break_even_inspire.hexa",   "__HEXA_ANTIMATTER_EMPIRICAL_BREAK_EVEN_INSPIRE__"],
+    ["verify/numerics_pet_realistic.hexa",         "__HEXA_ANTIMATTER_NUMERICS_PET_REALISTIC__"],
+    ["verify/numerics_tabletop_relativistic.hexa", "__HEXA_ANTIMATTER_NUMERICS_TABLETOP_RELATIVISTIC__"],
+    ["verify/numerics_dirac_precision.hexa",       "__HEXA_ANTIMATTER_NUMERICS_DIRAC_PRECISION__"],
+    ["verify/numerics_break_even_thrust.hexa",     "__HEXA_ANTIMATTER_NUMERICS_BREAK_EVEN_THRUST__"],
+    ["firmware/sim/cyclotron_trigger.hexa",        "__HEXA_ANTIMATTER_FIRMWARE_CYCLOTRON_TRIGGER__"],
+    ["firmware/sim/penning_rf.hexa",               "__HEXA_ANTIMATTER_FIRMWARE_PENNING_RF__"],
+    ["firmware/sim/atomic_clock_counter.hexa",     "__HEXA_ANTIMATTER_FIRMWARE_ATOMIC_CLOCK__"],
+    ["firmware/sim/thrust_acquisition.hexa",       "__HEXA_ANTIMATTER_FIRMWARE_THRUST_ACQ__"],
+    ["verify/firmware_phase_d_lint.hexa",          "__HEXA_ANTIMATTER_FIRMWARE_PHASE_D__"],
+    // saturation_check uses STOP sentinel (not __ PASS) — keep it out of this
+    // calculator-style harness; verify/all and saturation sub-target cover it.
+]
+
+fn _int_str(x: int) -> str { return "" + x }
+
+fn run_one(rel: str, sentinel: str) -> bool {
+    let path = ROOT + "/" + rel
+    let pass_token = sentinel + " PASS"
+    let out = exec("hexa run \"" + path + "\" 2>&1")
+    if out.contains(pass_token) {
+        println("  [PASS] " + rel + "  (" + sentinel + ")")
+        return true
+    }
+    println("  [FAIL] " + rel)
+    println("         · expected sentinel: " + pass_token)
+    println("         · last 8 lines of output:")
+    let lines = out.split("\n")
+    let n = len(lines)
+    let mut i = 0
+    if n > 8 { i = n - 8 }
+    while i < n {
+        println("         |  " + lines[i])
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-antimatter — test_calculators (calc_* + numerics_* sweep)")
+    println("  root: " + ROOT)
+    println("========================================================================")
+
+    let mut pass_n = 0
+    let total = len(SCRIPTS)
+    let mut i = 0
+    while i < total {
+        let row = SCRIPTS[i]
+        if run_one(row[0], row[1]) { pass_n = pass_n + 1 }
+        i = i + 1
+    }
+
+    println("")
+    println("  " + _int_str(pass_n) + "/" + _int_str(total) + " calculator scripts PASS")
+    if pass_n == total {
+        println("test_calculators: PASS")
+        return
+    }
+    println("test_calculators: FAIL")
+    exit(1)
+}

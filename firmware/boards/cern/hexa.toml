@@ -1,0 +1,100 @@
+# hexa.toml — hexa-cern standalone package manifest
+#
+# Spec: shared/hexa-lang/hexa-toml-spec.json (version 1.0.0)
+# Distribution target: hx install hexa-cern
+# Provenance: extracted from canon/domains/physics/{mini,particle,classical-mechanics}-accelerator/
+#             on 2026-05-06 (n6-arch SHA c0f1f570)
+
+[package]
+name = "hexa-cern"
+version = "1.1.0-pre"
+entry = "cli/hexa-cern.hexa"
+description = "hexa-cern — n=6 sigma-cascade 6-order benchtop accelerator (100 MeV / 1 GeV/m, mini + parent + classical 3-pillar). 3-pillar bundle: HEXA-MINI-ACCEL (laser-plasma 100 MeV / 1 GeV/m) + HEXA-PACCEL (integrated parent) + HEXA-CLASSIC-ACCEL (classical-mechanics baseline). LHC 7 TeV/27km, DESY 1 GeV/m baselines for n=6 σ-cascade 6-order comparison. specs only, .hexa CLI TBD."
+license = "MIT"
+authors = ["박민우 <nerve011235@gmail.com>"]
+repository = "https://github.com/dancinlab/hexa-cern"
+homepage = "https://github.com/dancinlab/hexa-cern"
+readme = "README.md"
+keywords = ["hexa-cern", "hexa-family", "mini-accelerator", "particle-accelerator", "classical-mechanics", "laser-plasma", "n6-invariant", "sigma-cascade"]
+categories = ["physics", "particle-accelerator", "benchtop-instrumentation"]
+
+[lib]
+# Library entry placeholder — pillar specs are .md only at v1.0.0.
+entry = "mini/doc/mini-accelerator.md"
+
+[[bin]]
+name = "hexa-cern"
+path = "cli/hexa-cern.hexa"
+
+[test]
+runner = "hexa"
+files = [
+    "tests/test_selftest.hexa",
+    "tests/test_lattice.hexa",
+    "tests/test_calculators.hexa",
+    "tests/test_cli_verify.hexa",
+    "tests/test_all.hexa",
+]
+
+# ── hx install hook ───────────────────────────────────────
+# install.hexa runs under hx package manager (hexa-lang) at install time.
+# Phases: pre   → no-op (specs-only at v1.0.0; no python_bridge yet).
+#         post  → quick selftest (warn-only, not a blocker).
+[scripts]
+install = "install.hexa"
+
+# ── Modules manifest (3 pillars) ──────────────────────────
+# mini       — HEXA-MINI-ACCEL (benchtop 100 MeV / 1 GeV/m laser-plasma)
+# parent     — HEXA-PACCEL (integrated parent accelerator)
+# classical  — HEXA-CLASSIC-ACCEL (classical-mechanics baseline)
+[modules]
+# v1.1.0-pre: .hexa runnable surface (verify + tests + cli verify subcmd).
+hexa = [
+    "cli/hexa-cern.hexa",
+    "verify/lattice_check.hexa",
+    "verify/cross_doc_audit.hexa",
+    "verify/calc_wakefield.hexa",
+    "verify/calc_sigma_cascade.hexa",
+    "verify/calc_classical.hexa",
+    "verify/falsifier_check.hexa",
+]
+docs = [
+    "mini/doc/mini-accelerator.md",
+    "parent/doc/particle-accelerator.md",
+    "classical/doc/classical-mechanics-accelerator.md",
+]
+
+# ── Dependencies ───────────────────────────────────────────
+[dependencies]
+hexa-lang = ">=1.0.0"
+
+# ── Closure provenance (raw#10 honest C3) ─────────────────
+# v1.0.0 closure: 3 pillar specs imported, .hexa CLI TBD.
+# v1.1.0-pre: .hexa verify + build + tests surface lands. Specs unchanged.
+[closure]
+pillars_total = 3
+pillars_specs = 3
+pillars_wired = 0
+verify_scripts = 6
+verify_pass_v110pre = "6/6 (lattice 23/23 + cross_doc 11/11 + wakefield 6/6 + sigma 8/8 + classical 11/11 + falsifier 3/3)"
+build_pdfs = 3
+tests_pass = "4/4 (selftest + lattice + calculators + cli_verify)"
+verdict = "SPECS_ONLY"
+extracted_from = "canon/domains/physics/{mini,particle,classical-mechanics}-accelerator/ @ c0f1f570"
+
+# ── Scope honesty (raw#10 C3) ─────────────────────────────
+[scope]
+honest_scope = "v1.0.0 ships 3 pillar specs (.md) + placeholder CLI dispatcher. Empirical wiring (laser-plasma sandbox, parent integration, classical baseline solver) deferred. n=6 sigma-cascade 6-order comparison vs LHC 7 TeV/27km + DESY 1 GeV/m is design-target, not measured."
+not_scope = ["actual particle acceleration (this is a spec/design package, not hardware control)", "LHC/DESY data ingestion (no live feed)", "Geant4/MAD-X bridge", "real-time beam diagnostics"]
+n6_lattice_caveat = "n=6 invariant (σ(6)=12, τ(6)=4, φ(6)=2) threads the design. σ-cascade 6-order claim (precision ×10, throughput ×144, energy ÷12, size ÷10, error ÷144, lifetime ×48) is theoretical ceiling — empirical validation requires Stage-1+ benchtop build (TBD)."
+
+# ── Cost profile ──────────────────────────────────────────
+[cost]
+mac_local_default = "$0 (specs-only at v1.0.0)"
+selftest = "$0 (verb-count check)"
+
+# ── Cross-link (dancinlab ecosystem) ───────────────
+[crosslink]
+sc_magnet_substrate = "dancinlab/hexa-rtsc"
+cousin_pet_cyclotron = "dancinlab/hexa-antimatter"
+stage3_propulsion_dependent = "dancinlab/hexa-ufo"

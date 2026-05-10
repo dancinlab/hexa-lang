@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use hexa-antimatter in academic work, please cite as below."
+title: "hexa-antimatter: Antimatter substrate (HEXA family, n=6 Dirac-mirror lattice)"
+abstract: |
+  hexa-antimatter is the antimatter axis of the HEXA family substrate
+  registry. It organizes three independent antimatter verbs — factory
+  (CERN-scale antimatter-factory), tabletop (desktop Penning-trap), and
+  pet_cyclotron (¹⁸F β⁺ on-site PET cyclotron) — onto the n=6 invariant
+  lattice (σ=12, τ=4, φ=2, J₂=24). The lattice serves as an organizing
+  scaffold; its empirical verification for any antimatter axis is not
+  claimed at this release.
+authors:
+  - name: dancinlab contributors
+    affiliation: dancinlab
+keywords:
+  - antimatter
+  - dirac-mirror
+  - n6-lattice
+  - hexa-family
+  - penning-trap
+  - pet-cyclotron
+  - cpt-symmetry
+license: MIT
+repository-code: "https://github.com/dancinlab/hexa-antimatter"
+url: "https://github.com/dancinlab/hexa-antimatter"
+version: "0.1.0"
+date-released: "2026-05-08"
+doi: "10.5281/zenodo.20077465"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.20077465"
+    description: "Concept DOI (always resolves to the latest version)"
+  - type: doi
+    value: "10.5281/zenodo.20077466"
+    description: "Version-specific DOI for v0.1.0"
