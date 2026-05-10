@@ -1,0 +1,139 @@
+// compiler/intrinsics/intrinsics.hexa
+//
+// Hexa fork-free intrinsics module (v0).
+//
+// Purpose:
+//   Centralize wall-clock, host-target detection, and filesystem-mutating
+//   operations behind a stable hexa API so that call sites stop reaching
+//   for `exec("date ...")`, `exec("uname ...")`, `exec("mkdir -p ...")`
+//   directly. Today these wrappers still fork() under the hood (v0 stage0
+//   on a hosted POSIX shell), but the call-site surface is fixed: native
+//   v1 will replace each body with a direct syscall, dropping the per-build
+//   fork count from 5–10 down to ≤2 (the unavoidable `as` and `ld` calls).
+//
+// Migration ladder:
+//   L0 — exec("date ..."), exec("uname ..."), exec("mkdir ...") scattered.
+//   L1 — call sites use the intrinsics below; bodies still fork (this file).
+//   L2 — bodies replaced with FFI to libc (gettimeofday, mkdir, uname).
+//   L3 — bodies replaced with raw Linux/Darwin syscalls; zero fork.
+//
+// Stage0 caveat (documented honestly):
+//   In the current self-hosted bootstrap we have no portable wall-clock,
+//   no portable filesystem, and no portable host detection without exec().
+//   We are running on a "1980s-spec system" relative to the native target,
+//   so the v0 bodies legitimately exec() — but they do so exactly once,
+//   inside one well-named function, instead of being inlined at hundreds
+//   of call sites. That is the entire point.
+//
+// Constraints:
+//   - English-only documentation.
+//   - No DiagBuilder / no diagnostics emitted from this module.
+//   - No new external deps.
+//
+// See also:
+//   - doc/fork_storm_inventory.md
+//   - SPEC.yaml#fork_storm_prevention
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cached state — populated lazily on first use.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let mut _host_target_cache: string = ""
+let mut _host_target_cached: bool = false
+
+// ─────────────────────────────────────────────────────────────────────────────
+// now_ns()
+//
+// Return the current wall-clock time as nanoseconds since the Unix epoch.
+//
+// v0 (this file):  forks `date +%s%N` (Linux) or falls back to `date +%s`
+//                  on Darwin (no nanos there) and pads with zeros.
+// v1 (native):     calls clock_gettime(CLOCK_REALTIME) via FFI.
+// v2 (raw):        emits the syscall directly — Linux 228 (clock_gettime),
+//                  Darwin gettimeofday trap. argument layout: a pointer
+//                  to a `struct timespec { i64 sec; i64 nsec }` on the
+//                  C stack; return value is i32 (rc).
+// ─────────────────────────────────────────────────────────────────────────────
+pub fn now_ns() -> i64 {
+    // Try Linux-style nanosecond `date +%s%N` first.
+    let ns_str = exec("date +%s%N 2>/dev/null").trim()
+    if ns_str != "" && !ns_str.contains("N") {
+        // parse_i64 is provided by stdlib; fallback to 0 on parse miss.
+        let v = parse_i64_or(ns_str, 0)
+        if v > 0 { return v }
+    }
+    // Darwin fallback: seconds only, pad to nanoseconds.
+    let s_str = exec("date +%s 2>/dev/null").trim()
+    let s = parse_i64_or(s_str, 0)
+    return s * 1000000000
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// host_target()
+//
+// Return a canonical "<arch>-<os>" string identifying the host.
+// Examples: "arm64-darwin", "x86_64-linux".
+//
+// v0 (this file):  forks `uname -sm` exactly once and caches the result.
+// v1 (native):     compile-time constant — the compiler stamps a literal
+//                  into the binary at codegen, no runtime call at all.
+// v2 (raw):        N/A — already constant.
+// ─────────────────────────────────────────────────────────────────────────────
+pub fn host_target() -> string {
+    if _host_target_cached { return _host_target_cache }
+    let raw = exec("uname -sm 2>/dev/null").trim()
+    // raw looks like "Darwin arm64" or "Linux x86_64". Normalize to "arch-os".
+    var os = "unknown"
+    var arch = "unknown"
+    if raw.contains("Darwin") { os = "darwin" }
+    else if raw.contains("Linux") { os = "linux" }
+    if raw.contains("arm64") || raw.contains("aarch64") { arch = "arm64" }
+    else if raw.contains("x86_64") { arch = "x86_64" }
+    _host_target_cache = arch + "-" + os
+    _host_target_cached = true
+    return _host_target_cache
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// mkdir_p(path)
+//
+// Recursively create `path`. Returns 0 on success, non-zero on error.
+// Idempotent — already-existing path is success.
+//
+// v0 (this file):  forks `mkdir -p`.
+// v1 (native):     FFI to libc mkdir() walking the path components,
+//                  treating EEXIST on a directory as success.
+// v2 (raw):        Linux syscall 83 (mkdir) / 258 (mkdirat); Darwin 136
+//                  (mkdir). args: (path_ptr: i64, mode: i32). We walk
+//                  the path manually splitting on '/'.
+// ─────────────────────────────────────────────────────────────────────────────
+pub fn mkdir_p(path: string) -> i64 {
+    if path == "" { return -1 }
+    let _ = exec("mkdir -p '" + path.replace("'", "'\\''") + "' 2>/dev/null")
+    // Verify post-condition with a single test fork. v1 uses stat() instead.
+    let probe = exec("test -d '" + path.replace("'", "'\\''") + "' && echo y || echo n").trim()
+    if probe == "y" { return 0 }
+    return 1
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal helper — minimal numeric parser. Stage0 stdlib `parse_i64`
+// has surface drift across the bootstrap; we vendor a tiny one to keep
+// the intrinsics module self-contained.
+// ─────────────────────────────────────────────────────────────────────────────
+fn parse_i64_or(s: string, fallback: i64) -> i64 {
+    if s == "" { return fallback }
+    var acc: i64 = 0
+    var i = 0
+    let n = s.length
+    var sign: i64 = 1
+    if n > 0 && s[0] == "-" { sign = -1; i = 1 }
+    while i < n {
+        let c = s[i]
+        if c < "0" || c > "9" { return fallback }
+        let d: i64 = (c.code() - 48) as i64
+        acc = acc * 10 + d
+        i = i + 1
+    }
+    return acc * sign
+}

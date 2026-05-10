@@ -1,0 +1,63 @@
+// compiler/intrinsics/intrinsics_test.hexa
+//
+// Smoke test for compiler/intrinsics/intrinsics.hexa.
+//
+// v0 expectations (host: any POSIX shell):
+//   - now_ns() returns a positive i64 not earlier than 2024-01-01 in nanos
+//     (1704067200_000000000) and not absurdly far in the future.
+//   - host_target() returns one of the four canonical strings:
+//       arm64-darwin, x86_64-darwin, arm64-linux, x86_64-linux
+//   - mkdir_p(/tmp/_hexa_intrinsics_test_dir/a/b/c) returns 0 and the
+//     directory exists afterwards.
+//
+// English-only. No DiagBuilder. No commits.
+
+import "compiler/intrinsics/intrinsics.hexa"
+
+fn assert(cond: bool, label: string) {
+    if cond {
+        println("ok  - " + label)
+    } else {
+        println("FAIL - " + label)
+    }
+}
+
+fn test_now_ns() {
+    let t = now_ns()
+    assert(t > 1704067200000000000, "now_ns >= 2024-01-01")
+    assert(t < 4102444800000000000, "now_ns < 2100-01-01")
+}
+
+fn test_host_target() {
+    let h = host_target()
+    let ok = (h == "arm64-darwin")
+          || (h == "x86_64-darwin")
+          || (h == "arm64-linux")
+          || (h == "x86_64-linux")
+    assert(ok, "host_target canonical (" + h + ")")
+    // Cached: second call must equal first.
+    let h2 = host_target()
+    assert(h == h2, "host_target cached identical")
+}
+
+fn test_mkdir_p() {
+    let path = "/tmp/_hexa_intrinsics_test_dir/a/b/c"
+    let rc = mkdir_p(path)
+    assert(rc == 0, "mkdir_p rc==0")
+    // Idempotent: a second call must also succeed.
+    let rc2 = mkdir_p(path)
+    assert(rc2 == 0, "mkdir_p idempotent")
+    // Empty path is rejected.
+    let rc3 = mkdir_p("")
+    assert(rc3 != 0, "mkdir_p('') rejected")
+    // Cleanup is best-effort; we leave the dir behind so a manual rm -rf
+    // can confirm. Test does not require teardown.
+}
+
+pub fn main() {
+    println("# compiler/intrinsics smoke test (v0)")
+    test_now_ns()
+    test_host_target()
+    test_mkdir_p()
+    println("# done")
+}

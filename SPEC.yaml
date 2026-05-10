@@ -633,6 +633,59 @@ roadmap:
     E2: { effort: M,  goal: retire hexa_interp after stage3 fixed point }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Fork storm prevention (Decision 2026-05-09)
+# ─────────────────────────────────────────────────────────────────────────────
+# A per-build "fork storm" occurs when build-hot hexa code calls exec()
+# for trivial probes (date, uname, mkdir, test, rm). Inventory on
+# 2026-05-09 found ~1403 exec() sites across compiler/, tool/, and tests/.
+# The fix is a 4-level ladder: replace exec() with named intrinsics, then
+# back the intrinsics with libc FFI, then with raw syscalls. See
+# doc/fork_storm_inventory.md for the full call-site catalog and
+# compiler/intrinsics/intrinsics.hexa for the v0 module.
+fork_storm_prevention:
+  decision_2026_05_09: ladder_L0_to_L3_intrinsics_first
+  goal:
+    forks_per_build_today:    "5–10"
+    forks_per_build_target:   "≤2 (only `as` and `ld`)"
+  ladder:
+    L0:
+      name: fork_storm
+      meaning: "exec() scattered at every call site; 5–10 forks/build"
+      status: current_baseline
+    L1:
+      name: intrinsic_surface
+      meaning: "exec() centralized inside named intrinsic functions; bodies still fork once"
+      status: shipping_2026_05_09
+      module: compiler/intrinsics/intrinsics.hexa
+      first_three:
+        - now_ns
+        - host_target
+        - mkdir_p
+    L2:
+      name: libc_ffi
+      meaning: "intrinsic bodies call libc directly via hexa C-FFI; no shell"
+      status: deferred_pending_ffi_landing
+    L3:
+      name: raw_syscall
+      meaning: "intrinsic bodies emit platform syscall trap inline; zero exec()"
+      status: deferred_post_native_v1
+  exec_call_inventory:
+    snapshot_date: 2026-05-09
+    total_call_sites: 1403
+    files_touched: 265
+    top_categories:
+      - { name: date,   count: 160, intrinsic: now_ns_plus_format,      effort: S }
+      - { name: rm,     count: 123, intrinsic: rm_rf,                   effort: M }
+      - { name: echo,   count: 110, intrinsic: getenv,                  effort: S }
+      - { name: test,   count:  85, intrinsic: path_exists_is_dir_file, effort: S }
+      - { name: uname,  count:  84, intrinsic: host_target,             effort: S }
+      - { name: mkdir,  count:  78, intrinsic: mkdir_p,                 effort: S }
+      - { name: pwd,    count:  58, intrinsic: getcwd,                  effort: S }
+      - { name: ls,     count:  56, intrinsic: list_dir,                effort: M }
+      - { name: cd,     count:  45, intrinsic: call_site_rewrite,       effort: M }
+      - { name: git,    count:  38, intrinsic: keep_exec_v0,            effort: L }
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Open questions (NOT decisions)
 # ─────────────────────────────────────────────────────────────────────────────
 open_questions:
