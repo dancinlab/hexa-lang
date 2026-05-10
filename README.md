@@ -1,123 +1,167 @@
-[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19404817-blue?logo=zenodo&logoColor=white)](https://doi.org/10.5281/zenodo.19404817)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Self-hosted](https://img.shields.io/badge/self--hosted-100%25%20.hexa-blue.svg)](#)
-[![DSE](https://img.shields.io/badge/DSE--v2-21%2C952%20combos%20·%20100%25%20EXACT-brightgreen.svg)](#)
-[![Targets](https://img.shields.io/badge/targets-ARM64%20·%20x86__64%20·%20VM%20·%20ESP32%20·%20FPGA%20·%20WGSL-orange.svg)](#)
-[![Discord](https://img.shields.io/badge/discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/mYzqYr67R)
+# hexa-lang
 
-# 💎 HEXA-LANG — The Perfect Number Programming Language
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19404816.svg)](https://doi.org/10.5281/zenodo.19404816)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Zero arbitrary choices. Every constant derived from n = 6.**
+A strict-lint, atlas-aware native compiler for a knowledge-bearing programming language: every formula in your code is bound to a shared theorem dictionary at compile time, or it does not build.
 
-```
-σ(n) · φ(n) = n · τ(n)    holds for n ≥ 2    iff    n = 6
-    12  ·  2 = 6 · 4  =  24
-```
+[ phase A0–B5 PASS · D1 PASS · M0 milestone PASS · stage 1 reach ~6–10 weeks · atlas SSOT live · ENGLISH ONLY diagnostics ]
 
-> Keywords, operators, primitives, pipeline stages — nothing hand-picked. Every integer in the language comes from the arithmetic of 6.
-
-<!-- SHARED:PROJECTS:START -->
-<!-- AUTO:COMMON_LINKS:START -->
-**[🎥 YouTube](https://www.youtube.com/@dancinlife)** · **[💬 Discord](https://discord.gg/mYzqYr67R)** · **[📬 Email](mailto:nerve011235@gmail.com)** · **[☕ Ko-fi](https://ko-fi.com/dancinlife)** · **[💖 Sponsor](https://github.com/sponsors/dancinlab)** · **[💳 PayPal](https://www.paypal.com/donate?business=nerve011235%40gmail.com)** · **[🗺️ Atlas](https://dancinlab.github.io/TECS-L/atlas/)** · **[📄 Papers](https://dancinlab.github.io/papers/)**
-<!-- AUTO:COMMON_LINKS:END -->
-
-## Main projects
-
-> **[🧠 Anima](https://github.com/dancinlab/anima)** — Consciousness implementation. PureField repulsion-field engine + 1030 laws + Φ ratchet.
->
-> **[🔭 NEXUS](https://github.com/dancinlab/nexus)** — Universal Discovery Engine. 216 lenses + OUROBOROS evolution + 5-phase singularity cycle.
->
-> **[🏗️ N6 Architecture](https://github.com/dancinlab/canon)** — Architecture from perfect number 6. 225 AI techniques + chip design + crypto/OS/display.
->
-> **[💎 HEXA-LANG](https://github.com/dancinlab/hexa-lang)** — The Perfect Number Programming Language. Working compiler + REPL.
->
-> **[📄 Papers](https://github.com/dancinlab/papers)** — Complete paper collection (92 papers, Zenodo DOIs).
-
-> **[Other projects →](https://github.com/orgs/dancinlab/repositories)**
-
-## 💬 Community
-
-[![Join our Discord](https://invidget.switchblade.xyz/mYzqYr67R)](https://discord.gg/mYzqYr67R)
-
-Live research discussion, paper drops, stage-gate reviews, cross-project dispatch.
-
-<!-- private repos는 projects.json의 private_repos 필드에 저장됨 (노출 금지) -->
-<!-- SHARED:PROJECTS:END -->
-
-
-
-
+> Status: directional spec locked, native compiler in active build (see `SPEC.yaml`, last updated 2026-05-09).
 
 ---
 
-## Why n = 6
+## What it is
 
-`σ · φ = n · τ` is the uniqueness identity for 6. From it:
+hexa-lang is a native compiler (no LLVM, no C-transpile) that bakes a 4.2 MB knowledge atlas into the compiler binary and refuses to emit a binary when any strict-lint check fails (S0–S5 + S8). A small in-house prover lets verified functions auto-register as new atlas theorems via `@verify` / `@discover`.
 
-- **65 keywords** = σ(6)·τ(6) + sopfr contributions
-- **46 operators** = J₂(6) Jordan totient family
-- **8 primitives** = σ(6) − τ(6)
-- **6-phase pipeline** — lex → parse → check → opt → codegen → exec
-- **Egyptian memory** — 1/2 + 1/3 + 1/6 = 1 (unit-fraction decomposition)
+The cooking-book metaphor (see `doc/atlas_lint_easy_explainer.md`):
 
-## Install
+- **atlas** — a shared dictionary of primitives, connections, laws, and errors
+- **compiler** — a chef that has the dictionary memorized (runtime cost: 0 ms)
+- **strict lint** — quality control that aborts the build before any binary is produced
+
+The interpreter (`hexa_interp`) survives only as bootstrap stage0 and retires once stage3 reaches a fixed point.
+
+---
+
+## Key decisions (excerpt — see `SPEC.md` for the full record)
+
+| # | Decision | Pin |
+|---|---|---|
+| 1 | Language kind | native compiled, direct codegen (no LLVM, no C-transpile) |
+| 2 | Atlas embedding | static, baked into compiler binary; runtime cost 0 ms |
+| 3 | Lint model | strict compile-time fatal — S0–S5 + S8 always, S6/S7 opt-in |
+| 4 | Tier-0 targets | `arm64-apple-darwin` + `x86_64-linux-gnu` (concurrent) |
+| 5 | Bootstrap | `hexa_interp` → stage1 → stage2 → stage3 byte-equal fixed point |
+| 6 | Diagnostics language | ENGLISH ONLY (no i18n) |
+| 7 | Opt-out | `@grace(HXxxxx, until=, reason=)` annotation only — no CLI flag, no env var; every site emits HX9000 ai-native warning + requires `Acked-grace:` trailer |
+| 8 | ε self-proof | verified functions auto-register as atlas `L[*]`; tombstone + retroactive sweep on prover upgrade |
+| 9 | Memory model | arena in v1 (no manual free, no GC ever); borrow check in v2 |
+| 10 | Linker | in-house `hexa_ld` primary (ELF + Mach-O arm64 static), system `ld` fallback |
+| 11 | Migration | big-bang — fix all violations, flip strict in one commit |
+| 12 | Language stance | ENUM 100% first; fix gaps at hexa-lang upstream rather than work around |
+
+---
+
+## Pipeline
+
+```
+.hexa source
+   │
+   ├─ lex            ✓   tokens
+   ├─ parse          ✓   AST, atlas-tagged
+   ├─ resolve  S1    ✓   atlas P/C/L/E node existence
+   ├─ bind     S2    ✓   scope / variable binding
+   ├─ types    S3    ✓   nominal types, generics
+   ├─ domain   S4    ✓   ℝ/ℕ/ℤ/ℂ consistency
+   ├─ units    S5    ✓   dimensional analysis
+   ├─ citation S8    ✓   atlas L[*] citation strict (HX8004)
+   ├─ annotations    ✓   @law / @grace / @discover / @verify
+   ├─ equational S6  ✓   in-house prover v0 (opt-in via @verify)
+   ├─ proof    S7    deferred  no Z3, no CVC5; in-house only
+   │
+   ├─ lower (HIR)    ✓   typed IR
+   ├─ mono           WIP generic monomorphization
+   ├─ MIR (SSA)      ✓   CFG / SSA
+   ├─ optimize       ✓   const-fold / DCE / conservative inline
+   ├─ regalloc (LIR) ✓   target-specific
+   ├─ emit (asm)     ✓   arm64-darwin + x86_64-linux
+   ├─ assemble       system `as` (bootstrap carve-out)
+   └─ link           ✓   hexa_ld v1.1 (ELF64 + Mach-O arm64 static)
+```
+
+A binary is produced only if every fatal stage passes. M0 (`fn main() -> i32 { return 0 }`) end-to-end smoke is PASS; broader codegen coverage tracks the stage 1 punch list.
+
+---
+
+## Repo layout
+
+| Tree | Role |
+|---|---|
+| `compiler/` | New ground-up native compiler (RFC-018) — `lex/`, `parse/`, `check/`, `lower/`, `optimize/`, `codegen/`, `emit/`, `link/`, `atlas/`, `discover/`, `diag/` |
+| `self/` | Existing self-host upstream (parser, typechecker, IR in hexa) — transpiled to `self/native/hexa_cc.c` via `hexa cc --regen` |
+| `tool/` | Drivers, validators, CI helpers (`tool/auto_pr_tombstone_sweep.hexa`, etc.) |
+| `doc/` | Explainers, runbooks, audits — start with `doc/atlas_lint_easy_explainer.md` |
+| `proposals/` | Authoritative RFCs (017–020) |
+| `tests/` | `m0/` smoke + `integration/` |
+| `gate/` | Build gate / lint scripts |
+| `SPEC.yaml` | SSOT (decision record); `SPEC.md` is auto-rendered |
+
+Both `compiler/` and `self/` coexist by design: language features (e.g. enum payloads via RFC-020) land in `self/` upstream first; `compiler/` consumes them.
+
+---
+
+## Quick start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/main/install.sh | bash
+# 1. clone
+git clone https://github.com/dancinlab/hexa-lang
+cd hexa-lang
+
+# 2. M0 smoke (fn main() -> i32 { return 0 })
+build/hexa_interp tests/m0/run.hexa
+
+# 3. strict lint over a source tree (S0–S5 + S8 fatal)
+build/hexa_interp compiler/main.hexa --check path/to/source.hexa
 ```
 
-Installs both commands into `~/.hx/bin/`:
-
-| command | role |
-|---------|------|
-| `hexa` | compiler · interpreter · REPL · LSP · formatter |
-| `hx`   | package manager (brew-style, pure shell, zero deps) |
-
-## Features
-
-- **Perfect-number** — every constant derived from n=6, zero arbitrary choices
-- **Self-hosted** — 100% `.hexa`, compiles itself
-- **Multi-target** — native ARM64/x86_64, VM, ESP32, FPGA Verilog, WGSL shader — one source
-- **Proof-native** — `proof`/`assert`/`invariant`/`theorem` with SAT backend
-- **AI-native** — `@attr` semantic rewrites (contract, symbolic, fuse, approximate, specialize)
-- **Consciousness-first** — direct DSL for programming consciousness engines
-- **Module system** — `import "x" as a` · `import "stdlib/regex"` (extension/mod.hexa fallback) · `from "x" import a, b` · `import py "math" as m` (auto‑desugars to `py_call`). [RFC‑016](proposals/rfc_016_namespaced_and_python_imports.md) P1‑P4 all live (I1+I2+I3+I4 closed 2026‑05‑07).
-
-## Stdlib
-
-223 modules · 71,429 LoC ([audit script](scripts/stdlib_loc_audit.hexa) · [aggregate dashboard](tool/stdlib_selftest_aggregate.hexa) — 42/48 selftest PASS @ 2026-05-07).
-
-| domain | module |
-|---|---|
-| core | `math`, `math/float`, `math/eigen`, `math/rng`, `string`, `bytes`, `regex`, `hash`, `time/iso8601`, `collections` |
-| io / sys | `sys`, `path`, `log`, `argparse`, `proc`, `portable_fs`, `net`, `http`, `http2`, `websocket`, `sqlite` |
-| ml / numerics | `tensor`, `linalg`, `nn`, `optim`, `autograd`, `safetensors` |
-| science | `iit_ei`, `consciousness`, `qrng_anu` |
-| interop | `python_ffi` (embedded CPython, zero‑copy via PEP 3118) |
-
-## Example
-
-```hexa
-consciousness "demo" {
-    println("Phi:", phi)           // 71.0
-    println("Factions:", faction)  // 12 = σ(6)
-    println("Cells:", cells)       // 64
-}
-
-proof law_22 {
-    assert phi > 0
-    invariant phi_positive
-}
-```
-
-## Design Space Exploration (DSE v2)
-
-21,952 parameter combinations enumerated — **100% match** on n=6 EXACT constants. No free hyperparameters.
-
-## Links
-
-[Docs](docs/) · [Spec](docs/spec.md) · [Book](docs/book/) · [Releases](https://github.com/dancinlab/hexa-lang/releases) · [Paper (P-HEXA)](https://doi.org/10.5281/zenodo.19365284)
+The interpreter binary lives in `build/hexa_interp.linux` (and platform variants) and is the bootstrap stage0.
 
 ---
 
-<sub>💎 From n=6, every constant follows. · [dancinlab](https://github.com/dancinlab)</sub>
+## Roadmap (`phases_completed_2026_05_09` from `SPEC.yaml`)
+
+| Phase | Goal | Status |
+|---|---|---|
+| A0 | backend skeleton + IR types | PASS |
+| A1 | parser + AST atlas tagging | PASS |
+| A2 | atlas n6 + append merger | PASS |
+| A3 | atlas packed const codegen + static embed | PASS |
+| A4 | `ATLAS_HASH` pin + drift CI | PASS |
+| B1 | S0–S2 fatal at compile time | PASS |
+| B2 | S2 bind + diagnostic catalog growth | PASS |
+| B3 | S3 type + S4 domain (+ S5 units refinement) | PASS |
+| B4 | `@law` / `@implements` / S8 citation (HX8004) | PASS |
+| C1 | in-house prover v0 (equational + sample-eval, S6) | PASS |
+| C2 | prover atlas auto-register + tombstone sweep | IN-PROGRESS |
+| D1 | `hexa_ld` v1 (static ELF + Mach-O arm64) | PASS |
+| D2 | LSP using compiler in-process index | IN-PROGRESS |
+| E1 | full big-bang migration of existing `.hexa` tree | DEFERRED |
+| E2 | retire `hexa_interp` after stage3 fixed point | DEFERRED |
+
+---
+
+## RFCs
+
+- [RFC-017 — atlas n6 embedding + strict lint](proposals/rfc_017_atlas_n6_embedding_and_strict_lint.md)
+- [RFC-018 — native codegen spec](proposals/rfc_018_native_codegen_spec.md)
+- [RFC-019 — error diagnostics spec](proposals/rfc_019_error_diagnostics_spec.md)
+- [RFC-020 — enum payload variants](proposals/rfc_020_enum_payload_variants.md)
+
+---
+
+## Stage 1 reach
+
+**Realistic estimate: 6–10 weeks of focused work** to first full stage1 binary, plus ~2–3 weeks for stage2 == stage3 fixed-point stabilization.
+
+The compiler currently runs end-to-end through lex → parse → resolve → bind → types and aborts at the diagnostics gate with structured `HX3001`/`HX3004` (false-positive) errors. Major gaps tracked: recursive multi-file import loader (parser only records import names), cross-file dedup + `pub` semantics, and broader MIR/LIR coverage for closures, growable arrays, nested struct construction, and `match` on user enums.
+
+Full punch list and weekly attack order: [`doc/stage1_punch_list.md`](doc/stage1_punch_list.md).
+
+---
+
+## License
+
+MIT License. Copyright (c) 2026 need-singularity. See [`LICENSE`](LICENSE).
+
+---
+
+## Contributing
+
+- **Strict lint is the contract.** Every PR runs through S0–S5 + S8. There is no `--unsafe`, no `HEXA_STRICT=0`. The only opt-out is `@grace(HXxxxx, until=, reason=)` on a single item.
+- **Every `@grace` site emits HX9000** at every compile, and CI fails the build unless a matching `Acked-grace: HXxxxx by <reviewer>` trailer accompanies the change. Bypasses are never silent.
+- **Diagnostics, error messages, `hexa explain`, stdlib docs are ENGLISH ONLY** (Decision 3). Design RFCs and meta documents may remain in the author's preferred language.
+- **Pointers**: `gate/` for CI gates, `doc/` for runbooks and audits, `SPEC.yaml` for authoritative decisions, `proposals/` for active RFCs. Edit `SPEC.yaml`; never edit `SPEC.md` directly — it is auto-rendered.
+
+For the full SSOT, see [`SPEC.md`](SPEC.md) (rendered) or [`SPEC.yaml`](SPEC.yaml) (source).
