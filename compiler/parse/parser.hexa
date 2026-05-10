@@ -183,15 +183,54 @@ fn _push_parse_diag(code: string, span: Span, found: string) {
     p_diags.push(diag_emit(b))
 }
 
+// ── Resync (Gap 6) ───────────────────────────────────────────────
+// After HX0011/HX0012 emission the parser is in a known-bad state: the
+// expected `{`/`}` was missing AND the offending token may itself be a
+// top-level keyword that belongs to the *next* item. Without a resync
+// step the block-loop in `parse_block_expr` would happily inhale that
+// keyword as the body of the current fn, cascading every subsequent
+// item into a single mis-parsed structure (one HX → no further diags).
+//
+// `_skip_to_resync` advances tokens until ONE of:
+//   • a top-level keyword (KwFn / KwLet / KwStruct / KwEnum /
+//     KwImport / KwPub) — the start of a likely new item
+//   • `;` (Semicolon) — common stmt boundary
+//   • `}` (RBrace) — useful inside fn body recovery
+//   • Eof
+// The current token is NOT consumed when it already matches a sync
+// point — callers want the loop above to re-evaluate it. The helper
+// is otherwise idempotent (calling at a sync point is a no-op).
+fn _is_resync_kind(k: TokenKind) -> bool {
+    if same_kind(k, TokenKind::KwFn) { return true }
+    if same_kind(k, TokenKind::KwLet) { return true }
+    if same_kind(k, TokenKind::KwStruct) { return true }
+    if same_kind(k, TokenKind::KwEnum) { return true }
+    if same_kind(k, TokenKind::KwImport) { return true }
+    if same_kind(k, TokenKind::KwPub) { return true }
+    if same_kind(k, TokenKind::Semicolon) { return true }
+    if same_kind(k, TokenKind::RBrace) { return true }
+    if same_kind(k, TokenKind::Eof) { return true }
+    return false
+}
+
+fn _skip_to_resync() {
+    while !at_eof() {
+        let t = peek()
+        if _is_resync_kind(t.kind) { return }
+        advance()
+    }
+}
+
 fn expect_brace_open() -> Token {
     if check_kind(TokenKind::LBrace) {
         return advance()
     }
     let t = peek()
     _push_parse_diag("HX0011", t.span, tag_of(t.kind))
-    // Advance one token so the block loop doesn't deadlock on the same
-    // misshapen token. Skip when at EOF — caller's loop handles that.
-    if !at_eof() { advance() }
+    // Gap 6: skip-to-resync so we don't cascade — without this the
+    // block loop in parse_block_expr would absorb the next top-level
+    // keyword as an item inside the prior body and never recover.
+    _skip_to_resync()
     return Token { kind: TokenKind::LBrace, text: "{", span: t.span }
 }
 
@@ -201,9 +240,10 @@ fn expect_brace_close() -> Token {
     }
     let t = peek()
     _push_parse_diag("HX0012", t.span, tag_of(t.kind))
-    // No synthetic advance here: the block loop already exited on EOF or
-    // on a non-RBrace it could not consume; advancing now would skip an
-    // item the caller has yet to see.
+    // Gap 6: same skip-to-resync rationale. The block loop already
+    // exited (we're past it), so without resync the outer item loop
+    // resumes mid-body and re-parses garbage as items.
+    _skip_to_resync()
     return Token { kind: TokenKind::RBrace, text: "}", span: t.span }
 }
 
@@ -721,7 +761,12 @@ fn parse_block_expr() -> Expr {
     // without any visible diagnostic; a missing `}` would silently terminate.
     expect_brace_open()
     let mut kids = []
-    while !check_kind(TokenKind::RBrace) && !at_eof() {
+    // Gap 6: bail on a top-level item keyword inside a block body so a
+    // missing `}` doesn't cause us to inhale the next fn/struct/enum as
+    // a body statement. The check below recognizes the same keyword set
+    // as `_is_resync_kind` minus `;`/`}`/Eof (those already terminate
+    // the block via the outer condition).
+    while !check_kind(TokenKind::RBrace) && !at_eof() && !_block_should_bail() {
         let e = parse_stmt()
         kids.push(e)
         // optional ;
@@ -735,6 +780,20 @@ fn parse_block_expr() -> Expr {
         children: kids,
         atlas_ref: empty_atlas()
     }
+}
+
+// Gap 6 (block-loop guard): peek at the current token to decide whether
+// the block loop should stop and let `expect_brace_close` fire HX0012.
+// Restricted to *top-level item starters* to avoid stopping on inner
+// `let`/`return`/`if` keywords that legitimately appear in stmt streams.
+fn _block_should_bail() -> bool {
+    let t = peek()
+    if same_kind(t.kind, TokenKind::KwFn) { return true }
+    if same_kind(t.kind, TokenKind::KwStruct) { return true }
+    if same_kind(t.kind, TokenKind::KwEnum) { return true }
+    if same_kind(t.kind, TokenKind::KwImport) { return true }
+    if same_kind(t.kind, TokenKind::KwPub) { return true }
+    return false
 }
 
 fn parse_if_expr() -> Expr {

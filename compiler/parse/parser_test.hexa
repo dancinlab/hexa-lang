@@ -55,6 +55,16 @@ fn dump_module(label: string, src: string) {
         println("    [" + to_string(i) + "] " + item_kind_str(it.kind) + " " + it.name + suffix)
         i = i + 1
     }
+    let diags = parse_diags()
+    if len(diags) > 0 {
+        println("  parse_diags=" + to_string(len(diags)))
+        let mut d = 0
+        while d < len(diags) {
+            let dg = diags[d]
+            println("    <" + dg.code + "> " + dg.message)
+            d = d + 1
+        }
+    }
 }
 
 fn case_basic_fn() {
@@ -95,6 +105,26 @@ fn case_assignment() {
     dump_module("case 7: assignment + compound assign", src)
 }
 
+// Stage1 punch list Gap 6 — error-recovery cases. Each malformed source
+// should emit the brace diag AND let the parser resynchronize so the
+// next top-level item still parses (visible as a non-zero items count).
+
+fn case_missing_open_brace() {
+    // Missing `{` for fn body — HX0011 fires; without resync the parser
+    // would try to parse `return 0 }` as the body and absorb the rest.
+    // After resync we expect 1× HX0011 and items >= 1.
+    let src = "fn main() return 0 }\nfn after() -> i64 { return 1 }"
+    dump_module("case h: missing { (HX0011 + resync)", src)
+}
+
+fn case_missing_close_brace() {
+    // Missing `}` for fn body — HX0012 fires; resync at next `fn` keyword
+    // so `next()` parses as its own item rather than being eaten as part
+    // of `main`'s body. Expect 1× HX0012 and items == 2.
+    let src = "fn main() { return 0   fn next() {}"
+    dump_module("case i: missing } (HX0012 + resync)", src)
+}
+
 println("══════════════════════════════════════════════")
 println("  HEXA Compiler — Parser Smoke Test (A1)")
 println("══════════════════════════════════════════════")
@@ -105,5 +135,7 @@ case_enum_and_match()
 case_struct_literal()
 case_for_loop()
 case_assignment()
+case_missing_open_brace()
+case_missing_close_brace()
 println("══════════════════════════════════════════════")
 println("  done.")
