@@ -39,6 +39,21 @@ pub let mut p_diags: array = []
 // (canonicalized) absolute-or-repo-relative paths so cycles + diamond
 // re-imports terminate after a single load.
 pub let mut p_visited_imports: [string] = []
+// Stage1 punch list A2 — in-place splice accumulator. The original
+// `_splice_imported_items` allocated a fresh `[Item]` per recursion level
+// and copied items between them; under stage0 this triggers monotonic
+// `array_store` growth (M4-fix freelist is disabled, so dead per-level
+// arrays are never reclaimed) and dominated peak RSS at 3.5 GB during
+// stage 1 self-compile (commit d99be4bd post-A1 measurement).
+//
+// Refactor: single module-scoped accumulator, refcount stays at 2 (module
+// binding), every `p_splice_acc.push(it)` hits the
+// `array_is_push_sole_owner` fast path in stage0's runtime
+// (`self/hexa_full.hexa::array_push_inplace`). One backing array for the
+// whole spliced super-module; resize cost amortises to host
+// `Array.push()`. Reset at the top of every `parse()` entry just like
+// `p_visited_imports`.
+pub let mut p_splice_acc: [Item] = []
 // While true, an ident-followed-by-LBrace is *not* parsed as a struct literal
 // (so `if cond { body }` doesn't read `cond { ... }` as `StructLit`). The
 // guard parsing functions toggle this around their condition expressions.
@@ -1307,14 +1322,29 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
 
 // Walk newly-parsed items, find each Import, resolve its path, and load the
 // referenced file. Items spliced from imported files keep their origin
-// `span.file` so diagnostics still attribute correctly. Returns the
-// (possibly extended) item list.
-fn _splice_imported_items(items: [Item], importer: string) -> [Item] {
-    let mut out: [Item] = []
+// `span.file` so diagnostics still attribute correctly.
+//
+// Stage1 punch list A2 — in-place accumulator pivot. Pushes go directly
+// into the module-scoped `p_splice_acc` so every push hits the stage0
+// runtime's sole-owner fast path. The previous shape returned a freshly
+// allocated `[Item]` from each recursion level — the inner array stayed
+// referenced via the parent's `inner_items` binding AND the parent's
+// `out` accumulator, then both were retained via the `Module.items`
+// struct-field box. With `array_free_list` disabled (M4-fix in
+// `self/hexa_full.hexa`), every level leaked its intermediate slot,
+// driving `array_store` from O(N) into O(N · D) where N=spliced items
+// and D=import depth. Single accumulator collapses this to O(N).
+//
+// Semantics preserved: leaves-first splice order (the recursive load of
+// an import's own imports happens before we move on to the importer's
+// next sibling item), per-item `span.file` attribution (we never rewrite
+// items, only re-parent them), and the visited-set short-circuit for
+// cycles/diamonds.
+fn _splice_imported_items(items: [Item], importer: string) {
     let mut i = 0
     while i < len(items) {
         let it = items[i]
-        out.push(it)
+        p_splice_acc.push(it)
         if item_is_import(it.kind) {
             let resolved = _resolve_import_path(importer, it.name)
             if _visited_contains(resolved) {
@@ -1330,33 +1360,31 @@ fn _splice_imported_items(items: [Item], importer: string) -> [Item] {
                     // Recurse into the inner module's imports first so the
                     // splice order is leaves-first (depends-of-depends loaded
                     // before their dependents) — matches self/module_loader
-                    // semantics.
-                    let inner_items = _splice_imported_items(inner.items, resolved)
-                    let mut k = 0
-                    while k < len(inner_items) {
-                        out.push(inner_items[k])
-                        k = k + 1
-                    }
+                    // semantics. The recursion writes directly into
+                    // `p_splice_acc`; no intermediate `[Item]` allocation.
+                    _splice_imported_items(inner.items, resolved)
                 }
             }
         }
         i = i + 1
     }
-    return out
 }
 
 pub fn parse(tokens: [Token], file: string) -> Module {
     p_diags = []
     p_visited_imports = []
+    // A2: reset the splice accumulator. A single backing slot is shared
+    // for the whole spliced super-module; pushes mutate in place.
+    p_splice_acc = []
     // Mark the entry file as visited so a self-import does not loop.
     let entry_resolved = _import_normalize(file)
     p_visited_imports.push(entry_resolved)
     let top = _parse_module_one(tokens, file)
-    let merged_items = _splice_imported_items(top.items, file)
+    _splice_imported_items(top.items, file)
     // `imports` reflects only the entry file's direct imports — used for
     // diagnostics/UI. The flat-splice pivot puts the actual cross-file items
-    // in `merged_items`.
-    return Module { file: file, items: merged_items, imports: top.imports }
+    // in `p_splice_acc`.
+    return Module { file: file, items: p_splice_acc, imports: top.imports }
 }
 
 // Drain parser-stage diagnostics emitted during the most recent parse().
