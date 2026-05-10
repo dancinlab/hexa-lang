@@ -121,3 +121,13 @@
   status: pending_external
   opened: 2026-05-10
   detail: patches/wilson-needs-hexa-real-promotion.md
+
+- id: wilson-needs-streaming-http-sse
+  source: wilson session — de-STUBbing provider-anthropic found stdlib/http_sse.hexa (claimed in wilson's gap-audit) does NOT exist; only buffered anthropic_send/http2_post available.
+  trees: [stdlib, runtime]
+  compiler_impact: new stdlib/http_sse.hexa (curl -fsN streaming + SSE parser, handle + callback forms, POST-with-body) OR confirm/wrap the existing runtime exec_stream_async/poll/close (AOT-only today). Consumer (wilson provider-anthropic) already written against the (a) handle surface.
+  selftest_delta: + a stdlib/http_sse selftest (mock SSE stream)
+  status: pending_external
+  priority: 2 (not a hard blocker — buffered works; this = token-by-token streaming UX)
+  opened: 2026-05-10
+  detail: patches/wilson-needs-streaming-http-sse.md
