@@ -1,0 +1,45 @@
+# incoming/PATCHES.yaml — 활성 upstream patch 매니페스트
+# 스키마: list of { id, source, trees, compiler_impact, selftest_delta, status, opened, note, detail }
+# status: pending_external | spec | in_progress | synced | archived  (INBOX.md 참조)
+# trees: 영향 받는 트리 — [self, compiler] 중 해당되는 것
+
+- id: rfc020-enum-payload-variants
+  source: proposals/rfc_020_enum_payload_variants.md (2026-05-09) + self/parser.hexa@3c8be96c (A1) + self/type_checker.hexa (A2/A3) + self/native/hexa_cc.c (A4 partial)
+  trees: [self, compiler]
+  compiler_impact: |
+    self/ — A1 parser construction E::V(x) DONE (3c8be96c), A2 typechecker payload-type
+    table DONE (enum_all_variant_payload_types / tc_register_enum_variant_payload /
+    tc_lookup_variant_payload), A3 pattern binding DONE (type_checker.hexa:1128), A4
+    codegen PARTIAL (hexa_cc.c — construction emits [tag,payload] HexaVal array;
+    match-extraction + binding-var emit 검증 필요). A5 regression test PENDING.
+    compiler/ — parse/ast.hexa ExprKind.EnumPath / ItemKind.Enum 는 payload-free
+    (주석: "stage0 enum variants cannot carry payloads yet" — STALE, A1-A3 후 갱신 필요).
+    Expr.children[] 에 payload AST 를 실어야 함. ir/{hir,mir,lir}.hexa 의 string-`kind`
+    discriminator → enum payload sum type 마이그레이션 (RFC-020 §5, Phase B1/B2).
+  selftest_delta: "+N (self/test_enum_payload_full.hexa 신설 — A5)"
+  status: in_progress
+  opened: 2026-05-10
+  note: |
+    wilson pi-port 의 load-bearing 갭 G1. ai 패키지의 AssistantMessageEvent =
+    discriminated union 이라 이게 완성돼야 hexa-strict 로 표현 가능. RFC doc 의
+    "미구현" 표기는 STALE — A1-A3 이미 land, A4 마무리 + A5 + B1/B2 만 남음.
+  detail: patches/rfc020-enum-payload-variants.md
+
+- id: wilson-pi-port-6-gap-prereq
+  source: ~/core/wilson/docs/hexa-lang-gap-audit.md (2026-05-10, commit dancinlab/wilson)
+  trees: [self, compiler]
+  compiler_impact: |
+    wilson core (pi-mono {agent→core,ai,tui,coding-agent} hexa-native 재포팅) 착수
+    전 hexa-lang 이 채워야 할 6개 갭. G1 payload-enum (= 위 entry), G2 async 실행
+    의미론 + interp parity (async fn/await/yield 파싱 OK, 실행 의미론 미완 +
+    exec_stream_async AOT-only), G3 cancel-token (AbortSignal 등가물 — exec/http_sse
+    에 미연결), G4 stdlib/jsonschema (tool-arg validator), G5 self/stdlib/fs
+    atomic-append+stat 보강, G6 stdlib/jsonl_pool + channel backpressure (swarm용,
+    P2). 상세 + .roadmap.{codegen,runtime,stdlib} 엔트리 초안은 detail 파일.
+  selftest_delta: "TBD per gap"
+  status: spec
+  opened: 2026-05-10
+  note: |
+    G1 만 in_progress, G2~G6 은 spec. G4/G5 는 순수 stdlib (저위험, 바로 가능),
+    G2 가 두번째 load-bearing (가장 큼). wilson core 착수 게이트 = G1+G2(+G3) done.
+  detail: patches/wilson-pi-port-6-gap-prereq.md

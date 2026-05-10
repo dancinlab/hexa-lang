@@ -1,0 +1,141 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test_enum_payload_full.hexa — RFC-020 A5 regression test
+//
+//  Covers single-field enum payload variants end-to-end:
+//    construction `E::V(x)` (A1) → typecheck payload type + pattern binding
+//    (A2/A3) → codegen match-side payload extraction + arm-scope binding (A4).
+//
+//  Must PASS on BOTH `hexa run` (interpreter) AND `hexa build … && ./bin`
+//  (native codegen) with byte-identical stdout — RFC-020 §7-1.
+//
+//  Note: the Linux interpreter build at ~/.hx/bin/hexa_real (2026-04-27)
+//  predates commit 3c8be96c (RFC-020 A1) — there `E::V(x)` drops the payload
+//  as `void`. Run on a current build (Mac hexa.real, or rebuilt self/).
+//
+//  Sister test: self/test_enum_variant.hexa (the original int-only single case).
+// ═══════════════════════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  RFC-020 A5: enum payload variants — full regression")
+println("═══════════════════════════════════════════════════════")
+println("")
+
+// ── 1. Int payload — construction + match capture + arithmetic on captured ──
+//     (= self/test_enum_variant.hexa baseline, expanded)
+
+println("--- 1. Int payload ---")
+
+enum Shape {
+    Circle(Int),
+    Square(Int),
+    Unit,
+}
+
+fn shape_area(s) {
+    return match s {
+        Shape::Circle(r) -> r * r * 3,
+        Shape::Square(side) -> side * side,
+        Shape::Unit -> 0,
+    }
+}
+
+check("1.1 Circle(2) area", shape_area(Shape::Circle(2)), 12)
+check("1.2 Square(5) area", shape_area(Shape::Square(5)), 25)
+check("1.3 Unit area", shape_area(Shape::Unit), 0)
+check("1.4 captured var arithmetic (Circle 10)", shape_area(Shape::Circle(10)), 300)
+check("1.5 expr-arg construction Square(3+4)", shape_area(Shape::Square(3 + 4)), 49)
+
+// ── 2. String payload — match capture + string ops on captured ──
+
+println("")
+println("--- 2. String payload ---")
+
+enum Outcome {
+    Ok(Int),
+    Err(String),
+}
+
+fn describe(o) {
+    return match o {
+        Outcome::Ok(code) -> "ok:" + to_string(code),
+        Outcome::Err(msg) -> "err:" + msg,
+    }
+}
+
+check("2.1 Ok(200)", describe(Outcome::Ok(200)), "ok:200")
+check("2.2 Err(\"not found\")", describe(Outcome::Err("not found")), "err:not found")
+check("2.3 Err empty", describe(Outcome::Err("")), "err:")
+
+// ── 3. Nested match — payload variant whose handling matches again ──
+
+println("")
+println("--- 3. Nested match ---")
+
+fn classify(s) {
+    return match s {
+        Shape::Circle(r) -> match r {
+            0 -> "degenerate-circle",
+            _ -> "circle",
+        },
+        Shape::Square(_) -> "square",
+        Shape::Unit -> "unit",
+    }
+}
+
+check("3.1 nested: Circle(0)", classify(Shape::Circle(0)), "degenerate-circle")
+check("3.2 nested: Circle(7)", classify(Shape::Circle(7)), "circle")
+check("3.3 nested: Square(4)", classify(Shape::Square(4)), "square")
+check("3.4 nested: Unit", classify(Shape::Unit), "unit")
+
+// ── 4. Struct-embed payload (RFC-020 §3.1 core pattern) — A4 frontier ──
+//     All multi-field ADTs are expressed as single-field struct-payload.
+//     If codegen A4 doesn't yet extract struct payloads, these are the
+//     fail points to fix (gen2_match_cond struct-payload binding).
+
+println("")
+println("--- 4. Struct-embed payload (A4 frontier) ---")
+
+struct RectData { w: int, h: int }
+
+enum Region {
+    Rect(RectData),
+    Point2,
+}
+
+fn region_area(rg) {
+    return match rg {
+        Region::Rect(rd) -> rd.w * rd.h,
+        Region::Point2 -> 0,
+    }
+}
+
+check("4.1 Rect(3x4) area", region_area(Region::Rect(RectData { w: 3, h: 4 })), 12)
+check("4.2 Point2 area", region_area(Region::Point2), 0)
+check("4.3 Rect(7x6) area", region_area(Region::Rect(RectData { w: 7, h: 6 })), 42)
+
+// ── summary ──
+
+println("")
+println("═══════════════════════════════════════════════════════")
+println("  passed: " + to_string(pass_count) + " / " + to_string(pass_count + fail_count))
+println("═══════════════════════════════════════════════════════")
+if fail_count == 0 {
+    println("RFC-020 A5 enum payload full — OK")
+} else {
+    println("RFC-020 A5 — " + to_string(fail_count) + " FAIL (see above)")
+}
+assert fail_count == 0
+println(to_string(pass_count) + " passed")
