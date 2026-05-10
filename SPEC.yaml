@@ -228,6 +228,19 @@ bootstrap:
     stage_2: { tool: stage_1,     output: "stage3 compiler" }
     stage_3: { tool: stage_2,     fixed_point: "byte-equal to stage2" }
   retire_interpreter_after: stage3_settled
+  # Witness paths for stage 2 self-compile + stage 3 fixed-point harness.
+  # Both harnesses exit 0 (DEFERRED) when their inputs are missing so CI
+  # does not block while A2 (stage 1 binary) is in flight. See
+  # doc/bootstrap_stage_2_3.md for the full failure-mode triage list.
+  witness_paths:
+    stage_2_smoke:        tests/bootstrap/stage_2_smoke.hexa
+    stage_3_fixed_point:  tests/bootstrap/stage_3_fixed_point.hexa
+    driver:               tests/bootstrap/run_bootstrap.sh
+    doc:                  doc/bootstrap_stage_2_3.md
+    expected_artifacts:
+      stage_2_binary:     /tmp/hexa_stage_2
+      stage_3_binary:     /tmp/hexa_stage_3
+      m0_asm_emitted:     /tmp/m0_s2.s
 
   # Interpret-mode after stage3 (Decision 2026-05-09 — D+B)
   #

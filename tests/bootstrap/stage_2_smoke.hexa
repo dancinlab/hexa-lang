@@ -1,0 +1,132 @@
+// tests/bootstrap/stage_2_smoke.hexa - Stage 1 to Stage 2 self-compile smoke.
+//
+// Bootstrap stage definitions (SPEC.yaml bootstrap.stages):
+//   stage_0  hexa_interp (interpreter)               - already in tree
+//   stage_1  native compiler binary, produced by     - A2 work in flight
+//            stage_0 running compiler/main.hexa
+//   stage_2  native compiler binary, produced by     - THIS HARNESS
+//            stage_1 re-compiling compiler/main.hexa
+//   stage_3  byte-equal to stage_2 (fixed point)     - stage_3_fixed_point.hexa
+//
+// What this smoke test does:
+//   1. Locate a stage 1 binary candidate.
+//   2. If absent: print "deferred" and exit 0 - must not block CI while A2
+//      is still landing the stage 1 build.
+//   3. If present: invoke `<stage_1> build compiler/main.hexa -o /tmp/hexa_stage_2`,
+//      verify the resulting file exists, chmod +x, then exercise the M0
+//      smoke path (compile tests/m0/hello.hexa to /tmp/m0_s2.s) to confirm
+//      the freshly produced stage 2 binary is functional.
+//
+// Exit codes:
+//   0   PASS or DEFERRED (stage 1 not yet available)
+//   1   stage 2 build attempted but produced no binary
+//   2   stage 2 binary produced but failed to compile M0 hello.hexa
+//
+// Stage 1 binary search order (matches A2 expected output paths; if more
+// candidates land, append here):
+//   $HEXA_STAGE_1                         - explicit env override
+//   build/hexa_stage_1                    - vendored output of stage 0 build
+//   build/hexa_stage_1.darwin             - host-tagged stage 0 output
+//   build/hexa_stage_1.linux
+//   self/native/hexa_stage_1              - alongside existing self/native/
+//
+// This harness intentionally only uses primitives present in current host
+// hexa_interp: exec(), file_exists(), println(), eprintln(), exit(), string
+// concat. No new builtins required.
+
+fn _path_exists(p: string) -> bool {
+    // file_exists is the canonical hexa_interp host wrapper around access(F_OK).
+    // It returns true for files, dirs, and symlinks alike - sufficient here.
+    return file_exists(p)
+}
+
+fn _trim(s: string) -> string {
+    return s.trim()
+}
+
+fn _exec(cmd: string) -> string {
+    // exec() returns whatever the host runtime produces; in current hexa_interp
+    // this is a string of the captured stdout. Callers compare via .trim().
+    return to_string(exec(cmd))
+}
+
+fn _is_executable(p: string) -> bool {
+    if !_path_exists(p) { return false }
+    let r = _trim(_exec("test -x '" + p + "' && echo y || echo n"))
+    return r == "y"
+}
+
+fn find_stage_1_binary() -> string {
+    // 1) explicit env override - easiest for A2 hand-off.
+    let env_path = env("HEXA_STAGE_1")
+    if env_path != "" && _is_executable(env_path) {
+        return env_path
+    }
+
+    // 2) repo-local vendored candidates. We don't try to detect the host
+    //    triple here - A2 may settle on one canonical path; for now accept
+    //    several so the harness lights up the moment the first one lands.
+    let candidates = [
+        "build/hexa_stage_1",
+        "build/hexa_stage_1.darwin",
+        "build/hexa_stage_1.linux",
+        "self/native/hexa_stage_1",
+    ]
+    let mut i = 0
+    while i < len(candidates) {
+        let c = candidates[i]
+        if _is_executable(c) {
+            return c
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+pub fn main() -> i32 {
+    println("[stage_2_smoke] start")
+
+    let stage_1 = find_stage_1_binary()
+    if stage_1 == "" {
+        println("[stage_2_smoke] stage 1 binary not found; deferred")
+        println("[stage_2_smoke] (set HEXA_STAGE_1=/abs/path or vendor build/hexa_stage_1)")
+        return 0
+    }
+    println("[stage_2_smoke] stage 1 = " + stage_1)
+
+    // Step 2: compile the compiler source with stage 1 to produce stage 2.
+    let stage_2_path = "/tmp/hexa_stage_2"
+    // Wipe any prior artifact so a stale file does not produce a false PASS.
+    let _rm = _exec("rm -f '" + stage_2_path + "' 2>/dev/null")
+
+    let build_cmd = "'" + stage_1 + "' build compiler/main.hexa -o '" + stage_2_path + "' 2>&1"
+    println("[stage_2_smoke] build: " + build_cmd)
+    let build_out = _exec(build_cmd)
+    if build_out != "" {
+        println("[stage_2_smoke] build output: " + build_out)
+    }
+
+    if !_path_exists(stage_2_path) {
+        eprintln("[stage_2_smoke] FAIL: stage 2 binary not produced at " + stage_2_path)
+        return 1
+    }
+    println("[stage_2_smoke] stage 2 binary present at " + stage_2_path)
+
+    // Step 3: ensure executable, then run M0 hello.hexa through the new binary.
+    let m0_asm = "/tmp/m0_s2.s"
+    let _rm2 = _exec("rm -f '" + m0_asm + "' 2>/dev/null")
+    let m0_cmd = "chmod +x '" + stage_2_path + "' && '" + stage_2_path +
+                 "' run tests/m0/hello.hexa --emit=asm -o '" + m0_asm + "' 2>&1"
+    println("[stage_2_smoke] m0:    " + m0_cmd)
+    let m0_out = _exec(m0_cmd)
+    if m0_out != "" {
+        println("[stage_2_smoke] m0 output: " + m0_out)
+    }
+    if !_path_exists(m0_asm) {
+        eprintln("[stage_2_smoke] FAIL: M0 asm not emitted at " + m0_asm)
+        return 2
+    }
+    println("[stage_2_smoke] M0 asm emitted at " + m0_asm)
+    println("[stage_2_smoke] PASS")
+    return 0
+}
