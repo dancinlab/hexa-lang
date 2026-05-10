@@ -1,0 +1,74 @@
+# spec/hexa_macho_gate.spec.yaml
+#
+# Declarative SSOT for the macOS hexa Mach-O gate (Decision 2026-05-09).
+# Phase A scope. Mode: warn-only. Sister documents:
+#   - SPEC.yaml :: macos_machO_gate (high-level decision record)
+#   - doc/macos_machO_gate.md (narrative)
+#   - tool/wrappers/hexa_top_wrapper.sh (Phase B reference wrapper)
+#   - tool/lint_macho_gate.hexa (LINT-MACHO-1 — .hexa exec() call sites)
+#   - tool/lint_macho_gate_invocations.hexa (LINT-MACHO-2 — shell + CI invocation surface)
+#
+# Schema is intentionally minimal: a falsifier set + a mode + a bypass.
+# Anything load-bearing (warning text, install steps) lives in SPEC.yaml or
+# the reference wrapper to avoid drift.
+
+schema_version: 1
+spec_id: hexa_macho_gate
+status: phase_A_warn_only
+last_updated: 2026-05-09
+authoritative_decision: SPEC.yaml::macos_machO_gate
+
+mode: warn          # warn | block. Phase A locks this at warn.
+phase: A            # A = repo lint + spec, B = $HOME/.hx/bin/hexa wrapper, C = strict block.
+
+bypass:
+  env_var: HEXA_LINT_MACHO_DISABLE
+  value:   "1"
+  rationale: |
+    Per-shell-session escape hatch for cases where the call site genuinely
+    cannot be modified (vendored scripts, transient debug). Not a long-term
+    silencer — the Phase C promotion will remove this bypass.
+
+silenced_by:
+  - cli_flag: --Mach-O
+  - env_var:  HEXA_TARGET_MACHO=1
+
+falsifiers:
+  - id: F-HEXA-MACHO-1
+    statement: |
+      Any consumer-visible `hexa run` or `hexa batch` invocation in the
+      hexa-lang repository must either (a) carry the `--Mach-O` flag, or
+      (b) be preceded by an `HEXA_TARGET_MACHO=1` env export. Otherwise
+      the call is implicitly using the stage0 interpreter on macOS hosts
+      and the intent is ambiguous.
+    detection_surface:
+      - shell_scripts:    "*.sh, *.bash, *.zsh"
+      - ci_workflows:     ".github/workflows/*.{yml,yaml}"
+    excluded_surface:
+      - hexa_source:      ".hexa files (covered by LINT-MACHO-1)"
+      - markdown_prose:   "*.md (documentation; not executable)"
+      - lint_internals:   "tool/lint_macho_gate*.hexa, tool/wrappers/* (the gate itself)"
+      - test_fixtures:    "test/, _spec_runner_selftest_fixtures/, _bench_runner_selftest_fixtures/"
+      - cache_dirs:       ".hexa-cache/, .raw-cache/, .hook-commands/, .meta2-cert/, .l5-discovery/"
+    severity: warn
+    block_phase: C
+
+  - id: F-HEXA-MACHO-2
+    statement: |
+      The Phase B top wrapper (`$HOME/.hx/bin/hexa`) and the in-repo
+      reference wrapper (`tool/wrappers/hexa_top_wrapper.sh`) must emit
+      byte-identical warning text. Drift between the two is itself a
+      gate violation and is detected by the lint's coherence check.
+    detection_surface:
+      - reference_wrapper: "tool/wrappers/hexa_top_wrapper.sh"
+      - spec_template:     "SPEC.yaml::macos_machO_gate.warning_template"
+    severity: warn
+    block_phase: C
+
+cross_references:
+  decision_record:    SPEC.yaml::macos_machO_gate
+  narrative_doc:      doc/macos_machO_gate.md
+  reference_wrapper:  tool/wrappers/hexa_top_wrapper.sh
+  source_lint:        tool/lint_macho_gate.hexa            # LINT-MACHO-1 (.hexa exec)
+  invocation_lint:    tool/lint_macho_gate_invocations.hexa # LINT-MACHO-2 (sh + CI)
+  cli_audit:          doc/nexus_cli_audit.md               # absorption plan context

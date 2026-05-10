@@ -1,0 +1,257 @@
+// tool/lint_macho_gate_invocations.hexa — LINT-MACHO-2 (warn-only, Phase A)
+//
+// Sister of tool/lint_macho_gate.hexa. Where LINT-MACHO-1 scans `.hexa`
+// source for `exec("hexa run …")`-style call sites, this rule scans the
+// REPO'S INVOCATION SURFACE — shell scripts and CI workflow yaml — for
+// bare `hexa run` / `hexa batch` calls that lack `--Mach-O` or a
+// preceding `HEXA_TARGET_MACHO=1` opt-in.
+//
+// Spec: spec/hexa_macho_gate.spec.yaml (falsifier F-HEXA-MACHO-1)
+// Mode: warn (Phase A — never blocks). Phase C may promote to block-1.
+// Bypass: HEXA_LINT_MACHO_DISABLE=1 in env (per-shell escape hatch).
+//
+// usage:
+//   hexa tool/lint_macho_gate_invocations.hexa                 — scan cwd, warn-only
+//   hexa tool/lint_macho_gate_invocations.hexa --root=<dir>    — scan <dir>
+//   hexa tool/lint_macho_gate_invocations.hexa --selftest      — internal selftest
+//
+// Output: one LINT-MACHO-2 line per finding on stdout, plus a JSON
+// summary trailer (schema: hexa.lint_macho_gate_invocations.v1).
+// ENGLISH ONLY (matches Phase B wrapper's ai-native English directive).
+
+fn _default_root() -> string {
+    return to_string(exec("pwd")).trim()
+}
+
+fn _is_macos() -> bool {
+    let u = to_string(exec("uname -s 2>/dev/null")).trim()
+    return u == "Darwin"
+}
+
+fn _bypass_active() -> bool {
+    let v = to_string(exec("printf '%s' \"$HEXA_LINT_MACHO_DISABLE\""))
+    return v == "1"
+}
+
+// Scan surface — shell scripts (*.sh, *.bash, *.zsh) and CI workflow yaml.
+// Excludes caches, vendored dirs, the gate's own internals, test fixtures,
+// and prose/grammar trees that mention `hexa run` as text rather than as
+// an executable invocation. Mirrors spec.detection_surface +
+// spec.excluded_surface.
+fn _scan_files(root: string) -> array {
+    let prune_dirs = "-path '*/.git' -prune -o -path '*/.hx' -prune -o -path '*/node_modules' -prune -o -path '*/target' -prune -o -path '*/.hexa-cache' -prune -o -path '*/.raw-cache' -prune -o -path '*/.hook-commands' -prune -o -path '*/.meta2-cert' -prune -o -path '*/.claude' -prune -o -path '*/.hexa-init' -prune -o -path '*/archive' -prune -o -path '*/proposals' -prune -o -path '*/convergence' -prune -o -path '*/.l5-discovery' -prune -o -path '*/.raw-exemptions' -prune -o -path '*/_spec_runner_selftest_fixtures' -prune -o -path '*/_bench_runner_selftest_fixtures' -prune"
+    let cmd_sh = "find " + root + " " + prune_dirs + " -o -type f \\( -name '*.sh' -o -name '*.bash' -o -name '*.zsh' \\) -print 2>/dev/null"
+    let cmd_yml = "find " + root + "/.github/workflows " + "-type f \\( -name '*.yml' -o -name '*.yaml' \\) -print 2>/dev/null"
+    let raw_sh = to_string(exec(cmd_sh))
+    let raw_yml = to_string(exec(cmd_yml))
+    let files = []
+    let s_lines = split(raw_sh, "\n")
+    for ln in s_lines {
+        let t = ln.trim()
+        if t == "" { continue }
+        // Skip the gate's own internals — they reference the flag/env in
+        // grep patterns, not as invocations.
+        if t.contains("/tool/lint_macho_gate") { continue }
+        if t.contains("/tool/wrappers/hexa_top_wrapper") { continue }
+        files.push(t)
+    }
+    let y_lines = split(raw_yml, "\n")
+    for ln in y_lines {
+        let t = ln.trim()
+        if t == "" { continue }
+        files.push(t)
+    }
+    return files
+}
+
+// True iff the line plausibly invokes `hexa run` or `hexa batch` as a
+// command (not as documentation prose). Conservative on both sides:
+//   - left  side: `hexa` must be at SOL, after whitespace, or after `/`
+//                 (e.g. `$HOME/.hx/bin/hexa run`).
+//   - right side: `run`/`batch` must be followed by whitespace or EOL —
+//                 NOT by another letter (rejects `runtime`, `runner`,
+//                 `batches`, `batched`, etc.).
+fn _has_word_after(line: string, needle: string) -> bool {
+    // Returns true iff `needle` appears in `line` followed immediately by
+    // whitespace or end-of-line (i.e. `needle\b` against a relaxed boundary).
+    // Walks the string by repeatedly slicing past the previous match — does
+    // not rely on .index_of_from (not in interp stdlib).
+    let mut rest = line
+    while true {
+        let idx = rest.index_of(needle)
+        if idx < 0 { return false }
+        let after = idx + len(needle)
+        if after >= len(rest) { return true }   // EOL
+        let c = rest.substring(after, after + 1)
+        if c == " " || c == "\t" || c == "\n" { return true }
+        rest = rest.substring(after, len(rest))
+    }
+    return false
+}
+
+fn _line_invokes_hexa(line: string) -> bool {
+    let l = line
+    if !(l.contains("hexa run") || l.contains("hexa batch")) { return false }
+    // Reject path-suffix matches like `/foo/myhexa run` — only flag the
+    // bare `hexa` command (or one preceded by `/hexa`, e.g. `$HOME/.hx/bin/hexa run`).
+    let has_bare = l.contains(" hexa run") || l.contains(" hexa batch") \
+                   || l.contains("\thexa run") || l.contains("\thexa batch") \
+                   || l.starts_with("hexa run") || l.starts_with("hexa batch")
+    let has_path = l.contains("/hexa run") || l.contains("/hexa batch")
+    if !has_bare && !has_path { return false }
+    // Right-side word boundary: reject `hexa runtime`, `hexa runner`,
+    // `hexa batches`, `hexa batched`, etc.
+    if !(_has_word_after(l, "hexa run") || _has_word_after(l, "hexa batch")) { return false }
+    return true
+}
+
+fn _line_has_macho(line: string) -> bool {
+    return line.contains("--Mach-O") || line.contains("HEXA_TARGET_MACHO=1")
+}
+
+fn _scan_file(path: string) -> array {
+    let raw_out = to_string(exec("cat '" + path + "' 2>/dev/null"))
+    let lines = split(raw_out, "\n")
+    let hits = []
+    let mut lineno = 0
+    for ln in lines {
+        lineno = lineno + 1
+        if !_line_invokes_hexa(ln) { continue }
+        if _line_has_macho(ln) { continue }
+        let h = {}
+        h["file"] = path
+        h["line"] = lineno
+        h["text"] = ln.trim()
+        hits.push(h)
+    }
+    return hits
+}
+
+fn _esc(s: string) -> string {
+    let mut r = s.replace("\\", "\\\\")
+    r = r.replace("\"", "\\\"")
+    return r
+}
+
+fn _emit(hit: object) {
+    println("LINT-MACHO-2 " + to_string(hit["file"]) + ":" + to_string(hit["line"]) + ": hexa invocation without --Mach-O on macOS — " + to_string(hit["text"]))
+}
+
+fn _render_summary(hits: array, root: string, host_macos: bool, bypassed: bool) -> string {
+    let mut s = "{\"schema\":\"hexa.lint_macho_gate_invocations.v1\""
+    s = s + ",\"tool\":\"tool/lint_macho_gate_invocations.hexa\""
+    s = s + ",\"rule\":\"LINT-MACHO-2\""
+    s = s + ",\"falsifier\":\"F-HEXA-MACHO-1\""
+    s = s + ",\"spec\":\"spec/hexa_macho_gate.spec.yaml\""
+    s = s + ",\"mode\":\"warn\""
+    s = s + ",\"phase\":\"A\""
+    let mut macos_str = "false"
+    if host_macos { macos_str = "true" }
+    s = s + ",\"host_macos\":" + macos_str
+    let mut bypass_str = "false"
+    if bypassed { bypass_str = "true" }
+    s = s + ",\"bypassed\":" + bypass_str
+    s = s + ",\"root\":\"" + _esc(root) + "\""
+    s = s + ",\"finding_count\":" + to_string(len(hits))
+    let mut sev = "pass"
+    if len(hits) > 0 && !bypassed { sev = "warn" }
+    s = s + ",\"severity\":\"" + sev + "\""
+    s = s + ",\"findings\":["
+    let mut i = 0
+    while i < len(hits) {
+        if i > 0 { s = s + "," }
+        let h = hits[i]
+        s = s + "{\"file\":\"" + _esc(to_string(h["file"])) + "\""
+        s = s + ",\"line\":" + to_string(h["line"])
+        s = s + ",\"text\":\"" + _esc(to_string(h["text"])) + "\"}"
+        i = i + 1
+    }
+    s = s + "]}"
+    return s
+}
+
+fn _emit_advisory() {
+    // Coherent with the Phase B wrapper warning text. Source of truth is
+    // SPEC.yaml::macos_machO_gate.warning_template. Phrasing kept short
+    // here because the wrapper itself emits the long form at runtime.
+    println("LINT-MACHO-2: hexa invocations on macOS use the stage0 interpreter")
+    println("              unless --Mach-O or HEXA_TARGET_MACHO=1 is in effect.")
+    println("              Add the flag ONLY when you genuinely need a native")
+    println("              arm64 binary (e.g. `hexa build --emit=exec` for a")
+    println("              release). For hooks, probes, lints and most dev")
+    println("              work this advisory is informational — no action")
+    println("              required. Set HEXA_LINT_MACHO_DISABLE=1 to silence")
+    println("              this lint per session (Phase A bypass).")
+}
+
+fn cmd_selftest() -> i64 {
+    println("[lint_macho_gate_invocations selftest]")
+    if !_line_invokes_hexa("    hexa run foo.hexa") { println("FAIL detect bare leading-ws"); return 1 }
+    if !_line_invokes_hexa("$HOME/.hx/bin/hexa run foo.hexa") { println("FAIL detect path"); return 1 }
+    if !_line_invokes_hexa("hexa batch jobs.txt") { println("FAIL detect bol"); return 1 }
+    if _line_invokes_hexa("# describes hexa runtime semantics") { println("FAIL false-positive 'hexa runtime'"); return 1 }
+    if _line_invokes_hexa("see the hexa runner module") { println("FAIL false-positive 'hexa runner'"); return 1 }
+    if _line_invokes_hexa("about hexa batches in queue") { println("FAIL false-positive 'hexa batches'"); return 1 }
+    if _line_invokes_hexa("myhexa run foo") { println("FAIL false-positive suffix"); return 1 }
+    if !_line_has_macho("hexa run --Mach-O foo.hexa") { println("FAIL macho flag"); return 1 }
+    if !_line_has_macho("HEXA_TARGET_MACHO=1 hexa run foo.hexa") { println("FAIL macho env"); return 1 }
+    if _line_has_macho("hexa run foo.hexa") { println("FAIL macho absent"); return 1 }
+    if _esc("a\"b") != "a\\\"b" { println("FAIL esc"); return 1 }
+    println("[lint_macho_gate_invocations selftest] OK")
+    return 0
+}
+
+fn _parse_root(argv: array) -> string {
+    let mut i = 0
+    while i < len(argv) {
+        let a = argv[i]
+        if a.starts_with("--root=") {
+            return a.substring(7, len(a))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn main() -> int {
+    let argv = args()
+    if len(argv) > 1 {
+        let mut k = 1
+        while k < len(argv) {
+            if argv[k] == "--selftest" || argv[k] == "selftest" { exit(cmd_selftest()) }
+            k = k + 1
+        }
+    }
+
+    let mut root = _parse_root(argv)
+    if root == "" { root = _default_root() }
+    let host_macos = _is_macos()
+    let bypassed = _bypass_active()
+
+    let files = _scan_files(root)
+    let all_hits = []
+    let mut i = 0
+    while i < len(files) {
+        let hs = _scan_file(files[i])
+        let mut j = 0
+        while j < len(hs) {
+            all_hits.push(hs[j])
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    if !bypassed {
+        let mut k = 0
+        while k < len(all_hits) {
+            _emit(all_hits[k])
+            k = k + 1
+        }
+        if len(all_hits) > 0 { _emit_advisory() }
+    }
+
+    println(_render_summary(all_hits, root, host_macos, bypassed))
+
+    // Warn-only — Phase A always exits 0.
+    return 0
+}

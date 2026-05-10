@@ -183,7 +183,10 @@ macos_machO_gate:
     B_user_wrapper:   user_session    # $HOME/.hx/bin/hexa edit, separate
     C_strict_block:   deferred        # awaits hook-layer migration
   reference_wrapper:  tool/wrappers/hexa_top_wrapper.sh
-  lint_rule:          tool/lint_macho_gate.hexa
+  lint_rule:          tool/lint_macho_gate.hexa                   # LINT-MACHO-1 (.hexa exec sites)
+  invocation_lint:    tool/lint_macho_gate_invocations.hexa       # LINT-MACHO-2 (sh + CI surface)
+  declarative_spec:   spec/hexa_macho_gate.spec.yaml              # falsifier SSOT (F-HEXA-MACHO-1/2)
+  lint_bypass_env:    HEXA_LINT_MACHO_DISABLE=1                   # per-session escape hatch (Phase A)
   warning_template: |
     ai-native: hexa invocation without --Mach-O on macOS.
       This call uses the stage0 interpreter; no native Mach-O codegen
