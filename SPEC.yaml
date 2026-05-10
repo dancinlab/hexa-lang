@@ -690,17 +690,8 @@ fork_storm_prevention:
       - { name: ls,     count:  56, intrinsic: list_dir,                effort: M, status: PENDING }
       - { name: cd,     count:  45, intrinsic: call_site_rewrite,       effort: M, status: PENDING }
       - { name: git,    count:  38, intrinsic: keep_exec_v0,            effort: L, status: PENDING }
-      - { name: curl,   count:   "?", intrinsic: http_request_libcurl_FFI, effort: M, status: PENDING_FFI, v0: shell_fork_via_stdlib_http_post_with_headers, v1: libcurl_C_FFI_via_c_ffi_hexa, v2: native_http11_emit_plus_tls_handshake_FFI }
     absorbed_site_count_v0: 638  # 160+123+110+85+84+78 — categories with v0 intrinsic shipped
     pending_site_count:     197  # 58+56+45+38 — categories awaiting future batches
-    note_curl: |
-      curl is added by the stdlib_evolution.http v1.1 patch
-      (http_post_with_headers, JSON-RPC enabler — bitcoind, generic API).
-      v0 is curl shellout (matches existing http_get_with_headers); v1
-      replaces with libcurl C-FFI via stdlib/c_ffi.hexa (depends on
-      stdlib_evolution.c_ffi v1.1 helpers c_alloc_ptr_slot + c_load_ptr).
-      Site count is unknown until http_post_with_headers ships and gets
-      adopted; tracking deferred to next inventory pass.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stdlib evolution policy (Decision 2026-05-09)
@@ -750,8 +741,8 @@ stdlib_evolution:
       planned_additions:
         - { name: http_post_with_headers, signature: "(url: str, headers: [str], body: str, timeout_s: int) -> Response", purpose: "POST + JSON body — JSON-RPC enabler" }
       implementation_path:
-        v0_path_c: shell_fork_curl  # mirrors existing http_get_with_headers
-        v1_path_b: libcurl_C_FFI    # depends on c_ffi v1.1 helpers
+        v0_path_c: curl_shellout    # mirrors existing http_get_with_headers
+        v1_path_b: libcurl_C_FFI    # depends on c_ffi v1.1 helpers (separate concern)
         v2_path_a: native_http_emit # syscall + tls_handshake; defer
       use_case_primary: |
         bitcoind RPC (localhost:8332): subprocess bitcoin-cli 15-30ms vs
@@ -761,10 +752,6 @@ stdlib_evolution:
       downstream_consumers:
         - orpheus recovery/module/method_bitcoin_core_rpc.hexa
       forge_engine_link: forge.cond.NATIVE_BTC_RPC
-      fork_storm_link: |
-        v0 curl shellout incurs +1 fork per call. Tracked in
-        fork_storm_prevention.exec_call_inventory.curl. Migration to
-        v1 libcurl FFI removes the fork (depends on c_ffi v1.1 helpers).
   selftest_invariant: |
     Every additive helper bumps the per-module selftest count and
     keeps overall stdlib selftest exit 0. Example: c_ffi 35 → 36;
