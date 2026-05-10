@@ -2,6 +2,8 @@
 //
 // @version 0.1.0
 // @capabilities [pure]
+// @allow-relop-banned-file  — codegen path uses `>=`/`<=` for arity
+//   guards and signed-id checks; C6 regalloc inherits the same need.
 //
 // Lowers MIR (SSA CFG) -> LIR (target-specific instructions) for the
 // arm64-apple-darwin target.
@@ -125,15 +127,340 @@ fn _instr3(op: string, a: LOperand, b: LOperand, c: LOperand, comment: string) -
     return LInstr { op: op, args: xs, comment: comment }
 }
 
-// ── Register assignment (naive) ──────────────────────────────
+// ── Register assignment (naive fallback) ─────────────────────
+//
+// Used only when no RegMap is available. Production codegen runs
+// through `_arm64_assign_regs` (linear scan, Poletto-Sarkar 1999)
+// and `_arm_reg_lookup` below.
 
 fn _arm64_reg_for_local(local_id: i64) -> string {
-    // x0..x7 already serve params per ABI; for simplicity Local id N maps
-    // to xN (mod 31) — x31 is sp/zr so we cap at 30.
     let mut idx = local_id
     if idx < 0 { idx = 0 }
     let m = idx - (idx / 31) * 31
     return "x" + to_string(m)
+}
+
+// ── C6 — Linear-scan register allocator (arm64) ──────────────
+pub struct RegMap {
+    ids: [i64],
+    regs: [string],
+    slots: [i64]
+}
+
+pub struct ArmAllocResult {
+    map: RegMap,
+    frame_size: i64
+}
+
+pub struct ArmIntervals {
+    ids: [i64],
+    starts: [i64],
+    ends: [i64]
+}
+
+fn _arm_pool_init() -> [string] {
+    let mut p: [string] = []
+    p.push("x10")
+    p.push("x11")
+    p.push("x12")
+    p.push("x13")
+    p.push("x14")
+    p.push("x15")
+    p.push("x19")
+    p.push("x20")
+    p.push("x21")
+    p.push("x22")
+    p.push("x23")
+    p.push("x24")
+    p.push("x25")
+    p.push("x26")
+    p.push("x27")
+    p.push("x28")
+    return p
+}
+
+fn _arm_index_of(ids: [i64], id: i64) -> i64 {
+    let mut i = 0
+    while i < len(ids) {
+        if ids[i] == id { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _arm_compute_live_ranges(mf: MFunc) -> ArmIntervals {
+    let mut ids: [i64] = []
+    let mut starts: [i64] = []
+    let mut ends: [i64] = []
+
+    let mut li = 0
+    while li < len(mf.locals) {
+        let id = mf.locals[li].id
+        if id >= 0 && _arm_index_of(ids, id) < 0 {
+            ids.push(id)
+            starts.push(-1)
+            ends.push(-1)
+        }
+        li = li + 1
+    }
+
+    let mut pi = 0
+    while pi < len(mf.params) {
+        let pid = mf.params[pi].id
+        let idx = _arm_index_of(ids, pid)
+        if idx >= 0 {
+            if starts[idx] < 0 { starts[idx] = 0 }
+            if ends[idx] < 0   { ends[idx] = 0 }
+        }
+        pi = pi + 1
+    }
+
+    let mut pos = 0
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            let did = s.dst.id
+            if did >= 0 {
+                let mut idx = _arm_index_of(ids, did)
+                if idx < 0 {
+                    ids.push(did)
+                    starts.push(pos)
+                    ends.push(pos)
+                    idx = len(ids) - 1
+                } else {
+                    if starts[idx] < 0 || pos < starts[idx] { starts[idx] = pos }
+                    if pos > ends[idx] { ends[idx] = pos }
+                }
+            }
+            let mut ai = 0
+            while ai < len(s.args) {
+                let o = s.args[ai]
+                if o.kind == "local" {
+                    let lid = o.local_id
+                    if lid >= 0 {
+                        let mut idx2 = _arm_index_of(ids, lid)
+                        if idx2 < 0 {
+                            ids.push(lid)
+                            starts.push(pos)
+                            ends.push(pos)
+                            idx2 = len(ids) - 1
+                        } else {
+                            if starts[idx2] < 0 || pos < starts[idx2] {
+                                starts[idx2] = pos
+                            }
+                            if pos > ends[idx2] { ends[idx2] = pos }
+                        }
+                    }
+                }
+                ai = ai + 1
+            }
+            pos = pos + 1
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return ArmIntervals { ids: ids, starts: starts, ends: ends }
+}
+
+fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
+    let iv = _arm_compute_live_ranges(mf)
+    let n = len(iv.ids)
+    let mut order: [i64] = []
+    let mut k = 0
+    while k < n {
+        if iv.starts[k] >= 0 { order.push(k) }
+        k = k + 1
+    }
+    let mut a = 1
+    while a < len(order) {
+        let key = order[a]
+        let key_start = iv.starts[key]
+        let mut b = a - 1
+        while b >= 0 && iv.starts[order[b]] > key_start {
+            order[b + 1] = order[b]
+            b = b - 1
+        }
+        order[b + 1] = key
+        a = a + 1
+    }
+
+    let mut map_ids: [i64] = []
+    let mut map_regs: [string] = []
+    let mut map_slots: [i64] = []
+    let mut j = 0
+    while j < n {
+        map_ids.push(iv.ids[j])
+        map_regs.push("")
+        map_slots.push(-1)
+        j = j + 1
+    }
+
+    let mut p = 0
+    while p < len(mf.params) {
+        if p < 8 {
+            let pid = mf.params[p].id
+            let idx = _arm_index_of(iv.ids, pid)
+            if idx >= 0 {
+                map_regs[idx] = "x" + to_string(p)
+            }
+        }
+        p = p + 1
+    }
+
+    let mut pool = _arm_pool_init()
+    let mut active_idx: [i64] = []
+    let mut next_slot: i64 = 0
+
+    let mut s = 0
+    while s < len(order) {
+        let cur = order[s]
+        let cur_start = iv.starts[cur]
+
+        let mut keep: [i64] = []
+        let mut e = 0
+        while e < len(active_idx) {
+            let ai = active_idx[e]
+            if iv.ends[ai] < cur_start {
+                let was = map_regs[ai]
+                let mut is_param = false
+                let mut pp = 0
+                while pp < len(mf.params) {
+                    if mf.params[pp].id == iv.ids[ai] { is_param = true }
+                    pp = pp + 1
+                }
+                if !is_param && len(was) > 0 && map_slots[ai] < 0 {
+                    pool.push(was)
+                }
+            } else {
+                keep.push(ai)
+            }
+            e = e + 1
+        }
+        active_idx = keep
+
+        if len(map_regs[cur]) > 0 {
+            let cur_end = iv.ends[cur]
+            let mut na: [i64] = []
+            let mut placed = false
+            let mut t = 0
+            while t < len(active_idx) {
+                if !placed && iv.ends[active_idx[t]] > cur_end {
+                    na.push(cur)
+                    placed = true
+                }
+                na.push(active_idx[t])
+                t = t + 1
+            }
+            if !placed { na.push(cur) }
+            active_idx = na
+            s = s + 1
+            continue
+        }
+
+        if len(pool) > 0 {
+            let r = pool[0]
+            let mut np: [string] = []
+            let mut tt = 1
+            while tt < len(pool) {
+                np.push(pool[tt])
+                tt = tt + 1
+            }
+            pool = np
+            map_regs[cur] = r
+            map_slots[cur] = -1
+            let cur_end = iv.ends[cur]
+            let mut na: [i64] = []
+            let mut placed = false
+            let mut t = 0
+            while t < len(active_idx) {
+                if !placed && iv.ends[active_idx[t]] > cur_end {
+                    na.push(cur)
+                    placed = true
+                }
+                na.push(active_idx[t])
+                t = t + 1
+            }
+            if !placed { na.push(cur) }
+            active_idx = na
+        } else {
+            let mut victim_pos = len(active_idx) - 1
+            while victim_pos >= 0 {
+                let v = active_idx[victim_pos]
+                let mut is_param = false
+                let mut pp = 0
+                while pp < len(mf.params) {
+                    if mf.params[pp].id == iv.ids[v] { is_param = true }
+                    pp = pp + 1
+                }
+                if !is_param { break }
+                victim_pos = victim_pos - 1
+            }
+
+            if victim_pos >= 0 && iv.ends[active_idx[victim_pos]] > iv.ends[cur] {
+                let v = active_idx[victim_pos]
+                map_regs[cur] = map_regs[v]
+                map_slots[cur] = -1
+                map_regs[v] = ""
+                map_slots[v] = next_slot
+                next_slot = next_slot + 8
+                let mut na: [i64] = []
+                let mut t = 0
+                while t < len(active_idx) {
+                    if t != victim_pos { na.push(active_idx[t]) }
+                    t = t + 1
+                }
+                let cur_end = iv.ends[cur]
+                let mut na2: [i64] = []
+                let mut placed = false
+                let mut tt = 0
+                while tt < len(na) {
+                    if !placed && iv.ends[na[tt]] > cur_end {
+                        na2.push(cur)
+                        placed = true
+                    }
+                    na2.push(na[tt])
+                    tt = tt + 1
+                }
+                if !placed { na2.push(cur) }
+                active_idx = na2
+            } else {
+                map_regs[cur] = ""
+                map_slots[cur] = next_slot
+                next_slot = next_slot + 8
+            }
+        }
+        s = s + 1
+    }
+
+    let mut frame = next_slot
+    let rem = frame - (frame / 16) * 16
+    if rem != 0 { frame = frame + (16 - rem) }
+
+    let map = RegMap { ids: map_ids, regs: map_regs, slots: map_slots }
+    return ArmAllocResult { map: map, frame_size: frame }
+}
+
+fn _arm_reg_lookup(rm: RegMap, id: i64) -> string {
+    let idx = _arm_index_of(rm.ids, id)
+    if idx < 0 { return _arm64_reg_for_local(id) }
+    if rm.slots[idx] >= 0 { return "x9" }
+    if len(rm.regs[idx]) == 0 { return _arm64_reg_for_local(id) }
+    return rm.regs[idx]
+}
+
+fn _arm_is_spilled(rm: RegMap, id: i64) -> bool {
+    let idx = _arm_index_of(rm.ids, id)
+    if idx < 0 { return false }
+    return rm.slots[idx] >= 0
+}
+
+fn _arm_spill_offset(rm: RegMap, id: i64) -> i64 {
+    let idx = _arm_index_of(rm.ids, id)
+    if idx < 0 { return 0 }
+    return rm.slots[idx]
 }
 
 // String literal → rodata label map. `keys[i]` is a literal string
@@ -249,47 +576,110 @@ fn _arm64_arg_reg(idx: i64) -> string {
     return "x0" // overflow → stack (TODO: spill)
 }
 
-// ── Statement lowering ───────────────────────────────────────
+// ── Statement lowering (C6 — RegMap-aware) ───────────────────
 
-fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: ArmStrTab) -> [LInstr] {
+fn _arm64_load_spill(buf: [LInstr], rm: RegMap, id: i64, scratch: string) -> [LInstr] {
+    let mut out = buf
+    let off = _arm_spill_offset(rm, id)
+    out.push(_instr2("ldr", _op_reg(scratch), _op_mem("sp", off),
+                     "reload L" + to_string(id) + " from spill slot"))
+    return out
+}
+
+fn _arm64_store_spill(buf: [LInstr], rm: RegMap, id: i64, src_reg: string) -> [LInstr] {
+    let mut out = buf
+    let off = _arm_spill_offset(rm, id)
+    out.push(_instr2("str", _op_reg(src_reg), _op_mem("sp", off),
+                     "spill L" + to_string(id) + " to slot"))
+    return out
+}
+
+fn _arm64_op_rm(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
+                scratch: string) -> [LInstr] {
+    let mut out = buf
+    if o.kind == "local" {
+        if _arm_is_spilled(rm, o.local_id) {
+            out = _arm64_load_spill(out, rm, o.local_id, scratch)
+        }
+    }
+    return out
+}
+
+fn _arm64_op_resolve(o: Operand, st: ArmStrTab, rm: RegMap,
+                     scratch: string) -> LOperand {
+    if o.kind == "local" {
+        if _arm_is_spilled(rm, o.local_id) {
+            return _op_reg(scratch)
+        }
+        return _op_reg(_arm_reg_lookup(rm, o.local_id))
+    }
+    if o.kind == "const_int" { return _op_imm(o.int_val) }
+    if o.kind == "global"    { return _op_label("g" + to_string(o.global_id)) }
+    if o.kind == "const_str" {
+        let lbl = _arm64_strtab_lookup(st, o.str_val)
+        if len(lbl) > 0 { return _op_label(lbl) }
+        return _op_label(o.str_val)
+    }
+    return _op_imm(0)
+}
+
+fn _arm64_emit_dst_writeback(buf: [LInstr], rm: RegMap, id: i64) -> [LInstr] {
+    let mut out = buf
+    if _arm_is_spilled(rm, id) {
+        out = _arm64_store_spill(out, rm, id, "x9")
+    }
+    return out
+}
+
+fn _arm64_dst_reg(rm: RegMap, id: i64) -> string {
+    if _arm_is_spilled(rm, id) { return "x9" }
+    return _arm_reg_lookup(rm, id)
+}
+
+fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
+                    st: ArmStrTab, rm: RegMap, spill_frame: i64) -> [LInstr] {
     let mut buf = out
     if s.kind == _STMT_ASSIGN {
-        // mov dst, src (single operand expected)
-        let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
         if len(s.args) >= 1 {
-            let src = _arm64_op_for_operand_st(s.args[0], st)
+            let mut src_scratch = "x9"
+            if _arm_is_spilled(rm, s.dst.id) { src_scratch = "x10" }
+            buf = _arm64_op_rm(buf, s.args[0], st, rm, src_scratch)
+            let src = _arm64_op_resolve(s.args[0], st, rm, src_scratch)
+            let dst = _op_reg(_arm64_dst_reg(rm, s.dst.id))
             buf.push(_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
+            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
         }
         return buf
     }
     if s.kind == _STMT_BINOP {
-        let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
         if len(s.args) >= 2 {
-            let a = _arm64_op_for_operand_st(s.args[0], st)
-            let b = _arm64_op_for_operand_st(s.args[1], st)
+            let a_scratch = "x10"
+            let b_scratch = "x11"
+            buf = _arm64_op_rm(buf, s.args[0], st, rm, a_scratch)
+            buf = _arm64_op_rm(buf, s.args[1], st, rm, b_scratch)
+            let a = _arm64_op_resolve(s.args[0], st, rm, a_scratch)
+            let b = _arm64_op_resolve(s.args[1], st, rm, b_scratch)
+            let dst = _op_reg(_arm64_dst_reg(rm, s.dst.id))
 
-            // String concat → runtime call. Move operands into x0/x1
-            // (AAPCS64 first two arg regs) and `bl _hexa_str_concat`.
-            // Result lands in x0 → mov into dst.
             if _is_concat(s.op) {
                 buf.push(_instr2("mov", _op_reg("x0"), a, "concat arg0"))
                 buf.push(_instr2("mov", _op_reg("x1"), b, "concat arg1"))
                 buf.push(_instr1("bl", _op_label("hexa_str_concat"),
                                  "call runtime: hexa_str_concat"))
                 buf.push(_instr2("mov", dst, _op_reg("x0"), "capture concat result"))
+                buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
                 return buf
             }
 
-            // Comparison → cmp + cset (writes 0/1 into dst).
             let cond = _arm64_cmp_cond(s.op)
             if len(cond) > 0 {
                 buf.push(_instr2("cmp", a, b, "binop " + s.op))
                 buf.push(_instr2("cset", dst, _op_label(cond),
                                  "binop " + s.op + " → bool"))
+                buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
                 return buf
             }
 
-            // Arithmetic / bitwise.
             let mut mnemonic = "add"
             if _is_arith_add(s.op) { mnemonic = "add" }
             if _is_arith_sub(s.op) { mnemonic = "sub" }
@@ -300,19 +690,18 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
             if _is_bit_or(s.op)    { mnemonic = "orr" }
             if _is_bit_xor(s.op)   { mnemonic = "eor" }
             buf.push(_instr3(mnemonic, dst, a, b, "binop " + s.op))
+            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
         }
         return buf
     }
     if s.kind == _STMT_CALL {
-        // Marshal args into x0..x7 (AAPCS64). Args >= 8 spill to
-        // stack — TODO: implement stack args (RFC-018 §4 — overflow
-        // on stack); for v0 we emit a comment marker so the gap is
-        // greppable.
         let mut i = 0
         while i < len(s.args) {
-            let src = _arm64_op_for_operand_st(s.args[i], st)
+            let scratch = _arm64_arg_reg(i)
             if i < 8 {
-                let dst_reg = _op_reg(_arm64_arg_reg(i))
+                buf = _arm64_op_rm(buf, s.args[i], st, rm, scratch)
+                let src = _arm64_op_resolve(s.args[i], st, rm, scratch)
+                let dst_reg = _op_reg(scratch)
                 buf.push(_instr2("mov", dst_reg, src, "arg " + to_string(i)))
             } else {
                 buf.push(_instr0("nop",
@@ -320,21 +709,26 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
             }
             i = i + 1
         }
-        let target = s.op // call target name carried in s.op
+        let target = s.op
         buf.push(_instr1("bl", _op_label(target), "call " + target))
         if s.dst.id >= 0 {
-            let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
+            let dst = _op_reg(_arm64_dst_reg(rm, s.dst.id))
             buf.push(_instr2("mov", dst, _op_reg("x0"), "capture call result"))
+            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
         }
         return buf
     }
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
-            let src = _arm64_op_for_operand_st(s.args[0], st)
+            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x9")
+            let src = _arm64_op_resolve(s.args[0], st, rm, "x9")
             buf.push(_instr2("mov", _op_reg("x0"), src, "set return value"))
         }
-        // epilogue: ldp x29, x30, [sp], #16  (post-index — symmetric with
-        // the prologue's pre-index `stp x29, x30, [sp, #-16]!`)
+        if spill_frame > 0 {
+            buf.push(_instr3("add", _op_reg("sp"), _op_reg("sp"),
+                             _op_label("#" + to_string(spill_frame)),
+                             "epilogue: free spill frame"))
+        }
         buf.push(_instr3("ldp", _op_reg("x29"), _op_reg("x30"),
                          _op_label("[sp], #16"), "epilogue: restore fp/lr"))
         buf.push(_instr0("ret", "return"))
@@ -346,11 +740,9 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
         return buf
     }
     if s.kind == _STMT_BR_COND {
-        // cbz <reg>, .Lelse  ; b .Lthen
-        // (compact encoding for "branch on zero / non-zero"; equivalent
-        //  to the older `cmp x, #0; b.eq`. Both are accepted by `as`.)
         if len(s.args) > 0 {
-            let cond = _arm64_op_for_operand_st(s.args[0], st)
+            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x9")
+            let cond = _arm64_op_resolve(s.args[0], st, rm, "x9")
             let else_lab = _arm64_block_label(modhash, fname, s.target_block_else)
             buf.push(_instr2("cbz", cond, _op_label(else_lab),
                              "br_cond: zero -> else"))
@@ -360,25 +752,26 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
         return buf
     }
     if s.kind == "load" {
-        // STMT_LOAD: dst <- [base + offset]. Until lower emits
-        // explicit LOADs, this path is mostly dormant.
-        let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
         if len(s.args) >= 1 {
-            let base_op = _arm64_op_for_operand_st(s.args[0], st)
+            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x10")
+            let base_op = _arm64_op_resolve(s.args[0], st, rm, "x10")
             let mut off = 0
             if len(s.args) >= 2 && s.args[1].kind == "const_int" {
                 off = s.args[1].int_val
             }
+            let dst = _op_reg(_arm64_dst_reg(rm, s.dst.id))
             buf.push(_instr2("ldr", dst, _op_mem(base_op.reg.name, off),
                              "load"))
+            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
         }
         return buf
     }
     if s.kind == "store" {
-        // STMT_STORE: [base + offset] <- src. Mirrors load order.
         if len(s.args) >= 2 {
-            let base_op = _arm64_op_for_operand_st(s.args[0], st)
-            let src = _arm64_op_for_operand_st(s.args[1], st)
+            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x10")
+            buf = _arm64_op_rm(buf, s.args[1], st, rm, "x11")
+            let base_op = _arm64_op_resolve(s.args[0], st, rm, "x10")
+            let src = _arm64_op_resolve(s.args[1], st, rm, "x11")
             let mut off = 0
             if len(s.args) >= 3 && s.args[2].kind == "const_int" {
                 off = s.args[2].int_val
@@ -388,7 +781,6 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
         }
         return buf
     }
-    // Unhandled (arena_*, etc.) — emit a comment-only nop for v1.
     buf.push(_instr0("nop", "unhandled stmt kind " + s.kind))
     return buf
 }
@@ -398,9 +790,14 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
 fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     let mut instrs = []
 
+    // C6 — run linear-scan regalloc up front so the prologue can size
+    // the spill frame and the body can resolve operands through the
+    // assigned RegMap.
+    let alloc = _arm64_assign_regs(mf)
+    let rm = alloc.map
+    let spill_frame = alloc.frame_size
+
     // Prologue
-    // stp x29, x30, [sp, #-16]!  (pre-index — symmetric with the epilogue's
-    // post-index `ldp x29, x30, [sp], #16`)
     instrs.push(_instr3(
         "stp",
         _op_reg("x29"),
@@ -410,30 +807,40 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     ))
     instrs.push(_instr2("mov", _op_reg("x29"), _op_reg("sp"), "prologue: set fp"))
 
-    // Move incoming params x0..x7 into their assigned local registers (if
-    // different). v1 naive: param i has Local id i so x_i -> x_i is a no-op,
-    // but emit explicit mov to make trace inspection clear.
+    // Spill-frame allocation (after fp/lr save).
+    if spill_frame > 0 {
+        instrs.push(_instr3("sub", _op_reg("sp"), _op_reg("sp"),
+                            _op_label("#" + to_string(spill_frame)),
+                            "prologue: alloc spill frame"))
+    }
+
+    // Move incoming params x0..x7 into their assigned regs / spill slots.
     let mut p = 0
     while p < len(mf.params) {
         if p < 8 {
-            let dst_name = _arm64_reg_for_local(mf.params[p].id)
+            let pid = mf.params[p].id
             let src_name = "x" + to_string(p)
-            if dst_name != src_name {
-                instrs.push(_instr2("mov", _op_reg(dst_name), _op_reg(src_name), "ingress param"))
+            if _arm_is_spilled(rm, pid) {
+                instrs = _arm64_store_spill(instrs, rm, pid, src_name)
+            } else {
+                let dst_name = _arm_reg_lookup(rm, pid)
+                if dst_name != src_name {
+                    instrs.push(_instr2("mov", _op_reg(dst_name),
+                                        _op_reg(src_name), "ingress param"))
+                }
             }
         }
         p = p + 1
     }
 
-    // Lower blocks in order. Emit per-block label as a comment-only marker
-    // (no LInstr.op label representation in v1).
     let mut bi = 0
     while bi < len(mf.blocks) {
         let blk = mf.blocks[bi]
         instrs.push(_instr0("label", _arm64_block_label(modhash, mf.name, blk.id)))
         let mut si = 0
         while si < len(blk.stmts) {
-            instrs = _emit_arm64_stmt(instrs, modhash, mf.name, blk.stmts[si], st)
+            instrs = _emit_arm64_stmt(instrs, modhash, mf.name,
+                                      blk.stmts[si], st, rm, spill_frame)
             si = si + 1
         }
         bi = bi + 1
@@ -444,15 +851,19 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     if len(instrs) > 0 {
         let last = instrs[len(instrs) - 1]
         if last.op == "ret" {
-            // already terminated
             return LFunc {
                 name: mf.name,
                 target: "arm64-apple-darwin",
                 instrs: instrs,
-                frame_size: 16,
+                frame_size: 16 + spill_frame,
                 callee_saved: []
             }
         }
+    }
+    if spill_frame > 0 {
+        instrs.push(_instr3("add", _op_reg("sp"), _op_reg("sp"),
+                            _op_label("#" + to_string(spill_frame)),
+                            "epilogue: free spill frame"))
     }
     instrs.push(_instr3("ldp", _op_reg("x29"), _op_reg("x30"),
                         _op_label("[sp], #16"), "epilogue: restore fp/lr"))
@@ -462,7 +873,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         name: mf.name,
         target: "arm64-apple-darwin",
         instrs: instrs,
-        frame_size: 16,
+        frame_size: 16 + spill_frame,
         callee_saved: []
     }
 }
