@@ -1,0 +1,280 @@
+// tool/scan_reserved_keywords.hexa - preventive scanner for stage0
+// reserved-keyword identifiers in compiler/*.hexa.
+//
+// Catches the same class of issue that bit Param.type -> typ rename and
+// bind.hexa scope -> sc rename: a struct field, fn param, or local var
+// named after a stage0 lexer keyword. These either hard-fail at parse
+// or silently turn into void at runtime - see gate/HEXA_RESERVED.md.
+//
+// SSOT:
+//   - gate/HEXA_RESERVED.md (human-readable)
+//   - self/lexer.hexa::is_keyword (authoritative keyword table)
+//
+// Usage:
+//   hexa run tool/scan_reserved_keywords.hexa
+//   hexa run tool/scan_reserved_keywords.hexa --root=DIR
+//
+// Output (one hit per line):
+//   path/to/file.hexa:LINE: identifier '<name>' is stage0-reserved (use '<suggestion>')
+//
+// Exit: 0 always (report-only). Wire as advisory CI step.
+
+fn _reserved_list() -> [string] {
+    return [
+        "if", "else", "match", "for", "while", "loop",
+        "type", "struct", "enum", "trait", "impl", "fn",
+        "return", "yield", "async", "await",
+        "let", "mut", "const", "static",
+        "mod", "use", "import", "pub", "crate",
+        "own", "borrow", "move", "drop",
+        "spawn", "channel", "select", "atomic",
+        "effect", "handle", "resume", "pure",
+        "proof", "assert", "invariant", "theorem",
+        "macro", "derive", "where", "comptime",
+        "try", "catch", "throw", "panic", "recover",
+        "intent", "generate", "verify", "optimize",
+        "extern", "break", "continue", "dyn",
+        "scope", "in", "do", "defer", "typeof",
+        "guard", "with", "as"
+    ]
+}
+
+fn _suggest(word: string) -> string {
+    if word == "spawn" { return "child" }
+    if word == "scope" { return "sc" }
+    if word == "select" { return "sel" }
+    if word == "channel" { return "chan" }
+    if word == "atomic" { return "atom" }
+    if word == "handle" { return "hdl" }
+    if word == "effect" { return "fx" }
+    if word == "resume" { return "cont" }
+    if word == "intent" { return "goal" }
+    if word == "verify" { return "check" }
+    if word == "optimize" { return "tune" }
+    if word == "generate" { return "gen" }
+    if word == "derive" { return "infer" }
+    if word == "proof" { return "pf" }
+    if word == "theorem" { return "thm" }
+    if word == "invariant" { return "inv" }
+    if word == "guard" { return "grd" }
+    if word == "with" { return "ctx" }
+    if word == "defer" { return "cleanup" }
+    if word == "as" { return "alias" }
+    if word == "in" { return "within" }
+    if word == "do" { return "body" }
+    if word == "typeof" { return "ty" }
+    if word == "type" { return "typ" }
+    if word == "move" { return "mv" }
+    if word == "own" { return "owner" }
+    if word == "drop" { return "dispose" }
+    if word == "borrow" { return "view" }
+    return word + "_id"
+}
+
+fn _is_ident_char(c: string) -> bool {
+    let k = char_code(c, 0)
+    if k >= 97 && k <= 122 { return true }
+    if k >= 65 && k <= 90  { return true }
+    if k >= 48 && k <= 57  { return true }
+    if k == 95 { return true }
+    return false
+}
+
+fn _strip_line_comment(line: string) -> string {
+    let n = len(line)
+    let mut i = 0
+    let mut parts = []
+    let mut in_str = false
+    while i < n {
+        let c = line[i]
+        if in_str {
+            parts.push(c)
+            if c == "\"" { in_str = false }
+            else if c == "\\" && i + 1 < n { i = i + 1; parts.push(line[i]) }
+            i = i + 1
+        } else if c == "/" && i + 1 < n && line[i + 1] == "/" {
+            return parts.join("")
+        } else if c == "\"" {
+            in_str = true; parts.push(c); i = i + 1
+        } else {
+            parts.push(c); i = i + 1
+        }
+    }
+    return parts.join("")
+}
+
+fn _read_safe(path: string) -> string {
+    try { return read_file(path) } catch e { return "" }
+}
+
+fn _list_files(root: string) -> [string] {
+    let cmd = "find " + root + " -type f -name '*.hexa' 2>/dev/null | sort"
+    let mut out = ""
+    try { out = exec(cmd) } catch e { out = "" }
+    if out.trim() == "" { return [] }
+    let raw = out.split("\n")
+    let mut acc = []
+    let mut i = 0
+    while i < len(raw) {
+        let p = raw[i].trim()
+        if p != "" { acc.push(p) }
+        i = i + 1
+    }
+    return acc
+}
+
+fn _is_reserved(word: string, reserved: [string]) -> bool {
+    let mut i = 0
+    while i < len(reserved) {
+        if reserved[i] == word { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _skip_ws(s: string, start: i64) -> i64 {
+    let mut i = start
+    let n = len(s)
+    while i < n && (s[i] == " " || s[i] == "\t") { i = i + 1 }
+    return i
+}
+
+// Returns "<end_index>|<word>" — packed string to dodge struct parse
+// quirks in stage0 tool/ files (no top-level struct support in this
+// interp dispatch path).
+fn _read_ident(s: string, start: i64) -> string {
+    let n = len(s)
+    let mut i = start
+    let mut parts = []
+    while i < n && _is_ident_char(s[i]) {
+        parts.push(s[i])
+        i = i + 1
+    }
+    return to_string(i) + "|" + parts.join("")
+}
+
+fn _ridx(packed: string) -> i64 {
+    let p = packed.split("|")
+    return to_int(p[0])
+}
+
+fn _rword(packed: string) -> string {
+    let p = packed.split("|")
+    if len(p) < 2 { return "" }
+    return p[1]
+}
+
+fn _scan_line(line: string, reserved: [string]) -> [string] {
+    let stripped = _strip_line_comment(line)
+    let n = len(stripped)
+    let mut hits = []
+
+    // Context A: let / let mut / const NAME
+    let mut i = 0
+    while i < n {
+        let prev_ok = (i == 0) || !_is_ident_char(stripped[i - 1])
+        if prev_ok && i + 3 <= n {
+            if stripped[i] == "l" && stripped[i + 1] == "e" && stripped[i + 2] == "t"
+                && i + 3 < n && (stripped[i + 3] == " " || stripped[i + 3] == "\t") {
+                let mut j = _skip_ws(stripped, i + 3)
+                if j + 3 < n && stripped[j] == "m" && stripped[j + 1] == "u" && stripped[j + 2] == "t"
+                    && (stripped[j + 3] == " " || stripped[j + 3] == "\t") {
+                    j = _skip_ws(stripped, j + 3)
+                }
+                let r = _read_ident(stripped, j)
+                let rw = _rword(r)
+                if rw != "" && _is_reserved(rw, reserved) {
+                    hits.push(to_string(j) + ":" + rw + ":let")
+                }
+                i = j + 1
+            } else if i + 5 <= n && stripped[i] == "c" && stripped[i + 1] == "o"
+                && stripped[i + 2] == "n" && stripped[i + 3] == "s" && stripped[i + 4] == "t"
+                && i + 5 < n && (stripped[i + 5] == " " || stripped[i + 5] == "\t") {
+                let j = _skip_ws(stripped, i + 5)
+                let r = _read_ident(stripped, j)
+                let rw = _rword(r)
+                if rw != "" && _is_reserved(rw, reserved) {
+                    hits.push(to_string(j) + ":" + rw + ":const")
+                }
+                i = j + 1
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+
+    // Context B: '(' / ',' / '{' then NAME ':'  (fn params + struct fields)
+    i = 0
+    while i < n {
+        let c = stripped[i]
+        if c == "(" || c == "," || c == "{" {
+            let j = _skip_ws(stripped, i + 1)
+            if j < n && _is_ident_char(stripped[j]) {
+                let r = _read_ident(stripped, j)
+                let rw = _rword(r)
+                let k = _skip_ws(stripped, _ridx(r))
+                if k < n && stripped[k] == ":" && (k + 1 >= n || stripped[k + 1] != ":") {
+                    if _is_reserved(rw, reserved) {
+                        hits.push(to_string(j) + ":" + rw + ":decl")
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    return hits
+}
+
+fn main() {
+    let av = args()
+    let mut root = "compiler"
+    let mut k = 0
+    while k < len(av) {
+        let a = av[k]
+        if len(a) > 7 && a.substring(0, 7) == "--root=" {
+            root = a.substring(7, len(a))
+        }
+        k = k + 1
+    }
+
+    let reserved = _reserved_list()
+    let files = _list_files(root)
+    let mut total = 0
+    let mut fi = 0
+    while fi < len(files) {
+        let path = files[fi]
+        let src = _read_safe(path)
+        if src == "" { fi = fi + 1; continue }
+        let lines = src.split("\n")
+        let mut li = 0
+        while li < len(lines) {
+            let ln = lines[li]
+            // fast-skip lines that cannot match any context
+            if !ln.contains("let ") && !ln.contains("const ") && !ln.contains("(") && !ln.contains(",") && !ln.contains("{") {
+                li = li + 1
+                continue
+            }
+            let hits = _scan_line(ln, reserved)
+            let mut hi = 0
+            while hi < len(hits) {
+                let parts = hits[hi].split(":")
+                if len(parts) >= 3 {
+                    let word = parts[1]
+                    let suggestion = _suggest(word)
+                    println(path + ":" + to_string(li + 1)
+                        + ": identifier '" + word
+                        + "' is stage0-reserved (use '" + suggestion + "')")
+                    total = total + 1
+                }
+                hi = hi + 1
+            }
+            li = li + 1
+        }
+        fi = fi + 1
+    }
+    eprintln("scan_reserved_keywords: " + to_string(total) + " hits across "
+        + to_string(len(files)) + " files (root=" + root + ")")
+}

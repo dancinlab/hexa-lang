@@ -599,3 +599,27 @@ open_questions:
   - python_ffi_native_path  # RFC-016 import py + native
   - prover_v2_capability_targets
   - migration_window_duration_estimate
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phases completed (2026-05-09)
+# ─────────────────────────────────────────────────────────────────────────────
+# Status snapshot derived from git log analysis on 2026-05-09 (main branch).
+# PASS = landed + tests / smoke witness on disk
+# IN-PROGRESS = code shipped, witness or follow-up still pending
+# DEFERRED = roadmapped but not yet started
+phases_completed_2026_05_09:
+  A0: { status: PASS, evidence: "5f506d06 feat(compiler): phase A0 — backend skeleton + IR types" }
+  A1: { status: PASS, evidence: "0f15a5bf feat(compiler): phase A1 — lexer + parser implementation" }
+  A2: { status: PASS, evidence: "80037e78 feat(compiler): phase A2 atlas merger + B1 S1 resolve pass" }
+  A3: { status: PASS, evidence: "38f8661f feat(compiler/atlas): phase A3 — packed const codegen + static embed" }
+  A4: { status: PASS, evidence: "6c4e7d4b feat(compiler/atlas): phase A4 — wire static_atlas() to real embedded fixture" }
+  B1: { status: PASS, evidence: "80037e78 (S1 resolve) + 6e255165 phase B2 catalog growth covers S0–S2" }
+  B2: { status: PASS, evidence: "6e255165 feat(compiler/check): phase B2 — S2 bind pass + diagnostic catalog growth" }
+  B3: { status: PASS, evidence: "9e82795e feat(compiler/check): phase B3 — S3 type check + S4 domain check; refined by 93fb38a9 B3+ S5 units pass" }
+  B4: { status: PASS, evidence: "6eab6c55 annotation handlers @law/@grace/@discover + 5ee37b49 HX8004 atlas citation strict (S8)" }
+  C1: { status: PASS, evidence: "6786affd / 15809e3d feat(compiler/check): phase B5 — S6 equational verify (in-house prover v0)" }
+  C2: { status: IN-PROGRESS, evidence: "3a0ce4d2 Decision 5e tombstone + retroactive sweep + HX1099 (atlas-side); cross_prover register pending: 675ce4b0" }
+  D1: { status: PASS, evidence: "566dd835 hexa_ld v1 minimal static ELF64 + 758659eb v1.1 Mach-O arm64 static binary" }
+  D2: { status: IN-PROGRESS, evidence: "81d2176a LP1+LP2+LP3 capability matrix + LSP 3.17 pin; in-process compiler index ongoing" }
+  E1: { status: DEFERRED, evidence: "big-bang migration scheduled post stage1 fixed point" }
+  E2: { status: DEFERRED, evidence: "depends on E1 + stage3 fixed point" }
