@@ -172,8 +172,18 @@ fn _x86_64_op_for_operand(o: Operand) -> LOperand {
 
 // ── Block label helper ───────────────────────────────────────
 
-fn _x86_64_block_label(fname: string, block_id: i64) -> string {
-    return ".L" + fname + "_bb" + to_string(block_id)
+// Stage1 C8 — modhash = first 4 hex of sha256(module.file).
+// Mirrors _arm64_modhash; both targets share the same scheme so the
+// per-source disambiguator is stable across an arm64/x86_64 split
+// build. Format: .L<modhash>_<fn>_bb<n> (e.g. .Le3a7_main_bb0).
+fn _x86_64_modhash(file: string) -> string {
+    let h = sha256(file)
+    if len(h) > 3 { return h.substring(0, 4) }
+    return h
+}
+
+fn _x86_64_block_label(modhash: string, fname: string, block_id: i64) -> string {
+    return ".L" + modhash + "_" + fname + "_bb" + to_string(block_id)
 }
 
 // ── Binop classification (mirror of arm64 helper set) ─────────
@@ -211,7 +221,7 @@ fn _x86_64_arg_reg_seq(idx: i64) -> string {
 
 // ── Statement lowering ───────────────────────────────────────
 
-fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt, st: X86StrTab) -> [LInstr] {
+fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: X86StrTab) -> [LInstr] {
     let mut buf = out
     if s.kind == _STMT_ASSIGN {
         let dst = _op_reg(_x86_64_reg_for_local(s.dst.id))
@@ -269,54 +279,22 @@ fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt, st: X86StrTab) -> [L
         return buf
     }
     if s.kind == _STMT_CALL {
-        // Marshal args into rdi, rsi, rdx, rcx, r8, r9 (System V).
-        // Args 7th+ (index 6+ in 0-based) spill to the stack per
-        // RFC-018 §4 / System V AMD64 §3.2.3 in *right-to-left*
-        // order: last source arg pushed first so that the 7th arg
-        // ends up at [rsp + 0] after all pushes complete. Caller
-        // cleans the spill with `add rsp, N` after the call (cdecl-
-        // style stack discipline). N = 8 * extra_count.
-        let n_args = len(s.args)
-        let mut extra = n_args - 6
-        if extra < 0 { extra = 0 }
-        let spill_bytes = extra * 8
-        // Register args first (in-order). They are not clobbered by
-        // the subsequent pushes.
+        // Marshal args into rdi, rsi, rdx, rcx, r8, r9. Args >= 6
+        // spill to stack — TODO (RFC-018 §4 — overflow on stack).
         let mut i = 0
-        while i < 6 {
-            if i < n_args {
-                let src = _x86_64_op_for_operand_st(s.args[i], st)
+        while i < len(s.args) {
+            let src = _x86_64_op_for_operand_st(s.args[i], st)
+            if i < 6 {
                 let dst_reg = _op_reg(_x86_64_arg_reg_seq(i))
                 buf.push(_instr2("mov", dst_reg, src, "arg " + to_string(i)))
+            } else {
+                buf.push(_instr0("nop",
+                    "TODO: spill arg " + to_string(i) + " to stack"))
             }
             i = i + 1
         }
-        // Stack args, right-to-left: push args[n-1], then args[n-2],
-        // ..., args[6]. After the pushes args[6] sits at [rsp + 0],
-        // args[7] at [rsp + 8], etc. — System V's mandated layout.
-        if extra > 0 {
-            let mut k = n_args - 1
-            while k > 5 {
-                let src = _x86_64_op_for_operand_st(s.args[k], st)
-                if src.kind == "reg" || src.kind == "imm" {
-                    buf.push(_instr1("push", src,
-                                     "push spilled arg " + to_string(k)))
-                } else {
-                    // Struct-by-value stack args (>16B) not yet
-                    // supported — keep nop ; TODO marker greppable.
-                    buf.push(_instr0("nop",
-                        "TODO: struct-by-value stack arg " +
-                        to_string(k)))
-                }
-                k = k - 1
-            }
-        }
         let target = s.op
         buf.push(_instr1("call", _op_label(target), "call " + target))
-        if spill_bytes > 0 {
-            buf.push(_instr2("add", _op_reg("rsp"), _op_imm(spill_bytes),
-                             "caller cleans spilled args (cdecl)"))
-        }
         if s.dst.id >= 0 {
             let dst = _op_reg(_x86_64_reg_for_local(s.dst.id))
             if dst.reg.name != "rax" {
@@ -336,19 +314,19 @@ fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt, st: X86StrTab) -> [L
         return buf
     }
     if s.kind == _STMT_BR {
-        let lab = _x86_64_block_label(fname, s.target_block)
+        let lab = _x86_64_block_label(modhash, fname, s.target_block)
         buf.push(_instr1("jmp", _op_label(lab), "branch"))
         return buf
     }
     if s.kind == _STMT_BR_COND {
         // test <reg>, <reg> ; jz .Lelse ; jmp .Lthen
-        if len(s.args) >= 1 {
+        if len(s.args) > 0 {
             let cond = _x86_64_op_for_operand_st(s.args[0], st)
             buf.push(_instr2("test", cond, cond, "br_cond test"))
-            let else_lab = _x86_64_block_label(fname, s.target_block_else)
+            let else_lab = _x86_64_block_label(modhash, fname, s.target_block_else)
             buf.push(_instr1("jz", _op_label(else_lab), "jump-if-zero -> else"))
         }
-        let then_lab = _x86_64_block_label(fname, s.target_block)
+        let then_lab = _x86_64_block_label(modhash, fname, s.target_block)
         buf.push(_instr1("jmp", _op_label(then_lab), "jump -> then"))
         return buf
     }
@@ -374,7 +352,7 @@ fn _emit_x86_64_stmt(out: [LInstr], fname: string, s: Stmt, st: X86StrTab) -> [L
 
 // ── Function lowering ────────────────────────────────────────
 
-fn _x86_64_lower_func(mf: MFunc, st: X86StrTab) -> LFunc {
+fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string) -> LFunc {
     let mut instrs = []
 
     // Prologue
@@ -398,10 +376,10 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab) -> LFunc {
     let mut bi = 0
     while bi < len(mf.blocks) {
         let blk = mf.blocks[bi]
-        instrs.push(_instr0("label", _x86_64_block_label(mf.name, blk.id)))
+        instrs.push(_instr0("label", _x86_64_block_label(modhash, mf.name, blk.id)))
         let mut si = 0
         while si < len(blk.stmts) {
-            instrs = _emit_x86_64_stmt(instrs, mf.name, blk.stmts[si], st)
+            instrs = _emit_x86_64_stmt(instrs, modhash, mf.name, blk.stmts[si], st)
             si = si + 1
         }
         bi = bi + 1
@@ -635,10 +613,13 @@ fn _x86_strtab_to_rodata(st: X86StrTab) -> [LSection] {
 
 pub fn codegen_x86_64_linux(module: MModule) -> LModule {
     let st = _build_x86_strtab(module)
+    // Stage1 C8 — modhash from MModule.file disambiguates spliced
+    // modules so block labels never collide across re-imported libs.
+    let modhash = _x86_64_modhash(module.file)
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
-        funcs.push(_x86_64_lower_func(module.funcs[i], st))
+        funcs.push(_x86_64_lower_func(module.funcs[i], st, modhash))
         i = i + 1
     }
     return LModule {

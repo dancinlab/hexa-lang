@@ -282,25 +282,25 @@ fn main() {
 
     let mut ok = true
 
-    // arm64: backward branch is `b Lsum10_bb1`. Loop header label
-    // (definition) appears as `Lsum10_bb1:`; references in branches
-    // also use bare `Lsum10_bb1` (no colon, possibly platform
-    // prefix). To avoid double-counting, search for `Lsum10_bb1`
-    // bare token and require ≥2 matches (definition + branch
-    // target).
+    // arm64: backward branch is `b _L<modhash>_sum10_bb1`. After
+    // Stage1 C8 the block label gains a per-source modhash prefix
+    // (first 4 hex of sha256(module.file)) so we can no longer grep
+    // for the bare `_Lsum10_bb1` form. Switch to a fn-suffix grep
+    // (`sum10_bb1`) that survives any modhash prefixing — the back
+    // edge still terminates with that suffix, and we still count
+    // 2+ hits (definition + branch target).
     let ok_arm = _run_target("arm64 / apple-darwin",
                              "arm64-apple-darwin",
-                             "b _Lsum10_bb1",
-                             "_Lsum10_bb1")
+                             "sum10_bb1",
+                             "sum10_bb1")
     if !ok_arm { ok = false }
 
-    // x86_64: backward branch is `jmp .Lsum10_bb1`. Loop header is
-    // `.Lsum10_bb1` (with leading dot per Intel-syntax local label
-    // convention).
+    // x86_64: backward branch is `jmp .L<modhash>_sum10_bb1`.
+    // Same Stage1 C8 fn-suffix-grep treatment.
     let ok_x86 = _run_target("x86_64 / linux-gnu",
                              "x86_64-linux-gnu",
-                             "jmp .Lsum10_bb1",
-                             ".Lsum10_bb1")
+                             "sum10_bb1",
+                             "sum10_bb1")
     if !ok_x86 { ok = false }
 
     println("")

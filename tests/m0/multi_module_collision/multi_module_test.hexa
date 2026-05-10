@@ -1,0 +1,206 @@
+// Stage1 punch-list C8 — block-label collision test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Drives the in-tree compiler over lib_a.hexa and lib_b.hexa as
+// independent --emit=asm runs. Both files declare a fn named
+// `helper` (different bodies); without C8's modhash mangle the
+// emitted block labels would be byte-identical and collide if both
+// fragments were ever appended into a single asm.
+//
+// After C8, every block label gains a per-source modhash prefix
+// (first 4 hex of sha256(source_path)), so the two .s files MUST
+// contain different label strings.
+//
+// We avoid importing the codegen modules directly here because
+// stage0's import resolver does not honor 3-level relative paths
+// like `../../../compiler/...`. Shelling out to the compiler driver
+// is the M0 smoke style anyway (cf. tests/m0/run_m0.hexa).
+//
+// Run:
+//   hexa run tests/m0/multi_module_collision/multi_module_test.hexa
+//
+// Exit:
+//   0 on PASS
+//   1 on FAIL
+
+fn _exists(path: string) -> bool {
+    let r = exec("test -e " + path + " && echo ok || echo no").trim()
+    return r == "ok"
+}
+
+fn _read(path: string) -> string {
+    if !_exists(path) { return "" }
+    return to_string(read_file(path))
+}
+
+fn _contains(hay: string, needle: string) -> bool {
+    let h = hay.chars()
+    let n = needle.chars()
+    let hn = len(h)
+    let nn = len(n)
+    if nn == 0 { return true }
+    if nn > hn { return false }
+    let mut i = 0
+    while i + nn < hn + 1 {
+        let mut j = 0
+        let mut ok = true
+        while j < nn {
+            if h[i + j] != n[j] {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _detect_target() -> string {
+    let u = exec("uname -sm 2>/dev/null").trim()
+    if u == "Darwin arm64" { return "arm64-apple-darwin" }
+    if u == "Linux x86_64" { return "x86_64-linux-gnu" }
+    if u == "Linux aarch64" { return "arm64-linux-gnu" }
+    return "arm64-apple-darwin"
+}
+
+fn _resolve_hexa_bin() -> string {
+    let pick = exec("tool/find_local_hexa.sh 2>/dev/null").trim()
+    if len(pick) > 0 && _exists(pick) { return pick }
+    return "hexa"
+}
+
+fn _label_sigil(target: string) -> string {
+    if target == "arm64-apple-darwin" { return "_L" }
+    return ".L"
+}
+
+// Compile `src` to `out` via `hexa run compiler/main.hexa --emit=asm`.
+// Returns true on success, false on driver failure.
+fn _compile_asm(hexa: string, target: string, src: string, out: string) -> bool {
+    exec("rm -f " + out)
+    let cmd = hexa + " run compiler/main.hexa --target=" + target +
+              " --emit=asm -o " + out + " " + src + " 2>&1"
+    println("$ " + cmd)
+    let drvout = exec(cmd)
+    if !_exists(out) {
+        println("  driver did not produce " + out)
+        println("  --- driver output ---")
+        println(drvout)
+        return false
+    }
+    return true
+}
+
+fn main() {
+    println("==============================================")
+    println("  HEXA Compiler -- C8 multi_module_collision test")
+    println("==============================================")
+
+    let target = _detect_target()
+    let hexa = _resolve_hexa_bin()
+    println("target = " + target)
+    println("hexa   = " + hexa)
+    println("")
+
+    let src_a = "tests/m0/multi_module_collision/lib_a.hexa"
+    let src_b = "tests/m0/multi_module_collision/lib_b.hexa"
+    let out_a = "/tmp/c8_lib_a.s"
+    let out_b = "/tmp/c8_lib_b.s"
+
+    let mut ok = true
+
+    if !_compile_asm(hexa, target, src_a, out_a) {
+        println("FAIL: could not compile " + src_a)
+        ok = false
+    }
+    if !_compile_asm(hexa, target, src_b, out_b) {
+        println("FAIL: could not compile " + src_b)
+        ok = false
+    }
+
+    if !ok {
+        println("==============================================")
+        println("FAIL: C8 driver step did not produce both .s files.")
+        println("==============================================")
+        exit(1)
+    }
+
+    let asm_a = _read(out_a)
+    let asm_b = _read(out_b)
+    let sigil = _label_sigil(target)
+
+    // Assert each fragment carries the helper-suffix block label
+    // (the fn-suffix grep that survives modhash prefixing).
+    if !_contains(asm_a, "helper_bb0") {
+        println("FAIL: " + out_a + " missing `helper_bb0`")
+        ok = false
+    } else {
+        println("ok: " + out_a + " contains `helper_bb0`")
+    }
+    if !_contains(asm_b, "helper_bb0") {
+        println("FAIL: " + out_b + " missing `helper_bb0`")
+        ok = false
+    } else {
+        println("ok: " + out_b + " contains `helper_bb0`")
+    }
+
+    // The whole point of C8 -- labels MUST differ across the two
+    // source files. Compute the expected modhashes from the source
+    // path the compiler sees.
+    let pfx_a = sha256(src_a).substring(0, 4)
+    let pfx_b = sha256(src_b).substring(0, 4)
+    let want_a = sigil + pfx_a + "_helper_bb0"
+    let want_b = sigil + pfx_b + "_helper_bb0"
+
+    println("expecting in " + out_a + ": " + want_a)
+    println("expecting in " + out_b + ": " + want_b)
+
+    if !_contains(asm_a, want_a) {
+        println("FAIL: " + out_a + " missing `" + want_a + "`")
+        ok = false
+    } else {
+        println("ok: " + out_a + " contains `" + want_a + "`")
+    }
+    if !_contains(asm_b, want_b) {
+        println("FAIL: " + out_b + " missing `" + want_b + "`")
+        ok = false
+    } else {
+        println("ok: " + out_b + " contains `" + want_b + "`")
+    }
+
+    // Cross-check: lib_a's block label must NOT appear in lib_b's
+    // asm (and vice-versa). This is the actual no-collision contract.
+    if pfx_a == pfx_b {
+        println("FAIL: modhash prefixes collide (" + pfx_a + " == " + pfx_b + ")")
+        ok = false
+    } else {
+        if _contains(asm_b, want_a) {
+            println("FAIL: " + out_b + " unexpectedly contains lib_a's label `"
+                    + want_a + "` -- collision regression")
+            ok = false
+        }
+        if _contains(asm_a, want_b) {
+            println("FAIL: " + out_a + " unexpectedly contains lib_b's label `"
+                    + want_b + "` -- collision regression")
+            ok = false
+        }
+        if ok {
+            println("ok: no asm-level label collisions across modules")
+        }
+    }
+
+    println("")
+    println("==============================================")
+    if ok {
+        println("PASS: modhash mangle disambiguates spliced modules.")
+    } else {
+        println("FAIL: C8 contract violated.")
+    }
+    println("==============================================")
+    if !ok { exit(1) }
+    exit(0)
+}

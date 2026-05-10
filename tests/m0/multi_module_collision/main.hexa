@@ -1,0 +1,9 @@
+// Stage1 C8 fixture — main.hexa
+//
+// Imports lib_a only (lib_b stays a co-resident sibling for the
+// label-collision codegen test, not a real import). Without the
+// modhash mangle introduced in C8 a stand-alone codegen of lib_a
+// and lib_b would emit identical block labels for `_Lhelper_bb0`.
+import "lib_a.hexa"
+
+fn main() -> i32 { return helper() }

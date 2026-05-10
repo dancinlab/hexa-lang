@@ -1,0 +1,7 @@
+// Stage1 C8 fixture — lib_a.hexa
+//
+// Defines `helper` returning 42. Co-resident with lib_b.hexa::helper
+// (returning 99) in the multi_module_collision test. Both are kept
+// private so the semantic checker would normally reject the dup —
+// the C8 fixture only exercises the codegen-level label disambiguation.
+fn helper() -> i32 { return 42 }
