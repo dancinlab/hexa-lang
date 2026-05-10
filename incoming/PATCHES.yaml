@@ -78,3 +78,23 @@
     for full feature parity but not for core start.
   status: in_progress
   background_task: 73  # wilson G2+G3 agent
+
+- id: g7-hexa-ld-dlopen
+  source: wilson plugin architecture (~/core/wilson/docs/plugin-interfaces-comms-aot-brainstorm.md Part C)
+  trees: [self, compiler]
+  compiler_impact: |
+    hexa_ld v1.1 = static only (ELF64 + Mach-O static). G7 = dynamic linking so
+    wilson in-proc plugins can be added without recompiling `wilson`. Phases:
+    G7-A codegen --shared (PIC, export <id>_dispatch only), G7-B hexa_ld --shared
+    (ET_DYN/MH_DYLIB, 1-symbol dynsym), G7-C runtime hexa_dlopen/dlsym/dlclose +
+    stdlib/dynlink.hexa, G7-D .so capability-manifest section + host gate, G7-E
+    wilson loader supports link:"dynamic", G7-F Mach-O parity. Recommended (b)
+    fat .so + single-symbol convention. ALT (d): skip — use G8 incremental link
+    + busybox-multi-call wilson; G7 only if plugin toggle is measured frequent.
+  selftest_delta: TBD
+  status: spec
+  opened: 2026-05-10
+  note: |
+    Priority ★ (nice-to-have, NOT blocking — wilson works without it via
+    `wilson build --with X` static absorption). RFC draft in detail file.
+  detail: patches/g7-hexa-ld-dlopen.md
