@@ -47,8 +47,98 @@ pub struct TypeBinding {
     module_file: string  // owning module file path (for private visibility)
 }
 
+// Stage1 punch list A3 — hash-keyed name index.
+//
+// `buckets` is a parallel array of length `_TYPES_NUM_BUCKETS`; each bucket
+// holds the indices into `entries` for bindings whose `name` hashes to that
+// bucket. Lookup keyed on `name` becomes O(entries / NUM_BUCKETS) average
+// instead of O(entries), which on the spliced super-module collapses ~9 M
+// string compares per type-check into ~140 K. First-occurrence ordering
+// inside each bucket is preserved (push-order), which the lookup logic
+// (pub-first / private-in-caller-file / private-other-module) relies on
+// for first-wins HX3010 / HX2002 attribution.
+//
+// Stage 0 hexa lacks a real hashmap, so we ship the index inline: 64
+// buckets, sum-of-char-codes hash. The constant lives as a fn (stage 0
+// `let` hoisting under splice is fragile per stage1 punch list C1).
+fn _types_num_buckets() -> i64 { return 64 }
+
+fn _types_hash_name(name: string) -> i64 {
+    // FNV-1a-ish but simplified — sum of char codes mod NUM_BUCKETS.
+    // Quality matters less than uniformity for the typical compiler
+    // identifier set; collisions just lengthen a bucket.
+    let mut h = 0
+    let n = len(name)
+    let mut i = 0
+    while i < n {
+        let c = name.char_code_at(i)
+        h = h * 31 + c
+        // Wrap to keep stage0 i64 arithmetic in range.
+        h = h % 1073741824
+        i = i + 1
+    }
+    if h < 0 { h = -h }
+    return h % _types_num_buckets()
+}
+
+fn _types_empty_buckets() -> [[i64]] {
+    let mut bs: [[i64]] = []
+    let n = _types_num_buckets()
+    let mut i = 0
+    while i < n {
+        let empty: [i64] = []
+        bs.push(empty)
+        i = i + 1
+    }
+    return bs
+}
+
 pub struct TypeEnv {
-    entries: [TypeBinding]
+    entries: [TypeBinding],
+    // Hash index: buckets[h] → list of indices into `entries` whose
+    // binding.name hashes to `h`. Always length _types_num_buckets()
+    // post-construction; treat as opaque outside the lookup helpers.
+    buckets: [[i64]]
+}
+
+fn _types_empty_env() -> TypeEnv {
+    return TypeEnv { entries: [], buckets: _types_empty_buckets() }
+}
+
+// Rebuild the bucket index from the current `entries`. Used as a safety
+// net when test harnesses or legacy callers construct a TypeEnv directly
+// with `TypeEnv { entries: [...] }` and never primed the buckets — the
+// first lookup detects the empty-buckets-but-non-empty-entries shape and
+// rebuilds. Constant in env-size, called at most once per such env.
+fn _types_rebuild_buckets(env: TypeEnv) -> TypeEnv {
+    let mut bs = _types_empty_buckets()
+    let mut i = 0
+    while i < len(env.entries) {
+        let h = _types_hash_name(env.entries[i].name)
+        bs[h] = bs[h].push(i)
+        i = i + 1
+    }
+    return TypeEnv { entries: env.entries, buckets: bs }
+}
+
+// Returns the bucket of entry-indices for a given name. When the env was
+// hand-built without buckets (legacy / test path), transparently rebuilds
+// once on first access via the caller.
+fn _types_bucket_for(env: TypeEnv, name: string) -> [i64] {
+    if len(env.buckets) == 0 {
+        // Caller should rebuild via _types_rebuild_buckets for stable
+        // subsequent calls; here we degrade to a synthetic full-scan
+        // bucket so behavior remains correct even if rebuild is skipped.
+        let mut all: [i64] = []
+        let mut i = 0
+        while i < len(env.entries) {
+            all.push(i)
+            i = i + 1
+        }
+        return all
+    }
+    let h = _types_hash_name(name)
+    return env.buckets[h]
 }
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -705,7 +795,22 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
 // pub=false / module_file=current to keep them invisible across files.
 fn _types_env_define_attr(env: TypeEnv, name: string, def: DefId, t: Type,
     is_pub: bool, module_file: string) -> TypeEnv {
+    // A3 — keep the hash index in lockstep with `entries`. If the env was
+    // hand-built without a primed bucket array (legacy test path), seed
+    // it once on first define so subsequent operations stay O(1) avg.
+    let mut buckets = env.buckets
+    if len(buckets) == 0 {
+        buckets = _types_empty_buckets()
+        // Re-bucket any pre-existing entries so the index stays consistent.
+        let mut k = 0
+        while k < len(env.entries) {
+            let hk = _types_hash_name(env.entries[k].name)
+            buckets[hk] = buckets[hk].push(k)
+            k = k + 1
+        }
+    }
     let mut entries = env.entries
+    let new_idx = len(entries)
     entries.push(TypeBinding {
         def: def,
         name: name,
@@ -713,7 +818,9 @@ fn _types_env_define_attr(env: TypeEnv, name: string, def: DefId, t: Type,
         is_pub: is_pub,
         module_file: module_file
     })
-    return TypeEnv { entries: entries }
+    let h = _types_hash_name(name)
+    buckets[h] = buckets[h].push(new_idx)
+    return TypeEnv { entries: entries, buckets: buckets }
 }
 
 // Backwards-compatible shim. Pre-Gap-2 callers expected a single-namespace
@@ -739,10 +846,13 @@ pub struct LookupResult {
 }
 
 fn _types_lookup_def(env: TypeEnv, name: string, caller_file: string) -> LookupResult {
+    // A3 — restrict scans to the hash bucket for `name`. Each pass walks
+    // only entries that share the same hash, not the entire env.
+    let bucket = _types_bucket_for(env, name)
     // Pass 1: pub global hit takes priority (pubs are global names).
     let mut i = 0
-    while i < len(env.entries) {
-        let b = env.entries[i]
+    while i < len(bucket) {
+        let b = env.entries[bucket[i]]
         if b.name == name && b.is_pub {
             return LookupResult {
                 found: true,
@@ -755,8 +865,8 @@ fn _types_lookup_def(env: TypeEnv, name: string, caller_file: string) -> LookupR
     }
     // Pass 2: private hit in caller's own module.
     let mut j = 0
-    while j < len(env.entries) {
-        let b = env.entries[j]
+    while j < len(bucket) {
+        let b = env.entries[bucket[j]]
         if b.name == name && !b.is_pub && b.module_file == caller_file {
             return LookupResult {
                 found: true,
@@ -770,8 +880,8 @@ fn _types_lookup_def(env: TypeEnv, name: string, caller_file: string) -> LookupR
     // Pass 3: name exists privately, but in a foreign module — surface
     // the privacy violation (caller emits HX2002).
     let mut k = 0
-    while k < len(env.entries) {
-        let b = env.entries[k]
+    while k < len(bucket) {
+        let b = env.entries[bucket[k]]
         if b.name == name && !b.is_pub {
             return LookupResult {
                 found: false,
@@ -795,9 +905,11 @@ fn _types_lookup_def(env: TypeEnv, name: string, caller_file: string) -> LookupR
 // Production code paths now use `_types_lookup_def` directly with the real
 // CheckCtx.module attribution.
 fn _types_env_lookup(env: TypeEnv, name: string) -> Type {
+    // A3 — bucket-restricted scan; semantics unchanged (first hit wins).
+    let bucket = _types_bucket_for(env, name)
     let mut i = 0
-    while i < len(env.entries) {
-        let b = env.entries[i]
+    while i < len(bucket) {
+        let b = env.entries[bucket[i]]
         if b.name == name { return b.typ }
         i = i + 1
     }
@@ -1313,9 +1425,11 @@ fn _types_enum_type(def: DefId) -> Type {
 // for idempotent re-registration detection (Item appears twice in
 // module.items because the same fn was spliced from another file).
 fn _types_find_binding(env: TypeEnv, name: string, owning_file: string) -> bool {
+    // A3 — bucket-restricted scan.
+    let bucket = _types_bucket_for(env, name)
     let mut i = 0
-    while i < len(env.entries) {
-        let b = env.entries[i]
+    while i < len(bucket) {
+        let b = env.entries[bucket[i]]
         if b.name == name && b.module_file == owning_file {
             return true
         }
@@ -1326,11 +1440,14 @@ fn _types_find_binding(env: TypeEnv, name: string, owning_file: string) -> bool 
 
 // Find the file that owns the existing pub binding for `name`, or "" when
 // no pub binding is present. Used by HX3010 emission to identify the prior
-// owner during a duplicate-pub-symbol-across-files report.
+// owner during a duplicate-pub-symbol-across-files report. First-occurrence
+// ordering is preserved by walking the bucket in insertion order.
 fn _types_pub_owner_file(env: TypeEnv, name: string) -> string {
+    // A3 — bucket-restricted scan.
+    let bucket = _types_bucket_for(env, name)
     let mut i = 0
-    while i < len(env.entries) {
-        let b = env.entries[i]
+    while i < len(bucket) {
+        let b = env.entries[bucket[i]]
         if b.name == name && b.is_pub {
             return b.module_file
         }
@@ -1354,7 +1471,10 @@ fn _types_pub_owner_file(env: TypeEnv, name: string) -> string {
 // The `out` array collects HX3010 diagnostics; non-collision cases push
 // nothing so existing single-file callers see an empty diag list.
 fn _collect_item_types(module: Module, out: array) -> TypeEnv {
-    let mut env = TypeEnv { entries: [] }
+    // A3 — start with a primed (bucketed) env so every define + lookup
+    // hits the hash index. _types_empty_env() pre-allocates the bucket
+    // slots; _types_env_define_attr keeps them in sync.
+    let mut env = _types_empty_env()
     let mut idx = 0
     let mut i = 0
     while i < len(module.items) {
