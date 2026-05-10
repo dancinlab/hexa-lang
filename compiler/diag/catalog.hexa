@@ -148,15 +148,6 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
-        code: "HX2002",
-        title: "private symbol not accessible from caller",
-        severity: Severity::Error,
-        stage: "S2",
-        template: "private name `{name}` defined in `{defining_file}` is not accessible from `{caller_file}` — mark it `pub` to expose it across files",
-        explain: "The identifier resolved to a definition that is not declared `pub`, and the call site lives in a different module file. Stage1 punch list Gap 2 — once the parser splices imported items into the world module, the type checker enforces file-private visibility for non-pub items: a private helper in file_a.hexa is invisible to file_b.hexa even when file_b imports file_a. Fix: add `pub` to the definition, or move the caller into the defining module.",
-        fix_it_kind: FixItKind::Insert
-    },
-    DiagSpec {
         code: "HX3001",
         title: "type mismatch",
         severity: Severity::Error,
@@ -200,15 +191,6 @@ pub let CATALOG: [DiagSpec] = [
         template: "match arms have different types: expected `{expected}`, got `{actual}` on arm {pos}",
         explain: "All arms of a `match` used as an expression must produce the same type. Adjust the divergent arm to match the first arm's result type.",
         fix_it_kind: FixItKind::None
-    },
-    DiagSpec {
-        code: "HX3010",
-        title: "duplicate pub symbol across files",
-        severity: Severity::Error,
-        stage: "S3",
-        template: "duplicate pub symbol `{name}`: first defined in `{first_file}`, redefined in `{second_file}`",
-        explain: "Two different files declare `pub` items with the same name. Pub items live in the global namespace once the world module is assembled (Stage1 punch list Gap 2 — multi-file pivot), so two pub `greet`s collide just like two definitions in the same file would. Fix: rename one of the definitions, or remove `pub` from the helper that should remain file-private.",
-        fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
         code: "HX4001",

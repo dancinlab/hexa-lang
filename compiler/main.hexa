@@ -481,6 +481,18 @@ if _has_errors(diags) {
 // ── Lower → MIR → LIR ────────────────────────────────────────
 
 let hmodule = lower(module, atlas)
+
+// Stage1 Gap 14: drain lower-pass diagnostics (HX1100 closure-capture).
+// Warnings only — we render them but do not abort, since closure
+// conversion is a Gap 14.1 follow-up.
+let lr_diags = lower_diags()
+if len(lr_diags) > 0 {
+    let mut ld: array = []
+    let mut lk = 0
+    while lk < len(lr_diags) { ld.push(lr_diags[lk]); lk = lk + 1 }
+    _render_all(ld, error_format)
+}
+
 let mut mmodule = lower_hir(hmodule)
 
 // MIR optimizer (RFC-018 §9 v1) — gated by --opt=LEVEL / $HEXA_OPT_LEVEL.

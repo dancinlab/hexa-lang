@@ -1,0 +1,28 @@
+// Stage1 Gap 14 / idiom 3 verification — nested struct construction.
+//
+// Exercises:
+//   - StructLit with a child StructLit (Outer { x:1, inner: Inner { z:2 } })
+//   - The new ast_to_hir struct_lit branch wraps each field as kind=field_lit
+//     and recurses into nested values.
+//   - hir_to_mir emits a STMT_ASSIGN op="struct_lit" with field operands.
+//
+// Goal: produce a non-empty .s. Codegen for struct layouts/loads is a Gap 15
+// follow-up; this test only asserts that the lower pass no longer drops the
+// inner struct on the floor.
+
+struct Inner {
+    z: i64
+}
+
+struct Outer {
+    x: i64,
+    inner: Inner
+}
+
+fn make() -> Outer {
+    return Outer { x: 1, inner: Inner { z: 2 } }
+}
+
+fn main() -> i32 {
+    return 0
+}

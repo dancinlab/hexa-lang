@@ -32,6 +32,22 @@ import "../atlas/merger.hexa"
 import "../atlas/parser.hexa"
 import "../ir/hir.hexa"
 import "../lex/tokens.hexa"
+import "../diag/builder.hexa"
+import "../diag/catalog.hexa"
+
+// ── Lower-pass diagnostic sink (Stage1 Gap 14) ──────────────
+// Module-level mutable buffer following the parse/check pass pattern.
+// `lower(...)` resets it on entry and `lower_diags()` returns the
+// collected diagnostics so the driver in compiler/main.hexa can merge
+// them with the rest of the diag stream. Currently the only code that
+// writes here is the HX1100 closure-capture detector (Gap 14.1 follow-
+// up — inactive today because the parser does not yet emit a fn-literal
+// / closure ExprKind).
+pub let mut l_diags: array = []
+
+pub fn lower_diags() -> array {
+    return l_diags
+}
 
 // ── Sentinels / helpers ──────────────────────────────────────
 
@@ -659,6 +675,206 @@ fn _hir_is_match_kind(k: ExprKind) -> bool {
     }
 }
 
+// ── Probes for the Gap 14 idiom set (struct_lit, enum_path,
+//    field, index, for, assign, wildcard). 100% enum-match
+//    dispatch per RFC-019 strict-enum policy. ──────────────────
+
+fn _hir_is_struct_lit_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::StructLit -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _hir_is_enum_path_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::EnumPath -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _hir_is_field_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Field -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _hir_is_index_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Index -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _hir_is_for_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::For -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _hir_is_assign_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Assign -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+fn _hir_is_wildcard_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Wildcard -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false
+    }
+}
+
 // ── Inline scope walker ──────────────────────────────────────
 // Self-contained DefId resolution table — flat name→DefId pairs with
 // frame boundaries tracked by `frame_starts`. We build it as we walk.
@@ -760,6 +976,70 @@ fn _lookup_in_scope(sc: LowerScope, name: string) -> LowerBinding {
         name: "",
         def: _hir_miss_def_id(),
         typ: _hir_empty_type()
+    }
+}
+
+// HX1100 closure-capture warning emitter (Stage1 Gap 14.1 follow-up).
+// Inactive today because compiler/parse/parser.hexa does not yet emit
+// a fn-literal / closure ExprKind. Wired here so the catalog entry has
+// a canonical call site once closure-conversion lands. `site` is the
+// enclosing function name; `name` is the captured outer variable.
+pub fn emit_hx1100_closure_capture(sp: Span, site: string, name: string) {
+    let mut b = diag_new("HX1100")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "site", site)
+    b = diag_arg(b, "name", name)
+    l_diags.push(diag_emit(b))
+}
+
+// Split an "Enum::Variant" path into its halves. Returns ["Enum","Variant"].
+// On miss returns [text, ""] so the caller can detect malformed paths.
+fn _split_enum_path(text: string) -> [string] {
+    let cs = text.chars()
+    let n = len(cs)
+    let mut i = 0
+    while i + 1 < n {
+        if cs[i] == ':' && cs[i + 1] == ':' {
+            let mut left = ""
+            let mut j = 0
+            while j < i {
+                left = left + to_string(cs[j])
+                j = j + 1
+            }
+            let mut right = ""
+            j = i + 2
+            while j < n {
+                right = right + to_string(cs[j])
+                j = j + 1
+            }
+            return [left, right]
+        }
+        i = i + 1
+    }
+    return [text, ""]
+}
+
+fn _enum_named_type(enum_name: string) -> Type {
+    if len(enum_name) == 0 { return _hir_empty_type() }
+    return Type {
+        kind: "enum:" + enum_name,
+        def: _hir_miss_def_id(),
+        args: [],
+        ret: [],
+        domain: "",
+        unit: ""
+    }
+}
+
+fn _struct_named_type(struct_name: string) -> Type {
+    if len(struct_name) == 0 { return _hir_empty_type() }
+    return Type {
+        kind: "struct:" + struct_name,
+        def: _hir_miss_def_id(),
+        args: [],
+        ret: [],
+        domain: "",
+        unit: ""
     }
 }
 
@@ -1133,7 +1413,125 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
         return LowerResult { expr: h, sc: new_sc }
     }
 
-    // ── Default (Assign / Field / Index / StructLit / EnumPath / For / Wildcard) ──
+    // ── Stage1 Gap 14 idiom handlers (struct_lit / enum_path /
+    // field / index / for / assign / wildcard). Each branch lowers
+    // children explicitly so downstream hir_to_mir can emit the
+    // matching STMT_ASSIGN / STMT_BR_COND patterns. ────────────
+    if _hir_is_struct_lit_kind(k) {
+        let mut new_sc = sc
+        let mut kids: [HExpr] = []
+        let mut i = 0
+        while i < len(e.children) {
+            let f = e.children[i]
+            if _hir_is_ident_kind(f.kind) && len(f.children) > 0 {
+                let vr = _lower_expr(f.children[0], atlas, new_sc)
+                new_sc = vr.sc
+                let mut field_kids: [HExpr] = []
+                field_kids.push(vr.expr)
+                let fh = _mk_hexpr("field_lit", f.span, vr.expr.typ, f.text,
+                                   field_kids, _empty_atlas_binding(),
+                                   _hir_miss_def_id())
+                kids.push(fh)
+            } else {
+                let vr = _lower_expr(f, atlas, new_sc)
+                new_sc = vr.sc
+                kids.push(vr.expr)
+            }
+            i = i + 1
+        }
+        let t = _struct_named_type(e.text)
+        let h = _mk_hexpr(kind_tag, e.span, t, e.text,
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: new_sc }
+    }
+    if _hir_is_enum_path_kind(k) {
+        let mut new_sc = sc
+        let mut kids: [HExpr] = []
+        let mut i = 0
+        while i < len(e.children) {
+            let r = _lower_expr(e.children[i], atlas, new_sc)
+            kids.push(r.expr)
+            new_sc = r.sc
+            i = i + 1
+        }
+        let parts = _split_enum_path(e.text)
+        let t = _enum_named_type(parts[0])
+        let h = _mk_hexpr(kind_tag, e.span, t, e.text,
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: new_sc }
+    }
+    if _hir_is_field_kind(k) {
+        let mut new_sc = sc
+        let mut kids: [HExpr] = []
+        if len(e.children) > 0 {
+            let r = _lower_expr(e.children[0], atlas, new_sc)
+            kids.push(r.expr)
+            new_sc = r.sc
+        }
+        let h = _mk_hexpr(kind_tag, e.span, _hir_empty_type(), e.text,
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: new_sc }
+    }
+    if _hir_is_index_kind(k) {
+        let mut new_sc = sc
+        let mut kids: [HExpr] = []
+        let mut i = 0
+        while i < len(e.children) {
+            let r = _lower_expr(e.children[i], atlas, new_sc)
+            kids.push(r.expr)
+            new_sc = r.sc
+            i = i + 1
+        }
+        let mut t = _hir_empty_type()
+        if len(kids) > 0 { t = kids[0].typ }
+        let h = _mk_hexpr(kind_tag, e.span, t, e.text,
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: new_sc }
+    }
+    if _hir_is_for_kind(k) {
+        let mut new_sc = sc
+        let mut kids: [HExpr] = []
+        if len(e.children) >= 1 {
+            let r = _lower_expr(e.children[0], atlas, new_sc)
+            kids.push(r.expr)
+            new_sc = r.sc
+        }
+        if len(e.children) >= 2 {
+            let mut body_sc = _push_frame(new_sc)
+            if len(e.text) > 0 {
+                body_sc = _define_in_scope(body_sc, e.text, _hir_empty_type())
+            }
+            let r = _lower_expr(e.children[1], atlas, body_sc)
+            kids.push(r.expr)
+            new_sc = _pop_frame(r.sc)
+        }
+        let h = _mk_hexpr(kind_tag, e.span, _hir_t_unit(), e.text,
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: new_sc }
+    }
+    if _hir_is_assign_kind(k) {
+        let mut new_sc = sc
+        let mut kids: [HExpr] = []
+        let mut i = 0
+        while i < len(e.children) {
+            let r = _lower_expr(e.children[i], atlas, new_sc)
+            kids.push(r.expr)
+            new_sc = r.sc
+            i = i + 1
+        }
+        let mut t = _hir_t_unit()
+        if len(kids) >= 2 { t = kids[1].typ }
+        let h = _mk_hexpr(kind_tag, e.span, t, e.text,
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: new_sc }
+    }
+    if _hir_is_wildcard_kind(k) {
+        let h = _mk_hexpr(kind_tag, e.span, _hir_empty_type(), e.text,
+                          [], _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: sc }
+    }
+
+    // ── Default — generic recurse for any kind not handled above. ──
     // Generic recurse — every child lowered in order.
     let mut new_sc = sc
     let mut kids: [HExpr] = []
@@ -1337,6 +1735,10 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
 // ── Public entry ─────────────────────────────────────────────
 
 pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
+    // Reset the per-invocation diag buffer so successive lower() calls in
+    // the same process do not leak HX1100 emissions across compilations.
+    l_diags = []
+
     // Pre-pass: mint DefIds + collect module-level type bindings so that
     // intra-module references (calls, struct-of-fields, etc.) can resolve.
     let mut module_sc = _new_scope(module.file)

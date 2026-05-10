@@ -768,6 +768,12 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     }
 
     // ── match: sequence of _STMT_BR_COND testing tag ─────────
+    //
+    // Stage1 Gap 14: arm-pattern coverage extended to:
+    //   - "wildcard"   → unconditional _STMT_BR to arm
+    //   - "ident"      → bind scrut to ident name in arm
+    //   - "enum_path"  → tag-equality test; payload binders bound to scrut
+    //   - other        → general operand-equality test (as before)
     if k == "match" {
         if len(e.children) < 1 { return _no_value(ctx) }
         let sr = _lower_hexpr(ctx, e.children[0])
@@ -803,6 +809,47 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 }
                 ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
                 ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
+            } else if pat.kind == "ident" && len(pat.text) > 0 && pat.text != "_" {
+                let br = Stmt {
+                    kind: _STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: arm_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
+                ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
+            } else if pat.kind == "enum_path" {
+                let tag_v = _path_hash(pat.text)
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "tag_eq")
+                let cmp_dst = ctx3.locals[len(ctx3.locals) - 1]
+                let mut cmp_args: [Operand] = []
+                cmp_args.push(scrut_op)
+                cmp_args.push(_const_int_op(tag_v))
+                let cmp = Stmt {
+                    kind: _STMT_BINOP,
+                    dst: cmp_dst,
+                    op: "==",
+                    args: cmp_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, cmp)
+                let mut br_args: [Operand] = []
+                br_args.push(_local_op(cmp_dst.id))
+                let br = Stmt {
+                    kind: _STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: br_args,
+                    target_block: arm_id,
+                    target_block_else: next_id
+                }
+                ctx3 = _push_stmt(ctx3, br)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                ctx2 = ctx3
             } else {
                 let pr = _lower_hexpr(ctx2, pat)
                 ctx2 = pr.ctx
@@ -836,7 +883,51 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx2 = ctx3
             }
 
+            // Position cur_block on the arm; emit per-pattern bindings
+            // (ident pat → bind name to scrut; enum_path → bind each
+            // payload child name to scrut for v0 — the structural extract
+            // is a Gap 15 follow-up).
             ctx2 = _set_cur_block(ctx2, arm_id)
+            if pat.kind == "ident" && len(pat.text) > 0 && pat.text != "_" {
+                let mut ctx_a = _fresh_local(ctx2, pat.typ, pat.text)
+                let dst_a = ctx_a.locals[len(ctx_a.locals) - 1]
+                let mut a: [Operand] = []
+                a.push(scrut_op)
+                let s = Stmt {
+                    kind: _STMT_ASSIGN,
+                    dst: dst_a,
+                    op: "bind",
+                    args: a,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx_a = _push_stmt(ctx_a, s)
+                ctx_a = _bind(ctx_a, pat.text, dst_a.id)
+                ctx2 = ctx_a
+            } else if pat.kind == "enum_path" {
+                let mut pi = 0
+                while pi < len(pat.children) {
+                    let pc = pat.children[pi]
+                    if pc.kind == "ident" && len(pc.text) > 0 && pc.text != "_" {
+                        let mut ctx_b = _fresh_local(ctx2, pc.typ, pc.text)
+                        let dst_b = ctx_b.locals[len(ctx_b.locals) - 1]
+                        let mut a2: [Operand] = []
+                        a2.push(scrut_op)
+                        let s2 = Stmt {
+                            kind: _STMT_ASSIGN,
+                            dst: dst_b,
+                            op: "payload",
+                            args: a2,
+                            target_block: -1,
+                            target_block_else: -1
+                        }
+                        ctx_b = _push_stmt(ctx_b, s2)
+                        ctx_b = _bind(ctx_b, pc.text, dst_b.id)
+                        ctx2 = ctx_b
+                    }
+                    pi = pi + 1
+                }
+            }
             let br_b = _lower_hexpr(ctx2, body)
             ctx2 = br_b.ctx
             if !ctx2.has_returned {
@@ -861,6 +952,115 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _no_value(ctx2)
     }
 
+    // ── struct_lit → STMT_ASSIGN op="struct_lit" with field operands ─
+    //
+    // Stage1 Gap 14 (idiom 3): nested-struct construction. Children are
+    // HExpr{kind="field_lit", text=field_name, children=[value]}. We
+    // recurse the values (so a Bar nested inside Foo emits its own
+    // struct_lit assignment first, then Foo references that local).
+    if k == "struct_lit" {
+        let mut ctx2 = ctx
+        let mut field_ops: [Operand] = []
+        let mut i = 0
+        while i < len(e.children) {
+            let f = e.children[i]
+            if f.kind == "field_lit" && len(f.children) > 0 {
+                let r = _lower_hexpr(ctx2, f.children[0])
+                ctx2 = r.ctx
+                field_ops.push(r.operand)
+            } else {
+                let r = _lower_hexpr(ctx2, f)
+                ctx2 = r.ctx
+                field_ops.push(r.operand)
+            }
+            i = i + 1
+        }
+        ctx2 = _fresh_local(ctx2, e.typ, "struct_" + e.text)
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let s = Stmt {
+            kind: _STMT_ASSIGN,
+            dst: dst,
+            op: "struct_lit",
+            args: field_ops,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── enum_path → constructor (constant tag + lowered payload) ─
+    //
+    // Stage1 Gap 14 (idiom 1 producer side): variant construction.
+    // Tag is a deterministic hash of the path text (matches the match
+    // arm comparison in the same pass).
+    if k == "enum_path" {
+        let mut ctx2 = ctx
+        let mut args: [Operand] = []
+        args.push(_const_int_op(_path_hash(e.text)))
+        let mut i = 0
+        while i < len(e.children) {
+            let r = _lower_hexpr(ctx2, e.children[i])
+            ctx2 = r.ctx
+            args.push(r.operand)
+            i = i + 1
+        }
+        ctx2 = _fresh_local(ctx2, e.typ, "enum_" + e.text)
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let s = Stmt {
+            kind: _STMT_ASSIGN,
+            dst: dst,
+            op: "enum_path",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── field: base.name → STMT_ASSIGN op="field" args=[base] ─
+    if k == "field" {
+        if len(e.children) < 1 { return _no_value(ctx) }
+        let r = _lower_hexpr(ctx, e.children[0])
+        let mut ctx2 = _fresh_local(r.ctx, e.typ, "field_" + e.text)
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let mut args: [Operand] = []
+        args.push(r.operand)
+        let s = Stmt {
+            kind: _STMT_ASSIGN,
+            dst: dst,
+            op: "field." + e.text,
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
+    // ── index: base[idx] → STMT_ASSIGN op="index" args=[base, idx] ─
+    if k == "index" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let lr = _lower_hexpr(ctx, e.children[0])
+        let rr = _lower_hexpr(lr.ctx, e.children[1])
+        let mut ctx2 = _fresh_local(rr.ctx, e.typ, "idx")
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let mut args: [Operand] = []
+        args.push(lr.operand)
+        args.push(rr.operand)
+        let s = Stmt {
+            kind: _STMT_ASSIGN,
+            dst: dst,
+            op: "index",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
     // ── Default: lower children, no value. ──────────────────
     let mut ctx_d = ctx
     let mut i = 0
@@ -873,6 +1073,44 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 }
 
 // ── Helpers ─────────────────────────────────────────────────
+
+// Stable per-string hash used to assign a deterministic discriminant
+// to enum variant paths ("Color::Red") in the match-on-enum lowering.
+// Stage1: real enum-discriminant tables are a Gap 15 follow-up; until
+// then this function gives every distinct path text a distinct (with
+// high probability) i64 tag.
+fn _path_hash(s: string) -> i64 {
+    let cs = s.chars()
+    let n = len(cs)
+    let mut h: i64 = 5381
+    let mut i = 0
+    while i < n {
+        let c = cs[i]
+        let mut code: i64 = 1
+        if c == ':' { code = 58 }
+        else if c == '_' { code = 95 }
+        else if c == 'a' || c == 'A' { code = 97 }
+        else if c == 'b' || c == 'B' { code = 98 }
+        else if c == 'c' || c == 'C' { code = 99 }
+        else if c == 'd' || c == 'D' { code = 100 }
+        else if c == 'e' || c == 'E' { code = 101 }
+        else if c == 'f' || c == 'F' { code = 102 }
+        else if c == 'g' || c == 'G' { code = 103 }
+        else if c == 'h' || c == 'H' { code = 104 }
+        else if c == 'i' || c == 'I' { code = 105 }
+        else if c == 'l' || c == 'L' { code = 108 }
+        else if c == 'n' || c == 'N' { code = 110 }
+        else if c == 'o' || c == 'O' { code = 111 }
+        else if c == 'r' || c == 'R' { code = 114 }
+        else if c == 's' || c == 'S' { code = 115 }
+        else if c == 't' || c == 'T' { code = 116 }
+        else if c == 'u' || c == 'U' { code = 117 }
+        else { code = 90 + i }
+        h = ((h * 33) + code) & 2147483647
+        i = i + 1
+    }
+    return h
+}
 
 fn _strip_mut_prefix(t: string) -> string {
     let chars = t.chars()
