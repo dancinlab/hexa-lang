@@ -17683,7 +17683,20 @@ fn val_to_string(v) {
 // decreases v — structural
 fn val_to_json(v) {
     if v.tag == TAG_INT { return to_string(v.int_val) }
-    if v.tag == TAG_FLOAT { return to_string(v.float_val) }
+    if v.tag == TAG_FLOAT {
+        // HEXA_F2 fix 2026-05-09: ensure whole-valued floats round-trip
+        // as floats (e.g. -250.0 -> "-250.0", not "-250"). The host's
+        // to_string applies %.1f for finite integer-valued floats
+        // (runtime.c trk.27 fix 2026-05-06), but if a stale stage0
+        // binary lacks that fix, append ".0" defensively when no
+        // decimal/exponent marker is present.
+        let fs = to_string(v.float_val)
+        if fs.contains(".") || fs.contains("e") || fs.contains("E") || fs.contains("n") {
+            // already float-shaped, or "nan"/"inf" — emit as-is.
+            return fs
+        }
+        return fs + ".0"
+    }
     if v.tag == TAG_BOOL {
         if v.bool_val { return "true" } else { return "false" }
     }
@@ -17772,10 +17785,19 @@ fn json_to_val(s) {
     }
     // Number — distinguish int vs float via `.`/`e`/`E` in token.
     // Handles 1e10, -0.5, 1.0e-3 etc. Fallback: bare digits → int.
+    //
+    // HEXA_F2 fix 2026-05-09: use `s.parse_float()` / `s.parse_int()`
+    // directly instead of `to_float(s)` / `to_int(s)`. The bare-name
+    // resolution in find_fn picks up the local `fn to_float(v)` helper
+    // (Val-tag dispatcher, defined later in this file) which returns
+    // 0.0 for raw string args — silently coercing every JSON float to
+    // 0.0 and breaking float typing for "-2.5E+2" / "0.0" round-trips.
+    // Method-call form `s.parse_float()` routes through the string
+    // method dispatcher to the host parser unambiguously.
     if s.contains(".") || s.contains("e") || s.contains("E") {
-        return val_float(to_float(s))
+        return val_float(s.parse_float())
     }
-    return val_int(to_int(s))
+    return val_int(s.parse_int())
 }
 
 // Unescape a JSON string body (without surrounding quotes). Strict-JSON

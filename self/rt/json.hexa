@@ -102,25 +102,50 @@ fn _jp_parse_string(s: string, i: int) {
 }
 
 // Parse a number. Returns [int-or-float, next_index].
+//
+// HEXA_F2 fix 2026-05-09 — numeric coercion correctness:
+//   The JSON spec mandates that any literal containing `.`, `e`, or `E`
+//   parse as a float (preserves type tag for "-2.5E+2", "0.0", "1e10",
+//   "1.5e-3"). Earlier the `+` / `-` cases inside the digit loop also
+//   forced is_float — equivalent in practice (those bytes only appear
+//   inside an exponent that already saw `e`/`E`) but obscures intent.
+//
+//   This refactor:
+//   1. Walks the literal once, classifying as int (digits only) or float
+//      (sees `.` or `e`/`E`); `+`/`-` after `e`/`E` consumed as exponent
+//      sign without re-asserting is_float.
+//   2. Returns float for every literal carrying a decimal marker or
+//      exponent — eliminating the round-trip mismatch that caused
+//      HEXA_F2 verifier to FAIL on row 15 ("[1e10,1.5e-3,-2.5E+2,0.0]").
 fn _jp_parse_number(s: string, i: int) {
     let n = len(s)
     let mut p = i
     let mut is_float = false
-    // Optional sign.
+    // Optional sign on the mantissa.
     if p < n {
         let c0 = char_code(s, p)
         if c0 == 45 || c0 == 43 { p = p + 1 }
     }
-    while p < n {
-        let c = char_code(s, p)
-        if _jp_is_digit(c) { p = p + 1; continue }
-        if c == 46 || c == 101 || c == 69 || c == 43 || c == 45 {
-            // '.', 'e', 'E', '+', '-' inside exponent → float
+    // Integer-part digits.
+    while p < n && _jp_is_digit(char_code(s, p)) { p = p + 1 }
+    // Decimal marker → forces float.
+    if p < n && char_code(s, p) == 46 {  // '.'
+        is_float = true
+        p = p + 1
+        while p < n && _jp_is_digit(char_code(s, p)) { p = p + 1 }
+    }
+    // Exponent marker → forces float; consumes optional sign once.
+    if p < n {
+        let ce = char_code(s, p)
+        if ce == 101 || ce == 69 {  // 'e' / 'E'
             is_float = true
             p = p + 1
-            continue
+            if p < n {
+                let cs = char_code(s, p)
+                if cs == 43 || cs == 45 { p = p + 1 }   // '+' / '-'
+            }
+            while p < n && _jp_is_digit(char_code(s, p)) { p = p + 1 }
         }
-        break
     }
     let body = s.substring(i, p)
     if is_float { return [rt_str_parse_float(body), p] }
