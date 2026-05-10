@@ -54,8 +54,36 @@ fn cmp_kind_to_string(k) {
 }
 
 // ── Operand (tagged struct) ─────────────────────────────────
-// Hexa enums lack per-variant payload shapes, so we encode Operand
-// as a struct with a kind tag + polymorphic payload slots.
+// RFC-020 B1 status (2026-05-10): the struct + string-kind discriminator
+// is intentionally retained. RFC-020 A5 landed enum payload variants in
+// self/hexa_full.hexa, but the current `hexa run` interpreter binary
+// (build/hexa_interp.real and the remote ubu-1 mirror) still resolves
+// payload-bound names to `val_void`, so a full sum-type migration of
+// Operand would silently break every downstream consumer.
+//
+// Audited consumers that read .kind / .a / .b / .cmp directly (must move
+// in lock-step with the migration):
+//   - self/ir/print.hexa             (12 kind branches in print_operand)
+//   - self/codegen/mod.hexa          (~80 sites: regalloc + arm64/x86 emit)
+//   - self/codegen/test_regalloc_coverage.hexa
+//
+// Planned sum-type shape (single-field payload, RFC-020 §5):
+//   struct PhiData    { block: int, value_id: int }
+//   struct SwitchCase { case_val: int, target_bb: int }
+//   struct CmpData    { kind: string }
+//   enum Operand {
+//       Value(int), ImmI64(int), ImmF64(float), ImmBool(bool),
+//       Block(int), Func(int), FieldIdx(int), StringRef(int),
+//       Phi(PhiData), Switch(SwitchCase), Cmp(CmpData), Param(int)
+//   }
+//
+// TODO (RFC-020 B1 follow-up): once `build/hexa_interp.real` is rebuilt
+// from self/hexa_full.hexa and confirms payload destructuring at runtime,
+// (1) replace the struct below with the enum, (2) rewrite constructors
+// to enum variants, (3) sweep print.hexa and codegen/mod.hexa to use
+// `match op { ... }` instead of `op.kind == "..."`, (4) drop the
+// kind/a/b/cmp fallback fields, (5) re-run self/test_enum_payload_full.hexa
+// + self/test_ir_match_enum_try.hexa to confirm 15/15 + 53/53.
 struct Operand {
     kind: string,   // "value" | "imm_i64" | "imm_f64" | "imm_bool" | "block" |
                     // "func" | "field_idx" | "string_ref" | "phi_entry" |
