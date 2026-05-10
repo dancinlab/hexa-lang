@@ -1,0 +1,151 @@
+(kicad_sch (version 20231120) (generator "hexa-rtsc-phase-E")
+
+	(uuid "11111111-1111-1111-1111-111111111111")
+
+	(paper "A3")
+
+	(title_block
+		(title "hexa-rtsc Quench-Detect FPGA — Phase E schematic skeleton")
+		(date "2026-05-08")
+		(rev "v0.1-skeleton")
+		(company "dancinlab/hexa-rtsc")
+		(comment 1 "Spec: doc/48t_rebco_coil_v0.md (Stage A)")
+		(comment 2 "HDL:  firmware/hdl/quench_detect.v (Phase D, 12/12 PASS)")
+		(comment 3 "MCU:  none (FPGA only)")
+		(comment 4 "PCB:  TBD — Phase E2, $25k procurement")
+	)
+
+	;; ─── KiCad library symbol references (Symbols + Footprints) ──────
+	(lib_symbols
+		(symbol "MCU_Xilinx:XC7A35T-1CSG324C"
+			(power)
+			(pin_names (offset 0))
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "U1" (at 0 50.8 0))
+			(property "Value" "XC7A35T-1CSG324C" (at 0 -50.8 0))
+			(property "Footprint" "Package_BGA:Xilinx_CSG324" (at 0 0 0))
+			(property "Datasheet" "https://docs.amd.com/v/u/en-US/ds181_Artix_7_Data_Sheet" (at 0 0 0))
+			(property "Description" "Artix-7 FPGA, 33k LUT, 50 BRAM, 6.5 GHz max GTX" (at 0 0 0))
+		)
+		(symbol "Analog_ADC:LTC2378-20"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U2" (at 0 0 0))
+			(property "Value" "LTC2378-20" (at 0 0 0))
+			(property "Footprint" "Package_DFN_QFN:DFN-16-1EP_3x4mm_P0.5mm_EP1.7x2.65mm" (at 0 0 0))
+			(property "Datasheet" "https://www.analog.com/media/en/technical-documentation/data-sheets/237820fb.pdf" (at 0 0 0))
+		)
+		(symbol "Amplifier_Instrumentation:AD8429"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U3" (at 0 0 0))
+			(property "Value" "AD8429" (at 0 0 0))
+			(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" (at 0 0 0))
+			(property "Datasheet" "https://www.analog.com/media/en/technical-documentation/data-sheets/AD8429.pdf" (at 0 0 0))
+		)
+		(symbol "Isolator:ISO224"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U4" (at 0 0 0))
+			(property "Value" "ISO224" (at 0 0 0))
+			(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" (at 0 0 0))
+			(property "Datasheet" "https://www.ti.com/lit/ds/symlink/iso224.pdf" (at 0 0 0))
+		)
+		(symbol "Optocoupler:TLP358"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U5" (at 0 0 0))
+			(property "Value" "TLP358" (at 0 0 0))
+			(property "Footprint" "Package_SO:SOIC-6_3.9x4.9mm_P1.27mm" (at 0 0 0))
+			(property "Datasheet" "https://toshiba.semicon-storage.com/info/docget.jsp?did=51999" (at 0 0 0))
+		)
+	)
+
+	;; ─── Top-level component instances ───────────────────────────────
+	(symbol (lib_id "MCU_Xilinx:XC7A35T-1CSG324C")
+		(at 100 100 0) (uuid "u1-fpga-quench-detect")
+		(property "Reference" "U1" (at 100 50 0))
+		(property "Value" "XC7A35T-1CSG324C" (at 100 150 0))
+		(instances (project "quench_detect" (path "/" (reference "U1") (unit 1))))
+	)
+
+	(symbol (lib_id "Analog_ADC:LTC2378-20") (at 60 80 0) (uuid "u2-adc-rebco")
+		(property "Reference" "U2" (at 60 70 0))
+		(property "Value" "LTC2378-20" (at 60 90 0))
+		(instances (project "quench_detect" (path "/" (reference "U2") (unit 1))))
+	)
+	(symbol (lib_id "Analog_ADC:LTC2378-20") (at 60 120 0) (uuid "u3-adc-bitter")
+		(property "Reference" "U3" (at 60 110 0))
+		(property "Value" "LTC2378-20" (at 60 130 0))
+		(instances (project "quench_detect" (path "/" (reference "U3") (unit 1))))
+	)
+
+	(symbol (lib_id "Amplifier_Instrumentation:AD8429") (at 30 80 0) (uuid "u4-diff-amp-rebco")
+		(property "Reference" "U4" (at 30 75 0))
+		(property "Value" "AD8429" (at 30 85 0))
+		(instances (project "quench_detect" (path "/" (reference "U4") (unit 1))))
+	)
+	(symbol (lib_id "Amplifier_Instrumentation:AD8429") (at 30 120 0) (uuid "u5-diff-amp-bitter")
+		(property "Reference" "U5" (at 30 115 0))
+		(property "Value" "AD8429" (at 30 125 0))
+		(instances (project "quench_detect" (path "/" (reference "U5") (unit 1))))
+	)
+
+	(symbol (lib_id "Isolator:ISO224") (at 45 80 0) (uuid "u6-iso-rebco")
+		(property "Reference" "U6" (at 45 75 0))
+		(property "Value" "ISO224" (at 45 85 0))
+		(instances (project "quench_detect" (path "/" (reference "U6") (unit 1))))
+	)
+	(symbol (lib_id "Isolator:ISO224") (at 45 120 0) (uuid "u7-iso-bitter")
+		(property "Reference" "U7" (at 45 115 0))
+		(property "Value" "ISO224" (at 45 125 0))
+		(instances (project "quench_detect" (path "/" (reference "U7") (unit 1))))
+	)
+
+	(symbol (lib_id "Optocoupler:TLP358") (at 150 100 0) (uuid "u8-igbt-driver")
+		(property "Reference" "U8" (at 150 95 0))
+		(property "Value" "TLP358" (at 150 105 0))
+		(instances (project "quench_detect" (path "/" (reference "U8") (unit 1))))
+	)
+
+	;; ─── Net labels (per firmware/hdl/constraints.xdc) ────────────────
+	(label "VRBCO_DIFF_P" (at 20 78 0) (effects (font (size 1.27 1.27)) (justify left)))
+	(label "VRBCO_DIFF_N" (at 20 82 0) (effects (font (size 1.27 1.27)) (justify left)))
+	(label "VBITT_DIFF_P" (at 20 118 0) (effects (font (size 1.27 1.27)) (justify left)))
+	(label "VBITT_DIFF_N" (at 20 122 0) (effects (font (size 1.27 1.27)) (justify left)))
+	(label "VRBCO_ISO_OUT" (at 50 80 0))
+	(label "VBITT_ISO_OUT" (at 50 120 0))
+	(label "ADC_REBCO_OUT[15:0]" (at 75 80 0))
+	(label "ADC_BITTER_OUT[15:0]" (at 75 120 0))
+	(label "FPGA_IGBT_GATE" (at 120 100 0))
+	(label "OPTO_GATE_OUT" (at 165 100 0))
+	(label "REBCO_TAP_HOT" (at 5 78 0))
+	(label "REBCO_TAP_COLD" (at 5 82 0))
+	(label "BITTER_TAP_HOT" (at 5 118 0))
+	(label "BITTER_TAP_COLD" (at 5 122 0))
+	(label "DUMP_RESISTOR_GATE" (at 175 100 0))
+
+	;; ─── Power rails ───────────────────────────────────────────────────
+	(label "+15V" (at 30 70 0) (effects (font) (justify left)))
+	(label "-15V" (at 30 90 0) (effects (font) (justify left)))
+	(label "+3V3" (at 100 50 0) (effects (font) (justify left)))
+	(label "+1V0" (at 100 60 0) (effects (font) (justify left)))
+	(label "GND"  (at 100 150 0) (effects (font) (justify left)))
+	(label "+24V_GATE" (at 165 95 0) (effects (font) (justify left)))
+
+	;; ─── Hierarchical sheet for power tree (subfile, TBD) ──────────────
+	(sheet (at 200 100) (size 50 30)
+		(uuid "sheet-power-tree")
+		(property "Sheet name" "power_tree" (at 200 95 0))
+		(property "Sheet file" "power_tree.kicad_sch" (at 200 130 0))
+	)
+
+	;; ─── Notes (text annotation) ──────────────────────────────────────
+	(text "REBCO voltage-tap differential signal path (cryogenic side)\n→ AD8429 instrumentation amp (×100, low-noise)\n→ ISO224 reinforced isolator (cryogen boundary)\n→ LTC2378-20 20-bit ADC (1 MS/s differential)\n→ XC7A35T FPGA (1-of-3 fast voting + Cernox confirm)"
+		(at 100 30 0)
+		(effects (font (size 1.5 1.5)))
+	)
+	(text "Bitter coil voltage-tap path (warm-room side, mirror layout)" (at 100 35 0))
+	(text "Worst-case latency: AD8429 50 ns + ISO224 100 ns + LTC2378 300 ns\n+ FPGA threshold 10 ns + IGBT gate 10 ns + opto 250 ns + IGBT switch 500 ns\n= 1.2 µs total (well under 4 µs spec, doc/chip_design.md §4)"
+		(at 100 170 0)
+		(effects (font (size 1.2 1.2)))
+	)
+
+)

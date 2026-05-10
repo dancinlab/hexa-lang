@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use hexa-rtsc in academic work, please cite as below."
+title: "hexa-rtsc: HEXA family substrate (n=6 invariant lattice)"
+authors:
+  - name: dancinlab contributors
+    affiliation: dancinlab
+license: MIT
+repository-code: "https://github.com/dancinlab/hexa-rtsc"
+url: "https://github.com/dancinlab/hexa-rtsc"
+version: "v0.1.0"
+date-released: "2026-05-10"
+doi: "10.5281/zenodo.20102616"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.20102616"
+    description: "Concept DOI (always resolves to the latest version)"
+  - type: doi
+    value: "10.5281/zenodo.20102617"
+    description: "Version-specific DOI for v0.1.0"
+keywords:
+  - hexa-family
+  - n6-lattice
+  - perfect-number

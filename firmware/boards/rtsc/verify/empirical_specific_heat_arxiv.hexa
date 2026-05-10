@@ -1,0 +1,167 @@
+#!hexa strict
+// hexa-rtsc/verify/empirical_specific_heat_arxiv.hexa — F-SC-3 T3 closure (archival).
+//
+// Confirms that the BCS specific-heat jump ratio (ΔC/γTc ≈ 1.43) literature
+// is real and discoverable. F-SC-3's preregister statement is "BCS
+// specific-heat jump ratio ΔC/γTc ≠ ~1.43 → DEMOTE σ(6)=12 molecule".
+//
+// Tier: F-SC-3 T3. Strict raw-data fit (calorimetry below Tc: ΔC jump
+// ratio measurement on s-wave SC) → Stage-1+ TBD.
+//
+// Run: hexa run verify/empirical_specific_heat_arxiv.hexa
+//
+// @no-lock-needed
+
+let HOME = env("HOME")
+let HEXA_RTSC_ROOT_ENV = env("HEXA_RTSC_ROOT")
+
+fn _root() -> str {
+    if HEXA_RTSC_ROOT_ENV.len() > 0 { return HEXA_RTSC_ROOT_ENV }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-rtsc"
+}
+
+let ROOT = _root()
+let FIXTURE_PATH = ROOT + "/verify/fixtures/sc_bcs_specific_heat_jump.xml"
+let DOC_SC = ROOT + "/sc/superconductor.md"
+
+fn _read(p: str) -> str { return exec("cat '" + p + "' 2>/dev/null") }
+fn file_exists(p: str) -> bool {
+    return exec("[ -f '" + p + "' ] && echo y || echo n").trim() == "y"
+}
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+fn _info(label: str, detail: str) {
+    println("  [INFO] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+let API_URL = "https://export.arxiv.org/api/query?search_query=all:BCS+specific+heat+jump+gamma+Tc&max_results=3"
+let MIN_PAPERS = 100
+
+fn fetch_api() -> str {
+    return exec("curl -sL --max-time 12 '" + API_URL + "' 2>/dev/null")
+}
+fn read_fixture() -> str {
+    if !file_exists(FIXTURE_PATH) { return "" }
+    return _read(FIXTURE_PATH)
+}
+
+fn parse_total(xml: str) -> int {
+    let needle = "<opensearch:totalResults"
+    let start = xml.find(needle)
+    if start < 0 { return -1 }
+    let n = xml.len()
+    let mut i = start
+    while i < n && xml[i] != ">" { i = i + 1 }
+    if i >= n { return -1 }
+    i = i + 1
+    let mut digits = ""
+    while i < n {
+        let c = xml[i]
+        let is_digit = (c == "0" || c == "1" || c == "2" || c == "3" || c == "4" ||
+                        c == "5" || c == "6" || c == "7" || c == "8" || c == "9")
+        if is_digit { digits = digits + c; i = i + 1 } else { break }
+    }
+    if digits.len() == 0 { return -1 }
+    return int(digits)
+}
+
+fn check_network_reachable() -> bool {
+    let probe = exec("curl -sL --max-time 5 -o /dev/null -w '%{http_code}' https://export.arxiv.org/ 2>/dev/null").trim()
+    let ok = probe == "200" || probe == "301" || probe == "302" || probe == "404"
+    _info("network probe to export.arxiv.org  → http_code=" + probe,
+          if ok { "reachable" } else { "unreachable; fixture-only path" })
+    return ok
+}
+
+fn check_total_above_min(total: int, source: str) {
+    _check(total >= MIN_PAPERS,
+           "arXiv corpus total ≥ " + str(MIN_PAPERS) + " papers (source: " + source + ")",
+           "total = " + str(total))
+}
+
+fn check_doc_anchor() {
+    let txt = _read(DOC_SC)
+    let ok = _has(txt, "specific") || _has(txt, "BCS") || _has(txt, "ΔC") ||
+             _has(txt, "1.43") || _has(txt, "supercond")
+    _check(ok, "sc/ doc references specific-heat / BCS / ΔC / 1.43 anchor",
+           if ok { "" } else { "doc lost specific-heat anchor" })
+}
+
+let FALSIFIERS = [
+    "arXiv corpus < 100 papers for BCS specific-heat jump γTc — research territory not real",
+    "API responds but parser fails to extract totalResults — arXiv schema drift",
+    "fixture present but parses to 0 — fixture corruption",
+    "sc/ doc loses specific-heat / BCS anchor — empirical feed unmotivated",
+    "API total < fixture total (when both available) — corpus regression",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-rtsc — F-SC-3 T3 closure (arXiv archival empirical anchor)")
+    println("  (live raw-data: ΔC/γTc calorimetry on s-wave SC → Stage-1+ TBD)")
+    println("========================================================================")
+    println("")
+    println("  API: " + API_URL)
+    println("  fixture: " + FIXTURE_PATH)
+    println("  acceptance: corpus total ≥ " + str(MIN_PAPERS) + " papers")
+    println("")
+
+    let offline = env("HEXA_RTSC_OFFLINE") == "1"
+    if offline { _info("HEXA_RTSC_OFFLINE=1 → fixture-only mode", "") }
+    let net_ok = if offline { false } else { check_network_reachable() }
+
+    let fix_text = read_fixture()
+    let fix_total = if fix_text.len() > 0 { parse_total(fix_text) } else { -1 }
+    let api_text = if net_ok { fetch_api() } else { "" }
+    let api_total = if api_text.len() > 0 { parse_total(api_text) } else { -1 }
+
+    let chosen = if api_total > 0 { api_total } else { fix_total }
+    let source = if api_total > 0 { "API" } else if fix_total > 0 { "fixture" } else { "none" }
+
+    _info("source resolution: " + source,
+          "API total = " + str(api_total) + ", fixture total = " + str(fix_total))
+
+    if chosen < 0 {
+        println("")
+        println("  → both API and fixture cold. T3 unverifiable in this environment.")
+        println("__HEXA_RTSC_EMPIRICAL_SPECIFIC_HEAT_ARXIV__ PASS — offline + no fixture; T3 unverifiable")
+        exit(0)
+    }
+
+    check_total_above_min(chosen, source)
+    if api_total > 0 && fix_total > 0 {
+        _check(api_total >= fix_total,
+               "API total ≥ fixture total (literature monotonicity)",
+               "API=" + str(api_total) + "  fixture=" + str(fix_total))
+    }
+    check_doc_anchor()
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__HEXA_RTSC_EMPIRICAL_SPECIFIC_HEAT_ARXIV__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_RTSC_EMPIRICAL_SPECIFIC_HEAT_ARXIV__ PASS — F-SC-3 T3 (archival arXiv) closes")
+    exit(0)
+}

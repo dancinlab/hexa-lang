@@ -7,13 +7,15 @@
 
 schema_version: 1
 title: hexa-lang specification
-status: directional (decisions locked, implementation not started)
-last_updated: 2026-05-09
+status: directional (decisions locked, stage 1 host-OOM blocked)
+last_updated: 2026-05-10
 authoritative_rfcs:
   - proposals/rfc_017_atlas_n6_embedding_and_strict_lint.md
   - proposals/rfc_018_native_codegen_spec.md
   - proposals/rfc_019_error_diagnostics_spec.md
   - proposals/rfc_020_enum_payload_variants.md
+  - proposals/rfc_021_daemon_mode.md
+  - proposals/rfc_022_async_model.md
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tree layout (what trees exist and what each is for)
@@ -77,15 +79,15 @@ language_features:
   enum_payload_status:
     summary: partial_working_needs_completion
     confirmed_working:
-      - 'enum Shape { Circle(Int), Rect(Int), Unit }' parser declaration
-      - 'match s { Shape::Circle(r) -> ... }' pattern binding (interpreter mode)
-      - 7 match patterns: wildcard, literal, binding, variant, struct, tuple, guard
+      - "'enum Shape { Circle(Int), Rect(Int), Unit }' parser declaration"
+      - "'match s { Shape::Circle(r) -> ... }' pattern binding (interpreter mode)"
+      - "7 match patterns: wildcard, literal, binding, variant, struct, tuple, guard"
     confirmed_missing:
-      - 'E::Variant(x)' construction syntax (parse_primary line 3016)
-      - typechecker variant payload type registry
-      - typechecker pattern binding — variable scope introduction
-      - hexa_cc.c struct/union codegen + payload extraction
-      - multi-field variants entirely
+      - "'E::Variant(x)' construction syntax (parse_primary line 3016)"
+      - "typechecker variant payload type registry"
+      - "typechecker pattern binding — variable scope introduction"
+      - "hexa_cc.c struct/union codegen + payload extraction"
+      - "multi-field variants entirely"
     target_design: single_field_payload_plus_struct_embed
     rfc: RFC-020
     multi_field_status: deferred_to_later_rfc
@@ -645,6 +647,25 @@ roadmap:
     D2: { effort: M,  goal: LSP using compiler in-process index }
     E1: { effort: L,  goal: full big-bang migration of existing .hexa tree }
     E2: { effort: M,  goal: retire hexa_interp after stage3 fixed point }
+    # Firmware absorption track (Decision 2026-05-10 — Option C).
+    # F0 landed at fc6d48b2; F1..F5 in flight via background tasks #84-#87
+    # (stdlib/core extraction, firmware/boards/rtsc port, thumbv7em codegen,
+    #  remaining board absorptions, and RFC-023 firmware linker spec).
+    F0: { effort: S,  goal: SPEC firmware Option C + firmware/ skeleton,                   status: DONE,        evidence: "fc6d48b2" }
+    F1: { effort: M,  goal: stdlib/core extraction from current host stdlib,               status: IN-FLIGHT,   background_task: 84 }
+    F2: { effort: M,  goal: firmware/boards/rtsc reference port,                           status: IN-FLIGHT,   background_task: 85 }
+    F3: { effort: L,  goal: thumbv7em-none-eabihf codegen target in compiler/codegen,      status: IN-FLIGHT,   background_task: 86 }
+    F4: { effort: L,  goal: "firmware/boards/{chip,cern,antimatter,space} absorptions",    status: IN-FLIGHT,   background_task: 87 }
+    F5: { effort: M,  goal: RFC-023 firmware linker spec (linker scripts + .bss/.data),    status: PLANNED }
+  revised_timeline:
+    note: |
+      Stage 1 self-compile is host-OOM blocked. Punch list v2
+      (doc/stage1_punch_list_v2.md, commit 86afadb0) revised the estimate
+      from 6-10 weeks to 14-22 weeks, dominated by category A bootstrap host
+      work (interpreter arena reset / partial self-compile / stage 0.5 host).
+    stage_1_reach_old_estimate: "6-10 weeks (pre 2026-05-10)"
+    stage_1_reach_new_estimate: "14-22 weeks (post Gap 1+2+14+15 host wall)"
+    bottleneck: stage0_2GB_memory_cap_during_spliced_self_compile
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fork storm prevention (Decision 2026-05-09)
@@ -771,15 +792,44 @@ firmware_evolution:
     consumed_by: hexa_ld
     rfc: RFC-023 (planned — extension of RFC-018 §10)
   roadmap:
-    F0: { status: this_commit,   deliverable: SPEC decisions + firmware/ skeleton }
+    F0: { status: done,          deliverable: SPEC decisions + firmware/ skeleton }
     F1: { status: next,          deliverable: stdlib/core/ extraction from current stdlib }
-    F2: { status: next,          deliverable: firmware/boards/rtsc/ reference port }
+    F2:
+      status: this_commit
+      deliverable: firmware/boards/rtsc/ reference port
+      mechanic: option_A_full_copy
+      source: "~/core/hexa-rtsc"
+      dest: "firmware/boards/rtsc/"
+      files_moved: 112
+      loc_moved: "~18k incl. README/CHANGELOG; firmware tree alone ~4k LOC"
+      excluded: [".git/", "build/", "firmware/mcu/target/",
+                 "firmware/state/markers/", "state/markers/", "state/*.log"]
+      selftest_pre: "70/70 PASS upstream"
+      selftest_post_absorb:
+        sim: "4/4 (43 internal checks via hexa_interp)"
+        lattice_check: "10/10"
+        falsifier_check: "49/49"
+        cross_doc_audit: "7/8 (pre-existing upstream — own_3 rogue-.hexa flag, NOT absorb regression)"
+        hdl: "deferred (iverilog 12/12 upstream — toolchain gated)"
+        mcu: "deferred (cargo 15/15 upstream — toolchain gated)"
+      license_preserved: true
+      citation_preserved: true
+      absorb_date: "2026-05-10"
     F3: { status: follow-up,     deliverable: thumbv7em-none-eabihf target in compiler/codegen }
-    F4: { status: follow-up,     deliverable: firmware/boards/{chip,cern,antimatter,space}/ absorptions }
+    F4:
+      status: follow-up
+      deliverable: "firmware/boards/{chip,cern,antimatter,space}/ absorptions"
+      pattern: "F2 reference (option_A_full_copy)"
     F5: { status: follow-up,     deliverable: RFC-023 firmware linker spec (linker scripts + .bss/.data init) }
+  absorption_mechanic:
+    decided_2026_05_10: option_A_full_copy
+    rationale: |
+      Self-contained, no submodule version-skew risk, simpler for
+      downstream consumers. Upstream repo stays standalone for
+      development; firmware/boards/<repo>/ is the consumed-by-hexa-lang
+      view. Each absorb verifies LICENSE + CITATION byte-identical.
   open_questions:
     - which current host modules are target-agnostic enough to move into stdlib/core
-    - in-place via git submodules vs full copy into firmware/boards/*
     - RFC-023 separate or extension of RFC-018
     - CI cross-compile to MCU targets via qemu-system-arm — vendored or in CI image
   biggest_unknown: |
@@ -878,6 +928,27 @@ open_questions:
   - prover_v2_capability_targets
   - migration_window_duration_estimate
 
+  # Surfaced 2026-05-10 (firmware audit + stage 1 punch list v2).
+  - stage0_arena_reset_semantics_for_2GB_OOM_mitigation
+      # punch list v2 A1 — interpreter holds every Module snapshot from
+      # _splice_imported_items; need --phase-arena-reset between
+      # parse / lower / codegen so spliced AST + lower IR fits in <1 GB.
+  - core_alloc_split_criteria_which_modules_are_target_agnostic
+      # firmware audit OQ #1 — math/slice/result/option seem clear,
+      # string is borderline due to alloc dependency. Need a written
+      # rule before F1 stdlib/core extraction begins.
+  - thumbv7em_riscv32imac_codegen_timeline_currently_zero
+      # tier_1_followup targets in this SPEC — not started; firmware/
+      # stays Rust-gated for hexa-cern/hexa-antimatter until F3 lands.
+  - arm_cortex_m_codegen_blocks_firmware_targets
+      # firmware audit "biggest unknown" — without F3 (thumbv7em
+      # codegen) hexa-rtsc / hexa-chip remain on parallel Rust path.
+  - hexa_str_concat_runtime_stub_linkage_in_self_native
+      # surfaced via Gap 15 codegen breadth (commit 194d9011) — concat
+      # path exists in MIR but the runtime stub linkage in self/native
+      # is not yet finalised; affects rodata-driven string ops in
+      # spliced super-module.
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phases completed (2026-05-09)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -901,3 +972,154 @@ phases_completed_2026_05_09:
   D2: { status: IN-PROGRESS, evidence: "81d2176a LP1+LP2+LP3 capability matrix + LSP 3.17 pin; in-process compiler index ongoing" }
   E1: { status: DEFERRED, evidence: "big-bang migration scheduled post stage1 fixed point" }
   E2: { status: DEFERRED, evidence: "depends on E1 + stage3 fixed point" }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phases completed (2026-05-10)
+# ─────────────────────────────────────────────────────────────────────────────
+# Delta over 2026-05-09 snapshot: firmware Option C decision landed,
+# hexa_ld v1.2 ad-hoc codesign on macOS, RFC-020 enum payload variants
+# A4/A5 PASS, RFC-021 daemon mode v0 prototype, RFC-022 async + cancel
+# token spec, stdlib I/O write_text + http_post_with_headers + c_ffi
+# v1.1, stage 1 punch list v2 (host OOM dominates), Mach-O gate Phase A,
+# upstream-patch inbox protocol, parser Gaps 1+2+14+15.
+phases_completed_2026_05_10:
+  F0_firmware_option_c:
+    status: PASS
+    evidence: "fc6d48b2 feat(spec+firmware): Option C — stdlib core/alloc split + firmware/ tree"
+    notes: |
+      SPEC decisions + firmware/ skeleton (firmware/boards, firmware/bsp,
+      firmware/linker_scripts) created. F1..F5 follow via background
+      tasks #84-#87 (stdlib/core extraction, rtsc reference port,
+      thumbv7em codegen, remaining boards, RFC-023 firmware linker).
+
+  hexa_ld_v1_2_codesign:
+    status: PASS
+    evidence: "96aa37e8 feat(compiler/link): hexa_ld v1.2 — Mach-O ad-hoc codesign emit (kernel accepts)"
+    notes: |
+      Ad-hoc LC_CODE_SIGNATURE — CSMAGIC_EMBEDDED_SIGNATURE wrapping
+      CSMAGIC_CODEDIRECTORY with SHA-256 per-4 KiB-page hashes; no
+      notarization, no team-id. Apple Silicon kernel accepts the
+      binary without external `codesign` shellout.
+
+  rfc020_enum_payload_a4_a5:
+    status: PASS
+    evidence: "4ed9966e fix(codegen): RFC-020 A4 match-side payload extraction + A5 regression PASS — 15/15"
+    notes: |
+      A1+A2+A3 already landed (3c8be96c + 005d5427). A4 hexa_cc.c
+      codegen for match-side payload extraction completed. A5
+      regression suite self/test_enum_payload_full.hexa now 15/15
+      PASS (was stale-build 5/15).
+
+  rfc022_async_plus_cancel:
+    status: PASS
+    evidence: "925846d0 spec(rfc): RFC-022 async model parity + stdlib cancel token (wilson G2+G3)"
+    notes: |
+      RFC-022 spec only (no compiler/ change in this batch). stdlib
+      cancel token (G3) ships with selftest +1. Unblocks wilson core
+      port G2+G3 alongside G1 (RFC-020 A5).
+
+  stdlib_io_write_text:
+    status: PASS
+    evidence: "4d414f73 feat(stdlib): write_text(path, content) — large-content file I/O (orpheus duckdb chokepoint unblock)"
+    notes: |
+      Bulk-write helper for orpheus duckdb large-content path.
+      Mirrors stdlib/fs read_text shape; backward-compat additive.
+
+  stage1_punch_list_v2:
+    status: PASS
+    evidence: "86afadb0 doc: stage 1 punch list v2 — host OOM dominates (was 6-10w, now 14-22w)"
+    notes: |
+      Stage 1 self-compile reach revised: 6-10 weeks → 14-22 weeks.
+      Stage 0 hexa_interp 2 GB cap now dominates after Gap 1+2+14+15
+      surface enlarged the in-process super-module to ~25,932 lines.
+      New punch list: A1-A4 host bootstrap (P0), B1-B5 recurring,
+      C1-C20 new findings.
+      Critical path: stage 0 arena reset OR stage 0.5 host before
+      any further stage 1 fix lands.
+
+  rfc020_b1_audit:
+    status: PASS
+    evidence: "77254d91 doc(self/ir/instr): RFC-020 B1 audit + holdout — stage0 binary blocks migration"
+
+  g7_hexa_ld_dlopen_draft:
+    status: SPEC
+    evidence: "a01fb505 chore(incoming): add g7-hexa-ld-dlopen RFC draft"
+    notes: |
+      Draft RFC for dynamic linking. Priority ★ nice-to-have, NOT
+      blocking — wilson works without it via static absorption.
+
+  inbox_rfc020_wilson:
+    status: PASS
+    evidence: "c48bbbeb incoming: add rfc020-enum-payload-variants + wilson-pi-port-6-gap-prereq entries"
+
+  gap_14_lower_match_payload:
+    status: PASS
+    evidence: "47d99c1c feat(compiler): Gap 14 lower coverage match payload index nested struct HX1100"
+
+  upstream_patch_inbox:
+    status: PASS
+    evidence: "03d5070b feat(incoming+tool+spec): upstream-patch inbox until stage 3"
+    notes: |
+      incoming/PATCHES.yaml + tool/inbox_sync.hexa +
+      tool/inbox_promote.hexa + doc/inbox_for_bedrock.md.
+      Sunsets at stage 3 fixed point.
+
+  rfc020_handoff_pi_port:
+    status: PASS
+    evidence: "36daab7d feat(incoming): RFC-020 enum-payload handoff + wilson pi-port 6-gap inbox + A5 test"
+
+  rfc021_daemon_v0:
+    status: PASS
+    evidence: "4ab3930c feat(compiler/daemon): RFC-021 v0 prototype — atlas.lookup + shutdown"
+    notes: |
+      Unix socket IPC. atlas.lookup + shutdown commands wired.
+      System-wide zero-fork pattern for build-hot probes.
+
+  rt_json_numeric_coercion:
+    status: PASS
+    evidence: "2e144e58 fix(rt): json.hexa numeric coercion HEXA_F2 PASS"
+
+  gap_15_codegen_breadth:
+    status: PASS
+    evidence: "194d9011 feat(compiler): Gap 15 codegen breadth — concat/cmp/cbr/N-arg/rodata"
+
+  gap_2_cross_file_dedup:
+    status: PASS
+    evidence: "150b004f feat(compiler/check): Gap 2 cross-file dedup with pub visibility"
+
+  gap_1_multi_file_loader:
+    status: PASS
+    evidence: "0ea8bc95 feat(compiler/parse): Gap 1 multi-file parser loader (3-way merged)"
+
+  macho_gate_phase_a:
+    status: PASS
+    evidence: "26e06d70 feat(spec+lint): macos Mach-O gate Phase A — invocation-surface lint + declarative SSOT"
+    notes: |
+      LINT-MACHO-1 (.hexa exec sites) + LINT-MACHO-2 (sh + CI surface) +
+      spec/hexa_macho_gate.spec.yaml falsifier SSOT. Warn-only.
+
+  c_ffi_v1_1_out_pointer:
+    status: PASS
+    evidence: "ecc49e1e feat(stdlib): c_ffi v1.1 — c_alloc_ptr_slot + c_load_ptr (out-pointer slot)"
+    notes: |
+      Out-pointer slot enables duckdb_open_ext-style C APIs.
+      orpheus duckdb_native.hexa 136ms subprocess → 1-3ms FFI.
+
+  http_post_with_headers:
+    status: PASS
+    evidence: "1d76e4fe feat(stdlib): http_post_with_headers — JSON-RPC enabler (orpheus bitcoind)"
+    notes: |
+      v0 path: curl shellout. orpheus method_bitcoin_core_rpc.hexa
+      bitcoind RPC: subprocess 15-30ms → persistent 3-7ms.
+
+  stage0_blocker1_audit:
+    status: PASS
+    evidence: "3565f672 doc: Blocker 1 stage0 rebuild audit — NO-OP outcome"
+
+  i32_lower_literal_coercion:
+    status: PASS
+    evidence: "48f65cf3 fix(compiler): i32 type lower + literal coercion — M0 ASM PASS"
+
+  parser_gap_6_recovery:
+    status: PASS
+    evidence: "1c7b5861 fix(parse): Gap 6 — parser error recovery (skip-to-resync)"

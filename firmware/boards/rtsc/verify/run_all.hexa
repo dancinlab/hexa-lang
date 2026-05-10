@@ -1,0 +1,88 @@
+#!hexa strict
+// hexa-rtsc/verify/run_all.hexa — orchestrator (.hexa primary).
+//
+// Single CLI entry that runs all verify/*.hexa scripts and aggregates
+// pass/fail. Sister of hexa-sscb's "make verify" pattern.
+//
+// Run:
+//     hexa run verify/run_all.hexa     # exit 0 = all subscripts PASS
+
+let SCRIPTS: [str] = [
+    "verify/lattice_check.hexa",
+    "verify/cross_doc_audit.hexa",
+    "verify/calc_bcs.hexa",
+    "verify/calc_mcmillan.hexa",
+    "verify/calc_hc2_48t.hexa",
+    "verify/calc_lk99.hexa",
+    "verify/numerics_bcs.hexa",
+    "verify/numerics_mcmillan.hexa",
+    "verify/numerics_hc2_48t.hexa",
+    "verify/numerics_lk99.hexa",
+    "verify/numerics_bcs_parity.hexa",
+    "verify/numerics_mcmillan_parity.hexa",
+    "verify/numerics_hc2_48t_parity.hexa",
+    "verify/numerics_lk99_parity.hexa",
+    "verify/numerics_lattice_arithmetic.hexa",
+    "verify/numerics_cross_pillar.hexa",
+    "verify/numerics_bcs_solver.hexa",
+    "verify/numerics_mcmillan_solver.hexa",
+    "verify/numerics_hc2_48t_solver.hexa",
+    "verify/numerics_lk99_solver.hexa",
+    "verify/numerics_lk99_dft.hexa",
+    "verify/numerics_tdgl_vortex.hexa",
+    "verify/numerics_whh_full.hexa",
+    "verify/empirical_lk99_arxiv.hexa",
+    "verify/empirical_mcmillan_arxiv.hexa",
+    "verify/empirical_hc2_high_field_arxiv.hexa",
+    "verify/empirical_bcs_cooper_arxiv.hexa",
+    "verify/empirical_abrikosov_sans_arxiv.hexa",
+    "verify/empirical_specific_heat_arxiv.hexa",
+    "verify/falsifier_check.hexa",
+    "verify/lint_numerics.hexa",
+    "verify/saturation_check.hexa",
+    "firmware/sim/synthesis_ctrl.hexa",
+    "firmware/sim/quench_logic.hexa",
+    "firmware/sim/calorimetry_ctrl.hexa",
+    "firmware/sim/squid_daq.hexa",
+]
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-rtsc verify/run_all — aggregate sweep")
+    println("========================================================================")
+    let mut passed = 0
+    let mut failed = 0
+    for s in SCRIPTS {
+        println("")
+        println("---- " + s + " ----")
+        let rc_str = exec("hexa run " + s + " >/tmp/_hexa_rtsc_v.out 2>&1; echo $?").trim()
+        let rc = int(rc_str)
+        let out = exec("cat /tmp/_hexa_rtsc_v.out 2>/dev/null")
+        // print last 6 lines for compactness
+        let lines = out.split("\n")
+        let n = lines.len()
+        let mut start = 0
+        if n > 6 { start = n - 6 }
+        let mut k = start
+        while k < n {
+            println(lines[k])
+            k = k + 1
+        }
+        if rc == 0 {
+            passed = passed + 1
+            println("  → " + s + " PASS")
+        } else {
+            failed = failed + 1
+            println("  → " + s + " FAIL (rc=" + str(rc) + ")")
+        }
+    }
+    println("")
+    println("========================================================================")
+    let total = passed + failed
+    println("  " + str(passed) + "/" + str(total) + " scripts passed")
+    if failed > 0 {
+        println("  verify sweep FAILED — see per-script output above.")
+        exit(1)
+    }
+    println("  PASS — all hexa-rtsc invariants hold.")
+}

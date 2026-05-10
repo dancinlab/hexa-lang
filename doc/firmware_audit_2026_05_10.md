@@ -102,12 +102,47 @@ Add to `targets.tier_1_followup` and `tier_2_later`:
 
 | Phase | Status | Deliverables |
 |---|---|---|
-| F0 | this commit | SPEC.yaml decisions + `firmware/` skeleton |
+| F0 | done | SPEC.yaml decisions + `firmware/` skeleton |
 | F1 | next | `stdlib/core/` extraction (split from current stdlib) |
-| F2 | next | `firmware/boards/rtsc/` reference port (use hexa-rtsc patterns) |
+| F2 | this commit | `firmware/boards/rtsc/` reference port (absorbed 2026-05-10, Option A full copy, 112 files, 4 sim suites PASS post-absorb) |
 | F3 | follow-up | `thumbv7em-none-eabihf` target in compiler/codegen |
 | F4 | follow-up | `firmware/boards/{chip,cern,antimatter,space}/` absorptions |
 | F5 | follow-up | RFC-023 firmware linker spec (linker scripts + `.bss/.data` init) |
+
+## F2 absorption record (2026-05-10)
+
+- **Source:** `~/core/hexa-rtsc` (upstream retained; not modified)
+- **Dest:** `firmware/boards/rtsc/`
+- **Mechanic:** Option A — full copy via rsync (no submodule)
+- **Files moved:** 112 (excludes `.git/`, `build/`, `firmware/mcu/target/`,
+  `firmware/state/markers/` ~1200 markers, `state/markers/`, `state/*.log`,
+  `.DS_Store`, `*.swp`, `*~`, `.claude/`)
+- **LOC moved:** ~18k total (firmware/ subtree ≈ 4k LOC excluding artifacts)
+- **License/Citation:** MIT LICENSE + CITATION.cff verified byte-identical
+- **Selftest delta:**
+  - Pre-absorb upstream: 70/70 PASS (sim 4 + iverilog 12 + cargo 15 + lint 113 / falsifier 43 — per upstream README)
+  - Post-absorb (`hexa_interp` from `firmware/boards/rtsc/`):
+    - `firmware/sim/{synthesis_ctrl,quench_logic,calorimetry_ctrl,squid_daq}.hexa` — **4/4 PASS** (43 internal checks)
+    - `verify/lattice_check.hexa` — **10/10 PASS**
+    - `verify/falsifier_check.hexa` — **49/49 PASS**
+    - `verify/cross_doc_audit.hexa` — 7/8 (pre-existing upstream `own_3` code-scope FAIL flagging `firmware/sim/*.hexa`; **NOT** an absorb regression — verified by running same script against upstream tree)
+    - `firmware/hdl/` (iverilog) and `firmware/mcu/` (cargo) layers deferred — toolchain gated; sources copied byte-identical to upstream Phase D+ verified state, so 12/12 + 15/15 expected to hold
+- **Key HAL patterns discovered for later reuse (F4 / `stdlib/hal`):**
+  - `use "self/runtime/math_pure"` → resolves against hexa-lang's own
+    `self/runtime/` after absorb (no path rewrite needed)
+  - PID + 6-interlock state machine (`firmware/sim/synthesis_ctrl.hexa`)
+  - 1-of-4 quench-detection logic (`firmware/sim/quench_logic.hexa`)
+  - Bachmann-1972 relaxation calorimetry controller (`firmware/sim/calorimetry_ctrl.hexa`)
+  - GPIB/SQUID DAQ pipeline + Tc extraction (`firmware/sim/squid_daq.hexa`)
+  - Rust no_std dual-mode (`#[cfg_attr(target_os="none", no_std)]`) bridge in `firmware/mcu/lib.rs`
+  - STM32F407VGT6 linker (`firmware/mcu/memory.x` — 1 MiB FLASH, 192 KiB SRAM)
+  - Verilog 2001 quench detect + iverilog testbench (`firmware/hdl/`)
+- **Deferred to F3/F4/F5:**
+  - HDL/MCU re-execution (toolchain gated — iverilog + cargo)
+  - Promotion of common patterns (PID, interlock, GPIB shim, no_std panic handler) into `stdlib/hal/` and `stdlib/embedded/`
+  - `thumbv7em-none-eabihf` native codegen (F3) so MCU layer doesn't need cargo
+  - `firmware/linker_scripts/stm32f407.ld` extraction from `firmware/mcu/memory.x` (F5 / RFC-023)
+  - `firmware/bsp/stm32f4/` board-support shim (F4)
 
 ## Open questions
 

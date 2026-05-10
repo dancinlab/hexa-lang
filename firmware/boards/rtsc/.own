@@ -1,0 +1,111 @@
+# ---
+# schema_version: project/own/v1
+# last_updated: 2026-05-07
+# mk: 2
+# ---
+#
+# # hexa-rtsc/.own (mk2)
+#
+# Schema authority: hive/spec/schema/own_v1.schema.yaml
+# Format: mk2 frontmatter (#-prefixed YAML) + comment-section markdown headers
+# + mk1 raw-format body (`own N <status> "name"` blocks). raw_loader.hexa
+# silently skips all `#`-prefixed lines so the body parses unchanged.
+# Authoritative rule content remains in `own N <status> ...` blocks below.
+#
+# This repo is the public distribution form of HEXA-RTSC v1.0.0, extracted
+# from canon/domains/energy/{room-temp-sc,superconductor}/ on
+# 2026-05-06 (SHA c0f1f570). Sister-of-substrates extraction following the
+# hexa-bio v1.0.0 template; structural pattern aligned to hexa-sscb on
+# 2026-05-07 (this .own + README.ai.md + verify/ landing).
+#
+# ## roles
+# - dancinlife (project owner)
+# - claude opus / sonnet / haiku (AI agents — autonomous within own baselines)
+#
+# ## baselines
+# - canon canonical SSOT — extraction consumer (sync mapping in doc/lineage/origin.md)
+# - rtsc/ + sc/ feature directory names preserved post-rename — must stay 1:1 with upstream domains/energy/{room-temp-sc,superconductor}/
+# - hexa-only orchestration (raw#9) — no Python bridge in verify/build/tests/cli; .hexa primary
+# - doc-first repo with thin runnable surface (verify/ + cli/ + tests/ only at v1.0.0; module/ reserved for v1.1.0+ per .roadmap)
+#
+# ## project_directives
+# - n=6 master identity invariant: σ(6)·φ(6) ≡ n·τ(6) ≡ 24, σ(6)=12, τ(6)=4, φ(6)=2, Hc2 ≡ σ·τ = 48 T — never changed without restating the lattice equality (own 1)
+# - RT-SC empirical claim contractual UNPROVEN: LK-99 (2023) and subsequent room-temp candidates have not been independently replicated; v1.0.0 ships closed-form candidate + falsifier preregister only — never silently promote to "claimed working" without F-RTSC-{1,2,3} disposition (own 2)
+# - code permitted ONLY in cli/, verify/, tests/, module/ (latter reserved for v1.1.0+) — new code locations require README + .own update before the implementing PR (own 3)
+# - rtsc/room-temp-sc.md + sc/superconductor.md = SSOT for empirical claims — module/* and verify/* derive; if numbers disagree spec.md wins
+# - falsifier preregister monotone — F-RTSC-{1,2,3} + F-SC-{1,2,3} disposition only flips one direction (OPEN → DEMOTED or OPEN → CONFIRMED); never silently retract a falsifier
+# - additive-only at doc layer — additions OK, renames/moves require doc/lineage/origin.md update + redirect note
+# - upstream sync mapping: rtsc/room-temp-sc.md ↔ canon/domains/energy/room-temp-sc/room-temp-sc.md, sc/superconductor.md ↔ same domain superconductor.md
+#
+# ## cross_link_to_specs
+# - hive/spec/schema/own_v1.schema.yaml — THIS schema authority
+# - hive/spec/mk2_apex.spec.yaml — orchestrator
+# - hive/spec/ai_native_module_architecture.spec.yaml — core+module+ai-native triplet pattern (raw 270/271/272/273 + arch.001)
+#
+# ## cross_link_to_raws
+# - raw 0 (root-ssot) — .raw + .own + .guide triad
+# - raw 9 (hexa-only-orchestration) — verify/cli/tests/ MUST be .hexa, no Python bridge
+# - raw 10 (honest-c3-disclosure) — RT-SC academic-unproven status MUST be surfaced in every public artifact
+# - raw 20 (own-monotonic) — own slug matching raw slug MUST strengthen
+# - raw 91 (honest-c3-disclosure) — process-quality + honest C1-C5
+# - raw 270/271/272/273 (core+module 4-rule cluster) — core/<feature>/ + module/<feature>/ + README.ai.md triplet pattern
+# - mk2.arch.001 — hive raw.mk2 arch.001 collapsed pattern
+#
+# ## recent_strengthenings
+# - 2026-05-06: v1.0.0 RELEASED — rtsc + sc seed, 3-link substrate-of-substrates wired (hexa-fusion 48T coil dep, hexa-ufo Meissner dep, hexa-cern SC magnet dep).
+# - 2026-05-07: structural pattern aligned to hexa-sscb mk2 own_v1 — .own (this file) + README.ai.md + verify/ + doc/lineage/ landing. v1.0.x compatible (additive); breaking moves (rtsc/→core/rtsc/) deferred to v1.1.0.
+# - 2026-05-07: own 1/2/3 land — n=6 master identity, RT-SC empirical-unproven contractual, hexa-only doc-first scope guard with 4 code-permitted directories.
+
+# hexa-rtsc/.own — project-local SSOT layer
+# 포맷: raw-format (.raw 와 동일 파서). 자세한 스펙: hive/self/raw_loader.hexa
+# 검증: tool/own_lint.hexa — 추가 규칙이 .raw 와 같은 slug 를 가지면 monotonic
+#       strengthening (status 강화 + scope 전 계승 + enforce/proof 가산) 이어야 한다.
+
+own 1 new "hexa-rtsc-n6-master-identity — n=6 격자 4 식별자가 모든 surface 에서 일치"
+  slug hexa-rtsc-n6-master-identity
+  scope hexa-rtsc 전체 — rtsc/room-temp-sc.md, sc/superconductor.md, cli/hexa-rtsc.hexa, verify/, tests/, module/, README badge / 다이어그램 / 격자 표 / falsifier 표 등 모든 .md 와 .hexa.
+  enforce raw:os-lock
+  enforce-layer hard
+  enforce-layer-rationale 격자 식별자는 verify/lattice_check.hexa 가 자동 검증 (sigma=12, tau=4, phi=2, sigma*phi=24, sigma*tau=48 Hc2). 위반 시 비-0 exit + 어긋난 위치 출력. 본 own 은 그 verifier 의 SSOT.
+  decl sigma_6 ≡ 12 (BCS specific-heat molecule + 12-vertex Cooper-pair shell)
+  decl tau_6 ≡ 4 (4-phase ladder: normal / pseudogap / SC / strange-metal — sister sscb tau=foundry_count, RTSC tau=phase_count)
+  decl phi_6 ≡ 2 (Cooper pair = 2-electron boson; binary verdict bit at fixed T)
+  decl Hc2 ≡ sigma_6 · tau_6 = 48 T (critical magnetic field gate)
+  decl master_identity ≡ sigma_6 · phi_6 == n · tau_6 == 24 (24 = J_2 Mathieu/Leech symmetry, M_24 octahedral O ⊂ icosahedral I subgroup)
+  why n=6 격자는 디자인 모티프가 아니라 falsification budget. 격자 식별자가 어긋나면 spec / roadmap / cli status table 의 모든 숫자 신뢰성이 무너짐. 4 surface (rtsc spec / sc spec / cli table / roadmap §A.1) 가 frozen 상태인 현재, 어긋남을 자동 체크하지 않으면 verify/ 또는 cli 코드가 silently drift 가능.
+  note 격자 식별자 SSOT = rtsc/room-temp-sc.md + sc/superconductor.md (spec). cli/hexa-rtsc.hexa table 또는 .roadmap §A.1 가 어긋나면 spec 이 이긴다. 문서 수정 시 spec 부터 갱신 → cli table → roadmap → 마지막에 verify/lattice_check.hexa 의 expected 값 갱신.
+  promoted-at 2026-05-07
+
+own 2 new "hexa-rtsc-empirical-unproven-contractual — RT-SC 실증 미달 상태 모든 공개 surface 에 명시"
+  slug hexa-rtsc-empirical-unproven-contractual
+  scope rtsc/room-temp-sc.md, sc/superconductor.md, cli/hexa-rtsc.hexa (status / rtsc / sc / selftest 모든 verb), README.md (Status), README.ai.md, .roadmap.hexa_rtsc §A.4 falsifier preregister, verify/falsifier_check.hexa.
+  enforce raw:os-lock
+  enforce-layer hard
+  enforce-layer-rationale RT-SC 학술적 미실증 사실 (LK-99 2023 미재현 등) 은 raw#10 honest C3 mandate 의 직접 적용. cli 에 "PASS" 출력하지만 그게 empirical 검증 PASS 가 아니라 sentinel-only 임을 매번 명시해야 함. verify/falsifier_check.hexa 가 6 falsifier (F-RTSC-{1,2,3} + F-SC-{1,2,3}) 가 OPEN 상태로 등재되어 있는지 자동 검증.
+  decl F-RTSC-1 OPEN: Tc(measured) < 250 K → DEMOTE n=6 Tc=300K 주장
+  decl F-RTSC-2 OPEN: Hc2 < 30 T at 4.2 K → DEMOTE σ·τ=48 closed-form
+  decl F-RTSC-3 OPEN: no Meissner expulsion → DEMOTE φ=2 boson 주장
+  decl F-SC-1 OPEN: Cooper pair size ≠ φ=2 → DEMOTE φ=2 pair 주장
+  decl F-SC-2 OPEN: vortex lattice not CN=6 → DEMOTE Abrikosov CN=6 주장
+  decl F-SC-3 OPEN: BCS ratio ΔC/γTc ≠ ~1.43 → DEMOTE σ=12 molecule 주장
+  decl academic_status ≡ "UNPROVEN" — LK-99 (2023) 및 후속 room-temp 후보 모두 독립 재현 실패. v1.0.0 = 닫힌 형식 후보 + falsifier preregister, NOT empirical claim.
+  why 실증 미달 사실을 silent 하게 PASS 출력으로 덮으면 raw 91 honest C3 위반. cli 의 모든 verb 가 sentinel PASS 옆에 "(sentinel only — does NOT validate empirical claim)" 캐비엇 동시 출력해야 함. verify/falsifier_check.hexa 는 6 falsifier 가 모두 OPEN status 로 spec / roadmap / cli 3 surface 에 동시 등장하는지 매번 확인.
+  decl falsifier flip 허용 조건: OPEN → CONFIRMED (재현 실패 시 = DEMOTE 예약된 격자 항목 강등) 또는 OPEN → CONFIRMED (재현 성공 시 = empirical wired). 절대 silent retract 금지 — falsifier 는 monotone 이며 OPEN → "삭제" 는 raw 91 직접 위반.
+  note F-RTSC-* 와 F-SC-* 의 시인 표기 ("Tc < 250K" vs "T_c < 250 K" 등) 변동은 verifier 검증 대상 아님 — verifier 는 falsifier ID (F-RTSC-1 등) 토큰만 확인.
+  promoted-at 2026-05-07
+
+own 3 new "hexa-rtsc-hexa-only-code-scope — 코드는 cli/ verify/ tests/ module/ 4 위치 + .hexa 만 허용"
+  slug hexa-rtsc-hexa-only-code-scope
+  scope hexa-rtsc repo 전체. 모든 *.hexa / Makefile / *.toml / *.json (metadata) 코드성 파일.
+  enforce raw:os-lock
+  enforce-layer hard
+  enforce-layer-rationale 4 위치 외 코드 추가 시 verify/code_scope_check.hexa 의 'rogue code' 체크가 차단. raw#9 hexa-only-orchestration 의 직접 적용 — Python/Bash 스크립트 추가 금지 (raw#9 위반). hive raw.mk2 arch.001 의 core/<feature>/ + module/<feature>/ 패턴 핵심.
+  decl 허용 위치 1: cli/ — 단일 진입점 (cli/hexa-rtsc.hexa)
+  decl 허용 위치 2: verify/ — runnable invariant audit (.hexa, hexa stdlib only — raw#9)
+  decl 허용 위치 3: tests/ — hexa native test runner (.hexa)
+  decl 허용 위치 4: module/ — RESERVED for v1.1.0+ (catalog / closed-form fit module). 현재 비어 있어도 패턴 보존.
+  decl 새 코드 위치 추가 절차: README.md "Architecture" 다이어그램 + README.ai.md "Hierarchy" 다이어그램 + 본 own entry decl 4 위치 갱신을 코드 PR 보다 먼저 land.
+  why hexa-only 는 마케팅이 아니라 작자 정책 (raw#9). cli/ + verify/ + tests/ 3 도메인 (+ v1.1.0 module/) 는 "단일 entry router" + "spec 자동 검증" + "harness 자동화" + "feature module fan-out" 4 가지 명확한 목적. 다른 위치에 코드 또는 다른 언어 (Python/Bash) 가 들어오면 hexa-only 정체성이 무너짐.
+  decl 면제: rtsc/*-verify.hexa 와 rtsc/*.json metadata 는 v1.0.0 시점 SPEC + APPLICATION SHELL 위치 (n6-arch 추출 직후). v1.1.0 에서 rtsc/ → core/rtsc/ + module/applications/ 분리 시 이 면제는 자동 해소 — 그때까지 rtsc/*.hexa STUB 들은 own 3 4 위치 면제.
+  note rtsc/room-temp-sc.md + sc/superconductor.md + arxiv-metadata.json + osf-metadata.json 등 .md/.json 은 own 3 의 4 코드 위치 제약 대상 아님 (코드성 파일 = .hexa / Makefile only at v1.0.0 — raw#9 hexa-only).
+  promoted-at 2026-05-07

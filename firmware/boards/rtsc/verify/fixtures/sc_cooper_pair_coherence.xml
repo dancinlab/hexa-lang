@@ -1,0 +1,82 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/aSlRoeQku/rSOnEQ1s9Noiv4p3k</id>
+  <title>arXiv Query: search_query=all:Cooper OR all:pair OR all:coherence OR all:length OR all:BCS&amp;id_list=&amp;start=0&amp;max_results=3</title>
+  <updated>2026-05-07T20:53:28Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:Cooper+OR+(all:pair+OR+(all:coherence+OR+(all:length+OR+all:BCS)))&amp;start=0&amp;max_results=3&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <opensearch:totalResults>325781</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/0801.3124v3</id>
+    <title>Coherence length of cosmic background radiation enlarges the attenuation length of the ultra-high energy proton</title>
+    <updated>2010-03-09T10:14:26Z</updated>
+    <link href="https://arxiv.org/abs/0801.3124v3" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/0801.3124v3" rel="related" type="application/pdf" title="pdf"/>
+    <summary>It is pointed out that an agreement of the one particle energy spectrum of the cosmic background radiation (CMBR) with  Plank distribution of 2.725 [K] does not give a strong constraint on the coherence length of CMBR if the mean free path of CMBR is very long. The coherence length in this situation is estimated as a few times of $k_BT$.     Due to this  finite coherence length,  the attenuation length of ultra-high energy cosmic rays (UHECR) is reduced in the  $Δ$ resonance region,i.e.,  around $10^{20}$ [eV]. The small  attenuation length makes the suppression of the flux of cosmic rays in this energy region less prominent than the naive estimation</summary>
+    <category term="hep-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2008-01-21T04:54:50Z</published>
+    <arxiv:comment>8 pages, 2 figures,study about the second coherence length has been added</arxiv:comment>
+    <arxiv:primary_category term="hep-ph"/>
+    <author>
+      <name>Kenzo Ishikawa</name>
+    </author>
+    <author>
+      <name>Yutaka Tobita</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2408.06420v2</id>
+    <title>Cooper-pair splitters as circuit elements for realizing topological superconductors</title>
+    <updated>2025-09-21T19:36:32Z</updated>
+    <link href="https://arxiv.org/abs/2408.06420v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2408.06420v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Advances in materials and fabrication of superconducting devices allows the exploration of novel quantum effects in synthetic superconducting systems beyond conventional Josephson junction arrays. As an example, we introduce a new circuit element, the Y-splitter, a superconducting loop with three leads and three Josephson junctions, smaller or comparable in size to the superconducting coherence length of the material. By tuning magnetic flux through an array of Y-splitters, Cooper-pair transport can be made to interfere destructively, while spatially separated split Cooper pairs propagate coherently. We consider an array of Y-splitters connected in a two-dimensional star [Archimedean (3,$12^2$)] geometry, deformable into the kagome lattice, and find a rich phase diagram that includes topological superconducting phases with Chern numbers $\pm 2$. Experimental realization appears feasible.</summary>
+    <category term="cond-mat.supr-con" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cond-mat.str-el" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2024-08-12T18:00:14Z</published>
+    <arxiv:comment>19 pages, 18 figures. v2: Added Appendix A which explores the transport properties of a single Cooper-pair splitter</arxiv:comment>
+    <arxiv:primary_category term="cond-mat.supr-con"/>
+    <arxiv:journal_ref>PRX Quantum 6 (2025), 030318</arxiv:journal_ref>
+    <author>
+      <name>Guilherme Delfino</name>
+    </author>
+    <author>
+      <name>Dmitry Green</name>
+    </author>
+    <author>
+      <name>Saulius Vaitiekėnas</name>
+    </author>
+    <author>
+      <name>Charles M. Marcus</name>
+    </author>
+    <author>
+      <name>Claudio Chamon</name>
+    </author>
+    <arxiv:doi>10.1103/3c6m-x28w</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1103/3c6m-x28w" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/hep-ph/0601007v1</id>
+    <title>Phases of a fermionic model with chiral condensates and Cooper pairs in 1+1 dimensions</title>
+    <updated>2006-01-01T18:38:56Z</updated>
+    <link href="https://arxiv.org/abs/hep-ph/0601007v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/hep-ph/0601007v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>  We study the phase structure of a 4-fermi model with three bare coupling constants, which potentially has three types of bound states. This model is a generalization of the model discussed previously by A. Chodos et al. [Phys. Rev. D 61, 045011 (2000)], which contained both chiral condensates and Cooper pairs. For this generalization we find that there are two independent renormalized coupling constants which determine the phase structure at finite density and temperature. We find that the vacuum can be in one of three distinct phases depending on the value of these two renormalized coupling constants.</summary>
+    <category term="hep-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2006-01-01T18:38:56Z</published>
+    <arxiv:primary_category term="hep-ph"/>
+    <arxiv:journal_ref>Phys.Rev.D73:016005,2006</arxiv:journal_ref>
+    <author>
+      <name>Bogdan Mihaila</name>
+    </author>
+    <author>
+      <name>Krastan B. Blagoev</name>
+    </author>
+    <author>
+      <name>Fred Cooper</name>
+    </author>
+    <arxiv:doi>10.1103/PhysRevD.73.016005</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1103/PhysRevD.73.016005" title="doi"/>
+  </entry>
+</feed>

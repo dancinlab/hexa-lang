@@ -1,0 +1,7 @@
+# runtime artifacts (audit log + per-run markers from cli/hexa-rtsc.hexa)
+state/
+
+# editor / OS junk
+.DS_Store
+*.swp
+*~

@@ -1,0 +1,99 @@
+(kicad_sch (version 20231120) (generator "hexa-rtsc-phase-E")
+
+	(uuid "22222222-2222-2222-2222-222222222222")
+
+	(paper "A3")
+
+	(title_block
+		(title "hexa-rtsc Synthesis Chamber MCU — Phase E schematic skeleton")
+		(date "2026-05-08")
+		(rev "v0.1-skeleton")
+		(company "dancinlab/hexa-rtsc")
+		(comment 1 "Spec: doc/synthesis_bench_v0.md (Stage A)")
+		(comment 2 "MCU:  firmware/mcu/chamber_drv.rs (Phase D+, 5/5 PASS)")
+		(comment 3 "Sim:  firmware/sim/synthesis_ctrl.hexa (Phase C, 7/7 PASS)")
+	)
+
+	(lib_symbols
+		(symbol "MCU_ST_STM32F4:STM32F407VGT6"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U1" (at 0 0 0))
+			(property "Value" "STM32F407VGT6" (at 0 0 0))
+			(property "Footprint" "Package_QFP:LQFP-100_14x14mm_P0.5mm" (at 0 0 0))
+			(property "Datasheet" "https://www.st.com/resource/en/datasheet/stm32f407vg.pdf" (at 0 0 0))
+		)
+		(symbol "Driver_Motor:DRV2700"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U2" (at 0 0 0))
+			(property "Value" "DRV2700_PWM_DRIVER" (at 0 0 0))
+			(property "Footprint" "Package_DFN_QFN:DFN-10-1EP_3x3mm_P0.5mm_EP1.65x2.38mm" (at 0 0 0))
+			(property "Datasheet" "https://www.ti.com/lit/ds/symlink/drv2700.pdf" (at 0 0 0))
+		)
+		(symbol "Sensor_Temperature:Pt100_4wire"
+			(in_bom yes) (on_board no)
+			(property "Reference" "RT1" (at 0 0 0))
+			(property "Value" "Pt100_4wire" (at 0 0 0))
+			(property "Footprint" "" (at 0 0 0))
+			(property "Datasheet" "https://www.heraeus-nexensos.com" (at 0 0 0))
+		)
+	)
+
+	;; ─── Top-level instances ─────────────────────────────────────────
+	(symbol (lib_id "MCU_ST_STM32F4:STM32F407VGT6")
+		(at 100 100 0) (uuid "u1-stm32f4-chamber")
+		(property "Reference" "U1" (at 100 50 0))
+		(property "Value" "STM32F407VGT6" (at 100 150 0))
+		(instances (project "synthesis_chamber" (path "/" (reference "U1") (unit 1))))
+	)
+
+	(symbol (lib_id "Driver_Motor:DRV2700") (at 70 80 0) (uuid "u2-pwm-furnace")
+		(property "Reference" "U2" (at 70 75 0))
+		(property "Value" "TIM4_PWM_buffer" (at 70 85 0))
+		(instances (project "synthesis_chamber" (path "/" (reference "U2") (unit 1))))
+	)
+
+	(symbol (lib_id "Sensor_Temperature:Pt100_4wire") (at 30 90 0) (uuid "rt1-furnace-pt100")
+		(property "Reference" "RT1" (at 30 85 0))
+		(property "Value" "Pt100 (furnace #1)" (at 30 95 0))
+		(instances (project "synthesis_chamber" (path "/" (reference "RT1") (unit 1))))
+	)
+	(symbol (lib_id "Sensor_Temperature:Pt100_4wire") (at 30 110 0) (uuid "rt2-furnace-pt100")
+		(property "Reference" "RT2" (at 30 105 0))
+		(property "Value" "Pt100 (furnace #2 redundant)" (at 30 115 0))
+		(instances (project "synthesis_chamber" (path "/" (reference "RT2") (unit 1))))
+	)
+
+	;; ─── Net labels (per chamber_drv.rs pin map + chip_design.md §2) ──
+	(label "FURNACE_TEMP_PT100_1" (at 50 90 0))
+	(label "FURNACE_TEMP_PT100_2" (at 50 110 0))
+	(label "DAC_FURNACE_PWR" (at 80 80 0))
+	(label "DAC_PRESSURE_CMD" (at 80 90 0))
+	(label "LOAD_CELL_HIGH_P" (at 80 100 0))
+	(label "O2_GLOVEBOX" (at 80 110 0))
+	(label "H2S_SENSOR" (at 80 120 0))
+	(label "EXTRACTOR_OK" (at 80 130 0))
+	(label "EMERGENCY_STOP" (at 80 140 0))
+	(label "TIM4_PWM_FURNACE_SSR" (at 130 80 0))
+	(label "TIM4_PWM_HIGH_P_PUMP" (at 130 90 0))
+	(label "UART_TX" (at 130 100 0))
+	(label "UART_RX" (at 130 110 0))
+	(label "I2C1_SCL" (at 130 120 0))
+	(label "I2C1_SDA" (at 130 130 0))
+
+	;; ─── Power rails ───────────────────────────────────────────────
+	(label "+3V3" (at 100 50 0))
+	(label "+5V" (at 100 60 0))
+	(label "+24V_SSR" (at 130 70 0))
+	(label "GND" (at 100 150 0))
+
+	;; ─── Notes ─────────────────────────────────────────────────────
+	(text "Synthesis chamber MCU board — STM32F407VGT6\n168 MHz Cortex-M4F + 1 MiB FLASH + 192 KiB SRAM\n4 Hz control loop = τ(6) anchor (TICK_MS=250)"
+		(at 100 30 0)
+		(effects (font (size 1.5 1.5)))
+	)
+	(text "6 safety interlocks (= τ(6) + 2 redundant): Pb-extractor + H2S + over-T +\nover-P + O2 ingress + ramp-deviation + emergency-stop. ABORT = TIM4 PWM zero."
+		(at 100 165 0)
+		(effects (font (size 1.2 1.2)))
+	)
+
+)

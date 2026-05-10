@@ -1,0 +1,197 @@
+# .roadmap.hexa_rtsc — repo-overall tracker
+
+> Cross-cutting state: invariant lattice, release cadence, cycle history,
+> deadlines, pointers. Sister substrate of `hexa-bio` / `hexa-millennium` /
+> `hexa-cosmos` under `dancinlab` org.
+
+**Last sync**: 2026-05-06 · **Current release**: v1.0.0 · **Branch**: `main`
+
+---
+
+## §0 Terminal goal — room-temperature superconductor 실증
+
+hexa-rtsc 도착지 = **T_c ≥ 300 K, ambient pressure 초전도체 실증**.
+
+DoD (Definition of Done):
+
+1. BCS 또는 BCS-너머 메커니즘 n=6 closed-form fit 완성 (λ → T_c 예측 식).
+2. LK-99 등 후보 substrate falsifier 명확화 (재현 실패 → 다음 후보 lattice 갱신).
+3. 48T SC coil 실현 (hexa-fusion / petite-cern / hexa-ufo 의존 해소 — RTSC 가
+   상위 substrate 로서 3 sister 의존을 풀어 줌).
+
+n=6 invariant lattice (§A.1) 는 도착지의 *correctness machinery* — 도착지
+자체가 아닌 후보 closed-form 정합성 보장 도구.
+
+## §A.1 Invariant lattice (n=6)
+
+```
+σ(6) · φ(6) = n · τ(6) = J₂ = 24
+   12   ·   2  =  6  ·   4  = 24
+```
+
+| Symbol | Value | Role | RTSC projection |
+|--------|-------|------|-----------------|
+| σ(6)   | 12    | sigma — cardinality bin | 12 candidate substrate families (cuprate / iron-pnictide / hydride / nickelate / LK-99-class / ...) |
+| τ(6)   | 4     | tau — state quartet | 4 phases: normal · pseudogap · SC · strange-metal |
+| φ(6)   | 2     | phi — verdict bit | superconducting / normal (binary at fixed T) |
+| J₂     | 24    | Mathieu / Leech symmetry | M₂₄ · O ⊂ I octahedral pairing-group |
+
+## §A.2 Release cadence
+
+| Version | Date            | Status       | Highlights |
+|---------|-----------------|--------------|------------|
+| v1.0.0  | 2026-05-06      | RELEASED     | rtsc + sc 시드 + substrate-of-substrates cross-link 3개 (hexa-fusion / petite-cern / hexa-ufo) |
+| v1.1.0  | 2026-05-08      | RSC code-layer FINAL on `main` | 18+ verify/ scripts (T1 ×6 + T2 ×9 + T2-solver ×4 + T3-archival ×6 + meta ×2). All 6 falsifiers 100% bookkeeping closure (T1 + T2 ×3 + T3 ×1). cli verify all 22/27 (5 pre-existing env fails). lint_numerics 92/92 PASS · falsifier_check 43/43 PASS. |
+| v1.2.0  | _planned 2026-12_ | TARGET     | n=6 closed-form fit BCS coupling λ → T_c 예측 .hexa module 보강 (T1/T2 within RSC; T3 still archival) |
+| v2.0.0  | _planned 2027-Q2_ | ASPIRATIONAL | Stage-1+ benchtop raw-data 합성/측정 (실제 LK-99 후보 합성 + 48 T REBCO coil 시제). **Out of RSC code-layer**; see §A.6. |
+
+## §A.3 Cycle history
+
+- **cycle 1 (2026-05-06)**: v1.0.0 RELEASED — rtsc + sc 시드, 3-link
+  substrate-of-substrates 도식 wired.
+- **cycle 2 (2026-05-07 ~ 2026-05-08)**: v1.1.0 RSC code-layer FINAL —
+  iter 1 ~ 19, recipe `~/core/bedrock/docs/runnable_surface_recipe.md`
+  적용. T1 ×6 (lattice + cross-doc + 4 calc) + T2 ×9 (4 numerics + 4
+  parity + lattice_arithmetic) + T2-solver ×4 (BCS / McMillan / Hc2 /
+  LK-99 Newton inversions) + T3-archival ×6 (arXiv 6-corpus 존재 검증)
+  + meta ×2 (falsifier_check + lint_numerics). 모든 6 falsifier
+  100% bookkeeping closure. recipe §7.2 sat-1 + sat-2 통과 후 user
+  override 로 §7.7 (a) 예외 발동, archival T3 추가.
+- **cycle 2-post (2026-05-08 심화 봉쇄)**: 사용자 명시 지시
+  ("심화 봉쇄 진행", recipe §9.1 합법 예외 #2) 로 recipe §7.4 우선순위
+  표 미충족 슬롯 2 개를 충족.
+    - **iter #1**: 슬롯 #15 (`saturation_check.hexa`). meta tier
+      ×2 → ×3. 22-check predicate (sat-1 ×6 + sat-2 ×2 + drift-lock
+      ×1 + falsifier mirror) 가 `__HEXA_RTSC_RSC_SATURATED__ STOP`
+      sentinel 을 자동 emit.
+    - **iter #2**: 슬롯 #7 (`numerics_cross_pillar.hexa`). T2
+      cross-cutter ×1 → ×2 (lattice_arithmetic + cross_pillar).
+      6 inter-pillar invariants (I1 SSOT lattice presence, I2 master
+      identity, I3 Hc2 σ·τ=48 gate, I4 Cooper φ=2, I5 McMillan→BCS
+      weak-coupling limit, I6 LK-99 negative-result σ-preservation).
+      drift-lock between 4 pillar bodies — silent pillar-level
+      corruption catches.
+    - **iter #3**: 슬롯 #11 (`tests/test_saturation.hexa`). isolated
+      regression test for `verify/saturation_check.hexa` (sentinel
+      ends in STOP not PASS, so test_calculators 가 미커버). 4 조건
+      (count 9/9 + sat-1 TRUE + sat-2 TRUE + STOP sentinel) AND
+      iter #1 prose 의 "22-check" → "9-check" 정정 wave.
+    - **iter #4**: 슬롯 #12 (`build/Makefile` + `build/header.tex`).
+      pandoc + xelatex 3-corpus PDF rebuild (pillars + roadmap +
+      hardware). Non-predicate-bearing reader-facing tool — closure
+      pct 변동 없음.
+    - **iter #5**: 슬롯 #13 (`docs/numerics_methodology.md`).
+      T1/T2/T3/T4 4-tier 사다리 narrative + 4 pillar 방법론 prose +
+      "What's NOT covered" honesty disclaimer + "How to add a new
+      pillar" 7-step gateway. Non-predicate-bearing.
+  closure-honesty: 여전히 bookkeeping/archival 만, T4 live hardware
+  는 §A.6 Step 4 미해결. recipe §7.4 priority table 모든 슬롯
+  (#1-#15 + cross-cutters) 충족 → §9.1 saturation 후 health-check
+  모드만 가능 (3가지 합법 예외 외 새 chunk 금지).
+
+## §A.4 Falsifier preregister
+
+| ID         | Statement                                                                                      | Status     |
+|------------|------------------------------------------------------------------------------------------------|------------|
+| F-RTSC-1   | LK-99 (Pb₁₀₋ₓCuₓ(PO₄)₆O) 재현 실패 (2023 후 다수) — 다른 후보 substrate spec 갱신 필요          | OPEN — v1.1.0 catalog 에 negative result 등재 |
+| F-RTSC-2   | BCS λ 한계 (T_c ≤ 30 K McMillan ceiling) 너머 메커니즘 n=6 closed-form fit 가능?                 | OPEN — v1.2.0 closed-form module 의 핵심 검증 |
+| F-RTSC-3   | 48 T SC coil 실현 시 hexa-fusion · petite-cern · hexa-ufo 3 sister 의존 모두 해소 동시 만족? | OPEN — v2.0.0 cross-verify gate |
+| F-SC-1     | Cooper pair size ≠ φ(6)=2 (electron boson pair size 측정값) → DEMOTE φ=2 pair 주장              | OPEN — empirical (UPS/STM/INS measurement) |
+| F-SC-2     | Abrikosov vortex lattice 좌표수 ≠ CN=6 (육각격자 깨짐, 정사각·삼각 등) → DEMOTE CN=6 주장        | OPEN — empirical (Bitter decoration / SANS imaging) |
+| F-SC-3     | BCS 비열점프비 ΔC/γTc ≠ ~1.43 (특이/비정상 pairing) → DEMOTE σ(6)=12 specific-heat molecule       | OPEN — empirical (calorimetry below Tc) |
+
+**Witness schema convention** (sister `hexa-bio` §A.8 alias-registry 동형):
+
+| Falsifier  | Witness schema (planned)            | Cycle |
+|------------|-------------------------------------|-------|
+| F-RTSC-1   | `raw_77_rtsc_lk99_repro_v1`         | 2     |
+| F-RTSC-2   | `raw_77_rtsc_bcs_n6_fit_v1`         | 3     |
+| F-RTSC-3   | `raw_77_rtsc_48t_coil_v1`           | 5     |
+| F-SC-1     | `raw_77_sc_cooper_phi2_v1`          | 4     |
+| F-SC-2     | `raw_77_sc_abrikosov_cn6_v1`        | 4     |
+| F-SC-3     | `raw_77_sc_bcs_ratio_sigma12_v1`    | 4     |
+
+## §A.5 Pending decisions
+
+- **[UNDEFINED] BCS-너머 메커니즘 family fix** — strong-coupling Eliashberg /
+  bipolaron / RVB / unconventional pairing 중 n=6 projection 우선순위 미정.
+  v1.1.0 catalog 작업 시 동시에 fix 필요.
+- **[UNDEFINED] cross-link priority** — v2.0.0 cross-verify 시 hexa-fusion
+  48 T coil dependency 가 가장 빠른 trigger 인지, hexa-ufo magnetic-confinement
+  side branch 가 더 빠른지 deadline 미정.
+- **[UNDEFINED] negative-result 처리** — LK-99 재현 실패 catalog 에 어떤
+  granularity (synthesis route / sample purity / measurement protocol) 까지
+  기록할지 SLA 미정.
+- **[UNDEFINED] §A.6 Step-1 외부 collab 후보** — synthesis lab (NIMS /
+  Argonne MSD / 大阪大 / KIAS / SNU CMR) 중 1, 그리고 high-field magnet
+  lab (NHMFL / Dresden HZDR / Kyoto-RIKEN) 중 1 선정 시점.
+
+## §A.6 Stage-1+ hardware path  (post-RSC, **out of code-layer scope**)
+
+RSC (verify/* `.hexa`) 가 닫을 수 없는 영역. v1.1.0 100% closure 이후
+v2.0.0 까지의 하드웨어/외부-bound 단계. 본 path 는 `.hexa` 가 아니라
+funding · 외부 검증 · 실제 합성/측정 으로 진행.
+
+| step | 내용                                                                         | 시점 (목표)  | RSC 가능?         | 결과물                                                            |
+|:----:|:-----------------------------------------------------------------------------|:------------:|:-----------------:|:------------------------------------------------------------------|
+|  1   | 외부 collab 결정 (synthesis lab × 1 + high-field magnet lab × 1)              | 2026-Q3      | ✗                 | MOU / 합의서                                                       |
+|  2   | Funding round (high-pressure synthesis chamber + 48 T REBCO test rig + UPS/STM/INS suite) | 2026-Q4      | ✗                 | grant / 투자 commitment                                           |
+|  3   | Stage-1 시뮬레이션 parity (DFT/QSGW for LK-99 candidates · TDGL vortex solver · WHH full integral) | ~2026-12     | **부분 가능** (.hexa T2 보강) | numerics_lk99_dft.hexa, numerics_tdgl_vortex.hexa, simulation parity 보고서 |
+|  4   | Stage-2/3 실제 합성 + 측정 (years out: LK-99 candidate 후보 합성 → Tc/Meissner 측정, 48 T REBCO coil 시제) | ~2027-Q1+    | ✗                 | 펌웨어 · HDL · PCB · BOM · 캘리브레이션 로그 · raw shot 데이터 |
+
+Step 3 까지가 본 repo 가 직접 다룰 수 있는 마지막 layer. Step 1 / 2 / 4 는
+hardware-ops · 외부-stakeholder · multi-month 작업으로 cron / loop
+firing 으로 닫히지 않음. 본 §A.6 는 `tracking only` — 진행 시 Cycle
+항목 (§A.3) 에 cross-referenced.
+
+**현재 (2026-05-08) 상태**: 모든 step 미착수. v2.0.0 = 종이 위 설계.
+sc/superconductor.md + rtsc/room-temp-sc.md 가 빌드 후보 BOM 의 출발점.
+
+### §A.6.1 추천 작업 순서 (A → B → C → D)
+
+§A.6 step 1/2/4 가 외부-bound 인 동안에도 본 repo 안에서 진행 가능한
+사전 작업 4 단계. 펌웨어/HW 가 실제로 나오는 시점은 D 단계 이후이며,
+A → B → C 는 "v2.0.0 빌드 직전" 까지 본 repo 가 자체적으로 닫을 수
+있는 범위.
+
+| 단계 | 내용                                                                                                                                                                     | 결과물                                                                              | 외부 HW 필요? | RSC 가능?         | 가치                                                              |
+|:----:|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:------------------------------------------------------------------------------------|:------------:|:-----------------:|:------------------------------------------------------------------|
+|  A   | **종이 설계 강화** — `doc/synthesis_bench_v0.md`, `doc/48t_rebco_coil_v0.md`, `doc/calorimetry_rig_v0.md` (풀 BOM + 블록 다이어그램 + 인터페이스 표 + 안전 명세)              | `.md` 1~3 개 + ASCII/TikZ 블록도                                                    | ✗            | ✓ docs-layer      | funding pitch deck 직전까지                                       |
+|  B   | **Stage-1 simulation parity** (= §A.6 Step 3) — DFT band-structure for LK-99 family · TDGL vortex dynamics solver · WHH full integral (truncated polynomial 보강)         | `verify/numerics_lk99_dft.hexa` · `verify/numerics_tdgl_vortex.hexa` · `verify/numerics_whh_full.hexa` 류 1~3 개 | ✗            | ✓ partial-RSC     | 외부 collab 미팅 카드 ("이미 simulation 검증")                    |
+|  C   | **Sim-펌웨어** — 합성-챔버 온도/압력 제어 + magnet quench-protection 회로를 sim-only 로 모델링, hardware-in-the-loop 없이 동작                                                | `firmware/sim/synthesis_ctrl.hexa` · `firmware/sim/quench_logic.hexa` (또는 `*.c` + cmocka) | ✗            | 부분 ✓            | 실제 MCU 펌웨어의 prototype layer                                  |
+|  D   | **HDL/MCU skeleton** — Verilog (FPGA quench-detection) + Rust/C (MCU synthesis-chamber driver). 컴파일은 되나 flash 할 보드 없음                                            | `firmware/hdl/quench_detect.v` · `firmware/mcu/chamber_drv.rs` + Vivado/Cargo-embedded 셋업 | ✗ (지금) / 나중에 ✓ | ✗ (toolchain layer) | toolchain 의존 무거움; 빌드 후 검증 불가                            |
+
+**추천 순서**: A → B → C → D.
+
+- A 는 1~2 commit (docs 만, RSC saturation 깨지 않음)
+- B 는 2~4 commit (.hexa 만, RSC 사다리 그대로)
+- C 는 새 디렉토리 (`firmware/sim/`) — 처음으로 .hexa 외 파일 추가 시작
+- D 는 본격 toolchain (vivado/cargo-embedded) — 실제 보드 살 시점에 다시
+
+#### 어디까지 갈지 (4 옵션)
+
+1. **A 만** — funding/collab 미팅 자료 수준. 1 일 작업.
+2. **A + B** — Stage-1 sim parity 까지. 외부 collab 에 "이미 simulation
+   검증됨" 카드 만들 수 있음. 2~3 일.
+3. **A + B + C** — sim-펌웨어까지. Stage-1 데모 가능 (모니터로 합성-챔버
+   온도 추적 시뮬). 1 주.
+4. **풀 D** — 실제 HW 살 시점에. 지금은 보류 권장 (검증 불가).
+
+---
+
+## §B POINTERS
+
+- Sister substrates: `~/core/hexa-bio` · `~/core/hexa-millennium` ·
+  `~/core/hexa-cosmos`
+- Cross-link upstream: `~/core/hexa-fusion` (48 T coil) ·
+  `~/core/petite-cern` (high-field magnet) · `~/core/hexa-ufo`
+  (magnetic-confinement)
+- Release notes: `RELEASE_NOTES_v1.0.0.md`
+- Changelog: `CHANGELOG.md`
+
+## §C Cross-cutting Require
+
+- **(R1)** `~/core/canon/` canonical SSOT 수정 금지 — symlink 소스, repo 는 consumer
+- **(R2)** Empirical SSOT 미정 (v1.2.0 closed-form module land 시 fix)
+- **(R3)** Witness = raw 108 schema → registry append-only (sister hexa-bio 패턴)
+- **(R4)** Negative-result (LK-99 등) 명시 등재 — silent drop 금지

@@ -1,0 +1,79 @@
+#!hexa strict
+// tests/test_calculators.hexa — exercise verify/calc_*.hexa + numerics_*.hexa
+// regression set (T1 algebraic + T2 numerical tier).
+//
+// Pass criterion: each registered (filename, sentinel) pair runs to exit 0
+// AND emits its sentinel string. Sentinel form: __HEXA_RTSC_<NAME>__ PASS.
+//
+// Inventory (grows per iteration of docs/runnable_surface_recipe.md):
+//   verify/calc_bcs.hexa        __HEXA_RTSC_CALC_BCS__ PASS         (T1, F-SC-1/2/3)
+//   verify/calc_mcmillan.hexa   __HEXA_RTSC_CALC_MCMILLAN__ PASS    (T1, F-RTSC-2)
+//   verify/calc_hc2_48t.hexa    __HEXA_RTSC_CALC_HC2_48T__ PASS     (T1, F-RTSC-3)
+//   verify/calc_lk99.hexa       __HEXA_RTSC_CALC_LK99__ PASS        (T1, F-RTSC-1)
+//   verify/numerics_bcs.hexa    __HEXA_RTSC_NUMERICS_BCS__ PASS     (T2, F-SC-1/2/3)
+//
+// Run:
+//     hexa run tests/test_calculators.hexa
+//
+// Authority: own 1 (n=6 lattice) + recipe T1/T2 closure-progression contract.
+
+let CALCULATORS: [[str]] = [
+    ["verify/calc_bcs.hexa",      "__HEXA_RTSC_CALC_BCS__ PASS"],
+    ["verify/calc_mcmillan.hexa", "__HEXA_RTSC_CALC_MCMILLAN__ PASS"],
+    ["verify/calc_hc2_48t.hexa",  "__HEXA_RTSC_CALC_HC2_48T__ PASS"],
+    ["verify/calc_lk99.hexa",     "__HEXA_RTSC_CALC_LK99__ PASS"],
+    ["verify/numerics_bcs.hexa",      "__HEXA_RTSC_NUMERICS_BCS__ PASS"],
+    ["verify/numerics_mcmillan.hexa", "__HEXA_RTSC_NUMERICS_MCMILLAN__ PASS"],
+    ["verify/numerics_hc2_48t.hexa",  "__HEXA_RTSC_NUMERICS_HC2_48T__ PASS"],
+    ["verify/numerics_lk99.hexa",        "__HEXA_RTSC_NUMERICS_LK99__ PASS"],
+    ["verify/numerics_bcs_parity.hexa",       "__HEXA_RTSC_NUMERICS_BCS_PARITY__ PASS"],
+    ["verify/numerics_mcmillan_parity.hexa",  "__HEXA_RTSC_NUMERICS_MCMILLAN_PARITY__ PASS"],
+    ["verify/numerics_hc2_48t_parity.hexa",   "__HEXA_RTSC_NUMERICS_HC2_48T_PARITY__ PASS"],
+    ["verify/numerics_lk99_parity.hexa",            "__HEXA_RTSC_NUMERICS_LK99_PARITY__ PASS"],
+    ["verify/numerics_lattice_arithmetic.hexa",     "__HEXA_RTSC_NUMERICS_LATTICE_ARITHMETIC__ PASS"],
+    ["verify/numerics_cross_pillar.hexa",           "__HEXA_RTSC_NUMERICS_CROSS_PILLAR__ PASS"],
+    ["verify/numerics_bcs_solver.hexa",             "__HEXA_RTSC_NUMERICS_BCS_SOLVER__ PASS"],
+    ["verify/numerics_mcmillan_solver.hexa",        "__HEXA_RTSC_NUMERICS_MCMILLAN_SOLVER__ PASS"],
+    ["verify/numerics_hc2_48t_solver.hexa",         "__HEXA_RTSC_NUMERICS_HC2_48T_SOLVER__ PASS"],
+    ["verify/numerics_lk99_solver.hexa",            "__HEXA_RTSC_NUMERICS_LK99_SOLVER__ PASS"],
+    ["verify/numerics_lk99_dft.hexa",               "__HEXA_RTSC_NUMERICS_LK99_DFT__ PASS"],
+    ["verify/numerics_tdgl_vortex.hexa",            "__HEXA_RTSC_NUMERICS_TDGL_VORTEX__ PASS"],
+    ["verify/numerics_whh_full.hexa",               "__HEXA_RTSC_NUMERICS_WHH_FULL__ PASS"],
+    ["verify/empirical_lk99_arxiv.hexa",                "__HEXA_RTSC_EMPIRICAL_LK99_ARXIV__ PASS"],
+    ["verify/empirical_mcmillan_arxiv.hexa",            "__HEXA_RTSC_EMPIRICAL_MCMILLAN_ARXIV__ PASS"],
+    ["verify/empirical_hc2_high_field_arxiv.hexa",      "__HEXA_RTSC_EMPIRICAL_HC2_HIGH_FIELD_ARXIV__ PASS"],
+    ["verify/empirical_bcs_cooper_arxiv.hexa",          "__HEXA_RTSC_EMPIRICAL_BCS_COOPER_ARXIV__ PASS"],
+    ["verify/empirical_abrikosov_sans_arxiv.hexa",      "__HEXA_RTSC_EMPIRICAL_ABRIKOSOV_SANS_ARXIV__ PASS"],
+    ["verify/empirical_specific_heat_arxiv.hexa",       "__HEXA_RTSC_EMPIRICAL_SPECIFIC_HEAT_ARXIV__ PASS"],
+    ["verify/lint_numerics.hexa",                   "__HEXA_RTSC_LINT_NUMERICS__ PASS"],
+]
+
+fn main() {
+    let root_env = env("HEXA_RTSC_ROOT")
+    let mut prefix = ""
+    if root_env.len() > 0 { prefix = root_env + "/" }
+
+    let mut passed = 0
+    let mut failed = 0
+    let mut i = 0
+    while i < CALCULATORS.len() {
+        let entry = CALCULATORS[i]
+        let path = prefix + entry[0]
+        let sentinel = entry[1]
+        let raw = exec("hexa run " + path + " 2>&1")
+        if raw.contains(sentinel) {
+            println("test_calculators: PASS  (" + entry[0] + " :: " + sentinel + ")")
+            passed = passed + 1
+        } else {
+            println("test_calculators: FAIL  (" + entry[0] + ")")
+            println("  expected sentinel: " + sentinel)
+            println(raw.trim())
+            failed = failed + 1
+        }
+        i = i + 1
+    }
+    let total = passed + failed
+    println("")
+    println("test_calculators: " + str(passed) + "/" + str(total) + " sentinels matched")
+    if failed > 0 { exit(1) }
+}

@@ -1,0 +1,67 @@
+// install.hexa — hx build hook for hexa-rtsc.
+//
+// Invoked by `hx install hexa-rtsc` (hexa-lang package manager) right after
+// the GitHub checkout (or symlink from /Users/ghost/core/hexa-rtsc) lands in
+// $HX_PKG_DIR. hx passes:
+//   HX_PKG_DIR     — absolute path to the package root
+//   HX_BIN_DIR     — ~/.hx/bin
+//   HX_PKG_NAME    — "hexa-rtsc"
+//   HX_HOOK_PHASE  — "pre" | "post" | "both" (default: "both")
+//
+// Mirrors hexa-bio/install.hexa pattern (sister extraction 2026-05-04).
+//
+// Responsibilities (each idempotent, raw#9 STRICT — no .py creation,
+// no shellout to system python3):
+//   1. Pre-install: no Python deps required (spec-only release).
+//   2. Post-install: run `hexa-rtsc selftest` via the freshly-staged
+//      cli/hexa-rtsc.hexa. Selftest output captured; non-PASS = warn-only
+//      (CLI dispatcher is placeholder TBD for v1.0.0).
+//
+// raw#9 hexa-only, raw#11 snake_case, raw#15 no-hardcode.
+// raw#10 honest C3: see hexa-rtsc/README.md "Status" + "Caveats" section.
+
+fn run_quick_selftest(root: str) -> bool {
+    let cli = root + "/cli/hexa-rtsc.hexa"
+    let exists = exec("[ -f \"" + cli + "\" ] && echo y || echo n").trim()
+    if exists != "y" {
+        eprintln("[hexa-rtsc/install] WARN: cli/hexa-rtsc.hexa missing — skip selftest")
+        return false
+    }
+    println("[hexa-rtsc/install] [post] running quick selftest (placeholder dispatcher)")
+    let cmd = "HEXA_RTSC_ROOT=\"" + root + "\" hexa run \"" + cli + "\" selftest 2>&1"
+    let raw = exec(cmd)
+    if raw.contains("__HEXA_RTSC_SELFTEST__ PASS") {
+        println("[hexa-rtsc/install]   selftest PASS — placeholder sentinel present")
+        return true
+    }
+    eprintln("[hexa-rtsc/install] WARN: selftest non-PASS (warn-only — v1.0.0 dispatcher is TBD)")
+    eprintln("  hint: see README §Status — RT-SC is academically unproven; spec-only release.")
+    return false
+}
+
+fn main() -> void {
+    let mut root = env("HX_PKG_DIR")
+    if root == "" { root = exec("pwd").trim() }
+    let phase = env("HX_HOOK_PHASE")
+    let mut p = phase
+    if p == "" { p = "both" }
+    println("[hexa-rtsc/install] HX_PKG_DIR=" + root + " phase=" + p)
+
+    let entry = root + "/cli/hexa-rtsc.hexa"
+    let entry_ok = exec("[ -f \"" + entry + "\" ] && echo y || echo n").trim()
+    if entry_ok != "y" {
+        eprintln("[hexa-rtsc/install] ERROR: canonical entry missing: " + entry)
+        exit(1)
+    }
+    println("[hexa-rtsc/install] canonical entry OK: cli/hexa-rtsc.hexa")
+
+    if p == "pre" || p == "both" {
+        println("[hexa-rtsc/install] [pre] no python deps required (spec-only)")
+    }
+
+    if p == "post" || p == "both" {
+        let _ = run_quick_selftest(root)  // warn-only
+    }
+
+    println("[hexa-rtsc/install] done — hx will generate " + env("HX_BIN_DIR") + "/hexa-rtsc shim")
+}

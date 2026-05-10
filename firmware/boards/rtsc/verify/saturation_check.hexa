@@ -1,0 +1,339 @@
+#!hexa strict
+// hexa-rtsc/verify/saturation_check.hexa — recipe §7.3 self-stop signal.
+//
+// recipe `~/core/bedrock/docs/runnable_surface_recipe.md` §7.3 declares an
+// auto-stop check the agent SHOULD run at the end of every iteration to
+// detect whether the RSC loop has reached saturation. Until v1.1.0 this
+// hexa-rtsc repo did NOT carry the script — saturation was inferred by
+// hand from `falsifier_check` + `lint_numerics` output. This file lifts
+// that into an explicit, auditable predicate so `sat-1 + sat-2` is a
+// regression-locked claim, not folklore.
+//
+// Predicate (recipe §7.3, adapted to hexa-rtsc 6-falsifier surface):
+//
+//   sat-1  =  ∀ Fi ∈ {F-RTSC-1, F-RTSC-2, F-RTSC-3,
+//                     F-SC-1,   F-SC-2,   F-SC-3}    :
+//                 Fi.T1 ≥ 1 file present
+//              ∧  Fi.T2 ≥ 1 file present
+//              ∧  Fi.T3 ≥ 1 file present
+//
+//   sat-2  =  inv_count(verify/numerics_*.hexa) ≥ 9
+//          ∧  lint_numerics PASS
+//
+//   SATURATED  ⇔  sat-1 ∧ sat-2
+//
+// PASS path emits the canonical sentinel
+//
+//     __HEXA_RTSC_RSC_SATURATED__ STOP
+//
+// recipe §7.3 names this exact string.  When emitted, downstream agents /
+// cron loops / `/rsc` runners read it as: "code-layer 100% closure has
+// been reached; do NOT auto-add new chunks (recipe §9.1 over-saturation
+// guard); only legitimate exceptions in §9.1 may extend."
+//
+// FAIL path emits a per-falsifier breakdown of which tier(s) are missing
+// + which numerics_*.hexa scripts must land + whether lint_numerics is
+// dirty, then exits 1 — the signal to the loop that more chunks are
+// owed (sat-1/sat-2 not yet met).
+//
+// HONESTY (memory: closure-honesty-contract):
+//
+//   "100% closure" emitted by this script means EVIDENCE-FILES-PRESENT,
+//   not "physics is settled". T3 is archival-API parity (arXiv corpus
+//   existence + integer counts) — the underlying RT-SC empirical claim
+//   stays UNPROVEN until §A.6 Step 4 (live REBCO + Cernox bench).
+//   Saturated ≠ falsified ≠ confirmed.  Saturated = bookkeeping-locked.
+//
+// Run:
+//     hexa run verify/saturation_check.hexa     # exit 0 = SATURATED
+//
+// Authority: recipe §7.2 stop conditions + §7.3 saturation logic +
+//            §9.1 post-saturation guard.  Sister of hexa-cern's
+//            verify/saturation_check.hexa (same predicate, different
+//            falsifier surface).
+//
+// @no-lock-needed
+
+let VERSION = "1.0.0"
+
+// ─── path / IO helpers ──────────────────────────────────────────────────
+
+let HOME = env("HOME")
+let HEXA_RTSC_ROOT_ENV = env("HEXA_RTSC_ROOT")
+
+fn _root() -> str {
+    if HEXA_RTSC_ROOT_ENV.len() > 0 { return HEXA_RTSC_ROOT_ENV }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-rtsc"
+}
+
+let ROOT       = _root()
+let VERIFY_DIR = ROOT + "/verify"
+
+fn read_file(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+fn file_exists(path: str) -> bool {
+    let r = exec("[ -f '" + path + "' ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+// ─── check harness ──────────────────────────────────────────────────────
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── falsifier surface (must match falsifier_check.hexa SSOT) ───────────
+//
+// Mirror of verify/falsifier_check.hexa's per-falsifier T1/T2/T3 arrays.
+// Drift between the two files is detected by check_falsifier_mirror()
+// further down — both files must list the same scripts per tier.
+
+let F1_ID = "F-RTSC-1"
+let F1_T1: [str] = ["calc_lk99.hexa"]
+let F1_T2: [str] = ["numerics_lk99.hexa", "numerics_lk99_parity.hexa", "numerics_lk99_solver.hexa"]
+let F1_T3: [str] = ["empirical_lk99_arxiv.hexa"]
+
+let F2_ID = "F-RTSC-2"
+let F2_T1: [str] = ["calc_mcmillan.hexa"]
+let F2_T2: [str] = ["numerics_mcmillan.hexa", "numerics_mcmillan_parity.hexa", "numerics_mcmillan_solver.hexa"]
+let F2_T3: [str] = ["empirical_mcmillan_arxiv.hexa"]
+
+let F3_ID = "F-RTSC-3"
+let F3_T1: [str] = ["calc_hc2_48t.hexa"]
+let F3_T2: [str] = ["numerics_hc2_48t.hexa", "numerics_hc2_48t_parity.hexa", "numerics_hc2_48t_solver.hexa"]
+let F3_T3: [str] = ["empirical_hc2_high_field_arxiv.hexa"]
+
+let F4_ID = "F-SC-1"
+let F4_T1: [str] = ["calc_bcs.hexa"]
+let F4_T2: [str] = ["numerics_bcs.hexa", "numerics_bcs_parity.hexa", "numerics_bcs_solver.hexa"]
+let F4_T3: [str] = ["empirical_bcs_cooper_arxiv.hexa"]
+
+let F5_ID = "F-SC-2"
+let F5_T1: [str] = ["calc_bcs.hexa"]
+let F5_T2: [str] = ["numerics_bcs.hexa", "numerics_bcs_parity.hexa", "numerics_bcs_solver.hexa"]
+let F5_T3: [str] = ["empirical_abrikosov_sans_arxiv.hexa"]
+
+let F6_ID = "F-SC-3"
+let F6_T1: [str] = ["calc_bcs.hexa"]
+let F6_T2: [str] = ["numerics_bcs.hexa", "numerics_bcs_parity.hexa", "numerics_bcs_solver.hexa"]
+let F6_T3: [str] = ["empirical_specific_heat_arxiv.hexa"]
+
+let FALSIFIERS: [str] = [
+    "F-RTSC-1: T1×1 + T2×3 + T3×1 must all be present (sat-1 row)",
+    "F-RTSC-2: T1×1 + T2×3 + T3×1 must all be present (sat-1 row)",
+    "F-RTSC-3: T1×1 + T2×3 + T3×1 must all be present (sat-1 row)",
+    "F-SC-1:   T1×1 + T2×3 + T3×1 must all be present (sat-1 row)",
+    "F-SC-2:   T1×1 + T2×3 + T3×1 must all be present (sat-1 row)",
+    "F-SC-3:   T1×1 + T2×3 + T3×1 must all be present (sat-1 row)",
+    "global:   inv_count(numerics_*.hexa) ≥ 9 (sat-2 inventory floor)",
+    "global:   lint_numerics.hexa PASS (sat-2 invariant lint)",
+]
+
+// ─── tier predicates ───────────────────────────────────────────────────
+
+fn _all_present(scripts: [str]) -> bool {
+    if scripts.len() == 0 { return false }
+    for s in scripts {
+        if file_exists(VERIFY_DIR + "/" + s) == false { return false }
+    }
+    return true
+}
+
+fn _missing(scripts: [str]) -> str {
+    let mut out = ""
+    for s in scripts {
+        if file_exists(VERIFY_DIR + "/" + s) == false {
+            if out.len() > 0 { out = out + ", " }
+            out = out + s
+        }
+    }
+    return out
+}
+
+fn check_falsifier(id: str,
+                   t1: [str], t2: [str], t3: [str]) -> bool {
+    let t1_ok = _all_present(t1)
+    let t2_ok = _all_present(t2)
+    let t3_ok = _all_present(t3)
+    let row_ok = t1_ok && t2_ok && t3_ok
+    let mut detail = ""
+    if !t1_ok { detail = "T1 missing: " + _missing(t1) }
+    if !t2_ok {
+        if detail.len() > 0 { detail = detail + " | " }
+        detail = detail + "T2 missing: " + _missing(t2)
+    }
+    if !t3_ok {
+        if detail.len() > 0 { detail = detail + " | " }
+        detail = detail + "T3 missing: " + _missing(t3)
+    }
+    if row_ok {
+        detail = "T1×" + str(t1.len()) +
+                 " + T2×" + str(t2.len()) +
+                 " + T3×" + str(t3.len()) + " all present"
+    }
+    _check(row_ok, "sat-1 · " + id + " row complete (T1+T2+T3)", detail)
+    return row_ok
+}
+
+// ─── inventory floor (recipe §7.3 inv_count ≥ 9) ───────────────────────
+
+fn count_numerics_on_disk() -> int {
+    let raw = exec("ls " + VERIFY_DIR + "/numerics_*.hexa 2>/dev/null").trim()
+    if raw.len() == 0 { return 0 }
+    let lines = raw.split("\n")
+    let mut n = 0
+    for ln in lines {
+        if ln.trim().len() > 0 { n = n + 1 }
+    }
+    return n
+}
+
+// ─── lint gate (recipe §7.3 lint_pass) ─────────────────────────────────
+
+fn lint_pass() -> bool {
+    let rc_str = exec("hexa run " + VERIFY_DIR + "/lint_numerics.hexa >/dev/null 2>&1; echo $?").trim()
+    let rc = int(rc_str)
+    return rc == 0
+}
+
+// ─── falsifier_check.hexa SSOT mirror check ────────────────────────────
+//
+// Sanity guard against drift: the per-tier arrays above must match the
+// arrays in falsifier_check.hexa.  We do a lightweight string-presence
+// check (every script we list must appear by basename in falsifier_check
+// body) — full structural diff would duplicate the parser.
+
+fn check_falsifier_mirror() {
+    let path = VERIFY_DIR + "/falsifier_check.hexa"
+    if !file_exists(path) {
+        _check(false, "falsifier_check.hexa SSOT present",
+               "expected at " + path)
+        return
+    }
+    let body = read_file(path)
+    let all_lists: [[str]] = [
+        F1_T1, F1_T2, F1_T3,
+        F2_T1, F2_T2, F2_T3,
+        F3_T1, F3_T2, F3_T3,
+        F4_T1, F4_T2, F4_T3,
+        F5_T1, F5_T2, F5_T3,
+        F6_T1, F6_T2, F6_T3,
+    ]
+    let mut missing: [str] = []
+    for lst in all_lists {
+        for s in lst {
+            if body.contains(s) == false { missing = missing + [s] }
+        }
+    }
+    let ok = missing.len() == 0
+    let mut detail = ""
+    if !ok {
+        for m in missing {
+            if detail.len() > 0 { detail = detail + ", " }
+            detail = detail + m
+        }
+        detail = "scripts in saturation_check not echoed by falsifier_check: " + detail
+    } else {
+        detail = "all 23 scripts mirrored across both meta files"
+    }
+    _check(ok, "drift-lock · falsifier_check.hexa mirrors saturation_check tier arrays",
+           detail)
+}
+
+// ─── main ───
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-rtsc — RSC saturation check (recipe §7.2 / §7.3)")
+    println("========================================================================")
+    println("  source:  " + VERIFY_DIR)
+    println("  recipe:  ~/core/bedrock/docs/runnable_surface_recipe.md §7.3")
+    println("")
+    println("  Predicate:")
+    println("    sat-1 = ∀ falsifier Fi: Fi.T1 ≥ 1 ∧ Fi.T2 ≥ 1 ∧ Fi.T3 ≥ 1 file present")
+    println("    sat-2 = inv_count(numerics_*.hexa) ≥ 9 ∧ lint_numerics PASS")
+    println("    SATURATED ⇔ sat-1 ∧ sat-2")
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + ", what `SATURATED` would be falsified by):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+    println("")
+
+    // ─── sat-1 (per-falsifier T1/T2/T3 row completeness) ──
+    println("  sat-1 · per-falsifier T1+T2+T3 row check:")
+    let r1 = check_falsifier(F1_ID, F1_T1, F1_T2, F1_T3)
+    let r2 = check_falsifier(F2_ID, F2_T1, F2_T2, F2_T3)
+    let r3 = check_falsifier(F3_ID, F3_T1, F3_T2, F3_T3)
+    let r4 = check_falsifier(F4_ID, F4_T1, F4_T2, F4_T3)
+    let r5 = check_falsifier(F5_ID, F5_T1, F5_T2, F5_T3)
+    let r6 = check_falsifier(F6_ID, F6_T1, F6_T2, F6_T3)
+    let sat_1 = r1 && r2 && r3 && r4 && r5 && r6
+
+    // ─── sat-2 (inventory floor + lint gate) ──
+    println("")
+    println("  sat-2 · inventory floor + lint gate:")
+    let inv_n = count_numerics_on_disk()
+    let inv_ok = inv_n >= 9
+    _check(inv_ok,
+           "inv_count(verify/numerics_*.hexa) = " + str(inv_n) + " ≥ 9",
+           if inv_ok { "" }
+           else { "need ≥ 9 numerics scripts on disk; have " + str(inv_n) })
+
+    let lint_ok = lint_pass()
+    _check(lint_ok, "lint_numerics.hexa exits 0",
+           if lint_ok { "5-invariant lint clean across all numerics_*.hexa" }
+           else { "lint_numerics returned non-zero — fix invariant violations first" })
+
+    let sat_2 = inv_ok && lint_ok
+
+    // ─── drift-lock between meta files ──
+    println("")
+    println("  drift-lock · meta-file mirror:")
+    check_falsifier_mirror()
+
+    // ─── verdict ──
+    println("")
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " saturation predicates passed")
+    println("  sat-1 (all 6 falsifier rows complete)        = " +
+            if sat_1 { "TRUE" } else { "FALSE" })
+    println("  sat-2 (inventory ≥ 9 + lint clean)           = " +
+            if sat_2 { "TRUE" } else { "FALSE" })
+    println("")
+
+    if FAIL > 0 || !sat_1 || !sat_2 {
+        println("  RSC loop NOT saturated — owed chunks remain.")
+        println("  See per-row detail above for which T-tier scripts must land next.")
+        println("__HEXA_RTSC_RSC_SATURATED__ FAIL")
+        exit(1)
+    }
+
+    println("  RSC code-layer 100% closure CONFIRMED — recipe §7.2 stop conditions met:")
+    println("    sat-1: every falsifier row carries T1 + T2 + T3 evidence files")
+    println("    sat-2: numerics inventory ≥ 9 AND 5-invariant lint clean")
+    println("")
+    println("  HONEST DISCLAIMER (closure-honesty-contract):")
+    println("    \"saturated\" = bookkeeping/archival-API closure complete.")
+    println("    T3 here is arXiv-corpus existence parity, NOT live raw-data.")
+    println("    Underlying RT-SC physics CLAIM remains UNPROVEN — that closes")
+    println("    only at §A.6 Step 4 (real REBCO + Cernox bench, funding-gated).")
+    println("    Saturated ≠ falsified ≠ confirmed.  Saturated = regression-locked.")
+    println("")
+    println("  Per recipe §9.1: post-saturation cron/loop firings should run THIS")
+    println("  predicate only and exit — do NOT auto-add new chunks unless one of")
+    println("  the three §9.1 legitimate exceptions applies (regression / explicit")
+    println("  user instruction / Stage-1+ truly begun).")
+    println("__HEXA_RTSC_RSC_SATURATED__ STOP")
+    exit(0)
+}

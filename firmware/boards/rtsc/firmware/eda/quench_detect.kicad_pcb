@@ -1,0 +1,150 @@
+(kicad_pcb (version 20231120) (generator "hexa-rtsc-phase-E")
+
+	(general (thickness 1.6))
+
+	(paper "A3")
+
+	(layers
+		(0 "F.Cu" signal)
+		(1 "In1.Cu" power "GND plane")
+		(2 "In2.Cu" power "PWR plane (split: +3V3 / +5V / +15V / -15V)")
+		(31 "B.Cu" signal)
+		(32 "B.Adhes" user)
+		(33 "F.Adhes" user)
+		(34 "B.Paste" user)
+		(35 "F.Paste" user)
+		(36 "B.SilkS" user)
+		(37 "F.SilkS" user)
+		(38 "B.Mask" user)
+		(39 "F.Mask" user)
+		(40 "Dwgs.User" user)
+		(41 "Cmts.User" user)
+		(42 "Eco1.User" user)
+		(43 "Eco2.User" user)
+		(44 "Edge.Cuts" user)
+		(45 "Margin" user)
+		(46 "B.CrtYd" user "B.Courtyard")
+		(47 "F.CrtYd" user "F.Courtyard")
+		(48 "B.Fab" user)
+		(49 "F.Fab" user)
+	)
+
+	(setup
+		(stackup
+			(layer "F.SilkS" (type "Top Silk Screen"))
+			(layer "F.Paste" (type "Top Solder Paste"))
+			(layer "F.Mask" (type "Top Solder Mask") (thickness 0.01))
+			(layer "F.Cu"   (type "copper") (thickness 0.035))
+			(layer "dielectric 1" (type "core") (thickness 0.480) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02))
+			(layer "In1.Cu" (type "copper") (thickness 0.035))
+			(layer "dielectric 2" (type "prepreg") (thickness 0.480) (material "FR4"))
+			(layer "In2.Cu" (type "copper") (thickness 0.035))
+			(layer "dielectric 3" (type "core") (thickness 0.480) (material "FR4"))
+			(layer "B.Cu"   (type "copper") (thickness 0.035))
+			(layer "B.Mask" (type "Bottom Solder Mask") (thickness 0.01))
+			(layer "B.Paste" (type "Bottom Solder Paste"))
+			(layer "B.SilkS" (type "Bottom Silk Screen"))
+			(copper_finish "ENIG")
+			(dielectric_constraints no)
+		)
+		(pad_to_mask_clearance 0)
+		(allow_soldermask_bridges_in_footprints no)
+		(pcbplotparams
+			(layerselection 0x00010fc_ffffffff)
+			(plot_on_all_layers_selection 0x00000000_00000000)
+			(disableapertmacros no)
+			(usegerberextensions no)
+			(usegerberattributes yes)
+			(usegerberadvancedattributes yes)
+			(creategerberjobfile yes)
+			(svguseinch no)
+			(svgprecision 6)
+			(excludeedgelayer yes)
+			(plotframeref no)
+			(viasonmask no)
+			(mode 1)
+			(useauxorigin no)
+			(hpglpennumber 1)
+			(hpglpenspeed 20)
+			(hpglpendiameter 15.000000)
+			(dxfpolygonmode yes)
+			(dxfimperialunits yes)
+			(dxfusepcbnewfont yes)
+			(psnegative no)
+			(psa4output no)
+			(plotreference yes)
+			(plotvalue yes)
+			(plotinvisibletext no)
+			(sketchpadsonfab no)
+			(subtractmaskfromsilk no)
+			(outputformat 1)
+			(mirror no)
+			(drillshape 1)
+			(scaleselection 1)
+			(outputdirectory "build/gerbers")
+		)
+	)
+
+	;; ─── Board outline (100 mm × 80 mm) ──────────────────────────────
+	(gr_line (start 0 0) (end 100 0) (layer "Edge.Cuts") (width 0.1))
+	(gr_line (start 100 0) (end 100 80) (layer "Edge.Cuts") (width 0.1))
+	(gr_line (start 100 80) (end 0 80) (layer "Edge.Cuts") (width 0.1))
+	(gr_line (start 0 80) (end 0 0) (layer "Edge.Cuts") (width 0.1))
+
+	;; ─── Mounting holes (4× M3 corners) ──────────────────────────────
+	(footprint "MountingHole:MountingHole_3.2mm_M3"
+		(layer "F.Cu") (uuid "mh1-corner-tl")
+		(at 5 5)
+		(attr through_hole)
+	)
+	(footprint "MountingHole:MountingHole_3.2mm_M3"
+		(layer "F.Cu") (uuid "mh2-corner-tr")
+		(at 95 5)
+		(attr through_hole)
+	)
+	(footprint "MountingHole:MountingHole_3.2mm_M3"
+		(layer "F.Cu") (uuid "mh3-corner-bl")
+		(at 5 75)
+		(attr through_hole)
+	)
+	(footprint "MountingHole:MountingHole_3.2mm_M3"
+		(layer "F.Cu") (uuid "mh4-corner-br")
+		(at 95 75)
+		(attr through_hole)
+	)
+
+	;; ─── Title block / silkscreen labels (annotation only — placement TBD) ──
+	(gr_text "hexa-rtsc Quench-Detect FPGA — Phase E2 PCB skeleton"
+		(at 50 8) (layer "F.SilkS")
+		(effects (font (size 2 2) (thickness 0.3)))
+	)
+	(gr_text "v0.1-skeleton  Phase E2 = layout placement + routing TBD"
+		(at 50 14) (layer "F.SilkS")
+		(effects (font (size 1 1) (thickness 0.15)))
+	)
+	(gr_text "Spec: doc/48t_rebco_coil_v0.md  HDL: firmware/hdl/quench_detect.v"
+		(at 50 75) (layer "F.SilkS")
+		(effects (font (size 1 1) (thickness 0.15)))
+	)
+	(gr_text "Sentinel: __HEXA_RTSC_PCB_QUENCH_DETECT__ SKELETON"
+		(at 50 70) (layer "F.SilkS")
+		(effects (font (size 0.8 0.8) (thickness 0.12)))
+	)
+
+	;; ─── Footprint placement (TBD — Phase E2 layout work) ────────────
+	;;
+	;; The actual component placement + routing is a Phase E2 deliverable
+	;; (~$1k pilot fab, 2 mo).  This skeleton ships:
+	;;   · 4-layer stackup definition (F.Cu / GND / PWR / B.Cu)
+	;;   · 100 × 80 mm board outline
+	;;   · 4 corner M3 mounting holes
+	;;   · Silkscreen title block + sentinel
+	;;   · ENIG copper finish (cryogenic robustness)
+	;;
+	;; What's NOT here:
+	;;   · component footprint placement (24 parts per bom_kicad.csv)
+	;;   · trace routing (50Ω SE / 100Ω LVDS-diff for ADC)
+	;;   · power plane splits
+	;;   · Gerber output (run `make gerber` once layout is done)
+
+)

@@ -1,0 +1,172 @@
+#!hexa strict
+// hexa-rtsc/verify/cross_doc_audit.hexa — n=6 invariant cross-document audit.
+//
+// Sister of hexa-sscb/verify/cross_doc_audit.py — same shape (parse 4 .md /
+// .hexa surfaces, assert lattice numbers and falsifier IDs agree).
+//
+// Verifies the n=6 lattice numbers declared in .own own 1 are present and
+// consistent across:
+//   - rtsc/room-temp-sc.md  (RT-SC spec, T1 canonical)
+//   - sc/superconductor.md  (SC spec, T1 canonical)
+//   - cli/hexa-rtsc.hexa    (CLI table — must echo spec values)
+//   - .roadmap.hexa_rtsc    (§A.1 invariant lattice — must echo spec values)
+//
+// Also verifies all 6 falsifier IDs (F-RTSC-{1,2,3} + F-SC-{1,2,3}) appear
+// in spec / cli / roadmap surfaces (per .own own 2 enforce-layer rationale).
+//
+// Run:
+//     hexa run verify/cross_doc_audit.hexa     # exit 0 = all invariants hold
+//
+// Authority: own 1 (n=6 master identity); own 2 (falsifier monotone).
+
+let mut FAIL_COUNT = 0
+let mut PASS_COUNT = 0
+
+fn check(label: str, ok: bool, detail: str) {
+    if ok {
+        PASS_COUNT = PASS_COUNT + 1
+        println("  [PASS] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    } else {
+        FAIL_COUNT = FAIL_COUNT + 1
+        println("  [FAIL] " + label)
+        if detail.len() > 0 { println("         · " + detail) }
+    }
+}
+
+fn read_file(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+// ─── lattice number presence ───
+//
+// SSOT = rtsc/room-temp-sc.md + sc/superconductor.md.
+// CLI table + roadmap §A.1 must echo the same numbers.
+
+fn check_lattice_in(label: str, text: str, must_have: [str]) {
+    let mut missing: [str] = []
+    for m in must_have {
+        if text.contains(m) == false { missing = missing + [m] }
+    }
+    let n = missing.len()
+    if n == 0 {
+        check(label + ": all lattice tokens present", true,
+            str(must_have.len()) + "/" + str(must_have.len()) + " tokens found")
+    } else {
+        let mut s = ""
+        for m in missing {
+            if s.len() > 0 { s = s + ", " }
+            s = s + m
+        }
+        check(label + ": missing lattice tokens", false, "missing: " + s)
+    }
+}
+
+// ─── falsifier ID presence ───
+
+fn check_falsifiers_in(label: str, text: str) {
+    let ids: [str] = [
+        "F-RTSC-1", "F-RTSC-2", "F-RTSC-3",
+        "F-SC-1",   "F-SC-2",   "F-SC-3",
+    ]
+    let mut missing: [str] = []
+    for id in ids {
+        if text.contains(id) == false { missing = missing + [id] }
+    }
+    if missing.len() == 0 {
+        check(label + ": all 6 falsifiers present", true, "F-RTSC-{1,2,3} + F-SC-{1,2,3}")
+    } else {
+        let mut s = ""
+        for m in missing {
+            if s.len() > 0 { s = s + ", " }
+            s = s + m
+        }
+        check(label + ": missing falsifiers", false, "missing: " + s)
+    }
+}
+
+// ─── code-scope guard (own 3) ───
+
+fn check_code_scope() {
+    // own 3 declares 4 permitted code locations: cli/, verify/, tests/, module/.
+    // Outside those, only .md / .json / .toml / Makefile / .gitignore /
+    // LICENSE / install.hexa (root hook) / .roadmap.hexa_rtsc / .own /
+    // README*.md are allowed. Detect rogue .hexa or other code files at
+    // unexpected paths.
+    let allowed_dirs: [str] = ["./cli", "./verify", "./tests", "./module", "./rtsc", "./sc", "./doc"]
+    // rtsc/ + sc/ are spec dirs — own 3 grants v1.0.0 grandfather to *-verify.hexa
+    // there until v1.1.0 splits them out. doc/ is human-only.
+    // Find all .hexa files outside cli/verify/tests/module/rtsc.
+    let raw = exec("find . -name '*.hexa' -not -path './.git/*' -not -path './state/*' 2>/dev/null").trim()
+    let lines = raw.split("\n")
+    let mut rogue: [str] = []
+    for ln in lines {
+        let p = ln.trim()
+        if p.len() == 0 { continue }
+        let mut matched = false
+        for d in allowed_dirs {
+            if p.starts_with(d + "/") { matched = true; break }
+        }
+        // root-level install.hexa is permitted (hx hook).
+        if p == "./install.hexa" { matched = true }
+        if matched == false { rogue = rogue + [p] }
+    }
+    if rogue.len() == 0 {
+        check("code-scope (own 3): no rogue .hexa outside permitted dirs",
+            true, "scanned cli/ verify/ tests/ module/ rtsc/ sc/ + install.hexa")
+    } else {
+        let mut s = ""
+        for r in rogue {
+            if s.len() > 0 { s = s + ", " }
+            s = s + r
+        }
+        check("code-scope (own 3): rogue .hexa found", false, s)
+    }
+}
+
+// ─── main ───
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-rtsc — cross-document n=6 invariant audit")
+    println("========================================================================")
+
+    let rtsc_md   = read_file("rtsc/room-temp-sc.md")
+    let sc_md     = read_file("sc/superconductor.md")
+    let cli_hexa  = read_file("cli/hexa-rtsc.hexa")
+    let roadmap   = read_file(".roadmap.hexa_rtsc")
+    let own_file  = read_file(".own")
+
+    // Lattice tokens: every spec-bearing surface must show σ=12, τ=4, φ=2,
+    // Hc2=48 in some recognizable form.
+    let rtsc_must: [str] = ["sigma(6) = 12", "tau(6) = 4", "phi(6) = 2"]
+    check_lattice_in("rtsc/room-temp-sc.md", rtsc_md, rtsc_must)
+
+    let sc_must: [str] = ["σ(6)", "τ(6)", "φ(6)"]
+    check_lattice_in("sc/superconductor.md (Greek lattice)", sc_md, sc_must)
+
+    // CLI table must surface lattice values for both verbs.
+    let cli_must: [str] = ["Tc=300K", "σ·τ=48T", "φ=2", "CN=6"]
+    check_lattice_in("cli/hexa-rtsc.hexa table", cli_hexa, cli_must)
+
+    // Roadmap §A.1 must echo lattice equality.
+    let roadmap_must: [str] = ["σ(6)", "τ(6)", "φ(6)", "J₂"]
+    check_lattice_in(".roadmap.hexa_rtsc §A.1", roadmap, roadmap_must)
+
+    // Falsifier presence.
+    check_falsifiers_in("cli/hexa-rtsc.hexa", cli_hexa)
+    check_falsifiers_in(".roadmap.hexa_rtsc", roadmap)
+    check_falsifiers_in(".own own 2 decl rows", own_file)
+
+    // Code-scope (own 3) guard.
+    check_code_scope()
+
+    println("========================================================================")
+    let total = PASS_COUNT + FAIL_COUNT
+    println("  " + str(PASS_COUNT) + "/" + str(total) + " checks passed")
+    if FAIL_COUNT > 0 {
+        println("  cross-doc drift detected — fix before merging.")
+        exit(1)
+    }
+    println("  All n=6 invariants hold across spec / cli / roadmap / own.")
+}

@@ -1,0 +1,97 @@
+(kicad_sch (version 20231120) (generator "hexa-rtsc-phase-E")
+
+	(uuid "44444444-4444-4444-4444-444444444444")
+
+	(paper "A4")
+
+	(title_block
+		(title "hexa-rtsc SQUID Host Adapter — Phase E schematic skeleton")
+		(date "2026-05-08")
+		(rev "v0.1-skeleton")
+		(company "dancinlab/hexa-rtsc")
+		(comment 1 "Spec: doc/synthesis_bench_v0.md (Stage A) BOM #6 (QD MPMS-3)")
+		(comment 2 "Sim:  firmware/sim/squid_daq.hexa (Phase D+, 9/9 PASS)")
+		(comment 3 "Role: USB-to-GPIB bridge for QD MPMS-3 GPIB acquisition")
+	)
+
+	(lib_symbols
+		(symbol "Interface_USB:FT232H"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U1" (at 0 0 0))
+			(property "Value" "FT232H (USB-to-MPSSE)" (at 0 0 0))
+			(property "Footprint" "Package_QFP:LQFP-48_7x7mm_P0.5mm" (at 0 0 0))
+			(property "Datasheet" "https://ftdichip.com/wp-content/uploads/2020/07/DS_FT232H.pdf" (at 0 0 0))
+		)
+		(symbol "Interface_GPIB:NAT9914"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U2" (at 0 0 0))
+			(property "Value" "NAT9914AP (GPIB controller)" (at 0 0 0))
+			(property "Footprint" "Package_DIP:DIP-40_W15.24mm" (at 0 0 0))
+			(property "Datasheet" "(National Instruments NAT9914 datasheet, archived)" (at 0 0 0))
+		)
+		(symbol "Connector:GPIB_24pin"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "J1" (at 0 0 0))
+			(property "Value" "GPIB_IEEE-488" (at 0 0 0))
+			(property "Footprint" "Connector_Centronics:24-position_Centronics-style" (at 0 0 0))
+		)
+		(symbol "Connector:USB_C"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "J2" (at 0 0 0))
+			(property "Value" "USB-C 2.0" (at 0 0 0))
+			(property "Footprint" "Connector_USB:USB_C_Receptacle_Amphenol_12401872E412A" (at 0 0 0))
+		)
+	)
+
+	;; ─── Top-level instances ─────────────────────────────────────────
+	(symbol (lib_id "Interface_USB:FT232H") (at 100 100 0) (uuid "u1-ft232h")
+		(property "Reference" "U1" (at 100 90 0))
+		(property "Value" "FT232H" (at 100 110 0))
+		(instances (project "squid_host_adapter" (path "/" (reference "U1") (unit 1))))
+	)
+
+	(symbol (lib_id "Interface_GPIB:NAT9914") (at 130 100 0) (uuid "u2-nat9914")
+		(property "Reference" "U2" (at 130 90 0))
+		(property "Value" "NAT9914AP" (at 130 110 0))
+		(instances (project "squid_host_adapter" (path "/" (reference "U2") (unit 1))))
+	)
+
+	(symbol (lib_id "Connector:USB_C") (at 60 100 0) (uuid "j2-usb-c")
+		(property "Reference" "J2" (at 60 95 0))
+		(property "Value" "USB-C (host)" (at 60 105 0))
+		(instances (project "squid_host_adapter" (path "/" (reference "J2") (unit 1))))
+	)
+
+	(symbol (lib_id "Connector:GPIB_24pin") (at 165 100 0) (uuid "j1-gpib-mpms")
+		(property "Reference" "J1" (at 165 95 0))
+		(property "Value" "GPIB → MPMS-3" (at 165 105 0))
+		(instances (project "squid_host_adapter" (path "/" (reference "J1") (unit 1))))
+	)
+
+	;; ─── Net labels ───────────────────────────────────────────────
+	(label "USB_DP" (at 80 99 0))
+	(label "USB_DN" (at 80 101 0))
+	(label "USB_VBUS" (at 80 95 0))
+	(label "USB_GND" (at 80 105 0))
+	(label "MPSSE_BUS[7:0]" (at 115 100 0))
+	(label "GPIB_DIO[7:0]" (at 145 95 0))
+	(label "GPIB_HANDSHAKE[2:0]" (at 145 100 0))
+	(label "GPIB_CTRL[4:0]" (at 145 105 0))
+	(label "GPIB_REN" (at 145 110 0))
+	(label "GPIB_GND" (at 165 110 0))
+
+	;; ─── Power ────────────────────────────────────────────────────
+	(label "+3V3" (at 100 80 0))
+	(label "+5V_USB" (at 60 95 0))
+	(label "GND" (at 100 120 0))
+
+	(text "SQUID Host Adapter — USB-C ↔ GPIB IEEE-488 bridge\nFT232H MPSSE mode (12 MHz max) → NAT9914 GPIB controller\nFor QD MPMS-3 magnetometer data acquisition (Tc + Meissner extraction)."
+		(at 100 30 0)
+		(effects (font (size 1.5 1.5)))
+	)
+	(text "Per-sample latency: USB cmd 1 ms + MPSSE 0.1 ms + GPIB write 1 ms\n+ MPMS internal 10 ms + GPIB read 1 ms ≈ 12 ms < 100 ms responsiveness spec.\nGPIB packet size = 4 bytes = τ(6) anchor.  Data block = 10 entries / scan = σ-φ."
+		(at 100 145 0)
+		(effects (font (size 1.2 1.2)))
+	)
+
+)

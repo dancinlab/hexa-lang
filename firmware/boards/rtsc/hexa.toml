@@ -1,0 +1,99 @@
+# hexa.toml — hexa-rtsc standalone package manifest
+#
+# Spec: shared/hexa-lang/hexa-toml-spec.json (version 1.0.0)
+# Distribution target: hx install hexa-rtsc
+# Provenance: extracted from canon/domains/energy/{room-temp-sc,superconductor}/
+#             on 2026-05-06 (n6-arch SHA c0f1f570). Sister-of-substrates extraction.
+
+[package]
+name = "hexa-rtsc"
+version = "1.0.0"
+entry = "cli/hexa-rtsc.hexa"
+description = "Room-Temp Superconductor — Meissner + 48T SC coil. Substrate-of-substrates for fusion · UFO · accelerator. n=6 closed-form candidate (σ·τ=48T Hc2, φ=2 Cooper pair, Tc=300K target) + falsifier preregister. RT-SC is academically unproven; LK-99 etc. candidates remain unsettled."
+license = "MIT"
+authors = ["박민우 <nerve011235@gmail.com>"]
+repository = "https://github.com/dancinlab/hexa-rtsc"
+homepage = "https://github.com/dancinlab/hexa-rtsc"
+readme = "README.md"
+keywords = ["room-temp-superconductor", "superconductor", "meissner", "cooper-pair", "hc2", "n6-invariant", "substrate-of-substrates"]
+categories = ["physics", "energy", "materials-science"]
+
+[[bin]]
+name = "hexa-rtsc"
+path = "cli/hexa-rtsc.hexa"
+
+[test]
+runner = "hexa"
+files = [
+    "tests/test_selftest.hexa",
+    "tests/test_lattice.hexa",
+    "tests/test_verify.hexa",
+    "tests/test_falsifier.hexa",
+    "tests/test_calculators.hexa",
+]
+
+# ── hx install hook ───────────────────────────────────────
+# install.hexa runs under hx package manager (hexa-lang) at install time.
+[scripts]
+install = "install.hexa"
+
+# ── Modules manifest (2 verbs spec only) ──────────────────
+# rtsc — IMPORTED from canon/domains/energy/room-temp-sc/ (SHA c0f1f570)
+# sc   — IMPORTED from canon/domains/energy/superconductor/ (SHA c0f1f570)
+[modules]
+spec = [
+    "rtsc/room-temp-sc.md",
+    "sc/superconductor.md",
+]
+verify_hexa = [
+    "rtsc/agi-architecture-verify.hexa",
+    "rtsc/helium-free-mri-verify.hexa",
+    "rtsc/lossless-power-grid-verify.hexa",
+    "rtsc/rt-ev-motor-verify.hexa",
+    "rtsc/rt-maglev-transport-verify.hexa",
+    "rtsc/rt-quantum-computer-verify.hexa",
+    "rtsc/rt-smes-verify.hexa",
+    "rtsc/space-colonization-verify.hexa",
+    "rtsc/superconducting-cpu-verify.hexa",
+    "rtsc/tabletop-fusion-verify.hexa",
+]
+
+# ── Dependencies ───────────────────────────────────────────
+# hexa stdlib only. No Python deps. CLI dispatcher is placeholder TBD.
+[dependencies]
+hexa-lang = ">=1.0.0"
+
+# ── Closure provenance (raw#10 honest C3) ─────────────────
+# v1.0.0 closure: 0/2 verbs WIRED — spec-only release.
+# RT-SC empirical claim (Tc=300K, R=0) is academically UNPROVEN.
+# This substrate ships n=6 closed-form candidate + falsifier preregister.
+[closure]
+verbs_total = 2
+verbs_wired = 0
+verbs_stub = 2
+verdict = "SPEC_ONLY"
+extracted_from = "canon/domains/energy/{room-temp-sc,superconductor}/ @ c0f1f570"
+
+# ── Scope honesty (raw#10 C3) ─────────────────────────────
+[scope]
+honest_scope = "RTSC + SC: n=6 closed-form candidate spec (σ(6)·τ(6)=48T Hc2, φ(6)=2 Cooper pair boson, Tc target 300K, Abrikosov CN=6 hexagonal lattice) + falsifier preregister tables. NO empirical sandbox at v1.0.0; no working .hexa CLI dispatcher."
+not_scope = ["wet-lab synthesis (LK-99 / cuprate / iron-pnictide)", "DFT band-structure prediction", "BCS gap-equation numerical solver", "Meissner phase-field PDE simulation"]
+academic_status = "UNPROVEN — RT-SC remains academically unsettled as of 2026-05. LK-99 (2023) and subsequent room-temp candidates have not been independently replicated. This substrate is a SPEC + FALSIFIER PREREGISTER, not an empirical claim of working RT-SC."
+
+# ── Substrate-of-substrates role ──────────────────────────
+# hexa-rtsc is the n=6 base substrate that 3 sister substrates depend on:
+#   hexa-fusion    — needs 48T SC coil (σ·τ=48 satisfies confinement gate)
+#   hexa-ufo       — needs Stage-1 Meissner levitation (B-field expulsion)
+#   hexa-cern    — needs SC magnet (accelerator beamline bending)
+[substrate_role]
+role = "substrate-of-substrates"
+downstream_consumers = [
+    "dancinlab/hexa-fusion (48T SC coil dep)",
+    "dancinlab/hexa-ufo (Stage-1 Meissner levitation dep)",
+    "dancinlab/hexa-cern (SC magnet dep)",
+]
+
+# ── Cost profile ──────────────────────────────────────────
+[cost]
+mac_local_default = "$0 (spec-only; CLI dispatcher placeholder; no compute)"
+empirical_path = "TBD — would require synthesis lab (out-of-repo)"

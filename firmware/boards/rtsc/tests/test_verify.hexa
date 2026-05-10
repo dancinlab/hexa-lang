@@ -1,0 +1,33 @@
+#!hexa strict
+// tests/test_verify.hexa — exercise verify/run_all.hexa aggregate sweep.
+//
+// Pass criterion: "35/35 scripts passed" from verify/run_all.hexa.
+// Composition (post numerics_cross_pillar landing):
+//   - T1 algebra ×6     : lattice + cross_doc + 4×calc_*
+//   - T2 numerics ×10   : 4×numerics_* + 4×_parity + lattice_arithmetic + cross_pillar
+//   - T2-solver ×4      : 4×numerics_*_solver
+//   - T2-extended ×3    : numerics_lk99_dft + tdgl_vortex + whh_full
+//   - T3 archival ×6    : 6×empirical_*_arxiv
+//   - meta ×3           : falsifier_check + lint_numerics + saturation_check
+//   - sim-firmware ×4   : firmware/sim/{synthesis,quench,calorimetry,squid}
+// All 6 falsifiers at 100% bookkeeping closure (T1 + T2≥1 + T3≥1).
+// Run:
+//     hexa run tests/test_verify.hexa
+//
+// Authority: own 1 (lattice), own 2 (falsifier), own 3 (code-scope) +
+//            recipe §7.2/§7.3 (saturation predicate).
+
+fn main() {
+    let root = env("HEXA_RTSC_ROOT")
+    let mut p = "verify/run_all.hexa"
+    if root.len() > 0 { p = root + "/verify/run_all.hexa" }
+
+    let raw = exec("hexa run " + p + " 2>&1")
+    if raw.contains("36/36 scripts passed") {
+        println("test_verify: PASS  (verify/run_all.hexa 36/36)")
+        return
+    }
+    println("test_verify: FAIL")
+    println(raw.trim())
+    exit(1)
+}

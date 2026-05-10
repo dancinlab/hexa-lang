@@ -1,0 +1,381 @@
+#!hexa strict
+// hexa-rtsc/verify/falsifier_check.hexa — preregistered falsifier checklist
+// + closure-progress tracker (3-tier ladder).
+//
+// .roadmap.hexa_rtsc §A.4 declares 6 falsifiers (F-RTSC-{1,2,3} +
+// F-SC-{1,2,3}). This script does TWO jobs:
+//
+//   (a) MONOTONE AUDIT — each ID surfaces in roadmap §A.4 / .own own 2 /
+//       cli/hexa-rtsc.hexa, with status ∈ {OPEN, CONFIRMED, DEMOTED}.
+//       No banned tokens (RETRACTED / WITHDRAWN / PENDING / TBD) on any
+//       falsifier row. (own 2 monotone contract.)
+//
+//   (b) CLOSURE-PROGRESS — for each falsifier, accumulate evidence over
+//       three tiers and report closure_pct (0/33/67/100):
+//
+//          T1  algebraic   n=6 closed-form derivation       verify/calc_*.hexa
+//          T2  numerical   closed-form via math_pure        verify/numerics_*.hexa
+//          T3  empirical   real bench / synthesis lab       Stage-1+ TBD
+//
+//       T3 is empty at v1.0.x — RT-SC empirical claim unsettled (LK-99
+//       not reproduced as of 2026-05). Closure caps at 67% until empirical
+//       lands, by design.
+//
+// PASS = all 6 IDs declared monotone-correctly + every script in any
+//        Fk_T*_SCRIPTS array exists on disk.
+// FAIL = any ID missing from a SSOT mirror, banned status detected, or a
+//        declared tier script missing on disk.
+//
+// Run:
+//     hexa run verify/falsifier_check.hexa     # exit 0 = monotone + closure-locked
+//
+// Authority: own 1 (n=6 lattice) + own 2 (RT-SC empirical-unproven +
+//            falsifier monotone). Recipe ref: docs/runnable_surface_recipe.md.
+
+let VERSION = "1.0.0"
+
+// ─── path / IO helpers ──────────────────────────────────────────────────
+
+let HOME = env("HOME")
+let HEXA_RTSC_ROOT_ENV = env("HEXA_RTSC_ROOT")
+
+fn _root() -> str {
+    if HEXA_RTSC_ROOT_ENV.len() > 0 { return HEXA_RTSC_ROOT_ENV }
+    let pwd = exec("pwd").trim()
+    if pwd.len() > 0 { return pwd }
+    return HOME + "/core/hexa-rtsc"
+}
+
+let ROOT = _root()
+let DOC_ROADMAP = ROOT + "/.roadmap.hexa_rtsc"
+let DOC_OWN     = ROOT + "/.own"
+let DOC_CLI     = ROOT + "/cli/hexa-rtsc.hexa"
+let VERIFY_DIR  = ROOT + "/verify"
+
+fn read_file(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+fn file_exists(path: str) -> bool {
+    let r = exec("[ -f '" + path + "' ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+// ─── check harness ──────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+// ─── falsifier registry (must match .roadmap.hexa_rtsc §A.4) ────────────
+//
+// Each row: (id, retract, T1 scripts[], T2 scripts[], T3 description).
+// T1/T2 scripts are paths *relative to verify/*. Empty array = tier
+// not yet landed. T3 is always TBD at v1.0.x — empirical RT-SC tier
+// closes only after Stage-1+ synthesis bench / collider feed.
+
+let F1_ID            = "F-RTSC-1"
+let F1_RETRACT       = "LK-99 reproduction failure → next-candidate substrate spec update"
+let F1_T1_SCRIPTS: [str] = ["calc_lk99.hexa"]
+let F1_T2_SCRIPTS: [str] = ["numerics_lk99.hexa", "numerics_lk99_parity.hexa", "numerics_lk99_solver.hexa"]
+let F1_T3_SCRIPTS: [str] = ["empirical_lk99_arxiv.hexa"]
+let F1_T3_DESCRIPTION = "synthesis lab: independent LK-99 / cuprate / hydride reproduction (live raw-data → Stage-1+ TBD; archival arXiv proxy via empirical_lk99_arxiv.hexa)"
+
+let F2_ID            = "F-RTSC-2"
+let F2_RETRACT       = "BCS λ McMillan ceiling (Tc ≤ 30 K) — beyond mechanism n=6 closed-form fit"
+let F2_T1_SCRIPTS: [str] = ["calc_mcmillan.hexa"]
+let F2_T2_SCRIPTS: [str] = ["numerics_mcmillan.hexa", "numerics_mcmillan_parity.hexa", "numerics_mcmillan_solver.hexa"]
+let F2_T3_SCRIPTS: [str] = ["empirical_mcmillan_arxiv.hexa"]
+let F2_T3_DESCRIPTION = "high-Tc bench: λ-vs-Tc data above McMillan ceiling (live raw-data → Stage-1+ TBD; archival arXiv proxy via empirical_mcmillan_arxiv.hexa)"
+
+let F3_ID            = "F-RTSC-3"
+let F3_RETRACT       = "48 T SC coil realisation gates fusion · cern · ufo 3 sister deps simultaneously"
+let F3_T1_SCRIPTS: [str] = ["calc_hc2_48t.hexa"]
+let F3_T2_SCRIPTS: [str] = ["numerics_hc2_48t.hexa", "numerics_hc2_48t_parity.hexa", "numerics_hc2_48t_solver.hexa"]
+let F3_T3_SCRIPTS: [str] = ["empirical_hc2_high_field_arxiv.hexa"]
+let F3_T3_DESCRIPTION = "magnet bench: sustained 48 T SC coil at 4.2 K + downstream ack from 3 sisters (live raw-data → Stage-1+ TBD; archival arXiv proxy via empirical_hc2_high_field_arxiv.hexa)"
+
+let F4_ID            = "F-SC-1"
+let F4_RETRACT       = "Cooper pair size ≠ φ(6)=2 → DEMOTE φ=2 boson pair claim"
+let F4_T1_SCRIPTS: [str] = ["calc_bcs.hexa"]
+let F4_T2_SCRIPTS: [str] = ["numerics_bcs.hexa", "numerics_bcs_parity.hexa", "numerics_bcs_solver.hexa"]
+let F4_T3_SCRIPTS: [str] = ["empirical_bcs_cooper_arxiv.hexa"]
+let F4_T3_DESCRIPTION = "UPS / STM / INS measurement of Cooper pair coherence (live raw-data → Stage-1+ TBD; archival arXiv proxy via empirical_bcs_cooper_arxiv.hexa)"
+
+let F5_ID            = "F-SC-2"
+let F5_RETRACT       = "Abrikosov vortex lattice ≠ CN=6 → DEMOTE hexagonal lattice claim"
+let F5_T1_SCRIPTS: [str] = ["calc_bcs.hexa"]
+let F5_T2_SCRIPTS: [str] = ["numerics_bcs.hexa", "numerics_bcs_parity.hexa", "numerics_bcs_solver.hexa"]
+let F5_T3_SCRIPTS: [str] = ["empirical_abrikosov_sans_arxiv.hexa"]
+let F5_T3_DESCRIPTION = "Bitter decoration / SANS vortex CN imaging (live raw-data → Stage-1+ TBD; archival arXiv proxy via empirical_abrikosov_sans_arxiv.hexa)"
+
+let F6_ID            = "F-SC-3"
+let F6_RETRACT       = "BCS specific-heat jump ratio ΔC/γTc ≠ ~1.43 → DEMOTE σ(6)=12 molecule"
+let F6_T1_SCRIPTS: [str] = ["calc_bcs.hexa"]
+let F6_T2_SCRIPTS: [str] = ["numerics_bcs.hexa", "numerics_bcs_parity.hexa", "numerics_bcs_solver.hexa"]
+let F6_T3_SCRIPTS: [str] = ["empirical_specific_heat_arxiv.hexa"]
+let F6_T3_DESCRIPTION = "calorimetry below Tc: ΔC/γTc jump on s-wave SC (live raw-data → Stage-1+ TBD; archival arXiv proxy via empirical_specific_heat_arxiv.hexa)"
+
+let FALSIFIER_IDS: [str] = [
+    "F-RTSC-1", "F-RTSC-2", "F-RTSC-3",
+    "F-SC-1",   "F-SC-2",   "F-SC-3",
+]
+
+let ALLOWED_STATUSES: [str] = ["OPEN", "CONFIRMED", "DEMOTED"]
+
+// ─── closure-pct rendering ──────────────────────────────────────────────
+
+fn _all_present(scripts: [str]) -> bool {
+    if scripts.len() == 0 { return false }
+    for s in scripts {
+        if file_exists(VERIFY_DIR + "/" + s) == false { return false }
+    }
+    return true
+}
+
+fn _closure_pct(t1_ok: bool, t2_ok: bool, t3_ok: bool) -> int {
+    let mut n = 0
+    if t1_ok { n = n + 1 }
+    if t2_ok { n = n + 1 }
+    if t3_ok { n = n + 1 }
+    if n == 0 { return 0 }
+    if n == 1 { return 33 }
+    if n == 2 { return 67 }
+    return 100
+}
+
+fn _emit_tier_line(label: str, scripts: [str]) {
+    if scripts.len() == 0 {
+        println("         " + label + " ✗  (no script declared yet)")
+        return
+    }
+    let ok = _all_present(scripts)
+    let mark = if ok { "✓" } else { "✗" }
+    let mut paths = ""
+    let mut i = 0
+    while i < scripts.len() {
+        if i > 0 { paths = paths + " + " }
+        paths = paths + "verify/" + scripts[i]
+        i = i + 1
+    }
+    println("         " + label + " " + mark + "  " + paths)
+}
+
+fn _emit_falsifier(id: str, retract: str,
+                   t1_scripts: [str], t2_scripts: [str],
+                   t3_scripts: [str], t3_desc: str) {
+    let t1_ok = _all_present(t1_scripts)
+    let t2_ok = _all_present(t2_scripts)
+    let t3_ok = _all_present(t3_scripts)
+    let pct = _closure_pct(t1_ok, t2_ok, t3_ok)
+    let status_str = if pct >= 100 { "FULL closure (algebra + numerics + empirical-archival)" }
+                     else if pct >= 67 { "PARTIAL closure (algebra + numerics)" }
+                     else if pct >= 33 { "EARLY closure (algebra only)" }
+                     else { "UNVERIFIED" }
+    let t1_count = t1_scripts.len()
+    let t2_count = t2_scripts.len()
+    let t3_count = t3_scripts.len()
+    println("    ✗ " + id + ": " + retract)
+    println("         closure:  " + str(pct) + "%   (" + status_str +
+            ")  [T1×" + str(t1_count) + " · T2×" + str(t2_count) +
+            " · T3×" + str(t3_count) + "]")
+    _emit_tier_line("T1 algebra:  ", t1_scripts)
+    _emit_tier_line("T2 numerics: ", t2_scripts)
+    _emit_tier_line("T3 empirical:", t3_scripts)
+    println("         description: " + t3_desc)
+}
+
+// ─── monotone audit (existing semantics) ────────────────────────────────
+
+fn _has(t: str, s: str) -> bool {
+    if t.len() == 0 { return false }
+    return t.find(s) >= 0
+}
+
+fn _line_contains(line: str, frag: str) -> bool {
+    return line.contains(frag)
+}
+
+fn audit_roadmap(roadmap: str) {
+    let lines = roadmap.split("\n")
+    for id in FALSIFIER_IDS {
+        let mut found_line = ""
+        for ln in lines {
+            if _line_contains(ln, "| " + id) || _line_contains(ln, id + " ") {
+                if _line_contains(ln, "Witness schema") { continue }
+                if _line_contains(ln, "raw_77_") { continue }
+                found_line = ln
+                break
+            }
+        }
+        if found_line.len() == 0 {
+            _check(false, ".roadmap §A.4: " + id + " row missing", "")
+            continue
+        }
+        let mut status_ok = false
+        let mut status_seen = ""
+        for st in ALLOWED_STATUSES {
+            if _line_contains(found_line, st) { status_ok = true; status_seen = st; break }
+        }
+        if status_ok {
+            _check(true, ".roadmap §A.4: " + id + " status token present",
+                "status=" + status_seen)
+        } else {
+            _check(false, ".roadmap §A.4: " + id + " status token missing",
+                "row had no OPEN/CONFIRMED/DEMOTED — line: " + found_line.trim())
+        }
+    }
+}
+
+fn audit_own(own_text: str) {
+    for id in FALSIFIER_IDS {
+        let ok = own_text.contains(id)
+        _check(ok, ".own own 2 decl: " + id + " mirrored",
+            if ok { "found" } else { "missing in own 2" })
+    }
+}
+
+fn audit_cli(cli_text: str) {
+    for id in FALSIFIER_IDS {
+        _check(cli_text.contains(id),
+            "cli/hexa-rtsc.hexa: " + id + " surfaced", "")
+    }
+}
+
+fn audit_no_silent_retract(roadmap: str) {
+    let banned: [str] = [
+        "RETRACTED", "WITHDRAWN", "REMOVED", "PENDING", "TBD"
+    ]
+    let mut hits: [str] = []
+    for b in banned {
+        let lines = roadmap.split("\n")
+        for ln in lines {
+            for id in FALSIFIER_IDS {
+                if ln.contains(id) && ln.contains(b) {
+                    hits = hits + [id + " uses banned status " + b]
+                }
+            }
+        }
+    }
+    if hits.len() == 0 {
+        _check(true, "falsifier monotone: no banned status tokens (RETRACTED/WITHDRAWN/...)",
+            "all 6 IDs use OPEN/CONFIRMED/DEMOTED only")
+    } else {
+        let mut s = ""
+        for h in hits {
+            if s.len() > 0 { s = s + "; " }
+            s = s + h
+        }
+        _check(false, "falsifier monotone: banned status detected", s)
+    }
+}
+
+// ─── tier-script presence audit ────────────────────────────────────────
+
+fn audit_tier_scripts(fid: str, label: str, scripts: [str]) {
+    for s in scripts {
+        let path = VERIFY_DIR + "/" + s
+        let ok = file_exists(path)
+        _check(ok, fid + " " + label + " — " + s + " present on disk",
+               "expected at " + path)
+    }
+}
+
+// ─── main ───
+
+fn main() {
+    println("========================================================================")
+    println("  hexa-rtsc — falsifier preregister monotone audit + closure-progress")
+    println("========================================================================")
+    println("  source: " + DOC_ROADMAP)
+    println("")
+    println("  Tiers of evidence, in order of accumulation:")
+    println("    T1  algebraic     n=6 closed-form derivation   (verify/calc_*.hexa)")
+    println("    T2  numerical     closed-form via math_pure    (verify/numerics_*.hexa)")
+    println("    T3  empirical     real bench / synthesis lab   (Stage-1+ TBD)")
+    println("")
+    println("  At v1.0.x: empirical RT-SC unsettled (LK-99 unreproduced 2023+).")
+    println("  Closure caps at 67% until T3 lands by design.")
+    println("")
+
+    println("  Falsifiers declared:")
+    _emit_falsifier(F1_ID, F1_RETRACT, F1_T1_SCRIPTS, F1_T2_SCRIPTS, F1_T3_SCRIPTS, F1_T3_DESCRIPTION)
+    println("")
+    _emit_falsifier(F2_ID, F2_RETRACT, F2_T1_SCRIPTS, F2_T2_SCRIPTS, F2_T3_SCRIPTS, F2_T3_DESCRIPTION)
+    println("")
+    _emit_falsifier(F3_ID, F3_RETRACT, F3_T1_SCRIPTS, F3_T2_SCRIPTS, F3_T3_SCRIPTS, F3_T3_DESCRIPTION)
+    println("")
+    _emit_falsifier(F4_ID, F4_RETRACT, F4_T1_SCRIPTS, F4_T2_SCRIPTS, F4_T3_SCRIPTS, F4_T3_DESCRIPTION)
+    println("")
+    _emit_falsifier(F5_ID, F5_RETRACT, F5_T1_SCRIPTS, F5_T2_SCRIPTS, F5_T3_SCRIPTS, F5_T3_DESCRIPTION)
+    println("")
+    _emit_falsifier(F6_ID, F6_RETRACT, F6_T1_SCRIPTS, F6_T2_SCRIPTS, F6_T3_SCRIPTS, F6_T3_DESCRIPTION)
+
+    let roadmap   = read_file(DOC_ROADMAP)
+    let own_file  = read_file(DOC_OWN)
+    let cli_text  = read_file(DOC_CLI)
+
+    println("")
+    println("  Roadmap §A.4 row + status audit:")
+    audit_roadmap(roadmap)
+
+    println("")
+    println("  .own own 2 mirror audit:")
+    audit_own(own_file)
+
+    println("")
+    println("  CLI surface audit:")
+    audit_cli(cli_text)
+
+    println("")
+    println("  Banned-status (silent-retract) audit:")
+    audit_no_silent_retract(roadmap)
+
+    println("")
+    println("  Tier-script presence audit (declared T1/T2/T3 scripts must exist):")
+    audit_tier_scripts(F1_ID, "T1", F1_T1_SCRIPTS)
+    audit_tier_scripts(F1_ID, "T2", F1_T2_SCRIPTS)
+    audit_tier_scripts(F1_ID, "T3", F1_T3_SCRIPTS)
+    audit_tier_scripts(F2_ID, "T1", F2_T1_SCRIPTS)
+    audit_tier_scripts(F2_ID, "T2", F2_T2_SCRIPTS)
+    audit_tier_scripts(F2_ID, "T3", F2_T3_SCRIPTS)
+    audit_tier_scripts(F3_ID, "T1", F3_T1_SCRIPTS)
+    audit_tier_scripts(F3_ID, "T2", F3_T2_SCRIPTS)
+    audit_tier_scripts(F3_ID, "T3", F3_T3_SCRIPTS)
+    audit_tier_scripts(F4_ID, "T1", F4_T1_SCRIPTS)
+    audit_tier_scripts(F4_ID, "T2", F4_T2_SCRIPTS)
+    audit_tier_scripts(F4_ID, "T3", F4_T3_SCRIPTS)
+    audit_tier_scripts(F5_ID, "T1", F5_T1_SCRIPTS)
+    audit_tier_scripts(F5_ID, "T2", F5_T2_SCRIPTS)
+    audit_tier_scripts(F5_ID, "T3", F5_T3_SCRIPTS)
+    audit_tier_scripts(F6_ID, "T1", F6_T1_SCRIPTS)
+    audit_tier_scripts(F6_ID, "T2", F6_T2_SCRIPTS)
+    audit_tier_scripts(F6_ID, "T3", F6_T3_SCRIPTS)
+
+    println("")
+    println("  Note: declared closure pct is BOOK-KEEPING ONLY — it asserts")
+    println("  evidence has been WRITTEN, not that the underlying RT-SC claim is")
+    println("  TRUE. T3 (empirical) is the only tier that can falsify; T1/T2")
+    println("  closure means the closed-form is REGRESSION-LOCKED and ready")
+    println("  for empirical comparison.")
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  Falsifier preregister NOT monotone — fix before merging.")
+        println("__HEXA_RTSC_FALSIFIER__ FAIL")
+        exit(1)
+    }
+    println("  All 6 falsifiers (F-RTSC-{1,2,3} + F-SC-{1,2,3}) preregistered + tier-locked.")
+    println("  HONEST C3: empirical RT-SC unproven; cli sentinel ≠ empirical PASS.")
+    println("__HEXA_RTSC_FALSIFIER__ PASS")
+    exit(0)
+}

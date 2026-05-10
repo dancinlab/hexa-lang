@@ -1,0 +1,26 @@
+Reference,Value,Footprint,Manufacturer,MPN,Vendor,Vendor PN,Qty,Unit Cost (USD),Subtotal (USD),Datasheet
+U1,XC7A35T-1CSG324C,Package_BGA:Xilinx_CSG324,AMD/Xilinx,XC7A35T-1CSG324C,Mouser,122-XC7A35T1CSG324C,1,30.00,30.00,https://docs.amd.com/v/u/en-US/ds181_Artix_7_Data_Sheet
+U2,LTC2378-20,Package_DFN_QFN:DFN-16-1EP_3x4mm_P0.5mm_EP1.7x2.65mm,Analog Devices,LTC2378IDE-20#PBF,Digi-Key,LTC2378IDE-20-PBFCT-ND,1,48.00,48.00,https://www.analog.com/media/en/technical-documentation/data-sheets/237820fb.pdf
+U3,LTC2378-20,Package_DFN_QFN:DFN-16-1EP_3x4mm_P0.5mm_EP1.7x2.65mm,Analog Devices,LTC2378IDE-20#PBF,Digi-Key,LTC2378IDE-20-PBFCT-ND,1,48.00,48.00,https://www.analog.com/media/en/technical-documentation/data-sheets/237820fb.pdf
+U4,AD8429,Package_SO:SOIC-8_3.9x4.9mm_P1.27mm,Analog Devices,AD8429ARZ,Digi-Key,AD8429ARZ-ND,1,18.00,18.00,https://www.analog.com/media/en/technical-documentation/data-sheets/AD8429.pdf
+U5,AD8429,Package_SO:SOIC-8_3.9x4.9mm_P1.27mm,Analog Devices,AD8429ARZ,Digi-Key,AD8429ARZ-ND,1,18.00,18.00,https://www.analog.com/media/en/technical-documentation/data-sheets/AD8429.pdf
+U6,ISO224,Package_SO:SOIC-8_3.9x4.9mm_P1.27mm,Texas Instruments,ISO224ADWVR,Digi-Key,296-46810-1-ND,1,8.00,8.00,https://www.ti.com/lit/ds/symlink/iso224.pdf
+U7,ISO224,Package_SO:SOIC-8_3.9x4.9mm_P1.27mm,Texas Instruments,ISO224ADWVR,Digi-Key,296-46810-1-ND,1,8.00,8.00,https://www.ti.com/lit/ds/symlink/iso224.pdf
+U8,TLP358,Package_SO:SOIC-6_3.9x4.9mm_P1.27mm,Toshiba,TLP358F(F,Mouser,757-TLP358FFTLF,1,4.00,4.00,https://toshiba.semicon-storage.com/info/docget.jsp?did=51999
+U9,TPS7A4901,Package_SO:SOIC-8_3.9x4.9mm_P1.27mm,Texas Instruments,TPS7A4901DGNR,Digi-Key,296-26056-1-ND,3,5.00,15.00,https://www.ti.com/lit/ds/symlink/tps7a49.pdf
+U10,LM5060,Package_SO:SOIC-8_3.9x4.9mm_P1.27mm,Texas Instruments,LM5060MM/NOPB,Digi-Key,LM5060MMCT-ND,3,3.50,10.50,https://www.ti.com/lit/ds/symlink/lm5060.pdf
+J1,SMA,Connector_Coaxial:SMA_Amphenol_132289_Vertical,Amphenol RF,132289,Digi-Key,ARFX1232-ND,4,5.00,20.00,
+J2,RJ45_EtherCAT,Connector_RJ:RJ45_Amphenol_RJSAE-5380_Vertical,Amphenol,RJSAE-5380,Digi-Key,609-RJSAE-5380,1,3.50,3.50,
+J3,USB-C,Connector_USB:USB_C_Receptacle_Amphenol_12401872E412A,Amphenol,12401872E412A,Mouser,646-12401872E412A,1,2.50,2.50,
+Y1,Y100MHZ_OSC,Oscillator:Oscillator_SMD_Abracon_ABM3B-4Pin_5.0x3.2mm,Abracon,ABM3B-100.000MHZ-B2T,Digi-Key,535-9897-1-ND,1,1.50,1.50,
+C1,100uF/25V,Capacitor_SMD:CP_Elec_8x10,Murata,GRM188R71H104KA93D,Digi-Key,490-1532-1-ND,4,0.50,2.00,
+C2,10uF/25V,Capacitor_SMD:C_0805_2012Metric,Murata,GRM21BR71E106KA73L,Digi-Key,490-3344-1-ND,20,0.10,2.00,
+C3,100nF,Capacitor_SMD:C_0402_1005Metric,Murata,GRM155R71E104KE14D,Digi-Key,490-7325-1-ND,40,0.05,2.00,
+R1,10K,Resistor_SMD:R_0402_1005Metric,Vishay,CRCW040210K0FKED,Digi-Key,541-10.0KKACT-ND,30,0.02,0.60,
+R2,49.9_diff_term,Resistor_SMD:R_0402_1005Metric,Vishay,CRCW040249R9FKED,Digi-Key,541-49.9KKACT-ND,8,0.05,0.40,
+L1,Ferrite_BLM18,Inductor_SMD:L_0805_2012Metric,Murata,BLM18AG601SN1D,Digi-Key,490-1064-1-ND,8,0.20,1.60,
+D1,LED_GREEN,LED_SMD:LED_0805_2012Metric,Lite-On,LTST-C171GKT,Digi-Key,160-1414-1-ND,4,0.10,0.40,
+D2,LED_RED,LED_SMD:LED_0805_2012Metric,Lite-On,LTST-C171KRKT,Digi-Key,160-1415-1-ND,1,0.10,0.10,
+PCB,4-layer_FR4_ENIG,N/A,PCBWay,custom,PCBWay,5-board pilot,5,200.00,1000.00,Quoted 2026-05-08 4-layer ENIG 100x80mm
+PCBA,Assembly_pilot,N/A,JLCPCB,custom,JLCPCB,5-board assembly,5,400.00,2000.00,Includes part placement + reflow
+TOTAL,,,,,,,,3242.10,,5-board pilot Phase E1 procurement target

@@ -1,0 +1,112 @@
+(kicad_sch (version 20231120) (generator "hexa-rtsc-phase-E")
+
+	(uuid "55555555-5555-5555-5555-555555555555")
+
+	(paper "A4")
+
+	(title_block
+		(title "hexa-rtsc — Power tree (subsheet, shared across boards)")
+		(date "2026-05-08")
+		(rev "v0.1-skeleton")
+		(company "dancinlab/hexa-rtsc")
+		(comment 1 "Power-rail topology shared by quench_detect + synthesis_chamber")
+		(comment 2 "+ calorimetry_rig + squid_host_adapter")
+		(comment 3 "Spec: firmware/doc/chip_design.md §6 power budget (~7.6 W board total)")
+	)
+
+	(lib_symbols
+		(symbol "Regulator_Linear:TPS7A4901"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U1" (at 0 0 0))
+			(property "Value" "TPS7A4901 (low-noise +3V3)" (at 0 0 0))
+			(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" (at 0 0 0))
+			(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps7a49.pdf" (at 0 0 0))
+		)
+		(symbol "Regulator_Linear:TPS7A30"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U2" (at 0 0 0))
+			(property "Value" "TPS7A30 (+15V analog)" (at 0 0 0))
+			(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" (at 0 0 0))
+		)
+		(symbol "Regulator_Linear:TPS7A33"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U3" (at 0 0 0))
+			(property "Value" "TPS7A33 (-15V analog)" (at 0 0 0))
+			(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" (at 0 0 0))
+		)
+		(symbol "Power_Mgmt:LM5060"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "U4" (at 0 0 0))
+			(property "Value" "LM5060 (hot-swap)" (at 0 0 0))
+			(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" (at 0 0 0))
+			(property "Datasheet" "https://www.ti.com/lit/ds/symlink/lm5060.pdf" (at 0 0 0))
+		)
+		(symbol "Connector:DC_Jack_2.1mm"
+			(in_bom yes) (on_board yes)
+			(property "Reference" "J1" (at 0 0 0))
+			(property "Value" "DC_24V_input" (at 0 0 0))
+			(property "Footprint" "Connector_BarrelJack:BarrelJack_Horizontal" (at 0 0 0))
+		)
+	)
+
+	;; ─── Topology ─────────────────────────────────────────────────
+	(symbol (lib_id "Connector:DC_Jack_2.1mm") (at 30 100 0) (uuid "j1-dc-input")
+		(property "Reference" "J1" (at 30 95 0))
+		(property "Value" "+24V/2A DC jack" (at 30 105 0))
+		(instances (project "power_tree" (path "/" (reference "J1") (unit 1))))
+	)
+
+	(symbol (lib_id "Power_Mgmt:LM5060") (at 60 100 0) (uuid "u4-hotswap")
+		(property "Reference" "U4" (at 60 95 0))
+		(property "Value" "LM5060 (reverse + OV/UV protect)" (at 60 105 0))
+		(instances (project "power_tree" (path "/" (reference "U4") (unit 1))))
+	)
+
+	(symbol (lib_id "Regulator_Linear:TPS7A4901") (at 100 80 0) (uuid "u1-3v3-reg")
+		(property "Reference" "U1" (at 100 75 0))
+		(property "Value" "TPS7A4901 → +3V3 (digital)" (at 100 85 0))
+		(instances (project "power_tree" (path "/" (reference "U1") (unit 1))))
+	)
+
+	(symbol (lib_id "Regulator_Linear:TPS7A4901") (at 100 95 0) (uuid "u1b-5v-reg")
+		(property "Reference" "U1B" (at 100 90 0))
+		(property "Value" "TPS7A4901 → +5V (mixed)" (at 100 100 0))
+		(instances (project "power_tree" (path "/" (reference "U1B") (unit 1))))
+	)
+
+	(symbol (lib_id "Regulator_Linear:TPS7A30") (at 100 110 0) (uuid "u2-15v-pos")
+		(property "Reference" "U2" (at 100 105 0))
+		(property "Value" "TPS7A30 → +15V (analog)" (at 100 115 0))
+		(instances (project "power_tree" (path "/" (reference "U2") (unit 1))))
+	)
+
+	(symbol (lib_id "Regulator_Linear:TPS7A33") (at 100 125 0) (uuid "u3-15v-neg")
+		(property "Reference" "U3" (at 100 120 0))
+		(property "Value" "TPS7A33 → -15V (analog)" (at 100 130 0))
+		(instances (project "power_tree" (path "/" (reference "U3") (unit 1))))
+	)
+
+	;; ─── Nets ─────────────────────────────────────────────────────
+	(label "+24V_RAW" (at 35 100 0))
+	(label "+24V_HOTSWAP" (at 65 100 0))
+	(label "+24V_BUFFERED" (at 75 100 0))
+
+	(label "+3V3" (at 110 80 0))
+	(label "+5V" (at 110 95 0))
+	(label "+15V" (at 110 110 0))
+	(label "-15V" (at 110 125 0))
+	(label "AGND" (at 110 130 0))
+	(label "DGND" (at 110 85 0))
+	(label "GND" (at 30 110 0))
+
+	;; ─── Power budget annotation ──────────────────────────────────
+	(text "Power budget (matches firmware/doc/chip_design.md §6 = 7.6 W board total)\n  +3V3 : 0.66 W (STM32F4 + ancillaries)\n  +5V  : 0.49 W (LTC2378 + AD5660)\n  +15V : 2.4 W  (AD8429 ×4 + ISO224 ×4)\n  -15V : 1.5 W  (mirror of +15V)\n  +24V_GATE: 1.2 W (TLP358 + IGBT gate)\n  +1V0 (FPGA core): 1.33 W (MMR onboard core LDO)\n  ──────────────────────────────\n  TOTAL: 7.58 W (5%-margined: 8 W power supply)"
+		(at 100 30 0)
+		(effects (font (size 1.2 1.2)))
+	)
+	(text "All TPS7A regulators have:\n  · ENABLE pulled high through 10kΩ to +24V_HOTSWAP\n  · 100 nF + 10 µF X5R + 100 µF tantalum on output\n  · Soft-start 1 ms via SS pin → SS cap = 22 nF\n  · Power-good pulled to MCU GPIO for telemetry"
+		(at 100 150 0)
+		(effects (font (size 1.0 1.0)))
+	)
+
+)

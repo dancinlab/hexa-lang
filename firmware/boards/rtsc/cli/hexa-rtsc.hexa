@@ -1,0 +1,515 @@
+#!hexa strict
+// hexa-rtsc/cli/hexa-rtsc.hexa — standalone hexa-rtsc CLI router (PLACEHOLDER)
+//
+// 2-verb Room-Temp Superconductor substrate router:
+//   rtsc        — room-temp superconductor spec + falsifier preregister  [SPEC]
+//   sc          — superconductor (BCS / Abrikosov) spec + n=6 lattice    [SPEC]
+//
+// Plus utility subcmds:
+//   status      — verb status table (0/2 wired, 2/2 spec)
+//   selftest    — verify sentinels present (placeholder dispatcher)
+//   help        — this help
+//   --version   — print version
+//
+// HONEST STATUS (raw#10 C3):
+//   RT-SC is academically UNPROVEN as of 2026-05. LK-99 (2023) and
+//   subsequent candidates have not been independently replicated.
+//   This v1.0.0 CLI dispatcher is a PLACEHOLDER — no working empirical
+//   sandbox; verbs print spec excerpt + falsifier preregister only.
+//
+// Constraints:
+//   raw#9   — hexa-only orchestration; no python bridge
+//   raw#15  — write-confined (audit log only)
+//   raw#10  — honest C3 caveats embedded
+//
+// Cost: $0 (Mac local; pure spec-print, no compute).
+
+let VERSION = "1.0.0"
+
+// ─── env / path resolve ───
+
+let HOME = env("HOME")
+let HEXA_RTSC_ROOT_ENV = env("HEXA_RTSC_ROOT")
+
+fn hexa_rtsc_root() -> str {
+    if HEXA_RTSC_ROOT_ENV.len() > 0 { return HEXA_RTSC_ROOT_ENV }
+    let inferred = exec("dirname \"$(dirname \"$0\")\" 2>/dev/null || true").trim()
+    if inferred.len() > 0 { return inferred }
+    return HOME + "/.hexa-rtsc"  // @allow-devpath
+}
+
+let HR = hexa_rtsc_root()
+
+let SPEC_RTSC = HR + "/rtsc/room-temp-sc.md"
+let SPEC_SC   = HR + "/sc/superconductor.md"
+
+let LOG_PATH = HR + "/state/hexa_rtsc_cli.log"
+
+// ─── arg helpers ───
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn has_flag(a: [str], flag: str) -> bool {
+    for x in a {
+        if x == flag { return true }
+    }
+    return false
+}
+
+fn json_mode(a: [str]) -> bool {
+    return has_flag(a, "--json")
+}
+
+// ─── audit log (jsonl) ───
+
+fn _ts_now() -> str {
+    return exec("date -u '+%Y-%m-%dT%H:%M:%SZ'").trim()
+}
+
+fn _audit(subcmd: str, args_str: str, exit_code: int) {
+    let line = "{\"ts\":\"" + _ts_now() + "\",\"caller\":\"hexa_rtsc_standalone\",\"subcmd\":\"hexa-rtsc " +
+               subcmd + "\",\"args\":\"" + args_str.replace("\"", "\\\"") +
+               "\",\"exit_code\":" + str(exit_code) + ",\"version\":\"" + VERSION + "\"}"
+    exec("mkdir -p " + shq(HR + "/state") + " 2>/dev/null")
+    exec("echo " + shq(line) + " >> " + shq(LOG_PATH) + " 2>/dev/null")
+}
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+// ─── caveat printer (raw#10 honest C3) ───
+
+fn _print_caveats() {
+    println("")
+    println("--- caveats (raw#10 C3) ---")
+    println("  1. RT-SC is academically UNPROVEN (LK-99 etc. unsettled). v1.0.0 ships")
+    println("     spec + falsifier preregister only — no working empirical sandbox.")
+    println("  2. CLI dispatcher is PLACEHOLDER TBD; verbs print spec excerpt only.")
+    println("  3. n=6 invariant lattice (σ·τ=48T Hc2, φ=2 Cooper pair, Tc=300K) is a")
+    println("     CLOSED-FORM CANDIDATE, not empirical fit. Synthesis-side validation")
+    println("     is out-of-repo (would require materials lab).")
+    println("  4. Substrate-of-substrates: hexa-fusion (48T coil), hexa-ufo (Meissner),")
+    println("     hexa-cern (SC magnet) all depend on this base. Their working")
+    println("     status is upper-bounded by RT-SC empirical realisation.")
+}
+
+// ─── subcommand: status ───
+
+fn cmd_status(a: [str]) {
+    if json_mode(a) {
+        let mut js = "{\"hexa_rtsc\":\"" + VERSION + "\",\"subcmd\":\"status\","
+        js = js + "\"verbs_total\":2,\"verbs_wired\":0,\"verbs_stub\":2,"
+        js = js + "\"verdict\":\"SPEC_ONLY\","
+        js = js + "\"verbs\":[\"rtsc:spec\",\"sc:spec\"],"
+        js = js + "\"academic_status\":\"unproven\","
+        js = js + "\"role\":\"substrate-of-substrates\""
+        js = js + "}"
+        println(js)
+        return
+    }
+
+    println("hexa-rtsc " + VERSION + " status — Room-Temp Superconductor substrate-of-substrates")
+    println("")
+    println("  verb   status        n=6 lattice candidate         empirical")
+    println("  ----   -----------   ---------------------------   --------------")
+    println("  rtsc   SPEC v1.0.0   Tc=300K, σ·τ=48T, φ=2         UNPROVEN (TBD)")
+    println("  sc     SPEC v1.0.0   Cooper φ=2, Abrikosov CN=6    UNPROVEN (TBD)")
+    println("")
+    println("  verdict: SPEC_ONLY (0/2 verbs wired; 2/2 spec + falsifier preregister)")
+    println("")
+    println("  substrate-of-substrates downstream consumers:")
+    println("    dancinlab/hexa-fusion    (48T SC coil dep)")
+    println("    dancinlab/hexa-ufo       (Stage-1 Meissner levitation dep)")
+    println("    dancinlab/hexa-cern    (SC magnet dep)")
+    println("")
+    println("  drill into a verb:")
+    println("    hexa-rtsc rtsc       (prints spec excerpt + falsifier table)")
+    println("    hexa-rtsc sc         (prints spec excerpt + falsifier table)")
+    println("    hexa-rtsc selftest   (placeholder sentinel sweep)")
+    _print_caveats()
+}
+
+// ─── subcommand: rtsc ───
+
+fn cmd_rtsc(a: [str]) {
+    println("hexa-rtsc rtsc — Room-Temp Superconductor (SPEC v1.0.0)")
+    println("")
+    println("  n=6 closed-form candidate:")
+    println("    Tc        = 300 K           (room temperature target)")
+    println("    Hc2       = σ(6)·τ(6) = 48 T (critical magnetic field)")
+    println("    cooper    = φ(6) = 2        (electron boson pair → R=0)")
+    println("    meissner  = full B-expulsion (substrate of UFO levitation)")
+    println("    miniaturisation = 1/(σ-φ) = 1/10  (SC magnet shrink ratio)")
+    println("")
+    println("  falsifier preregister:")
+    println("    F-RTSC-1: Tc(measured) < 250 K   → DEMOTE n=6 Tc claim")
+    println("    F-RTSC-2: Hc2 < 30 T at 4.2 K    → DEMOTE σ·τ=48 closed-form")
+    println("    F-RTSC-3: no Meissner expulsion  → DEMOTE φ=2 boson claim")
+    println("")
+    println("  spec source: " + SPEC_RTSC)
+    println("")
+    println("__HEXA_RTSC_RTSC__ PASS  (sentinel only — does NOT validate empirical claim)")
+    if json_mode(a) {
+        println("{\"hexa_rtsc\":\"" + VERSION + "\",\"subcmd\":\"rtsc\",\"pass\":true,\"status\":\"spec\"}")
+    }
+    _audit("rtsc", "", 0)
+}
+
+// ─── subcommand: sc ───
+
+fn cmd_sc(a: [str]) {
+    println("hexa-rtsc sc — Superconductor (BCS / Abrikosov) (SPEC v1.0.0)")
+    println("")
+    println("  n=6 closed-form candidate:")
+    println("    cooper       = φ(6) = 2     (electron boson pair)")
+    println("    abrikosov    = CN=6         (hexagonal vortex lattice)")
+    println("    bcs_ratio    = σ(6) = 12    (specific-heat jump molecule)")
+    println("    flux_quantum = Φ₀ = h/(2e)  (φ=2 denominator)")
+    println("    Tc_high      = 150 K → RT-SC 300 K (rtsc verb upgrade)")
+    println("")
+    println("  falsifier preregister:")
+    println("    F-SC-1: Cooper pair size ≠ φ=2   → DEMOTE φ=2 pair claim")
+    println("    F-SC-2: vortex lattice not CN=6  → DEMOTE Abrikosov CN=6 claim")
+    println("    F-SC-3: BCS ratio ΔC/γTc ≠ ~1.43 → DEMOTE σ=12 molecule claim")
+    println("")
+    println("  spec source: " + SPEC_SC)
+    println("")
+    println("__HEXA_RTSC_SC__ PASS  (sentinel only — does NOT validate empirical claim)")
+    if json_mode(a) {
+        println("{\"hexa_rtsc\":\"" + VERSION + "\",\"subcmd\":\"sc\",\"pass\":true,\"status\":\"spec\"}")
+    }
+    _audit("sc", "", 0)
+}
+
+// ─── subcommand: lattice ───
+//
+// Print n=6 closed-form lattice math live (sigma / tau / phi / Hc2 derived
+// from divisor-function arithmetic, not memorized constants). Sister of
+// hexa-sscb spec.md §7 — the lattice is the *correctness machinery*.
+
+fn _div_sum(n: int) -> int {
+    let mut s = 0
+    let mut k = 1
+    while k <= n {
+        if n % k == 0 { s = s + k }
+        k = k + 1
+    }
+    return s
+}
+
+fn _div_count(n: int) -> int {
+    let mut c = 0
+    let mut k = 1
+    while k <= n {
+        if n % k == 0 { c = c + 1 }
+        k = k + 1
+    }
+    return c
+}
+
+fn _gcd(a: int, b: int) -> int {
+    let mut x = a
+    let mut y = b
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    return x
+}
+
+fn _phi(n: int) -> int {
+    let mut c = 0
+    let mut k = 1
+    while k <= n {
+        if _gcd(k, n) == 1 { c = c + 1 }
+        k = k + 1
+    }
+    return c
+}
+
+fn cmd_lattice(a: [str]) {
+    let n = 6
+    let s = _div_sum(n)
+    let t = _div_count(n)
+    let p = _phi(n)
+    let hc2 = s * t
+    let lhs = s * p
+    let rhs = n * t
+
+    if json_mode(a) {
+        let mut js = "{\"hexa_rtsc\":\"" + VERSION + "\",\"subcmd\":\"lattice\","
+        js = js + "\"n\":" + str(n) + ","
+        js = js + "\"sigma\":" + str(s) + ","
+        js = js + "\"tau\":" + str(t) + ","
+        js = js + "\"phi\":" + str(p) + ","
+        js = js + "\"Hc2_T\":" + str(hc2) + ","
+        js = js + "\"master\":" + str(lhs) + ","
+        js = js + "\"holds\":" + (if lhs == rhs && lhs == 24 { "true" } else { "false" })
+        js = js + "}"
+        println(js)
+        return
+    }
+
+    println("hexa-rtsc lattice — n=6 closed-form candidate (live computation)")
+    println("")
+    println("  σ(6) = " + str(s) + "    (divisor sum 1+2+3+6 = 12; BCS molecule)")
+    println("  τ(6) = " + str(t) + "    (divisor count {1,2,3,6}; 4-phase ladder)")
+    println("  φ(6) = " + str(p) + "    (Euler totient — coprime {1,5}; Cooper pair)")
+    println("")
+    println("  master identity:   σ·φ = " + str(lhs) + "  ?=  n·τ = " + str(rhs))
+    if lhs == rhs && lhs == 24 {
+        println("                     ✓ holds (J₂ = 24, Mathieu M₂₄)")
+    } else {
+        println("                     ✗ BROKEN — own 1 violation")
+    }
+    println("")
+    println("  derived:           Hc2 = σ·τ = " + str(hc2) + " T  (critical magnetic field gate)")
+    println("                     1/(σ-φ) = 1/" + str(s - p) + "  (SC magnet shrink ratio)")
+    println("")
+    println("  CLOSED-FORM CANDIDATE — empirical RT-SC unproven.")
+    _audit("lattice", "", 0)
+}
+
+// ─── subcommand: verify ───
+//
+// Runs verify/*.hexa scripts in sequence (lattice / cross-doc / falsifier).
+// Sister of hexa-sscb's `python3 verify/sscb_verify.py` + cross_doc_audit
+// + bom_lattice trio.
+
+fn _verify_one(name: str, path: str) -> int {
+    println("")
+    println("---- " + name + " (" + path + ") ----")
+    let rc_str = exec("hexa run " + path + "; echo __RC=$?").trim()
+    // Find the trailing __RC=N marker
+    let lines = rc_str.split("\n")
+    let last = lines[lines.len() - 1]
+    let mut rc = 0
+    if last.starts_with("__RC=") {
+        let raw = last.replace("__RC=", "")
+        rc = int(raw)
+        let mut i = 0
+        while i < lines.len() - 1 {
+            println(lines[i])
+            i = i + 1
+        }
+    } else {
+        println(rc_str)
+    }
+    return rc
+}
+
+fn cmd_verify(a: [str]) {
+    let scripts: [str] = [
+        "verify/lattice_check.hexa",
+        "verify/cross_doc_audit.hexa",
+        "verify/calc_bcs.hexa",
+        "verify/calc_mcmillan.hexa",
+        "verify/calc_hc2_48t.hexa",
+        "verify/calc_lk99.hexa",
+        "verify/numerics_bcs.hexa",
+        "verify/numerics_mcmillan.hexa",
+        "verify/numerics_hc2_48t.hexa",
+        "verify/numerics_lk99.hexa",
+        "verify/numerics_bcs_parity.hexa",
+        "verify/numerics_mcmillan_parity.hexa",
+        "verify/numerics_hc2_48t_parity.hexa",
+        "verify/numerics_lk99_parity.hexa",
+        "verify/numerics_lattice_arithmetic.hexa",
+        "verify/numerics_cross_pillar.hexa",
+        "verify/numerics_bcs_solver.hexa",
+        "verify/numerics_mcmillan_solver.hexa",
+        "verify/numerics_hc2_48t_solver.hexa",
+        "verify/numerics_lk99_solver.hexa",
+        "verify/numerics_lk99_dft.hexa",
+        "verify/numerics_tdgl_vortex.hexa",
+        "verify/numerics_whh_full.hexa",
+        "verify/empirical_lk99_arxiv.hexa",
+        "verify/empirical_mcmillan_arxiv.hexa",
+        "verify/empirical_hc2_high_field_arxiv.hexa",
+        "verify/empirical_bcs_cooper_arxiv.hexa",
+        "verify/empirical_abrikosov_sans_arxiv.hexa",
+        "verify/empirical_specific_heat_arxiv.hexa",
+        "verify/falsifier_check.hexa",
+        "verify/lint_numerics.hexa",
+        "verify/saturation_check.hexa",
+    ]
+    let names: [str] = ["lattice", "cross-doc", "calc-bcs", "calc-mcmillan", "calc-hc2-48t", "calc-lk99", "numerics-bcs", "numerics-mcmillan", "numerics-hc2-48t", "numerics-lk99", "numerics-bcs-parity", "numerics-mcmillan-parity", "numerics-hc2-48t-parity", "numerics-lk99-parity", "numerics-lattice-arithmetic", "numerics-cross-pillar", "numerics-bcs-solver", "numerics-mcmillan-solver", "numerics-hc2-48t-solver", "numerics-lk99-solver", "numerics-lk99-dft", "numerics-tdgl-vortex", "numerics-whh-full", "empirical-lk99", "empirical-mcmillan", "empirical-hc2", "empirical-bcs-cooper", "empirical-abrikosov", "empirical-specific-heat", "falsifier", "lint-numerics", "saturation"]
+    let mut passed = 0
+    let mut failed = 0
+    let mut i = 0
+    println("hexa-rtsc verify — running " + str(scripts.len()) + " invariant audits")
+    while i < scripts.len() {
+        let path = HR + "/" + scripts[i]
+        let rc = _verify_one(names[i], path)
+        if rc == 0 { passed = passed + 1 }
+        else       { failed = failed + 1 }
+        i = i + 1
+    }
+    println("")
+    println("========================================================================")
+    let total = passed + failed
+    println("  " + str(passed) + "/" + str(total) + " verify scripts passed")
+    if json_mode(a) {
+        let verdict = if failed == 0 { "PASS" } else { "FAIL" }
+        let mut js = "{\"hexa_rtsc\":\"" + VERSION + "\",\"subcmd\":\"verify\","
+        js = js + "\"passed\":" + str(passed) + ","
+        js = js + "\"failed\":" + str(failed) + ","
+        js = js + "\"verdict\":\"" + verdict + "\"}"
+        println(js)
+    }
+    if failed == 0 {
+        println("  __HEXA_RTSC_VERIFY__ PASS  (n=6 lattice + cross-doc + falsifier monotone)")
+    } else {
+        println("  __HEXA_RTSC_VERIFY__ FAIL  (" + str(failed) + " script(s) failed)")
+    }
+    _audit("verify", "", if failed == 0 { 0 } else { 1 })
+    if failed > 0 { exit(1) }
+}
+
+// ─── subcommand: selftest ───
+
+fn cmd_selftest(a: [str]) {
+    let ok_rtsc = _file_exists(SPEC_RTSC)
+    let ok_sc   = _file_exists(SPEC_SC)
+    let ok_own  = _file_exists(HR + "/.own")
+    let ok_ai   = _file_exists(HR + "/README.ai.md")
+    let ok_v1   = _file_exists(HR + "/verify/lattice_check.hexa")
+    let ok_v2   = _file_exists(HR + "/verify/cross_doc_audit.hexa")
+    let ok_v3   = _file_exists(HR + "/verify/falsifier_check.hexa")
+    let ok_lin  = _file_exists(HR + "/doc/lineage/origin.md")
+
+    println("hexa-rtsc selftest — sentinel sweep (specs + own_v1 pattern + verify/)")
+    println("")
+    if ok_rtsc { println("  [OK]  rtsc spec    : " + SPEC_RTSC) }
+    else       { println("  [!!]  rtsc spec    : MISSING " + SPEC_RTSC) }
+    if ok_sc   { println("  [OK]  sc   spec    : " + SPEC_SC) }
+    else       { println("  [!!]  sc   spec    : MISSING " + SPEC_SC) }
+    if ok_own  { println("  [OK]  .own own_v1  : " + HR + "/.own") }
+    else       { println("  [!!]  .own own_v1  : MISSING " + HR + "/.own") }
+    if ok_ai   { println("  [OK]  README.ai.md : " + HR + "/README.ai.md") }
+    else       { println("  [!!]  README.ai.md : MISSING") }
+    if ok_v1   { println("  [OK]  verify/lattice_check.hexa") }
+    else       { println("  [!!]  verify/lattice_check.hexa MISSING") }
+    if ok_v2   { println("  [OK]  verify/cross_doc_audit.hexa") }
+    else       { println("  [!!]  verify/cross_doc_audit.hexa MISSING") }
+    if ok_v3   { println("  [OK]  verify/falsifier_check.hexa") }
+    else       { println("  [!!]  verify/falsifier_check.hexa MISSING") }
+    if ok_lin  { println("  [OK]  doc/lineage/origin.md") }
+    else       { println("  [!!]  doc/lineage/origin.md MISSING") }
+
+    let pass = ok_rtsc && ok_sc && ok_own && ok_ai && ok_v1 && ok_v2 && ok_v3 && ok_lin
+    println("")
+    if pass {
+        println("__HEXA_RTSC_SELFTEST__ PASS  (sentinel only — empirical RT-SC unproven)")
+    } else {
+        println("__HEXA_RTSC_SELFTEST__ FAIL  (set HEXA_RTSC_ROOT or run from repo root)")
+    }
+    if json_mode(a) {
+        println("{\"hexa_rtsc\":\"" + VERSION + "\",\"subcmd\":\"selftest\",\"verdict\":\"" + (if pass { "PASS" } else { "FAIL" }) + "\"}")
+    }
+    _print_caveats()
+    _audit("selftest", "", if pass { 0 } else { 1 })
+    if pass == false { exit(1) }
+}
+
+// ─── version ───
+
+fn cmd_version() {
+    println("hexa-rtsc " + VERSION)
+    println("standalone Room-Temp Superconductor substrate (extracted from canon 2026-05-06)")
+    println("license: MIT")
+    println("repo:    https://github.com/dancinlab/hexa-rtsc")
+}
+
+// ─── help ───
+
+fn cmd_help() {
+    println("hexa-rtsc " + VERSION + " — Room-Temp Superconductor substrate-of-substrates")
+    println("")
+    println("usage: hexa-rtsc <subcmd> [flags...]")
+    println("")
+    println("verb subcommands (n=6 invariant lattice — CLOSED-FORM CANDIDATE):")
+    println("  rtsc            room-temp superconductor (Tc=300K, 48T)    [SPEC]")
+    println("  sc              superconductor (BCS / Abrikosov)            [SPEC]")
+    println("")
+    println("utility subcommands:")
+    println("  status          0/2-wired verb table + verdict + caveats")
+    println("  lattice         live-compute n=6 closed-form (σ τ φ Hc2 master)")
+    println("  verify          run all verify/*.hexa invariant audits")
+    println("  selftest        sentinel sweep (specs + own_v1 + verify/ landing)")
+    println("")
+    println("global flags:")
+    println("  --version       show version")
+    println("  --json          machine-parseable JSON tail")
+    println("  --help, -h      this help")
+    println("")
+    println("env:")
+    println("  HEXA_RTSC_ROOT  override repo root (default: inferred from $0)")
+    println("")
+    println("HONEST STATUS: RT-SC is academically unproven (LK-99 etc. unsettled).")
+    println("  v1.0.0 ships spec + falsifier preregister only — CLI dispatcher is")
+    println("  PLACEHOLDER. Working .hexa empirical sandbox is TBD.")
+    println("")
+    println("substrate-of-substrates: hexa-fusion (48T coil) · hexa-ufo (Meissner)")
+    println("                         · hexa-cern (SC magnet) all depend on this base.")
+}
+
+// ─── main ───
+
+fn main() {
+    let _raw = args()
+    let mut _sidx = -1
+    let mut _i = 0
+    while _i < _raw.len() {
+        if _raw[_i].ends_with(".hexa") { _sidx = _i; break }
+        _i = _i + 1
+    }
+    let mut _user_start = 2
+    if _sidx >= 0 { _user_start = _sidx + 1 }
+
+    let mut a: [str] = ["hexa_rtsc_cli", "hexa_rtsc_router"]
+    let mut _ua = _user_start
+    while _ua < _raw.len() {
+        a = a + [_raw[_ua]]
+        _ua = _ua + 1
+    }
+    let n = len(a)
+
+    if n < 3 {
+        cmd_help()
+        return
+    }
+
+    let sub = a[2]
+
+    if sub == "--version" || sub == "-V" || sub == "version" {
+        cmd_version()
+        return
+    }
+
+    if sub == "help" || sub == "--help" || sub == "-h" { cmd_help(); return }
+
+    if sub == "status" {
+        cmd_status(a)
+    } else if sub == "rtsc" {
+        cmd_rtsc(a)
+    } else if sub == "sc" {
+        cmd_sc(a)
+    } else if sub == "selftest" {
+        cmd_selftest(a)
+    } else if sub == "lattice" {
+        cmd_lattice(a)
+    } else if sub == "verify" {
+        cmd_verify(a)
+    } else {
+        eprintln("hexa-rtsc: unknown subcommand '" + sub + "'")
+        eprintln("run 'hexa-rtsc help' for usage")
+        _audit(sub, "", 2)
+        exit(2)
+    }
+}
