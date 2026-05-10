@@ -48,7 +48,7 @@ pub struct BindScope {
 
 // ── Helpers ──────────────────────────────────────────────────
 
-fn _empty_fixit() -> FixIt {
+fn _bind_empty_fixit() -> FixIt {
     return FixIt {
         kind: FixItKind::None,
         span: Span { file: "", line: 0, col: 0, len: 0 },
@@ -56,7 +56,7 @@ fn _empty_fixit() -> FixIt {
     }
 }
 
-fn _miss_def_id() -> DefId {
+fn _bind_miss_def_id() -> DefId {
     return DefId { module: "", index: -1 }
 }
 
@@ -105,7 +105,7 @@ fn _define(sc: BindScope, name: string, mod_file: string) -> BindScope {
 
 // Look up `name` walking the frame stack from innermost to outermost. Returns
 // a DefId with index=-1 on miss so callers can branch without exceptions.
-fn _lookup(sc: BindScope, name: string) -> DefId {
+fn _bind_lookup(sc: BindScope, name: string) -> DefId {
     let n = len(sc.frames)
     let mut i = n - 1
     while i >= 0 {
@@ -120,7 +120,7 @@ fn _lookup(sc: BindScope, name: string) -> DefId {
         }
         i = i - 1
     }
-    return _miss_def_id()
+    return _bind_miss_def_id()
 }
 
 // Collect every visible identifier across all frames — used for did-you-mean.
@@ -164,7 +164,7 @@ fn _suggest_name(sc: BindScope, name: string, cutoff: i64) -> string {
 // ── ExprKind probes ──────────────────────────────────────────
 // Stage0 cannot derive Eq for enums — pattern-match like resolve.hexa.
 
-fn _is_ident_kind(k: ExprKind) -> bool {
+fn _bind_is_ident_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Ident -> true,
         ExprKind::LiteralInt -> false,
@@ -192,7 +192,7 @@ fn _is_ident_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_block_kind(k: ExprKind) -> bool {
+fn _bind_is_block_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Block -> true,
         ExprKind::LiteralInt -> false,
@@ -276,7 +276,7 @@ fn _is_let_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_match_kind(k: ExprKind) -> bool {
+fn _bind_is_match_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Match -> true,
         ExprKind::LiteralInt -> false,
@@ -430,7 +430,7 @@ fn _emit_hx2001(name: string, span: Span, suggest: string, out: array) {
 // parse_let_expr stashes the binding name in `text`, prefixed with
 // "mut:" if it was declared mutable. Strip the prefix for binding.
 
-fn _let_name(t: string) -> string {
+fn _bind_let_name(t: string) -> string {
     let chars = t.chars()
     let n = len(chars)
     if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
@@ -471,12 +471,12 @@ fn _enum_head(t: string) -> string {
 // thread state through return values). `out` is an `array` — Diagnostic
 // pushes mutate the underlying buffer the caller passed in.
 
-fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindScope {
+fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindScope {
     let mut sc = in_sc
 
-    if _is_ident_kind(e.kind) {
+    if _bind_is_ident_kind(e.kind) {
         if len(e.text) > 0 && e.text != "_" {
-            let hit = _lookup(sc, e.text)
+            let hit = _bind_lookup(sc, e.text)
             if hit.index < 0 {
                 let suggest = _suggest_name(sc, e.text, 2)
                 _emit_hx2001(e.text, e.span, suggest, out)
@@ -493,7 +493,7 @@ fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindSc
         // Field access: child[0] is the receiver; field name is `text` and
         // is NOT a free identifier — skip it.
         if len(e.children) > 0 {
-            sc = _walk_expr(e.children[0], sc, mod_file, out)
+            sc = _bind_walk_expr(e.children[0], sc, mod_file, out)
         }
         return sc
     }
@@ -501,7 +501,7 @@ fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindSc
     if _is_struct_lit_kind(e.kind) {
         // Resolve the struct type name (text) at top level …
         if len(e.text) > 0 {
-            let hit = _lookup(sc, e.text)
+            let hit = _bind_lookup(sc, e.text)
             if hit.index < 0 {
                 let suggest = _suggest_name(sc, e.text, 2)
                 _emit_hx2001(e.text, e.span, suggest, out)
@@ -515,7 +515,7 @@ fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindSc
             let f = e.children[i]
             let mut j = 0
             while j < len(f.children) {
-                sc = _walk_expr(f.children[j], sc, mod_file, out)
+                sc = _bind_walk_expr(f.children[j], sc, mod_file, out)
                 j = j + 1
             }
             i = i + 1
@@ -526,7 +526,7 @@ fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindSc
     if _is_enum_path_kind(e.kind) {
         let head = _enum_head(e.text)
         if len(head) > 0 {
-            let hit = _lookup(sc, head)
+            let hit = _bind_lookup(sc, head)
             if hit.index < 0 {
                 let suggest = _suggest_name(sc, head, 2)
                 _emit_hx2001(head, e.span, suggest, out)
@@ -535,7 +535,7 @@ fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindSc
         // Payload children (when used as an expression, not pattern).
         let mut i = 0
         while i < len(e.children) {
-            sc = _walk_expr(e.children[i], sc, mod_file, out)
+            sc = _bind_walk_expr(e.children[i], sc, mod_file, out)
             i = i + 1
         }
         return sc
@@ -545,21 +545,21 @@ fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindSc
         // Walk RHS first (let x = RHS) — RHS cannot reference `x`.
         let mut i = 0
         while i < len(e.children) {
-            sc = _walk_expr(e.children[i], sc, mod_file, out)
+            sc = _bind_walk_expr(e.children[i], sc, mod_file, out)
             i = i + 1
         }
-        let nm = _let_name(e.text)
+        let nm = _bind_let_name(e.text)
         if len(nm) > 0 {
             sc = _define(sc, nm, mod_file)
         }
         return sc
     }
 
-    if _is_block_kind(e.kind) {
+    if _bind_is_block_kind(e.kind) {
         sc = _push_scope(sc)
         let mut i = 0
         while i < len(e.children) {
-            sc = _walk_expr(e.children[i], sc, mod_file, out)
+            sc = _bind_walk_expr(e.children[i], sc, mod_file, out)
             i = i + 1
         }
         sc = _pop_scope(sc)
@@ -569,23 +569,23 @@ fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindSc
     if _is_for_kind(e.kind) {
         // children[0] = iter, children[1] = body. Iter binding is on `text`.
         if len(e.children) >= 1 {
-            sc = _walk_expr(e.children[0], sc, mod_file, out)
+            sc = _bind_walk_expr(e.children[0], sc, mod_file, out)
         }
         sc = _push_scope(sc)
         if len(e.text) > 0 {
             sc = _define(sc, e.text, mod_file)
         }
         if len(e.children) >= 2 {
-            sc = _walk_expr(e.children[1], sc, mod_file, out)
+            sc = _bind_walk_expr(e.children[1], sc, mod_file, out)
         }
         sc = _pop_scope(sc)
         return sc
     }
 
-    if _is_match_kind(e.kind) {
+    if _bind_is_match_kind(e.kind) {
         // children layout: [scrutinee, pat0, body0, pat1, body1, ...]
         if len(e.children) >= 1 {
-            sc = _walk_expr(e.children[0], sc, mod_file, out)
+            sc = _bind_walk_expr(e.children[0], sc, mod_file, out)
         }
         let mut i = 1
         while i + 1 < len(e.children) {
@@ -593,7 +593,7 @@ fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindSc
             let body = e.children[i + 1]
             sc = _push_scope(sc)
             sc = _bind_pattern(pat, sc, mod_file, out)
-            sc = _walk_expr(body, sc, mod_file, out)
+            sc = _bind_walk_expr(body, sc, mod_file, out)
             sc = _pop_scope(sc)
             i = i + 2
         }
@@ -604,7 +604,7 @@ fn _walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> BindSc
     // literals — all delegate to children).
     let mut i = 0
     while i < len(e.children) {
-        sc = _walk_expr(e.children[i], sc, mod_file, out)
+        sc = _bind_walk_expr(e.children[i], sc, mod_file, out)
         i = i + 1
     }
     return sc
@@ -621,7 +621,7 @@ fn _bind_pattern(p: Expr, in_sc: BindScope, mod_file: string, out: array) -> Bin
 
     if _is_wildcard_kind(p.kind) { return sc }
 
-    if _is_ident_kind(p.kind) {
+    if _bind_is_ident_kind(p.kind) {
         if len(p.text) > 0 && p.text != "_" {
             sc = _define(sc, p.text, mod_file)
         }
@@ -635,7 +635,7 @@ fn _bind_pattern(p: Expr, in_sc: BindScope, mod_file: string, out: array) -> Bin
         let mut i = 0
         while i < len(p.children) {
             let c = p.children[i]
-            if _is_ident_kind(c.kind) {
+            if _bind_is_ident_kind(c.kind) {
                 if len(c.text) > 0 && c.text != "_" {
                     sc = _define(sc, c.text, mod_file)
                 }
@@ -651,7 +651,7 @@ fn _bind_pattern(p: Expr, in_sc: BindScope, mod_file: string, out: array) -> Bin
 
     // Literal / arbitrary expr pattern — no binders, but still walk so that
     // any `Ident` references inside (rare) get checked against scope.
-    sc = _walk_expr(p, sc, mod_file, out)
+    sc = _bind_walk_expr(p, sc, mod_file, out)
     return sc
 }
 
@@ -721,14 +721,14 @@ pub fn bind(module: Module) -> array {
                 }
                 p = p + 1
             }
-            sc = _walk_expr(it.body, sc, mod_file, out)
+            sc = _bind_walk_expr(it.body, sc, mod_file, out)
             sc = _pop_scope(sc)
         } else if _is_let_item_kind(it.kind) {
             // Top-level let: walk RHS in module scope. The name is already
             // visible from the pre-pass; that matches "let foo = foo" being
             // legal-but-silly across forward refs (the resolver doesn't try
             // to enforce initialization order at S2).
-            sc = _walk_expr(it.body, sc, mod_file, out)
+            sc = _bind_walk_expr(it.body, sc, mod_file, out)
         } else {
             // Struct / Enum / Import — body is the empty placeholder Expr
             // (parse path). Nothing to walk.

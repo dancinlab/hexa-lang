@@ -138,7 +138,7 @@ fn _array_for_kind_local(atlas: AtlasIndex, kind: string) -> array {
 // ── ExprKind probe ───────────────────────────────────────────
 // Stage0 cannot derive Eq for enums; mirror parser.hexa tag_of pattern.
 
-fn _is_atlas_ref_kind(k: ExprKind) -> bool {
+fn _resolve_is_atlas_ref_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::AtlasRef -> true,
         ExprKind::LiteralInt -> false,
@@ -186,8 +186,8 @@ fn _check_atlas_ref(aref: AtlasRef, atlas: AtlasIndex, out: array) {
     out.push(diag_emit(b))
 }
 
-fn _walk_expr(e: Expr, atlas: AtlasIndex, out: array) {
-    if _is_atlas_ref_kind(e.kind) {
+fn _resolve_walk_expr(e: Expr, atlas: AtlasIndex, out: array) {
+    if _resolve_is_atlas_ref_kind(e.kind) {
         _check_atlas_ref(e.atlas_ref, atlas, out)
     } else {
         // Some non-AtlasRef Exprs may still carry a populated atlas_ref
@@ -199,7 +199,7 @@ fn _walk_expr(e: Expr, atlas: AtlasIndex, out: array) {
     }
     let mut i = 0
     while i < len(e.children) {
-        _walk_expr(e.children[i], atlas, out)
+        _resolve_walk_expr(e.children[i], atlas, out)
         i = i + 1
     }
 }
@@ -210,19 +210,19 @@ fn _walk_annotations(anns: array, atlas: AtlasIndex, out: array) {
         let a = anns[i]
         let mut j = 0
         while j < len(a.args) {
-            _walk_expr(a.args[j], atlas, out)
+            _resolve_walk_expr(a.args[j], atlas, out)
             j = j + 1
         }
         i = i + 1
     }
 }
 
-fn _walk_item(it: Item, atlas: AtlasIndex, out: array) {
+fn _resolve_walk_item(it: Item, atlas: AtlasIndex, out: array) {
     _walk_annotations(it.annotations, atlas, out)
     // Item.body is the only Expr root carried at item level (Fn body,
     // Let RHS, etc.); Struct fields and Imports leave it as the
     // empty placeholder (kind=Ident, span zero, no atlas_ref).
-    _walk_expr(it.body, atlas, out)
+    _resolve_walk_expr(it.body, atlas, out)
 }
 
 // ── Public entry ─────────────────────────────────────────────
@@ -231,7 +231,7 @@ pub fn resolve(module: Module, atlas: AtlasIndex) -> array {
     let mut out = []
     let mut i = 0
     while i < len(module.items) {
-        _walk_item(module.items[i], atlas, out)
+        _resolve_walk_item(module.items[i], atlas, out)
         i = i + 1
     }
     return out

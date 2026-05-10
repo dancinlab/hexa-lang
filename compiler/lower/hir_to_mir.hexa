@@ -362,7 +362,7 @@ fn _rebind(ctx: LowerCtx, name: string, local_id: i64) -> LowerCtx {
     }
 }
 
-fn _lookup(ctx: LowerCtx, name: string) -> i64 {
+fn _mir_lookup(ctx: LowerCtx, name: string) -> i64 {
     let mut i = len(ctx.bindings) - 1
     while i >= 0 {
         if ctx.bindings[i].name == name {
@@ -420,7 +420,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── ident ───────────────────────────────────────────────
     if k == "ident" {
-        let id = _lookup(ctx, e.text)
+        let id = _mir_lookup(ctx, e.text)
         if id < 0 {
             return _value(ctx, _const_int_op(0))
         }
@@ -889,7 +889,7 @@ fn _strip_mut_prefix(t: string) -> string {
     return t
 }
 
-fn _digit_val(c: char) -> i64 {
+fn _mir_digit_val(c: char) -> i64 {
     if c == '0' { return 0 }
     if c == '1' { return 1 }
     if c == '2' { return 2 }
@@ -915,7 +915,7 @@ fn _parse_int(t: string) -> i64 {
     }
     let mut v: i64 = 0
     while i < n {
-        let d = _digit_val(chars[i])
+        let d = _mir_digit_val(chars[i])
         if d >= 0 { v = v * 10 + d }
         i = i + 1
     }

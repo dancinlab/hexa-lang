@@ -47,7 +47,7 @@ import "../lex/tokens.hexa"
 // -- ExprKind / ItemKind probes -----------------------------
 // Stage0 enums are payload-free; mirror the pattern from types.hexa.
 
-fn _is_lit_int_kind(k: ExprKind) -> bool {
+fn _eq_is_lit_int_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::LiteralInt -> true,
         ExprKind::LiteralFloat -> false,
@@ -75,7 +75,7 @@ fn _is_lit_int_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_ident_kind(k: ExprKind) -> bool {
+fn _eq_is_ident_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Ident -> true,
         ExprKind::LiteralInt -> false,
@@ -103,7 +103,7 @@ fn _is_ident_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_binop_kind(k: ExprKind) -> bool {
+fn _eq_is_binop_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::BinOp -> true,
         ExprKind::LiteralInt -> false,
@@ -131,7 +131,7 @@ fn _is_binop_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_unop_kind(k: ExprKind) -> bool {
+fn _eq_is_unop_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::UnOp -> true,
         ExprKind::LiteralInt -> false,
@@ -159,7 +159,7 @@ fn _is_unop_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_return_kind(k: ExprKind) -> bool {
+fn _eq_is_return_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Return -> true,
         ExprKind::LiteralInt -> false,
@@ -187,7 +187,7 @@ fn _is_return_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_block_kind(k: ExprKind) -> bool {
+fn _eq_is_block_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Block -> true,
         ExprKind::LiteralInt -> false,
@@ -215,7 +215,7 @@ fn _is_block_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_fn_item(k: ItemKind) -> bool {
+fn _eq_is_fn_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Fn -> true,
         ItemKind::Let -> false,
@@ -242,7 +242,7 @@ fn _is_int_type_ref(tr: TypeRef) -> bool {
 // -- Integer parsing (digit string -> i64) -----------------
 // Lifted to keep this module self-contained (mirrors hir_to_mir._parse_int).
 
-fn _digit_val(c: char) -> i64 {
+fn _eq_digit_val(c: char) -> i64 {
     if c == '0' { return 0 }
     if c == '1' { return 1 }
     if c == '2' { return 2 }
@@ -268,7 +268,7 @@ fn _parse_int_text(t: string) -> i64 {
     }
     let mut v: i64 = 0
     while i < n {
-        let d = _digit_val(chars[i])
+        let d = _eq_digit_val(chars[i])
         if d >= 0 { v = v * 10 + d }
         i = i + 1
     }
@@ -295,7 +295,7 @@ fn _str_lt(a: string, b: string) -> bool {
 }
 
 // In-place insertion sort on a [string] (stable, deterministic).
-fn _sort_strings(xs: [string]) -> [string] {
+fn _eq_sort_strings(xs: [string]) -> [string] {
     let mut a = xs
     let n = len(a)
     let mut i = 1
@@ -336,7 +336,7 @@ fn _i64_to_string(v: i64) -> string {
 }
 
 fn _flatten_chain(e: Expr, op: string, out: array) {
-    if _is_binop_kind(e.kind) && e.text == op && len(e.children) == 2 {
+    if _eq_is_binop_kind(e.kind) && e.text == op && len(e.children) == 2 {
         _flatten_chain(e.children[0], op, out)
         _flatten_chain(e.children[1], op, out)
     } else {
@@ -369,17 +369,17 @@ fn _fold_int_op(op: string, a: i64, b: i64) -> FoldResult {
 // Build the canonical string of a (possibly nested) expression. Constant
 // folds bottom-up; sorts commutative operand chains; collapses identity
 // laws (0+x -> x, 1*x -> x, x*0 -> 0, x-x -> 0).
-fn _normalize(e: Expr) -> string {
-    if _is_lit_int_kind(e.kind) {
+fn _eq_normalize(e: Expr) -> string {
+    if _eq_is_lit_int_kind(e.kind) {
         let v = _parse_int_text(e.text)
         return _i64_to_string(v)
     }
-    if _is_ident_kind(e.kind) {
+    if _eq_is_ident_kind(e.kind) {
         return e.text
     }
-    if _is_unop_kind(e.kind) {
+    if _eq_is_unop_kind(e.kind) {
         if len(e.children) == 0 { return e.text }
-        let inner = _normalize(e.children[0])
+        let inner = _eq_normalize(e.children[0])
         if e.text == "-" {
             let v = _parse_int_text(inner)
             let s = _i64_to_string(v)
@@ -390,14 +390,14 @@ fn _normalize(e: Expr) -> string {
         }
         return "(" + e.text + " " + inner + ")"
     }
-    if _is_binop_kind(e.kind) {
+    if _eq_is_binop_kind(e.kind) {
         if len(e.children) < 2 {
             return "(" + e.text + ")"
         }
         let op = e.text
 
-        let l_norm = _normalize(e.children[0])
-        let r_norm = _normalize(e.children[1])
+        let l_norm = _eq_normalize(e.children[0])
+        let r_norm = _eq_normalize(e.children[1])
 
         // x - x -> 0 (only when both sides normalise identically)
         if op == "-" && l_norm == r_norm {
@@ -439,7 +439,7 @@ fn _normalize(e: Expr) -> string {
             let mut acc: i64 = 0
             let mut k = 0
             while k < len(chain) {
-                let s = _normalize(chain[k])
+                let s = _eq_normalize(chain[k])
                 let pv = _parse_int_text(s)
                 if _i64_to_string(pv) == s {
                     if !acc_set {
@@ -456,7 +456,7 @@ fn _normalize(e: Expr) -> string {
             }
 
             if _is_commutative_op(op) {
-                parts = _sort_strings(parts)
+                parts = _eq_sort_strings(parts)
             }
 
             if acc_set {
@@ -473,7 +473,7 @@ fn _normalize(e: Expr) -> string {
                         q = q + 1
                     }
                     if _is_commutative_op(op) {
-                        parts = _sort_strings(next)
+                        parts = _eq_sort_strings(next)
                     } else {
                         parts = next
                     }
@@ -510,20 +510,20 @@ fn _normalize(e: Expr) -> string {
 // hangs off the Return's first child.
 
 fn _find_eq(e: Expr) -> Expr {
-    if _is_binop_kind(e.kind) && e.text == "==" {
+    if _eq_is_binop_kind(e.kind) && e.text == "==" {
         return e
     }
-    if _is_return_kind(e.kind) {
+    if _eq_is_return_kind(e.kind) {
         if len(e.children) > 0 {
             let inner = _find_eq(e.children[0])
-            if _is_binop_kind(inner.kind) && inner.text == "==" { return inner }
+            if _eq_is_binop_kind(inner.kind) && inner.text == "==" { return inner }
         }
     }
-    if _is_block_kind(e.kind) {
+    if _eq_is_block_kind(e.kind) {
         let mut i = 0
         while i < len(e.children) {
             let inner = _find_eq(e.children[i])
-            if _is_binop_kind(inner.kind) && inner.text == "==" { return inner }
+            if _eq_is_binop_kind(inner.kind) && inner.text == "==" { return inner }
             i = i + 1
         }
     }
@@ -538,7 +538,7 @@ fn _find_eq(e: Expr) -> Expr {
 }
 
 fn _is_eq_found(eq: Expr) -> bool {
-    if !_is_binop_kind(eq.kind) { return false }
+    if !_eq_is_binop_kind(eq.kind) { return false }
     return eq.text == "=="
 }
 
@@ -569,13 +569,13 @@ fn _binding_lookup(env: [Binding], name: string) -> EvalResult {
 }
 
 fn _eval(e: Expr, env: [Binding]) -> EvalResult {
-    if _is_lit_int_kind(e.kind) {
+    if _eq_is_lit_int_kind(e.kind) {
         return EvalResult { ok: true, value: _parse_int_text(e.text) }
     }
-    if _is_ident_kind(e.kind) {
+    if _eq_is_ident_kind(e.kind) {
         return _binding_lookup(env, e.text)
     }
-    if _is_unop_kind(e.kind) {
+    if _eq_is_unop_kind(e.kind) {
         if len(e.children) == 0 { return EvalResult { ok: false, value: 0 } }
         let inner = _eval(e.children[0], env)
         if !inner.ok { return inner }
@@ -583,7 +583,7 @@ fn _eval(e: Expr, env: [Binding]) -> EvalResult {
         if e.text == "+" { return inner }
         return EvalResult { ok: false, value: 0 }
     }
-    if _is_binop_kind(e.kind) {
+    if _eq_is_binop_kind(e.kind) {
         if len(e.children) < 2 { return EvalResult { ok: false, value: 0 } }
         let lr = _eval(e.children[0], env)
         if !lr.ok { return lr }
@@ -685,8 +685,8 @@ fn _verify_item(it: Item, out: array) {
     let rhs_expr = eq.children[1]
 
     // Stage (a): equational normalization.
-    let lhs_norm = _normalize(lhs_expr)
-    let rhs_norm = _normalize(rhs_expr)
+    let lhs_norm = _eq_normalize(lhs_expr)
+    let rhs_norm = _eq_normalize(rhs_expr)
     let normalized_pass = lhs_norm == rhs_norm
     if !normalized_pass {
         _emit_hx6001(it.name, lhs_norm, rhs_norm, eq.span, out)
@@ -737,7 +737,7 @@ pub fn equational_check(module: Module) -> array {
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
-        if _is_fn_item(it.kind) {
+        if _eq_is_fn_item(it.kind) {
             _verify_item(it, out)
         }
         i = i + 1

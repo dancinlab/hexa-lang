@@ -68,7 +68,7 @@ fn _is_string_lit(k: ExprKind) -> bool {
     }
 }
 
-fn _is_assign(k: ExprKind) -> bool {
+fn _annot_is_assign(k: ExprKind) -> bool {
     return match k {
         ExprKind::Assign -> true,
         ExprKind::LiteralInt -> false,
@@ -96,7 +96,7 @@ fn _is_assign(k: ExprKind) -> bool {
     }
 }
 
-fn _is_ident(k: ExprKind) -> bool {
+fn _annot_is_ident(k: ExprKind) -> bool {
     return match k {
         ExprKind::Ident -> true,
         ExprKind::LiteralInt -> false,
@@ -148,10 +148,10 @@ fn _kwarg_lookup(args: [Expr], key: string) -> Expr {
     let mut i = 0
     while i < len(args) {
         let a = args[i]
-        if _is_assign(a.kind) {
+        if _annot_is_assign(a.kind) {
             if len(a.children) >= 2 {
                 let lhs = a.children[0]
-                if _is_ident(lhs.kind) {
+                if _annot_is_ident(lhs.kind) {
                     if lhs.text == key {
                         return a.children[1]
                     }
@@ -169,10 +169,10 @@ fn _kwarg_present(args: [Expr], key: string) -> bool {
     let mut i = 0
     while i < len(args) {
         let a = args[i]
-        if _is_assign(a.kind) {
+        if _annot_is_assign(a.kind) {
             if len(a.children) >= 2 {
                 let lhs = a.children[0]
-                if _is_ident(lhs.kind) {
+                if _annot_is_ident(lhs.kind) {
                     if lhs.text == key { return true }
                 }
             }
@@ -187,7 +187,7 @@ fn _first_positional(args: [Expr]) -> Expr {
     let mut i = 0
     while i < len(args) {
         let a = args[i]
-        if !_is_assign(a.kind) { return a }
+        if !_annot_is_assign(a.kind) { return a }
         i = i + 1
     }
     return _empty_expr()
@@ -196,7 +196,7 @@ fn _first_positional(args: [Expr]) -> Expr {
 fn _has_positional(args: [Expr]) -> bool {
     let mut i = 0
     while i < len(args) {
-        if !_is_assign(args[i].kind) { return true }
+        if !_annot_is_assign(args[i].kind) { return true }
         i = i + 1
     }
     return false
@@ -276,7 +276,7 @@ fn _check_grace(a: Annotation, today: string, out: array) {
     let code_expr = _first_positional(a.args)
     let code_str = code_expr.text
     let mut code_ok = false
-    if _is_ident(code_expr.kind) {
+    if _annot_is_ident(code_expr.kind) {
         code_ok = _is_hx_code(code_str)
     } else if _is_string_lit(code_expr.kind) {
         code_ok = _is_hx_code(code_str)
@@ -390,7 +390,7 @@ fn _check_discover(a: Annotation, out: array) {
 
 // ── Per-item walk ────────────────────────────────────────────
 
-fn _walk_item(it: Item, today: string, out: array) {
+fn _annot_walk_item(it: Item, today: string, out: array) {
     let mut i = 0
     while i < len(it.annotations) {
         let a = it.annotations[i]
@@ -415,7 +415,7 @@ pub fn check_annotations(module: Module, today: string) -> array {
     let mut out = []
     let mut i = 0
     while i < len(module.items) {
-        _walk_item(module.items[i], today, out)
+        _annot_walk_item(module.items[i], today, out)
         i = i + 1
     }
     return out

@@ -50,7 +50,7 @@ pub struct TypeEnv {
 
 // ── Helpers ──────────────────────────────────────────────────
 
-fn _empty_fixit() -> FixIt {
+fn _types_empty_fixit() -> FixIt {
     return FixIt {
         kind: FixItKind::None,
         span: Span { file: "", line: 0, col: 0, len: 0 },
@@ -58,14 +58,14 @@ fn _empty_fixit() -> FixIt {
     }
 }
 
-fn _miss_def_id() -> DefId {
+fn _types_miss_def_id() -> DefId {
     return DefId { module: "", index: -1 }
 }
 
-fn _empty_type() -> Type {
+fn _types_empty_type() -> Type {
     return Type {
         kind: "",
-        def: _miss_def_id(),
+        def: _types_miss_def_id(),
         args: [],
         ret: [],
         domain: "",
@@ -76,7 +76,7 @@ fn _empty_type() -> Type {
 fn _prim(kind: string, domain: string) -> Type {
     return Type {
         kind: kind,
-        def: _miss_def_id(),
+        def: _types_miss_def_id(),
         args: [],
         ret: [],
         domain: domain,
@@ -84,12 +84,12 @@ fn _prim(kind: string, domain: string) -> Type {
     }
 }
 
-fn _t_i64()    -> Type { return _prim("i64",    "integer") }
-fn _t_f64()    -> Type { return _prim("f64",    "real") }
-fn _t_bool()   -> Type { return _prim("bool",   "") }
-fn _t_string() -> Type { return _prim("string", "") }
-fn _t_char()   -> Type { return _prim("char",   "") }
-fn _t_unit()   -> Type { return _prim("unit",   "") }
+fn _types_t_i64()    -> Type { return _prim("i64",    "integer") }
+fn _types_t_f64()    -> Type { return _prim("f64",    "real") }
+fn _types_t_bool()   -> Type { return _prim("bool",   "") }
+fn _types_t_string() -> Type { return _prim("string", "") }
+fn _types_t_char()   -> Type { return _prim("char",   "") }
+fn _types_t_unit()   -> Type { return _prim("unit",   "") }
 
 // Render a Type for diagnostic messages. Stage0 has no Display impl, so we
 // hand-roll a minimal pretty-printer that resolves the most common cases.
@@ -121,7 +121,7 @@ fn _type_display(t: Type) -> string {
 
 // ── ExprKind probes (stage0 has no derived Eq) ───────────────
 
-fn _is_lit_int(k: ExprKind) -> bool {
+fn _types_is_lit_int(k: ExprKind) -> bool {
     return match k {
         ExprKind::LiteralInt -> true,
         ExprKind::LiteralFloat -> false,
@@ -149,7 +149,7 @@ fn _is_lit_int(k: ExprKind) -> bool {
     }
 }
 
-fn _is_lit_float(k: ExprKind) -> bool {
+fn _types_is_lit_float(k: ExprKind) -> bool {
     return match k {
         ExprKind::LiteralFloat -> true,
         ExprKind::LiteralInt -> false,
@@ -177,7 +177,7 @@ fn _is_lit_float(k: ExprKind) -> bool {
     }
 }
 
-fn _is_lit_string(k: ExprKind) -> bool {
+fn _types_is_lit_string(k: ExprKind) -> bool {
     return match k {
         ExprKind::LiteralString -> true,
         ExprKind::LiteralInt -> false,
@@ -261,7 +261,7 @@ fn _is_lit_char(k: ExprKind) -> bool {
     }
 }
 
-fn _is_ident(k: ExprKind) -> bool {
+fn _types_is_ident(k: ExprKind) -> bool {
     return match k {
         ExprKind::Ident -> true,
         ExprKind::LiteralInt -> false,
@@ -317,7 +317,7 @@ fn _is_atlas(k: ExprKind) -> bool {
     }
 }
 
-fn _is_call(k: ExprKind) -> bool {
+fn _types_is_call(k: ExprKind) -> bool {
     return match k {
         ExprKind::Call -> true,
         ExprKind::LiteralInt -> false,
@@ -345,7 +345,7 @@ fn _is_call(k: ExprKind) -> bool {
     }
 }
 
-fn _is_binop(k: ExprKind) -> bool {
+fn _types_is_binop(k: ExprKind) -> bool {
     return match k {
         ExprKind::BinOp -> true,
         ExprKind::LiteralInt -> false,
@@ -373,7 +373,7 @@ fn _is_binop(k: ExprKind) -> bool {
     }
 }
 
-fn _is_unop(k: ExprKind) -> bool {
+fn _types_is_unop(k: ExprKind) -> bool {
     return match k {
         ExprKind::UnOp -> true,
         ExprKind::LiteralInt -> false,
@@ -401,7 +401,7 @@ fn _is_unop(k: ExprKind) -> bool {
     }
 }
 
-fn _is_block(k: ExprKind) -> bool {
+fn _types_is_block(k: ExprKind) -> bool {
     return match k {
         ExprKind::Block -> true,
         ExprKind::LiteralInt -> false,
@@ -429,7 +429,7 @@ fn _is_block(k: ExprKind) -> bool {
     }
 }
 
-fn _is_if(k: ExprKind) -> bool {
+fn _types_is_if(k: ExprKind) -> bool {
     return match k {
         ExprKind::If -> true,
         ExprKind::LiteralInt -> false,
@@ -457,7 +457,7 @@ fn _is_if(k: ExprKind) -> bool {
     }
 }
 
-fn _is_while(k: ExprKind) -> bool {
+fn _types_is_while(k: ExprKind) -> bool {
     return match k {
         ExprKind::While -> true,
         ExprKind::LiteralInt -> false,
@@ -485,7 +485,7 @@ fn _is_while(k: ExprKind) -> bool {
     }
 }
 
-fn _is_return(k: ExprKind) -> bool {
+fn _types_is_return(k: ExprKind) -> bool {
     return match k {
         ExprKind::Return -> true,
         ExprKind::LiteralInt -> false,
@@ -513,7 +513,7 @@ fn _is_return(k: ExprKind) -> bool {
     }
 }
 
-fn _is_let(k: ExprKind) -> bool {
+fn _types_is_let(k: ExprKind) -> bool {
     return match k {
         ExprKind::Let -> true,
         ExprKind::LiteralInt -> false,
@@ -541,7 +541,7 @@ fn _is_let(k: ExprKind) -> bool {
     }
 }
 
-fn _is_assign(k: ExprKind) -> bool {
+fn _types_is_assign(k: ExprKind) -> bool {
     return match k {
         ExprKind::Assign -> true,
         ExprKind::LiteralInt -> false,
@@ -599,7 +599,7 @@ fn _is_match_expr(k: ExprKind) -> bool {
 
 // ── ItemKind probes ──────────────────────────────────────────
 
-fn _is_fn_item(k: ItemKind) -> bool {
+fn _types_is_fn_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Fn -> true,
         ItemKind::Let -> false,
@@ -609,7 +609,7 @@ fn _is_fn_item(k: ItemKind) -> bool {
     }
 }
 
-fn _is_struct_item(k: ItemKind) -> bool {
+fn _types_is_struct_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Struct -> true,
         ItemKind::Fn -> false,
@@ -619,7 +619,7 @@ fn _is_struct_item(k: ItemKind) -> bool {
     }
 }
 
-fn _is_enum_item(k: ItemKind) -> bool {
+fn _types_is_enum_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Enum -> true,
         ItemKind::Fn -> false,
@@ -629,7 +629,7 @@ fn _is_enum_item(k: ItemKind) -> bool {
     }
 }
 
-fn _is_let_item(k: ItemKind) -> bool {
+fn _types_is_let_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Let -> true,
         ItemKind::Fn -> false,
@@ -645,19 +645,19 @@ fn _is_let_item(k: ItemKind) -> bool {
 // Type carrying just the name through `kind` so the diagnostic
 // pretty-printer can still show something.
 
-fn _lower_type_ref(tr: TypeRef) -> Type {
-    if len(tr.kind) == 0 { return _empty_type() }
+fn _types_lower_type_ref(tr: TypeRef) -> Type {
+    if len(tr.kind) == 0 { return _types_empty_type() }
     if tr.kind == "named" {
         let n = tr.name
-        if n == "i64" || n == "Int" || n == "int" { return _t_i64() }
-        if n == "f64" || n == "Float" || n == "float" || n == "Real" { return _t_f64() }
-        if n == "bool" || n == "Bool" { return _t_bool() }
-        if n == "string" || n == "String" { return _t_string() }
-        if n == "char" || n == "Char" { return _t_char() }
-        if n == "unit" || n == "Unit" || n == "()" || len(n) == 0 { return _t_unit() }
+        if n == "i64" || n == "Int" || n == "int" { return _types_t_i64() }
+        if n == "f64" || n == "Float" || n == "float" || n == "Real" { return _types_t_f64() }
+        if n == "bool" || n == "Bool" { return _types_t_bool() }
+        if n == "string" || n == "String" { return _types_t_string() }
+        if n == "char" || n == "Char" { return _types_t_char() }
+        if n == "unit" || n == "Unit" || n == "()" || len(n) == 0 { return _types_t_unit() }
         return Type {
             kind: "named:" + n,
-            def: _miss_def_id(),
+            def: _types_miss_def_id(),
             args: [],
             ret: [],
             domain: "",
@@ -667,7 +667,7 @@ fn _lower_type_ref(tr: TypeRef) -> Type {
     // generic / fn / tuple / atlas_kind — degrade gracefully
     return Type {
         kind: tr.kind + ":" + tr.name,
-        def: _miss_def_id(),
+        def: _types_miss_def_id(),
         args: [],
         ret: [],
         domain: "",
@@ -677,20 +677,20 @@ fn _lower_type_ref(tr: TypeRef) -> Type {
 
 // ── TypeEnv ops ──────────────────────────────────────────────
 
-fn _env_define(env: TypeEnv, name: string, def: DefId, t: Type) -> TypeEnv {
+fn _types_env_define(env: TypeEnv, name: string, def: DefId, t: Type) -> TypeEnv {
     let mut entries = env.entries
     entries.push(TypeBinding { def: def, name: name, typ: t })
     return TypeEnv { entries: entries }
 }
 
-fn _env_lookup(env: TypeEnv, name: string) -> Type {
+fn _types_env_lookup(env: TypeEnv, name: string) -> Type {
     let mut i = 0
     while i < len(env.entries) {
         let b = env.entries[i]
         if b.name == name { return b.typ }
         i = i + 1
     }
-    return _empty_type()
+    return _types_empty_type()
 }
 
 // Standalone fallback used by the test when bind has not run — scan a
@@ -698,7 +698,7 @@ fn _env_lookup(env: TypeEnv, name: string) -> Type {
 // synthesise its Type. Mirrors the pre-pass that `type_check` performs
 // on a real module, just inlined for callers that hand-build envs.
 pub fn _resolve_ident_to_type(env: TypeEnv, name: string) -> Type {
-    return _env_lookup(env, name)
+    return _types_env_lookup(env, name)
 }
 
 // ── Diagnostic emit helpers ──────────────────────────────────
@@ -762,7 +762,7 @@ fn _types_equal(a: Type, b: Type) -> bool {
     return a.kind == b.kind
 }
 
-fn _is_numeric(t: Type) -> bool {
+fn _types_is_numeric(t: Type) -> bool {
     if len(t.kind) == 0 { return false }
     if t.kind == "i64" { return true }
     if t.kind == "f64" { return true }
@@ -787,8 +787,8 @@ pub struct CheckCtx {
     module: string
 }
 
-fn _new_ctx(module: string) -> CheckCtx {
-    return CheckCtx { fn_name: "", fn_return: _empty_type(), module: module }
+fn _types_new_ctx(module: string) -> CheckCtx {
+    return CheckCtx { fn_name: "", fn_return: _types_empty_type(), module: module }
 }
 
 fn _ctx_with_fn(ctx: CheckCtx, name: string, ret: Type) -> CheckCtx {
@@ -800,24 +800,24 @@ fn _ctx_with_fn(ctx: CheckCtx, name: string, ret: Type) -> CheckCtx {
 // into `out` along the way (multi-error policy).
 
 fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
-    if _is_lit_int(e.kind)    { return _t_i64() }
-    if _is_lit_float(e.kind)  { return _t_f64() }
-    if _is_lit_string(e.kind) { return _t_string() }
-    if _is_lit_bool(e.kind)   { return _t_bool() }
-    if _is_lit_char(e.kind)   { return _t_char() }
+    if _types_is_lit_int(e.kind)    { return _types_t_i64() }
+    if _types_is_lit_float(e.kind)  { return _types_t_f64() }
+    if _types_is_lit_string(e.kind) { return _types_t_string() }
+    if _is_lit_bool(e.kind)   { return _types_t_bool() }
+    if _is_lit_char(e.kind)   { return _types_t_char() }
 
-    if _is_ident(e.kind) {
-        let t = _env_lookup(env, e.text)
+    if _types_is_ident(e.kind) {
+        let t = _types_env_lookup(env, e.text)
         return t
     }
 
     if _is_atlas(e.kind) {
         // Atlas refs inhabit a kind-specific opaque type; S5/S8 will refine.
         let k = e.atlas_ref.kind
-        if len(k) == 0 { return _empty_type() }
+        if len(k) == 0 { return _types_empty_type() }
         return Type {
             kind: "atlas_" + k,
-            def: _miss_def_id(),
+            def: _types_miss_def_id(),
             args: [],
             ret: [],
             domain: "",
@@ -825,26 +825,26 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         }
     }
 
-    if _is_unop(e.kind) {
-        if len(e.children) == 0 { return _empty_type() }
+    if _types_is_unop(e.kind) {
+        if len(e.children) == 0 { return _types_empty_type() }
         let inner = _infer_expr(e.children[0], env, ctx, out)
         // Unary `-` keeps the operand's numeric type; otherwise pass through.
-        if e.text == "-" && _is_numeric(inner) {
+        if e.text == "-" && _types_is_numeric(inner) {
             return inner
         }
         return inner
     }
 
-    if _is_binop(e.kind) {
-        return _check_binop(e, env, ctx, out)
+    if _types_is_binop(e.kind) {
+        return _types_check_binop(e, env, ctx, out)
     }
 
-    if _is_call(e.kind) {
-        return _check_call(e, env, ctx, out)
+    if _types_is_call(e.kind) {
+        return _types_check_call(e, env, ctx, out)
     }
 
-    if _is_block(e.kind) {
-        let mut last = _t_unit()
+    if _types_is_block(e.kind) {
+        let mut last = _types_t_unit()
         let mut i = 0
         while i < len(e.children) {
             last = _infer_expr(e.children[i], env, ctx, out)
@@ -853,16 +853,16 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         return last
     }
 
-    if _is_if(e.kind) {
+    if _types_is_if(e.kind) {
         // children: [cond, then, (else)]
         if len(e.children) >= 1 {
             let cond_t = _infer_expr(e.children[0], env, ctx, out)
-            if !_types_equal(cond_t, _t_bool()) {
-                _emit_hx3001(_t_bool(), cond_t, e.children[0].span, out)
+            if !_types_equal(cond_t, _types_t_bool()) {
+                _emit_hx3001(_types_t_bool(), cond_t, e.children[0].span, out)
             }
         }
-        let mut then_t = _t_unit()
-        let mut else_t = _t_unit()
+        let mut then_t = _types_t_unit()
+        let mut else_t = _types_t_unit()
         if len(e.children) >= 2 {
             then_t = _infer_expr(e.children[1], env, ctx, out)
         }
@@ -875,22 +875,22 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         return then_t
     }
 
-    if _is_while(e.kind) {
+    if _types_is_while(e.kind) {
         if len(e.children) >= 1 {
             let cond_t = _infer_expr(e.children[0], env, ctx, out)
-            if !_types_equal(cond_t, _t_bool()) {
-                _emit_hx3001(_t_bool(), cond_t, e.children[0].span, out)
+            if !_types_equal(cond_t, _types_t_bool()) {
+                _emit_hx3001(_types_t_bool(), cond_t, e.children[0].span, out)
             }
         }
         if len(e.children) >= 2 {
             // body's type discarded — while is always unit.
             let _b = _infer_expr(e.children[1], env, ctx, out)
         }
-        return _t_unit()
+        return _types_t_unit()
     }
 
-    if _is_return(e.kind) {
-        let mut val_t = _t_unit()
+    if _types_is_return(e.kind) {
+        let mut val_t = _types_t_unit()
         if len(e.children) > 0 {
             val_t = _infer_expr(e.children[0], env, ctx, out)
         }
@@ -900,20 +900,20 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                 _emit_hx3004(ctx.fn_name, ctx.fn_return, val_t, e.span, out)
             }
         }
-        return _t_unit()
+        return _types_t_unit()
     }
 
-    if _is_let(e.kind) {
+    if _types_is_let(e.kind) {
         // Walk RHS so any inner type errors surface.
         let mut i = 0
         while i < len(e.children) {
             let _t = _infer_expr(e.children[i], env, ctx, out)
             i = i + 1
         }
-        return _t_unit()
+        return _types_t_unit()
     }
 
-    if _is_assign(e.kind) {
+    if _types_is_assign(e.kind) {
         if len(e.children) >= 2 {
             let lhs_t = _infer_expr(e.children[0], env, ctx, out)
             let rhs_t = _infer_expr(e.children[1], env, ctx, out)
@@ -921,7 +921,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                 _emit_hx3001(lhs_t, rhs_t, e.span, out)
             }
         }
-        return _t_unit()
+        return _types_t_unit()
     }
 
     if _is_match_expr(e.kind) {
@@ -936,7 +936,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         let _t = _infer_expr(e.children[i], env, ctx, out)
         i = i + 1
     }
-    return _empty_type()
+    return _types_empty_type()
 }
 
 // ── BinOp checker ────────────────────────────────────────────
@@ -950,7 +950,7 @@ fn _is_arith_op(op: string) -> bool {
     return false
 }
 
-fn _is_compare_op(op: string) -> bool {
+fn _types_is_compare_op(op: string) -> bool {
     if op == "==" { return true }
     if op == "!=" { return true }
     if op == "<"  { return true }
@@ -960,15 +960,15 @@ fn _is_compare_op(op: string) -> bool {
     return false
 }
 
-fn _check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
-    if len(e.children) < 2 { return _empty_type() }
+fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
+    if len(e.children) < 2 { return _types_empty_type() }
     let lt = _infer_expr(e.children[0], env, ctx, out)
     let rt = _infer_expr(e.children[1], env, ctx, out)
     let op = e.text
 
     if _is_arith_op(op) {
         // Both sides must be numeric AND of the same kind.
-        if _is_numeric(lt) && _is_numeric(rt) {
+        if _types_is_numeric(lt) && _types_is_numeric(rt) {
             if !_types_equal(lt, rt) {
                 _emit_hx3001(lt, rt, e.span, out)
             }
@@ -984,11 +984,11 @@ fn _check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         return lt
     }
 
-    if _is_compare_op(op) {
+    if _types_is_compare_op(op) {
         if !_types_equal(lt, rt) {
             _emit_hx3001(lt, rt, e.span, out)
         }
-        return _t_bool()
+        return _types_t_bool()
     }
 
     // Unknown operator — fall back to LHS type.
@@ -997,15 +997,15 @@ fn _check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 
 // ── Call checker ─────────────────────────────────────────────
 
-fn _check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
-    if len(e.children) == 0 { return _empty_type() }
+fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
+    if len(e.children) == 0 { return _types_empty_type() }
     let callee = e.children[0]
     let callee_t = _infer_expr(callee, env, ctx, out)
     let arg_count = len(e.children) - 1
 
     // Best-effort callee name for diagnostics.
     let mut name = "<callee>"
-    if _is_ident(callee.kind) && len(callee.text) > 0 { name = callee.text }
+    if _types_is_ident(callee.kind) && len(callee.text) > 0 { name = callee.text }
 
     // Walk args first so inner errors surface even when callee resolution fails.
     let mut arg_types: [Type] = []
@@ -1020,7 +1020,7 @@ fn _check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     if callee_t.kind != "fn" {
         // Callee not resolved as fn — skip arity/argument checks; return value
         // type unknown.
-        return _empty_type()
+        return _types_empty_type()
     }
 
     let expected_count = len(callee_t.args)
@@ -1039,16 +1039,16 @@ fn _check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     }
 
     if len(callee_t.ret) > 0 { return callee_t.ret[0] }
-    return _t_unit()
+    return _types_t_unit()
 }
 
 // ── Match checker ────────────────────────────────────────────
 
 fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // children: [scrut, pat0, body0, pat1, body1, ...]
-    if len(e.children) == 0 { return _empty_type() }
+    if len(e.children) == 0 { return _types_empty_type() }
     let _scrut_t = _infer_expr(e.children[0], env, ctx, out)
-    let mut first_t = _empty_type()
+    let mut first_t = _types_empty_type()
     let mut have_first = false
     let mut arm_idx = 0
     let mut i = 1
@@ -1074,23 +1074,23 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 
 // ── Pre-pass: collect Item types into TypeEnv ────────────────
 
-fn _signature_type(it: Item) -> Type {
+fn _types_signature_type(it: Item) -> Type {
     let mut params: [Type] = []
     let mut i = 0
     while i < len(it.params) {
-        params.push(_lower_type_ref(it.params[i].typ))
+        params.push(_types_lower_type_ref(it.params[i].typ))
         i = i + 1
     }
     let mut ret: [Type] = []
-    let r = _lower_type_ref(it.return_type)
+    let r = _types_lower_type_ref(it.return_type)
     if len(r.kind) > 0 {
         ret.push(r)
     } else {
-        ret.push(_t_unit())
+        ret.push(_types_t_unit())
     }
     return Type {
         kind: "fn",
-        def: _miss_def_id(),
+        def: _types_miss_def_id(),
         args: params,
         ret: ret,
         domain: "",
@@ -1098,11 +1098,11 @@ fn _signature_type(it: Item) -> Type {
     }
 }
 
-fn _struct_type(it: Item, def: DefId) -> Type {
+fn _types_struct_type(it: Item, def: DefId) -> Type {
     let mut fields: [Type] = []
     let mut i = 0
     while i < len(it.params) {
-        fields.push(_lower_type_ref(it.params[i].typ))
+        fields.push(_types_lower_type_ref(it.params[i].typ))
         i = i + 1
     }
     return Type {
@@ -1115,7 +1115,7 @@ fn _struct_type(it: Item, def: DefId) -> Type {
     }
 }
 
-fn _enum_type(def: DefId) -> Type {
+fn _types_enum_type(def: DefId) -> Type {
     return Type {
         kind: "enum",
         def: def,
@@ -1133,17 +1133,17 @@ fn _collect_item_types(module: Module) -> TypeEnv {
     while i < len(module.items) {
         let it = module.items[i]
         let def = DefId { module: module.file, index: idx }
-        if _is_fn_item(it.kind) {
-            env = _env_define(env, it.name, def, _signature_type(it))
+        if _types_is_fn_item(it.kind) {
+            env = _types_env_define(env, it.name, def, _types_signature_type(it))
             idx = idx + 1
-        } else if _is_struct_item(it.kind) {
-            env = _env_define(env, it.name, def, _struct_type(it, def))
+        } else if _types_is_struct_item(it.kind) {
+            env = _types_env_define(env, it.name, def, _types_struct_type(it, def))
             idx = idx + 1
-        } else if _is_enum_item(it.kind) {
-            env = _env_define(env, it.name, def, _enum_type(def))
+        } else if _types_is_enum_item(it.kind) {
+            env = _types_env_define(env, it.name, def, _types_enum_type(def))
             idx = idx + 1
-        } else if _is_let_item(it.kind) {
-            env = _env_define(env, it.name, def, _lower_type_ref(it.return_type))
+        } else if _types_is_let_item(it.kind) {
+            env = _types_env_define(env, it.name, def, _types_lower_type_ref(it.return_type))
             idx = idx + 1
         }
         i = i + 1
@@ -1153,13 +1153,13 @@ fn _collect_item_types(module: Module) -> TypeEnv {
 
 // ── Per-fn local env (params bind on top of module env) ──────
 
-fn _bind_params(env: TypeEnv, it: Item) -> TypeEnv {
+fn _types_bind_params(env: TypeEnv, it: Item) -> TypeEnv {
     let mut e = env
     let mut i = 0
     while i < len(it.params) {
         let p = it.params[i]
-        let pt = _lower_type_ref(p.typ)
-        e = _env_define(e, p.name, _miss_def_id(), pt)
+        let pt = _types_lower_type_ref(p.typ)
+        e = _types_env_define(e, p.name, _types_miss_def_id(), pt)
         i = i + 1
     }
     return e
@@ -1170,16 +1170,16 @@ fn _bind_params(env: TypeEnv, it: Item) -> TypeEnv {
 pub fn type_check(module: Module) -> array {
     let mut out = []
     let env = _collect_item_types(module)
-    let ctx0 = _new_ctx(module.file)
+    let ctx0 = _types_new_ctx(module.file)
 
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
-        if _is_fn_item(it.kind) {
-            let local = _bind_params(env, it)
-            let r = _lower_type_ref(it.return_type)
+        if _types_is_fn_item(it.kind) {
+            let local = _types_bind_params(env, it)
+            let r = _types_lower_type_ref(it.return_type)
             let mut ret = r
-            if len(ret.kind) == 0 { ret = _t_unit() }
+            if len(ret.kind) == 0 { ret = _types_t_unit() }
             let ctx = _ctx_with_fn(ctx0, it.name, ret)
             // Walk body — inner Returns validate against ctx.fn_return.
             let body_t = _infer_expr(it.body, local, ctx, out)
@@ -1192,9 +1192,9 @@ pub fn type_check(module: Module) -> array {
                     _emit_hx3004(it.name, r, body_t, it.body.span, out)
                 }
             }
-        } else if _is_let_item(it.kind) {
+        } else if _types_is_let_item(it.kind) {
             // RHS type vs declared type.
-            let declared = _lower_type_ref(it.return_type)
+            let declared = _types_lower_type_ref(it.return_type)
             let rhs_t = _infer_expr(it.body, env, ctx0, out)
             if len(declared.kind) > 0 && len(rhs_t.kind) > 0 {
                 if !_types_equal(declared, rhs_t) {

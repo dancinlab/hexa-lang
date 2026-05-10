@@ -35,14 +35,14 @@ import "../lex/tokens.hexa"
 
 // ── Sentinels / helpers ──────────────────────────────────────
 
-fn _miss_def_id() -> DefId {
+fn _hir_miss_def_id() -> DefId {
     return DefId { module: "", index: -1 }
 }
 
-fn _empty_type() -> Type {
+fn _hir_empty_type() -> Type {
     return Type {
         kind: "?",
-        def: _miss_def_id(),
+        def: _hir_miss_def_id(),
         args: [],
         ret: [],
         domain: "",
@@ -53,7 +53,7 @@ fn _empty_type() -> Type {
 fn _prim_type(kind: string, domain: string) -> Type {
     return Type {
         kind: kind,
-        def: _miss_def_id(),
+        def: _hir_miss_def_id(),
         args: [],
         ret: [],
         domain: domain,
@@ -61,12 +61,12 @@ fn _prim_type(kind: string, domain: string) -> Type {
     }
 }
 
-fn _t_i64()    -> Type { return _prim_type("i64",    "integer") }
-fn _t_f64()    -> Type { return _prim_type("f64",    "real") }
-fn _t_bool()   -> Type { return _prim_type("bool",   "") }
-fn _t_string() -> Type { return _prim_type("string", "") }
-fn _t_char()   -> Type { return _prim_type("char",   "") }
-fn _t_unit()   -> Type { return _prim_type("unit",   "") }
+fn _hir_t_i64()    -> Type { return _prim_type("i64",    "integer") }
+fn _hir_t_f64()    -> Type { return _prim_type("f64",    "real") }
+fn _hir_t_bool()   -> Type { return _prim_type("bool",   "") }
+fn _hir_t_string() -> Type { return _prim_type("string", "") }
+fn _hir_t_char()   -> Type { return _prim_type("char",   "") }
+fn _hir_t_unit()   -> Type { return _prim_type("unit",   "") }
 
 fn _empty_atlas_binding() -> AtlasBinding {
     return AtlasBinding {
@@ -79,19 +79,19 @@ fn _empty_atlas_binding() -> AtlasBinding {
 
 // ── TypeRef → Type lowering ─────────────────────────────────
 
-fn _lower_type_ref(tr: TypeRef) -> Type {
-    if len(tr.kind) == 0 { return _t_unit() }
+fn _hir_lower_type_ref(tr: TypeRef) -> Type {
+    if len(tr.kind) == 0 { return _hir_t_unit() }
     if tr.kind == "named" {
         let n = tr.name
-        if n == "i64" || n == "Int" || n == "int" { return _t_i64() }
-        if n == "f64" || n == "Float" || n == "float" || n == "Real" { return _t_f64() }
-        if n == "bool" || n == "Bool" { return _t_bool() }
-        if n == "string" || n == "String" { return _t_string() }
-        if n == "char" || n == "Char" { return _t_char() }
-        if n == "unit" || n == "Unit" || n == "()" || len(n) == 0 { return _t_unit() }
+        if n == "i64" || n == "Int" || n == "int" { return _hir_t_i64() }
+        if n == "f64" || n == "Float" || n == "float" || n == "Real" { return _hir_t_f64() }
+        if n == "bool" || n == "Bool" { return _hir_t_bool() }
+        if n == "string" || n == "String" { return _hir_t_string() }
+        if n == "char" || n == "Char" { return _hir_t_char() }
+        if n == "unit" || n == "Unit" || n == "()" || len(n) == 0 { return _hir_t_unit() }
         return Type {
             kind: "named:" + n,
-            def: _miss_def_id(),
+            def: _hir_miss_def_id(),
             args: [],
             ret: [],
             domain: "",
@@ -100,7 +100,7 @@ fn _lower_type_ref(tr: TypeRef) -> Type {
     }
     return Type {
         kind: tr.kind + ":" + tr.name,
-        def: _miss_def_id(),
+        def: _hir_miss_def_id(),
         args: [],
         ret: [],
         domain: "",
@@ -120,7 +120,7 @@ fn _item_kind_tag(k: ItemKind) -> string {
     }
 }
 
-fn _is_fn_item(k: ItemKind) -> bool {
+fn _hir_is_fn_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Fn -> true,
         ItemKind::Let -> false,
@@ -130,7 +130,7 @@ fn _is_fn_item(k: ItemKind) -> bool {
     }
 }
 
-fn _is_let_item(k: ItemKind) -> bool {
+fn _hir_is_let_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Let -> true,
         ItemKind::Fn -> false,
@@ -140,7 +140,7 @@ fn _is_let_item(k: ItemKind) -> bool {
     }
 }
 
-fn _is_struct_item(k: ItemKind) -> bool {
+fn _hir_is_struct_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Struct -> true,
         ItemKind::Fn -> false,
@@ -150,7 +150,7 @@ fn _is_struct_item(k: ItemKind) -> bool {
     }
 }
 
-fn _is_enum_item(k: ItemKind) -> bool {
+fn _hir_is_enum_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Enum -> true,
         ItemKind::Fn -> false,
@@ -202,7 +202,7 @@ fn _expr_kind_tag(k: ExprKind) -> string {
 
 // Probe helpers for inner dispatch (stage0 has no derived Eq for enums).
 
-fn _is_lit_int_kind(k: ExprKind) -> bool {
+fn _hir_is_lit_int_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::LiteralInt -> true,
         ExprKind::LiteralFloat -> false,
@@ -342,7 +342,7 @@ fn _is_lit_char_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_ident_kind(k: ExprKind) -> bool {
+fn _hir_is_ident_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Ident -> true,
         ExprKind::LiteralInt -> false,
@@ -426,7 +426,7 @@ fn _is_call_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_binop_kind(k: ExprKind) -> bool {
+fn _hir_is_binop_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::BinOp -> true,
         ExprKind::LiteralInt -> false,
@@ -454,7 +454,7 @@ fn _is_binop_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_unop_kind(k: ExprKind) -> bool {
+fn _hir_is_unop_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::UnOp -> true,
         ExprKind::LiteralInt -> false,
@@ -482,7 +482,7 @@ fn _is_unop_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_block_kind(k: ExprKind) -> bool {
+fn _hir_is_block_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Block -> true,
         ExprKind::LiteralInt -> false,
@@ -566,7 +566,7 @@ fn _is_while_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_return_kind(k: ExprKind) -> bool {
+fn _hir_is_return_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Return -> true,
         ExprKind::LiteralInt -> false,
@@ -622,7 +622,7 @@ fn _is_let_expr_kind(k: ExprKind) -> bool {
     }
 }
 
-fn _is_match_kind(k: ExprKind) -> bool {
+fn _hir_is_match_kind(k: ExprKind) -> bool {
     return match k {
         ExprKind::Match -> true,
         ExprKind::LiteralInt -> false,
@@ -749,13 +749,13 @@ fn _lookup_in_scope(sc: LowerScope, name: string) -> LowerBinding {
     }
     return LowerBinding {
         name: "",
-        def: _miss_def_id(),
-        typ: _empty_type()
+        def: _hir_miss_def_id(),
+        typ: _hir_empty_type()
     }
 }
 
 // `let` text decoder (mirrors bind.hexa _let_name) — strips "mut:" prefix.
-fn _let_name(t: string) -> string {
+fn _hir_let_name(t: string) -> string {
     let chars = t.chars()
     let n = len(chars)
     if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
@@ -804,10 +804,10 @@ fn _array_for_kind(atlas: AtlasIndex, kind: string) -> array {
 }
 
 fn _atlas_kind_type(rk: string) -> Type {
-    if len(rk) == 0 { return _empty_type() }
+    if len(rk) == 0 { return _hir_empty_type() }
     return Type {
         kind: "atlas_" + rk,
-        def: _miss_def_id(),
+        def: _hir_miss_def_id(),
         args: [],
         ret: [],
         domain: "",
@@ -817,7 +817,7 @@ fn _atlas_kind_type(rk: string) -> Type {
 
 // ── Numeric promotion helper for binops (same-kind passthrough) ──
 
-fn _is_numeric(t: Type) -> bool {
+fn _hir_is_numeric(t: Type) -> bool {
     if t.kind == "i64" { return true }
     if t.kind == "f64" { return true }
     if t.kind == "i32" { return true }
@@ -825,7 +825,7 @@ fn _is_numeric(t: Type) -> bool {
     return false
 }
 
-fn _is_compare_op(op: string) -> bool {
+fn _hir_is_compare_op(op: string) -> bool {
     if op == "==" { return true }
     if op == "!=" { return true }
     if op == "<"  { return true }
@@ -863,38 +863,38 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     let kind_tag = _expr_kind_tag(k)
 
     // ── literals ────────────────────────────────────────────
-    if _is_lit_int_kind(k) {
-        let h = _mk_hexpr(kind_tag, e.span, _t_i64(), e.text,
-                          [], _empty_atlas_binding(), _miss_def_id())
+    if _hir_is_lit_int_kind(k) {
+        let h = _mk_hexpr(kind_tag, e.span, _hir_t_i64(), e.text,
+                          [], _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: sc }
     }
     if _is_lit_float_kind(k) {
-        let h = _mk_hexpr(kind_tag, e.span, _t_f64(), e.text,
-                          [], _empty_atlas_binding(), _miss_def_id())
+        let h = _mk_hexpr(kind_tag, e.span, _hir_t_f64(), e.text,
+                          [], _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: sc }
     }
     if _is_lit_string_kind(k) {
-        let h = _mk_hexpr(kind_tag, e.span, _t_string(), e.text,
-                          [], _empty_atlas_binding(), _miss_def_id())
+        let h = _mk_hexpr(kind_tag, e.span, _hir_t_string(), e.text,
+                          [], _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: sc }
     }
     if _is_lit_bool_kind(k) {
-        let h = _mk_hexpr(kind_tag, e.span, _t_bool(), e.text,
-                          [], _empty_atlas_binding(), _miss_def_id())
+        let h = _mk_hexpr(kind_tag, e.span, _hir_t_bool(), e.text,
+                          [], _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: sc }
     }
     if _is_lit_char_kind(k) {
-        let h = _mk_hexpr(kind_tag, e.span, _t_char(), e.text,
-                          [], _empty_atlas_binding(), _miss_def_id())
+        let h = _mk_hexpr(kind_tag, e.span, _hir_t_char(), e.text,
+                          [], _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: sc }
     }
 
     // ── ident: resolve DefId via inline scope ───────────────
-    if _is_ident_kind(k) {
+    if _hir_is_ident_kind(k) {
         let b = _lookup_in_scope(sc, e.text)
         let def = b.def
         let mut t = b.typ
-        if len(t.kind) == 0 { t = _empty_type() }
+        if len(t.kind) == 0 { t = _hir_empty_type() }
         let h = _mk_hexpr(kind_tag, e.span, t, e.text,
                           [], _empty_atlas_binding(), def)
         return LowerResult { expr: h, sc: sc }
@@ -905,12 +905,12 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
         let ab = _resolve_atlas(e.atlas_ref, atlas)
         let t = _atlas_kind_type(e.atlas_ref.kind)
         let h = _mk_hexpr(kind_tag, e.span, t, e.text,
-                          [], ab, _miss_def_id())
+                          [], ab, _hir_miss_def_id())
         return LowerResult { expr: h, sc: sc }
     }
 
     // ── binop: type from operand types (numeric promotion same-kind) ──
-    if _is_binop_kind(k) {
+    if _hir_is_binop_kind(k) {
         let mut new_sc = sc
         let mut kids: [HExpr] = []
         let mut i = 0
@@ -920,13 +920,13 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             new_sc = r.sc
             i = i + 1
         }
-        let mut t = _empty_type()
-        if _is_compare_op(e.text) {
-            t = _t_bool()
+        let mut t = _hir_empty_type()
+        if _hir_is_compare_op(e.text) {
+            t = _hir_t_bool()
         } else if len(kids) >= 2 {
             let lt = kids[0].typ
             let rt = kids[1].typ
-            if _is_numeric(lt) && _is_numeric(rt) && lt.kind == rt.kind {
+            if _hir_is_numeric(lt) && _hir_is_numeric(rt) && lt.kind == rt.kind {
                 t = lt
             } else if len(lt.kind) > 0 && lt.kind != "?" {
                 t = lt
@@ -937,12 +937,12 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             t = kids[0].typ
         }
         let h = _mk_hexpr(kind_tag, e.span, t, e.text,
-                          kids, _empty_atlas_binding(), _miss_def_id())
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: new_sc }
     }
 
     // ── unop: type from operand ─────────────────────────────
-    if _is_unop_kind(k) {
+    if _hir_is_unop_kind(k) {
         let mut new_sc = sc
         let mut kids: [HExpr] = []
         let mut i = 0
@@ -952,10 +952,10 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             new_sc = r.sc
             i = i + 1
         }
-        let mut t = _empty_type()
+        let mut t = _hir_empty_type()
         if len(kids) > 0 { t = kids[0].typ }
         let h = _mk_hexpr(kind_tag, e.span, t, e.text,
-                          kids, _empty_atlas_binding(), _miss_def_id())
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: new_sc }
     }
 
@@ -970,8 +970,8 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             new_sc = r.sc
             i = i + 1
         }
-        let mut t = _empty_type()
-        let mut callee_def = _miss_def_id()
+        let mut t = _hir_empty_type()
+        let mut callee_def = _hir_miss_def_id()
         if len(kids) > 0 {
             let callee = kids[0]
             callee_def = callee.def
@@ -986,7 +986,7 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     }
 
     // ── block: type = last child's type, opens a scope frame ──
-    if _is_block_kind(k) {
+    if _hir_is_block_kind(k) {
         let mut new_sc = _push_frame(sc)
         let mut kids: [HExpr] = []
         let mut i = 0
@@ -996,13 +996,13 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             new_sc = r.sc
             i = i + 1
         }
-        let mut t = _t_unit()
+        let mut t = _hir_t_unit()
         if len(kids) > 0 {
             t = kids[len(kids) - 1].typ
         }
         new_sc = _pop_frame(new_sc)
         let h = _mk_hexpr(kind_tag, e.span, t, e.text,
-                          kids, _empty_atlas_binding(), _miss_def_id())
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: new_sc }
     }
 
@@ -1017,10 +1017,10 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             new_sc = r.sc
             i = i + 1
         }
-        let mut t = _t_unit()
+        let mut t = _hir_t_unit()
         if len(kids) >= 2 { t = kids[1].typ }
         let h = _mk_hexpr(kind_tag, e.span, t, e.text,
-                          kids, _empty_atlas_binding(), _miss_def_id())
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: new_sc }
     }
 
@@ -1035,13 +1035,13 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             new_sc = r.sc
             i = i + 1
         }
-        let h = _mk_hexpr(kind_tag, e.span, _t_unit(), e.text,
-                          kids, _empty_atlas_binding(), _miss_def_id())
+        let h = _mk_hexpr(kind_tag, e.span, _hir_t_unit(), e.text,
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: new_sc }
     }
 
     // ── return: unit (control-flow), child carries return value ──
-    if _is_return_kind(k) {
+    if _hir_is_return_kind(k) {
         let mut new_sc = sc
         let mut kids: [HExpr] = []
         let mut i = 0
@@ -1051,8 +1051,8 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             new_sc = r.sc
             i = i + 1
         }
-        let h = _mk_hexpr(kind_tag, e.span, _t_unit(), e.text,
-                          kids, _empty_atlas_binding(), _miss_def_id())
+        let h = _mk_hexpr(kind_tag, e.span, _hir_t_unit(), e.text,
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: new_sc }
     }
 
@@ -1067,19 +1067,19 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             new_sc = r.sc
             i = i + 1
         }
-        let nm = _let_name(e.text)
+        let nm = _hir_let_name(e.text)
         if len(nm) > 0 {
-            let mut rhs_t = _empty_type()
+            let mut rhs_t = _hir_empty_type()
             if len(kids) > 0 { rhs_t = kids[0].typ }
             new_sc = _define_in_scope(new_sc, nm, rhs_t)
         }
-        let h = _mk_hexpr(kind_tag, e.span, _t_unit(), e.text,
-                          kids, _empty_atlas_binding(), _miss_def_id())
+        let h = _mk_hexpr(kind_tag, e.span, _hir_t_unit(), e.text,
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: new_sc }
     }
 
     // ── match: type = first arm body type ───────────────────
-    if _is_match_kind(k) {
+    if _hir_is_match_kind(k) {
         let mut new_sc = sc
         let mut kids: [HExpr] = []
         // children: [scrut, pat0, body0, pat1, body1, ...]
@@ -1091,7 +1091,7 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             new_sc = r.sc
         }
         let mut idx = 1
-        let mut first_body_t = _empty_type()
+        let mut first_body_t = _hir_empty_type()
         let mut have_first = false
         while idx + 1 < len(e.children) {
             let pat = e.children[idx]
@@ -1099,8 +1099,8 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             // arm scope
             let mut arm_sc = _push_frame(new_sc)
             // bind ident-pattern names so body lookups can see them
-            if _is_ident_kind(pat.kind) && len(pat.text) > 0 && pat.text != "_" {
-                arm_sc = _define_in_scope(arm_sc, pat.text, _empty_type())
+            if _hir_is_ident_kind(pat.kind) && len(pat.text) > 0 && pat.text != "_" {
+                arm_sc = _define_in_scope(arm_sc, pat.text, _hir_empty_type())
             }
             let pr = _lower_expr(pat, atlas, arm_sc)
             arm_sc = pr.sc
@@ -1115,10 +1115,10 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             }
             idx = idx + 2
         }
-        let mut t = _t_unit()
+        let mut t = _hir_t_unit()
         if have_first { t = first_body_t }
         let h = _mk_hexpr(kind_tag, e.span, t, e.text,
-                          kids, _empty_atlas_binding(), _miss_def_id())
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: new_sc }
     }
 
@@ -1133,26 +1133,26 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
         new_sc = r.sc
         i = i + 1
     }
-    let h = _mk_hexpr(kind_tag, e.span, _empty_type(), e.text,
-                      kids, _empty_atlas_binding(), _miss_def_id())
+    let h = _mk_hexpr(kind_tag, e.span, _hir_empty_type(), e.text,
+                      kids, _empty_atlas_binding(), _hir_miss_def_id())
     return LowerResult { expr: h, sc: new_sc }
 }
 
 // ── Module-level pre-pass: mint DefIds for items, build top env ─
 
-fn _signature_type(it: Item) -> Type {
+fn _hir_signature_type(it: Item) -> Type {
     let mut params: [Type] = []
     let mut i = 0
     while i < len(it.params) {
-        params.push(_lower_type_ref(it.params[i].typ))
+        params.push(_hir_lower_type_ref(it.params[i].typ))
         i = i + 1
     }
     let mut ret: [Type] = []
-    let r = _lower_type_ref(it.return_type)
+    let r = _hir_lower_type_ref(it.return_type)
     ret.push(r)
     return Type {
         kind: "fn",
-        def: _miss_def_id(),
+        def: _hir_miss_def_id(),
         args: params,
         ret: ret,
         domain: "",
@@ -1160,11 +1160,11 @@ fn _signature_type(it: Item) -> Type {
     }
 }
 
-fn _struct_type(it: Item, def: DefId) -> Type {
+fn _hir_struct_type(it: Item, def: DefId) -> Type {
     let mut fields: [Type] = []
     let mut i = 0
     while i < len(it.params) {
-        fields.push(_lower_type_ref(it.params[i].typ))
+        fields.push(_hir_lower_type_ref(it.params[i].typ))
         i = i + 1
     }
     return Type {
@@ -1177,7 +1177,7 @@ fn _struct_type(it: Item, def: DefId) -> Type {
     }
 }
 
-fn _enum_type(def: DefId) -> Type {
+fn _hir_enum_type(def: DefId) -> Type {
     return Type {
         kind: "enum",
         def: def,
@@ -1194,11 +1194,11 @@ fn _empty_hbody(sp: Span) -> HExpr {
     return HExpr {
         kind: "block",
         span: sp,
-        typ: _t_unit(),
+        typ: _hir_t_unit(),
         text: "",
         children: [],
         atlas: _empty_atlas_binding(),
-        def: _miss_def_id()
+        def: _hir_miss_def_id()
     }
 }
 
@@ -1208,21 +1208,21 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
                module_scope: LowerScope) -> HItem {
     let kind_tag = _item_kind_tag(it.kind)
 
-    if _is_fn_item(it.kind) {
+    if _hir_is_fn_item(it.kind) {
         // Build a function-local scope: module env + params.
         let mut fn_sc = _push_frame(module_scope)
         let mut sig_params: [Type] = []
         let mut p = 0
         while p < len(it.params) {
             let par = it.params[p]
-            let pt = _lower_type_ref(par.typ)
+            let pt = _hir_lower_type_ref(par.typ)
             sig_params.push(pt)
             if len(par.name) > 0 {
                 fn_sc = _define_in_scope(fn_sc, par.name, pt)
             }
             p = p + 1
         }
-        let sig_ret = _lower_type_ref(it.return_type)
+        let sig_ret = _hir_lower_type_ref(it.return_type)
         let r = _lower_expr(it.body, atlas, fn_sc)
         return HItem {
             kind: kind_tag,
@@ -1240,8 +1240,8 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
         }
     }
 
-    if _is_let_item(it.kind) {
-        let declared = _lower_type_ref(it.return_type)
+    if _hir_is_let_item(it.kind) {
+        let declared = _hir_lower_type_ref(it.return_type)
         let r = _lower_expr(it.body, atlas, module_scope)
         let mut sig_ret = declared
         if len(declared.kind) == 0 || declared.kind == "?" || declared.kind == "unit" {
@@ -1266,11 +1266,11 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
         }
     }
 
-    if _is_struct_item(it.kind) {
+    if _hir_is_struct_item(it.kind) {
         let mut fields: [Type] = []
         let mut i = 0
         while i < len(it.params) {
-            fields.push(_lower_type_ref(it.params[i].typ))
+            fields.push(_hir_lower_type_ref(it.params[i].typ))
             i = i + 1
         }
         return HItem {
@@ -1280,7 +1280,7 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
             span: it.span,
             annotations: it.annotations,
             sig_params: fields,
-            sig_return: _struct_type(it, def),
+            sig_return: _hir_struct_type(it, def),
             body: _empty_hbody(it.span),
             is_pub: it.is_pub,
             discoverable: false,
@@ -1289,7 +1289,7 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
         }
     }
 
-    if _is_enum_item(it.kind) {
+    if _hir_is_enum_item(it.kind) {
         return HItem {
             kind: kind_tag,
             def: def,
@@ -1297,7 +1297,7 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
             span: it.span,
             annotations: it.annotations,
             sig_params: [],
-            sig_return: _enum_type(def),
+            sig_return: _hir_enum_type(def),
             body: _empty_hbody(it.span),
             is_pub: it.is_pub,
             discoverable: false,
@@ -1314,7 +1314,7 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
         span: it.span,
         annotations: it.annotations,
         sig_params: [],
-        sig_return: _t_unit(),
+        sig_return: _hir_t_unit(),
         body: _empty_hbody(it.span),
         is_pub: it.is_pub,
         discoverable: false,
@@ -1340,14 +1340,14 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
         item_defs.push(def)
         if _is_import_item(it.kind) {
             // Imports are not bound as defs in scope.
-        } else if _is_fn_item(it.kind) {
-            module_sc = _define_with_def(module_sc, it.name, def, _signature_type(it))
-        } else if _is_struct_item(it.kind) {
-            module_sc = _define_with_def(module_sc, it.name, def, _struct_type(it, def))
-        } else if _is_enum_item(it.kind) {
-            module_sc = _define_with_def(module_sc, it.name, def, _enum_type(def))
-        } else if _is_let_item(it.kind) {
-            module_sc = _define_with_def(module_sc, it.name, def, _lower_type_ref(it.return_type))
+        } else if _hir_is_fn_item(it.kind) {
+            module_sc = _define_with_def(module_sc, it.name, def, _hir_signature_type(it))
+        } else if _hir_is_struct_item(it.kind) {
+            module_sc = _define_with_def(module_sc, it.name, def, _hir_struct_type(it, def))
+        } else if _hir_is_enum_item(it.kind) {
+            module_sc = _define_with_def(module_sc, it.name, def, _hir_enum_type(def))
+        } else if _hir_is_let_item(it.kind) {
+            module_sc = _define_with_def(module_sc, it.name, def, _hir_lower_type_ref(it.return_type))
         }
         idx = idx + 1
         i = i + 1

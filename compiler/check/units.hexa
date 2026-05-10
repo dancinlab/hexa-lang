@@ -70,7 +70,7 @@ fn _is_digit_ch(c: string) -> bool {
     return false
 }
 
-fn _digit_val(c: string) -> i64 {
+fn _units_digit_val(c: string) -> i64 {
     if c == "0" { return 0 }
     if c == "1" { return 1 }
     if c == "2" { return 2 }
@@ -153,7 +153,7 @@ fn _parse_factor(tok: string) -> UnitFactor {
     while j < n {
         let c = t.substring(j, j + 1)
         if !_is_digit_ch(c) { break }
-        acc = acc * 10 + _digit_val(c)
+        acc = acc * 10 + _units_digit_val(c)
         j = j + 1
     }
     if acc == 0 { acc = 1 }
@@ -187,7 +187,7 @@ fn _ingest_product(spec: string, num: [string], den: [string], invert: bool) -> 
 }
 
 // In-place insertion sort for [string].
-fn _sort_strings(xs: [string]) -> [string] {
+fn _units_sort_strings(xs: [string]) -> [string] {
     let mut a = xs
     let n = len(a)
     let mut i = 1
@@ -239,11 +239,11 @@ fn _cancel(u: Unit) -> Unit {
     return Unit { num: new_num, den: den }
 }
 
-fn _normalize(u: Unit) -> Unit {
+fn _units_normalize(u: Unit) -> Unit {
     let cancelled = _cancel(u)
     return Unit {
-        num: _sort_strings(cancelled.num),
-        den: _sort_strings(cancelled.den)
+        num: _units_sort_strings(cancelled.num),
+        den: _units_sort_strings(cancelled.den)
     }
 }
 
@@ -285,14 +285,14 @@ pub fn parse_unit(spec: string) -> Unit {
     let mut dens: [string] = []
     let u1 = _ingest_product(num_str, nums, dens, false)
     let u2 = _ingest_product(den_str, u1.num, u1.den, true)
-    return _normalize(u2)
+    return _units_normalize(u2)
 }
 
 pub fn unit_eq(a: Unit, b: Unit) -> bool {
-    let an = _sort_strings(a.num)
-    let ad = _sort_strings(a.den)
-    let bn = _sort_strings(b.num)
-    let bd = _sort_strings(b.den)
+    let an = _units_sort_strings(a.num)
+    let ad = _units_sort_strings(a.den)
+    let bn = _units_sort_strings(b.num)
+    let bd = _units_sort_strings(b.den)
     if len(an) != len(bn) { return false }
     if len(ad) != len(bd) { return false }
     let mut i = 0
@@ -319,7 +319,7 @@ pub fn unit_mul(a: Unit, b: Unit) -> Unit {
     while i < len(a.den) { den.push(a.den[i]); i = i + 1 }
     i = 0
     while i < len(b.den) { den.push(b.den[i]); i = i + 1 }
-    return _normalize(Unit { num: num, den: den })
+    return _units_normalize(Unit { num: num, den: den })
 }
 
 pub fn unit_div(a: Unit, b: Unit) -> Unit {
@@ -333,7 +333,7 @@ pub fn unit_div(a: Unit, b: Unit) -> Unit {
     while i < len(a.den) { den.push(a.den[i]); i = i + 1 }
     i = 0
     while i < len(b.num) { den.push(b.num[i]); i = i + 1 }
-    return _normalize(Unit { num: num, den: den })
+    return _units_normalize(Unit { num: num, den: den })
 }
 
 // Pretty-print canonical unit for diagnostics.
@@ -364,7 +364,7 @@ pub fn unit_to_string(u: Unit) -> string {
 
 // ── ExprKind probes (mirror types.hexa pattern) ──────────────
 
-fn _is_lit_int(k: ExprKind) -> bool {
+fn _units_is_lit_int(k: ExprKind) -> bool {
     return match k {
         ExprKind::LiteralInt -> true,
         ExprKind::LiteralFloat -> false,
@@ -392,7 +392,7 @@ fn _is_lit_int(k: ExprKind) -> bool {
     }
 }
 
-fn _is_lit_float(k: ExprKind) -> bool {
+fn _units_is_lit_float(k: ExprKind) -> bool {
     return match k {
         ExprKind::LiteralFloat -> true,
         ExprKind::LiteralInt -> false,
@@ -420,7 +420,7 @@ fn _is_lit_float(k: ExprKind) -> bool {
     }
 }
 
-fn _is_lit_string(k: ExprKind) -> bool {
+fn _units_is_lit_string(k: ExprKind) -> bool {
     return match k {
         ExprKind::LiteralString -> true,
         ExprKind::LiteralInt -> false,
@@ -448,7 +448,7 @@ fn _is_lit_string(k: ExprKind) -> bool {
     }
 }
 
-fn _is_ident(k: ExprKind) -> bool {
+fn _units_is_ident(k: ExprKind) -> bool {
     return match k {
         ExprKind::Ident -> true,
         ExprKind::LiteralInt -> false,
@@ -476,7 +476,7 @@ fn _is_ident(k: ExprKind) -> bool {
     }
 }
 
-fn _is_call(k: ExprKind) -> bool {
+fn _units_is_call(k: ExprKind) -> bool {
     return match k {
         ExprKind::Call -> true,
         ExprKind::LiteralInt -> false,
@@ -504,7 +504,7 @@ fn _is_call(k: ExprKind) -> bool {
     }
 }
 
-fn _is_binop(k: ExprKind) -> bool {
+fn _units_is_binop(k: ExprKind) -> bool {
     return match k {
         ExprKind::BinOp -> true,
         ExprKind::LiteralInt -> false,
@@ -532,7 +532,7 @@ fn _is_binop(k: ExprKind) -> bool {
     }
 }
 
-fn _is_unop(k: ExprKind) -> bool {
+fn _units_is_unop(k: ExprKind) -> bool {
     return match k {
         ExprKind::UnOp -> true,
         ExprKind::LiteralInt -> false,
@@ -560,7 +560,7 @@ fn _is_unop(k: ExprKind) -> bool {
     }
 }
 
-fn _is_block(k: ExprKind) -> bool {
+fn _units_is_block(k: ExprKind) -> bool {
     return match k {
         ExprKind::Block -> true,
         ExprKind::LiteralInt -> false,
@@ -588,7 +588,7 @@ fn _is_block(k: ExprKind) -> bool {
     }
 }
 
-fn _is_if(k: ExprKind) -> bool {
+fn _units_is_if(k: ExprKind) -> bool {
     return match k {
         ExprKind::If -> true,
         ExprKind::LiteralInt -> false,
@@ -616,7 +616,7 @@ fn _is_if(k: ExprKind) -> bool {
     }
 }
 
-fn _is_while(k: ExprKind) -> bool {
+fn _units_is_while(k: ExprKind) -> bool {
     return match k {
         ExprKind::While -> true,
         ExprKind::LiteralInt -> false,
@@ -644,7 +644,7 @@ fn _is_while(k: ExprKind) -> bool {
     }
 }
 
-fn _is_return(k: ExprKind) -> bool {
+fn _units_is_return(k: ExprKind) -> bool {
     return match k {
         ExprKind::Return -> true,
         ExprKind::LiteralInt -> false,
@@ -672,7 +672,7 @@ fn _is_return(k: ExprKind) -> bool {
     }
 }
 
-fn _is_let(k: ExprKind) -> bool {
+fn _units_is_let(k: ExprKind) -> bool {
     return match k {
         ExprKind::Let -> true,
         ExprKind::LiteralInt -> false,
@@ -700,7 +700,7 @@ fn _is_let(k: ExprKind) -> bool {
     }
 }
 
-fn _is_fn_item(k: ItemKind) -> bool {
+fn _units_is_fn_item(k: ItemKind) -> bool {
     return match k {
         ItemKind::Fn -> true,
         ItemKind::Let -> false,
@@ -744,7 +744,7 @@ fn _extract_units_ann(it: Item) -> UnitsAnn {
             let mut j = 0
             while j < len(a.args) {
                 let arg = a.args[j]
-                if _is_lit_string(arg.kind) {
+                if _units_is_lit_string(arg.kind) {
                     strs.push(arg.text)
                 }
                 j = j + 1
@@ -786,13 +786,13 @@ fn _env_empty() -> UnitEnv {
     return UnitEnv { entries: [] }
 }
 
-fn _env_define(env: UnitEnv, name: string, u: Unit) -> UnitEnv {
+fn _units_env_define(env: UnitEnv, name: string, u: Unit) -> UnitEnv {
     let mut e = env.entries
     e.push(UnitBinding { name: name, u: u })
     return UnitEnv { entries: e }
 }
 
-fn _env_lookup(env: UnitEnv, name: string) -> Unit {
+fn _units_env_lookup(env: UnitEnv, name: string) -> Unit {
     let mut i = 0
     while i < len(env.entries) {
         if env.entries[i].name == name { return env.entries[i].u }
@@ -818,7 +818,7 @@ fn _collect_sigs(module: Module) -> SigTable {
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
-        if _is_fn_item(it.kind) {
+        if _units_is_fn_item(it.kind) {
             let ann = _extract_units_ann(it)
             sigs.push(FnSig {
                 name: it.name,
@@ -843,7 +843,7 @@ fn _lookup_sig(table: SigTable, name: string) -> FnSig {
 
 // ── Diagnostic emit helpers ──────────────────────────────────
 
-fn _empty_fixit() -> FixIt {
+fn _units_empty_fixit() -> FixIt {
     return FixIt {
         kind: FixItKind::None,
         span: Span { file: "", line: 0, col: 0, len: 0 },
@@ -900,28 +900,28 @@ fn _incompatible(a: Unit, b: Unit) -> bool {
 // ── Expression unit inference ────────────────────────────────
 
 fn _infer(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
-    if _is_lit_int(e.kind)    { return unit_empty() }
-    if _is_lit_float(e.kind)  { return unit_empty() }
-    if _is_lit_string(e.kind) { return unit_empty() }
+    if _units_is_lit_int(e.kind)    { return unit_empty() }
+    if _units_is_lit_float(e.kind)  { return unit_empty() }
+    if _units_is_lit_string(e.kind) { return unit_empty() }
 
-    if _is_ident(e.kind) {
-        return _env_lookup(env, e.text)
+    if _units_is_ident(e.kind) {
+        return _units_env_lookup(env, e.text)
     }
 
-    if _is_unop(e.kind) {
+    if _units_is_unop(e.kind) {
         if len(e.children) == 0 { return unit_empty() }
         return _infer(e.children[0], env, ctx, out)
     }
 
-    if _is_binop(e.kind) {
-        return _check_binop(e, env, ctx, out)
+    if _units_is_binop(e.kind) {
+        return _units_check_binop(e, env, ctx, out)
     }
 
-    if _is_call(e.kind) {
-        return _check_call(e, env, ctx, out)
+    if _units_is_call(e.kind) {
+        return _units_check_call(e, env, ctx, out)
     }
 
-    if _is_block(e.kind) {
+    if _units_is_block(e.kind) {
         let mut last = unit_empty()
         let mut i = 0
         while i < len(e.children) {
@@ -931,7 +931,7 @@ fn _infer(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
         return last
     }
 
-    if _is_if(e.kind) {
+    if _units_is_if(e.kind) {
         let mut i = 0
         while i < len(e.children) {
             let _u = _infer(e.children[i], env, ctx, out)
@@ -944,7 +944,7 @@ fn _infer(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
         return unit_empty()
     }
 
-    if _is_while(e.kind) {
+    if _units_is_while(e.kind) {
         let mut i = 0
         while i < len(e.children) {
             let _u = _infer(e.children[i], env, ctx, out)
@@ -953,7 +953,7 @@ fn _infer(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
         return unit_empty()
     }
 
-    if _is_return(e.kind) {
+    if _units_is_return(e.kind) {
         let mut val_u = unit_empty()
         if len(e.children) > 0 {
             val_u = _infer(e.children[0], env, ctx, out)
@@ -966,7 +966,7 @@ fn _infer(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
         return unit_empty()
     }
 
-    if _is_let(e.kind) {
+    if _units_is_let(e.kind) {
         // Walk children; let bindings don't propagate units in v1.
         let mut i = 0
         while i < len(e.children) {
@@ -1004,7 +1004,7 @@ fn _is_compare(op: string) -> bool {
     return false
 }
 
-fn _check_binop(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
+fn _units_check_binop(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
     if len(e.children) < 2 { return unit_empty() }
     let lu = _infer(e.children[0], env, ctx, out)
     let ru = _infer(e.children[1], env, ctx, out)
@@ -1038,7 +1038,7 @@ fn _check_binop(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
     return lu
 }
 
-fn _check_call(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
+fn _units_check_call(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
     if len(e.children) == 0 { return unit_empty() }
     let callee = e.children[0]
     let arg_count = len(e.children) - 1
@@ -1052,7 +1052,7 @@ fn _check_call(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
         i = i + 1
     }
 
-    if !_is_ident(callee.kind) {
+    if !_units_is_ident(callee.kind) {
         let _cu = _infer(callee, env, ctx, out)
         return unit_empty()
     }
@@ -1078,7 +1078,7 @@ fn _check_call(e: Expr, env: UnitEnv, ctx: UnitCtx, out: array) -> Unit {
 
 // ── Per-fn binding ──────────────────────────────────────────
 
-fn _bind_params(env: UnitEnv, it: Item, ann: UnitsAnn) -> UnitEnv {
+fn _units_bind_params(env: UnitEnv, it: Item, ann: UnitsAnn) -> UnitEnv {
     let mut e = env
     let mut i = 0
     while i < len(it.params) {
@@ -1087,7 +1087,7 @@ fn _bind_params(env: UnitEnv, it: Item, ann: UnitsAnn) -> UnitEnv {
         if i < len(ann.params) {
             u = ann.params[i]
         }
-        e = _env_define(e, p.name, u)
+        e = _units_env_define(e, p.name, u)
         i = i + 1
     }
     return e
@@ -1101,11 +1101,11 @@ pub fn unit_check(module: Module) -> array {
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
-        if _is_fn_item(it.kind) {
+        if _units_is_fn_item(it.kind) {
             let ann = _extract_units_ann(it)
             // Skip fns without @units annotation entirely (lenient v1 gate).
             if ann.has {
-                let env = _bind_params(_env_empty(), it, ann)
+                let env = _units_bind_params(_env_empty(), it, ann)
                 let ctx = UnitCtx {
                     fn_name: it.name,
                     fn_ret: ann.ret,
