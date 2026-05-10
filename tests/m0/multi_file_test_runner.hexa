@@ -1,0 +1,272 @@
+// HEXA Native Compiler — Stage1 Punch List Gap 2 multi-file regression
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Once the parser splices imported items into the top-level (world) Module
+// (Gap 1, commit 0ea8bc95), the type checker's pre-pass must
+//   1. dedupe across files,
+//   2. respect `pub` visibility (pubs are global; non-pubs are file-local).
+//
+// This runner hand-builds three world-modules that mirror what the spliced
+// shape will look like, then drives `type_check` and asserts the diagnostic
+// contract:
+//
+//   case_a — file1 defines `pub fn greet() -> i32 { 0 }`,
+//            file2 imports file1 and calls greet().
+//            EXPECT: 0 diagnostics (pub names are global).
+//
+//   case_b — same as case_a but greet is non-pub.
+//            EXPECT: 1× HX2002 (private symbol not accessible).
+//
+//   case_c — file1 and file2 both declare `pub fn ambig() -> i32 { 0 }`,
+//            file3 imports both.
+//            EXPECT: 1× HX3010 (duplicate pub symbol across files).
+//
+// Run:
+//   hexa run tests/m0/multi_file_test_runner.hexa
+
+import "../../compiler/parse/ast.hexa"
+import "../../compiler/diag/catalog.hexa"
+import "../../compiler/diag/builder.hexa"
+import "../../compiler/lex/tokens.hexa"
+import "../../compiler/ir/hir.hexa"
+import "../../compiler/check/types.hexa"
+
+// ── AST construction helpers ─────────────────────────────────
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_atlas_ref() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _span("", 0, 0, 0) }
+}
+
+fn _empty_type_ref() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: _span("", 0, 0, 0) }
+}
+
+fn _named_type_ref(name: string) -> TypeRef {
+    return TypeRef { kind: "named", name: name, args: [], span: _span("", 0, 0, 0) }
+}
+
+fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _int_expr(text: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralInt,
+        span: _span(file, line, col, len(text)),
+        text: text,
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _call_expr(callee: Expr, args: [Expr], file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(callee)
+    let mut i = 0
+    while i < len(args) {
+        kids.push(args[i])
+        i = i + 1
+    }
+    return Expr {
+        kind: ExprKind::Call,
+        span: _span(file, line, col, 1),
+        text: "",
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _span(file, line, col, 1),
+        text: "",
+        children: children,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// fn item with explicit owning-file attribution (item.span.file). This
+// emulates what the parser splice will do once Gap 1 is fully wired:
+// each Item carries the file it was lexed from, even when the world
+// Module's `module.file` is the entry-point.
+fn _fn_item_in(name: string, ret: TypeRef, body: Expr,
+    is_pub: bool, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: [],
+        params: [],
+        return_type: ret,
+        body: body,
+        is_pub: is_pub
+    }
+}
+
+// Build a `pub fn greet() -> i32 { 0 }` (or non-pub when is_pub=false).
+fn _build_greet_item(file: string, is_pub: bool) -> Item {
+    let lit = _int_expr("0", file, 1, 28)
+    let mut block_kids = []
+    block_kids.push(lit)
+    let body = _block(block_kids, file, 1, 26)
+    return _fn_item_in("greet", _named_type_ref("i32"), body, is_pub, file, 1)
+}
+
+// Build a `pub fn ambig() -> i32 { 0 }` in the given file.
+fn _build_ambig_item(file: string, is_pub: bool) -> Item {
+    let lit = _int_expr("0", file, 1, 28)
+    let mut block_kids = []
+    block_kids.push(lit)
+    let body = _block(block_kids, file, 1, 26)
+    return _fn_item_in("ambig", _named_type_ref("i32"), body, is_pub, file, 1)
+}
+
+// Build a `fn main() -> i32 { greet() }` rooted in `caller_file`.
+fn _build_caller_main(caller_file: string, callee_name: string) -> Item {
+    let callee = _ident_expr(callee_name, caller_file, 2, 5)
+    let call = _call_expr(callee, [], caller_file, 2, 9)
+    let mut kids = []
+    kids.push(call)
+    let body = _block(kids, caller_file, 2, 1)
+    return _fn_item_in("main", _named_type_ref("i32"), body, false, caller_file, 2)
+}
+
+// ── Cases ────────────────────────────────────────────────────
+
+// case_a — pub greet, cross-file call should PASS (0 diags).
+fn _build_case_a() -> Module {
+    let f1 = "file1.hexa"
+    let f2 = "file2.hexa"
+    let mut items = []
+    items.push(_build_greet_item(f1, true))
+    items.push(_build_caller_main(f2, "greet"))
+    // World module's file is the entry point — file2 — but items carry
+    // their own owning-file attribution via Item.span.file.
+    return Module { file: f2, items: items, imports: [] }
+}
+
+// case_b — non-pub greet, cross-file call should emit HX2002.
+fn _build_case_b() -> Module {
+    let f1 = "file1.hexa"
+    let f2 = "file2.hexa"
+    let mut items = []
+    items.push(_build_greet_item(f1, false))
+    items.push(_build_caller_main(f2, "greet"))
+    return Module { file: f2, items: items, imports: [] }
+}
+
+// case_c — two pub `ambig` from different files, third file imports both.
+fn _build_case_c() -> Module {
+    let f1 = "file1.hexa"
+    let f2 = "file2.hexa"
+    let f3 = "file3.hexa"
+    let mut items = []
+    items.push(_build_ambig_item(f1, true))
+    items.push(_build_ambig_item(f2, true))
+    items.push(_build_caller_main(f3, "ambig"))
+    return Module { file: f3, items: items, imports: [] }
+}
+
+// ── Driver ───────────────────────────────────────────────────
+
+fn _sev_str(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "error",
+        Severity::Warning -> "warning",
+        Severity::Note -> "note"
+    }
+}
+
+fn _print_diag(idx: i64, d: Diagnostic) {
+    let sp = d.span
+    let loc = sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+    println("    [" + to_string(idx) + "] " + d.code + " (" + _sev_str(d.severity) + " " + d.stage + ") @ " + loc)
+    println("          msg:     " + d.message)
+}
+
+fn _run_case(label: string, m: Module) -> array {
+    println("")
+    println("── " + label + " ──")
+    println("  module: " + m.file + " (items=" + to_string(len(m.items)) + ")")
+    let diags = type_check(m)
+    println("  diagnostics: " + to_string(len(diags)))
+    let mut i = 0
+    while i < len(diags) {
+        _print_diag(i, diags[i])
+        i = i + 1
+    }
+    return diags
+}
+
+fn _count_code(diags: array, code: string) -> i64 {
+    let mut i = 0
+    let mut n = 0
+    while i < len(diags) {
+        let d = diags[i]
+        if d.code == code { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Multi-File Visibility Test (Gap 2)")
+    println("══════════════════════════════════════════════")
+
+    let mut ok = true
+
+    // case_a — pub greet, cross-file call PASS.
+    let diags_a = _run_case("(case_a) PASS — pub greet visible across files", _build_case_a())
+    if len(diags_a) != 0 {
+        println("  FAIL: case_a expected 0 diagnostics, got " + to_string(len(diags_a)))
+        ok = false
+    } else {
+        println("  ok: 0 diagnostics")
+    }
+
+    // case_b — private greet, cross-file → HX2002.
+    let diags_b = _run_case("(case_b) FAIL HX2002 — non-pub greet not accessible", _build_case_b())
+    let nb = _count_code(diags_b, "HX2002")
+    if nb < 1 {
+        println("  FAIL: case_b expected ≥1 HX2002, got " + to_string(nb)
+            + " (total=" + to_string(len(diags_b)) + ")")
+        ok = false
+    } else {
+        println("  ok: HX2002 emitted (" + to_string(nb) + ")")
+    }
+
+    // case_c — two pub `ambig` → HX3010.
+    let diags_c = _run_case("(case_c) FAIL HX3010 — duplicate pub symbol across files", _build_case_c())
+    let nc = _count_code(diags_c, "HX3010")
+    if nc < 1 {
+        println("  FAIL: case_c expected ≥1 HX3010, got " + to_string(nc)
+            + " (total=" + to_string(len(diags_c)) + ")")
+        ok = false
+    } else {
+        println("  ok: HX3010 emitted (" + to_string(nc) + ")")
+    }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: multi-file visibility contract satisfied.")
+    } else {
+        println("FAIL: multi-file visibility contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}

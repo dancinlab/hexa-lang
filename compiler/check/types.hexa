@@ -41,7 +41,10 @@ import "../lex/tokens.hexa"
 pub struct TypeBinding {
     def: DefId,
     name: string,        // mirror of name for did-you-mean / lookup convenience
-    typ: Type
+    typ: Type,
+    is_pub: bool,        // Stage1 punch list Gap 2 — pub items live in the
+                         //   global namespace; non-pub items are file-private.
+    module_file: string  // owning module file path (for private visibility)
 }
 
 pub struct TypeEnv {
@@ -695,12 +698,102 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
 
 // ── TypeEnv ops ──────────────────────────────────────────────
 
-fn _types_env_define(env: TypeEnv, name: string, def: DefId, t: Type) -> TypeEnv {
+// Define a binding with explicit visibility + owning-module attribution.
+// Stage1 punch list Gap 2 — pub items live in the global namespace; non-pub
+// items are file-private and visible only when the caller's module.file
+// matches `module_file`. Local bindings (fn params, lets) are recorded as
+// pub=false / module_file=current to keep them invisible across files.
+fn _types_env_define_attr(env: TypeEnv, name: string, def: DefId, t: Type,
+    is_pub: bool, module_file: string) -> TypeEnv {
     let mut entries = env.entries
-    entries.push(TypeBinding { def: def, name: name, typ: t })
+    entries.push(TypeBinding {
+        def: def,
+        name: name,
+        typ: t,
+        is_pub: is_pub,
+        module_file: module_file
+    })
     return TypeEnv { entries: entries }
 }
 
+// Backwards-compatible shim. Pre-Gap-2 callers expected a single-namespace
+// define with no visibility/attribution — we record those as pub=false /
+// module_file="" so cross-file lookups never see them. The pre-pass uses
+// `_types_env_define_attr` directly with the real values.
+fn _types_env_define(env: TypeEnv, name: string, def: DefId, t: Type) -> TypeEnv {
+    return _types_env_define_attr(env, name, def, t, false, "")
+}
+
+// Status of a name lookup. Stage1 Gap 2:
+//   found=true                          → typ is the visible binding
+//   found=false, private_other_module=true
+//                                       → name exists privately in another
+//                                         module — caller emits HX2002
+//   found=false, private_other_module=false
+//                                       → name simply does not exist
+pub struct LookupResult {
+    found: bool,
+    typ: Type,
+    private_other_module: bool,
+    other_module_file: string
+}
+
+fn _types_lookup_def(env: TypeEnv, name: string, caller_file: string) -> LookupResult {
+    // Pass 1: pub global hit takes priority (pubs are global names).
+    let mut i = 0
+    while i < len(env.entries) {
+        let b = env.entries[i]
+        if b.name == name && b.is_pub {
+            return LookupResult {
+                found: true,
+                typ: b.typ,
+                private_other_module: false,
+                other_module_file: ""
+            }
+        }
+        i = i + 1
+    }
+    // Pass 2: private hit in caller's own module.
+    let mut j = 0
+    while j < len(env.entries) {
+        let b = env.entries[j]
+        if b.name == name && !b.is_pub && b.module_file == caller_file {
+            return LookupResult {
+                found: true,
+                typ: b.typ,
+                private_other_module: false,
+                other_module_file: ""
+            }
+        }
+        j = j + 1
+    }
+    // Pass 3: name exists privately, but in a foreign module — surface
+    // the privacy violation (caller emits HX2002).
+    let mut k = 0
+    while k < len(env.entries) {
+        let b = env.entries[k]
+        if b.name == name && !b.is_pub {
+            return LookupResult {
+                found: false,
+                typ: _types_empty_type(),
+                private_other_module: true,
+                other_module_file: b.module_file
+            }
+        }
+        k = k + 1
+    }
+    return LookupResult {
+        found: false,
+        typ: _types_empty_type(),
+        private_other_module: false,
+        other_module_file: ""
+    }
+}
+
+// Legacy lookup. Caller-file is taken from the env's first private binding
+// when present (test harnesses build flat envs with no module attribution).
+// Production code paths now use `_types_lookup_def` directly with the real
+// CheckCtx.module attribution.
 fn _types_env_lookup(env: TypeEnv, name: string) -> Type {
     let mut i = 0
     while i < len(env.entries) {
@@ -769,6 +862,26 @@ fn _emit_hx3005(pos: i64, expected: Type, actual: Type, sp: Span, out: array) {
 fn _emit_hx4001(sp: Span, out: array) {
     let mut b = diag_new("HX4001")
     b = diag_span(b, sp)
+    out.push(diag_emit(b))
+}
+
+// Stage1 Gap 2 — duplicate pub symbol across files.
+fn _emit_hx3010(name: string, first_file: string, second_file: string, sp: Span, out: array) {
+    let mut b = diag_new("HX3010")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "first_file", first_file)
+    b = diag_arg(b, "second_file", second_file)
+    out.push(diag_emit(b))
+}
+
+// Stage1 Gap 2 — private symbol referenced from a foreign module.
+fn _emit_hx2002(name: string, defining_file: string, caller_file: string, sp: Span, out: array) {
+    let mut b = diag_new("HX2002")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    b = diag_arg(b, "defining_file", defining_file)
+    b = diag_arg(b, "caller_file", caller_file)
     out.push(diag_emit(b))
 }
 
@@ -863,8 +976,18 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     if _is_lit_char(e.kind)   { return _types_t_char() }
 
     if _types_is_ident(e.kind) {
-        let t = _types_env_lookup(env, e.text)
-        return t
+        // Stage1 Gap 2 — caller-module-aware lookup. Pub items are global;
+        // privates are only visible inside their owning module. A foreign
+        // private surface as HX2002 (private name not accessible).
+        let r = _types_lookup_def(env, e.text, ctx.module)
+        if r.found { return r.typ }
+        if r.private_other_module {
+            _emit_hx2002(e.text, r.other_module_file, ctx.module, e.span, out)
+        }
+        // Fall back to legacy single-namespace scan for hand-built test envs
+        // that pre-date the visibility split (resolve_test / bind_test build
+        // their TypeEnv directly without module attribution).
+        return _types_env_lookup(env, e.text)
     }
 
     if _is_atlas(e.kind) {
@@ -1186,26 +1309,106 @@ fn _types_enum_type(def: DefId) -> Type {
     }
 }
 
-fn _collect_item_types(module: Module) -> TypeEnv {
+// Look up an existing binding by (name, owning_file) — used by the pre-pass
+// for idempotent re-registration detection (Item appears twice in
+// module.items because the same fn was spliced from another file).
+fn _types_find_binding(env: TypeEnv, name: string, owning_file: string) -> bool {
+    let mut i = 0
+    while i < len(env.entries) {
+        let b = env.entries[i]
+        if b.name == name && b.module_file == owning_file {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// Find the file that owns the existing pub binding for `name`, or "" when
+// no pub binding is present. Used by HX3010 emission to identify the prior
+// owner during a duplicate-pub-symbol-across-files report.
+fn _types_pub_owner_file(env: TypeEnv, name: string) -> string {
+    let mut i = 0
+    while i < len(env.entries) {
+        let b = env.entries[i]
+        if b.name == name && b.is_pub {
+            return b.module_file
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Stage1 Gap 2 — pre-pass that respects pub visibility AND dedupes across
+// files. Walks module.items (which after Gap 1 may carry items spliced
+// from imported files) and:
+//   - Skips an Item whose (name, owning_file) is already in env (idempotent
+//     re-registration; the same fn arrived twice via the splice path — no
+//     diagnostic, this is by design).
+//   - For pub items, treats `name` as a global key. A second pub binding
+//     for the same name from a DIFFERENT file emits HX3010 (Error, S3) and
+//     skips the duplicate so downstream lookups see only the first.
+//   - For non-pub items, treats `<file>::<name>` as the key — multiple
+//     files may each declare a private `helper` without conflict.
+//
+// The `out` array collects HX3010 diagnostics; non-collision cases push
+// nothing so existing single-file callers see an empty diag list.
+fn _collect_item_types(module: Module, out: array) -> TypeEnv {
     let mut env = TypeEnv { entries: [] }
     let mut idx = 0
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
-        let def = DefId { module: module.file, index: idx }
-        if _types_is_fn_item(it.kind) {
-            env = _types_env_define(env, it.name, def, _types_signature_type(it))
-            idx = idx + 1
-        } else if _types_is_struct_item(it.kind) {
-            env = _types_env_define(env, it.name, def, _types_struct_type(it, def))
-            idx = idx + 1
-        } else if _types_is_enum_item(it.kind) {
-            env = _types_env_define(env, it.name, def, _types_enum_type(def))
-            idx = idx + 1
-        } else if _types_is_let_item(it.kind) {
-            env = _types_env_define(env, it.name, def, _types_lower_type_ref(it.return_type))
-            idx = idx + 1
+        // Each item carries an owning file via item.span.file (parser sets
+        // span.file on every constructed AST node). Fall back to the top-
+        // level module.file when span.file is empty (hand-built tests).
+        let mut owning = it.span.file
+        if len(owning) == 0 { owning = module.file }
+        let def = DefId { module: owning, index: idx }
+
+        // Skip non-definition items up front.
+        let is_def = _types_is_fn_item(it.kind)
+            || _types_is_struct_item(it.kind)
+            || _types_is_enum_item(it.kind)
+            || _types_is_let_item(it.kind)
+        if !is_def {
+            i = i + 1
+            continue
         }
+
+        // Idempotent re-registration: same item from same file already in
+        // env — silently skip (the parser's import splice may surface the
+        // same fn twice when a file is reachable from multiple paths).
+        if _types_find_binding(env, it.name, owning) {
+            i = i + 1
+            continue
+        }
+
+        // Pub-vs-pub collision across files → HX3010, skip the second.
+        if it.is_pub {
+            let prior_owner = _types_pub_owner_file(env, it.name)
+            if len(prior_owner) > 0 && prior_owner != owning {
+                _emit_hx3010(it.name, prior_owner, owning, it.span, out)
+                i = i + 1
+                continue
+            }
+        }
+
+        if _types_is_fn_item(it.kind) {
+            env = _types_env_define_attr(env, it.name, def,
+                _types_signature_type(it), it.is_pub, owning)
+        } else if _types_is_struct_item(it.kind) {
+            env = _types_env_define_attr(env, it.name, def,
+                _types_struct_type(it, def), it.is_pub, owning)
+        } else if _types_is_enum_item(it.kind) {
+            env = _types_env_define_attr(env, it.name, def,
+                _types_enum_type(def), it.is_pub, owning)
+        } else {
+            // _types_is_let_item
+            env = _types_env_define_attr(env, it.name, def,
+                _types_lower_type_ref(it.return_type), it.is_pub, owning)
+        }
+        idx = idx + 1
         i = i + 1
     }
     return env
@@ -1213,13 +1416,22 @@ fn _collect_item_types(module: Module) -> TypeEnv {
 
 // ── Per-fn local env (params bind on top of module env) ──────
 
-fn _types_bind_params(env: TypeEnv, it: Item) -> TypeEnv {
+fn _types_bind_params(env: TypeEnv, it: Item, caller_file: string) -> TypeEnv {
     let mut e = env
+    // Resolve the file that "owns" these params — falls back to caller_file
+    // when the item has no span attribution (hand-built tests).
+    let mut owning = it.span.file
+    if len(owning) == 0 { owning = caller_file }
     let mut i = 0
     while i < len(it.params) {
         let p = it.params[i]
         let pt = _types_lower_type_ref(p.typ)
-        e = _types_env_define(e, p.name, _types_miss_def_id(), pt)
+        // Params are file-private (visible only within the enclosing fn /
+        // module). Record them with is_pub=false and the resolved owning
+        // file so `_types_lookup_def` can match them under the caller's
+        // module attribution.
+        e = _types_env_define_attr(e, p.name, _types_miss_def_id(), pt,
+            false, owning)
         i = i + 1
     }
     return e
@@ -1229,18 +1441,28 @@ fn _types_bind_params(env: TypeEnv, it: Item) -> TypeEnv {
 
 pub fn type_check(module: Module) -> array {
     let mut out = []
-    let env = _collect_item_types(module)
+    // Pre-pass collects item types and emits HX3010 for duplicate pub
+    // symbols across files (Stage1 punch list Gap 2).
+    let env = _collect_item_types(module, out)
     let ctx0 = _types_new_ctx(module.file)
 
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
         if _types_is_fn_item(it.kind) {
-            let local = _types_bind_params(env, it)
+            // The fn's enclosing file becomes the caller's module for
+            // visibility checks. Fall back to module.file when the item
+            // span has no attribution (hand-built tests).
+            let mut fn_file = it.span.file
+            if len(fn_file) == 0 { fn_file = module.file }
+            let local = _types_bind_params(env, it, fn_file)
             let r = _types_lower_type_ref(it.return_type)
             let mut ret = r
             if len(ret.kind) == 0 { ret = _types_t_unit() }
-            let ctx = _ctx_with_fn(ctx0, it.name, ret)
+            // Per-fn ctx uses the fn's owning file so `_types_lookup_def`
+            // applies the right caller-module to private visibility.
+            let ctx_for_fn = _types_new_ctx(fn_file)
+            let ctx = _ctx_with_fn(ctx_for_fn, it.name, ret)
             // Walk body — inner Returns validate against ctx.fn_return.
             let body_t = _infer_expr(it.body, local, ctx, out)
             // Trailing block expression must also satisfy the return type
