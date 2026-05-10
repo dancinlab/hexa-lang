@@ -2,6 +2,7 @@
 
 > An atlas of laws bound to the compiler. The stricter the gate, the cleaner the code that passes.
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19404816.svg)](https://doi.org/10.5281/zenodo.19404816)
 [![phase A0–B5](https://img.shields.io/badge/phase-A0%E2%80%93B5%20PASS-brightgreen.svg)](SPEC.yaml)
 [![D1](https://img.shields.io/badge/D1-PASS-brightgreen.svg)](SPEC.yaml)
 [![M0](https://img.shields.io/badge/M0-PASS-brightgreen.svg)](tests/m0)
