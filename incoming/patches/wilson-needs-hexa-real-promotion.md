@@ -1,6 +1,6 @@
 # incoming patch: wilson-needs-hexa-real-promotion
 
-> **id**: `wilson-needs-hexa-real-promotion` · **opened**: 2026-05-10 · **status**: `pending_external`
+> **id**: `wilson-needs-hexa-real-promotion` · **opened**: 2026-05-10 · **status**: `applied` (2026-05-10)
 > **trees**: build artifacts (`~/.hx/bin/hexa_real`, `~/.hx/packages/hexa/hexa.real`) — no source-tree change needed unless the rebuild itself surfaces a bug.
 > **why**: G2 source landed (`9210e024 feat(codegen+stdlib): RFC-022 G2 async integration — wilson gate FINAL CLEAR`; RFC-022 status "Integrated") — but the **deployed interpreter binary doesn't reflect it yet**, so wilson can't compile-verify its `core/` + `plugins/` scaffolds. This is the *last* concrete blocker for wilson P1 verification (G1✅ + G2✅-source + G3✅ — gate is source-clear, runtime-binary not).
 
@@ -25,3 +25,24 @@
 - wilson whole-program `hexa build` of `core/main.hexa` + `plugins/_bundle` once the `core/dispatch_table.hexa` wiring + the bundled `plugins/*` are complete (wilson is doing that in parallel).
 
 (Reference: `~/core/wilson/docs/hexa-lang-gap-audit.md` §업데이트(d), `~/core/wilson/docs/ROADMAP.md` P0 / open-decision #5.)
+
+---
+
+## Resolution (2026-05-10)
+
+**Status**: `applied` — rebuild + promotion complete.
+
+- Host interp rebuilt: `clang -O0 -std=c11 -I . -I self /tmp/hexa_full_regen.c -o build/hexa_interp.real` (regen .c was fresh, contained 5 G2 markers — `AwaitExpr` / `NK_AWAIT_EXPR` / `hexa_await_unwrap`).
+- AOT dispatcher rebuilt: regen `build/stage1/main.c` via `self/native/hexa_v2 self/main.hexa build/stage1/main.c`, then `clang -O0 -fno-strict-aliasing -std=c11 -I self build/stage1/main.c -o hexa.real`.
+- Codesigned ad-hoc.
+- Smoke test (both backends, `RESOURCE_LOCAL_HEXA=1 HEXA_MEM_UNLIMITED=1`):
+  - `./build/hexa_interp.real run self/test_async_codegen.hexa` → **4/4 PASS**
+  - `./hexa.real run self/test_async_codegen.hexa` → **4/4 PASS**
+- Promoted:
+  - `~/.hx/bin/hexa_real` ← worktree `hexa.real` (AOT dispatcher, 472928 B). sha256 `8cf82fb46ce51f379873640f47e5701a89548d612c5aa15d901be433730debb6`.
+  - `~/.hx/packages/hexa/hexa.real` ← worktree `build/hexa_interp.real` (interp, 2956288 B). sha256 `4b60d9427f2530bec56642b8ce7af62d9f347bb542d32eb371b48eb00ca0e4bc`.
+- Backups:
+  - `~/.hx/bin/hexa_real.bak.1778422104` (1580720 B, May-2 build)
+  - `~/.hx/packages/hexa/hexa.real.bak.1778422104` (401920 B, 22:37 stale build)
+- Verified post-promotion: `~/.hx/bin/hexa_real run self/test_async_codegen.hexa` → **4/4 PASS**.
+- A2 status: A2 splice accumulator NOT yet landed in `origin/main` (last relevant commits: `d99be4bd` A1 hooks, `9210e024` G2). The `test_async_codegen` workload did NOT trigger OOM during this rebuild — A1 alone sufficed for this test. Wider workloads may still OOM until A2 lands; rerun if needed.

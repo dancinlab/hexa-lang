@@ -131,3 +131,13 @@
   priority: 2 (not a hard blocker — buffered works; this = token-by-token streaming UX)
   opened: 2026-05-10
   detail: patches/wilson-needs-streaming-http-sse.md
+
+- id: wilson-needs-hexa-build-out-of-tree
+  source: wilson session — `hexa build core/main.hexa` of the multi-module wilson project fails (linker undefined symbols) because `hexa build` doesn't pre-flatten use/import (only `hexa run` does); also clang -I points at <argv0-dir>/self (~/.hx/bin/self, nonexistent) so #include "runtime.c" fails.
+  trees: [build-driver, install-layout]
+  compiler_impact: `hexa build <entry>` should flatten (module_loader.hexa) -> transpile (hexa_v2) -> clang, like `hexa run` minus exec; clang -I should be $HEXA_LANG/self (or a stable install path); `hexa cc` shouldn't try to rebuild hexa_cc relative to cwd. Workarounds in place (manual flatten, ln -s ~/core/hexa-lang/self ~/.hx/bin/self).
+  selftest_delta: 0 (a "build a 2-module out-of-tree project" smoke test would help)
+  status: pending_external
+  priority: 2 (blocks `hexa build` of out-of-tree multi-module projects = wilson; manual pipeline works)
+  opened: 2026-05-11
+  detail: patches/wilson-needs-hexa-build-out-of-tree.md
