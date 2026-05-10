@@ -62,6 +62,13 @@ pub let ATLAS_HASH_MAX: string = ""
 // static path — those are merger-time signals and were resolved at
 // compiler-build time, not preserved across the embed boundary.
 pub fn static_atlas() -> AtlasIndex {
+    // type: AtlasIndex
+    // Stage1 punch list Gap 11 — verified, all 8 AtlasIndex fields are
+    // literal-initialized here so the type checker round-trips this const
+    // through `_collect_item_types` cleanly when compiler/ self-loads. The
+    // two arrays (`duplicates`, `skipped_oversize`) are intentionally empty
+    // in the static path — those signals are merger-time only and were
+    // resolved at compiler-build time.
     return AtlasIndex {
         p_nodes: ATLAS_P_NODES,
         c_nodes: ATLAS_C_NODES,

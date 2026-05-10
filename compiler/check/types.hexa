@@ -649,12 +649,18 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
     if len(tr.kind) == 0 { return _types_empty_type() }
     if tr.kind == "named" {
         let n = tr.name
+        // Gap 3 (stage1 punch list): kind="named" with empty `name` is a stale
+        // TypeRef shape — degrade to the unknown sentinel so the let-RHS /
+        // return checker tolerates instead of falsely mapping to `unit`.
+        // Without this, an unannotated let RHS spuriously raised HX3001
+        // "expected unit, got <rhs>".
+        if len(n) == 0 { return _types_empty_type() }
         if n == "i64" || n == "Int" || n == "int" { return _types_t_i64() }
         if n == "f64" || n == "Float" || n == "float" || n == "Real" { return _types_t_f64() }
         if n == "bool" || n == "Bool" { return _types_t_bool() }
         if n == "string" || n == "String" { return _types_t_string() }
         if n == "char" || n == "Char" { return _types_t_char() }
-        if n == "unit" || n == "Unit" || n == "()" || len(n) == 0 { return _types_t_unit() }
+        if n == "unit" || n == "Unit" || n == "()" { return _types_t_unit() }
         return Type {
             kind: "named:" + n,
             def: _types_miss_def_id(),

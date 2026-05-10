@@ -85,6 +85,24 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX0011",
+        title: "expected opening brace",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "expected opening brace to start a block, found {found}",
+        explain: "The parser expected an opening brace `{` to begin a block expression (fn body, if/else arm, while body, struct/enum body). Without it, the parser cannot tell where the body starts and may silently absorb the next item into the surrounding context. Stage1 punch list Gap 5 — added so block-open mismatches surface as a precise S0 diagnostic instead of a downstream cascade. Note: braces are escaped from the message template here because `compiler/diag/builder.hexa::_interpolate` treats raw `{...}` as a placeholder boundary.",
+        fix_it_kind: FixItKind::Insert
+    },
+    DiagSpec {
+        code: "HX0012",
+        title: "expected closing brace",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "expected closing brace to end a block, found {found}",
+        explain: "The parser expected a closing brace `}` to end a block expression. Without it, the parser may silently consume the next top-level item into the prior body. Stage1 punch list Gap 5 — added so block-close mismatches surface as a precise S0 diagnostic instead of a downstream cascade. Note: braces are escaped from the message template here because `compiler/diag/builder.hexa::_interpolate` treats raw `{...}` as a placeholder boundary.",
+        fix_it_kind: FixItKind::Insert
+    },
+    DiagSpec {
         code: "HX1042",
         title: "atlas node not found",
         severity: Severity::Error,
@@ -251,8 +269,8 @@ pub let CATALOG: [DiagSpec] = [
         title: "@grace requires reviewer acknowledgement",
         severity: Severity::Warning,
         stage: "runtime",
-        template: "ai-native: @grace at {file}:{line} suppresses {error_code} until {until}. Reason: \"{reason}\".\n\nSuppressed diagnostic ({error_code} — {suppressed_title}):\n  {suppressed_message}\n  ({suppressed_severity_original}; downgraded by @grace until {until}.)\n\nThis is a TEMPORARY debt — the author is responsible for resolving the underlying issue before the expiry date. Reviewer acknowledgement REQUIRED before merge.",
-        explain: "Every @grace site emits this warning to prevent silent strict-lint bypass. The build is gated on explicit user consent at the CI/PR layer: PR description must contain `Acked-grace: HXxxxx by <reviewer>` trailer or commit message must contain `acked-grace: <code> by <author>`. The HX9000 template inlines the FULL rendered text of the suppressed diagnostic (suppressed_title / suppressed_message / suppressed_severity_original) so reviewers see WHAT is being silenced, not just that something is. SPEC.yaml opt_out.ai_native_warn_policy.suppressed_diagnostic_inlining.",
+        template: "ai-native: @grace at {file}:{line} suppresses {error_code} until {until}. Reason: \"{reason}\". This is a TEMPORARY debt — the author is responsible for resolving the underlying issue before the expiry date. Reviewer acknowledgement REQUIRED before merge.",
+        explain: "Every @grace site emits this warning to prevent silent strict-lint bypass. The build is gated on explicit user consent at the CI/PR layer: PR description must contain `Acked-grace: HXxxxx by <reviewer>` trailer or commit message must contain `acked-grace: <code> by <author>`. SPEC.yaml opt_out.ai_native_warn_policy.",
         fix_it_kind: FixItKind::None
     },
     DiagSpec {

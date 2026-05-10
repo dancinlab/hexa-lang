@@ -13,6 +13,8 @@
 
 import "../lex/tokens.hexa"
 import "./ast.hexa"
+import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
 
 // ── Mutable parse state ────────────────────────────────────────
 
@@ -20,6 +22,11 @@ pub let mut p_tokens = []
 pub let mut p_pos = 0
 pub let mut p_file = ""
 pub let mut p_pending_annotations = []
+// Stage1 punch list Gap 5 — parser-stage diagnostics. Filled by the
+// `expect_brace_*` helpers when a `{`/`}` is missing. Drained by
+// `parse_diags()` so main.hexa can fold them into the master diag list
+// ahead of S1+ checks. Reset on every `parse()` entry.
+pub let mut p_diags: array = []
 // While true, an ident-followed-by-LBrace is *not* parsed as a struct literal
 // (so `if cond { body }` doesn't read `cond { ... }` as `StructLit`). The
 // guard parsing functions toggle this around their condition expressions.
@@ -160,6 +167,44 @@ fn expect(k: TokenKind) -> Token {
     }
     let t = peek()
     return Token { kind: k, text: "", span: t.span }
+}
+
+// ── Parser-stage diagnostic helpers (Gap 5) ──────────────────────
+// `expect_brace_open` / `expect_brace_close` wrap `expect` for the common
+// `{`/`}` case. On a token mismatch they push a Diagnostic into `p_diags`
+// AND ADVANCE one token (open case) so the parser stays in sync. The
+// previous behavior — silent `eat(LBrace)` / `eat(RBrace)` — let the
+// block loop swallow the next top-level fn into the prior body without
+// any visible diagnostic.
+fn _push_parse_diag(code: string, span: Span, found: string) {
+    let mut b = diag_new(code)
+    b = diag_span(b, span)
+    b = diag_arg(b, "found", found)
+    p_diags.push(diag_emit(b))
+}
+
+fn expect_brace_open() -> Token {
+    if check_kind(TokenKind::LBrace) {
+        return advance()
+    }
+    let t = peek()
+    _push_parse_diag("HX0011", t.span, tag_of(t.kind))
+    // Advance one token so the block loop doesn't deadlock on the same
+    // misshapen token. Skip when at EOF — caller's loop handles that.
+    if !at_eof() { advance() }
+    return Token { kind: TokenKind::LBrace, text: "{", span: t.span }
+}
+
+fn expect_brace_close() -> Token {
+    if check_kind(TokenKind::RBrace) {
+        return advance()
+    }
+    let t = peek()
+    _push_parse_diag("HX0012", t.span, tag_of(t.kind))
+    // No synthetic advance here: the block loop already exited on EOF or
+    // on a non-RBrace it could not consume; advancing now would skip an
+    // item the caller has yet to see.
+    return Token { kind: TokenKind::RBrace, text: "}", span: t.span }
 }
 
 fn at_eof() -> bool {
@@ -669,7 +714,12 @@ fn parse_match_pattern() -> Expr {
 
 fn parse_block_expr() -> Expr {
     let open = peek()
-    eat(TokenKind::LBrace)
+    // Gap 5 (stage1 punch list): replace silent `eat(LBrace)`/`eat(RBrace)`
+    // with `expect_brace_open`/`expect_brace_close` — emit HX0011/HX0012 on
+    // miss + advance to keep parsing in sync. Previously a missing `{` would
+    // let the loop below absorb the next top-level fn into the current body
+    // without any visible diagnostic; a missing `}` would silently terminate.
+    expect_brace_open()
     let mut kids = []
     while !check_kind(TokenKind::RBrace) && !at_eof() {
         let e = parse_stmt()
@@ -677,7 +727,7 @@ fn parse_block_expr() -> Expr {
         // optional ;
         if check_kind(TokenKind::Semicolon) { advance() }
     }
-    eat(TokenKind::RBrace)
+    expect_brace_close()
     return Expr {
         kind: ExprKind::Block,
         span: open.span,
@@ -854,8 +904,18 @@ fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
 fn parse_let_item(is_pub: bool, anns: [Annotation]) -> Item {
     let kw = peek()
     eat(TokenKind::KwLet)
-    eat(TokenKind::KwMut)
+    // Stage1 punch list Gap 7: split `let name` (immutable) vs `let mut name`
+    // (mutable). Previously `eat(KwMut)` accepted `mut` unconditionally and
+    // discarded the result — the parser had no way to tell the two forms
+    // apart. We now capture the flag explicitly. AST `Item` has no `is_mut`
+    // field yet (would ripple through every Item literal in the tree), so
+    // we encode mutability into `name` with a `mut:` prefix mirroring
+    // `parse_let_expr`'s convention. Default — when `mut` is absent — is
+    // immutable, no diagnostic (matches RFC-019 §2 silent-default policy).
+    let is_mut = eat(TokenKind::KwMut)
     let name_tok = expect(TokenKind::Ident)
+    let mut item_name = name_tok.text
+    if is_mut { item_name = "mut:" + name_tok.text }
     let mut ty = empty_type()
     if check_kind(TokenKind::Colon) {
         advance()
@@ -868,7 +928,7 @@ fn parse_let_item(is_pub: bool, anns: [Annotation]) -> Item {
     }
     return Item {
         kind: ItemKind::Let,
-        name: name_tok.text,
+        name: item_name,
         span: kw.span,
         annotations: anns,
         params: [],
@@ -1023,6 +1083,7 @@ pub fn parse(tokens: [Token], file: string) -> Module {
     p_tokens = tokens
     p_pos = 0
     p_file = file
+    p_diags = []
     let mut items = []
     let mut imports = []
     while !at_eof() {
@@ -1039,4 +1100,12 @@ pub fn parse(tokens: [Token], file: string) -> Module {
         }
     }
     return Module { file: file, items: items, imports: imports }
+}
+
+// Drain parser-stage diagnostics emitted during the most recent parse().
+// Stage1 punch list Gap 5 — main.hexa folds these into the master diag
+// list before S1+ runs so block-shape errors surface as HX0011/HX0012
+// rather than as a downstream type-cascade.
+pub fn parse_diags() -> array {
+    return p_diags
 }

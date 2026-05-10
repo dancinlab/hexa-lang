@@ -880,6 +880,12 @@ fn _emit_hx5003(name: string, pos: i64, expected: Unit, actual: Unit, sp: Span, 
 }
 
 // ── Walker context ──────────────────────────────────────────
+// Stage1 punch list Gap 12 — VERIFIED, no code change. All UnitCtx fields
+// are populated at the SOLE construction site (`unit_check`, see ~line
+// 1109) where `sigs` receives `_collect_sigs(module)`, which always
+// returns `SigTable { sigs: [] }` even on an empty module (see
+// `_collect_sigs` ~line 832). `_lookup_sig(ctx.sigs, name)` therefore
+// never reads a missing field.
 
 pub struct UnitCtx {
     fn_name: string,

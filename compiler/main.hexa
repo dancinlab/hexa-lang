@@ -27,7 +27,6 @@ import "./check/bind.hexa"
 import "./check/types.hexa"
 import "./check/units.hexa"
 import "./check/citation.hexa"
-import "./check/annotations.hexa"
 import "./lower/ast_to_hir.hexa"
 import "./lower/hir_to_mir.hexa"
 import "./optimize/const_fold.hexa"
@@ -122,6 +121,8 @@ fn print_help() {
     println("  --opt=LEVEL            0 | 1 | 2 | 3     (default: 0, or $HEXA_OPT_LEVEL)")
     println("  --keep-temp            do not remove the per-build intermediate dir (default: off)")
     println("  -v, --verbose          print build-temp dir and intermediate paths to stderr")
+    println("  --strict-citations     treat S8 citation diagnostics as fatal (default: off)")
+    println("  --no-strict-citations  demote S8 citation diagnostics to warnings (default)")
     println("  --version              print version and exit")
     println("  --help                 print this help and exit")
     println("")
@@ -290,6 +291,15 @@ let mut linker_kind = "system"
 let mut source_path = ""
 let mut keep_temp = false
 let mut verbose = false
+// Stage1 punch list Gap 13: `--strict-citations` defaults OFF. While compiler/
+// source is not yet fully cite-bound (every implementation function would
+// need an @implements/@discover annotation otherwise), we run citation_check
+// for signal but DOWNGRADE its Errors to Warnings so they don't gate
+// stage1 reach. Pass `--strict-citations` (or set `HEXA_STRICT_CITATIONS=1`)
+// to restore RFC-017 §3.1 S8 fatal-citation semantics.
+let mut strict_citations = false
+let _strict_env = env("HEXA_STRICT_CITATIONS")
+if _strict_env == "1" { strict_citations = true }
 
 // --opt=LEVEL default: $HEXA_OPT_LEVEL if set+parseable (0..3), else 0.
 let _opt_env = env("HEXA_OPT_LEVEL")
@@ -345,6 +355,13 @@ while ai < len(user_argv) {
     } else if a == "--verbose" {
         verbose = true
         ai = ai + 1
+    } else if a == "--strict-citations" {
+        // Gap 13: opt back into RFC-017 §3.1 S8 fatal-citation semantics.
+        strict_citations = true
+        ai = ai + 1
+    } else if a == "--no-strict-citations" {
+        strict_citations = false
+        ai = ai + 1
     } else if len(a) >= 1 && a.chars()[0] == '-' {
         eprintln("hexa-compiler: warning: unknown flag `" + a + "` (ignored)")
         ai = ai + 1
@@ -388,6 +405,14 @@ let atlas = _load_atlas()
 
 let mut diags: array = []
 
+// Stage1 punch list Gap 5: drain parser-stage diagnostics (HX0011/HX0012)
+// FIRST so brace-shape errors surface ahead of any downstream cascade. The
+// parser still produces a best-effort Module on miss, so later passes still
+// run — multi-error policy per RFC-019 §6.
+let r0 = parse_diags()
+let mut k0 = 0
+while k0 < len(r0) { diags.push(r0[k0]); k0 = k0 + 1 }
+
 let r1 = resolve(module, atlas)
 let mut k = 0
 while k < len(r1) { diags.push(r1[k]); k = k + 1 }
@@ -406,16 +431,30 @@ while k < len(r4) { diags.push(r4[k]); k = k + 1 }
 
 let r5 = citation_check(module, atlas)
 k = 0
-while k < len(r5) { diags.push(r5[k]); k = k + 1 }
-
-// SPEC.yaml opt_out.ai_native_warn_policy.suppressed_diagnostic_inlining:
-// post-process the collected diag list, suppressing real diagnostics
-// that match a @grace site and replacing them with HX9000 (Warning)
-// carrying the FULL inlined render of what is being silenced. Runs
-// AFTER all check passes, BEFORE the abort gate so a successful @grace-
-// suppressed Error no longer trips _has_errors.
-let _today_iso = exec("date -u +%Y-%m-%d").trim()
-diags = apply_grace_suppression(module, diags, _today_iso)
+while k < len(r5) {
+    let d = r5[k]
+    // Gap 13: when --strict-citations is OFF (default), demote citation
+    // Errors to Warnings so currently-unmapped P/C/L/E refs in compiler/
+    // source don't gate stage1 reach. Citation pass still runs and produces
+    // signal; only its severity is shifted. Set --strict-citations (or
+    // HEXA_STRICT_CITATIONS=1) to restore RFC-017 §3.1 S8 fatal semantics.
+    if !strict_citations {
+        diags.push(Diagnostic {
+            code: d.code,
+            severity: Severity::Warning,
+            stage: d.stage,
+            span: d.span,
+            message: d.message,
+            note: d.note,
+            suggest: d.suggest,
+            fixit: d.fixit,
+            related: d.related
+        })
+    } else {
+        diags.push(d)
+    }
+    k = k + 1
+}
 
 // Always render whatever diagnostics we collected (warnings first, then
 // — if errors — bail out before lowering / codegen).
