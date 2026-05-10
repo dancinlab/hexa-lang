@@ -793,7 +793,16 @@ firmware_evolution:
     rfc: RFC-023 (planned — extension of RFC-018 §10)
   roadmap:
     F0: { status: done,          deliverable: SPEC decisions + firmware/ skeleton }
-    F1: { status: next,          deliverable: stdlib/core/ extraction from current stdlib }
+    F1:
+      status: this_commit
+      deliverable: stdlib/core/ + stdlib/alloc/ extraction (Option C split)
+      audit: doc/stdlib_core_extraction_2026_05_10.md
+      core_modules: [math, string, parse, bytes, math/float, math/permille, math/rng, hash/sha256, hash/xxhash]
+      alloc_modules: [collections, path, json, json_object, argparse, math/eigen, math/rng_ctx]
+      total_moved: 16
+      shim_strategy: backward_compat_via_import_redirect
+      sunset_target: after_F4_absorptions_complete
+      target_gate_check_enforcement: deferred_to_F3
     F2:
       status: this_commit
       deliverable: firmware/boards/rtsc/ reference port
