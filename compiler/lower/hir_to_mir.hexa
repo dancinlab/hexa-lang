@@ -17,27 +17,19 @@
 //
 // SSA discipline:
 //   Every Local is assigned exactly once. When a value flows out of
-//   multiple branches we emit a phi-style _STMT_ASSIGN with op="phi"
+//   multiple branches we emit a phi-style STMT_ASSIGN with op="phi"
 //   carrying the per-pred Operand list. v1 keeps lowering simple — most
-//   if/while/match arms terminate via _STMT_RETURN so phis are rare.
+//   if/while/match arms terminate via STMT_RETURN so phis are rare.
 
 import "../ir/hir.hexa"
 import "../ir/mir.hexa"
 
-// ── Local mirror of mir.hexa STMT_* constants ────────────────
-// Stage0's interpreter does not propagate `pub let` bindings transitively
-// across the long import chain (main.hexa → hir_to_mir.hexa → mir.hexa).
-// At runtime `_STMT_RETURN` etc. resolve to the void value here, which
-// makes every Stmt construction and codegen comparison silently broken
-// (see M0 smoke gap 3+4). We redeclare the literals locally so this file
-// is self-sufficient. mir.hexa stays the single authoritative source.
-let _STMT_ASSIGN   = "assign"
-let _STMT_BINOP    = "binop"
-let _STMT_UNOP     = "unop"
-let _STMT_CALL     = "call"
-let _STMT_RETURN   = "return"
-let _STMT_BR       = "br"
-let _STMT_BR_COND  = "br_cond"
+// STMT_* constants come from compiler/ir/mir.hexa as `pub let`. The
+// previous local mirror was needed when stage0's interpreter did not
+// propagate transitive `pub let` bindings across the long import chain;
+// after Stage1 Gap 1 (multi-file splice) the bindings now resolve once
+// at the canonical site, so the local mirror has been removed (Stage1
+// punch-list C1 — duplicate top-level lets collide post-splice).
 
 // ── Sentinels ────────────────────────────────────────────────
 
@@ -427,14 +419,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx, _local_op(id))
     }
 
-    // ── atlas ref → _STMT_ASSIGN with global Operand ─────────
+    // ── atlas ref → STMT_ASSIGN with global Operand ─────────
     if k == "atlas_ref" {
         let mut ctx2 = _fresh_local(ctx, e.typ, "atlas_" + e.atlas.ref_kind + "_" + e.atlas.id)
         let dst = ctx2.locals[len(ctx2.locals) - 1]
         let mut args: [Operand] = []
         args.push(_global_op(e.atlas.atlas_index, e.atlas.ref_kind + "[" + e.atlas.id + "]"))
         let s = Stmt {
-            kind: _STMT_ASSIGN,
+            kind: STMT_ASSIGN,
             dst: dst,
             op: "atlas",
             args: args,
@@ -445,7 +437,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx2, _local_op(dst.id))
     }
 
-    // ── binop → _STMT_BINOP ──────────────────────────────────
+    // ── binop → STMT_BINOP ──────────────────────────────────
     if k == "binop" {
         if len(e.children) < 2 { return _no_value(ctx) }
         let lr = _lower_hexpr(ctx, e.children[0])
@@ -456,7 +448,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         args.push(lr.operand)
         args.push(rr.operand)
         let s = Stmt {
-            kind: _STMT_BINOP,
+            kind: STMT_BINOP,
             dst: dst,
             op: e.text,
             args: args,
@@ -467,7 +459,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx2, _local_op(dst.id))
     }
 
-    // ── unop → _STMT_UNOP ───────────────────────────────────
+    // ── unop → STMT_UNOP ───────────────────────────────────
     if k == "unop" {
         if len(e.children) < 1 { return _no_value(ctx) }
         let r = _lower_hexpr(ctx, e.children[0])
@@ -476,7 +468,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut args: [Operand] = []
         args.push(r.operand)
         let s = Stmt {
-            kind: _STMT_UNOP,
+            kind: STMT_UNOP,
             dst: dst,
             op: e.text,
             args: args,
@@ -487,7 +479,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx2, _local_op(dst.id))
     }
 
-    // ── call → _STMT_CALL ───────────────────────────────────
+    // ── call → STMT_CALL ───────────────────────────────────
     if k == "call" {
         let mut ctx_r = ctx
         let mut callee_text = ""
@@ -505,7 +497,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut ctx2 = _fresh_local(ctx_r, e.typ, "call_ret")
         let dst = ctx2.locals[len(ctx2.locals) - 1]
         let s = Stmt {
-            kind: _STMT_CALL,
+            kind: STMT_CALL,
             dst: dst,
             op: callee_text,
             args: arg_ops,
@@ -516,7 +508,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx2, _local_op(dst.id))
     }
 
-    // ── return → _STMT_RETURN ───────────────────────────────
+    // ── return → STMT_RETURN ───────────────────────────────
     if k == "return" {
         let mut args: [Operand] = []
         let mut ctx2 = ctx
@@ -526,7 +518,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             args.push(r.operand)
         }
         let s = Stmt {
-            kind: _STMT_RETURN,
+            kind: STMT_RETURN,
             dst: _miss_local(),
             op: "",
             args: args,
@@ -538,7 +530,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _no_value(ctx2)
     }
 
-    // ── let → _STMT_ASSIGN, bind name to dst ────────────────
+    // ── let → STMT_ASSIGN, bind name to dst ────────────────
     if k == "let" {
         let nm = _strip_mut_prefix(e.text)
         let mut ctx2 = ctx
@@ -558,7 +550,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut args: [Operand] = []
         args.push(rhs_op)
         let s = Stmt {
-            kind: _STMT_ASSIGN,
+            kind: STMT_ASSIGN,
             dst: dst,
             op: "let",
             args: args,
@@ -580,7 +572,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut args: [Operand] = []
         args.push(rr.operand)
         let s = Stmt {
-            kind: _STMT_ASSIGN,
+            kind: STMT_ASSIGN,
             dst: dst,
             op: "assign",
             args: args,
@@ -610,7 +602,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _no_value(ctx2)
     }
 
-    // ── if → _STMT_BR_COND + then/else/after blocks ─────────
+    // ── if → STMT_BR_COND + then/else/after blocks ─────────
     if k == "if" {
         if len(e.children) < 2 { return _no_value(ctx) }
         let cr = _lower_hexpr(ctx, e.children[0])
@@ -626,7 +618,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut br_args: [Operand] = []
         br_args.push(cr.operand)
         let br = Stmt {
-            kind: _STMT_BR_COND,
+            kind: STMT_BR_COND,
             dst: _miss_local(),
             op: "",
             args: br_args,
@@ -664,7 +656,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
             if !then_returned {
                 let br_then = Stmt {
-                    kind: _STMT_BR,
+                    kind: STMT_BR,
                     dst: _miss_local(),
                     op: "",
                     args: [],
@@ -676,7 +668,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             }
             if !else_returned {
                 let br_else = Stmt {
-                    kind: _STMT_BR,
+                    kind: STMT_BR,
                     dst: _miss_local(),
                     op: "",
                     args: [],
@@ -693,7 +685,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // No-else: else_id IS the after block.
         if !then_returned {
             let br_then = Stmt {
-                kind: _STMT_BR,
+                kind: STMT_BR,
                 dst: _miss_local(),
                 op: "",
                 args: [],
@@ -720,7 +712,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let after_id = ctx2.blocks[len(ctx2.blocks) - 1].id
 
         let br0 = Stmt {
-            kind: _STMT_BR,
+            kind: STMT_BR,
             dst: _miss_local(),
             op: "",
             args: [],
@@ -736,7 +728,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut br_args: [Operand] = []
         br_args.push(cr.operand)
         let br = Stmt {
-            kind: _STMT_BR_COND,
+            kind: STMT_BR_COND,
             dst: _miss_local(),
             op: "",
             args: br_args,
@@ -753,7 +745,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         if !ctx2.has_returned {
             let body_end = ctx2.cur_block
             let back = Stmt {
-                kind: _STMT_BR,
+                kind: STMT_BR,
                 dst: _miss_local(),
                 op: "",
                 args: [],
@@ -767,10 +759,10 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _no_value(ctx2)
     }
 
-    // ── match: sequence of _STMT_BR_COND testing tag ─────────
+    // ── match: sequence of STMT_BR_COND testing tag ─────────
     //
     // Stage1 Gap 14: arm-pattern coverage extended to:
-    //   - "wildcard"   → unconditional _STMT_BR to arm
+    //   - "wildcard"   → unconditional STMT_BR to arm
     //   - "ident"      → bind scrut to ident name in arm
     //   - "enum_path"  → tag-equality test; payload binders bound to scrut
     //   - other        → general operand-equality test (as before)
@@ -800,7 +792,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let cur_block_id = ctx2.cur_block
             if pat.kind == "wildcard" {
                 let br = Stmt {
-                    kind: _STMT_BR,
+                    kind: STMT_BR,
                     dst: _miss_local(),
                     op: "",
                     args: [],
@@ -811,7 +803,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
             } else if pat.kind == "ident" && len(pat.text) > 0 && pat.text != "_" {
                 let br = Stmt {
-                    kind: _STMT_BR,
+                    kind: STMT_BR,
                     dst: _miss_local(),
                     op: "",
                     args: [],
@@ -828,7 +820,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 cmp_args.push(scrut_op)
                 cmp_args.push(_const_int_op(tag_v))
                 let cmp = Stmt {
-                    kind: _STMT_BINOP,
+                    kind: STMT_BINOP,
                     dst: cmp_dst,
                     op: "==",
                     args: cmp_args,
@@ -839,7 +831,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let mut br_args: [Operand] = []
                 br_args.push(_local_op(cmp_dst.id))
                 let br = Stmt {
-                    kind: _STMT_BR_COND,
+                    kind: STMT_BR_COND,
                     dst: _miss_local(),
                     op: "",
                     args: br_args,
@@ -859,7 +851,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 cmp_args.push(scrut_op)
                 cmp_args.push(pr.operand)
                 let cmp = Stmt {
-                    kind: _STMT_BINOP,
+                    kind: STMT_BINOP,
                     dst: cmp_dst,
                     op: "==",
                     args: cmp_args,
@@ -870,7 +862,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let mut br_args: [Operand] = []
                 br_args.push(_local_op(cmp_dst.id))
                 let br = Stmt {
-                    kind: _STMT_BR_COND,
+                    kind: STMT_BR_COND,
                     dst: _miss_local(),
                     op: "",
                     args: br_args,
@@ -894,7 +886,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let mut a: [Operand] = []
                 a.push(scrut_op)
                 let s = Stmt {
-                    kind: _STMT_ASSIGN,
+                    kind: STMT_ASSIGN,
                     dst: dst_a,
                     op: "bind",
                     args: a,
@@ -914,7 +906,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         let mut a2: [Operand] = []
                         a2.push(scrut_op)
                         let s2 = Stmt {
-                            kind: _STMT_ASSIGN,
+                            kind: STMT_ASSIGN,
                             dst: dst_b,
                             op: "payload",
                             args: a2,
@@ -933,7 +925,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             if !ctx2.has_returned {
                 let arm_end = ctx2.cur_block
                 let to_join = Stmt {
-                    kind: _STMT_BR,
+                    kind: STMT_BR,
                     dst: _miss_local(),
                     op: "",
                     args: [],
@@ -978,7 +970,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         ctx2 = _fresh_local(ctx2, e.typ, "struct_" + e.text)
         let dst = ctx2.locals[len(ctx2.locals) - 1]
         let s = Stmt {
-            kind: _STMT_ASSIGN,
+            kind: STMT_ASSIGN,
             dst: dst,
             op: "struct_lit",
             args: field_ops,
@@ -1008,7 +1000,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         ctx2 = _fresh_local(ctx2, e.typ, "enum_" + e.text)
         let dst = ctx2.locals[len(ctx2.locals) - 1]
         let s = Stmt {
-            kind: _STMT_ASSIGN,
+            kind: STMT_ASSIGN,
             dst: dst,
             op: "enum_path",
             args: args,
@@ -1028,7 +1020,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut args: [Operand] = []
         args.push(r.operand)
         let s = Stmt {
-            kind: _STMT_ASSIGN,
+            kind: STMT_ASSIGN,
             dst: dst,
             op: "field." + e.text,
             args: args,
@@ -1050,7 +1042,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         args.push(lr.operand)
         args.push(rr.operand)
         let s = Stmt {
-            kind: _STMT_ASSIGN,
+            kind: STMT_ASSIGN,
             dst: dst,
             op: "index",
             args: args,
@@ -1203,7 +1195,7 @@ fn _lower_fn(it: HItem) -> MFunc {
         let mut args: [Operand] = []
         if br.has_value { args.push(br.operand) }
         let s = Stmt {
-            kind: _STMT_RETURN,
+            kind: STMT_RETURN,
             dst: _miss_local(),
             op: "",
             args: args,

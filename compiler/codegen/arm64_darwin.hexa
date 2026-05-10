@@ -34,17 +34,10 @@
 import "../ir/mir.hexa"
 import "../ir/lir.hexa"
 
-// ── Local mirror of mir.hexa STMT_* constants ────────────────
-// See note in compiler/lower/hir_to_mir.hexa: stage0's interpreter does
-// not propagate transitive `pub let` bindings, so STMT_* arrive here as
-// the void value. Redeclaring locally keeps codegen dispatch working.
-let _STMT_ASSIGN   = "assign"
-let _STMT_BINOP    = "binop"
-let _STMT_UNOP     = "unop"
-let _STMT_CALL     = "call"
-let _STMT_RETURN   = "return"
-let _STMT_BR       = "br"
-let _STMT_BR_COND  = "br_cond"
+// STMT_* constants are imported from compiler/ir/mir.hexa (canonical
+// `pub let` definitions). The previous local mirror has been removed
+// per Stage1 punch-list C1: post-Gap-1 splice the duplicate top-level
+// lets collide with the canonical declarations.
 
 // ── PReg / LOperand helpers ──────────────────────────────────
 
@@ -253,7 +246,7 @@ fn _arm64_arg_reg(idx: i64) -> string {
 
 fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: ArmStrTab) -> [LInstr] {
     let mut buf = out
-    if s.kind == _STMT_ASSIGN {
+    if s.kind == STMT_ASSIGN {
         // mov dst, src (single operand expected)
         let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
         if len(s.args) >= 1 {
@@ -262,7 +255,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
         }
         return buf
     }
-    if s.kind == _STMT_BINOP {
+    if s.kind == STMT_BINOP {
         let dst = _op_reg(_arm64_reg_for_local(s.dst.id))
         if len(s.args) >= 2 {
             let a = _arm64_op_for_operand_st(s.args[0], st)
@@ -303,7 +296,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
         }
         return buf
     }
-    if s.kind == _STMT_CALL {
+    if s.kind == STMT_CALL {
         // Marshal args into x0..x7 (AAPCS64). Args >= 8 spill to
         // stack — TODO: implement stack args (RFC-018 §4 — overflow
         // on stack); for v0 we emit a comment marker so the gap is
@@ -328,7 +321,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
         }
         return buf
     }
-    if s.kind == _STMT_RETURN {
+    if s.kind == STMT_RETURN {
         if len(s.args) >= 1 {
             let src = _arm64_op_for_operand_st(s.args[0], st)
             buf.push(_instr2("mov", _op_reg("x0"), src, "set return value"))
@@ -340,12 +333,12 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
         buf.push(_instr0("ret", "return"))
         return buf
     }
-    if s.kind == _STMT_BR {
+    if s.kind == STMT_BR {
         let lab = _arm64_block_label(modhash, fname, s.target_block)
         buf.push(_instr1("b", _op_label(lab), "branch"))
         return buf
     }
-    if s.kind == _STMT_BR_COND {
+    if s.kind == STMT_BR_COND {
         // cbz <reg>, .Lelse  ; b .Lthen
         // (compact encoding for "branch on zero / non-zero"; equivalent
         //  to the older `cmp x, #0; b.eq`. Both are accepted by `as`.)
@@ -439,7 +432,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         bi = bi + 1
     }
 
-    // Safety epilogue (in case last block lacks _STMT_RETURN)
+    // Safety epilogue (in case last block lacks STMT_RETURN)
     let last_is_ret = false
     if len(instrs) > 0 {
         let last = instrs[len(instrs) - 1]
@@ -681,8 +674,9 @@ pub fn codegen_arm64_darwin(module: MModule) -> LModule {
     let mut i = 0
     while i < len(module.funcs) {
         // Stage1 C8 — recompute modhash inline at every call site so
-        // stage0's transitive-let binding gap (see _STMT_* mirror at
-        // top of this file) cannot hand the lowering pass a void.
+        // stage0's transitive-let binding gap cannot hand the lowering
+        // pass a void (the STMT_* mirror that previously documented this
+        // was removed by Stage1 C1; constants now come from mir.hexa).
         funcs.push(_arm64_lower_func(module.funcs[i], st, _arm64_modhash(module.file)))
         i = i + 1
     }

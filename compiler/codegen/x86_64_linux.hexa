@@ -32,17 +32,10 @@
 import "../ir/mir.hexa"
 import "../ir/lir.hexa"
 
-// ── Local mirror of mir.hexa STMT_* constants ────────────────
-// See note in compiler/lower/hir_to_mir.hexa: stage0's interpreter does
-// not propagate transitive `pub let` bindings, so STMT_* arrive here as
-// the void value. Redeclaring locally keeps codegen dispatch working.
-let _STMT_ASSIGN   = "assign"
-let _STMT_BINOP    = "binop"
-let _STMT_UNOP     = "unop"
-let _STMT_CALL     = "call"
-let _STMT_RETURN   = "return"
-let _STMT_BR       = "br"
-let _STMT_BR_COND  = "br_cond"
+// STMT_* constants are imported from compiler/ir/mir.hexa (canonical
+// `pub let` definitions). The previous local mirror has been removed
+// per Stage1 punch-list C1: post-Gap-1 splice the duplicate top-level
+// lets collide with the canonical declarations.
 
 // ── PReg / LOperand helpers ──────────────────────────────────
 
@@ -223,7 +216,7 @@ fn _x86_64_arg_reg_seq(idx: i64) -> string {
 
 fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: X86StrTab) -> [LInstr] {
     let mut buf = out
-    if s.kind == _STMT_ASSIGN {
+    if s.kind == STMT_ASSIGN {
         let dst = _op_reg(_x86_64_reg_for_local(s.dst.id))
         if len(s.args) >= 1 {
             let src = _x86_64_op_for_operand_st(s.args[0], st)
@@ -231,7 +224,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st:
         }
         return buf
     }
-    if s.kind == _STMT_BINOP {
+    if s.kind == STMT_BINOP {
         let dst_name = _x86_64_reg_for_local(s.dst.id)
         let dst = _op_reg(dst_name)
         if len(s.args) >= 2 {
@@ -278,7 +271,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st:
         }
         return buf
     }
-    if s.kind == _STMT_CALL {
+    if s.kind == STMT_CALL {
         // Marshal args into rdi, rsi, rdx, rcx, r8, r9. Args >= 6
         // spill to stack — TODO (RFC-018 §4 — overflow on stack).
         let mut i = 0
@@ -303,7 +296,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st:
         }
         return buf
     }
-    if s.kind == _STMT_RETURN {
+    if s.kind == STMT_RETURN {
         if len(s.args) >= 1 {
             let src = _x86_64_op_for_operand_st(s.args[0], st)
             buf.push(_instr2("mov", _op_reg("rax"), src, "set return value"))
@@ -313,12 +306,12 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st:
         buf.push(_instr0("ret", "return"))
         return buf
     }
-    if s.kind == _STMT_BR {
+    if s.kind == STMT_BR {
         let lab = _x86_64_block_label(modhash, fname, s.target_block)
         buf.push(_instr1("jmp", _op_label(lab), "branch"))
         return buf
     }
-    if s.kind == _STMT_BR_COND {
+    if s.kind == STMT_BR_COND {
         // test <reg>, <reg> ; jz .Lelse ; jmp .Lthen
         if len(s.args) > 0 {
             let cond = _x86_64_op_for_operand_st(s.args[0], st)
