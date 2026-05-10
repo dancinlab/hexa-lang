@@ -3,22 +3,26 @@
 > **id**: `wilson-pi-port-6-gap-prereq` · **opened**: 2026-05-10 · **status**: `spec`
 > **trees**: `self/` + `compiler/`
 > **source**: `~/core/wilson/docs/hexa-lang-gap-audit.md` (commit `dancinlab/wilson`)
-> **why**: wilson core = pi-mono `{agent→core, ai, tui, coding-agent}` 의 hexa-native 재포팅. hive 가 그걸 하다 `core`/`ai` 핵심 모듈을 BLOCKED 낸 게 hexa-lang 부족 때문. wilson 착수 전 hexa-lang 이 채워야 할 6개 갭.
+> **why**: wilson core = pi-mono `{agent→core, ai, tui, coding-agent}` 의 hexa-native 재포팅. hive 가 그걸 하다 `core`/`ai` 핵심 모듈을 BLOCKED 낸 게 hexa-lang 부족 때문. wilson 착수 전 hexa-lang 이 채워야 할 갭.
+>
+> **갱신 2026-05-10**: (1) hexa-lang = 컴파일 언어 전환 (인터프리터 retire) → **G2 의 "interp parity" 하위갭 소멸** (`exec_stream_async` 가 AOT-only 인 게 더는 갭 아님 — 컴파일 언어가 그냥 갖는다). G2 = "async 실행 의미론 완성 + codegen 통합" 만. (2) wilson 의 모든 것(core+모든 plugin+모든 도구)은 hexa-lang 으로 — TS 0. (3) plugin 아키텍처(`wilson/docs/plugin-interfaces-comms-aot-brainstorm.md` Part C 개정판)가 강제하는 신규 갭 후보 **G7/G8** 추가.
 
 ---
 
-## 6개 갭 (상세는 wilson 문서)
+## 갭 목록 (상세는 wilson 문서)
 
 | # | 갭 | 계층 | 현재 | 무게 | roadmap 초안 위치 |
 |---|---|---|---|---|---|
 | **G1** | payload enum 완성 (construction + type-binding + codegen extraction + 다중필드) | 언어/typechecker/codegen | A1-A3 land, A4 partial, A5 pending — `patches/rfc020-enum-payload-variants.md` | ★★★ | `.roadmap.codegen` CG-RFC020-A4-A5 / B1 / B2 / C1 (rfc020 patch 파일) |
-| **G2** | async 실행 의미론 완성 + interp parity | 런타임/codegen/typecheck | `async fn`/`await`/`yield`/`spawn`/`select` 파싱 OK, `self/async_runtime.hexa` (cooperative scheduler, Rust 포팅) 존재, `stdlib/net/http_server` 가 live 사용 — 실행 의미론 미완 ("spawn 테스트는 syntax validation only"), `exec_stream_async` AOT-only (`hexa run` 은 'exec' 만 등록) | ★★★ | `.roadmap.runtime` RT-ASYNC-MODEL — 아래 |
+| **G2** | async 실행 의미론 완성 (`async fn`/`await`/`yield`/`select`/async-generator) + codegen 통합 | 런타임/codegen/typecheck | `async fn`/`await`/`yield`/`spawn`/`select` 파싱 OK, `self/async_runtime.hexa`(cooperative scheduler, Rust 포팅) 존재, `stdlib/net/http_server` 가 live 사용 — 실행 의미론 미완 ("spawn 테스트는 syntax validation only"). ~~interp parity~~ → 인터프리터 retire 하니 불필요, codegen 통합만. | ★★★ | `.roadmap.runtime` RT-ASYNC-MODEL — 아래 (interp dispatch 항목 제거) |
 | **G3** | cancellation handle (AbortSignal 등가물) — exec/http_sse/tool 중단 | 런타임/stdlib | `async_runtime` 에 cooperative `task_group_cancel`/`scheduler_shutdown` — exec/http 에 미연결 | ★★ | `.roadmap.runtime` RT-CANCEL-TOKEN — 아래 |
 | **G4** | `stdlib/jsonschema.hexa` — JSON Schema draft-07 subset 런타임 validator (tool-arg 검증) | stdlib | 없음 (`stdlib/json`, `json_object` 는 traverse 만). 순수 stdlib — 저위험, 바로 가능 | ★ | `.roadmap.stdlib` S-NEW-JSONSCHEMA — 아래 |
 | **G5** | `self/stdlib/fs.hexa` 보강 — atomic O_APPEND + rotation + stat parity | stdlib/rt | `self/stdlib/fs::append_file` 있음 (atomic 보장 미확인), `stdlib/portable_fs::{file_size,mtime,now_ns,exists}`. 먼저 `self/stdlib/fs.hexa` 실독으로 갭 확정 | ★ | `.roadmap.stdlib` S-FS-ATOMIC-APPEND — 아래 |
-| **G6** | `stdlib/jsonl_pool.hexa` + `stdlib/channel.hexa` backpressure — JSONL-demux 서브프로세스 풀 (swarm cell) | stdlib | `stdlib/proc`(supervised spawn) + `stdlib/channel`(bidirectional FIFO) + `exec_stream_async` 조각만; 풀 헬퍼 없음; `channel.ai.md` C3 "백프레셔 미surface". swarm = P3 — wilson core MVP 엔 불필요 | ★ | `.roadmap.stdlib` S-NEW-JSONL-POOL — 아래 |
+| **G6** | `stdlib/jsonl_pool.hexa` + `stdlib/channel.hexa` backpressure — JSONL-demux 서브프로세스 풀 (swarm cell, out-of-proc plugin IPC) | stdlib | `stdlib/proc`(supervised spawn) + `stdlib/channel`(bidirectional FIFO) + `exec_stream_async` 조각만; 풀 헬퍼 없음; `channel.ai.md` C3 "백프레셔 미surface". | ★ | `.roadmap.stdlib` S-NEW-JSONL-POOL — 아래 |
+| **G7** (신규 후보) | `hexa_ld` 동적 링킹 / dlopen — in-proc plugin 을 재컴파일 없이 추가 (`.so`/`.dylib` 런타임 로드) | linker/runtime | 없음 — `hexa_ld v1.1` 은 static only (ELF64+Mach-O static). 없으면 wilson 의 in-proc plugin = 전부 `wilson build` 로 정적 흡수 강제 (plugin 켜고 끄기 = 재컴파일). | ★ (있으면 plugin UX ↑, 없어도 동작 가능) | `.roadmap.codegen` 또는 `.roadmap.runtime` — 신규 (RFC 필요) |
+| **G8** (신규 후보) | `hexa_ld` incremental link — 변경된 plugin object 만 재링크 | linker | 미확인 — `hexa_ld v1.1` 의 incremental 지원 여부 불명. 없으면 `wilson build --with X` = 매번 full relink (core 포함 수십초~분) → wilson dev UX 저하. | ★ (dev UX) | `.roadmap.codegen` — 신규 |
 
-**우선순위**: G1 ∥ G2 → G3, G4/G5 끼워넣기 (저위험), G6 한참 뒤. **wilson core 착수 게이트 = G1 + G2 (+G3) done.**
+**우선순위**: G1 ∥ G2 → G3, G4/G5 끼워넣기 (저위험), G6 (out-of-proc plugin IPC + swarm), G7/G8 (plugin UX — 없어도 wilson 동작 가능, 있으면 좋음). **wilson core 착수 게이트 = G1 + G2 (+G3) done.**
 
 **hexa-lang 갭이 아닌 것** (wilson 쪽 / 그냥 큰 것): pi extension host API (coding-agent surface), `core/agent-session.ts` 3110 LoC (deps 풀리면 그냥 큼), TUI cli 서브커맨드 (`self/tui` 쓰면 됨), macOS Keychain (`security` shellout 한 줄), image-resize/mime (`photon-node` Rust/WASM — `sips`/`magick` shellout or c_ffi), multi-provider routing (provider SDK 는 `self/stdlib/{anthropic,bedrock,google}_sdk` 로 부분), BM25/MinHash (hive `packages/compression/hexa/*` 이미 hexa-native).
 
