@@ -541,24 +541,30 @@ linker:
     - explicit_flag: "--linker=system"
   hexa_ld_v1_scope:
     # NOTE (2026-05-09): v1.1 adds Mach-O arm64 emitter alongside ELF.
+    # NOTE (2026-05-10): v1.2 embeds ad-hoc LC_CODE_SIGNATURE so the
+    # kernel accepts the binary on Apple Silicon without any external
+    # `codesign` shellout. ad-hoc only — no notarization, no team-id.
     # See compiler/link/hexa_ld.hexa: link() autodetects ELF (0x7F ELF)
     # vs Mach-O 64 (CF FA ED FE) magic and dispatches accordingly.
-    # Mach-O caveats: requires ad-hoc `codesign -s -` on Apple Silicon
-    # for the kernel to accept the binary; LC_LOAD_DYLINKER stub
-    # `/usr/lib/dyld` is included to satisfy modern XNU loader.
     formats: [ELF, Mach-O_arm64]      # v1 → ELF; v1.1 → ELF + Mach-O_arm64
     capabilities:
       - static_linking_only
       - symbol_resolution             # ELF: `_start`/`main`; Mach-O: `_main`/`start`
-      - basic_relocations             # v1.1: NONE only — full reloc → v1.2
-      - dwarf_debug_section_emit_basic # v1.1: dropped — lands v1.2
+      - basic_relocations             # v1.1: NONE only — full reloc → v1.3
+      - dwarf_debug_section_emit_basic # v1.1: dropped — lands v1.3
       - macho_arm64_execute           # v1.1: MH_EXECUTE + LC_MAIN + LC_LOAD_DYLINKER
+      - codesign_embedded             # v1.2: ad-hoc LC_CODE_SIGNATURE
+                                      #   (CSMAGIC_EMBEDDED_SIGNATURE wrapping
+                                      #    CSMAGIC_CODEDIRECTORY with
+                                      #    SHA-256 per-4 KiB-page hashes;
+                                      #    no notarization, no team-id)
     deferred:
-      - dynamic_linking               # LC_LOAD_DYLIB / PT_DYNAMIC → v1.2+
+      - dynamic_linking               # LC_LOAD_DYLIB / PT_DYNAMIC → v1.3+
       - link_time_optimization
       - section_dead_code_elim
-      - relocation_processing_full    # v1.2
-      - codesign_embedded             # v1.2: emit ad-hoc LC_CODE_SIGNATURE inline
+      - relocation_processing_full    # v1.3
+      - codesign_notarized            # v1.4+: requires Apple Developer ID
+                                      #   + altool roundtrip; out of scope
   bootstrap_carve_out:
     rule: system_ld_temporarily_permitted_during_stage0_to_stage1
     expires_after: stage1_native_compiler_settled

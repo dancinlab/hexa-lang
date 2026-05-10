@@ -149,7 +149,7 @@ fn _assemble_macho(s_path: string, o_path: string) -> bool {
 
 fn main() {
     println("══════════════════════════════════════════════")
-    println("  hexa_ld v1.1 — ELF + Mach-O Linker Smoke Test")
+    println("  hexa_ld v1.2 — ELF + Mach-O (ad-hoc signed) Linker Smoke Test")
     println("══════════════════════════════════════════════")
 
     let mut ok = true               // ELF case ok (true if PASS or SKIP)
@@ -270,20 +270,28 @@ fn main() {
                     println("  ok: arch = arm64")
                 }
 
-                // Best-effort exec: kernel will refuse without ad-hoc
-                // codesign on Apple Silicon. We try `codesign -s -` once,
-                // then probe; failure is reported but does NOT fail the
-                // test (format check is the contract for v1.1).
-                let cs_out = exec("codesign -s - '" + e_m + "' 2>&1").trim()
-                if len(cs_out) > 0 { println("  codesign: " + cs_out) }
+                // v1.2 contract: hexa_ld emits a self-signed binary;
+                // we run it directly. NO post-link codesign shellout —
+                // the whole point of v1.2 is that hexa_ld emits valid
+                // ad-hoc CDHash inline (CSMAGIC_EMBEDDED_SIGNATURE +
+                // CSMAGIC_CODEDIRECTORY w/ per-4-KiB SHA-256 hashes).
+                // @allow-bare-exec @allow-silent-exit  (lints below)
                 let probe = exec("'" + e_m + "' ; echo __RC=$?").trim()
                 if _contains(probe, "__RC=0") {
-                    println("  ok: emitted Mach-O exited 0 (codesign accepted)")
+                    println("  ok: emitted Mach-O exited 0 (kernel CDHash accepted)")
                 } else {
-                    println("  EXEC_BLOCKED: kernel refused to run — likely")
-                    println("    codesign + LC_LOAD_DYLINKER stub insufficient")
-                    println("    for this XNU rev. probe: " + probe)
-                    println("    (format check stands; full runtime path → --linker=system)")
+                    println("  EXEC_BLOCKED: kernel refused to run.")
+                    println("    probe: " + probe)
+                    // diagnostics: ask the system codesign tool to
+                    // verify what we emitted; a CDHash mismatch or blob
+                    // structure error shows up here.
+                    // @allow-bare-exec @allow-silent-exit
+                    let cs_v = exec("codesign -v -v '" + e_m + "' 2>&1").trim()
+                    println("    codesign -v -v: " + cs_v)
+                    // @allow-bare-exec @allow-silent-exit
+                    let cs_d = exec("codesign -d -v '" + e_m + "' 2>&1").trim()
+                    println("    codesign -d -v: " + cs_d)
+                    macho_ok = false
                 }
             }
         }
@@ -296,9 +304,9 @@ fn main() {
     println("══════════════════════════════════════════════")
     let final_ok = ok && macho_ok
     if final_ok {
-        println("PASS: hexa_ld v1.1 emits valid ELF64 + Mach-O 64 executables.")
+        println("PASS: hexa_ld v1.2 emits valid ELF64 + Mach-O 64 (ad-hoc signed) executables.")
     } else {
-        println("FAIL: hexa_ld v1.1 contract broken — see lines above.")
+        println("FAIL: hexa_ld v1.2 contract broken — see lines above.")
     }
     println("══════════════════════════════════════════════")
     if !final_ok { exit(1) }

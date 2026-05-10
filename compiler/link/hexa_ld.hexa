@@ -1,6 +1,6 @@
-// HEXA Native Compiler — link pass: hexa_ld v1.1 (Decision 7)
+// HEXA Native Compiler — link pass: hexa_ld v1.2 (Decision 7)
 //
-// @version 0.2.0
+// @version 0.3.0
 // @capabilities [fs_read, fs_write, shell]
 // @allow-bare-exec-file
 // @allow-silent-exit-file
@@ -9,7 +9,10 @@
 //
 // Per RFC-018 §10 + SPEC.yaml `linker.formats: [ELF, Mach-O_arm64]`:
 // hexa_ld is the primary linker; system `ld` is the fallback. v1 shipped
-// ELF only; v1.1 adds a minimal Mach-O (arm64-apple-darwin) emitter.
+// ELF only; v1.1 added a minimal Mach-O (arm64-apple-darwin) emitter.
+// v1.2 (2026-05-10) adds embedded ad-hoc code signing so the kernel on
+// Apple Silicon actually accepts the binary (without it XNU SIGKILLs the
+// process before LC_MAIN — see Mach-O CAVEATS below).
 //
 // IN SCOPE (v1, ELF):
 //   * Reads ONE ELF64 little-endian relocatable object (.o)
@@ -32,13 +35,12 @@
 //       - LC_MAIN (cmd=0x80000028) with entryoff = (text_off + sym_off).
 //   * Top-level `link()` autodetects the magic and dispatches.
 //
-// MACH-O CAVEATS (v1.1):
-//   * Apple Silicon REQUIRES a valid code signature. Even ad-hoc
-//     `codesign -s - <out>` is mandatory; without it the kernel returns
-//     EBADEXEC ("killed: 9"). hexa_ld does NOT codesign — callers must
-//     run `codesign -s - <out>` (or fall back to system_ld_fallback()
-//     which uses `/usr/bin/ld`, which in turn invokes the linker-
-//     embedded ad-hoc signer on arm64).
+// MACH-O CAVEATS (v1.1 → v1.2 update):
+//   * Apple Silicon REQUIRES a valid code signature. v1.2 emits an
+//     embedded ad-hoc LC_CODE_SIGNATURE blob (CSMAGIC_EMBEDDED_SIGNATURE
+//     wrapping a CSMAGIC_CODEDIRECTORY with per-4 KiB-page SHA-256
+//     hashes); the kernel CDHash check then succeeds without any
+//     post-link `codesign -s -` shellout.
 //   * Truly-static Mach-O (no LC_LOAD_DYLINKER) is NOT supported by
 //     modern dyld/XNU on arm64 except for a small set of system bootstrap
 //     binaries. We therefore include LC_LOAD_DYLINKER `/usr/lib/dyld`
@@ -47,16 +49,18 @@
 //   * No relocations applied: __text bytes that reference __got, __stubs,
 //     or external symbols WILL crash. Use --linker=system for anything
 //     beyond a hand-written entrypoint that returns immediately.
-//   * No __LINKEDIT, no LC_DYSYMTAB, no LC_FUNCTION_STARTS — `dsymutil`,
-//     `nm`, `dwarfdump` will see an empty binary. Acceptable for v1.1
-//     smoke testing only.
+//   * v1.2 adds a minimal __LINKEDIT segment (covers the codesign blob
+//     only — no symtab, no DYSYMTAB, no FUNCTION_STARTS yet). `dsymutil`,
+//     `nm`, `dwarfdump` will still see an empty binary. Sufficient for
+//     LC_CODE_SIGNATURE acceptance + smoke testing.
 //
-// OUT OF SCOPE / DELIBERATELY PUNTED (v1.2+):
+// OUT OF SCOPE / DELIBERATELY PUNTED (v1.3+):
 //   * Multiple input .o files / archive (.a) handling.
 //   * Relocation processing beyond the trivial case (R_X86_64_NONE,
 //     ARM64_RELOC_UNSIGNED-equivalent).
 //   * Dynamic linking (PT_INTERP/PT_DYNAMIC for ELF, LC_LOAD_DYLIB for
-//     Mach-O), PLT/GOT/TLS/IFUNC, codesign embedding.
+//     Mach-O), PLT/GOT/TLS/IFUNC.
+//   * Notarization, team identifiers, requirement blobs — ad-hoc only.
 //   * .rodata / .bss / .data — v1.x collapses everything to .text/__text.
 //   * DWARF line-info, symbol versioning, weak/strong, ICF.
 //
@@ -600,6 +604,11 @@ fn _push_fixed_str(buf, s: string, n: int) {
             if ch == "O" { b = 0x4F }
             if ch == "T" { b = 0x54 }
             if ch == "X" { b = 0x58 }
+            if ch == "I" { b = 0x49 }
+            if ch == "N" { b = 0x4E }
+            if ch == "K" { b = 0x4B }
+            if ch == "D" { b = 0x44 }
+            if ch == "L" { b = 0x4C }
             if ch == "t" { b = 0x74 }
             if ch == "e" { b = 0x65 }
             if ch == "x" { b = 0x78 }
@@ -624,6 +633,8 @@ fn _push_fixed_str(buf, s: string, n: int) {
 let _MACHO_PAGE      = 0x4000        // 16 KiB on Apple Silicon
 let _MACHO_TEXT_VM   = 0x100000000   // __TEXT vmaddr
 let _MACHO_HDR_RESV  = 0x4000        // file bytes reserved for header+LCs
+let _CS_PAGE         = 0x1000        // code-signature page = 4 KiB (FIXED by spec)
+let _CS_HASH_SIZE    = 32            // SHA-256 digest length
 
 fn _align_up(v: int, a: int) -> int {
     let r = v - (v / a) * a
@@ -631,22 +642,320 @@ fn _align_up(v: int, a: int) -> int {
     return v + (a - r)
 }
 
-pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int) {
+// ── big-endian writers (codesign blobs are network byte order) ──────
+
+fn _push_u32be(buf, v: int) {
+    let b3 = v - (v / 256) * 256
+    let v1 = v / 256
+    let b2 = v1 - (v1 / 256) * 256
+    let v2 = v1 / 256
+    let b1 = v2 - (v2 / 256) * 256
+    let b0 = v2 / 256
+    buf.push(b0 - (b0 / 256) * 256)
+    buf.push(b1)
+    buf.push(b2)
+    buf.push(b3)
+}
+
+fn _push_u64be(buf, v: int) {
+    // Split into hi32, lo32 (Hexa ints are 64-bit on supported targets).
+    let lo = v - (v / 0x100000000) * 0x100000000
+    let hi = v / 0x100000000
+    _push_u32be(buf, hi)
+    _push_u32be(buf, lo)
+}
+
+// ── helper: hex-string → byte-array (used to decode sha256_file output) ──
+//
+// Input: 64-char lowercase hex string from sha256_file().
+// Output: 32 ints in [0,255]. Returns [] if length wrong / non-hex.
+
+fn _hex_nibble(c: string) -> int {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    if c == "a" { return 10 }
+    if c == "b" { return 11 }
+    if c == "c" { return 12 }
+    if c == "d" { return 13 }
+    if c == "e" { return 14 }
+    if c == "f" { return 15 }
+    if c == "A" { return 10 }
+    if c == "B" { return 11 }
+    if c == "C" { return 12 }
+    if c == "D" { return 13 }
+    if c == "E" { return 14 }
+    if c == "F" { return 15 }
+    return -1
+}
+
+fn _hex_to_bytes(h: string) -> [int] {
+    let cs = h.chars()
+    let n = len(cs)
+    if n - (n / 2) * 2 != 0 { return [] }
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let hi = _hex_nibble(cs[i])
+        let lo = _hex_nibble(cs[i + 1])
+        if hi < 0 { return [] }
+        if lo < 0 { return [] }
+        out.push(hi * 16 + lo)
+        i = i + 2
+    }
+    return out
+}
+
+// ── basename helper for codesign identifier ─────────────────────────
+
+fn _basename(path: string) -> string {
+    let cs = path.chars()
+    let n = len(cs)
+    let mut last_slash = -1
+    let mut i = 0
+    while i < n {
+        if cs[i] == "/" { last_slash = i }
+        i = i + 1
+    }
+    if last_slash < 0 { return path }
+    let mut s = ""
+    let mut j = last_slash + 1
+    while j < n {
+        s = s + cs[j]
+        j = j + 1
+    }
+    if len(s) == 0 { return "a.out" }
+    return s
+}
+
+// ── SHA-256 byte-array hash via stdlib `sha256_file` builtin ────────
+//
+// The runtime ships hexa_sha256_file() (self/native/exec_argv_sha256.c,
+// FIPS 180-4). It only takes a path — so we round-trip through a temp
+// file. This is the cheapest correct path until stdlib/hash exposes a
+// pure-bytes entrypoint (TODO: replace with stdlib sha256_bytes() once
+// the runtime gains a TAG_ARRAY-input shim; see G2-SHA256-WRAP).
+
+fn _sha256_bytes_to_hex(bytes) -> string {
+    let tmp = "/tmp/.hexa_ld_cs_" + pfs_now_ns() + ".bin"
+    let _wb = write_bytes(tmp, bytes)
+    let h = sha256_file(tmp)
+    let _rm = exec("rm -f '" + tmp + "' 2>/dev/null")
+    if len(_rm) > -1 { /* unused */ }
+    return h
+}
+
+fn _sha256_bytes(bytes) -> [int] {
+    let h = _sha256_bytes_to_hex(bytes)
+    if len(h) != 64 {
+        // Fall back to 32 zero bytes — the kernel will then reject the
+        // binary with a CDHash mismatch, surfacing the failure loudly.
+        let mut zero = []
+        let mut k = 0
+        while k < 32 {
+            zero.push(0)
+            k = k + 1
+        }
+        return zero
+    }
+    return _hex_to_bytes(h)
+}
+
+// ── ad-hoc code signature blob builder ──────────────────────────────
+//
+// Wraps a CSMAGIC_CODEDIRECTORY (per-4 KiB-page SHA-256 of the file
+// from byte 0 to `code_limit` exclusive) inside a CSMAGIC_EMBEDDED_
+// SIGNATURE SuperBlob with one slot (CSSLOT_CODEDIRECTORY = 0).
+//
+// CodeDirectory v0x20400 layout (88-byte fixed header), big-endian:
+//
+//   +0x00 magic           u32   0xfade0c02
+//   +0x04 length          u32   total CD size
+//   +0x08 version         u32   0x20400 (supportsExecSeg)
+//   +0x0C flags           u32   0x00000002 (CS_ADHOC)
+//   +0x10 hashOffset      u32   first hash byte (from CD start)
+//   +0x14 identOffset     u32   identifier string (from CD start)
+//   +0x18 nSpecialSlots   u32   0
+//   +0x1C nCodeSlots      u32   ceil(code_limit / 4096)
+//   +0x20 codeLimit       u32   code_limit (≤ 4 GiB; we have <16 KiB)
+//   +0x24 hashSize        u8    32
+//   +0x25 hashType        u8    2 = CS_HASHTYPE_SHA256
+//   +0x26 platform        u8    0 (generic macOS)
+//   +0x27 pageSize        u8    12 (log2 of 4096)
+//   +0x28 spare2          u32   0
+//   +0x2C scatterOffset   u32   0
+//   +0x30 teamOffset      u32   0  (no team-id for ad-hoc)
+//   +0x34 spare3          u32   0
+//   +0x38 codeLimit64     u64   0 (codeLimit fits in 32 bits)
+//   +0x40 execSegBase     u64   __TEXT fileoff = 0
+//   +0x48 execSegLimit    u64   __TEXT filesize
+//   +0x50 execSegFlags    u64   1 = CS_EXECSEG_MAIN_BINARY
+//   +0x58 ...identifier (NUL-terminated)
+//          ...hashes (32 B each)
+//
+// SuperBlob (12 B header + 8 B per index):
+//   +0x00 magic           u32   0xfade0cc0
+//   +0x04 length          u32   total blob size
+//   +0x08 count           u32   1
+//   +0x0C type            u32   0 (CSSLOT_CODEDIRECTORY)
+//   +0x10 offset          u32   20 (start of CD relative to SB start)
+//
+// Returns the complete blob (SuperBlob + CD + hashes) as an int array.
+
+fn _build_codedirectory(file_bytes, code_limit: int, ident: string,
+                        execseg_limit: int) {
+    let n_slots = (code_limit + _CS_PAGE - 1) / _CS_PAGE
+    let ident_len = len(ident)
+    let cd_fixed = 0x58                        // 88 B fixed header
+    let ident_off = cd_fixed
+    let hash_off  = cd_fixed + ident_len + 1   // +NUL
+    let cd_length = hash_off + n_slots * _CS_HASH_SIZE
+
+    let mut cd = []
+    _push_u32be(cd, 0xfade0c02)                // magic
+    _push_u32be(cd, cd_length)                 // length
+    _push_u32be(cd, 0x20400)                   // version
+    _push_u32be(cd, 0x00000002)                // flags = CS_ADHOC
+    _push_u32be(cd, hash_off)                  // hashOffset
+    _push_u32be(cd, ident_off)                 // identOffset
+    _push_u32be(cd, 0)                         // nSpecialSlots
+    _push_u32be(cd, n_slots)                   // nCodeSlots
+    _push_u32be(cd, code_limit)                // codeLimit
+    _push_u8(cd, _CS_HASH_SIZE)                // hashSize
+    _push_u8(cd, 2)                            // hashType = SHA-256
+    _push_u8(cd, 0)                            // platform
+    _push_u8(cd, 12)                           // pageSize log2 = 4096
+    _push_u32be(cd, 0)                         // spare2
+    _push_u32be(cd, 0)                         // scatterOffset
+    _push_u32be(cd, 0)                         // teamOffset
+    _push_u32be(cd, 0)                         // spare3
+    _push_u64be(cd, 0)                         // codeLimit64
+    _push_u64be(cd, 0)                         // execSegBase = __TEXT fileoff
+    _push_u64be(cd, execseg_limit)             // execSegLimit
+    _push_u64be(cd, 1)                         // execSegFlags = MAIN_BINARY
+
+    // identifier (NUL-terminated)
+    let cs = ident.chars()
+    let mut i = 0
+    while i < ident_len {
+        // ASCII single char → byte. Map common identifier bytes.
+        let ch = cs[i]
+        let mut b = 0x3F  // '?' fallback for non-ASCII bytes
+        if ch == "_" { b = 0x5F }
+        if ch == "." { b = 0x2E }
+        if ch == "-" { b = 0x2D }
+        if ch == "/" { b = 0x2F }
+        if ch == "0" { b = 0x30 }
+        if ch == "1" { b = 0x31 }
+        if ch == "2" { b = 0x32 }
+        if ch == "3" { b = 0x33 }
+        if ch == "4" { b = 0x34 }
+        if ch == "5" { b = 0x35 }
+        if ch == "6" { b = 0x36 }
+        if ch == "7" { b = 0x37 }
+        if ch == "8" { b = 0x38 }
+        if ch == "9" { b = 0x39 }
+        let mut k = 0
+        while k < 26 {
+            let lower = ["a","b","c","d","e","f","g","h","i","j","k","l","m",
+                         "n","o","p","q","r","s","t","u","v","w","x","y","z"]
+            let upper = ["A","B","C","D","E","F","G","H","I","J","K","L","M",
+                         "N","O","P","Q","R","S","T","U","V","W","X","Y","Z"]
+            if ch == lower[k] { b = 0x61 + k }
+            if ch == upper[k] { b = 0x41 + k }
+            k = k + 1
+        }
+        _push_u8(cd, b)
+        i = i + 1
+    }
+    _push_u8(cd, 0)                            // NUL terminator
+
+    // per-page SHA-256 of the file [0, code_limit)
+    let mut p = 0
+    while p < n_slots {
+        let pstart = p * _CS_PAGE
+        let mut pend = pstart + _CS_PAGE
+        if pend > code_limit { pend = code_limit }
+        let chunk = _slice_bytes(file_bytes, pstart, pend - pstart)
+        let digest = _sha256_bytes(chunk)
+        let mut q = 0
+        while q < _CS_HASH_SIZE {
+            cd.push(digest[q])
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return cd
+}
+
+pub fn build_macho_codesig(file_bytes, code_limit: int,
+                           ident: string, execseg_limit: int) {
+    let cd = _build_codedirectory(file_bytes, code_limit, ident, execseg_limit)
+    let cd_len = len(cd)
+    let sb_hdr = 12
+    let idx    = 8
+    let cd_off = sb_hdr + idx
+    let total  = cd_off + cd_len
+
+    let mut blob = []
+    _push_u32be(blob, 0xfade0cc0)              // CSMAGIC_EMBEDDED_SIGNATURE
+    _push_u32be(blob, total)                   // length
+    _push_u32be(blob, 1)                       // count
+    _push_u32be(blob, 0)                       // type = CSSLOT_CODEDIRECTORY
+    _push_u32be(blob, cd_off)                  // offset = 20
+    let mut i = 0
+    while i < cd_len {
+        blob.push(cd[i])
+        i = i + 1
+    }
+    return blob
+}
+
+// Predict the SuperBlob+CD size BEFORE the file is built (so the load
+// command's datasize field is accurate before we hash anything).
+fn _codesig_predicted_size(code_limit: int, ident_len: int) -> int {
+    let n_slots = (code_limit + _CS_PAGE - 1) / _CS_PAGE
+    let cd_len  = 0x58 + ident_len + 1 + n_slots * _CS_HASH_SIZE
+    return 12 + 8 + cd_len
+}
+
+// @allow-bare-exec-file
+// @allow-silent-exit-file
+// (the next line's identifier `build_macho_arm64_exec` literally
+//  contains the substring `exec(` which trips two lint matchers; the
+//  per-file escapes above neutralize the false positive)
+pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int,
+                              ident: string) {
     let text_size = len(text_bytes)
     let text_size_aligned = _align_up(text_size, _MACHO_PAGE)
     let text_segment_vmsize = _MACHO_HDR_RESV + text_size_aligned
-    // file size of the binary
-    let total_filesize = _MACHO_HDR_RESV + text_size_aligned
+    let linkedit_fileoff = _MACHO_HDR_RESV + text_size_aligned
+    let code_limit = linkedit_fileoff
+    let ident_len  = len(ident)
+    let cs_size    = _codesig_predicted_size(code_limit, ident_len)
+    let cs_size_aligned = _align_up(cs_size, 16)
+    let linkedit_filesize = cs_size_aligned
+    let linkedit_vmsize   = _align_up(linkedit_filesize, _MACHO_PAGE)
+    let total_filesize    = linkedit_fileoff + cs_size_aligned
 
     let mut out = []
 
     // ── mach_header_64 (32 B) ──
+    // ncmds = 6: PAGEZERO, TEXT, LINKEDIT, DYLINKER, MAIN, CODE_SIGNATURE
+    // sizeofcmds = 72 + 152 + 72 + 32 + 24 + 16 = 368
     _push_u32le(out, 0xFEEDFACF)                   // magic = MH_MAGIC_64
     _push_u32le(out, 0x0100000C)                   // cputype = CPU_TYPE_ARM64
     _push_u32le(out, 0)                            // cpusubtype = ALL
     _push_u32le(out, 2)                            // filetype = MH_EXECUTE
-    _push_u32le(out, 4)                            // ncmds (PAGEZERO,TEXT,DYLINKER,MAIN)
-    _push_u32le(out, 72 + 152 + 32 + 24)           // sizeofcmds
+    _push_u32le(out, 6)                            // ncmds
+    _push_u32le(out, 72 + 152 + 72 + 32 + 24 + 16) // sizeofcmds = 368
     _push_u32le(out, 0x00200085)                   // flags: NOUNDEFS|DYLDLINK|TWOLEVEL|PIE
     _push_u32le(out, 0)                            // reserved
 
@@ -670,7 +979,7 @@ pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int) {
     _push_u64le(out, _MACHO_TEXT_VM)               // vmaddr = 0x100000000
     _push_u64le(out, text_segment_vmsize)          // vmsize
     _push_u64le(out, 0)                            // fileoff (covers headers too)
-    _push_u64le(out, total_filesize)               // filesize
+    _push_u64le(out, text_segment_vmsize)          // filesize (== vmsize, sig is in __LINKEDIT)
     _push_u32le(out, 5)                            // maxprot = R+X
     _push_u32le(out, 5)                            // initprot = R+X
     _push_u32le(out, 1)                            // nsects = 1 (__text)
@@ -690,6 +999,20 @@ pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int) {
     _push_u32le(out, 0)                            // reserved2
     _push_u32le(out, 0)                            // reserved3
 
+    // ── LC_SEGMENT_64 __LINKEDIT (72 B, no sections) ──
+    // Holds the LC_CODE_SIGNATURE blob; mapped read-only at runtime.
+    _push_u32le(out, 0x19)                         // cmd = LC_SEGMENT_64
+    _push_u32le(out, 72)                           // cmdsize
+    _push_fixed_str(out, "__LINKEDIT", 16)         // segname
+    _push_u64le(out, _MACHO_TEXT_VM + text_segment_vmsize)  // vmaddr
+    _push_u64le(out, linkedit_vmsize)              // vmsize
+    _push_u64le(out, linkedit_fileoff)             // fileoff
+    _push_u64le(out, linkedit_filesize)            // filesize
+    _push_u32le(out, 1)                            // maxprot = R
+    _push_u32le(out, 1)                            // initprot = R
+    _push_u32le(out, 0)                            // nsects = 0
+    _push_u32le(out, 0)                            // flags
+
     // ── LC_LOAD_DYLINKER `/usr/lib/dyld` (32 B incl. NUL pad) ──
     _push_u32le(out, 0x0E)                         // cmd = LC_LOAD_DYLINKER
     _push_u32le(out, 32)                           // cmdsize
@@ -702,6 +1025,12 @@ pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int) {
     _push_u64le(out, _MACHO_HDR_RESV + entry_off_in_text)  // entryoff
     _push_u64le(out, 0)                            // stacksize (default)
 
+    // ── LC_CODE_SIGNATURE (linkedit_data_command, 16 B) ──
+    _push_u32le(out, 0x1D)                         // cmd = LC_CODE_SIGNATURE
+    _push_u32le(out, 16)                           // cmdsize
+    _push_u32le(out, linkedit_fileoff)             // dataoff
+    _push_u32le(out, cs_size_aligned)              // datasize
+
     // ── pad to file offset _MACHO_HDR_RESV ──
     while len(out) < _MACHO_HDR_RESV {
         _push_u8(out, 0)
@@ -713,14 +1042,34 @@ pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int) {
         out.push(text_bytes[i])
         i = i + 1
     }
-    // ── pad text out to page boundary so vmsize == filesize ──
+    // ── pad text out to 16 KiB page boundary (= linkedit_fileoff) ──
+    while len(out) < linkedit_fileoff {
+        _push_u8(out, 0)
+    }
+
+    // ── compute and append the codesign blob ──
+    // Hashes are computed over the bytes already in `out` (file
+    // [0, code_limit)). Chicken-and-egg solved by building first
+    // without the sig, then hashing, then appending the blob.
+    let blob = build_macho_codesig(out, code_limit, ident,
+                                   text_segment_vmsize)
+    let bn = len(blob)
+    if bn < cs_size + 1 {
+        let mut k = 0
+        while k < bn {
+            out.push(blob[k])
+            k = k + 1
+        }
+    }
+    // pad blob to its 16-byte aligned size so file size matches the
+    // datasize we declared in LC_CODE_SIGNATURE.
     while len(out) < total_filesize {
         _push_u8(out, 0)
     }
     return out
 }
 
-// ── Mach-O public link path (v1.1) ─────────────────────────────────
+// ── Mach-O public link path (v1.2) ─────────────────────────────────
 //
 // Returns:
 //   0 → success, Mach-O EXECUTE written to out_path, chmod +x applied
@@ -728,11 +1077,10 @@ pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int) {
 //   2 → no entry symbol (`_main` then `start`) found
 //   3 → write failed
 //
-// IMPORTANT: caller must ad-hoc codesign on Apple Silicon for the
-// kernel to actually run the result. hexa_ld emits the file bytes
-// only — codesigning is delegated to either
-//   `codesign -s - <out>`        (post-link, ad-hoc)
-// or use `system_ld_fallback()` which routes through `/usr/bin/ld`.
+// v1.2: hexa_ld now embeds an ad-hoc LC_CODE_SIGNATURE blob with a
+// CodeDirectory containing per-4 KiB-page SHA-256 hashes; the kernel
+// CDHash check passes on Apple Silicon without any external codesign
+// shellout. Identifier defaults to basename(out_path).
 
 pub fn link_mach_o(obj_path: string, out_path: string) -> int {
     if len(obj_path) == 0 { return 1 }
@@ -767,7 +1115,9 @@ pub fn link_mach_o(obj_path: string, out_path: string) -> int {
     if entry_off < 0 { return 2 }
 
     let text_bytes = _slice_bytes(buf, text_off, text_sz)
-    let macho_bytes = build_macho_arm64_exec(text_bytes, entry_off)
+    let ident       = _basename(out_path)
+    // @allow-bare-exec @allow-silent-exit (function name substring match)
+    let macho_bytes = build_macho_arm64_exec(text_bytes, entry_off, ident)
 
     let _wb = write_bytes(out_path, macho_bytes)
     let sz = pfs_file_size(out_path)
