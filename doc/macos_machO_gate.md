@@ -82,5 +82,11 @@ informational, not corrective.
 ## Cross-references
 
 - Reference wrapper: `tool/wrappers/hexa_top_wrapper.sh`
-- Lint rule (`LINT-MACHO-1`): `tool/lint_macho_gate.hexa`
+- Lint rule (`LINT-MACHO-1`, `.hexa` exec sites): `tool/lint_macho_gate.hexa`
+- Lint rule (`LINT-MACHO-2`, shell + CI invocation surface):
+  `tool/lint_macho_gate_invocations.hexa`
+- Declarative spec (falsifiers `F-HEXA-MACHO-1` / `-2`):
+  `spec/hexa_macho_gate.spec.yaml`
 - SPEC section: `macos_machO_gate` in `SPEC.yaml`
+- Per-session lint bypass: `HEXA_LINT_MACHO_DISABLE=1` (removed when Phase C
+  promotes warn -> block)
