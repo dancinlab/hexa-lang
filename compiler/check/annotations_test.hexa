@@ -25,6 +25,7 @@
 
 import "../parse/ast.hexa"
 import "../diag/catalog.hexa"
+import "../diag/builder.hexa"
 import "../lex/tokens.hexa"
 import "./annotations.hexa"
 
@@ -300,8 +301,98 @@ fn main() {
         ok = false
     }
 
+    // ── (g) apply_grace_suppression: HX1042 + @grace(HX1042) ─
+    //
+    // SPEC.yaml opt_out.ai_native_warn_policy.suppressed_diagnostic_inlining:
+    // a @grace site rewrites a real diagnostic into HX9000 carrying the
+    // full inlined render via suppressed_title / suppressed_message /
+    // suppressed_severity_original args.
+    println("")
+    println("── case (g) apply_grace_suppression HX1042 ─────")
+    let mut args_g = []
+    args_g.push(_ident_expr("HX1042", f, 22, 8))
+    args_g.push(_kwarg_expr("until", "2099-12-31", f, 22, 16))
+    args_g.push(_kwarg_expr("reason", "atlas-migration", f, 22, 40))
+    let ann_g = _ann("grace", args_g, f, 22)
+    let mut anns_g = []
+    anns_g.push(ann_g)
+    let item_g = _fn_item("graced_g", anns_g, f, 22)
+    let mod_g = _module_with(item_g, f)
+
+    // Synthesize a "real" HX1042 atlas-not-found diagnostic that lands
+    // INSIDE the @grace-protected item's line range. The item starts at
+    // line 22; the diagnostic is at line 23 (body), same file.
+    let mut bg = diag_new("HX1042")
+    bg = diag_span(bg, _span(f, 23, 5, 7))
+    bg = diag_arg(bg, "atlas_hash", "abc123")
+    bg = diag_arg(bg, "kind", "L")
+    bg = diag_arg(bg, "node_id", "missing_node")
+    let real_diag = diag_emit(bg)
+
+    let mut input_g: array = []
+    input_g.push(real_diag)
+    let result_g = apply_grace_suppression(mod_g, input_g, today)
+
+    println("input diagnostics:  " + to_string(len(input_g)))
+    println("result diagnostics: " + to_string(len(result_g)))
+    let mut gi = 0
+    while gi < len(result_g) {
+        _print_diag(gi, result_g[gi])
+        gi = gi + 1
+    }
+
+    // Expectations:
+    //   * The HX1042 is removed (suppressed).
+    //   * Exactly ONE HX9000 is in the result.
+    //   * That HX9000's rendered message contains "atlas node not found"
+    //     (suppressed_title), "Error" (suppressed_severity_original),
+    //     and "missing_node" (the suppressed_message body from render_short).
+    if len(result_g) != 1 {
+        println("FAIL (g): expected 1 diagnostic, got " + to_string(len(result_g)))
+        ok = false
+    } else if result_g[0].code != "HX9000" {
+        println("FAIL (g): expected HX9000, got " + result_g[0].code)
+        ok = false
+    } else {
+        let msg = result_g[0].message
+        let title_needle = "atlas node not found"
+        let sev_needle = "Error"
+        let suppressed_needle = "missing_node"
+        let mut have_title = false
+        let mut have_sev = false
+        let mut have_supp = false
+        let mn = len(msg)
+        let mut sx = 0
+        while sx + len(title_needle) <= mn {
+            if msg.substring(sx, sx + len(title_needle)) == title_needle { have_title = true }
+            sx = sx + 1
+        }
+        sx = 0
+        while sx + len(sev_needle) <= mn {
+            if msg.substring(sx, sx + len(sev_needle)) == sev_needle { have_sev = true }
+            sx = sx + 1
+        }
+        sx = 0
+        while sx + len(suppressed_needle) <= mn {
+            if msg.substring(sx, sx + len(suppressed_needle)) == suppressed_needle { have_supp = true }
+            sx = sx + 1
+        }
+        if !have_title {
+            println("FAIL (g): HX9000 message missing suppressed_title `" + title_needle + "`")
+            ok = false
+        }
+        if !have_sev {
+            println("FAIL (g): HX9000 message missing suppressed_severity_original `" + sev_needle + "`")
+            ok = false
+        }
+        if !have_supp {
+            println("FAIL (g): HX9000 message missing suppressed_message body (looking for `" + suppressed_needle + "`)")
+            ok = false
+        }
+    }
+
     if ok {
-        println("PASS: 7 cases — 0 / HX8010×1 / HX9001+HX9000 / HX9000×1 / HX9002×1 / 0 / HX9003×1.")
+        println("PASS: 8 cases — 0 / HX8010×1 / HX9001+HX9000 / HX9000×1 / HX9002×1 / 0 / HX9003×1 / inline-HX9000.")
     }
     println("══════════════════════════════════════════════")
     if !ok { exit(1) }

@@ -234,6 +234,82 @@ pub fn diag_related(b: DiagBuilder, code: string) -> DiagBuilder {
     }
 }
 
+// Severity → catalog-ish title-case string, used by HX9000 inlining
+// (suppressed_severity_original arg keeps the ORIGINAL severity visible
+// even after @grace downgrades the build-fail to a Warning).
+fn _sev_title(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "Error",
+        Severity::Warning -> "Warning",
+        Severity::Note -> "Note"
+    }
+}
+
+// Severity → lowercase string (mirrors render._sev_str). Inlined here
+// to avoid an import cycle with render.hexa (render imports catalog,
+// builder imports catalog; pulling render in would chain through a
+// path the stage0 interp doesn't always resolve transitively).
+fn _sev_lower(s: Severity) -> string {
+    return match s {
+        Severity::Error -> "error",
+        Severity::Warning -> "warning",
+        Severity::Note -> "note"
+    }
+}
+
+// Inline rendering of a Diagnostic in `short` form (single-line,
+// grep-friendly), kept consistent with compiler/diag/render.hexa
+// `render_short`. SPEC.yaml opt_out.ai_native_warn_policy.suppressed
+// _diagnostic_inlining fixes render_format=short — multi-line pretty
+// would clobber the HX9000 layout.
+fn _render_short_inline(d: Diagnostic) -> string {
+    let sp = d.span
+    let loc = sp.file + ":" + to_string(sp.line) + ":" + to_string(sp.col)
+    let mut s = loc + " " + d.code + " " + _sev_lower(d.severity) + ": " + d.message
+    if len(d.suggest) > 0 {
+        s = s + "  [suggest=" + d.suggest + "]"
+    }
+    return s
+}
+
+// ── @grace suppression helper (SPEC.yaml ai_native_warn_policy) ──
+//
+// Folds a real diagnostic into a paired HX9000 ai-native warn whose
+// template inlines the FULL rendered text of what is being silenced.
+// SPEC.yaml opt_out.ai_native_warn_policy.suppressed_diagnostic_inlining
+// fixes args_keys: suppressed_title, suppressed_message,
+// suppressed_severity_original; render_format=short (multi-line pretty
+// would clobber the HX9000 layout).
+//
+// The returned Diagnostic carries:
+//   * code = HX9000, severity = Warning (from CATALOG)
+//   * span = real.span                       (visible at suppression site)
+//   * args = file/line/error_code/until/reason
+//          + suppressed_title (DiagSpec.title of real.code)
+//          + suppressed_message (render_short(real))
+//          + suppressed_severity_original ("Error"/"Warning"/"Note")
+//
+// Caller is responsible for REMOVING `real` from the diag list — this
+// helper only constructs the paired HX9000.
+pub fn diag_suppressed_by_grace(real: Diagnostic, grace_until: string,
+    grace_reason: string) -> Diagnostic {
+    let spec = _spec_for(real.code)
+    let title = spec.title
+    let sev_str = _sev_title(real.severity)
+    let rendered = _render_short_inline(real)
+    let mut w = diag_new("HX9000")
+    w = diag_span(w, real.span)
+    w = diag_arg(w, "file", real.span.file)
+    w = diag_arg(w, "line", to_string(real.span.line))
+    w = diag_arg(w, "error_code", real.code)
+    w = diag_arg(w, "until", grace_until)
+    w = diag_arg(w, "reason", grace_reason)
+    w = diag_arg(w, "suppressed_title", title)
+    w = diag_arg(w, "suppressed_message", rendered)
+    w = diag_arg(w, "suppressed_severity_original", sev_str)
+    return diag_emit(w)
+}
+
 // Resolve template + args against CATALOG, fold into a Diagnostic.
 // On unknown code we still return a Diagnostic so callers don't have
 // to special-case missing catalog entries (message says so plainly).

@@ -251,8 +251,8 @@ pub let CATALOG: [DiagSpec] = [
         title: "@grace requires reviewer acknowledgement",
         severity: Severity::Warning,
         stage: "runtime",
-        template: "ai-native: @grace at {file}:{line} suppresses {error_code} until {until}. Reason: \"{reason}\". This is a TEMPORARY debt — the author is responsible for resolving the underlying issue before the expiry date. Reviewer acknowledgement REQUIRED before merge.",
-        explain: "Every @grace site emits this warning to prevent silent strict-lint bypass. The build is gated on explicit user consent at the CI/PR layer: PR description must contain `Acked-grace: HXxxxx by <reviewer>` trailer or commit message must contain `acked-grace: <code> by <author>`. SPEC.yaml opt_out.ai_native_warn_policy.",
+        template: "ai-native: @grace at {file}:{line} suppresses {error_code} until {until}. Reason: \"{reason}\".\n\nSuppressed diagnostic ({error_code} — {suppressed_title}):\n  {suppressed_message}\n  ({suppressed_severity_original}; downgraded by @grace until {until}.)\n\nThis is a TEMPORARY debt — the author is responsible for resolving the underlying issue before the expiry date. Reviewer acknowledgement REQUIRED before merge.",
+        explain: "Every @grace site emits this warning to prevent silent strict-lint bypass. The build is gated on explicit user consent at the CI/PR layer: PR description must contain `Acked-grace: HXxxxx by <reviewer>` trailer or commit message must contain `acked-grace: <code> by <author>`. The HX9000 template inlines the FULL rendered text of the suppressed diagnostic (suppressed_title / suppressed_message / suppressed_severity_original) so reviewers see WHAT is being silenced, not just that something is. SPEC.yaml opt_out.ai_native_warn_policy.suppressed_diagnostic_inlining.",
         fix_it_kind: FixItKind::None
     },
     DiagSpec {

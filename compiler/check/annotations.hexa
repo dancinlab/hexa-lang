@@ -351,6 +351,13 @@ fn _check_grace(a: Annotation, today: string, out: array) {
     // the bypass is visible at every compile. Reviewer acknowledgement is
     // enforced at the CI/PR layer (Acked-grace trailer); the compiler just
     // makes sure the warn is emitted. Multi-error collected alongside HX9001.
+    //
+    // suppressed_diagnostic_inlining: if a check pass actually emits a
+    // matching diagnostic, apply_grace_suppression() rewrites this
+    // in-place HX9000 with one carrying the FULL inlined render. When no
+    // real diagnostic fires, the in-place HX9000 stays — we populate the
+    // suppressed_* slots with neutral placeholders so the catalog
+    // template doesn't surface `{suppressed_title}` etc. verbatim.
     let mut w = diag_new("HX9000")
     w = diag_span(w, a.span)
     w = diag_arg(w, "file", a.span.file)
@@ -358,6 +365,9 @@ fn _check_grace(a: Annotation, today: string, out: array) {
     w = diag_arg(w, "error_code", code_str)
     w = diag_arg(w, "until", until_val.text)
     w = diag_arg(w, "reason", reason_val.text)
+    w = diag_arg(w, "suppressed_title", "no diagnostic emitted at this site (pre-emptive @grace)")
+    w = diag_arg(w, "suppressed_message", "(no matching diagnostic was emitted by any check pass; @grace covers a hypothetical future diagnostic of code " + code_str + ")")
+    w = diag_arg(w, "suppressed_severity_original", "n/a")
     out.push(diag_emit(w))
 }
 
@@ -417,6 +427,173 @@ pub fn check_annotations(module: Module, today: string) -> array {
     while i < len(module.items) {
         _annot_walk_item(module.items[i], today, out)
         i = i + 1
+    }
+    return out
+}
+
+// ── @grace suppression post-processing ──────────────────────
+//
+// SPEC.yaml opt_out.ai_native_warn_policy.suppressed_diagnostic_inlining:
+// rather than weave per-pass @grace-awareness through every check pass
+// (resolve / bind / types / units / citation / equational), we let each
+// pass emit its diagnostics normally and post-process the collected
+// list here. For every well-formed @grace site:
+//
+//   1. Find diagnostics whose `code` matches the @grace error_code AND
+//      whose `span.file` matches the item file AND whose `span.line`
+//      falls inside the @grace-protected item's line range.
+//   2. Remove those matches from the diag list (suppression intact).
+//   3. Synthesize a paired HX9000 via diag_suppressed_by_grace(),
+//      inlining the full rendered original message into HX9000 args.
+//
+// Item line range: [item.span.line, next_item.span.line - 1] when
+// there's a next item, else [item.span.line, +inf]. That covers the
+// item's body without depending on a parser-tracked end-line. The
+// existing in-place HX9000 emitted by _check_grace (no inlining) is
+// preserved when no real diagnostic matches — i.e. @grace fires before
+// the suppressed code actually shows up. When a match exists, we
+// REPLACE the in-place HX9000 with the inlined HX9000.
+
+// Internal: find @grace annotation on an item, returning code/until/reason.
+// `found` is signalled by non-empty error_code in the returned tuple-like
+// triple. For stage0 portability we represent the triple as a 3-string
+// array: [code, until, reason] (empty code means "no @grace").
+fn _grace_fields(it: Item) -> [string] {
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if a.name == "grace" {
+            // first positional: HX-code (Ident or string literal)
+            if !_has_positional(a.args) { i = i + 1; continue }
+            let code_expr = _first_positional(a.args)
+            let code_str = code_expr.text
+            let mut code_ok = false
+            if _annot_is_ident(code_expr.kind) {
+                code_ok = _is_hx_code(code_str)
+            } else if _is_string_lit(code_expr.kind) {
+                code_ok = _is_hx_code(code_str)
+            }
+            if !code_ok { i = i + 1; continue }
+            if !_kwarg_present(a.args, "until") { i = i + 1; continue }
+            let until_val = _kwarg_lookup(a.args, "until")
+            if !_is_string_lit(until_val.kind) { i = i + 1; continue }
+            if !_is_iso_date(until_val.text) { i = i + 1; continue }
+            if !_kwarg_present(a.args, "reason") { i = i + 1; continue }
+            let reason_val = _kwarg_lookup(a.args, "reason")
+            if !_is_string_lit(reason_val.kind) { i = i + 1; continue }
+            if len(reason_val.text) == 0 { i = i + 1; continue }
+            return [code_str, until_val.text, reason_val.text]
+        }
+        i = i + 1
+    }
+    return ["", "", ""]
+}
+
+fn _next_item_line(items: [Item], idx: i64) -> i64 {
+    let j = idx + 1
+    if j < len(items) { return items[j].span.line }
+    return 1000000000
+}
+
+fn _diag_in_item_range(d: Diagnostic, file: string, lo: i64, upper_excl: i64) -> bool {
+    if d.span.file != file { return false }
+    if d.span.line < lo { return false }
+    if d.span.line >= upper_excl { return false }
+    return true
+}
+
+// True when the diagnostic at index `i` is a same-line HX9000 emitted
+// by _check_grace for the same @grace annotation we're processing.
+// We detect it by code (HX9000) and span.line == item.span.line, with
+// matching file. This is the in-place HX9000 we replace with the
+// inlined version when a real diagnostic match is also found.
+fn _is_inplace_hx9000_for(d: Diagnostic, item_file: string, item_line: i64) -> bool {
+    if d.code != "HX9000" { return false }
+    if d.span.file != item_file { return false }
+    if d.span.line != item_line { return false }
+    return true
+}
+
+pub fn apply_grace_suppression(module: Module, diags: [Diagnostic],
+    today: string) -> [Diagnostic] {
+    // Walk items to discover @grace sites; for each, scan the diag
+    // list for matching real diagnostics and rewrite. We do a
+    // mark-and-sweep style: build a parallel `keep[]` bool array and
+    // a `synth[]` list of HX9000 inlined diagnostics, then assemble
+    // the result.
+    let n = len(diags)
+    let mut keep: [bool] = []
+    let mut k0 = 0
+    while k0 < n { keep.push(true); k0 = k0 + 1 }
+
+    let mut synth: [Diagnostic] = []
+    let _today_unused = today  // reserved for future expiry-driven gating
+
+    let mut ii = 0
+    while ii < len(module.items) {
+        let it = module.items[ii]
+        let triple = _grace_fields(it)
+        let gcode = triple[0]
+        let guntil = triple[1]
+        let greason = triple[2]
+        if len(gcode) == 0 { ii = ii + 1; continue }
+
+        let lo = it.span.line
+        let upper_excl = _next_item_line(module.items, ii)
+        let item_file = it.span.file
+
+        // Scan diags for matches. For every match: drop it from keep[]
+        // and produce a paired HX9000 in synth[].
+        let mut found_match = false
+        let mut di = 0
+        while di < n {
+            if keep[di] {
+                let d = diags[di]
+                if d.code == gcode {
+                    if _diag_in_item_range(d, item_file, lo, upper_excl) {
+                        keep[di] = false
+                        let paired = diag_suppressed_by_grace(d, guntil, greason)
+                        synth.push(paired)
+                        found_match = true
+                    }
+                }
+            }
+            di = di + 1
+        }
+
+        // If we matched at least one real diagnostic, drop the
+        // in-place HX9000 emitted by _check_grace for this same
+        // @grace site (we replace it with the inlined HX9000 in
+        // synth). If no real match was found, we leave the in-place
+        // HX9000 alone — @grace fires before the underlying code
+        // does, but the warn must still surface.
+        if found_match {
+            let mut dj = 0
+            while dj < n {
+                if keep[dj] {
+                    let d2 = diags[dj]
+                    if _is_inplace_hx9000_for(d2, item_file, it.span.line) {
+                        keep[dj] = false
+                    }
+                }
+                dj = dj + 1
+            }
+        }
+
+        ii = ii + 1
+    }
+
+    // Assemble the result: kept original diags first, then synth tail.
+    let mut out: [Diagnostic] = []
+    let mut p = 0
+    while p < n {
+        if keep[p] { out.push(diags[p]) }
+        p = p + 1
+    }
+    let mut q = 0
+    while q < len(synth) {
+        out.push(synth[q])
+        q = q + 1
     }
     return out
 }

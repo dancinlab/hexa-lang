@@ -27,6 +27,7 @@ import "./check/bind.hexa"
 import "./check/types.hexa"
 import "./check/units.hexa"
 import "./check/citation.hexa"
+import "./check/annotations.hexa"
 import "./lower/ast_to_hir.hexa"
 import "./lower/hir_to_mir.hexa"
 import "./optimize/const_fold.hexa"
@@ -406,6 +407,15 @@ while k < len(r4) { diags.push(r4[k]); k = k + 1 }
 let r5 = citation_check(module, atlas)
 k = 0
 while k < len(r5) { diags.push(r5[k]); k = k + 1 }
+
+// SPEC.yaml opt_out.ai_native_warn_policy.suppressed_diagnostic_inlining:
+// post-process the collected diag list, suppressing real diagnostics
+// that match a @grace site and replacing them with HX9000 (Warning)
+// carrying the FULL inlined render of what is being silenced. Runs
+// AFTER all check passes, BEFORE the abort gate so a successful @grace-
+// suppressed Error no longer trips _has_errors.
+let _today_iso = exec("date -u +%Y-%m-%d").trim()
+diags = apply_grace_suppression(module, diags, _today_iso)
 
 // Always render whatever diagnostics we collected (warnings first, then
 // — if errors — bail out before lowering / codegen).
