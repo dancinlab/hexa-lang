@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use HEXA-LANG in academic work, please cite as below."
+title: "HEXA-LANG: A Programming Language with Zero Arbitrary Design Choices — Every Constant Derived from the Perfect Number 6"
+abstract: |
+  HEXA-LANG is a self-hosted programming language whose design constants
+  are derived from the first perfect number n=6 via the σ=12 / τ=4 /
+  φ=2 / J₂=24 invariant lattice. It targets ARM64, x86_64, VM, ESP32,
+  FPGA, and WGSL backends, with a 21,952-combination DSE-v2 audit at
+  100% EXACT compliance. Companion paper "P-HEXA" documents the
+  derivation chain and zero-arbitrary-choices proof.
+authors:
+  - name: Park, Hyunsoo
+    affiliation: dancinlab
+license: MIT
+repository-code: "https://github.com/dancinlab/hexa-lang"
+url: "https://github.com/dancinlab/hexa-lang"
+version: "0.2.0"
+date-released: "2026-04-03"
+doi: "10.5281/zenodo.19404816"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.19404816"
+    description: "Concept DOI (always resolves to the latest version)"
+  - type: doi
+    value: "10.5281/zenodo.19404817"
+    description: "Version-specific DOI for v0.1.0"
+  - type: doi
+    value: "10.5281/zenodo.19365284"
+    description: "Companion paper — P-HEXA: derivation of every constant from n=6"
+keywords:
+  - perfect-number
+  - n6-lattice
+  - programming-language
+  - self-hosted
+  - zero-arbitrary-choices
+  - dse
+  - hexa-family
