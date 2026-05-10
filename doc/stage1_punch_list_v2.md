@@ -1,0 +1,185 @@
+# Stage 1 Bootstrap — Discovery Punch List v2 (Post Gap 1+2+14+15)
+
+> Source: stage 1 first-attempt self-compile after Gaps 1 (multi-file
+> splice), 2 (cross-file dedup), 14 (lower diag plumbing), and 15
+> (codegen breadth) all landed.
+>
+> Invocation:
+>   `$HOME/.hx/bin/hexa_real run compiler/main.hexa --emit=asm \
+>    -o /tmp/stage1_self.s compiler/main.hexa`
+>
+> Status: **discovery only — no fixes applied**. Captured 2026-05-10.
+
+---
+
+## TL;DR
+
+The self-compile **never reaches a structured diagnostic**. The stage0
+hexa_interp runtime aborts via its own memory cap before parse +
+type-check finish on the 25,932-line spliced super-module that Gap 1
+now produces from `compiler/main.hexa`'s 19 imports.
+
+Concrete capture:
+
+| run                         | flags             | wall  | result                                |
+|-----------------------------|-------------------|-------|---------------------------------------|
+| `--emit=asm` self           | default cap 2 GB  | ~16 m | `[hexa-runtime] memory cap exceeded: rss=2048MB > cap=2048MB`, exit 1 |
+| `--emit=asm` self           | `HEXA_MEM_UNLIMITED=1`, 25 m budget | aborted by harness | RSS still climbing (1.5 GB → killed) — no diags emitted |
+| single-file `tests/m0/hello.hexa` | default          | <1 s  | clean, 371-byte `.s`                  |
+| single-file `compiler/check/units.hexa` (1,131 lines, 4 imports) | 60 s timeout | timeout | hits Gap-1 splice, no output |
+
+So the **diagnostic count is unobservable** at this stage. Gap 1 was so
+successful at loading the world that the interpreter, rather than the
+compiler, became the first wall.
+
+This is itself the headline new finding: **stage 1 cannot land while
+stage 0 is the harness for self-compile**. Either (a) stage 0 needs a
+fast-path / arena reset / interner so the spliced AST + lower IR fits
+in <1 GB, or (b) stage 1 needs a *partial* self-compile mode that
+emits each leaf module to `.s`, links them, and skips the in-process
+super-module entirely, or (c) we need a stage 0.5 — a host-language
+(C / Rust) re-implementation of just enough of the interpreter to
+host the compiler. Today, none of (a)/(b)/(c) exists.
+
+---
+
+## Pipeline Reach
+
+`lex` → `parse` (with Gap 1 splice) → ??? . The interpreter ran for
+~16 minutes consuming 2 GB before the runtime aborted; the program
+emitted **zero stdout, zero stderr** prior to the runtime's own OOM
+note. We cannot tell from this run whether it was inside `parse` (the
+splice itself), inside `_collect_item_types` (Gap 2 pre-pass — O(n)
+linear walk over n≈3,000 spliced items, plus an O(n) lookup in
+`_types_pub_owner_file` per item, so O(n²) in n-items ≈ ~9 M
+comparisons of stage0 strings), inside `_infer_expr` per fn body, or
+inside `lower(module, atlas)`.
+
+Best guess from RSS/CPU profile (RSS climbed monotonically through
+the 1.5 GB threshold while CPU stayed ~30–60 %): the interpreter is
+holding onto every intermediate `Module.items` snapshot built by
+`_splice_imported_items` because each `out.push(it)` allocates a fresh
+list and the prior list is still referenced. Stage 0 has no arena
+reset between phases.
+
+---
+
+## Diagnostic Capture vs cfc883af baseline
+
+| run | diag count | shape | reach |
+|---|---|---|---|
+| cfc883af (Gap 1 NOT landed) | 9 | 1× HX3001 + 8× HX3004 | through types (single-file, ~700 LOC) |
+| **this run** (post Gap 1+2+14+15) | **0** observable | runtime OOM before any HX-emit | unknown — likely inside parse/splice or types pre-pass |
+
+The shape is fundamentally different: the prior run was bottlenecked by
+the type-checker's false-positive pattern on the 700-line single-file
+Module. The new run is bottlenecked on the *interpreter's* memory
+budget while loading the world. **None of the prior 9 diagnostics
+recurred** in observable form; they may still be there waiting behind
+the wall, but we cannot say.
+
+---
+
+## New Punch List
+
+Each entry: file:line / phase, description, fix sketch, effort
+(S/M/L), priority (P0=blocks stage 1 binary entirely, P1=blocks
+correctness, P2=improves but not blocking).
+
+### A. Bootstrap host (the new wall)
+
+| # | Site | Issue | Sketch | Effort | Pri |
+|---|------|-------|--------|--------|-----|
+| A1 | `hexa_real` (stage0 runtime) | 2 GB hard cap, no arena reset between pipeline phases | add `--phase-arena-reset` so `parse` / `lower` / `codegen` allocations free between calls; current behaviour holds every Module snapshot from `_splice_imported_items`. | **L** | **P0** |
+| A2 | `compiler/parse/parser.hexa:1312 _splice_imported_items` | Naive `out.push(...)` over a re-built `[Item]` for every visited file → O(n²) memory growth in items×imports | replace with a single accumulator passed by reference; or build flat list once and mutate in place under a phase arena (depends A1) | **M** | **P0** |
+| A3 | `compiler/check/types.hexa:1356 _collect_item_types` | Each `_types_find_binding` / `_types_pub_owner_file` is O(n) in env.entries; total O(n²) over ~3 K spliced items ≈ 9 M scans of stage0 strings | introduce a hash-map binding lookup keyed by `(name, owning_file)` and `name → first pub`; stage0 has no native map but we can use the `intrinsics/intrinsics.hexa` candidate or tabulate via dedicated arrays | **M** | **P0** |
+| A4 | `compiler/check/types.hexa:1442 type_check` outer loop | Re-walks every Item in module.items linearly; with ~3 K items and per-fn body O(b) inner traversal, throughput becomes infeasible under stage0 dispatch overhead | profile dispatch first (likely the `match k` over ExprKind tag in `_infer_expr` is the inner loop); consider computing `is_fn_item` once via a side index | **M** | **P1** |
+
+### B. Recurring from v1 — surfaces once we cross the wall
+
+| # | Site | Issue | Sketch | Effort | Pri |
+|---|------|-------|--------|--------|-----|
+| B1 | (formerly Gap 3) `compiler/check/types.hexa:660` | `kind=="named"` empty-name guard now in place but only for `_types_lower_type_ref`; other consumers (`_hir_lower_type_ref` lines 102–134) lack the same degrade — risk of recurring HX3001 cascades inside the hir lower path once visible | mirror Gap 3 fix into `compiler/lower/ast_to_hir.hexa::_hir_lower_type_ref` | **S** | **P1** |
+| B2 | (formerly Gap 4) `_types_check_call`, `_types_check_binop` | Per-fn ctx is value-copied via `_ctx_with_fn` (line 963), but the `out: array` accumulator is shared and mutated; in stage0 a single bad fn could still attribute its HX3004 to the wrong fn name when `_emit_hx3004` reads `ctx.fn_name` from a stale frame | thread `ctx.fn_name` through `_emit_hx3004(...)` arg explicitly rather than via shared mutable | **S** | **P1** |
+| B3 | (formerly Gap 5/6) `parser.hexa:163 expect`, `:146 eat` | `expect` fabricates token without advancing on miss → `parse_block_expr` (line 670) silently swallows next fn into prior body when a `}` is missing; HX0011/HX0012 added in Gap 5 cover the brace shape but recovery is still single-token-skip | replace `expect` with `expect_or_diag_and_resync` that skips to next `}` / `;` / top-level keyword | **M** | **P1** |
+| B4 | (formerly Gap 7) `parse_let_item:857` | `eat(KwMut)` accepted unconditionally — no diag if `mut` mis-typed as `mu` | split into `parse_let_mut_item` and `parse_let_imm_item` | **S** | **P2** |
+| B5 | (formerly Gap 10) cross-tree `_helper_name` collisions | Existing Gap 10 work added `_types_*` / `_hir_*` prefix discipline but new files (`emit/asm.hexa`, `optimize/*.hexa`) regressed: e.g. `_op_reg`, `_op_imm`, `_op_label`, `_instr2` defined in BOTH `codegen/arm64_darwin.hexa` and `codegen/x86_64_linux.hexa` (same module after splice) | rename to `_arm64_op_reg` / `_x86_op_reg` etc.; same for `_emit_*` helpers across diag/render and codegen | **M** | **P0** (will collide once visible) |
+
+### C. New, never seen before (post-Gap 1+2 surface)
+
+| # | Site | Issue | Sketch | Effort | Pri |
+|---|------|-------|--------|--------|-----|
+| C1 | `compiler/lower/hir_to_mir.hexa:34–40` and `compiler/codegen/arm64_darwin.hexa:41–47` | Both files redeclare `_STMT_ASSIGN` / `_STMT_BR` / etc. as a workaround for "stage0 does not propagate transitive `pub let`" — once Gap 1 splices everything into one Module, these become **duplicate top-level `let` items** at the spliced level. `_collect_item_types` will record each twice, both private — first registration wins, second silently dropped, but stage0 ident resolution may still pick the wrong one. | promote to a single shared file (`compiler/ir/stmt_kinds.hexa`) and import once; OR strip the workaround entirely now that Gap 1 propagation works | **S** | **P0** |
+| C2 | `compiler/main.hexa:504` `fn _mmod_stmt_count` defined inline mid-driver, after `let user_argv = ...` initializers | Spliced into the world Module, this fn appears between top-level executable statements. Stage0 hexa runs top-level statements top-to-bottom; the fn definition is hoistable but in stage1 the linear order matters for codegen — block_label collisions possible | extract to `compiler/optimize/_stmt_count.hexa`; remove inline fn entirely | **S** | **P1** |
+| C3 | `compiler/parse/parser.hexa:1359 parse()` | Returns `Module { file, items: merged_items, imports: top.imports }` — but `imports` only reflects the entry file. Gap-1 deeper diag-attribution wants per-file `imports` too. Some Gap-2 / Gap-13 diagnostics will mis-attribute `importer` | extend `Module` with `[ModuleSlice { file, imports }]`, OR keep a flat `(file, import)` list | **M** | **P1** |
+| C4 | `compiler/check/types.hexa:1183` `_types_check_call` | Callee resolution returns `_types_empty_type()` on miss and silently skips arity / arg-type check. Once Gap 1 surfaces ~80 callable names from spliced files and Gap 2 dedupes them, *every* miss becomes an HX3002/3 floor; without this check a typo in a callee name passes through to lower → MIR with a `?` type, then codegen blows up | emit HX2001 (unknown callee) on miss BEFORE the early return; coordinate with bind/resolve so the check isn't double-fired | **S** | **P1** |
+| C5 | `compiler/lower/hir_to_mir.hexa:422 _lower_hexpr` k=="ident" branch | When `_mir_lookup` misses, returns `_const_int_op(0)` — a silent zero. Spliced super-module has many cross-file ident references; any miss now produces zero-coded MIR rather than a diag | propagate the miss as HX1101 (unbound ident in lower); make ident-resolution failures fatal | **S** | **P1** |
+| C6 | `compiler/codegen/arm64_darwin.hexa:130 _arm64_reg_for_local` | Naive `id mod 31` with no spilling. The compiler's own fns (e.g. `parse_fn_item`, `_collect_item_types`) declare 50–80 SSA locals each → modulo aliasing over x0..x30 will silently overwrite live values. Stage1 will produce *wrong code* not bad code — no diagnostic emitted | introduce minimal liveness-aware regalloc (linear scan); v0 stage1 may still demand spilling for `compiler/check/types.hexa::_infer_expr` (60+ locals) | **L** | **P0** for correctness |
+| C7 | `compiler/codegen/x86_64_linux.hexa:202 _x86_64_arg_reg_seq` and arm64 mirror | Both targets `nop`-comment >6/>8 args and continue. `compiler/parse/parser.hexa::_splice_imported_items(items: [Item], importer: string)` passes 2 args ok, but `_emit_hx3003(name, pos, expected, actual, sp, out)` takes 6 — at boundary; many real hexa fns take 7+ | implement 7th+ arg stack spill (System V on x86_64, AAPCS64 with `[sp, #16]+` on arm64) | **M** | **P0** |
+| C8 | `compiler/codegen/arm64_darwin.hexa:196 _arm64_block_label` | Returns `"_L" + fname + "_bb" + ...` — `fname` is the user fn name including possibly `<` or `:` characters from spliced lambdas? Today there are no lambdas, but `compiler/check/units.hexa::_t_unit` and `compiler/check/types.hexa::_t_unit` would now both produce `_L_t_unit_bb0`, colliding | qualify with module hash: `_L<hash8>_<fname>_bb<id>`; adopt now to avoid a debug session later | **S** | **P0** |
+| C9 | `compiler/lower/hir_to_mir.hexa:617 if-branch` | `_new_block` then `_set_cur_block(then_id)` then `_lower_hexpr(child)` — but `_lower_hexpr` may itself call `_new_block` (nested if / while), invalidating `then_end_block`. The `_push_stmt_to(then_end_block, br_then)` may target a stale block id | recompute `then_end_block = ctx2.cur_block` AFTER the inner lower returns (already done — line 645) but parallel `else_end_block` path missing the same recompute on the no-else fall-through | **S** | **P1** |
+| C10 | `compiler/lower/hir_to_mir.hexa:780 match-arm lowering` | Pattern lowering only handles `wildcard`, `ident`, and `enum_path`. `compiler/parse/parser.hexa::tag_of(k)` matches over 30+ enum variants; if the parser ever emits a struct-pattern or literal-pattern, lower drops it silently | extend pattern match to literal_int/literal_string/struct_pattern; emit HX1102 on truly unknown shapes | **M** | **P1** |
+| C11 | `compiler/atlas/embedded.gen.hexa` (existence) | Mentioned in v1 punch list as untouched. Now that splice loads it, it ships with ~10 K AtlasNode literals, each a struct value. Stage0 interp stores them as 10 K live frames during parse → contributes to A1's OOM | mark as `@phase=parse_only` so checker can skip walking; or convert to a lazy `static_atlas()` callback | **M** | **P0** (memory) |
+| C12 | `compiler/check/citation.hexa` | Default soft mode (Gap 13) demotes to Warnings, but the citation pass still **walks every Item in the spliced module** building atlas-ref index; this walk is roughly free for 700 items but ~3 K items * each fn body ~30 nodes = ~90 K AtlasRef checks per compile | gate the entire walk on `--strict-citations` instead of per-diag demotion | **S** | **P2** |
+| C13 | `compiler/check/units.hexa::unit_check` | Same scaling concern: walks every fn for `@units(...)` annotation. Most compiler/ fns are unannotated, but the early-out check is at line ~870 and runs after token scan | early-out on `len(fn.annotations) == 0` before any unit string parsing | **S** | **P2** |
+| C14 | `compiler/main.hexa:417` `let mut diags: array = []` | Untyped `array` here means stage0 boxes every Diagnostic. With ~3 K candidate sites for diags emerging from a real compile, the array could grow large; resizing copies are O(n) | type as `[Diagnostic]`; pre-size hint via `with_capacity()` once that intrinsic lands | **S** | **P2** |
+| C15 | `compiler/main.hexa:540` `let mut lmodule = LModule { ... }` then unconditionally overwritten | Wasted alloc — small, but stacks up across recursive calls | replace with `let lmodule = if ... else if ... else { exit(2) }` | **S** | **P2** |
+| C16 | `compiler/lower/hir_to_mir.hexa::lower_hir` | No diagnostic plumbing for "unhandled HExpr kind". The `_lower_hexpr` default fall-through (line 1545) silently produces an empty HExpr-shaped output; lower then treats it as ok. Many real source constructs (e.g. Field on a struct lit, growable array methods) take this fall-through path today | add `_lr_diag` accumulator and HX1103 emission on default fall-through; mirror the Gap 14 sink convention | **M** | **P0** for correctness |
+| C17 | `compiler/parse/parser.hexa:670 parse_block_expr` | `eat(LBrace)`/`eat(RBrace)` softness reported in v1 (Gap 5) — Gap 5 emitted HX0011/HX0012 but **only for the outer block** (the `parse_fn_item` body). Nested blocks (if/while/for) still call `eat(LBrace)` directly at parser.hexa:683, :701, etc. | refactor every `eat(LBrace)/(RBrace)` into a single `expect_balanced_block` helper that also emits HX0011/HX0012 | **M** | **P1** |
+| C18 | `compiler/codegen/arm64_darwin.hexa::_arm64_op_for_operand_st` | `const_str` falls back to `_op_label(o.str_val)` when strtab miss — emits the literal string itself as a label, which `as` will reject. Today the strtab-collect pass is supposed to populate every `const_str` first, but in spliced mode imported files' string literals may produce const_str ops via paths the strtab walk hasn't visited (e.g. lower-emitted internal labels like atlas keys) | emit `.LCstr_unknown_<hash>` as the fallback label and queue it for rodata emission | **S** | **P1** |
+| C19 | `compiler/lower/hir_to_mir.hexa::_lower_hexpr "for"` branch (not shown above) | If parser produces ExprKind::For, hir_to_mir lacks an explicit handler — falls to default-recurse which generates wrong MIR (no loop CFG). Stage0 has historically used `while` only, but parser does support `for x in expr {}` | implement `for` desugar in `ast_to_hir` (lower to while + iterator next) BEFORE hir_to_mir sees it | **M** | **P1** |
+| C20 | `compiler/check/types.hexa::_types_check_call` ‑- callee_t.kind != "fn" early return | Returns `_types_empty_type()` silently on a non-fn callee (e.g. calling a struct field or local var). After Gap 1 imports many user-named items into the env, `let mut x = 0; x()` returns unit silently | emit HX2003 (not callable) on miss | **S** | **P2** |
+
+---
+
+## Summary by Priority
+
+| Priority | Count | Examples |
+|---|---|---|
+| **P0** (blocks stage 1 binary) | 9 | A1 (interpreter cap), A2 (splice memory), A3 (env O(n²)), B5 (helper collisions), C1 (STMT_ const dup), C6 (regalloc spill), C7 (>6/>8 args), C8 (label collisions), C11 (atlas embed memory), C16 (lower diag plumb) |
+| **P1** (blocks correctness) | 9 | A4, B1, B2, B3, C2, C3, C4, C5, C9, C10, C17, C18, C19 |
+| **P2** (improvement, not blocking) | ~6 | B4, C12, C13, C14, C15, C20 |
+
+(Some bullets straddle P0/P1; chosen on first-impact severity.)
+
+---
+
+## Revised Stage 1 Reach Estimate
+
+**Was: 6–10 weeks of focused work.**
+
+**Now: 14–22 weeks**, dominated by category A (host bootstrap).
+Breakdown:
+
+| Bucket | Old est. | New est. | Why moved |
+|---|---|---|---|
+| Gap 1–10 originals (smaller pivots) | 4 weeks | **0 weeks (most landed)** | Done by this run |
+| Gap 14 lower diag + Gap 15 codegen breadth | 2–4 weeks | **+2 weeks (C6, C7, C8, C16)** | New gaps surfaced once visible |
+| **Stage 0 host** (A1–A4 + C11) | not on map | **+6–10 weeks** | Hidden iceberg; must add interpreter arena reset OR write stage 0.5 host |
+| Stage 1 byte-equality fixed point | 2–3 weeks | 4–5 weeks | More moving pieces post-Gap-1 |
+
+So minimum **14 weeks** if we get lucky with stage 0 patches; **22
+weeks** if we need a stage 0.5 host. Either path beats writing
+stage 1 in C/Rust outright (which would be 26–40 weeks for just
+matching the current hexa-side surface), but the gap to the original
+6–10 estimate is real.
+
+---
+
+## Biggest Remaining Unknown
+
+**What is the actual diagnostic shape on a *successful* self-compile
+trace?** We literally cannot see it. Every probe that crosses the
+Gap 1 splice threshold either OOMs or stalls under stage 0. Until
+A1+A2+A3 land, Bs and Cs in this list are **inferences from reading
+source, not from observing diagnostics**. Confidence:
+
+| signal source | confidence |
+|---|---|
+| Source-read inferences (B1–B5, C1–C20) | medium-high — these are real code shapes, but their *severity* under real diag traffic is unknown |
+| Memory-cap measurement (A1, A2, A3, C11) | high — directly observed runtime crash |
+| The 9 prior diagnostics (cfc883af) recurrence | unknown — they may be already-fixed, masked by the OOM, or queued behind it |
+
+The next data-collection step is NOT to fix any of these — it's to
+make stage 0 (or a stage 0.5 host) survive the spliced compile so we
+can see what comes out the other side. That's the new critical path.
