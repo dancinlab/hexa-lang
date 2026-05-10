@@ -8,6 +8,8 @@
 import "../atlas/parser.hexa"
 import "../atlas/merger.hexa"
 import "./tombstone.hexa"
+import "./cascade.hexa"
+import "../../tool/auto_pr_tombstone_sweep.hexa"
 
 fn _today_utc() -> string {
     let s = exec("date -u +%Y-%m-%d").trim()
@@ -193,10 +195,13 @@ pub fn retroactive_sweep(atlas_root: string, current_verifier_version: string,
     let rows = _scan_atlas_file_l_nodes(atlas_root)
 
     let dispositions = []
+    let newly_tombstoned_ids = []
+    let pr_dispositions = []
     let mut seen: i64 = 0
     let mut passed: i64 = 0
     let mut skipped: i64 = 0
     let mut tombstoned: i64 = 0
+    let mut prior_ver = ""
 
     let today = _today_utc()
 
@@ -236,6 +241,9 @@ pub fn retroactive_sweep(atlas_root: string, current_verifier_version: string,
         if rc == 0 {
             tombstoned = tombstoned + 1
             dispositions.push("TOMB    L[" + node_id + "] verifier=" + stored_ver + " reason=\"" + reason + "\"")
+            newly_tombstoned_ids.push(node_id)
+            pr_dispositions.push(make_disposition(node_id, reason, "", "sweep"))
+            if len(prior_ver) == 0 { prior_ver = stored_ver }
         } else {
             dispositions.push("ERROR   L[" + node_id + "] tombstone_rc=" + to_string(rc))
         }
@@ -253,5 +261,36 @@ pub fn retroactive_sweep(atlas_root: string, current_verifier_version: string,
             " skipped=" + to_string(skipped) +
             " tombstoned=" + to_string(tombstoned))
     println("retroactive_sweep: manifest=" + manifest_path)
+
+    // ── RFC-017 5e cascade + auto-PR ──────────────────────────
+    // When the sweep newly tombstoned anything, re-verify dependents
+    // (those whose normalized_form references a newly-tombstoned id)
+    // and then file an auto-PR if the combined total > 0. CI infra
+    // resilience: cascade/auto-PR must NOT change the sweep's return
+    // value semantics — the integer the caller sees still reflects
+    // only the count of nodes the sweep itself tombstoned.
+    let mut cascade_count: i64 = 0
+    if tombstoned > 0 {
+        cascade_count = cascade_tombstones(atlas_root, newly_tombstoned_ids,
+                                           reverify_fn)
+    }
+
+    let total = tombstoned + cascade_count
+    if total > 0 {
+        let summary = SweepSummary {
+            prover_from: prior_ver,
+            prover_to: current_verifier_version,
+            atlas_root: atlas_root,
+            seen: seen,
+            passed: passed,
+            skipped: skipped,
+            tombstoned_manual: tombstoned,
+            tombstoned_cascade: cascade_count,
+            dispositions: pr_dispositions,
+            manifest_path: manifest_path
+        }
+        let _pr_rc = auto_pr_tombstone_sweep(summary)
+    }
+
     return tombstoned
 }

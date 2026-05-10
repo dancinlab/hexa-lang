@@ -450,9 +450,26 @@ atlas_self_discovery:
       automatic_sweep: |
         On prover version upgrade, CI nightly job re-verifies every registered
         L node. Failing nodes are auto-tombstoned with PR open for human review.
+        Implementation: compiler/discover/retroactive_sweep.hexa.
       dependency_tracking: |
-        proof-hash records lemmas used. When a lemma is tombstoned, dependent
-        L nodes auto re-verify; failures cascade-tombstone.
+        Status: cascade_tombstones lands.
+        Implementation: compiler/discover/cascade.hexa.
+        proof-hash records lemmas used. When a lemma is tombstoned (manual or
+        sweep), dependent L nodes auto re-verify; failures cascade-tombstone
+        with reason "cascade-tombstone: depends on L[<root>] which was
+        tombstoned". v1 detection is heuristic substring match in
+        normalized_form; semantic dependency analysis (parse the S-expr and
+        walk referenced lemma symbols + transitive closure) is v1.1 work.
+      auto_pr_helper: |
+        tool/auto_pr_tombstone_sweep.hexa — when retroactive_sweep +
+        cascade_tombstones together newly tombstone >0 L nodes, this helper
+        renders a PR body summarizing the prover version transition, counts,
+        and per-tombstone disposition, then invokes `gh pr create`. On any
+        failure (gh missing, no auth, no commits) it falls back to writing
+        /tmp/_tombstone_sweep_pr_body.{date}.txt and printing the suggested
+        command. Returns 0 always (CI infra resilience). Smoke tests should
+        export HEXA_AUTO_PR_DRY_RUN=1 (or call auto_pr_dry_run directly) to
+        skip the git/gh side-effects.
     citing_tombstoned_l_emits: HX1099_compile_fail
     history_kept_in: atlas.tombstones.n6
 

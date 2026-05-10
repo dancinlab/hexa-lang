@@ -1,0 +1,287 @@
+// HEXA Native Compiler - Discovery cascade tombstones (RFC-017 5e: invalidation)
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read, fs_write]
+//
+// Decision 5e completion piece: when an L node is tombstoned (manually or via
+// retroactive_sweep), every dependent L whose proof relied on the
+// now-tombstoned lemma must be re-verified. Failures cascade-tombstone with
+// reason "cascade-tombstone: depends on L[<root_id>] which was tombstoned".
+//
+// SCOPE
+//   Companion to compiler/discover/tombstone.hexa (manual API) and
+//   compiler/discover/retroactive_sweep.hexa (auto-sweep). Cascade detection
+//   v1 is a heuristic substring match: a node B is considered "depends on"
+//   node A iff A's id appears as a free token inside B's normalized_form.
+//   Semantic dependency analysis (parse the normalized_form S-expr, walk
+//   referenced lemma symbols) is v1.1 work.
+//
+// MANIFEST
+//   Appends "CASCADE L[<dep_id>] reason='depends on L[<root_id>]'" lines to
+//   the existing /tmp/_retroactive_sweep_manifest.{date}.txt produced by
+//   retroactive_sweep. When called outside a sweep (i.e., from a manual
+//   tombstone path) the file is created/appended just the same.
+//
+// PUBLIC SURFACE
+//   pub fn cascade_tombstones(atlas_root, newly_tombstoned, reverify_fn) -> i64
+//
+// Catalog/diagnostic strings: ENGLISH ONLY (RFC-019 §6 + repo policy).
+
+import "./tombstone.hexa"
+
+// -- Tiny string utilities (mirrored from tombstone.hexa to stay standalone) --
+
+fn _is_ws_char_c(c: string) -> bool {
+    return c == " " || c == "\t"
+}
+
+fn _ltrim_c(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if !_is_ws_char_c(c) { break }
+        i = i + 1
+    }
+    return s.substring(i, n)
+}
+
+fn _starts_with_c(s: string, prefix: string) -> bool {
+    let m = len(prefix)
+    if len(s) < m { return false }
+    return s.substring(0, m) == prefix
+}
+
+fn _contains_substr(haystack: string, needle: string) -> bool {
+    let n = len(haystack)
+    let m = len(needle)
+    if m == 0 { return true }
+    if m > n { return false }
+    let mut i = 0
+    while i + m <= n {
+        if haystack.substring(i, i + m) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _today_utc_c() -> string {
+    let s = exec("date -u +%Y-%m-%d").trim()
+    if len(s) == 0 { return "unknown-date" }
+    return s
+}
+
+fn _manifest_path_c(today: string) -> string {
+    return "/tmp/_retroactive_sweep_manifest." + today + ".txt"
+}
+
+// -- Atlas L-node row scanner (id + normalized_form) ---------------
+// Mirror of retroactive_sweep::_scan_atlas_file_l_nodes but trimmed to
+// only the columns this module needs. Reading the file directly avoids
+// the Stage0 hexa interp's continuation-line dropout.
+
+pub struct CascadeRow {
+    id: string,
+    normalized_form: string
+}
+
+fn _scan_atlas_rows(atlas_root: string) -> array {
+    let out = []
+    let main_path = atlas_root + "/atlas.n6"
+    if !file_exists(main_path) { return out }
+    let text = read_file(main_path)
+    if len(text) == 0 { return out }
+    let lines = text.split("\n")
+    let n_lines = len(lines)
+    let mut have_cur = false
+    let mut cur_id = ""
+    let mut cur_norm = ""
+    let mut i = 0
+    while i < n_lines {
+        let line = lines[i]
+        if len(line) == 0 { i = i + 1; continue }
+        let c0 = line.substring(0, 1)
+        if c0 == "#" { i = i + 1; continue }
+        if c0 == "@" {
+            if have_cur {
+                out.push(CascadeRow { id: cur_id, normalized_form: cur_norm })
+            }
+            if len(line) >= 4 && line.substring(0, 3) == "@L " {
+                let rest = line.substring(3, len(line))
+                let m = len(rest)
+                let mut j = 0
+                while j < m {
+                    let c = rest.substring(j, j + 1)
+                    if c == " " || c == "\t" { break }
+                    if c == "=" { break }
+                    if c == ":" {
+                        if j + 1 < m && rest.substring(j + 1, j + 2) == ":" { break }
+                    }
+                    j = j + 1
+                }
+                cur_id = rest.substring(0, j)
+                cur_norm = ""
+                have_cur = true
+            } else {
+                have_cur = false
+            }
+            i = i + 1
+            continue
+        }
+        if have_cur {
+            let s = _ltrim_c(line)
+            if _starts_with_c(s, "normalized_form:") {
+                let v = _ltrim_c(s.substring(len("normalized_form:"), len(s)))
+                if len(cur_norm) == 0 { cur_norm = v }
+            }
+        }
+        i = i + 1
+    }
+    if have_cur {
+        out.push(CascadeRow { id: cur_id, normalized_form: cur_norm })
+    }
+    return out
+}
+
+// -- Manifest append helper ----------------------------------------
+// Cascade lines have the form:
+//   CASCADE L[<dep_id>] reason='depends on L[<root_id>]'
+// We always append (creating the file with a stub header when missing).
+
+fn _append_cascade_line(today: string, dep_id: string, root_id: string,
+                        verdict: string) {
+    let path = _manifest_path_c(today)
+    let parts = []
+    if !file_exists(path) {
+        parts.push("# hexa atlas cascade manifest -- ")
+        parts.push(today)
+        parts.push("\n# (created by cascade_tombstones; no preceding sweep manifest found)\n\n")
+    } else {
+        let existing = read_file(path)
+        parts.push(existing)
+        let n = len(existing)
+        if n > 0 && existing.substring(n - 1, n) != "\n" {
+            parts.push("\n")
+        }
+    }
+    parts.push("CASCADE L[")
+    parts.push(dep_id)
+    parts.push("] ")
+    parts.push(verdict)
+    parts.push(" reason='depends on L[")
+    parts.push(root_id)
+    parts.push("] which was tombstoned'\n")
+    write_file(path, parts.join(""))
+}
+
+// -- Dependency heuristic ------------------------------------------
+//
+// v1 rule: B "depends on" A iff B.normalized_form contains A.id as a
+// substring. We additionally require that A.id is bordered by a non-id
+// character on at least one side (so id "a" does not match "abacus")
+// when both sides are alphanumeric. Free-variable parsing is v1.1.
+
+fn _is_id_char(c: string) -> bool {
+    if c == "-" || c == "_" { return true }
+    let n = len(c)
+    if n != 1 { return false }
+    let code = ord(c)
+    if code >= 97 && code <= 122 { return true }   // a-z
+    if code >= 65 && code <= 90 { return true }    // A-Z
+    if code >= 48 && code <= 57 { return true }    // 0-9
+    return false
+}
+
+fn _depends_on(normalized_form: string, root_id: string) -> bool {
+    let n = len(normalized_form)
+    let m = len(root_id)
+    if m == 0 || n == 0 { return false }
+    if m > n { return false }
+    let mut i = 0
+    while i + m <= n {
+        if normalized_form.substring(i, i + m) == root_id {
+            let mut left_ok = (i == 0)
+            if !left_ok {
+                let lc = normalized_form.substring(i - 1, i)
+                if !_is_id_char(lc) { left_ok = true }
+            }
+            let right_idx = i + m
+            let mut right_ok = (right_idx >= n)
+            if !right_ok {
+                let rc = normalized_form.substring(right_idx, right_idx + 1)
+                if !_is_id_char(rc) { right_ok = true }
+            }
+            if left_ok && right_ok { return true }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// -- Public API ----------------------------------------------------
+//
+// cascade_tombstones — for every L node whose normalized_form depends on
+// any id in `newly_tombstoned`, call `reverify_fn(node_id, normalized_form)`.
+// On failure, tombstone the dependent and append a CASCADE line to the
+// shared manifest. Returns count of newly cascade-tombstoned nodes.
+//
+// reverify_fn signature: (node_id, normalized_form) -> bool
+//
+// Notes:
+//   - We pass over the atlas once per cascade pass (not transitively); a
+//     second-degree cascade (B → C) materializes via the next sweep cycle.
+//     Transitive closure is v1.1 (requires DAG construction).
+//   - Already-tombstoned nodes are skipped (idempotent).
+
+pub fn cascade_tombstones(atlas_root: string, newly_tombstoned: array,
+                          reverify_fn: (string, string) -> bool) -> i64 {
+    let rows = _scan_atlas_rows(atlas_root)
+    let today = _today_utc_c()
+    let mut cascade_count: i64 = 0
+
+    let mut r = 0
+    while r < len(newly_tombstoned) {
+        let root_id = to_string(newly_tombstoned[r])
+        if len(root_id) == 0 { r = r + 1; continue }
+
+        let mut i = 0
+        while i < len(rows) {
+            let row = rows[i]
+            // Skip self.
+            if row.id == root_id { i = i + 1; continue }
+            // Skip already-tombstoned.
+            if is_tombstoned(atlas_root, row.id) { i = i + 1; continue }
+            // Heuristic: depends-on check.
+            if !_depends_on(row.normalized_form, root_id) {
+                i = i + 1
+                continue
+            }
+            // Re-verify the dependent in light of the lemma loss.
+            let ok = reverify_fn(row.id, row.normalized_form)
+            if ok {
+                _append_cascade_line(today, row.id, root_id, "PASS   ")
+                i = i + 1
+                continue
+            }
+            // Cascade-tombstone.
+            let reason = "cascade-tombstone: depends on L[" + root_id +
+                         "] which was tombstoned"
+            let actor = "cascade-sweep"
+            let rc = tombstone_node_with_actor(atlas_root, row.id, reason,
+                                               "", actor)
+            if rc == 0 {
+                cascade_count = cascade_count + 1
+                _append_cascade_line(today, row.id, root_id, "TOMB   ")
+            } else {
+                _append_cascade_line(today, row.id, root_id,
+                                     "ERROR (rc=" + to_string(rc) + ")")
+            }
+            i = i + 1
+        }
+        r = r + 1
+    }
+
+    println("cascade_tombstones: roots=" + to_string(len(newly_tombstoned)) +
+            " cascade_tombstoned=" + to_string(cascade_count))
+    return cascade_count
+}
