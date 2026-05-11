@@ -1181,6 +1181,16 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     }
 
     if _types_is_return(e.kind) {
+        // Stage1 punch list B2 — capture fn_name and fn_return into local
+        // bindings BEFORE the recursive _infer_expr call. Under stage0 the
+        // `out: array` is shared-mutable across the per-fn ctx frames; if
+        // any sub-walk smuggles a write back into the apparently-copied
+        // CheckCtx (heap aliasing in stage0's value semantics), reading
+        // ctx.fn_name later could attribute this fn's HX3004 to a stale
+        // frame name. Pinning the strings here makes the attribution
+        // independent of shared-mutable state observed by deeper walks.
+        let frame_name = ctx.fn_name
+        let frame_ret = ctx.fn_return
         let mut val_t = _types_t_unit()
         let mut val_src = e
         if len(e.children) > 0 {
@@ -1190,9 +1200,9 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // Validate against enclosing fn return type. _types_assignable
         // permits the standard integer-literal coercion (e.g. `return 0`
         // for an `-> i32` fn) so the M0 baseline type-checks.
-        if len(ctx.fn_return.kind) > 0 {
-            if !_types_assignable(ctx.fn_return, val_t, val_src) {
-                _emit_hx3004(ctx.fn_name, ctx.fn_return, val_t, e.span, out)
+        if len(frame_ret.kind) > 0 {
+            if !_types_assignable(frame_ret, val_t, val_src) {
+                _emit_hx3004(frame_name, frame_ret, val_t, e.span, out)
             }
         }
         return _types_t_unit()
