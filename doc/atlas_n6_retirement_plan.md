@@ -61,6 +61,43 @@
 
 ---
 
+## 0b. 2026-05-12 absorption closure (commit `0db952a2` + `150e0220`)
+
+§4 의 #5 단계가 본래 의도였음 — "atlas.n6 지도파일이 별도 필요없게 hexa-lang atlas 시스템에 흡수" (operator clarification). §0a 발견과 합치면:
+
+- **RFC-017 §4.5 + SPEC.md §2.2 의 흡수 scaffold 는 이미 land 됨** (`compiler/atlas/embed.hexa` + `static_index.hexa` + `embedded.gen.hexa` + `tool/atlas_embed_gen.hexa`). 누락은 데이터뿐 — `embedded.gen.hexa` 가 8-노드 FIXTURE (`ATLAS_GENERATED_AT = "fixture"`) 상태였음.
+- 이 commit (`0db952a2`) 에서 `tool/atlas_embed_gen.hexa` 를 실제 `~/core/nexus/n6` 에 대해 실행 → `embedded.gen.hexa` 가 **P=255 / C=5424 / L=392 / E=10 (총 6081 노드, sha256 `2efce3bba0c39ea2095caf67b289b1386b9a079cc865f6af0764296d16b575ad`)** 로 재생성. 2,489,881 bytes (2431 KB).
+- 다운스트림 hot-path consumer (`compiler/main`, `compiler/check/types`, `compiler/daemon/server`) 는 이미 `static_atlas()` 경유. 잔여 `load_atlas()` 직접 콜러는 `compiler/discover/{promote,promote_smoke,tombstone_smoke}.hexa` (스테이징 shard promotion 경로, runtime SSOT 와 분리됨) + `tool/atlas_embed_gen.hexa` (regen driver 자체).
+- Smoke: `compiler/atlas/static_index_test.hexa` — 9/9 PASS (fixture-only ID `alpha`/`addition-commutative` → 실제 stable 앵커 `n` (foundation [11*] axiom) + `consciousness_structure` 로 재핀).
+
+### regen 친화도 friction (2026-05-12, 후속 fix `150e0220`)
+
+Linux GNU 호스트에서 `hexa run tool/atlas_embed_gen.hexa` 실행 시 3 false start. Root cause: `self/hexa_full.hexa::file_size` 빌트인이 BSD `stat -f %z` 먼저 시도 → GNU `stat -f` 는 filesystem-info 모드라 `%z` 가 undefined → locale-formatted 메타데이터를 **STDOUT** 에 emit ("`  파일: ...\n    ID: ...`") → `2>/dev/null` 로 못 막음 → `to_int` 가 진짜 garbage 처리. `150e0220` 에서 GNU-first 순서로 뒤집고 `LC_ALL=C` 가드 추가. 단 deployed `~/.hx/packages/hexa/build/hexa_interp` 바이너리는 다음 re-promote 사이클까지 구 로직 유지 → 그 동안 Linux 사용자는 여전히 `env LC_ALL=C PATH=<stat shim>:$PATH` 워크어라운드 필요. 세부는 `incoming/notes/2026-05-12-atlas-n6-absorption-session.md` §B.
+
+### 폐기 가능성 — 즉시 가능한 것 vs 후속
+
+**즉시 가능** (이 commit 이후):
+- `~/core/nexus/n6/atlas.n6` 외부 파일은 hexa 컴파일러 runtime 에서 **read 되지 않음**. 컴파일러 바이너리가 atlas 데이터를 자체적으로 휴대 (embedded const arrays).
+- 클린 체크아웃 → 클린 빌드 시퀀스에서 외부 atlas 파일 0 의존.
+
+**후속 사이클 필요** (이번 범위 밖):
+- **§4 #1 bit-rotted caller 정리** — `tool/foundation_axiom_lock.hexa:31`, `tool/drill_classify.hexa:36` 의 `/Users/ghost/core/canon/atlas/atlas.n6` 하드코딩. 사용자가 1차 시도를 revert 했으므로 별도 협의 필요.
+- **§2 Phase 2** — append/promote 의 외부 shard 경로 (`compiler/discover/promote.hexa::promote_to_atlas`) 는 staging 흐름이 atlas.n6 와 별개로 운영되는지 재확인 필요.
+- **§2 Phase 4** — nexus 측 `~/core/nexus/n6/atlas.n6` 파일은 hexa 외 호출자 (nexus CLI, viewer, archival) 가 read 할 가능성. 1주 read-only tombstone 관찰 후 삭제 단계는 operator 결정.
+- **§2 Phase 5** — `README.md`/`SPEC.md`/`SPEC.yaml` 의 "compiler build time merge" 문장은 흡수 후 그대로 정확 (정의 갱신 불요), 다만 RFC-017 cross-ref 갱신은 미정.
+- **interp re-promote** — `150e0220` 의 file_size 패치가 deployed binary 에 land 되어 Linux 사용자도 워크어라운드 없이 regen 가능해질 것. 별도 build(stage0) 사이클.
+
+### §4 step 매핑 (재정렬)
+
+§4 의 5-step 원안에서:
+- #1 (bit-rotted caller) — **deferred**, operator-revert 후 미진행.
+- #2 (compiler/cli/dispatch.hexa 모듈 분리) — **deferred**, 흡수 본체가 아니라 별개 리팩터.
+- #3 (`hexa atlas` 최소 surface) — **deferred**, 흡수 본체 외 새 CLI 추가.
+- #4 (`hexa scrub` / determinism scan) — **deferred**, raw_determinism Tier 1 의 별도 surface.
+- #5 (§2 Phase 0–5 재설계) — **본 commit 으로 in spirit 종결**. Phase 1 의 "디렉터리 트리 전환" 전제가 §0a 에서 깨졌고, 실제로는 단일 파일 SSOT 에 대해 기존 generator 를 실행하는 것이 closure 였음. 명시적 doc 재설계 (Phase 1–5 의 redrafted 본문) 는 별도 PR.
+
+---
+
 ## 1. 계획 검토 ① — nexus atlas / atlas CLI → hexa CLI 전환
 
 ### 흡수 매핑 (audit 대비, 현 상태)
