@@ -119,15 +119,21 @@
   compiler_impact: none expected — rebuild + OOM-stabilize + promote ~/.hx/bin/hexa_real. (if the rebuild surfaces a bug, that's the real work.)
   selftest_delta: 0 (existing self/test_async_codegen.hexa should go 0/4 -> 4/4 once the deployed binary has the AwaitExpr branches)
   status: applied
-  applied_at: 2026-05-10
+  applied_at: 2026-05-11
   opened: 2026-05-10
   note: |
-    Rebuilt + promoted ~/.hx/bin/hexa_real on 2026-05-10 (G2 + A1 arena hooks).
-    A2 in-place splice accumulator (ab2dfcee) landed LATER and is NOT in this
-    deployed binary yet — re-promote pending the stage-1 RSS verification.
-    Verified at promotion time: 4/4 PASS interp + 4/4 PASS native AOT on
-    self/test_async_codegen.hexa. sha256 + backup paths recorded in
-    incoming/manifest_log.jsonl (applied row, 2026-05-10).
+    Re-promoted ~/.hx/bin/hexa_real (and ~/.hx/packages/hexa/hexa.real, same
+    binary) on 2026-05-11 from source HEAD 64dc8488. Now in the deployed binary:
+    #12 cmd_build flatten via module_loader + $HEXA_LANG/self -I (21e7b518),
+    A2 in-place _splice_imported_items accumulator (ab2dfcee), the Types /
+    C11-parse_only / Lower / B1+C19 / P2 clusters, and #14 drain wiring (18c6a536).
+    sha256 ffa91279f47eccb5ac6a8471a54d1fc1f400db8f23bf89ddd9310f1b6c9e7287
+    (prev bin 8cf82fb4…, prev packages b6b304bd…); backups at *.bak.1778481370.
+    Verified: --version + parse OK; test_async_codegen 4/4 PASS interp
+    (RESOURCE_LOCAL_HEXA=1) + 4/4 PASS native AOT (HEXA_MAC_BUILD_OK=1);
+    out-of-tree 2-file `use` build OK (module_loader flatten + correct -I).
+    sha256 + backup paths also in incoming/manifest_log.jsonl (promote row, 2026-05-11).
+    Earlier 2026-05-10 promote (G2 + A1, sha 8cf82fb4) superseded.
   detail: patches/wilson-needs-hexa-real-promotion.md
 
 - id: wilson-needs-streaming-http-sse
