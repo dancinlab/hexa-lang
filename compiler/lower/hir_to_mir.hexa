@@ -755,7 +755,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             return _no_value(ctx2)
         }
 
-        // No-else: else_id IS the after block.
+        // No-else: else_id IS the after block. Stage1 punch list C9 —
+        // mirror the has_else recompute so `else_end_block` reflects the
+        // current cur_block after the then-branch lower; today this is a
+        // defensive parallel to the `then_end_block` recompute at line
+        // ~710 (block IDs are stable, so the value is unchanged in the
+        // common case), but it keeps the no-else path consistent with
+        // the has_else path for downstream consumers reading the var.
+        else_end_block = ctx2.cur_block
         if !then_returned {
             let br_then = Stmt {
                 kind: STMT_BR,
