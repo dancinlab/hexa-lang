@@ -457,7 +457,11 @@ phase_reset("post_parse")
 // Atlas: A4 wired — real index from compiler/atlas/embedded.gen.hexa.
 let atlas = _load_atlas()
 
-let mut diags: array = []
+// Stage1 punch list C14: type as `[Diagnostic]` instead of bare `array` so
+// stage0 stores concrete Diagnostic structs in array_store rather than boxing
+// each through the generic value slot. Real compiles emit thousands of diag
+// candidates; the typed form is cheaper to push/iterate.
+let mut diags: [Diagnostic] = []
 
 // Stage1 punch list Gap 5 + Gap 1: drain parser-stage diagnostics
 // (HX0011/HX0012 brace-shape, HX0010 import-not-found) FIRST so parse-time
