@@ -7,7 +7,7 @@
 
 schema_version: 1
 title: hexa-lang specification
-status: directional (decisions locked; stage 1 source-side OOM mitigated by A2 in-place splice accumulator — host re-promote pending verification)
+status: directional (decisions locked; P0 stage-1 source-side OOM closed at current scale — A1+A2 → peak ~782 MB verified; deployed `hexa_real` current at HEAD `dae438ee`)
 last_updated: 2026-05-11
 authoritative_rfcs:
   - proposals/rfc_017_atlas_n6_embedding_and_strict_lint.md
@@ -714,13 +714,18 @@ roadmap:
     F5: { effort: M,  goal: RFC-023 firmware linker spec (linker scripts + .bss/.data),    status: SPEC LAND,   evidence: "2026-05-10 — 2f9789e3 (implementation follow-up)" }
   revised_timeline:
     note: |
-      Stage 1 self-compile is host-OOM blocked. Punch list v2
+      Stage 1 self-compile was host-OOM blocked. Punch list v2
       (doc/stage1_punch_list_v2.md, commit 86afadb0) revised the estimate
       from 6-10 weeks to 14-22 weeks, dominated by category A bootstrap host
-      work (interpreter arena reset / partial self-compile / stage 0.5 host).
+      work. The closure round (2026-05-11) closed P0: A1 phase-arena reset +
+      A2 in-place splice accumulator landed and deployed (~/.hx/bin/hexa_real
+      re-promoted 774c5d32 → 41ecfb97 → dae438ee); #13 re-probe (uncapped)
+      peak ~782 MB vs 5/10 baseline 3510 MB (4f5f8f07). A full stage-1
+      fixed-point re-estimate is the remaining open work (no longer
+      host-OOM-bound). M4 freelist re-enable is an optional further reduction.
     stage_1_reach_old_estimate: "6-10 weeks (pre 2026-05-10)"
-    stage_1_reach_new_estimate: "14-22 weeks (post Gap 1+2+14+15 host wall)"
-    bottleneck: stage0_2GB_memory_cap_during_spliced_self_compile
+    stage_1_reach_new_estimate: "14-22 weeks (post Gap 1+2+14+15 host wall); P0 host-OOM closed 2026-05-11 — re-estimate pending"
+    bottleneck: "stage0_2GB_memory_cap_during_spliced_self_compile (RESOLVED 2026-05-11 — A1+A2, peak ~782 MB)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fork storm prevention (Decision 2026-05-09)
@@ -1069,6 +1074,22 @@ stdlib_evolution:
       downstream_consumers:
         - wilson provider-anthropic (Messages API streaming)
         - any OpenAI Chat Completions streaming client
+    semver:
+      file: stdlib/semver.hexa
+      applied_version: v1.0.0
+      applied_date: "2026-05-11"
+      applied_commit: 4725c619
+      applied_additions:
+        - { name: semver_parse,            purpose: "parse a SemVer 2.0.0 string (major.minor.patch[-prerelease][+build])" }
+        - { name: semver_compare,          purpose: "precedence compare two versions (prerelease < release; build ignored)" }
+        - { name: semver_satisfies,        purpose: "range-satisfies — ^, ~, >=, <=, >, <, =, x-ranges, hyphen ranges" }
+      use_case_primary: |
+        wilson loader_validate — validate plugin / dependency version
+        constraints against installed versions. SemVer 2.0.0 conformant.
+      compat: new module (v1.0.0)
+      downstream_consumers:
+        - wilson loader_validate (plugin version-constraint checks)
+      selftest: test_semver 110/110
   inbox_protocol:
     decision_2026_05_09: incoming_dir_until_native_compiler_v1
     directory: incoming/
@@ -1151,21 +1172,27 @@ open_questions_resolved_2026_05_10_to_05_11:
       ld step is a downstream codegen follow-up of commit 194d9011, gated behind
       the still-open compiler-driver gaps (driver aborts before codegen on real
       source) — tracked there, not a standalone open question.
+  a2_deploy_gap:
+    resolved_in: |
+      ~/.hx/bin/hexa_real re-promoted (774c5d32 → 41ecfb97 → dae438ee),
+      then re-probed uncapped (HEXA_MEM_UNLIMITED=1): peak RSS ~782 MB
+      (vs 5/10 baseline 3510 MB), dropping to ~160 MB once the A1
+      phase-arena reset fires. 4f5f8f07; doc/stage1_punch_list_v2.md
+      "Update 2026-05-11 (PM)". P0 stage-1 source-side OOM closed at
+      current scale.
+  m4_freelist_reenable_timing:
+    resolved_in: |
+      resolved as a strategy question — the A2-verification gate cleared
+      (~782 MB << 1.5 GB), so A1+A2 alone suffice for P0 closure at
+      current scale; re-enabling the M4 freelist (self/hexa_full.hexa
+      ~L17993) is an optional further reduction, not needed for closure.
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Open questions surfaced 2026-05-11 (post-A2 land + #14 drain + cluster merges).
+# Open questions surfaced 2026-05-11: none currently. The A2 deploy gap +
+# M4 freelist strategy questions (above) resolved; the still-open work is the
+# deferred-by-design items under open_questions (Surfaced 2026-05-10 + pre-existing).
 # ─────────────────────────────────────────────────────────────────────────────
-open_questions_surfaced_2026_05_11:
-  a2_deploy_gap:
-    # A2 source landed (ab2dfcee) + host rebuild (ddb21f21) — but ~/.hx/bin/hexa_real
-    # re-promote still pending. Closure requires host I/O + clang only (~90s wall) plus
-    # 2 GB-cap re-probe to confirm peak RSS drops below ~1.5 GB.
-    blocker: "host re-promote (~/.hx/bin/hexa_real) + 2 GB-cap re-probe"
-    effort: "host I/O + clang only, ~90s wall"
-  m4_freelist_reenable_timing:
-    # gated on A2 verification per punch list v2 5/11 closure path step 3.
-    gated_on: a2_deploy_gap_closure
-    reference: doc/stage1_punch_list_v2.md (Update 2026-05-11)
+open_questions_surfaced_2026_05_11: {}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phases completed (2026-05-09)
@@ -1346,8 +1373,9 @@ phases_completed_2026_05_10:
 # Phases completed (2026-05-11) — mirror of SPEC.md §20.3 delta snapshot.
 # ─────────────────────────────────────────────────────────────────────────────
 # A2 source-side splice mitigation + 5 cluster merges + #14 drain + #11/#12
-# wilson fixes + stage 2/3 witness + SPEC.md sync. Stage 1 host verification
-# deferred to host re-promote (see open_questions.surfaced_2026_05_11.a2_deploy_gap).
+# wilson fixes + stage 2/3 witness + SPEC.md sync. (Stage-1 host verification
+# subsequently CLOSED in the closure round — see phases_completed_2026_05_11_closure
+# and open_questions_resolved_2026_05_10_to_05_11.a2_deploy_gap.)
 phases_completed_2026_05_11:
   stage_2_3_witness_plus_rfc_023:
     status: PASS
@@ -1359,10 +1387,11 @@ phases_completed_2026_05_11:
     status: PASS
     evidence: "ab2dfcee fix(compiler/parse): A2 — in-place _splice_imported_items accumulator (stage1 OOM)"
     notes: |
-      Source-side mitigation only — host re-promote (~/.hx/bin/hexa_real)
-      + 2 GB-cap re-probe still pending. See open_questions.surfaced_2026_05_11.
+      Source-side mitigation. Subsequently deployed (~/.hx/bin/hexa_real
+      re-promoted 774c5d32 → 41ecfb97 → dae438ee) and re-probed: peak
+      ~782 MB (4f5f8f07) → P0 stage-1 OOM closed at current scale.
   stage0_host_rebuild_a2:
-    status: "PASS (source) / PENDING (deploy)"
+    status: "PASS (source + deployed — re-promoted 774c5d32 → dae438ee)"
     evidence: "ddb21f21 build(stage0): rebuild host — A2 in-place splice accumulator"
   superpowers_void_d1_d6_defense:
     status: PASS
@@ -1406,3 +1435,52 @@ phases_completed_2026_05_11:
   spec_md_sync_2026_05_11:
     status: PASS
     evidence: "d05696a2 doc(spec): 2026-05-11 — sync SPEC.md with 5/11 stage1 + cluster + wilson + drain land"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phases completed (2026-05-11 — closure round): P0 stage-1 OOM verified closed
+# (A1+A2 → peak ~782 MB), hexa_real re-promoted twice more, RFC-020 A4 restored
+# in SSOT, wilson hexa-lang side closed (hexa build core/main.hexa → wilson 0.0.1).
+# ─────────────────────────────────────────────────────────────────────────────
+phases_completed_2026_05_11_closure:
+  stage1_rss_reprobe_post_repromote:
+    status: PASS
+    evidence: "4f5f8f07 #13 RSS re-probe post hexa_real re-promote — peak ~782MB (was 3510MB), P0 OOM closed"
+  hexa_real_repromote_12_a2_clusters:
+    status: PASS
+    evidence: "774c5d32 build(stage0): re-promote hexa_real — #12 cmd_build flatten + A2 splice + clusters + #14"
+  rfc020_a4_codegen_restored_ssot:
+    status: PASS
+    evidence: "41ecfb97 fix(self/codegen): RFC-020 A4 — restore enum-payload match codegen in codegen_c2.hexa (regen had wiped the a85b8a1c hexa_cc.c hand-fix); test_enum_payload_full 15/15 codegen + 15/15 interp"
+  stdlib_semver:
+    status: PASS
+    evidence: "4725c619 feat(stdlib): add stdlib/semver.hexa — SemVer 2.0.0 parse + compare + range-satisfies (wilson loader_validate); test_semver 110/110"
+  install_relative_stdlib_discovery:
+    status: PASS
+    evidence: "df9e7f6b feat(self/module_loader+main): install-relative stdlib/ discovery — works without HEXA_LANG/HEXA_STDLIB_ROOT (orpheus O-002)"
+  gap15_hexa_str_concat_closed_moot:
+    status: PASS
+    evidence: "a8ff675b doc(spec): close out Gap 15 — hexa_str_concat runtime stub linkage"
+  spec_19_20_status_reconcile:
+    status: PASS
+    evidence: "571df583 doc(spec): reconcile §19/§20 status with reality — D2 scaffold/deferred, C2 cross_prover parked, F3 done, dedupe §19"
+  shell_builtin_absorb_pwd_ls:
+    status: PASS
+    evidence: "0ba5fd7d feat(stdlib/runtime): absorb pwd/ls shell builtins → cwd()/list_dir() intrinsics (absorbed_site_count 638→752, pending 197→83)"
+  exec_stream_kill_builtin:
+    status: PASS
+    evidence: "6c0fbac7 feat(self/runtime+codegen): add exec_stream_kill(h) builtin — SIGKILL stream child (wilson tool-core ESC-cancel)"
+  builtin_byvalue_thunk_codegen:
+    status: PASS
+    evidence: "46016739 feat(self/codegen): emit thunks for builtins/methods taken by-value — fixes hexa_callN(<builtin>) undeclared (wilson gap b2); un-doubled hexa_cc.c 32447→21010 lines"
+  hexa_cc_resolve_out_of_tree:
+    status: PASS
+    evidence: "731f41d6 fix(self/main cmd_cc): resolve hexa_cc.c / SSOT modules / -I via $HEXA_LANG > install_dir > ./self (not cwd) — hexa cc works out-of-tree"
+  law_io_selftest_main_moved:
+    status: PASS
+    evidence: "a5de44e2 fix(self/stdlib/law_io): move selftest main() to tool/law_io_selftest.hexa — u_main collision on flatten"
+  hexa_real_repromote_46016739:
+    status: PASS
+    evidence: "dae438ee build(stage0): re-promote hexa_real (46016739) — exec_stream_kill + fnref thunks + un-doubled hexa_cc.c; sha cd817981… (~/.hx/bin/hexa_real + ~/.hx/packages/hexa/hexa.real)"
+  wilson_hexa_lang_side_closed:
+    status: PASS
+    evidence: "340c3788 doc(inbox): wilson<->hexa-lang closure — VERIFIED, wilson hexa build → wilson 0.0.1; all follow-ups landed (closure note incoming/notes/2026-05-11-wilson-hexa-lang-closure.md)"

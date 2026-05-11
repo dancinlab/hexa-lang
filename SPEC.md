@@ -8,7 +8,7 @@
 > drift on the header fields below.
 
 - **Schema version**: 1
-- **Status**: directional (decisions locked; stage 1 source-side OOM mitigated by A2 in-place splice accumulator — host re-promote pending verification)
+- **Status**: directional (decisions locked; P0 stage-1 source-side OOM closed at current scale — A1+A2 → peak ~782 MB verified; deployed `hexa_real` current at HEAD `dae438ee`)
 - **Last updated**: 2026-05-11
 - **Authoritative RFCs**:
   - [RFC-017 — atlas embedding + strict lint](proposals/rfc_017_atlas_n6_embedding_and_strict_lint.md)
@@ -148,22 +148,23 @@ Mach-O codegen (hooks/handlers/probes); the flag makes intent explicit.
 `hexa_interp` retires after stage 3 settles. System `as` / `ld` permitted
 only during stage 0 → stage 1 transition.
 
-### Stage 1 OOM mitigation (2026-05-11)
+### Stage 1 OOM mitigation (2026-05-11 — CLOSED at current scale)
 
 The stage 0 → stage 1 self-compile hit a 2 GB-cap OOM at the spliced
-super-module (~25,932 lines). Source-side mitigations now landed:
+super-module (~25,932 lines). Source-side mitigations landed and the
+deployed host was re-promoted; the re-probe confirms closure:
 
 | Step | Commit | Effect |
 |---|---|---|
-| A1 host arena reset (`--phase-arena-reset` between parse / lower / codegen) | a0f5cd5d (restored) | sawtooth RSS observed; reset works but reclaimable mass dwarfed by `array_store` growth |
-| A2 in-place `_splice_imported_items` accumulator (module-scoped `p_splice_acc`, replaces per-call `[Item]` allocation) | ab2dfcee | source land |
-| Stage 0 host rebuild incorporating A2 | ddb21f21 (`self/native/hexa_v2` +536 B) | host re-promote pending; deployed `~/.hx/bin/hexa_real` still 5/10 G2 build |
+| A1 host arena reset (`--phase-arena-reset` between parse / lower / codegen) | a0f5cd5d (restored) | once spliced AST + lower IR is freed, RSS drops to ~160 MB; was previously dwarfed by `array_store` growth — A2 removes that growth |
+| A2 in-place `_splice_imported_items` accumulator (module-scoped `p_splice_acc`, replaces per-call `[Item]` allocation) | ab2dfcee + ddb21f21 (host rebuild) | source land + host rebuild |
+| `~/.hx/bin/hexa_real` re-promote (carrying A2 + clusters + #14) | 774c5d32, then 41ecfb97, then dae438ee (sha cd817981…) | deployed host now current at HEAD `dae438ee` |
+| #13 RSS re-probe (uncapped, `HEXA_MEM_UNLIMITED=1`) | 4f5f8f07 | **peak ~782 MB** (vs 5/10 baseline 3 510 MB), dropping to ~160 MB once the A1 phase-arena reset fires — well under the ~1.5 GB threshold |
 
-5/11 probe ran against the pre-A2 deployed binary under a 768 MB cap, so
-the A2 effect is **not yet measurable**. Closure path (per
-`doc/stage1_punch_list_v2.md` Update 2026-05-11): re-promote
-`~/.hx/bin/hexa_real` from current sources, re-probe at 2 GB cap or
-`HEXA_MEM_UNLIMITED=1`, then optionally re-enable the M4 freelist.
+Verdict (per `doc/stage1_punch_list_v2.md` "Update 2026-05-11 (PM)"):
+**P0 stage-1 source-side OOM is closed at current scale** — A1 + A2
+alone suffice. Re-enabling the M4 freelist (`self/hexa_full.hexa`
+~L17993) remains an *optional* further reduction, not needed for closure.
 
 ### Interpret-mode after stage 3 (Decision 2026-05-09 — D + B)
 
@@ -480,16 +481,17 @@ lower-pass codes were emitted into a sink not visible to the caller.
 |---|---|---|
 | 6–10 weeks | pre 2026-05-10 | Original Gap-1..15 punch list assumption |
 | **14–22 weeks** | 2026-05-10 | Stage 0 host OOM dominates; punch list v2 (`doc/stage1_punch_list_v2.md`, commit 86afadb0) adds A1–A4 (interpreter arena reset / partial self-compile / stage 0.5 host) as the new critical path. |
-| **revised — A2 land, verification pending** | 2026-05-11 | A1 + A2 source-side mitigations landed (a0f5cd5d restored, ab2dfcee); A2 deploy + 2 GB-cap re-probe still required before re-estimate. Track B / C cluster work (B1+C19, Types A4+C4+B2, C11 atlas embed, Lower C5/C9/C10/C16, P2 C12–C20) all landed — once A2 verification clears, the recurring v1 surface is closed. |
+| **P0 OOM closed at current scale** | 2026-05-11 (closure round) | A1 + A2 source-side mitigations landed (a0f5cd5d restored, ab2dfcee), `~/.hx/bin/hexa_real` re-promoted (774c5d32 → 41ecfb97 → dae438ee), #13 re-probe (uncapped) shows peak ~782 MB (was 3 510 MB) → P0 stage-1 OOM closed (4f5f8f07). Track B / C cluster work (B1+C19, Types A4+C4+B2, C11 atlas embed, Lower C5/C9/C10/C16, P2 C12–C20) all landed — the recurring v1 surface is closed. A full stage 1 fixed-point re-estimate is the remaining open work (no longer host-OOM-bound). |
 
-Bottleneck: stage 0 hexa_interp 2 GB cap during spliced self-compile
-(~25,932-line super-module).
+Bottleneck (historical): stage 0 hexa_interp 2 GB cap during spliced
+self-compile (~25,932-line super-module) — resolved by A1 + A2 (peak
+~782 MB; see "Stage 1 OOM mitigation" above).
 
 ### Punch list v2 cluster status (2026-05-11)
 
 | Cluster | Items | Commits | Status |
 |---|---|---|---|
-| Track A (bootstrap host) | A1 arena reset, A2 in-place splice accumulator, A4 type_check side-index | A1 a0f5cd5d (restored); A2 ab2dfcee + ddb21f21 host rebuild; A4 (bc50db32 side-index) | A1+A2 source-side land; A2 verification deferred to host re-promote |
+| Track A (bootstrap host) | A1 arena reset, A2 in-place splice accumulator, A4 type_check side-index | A1 a0f5cd5d (restored); A2 ab2dfcee + ddb21f21 host rebuild + re-promote 774c5d32→41ecfb97→dae438ee; A4 (bc50db32 side-index) | A1+A2 landed + deployed; #13 re-probe peak ~782 MB (4f5f8f07) → P0 OOM closed |
 | Track B (recurring from v1) | B1 empty-name guard in `_hir_lower_type_ref`, B2 pin `fn_name`/`fn_return` before recursive return walk | B1 e34b9eb6 / 4cd39b2a, B2 cdc66054 / bc50db32 | landed |
 | Track C — Types cluster | C4 HX2001 non-Ident callee | bc50db32 | landed |
 | Track C — Atlas embed | C11 parse_only skip on atlas literals (`item_is_parse_only`) | 2b67ccb6 | landed |
@@ -497,7 +499,7 @@ Bottleneck: stage 0 hexa_interp 2 GB cap during spliced self-compile
 | Track C — for-desugar | C19 `for x in iter` → index-based while in ast_to_hir | 4cd39b2a (f534fea9) | landed |
 | Track C — P2 batch | C12 citation walk gated `--strict-citations`, C13 units early-out, C14 typed diags, C15 lmodule if-expr, C20 HX2003 non-fn callee | 840c8f7d (b5923aad, f6468143, 5342d50a, fbe11334, bed14aac) | landed |
 | #14 drain | `compiler/main` hir_to_mir_diags drain (HX1101/1102/1103 surface in CLI) | 18c6a536 | landed |
-| #10 wilson hexa-real promotion | PATCHES.yaml flip → applied | 13143f18 | A1+G2 binary promoted 5/10; A2 promotion pending |
+| #10 wilson hexa-real promotion | PATCHES.yaml flip → applied | 13143f18 | A1+G2 binary promoted 5/10; A2 + clusters re-promoted 5/11 (774c5d32 → … → dae438ee, sha cd817981…) |
 | #11 stdlib http_sse v1.1 POST+body | wilson provider-anthropic streaming POST | faca4134 | landed |
 | #12 hexa build out-of-tree | cmd_build flatten via module_loader + `$HEXA_LANG/self` -I priority | 21e7b518 | landed |
 | #13 stage 1 punch list v2 5/11 update | A2 verify deferred to host rebuild | ee62470a | landed |
@@ -542,6 +544,7 @@ owns its own backward-compat contract.
 | c_ffi | `stdlib/c_ffi.hexa` | v1.1 (applied 2026-05-09) | `c_alloc_ptr_slot()`, `c_load_ptr(slot)` — out-pointer slot for duckdb-style C APIs (orpheus 136 ms → 1–3 ms) |
 | http | `stdlib/http.hexa` | v1.1 (pending external) | `http_post_with_headers(url, headers, body, timeout_s)` — JSON-RPC enabler (orpheus bitcoind 15–30 ms → 3–7 ms) |
 | http_sse | `stdlib/http_sse.hexa` | v1.1 (applied 2026-05-11, commit faca4134) | `http_sse_post`, `http_sse_open_post`, `http_sse_open_method`, `http_sse_build_curl_method_cmd` — streaming POST + body (Anthropic Messages, OpenAI Chat Completions). Internal `_sse_build_curl` factored into `_method` variant. GET surface byte-identical. Body routed via `printf %s '...' \| curl --data-binary @-`. Interp-mode POST fallback deferred — AOT users get streaming POST today |
+| semver | `stdlib/semver.hexa` | v1.0.0 (new module, applied 2026-05-11, commit 4725c619) | `semver_parse`, `semver_compare`, `semver_satisfies` — SemVer 2.0.0 parse / precedence compare / range-satisfies (`^`, `~`, `>=`, `<=`, `>`, `<`, `=`, x-ranges, hyphen ranges). wilson `loader_validate` plugin version-constraint checks. test_semver 110/110 |
 
 ### Inbox protocol
 
@@ -676,14 +679,20 @@ Resolved 2026-05-10 / 2026-05-11:
   codegen follow-up of commit 194d9011, gated behind the still-open
   compiler-driver gaps (the driver aborts before codegen on real source),
   not a standalone open question.
+- A2 source-land vs deployed-binary gap — RESOLVED: `~/.hx/bin/hexa_real`
+  re-promoted (774c5d32 → 41ecfb97 → dae438ee), then re-probed uncapped
+  (`HEXA_MEM_UNLIMITED=1`): peak RSS ~782 MB (vs 5/10 baseline 3 510 MB),
+  dropping to ~160 MB once the A1 phase-arena reset fires (4f5f8f07,
+  `doc/stage1_punch_list_v2.md` "Update 2026-05-11 (PM)").
+- M4 freelist re-enable strategy — RESOLVED as a strategy question: the
+  A2-verification gate cleared (~782 MB ≪ 1.5 GB), so the verdict is
+  "A1+A2 alone suffice for P0 closure at current scale; re-enabling the
+  M4 freelist (`self/hexa_full.hexa` ~L17993) is an optional further
+  reduction, not needed for closure."
 
-Surfaced 2026-05-11:
-
-- A2 source land vs deployed-binary gap — closure requires `~/.hx/bin/hexa_real`
-  re-promote (host I/O + clang only; ~90 s wall) plus 2 GB-cap re-probe to
-  confirm peak RSS drops below ~1.5 GB.
-- M4 freelist re-enable strategy — gated on A2 verification (per punch
-  list v2 5/11 closure path step 3).
+Surfaced 2026-05-11: (none currently — A2 deploy gap + M4 freelist
+strategy resolved above; the still-open work is the deferred-by-design
+items under "Surfaced 2026-05-10" / "Pre-existing".)
 
 ---
 
@@ -759,6 +768,29 @@ verification deferred to host re-promote).
 | superpowers/void D1–D6 defense layer design (incident 2026-05-11) | PASS | 5d97e9db |
 | Stage 2 / 3 witness harness + RFC-023 firmware linker spec | PASS | 2f9789e3 |
 
+### 20.4 Delta 2026-05-11 (closure round)
+
+P0 stage-1 OOM verified closed (A1+A2 → peak ~782 MB); `hexa_real`
+re-promoted twice more; RFC-020 A4 restored in SSOT; wilson hexa-lang
+side closed (`hexa build core/main.hexa` → `wilson 0.0.1`).
+
+| Item | Status | Evidence |
+|---|---|---|
+| #13 stage-1 self-compile RSS re-probe post host re-promote — peak ~782 MB (was 3 510 MB) → P0 OOM closed | PASS | 4f5f8f07 |
+| `~/.hx/bin/hexa_real` re-promote (#12 cmd_build flatten + A2 splice + clusters + #14) | PASS | 774c5d32 |
+| RFC-020 A4 enum-payload match codegen restored in SSOT `codegen_c2.hexa` (regen had wiped the `a85b8a1c` hand-fix in `hexa_cc.c`) | PASS | 41ecfb97 (test_enum_payload_full 15/15 codegen + 15/15 interp) |
+| `stdlib/semver.hexa` — SemVer 2.0.0 parse / compare / range-satisfies (wilson `loader_validate`) | PASS | 4725c619 (test_semver 110/110) |
+| Install-relative `stdlib/` discovery + `HEXA_INSTALL_DIR` passdown — `use "stdlib/*"` works w/o `HEXA_LANG`/`HEXA_STDLIB_ROOT` (orpheus O-002) | PASS | df9e7f6b |
+| Gap 15 (`hexa_str_concat` runtime stub linkage) closed out as moot | PASS | a8ff675b |
+| SPEC §19/§20 status reconcile (D2 SCAFFOLD/Step3+-deferred, C2 PASS/cross_prover-parked, F3 DONE, §19 dedupe) | PASS | 571df583 |
+| Shell-builtin absorption — `pwd → cwd()/getcwd()`, `ls → list_dir()` intrinsics (absorbed_site_count 638→752, pending 197→83) | PASS | 0ba5fd7d |
+| `exec_stream_kill(h)` runtime builtin (fork+setpgid stream child; SIGTERM→grace→SIGKILL; wilson tool-core ESC-cancel) | PASS | 6c0fbac7 |
+| builtin/method taken-by-value → static `__hxthunk_<name>` codegen (fixes `hexa_callN(<builtin>)` undeclared = wilson gap b2) + un-doubled `hexa_cc.c` (32 447→21 010 lines) | PASS | 46016739 |
+| `hexa cc` / `hexa cc --regen` resolve `hexa_cc.c` / SSOT modules / `-I` via `$HEXA_LANG > install_dir > ./self` (not cwd) — works out-of-tree | PASS | 731f41d6 |
+| `self/stdlib/law_io.hexa` selftest `main()` → `tool/law_io_selftest.hexa` (u_main collision on flatten) | PASS | a5de44e2 |
+| `~/.hx/bin/hexa_real` + `~/.hx/packages/hexa/hexa.real` re-promoted from HEAD `46016739` (sha cd817981…; manifest_log row) | PASS | dae438ee |
+| wilson `hexa build core/main.hexa` → `OK: built build/wilson` → `wilson 0.0.1` (hello, harness-cli/print/rpc, tool-core, provider-claude-cli/anthropic, agents-md) — hexa-lang side of wilson CLOSED | PASS | 340c3788 (closure note `incoming/notes/2026-05-11-wilson-hexa-lang-closure.md`) |
+
 ---
 
 ## 21. Downstream consumers
@@ -768,7 +800,7 @@ How downstream tools interact with hexa-lang today:
 | Consumer | Surface | Status |
 |---|---|---|
 | **orpheus** | `stdlib/c_ffi v1.1` (out-pointer) → duckdb_native; `stdlib/http v1.1` (POST + headers) → bitcoind RPC; `stdlib/write_text` → bulk file I/O | working post c_ffi v1.1 + write_text; http v1.1 inbox pending external |
-| **wilson** | RFC-020 enum payloads (G1), RFC-022 async (G2), `stdlib/cancel` (G3); `stdlib/http_sse v1.1` POST + body (provider-anthropic streaming); `hexa build` out-of-tree flatten + `$HEXA_LANG/self` -I; G7 dynamic-linking RFC draft (nice-to-have, not blocking) | core port unblocks via G1+G2+G3 (applied 2026-05-10); http_sse + build-out-of-tree closed 2026-05-11 (#11 / #12); A2 host promotion pending |
+| **wilson** | RFC-020 enum payloads (G1), RFC-022 async (G2), `stdlib/cancel` (G3); `stdlib/http_sse v1.1` POST + body (provider-anthropic streaming); `stdlib/semver` (loader_validate); `hexa build` / `hexa cc` out-of-tree (flatten + `$HEXA_LANG > install_dir > ./self` -I); `exec_stream_kill` (tool-core ESC-cancel); builtin-by-value thunk codegen (gap b2); G7 dynamic-linking RFC draft (nice-to-have, not blocking) | **hexa-lang side CLOSED 2026-05-11** — `hexa build core/main.hexa` → `wilson 0.0.1` (340c3788); G1+G2+G3 applied 2026-05-10; http_sse + build-out-of-tree + semver + exec_stream_kill + b2-thunks landed 2026-05-11; `~/.hx/bin/hexa_real` re-promoted (dae438ee, sha cd817981…) |
 | **anima** | shares language upstream via `self/`; consumes `compiler/discover/` outputs | following RFC-020 + atlas-side staging |
 | **firmware boards** (hexa-rtsc / hexa-chip / hexa-cern / hexa-antimatter / hexa-space) | `stdlib/core` + `stdlib/alloc` + `stdlib/hal` + `stdlib/embedded` + `stdlib/mcu`; per-board absorption under `firmware/boards/*` | F0–F4 landed 2026-05-10; F5 (RFC-023) spec landed 2026-05-10 (implementation follow-up); qemu / hardware commission remaining gate |
 
@@ -795,7 +827,7 @@ Cross-reference verification:
   exist on disk.
 
 Status: **ready for share** — SPEC.yaml + SPEC.md aligned for stage 1
-reach, downstream consumers, and audit verifiers. SPEC.yaml header
-fields (last_updated, status) still point to 2026-05-10 — SPEC.md
-header advances to 2026-05-11 ahead of SPEC.yaml; see
-`tool/render_spec.hexa` drift check.
+reach, downstream consumers, and audit verifiers. Both header fields
+(`last_updated`, `status`) are at 2026-05-11 and char-for-char identical
+across the two files; `tool/render_spec.hexa` reports
+`ok: SPEC.yaml and SPEC.md aligned`.
