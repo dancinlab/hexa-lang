@@ -9,8 +9,9 @@
 // Asserts:
 //   - static_atlas().hash is non-empty and is not the legacy
 //     all-zeros sentinel (00000000…)
-//   - lookup_static("P", "alpha") returns a node with kind == "P"
-//   - lookup_static("L", "addition-commutative") returns kind == "L"
+//   - lookup_static("P", "n") returns a node with kind == "P"
+//     ("n" is one of the [11*] foundation axioms — stable anchor)
+//   - lookup_static("L", "consciousness_structure") returns kind == "L"
 //   - lookup_static("P", "ghost") returns kind == "" (sentinel miss)
 //
 // Prints a per-kind count summary + the embedded hash. Exits 0 on PASS,
@@ -67,12 +68,12 @@ fn main() {
     _check("at least one P node present",            p > 0,                                             fails)
     _check("at least one L node present",            l > 0,                                             fails)
 
-    let n_alpha = lookup_static("P", "alpha")
-    _check("lookup_static(P, alpha).kind == P",      n_alpha.kind == "P",                               fails)
-    _check("lookup_static(P, alpha).id == alpha",    n_alpha.id == "alpha",                             fails)
+    let n_p = lookup_static("P", "n")
+    _check("lookup_static(P, n).kind == P",          n_p.kind == "P",                                   fails)
+    _check("lookup_static(P, n).id == n",            n_p.id == "n",                                     fails)
 
-    let n_law = lookup_static("L", "addition-commutative")
-    _check("lookup_static(L, addition-commutative).kind == L",  n_law.kind == "L",                      fails)
+    let n_law = lookup_static("L", "consciousness_structure")
+    _check("lookup_static(L, consciousness_structure).kind == L",  n_law.kind == "L",                   fails)
 
     let n_miss = lookup_static("P", "ghost")
     _check("lookup_static(P, ghost) miss → kind == \"\"",       n_miss.kind == "",                      fails)
