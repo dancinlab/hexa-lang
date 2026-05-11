@@ -1313,6 +1313,18 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 
     // Callee must be a fn type.
     if callee_t.kind != "fn" {
+        // Stage1 punch list C20: surface HX2003 (not callable) instead of
+        // silently returning unit when a non-fn value appears in callee
+        // position (e.g. `let mut x = 0; x()`). Skips when the inferred
+        // callee type is itself empty/unknown so we don't pile onto an
+        // earlier unresolved-name diagnostic.
+        if len(callee_t.kind) > 0 {
+            let mut b = diag_new("HX2003")
+            b = diag_span(b, e.span)
+            b = diag_arg(b, "name", name)
+            b = diag_arg(b, "actual", _type_display(callee_t))
+            out.push(diag_emit(b))
+        }
         // Callee not resolved as fn — skip arity/argument checks; return value
         // type unknown.
         return _types_empty_type()

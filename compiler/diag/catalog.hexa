@@ -157,6 +157,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
+        code: "HX2003",
+        title: "callee is not callable",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "`{name}` is not callable: its type `{actual}` is not a function",
+        explain: "The call-site expression's callee resolved to a value whose static type is not a function. Common causes: shadowing a function name with a local let binding, calling a struct field, or accessing a value of a non-fn type as if it were a function. Stage1 punch list C20 surfaces this as HX2003 instead of silently returning unit, so the cascade after Gap 1 multi-file imports stays readable.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX3001",
         title: "type mismatch",
         severity: Severity::Error,
