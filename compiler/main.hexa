@@ -560,6 +560,16 @@ phase_reset("post_lower_ast_to_hir")
 
 let mut mmodule = lower_hir(hmodule)
 
+// #14 — drain Lower-cluster diagnostics (HX1101/HX1102/HX1103) so they
+// surface in CLI alongside parser/check/units diags. hir_to_mir.hexa
+// accumulates into a module-scope buffer (`_lr_diag`); we drain once
+// after lower_hir returns. hir_to_mir_diags() returns the same array
+// reference each call, so a second invocation would double-push —
+// keep this as the single drain site for the buffer.
+let _lr_d = hir_to_mir_diags()
+let mut _lk = 0
+while _lk < len(_lr_d) { diags.push(_lr_d[_lk]); _lk = _lk + 1 }
+
 // Phase boundary 4: HIR→MIR done. `hmodule` still bound but unread by
 // later phases; arena scratch built during hir_to_mir (block label
 // concat, MIR debug strings) reclaimable.
