@@ -606,17 +606,19 @@ if opt_level > 0 && verbose {
     }
 }
 
-let mut lmodule_target = target
-let mut lmodule = LModule { file: source_path, target: target, funcs: [], rodata: [], bss: [] }
-if target == "arm64-apple-darwin" {
-    lmodule = codegen_arm64_darwin(mmodule)
+// Stage1 punch list C15: replace the placeholder `let mut lmodule = LModule
+// { ... }` (immediately overwritten by every codegen branch) with a single
+// if-expression binding. The unused `lmodule_target` slot is dropped along
+// with the placeholder alloc.
+let lmodule = if target == "arm64-apple-darwin" {
+    codegen_arm64_darwin(mmodule)
 } else if target == "x86_64-linux-gnu" {
-    lmodule = codegen_x86_64_linux(mmodule)
+    codegen_x86_64_linux(mmodule)
 } else if target == "thumbv7em-none-eabihf" {
     // F3 — bare-metal Cortex-M4F target (hexa-rtsc, hexa-chip,
     // hexa-cern firmware boards). Soft-float fallback variant
     // (`-eabi`) is a tier_2 follow-up; v1 ships hf only.
-    lmodule = codegen_thumbv7em_eabihf(mmodule)
+    codegen_thumbv7em_eabihf(mmodule)
 } else {
     eprintln("hexa-compiler: unsupported --target=" + target)
     eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf")
