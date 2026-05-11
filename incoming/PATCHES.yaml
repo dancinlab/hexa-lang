@@ -118,8 +118,16 @@
   trees: [build-artifact]
   compiler_impact: none expected — rebuild + OOM-stabilize + promote ~/.hx/bin/hexa_real. (if the rebuild surfaces a bug, that's the real work.)
   selftest_delta: 0 (existing self/test_async_codegen.hexa should go 0/4 -> 4/4 once the deployed binary has the AwaitExpr branches)
-  status: pending_external
+  status: applied
+  applied_at: 2026-05-10
   opened: 2026-05-10
+  note: |
+    Rebuilt + promoted ~/.hx/bin/hexa_real on 2026-05-10 (G2 + A1 arena hooks).
+    A2 in-place splice accumulator (ab2dfcee) landed LATER and is NOT in this
+    deployed binary yet — re-promote pending the stage-1 RSS verification.
+    Verified at promotion time: 4/4 PASS interp + 4/4 PASS native AOT on
+    self/test_async_codegen.hexa. sha256 + backup paths recorded in
+    incoming/manifest_log.jsonl (applied row, 2026-05-10).
   detail: patches/wilson-needs-hexa-real-promotion.md
 
 - id: wilson-needs-streaming-http-sse
