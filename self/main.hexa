@@ -340,11 +340,11 @@ fn cmd_cc() {
     let uname = exec("uname 2>/dev/null | tr -d ' \\n\\t'")
     let mut cmd = ""
     if uname == "Linux" {
-        cmd = "clang -O2 -D_GNU_SOURCE -I . -I self self/native/hexa_cc.c -o self/native/hexa_v2 -lm 2>&1"
+        cmd = "clang -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' -o '" + __hxroot + "/self/native/hexa_v2' -lm 2>&1"
     } else {
         // macOS (Darwin) — libSystem 이 libm 자동 포함, _GNU_SOURCE 무의미.
         // 단, `-I self` 는 runtime.c 경로 해석에 반드시 필요.
-        cmd = "clang -O2 -I . -I self self/native/hexa_cc.c -o self/native/hexa_v2 2>&1"
+        cmd = "clang -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' -o '" + __hxroot + "/self/native/hexa_v2' 2>&1"
     }
     println("  " + cmd)
     let r = exec(cmd)
@@ -511,6 +511,10 @@ fn merge_modules_awk(out_path) {
 fn cmd_regen_cc() {
     println("=== hexa cc --regen : hexa_cc.c 자동 재생성 ===")
     println("  SSOT: self/{lexer,parser,type_checker,codegen_c2}.hexa")
+    // #12 leftover (3): resolve SSOT modules / hexa_cc.c / -I via
+    // $HEXA_LANG > install_dir_from_argv0() > ./self — not cwd. `.` when
+    // run from the repo root, so behavior there is unchanged.
+    let __hxroot = resolve_hxroot()
     // preflight — buglist#5: resolve_hexa_v2() 로 cwd/$HOME/argv[0] 모두 탐색.
     let v2 = resolve_hexa_v2()
     if len(v2) == 0 {
@@ -520,10 +524,10 @@ fn cmd_regen_cc() {
     // Step 1-4: hexa_v2 transpile each SSOT → /tmp/_*.c
     println("")
     println("[1/4] transpiling SSOT modules via hexa_v2")
-    let ok1 = regen_one_module("self/lexer.hexa", "/tmp/_lexer.c")
-    let ok2 = regen_one_module("self/parser.hexa", "/tmp/_parser.c")
-    let ok3 = regen_one_module("self/type_checker.hexa", "/tmp/_tc.c")
-    let ok4 = regen_one_module("self/codegen_c2.hexa", "/tmp/_cg.c")
+    let ok1 = regen_one_module(__hxroot + "/self/lexer.hexa", "/tmp/_lexer.c")
+    let ok2 = regen_one_module(__hxroot + "/self/parser.hexa", "/tmp/_parser.c")
+    let ok3 = regen_one_module(__hxroot + "/self/type_checker.hexa", "/tmp/_tc.c")
+    let ok4 = regen_one_module(__hxroot + "/self/codegen_c2.hexa", "/tmp/_cg.c")
     let s1 = if ok1 { "ok" } else { "FAIL" }
     let s2 = if ok2 { "ok" } else { "FAIL" }
     let s3 = if ok3 { "ok" } else { "FAIL" }
@@ -536,7 +540,7 @@ fn cmd_regen_cc() {
     // Step 5: merge → self/native/hexa_cc.c.new
     println("")
     println("[2/4] merging modules → self/native/hexa_cc.c.new  (MVP: concat + #include dedup + main strip)")
-    let out_new = "self/native/hexa_cc.c.new"
+    let out_new = __hxroot + "/self/native/hexa_cc.c.new"
     let merged = merge_modules_awk(out_new)
     if !merged {
         println("error: merge failed")
@@ -544,8 +548,8 @@ fn cmd_regen_cc() {
     }
     let new_sz = exec("wc -c < " + out_new + " | tr -d ' \\n'")
     let new_ln = exec("wc -l < " + out_new + " | tr -d ' \\n'")
-    let old_sz = exec("wc -c < self/native/hexa_cc.c | tr -d ' \\n'")
-    let old_ln = exec("wc -l < self/native/hexa_cc.c | tr -d ' \\n'")
+    let old_sz = exec("wc -c < '" + __hxroot + "/self/native/hexa_cc.c' | tr -d ' \\n'")
+    let old_ln = exec("wc -l < '" + __hxroot + "/self/native/hexa_cc.c' | tr -d ' \\n'")
     println("  hexa_cc.c      bytes=" + old_sz + "  lines=" + old_ln)
     println("  hexa_cc.c.new  bytes=" + new_sz + "  lines=" + new_ln)
     // Step 6: clang hexa_cc.c.new → /tmp/hexa_v2.new  (실패 허용)
@@ -560,7 +564,7 @@ fn cmd_regen_cc() {
     //   default bracket nesting limit (256) blows up on such files. Bumping
     //   to 4096 unblocks the ALM hexa-first launcher; real fix is to emit
     //   a loop or single large literal in codegen_c2, tracked separately.
-    let cc = "clang -O2 " + os_clang_cflags() + "-I self -x c -Wno-trigraphs -fbracket-depth=4096 " + out_new + " -o /tmp/hexa_v2.new" + os_clang_ldflags() + " 2>&1 | head -40"
+    let cc = "clang -O2 " + os_clang_cflags() + "-I '" + __hxroot + "/self' -x c -Wno-trigraphs -fbracket-depth=4096 " + out_new + " -o /tmp/hexa_v2.new" + os_clang_ldflags() + " 2>&1 | head -40"
     println("  " + cc)
     let cc_out = exec(cc)
     if len(cc_out) > 0 { println(cc_out) }
@@ -569,7 +573,7 @@ fn cmd_regen_cc() {
     // Step 7: diff report
     println("")
     println("[4/4] diff summary")
-    let diff_sz = exec("diff -q self/native/hexa_cc.c " + out_new + " 2>&1 | head -1")
+    let diff_sz = exec("diff -q '" + __hxroot + "/self/native/hexa_cc.c' " + out_new + " 2>&1 | head -1")
     println("  diff: " + diff_sz)
     println("")
     println("Phase C MVP done. Merge algorithm limitations:")
