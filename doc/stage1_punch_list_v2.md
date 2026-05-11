@@ -8,7 +8,15 @@
 >   `$HOME/.hx/bin/hexa_real run compiler/main.hexa --emit=asm \
 >    -o /tmp/stage1_self.s compiler/main.hexa`
 >
-> Status: **discovery only — no fixes applied**. Captured 2026-05-10.
+> Status (original capture): **discovery only — no fixes applied**. Captured 2026-05-10.
+>
+> **Superseded — see "Update 2026-05-11 (PM)" below**: the closure round
+> (2026-05-11) landed A1 + A2 and re-promoted `~/.hx/bin/hexa_real`; the #13
+> RSS re-probe (uncapped) shows peak ~782 MB (was 3 510 MB) → **P0 stage-1
+> source-side OOM is closed at current scale**. The original TL;DR and "Was:
+> 6–10 weeks / Now: 14–22 weeks" estimate below are the 2026-05-10 snapshot;
+> the open work toward a full stage-1 binary is now the compiler-driver gaps
+> + a fixed-point (stage2 == stage3) re-estimate, no longer host-OOM-bound.
 
 ---
 

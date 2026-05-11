@@ -5,7 +5,9 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19404816.svg)](https://doi.org/10.5281/zenodo.19404816)
 [![phase A0–B5](https://img.shields.io/badge/phase-A0%E2%80%93B5%20PASS-brightgreen.svg)](SPEC.yaml)
 [![D1](https://img.shields.io/badge/D1-PASS-brightgreen.svg)](SPEC.yaml)
+[![D2](https://img.shields.io/badge/D2-SCAFFOLD-yellow.svg)](SPEC.yaml)
 [![M0](https://img.shields.io/badge/M0-PASS-brightgreen.svg)](tests/m0)
+[![wilson-build](https://img.shields.io/badge/wilson--build-PASS-brightgreen.svg)](SPEC.yaml)
 [![atlas](https://img.shields.io/badge/atlas-hash%20pinned-blue.svg)](SPEC.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -38,22 +40,24 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
 
 * * *
 
-## 🎯 What just landed (Cycle close 2026-05-09)
+## 🎯 What just landed (Cycle close 2026-05-11)
 
-The last week's fixed points, with witnesses on disk:
+The closure round's fixed points, with witnesses on disk:
 
-- `f9e61595` — macOS Mach-O gate Phase A — wrapper ref + lint + SPEC + doc
-- `0b14ae23` — Decision 5e completion: cascade tombstones + auto-PR helper
-- `3a0ce4d2` — tombstone + retroactive sweep + HX1099 (citing tombstoned L)
-- `5ee37b49` — HX8004 atlas citation strict — formula must cite L (S8 Error)
-- `e1ba9369` — HX9000 @grace ai-native warn — every grace site visible at compile
-- `0aa8b47a` — Acked-grace CI checker — enforces user consent per @grace site
-- `0008cdd4` — promote_to_atlas — Decision 5b/5d auto-promote
-- `758659eb` — hexa_ld v1.1 — Mach-O arm64 static-binary emission
-- `5569ee25` — M0 gap 1–3: label emit, arm64 ldp/stp, return lowering (M0 PASS)
-- `6786affd` — phase B5 — S6 equational verify (in-house prover v0)
+- `41ecfb97` — RFC-020 A4 enum-payload codegen restored in SSOT `codegen_c2.hexa` (regen-safe; test_enum_payload_full 15/15 codegen + interp)
+- `46016739` — builtin/method taken-by-value → `__hxthunk_<name>` codegen (fixes `hexa_callN(<builtin>)` undeclared) + un-doubled `hexa_cc.c`
+- `6c0fbac7` — `exec_stream_kill(h)` runtime builtin (fork+setpgid stream child, SIGTERM→grace→SIGKILL)
+- `4725c619` — `stdlib/semver.hexa` — SemVer 2.0.0 parse/compare/range-satisfies (test_semver 110/110)
+- `df9e7f6b` — install-relative `stdlib/` discovery + `HEXA_INSTALL_DIR` passdown (`use "stdlib/*"` works without `HEXA_LANG`/`HEXA_STDLIB_ROOT`)
+- `0ba5fd7d` — shell-builtin absorption: `pwd → cwd()/getcwd()`, `ls → list_dir()` intrinsics (absorbed 638→752, pending 197→83)
+- `731f41d6` — `hexa cc` resolves `hexa_cc.c`/SSOT/`-I` via `$HEXA_LANG > install_dir > ./self` (works out-of-tree)
+- `a5de44e2` — `self/stdlib/law_io.hexa` selftest `main()` → `tool/law_io_selftest.hexa` (u_main collision on flatten)
+- `dae438ee` — `~/.hx/bin/hexa_real` re-promoted from HEAD `46016739` (sha cd817981…)
+- `774c5d32` / `4f5f8f07` — stage-1 punch-list v2: A1+A2 host re-promote → #13 RSS re-probe **peak ~782 MB** (vs 3 510 MB) — P0 stage-1 OOM closed at current scale
+- `571df583` / `a8ff675b` — SPEC §19/§20 reconcile + Gap-15 close-out
+- `340c3788` / `5ddcf2a9` — wilson↔hexa-lang closure (VERIFIED — `hexa build core/main.hexa` → `wilson 0.0.1`) + SPEC closure-round fold-in
 
-Snapshot derived from `git log` on main; full table at `SPEC.yaml::phases_completed_2026_05_09`.
+Snapshot derived from `git log` on main; full tables at `SPEC.yaml::phases_completed_2026_05_09` and `SPEC.yaml::phases_completed_2026_05_11_closure`.
 
 * * *
 
@@ -87,6 +91,10 @@ build/hexa_interp tests/m0/run.hexa
 
 # 4. strict lint over a tree (S0–S5 + S8 fatal)
 build/hexa_interp compiler/main.hexa --check path/to/source.hexa
+
+# 5. build a native binary from a project (works out-of-tree;
+#    flattens use/import, resolves stdlib/ install-relative)
+hexa build path/to/project/main.hexa     # → build/<name>
 ```
 
 `hx install <pkg>` resolves bare names by probing GitHub orgs in `HX_ORGS` order. No central index, no lock-in.
@@ -161,17 +169,19 @@ Citing a tombstoned `L[id]` fires `HX1099` and fails the build. Bypass is `@grac
 - ε self-proof: `@verify` / `@discover` → atlas auto-promote → tombstone retroactive sweep
 - M0 milestone: `fn main() -> i32 { return 0 }` produces a working Mach-O arm64 binary
 - `hexa_ld` v1.1: in-house static linker for ELF64 + Mach-O arm64
+- `hexa build` / `hexa cc` work **out-of-tree** — flattens `use`/`import`, resolves `hexa_cc.c`/SSOT/`-I` via `$HEXA_LANG > install_dir > ./self`; install-relative `stdlib/` discovery means `use "stdlib/*"` works with no env vars (downstream: `wilson` builds end-to-end → `wilson 0.0.1`)
+- stage-1 P0 host-OOM closed at current scale: A1 phase-arena reset + A2 in-place splice accumulator → peak ~782 MB (was 3 510 MB)
 - 14+ pinned decisions in `SPEC.yaml`, every claim traceable to an RFC
 
 * * *
 
 ## 🚧 Roadmap
 
-- **stage 1 reach: 6–10 weeks** of focused work to first full stage1 binary, plus 2–3 weeks for stage2 == stage3 byte-equal stabilization.
-- biggest unknowns: recursive multi-file import loader, MIR/LIR coverage on real `compiler/` source (closures, growable arrays, nested struct construction, `match` on user enums).
-- full punch list: [`doc/stage1_punch_list.md`](doc/stage1_punch_list.md).
+- **stage 1: P0 host-OOM closed at current scale** (A1+A2 → peak ~782 MB, was 3 510 MB); the remaining open work toward a full stage-1 binary is the compiler-driver gaps (Gaps 1–16) + a fixed-point (stage2 == stage3) re-estimate — see [`doc/stage1_punch_list_v2.md`](doc/stage1_punch_list_v2.md).
+- biggest unknowns: MIR/LIR coverage on real `compiler/` source (closures, growable arrays, nested struct construction, `match` on user enums) and what a *successful* self-compile diagnostic trace actually looks like.
+- full punch list: [`doc/stage1_punch_list_v2.md`](doc/stage1_punch_list_v2.md).
 
-Phase status (PASS / IN-PROGRESS / DEFERRED) lives in [`SPEC.yaml::phases_completed_2026_05_09`](SPEC.yaml).
+Phase status (PASS / IN-PROGRESS / DEFERRED) lives in [`SPEC.yaml::phases_completed_2026_05_09`](SPEC.yaml) and [`SPEC.yaml::phases_completed_2026_05_11_closure`](SPEC.yaml).
 
 * * *
 
