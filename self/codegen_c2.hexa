@@ -689,6 +689,7 @@ fn codegen_c2(ast) {
     _strlit_counter = 0
     // b2-fnref: reset by-value builtin/method thunk set per codegen call.
     _fnref_thunk_names = []
+    _gen2_current_fn_lets = []
     // 2026-04-18 use-resolver dedup table — reset per codegen call so a
     // second invocation in the same process doesn't treat the first call's
     // resolved modules as already-emitted.
@@ -1197,6 +1198,9 @@ fn gen2_fn_decl(node) {
     }
     // Collect all LetStmt names (with duplicates).
     let all_names = _gen2_collect_lets(node.body, [])
+    // b2-fnref: expose the current fn's `let` names so the bare-Ident thunk
+    // path never replaces a local var with a builtin/method thunk.
+    _gen2_current_fn_lets = all_names
     let mut _hoisted = []
     let mut hoists = []
     let mut ii = 0
@@ -2835,37 +2839,47 @@ let mut _fnref_thunk_names = []
 
 // Total arity (receiver + args) of a thunk-able builtin method, or -1.
 fn _gen2_fnref_method_arity(name) {
+    // Deliberately narrow: only string methods that are essentially never
+    // used as local-variable identifiers. Bare-Ident scope tracking in
+    // gen2_expr is incomplete (single `let x` locals aren't in
+    // _gen2_declared_names), so a broad set here would mis-thunk locals like
+    // `lines` / `chars` / `bytes`. Wilson's by-value uses (`trim`,
+    // `char_at`) are covered. Polymorphic / common-name methods are
+    // intentionally excluded.
     // arity 1 — receiver only
     if name == "trim" { return 1 }
     if name == "trim_start" { return 1 }
     if name == "trim_end" { return 1 }
     if name == "to_upper" { return 1 }
     if name == "to_lower" { return 1 }
-    if name == "chars" { return 1 }
-    if name == "bytes" { return 1 }
-    if name == "lines" { return 1 }
     if name == "parse_int" { return 1 }
     if name == "parse_float" { return 1 }
-    if name == "to_string" { return 1 }
-    if name == "to_int" { return 1 }
-    if name == "to_float" { return 1 }
-    if name == "to_bool" { return 1 }
     // arity 2 — receiver + 1
     if name == "char_at" { return 2 }
     if name == "char_code_at" { return 2 }
     if name == "byte_at" { return 2 }
-    if name == "split" { return 2 }
-    if name == "repeat" { return 2 }
     if name == "starts_with" { return 2 }
     if name == "ends_with" { return 2 }
     if name == "pad_left" { return 2 }
     // arity 3 — receiver + 2
-    if name == "replace" { return 3 }
-    if name == "substring" { return 3 }
-    if name == "substr" { return 3 }
     if name == "pad_right" { return 3 }
-    if name == "center" { return 3 }
     return -1
+}
+
+// Names declared via `let` in the current function body (or script body).
+// Used as a second guard in the by-value builtin/method thunk path so a
+// user `let trim = …` is never replaced by a thunk. Set in gen2_fn_decl /
+// the script-body walk; over-broad inside lambdas (uses the enclosing fn's
+// lets) which is the safe direction (more idents left un-thunked).
+let mut _gen2_current_fn_lets = []
+
+fn _gen2_name_in_cur_lets(name) {
+    let mut i = 0
+    while i < len(_gen2_current_fn_lets) {
+        if _gen2_current_fn_lets[i] == name { return true }
+        i = i + 1
+    }
+    return false
 }
 
 // If `name` is a thunk-able builtin/method, register the thunk and return
@@ -2995,7 +3009,7 @@ fn gen2_expr(node) {
         // b2-fnref: a bare name that resolves to a builtin/method (not a
         // user fn, global, or local) used in value position — emit a TAG_FN
         // wrapping a static thunk instead of a bare (undeclared) C identifier.
-        if !_gen2_has_decl(node.name) && !_is_known_fn_global(node.name) && !_is_known_nonlocal(node.name) {
+        if !_gen2_has_decl(node.name) && !_gen2_name_in_cur_lets(node.name) && !_is_known_fn_global(node.name) && !_is_known_nonlocal(node.name) {
             let _fnref = _gen2_fnref_thunk(node.name)
             if _fnref != "" { return _fnref }
         }
@@ -6160,6 +6174,7 @@ fn codegen_c2_full(ast) {
     _strlit_counter = 0
     // b2-fnref: reset by-value builtin/method thunk set (mirror codegen_c2).
     _fnref_thunk_names = []
+    _gen2_current_fn_lets = []
     // 2026-04-18 use-resolver dedup table — mirror codegen_c2's reset.
     _resolved_modules = []
     _resolve_caller_dir_inited = false

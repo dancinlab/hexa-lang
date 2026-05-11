@@ -1,0 +1,48 @@
+// b2-fnref: builtins/methods taken by-value as first-class function values.
+// Before the codegen thunk fix, `let f = trim; f(s)` emitted `hexa_call1(trim, …)`
+// referencing a bare (undeclared) C identifier `trim` — clang error
+// "use of undeclared identifier ". Codegen now emits a TAG_FN wrapping a
+// static thunk `__hxthunk_<name>` that forwards to the canonical lowering.
+// NB: requires the codegen path (self/native/hexa_v2 → clang); the tree-walk
+// interpreter (`hexa run`) does not bind bare builtin/method names as values.
+fn apply1(f, x) { return f(x) }
+fn apply2(f, a, b) { return f(a, b) }
+
+// Shadowing safety: a local `let trim = …` must NOT be replaced by a thunk.
+fn shadow_ok() {
+    let trim = 7
+    return trim == 7
+}
+
+fn main() {
+    let mut ok = 0
+    let mut total = 0
+
+    total = total + 1
+    let f = trim
+    if f("  hi  ") == "hi" { ok = ok + 1 } else { println("FAIL: trim by-value") }
+
+    total = total + 1
+    if apply1(trim, "  bye  ") == "bye" { ok = ok + 1 } else { println("FAIL: trim callback") }
+
+    total = total + 1
+    let g = char_at
+    if g("hello", 1) == "e" { ok = ok + 1 } else { println("FAIL: char_at by-value") }
+
+    total = total + 1
+    if apply2(char_at, "world", 0) == "w" { ok = ok + 1 } else { println("FAIL: char_at callback") }
+
+    total = total + 1
+    let toup = to_upper
+    if toup("abc") == "ABC" { ok = ok + 1 } else { println("FAIL: to_upper by-value") }
+
+    total = total + 1
+    let sw = starts_with
+    if sw("hexa", "hex") { ok = ok + 1 } else { println("FAIL: starts_with by-value") }
+
+    total = total + 1
+    if shadow_ok() { ok = ok + 1 } else { println("FAIL: trim shadow") }
+
+    println("test_builtin_fn_ref: " + to_string(ok) + "/" + to_string(total) + " passed")
+    if ok == total { println("ALL B2-FNREF TESTS PASSED!") }
+}
