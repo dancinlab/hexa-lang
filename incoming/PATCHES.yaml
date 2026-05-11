@@ -138,24 +138,28 @@
   opened: 2026-05-10
   note: |
     Re-promoted ~/.hx/bin/hexa_real (and ~/.hx/packages/hexa/hexa.real, same
-    binary) several times on 2026-05-11; the deployed binary is now built from
-    source HEAD 46016739 (sha256 cd817981...; prev 21c2be60...; backups
-    *.bak.1778499543). Cumulative content in the deployed binary:
+    binary) repeatedly through 2026-05-11/12; the deployed binary is now built
+    from source HEAD 014b9ca9 (sha256 31723708...; prev cd817981...; backups
+    *.bak.1778516631). Cumulative content in the deployed binary:
     #12 cmd_build flatten via module_loader + $HEXA_LANG/self -I (21e7b518),
     A2 in-place _splice_imported_items accumulator (ab2dfcee), the Types /
     C11-parse_only / Lower / B1+C19 / P2 clusters, #14 drain wiring (18c6a536),
     RFC-020 A4 enum-payload codegen restored in the SSOT codegen_c2.hexa (41ecfb97),
     exec_stream_kill(h) runtime builtin (6c0fbac7), builtin/method-by-value thunk
     codegen (46016739), install-relative stdlib/ discovery + HEXA_INSTALL_DIR
-    passdown (df9e7f6b), cmd_cc out-of-tree resolution (731f41d6). See
+    passdown (df9e7f6b), cmd_cc out-of-tree resolution (731f41d6),
+    sleep_ms/sleep_ns nanosleep-backed sub-second sleep (014b9ca9 - self/runtime.c
+    + self/codegen_c2.hexa + regenerated self/native/hexa_v2). Also picks up the
+    proc_spawn_async/proc_poll/proc_kill stdlib additions (c7fde4a8) which are
+    pure-.hexa - no binary dep, resolved from source. See
     incoming/manifest_log.jsonl for the per-promote sha/backup rows.
-    sha256 ffa91279f47eccb5ac6a8471a54d1fc1f400db8f23bf89ddd9310f1b6c9e7287
-    (prev bin 8cf82fb4…, prev packages b6b304bd…); backups at *.bak.1778481370.
-    Verified: --version + parse OK; test_async_codegen 4/4 PASS interp
-    (RESOURCE_LOCAL_HEXA=1) + 4/4 PASS native AOT (HEXA_MAC_BUILD_OK=1);
-    out-of-tree 2-file `use` build OK (module_loader flatten + correct -I).
-    sha256 + backup paths also in incoming/manifest_log.jsonl (promote row, 2026-05-11).
-    Earlier 2026-05-10 promote (G2 + A1, sha 8cf82fb4) superseded.
+    Verified for the 2026-05-12 re-promote: --version hexa 0.1.0-dispatch ;
+    parse tests/m0/hello.hexa OK ; test_async_codegen 4/4 PASS interp
+    (RESOURCE_LOCAL_HEXA=1) ; test_sleep_ms 5/5 PASS interp (RESOURCE_LOCAL_HEXA=1)
+    on both the freshly-built binary and the live ~/.hx/bin/hexa_real after
+    promote (proof the live binary now has sleep_ms; the prior cd817981 build
+    errored "undefined function: sleep_ms"). sha256 + backup paths also in
+    incoming/manifest_log.jsonl (promote row, 2026-05-12).
   detail: patches/wilson-needs-hexa-real-promotion.md
 
 - id: wilson-needs-streaming-http-sse
