@@ -23,6 +23,20 @@
 
 import "../ir/hir.hexa"
 import "../ir/mir.hexa"
+import "../diag/builder.hexa"
+import "../diag/catalog.hexa"
+
+// ── Lower-pass diagnostic sink (Stage1 punch list C16) ───────
+// Module-level mutable buffer for hir_to_mir-only diagnostics, mirroring
+// the ast_to_hir `l_diags` convention from Gap 14. The driver in
+// compiler/main.hexa drains via `hir_to_mir_diags()` after `lower_hir`
+// returns. Cleared on every `lower_hir` entry so repeated compiles in
+// the same process do not leak emissions across runs.
+pub let mut _lr_diag: array = []
+
+pub fn hir_to_mir_diags() -> array {
+    return _lr_diag
+}
 
 // STMT_* constants come from compiler/ir/mir.hexa as `pub let`. The
 // previous local mirror was needed when stage0's interpreter did not
@@ -383,6 +397,61 @@ fn _no_value(ctx: LowerCtx) -> LowerExprResult {
 
 fn _value(ctx: LowerCtx, op: Operand) -> LowerExprResult {
     return LowerExprResult { ctx: ctx, operand: op, has_value: true }
+}
+
+// ── Diagnostic emit helpers (Stage1 punch list C5/C10/C16) ──
+
+fn _emit_hx1101(name: string, sp: Span) {
+    let mut b = diag_new("HX1101")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    _lr_diag.push(diag_emit(b))
+}
+
+fn _emit_hx1102(kind: string, sp: Span) {
+    let mut b = diag_new("HX1102")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "kind", kind)
+    _lr_diag.push(diag_emit(b))
+}
+
+fn _emit_hx1103(kind: string, sp: Span) {
+    let mut b = diag_new("HX1103")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "kind", kind)
+    _lr_diag.push(diag_emit(b))
+}
+
+// Set of HExpr kinds the lowering core dispatches on explicitly. Used
+// by the default fall-through to distinguish "shape we know but didn't
+// produce a value for" (e.g. a side-effect-only block) from "shape we
+// genuinely don't handle" (HX1103 trigger). Kept in sync with the
+// branches in `_lower_hexpr` below.
+fn _is_known_hexpr_kind(k: string) -> bool {
+    if k == "literal_int" { return true }
+    if k == "literal_float" { return true }
+    if k == "literal_string" { return true }
+    if k == "literal_bool" { return true }
+    if k == "literal_char" { return true }
+    if k == "ident" { return true }
+    if k == "atlas_ref" { return true }
+    if k == "binop" { return true }
+    if k == "unop" { return true }
+    if k == "call" { return true }
+    if k == "return" { return true }
+    if k == "let" { return true }
+    if k == "assign" { return true }
+    if k == "block" { return true }
+    if k == "if" { return true }
+    if k == "while" { return true }
+    if k == "match" { return true }
+    if k == "struct_lit" { return true }
+    if k == "enum_path" { return true }
+    if k == "field" { return true }
+    if k == "index" { return true }
+    if k == "wildcard" { return true }
+    if k == "field_lit" { return true }
+    return false
 }
 
 // ── HExpr lowering core ─────────────────────────────────────
@@ -1054,6 +1123,11 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     }
 
     // ── Default: lower children, no value. ──────────────────
+    // Truly-unknown HExpr kinds emit HX1103 (Stage1 punch list C16). Known
+    // value-less shapes (e.g. side-effect blocks) still recurse silently.
+    if !_is_known_hexpr_kind(k) {
+        _emit_hx1103(k, e.span)
+    }
     let mut ctx_d = ctx
     let mut i = 0
     while i < len(e.children) {
@@ -1220,6 +1294,7 @@ fn _lower_fn(it: HItem) -> MFunc {
 // ── Public entry ────────────────────────────────────────────
 
 pub fn lower_hir(module: HModule) -> MModule {
+    _lr_diag = []
     let mut funcs: [MFunc] = []
     let mut globals: [Local] = []
     let mut i = 0
