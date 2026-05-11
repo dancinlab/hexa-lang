@@ -735,6 +735,11 @@ fn _empty_units_ann(param_count: i64) -> UnitsAnn {
 fn _extract_units_ann(it: Item) -> UnitsAnn {
     let pc = len(it.params)
     let mut ann = _empty_units_ann(pc)
+    // Stage1 punch list C13: early-out before any unit-string parsing.
+    // Most compiler/ fns are unannotated; skipping the loop saves a hot
+    // pass over `it.annotations` (zero-iteration `while` still allocates
+    // its scratch slot in stage0).
+    if len(it.annotations) == 0 { return ann }
     let mut i = 0
     while i < len(it.annotations) {
         let a = it.annotations[i]

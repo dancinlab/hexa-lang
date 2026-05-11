@@ -1334,17 +1334,28 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 
     // Callee must be a fn type.
     if callee_t.kind != "fn" {
-        // Stage1 punch list C4 — previously a silent miss. Without a
-        // diagnostic the typo passes through to lower → MIR with a `?`
-        // type, then codegen blows up far from the user-visible site.
-        // bind.hexa already emits HX2001 for plain-Ident misses (with
-        // did-you-mean), so we gate on `callee is non-Ident` to avoid
-        // double-firing on the same name. Field / Index / Call-result /
-        // other non-Ident callees that don't resolve to fn types land
-        // here as the unique source of HX2001.
-        if !_types_is_ident(callee.kind) {
+        if len(callee_t.kind) > 0 {
+            // Stage1 punch list C20 — surface HX2003 (not callable) when
+            // a non-fn value with a known type appears in callee position
+            // (e.g. `let mut x = 0; x()`). The inferred callee type is
+            // non-empty here, so this never piles onto an unresolved-name
+            // diagnostic — that branch falls to C4 below.
+            let mut b = diag_new("HX2003")
+            b = diag_span(b, e.span)
+            b = diag_arg(b, "name", name)
+            b = diag_arg(b, "actual", _type_display(callee_t))
+            out.push(diag_emit(b))
+        } else if !_types_is_ident(callee.kind) {
+            // Stage1 punch list C4 — previously a silent miss for non-Ident
+            // unresolved callees. bind.hexa already emits HX2001 for plain-
+            // Ident misses (with did-you-mean), so we gate on non-Ident here
+            // to avoid double-firing on the same name. Field / Index /
+            // Call-result / other non-Ident callees that don't resolve to
+            // fn types land here as the unique HX2001 source.
             _emit_hx2001_callee(name, callee.span, out)
         }
+        // Callee not resolved as fn — skip arity/argument checks; return value
+        // type unknown.
         return _types_empty_type()
     }
 

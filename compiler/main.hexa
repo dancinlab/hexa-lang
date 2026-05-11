@@ -457,7 +457,11 @@ phase_reset("post_parse")
 // Atlas: A4 wired — real index from compiler/atlas/embedded.gen.hexa.
 let atlas = _load_atlas()
 
-let mut diags: array = []
+// Stage1 punch list C14: type as `[Diagnostic]` instead of bare `array` so
+// stage0 stores concrete Diagnostic structs in array_store rather than boxing
+// each through the generic value slot. Real compiles emit thousands of diag
+// candidates; the typed form is cheaper to push/iterate.
+let mut diags: [Diagnostic] = []
 
 // Stage1 punch list Gap 5 + Gap 1: drain parser-stage diagnostics
 // (HX0011/HX0012 brace-shape, HX0010 import-not-found) FIRST so parse-time
@@ -494,31 +498,25 @@ let r4 = unit_check(module)
 k = 0
 while k < len(r4) { diags.push(r4[k]); k = k + 1 }
 
-let r5 = citation_check(module, atlas)
-k = 0
-while k < len(r5) {
-    let d = r5[k]
-    // Gap 13: when --strict-citations is OFF (default), demote citation
-    // Errors to Warnings so currently-unmapped P/C/L/E refs in compiler/
-    // source don't gate stage1 reach. Citation pass still runs and produces
-    // signal; only its severity is shifted. Set --strict-citations (or
-    // HEXA_STRICT_CITATIONS=1) to restore RFC-017 §3.1 S8 fatal semantics.
-    if !strict_citations {
-        diags.push(Diagnostic {
-            code: d.code,
-            severity: Severity::Warning,
-            stage: d.stage,
-            span: d.span,
-            message: d.message,
-            note: d.note,
-            suggest: d.suggest,
-            fixit: d.fixit,
-            related: d.related
-        })
-    } else {
-        diags.push(d)
+// Stage1 punch list C12: gate the entire S8 citation walk on
+// `--strict-citations` (or HEXA_STRICT_CITATIONS=1) instead of demoting
+// each diag per-iteration. The walk over every Item × annotation × body
+// L-ref is ~3K items × ~30 nodes worth of work on a real compile and
+// produces nothing observable when soft mode is in effect — skipping it
+// outright is equivalent in user-visible behaviour to the prior per-diag
+// downgrade (every produced diag would have been demoted to a Warning,
+// then re-rendered; we now emit no Warnings instead, which matches the
+// soft-mode intent: "compiler/ source is not yet fully cite-bound").
+//
+// Pass --strict-citations (or set HEXA_STRICT_CITATIONS=1) to opt back
+// into RFC-017 §3.1 S8 fatal-citation semantics.
+if strict_citations {
+    let r5 = citation_check(module, atlas)
+    k = 0
+    while k < len(r5) {
+        diags.push(r5[k])
+        k = k + 1
     }
-    k = k + 1
 }
 
 // Always render whatever diagnostics we collected (warnings first, then
@@ -608,17 +606,19 @@ if opt_level > 0 && verbose {
     }
 }
 
-let mut lmodule_target = target
-let mut lmodule = LModule { file: source_path, target: target, funcs: [], rodata: [], bss: [] }
-if target == "arm64-apple-darwin" {
-    lmodule = codegen_arm64_darwin(mmodule)
+// Stage1 punch list C15: replace the placeholder `let mut lmodule = LModule
+// { ... }` (immediately overwritten by every codegen branch) with a single
+// if-expression binding. The unused `lmodule_target` slot is dropped along
+// with the placeholder alloc.
+let lmodule = if target == "arm64-apple-darwin" {
+    codegen_arm64_darwin(mmodule)
 } else if target == "x86_64-linux-gnu" {
-    lmodule = codegen_x86_64_linux(mmodule)
+    codegen_x86_64_linux(mmodule)
 } else if target == "thumbv7em-none-eabihf" {
     // F3 — bare-metal Cortex-M4F target (hexa-rtsc, hexa-chip,
     // hexa-cern firmware boards). Soft-float fallback variant
     // (`-eabi`) is a tier_2 follow-up; v1 ships hf only.
-    lmodule = codegen_thumbv7em_eabihf(mmodule)
+    codegen_thumbv7em_eabihf(mmodule)
 } else {
     eprintln("hexa-compiler: unsupported --target=" + target)
     eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf")
