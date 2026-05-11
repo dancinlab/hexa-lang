@@ -1596,53 +1596,80 @@ pub fn type_check(module: Module) -> array {
     let env = _collect_item_types(module, out)
     let ctx0 = _types_new_ctx(module.file)
 
-    let mut i = 0
-    while i < len(module.items) {
-        let it = module.items[i]
-        if _types_is_fn_item(it.kind) {
-            // The fn's enclosing file becomes the caller's module for
-            // visibility checks. Fall back to module.file when the item
-            // span has no attribution (hand-built tests).
-            let mut fn_file = it.span.file
-            if len(fn_file) == 0 { fn_file = module.file }
-            let local = _types_bind_params(env, it, fn_file)
-            let r = _types_lower_type_ref(it.return_type)
-            let mut ret = r
-            if len(ret.kind) == 0 { ret = _types_t_unit() }
-            // Per-fn ctx uses the fn's owning file so `_types_lookup_def`
-            // applies the right caller-module to private visibility.
-            let ctx_for_fn = _types_new_ctx(fn_file)
-            let ctx = _ctx_with_fn(ctx_for_fn, it.name, ret)
-            // Walk body — inner Returns validate against ctx.fn_return.
-            let body_t = _infer_expr(it.body, local, ctx, out)
-            // Trailing block expression must also satisfy the return type
-            // (when fn was annotated and body produced a value).
-            // Use the block's last child as the literal-coercion source so
-            // `fn f() -> i32 { 0 }` type-checks via _types_assignable.
-            let mut tail_src = it.body
-            if len(it.body.children) > 0 {
-                tail_src = it.body.children[len(it.body.children) - 1]
-            }
-            if len(r.kind) > 0 && !_types_assignable(r, body_t, tail_src) {
-                // Only report if body actually produced something (non-unknown);
-                // unannotated/early-return-only fns still pass cleanly.
-                if len(body_t.kind) > 0 && body_t.kind != "unit" {
-                    _emit_hx3004(it.name, r, body_t, it.body.span, out)
-                }
-            }
-        } else if _types_is_let_item(it.kind) {
-            // RHS type vs declared type. _types_assignable lets
-            // `let x: i32 = 0` type-check (literal-int coercion).
-            let declared = _types_lower_type_ref(it.return_type)
-            let rhs_t = _infer_expr(it.body, env, ctx0, out)
-            if len(declared.kind) > 0 && len(rhs_t.kind) > 0 {
-                if !_types_assignable(declared, rhs_t, it.body) {
-                    _emit_hx3001(declared, rhs_t, it.body.span, out)
-                }
+    // Stage1 punch list A4 — side-index of fn / let item positions.
+    // The legacy loop re-walked every Item in module.items linearly and
+    // ran a per-kind match on every iteration. For spliced super-modules
+    // with ~3 K items, the per-item `_types_is_fn_item` / `_types_is_let_item`
+    // dispatch (each a 5-arm ExprKind tag match under stage0) dominates
+    // when the body of work per item is small (Struct / Enum / Import
+    // items have no body to walk at all). Build the indices once up
+    // front so the body loops skip directly to the items that need work.
+    let n_items = len(module.items)
+    let mut fn_idx: [i64] = []
+    let mut let_idx: [i64] = []
+    let mut pass1 = 0
+    while pass1 < n_items {
+        let k = module.items[pass1].kind
+        if _types_is_fn_item(k) {
+            fn_idx.push(pass1)
+        } else if _types_is_let_item(k) {
+            let_idx.push(pass1)
+        }
+        // Struct / Enum / Import: skipped entirely — no body to walk.
+        pass1 = pass1 + 1
+    }
+
+    // Per-fn body check (the hot path).
+    let mut fi = 0
+    while fi < len(fn_idx) {
+        let it = module.items[fn_idx[fi]]
+        // The fn's enclosing file becomes the caller's module for
+        // visibility checks. Fall back to module.file when the item
+        // span has no attribution (hand-built tests).
+        let mut fn_file = it.span.file
+        if len(fn_file) == 0 { fn_file = module.file }
+        let local = _types_bind_params(env, it, fn_file)
+        let r = _types_lower_type_ref(it.return_type)
+        let mut ret = r
+        if len(ret.kind) == 0 { ret = _types_t_unit() }
+        // Per-fn ctx uses the fn's owning file so `_types_lookup_def`
+        // applies the right caller-module to private visibility.
+        let ctx_for_fn = _types_new_ctx(fn_file)
+        let ctx = _ctx_with_fn(ctx_for_fn, it.name, ret)
+        // Walk body — inner Returns validate against ctx.fn_return.
+        let body_t = _infer_expr(it.body, local, ctx, out)
+        // Trailing block expression must also satisfy the return type
+        // (when fn was annotated and body produced a value).
+        // Use the block's last child as the literal-coercion source so
+        // `fn f() -> i32 { 0 }` type-checks via _types_assignable.
+        let mut tail_src = it.body
+        if len(it.body.children) > 0 {
+            tail_src = it.body.children[len(it.body.children) - 1]
+        }
+        if len(r.kind) > 0 && !_types_assignable(r, body_t, tail_src) {
+            // Only report if body actually produced something (non-unknown);
+            // unannotated/early-return-only fns still pass cleanly.
+            if len(body_t.kind) > 0 && body_t.kind != "unit" {
+                _emit_hx3004(it.name, r, body_t, it.body.span, out)
             }
         }
-        // Struct / Enum / Import: no body to walk.
-        i = i + 1
+        fi = fi + 1
+    }
+
+    // Per-let-item RHS check.
+    let mut li = 0
+    while li < len(let_idx) {
+        let it = module.items[let_idx[li]]
+        // RHS type vs declared type. _types_assignable lets
+        // `let x: i32 = 0` type-check (literal-int coercion).
+        let declared = _types_lower_type_ref(it.return_type)
+        let rhs_t = _infer_expr(it.body, env, ctx0, out)
+        if len(declared.kind) > 0 && len(rhs_t.kind) > 0 {
+            if !_types_assignable(declared, rhs_t, it.body) {
+                _emit_hx3001(declared, rhs_t, it.body.span, out)
+            }
+        }
+        li = li + 1
     }
 
     return out
