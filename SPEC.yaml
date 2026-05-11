@@ -7,8 +7,8 @@
 
 schema_version: 1
 title: hexa-lang specification
-status: directional (decisions locked, stage 1 host-OOM blocked)
-last_updated: 2026-05-10
+status: directional (decisions locked; stage 1 source-side OOM mitigated by A2 in-place splice accumulator — host re-promote pending verification)
+last_updated: 2026-05-11
 authoritative_rfcs:
   - proposals/rfc_017_atlas_n6_embedding_and_strict_lint.md
   - proposals/rfc_018_native_codegen_spec.md
@@ -16,6 +16,7 @@ authoritative_rfcs:
   - proposals/rfc_020_enum_payload_variants.md
   - proposals/rfc_021_daemon_mode.md
   - proposals/rfc_022_async_model.md
+  - proposals/rfc_023_firmware_linker_spec.md
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tree layout (what trees exist and what each is for)
@@ -637,6 +638,36 @@ diagnostics:
     - multi_error_collector_with_cascade_compression
     - snapshot_regression_tests
   references: [RFC-019]
+  # New diagnostics surfaced 2026-05-11 — stage 1 punch list v2 C4/C5/C10/C16/C20
+  # promoted from silent fallbacks to real diagnostics. CLI drain wiring
+  # (`compiler/main.hexa` post-lower `hir_to_mir_diags` drain, commit 18c6a536)
+  # is required for HX1101/1102/1103 to surface alongside parser/check/units.
+  new_codes_2026_05_11:
+    HX1101:
+      severity: Error
+      stage: S2
+      title: unbound ident in lower
+      emitted_at: "compiler/lower/hir_to_mir.hexa (_lower_hexpr ident miss, was silent _const_int_op(0))"
+    HX1102:
+      severity: Error
+      stage: S2
+      title: unsupported pattern shape in lower
+      emitted_at: "compiler/lower/hir_to_mir.hexa (match-arm pattern fallback)"
+    HX1103:
+      severity: Error
+      stage: S2
+      title: unhandled HExpr kind in lower
+      emitted_at: "compiler/lower/hir_to_mir.hexa (HExpr default fall-through)"
+    HX2001:
+      severity: Error
+      stage: S2
+      title: undefined name
+      emitted_at: "compiler/check/types.hexa::_types_check_call (non-Ident callee — auxiliary emit cooperating with bind.hexa's same code)"
+    HX2003:
+      severity: Error
+      stage: S3
+      title: callee is not callable
+      emitted_at: "compiler/check/types.hexa::_types_check_call (callee_t.kind != \"fn\" — non-fn value invoked)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Roadmap phases (rough)
@@ -665,11 +696,11 @@ roadmap:
     # (stdlib/core extraction, firmware/boards/rtsc port, thumbv7em codegen,
     #  remaining board absorptions, and RFC-023 firmware linker spec).
     F0: { effort: S,  goal: SPEC firmware Option C + firmware/ skeleton,                   status: DONE,        evidence: "fc6d48b2" }
-    F1: { effort: M,  goal: stdlib/core extraction from current host stdlib,               status: IN-FLIGHT,   background_task: 84 }
-    F2: { effort: M,  goal: firmware/boards/rtsc reference port,                           status: IN-FLIGHT,   background_task: 85 }
-    F3: { effort: L,  goal: thumbv7em-none-eabihf codegen target in compiler/codegen,      status: IN-FLIGHT,   background_task: 86 }
-    F4: { effort: L,  goal: "firmware/boards/{chip,cern,antimatter,space} absorptions",    status: IN-FLIGHT,   background_task: 87 }
-    F5: { effort: M,  goal: RFC-023 firmware linker spec (linker scripts + .bss/.data),    status: PLANNED }
+    F1: { effort: M,  goal: stdlib/core extraction from current host stdlib,               status: DONE,        evidence: "2026-05-10 — 16-module split" }
+    F2: { effort: M,  goal: firmware/boards/rtsc reference port,                           status: DONE,        evidence: "2026-05-10 — option_A_full_copy" }
+    F3: { effort: L,  goal: thumbv7em-none-eabihf codegen target in compiler/codegen,      status: DONE,        evidence: "2026-05-10 — asm-shape only; HX1110 gate" }
+    F4: { effort: L,  goal: "firmware/boards/{chip,cern,antimatter,space} absorptions",    status: DONE,        evidence: "2026-05-10 — 4-board batch" }
+    F5: { effort: M,  goal: RFC-023 firmware linker spec (linker scripts + .bss/.data),    status: SPEC LAND,   evidence: "2026-05-10 — 2f9789e3 (implementation follow-up)" }
   revised_timeline:
     note: |
       Stage 1 self-compile is host-OOM blocked. Punch list v2
@@ -807,7 +838,8 @@ firmware_evolution:
   roadmap:
     F0: { status: done,          deliverable: SPEC decisions + firmware/ skeleton }
     F1:
-      status: this_commit
+      status: done
+      applied_date: "2026-05-10"
       deliverable: stdlib/core/ + stdlib/alloc/ extraction (Option C split)
       audit: doc/stdlib_core_extraction_2026_05_10.md
       core_modules: [math, string, parse, bytes, math/float, math/permille, math/rng, hash/sha256, hash/xxhash]
@@ -817,7 +849,8 @@ firmware_evolution:
       sunset_target: after_F4_absorptions_complete
       target_gate_check_enforcement: deferred_to_F3
     F2:
-      status: this_commit
+      status: done
+      applied_date: "2026-05-10"
       deliverable: firmware/boards/rtsc/ reference port
       mechanic: option_A_full_copy
       source: "~/core/hexa-rtsc"
@@ -838,7 +871,8 @@ firmware_evolution:
       citation_preserved: true
       absorb_date: "2026-05-10"
     F3:
-      status: this_commit
+      status: done
+      applied_date: "2026-05-10"
       deliverable: "thumbv7em-none-eabihf target in compiler/codegen + target_gate_check enforcement (HX1110)"
       codegen: compiler/codegen/thumbv7em_eabihf.hexa
       gate_check: compiler/check/target_gate.hexa
@@ -857,7 +891,8 @@ firmware_evolution:
         - "fifth_arg_and_beyond_stack_spill" # AAPCS overflow-on-stack — F3+ followup
       execution: not_attempted_in_F3     # qemu/hardware not required; asm-shape only
     F4:
-      status: this_commit
+      status: done
+      applied_date: "2026-05-10"
       deliverable: "firmware/boards/{chip,cern,antimatter,space}/ absorptions"
       pattern: "F2 reference (option_A_full_copy)"
       mechanic: option_A_full_copy
@@ -926,7 +961,7 @@ firmware_evolution:
         cern: "Rust hybrid retained (Cargo.toml + memory.x + src/.rs); 532 MB target/ filtered; Phase E migration pending F3"
         antimatter: "multi-vendor: KiCad + Verilog + Rust + hexa coexist; selftest/selftest.hexa requires HEXA_ANTIMATTER_ROOT (deferred)"
         space: "KiCad-first lives above firmware/ tier (top-level pcb/engineering); firmware/ subtree is sim+HDL clean 1:1"
-    F5: { status: follow-up,     deliverable: RFC-023 firmware linker spec (linker scripts + .bss/.data init) }
+    F5: { status: spec_land,     applied_date: "2026-05-10",  evidence: "2f9789e3",  deliverable: RFC-023 firmware linker spec (linker scripts + .bss/.data init — implementation follow-up) }
   absorption_mechanic:
     decided_2026_05_10: option_A_full_copy
     rationale: |
@@ -967,6 +1002,9 @@ stdlib_evolution:
     c_ffi:
       file: stdlib/c_ffi.hexa
       planned_version: v1.1
+      applied_version: v1.1
+      applied_date: "2026-05-09"
+      applied_commit: ecc49e1e
       planned_additions:
         - { name: c_alloc_ptr_slot, signature: "() -> int",            purpose: "heap-allocate one void* slot, return address" }
         - { name: c_load_ptr,       signature: "(slot: int) -> int",   purpose: "read stored void* at slot, return pointer-sized int" }
@@ -997,6 +1035,25 @@ stdlib_evolution:
       downstream_consumers:
         - orpheus recovery/module/method_bitcoin_core_rpc.hexa
       forge_engine_link: forge.cond.NATIVE_BTC_RPC
+    http_sse:
+      file: stdlib/http_sse.hexa
+      current_version: v1.0.0 (GET streaming surface)
+      applied_version: v1.1
+      applied_date: "2026-05-11"
+      applied_commit: faca4134
+      applied_additions:
+        - { name: http_sse_post,                    purpose: "streaming POST + body (Anthropic Messages, OpenAI Chat Completions)" }
+        - { name: http_sse_open_post,               purpose: "POST variant of http_sse_open" }
+        - { name: http_sse_open_method,             purpose: "method-parametric open (GET/POST/...)" }
+        - { name: http_sse_build_curl_method_cmd,   purpose: "internal _sse_build_curl factored into _method variant" }
+      use_case_primary: |
+        wilson provider-anthropic streaming POST. GET surface byte-identical.
+        Body routed via `printf %s '...' | curl --data-binary @-`.
+        Interp-mode POST fallback deferred — AOT users get streaming POST today.
+      compat: backward 100% (additive POST API; GET surface byte-identical)
+      downstream_consumers:
+        - wilson provider-anthropic (Messages API streaming)
+        - any OpenAI Chat Completions streaming client
   inbox_protocol:
     decision_2026_05_09: incoming_dir_until_native_compiler_v1
     directory: incoming/
@@ -1054,6 +1111,36 @@ open_questions:
       # path exists in MIR but the runtime stub linkage in self/native
       # is not yet finalised; affects rodata-driven string ops in
       # spliced super-module.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Open questions resolved between 2026-05-10 and 2026-05-11.
+# ─────────────────────────────────────────────────────────────────────────────
+open_questions_resolved_2026_05_10_to_05_11:
+  core_alloc_split_criteria:
+    resolved_in: F1 (2026-05-10 — 16-module split rule landed)
+    criterion_doc: doc/stdlib_core_extraction_2026_05_10.md
+    rule: target-agnostic primitives in stdlib/core; alloc-dependent helpers in stdlib/alloc
+  thumbv7em_codegen_timeline:
+    resolved_in: F3 (2026-05-10 — asm-shape only; no qemu/hardware run yet)
+    remaining_gate: qemu / hardware commission
+  arm_cortex_m_codegen_blocks_firmware:
+    resolved_in: partial — F3 + HX1110 target_gate_check landed 2026-05-10
+    remaining_gate: qemu / hardware commission
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Open questions surfaced 2026-05-11 (post-A2 land + #14 drain + cluster merges).
+# ─────────────────────────────────────────────────────────────────────────────
+open_questions_surfaced_2026_05_11:
+  a2_deploy_gap:
+    # A2 source landed (ab2dfcee) + host rebuild (ddb21f21) — but ~/.hx/bin/hexa_real
+    # re-promote still pending. Closure requires host I/O + clang only (~90s wall) plus
+    # 2 GB-cap re-probe to confirm peak RSS drops below ~1.5 GB.
+    blocker: "host re-promote (~/.hx/bin/hexa_real) + 2 GB-cap re-probe"
+    effort: "host I/O + clang only, ~90s wall"
+  m4_freelist_reenable_timing:
+    # gated on A2 verification per punch list v2 5/11 closure path step 3.
+    gated_on: a2_deploy_gap_closure
+    reference: doc/stage1_punch_list_v2.md (Update 2026-05-11)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phases completed (2026-05-09)
@@ -1229,3 +1316,68 @@ phases_completed_2026_05_10:
   parser_gap_6_recovery:
     status: PASS
     evidence: "1c7b5861 fix(parse): Gap 6 — parser error recovery (skip-to-resync)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phases completed (2026-05-11) — mirror of SPEC.md §20.3 delta snapshot.
+# ─────────────────────────────────────────────────────────────────────────────
+# A2 source-side splice mitigation + 5 cluster merges + #14 drain + #11/#12
+# wilson fixes + stage 2/3 witness + SPEC.md sync. Stage 1 host verification
+# deferred to host re-promote (see open_questions.surfaced_2026_05_11.a2_deploy_gap).
+phases_completed_2026_05_11:
+  stage_2_3_witness_plus_rfc_023:
+    status: PASS
+    evidence: "2f9789e3 doc(bootstrap): stage 2/3 witness harness + RFC-023 firmware linker spec"
+  bak_timestamped_gitignore:
+    status: PASS
+    evidence: "805c61a5 chore: ignore *.bak.* timestamped backup files"
+  a2_in_place_splice_accumulator:
+    status: PASS
+    evidence: "ab2dfcee fix(compiler/parse): A2 — in-place _splice_imported_items accumulator (stage1 OOM)"
+    notes: |
+      Source-side mitigation only — host re-promote (~/.hx/bin/hexa_real)
+      + 2 GB-cap re-probe still pending. See open_questions.surfaced_2026_05_11.
+  stage0_host_rebuild_a2:
+    status: "PASS (source) / PENDING (deploy)"
+    evidence: "ddb21f21 build(stage0): rebuild host — A2 in-place splice accumulator"
+  superpowers_void_d1_d6_defense:
+    status: PASS
+    evidence: "5d97e9db superpowers/void D1–D6 defense layer design (incident 2026-05-11)"
+  inbox_patches_flip_10:
+    status: PASS
+    evidence: "13143f18 #10 wilson hexa-real-promotion — incoming PATCHES.yaml flip"
+  types_cluster_a4_c4_b2:
+    status: PASS
+    evidence: "bc50db32 Types cluster — A4 side-index / C4 HX2001 non-Ident callee / B2 fn_name pin"
+  c11_parse_only_atlas_literals:
+    status: PASS
+    evidence: "2b67ccb6 C11 parse_only skip on atlas literals (cherry-pick)"
+  lower_cluster_c5_c9_c10_c16:
+    status: PASS
+    evidence: "f3f63b72 Lower cluster — C5 HX1101 unbound ident, C9 else-end recompute, C10 HX1102 pattern, C16 HX1103 unhandled HExpr"
+  b1_hir_lower_type_ref_plus_c19:
+    status: PASS
+    evidence: "4cd39b2a B1 _hir_lower_type_ref empty-name guard + C19 for-desugar"
+  p2_batch_c12_c20:
+    status: PASS
+    evidence: "840c8f7d P2 batch — C12 citation gate (--strict-citations), C13 units early-out, C14 typed diags, C15 lmodule if-expr, C20 HX2003 non-fn callee"
+  http_sse_v1_1_post_body:
+    status: PASS
+    evidence: "faca4134 #11 stdlib http_sse v1.1 — streaming POST + body (wilson provider-anthropic)"
+  cmd_build_out_of_tree_flatten:
+    status: PASS
+    evidence: "21e7b518 #12 hexa build out-of-tree (flatten + $HEXA_LANG/self -I)"
+  inbox_patches_flip_batch:
+    status: PASS
+    evidence: "a06530fb #10/#11/#12 PATCHES flip batch"
+  compiler_main_hir_to_mir_drain:
+    status: PASS
+    evidence: "18c6a536 #14 hir_to_mir_diags drain in compiler/main (HX1101/1102/1103 surface in CLI)"
+  stage1_punch_list_v2_5_11_update:
+    status: PASS
+    evidence: "ee62470a #13 stage 1 punch list v2 — 2026-05-11 update (A2 verify deferred)"
+  macos_smoke_portable_timeout:
+    status: PASS
+    evidence: "1ceece8a fix(tests/integration): macOS-portable timeout + clarify HEXA_BIN default"
+  spec_md_sync_2026_05_11:
+    status: PASS
+    evidence: "d05696a2 doc(spec): 2026-05-11 — sync SPEC.md with 5/11 stage1 + cluster + wilson + drain land"
