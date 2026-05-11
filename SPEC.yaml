@@ -1171,9 +1171,9 @@ phases_completed_2026_05_09:
   B3: { status: PASS, evidence: "9e82795e feat(compiler/check): phase B3 — S3 type check + S4 domain check; refined by 93fb38a9 B3+ S5 units pass" }
   B4: { status: PASS, evidence: "6eab6c55 annotation handlers @law/@grace/@discover + 5ee37b49 HX8004 atlas citation strict (S8)" }
   C1: { status: PASS, evidence: "6786affd / 15809e3d feat(compiler/check): phase B5 — S6 equational verify (in-house prover v0)" }
-  C2: { status: IN-PROGRESS, evidence: "3a0ce4d2 Decision 5e tombstone + retroactive sweep + HX1099 (atlas-side); cross_prover register pending: 675ce4b0" }
+  C2: { status: PASS (cross_prover atlas-registration parked), evidence: "3a0ce4d2 Decision 5e tombstone + retroactive sweep + cascade + HX1099 (atlas-side) — smoke witnesses on disk (compiler/discover/{tombstone,cascade,promote}_smoke.hexa); tool/cross_prover.hexa diagonal exists (675ce4b0) but its auto-registration into the prover atlas is a separable nice-to-have, not yet started — parked" }
   D1: { status: PASS, evidence: "566dd835 hexa_ld v1 minimal static ELF64 + 758659eb v1.1 Mach-O arm64 static binary" }
-  D2: { status: IN-PROGRESS, evidence: "81d2176a LP1+LP2+LP3 capability matrix + LSP 3.17 pin; in-process compiler index ongoing" }
+  D2: { status: SCAFFOLD (RC met 2026-05-06) / Step 3+ deferred, evidence: "81d2176a LP1+LP2+LP3 capability matrix + LSP 3.17 pin — .roadmap.lsp LP1-LP5 all CLOSED, status PEER_SCAFFOLD_RC_MET; the feature suite (completion/hover/definition/references/rename/formatting/workspace.diagnostic, incremental TextDocumentSync, pull diagnostics) is explicitly deferred to Step 3+, not in-flight" }
   E1: { status: DEFERRED, evidence: "big-bang migration scheduled post stage1 fixed point" }
   E2: { status: DEFERRED, evidence: "depends on E1 + stage3 fixed point" }
 

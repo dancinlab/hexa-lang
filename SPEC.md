@@ -650,10 +650,8 @@ Pre-existing:
 Surfaced 2026-05-10:
 
 - Stage 0 arena reset semantics for 2 GB OOM mitigation (punch list v2 A1)
-- core / alloc split criteria — which modules are target-agnostic
-  enough to move into `stdlib/core`
-- `thumbv7em` / `riscv32imac` codegen timeline (currently zero)
-- ARM Cortex-M codegen blocks firmware targets (F3 not started)
+- `riscv32imac` codegen timeline (currently zero — no RISC-V target yet;
+  `thumbv7em` resolved separately, see below)
 - `hexa_str_concat` runtime stub linkage in `self/native`
   (Gap 15 surfaced)
 
@@ -664,9 +662,9 @@ Resolved 2026-05-10 / 2026-05-11:
   in `stdlib/alloc`); criterion documented in `doc/stdlib_core_extraction_2026_05_10.md`.
 - `thumbv7em` codegen timeline — F3 landed (asm-shape only; no
   qemu / hardware run yet).
-- ARM Cortex-M codegen blocks firmware — partially resolved: F3 + HX1110
-  target_gate_check land, leaving qemu / hardware commission as the
-  remaining gate.
+- ARM Cortex-M codegen blocks firmware — partially resolved: F3 is `DONE`
+  (asm-shape only; HX1110 gate) + `target_gate_check` landed, leaving
+  qemu / hardware commission as the remaining gate.
 
 Surfaced 2026-05-11:
 
@@ -694,9 +692,9 @@ Surfaced 2026-05-11:
 | B3 | PASS | 9e82795e S3 + S4 (refined by 93fb38a9 B3+ S5 units) |
 | B4 | PASS | 6eab6c55 annotation handlers + 5ee37b49 HX8004 citation strict |
 | C1 | PASS | 6786affd / 15809e3d in-house prover v0 |
-| C2 | IN-PROGRESS | 3a0ce4d2 tombstone + retroactive sweep + HX1099; cross_prover register pending |
+| C2 | PASS (cross_prover parked) | 3a0ce4d2 Decision 5e tombstone + retroactive sweep + cascade + HX1099 (atlas-side, smoke witnesses on disk); `tool/cross_prover.hexa` diagonal exists (675ce4b0) but its auto-registration into the prover atlas is a separable nice-to-have — not yet started, parked |
 | D1 | PASS | 566dd835 hexa_ld v1 ELF64 + 758659eb v1.1 Mach-O arm64 |
-| D2 | IN-PROGRESS | 81d2176a LSP capability matrix + LSP 3.17 pin |
+| D2 | SCAFFOLD (Step 3+ deferred) | 81d2176a LSP capability matrix + LSP 3.17 pin — `.roadmap.lsp` LP1–LP5 all CLOSED, status `PEER_SCAFFOLD_RC_MET` (RC met 2026-05-06); feature suite (completion/hover/definition/references/rename/formatting/workspace.diagnostic, incremental sync, pull diagnostics) explicitly deferred to Step 3+ |
 | E1 | DEFERRED | scheduled post stage 1 fixed point |
 | E2 | DEFERRED | depends on E1 + stage 3 fixed point |
 
