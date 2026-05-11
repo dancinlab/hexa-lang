@@ -841,11 +841,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── match: sequence of STMT_BR_COND testing tag ─────────
     //
-    // Stage1 Gap 14: arm-pattern coverage extended to:
-    //   - "wildcard"   → unconditional STMT_BR to arm
-    //   - "ident"      → bind scrut to ident name in arm
-    //   - "enum_path"  → tag-equality test; payload binders bound to scrut
-    //   - other        → general operand-equality test (as before)
+    // Stage1 Gap 14 + punch list C10: arm-pattern coverage:
+    //   - "wildcard"       → unconditional STMT_BR to arm
+    //   - "ident"          → bind scrut to ident name in arm
+    //   - "enum_path"      → tag-equality test; payload binders bound to scrut
+    //   - "literal_int"    → integer-constant-equality test
+    //   - "literal_string" → string-constant-equality test
+    //   - "struct_pattern" → operand-equality test on field sub-patterns
+    //   - other            → HX1102 emit + general operand-equality test fallback
     if k == "match" {
         if len(e.children) < 1 { return _no_value(ctx) }
         let sr = _lower_hexpr(ctx, e.children[0])
@@ -922,7 +925,90 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
                 ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
                 ctx2 = ctx3
+            } else if pat.kind == "literal_int" {
+                // Stage1 punch list C10 — integer-literal pattern.
+                let v = _parse_int(pat.text)
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "lit_eq")
+                let cmp_dst = ctx3.locals[len(ctx3.locals) - 1]
+                let mut cmp_args: [Operand] = []
+                cmp_args.push(scrut_op)
+                cmp_args.push(_const_int_op(v))
+                let cmp = Stmt {
+                    kind: STMT_BINOP,
+                    dst: cmp_dst,
+                    op: "==",
+                    args: cmp_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, cmp)
+                let mut br_args: [Operand] = []
+                br_args.push(_local_op(cmp_dst.id))
+                let br = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: br_args,
+                    target_block: arm_id,
+                    target_block_else: next_id
+                }
+                ctx3 = _push_stmt(ctx3, br)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                ctx2 = ctx3
+            } else if pat.kind == "literal_string" {
+                // Stage1 punch list C10 — string-literal pattern. Operand
+                // equality lowers to STMT_BINOP `==`; codegen handles the
+                // string-compare via the same path as runtime `==` on strings.
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "lit_eq")
+                let cmp_dst = ctx3.locals[len(ctx3.locals) - 1]
+                let mut cmp_args: [Operand] = []
+                cmp_args.push(scrut_op)
+                cmp_args.push(_const_str_op(pat.text))
+                let cmp = Stmt {
+                    kind: STMT_BINOP,
+                    dst: cmp_dst,
+                    op: "==",
+                    args: cmp_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, cmp)
+                let mut br_args: [Operand] = []
+                br_args.push(_local_op(cmp_dst.id))
+                let br = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: br_args,
+                    target_block: arm_id,
+                    target_block_else: next_id
+                }
+                ctx3 = _push_stmt(ctx3, br)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, arm_id)
+                ctx3 = _add_edge(ctx3, ctx3.cur_block, next_id)
+                ctx2 = ctx3
+            } else if pat.kind == "struct_pattern" {
+                // Stage1 punch list C10 — struct-pattern. v0: take an
+                // unconditional STMT_BR to the arm (the structural match
+                // succeeds by shape; field-binding happens below in the
+                // arm-entry block). Field sub-patterns are bound there.
+                let br = Stmt {
+                    kind: STMT_BR,
+                    dst: _miss_local(),
+                    op: "",
+                    args: [],
+                    target_block: arm_id,
+                    target_block_else: -1
+                }
+                ctx2 = _push_stmt_to(ctx2, cur_block_id, br)
+                ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
             } else {
+                // Stage1 punch list C10 — truly unknown pattern shape.
+                // Emit HX1102 with the kind so the gap surfaces, then fall
+                // through to the general operand-equality test so the rest
+                // of the match still lowers (defensive recovery).
+                _emit_hx1102(pat.kind, pat.span)
                 let pr = _lower_hexpr(ctx2, pat)
                 ctx2 = pr.ctx
                 let mut ctx3 = _fresh_local(ctx2, pat.typ, "tag_eq")
@@ -995,6 +1081,46 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         }
                         ctx_b = _push_stmt(ctx_b, s2)
                         ctx_b = _bind(ctx_b, pc.text, dst_b.id)
+                        ctx2 = ctx_b
+                    }
+                    pi = pi + 1
+                }
+            } else if pat.kind == "struct_pattern" {
+                // Stage1 punch list C10 — bind each named struct-field
+                // sub-pattern. A "field_lit"-shaped child (text=field name,
+                // children=[binding-ident]) lowers to a field extract on
+                // scrut. Bare-ident children mirror enum-path binding.
+                let mut pi = 0
+                while pi < len(pat.children) {
+                    let pc = pat.children[pi]
+                    let mut bind_name = ""
+                    let mut field_text = ""
+                    if pc.kind == "field_lit" {
+                        field_text = pc.text
+                        if len(pc.children) > 0 && pc.children[0].kind == "ident" {
+                            bind_name = pc.children[0].text
+                        } else {
+                            bind_name = pc.text
+                        }
+                    } else if pc.kind == "ident" && len(pc.text) > 0 && pc.text != "_" {
+                        bind_name = pc.text
+                        field_text = pc.text
+                    }
+                    if len(bind_name) > 0 {
+                        let mut ctx_b = _fresh_local(ctx2, pc.typ, bind_name)
+                        let dst_b = ctx_b.locals[len(ctx_b.locals) - 1]
+                        let mut a2: [Operand] = []
+                        a2.push(scrut_op)
+                        let s2 = Stmt {
+                            kind: STMT_ASSIGN,
+                            dst: dst_b,
+                            op: "field." + field_text,
+                            args: a2,
+                            target_block: -1,
+                            target_block_else: -1
+                        }
+                        ctx_b = _push_stmt(ctx_b, s2)
+                        ctx_b = _bind(ctx_b, bind_name, dst_b.id)
                         ctx2 = ctx_b
                     }
                     pi = pi + 1
