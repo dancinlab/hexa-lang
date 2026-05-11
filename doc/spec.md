@@ -1,5 +1,18 @@
 # HEXA-LANG 언어 사양서 v0.1
 
+> **SUPERSEDED — historical v0.1 draft.** The authoritative hexa-lang
+> specification is the repo-root `SPEC.md` (generated from `SPEC.yaml`, the
+> SSOT). This file is the original Korean-language v0.1 design sketch — kept
+> for the n=6 arithmetic-derivation rationale and the BT-hypothesis appendix,
+> which are not (yet) carried into root `SPEC.md`. Do not treat anything here
+> as current; when this disagrees with root `SPEC.md`, root `SPEC.md` wins.
+> See: ../SPEC.md  -  ../SPEC.yaml
+>
+> (owner review: this file is also surfaced as `doc/SPEC.md` on case-insensitive
+> filesystems — same inode, single tracked path `doc/spec.md`. Decide whether
+> to retire it once the unique n=6/BT content lands in root SPEC.md or a
+> dedicated doc/n6_derivation.md.)
+
 ## 1. 개요
 
 HEXA-LANG은 완전수 n=6의 산술 함수에서 도출된 상수로 설계된 프로그래밍 언어다.
