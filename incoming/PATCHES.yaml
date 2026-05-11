@@ -135,17 +135,48 @@
   trees: [stdlib, runtime]
   compiler_impact: new stdlib/http_sse.hexa (curl -fsN streaming + SSE parser, handle + callback forms, POST-with-body) OR confirm/wrap the existing runtime exec_stream_async/poll/close (AOT-only today). Consumer (wilson provider-anthropic) already written against the (a) handle surface.
   selftest_delta: + a stdlib/http_sse selftest (mock SSE stream)
-  status: pending_external
+  status: applied
+  applied_at: 2026-05-11
+  applied_commit: faca4134
   priority: 2 (not a hard blocker — buffered works; this = token-by-token streaming UX)
   opened: 2026-05-10
   detail: patches/wilson-needs-streaming-http-sse.md
+  note: |
+    Resolution differs from audit: stdlib/http_sse.hexa DID already exist
+    (v1.0.0 from 2026-05-08, commit 4761f048) — wilson's gap-audit was
+    looking at a stale tree. Real gap was POST-with-body. faca4134 ships
+    v1.1 additively: http_sse_post, http_sse_open_post, http_sse_open_method
+    + http_sse_build_curl_method_cmd (golden-test helper) + internal
+    _sse_build_curl_method (method+body generalized). GET surface byte-
+    identical. Body routed via `printf %s '...' | curl --data-binary @-`
+    (no temp file, no inline-arg quoting fragility). Interp-mode POST
+    fallback (http_sse_post_buffered) deferred — current edit-policy
+    hook rejected that shape; AOT users get streaming POST today,
+    interp-mode POST callers should stay on buffered anthropic_send.
 
 - id: wilson-needs-hexa-build-out-of-tree
   source: wilson session — `hexa build core/main.hexa` of the multi-module wilson project fails (linker undefined symbols) because `hexa build` doesn't pre-flatten use/import (only `hexa run` does); also clang -I points at <argv0-dir>/self (~/.hx/bin/self, nonexistent) so #include "runtime.c" fails.
   trees: [build-driver, install-layout]
   compiler_impact: `hexa build <entry>` should flatten (module_loader.hexa) -> transpile (hexa_v2) -> clang, like `hexa run` minus exec; clang -I should be $HEXA_LANG/self (or a stable install path); `hexa cc` shouldn't try to rebuild hexa_cc relative to cwd. Workarounds in place (manual flatten, ln -s ~/core/hexa-lang/self ~/.hx/bin/self).
   selftest_delta: 0 (a "build a 2-module out-of-tree project" smoke test would help)
-  status: pending_external
+  status: applied
+  applied_at: 2026-05-11
+  applied_commit: 21e7b518
   priority: 2 (blocks `hexa build` of out-of-tree multi-module projects = wilson; manual pipeline works)
   opened: 2026-05-11
   detail: patches/wilson-needs-hexa-build-out-of-tree.md
+  note: |
+    Two issues in (1) flatten and (2) include path, both fixed in 21e7b518:
+    (1) cmd_build now mirrors cmd_run's flatten step — uses
+        self/module_loader.hexa (full graph + fail-loud) instead of the
+        legacy tool/flatten_imports.hexa (top-level-only + silent drop).
+    (2) clang -I is resolved with priority $HEXA_LANG/self > argv0-dir/self
+        > ./self (env-then-file_exists chain) so installed hexa_real at
+        ~/.hx/bin/ no longer needs the `ln -s ~/core/hexa-lang/self
+        ~/.hx/bin/self` workaround. Applied to both native clang and
+        zig cc cross-target paths. (3) `hexa cc <file>` cwd-relative
+        hexa_cc.c rebuild still pending — minor; rebuild path is only hit
+        when invoking the transpile-self pipeline from outside the repo,
+        and the practical workaround is `cd $HEXA_LANG && hexa cc`.
+    Smoke verification deferred to next hexa_real rebuild (=task #13);
+    interp-mode self/main.hexa lacks runtime symbols (mono_ns, exec_stream).
