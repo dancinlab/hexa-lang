@@ -184,5 +184,13 @@
         hexa_cc.c rebuild still pending — minor; rebuild path is only hit
         when invoking the transpile-self pipeline from outside the repo,
         and the practical workaround is `cd $HEXA_LANG && hexa cc`.
-    Smoke verification deferred to next hexa_real rebuild (=task #13);
-    interp-mode self/main.hexa lacks runtime symbols (mono_ns, exec_stream).
+    Verified 2026-05-11 after the hexa_real re-promote (774c5d32): an
+    out-of-tree 2-file `use` program builds clean (module_loader flatten +
+    correct `-I`). The wilson build itself now flattens + transpiles +
+    reaches clang (the old link-time undefined-symbol failure is gone) but
+    hits a NEW C-compile wall: (a) match-arm enum-payload bindings not
+    emitted = RFC-020 A4 codegen gap (see `rfc020-enum-payload-variants`,
+    BG task 72), and (b) some stdlib functions referenced by-value
+    (`cancel_new`, `cancel_is_cancelled`, `read_line_stdin`, `split_ws`)
+    are undeclared in the transpiled C — flatten-coverage or AOT-builtin
+    gap. Full write-up: incoming/notes/2026-05-11-wilson-build-codegen-wall.md.
