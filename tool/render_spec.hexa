@@ -3,15 +3,21 @@
 // SPEC.yaml is the SSOT for hexa-lang language/toolchain decisions.
 // SPEC.md is the human-readable rendering of the same data.
 //
-// Status: STUB
+// Status: STUB+ (line-based drift checks; structural rendering still deferred)
 //   - hexa stdlib does not yet provide a YAML parser
 //   - full structural rendering deferred until stdlib/yaml.hexa exists
 //     OR SPEC.yaml is migrated to JSON / hexa.toml format
 //
 // Current behavior:
-//   - reads SPEC.yaml, extracts schema_version + last_updated + status
-//   - verifies SPEC.md header matches; warns on drift
-//   - exits 1 on drift so CI can flag desync
+//   - reads SPEC.yaml + SPEC.md
+//   - drift checks (all line-grep based via exec; exit 1 if any drift):
+//       1. schema_version / last_updated / status scalar match
+//       2. authoritative_rfcs set match (RFC numbers)
+//       3. diagnostic code set match (HX#### codes used in both files)
+//       4. stdlib_evolution module name set match
+//       5. firmware F0..F5 status keyword match (DONE / SPEC LAND / etc.)
+//   - prints `drift: <field>` per failure (current format preserved)
+//   - exit 0 if clean, 1 if any drift
 //
 // Future behavior (when yaml parser lands):
 //   - full SPEC.md regeneration from SPEC.yaml
@@ -50,6 +56,111 @@ fn extract_yaml_scalar(yaml: string, key: string) -> string {
     return ""
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Set drift helper — compares two canonical comma-joined strings, prints a
+// drift line in the existing format, and returns 0 (match) or 1 (drift).
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn _set_diff(label: string, yaml_set: string, md_set: string) -> i64 {
+    if yaml_set == md_set { return 0 }
+    eprintln("drift: " + label)
+    eprintln("  SPEC.yaml: " + yaml_set)
+    eprintln("  SPEC.md:   " + md_set)
+    return 1
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. authoritative_rfcs set match
+//    yaml: lines under `authoritative_rfcs:` like `  - proposals/rfc_NNN_*`
+//    md:   lines under `**Authoritative RFCs**:` like `  - [RFC-NNN ...`
+//    Both reduce to the 3-digit suffix set.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn _yaml_rfc_set(yaml_path: string) -> string {
+    let cmd =
+        "awk '/^authoritative_rfcs:/{f=1;next} " +
+        "f && /^[a-z_]+:/{exit} " +
+        "f && /rfc_[0-9]+/{ " +
+        "  if (match($0, /rfc_[0-9]+/)) print substr($0, RSTART+4, RLENGTH-4) " +
+        "}' \"" + yaml_path + "\" | sort -u | tr '\\n' ',' | sed 's/,$//'"
+    return exec(cmd).trim()
+}
+
+fn _md_rfc_set(md_path: string) -> string {
+    let cmd =
+        "awk '/^- \\*\\*Authoritative RFCs\\*\\*:/{f=1;next} " +
+        "f && /^---/{exit} " +
+        "f && /RFC-[0-9]+/{ " +
+        "  if (match($0, /RFC-[0-9]+/)) print substr($0, RSTART+4, RLENGTH-4) " +
+        "}' \"" + md_path + "\" | sort -u | tr '\\n' ',' | sed 's/,$//'"
+    return exec(cmd).trim()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. diagnostic-code set match — HX#### codes anywhere in either file.
+//    Drift example: SPEC.md cites HX1042 not present in SPEC.yaml catalog.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn _hx_set(path: string) -> string {
+    let cmd = "grep -oE 'HX[0-9]{4}' \"" + path + "\" | sort -u | tr '\\n' ',' | sed 's/,$//'"
+    return exec(cmd).trim()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. stdlib_evolution module name set match.
+//    yaml: under `modules_in_flight:`, 4-space-indented map keys
+//          (e.g. `    c_ffi:`).
+//    md:   `### Modules in flight` table rows; first cell is module name.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn _yaml_module_set(yaml_path: string) -> string {
+    let cmd =
+        "awk '/^  modules_in_flight:/{f=1;next} " +
+        "f && /^  [a-z_]+:/{exit} " +
+        "f && /^    [a-z_0-9]+:$/{ " +
+        "  s=$0; sub(/^ +/,\"\",s); sub(/:$/,\"\",s); print s " +
+        "}' \"" + yaml_path + "\" | sort -u | tr '\\n' ',' | sed 's/,$//'"
+    return exec(cmd).trim()
+}
+
+fn _md_module_set(md_path: string) -> string {
+    let cmd =
+        "awk '/^### Modules in flight/{f=1;next} " +
+        "f && /^### /{exit} " +
+        "f && /^\\| [a-z_]/{ " +
+        "  s=$0; sub(/^\\| /,\"\",s); sub(/ \\|.*/,\"\",s); print s " +
+        "}' \"" + md_path + "\" | sort -u | tr '\\n' ',' | sed 's/,$//'"
+    return exec(cmd).trim()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. firmware F0..F5 status keyword match.
+//    yaml: first occurrence per F0..F5 (firmware.roadmap one-line entries).
+//    md:   first table row per `| F0 |` … `| F5 |`.
+//    Statuses are short uppercase tokens; SPEC.yaml uses `SPEC LAND` form,
+//    SPEC.md uses `SPEC LAND` form too — we extract a known token list.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn _yaml_firmware_statuses(yaml_path: string) -> string {
+    let cmd =
+        "for f in F0 F1 F2 F3 F4 F5; do " +
+        "  line=$(grep -m1 \"^    ${f}: \" \"" + yaml_path + "\"); " +
+        "  st=$(printf '%s' \"$line\" | grep -oE 'status: (DONE|SPEC LAND|PLANNED|IN-FLIGHT|PASS)' | head -1 | sed 's/status: //'); " +
+        "  printf '%s=%s\\n' \"$f\" \"$st\"; " +
+        "done | tr '\\n' ',' | sed 's/,$//'"
+    return exec(cmd).trim()
+}
+
+fn _md_firmware_statuses(md_path: string) -> string {
+    let cmd =
+        "for f in F0 F1 F2 F3 F4 F5; do " +
+        "  line=$(grep -m1 \"^| ${f} \" \"" + md_path + "\"); " +
+        "  st=$(printf '%s' \"$line\" | grep -oE '(DONE|SPEC LAND|PLANNED|IN-FLIGHT|PASS)' | head -1); " +
+        "  printf '%s=%s\\n' \"$f\" \"$st\"; " +
+        "done | tr '\\n' ',' | sed 's/,$//'"
+    return exec(cmd).trim()
+}
+
 fn check_drift() -> i64 {
     let yaml = read_file(SPEC_YAML)
     let md = read_file(SPEC_MD)
@@ -68,6 +179,8 @@ fn check_drift() -> i64 {
     let yaml_status = extract_yaml_scalar(yaml, "status")
 
     let mut drift = 0
+
+    // 1. scalar header fields.
     if !md.contains("Schema version**: " + yaml_version) {
         eprintln("drift: SPEC.md schema_version != SPEC.yaml (" + yaml_version + ")")
         drift = drift + 1
@@ -81,6 +194,26 @@ fn check_drift() -> i64 {
         drift = drift + 1
     }
 
+    // 2. authoritative_rfcs set.
+    let yaml_rfcs = _yaml_rfc_set(SPEC_YAML)
+    let md_rfcs = _md_rfc_set(SPEC_MD)
+    drift = drift + _set_diff("authoritative_rfcs", yaml_rfcs, md_rfcs)
+
+    // 3. diagnostic-code set (HX####).
+    let yaml_hx = _hx_set(SPEC_YAML)
+    let md_hx = _hx_set(SPEC_MD)
+    drift = drift + _set_diff("diagnostic_codes (HX####)", yaml_hx, md_hx)
+
+    // 4. stdlib_evolution module names.
+    let yaml_mods = _yaml_module_set(SPEC_YAML)
+    let md_mods = _md_module_set(SPEC_MD)
+    drift = drift + _set_diff("stdlib_evolution.modules_in_flight", yaml_mods, md_mods)
+
+    // 5. firmware F0..F5 status keywords.
+    let yaml_fw = _yaml_firmware_statuses(SPEC_YAML)
+    let md_fw = _md_firmware_statuses(SPEC_MD)
+    drift = drift + _set_diff("firmware F0..F5 status", yaml_fw, md_fw)
+
     if drift > 0 {
         eprintln("")
         eprintln("drift detected. see warnings above.")
@@ -88,7 +221,12 @@ fn check_drift() -> i64 {
         eprintln("for now, please manually update SPEC.md to match SPEC.yaml.")
         return 1
     }
-    println("ok: SPEC.yaml and SPEC.md headers match (schema_version=" + yaml_version + ")")
+    println("ok: SPEC.yaml and SPEC.md aligned")
+    println("  schema_version=" + yaml_version)
+    println("  authoritative_rfcs=" + yaml_rfcs)
+    println("  diagnostic_codes=" + yaml_hx)
+    println("  stdlib_modules=" + yaml_mods)
+    println("  firmware_statuses=" + yaml_fw)
     return 0
 }
 
