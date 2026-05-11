@@ -11182,17 +11182,25 @@ fn call_builtin(name, args) {
         if len(p) == 0 { return val_int(0) }
         let escaped = "'" + p.replace("'", "'\\''") + "'"
         // S_ISREG gate: only regular files have a meaningful "size" here.
-        let is_reg = exec("test -f " + escaped + " && echo 1 || echo 0").trim()
+        let is_reg = exec("LC_ALL=C test -f " + escaped + " && echo 1 || echo 0").trim()
         if is_reg != "1" { return val_int(0) }
-        // BSD (Mac) first, GNU (Linux) fallback.
-        let bsd = exec("stat -f %z " + escaped + " 2>/dev/null").trim()
-        if len(bsd) > 0 {
-            let v = to_int(bsd)
-            if v > 0 { return val_int(v) }
+        // ω-stdlib-5 (2026-05-12): GNU (`stat -c %s`) first, BSD (`stat -f %z`)
+        // fallback. Prior BSD-first ordering broke on Linux because GNU `stat -f`
+        // is "filesystem info" (not size format), and with `%z` undefined GNU
+        // emits locale-formatted file metadata on STDOUT (not stderr!) —
+        // `2>/dev/null` doesn't suppress it. Result: to_int("  파일: ...") fed
+        // real garbage to every caller (atlas_embed_gen regen broke for 30 min).
+        // `stat -c %s` is GNU-only so it cleanly errors on BSD → empty trim →
+        // falls to BSD branch unambiguously. LC_ALL=C defends against any
+        // residual locale leak (e.g. BSD stat under non-C LANG).
+        let gnu = exec("LC_ALL=C stat -c %s " + escaped + " 2>/dev/null").trim()
+        if len(gnu) > 0 {
+            let v = to_int(gnu)
+            if v >= 0 { return val_int(v) }
         }
-        let gnu = exec("stat -c %s " + escaped + " 2>/dev/null").trim()
-        if len(gnu) == 0 { return val_int(0) }
-        return val_int(to_int(gnu))
+        let bsd = exec("LC_ALL=C stat -f %z " + escaped + " 2>/dev/null").trim()
+        if len(bsd) == 0 { return val_int(0) }
+        return val_int(to_int(bsd))
     }
     if name == "clock" || name == "elapsed" {
         return val_int(timestamp())
