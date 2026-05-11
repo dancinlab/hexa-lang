@@ -1,5 +1,7 @@
 # wilson ↔ hexa-lang — closure
 
+**2026-05-11 (FINAL — VERIFIED):** `cd ~/core/wilson && HEXA_LANG=~/core/hexa-lang ~/.hx/bin/hexa build core/main.hexa -o build/wilson` → **`OK: built build/wilson`** (775 KB, ~7 s); `./build/wilson --version` → **`wilson 0.0.1`** + bundle `hello, harness-cli, harness-print, harness-rpc, tool-core, provider-claude-cli, provider-anthropic, agents-md`. The hexa-lang side of wilson is **closed** — wilson `hexa build` produces a working binary. Everything below stays as the record; the small hexa-lang follow-ups it listed (§E) are now also landed: RFC-020 A4 codegen SSOT (`41ecfb97`), builtin/method-by-value thunks = gap b2 (`46016739`), `exec_stream_kill(h)` (`6c0fbac7`), `hexa cc` out-of-tree resolution (`731f41d6`), `stdlib/semver.hexa` (`4725c619`), install-relative `stdlib/` discovery (`df9e7f6b`), `law_io` stray-`main` (`a5de44e2`); deployed `~/.hx/bin/hexa_real` re-promoted from HEAD `46016739` (`dae438ee`, sha cd817981…). Remaining is wilson's own (harness-cli ← `self/tui/*` revert + delete `core/tui.hexa` for raw-mode/alt-screen; `host_render` slot routing P1+).
+
 **Date:** 2026-05-11
 **Scope:** Everything hexa-lang owed wilson (the hexa-native re-port of pi-mono's
 `{agent→core, ai, tui, coding-agent}`), per `~/core/wilson/docs/hexa-lang-gap-audit.md`
