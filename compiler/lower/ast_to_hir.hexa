@@ -49,6 +49,19 @@ pub fn lower_diags() -> array {
     return l_diags
 }
 
+// ── C19 (stage1 punch list v2): unique-id counter for `for`-desugar
+// temporaries. Each `for x in iter { body }` mints two fresh names —
+// `__for_it_<n>` (iterable snapshot) and `__for_idx_<n>` (counter) —
+// so nested for-loops do not shadow each other. The counter is reset
+// per `lower(...)` call below so output is determinate for a given
+// input module.
+pub let mut _for_uid: i64 = 0
+
+fn _next_for_uid() -> i64 {
+    _for_uid = _for_uid + 1
+    return _for_uid
+}
+
 // ── Sentinels / helpers ──────────────────────────────────────
 
 fn _hir_miss_def_id() -> DefId {
@@ -103,6 +116,12 @@ fn _hir_lower_type_ref(tr: TypeRef) -> Type {
     if len(tr.kind) == 0 { return _hir_t_unit() }
     if tr.kind == "named" {
         let n = tr.name
+        // B1 (stage1 punch list v2): kind="named" with empty `name` is a stale
+        // TypeRef shape — degrade to the unknown sentinel rather than falsely
+        // mapping to `unit`. Mirrors the Gap 3 fix in
+        // compiler/check/types.hexa::_types_lower_type_ref so the HIR lower
+        // path does not re-introduce HX3001 cascades when it becomes visible.
+        if len(n) == 0 { return _hir_empty_type() }
         if n == "i8"  { return _hir_t_i8() }
         if n == "i16" { return _hir_t_i16() }
         if n == "i32" { return _hir_t_i32() }
@@ -1149,6 +1168,205 @@ fn _mk_hexpr(kind: string, sp: Span, typ: Type, text: string,
     }
 }
 
+// ── C19: for-loop AST desugar helpers ────────────────────────
+// Build synthetic AST Expr nodes; existing `_lower_expr` cases then
+// handle scope plumbing, def-ids, and type fall-throughs uniformly.
+
+fn _empty_atlas_ref(sp: Span) -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: sp }
+}
+
+fn _mk_ast_ident(name: string, sp: Span) -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: sp,
+        text: name,
+        children: [],
+        atlas_ref: _empty_atlas_ref(sp)
+    }
+}
+
+fn _mk_ast_lit_int(text: string, sp: Span) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralInt,
+        span: sp,
+        text: text,
+        children: [],
+        atlas_ref: _empty_atlas_ref(sp)
+    }
+}
+
+fn _mk_ast_let(name: string, is_mut: bool, rhs: Expr, sp: Span) -> Expr {
+    let mut t = name
+    if is_mut { t = "mut:" + name }
+    let mut kids: [Expr] = []
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::Let,
+        span: sp,
+        text: t,
+        children: kids,
+        atlas_ref: _empty_atlas_ref(sp)
+    }
+}
+
+fn _mk_ast_binop(op: string, l: Expr, r: Expr, sp: Span) -> Expr {
+    let mut kids: [Expr] = []
+    kids.push(l)
+    kids.push(r)
+    return Expr {
+        kind: ExprKind::BinOp,
+        span: sp,
+        text: op,
+        children: kids,
+        atlas_ref: _empty_atlas_ref(sp)
+    }
+}
+
+fn _mk_ast_assign(op: string, l: Expr, r: Expr, sp: Span) -> Expr {
+    let mut kids: [Expr] = []
+    kids.push(l)
+    kids.push(r)
+    return Expr {
+        kind: ExprKind::Assign,
+        span: sp,
+        text: op,
+        children: kids,
+        atlas_ref: _empty_atlas_ref(sp)
+    }
+}
+
+fn _mk_ast_call1(callee_name: string, arg: Expr, sp: Span) -> Expr {
+    let mut kids: [Expr] = []
+    kids.push(_mk_ast_ident(callee_name, sp))
+    kids.push(arg)
+    return Expr {
+        kind: ExprKind::Call,
+        span: sp,
+        text: "",
+        children: kids,
+        atlas_ref: _empty_atlas_ref(sp)
+    }
+}
+
+fn _mk_ast_index(base: Expr, idx: Expr, sp: Span) -> Expr {
+    let mut kids: [Expr] = []
+    kids.push(base)
+    kids.push(idx)
+    return Expr {
+        kind: ExprKind::Index,
+        span: sp,
+        text: "",
+        children: kids,
+        atlas_ref: _empty_atlas_ref(sp)
+    }
+}
+
+fn _mk_ast_block(stmts: [Expr], sp: Span) -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: sp,
+        text: "",
+        children: stmts,
+        atlas_ref: _empty_atlas_ref(sp)
+    }
+}
+
+fn _mk_ast_while(cond: Expr, body: Expr, sp: Span) -> Expr {
+    let mut kids: [Expr] = []
+    kids.push(cond)
+    kids.push(body)
+    return Expr {
+        kind: ExprKind::While,
+        span: sp,
+        text: "",
+        children: kids,
+        atlas_ref: _empty_atlas_ref(sp)
+    }
+}
+
+fn _pick_for_iter(kids: [Expr], fallback: Expr) -> Expr {
+    let n = len(kids)
+    if n == 0 {
+        return fallback
+    }
+    return kids[0]
+}
+
+fn _pick_for_body(kids: [Expr], fallback: Expr) -> Expr {
+    let n = len(kids)
+    if n < 2 {
+        return fallback
+    }
+    return kids[1]
+}
+
+// C19: build the inner block of the desugared for-loop.
+// Splices body-as-block children inline to avoid an extra scope frame;
+// otherwise wraps the body expr as a single stmt.
+fn _build_for_body(bind_var: Expr, body_e: Expr, inc: Expr) -> [Expr] {
+    let mut inner: [Expr] = []
+    inner.push(bind_var)
+    let body_k = body_e.kind
+    let is_blk = _hir_is_block_kind(body_k)
+    if is_blk == false {
+        inner.push(body_e)
+        inner.push(inc)
+        return inner
+    }
+    let mut j = 0
+    while j < len(body_e.children) {
+        inner.push(body_e.children[j])
+        j = j + 1
+    }
+    inner.push(inc)
+    return inner
+}
+
+// C19: desugar `for x in iter { body }` to an index-based while loop:
+//
+//   block {
+//       let __for_it_<n>  = <iter>
+//       let mut __for_idx_<n> = 0
+//       while __for_idx_<n> < len(__for_it_<n>) {
+//           let <x> = __for_it_<n>[__for_idx_<n>]
+//           <body...>
+//           __for_idx_<n> = __for_idx_<n> + 1
+//       }
+//   }
+//
+// Stage0 has no iterator protocol — arbitrary-iter exprs (range objects,
+// custom generators) compile to MIR that type-checks wrong downstream.
+// Accepted for the common range-or-array case.
+// TODO(C19-followup): wire to a real `next()` protocol when it lands.
+fn _desugar_for(e: Expr) -> Expr {
+    let sp = e.span
+    let loop_var = e.text
+    let iter_e = _pick_for_iter(e.children, _mk_ast_ident(loop_var, sp))
+    let body_e = _pick_for_body(e.children, _mk_ast_block([], sp))
+    let uid = _next_for_uid()
+    let it_name  = "__for_it_"  + to_string(uid)
+    let idx_name = "__for_idx_" + to_string(uid)
+    let let_it = _mk_ast_let(it_name, false, iter_e, sp)
+    let let_idx = _mk_ast_let(idx_name, true, _mk_ast_lit_int("0", sp), sp)
+    let cond = _mk_ast_binop("<",
+        _mk_ast_ident(idx_name, sp),
+        _mk_ast_call1("len", _mk_ast_ident(it_name, sp), sp), sp)
+    let bind_var = _mk_ast_let(loop_var, false,
+        _mk_ast_index(_mk_ast_ident(it_name, sp),
+            _mk_ast_ident(idx_name, sp), sp), sp)
+    let inc = _mk_ast_assign("=", _mk_ast_ident(idx_name, sp),
+        _mk_ast_binop("+", _mk_ast_ident(idx_name, sp),
+            _mk_ast_lit_int("1", sp), sp), sp)
+    let inner = _build_for_body(bind_var, body_e, inc)
+    let while_e = _mk_ast_while(cond, _mk_ast_block(inner, sp), sp)
+    let mut outer: [Expr] = []
+    outer.push(let_it)
+    outer.push(let_idx)
+    outer.push(while_e)
+    return _mk_ast_block(outer, sp)
+}
+
 fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     let k = e.kind
     let kind_tag = _expr_kind_tag(k)
@@ -1489,25 +1707,31 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
         return LowerResult { expr: h, sc: new_sc }
     }
     if _hir_is_for_kind(k) {
-        let mut new_sc = sc
-        let mut kids: [HExpr] = []
-        if len(e.children) >= 1 {
-            let r = _lower_expr(e.children[0], atlas, new_sc)
-            kids.push(r.expr)
-            new_sc = r.sc
-        }
-        if len(e.children) >= 2 {
-            let mut body_sc = _push_frame(new_sc)
-            if len(e.text) > 0 {
-                body_sc = _define_in_scope(body_sc, e.text, _hir_empty_type())
-            }
-            let r = _lower_expr(e.children[1], atlas, body_sc)
-            kids.push(r.expr)
-            new_sc = _pop_frame(r.sc)
-        }
-        let h = _mk_hexpr(kind_tag, e.span, _hir_t_unit(), e.text,
-                          kids, _empty_atlas_binding(), _hir_miss_def_id())
-        return LowerResult { expr: h, sc: new_sc }
+        // C19 (stage1 punch list v2): desugar `for x in iter { body }` into
+        // an explicit index-based while loop BEFORE hir_to_mir ever sees a
+        // "for" node. hir_to_mir lacks a `for` handler and would otherwise
+        // fall through to generic-recurse, producing MIR with no loop CFG.
+        //
+        // Stage0 has no iterator protocol, so we lower to the common
+        // index-into-array form:
+        //
+        //   block {
+        //       let __for_it_<n>  = <iter>
+        //       let mut __for_idx_<n> = 0
+        //       while __for_idx_<n> < len(__for_it_<n>) {
+        //           let <x> = __for_it_<n>[__for_idx_<n>]
+        //           <body>
+        //           __for_idx_<n> = __for_idx_<n> + 1
+        //       }
+        //   }
+        //
+        // TODO(C19-followup): once an iterator protocol lands
+        // (`iter.next() -> Option<T>` or similar), desugar arbitrary-expr
+        // iteration to that shape instead. Today any non-indexable iterable
+        // (e.g. a custom generator) compiles to MIR that will type-check
+        // wrong downstream — accepted for stage0.
+        let desugared = _desugar_for(e)
+        return _lower_expr(desugared, atlas, sc)
     }
     if _hir_is_assign_kind(k) {
         let mut new_sc = sc
@@ -1738,6 +1962,8 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
     // Reset the per-invocation diag buffer so successive lower() calls in
     // the same process do not leak HX1100 emissions across compilations.
     l_diags = []
+    // C19: reset for-desugar uid counter so output is determinate.
+    _for_uid = 0
 
     // Pre-pass: mint DefIds + collect module-level type bindings so that
     // intra-module references (calls, struct-of-fields, etc.) can resolve.
