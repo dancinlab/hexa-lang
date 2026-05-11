@@ -1117,11 +1117,6 @@ open_questions:
   - arm_cortex_m_codegen_blocks_firmware_targets
       # firmware audit "biggest unknown" — without F3 (thumbv7em
       # codegen) hexa-rtsc / hexa-chip remain on parallel Rust path.
-  - hexa_str_concat_runtime_stub_linkage_in_self_native
-      # surfaced via Gap 15 codegen breadth (commit 194d9011) — concat
-      # path exists in MIR but the runtime stub linkage in self/native
-      # is not yet finalised; affects rodata-driven string ops in
-      # spliced super-module.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Open questions resolved between 2026-05-10 and 2026-05-11.
@@ -1137,6 +1132,21 @@ open_questions_resolved_2026_05_10_to_05_11:
   arm_cortex_m_codegen_blocks_firmware:
     resolved_in: partial — F3 + HX1110 target_gate_check landed 2026-05-10
     remaining_gate: qemu / hardware commission
+  hexa_str_concat_runtime_stub_linkage:
+    resolved_in: |
+      moot for the self/ build path — hexa_str_concat is defined in
+      self/runtime.c:3634 and every transpiled program #includes runtime.c,
+      so codegen_c2.hexa:271 (str_concat -> hexa_str_concat) always resolves.
+      No stub ever shipped in self/native/*.c; the only literal there is the
+      symbol-name string inside the transpiled hexa_cc.c (codegen_c2 symbol map).
+    compiler_tree_followup: |
+      the compiler/ (ground-up native) tree emits bl _hexa_str_concat /
+      call hexa_str_concat from compiler/codegen/{arm64_darwin,x86_64_linux,
+      thumbv7em_eabihf}.hexa; this is verified at the .s-text level by
+      tests/m0/concat_test.hexa. Linking a hexa runtime into compiler/main.hexa's
+      ld step is a downstream codegen follow-up of commit 194d9011, gated behind
+      the still-open compiler-driver gaps (driver aborts before codegen on real
+      source) — tracked there, not a standalone open question.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Open questions surfaced 2026-05-11 (post-A2 land + #14 drain + cluster merges).

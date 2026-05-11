@@ -652,8 +652,6 @@ Surfaced 2026-05-10:
 - Stage 0 arena reset semantics for 2 GB OOM mitigation (punch list v2 A1)
 - `riscv32imac` codegen timeline (currently zero — no RISC-V target yet;
   `thumbv7em` resolved separately, see below)
-- `hexa_str_concat` runtime stub linkage in `self/native`
-  (Gap 15 surfaced)
 
 Resolved 2026-05-10 / 2026-05-11:
 
@@ -665,6 +663,19 @@ Resolved 2026-05-10 / 2026-05-11:
 - ARM Cortex-M codegen blocks firmware — partially resolved: F3 is `DONE`
   (asm-shape only; HX1110 gate) + `target_gate_check` landed, leaving
   qemu / hardware commission as the remaining gate.
+- `hexa_str_concat` runtime stub linkage (Gap 15) — moot for the `self/`
+  build path: `hexa_str_concat` is defined in `self/runtime.c` and every
+  transpiled program `#include`s `runtime.c`, so `codegen_c2.hexa`'s
+  `str_concat → hexa_str_concat` mapping always resolves; no stub ever
+  shipped in `self/native/*.c` (the only literal there is the symbol-name
+  string inside the transpiled `hexa_cc.c`). The `compiler/` (ground-up
+  native) tree's `bl _hexa_str_concat` / `call hexa_str_concat` emitted by
+  `compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf}.hexa` is
+  verified at the .s-text level by `tests/m0/concat_test.hexa`; wiring a
+  hexa runtime into `compiler/main.hexa`'s link step is a downstream
+  codegen follow-up of commit 194d9011, gated behind the still-open
+  compiler-driver gaps (the driver aborts before codegen on real source),
+  not a standalone open question.
 
 Surfaced 2026-05-11:
 
