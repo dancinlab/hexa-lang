@@ -144,6 +144,58 @@ worktree-isolated agent work, so the rebuild must run mac-local.
 
 ---
 
+## Update 2026-05-11 (PM) — post-promote RSS verification: P0 OOM closed at current scale
+
+Closure-path step 1 done: `~/.hx/bin/hexa_real` (and `~/.hx/packages/hexa/hexa.real`,
+same binary) re-promoted at commit `774c5d32` — sha256
+`ffa91279f47eccb5ac6a8471a54d1fc1f400db8f23bf89ddd9310f1b6c9e7287`, built
+`self/native/hexa_v2 self/main.hexa → /tmp/hexa_main_regen.c ; clang -O0
+-fno-strict-aliasing -std=c11 -I self → hexa_real ; codesign -s -` from HEAD
+`64dc8488` (= #12 cmd_build flatten + A2 splice + Types/C11/Lower/B1+C19/P2
+clusters + #14 drain). Backups `*.bak.1778481370`; manifest_log.jsonl promote row.
+
+Step 2 — RSS re-probe with the post-A2 deployed binary, uncapped:
+
+```
+RESOURCE_LOCAL_HEXA=1 HEXA_MEM_UNLIMITED=1 HEXA_LANG=$PWD \
+  /usr/bin/time -l ~/.hx/bin/hexa_real run compiler/main.hexa \
+  --emit=asm -o /tmp/stage1_self.s compiler/main.hexa
+```
+(`hexa_real run` LB-routes to a remote compute sandbox by default — `RESOURCE_LOCAL_HEXA=1`
+forces the local `~/.hx/packages/hexa/build/hexa_interp.real`; `/usr/bin/time -l`'s
+`ru_maxrss` on macOS includes the waited-for interp child, so wrapping `hexa_real` captures it.)
+
+| metric                | 5/10 baseline (pre-A2)  | 5/11 PM (post-A2 binary, HEXA_MEM_UNLIMITED) | target            |
+|-----------------------|-------------------------|----------------------------------------------|-------------------|
+| binary used           | 5/10 23:39 hexa_real    | **774c5d32 hexa_real** (A2 source + A1 hooks) | post-A2 hexa_real |
+| memory cap            | 2 048 MB (hit it)       | **unlimited**                                | unlimited         |
+| RSS at OOM / peak     | 3 510 MB (killed)       | **~782 MB peak** (781 712 KB on the interp child), then **dropped to ~160 MB** when the A1 phase-arena reset fired (~21 min in) | < 1 500 MB peak |
+| outcome               | killed at 2 GB cap      | no cap hit; RSS plateaued (not climbing) — CPU-bound from there, run continues | clean completion |
+
+**Verdict: P0 stage-1 OOM is closed at current scale.** A2 (`p_splice_acc` in-place
+accumulator, `ab2dfcee`, source-level so it's exercised inside the flattened
+super-module) + A1 (phase-arena reset hooks in the 5/10 `hexa_interp.real`) together
+take peak RSS from 3 510 MB → ~782 MB — a ~78 % cut, well under the 1 500 MB
+threshold. The mid-run drop to ~160 MB confirms the A1 reset hooks are live in the
+deployed interp binary and that the parse-phase arena (which A2 stops bloating) is
+the bulk of the high-water mark. C11's `@phase("parse_only")` skip on the ~10 K
+`AtlasNode` literals further trims the type-check fan-out on the spliced module.
+
+Caveat: this measures peak RSS, not full self-compile completion — at ~21 min the
+interpreted `--emit=asm` codegen was still grinding CPU (~20.5 min UTIME). It's slow
+(interpreted whole-compiler codegen) but **not** memory-bound, so it's a wall-clock
+nuisance, not an OOM. The `.s` output / exit code is incidental to the OOM verdict.
+
+**Remaining (now optional, belt-and-suspenders — 782 MB << 1.5 GB already):**
+- Step 3: re-enable the M4 freelist (`self/hexa_full.hexa` ~line 17993, `array_free_list`
+  reclaim) and rebuild `~/.hx/packages/hexa/build/hexa_interp.real` (= `tool/build_interp.hexa`,
+  separate from the `hexa_real`=`self/main.hexa` build done above), then re-probe. Predicted
+  to shave the ~782 MB peak further but no longer needed to clear the wall.
+- A3 (hash-keyed env in `compiler/check/types.hexa`) — already landed (`4ed9966e`); the
+  ~782 MB figure already includes it.
+
+---
+
 ## TL;DR
 
 The self-compile **never reaches a structured diagnostic**. The stage0
