@@ -710,6 +710,15 @@ pub fn bind(module: Module) -> array {
     let mut k = 0
     while k < len(module.items) {
         let it = module.items[k]
+        // Stage1 punch list C11 — items tagged @phase("parse_only")
+        // (e.g. the ~10K AtlasNode literals in
+        // compiler/atlas/embedded.gen.hexa) skip the bind body walk.
+        // Their NAMES are already in the module scope from the pre-pass
+        // above, so downstream lookups still resolve.
+        if item_is_parse_only(it) {
+            k = k + 1
+            continue
+        }
         if _is_fn_kind(it.kind) {
             // Function body lives in its own scope with params first.
             sc = _push_scope(sc)

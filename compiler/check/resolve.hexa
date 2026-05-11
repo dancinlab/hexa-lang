@@ -219,6 +219,11 @@ fn _walk_annotations(anns: array, atlas: AtlasIndex, out: array) {
 
 fn _resolve_walk_item(it: Item, atlas: AtlasIndex, out: array) {
     _walk_annotations(it.annotations, atlas, out)
+    // Stage1 punch list C11 — skip body walks for items tagged
+    // @phase("parse_only"). compiler/atlas/embedded.gen.hexa carries
+    // ~10K AtlasNode struct literals whose bodies contain no atlas refs
+    // and otherwise just inflate arena pressure during S1.
+    if item_is_parse_only(it) { return }
     // Item.body is the only Expr root carried at item level (Fn body,
     // Let RHS, etc.); Struct fields and Imports leave it as the
     // empty placeholder (kind=Ident, span zero, no atlas_ref).

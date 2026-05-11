@@ -129,8 +129,12 @@ fn _emit_node(n: AtlasNode) -> string {
 }
 
 // Emit one `pub let ATLAS_<X>_NODES: [AtlasNode] = [ ... ]` block.
+//
+// Stage1 punch list C11 — prefix every binding with @phase("parse_only")
+// so analysis passes skip walking the multi-thousand-node array bodies.
 fn _emit_array(name: string, arr: array) -> string {
     let parts = []
+    parts.push("@phase(\"parse_only\")\n")
     parts.push("pub let ")
     parts.push(name)
     parts.push(": [AtlasNode] = [\n")
@@ -176,12 +180,15 @@ pub fn embed_atlas(idx: AtlasIndex, out_path: string) {
     parts.push("\n")
     parts.push("use \"compiler/atlas/parser\"\n")
     parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
     parts.push("pub let ATLAS_HASH: string = \"")
     parts.push(_escape_string(idx.hash))
     parts.push("\"\n")
+    parts.push("@phase(\"parse_only\")\n")
     parts.push("pub let ATLAS_SOURCE_COUNT: i64 = ")
     parts.push(to_string(idx.source_count))
     parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
     parts.push("pub let ATLAS_GENERATED_AT: string = \"")
     parts.push(_escape_string(_iso_utc_now()))
     parts.push("\"\n")

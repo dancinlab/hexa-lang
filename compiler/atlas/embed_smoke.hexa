@@ -121,6 +121,7 @@ fn main() {
     _check("ATLAS_C_NODES declared",             _contains(body, "pub let ATLAS_C_NODES:"),                              fails)
     _check("ATLAS_L_NODES declared",             _contains(body, "pub let ATLAS_L_NODES:"),                              fails)
     _check("ATLAS_E_NODES declared",             _contains(body, "pub let ATLAS_E_NODES:"),                              fails)
+    _check("@phase(parse_only) on ATLAS_*",      _contains(body, "@phase(\"parse_only\")"),                              fails)
     _check("AtlasNode literal emitted",          _contains(body, "AtlasNode { kind: \"P\", id: \"alpha\""),              fails)
     _check("constant phi_tau present",           _contains(body, "id: \"phi_tau\""),                                     fails)
     _check("law_long present",                   _contains(body, "id: \"law_long\""),                                    fails)

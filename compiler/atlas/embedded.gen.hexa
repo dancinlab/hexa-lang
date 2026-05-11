@@ -26,26 +26,40 @@
 
 use "compiler/atlas/parser"
 
+// Stage1 punch list C11 — every ATLAS_* binding below is tagged
+// @phase("parse_only"). The analysis passes (resolve / bind / types) skip
+// walking the body so the ~10K AtlasNode struct literals do not drive
+// arena traffic during the post-parse walks. Item names are still
+// registered in the type env from the declared type, so static_atlas()
+// in compiler/atlas/static_index.hexa still resolves the symbols.
+
+@phase("parse_only")
 pub let ATLAS_HASH: string = "838ba2c6529bf106ea4ac82cf1e9de623bad39aabd4a501c65ae49b2a0ab415c"
+@phase("parse_only")
 pub let ATLAS_SOURCE_COUNT: i64 = 1
+@phase("parse_only")
 pub let ATLAS_GENERATED_AT: string = "fixture"
 
+@phase("parse_only")
 pub let ATLAS_P_NODES: [AtlasNode] = [
     AtlasNode { kind: "P", id: "alpha", raw: "@P alpha :: foundation [11*]\n  -> beta", source_file: "fixture.n6", source_line: 2 },
     AtlasNode { kind: "P", id: "beta", raw: "@P beta :: foundation [11*]\n  -> gamma", source_file: "fixture.n6", source_line: 4 },
     AtlasNode { kind: "P", id: "gamma", raw: "@P gamma :: foundation [11*]", source_file: "fixture.n6", source_line: 6 }
 ]
 
+@phase("parse_only")
 pub let ATLAS_C_NODES: [AtlasNode] = [
     AtlasNode { kind: "C", id: "alpha-beta", raw: "@C alpha-beta = alpha + beta :: foundation", source_file: "fixture.n6", source_line: 7 },
     AtlasNode { kind: "C", id: "beta-gamma", raw: "@C beta-gamma = beta + gamma :: foundation", source_file: "fixture.n6", source_line: 8 }
 ]
 
+@phase("parse_only")
 pub let ATLAS_L_NODES: [AtlasNode] = [
     AtlasNode { kind: "L", id: "addition-commutative", raw: "@L addition-commutative :: foundation\n  \"for all a,b: a + b == b + a\"", source_file: "fixture.n6", source_line: 9 },
     AtlasNode { kind: "L", id: "multiplication-associative", raw: "@L multiplication-associative :: foundation\n  \"for all a,b,c: (a*b)*c == a*(b*c)\"", source_file: "fixture.n6", source_line: 11 }
 ]
 
+@phase("parse_only")
 pub let ATLAS_E_NODES: [AtlasNode] = [
     AtlasNode { kind: "E", id: "invalid-state", raw: "@E invalid-state :: bridge\n  \"marker for E-kind in the fixture\"", source_file: "fixture.n6", source_line: 13 }
 ]

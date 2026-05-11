@@ -117,3 +117,49 @@ pub struct Module {
     items: [Item],
     imports: [string]
 }
+
+// C11 helper.
+fn _ast_is_string_lit(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::LiteralString -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false
+    }
+}
+
+pub fn item_is_parse_only(it: Item) -> bool {
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if a.name == "phase" {
+            if len(a.args) > 0 {
+                let arg0 = a.args[0]
+                if _ast_is_string_lit(arg0.kind) {
+                    if arg0.text == "parse_only" { return true }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return false
+}

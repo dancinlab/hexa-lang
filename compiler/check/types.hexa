@@ -1604,12 +1604,24 @@ pub fn type_check(module: Module) -> array {
     // when the body of work per item is small (Struct / Enum / Import
     // items have no body to walk at all). Build the indices once up
     // front so the body loops skip directly to the items that need work.
+    //
+    // Stage1 punch list C11 — items tagged @phase("parse_only") (e.g.
+    // the ~10K AtlasNode literals in compiler/atlas/embedded.gen.hexa)
+    // are filtered out of the indices here, so neither the fn-body nor
+    // let-RHS pass walks them. _collect_item_types above already
+    // registered the name + declared type, so static_atlas() and other
+    // lookups still resolve cleanly.
     let n_items = len(module.items)
     let mut fn_idx: [i64] = []
     let mut let_idx: [i64] = []
     let mut pass1 = 0
     while pass1 < n_items {
-        let k = module.items[pass1].kind
+        let item_p1 = module.items[pass1]
+        if item_is_parse_only(item_p1) {
+            pass1 = pass1 + 1
+            continue
+        }
+        let k = item_p1.kind
         if _types_is_fn_item(k) {
             fn_idx.push(pass1)
         } else if _types_is_let_item(k) {
