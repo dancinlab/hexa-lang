@@ -573,6 +573,38 @@ pub fn http_sse_post(url: string, headers, body: string, on_event, timeout_sec: 
     return rc
 }
 
+// v1.1 POST interp fallback — parallel to http_sse_get_buffered.
+// Latency = full response (zero streaming benefit); event sequence
+// byte-identical to http_sse_post. For dev runs under `hexa run`
+// (interp) where exec_stream is not registered.
+//
+// @allow-bare-exec — curl shellout is the documented v0 transport
+//                    (mirror of http_sse_get_buffered above).
+// @allow-silent-exit — buffered path discards curl rc by design;
+//                      AOT path (http_sse_post) is the rc-aware variant.
+pub fn http_sse_post_buffered(url: string, headers, body: string, on_event, timeout_sec: int) -> int {
+    if len(url) == 0 { return 127 }
+    let cmd = _sse_build_curl_method(url, headers, "POST", body, timeout_sec)
+    let raw = to_string(exec(cmd))
+    let lines = split(raw, "\n")
+    let mut ev = _sse_empty_event()
+    let mut i = 0
+    while i < len(lines) {
+        let line = to_string(lines[i])
+        if len(line) == 0 {
+            let has_content = ev["_has_data"] || to_string(ev["event"]) != "message" || len(to_string(ev["id"])) > 0
+            if has_content {
+                on_event(ev)
+            }
+            ev = _sse_empty_event()
+        } else {
+            ev = http_sse_parse_event(ev, line)
+        }
+        i = i + 1
+    }
+    return 0
+}
+
 // v1.1 POST handle form — for streaming chat completion endpoints
 // that require a request body. Body is piped to curl via stdin.
 pub fn http_sse_open_post(url: string, headers, body: string, timeout_sec: int) -> int {
