@@ -242,3 +242,27 @@
   status: applied
   applied_at: 2026-05-11
   opened: 2026-05-11
+
+- id: stdlib-semver
+  source: wilson session — core/loader.hexa loader_validate checks (f) requires_host semver range, (g) dep version constraints — "need a semver helper"
+  trees: [stdlib]
+  compiler_impact: new stdlib/semver.hexa (pure SemVer 2.0.0 parse + compare + range-satisfies) + stdlib/semver.ai.md + stdlib/test/test_semver.hexa. No compiler/runtime change. Self-contained (imports nothing); no exec/fs/net; no `>=`/`<=` operators (RULES.md §1).
+  selftest_delta: "+1 stdlib selftest (test_semver 110/110 PASS — auto-discovered by tool/stdlib_selftest_aggregate.hexa)"
+  downstream_consumer: wilson core/loader.hexa loader_validate (e)/(f)/(g)/(h)/(i) TODO checks; any hexa consumer needing version-range checks.
+  status: applied
+  applied_at: 2026-05-11
+  opened: 2026-05-11
+  note: |
+    Public API: semver_parse / semver_valid / semver_compare /
+    semver_eq|gt|gte|lt|lte / semver_satisfies / semver_max /
+    semver_satisfying_max. Range grammar: exact, `^`, `~`, `>=`/`>`/`<=`/`<`/
+    `=`/`==`, x-ranges (`1.x` `1.2.x` `*` `""`), space-AND, `||`-OR.
+    Prerelease-in-range rule (chosen — npm-ish, simplified): a prerelease
+    version satisfies a range only if some comparator bound carries a
+    prerelease on the same [major,minor,patch] tuple; `*`/`""` never match
+    prereleases; stable versions unaffected. Build metadata parsed but
+    ignored for precedence (spec §10). Unparseable input never panics —
+    `semver_compare` sorts it lowest, `semver_satisfies` returns false.
+    `1.2`/`1` are NOT valid *versions* (ok=false) but ARE accepted inside
+    *ranges*. Caveats fully documented in stdlib/semver.hexa header +
+    stdlib/semver.ai.md.

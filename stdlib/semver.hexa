@@ -1,0 +1,610 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/semver.hexa — SemVer 2.0.0 parse + compare + range-satisfaction
+//
+//  @module(slug="semver", desc="SemVer 2.0.0 version parsing, precedence comparison, and npm-style range satisfaction")
+//  @usage(use "stdlib/semver"; if semver_satisfies(host_api_version(), requires_host) { ... })
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [semver_parse, semver_valid, semver_compare, semver_eq,
+//                 semver_gt, semver_gte, semver_lt, semver_lte,
+//                 semver_satisfies, semver_max, semver_satisfying_max]
+//  @stability preview
+//  @since 2026-05-11
+//  @maintainer hexa-core
+//  @priority P0
+//
+//  ── PROBLEM (wilson session — core/loader.hexa loader_validate, 2026-05-11) ─
+//
+//  wilson's plugin loader (core/loader.hexa::loader_validate) carries TODO
+//  checks that need a version-range helper: (f) requires_host semver range
+//  satisfied by host_api_version(), (g) per-dependency version constraints,
+//  etc. hexa had no semver primitive — every consumer would hand-roll a
+//  fragile dotted-string compare. This module centralizes it. Pure: no shell,
+//  no fs, no network — just string parsing + integer/lexical comparison.
+//
+//  ── PUBLIC API ─────────────────────────────────────────────────────────────
+//
+//   semver_parse(s) -> map
+//       #{ "ok": bool, "major": int, "minor": int, "patch": int,
+//          "prerelease": string, "build": string }
+//       Accepts an optional leading "v" (v1.2.3). Malformed → ok=false,
+//       all numeric fields 0, strings "". `prerelease` is the dot-separated
+//       identifier string after "-" ("alpha.1"); `build` is the string after
+//       "+" ("20130313144700"). Build metadata is parsed but IGNORED for
+//       precedence (SemVer 2.0.0 §10). A bare "1.2" or "1" is NOT a valid
+//       version here (ok=false) — only X.Y.Z. (Note: "1.2" / "1" / "1.x" ARE
+//       accepted inside *ranges* — see semver_satisfies.)
+//
+//   semver_valid(s) -> bool          = semver_parse(s).ok
+//
+//   semver_compare(a, b) -> int      -1 if a<b, 0 if a==b, 1 if a>b, by
+//       SemVer §11: compare major, minor, patch numerically; then a version
+//       WITH a prerelease has LOWER precedence than the same version without;
+//       prereleases compared identifier-by-identifier (all-numeric identifiers
+//       numerically; otherwise ASCII-lexically; numeric < alphanumeric; a
+//       longer prerelease with all prior identifiers equal is HIGHER).
+//       Build metadata ignored. FALLBACK for unparseable input: an
+//       unparseable string sorts strictly LOWEST (lower than any valid
+//       version; two unparseable strings compare equal). Deterministic,
+//       never panics.
+//
+//   semver_eq/gt/gte/lt/lte(a, b) -> bool   thin wrappers over semver_compare.
+//
+//   semver_satisfies(version, range) -> bool
+//       Does `version` satisfy `range`? Supported range grammar:
+//         exact:        1.2.3
+//         comparators:  >=1.2.3  >1.2.3  <=1.2.3  <1.2.3  =1.2.3  ==1.2.3
+//         caret:        ^1.2.3 = >=1.2.3 <2.0.0 ; ^0.2.3 = >=0.2.3 <0.3.0 ;
+//                       ^0.0.3 = >=0.0.3 <0.0.4   (npm "first non-zero is
+//                       the pinned element" rule)
+//         tilde:        ~1.2.3 = >=1.2.3 <1.3.0 ; ~1.2 = >=1.2.0 <1.3.0 ;
+//                       ~1 = >=1.0.0 <2.0.0
+//         wildcard:     *  x  X  ""  = any ; 1.x = >=1.0.0 <2.0.0 ;
+//                       1.2.x = >=1.2.0 <1.3.0
+//         AND (space):  ">=1.2.0 <2.0.0"  — every comparator must hold
+//         OR  (||):     "^1.0.0 || ^2.0.0" — any clause must hold
+//       Returns false (never panics) on an unparseable range or version.
+//
+//       PRERELEASE-IN-RANGE RULE (chosen — npm-ish, simplified): a version
+//       that carries a prerelease (e.g. 1.2.3-alpha) satisfies the range
+//       ONLY IF some comparator bound in the range carries a prerelease on
+//       the SAME [major, minor, patch] tuple. Otherwise a prerelease version
+//       never satisfies a "stable" range — even if numerically in-window.
+//       (A stable version is unaffected by this rule.) "*" / "" likewise do
+//       not match prereleases.
+//
+//   semver_max(versions) -> string             highest by semver_compare;
+//       "" if the array is empty. Unparseable entries lose to any parseable.
+//
+//   semver_satisfying_max(versions, range) -> string   highest entry that
+//       satisfies `range`; "" if none.
+//
+//  ── NOTES ──────────────────────────────────────────────────────────────────
+//   · No `>=` / `<=` operators in the source (RULES.md §1 — `<` / `>` only).
+//     Comparison results use the -1/0/1 convention from semver_compare, so
+//     "a >= b" is written `semver_compare(a,b) > -1` etc.
+//   · Pure module — no exec / fs / network. Imports nothing from stdlib.
+//
+//  ── See also ──────────────────────────────────────────────────────────────
+//   · stdlib/semver.ai.md            — contract digest for AI consumers
+//   · stdlib/test/test_semver.hexa   — selftest (parse / compare §11 chain /
+//                                       satisfies caret/tilde/x/||/AND)
+//   · https://semver.org/spec/v2.0.0.html
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── tiny pure string helpers (self-contained — no stdlib import) ───────────
+
+// True iff `s` begins with `prefix`.
+fn _sv_starts(s: string, prefix: string) -> bool {
+    if len(prefix) > len(s) { return false }
+    return s.substring(0, len(prefix)) == prefix
+}
+
+// Index of first occurrence of single-char `ch` in `s`, or -1.
+fn _sv_index_of(s: string, ch: string) -> int {
+    let mut i = 0
+    while i < len(s) {
+        if s.substring(i, i + 1) == ch { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// True iff `s` is non-empty and every char is an ASCII digit.
+fn _sv_all_digits(s: string) -> bool {
+    if len(s) == 0 { return false }
+    let mut i = 0
+    while i < len(s) {
+        let cb = ord(s.substring(i, i + 1))
+        if cb < 48 { return false }
+        if cb > 57 { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// Parse an all-digit string to int. Caller must have checked _sv_all_digits.
+fn _sv_to_int(s: string) -> int {
+    let mut v = 0
+    let mut i = 0
+    while i < len(s) {
+        v = v * 10 + (ord(s.substring(i, i + 1)) - 48)
+        i = i + 1
+    }
+    return v
+}
+
+// True iff every char of `s` is in [0-9A-Za-z-]. Empty → false.
+fn _sv_is_ident_chars(s: string) -> bool {
+    if len(s) == 0 { return false }
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        let is_d = !(c < "0") && !(c > "9")
+        let is_l = !(c < "a") && !(c > "z")
+        let is_u = !(c < "A") && !(c > "Z")
+        if !is_d && !is_l && !is_u && c != "-" { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// True iff numeric segment `seg` has a forbidden leading zero (len>1, "0..").
+fn _sv_lead_zero(seg: string) -> bool {
+    if len(seg) < 2 { return false }
+    return seg.substring(0, 1) == "0"
+}
+
+// Validate a dot-separated identifier list for a prerelease/build tag.
+// Each segment must be non-empty and ident-chars; numeric prerelease
+// segments must have no leading zero (SemVer §9). `is_pre` toggles the
+// leading-zero check (build segments §10 allow leading zeros).
+fn _sv_valid_dotted(tag: string, is_pre: bool) -> bool {
+    if len(tag) == 0 { return false }
+    let segs = tag.split(".")
+    let mut i = 0
+    while i < len(segs) {
+        let seg = segs[i]
+        if !_sv_is_ident_chars(seg) { return false }
+        if is_pre && _sv_all_digits(seg) {
+            if _sv_lead_zero(seg) { return false }
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// Lexically compare two ASCII strings: -1 / 0 / 1.
+fn _sv_strcmp(a: string, b: string) -> int {
+    let mut i = 0
+    let la = len(a)
+    let lb = len(b)
+    while i < la && i < lb {
+        let ca = ord(a.substring(i, i + 1))
+        let cb = ord(b.substring(i, i + 1))
+        if ca < cb { return -1 }
+        if ca > cb { return 1 }
+        i = i + 1
+    }
+    if la < lb { return -1 }
+    if la > lb { return 1 }
+    return 0
+}
+
+// ── semver_parse ───────────────────────────────────────────────────────────
+
+fn _sv_bad() -> map {
+    return #{ "ok": false, "major": 0, "minor": 0, "patch": 0, "prerelease": "", "build": "" }
+}
+
+pub fn semver_parse(s: string) -> map {
+    if type_of(s) != "string" { return _sv_bad() }
+    let mut t = s.trim()
+    if len(t) == 0 { return _sv_bad() }
+    // Optional leading v / V.
+    let h = t.substring(0, 1)
+    if h == "v" || h == "V" {
+        t = t.substring(1, len(t))
+    }
+    if len(t) == 0 { return _sv_bad() }
+
+    // Split off build (+...) first, then prerelease (-...).
+    let mut build = ""
+    let plus = _sv_index_of(t, "+")
+    if !(plus < 0) {
+        build = t.substring(plus + 1, len(t))
+        t = t.substring(0, plus)
+        if !_sv_valid_dotted(build, false) { return _sv_bad() }
+    }
+    let mut pre = ""
+    let dash = _sv_index_of(t, "-")
+    if !(dash < 0) {
+        pre = t.substring(dash + 1, len(t))
+        t = t.substring(0, dash)
+        if !_sv_valid_dotted(pre, true) { return _sv_bad() }
+    }
+
+    // Core must be exactly X.Y.Z, all numeric, no leading zeros (§2).
+    let parts = t.split(".")
+    if len(parts) != 3 { return _sv_bad() }
+    let mut k = 0
+    while k < 3 {
+        let p = parts[k]
+        if !_sv_all_digits(p) { return _sv_bad() }
+        if _sv_lead_zero(p) { return _sv_bad() }
+        k = k + 1
+    }
+    return #{
+        "ok": true,
+        "major": _sv_to_int(parts[0]),
+        "minor": _sv_to_int(parts[1]),
+        "patch": _sv_to_int(parts[2]),
+        "prerelease": pre,
+        "build": build
+    }
+}
+
+pub fn semver_valid(s: string) -> bool {
+    return semver_parse(s)["ok"]
+}
+
+// ── precedence comparison (SemVer §11) ─────────────────────────────────────
+
+// Compare two prerelease identifier-lists ("" = no prerelease). Per §11:
+// no-prerelease > has-prerelease; otherwise field-by-field.
+fn _sv_cmp_pre(a: string, b: string) -> int {
+    if a == b { return 0 }
+    if len(a) == 0 { return 1 }   // no prerelease wins
+    if len(b) == 0 { return -1 }
+    let sa = a.split(".")
+    let sb = b.split(".")
+    let mut i = 0
+    while i < len(sa) && i < len(sb) {
+        let x = sa[i]
+        let y = sb[i]
+        if x != y {
+            let xn = _sv_all_digits(x)
+            let yn = _sv_all_digits(y)
+            if xn && yn {
+                let xv = _sv_to_int(x)
+                let yv = _sv_to_int(y)
+                if xv < yv { return -1 }
+                if xv > yv { return 1 }
+            } else if xn && !yn {
+                return -1   // numeric < alphanumeric
+            } else if !xn && yn {
+                return 1
+            } else {
+                let c = _sv_strcmp(x, y)
+                if c != 0 { return c }
+            }
+        }
+        i = i + 1
+    }
+    // All compared fields equal → the longer list has higher precedence.
+    if len(sa) < len(sb) { return -1 }
+    if len(sa) > len(sb) { return 1 }
+    return 0
+}
+
+// Compare two parsed-version maps (already known ok). Build ignored.
+fn _sv_cmp_parsed(pa: map, pb: map) -> int {
+    if pa["major"] < pb["major"] { return -1 }
+    if pa["major"] > pb["major"] { return 1 }
+    if pa["minor"] < pb["minor"] { return -1 }
+    if pa["minor"] > pb["minor"] { return 1 }
+    if pa["patch"] < pb["patch"] { return -1 }
+    if pa["patch"] > pb["patch"] { return 1 }
+    return _sv_cmp_pre(pa["prerelease"], pb["prerelease"])
+}
+
+pub fn semver_compare(a: string, b: string) -> int {
+    let pa = semver_parse(a)
+    let pb = semver_parse(b)
+    let oka = pa["ok"]
+    let okb = pb["ok"]
+    if !oka && !okb { return 0 }
+    if !oka { return -1 }   // unparseable sorts lowest
+    if !okb { return 1 }
+    return _sv_cmp_parsed(pa, pb)
+}
+
+pub fn semver_eq(a: string, b: string) -> bool  { return semver_compare(a, b) == 0 }
+pub fn semver_gt(a: string, b: string) -> bool  { return semver_compare(a, b) > 0 }
+pub fn semver_gte(a: string, b: string) -> bool { return semver_compare(a, b) > -1 }
+pub fn semver_lt(a: string, b: string) -> bool  { return semver_compare(a, b) < 0 }
+pub fn semver_lte(a: string, b: string) -> bool { return semver_compare(a, b) < 1 }
+
+// ── range satisfaction ─────────────────────────────────────────────────────
+
+// Build a synthetic version map (always ok=true) from components.
+fn _sv_mk(mj: int, mn: int, pt: int, pre: string) -> map {
+    return #{ "ok": true, "major": mj, "minor": mn, "patch": pt, "prerelease": pre, "build": "" }
+}
+
+// Is `tok` a wildcard segment ("", "*", "x", "X")?
+fn _sv_is_x(tok: string) -> bool {
+    return tok == "" || tok == "*" || tok == "x" || tok == "X"
+}
+
+// Parse a (possibly partial / x-ranged) version token: "1", "1.2", "1.2.3",
+// "1.x", "1.2.x", "*", "v1.2.3-rc.1" → a map with "kind" in:
+//   "any"      — matches everything
+//   "exact"    — full X.Y.Z (maybe with -pre/+build; build ignored)
+//   "partial"  — some trailing component is x / missing (has "have" = count
+//                of concrete leading components)
+//   "bad"      — garbage
+// plus "major"/"minor"/"patch"/"pre".
+fn _sv_parse_range_token(tok0: string) -> map {
+    let mut tok = tok0.trim()
+    if _sv_is_x(tok) { return #{ "kind": "any", "major": 0, "minor": 0, "patch": 0, "pre": "" } }
+    let h = tok.substring(0, 1)
+    if h == "v" || h == "V" { tok = tok.substring(1, len(tok)) }
+    if len(tok) == 0 { return #{ "kind": "any", "major": 0, "minor": 0, "patch": 0, "pre": "" } }
+    // strip build then pre (only meaningful on the core part)
+    let mut pre = ""
+    let plus = _sv_index_of(tok, "+")
+    if !(plus < 0) { tok = tok.substring(0, plus) }
+    let dash = _sv_index_of(tok, "-")
+    if !(dash < 0) {
+        pre = tok.substring(dash + 1, len(tok))
+        tok = tok.substring(0, dash)
+        if !_sv_valid_dotted(pre, true) { return #{ "kind": "bad" } }
+    }
+    let parts = tok.split(".")
+    if len(parts) == 0 { return #{ "kind": "bad" } }
+    if len(parts) > 3 { return #{ "kind": "bad" } }
+    let mut comps = [0, 0, 0]
+    let mut have = 0
+    let mut wild = false
+    let mut i = 0
+    while i < 3 {
+        if i < len(parts) {
+            let p = parts[i]
+            if _sv_is_x(p) {
+                wild = true
+            } else {
+                if wild { return #{ "kind": "bad" } }   // "1.x.3" invalid
+                if !_sv_all_digits(p) { return #{ "kind": "bad" } }
+                if _sv_lead_zero(p) { return #{ "kind": "bad" } }
+                comps[i] = _sv_to_int(p)
+                have = have + 1
+            }
+        } else {
+            wild = true
+        }
+        i = i + 1
+    }
+    if have == 0 { return #{ "kind": "any", "major": 0, "minor": 0, "patch": 0, "pre": "" } }
+    if have == 3 && !wild {
+        return #{ "kind": "exact", "major": comps[0], "minor": comps[1], "patch": comps[2], "pre": pre }
+    }
+    // partial: pre ignored on partials (npm does too)
+    return #{ "kind": "partial", "major": comps[0], "minor": comps[1], "patch": comps[2], "pre": "", "have": have }
+}
+
+// Append a comparator #{ "op":, "v": <map> } to acc; return acc.
+fn _sv_push_cmp(acc: [map], op: string, v: map) -> [map] {
+    acc.push(#{ "op": op, "v": v })
+    return acc
+}
+
+// Desugar one space-separated range atom (e.g. "^1.2.3", ">=1.2.3", "1.x")
+// into 0+ comparators appended to `acc`. Returns #{ "ok": bool, "cmps": [map] }.
+fn _sv_desugar_atom(atom0: string, acc: [map]) -> map {
+    let atom = atom0.trim()
+    if len(atom) == 0 { return #{ "ok": true, "cmps": acc } }
+
+    // leading operator?
+    let mut op = ""
+    let mut rest = atom
+    if _sv_starts(rest, ">=") { op = ">="; rest = rest.substring(2, len(rest)) }
+    else if _sv_starts(rest, "<=") { op = "<="; rest = rest.substring(2, len(rest)) }
+    else if _sv_starts(rest, "==") { op = "="; rest = rest.substring(2, len(rest)) }
+    else if _sv_starts(rest, ">") { op = ">"; rest = rest.substring(1, len(rest)) }
+    else if _sv_starts(rest, "<") { op = "<"; rest = rest.substring(1, len(rest)) }
+    else if _sv_starts(rest, "=") { op = "="; rest = rest.substring(1, len(rest)) }
+    else if _sv_starts(rest, "^") { op = "^"; rest = rest.substring(1, len(rest)) }
+    else if _sv_starts(rest, "~") { op = "~"; rest = rest.substring(1, len(rest)) }
+    rest = rest.trim()
+
+    let tk = _sv_parse_range_token(rest)
+    if tk["kind"] == "bad" { return #{ "ok": false, "cmps": acc } }
+    if tk["kind"] == "any" {
+        // "*" — no constraint added (matches everything within this AND clause).
+        return #{ "ok": true, "cmps": acc }
+    }
+
+    let mj = tk["major"]
+    let mn = tk["minor"]
+    let pt = tk["patch"]
+    let pre = tk["pre"]
+
+    if op == "^" {
+        if tk["kind"] == "partial" {
+            let lo = _sv_mk(mj, mn, pt, "")
+            let hav = tk["have"]
+            let mut hi = _sv_mk(0, 0, 0, "")
+            if hav == 1 {
+                hi = _sv_mk(mj + 1, 0, 0, "")           // ^1 = >=1.0.0 <2.0.0
+            } else {
+                if mj > 0 { hi = _sv_mk(mj + 1, 0, 0, "") }      // ^1.2 = <2.0.0
+                else { hi = _sv_mk(0, mn + 1, 0, "") }           // ^0.2 = <0.3.0
+            }
+            let mut a = _sv_push_cmp(acc, ">=", lo)
+            a = _sv_push_cmp(a, "<", hi)
+            return #{ "ok": true, "cmps": a }
+        }
+        let lo = _sv_mk(mj, mn, pt, pre)
+        let mut hi = _sv_mk(0, 0, 0, "")
+        if mj > 0 { hi = _sv_mk(mj + 1, 0, 0, "") }              // ^1.2.3 = <2.0.0
+        else if mn > 0 { hi = _sv_mk(0, mn + 1, 0, "") }         // ^0.2.3 = <0.3.0
+        else { hi = _sv_mk(0, 0, pt + 1, "") }                   // ^0.0.3 = <0.0.4
+        let mut a = _sv_push_cmp(acc, ">=", lo)
+        a = _sv_push_cmp(a, "<", hi)
+        return #{ "ok": true, "cmps": a }
+    }
+
+    if op == "~" {
+        if tk["kind"] == "partial" {
+            let hav = tk["have"]
+            let lo = _sv_mk(mj, mn, pt, "")
+            let mut hi = _sv_mk(0, 0, 0, "")
+            if hav == 1 { hi = _sv_mk(mj + 1, 0, 0, "") }        // ~1 = >=1.0.0 <2.0.0
+            else { hi = _sv_mk(mj, mn + 1, 0, "") }              // ~1.2 = >=1.2.0 <1.3.0
+            let mut a = _sv_push_cmp(acc, ">=", lo)
+            a = _sv_push_cmp(a, "<", hi)
+            return #{ "ok": true, "cmps": a }
+        }
+        let lo = _sv_mk(mj, mn, pt, pre)
+        let hi = _sv_mk(mj, mn + 1, 0, "")                       // ~1.2.3 = >=1.2.3 <1.3.0
+        let mut a = _sv_push_cmp(acc, ">=", lo)
+        a = _sv_push_cmp(a, "<", hi)
+        return #{ "ok": true, "cmps": a }
+    }
+
+    // No caret/tilde. Partial / x-range → window (or pinned bound if op given).
+    if tk["kind"] == "partial" {
+        let hav = tk["have"]
+        let lo = _sv_mk(mj, mn, pt, "")
+        let mut hi = _sv_mk(0, 0, 0, "")
+        if hav == 1 { hi = _sv_mk(mj + 1, 0, 0, "") }            // 1.x = >=1.0.0 <2.0.0
+        else { hi = _sv_mk(mj, mn + 1, 0, "") }                  // 1.2.x = >=1.2.0 <1.3.0
+        if op == ">" || op == ">=" {
+            return #{ "ok": true, "cmps": _sv_push_cmp(acc, op, lo) }
+        }
+        if op == "<" {
+            return #{ "ok": true, "cmps": _sv_push_cmp(acc, "<", lo) }
+        }
+        if op == "<=" {
+            return #{ "ok": true, "cmps": _sv_push_cmp(acc, "<", hi) }   // <=1.2 = <1.3.0
+        }
+        let mut a = _sv_push_cmp(acc, ">=", lo)
+        a = _sv_push_cmp(a, "<", hi)
+        return #{ "ok": true, "cmps": a }
+    }
+
+    // Exact full version with explicit (or implicit "=") comparator.
+    let v = _sv_mk(mj, mn, pt, pre)
+    let eop = if op == "" { "=" } else { op }
+    return #{ "ok": true, "cmps": _sv_push_cmp(acc, eop, v) }
+}
+
+// Same [major, minor, patch] tuple?
+fn _sv_same_tuple(a: map, b: map) -> bool {
+    return a["major"] == b["major"] && a["minor"] == b["minor"] && a["patch"] == b["patch"]
+}
+
+// Evaluate one comparator op against a -1/0/1 compare result.
+fn _sv_op_holds(op: string, c: int) -> bool {
+    if op == "=" { return c == 0 }
+    if op == ">" { return c > 0 }
+    if op == ">=" { return c > -1 }
+    if op == "<" { return c < 0 }
+    if op == "<=" { return c < 1 }
+    return false
+}
+
+// Evaluate a conjunction (AND) of comparators against parsed version `pv`.
+fn _sv_eval_and(cmps: [map], pv: map) -> bool {
+    let ver_is_pre = len(pv["prerelease"]) > 0
+    // Prerelease gate: a prerelease version satisfies only if SOME comparator
+    // bound is itself a prerelease on the same tuple.
+    if ver_is_pre {
+        let mut allow = false
+        let mut j = 0
+        while j < len(cmps) {
+            let bv = cmps[j]["v"]
+            if len(bv["prerelease"]) > 0 && _sv_same_tuple(bv, pv) { allow = true }
+            j = j + 1
+        }
+        if !allow { return false }
+    }
+    let mut i = 0
+    while i < len(cmps) {
+        let op = cmps[i]["op"]
+        let bv = cmps[i]["v"]
+        let c = _sv_cmp_parsed(pv, bv)
+        if !_sv_op_holds(op, c) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn semver_satisfies(version: string, range: string) -> bool {
+    if type_of(version) != "string" { return false }
+    if type_of(range) != "string" { return false }
+    let pv = semver_parse(version)
+    if !pv["ok"] { return false }
+
+    let r = range.trim()
+    if _sv_is_x(r) {
+        // "*" / "" / "x" / "X": matches anything stable; not prereleases.
+        return len(pv["prerelease"]) == 0
+    }
+
+    let clauses = r.split("||")
+    let mut ci = 0
+    while ci < len(clauses) {
+        let clause = clauses[ci].trim()
+        ci = ci + 1
+        let norm = clause.replace("\t", " ")
+        let toks = norm.split(" ")
+        let mut cmps = []
+        let mut ok = true
+        let mut ti = 0
+        while ti < len(toks) {
+            let tok = toks[ti].trim()
+            ti = ti + 1
+            if len(tok) == 0 { continue }
+            let res = _sv_desugar_atom(tok, cmps)
+            if !res["ok"] { ok = false; break }
+            cmps = res["cmps"]
+        }
+        if !ok { continue }   // a bad clause simply can't be satisfied
+        if len(cmps) == 0 {
+            // "*"-equivalent clause: stable-only, mirroring npm.
+            if len(pv["prerelease"]) > 0 { continue }
+            return true
+        }
+        if _sv_eval_and(cmps, pv) { return true }
+    }
+    return false
+}
+
+// ── convenience aggregates ─────────────────────────────────────────────────
+
+pub fn semver_max(versions: [string]) -> string {
+    if type_of(versions) != "array" { return "" }
+    if len(versions) == 0 { return "" }
+    let mut best = ""
+    let mut have = false
+    let mut i = 0
+    while i < len(versions) {
+        let v = versions[i]
+        i = i + 1
+        if type_of(v) != "string" { continue }
+        if !have { best = v; have = true; continue }
+        if semver_compare(v, best) > 0 { best = v }
+    }
+    if !have { return "" }
+    return best
+}
+
+pub fn semver_satisfying_max(versions: [string], range: string) -> string {
+    if type_of(versions) != "array" { return "" }
+    let mut best = ""
+    let mut have = false
+    let mut i = 0
+    while i < len(versions) {
+        let v = versions[i]
+        i = i + 1
+        if type_of(v) != "string" { continue }
+        if !semver_satisfies(v, range) { continue }
+        if !have { best = v; have = true; continue }
+        if semver_compare(v, best) > 0 { best = v }
+    }
+    if !have { return "" }
+    return best
+}
