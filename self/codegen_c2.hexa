@@ -4259,10 +4259,22 @@ fn gen2_expr(node) {
     }
 
     // ── Enum path: Color::Red → hexa_int(N) ──────────────────
+    // RFC-020 A4: single-field payload variant construction. When the parser
+    // attached a non-empty `payload_expr` (an AST map node), emit the runtime
+    // form — a tagged HexaVal array `[tag, payload]` — so the payload travels
+    // with the tag. Plain unit variants keep the bare `<name>_<value>` tag
+    // macro (zero regression). This logic was hand-applied to the generated
+    // self/native/hexa_cc.c at a85b8a1c but never back-ported here, so a later
+    // `hexa cc --regen` wiped it; restoring it in the SSOT keeps regen safe.
     if k == "EnumPath" {
         let ename = node.name
         let vname = node.value
-        return ename + "_" + vname
+        let enum_const = ename + "_" + vname
+        let pe = node.payload_expr
+        if type_of(pe) != "string" {
+            return "hexa_array_push(hexa_array_push(hexa_array_new(), " + enum_const + "), " + gen2_expr(pe) + ")"
+        }
+        return enum_const
     }
 
     // ── If expression (value-producing) ──────────────────────
@@ -4634,6 +4646,22 @@ fn gen2_enum_decl(node) {
     if tag_bits < 8 {
         parts.push("// @compact: tag fits in " + to_string(tag_bits) + " bit(s), mask=0x" + gen2_hex_mask(tag_bits) + "\n")
     }
+    // RFC-020 A4: detect any variant with a payload type (non-empty `items`).
+    // Tag macros stay as `hexa_int(N)` (HexaVal) for both forms; payload-bearing
+    // variants are constructed at use-sites as a HexaVal array `[tag, payload]`
+    // (see gen2_expr EnumPath emission + gen2_match_cond / gen2_match_ternary).
+    let mut _has_payload = false
+    let mut _pi = 0
+    while _pi < vc {
+        let _pv = node.variants[_pi]
+        if type_of(_pv.items) != "string" && len(_pv.items) > 0 {
+            _has_payload = true
+        }
+        _pi = _pi + 1
+    }
+    if _has_payload {
+        parts.push("// @payload: enum " + name + " carries single-field payload variants — runtime form is HexaVal array [tag, payload]\n")
+    }
     let mut i = 0
     while i < vc {
         let v = node.variants[i]
@@ -4701,6 +4729,18 @@ fn gen2_match_stmt(node, depth) {
             }
         }
 
+        // RFC-020 A4: emit the payload binding `HexaVal <var> = hexa_index_get(__match_val, hexa_int(1));`
+        // as the FIRST line inside this arm's block, when the EnumPath pattern
+        // carried a binder (single-field payload only — `Shape::Circle(r)`).
+        // pat.left is the inner Ident pattern node; `_` is not a binding.
+        if type_of(pat) != "string" && pat.kind == "EnumPath" && type_of(pat.left) != "string" && pat.left.kind == "Ident" {
+            let _bn = pat.left.name
+            if type_of(_bn) == "string" && _bn != "_" {
+                let _pad3 = gen2_indent(depth + 2)
+                chunks.push(_pad3 + "HexaVal " + _hexa_mangle_ident(_bn) + " = hexa_index_get(__match_val, hexa_int(1));\n")
+            }
+        }
+
         // Arm body
         let mut bi = 0
         while bi < len(arm.body) {
@@ -4739,6 +4779,14 @@ fn gen2_match_cond(pat, scrutinee_var) {
     }
     if k == "EnumPath" {
         let enum_const = pat.name + "_" + pat.value
+        // RFC-020 A4: payload-binder pattern (e.g. `Shape::Circle(r)`) — pat.left
+        // holds the inner pattern node. The scrutinee then carries the runtime
+        // array form `[tag, payload]`; compare the *tag only* (index 0), gated
+        // on HX_IS_ARRAY so a bare-tag unit value can't crash. Plain (no-binder)
+        // variants keep the original whole-value equality test.
+        if type_of(pat.left) != "string" {
+            return "(HX_IS_ARRAY(" + scrutinee_var + ") && hexa_truthy(hexa_eq(hexa_index_get(" + scrutinee_var + ", hexa_int(0)), " + enum_const + ")))"
+        }
         return "hexa_truthy(hexa_eq(" + scrutinee_var + ", " + enum_const + "))"
     }
     // Fallback: compare with the expression
@@ -4768,7 +4816,18 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
     let is_wildcard = (type_of(pat) != "string" && pat.kind == "Wildcard")
 
     // Get the value from the arm body (last expr)
-    let val = gen2_arm_value(arm.body)
+    let mut val = gen2_arm_value(arm.body)
+
+    // RFC-020 A4: if the EnumPath pattern carries a payload binder, the arm
+    // value may reference it (e.g. `Shape::Circle(r) -> r * r * 3`). A ternary
+    // chain can't introduce a C local mid-expression, so wrap the value in a
+    // GCC statement-expression that binds the var from `scrutinee_c[1]`.
+    if type_of(pat) != "string" && pat.kind == "EnumPath" && type_of(pat.left) != "string" && pat.left.kind == "Ident" {
+        let _bn = pat.left.name
+        if type_of(_bn) == "string" && _bn != "_" {
+            val = "({ HexaVal " + _hexa_mangle_ident(_bn) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(1)); (" + val + "); })"
+        }
+    }
 
     if is_wildcard || idx == len(arms) - 1 {
         if is_wildcard {

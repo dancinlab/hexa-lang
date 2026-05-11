@@ -42,21 +42,36 @@
 - id: rfc020-enum-payload-variants
   source_commit: pending
   source_files:
-    - self/parser.hexa
+    - self/parser.hexa            # A1 construction + A4: payload_expr on match-pattern EnumPath nodes
     - self/type_checker.hexa
-    - self/native/hexa_cc.c
+    - self/codegen_c2.hexa        # A4 SSOT — construction, gen2_match_cond, gen2_match_stmt arm-bind, gen2_match_ternary stmt-expr wrap, gen2_enum_decl @payload header
+    - self/native/hexa_cc.c       # regenerated from the SSOT modules (was hand-patched at a85b8a1c — regen-unsafe; now SSOT-derived)
+    - self/native/hexa_v2         # regenerated
     - self/test_enum_payload_full.hexa
   compiler_impact: |
-    A1+A2+A3 already landed (commits 3c8be96c + 005d5427 bundled).
-    A4 hexa_cc.c codegen partial (commit a85b8a1c) — match-side
-    payload extraction gap remaining.
-    A5 regression test self/test_enum_payload_full.hexa: 15-case
-    target; stale-build 5/15 → current rebuild target 15/15.
-  selftest_delta: "RFC-020 regression suite (15 cases)"
+    A1+A2+A3 landed (commits 3c8be96c + 005d5427 bundled). A4 codegen
+    landed: ORIGINALLY hand-applied to the GENERATED self/native/hexa_cc.c
+    at a85b8a1c and never back-ported to its source-of-truth
+    self/codegen_c2.hexa, so the May-11 `hexa cc --regen` (ddb21f21 /
+    64dc8488) overwrote it — any `match` arm with an enum-payload binding
+    re-regressed (broken C: undeclared arm-binding identifiers). Now ported
+    into the SSOT self/codegen_c2.hexa (+ a defensive `payload_expr: ""`
+    on self/parser.hexa's match-pattern EnumPath node), regen'd, rebuilt;
+    regen-safe henceforth.
+    A5 regression test self/test_enum_payload_full.hexa: 15/15 PASS on
+    BOTH the codegen/AOT path (`hexa build`) and the interpreter path
+    (`hexa run`), byte-identical stdout (RFC-020 §7).
+  selftest_delta: "RFC-020 regression suite — 15/15 codegen + 15/15 interp; test_enum_variant/construct/path + 7gate_smoke green"
   downstream_consumer: |
-    wilson core port G1 gate; RFC-020 stdlib usage across all hexa
-    consumers that adopt sum-type idioms.
-  status: in_progress
+    wilson core port G1 gate (the `AsmEvent` match-side enum-payload
+    codegen errors — undeclared `tc`/`u`/`s`/`e` — are now resolved;
+    wilson build advances past the A4 wall to gap (b), stdlib-by-ref);
+    RFC-020 stdlib usage across all hexa consumers that adopt sum-type idioms.
+  status: applied
+  applied_at: 2026-05-11
+  note: |
+    A4 codegen is now in the SSOT (self/codegen_c2.hexa) — not just the
+    generated self/native/hexa_cc.c — and survives `hexa cc --regen`.
   background_task: 72  # RFC-020 A4/A5 agent
 
 - id: wilson-pi-port-6-gap-prereq
@@ -191,6 +206,14 @@
     hits a NEW C-compile wall: (a) match-arm enum-payload bindings not
     emitted = RFC-020 A4 codegen gap (see `rfc020-enum-payload-variants`,
     BG task 72), and (b) some stdlib functions referenced by-value
-    (`cancel_new`, `cancel_is_cancelled`, `read_line_stdin`, `split_ws`)
-    are undeclared in the transpiled C — flatten-coverage or AOT-builtin
-    gap. Full write-up: incoming/notes/2026-05-11-wilson-build-codegen-wall.md.
+    (`cancel_new`, `cancel_is_cancelled`, `read_line_stdin`, `split_ws`,
+    `char_at`, `trim`, `popen_lines`) are undeclared in the transpiled C
+    — flatten-coverage or AOT-builtin gap.
+    UPDATE 2026-05-11: gap (a) [RFC-020 A4] FIXED — A4 codegen restored in
+    the SSOT self/codegen_c2.hexa + regen'd hexa_cc.c/hexa_v2 + re-promoted
+    hexa_real; wilson's `AsmEvent` enum-payload match no longer produces
+    undeclared-identifier errors (verified: build/artifacts/wilson.c now
+    emits `HexaVal <bind> = hexa_index_get(__match_val, hexa_int(1))` arm
+    bindings + `// @payload:` header). Only gap (b) [stdlib-by-ref
+    undeclared] remains — a separate flatten/AOT-builtin issue.
+    Full write-up: incoming/notes/2026-05-11-wilson-build-codegen-wall.md.
