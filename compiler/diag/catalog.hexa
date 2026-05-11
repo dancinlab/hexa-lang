@@ -121,6 +121,33 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
+        code: "HX1101",
+        title: "unbound ident in lower",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "unbound identifier `{name}` in lower (no binding visible from this scope)",
+        explain: "The HIR→MIR lowering pass tried to resolve an identifier reference but no local binding for it exists in the lowering scope chain. Stage1 punch list C5 — previously the miss silently produced `_const_int_op(0)` (a zero-valued operand), which masked cross-file resolution failures introduced by the Gap 1 splice. Failing fatally here surfaces the unbound name as a precise S2 diagnostic instead of letting zero-typed MIR flow downstream to codegen.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX1102",
+        title: "unsupported pattern shape in lower",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "unsupported pattern kind `{kind}` in match-arm lower (Stage1 punch list C10 — extend pattern lowering or emit via ast_to_hir desugar)",
+        explain: "The HIR→MIR match-arm lowering currently handles wildcard, ident, enum_path, literal_int, literal_string, and struct_pattern. Any other pattern shape is silently coerced into a general operand-equality test today, which can be wrong (e.g. ranges, or-patterns, struct-field patterns once the parser learns them). Stage1 punch list C10 — emit HX1102 instead of relying on an operand fallback so the missing pattern kind shows up as a diagnostic.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX1103",
+        title: "unhandled HExpr kind in lower",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "unhandled HExpr kind `{kind}` in hir_to_mir (default fall-through produced no MIR)",
+        explain: "The HIR→MIR lowering pass dispatches on HExpr.kind; unknown kinds previously fell through to a children-recurse-then-return-no-value path that silently produced empty MIR. Stage1 punch list C16 — mirror the Gap 14 lower-diag sink convention: emit HX1103 with the unhandled kind so missing constructs (e.g. growable-array method calls, future for/yield desugarings) surface as a precise S2 diagnostic instead of generating a zero-shaped output.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX1100",
         title: "closure capture not yet supported",
         severity: Severity::Warning,
