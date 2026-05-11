@@ -306,8 +306,29 @@ fn strict_fp_cflags(c_file) {
     return "-ffp-contract=off -fno-fast-math -fno-associative-math -fno-reciprocal-math -fsignaling-nans "
 }
 
+// #12 leftover (3) — wilson-needs-hexa-build-out-of-tree: `hexa cc` /
+// `hexa cc --regen` resolved `self/native/hexa_cc.c`, the SSOT modules and
+// the `-I` paths *relative to cwd*, so invoking from outside the repo failed
+// (`fatal error: 'runtime.c' file not found`, or `hexa_cc.c` missing). Mirror
+// cmd_build's `__self_dir` resolver: $HEXA_LANG > install_dir_from_argv0() >
+// ./self. Behavior is identical when run from the repo root.
+fn resolve_hxroot() {
+    let __hxroot = env("HEXA_LANG")
+    if len(__hxroot) > 0 && file_exists(__hxroot + "/self/native/hexa_cc.c") {
+        return __hxroot
+    }
+    let __i = install_dir_from_argv0()
+    if len(__i) > 0 && file_exists(__i + "/self/native/hexa_cc.c") {
+        return __i
+    }
+    if file_exists("./self/native/hexa_cc.c") { return "." }
+    // Last resort: keep cwd-relative behavior (will fail loudly downstream).
+    return "."
+}
+
 fn cmd_cc() {
     println("=== Rebuilding hexa_cc (transpiler) ===")
+    let __hxroot = resolve_hxroot()
     // OS 분기: Linux 에서는 glibc 의 POSIX/GNU 확장(strdup, getline 등)을
     //          사용하기 위해 `-D_GNU_SOURCE` 가 필요하고, 수학 심볼 참조
     //          (fmod/sqrt 등) 는 `-lm` 로 링크해야 한다. macOS 는 두 플래그
@@ -824,6 +845,39 @@ fn resolve_module_loader() {
     return ""
 }
 
+// orpheus FEATURE.md O-002 / F-013 — install-relative stdlib discovery.
+//
+// When `hexa run <module>` is invoked from cron/launchd/a subagent it
+// inherits no environment, so HEXA_LANG / HEXA_STDLIB_ROOT are unset and
+// `use "stdlib/*"` previously FATAL'd in the module_loader pre-flatten.
+// Fix: derive the install dir from argv[0] / /proc/self/exe (via
+// install_dir_from_argv0(), already used to locate the interp + the
+// module_loader.hexa source) and pass it down to the module_loader child
+// as HEXA_INSTALL_DIR. module_loader's ml_resolve_stdlib() then probes a
+// fixed install-relative chain (<inst>/stdlib, <inst>/self/stdlib,
+// <inst>/self/../stdlib — which reaches a `self -> <repo>/self` symlink's
+// repo top-level stdlib/ even when <inst> has no stdlib link, e.g.
+// ~/.hx/bin — the FHS <prefix>/share/hexa/stdlib, …) as a *fallback*.
+// HEXA_STDLIB_ROOT / HEXA_LANG still win when set. This obsoletes
+// orpheus's tool/orpheus_hexa_run.sh probe wrapper for the standard
+// ~/.hx/ install.
+//
+// Returns a `HEXA_INSTALL_DIR='<dir>' ` shell prefix (trailing space) to
+// be prepended to the `exec(...)` command that launches the module_loader
+// child, or "" if the install dir isn't derivable or HEXA_INSTALL_DIR is
+// already present in the environment (never clobbered).
+fn module_loader_env_prefix() {
+    // Don't clobber an operator-supplied HEXA_INSTALL_DIR.
+    if len(env_var("HEXA_INSTALL_DIR")) > 0 { return "" }
+    let inst = install_dir_from_argv0()
+    if len(inst) == 0 { return "" }
+    let mut parts = []
+    parts.push("HEXA_INSTALL_DIR='")
+    parts.push(inst)
+    parts.push("' ")
+    return parts.join("")
+}
+
 // 실패 메시지 공통화 — silent exit 0 회귀 재발 방지.
 fn die_no_hexa_v2() {
     println("error: hexa_v2 transpiler binary not found")
@@ -954,7 +1008,9 @@ fn cmd_build(src, out, c_only, target) {
         let __ml = resolve_module_loader()
         if len(__interp) > 0 && len(__ml) > 0 {
             let __expanded = runtime_tmpname("hexa_build_expanded") + ".hexa"
-            let __preproc = "'" + __interp + "' '" + __ml + "' '" + src + "' '" + __expanded + "' 2>&1"
+            // orpheus O-002 / F-013: pass install dir to module_loader (see
+            // module_loader_env_prefix) so stdlib/* resolves env-free.
+            let __preproc = module_loader_env_prefix() + "'" + __interp + "' '" + __ml + "' '" + src + "' '" + __expanded + "' 2>&1"
             println("  [flat] module_loader → " + __expanded)
             let __pair = exec_with_status(__preproc)
             let __pout = __pair[0]
@@ -1355,7 +1411,10 @@ fn cmd_run(file, extra_args) {
             // based filename — nanosecond precision avoids collision across
             // parallel launchd-triggered hexa runs. Saves 1 fork per invocation.
             let expanded = runtime_tmpname("hexa_expanded") + ".hexa"
-            let preproc = "'" + interp + "' '" + ml_source + "' '" + file + "' '" + expanded + "' 2>&1"
+            // orpheus O-002 / F-013: hand the install dir to module_loader so
+            // `use "stdlib/*"` resolves without HEXA_LANG/HEXA_STDLIB_ROOT set.
+            let __ml_env = module_loader_env_prefix()
+            let preproc = __ml_env + "'" + interp + "' '" + ml_source + "' '" + file + "' '" + expanded + "' 2>&1"
             // raw#92 fail-loud: capture rc so loader exit(2) (FATAL module not
             // found) propagates instead of silently falling back to the raw
             // file. exec() drops rc → previous behavior swallowed loader

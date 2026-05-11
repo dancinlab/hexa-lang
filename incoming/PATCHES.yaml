@@ -266,3 +266,64 @@
     `1.2`/`1` are NOT valid *versions* (ok=false) but ARE accepted inside
     *ranges*. Caveats fully documented in stdlib/semver.hexa header +
     stdlib/semver.ai.md.
+
+- id: stdlib-install-relative-discovery
+  source: orpheus recovery/FEATURE.md O-002 / F-013 — hexa_real should probe install-relative stdlib paths so `use "stdlib/*"` works without HEXA_LANG/HEXA_STDLIB_ROOT set (cron/launchd/subagent runs inherit no env); obsoletes tool/orpheus_hexa_run.sh's 6 hardcoded probe paths.
+  trees: [build-driver, install-layout]
+  compiler_impact: |
+    self/module_loader.hexa ml_resolve_stdlib() gains a 3rd resolution
+    step: an install-relative + cwd + system fallback chain, tried only
+    after HEXA_STDLIB_ROOT (step 1) and HEXA_LANG (step 2) both miss —
+    they keep top priority, the new chain is a pure fallback. Anchor =
+    HEXA_INSTALL_DIR; new env_hexa_install_dir() reads that env var and,
+    when unset, SELF-DERIVES it from args()[1] (this script's own path,
+    handed to it by the interp) → grandparent dir = the install dir. So
+    the fix is live the moment module_loader.hexa is updated — no
+    hexa_real rebuild required (module_loader is interpreted at run time).
+    self/main.hexa cmd_run + cmd_build also gained module_loader_env_prefix()
+    which prepends `HEXA_INSTALL_DIR='<install_dir_from_argv0()>' ` to the
+    module_loader child's command (never clobbers an existing one) — a
+    belt-and-suspenders that also covers the FHS-install case where
+    module_loader.hexa isn't co-located under <inst>/self/; it takes
+    effect on the next routine hexa_real rebuild. No runtime.c change —
+    `use "stdlib/*"` resolves entirely in the module_loader pre-flatten,
+    not at interpret time, so the .c regen/rebuild path was not touched.
+  selftest_delta: "0 (env -u HEXA_LANG -u HEXA_STDLIB_ROOT RESOURCE_LOCAL_HEXA=1 hexa_real run recovery/module/launch_brainflayer.hexa --list-jobs → __ORPHEUS_RECOVERY_LAUNCH_BRAINFLAYER__ PASS list-jobs count=6; resolves stdlib/c_ffi transitively via the install-relative chain; HEXA_LANG-set and HEXA_STDLIB_ROOT-set runs still pass — no regression)"
+  downstream_consumer: orpheus recovery modules (launch_brainflayer, launch_brainwallet_gpu_native, recovery/module/duckdb_native, etc.) run from cron/subagent with empty env — they `use "stdlib/c_ffi"`; tool/orpheus_hexa_run.sh's hardcoded probe wrapper is no longer needed for the standard ~/.hx/ install. Generally: any hexa-lang consumer of stdlib/ invoked outside a HEXA_LANG-set shell.
+  status: applied
+  applied_at: 2026-05-11
+  opened: 2026-05-11
+  note: |
+    Probe chain added to ml_resolve_stdlib (in ml_stdlib_install_candidates,
+    tried in order, first hit wins; <inst> = HEXA_INSTALL_DIR or self-derived):
+      <inst>/stdlib                  — binary co-located with a checkout
+      <inst>/self/stdlib
+      <inst>/../stdlib               — binary at <repo>/build/
+      <inst>/../self/stdlib
+      <inst>/self/../stdlib          — reaches a `self -> <repo>/self` symlink's
+      <inst>/self/../self/stdlib       repo-top-level stdlib/ even when <inst>
+                                       itself has no stdlib link (the ~/.hx/bin/
+                                       case: ~/.hx/bin/self -> <repo>/self, but
+                                       no ~/.hx/bin/stdlib)
+      <inst>/../share/hexa/stdlib    — FHS install (<prefix>/bin/hexa_real)
+      <inst>/share/hexa/stdlib
+      ./stdlib, ./self/stdlib        — cwd probe, only when ./self/runtime.c
+                                       exists (we're standing in a checkout)
+      /usr/local/share/hexa/stdlib   — system installs, last resort
+      /opt/hexa/stdlib
+    Applied to BOTH the `stdlib/...` and `self/stdlib/...` import prefixes
+    (both strip to <rest> via ml_strip_stdlib_prefix). The FATAL "module not
+    found" diagnostic now also prints HEXA_INSTALL_DIR and the full
+    install-relative probe list, plus a hint when the install dir wasn't
+    derivable.
+    INSTALL-LAYOUT FINDING (follow-up, not a blocker): the standard ~/.hx/
+    install does NOT place stdlib/ anywhere directly under ~/.hx/ — only a
+    `~/.hx/bin/self -> <repo>/self` symlink exists, and c_ffi.hexa lives in
+    the *top-level* stdlib/ (not self/stdlib/). The `<inst>/self/../stdlib`
+    leg above bridges this (resolves through the `self` symlink to the repo
+    root, then ../stdlib). A cleaner long-term fix would have `hx install`
+    drop a `~/.hx/bin/stdlib -> <repo>/stdlib` symlink (or copy stdlib/ into
+    `~/.hx/share/hexa/stdlib`) so the FHS leg catches it without relying on
+    the `self`-symlink-relative `..` trick. Left as a separate install-layer
+    item; the probe chain here covers the in-repo, build-sibling, ~/.hx/bin
+    (via the `self` symlink) and FHS layouts already.

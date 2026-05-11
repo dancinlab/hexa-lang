@@ -361,6 +361,47 @@ fn env_hexa_stdlib_root() {
     return env_var("HEXA_STDLIB_ROOT")
 }
 
+// HEXA_INSTALL_DIR — install-relative discovery anchor (orpheus FEATURE.md
+// O-002 / F-013). Set by self/main.hexa (cmd_run / cmd_build) from
+// install_dir_from_argv0() — i.e. the directory the `hexa_real` binary
+// (or its symlink target) lives in. Unlike HEXA_LANG / HEXA_STDLIB_ROOT
+// it needs no environment to be set: it's derived from argv[0] /
+// /proc/self/exe. This is the cron/launchd/subagent-friendly fallback
+// that lets `use "stdlib/*"` resolve without operator env config (so
+// orpheus's tool/orpheus_hexa_run.sh probe wrapper is no longer needed).
+// It is a FALLBACK ONLY — HEXA_STDLIB_ROOT and HEXA_LANG keep top priority.
+//
+// Self-derivation fallback (works without any hexa_real rebuild): the
+// interp invokes this script as `<interp> <…>/self/module_loader.hexa
+// <input> <output>`, so args()[1] is THIS file's path → its grandparent
+// (`<…>/self/..`) is the install dir. That covers the case where main.hexa
+// hasn't yet been rebuilt to pass HEXA_INSTALL_DIR (module_loader.hexa is
+// interpreted at run time, so a fix here is live immediately). Env var
+// (when present) wins over self-derivation — an operator/main.hexa override.
+fn env_hexa_install_dir() {
+    let e = env_var("HEXA_INSTALL_DIR")
+    if len(e) > 0 { return e }
+    return ml_self_install_dir()
+}
+
+// Derive the install dir from THIS script's own path (args()[1]). Returns
+// "" if argv shape is unexpected. args() layout when run via the interp:
+//   [0] = interp binary, [1] = module_loader.hexa path, [2] = input,
+//   [3] = output  (see the CLI block at the bottom of this file).
+// dirname(args()[1]) = `<inst>/self` → its dirname = `<inst>`.
+fn ml_self_install_dir() {
+    let av = args()
+    if len(av) < 2 { return "" }
+    let self_path = av[1]
+    if len(self_path) == 0 { return "" }
+    let self_dir = ml_dirname(self_path)            // e.g. <inst>/self
+    if len(self_dir) == 0 { return "" }
+    if self_dir == "." { return "." }
+    let inst = ml_dirname(self_dir)                 // e.g. <inst>
+    if len(inst) == 0 { return "" }
+    return inst
+}
+
 // Strip a known stdlib prefix from `imp`. Returns "" if no prefix matches.
 //   "stdlib/ai_err"      → "ai_err"
 //   "self/stdlib/ai_err" → "ai_err"
@@ -403,6 +444,69 @@ fn ml_resolve_stdlib(imp) {
         p2.push(hl) p2.push("/self/stdlib/") p2.push(rest)
         let v2 = ml_try_path_variants(p2.join(""))
         if len(v2) > 0 { return v2 }
+    }
+    // 3. Install-relative fallback (orpheus FEATURE.md O-002 / F-013).
+    //    Only reached when neither HEXA_STDLIB_ROOT nor HEXA_LANG resolved
+    //    — the empty-environment (cron/launchd/subagent) case. Probes a
+    //    fixed chain derived from the `hexa_real` binary location plus a
+    //    couple of system install prefixes. See ml_stdlib_install_candidates.
+    let ir = ml_resolve_stdlib_install_relative(rest)
+    if len(ir) > 0 { return ir }
+    return ""
+}
+
+// Build the ordered list of stdlib-root candidate directories for the
+// install-relative fallback. `inst` = $HEXA_INSTALL_DIR (may be ""). The
+// `self/..` legs cover the layouts where `inst` is `<repo>/build` *or*
+// `<install>/bin` with a `self` symlink into a checkout (e.g. ~/.hx/bin
+// → self -> <repo>/self): `<inst>/self/..` resolves through the symlink
+// to the actual repo root, so `<inst>/self/../stdlib` reaches the
+// top-level stdlib/ that ~/.hx/bin itself doesn't symlink. Order matters:
+// install-co-located checkout first, then build-sibling, then FHS share,
+// then cwd (only when we're standing in a hexa-lang repo), then system.
+fn ml_stdlib_install_candidates(inst) {
+    let mut cands = []
+    if len(inst) > 0 {
+        // (a) binary co-located with a hexa-lang checkout: <inst>/stdlib, <inst>/self/stdlib
+        cands.push(ml_join_path(inst, "stdlib"))
+        cands.push(ml_join_path(inst, "self/stdlib"))
+        // (b) binary at <repo>/build/ (or <install>/bin/ with `self` symlink):
+        //     <inst>/../stdlib, <inst>/../self/stdlib, and via the `self` leg
+        //     <inst>/self/../stdlib (reaches the repo top-level stdlib/ through
+        //     a `self -> <repo>/self` symlink even when <inst> has no stdlib link).
+        cands.push(ml_join_path(inst, "../stdlib"))
+        cands.push(ml_join_path(inst, "../self/stdlib"))
+        cands.push(ml_join_path(inst, "self/../stdlib"))
+        cands.push(ml_join_path(inst, "self/../self/stdlib"))
+        // (c) FHS install: <prefix>/bin/hexa_real → <prefix>/share/hexa/stdlib
+        cands.push(ml_join_path(inst, "../share/hexa/stdlib"))
+        cands.push(ml_join_path(inst, "share/hexa/stdlib"))
+    }
+    // (d) cwd probe — only meaningful when ./self/runtime.c exists (we're
+    //     inside a hexa-lang checkout). Cheap: ml_try_path_variants short-
+    //     circuits on the first miss anyway, but gate it to avoid surprising
+    //     a consumer who happens to have a ./stdlib/ of their own.
+    if file_exists("./self/runtime.c") {
+        cands.push("./stdlib")
+        cands.push("./self/stdlib")
+    }
+    // (e) system installs — last resort.
+    cands.push("/usr/local/share/hexa/stdlib")
+    cands.push("/opt/hexa/stdlib")
+    return cands
+}
+
+fn ml_resolve_stdlib_install_relative(rest) {
+    if len(rest) == 0 { return "" }
+    let inst = env_hexa_install_dir()
+    let cands = ml_stdlib_install_candidates(inst)
+    let n = len(cands)
+    let mut i = 0
+    while i < n {
+        let base = ml_join_path(cands[i], rest)
+        let v = ml_try_path_variants(base)
+        if len(v) > 0 { return v }
+        i = i + 1
     }
     return ""
 }
@@ -870,6 +974,7 @@ fn ml_iter_walk(start_file) {
                         let hl_now = env_var("HEXA_LANG")
                         let sr_now = env_var("HEXA_STDLIB_ROOT")
                         let cwd_now = env_var("PWD")
+                        let inst_now = env_hexa_install_dir()
                         let mut wp = []
                         wp.push("[module_loader] FATAL module not found: ")
                         wp.push(imp)
@@ -880,12 +985,30 @@ fn ml_iter_walk(start_file) {
                         if len(hl_now) > 0 { wp.push(hl_now) } else { wp.push("<unset>") }
                         wp.push("\n    HEXA_STDLIB_ROOT=")
                         if len(sr_now) > 0 { wp.push(sr_now) } else { wp.push("<unset>") }
+                        wp.push("\n    HEXA_INSTALL_DIR=")
+                        if len(inst_now) > 0 { wp.push(inst_now) } else { wp.push("<unset — argv[0]/proc-self-exe install dir not derivable>") }
                         wp.push("\n    project_root=")
                         if len(hl_now) > 0 { wp.push(hl_now) } else { wp.push("<none>") }
                         wp.push("\n    caller_dir=")
                         wp.push(caller_dir)
                         wp.push("\n    cwd=")
                         if len(cwd_now) > 0 { wp.push(cwd_now) } else { wp.push("<unset>") }
+                        // Install-relative fallback chain that was attempted (orpheus
+                        // O-002 / F-013) — list it so the diagnostic stays honest when
+                        // the import was a stdlib path and all of HEXA_*/install probes
+                        // missed.
+                        let strip_for_msg = ml_strip_stdlib_prefix(imp)
+                        if len(strip_for_msg) > 0 {
+                            wp.push("\n    install-relative stdlib roots tried (HEXA_INSTALL_DIR-derived + system):")
+                            let cm = ml_stdlib_install_candidates(inst_now)
+                            let cmn = len(cm)
+                            let mut cmi = 0
+                            while cmi < cmn {
+                                wp.push("\n      ")
+                                wp.push(ml_join_path(cm[cmi], strip_for_msg))
+                                cmi = cmi + 1
+                            }
+                        }
                         // Ghost-path hint: `self/core/...` was a 36-callsite typo
                         // for `self/stdlib/...` (see hive raw#92 ghost-import fix).
                         if ml_starts_with(imp, "self/core/") {
@@ -893,6 +1016,13 @@ fn ml_iter_walk(start_file) {
                             wp.push("\n        did you mean self/stdlib/")
                             wp.push(imp.substring(10, len(imp)))
                             wp.push("?")
+                        }
+                        if len(inst_now) == 0 {
+                            wp.push("\n  hint: HEXA_INSTALL_DIR is unset — the running binary's install dir")
+                            wp.push("\n        couldn't be derived from argv[0] / /proc/self/exe, so the")
+                            wp.push("\n        install-relative stdlib probe was skipped. Set HEXA_LANG or")
+                            wp.push("\n        HEXA_STDLIB_ROOT, or run via a `hexa_real` that can resolve its")
+                            wp.push("\n        own path.")
                         }
                         eprintln(wp.join(""))
                         exit(2)
