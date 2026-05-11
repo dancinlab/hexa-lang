@@ -977,6 +977,17 @@ fn _emit_hx4001(sp: Span, out: array) {
     out.push(diag_emit(b))
 }
 
+// Stage1 punch list C4 — unknown callee in a call expression. Mirrors
+// bind.hexa's HX2001 shape (no suggest field — bind owns did-you-mean).
+// Only fired when the call's callee is NOT a plain Ident, since bind
+// already covers the Ident-miss case and would otherwise double-fire.
+fn _emit_hx2001_callee(name: string, sp: Span, out: array) {
+    let mut b = diag_new("HX2001")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "name", name)
+    out.push(diag_emit(b))
+}
+
 // Stage1 Gap 2 — duplicate pub symbol across files.
 fn _emit_hx3010(name: string, first_file: string, second_file: string, sp: Span, out: array) {
     let mut b = diag_new("HX3010")
@@ -1323,8 +1334,17 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 
     // Callee must be a fn type.
     if callee_t.kind != "fn" {
-        // Callee not resolved as fn — skip arity/argument checks; return value
-        // type unknown.
+        // Stage1 punch list C4 — previously a silent miss. Without a
+        // diagnostic the typo passes through to lower → MIR with a `?`
+        // type, then codegen blows up far from the user-visible site.
+        // bind.hexa already emits HX2001 for plain-Ident misses (with
+        // did-you-mean), so we gate on `callee is non-Ident` to avoid
+        // double-firing on the same name. Field / Index / Call-result /
+        // other non-Ident callees that don't resolve to fn types land
+        // here as the unique source of HX2001.
+        if !_types_is_ident(callee.kind) {
+            _emit_hx2001_callee(name, callee.span, out)
+        }
         return _types_empty_type()
     }
 
