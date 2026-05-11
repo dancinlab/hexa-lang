@@ -1,11 +1,14 @@
 # 2026-05-12 — atlas.n6 absorption session log
 
-> Session note per operator directive ("이번 세션 진행 내역을 .md 로 저장한 뒤 종료하세요. AI agent 는 진행하면서 반드시 md 로 기록을 남겨야 합니다"). Connection dropped mid-monitor; this is the recovery record of what landed, what was reverted, and what is left.
+> Session note per operator directive ("이번 세션 진행 내역을 .md 로 저장한 뒤 종료하세요. AI agent 는 진행하면서 반드시 md 로 기록을 남겨야 합니다"). Connection dropped mid-monitor; this note picks up the recovery, smoke, commit, and follow-up cycle.
 
 **Date:** 2026-05-12
-**Driver doc:** `ATLAS_N6_RETIREMENT_PLAN.md` (root copy added 05:11; identical to `doc/atlas_n6_retirement_plan.md`)
+**Driver doc:** `doc/atlas_n6_retirement_plan.md` (now with §0b absorption closure section)
 **Goal:** make external `~/core/nexus/n6/atlas.n6` unnecessary by absorbing the SSOT into the hexa-lang compile-time embed (per SPEC.md §2.2 / RFC-017 §4.5).
-**Outcome:** embed regenerated with real atlas data (6081 nodes, sha256 `2efce3bb…`). Uncommitted. Smoke test + downstream callers not yet verified.
+**Outcome:** Absorption functionally closed across three commits:
+- `0db952a2` — `embedded.gen.hexa` regen (6081 nodes, sha256 `2efce3bb…`) + `static_index_test.hexa` repinned to real stable IDs (`n`, `consciousness_structure`). Smoke 9/9 PASS.
+- `150e0220` — `self/hexa_full.hexa::file_size` GNU-first fix (root cause of the 30-min regen friction). Source-only; deployed interp picks it up at next re-promote.
+- `2696ba7e` — retirement plan §0b — absorption closure doc with sha256 pin + deferred-step mapping.
 
 ## A. Misdirection (reverted)
 
@@ -73,20 +76,35 @@ Working tree at session close:
 ?? ATLAS_N6_RETIREMENT_PLAN.md           ← root copy of doc/, can be removed if doc/ is canonical
 ```
 
-## C. Open work for next session
+## C. Follow-up status (post-closure)
 
-1. **Smoke**: `hexa run compiler/atlas/static_index_test.hexa` — must pass on the new 6081-node embed (was passing on 8-node fixture; structure unchanged, only data size).
-2. **Downstream parser regression**: every `static_index` consumer must still resolve known IDs. Spot-check at least `compiler/atlas/merger.hexa` + `compiler/diag/catalog.hexa` + `compiler/discover/promote.hexa`.
-3. **Then commit** `compiler/atlas/embedded.gen.hexa` (single-file commit; message should pin sha256 `2efce3bb…` so future regens are byte-comparable).
-4. **Path audit** — strings I saw still referencing the external file (`LC_ALL=C grep -rln 'atlas\.n6\|"\.n6"\|nexus/n6' compiler/ self/ tool/`):
-   - `tool/foundation_axiom_lock.hexa` (hard `/Users/ghost/core/canon/atlas/atlas.n6` — bit-rot, also surfaces in `drill_classify.hexa`)
-   - `compiler/discover/promote.hexa` + `promote_smoke.hexa` (these *write* `.n6` shards to a stage dir, different concern)
-   - `compiler/diag/catalog.hexa`, `compiler/atlas/parser.hexa`, several others — verify each is "reads the embed via static_index" vs "still calls `load_atlas(file)`"
-   Once the embed is committed, the foundation_axiom hash-anchor can move to ATLAS_HASH (already embedded) and the external path constants are dead.
-5. **Stat / locale portability** — the regen friction in §B is a real bug for any Linux user, not just this session. `stdlib/portable_fs::file_size` should:
-   - force `LC_ALL=C` internally (don't trust caller env)
-   - detect host stat flavor and emit `-c %s` (GNU) vs `-f %z` (BSD), not assume BSD
-   File a follow-up; this blocks `hexa run tool/atlas_embed_gen.hexa` on any non-mac, non-C-locale host.
+1. ✅ **Smoke** — `compiler/atlas/static_index_test.hexa` 9/9 PASS on the new 6081-node embed (commit `0db952a2`). Two FAILs caused by fixture-only IDs in the test (`alpha`, `addition-commutative`) → repinned to real stable anchors (`n` from the [11*] foundation axiom block + `consciousness_structure` from L corpus head).
+2. ✅ **Downstream parser regression** — every hot-path `static_index` consumer accounted for. Hot path = `compiler/main.hexa::_load_atlas → static_atlas()`, `compiler/check/types.hexa` (doc-only ref), `compiler/daemon/server.hexa::atlas.lookup` handler. No live `load_atlas(<file>)` callers in the compiler runtime; the remaining direct callers (`compiler/discover/{promote,promote_smoke,tombstone_smoke}.hexa` + `tool/atlas_embed_gen.hexa`) are staging-shard promotion + regen driver respectively — separate code paths from runtime SSOT.
+3. ✅ **Commit** — `0db952a2` pins sha256 in the title for byte-compare on future regens.
+4. ⏸️ **Path audit (bit-rotted callers)** — `tool/foundation_axiom_lock.hexa:34` + `tool/drill_classify.hexa:36` still reference the macOS-absolute `/Users/ghost/core/canon/atlas/atlas.n6`. Operator reverted the prior path-fix attempt in this session because the goal was absorption, not path hygiene. Now that absorption is done these are pure bit-rot, but the proper fix is option B: refactor to use the embedded `static_atlas()` rather than re-reading the file. Deferred per retirement-plan §0b "후속 사이클 필요".
+5. ✅ **Stat / locale portability** — root-caused: `self/hexa_full.hexa::file_size` builtin tried BSD `stat -f %z` first. On Linux GNU coreutils, `stat -f` is "filesystem info" mode; `%z` is undefined there and GNU emits locale-formatted file metadata to STDOUT (not stderr), so `2>/dev/null` doesn't suppress it. `to_int("  파일: ...")` then fed garbage to merger. Fix `150e0220`: invert ordering (GNU `stat -c %s` first; BSD `stat -f %z` fallback — GNU-only flag means BSD falls through cleanly), add `LC_ALL=C` on both invocations. **Source-only** — deployed `~/.hx/packages/hexa/build/hexa_interp` carries the old logic until next re-promote cycle, so Linux users running `tool/atlas_embed_gen.hexa` between now and that cycle still need:
+
+   ```bash
+   mkdir -p /tmp/stat_shim
+   cat > /tmp/stat_shim/stat <<'SH'
+   #!/bin/bash
+   # Translate macOS BSD `stat -f %z <path>` → GNU `stat --printf '%s' <path>`.
+   if [ "$1" = "-f" ] && [ "$2" = "%z" ]; then
+       /usr/bin/stat --printf '%s' "$3"
+   else
+       /usr/bin/stat "$@"
+   fi
+   SH
+   chmod +x /tmp/stat_shim/stat
+   env LC_ALL=C LANG=C PATH=/tmp/stat_shim:$PATH \
+       $HOME/.hx/packages/hexa/build/hexa_interp tool/atlas_embed_gen.hexa
+   ```
+
+## D. Still-open items (out of this session's scope)
+
+- **Interp re-promote** to pick up `150e0220` — separate `build(stage0): re-promote hexa_interp` cycle, matches pattern of recent `build(stage0): re-promote hexa_real` (7eb93be8) and `dae438ee`.
+- **`foundation_axiom_lock` / `drill_classify` refactor to use embedded `static_atlas()`** — the right form of "absorption" for these tools too. Operator decision pending.
+- **nexus-side `atlas.n6` file lifecycle** — retirement-plan §2 Phase 4 (1-week read-only tombstone observation, then delete) requires confirming no external (non-hexa-lang) callers still read it. Out of hexa-lang's scope.
 
 ## D. Hook friction observed
 
