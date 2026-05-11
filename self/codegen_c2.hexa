@@ -3448,6 +3448,16 @@ fn gen2_expr(node) {
             if name == "sleep_s" {
                 return "hexa_sleep_s(" + gen2_expr(node.args[0]) + ")"
             }
+            // sleep_ms(ms) / sleep_ns(ns) — nanosleep-backed sub-second sleep,
+            // no fork (replaces `exec("sleep 0.1")` ~5-8ms/tick fork in
+            // throttle loops — wilson provider-claude-cli poll loop).
+            // runtime.c: hexa_sleep_ms / hexa_sleep_ns.
+            if name == "sleep_ms" {
+                return "hexa_sleep_ms(" + gen2_expr(node.args[0]) + ")"
+            }
+            if name == "sleep_ns" {
+                return "hexa_sleep_ns(" + gen2_expr(node.args[0]) + ")"
+            }
             if name == "now_monotonic_s" {
                 return "hexa_now_monotonic_s()"
             }
@@ -4027,6 +4037,8 @@ fn gen2_expr(node) {
                 if name == "to_float"        { return "hexa_to_float(" + a0 + ")" }
                 if name == "http_get"        { return "hexa_http_get(" + a0 + ")" }
                 if name == "sleep_s"         { return "hexa_sleep_s(" + a0 + ")" }
+                if name == "sleep_ms"        { return "hexa_sleep_ms(" + a0 + ")" }
+                if name == "sleep_ns"        { return "hexa_sleep_ns(" + a0 + ")" }
                 if name == "exec_replace"    { return "hexa_exec_replace(" + a0 + ")" }
             }
             if len(node.args) == 2 {
@@ -5861,6 +5873,8 @@ fn _is_builtin_name(name) {
     // FIX-A (Anima stdlib unblock, 2026-04-19): 10 cross-project builtins
     if name == "read_stdin" { return true }
     if name == "sleep_s" { return true }
+    if name == "sleep_ms" { return true }
+    if name == "sleep_ns" { return true }
     if name == "now_monotonic_s" { return true }
     if name == "mono_ns" { return true }
     if name == "utc_iso_now" { return true }

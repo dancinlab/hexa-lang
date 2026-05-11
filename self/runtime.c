@@ -7707,6 +7707,39 @@ HexaVal hexa_sleep_s(HexaVal n) {
     return hexa_void();
 }
 
+// sleep_ms(ms): sleep ms milliseconds. nanosleep-backed — no fork. Was
+// `exec("sleep 0.1")` (fork /bin/sh -> exec /bin/sleep -> waitpid, ~5-8ms
+// overhead/tick) in sub-second throttle loops; this is the no-fork primitive.
+// Negative -> clamped to 0 (returns immediately). Loops on EINTR with the
+// remaining time so signal delivery doesn't shorten the sleep. Returns void.
+HexaVal hexa_sleep_ms(HexaVal ms) {
+    int64_t m = HX_IS_INT(ms) ? HX_INT(ms)
+              : HX_IS_FLOAT(ms) ? (int64_t)HX_FLOAT(ms)
+              : (int64_t)hexa_as_num(ms);
+    if (m <= 0) return hexa_void();
+    struct timespec req;
+    req.tv_sec  = (time_t)(m / 1000);
+    req.tv_nsec = (long)((m % 1000) * 1000000L);
+    struct timespec rem;
+    while (nanosleep(&req, &rem) != 0 && errno == EINTR) req = rem;
+    return hexa_void();
+}
+
+// sleep_ns(ns): sleep ns nanoseconds. nanosleep-backed — no fork. Same
+// EINTR-resume semantics as sleep_ms. Negative -> clamped to 0. Returns void.
+HexaVal hexa_sleep_ns(HexaVal ns) {
+    int64_t n = HX_IS_INT(ns) ? HX_INT(ns)
+              : HX_IS_FLOAT(ns) ? (int64_t)HX_FLOAT(ns)
+              : (int64_t)hexa_as_num(ns);
+    if (n <= 0) return hexa_void();
+    struct timespec req;
+    req.tv_sec  = (time_t)(n / 1000000000LL);
+    req.tv_nsec = (long)(n % 1000000000LL);
+    struct timespec rem;
+    while (nanosleep(&req, &rem) != 0 && errno == EINTR) req = rem;
+    return hexa_void();
+}
+
 // now_monotonic_s(): TAG_FLOAT seconds from CLOCK_MONOTONIC (wall-clock
 // elapsed, immune to system clock adjustment). Paired with time_ms()
 // for finer-grained benchmarks.

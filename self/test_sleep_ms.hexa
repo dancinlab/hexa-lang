@@ -1,0 +1,73 @@
+// test_sleep_ms.hexa — sleep_ms(ms) / sleep_ns(ns): nanosleep-backed
+// sub-second sleep, no fork (patch stdlib-subsecond-sleep — wilson
+// provider-claude-cli poll loop). Replaces the old shell-out throttle
+// (`sleep 0.1` via the shell, ~5-8ms fork overhead per tick). Runs
+// identically on the interp path (`hexa run`) and the codegen/AOT path
+// (`hexa_v2 -> clang`).
+//
+// Coverage:
+//   1. sleep_ms(120)  — elapsed ~120ms (> 109, < 250 — generous upper
+//      bound for loaded CI / sshfs)
+//   2. sleep_ms(0)    — returns immediately (< 50ms)
+//   3. sleep_ms(-5)   — clamps to 0, no crash (< 50ms)
+//   4. sleep_ns(50_000_000) — 50ms via the ns primitive (> 39, < 200)
+//
+// Timing source: time_ms() (millisecond wall clock — available on both the
+// interp and codegen paths; the windows below tolerate the wall-clock
+// granularity).
+
+fn elapsed_ms(f) {
+    let t0 = time_ms()
+    f()
+    return time_ms() - t0
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    let d1 = elapsed_ms(fn() { sleep_ms(120) })
+    if d1 > 109 && d1 < 250 {
+        pass = pass + 1
+        println("PASS sleep_ms(120) elapsed=" + to_string(d1) + "ms")
+    } else {
+        fail = fail + 1
+        println("FAIL sleep_ms(120) elapsed=" + to_string(d1) + "ms (want 110..249)")
+    }
+
+    let d2 = elapsed_ms(fn() { sleep_ms(0) })
+    if d2 < 50 {
+        pass = pass + 1
+        println("PASS sleep_ms(0) returns immediately elapsed=" + to_string(d2) + "ms")
+    } else {
+        fail = fail + 1
+        println("FAIL sleep_ms(0) elapsed=" + to_string(d2) + "ms (want < 50)")
+    }
+
+    let d3 = elapsed_ms(fn() { sleep_ms(-5) })
+    if d3 < 50 {
+        pass = pass + 1
+        println("PASS sleep_ms(-5) clamps to 0, no crash elapsed=" + to_string(d3) + "ms")
+    } else {
+        fail = fail + 1
+        println("FAIL sleep_ms(-5) elapsed=" + to_string(d3) + "ms (want < 50)")
+    }
+
+    let d4 = elapsed_ms(fn() { sleep_ns(50000000) })
+    if d4 > 39 && d4 < 200 {
+        pass = pass + 1
+        println("PASS sleep_ns(50_000_000) elapsed=" + to_string(d4) + "ms")
+    } else {
+        fail = fail + 1
+        println("FAIL sleep_ns(50_000_000) elapsed=" + to_string(d4) + "ms (want 40..199)")
+    }
+
+    // backward-compat: sleep(0) must still work (no regression)
+    sleep(0)
+    pass = pass + 1
+    println("PASS sleep(0) still works (backward-compat)")
+
+    println("")
+    println(to_string(pass) + "/" + to_string(pass + fail) + " PASS")
+    if fail > 0 { exit(1) }
+}

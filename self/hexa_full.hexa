@@ -12333,6 +12333,20 @@ fn call_builtin(name, args) {
         sleep_s(args[0])
         return val_void()
     }
+    // sleep_ms(ms) / sleep_ns(ns) — nanosleep-backed sub-second sleep, no
+    // fork. Replaces `exec("sleep 0.1")` (~5-8ms/tick fork) in throttle
+    // loops (wilson provider-claude-cli poll loop). runtime.c parity:
+    // hexa_sleep_ms / hexa_sleep_ns (negatives clamp to 0, EINTR-resume).
+    if name == "sleep_ms" {
+        if len(args) == 0 { return val_void() }
+        sleep_ms(args[0].int_val)
+        return val_void()
+    }
+    if name == "sleep_ns" {
+        if len(args) == 0 { return val_void() }
+        sleep_ns(args[0].int_val)
+        return val_void()
+    }
     // TUI-PRIM L1 (kick T1.A) — interpreter dispatch DEFERRED.
     // The raw POSIX wrappers in self/native/term_ffi.c expose plain-C
     // signatures (int-returning), but interpreter dispatch needs HexaVal-
