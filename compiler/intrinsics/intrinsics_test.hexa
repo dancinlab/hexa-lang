@@ -100,6 +100,36 @@ fn test_path_exists_and_is_dir() {
     assert(!path_is_dir(""), "path_is_dir('') false")
 }
 
+fn test_getcwd() {
+    let d = getcwd()
+    assert(d != "", "getcwd non-empty")
+    assert(d[0] == "/", "getcwd absolute (starts with /)")
+    // cwd() alias must agree.
+    let d2 = cwd()
+    assert(d == d2, "cwd() alias agrees with getcwd()")
+}
+
+fn test_list_dir() {
+    // /tmp exists on every POSIX host and is non-empty after the mkdir_p
+    // test above created /tmp/_hexa_intrinsics_test_dir.
+    let _ = exec("mkdir -p /tmp/_hexa_list_dir_test/x /tmp/_hexa_list_dir_test/y 2>/dev/null")  // @allow-bare-exec
+    let entries = list_dir("/tmp/_hexa_list_dir_test")
+    assert(len(entries) == 2, "list_dir counts two entries")
+    var saw_x = false
+    var saw_y = false
+    for e in entries {
+        if e == "x" { saw_x = true }
+        if e == "y" { saw_y = true }
+    }
+    assert(saw_x && saw_y, "list_dir returns both x and y")
+    // Missing directory -> empty array (not an error).
+    let none = list_dir("/tmp/_hexa_no_such_dir_zzz")
+    assert(len(none) == 0, "list_dir(missing) is []")
+    // Empty path -> empty array.
+    let empty = list_dir("")
+    assert(len(empty) == 0, "list_dir('') is []")
+}
+
 pub fn main() {
     println("# compiler/intrinsics smoke test (v0)")
     test_now_ns()
@@ -108,5 +138,7 @@ pub fn main() {
     test_rm_file()
     test_getenv()
     test_path_exists_and_is_dir()
+    test_getcwd()
+    test_list_dir()
     println("# done")
 }

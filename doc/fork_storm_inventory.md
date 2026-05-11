@@ -33,14 +33,14 @@ is closed at the call site. **pending** = no intrinsic yet.
 | 4    | `test`      |  85   | v0-absorbed   | path / file existence probes                 |
 | 5    | `uname`     |  84   | v0-absorbed   | host / arch detection                        |
 | 6    | `mkdir`     |  78   | v0-absorbed   | directory creation                           |
-| 7    | `pwd`       |  58   | pending       | current working directory                    |
-| 8    | `ls`        |  56   | pending       | directory listing                            |
+| 7    | `pwd`       |  58   | v0-absorbed   | current working directory                    |
+| 8    | `ls`        |  56   | v0-absorbed   | directory listing                            |
 | 9    | `cd`        |  45   | pending       | shell-state path mutation (always paired)    |
 | 10   | `git`       |  38   | pending       | repo metadata (rev-parse, log, status)       |
 
-Cumulative v0-absorbed sites: **638** (160 + 123 + 110 + 85 + 84 + 78).
-Pending in top-10: **197** (58 + 56 + 45 + 38). Long-tail commands not
-counted here.
+Cumulative v0-absorbed sites: **752** (160 + 123 + 110 + 85 + 84 + 78 +
+58 + 56). Pending in top-10: **83** (45 + 38: cd + git). Long-tail
+commands not counted here.
 
 The long tail (wc, grep, cat, cp, basename, dirname, awk, printf, stat, …)
 adds another ~300 calls.
@@ -81,8 +81,8 @@ times in build-hot paths.
 | rm       | `rm_rf(path)` + `rm_file(path)`   | M      | shipped — v0 fork; v1 opendir/unlink FFI; v2 unlink 87 |
 | test     | `path_exists`, `path_is_dir`      | S      | shipped — v0 fork; v1 libc stat; v2 access 21          |
 | echo     | `getenv(name)`                    | S      | shipped — v0 validates name then forks; v1 libc getenv |
-| pwd      | `getcwd()`                        | S      | pending — libc `getcwd()` / Linux 79                   |
-| ls       | `list_dir(path) -> [string]`      | M      | pending — `opendir`/`readdir`; needs allocator         |
+| pwd      | `getcwd()` / `cwd()`              | S      | shipped — v0 fork `pwd`; v1 libc getcwd; v2 syscall 79 |
+| ls       | `list_dir(path) -> [string]`      | M      | shipped — v0 fork `ls -1`; v1 opendir/readdir; v2 217  |
 | cd       | (call-site rewrite)               | M      | pending — most `cd && X` collapses into absolute paths |
 | git      | `git_rev_parse_head()` + small    | L      | pending — keep as exec for v0; eventually parse `.git` |
 | cat      | `read_file(path)`                 | S      | pending — already exists in stdlib for most call sites |
@@ -117,8 +117,12 @@ times in build-hot paths.
    `compiler/discover/*.hexa` call sites — these are in the build hot
    path. Estimated 30 sites, S effort. **Pending (issue #58 + future
    batches).**
-4. Add `getcwd`, `list_dir` as the third batch of intrinsics — covers
-   the next ~114 sites (pwd 58 + ls 56). **Pending.**
+4. Add `getcwd`/`cwd`, `list_dir` as the third batch of intrinsics —
+   covers the next ~114 sites (pwd 58 + ls 56). `getcwd()` forks `pwd`
+   once (logical $PWD, matching every existing `exec("pwd").trim()`
+   call site); `list_dir(path)` forks `ls -1` once with a single-quote-
+   escaped path and splits on newlines (the newline-in-name caveat is
+   documented inline and resolved at v1). **Done 2026-05-11.**
 5. Land L2 (libc FFI) bodies once hexa's C-FFI lands cleanly.
 6. Land L3 syscall bodies once the codegen knows the platform's
    syscall convention. At that point per-build forks = 2 (`as`, `ld`)

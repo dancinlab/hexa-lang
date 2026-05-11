@@ -757,6 +757,10 @@ fork_storm_prevention:
         - getenv
         - path_exists
         - path_is_dir
+      third_batch:
+        - getcwd
+        - cwd        # alias of getcwd, reads better at call sites
+        - list_dir
     L2:
       name: libc_ffi
       meaning: "intrinsic bodies call libc directly via hexa C-FFI; no shell"
@@ -776,12 +780,12 @@ fork_storm_prevention:
       - { name: test,   count:  85, intrinsic: path_exists_path_is_dir, effort: S, status: PARTIALLY_ABSORBED, v0: shell_fork, v1: libc_stat, v2: linux_access_21_stat_4 }
       - { name: uname,  count:  84, intrinsic: host_target,             effort: S, status: PARTIALLY_ABSORBED, v0: shell_fork, v1: compile_time_constant, v2: na_already_constant }
       - { name: mkdir,  count:  78, intrinsic: mkdir_p,                 effort: S, status: PARTIALLY_ABSORBED, v0: shell_fork, v1: libc_mkdir_walk, v2: linux_mkdir_83_mkdirat_258 }
-      - { name: pwd,    count:  58, intrinsic: getcwd,                  effort: S, status: PENDING }
-      - { name: ls,     count:  56, intrinsic: list_dir,                effort: M, status: PENDING }
+      - { name: pwd,    count:  58, intrinsic: getcwd,                  effort: S, status: PARTIALLY_ABSORBED, v0: shell_fork, v1: libc_getcwd, v2: linux_syscall_79 }
+      - { name: ls,     count:  56, intrinsic: list_dir,                effort: M, status: PARTIALLY_ABSORBED, v0: shell_fork, v1: opendir_readdir_FFI, v2: linux_getdents64_217 }
       - { name: cd,     count:  45, intrinsic: call_site_rewrite,       effort: M, status: PENDING }
       - { name: git,    count:  38, intrinsic: keep_exec_v0,            effort: L, status: PENDING }
-    absorbed_site_count_v0: 638  # 160+123+110+85+84+78 — categories with v0 intrinsic shipped
-    pending_site_count:     197  # 58+56+45+38 — categories awaiting future batches
+    absorbed_site_count_v0: 752  # 160+123+110+85+84+78+58+56 — categories with v0 intrinsic shipped
+    pending_site_count:      83  # 45+38 (cd+git) — categories awaiting future batches
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stdlib evolution policy (Decision 2026-05-09)

@@ -234,6 +234,68 @@ pub fn path_is_dir(path: string) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// getcwd()
+//
+// Return the absolute path of the current working directory, or "" if it
+// cannot be determined (e.g. the cwd was unlinked underneath us).
+//
+// v0 (this file):  forks `pwd` exactly once and trims. `pwd` is a shell
+//                  builtin, so this is a single fork with no PATH lookup;
+//                  it reports the *logical* cwd ($PWD) which matches how
+//                  every existing call site uses `exec("pwd").trim()`.
+// v1 (native):     libc getcwd(buf, size); pure syscall wrapper, no shell.
+// v2 (raw):        Linux getcwd(2) syscall 79 — args: (buf_ptr: i64,
+//                  size: i64); returns the byte length written (negative
+//                  on error). Darwin: __getcwd / getcwd trap. The caller
+//                  owns a stack buffer of PATH_MAX bytes.
+// ─────────────────────────────────────────────────────────────────────────────
+pub fn getcwd() -> string {
+    // @allow-bare-exec — v0 intrinsic body forks `pwd` exactly once.
+    let p = exec("pwd 2>/dev/null").trim()
+    return p
+}
+
+// Alias: `cwd()` reads more naturally at most call sites. Same semantics.
+pub fn cwd() -> string {
+    return getcwd()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// list_dir(path)
+//
+// Return the names of the entries directly inside directory `path`, as an
+// array of strings (NOT including "." or ".."). Returns an empty array if
+// `path` is empty, does not exist, or is not a directory — callers that
+// need to distinguish "empty dir" from "no such dir" should pair this with
+// `path_is_dir(path)`.
+//
+// LIMITATION (v0): the `ls -1` shellout loses any entry whose name contains
+// a newline character. That is inherent to the line-delimited shape and is
+// fixed at v1 (readdir(3) returns the raw bytes). Entry names with embedded
+// newlines are vanishingly rare on the trees this compiler walks; the same
+// caveat is documented on the interpreter's `list_dir` builtin.
+//
+// v0 (this file):  forks `ls -1 '<path>' 2>/dev/null`, trims, splits on
+//                  newline. The path is single-quote-escaped so embedded
+//                  apostrophes cannot break out of the shell quoting.
+// v1 (native):     opendir(path) / readdir() loop / closedir() via libc
+//                  FFI; needs the allocator for the result array. Skips
+//                  d_name == "." and "..".
+// v2 (raw):        Linux getdents64(2) syscall 217 against an O_DIRECTORY
+//                  fd from openat(2) 257; Darwin getdirentries(2). We
+//                  decode the `struct linux_dirent64` records inline and
+//                  push d_name onto the result array, skipping "." / "..".
+// ─────────────────────────────────────────────────────────────────────────────
+pub fn list_dir(path: string) -> [string] {
+    if path == "" { return [] }
+    let q = path.replace("'", "'\\''")
+    // @allow-bare-exec — v0 intrinsic body forks `ls -1` exactly once.
+    let raw = exec("ls -1 '" + q + "' 2>/dev/null").trim()
+    if raw == "" { return [] }
+    return raw.split("\n")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Internal helper — minimal numeric parser. Stage0 stdlib `parse_i64`
 // has surface drift across the bootstrap; we vendor a tiny one to keep
 // the intrinsics module self-contained.
