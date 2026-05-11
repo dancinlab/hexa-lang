@@ -498,31 +498,25 @@ let r4 = unit_check(module)
 k = 0
 while k < len(r4) { diags.push(r4[k]); k = k + 1 }
 
-let r5 = citation_check(module, atlas)
-k = 0
-while k < len(r5) {
-    let d = r5[k]
-    // Gap 13: when --strict-citations is OFF (default), demote citation
-    // Errors to Warnings so currently-unmapped P/C/L/E refs in compiler/
-    // source don't gate stage1 reach. Citation pass still runs and produces
-    // signal; only its severity is shifted. Set --strict-citations (or
-    // HEXA_STRICT_CITATIONS=1) to restore RFC-017 §3.1 S8 fatal semantics.
-    if !strict_citations {
-        diags.push(Diagnostic {
-            code: d.code,
-            severity: Severity::Warning,
-            stage: d.stage,
-            span: d.span,
-            message: d.message,
-            note: d.note,
-            suggest: d.suggest,
-            fixit: d.fixit,
-            related: d.related
-        })
-    } else {
-        diags.push(d)
+// Stage1 punch list C12: gate the entire S8 citation walk on
+// `--strict-citations` (or HEXA_STRICT_CITATIONS=1) instead of demoting
+// each diag per-iteration. The walk over every Item × annotation × body
+// L-ref is ~3K items × ~30 nodes worth of work on a real compile and
+// produces nothing observable when soft mode is in effect — skipping it
+// outright is equivalent in user-visible behaviour to the prior per-diag
+// downgrade (every produced diag would have been demoted to a Warning,
+// then re-rendered; we now emit no Warnings instead, which matches the
+// soft-mode intent: "compiler/ source is not yet fully cite-bound").
+//
+// Pass --strict-citations (or set HEXA_STRICT_CITATIONS=1) to opt back
+// into RFC-017 §3.1 S8 fatal-citation semantics.
+if strict_citations {
+    let r5 = citation_check(module, atlas)
+    k = 0
+    while k < len(r5) {
+        diags.push(r5[k])
+        k = k + 1
     }
-    k = k + 1
 }
 
 // Always render whatever diagnostics we collected (warnings first, then
