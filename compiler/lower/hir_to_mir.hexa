@@ -483,7 +483,11 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     if k == "ident" {
         let id = _mir_lookup(ctx, e.text)
         if id < 0 {
-            return _value(ctx, _const_int_op(0))
+            // Stage1 punch list C5 — unbound ident in lower is fatal.
+            // Previously returned `_const_int_op(0)`, masking cross-file
+            // resolution failures introduced by the Gap 1 splice.
+            _emit_hx1101(e.text, e.span)
+            return _no_value(ctx)
         }
         return _value(ctx, _local_op(id))
     }
