@@ -9019,6 +9019,14 @@ typedef struct {
     int   buf_len;      /* current length */
     int   eof;
     int   in_use;
+    /* v1.3 (2026-05-11, wilson tool-core ESC-cancel): own child pid so
+       exec_stream_kill can SIGTERM->SIGKILL the whole process *group*.
+       _async forks /bin/sh -c cmd directly (setpgid(0,0) in the child)
+       instead of popen(), so pid == child sh pid == the group leader pgid.
+       pid <= 0 -> legacy popen fallback (fork/pipe failed): no pid, so
+       exec_stream_kill on that slot is best-effort fclose only & returns
+       -1 (raw 91 honest C3 - prompt-kill needs the fork path). */
+    pid_t pid;
 } HexaStreamSlot;
 static HexaStreamSlot _hexa_stream_slots[HEXA_STREAM_SLOT_COUNT];
 static int _hexa_stream_slots_init = 0;
@@ -9033,6 +9041,7 @@ static void _hexa_stream_slots_ensure_init(void) {
         _hexa_stream_slots[i].buf_len = 0;
         _hexa_stream_slots[i].eof = 0;
         _hexa_stream_slots[i].in_use = 0;
+        _hexa_stream_slots[i].pid = (pid_t)-1;
     }
     _hexa_stream_slots_init = 1;
 }
@@ -9052,14 +9061,52 @@ HexaVal hexa_exec_stream_async_impl(HexaVal cmd) {
         if (!_hexa_stream_slots[slot].buf) return hexa_int((int64_t)-1);
         _hexa_stream_slots[slot].buf_cap = HEXA_STREAM_LINE_BUF_INITIAL;
     }
-    // 2026-05-06 — POSIX fork buffer flush before popen (mirrors hexa_exec)
+    // 2026-05-06 — POSIX fork buffer flush before fork/popen (mirrors hexa_exec)
     fflush(NULL);
-    FILE* fp = popen(cmd_s, "r");
-    if (!fp) return hexa_int((int64_t)-1);
+    // v1.3 (2026-05-11): own the child pid so exec_stream_kill can SIGKILL the
+    // whole process group. fork() + setpgid(0,0) in the child + exec /bin/sh
+    // -c cmd; parent keeps the read end of a pipe (matches popen("r") FILE*
+    // semantics). On any fork/pipe step failure we fall back to popen() with
+    // pid = -1 (exec_stream_kill on that slot then degrades to fclose + -1).
+    FILE* fp = NULL;
+    pid_t child_pid = (pid_t)-1;
+    {
+        int pipefd[2];
+        if (pipe(pipefd) == 0) {
+            pid_t pid = fork();
+            if (pid == 0) {
+                // child
+                setpgid(0, 0);                 // own process group -> killpg target
+                close(pipefd[0]);
+                if (pipefd[1] != STDOUT_FILENO) {
+                    dup2(pipefd[1], STDOUT_FILENO);
+                    close(pipefd[1]);
+                }
+                execl("/bin/sh", "sh", "-c", cmd_s, (char*)NULL);
+                _exit(127);                    // execl failed
+            } else if (pid > 0) {
+                // parent
+                close(pipefd[1]);
+                setpgid(pid, pid);             // race-safe (also set on child side)
+                fp = fdopen(pipefd[0], "r");
+                if (!fp) { close(pipefd[0]); kill(-pid, SIGKILL); waitpid(pid, NULL, 0); }
+                else child_pid = pid;
+            } else {
+                // fork failed
+                close(pipefd[0]); close(pipefd[1]);
+            }
+        }
+    }
+    if (!fp) {
+        fp = popen(cmd_s, "r");
+        if (!fp) return hexa_int((int64_t)-1);
+        child_pid = (pid_t)-1;                  // popen path: no usable pid
+    }
     int fd = fileno(fp);
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     _hexa_stream_slots[slot].fp = fp;
+    _hexa_stream_slots[slot].pid = child_pid;
     _hexa_stream_slots[slot].buf_len = 0;
     _hexa_stream_slots[slot].eof = 0;
     _hexa_stream_slots[slot].in_use = 1;
@@ -9189,12 +9236,26 @@ HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
     if (h < 0 || h >= HEXA_STREAM_SLOT_COUNT) return hexa_int((int64_t)-1);
     HexaStreamSlot* s = &_hexa_stream_slots[h];
     if (!s->in_use || !s->fp) return hexa_int((int64_t)-1);
-    int raw_rc = pclose(s->fp);
+    int raw_rc;
+    if (s->pid > 0) {
+        /* v1.3 fork path: close our pipe end, then reap the child. */
+        fclose(s->fp);
+        raw_rc = -1;
+        for (;;) {
+            int st = 0;
+            pid_t r = waitpid(s->pid, &st, 0);
+            if (r < 0) { if (errno == EINTR) continue; raw_rc = -1; break; }
+            raw_rc = st;  /* pclose-style encoded status */
+            break;
+        }
+    } else {
+        raw_rc = pclose(s->fp);  /* legacy popen fallback */
+    }
     /* v1.1 WIFEXITED + WEXITSTATUS proper rc decode (raw 91 honest C3 — caller가
        표준 exit code 패턴 사용 가능). Signal exit 시 negative signal 반환. */
     int proper_rc;
     if (raw_rc == -1) {
-        proper_rc = -1;  /* pclose itself failed */
+        proper_rc = -1;  /* pclose/waitpid itself failed */
     } else if (WIFEXITED(raw_rc)) {
         proper_rc = WEXITSTATUS(raw_rc);
     } else if (WIFSIGNALED(raw_rc)) {
@@ -9203,6 +9264,7 @@ HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
         proper_rc = -1;
     }
     s->fp = NULL;
+    s->pid = (pid_t)-1;
     s->buf_len = 0;
     s->eof = 0;
     s->in_use = 0;
@@ -9211,6 +9273,69 @@ HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
 }
 HexaVal hexa_exec_stream_close(HexaVal handle) {
     return hexa_exec_stream_close_impl(handle);
+}
+
+// exec_stream_kill(handle) -> int (2026-05-11, wilson tool-core ESC-cancel) --
+// Promptly terminate the streaming child *process group*: SIGTERM, a short
+// grace poll, then SIGKILL -- then close our pipe end and reap. exec_stream_close
+// only pclose/waitpid-joins (blocks until the child exits on its own), so a
+// long-running `bash` tool would not die quickly on ESC. Returns:
+//   >= 0  : child terminated; value = -WTERMSIG (negative) when it exited via
+//           signal (the SIGTERM/SIGKILL we sent), or its own WEXITSTATUS if it
+//           happened to exit cleanly during the grace window.
+//   -1    : stale/invalid handle, or a popen-fallback slot with no usable pid
+//           (raw 91 honest C3 -- prompt-kill needs exec_stream_async's fork
+//           path; on a popen slot the pipe is still fclose'd but the child is
+//           only reaped opportunistically and rc is -1).
+HexaVal hexa_exec_stream_kill_impl(HexaVal handle) {
+    _hexa_stream_slots_ensure_init();
+    int h = (int)__hx_to_double(handle);
+    if (h < 0 || h >= HEXA_STREAM_SLOT_COUNT) return hexa_int((int64_t)-1);
+    HexaStreamSlot* s = &_hexa_stream_slots[h];
+    if (!s->in_use || !s->fp) return hexa_int((int64_t)-1);
+    if (s->pid <= 0) {
+        /* popen fallback slot -- no pid. Best-effort: close the pipe (the child
+           sees EOF/SIGPIPE on its next write) and release the slot. */
+        fclose(s->fp);
+        s->fp = NULL; s->pid = (pid_t)-1; s->buf_len = 0; s->eof = 0; s->in_use = 0;
+        return hexa_int((int64_t)-1);
+    }
+    pid_t pid = s->pid;
+    pid_t pgid = pid;  /* setpgid(0,0) in the child made pid the group leader */
+    /* Step 1: polite SIGTERM to the whole group. */
+    kill(-pgid, SIGTERM);
+    /* Step 2: ~200ms grace, polled every 10ms via waitpid(WNOHANG). */
+    int reaped = 0; int raw_rc = -1;
+    for (int i = 0; i < 20; i++) {
+        int st = 0;
+        pid_t r = waitpid(pid, &st, WNOHANG);
+        if (r == pid) { reaped = 1; raw_rc = st; break; }
+        if (r < 0 && errno != EINTR && errno != 0) break;  /* ECHILD etc. */
+        struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 10L * 1000L * 1000L;  /* 10ms */
+        nanosleep(&ts, NULL);
+    }
+    /* Step 3: still alive -> SIGKILL the group and blocking-reap. */
+    if (!reaped) {
+        kill(-pgid, SIGKILL);
+        for (;;) {
+            int st = 0;
+            pid_t r = waitpid(pid, &st, 0);
+            if (r < 0) { if (errno == EINTR) continue; raw_rc = -1; break; }
+            raw_rc = st; break;
+        }
+    }
+    /* Step 4: close our pipe end + release the slot. */
+    fclose(s->fp);
+    s->fp = NULL; s->pid = (pid_t)-1; s->buf_len = 0; s->eof = 0; s->in_use = 0;
+    int proper_rc;
+    if (raw_rc == -1) proper_rc = -1;
+    else if (WIFEXITED(raw_rc)) proper_rc = WEXITSTATUS(raw_rc);
+    else if (WIFSIGNALED(raw_rc)) proper_rc = -WTERMSIG(raw_rc);
+    else proper_rc = -1;
+    return hexa_int((int64_t)proper_rc);
+}
+HexaVal hexa_exec_stream_kill(HexaVal handle) {
+    return hexa_exec_stream_kill_impl(handle);
 }
 
 // codegen이 raw symbol `exec_stream_*` 도 emit (hexa_call1 indirect 패턴) —
@@ -9223,5 +9348,8 @@ HexaVal exec_stream_poll(HexaVal handle) {
 }
 HexaVal exec_stream_close(HexaVal handle) {
     return hexa_exec_stream_close_impl(handle);
+}
+HexaVal exec_stream_kill(HexaVal handle) {
+    return hexa_exec_stream_kill_impl(handle);
 }
 

@@ -10856,6 +10856,20 @@ fn call_builtin(name, args) {
             return val_str("")
         }
     }
+    // exec_stream_kill(handle) -> int — SIGKILL the streaming child process
+    // group (wilson tool-core ESC-cancel). The exec_stream* family
+    // (exec_stream / exec_stream_async / exec_stream_poll / exec_stream_close /
+    // exec_stream_kill) is AOT-codegen-only: the slot table + non-blocking
+    // pipe + fork/pgid logic lives in runtime.c (hexa_exec_stream_kill) and is
+    // emitted directly by codegen_c2.hexa. The tree-walking interpreter has no
+    // stream slot table, so under `hexa run` there is never a live handle to
+    // kill — return -1 (the runtime's "stale/invalid handle" rc) rather than
+    // raising "undefined function". Consistent with how exec_stream_async/poll/
+    // close behave under interp (no-op surface; real behavior is on the AOT
+    // path only).
+    if name == "exec_stream_kill" {
+        return val_int(-1)
+    }
     if name == "exec_with_status" {
         if len(args) == 0 { return val_array([val_str(""), val_int(0)]) }
         // FIX 2026-04-17: capture real exit code via shell $? sentinel.

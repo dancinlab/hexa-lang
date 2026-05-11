@@ -687,6 +687,8 @@ fn codegen_c2(ast) {
     _strlit_keys = []
     _strlit_ids = []
     _strlit_counter = 0
+    // b2-fnref: reset by-value builtin/method thunk set per codegen call.
+    _fnref_thunk_names = []
     // 2026-04-18 use-resolver dedup table — reset per codegen call so a
     // second invocation in the same process doesn't treat the first call's
     // resolved modules as already-emitted.
@@ -1007,6 +1009,9 @@ fn codegen_c2(ast) {
         parts.push(_lambda_def_parts[_ldp_i])
         _ldp_i = _ldp_i + 1
     }
+    // b2-fnref: emit static thunks for builtins/methods taken by-value,
+    // before any user fn body / main can reference __hxthunk_<name>.
+    parts.push(_gen2_emit_fnref_thunks())
     parts.push(fn_parts.join(""))
     // B20 / roadmap 55: emit a sentinel comment the build driver
     // (self/main.hexa) greps to decide whether to inject IEEE-strict clang
@@ -2816,6 +2821,94 @@ fn gen2_method_builtin(obj_expr, method, args) {
     return "(fprintf(stderr, \"CODEGEN ERROR: unknown builtin method: " + method + "\\n\"), exit(1), hexa_void())"
 }
 
+// ── b2-fnref: by-value builtin/method thunks ─────────────────
+// When a bare identifier naming a builtin/method (not a user fn or local)
+// appears in value position (`let f = trim; f(s)` or passed as a callback),
+// codegen previously emitted a bare C identifier `trim` which clang rejects
+// ("use of undeclared identifier 'trim'"). We instead emit a TAG_FN HexaVal
+// wrapping a static C thunk `__hxthunk_<name>` that forwards to the canonical
+// method-builtin lowering. Thunk decls are collected here and emitted once
+// near the top of the TU (alongside lambda fwd decls). Scope: unambiguous
+// string/scalar methods only — polymorphic/array higher-order methods are
+// intentionally excluded (`reverse`, `len`, `contains`, `map`, …).
+let mut _fnref_thunk_names = []
+
+// Total arity (receiver + args) of a thunk-able builtin method, or -1.
+fn _gen2_fnref_method_arity(name) {
+    // arity 1 — receiver only
+    if name == "trim" { return 1 }
+    if name == "trim_start" { return 1 }
+    if name == "trim_end" { return 1 }
+    if name == "to_upper" { return 1 }
+    if name == "to_lower" { return 1 }
+    if name == "chars" { return 1 }
+    if name == "bytes" { return 1 }
+    if name == "lines" { return 1 }
+    if name == "parse_int" { return 1 }
+    if name == "parse_float" { return 1 }
+    if name == "to_string" { return 1 }
+    if name == "to_int" { return 1 }
+    if name == "to_float" { return 1 }
+    if name == "to_bool" { return 1 }
+    // arity 2 — receiver + 1
+    if name == "char_at" { return 2 }
+    if name == "char_code_at" { return 2 }
+    if name == "byte_at" { return 2 }
+    if name == "split" { return 2 }
+    if name == "repeat" { return 2 }
+    if name == "starts_with" { return 2 }
+    if name == "ends_with" { return 2 }
+    if name == "pad_left" { return 2 }
+    // arity 3 — receiver + 2
+    if name == "replace" { return 3 }
+    if name == "substring" { return 3 }
+    if name == "substr" { return 3 }
+    if name == "pad_right" { return 3 }
+    if name == "center" { return 3 }
+    return -1
+}
+
+// If `name` is a thunk-able builtin/method, register the thunk and return
+// the C value expression `hexa_fn_new((void*)__hxthunk_<name>, N)`.
+// Returns "" if `name` is not handled.
+fn _gen2_fnref_thunk(name) {
+    let ar = _gen2_fnref_method_arity(name)
+    if ar < 1 { return "" }
+    _fnref_thunk_names = _add_unique(_fnref_thunk_names, name)
+    return "hexa_fn_new((void*)__hxthunk_" + name + ", " + to_string(ar) + ")"
+}
+
+// Emit `static HexaVal __hxthunk_<name>(HexaVal a0, ...) { return <body>; }`
+// for every collected thunk name. Body reuses gen2_method_builtin with
+// synthetic Ident params a0 (receiver), a1, a2.
+fn _gen2_emit_fnref_thunks() {
+    let mut out = ""
+    let mut i = 0
+    while i < len(_fnref_thunk_names) {
+        let nm = _fnref_thunk_names[i]
+        let ar = _gen2_fnref_method_arity(nm)
+        let mut params = []
+        let mut synth_args = []
+        let mut p = 0
+        while p < ar {
+            params.push("HexaVal a" + to_string(p))
+            if p > 0 {
+                synth_args.push(#{ "kind": "Ident", "name": "a" + to_string(p) })
+            }
+            p = p + 1
+        }
+        let body = gen2_method_builtin("a0", nm, synth_args)
+        // Wrap in an include guard: the SSOT compiler is built by concatenating
+        // 4 transpiled modules (lexer/parser/type_checker/codegen_c2) into one
+        // TU (hexa cc --regen) — each module that takes the same builtin/method
+        // by-value would otherwise emit a duplicate file-scope definition.
+        // The bodies are byte-identical, so first-wins is correct.
+        out = out + "#ifndef HXTHUNK_" + nm + "_DEFINED\n#define HXTHUNK_" + nm + "_DEFINED\nstatic HexaVal __hxthunk_" + nm + "(" + params.join(", ") + ") { return " + body + "; }\n#endif\n"
+        i = i + 1
+    }
+    return out
+}
+
 // ── BinOp `+` chain flattener ────────────────────────────────
 // Long string-concat chains (e.g. anima training launcher files,
 // 100+ segments) blow past clang's default -fbracket-depth=256 when
@@ -2899,6 +2992,13 @@ fn gen2_expr(node) {
         if node.name == "void" { return "hexa_void()" }
         if node.name == "true" { return "hexa_bool(1)" }
         if node.name == "false" { return "hexa_bool(0)" }
+        // b2-fnref: a bare name that resolves to a builtin/method (not a
+        // user fn, global, or local) used in value position — emit a TAG_FN
+        // wrapping a static thunk instead of a bare (undeclared) C identifier.
+        if !_gen2_has_decl(node.name) && !_is_known_fn_global(node.name) && !_is_known_nonlocal(node.name) {
+            let _fnref = _gen2_fnref_thunk(node.name)
+            if _fnref != "" { return _fnref }
+        }
         return _hexa_mangle_ident(node.name)
     }
 
@@ -3439,6 +3539,17 @@ fn gen2_expr(node) {
             // Routes to runtime.c hexa_exec_stream (HexaVal,HexaVal)->HexaVal.
             if name == "exec_stream" {
                 return "hexa_exec_stream(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
+            }
+            // exec_stream_kill(handle) — SIGTERM->grace->SIGKILL the streaming
+            // child process group (wilson tool-core ESC-cancel; build-fix-
+            // checklist L25). exec_stream_close only pclose/waitpid-joins
+            // (blocks until the child exits on its own). Routes to runtime.c
+            // hexa_exec_stream_kill (HexaVal)->HexaVal. The exec_stream_async/
+            // poll/close siblings go through the hexa_call1(raw-symbol) path;
+            // _kill gets an explicit emit here too (runtime.c keeps a raw
+            // `exec_stream_kill` alias either way).
+            if name == "exec_stream_kill" {
+                return "hexa_exec_stream_kill(" + gen2_expr(node.args[0]) + ")"
             }
             if name == "exec_capture" {
                 return "hexa_exec_capture(" + gen2_expr(node.args[0]) + ")"
@@ -5686,6 +5797,7 @@ fn _is_builtin_name(name) {
     if name == "script_path" { return true }
     if name == "exec" { return true }
     if name == "exec_with_status" { return true }
+    if name == "exec_stream_kill" { return true }
     if name == "read_file" { return true }
     if name == "write_file" { return true }
     if name == "write_bytes" { return true }
@@ -6046,6 +6158,8 @@ fn codegen_c2_full(ast) {
     _strlit_keys = []
     _strlit_ids = []
     _strlit_counter = 0
+    // b2-fnref: reset by-value builtin/method thunk set (mirror codegen_c2).
+    _fnref_thunk_names = []
     // 2026-04-18 use-resolver dedup table — mirror codegen_c2's reset.
     _resolved_modules = []
     _resolve_caller_dir_inited = false
@@ -6301,6 +6415,8 @@ fn codegen_c2_full(ast) {
         out_parts.push(_lambda_def_parts[_ldp_i_full])
         _ldp_i_full = _ldp_i_full + 1
     }
+    // b2-fnref: emit static thunks for builtins/methods taken by-value.
+    out_parts.push(_gen2_emit_fnref_thunks())
     out_parts.push(fn_parts.join(""))
     // T3 fix: emit `int main(int argc, char** argv)` + hexa_set_args.
     out_parts.push("int main(int argc, char** argv) {\n")
