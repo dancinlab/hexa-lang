@@ -3,10 +3,16 @@
 // @module(slug="stdlib-http-sse", desc="curl --no-buffer streaming GET — Server-Sent Events parser + raw-line generator")
 // @usage(import stdlib/http_sse; let n = http_sse_get(url, #{}, on_event, 60))
 //
-// @version 1.0.0
-// @capabilities [http_sse_get, http_sse_get_lines, http_sse_open, http_sse_next, http_sse_close, http_sse_parse_event, http_sse_available]
+// @version 1.1.0
+// @capabilities [http_sse_get, http_sse_get_lines, http_sse_get_buffered, http_sse_post, http_sse_post_buffered, http_sse_open, http_sse_open_post, http_sse_open_method, http_sse_next, http_sse_close, http_sse_parse_event, http_sse_feed, http_sse_available, http_sse_build_curl_cmd, http_sse_build_curl_method_cmd, http_sse_empty_event]
 // @stability experimental
 // @since 2026-05-08
+// @changelog
+//   1.1.0 (2026-05-11) — POST-with-body support: http_sse_post / http_sse_open_post
+//                        (Anthropic Messages, OpenAI Chat Completions streaming).
+//                        Internal _sse_build_curl factored into _method variant;
+//                        GET surface unchanged.
+//   1.0.0 (2026-05-08) — initial GET-only callback + handle API.
 // @maintainer anima-core
 // @priority P1
 // Versioning policy: docs/hexa_lang_module_versioning_spec_2026_05_03.md
@@ -203,16 +209,41 @@ fn _sse_build_header_flags(headers) -> string {
 // We deliberately do NOT pass --fail (which silently swallows 4xx/5xx
 // bodies) — for SSE the body IS the stream and a 4xx with a JSON error
 // page is useful diagnostic the caller wants to surface.
-fn _sse_build_curl(url: string, headers, timeout_sec: int) -> string {
+//
+// _sse_build_curl_method — generalized builder, supports any HTTP verb
+// + optional body. Body delivery uses `printf '%s' '<escaped>' | curl
+// --data-binary @-` to avoid temp-file lifecycle and inline-arg
+// quoting fragility (JSON bodies have lots of `"`). Single-quote
+// wrapping of the body is shell-safe (no $ expansion) — _sse_shell_escape
+// handles embedded `'`. The pipe ends when curl closes stdin, so body
+// lifetime is automatically tied to the curl process.
+//
+// method == "" or "GET" → no `-X` flag (GET is curl's default), no body.
+// body  == ""           → no `--data-binary @-`, no printf prefix.
+fn _sse_build_curl_method(url: string, headers, method: string, body: string, timeout_sec: int) -> string {
     let hflags = _sse_build_header_flags(headers)
+    let mut prefix = ""
     let mut cmd = "curl -sSL -N --no-buffer"
     if timeout_sec > 0 {
         cmd = cmd + " --max-time " + to_string(timeout_sec)
     }
     cmd = cmd + hflags
+    if len(method) > 0 && method != "GET" {
+        cmd = cmd + " -X " + method
+    }
+    if len(body) > 0 {
+        prefix = "printf '%s' " + _sse_shell_escape(body) + " | "
+        cmd = cmd + " --data-binary @-"
+    }
     cmd = cmd + " " + _sse_shell_escape(url)
     cmd = cmd + " 2>/dev/null"
-    return cmd
+    return prefix + cmd
+}
+
+// _sse_build_curl — thin GET-only wrapper, kept for ABI / call-site
+// stability. New code can call _sse_build_curl_method directly.
+fn _sse_build_curl(url: string, headers, timeout_sec: int) -> string {
+    return _sse_build_curl_method(url, headers, "GET", "", timeout_sec)
 }
 
 // http_sse_available — probe streaming readiness.
@@ -493,7 +524,7 @@ pub fn http_sse_get_buffered(url: string, headers, on_event, timeout_sec: int) -
     return 0
 }
 
-// ── Public handle API ───────────────────────────────────────────────
+// ── Public handle API (incl. POST variants v1.1) ────────────────────
 
 // http_sse_open — start a backgrounded curl stream, return a handle.
 //
@@ -529,12 +560,48 @@ pub fn http_sse_close(h: int) -> int {
     return exec_stream_close(h)
 }
 
+// v1.1 POST callback form — parallel to http_sse_get but routes a
+// request body to curl via stdin (--data-binary @-). Use for chat
+// completion streaming endpoints (request body = POST'd JSON).
+pub fn http_sse_post(url: string, headers, body: string, on_event, timeout_sec: int) -> int {
+    if len(url) == 0 { return 127 }
+    _sse_init_partial()
+    _sse_event_fn = on_event
+    let cmd = _sse_build_curl_method(url, headers, "POST", body, timeout_sec)
+    let rc = exec_stream(cmd, _sse_event_bridge)
+    _sse_partial_event = _sse_empty_event()
+    return rc
+}
+
+// v1.1 POST handle form — for streaming chat completion endpoints
+// that require a request body. Body is piped to curl via stdin.
+pub fn http_sse_open_post(url: string, headers, body: string, timeout_sec: int) -> int {
+    if len(url) == 0 { return -1 }
+    let cmd = _sse_build_curl_method(url, headers, "POST", body, timeout_sec)
+    return exec_stream_async(cmd)
+}
+
+// v1.1 generalized — any HTTP verb + optional body. method="" or "GET"
+// behaves like http_sse_open; body="" omits --data-binary.
+pub fn http_sse_open_method(url: string, headers, method: string, body: string, timeout_sec: int) -> int {
+    if len(url) == 0 { return -1 }
+    let cmd = _sse_build_curl_method(url, headers, method, body, timeout_sec)
+    return exec_stream_async(cmd)
+}
+
 // ── Test/golden helpers (pure, no I/O) ──────────────────────────────
 
 // http_sse_build_curl_cmd — expose the curl command builder for golden
 // fixture tests (deterministic string transform, no exec()).
 pub fn http_sse_build_curl_cmd(url: string, headers, timeout_sec: int) -> string {
     return _sse_build_curl(url, headers, timeout_sec)
+}
+
+// http_sse_build_curl_method_cmd — v1.1 generalized golden-fixture
+// helper. Same deterministic-string contract as build_curl_cmd, but
+// exposes the method+body path for POST / PUT / DELETE etc. test cases.
+pub fn http_sse_build_curl_method_cmd(url: string, headers, method: string, body: string, timeout_sec: int) -> string {
+    return _sse_build_curl_method(url, headers, method, body, timeout_sec)
 }
 
 // http_sse_empty_event — public ctor for the partial-event map used
