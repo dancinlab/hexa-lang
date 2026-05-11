@@ -156,14 +156,8 @@ pub fn safe_exec(cmd: string) -> int {
     }
 }
 
-// Self-test entry. `hexa run self/stdlib/law_io.hexa` for smoke.
-fn main() {
-    println("law_io: self-test")
-    let p = "/tmp/hexa_law_io_selftest.hexa"
-    let ok = safe_write_file(p, "fn main() { println(\"ok\") }\n")
-    let ok2 = safe_append_file(p, "// appended\n")
-    let rc = safe_exec("test -f '" + p + "'")
-    println("  write=" + to_string(ok) + " append=" + to_string(ok2) + " exec_rc=" + to_string(rc))
-    exec("rm -f '" + p + "' 2>/dev/null")
-    println("law_io: selftest OK")
-}
+// Self-test moved to tool/law_io_selftest.hexa — a stray `fn main()` in a
+// `use`d stdlib module collides (C `redefinition of 'u_main'`) with the
+// entry module's `main()` once `self/main.hexa`'s module_loader flattens
+// the graph (same reason the self/tui/* selftests live in tool/*_selftest.hexa).
+// Smoke: `hexa run tool/law_io_selftest.hexa`

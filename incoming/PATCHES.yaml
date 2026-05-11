@@ -217,3 +217,28 @@
     bindings + `// @payload:` header). Only gap (b) [stdlib-by-ref
     undeclared] remains — a separate flatten/AOT-builtin issue.
     Full write-up: incoming/notes/2026-05-11-wilson-build-codegen-wall.md.
+
+- id: wilson-stdlib-law-io-stray-main
+  source: wilson session — `hexa build core/main.hexa` (post RFC-020 A4 fix) clang error `redefinition of 'u_main'`: self/stdlib/law_io.hexa carried a selftest `fn main()` that collides with the entry module's `main()` once self/main.hexa's module_loader flattens the graph. (Same class the self/tui/* selftests already dodged by living in tool/*_selftest.hexa.)
+  trees: [stdlib]
+  compiler_impact: |
+    Targeted fix (this commit): moved law_io's `fn main()` selftest to
+    tool/law_io_selftest.hexa (top-level statements, no `fn main()`); the
+    module now has zero entry-point. self/stdlib/law_io.hexa is `use`d by
+    self/module_loader.hexa, self/linter.hexa, self/build_c.hexa and the
+    self/tui/* chain — any consumer that flattens it no longer inherits a
+    stray `main()`.
+    Robust follow-up (NOT done — noted): the flattener (module_loader.hexa)
+    could strip a non-entry module's `fn main()` during splice — there are
+    ~100+ stdlib/HAL/hxc_* files with selftest `fn main()`s, most not in any
+    real `use` chain, but a blanket strip would close the whole class. Left
+    out here to avoid touching the A2-hot splice path on a delicate change.
+  selftest_delta: "0 (tool/law_io_selftest.hexa: write=true append=true exec_rc=0 rm_rc=0, selftest OK)"
+  downstream_consumer: |
+    wilson — unblocks `hexa build core/main.hexa` (was the last hexa-lang
+    error after RFC-020 A4); also lets harness-cli revert from the
+    core/tui.hexa stub back to self/tui/{render,input,widget/text}
+    (delete core/tui.hexa) → raw-mode editor / alt-screen restored.
+  status: applied
+  applied_at: 2026-05-11
+  opened: 2026-05-11
