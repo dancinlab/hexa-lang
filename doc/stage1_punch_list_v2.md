@@ -82,6 +82,68 @@ durable escape valve if A2 proves harder than expected.
 
 ---
 
+## Update 2026-05-11 (A2 source landed; verification deferred to next host rebuild)
+
+Source-side delta since the 5/10 baseline above:
+- A2 landed at `ab2dfcee` (`fix(compiler/parse): A2 — in-place
+  _splice_imported_items accumulator`). Per-call `[Item]` allocation
+  collapsed to a module-scoped accumulator `p_splice_acc` —
+  the array-store growth path the 5/10 sawtooth showed A1 cannot reach.
+- Host transpiler rebuilt at `ddb21f21` (`self/native/hexa_v2` +536 B,
+  matches the d99be4bd "host alongside source" pattern).
+- Cluster work integrated since A2: Types (A4/C4/B2) `bc50db32`,
+  C11 parse_only skip `2b67ccb6`, Lower (C5/C9/C10/C16, +HX1101..3 to
+  catalog) `f3f63b72`, B1+C19 `4cd39b2a`, P2 (C12..C20, +HX2003)
+  `840c8f7d`. #14 drain wiring `18c6a536` makes the new HX1101/1102/1103
+  surface in CLI alongside parser/check/units diags. Out-of-band:
+  `faca4134` (stdlib/http_sse v1.1 POST+body) and `21e7b518`
+  (cmd_build flatten via module_loader + HEXA_LANG/self -I) close the
+  wilson upstream gaps. None of those touch the stage1 OOM directly,
+  but C11's `@phase("parse_only")` skip on the ~10K AtlasNode literals
+  in `compiler/atlas/embedded.gen.hexa` removes a known fan-out cost
+  from the type-check inner loop on the spliced super-module.
+
+| metric                | 5/10 baseline (pre-A2)     | 5/11 probe (HEAD=18c6a536, deployed binary = pre-A2) | target |
+|-----------------------|----------------------------|------------------------------------------------------|--------|
+| binary used           | 5/10 23:39 hexa_real       | **same 5/10 23:39 hexa_real** (pre-A2)               | post-A2 hexa_real |
+| memory cap            | 2 048 MB                   | **768 MB** (current default cap)                     | unlimited |
+| wall to OOM           | ~14 m                      | 66 s                                                 | N/A |
+| RSS at OOM            | 3 510 MB                   | 805 MB (at cap=768 MB)                               | < 1 500 MB peak |
+| outcome               | killed at 2 GB cap         | killed at 768 MB cap (exit 77)                       | clean completion |
+
+**Cannot conclude A2 effect from this probe.** The deployed
+`~/.hx/bin/hexa_real` is still the 5/10 23:39 G2 build — A2 source
+exists but is not in the running binary. PATCHES.yaml id
+`wilson-needs-hexa-real-promotion` carries this caveat (re-promote
+pending RSS verify). The 5/11 probe re-measures the *pre-A2* baseline
+under a tighter 768 MB cap; the lower cap caused an earlier OOM
+exit at 66 s vs 14 m — that's a cap effect, not an A2 effect.
+
+**Closure path (separate next step, not in this commit):**
+
+1. Rebuild `~/.hx/bin/hexa_real` from current sources (A2 + Types +
+   C11 + Lower + B1+C19 + P2 + #14 drain). Pipeline: `hexa cc --regen`
+   to regenerate `self/native/hexa_cc.c` from the SSOT
+   `self/{lexer,parser,type_checker,codegen_c2}.hexa`, then clang →
+   new `hexa_v2`, then re-deploy `hexa_real` (same atomic-rename
+   pattern as the wilson-needs-hexa-real-promotion 5/10 apply row).
+   Total wall ~90 s from the 5/10 record.
+2. Re-run probe with the post-A2 binary at cap=2 GB (or
+   `HEXA_MEM_UNLIMITED=1`) — same invocation as §"5/10 baseline" above
+   so peak RSS is directly comparable.
+3. If peak RSS drops below ~1.5 GB → re-enable the M4 freelist
+   (`self/hexa_full.hexa` ~line 17993) and re-probe; A1 + A2 +
+   freelist together is the predicted-sufficient bundle.
+4. If peak RSS stays ≥ 2 GB → A2 alone was insufficient; pursue (b)
+   partial self-compile mode per 5/10 verdict.
+
+Step 1 is host I/O + clang only, modest ROI; step 2 is the actual
+verification. Both are gated on Mac compute availability — the
+synced repo on the Linux side has stale `.git` state that breaks
+worktree-isolated agent work, so the rebuild must run mac-local.
+
+---
+
 ## TL;DR
 
 The self-compile **never reaches a structured diagnostic**. The stage0
