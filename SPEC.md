@@ -8,8 +8,8 @@
 > drift on the header fields below.
 
 - **Schema version**: 1
-- **Status**: directional (decisions locked, stage 1 host-OOM blocked)
-- **Last updated**: 2026-05-10
+- **Status**: directional (decisions locked; stage 1 source-side OOM mitigated by A2 in-place splice accumulator — host re-promote pending verification)
+- **Last updated**: 2026-05-11
 - **Authoritative RFCs**:
   - [RFC-017 — atlas embedding + strict lint](proposals/rfc_017_atlas_n6_embedding_and_strict_lint.md)
   - [RFC-018 — native codegen spec](proposals/rfc_018_native_codegen_spec.md)
@@ -17,6 +17,7 @@
   - [RFC-020 — enum payload variants](proposals/rfc_020_enum_payload_variants.md)
   - [RFC-021 — daemon mode](proposals/rfc_021_daemon_mode.md)
   - [RFC-022 — async model](proposals/rfc_022_async_model.md)
+  - [RFC-023 — firmware linker spec](proposals/rfc_023_firmware_linker_spec.md)
 
 ---
 
@@ -147,6 +148,23 @@ Mach-O codegen (hooks/handlers/probes); the flag makes intent explicit.
 `hexa_interp` retires after stage 3 settles. System `as` / `ld` permitted
 only during stage 0 → stage 1 transition.
 
+### Stage 1 OOM mitigation (2026-05-11)
+
+The stage 0 → stage 1 self-compile hit a 2 GB-cap OOM at the spliced
+super-module (~25,932 lines). Source-side mitigations now landed:
+
+| Step | Commit | Effect |
+|---|---|---|
+| A1 host arena reset (`--phase-arena-reset` between parse / lower / codegen) | a0f5cd5d (restored) | sawtooth RSS observed; reset works but reclaimable mass dwarfed by `array_store` growth |
+| A2 in-place `_splice_imported_items` accumulator (module-scoped `p_splice_acc`, replaces per-call `[Item]` allocation) | ab2dfcee | source land |
+| Stage 0 host rebuild incorporating A2 | ddb21f21 (`self/native/hexa_v2` +536 B) | host re-promote pending; deployed `~/.hx/bin/hexa_real` still 5/10 G2 build |
+
+5/11 probe ran against the pre-A2 deployed binary under a 768 MB cap, so
+the A2 effect is **not yet measurable**. Closure path (per
+`doc/stage1_punch_list_v2.md` Update 2026-05-11): re-promote
+`~/.hx/bin/hexa_real` from current sources, re-probe at 2 GB cap or
+`HEXA_MEM_UNLIMITED=1`, then optionally re-enable the M4 freelist.
+
 ### Interpret-mode after stage 3 (Decision 2026-05-09 — D + B)
 
 - **D (default)**: `hexa run x.hexa` ≡ build + exec. Zero extra LOC.
@@ -191,6 +209,12 @@ RFC-020.
 Target design: single-field payload + struct embed (RFC-020).
 A5 regression suite `self/test_enum_payload_full.hexa` 15/15 PASS at
 `4ed9966e`.
+
+PATCHES.yaml id `rfc020-enum-payload-variants` (incoming inbox) tracks
+A1+A2+A3 bundled (3c8be96c + 005d5427); A4 partial (a85b8a1c, match-
+side extraction landed via 4ed9966e). Sibling id `wilson-pi-port-6-gap-
+prereq` (G1+G2+G3 wilson core gate) is applied — G1=A5, G2 async parity
+(integrated codegen + runtime + interp), G3 cancel token (stdlib).
 
 ---
 
@@ -397,6 +421,24 @@ atlas trie + scope identifiers), fix-it, `hexa explain` subcommand,
 multi-error collector with cascade compression, snapshot regression
 tests.
 
+### 14.1 New diagnostics (2026-05-11)
+
+Surfacing the stage 1 punch list v2 (C4 / C5 / C10 / C16 / C20)
+through real diagnostics rather than silent fallbacks:
+
+| Code | Severity | Stage | Emitted at | Title |
+|---|---|---|---|---|
+| HX1101 | Error | S2 | `compiler/lower/hir_to_mir.hexa` (`_lower_hexpr` ident miss, was silent `_const_int_op(0)`) | unbound ident in lower |
+| HX1102 | Error | S2 | `compiler/lower/hir_to_mir.hexa` (match-arm pattern fallback) | unsupported pattern shape in lower |
+| HX1103 | Error | S2 | `compiler/lower/hir_to_mir.hexa` (HExpr default fall-through) | unhandled HExpr kind in lower |
+| HX2001 | Error | S2 | `compiler/check/types.hexa::_types_check_call` (non-Ident callee — auxiliary to bind/resolve) | undefined name |
+| HX2003 | Error | S3 | `compiler/check/types.hexa::_types_check_call` (callee_t.kind != "fn") | callee is not callable |
+
+CLI drain wiring (`compiler/main.hexa` post-lower hir_to_mir_diags
+drain, commit 18c6a536) is required for HX1101/1102/1103 to surface
+alongside parser / check / units diagnostics; without the drain the
+lower-pass codes were emitted into a sink not visible to the caller.
+
 ---
 
 ## 15. Roadmap
@@ -426,21 +468,39 @@ tests.
 | Phase | Effort | Goal | Status |
 |---|---|---|---|
 | F0 | S | SPEC firmware Option C + `firmware/` skeleton | DONE — fc6d48b2 |
-| F1 | M | `stdlib/core` extraction from current host stdlib | IN-FLIGHT (#84) |
-| F2 | M | `firmware/boards/rtsc` reference port | IN-FLIGHT (#85) |
-| F3 | L | `thumbv7em-none-eabihf` codegen target | IN-FLIGHT (#86) |
-| F4 | L | `firmware/boards/{chip,cern,antimatter,space}` absorptions | IN-FLIGHT (#87) |
-| F5 | M | RFC-023 firmware linker spec (linker scripts + `.bss` / `.data` init) | PLANNED |
+| F1 | M | `stdlib/core` + `stdlib/alloc` extraction (16 modules) | DONE (2026-05-10) |
+| F2 | M | `firmware/boards/rtsc` reference port | DONE (2026-05-10) |
+| F3 | L | `thumbv7em-none-eabihf` codegen + HX1110 target_gate_check | DONE (2026-05-10) |
+| F4 | L | `firmware/boards/{chip,cern,antimatter,space}` absorptions | DONE (2026-05-10) |
+| F5 | M | RFC-023 firmware linker spec (linker scripts + `.bss` / `.data` init) | SPEC LAND (2f9789e3, 2026-05-10); implementation follow-up |
 
 ### Revised stage 1 timeline
 
 | Estimate | Date | Reason |
 |---|---|---|
 | 6–10 weeks | pre 2026-05-10 | Original Gap-1..15 punch list assumption |
-| **14–22 weeks** | 2026-05-10 (current) | Stage 0 host OOM dominates; punch list v2 (`doc/stage1_punch_list_v2.md`, commit 86afadb0) adds A1–A4 (interpreter arena reset / partial self-compile / stage 0.5 host) as the new critical path. |
+| **14–22 weeks** | 2026-05-10 | Stage 0 host OOM dominates; punch list v2 (`doc/stage1_punch_list_v2.md`, commit 86afadb0) adds A1–A4 (interpreter arena reset / partial self-compile / stage 0.5 host) as the new critical path. |
+| **revised — A2 land, verification pending** | 2026-05-11 | A1 + A2 source-side mitigations landed (a0f5cd5d restored, ab2dfcee); A2 deploy + 2 GB-cap re-probe still required before re-estimate. Track B / C cluster work (B1+C19, Types A4+C4+B2, C11 atlas embed, Lower C5/C9/C10/C16, P2 C12–C20) all landed — once A2 verification clears, the recurring v1 surface is closed. |
 
 Bottleneck: stage 0 hexa_interp 2 GB cap during spliced self-compile
 (~25,932-line super-module).
+
+### Punch list v2 cluster status (2026-05-11)
+
+| Cluster | Items | Commits | Status |
+|---|---|---|---|
+| Track A (bootstrap host) | A1 arena reset, A2 in-place splice accumulator, A4 type_check side-index | A1 a0f5cd5d (restored); A2 ab2dfcee + ddb21f21 host rebuild; A4 (bc50db32 side-index) | A1+A2 source-side land; A2 verification deferred to host re-promote |
+| Track B (recurring from v1) | B1 empty-name guard in `_hir_lower_type_ref`, B2 pin `fn_name`/`fn_return` before recursive return walk | B1 e34b9eb6 / 4cd39b2a, B2 cdc66054 / bc50db32 | landed |
+| Track C — Types cluster | C4 HX2001 non-Ident callee | bc50db32 | landed |
+| Track C — Atlas embed | C11 parse_only skip on atlas literals (`item_is_parse_only`) | 2b67ccb6 | landed |
+| Track C — Lower cluster | C5 HX1101 unbound ident, C9 else-end recompute, C10 HX1102 pattern, C16 HX1103 unhandled HExpr | f3f63b72 (+ 9b9cc8a0, b8392fa6, dc15c327, d0ca3659) | landed |
+| Track C — for-desugar | C19 `for x in iter` → index-based while in ast_to_hir | 4cd39b2a (f534fea9) | landed |
+| Track C — P2 batch | C12 citation walk gated `--strict-citations`, C13 units early-out, C14 typed diags, C15 lmodule if-expr, C20 HX2003 non-fn callee | 840c8f7d (b5923aad, f6468143, 5342d50a, fbe11334, bed14aac) | landed |
+| #14 drain | `compiler/main` hir_to_mir_diags drain (HX1101/1102/1103 surface in CLI) | 18c6a536 | landed |
+| #10 wilson hexa-real promotion | PATCHES.yaml flip → applied | 13143f18 | A1+G2 binary promoted 5/10; A2 promotion pending |
+| #11 stdlib http_sse v1.1 POST+body | wilson provider-anthropic streaming POST | faca4134 | landed |
+| #12 hexa build out-of-tree | cmd_build flatten via module_loader + `$HEXA_LANG/self` -I priority | 21e7b518 | landed |
+| #13 stage 1 punch list v2 5/11 update | A2 verify deferred to host rebuild | ee62470a | landed |
 
 ---
 
@@ -479,8 +539,9 @@ owns its own backward-compat contract.
 
 | Module | File | Version | Additions |
 |---|---|---|---|
-| c_ffi | `stdlib/c_ffi.hexa` | v1.1 (applied) | `c_alloc_ptr_slot()`, `c_load_ptr(slot)` — out-pointer slot for duckdb-style C APIs (orpheus 136 ms → 1–3 ms) |
+| c_ffi | `stdlib/c_ffi.hexa` | v1.1 (applied 2026-05-09) | `c_alloc_ptr_slot()`, `c_load_ptr(slot)` — out-pointer slot for duckdb-style C APIs (orpheus 136 ms → 1–3 ms) |
 | http | `stdlib/http.hexa` | v1.1 (pending external) | `http_post_with_headers(url, headers, body, timeout_s)` — JSON-RPC enabler (orpheus bitcoind 15–30 ms → 3–7 ms) |
+| http_sse | `stdlib/http_sse.hexa` | v1.1 (applied 2026-05-11, commit faca4134) | `http_sse_post`, `http_sse_open_post`, `http_sse_open_method`, `http_sse_build_curl_method_cmd` — streaming POST + body (Anthropic Messages, OpenAI Chat Completions). Internal `_sse_build_curl` factored into `_method` variant. GET surface byte-identical. Body routed via `printf %s '...' \| curl --data-binary @-`. Interp-mode POST fallback deferred — AOT users get streaming POST today |
 
 ### Inbox protocol
 
@@ -548,15 +609,27 @@ Embedded allocator: arena v1 by default; bump allocator optional for
 tight-RAM MCUs; tracing GC permanently rejected (Decision 6).
 
 Linker scripts: `firmware/linker_scripts/*.ld` consumed by `hexa_ld`.
-RFC-023 (planned — extension of RFC-018 §10).
+RFC-023 spec draft (proposed 2026-05-10, commit 2f9789e3) — extension
+of RFC-018 §10; implementation deferred to F5+1.
 
-### 18.3 Biggest unknown (firmware audit)
+### 18.3 Roadmap status (2026-05-11)
 
-hexa-lang ARM Cortex-M native codegen timeline. F3 (`thumbv7em`
-target) is not started; `firmware/` stays Rust-gated for hexa-cern /
-hexa-antimatter until F3 + RFC-022 land. Mitigation: parallel Rust
-path keeps Phase D extending until 2026-06-30; Phase E hardware
-commission unblocks once `stdlib/hal v1.0.0` lands.
+| Phase | Goal | Status |
+|---|---|---|
+| F0 | SPEC firmware Option C + `firmware/` skeleton | DONE (fc6d48b2) |
+| F1 | `stdlib/core` + `stdlib/alloc` extraction (16 modules moved) | DONE (2026-05-10) |
+| F2 | `firmware/boards/rtsc` reference port | DONE (2026-05-10, option_A_full_copy) |
+| F3 | `thumbv7em-none-eabihf` codegen + `target_gate_check` (HX1110) | DONE (2026-05-10) |
+| F4 | `firmware/boards/{chip,cern,antimatter,space}` absorptions | DONE (2026-05-10, 4-board batch) |
+| F5 | RFC-023 firmware linker spec | SPEC LAND (2026-05-10, 2f9789e3 — implementation follow-up) |
+
+### 18.4 Biggest unknown (firmware audit)
+
+hexa-lang ARM Cortex-M native codegen has F3 spec landed (asm-shape
+only; no qemu/hardware run). Phase E hardware commission still gated
+on `stdlib/hal v1.0.0`. Rust-side `cortex-m-rt` parity remains the
+fallback for hexa-cern / hexa-antimatter until F5 implementation +
+RFC-022 (async) downstream consumers settle.
 
 ---
 
@@ -583,6 +656,25 @@ Surfaced 2026-05-10:
 - ARM Cortex-M codegen blocks firmware targets (F3 not started)
 - `hexa_str_concat` runtime stub linkage in `self/native`
   (Gap 15 surfaced)
+
+Resolved 2026-05-10 / 2026-05-11:
+
+- core / alloc split criteria — F1 landed with 16-module split rule
+  (target-agnostic primitives in `stdlib/core`; alloc-dependent helpers
+  in `stdlib/alloc`); criterion documented in `doc/stdlib_core_extraction_2026_05_10.md`.
+- `thumbv7em` codegen timeline — F3 landed (asm-shape only; no
+  qemu / hardware run yet).
+- ARM Cortex-M codegen blocks firmware — partially resolved: F3 + HX1110
+  target_gate_check land, leaving qemu / hardware commission as the
+  remaining gate.
+
+Surfaced 2026-05-11:
+
+- A2 source land vs deployed-binary gap — closure requires `~/.hx/bin/hexa_real`
+  re-promote (host I/O + clang only; ~90 s wall) plus 2 GB-cap re-probe to
+  confirm peak RSS drops below ~1.5 GB.
+- M4 freelist re-enable strategy — gated on A2 verification (per punch
+  list v2 5/11 closure path step 3).
 
 ---
 
@@ -636,6 +728,28 @@ Surfaced 2026-05-10:
 | i32 lower + literal coercion | PASS | 48f65cf3 |
 | Parser Gap 6 recovery | PASS | 1c7b5861 |
 
+### 20.3 Delta 2026-05-11
+
+A2 land + 5 cluster merges + #14 drain + #11/#12 wilson fixes (stage 1
+verification deferred to host re-promote).
+
+| Item | Status | Evidence |
+|---|---|---|
+| A2 in-place `_splice_imported_items` accumulator (stage1 OOM source-side fix) | PASS | ab2dfcee |
+| Stage 0 host rebuild incorporating A2 | PASS (source) / PENDING (deploy) | ddb21f21 |
+| Types cluster — A4 side-index / C4 HX2001 / B2 fn_name pin | PASS | bc50db32 |
+| C11 parse_only skip on atlas literals | PASS | 2b67ccb6 |
+| Lower cluster — C5 HX1101, C9 else-end, C10 HX1102, C16 HX1103 | PASS | f3f63b72 |
+| B1 `_hir_lower_type_ref` empty-name guard + C19 for-desugar | PASS | 4cd39b2a |
+| P2 batch — C12 (citation gate), C13 (units early-out), C14 (typed diags), C15 (lmodule if-expr), C20 HX2003 | PASS | 840c8f7d |
+| #14 `hir_to_mir_diags` drain in compiler/main (HX1101/2/3 surface) | PASS | 18c6a536 |
+| #10 wilson hexa-real-promotion → applied (incoming PATCHES.yaml) | PASS | 13143f18 |
+| #11 stdlib http_sse v1.1 (POST + body via curl stdin) | PASS | faca4134 |
+| #12 hexa build out-of-tree (flatten + `$HEXA_LANG/self` -I) | PASS | 21e7b518 |
+| #13 stage 1 punch list v2 — 2026-05-11 update (A2 verify deferred) | PASS | ee62470a |
+| superpowers/void D1–D6 defense layer design (incident 2026-05-11) | PASS | 5d97e9db |
+| Stage 2 / 3 witness harness + RFC-023 firmware linker spec | PASS | 2f9789e3 |
+
 ---
 
 ## 21. Downstream consumers
@@ -645,9 +759,9 @@ How downstream tools interact with hexa-lang today:
 | Consumer | Surface | Status |
 |---|---|---|
 | **orpheus** | `stdlib/c_ffi v1.1` (out-pointer) → duckdb_native; `stdlib/http v1.1` (POST + headers) → bitcoind RPC; `stdlib/write_text` → bulk file I/O | working post c_ffi v1.1 + write_text; http v1.1 inbox pending external |
-| **wilson** | RFC-020 enum payloads (G1), RFC-022 async (G2), `stdlib/cancel` (G3); G7 dynamic-linking RFC draft (nice-to-have, not blocking) | core port unblocks once G1+G2+G3 land; G4–G6 deferred |
+| **wilson** | RFC-020 enum payloads (G1), RFC-022 async (G2), `stdlib/cancel` (G3); `stdlib/http_sse v1.1` POST + body (provider-anthropic streaming); `hexa build` out-of-tree flatten + `$HEXA_LANG/self` -I; G7 dynamic-linking RFC draft (nice-to-have, not blocking) | core port unblocks via G1+G2+G3 (applied 2026-05-10); http_sse + build-out-of-tree closed 2026-05-11 (#11 / #12); A2 host promotion pending |
 | **anima** | shares language upstream via `self/`; consumes `compiler/discover/` outputs | following RFC-020 + atlas-side staging |
-| **firmware boards** (hexa-rtsc / hexa-chip / hexa-cern / hexa-antimatter / hexa-space) | `stdlib/core` + `stdlib/alloc` + `stdlib/hal` + `stdlib/embedded` + `stdlib/mcu`; per-board absorption under `firmware/boards/*` | F0 skeleton landed; F1–F5 in flight (#84–#87); ARM Cortex-M codegen (F3) blocks Rust→hexa migration for cern/antimatter |
+| **firmware boards** (hexa-rtsc / hexa-chip / hexa-cern / hexa-antimatter / hexa-space) | `stdlib/core` + `stdlib/alloc` + `stdlib/hal` + `stdlib/embedded` + `stdlib/mcu`; per-board absorption under `firmware/boards/*` | F0–F4 landed 2026-05-10; F5 (RFC-023) spec landed 2026-05-10 (implementation follow-up); qemu / hardware commission remaining gate |
 
 ---
 
@@ -663,7 +777,7 @@ Does this document comprehensively answer:
 | Revised timeline? | §15 (roadmap) + revised stage 1 estimate |
 
 Cross-reference verification:
-- All RFC links (RFC-017..022) resolve in `proposals/`.
+- All RFC links (RFC-017..023) resolve in `proposals/`.
 - All commit SHAs cited resolve via `git log --oneline`.
 - All file paths cited (`compiler/intrinsics/intrinsics.hexa`,
   `compiler/discover/*.hexa`, `compiler/link/hexa_ld.hexa`,
@@ -672,4 +786,7 @@ Cross-reference verification:
   exist on disk.
 
 Status: **ready for share** — SPEC.yaml + SPEC.md aligned for stage 1
-reach, downstream consumers, and audit verifiers.
+reach, downstream consumers, and audit verifiers. SPEC.yaml header
+fields (last_updated, status) still point to 2026-05-10 — SPEC.md
+header advances to 2026-05-11 ahead of SPEC.yaml; see
+`tool/render_spec.hexa` drift check.
