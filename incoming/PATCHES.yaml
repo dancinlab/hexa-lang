@@ -334,3 +334,90 @@
     the `self`-symlink-relative `..` trick. Left as a separate install-layer
     item; the probe chain here covers the in-repo, build-sibling, ~/.hx/bin
     (via the `self` symlink) and FHS layouts already.
+
+- id: stdlib-proc-nonblocking-spawn
+  source_commit: pending
+  source_files:
+    - self/stdlib/proc.hexa             # proc_spawn_async/poll/kill + exec_with_status &-child pitfall doc + selftest cases 6-9
+    - self/stdlib/test_proc_async.hexa  # new — driver for the proc.hexa selftest (cases 6-9)
+  compiler_impact: shared via stdlib — no compiler/ change, no self-host fixpoint risk (pure tmp-file + bg-PID pattern over the existing exec() builtin; mirrors proc_run_with_stdin). No rebuild required.
+  selftest_delta: "proc selftest 5 -> 9 cases (PASS n=9 fail=0); + test_proc_async driver 5/5 PASS — on both `hexa run` (interp) and `hexa build` (codegen/AOT)"
+  downstream_consumer: |
+    wilson provider-claude-cli — the LLM subprocess (`claude -p
+    --output-format json`: one final JSON blob, NOT a token stream → this,
+    not exec_stream_*) must not block the agent's input loop ("thinking 중
+    입력 안 됨" fix). Should switch from a blocking `proc_run` to
+    `proc_spawn_async` + `proc_poll` (poll the {done, output, rc}
+    response-set while still reading user input). Generally: any hexa
+    consumer that needs to launch a long one-shot child without pinning the
+    caller.
+  status: applied
+  applied_at: 2026-05-12
+  opened: 2026-05-12
+  note: |
+    Two asks landed in one commit:
+    (a) Non-blocking, response-set-oriented spawn primitive in
+        self/stdlib/proc.hexa:
+          proc_spawn_async(cmd: string) -> any   (handle map)
+          proc_poll(ph) -> any                   (#{done:bool, output:string, rc:int})
+          proc_kill(ph) -> int                   (SIGTERM→0.2s grace→SIGKILL→reap; rc 0)
+        (`ph` not `handle` — `handle` is a reserved word in hexa.) Pure
+        stdlib: spawn launches `( cmd > "$d/out" 2>&1 ; echo $? > "$d/rc" )
+        >/dev/null 2>&1 </dev/null &` in a detached subshell under a
+        `mktemp -d` dir; the wrapping exec() returns within ms. proc_poll
+        returns {done:false,output:"",rc:-1} (EAGAIN) until the rc file is
+        written, then {done:true, full accumulated stdout (+stderr), exit
+        rc} and caches/cleans up (stateful handle, repeat polls are O(1)).
+        proc_kill TERMs the subshell + `pkill -P` its children, brief
+        grace, then KILLs the same set; flips the handle done with rc=143
+        so a later poll reports terminated. Best-effort kill (a
+        double-forked grandchild can outlive it — for a hard process-GROUP
+        kill use the exec_stream_async/exec_stream_kill runtime builtins).
+        This is the ONE-FINAL-BLOB case; for a token stream use exec_stream_*.
+    (b) Documented the exec_with_status() + `&`-backgrounded-inner-command
+        pipe-inheritance trap in proc.hexa's module header:
+        exec_with_status("( inner ) &") STILL BLOCKS because the
+        backgrounded subshell inherits the popen pipe's write fd, so the
+        parent's read() doesn't see EOF until `inner` itself exits — the
+        fix is `( inner ) >/dev/null 2>&1 </dev/null &` (redirect the bg
+        child's fds away from the inherited pipe) or just use
+        proc_spawn_async, which does this fd hygiene for you.
+
+- id: stdlib-subsecond-sleep
+  source_commit: pending
+  source_files:
+    - self/runtime.c            # hexa_sleep_ms / hexa_sleep_ns — nanosleep(2)-backed, no fork
+    - self/hexa_full.hexa       # interp dispatch for sleep_ms / sleep_ns (next to sleep_s)
+    - self/codegen_c2.hexa      # gen2_expr 1-arg builtin dispatch (sleep_ms -> hexa_sleep_ms, sleep_ns -> hexa_sleep_ns) + _is_builtin_name recognition list
+    - self/native/hexa_cc.c     # regenerated from the SSOT modules (hexa cc --regen)
+    - self/native/hexa_v2       # regenerated
+    - self/test_sleep_ms.hexa   # new — sleep_ms/sleep_ns regression test (timing windows + clamp + backward-compat)
+  compiler_impact: |
+    Runtime builtin only (no stdlib .hexa change). New primitives:
+      sleep_ms(ms: int)  -> nanosleep({ms/1000, (ms%1000)*1_000_000 ns}) — no fork.
+      sleep_ns(ns: int)  -> nanosleep({ns/1e9, ns%1e9}) — no fork.
+    Both clamp negatives/zero to "return immediately" and loop on EINTR
+    resuming with the remaining time. `sleep(n)` is 100% untouched
+    (signature + behavior preserved). Backing call: nanosleep(2) — zero
+    process creation, replaces the `exec("sleep 0.1")` shell-out
+    (fork /bin/sh -> exec /bin/sleep -> waitpid, ~5-8 ms overhead per
+    tick) that sub-second throttle loops were paying.
+    self_host: regen self/native/{hexa_cc.c,hexa_v2} via `hexa cc --regen`
+    (21010 -> 21039 lines, +29 — NOT doubled). build/hexa_interp.real also
+    rebuilt from the new hexa_v2 so the interp path emits hexa_sleep_ms.
+  selftest_delta: "self/test_sleep_ms.hexa 5/5 PASS on both backends (interp `hexa run` + codegen/AOT `hexa_v2 -> clang`); test_async_codegen 4/4 (interp + AOT), test_enum_payload_full 15/15 (AOT), self-host smoke (hexa_v2 self/main.hexa -> clang -> --version = hexa 0.1.0-dispatch) all green on the regen'd hexa_v2"
+  downstream_consumer: |
+    wilson provider-claude-cli poll loop — swap `exec("sleep 0.1")` for
+    `sleep_ms(100)` (or the chosen interval): no fork per tick. wilson
+    measured the old fork churn at ~16% of a core on a 50 ms loop.
+    Generally: any hexa consumer with a sub-second throttle/poll loop.
+  status: applied
+  applied_at: 2026-05-12
+  opened: 2026-05-11
+  note: |
+    API: sleep_ms(ms: int) / sleep_ns(ns: int), backed by nanosleep(2)
+    (no fork). `~/.hx/bin/hexa_real` re-promote recommended so deployed
+    interp callers (`hexa run`) get sleep_ms; `hexa build` consumers
+    already get it via the repo's regenerated hexa_v2 + self/runtime.c.
+    Reporter: wilson (provider-claude-cli poll loop).
+  detail: patches/stdlib-subsecond-sleep.md

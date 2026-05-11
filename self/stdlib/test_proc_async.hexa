@@ -1,0 +1,59 @@
+// self/stdlib/test_proc_async.hexa — driver for the proc.hexa non-blocking
+// response-set spawn primitive (proc_spawn_async / proc_poll / proc_kill)
+// and the exec_with_status &-child pipe-inheritance pitfall demo.
+//
+// Source ask: wilson `provider-claude-cli` — the agent loop must not block
+// on the LLM CLI subprocess (`claude -p --output-format json`: one final
+// blob, not a token stream → proc_spawn_async, not exec_stream_*).
+//
+// WHY a driver (not direct `use "self/stdlib/proc"`): the interpreter path
+// (`hexa run`) does not resolve `use`-imported module functions — only the
+// codegen path (`hexa build`) flattens them. So the actual assertions live
+// in proc.hexa's own _selftest_main (cases 6-9: async spawn / poll / kill /
+// pitfall-fix timing); this file just shells out to that selftest and
+// checks for the PASS line, so a generic `*test*.hexa` harness picks it up.
+//
+// Run with:
+//   hexa run self/stdlib/test_proc_async.hexa
+//
+// Emits:  __PROC_ASYNC_TEST__ <PASS|FAIL> total=N pass=P fail=F
+// Exits 1 on any failure (raw#91 no_silent_errors).
+
+let mut __total = 0
+let mut __pass = 0
+
+fn check(name: string, ok: bool) {
+    __total = __total + 1
+    if ok {
+        __pass = __pass + 1
+        println("  ok  " + name)
+    } else {
+        println("  FAIL " + name)
+    }
+}
+
+fn main() -> int {
+    // Locate the hexa launcher: prefer ./hexa in the repo root (the
+    // committed dispatcher script); fall back to bare `hexa` on PATH.
+    let hexa_bin = if file_exists("./hexa") { "./hexa" } else { "hexa" }
+
+    // @allow-bare-exec — drives proc.hexa's own selftest in a child
+    // process (cases 6-9 = the async-spawn + pitfall coverage).
+    // @allow-silent-exit — we inspect the captured output, not just rc.
+    let res = exec_with_status(hexa_bin + " run self/stdlib/proc.hexa --selftest 2>&1")
+    let out = to_string(res[0])
+    let rc = res[1]
+    println(out.trim())
+
+    check("proc selftest rc == 0", rc == 0)
+    check("proc selftest reports PASS", out.contains("__PROC_SELFTEST__ PASS"))
+    check("all 9 cases ran (n=9)", out.contains("n=9"))
+    check("no case failures (fail=0)", out.contains("fail=0"))
+    check("no per-case FAIL lines", !out.contains("[proc.selftest] FAIL"))
+
+    let __fail = __total - __pass
+    let __status = if __fail == 0 { "PASS" } else { "FAIL" }
+    println("__PROC_ASYNC_TEST__ " + __status + " total=" + to_string(__total) + " pass=" + to_string(__pass) + " fail=" + to_string(__fail))
+    if __fail != 0 { return 1 }
+    return 0
+}

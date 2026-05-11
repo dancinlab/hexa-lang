@@ -33,6 +33,44 @@
 //   popen_lines_with_status(cmd: string) -> [any]
 //     same but returns [lines: [string], rc: int]. Mirrors the
 //     exec_with_status builtin shape.
+//
+//   proc_spawn_async(cmd: string) -> any            (non-blocking handle)
+//   proc_poll(handle) -> any                        (#{done, output, rc})
+//   proc_kill(handle) -> int                        (SIGTERM→grace→SIGKILL)
+//     fire-and-forget, response-set (NOT token-stream) child process.
+//     See "non-blocking response-set spawn" section below.
+//
+// ── PITFALL: exec_with_status() + a `&`-backgrounded inner command ────
+//
+// (wilson `provider-claude-cli` "thinking 중 입력 안 됨" — the LLM subprocess
+//  must not block the agent's input loop.)
+//
+// `exec()` / `exec_with_status()` / `exec_capture()` are synchronous popen:
+// the parent reads the child's stdout pipe to EOF before returning. EOF on
+// that pipe arrives only when *every* process holding the write end has
+// closed it — not just the foreground command.
+//
+//   exec_with_status("( slow_thing ) &")            # ❌ STILL BLOCKS
+//
+// Here the backgrounded subshell `( slow_thing )` inherits the popen pipe's
+// write fd. The foreground shell exits immediately, but the pipe stays open
+// in the still-running grandchild, so the parent's read() does NOT see EOF
+// until `slow_thing` itself exits. You "backgrounded" it but gained nothing
+// — the parent is pinned for the full duration of `slow_thing`.
+//
+//   exec_with_status("( slow_thing ) >/dev/null 2>&1 </dev/null &")  # ✓ FAST
+//
+// Redirecting the bg child's std{in,out,err} away from the inherited pipe
+// lets the foreground shell's exit close the last write end → EOF → the
+// parent returns at once; `slow_thing` keeps running detached.
+//
+// For the response-set case (spawn a long command, poll for its final blob
+// + exit code later) prefer `proc_spawn_async` / `proc_poll` — they do this
+// fd hygiene for you AND capture the detached child's stdout + rc to a temp
+// dir so you can collect it after it exits. (For a token *stream* — child
+// emits incrementally — use the `exec_stream_*` builtins instead; this
+// module's async spawn is for `claude -p --output-format json`-style "one
+// final blob" children, not streaming.)
 
 // ── popen_lines_with_status ──────────────────────────────────────
 //
@@ -184,6 +222,158 @@ fn proc_run_json_bridge(cmd: string, payload) {
     return parsed
 }
 
+// ── non-blocking response-set spawn (proc_spawn_async / poll / kill) ──
+//
+// Source ask: wilson `provider-claude-cli` — the agent loop must keep
+// reading user input while an LLM CLI subprocess (`claude -p
+// --output-format json`) runs. That child emits ONE final blob (JSON) on
+// exit, not a token stream — so `exec_stream_*` (line-at-a-time iterator)
+// is the wrong tool; what's wanted is "launch it, don't block, poll the
+// {done, output, rc} response-set later".
+//
+// Design (pure stdlib — no runtime.c change, no self-host fixpoint risk;
+//         mirrors proc_run_with_stdin's temp-file pattern):
+//   proc_spawn_async(cmd):
+//     mktemp -d a private dir; launch
+//       ( cmd > "$d/out" 2>&1 ; echo $? > "$d/rc" ) >/dev/null 2>&1 </dev/null &
+//     in a detached subshell whose own std{in,out,err} are redirected
+//     AWAY from the popen pipe (the pitfall fix, above), so the wrapping
+//     `exec()` returns immediately. We capture `$!|$d` (subshell pid +
+//     dir) and hand back a small handle map.
+//   proc_poll(handle):
+//     handle is stateful — once we observe `$d/rc` is present AND
+//     non-empty (the subshell has written the child's exit status) we
+//     read `$d/out`, parse rc, rm -rf the dir, flip handle.done=true and
+//     cache {output, rc} so further polls are O(1). Until then →
+//     {done:false, output:"", rc:-1} (EAGAIN — child still running, or
+//     rc file created-but-not-yet-written; either way: not done).
+//   proc_kill(handle):
+//     SIGTERM the subshell pid (and `pkill -P` its children = the cmd),
+//     ~0.2s grace, then SIGKILL the same set; rm -rf the dir; flip
+//     handle.done=true with rc = 143 (128+SIGTERM) so a subsequent poll
+//     reports terminated rather than spinning on a now-deleted rc file.
+//
+// Known limits (raw#91 honest): kill is best-effort — a grandchild that
+// `cmd` itself daemonised (double-fork) can outlive the SIGKILL; for the
+// claude-CLI use case (a single node process) this is adequate. For a
+// hard process-GROUP kill use the `exec_stream_async` + `exec_stream_kill`
+// runtime builtins (fork+setpgid). Temp-dir is `mktemp -d` so the
+// concurrent-nonce-collision caveat that applies to proc_run_with_stdin
+// does not apply here.
+
+// _proc_async_handle_done — internal: stamp the proc handle as finished
+// and drop the temp dir. Idempotent.  (`handle` is a reserved word in
+// hexa, hence the `ph` parameter name throughout this section.)
+fn _proc_async_handle_done(ph, output: string, rc: int) {
+    let dir = to_string(ph["dir"])
+    if dir != "" {
+        // @allow-bare-exec — best-effort temp-dir cleanup; rc irrelevant.
+        // @allow-silent-exit
+        let _drop = exec("rm -rf '" + dir + "' 2>/dev/null")
+    }
+    ph["done"] = true
+    ph["output"] = output
+    ph["rc"] = rc
+}
+
+// proc_spawn_async(cmd) -> any  (proc handle)
+//
+// Launch `cmd` detached; the caller is NOT blocked. Returns a handle map
+// `#{pid, dir, out_path, rc_path, done:false, output:"", rc:-1}` to pass
+// to proc_poll / proc_kill. stdout+stderr of `cmd` are merged (`2>&1`)
+// into a temp file the child writes; the exit code lands in a sibling
+// file once `cmd` returns.
+pub fn proc_spawn_async(cmd: string) -> any {
+    // mktemp -d -> private dir; the subshell is detached with its own
+    // std{in,out,err} -> /dev/null so the popen pipe sees EOF immediately
+    // (the exec_with_status &-child pitfall fix documented in the header).
+    let launcher = "d=$(mktemp -d \"${TMPDIR:-/tmp}/hexa_proc_async.XXXXXX\") || exit 1; " +
+        "( " + cmd + " > \"$d/out\" 2>&1 ; echo $? > \"$d/rc\" ) >/dev/null 2>&1 </dev/null & " +
+        "echo \"$!|$d\""
+    // @allow-bare-exec — synchronous launch handshake only; the child
+    // itself runs detached, so this returns within ms (the foreground
+    // shell merely echoes `$!|$d` then exits).
+    // @allow-silent-exit — launcher rc not inspected; a mktemp failure
+    // surfaces as an empty handle dir, which proc_poll reports as done
+    // with rc=-1 on the first call.
+    let raw = to_string(exec(launcher)).trim()
+    let bar = raw.index_of("|")
+    let mut pid = ""
+    let mut dir = ""
+    if bar > 0 {
+        pid = raw.substring(0, bar)
+        dir = raw.substring(bar + 1, len(raw))
+    }
+    let ph = #{
+        "pid": pid,
+        "dir": dir,
+        "out_path": dir + "/out",
+        "rc_path": dir + "/rc",
+        "done": false,
+        "output": "",
+        "rc": -1
+    }
+    if dir == "" {
+        // mktemp / launch failed — present as a finished, failed handle.
+        _proc_async_handle_done(ph, "", -1)
+    }
+    return ph
+}
+
+// proc_poll(ph) -> any  (#{done: bool, output: string, rc: int})
+//
+//   done=false, output="", rc=-1  -> child still running (EAGAIN). Caller
+//                                    should do other work and poll again.
+//   done=true,  output=<stdout>,  -> child has exited; `output` is the full
+//   rc=<exit code>                  accumulated stdout (+stderr), `rc` its
+//                                   exit status (143 if proc_kill'd).
+//
+// Stateful: once done, the temp dir is removed and the result is cached
+// in the handle, so repeated polls are cheap and stable.
+pub fn proc_poll(ph) -> any {
+    if ph["done"] == true {
+        return #{ "done": true, "output": to_string(ph["output"]), "rc": ph["rc"] }
+    }
+    let rc_path = to_string(ph["rc_path"])
+    if rc_path == "" || !file_exists(rc_path) {
+        return #{ "done": false, "output": "", "rc": -1 }
+    }
+    let rc_raw = to_string(read_file(rc_path)).trim()
+    if rc_raw == "" {
+        // rc file exists but the subshell's `echo $? > rc` has not landed
+        // yet — treat as still-running (next poll will catch it).
+        return #{ "done": false, "output": "", "rc": -1 }
+    }
+    let out_path = to_string(ph["out_path"])
+    let output = if file_exists(out_path) { to_string(read_file(out_path)) } else { "" }
+    let rc = to_int(rc_raw)
+    _proc_async_handle_done(ph, output, rc)
+    return #{ "done": true, "output": output, "rc": rc }
+}
+
+// proc_kill(ph) -> int
+//
+// SIGTERM the detached subshell (and its direct children = `cmd`), brief
+// grace, then SIGKILL the same set; remove the temp dir and mark the
+// handle done (rc = 143, i.e. 128+SIGTERM) so a subsequent proc_poll
+// reports terminated. Returns 0. Best-effort — see "Known limits" above.
+pub fn proc_kill(ph) -> int {
+    if ph["done"] == true { return 0 }
+    let pid = to_string(ph["pid"])
+    if pid != "" {
+        let killer = "P='" + pid + "'; " +
+            "kill -TERM \"$P\" 2>/dev/null; pkill -TERM -P \"$P\" 2>/dev/null; " +
+            "sleep 0.2; " +
+            "kill -KILL \"$P\" 2>/dev/null; pkill -KILL -P \"$P\" 2>/dev/null; true"
+        // @allow-bare-exec — process teardown; the `; true` floor keeps rc 0.
+        // @allow-silent-exit — kill rc deliberately ignored (target may have
+        // already exited; that is success for our purposes).
+        let _drop = exec(killer)
+    }
+    _proc_async_handle_done(ph, to_string(ph["output"]), 143)
+    return 0
+}
+
 // ── --selftest dispatcher ─────────────────────────────────────────
 //
 // `hexa run self/stdlib/proc.hexa --selftest` exercises the synthetic
@@ -193,6 +383,10 @@ fn proc_run_json_bridge(cmd: string, payload) {
 //   3. single:     echo only              → ["only"]
 //   4. status:     false                  → ([], rc!=0)
 //   5. ordering:   printf "x\ny\nz\n"     → ["x","y","z"]
+//   6. async spawn → first poll done=false (caller not blocked)
+//   7. async, after child exits → done=true, output="done\n", rc=0
+//   8. proc_kill on `sleep 10` → next poll done=true, rc=143, returns fast
+//   9. pitfall fix: exec_with_status("( sleep N ) >/dev/null 2>&1 &") fast
 //
 // Emits __PROC_SELFTEST__ <PASS|FAIL> n=<N> fail=<M> for harness pickup.
 fn _selftest_main() {
@@ -239,6 +433,55 @@ fn _selftest_main() {
     if len(r5) != 3 || r5[0] != "x" || r5[1] != "y" || r5[2] != "z" {
         fail = fail + 1
         eprintln("[proc.selftest] FAIL case5: " + to_string(r5))
+    }
+
+    // Case 6: async spawn — first poll must be not-done (caller NOT blocked).
+    n = n + 1
+    let h6 = proc_spawn_async("sleep 0.5; echo done")
+    let p6a = proc_poll(h6)
+    if p6a["done"] != false || to_string(p6a["output"]) != "" {
+        fail = fail + 1
+        eprintln("[proc.selftest] FAIL case6: expected {done:false,out:''}, got done=" + to_string(p6a["done"]) + " out=" + to_string(p6a["output"]))
+    }
+
+    // Case 7: after the child exits → done=true, full stdout, rc=0; repeat
+    //         poll is cached/stable.
+    n = n + 1
+    // @allow-bare-exec — fixed-duration test wait (no sleep_ms in interp).
+    // @allow-silent-exit
+    let _w7 = exec("sleep 0.8")
+    let p6b = proc_poll(h6)
+    let p6c = proc_poll(h6)
+    if p6b["done"] != true || to_string(p6b["output"]) != "done\n" || p6b["rc"] != 0 || p6c["done"] != true || to_string(p6c["output"]) != "done\n" {
+        fail = fail + 1
+        eprintln("[proc.selftest] FAIL case7: done=" + to_string(p6b["done"]) + " out=" + to_string(p6b["output"]) + " rc=" + to_string(p6b["rc"]))
+    }
+
+    // Case 8: proc_kill on a long child → returns promptly, next poll done.
+    n = n + 1
+    let h8 = proc_spawn_async("sleep 10")
+    let kt0 = now_monotonic_s()
+    let krc = proc_kill(h8)
+    let kt1 = now_monotonic_s()
+    let p8 = proc_poll(h8)
+    if krc != 0 || (kt1 - kt0) >= 2.0 || p8["done"] != true || p8["rc"] != 143 {
+        fail = fail + 1
+        eprintln("[proc.selftest] FAIL case8: krc=" + to_string(krc) + " dt=" + to_string(kt1 - kt0) + " done=" + to_string(p8["done"]) + " rc=" + to_string(p8["rc"]))
+    }
+
+    // Case 9: PITFALL FIX — `( inner ) >/dev/null 2>&1 </dev/null &` (the
+    //         form proc_spawn_async uses) returns at once; without the
+    //         redirects the popen pipe would pin the parent for `inner`'s
+    //         whole duration. We assert it returns well under that duration.
+    n = n + 1
+    let pt0 = now_monotonic_s()
+    // @allow-bare-exec — pitfall-fix demo; we assert on timing, not rc.
+    // @allow-silent-exit
+    let _pr = exec("( sleep 0.5 ) >/dev/null 2>&1 </dev/null &")
+    let pt1 = now_monotonic_s()
+    if (pt1 - pt0) >= 0.3 {
+        fail = fail + 1
+        eprintln("[proc.selftest] FAIL case9: redirected &-child took " + to_string(pt1 - pt0) + "s (expected < 0.3s, pipe-inheritance regression?)")
     }
 
     let status = if fail == 0 { "PASS" } else { "FAIL" }
