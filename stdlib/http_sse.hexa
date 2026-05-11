@@ -114,10 +114,13 @@
 //      open stream pass timeout_sec <= 0 → no --max-time flag (let
 //      OS keepalive govern). Default 300s for finite jobs.
 //
-//   6. No HTTP method override. SSE GET is the wire convention; for
-//      streaming POST (rare — some HF endpoints want the prompt as
-//      body) call http2_post() and feed its body to a separate parser.
-//      A future http_sse_post() can wrap proc_run_with_stdin.
+//   6. HTTP method override: RESOLVED in v1.1 (2026-05-11, faca4134).
+//      http_sse_post / http_sse_open_post / http_sse_open_method route
+//      the body via `printf %s '...' | curl --data-binary @-` (no temp
+//      file, no inline-arg quoting fragility). The GET wire surface is
+//      byte-identical. Streaming POST under `hexa run` still falls to
+//      the buffered path (http_sse_post_buffered) — same AOT-vs-interp
+//      split as item 1.
 //
 //   7. Binary frame in SSE 'data:' is base64-on-the-wire by spec — we
 //      pass through as string (UTF-8 safe per curl). Zero bytes (NUL)

@@ -668,6 +668,17 @@ diagnostics:
       stage: S3
       title: callee is not callable
       emitted_at: "compiler/check/types.hexa::_types_check_call (callee_t.kind != \"fn\" — non-fn value invoked)"
+  # Codes referenced by name in SPEC.md prose/examples but not in the
+  # "new" set above — enumerated here so the render_spec drift check
+  # (diag-code-set: SPEC.md ↔ SPEC.yaml) stays clean. Full catalog is
+  # the SSOT at catalog_location, not this file.
+  notable_existing_codes:
+    HX1042:
+      severity: Error   # fatal
+      stage: S1
+      title: atlas node not found
+      emitted_at: "compiler/diag/catalog.hexa (atlas P/C/L/E resolve miss)"
+      note: canonical @grace example in SPEC.md §8 (until=2026-06-01, legacy atlas refactor)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Roadmap phases (rough)
