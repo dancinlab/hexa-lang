@@ -4,7 +4,7 @@ Welcome to the HEXA-LANG community. This language is built on the mathematics of
 
 ## Resources
 
-- **GitHub**: [need-singularity/hexa-lang](https://github.com/need-singularity/hexa-lang)
+- **GitHub**: [dancinlab/hexa-lang](https://github.com/dancinlab/hexa-lang)
 - **The HEXA Book**: [docs/book/](../book/README.md) -- learn HEXA from scratch
 - **Language Spec**: [docs/spec.md](../spec.md) -- formal specification
 - **n=6 Constants**: [docs/n6-constants.md](../n6-constants.md) -- mathematical reference
@@ -44,4 +44,4 @@ See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the full code of conduct.
 ## Contact
 
 - **Email**: nerve011235@gmail.com
-- **GitHub Issues**: [need-singularity/hexa-lang/issues](https://github.com/need-singularity/hexa-lang/issues)
+- **GitHub Issues**: [dancinlab/hexa-lang/issues](https://github.com/dancinlab/hexa-lang/issues)

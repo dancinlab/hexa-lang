@@ -13,7 +13,7 @@
 //
 // `.raw-ref` FORMAT (hexa-like directive)
 //     ref 1 live "hexa-lang canonical"
-//       source github.com/need-singularity/hexa-lang
+//       source github.com/dancinlab/hexa-lang
 //       branch main
 //       path .raw
 //       pinned-hash <sha256_of_raw_file>
@@ -248,8 +248,8 @@ fn _primary_ref(refs: array) -> array {
 
 // ─── canonical URL derivation ───────────────────────────────────
 //
-// source=`github.com/need-singularity/hexa-lang`, branch=main, path=.raw
-// → https://raw.githubusercontent.com/need-singularity/hexa-lang/main/.raw
+// source=`github.com/dancinlab/hexa-lang`, branch=main, path=.raw
+// → https://raw.githubusercontent.com/dancinlab/hexa-lang/main/.raw
 
 fn _derive_raw_url(source: string, branch: string, ipath: string) -> string {
     // strip protocol if present

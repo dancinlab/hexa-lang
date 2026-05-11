@@ -3,7 +3,7 @@
     "displayName": "HEXA-LANG",
     "description": "The Perfect Number Programming Language",
     "version": "0.1.0",
-    "publisher": "need-singularity",
+    "publisher": "dancinlab",
     "engines": {
         "vscode": "^1.75.0"
     },
@@ -19,7 +19,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/need-singularity/hexa-lang"
+        "url": "https://github.com/dancinlab/hexa-lang"
     },
     "contributes": {
         "languages": [

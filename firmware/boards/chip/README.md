@@ -24,7 +24,7 @@
 [![Version](https://img.shields.io/badge/version-1.0.0-informational.svg)](CHANGELOG.md)
 [![Verbs: 28 / 7 groups](https://img.shields.io/badge/verbs-28%20%2F%207%20groups-blue.svg)](#verbs)
 [![Status: spec-first](https://img.shields.io/badge/status-spec--first-orange.svg)](#status)
-[![Provenance](https://img.shields.io/badge/from-n6--arch%40c0f1f570-purple.svg)](https://github.com/need-singularity/canon)
+[![Provenance](https://img.shields.io/badge/from-n6--arch%40c0f1f570-purple.svg)](https://github.com/dancinlab/canon)
 [![Verify: 5/5](https://img.shields.io/badge/verify-5%2F5-brightgreen.svg)](#verify)
 [![Sandboxes: 29/29](https://img.shields.io/badge/sandboxes-29%2F29-brightgreen.svg)](#verify)
 [![Tests: 4/4](https://img.shields.io/badge/tests-4%2F4-brightgreen.svg)](#verify)
@@ -41,7 +41,7 @@
 > Wired in 2026-05-07 — see "Build & verify" below.
 
 > **Distribution**: GitHub canonical at
-> <https://github.com/need-singularity/hexa-chip>. CLI tooling — installed
+> <https://github.com/dancinlab/hexa-chip>. CLI tooling — installed
 > via `hx install hexa-chip` from the hexa-lang registry, or `git clone`
 > directly.
 
@@ -226,7 +226,7 @@ hexa-chip status                              # → 29-verb / 6-group table
 ### Via git clone (works today)
 
 ```bash
-git clone https://github.com/need-singularity/hexa-chip.git ~/.hexa-chip
+git clone https://github.com/dancinlab/hexa-chip.git ~/.hexa-chip
 export HEXA_CHIP_ROOT=~/.hexa-chip
 export PATH="$HEXA_CHIP_ROOT/cli:$PATH"
 
@@ -304,12 +304,12 @@ Run all 29 with `make verbs` (or filter: `hexa run verify/verb_runner.hexa --gro
 
 ## Cross-link
 
-- **`need-singularity/hexa-rtsc`** — SC-chip dependency (this repo's
+- **`dancinlab/hexa-rtsc`** — SC-chip dependency (this repo's
   `sc/` verb is the upstream substrate that hexa-rtsc consumes).
-- **`need-singularity/hexa-codex`** — NPU / AI-chip ↔ AI substrate
+- **`dancinlab/hexa-codex`** — NPU / AI-chip ↔ AI substrate
   (this repo's `npu_n6/` + `accel/` + `pim/` verbs feed hexa-codex
   inference IP).
-- **`need-singularity/anima`** — `conscious_chip/` + `conscious_soc/`
+- **`dancinlab/anima`** — `conscious_chip/` + `conscious_soc/`
   ↔ anima's consciousness substrate; experimental axis with no
   empirical claim at v1.0.0.
 
@@ -322,4 +322,4 @@ Upstream SSOT: `canon/domains/compute/` (commit `c0f1f570`,
 
 MIT — see [LICENSE](LICENSE).
 
-Copyright (c) 2026 need-singularity (박민우 <nerve011235@gmail.com>).
+Copyright (c) 2026 dancinlab (박민우 <nerve011235@gmail.com>).

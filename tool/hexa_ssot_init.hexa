@@ -89,7 +89,7 @@ fn render_raw_ref(project: string) -> string {
     lines.push("# Populate pinned-hash via: ./hexa tool/raw_sync.hexa check")
     lines.push("")
     lines.push("ref 1 live \"hexa-lang canonical (" + project + ")\"")
-    lines.push("  source github.com/need-singularity/hexa-lang")
+    lines.push("  source github.com/dancinlab/hexa-lang")
     lines.push("  branch main")
     lines.push("  path .raw")
     lines.push("  pinned-hash TO_BE_FILLED_ON_FIRST_SYNC")

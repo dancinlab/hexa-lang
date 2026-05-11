@@ -34,7 +34,7 @@ println("html embedded: " + html_ver)
 // 3. GitHub Pages API — 2026-04-11: python3 → pure-hexa json_parse
 let mut has_pages = "unknown"
 try {
-  let raw = exec("gh api repos/need-singularity/nexus 2>/dev/null").trim()
+  let raw = exec("gh api repos/dancinlab/nexus 2>/dev/null").trim()
   if len(raw) > 0 {
     let d = json_parse(raw)
     has_pages = to_string(d["has_pages"])
@@ -45,10 +45,10 @@ try {
 println("has_pages: " + has_pages)
 
 // 4. URL 프로빙
-let u1 = "https://need-singularity.github.io/nexus/"
-let u2 = "https://need-singularity.github.io/nexus/index.html"
-let u3 = "https://need-singularity.github.io/nexus/shared/reality_map_3d.html"
-let u4 = "https://need-singularity.github.io/nexus/reality_map_3d.html"
+let u1 = "https://dancinlab.github.io/nexus/"
+let u2 = "https://dancinlab.github.io/nexus/index.html"
+let u3 = "https://dancinlab.github.io/nexus/shared/reality_map_3d.html"
+let u4 = "https://dancinlab.github.io/nexus/reality_map_3d.html"
 
 let mut c1 = "err"
 let mut c2 = "err"
@@ -80,8 +80,8 @@ report = report + "- dashboard.html 존재: " + local_dash + "\n"
 report = report + "- docs/index.html 존재: " + docs_index + "\n"
 report = report + "- .github/workflows/ 파일 수: " + workflows + "\n\n"
 report = report + "## GitHub Pages API\n"
-report = report + "- repos/need-singularity/nexus has_pages: " + has_pages + "\n"
-report = report + "- repos/need-singularity/nexus/pages: 404 (사이트 없음)\n\n"
+report = report + "- repos/dancinlab/nexus has_pages: " + has_pages + "\n"
+report = report + "- repos/dancinlab/nexus/pages: 404 (사이트 없음)\n\n"
 report = report + "## URL 프로빙 (curl -L)\n| URL | HTTP |\n|---|---|\n" + probe_md + "\n"
 report = report + "## 버전 격차\n"
 report = report + "- Target 요구: v6.0 / 276 노드\n"

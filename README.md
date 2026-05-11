@@ -80,7 +80,7 @@ Full record: 14+ pinned decisions, all traceable to RFC-017 through RFC-020.
 
 ```bash
 # 1. clone
-git clone https://github.com/need-singularity/hexa-lang
+git clone https://github.com/dancinlab/hexa-lang
 cd hexa-lang
 
 # 2. install hexa + hx (one-liner, drops binaries into ~/.hx/bin)
@@ -198,7 +198,7 @@ Phase status (PASS / IN-PROGRESS / DEFERRED) lives in [`SPEC.yaml::phases_comple
 
 ## 📜 License
 
-MIT License. Copyright (c) 2026 need-singularity. See [`LICENSE`](LICENSE).
+MIT License. Copyright (c) 2026 dancinlab. See [`LICENSE`](LICENSE).
 
 * * *
 

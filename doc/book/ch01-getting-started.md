@@ -8,13 +8,13 @@ Choose one of three methods:
 
 ```bash
 # Option A: Homebrew (macOS)
-brew install need-singularity/tap/hexa-lang
+brew install dancinlab/tap/hexa-lang
 
 # Option B: hx package manager (any platform)
 # (see pkg/hx — no Rust toolchain required)
 
 # Option C: From source (100% self-host, Rust 폐기 — 2026-04-13~)
-git clone https://github.com/need-singularity/hexa-lang.git
+git clone https://github.com/dancinlab/hexa-lang.git
 cd hexa-lang
 cp hexa /usr/local/bin/    # stage1 CLI dispatcher (77KB, go/cargo style)
 # Rebuild from source: ./hexa build self/main.hexa -o hexa

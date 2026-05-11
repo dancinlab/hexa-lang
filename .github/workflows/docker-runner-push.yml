@@ -11,7 +11,7 @@
 #
 #   This workflow assembles both linux/amd64 + linux/arm64 ELFs natively
 #   (mirroring bootstrap.yml stages) and pushes the multi-arch manifest
-#   list to ghcr.io/need-singularity/hexa-runner:<tag>.
+#   list to ghcr.io/dancinlab/hexa-runner:<tag>.
 #
 # RELATIONSHIP TO LOCAL TOOL
 #   tool/build_runner_image.hexa is the operator-side path (cross-build
@@ -22,13 +22,13 @@
 #   running the local tool.
 #
 # IMAGE TAGS PUSHED
-#   ghcr.io/need-singularity/hexa-runner:latest         (always)
-#   ghcr.io/need-singularity/hexa-runner:<short-sha>    (commit pin)
+#   ghcr.io/dancinlab/hexa-runner:latest         (always)
+#   ghcr.io/dancinlab/hexa-runner:<short-sha>    (commit pin)
 #
 # WHY ghcr.io
 #   GitHub-native: GITHUB_TOKEN already has package:write, no extra
 #   secret to manage.  Mirrors the existing pattern used by
-#   tool/ensure_hive_exec.hexa (ghcr.io/need-singularity/airgenome:fat).
+#   tool/ensure_hive_exec.hexa (ghcr.io/dancinlab/airgenome:fat).
 #
 # TRIGGER
 #   - push to main (auto-publish)

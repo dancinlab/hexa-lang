@@ -141,7 +141,7 @@ hetzner (currently SSOT only has `ubu1 ubu2`).
 
 ### `harness/<sub>`
 
-Multi-axis dispatcher for `need-singularity/browser-harness` CLI. The only route
+Multi-axis dispatcher for `dancinlab/browser-harness` CLI. The only route
 with the full axis system (target/fmt/async/timeout). hxq short-circuits this
 prefix to bypass the docker hexa runtime.
 
@@ -301,11 +301,11 @@ shareable URL bookmarks, and macOS LaunchServices integration.
 
 | Scope             | Owner module / repo                          |
 |-------------------|----------------------------------------------|
-| `kick`, `omega`   | `nexus/cli/run.hexa` (need-singularity/nexus) |
+| `kick`, `omega`   | `nexus/cli/run.hexa` (dancinlab/nexus) |
 | `claude/login`    | claude-code session                          |
 | `htz/*`           | hetzner ops (no SSOT module)                 |
-| `recovery/fleet`  | `hive resource` CLI (need-singularity/hive-resource) |
-| `harness/*`       | `need-singularity/browser-harness`           |
+| `recovery/fleet`  | `hive resource` CLI (dancinlab/hive-resource) |
+| `harness/*`       | `dancinlab/browser-harness`           |
 | `memory/save`     | claude-code memory layer (hive project)      |
 | `gate/*`, `cmd/*`, `active`, `remote/*` | `~/core/hexa-lang/gate/`        |
 

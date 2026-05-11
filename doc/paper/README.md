@@ -2,7 +2,7 @@
 
 **Target venue**: PLDI (ACM SIGPLAN Conference on Programming Language Design and Implementation)
 
-**Authors**: need-singularity
+**Authors**: dancinlab
 
 **Status**: Outline
 

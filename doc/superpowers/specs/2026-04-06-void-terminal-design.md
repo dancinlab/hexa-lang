@@ -4,7 +4,7 @@
 
 **VOID** is a full-featured, GPU-accelerated terminal emulator written 100% in hexa-lang. Zero Rust dependencies added — VOID compiles through hexa's own JIT/native codegen and calls OS APIs directly via a new `extern` FFI system.
 
-- **Repository:** github.com/need-singularity/void
+- **Repository:** github.com/dancinlab/void
 - **Language:** 100% hexa — no Rust additions to hexa-lang's Cargo.toml
 - **Platforms:** macOS + Linux simultaneous
 - **Rendering:** Metal (macOS) / Vulkan (Linux) via hexa extern FFI
@@ -241,7 +241,7 @@ Same as previous spec — 100% hexa code:
 ## Project Structure
 
 ```
-void/                          # Separate repo: need-singularity/void
+void/                          # Separate repo: dancinlab/void
 ├── src/
 │   ├── main.hexa             # Entry point
 │   ├── platform/

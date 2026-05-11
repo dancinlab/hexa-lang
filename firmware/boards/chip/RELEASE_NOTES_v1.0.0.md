@@ -5,7 +5,7 @@
 across 7 groups; per-verb working `.hexa` CLI sandboxes TBD)
 **Provenance**: extracted 2026-05-06 from `canon/domains/compute/`
 at SHA `c0f1f570`. Sister-extraction of `hexa-bio` (molecular toolkit, 4
-verbs), `hexa-rtsc`, `hexa-codex`, and the wider `need-singularity` family
+verbs), `hexa-rtsc`, `hexa-codex`, and the wider `dancinlab` family
 (`hexa-{antimatter, bot, brain, cosmos, earth, energy, fantasy, fusion,
 lang, millennium, os, pet, space, sscb, time, ufo}`).
 
@@ -32,7 +32,7 @@ full `canon` monorepo.
 - **MIT license** — pure permissive. No proprietary fab content, no
   NDA material, no trade-secret data.
 - **GitHub-only distribution** — canonical at
-  <https://github.com/need-singularity/hexa-chip>.
+  <https://github.com/dancinlab/hexa-chip>.
 
 ## Installation
 
@@ -42,7 +42,7 @@ hx install hexa-chip@1.0.0
 hexa-chip --version           # → 1.0.0
 
 # Or git clone (works today):
-git clone https://github.com/need-singularity/hexa-chip.git ~/.hexa-chip
+git clone https://github.com/dancinlab/hexa-chip.git ~/.hexa-chip
 export HEXA_CHIP_ROOT=~/.hexa-chip
 export PATH="$HEXA_CHIP_ROOT/cli:$PATH"
 hexa run "$HEXA_CHIP_ROOT/cli/hexa-chip.hexa" selftest
@@ -88,11 +88,11 @@ ls $HEXA_CHIP_ROOT/architecture/   # browse verb spec directly
 
 ## Cross-link
 
-- **`need-singularity/hexa-rtsc`** — depends on this repo's `sc/` verb
+- **`dancinlab/hexa-rtsc`** — depends on this repo's `sc/` verb
   (SC-chip substrate).
-- **`need-singularity/hexa-codex`** — depends on this repo's `npu_n6/` +
+- **`dancinlab/hexa-codex`** — depends on this repo's `npu_n6/` +
   `accel/` + `pim/` verbs (NPU / AI-chip IP).
-- **`need-singularity/anima`** — depends on this repo's `conscious_chip/`
+- **`dancinlab/anima`** — depends on this repo's `conscious_chip/`
   + `conscious_soc/` verbs (consciousness substrate).
 
 ## Provenance
@@ -105,10 +105,10 @@ ls $HEXA_CHIP_ROOT/architecture/   # browse verb spec directly
   `chip-isa-n6` → `isa_n6`, `advanced-packaging` → `advanced_packaging`,
   `consciousness-chip` → `conscious_chip`, etc).
 - Sister extractions: `hexa-bio` v1.1.0+ (molecular toolkit), `hexa-rtsc`,
-  `hexa-codex`, `anima`, plus the wider `need-singularity` family.
+  `hexa-codex`, `anima`, plus the wider `dancinlab` family.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
 
-Copyright (c) 2026 need-singularity (박민우 <nerve011235@gmail.com>).
+Copyright (c) 2026 dancinlab (박민우 <nerve011235@gmail.com>).

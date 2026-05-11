@@ -1,7 +1,7 @@
 // tool/readme_english_audit.hexa — public README English-only audit
 //
 // 목적:
-//   need-singularity org 5개 repo (canon, nexus, hexa-lang, anima, papers)
+//   dancinlab org 5개 repo (canon, nexus, hexa-lang, anima, papers)
 //   의 루트 README.md 에 CJK (한글 / 일본어 / 중국어) 혼재 여부를 감지.
 //   arXiv 호환 + 국제 기여 우선 정책 (.own #1 doc-english-required) 의 enforce path.
 //
@@ -57,7 +57,7 @@ fn file_exists(path: string) -> bool {
 }
 
 // ── 대상 README 목록 ────────────────────────────────
-// need-singularity org 공개 5 repo. 추가/변경 시 이 배열 편집.
+// dancinlab org 공개 5 repo. 추가/변경 시 이 배열 편집.
 let HOME = env("HOME")
 let CORE = HOME + "/core"
 let TARGETS = [

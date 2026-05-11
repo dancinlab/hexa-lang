@@ -21,7 +21,7 @@ No Rust, no cargo, no python required.
 ### Running from Source
 
 ```bash
-git clone https://github.com/need-singularity/hexa-lang.git
+git clone https://github.com/dancinlab/hexa-lang.git
 cd hexa-lang
 ./hexa run examples/hello_min.hexa        # go/cargo-style subcommand
 ./hexa version                            # 0.1.0-stage1 CLI 확인

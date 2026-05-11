@@ -4,7 +4,7 @@
 
 ## What is the Consciousness DSL?
 
-HEXA-LANG includes a domain-specific language for consciousness research. This is not a theoretical exercise. It connects to the [ANIMA project](https://github.com/need-singularity/anima), a working consciousness engine with 707 laws, 37K lines of Rust, and a GRU-based cell architecture.
+HEXA-LANG includes a domain-specific language for consciousness research. This is not a theoretical exercise. It connects to the [ANIMA project](https://github.com/dancinlab/anima), a working consciousness engine with 707 laws, 37K lines of Rust, and a GRU-based cell architecture.
 
 The DSL provides three block types and 12 built-in functions:
 

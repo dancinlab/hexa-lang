@@ -227,7 +227,7 @@ Parent roadmap **64** → 5 children **65–69**. 상세 정의 `.roadmap` 64–
 - **nexus canonical** — `~/core/nexus/cli/run.hexa` (`079bc12d`). shim: `~/.hx/bin/nexus` → `.hx/packages/nexus/cli/run.hexa`.
 
 ### Brand
-- **need-singularity** org — 🧬 (2026-04-21, 🌀 deprecated). Avatar = hexagon gravitational well SVG. 보조: ⬢ / ⌬.
+- **dancinlab** org — 🧬 (2026-04-21, 🌀 deprecated). Avatar = hexagon gravitational well SVG. 보조: ⬢ / ⌬.
 
 ### Ops 회수
 - H100 idle pod stopped: $2.99/hr → $0/hr ($143 낭비 회수).

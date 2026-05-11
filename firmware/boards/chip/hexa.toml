@@ -12,8 +12,8 @@ entry = "cli/hexa-chip.hexa"
 description = "Chip substrate — 29-verb semiconductor stack (architecture / design / EDA / process / packaging / NPU / PIM / 3D / photonic / RTL-gen / yield / consciousness-chip)."
 license = "MIT"
 authors = ["박민우 <nerve011235@gmail.com>"]
-repository = "https://github.com/need-singularity/hexa-chip"
-homepage = "https://github.com/need-singularity/hexa-chip"
+repository = "https://github.com/dancinlab/hexa-chip"
+homepage = "https://github.com/dancinlab/hexa-chip"
 readme = "README.md"
 keywords = [
     "semiconductor", "chip-architecture", "rtl", "eda", "npu", "pim",

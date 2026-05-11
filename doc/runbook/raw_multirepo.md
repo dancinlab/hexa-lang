@@ -55,7 +55,7 @@ cp /path/to/hexa-lang/.raw-ref.example .raw-ref
 
 ```
 ref 1 live "hexa-lang canonical"
-  source github.com/need-singularity/hexa-lang
+  source github.com/dancinlab/hexa-lang
   branch main
   path .raw
   pinned-hash 3f4a...e91c
@@ -143,7 +143,7 @@ follower repo 에서 canonical 에 rule 을 제안해야 할 때 (거의 없음)
 명령 시퀀스를 출력한다:
 
 ```
-git clone https://github.com/need-singularity/hexa-lang /tmp/canonical-<ts>
+git clone https://github.com/dancinlab/hexa-lang /tmp/canonical-<ts>
 cp .raw /tmp/canonical-<ts>/.raw
 cd /tmp/canonical-<ts>
 ./hx unlock --reason "sync .raw from follower"

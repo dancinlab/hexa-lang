@@ -16,9 +16,9 @@ Pre-flight checklist for publishing hexa-lang to crates.io.
 - [x] `edition = "2021"`
 - [x] `description = "The Perfect Number Programming Language -- every constant from n=6"`
 - [x] `license = "MIT"`
-- [x] `repository = "https://github.com/need-singularity/hexa-lang"`
-- [x] `homepage = "https://github.com/need-singularity/hexa-lang"`
-- [x] `documentation = "https://github.com/need-singularity/hexa-lang/blob/main/docs/spec.md"`
+- [x] `repository = "https://github.com/dancinlab/hexa-lang"`
+- [x] `homepage = "https://github.com/dancinlab/hexa-lang"`
+- [x] `documentation = "https://github.com/dancinlab/hexa-lang/blob/main/docs/spec.md"`
 - [x] `readme = "README.md"`
 - [x] `keywords = ["programming-language", "compiler", "interpreter", "consciousness", "n6"]`
 - [x] `categories = ["compilers", "development-tools"]`

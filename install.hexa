@@ -6,14 +6,14 @@
 // Env overrides:
 //   HX_HOME        install prefix (default: ~/.hx)
 //   HEXA_VERSION   release tag to pull hexa binary from (default: latest)
-//   HEXA_REPO      upstream repo (default: need-singularity/hexa-lang)
+//   HEXA_REPO      upstream repo (default: dancinlab/hexa-lang)
 //   HEXA_SKIP_HX   set to 1 to skip hx package manager install
 //   HEXA_SKIP_HEXA set to 1 to skip hexa compiler install
 
 let home = env("HOME")
 let hx_home = if env("HX_HOME") != "" { env("HX_HOME") } else { home + "/.hx" }
 let hx_bin = hx_home + "/bin"
-let hexa_repo = if env("HEXA_REPO") != "" { env("HEXA_REPO") } else { "need-singularity/hexa-lang" }
+let hexa_repo = if env("HEXA_REPO") != "" { env("HEXA_REPO") } else { "dancinlab/hexa-lang" }
 let hexa_version = if env("HEXA_VERSION") != "" { env("HEXA_VERSION") } else { "latest" }
 
 fn bold(msg) {

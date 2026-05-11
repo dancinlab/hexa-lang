@@ -2,7 +2,7 @@
 // @allow-bare-exec
 // @no-sandbox
 //
-// 목적: 로드맵 변경이 GitHub Pages(need-singularity.github.io/nexus/roadmap)에
+// 목적: 로드맵 변경이 GitHub Pages(dancinlab.github.io/nexus/roadmap)에
 //       즉시 반영되도록 OS 레벨에서 강제 동기화. Claude Code 훅 사용 금지.
 //
 // 2-layer 강제 체계 (OS 레벨, hook/skill 금지):

@@ -229,7 +229,7 @@ AST transform: `@module { tool: T, sentinel: S, usage: U, resolver-bypass: R }`
 | 4 | L6 typed use는 IDE/LSP support 없으면 "그냥 syntax sugar" — LSP integration이 v2-rc 동시 land 필요 | MEDIUM |
 | 5 | L12 attr composition은 expand AST가 source location 유지해야 stacktrace 보존 — non-trivial | MEDIUM |
 | 6 | anima 의 attr 사용은 현재 **comment-form** (`// @tool(...)`) — 실제 attr syntax 활성화가 v2 prerequisite | MEDIUM |
-| 7 | breaking change candidate → 다운스트림 (anima, anima-eeg, anima-physics, need-singularity) coordination 필요 | HIGH |
+| 7 | breaking change candidate → 다운스트림 (anima, anima-eeg, anima-physics, dancinlab) coordination 필요 | HIGH |
 | 8 | migration tool idempotency 검증 = round-trip stable (parse → expand → emit → parse 동치) — 검증 부담 large | MEDIUM |
 | 9 | dual-form 90d ramp = parser + emitter dual-codepath = maintenance burden + potential codepath divergence | MEDIUM |
 | 10 | v1 EOL date 명시 시 외부 consumer freeze risk — communication overhead 필수 | LOW |

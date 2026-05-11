@@ -1567,7 +1567,7 @@
       "description": "극한 로드맵 aggregate 자동 sync (ALM+CLM 브레인스토밍 state 골화)",
       "category": "automation",
       "action": "shared/bin/hexa run shared/tool/extreme_sync.hexa sync — ALM/CLM standalone 로드맵 options state 카운트 + hire_sim log 스캔 + extreme.json aggregate_state 재계산 + update_log append",
-      "doc_url": "https://need-singularity.github.io/nexus/roadmap/#extreme",
+      "doc_url": "https://dancinlab.github.io/nexus/roadmap/#extreme",
       "ssot": "shared/roadmaps/extreme.json",
       "harness": "shared/tool/extreme_sync.hexa",
       "mode": "autonomous_60min",
@@ -1854,7 +1854,7 @@
         "post": [
           "aggregate_state 갱신 결과 stderr 출력 (변경 없으면 silent)",
           "last_auto_sync 필드 갱신 확인",
-          "뷰어: https://need-singularity.github.io/nexus/roadmap/#extreme"
+          "뷰어: https://dancinlab.github.io/nexus/roadmap/#extreme"
         ],
         "silent_success": true
       },

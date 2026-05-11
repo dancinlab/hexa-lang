@@ -12,8 +12,8 @@ entry = "self/main.hexa"
 description = "The Perfect Number Programming Language — every constant from n=6"
 license = "MIT"
 authors = ["박민우 <nerve011235@gmail.com>"]
-repository = "https://github.com/need-singularity/hexa-lang"
-homepage = "https://github.com/need-singularity/hexa-lang"
+repository = "https://github.com/dancinlab/hexa-lang"
+homepage = "https://github.com/dancinlab/hexa-lang"
 readme = "README.md"
 keywords = ["programming-language", "compiler", "interpreter", "consciousness", "n6", "self-host"]
 categories = ["language", "compiler", "perfect-number"]

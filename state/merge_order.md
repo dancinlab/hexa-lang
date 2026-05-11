@@ -1,6 +1,6 @@
 # Merge Order — 18 Worktree-Agent PRs (#28-#45)
 
-Generated: 2026-05-04. Repo: `need-singularity/hexa-lang`. Base: `main` @ `ea736c1d`.
+Generated: 2026-05-04. Repo: `dancinlab/hexa-lang`. Base: `main` @ `ea736c1d`.
 
 This doc is the recommended landing order for the 18 PRs opened against
 `main` after the parallel-worktree cycle. PRs are grouped into **waves**;
@@ -14,24 +14,24 @@ is a hard ordering driven by file-overlap, semantic dependency, or
 
 | PR | Branch tail | Track | Title |
 |----|------------|-------|-------|
-| [#28](https://github.com/need-singularity/hexa-lang/pull/28) | `abd57c2b3b22c19df` | A1 | atp: hexa->PyTorch transpiler (F-VLM-TRANSPILE-1) |
-| [#29](https://github.com/need-singularity/hexa-lang/pull/29) | `aa0d8fc7699b8901c` | A2 | transpile: hexa->Python codegen + 55 fixtures (F-TRANSPILE-2) |
-| [#30](https://github.com/need-singularity/hexa-lang/pull/30) | `aa1915a82e4720367` | B3 | tensor: stdlib/tensor with FFI dispatch (F-STDLIB-T1) |
-| [#31](https://github.com/need-singularity/hexa-lang/pull/31) | `aa98fd8b1488456ac` | B4 | autograd: tape-based reverse-mode (F-AUTOGRAD-T2) |
-| [#32](https://github.com/need-singularity/hexa-lang/pull/32) | `a08aa1e1c72bd9894` | B5 | safetensors: read+write (F-SAFETENSORS-1) **DUPLICATE — discard** |
-| [#33](https://github.com/need-singularity/hexa-lang/pull/33) | `a54d4a1efb177d2a4` | B7 | sqlite: CLI binding + ORM-lite (F-SQLITE) |
-| [#34](https://github.com/need-singularity/hexa-lang/pull/34) | `a6bb89d9e434dc1c2` | C8 | multiarch: 4-arch dispatch (F-MULTIARCH-1) |
-| [#35](https://github.com/need-singularity/hexa-lang/pull/35) | `a2f7fb3fd6735db92` | C9 | lora: custom CUDA kernels (F-CUDA-LORA-1) |
-| [#36](https://github.com/need-singularity/hexa-lang/pull/36) | `ae14c5a00d4575683` | C10 | jit: @jit fn -> IR -> C -> dylib (F-JIT) |
-| [#37](https://github.com/need-singularity/hexa-lang/pull/37) | `a81f63b9c097fd22e` | D11 | python_ffi: embedded CPython + zero-copy (F-FFI-1) |
-| [#38](https://github.com/need-singularity/hexa-lang/pull/38) | `a48d44074dfbace8b` | D12 | docs_gen: 58-module doc tree (F-DOCS-1) |
-| [#39](https://github.com/need-singularity/hexa-lang/pull/39) | `a87d4dd7595005b57` | D13 | repl: interactive REPL |
-| [#40](https://github.com/need-singularity/hexa-lang/pull/40) | `abfa46f95e9f28b3b` | E14 | stdlib: @version + @capabilities + lint (F-VERSION-1) |
-| [#41](https://github.com/need-singularity/hexa-lang/pull/41) | `aaf67bec5f2156579` | FIX-1 | parser: G-AMBIG `Foo<Bar` vs `L < n` |
-| [#42](https://github.com/need-singularity/hexa-lang/pull/42) | `a231861dc50c580e7` | FIX-2 | runtime: IEEE-754 reinterpret builtins |
-| [#43](https://github.com/need-singularity/hexa-lang/pull/43) | `a310e7a7f6c12dfe4` | FIX-4 | lint: private_fn_collision_lint |
-| [#44](https://github.com/need-singularity/hexa-lang/pull/44) | `ad16c0b0762154690` | FIX-5 | resolver: @resolver-bypass mechanism |
-| [#45](https://github.com/need-singularity/hexa-lang/pull/45) | `ace8e5f603275089b` | FIX-6 | bytes: chunked I/O + fn-param fix |
+| [#28](https://github.com/dancinlab/hexa-lang/pull/28) | `abd57c2b3b22c19df` | A1 | atp: hexa->PyTorch transpiler (F-VLM-TRANSPILE-1) |
+| [#29](https://github.com/dancinlab/hexa-lang/pull/29) | `aa0d8fc7699b8901c` | A2 | transpile: hexa->Python codegen + 55 fixtures (F-TRANSPILE-2) |
+| [#30](https://github.com/dancinlab/hexa-lang/pull/30) | `aa1915a82e4720367` | B3 | tensor: stdlib/tensor with FFI dispatch (F-STDLIB-T1) |
+| [#31](https://github.com/dancinlab/hexa-lang/pull/31) | `aa98fd8b1488456ac` | B4 | autograd: tape-based reverse-mode (F-AUTOGRAD-T2) |
+| [#32](https://github.com/dancinlab/hexa-lang/pull/32) | `a08aa1e1c72bd9894` | B5 | safetensors: read+write (F-SAFETENSORS-1) **DUPLICATE — discard** |
+| [#33](https://github.com/dancinlab/hexa-lang/pull/33) | `a54d4a1efb177d2a4` | B7 | sqlite: CLI binding + ORM-lite (F-SQLITE) |
+| [#34](https://github.com/dancinlab/hexa-lang/pull/34) | `a6bb89d9e434dc1c2` | C8 | multiarch: 4-arch dispatch (F-MULTIARCH-1) |
+| [#35](https://github.com/dancinlab/hexa-lang/pull/35) | `a2f7fb3fd6735db92` | C9 | lora: custom CUDA kernels (F-CUDA-LORA-1) |
+| [#36](https://github.com/dancinlab/hexa-lang/pull/36) | `ae14c5a00d4575683` | C10 | jit: @jit fn -> IR -> C -> dylib (F-JIT) |
+| [#37](https://github.com/dancinlab/hexa-lang/pull/37) | `a81f63b9c097fd22e` | D11 | python_ffi: embedded CPython + zero-copy (F-FFI-1) |
+| [#38](https://github.com/dancinlab/hexa-lang/pull/38) | `a48d44074dfbace8b` | D12 | docs_gen: 58-module doc tree (F-DOCS-1) |
+| [#39](https://github.com/dancinlab/hexa-lang/pull/39) | `a87d4dd7595005b57` | D13 | repl: interactive REPL |
+| [#40](https://github.com/dancinlab/hexa-lang/pull/40) | `abfa46f95e9f28b3b` | E14 | stdlib: @version + @capabilities + lint (F-VERSION-1) |
+| [#41](https://github.com/dancinlab/hexa-lang/pull/41) | `aaf67bec5f2156579` | FIX-1 | parser: G-AMBIG `Foo<Bar` vs `L < n` |
+| [#42](https://github.com/dancinlab/hexa-lang/pull/42) | `a231861dc50c580e7` | FIX-2 | runtime: IEEE-754 reinterpret builtins |
+| [#43](https://github.com/dancinlab/hexa-lang/pull/43) | `a310e7a7f6c12dfe4` | FIX-4 | lint: private_fn_collision_lint |
+| [#44](https://github.com/dancinlab/hexa-lang/pull/44) | `ad16c0b0762154690` | FIX-5 | resolver: @resolver-bypass mechanism |
+| [#45](https://github.com/dancinlab/hexa-lang/pull/45) | `ace8e5f603275089b` | FIX-6 | bytes: chunked I/O + fn-param fix |
 
 ---
 
