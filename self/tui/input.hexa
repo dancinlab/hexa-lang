@@ -61,7 +61,16 @@ use "self/stdlib/law_io"
 // ── module state ──────────────────────────────────────────────────
 let mut _input_initialized = 0
 let mut _paste_active = 0
-let mut _paste_buf = ""
+// Bracketed-paste accumulator. Was previously `let mut _paste_buf = ""` with
+// per-byte string concat (`_paste_buf = _paste_buf + _byte_to_str(b)`), which is
+// O(n²) for the payload size — for ~200KB pastes the inner loop took 20+ seconds,
+// long enough that the kernel TTY buffer overflowed and the terminal's closing
+// ESC[201~ was effectively lost (large pastes auto-submitted as raw keystrokes
+// instead of arriving as a single ["paste", payload] event). Now we accumulate
+// raw bytes into an int array (push is O(1)) and call bytes_to_str_raw once at
+// the close marker. (Local hotfix for wilson; same change proposed upstream as
+// incoming/patches/tui-input-paste-buf-quadratic.md.)
+let mut _paste_bytes: [int] = []
 // Bytes injected from outside the L1 stdin pipeline (e.g. T1.C Surface 4
 // JSON-RPC `key` method) — drained before falling through to
 // term_read_byte. Used by editor bridges that drive the hexa TUI as a
@@ -154,7 +163,7 @@ pub fn input_close() -> int {
     let r = term_raw_restore()
     _input_initialized = 0
     _paste_active = 0
-    _paste_buf = ""
+    _paste_bytes = []
     return r
 }
 
@@ -414,7 +423,7 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
         if n == 200 {
             // Bracketed paste begin
             _paste_active = 1
-            _paste_buf = ""
+            _paste_bytes = []
             return ["none"]
         }
         if n == 2  { return ["key", -22, _ctrl_f, _alt_f, _shift_f, ""] }   // ins
@@ -467,7 +476,7 @@ fn _decode_in_paste(first_byte: int) -> array {
             // Could be the closing ESC [ 201 ~. Buffer it and check.
             let p = _poll_stdin(50)
             if p <= 0 {
-                _paste_buf = _paste_buf + _byte_to_str(b)
+                _paste_bytes.push(b)
                 return ["none"]
             }
             let b2 = _read_byte()
@@ -477,7 +486,8 @@ fn _decode_in_paste(first_byte: int) -> array {
                 // (2,0,1,~) and decide.
                 let p3 = _poll_stdin(50)
                 if p3 <= 0 {
-                    _paste_buf = _paste_buf + _byte_to_str(b) + _byte_to_str(b2)
+                    _paste_bytes.push(b)
+                    _paste_bytes.push(b2)
                     return ["none"]
                 }
                 let b3 = _read_byte()
@@ -488,24 +498,32 @@ fn _decode_in_paste(first_byte: int) -> array {
                     let b5 = _read_byte()
                     let b6 = _read_byte()
                     if b4 == 48 && b5 == 49 && b6 == 126 {
-                        // Closed paste
-                        let payload = _paste_buf
-                        _paste_buf = ""
+                        // Closed paste — convert accumulated bytes to a raw byte string.
+                        let payload = bytes_to_str_raw(_paste_bytes)
+                        _paste_bytes = []
                         _paste_active = 0
                         return ["paste", payload]
                     }
                     // Not the close marker — append all bytes literally.
-                    _paste_buf = _paste_buf + _byte_to_str(b) + _byte_to_str(b2) + _byte_to_str(b3) + _byte_to_str(b4) + _byte_to_str(b5) + _byte_to_str(b6)
+                    _paste_bytes.push(b)
+                    _paste_bytes.push(b2)
+                    _paste_bytes.push(b3)
+                    _paste_bytes.push(b4)
+                    _paste_bytes.push(b5)
+                    _paste_bytes.push(b6)
                     return ["none"]
                 }
-                _paste_buf = _paste_buf + _byte_to_str(b) + _byte_to_str(b2) + _byte_to_str(b3)
+                _paste_bytes.push(b)
+                _paste_bytes.push(b2)
+                _paste_bytes.push(b3)
                 return ["none"]
             }
-            _paste_buf = _paste_buf + _byte_to_str(b) + _byte_to_str(b2)
+            _paste_bytes.push(b)
+            _paste_bytes.push(b2)
             return ["none"]
         }
         // Regular paste byte
-        _paste_buf = _paste_buf + _byte_to_str(b)
+        _paste_bytes.push(b)
         let np = _poll_stdin(0)
         if np <= 0 { return ["none"] }
         let nb = _read_byte()
