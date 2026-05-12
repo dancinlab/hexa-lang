@@ -1,19 +1,23 @@
-// tool/atlas_cli.hexa — `hexa atlas {lookup|dump|stats|hash}`
+// tool/atlas_cli.hexa — `hexa atlas {hash|stats|lookup|dump|append-witness}`
 //
-// @version 0.1.0
-// @capabilities [pure]
+// @version 0.2.0
+// @capabilities [fs_read, fs_write, exec]
+// @allow-bare-exec-file (reason: exec() used for date +%s%3N millis timer in
+//   _now_ms() — wall-clock for unique shard filename; matches the same
+//   pattern in tool/atlas_embed_gen.hexa::_now_ms.)
 //
-// Read-only surface over the compile-time embedded atlas index.
-// All four subcommands resolve against compiler/atlas/static_index.hexa
-// (static_atlas()). No fs read, no parse — the data has already been
-// embedded as const arrays in compiler/atlas/embedded.gen.hexa.
+// Atlas SSOT surface:
+//   - 4 READ subcommands (hash/stats/lookup/dump) resolve against the
+//     compile-time embedded static_atlas() — zero fs read, zero parse.
+//   - 1 WRITE subcommand (append-witness) records new nodes as
+//     `atlas.append.witness-<ts>-<id>.n6` staging shards, picked up by
+//     compiler/atlas/merger.hexa::_discover on the next regen.
 //
 // Wired from self/main.hexa: `hexa atlas <sub-sub> [args]`.
 // Also runnable directly: `hexa run tool/atlas_cli.hexa <sub-sub> [args]`.
 //
-// Phase 2 of the atlas.n6 absorption plan
-// (ATLAS_N6_RETIREMENT_PLAN.md §0b). Write surface (append-witness)
-// lands in Phase 3.
+// Phase 2 (read) + Phase 3 (write) of the atlas.n6 absorption plan
+// (ATLAS_N6_RETIREMENT_PLAN.md §0b).
 
 use "compiler/atlas/parser"
 use "compiler/atlas/merger"
@@ -25,7 +29,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "append-witness" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -179,15 +183,120 @@ fn cmd_dump(rest: array) {
     }
 }
 
+// ── append-witness (Phase 3 write path) ───────────────────
+// nexus 의 ω-cycle ingest 패턴을 hexa-lang 으로 이관한 surface.
+// atlas.n6 직접 append 가 아니라 staging shard (atlas.append.witness-<ts>-<id>.n6)
+// 로 record → 다음 regen 사이클에 embedded.gen.hexa 로 absorb.
+
+fn _now_ms() -> int {
+    let s = exec("date +%s%3N 2>/dev/null").trim()
+    if len(s) > 0 && s.substring(len(s) - 1, len(s)) != "N" {
+        return to_int(s)
+    }
+    let sec = exec("date +%s 2>/dev/null").trim()
+    return to_int(sec) * 1000
+}
+
+fn _safe_id(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let is_lo = c >= "a" && c <= "z"
+        let is_up = c >= "A" && c <= "Z"
+        let is_di = c >= "0" && c <= "9"
+        let safe = is_lo || is_up || is_di || c == "_" || c == "-"
+        if safe { out = out + c } else { out = out + "-" }
+        i = i + 1
+    }
+    if len(out) > 64 { out = out.substring(0, 64) }
+    return out
+}
+
+fn _resolve_staging_dir() -> string {
+    let override = env_var("HEXA_ATLAS_STAGING")
+    if len(override) > 0 { return override }
+    let home = env_var("HOME")
+    return home + "/core/nexus/n6"
+}
+
+fn cmd_append_witness(rest: array) {
+    let mut kind = ""
+    let mut id = ""
+    let mut raw = ""
+    let mut from_stdin = false
+    let mut dir_override = ""
+    let mut emitter = "manual"
+    let mut i = 0
+    let n = len(rest)
+    while i < n {
+        let a = to_string(rest[i])
+        if a == "--kind" && i + 1 < n {
+            kind = to_string(rest[i + 1])
+            i = i + 2
+        } else if a == "--id" && i + 1 < n {
+            id = to_string(rest[i + 1])
+            i = i + 2
+        } else if a == "--raw" && i + 1 < n {
+            raw = to_string(rest[i + 1])
+            i = i + 2
+        } else if a == "--stdin" {
+            from_stdin = true
+            i = i + 1
+        } else if a == "--dir" && i + 1 < n {
+            dir_override = to_string(rest[i + 1])
+            i = i + 2
+        } else if a == "--emitter" && i + 1 < n {
+            emitter = to_string(rest[i + 1])
+            i = i + 2
+        } else {
+            println("error: unknown arg: " + a)
+            exit(2)
+        }
+    }
+    if kind != "P" && kind != "C" && kind != "L" && kind != "E" {
+        println("error: --kind must be one of P|C|L|E (got: " + kind + ")")
+        exit(2)
+    }
+    if len(id) == 0 {
+        println("error: --id required")
+        exit(2)
+    }
+    if from_stdin { raw = read_stdin() }
+    if len(raw) == 0 {
+        println("error: --raw <content> or --stdin required")
+        exit(2)
+    }
+    let mut dir = dir_override
+    if len(dir) == 0 { dir = _resolve_staging_dir() }
+
+    let ts = _now_ms()
+    let safe = _safe_id(id)
+    let fname = "atlas.append.witness-" + to_string(ts) + "-" + safe + ".n6"
+    let path = dir + "/" + fname
+
+    let header = "# witness shard — hexa atlas append-witness\n# emitter: " + emitter + "\n# kind: " + kind + "\n# id: " + id + "\n# timestamp_ms: " + to_string(ts) + "\n"
+    let content = header + raw + "\n@END\n"
+    write_file(path, content)
+    println(path)
+}
+
 fn cmd_help() {
-    println("hexa atlas — read-only surface over the embedded atlas index")
+    println("hexa atlas — atlas SSOT surface (embedded read + staging write)")
     println("")
-    println("subcommands:")
+    println("read subcommands (zero-I/O over compile-time embed):")
     println("  hash                    print ATLAS_HASH (embedded sha256 pin)")
     println("  stats                   per-kind counts + ATLAS_HASH + source_count")
     println("  lookup <id>             search P, C, L, E for matching id")
     println("  lookup <P|C|L|E> <id>   restrict to one kind")
     println("  dump [P|C|L|E] [--json] emit all nodes (text or jsonl)")
+    println("")
+    println("write subcommands (staging shard, absorbed on next regen):")
+    println("  append-witness --kind <P|C|L|E> --id <id> {--raw <body> | --stdin}")
+    println("                          [--emitter <name>] [--dir <staging_dir>]")
+    println("                          writes atlas.append.witness-<ts>-<id>.n6")
+    println("                          default --dir = $HEXA_ATLAS_STAGING or $HOME/core/nexus/n6")
     println("")
     println("data lives compile-time in compiler/atlas/embedded.gen.hexa")
     println("(regenerate via:  hexa run tool/atlas_embed_gen.hexa)")
@@ -210,6 +319,7 @@ fn main() {
     else if sub == "stats" { cmd_stats() }
     else if sub == "lookup" { cmd_lookup(rest) }
     else if sub == "dump" { cmd_dump(rest) }
+    else if sub == "append-witness" { cmd_append_witness(rest) }
     else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
     else {
         println("error: unknown subcommand: " + sub)
