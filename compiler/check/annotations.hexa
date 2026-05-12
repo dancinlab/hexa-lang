@@ -462,27 +462,51 @@ fn _grace_fields(it: Item) -> [string] {
     let mut i = 0
     while i < len(it.annotations) {
         let a = it.annotations[i]
+        // INTERP-029 workaround: nested-if continue → if/else chain. See RFC-029.
+        // Stage0 hexa_interp mishandles `continue` inside a nested `if` —
+        // it only breaks the inner if, not the enclosing while. To stay
+        // safe, the body of `if a.name == "grace"` uses a single guard-flag
+        // (`ok`) instead of multiple `if !cond { i = i + 1; continue }`
+        // early-exits nested under the outer if.
         if a.name == "grace" {
-            // first positional: HX-code (Ident or string literal)
-            if !_has_positional(a.args) { i = i + 1; continue }
-            let code_expr = _first_positional(a.args)
-            let code_str = code_expr.text
-            let mut code_ok = false
-            if _annot_is_ident(code_expr.kind) {
-                code_ok = _is_hx_code(code_str)
-            } else if _is_string_lit(code_expr.kind) {
-                code_ok = _is_hx_code(code_str)
+            let mut ok = _has_positional(a.args)
+            let mut code_str = ""
+            let mut until_text = ""
+            let mut reason_text = ""
+            if ok {
+                let code_expr = _first_positional(a.args)
+                code_str = code_expr.text
+                let mut code_ok = false
+                if _annot_is_ident(code_expr.kind) {
+                    code_ok = _is_hx_code(code_str)
+                } else if _is_string_lit(code_expr.kind) {
+                    code_ok = _is_hx_code(code_str)
+                }
+                ok = code_ok
             }
-            if !code_ok { i = i + 1; continue }
-            if !_kwarg_present(a.args, "until") { i = i + 1; continue }
-            let until_val = _kwarg_lookup(a.args, "until")
-            if !_is_string_lit(until_val.kind) { i = i + 1; continue }
-            if !_is_iso_date(until_val.text) { i = i + 1; continue }
-            if !_kwarg_present(a.args, "reason") { i = i + 1; continue }
-            let reason_val = _kwarg_lookup(a.args, "reason")
-            if !_is_string_lit(reason_val.kind) { i = i + 1; continue }
-            if len(reason_val.text) == 0 { i = i + 1; continue }
-            return [code_str, until_val.text, reason_val.text]
+            if ok { ok = _kwarg_present(a.args, "until") }
+            if ok {
+                let until_val = _kwarg_lookup(a.args, "until")
+                if !_is_string_lit(until_val.kind) {
+                    ok = false
+                } else if !_is_iso_date(until_val.text) {
+                    ok = false
+                } else {
+                    until_text = until_val.text
+                }
+            }
+            if ok { ok = _kwarg_present(a.args, "reason") }
+            if ok {
+                let reason_val = _kwarg_lookup(a.args, "reason")
+                if !_is_string_lit(reason_val.kind) {
+                    ok = false
+                } else if len(reason_val.text) == 0 {
+                    ok = false
+                } else {
+                    reason_text = reason_val.text
+                }
+            }
+            if ok { return [code_str, until_text, reason_text] }
         }
         i = i + 1
     }
