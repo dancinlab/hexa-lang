@@ -96,7 +96,9 @@ Second session same day (ubu-1 ControlMaster after ubu-2 auth fail). Added:
 
 이 변경들은 모두 write_file / exec(shell) 만 사용 → 어떤 것도 buggy interp 의 parser 호출 안 함 (parser drift 영향 0).
 
-### Phase 8 (atlas.n6 + shards 실제 삭제) — UNBLOCKED 2026-05-12 (session 3)
+### Phase 8 (atlas.n6 + shards 실제 삭제) — CLOSED 2026-05-12 (session 3)
+
+**완료 상태:** nexus `2df92aed` — `n6/atlas.n6` + 409 shards 삭제 (96551 줄, 7.4 MB). hexa-lang `d2c5af7b` 의 깨끗한 embed (sha256 663698a06bc6...) 가 유일한 source-of-truth.
 
 #### 정정 진단 (root cause 확정)
 
@@ -127,13 +129,18 @@ memory entry: `feedback_hexa_interp_nested_continue.md`.
 6. compiler/atlas/static_index_test.hexa:       9/9 PASS
 ```
 
-#### Phase 8 progression (남은 단계 — nexus repo)
+#### Phase 8 closure 실행 기록
 
 ```
-[1] hexa-lang 측 commit + push (clean embedded.gen.hexa + parser workaround + RFC-029)
-[2] nexus: rm n6/atlas.n6 n6/atlas.append.*.n6      (Phase 8 실행)
-[3] nexus commit + push (atlas.n6 retirement closure)
+[1] hexa-lang d2c5af7b  ✓ parser workaround + clean embed + RFC-029
+[2] nexus    58e7c930   ✓ dirty pre-rm commit (ANIMA-psi-alpha-corrected)
+[3] nexus    2df92aed   ✓ rm n6/atlas.n6 + 409 shards (96551줄, 7.4MB)
 ```
+
+보존:
+  - `n6/atlas.n6.bak.pre-promote-20260421_173217` (백업)
+  - `n6/atlas.millennium.n6`, `n6/atlas.signals.n6` (별개 데이터셋, 무관)
+  - `n6/_absorbed/2026-05-06/atlas.append.*.n6` (archive, 무관)
 
 Blocker #3 (ubu-1 SSH) 무관해짐 — Mac local 에서 모든 검증 완료.
 
