@@ -26,7 +26,10 @@ fn version_str() {
 }
 
 fn cmd_help() {
-    println("HEXA — self-hosted language toolchain")
+    println("HEXA — native-compiled, atlas-aware, strict-lint language toolchain")
+    println("  in-house prover + linker · English-only diagnostics · zero runtime GC")
+    println("  stage 0 interpreter (this `hexa`)  →  stage 1 native compiler (RFC-018, 5-stage IR,")
+    println("  atlas statically embedded)  →  stage 3 byte-equal self-hosted fixed point")
     println("")
     println("USAGE:")
     println("    hexa <SUBCOMMAND> [ARGS...]")
@@ -52,6 +55,9 @@ fn cmd_help() {
     println("                              B) # @convergence k=v k=\"v\"  single-line comment (.md)")
     println("                              C) @convergence(k=\"v\", ...)  hexa attribute (.hexa)")
     println("    build <file> [-o out] [--target=<t>]   Compile .hexa (native or cross)")
+    println("                              RFC-018 path: 5-stage IR; atlas baked in (0 ms);")
+    println("                              forks ≤2 (`as`, `ld`) — shell-outs are absorbed")
+    println("                              as intrinsics (cwd/list_dir/mkdir_p/… — SPEC §16)")
     println("    bench <file> [opts]     Benchmark a .hexa script (wall/RSS/alloc)")
     println("                              opts: --runs N (default 3)")
     println("                                    --json (JSON output, no table)")
@@ -72,6 +78,16 @@ fn cmd_help() {
     println("                                       hexa://repl?dir=PATH")
     println("                                       hexa://install?pkg=NAME")
     println("    help                    Show this help")
+    println("")
+    println("ATLAS / STRICT LINT (SPEC.md §2.2 / §9 / §10):")
+    println("  The atlas theorem+constant library (P/C/L/E nodes) is embedded into the compiler")
+    println("  (rodata, 0 ms, hash-pinned). Verified code auto-registers as new atlas L[*] nodes")
+    println("  (ε self-proof, in-house prover — no Z3); `compiler/discover/promote.hexa` folds")
+    println("  proposed → live and emits `atlas.append.<date>.n6` shards, so the atlas grows with")
+    println("  every contribution. Formula/constant-bearing fns must cite an atlas L —")
+    println("  `@implements(L[<id>])` or `@discover(kind=\"L\")` — or compile fails (HX8004).")
+    println("  Bypass: `@grace(HX####, until=\"...\", reason=\"...\")` — never silent (emits HX9000,")
+    println("  build gated on explicit acked-grace consent). Inspect: `hexa atlas hash|stats|lookup|dump`.")
 }
 
 // ─── hexa:// URL dispatcher ────────────────────────────────────────────
