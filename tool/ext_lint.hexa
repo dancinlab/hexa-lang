@@ -82,35 +82,25 @@ fn _load_ext(path: string) -> array {
         let first = line.substring(0, 1)
         if first == "#" { continue }
 
-        // INTERP-029 workaround: nested-if continue → if/else chain. See RFC-029.
-        // Stage0 hexa_interp mishandles `continue` inside a nested `if` — it
-        // only breaks the inner if, so the outer-if tail still runs. Rewrite
-        // both branches as nested-if chains (no `continue` from inside a
-        // nested `if`).
         if first == " " || first == "\t" {
-            if has_rule {
-                let stripped = line.trim_start()
-                let sp = stripped.index_of(" ")
-                if sp >= 0 {
-                    let key = stripped.substring(0, sp)
-                    let val = stripped.substring(sp + 1, len(stripped)).trim()
-                    cur_keys.push([key, val])
-                }
-            }
+            if !has_rule { continue }
+            let stripped = line.trim_start()
+            let sp = stripped.index_of(" ")
+            if sp < 0 { continue }
+            let key = stripped.substring(0, sp)
+            let val = stripped.substring(sp + 1, len(stripped)).trim()
+            cur_keys.push([key, val])
         } else {
             if has_rule {
                 rules.push([cur_id, cur_status, cur_name, cur_keys])
                 cur_keys = []
             }
             let hdr = _parse_ext_header(line)
-            if len(hdr) == 0 {
-                has_rule = false
-            } else {
-                cur_id = hdr[0]
-                cur_status = hdr[1]
-                cur_name = hdr[2]
-                has_rule = true
-            }
+            if len(hdr) == 0 { has_rule = false; continue }
+            cur_id = hdr[0]
+            cur_status = hdr[1]
+            cur_name = hdr[2]
+            has_rule = true
         }
     }
     if has_rule {

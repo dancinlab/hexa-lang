@@ -236,21 +236,17 @@ fn tok_merge_in_words(corpus_words, pair_a, pair_b) {
         let mut new_syms = []
         let mut si = 0
         while si < ns {
-            // INTERP-029 workaround: nested-if continue → if/else chain. See RFC-029.
-            // Stage0 hexa_interp mishandles `continue` inside a nested `if` —
-            // it only breaks the inner if, so the outer-if tail (the fallback
-            // push at si) still runs even after we've merged + advanced si.
-            // Hoist the match to a single boolean and branch once.
-            let matched = si < ns - 1
-                && syms[si] == pair_a
-                && syms[si + 1] == pair_b
-            if matched {
-                new_syms = new_syms + [merged]
-                si = si + 2
-            } else {
-                new_syms = new_syms + [syms[si]]
-                si = si + 1
+            if si < ns - 1 {
+                if syms[si] == pair_a {
+                    if syms[si + 1] == pair_b {
+                        new_syms = new_syms + [merged]
+                        si = si + 2
+                        continue
+                    }
+                }
             }
+            new_syms = new_syms + [syms[si]]
+            si = si + 1
         }
         result = result + [new_syms]
         wi = wi + 1

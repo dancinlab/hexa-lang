@@ -1546,39 +1546,30 @@ fn _collect_item_types(module: Module, out: array) -> TypeEnv {
         }
 
         // Pub-vs-pub collision across files → HX3010, skip the second.
-        // INTERP-029 workaround: nested-if continue → if/else chain. See RFC-029.
-        // Stage0 hexa_interp would otherwise fall through to the define block
-        // after the inner `continue`. Hoist the collision check to a flag and
-        // gate the registration on it instead of using nested `if { continue }`.
-        let mut pub_collision = false
         if it.is_pub {
             let prior_owner = _types_pub_owner_file(env, it.name)
             if len(prior_owner) > 0 && prior_owner != owning {
                 _emit_hx3010(it.name, prior_owner, owning, it.span, out)
-                pub_collision = true
+                i = i + 1
+                continue
             }
         }
 
-        if pub_collision {
-            // skip registration; HX3010 already emitted above
-        } else if _types_is_fn_item(it.kind) {
+        if _types_is_fn_item(it.kind) {
             env = _types_env_define_attr(env, it.name, def,
                 _types_signature_type(it), it.is_pub, owning)
-            idx = idx + 1
         } else if _types_is_struct_item(it.kind) {
             env = _types_env_define_attr(env, it.name, def,
                 _types_struct_type(it, def), it.is_pub, owning)
-            idx = idx + 1
         } else if _types_is_enum_item(it.kind) {
             env = _types_env_define_attr(env, it.name, def,
                 _types_enum_type(def), it.is_pub, owning)
-            idx = idx + 1
         } else {
             // _types_is_let_item
             env = _types_env_define_attr(env, it.name, def,
                 _types_lower_type_ref(it.return_type), it.is_pub, owning)
-            idx = idx + 1
         }
+        idx = idx + 1
         i = i + 1
     }
     return env
