@@ -1,6 +1,6 @@
 # RFC 033 — `farr_copy` + `farr_add_gaussian_noise` native builtins
 
-- **Status**: draft (2026-05-12)
+- **Status**: implemented (2026-05-12)
 - **Date**: 2026-05-12
 - **Severity**: HIGH (blocks pure-hexa serve-time mitosis hook full impl)
 - **Priority**: P0 (anima `tool/hexa_native/mitosis_hook.hexa` prerequisite)
@@ -12,6 +12,27 @@
   gaussian perturbation are first-class hexa runtime primitives (the PyTorch
   reference `anima/tool/mitosis.py` L204/L213 does both as one-liners; the
   hexa lane has to match the semantics, not the implementation).
+
+## Implementation status (2026-05-12)
+
+**LANDED** in commit `797e5fc0` (runtime + codegen + interp dispatch) +
+`806a4f33` (smoke). 10/10 falsifiers pass on rebuilt
+`build/hexa_interp.real`:
+
+- `self/runtime.c::hexa_farr_copy` — memcpy under the hood.
+- `self/runtime.c::hexa_farr_add_gaussian_noise` — splitmix64 + Box-Muller,
+  `__HEXA_FARR_GAUSS_SEED__` env hook for reproducibility (byte-exact across
+  two process invocations verified out-of-band).
+- `self/runtime.c::_hexa_init_fn_shims` — arity 1 + arity 2 shim registration.
+- `self/codegen_c2.hexa` — AOT dispatch (1-arg + 2-arg blocks).
+- `self/hexa_full.hexa::call_builtin` — interp dispatch.
+- Smoke: `tmp_rfc033_smoke.hexa`.
+
+Side-effect: also added `static inline` wrappers `farr_matmul`,
+`farr_apply_single_farr`, `farr_apply_cnot` to unbreak the
+`tool/build_interp.hexa` pipeline (broken since commits `5e817564` and
+`bfca049c` introduced literal hexa-side calls past the hexa_callN ceiling
+without the matching C-side shims).
 
 ## Problem
 
