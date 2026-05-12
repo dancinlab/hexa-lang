@@ -146,10 +146,43 @@ if env("SKIP_TRANSPILE") == "" {
         let interp_shim = hexa_dir + "/build/hexa_interp"
         let mut flatten_runner = ""
         let mut flatten_env_prefix = "HEXA_NO_LAUNCHD=1 "
-        let s0_check = exec_with_status("test -x " + interp_shim)
-        if s0_check[1] == 0 {
-            flatten_runner = interp_shim
-        } else {
+        // 2026-05-12 (ATLAS_N6_RETIREMENT_PLAN §0c blocker #2 fix):
+        // build/hexa_interp 셈 은 macOS 절대경로 (`/Users/ghost/.hx/packages/...`)
+        // 를 exec 하도록 baked 되어 있어 Linux 측 mac_home FUSE mount 에서는
+        // exec 시 "No such file" 로 silent-fail (test -x 는 통과). 따라서
+        // 검출 우선순위를 (1) 환경변수 override → (2) shim 실제 동작 검증 →
+        // (3) 시스템 설치된 ~/.hx/packages/hexa/build/hexa_interp →
+        // (4) <hexa_dir>/hexa 의 순서로 다층화. 각 candidate 마다 actual
+        // run-test (echo + interp 미니 스크립트) 로 동작 검증.
+        //
+        // Override: HEXA_FLATTEN_RUNNER=path → 직접 지정 (test 건너뜀).
+        let env_runner = env("HEXA_FLATTEN_RUNNER")
+        if len(env_runner) > 0 {
+            flatten_runner = env_runner
+            // env override 로 들어온 runner 가 ./hexa 형태인 경우 prefix 제거.
+            if env_runner.ends_with("/hexa") { flatten_env_prefix = "" }
+        }
+        // 후보들에 대해 actual run probe — `test -x` 는 셈의 exec target 누락
+        // (Mac path on Linux) 을 못 잡아낸다. 작은 stdin script 실행으로 확인.
+        if flatten_runner == "" {
+            let probe_cmd_shim = "echo 'println(\"__hx_probe_ok\")' | " + flatten_env_prefix + interp_shim + " /dev/stdin 2>/dev/null | grep -q __hx_probe_ok"
+            let probe_shim = exec_with_status(probe_cmd_shim)
+            if probe_shim[1] == 0 {
+                flatten_runner = interp_shim
+            }
+        }
+        if flatten_runner == "" {
+            // 시스템 설치된 interp — Linux 측 ~/.hx/packages/hexa/build/hexa_interp
+            // 가 보통 host 의 native ELF 또는 Mach-O. 어떤 case 든 직접 실행 가능.
+            let sys_interp = env("HOME") + "/.hx/packages/hexa/build/hexa_interp"
+            let probe_cmd_sys = "echo 'println(\"__hx_probe_ok\")' | " + sys_interp + " /dev/stdin 2>/dev/null | grep -q __hx_probe_ok"
+            let probe_sys = exec_with_status(probe_cmd_sys)
+            if probe_sys[1] == 0 {
+                flatten_runner = sys_interp
+                flatten_env_prefix = ""  // 시스템 interp 는 launchd 우회 prefix 불필요
+            }
+        }
+        if flatten_runner == "" {
             let hexa_check = exec_with_status("test -x " + hexa_dir + "/hexa")
             if hexa_check[1] == 0 {
                 flatten_runner = hexa_dir + "/hexa"
@@ -157,7 +190,9 @@ if env("SKIP_TRANSPILE") == "" {
             }
         }
         if flatten_runner == "" {
-            eprintln("error: flatten runner missing (need build/hexa_interp or ./hexa)")
+            eprintln("error: flatten runner missing")
+            eprintln("  tried: $HEXA_FLATTEN_RUNNER, build/hexa_interp (probe), ~/.hx/packages/hexa/build/hexa_interp (probe), ./hexa (test -x)")
+            eprintln("  fix: set HEXA_FLATTEN_RUNNER=<path-to-working-interp> or install ~/.hx")
             exit(1)
         }
 

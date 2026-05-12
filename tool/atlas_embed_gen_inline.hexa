@@ -1,0 +1,526 @@
+// tool/atlas_embed_gen_inline.hexa — `use`-free embed generator
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// SCOPE (ATLAS_N6_RETIREMENT_PLAN §0c blocker #1 fix):
+//   tool/atlas_embed_gen.hexa 는 `use "compiler/atlas/merger"` (그리고 그
+//   안에서 `use "compiler/atlas/parser"`) 통해 parse_atlas_file 를 호출하는데,
+//   deployed hexa_interp 의 module-loader drift 때문에 parsed_node.raw 의
+//   continuation 라인이 odd-dup / even-drop 패턴으로 corrupt. 진단 detail:
+//     - probe `comments=0..7 → nodes={1,0,1,0,1,0,1,0}` (parity bug)
+//     - 같은 알고리즘을 inline 으로 돌리면 정상 작동 (use 가 진원지)
+//     - source `compiler/atlas/parser.hexa` 자체는 정확
+//     - 자세한 root cause: memory/project_atlas_absorption_phase4_blocked.md
+//
+// FIX:
+//   parser + merger + embed + driver 의 모든 로직을 본 단일 파일에 inline.
+//   `use` 0 개 — module-loader drift 우회. parser.hexa / merger.hexa /
+//   embed.hexa 와 byte-identical 한 함수 본체 복사 (수정 X, 단순 인라인).
+//
+// USE:
+//   hexa run tool/atlas_embed_gen_inline.hexa                # default ~/core/nexus/n6
+//   hexa run tool/atlas_embed_gen_inline.hexa /alt/atlas     # override root
+
+// ═════════════════════════════════════════════════════════════════
+// SECTION 1 — inlined from compiler/atlas/parser.hexa
+// ═════════════════════════════════════════════════════════════════
+
+pub struct AtlasNode {
+    kind: string,
+    id: string,
+    raw: string,
+    source_file: string,
+    source_line: i64
+}
+
+fn _is_ws(c: string) -> bool {
+    return c == " " || c == "\t"
+}
+
+fn _ltrim(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if !_is_ws(c) { break }
+        i = i + 1
+    }
+    return s.substring(i, n)
+}
+
+fn _kind_of(tok: string) -> string {
+    if tok == "@P" { return "P" }
+    if tok == "@C" { return "C" }
+    if tok == "@L" { return "L" }
+    if tok == "@E" { return "E" }
+    return ""
+}
+
+fn _is_header_sigil(tok: string) -> bool {
+    if len(tok) < 2 { return false }
+    if tok.substring(0, 1) != "@" { return false }
+    if tok == "@END" { return false }
+    if tok == "@shard" { return false }
+    if tok == "@META" { return false }
+    return true
+}
+
+fn _first_token(line: string) -> string {
+    let n = len(line)
+    let mut i = 0
+    while i < n {
+        let c = line.substring(i, i + 1)
+        if _is_ws(c) { return line.substring(0, i) }
+        i = i + 1
+    }
+    return line
+}
+
+fn _extract_id(rest: string) -> string {
+    let s = _ltrim(rest)
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if _is_ws(c) { break }
+        if c == "=" { break }
+        if c == ":" {
+            if i + 1 < n && s.substring(i + 1, i + 2) == ":" { break }
+        }
+        i = i + 1
+    }
+    return s.substring(0, i)
+}
+
+fn _is_comment(line: string) -> bool {
+    let s = _ltrim(line)
+    if len(s) == 0 { return true }
+    if s.substring(0, 1) == "#" { return true }
+    if len(s) >= 2 && s.substring(0, 2) == "//" { return true }
+    return false
+}
+
+pub fn parse_atlas_file(path: string, source_file: string) -> array {
+    let text = read_file(path)
+    let out = []
+    if len(text) == 0 { return out }
+
+    let lines = text.split("\n")
+    let n_lines = len(lines)
+
+    let mut have_cur = false
+    let mut cur_kind = ""
+    let mut cur_id = ""
+    let mut cur_raw_chunks = []
+    let mut cur_line = 0
+
+    let mut i = 0
+    while i < n_lines {
+        let line = lines[i]
+
+        if len(line) == 0 {
+            i = i + 1
+            continue
+        }
+        let c0 = line.substring(0, 1)
+        if c0 == "#" {
+            i = i + 1
+            continue
+        }
+        if c0 != "@" {
+            if c0 == " " || c0 == "\t" || c0 == "\"" || c0 == "(" {
+                if have_cur {
+                    cur_raw_chunks.push(line)
+                }
+                i = i + 1
+                continue
+            }
+            if _is_comment(line) {
+                i = i + 1
+                continue
+            }
+            if have_cur {
+                cur_raw_chunks.push(line)
+            }
+            i = i + 1
+            continue
+        }
+
+        let tok = _first_token(line)
+        if _is_header_sigil(tok) {
+            if have_cur && cur_kind != "" {
+                out.push(AtlasNode {
+                    kind: cur_kind,
+                    id: cur_id,
+                    raw: cur_raw_chunks.join("\n"),
+                    source_file: source_file,
+                    source_line: cur_line
+                })
+            }
+            let k = _kind_of(tok)
+            let rest = line.substring(len(tok), len(line))
+            let id = _extract_id(rest)
+            have_cur = true
+            cur_kind = k
+            cur_id = id
+            cur_raw_chunks = [line]
+            cur_line = i + 1
+            i = i + 1
+            continue
+        }
+        if have_cur {
+            cur_raw_chunks.push(line)
+        }
+        i = i + 1
+    }
+
+    if have_cur && cur_kind != "" {
+        out.push(AtlasNode {
+            kind: cur_kind,
+            id: cur_id,
+            raw: cur_raw_chunks.join("\n"),
+            source_file: source_file,
+            source_line: cur_line
+        })
+    }
+
+    return out
+}
+
+// ═════════════════════════════════════════════════════════════════
+// SECTION 2 — inlined from compiler/atlas/merger.hexa
+// ═════════════════════════════════════════════════════════════════
+
+pub struct AtlasIndex {
+    p_nodes: array,
+    c_nodes: array,
+    l_nodes: array,
+    e_nodes: array,
+    hash: string,
+    source_count: i64,
+    duplicates: array,
+    skipped_oversize: array
+}
+
+fn _dup_key(kind: string, id: string) -> string {
+    return kind + "|" + id
+}
+
+let _MAX_FILE_BYTES: i64 = 10 * 1024 * 1024
+
+fn _basename_of(path: string) -> string {
+    let n = len(path)
+    let mut i = n
+    while i > 0 {
+        let c = path.substring(i - 1, i)
+        if c == "/" { return path.substring(i, n) }
+        i = i - 1
+    }
+    return path
+}
+
+fn _discover(root: string) -> array {
+    let out = []
+    let main = root + "/atlas.n6"
+    if file_exists(main) { out.push(main) }
+
+    let entries = list_dir(root)
+    if type_of(entries) != "array" { return out }
+
+    let mut appends = []
+    let mut i = 0
+    while i < len(entries) {
+        let name = to_string(entries[i])
+        if len(name) >= 16 && name.substring(0, 13) == "atlas.append." {
+            let tail = name.substring(len(name) - 3, len(name))
+            if tail == ".n6" {
+                appends.push(name)
+            }
+        }
+        i = i + 1
+    }
+    let mut a = 0
+    while a < len(appends) {
+        let mut b = a + 1
+        while b < len(appends) {
+            if to_string(appends[b]) < to_string(appends[a]) {
+                let tmp = appends[a]
+                appends[a] = appends[b]
+                appends[b] = tmp
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let mut k = 0
+    while k < len(appends) {
+        out.push(root + "/" + to_string(appends[k]))
+        k = k + 1
+    }
+    return out
+}
+
+fn _insert_first_wins(idx: AtlasIndex, seen, node: AtlasNode) {
+    let key = _dup_key(node.kind, node.id)
+    if has_key(seen, key) {
+        let first_src = to_string(seen[key])
+        idx.duplicates.push(node.kind + ":" + node.id + " from " + node.source_file + " (first " + first_src + ")")
+        return
+    }
+    seen[key] = node.source_file
+    if node.kind == "P" { idx.p_nodes.push(node); return }
+    if node.kind == "C" { idx.c_nodes.push(node); return }
+    if node.kind == "L" { idx.l_nodes.push(node); return }
+    if node.kind == "E" { idx.e_nodes.push(node); return }
+}
+
+pub fn load_atlas(root: string) -> AtlasIndex {
+    let mut effective = root
+    if len(effective) == 0 {
+        effective = env("HOME") + "/core/nexus/n6"
+    }
+
+    let idx = AtlasIndex {
+        p_nodes: [],
+        c_nodes: [],
+        l_nodes: [],
+        e_nodes: [],
+        hash: "",
+        source_count: 0,
+        duplicates: [],
+        skipped_oversize: []
+    }
+    let seen = {}
+
+    let files = _discover(effective)
+    let hash_chunks = []
+    let mut fi = 0
+    while fi < len(files) {
+        let path = to_string(files[fi])
+        let sz = file_size(path)
+        if sz > _MAX_FILE_BYTES {
+            idx.skipped_oversize.push(path)
+            fi = fi + 1
+            continue
+        }
+        let basename = _basename_of(path)
+        let raw_bytes = read_file(path)
+        hash_chunks.push("--FILE:" + basename + "--\n")
+        hash_chunks.push(raw_bytes)
+        let nodes = parse_atlas_file(path, basename)
+        if len(raw_bytes) > 0 {
+            idx.source_count = idx.source_count + 1
+        }
+        let mut ni = 0
+        while ni < len(nodes) {
+            _insert_first_wins(idx, seen, nodes[ni])
+            ni = ni + 1
+        }
+        fi = fi + 1
+    }
+
+    let canonical = hash_chunks.join("")
+    idx.hash = sha256(canonical)
+    return idx
+}
+
+// ═════════════════════════════════════════════════════════════════
+// SECTION 3 — inlined from compiler/atlas/embed.hexa
+// ═════════════════════════════════════════════════════════════════
+
+let RAW_MAX_BYTES: i64 = 1024
+let RAW_KEEP_PREFIX: i64 = 256
+pub let DEFAULT_EMBED_OUT_PATH: string = "compiler/atlas/embedded.gen.hexa"
+
+fn _escape_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _escape_string(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        chunks.push(_escape_char(c))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _truncate_raw(raw: string) -> string {
+    let n = len(raw)
+    if n <= RAW_MAX_BYTES { return raw }
+    let head = raw.substring(0, RAW_KEEP_PREFIX)
+    return head + "..." + " [truncated, full=" + to_string(n) + "bytes]"
+}
+
+fn _emit_node(n: AtlasNode) -> string {
+    let raw_clipped = _truncate_raw(n.raw)
+    let parts = []
+    parts.push("    AtlasNode { kind: \"")
+    parts.push(_escape_string(n.kind))
+    parts.push("\", id: \"")
+    parts.push(_escape_string(n.id))
+    parts.push("\", raw: \"")
+    parts.push(_escape_string(raw_clipped))
+    parts.push("\", source_file: \"")
+    parts.push(_escape_string(n.source_file))
+    parts.push("\", source_line: ")
+    parts.push(to_string(n.source_line))
+    parts.push(" }")
+    return parts.join("")
+}
+
+fn _emit_array(name: string, arr: array) -> string {
+    let parts = []
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let ")
+    parts.push(name)
+    parts.push(": [AtlasNode] = [\n")
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        parts.push(_emit_node(arr[i]))
+        if i + 1 < n {
+            parts.push(",")
+        }
+        parts.push("\n")
+        i = i + 1
+    }
+    parts.push("]\n\n")
+    return parts.join("")
+}
+
+fn _iso_utc_now() -> string {
+    let s = exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()  // @allow-bare-exec
+    return s
+}
+
+pub fn embed_atlas(idx: AtlasIndex, out_path: string) {
+    let parts = []
+    parts.push("// AUTO-GENERATED — do not edit. Regenerate via tool/atlas_embed_gen_inline.hexa\n")
+    parts.push("//\n")
+    parts.push("// Phase A3 of the hexa native compiler: atlas static embed.\n")
+    parts.push("// Source: tool/atlas_embed_gen_inline.hexa::embed_atlas (use-free variant)\n")
+    parts.push("// Spec:   RFC-017 §4.5 / RFC-018 §6 / SPEC.yaml foundation.atlas_embedding\n")
+    parts.push("\n")
+    parts.push("use \"compiler/atlas/parser\"\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let ATLAS_HASH: string = \"")
+    parts.push(_escape_string(idx.hash))
+    parts.push("\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let ATLAS_SOURCE_COUNT: i64 = ")
+    parts.push(to_string(idx.source_count))
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let ATLAS_GENERATED_AT: string = \"")
+    parts.push(_escape_string(_iso_utc_now()))
+    parts.push("\"\n")
+    parts.push("\n")
+    parts.push(_emit_array("ATLAS_P_NODES", idx.p_nodes))
+    parts.push(_emit_array("ATLAS_C_NODES", idx.c_nodes))
+    parts.push(_emit_array("ATLAS_L_NODES", idx.l_nodes))
+    parts.push(_emit_array("ATLAS_E_NODES", idx.e_nodes))
+
+    let body = parts.join("")
+    write_file(out_path, body)
+}
+
+// ═════════════════════════════════════════════════════════════════
+// SECTION 4 — driver (inlined from tool/atlas_embed_gen.hexa)
+// ═════════════════════════════════════════════════════════════════
+
+fn _now_ms() -> int {
+    let py = exec("python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null").trim()
+    if len(py) > 0 { return to_int(py) }
+    let s = exec("date +%s%3N 2>/dev/null").trim()
+    if len(s) > 0 && s.substring(len(s) - 1, len(s)) != "N" {
+        return to_int(s)
+    }
+    let sec = exec("date +%s 2>/dev/null").trim()
+    return to_int(sec) * 1000
+}
+
+fn _size_of(path: string) -> i64 {
+    return file_size(path)
+}
+
+fn _format_kb(bytes: i64) -> string {
+    if bytes < 0 { return "?" }
+    let kb = bytes / 1024
+    return to_string(kb) + " KB (" + to_string(bytes) + " bytes)"
+}
+
+fn main() {
+    let av = argv()
+    let mut root = ""
+    if len(av) >= 3 {
+        root = to_string(av[2])
+    }
+    if len(root) == 0 {
+        root = env("HOME") + "/core/nexus/n6"
+    }
+    let out_path = DEFAULT_EMBED_OUT_PATH
+
+    println("phase-a3 atlas embed codegen (inline variant — bypasses use module-loader)")
+    println("  root:    " + root)
+    println("  out:     " + out_path)
+
+    let t0 = _now_ms()
+    let idx = load_atlas(root)
+    let t1 = _now_ms()
+    embed_atlas(idx, out_path)
+    let t2 = _now_ms()
+
+    let p = len(idx.p_nodes)
+    let c = len(idx.c_nodes)
+    let l = len(idx.l_nodes)
+    let e = len(idx.e_nodes)
+
+    println("")
+    println("merge:")
+    println("  sources merged:     " + to_string(idx.source_count))
+    println("  P (primitives):     " + to_string(p))
+    println("  C (constants):      " + to_string(c))
+    println("  L (laws):           " + to_string(l))
+    println("  E (edges):          " + to_string(e))
+    println("  total:              " + to_string(p + c + l + e))
+    println("  duplicates dropped: " + to_string(len(idx.duplicates)))
+    println("  oversize skipped:   " + to_string(len(idx.skipped_oversize)))
+    println("  sha256:             " + idx.hash)
+
+    let sz = _size_of(out_path)
+    println("")
+    println("emit:")
+    println("  output:             " + out_path)
+    println("  size:               " + _format_kb(sz))
+
+    println("")
+    println("timing:")
+    println("  load_ms:  " + to_string(t1 - t0))
+    println("  emit_ms:  " + to_string(t2 - t1))
+    println("  total_ms: " + to_string(t2 - t0))
+}
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/atlas_embed_gen_inline.hexa") { return true }
+    if script == "atlas_embed_gen_inline.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}
