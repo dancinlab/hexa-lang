@@ -6456,6 +6456,47 @@ static HexaVal safetensors_mmap_close;
 HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
                          HexaVal b_v, HexaVal bc_v);
 static HexaVal farr_matmul_shim;
+// hexa_v2 (bootstrap transpiler) emits direct C calls for ≥5 args
+// (no `hexa_callN` indirection exists past N=4). The dispatch in
+// hexa_full.hexa::call_builtin uses `farr_matmul(...)` literally —
+// provide an inline wrapper so that compiles to a single jump.
+HexaVal hexa_farr_apply_single_farr(HexaVal re_v, HexaVal im_v,
+                                    HexaVal gre_h, HexaVal gim_h,
+                                    HexaVal target_v, HexaVal nq_v);
+HexaVal hexa_farr_apply_cnot(HexaVal src_re_v, HexaVal src_im_v,
+                             HexaVal dst_re_v, HexaVal dst_im_v,
+                             HexaVal control_v, HexaVal target_v,
+                             HexaVal nq_v);
+static inline HexaVal farr_matmul(HexaVal a, HexaVal ar, HexaVal ac,
+                                  HexaVal b, HexaVal bc) {
+    return hexa_farr_matmul(a, ar, ac, b, bc);
+}
+// 5e817564 — interp dispatch added `farr_apply_single_farr(...)` and
+// `farr_apply_cnot(...)` literal calls (6-arg / 7-arg, past the
+// hexa_callN ceiling) but never grew the matching shims. Without
+// these the entire interp fails to compile (pre-existing breakage on
+// `tool/build_interp.hexa` since 5e817564). Added here as part of
+// RFC 033's runtime impl so the interp can rebuild.
+static inline HexaVal farr_apply_single_farr(HexaVal re_v, HexaVal im_v,
+                                             HexaVal gre_h, HexaVal gim_h,
+                                             HexaVal target_v, HexaVal nq_v) {
+    return hexa_farr_apply_single_farr(re_v, im_v, gre_h, gim_h, target_v, nq_v);
+}
+static inline HexaVal farr_apply_cnot(HexaVal src_re_v, HexaVal src_im_v,
+                                      HexaVal dst_re_v, HexaVal dst_im_v,
+                                      HexaVal control_v, HexaVal target_v,
+                                      HexaVal nq_v) {
+    return hexa_farr_apply_cnot(src_re_v, src_im_v, dst_re_v, dst_im_v,
+                                control_v, target_v, nq_v);
+}
+// RFC 033 (2026-05-12): farr_copy + farr_add_gaussian_noise.
+HexaVal hexa_farr_copy(HexaVal src_v);
+HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v);
+// 1-arg / 2-arg builtins are dispatched via hexa_call1 / hexa_call2,
+// which need `static HexaVal` shims with the exact identifier the
+// hexa-side code uses.
+static HexaVal farr_copy;
+static HexaVal farr_add_gaussian_noise;
 
 // `bit_or(x, y)` — shim kept because `|` as binary op conflicts with lambda
 // param delimiters `|x| x+1`. `&` and `^` are supported by parser directly.
@@ -8058,6 +8099,127 @@ HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
     return c_handle;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// RFC 033 (2026-05-12): farr_copy + farr_add_gaussian_noise.
+//
+// Both builtins exist to unblock anima tool/hexa_native/mitosis_hook
+// .hexa full-impl. The PyTorch reference (anima/tool/mitosis.py
+// L204/L213) does:
+//
+//     child_state = {k: v.clone() for k,v in parent_state.items()}
+//     for w in child_state.values():
+//         w.add_(torch.randn_like(w) * 0.1 * w.std())
+//
+// The pure-hexa equivalent without these two builtins needs N
+// farr_get/farr_set scalar ops per element + a Box-Muller emitted in
+// hexa, paying ~88 B HexaVal arena per element. For a 1 M-element
+// layer that is ~88 MB scratch per layer, ~2 GB across 24 layers —
+// far past the interp arena cap. The native builtins below do the
+// same work with zero hot-loop allocation.
+// ═══════════════════════════════════════════════════════════════════
+
+// RFC 033-A — farr_copy(src) -> dst.
+//   Deep-copy the contents of farr handle `src` into a freshly
+//   allocated farr handle. Returns -1 on invalid src. Empty src
+//   (len=0) returns a valid empty handle, not -1.
+HexaVal hexa_farr_copy(HexaVal src_v) {
+    int64_t src_id = hexa_as_num(src_v);
+    if (src_id < 0 || src_id >= _hx_farr_count) return hexa_int(-1);
+    HexaFarrEntry* se = &_hx_farr_table[src_id];
+    // freed slot (buf NULL with len>0 would be a runtime bug, but a
+    // freed slot has buf=NULL and len=0 after hexa_farr_free; reject
+    // the former, accept the latter as an empty copy).
+    if (!se->buf && se->len > 0) return hexa_int(-1);
+    int64_t n = se->len;
+    HexaVal dst_handle = hexa_farr_zeros(hexa_int(n));
+    int64_t dst_id = HX_INT(dst_handle);
+    if (dst_id < 0 || dst_id >= _hx_farr_count) return hexa_int(-1);
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    if (n > 0 && de->buf && se->buf) {
+        memcpy(de->buf, se->buf, (size_t)n * sizeof(double));
+    }
+    return dst_handle;
+}
+
+// ── RFC 033-B PRNG support ────────────────────────────────────────
+// splitmix64 — a 64-bit non-cryptographic PRNG with good
+// distributional properties for Monte Carlo noise. Used here as the
+// internal source for the Box-Muller transform driving
+// farr_add_gaussian_noise. State is process-local (single-thread
+// interp); revisit if hexa gains threads.
+static uint64_t _hx_gauss_rng_state = 0;
+static int      _hx_gauss_rng_inited = 0;
+
+static uint64_t _hx_splitmix64_next(uint64_t* x) {
+    uint64_t z = (*x += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+// Map u64 → double in (2^-53, 1]. Open at zero avoids log(0) in
+// Box-Muller.
+static double _hx_uniform01_open(uint64_t* state) {
+    uint64_t r = _hx_splitmix64_next(state) >> 11;       // 53-bit mantissa
+    if (r == 0) r = 1;
+    return (double)r * (1.0 / 9007199254740992.0);       // 2^53
+}
+
+static void _hx_gauss_rng_lazy_init(void) {
+    if (_hx_gauss_rng_inited) return;
+    const char* env = getenv("__HEXA_FARR_GAUSS_SEED__");
+    if (env && *env) {
+        _hx_gauss_rng_state = strtoull(env, NULL, 10);
+    } else {
+        _hx_gauss_rng_state = (uint64_t)time(NULL) ^
+                              ((uint64_t)getpid() << 16);
+    }
+    if (_hx_gauss_rng_state == 0) _hx_gauss_rng_state = 1;
+    _hx_gauss_rng_inited = 1;
+}
+
+// RFC 033-B — farr_add_gaussian_noise(target, sigma) -> void.
+//   In-place addition of N(0, sigma^2) draws to every element of
+//   farr handle `target`. Box-Muller transform pairs adjacent
+//   elements; tail element (when len is odd) consumes one extra
+//   pair and uses only z0.
+//
+//   No-op on: invalid handle, sigma == 0.0, sigma < 0, or NaN sigma.
+//   Reproducibility: set __HEXA_FARR_GAUSS_SEED__=<u64-decimal>
+//   before first call (the env is read once and cached).
+HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v) {
+    int64_t id = hexa_as_num(target_v);
+    double  sigma = __hx_to_double(sigma_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_void();
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    if (!e->buf || e->len <= 0)         return hexa_void();
+    // Reject NaN (sigma != sigma) and negative sigma. sigma == 0 is a
+    // no-op — every draw would be 0.0 anyway.
+    if (!(sigma == sigma))              return hexa_void();
+    if (sigma < 0.0)                    return hexa_void();
+    if (sigma == 0.0)                   return hexa_void();
+    _hx_gauss_rng_lazy_init();
+    int64_t n = e->len;
+    int64_t i = 0;
+    const double two_pi = 6.28318530717958647692; // 2π
+    for (; i + 2 <= n; i += 2) {
+        double u1 = _hx_uniform01_open(&_hx_gauss_rng_state);
+        double u2 = _hx_uniform01_open(&_hx_gauss_rng_state);
+        double r  = sqrt(-2.0 * log(u1));
+        double th = two_pi * u2;
+        e->buf[i]   += sigma * r * cos(th);
+        e->buf[i+1] += sigma * r * sin(th);
+    }
+    if (i < n) {
+        double u1 = _hx_uniform01_open(&_hx_gauss_rng_state);
+        double u2 = _hx_uniform01_open(&_hx_gauss_rng_state);
+        double r  = sqrt(-2.0 * log(u1));
+        double th = two_pi * u2;
+        e->buf[i] += sigma * r * cos(th);
+    }
+    return hexa_void();
+}
+
 // ── A1 (2026-05-10): per-phase arena reset side channel ─────────
 // Stage 0 host (hexa_real / hexa_interp.real) holds every str-arena
 // allocation for the whole process lifetime — there is no per-phase
@@ -9520,6 +9682,9 @@ static void _hexa_init_fn_shims(void) {
     safetensors_mmap_close          = hexa_fn_new((void*)hexa_safetensors_mmap_close,          1);
     // RFC 032 (2026-05-12): farr_matmul — packed-double matrix multiply.
     farr_matmul_shim                = hexa_fn_new((void*)hexa_farr_matmul,                     5);
+    // RFC 033 (2026-05-12): farr_copy + farr_add_gaussian_noise.
+    farr_copy                       = hexa_fn_new((void*)hexa_farr_copy,                       1);
+    farr_add_gaussian_noise         = hexa_fn_new((void*)hexa_farr_add_gaussian_noise,         2);
     bit_or     = hexa_fn_new((void*)_hx_bit_or,           2);
     // bt73 free-fn shims (timestamp, base64_encode, base64_decode)
     timestamp     = hexa_fn_new((void*)_bt73_timestamp_w,     0);

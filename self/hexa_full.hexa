@@ -10752,6 +10752,9 @@ fn call_builtin(name, args) {
     if name == "safetensors_mmap_close"       { if len(args) > 0 { let _ = safetensors_mmap_close(args[0].int_val); return val_void() }                         else { return val_void() } }
     // RFC 032 (2026-05-12): farr_matmul — packed-double matrix multiply.
     if name == "farr_matmul" { if len(args) > 4 { return val_int(farr_matmul(args[0].int_val, args[1].int_val, args[2].int_val, args[3].int_val, args[4].int_val)) } else { return val_int(-1) } }
+    // RFC 033 (2026-05-12): farr_copy + farr_add_gaussian_noise.
+    if name == "farr_copy" { if len(args) > 0 { return val_int(farr_copy(args[0].int_val)) }                                                                  else { return val_int(-1) } }
+    if name == "farr_add_gaussian_noise" { if len(args) > 1 { let _ = farr_add_gaussian_noise(args[0].int_val, args[1].float_val); return val_void() }       else { return val_void() } }
     // ── End fast-path ────────────────────────────────────────────────
 
     if name == "println" {
