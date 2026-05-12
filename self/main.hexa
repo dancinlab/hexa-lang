@@ -61,7 +61,9 @@ fn cmd_help() {
     println("    status                  Show toolchain status")
     println("    version                 Print version")
     println("    init <dir> [--name N]   Scaffold <dir>/project.hexa (0% external format)")
-    println("    smash|free|thinking|lens|atlas|bus|roadmap|discovery")
+    println("    atlas <sub-sub> [args]  Embedded SSOT (zero-I/O, ATLAS_N6_RETIREMENT_PLAN.md §0b)")
+    println("                              hash | stats | lookup [P|C|L|E] <id> | dump [P|C|L|E] [--json]")
+    println("    smash|free|thinking|lens|bus|roadmap|discovery")
     println("                            Delegate to $NEXUS/shared/bin/nexus-cli")
     println("                              hexa smash --seed \"...\" [--depth 3]")
     println("                              hexa free --seed \"...\" [--dfs 3]")
@@ -2455,8 +2457,27 @@ if len(av) < 3 {
         } else {
             cmd_url(av[3])
         }
-    } else if sub == "smash" || sub == "free" || sub == "thinking" || sub == "lens" || sub == "atlas" || sub == "bus" || sub == "roadmap" || sub == "discovery" || sub == "status-proj" || sub == "roadmap-proj" || sub == "convergence-proj" {
+    } else if sub == "atlas" {
+        // ATLAS_N6_RETIREMENT_PLAN.md §0b Phase 2: hexa-native atlas surface.
+        // tool/atlas_cli.hexa reads the embedded static_atlas() — zero fs I/O,
+        // zero nexus dependency. Supersedes the prior nexus-cli proxy path
+        // for "atlas" (the other subs — smash/free/etc — still proxy).
+        let __inst_a = install_dir_from_argv0()
+        let mut atlas_script = "tool/atlas_cli.hexa"
+        if len(__inst_a) > 0 {
+            let inst_path = __inst_a + "/tool/atlas_cli.hexa"
+            if file_exists(inst_path) { atlas_script = inst_path }
+        }
+        let mut atlas_args = []
+        let mut ai = 3
+        while ai < len(av) {
+            atlas_args.push(av[ai])
+            ai = ai + 1
+        }
+        cmd_run(atlas_script, atlas_args)
+    } else if sub == "smash" || sub == "free" || sub == "thinking" || sub == "lens" || sub == "bus" || sub == "roadmap" || sub == "discovery" || sub == "status-proj" || sub == "roadmap-proj" || sub == "convergence-proj" {
         // @cli bake: nexus-cli 위임. av[3..] 전체를 nexus-cli 에 그대로 전달.
+        // (atlas 는 위 분기에서 hexa-native 로 흡수 — RETIREMENT_PLAN §0b Phase 2.)
         let mut nc_args = []
         let mut ni = 3
         while ni < len(av) {

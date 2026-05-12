@@ -1,0 +1,219 @@
+// tool/atlas_cli.hexa — `hexa atlas {lookup|dump|stats|hash}`
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Read-only surface over the compile-time embedded atlas index.
+// All four subcommands resolve against compiler/atlas/static_index.hexa
+// (static_atlas()). No fs read, no parse — the data has already been
+// embedded as const arrays in compiler/atlas/embedded.gen.hexa.
+//
+// Wired from self/main.hexa: `hexa atlas <sub-sub> [args]`.
+// Also runnable directly: `hexa run tool/atlas_cli.hexa <sub-sub> [args]`.
+//
+// Phase 2 of the atlas.n6 absorption plan
+// (ATLAS_N6_RETIREMENT_PLAN.md §0b). Write surface (append-witness)
+// lands in Phase 3.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/static_index"
+
+fn _slice_args() -> array {
+    let av = args()
+    let n = len(av)
+    let mut i = 1
+    while i < n {
+        let a = to_string(av[i])
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "--help" || a == "-h" || a == "help" {
+            let mut out = []
+            let mut j = i
+            while j < n {
+                out.push(av[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    if n >= 3 {
+        let mut out = []
+        let mut j = 2
+        while j < n {
+            out.push(av[j])
+            j = j + 1
+        }
+        return out
+    }
+    return []
+}
+
+fn _jq(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+fn _arr_for_kind(idx: AtlasIndex, k: string) -> array {
+    if k == "P" { return idx.p_nodes }
+    if k == "C" { return idx.c_nodes }
+    if k == "L" { return idx.l_nodes }
+    if k == "E" { return idx.e_nodes }
+    return []
+}
+
+fn _emit_text(n: AtlasNode) {
+    println("@" + n.kind + " " + n.id + " :: " + n.source_file + ":" + to_string(n.source_line))
+    if len(n.raw) > 0 {
+        println(n.raw)
+    }
+    println("--")
+}
+
+fn _emit_jsonl(n: AtlasNode) {
+    println("{\"kind\":\"" + _jq(n.kind) + "\",\"id\":\"" + _jq(n.id) + "\",\"source_file\":\"" + _jq(n.source_file) + "\",\"source_line\":" + to_string(n.source_line) + ",\"raw\":\"" + _jq(n.raw) + "\"}")
+}
+
+fn cmd_hash() {
+    let idx = static_atlas()
+    println(idx.hash)
+}
+
+fn cmd_stats() {
+    let idx = static_atlas()
+    let p = len(idx.p_nodes)
+    let c = len(idx.c_nodes)
+    let l = len(idx.l_nodes)
+    let e = len(idx.e_nodes)
+    let total = p + c + l + e
+    println("ATLAS_HASH         " + idx.hash)
+    println("ATLAS_SOURCE_COUNT " + to_string(idx.source_count))
+    println("P primitives       " + to_string(p))
+    println("C constants        " + to_string(c))
+    println("L laws             " + to_string(l))
+    println("E edges            " + to_string(e))
+    println("total nodes        " + to_string(total))
+}
+
+fn cmd_lookup(rest: array) {
+    if len(rest) == 0 {
+        println("usage: hexa atlas lookup [P|C|L|E] <id>")
+        exit(2)
+    }
+    let mut kind = ""
+    let mut id = ""
+    if len(rest) >= 2 {
+        let a0 = to_string(rest[0])
+        if a0 == "P" || a0 == "C" || a0 == "L" || a0 == "E" {
+            kind = a0
+            id = to_string(rest[1])
+        } else {
+            id = a0
+        }
+    } else {
+        id = to_string(rest[0])
+    }
+
+    if len(kind) > 0 {
+        let n = lookup_static(kind, id)
+        if n.kind == "" {
+            println("# not found: " + kind + ":" + id)
+            exit(1)
+        }
+        _emit_text(n)
+        return
+    }
+    let kinds = ["P", "C", "L", "E"]
+    let mut i = 0
+    let mut found = 0
+    while i < len(kinds) {
+        let n = lookup_static(kinds[i], id)
+        if n.kind != "" {
+            _emit_text(n)
+            found = found + 1
+        }
+        i = i + 1
+    }
+    if found == 0 {
+        println("# not found: " + id + " (searched P, C, L, E)")
+        exit(1)
+    }
+}
+
+fn cmd_dump(rest: array) {
+    let mut want_kind = ""
+    let mut json_mode = false
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--json" || a == "-j" { json_mode = true }
+        else if a == "P" || a == "C" || a == "L" || a == "E" { want_kind = a }
+        i = i + 1
+    }
+    let idx = static_atlas()
+    let kinds = ["P", "C", "L", "E"]
+    let mut ki = 0
+    while ki < len(kinds) {
+        let k = kinds[ki]
+        if len(want_kind) == 0 || want_kind == k {
+            let arr = _arr_for_kind(idx, k)
+            let mut ni = 0
+            while ni < len(arr) {
+                let n = arr[ni]
+                if json_mode { _emit_jsonl(n) } else { _emit_text(n) }
+                ni = ni + 1
+            }
+        }
+        ki = ki + 1
+    }
+}
+
+fn cmd_help() {
+    println("hexa atlas — read-only surface over the embedded atlas index")
+    println("")
+    println("subcommands:")
+    println("  hash                    print ATLAS_HASH (embedded sha256 pin)")
+    println("  stats                   per-kind counts + ATLAS_HASH + source_count")
+    println("  lookup <id>             search P, C, L, E for matching id")
+    println("  lookup <P|C|L|E> <id>   restrict to one kind")
+    println("  dump [P|C|L|E] [--json] emit all nodes (text or jsonl)")
+    println("")
+    println("data lives compile-time in compiler/atlas/embedded.gen.hexa")
+    println("(regenerate via:  hexa run tool/atlas_embed_gen.hexa)")
+}
+
+fn main() {
+    let a = _slice_args()
+    if len(a) == 0 {
+        cmd_help()
+        return
+    }
+    let sub = to_string(a[0])
+    let mut rest = []
+    let mut i = 1
+    while i < len(a) {
+        rest.push(a[i])
+        i = i + 1
+    }
+    if sub == "hash" { cmd_hash() }
+    else if sub == "stats" { cmd_stats() }
+    else if sub == "lookup" { cmd_lookup(rest) }
+    else if sub == "dump" { cmd_dump(rest) }
+    else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
+    else {
+        println("error: unknown subcommand: " + sub)
+        cmd_help()
+        exit(2)
+    }
+}
