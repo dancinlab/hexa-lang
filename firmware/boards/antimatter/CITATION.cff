@@ -10,7 +10,10 @@ abstract: |
   scaffold; its empirical verification for any antimatter axis is not
   claimed at this release.
 authors:
-  - name: dancinlab contributors
+  - family-names: Park
+    given-names: Min Woo
+    alias: dancinlab
+    email: nerve011235@gmail.com
     affiliation: dancinlab
 keywords:
   - antimatter

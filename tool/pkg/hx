@@ -7,7 +7,7 @@ HX_HOME="${HX_HOME:-$HOME/.hx}"
 HX_BIN="$HX_HOME/bin"
 HX_PKG="$HX_HOME/packages"
 HX_CACHE="$HX_HOME/cache/resolve.tsv"
-REGISTRY_REMOTE="https://raw.githubusercontent.com/need-singularity/hexa-lang/main/pkg/registry.tsv"
+REGISTRY_REMOTE="https://raw.githubusercontent.com/dancinlab/hexa-lang/main/pkg/registry.tsv"
 HX_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
 HX_DIR="$(cd "$(dirname "$HX_SCRIPT")" && pwd)"
 REGISTRY_LOCAL="${HX_DIR}/registry.tsv"
@@ -15,7 +15,7 @@ REGISTRY_LOCAL="${HX_DIR}/registry.tsv"
 
 # AI-native convention: probe these orgs in order. No central list.
 # Override with HX_ORGS="org1 org2 ..." env var.
-HX_ORGS_DEFAULT="hexa-pkg need-singularity dancinlife"
+HX_ORGS_DEFAULT="hexa-pkg dancinlab dancinlife"
 HX_ORGS="${HX_ORGS:-$HX_ORGS_DEFAULT}"
 
 mkdir -p "$HX_BIN" "$HX_PKG" "$(dirname "$HX_CACHE")"

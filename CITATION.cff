@@ -9,7 +9,10 @@ abstract: |
   100% EXACT compliance. Companion paper "P-HEXA" documents the
   derivation chain and zero-arbitrary-choices proof.
 authors:
-  - name: Park, Hyunsoo
+  - family-names: Park
+    given-names: Min Woo
+    alias: dancinlab
+    email: nerve011235@gmail.com
     affiliation: dancinlab
 license: MIT
 repository-code: "https://github.com/dancinlab/hexa-lang"

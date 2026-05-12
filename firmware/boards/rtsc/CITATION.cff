@@ -2,7 +2,10 @@ cff-version: 1.2.0
 message: "If you use hexa-rtsc in academic work, please cite as below."
 title: "hexa-rtsc: HEXA family substrate (n=6 invariant lattice)"
 authors:
-  - name: dancinlab contributors
+  - family-names: Park
+    given-names: Min Woo
+    alias: dancinlab
+    email: nerve011235@gmail.com
     affiliation: dancinlab
 license: MIT
 repository-code: "https://github.com/dancinlab/hexa-rtsc"

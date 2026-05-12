@@ -26,7 +26,7 @@
 #   checked-at  — ISO-8601 UTC timestamp of last successful check/pull
 
 ref 1 live "hexa-lang canonical"
-  source github.com/need-singularity/hexa-lang
+  source github.com/dancinlab/hexa-lang
   branch main
   path .raw
   pinned-hash TO_BE_FILLED_ON_FIRST_SYNC
