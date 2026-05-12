@@ -1,0 +1,446 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/jsonl_pool.hexa — JSONL-demux subprocess pool
+//
+//  @module(slug="jsonl_pool", desc="pool of N JSONL-over-stdio child processes with id-demux request routing")
+//  @usage(use "stdlib/jsonl_pool"; let p = pool_spawn(4, "myworker"); let r = pool_request(p, m); pool_shutdown(p))
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [pool_spawn, pool_request, pool_request_to, pool_broadcast,
+//                 pool_broadcast_to, pool_send, pool_recv_any, pool_shutdown,
+//                 pool_size, pool_pids, pool_alive]
+//  @stability preview
+//  @since 2026-05-13
+//  @maintainer hexa-core
+//  @priority P1
+//  @rfc incoming/patches/wilson-pi-port-6-gap-prereq.md (G6) — .roadmap.stdlib S-NEW-JSONL-POOL
+//
+//  ── PROBLEM (wilson swarm — incoming/patches/wilson-pi-port-6-gap-prereq, G6) ──
+//
+//  wilson's swarm (P5) and out-of-proc plugin IPC need: spawn N child
+//  processes — each = `wilson --harness rpc`, or any worker that speaks
+//  newline-delimited JSON on stdin/stdout (`{"id":<id>, …}` in,
+//  `{"id":<id>, …}` out) — route requests round-robin, demux replies back
+//  to callers by request id, fan a request out to every child, and tear the
+//  whole pool down cleanly. `stdlib/proc` gives fire-and-forget supervised
+//  spawn; `stdlib/channel` gives one bidirectional FIFO pair +
+//  `proc_spawn_with_channels`; neither assembles the pool. This module does.
+//
+//  ── MODEL ─────────────────────────────────────────────────────────────────
+//
+//  A `Pool` is a map:
+//      { "n": int,                      // cell count
+//        "cells": [ Cell ],             // per-cell state
+//        "rr": int,                     // round-robin cursor (next cell to use)
+//        "seq": int }                   // monotonic id minter for auto-ids
+//  A `Cell` is a map:
+//      { "idx": int, "pid": int,
+//        "read_fd": int, "write_fd": int }   // channel ints (see stdlib/channel)
+//
+//  Each cell is a child spawned with `proc_spawn_with_channels(cmd, write_fd,
+//  read_fd)` (channel.hexa) — the child sees plain stdin/stdout; the parent
+//  writes JSONL to write_fd and reads JSONL from read_fd. Sends use
+//  `channel_send_sync` (ordered + backpressure-aware) — the demux relies on
+//  in-order delivery per cell.
+//
+//  Request-id contract: every JSON request carries an "id" (int or string).
+//  pool_request / pool_send / pool_broadcast mint a fresh int id
+//  (`pool["seq"]`) when the caller's request map has no "id" key, and return /
+//  report it so the caller can match the reply. The child MUST echo the same
+//  "id" back on every line it emits for that request. Lines that don't parse
+//  as a JSON object, or whose "id" doesn't match an in-flight request, are
+//  skipped — a child logging plain text to stdout doesn't corrupt the demux.
+//
+//  ── LIMITS / NON-GOALS (v0.1.0) ───────────────────────────────────────────
+//
+//   · Single-threaded / synchronous, like the rest of hexa's exec model:
+//     pool_request blocks. "Concurrency" = pool_send-all then pool_recv_any
+//     in a loop — the demux is what makes that correct, not OS threads.
+//   · One reply line per request in pool_request (the common echo / RPC
+//     shape). For a streamed reply (`{id,ev,…}* {id,ev:"done"}`) loop
+//     pool_recv_any and stop on your own terminal marker.
+//   · No automatic dead-cell restart yet — pool_recv_any returns {} on
+//     timeout; a supervisor loop can probe pool_pids + pool_alive and
+//     re-spawn that slot. (Follow-up: wilson docs/hexa-lang-gap-audit.md#g6.)
+//   · Cancellation not wired to stdlib/cancel yet (S-NEW-JSONL-POOL
+//     depends_on RT-CANCEL-TOKEN — follow-up).
+//
+//  ── See also ──────────────────────────────────────────────────────────────
+//
+//  · stdlib/channel.hexa — bidirectional FIFO pair + channel_send_sync + proc_spawn_with_channels
+//  · stdlib/proc.hexa    — supervised fire-and-forget spawn (no demux)
+//  · stdlib/test/test_jsonl_pool.hexa — selftest (4-cell echo + 20-req demux + broadcast + shutdown)
+//  · wilson plugins/swarm/main.hexa — the consumer (cell pool over `wilson --harness rpc`)
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/channel"
+
+// Default per-request timeout (ms) when the caller doesn't pass one.
+let JSONL_POOL_DEFAULT_TIMEOUT_MS = 30000
+// Sleep between empty full rounds in the recv-any poll loop (`sleep` arg).
+let _JP_EMPTY_ROUND_SLEEP_S = "0.02"
+// Each empty round in pool_recv_any costs ~this many ms toward the budget.
+let _JP_EMPTY_ROUND_MS = 20
+
+// ── internal: kill / alive (kept local — stdlib/proc's equivalents aren't pub) ──
+fn _pool_kill(pid: int) -> bool {
+    if pid < 1 { return true }
+    // pgrp first (cascades a setsid'd worker tree), then bare pid; both silent.
+    let out = exec("kill -TERM -" + to_string(pid) + " 2>/dev/null; kill -TERM " + to_string(pid) + " 2>/dev/null; echo done").trim()
+    return out == "done"
+}
+
+// pool_alive(pid) -> bool — POSIX `kill -0` liveness probe. Exposed so a
+// supervisor can sweep pool_pids() and re-spawn dead slots.
+pub fn pool_alive(pid: int) -> bool {
+    if pid < 1 { return false }
+    let out = exec("kill -0 " + to_string(pid) + " 2>/dev/null && echo y || echo n").trim()
+    return out == "y"
+}
+
+// ── internal: cmd-template substitution ───────────────────────────────────
+// Replace every "{i}" in `tmpl` with `to_string(idx)`. No "{i}" ⇒ verbatim.
+fn _jp_subst_index(tmpl: string, idx: int) -> string {
+    let needle = "{i}"
+    let rep = to_string(idx)
+    let mut out = ""
+    let mut rest = tmpl
+    while true {
+        let at = rest.index_of(needle)
+        if at < 0 { out = out + rest ; break }
+        out = out + rest.substring(0, at) + rep
+        rest = rest.substring(at + len(needle), len(rest))
+    }
+    return out
+}
+
+// ── internal: deep-copy a JSON-able value (stringify round-trip) ──────────
+fn _jp_clone(v) -> any {
+    return json_parse(json_stringify(v))
+}
+
+// ── internal: parse one stdout line as a JSON object, or void on junk ─────
+// json_parse returns garbage (and can panic downstream) on bare text — gate
+// on a leading '{' and require a map result.
+fn _jp_parse_obj(line: string) -> any {
+    let t = line.trim()
+    if len(t) < 2 { return void }
+    if t.substring(0, 1) != "{" { return void }
+    let m = json_parse(t)
+    if type_of(m) != "map" { return void }
+    return m
+}
+
+// ── internal: the "id" of a reply map as a string ("" if absent) ─────────
+fn _jp_id_str(m) -> string {
+    if type_of(m) != "map" { return "" }
+    if !has_key(m, "id") { return "" }
+    return to_string(m["id"])
+}
+
+// ── internal: round-robin next cell (advances the cursor) ────────────────
+fn _jp_next_cell(pool) -> any {
+    let n = pool["n"]
+    if n < 1 { return void }
+    let mut rr = pool["rr"]
+    if rr < 0 { rr = 0 }
+    if rr > n - 1 { rr = 0 }
+    let cell = pool["cells"][rr]
+    pool["rr"] = (rr + 1) % n
+    return cell
+}
+
+// ── internal: next reply line from a cell ("" if none within timeout) ────
+// Serves from the cell's local line buffer first; refills it in one shot
+// via channel_recv_lines when empty (so no line is ever lost — see that
+// function's doc for why channel_recv alone drops lines 2..N).
+fn _jp_cell_next_line(cell, timeout_ms: int) -> string {
+    if type_of(cell) != "map" { return "" }
+    let lp = cell["lpos"]
+    let lines = cell["lines"]
+    if lp < len(lines) {
+        cell["lpos"] = lp + 1
+        return lines[lp]
+    }
+    let rfd = cell["read_fd"]
+    if rfd < 0 { return "" }
+    let fresh = channel_recv_lines(rfd, timeout_ms)
+    if len(fresh) < 1 { return "" }
+    cell["lines"] = fresh
+    cell["lpos"] = 1
+    return fresh[0]
+}
+
+// ── internal: stamp an "id" onto a request ────────────────────────────────
+// Returns [reqToSend, idStr]. If `req` already has "id" it's used as-is (no
+// copy). A non-map `req` is wrapped as {"id":<minted>, "payload":req}.
+// Otherwise a CLONE of `req` gets a fresh minted id (caller's map untouched).
+fn _jp_with_id(pool, req) -> array {
+    if type_of(req) != "map" {
+        let m = json_parse("{}")
+        let id = pool["seq"]
+        pool["seq"] = id + 1
+        m["id"] = id
+        m["payload"] = req
+        return [m, to_string(id)]
+    }
+    if has_key(req, "id") {
+        return [req, to_string(req["id"])]
+    }
+    let m = _jp_clone(req)
+    let id = pool["seq"]
+    pool["seq"] = id + 1
+    m["id"] = id
+    return [m, to_string(id)]
+}
+
+// ── internal: mint a fresh int id ─────────────────────────────────────────
+fn _jp_mint(pool) -> int {
+    let id = pool["seq"]
+    pool["seq"] = id + 1
+    return id
+}
+
+// ── pool_spawn(n, cmd_tmpl) -> Pool ───────────────────────────────────────
+//
+// Open `n` channel pairs and spawn `n` children. `cmd_tmpl` is a shell
+// command; every "{i}" in it is replaced with the 0-based cell index (so a
+// worker can pick a port / name a log file from its index). With no "{i}"
+// the same command runs for every cell.
+//
+// A cell whose channel or spawn fails has pid 0 (and read_fd/write_fd -1);
+// the pool is still returned — probe pool_pids() / pool_alive() to find
+// holes, and pool_shutdown() to clean up a partial pool.
+pub fn pool_spawn(n: int, cmd_tmpl: string) -> any {
+    let pool = json_parse("{}")
+    pool["n"] = 0
+    pool["rr"] = 0
+    pool["seq"] = 1
+    let mut cells = []
+    if n < 1 { pool["cells"] = cells ; return pool }
+    let mut i = 0
+    while i < n {
+        let pair = channel_pair_open()
+        let read_fd = pair[0]
+        let write_fd = pair[1]
+        let mut pid = 0
+        if read_fd > -1 && write_fd > -1 {
+            let cmd = _jp_subst_index(cmd_tmpl, i)
+            // child stdin = parent's write side; child stdout = parent's read side
+            pid = proc_spawn_with_channels(cmd, write_fd, read_fd)
+        }
+        let cell = json_parse("{}")
+        cell["idx"] = i
+        cell["pid"] = pid
+        cell["read_fd"] = read_fd
+        cell["write_fd"] = write_fd
+        cell["lines"] = []      // drained-but-not-yet-consumed reply lines (FIFO)
+        cell["lpos"] = 0        // index of the next unconsumed line in cell["lines"]
+        cells.push(cell)
+        i = i + 1
+    }
+    pool["cells"] = cells
+    pool["n"] = n
+    return pool
+}
+
+// pool_size(pool) -> int — number of cell slots (incl. failed ones).
+pub fn pool_size(pool) -> int {
+    if type_of(pool) != "map" { return 0 }
+    if !has_key(pool, "n") { return 0 }
+    return pool["n"]
+}
+
+// pool_pids(pool) -> [int] — child pids in cell order (0 = failed slot).
+pub fn pool_pids(pool) -> array {
+    let mut out = []
+    if type_of(pool) != "map" { return out }
+    if !has_key(pool, "cells") { return out }
+    for c in pool["cells"] { out.push(c["pid"]) }
+    return out
+}
+
+// ── pool_send(pool, req) -> idStr ─────────────────────────────────────────
+//
+// Fire `req` at the next round-robin cell and return immediately with the
+// request id as a string (the minted int, or whatever "id" the caller set
+// on `req`). Pair with pool_recv_any to collect the reply later — that is
+// how you get many requests "in flight" in a single-threaded model.
+//
+// Returns "" on a dead/empty pool or a send failure (cell channel closed).
+pub fn pool_send(pool, req) -> string {
+    if type_of(pool) != "map" { return "" }
+    if pool_size(pool) < 1 { return "" }
+    let cell = _jp_next_cell(pool)
+    if type_of(cell) != "map" { return "" }
+    let pr = _jp_with_id(pool, req)
+    let ok = channel_send_sync(cell["write_fd"], json_stringify(pr[0]))
+    if !ok { return "" }
+    return pr[1]
+}
+
+// ── pool_recv_any(pool, timeout_ms) -> map ────────────────────────────────
+//
+// Round-robin every cell's reply buffer; return the first line that parses
+// as a JSON object. Returns {} (empty map) on timeout. Junk / non-object
+// lines are consumed and skipped. Caller demuxes by "id".
+// timeout_ms < 0 ⇒ block until something arrives.
+pub fn pool_recv_any(pool, timeout_ms: int) -> any {
+    if type_of(pool) != "map" { return json_parse("{}") }
+    if pool_size(pool) < 1 { return json_parse("{}") }
+    let n = pool["n"]
+    let blocking = timeout_ms < 0
+    let budget = if timeout_ms < 1 { 1 } else { timeout_ms }
+    let mut waited = 0
+    while true {
+        let mut anything = false
+        let mut i = 0
+        while i < n {
+            let cell = pool["cells"][i]
+            let line = _jp_cell_next_line(cell, 0)   // poll
+            if line != "" {
+                anything = true
+                let m = _jp_parse_obj(line)
+                if type_of(m) == "map" { return m }
+            }
+            i = i + 1
+        }
+        if !blocking {
+            if waited > budget - 1 { break }
+        }
+        if !anything {
+            // nothing anywhere this round — back off so we don't hot-spin perl
+            let _z = exec("sleep " + _JP_EMPTY_ROUND_SLEEP_S)
+            waited = waited + _JP_EMPTY_ROUND_MS
+        } else {
+            // consumed only junk this round — count a small cost and loop
+            waited = waited + 1
+        }
+    }
+    return json_parse("{}")
+}
+
+// ── pool_request(pool, req) -> map ────────────────────────────────────────
+//
+// Send `req` to the next round-robin cell, then read replies from THAT cell
+// until one carries the matching "id"; return it. Skips non-object lines and
+// stale ids. Returns {} on timeout / send failure. Module default timeout
+// (JSONL_POOL_DEFAULT_TIMEOUT_MS) — use pool_request_to for a custom one.
+pub fn pool_request(pool, req) -> any {
+    return pool_request_to(pool, req, JSONL_POOL_DEFAULT_TIMEOUT_MS)
+}
+
+pub fn pool_request_to(pool, req, timeout_ms: int) -> any {
+    if type_of(pool) != "map" { return json_parse("{}") }
+    if pool_size(pool) < 1 { return json_parse("{}") }
+    let cell = _jp_next_cell(pool)
+    if type_of(cell) != "map" { return json_parse("{}") }
+    let pr = _jp_with_id(pool, req)
+    let want = pr[1]
+    let ok = channel_send_sync(cell["write_fd"], json_stringify(pr[0]))
+    if !ok { return json_parse("{}") }
+    let budget = if timeout_ms < 1 { 1 } else { timeout_ms }
+    let mut waited = 0
+    while waited < budget {
+        // wait up to ~200ms per refill so a slow reply doesn't burn fork/exec on tight polls
+        let mut slice = 200
+        if budget - waited < slice { slice = budget - waited }
+        if slice < 1 { slice = 1 }
+        let line = _jp_cell_next_line(cell, slice)
+        if line != "" {
+            let m = _jp_parse_obj(line)
+            if type_of(m) == "map" {
+                if _jp_id_str(m) == want { return m }
+            }
+            // junk or a stale / unsolicited id — count a small cost, keep reading
+            waited = waited + 1
+        } else {
+            waited = waited + slice
+        }
+    }
+    return json_parse("{}")
+}
+
+// ── pool_broadcast(pool, req) -> [map] ────────────────────────────────────
+//
+// Fan `req` out to ALL cells (each gets a clone with a distinct minted id)
+// and collect one reply per cell. Returns an array of reply maps in cell
+// order; a cell that failed to send / timed out contributes {} at its slot.
+// Module default timeout — use pool_broadcast_to for a custom one.
+pub fn pool_broadcast(pool, req) -> array {
+    return pool_broadcast_to(pool, req, JSONL_POOL_DEFAULT_TIMEOUT_MS)
+}
+
+pub fn pool_broadcast_to(pool, req, timeout_ms: int) -> array {
+    let mut out = []
+    if type_of(pool) != "map" { return out }
+    if pool_size(pool) < 1 { return out }
+    let n = pool["n"]
+    let mut wants = []
+    // ── send phase: distinct id per cell ─────────────────────────────────
+    let mut i = 0
+    while i < n {
+        let cell = pool["cells"][i]
+        let id = _jp_mint(pool)
+        let mut msg = json_parse("{}")
+        if type_of(req) == "map" {
+            msg = _jp_clone(req)
+        } else {
+            msg["payload"] = req
+        }
+        msg["id"] = id
+        let ok = channel_send_sync(cell["write_fd"], json_stringify(msg))
+        if ok { wants.push(to_string(id)) } else { wants.push("") }
+        out.push(json_parse("{}"))   // placeholder; filled in recv phase
+        i = i + 1
+    }
+    // ── recv phase: per cell, read until its want id shows up ────────────
+    let budget = if timeout_ms < 1 { 1 } else { timeout_ms }
+    let mut j = 0
+    while j < n {
+        let want = wants[j]
+        if want == "" { j = j + 1 ; continue }
+        let cell = pool["cells"][j]
+        let mut waited = 0
+        let mut done = false
+        while waited < budget {
+            if done { break }
+            let mut slice = 200
+            if budget - waited < slice { slice = budget - waited }
+            if slice < 1 { slice = 1 }
+            let line = _jp_cell_next_line(cell, slice)
+            if line != "" {
+                let m = _jp_parse_obj(line)
+                if type_of(m) == "map" {
+                    if _jp_id_str(m) == want { out[j] = m ; done = true }
+                }
+                waited = waited + 1
+            } else {
+                waited = waited + slice
+            }
+        }
+        j = j + 1
+    }
+    return out
+}
+
+// ── pool_shutdown(pool) -> bool ───────────────────────────────────────────
+//
+// SIGTERM every cell child (pgrp + pid), close every channel (unlinks the
+// FIFOs — the child also gets EOF on stdin and exits). Returns true iff
+// every kill succeeded AND every channel closed. Idempotent — safe on an
+// already-shut pool. Sets pool["n"] = 0.
+pub fn pool_shutdown(pool) -> bool {
+    if type_of(pool) != "map" { return true }
+    if !has_key(pool, "cells") { return true }
+    let mut all_ok = true
+    for cell in pool["cells"] {
+        if !_pool_kill(cell["pid"]) { all_ok = false }
+        if !channel_close(cell["read_fd"]) { all_ok = false }
+        if !channel_close(cell["write_fd"]) { all_ok = false }
+    }
+    pool["n"] = 0
+    return all_ok
+}
+
+// ── End of module ─────────────────────────────────────────────────────────

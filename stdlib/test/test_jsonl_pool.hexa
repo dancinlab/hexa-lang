@@ -1,0 +1,187 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/test/test_jsonl_pool.hexa
+//
+//  Selftest for stdlib/jsonl_pool — JSONL-demux subprocess pool.
+//
+//  Acceptance (incoming/patches/wilson-pi-port-6-gap-prereq.md — S-NEW-JSONL-POOL):
+//    0. 4-cell echo pool spawns; all 4 children alive.
+//    1. pool_request single round-trip (auto-minted id echoed back).
+//    2. concurrent 20 requests, id-correct demux — send 20, then collect 20
+//       via pool_recv_any; every reply's id ↔ payload pairing is correct and
+//       all 20 distinct ids appear exactly once (out-of-order reordering OK).
+//    3. pool_broadcast — one reply per cell, distinct ids, right payload.
+//    4. pool_shutdown reaps all — every child pid dead afterwards.
+//
+//  Cell program: a pure echo loop — `while IFS= read -r line; do printf
+//  '%s\n' "$line"; done` — echoes each JSONL request line back verbatim.
+//  (An "echo pool" in the most literal sense; the request line already
+//  carries "id" so the reply round-trips it.)
+//
+//  Run:
+//      RESOURCE_LOCAL_HEXA=1 $HOME/core/hexa-lang/build/hexa_interp \
+//          stdlib/test/test_jsonl_pool.hexa
+//    (or, when the resource router is up:  hexa run stdlib/test/test_jsonl_pool.hexa)
+//
+//  Exit semantics: all asserts pass → prints "PASS: jsonl_pool stdlib selftest N/N";
+//  any failure → FAIL lines + PASS line with the failing count, exit 1.
+//
+//  System deps: sh, printf, perl, mkfifo, nohup, kill, sleep. All present on
+//  macOS + every Linux distro shipping perl-base. (perl: via stdlib/channel.)
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/jsonl_pool"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk_true(tag, cond) {
+    if cond { pass_count = pass_count + 1 }
+    else { println("  FAIL " + tag + " (cond false)") ; fail_count = fail_count + 1 }
+}
+fn chk_eq_int(tag, got, want) {
+    if got == want { pass_count = pass_count + 1 }
+    else { println("  FAIL " + tag + " got=" + to_string(got) + " want=" + to_string(want)) ; fail_count = fail_count + 1 }
+}
+fn chk_eq_str(tag, got, want) {
+    if got == want { pass_count = pass_count + 1 }
+    else { println("  FAIL " + tag + " got='" + got + "' want='" + want + "'") ; fail_count = fail_count + 1 }
+}
+
+// Skip the whole suite if perl is missing — stdlib/channel's recv needs it.
+let perl_ok = exec("command -v perl >/dev/null && echo y || echo n").trim()
+if perl_ok != "y" {
+    println("SKIP: jsonl_pool selftest — perl not found on PATH")
+    println("PASS: jsonl_pool stdlib selftest 0/0 (skipped)")
+    exit(0)
+}
+
+let echo_cell = "while IFS= read -r line; do printf '%s\\n' \"$line\"; done"
+
+// ── Test 0: spawn a 4-cell echo pool; all children alive ─────────────────
+let pool = pool_spawn(4, echo_cell)
+chk_eq_int("pool_size == 4", pool_size(pool), 4)
+let pids = pool_pids(pool)
+chk_eq_int("pool_pids len == 4", len(pids), 4)
+let _settle = exec("sleep 0.2")
+let mut all_alive = true
+let mut distinct_pids = true
+let mut seen_pids = []
+for p in pids {
+    if p < 1 { all_alive = false }
+    if !pool_alive(p) { all_alive = false }
+    for q in seen_pids { if q == p { distinct_pids = false } }
+    seen_pids.push(p)
+}
+chk_true("all 4 cell children alive", all_alive)
+chk_true("4 distinct pids", distinct_pids)
+
+// ── Test 1: single round-trip — pool_request mints an id, cell echoes it ─
+let req1 = json_parse("{}")
+req1["payload"] = "hi"
+let r1 = pool_request_to(pool, req1, 5000)
+chk_true("r1 is a map", type_of(r1) == "map")
+chk_true("r1 has id", has_key(r1, "id"))
+chk_eq_int("r1 minted id == 1", to_string(r1["id"]) == "1", true)
+chk_eq_str("r1 payload echoed", to_string(r1["payload"]), "hi")
+// caller's map untouched (id was stamped on a clone)
+chk_true("req1 not mutated (no id)", !has_key(req1, "id"))
+
+// ── Test 2: 20 concurrent requests, id-correct out-of-order demux ────────
+//
+// Send 20 requests {"id": 100+k, "payload": "req-k"} round-robin (5 per
+// cell). pool_send returns the id-string. Then collect 20 replies via
+// pool_recv_any (which polls all 4 cells); each reply must pair its id with
+// the matching payload, and all 20 distinct ids must show up exactly once.
+let N = 20
+let mut k = 0
+let mut sent_ok = true
+while k < N {
+    let rq = json_parse("{}")
+    rq["id"] = 100 + k
+    rq["payload"] = "req-" + to_string(k)
+    let idstr = pool_send(pool, rq)
+    if idstr != to_string(100 + k) { sent_ok = false }
+    k = k + 1
+}
+chk_true("all 20 pool_send returned the set id", sent_ok)
+
+// collect 20 replies
+let mut got = 0
+let mut seen = json_parse("{}")          // id-string -> 1
+let mut dup_or_unknown = false
+let mut payload_mismatch = false
+let mut timed_out = false
+let mut iter = 0
+while got < N {
+    if iter > N + 40 { timed_out = true ; break }   // hard ceiling on poll rounds
+    iter = iter + 1
+    let m = pool_recv_any(pool, 5000)
+    if type_of(m) != "map" { timed_out = true ; break }
+    if !has_key(m, "id") {
+        // empty {} from a timeout, or a junk line that slipped through
+        if !has_key(m, "payload") { timed_out = true ; break }
+        dup_or_unknown = true
+        continue
+    }
+    let ids = to_string(m["id"])
+    let idn = to_int(ids)
+    if idn < 100 || idn > 100 + N - 1 { dup_or_unknown = true ; continue }
+    if has_key(seen, ids) { dup_or_unknown = true ; continue }
+    seen[ids] = 1
+    let want_payload = "req-" + to_string(idn - 100)
+    if to_string(m["payload"]) != want_payload { payload_mismatch = true }
+    got = got + 1
+}
+chk_true("collected 20 replies (no timeout)", !timed_out)
+chk_eq_int("got exactly 20 replies", got, N)
+chk_true("no duplicate / unknown ids", !dup_or_unknown)
+chk_true("every id↔payload pairing correct", !payload_mismatch)
+// verify all 20 ids present
+let mut all_present = true
+let mut kk = 0
+while kk < N {
+    if !has_key(seen, to_string(100 + kk)) { all_present = false }
+    kk = kk + 1
+}
+chk_true("all 20 distinct ids seen", all_present)
+
+// ── Test 3: broadcast — one reply per cell, distinct ids, right payload ──
+let breq = json_parse("{}")
+breq["payload"] = "bcast"
+let bres = pool_broadcast_to(pool, breq, 5000)
+chk_eq_int("broadcast returned 4 replies", len(bres), 4)
+let mut bc_ok = true
+let mut bc_ids = json_parse("{}")
+let mut bc_distinct = true
+for m in bres {
+    if type_of(m) != "map" { bc_ok = false ; continue }
+    if !has_key(m, "id") { bc_ok = false ; continue }
+    if to_string(m["payload"]) != "bcast" { bc_ok = false }
+    let ids = to_string(m["id"])
+    if has_key(bc_ids, ids) { bc_distinct = false }
+    bc_ids[ids] = 1
+}
+chk_true("all 4 broadcast replies well-formed + payload echoed", bc_ok)
+chk_true("4 distinct broadcast ids", bc_distinct)
+
+// ── Test 4: shutdown reaps all children ──────────────────────────────────
+let saved_pids = pool_pids(pool)
+let sd = pool_shutdown(pool)
+chk_true("pool_shutdown returned true", sd)
+chk_eq_int("pool_size == 0 after shutdown", pool_size(pool), 0)
+let _reap = exec("sleep 0.25")
+let mut all_dead = true
+for p in saved_pids { if pool_alive(p) { all_dead = false } }
+chk_true("all cell children dead after shutdown", all_dead)
+// idempotent
+let sd2 = pool_shutdown(pool)
+chk_true("pool_shutdown idempotent", sd2)
+
+// ── Summary ──────────────────────────────────────────────────────────────
+let total = pass_count + fail_count
+println("PASS: jsonl_pool stdlib selftest " + to_string(pass_count) + "/" + to_string(total))
+if fail_count > 0 {
+    println("(failures: " + to_string(fail_count) + ")")
+    exit(1)
+}
+exit(0)

@@ -5,11 +5,16 @@
 //  @usage(import "stdlib/channel" as ch; let pair = ch.channel_pair_open(); ...)
 //
 //  ── module governance metadata ─────────────────────────────────────────────
-//  @version 0.1.0
-//  @capabilities [channel_pair_open, channel_send, channel_recv, channel_close,
-//                 channel_path_for, proc_spawn_with_channels]
+//  @version 0.2.0
+//  @capabilities [channel_pair_open, channel_send, channel_send_sync, channel_recv,
+//                 channel_recv_lines, channel_close, channel_path_for, proc_spawn_with_channels]
 //  @stability preview
 //  @since 2026-05-08
+//  @changelog 0.2.0 (2026-05-13) — + channel_send_sync (synchronous send: backpressure
+//             surfaced as write(2) block; ordered w.r.t. subsequent sends; FIFO-gone → false)
+//             + channel_recv_lines (unbuffered sysread → drain all buffered lines in one
+//             shot — channel_recv alone loses lines 2..N when several are buffered).
+//             Driver: stdlib/jsonl_pool (wilson swarm — incoming/patches/wilson-pi-port-6-gap-prereq).
 //  @maintainer anima-core
 //  @priority P0
 //
@@ -273,6 +278,55 @@ pub fn channel_send(fd: int, msg: string) -> bool {
     return out == "ok"
 }
 
+// channel_send_sync(fd, msg) -> bool
+//
+// Like channel_send, but SYNCHRONOUS — the write is not backgrounded.
+// Two guarantees channel_send cannot give:
+//
+//   1. Backpressure. The writer opens the FIFO and write(2)s the line
+//      itself; when the kernel pipe buffer is full (slow / stalled peer
+//      reader), write(2) blocks and so does this call. The caller feels
+//      the peer's pace instead of piling unbounded data into background
+//      shells. (channel.ai.md C3 "backpressure not surfaced" — this is
+//      the surface.)
+//
+//   2. Ordering. Each channel_send_sync(fd, …) fully completes (its sh
+//      process exits) before the next one starts, so N sends on the same
+//      fd arrive at the peer in call order. channel_send backgrounds each
+//      write under `()&`, so N rapid channel_send calls race and can
+//      arrive out of order — fine for one-shot fire-and-forget, wrong for
+//      a request stream (e.g. a JSONL subprocess pool — see stdlib/jsonl_pool).
+//
+// EPIPE / closed-channel: if the FIFO inode is gone (peer called
+// channel_close, or the channel was never opened), there is no one to
+// deliver to — return false. This is the explicit-error surface
+// channel_send lacks (it always returns true once the background shell
+// is launched). Note: if the inode still exists but the peer process
+// died without channel_close, a small line (≤ pipe-buf, 65536 on macOS)
+// still goes into the kernel buffer and this returns true — true EPIPE
+// would require a write-only open that blocks until a reader attaches,
+// trading the non-blocking-open property away; the pool layer detects a
+// dead cell via the reaper, not via the send.
+//
+// Implementation mirrors channel_send (RW `exec 3<>` open — never blocks
+// on open, classic FIFO-open-deadlock-free), minus the `()&` wrapper.
+pub fn channel_send_sync(fd: int, msg: string) -> bool {
+    if fd < 0 { return false }
+    let path = channel_path_for(fd)
+    let exists = exec("test -p '" + path + "' && echo y || echo n").trim()
+    if exists != "y" { return false }
+    let q = _shell_quote(msg)
+    let nonce = _ch_alloc_nonce()
+    let script_path = "/tmp/hexa_chan_sends_" + to_string(nonce) + ".sh"
+    let script = "#!/bin/sh\n"
+        + "exec 3<>'" + path + "'\n"
+        + "printf '%s\\n' " + q + " >&3\n"
+    write_file(script_path, script)
+    // No `&` — write(2) blocks here when the peer's buffer is full.
+    let out = exec("sh '" + script_path + "'; rm -f '" + script_path + "'; echo __chs_done__").trim()
+    return out == "__chs_done__"
+}
+
 // channel_recv(fd, timeout_ms) -> string
 //
 // Read one line from the FIFO referenced by `fd`. Newline trimmed.
@@ -323,6 +377,60 @@ pub fn channel_recv(fd: int, timeout_ms: int) -> string {
         + "' '" + path + "' " + arg
     let out = exec(cmd)
     return out
+}
+
+// channel_recv_lines(fd, timeout_ms) -> [string]
+//
+// Drain ALL currently-buffered lines from the FIFO in one shot, returning
+// them as an array (newlines trimmed, in arrival order). Empty array on
+// timeout / EOF / closed channel.
+//
+// Why this exists (and channel_recv alone is not enough): channel_recv reads
+// "one line" via perl's buffered <$fh>, but the underlying read(2) slurps the
+// whole pipe buffer into perl's I/O buffer — channel_recv prints one line and
+// close()s, discarding the rest. Fine for strict ping-pong (only ever one
+// line buffered), WRONG when a peer has written several lines before you read
+// (a request-stream / demux pool — stdlib/jsonl_pool). channel_recv_lines
+// does a single unbuffered sysread of the whole available buffer and splits
+// it, so nothing is lost.
+//
+// timeout_ms: < 0 block until ≥1 line is available; 0 poll once; > 0 wait up
+// to that many ms for the first line, then take everything that's there.
+//
+// Line framing: each writer's `printf '%s\n' …` write is atomic for lines
+// ≤ PIPE_BUF (512 on macOS, 4096 on Linux) — channel_send / channel_send_sync
+// produce such writes — so the buffer always holds whole lines. A single
+// write longer than PIPE_BUF may interleave with another writer's; for that
+// regime use a dedicated channel pair per writer (which the pool does).
+pub fn channel_recv_lines(fd: int, timeout_ms: int) -> array {
+    if fd < 0 { return [] }
+    let path = channel_path_for(fd)
+    let exists = exec("test -p '" + path + "' && echo y || echo n").trim()
+    if exists != "y" { return [] }
+    let arg = if timeout_ms < 0 { "-1" } else { to_string(timeout_ms) }
+    let cmd = "perl -e '"
+        + "use IO::Select; "
+        + "my $path = $ARGV[0]; my $ms = $ARGV[1]; "
+        + "open(my $fh, \"+<\", $path) or exit 0; "
+        + "my $sel = IO::Select->new($fh); "
+        + "my @r; "
+        + "if ($ms < 0) { @r = $sel->can_read(); } "
+        + "else { @r = $sel->can_read($ms/1000.0); } "
+        + "if (@r) { "
+        +   "my $buf = \"\"; "
+        +   "my $n = sysread($fh, $buf, 1048576); "
+        +   "if (defined($n) && $n > 0) { "
+        +     "$buf =~ s/\\r//g; "
+        +     "my @lines = split(/\\n/, $buf, -1); "
+        +     "pop @lines if (@lines && $lines[-1] eq \"\"); "
+        +     "print join(\"\\n\", @lines); "
+        +   "} "
+        + "} "
+        + "close($fh);"
+        + "' '" + path + "' " + arg
+    let out = exec(cmd)
+    if out == "" { return [] }
+    return split(out, "\n")
 }
 
 // channel_close(fd) -> bool

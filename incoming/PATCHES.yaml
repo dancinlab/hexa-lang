@@ -97,14 +97,25 @@
        nodes (D5 closed). New selftest test_async_codegen.hexa 4/4
        PASS on both interp + native AOT backends.
     G3 cancel token: stdlib-only addition; selftest +1 (23/23 PASS)
-    G4 jsonschema, G5 fs atomic-append, G6 jsonl_pool — DEFERRED
-    (low-risk stdlib follow-ups; out of wilson core gate)
-  selftest_delta: "+5 (cancel 23/23 + async 4/4 + stdlib regression intact)"
+    G6 jsonl_pool — LANDED 2026-05-13: stdlib/jsonl_pool.hexa v0.1.0
+    (pool_spawn/request/broadcast/send/recv_any/shutdown + pool_pids/
+    pool_alive — JSONL-demux subprocess pool over stdlib/channel cells)
+    + stdlib/channel.hexa v0.2.0 (channel_send_sync = ordered/
+    backpressure-aware sync send; channel_recv_lines = unbuffered
+    sysread bulk drain, fixes channel_recv dropping lines 2..N when
+    several are buffered). test_jsonl_pool.hexa 22/22 PASS;
+    test_channel.hexa 21/21 unchanged. .roadmap.stdlib S-NEW-JSONL-POOL
+    = CLOSED. (channel.ai.md C3 note refresh = follow-up.)
+    G4 jsonschema, G5 fs atomic-append — DEFERRED (low-risk stdlib
+    follow-ups; out of wilson core gate)
+  selftest_delta: "+5 (cancel 23/23 + async 4/4 + stdlib regression intact); +22 (jsonl_pool 22/22, 2026-05-13)"
   downstream_consumer: |
     wilson core port unblocks once G1 + G2 + G3 land; G4-G6 needed
     for full feature parity but not for core start.
     G2+G3 cleared 2026-05-10 PM; G1 (RFC-020 A5) was already cleared
     (commit 4ed9966e). wilson core gate (G1+G2+G3) is now PASS.
+    G6 landed 2026-05-13 — unblocks wilson plugins/swarm/main.hexa
+    cell-pool de-STUB (use "stdlib/jsonl_pool").
   status: applied
   background_task: 73  # wilson G2+G3 agent
 
