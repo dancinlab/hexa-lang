@@ -84,7 +84,7 @@ git clone https://github.com/dancinlab/hexa-lang
 cd hexa-lang
 
 # 2. install hexa + hx (one-liner, drops binaries into ~/.hx/bin)
-hexa install.hexa
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/main/install.sh)"
 
 # 3. M0 smoke — fn main() -> i32 { return 0 } end-to-end
 build/hexa_interp tests/m0/run.hexa
