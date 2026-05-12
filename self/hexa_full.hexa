@@ -10676,6 +10676,24 @@ fn call_builtin(name, args) {
     if name == "isnan"    { if len(args) > 0 { return val_bool(isnan(to_float_val(args[0])))     } else { return val_bool(false) } }
     if name == "isinf"    { if len(args) > 0 { return val_bool(isinf(to_float_val(args[0])))     } else { return val_bool(false) } }
     if name == "isfinite" { if len(args) > 0 { return val_bool(isfinite(to_float_val(args[0])))  } else { return val_bool(true) } }
+    // feat/primitive-float-array (2026-05-12) — interpreter dispatch for the
+    // unboxed packed-double-array builtins (qmirror Phase 7 unblocker).
+    // Codegen entries in codegen_c2.hexa map each name to its hexa_farr_*
+    // C runtime function (self/runtime.c). The handle returned by farr_zeros
+    // is a Val{TAG_INT, int_val=id}; subsequent farr_get/set/len/free use
+    // that handle. Out-of-range reads return 0.0, writes are no-ops.
+    //
+    // Why explicit functions (vs reusing TAG_ARRAY): the interpreter's
+    // array_store backs every TAG_ARRAY with a Val[] (each Val ~88B per
+    // element). For 2^17 amplitudes × 2 (re/im) × N copies, that exceeds
+    // the 768 MB cap. Packed double[] cuts per-element cost from ~88B to
+    // 8B and gives O(1) loads/stores. Same syntax-cost tradeoff as the
+    // tensor builtin family already in this dispatch.
+    if name == "farr_zeros" { if len(args) > 0 { return val_int(farr_zeros(args[0])) }                          else { return val_int(0) } }
+    if name == "farr_get"   { if len(args) > 1 { return val_float(farr_get(args[0], args[1])) }                  else { return val_float(0.0) } }
+    if name == "farr_set"   { if len(args) > 2 { let _ = farr_set(args[0], args[1], args[2]); return args[0] }   else { return val_void() } }
+    if name == "farr_len"   { if len(args) > 0 { return val_int(farr_len(args[0])) }                             else { return val_int(0) } }
+    if name == "farr_free"  { if len(args) > 0 { let _ = farr_free(args[0]); return val_void() }                 else { return val_void() } }
     // ── End fast-path ────────────────────────────────────────────────
 
     if name == "println" {
@@ -14271,6 +14289,34 @@ fn call_builtin(name, args) {
         if len(args) == 0 { return val_str("") }
         // HX-chr-fix: actual int→char, not decimal representation.
         return val_str(from_char_code(args[0].int_val))
+    }
+    // RFC 030 (2026-05-12): bytes_to_str_raw([int]) — wrap a byte array
+    // as a string whose underlying bytes are exactly the input ints
+    // (range 1..255). Phase 1: out-of-range / NUL → "" (silent).
+    //
+    // Extract the raw int array from the interp Val wrapper and
+    // delegate to the C runtime via the codegen_c2 dispatch (the call
+    // `bytes_to_str_raw(raw_arr)` below lowers to `hexa_bytes_to_str_raw`
+    // when hexa_full.hexa is transpiled). This keeps the interp path
+    // and the AOT path byte-identical: both produce raw-byte strings
+    // that round-trip "안녕" / "🌌".
+    if name == "bytes_to_str_raw" {
+        if len(args) == 0 { return val_str("") }
+        let a = args[0]
+        if a.tag != TAG_ARRAY { return val_str("") }
+        let items = get_array(a)
+        let n = len(items)
+        let mut raw_arr = []
+        let mut i = 0
+        while i < n {
+            let b = items[i].int_val
+            if b < 0 { return val_str("") }
+            if b > 255 { return val_str("") }
+            if b == 0 { return val_str("") }
+            raw_arr.push(b)
+            i = i + 1
+        }
+        return val_str(bytes_to_str_raw(raw_arr))
     }
     if name == "to_json" {
         if len(args) == 0 { return val_str("null") }

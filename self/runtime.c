@@ -6404,6 +6404,32 @@ HexaVal hexa_char_code(HexaVal s, HexaVal idx) {
 HexaVal hexa_from_char_code(HexaVal n);
 static HexaVal chr;
 
+// RFC 030 (2026-05-12): bytes_to_str_raw([int]) — see implementation
+// below near hexa_from_char_code. Declared here so it's reachable as
+// a bare C identifier from `hexa_call1(bytes_to_str_raw, arr)` emitted
+// by precompiled hexa_v2 (which doesn't have the codegen entry yet).
+HexaVal hexa_bytes_to_str_raw(HexaVal arr);
+static HexaVal bytes_to_str_raw;
+
+// 2026-05-12 (RFC 030 sibling fix): farr_* primitive shims. The
+// codegen_c2.hexa entries route `farr_zeros / get / set / len / free`
+// to their hexa_farr_* C impls (added recently), but the currently
+// shipped hexa_v2 binary predates those entries, so transpiles of the
+// interpreter dispatch handlers (hexa_full.hexa:~10700) emit bare
+// `hexa_call1(farr_zeros, ...)` lookups against undeclared symbols.
+// Declare the static carriers so the resulting C compiles;
+// _hexa_init_fn_shims wires fn_ptr to the hexa_farr_* impl below.
+HexaVal hexa_farr_zeros(HexaVal n_v);
+HexaVal hexa_farr_get(HexaVal h_v, HexaVal i_v);
+HexaVal hexa_farr_set(HexaVal h_v, HexaVal i_v, HexaVal x_v);
+HexaVal hexa_farr_len(HexaVal h_v);
+HexaVal hexa_farr_free(HexaVal h_v);
+static HexaVal farr_zeros;
+static HexaVal farr_get;
+static HexaVal farr_set;
+static HexaVal farr_len;
+static HexaVal farr_free;
+
 // `bit_or(x, y)` — shim kept because `|` as binary op conflicts with lambda
 // param delimiters `|x| x+1`. `&` and `^` are supported by parser directly.
 HexaVal _hx_bit_or(HexaVal a, HexaVal b) {
@@ -7307,6 +7333,189 @@ HexaVal hexa_from_char_code(HexaVal n) {
     }
     char* out = strdup(buf);
     return hexa_str_own(out);
+}
+
+// RFC 030 — `bytes_to_str_raw([int]) -> string`
+//
+// Wrap a hexa int array (each ∈ 0..255) as a hexa string whose underlying
+// bytes are exactly those integers — no UTF-8 codepoint re-encoding.
+// Inverse of `_str_to_bytes(s)` (stdlib/safetensors.hexa) for UTF-8 strings
+// containing arbitrary multi-byte sequences (Korean 한, emoji 🌌, etc.).
+//
+// Uses hexa_strbuf_alloc(n) which prepends a length header so HX_STRLEN
+// is O(1) and reads the cached length; this makes embedded NUL (0x00)
+// bytes safely representable (strlen()-using paths will truncate at the
+// first NUL, but HX_STRLEN-aware paths see the full length).
+//
+// Phase 1 policy per RFC 030: out-of-range values (b<0 or b>255) and
+// embedded NUL bytes both produce the empty string (silent error). This
+// matches the runtime's existing "soft-fail with empty result" idiom
+// (e.g. safetensors_read returning {} on parse error). A future Phase 2
+// could route to hexa_throw once a consistent error policy is decided
+// across the safetensors / json / parse builtins.
+HexaVal hexa_bytes_to_str_raw(HexaVal arr) {
+    if (HX_TAG(arr) != TAG_ARRAY) return hexa_str("");
+    int64_t n = (int64_t)HX_ARR_LEN(arr);
+    if (n <= 0) return hexa_str("");
+    char* buf = hexa_strbuf_alloc((size_t)n);
+    if (!buf) return hexa_str("");
+    HexaVal* items = HX_ARR_ITEMS(arr);
+    for (int64_t i = 0; i < n; i++) {
+        HexaVal v = items[i];
+        int64_t b = HX_IS_INT(v) ? HX_INT(v) : (int64_t)_hexa_f(v);
+        if (b < 0 || b > 255) {
+            // Out-of-range → return empty per Phase 1 policy.
+            return hexa_str("");
+        }
+        if (b == 0) {
+            // Phase 1: forbid mid-NUL (length-aware paths could handle
+            // it but printf/concat surfaces still rely on C strlen).
+            return hexa_str("");
+        }
+        buf[i] = (char)(b & 0xFF);
+    }
+    // hexa_strbuf_alloc pre-NUL-terminates buf[n] so this is a valid C str.
+    return (HexaVal){.tag=TAG_STR, .s=buf};
+}
+
+// ═══════════════════════════════════════════════════════════
+//  farr — primitive (unboxed) float array for state-vector kernels
+//  hexa-lang/feat-primitive-float-array (2026-05-12)
+//
+//  Motivation: qmirror Phase 7 (surface_code_d3) needs n=17 qubits =
+//  2^17 = 131072 double-precision amplitudes per state vector. Each
+//  amplitude stored as a boxed `Val` (12-field struct, ~88B in the
+//  interpreter) inflates to ~11 MB per array, × 2 (re/im) × N copies
+//  ≫ 768 MB cap. Packed `double[]` storage cuts that to 1 MB per
+//  array (8B/element) and gives O(1) load/store at index time.
+//
+//  Design: opaque int handles into a process-global table mapping
+//  `id -> (double* buf, int len)`. Handles are *never* freed during
+//  the program lifetime (handles outlive the kernel call, and the
+//  scope-aware GC machinery for `array_store` doesn't apply to raw
+//  C buffers). For long-running programs `farr_free` can be called
+//  explicitly. Memory leak risk for typical kernel use (a few dozen
+//  state-vector snapshots per quantum circuit) is bounded and small.
+//
+//  Builtins (called from interpreter `call_builtin`):
+//      farr_zeros(n)        -> int handle    (n doubles, all 0.0)
+//      farr_get(h, i)       -> float
+//      farr_set(h, i, x)    -> int           (returns h for chaining)
+//      farr_len(h)          -> int
+//      farr_free(h)         -> void          (optional; explicit)
+//
+//  Index encoding matches qiskit conventions in qmirror state vectors:
+//  amp[i] is the coefficient of |b_{n-1} ... b_0> where b_q=(i>>q)&1.
+//  But farr itself is index-agnostic — it's just a packed double buf.
+//
+//  Out-of-bounds reads return 0.0 and writes are no-ops (soft-fail,
+//  matching the "silent error" idiom of hexa_bytes_to_str_raw above).
+//  Negative-index semantics differ from hexa_array_get's "py-style":
+//  here a negative index is an OOB error and returns/no-ops with 0.0
+//  (callers should pass non-negative indices into 0..len).
+// ═══════════════════════════════════════════════════════════
+
+typedef struct {
+    double* buf;
+    int64_t len;
+} HexaFarrEntry;
+
+static HexaFarrEntry* _hx_farr_table     = NULL;
+static int64_t        _hx_farr_count     = 0;
+static int64_t        _hx_farr_capacity  = 0;
+static int64_t*       _hx_farr_freelist  = NULL;
+static int64_t        _hx_farr_freelist_n = 0;
+static int64_t        _hx_farr_freelist_cap = 0;
+
+// Allocate a new packed double[n] buffer, zero-filled. Returns int handle.
+// Accepts HexaVal{TAG_INT} (AOT-emitted call site) or HexaVal{TAG_VALSTRUCT}
+// wrapping a TAG_INT (interpreter-emitted Val); hexa_as_num normalizes both.
+HexaVal hexa_farr_zeros(HexaVal n_v) {
+    int64_t n = hexa_as_num(n_v);
+    if (n < 0) n = 0;
+    double* buf = NULL;
+    if (n > 0) {
+        // calloc — zero-fill required (state_zero relies on it).
+        buf = (double*)calloc((size_t)n, sizeof(double));
+        if (!buf) {
+            fprintf(stderr, "[farr] OOM allocating %lld doubles\n", (long long)n);
+            exit(77);
+        }
+    }
+    // Pop from freelist if any handle slot was farr_free'd previously.
+    int64_t id;
+    if (_hx_farr_freelist_n > 0) {
+        id = _hx_farr_freelist[--_hx_farr_freelist_n];
+    } else {
+        // Grow table geometrically.
+        if (_hx_farr_count >= _hx_farr_capacity) {
+            int64_t new_cap = _hx_farr_capacity < 16 ? 16 : _hx_farr_capacity * 2;
+            HexaFarrEntry* nt = (HexaFarrEntry*)realloc(_hx_farr_table,
+                                  (size_t)new_cap * sizeof(HexaFarrEntry));
+            if (!nt) {
+                fprintf(stderr, "[farr] OOM growing handle table\n");
+                if (buf) free(buf);
+                exit(77);
+            }
+            _hx_farr_table = nt;
+            _hx_farr_capacity = new_cap;
+        }
+        id = _hx_farr_count++;
+    }
+    _hx_farr_table[id].buf = buf;
+    _hx_farr_table[id].len = n;
+    return hexa_int(id);
+}
+
+// Read element at index i. Returns 0.0 on out-of-bounds.
+HexaVal hexa_farr_get(HexaVal h_v, HexaVal i_v) {
+    int64_t id = hexa_as_num(h_v);
+    int64_t i  = hexa_as_num(i_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_float(0.0);
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    if (!e->buf || i < 0 || i >= e->len) return hexa_float(0.0);
+    return hexa_float(e->buf[i]);
+}
+
+// Write element at index i. No-op on out-of-bounds. Returns h (for chaining).
+HexaVal hexa_farr_set(HexaVal h_v, HexaVal i_v, HexaVal x_v) {
+    int64_t id = hexa_as_num(h_v);
+    int64_t i  = hexa_as_num(i_v);
+    double  x  = __hx_to_double(x_v);
+    if (id < 0 || id >= _hx_farr_count) return h_v;
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    if (!e->buf || i < 0 || i >= e->len) return h_v;
+    e->buf[i] = x;
+    return h_v;
+}
+
+// Return length (number of elements) of the packed buffer.
+HexaVal hexa_farr_len(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(0);
+    return hexa_int(_hx_farr_table[id].len);
+}
+
+// Free a handle's backing buffer. Returns void. Idempotent.
+HexaVal hexa_farr_free(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_void();
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
+    // Push id onto freelist for reuse.
+    if (_hx_farr_freelist_n >= _hx_farr_freelist_cap) {
+        int64_t new_cap = _hx_farr_freelist_cap < 16 ? 16 : _hx_farr_freelist_cap * 2;
+        int64_t* nf = (int64_t*)realloc(_hx_farr_freelist,
+                       (size_t)new_cap * sizeof(int64_t));
+        if (nf) {
+            _hx_farr_freelist = nf;
+            _hx_farr_freelist_cap = new_cap;
+        }
+    }
+    if (_hx_farr_freelist_n < _hx_farr_freelist_cap) {
+        _hx_farr_freelist[_hx_farr_freelist_n++] = id;
+    }
+    return hexa_void();
 }
 
 // ── A1 (2026-05-10): per-phase arena reset side channel ─────────
@@ -8749,6 +8958,16 @@ static void _hexa_init_fn_shims(void) {
     join       = hexa_fn_new((void*)hexa_str_join,        2);
     char_code  = hexa_fn_new((void*)hexa_char_code,       2);
     chr        = hexa_fn_new((void*)hexa_from_char_code,   1);
+    // RFC 030 (2026-05-12): bytes_to_str_raw([int]) — raw byte string
+    // assembler for the byte_tokenizer / safetensors paths. See impl
+    // near hexa_from_char_code below.
+    bytes_to_str_raw = hexa_fn_new((void*)hexa_bytes_to_str_raw, 1);
+    // 2026-05-12 RFC 030 sibling: farr_* primitive shims (see fwd-decls).
+    farr_zeros = hexa_fn_new((void*)hexa_farr_zeros, 1);
+    farr_get   = hexa_fn_new((void*)hexa_farr_get,   2);
+    farr_set   = hexa_fn_new((void*)hexa_farr_set,   3);
+    farr_len   = hexa_fn_new((void*)hexa_farr_len,   1);
+    farr_free  = hexa_fn_new((void*)hexa_farr_free,  1);
     bit_or     = hexa_fn_new((void*)_hx_bit_or,           2);
     // bt73 free-fn shims (timestamp, base64_encode, base64_decode)
     timestamp     = hexa_fn_new((void*)_bt73_timestamp_w,     0);

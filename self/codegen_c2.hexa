@@ -3982,6 +3982,15 @@ fn gen2_expr(node) {
                 if name == "from_char_code" { return "hexa_from_char_code(" + a0 + ")" }
                 if name == "ord"            { return "hexa_char_code(" + a0 + ", hexa_int(0))" }
                 if name == "chr"            { return "hexa_from_char_code(" + a0 + ")" }
+                // RFC 030 (2026-05-12): bytes_to_str_raw([int]) — raw byte
+                // concatenation, no UTF-8 codepoint re-encoding. Unblocks
+                // byte_tokenizer.hexa → string round-trip for Korean / emoji.
+                if name == "bytes_to_str_raw" { return "hexa_bytes_to_str_raw(" + a0 + ")" }
+                // feat/primitive-float-array (2026-05-12): farr_* primitive
+                // (unboxed) packed-double array. 1-arg forms.
+                if name == "farr_zeros"     { return "hexa_farr_zeros(" + a0 + ")" }
+                if name == "farr_len"       { return "hexa_farr_len(" + a0 + ")" }
+                if name == "farr_free"      { return "hexa_farr_free(" + a0 + ")" }
                 if name == "keys"           { return "hexa_map_keys(" + a0 + ")" }
                 if name == "values"         { return "hexa_map_values(" + a0 + ")" }
                 // F10 retire (2026-04-28): bare-call map_* builtins for AOT.
@@ -4084,6 +4093,8 @@ fn gen2_expr(node) {
                 if name == "regex_search"     { return "hexa_regex_search("     + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "regex_findall"    { return "hexa_regex_findall("    + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "regex_split"      { return "hexa_regex_split("      + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                // feat/primitive-float-array — packed-double array element access.
+                if name == "farr_get"         { return "hexa_farr_get(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
             }
             if len(node.args) == 3 {
                 // PTY 3-arg builtins
@@ -4100,6 +4111,8 @@ fn gen2_expr(node) {
                 if name == "map_set"       { return "hexa_map_set(" + arg_strs[0] + ", hexa_to_cstring(" + arg_strs[1] + "), " + arg_strs[2] + ")" }
                 // G3-REGEX 2026-05-06 (.roadmap.stdlib.G3) — POSIX ERE bridge.
                 if name == "regex_replace" { return "hexa_regex_replace(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
+                // feat/primitive-float-array — packed-double array element set.
+                if name == "farr_set"      { return "hexa_farr_set(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
             }
             if len(node.args) == 5 {
                 if name == "matmul"         { return "hexa_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }

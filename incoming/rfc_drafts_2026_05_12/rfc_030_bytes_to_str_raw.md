@@ -1,9 +1,16 @@
 # RFC 030 — `bytes_to_str_raw([int]) -> string`
 
-> **Status**: draft (stub from anima Phase 4.2)
+> **Status**: implemented (2026-05-12)
 > **Author**: anima/HEXA_NATIVE_INFERENCE Phase 4.2 byte_tokenizer
 > **Filed**: 2026-05-12
 > **Class**: runtime primitive (one new builtin)
+>
+> **Implementation pointers** (2026-05-12):
+> - `self/runtime.c::hexa_bytes_to_str_raw` (~30 LoC, after `hexa_from_char_code`)
+> - `self/runtime.c::_hexa_init_fn_shims` — fn_shim registration
+> - `self/codegen_c2.hexa` — AOT dispatch entry (1-arg block)
+> - `self/hexa_full.hexa` — interp dispatch handler (delegates to runtime)
+> - Smoke: `tmp_rfc030_smoke.hexa` (6/6 falsifiers pass — EMPTY / ASCII / UTF8 안녕 / EMOJI 🌌 / RANGE / NUL)
 
 ## Problem
 
