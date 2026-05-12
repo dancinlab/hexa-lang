@@ -4125,12 +4125,19 @@ fn gen2_expr(node) {
                 if name == "safetensors_mmap_read_f32_farr" {
                     return "hexa_safetensors_mmap_read_f32_farr(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
                 }
+                // RFC 031 (2026-05-12): BF16 reader companion to RFC 025
+                // read_f32_farr — bf16 → f32 widen → packed-double farr.
+                if name == "safetensors_mmap_read_bf16_to_f32_farr" {
+                    return "hexa_safetensors_mmap_read_bf16_to_f32_farr(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
+                }
                 if name == "safetensors_mmap_read_bytes" {
                     return "hexa_safetensors_mmap_read_bytes(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
                 }
             }
             if len(node.args) == 5 {
                 if name == "matmul"         { return "hexa_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                // RFC 032 (2026-05-12): farr_matmul — packed-double matmul.
+                if name == "farr_matmul"    { return "hexa_farr_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
             }
             if len(node.args) == 4 {
                 if name == "matvec"         { return "hexa_matvec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }

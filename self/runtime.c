@@ -6441,6 +6441,7 @@ HexaVal hexa_safetensors_mmap_header(HexaVal h_v);
 HexaVal hexa_safetensors_mmap_data_offset(HexaVal h_v);
 HexaVal hexa_safetensors_mmap_size(HexaVal h_v);
 HexaVal hexa_safetensors_mmap_read_f32_farr(HexaVal h_v, HexaVal off_v, HexaVal n_v);
+HexaVal hexa_safetensors_mmap_read_bf16_to_f32_farr(HexaVal h_v, HexaVal off_v, HexaVal n_v);
 HexaVal hexa_safetensors_mmap_read_bytes(HexaVal h_v, HexaVal off_v, HexaVal n_v);
 HexaVal hexa_safetensors_mmap_close(HexaVal h_v);
 static HexaVal safetensors_mmap_open;
@@ -6448,8 +6449,13 @@ static HexaVal safetensors_mmap_header;
 static HexaVal safetensors_mmap_data_offset;
 static HexaVal safetensors_mmap_size;
 static HexaVal safetensors_mmap_read_f32_farr;
+static HexaVal safetensors_mmap_read_bf16_to_f32_farr;
 static HexaVal safetensors_mmap_read_bytes;
 static HexaVal safetensors_mmap_close;
+// RFC 032 (2026-05-12): farr_matmul — packed-double matrix multiply.
+HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                         HexaVal b_v, HexaVal bc_v);
+static HexaVal farr_matmul_shim;
 
 // `bit_or(x, y)` — shim kept because `|` as binary op conflicts with lambda
 // param delimiters `|x| x+1`. `&` and `^` are supported by parser directly.
@@ -7848,6 +7854,69 @@ HexaVal hexa_safetensors_mmap_read_f32_farr(HexaVal h_v, HexaVal off_v, HexaVal 
     return farr_handle;
 }
 
+// ── RFC 031 (2026-05-12) ────────────────────────────────────────────
+// safetensors_mmap_read_bf16_to_f32_farr(handle, byte_off, n_elem)
+//     → int farr_id (-1 on error).
+//
+// Reads n_elem BF16 (bfloat16) values starting at byte_off. Each
+// BF16 value is upcast to f32 by zero-extending its 16 bits into the
+// HIGH 16 bits of an IEEE-754 binary32 (the canonical bf16 → f32
+// widening: bf16 layout is identical to f32's sign + 8-bit exp +
+// top-7-bit mantissa, so `(uint32_t)u16 << 16` IS the f32 bit
+// pattern). The resulting f32 is then promoted to double and stored
+// in a new packed-double farr buffer (8 B/elem, parallel to RFC 025
+// _read_f32_farr).
+//
+// Why needed: real-world HuggingFace ckpts (anima Phase 1a1 included)
+// store weights as BF16, but _read_f32_farr only handles F32. Without
+// this builtin, callers either (a) emit a one-time F32 sidecar on the
+// PyTorch side (167 MB workaround used in Phase 5.1 — does not scale
+// to full 24-layer pure-hexa inference), or (b) write the bf16→f32
+// loop in hexa, paying ~88 B/elem interp arena pressure.
+//
+// IEEE-754 BF16:  s eeeeeeee mmmmmmm   (16 bits)
+// IEEE-754 F32:   s eeeeeeee mmmmmmm 0000000000000000  (32 bits)
+//                 ────── identical ────── + zero-pad
+//
+// Special values that this scheme preserves exactly:
+//   - 0x0000        →   0.0          (positive zero)
+//   - 0x8000        →   -0.0         (negative zero)
+//   - 0x3F80        →   1.0          (sign=0, exp=0x7F, mantissa=0)
+//   - 0xBF80        →   -1.0
+//   - 0x7F80        →   +Inf
+//   - 0xFF80        →   -Inf
+//   - 0x7FC0        →   NaN (quiet)
+//   - 0xFFC0        →   NaN
+//
+// Bounds: 2 B/elem so we check off + 2*n <= mmap_len.
+HexaVal hexa_safetensors_mmap_read_bf16_to_f32_farr(HexaVal h_v, HexaVal off_v, HexaVal n_v) {
+    int64_t id   = hexa_as_num(h_v);
+    int64_t off  = hexa_as_num(off_v);
+    int64_t n    = hexa_as_num(n_v);
+    if (id < 0 || id >= _hx_mmap_count) return hexa_int(-1);
+    HexaMmapEntry* e = &_hx_mmap_table[id];
+    if (!e->base) return hexa_int(-1);
+    if (off < 0 || n < 0) return hexa_int(-1);
+    if ((size_t)off + (size_t)(n * 2) > e->len) return hexa_int(-1);
+    HexaVal farr_handle = hexa_farr_zeros(hexa_int(n));
+    int64_t farr_id = HX_INT(farr_handle);
+    if (farr_id < 0 || farr_id >= _hx_farr_count) return hexa_int(-1);
+    HexaFarrEntry* fe = &_hx_farr_table[farr_id];
+    if (!fe->buf || fe->len < n) return hexa_int(-1);
+    const unsigned char* src = (const unsigned char*)e->base + off;
+    // Read host-endian-safe: bf16 in safetensors is stored as little-
+    // endian uint16. Compose explicitly so this works on any host.
+    for (int64_t i = 0; i < n; i++) {
+        uint16_t u16 = (uint16_t)src[2*i] | ((uint16_t)src[2*i + 1] << 8);
+        uint32_t u32 = ((uint32_t)u16) << 16;
+        // Type-pun via union to avoid strict-aliasing UB.
+        union { uint32_t u; float f; } cvt;
+        cvt.u = u32;
+        fe->buf[i] = (double)cvt.f;
+    }
+    return farr_handle;
+}
+
 // safetensors_mmap_read_bytes(handle, byte_off, n_bytes) → [int].
 // Reads n_bytes bytes from mmap as a boxed hexa int array. Used for
 // integral-dtype tensors or for header-byte inspection. Memory cost
@@ -7902,6 +7971,91 @@ HexaVal hexa_safetensors_mmap_close(HexaVal h_v) {
         _hx_mmap_freelist[_hx_mmap_freelist_n++] = id;
     }
     return hexa_void();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// RFC 032 (2026-05-12): farr_matmul — packed-double matrix multiply.
+//
+//   farr_matmul(A_farr, A_rows, A_cols, B_farr, B_cols) -> C_farr
+//
+// Semantics: C = A @ B, where
+//   A is (A_rows × A_cols) row-major in farr buffer A_farr,
+//   B is (A_cols × B_cols) row-major in farr buffer B_farr,
+//   C is (A_rows × B_cols) row-major in a freshly-allocated farr.
+//
+// Returns -1 (as a HexaVal{int}) on shape / bounds error.
+//
+// Why a native builtin: pure-hexa matmul through farr_get/farr_set
+// allocates ~12-88 B HexaVal scratch per inner-loop scalar op. For
+// a single 1024×1024 matmul (~2^30 mac) this saturates the interp
+// arena (>100 GB extrapolated) long before completion. The native
+// kernel below uses raw double* indexing, zero arena pressure, and
+// finishes a 1024² matmul in well under a second.
+//
+// Algorithm: cache-friendly ikj triple loop (best for row-major
+// row-major output):
+//   for i in 0..M:
+//     for k in 0..K:
+//       a_ik = A[i*K + k]
+//       for j in 0..N:
+//         C[i*N + j] += a_ik * B[k*N + j]
+// This streams B linearly and reuses C[i*N + j] in registers.
+//
+// No BLAS dependency; no AVX intrinsics (portability over peak FLOPS).
+// On a 24-layer EngineAG forward (4 Linear ops/layer × 24 layers + LM
+// head, each at hidden=1024) this is fast enough to clear the Phase 5∥
+// 24-layer parity gate without GPU.
+//
+// Falsifier coverage: F-RFC032-2x2-1 / IDENT-2 / RECT-3 / LARGE-4 / MEM-5
+// (see tmp_rfc032_smoke.hexa).
+// ═══════════════════════════════════════════════════════════════════
+HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                         HexaVal b_v, HexaVal bc_v) {
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t M    = hexa_as_num(ar_v);
+    int64_t K    = hexa_as_num(ac_v);
+    int64_t b_id = hexa_as_num(b_v);
+    int64_t N    = hexa_as_num(bc_v);
+    if (a_id < 0 || a_id >= _hx_farr_count) return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count) return hexa_int(-1);
+    if (M <= 0 || K <= 0 || N <= 0)         return hexa_int(-1);
+    HexaFarrEntry* ae = &_hx_farr_table[a_id];
+    HexaFarrEntry* be = &_hx_farr_table[b_id];
+    if (!ae->buf || !be->buf)               return hexa_int(-1);
+    if (ae->len < M * K)                    return hexa_int(-1);
+    if (be->len < K * N)                    return hexa_int(-1);
+    // Allocate output farr (zero-filled by hexa_farr_zeros).
+    HexaVal c_handle = hexa_farr_zeros(hexa_int(M * N));
+    int64_t c_id = HX_INT(c_handle);
+    if (c_id < 0 || c_id >= _hx_farr_count) return hexa_int(-1);
+    HexaFarrEntry* ce = &_hx_farr_table[c_id];
+    if (!ce->buf || ce->len < M * N)        return hexa_int(-1);
+    const double* A = ae->buf;
+    const double* B = be->buf;
+    double* C = ce->buf;
+    // ikj loop — streaming B + C, A_ik hoisted out of j.
+    for (int64_t i = 0; i < M; i++) {
+        const double* Ai = A + i * K;
+        double*       Ci = C + i * N;
+        for (int64_t k = 0; k < K; k++) {
+            double a_ik = Ai[k];
+            const double* Bk = B + k * N;
+            // Inner: C[i,j] += a_ik * B[k,j]
+            int64_t j = 0;
+            // Light manual unroll x4 — keeps portability, helps clang
+            // emit fma (-O2). Tail loop handles N % 4.
+            for (; j + 4 <= N; j += 4) {
+                Ci[j]   += a_ik * Bk[j];
+                Ci[j+1] += a_ik * Bk[j+1];
+                Ci[j+2] += a_ik * Bk[j+2];
+                Ci[j+3] += a_ik * Bk[j+3];
+            }
+            for (; j < N; j++) {
+                Ci[j] += a_ik * Bk[j];
+            }
+        }
+    }
+    return c_handle;
 }
 
 // ── A1 (2026-05-10): per-phase arena reset side channel ─────────
@@ -9360,8 +9514,12 @@ static void _hexa_init_fn_shims(void) {
     safetensors_mmap_data_offset    = hexa_fn_new((void*)hexa_safetensors_mmap_data_offset,    1);
     safetensors_mmap_size           = hexa_fn_new((void*)hexa_safetensors_mmap_size,           1);
     safetensors_mmap_read_f32_farr  = hexa_fn_new((void*)hexa_safetensors_mmap_read_f32_farr,  3);
+    // RFC 031 (2026-05-12): BF16 reader — bf16 → f32 → packed-double farr.
+    safetensors_mmap_read_bf16_to_f32_farr = hexa_fn_new((void*)hexa_safetensors_mmap_read_bf16_to_f32_farr, 3);
     safetensors_mmap_read_bytes     = hexa_fn_new((void*)hexa_safetensors_mmap_read_bytes,     3);
     safetensors_mmap_close          = hexa_fn_new((void*)hexa_safetensors_mmap_close,          1);
+    // RFC 032 (2026-05-12): farr_matmul — packed-double matrix multiply.
+    farr_matmul_shim                = hexa_fn_new((void*)hexa_farr_matmul,                     5);
     bit_or     = hexa_fn_new((void*)_hx_bit_or,           2);
     // bt73 free-fn shims (timestamp, base64_encode, base64_decode)
     timestamp     = hexa_fn_new((void*)_bt73_timestamp_w,     0);
