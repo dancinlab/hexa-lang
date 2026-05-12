@@ -69,3 +69,32 @@ on scripts that hit certain imports/intrinsics. (The resource server **is** runn
   runtime, so wilson's own development isn't blocked. But anything interpreter-mediated is.
 
 No wilson-side change; filing per the AGENTS.md hexa-lang handoff protocol.
+
+## Update (later in the same session)
+
+After re-checking the install:
+
+- `~/core/hexa-lang/build/hexa_interp` is **not** a native binary — it's a
+  shell shim (`build/hexa_interp` v5, 2026-05-12) that routes to either
+  `$HOME/.hx/packages/hexa/build/hexa_interp.real` (the actual interp
+  binary) or `$HOME/core/resource/bin/hexa-r ubu-1 run …` (resource-TCP
+  offload). The hang was happening on the **offload path**.
+- **The escape hatch already exists** — `RESOURCE_LOCAL_HEXA=1` makes the
+  shim `exec "$REAL" "$@"` directly. Confirmed:
+  ```
+  $ RESOURCE_LOCAL_HEXA=1 ~/core/hexa-lang/hexa.real run /tmp/ht.hexa
+  HEXA_RUN_OK 42
+  ```
+  So ask #2 is "document this, not invent it."
+- The original hang turned out to be **transient** — on a later retry the
+  resource-router path worked fine end-to-end (`hexa.real run /tmp/ht.hexa`
+  → `HEXA_RUN_OK 42`, rc=0). Best guess: a stuck ssh socket / resource-r
+  pool state cleared after a few minutes.
+
+So the still-live asks are #3 (a `hexa build-interp` to reliably rebuild
+`hexa_interp.real`) and #4 (`hexa doctor` should report interpreter
+path / freshness / which routing arm is live). #1 (the hang) is "the
+resource-router offload path is fragile under intermittent ssh failure;
+a libtimeout + auto-fallback-to-local would close it." #2 has an answer
+(`RESOURCE_LOCAL_HEXA=1`) — just needs to surface in `hexa --help` and
+`hexa doctor`.
