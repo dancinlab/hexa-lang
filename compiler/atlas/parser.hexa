@@ -176,22 +176,20 @@ pub fn parse_atlas_file(path: string, source_file: string) -> array {
             continue
         }
         if c0 != "@" {
-            // Either a continuation (leading ws/quote) or a // comment.
-            // Distinguish // comments by ltrim only when needed.
+            // INTERP BUG WORKAROUND: nested `if { continue }` does not skip
+            // the rest of the enclosing if body — collapse into single
+            // if/else chain so only one push site runs per iteration.
             if c0 == " " || c0 == "\t" || c0 == "\"" || c0 == "(" {
                 if have_cur {
                     cur_raw_chunks.push(line)
                 }
-                i = i + 1
-                continue
-            }
-            if _is_comment(line) {
-                i = i + 1
-                continue
-            }
-            // Other unexpected first char — treat as continuation.
-            if have_cur {
-                cur_raw_chunks.push(line)
+            } else if _is_comment(line) {
+                // skip
+            } else {
+                // Other unexpected first char — treat as continuation.
+                if have_cur {
+                    cur_raw_chunks.push(line)
+                }
             }
             i = i + 1
             continue

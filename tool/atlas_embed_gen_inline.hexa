@@ -129,19 +129,19 @@ pub fn parse_atlas_file(path: string, source_file: string) -> array {
             continue
         }
         if c0 != "@" {
+            // INTERP BUG WORKAROUND (mirrors parser.hexa fix): nested
+            // `if { continue }` does not skip the rest of the enclosing
+            // if body — collapse into single if/else chain.
             if c0 == " " || c0 == "\t" || c0 == "\"" || c0 == "(" {
                 if have_cur {
                     cur_raw_chunks.push(line)
                 }
-                i = i + 1
-                continue
-            }
-            if _is_comment(line) {
-                i = i + 1
-                continue
-            }
-            if have_cur {
-                cur_raw_chunks.push(line)
+            } else if _is_comment(line) {
+                // skip
+            } else {
+                if have_cur {
+                    cur_raw_chunks.push(line)
+                }
             }
             i = i + 1
             continue
