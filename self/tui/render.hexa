@@ -52,6 +52,7 @@
 //   --selftest exercises buffer alloc + diff path on a synthetic 4x4 grid
 
 use "self/stdlib/law_io"
+use "self/stdlib/term_unicode"   // char_width_at — East Asian Width-aware cell-width-per-grapheme
 
 // ── L1 builtins (declared via env.hexa whitelist; runtime-resolved) ─
 // term_winsize_rows / term_winsize_cols / term_write_str
@@ -213,8 +214,19 @@ pub fn render_flush() -> int {
             let idx = _cell_idx(x, y)
             let f_cell = _front[idx]
             let b_cell = _back[idx]
+            let ch = b_cell[0]
+            // Cell display width: 1 for "" (blank) / narrow glyphs, 2 for East
+            // Asian Wide / emoji. char_width_at returns [width, next_byte_off];
+            // a negative width (e.g. C0 control) is coerced to 1 to keep the
+            // loop forward-progressing on garbage input.
+            let w = if ch == "" { 1 } else {
+                let cw = char_width_at(ch, 0)[0]
+                if cw < 1 { 1 } else { cw }
+            }
             if !_cell_eq(f_cell, b_cell) {
-                // Cursor positioning only when not adjacent to last write.
+                // Cursor positioning only when not adjacent to last write. last_x
+                // tracks the column the terminal cursor parked at after the prior
+                // emission, so wide-glyph advances (2 cells) are accounted for.
                 if y != last_y || x != last_x + 1 {
                     parts.push(chr(27))
                     parts.push("[")
@@ -232,17 +244,24 @@ pub fn render_flush() -> int {
                     last_bg = new_bg
                     last_attrs = new_attrs
                 }
-                let ch = b_cell[0]
                 if ch == "" {
                     parts.push(" ")
                 } else {
                     parts.push(ch)
                 }
-                last_x = x
+                // Wide glyph: terminal cursor advances by 2 cells. last_x lands
+                // at x + w - 1 so the next-cell adjacency check (x+1 == last_x+1)
+                // stays correct.
+                last_x = x + w - 1
                 last_y = y
                 changed = changed + 1
             }
-            x = x + 1
+            // Skip the continuation cell of a wide glyph entirely (tcell
+            // canonical contract: "If a second character is displayed
+            // immediately in the cell adjacent to a wide character (offset
+            // by one instead of by two), then the results are undefined."
+            // The wide-glyph emission already owns that terminal column.)
+            x = x + w
         }
         y = y + 1
     }

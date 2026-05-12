@@ -58,14 +58,16 @@ pub fn text_draw(x: int, y: int, s: string, w: int, fg: int, bg: int, attrs: int
             let glyph = s.substring(i, i + cp_count)
             let width = _unicode_width(cp)
             // Wide char (width=2) — only place if there's room for both
-            // cells. Render the glyph in the first cell and a blank
-            // continuation in the second so render_flush diff path
-            // doesn't leak the previous frame's char in the right cell.
+            // cells. We only paint the glyph itself; the L3 render_flush
+            // diff loop skips the continuation cell (cell x+1) entirely
+            // because the terminal's wide-glyph emission already owns that
+            // column (tcell canonical contract). Leaving the continuation
+            // cell at its render_clear default avoids the prior-frame
+            // attrs leakage that the old "paint blank with caller attrs"
+            // workaround tried to plug.
             if width == 2 && col + 1 < w {
                 let r = render_put(x + col, y, glyph, fg, bg, attrs)
                 if r == 0 { count = count + 1 }
-                let r2 = render_put(x + col + 1, y, "", fg, bg, attrs)
-                if r2 == 0 { count = count + 1 }
                 col = col + 2
             } else if width == 2 {
                 // Doesn't fit; truncate (skip) — we keep the column
