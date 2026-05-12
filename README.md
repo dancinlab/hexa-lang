@@ -76,7 +76,7 @@ Full record: 14+ pinned decisions, all traceable to RFC-017 through RFC-020.
 
 * * *
 
-## 🔭 Install
+## Install
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/main/install.sh)"
