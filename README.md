@@ -76,28 +76,11 @@ Full record: 14+ pinned decisions, all traceable to RFC-017 through RFC-020.
 
 * * *
 
-## 🔭 Quick start
+## 🔭 Install
 
 ```bash
-# 1. clone
-git clone https://github.com/dancinlab/hexa-lang
-cd hexa-lang
-
-# 2. install hexa + hx (one-liner, drops binaries into ~/.hx/bin)
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/main/install.sh)"
-
-# 3. M0 smoke — fn main() -> i32 { return 0 } end-to-end
-build/hexa_interp tests/m0/run.hexa
-
-# 4. strict lint over a tree (S0–S5 + S8 fatal)
-build/hexa_interp compiler/main.hexa --check path/to/source.hexa
-
-# 5. build a native binary from a project (works out-of-tree;
-#    flattens use/import, resolves stdlib/ install-relative)
-hexa build path/to/project/main.hexa     # → build/<name>
 ```
-
-`hx install <pkg>` resolves bare names by probing GitHub orgs in `HX_ORGS` order. No central index, no lock-in.
 
 * * *
 
