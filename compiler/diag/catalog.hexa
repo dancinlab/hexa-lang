@@ -296,8 +296,8 @@ pub let CATALOG: [DiagSpec] = [
         title: "atlas L node missing for @implements",
         severity: Severity::Error,
         stage: "S8",
-        template: "atlas {atlas_hash} has no L node `{node_id}` cited by @implements",
-        explain: "An `@implements(L[id])` annotation refers to an L node that is not present in the merged atlas snapshot. Either add the L node to atlas.n6 (or an append shard), or fix the citation id.",
+        template: "atlas {atlas_hash} has no L node `{node_id}` cited by @implements — fix the citation id, or if L[{node_id}] should exist, register it: `@discover(kind=\"L\")` (upstream = update || PR).",
+        explain: "An `@implements(L[id])` annotation refers to an L node that is not present in the merged atlas snapshot. Either fix the citation id (typo / wrong node), or — if the law genuinely belongs in the atlas — register it with `@discover(kind=\"L\")` and land it upstream via `update || PR` (a direct atlas update if you own the hexa-lang repo, else a PR; `promote.hexa` folds the proposed node into the live atlas, emitting atlas.append.<date>.n6).",
         fix_it_kind: FixItKind::Replace
     },
     DiagSpec {
@@ -323,8 +323,8 @@ pub let CATALOG: [DiagSpec] = [
         title: "formula has no atlas binding",
         severity: Severity::Error,
         stage: "S8",
-        template: "formula in `{name}` has no atlas binding — add @implements(L[id]) to cite an existing law, or @discover(kind=\"L\") to register this function as a new one. SPEC.yaml atlas_citation_strict.",
-        explain: "Functions carrying @verify or @law annotations, OR whose body references atlas L[*] nodes, are knowledge-bearing artifacts. They must be bound to atlas L either by citing an existing law (@implements(L[id])) or proposing a new one (@discover(kind=\"L\")). Bypass via @grace(HX8004, until, reason) if migration is in flight; never silently.",
+        template: "formula in `{name}` has no atlas binding — `@implements(L[id])` to cite an existing law, or `@discover(kind=\"L\")` to register a new one (upstream = update || PR). Bypass: `@grace(HX8004, until=\"...\", reason=\"...\")` — never silent (emits HX9000). SPEC.yaml atlas_citation_strict.",
+        explain: "Functions carrying @verify or @law annotations, OR whose body references atlas L[*] nodes, are knowledge-bearing artifacts — they must be bound to atlas L. Cite an existing law with `@implements(L[id])`, or register a new one with `@discover(kind=\"L\")` (routes through compiler/discover/; `promote.hexa` folds the proposed node into the live atlas, emitting atlas.append.<date>.n6 — so the atlas grows with every contribution). Landing that registration upstream is `update || PR`: a direct atlas update if you own the hexa-lang repo, else a PR. Bypass while a migration is in flight: `@grace(HX8004, until, reason)` — never silently (every @grace site emits HX9000 and the build is gated on acked-grace consent).",
         fix_it_kind: FixItKind::Insert
     },
     DiagSpec {
