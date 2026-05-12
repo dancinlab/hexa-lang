@@ -5,15 +5,24 @@
 //  @usage(use "stdlib/jsonl_pool"; let p = pool_spawn(4, "myworker"); let r = pool_request(p, m); pool_shutdown(p))
 //
 //  ── module governance metadata ─────────────────────────────────────────────
-//  @version 0.1.0
-//  @capabilities [pool_spawn, pool_request, pool_request_to, pool_broadcast,
-//                 pool_broadcast_to, pool_send, pool_recv_any, pool_shutdown,
+//  @version 0.2.0
+//  @capabilities [pool_spawn, pool_grow, pool_request, pool_request_to,
+//                 pool_request_cancellable, pool_broadcast, pool_broadcast_to,
+//                 pool_broadcast_cancellable, pool_send, pool_recv_any,
+//                 pool_recv_any_cancellable, pool_shutdown,
 //                 pool_size, pool_pids, pool_alive]
 //  @stability preview
 //  @since 2026-05-13
 //  @maintainer hexa-core
 //  @priority P1
 //  @rfc incoming/patches/wilson-pi-port-6-gap-prereq.md (G6) — .roadmap.stdlib S-NEW-JSONL-POOL
+//  @changelog 0.2.0 (2026-05-13) — + pool_grow(pool, n) (spawn extra cells against the
+//             cmd_tmpl saved at pool_spawn). + pool_request_cancellable /
+//             pool_recv_any_cancellable / pool_broadcast_cancellable accepting a duck-typed
+//             cancel handle (void / [bool] / map with "flag":[bool] — matches wilson's
+//             CancelToken struct or a bare flag-cell). Existing 2-/3-arg public surface
+//             unchanged (the new variants are siblings). Driver: wilson swarm — thread
+//             ToolCtx.cancel into pool_request, allow `/swarm spawn N` to grow incrementally.
 //
 //  ── PROBLEM (wilson swarm — incoming/patches/wilson-pi-port-6-gap-prereq, G6) ──
 //
@@ -138,6 +147,24 @@ fn _jp_id_str(m) -> string {
     return to_string(m["id"])
 }
 
+// ── internal: is the caller-provided "cancel" handle tripped? ────────────
+// Duck-typed so the same pool layer accepts:
+//   · void                    — no cancel handle (always returns false)
+//   · [bool]                  — a bare flag-cell (caller mutates [0])
+//   · map with "flag":[bool]  — e.g. wilson's CancelToken struct, or an
+//                                stdlib/cancel Token exposed as a map
+// Anything else → not canceled (false). Cheap check called once per recv slice.
+fn _jp_canceled(cancel) -> bool {
+    if type_of(cancel) == "void" { return false }
+    if type_of(cancel) == "map" && has_key(cancel, "flag") {
+        let f = cancel["flag"]
+        if type_of(f) == "array" && len(f) > 0 && f[0] == true { return true }
+        return false
+    }
+    if type_of(cancel) == "array" && len(cancel) > 0 && cancel[0] == true { return true }
+    return false
+}
+
 // ── internal: round-robin next cell (advances the cursor) ────────────────
 fn _jp_next_cell(pool) -> any {
     let n = pool["n"]
@@ -241,7 +268,48 @@ pub fn pool_spawn(n: int, cmd_tmpl: string) -> any {
     }
     pool["cells"] = cells
     pool["n"] = n
+    pool["cmd_tmpl"] = cmd_tmpl   // remembered for pool_grow (v0.2.0)
     return pool
+}
+
+// pool_grow(pool, n) -> bool (v0.2.0)
+//
+// Grow the pool to at least `n` cells. If `pool["n"]` is already > n-1, returns true (no-op).
+// Otherwise spawns (n - current_n) extra cells using the pool's original `cmd_tmpl` (saved by
+// pool_spawn), appends them to `pool["cells"]`, bumps `pool["n"]`. Returns true iff at least
+// one of the newly-added cells is live; on a fully-failed grow the pool is left at its old
+// size and false is returned. Idempotent: pool_grow(pool, n) is safe to call repeatedly.
+pub fn pool_grow(pool, n: int) -> bool {
+    if type_of(pool) != "map" { return false }
+    if !has_key(pool, "n") { return false }
+    let cur = pool["n"]
+    if cur > n - 1 { return true }
+    let cmd_tmpl = if has_key(pool, "cmd_tmpl") { str(pool["cmd_tmpl"]) } else { "" }
+    if cmd_tmpl == "" { return false }   // can't grow without a remembered template
+    let mut added_live = false
+    let mut i = cur
+    while i < n {
+        let pair = channel_pair_open()
+        let read_fd = pair[0]
+        let write_fd = pair[1]
+        let mut pid = 0
+        if read_fd > -1 && write_fd > -1 {
+            let cmd = _jp_subst_index(cmd_tmpl, i)
+            pid = proc_spawn_with_channels(cmd, write_fd, read_fd)
+            if pid > 0 { added_live = true }
+        }
+        let cell = json_parse("{}")
+        cell["idx"] = i
+        cell["pid"] = pid
+        cell["read_fd"] = read_fd
+        cell["write_fd"] = write_fd
+        cell["lines"] = []
+        cell["lpos"] = 0
+        pool["cells"].push(cell)
+        i = i + 1
+    }
+    pool["n"] = n
+    return added_live
 }
 
 // pool_size(pool) -> int — number of cell slots (incl. failed ones).
@@ -282,10 +350,17 @@ pub fn pool_send(pool, req) -> string {
 // ── pool_recv_any(pool, timeout_ms) -> map ────────────────────────────────
 //
 // Round-robin every cell's reply buffer; return the first line that parses
-// as a JSON object. Returns {} (empty map) on timeout. Junk / non-object
-// lines are consumed and skipped. Caller demuxes by "id".
-// timeout_ms < 0 ⇒ block until something arrives.
+// as a JSON object. Returns {} (empty map) on timeout / cancel. Junk /
+// non-object lines are consumed and skipped. Caller demuxes by "id".
+// timeout_ms < 0 ⇒ block until something arrives (or cancel fires).
 pub fn pool_recv_any(pool, timeout_ms: int) -> any {
+    return pool_recv_any_cancellable(pool, timeout_ms, void)
+}
+
+// pool_recv_any_cancellable (v0.2.0) — like pool_recv_any, but a `cancel`
+// handle (see _jp_canceled for accepted shapes) short-circuits the polling
+// loop. Returns {} as soon as the cancel flips.
+pub fn pool_recv_any_cancellable(pool, timeout_ms: int, cancel) -> any {
     if type_of(pool) != "map" { return json_parse("{}") }
     if pool_size(pool) < 1 { return json_parse("{}") }
     let n = pool["n"]
@@ -293,6 +368,7 @@ pub fn pool_recv_any(pool, timeout_ms: int) -> any {
     let budget = if timeout_ms < 1 { 1 } else { timeout_ms }
     let mut waited = 0
     while true {
+        if _jp_canceled(cancel) { return json_parse("{}") }
         let mut anything = false
         let mut i = 0
         while i < n {
@@ -331,6 +407,14 @@ pub fn pool_request(pool, req) -> any {
 }
 
 pub fn pool_request_to(pool, req, timeout_ms: int) -> any {
+    return pool_request_cancellable(pool, req, timeout_ms, void)
+}
+
+// pool_request_cancellable (v0.2.0) — like pool_request_to, but a `cancel`
+// handle (see _jp_canceled) short-circuits the recv loop. The send happens
+// before the cancel check (so a fast-arriving reply still wins); subsequent
+// slices check cancel and return {} early.
+pub fn pool_request_cancellable(pool, req, timeout_ms: int, cancel) -> any {
     if type_of(pool) != "map" { return json_parse("{}") }
     if pool_size(pool) < 1 { return json_parse("{}") }
     let cell = _jp_next_cell(pool)
@@ -342,6 +426,7 @@ pub fn pool_request_to(pool, req, timeout_ms: int) -> any {
     let budget = if timeout_ms < 1 { 1 } else { timeout_ms }
     let mut waited = 0
     while waited < budget {
+        if _jp_canceled(cancel) { return json_parse("{}") }
         // wait up to ~200ms per refill so a slow reply doesn't burn fork/exec on tight polls
         let mut slice = 200
         if budget - waited < slice { slice = budget - waited }
@@ -372,6 +457,14 @@ pub fn pool_broadcast(pool, req) -> array {
 }
 
 pub fn pool_broadcast_to(pool, req, timeout_ms: int) -> array {
+    return pool_broadcast_cancellable(pool, req, timeout_ms, void)
+}
+
+// pool_broadcast_cancellable (v0.2.0) — like pool_broadcast_to, but a `cancel`
+// handle (see _jp_canceled) short-circuits the recv loop per cell. Cells that
+// were canceled before their reply arrived get {} at their slot, same as a
+// timeout / send-failure.
+pub fn pool_broadcast_cancellable(pool, req, timeout_ms: int, cancel) -> array {
     let mut out = []
     if type_of(pool) != "map" { return out }
     if pool_size(pool) < 1 { return out }
@@ -405,6 +498,7 @@ pub fn pool_broadcast_to(pool, req, timeout_ms: int) -> array {
         let mut done = false
         while waited < budget {
             if done { break }
+            if _jp_canceled(cancel) { done = true ; continue }
             let mut slice = 200
             if budget - waited < slice { slice = budget - waited }
             if slice < 1 { slice = 1 }

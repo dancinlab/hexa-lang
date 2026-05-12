@@ -177,6 +177,71 @@ chk_true("all cell children dead after shutdown", all_dead)
 let sd2 = pool_shutdown(pool)
 chk_true("pool_shutdown idempotent", sd2)
 
+// ── Test 5 (v0.2.0): pool_grow + a request hits a new cell ───────────────
+let p2 = pool_spawn(2, echo_cell)
+chk_eq_int("pool_grow: start size 2", pool_size(p2), 2)
+let _g_settle = exec("sleep 0.15")
+let g_ok = pool_grow(p2, 4)
+chk_true("pool_grow(2->4) returned true", g_ok)
+chk_eq_int("pool_grow: post size 4", pool_size(p2), 4)
+let _g_settle2 = exec("sleep 0.15")
+// every cell (incl. the two new ones) alive
+let mut g_all_alive = true
+for p in pool_pids(p2) { if !pool_alive(p) { g_all_alive = false } }
+chk_true("pool_grow: all 4 cells alive", g_all_alive)
+// pool_grow is a no-op when already big enough
+let g_noop = pool_grow(p2, 3)
+chk_true("pool_grow(4->3) no-op returns true", g_noop)
+chk_eq_int("pool_grow: size still 4 after no-op grow", pool_size(p2), 4)
+// 8 requests round-robin should cover all 4 cells (2 per cell, echo loop matches by id)
+let mut g_k = 0
+let mut g_sent = true
+while g_k < 8 {
+    let rq = json_parse("{}")
+    rq["id"] = 500 + g_k
+    rq["payload"] = "grow-" + to_string(g_k)
+    let s = pool_send(p2, rq)
+    if s != to_string(500 + g_k) { g_sent = false }
+    g_k = g_k + 1
+}
+chk_true("pool_grow: all 8 sends got their id", g_sent)
+let mut g_got = 0 ; let mut g_seen = json_parse("{}") ; let mut g_iter = 0
+while g_got < 8 {
+    if g_iter > 60 { break }
+    g_iter = g_iter + 1
+    let m = pool_recv_any(p2, 4000)
+    if type_of(m) != "map" || !has_key(m, "id") { continue }
+    let ids = to_string(m["id"]) ; let idn = to_int(ids)
+    if idn < 500 || idn > 507 { continue }
+    if has_key(g_seen, ids) { continue }
+    g_seen[ids] = 1 ; g_got = g_got + 1
+}
+chk_eq_int("pool_grow: got 8 replies across the 4-cell grown pool", g_got, 8)
+let _ = pool_shutdown(p2)
+
+// ── Test 6 (v0.2.0): pre-canceled token short-circuits ──────────────────
+let p3 = pool_spawn(1, echo_cell)
+let _c_settle = exec("sleep 0.1")
+// a pre-tripped duck-typed cancel handle (bare flag-cell form)
+let canceled = [true]
+let req_c = json_parse("{}") ; req_c["payload"] = "should-not-arrive"
+let t_before = to_int(exec("date +%s 2>/dev/null").trim())
+let r_c = pool_request_cancellable(p3, req_c, 5000, canceled)
+let t_after = to_int(exec("date +%s 2>/dev/null").trim())
+// The send still goes out (cancel checks happen in the recv loop), but the recv returns
+// {} promptly. Worst case: one slice ~200ms; in wall-clock seconds, the gap must be 0..1s.
+chk_true("pool_request_cancellable returns {} on pre-tripped flag", type_of(r_c) == "map" && (!has_key(r_c, "id")))
+chk_true("pool_request_cancellable short-circuits in <2 wall-clock seconds", t_after - t_before < 2)
+// map-shaped cancel handle (wilson CancelToken { flag: [bool] }) also works
+let canceled_map = json_parse("{}") ; canceled_map["flag"] = [true]
+let r_cm = pool_request_cancellable(p3, req_c, 5000, canceled_map)
+chk_true("pool_request_cancellable respects {flag:[true]} handle", type_of(r_cm) == "map" && !has_key(r_cm, "id"))
+// not-canceled void handle still does the round-trip (sanity)
+let req_ok = json_parse("{}") ; req_ok["id"] = 9001 ; req_ok["payload"] = "still-works"
+let r_ok = pool_request_cancellable(p3, req_ok, 5000, void)
+chk_true("pool_request_cancellable(void cancel) still round-trips", type_of(r_ok) == "map" && has_key(r_ok, "id") && to_string(r_ok["id"]) == "9001")
+let _ = pool_shutdown(p3)
+
 // ── Summary ──────────────────────────────────────────────────────────────
 let total = pass_count + fail_count
 println("PASS: jsonl_pool stdlib selftest " + to_string(pass_count) + "/" + to_string(total))
