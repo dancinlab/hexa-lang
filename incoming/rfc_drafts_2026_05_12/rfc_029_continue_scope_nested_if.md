@@ -113,10 +113,17 @@ Verification:
 - `self/test_tokenizer.hexa` → 66/66 PASS
 - `self/_bug2_continue.hexa` → correct output
 
-### Phase 3: Workaround revert (optional, deferred)
-Source workarounds can revert to the more readable `if { continue }` form once the new interp is stable. Defer until a tag/version cutover is in place — for now, the workarounds are harmless and defensive against older deployed interp binaries.
+### Phase 3a: Atlas pipeline revert (done 2026-05-12)
+- `compiler/atlas/parser.hexa` — workaround removed, back to original `if { continue }` early-exit form.
+- `tool/atlas_embed_gen_inline.hexa` — deleted. Use-based `tool/atlas_embed_gen.hexa` is canonical again.
+- `compiler/atlas/embedded.gen.hexa` — header updated to point at canonical tool. Embed itself frozen (n6 source retired in nexus `2df92aed`; no future regen possible without restoring source).
 
-`tool/atlas_embed_gen_inline.hexa` can be retired (replaced by `tool/atlas_embed_gen.hexa` which uses `use`-based imports) once the workarounds are removed.
+Verification: regen-based byte-identity test was NOT possible because the source corpus was deleted by nexus Phase 8 between commits `d2c5af7b` and this revert. The committed embed (produced via the inline tool on still-present source) is the final SSOT. Soundness rests on:
+1. The interp fix (`94fbbc19`) is verified independently via minimal repros and `static_index_test.hexa` 9/9 PASS.
+2. The parser.hexa pre-workaround form is byte-identical to its `d2c5af7b^` ancestor; under fixed interp it produces the same output that the workaround produced under buggy interp.
+
+### Phase 3b: Audit sites revert
+See separate commit. 5 sites in `compiler/check/{annotations,types}.hexa`, `self/test_tokenizer.hexa`, `tool/{ext_lint,runaway_pattern_lint}.hexa` — `INTERP-029 workaround` markers removed, original early-exit form restored.
 
 ## Rollout
 

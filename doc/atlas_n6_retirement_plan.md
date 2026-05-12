@@ -111,12 +111,12 @@ Second session same day (ubu-1 ControlMaster after ubu-2 auth fail). Added:
 상세 minimal repro 와 fix 경로: [RFC-029](../incoming/rfc_drafts_2026_05_12/rfc_029_continue_scope_nested_if.md).
 memory entry: `feedback_hexa_interp_nested_continue.md`.
 
-#### 적용된 소스측 workaround
+#### 적용된 fix (최종 형태 — RFC-029 Phase 1/2/3 모두 완료)
 
-- `compiler/atlas/parser.hexa` — `c0 != "@"` branch 를 `if / else if / else` 체인으로 collapse (양쪽 push site 가 동시 실행 못함)
-- `tool/atlas_embed_gen_inline.hexa` — 동일 패턴 동일 fix
-
-`use "..."` 자체는 무고함이 확인되어, 향후 inline gen 폐기 + 원본 `tool/atlas_embed_gen.hexa` 복귀 가능 (RFC-029 Phase 5).
+- **interp 진짜 fix (`94fbbc19`)**: `self/hexa_full.hexa::eval_body` 에 `break_flag`/`continue_flag` 추가 → nested-if continue 가 정상 동작.
+- **parser.hexa**: 원본 `if { continue }` early-exit 형태로 복귀 (간결성 회복). Phase 3a 에서 workaround 제거.
+- **`tool/atlas_embed_gen_inline.hexa`**: 삭제. 원본 `tool/atlas_embed_gen.hexa` 가 canonical (use-based).
+- **embed 파일 (`compiler/atlas/embedded.gen.hexa`)**: 그대로 — n6/ source 가 nexus `2df92aed` 에서 삭제되어 regen 불가. 본 embed 가 frozen SSOT.
 
 #### 결과 (2026-05-12 session 3)
 
