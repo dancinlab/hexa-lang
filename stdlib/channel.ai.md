@@ -1,10 +1,24 @@
 # stdlib/channel — bidirectional IPC + spawn-with-channels
 
-**Status**: preview (since 2026-05-08)
+**Status**: preview (since 2026-05-08) · **v0.2.0** (2026-05-13)
 **Module**: `stdlib/channel.hexa`
 **Selftest**: `stdlib/test/test_channel.hexa` — 21/21 PASS (interp, macOS arm64)
 **Driver**: anima chat autonomous-speech roadmap 2026-05-08, decision 4c
-(L2 multi-agent dialogue + L5 long-running daemon prereq).
+(L2 multi-agent dialogue + L5 long-running daemon prereq); **v0.2.0** driver =
+`stdlib/jsonl_pool` (wilson swarm — `incoming/patches/wilson-pi-port-6-gap-prereq.md` G6).
+
+**v0.2.0 (2026-05-13, additive — the original 6-symbol surface is unchanged):**
+- `channel_send_sync(fd, msg) -> bool` — synchronous send (no `()&` backgrounding).
+  Surfaces **back-pressure** (a full kernel pipe buffer blocks the caller in `write(2)`)
+  and gives **ordering** (call N completes before N+1 starts → N sends on the same fd
+  arrive in call order; `channel_send` races). FIFO inode gone → `false` = the explicit
+  EPIPE-equivalent `channel_send` lacks. (See "Synchronous send" + "No back-pressure
+  surfacing" below — the latter is now *surfaced*.)
+- `channel_recv_lines(fd, timeout_ms) -> [string]` — drain **all** currently-buffered
+  lines in one shot via a single unbuffered `sysread`. `channel_recv` alone reads one
+  line via perl's buffered `<$fh>` and `close()`s, discarding lines 2..N when several
+  are buffered — invisible in strict ping-pong, **wrong for a request-stream / demux
+  pool**. See "Embedded newlines / multi-line buffering" below.
 
 ## TL;DR
 
@@ -71,7 +85,16 @@ The "fd" returned is a small `int` channel-id that encodes a (nonce, side) pair.
 
 Return value of `""` is overloaded: it means "no data" (timeout fired, or peer closed the write end and FIFO is drained). The roadmap entry treats this as the same condition by intent — both signal "peer is unresponsive". Callers needing to distinguish should pair recv with `proc_alive(pid)` from `stdlib/proc`.
 
-`channel_send(fd, msg)` is fire-and-forget non-blocking: the message is written to a kernel pipe buffer and the call returns. EPIPE on a closed peer is NOT surfaced as a return value (the `&` background subshell catches it on stderr but doesn't propagate). Callers needing reliable delivery should bracket sends with response acks via `channel_recv`.
+`channel_send(fd, msg)` is fire-and-forget non-blocking: the message is written to a kernel pipe buffer and the call returns. EPIPE on a closed peer is NOT surfaced as a return value (the `&` background subshell catches it on stderr but doesn't propagate). Callers needing reliable delivery should bracket sends with response acks via `channel_recv` — or use `channel_send_sync`.
+
+### Synchronous send (`channel_send_sync`, v0.2.0)
+
+`channel_send_sync(fd, msg) -> bool` runs the write **without** the `()&` backgrounding `channel_send` uses. Two consequences:
+
+- **Back-pressure is surfaced.** The writer opens the FIFO RW (`exec 3<>` — a non-blocking open, dodging the classic FIFO-open deadlock) and `write(2)`s the line itself. When the kernel pipe buffer is full (slow / stalled peer reader), `write(2)` blocks and so does this call — the caller feels the peer's pace instead of piling unbounded data into background shells.
+- **Ordering is guaranteed.** Each call fully completes (its `sh` process exits) before the next one starts, so N `channel_send_sync` calls on the same fd arrive at the peer in call order. `channel_send` backgrounds each write under `()&`, so N rapid `channel_send` calls race and can arrive out of order — fine for one-shot fire-and-forget, wrong for a request stream (this is why `stdlib/jsonl_pool` uses `channel_send_sync`).
+
+Return: `false` if the FIFO inode is gone (peer called `channel_close`, or the channel was never opened) — the explicit EPIPE-equivalent `channel_send` doesn't give. Caveat: if the inode still exists but the peer process died without `channel_close`, a small line (≤ pipe-buf) still goes into the kernel buffer and the call returns `true`; true EPIPE would need a write-only open that blocks until a reader attaches, trading away the non-blocking-open property — the pool layer detects a dead cell via `pool_pids`+`pool_alive`, not via the send.
 
 ## Cross-platform (macOS / Linux)
 
@@ -94,8 +117,10 @@ Measured on macOS arm64 (M-class CPU, warm cache):
 |---|---|---|
 | `channel_pair_open` | ~10 ms | 2× mkfifo shell-out + status check |
 | `channel_send` (small line) | ~5 ms | sh exec + small file create + printf |
+| `channel_send_sync` (small line, drained peer) | ~5 ms | sh exec + small file create + printf (blocks if peer buffer full = back-pressure) |
 | `channel_recv` (data ready) | ~10 ms | perl fork+exec + select syscall |
 | `channel_recv` (timeout fires) | timeout + ~10 ms overhead | perl select |
+| `channel_recv_lines` (data ready) | ~10 ms | perl fork+exec + select + one sysread (drains *all* buffered lines in this one call) |
 | `channel_close` | ~3 ms | rm -f shell-out |
 | `proc_spawn_with_channels` | ~20 ms | nohup + 2 fifo opens + sh -c |
 
@@ -107,15 +132,15 @@ The 5-cycle ping-pong selftest completes in ~150 ms total wall-clock — comfort
 
 - **Line size**: a single line is whatever fits in the kernel pipe buffer (PIPE_BUF=512 atomic on macOS, 4096 on Linux; total buffer 65536 default). Lines larger than the buffer split across multiple `read(2)`s — perl's `<$fh>` handles this, but extremely large lines (> 1 MB) will starve the writer until the reader drains. Practical recommendation: keep individual messages under 64 KB. Not enforced.
 
-- **Embedded newlines**: `channel_send` appends a single trailing `\n`. If `msg` itself contains `\n`, it passes through verbatim — the receiver's `recv` reads up to the FIRST `\n`, leaving the rest buffered for the next `recv`. Callers wanting strict 1-message-per-line semantics should pre-validate or replace `\n` with a marker (e.g. `\\n`).
+- **Embedded newlines / multi-line buffering**: `channel_send` appends a single trailing `\n`. If `msg` itself contains `\n`, it passes through verbatim. More importantly: when *several* messages are buffered before you read, `channel_recv` returns only the FIRST line and **discards the rest** — its perl `<$fh>` is buffered, so the underlying `read(2)` slurps the whole pipe buffer into perl's I/O buffer, then `print $line; close($fh)` throws lines 2..N away. Invisible in strict ping-pong (only ever one line buffered); a silent data-loss bug for a request-stream / demux pool. **Fix (v0.2.0): `channel_recv_lines(fd, timeout_ms)`** — `can_read(timeout)` then one unbuffered `sysread` of the whole available buffer → `split(/\n/)` → returns *all* lines. Line framing holds because `channel_send`/`channel_send_sync` write lines ≤ PIPE_BUF (atomic). Callers wanting strict 1-message-per-line should still pre-validate / replace embedded `\n` with a marker; callers reading a multi-message burst should use `channel_recv_lines`, not a loop of `channel_recv`.
 
 - **close-on-exec**: FIFO fds are NOT marked `FD_CLOEXEC`. A grandchild spawned via `system()`/`fork()`/`exec()` from inside the child will inherit the FIFO descriptors. For cooperative children this is harmless; for security-sensitive cases, the child should explicitly close fds 3 and 4 before exec'ing.
 
-- **EPIPE on closed peer**: `channel_send` does NOT propagate EPIPE / SIGPIPE to the caller. The send returns `true` even if the peer has closed the read end. The recommended idiom is to bracket sends with response acks via `channel_recv`, which returns `""` on a peer-closed channel.
+- **EPIPE on closed peer**: `channel_send` does NOT propagate EPIPE / SIGPIPE to the caller — it returns `true` even if the peer has closed the read end. **`channel_send_sync` (v0.2.0)** returns `false` when the FIFO inode is gone (the closest the FIFO model gives to EPIPE — see "Synchronous send" for the inode-present-but-peer-dead caveat). Idiom for `channel_send`: bracket sends with response acks via `channel_recv` / `channel_recv_lines`, which return `""` / `[]` on a peer-closed channel.
 
 - **Send-before-spawn loses messages on macOS**: BSD/Darwin FIFO semantics drop unconsumed buffered bytes when the LAST writer closes WITHOUT a reader currently attached. Sequence `pair = channel_pair_open(); pid = proc_spawn_with_channels(...); channel_send(...)` (spawn before send) — same advice as POSIX `pipe(7)` recommends.
 
-- **No back-pressure surfacing**: if the reader is slow and the kernel buffer fills, `channel_send` writes block in the background subshell — the parent hexa script does NOT see this. Visible only as growing process count via `pgrep -f hexa_chan_send`. For pipelines where back-pressure matters, the c_ffi-based replacement is the correct path.
+- **Back-pressure** — `channel_send` does NOT surface it: if the reader is slow and the kernel buffer fills, the `write(2)` blocks in the background subshell, invisible to the parent (visible only as growing process count via `pgrep -f hexa_chan_send`). **Use `channel_send_sync` (v0.2.0)** for pipelines where back-pressure matters — it runs the write in the foreground so a full buffer blocks the caller. (A c_ffi-based `channel_send_native` using libc `write` with `O_NONBLOCK` + `EAGAIN` could later give finer control without an API change.)
 
 - **Nonce collision**: nonces use `epoch_seconds * 1e6 + (pid % 1000) * 1e3 + counter`. Two hexa scripts started in the same wall-clock second from processes with PIDs differing by a multiple of 1000, both calling `channel_pair_open()` exactly N times, would collide. `_ch_alloc_counter` is per-script so within one script collisions are impossible; cross-script the probability is astronomically small but not zero.
 
