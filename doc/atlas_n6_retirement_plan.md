@@ -96,12 +96,47 @@ Second session same day (ubu-1 ControlMaster after ubu-2 auth fail). Added:
 
 이 변경들은 모두 write_file / exec(shell) 만 사용 → 어떤 것도 buggy interp 의 parser 호출 안 함 (parser drift 영향 0).
 
-### Phase 8 (atlas.n6 + shards 실제 삭제) — 여전히 BLOCKED
+### Phase 8 (atlas.n6 + shards 실제 삭제) — 여전히 BLOCKED, fix 후보는 main 에 land
+
+#### 현 상태 (2026-05-12 session 2 close 직후)
 
 이유:
 1. **유일한 데이터 완전본이 nexus repo 의 disk 파일** (atlas.n6 본체 4.2 MB + 38 atlas.append.*.n6 shards). hexa-lang 의 `embedded.gen.hexa` 는 `b55b9f92` 에서 macOS-canonical 소스로 regen 됐지만 buggy parser 통과 → `.raw` 필드의 continuation 라인들 corrupt (e.g. `psi_alpha` 의 `<- "ln(2)/2^5.5..."` 실종).
 2. 따라서 지금 atlas.n6 + shards 를 삭제하면 corrupted embed 만 남고 손상되지 않은 source 영구 손실.
-3. 진짜 진행 조건: `build(stage0): re-promote hexa_interp` 이후 fresh regen → clean embed → 그 다음에야 Phase 8 안전.
+3. 진짜 진행 조건: clean embed regen → 그 다음에야 Phase 8 안전.
+
+#### `0cbdc4a8` 의 fix 후보 (untested, next-session verify 대기)
+
+`0cbdc4a8` 에서 두 fix 가 main 에 land:
+
+- **Blocker #1 fix — `tool/atlas_embed_gen_inline.hexa` (신규, 526줄)**
+  parser + merger + embed + driver 모든 로직을 single file 에 inline.
+  `use` 0 개 — module-loader drift 우회. 기대 동작:
+  버그 있는 deployed interp 로도 정상 parsing → clean `.raw` 의 embed 생성.
+  미검증 (ubu-1 SSH 끊김). next-session 첫 동작은 이 도구 실행 +
+  결과 diff vs `b55b9f92`.
+
+- **Blocker #2 fix — `tool/build_interp.hexa` runner detection 개선**
+  기존: `test -x build/hexa_interp` → silent-fail on Linux mac-mount.
+  fix: `HEXA_FLATTEN_RUNNER` env override + shim actual-run probe +
+  `~/.hx/packages/hexa/build/hexa_interp` fallback + `./hexa` fallback.
+  미검증. next-session 의 stage0 re-promote 시도 시 동작 확인.
+
+#### Phase 8 progression (Blocker #3 ubu-1 SSH 복구 후)
+
+```
+[1] SSH 복구 — server-side fix (sshd 재시작 또는 reboot)
+[2] env LC_ALL=C PATH=/tmp/stat_shim_v2:$PATH \
+      ~/.hx/packages/hexa/build/hexa_interp \
+      tool/atlas_embed_gen_inline.hexa
+    → diff vs b55b9f92 의 embed; expect raw continuation lines match disk
+[3] static_index_test.hexa 9/9 PASS (clean embed 검증)
+[4] commit + push (new embedded.gen.hexa)
+[5] nexus: rm n6/atlas.n6 n6/atlas.append.*.n6  (Phase 8 실행)
+[6] nexus commit + push (atlas.n6 retirement closure)
+```
+
+각 단계 verify gate 가 있어 중단 가능.
 
 ### Phase 7 잔여 미세 readers (낮은 우선순위)
 
