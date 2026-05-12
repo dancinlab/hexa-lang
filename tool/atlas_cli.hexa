@@ -276,8 +276,19 @@ fn cmd_append_witness(rest: array) {
     let fname = "atlas.append.witness-" + to_string(ts) + "-" + safe + ".n6"
     let path = dir + "/" + fname
 
-    let header = "# witness shard — hexa atlas append-witness\n# emitter: " + emitter + "\n# kind: " + kind + "\n# id: " + id + "\n# timestamp_ms: " + to_string(ts) + "\n"
-    let content = header + raw + "\n@END\n"
+    // Header uses `//` line comments to match nexus shard convention
+    // (atlas.append.*.n6 sample stats: 5120 `//` vs 1789 `#` lines).
+    // The blank line between header and body is LOAD-BEARING — without
+    // it the current deployed hexa_interp's parser drift (project memory:
+    // "SH3 phase 2.F interp drift") trips on odd-count leading `//`
+    // comments and swallows the first `@` header. A blank line resets
+    // that state. Once hexa_interp is re-promoted from current source
+    // (compiler/atlas/parser.hexa is itself correct), the blank line is
+    // still harmless. Soft terminator `// EOF — ...` matches existing
+    // shards; @END would pollute the last node's raw (_is_header_sigil
+    // rejects it → falls into continuation branch).
+    let header = "// witness shard — hexa atlas append-witness\n// emitter: " + emitter + "\n// kind: " + kind + "\n// id: " + id + "\n// timestamp_ms: " + to_string(ts) + "\n"
+    let content = header + "\n" + raw + "\n\n// EOF — hexa atlas append-witness\n"
     write_file(path, content)
     println(path)
 }
