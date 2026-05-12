@@ -9437,7 +9437,12 @@ fn eval_body(stmts) {
     let mut result = val_void()
     let mut _bi = 0
     while _bi < len(stmts) {
-        if return_flag || throw_flag { return result }
+        // RFC-029 fix: also halt on break/continue so nested `if { continue }`
+        // does not fall through to the enclosing if's tail statements. Without
+        // this, continue/break only short-circuited the innermost loop and
+        // any intermediate if-body still executed remaining stmts, causing
+        // double-side-effects (e.g. atlas embed continuation-line odd-dup).
+        if return_flag || throw_flag || break_flag || continue_flag { return result }
         result = exec_stmt_at(stmts, _bi)
         _bi = _bi + 1
     }

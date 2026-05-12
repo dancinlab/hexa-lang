@@ -1,6 +1,6 @@
 # RFC 029 — `continue` scope inside nested `if` (interp codegen)
 
-- **Status**: draft
+- **Status**: FIXED 2026-05-12 (`self/hexa_full.hexa::eval_body`)
 - **Date**: 2026-05-12
 - **Severity**: BLOCKER (atlas pipeline, any nested-branch loop)
 - **Priority**: P0
@@ -66,35 +66,57 @@ So the bug is **specifically about `continue` nested under more than one `if`**.
 - F-029-2: atlas embed regenerated from clean n6 source has no duplicate continuation lines
 - F-029-3: existing source-side workarounds in `compiler/atlas/parser.hexa` and `tool/atlas_embed_gen_inline.hexa` can be reverted to `if { continue }` form and still produce correct output
 
-## Hypothesis
+## Root cause (confirmed)
 
-`continue` codegen emits a control-flow target that resolves to the end of the **innermost enclosing `if`** rather than the **innermost enclosing `loop`**. Likely a single mis-set parent pointer or scope ID in HIR→MIR lowering.
+Stage0 hexa interpreter is **flag-based** (tree-walking, not bytecode). `ContinueStmt`/`BreakStmt` set `continue_flag` / `break_flag` and rely on outer loop bodies to observe the flag and short-circuit. `WhileStmt` (and `ForStmt`/`ForRangeStmt`) check all four flags (`return_flag || break_flag || continue_flag || throw_flag`) at every iteration of their body stmt-loop and correctly reset on exit.
 
-Verification step (when patching codegen):
-1. Locate `Continue` emitter in `compiler/codegen` (or stage0 interp evaluator)
-2. Confirm the loop-target is taken from a `loop_stack` (or equivalent), not from a generic statement-stack
-3. Compare with `break` — if `break` also has this bug, the fix is a single shared fix
+The bug: `eval_body(stmts)` (which evaluates the body of an `IfStmt`, `IfExpr`, `MatchExpr` arm, etc.) only checked `return_flag || throw_flag` between statements:
 
-## Proposal
+```hexa
+fn eval_body(stmts) {
+    let mut result = val_void()
+    let mut _bi = 0
+    while _bi < len(stmts) {
+        if return_flag || throw_flag { return result }  // ← missed break/continue
+        result = exec_stmt_at(stmts, _bi)
+        _bi = _bi + 1
+    }
+    return result
+}
+```
 
-### Short term (already done — 2026-05-12)
-Source workaround landed in:
+When an inner `if`-body executed `continue`, the flag was set, but the **outer if-body's `eval_body`** kept iterating its remaining statements (push, assign, the outer `continue`), producing the double-side-effect symptom.
+
+`break` and match arms share the same `eval_body`, so this fix addresses H1 (match-arm continue) and H2 (nested-if break) in one line.
+
+## Fix
+
+`self/hexa_full.hexa` line 9440 — add `|| break_flag || continue_flag` to the gate. One-line change. Verified empirically with three minimal repros (parent continue, match-arm continue, nested-if break) all producing correct output after rebuild.
+
+## Proposal — all complete
+
+### Phase 1: Source workarounds (done 2026-05-12, commit d2c5af7b + c713c9e4)
 - `compiler/atlas/parser.hexa` — `c0 != "@"` branch rewritten as `if / else if / else` chain
 - `tool/atlas_embed_gen_inline.hexa` — same rewrite (mirror)
+- 5 additional audit sites (commit `c713c9e4`): `compiler/check/annotations.hexa`, `compiler/check/types.hexa`, `self/test_tokenizer.hexa`, `tool/ext_lint.hexa`, `tool/runaway_pattern_lint.hexa`
 
 Memory: `feedback_hexa_interp_nested_continue.md` — guidance for future hexa code.
 
-### Medium term
-Audit codebase for `if { ... if { ... continue } ... continue }` patterns. Grep:
-```
-grep -rn "continue" compiler/ tool/ self/ std/ stdlib/ | grep -B5 "continue" | ...
-```
-manual review of nested-branch loops (any while/for with `>1` `continue`).
+### Phase 2: Interp fix (done 2026-05-12)
+One-line patch to `self/hexa_full.hexa::eval_body`. Rebuilt stage0 interp via `tool/build_interp.hexa` pipeline (flatten → hexa_v2 transpile → clang). Promoted to both `build/hexa_interp.real` and `~/.hx/packages/hexa/build/hexa_interp.real`. Backups kept as `.bak.pre-rfc029`.
 
-### Long term — interp/codegen fix
-1. Add `loop_stack` discipline to the evaluator: `continue` resolves to the top of the current loop body, `break` to one past the bottom — never bound to surrounding `if`.
-2. Stage0 self-host has the same risk surface. Verify after fix by self-rebuilding and re-running atlas embed regen — output must be byte-identical to source-workaround output.
-3. Once landed and stage0 re-promoted, the source workarounds in (Short term) can revert to the more readable `if { continue }` form — but defer revert until a deployed-interp version cutover is confirmed (e.g., `HEXA_VERSION` check or test that fails on old binaries).
+Verification:
+- Parent repro `/tmp/_bug_repro.hexa` → `chunks=1` (correct)
+- H1 (match arm continue) `/tmp/_match_arm_continue.hexa` → 2 distinct chunks (correct)
+- H2 (nested-if break) `/tmp/_nested_if_break.hexa` → break correctly stops loop (correct)
+- `compiler/atlas/static_index_test.hexa` → 9/9 PASS
+- `self/test_tokenizer.hexa` → 66/66 PASS
+- `self/_bug2_continue.hexa` → correct output
+
+### Phase 3: Workaround revert (optional, deferred)
+Source workarounds can revert to the more readable `if { continue }` form once the new interp is stable. Defer until a tag/version cutover is in place — for now, the workarounds are harmless and defensive against older deployed interp binaries.
+
+`tool/atlas_embed_gen_inline.hexa` can be retired (replaced by `tool/atlas_embed_gen.hexa` which uses `use`-based imports) once the workarounds are removed.
 
 ## Rollout
 
