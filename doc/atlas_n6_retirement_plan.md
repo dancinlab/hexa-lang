@@ -79,6 +79,43 @@ Second session same day (ubu-1 ControlMaster after ubu-2 auth fail). Added:
   body + blank + `// EOF —` terminator. The blank line is load-bearing
   due to a deployed-interp parser drift bug (see below).
 
+### 2026-05-12 session 2 추가 — Phase 4 / 5 / 7 land, Phase 8 만 잔존
+
+세션 2 후반에 nexus repo 측 (별도 PR 트랙, push 미실시) 마이그레이션 작업:
+
+| Phase | nexus commit | 내용 |
+|---|---|---|
+| 4 | `6b5d4626` | `omega_cycle_atlas_ingest._absorb_shard_to_main` 호출 제거 (dual-write retire) |
+| 5 w1/3 | `2f395618` | `n6/hub_leaf_promote.hexa` → shard emit (edges) |
+| 5 w2/3 | `d8b9d748` | `tool/bt_atlas_pipe.hexa` `_guarded_append_atlas` → `_emit_atlas_shard` |
+| 5 w3/3 | `04b7e3db` | `n6/scripts/atlas_phase46_canonical_nodes.hexa` 제안 텍스트 갱신 |
+| 6 | — | scripts/n6_ops 가 이미 nexus 측 commit `68acce70` 에서 삭제됨 (auto-effective) |
+| 7 r1/3 | `083c41b3` | `mk2_hexa/mk2/src/atlas/lookup.hexa` grep target 에 shard 추가 |
+| 7 r2/3 | `7a269f3a` | `cli/blowup/todo.hexa` line_count + 4-pattern awk 가 shards 도 read |
+| 7 r3/3 | `36df4643` | `cli/blowup/compose.hexa` init gate 가 shard-only state 허용 |
+
+이 변경들은 모두 write_file / exec(shell) 만 사용 → 어떤 것도 buggy interp 의 parser 호출 안 함 (parser drift 영향 0).
+
+### Phase 8 (atlas.n6 + shards 실제 삭제) — 여전히 BLOCKED
+
+이유:
+1. **유일한 데이터 완전본이 nexus repo 의 disk 파일** (atlas.n6 본체 4.2 MB + 38 atlas.append.*.n6 shards). hexa-lang 의 `embedded.gen.hexa` 는 `b55b9f92` 에서 macOS-canonical 소스로 regen 됐지만 buggy parser 통과 → `.raw` 필드의 continuation 라인들 corrupt (e.g. `psi_alpha` 의 `<- "ln(2)/2^5.5..."` 실종).
+2. 따라서 지금 atlas.n6 + shards 를 삭제하면 corrupted embed 만 남고 손상되지 않은 source 영구 손실.
+3. 진짜 진행 조건: `build(stage0): re-promote hexa_interp` 이후 fresh regen → clean embed → 그 다음에야 Phase 8 안전.
+
+### Phase 7 잔여 미세 readers (낮은 우선순위)
+
+대부분 dead code 또는 진단용:
+- `discovery/_h3_probe.hexa` — wc -l 진단 (HOME path 도 stale `$HOME/Dev/nexus`)
+- `n6/atlas_3d_node_sync.hexa` — atlas.n6 → mirror sync; atlas.n6 사라지면 자연스럽게 무용
+- `n6/atlas_shard_gc.hexa` — manifest mtime 만 봄, content read X
+- `cli/run.hexa` — 다른 tool 의 console output parse, atlas.n6 직접 read X
+- `cli/blowup/seed/seed_dna.hexa` — path 변수 선언만 (line 21), 실제 read 사용처 추가 audit 필요
+
+이들은 Phase 8 이후 (또는 atlas.n6 삭제와 함께) cleanup.
+
+---
+
 ### Phase 4–8: BLOCKED on deployed-interp parser drift
 
 Phase 3 dogfood revealed a **deployed hexa_interp parser-state bug** that
