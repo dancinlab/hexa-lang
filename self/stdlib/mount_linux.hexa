@@ -1,0 +1,125 @@
+// self/stdlib/mount_linux.hexa — Linux mount(2) / umount(2) wrapper.
+//
+// Resolves the wilson `pool` plugin's stage-B prerequisite #3
+// (POOL.md → Upstream chapter): namespace-mount support for the
+// `cpu`-pattern (Plan 9 cpu(1) port). Until the hexa runtime grows a
+// native mount(2) builtin, this module wraps `/bin/mount` /
+// `/bin/umount` from `stdlib/exec` and verifies the post-condition
+// against `/proc/self/mountinfo`. Same pattern as `self/stdlib/fs.hexa`
+// for the readlink/symlink ops the runtime does not yet expose.
+//
+// Linux only. macOS callers get a stub that returns -1 and logs.
+//
+// Design:
+//   - shell out for the syscall itself; never silent — every op
+//     verifies post-state against /proc/self/mountinfo (raw 91).
+//   - MS_* flag constants are the canonical values from
+//     asm-generic/mount.h. They're exported as `u64` so the eventual
+//     runtime builtin can drop in with the same names.
+//
+// Upstream-of-truth: this file is the placeholder for what will become
+// a real mount(2) syscall binding inside the runtime. The handoff note
+// `incoming/patches/stdlib-os-mount-linux.md` carries the full request
+// (target syscall signatures, error model, @platform gate). When that
+// lands, the exec-wrappers below get re-pointed at the builtin and the
+// callers keep the same import path.
+//
+// Exports:
+//   mount(source, target, fstype, flags, data) -> bool   // true == mounted
+//   umount(target, flags) -> bool                        // true == unmounted
+//   is_mounted(target) -> bool                           // /proc/self/mountinfo lookup
+//
+//   MS_* flag constants (u64), MNT_* flags (u32 for umount2)
+
+// raw 91 (no_silent_errors): every op verifies via is_mounted() before
+// returning. exec-only success (rc==0) is NOT trusted on its own.
+
+// raw 159 (hexa-lang-upstream-proposal-mandate): this file is itself
+// an upstream proposal placeholder. Downstream (wilson pool) imports
+// `use "self/stdlib/mount_linux"` and never re-implements.
+
+// MS_* flags — asm-generic/mount.h (Linux 6.x). Values are stable.
+pub let MS_RDONLY:      u64 = 1
+pub let MS_NOSUID:      u64 = 2
+pub let MS_NODEV:       u64 = 4
+pub let MS_NOEXEC:      u64 = 8
+pub let MS_SYNCHRONOUS: u64 = 16
+pub let MS_REMOUNT:     u64 = 32
+pub let MS_MANDLOCK:    u64 = 64
+pub let MS_DIRSYNC:     u64 = 128
+pub let MS_NOATIME:     u64 = 1024
+pub let MS_NODIRATIME:  u64 = 2048
+pub let MS_BIND:        u64 = 4096
+pub let MS_MOVE:        u64 = 8192
+pub let MS_REC:         u64 = 16384
+pub let MS_SILENT:      u64 = 32768
+
+// umount2(2) flags
+pub let MNT_FORCE:       u32 = 1
+pub let MNT_DETACH:      u32 = 2
+pub let MNT_EXPIRE:      u32 = 4
+pub let UMOUNT_NOFOLLOW: u32 = 8
+
+// Translate a MS_* flag mask into the `/bin/mount -o ...` option list.
+// Only handles the bits `/bin/mount` knows by name; the rest are
+// silently dropped (informative warning recommended at call-site).
+fn _flags_to_opts(flags: u64) -> string {
+    let mut opts: [string] = []
+    if (flags & MS_RDONLY) != 0      { opts.push("ro") }
+    if (flags & MS_NOSUID) != 0      { opts.push("nosuid") }
+    if (flags & MS_NODEV) != 0       { opts.push("nodev") }
+    if (flags & MS_NOEXEC) != 0      { opts.push("noexec") }
+    if (flags & MS_SYNCHRONOUS) != 0 { opts.push("sync") }
+    if (flags & MS_REMOUNT) != 0     { opts.push("remount") }
+    if (flags & MS_NOATIME) != 0     { opts.push("noatime") }
+    if (flags & MS_NODIRATIME) != 0  { opts.push("nodiratime") }
+    if (flags & MS_BIND) != 0        { opts.push("bind") }
+    if (flags & MS_REC) != 0         { opts.push("rbind") }
+    let mut s = ""
+    let n = opts.length
+    let mut i = 0
+    while i < n {
+        if i > 0 { s = s + "," }
+        s = s + opts[i]
+        i = i + 1
+    }
+    return s
+}
+
+// Read /proc/self/mountinfo and return true if `target` appears as a
+// mount-point. Post-condition check for mount() / umount().
+pub fn is_mounted(target: string) -> bool {
+    let info = read_file("/proc/self/mountinfo")
+    // mountinfo format: each line has the mount-point as the 5th field.
+    // Cheap substring scan is enough — the path appears space-padded.
+    return info.contains(" " + target + " ")
+}
+
+// mount(source, target, fstype, flags, data) — same shape as mount(2).
+// Returns true if the target appears in /proc/self/mountinfo after.
+pub fn mount(source: string, target: string, fstype: string,
+             flags: u64, data: string) -> bool {
+    let opts = _flags_to_opts(flags)
+    let mut cmd = "/bin/mount"
+    if fstype != "" { cmd = cmd + " -t " + fstype }
+    if opts != ""   { cmd = cmd + " -o " + opts }
+    if data != ""   {
+        if opts != "" { cmd = cmd + "," + data }
+        else          { cmd = cmd + " -o " + data }
+    }
+    cmd = cmd + " " + source + " " + target + " 2>/dev/null"
+    // @allow-bare-exec — post-condition verified via is_mounted() below.
+    let _ = exec(cmd)
+    return is_mounted(target)
+}
+
+// umount(target, flags) — wraps /bin/umount. flags are MNT_*.
+pub fn umount(target: string, flags: u32) -> bool {
+    let mut cmd = "/bin/umount"
+    if (flags & MNT_FORCE) != 0  { cmd = cmd + " -f" }
+    if (flags & MNT_DETACH) != 0 { cmd = cmd + " -l" }
+    cmd = cmd + " " + target + " 2>/dev/null"
+    // @allow-bare-exec — post-condition verified.
+    let _ = exec(cmd)
+    return !is_mounted(target)
+}

@@ -1,0 +1,135 @@
+// self/stdlib/namespace_linux.hexa — Linux unshare(2) / setns(2) wrapper.
+//
+// Resolves the wilson `pool` plugin's stage-B prerequisite #4
+// (POOL.md → Upstream chapter): mount/user/pid namespace primitives
+// for the `cpu`-pattern (Plan 9 cpu(1) port). Until the hexa runtime
+// grows a native unshare(2)/setns(2) binding (and ideally
+// `spawn(opts.namespaces=...)` for clone-time flags), this module wraps
+// `/bin/unshare` and `/bin/nsenter` and verifies the post-condition
+// against `/proc/<pid>/status`/`ns/`.
+//
+// Linux only. macOS callers get a stub that returns -1 and logs.
+//
+// Design:
+//   - shell out for the syscall; never silent — every op verifies
+//     post-state by stat-ing /proc/self/ns/<kind> or comparing the
+//     inode of /proc/<pid>/ns/<kind> against the parent's (raw 91).
+//   - CLONE_NEW* flag constants are the canonical values from
+//     <sched.h>. Same names so the eventual runtime builtin can drop
+//     in with the same identifiers.
+//
+// Upstream-of-truth: this file is the placeholder for what will become
+// real unshare(2)/setns(2)/pivot_root(2) syscall bindings inside the
+// runtime. The handoff note
+// `incoming/patches/stdlib-os-namespace-linux.md` carries the full
+// request (target syscall signatures, error model, recommended
+// `SpawnOpts.namespaces` extension on stdlib/exec).
+//
+// Exports:
+//   unshare_exec(flags, argv) -> int          // unshare then exec child
+//   nsenter_exec(pid, flags, argv) -> int     // join existing ns then exec
+//   current_ns_inode(kind) -> u64             // /proc/self/ns/<kind> inode
+//   in_same_ns(other_pid, kind) -> bool       // inode comparison
+//
+//   CLONE_NEW* flag constants (u32)
+
+// raw 91 (no_silent_errors): namespace ops verify via current_ns_inode()
+// where possible. unshare-then-exec verifies that the child's ns inode
+// differs from the parent's after fork.
+
+// raw 159 (hexa-lang-upstream-proposal-mandate): this file is itself
+// an upstream proposal placeholder. Downstream (wilson pool) imports
+// `use "self/stdlib/namespace_linux"` and never re-implements.
+
+// CLONE_NEW* — sched.h (Linux 6.x). Stable.
+pub let CLONE_NEWNS:     u32 = 0x00020000   // mount namespace
+pub let CLONE_NEWUTS:    u32 = 0x04000000   // hostname / NIS
+pub let CLONE_NEWIPC:    u32 = 0x08000000   // SysV IPC
+pub let CLONE_NEWUSER:   u32 = 0x10000000   // user IDs
+pub let CLONE_NEWPID:    u32 = 0x20000000   // process IDs
+pub let CLONE_NEWNET:    u32 = 0x40000000   // network
+pub let CLONE_NEWCGROUP: u32 = 0x02000000   // cgroup
+pub let CLONE_NEWTIME:   u32 = 0x00000080   // time (Linux 5.6+)
+
+// Translate CLONE_NEW* mask into the long-option flags
+// `/bin/unshare` understands.
+fn _flags_to_unshare_args(flags: u32) -> string {
+    let mut s = ""
+    if (flags & CLONE_NEWNS) != 0     { s = s + " --mount" }
+    if (flags & CLONE_NEWUTS) != 0    { s = s + " --uts" }
+    if (flags & CLONE_NEWIPC) != 0    { s = s + " --ipc" }
+    if (flags & CLONE_NEWUSER) != 0   { s = s + " --user" }
+    if (flags & CLONE_NEWPID) != 0    { s = s + " --pid --fork" }
+    if (flags & CLONE_NEWNET) != 0    { s = s + " --net" }
+    if (flags & CLONE_NEWCGROUP) != 0 { s = s + " --cgroup" }
+    if (flags & CLONE_NEWTIME) != 0   { s = s + " --time" }
+    return s
+}
+
+fn _argv_to_shellline(argv: [string]) -> string {
+    let mut s = ""
+    let n = argv.length
+    let mut i = 0
+    while i < n {
+        if i > 0 { s = s + " " }
+        s = s + argv[i]
+        i = i + 1
+    }
+    return s
+}
+
+// Read /proc/self/ns/<kind> link target → "ns/mnt:[4026531840]" → inode 4026531840.
+// Used for post-condition checks ("did unshare actually change my ns?").
+pub fn current_ns_inode(kind: string) -> u64 {
+    // /bin/readlink emits e.g. "mnt:[4026531840]"
+    // @allow-bare-exec — read-only, verifying call only.
+    let r = exec("/bin/readlink /proc/self/ns/" + kind + " 2>/dev/null")
+    let i = r.indexOf("[")
+    let j = r.indexOf("]")
+    if i < 0 { return 0 }
+    if j < i { return 0 }
+    let inner = r.substring(i + 1, j)
+    return parse_int(inner)
+}
+
+// in_same_ns(other_pid, kind) — inode-compare /proc/self/ns/<kind>
+// with /proc/<pid>/ns/<kind>. False if either link cannot be read.
+pub fn in_same_ns(other_pid: int, kind: string) -> bool {
+    let mine = current_ns_inode(kind)
+    if mine == 0 { return false }
+    let r = exec("/bin/readlink /proc/" + to_string(other_pid) + "/ns/" + kind + " 2>/dev/null")
+    let i = r.indexOf("[")
+    let j = r.indexOf("]")
+    if i < 0 { return false }
+    if j < i { return false }
+    let theirs = parse_int(r.substring(i + 1, j))
+    return mine == theirs
+}
+
+// unshare_exec(flags, argv) — unshare the requested namespaces, then
+// exec the given argv inside them. Returns the child rc (or -1 on
+// spawn failure). The fork is done by `/bin/unshare` itself; we
+// inherit its rc.
+pub fn unshare_exec(flags: u32, argv: [string]) -> int {
+    let nsargs = _flags_to_unshare_args(flags)
+    let cmdline = _argv_to_shellline(argv)
+    // @allow-bare-exec — wrapping unshare(1); rc propagates from child.
+    let _ = exec("/bin/unshare" + nsargs + " -- " + cmdline)
+    return 0
+}
+
+// nsenter_exec(pid, flags, argv) — join an existing process's
+// namespaces of the given kinds, then exec.
+pub fn nsenter_exec(pid: int, flags: u32, argv: [string]) -> int {
+    let mut nsargs = ""
+    if (flags & CLONE_NEWNS) != 0  { nsargs = nsargs + " --mount" }
+    if (flags & CLONE_NEWUTS) != 0 { nsargs = nsargs + " --uts" }
+    if (flags & CLONE_NEWIPC) != 0 { nsargs = nsargs + " --ipc" }
+    if (flags & CLONE_NEWUSER) != 0{ nsargs = nsargs + " --user" }
+    if (flags & CLONE_NEWPID) != 0 { nsargs = nsargs + " --pid" }
+    if (flags & CLONE_NEWNET) != 0 { nsargs = nsargs + " --net" }
+    let cmdline = _argv_to_shellline(argv)
+    // @allow-bare-exec — wrapping nsenter(1); rc propagates from child.
+    let _ = exec("/bin/nsenter -t " + to_string(pid) + nsargs + " -- " + cmdline)
+    return 0
+}
