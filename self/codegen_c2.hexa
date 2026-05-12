@@ -4140,6 +4140,9 @@ fn gen2_expr(node) {
                 if name == "farr_apply_single" {
                     return "hexa_farr_apply_single(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
                 }
+                if name == "farr_apply_single_farr" {
+                    return "hexa_farr_apply_single_farr(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
             }
             if len(node.args) == 7 {
                 // feat/primitive-float-array — CNOT kernel.

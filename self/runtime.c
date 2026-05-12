@@ -7554,6 +7554,9 @@ HexaVal hexa_farr_free(HexaVal h_v) {
 
 // Convert a hexa [float] gate (TAG_ARRAY of 4 boxed floats) into a
 // 4-element double[] on the C stack. Returns 1 on success, 0 on shape error.
+// AOT-only — in the interpreter, gate arrays are referenced via
+// Val{TAG_ARRAY, int_val=array_store idx}, so callers should pre-unpack
+// the gate into a farr handle and use farr_apply_single_farr instead.
 static int _hx_farr_unpack_gate4(HexaVal arr, double dst[4]) {
     if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) < 4) return 0;
     HexaVal* items = HX_ARR_ITEMS(arr);
@@ -7563,28 +7566,12 @@ static int _hx_farr_unpack_gate4(HexaVal arr, double dst[4]) {
     return 1;
 }
 
-// farr_apply_single(re_h, im_h, gate_re, gate_im, target, n_qubits) -> 0
-// Applies a 2x2 single-qubit gate to the packed state vector identified
-// by (re_h, im_h). Mutates the buffers in place. Returns 0 on success
-// or -1 on argument shape error (invalid handle / non-array gate / etc).
-//
-// Per-amplitude update is exactly the same as qmirror's pure-hexa
-// apply_single (state_vector.hexa lines 61-104) but in raw doubles.
-HexaVal hexa_farr_apply_single(HexaVal re_v, HexaVal im_v,
-                               HexaVal gate_re, HexaVal gate_im,
-                               HexaVal target_v, HexaVal nq_v) {
-    int64_t re_id = hexa_as_num(re_v);
-    int64_t im_id = hexa_as_num(im_v);
-    int64_t target = hexa_as_num(target_v);
-    int64_t n_qubits = hexa_as_num(nq_v);
-    if (re_id < 0 || re_id >= _hx_farr_count) return hexa_int(-1);
-    if (im_id < 0 || im_id >= _hx_farr_count) return hexa_int(-1);
-    double* re = _hx_farr_table[re_id].buf;
-    double* im = _hx_farr_table[im_id].buf;
-    if (!re || !im) return hexa_int(-1);
-    double m_re[4], m_im[4];
-    if (!_hx_farr_unpack_gate4(gate_re, m_re)) return hexa_int(-1);
-    if (!_hx_farr_unpack_gate4(gate_im, m_im)) return hexa_int(-1);
+// Core single-qubit kernel — takes 4 raw doubles for gate_re/gate_im.
+// Internal; called from both public entry points after gate unpacking.
+static void _hx_farr_apply_single_core(double* re, double* im,
+                                       const double m_re[4],
+                                       const double m_im[4],
+                                       int64_t target, int64_t n_qubits) {
     int64_t dim = 1;
     for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
     int64_t bit = (int64_t)1 << target;
@@ -7603,6 +7590,56 @@ HexaVal hexa_farr_apply_single(HexaVal re_v, HexaVal im_v,
             im[j] = (m10r*s0i + m10i*s0r) + (m11r*s1i + m11i*s1r);
         }
     }
+}
+
+// farr_apply_single(re_h, im_h, gate_re, gate_im, target, n_qubits) -> 0
+// Gate matrices are hexa [float] arrays of 4 doubles. AOT only — see
+// farr_apply_single_farr for the interpreter-safe variant.
+HexaVal hexa_farr_apply_single(HexaVal re_v, HexaVal im_v,
+                               HexaVal gate_re, HexaVal gate_im,
+                               HexaVal target_v, HexaVal nq_v) {
+    int64_t re_id = hexa_as_num(re_v);
+    int64_t im_id = hexa_as_num(im_v);
+    int64_t target = hexa_as_num(target_v);
+    int64_t n_qubits = hexa_as_num(nq_v);
+    if (re_id < 0 || re_id >= _hx_farr_count) return hexa_int(-1);
+    if (im_id < 0 || im_id >= _hx_farr_count) return hexa_int(-1);
+    double* re = _hx_farr_table[re_id].buf;
+    double* im = _hx_farr_table[im_id].buf;
+    if (!re || !im) return hexa_int(-1);
+    double m_re[4], m_im[4];
+    if (!_hx_farr_unpack_gate4(gate_re, m_re)) return hexa_int(-1);
+    if (!_hx_farr_unpack_gate4(gate_im, m_im)) return hexa_int(-1);
+    _hx_farr_apply_single_core(re, im, m_re, m_im, target, n_qubits);
+    return hexa_int(0);
+}
+
+// farr_apply_single_farr(re_h, im_h, gate_re_h, gate_im_h, target, n_qubits) -> 0
+// Same kernel; gate matrices are farr handles (packed double[4]).
+// Used by the interpreter dispatch (hexa_full.hexa) which pre-unpacks
+// [float] gates into a farr to sidestep the array_store-from-C problem.
+HexaVal hexa_farr_apply_single_farr(HexaVal re_v, HexaVal im_v,
+                                    HexaVal gre_h, HexaVal gim_h,
+                                    HexaVal target_v, HexaVal nq_v) {
+    int64_t re_id = hexa_as_num(re_v);
+    int64_t im_id = hexa_as_num(im_v);
+    int64_t gr_id = hexa_as_num(gre_h);
+    int64_t gi_id = hexa_as_num(gim_h);
+    int64_t target = hexa_as_num(target_v);
+    int64_t n_qubits = hexa_as_num(nq_v);
+    if (re_id < 0 || re_id >= _hx_farr_count) return hexa_int(-1);
+    if (im_id < 0 || im_id >= _hx_farr_count) return hexa_int(-1);
+    if (gr_id < 0 || gr_id >= _hx_farr_count) return hexa_int(-1);
+    if (gi_id < 0 || gi_id >= _hx_farr_count) return hexa_int(-1);
+    double* re = _hx_farr_table[re_id].buf;
+    double* im = _hx_farr_table[im_id].buf;
+    double* gr = _hx_farr_table[gr_id].buf;
+    double* gi = _hx_farr_table[gi_id].buf;
+    if (!re || !im || !gr || !gi) return hexa_int(-1);
+    if (_hx_farr_table[gr_id].len < 4 || _hx_farr_table[gi_id].len < 4) return hexa_int(-1);
+    double m_re[4] = { gr[0], gr[1], gr[2], gr[3] };
+    double m_im[4] = { gi[0], gi[1], gi[2], gi[3] };
+    _hx_farr_apply_single_core(re, im, m_re, m_im, target, n_qubits);
     return hexa_int(0);
 }
 
