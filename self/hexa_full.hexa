@@ -10703,7 +10703,35 @@ fn call_builtin(name, args) {
     // These dispatch the inner 2^n iteration into C so the interpreter
     // doesn't allocate ~12 boxed Vals per amplitude. n=17 unblocked.
     if name == "farr_apply_single" {
-        if len(args) > 5 { return val_int(farr_apply_single(args[0], args[1], args[2], args[3], args[4], args[5])) }
+        if len(args) > 5 {
+            // Interpreter Val{TAG_ARRAY} backs [float] via array_store, which
+            // is unreachable from C. Pre-unpack the 4 gate floats into a
+            // transient farr handle, then dispatch to the farr-input variant
+            // which the C kernel can read directly. AOT-compiled callers
+            // route to hexa_farr_apply_single (gate-as-HexaArr) via
+            // codegen_c2.hexa, so this dispatch is interp-only.
+            let g_re = get_array(args[2])
+            let g_im = get_array(args[3])
+            let gre_h = farr_zeros(val_int(4))
+            let gim_h = farr_zeros(val_int(4))
+            let _ = farr_set(gre_h, val_int(0), g_re[0])
+            let _ = farr_set(gre_h, val_int(1), g_re[1])
+            let _ = farr_set(gre_h, val_int(2), g_re[2])
+            let _ = farr_set(gre_h, val_int(3), g_re[3])
+            let _ = farr_set(gim_h, val_int(0), g_im[0])
+            let _ = farr_set(gim_h, val_int(1), g_im[1])
+            let _ = farr_set(gim_h, val_int(2), g_im[2])
+            let _ = farr_set(gim_h, val_int(3), g_im[3])
+            let rc = farr_apply_single_farr(args[0], args[1], gre_h, gim_h, args[4], args[5])
+            let _ = farr_free(gre_h)
+            let _ = farr_free(gim_h)
+            return val_int(rc)
+        }
+        else { return val_int(0 - 1) }
+    }
+    if name == "farr_apply_single_farr" {
+        // Direct path — caller already owns farr handles for gate matrices.
+        if len(args) > 5 { return val_int(farr_apply_single_farr(args[0], args[1], args[2], args[3], args[4], args[5])) }
         else { return val_int(0 - 1) }
     }
     if name == "farr_apply_cnot" {
@@ -10718,8 +10746,12 @@ fn call_builtin(name, args) {
     if name == "safetensors_mmap_data_offset" { if len(args) > 0 { return val_int(safetensors_mmap_data_offset(args[0].int_val)) }                              else { return val_int(0) } }
     if name == "safetensors_mmap_size"        { if len(args) > 0 { return val_int(safetensors_mmap_size(args[0].int_val)) }                                     else { return val_int(0) } }
     if name == "safetensors_mmap_read_f32_farr" { if len(args) > 2 { return val_int(safetensors_mmap_read_f32_farr(args[0].int_val, args[1].int_val, args[2].int_val)) } else { return val_int(-1) } }
+    // RFC 031 (2026-05-12): BF16 reader — bf16 → f32 → packed-double farr.
+    if name == "safetensors_mmap_read_bf16_to_f32_farr" { if len(args) > 2 { return val_int(safetensors_mmap_read_bf16_to_f32_farr(args[0].int_val, args[1].int_val, args[2].int_val)) } else { return val_int(-1) } }
     if name == "safetensors_mmap_read_bytes"  { if len(args) > 2 { return val_array_simple(safetensors_mmap_read_bytes(args[0].int_val, args[1].int_val, args[2].int_val)) }   else { return val_array([]) } }
     if name == "safetensors_mmap_close"       { if len(args) > 0 { let _ = safetensors_mmap_close(args[0].int_val); return val_void() }                         else { return val_void() } }
+    // RFC 032 (2026-05-12): farr_matmul — packed-double matrix multiply.
+    if name == "farr_matmul" { if len(args) > 4 { return val_int(farr_matmul(args[0].int_val, args[1].int_val, args[2].int_val, args[3].int_val, args[4].int_val)) } else { return val_int(-1) } }
     // ── End fast-path ────────────────────────────────────────────────
 
     if name == "println" {
