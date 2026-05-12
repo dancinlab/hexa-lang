@@ -61,6 +61,74 @@
 
 ---
 
+## 0c. 2026-05-12 (session 2) — Phase 3 land + Phase 4–8 blocker
+
+Second session same day (ubu-1 ControlMaster after ubu-2 auth fail). Added:
+
+- **Phase 1.5 — re-regen on macOS-canonical source** (commit `b55b9f92`):
+  the session 1 embed was built from Linux mirror (stale 10일 fork);
+  session 2 found macOS `~/core/nexus/n6/atlas.n6` was actually canonical
+  (4.2 MB vs Linux 3.0 MB, fork at byte 979,780). New embed: P=253 / C=5943
+  / L=388 / E=10 (총 6594 노드, sha256 `663698a0bc6f967fa2855a77bc4e399aae465dda5ca948b3c7352dbf98ce7fb`).
+- **Phase 2 — `hexa atlas` read-only CLI** (commit `a7d8aaa3`): hash /
+  stats / lookup / dump, zero-I/O over `static_atlas()`. self/main.hexa
+  wired `hexa atlas` → tool/atlas_cli.hexa (direct), 기존 nexus-cli proxy
+  에서 atlas 만 분기.
+- **Phase 3 — `hexa atlas append-witness`** (commits `336ed7bb` + `815d2354`):
+  staging shard writer. Shard format = 5 `//` header lines + blank +
+  body + blank + `// EOF —` terminator. The blank line is load-bearing
+  due to a deployed-interp parser drift bug (see below).
+
+### Phase 4–8: BLOCKED on deployed-interp parser drift
+
+Phase 3 dogfood revealed a **deployed hexa_interp parser-state bug** that
+makes any further automated absorption unsafe:
+
+1. **Leading-comment count parity**: `parse_atlas_file` returns 0 nodes
+   when the body `@` header is preceded by an odd number of `//` comments
+   (0,2,4,6 → 1 node; 1,3,5,7 → 0 nodes). Workaround: blank line between
+   header and body (resets parser state). Encoded into shard emit format.
+
+2. **Continuation-line corruption** (worse): when parser DOES return a
+   node, the `.raw` is mangled — odd-indexed continuation lines
+   duplicate, even-indexed drop. Dogfood input of 5 continuation lines
+   (`<-`, `->`, `=>`, `==`, `|>`) parsed to 6 lines with `->` and `==`
+   dropped, the others doubled.
+
+Source `compiler/atlas/parser.hexa` is correct. The drift is in
+`~/.hx/packages/hexa/build/hexa_interp` (Mac arm64 stage1 binary built
+from older sources). Same root cause family as memory entry
+`project_sh3_phase2f_interp_drift` ("fn-arg map TAG_MAP not incref'd in
+env_define").
+
+**Consequence for Phase 4+:** every nexus writer migration via `hexa atlas
+append-witness` would produce shards whose data is silently corrupted on
+the next regen (which itself runs through the buggy interp).
+
+**Required prerequisite cycle:** `build(stage0): re-promote hexa_interp`
+from current `self/hexa_full.hexa`. Same cycle that needs to land the
+`file_size` portability fix (`150e0220`). Until then Phase 4–8 stays
+parked.
+
+### Note on currently-shipped `compiler/atlas/embedded.gen.hexa`
+
+The `b55b9f92` embed (sha256 `663698a0…`, 6594 nodes) was produced by
+the same buggy interp. **Node counts and the file digest are correct**
+(parser handles node-boundaries fine — only continuation accumulation
+drifts), but the `raw` field of every multi-line P/C/L/E node has the
+duplicate/drop pattern in its continuation lines. Smoke `hash` / `stats`
+PASS because they don't inspect `.raw` semantics. Downstream consumers
+that only need `(kind, id, [11*]-tier, source_file)` are unaffected;
+consumers that read `raw` for the `<-` / `->` / `==` / `|>` body
+relations get corrupted data.
+
+The re-promote cycle should be followed by a fresh regen against current
+macOS-canonical atlas.n6 to land a clean embed.
+
+Detailed session log: `incoming/notes/2026-05-12-atlas-absorption-phase3-and-interp-drift.md`.
+
+---
+
 ## 0b. 2026-05-12 absorption closure (commit `0db952a2` + `150e0220`)
 
 §4 의 #5 단계가 본래 의도였음 — "atlas.n6 지도파일이 별도 필요없게 hexa-lang atlas 시스템에 흡수" (operator clarification). §0a 발견과 합치면:
