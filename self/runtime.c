@@ -20,6 +20,7 @@
 #include <fcntl.h>      // TL;DR #4: F_SETPIPE_SZ on Linux for pipe enlarge
 #include <signal.h>     // 2026-05-06: SIGPIPE SIG_IGN install in stdio init
 #include <regex.h>      // G3-REGEX 2026-05-06: POSIX ERE regcomp/regexec
+#include <sys/mman.h>   // RFC 025 (2026-05-12): mmap-backed safetensors load
 extern char **environ; // posix_spawnp inherits parent env explicitly
 #if defined(__APPLE__)
 #include <execinfo.h>
@@ -6430,6 +6431,26 @@ static HexaVal farr_set;
 static HexaVal farr_len;
 static HexaVal farr_free;
 
+// RFC 025 (2026-05-12): safetensors mmap-backed zero-copy load shims.
+// Mirror the farr_* pattern: bare static carriers so transpiled C
+// resolves `hexa_call*(safetensors_mmap_*, ...)` to direct calls into
+// the hexa_safetensors_mmap_* impls below. fn_shim registration in
+// _hexa_init_fn_shims; AOT codegen entries in codegen_c2.hexa.
+HexaVal hexa_safetensors_mmap_open(HexaVal path_v);
+HexaVal hexa_safetensors_mmap_header(HexaVal h_v);
+HexaVal hexa_safetensors_mmap_data_offset(HexaVal h_v);
+HexaVal hexa_safetensors_mmap_size(HexaVal h_v);
+HexaVal hexa_safetensors_mmap_read_f32_farr(HexaVal h_v, HexaVal off_v, HexaVal n_v);
+HexaVal hexa_safetensors_mmap_read_bytes(HexaVal h_v, HexaVal off_v, HexaVal n_v);
+HexaVal hexa_safetensors_mmap_close(HexaVal h_v);
+static HexaVal safetensors_mmap_open;
+static HexaVal safetensors_mmap_header;
+static HexaVal safetensors_mmap_data_offset;
+static HexaVal safetensors_mmap_size;
+static HexaVal safetensors_mmap_read_f32_farr;
+static HexaVal safetensors_mmap_read_bytes;
+static HexaVal safetensors_mmap_close;
+
 // `bit_or(x, y)` — shim kept because `|` as binary op conflicts with lambda
 // param delimiters `|x| x+1`. `&` and `^` are supported by parser directly.
 HexaVal _hx_bit_or(HexaVal a, HexaVal b) {
@@ -7514,6 +7535,334 @@ HexaVal hexa_farr_free(HexaVal h_v) {
     }
     if (_hx_farr_freelist_n < _hx_farr_freelist_cap) {
         _hx_farr_freelist[_hx_farr_freelist_n++] = id;
+    }
+    return hexa_void();
+}
+
+// ── farr high-level state-vector kernels (qmirror Phase 7 fast paths) ──
+// The per-iteration interpreter overhead of calling farr_get/farr_set
+// inside a 2^n loop dominates wall time and arena allocation pressure
+// at n=17 (131 k iterations × ~12 boxed-Val constructions each =
+// ~130 MB of arena Vals before the function returns and the arena
+// rewinds). The two whole-loop kernels below close that gap by
+// running the entire inner loop in C with raw double arithmetic.
+//
+// Both are pure functions of (handles, gate matrices, qubit indices,
+// total qubit count). Storage layout matches qmirror's qiskit-aligned
+// convention: amp[i] is the coefficient of |b_{n-1}...b_0> where
+// b_q = (i >> q) & 1, split into re/im as packed double[] buffers.
+
+// Convert a hexa [float] gate (TAG_ARRAY of 4 boxed floats) into a
+// 4-element double[] on the C stack. Returns 1 on success, 0 on shape error.
+static int _hx_farr_unpack_gate4(HexaVal arr, double dst[4]) {
+    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) < 4) return 0;
+    HexaVal* items = HX_ARR_ITEMS(arr);
+    for (int i = 0; i < 4; i++) {
+        dst[i] = __hx_to_double(items[i]);
+    }
+    return 1;
+}
+
+// farr_apply_single(re_h, im_h, gate_re, gate_im, target, n_qubits) -> 0
+// Applies a 2x2 single-qubit gate to the packed state vector identified
+// by (re_h, im_h). Mutates the buffers in place. Returns 0 on success
+// or -1 on argument shape error (invalid handle / non-array gate / etc).
+//
+// Per-amplitude update is exactly the same as qmirror's pure-hexa
+// apply_single (state_vector.hexa lines 61-104) but in raw doubles.
+HexaVal hexa_farr_apply_single(HexaVal re_v, HexaVal im_v,
+                               HexaVal gate_re, HexaVal gate_im,
+                               HexaVal target_v, HexaVal nq_v) {
+    int64_t re_id = hexa_as_num(re_v);
+    int64_t im_id = hexa_as_num(im_v);
+    int64_t target = hexa_as_num(target_v);
+    int64_t n_qubits = hexa_as_num(nq_v);
+    if (re_id < 0 || re_id >= _hx_farr_count) return hexa_int(-1);
+    if (im_id < 0 || im_id >= _hx_farr_count) return hexa_int(-1);
+    double* re = _hx_farr_table[re_id].buf;
+    double* im = _hx_farr_table[im_id].buf;
+    if (!re || !im) return hexa_int(-1);
+    double m_re[4], m_im[4];
+    if (!_hx_farr_unpack_gate4(gate_re, m_re)) return hexa_int(-1);
+    if (!_hx_farr_unpack_gate4(gate_im, m_im)) return hexa_int(-1);
+    int64_t dim = 1;
+    for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
+    int64_t bit = (int64_t)1 << target;
+    double m00r = m_re[0], m00i = m_im[0];
+    double m01r = m_re[1], m01i = m_im[1];
+    double m10r = m_re[2], m10i = m_im[2];
+    double m11r = m_re[3], m11i = m_im[3];
+    for (int64_t i = 0; i < dim; i++) {
+        if ((i & bit) == 0) {
+            int64_t j = i | bit;
+            double s0r = re[i], s0i = im[i];
+            double s1r = re[j], s1i = im[j];
+            re[i] = (m00r*s0r - m00i*s0i) + (m01r*s1r - m01i*s1i);
+            im[i] = (m00r*s0i + m00i*s0r) + (m01r*s1i + m01i*s1r);
+            re[j] = (m10r*s0r - m10i*s0i) + (m11r*s1r - m11i*s1i);
+            im[j] = (m10r*s0i + m10i*s0r) + (m11r*s1i + m11i*s1r);
+        }
+    }
+    return hexa_int(0);
+}
+
+// farr_apply_cnot(src_re_h, src_im_h, dst_re_h, dst_im_h, control, target, n_qubits) -> 0
+// Computes the CNOT image of (src_re, src_im) into the (already-zeroed)
+// (dst_re, dst_im) buffers. Does NOT touch src. Returns 0 / -1.
+//
+// Per qmirror state_vector.hexa lines 111-137: out[j] += state[i] where
+// j = i ^ (1<<target) iff bit `control` of i is 1, else j = i. Because
+// the partition is a permutation (no collisions), the += can be a =
+// when dst starts zero. We keep the += form to match the reference.
+HexaVal hexa_farr_apply_cnot(HexaVal src_re_v, HexaVal src_im_v,
+                             HexaVal dst_re_v, HexaVal dst_im_v,
+                             HexaVal control_v, HexaVal target_v,
+                             HexaVal nq_v) {
+    int64_t sr = hexa_as_num(src_re_v);
+    int64_t si = hexa_as_num(src_im_v);
+    int64_t dr = hexa_as_num(dst_re_v);
+    int64_t di = hexa_as_num(dst_im_v);
+    if (sr < 0 || sr >= _hx_farr_count) return hexa_int(-1);
+    if (si < 0 || si >= _hx_farr_count) return hexa_int(-1);
+    if (dr < 0 || dr >= _hx_farr_count) return hexa_int(-1);
+    if (di < 0 || di >= _hx_farr_count) return hexa_int(-1);
+    double* src_re = _hx_farr_table[sr].buf;
+    double* src_im = _hx_farr_table[si].buf;
+    double* dst_re = _hx_farr_table[dr].buf;
+    double* dst_im = _hx_farr_table[di].buf;
+    if (!src_re || !src_im || !dst_re || !dst_im) return hexa_int(-1);
+    int64_t control = hexa_as_num(control_v);
+    int64_t target  = hexa_as_num(target_v);
+    int64_t n_qubits = hexa_as_num(nq_v);
+    int64_t dim = 1;
+    for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
+    int64_t cbit = (int64_t)1 << control;
+    int64_t tbit = (int64_t)1 << target;
+    for (int64_t i = 0; i < dim; i++) {
+        int64_t j = ((i & cbit) != 0) ? (i ^ tbit) : i;
+        dst_re[j] += src_re[i];
+        dst_im[j] += src_im[i];
+    }
+    return hexa_int(0);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  RFC 025 — safetensors zero-copy mmap load (2026-05-12)
+//
+//  Motivation: stdlib/safetensors.hexa::safetensors_read() materializes
+//  every tensor byte as a boxed `Val{TAG_INT}` (~88B/byte under interp,
+//  ~16B/byte under AOT). A 570MB ckpt → 9.1GB RSS (16× overhead),
+//  OOMs the 332M-param anima Phase 1a1 model on commonly-sized hosts.
+//
+//  Design: a process-global table of mmap regions, indexed by an int
+//  handle (mirrors the `farr` precedent at runtime.c:7418). The file
+//  is mmap()'d read-only once; tensor views reference it by handle +
+//  offset + length. Element access reads through the mmap pointer
+//  without per-byte boxing — typed copies land in `farr` packed
+//  buffers (for f32/f64) or in raw int arrays (for integral dtypes).
+//
+//  Builtins (registered via fn_shim + codegen_c2.hexa):
+//      safetensors_mmap_open(path)              -> int handle  (-1 on err)
+//      safetensors_mmap_header(handle)          -> string (raw JSON header)
+//      safetensors_mmap_data_offset(handle)     -> int    (8 + header_len)
+//      safetensors_mmap_read_f32_farr(handle, byte_off, n_elem) -> int farr_id
+//      safetensors_mmap_read_bytes(handle, byte_off, n_bytes)   -> [int]
+//      safetensors_mmap_size(handle)            -> int    (full mapped size)
+//      safetensors_mmap_close(handle)           -> void
+//
+//  The hexa-side parser (stdlib/safetensors.hexa) parses the JSON
+//  header to get each tensor's (dtype, shape, offset_start, offset_end);
+//  then for f32 tensors it calls safetensors_mmap_read_f32_farr to
+//  materialize a packed farr buffer for inference. Per-tensor RSS
+//  cost = 8 B/elem (one f32 → one double in farr, no Val boxing).
+//  Total expected for 332M params: ~2.7 GB farr + ~570 MB mmap (shared)
+//  = ~3.3 GB RSS vs 9.1 GB pre-RFC → 2.7× reduction.
+//
+//  For TRUE zero-copy (no f32→double upcast), a future RFC 025-B can
+//  add `mmap_f32_ptr_get(handle, off, i) -> float` returning unboxed
+//  via dlsym/direct pointer arithmetic. Phase 1 here uses farr because
+//  it's the existing supported typed-buffer path.
+//
+//  Falsifier coverage (see tmp_rfc025_smoke.hexa):
+//      F-025-OPEN-OK / OPEN-MISS / HEADER-LEN / DATA-OFFSET / SIZE
+//      F-025-READ-F32 (roundtrip 32 bytes) / READ-BYTES / CLOSE
+// ═══════════════════════════════════════════════════════════
+
+typedef struct {
+    void*  base;       // mmap() base ptr; NULL = closed slot
+    size_t len;        // mapped length (full file size for safetensors)
+    int    fd;         // backing file descriptor (kept for diagnostics)
+} HexaMmapEntry;
+
+static HexaMmapEntry* _hx_mmap_table     = NULL;
+static int64_t        _hx_mmap_count     = 0;
+static int64_t        _hx_mmap_capacity  = 0;
+static int64_t*       _hx_mmap_freelist  = NULL;
+static int64_t        _hx_mmap_freelist_n = 0;
+static int64_t        _hx_mmap_freelist_cap = 0;
+
+// Allocate a new mmap-table slot id (pop freelist or extend table).
+static int64_t _hx_mmap_alloc_slot(void) {
+    if (_hx_mmap_freelist_n > 0) {
+        return _hx_mmap_freelist[--_hx_mmap_freelist_n];
+    }
+    if (_hx_mmap_count >= _hx_mmap_capacity) {
+        int64_t new_cap = _hx_mmap_capacity < 8 ? 8 : _hx_mmap_capacity * 2;
+        HexaMmapEntry* nt = (HexaMmapEntry*)realloc(_hx_mmap_table,
+                              (size_t)new_cap * sizeof(HexaMmapEntry));
+        if (!nt) return -1;
+        _hx_mmap_table = nt;
+        _hx_mmap_capacity = new_cap;
+    }
+    return _hx_mmap_count++;
+}
+
+// safetensors_mmap_open(path) → int handle (-1 on error).
+// Opens the file read-only, mmap()s the entire size with MAP_PRIVATE,
+// and stores (base, len, fd) in the global table. The fd is kept open
+// to anchor the mapping; close happens in safetensors_mmap_close.
+HexaVal hexa_safetensors_mmap_open(HexaVal path_v) {
+    const char* path = hexa_to_cstring(path_v);
+    if (!path || !*path) return hexa_int(-1);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return hexa_int(-1);
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return hexa_int(-1); }
+    size_t len = (size_t)st.st_size;
+    if (len == 0) { close(fd); return hexa_int(-1); }
+    // Pre-mmap header validation could go here (read first 8 bytes
+    // for header_len, verify 8 + header_len <= len). Phase 1 skips:
+    // the hexa-side caller already parses + validates the header.
+    void* base = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (base == MAP_FAILED) { close(fd); return hexa_int(-1); }
+    int64_t id = _hx_mmap_alloc_slot();
+    if (id < 0) { munmap(base, len); close(fd); return hexa_int(-1); }
+    _hx_mmap_table[id].base = base;
+    _hx_mmap_table[id].len  = len;
+    _hx_mmap_table[id].fd   = fd;
+    return hexa_int(id);
+}
+
+// safetensors_mmap_header(handle) → string (raw JSON header bytes).
+// Reads the 8-byte LE u64 header_len prefix at offset 0, then returns
+// the next header_len bytes as a hexa string (length-headered, NUL-safe
+// at storage layer though header JSON is ASCII). Empty string on
+// invalid handle or truncated file.
+HexaVal hexa_safetensors_mmap_header(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_mmap_count) return hexa_str("");
+    HexaMmapEntry* e = &_hx_mmap_table[id];
+    if (!e->base || e->len < 8) return hexa_str("");
+    const unsigned char* p = (const unsigned char*)e->base;
+    uint64_t header_len = 0;
+    for (int i = 0; i < 8; i++) header_len |= ((uint64_t)p[i]) << (8 * i);
+    if (header_len == 0 || header_len > e->len - 8) return hexa_str("");
+    char* buf = hexa_strbuf_alloc((size_t)header_len);
+    if (!buf) return hexa_str("");
+    memcpy(buf, p + 8, (size_t)header_len);
+    return (HexaVal){.tag=TAG_STR, .s=buf};
+}
+
+// safetensors_mmap_data_offset(handle) → int (= 8 + header_len).
+// Convenience: returns the byte offset where tensor data begins.
+HexaVal hexa_safetensors_mmap_data_offset(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_mmap_count) return hexa_int(0);
+    HexaMmapEntry* e = &_hx_mmap_table[id];
+    if (!e->base || e->len < 8) return hexa_int(0);
+    const unsigned char* p = (const unsigned char*)e->base;
+    uint64_t header_len = 0;
+    for (int i = 0; i < 8; i++) header_len |= ((uint64_t)p[i]) << (8 * i);
+    return hexa_int((int64_t)(8 + header_len));
+}
+
+// safetensors_mmap_size(handle) → int (full mapped file size in bytes).
+HexaVal hexa_safetensors_mmap_size(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_mmap_count) return hexa_int(0);
+    HexaMmapEntry* e = &_hx_mmap_table[id];
+    return hexa_int((int64_t)e->len);
+}
+
+// safetensors_mmap_read_f32_farr(handle, byte_off, n_elem) → int farr_id.
+// Reads n_elem float32 values starting at byte_off, copies them into a
+// new farr packed buffer (one f32 → one double; n_elem * 8 B allocated).
+// Returns -1 on bounds error. The farr buffer is INDEPENDENT of the
+// mmap (so safetensors_mmap_close after this read is safe).
+HexaVal hexa_safetensors_mmap_read_f32_farr(HexaVal h_v, HexaVal off_v, HexaVal n_v) {
+    int64_t id   = hexa_as_num(h_v);
+    int64_t off  = hexa_as_num(off_v);
+    int64_t n    = hexa_as_num(n_v);
+    if (id < 0 || id >= _hx_mmap_count) return hexa_int(-1);
+    HexaMmapEntry* e = &_hx_mmap_table[id];
+    if (!e->base) return hexa_int(-1);
+    if (off < 0 || n < 0) return hexa_int(-1);
+    if ((size_t)off + (size_t)(n * 4) > e->len) return hexa_int(-1);
+    // Allocate a farr packed double[] buffer; copy f32 values from mmap.
+    HexaVal farr_handle = hexa_farr_zeros(hexa_int(n));
+    int64_t farr_id = HX_INT(farr_handle);
+    if (farr_id < 0 || farr_id >= _hx_farr_count) return hexa_int(-1);
+    HexaFarrEntry* fe = &_hx_farr_table[farr_id];
+    if (!fe->buf || fe->len < n) return hexa_int(-1);
+    const float* src = (const float*)((const char*)e->base + off);
+    for (int64_t i = 0; i < n; i++) {
+        fe->buf[i] = (double)src[i];
+    }
+    return farr_handle;
+}
+
+// safetensors_mmap_read_bytes(handle, byte_off, n_bytes) → [int].
+// Reads n_bytes bytes from mmap as a boxed hexa int array. Used for
+// integral-dtype tensors or for header-byte inspection. Memory cost
+// is the standard Val-boxed per-byte (88B/byte interp, 16B/byte AOT),
+// but the per-tensor `safetensors_mmap_read_f32_farr` path avoids
+// this for the dominant f32 weight payload.
+HexaVal hexa_safetensors_mmap_read_bytes(HexaVal h_v, HexaVal off_v, HexaVal n_v) {
+    int64_t id   = hexa_as_num(h_v);
+    int64_t off  = hexa_as_num(off_v);
+    int64_t n    = hexa_as_num(n_v);
+    HexaVal out = hexa_array_new();
+    if (id < 0 || id >= _hx_mmap_count) return out;
+    HexaMmapEntry* e = &_hx_mmap_table[id];
+    if (!e->base) return out;
+    if (off < 0 || n < 0) return out;
+    if ((size_t)off + (size_t)n > e->len) return out;
+    const unsigned char* src = (const unsigned char*)e->base + off;
+    for (int64_t i = 0; i < n; i++) {
+        out = hexa_array_push(out, hexa_int((int64_t)src[i]));
+    }
+    return out;
+}
+
+// safetensors_mmap_close(handle) → void. Idempotent. After this the
+// handle slot is recycled via the freelist; callers MUST NOT use
+// previously-returned farr_ids derived from this handle, but since
+// farr buffers are independent of mmap (copied at read time), they
+// remain valid until farr_free.
+HexaVal hexa_safetensors_mmap_close(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_mmap_count) return hexa_void();
+    HexaMmapEntry* e = &_hx_mmap_table[id];
+    if (e->base) {
+        munmap(e->base, e->len);
+        e->base = NULL;
+        e->len = 0;
+    }
+    if (e->fd >= 0) {
+        close(e->fd);
+        e->fd = -1;
+    }
+    if (_hx_mmap_freelist_n >= _hx_mmap_freelist_cap) {
+        int64_t new_cap = _hx_mmap_freelist_cap < 8 ? 8 : _hx_mmap_freelist_cap * 2;
+        int64_t* nf = (int64_t*)realloc(_hx_mmap_freelist,
+                       (size_t)new_cap * sizeof(int64_t));
+        if (nf) {
+            _hx_mmap_freelist = nf;
+            _hx_mmap_freelist_cap = new_cap;
+        }
+    }
+    if (_hx_mmap_freelist_n < _hx_mmap_freelist_cap) {
+        _hx_mmap_freelist[_hx_mmap_freelist_n++] = id;
     }
     return hexa_void();
 }
@@ -8968,6 +9317,14 @@ static void _hexa_init_fn_shims(void) {
     farr_set   = hexa_fn_new((void*)hexa_farr_set,   3);
     farr_len   = hexa_fn_new((void*)hexa_farr_len,   1);
     farr_free  = hexa_fn_new((void*)hexa_farr_free,  1);
+    // RFC 025 (2026-05-12): safetensors mmap-backed zero-copy load shims.
+    safetensors_mmap_open           = hexa_fn_new((void*)hexa_safetensors_mmap_open,           1);
+    safetensors_mmap_header         = hexa_fn_new((void*)hexa_safetensors_mmap_header,         1);
+    safetensors_mmap_data_offset    = hexa_fn_new((void*)hexa_safetensors_mmap_data_offset,    1);
+    safetensors_mmap_size           = hexa_fn_new((void*)hexa_safetensors_mmap_size,           1);
+    safetensors_mmap_read_f32_farr  = hexa_fn_new((void*)hexa_safetensors_mmap_read_f32_farr,  3);
+    safetensors_mmap_read_bytes     = hexa_fn_new((void*)hexa_safetensors_mmap_read_bytes,     3);
+    safetensors_mmap_close          = hexa_fn_new((void*)hexa_safetensors_mmap_close,          1);
     bit_or     = hexa_fn_new((void*)_hx_bit_or,           2);
     // bt73 free-fn shims (timestamp, base64_encode, base64_decode)
     timestamp     = hexa_fn_new((void*)_bt73_timestamp_w,     0);

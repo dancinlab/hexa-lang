@@ -3991,6 +3991,13 @@ fn gen2_expr(node) {
                 if name == "farr_zeros"     { return "hexa_farr_zeros(" + a0 + ")" }
                 if name == "farr_len"       { return "hexa_farr_len(" + a0 + ")" }
                 if name == "farr_free"      { return "hexa_farr_free(" + a0 + ")" }
+                // RFC 025 (2026-05-12): safetensors mmap-backed zero-copy
+                // load. 1-arg forms (open/close/header/data_offset/size).
+                if name == "safetensors_mmap_open"        { return "hexa_safetensors_mmap_open(" + a0 + ")" }
+                if name == "safetensors_mmap_header"      { return "hexa_safetensors_mmap_header(" + a0 + ")" }
+                if name == "safetensors_mmap_data_offset" { return "hexa_safetensors_mmap_data_offset(" + a0 + ")" }
+                if name == "safetensors_mmap_size"        { return "hexa_safetensors_mmap_size(" + a0 + ")" }
+                if name == "safetensors_mmap_close"       { return "hexa_safetensors_mmap_close(" + a0 + ")" }
                 if name == "keys"           { return "hexa_map_keys(" + a0 + ")" }
                 if name == "values"         { return "hexa_map_values(" + a0 + ")" }
                 // F10 retire (2026-04-28): bare-call map_* builtins for AOT.
@@ -4113,12 +4120,32 @@ fn gen2_expr(node) {
                 if name == "regex_replace" { return "hexa_regex_replace(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // feat/primitive-float-array — packed-double array element set.
                 if name == "farr_set"      { return "hexa_farr_set(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
+                // RFC 025 (2026-05-12): safetensors mmap-backed zero-copy
+                // load. 3-arg forms (read_f32_farr / read_bytes).
+                if name == "safetensors_mmap_read_f32_farr" {
+                    return "hexa_safetensors_mmap_read_f32_farr(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
+                }
+                if name == "safetensors_mmap_read_bytes" {
+                    return "hexa_safetensors_mmap_read_bytes(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
+                }
             }
             if len(node.args) == 5 {
                 if name == "matmul"         { return "hexa_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
             }
             if len(node.args) == 4 {
                 if name == "matvec"         { return "hexa_matvec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
+            }
+            if len(node.args) == 6 {
+                // feat/primitive-float-array — single-qubit gate kernel.
+                if name == "farr_apply_single" {
+                    return "hexa_farr_apply_single(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
+            }
+            if len(node.args) == 7 {
+                // feat/primitive-float-array — CNOT kernel.
+                if name == "farr_apply_cnot" {
+                    return "hexa_farr_apply_cnot(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
+                }
             }
             let nargs = len(node.args)
             if nargs == 0 { return "hexa_call0(" + name + ")" }

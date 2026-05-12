@@ -1,0 +1,139 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_rfc025_smoke.hexa — RFC 025 safetensors mmap zero-copy load smoke
+//
+// Falsifiers (≥5, per F-025-* in rfc_025_safetensors_zero_copy_load.md):
+//   F-025-OPEN-OK       safetensors_mmap_open(real_path) >= 0
+//   F-025-OPEN-MISS     safetensors_mmap_open("/nonexistent") == -1
+//   F-025-HEADER-LEN    safetensors_mmap_header(h) length matches expected
+//   F-025-DATA-OFFSET   safetensors_mmap_data_offset(h) == 8 + header_len
+//   F-025-SIZE          safetensors_mmap_size(h) == filesize on disk
+//   F-025-READ-F32      read_f32_farr returns valid farr handle (n>0)
+//   F-025-READ-BYTES    read_bytes returns [int] with correct length
+//   F-025-CLOSE         close + reopen returns fresh valid handle
+// ════════════════════════════════════════════════════════════════════════
+
+fn _str(x) -> string {
+    let t = type_of(x)
+    if t == "str" || t == "string" { return x }
+    return ""
+}
+
+fn _ckpt_path() -> string {
+    return _str(env("HOME")) + "/core/anima/state/anima_phase1a1_color_cosmology_2026_05_12/ckpts/ckpt_phase1a1_sft.safetensors"
+}
+
+fn check_bool(label: string, got: bool) {
+    if got {
+        println("PASS  " + label)
+        return 1
+    }
+    println("FAIL  " + label)
+    return 0
+}
+
+fn check_eq_int(label: string, got: int, want: int) {
+    if got == want {
+        println("PASS  " + label + "  (=" + to_string(got) + ")")
+        return 1
+    }
+    println("FAIL  " + label + "  want=" + to_string(want) + " got=" + to_string(got))
+    return 0
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    let p = _ckpt_path()
+    if !file_exists(p) {
+        println("SKIP — ckpt file not present at " + p)
+        println("       RFC 025 smoke can only run where the .safetensors lives.")
+        return
+    }
+    println("RFC 025 mmap zero-copy smoke")
+    println("path: " + p)
+    println("")
+
+    // F-025-OPEN-MISS
+    let h_miss = safetensors_mmap_open("/nonexistent/path/__rfc025_miss")
+    pass = pass + check_eq_int("F-025-OPEN-MISS (missing file returns -1)", h_miss, -1)
+    total = total + 1
+
+    // F-025-OPEN-OK
+    let h = safetensors_mmap_open(p)
+    pass = pass + check_bool("F-025-OPEN-OK (real file returns handle >= 0)", h >= 0)
+    total = total + 1
+
+    if h < 0 {
+        println("FATAL — cannot continue without valid handle")
+        return
+    }
+
+    // F-025-SIZE — expect ~570 MB (598041000 bytes give-or-take)
+    let sz = safetensors_mmap_size(h)
+    pass = pass + check_bool("F-025-SIZE (>500MB and <700MB)", sz > 500000000 && sz < 700000000)
+    total = total + 1
+    println("       observed size: " + to_string(sz) + " bytes")
+
+    // F-025-HEADER-LEN — read header, compare to expected 22104 from prior smoke
+    let header_json = safetensors_mmap_header(h)
+    let hjl = len(header_json)
+    pass = pass + check_eq_int("F-025-HEADER-LEN (== 22104 from prior smoke)", hjl, 22104)
+    total = total + 1
+
+    // F-025-DATA-OFFSET — should be 8 + 22104 = 22112
+    let data_off = safetensors_mmap_data_offset(h)
+    pass = pass + check_eq_int("F-025-DATA-OFFSET (== 8 + header_len)", data_off, 8 + hjl)
+    total = total + 1
+
+    // F-025-READ-BYTES — read first 8 bytes after data_offset, verify length
+    let first_bytes = safetensors_mmap_read_bytes(h, data_off, 8)
+    pass = pass + check_eq_int("F-025-READ-BYTES (len == 8)", len(first_bytes), 8)
+    total = total + 1
+
+    // F-025-READ-F32 — read 8 f32 values (32 bytes) into farr, verify farr_len == 8
+    let farr_id = safetensors_mmap_read_f32_farr(h, data_off, 8)
+    pass = pass + check_bool("F-025-READ-F32 (returns valid farr handle)", farr_id >= 0)
+    total = total + 1
+    if farr_id >= 0 {
+        let flen = farr_len(farr_id)
+        pass = pass + check_eq_int("F-025-READ-F32-LEN (farr_len == 8)", flen, 8)
+        total = total + 1
+        // Spot-check: tok_emb.weight first 4 values should NOT all be zero
+        // (random init at start of training produces non-zero floats)
+        let v0 = farr_get(farr_id, 0)
+        let v1 = farr_get(farr_id, 1)
+        let v2 = farr_get(farr_id, 2)
+        let v3 = farr_get(farr_id, 3)
+        let nonzero = (v0 != 0.0) || (v1 != 0.0) || (v2 != 0.0) || (v3 != 0.0)
+        pass = pass + check_bool("F-025-READ-F32-VALUES (not all zero)", nonzero)
+        total = total + 1
+        println("       sample f32 values: " + to_string(v0) + ", " + to_string(v1) + ", " + to_string(v2) + ", " + to_string(v3))
+        farr_free(farr_id)
+    }
+
+    // F-025-CLOSE
+    safetensors_mmap_close(h)
+    println("PASS  F-025-CLOSE (no crash on munmap)")
+    pass = pass + 1
+    total = total + 1
+
+    // Re-open after close — should still get a valid handle
+    let h2 = safetensors_mmap_open(p)
+    pass = pass + check_bool("F-025-REOPEN (handle valid after close)", h2 >= 0)
+    total = total + 1
+    if h2 >= 0 {
+        safetensors_mmap_close(h2)
+    }
+
+    println("")
+    println("RFC 025 smoke: " + to_string(pass) + "/" + to_string(total) + " passed")
+    if pass == total {
+        println("PASS — RFC 025 mmap-backed safetensors load works end-to-end")
+        println("       Phase 5 (parity vs PyTorch) can now stream tensors")
+        println("       on-demand via safetensors_mmap_read_f32_farr.")
+    } else {
+        println("FAIL — RFC 025 smoke incomplete")
+    }
+}

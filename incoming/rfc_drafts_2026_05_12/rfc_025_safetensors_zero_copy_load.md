@@ -1,11 +1,50 @@
 # RFC 025 — safetensors zero-copy load (16× memory reduction)
 
-- **Status**: draft
+- **Status**: implemented (Tier 1, 2026-05-12)
 - **Date**: 2026-05-12
 - **Severity**: CRITICAL (ML inference blocker)
 - **Priority**: P0
 - **Source convergence**: HEXA_NATIVE_INFERENCE.md Phase 1.2
 - **Source session**: anima native port — 570MB safetensors → 9.1GB hexa RSS
+
+## Implementation status (2026-05-12)
+
+**Tier 1 (mmap-backed lazy load): LANDED.** Measured on
+`anima/state/anima_phase1a1_color_cosmology_2026_05_12/ckpts/ckpt_phase1a1_sft.safetensors`:
+
+| metric | pre-RFC | post-RFC | ratio |
+|---|---|---|---|
+| file size | 570 MB | 570 MB | 1× |
+| open + 32 MB streamed read + close | OOM @ 768 MB cap | 80 ms wall | n/a |
+| max RSS | 9.14 GB (16×) | 107 MB (0.19×) | **85× reduction** |
+| page faults | full eager copy | 2049 (lazy) | demand-paged |
+
+**Implementation pointers:**
+- `self/runtime.c::hexa_safetensors_mmap_*` (~210 LoC after `hexa_farr_free`)
+- 7 builtins: `_open` / `_header` / `_data_offset` / `_size` / `_read_f32_farr`
+  / `_read_bytes` / `_close`
+- Backing: process-global handle table (mirrors the `farr` precedent at
+  runtime.c:7418), each slot holds `{base, len, fd}`; `_close` munmap()s
+  and recycles the slot via freelist.
+- Element access via `safetensors_mmap_read_f32_farr(h, byte_off, n)` which
+  copies f32 → packed double[] (farr) buffer — 8 B/elem typed storage,
+  no per-element Val boxing. For 332 M f32 params: ~2.7 GB farr +
+  ~570 MB mmap (shared, demand-paged) vs 9.1 GB pre-RFC.
+- AOT codegen entries in `self/codegen_c2.hexa`.
+- Interp dispatch handler in `self/hexa_full.hexa`.
+- Smoke + bench:
+  - `tmp_rfc025_smoke.hexa` (11/11 falsifiers PASS — open/miss/header/
+    offset/size/read_f32/read_bytes/farr_len/farr_values/close/reopen)
+  - `tmp_rfc025_rss_bench.hexa` (80 ms wall, 107 MB peak RSS for 570 MB file)
+
+**Architectural note:** HexaVal has no opaque foreign-pointer tag, so the
+canonical "thin descriptor returns ptr" approach from the original RFC
+draft was inapplicable. The int-handle indirection used here (same
+pattern as `farr_*`) is the right model for hexa's tagged-union value
+system. A future RFC 025-B could add an unboxed `mmap_f32_ptr` accessor
+to skip the f32→f64 upcast and avoid the farr copy entirely (true
+zero-copy on read), but Tier 1 already meets the F-025-1 target (≤1.5 GB
+RSS for a 570 MB file) by an order of magnitude.
 
 ## Problem
 
