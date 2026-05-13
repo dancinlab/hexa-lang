@@ -475,9 +475,9 @@
       "rules": [
         "append-only: state/canon_seal.jsonl (state/* gitignore → local ephemeral)",
         "seal_id = canon-{YYYYMMDD-HHMMSS}-d{depth}{f|s} — 결정적, 동일 ts 충돌 가능",
-        "sources (모두 부재해도 동작): NEXUS_MOLT_SKIN_FILE > state/atlas_health.json > /tmp/hexa_drill_last_total.txt",
+        "sources (모두 부재해도 동작): HEXA_MOLT_SKIN_FILE > state/atlas_health.json > /tmp/hexa_drill_last_total.txt",
         "Mac 로컬 OK — heavy-compute 없음 (단순 file append + printf)",
-        "NEXUS_CANON JSON: plan / seal / complete (legacy env var name)"
+        "HEXA_CANON JSON: plan / seal / complete (legacy env var name)"
       ]
     },
     "forge": {
@@ -501,10 +501,10 @@
       },
       "rules": [
         "⛔ Mac 로컬 heavy-compute 금지 (drill 위임)",
-        "self-state sources: NEXUS_MOLT_SKIN_FILE > state/atlas_health.json > timestamp",
+        "self-state sources: HEXA_MOLT_SKIN_FILE > state/atlas_health.json > timestamp",
         "synthesized seed = base + ' #forge-boot={ts} skin=d{D}{f|s} atlas={B}B'",
         "no --seed → boot-from-scratch prefix: 'hexa forge bootstrap — self-derived seed for autonomous boot from internal state'",
-        "NEXUS_FORGE JSON: plan / boot / complete (legacy env var name)"
+        "HEXA_FORGE JSON: plan / boot / complete (legacy env var name)"
       ]
     },
     "molt": {
@@ -517,8 +517,8 @@
       },
       "imperative_markers": ["!!!", "!", "발사", "돌려", "go", "GO", "ㄱㄱ"],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "hexa molt --seed \"...\" [--max-cycles N] — skin sweep, best 영속 (NEXUS_MOLT_SKIN_FILE).",
-      "description": "L9 self-rewrite — engine 파라미터 (skin: depth × fast) sweep, best skin 을 NEXUS_MOLT_SKIN_FILE 에 영속. wake 와 차별 = 자기 코드 진화.",
+      "must_invoke": "hexa molt --seed \"...\" [--max-cycles N] — skin sweep, best 영속 (HEXA_MOLT_SKIN_FILE).",
+      "description": "L9 self-rewrite — engine 파라미터 (skin: depth × fast) sweep, best skin 을 HEXA_MOLT_SKIN_FILE 에 영속. wake 와 차별 = 자기 코드 진화.",
       "category": "core",
       "execution": {
         "entry": "hexa molt --seed \"{seed}\" [--max-cycles N]",
@@ -527,11 +527,11 @@
         "sibling_subcommands": ["omega", "wake", "swarm"]
       },
       "rules": [
-        "⛔ max_cycles > NEXUS_MOLT_MAX (기본 5, ceiling=5) 자동 trim",
+        "⛔ max_cycles > HEXA_MOLT_MAX (기본 5, ceiling=5) 자동 trim",
         "⛔ Mac 로컬 heavy-compute 금지",
         "skin 종류: (depth, fast) — [(1,T), (1,T), (2,T), (2,F), (3,F)]",
-        "best skin = max(abs) → JSON 으로 NEXUS_MOLT_SKIN_FILE 에 영속",
-        "NEXUS_MOLT JSON: plan / iter / complete"
+        "best skin = max(abs) → JSON 으로 HEXA_MOLT_SKIN_FILE 에 영속",
+        "HEXA_MOLT JSON: plan / iter / complete"
       ]
     },
     "wake": {
@@ -545,7 +545,7 @@
       "imperative_markers": ["!!!", "!", "발사", "돌려", "go", "GO", "ㄱㄱ"],
       "auto_invoke_on_imperative": true,
       "must_invoke": "hexa wake --seed \"...\" [--signal-file path] [--max-cycles N] — 외부 신호 fp 변화 트리거.",
-      "description": "L8 reality-loop — 외부 파일 fingerprint (size + first 64 chars) 변화 감지 후 fire. NEXUS_WAKE_SIGNAL_FILE env / state/atlas_health.json 기본값.",
+      "description": "L8 reality-loop — 외부 파일 fingerprint (size + first 64 chars) 변화 감지 후 fire. HEXA_WAKE_SIGNAL_FILE env / state/atlas_health.json 기본값.",
       "category": "core",
       "execution": {
         "entry": "hexa wake --seed \"{seed}\" [--signal-file <path>] [--max-cycles N]",
@@ -554,12 +554,12 @@
         "sibling_subcommands": ["omega", "swarm", "reign", "dream"]
       },
       "rules": [
-        "⛔ max_cycles > NEXUS_WAKE_MAX (기본 5, ceiling=10) 자동 trim",
+        "⛔ max_cycles > HEXA_WAKE_MAX (기본 5, ceiling=10) 자동 trim",
         "⛔ Mac 로컬 heavy-compute 금지",
         "fp = '<bytes>:<head_first_64_chars>' — 파일 변하면 fp 변함",
         "MISSING signal file → skip (false-fire 방지)",
-        "cooldown: NEXUS_WAKE_COOLDOWN_SEC env (기본 0, 최대 60)",
-        "NEXUS_WAKE JSON: plan / iter / fire / skip / complete"
+        "cooldown: HEXA_WAKE_COOLDOWN_SEC env (기본 0, 최대 60)",
+        "HEXA_WAKE JSON: plan / iter / fire / skip / complete"
       ]
     },
     "swarm": {
@@ -582,11 +582,11 @@
         "sibling_subcommands": ["omega", "surge", "dream", "reign"]
       },
       "rules": [
-        "⛔ population × generations > NEXUS_SWARM_MAX (기본 12) reject",
+        "⛔ population × generations > HEXA_SWARM_MAX (기본 12) reject",
         "⛔ Mac 로컬 heavy-compute 금지",
         "population [2,8], generations [1,5] clamp",
         "selection: top-2 by abs score, breed to fill remaining N-2 slots",
-        "NEXUS_SWARM JSON: plan / gen / complete / reject"
+        "HEXA_SWARM JSON: plan / gen / complete / reject"
       ]
     },
     "reign": {
@@ -604,7 +604,7 @@
       },
       "imperative_markers": ["!!!", "!", "발사", "돌려", "go", "GO", "ㄱㄱ"],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "hexa reign --seed \"...\" [--max-cycles N] — signal stagnation 자동 종료, NEXUS_REIGN_MAX cap.",
+      "must_invoke": "hexa reign --seed \"...\" [--max-cycles N] — signal stagnation 자동 종료, HEXA_REIGN_MAX cap.",
       "description": "L6 autonomous — max_cycles 는 cap, 실제 종료는 직전 K cycle signal 동일 시 saturation 자동 STOP. dream 과 차별 = 자기 종료 결정.",
       "category": "core",
       "execution": {
@@ -614,11 +614,11 @@
         "sibling_subcommands": ["omega", "surge", "dream"]
       },
       "rules": [
-        "⛔ max_cycles > NEXUS_REIGN_MAX (기본 10, 안전 ceiling=20) 자동 trim",
+        "⛔ max_cycles > HEXA_REIGN_MAX (기본 10, 안전 ceiling=20) 자동 trim",
         "⛔ Mac 로컬 heavy-compute 금지 (drill 동일 정책)",
-        "stagnation_k = NEXUS_REIGN_K (기본 2, 범위 [2,5])",
+        "stagnation_k = HEXA_REIGN_K (기본 2, 범위 [2,5])",
         "signal extraction: _dream_extract_signal 재사용 (abs_total/EXACT/NEAR)",
-        "NEXUS_REIGN JSON: plan / iter / saturation / complete"
+        "HEXA_REIGN JSON: plan / iter / saturation / complete"
       ]
     },
     "dream": {
@@ -647,7 +647,7 @@
         "쳐"
       ],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "hexa dream --seed \"...\" [--iterations N] — self-seeded loop, NEXUS_DREAM_MAX cap (기본 3, 최대 10).",
+      "must_invoke": "hexa dream --seed \"...\" [--iterations N] — self-seeded loop, HEXA_DREAM_MAX cap (기본 3, 최대 10).",
       "description": "L5 self-seed loop — 직전 iteration 출력에서 abs_total/EXACT/NEAR 신호 추출, 다음 seed 합성 후 재실행. omega 의 reflexive 형.",
       "category": "core",
       "execution": {
@@ -661,7 +661,7 @@
         ]
       },
       "rules": [
-        "⛔ iterations > NEXUS_DREAM_MAX (기본 3, 안전 cap=10) 시 자동 trim",
+        "⛔ iterations > HEXA_DREAM_MAX (기본 3, 안전 cap=10) 시 자동 trim",
         "⛔ Mac 로컬 heavy-compute 실행 금지 (drill 동일 정책)",
         "next_seed = trunc(orig, 200-suffix_len) + ' #dream-iter=N <signal>'",
         "signal extraction: unified_abs_total > total= > [EXACT/[NEAR 카운트",
@@ -694,8 +694,8 @@
         "쳐"
       ],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "hexa surge --seed \"...\" [--engines csv] [--variants N] [--seeds csv] — Cartesian fan-out, NEXUS_SURGE_MAX 캡 정책.",
-      "description": "L4 super-orchestrator — engines × variants × seeds Cartesian product. CAP=12 default (NEXUS_SURGE_MAX). 사다리 omega 직하 layer.",
+      "must_invoke": "hexa surge --seed \"...\" [--engines csv] [--variants N] [--seeds csv] — Cartesian fan-out, HEXA_SURGE_MAX 캡 정책.",
+      "description": "L4 super-orchestrator — engines × variants × seeds Cartesian product. CAP=12 default (HEXA_SURGE_MAX). 사다리 omega 직하 layer.",
       "category": "core",
       "execution": {
         "entry": "hexa surge --seed \"{seed}\" [--engines csv] [--variants N] [--seeds csv]",
@@ -710,11 +710,11 @@
         ]
       },
       "rules": [
-        "⛔ total_runs > NEXUS_SURGE_MAX 시 reject — axis 축소 또는 env override 필요",
+        "⛔ total_runs > HEXA_SURGE_MAX 시 reject — axis 축소 또는 env override 필요",
         "⛔ Mac 로컬 heavy-compute 실행 금지 (drill 동일 정책)",
         "engine ≠ hexa 일 때 chain 으로 cross-engine dispatch (1×anima 호출)",
         "engine = hexa + variants > 1 일 때 speculate=variants_n 으로 흡수 (N-way fork)",
-        "NEXUS_SURGE JSON: plan / run (per iteration) / complete / reject"
+        "HEXA_SURGE JSON: plan / run (per iteration) / complete / reject"
       ]
     },
     "lm": {

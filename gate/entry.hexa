@@ -44,29 +44,29 @@
 
 let HOME = env("HOME")
 let WS = env("WS")
-// nexus_home 해소 우선순위 — env-driven 정상화 (raw 44 docker hard-landing 동반).
-//   1) NEXUS_HOME           (container/CI 에서 명시적 주입)
-//   2) WS + "/nexus"        (workspace 패턴, hive/Mac 일반)
-//   3) HOME + "/core/nexus" (Mac 기본 레이아웃 fallback)
-//   4) "/nexus"             (container 관습 — 부재 시 graceful no-op)
-fn _resolve_nexus_home() -> str {
-    let nh = env("NEXUS_HOME")
-    if nh.len() > 0 { return nh }
-    if WS.len() > 0 { return WS + "/nexus" }
-    if HOME.len() > 0 { return HOME + "/core/nexus" }
-    return "/nexus"
+// hexa_home 해소 우선순위 — env-driven 정상화 (raw 44 docker hard-landing 동반).
+//   1) HEXA_HOME            (container/CI 에서 명시적 주입)
+//   2) WS + "/hexa-lang"    (workspace 패턴, hive/Mac 일반)
+//   3) HOME + "/core/hexa-lang" (Mac 기본 레이아웃 fallback)
+//   4) "/hexa-lang"         (container 관습 — 부재 시 graceful no-op)
+fn _resolve_hexa_home() -> str {
+    let hh = env("HEXA_HOME")
+    if hh.len() > 0 { return hh }
+    if WS.len() > 0 { return WS + "/hexa-lang" }
+    if HOME.len() > 0 { return HOME + "/core/hexa-lang" }
+    return "/hexa-lang"
 }
-let NEXUS_HOME = _resolve_nexus_home()
-let HARNESS = NEXUS_HOME + "/tool"
-let GATE = WS + "/hexa-lang/gate"
-let HEXA = NEXUS_HOME + "/bin/hexa"
+let HEXA_HOME = _resolve_hexa_home()
+let HARNESS = HEXA_HOME + "/tool"
+let GATE = HEXA_HOME + "/gate"
+let HEXA = env("HOME") + "/.hx/bin/hexa"
 
-// Container/missing-nexus graceful degradation — `dispatch_file` 가 file_exists
+// Container/missing-harness graceful degradation — `dispatch_file` 가 file_exists
 // 체크로 silent pass 하지만, HEXA 자체가 없으면 self_check 등에서 stderr 노이즈
-// 생성. NEXUS_OK 플래그로 사전 차단 (성공 조용 / 실패 시끄럽게 — H1 원칙 준수).
-let NEXUS_OK = file_exists(HEXA)
+// 생성. HEXA_OK 플래그로 사전 차단 (성공 조용 / 실패 시끄럽게 — H1 원칙 준수).
+let HEXA_OK = file_exists(HEXA)
 
-// L1 좀비 차단 — sub-module dispatch 기본 timeout (초). 우회: NEXUS_NO_TIMEOUT=1
+// L1 좀비 차단 — sub-module dispatch 기본 timeout (초). 우회: HEXA_NO_TIMEOUT=1
 let WRAPPER = HARNESS + "/perl_timeout.sh"
 let DISPATCH_TIMEOUT_SEC = 45
 
@@ -96,7 +96,7 @@ fn roadmap_sync_gate(mode: str) {
     for skip in ROADMAP_GATE_SKIP {
         if mode == skip { return }
     }
-    if NEXUS_OK == false { return }
+    if HEXA_OK == false { return }
     let gate_script = HARNESS + "/roadmap_sync_gate.hexa"
     if file_exists(gate_script) == false { return }
     // fast-path: 최근 30s 내 clean 확인 완료됐으면 gate exec 자체 skip.
@@ -267,7 +267,7 @@ fn dispatch_agent_guard(rest: [str]) {
     // usage: entry.hexa guard <area> [prompt_hash]
     //        entry.hexa guard complete <agent_id>    — 완료 마감
     if rest.len() == 0 { return }
-    if NEXUS_OK == false { return }
+    if HEXA_OK == false { return }
     let script = HARNESS + "/agent_ledger.hexa"
     if file_exists(script) == false { return }
     let mut sub = "register"
@@ -306,8 +306,8 @@ fn dispatch_file(script: str, rest: [str]) {
     }
     // Container/missing-nexus graceful — script 가 nexus 안에 있는데 HEXA bin
     // 없으면 sh: not found 노이즈 도배 막고 silent pass.
-    if NEXUS_OK == false && script.contains("/nexus/") {
-        eprintln("[entry] nexus dispatch skip — NEXUS_HOME=" + NEXUS_HOME + " unavailable (script=" + script + ")")
+    if HEXA_OK == false && script.contains("/nexus/") {
+        eprintln("[entry] nexus dispatch skip — HEXA_HOME=" + HEXA_HOME + " unavailable (script=" + script + ")")
         return
     }
     let prefix = wrap_prefix(script)
@@ -369,8 +369,8 @@ fn self_check() {
         println("missing: " + ", ".join(missing))
     }
     // cmd_gate 기본 동작 확인 (GATE-local; HEXA bin 부재 시 graceful skip)
-    if NEXUS_OK == false {
-        println("gate reject test: SKIP (NEXUS_HOME=" + NEXUS_HOME + " unavailable)")
+    if HEXA_OK == false {
+        println("gate reject test: SKIP (HEXA_HOME=" + HEXA_HOME + " unavailable)")
     } else if file_exists(GATE + "/cmd_gate.hexa") == false {
         println("gate reject test: SKIP (cmd_gate.hexa missing — GATE=" + GATE + ")")
     } else {
@@ -382,7 +382,7 @@ fn self_check() {
         }
     }
     // harness_audit 스코어 요약 (옵셔널 — 매 self_check 마다 점수 표시)
-    let audit_out = if NEXUS_OK { to_string(exec(HEXA + " run " + HARNESS + "/harness_audit.hexa summary 2>/dev/null")).trim() } else { "" }  // @allow-bare-exec
+    let audit_out = if HEXA_OK { to_string(exec(HEXA + " run " + HARNESS + "/harness_audit.hexa summary 2>/dev/null")).trim() } else { "" }  // @allow-bare-exec
     if audit_out.len() > 0 { println(audit_out) }
 }
 

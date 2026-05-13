@@ -3,7 +3,7 @@
 // Problem (2026-04-22, evidence from ~/core/anima session log):
 //   `nexus drill` serially TCP-dials each configured host with ConnectTimeout=5.
 //   When both hosts are down, the user waits 10+ s per invocation before the
-//   resolver emits `NEXUS_REMOTE_ERROR` and aborts. The resolver message is
+//   resolver emits `HEXA_REMOTE_ERROR` and aborts. The resolver message is
 //   rich, but it arrives too late — the user paid the full timeout thrice in
 //   one session before realizing the hosts were unreachable.
 //
@@ -19,8 +19,8 @@
 //       74 — all hosts unreachable on Darwin (heavy-compute abort)
 //   • stderr JSON lines match the existing resolver contract so downstream
 //     log parsers don't need changes:
-//       NEXUS_REMOTE_PREFLIGHT {"verdict":"ok|all_unreachable","hosts":[...]}
-//       (on all_unreachable) NEXUS_REMOTE_ERROR {"hosts_tried":[...],"reason":"all_unreachable","exit_code":74}
+//       HEXA_REMOTE_PREFLIGHT {"verdict":"ok|all_unreachable","hosts":[...]}
+//       (on all_unreachable) HEXA_REMOTE_ERROR {"hosts_tried":[...],"reason":"all_unreachable","exit_code":74}
 //
 // usage:
 //   hexa run gate/remote_preflight.hexa [--hosts ubu,ubu2] [--port 22]
@@ -34,9 +34,9 @@
 // Integration:
 //   • gate/hexa_url.hexa :: dispatch_remote — calls this before ssh,
 //     shortcircuits to ai_err on all-unreachable.
-//   • nexus drill resolver (out-of-tree in ~/core/nexus/cli/run.hexa) —
-//     intended to call this before `hexa_remote` dispatch. That patch
-//     lives with nexus; this repo owns the primitive.
+//   • drill resolver (absorbed into compiler/drill/) calls this before
+//     `hexa_remote` dispatch — this repo owns both the primitive and
+//     the downstream caller.
 //
 // @allow-bare-exec
 // @no-sandbox (TCP probe is a read-only network op; respects raw:os-lock)
@@ -289,16 +289,16 @@ fn _json_host_array(hosts: [str]) -> str {
 }
 
 fn emit_verdict(hosts: [str], ok: [str], verdict: str) -> void {
-    let j = "NEXUS_REMOTE_PREFLIGHT {\"verdict\":\"" + verdict +
+    let j = "HEXA_REMOTE_PREFLIGHT {\"verdict\":\"" + verdict +
             "\",\"hosts\":" + _json_host_array(hosts) +
             ",\"ok\":" + _json_host_array(ok) + "}"
     eprintln(j)
 }
 
 fn emit_error_compat(hosts: [str], exit_code: i64) -> void {
-    // Match the existing NEXUS_REMOTE_ERROR format so downstream parsers
+    // Match the existing HEXA_REMOTE_ERROR format so downstream parsers
     // (loop harness, ~/core/anima log ingest) don't need changes.
-    let j = "NEXUS_REMOTE_ERROR {\"hosts_tried\":" + _json_host_array(hosts) +
+    let j = "HEXA_REMOTE_ERROR {\"hosts_tried\":" + _json_host_array(hosts) +
             ",\"reason\":\"all_unreachable\",\"exit_code\":" + to_string(exit_code) + "}"
     eprintln(j)
 }

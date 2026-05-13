@@ -3,7 +3,7 @@
 // @version 0.1.0
 // @capabilities [fs_read, fs_write, exec]
 //
-// Reads ~/core/nexus/config/projects.json, extracts
+// Reads ~/core/hexa-lang/config/projects.json, extracts
 // _meta.universal_completion_criterion, emits
 // compiler/completion_criterion/embedded.gen.hexa.
 //
@@ -95,7 +95,7 @@ fn main() {
     let av = argv()
     let mut src = ""
     if len(av) >= 3 { src = to_string(av[2]) }
-    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    if len(src) == 0 { src = env("HOME") + "/core/hexa-lang/" + DEFAULT_SRC }
     let out_path = DEFAULT_OUT
 
     println("wave1 completion_criterion embed codegen")

@@ -11,7 +11,7 @@
 // with strict round cap.
 //
 // Idempotency guard: when the previous canon seal recorded the same atlas
-// hash, forge rejects unless NEXUS_FORGE_FORCE=1. Hash here is over the
+// hash, forge rejects unless HEXA_FORGE_FORCE=1. Hash here is over the
 // atlas overlay file (rule 5 surface); the rodata seed is content-hashed at
 // build time so we don't re-hash it every boot.
 //
@@ -75,7 +75,7 @@ fn _forge_json_bool(json: string, key: string) -> bool {
 }
 
 pub fn forge_skin_file_path() -> string {
-    let v = env("NEXUS_MOLT_SKIN_FILE")
+    let v = env("HEXA_MOLT_SKIN_FILE")
     if len(v) > 0 { return v }
     return "/tmp/hexa_molt_skin.json"
 }

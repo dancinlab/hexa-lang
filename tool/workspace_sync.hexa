@@ -81,7 +81,7 @@ fn _readlink(path: string) -> string {
 
 // realpath — resolve all symlinks and relative parts. Returns "" on failure
 // (path missing, loop, permission). Used to detect self-reference through
-// intermediate symlinks: e.g. ~/Dev/nexus/... and ~/core/nexus/... resolve
+// intermediate symlinks: e.g. ~/Dev/nexus/... and ~/core/hexa-lang/... resolve
 // to the same inode when ~/Dev is a symlink to ~/core. Portable across
 // macOS (coreutils via brew) and Linux (GNU readlink).
 fn _resolve_path(path: string) -> string {
@@ -789,7 +789,7 @@ for m in members {
         // would produce `ln -s X X`, a self-loop that destroys the source
         // file (replaced by a symlink to itself). Catches both literal string
         // equality and resolved-path equality (e.g. ~/Dev/nexus/... and
-        // ~/core/nexus/... when ~/Dev is a symlink to ~/core).
+        // ~/core/hexa-lang/... when ~/Dev is a symlink to ~/core).
         if abs_src == abs_tgt {
             let _sr_msg = "self-reference: source == target (" + abs_src + ")"
             operations.push(["error", alias, abs_tgt, abs_src, res_id, install, _sr_msg])

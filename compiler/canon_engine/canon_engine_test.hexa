@@ -15,7 +15,7 @@ fn _setup_sandbox() -> string {
     let seal_path = base + "/.hx/data/canon_seal.jsonl"
     setenv("HEXA_CANON_SEAL_PATH", seal_path)
     // No skin file — canon falls back to defaults.
-    setenv("NEXUS_MOLT_SKIN_FILE", base + "/no_such_skin.json")
+    setenv("HEXA_MOLT_SKIN_FILE", base + "/no_such_skin.json")
     return base
 }
 

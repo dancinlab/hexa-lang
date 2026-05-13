@@ -27,7 +27,7 @@ pub struct WakeResult {
 }
 
 pub fn wake_max_cycles_cap() -> i64 {
-    let v = env("NEXUS_WAKE_MAX")
+    let v = env("HEXA_WAKE_MAX")
     if len(v) == 0 { return 5 }
     let mut n: i64 = 5
     try { n = to_int(v) } catch e { n = 5 }
@@ -37,7 +37,7 @@ pub fn wake_max_cycles_cap() -> i64 {
 }
 
 pub fn wake_cooldown_sec() -> i64 {
-    let v = env("NEXUS_WAKE_COOLDOWN_SEC")
+    let v = env("HEXA_WAKE_COOLDOWN_SEC")
     if len(v) == 0 { return 0 }
     let mut n: i64 = 0
     try { n = to_int(v) } catch e { n = 0 }
@@ -47,7 +47,7 @@ pub fn wake_cooldown_sec() -> i64 {
 }
 
 pub fn wake_default_signal_file() -> string {
-    let v = env("NEXUS_WAKE_SIGNAL_FILE")
+    let v = env("HEXA_WAKE_SIGNAL_FILE")
     if len(v) > 0 { return v }
     let home = env("HOME")
     return home + "/.hx/data/wake_signal.txt"

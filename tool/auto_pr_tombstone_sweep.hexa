@@ -178,7 +178,7 @@ fn _render_pr_body(summary: SweepSummary) -> string {
     parts.push("- [ ] confirm prover version transition matches release notes\n")
     parts.push("- [ ] inspect each tombstoned L node: counter-example documented?\n")
     parts.push("- [ ] cite replacement L (where applicable) in dependent proofs\n")
-    parts.push("- [ ] verify no live (`~/core/nexus/n6/`) atlas was modified by this run\n")
+    parts.push("- [ ] verify no live (`~/core/hexa-lang/n6/`) atlas was modified by this run\n")
     return parts.join("")
 }
 

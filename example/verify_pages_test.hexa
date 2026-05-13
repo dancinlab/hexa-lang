@@ -9,7 +9,9 @@ try {
     if type_of(h) == "string" { home = to_string(h) }
 } catch err { home = "" }
 if len(home) == 0 { home = exec("echo \"$HOME\"").trim() }
-let root = home + "/Dev/nexus"
+// External GitHub repo `dancinlab/nexus` URLs verified below; local repo
+// asset checks now point at hexa-lang (the post-absorption canonical tree).
+let root = home + "/core/hexa-lang"
 
 println("=== Pages Deploy Verify ===")
 

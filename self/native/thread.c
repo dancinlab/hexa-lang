@@ -240,23 +240,33 @@ HexaVal hexa_now_ms(void) {
     return hexa_int((int64_t)ms);
 }
 
-/* === TAG_FN shim globals === */
+/* === TAG_FN shim globals ===
+ *
+ * 2026-05-13 PM: The pthread+condvar channel primitives use `thread_channel_*`
+ * names to avoid clobbering the older `stdlib/channel.hexa` FD-pipe channels
+ * (`pub fn channel_send(fd, msg)` etc.) — both APIs are otherwise valid and
+ * have separate use cases. wilson's swarm/jsonl_pool uses the FD variant;
+ * anima's frame-loop ↔ inference-worker bridge (the RFC motivation) uses
+ * these pthread variants. Distinct names = no clang "redefinition of
+ * 'channel_close' as different kind of symbol" link error when both end up
+ * in the same downstream binary.
+ */
 HexaVal thread_spawn;
 HexaVal thread_join;
-HexaVal channel_new;
-HexaVal channel_send;
-HexaVal channel_recv;
-HexaVal channel_close;
+HexaVal thread_channel_new;
+HexaVal thread_channel_send;
+HexaVal thread_channel_recv;
+HexaVal thread_channel_close;
 HexaVal sleep_ms;
 HexaVal now_ms;
 
 static void _hexa_init_thread_fn_shims(void) {
-    thread_spawn  = hexa_fn_new((void*)hexa_thread_spawn,  2);
-    thread_join   = hexa_fn_new((void*)hexa_thread_join,   1);
-    channel_new   = hexa_fn_new((void*)hexa_channel_new,   0);
-    channel_send  = hexa_fn_new((void*)hexa_channel_send,  2);
-    channel_recv  = hexa_fn_new((void*)hexa_channel_recv,  2);
-    channel_close = hexa_fn_new((void*)hexa_channel_close, 1);
-    sleep_ms      = hexa_fn_new((void*)hexa_sleep_ms,      1);
-    now_ms        = hexa_fn_new((void*)hexa_now_ms,        0);
+    thread_spawn         = hexa_fn_new((void*)hexa_thread_spawn,         2);
+    thread_join          = hexa_fn_new((void*)hexa_thread_join,          1);
+    thread_channel_new   = hexa_fn_new((void*)hexa_channel_new,          0);
+    thread_channel_send  = hexa_fn_new((void*)hexa_channel_send,         2);
+    thread_channel_recv  = hexa_fn_new((void*)hexa_channel_recv,         2);
+    thread_channel_close = hexa_fn_new((void*)hexa_channel_close,        1);
+    sleep_ms             = hexa_fn_new((void*)hexa_sleep_ms,             1);
+    now_ms               = hexa_fn_new((void*)hexa_now_ms,               0);
 }

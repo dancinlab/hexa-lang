@@ -12,18 +12,18 @@
 //   훅 없이 cmd_gate 단일 디스패처로 강제됨.
 
 let HOME_PATH = env("HOME")
-// nexus_home 해소 — env-driven (raw 44 docker hard-landing 동반)
-fn _resolve_nexus_home() -> str {
-    let nh = env("NEXUS_HOME")
-    if nh.len() > 0 { return nh }
+// hexa_home 해소 — env-driven (raw 44 docker hard-landing 동반)
+fn _resolve_hexa_home() -> str {
+    let hh = env("HEXA_HOME")
+    if hh.len() > 0 { return hh }
     let ws = env("WS")
-    if ws.len() > 0 { return ws + "/nexus" }
-    if HOME_PATH.len() > 0 { return HOME_PATH + "/core/nexus" }
-    return "/nexus"
+    if ws.len() > 0 { return ws + "/hexa-lang" }
+    if HOME_PATH.len() > 0 { return HOME_PATH + "/core/hexa-lang" }
+    return "/hexa-lang"
 }
-let NEXUS_HOME = _resolve_nexus_home()
-let OPTION_GATE = NEXUS_HOME + "/tool/option_gate.hexa"
-let HEXA_BIN = NEXUS_HOME + "/scripts/bin/hexa"
+let HEXA_HOME = _resolve_hexa_home()
+let OPTION_GATE = HEXA_HOME + "/tool/option_gate.hexa"
+let HEXA_BIN = env("HOME") + "/.hx/bin/hexa"
 
 // option_gate 워커 호출 — 출력 있으면 SELECTED 블록 반환, 없으면 빈 문자열
 fn run_option_gate(prompt: str) -> str {
@@ -43,8 +43,8 @@ fn anima_cwd() -> bool {
 }
 
 fn decision_router_validate() -> bool {
-    let dr = NEXUS_HOME + "/tool/decision_router.hexa"
-    let hx = NEXUS_HOME + "/bin/hexa"
+    let dr = HEXA_HOME + "/tool/decision_router.hexa"
+    let hx = HEXA_HOME + "/bin/hexa"
     if file_exists(dr) == false || file_exists(hx) == false { return true }  // graceful: nexus 부재 시 fail-open
     let cmd = "HEXA_LOCAL=1 " + hx + " run " + dr + " validate 2>&1"
     let out = exec(cmd).trim()  // @allow-bare-exec
@@ -52,8 +52,8 @@ fn decision_router_validate() -> bool {
 }
 
 fn emit_decisions_block() {
-    let dr = NEXUS_HOME + "/tool/decision_router.hexa"
-    let hx = NEXUS_HOME + "/bin/hexa"
+    let dr = HEXA_HOME + "/tool/decision_router.hexa"
+    let hx = HEXA_HOME + "/bin/hexa"
     if file_exists(dr) == false || file_exists(hx) == false { return }
     let cmd = "HEXA_LOCAL=1 " + hx + " run " + dr + " emit 2>&1"
     let out = exec(cmd).trim()  // @allow-bare-exec
@@ -146,7 +146,7 @@ fn main() {
         //   drill rc=74 (remote unavailable → abort) 실패 로그가 seed 로 재주입되면
         //   동일 abort 를 반복 → 사용자 프롬프트 루프. 실패 서명은 seed 가 아니라
         //   상태(remote hosts down)의 결과이므로 seed 재실행은 의미 없음.
-        if s.contains("Exit code 74") || s.contains("NEXUS_REMOTE_ERROR") || s.contains("NEXUS_REMOTE_DOWNGRADE") || s.contains("all_timeout") || s.contains("remote_unavailable") || s.contains("abort_to_prevent_oom") {
+        if s.contains("Exit code 74") || s.contains("HEXA_REMOTE_ERROR") || s.contains("HEXA_REMOTE_DOWNGRADE") || s.contains("all_timeout") || s.contains("remote_unavailable") || s.contains("abort_to_prevent_oom") {
             eprintln("REJECT: drill seed contains prior-failure signature (rc=74 / remote_unavailable / all_timeout). 원격 호스트 부팅 후 새 seed 로 재실행. Mac local fallback 금지 (AG10).")
             exit(2)
         }
@@ -190,9 +190,9 @@ fn main() {
     } else if cmd == "todo" || cmd == "go" || cmd == "keep" || cmd == "loop" || cmd == "list" || cmd == "roi" || cmd == "lm" || cmd == "roadmap" || cmd == "로드맵" {
         // H-DECISION-ROUTER (anima) — go/keep/loop 진입 시 decision_router validate + emit 강제
         if cmd == "go" || cmd == "keep" || cmd == "loop" {
-            if anima_cwd() && env("NEXUS_DECISION_OK") != "1" {
+            if anima_cwd() && env("HEXA_DECISION_OK") != "1" {
                 if !decision_router_validate() {
-                    eprintln("REJECT: anima " + cmd + " — decision_router validate FAIL. shared/config/decisions.json 검증 후 재실행. 우회: NEXUS_DECISION_OK=1")
+                    eprintln("REJECT: anima " + cmd + " — decision_router validate FAIL. shared/config/decisions.json 검증 후 재실행. 우회: HEXA_DECISION_OK=1")
                     exit(2)
                 }
                 // 통과 시 DECISIONS 블록을 stdout 으로 emit (Claude 가 ===DECISIONS_BEGIN/END=== 발견 시 다음 dispatch 에 inject)

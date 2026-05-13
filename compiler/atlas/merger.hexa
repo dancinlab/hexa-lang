@@ -4,7 +4,7 @@
 // @capabilities [pure, fs_read]
 //
 // Loads atlas.n6 + every atlas.append.*.n6 in `root` (default
-// ~/core/nexus/n6/), merges them into a single packed in-memory index
+// ~/core/hexa-lang/n6/), merges them into a single packed in-memory index
 // keyed by kind ("P"|"C"|"L"|"E"), and exposes O(1) lookup for the
 // compiler's S1 resolve pass.
 //
@@ -139,11 +139,11 @@ fn _insert_first_wins(idx: AtlasIndex, seen, node: AtlasNode) {
 // load_atlas — read every atlas file under `root`, merge first-wins,
 // hash the canonical merge, and return an AtlasIndex.
 //
-// `root` may be empty/"" to fall back to ~/core/nexus/n6/.
+// `root` may be empty/"" to fall back to ~/core/hexa-lang/n6/.
 pub fn load_atlas(root: string) -> AtlasIndex {
     let mut effective = root
     if len(effective) == 0 {
-        effective = env("HOME") + "/core/nexus/n6"
+        effective = env("HOME") + "/core/hexa-lang/n6"
     }
 
     let idx = AtlasIndex {

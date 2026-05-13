@@ -15,7 +15,7 @@
 // Caps:
 //   population: clamp [2, 8]
 //   generations: clamp [1, 5]
-//   total = pop × gens ≤ HEXA_SWARM_MAX > NEXUS_SWARM_MAX > 12
+//   total = pop × gens ≤ HEXA_SWARM_MAX > HEXA_SWARM_MAX > 12
 //
 // Selection: top-2 by abs score, single-pass argmax (no full sort —
 // upstream comment notes hexa-lang's sort isn't stability-guaranteed,
@@ -61,7 +61,7 @@ pub fn swarm_max_runs() -> i64 {
         if n < 1 { return 1 }
         return n
     }
-    let v2 = env("NEXUS_SWARM_MAX")
+    let v2 = env("HEXA_SWARM_MAX")
     if len(v2) > 0 {
         let mut n2: i64 = 12
         try { n2 = to_int(v2) } catch e { n2 = 12 }

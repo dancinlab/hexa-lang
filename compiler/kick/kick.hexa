@@ -9,7 +9,7 @@
 //         + ~/core/nexus/tool/kick_dispatch.hexa
 //         + ~/core/nexus/tool/kick_{bench,tree,parallel,...}.hexa
 //
-// Live path: SSH-forward to NEXUS_KICK_FORWARD_HOST (default `ubu2`)
+// Live path: SSH-forward to HEXA_KICK_FORWARD_HOST (default `ubu2`)
 //            for the actual kick dispatch — mirrors the existing
 //            cli/run.hexa::_kick_run forwarding logic.
 //
@@ -40,7 +40,7 @@ import "./../bridges/_common.hexa"
 import "./local_fallback.hexa"
 
 fn _forward_host() -> string {
-    let h = env("NEXUS_KICK_FORWARD_HOST")
+    let h = env("HEXA_KICK_FORWARD_HOST")
     if h.len() > 0 { return h }
     return "ubu2"
 }
@@ -63,7 +63,7 @@ pub fn kick_exec_live(sub: string, topic: string, extra: [string]) -> array {
     if topic.len() > 0 { inner_args = inner_args + " " + shq(topic) }
     let mut i = 0
     while i < len(extra) { inner_args = inner_args + " " + shq(extra[i]); i = i + 1 }
-    let remote_inner = "cd ~/core/nexus && NEXUS_KICK_SKIP_OAUTH_GATE=1 NEXUS_KICK_SKIP_PREFLIGHT=1 ~/.hx/bin/hexa run cli/run.hexa" + inner_args
+    let remote_inner = "cd ~/core/nexus && HEXA_KICK_SKIP_OAUTH_GATE=1 HEXA_KICK_SKIP_PREFLIGHT=1 ~/.hx/bin/hexa run cli/run.hexa" + inner_args
     let cmd = "ssh -o BatchMode=yes -o ServerAliveInterval=30 -o ConnectTimeout=10 " + shq(host) + " " + shq(remote_inner) + " 2>&1; echo __FORWARD_RC=$?"
     let r = exec_capture(cmd)
     let stdout_s = to_string(r[0])

@@ -1,16 +1,19 @@
-// self/std_nexus.hexa — HEXA STD_NEXUS ported from src/std_nexus.rs
+// self/std_n6.hexa — HEXA STD_N6 user-facing n=6 constant utilities
 //
-// NEXUS-6 integration for HEXA-LANG.
-// Provides native access to the NEXUS-6 discovery engine from within HEXA code.
-// This is the 13th stdlib module (sigma + mu = 12 + 1 = 13).
+// Smaller user-facing utility stdlib module for n=6 constant checks and the
+// six Omega lenses. The discovery engine that historically sat behind these
+// helpers was absorbed into compiler/ (compiler/atlas, compiler/free,
+// compiler/honesty, etc.); this module is what HEXA user code calls when
+// it only needs the constants and lens names without pulling the heavy
+// engine surface.
 //
 // Provides:
-//   nexus_scan(domain)      -- Run NEXUS-6 full scan on a domain
-//   nexus_verify(value)     -- Check if a value matches n=6 constants
-//   nexus_omega(...)        -- Run 6 Omega lenses
-//   nexus_lenses()          -- List the 6 Omega lens names
-//   nexus_consensus(data)   -- Compute consensus score across lenses
-//   nexus_n6_check(value)   -- Quick n=6 constant check
+//   n6_scan(domain)      -- Symbolic scan placeholder on a domain
+//   n6_verify(value)     -- Check if a value matches n=6 constants
+//   n6_omega(...)        -- Build a 6 Omega lens result record
+//   n6_lenses()          -- List the 6 Omega lens names
+//   n6_consensus(data)   -- Compute consensus score across lenses
+//   n6_check(value)      -- Quick n=6 constant check (with closest-match)
 
 // ── n=6 Constants ──────────────────────────────────────────
 
@@ -45,14 +48,14 @@ let OMEGA_LENSES = [
     "Physical"
 ]
 
-fn nexus_lenses() -> [string] {
+fn n6_lenses() -> [string] {
     return OMEGA_LENSES
 }
 
-// ── nexus_verify(value) ────────────────────────────────────
+// ── n6_verify(value) ───────────────────────────────────────
 // Check if a numeric value matches any n=6 constant.
 
-fn nexus_verify(value: float) -> string {
+fn n6_verify(value: float) -> string {
     let i = 0
     while i < len(N6_CONSTANTS) {
         let c = N6_CONSTANTS[i]
@@ -66,10 +69,10 @@ fn nexus_verify(value: float) -> string {
     return "NONE: " + str(value) + " has no n=6 match"
 }
 
-// ── nexus_n6_check(value) ──────────────────────────────────
+// ── n6_check(value) ────────────────────────────────────────
 // Quick n=6 constant check with closest-match fallback.
 
-fn nexus_n6_check(value: float) -> string {
+fn n6_check(value: float) -> string {
     // Exact check first
     let i = 0
     while i < len(N6_CONSTANTS) {
@@ -110,10 +113,10 @@ fn nexus_n6_check(value: float) -> string {
     return "NONE: " + str(value) + " has no n=6 match (nearest: " + str(closest_val) + " = " + closest_formula + ")"
 }
 
-// ── nexus_consensus(data) ──────────────────────────────────
+// ── n6_consensus(data) ─────────────────────────────────────
 // Take an array of numbers and compute n=6 consensus.
 
-fn nexus_consensus(data: [float]) -> string {
+fn n6_consensus(data: [float]) -> string {
     let matches = 0
     let total = len(data)
 
@@ -150,15 +153,15 @@ fn nexus_consensus(data: [float]) -> string {
     return "n=6 consensus: " + str(matches) + "/" + str(total) + " (" + str(int(ratio * 100.0)) + "%) -- " + signal
 }
 
-// ── nexus_scan(domain) ─────────────────────────────────────
-// Simulated NEXUS-6 full scan on a domain.
+// ── n6_scan(domain) ────────────────────────────────────────
+// Symbolic placeholder for a full n=6 scan on a domain.
 
-fn nexus_scan(domain: string) -> string {
-    return "[nexus scan] domain=" + domain + " status=complete n=6 verified"
+fn n6_scan(domain: string) -> string {
+    return "[n6 scan] domain=" + domain + " status=complete n=6 verified"
 }
 
-// ── nexus_omega ────────────────────────────────────────────
-// Run 6 Omega lenses on consciousness state parameters.
+// ── n6_omega ───────────────────────────────────────────────
+// Build a 6 Omega lens result record from consciousness state parameters.
 
 struct OmegaScanResult {
     phi: float,
@@ -170,7 +173,7 @@ struct OmegaScanResult {
     lenses: [string]
 }
 
-fn nexus_omega(phi: float, tension: float, cells: int, entropy: float, alpha: float, balance: float) -> OmegaScanResult {
+fn n6_omega(phi: float, tension: float, cells: int, entropy: float, alpha: float, balance: float) -> OmegaScanResult {
     return OmegaScanResult {
         phi: phi,
         tension: tension,
@@ -207,73 +210,73 @@ fn test_n6_constants_count() {
     print("  PASS: n6_constants_count")
 }
 
-fn test_nexus_lenses_count() {
-    let lenses = nexus_lenses()
+fn test_n6_lenses_count() {
+    let lenses = n6_lenses()
     assert(len(lenses) == 6)
     assert(lenses[0] == "Arithmetic")
     assert(lenses[5] == "Physical")
-    print("  PASS: nexus_lenses_count")
+    print("  PASS: n6_lenses_count")
 }
 
-fn test_nexus_verify_exact() {
-    let result = nexus_verify(6.0)
+fn test_n6_verify_exact() {
+    let result = n6_verify(6.0)
     assert(result == "EXACT: 6.0 = n")
-    let result2 = nexus_verify(12.0)
+    let result2 = n6_verify(12.0)
     assert(result2 == "EXACT: 12.0 = sigma(6)")
-    let result3 = nexus_verify(24.0)
+    let result3 = n6_verify(24.0)
     assert(result3 == "EXACT: 24.0 = J2(6)")
-    print("  PASS: nexus_verify_exact")
+    print("  PASS: n6_verify_exact")
 }
 
-fn test_nexus_verify_none() {
-    let result = nexus_verify(999.0)
+fn test_n6_verify_none() {
+    let result = n6_verify(999.0)
     assert(result == "NONE: 999.0 has no n=6 match")
-    print("  PASS: nexus_verify_none")
+    print("  PASS: n6_verify_none")
 }
 
-fn test_nexus_n6_check_exact() {
-    let result = nexus_n6_check(4.0)
+fn test_n6_check_exact() {
+    let result = n6_check(4.0)
     assert(result == "EXACT: 4.0 = tau(6)")
-    print("  PASS: nexus_n6_check_exact")
+    print("  PASS: n6_check_exact")
 }
 
-fn test_nexus_n6_check_close() {
-    let result = nexus_n6_check(6.3)
+fn test_n6_check_close() {
+    let result = n6_check(6.3)
     // Should be CLOSE to 6.0 = n
     assert(len(result) > 0)
-    print("  PASS: nexus_n6_check_close")
+    print("  PASS: n6_check_close")
 }
 
-fn test_nexus_consensus_all_match() {
-    let result = nexus_consensus([6.0, 12.0, 4.0, 2.0, 5.0])
+fn test_n6_consensus_all_match() {
+    let result = n6_consensus([6.0, 12.0, 4.0, 2.0, 5.0])
     // 5/5 = 100% -> EXACT
     assert(len(result) > 0)
-    print("  PASS: nexus_consensus_all_match")
+    print("  PASS: n6_consensus_all_match")
 }
 
-fn test_nexus_consensus_none() {
-    let result = nexus_consensus([99.0, 100.0, 200.0])
+fn test_n6_consensus_none() {
+    let result = n6_consensus([99.0, 100.0, 200.0])
     assert(len(result) > 0)
-    print("  PASS: nexus_consensus_none")
+    print("  PASS: n6_consensus_none")
 }
 
-fn test_nexus_scan() {
-    let result = nexus_scan("compiler")
-    assert(result == "[nexus scan] domain=compiler status=complete n=6 verified")
-    print("  PASS: nexus_scan")
+fn test_n6_scan() {
+    let result = n6_scan("compiler")
+    assert(result == "[n6 scan] domain=compiler status=complete n=6 verified")
+    print("  PASS: n6_scan")
 }
 
-fn test_nexus_omega() {
-    let result = nexus_omega(71.0, 0.5, 64, 0.998, 0.014, 0.5)
+fn test_n6_omega() {
+    let result = n6_omega(71.0, 0.5, 64, 0.998, 0.014, 0.5)
     assert(result.phi == 71.0)
     assert(result.tension == 0.5)
     assert(result.cells == 64)
     assert(len(result.lenses) == 6)
-    print("  PASS: nexus_omega")
+    print("  PASS: n6_omega")
 }
 
 fn test_omega_scan_report() {
-    let result = nexus_omega(71.0, 0.5, 64, 0.998, 0.014, 0.5)
+    let result = n6_omega(71.0, 0.5, 64, 0.998, 0.014, 0.5)
     let report = omega_scan_report(result)
     assert(len(report) > 0)
     print("  PASS: omega_scan_report")
@@ -281,16 +284,16 @@ fn test_omega_scan_report() {
 
 // ── Main ───────────────────────────────────────────────────
 
-print("=== std_nexus.hexa tests ===")
+print("=== std_n6.hexa tests ===")
 test_n6_constants_count()
-test_nexus_lenses_count()
-test_nexus_verify_exact()
-test_nexus_verify_none()
-test_nexus_n6_check_exact()
-test_nexus_n6_check_close()
-test_nexus_consensus_all_match()
-test_nexus_consensus_none()
-test_nexus_scan()
-test_nexus_omega()
+test_n6_lenses_count()
+test_n6_verify_exact()
+test_n6_verify_none()
+test_n6_check_exact()
+test_n6_check_close()
+test_n6_consensus_all_match()
+test_n6_consensus_none()
+test_n6_scan()
+test_n6_omega()
 test_omega_scan_report()
-print("All std_nexus tests passed.")
+print("All std_n6 tests passed.")

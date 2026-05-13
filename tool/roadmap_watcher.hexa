@@ -141,9 +141,9 @@ fn _grace_seconds() -> int {
 // audit-driven window (_grace_seconds). If the target file has been
 // modified within this many seconds, SKIP chflags restore so the editor
 // session isn't interrupted mid-keystroke. Configurable via
-// NEXUS_WATCHER_GRACE_SEC (default 30, max 600).
+// HEXA_WATCHER_GRACE_SEC (default 30, max 600).
 fn _fresh_edit_grace_seconds() -> int {
-    let raw = env("NEXUS_WATCHER_GRACE_SEC")
+    let raw = env("HEXA_WATCHER_GRACE_SEC")
     if raw == "" { return 30 }
     let n = _parse_int_digits(raw)
     if n <= 0 { return 30 }
@@ -261,7 +261,7 @@ fn _scan_repo(home: string, name: string) -> string {
     }
 
     // Short-window fresh-edit grace (mtime-based, independent of hx_unlock).
-    // If .roadmap was edited within NEXUS_WATCHER_GRACE_SEC seconds (default
+    // If .roadmap was edited within HEXA_WATCHER_GRACE_SEC seconds (default
     // 30s), skip the uchg restore so an in-flight editor session isn't
     // interrupted mid-keystroke. Emits a [SKIP-FRESH-EDIT mtime=<X>]
     // breadcrumb so operators can correlate tick runs with live edits.
@@ -335,7 +335,7 @@ fn _cmd_selftest() -> int {
     // 5) _shell_quote wraps + escapes embedded '
     let q = _shell_quote("a'b")
     if q != "'a'\\''b'" { eprintln("FAIL: _shell_quote: " + q); return 1 }
-    // 6) _fresh_edit_grace_seconds default + bounds (NEXUS_WATCHER_GRACE_SEC)
+    // 6) _fresh_edit_grace_seconds default + bounds (HEXA_WATCHER_GRACE_SEC)
     let fg = _fresh_edit_grace_seconds()
     if fg < 1 || fg > 600 { eprintln("FAIL: fresh grace out of range: " + to_string(fg)); return 1 }
     // 7) _mtime_epoch on /tmp (always exists) yields a sane epoch, 0 on junk.

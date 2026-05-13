@@ -2,16 +2,16 @@
 # 01_proposal_archive_help — `proposal_archive.hexa --help` exits 0 and prints usage.
 # Guards hxa-20260424-006 (args.len()→void silent-fail) for the --help parser path.
 #
-# proposal_archive.hexa is a nexus-owned tool; accept either:
-#   $NEXUS_ROOT/tool/proposal_archive.hexa   (explicit env)
-#   /Users/ghost/core/nexus/tool/proposal_archive.hexa  (hxa-20260424-003 path convention)
+# proposal_archive.hexa was absorbed into hexa-lang; accept either:
+#   $HEXA_ROOT/tool/proposal_archive.hexa            (explicit env)
+#   /Users/ghost/core/hexa-lang/tool/proposal_archive.hexa  (canonical post-absorption)
 # If neither present, SKIP (rc=77) — test is still informative but not blocking.
 
 set -u
-NEXUS_ROOT="${NEXUS_ROOT:-/Users/ghost/core/nexus}"
-SCRIPT="$NEXUS_ROOT/tool/proposal_archive.hexa"
+HEXA_ROOT="${HEXA_ROOT:-/Users/ghost/core/hexa-lang}"
+SCRIPT="$HEXA_ROOT/tool/proposal_archive.hexa"
 if [ ! -f "$SCRIPT" ]; then
-    echo "SKIP: nexus proposal_archive.hexa not found at $SCRIPT"
+    echo "SKIP: proposal_archive.hexa not found at $SCRIPT (not yet ported)"
     exit 77
 fi
 

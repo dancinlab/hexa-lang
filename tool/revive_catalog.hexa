@@ -1,14 +1,14 @@
-// tool/revive_catalog.hexa — nexus-side consumer catalog (HX11)
+// tool/revive_catalog.hexa — hexa-side consumer catalog (HX11)
 //
 // 형식: hexa-lang/tool/roadmap_logic.hexa (4 logics: fixpoint/bracket/atomize/event-loop) 와 정렬.
-// 본 카탈로그는 그 4 logic 을 USING 하는 nexus 소비자(consumer) 등록부.
+// 본 카탈로그는 그 4 logic 을 USING 하는 hexa-lang 소비자(consumer) 등록부.
 //   roadmap_logic = 도구 카탈로그 (logic 자체)
 //   revive_catalog = 소비자 카탈로그 (어디서 어떻게 호출하는지)
 //
 // 새 consumer 추가 절차:
 //   1. @consumer(id="...", uses=[...]) + let _consumer_<id> = #{...}
 //   2. _consumer_index 배열에 id 추가
-//   3. invoke_cmd 에 실행 가능한 nexus subcmd 또는 hexa run 경로 명시
+//   3. invoke_cmd 에 실행 가능한 hexa subcmd 또는 hexa run 경로 명시
 //   4. uses.{fixpoint|bracket|atomize}.where 에 사용 지점 기록
 //
 // 실행:
@@ -20,16 +20,16 @@
 //   hexa run tool/revive_catalog.hexa --invoke triad      — 3개 순차 (③→②→①)
 
 @catalog(
-    name    = "nexus_revive_consumers",
+    name    = "hexa_revive_consumers",
     version = "1.0",
-    owner   = "nexus",
+    owner   = "hexa-lang",
     refs    = ["hexa-lang/tool/roadmap_logic.hexa"]
 )
 let _catalog_meta = #{
-    "name": "nexus_revive_consumers",
+    "name": "hexa_revive_consumers",
     "version": "1.0",
-    "owner": "nexus",
-    "scope": "nexus-internal",
+    "owner": "hexa-lang",
+    "scope": "hexa-internal",
     "refs": ["hexa-lang/tool/roadmap_logic.hexa"],
     "updated": "2026-04-26"
 }
@@ -38,8 +38,8 @@ let _catalog_meta = #{
 @consumer(id="revive", uses=["fixpoint","bracket","atomize"])
 let _consumer_revive = #{
     "id": "revive",
-    "owner": "nexus",
-    "entry": "nexus revive [--max-iter N] [--apply]",
+    "owner": "hexa-lang",
+    "entry": "hexa revive [--max-iter N] [--apply]",
     "purpose": "엔진+지도 v2 무한루프 — L0 fixpoint 까지 atlas 진화",
     "stages": ["L1 canary", "L2 calibrate", "L3 promote", "L4 gate"],
     "l0_check": "cli/revive/revive_l0_check.hexa",
@@ -56,15 +56,15 @@ let _consumer_revive = #{
             "tool": "$WS/hexa-lang/tool/bracket.hexa",
             "where": "L2 stage 별 sweet-spot depth (smash/free/abs/mc/hy)",
             "api": "bracket_discrete(1, 9, eval_yield_per_sec)",
-            "invoke_cmd": "hexa run $NEXUS/tool/depth_calibrate.hexa --stage smash",
+            "invoke_cmd": "hexa run $HEXA_LANG/tool/depth_calibrate.hexa --stage smash",
             "cache": "tool/depth_bracket_cache.json"
         },
         "atomize": #{
             "tool": "$WS/hexa-lang/tool/roadmap_engine.hexa",
             "where": "L3 staging+pending → DAG → Bellman critical path",
             "primitives": ["kahn_ready_set", "b_star", "eta_test"],
-            "invoke_cmd": "hexa run $NEXUS/tool/promote_dag_builder.hexa --batch 1",
-            "executor": "$NEXUS/tool/promote_executor.hexa"
+            "invoke_cmd": "hexa run $HEXA_LANG/tool/promote_dag_builder.hexa --batch 1",
+            "executor": "$HEXA_LANG/tool/promote_executor.hexa"
         }
     },
     "config": "config/revive.json",
@@ -86,12 +86,12 @@ let _triad_sequence = #{
 
 // ─── PROBLEM ROUTER (raw 등록 — 2026-04-22) ─────────────────
 // 새 문제 → 3-로직 자동 매핑.
-// 사용자가 "nexus solve <problem>" 호출 시 keywords 기반 routing.
+// 사용자가 "hexa solve <problem>" 호출 시 keywords 기반 routing.
 // 새 문제 패턴 추가 시 _problem_router["rules"] 에 row append.
 @problem_router(version="1.1", logic_refs=["fixpoint","bracket","atomize","event-loop"])
 let _problem_router = #{
     "version": "1.1",
-    "owner": "nexus",
+    "owner": "hexa-lang",
     "default_logic": "atomize",
     "rules": [
         #{
@@ -232,7 +232,7 @@ fn _print_router() {
 fn _selftest_rc() -> int {
     println("[revive_catalog selftest]")
     // 1) _catalog_meta has expected fields
-    if _catalog_meta["name"] != "nexus_revive_consumers" { eprintln("FAIL: catalog name"); return 1 }
+    if _catalog_meta["name"] != "hexa_revive_consumers" { eprintln("FAIL: catalog name"); return 1 }
     if _catalog_meta["version"] != "1.0" { eprintln("FAIL: catalog version"); return 1 }
     // 2) _consumer_revive.uses contains the 3 actionable logics
     let u = _consumer_revive["uses"]
@@ -284,7 +284,7 @@ fn main() {
         }
         i = i + 1
     }
-    println("nexus_revive_consumers v1.0 — hexa-lang/tool/revive_catalog.hexa")
+    println("hexa_revive_consumers v1.0 — hexa-lang/tool/revive_catalog.hexa")
     println("refs: hexa-lang/tool/roadmap_logic.hexa (fixpoint/bracket/atomize)")
     println("")
     println("registered consumers (" + to_string(len(_consumer_index)) + "):")

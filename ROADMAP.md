@@ -224,7 +224,7 @@ Parent roadmap **64** → 5 children **65–69**. 상세 정의 `.roadmap` 64–
 ### Core workspace
 - **~/core super-project + .workspace SSOT** · per-project `cli/` convention · ~/shared decommission in progress.
 - **atlas SSOT = ~/core/canon/atlas/** (owner canon, 2026-04-21 재결정). `data/n6/` = backward-compat symlink.
-- **nexus canonical** — `~/core/nexus/cli/run.hexa` (`079bc12d`). shim: `~/.hx/bin/nexus` → `.hx/packages/nexus/cli/run.hexa`.
+- **hexa canonical** — `~/core/hexa-lang/` (post-absorption SSOT). Launcher: `~/.hx/bin/hexa`. Legacy nexus CLI (`079bc12d`) decommissioned 2026-05-13; verbs absorbed into compiler/ and hexa native dispatch.
 
 ### Brand
 - **dancinlab** org — 🧬 (2026-04-21, 🌀 deprecated). Avatar = hexagon gravitational well SVG. 보조: ⬢ / ⌬.

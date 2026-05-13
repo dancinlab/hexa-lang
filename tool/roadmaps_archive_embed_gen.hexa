@@ -3,7 +3,7 @@
 // @version 0.1.0
 // @capabilities [fs_read, fs_write, exec]
 //
-// Reads ~/core/nexus/roadmaps/<project>.json for the 7 core projects per
+// Reads ~/core/hexa-lang/roadmaps/<project>.json for the 7 core projects per
 // projects.json readme_order, emits compiler/roadmaps_archive/embedded.gen.hexa.
 //
 // Frozen archive: we serialize each parsed roadmap back to canonical JSON
@@ -12,7 +12,7 @@
 // concatenated per-file hashes (so any one file changing trips the bundle).
 //
 // Project → source path mapping (project key from projects.json
-// readme_order; file name as it actually exists in ~/core/nexus/roadmaps/):
+// readme_order; file name as it actually exists in ~/core/hexa-lang/roadmaps/):
 //   anima       -> roadmaps/anima.json
 //   nexus       -> roadmaps/nexus.json
 //   canon       -> roadmaps/n6-architecture.json   (n6-arch._meta.project = "CANON")
@@ -186,14 +186,14 @@ fn _count_seq(v) -> i64 {
 // Pass 1: compute per-row metadata only (hashes/sizes/counts/status).
 // We do NOT keep raw_json in memory across rows — pass 2 re-reads the
 // source file for the row currently being written.
-fn _pass1_meta(nexus_root: string) -> array {
+fn _pass1_meta(repo_root: string) -> array {
     let n = len(PROJECT_KEYS)
     let metas = []
     let mut i = 0
     while i < n {
         let key = PROJECT_KEYS[i]
         let rel = PROJECT_PATHS[i]
-        let abs = nexus_root + "/" + rel
+        let abs = repo_root + "/" + rel
         let m = {}
         m["key"] = key
         m["rel"] = rel
@@ -227,17 +227,17 @@ fn _pass1_meta(nexus_root: string) -> array {
 
 fn main() {
     let out_path = DEFAULT_OUT
-    let nexus_root = env("HOME") + "/core/nexus"
+    let repo_root = env("HOME") + "/core/hexa-lang"
 
     println("phase1-ext roadmaps_archive embed codegen")
-    println("  nexus_root: " + nexus_root)
+    println("  repo_root: " + repo_root)
     println("  out:        " + out_path)
 
     let gen_at = _iso_utc_now()
     let n = len(PROJECT_KEYS)
 
     // Pass 1: just metadata.
-    let metas = _pass1_meta(nexus_root)
+    let metas = _pass1_meta(repo_root)
 
     // Bundle hash = sha256 over concatenated per-row hashes (zero-hex for
     // missing files).

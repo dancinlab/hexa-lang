@@ -30,7 +30,7 @@
       "desc": "hook 시스템 신규 작성 금지 — 모든 자동 강제는 shared/tool/entry.hexa 자율 호출로",
       "scope": "global",
       "bypass": [
-        "env:NEXUS_HOOK_OK=1",
+        "env:HEXA_HOOK_OK=1",
         "path:@allow-hook"
       ],
       "triggers": [
@@ -102,7 +102,7 @@
       "desc": "*.bak / backup/ / archive/ 폴더·파일 신규 작성 금지 — git commit 이 버전관리 SSOT",
       "scope": "global",
       "bypass": [
-        "env:NEXUS_ARCHIVE_OK=1"
+        "env:HEXA_ARCHIVE_OK=1"
       ],
       "triggers": [
         "백업 생성",
@@ -153,7 +153,7 @@
       "desc": "MD→PDF 변환은 md-to-pdf 전용. pandoc/xelatex/pdflatex/lualatex 금지",
       "scope": "global",
       "bypass": [
-        "env:NEXUS_PDF_OK=1"
+        "env:HEXA_PDF_OK=1"
       ],
       "triggers": [
         "pdf 로 변환",
@@ -174,7 +174,7 @@
       "desc": "외부 발송/등록 사용자 명시 요청 전 금지 — gh issue/PR, 이메일, slack/discord webhook 차단",
       "scope": "global",
       "bypass": [
-        "env:NEXUS_SEND_OK=1"
+        "env:HEXA_SEND_OK=1"
       ],
       "triggers": [
         "이슈 만들",
@@ -196,7 +196,7 @@
       "desc": "세션 채팅 블로킹 금지 — read -p/wait/fg/sleep>=10/while+sleep 차단. ScheduleWakeup/Monitor/run_in_background 강제",
       "scope": "global",
       "bypass": [
-        "env:NEXUS_BLOCK_OK=1"
+        "env:HEXA_BLOCK_OK=1"
       ],
       "layers": {
         "pre_bash": {
@@ -297,7 +297,7 @@
       "desc": "파일 area 기반 advisory lockdir — 멀티세션 race 방지 (WARN only)",
       "scope": "global",
       "bypass": [
-        "env:NEXUS_LOCK_OK=1"
+        "env:HEXA_LOCK_OK=1"
       ],
       "layers": {
         "pre_write": {
@@ -312,9 +312,9 @@
       "desc": "좀비 프로세스 차단 5층 — perl_timeout/lock_gate/budget_gate/reaper + lib helpers",
       "scope": "global",
       "bypass": [
-        "env:NEXUS_NO_TIMEOUT_OK=1",
-        "env:NEXUS_LOCK_OK=1",
-        "env:NEXUS_BUDGET_OK=1"
+        "env:HEXA_NO_TIMEOUT_OK=1",
+        "env:HEXA_LOCK_OK=1",
+        "env:HEXA_BUDGET_OK=1"
       ],
       "layers": {
         "pre_bash": {
@@ -357,7 +357,7 @@
       "desc": "전체/프로젝트 목록/정리/설계 맥락 발화 시 projects.json SSOT 데이터 자동 주입 (hint 아님, 실 자료 dump)",
       "scope": "global",
       "bypass": [
-        "env:NEXUS_PROJ_ALL_OK=1",
+        "env:HEXA_PROJ_ALL_OK=1",
         "path:@allow-proj-all"
       ],
       "triggers": [
@@ -459,7 +459,7 @@
       "desc": "errors.jsonl open 카운트 임계치 초과 시 drain 경고",
       "scope": "global",
       "bypass": [
-        "env:NEXUS_DRAIN_OK=1"
+        "env:HEXA_DRAIN_OK=1"
       ],
       "layers": {
         "prompt": {
@@ -539,7 +539,7 @@
       "desc": "L3 meta-lockdown — rules/*, lockdown.json, enforcement_registry.json 자체 잠금",
       "scope": "nexus",
       "bypass": [
-        "env:NEXUS_L3_UNLOCK=<signer>:<reason(>=8chars)>"
+        "env:HEXA_L3_UNLOCK=<signer>:<reason(>=8chars)>"
       ],
       "triggers": [
         "shared/rules/",
@@ -591,7 +591,7 @@
       "desc": "미지정 project root 진입 금지 — Write/Edit/Bash 가 $HOME/core/<X>/ 참조 시 X 가 DESIGNATED_PROJECTS 나 git-root basename 에 없으면 REJECT",
       "scope": "global",
       "bypass": [
-        "env:NEXUS_PROJECT_ENTRY_OK=1",
+        "env:HEXA_PROJECT_ENTRY_OK=1",
         "path-token:@allow-project-entry",
         "env:DESIGNATED_PROJECTS=<csv>",
         "file:$HOME/core/shared/.designated_projects (한 줄 한 repo)"

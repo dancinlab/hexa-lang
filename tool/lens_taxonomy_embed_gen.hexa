@@ -3,7 +3,7 @@
 // @version 0.1.0
 // @capabilities [fs_read, fs_write, exec]
 //
-// Reads ~/core/nexus/config/lens_registry.json (4000 lenses),
+// Reads ~/core/hexa-lang/config/lens_registry.json (4000 lenses),
 // emits compiler/lens_taxonomy/embedded.gen.hexa.
 
 use "compiler/lens_taxonomy/embed"
@@ -53,7 +53,7 @@ fn main() {
     let av = argv()
     let mut src = ""
     if len(av) >= 3 { src = to_string(av[2]) }
-    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    if len(src) == 0 { src = env("HOME") + "/core/hexa-lang/" + DEFAULT_SRC }
     let out_path = DEFAULT_OUT
 
     println("wave1 lens_taxonomy embed codegen")

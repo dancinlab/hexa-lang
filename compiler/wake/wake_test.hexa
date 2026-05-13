@@ -12,7 +12,7 @@ fn _setup_sandbox() -> string {
     let base = "/tmp/hexa_wake_smoke"
     exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
     setenv("HOME", base)
-    setenv("NEXUS_WAKE_COOLDOWN_SEC", "0")
+    setenv("HEXA_WAKE_COOLDOWN_SEC", "0")
     return base
 }
 

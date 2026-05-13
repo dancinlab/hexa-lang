@@ -27,8 +27,8 @@
 //   }
 //
 // REFERENCES
-//   /Users/ghost/core/nexus/.raw-audit  (BUG#2 incident 2026-04-27)
-//   /Users/ghost/core/hive/tool/subagent_dispatch.hexa  (canonical inline fix, lines 507-538)
+//   ~/core/hive/.raw-audit  (BUG#2 incident 2026-04-27)
+//   ~/core/hive/tool/subagent_dispatch.hexa  (canonical inline fix, lines 507-538)
 
 // _argv_basename — extract the last "/"-segment of a path string.
 // Inline (no import of path.hexa) to avoid cyclic stdlib deps.

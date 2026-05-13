@@ -153,7 +153,7 @@ fn _path_hexad() -> array {
 fn _path_nexus_anima() -> array {
     let home = _home()
     let a = home + "/core/anima"
-    let n = home + "/core/nexus"
+    let n = home + "/core/hexa-lang"
     if !_path_exists(a) || !_path_exists(n) {
         return ["nexus↔anima", 0, false, "repos missing"]
     }

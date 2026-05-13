@@ -9,7 +9,7 @@
 // axis and forwards, surge takes the Cartesian product
 // (engines × variants × seeds) and runs every combination. The total
 // run count is capped (HEXA_SURGE_MAX env, default 12) to keep mac
-// 4GB RSS / hetzner 32GB concurrency safe — upstream's NEXUS_SURGE_MAX
+// 4GB RSS / hetzner 32GB concurrency safe — upstream's HEXA_SURGE_MAX
 // constant ported verbatim.
 //
 // Per-run dispatch matches upstream:
@@ -39,7 +39,7 @@ pub struct SurgeResult {
 
 // ─── cap policy ───────────────────────────────────────────────────────
 
-// Cap source priority: HEXA_SURGE_MAX > 12. The legacy NEXUS_SURGE_MAX
+// Cap source priority: HEXA_SURGE_MAX > 12. The legacy HEXA_SURGE_MAX
 // is also honoured so existing env files keep working.
 pub fn surge_max_runs() -> i64 {
     let v = env("HEXA_SURGE_MAX")
@@ -49,7 +49,7 @@ pub fn surge_max_runs() -> i64 {
         if n < 1 { return 1 }
         return n
     }
-    let v2 = env("NEXUS_SURGE_MAX")
+    let v2 = env("HEXA_SURGE_MAX")
     if len(v2) > 0 {
         let mut n2: i64 = 12
         try { n2 = to_int(v2) } catch e { n2 = 12 }

@@ -3,7 +3,7 @@
 // @version 0.1.0
 // @capabilities [fs_read, fs_write, exec]
 //
-// Captures a frozen tableau of ~/core/nexus/state/markers/ and emits
+// Captures a frozen tableau of ~/core/hexa-lang/state/markers/ and emits
 // compiler/status_archive/embedded.gen.hexa.
 //
 // Strategy: shell out to `stat -f "%N|%m|%z"` (BSD stat — macOS native)
@@ -66,8 +66,8 @@ fn _now_ns() -> i64 {
 
 fn main() {
     let out_path = DEFAULT_OUT
-    let nexus_root = env("HOME") + "/core/nexus"
-    let markers_dir = nexus_root + "/" + DEFAULT_REL
+    let repo_root = env("HOME") + "/core/hexa-lang"
+    let markers_dir = repo_root + "/" + DEFAULT_REL
 
     println("phase1-ext status_archive embed codegen")
     println("  markers_dir: " + markers_dir)

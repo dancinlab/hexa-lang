@@ -50,22 +50,23 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 let HOME = env("HOME")
-let NEXUS_ENV = env("NEXUS")
-let NEXUS = if NEXUS_ENV.len() > 0 { NEXUS_ENV } else { HOME + "/Dev/nexus" } // @allow-devpath
-let HARNESS = NEXUS + "/harness"
-let ROADMAPS = NEXUS + "/roadmaps"
-// verifier moved harness/ → tool/ (nexus reorg); fall back to harness/ for
-// older checkouts so the gate keeps working across branches.
+let HEXA_LANG_ENV = env("HEXA_LANG")
+let HEXA_ROOT = if HEXA_LANG_ENV.len() > 0 { HEXA_LANG_ENV } else { HOME + "/core/hexa-lang" }
+let HARNESS = HEXA_ROOT + "/tool"
+let ROADMAPS = HEXA_ROOT + "/roadmaps"
+// verifier lives in tool/ post-absorption; fall back to harness/ alias just in
+// case someone restores the legacy layout.
 fn _pick_verifier() -> string {
-    let a = NEXUS + "/tool/verifier.hexa"
+    let a = HEXA_ROOT + "/tool/verifier.hexa"
     if file_exists(a) { return a }
-    return NEXUS + "/harness/verifier.hexa"
+    return HEXA_ROOT + "/harness/verifier.hexa"
 }
 let VERIFIER = _pick_verifier()
 let LOG_PATH = HARNESS + "/dod_gate_log.jsonl"
-let HEXA_BIN = NEXUS + "/bin/hexa"
+let HEXA_BIN = HOME + "/.hx/bin/hexa"
 
-// Project env tokens (H-NEXUSPATH SSOT) — expand in DoD config path strings.
+// Project env tokens (H-NEXUSPATH SSOT, env var names retained for backcompat)
+// — expand in DoD config path strings.
 // Fallbacks to $HOME/Dev/<proj> if env var not set (matches rule fallback guidance).
 fn _env_or_default(key: string, fallback: string) -> string {
     let v = env(key)
@@ -79,13 +80,12 @@ let AIRGENOME = _env_or_default("AIRGENOME", HOME + "/Dev/airgenome")   // @allo
 let VOID      = _env_or_default("VOID",      HOME + "/Dev/void")        // @allow-devpath
 let PAPERS    = _env_or_default("PAPERS",    HOME + "/Dev/papers")      // @allow-devpath
 
-// Expand $NEXUS/$ANIMA/... tokens in a path string. String-based substitution — no shell.
+// Expand $HEXA_LANG/$ANIMA/... tokens in a path string. String-based substitution — no shell.
 fn expand_template(s: string) -> string {
     if s.len() == 0 { return s }
     let mut r = s
-    r = r.replace("$NEXUS",     NEXUS)
-    r = r.replace("$ANIMA",     ANIMA)
     r = r.replace("$HEXA_LANG", HEXA_LANG)
+    r = r.replace("$ANIMA",     ANIMA)
     r = r.replace("$N6_ARCH",   N6_ARCH)
     r = r.replace("$AIRGENOME", AIRGENOME)
     r = r.replace("$VOID",      VOID)
@@ -309,7 +309,7 @@ fn _has_glob(s: string) -> bool {
 
 fn call_verifier_ls(path_or_glob: string) -> [string] {
     // Literal paths: bypass the verifier sub-hexa shell-out. The verifier's
-    // argv normalizer (nexus/tool/verifier.hexa) trips when a user argument
+    // argv normalizer (hexa-lang/tool/verifier.hexa) trips when a user argument
     // ends in ".hexa" — it misidentifies the arg as the script token and
     // drops the subcommand. file_exists here is both faster and immune to
     // that cross-repo argv bug.

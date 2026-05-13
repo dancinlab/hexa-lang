@@ -4,12 +4,12 @@
 // @capabilities [fs_read, fs_write, exec]
 //
 // Top-level entry point that:
-//   1. reads $1 (atlas root, default ~/core/nexus/n6/) via load_atlas()
+//   1. reads $1 (atlas root, default ~/core/hexa-lang/n6/) via load_atlas()
 //   2. emits compiler/atlas/embedded.gen.hexa via embed_atlas()
 //   3. prints a summary (sources merged, P/C/L/E counts, output path/size)
 //
 // Run:
-//   hexa run tool/atlas_embed_gen.hexa                # uses ~/core/nexus/n6
+//   hexa run tool/atlas_embed_gen.hexa                # uses ~/core/hexa-lang/n6
 //   hexa run tool/atlas_embed_gen.hexa /alt/atlas     # override root
 //
 // This is the build-time codegen the compiler will invoke before the
@@ -51,7 +51,7 @@ fn main() {
         root = to_string(av[2])
     }
     if len(root) == 0 {
-        root = env("HOME") + "/core/nexus/n6"
+        root = env("HOME") + "/core/hexa-lang/n6"
     }
     let out_path = DEFAULT_EMBED_OUT_PATH
 

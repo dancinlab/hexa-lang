@@ -12,7 +12,7 @@
 //   1. canonical atlas.n6 에서 `[11*]` 마커 포함 라인 전부 추출 (awk).
 //   2. sha256 계산.
 //   3. stored constant (아래 FOUNDATION_AXIOM_SHA256) 와 비교.
-//   4. 불일치 시 stderr 로 NEXUS_ENGINE_DEAD 출력 + exit 1.
+//   4. 불일치 시 stderr 로 HEXA_ENGINE_DEAD 출력 + exit 1.
 //
 // baseline anchored 2026-04-21: 6 lines (n/sigma/tau/DELTA0_ABSOLUTE_THEOREM/
 // ULTRA_UNIFORMITY_THEOREM block + 1 leading comment line).
@@ -77,7 +77,7 @@ fn main() -> void {
     let block = _extract_block()
 
     if block.len() == 0 {
-        eprintln("NEXUS_ENGINE_DEAD {\"reason\":\"atlas_foundation_block_missing\",\"path\":\""
+        eprintln("HEXA_ENGINE_DEAD {\"reason\":\"atlas_foundation_block_missing\",\"path\":\""
             + ATLAS_PATH + "\"}")
         exit(1)  // @allow-silent-exit
     }
@@ -99,7 +99,7 @@ fn main() -> void {
         println("raw#24 foundation-axioms-locked: PASS (" + got + ")")
         return
     }
-    eprintln("NEXUS_ENGINE_DEAD {\"reason\":\"foundation_axiom_drift\",\"expected\":\""
+    eprintln("HEXA_ENGINE_DEAD {\"reason\":\"foundation_axiom_drift\",\"expected\":\""
         + FOUNDATION_AXIOM_SHA256 + "\",\"got\":\"" + got + "\"}")
     eprintln("raw#24 verify FAIL — [11*] block hash diverged. If this change is")
     eprintln("approved, follow the re-anchor procedure documented at the top.")

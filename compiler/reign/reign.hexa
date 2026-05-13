@@ -22,9 +22,9 @@
 //   reign_signal_stagnant(history,k) -> bool
 //
 // Env overrides (parity with nexus):
-//   NEXUS_REIGN_MAX  — cap on max_cycles (default 10, clamp [1,20])
-//   NEXUS_REIGN_K    — stagnation window (default 2, clamp [2,5])
-//   NEXUS_SEED_CAP   — seed length cap (default 280, clamp [30,1000])
+//   HEXA_REIGN_MAX  — cap on max_cycles (default 10, clamp [1,20])
+//   HEXA_REIGN_K    — stagnation window (default 2, clamp [2,5])
+//   HEXA_SEED_CAP   — seed length cap (default 280, clamp [30,1000])
 
 use "compiler/atlas/overlay"
 use "compiler/atlas/parser"
@@ -42,7 +42,7 @@ pub struct ReignResult {
 // --- env / config ----------------------------------------------------------
 
 pub fn reign_max_cycles_cap() -> i64 {
-    let v = env("NEXUS_REIGN_MAX")
+    let v = env("HEXA_REIGN_MAX")
     if len(v) == 0 { return 10 }
     let mut n: i64 = 10
     try { n = to_int(v) } catch e { n = 10 }
@@ -52,7 +52,7 @@ pub fn reign_max_cycles_cap() -> i64 {
 }
 
 pub fn reign_stagnation_k() -> i64 {
-    let v = env("NEXUS_REIGN_K")
+    let v = env("HEXA_REIGN_K")
     if len(v) == 0 { return 2 }
     let mut n: i64 = 2
     try { n = to_int(v) } catch e { n = 2 }
@@ -62,7 +62,7 @@ pub fn reign_stagnation_k() -> i64 {
 }
 
 fn _seed_cap() -> i64 {
-    let v = env("NEXUS_SEED_CAP")
+    let v = env("HEXA_SEED_CAP")
     if len(v) == 0 { return 280 }
     let mut n: i64 = 280
     try { n = to_int(v) } catch e { n = 280 }

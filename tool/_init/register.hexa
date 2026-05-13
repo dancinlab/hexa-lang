@@ -1,7 +1,7 @@
-// tool/_init/register.hexa — nexus 허브 registry 갱신 보조
+// tool/_init/register.hexa — hexa-lang hub registry 갱신 보조
 //
 // 지원 모드:
-//   project — nexus/tool/config/projects.json 에 엔트리 추가
+//   project — hexa-lang/tool/config/projects.json 에 엔트리 추가
 //   domain  — (미래용) 도메인 등록 — 현재는 stub
 //
 // 전략:
@@ -15,17 +15,17 @@
 use "self/stdlib/law_io"
 
 // ─────────────────────────────────────────────────────────────
-// nexus 허브 경로 해결 — $NEXUS env 우선, fallback = /Users/ghost/Dev/nexus
+// hexa-lang hub 경로 해결 — $HEXA_LANG env 우선, fallback = ~/core/hexa-lang
 // ─────────────────────────────────────────────────────────────
 
-pub fn nexus_root_reg() -> string {
-    let raw = env("NEXUS")
+pub fn hexa_root_reg() -> string {
+    let raw = env("HEXA_LANG")
     if raw != "" { return raw }
-    return "/Users/ghost/Dev/nexus"
+    return env("HOME") + "/core/hexa-lang"
 }
 
 pub fn projects_json_path() -> string {
-    return nexus_root_reg() + "/tool/config/projects.json"
+    return hexa_root_reg() + "/tool/config/projects.json"
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ pub fn register_project(target: string, name: string, preset: string) -> bool {
 // ─────────────────────────────────────────────────────────────
 
 pub fn register_domain(target: string, domain_id: string, axis: string) -> bool {
-    let path = nexus_root_reg() + "/tool/config/domains.json"
+    let path = hexa_root_reg() + "/tool/config/domains.json"
     let mut raw = ""
     try { raw = read_file(path) } catch e { raw = "" }
     if raw == "" {

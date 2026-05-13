@@ -13510,7 +13510,7 @@ fn call_builtin(name, args) {
     if name == "auto_topology" || name == "ring_topology" || name == "small_world_topology" || name == "hypercube_topology" {
         return val_array([])
     }
-    if name == "nexus_n6_check" {
+    if name == "n6_check" {
         return val_bool(true)
     }
     if name == "running_stats" {

@@ -6,7 +6,7 @@
 // `hyperarithmetic` — Mk.IX Π₀² reverse-math 5-system classifier.
 // Ports `~/core/nexus/cli/blowup/modules/blowup_hyperarithmetic.hexa`
 // (531 LOC) with the algorithm preserved 1:1 — only the runner
-// scaffolding (atlas.n6 self-check, NEXUS_ENGINE_{DEAD,ERROR,WARN}
+// scaffolding (atlas.n6 self-check, HEXA_ENGINE_{DEAD,ERROR,WARN}
 // emit, stub-fallback include hooks) is stripped.
 //
 // Public surface:

@@ -63,7 +63,7 @@ pub let mut MODULE_REGISTRY = [
     ["std_testing",       true,  true],
     ["std_crypto",        false, true],
     ["std_consciousness", true,  true],
-    ["std_nexus",         false, true],
+    ["std_n6",            false, true],
     ["atomic_ops",        true,  true],
     ["anima_bridge",      false, true],
     ["package",           true,  true],

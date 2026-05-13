@@ -28,5 +28,5 @@ fn main() {
     println("  commands     /Users/ghost/core/hexa-lang/gate/commands.json")
     println("")
     println("DO NOT create per-project CLAUDE.md / Claude Code hooks / .claude/skills/ (AG10).")
-    println("Bypass: NEXUS_HOOK_OK=1 (explicit user approval only).")
+    println("Bypass: HEXA_HOOK_OK=1 (explicit user approval only).")
 }

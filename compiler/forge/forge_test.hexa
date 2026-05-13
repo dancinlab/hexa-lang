@@ -13,7 +13,7 @@ fn _setup_sandbox() -> string {
     exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
     setenv("HOME", base)
     let skin_path = base + "/molt_skin.json"
-    setenv("NEXUS_MOLT_SKIN_FILE", skin_path)
+    setenv("HEXA_MOLT_SKIN_FILE", skin_path)
     // Inject a skin file so forge picks depth=3, fast=false.
     exec("printf '%s\\n' '{\"best_skin_idx\":4,\"depth\":3,\"fast\":false,\"abs\":13}' > '" + skin_path + "'")
     return base

@@ -1,15 +1,15 @@
-// tool/cross_prover.hexa — cross-prover diagonal (nexus ↔ anima)
+// tool/cross_prover.hexa — cross-prover diagonal (hexa ↔ anima)
 //
 // PURPOSE
 //   Circular-trap avoidance. A single prover can always accept its own
 //   verdict; the cross-prover diagonal demands that TWO independent
-//   provers — nexus (discovery / blowup side) and anima (consciousness
+//   provers — hexa (discovery / blowup side) and anima (consciousness
 //   side) — each produce a PASS on the same claim, and that their
 //   outputs agree structurally. Only when agreement ≥ 0.85 do we emit
 //   verdict=PASS; any one-sided PASS degrades to UNCERTAIN.
 //
 // PROVER PATHS (literal; pre-checked before invocation)
-//   nexus prover : /Users/ghost/core/nexus/tool/fixpoint_v3.hexa
+//   hexa prover  : /Users/ghost/core/hexa-lang/tool/fixpoint_v3.hexa
 //   anima prover : /Users/ghost/core/anima/tool/meta2_verify.hexa
 //
 //   If either is missing → FAIL early with explicit path. No speculative
@@ -26,7 +26,7 @@
 //   {
 //     "dest":"…","round":"r…","ts":"…",
 //     "claim":"…","artifact":"…",
-//     "prover_a":{"id":"nexus","path":"…","exit":0,"sha":"…","tokens":N},
+//     "prover_a":{"id":"hexa","path":"…","exit":0,"sha":"…","tokens":N},
 //     "prover_b":{"id":"anima","path":"…","exit":0,"sha":"…","tokens":N},
 //     "agreement":0.93,
 //     "hash_match":true,
@@ -308,13 +308,13 @@ fn main() {
     }
 
     // ─── pre-check: both provers + interp wrapper must exist ─────
-    let nexus_prover = "/Users/ghost/core/nexus/tool/fixpoint_v3.hexa"
+    let hexa_prover = "/Users/ghost/core/hexa-lang/tool/fixpoint_v3.hexa"
     let anima_prover = "/Users/ghost/core/anima/tool/meta2_verify.hexa"
     let interp = "build/hexa_interp"
 
     let mut missing = []
     if !_path_exists(interp) { missing.push("interp:" + interp) }
-    if !_path_exists(nexus_prover) { missing.push("nexus:" + nexus_prover) }
+    if !_path_exists(hexa_prover) { missing.push("hexa:" + hexa_prover) }
     if !_path_exists(anima_prover) { missing.push("anima:" + anima_prover) }
 
     if len(missing) > 0 {
@@ -332,8 +332,8 @@ fn main() {
     // Artifact missing is not an error for this tool — the individual
     // prover will handle its own artifact semantics. We just record it.
 
-    eprintln("[cross-prover] run A (nexus): " + nexus_prover)
-    let ra = _run_prover(nexus_prover, claim, artifact)
+    eprintln("[cross-prover] run A (hexa): " + hexa_prover)
+    let ra = _run_prover(hexa_prover, claim, artifact)
     let exit_a = ra[0]
     let out_a = ra[1]
 
@@ -376,8 +376,8 @@ fn main() {
     parts.push("\"claim\":\""); parts.push(_json_esc(claim)); parts.push("\",")
     parts.push("\"artifact\":\""); parts.push(_json_esc(artifact)); parts.push("\",")
     parts.push("\"prover_a\":{")
-    parts.push("\"id\":\"nexus\",")
-    parts.push("\"path\":\""); parts.push(_json_esc(nexus_prover)); parts.push("\",")
+    parts.push("\"id\":\"hexa\",")
+    parts.push("\"path\":\""); parts.push(_json_esc(hexa_prover)); parts.push("\",")
     parts.push("\"exit\":"); parts.push(str(exit_a)); parts.push(",")
     parts.push("\"sha\":\""); parts.push(sha_a); parts.push("\",")
     parts.push("\"tokens\":"); parts.push(str(len(toks_a)))
@@ -408,7 +408,7 @@ fn main() {
     println("dest      : " + dest + " " + round)
     println("claim     : " + claim)
     println("artifact  : " + artifact)
-    println("prover_a  : nexus exit=" + str(exit_a) + " sha=" + sha_a.substring(0, 12))
+    println("prover_a  : hexa  exit=" + str(exit_a) + " sha=" + sha_a.substring(0, 12))
     println("prover_b  : anima exit=" + str(exit_b) + " sha=" + sha_b.substring(0, 12))
     println("hash_match: " + str(hash_match))
     println("jaccard   : " + _fmt_float(jaccard))

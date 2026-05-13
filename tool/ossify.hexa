@@ -421,7 +421,7 @@ fn _cmd_release_all() -> int {
 }
 
 // Field extraction that tolerates both `"k": "v"` (manifest style)
-// and `"k":"v"` (compact jsonl style used by codegen NEXUS_CERT).
+// and `"k":"v"` (compact jsonl style used by codegen HEXA_CERT).
 fn _extract_field_compact(line, key) {
     let v1 = _extract_field(line, key)
     if len(v1) > 0 { return v1 }
@@ -434,7 +434,7 @@ fn _extract_field_compact(line, key) {
     return rest.substring(0, end)
 }
 
-// Parse one JSON-line cert (emitted by codegen_c2 NEXUS_CERT=1) into
+// Parse one JSON-line cert (emitted by codegen_c2 HEXA_CERT=1) into
 // a dict matching self/proof/certificate.hexa's cert shape, so we can
 // call verify_certificate() on it.
 fn _cert_parse_line(line) {

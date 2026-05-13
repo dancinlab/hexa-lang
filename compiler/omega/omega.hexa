@@ -266,7 +266,7 @@ pub fn omega_run(
     let axes = omega_axes(engines_csv, variants_n, seeds_csv, seeds_file)
 
     // Surface event for any consumer tailing stderr (mirrors upstream
-    // NEXUS_OMEGA {"event":"dispatch", ...}).
+    // HEXA_OMEGA {"event":"dispatch", ...}).
     let mut ev = []
     ev.push("HEXA_OMEGA {\"event\":\"dispatch\",\"axes\":")
     ev.push(to_string(axes))

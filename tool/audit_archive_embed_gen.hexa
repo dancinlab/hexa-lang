@@ -3,7 +3,7 @@
 // @version 0.1.0
 // @capabilities [fs_read, fs_write, exec]
 //
-// Reads ~/core/nexus/logs/nexus_cli.log (jsonl, last N lines such that
+// Reads ~/core/hexa-lang/logs/nexus_cli.log (jsonl, last N lines such that
 // the resulting embed file stays ≤ ~100 KB), emits
 // compiler/audit_archive/embedded.gen.hexa.
 //
@@ -105,7 +105,7 @@ fn main() {
     let av = argv()
     let mut src = ""
     if len(av) >= 3 { src = to_string(av[2]) }
-    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    if len(src) == 0 { src = env("HOME") + "/core/hexa-lang/" + DEFAULT_SRC }
     let out_path = DEFAULT_OUT
 
     println("phase1-ext audit_archive embed codegen")

@@ -227,7 +227,7 @@ fn _resolve_staging_dir() -> string {
     let override = env_var("HEXA_ATLAS_STAGING")
     if len(override) > 0 { return override }
     let home = env_var("HOME")
-    return home + "/core/nexus/n6"
+    return home + "/core/hexa-lang/n6"
 }
 
 fn cmd_append_witness(rest: array) {
@@ -395,7 +395,7 @@ fn cmd_help() {
     println("  append-witness --kind <P|C|L|E> --id <id> {--raw <body> | --stdin}")
     println("                          [--emitter <name>] [--dir <staging_dir>]")
     println("                          stage a node as atlas.append.witness-<ts>-<id>.n6")
-    println("                          default --dir = $HEXA_ATLAS_STAGING or $HOME/core/nexus/n6")
+    println("                          default --dir = $HEXA_ATLAS_STAGING or $HOME/core/hexa-lang/n6")
     println("  promote --staging <file.n6> [--atlas-root <repo-root>]")
     println("                          fold a staging shard into the LIVE atlas (dedup → alias /")
     println("                          id-first wins), write atlas.append.<today>.n6 + a manifest.")

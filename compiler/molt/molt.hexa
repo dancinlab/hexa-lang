@@ -36,13 +36,13 @@ pub struct MoltResult {
 }
 
 pub fn molt_skin_file_path() -> string {
-    let v = env("NEXUS_MOLT_SKIN_FILE")
+    let v = env("HEXA_MOLT_SKIN_FILE")
     if len(v) > 0 { return v }
     return "/tmp/hexa_molt_skin.json"
 }
 
 pub fn molt_max_cycles_cap() -> i64 {
-    let v = env("NEXUS_MOLT_MAX")
+    let v = env("HEXA_MOLT_MAX")
     if len(v) == 0 { return 5 }
     let mut n: i64 = 5
     try { n = to_int(v) } catch e { n = 5 }

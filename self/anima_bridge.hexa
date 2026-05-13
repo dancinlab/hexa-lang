@@ -295,7 +295,7 @@ fn omega_scan(phi: float, tension: float, cells: int, entropy: float, alpha: flo
 }
 
 fn omega_scan_report(scan: OmegaScanResult) -> string {
-    let out = "NEXUS-6 Omega Lens Scan (6 lenses = n)\n"
+    let out = "n=6 Omega Lens Scan (6 lenses = n)\n"
     out = out + "  Consensus: " + to_string(scan.consensus) + "/6"
     if scan.consensus >= 3 { out = out + " CONFIRMED" }
     out = out + "\n  Phi aggregate: " + to_string(scan.phi_aggregate)
@@ -303,16 +303,16 @@ fn omega_scan_report(scan: OmegaScanResult) -> string {
     return out
 }
 
-// ── NEXUS-6 external scan ───────────────────────────────────
+// ── n=6 external scan stubs ─────────────────────────────────
+// Bridge to the absorbed discovery engine. self-hosted mode returns sentinel
+// errors; std_n6 covers the lightweight constant-check surface directly.
 
-fn nexus_scan(domain: string) -> string {
-    // Would call NEXUS-6 CLI binary
-    return "ERROR:NEXUS-6 binary not available in self-hosted mode"
+fn n6_scan(domain: string) -> string {
+    return "ERROR:n6 discovery engine not available in self-hosted mode"
 }
 
-fn nexus_verify(value: float) -> string {
-    // Would call NEXUS-6 verify command
-    return "ERROR:NEXUS-6 binary not available in self-hosted mode"
+fn n6_verify(value: float) -> string {
+    return "ERROR:n6 discovery engine not available in self-hosted mode"
 }
 
 // ── ESP32 flash stub ────────────────────────────────────────

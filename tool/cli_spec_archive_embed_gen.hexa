@@ -3,7 +3,7 @@
 // @version 0.1.0
 // @capabilities [fs_read, fs_write, exec]
 //
-// Reads ~/core/nexus/engine/nexus_cli_spec.json (the spec sidecar emitted
+// Reads ~/core/hexa-lang/engine/nexus_cli_spec.json (the spec sidecar emitted
 // by `nexus --catalog`), emits compiler/cli_spec_archive/embedded.gen.hexa.
 //
 // One CliSpecSection per top-level key, with the subtree re-serialized as
@@ -101,7 +101,7 @@ fn main() {
     let av = argv()
     let mut src = ""
     if len(av) >= 3 { src = to_string(av[2]) }
-    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    if len(src) == 0 { src = env("HOME") + "/core/hexa-lang/" + DEFAULT_SRC }
     let out_path = DEFAULT_OUT
 
     println("phase1-ext cli_spec_archive embed codegen")

@@ -8,7 +8,7 @@
 //
 // Direct port (heuristics preserved) of
 // `~/core/nexus/cli/blowup/modules/blowup_hyperarithmetic.hexa` (531 LOC).
-// All atlas.n6 self-check / NEXUS_ENGINE_{DEAD,ERROR,WARN} emission
+// All atlas.n6 self-check / HEXA_ENGINE_{DEAD,ERROR,WARN} emission
 // stripped — that scaffolding belongs to the operator/runner layer,
 // not the algorithm.
 //

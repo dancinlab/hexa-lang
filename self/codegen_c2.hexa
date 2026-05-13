@@ -3935,6 +3935,9 @@ fn gen2_expr(node) {
                 // the dispatch in AOT so removing the runtime.c `#define now
                 // timestamp` shim is safe.
                 if name == "timestamp" || name == "now" || name == "time_now" { return "hexa_timestamp()" }
+                // Wilson 2026-05-13 — expose hexa_time_ms (monotonic ms wall clock)
+                // to user-side hexa. Filed at incoming/patches/wilson-needs-time-now-ms-builtin.md.
+                if name == "time_now_ms" || name == "now_ms" || name == "timestamp_ms" { return "hexa_time_ms()" }
                 if name == "input"     { return "hexa_input(hexa_str(\"\"))" }
                 if name == "random"    { return "hexa_random()" }
                 // P7-6 zero-arg time/IO primitives (runtime.c)
@@ -6523,25 +6526,25 @@ fn codegen_c2_full(ast) {
     out_parts.push(main_parts.join(""))
     if has_user_main && !has_explicit_main_call { out_parts.push("    u_main();\n") }
     out_parts.push("    fflush(stdout); fflush(stderr);\n    return 0;\n}\n")
-    // ─── NEXUS_CERT=1 cert emission (opt-in) ───────────────────────
+    // ─── HEXA_CERT=1 cert emission (opt-in) ───────────────────────
     // Proof certificate sidecar — emit one JSON-Line per recognized
     // IR-opcode-like node into `.certificates/<module>.cert.jsonl`.
-    // Off by default; triggered by `NEXUS_CERT=1` in env. Output is
+    // Off by default; triggered by `HEXA_CERT=1` in env. Output is
     // side-channel only: the returned C source is unchanged.
     // See self/proof/certificate.hexa for the cert schema + hash fn.
-    let _nc = env_var("NEXUS_CERT")
+    let _nc = env_var("HEXA_CERT")
     if type_of(_nc) == "string" && _nc == "1" {
-        _nexus_cert_emit(ast)
+        _hexa_cert_emit(ast)
     }
     return out_parts.join("")
 }
 
-// ─── NEXUS_CERT cert emission helpers ─────────────────────────────
+// ─── HEXA_CERT cert emission helpers ─────────────────────────────
 // We intentionally inline a minimal copy of the cert schema here
 // rather than `use "proof/certificate"` — codegen_c2 must remain
 // dependency-free for the P5 fixpoint; the emitted .jsonl is
 // verified by tool/ossify.hexa which DOES import the proof module.
-fn _nexus_cert_hash_str(s) {
+fn _hexa_cert_hash_str(s) {
     let cs = s.chars()
     let n = len(cs)
     let mut h = 5381
@@ -6555,7 +6558,7 @@ fn _nexus_cert_hash_str(s) {
     return h
 }
 
-fn _nexus_cert_bucket(op) {
+fn _hexa_cert_bucket(op) {
     // Egyptian 12/8/4 over the 24 opcodes — mirror self/proof/certificate.hexa.
     if op == "Add" || op == "Sub" || op == "Mul" || op == "Div" || op == "Mod" || op == "Neg" { return "issue" }
     if op == "Load" || op == "Store" || op == "Alloc" || op == "Free" || op == "Copy" || op == "Move" { return "issue" }
@@ -6564,7 +6567,7 @@ fn _nexus_cert_bucket(op) {
     return "issue"
 }
 
-fn _nexus_cert_pred_for(op) {
+fn _hexa_cert_pred_for(op) {
     if op == "Add"    { return "bounded" }
     if op == "Sub"    { return "monotone" }
     if op == "Mul"    { return "nonneg" }
@@ -6581,7 +6584,7 @@ fn _nexus_cert_pred_for(op) {
 }
 
 // Map a BinaryOp.op string to one of the 24 IR opcode names (or "").
-fn _nexus_cert_binop_to_ir(binop) {
+fn _hexa_cert_binop_to_ir(binop) {
     if binop == "+" { return "Add" }
     if binop == "-" { return "Sub" }
     if binop == "*" { return "Mul" }
@@ -6595,41 +6598,41 @@ fn _nexus_cert_binop_to_ir(binop) {
 // and the obvious arithmetic BinaryOp cases. Good enough for a v0
 // jsonl; ossify verify just re-hashes the emitted lines.
 // decreases node — structural
-fn _nexus_cert_walk_expr(node, target, rows) {
+fn _hexa_cert_walk_expr(node, target, rows) {
     if type_of(node) == "string" { return rows }
     let k = node.kind
     if k == "BinaryOp" {
-        let op_ir = _nexus_cert_binop_to_ir(node.op)
+        let op_ir = _hexa_cert_binop_to_ir(node.op)
         if op_ir != "" {
             rows.push([op_ir, target])
         }
-        rows = _nexus_cert_walk_expr(node.left,  target, rows)
-        rows = _nexus_cert_walk_expr(node.right, target, rows)
+        rows = _hexa_cert_walk_expr(node.left,  target, rows)
+        rows = _hexa_cert_walk_expr(node.right, target, rows)
     }
     return rows
 }
 
-fn _nexus_cert_walk_stmt(node, target, rows) {
+fn _hexa_cert_walk_stmt(node, target, rows) {
     if type_of(node) == "string" { return rows }
     let k = node.kind
     if k == "LetStmt" || k == "LetMutStmt" {
         rows.push(["Store", node.name])
-        rows = _nexus_cert_walk_expr(node.value, node.name, rows)
+        rows = _hexa_cert_walk_expr(node.value, node.name, rows)
     } else if k == "AssignStmt" {
         rows.push(["Store", target])
-        rows = _nexus_cert_walk_expr(node.value, target, rows)
+        rows = _hexa_cert_walk_expr(node.value, target, rows)
     } else if k == "CallExpr" {
         rows.push(["Call", target])
     } else if k == "ReturnStmt" {
         rows.push(["Return", target])
-        rows = _nexus_cert_walk_expr(node.value, target, rows)
+        rows = _hexa_cert_walk_expr(node.value, target, rows)
     } else if k == "BinaryOp" {
-        rows = _nexus_cert_walk_expr(node, target, rows)
+        rows = _hexa_cert_walk_expr(node, target, rows)
     }
     return rows
 }
 
-fn _nexus_cert_module_name() {
+fn _hexa_cert_module_name() {
     // Best-effort: derive from args()[2] (the .hexa being compiled);
     // fall back to "module" if unavailable.
     let av = args()
@@ -6652,7 +6655,7 @@ fn _nexus_cert_module_name() {
     return base
 }
 
-fn _nexus_cert_emit(ast) {
+fn _hexa_cert_emit(ast) {
     let mut rows = []
     let mut i = 0
     while i < len(ast) {
@@ -6666,7 +6669,7 @@ fn _nexus_cert_emit(ast) {
             if type_of(body) != "string" {
                 let mut j = 0
                 while j < len(body) {
-                    rows = _nexus_cert_walk_stmt(body[j], fn_name, rows)
+                    rows = _hexa_cert_walk_stmt(body[j], fn_name, rows)
                     j = j + 1
                 }
             }
@@ -6679,22 +6682,22 @@ fn _nexus_cert_emit(ast) {
     while ri < len(rows) {
         let op     = rows[ri][0]
         let target = rows[ri][1]
-        let pred   = _nexus_cert_pred_for(op)
-        let bucket = _nexus_cert_bucket(op)
+        let pred   = _hexa_cert_pred_for(op)
+        let bucket = _hexa_cert_bucket(op)
         let status = "ISSUED"
         let canonical = pred + "|" + target + "|" + bucket + "|" + status
-        let h = _nexus_cert_hash_str(canonical)
+        let h = _hexa_cert_hash_str(canonical)
         let line = "{\"predicate\":\"" + pred + "\",\"target\":\"" + target + "\",\"opcode\":\"" + op + "\",\"bucket\":\"" + bucket + "\",\"status\":\"" + status + "\",\"hash\":" + to_string(h) + "}"
         lines.push(line)
         ri = ri + 1
     }
     // ensure dir exists, then write file.
     exec("mkdir -p .certificates")
-    let mname = _nexus_cert_module_name()
+    let mname = _hexa_cert_module_name()
     let path = ".certificates/" + mname + ".cert.jsonl"
     let body = lines.join("\n") + "\n"
     write_file(path, body)
-    eprintln("[nexus_cert] wrote " + to_string(len(lines)) + " cert(s) → " + path)
+    eprintln("[hexa_cert] wrote " + to_string(len(lines)) + " cert(s) → " + path)
 }
 
 // ═══════════════════════════════════════════════════════════

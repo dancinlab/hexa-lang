@@ -73,15 +73,15 @@ println("  AI techniques:", n6arch_techniques)
 println("  DSE domains: 307")
 assert n6arch_groups == 12
 
-// 5. NEXUS-6: 4 consensus tiers = tau(6)
-let nexus_tiers = t  // tau(6) = 4
-let nexus_lenses = 137
+// 5. n=6 discovery: 4 consensus tiers = tau(6)
+let n6_tiers = t  // tau(6) = 4
+let n6_total_lenses = 137
 println("")
-println("--- NEXUS-6 ---")
-println("  Consensus tiers:", nexus_tiers, "= tau(6)")
-println("  Total lenses:", nexus_lenses)
+println("--- n=6 discovery ---")
+println("  Consensus tiers:", n6_tiers, "= tau(6)")
+println("  Total lenses:", n6_total_lenses)
 println("  Cross-validation: 3+ lens consensus = confirmed")
-assert nexus_tiers == 4
+assert n6_tiers == 4
 
 // 6. SEDI: 688 hypotheses, 6-dimensional search space
 let sedi_dimensions = n

@@ -3,7 +3,7 @@
 // @version 0.1.0
 // @capabilities [pure, fs_read]
 //
-// Loads ~/core/nexus/n6/, then prints:
+// Loads ~/core/hexa-lang/n6/, then prints:
 //   - total counts per kind (P/C/L/E)
 //   - SHA256 hash of the canonicalized merge
 //   - source_count (number of files merged, atlas.n6 + non-empty appends)
@@ -46,7 +46,7 @@ fn _sample_ids(arr: array, n: int) -> string {
 }
 
 fn main() {
-    let root = env("HOME") + "/core/nexus/n6"
+    let root = env("HOME") + "/core/hexa-lang/n6"
     println("phase-a2 atlas merger smoke")
     println("  root: " + root)
 

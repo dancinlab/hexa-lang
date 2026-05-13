@@ -12,7 +12,7 @@ fn _setup_sandbox() -> string {
     let base = "/tmp/hexa_molt_smoke"
     exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
     setenv("HOME", base)
-    setenv("NEXUS_MOLT_SKIN_FILE", base + "/molt_skin.json")
+    setenv("HEXA_MOLT_SKIN_FILE", base + "/molt_skin.json")
     return base
 }
 
