@@ -171,6 +171,88 @@ HexaVal hexa_net_close(HexaVal fd_val) {
     return hexa_int(0);
 }
 
+/* net_set_nonblock(fd) -> 0 / -errno (RFC net-nonblock-multiplex.md)
+ *
+ * Sets O_NONBLOCK on the fd. Subsequent net_read / net_accept on the
+ * fd returns immediately if no data / no pending connection (with
+ * recv() yielding -1 / EAGAIN, mapped to "" by net_read; net_accept
+ * yields -1 / EAGAIN, mapped to -errno by hexa_net_accept). Pair with
+ * hexa_net_select to wait on N fds without per-fd blocking.
+ */
+HexaVal hexa_net_set_nonblock(HexaVal fd_val) {
+    if (!HX_IS_INT(fd_val)) return hexa_int((int64_t)-EINVAL);
+    int fd = (int)HX_INT(fd_val);
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return hexa_int((int64_t)-errno);
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return hexa_int((int64_t)-errno);
+    return hexa_int(0);
+}
+
+/* net_select(fds, timeout_ms) -> [ready_fds] (RFC net-nonblock-multiplex.md)
+ *
+ *   timeout_ms < 0  : block indefinitely
+ *   timeout_ms == 0 : poll (return immediately)
+ *   timeout_ms > 0  : block up to that long
+ *
+ * Returns: array of fds that are READ-ready. Empty on timeout.
+ *          On error, returns a single-element array [-errno] so the
+ *          caller can distinguish from "no fds ready". (Empty array
+ *          and [-errno] are both length-1 in the error case; check
+ *          the first element's sign to disambiguate.)
+ *
+ * FD_SETSIZE limit (~1024 on Linux/Mac) is enforced via -EBADF.
+ */
+HexaVal hexa_net_select(HexaVal fds_val, HexaVal timeout_ms_val) {
+    HexaVal err_out = hexa_array_new();
+    if (!HX_IS_ARRAY(fds_val)) {
+        return hexa_array_push(err_out, hexa_int((int64_t)-EINVAL));
+    }
+    int n = HX_ARR_LEN(fds_val);
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    int maxfd = -1;
+    for (int i = 0; i < n; i++) {
+        HexaVal v = HX_ARR_ITEMS(fds_val)[i];
+        if (!HX_IS_INT(v)) continue;
+        int fd = (int)HX_INT(v);
+        if (fd < 0 || fd >= FD_SETSIZE) {
+            return hexa_array_push(hexa_array_new(), hexa_int((int64_t)-EBADF));
+        }
+        FD_SET(fd, &readfds);
+        if (fd > maxfd) maxfd = fd;
+    }
+    long long ms = HX_IS_INT(timeout_ms_val) ? (long long)HX_INT(timeout_ms_val) : -1;
+    struct timeval tv;
+    struct timeval* tvp;
+    if (ms < 0) {
+        tvp = NULL;
+    } else {
+        tv.tv_sec = (time_t)(ms / 1000);
+        tv.tv_usec = (suseconds_t)((ms % 1000) * 1000);
+        tvp = &tv;
+    }
+    /* select() can be interrupted by signals — caller-handles by reading
+     * a single -EINTR back. We don't auto-retry here; downstream code
+     * (anima frame loop) needs to interleave signal handling with the
+     * select() return path. */
+    int rc = select(maxfd + 1, &readfds, NULL, NULL, tvp);
+    if (rc < 0) {
+        return hexa_array_push(hexa_array_new(), hexa_int((int64_t)-errno));
+    }
+    /* rc == 0 -> timeout, empty array. rc > 0 -> walk fds again. */
+    HexaVal out = hexa_array_new();
+    if (rc == 0) return out;
+    for (int i = 0; i < n; i++) {
+        HexaVal v = HX_ARR_ITEMS(fds_val)[i];
+        if (!HX_IS_INT(v)) continue;
+        int fd = (int)HX_INT(v);
+        if (FD_ISSET(fd, &readfds)) {
+            out = hexa_array_push(out, hexa_int((int64_t)fd));
+        }
+    }
+    return out;
+}
+
 HexaVal hexa_net_connect(HexaVal addr_val) {
     const char* addr = hexa_to_cstring(addr_val);
     struct sockaddr_storage sa;
@@ -263,70 +345,10 @@ HexaVal hexa_net_set_timeout(HexaVal fd_val, HexaVal ms_val) {
     return hexa_int(0);
 }
 
-/* ── ADDED 2026-05-13: anima daemon Phase 2 (CHAT.md rev 2) prereq ──
- * Non-blocking + select multiplex for multi-client + 60+ FPS frame loop.
- * RFC: ~/core/hexa-lang/incoming/patches/net-nonblock-multiplex.md
- */
-
-/* hexa_net_set_nonblock(fd) → 0 ok / -errno */
-HexaVal hexa_net_set_nonblock(HexaVal fd_val) {
-    if (!HX_IS_INT(fd_val)) return hexa_int(-EINVAL);
-    int fd = (int)HX_INT(fd_val);
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0) return hexa_int(-errno);
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return hexa_int(-errno);
-    return hexa_int(0);
-}
-
-/* hexa_net_select(fds_array, timeout_ms) → ready_fds_array
- *   timeout_ms < 0  : block indefinitely
- *   timeout_ms = 0  : poll (return immediately)
- *   timeout_ms > 0  : block up to that long
- *   Returns: array of fds READ-ready. Empty on timeout.
- *   On error: single-element [-errno] array.
- */
-HexaVal hexa_net_select(HexaVal fds_val, HexaVal timeout_ms_val) {
-    if (!HX_IS_ARRAY(fds_val)) {
-        HexaVal err = hexa_array_new();
-        err = hexa_array_push(err, hexa_int(-EINVAL));
-        return err;
-    }
-    int n = HX_ARR_LEN(fds_val);
-    fd_set readfds; FD_ZERO(&readfds);
-    int maxfd = -1;
-    for (int i = 0; i < n; i++) {
-        HexaVal v = HX_ARR_ITEMS(fds_val)[i];
-        if (!HX_IS_INT(v)) continue;
-        int fd = (int)HX_INT(v);
-        if (fd < 0 || fd >= FD_SETSIZE) {
-            HexaVal err = hexa_array_new();
-            err = hexa_array_push(err, hexa_int(-EBADF));
-            return err;
-        }
-        FD_SET(fd, &readfds);
-        if (fd > maxfd) maxfd = fd;
-    }
-    long long ms = HX_IS_INT(timeout_ms_val) ? (long long)HX_INT(timeout_ms_val) : -1;
-    struct timeval tv; struct timeval* tvp;
-    if (ms < 0) { tvp = NULL; }
-    else { tv.tv_sec = ms / 1000; tv.tv_usec = (ms % 1000) * 1000; tvp = &tv; }
-    int rc = select(maxfd + 1, &readfds, NULL, NULL, tvp);
-    if (rc < 0) {
-        HexaVal err = hexa_array_new();
-        err = hexa_array_push(err, hexa_int(-errno));
-        return err;
-    }
-    HexaVal out = hexa_array_new();
-    for (int i = 0; i < n; i++) {
-        HexaVal v = HX_ARR_ITEMS(fds_val)[i];
-        if (!HX_IS_INT(v)) continue;
-        int fd = (int)HX_INT(v);
-        if (FD_ISSET(fd, &readfds)) {
-            out = hexa_array_push(out, hexa_int(fd));
-        }
-    }
-    return out;
-}
+/* net_set_nonblock + net_select are defined earlier in this file
+ * (anima daemon Phase 2 prereq — RFC net-nonblock-multiplex.md). This
+ * comment marks the historical insertion point a previous draft used
+ * before the canonical definitions moved next to hexa_net_close. */
 
 HexaVal hexa_net_write(HexaVal fd_val, HexaVal data_val) {
     int64_t fd = hexa_as_num(fd_val);
