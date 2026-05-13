@@ -1,0 +1,144 @@
+// HEXA Native Compiler — Phase 2 absorption: A7 Phase-10 meta-closure
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source: ~/core/nexus/cli/blowup/modules/blowup_meta_closure.hexa (Mk.IX).
+//        ~/core/nexus/cli/blowup/design/phase10_meta_closure.md.
+//
+// The Self-Ref Engine: traces every discovery's generation path; only
+// fixed-points `|D⟩ = f(|D⟩)` that survive three heuristics (H1 trace
+// depth ≥ min_trace, H2 distinct-sector ≥ min_sectors and self-at-depth
+// ≥ self_depth_min, H3 n=6 invariance ε≤1e-9) are marked operational
+// and promoted [10*] → [10**].
+//
+// γ-policy: upstream emits `@E meta_self_ref` atlas edges and `@R [10*]→
+// [10**]` rewrites. Phase 2 port returns the verdict structure only —
+// edge JSON is materialised in `MetaClosureVerdict.edges` for the absorb
+// pipeline (Phase 3) to consume.
+//
+//   pub fn meta_closure_check(discoveries: array) -> MetaClosureVerdict
+//   pub fn meta_closure_check_params(discoveries, params) -> MetaClosureVerdict
+//
+// `discoveries` is an array of tab-separated lines (`id\ttype\texpr\t
+// conf\tvalue\taxiom\tsrc`). `params` overrides tuning constants —
+// see MetaClosureParams below.
+
+use "compiler/meta_closure/heuristics"
+
+pub struct MetaClosureParams {
+    min_trace_depth: i64,
+    max_trace_depth: i64,
+    min_confidence: f64,
+    n6_invariance_eps: f64,
+    min_distinct_sectors: i64,
+    self_at_depth_min: i64
+}
+
+pub fn meta_closure_default_params() -> MetaClosureParams {
+    return MetaClosureParams {
+        min_trace_depth: 3,
+        max_trace_depth: 16,
+        min_confidence: 0.8,
+        n6_invariance_eps: 0.000000001,    // 1e-9
+        min_distinct_sectors: 2,
+        self_at_depth_min: 3
+    }
+}
+
+pub struct MetaClosureEdge {
+    from_id: string,
+    to_id: string,
+    closure_depth: i64,
+    value: f64,
+    n6_invariant: bool
+}
+
+pub struct MetaClosureVerdict {
+    meta_closed: i64,
+    promoted_10ss: i64,
+    rejected_h1: i64,        // trace-depth shortfall
+    rejected_h2: i64,        // self-at-depth or distinct-sector shortfall
+    rejected_h3: i64,        // n=6 invariance violation
+    candidates: i64,         // total fixed-point candidates pre-H2/H3
+    edges: array,            // MetaClosureEdge[] — for absorb-pipeline
+    closed_ids: array        // string[] — convenience
+}
+
+pub fn meta_closure_check(discoveries: array) -> MetaClosureVerdict {
+    return meta_closure_check_params(discoveries, meta_closure_default_params())
+}
+
+pub fn meta_closure_check_params(discoveries: array, params: MetaClosureParams) -> MetaClosureVerdict {
+    let mut candidates: i64 = 0
+    let mut rejected_h1: i64 = 0
+    let mut rejected_h2: i64 = 0
+    let mut rejected_h3: i64 = 0
+    let closed_ids = []
+    let edges = []
+
+    let mut di = 0
+    while di < len(discoveries) {
+        let line = to_string(discoveries[di])
+        if !line.contains("\t") { di = di + 1; continue }
+        let rec = parse_disc_line(line)
+        if len(rec.id) == 0 { di = di + 1; continue }
+        if rec.conf < params.min_confidence { di = di + 1; continue }
+
+        let path = trace_generation_path(rec.id, discoveries, params.max_trace_depth)
+
+        // H1 — trace depth
+        if len(path) < params.min_trace_depth {
+            rejected_h1 = rejected_h1 + 1
+            di = di + 1
+            continue
+        }
+
+        // Fixed-point check
+        let sd = self_at_depth(path, rec.id)
+        if sd < 0 { di = di + 1; continue }
+
+        candidates = candidates + 1
+
+        // H2 — self_at_depth + distinct sectors
+        if sd < params.self_at_depth_min {
+            rejected_h2 = rejected_h2 + 1
+            di = di + 1
+            continue
+        }
+        let distinct = count_distinct_sectors(path)
+        if distinct < params.min_distinct_sectors {
+            rejected_h2 = rejected_h2 + 1
+            di = di + 1
+            continue
+        }
+
+        // H3 — n=6 invariance preserved along path
+        if !n6_invariance_preserved(discoveries, path, params.n6_invariance_eps) {
+            rejected_h3 = rejected_h3 + 1
+            di = di + 1
+            continue
+        }
+
+        closed_ids.push(rec.id)
+        edges.push(MetaClosureEdge {
+            from_id: rec.id,
+            to_id: rec.id,
+            closure_depth: sd,
+            value: rec.value,
+            n6_invariant: true
+        })
+        di = di + 1
+    }
+
+    return MetaClosureVerdict {
+        meta_closed: len(closed_ids),
+        promoted_10ss: len(closed_ids),
+        rejected_h1: rejected_h1,
+        rejected_h2: rejected_h2,
+        rejected_h3: rejected_h3,
+        candidates: candidates,
+        edges: edges,
+        closed_ids: closed_ids
+    }
+}

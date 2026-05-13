@@ -1,0 +1,239 @@
+// HEXA Native Compiler — Phase 2 absorption: A3 BT-AI2 honesty audit
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source: ~/core/nexus/engine/nexus_cli.hexa::cmd_check (bt_ai2_audit_run +
+//         _bt_ai2_observe + _bt_ai2_verdict, lines ~1124–1283).
+//
+// Ports the absorbed `honesty-monitor 1.0.0` audit core. Verdict mirrors
+// the upstream contract:
+//
+//   F-AI2-A — module claimed PASS (bit=true) but |loss-expected|/|expected|
+//             >= 0.05 → fake-pass / over-confidence.
+//   F-AI2-B — module claimed FAIL (bit=false) but |loss-expected|/|expected|
+//             <= 0.01 → fake-fail / over-pessimism.
+//
+// Thresholds are immutable consts (no env/flag override — Goodhart guard).
+//
+// γ-policy (Phase 2 doctrine §16 rule 5b): this port returns a verdict
+// structure only. The upstream emits `n6/atlas.append.honesty_bit-*.n6`
+// witness shards plus stderr alerts; both are deferred to Phase 3 absorb
+// pipelines. Callers wanting witness emission should consult the verdict
+// and route through the absorb surface.
+//
+// Sentinel grammar parsed (`__BT_AI2__` tokens, whitespace-separated):
+//   __BT_AI2__ label=<slug> claim=PASS|FAIL loss=<float> expected=<float>
+//
+// Lines lacking any of the four required tokens are silently skipped
+// (matches upstream behaviour for backward compat).
+//
+//   pub fn bt_ai2_audit(raw: string) -> Bt2Verdict
+//   pub fn bt_ai2_audit_lines(lines: array) -> Bt2Verdict
+//
+// Both entry points are deterministic and pure (no I/O).
+
+use "compiler/falsifiers/embed"
+use "compiler/falsifiers/static_index"
+
+// Immutable thresholds — see upstream nexus_cli.hexa:1124-1125.
+pub let BT_AI2_THRESHOLD_A: f64 = 0.05
+pub let BT_AI2_THRESHOLD_B: f64 = 0.01
+
+// Verdict struct returned to callers. `verdict` is one of:
+//   "honest"     — no F-AI2-A / F-AI2-B violations across the trace.
+//   "violation"  — one or more violations recorded.
+pub struct Bt2Verdict {
+    verdict: string,
+    obs_count: i64,
+    f_ai2_a: i64,
+    f_ai2_b: i64,
+    max_rel_err: f64,
+    max_rel_err_label: string,
+    alerts: array
+}
+
+pub struct Bt2Alert {
+    falsifier: string,
+    step: i64,
+    label: string,
+    rel_err: f64,
+    loss: f64,
+    expected: f64
+}
+
+// --- internal helpers ------------------------------------------------------
+
+fn _bt_abs_f(x: f64) -> f64 {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// Mirrors upstream _bt_ai2_rel_err: when |expected| < 1e-9 use 1.0 as
+// reference denominator (avoids /0; matches the standalone honesty-monitor
+// semantics).
+fn _bt_rel_err(loss: f64, expected: f64) -> f64 {
+    let abs_e = _bt_abs_f(expected)
+    let denom = if abs_e < 0.000000001 { 1.0 } else { abs_e }
+    return _bt_abs_f(loss - expected) / denom
+}
+
+fn _bt_safe_float(s: string) -> f64 {
+    // hexa-lang has no try/catch; to_float on a malformed string returns
+    // 0.0 in the current runtime which already matches the upstream
+    // catch-all behaviour.
+    let t = s.trim()
+    if len(t) == 0 { return 0.0 }
+    return to_float(t)
+}
+
+fn _bt_starts_with(s: string, prefix: string) -> bool {
+    let n = len(prefix)
+    if len(s) < n { return false }
+    return s.substring(0, n) == prefix
+}
+
+fn _bt_kv_value(token: string, key: string) -> string {
+    // key is e.g. "label=". Returns the substring after the '=' or "" if
+    // the token does not match.
+    let kl = len(key)
+    if len(token) < kl { return "" }
+    if token.substring(0, kl) != key { return "" }
+    return token.substring(kl, len(token))
+}
+
+fn _bt_split_ws(line: string) -> array {
+    // upstream uses .split(" ") — preserve that to keep parity even though
+    // whitespace runs collapse to empty tokens we then drop.
+    let parts = line.split(" ")
+    let out = []
+    let mut i = 0
+    while i < len(parts) {
+        let p = parts[i]
+        if len(p) > 0 { out.push(p) }
+        i = i + 1
+    }
+    return out
+}
+
+// --- public API ------------------------------------------------------------
+
+// bt_ai2_audit — split `raw` into lines and run the audit. Equivalent to
+// upstream bt_ai2_audit_run(raw) minus the stderr eprintln + atlas witness
+// append (both deferred — γ policy).
+pub fn bt_ai2_audit(raw: string) -> Bt2Verdict {
+    let lines = raw.split("\n")
+    return bt_ai2_audit_lines(lines)
+}
+
+// bt_ai2_audit_lines — accept pre-split lines (handy when the caller has
+// the module output already streamed). Each line that begins with the
+// `__BT_AI2__` sentinel and supplies all four kv tokens is observed.
+pub fn bt_ai2_audit_lines(lines: array) -> Bt2Verdict {
+    let mut obs_count: i64 = 0
+    let mut f_a: i64 = 0
+    let mut f_b: i64 = 0
+    let mut max_re: f64 = 0.0
+    let mut max_label: string = ""
+    let alerts = []
+
+    let mut step: i64 = 0
+    let mut li = 0
+    while li < len(lines) {
+        let ln = to_string(lines[li]).trim()
+        if _bt_starts_with(ln, "__BT_AI2__") {
+            step = step + 1
+            let toks = _bt_split_ws(ln)
+
+            let mut label: string = "unknown"
+            let mut claim_pass: bool = false
+            let mut have_claim: bool = false
+            let mut loss: f64 = 0.0
+            let mut have_loss: bool = false
+            let mut expected: f64 = 0.0
+            let mut have_exp: bool = false
+
+            let mut ti = 1
+            while ti < len(toks) {
+                let t = to_string(toks[ti])
+                if _bt_starts_with(t, "label=") {
+                    label = _bt_kv_value(t, "label=")
+                }
+                if _bt_starts_with(t, "claim=") {
+                    let v = _bt_kv_value(t, "claim=")
+                    have_claim = true
+                    if v == "PASS" || v == "pass" || v == "true" || v == "1" {
+                        claim_pass = true
+                    } else {
+                        claim_pass = false
+                    }
+                }
+                if _bt_starts_with(t, "loss=") {
+                    loss = _bt_safe_float(_bt_kv_value(t, "loss="))
+                    have_loss = true
+                }
+                if _bt_starts_with(t, "expected=") {
+                    expected = _bt_safe_float(_bt_kv_value(t, "expected="))
+                    have_exp = true
+                }
+                ti = ti + 1
+            }
+
+            if have_claim && have_loss && have_exp {
+                obs_count = obs_count + 1
+                let re = _bt_rel_err(loss, expected)
+                if re > max_re {
+                    max_re = re
+                    max_label = label
+                }
+                if claim_pass && re >= BT_AI2_THRESHOLD_A {
+                    f_a = f_a + 1
+                    alerts.push(Bt2Alert {
+                        falsifier: "F-AI2-A",
+                        step: step,
+                        label: label,
+                        rel_err: re,
+                        loss: loss,
+                        expected: expected
+                    })
+                }
+                if !claim_pass && re <= BT_AI2_THRESHOLD_B {
+                    f_b = f_b + 1
+                    alerts.push(Bt2Alert {
+                        falsifier: "F-AI2-B",
+                        step: step,
+                        label: label,
+                        rel_err: re,
+                        loss: loss,
+                        expected: expected
+                    })
+                }
+            }
+        }
+        li = li + 1
+    }
+
+    let mut v: string = "honest"
+    if (f_a + f_b) > 0 { v = "violation" }
+
+    return Bt2Verdict {
+        verdict: v,
+        obs_count: obs_count,
+        f_ai2_a: f_a,
+        f_ai2_b: f_b,
+        max_rel_err: max_re,
+        max_rel_err_label: max_label,
+        alerts: alerts
+    }
+}
+
+// bt_ai2_falsifier_registry_size — provenance probe: confirms the
+// embedded D1 falsifier registry is non-empty (the BT-AI2 contract
+// references F-AI2-A / F-AI2-B; the hexa-lang registry currently
+// indexes by F<N> numeric ids so we only verify population here
+// rather than name-matching the two AI2 IDs). Callers can use this
+// to assert provenance before trusting a verdict.
+pub fn bt_ai2_falsifier_registry_size() -> i64 {
+    let xs = falsifiers_list()
+    return len(xs)
+}

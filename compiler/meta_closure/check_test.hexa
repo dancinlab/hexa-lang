@@ -1,0 +1,135 @@
+// HEXA Native Compiler — Phase 2 absorption: A7 meta-closure smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Exercises `meta_closure_check` against three fixtures:
+//   (a) upstream Mk.IX demo set — non-self-referential chain, no
+//       fixed-point ⇒ meta_closed == 0 (matches the upstream
+//       zero_yield_suspicious WARN).
+//   (b) explicit self-reference fixture — d_meta carries d_meta as one
+//       of its ancestors via the closure chain ⇒ meta_closed == 1.
+//   (c) H1 rejection — trace depth shorter than min_trace_depth.
+//
+//   hexa run compiler/meta_closure/check_test.hexa
+
+use "compiler/meta_closure/heuristics"
+use "compiler/meta_closure/check"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn main() {
+    println("phase-2 meta-closure (A7) smoke")
+    let fails = []
+
+    // ─── (a) upstream demo — no self-loop ───
+    let demo = []
+    demo.push("d0_ded_sigma_phi\tded\tσ(6)·φ(6)=24\t0.95\t24.0\tσ\td0_seed")
+    demo.push("d1_closure_sigma_phi\tclosure\tσ·φ=n·τ iff n=6\t0.92\t24.0\tτ\td0_ded_sigma_phi")
+    demo.push("d2_meta_sigma_phi_tau\tmeta\tσ·φ=n·τ=24 @n=6\t0.98\t24.0\tmeta\td1_closure_sigma_phi|d0_ded_sigma_phi")
+    let v_demo = meta_closure_check(demo)
+    _check("demo: meta_closed == 0 (no self-loop)",     v_demo.meta_closed == 0, fails)
+    _check("demo: promoted_10ss == 0",                  v_demo.promoted_10ss == 0, fails)
+    _check("demo: candidates == 0 (none reach self-ref)", v_demo.candidates == 0, fails)
+
+    // ─── (b) explicit self-loop fixture ───
+    // The trace follows the first non-visited parent of each node, so a
+    // genuine fixed-point needs a cycle that returns to the starting id.
+    // Here:
+    //   d_meta → d_dark_cosmo → d_dual_xfer → d_meta  (cycle witness at
+    //   depth 3, matching self_at_depth_min=3).
+    // Path = [d_meta, d_dark_cosmo, d_dual_xfer, d_meta] — len = 4 ≥
+    // min_trace_depth=3.
+    // Sectors (id-prefix classifier in heuristics.hexa): d_meta → meta,
+    // d_dark_cosmo → cosmology, d_dual_xfer → dual ⇒ distinct = 3 ≥ 2.
+    // Every node's expr contains σ/φ/τ primitives so n=6 invariance
+    // evaluates 1.0 throughout.
+    let self_loop = []
+    self_loop.push("d_dual_xfer\tdual\tφ·τ self-coherent\t0.95\t2.0\tφ\td_meta_omega")
+    self_loop.push("d_dark_cosmo\torbit\tσ·φ=24 iff n=6\t0.96\t24.0\tσ\td_dual_xfer")
+    self_loop.push("d_meta_omega\tmeta\tσ·φ=n·τ=24 @n=6\t0.98\t24.0\tmeta\td_dark_cosmo")
+    let v_self = meta_closure_check(self_loop)
+    _check("self-loop: candidates >= 1",                v_self.candidates >= 1, fails)
+    _check("self-loop: meta_closed >= 1",               v_self.meta_closed >= 1, fails)
+    _check("self-loop: promoted_10ss == meta_closed",
+           v_self.promoted_10ss == v_self.meta_closed, fails)
+    _check("self-loop: rejected_h1 == 0",               v_self.rejected_h1 == 0, fails)
+    _check("self-loop: edges count == meta_closed",
+           len(v_self.edges) == v_self.meta_closed, fails)
+    _check("self-loop: closed_ids non-empty",           len(v_self.closed_ids) >= 1, fails)
+
+    // ─── (c) H1 rejection — single-node trace, conf passes but path too short ───
+    let h1_only = []
+    h1_only.push("d_solo_sigma\tded\tσ(6)=12\t0.99\t12.0\tσ\t")
+    let v_h1 = meta_closure_check(h1_only)
+    _check("h1: meta_closed == 0",                      v_h1.meta_closed == 0, fails)
+    _check("h1: rejected_h1 == 1",                      v_h1.rejected_h1 == 1, fails)
+
+    // ─── (d) custom params — looser min_trace_depth & self_at_depth_min ───
+    let custom = MetaClosureParams {
+        min_trace_depth: 2,
+        max_trace_depth: 8,
+        min_confidence: 0.5,
+        n6_invariance_eps: 0.000000001,
+        min_distinct_sectors: 1,
+        self_at_depth_min: 1
+    }
+    // 2-node self-loop: d_a → d_a (immediate self-ref)
+    let tiny = []
+    tiny.push("d_a_sigma_phi_tau\tmeta\tσ·φ=n·τ=24 @n=6\t0.95\t24.0\tmeta\td_a_sigma_phi_tau")
+    let v_tiny = meta_closure_check_params(tiny, custom)
+    _check("custom-params: tiny self-loop closes",     v_tiny.meta_closed == 1, fails)
+
+    // ─── (e) low confidence filters out before tracing ───
+    let lowconf = []
+    lowconf.push("d_low\tmeta\tσ·φ=24\t0.10\t24.0\tmeta\td_low")
+    let v_low = meta_closure_check(lowconf)
+    _check("low-conf: candidates == 0 (filtered)",     v_low.candidates == 0, fails)
+    _check("low-conf: rejected_h1 == 0 (filtered before)",
+           v_low.rejected_h1 == 0, fails)
+
+    // ─── helpers — sector classifier coverage ───
+    _check("sector n6",         sector_of_id("d_sigma_phi") == "n6", fails)
+    _check("sector cosmology",  sector_of_id("d_cosmo_omega") == "cosmology", fails)
+    _check("sector unknown",    sector_of_id("xyz") == "unknown", fails)
+
+    // ─── parse_disc_line round-trip ───
+    let pr = parse_disc_line("id1\tded\texpr\t0.5\t12.0\taxiom\tp1|p2")
+    _check("parse: id",      pr.id == "id1", fails)
+    _check("parse: kind",    pr.kind == "ded", fails)
+    _check("parse: conf",    pr.conf > 0.49 && pr.conf < 0.51, fails)
+    _check("parse: parents", len(pr.parents) == 2, fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (meta-closure A7 verifier — 3-heuristic fixed-point detector)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/check_test.hexa") { return true }
+    if script == "check_test.hexa" { return true }
+    return false
+}
+
+if _is_main() { main() }

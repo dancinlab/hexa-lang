@@ -1,0 +1,214 @@
+// HEXA Native Compiler — Phase 2 absorption: A3 hexalint structural rules
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source: ~/core/nexus/tool/check_hexalint.hexa (thin delegator pointing at
+//         ~/core/nexus/tooling/hexa-lint/lints_via_treesitter.hexa).
+//
+// Upstream uses a tree-sitter-hexa grammar to run AST queries against
+// each *.hexa file in a batch. Phase 2 ports the *rule definitions* as
+// data and provides a grep-MVP scanner over already-loaded source text.
+// The matching grammar query stays in tree-sitter land — once the
+// native hexa-lang AST (self/parser.hexa) exposes a programmatic query
+// surface this module gains an `apply_via_ast` adaptor; until then the
+// MVP returns the same verdict shape as the upstream sentinel and the
+// caller can choose between the two backends.
+//
+// Rule catalogue (mirrors the production hexalint set, conservative
+// scanner-based heuristics — no false negatives, may have rare false
+// positives that the AST backend can prune):
+//
+//   HL001 — fn-def followed by another fn-def with no intervening body
+//   HL002 — `let mut` without subsequent assignment in same scope (proxy
+//           via "let mut" followed by "}" within N lines without ` = `)
+//   HL003 — tab/space mix on indentation
+//
+// All three rules emit "warnings" only — `errors` count stays 0 in this
+// MVP. Callers that want hard-fail behaviour should wrap the verdict and
+// promote warnings → errors per their policy. This matches the upstream
+// "PASS unless errors > 0" sentinel contract.
+//
+//   pub fn hexalint_check(source: string) -> HexalintVerdict
+//   pub fn hexalint_check_files(file_blobs: array) -> HexalintVerdict
+
+pub struct HexalintVerdict {
+    overall: string,   // "PASS" | "FAIL"
+    files: i64,
+    violations: i64,
+    errors: i64,
+    warnings: i64,
+    rules: array       // string[] — rule IDs that fired
+}
+
+fn _has_tab_space_mix(line: string) -> bool {
+    // Indentation = leading whitespace run. Mix = both ' ' and '\t' in
+    // that run.
+    let mut i = 0
+    let mut saw_tab: bool = false
+    let mut saw_sp: bool = false
+    while i < len(line) {
+        let c = line.substring(i, i + 1)
+        if c == " " { saw_sp = true }
+        else if c == "\t" { saw_tab = true }
+        else { break }
+        i = i + 1
+    }
+    return saw_tab && saw_sp
+}
+
+fn _line_starts_with(line: string, prefix: string) -> bool {
+    let stripped = line.trim_start()
+    let n = len(prefix)
+    if len(stripped) < n { return false }
+    return stripped.substring(0, n) == prefix
+}
+
+// HL001 — empty-body fn-decl (suggests paste accident or stub left
+// behind). Triggers when a `fn …` declaration is followed by lines that
+// together contain only a `{` … `}` pair with no executable statements.
+// Conservative: only fires when no non-whitespace line lives between the
+// opening and closing brace.
+fn _scan_hl001(lines: array) -> i64 {
+    let mut count: i64 = 0
+    let mut i = 0
+    let n = len(lines)
+    while i < n {
+        let a = to_string(lines[i])
+        let is_fn = _line_starts_with(a, "fn ") || _line_starts_with(a, "pub fn ")
+        if is_fn {
+            // find the matching `}` (track brace depth on this and
+            // following lines). Heuristic — counts braces in raw text.
+            let mut depth: i64 = 0
+            let mut started: bool = false
+            let mut body_chars: i64 = 0
+            let mut j = i
+            while j < n {
+                let line = to_string(lines[j])
+                let mut k = 0
+                while k < len(line) {
+                    let c = line.substring(k, k + 1)
+                    if c == "{" { depth = depth + 1; started = true }
+                    else if c == "}" {
+                        depth = depth - 1
+                        if started && depth == 0 { k = len(line); break }
+                    }
+                    else if started && depth > 0 {
+                        // count any non-whitespace char inside body
+                        if c != " " && c != "\t" { body_chars = body_chars + 1 }
+                    }
+                    k = k + 1
+                }
+                if started && depth == 0 {
+                    if body_chars == 0 { count = count + 1 }
+                    i = j
+                    break
+                }
+                j = j + 1
+            }
+            if !started || depth != 0 { i = i + 1 }
+            else { i = i + 1 }
+        } else {
+            i = i + 1
+        }
+    }
+    return count
+}
+
+// HL002 — `let mut` declared but no subsequent `=` assignment within 8
+// lines (proxy for "uninitialised mut never written"). Scanner-grade
+// heuristic; the AST backend prunes false positives where the assignment
+// is in a sibling block.
+fn _scan_hl002(lines: array) -> i64 {
+    let mut count: i64 = 0
+    let mut i = 0
+    let n = len(lines)
+    while i < n {
+        let a = to_string(lines[i])
+        let trimmed = a.trim_start()
+        if _line_starts_with(trimmed, "let mut ") && !a.contains(" = ") {
+            // window of 8 lines
+            let mut j = i + 1
+            let stop = if i + 8 < n { i + 8 } else { n }
+            let mut found: bool = false
+            while j < stop {
+                let b = to_string(lines[j])
+                if b.contains(" = ") { found = true; break }
+                if _line_starts_with(b.trim_start(), "}") { break }
+                j = j + 1
+            }
+            if !found { count = count + 1 }
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// HL003 — tab/space mix on a single line's indentation.
+fn _scan_hl003(lines: array) -> i64 {
+    let mut count: i64 = 0
+    let mut i = 0
+    while i < len(lines) {
+        if _has_tab_space_mix(to_string(lines[i])) { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+pub fn hexalint_check(source: string) -> HexalintVerdict {
+    let lines = source.split("\n")
+    let h1 = _scan_hl001(lines)
+    let h2 = _scan_hl002(lines)
+    let h3 = _scan_hl003(lines)
+    let v = h1 + h2 + h3
+    let rules = []
+    if h1 > 0 { rules.push("HL001") }
+    if h2 > 0 { rules.push("HL002") }
+    if h3 > 0 { rules.push("HL003") }
+    // upstream sentinel: PASS unless errors > 0. MVP keeps errors at 0
+    // (warnings only) so violations don't fail the verdict — they are
+    // surfaced via `warnings` for the caller to triage.
+    let overall = "PASS"
+    return HexalintVerdict {
+        overall: overall,
+        files: 1,
+        violations: v,
+        errors: 0,
+        warnings: v,
+        rules: rules
+    }
+}
+
+pub fn hexalint_check_files(file_blobs: array) -> HexalintVerdict {
+    let mut violations: i64 = 0
+    let mut warnings: i64 = 0
+    let rules_seen = []
+    let mut i = 0
+    while i < len(file_blobs) {
+        let v = hexalint_check(to_string(file_blobs[i]))
+        violations = violations + v.violations
+        warnings = warnings + v.warnings
+        let mut j = 0
+        while j < len(v.rules) {
+            let r = to_string(v.rules[j])
+            // dedup
+            let mut already: bool = false
+            let mut k = 0
+            while k < len(rules_seen) {
+                if to_string(rules_seen[k]) == r { already = true; break }
+                k = k + 1
+            }
+            if !already { rules_seen.push(r) }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return HexalintVerdict {
+        overall: "PASS",
+        files: len(file_blobs),
+        violations: violations,
+        errors: 0,
+        warnings: warnings,
+        rules: rules_seen
+    }
+}

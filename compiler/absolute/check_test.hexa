@@ -1,0 +1,115 @@
+// HEXA Native Compiler — Phase 2 absorption: A4 Δ₀-absolute smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Runs known-good (Δ₀-absolute) + known-bad (set-theoretic) fixtures
+// through `absolute_check`.
+//
+//   hexa run compiler/absolute/check_test.hexa
+
+use "compiler/absolute/check"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn main() {
+    println("phase-2 Δ₀-absolute (A4) smoke")
+    let fails = []
+
+    // ─── known-good — canonical Δ₀-absolute theorem ───
+    let good = "σ·φ=n·τ=24 iff n=6"
+    let v_good = absolute_check(good)
+    _check("good: arithmetical == true",         v_good.arithmetical, fails)
+    _check("good: transitive_pass == true",      v_good.transitive_pass, fails)
+    _check("good: cross_axis_pass == 5",         v_good.cross_axis_pass == 5, fails)
+    _check("good: witness == ABSOLUTE-PASS",     v_good.witness == "ABSOLUTE-PASS", fails)
+    _check("good: absolute == true",             v_good.absolute, fails)
+    _check("good: grade == 10 (raw expr, not @R line)", v_good.grade == 10, fails)
+
+    // ─── empty seed default → same canonical proposition ───
+    let v_dflt = absolute_check("")
+    _check("default seed: absolute == true",     v_dflt.absolute, fails)
+
+    // ─── known-bad — set-theoretic (∈) disqualifies ───
+    let bad_set = "∀x ∈ N, x ≥ 0"
+    let v_bad = absolute_check(bad_set)
+    _check("bad set-theoretic: arithmetical == false", !v_bad.arithmetical, fails)
+    _check("bad set-theoretic: witness == NOT-ABSOLUTE",
+           v_bad.witness == "NOT-ABSOLUTE", fails)
+    _check("bad set-theoretic: absolute == false", !v_bad.absolute, fails)
+
+    // ─── known-bad — V=L disqualifies ───
+    let bad_vl = "Assume V=L and σ(6)=12"
+    let v_vl = absolute_check(bad_vl)
+    _check("bad V=L: arithmetical == false", !v_vl.arithmetical, fails)
+
+    // ─── known-bad — AC axiom ───
+    let bad_ac = "By AC choose σ(6)"
+    let v_ac = absolute_check(bad_ac)
+    _check("bad AC: arithmetical == false",      !v_ac.arithmetical, fails)
+
+    // ─── known-bad — no arithmetic primitives ───
+    let v_empty = absolute_check("hello world")
+    _check("plain text: arithmetical == false",  !v_empty.arithmetical, fails)
+    _check("plain text: absolute == false",      !v_empty.absolute, fails)
+
+    // ─── grade promotion contract — only @R/@C/@L lines + [10*] ───
+    let r_line = "@R sigma_phi_law σ·φ=n·τ=24 iff n=6 :: arithmetic [10*]"
+    let v_r = absolute_check(r_line)
+    _check("@R Δ₀ line: absolute == true",       v_r.absolute, fails)
+    _check("@R Δ₀ line: promoted == true",       v_r.promoted, fails)
+    _check("@R Δ₀ line: grade == 11",            v_r.grade == 11, fails)
+
+    let r_already = "@R sigma_phi σ·φ=24 iff n=6 :: arithmetic [11*]"
+    let v_r_already = absolute_check(r_already)
+    _check("@R already [11*]: promoted == false", !v_r_already.promoted, fails)
+
+    // Non-prefix line never promotes regardless of Δ₀-ness
+    let v_noprefix = absolute_check("σ·φ=n·τ=24 iff n=6 :: arithmetic [10*]")
+    _check("non-@R line: promoted == false (Δ₀ but no prefix)",
+           !v_noprefix.promoted, fails)
+
+    // Provenance — D2 + D4 tables populated
+    _check("D4 absolute_rules registry populated", v_good.rules_count > 0, fails)
+    _check("D2 hexad constants registry populated", v_good.hexad_count > 0, fails)
+
+    // ─── direct `absolute_should_promote_11` API ───
+    _check("should_promote_11 on Δ₀ @R line",  absolute_should_promote_11(r_line), fails)
+    _check("should_promote_11 rejects already-[11*]",
+           !absolute_should_promote_11(r_already), fails)
+    _check("should_promote_11 rejects raw expr (no @R)",
+           !absolute_should_promote_11("σ·φ=24 iff n=6"), fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (Δ₀-absolute A4 verifier — 5-phase pipeline)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/check_test.hexa") { return true }
+    if script == "check_test.hexa" { return true }
+    return false
+}
+
+if _is_main() { main() }
