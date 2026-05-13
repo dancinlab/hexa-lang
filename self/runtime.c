@@ -6513,6 +6513,31 @@ HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v);
 static HexaVal farr_copy;
 static HexaVal farr_add_gaussian_noise;
 
+// RFC 034 (2026-05-13): Pauli-string exp + expectation whole-loop kernels.
+// 8-arg / 7-arg; past the hexa_callN ceiling → static inline wrappers.
+HexaVal hexa_farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
+                                    HexaVal alpha_v,
+                                    HexaVal flip_v, HexaVal zmask_v,
+                                    HexaVal ymask_v, HexaVal cy_v,
+                                    HexaVal nq_v);
+HexaVal hexa_farr_pauli_expectation(HexaVal re_v, HexaVal im_v,
+                                    HexaVal flip_v, HexaVal zmask_v,
+                                    HexaVal ymask_v, HexaVal cy_v,
+                                    HexaVal nq_v);
+static inline HexaVal farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
+                                             HexaVal alpha_v,
+                                             HexaVal flip_v, HexaVal zmask_v,
+                                             HexaVal ymask_v, HexaVal cy_v,
+                                             HexaVal nq_v) {
+    return hexa_farr_pauli_exp_inplace(re_v, im_v, alpha_v, flip_v, zmask_v, ymask_v, cy_v, nq_v);
+}
+static inline HexaVal farr_pauli_expectation(HexaVal re_v, HexaVal im_v,
+                                              HexaVal flip_v, HexaVal zmask_v,
+                                              HexaVal ymask_v, HexaVal cy_v,
+                                              HexaVal nq_v) {
+    return hexa_farr_pauli_expectation(re_v, im_v, flip_v, zmask_v, ymask_v, cy_v, nq_v);
+}
+
 // `bit_or(x, y)` — shim kept because `|` as binary op conflicts with lambda
 // param delimiters `|x| x+1`. `&` and `^` are supported by parser directly.
 HexaVal _hx_bit_or(HexaVal a, HexaVal b) {
@@ -7743,6 +7768,179 @@ HexaVal hexa_farr_apply_cnot(HexaVal src_re_v, HexaVal src_im_v,
         dst_im[j] += src_im[i];
     }
     return hexa_int(0);
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// RFC 034 (2026-05-13): Pauli-string exponential + expectation kernels.
+// Whole-loop C kernels to eliminate the per-iteration interp arena pressure
+// (~1.5 KB/op of boxed Vals retained until function return) that blocked
+// qmirror's chemistry_vqe_cmt_uccsd_lih_4e4o.hexa from running an in-process
+// 26-parameter Nelder-Mead loop at 4e/4o. Same shape as the existing
+// farr_apply_single / farr_apply_cnot fast paths.
+//
+// Algorithm validated against scipy.linalg.expm at machine precision
+// (max err < 1e-12 on 8 random 6-qubit Pauli strings) in the qmirror
+// dev session's offline numpy harness (2026-05-13).
+//
+// Per Pauli string P on n qubits — precomputed masks (offline, in the
+// hexa-side caller):
+//   flip_mask = OR over q where label[n-1-q] ∈ {X, Y}
+//   z_mask    = OR over q where label[n-1-q] = Z
+//   y_mask    = OR over q where label[n-1-q] = Y
+//   count_Y   = popcount(y_mask)
+// (These four ints fully describe P; no per-amplitude string parsing.)
+//
+// Phase(i) for amplitude index i:
+//   parity_bits = i & (z_mask | y_mask)
+//   sign = (-1)^popcount(parity_bits)
+//   cy = count_Y % 4
+//   phase_re/im table:
+//     cy 0 →  ( sign,  0    )
+//     cy 1 →  ( 0,     sign )
+//     cy 2 →  (-sign,  0    )
+//     cy 3 →  ( 0,    -sign )
+
+static inline int _hx_pauli_popcount6(int64_t x) {
+    // 6-qubit max → at most 6 set bits. Use compiler builtin where available.
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_popcountll((unsigned long long)x);
+#else
+    int n = 0;
+    while (x) { n += (int)(x & 1); x >>= 1; }
+    return n;
+#endif
+}
+
+// farr_pauli_exp_inplace(re_h, im_h, alpha, flip_mask, z_mask, y_mask, count_Y, n_qubits) -> 0
+// Apply exp(i*alpha*P) to the state in place. P^2 = I, so
+// exp(i*alpha*P) = cos(alpha)*I + i*sin(alpha)*P. Pair-iteration:
+//   for i in 0..dim where j = i ^ flip_mask, i <= j:
+//     new_amp_i = cos*amp_i + (i*sin*sign_y*phase(i)) * amp_j
+//     new_amp_j = (i*sin*phase(i)) * amp_i + cos*amp_j
+//   where sign_y = (-1)^count_Y and phase(j) = phase(i) * sign_y.
+// flip_mask == 0 (diagonal Pauli): in-place per-amplitude update.
+HexaVal hexa_farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
+                                    HexaVal alpha_v,
+                                    HexaVal flip_v, HexaVal zmask_v,
+                                    HexaVal ymask_v, HexaVal cy_v,
+                                    HexaVal nq_v) {
+    int64_t re_id = hexa_as_num(re_v);
+    int64_t im_id = hexa_as_num(im_v);
+    if (re_id < 0 || re_id >= _hx_farr_count) return hexa_int(-1);
+    if (im_id < 0 || im_id >= _hx_farr_count) return hexa_int(-1);
+    double* re = _hx_farr_table[re_id].buf;
+    double* im = _hx_farr_table[im_id].buf;
+    if (!re || !im) return hexa_int(-1);
+    double alpha = __hx_to_double(alpha_v);
+    int64_t flip_mask = hexa_as_num(flip_v);
+    int64_t z_mask    = hexa_as_num(zmask_v);
+    int64_t y_mask    = hexa_as_num(ymask_v);
+    int64_t count_Y   = hexa_as_num(cy_v);
+    int64_t n_qubits  = hexa_as_num(nq_v);
+    int64_t dim = 1;
+    for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
+    double c = cos(alpha);
+    double s = sin(alpha);
+    int cy_mod = (int)(count_Y % 4);
+    double sign_y = ((count_Y % 2) == 0) ? 1.0 : -1.0;
+    int64_t parity_mask = z_mask | y_mask;
+
+    if (flip_mask == 0) {
+        // Diagonal: j == i; new_amp_i = (cos + i*sin*phase(i)) * amp_i.
+        // For diagonal Pauli, count_Y is necessarily 0 (no Y in flip_mask=0).
+        // phase(i) is purely real = (-1)^parity. So:
+        //   new_re = c * re_i - (s * sign) * im_i
+        //   new_im = (s * sign) * re_i + c * im_i
+        for (int64_t i = 0; i < dim; i++) {
+            int pc = _hx_pauli_popcount6(i & parity_mask);
+            double sign = (pc % 2 == 0) ? 1.0 : -1.0;
+            double ri = re[i], ii = im[i];
+            re[i] = c * ri - (s * sign) * ii;
+            im[i] = (s * sign) * ri + c * ii;
+        }
+        return hexa_int(0);
+    }
+
+    // General case: pair iteration.
+    for (int64_t i = 0; i < dim; i++) {
+        int64_t j = i ^ flip_mask;
+        if (i >= j) continue;  // process each pair once
+        int pc = _hx_pauli_popcount6(i & parity_mask);
+        double sign_i = (pc % 2 == 0) ? 1.0 : -1.0;
+        double pi_re, pi_im;
+        switch (cy_mod) {
+            case 0: pi_re = sign_i;       pi_im = 0.0;          break;
+            case 1: pi_re = 0.0;          pi_im = sign_i;       break;
+            case 2: pi_re = -sign_i;      pi_im = 0.0;          break;
+            default: pi_re = 0.0;         pi_im = -sign_i;      break;
+        }
+        // factor_{i→j} = (i*sin a) * (pi_re + i*pi_im) = sin a * (-pi_im + i*pi_re)
+        double fij_re = -s * pi_im;
+        double fij_im =  s * pi_re;
+        // factor_{j→i} = sign_y * factor_{i→j}
+        double fji_re = sign_y * fij_re;
+        double fji_im = sign_y * fij_im;
+        double ri = re[i], ii = im[i];
+        double rj = re[j], ij = im[j];
+        // new_amp_i = c*(ri,ii) + (fji_re,fji_im)*(rj,ij)
+        double new_ri = c * ri + fji_re * rj - fji_im * ij;
+        double new_ii = c * ii + fji_re * ij + fji_im * rj;
+        // new_amp_j = (fij_re,fij_im)*(ri,ii) + c*(rj,ij)
+        double new_rj = fij_re * ri - fij_im * ii + c * rj;
+        double new_ij = fij_re * ii + fij_im * ri + c * ij;
+        re[i] = new_ri;  im[i] = new_ii;
+        re[j] = new_rj;  im[j] = new_ij;
+    }
+    return hexa_int(0);
+}
+
+// farr_pauli_expectation(re_h, im_h, flip_mask, z_mask, y_mask, count_Y, n_qubits) -> float
+// Returns <psi|P|psi> for Hermitian Pauli P. For Hermitian H, the result is
+// purely real; we return just the real part.
+//   <psi|P|psi> = sum_i conj(psi_i) * P|i>
+//               = sum_i conj(psi_i) * phase(i) * psi_{i^flip_mask}
+HexaVal hexa_farr_pauli_expectation(HexaVal re_v, HexaVal im_v,
+                                    HexaVal flip_v, HexaVal zmask_v,
+                                    HexaVal ymask_v, HexaVal cy_v,
+                                    HexaVal nq_v) {
+    int64_t re_id = hexa_as_num(re_v);
+    int64_t im_id = hexa_as_num(im_v);
+    if (re_id < 0 || re_id >= _hx_farr_count) return hexa_float(0.0);
+    if (im_id < 0 || im_id >= _hx_farr_count) return hexa_float(0.0);
+    double* re = _hx_farr_table[re_id].buf;
+    double* im = _hx_farr_table[im_id].buf;
+    if (!re || !im) return hexa_float(0.0);
+    int64_t flip_mask = hexa_as_num(flip_v);
+    int64_t z_mask    = hexa_as_num(zmask_v);
+    int64_t y_mask    = hexa_as_num(ymask_v);
+    int64_t count_Y   = hexa_as_num(cy_v);
+    int64_t n_qubits  = hexa_as_num(nq_v);
+    int64_t dim = 1;
+    for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
+    int cy_mod = (int)(count_Y % 4);
+    int64_t parity_mask = z_mask | y_mask;
+    double sum_re = 0.0;
+    for (int64_t i = 0; i < dim; i++) {
+        int pc = _hx_pauli_popcount6(i & parity_mask);
+        double sign_i = (pc % 2 == 0) ? 1.0 : -1.0;
+        double pi_re, pi_im;
+        switch (cy_mod) {
+            case 0: pi_re = sign_i;  pi_im = 0.0;     break;
+            case 1: pi_re = 0.0;     pi_im = sign_i;  break;
+            case 2: pi_re = -sign_i; pi_im = 0.0;     break;
+            default: pi_re = 0.0;    pi_im = -sign_i; break;
+        }
+        int64_t j = i ^ flip_mask;
+        double ri = re[i], ii = im[i];
+        double rj = re[j], ij = im[j];
+        // ppj = phase(i) * psi_i;  contribution = conj(psi_j) * ppj.
+        // ppj_re = pi_re*ri - pi_im*ii ; ppj_im = pi_re*ii + pi_im*ri
+        // real(conj(psi_j) * ppj) = rj*ppj_re + ij*ppj_im
+        double ppj_re = pi_re * ri - pi_im * ii;
+        double ppj_im = pi_re * ii + pi_im * ri;
+        sum_re += rj * ppj_re + ij * ppj_im;
+    }
+    return hexa_float(sum_re);
 }
 
 // ═══════════════════════════════════════════════════════════

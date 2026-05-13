@@ -10755,6 +10755,20 @@ fn call_builtin(name, args) {
     // RFC 033 (2026-05-12): farr_copy + farr_add_gaussian_noise.
     if name == "farr_copy" { if len(args) > 0 { return val_int(farr_copy(args[0].int_val)) }                                                                  else { return val_int(-1) } }
     if name == "farr_add_gaussian_noise" { if len(args) > 1 { let _ = farr_add_gaussian_noise(args[0].int_val, args[1].float_val); return val_void() }       else { return val_void() } }
+    // RFC 034 (2026-05-13): Pauli-string exp + expectation whole-loop kernels.
+    // Eliminates the per-iter HexaVal arena pressure that blocked qmirror's
+    // in-process 26-parameter Nelder-Mead at UCCSD-4e/4o (~180 MB/eval from
+    // ~11k farr_get/set ops × ~25 evals = 768 MB cap exceeded).
+    if name == "farr_pauli_exp_inplace" {
+        // (re_h, im_h, alpha, flip_mask, z_mask, y_mask, count_Y, n_qubits) → 0
+        if len(args) > 7 { return val_int(farr_pauli_exp_inplace(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7])) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "farr_pauli_expectation" {
+        // (re_h, im_h, flip_mask, z_mask, y_mask, count_Y, n_qubits) → float
+        if len(args) > 6 { return val_float(farr_pauli_expectation(args[0], args[1], args[2], args[3], args[4], args[5], args[6])) }
+        else { return val_float(0.0) }
+    }
     // ── End fast-path ────────────────────────────────────────────────
 
     if name == "println" {
