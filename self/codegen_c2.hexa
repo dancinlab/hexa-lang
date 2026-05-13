@@ -3851,6 +3851,16 @@ fn gen2_expr(node) {
             if name == "str" {
                 return "hexa_to_string(" + gen2_expr(node.args[0]) + ")"
             }
+            // 2026-05-13 (wilson-build-broken-pool-openai-compat §1):
+            // `float(x)` is the scalar coercion builtin (mirror of `int(x)` /
+            // `str(x)` / `to_float(x)`). Previously fell through to the user
+            // fn-call dispatch, emitting `hexa_call1(float, …)` — `float` is a
+            // C keyword and clang rejected the macro expansion. Route through
+            // hexa_to_float (runtime.c), which handles STR / int / float
+            // unwrap consistently.
+            if name == "float" {
+                return "hexa_to_float(" + gen2_expr(node.args[0]) + ")"
+            }
             // clock/random — B4 will add the runtime stubs
             if name == "clock" {
                 return "hexa_clock()"
