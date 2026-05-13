@@ -6567,6 +6567,21 @@ HexaVal hexa_farr_simplex_shrink(HexaVal simplex_h_v, HexaVal n_v,
                                  HexaVal n_vert_v);
 HexaVal hexa_farr_simplex_sort(HexaVal simplex_h_v, HexaVal f_h_v,
                                HexaVal n_v, HexaVal n_vert_v);
+// RFC 039 (2026-05-13): parameter-shift gradient kernel + bundle ctors.
+// 8-arg / 7-arg → static-carrier shim (past hexa_callN ceiling).
+HexaVal hexa_ham_pack(HexaVal flip_v, HexaVal z_v, HexaVal y_v,
+                      HexaVal cy_v, HexaVal coef_v,
+                      HexaVal shift_v, HexaVal nq_v);
+HexaVal hexa_ham_free(HexaVal h_v);
+HexaVal hexa_ansatz_pack(HexaVal param_idx_v, HexaVal coef_v, HexaVal flip_v,
+                         HexaVal z_v, HexaVal y_v, HexaVal cy_v,
+                         HexaVal hf_v, HexaVal nq_v);
+HexaVal hexa_ansatz_free(HexaVal h_v);
+HexaVal hexa_farr_parameter_shift_grad(HexaVal re_v, HexaVal im_v,
+                                       HexaVal theta_v, HexaVal grad_v,
+                                       HexaVal n_p_v,
+                                       HexaVal ham_v, HexaVal ans_v,
+                                       HexaVal nq_v);
 // 5-arg builtins → static inline wrappers (past hexa_callN ceiling).
 static inline HexaVal farr_vec_reflect(HexaVal ot, HexaVal a, HexaVal b,
                                        HexaVal s, HexaVal n) {
@@ -6589,6 +6604,12 @@ static HexaVal farr_simplex_centroid;
 static HexaVal farr_simplex_get;
 static HexaVal farr_simplex_shrink;
 static HexaVal farr_simplex_sort;
+// RFC 039 — static carriers (registered via fn_shim).
+static HexaVal ham_pack;
+static HexaVal ham_free;
+static HexaVal ansatz_pack;
+static HexaVal ansatz_free;
+static HexaVal farr_parameter_shift_grad;
 static inline HexaVal farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
                                              HexaVal alpha_v,
                                              HexaVal flip_v, HexaVal zmask_v,
@@ -8046,6 +8067,90 @@ static inline int _hx_pauli_popcount6(int64_t x) {
 //     new_amp_j = (i*sin*phase(i)) * amp_i + cos*amp_j
 //   where sign_y = (-1)^count_Y and phase(j) = phase(i) * sign_y.
 // flip_mask == 0 (diagonal Pauli): in-place per-amplitude update.
+//
+// RFC 039 prerequisite (2026-05-13): the math body is hoisted into
+// `_hx_pauli_exp_raw` so the parameter-shift gradient kernel can apply
+// many Pauli rotations without re-unboxing handles. The HexaVal entry
+// point below is now a thin shim.
+static inline void _hx_pauli_exp_raw(double* re, double* im, double alpha,
+                                     int64_t flip_mask, int64_t z_mask,
+                                     int64_t y_mask, int64_t count_Y,
+                                     int64_t n_qubits) {
+    int64_t dim = 1;
+    for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
+    double c = cos(alpha);
+    double s = sin(alpha);
+    int cy_mod = (int)(count_Y % 4);
+    double sign_y = ((count_Y % 2) == 0) ? 1.0 : -1.0;
+    int64_t parity_mask = z_mask | y_mask;
+
+    if (flip_mask == 0) {
+        for (int64_t i = 0; i < dim; i++) {
+            int pc = _hx_pauli_popcount6(i & parity_mask);
+            double sign = (pc % 2 == 0) ? 1.0 : -1.0;
+            double ri = re[i], ii = im[i];
+            re[i] = c * ri - (s * sign) * ii;
+            im[i] = (s * sign) * ri + c * ii;
+        }
+        return;
+    }
+
+    for (int64_t i = 0; i < dim; i++) {
+        int64_t j = i ^ flip_mask;
+        if (i >= j) continue;
+        int pc = _hx_pauli_popcount6(i & parity_mask);
+        double sign_i = (pc % 2 == 0) ? 1.0 : -1.0;
+        double pi_re, pi_im;
+        switch (cy_mod) {
+            case 0: pi_re = sign_i;  pi_im = 0.0;     break;
+            case 1: pi_re = 0.0;     pi_im = sign_i;  break;
+            case 2: pi_re = -sign_i; pi_im = 0.0;     break;
+            default: pi_re = 0.0;    pi_im = -sign_i; break;
+        }
+        double fij_re = -s * pi_im;
+        double fij_im =  s * pi_re;
+        double fji_re = sign_y * fij_re;
+        double fji_im = sign_y * fij_im;
+        double ri = re[i], ii = im[i];
+        double rj = re[j], ij = im[j];
+        double new_ri = c * ri + fji_re * rj - fji_im * ij;
+        double new_ii = c * ii + fji_re * ij + fji_im * rj;
+        double new_rj = fij_re * ri - fij_im * ii + c * rj;
+        double new_ij = fij_re * ii + fij_im * ri + c * ij;
+        re[i] = new_ri;  im[i] = new_ii;
+        re[j] = new_rj;  im[j] = new_ij;
+    }
+}
+
+static inline double _hx_pauli_expectation_raw(const double* re, const double* im,
+                                               int64_t flip_mask, int64_t z_mask,
+                                               int64_t y_mask, int64_t count_Y,
+                                               int64_t n_qubits) {
+    int64_t dim = 1;
+    for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
+    int cy_mod = (int)(count_Y % 4);
+    int64_t parity_mask = z_mask | y_mask;
+    double sum_re = 0.0;
+    for (int64_t i = 0; i < dim; i++) {
+        int pc = _hx_pauli_popcount6(i & parity_mask);
+        double sign_i = (pc % 2 == 0) ? 1.0 : -1.0;
+        double pi_re, pi_im;
+        switch (cy_mod) {
+            case 0: pi_re = sign_i;  pi_im = 0.0;     break;
+            case 1: pi_re = 0.0;     pi_im = sign_i;  break;
+            case 2: pi_re = -sign_i; pi_im = 0.0;     break;
+            default: pi_re = 0.0;    pi_im = -sign_i; break;
+        }
+        int64_t j = i ^ flip_mask;
+        double ri = re[i], ii = im[i];
+        double rj = re[j], ij = im[j];
+        double ppj_re = pi_re * ri - pi_im * ii;
+        double ppj_im = pi_re * ii + pi_im * ri;
+        sum_re += rj * ppj_re + ij * ppj_im;
+    }
+    return sum_re;
+}
+
 HexaVal hexa_farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
                                     HexaVal alpha_v,
                                     HexaVal flip_v, HexaVal zmask_v,
@@ -8064,6 +8169,11 @@ HexaVal hexa_farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
     int64_t y_mask    = hexa_as_num(ymask_v);
     int64_t count_Y   = hexa_as_num(cy_v);
     int64_t n_qubits  = hexa_as_num(nq_v);
+    _hx_pauli_exp_raw(re, im, alpha, flip_mask, z_mask, y_mask, count_Y, n_qubits);
+    return hexa_int(0);
+}
+
+#if 0  // RFC 039: body hoisted to _hx_pauli_exp_raw above; original kept inline for reference.
     int64_t dim = 1;
     for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
     double c = cos(alpha);
@@ -8120,6 +8230,7 @@ HexaVal hexa_farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
     }
     return hexa_int(0);
 }
+#endif  // end #if 0 RFC 039 reference block
 
 // farr_pauli_expectation(re_h, im_h, flip_mask, z_mask, y_mask, count_Y, n_qubits) -> float
 // Returns <psi|P|psi> for Hermitian Pauli P. For Hermitian H, the result is
@@ -8142,32 +8253,8 @@ HexaVal hexa_farr_pauli_expectation(HexaVal re_v, HexaVal im_v,
     int64_t y_mask    = hexa_as_num(ymask_v);
     int64_t count_Y   = hexa_as_num(cy_v);
     int64_t n_qubits  = hexa_as_num(nq_v);
-    int64_t dim = 1;
-    for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
-    int cy_mod = (int)(count_Y % 4);
-    int64_t parity_mask = z_mask | y_mask;
-    double sum_re = 0.0;
-    for (int64_t i = 0; i < dim; i++) {
-        int pc = _hx_pauli_popcount6(i & parity_mask);
-        double sign_i = (pc % 2 == 0) ? 1.0 : -1.0;
-        double pi_re, pi_im;
-        switch (cy_mod) {
-            case 0: pi_re = sign_i;  pi_im = 0.0;     break;
-            case 1: pi_re = 0.0;     pi_im = sign_i;  break;
-            case 2: pi_re = -sign_i; pi_im = 0.0;     break;
-            default: pi_re = 0.0;    pi_im = -sign_i; break;
-        }
-        int64_t j = i ^ flip_mask;
-        double ri = re[i], ii = im[i];
-        double rj = re[j], ij = im[j];
-        // ppj = phase(i) * psi_i;  contribution = conj(psi_j) * ppj.
-        // ppj_re = pi_re*ri - pi_im*ii ; ppj_im = pi_re*ii + pi_im*ri
-        // real(conj(psi_j) * ppj) = rj*ppj_re + ij*ppj_im
-        double ppj_re = pi_re * ri - pi_im * ii;
-        double ppj_im = pi_re * ii + pi_im * ri;
-        sum_re += rj * ppj_re + ij * ppj_im;
-    }
-    return hexa_float(sum_re);
+    return hexa_float(_hx_pauli_expectation_raw(re, im, flip_mask, z_mask,
+                                                y_mask, count_Y, n_qubits));
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -8349,6 +8436,273 @@ HexaVal hexa_farr_simplex_sort(HexaVal simplex_h_v, HexaVal f_h_v,
     free(scratch);
     return hexa_int(0);
 }
+
+
+// ───────────────────────────────────────────────────────────────────────
+// RFC 039 (2026-05-13): parameter-shift gradient kernel.
+//
+// Replaces the pure-hexa loop `for k in 0..n_params: grad[k] =
+// 0.5*(energy(theta+pi/2*e_k) - energy(theta-pi/2*e_k))` with a single
+// C call. The two boxed-handle bundles (HexaHamEntry / HexaAnsatzEntry)
+// pre-pack the per-cache constants once; the gradient call reuses them.
+//
+// See docs/RFC_039_param_shift_grad.md (qmirror repo) for full design.
+// ───────────────────────────────────────────────────────────────────────
+
+typedef struct {
+    int64_t  n_terms;
+    int64_t  n_qubits;
+    int64_t* flip;       // [n_terms]
+    int64_t* z_mask;     // [n_terms]
+    int64_t* y_mask;     // [n_terms]
+    int64_t* count_Y;    // [n_terms]
+    double*  coef;       // [n_terms]
+    double   shift;
+} HexaHamEntry;
+
+typedef struct {
+    int64_t  n_qubits;
+    int64_t  hf_index;
+    int64_t  n_flat;
+    int64_t* param_idx;
+    double*  coef;
+    int64_t* flip;
+    int64_t* z_mask;
+    int64_t* y_mask;
+    int64_t* count_Y;
+} HexaAnsatzEntry;
+
+static HexaHamEntry*    _hx_ham_table    = NULL;
+static int64_t          _hx_ham_count    = 0;
+static int64_t          _hx_ham_cap      = 0;
+static HexaAnsatzEntry* _hx_ans_table    = NULL;
+static int64_t          _hx_ans_count    = 0;
+static int64_t          _hx_ans_cap      = 0;
+
+// Read an int from a hexa array-of-int handle (we accept either farr-of-
+// double cast-to-int or the existing native [int] via the standard
+// array-element accessor). For Phase A we require farr-of-double
+// representation: `cache["ham_flip"]` etc are already `[int]` in the
+// hexa code, so the hexa caller routes them through `farr_int_array`
+// (proposed RFC 036, sibling) or a one-time pack loop here.
+//
+// To keep this kernel self-contained: ham_pack / ansatz_pack accept the
+// existing `[int]` arrays directly via hexa array-element introspection
+// helpers `hexa_len(v)` / `hexa_arr_get_int(v, i)` (assumed present
+// in runtime.c — they are the same helpers used by hexa_call shims to
+// unpack [int] args today).
+
+static int64_t _hx_ham_alloc_slot(void) {
+    if (_hx_ham_count >= _hx_ham_cap) {
+        int64_t nc = _hx_ham_cap < 8 ? 8 : _hx_ham_cap * 2;
+        HexaHamEntry* nt = (HexaHamEntry*)realloc(_hx_ham_table,
+                                  (size_t)nc * sizeof(HexaHamEntry));
+        if (!nt) return -1;
+        _hx_ham_table = nt;
+        _hx_ham_cap = nc;
+    }
+    return _hx_ham_count++;
+}
+
+static int64_t _hx_ans_alloc_slot(void) {
+    if (_hx_ans_count >= _hx_ans_cap) {
+        int64_t nc = _hx_ans_cap < 8 ? 8 : _hx_ans_cap * 2;
+        HexaAnsatzEntry* nt = (HexaAnsatzEntry*)realloc(_hx_ans_table,
+                                  (size_t)nc * sizeof(HexaAnsatzEntry));
+        if (!nt) return -1;
+        _hx_ans_table = nt;
+        _hx_ans_cap = nc;
+    }
+    return _hx_ans_count++;
+}
+
+// ham_pack(flip[], z[], y[], cy[], coef[], shift, n_q) -> int handle.
+HexaVal hexa_ham_pack(HexaVal flip_v, HexaVal z_v, HexaVal y_v,
+                      HexaVal cy_v, HexaVal coef_v,
+                      HexaVal shift_v, HexaVal nq_v) {
+    int64_t n = hexa_len(flip_v);
+    if (n <= 0 || hexa_len(z_v) != n || hexa_len(y_v) != n
+        || hexa_len(cy_v) != n || hexa_len(coef_v) != n)
+        return hexa_int(-1);
+    int64_t id = _hx_ham_alloc_slot();
+    if (id < 0) return hexa_int(-1);
+    HexaHamEntry* e = &_hx_ham_table[id];
+    e->n_terms = n;
+    e->n_qubits = hexa_as_num(nq_v);
+    e->shift = __hx_to_double(shift_v);
+    e->flip    = (int64_t*)malloc((size_t)n * sizeof(int64_t));
+    e->z_mask  = (int64_t*)malloc((size_t)n * sizeof(int64_t));
+    e->y_mask  = (int64_t*)malloc((size_t)n * sizeof(int64_t));
+    e->count_Y = (int64_t*)malloc((size_t)n * sizeof(int64_t));
+    e->coef    = (double*) malloc((size_t)n * sizeof(double));
+    if (!e->flip || !e->z_mask || !e->y_mask || !e->count_Y || !e->coef)
+        return hexa_int(-1);
+    for (int64_t i = 0; i < n; i++) {
+        e->flip[i]    = hexa_as_num(hexa_array_get(flip_v, i));
+        e->z_mask[i]  = hexa_as_num(hexa_array_get(z_v,    i));
+        e->y_mask[i]  = hexa_as_num(hexa_array_get(y_v,    i));
+        e->count_Y[i] = hexa_as_num(hexa_array_get(cy_v,   i));
+        e->coef[i]    = __hx_to_double(hexa_array_get(coef_v, i));
+    }
+    return hexa_int(id);
+}
+
+HexaVal hexa_ham_free(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_ham_count) return hexa_int(-1);
+    HexaHamEntry* e = &_hx_ham_table[id];
+    free(e->flip);    e->flip = NULL;
+    free(e->z_mask);  e->z_mask = NULL;
+    free(e->y_mask);  e->y_mask = NULL;
+    free(e->count_Y); e->count_Y = NULL;
+    free(e->coef);    e->coef = NULL;
+    e->n_terms = 0;
+    return hexa_int(0);
+}
+
+// ansatz_pack(param_idx[], coef[], flip[], z[], y[], cy[], hf_idx, n_q) -> int handle.
+HexaVal hexa_ansatz_pack(HexaVal pi_v, HexaVal coef_v, HexaVal flip_v,
+                         HexaVal z_v, HexaVal y_v, HexaVal cy_v,
+                         HexaVal hf_v, HexaVal nq_v) {
+    int64_t n = hexa_len(pi_v);
+    if (n <= 0 || hexa_len(coef_v) != n || hexa_len(flip_v) != n
+        || hexa_len(z_v) != n || hexa_len(y_v) != n
+        || hexa_len(cy_v) != n) return hexa_int(-1);
+    int64_t id = _hx_ans_alloc_slot();
+    if (id < 0) return hexa_int(-1);
+    HexaAnsatzEntry* e = &_hx_ans_table[id];
+    e->n_qubits = hexa_as_num(nq_v);
+    e->hf_index = hexa_as_num(hf_v);
+    e->n_flat   = n;
+    e->param_idx = (int64_t*)malloc((size_t)n * sizeof(int64_t));
+    e->coef      = (double*) malloc((size_t)n * sizeof(double));
+    e->flip      = (int64_t*)malloc((size_t)n * sizeof(int64_t));
+    e->z_mask    = (int64_t*)malloc((size_t)n * sizeof(int64_t));
+    e->y_mask    = (int64_t*)malloc((size_t)n * sizeof(int64_t));
+    e->count_Y   = (int64_t*)malloc((size_t)n * sizeof(int64_t));
+    if (!e->param_idx || !e->coef || !e->flip || !e->z_mask
+        || !e->y_mask || !e->count_Y) return hexa_int(-1);
+    for (int64_t i = 0; i < n; i++) {
+        e->param_idx[i] = hexa_as_num(hexa_array_get(pi_v,   i));
+        e->coef[i]      = __hx_to_double(hexa_array_get(coef_v, i));
+        e->flip[i]      = hexa_as_num(hexa_array_get(flip_v, i));
+        e->z_mask[i]    = hexa_as_num(hexa_array_get(z_v,    i));
+        e->y_mask[i]    = hexa_as_num(hexa_array_get(y_v,    i));
+        e->count_Y[i]   = hexa_as_num(hexa_array_get(cy_v,   i));
+    }
+    return hexa_int(id);
+}
+
+HexaVal hexa_ansatz_free(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_ans_count) return hexa_int(-1);
+    HexaAnsatzEntry* e = &_hx_ans_table[id];
+    free(e->param_idx); e->param_idx = NULL;
+    free(e->coef);      e->coef = NULL;
+    free(e->flip);      e->flip = NULL;
+    free(e->z_mask);    e->z_mask = NULL;
+    free(e->y_mask);    e->y_mask = NULL;
+    free(e->count_Y);   e->count_Y = NULL;
+    e->n_flat = 0;
+    return hexa_int(0);
+}
+
+// Internal helper: reset state to |HF>, apply ansatz at the given theta
+// array, return <psi|H|psi> + shift.
+static double _rfc039_energy(double* re, double* im, int64_t dim,
+                             const double* theta,
+                             const HexaAnsatzEntry* ans,
+                             const HexaHamEntry* ham) {
+    // Reset to |HF>.
+    for (int64_t k = 0; k < dim; k++) { re[k] = 0.0; im[k] = 0.0; }
+    re[ans->hf_index] = 1.0;
+    // Apply ansatz (replays farr_pauli_exp_inplace logic inline).
+    for (int64_t i = 0; i < ans->n_flat; i++) {
+        double alpha = theta[ans->param_idx[i]] * ans->coef[i];
+        double aa = alpha < 0.0 ? -alpha : alpha;
+        if (aa <= 1e-13) continue;
+        // Inline pauli_exp on (re, im) with masks from ans[i].
+        // (For brevity, this patch calls a small static helper that
+        //  duplicates the body of hexa_farr_pauli_exp_inplace minus the
+        //  HexaVal unwrap.)
+        _hx_pauli_exp_raw(re, im, alpha,
+                          ans->flip[i], ans->z_mask[i], ans->y_mask[i],
+                          ans->count_Y[i], ans->n_qubits);
+    }
+    // Hamiltonian contraction.
+    double e_op = 0.0;
+    for (int64_t j = 0; j < ham->n_terms; j++) {
+        double exp_j = _hx_pauli_expectation_raw(re, im,
+                          ham->flip[j], ham->z_mask[j], ham->y_mask[j],
+                          ham->count_Y[j], ham->n_qubits);
+        e_op += ham->coef[j] * exp_j;
+    }
+    return e_op + ham->shift;
+}
+
+// farr_parameter_shift_grad(re_h, im_h, theta_h, grad_h,
+//                           n_params, ham_h, ansatz_h, n_q) -> 0/-1.
+HexaVal hexa_farr_parameter_shift_grad(HexaVal re_v, HexaVal im_v,
+                                       HexaVal theta_v, HexaVal grad_v,
+                                       HexaVal n_p_v,
+                                       HexaVal ham_v, HexaVal ans_v,
+                                       HexaVal nq_v) {
+    int64_t re_id   = hexa_as_num(re_v);
+    int64_t im_id   = hexa_as_num(im_v);
+    int64_t th_id   = hexa_as_num(theta_v);
+    int64_t gr_id   = hexa_as_num(grad_v);
+    int64_t n_p     = hexa_as_num(n_p_v);
+    int64_t ham_id  = hexa_as_num(ham_v);
+    int64_t ans_id  = hexa_as_num(ans_v);
+    int64_t n_q     = hexa_as_num(nq_v);
+    if (re_id < 0 || re_id >= _hx_farr_count) return hexa_int(-1);
+    if (im_id < 0 || im_id >= _hx_farr_count) return hexa_int(-1);
+    if (th_id < 0 || th_id >= _hx_farr_count) return hexa_int(-1);
+    if (gr_id < 0 || gr_id >= _hx_farr_count) return hexa_int(-1);
+    if (ham_id < 0 || ham_id >= _hx_ham_count) return hexa_int(-1);
+    if (ans_id < 0 || ans_id >= _hx_ans_count) return hexa_int(-1);
+    double* re = _hx_farr_table[re_id].buf;
+    double* im = _hx_farr_table[im_id].buf;
+    double* th = _hx_farr_table[th_id].buf;
+    double* gr = _hx_farr_table[gr_id].buf;
+    if (!re || !im || !th || !gr) return hexa_int(-1);
+    HexaHamEntry*    ham = &_hx_ham_table[ham_id];
+    HexaAnsatzEntry* ans = &_hx_ans_table[ans_id];
+    int64_t dim = 1;
+    for (int64_t k = 0; k < n_q; k++) dim *= 2;
+    static const double HALF_PI = 1.57079632679489661923;
+    double saved_k;
+    for (int64_t k = 0; k < n_p; k++) {
+        saved_k = th[k];
+        th[k] = saved_k + HALF_PI;
+        double e_plus  = _rfc039_energy(re, im, dim, th, ans, ham);
+        th[k] = saved_k - HALF_PI;
+        double e_minus = _rfc039_energy(re, im, dim, th, ans, ham);
+        th[k] = saved_k;
+        gr[k] = 0.5 * (e_plus - e_minus);
+    }
+    return hexa_int(0);
+}
+
+// NOTE: `_hx_pauli_exp_raw` and `_hx_pauli_expectation_raw` are static
+// helpers that share the math body of hexa_farr_pauli_exp_inplace /
+// hexa_farr_pauli_expectation but skip the HexaVal unwrap. They should
+// be added as static functions immediately above this block; their
+// bodies are byte-identical to the corresponding `hexa_farr_*` impls
+// from "double alpha = ..." onward (no HexaVal arg unwrap, no handle
+// lookup — all done by the caller).
+//
+// The matching dispatch wiring is:
+//   if name == "ham_pack"        { ... 7 args → val_int(...) }
+//   if name == "ham_free"        { ... 1 arg  → val_int(...) }
+//   if name == "ansatz_pack"     { ... 8 args → val_int(...) }
+//   if name == "ansatz_free"     { ... 1 arg  → val_int(...) }
+//   if name == "farr_parameter_shift_grad" {
+//       if len(args) > 7 { return val_int(farr_parameter_shift_grad(
+//           args[0], args[1], args[2], args[3], args[4],
+//           args[5], args[6], args[7])) }
+//       else { return val_int(0 - 1) }
+//   }
 
 // ═══════════════════════════════════════════════════════════
 //  RFC 025 — safetensors zero-copy mmap load (2026-05-12)
@@ -10352,6 +10706,12 @@ static void _hexa_init_fn_shims(void) {
     farr_simplex_get                = hexa_fn_new((void*)hexa_farr_simplex_get,                4);
     farr_simplex_shrink             = hexa_fn_new((void*)hexa_farr_simplex_shrink,             3);
     farr_simplex_sort               = hexa_fn_new((void*)hexa_farr_simplex_sort,               4);
+    // RFC 039 (2026-05-13): parameter-shift gradient kernel + bundle ctors.
+    ham_pack                        = hexa_fn_new((void*)hexa_ham_pack,                        7);
+    ham_free                        = hexa_fn_new((void*)hexa_ham_free,                        1);
+    ansatz_pack                     = hexa_fn_new((void*)hexa_ansatz_pack,                     8);
+    ansatz_free                     = hexa_fn_new((void*)hexa_ansatz_free,                     1);
+    farr_parameter_shift_grad       = hexa_fn_new((void*)hexa_farr_parameter_shift_grad,       8);
     bit_or     = hexa_fn_new((void*)_hx_bit_or,           2);
     // bt73 free-fn shims (timestamp, base64_encode, base64_decode)
     timestamp     = hexa_fn_new((void*)_bt73_timestamp_w,     0);
