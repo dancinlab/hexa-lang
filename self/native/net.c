@@ -79,18 +79,75 @@ static int _hexa_net_parse_addr(const char* addr, struct sockaddr_in* sa_out) {
     return 0;
 }
 
+/* Parse a hexa-side addr string into a sockaddr_storage. Recognizes:
+ *   "host:port"       -> AF_INET via _hexa_net_parse_addr
+ *   "unix:/path/sock" -> AF_UNIX, filesystem-bound
+ *   "unix:@name"      -> AF_UNIX abstract namespace (Linux only; -EAFNOSUPPORT on Mac)
+ * Returns the address family (>0) on success, -errno on failure.
+ * Populates *salen_out with the right struct length for bind/connect.
+ *
+ * RFC: incoming/patches/net-unix-domain-socket.md
+ */
+static int _hexa_net_parse_any(const char* addr,
+                               struct sockaddr_storage* sa_out,
+                               socklen_t* salen_out) {
+    if (!addr || !*addr || !sa_out || !salen_out) return -EINVAL;
+    if (strncmp(addr, "unix:", 5) == 0) {
+        const char* path = addr + 5;
+        if (!*path) return -EINVAL;
+        struct sockaddr_un* un = (struct sockaddr_un*)sa_out;
+        memset(un, 0, sizeof(*un));
+        un->sun_family = AF_UNIX;
+        if (path[0] == '@') {
+#ifndef __linux__
+            return -EAFNOSUPPORT;
+#else
+            /* abstract namespace: leading '\0' + name */
+            size_t name_len = strlen(path + 1);
+            if (name_len + 1 > sizeof(un->sun_path)) return -ENAMETOOLONG;
+            un->sun_path[0] = '\0';
+            memcpy(un->sun_path + 1, path + 1, name_len);
+            *salen_out = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + name_len);
+            return AF_UNIX;
+#endif
+        }
+        size_t plen = strlen(path);
+        if (plen + 1 > sizeof(un->sun_path)) return -ENAMETOOLONG;
+        memcpy(un->sun_path, path, plen);
+        un->sun_path[plen] = '\0';
+        *salen_out = sizeof(struct sockaddr_un);
+        return AF_UNIX;
+    }
+    /* Existing AF_INET path. */
+    int rc = _hexa_net_parse_addr(addr, (struct sockaddr_in*)sa_out);
+    if (rc < 0) return rc;
+    *salen_out = sizeof(struct sockaddr_in);
+    return AF_INET;
+}
+
 HexaVal hexa_net_listen(HexaVal addr_val) {
     const char* addr = hexa_to_cstring(addr_val);
-    struct sockaddr_in sa;
-    int parse_rc = _hexa_net_parse_addr(addr, &sa);
-    if (parse_rc < 0) return hexa_int(parse_rc);
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_storage sa;
+    socklen_t salen = 0;
+    int family = _hexa_net_parse_any(addr, &sa, &salen);
+    if (family < 0) return hexa_int(family);
+    int fd = socket(family, SOCK_STREAM, 0);
     if (fd < 0) return hexa_int(-errno);
-    int one = 1;
-    /* SO_REUSEADDR mirrors the Rust TcpListener default. Without it,
-     * repeat `hexa run` within TIME_WAIT collides. */
-    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+    if (family == AF_INET) {
+        int one = 1;
+        /* SO_REUSEADDR mirrors the Rust TcpListener default. Without it,
+         * repeat `hexa run` within TIME_WAIT collides. AF_UNIX has no
+         * TIME_WAIT — skip. */
+        (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    } else if (family == AF_UNIX) {
+        /* Filesystem-bound sockets: unlink any stale leftover so bind
+         * doesn't fail with EADDRINUSE. Ignore ENOENT (no leftover) and
+         * any error on the abstract namespace path (sun_path[0] = '\0'
+         * means abstract — nothing to unlink). */
+        struct sockaddr_un* un = (struct sockaddr_un*)&sa;
+        if (un->sun_path[0] != '\0') (void)unlink(un->sun_path);
+    }
+    if (bind(fd, (struct sockaddr*)&sa, salen) < 0) {
         int e = errno; close(fd); return hexa_int(-e);
     }
     if (listen(fd, 64) < 0) {
@@ -116,12 +173,13 @@ HexaVal hexa_net_close(HexaVal fd_val) {
 
 HexaVal hexa_net_connect(HexaVal addr_val) {
     const char* addr = hexa_to_cstring(addr_val);
-    struct sockaddr_in sa;
-    int parse_rc = _hexa_net_parse_addr(addr, &sa);
-    if (parse_rc < 0) return hexa_int(parse_rc);
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_storage sa;
+    socklen_t salen = 0;
+    int family = _hexa_net_parse_any(addr, &sa, &salen);
+    if (family < 0) return hexa_int(family);
+    int fd = socket(family, SOCK_STREAM, 0);
     if (fd < 0) return hexa_int(-errno);
-    if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+    if (connect(fd, (struct sockaddr*)&sa, salen) < 0) {
         int e = errno; close(fd); return hexa_int(-e);
     }
     return hexa_int(fd);

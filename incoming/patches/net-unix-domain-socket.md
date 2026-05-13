@@ -1,6 +1,6 @@
 # incoming patch: net-unix-domain-socket — AF_UNIX SOCK_STREAM for local-only IPC
 
-> **id**: `net-unix-domain-socket` · **opened**: 2026-05-13 KST PM · **status**: `spec` (RFC 초안 — 미land)
+> **id**: `net-unix-domain-socket` · **opened**: 2026-05-13 KST PM · **landed**: 2026-05-14 KST · **status**: `applied` — `_hexa_net_parse_any` dispatches `unix:/path` to AF_UNIX, `unix:@name` to abstract namespace (Linux only, -EAFNOSUPPORT on Mac); `hexa_net_listen` / `hexa_net_connect` use it. SO_REUSEADDR skipped for AF_UNIX (no TIME_WAIT). Filesystem-bound sockets get unlink-before-bind. Live verified on Mac: `net_listen("unix:/tmp/test.sock")` → connect → accept → write/read 'hello' round-trip PASS; AF_INET `127.0.0.1:0` regression PASS; wilson 23/23 smoke PASS.
 > **trees**: `self/native/net.c` + `self/std_net.hexa`
 > **source**: anima daemon Phase 2 (CHAT.md `~/core/anima/CHAT.md` 의 `--unix /tmp/anima.sock` 옵션) — local-only client (같은 host 의 wilson plugin, Python script, Node process 등) 에 대해 TCP `:7878` 보다 (a) localhost loopback overhead 회피 (b) 인증 단순화 (filesystem permissions) (c) port 충돌 없음.
 > **why this matters**: anima daemon 이 local-only mode 로 동작할 때 TCP 는 과한 surface — port allocation, firewall, IPv4 vs IPv6 결정 등 모두 불필요. AF_UNIX SOCK_STREAM 은 동일 process-tree 안에서 가장 단순한 IPC. wilson 도 `provider-anima` plugin 이 같은 머신에서 daemon 호출 시 Unix domain 선호. anima 외에도 모든 local-only hexa-native IPC (nexus / hyperion / hexa hook script ↔ daemon) 가 같은 needs.
