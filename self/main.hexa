@@ -498,7 +498,7 @@ fn _absorbed_script(verb) {
     if verb == "qmirror"          { return "compiler/hw_probes/qmirror.hexa" }
     if verb == "akida"            { return "compiler/hw_probes/akida.hexa" }
     if verb == "qrng"             { return "compiler/hw_probes/qrng.hexa" }
-    if verb == "kick"             { return "compiler/kick/kick.hexa" }
+    if verb == "kick"             { return "compiler/drill/drill.hexa" }   // alias: kick → drill (ω-cycle ≡ drill apex)
     if verb == "codata"           { return "compiler/bridges/codata.hexa" }
     if verb == "oeis"             { return "compiler/bridges/oeis.hexa" }
     if verb == "arxiv"            { return "compiler/bridges/arxiv.hexa" }
