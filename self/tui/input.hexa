@@ -250,6 +250,16 @@ fn _decode_one() -> array {
         if b2 == 127 || b2 == 8 {
             return ["key", -3, 0, 1, 0, ""]
         }
+        // Alt+Enter — ESC + CR or ESC + LF. The portable encoding of
+        // Shift+Enter used by claude-code's terminalSetup (iTerm2 / VS Code /
+        // Cursor / Windsurf install a `shift+enter → \r` rule that
+        // forwards Shift+Enter as ESC+CR to the app). We collapse both ESC+CR
+        // and ESC+LF into ["key", -1, 0, 1, 0, ""] (enter with alt=1) so the
+        // editor branches on alt to insert a newline instead of submitting.
+        // (wilson 2026-05-13, see incoming/patches/wilson-shift-enter-newline.md.)
+        if b2 == 13 || b2 == 10 {
+            return ["key", -1, 0, 1, 0, ""]
+        }
         return ["key", -4, 0, 0, 0, ""]
     }
 
@@ -405,6 +415,25 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
     if final_byte == 73 { return ["focus", 1] }                 // I focus-in
     if final_byte == 79 { return ["focus", 0] }                 // O focus-out
     if final_byte == 90 { return ["key", -2, 0, 0, 1, ""] }     // Z shift+tab (CBT / BackTab) — wilson 2026-05-13, see incoming/patches/wilson-shift-tab-csi-Z-decode.md
+    if final_byte == 117 {
+        // CSI u — kitty keyboard protocol: ESC[<codepoint>;<modifier>u
+        // (e.g. ESC[13;2u = Shift+Enter). Modifier bitmap follows xterm
+        // modifyOtherKeys: 1=base, 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, ...
+        // We decode Enter (cp 13) with mod flags so terminals that emit kitty
+        // CSI u (ghostty / kitty / WezTerm / recent iTerm2 with proto enabled)
+        // produce a Shift+Enter event without needing the ESC+CR mapping.
+        // Other codepoints fall through as ["err", "csi-u-unsupported-cp"].
+        // (wilson 2026-05-13, see incoming/patches/wilson-shift-enter-newline.md.)
+        let _u_parts = _split_semi(params)
+        let _u_cp = if len(_u_parts) > 0 { _atoi(to_string(_u_parts[0])) } else { _atoi(params) }
+        let _u_mod = if len(_u_parts) >= 2 { _atoi(to_string(_u_parts[1])) } else { 1 }
+        let _u_eff = if _u_mod <= 1 { 0 } else { _u_mod - 1 }
+        let _u_shift = if (_u_eff & 1) != 0 { 1 } else { 0 }
+        let _u_alt   = if (_u_eff & 2) != 0 { 1 } else { 0 }
+        let _u_ctrl  = if (_u_eff & 4) != 0 { 1 } else { 0 }
+        if _u_cp == 13 { return ["key", -1, _u_ctrl, _u_alt, _u_shift, ""] }
+        return ["err", "csi-u-unsupported-cp"]
+    }
     if final_byte == 126 {
         // ~ — keypad / function-key / paste
         // hive Task #58 (2026-04-29): support xterm modifier params of the
@@ -426,6 +455,27 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
             _paste_active = 1
             _paste_bytes = []
             return ["none"]
+        }
+        // xterm modifyOtherKeys level 2 — CSI 27 ; <modifier> ; <code> ~. Emitted
+        // by terminals (Ghostty was the empirical repro) when the app sends
+        // CSI >4;2m to enable modifyOtherKeys. The format encodes the literal
+        // character code the keypress *would have* produced plus the modifier
+        // bitmap, so Shift+Enter arrives as `27;2;13~` (Shift=mod 2, Enter=code 13).
+        // Without this branch the sequence fell through as "csi-tilde-unknown"
+        // and the editor never saw the shift flag. Three params: marker 27,
+        // modifier, code. (wilson 2026-05-13.)
+        if n == 27 && len(_parts_csi) >= 3 {
+            let _mok_mod  = _atoi(to_string(_parts_csi[1]))
+            let _mok_code = _atoi(to_string(_parts_csi[2]))
+            let _mok_eff  = if _mok_mod <= 1 { 0 } else { _mok_mod - 1 }
+            let _mok_shift = if (_mok_eff & 1) != 0 { 1 } else { 0 }
+            let _mok_alt   = if (_mok_eff & 2) != 0 { 1 } else { 0 }
+            let _mok_ctrl  = if (_mok_eff & 4) != 0 { 1 } else { 0 }
+            if _mok_code == 13 { return ["key", -1, _mok_ctrl, _mok_alt, _mok_shift, ""] }   // Enter
+            if _mok_code == 9  { return ["key", -2, _mok_ctrl, _mok_alt, _mok_shift, ""] }   // Tab
+            if _mok_code == 8 || _mok_code == 127 { return ["key", -3, _mok_ctrl, _mok_alt, _mok_shift, ""] }   // Backspace
+            if _mok_code >= 32 && _mok_code < 127 { return ["key", _mok_code, _mok_ctrl, _mok_alt, _mok_shift, chr(_mok_code)] }
+            return ["err", "csi-modifyotherkeys-unsupported-code"]
         }
         if n == 2  { return ["key", -22, _ctrl_f, _alt_f, _shift_f, ""] }   // ins
         if n == 3  { return ["key", -23, _ctrl_f, _alt_f, _shift_f, ""] }   // del
