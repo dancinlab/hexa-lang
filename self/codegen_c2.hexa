@@ -4101,8 +4101,15 @@ fn gen2_expr(node) {
                 if name == "pty_tcgetattr"   { return "hexa_tcgetattr(" + a0 + ")" }
                 if name == "tty_isatty"      { return "hexa_tty_isatty(" + a0 + ")" }
                 if name == "tty_ttyname"     { return "hexa_tty_ttyname(" + a0 + ")" }
+                // stdlib/os/namespace — 1-arg (RFC stdlib-os-namespace-linux.md)
+                if name == "unshare"                 { return "hexa_unshare(" + a0 + ")" }
+                if name == "namespace_clone_const"   { return "hexa_namespace_clone_const(" + a0 + ")" }
             }
             if len(node.args) == 2 {
+                // stdlib/os/mount + namespace — 2-arg (RFC stdlib-os-{mount,namespace}-linux.md)
+                if name == "umount"    { return "hexa_umount(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                if name == "setns"     { return "hexa_setns(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                if name == "pivot_root"{ return "hexa_pivot_root(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // PTY 2-arg builtins
                 if name == "term_fd_read"   { return "hexa_term_fd_read(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "term_fd_write"  { return "hexa_term_fd_write(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
@@ -4198,6 +4205,10 @@ fn gen2_expr(node) {
                 // stdlib/os/pty — 5-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_set_winsize" {
                     return "hexa_pty_set_winsize(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
+                }
+                // stdlib/os/mount — 5-arg (RFC stdlib-os-mount-linux.md)
+                if name == "mount" {
+                    return "hexa_mount(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
                 }
             }
             if len(node.args) == 4 {
@@ -6010,6 +6021,13 @@ fn _is_builtin_name(name) {
     if name == "pty_forkexec" { return true }
     if name == "tty_isatty" { return true }
     if name == "tty_ttyname" { return true }
+    // stdlib/os/mount + namespace — Linux syscall wrappers (RFCs *-linux.md)
+    if name == "mount" { return true }
+    if name == "umount" { return true }
+    if name == "unshare" { return true }
+    if name == "setns" { return true }
+    if name == "pivot_root" { return true }
+    if name == "namespace_clone_const" { return true }
     if name == "now_monotonic_s" { return true }
     if name == "mono_ns" { return true }
     if name == "utc_iso_now" { return true }

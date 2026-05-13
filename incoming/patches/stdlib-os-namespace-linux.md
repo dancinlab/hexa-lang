@@ -1,5 +1,7 @@
 # `stdlib/os/namespace.hexa` — Linux `unshare(2)` / `setns(2)` / `pivot_root(2)`
 
+> **status**: `applied` (2026-05-13 KST PM, bundled with mount) — `hexa_unshare` / `hexa_setns` / `hexa_pivot_root` in `self/native/namespace.c`; `namespace_clone_const(name)` returns CLONE_NEW* values at module-load time so the hexa-side `pub let CLONE_NEW*` constants stay in sync with `<linux/sched.h>`. macOS returns `-ENOSYS` for the syscalls but still surfaces the canonical Linux constants for portable code. Convenience: `unshare_mount_ns_private()` does the "fresh mount ns + mount / private rec" combo the cpu pattern's first move needs. Live verified on Mac (`CLONE_NEWNS=131072`, `CLONE_NEWUSER=268435456`, unshare returns -78). Wilson 23/23 smoke PASS.
+
 **From:** wilson (downstream) — 2026-05-13. P0 #4 of 5 in the
 `u-root/cpu` port. Companion meta: `stdlib-for-cpu-port.md`.
 Dependency-free; can land alongside `stdlib-os-mount-linux.md`.

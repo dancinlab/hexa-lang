@@ -1,0 +1,37 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/os/namespace.hexa -- Linux unshare / setns / pivot_root
+//
+//  Thin facade over the C builtins in self/native/namespace.c.
+//
+//  CLONE_NEW* flags are exposed at hexa-load time via a tiny lookup
+//  builtin (`namespace_clone_const`) so the values stay in sync with
+//  whatever <linux/sched.h> defines on the current kernel — no risk
+//  of skew vs hard-coded literals.
+//
+//  Convention matches kernel ABI: returns 0 on success, -errno on
+//  failure. macOS stub returns -ENOSYS for all three syscalls.
+
+// Resolved at module-load time. On Linux these match
+// <linux/sched.h>; on macOS the namespace.c stub returns the
+// canonical Linux values so portable code can read these even
+// where the syscalls themselves are unavailable.
+pub let CLONE_NEWNS     : int = namespace_clone_const("CLONE_NEWNS")
+pub let CLONE_NEWUTS    : int = namespace_clone_const("CLONE_NEWUTS")
+pub let CLONE_NEWIPC    : int = namespace_clone_const("CLONE_NEWIPC")
+pub let CLONE_NEWUSER   : int = namespace_clone_const("CLONE_NEWUSER")
+pub let CLONE_NEWPID    : int = namespace_clone_const("CLONE_NEWPID")
+pub let CLONE_NEWNET    : int = namespace_clone_const("CLONE_NEWNET")
+pub let CLONE_NEWCGROUP : int = namespace_clone_const("CLONE_NEWCGROUP")
+pub let CLONE_NEWTIME   : int = namespace_clone_const("CLONE_NEWTIME")
+
+// Convenience: "give me a fresh mount namespace + make / private"
+// is the cpu pattern's first move. Fails fast and surfaces the
+// errno of the failing call (unshare or the make_private mount).
+pub fn unshare_mount_ns_private() -> int {
+    let rc = unshare(CLONE_NEWNS)
+    if rc != 0 { return rc }
+    // make / a private mount so subsequent mounts don't leak into
+    // the parent namespace. mount() returning ENOSYS on macOS keeps
+    // this call shape consistent.
+    return mount("none", "/", "", 262144 + 16384, "")    // MS_PRIVATE | MS_REC
+}

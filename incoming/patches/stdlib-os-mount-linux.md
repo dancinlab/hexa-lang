@@ -1,5 +1,7 @@
 # `stdlib/os/mount.hexa` — Linux `mount(2)` / `umount(2)` syscall wrapper
 
+> **status**: `applied` (2026-05-13 KST PM) — `hexa_mount` / `hexa_umount` in `self/native/mount.c`; codegen direct-emit at 5-arg / 2-arg; hexa-side facade in `self/stdlib/os/mount.hexa` with the full MS_* + MNT_* constants table + convenience helpers (`bind_mount`, `mount_tmpfs`, `make_private`, …). macOS returns `-ENOSYS` for both calls (consumer code in u-root/cpu is Linux-only, so the stub is graceful degradation). Live verified on Mac via `/tmp/test_mount_ns` — constants resolved correctly (`MS_BIND=4096`, `MS_PRIVATE=262144`), stub returns `-78` cleanly. Wilson 23/23 smoke PASS post-toolchain-rebuild.
+
 **From:** wilson (downstream) — 2026-05-13. P0 #3 of 5 in the
 `u-root/cpu` port. Companion meta: `stdlib-for-cpu-port.md`. Smallest
 and dependency-free — recommended first landing.

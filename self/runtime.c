@@ -246,19 +246,36 @@ static void _hexa_init_path_augment(void) {
 // Defaults & overrides:
 //   HEXA_MEM_UNLIMITED=1           → cap disabled
 //   HEXA_MEM_CAP_MB=<N>            → cap to N MB (must be >0)
-//   default                        → 768 MB (2026-05-05: lowered 2048 → 768
-//                                    after hive watcher logged repeat
-//                                    runaways at 0.5–6 GB; the prior 2 GB
-//                                    default never fired before the
-//                                    external 250MB watcher SIGKILL'd.
-//                                    768 MB still permits 41-file
-//                                    flatten+transpile compiles.)
+//   default                        → 2048 MB (2026-05-13: raised 768 → 2048
+//                                    after n6 Wave 1 enriched
+//                                    compiler/atlas/embedded.gen.hexa
+//                                    [3.27 MB → 4.92 MB rodata; ~7398
+//                                    AtlasNode literals + 5 per-kind arrays
+//                                    with default GradeInfo/EdgeInfo per
+//                                    node]. The interp parse phase peaks at
+//                                    ~810 MB RSS just materializing the
+//                                    embed AST — the prior 768 MB cap fired
+//                                    on every `use "compiler/atlas/static_index"`
+//                                    smoke (static_index_test, overlay_test,
+//                                    drill_test). 2048 MB matches the
+//                                    module_loader child default and gives
+//                                    ~2.5× headroom on observed peaks.
+//                                    Operator override via HEXA_MEM_CAP_MB /
+//                                    HEXA_MEM_UNLIMITED unchanged.
+//                                    Prior 768 MB rationale (hive watcher
+//                                    runaway containment) is now handled by
+//                                    the 4 K-tick rss probe (~0xFFF stride),
+//                                    which catches bursty allocators well
+//                                    inside 2 GB. 41-file flatten+transpile
+//                                    bundles already get 4 GB via the
+//                                    module_loader_env_prefix() path in
+//                                    self/main.hexa.)
 //
 // CLI flags (parsed by the hexa wrapper script, exported as env above):
 //   --mem-unlimited                → HEXA_MEM_UNLIMITED=1
 //   --mem-cap=<N>                  → HEXA_MEM_CAP_MB=<N>
 
-static size_t _hx_mem_cap_bytes = 768ull * 1024ull * 1024ull;   // 768 MB default
+static size_t _hx_mem_cap_bytes = 2048ull * 1024ull * 1024ull;  // 2048 MB default
 static int    _hx_mem_cap_disabled = 0;
 static volatile uint64_t _hx_mem_tick_ctr = 0;
 
@@ -11068,6 +11085,24 @@ static void _hexa_init_fn_shims(void) {
  * macOS bundles it in libsystem.
  * ═══════════════════════════════════════════════════════════════════ */
 #include "native/pty.c"
+
+/* ═══════════════════════════════════════════════════════════════════
+ * stdlib/os/mount + stdlib/os/namespace -- Linux mount(2) / umount(2) +
+ * unshare / setns / pivot_root. Functions return 0 on success, -errno
+ * on failure. macOS returns -ENOSYS (graceful degradation for
+ * downstream code that targets both platforms).
+ *
+ *   hexa_mount(src, tgt, fs, flags, data)        -> 0 or -errno
+ *   hexa_umount(tgt, flags)                      -> 0 or -errno
+ *   hexa_unshare(flags)                          -> 0 or -errno
+ *   hexa_setns(fd, nstype)                       -> 0 or -errno
+ *   hexa_pivot_root(new_root, put_old)           -> 0 or -errno
+ *   hexa_namespace_clone_const(name)             -> int (CLONE_NEW* value)
+ *
+ * RFCs: incoming/patches/stdlib-os-{mount,namespace}-linux.md
+ * ═══════════════════════════════════════════════════════════════════ */
+#include "native/mount.c"
+#include "native/namespace.c"
 
 /* ═══════════════════════════════════════════════════════════════════
  * B20 / roadmap 55 Phase 1 — deterministic FP control-word init.
