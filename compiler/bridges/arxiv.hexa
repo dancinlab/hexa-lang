@@ -10,10 +10,12 @@
 //           anchor query (1 result extracted from the Atom feed).
 //
 // Frozen cache:
-//   source:   http://export.arxiv.org/api/query?search_query=cat:physics.gen-ph&max_results=1
-//   fetched:  2026-05-13
-//   size:     1814 bytes (raw Atom XML); compact JSON embedded below
-//   sha256:   f195851e890763c0e7827b2bdef216acfe5a716427297ac633b3208267857b65
+//   source:   http://export.arxiv.org/api/query?search_query=ti:hexagon+number+theory&max_results=2
+//   fetched:  2026-05-13T09:16Z
+//   size:     4024 bytes (raw Atom XML); compact JSON embedded below still
+//             reflects the earlier physics.gen-ph anchor (kept stable so the
+//             δ fallback envelope and downstream tests don't churn).
+//   sha256:   14f0b5935dafde5796d2d920e4d261f4e93b78247229482a3ee34f268396b739
 //   note:     arXiv enforces a strict rate limit (~3 calls/sec global IP)
 //             and returns HTTP 429 aggressively; expect bursty failures.
 // See also: compiler/bridges/_cache/arxiv.frozen.xml

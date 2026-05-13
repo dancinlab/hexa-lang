@@ -10,11 +10,13 @@
 //           (CID=2519, curated anchor).
 //
 // Frozen cache for CID=962:
-//   source:   https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/962/property/MolecularWeight,MolecularFormula,CanonicalSMILES/JSON
-//   fetched:  2026-05-13
-//   size:     197 bytes
-//   sha256:   fe16d0c03d380239c00c30c131a369013d6c8abc14d0d781a0519f7cd75ff6c2
+//   source:   https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/962/property/MolecularFormula,IUPACName,MolecularWeight/JSON
+//   fetched:  2026-05-13T09:18Z
+//   size:     194 bytes
+//   sha256:   1e4679f68c9194af90aaae1a0e7b4458ab97d3bda724d19c09fc71b960d0fd8a
 //   note:     PubChem v2026-05 renamed CanonicalSMILES → ConnectivitySMILES.
+//             Re-fetched with IUPACName field (richer identification surface)
+//             in place of CanonicalSMILES per Phase 5 cache enrichment.
 // See also: compiler/bridges/_cache/pubchem.frozen.json
 
 import "./_common.hexa"

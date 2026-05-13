@@ -1,25 +1,50 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
-  <id>https://arxiv.org/api/3sGVg728OwjoZ5Os3INLRBdZ+Ys</id>
-  <title>arXiv Query: search_query=cat:physics.gen-ph&amp;id_list=&amp;start=0&amp;max_results=1</title>
-  <updated>2026-05-13T07:34:23Z</updated>
-  <link href="https://arxiv.org/api/query?search_query=cat:physics.gen-ph&amp;start=0&amp;max_results=1&amp;id_list=" type="application/atom+xml"/>
-  <opensearch:itemsPerPage>1</opensearch:itemsPerPage>
-  <opensearch:totalResults>10826</opensearch:totalResults>
+  <id>https://arxiv.org/api/+bns2BQUWtanWrPGFAddP29GbuQ</id>
+  <title>arXiv Query: search_query=ti:hexagon OR all:number OR all:theory&amp;id_list=&amp;start=0&amp;max_results=2</title>
+  <updated>2026-05-13T09:16:31Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=ti:hexagon+OR+(all:number+OR+all:theory)&amp;start=0&amp;max_results=2&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>2</opensearch:itemsPerPage>
+  <opensearch:totalResults>1030860</opensearch:totalResults>
   <opensearch:startIndex>0</opensearch:startIndex>
   <entry>
-    <id>http://arxiv.org/abs/1905.02587v1</id>
-    <title>Vapor Pressure in a Paramagnetic Solid?</title>
-    <updated>2019-05-06T02:33:11Z</updated>
-    <link href="https://arxiv.org/abs/1905.02587v1" rel="alternate" type="text/html"/>
-    <link href="https://arxiv.org/pdf/1905.02587v1" rel="related" type="application/pdf" title="pdf"/>
-    <summary>In this paper, we obtain an analytical expression for the vapor pressure of a paramagnetic solid for high temperatures. We have considered the behavior of magnetic materials in the presence of an external magnetic field using the thermodynamical analysis and the elements of statistical mechanics in microscopic systems. We found that the vapor pressure depends on the magnetic susceptibility of material and the external field applied.</summary>
-    <category term="physics.gen-ph" scheme="http://arxiv.org/schemas/atom"/>
-    <published>2019-05-06T02:33:11Z</published>
-    <arxiv:comment>14 pages</arxiv:comment>
-    <arxiv:primary_category term="physics.gen-ph"/>
+    <id>http://arxiv.org/abs/math/0603469v1</id>
+    <title>The Caccetta-Haggkvist conjecture and additive number theory</title>
+    <updated>2006-03-20T01:26:20Z</updated>
+    <link href="https://arxiv.org/abs/math/0603469v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/math/0603469v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>  The Caccetta-Haggkvist conjecture states that if G is a finite directed graph with at least n/k edges going out of each vertex, then G contains a directed cycle of length at most k. Hamidoune used methods and results from additive number theory to prove the conjecture for Cayley graphs and for vertex-transitive graphs. This expository paper contains a survey of results on the Caccetta-Haggkvist conjecture, and complete proofs of the conjecture in the case of Cayley and vertex-transitive graphs.</summary>
+    <category term="math.CO" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.NT" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2006-03-20T01:26:20Z</published>
+    <arxiv:comment>14 pages; text of two lectures in the New York Number Theory Seminar</arxiv:comment>
+    <arxiv:primary_category term="math.CO"/>
+    <arxiv:journal_ref>Analytic Number Theory: Essays in Honour of Klaus F. Roth, Cambridge Univ. Press, 2009, pp. 347--358</arxiv:journal_ref>
     <author>
-      <name>Manuel Malaver</name>
+      <name>Melvyn B. Nathanson</name>
     </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1508.06031v2</id>
+    <title>On the local Tamagawa number conjecture for Tate motives over tamely ramified fields</title>
+    <updated>2016-05-24T10:11:05Z</updated>
+    <link href="https://arxiv.org/abs/1508.06031v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1508.06031v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>The local Tamagawa number conjecure, first formulated by Fontaine and Perrin-Riou, expresses the compatibility of the (global) Tamagawa number conjecture on motivic $L$-functions with the functional equation. The local conjecture was proven for Tate motives over finite unramified extensions $K/\mathbb{Q}_p$ by Bloch and Kato. We use the theory of $(φ, Γ_K)$-modules and a reciprocity law due to Cherbonnier and Colmez to provide a new proof in the case of unramified extensions, and to prove the conjecture for the motive $\mathbb{Q}_p(2)$ over certain tamely ramified extensions.</summary>
+    <category term="math.NT" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.AG" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.KT" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2015-08-25T05:03:25Z</published>
+    <arxiv:comment>45 pages, LaTeX; extensive revisions and clarifications based on feedback; to appear in Algebra &amp; Number Theory</arxiv:comment>
+    <arxiv:primary_category term="math.NT"/>
+    <arxiv:journal_ref>Algebra Number Theory 10 (2016) 1221-1275</arxiv:journal_ref>
+    <author>
+      <name>Jay Daigle</name>
+    </author>
+    <author>
+      <name>Matthias Flach</name>
+    </author>
+    <arxiv:doi>10.2140/ant.2016.10.1221</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.2140/ant.2016.10.1221" title="doi"/>
   </entry>
 </feed>

@@ -1,0 +1,93 @@
+// HEXA Native Compiler — Phase 5 bridge live-HTTP audit harness
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// Companion to bridges_live_test.hexa. Records the *outcome* of each
+// bridge's live HTTP path in a machine-friendly table (one row per
+// bridge) and prints a tabular summary. Unlike bridges_live_test.hexa
+// which only does a soft probe, this audit captures:
+//
+//   - dispatcher ok flag
+//   - envelope classification (LIVE / CACHE / OTHER)
+//   - body length (bytes after δ envelope)
+//   - first 60 chars preview
+//
+// Latency is not measured here (the hexa interp does not expose a
+// monotonic clock from this scope); refer to the bash audit captured
+// in incoming/notes/2026-05-13-bridge-cache-live-validation-session.md
+// for wall-clock numbers from the shell-level audit.
+//
+// Run:  HEXA_BRIDGE_LIVE=1 hexa run compiler/bridges/bridges_live_audit.hexa
+//
+// Honors HEXA_BRIDGE_LIVE gate (same as bridges_live_test.hexa).
+// Exits 0 always (probe, not gate). Strict mode reserved for follow-up.
+
+import "./_common.hexa"
+import "./codata.hexa"
+import "./oeis.hexa"
+import "./arxiv.hexa"
+import "./gw.hexa"
+import "./horizons.hexa"
+import "./cmb.hexa"
+import "./nanograv.hexa"
+import "./simbad.hexa"
+import "./icecube.hexa"
+import "./nist_atomic.hexa"
+import "./wikipedia.hexa"
+import "./openalex.hexa"
+import "./gaia.hexa"
+import "./lhc.hexa"
+import "./pubchem.hexa"
+import "./uniprot.hexa"
+
+fn _classify(body: string) -> string {
+    if body.contains("\"source\":\"live:") { return "LIVE " }
+    if body.contains("\"source\":\"fallback:frozen-cache\"") { return "CACHE" }
+    if body.contains("\"source\":\"fallback:") { return "CACHE" }
+    return "OTHER"
+}
+
+fn _row(name: string, r: array) {
+    let ok = cli_ok(r)
+    let body = cli_stdout(r)
+    let kind = _classify(body)
+    let sz = body.len()
+    let preview = if sz > 60 { body.substring(0, 60) + "..." } else { body }
+    let flag = if ok { "OK  " } else { "FAIL" }
+    println("  " + flag + " " + kind + " " + name + " size=" + to_string(sz) + " | " + preview)
+}
+
+fn main() {
+    if env("HEXA_BRIDGE_LIVE") != "1" {
+        println("bridges_live_audit: skipped (set HEXA_BRIDGE_LIVE=1 to run)")
+        exit(0)
+    }
+    setenv("HEXA_FORCE_FALLBACK", "")
+
+    println("bridges Phase 5 live HTTP audit (16 bridges)")
+    println("HEXA_FORCE_FALLBACK = " + env("HEXA_FORCE_FALLBACK"))
+    println("HEXA_CLI_TIMEOUT_SEC = " + env("HEXA_CLI_TIMEOUT_SEC"))
+    println("")
+
+    _row("codata     ", codata_run([]))
+    _row("oeis       ", oeis_run(["A000045"]))
+    _row("arxiv      ", arxiv_run(["cat:physics.gen-ph", "1"]))
+    _row("gw         ", gw_run([]))
+    _row("horizons   ", horizons_run(["301"]))
+    _row("cmb        ", cmb_run([]))
+    _row("nanograv   ", nanograv_run([]))
+    _row("simbad     ", simbad_run(["SgrA*"]))
+    _row("icecube    ", icecube_run([]))
+    _row("nist_atomic", nist_atomic_run(["H"]))
+    _row("wikipedia  ", wikipedia_run(["Perfect_number"]))
+    _row("openalex   ", openalex_run(["perfect+number"]))
+    _row("gaia       ", gaia_run([]))
+    _row("lhc        ", lhc_run([]))
+    _row("pubchem    ", pubchem_run(["962"]))
+    _row("uniprot    ", uniprot_run(["P01308"]))
+
+    println("")
+    println("Audit complete. See incoming/notes/2026-05-13-bridge-cache-live-validation-session.md for shell-level latency table.")
+    exit(0)
+}
