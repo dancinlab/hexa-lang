@@ -332,8 +332,8 @@ pub let CATALOG: [DiagSpec] = [
         title: "@grace requires reviewer acknowledgement",
         severity: Severity::Warning,
         stage: "runtime",
-        template: "ai-native: @grace at {file}:{line} suppresses {error_code} until {until}. Reason: \"{reason}\". This is a TEMPORARY debt — the author is responsible for resolving the underlying issue before the expiry date. Reviewer acknowledgement REQUIRED before merge.",
-        explain: "Every @grace site emits this warning to prevent silent strict-lint bypass. The build is gated on explicit user consent at the CI/PR layer: PR description must contain `Acked-grace: HXxxxx by <reviewer>` trailer or commit message must contain `acked-grace: <code> by <author>`. SPEC.yaml opt_out.ai_native_warn_policy.",
+        template: "ai-native: @grace at {file}:{line} suppresses {error_code} until {until}. Reason: \"{reason}\". Suppressed [{suppressed_severity_original}]: {suppressed_title} — {suppressed_message}. This is a TEMPORARY debt — the author is responsible for resolving the underlying issue before the expiry date. Reviewer acknowledgement REQUIRED before merge.",
+        explain: "Every @grace site emits this warning to prevent silent strict-lint bypass. The build is gated on explicit user consent at the CI/PR layer: PR description must contain `Acked-grace: HXxxxx by <reviewer>` trailer or commit message must contain `acked-grace: <code> by <author>`. The `Suppressed [...]` segment inlines the original diagnostic's severity / title / short-rendered body (SPEC.yaml opt_out.ai_native_warn_policy.suppressed_diagnostic_inlining, args_keys: suppressed_title / suppressed_message / suppressed_severity_original) so the bypassed text stays auditable at every compile. SPEC.yaml opt_out.ai_native_warn_policy.",
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
