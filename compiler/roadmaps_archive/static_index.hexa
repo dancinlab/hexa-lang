@@ -1,0 +1,46 @@
+// HEXA Native Compiler — Phase 1-extension absorption: roadmaps archive index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Read-only facade over the embedded ROADMAPS_ARCHIVE table.
+//
+//   pub fn roadmaps_archive_list()                    -> [RoadmapArchive]
+//   pub fn roadmaps_archive_lookup(project: string)   -> RoadmapArchive
+//   pub fn roadmaps_archive_present()                 -> [RoadmapArchive]
+//
+// Lookup miss returns a sentinel entry (project == "").
+
+use "compiler/roadmaps_archive/embed"
+use "compiler/roadmaps_archive/embedded.gen"
+
+pub fn roadmaps_archive_list() -> [RoadmapArchive] {
+    return ROADMAPS_ARCHIVE
+}
+
+pub fn roadmaps_archive_lookup(project: string) -> RoadmapArchive {
+    let n = len(ROADMAPS_ARCHIVE)
+    let mut i = 0
+    while i < n {
+        let e = ROADMAPS_ARCHIVE[i]
+        if e.project == project { return e }
+        i = i + 1
+    }
+    return RoadmapArchive {
+        project: "", source_path: "", sha256: "",
+        status: "", size_bytes: 0, phase_count: 0, track_count: 0,
+        raw_json: ""
+    }
+}
+
+pub fn roadmaps_archive_present() -> [RoadmapArchive] {
+    let out = []
+    let n = len(ROADMAPS_ARCHIVE)
+    let mut i = 0
+    while i < n {
+        let e = ROADMAPS_ARCHIVE[i]
+        if e.status == "present" { out.push(e) }
+        i = i + 1
+    }
+    return out
+}

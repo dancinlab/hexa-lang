@@ -1,0 +1,200 @@
+// tool/status_archive_embed_gen.hexa — Phase 1-extension absorption driver (D12)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Captures a frozen tableau of ~/core/nexus/state/markers/ and emits
+// compiler/status_archive/embedded.gen.hexa.
+//
+// Strategy: shell out to `stat -f "%N|%m|%z"` (BSD stat — macOS native)
+// across every entry in the markers directory, sort by name, then embed
+// one StatusMarkerEntry per row. The bundle hash is a sha256 over the
+// concatenated sorted `name|mtime|size\n` lines.
+//
+// Run:
+//   hexa run tool/status_archive_embed_gen.hexa
+
+use "compiler/status_archive/embed"
+
+let DEFAULT_REL: string = "state/markers"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/status_archive/embedded.gen.hexa"
+let MODULE_NAME: string = "STATUS_ARCHIVE"
+let LIST_NAME: string   = "STATUS_MARKERS"
+
+// --- string escape ---------------------------------------------------------
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+// sha256 of a string passed via stdin to shasum (avoids shell escaping of
+// the payload entirely).
+fn _sha256_of_string(s: string) -> string {
+    // Write to a temp file first to avoid shell-quoting + ARG_MAX issues
+    // when s is large (it will be — ~6k×80B ≈ 480 KB).
+    let tmp = "/tmp/.hexa_status_archive_digest_" + to_string(_now_ns()) + ".bin"
+    write_file(tmp, s)
+    let out = exec("LC_ALL=C shasum -a 256 " + tmp + " ; rm -f " + tmp).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+// A nonce for the tmp filename. We don't need cryptographic randomness;
+// PID + time is sufficient because we delete the file immediately.
+fn _now_ns() -> i64 {
+    return parse_int(exec("LC_ALL=C date +%s").trim())
+}
+
+fn main() {
+    let out_path = DEFAULT_OUT
+    let nexus_root = env("HOME") + "/core/nexus"
+    let markers_dir = nexus_root + "/" + DEFAULT_REL
+
+    println("phase1-ext status_archive embed codegen")
+    println("  markers_dir: " + markers_dir)
+    println("  out:         " + out_path)
+
+    let gen_at = _iso_utc_now()
+
+    // BSD stat with sort by name (deterministic). Write to a temp file so
+    // the interpreter doesn't have to hold the whole stat blob in a single
+    // exec-return string (we read it line by line).
+    let tmp_listing = "/tmp/.hexa_status_archive_listing.txt"
+    exec("LC_ALL=C bash -c '(cd " + markers_dir + " && find . -maxdepth 1 -type f -print0 | LC_ALL=C sort -z | xargs -0 stat -f \"%N|%m|%z\") > " + tmp_listing + "'")
+    let raw_list = read_file(tmp_listing)
+    exec("rm -f " + tmp_listing)
+
+    // Parse lines. Each line: ./<name>|<mtime>|<size>
+    let names   = []
+    let mtimes  = []
+    let sizes   = []
+    let n = len(raw_list)
+    let mut start = 0
+    let mut i = 0
+    while i <= n {
+        if i == n || raw_list.substring(i, i + 1) == "\n" {
+            if i > start {
+                let line = raw_list.substring(start, i)
+                // Split on the first two | chars.
+                let p1 = line.index_of("|")
+                if p1 > 0 {
+                    let p2 = line.index_of("|", p1 + 1)
+                    if p2 > p1 {
+                        let raw_name = line.substring(0, p1)
+                        // Strip leading "./" from find output.
+                        let nm = if raw_name.starts_with("./") { raw_name.substring(2, len(raw_name)) } else { raw_name }
+                        let mt = parse_int(line.substring(p1 + 1, p2))
+                        let sz = parse_int(line.substring(p2 + 1, len(line)))
+                        names.push(nm)
+                        mtimes.push(mt)
+                        sizes.push(sz)
+                    }
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+
+    let count = len(names)
+
+    // Bundle hash = sha256 over concatenated "name|mtime|size\n" lines.
+    let digest_buf = []
+    let mut k = 0
+    while k < count {
+        digest_buf.push(names[k])
+        digest_buf.push("|")
+        digest_buf.push(to_string(mtimes[k]))
+        digest_buf.push("|")
+        digest_buf.push(to_string(sizes[k]))
+        digest_buf.push("\n")
+        k = k + 1
+    }
+    let digest_blob = digest_buf.join("")
+    let hash = _sha256_of_string(digest_blob)
+
+    // --- emit ---
+    let header = []
+    header.push("// AUTO-GENERATED — do not edit. Regenerate via tool/status_archive_embed_gen.hexa\n")
+    header.push("//\n")
+    header.push("// Phase 1-extension absorption: status archive (D12).\n")
+    header.push("// Source: state/markers/ in nexus repo (frozen listing tableau).\n")
+    header.push("// Strategy: name|mtime|size triples for every marker, sorted by name.\n")
+    header.push("// Bundle hash = sha256 of the concatenated \"name|mtime|size\\n\" digest.\n")
+    header.push("\n")
+    header.push("use \"compiler/status_archive/embed\"\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_SOURCE_DIR: string = \"" + _esc("state/markers") + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(count) + "\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + LIST_NAME + ": [StatusMarkerEntry] = [\n")
+    write_file(out_path, header.join(""))
+
+    // Stream rows in chunks of 256.
+    let CHUNK: i64 = 256
+    let mut kk = 0
+    while kk < count {
+        let chunk = []
+        let end = if kk + CHUNK < count { kk + CHUNK } else { count }
+        let mut j = kk
+        while j < end {
+            chunk.push("    StatusMarkerEntry { name: \"")
+            chunk.push(_esc(names[j]))
+            chunk.push("\", mtime_epoch: ")
+            chunk.push(to_string(mtimes[j]))
+            chunk.push(", size_bytes: ")
+            chunk.push(to_string(sizes[j]))
+            chunk.push(" }")
+            if j + 1 < count { chunk.push(",") }
+            chunk.push("\n")
+            j = j + 1
+        }
+        append_file(out_path, chunk.join(""))
+        kk = end
+    }
+    append_file(out_path, "]\n")
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(count))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  sha256:  " + hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/status_archive_embed_gen.hexa") { return true }
+    if s == "status_archive_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

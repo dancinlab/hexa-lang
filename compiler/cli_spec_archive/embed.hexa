@@ -1,0 +1,38 @@
+// HEXA Native Compiler — Phase 1-extension absorption: cli_spec archive (D14)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/engine/nexus_cli_spec.json   (full spec sidecar)
+//
+// Per absorption doctrine v2 rule 3, nexus's CLI surface specification is
+// absorbed as a frozen archive — historical record. We preserve every
+// top-level section verbatim as canonical-JSON strings (no schema
+// flattening) so the data round-trips no matter how nexus extends the
+// spec in the future.
+//
+// Top-level sections the spec carries today (per the schema_version=2
+// shape, 2026-04-20):
+//   _meta, projects, project_paths, env, global_flags, exit_codes,
+//   audit, subcommands, subcmds_v2, subcmds_raw99_cli_coverage,
+//   subcmds_check, v2_invariants, security
+//
+// Each section is materialized as one CliSpecSection row with raw_json
+// holding the canonical JSON encoding of that subtree. A separate
+// SUBCOMMAND_NAMES list gives a quick index over the subcommands map
+// without parsing raw_json.
+
+@phase("parse_only")
+pub struct CliSpecSection {
+    // Section key as it appears at the top level of nexus_cli_spec.json
+    // (e.g. "subcommands", "global_flags", "_meta").
+    name: string,
+
+    // Canonical JSON serialization of the section subtree. Consumers
+    // that need structured access should json_parse() this.
+    raw_json: string,
+
+    // Cached size in bytes of raw_json for cheap rough-budgeting.
+    size_bytes: i64
+}

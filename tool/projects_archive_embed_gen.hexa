@@ -1,0 +1,264 @@
+// tool/projects_archive_embed_gen.hexa — Phase 1-extension absorption driver (D10)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/config/projects.json, emits
+// compiler/projects_archive/embedded.gen.hexa.
+//
+// Strategy: for each top-level bucket (categories listed in BUCKETS below)
+// we serialize each per-project sub-object back to JSON text and emit it
+// verbatim as the `raw_json` field of a ProjectArchiveEntry row. We also
+// expose the top-level `_meta`, `categories`, `common_links`, `dev_dir`,
+// `private_repos` blocks as separate raw-JSON `pub let` constants.
+//
+// Run:
+//   hexa run tool/projects_archive_embed_gen.hexa
+
+use "compiler/projects_archive/embed"
+
+let DEFAULT_SRC: string = "config/projects.json"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/projects_archive/embedded.gen.hexa"
+let MODULE_NAME: string = "PROJECTS_ARCHIVE"
+
+// Top-level buckets that contain per-project sub-objects.
+let BUCKETS: [string] = ["projects", "auxiliary", "launch_ops", "experimental", "archived"]
+
+// --- string escape ---------------------------------------------------------
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+fn _sha256(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+// --- JSON re-serializer ----------------------------------------------------
+// We re-emit a parsed value as compact JSON. This is a deterministic
+// canonical form for hash-stable archives: nexus's exact whitespace and
+// key order from projects.json round-trip via the JSON model rather than
+// the original text bytes (which is fine — the source hash above pins the
+// raw nexus document).
+fn _json_str(s: string) -> string {
+    // JSON requires the same set of escapes as our hexa-string-literal
+    // escape, plus the literal must be wrapped in double quotes. We re-use
+    // _esc which already covers \ " \n \r \t — the four JSON-required
+    // structural escapes (formfeed/backspace are uncommon in our source
+    // and pass through as raw UTF-8 bytes).
+    return "\"" + _esc(s) + "\""
+}
+
+fn _json_emit(v) -> string {
+    let t = type_of(v)
+    if t == "void"   { return "null" }
+    if t == "bool"   { return if v { "true" } else { "false" } }
+    if t == "int"    { return to_string(v) }
+    if t == "float"  { return to_string(v) }
+    if t == "string" { return _json_str(to_string(v)) }
+    if t == "array" {
+        let parts = []
+        parts.push("[")
+        let n = len(v)
+        let mut i = 0
+        while i < n {
+            if i > 0 { parts.push(",") }
+            parts.push(_json_emit(v[i]))
+            i = i + 1
+        }
+        parts.push("]")
+        return parts.join("")
+    }
+    if t == "map" {
+        let parts = []
+        parts.push("{")
+        let keys = map_keys(v)
+        let n = len(keys)
+        let mut i = 0
+        while i < n {
+            if i > 0 { parts.push(",") }
+            let k = to_string(keys[i])
+            parts.push(_json_str(k))
+            parts.push(":")
+            parts.push(_json_emit(v[k]))
+            i = i + 1
+        }
+        parts.push("}")
+        return parts.join("")
+    }
+    return "null"
+}
+
+fn main() {
+    let av = argv()
+    let mut src = ""
+    if len(av) >= 3 { src = to_string(av[2]) }
+    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    let out_path = DEFAULT_OUT
+
+    println("phase1-ext projects_archive embed codegen")
+    println("  src:  " + src)
+    println("  out:  " + out_path)
+
+    let hash = _sha256(src)
+    let gen_at = _iso_utc_now()
+    let text = read_file(src)
+    let root = json_parse(text)
+
+    // Collect (category, name, raw_json) tuples.
+    let cats = []
+    let names = []
+    let raws = []
+
+    if type_of(root) == "map" {
+        let nb = len(BUCKETS)
+        let mut bi = 0
+        while bi < nb {
+            let bucket = BUCKETS[bi]
+            // The "core" category key in projects.json is named "projects"
+            // (the readme_order list points into the same set). We emit
+            // bucket "projects" rows under category="core" so consumers
+            // can lookup by_category("core").
+            let cat_label = if bucket == "projects" { "core" } else { bucket }
+            if has_key(root, bucket) {
+                let b = root[bucket]
+                if type_of(b) == "map" {
+                    let keys = map_keys(b)
+                    let nk = len(keys)
+                    let mut i = 0
+                    while i < nk {
+                        let k = to_string(keys[i])
+                        // Skip _comment / _exposure marker fields.
+                        if k.starts_with("_") { i = i + 1; continue }
+                        let v = b[k]
+                        if type_of(v) != "map" { i = i + 1; continue }
+                        cats.push(cat_label)
+                        names.push(k)
+                        raws.push(_json_emit(v))
+                        i = i + 1
+                    }
+                }
+            }
+            bi = bi + 1
+        }
+        // private_repos is structured differently: it has a "repos" list,
+        // not a per-key map. We emit each repo by its "name" field.
+        if has_key(root, "private_repos") {
+            let pr = root["private_repos"]
+            if type_of(pr) == "map" && has_key(pr, "repos") {
+                let rs = pr["repos"]
+                if type_of(rs) == "array" {
+                    let n = len(rs)
+                    let mut i = 0
+                    while i < n {
+                        let r = rs[i]
+                        if type_of(r) == "map" && has_key(r, "name") {
+                            let nm = to_string(r["name"])
+                            cats.push("private_repos")
+                            names.push(nm)
+                            raws.push(_json_emit(r))
+                        }
+                        i = i + 1
+                    }
+                }
+            }
+        }
+    }
+
+    let count = len(names)
+
+    // Top-level shell blocks (raw-json strings).
+    let meta_json         = if type_of(root) == "map" && has_key(root, "_meta")         { _json_emit(root["_meta"]) } else { "{}" }
+    let categories_json   = if type_of(root) == "map" && has_key(root, "categories")    { _json_emit(root["categories"]) } else { "{}" }
+    let common_links_json = if type_of(root) == "map" && has_key(root, "common_links")  { _json_emit(root["common_links"]) } else { "[]" }
+    let private_repos_json= if type_of(root) == "map" && has_key(root, "private_repos") { _json_emit(root["private_repos"]) } else { "{}" }
+    let dev_dir           = if type_of(root) == "map" && has_key(root, "dev_dir")       { to_string(root["dev_dir"]) } else { "" }
+
+    // Emit header. Body is streamed (rows can be large).
+    let header = []
+    header.push("// AUTO-GENERATED — do not edit. Regenerate via tool/projects_archive_embed_gen.hexa\n")
+    header.push("//\n")
+    header.push("// Phase 1-extension absorption: projects archive (D10).\n")
+    header.push("// Source: config/projects.json in nexus repo (frozen snapshot).\n")
+    header.push("\n")
+    header.push("use \"compiler/projects_archive/embed\"\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(count) + "\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_DEV_DIR: string = \"" + _esc(dev_dir) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_META_JSON: string = \"" + _esc(meta_json) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_CATEGORIES_JSON: string = \"" + _esc(categories_json) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_COMMON_LINKS_JSON: string = \"" + _esc(common_links_json) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_PRIVATE_REPOS_JSON: string = \"" + _esc(private_repos_json) + "\"\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + ": [ProjectArchiveEntry] = [\n")
+    write_file(out_path, header.join(""))
+
+    // Stream entries one at a time (rows can be 1-5 KB each).
+    let mut k = 0
+    while k < count {
+        let row = []
+        row.push("    ProjectArchiveEntry { category: \"")
+        row.push(_esc(cats[k]))
+        row.push("\", name: \"")
+        row.push(_esc(names[k]))
+        row.push("\", raw_json: \"")
+        row.push(_esc(raws[k]))
+        row.push("\" }")
+        if k + 1 < count { row.push(",") }
+        row.push("\n")
+        append_file(out_path, row.join(""))
+        k = k + 1
+    }
+    append_file(out_path, "]\n")
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(count))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  sha256:  " + hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/projects_archive_embed_gen.hexa") { return true }
+    if s == "projects_archive_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

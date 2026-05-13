@@ -1,0 +1,233 @@
+// tool/audit_archive_embed_gen.hexa — Phase 1-extension absorption driver (D13)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/logs/nexus_cli.log (jsonl, last N lines such that
+// the resulting embed file stays ≤ ~100 KB), emits
+// compiler/audit_archive/embedded.gen.hexa.
+//
+// Halts (no emit) if the source file does not exist — see brief: we do
+// NOT invent data.
+//
+// Run:
+//   hexa run tool/audit_archive_embed_gen.hexa
+
+use "compiler/audit_archive/embed"
+
+let DEFAULT_SRC: string = "logs/nexus_cli.log"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/audit_archive/embedded.gen.hexa"
+let MODULE_NAME: string = "AUDIT_ARCHIVE"
+let LIST_NAME: string   = "AUDIT_LOG_TAIL"
+
+// Approximate cap on the GENERATED file (not the source log). We binary-
+// pick the largest tail count whose emitted size stays under this. For
+// the current 78 KB jsonl source with ~370 lines the whole file fits.
+let EMBED_BYTE_CAP: i64 = 102400  // 100 KB
+
+// --- string escape ---------------------------------------------------------
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+fn _sha256(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+fn _file_exists(path: string) -> bool {
+    let r = exec("test -f " + path + " && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+fn _gstr(m, key: string) -> string {
+    if !has_key(m, key) { return "" }
+    let v = m[key]
+    if type_of(v) == "void" { return "" }
+    return to_string(v)
+}
+
+fn _gint(m, key: string) -> i64 {
+    if !has_key(m, key) { return 0 }
+    let v = m[key]
+    let t = type_of(v)
+    if t == "int" { return v }
+    if t == "string" { return parse_int(to_string(v)) }
+    return 0
+}
+
+// Emit one AuditLogEntry literal into parts (no trailing newline).
+fn _emit_row(parts: array, e) {
+    parts.push("    AuditLogEntry { ts: \"")
+    parts.push(_esc(_gstr(e, "ts")))
+    parts.push("\", caller: \"")
+    parts.push(_esc(_gstr(e, "caller")))
+    parts.push("\", subcmd: \"")
+    parts.push(_esc(_gstr(e, "subcmd")))
+    parts.push("\", args: \"")
+    parts.push(_esc(_gstr(e, "args")))
+    parts.push("\", exit_code: ")
+    parts.push(to_string(_gint(e, "exit_code")))
+    parts.push(", duration_ms: ")
+    parts.push(to_string(_gint(e, "duration_ms")))
+    parts.push(" }")
+}
+
+// Estimate the emitted byte cost of one entry by actually rendering it.
+fn _row_bytes(e) -> i64 {
+    let parts = []
+    _emit_row(parts, e)
+    return len(parts.join(""))
+}
+
+fn main() {
+    let av = argv()
+    let mut src = ""
+    if len(av) >= 3 { src = to_string(av[2]) }
+    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    let out_path = DEFAULT_OUT
+
+    println("phase1-ext audit_archive embed codegen")
+    println("  src:  " + src)
+    println("  out:  " + out_path)
+
+    if !_file_exists(src) {
+        println("")
+        println("HALT — source file does not exist: " + src)
+        println("       (no embed file emitted; per brief, we do not invent data.)")
+        exit(2)
+    }
+
+    let hash = _sha256(src)
+    let gen_at = _iso_utc_now()
+    let text = read_file(src)
+
+    // Split into lines; parse each non-empty as a map.
+    let all_rows = []
+    let n = len(text)
+    let mut start = 0
+    let mut i = 0
+    while i <= n {
+        if i == n || text.substring(i, i + 1) == "\n" {
+            if i > start {
+                let line = text.substring(start, i)
+                if len(line.trim()) > 0 {
+                    let o = json_parse(line)
+                    if type_of(o) == "map" {
+                        all_rows.push(o)
+                    }
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    let source_lines = len(all_rows)
+    println("  source lines: " + to_string(source_lines))
+
+    // Tail-select: take rows from the end, accumulating until the rendered
+    // entries would exceed EMBED_BYTE_CAP. We over-estimate header
+    // overhead at 1 KB.
+    let HEADER_OVERHEAD: i64 = 1024
+    let mut budget = EMBED_BYTE_CAP - HEADER_OVERHEAD
+    let take = []
+    let mut idx = source_lines - 1
+    while idx >= 0 {
+        let cost = _row_bytes(all_rows[idx]) + 2  // trailing ",\n"
+        if cost > budget { break }
+        budget = budget - cost
+        take.push(all_rows[idx])
+        idx = idx - 1
+    }
+    // take currently runs newest → oldest; reverse to chronological order.
+    let kept = []
+    let mut t = len(take) - 1
+    while t >= 0 {
+        kept.push(take[t])
+        t = t - 1
+    }
+    let kept_count = len(kept)
+    println("  embedded:     " + to_string(kept_count))
+
+    let ts_first = if kept_count > 0 { _gstr(kept[0], "ts") } else { "" }
+    let ts_last  = if kept_count > 0 { _gstr(kept[kept_count - 1], "ts") } else { "" }
+
+    // --- emit ---
+    let header = []
+    header.push("// AUTO-GENERATED — do not edit. Regenerate via tool/audit_archive_embed_gen.hexa\n")
+    header.push("//\n")
+    header.push("// Phase 1-extension absorption: audit log tail archive (D13).\n")
+    header.push("// Source: logs/nexus_cli.log in nexus repo (jsonl).\n")
+    header.push("// Emit policy: tail-select rows newest→oldest until ~100 KB emit cap.\n")
+    header.push("\n")
+    header.push("use \"compiler/audit_archive/embed\"\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_SOURCE_PATH: string = \"" + _esc("logs/nexus_cli.log") + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_SOURCE_LINES: i64 = " + to_string(source_lines) + "\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(kept_count) + "\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_TS_FIRST: string = \"" + _esc(ts_first) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_TS_LAST: string = \"" + _esc(ts_last) + "\"\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + LIST_NAME + ": [AuditLogEntry] = [\n")
+    write_file(out_path, header.join(""))
+
+    let mut k = 0
+    while k < kept_count {
+        let row = []
+        _emit_row(row, kept[k])
+        if k + 1 < kept_count { row.push(",") }
+        row.push("\n")
+        append_file(out_path, row.join(""))
+        k = k + 1
+    }
+    append_file(out_path, "]\n")
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(kept_count))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  sha256:  " + hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/audit_archive_embed_gen.hexa") { return true }
+    if s == "audit_archive_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

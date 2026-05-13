@@ -1,0 +1,340 @@
+// tool/roadmaps_archive_embed_gen.hexa — Phase 1-extension absorption driver (D11)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/roadmaps/<project>.json for the 7 core projects per
+// projects.json readme_order, emits compiler/roadmaps_archive/embedded.gen.hexa.
+//
+// Frozen archive: we serialize each parsed roadmap back to canonical JSON
+// and embed it verbatim as raw_json. Source file sha256 is recorded
+// per-row; the module-level bundle hash is a sha256 over the
+// concatenated per-file hashes (so any one file changing trips the bundle).
+//
+// Project → source path mapping (project key from projects.json
+// readme_order; file name as it actually exists in ~/core/nexus/roadmaps/):
+//   anima       -> roadmaps/anima.json
+//   nexus       -> roadmaps/nexus.json
+//   canon       -> roadmaps/n6-architecture.json   (n6-arch._meta.project = "CANON")
+//   papers      -> roadmaps/papers.json
+//   hexa-lang   -> roadmaps/hexa-lang.json
+//   void        -> roadmaps/void.json
+//   airgenome   -> roadmaps/airgenome.json         (NOT FOUND on disk → status=not_found)
+//
+// Run with extra memory for the 261 KB nexus.json:
+//   HEXA_MEM_UNLIMITED=1 hexa run tool/roadmaps_archive_embed_gen.hexa
+
+use "compiler/roadmaps_archive/embed"
+
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/roadmaps_archive/embedded.gen.hexa"
+let MODULE_NAME: string = "ROADMAPS_ARCHIVE"
+
+// Per-project (key, source path relative to nexus root).
+let PROJECT_KEYS: [string]  = ["anima", "nexus", "canon", "papers", "hexa-lang", "void", "airgenome"]
+let PROJECT_PATHS: [string] = [
+    "roadmaps/anima.json",
+    "roadmaps/nexus.json",
+    "roadmaps/n6-architecture.json",
+    "roadmaps/papers.json",
+    "roadmaps/hexa-lang.json",
+    "roadmaps/void.json",
+    "roadmaps/airgenome.json"
+]
+
+// --- string escape ---------------------------------------------------------
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+fn _sha256_file(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+fn _sha256_str(s: string) -> string {
+    // Use printf so trailing newline is suppressed; pipe to shasum.
+    // The string s is treated as a filename-safe payload of hex chars only
+    // (used for the bundle hash), so no shell escaping needed.
+    let out = exec("LC_ALL=C printf '%s' '" + s + "' | shasum -a 256").trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+fn _file_exists(path: string) -> bool {
+    let r = exec("test -f " + path + " && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+fn _file_size(path: string) -> i64 {
+    let r = exec("LC_ALL=C wc -c < " + path).trim()
+    return parse_int(r)
+}
+
+// --- streaming JSON re-serializer -------------------------------------------
+// Writes canonical JSON for `v` into `parts`, applying outer-string-literal
+// escaping (i.e. each character is double-escaped: once for the JSON layer
+// and once for the hexa string literal we're embedding into). The output
+// is suitable to push between `"..."` delimiters in the generated hexa
+// source. Doing it this way avoids materializing a giant intermediate
+// string for the inner JSON.
+
+// Escape a single source character so it survives BOTH layers:
+//   level A (JSON): \ → \\ ;  " → \" ;  CR/LF/TAB → \r/\n/\t
+//   level B (hexa literal): each backslash from level A → \\\\ ;
+//                            each \" from level A → \\\" ;
+//                            literal \" passes through as \\\" (already
+//                            covered) — but no naked \" can survive.
+// In practice the outer hexa literal sees the level-A output as a normal
+// string and applies the same escape table. So a JSON " becomes \" at
+// level A, then \\\" at level B. We implement this as a single combined
+// table.
+fn _esc2_char(c: string) -> string {
+    if c == "\\" { return "\\\\\\\\" }       // \  → \\ → \\\\
+    if c == "\"" { return "\\\\\\\"" }       // "  → \" → \\\"
+    if c == "\n" { return "\\\\n" }          // LF → \n → \\n
+    if c == "\r" { return "\\\\r" }          // CR → \r → \\r
+    if c == "\t" { return "\\\\t" }          // TAB → \t → \\t
+    return c
+}
+
+fn _esc2(parts: array, s: string) {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        parts.push(_esc2_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+}
+
+// Push a JSON-quoted string (with outer-layer escaping) to parts.
+fn _emit_json_str(parts: array, s: string) {
+    // Opening quote: JSON `"` → outer-layer `\"`
+    parts.push("\\\"")
+    _esc2(parts, s)
+    parts.push("\\\"")
+}
+
+// Stream-emit a parsed JSON value `v` as canonical JSON into parts, with
+// outer-hexa-string-literal escaping applied along the way.
+fn _emit_json(parts: array, v) {
+    let t = type_of(v)
+    if t == "void"   { parts.push("null"); return }
+    if t == "bool"   { if v { parts.push("true") } else { parts.push("false") }; return }
+    if t == "int"    { parts.push(to_string(v)); return }
+    if t == "float"  { parts.push(to_string(v)); return }
+    if t == "string" { _emit_json_str(parts, to_string(v)); return }
+    if t == "array" {
+        parts.push("[")
+        let n = len(v)
+        let mut i = 0
+        while i < n {
+            if i > 0 { parts.push(",") }
+            _emit_json(parts, v[i])
+            i = i + 1
+        }
+        parts.push("]")
+        return
+    }
+    if t == "map" {
+        parts.push("{")
+        let keys = map_keys(v)
+        let n = len(keys)
+        let mut i = 0
+        while i < n {
+            if i > 0 { parts.push(",") }
+            let k = to_string(keys[i])
+            _emit_json_str(parts, k)
+            parts.push(":")
+            _emit_json(parts, v[k])
+            i = i + 1
+        }
+        parts.push("}")
+        return
+    }
+    parts.push("null")
+}
+
+// Count top-level keys in `phases` and `tracks` if they exist as map or array.
+fn _count_seq(v) -> i64 {
+    let t = type_of(v)
+    if t == "array" { return len(v) }
+    if t == "map"   { return len(map_keys(v)) }
+    return 0
+}
+
+// Pass 1: compute per-row metadata only (hashes/sizes/counts/status).
+// We do NOT keep raw_json in memory across rows — pass 2 re-reads the
+// source file for the row currently being written.
+fn _pass1_meta(nexus_root: string) -> array {
+    let n = len(PROJECT_KEYS)
+    let metas = []
+    let mut i = 0
+    while i < n {
+        let key = PROJECT_KEYS[i]
+        let rel = PROJECT_PATHS[i]
+        let abs = nexus_root + "/" + rel
+        let m = {}
+        m["key"] = key
+        m["rel"] = rel
+        m["abs"] = abs
+        if !_file_exists(abs) {
+            m["status"] = "not_found"
+            m["sha256"] = ""
+            m["size"] = 0
+            m["phase_ct"] = 0
+            m["track_ct"] = 0
+            println("  " + key + ": NOT FOUND (" + rel + ")")
+        } else {
+            let h = _sha256_file(abs)
+            let sz = _file_size(abs)
+            // Parse + count, then immediately drop root reference.
+            let root = json_parse(read_file(abs))
+            let phase_ct = if type_of(root) == "map" && has_key(root, "phases") { _count_seq(root["phases"]) } else { 0 }
+            let track_ct = if type_of(root) == "map" && has_key(root, "tracks") { _count_seq(root["tracks"]) } else { 0 }
+            m["status"] = "present"
+            m["sha256"] = h
+            m["size"] = sz
+            m["phase_ct"] = phase_ct
+            m["track_ct"] = track_ct
+            println("  " + key + ": " + h.substring(0, 12) + "... " + to_string(sz) + " B, phases=" + to_string(phase_ct) + " tracks=" + to_string(track_ct))
+        }
+        metas.push(m)
+        i = i + 1
+    }
+    return metas
+}
+
+fn main() {
+    let out_path = DEFAULT_OUT
+    let nexus_root = env("HOME") + "/core/nexus"
+
+    println("phase1-ext roadmaps_archive embed codegen")
+    println("  nexus_root: " + nexus_root)
+    println("  out:        " + out_path)
+
+    let gen_at = _iso_utc_now()
+    let n = len(PROJECT_KEYS)
+
+    // Pass 1: just metadata.
+    let metas = _pass1_meta(nexus_root)
+
+    // Bundle hash = sha256 over concatenated per-row hashes (zero-hex for
+    // missing files).
+    let hash_concat = []
+    let mut i = 0
+    while i < n {
+        let h = to_string(metas[i]["sha256"])
+        if len(h) == 0 {
+            hash_concat.push("0000000000000000000000000000000000000000000000000000000000000000")
+        } else {
+            hash_concat.push(h)
+        }
+        i = i + 1
+    }
+    let bundle_hash = _sha256_str(hash_concat.join(""))
+
+    // Emit header.
+    let header = []
+    header.push("// AUTO-GENERATED — do not edit. Regenerate via tool/roadmaps_archive_embed_gen.hexa\n")
+    header.push("//\n")
+    header.push("// Phase 1-extension absorption: roadmaps archive (D11).\n")
+    header.push("// Source: roadmaps/<project>.json in nexus repo (frozen snapshot per project).\n")
+    header.push("// Bundle hash = sha256 over concatenated per-file sha256s.\n")
+    header.push("\n")
+    header.push("use \"compiler/roadmaps_archive/embed\"\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(bundle_hash) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(n) + "\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + ": [RoadmapArchive] = [\n")
+    write_file(out_path, header.join(""))
+
+    // Pass 2: stream each row, re-reading + re-emitting JSON one at a time.
+    // We split the row into THREE chunks so the giant raw_json buffer can be
+    // flushed and dropped before we move on to the next row:
+    //   chunk_pre = prefix up to `raw_json: "`
+    //   chunk_json = the streaming-emitted JSON body (already outer-escaped)
+    //   chunk_post = closing `" }` + optional `,` + newline
+    let mut k = 0
+    while k < n {
+        let m = metas[k]
+        let status = to_string(m["status"])
+
+        let pre = []
+        pre.push("    RoadmapArchive { project: \"")
+        pre.push(_esc(to_string(m["key"])))
+        pre.push("\", source_path: \"")
+        pre.push(_esc(to_string(m["rel"])))
+        pre.push("\", sha256: \"")
+        pre.push(_esc(to_string(m["sha256"])))
+        pre.push("\", status: \"")
+        pre.push(_esc(status))
+        pre.push("\", size_bytes: ")
+        pre.push(to_string(m["size"]))
+        pre.push(", phase_count: ")
+        pre.push(to_string(m["phase_ct"]))
+        pre.push(", track_count: ")
+        pre.push(to_string(m["track_ct"]))
+        pre.push(", raw_json: \"")
+        append_file(out_path, pre.join(""))
+
+        if status == "present" {
+            let root = json_parse(read_file(to_string(m["abs"])))
+            let buf = []
+            _emit_json(buf, root)
+            append_file(out_path, buf.join(""))
+        }
+
+        let post = []
+        post.push("\" }")
+        if k + 1 < n { post.push(",") }
+        post.push("\n")
+        append_file(out_path, post.join(""))
+        k = k + 1
+    }
+    append_file(out_path, "]\n")
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(n))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  bundle:  " + bundle_hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/roadmaps_archive_embed_gen.hexa") { return true }
+    if s == "roadmaps_archive_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

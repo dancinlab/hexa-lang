@@ -1,0 +1,44 @@
+// HEXA Native Compiler — Phase 1-extension absorption: projects archive index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Read-only facade over the embedded PROJECTS_ARCHIVE table. The data is
+// a frozen snapshot of ~/core/nexus/config/projects.json — see
+// compiler/projects_archive/embed.hexa.
+//
+//   pub fn projects_archive_list()                     -> [ProjectArchiveEntry]
+//   pub fn projects_archive_lookup(name: string)       -> ProjectArchiveEntry
+//   pub fn projects_archive_by_category(c: string)     -> [ProjectArchiveEntry]
+//
+// Lookup miss returns a sentinel entry (name == "").
+
+use "compiler/projects_archive/embed"
+use "compiler/projects_archive/embedded.gen"
+
+pub fn projects_archive_list() -> [ProjectArchiveEntry] {
+    return PROJECTS_ARCHIVE
+}
+
+pub fn projects_archive_lookup(name: string) -> ProjectArchiveEntry {
+    let n = len(PROJECTS_ARCHIVE)
+    let mut i = 0
+    while i < n {
+        let e = PROJECTS_ARCHIVE[i]
+        if e.name == name { return e }
+        i = i + 1
+    }
+    return ProjectArchiveEntry { category: "", name: "", raw_json: "" }
+}
+
+pub fn projects_archive_by_category(category: string) -> [ProjectArchiveEntry] {
+    let out = []
+    let n = len(PROJECTS_ARCHIVE)
+    let mut i = 0
+    while i < n {
+        let e = PROJECTS_ARCHIVE[i]
+        if e.category == category { out.push(e) }
+        i = i + 1
+    }
+    return out
+}

@@ -1,0 +1,84 @@
+// HEXA Native Compiler — Phase 1-extension absorption: projects archive smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Run:
+//   hexa run compiler/projects_archive/static_index_test.hexa
+
+use "compiler/projects_archive/embed"
+use "compiler/projects_archive/embedded.gen"
+use "compiler/projects_archive/static_index"
+
+fn _is_hex64(s: string) -> bool {
+    if len(s) != 64 { return false }
+    let mut i = 0
+    while i < 64 {
+        let c = s.substring(i, i + 1)
+        let ok = (c >= "0" && c <= "9") || (c >= "a" && c <= "f")
+        if !ok { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn main() {
+    println("phase1-ext projects archive embed smoke")
+    println("  hash:         " + PROJECTS_ARCHIVE_HASH)
+    println("  generated_at: " + PROJECTS_ARCHIVE_GENERATED_AT)
+    println("  source_count: " + to_string(PROJECTS_ARCHIVE_SOURCE_COUNT))
+    println("  entries:      " + to_string(len(PROJECTS_ARCHIVE)))
+
+    let fails = []
+    println("")
+    println("checks:")
+    _check("hash is 64-char hex",                _is_hex64(PROJECTS_ARCHIVE_HASH),                  fails)
+    _check("generated_at non-empty",             len(PROJECTS_ARCHIVE_GENERATED_AT) > 0,            fails)
+    _check("source_count > 0",                   PROJECTS_ARCHIVE_SOURCE_COUNT > 0,                 fails)
+    _check("entries match source_count",         len(PROJECTS_ARCHIVE) == PROJECTS_ARCHIVE_SOURCE_COUNT, fails)
+
+    // 7 known core projects (per projects.json readme_order).
+    let nexus_e = projects_archive_lookup("nexus")
+    _check("lookup(nexus).name == nexus",        nexus_e.name == "nexus",                           fails)
+    _check("lookup(nexus).category == core",     nexus_e.category == "core",                        fails)
+    _check("lookup(nexus).raw_json non-empty",   len(nexus_e.raw_json) > 0,                         fails)
+
+    let hexa_lang_e = projects_archive_lookup("hexa-lang")
+    _check("lookup(hexa-lang).name set",         hexa_lang_e.name == "hexa-lang",                   fails)
+    _check("lookup(hexa-lang).category == core", hexa_lang_e.category == "core",                    fails)
+
+    let core_list = projects_archive_by_category("core")
+    _check("by_category(core) >= 7",             len(core_list) >= 7,                               fails)
+
+    let miss = projects_archive_lookup("NOT-A-REAL-PROJECT")
+    _check("lookup miss → name == \"\"",        miss.name == "",                                   fails)
+
+    // Top-level shell blocks present.
+    _check("META_JSON non-empty",                len(PROJECTS_ARCHIVE_META_JSON) > 0,               fails)
+    _check("CATEGORIES_JSON non-empty",          len(PROJECTS_ARCHIVE_CATEGORIES_JSON) > 0,         fails)
+    _check("COMMON_LINKS_JSON non-empty",        len(PROJECTS_ARCHIVE_COMMON_LINKS_JSON) > 0,       fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS (" + to_string(len(PROJECTS_ARCHIVE)) + "/" + to_string(PROJECTS_ARCHIVE_SOURCE_COUNT) + " entries, hash=" + PROJECTS_ARCHIVE_HASH.substring(0, 12) + "...)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/static_index_test.hexa") { return true }
+    if s == "static_index_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

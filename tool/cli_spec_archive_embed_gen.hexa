@@ -1,0 +1,227 @@
+// tool/cli_spec_archive_embed_gen.hexa — Phase 1-extension absorption driver (D14)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/engine/nexus_cli_spec.json (the spec sidecar emitted
+// by `nexus --catalog`), emits compiler/cli_spec_archive/embedded.gen.hexa.
+//
+// One CliSpecSection per top-level key, with the subtree re-serialized as
+// canonical JSON in raw_json. A separate CLI_SPEC_SUBCOMMAND_NAMES list
+// indexes the subcommand keys so callers can iterate without parsing.
+//
+// Run:
+//   hexa run tool/cli_spec_archive_embed_gen.hexa
+
+use "compiler/cli_spec_archive/embed"
+
+let DEFAULT_SRC: string = "engine/nexus_cli_spec.json"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/cli_spec_archive/embedded.gen.hexa"
+let MODULE_NAME: string = "CLI_SPEC_ARCHIVE"
+let LIST_NAME: string   = "CLI_SPEC_SECTIONS"
+let SUBCMD_LIST_NAME: string = "CLI_SPEC_SUBCOMMAND_NAMES"
+
+// --- string escape ---------------------------------------------------------
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+fn _sha256(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+// --- JSON re-serializer (compact, deterministic) ---------------------------
+fn _json_str(s: string) -> string {
+    return "\"" + _esc(s) + "\""
+}
+
+fn _json_emit(v) -> string {
+    let t = type_of(v)
+    if t == "void"   { return "null" }
+    if t == "bool"   { return if v { "true" } else { "false" } }
+    if t == "int"    { return to_string(v) }
+    if t == "float"  { return to_string(v) }
+    if t == "string" { return _json_str(to_string(v)) }
+    if t == "array" {
+        let parts = []
+        parts.push("[")
+        let n = len(v)
+        let mut i = 0
+        while i < n {
+            if i > 0 { parts.push(",") }
+            parts.push(_json_emit(v[i]))
+            i = i + 1
+        }
+        parts.push("]")
+        return parts.join("")
+    }
+    if t == "map" {
+        let parts = []
+        parts.push("{")
+        let keys = map_keys(v)
+        let n = len(keys)
+        let mut i = 0
+        while i < n {
+            if i > 0 { parts.push(",") }
+            let k = to_string(keys[i])
+            parts.push(_json_str(k))
+            parts.push(":")
+            parts.push(_json_emit(v[k]))
+            i = i + 1
+        }
+        parts.push("}")
+        return parts.join("")
+    }
+    return "null"
+}
+
+fn main() {
+    let av = argv()
+    let mut src = ""
+    if len(av) >= 3 { src = to_string(av[2]) }
+    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    let out_path = DEFAULT_OUT
+
+    println("phase1-ext cli_spec_archive embed codegen")
+    println("  src:  " + src)
+    println("  out:  " + out_path)
+
+    let hash = _sha256(src)
+    let gen_at = _iso_utc_now()
+    let text = read_file(src)
+    let root = json_parse(text)
+
+    // Walk top-level keys. Each becomes one CliSpecSection row.
+    let section_names = []
+    let section_raws  = []
+    let section_sizes = []
+
+    if type_of(root) == "map" {
+        let keys = map_keys(root)
+        let nk = len(keys)
+        let mut i = 0
+        while i < nk {
+            let k = to_string(keys[i])
+            let raw = _json_emit(root[k])
+            section_names.push(k)
+            section_raws.push(raw)
+            section_sizes.push(len(raw))
+            i = i + 1
+        }
+    }
+
+    // Capture subcommand keys (if present) as a flat string list for
+    // quick indexing.
+    let subcmd_names = []
+    if type_of(root) == "map" && has_key(root, "subcommands") {
+        let sc = root["subcommands"]
+        if type_of(sc) == "map" {
+            let ks = map_keys(sc)
+            let n = len(ks)
+            let mut j = 0
+            while j < n {
+                subcmd_names.push(to_string(ks[j]))
+                j = j + 1
+            }
+        }
+    }
+
+    let count = len(section_names)
+
+    // --- emit header ---
+    let header = []
+    header.push("// AUTO-GENERATED — do not edit. Regenerate via tool/cli_spec_archive_embed_gen.hexa\n")
+    header.push("//\n")
+    header.push("// Phase 1-extension absorption: nexus_cli_spec archive (D14).\n")
+    header.push("// Source: engine/nexus_cli_spec.json in nexus repo (frozen snapshot).\n")
+    header.push("\n")
+    header.push("use \"compiler/cli_spec_archive/embed\"\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_SOURCE_PATH: string = \"" + _esc("engine/nexus_cli_spec.json") + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(count) + "\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + LIST_NAME + ": [CliSpecSection] = [\n")
+    write_file(out_path, header.join(""))
+
+    // --- emit one row per section ---
+    let mut k = 0
+    while k < count {
+        let row = []
+        row.push("    CliSpecSection { name: \"")
+        row.push(_esc(section_names[k]))
+        row.push("\", raw_json: \"")
+        row.push(_esc(section_raws[k]))
+        row.push("\", size_bytes: ")
+        row.push(to_string(section_sizes[k]))
+        row.push(" }")
+        if k + 1 < count { row.push(",") }
+        row.push("\n")
+        append_file(out_path, row.join(""))
+        k = k + 1
+    }
+    append_file(out_path, "]\n\n")
+
+    // --- subcommand-name index ---
+    let scbuf = []
+    scbuf.push("@phase(\"parse_only\")\n")
+    scbuf.push("pub let " + SUBCMD_LIST_NAME + ": [string] = [")
+    let sn = len(subcmd_names)
+    let mut m = 0
+    while m < sn {
+        scbuf.push("\"")
+        scbuf.push(_esc(subcmd_names[m]))
+        scbuf.push("\"")
+        if m + 1 < sn { scbuf.push(", ") }
+        m = m + 1
+    }
+    scbuf.push("]\n")
+    append_file(out_path, scbuf.join(""))
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  sections: " + to_string(count))
+    println("  subcmds:  " + to_string(sn))
+    println("  size:     " + to_string(sz) + " bytes")
+    println("  sha256:   " + hash)
+    println("  gen_at:   " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/cli_spec_archive_embed_gen.hexa") { return true }
+    if s == "cli_spec_archive_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

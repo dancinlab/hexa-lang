@@ -1,0 +1,54 @@
+// HEXA Native Compiler — Phase 1-extension absorption: audit archive index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Read-only facade over the embedded AUDIT_LOG_TAIL table.
+//
+//   pub fn audit_archive_list()                  -> [AuditLogEntry]
+//   pub fn audit_archive_by_subcmd(s: string)    -> [AuditLogEntry]
+//   pub fn audit_archive_by_caller(c: string)    -> [AuditLogEntry]
+//   pub fn audit_archive_failures()              -> [AuditLogEntry]
+
+use "compiler/audit_archive/embed"
+use "compiler/audit_archive/embedded.gen"
+
+pub fn audit_archive_list() -> [AuditLogEntry] {
+    return AUDIT_LOG_TAIL
+}
+
+pub fn audit_archive_by_subcmd(subcmd: string) -> [AuditLogEntry] {
+    let out = []
+    let n = len(AUDIT_LOG_TAIL)
+    let mut i = 0
+    while i < n {
+        let e = AUDIT_LOG_TAIL[i]
+        if e.subcmd == subcmd { out.push(e) }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn audit_archive_by_caller(caller: string) -> [AuditLogEntry] {
+    let out = []
+    let n = len(AUDIT_LOG_TAIL)
+    let mut i = 0
+    while i < n {
+        let e = AUDIT_LOG_TAIL[i]
+        if e.caller == caller { out.push(e) }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn audit_archive_failures() -> [AuditLogEntry] {
+    let out = []
+    let n = len(AUDIT_LOG_TAIL)
+    let mut i = 0
+    while i < n {
+        let e = AUDIT_LOG_TAIL[i]
+        if e.exit_code != 0 { out.push(e) }
+        i = i + 1
+    }
+    return out
+}
