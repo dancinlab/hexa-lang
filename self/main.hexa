@@ -1038,14 +1038,33 @@ fn resolve_module_loader() {
 // child, or "" if the install dir isn't derivable or HEXA_INSTALL_DIR is
 // already present in the environment (never clobbered).
 fn module_loader_env_prefix() {
-    // Don't clobber an operator-supplied HEXA_INSTALL_DIR.
-    if len(env_var("HEXA_INSTALL_DIR")) > 0 { return "" }
-    let inst = install_dir_from_argv0()
-    if len(inst) == 0 { return "" }
+    // module_loader is a one-shot flatten — it holds the entire bundle's AST
+    // in memory. The default 768 MB runtime cap (runtime.c::_hx_mem_cap_bytes)
+    // bites on bundles that grow past ~1100 user-fns (observed: wilson v0.1
+    // adding 4 pool helpers pushed past the cap → silent fallback to raw src
+    // → codegen sees `use "..."` directives intact → `_resolve_use_emit`
+    // path that emits only fn forward decls, no struct decls → clang link
+    // fails on `SessionStartData` undeclared etc.). 2026-05-13 fix: raise
+    // the cap for the child module_loader so flatten completes for any
+    // realistic project size. The parent `hexa build` keeps the default cap
+    // because hexa_v2 (the actual transpiler) is much lighter than the
+    // flatten step. If a future bundle grows past 4 GB this needs revisit.
+    //
+    // Operator override: HEXA_MEM_CAP_MB=<N> (parent) is propagated; if
+    // unset, force 4096. HEXA_MEM_UNLIMITED=1 (parent) is also propagated.
     let mut parts = []
-    parts.push("HEXA_INSTALL_DIR='")
-    parts.push(inst)
-    parts.push("' ")
+    if len(env_var("HEXA_INSTALL_DIR")) == 0 {
+        let inst = install_dir_from_argv0()
+        if len(inst) > 0 {
+            parts.push("HEXA_INSTALL_DIR='")
+            parts.push(inst)
+            parts.push("' ")
+        }
+    }
+    // Memory-cap propagation. Don't clobber an operator-supplied value.
+    if env_var("HEXA_MEM_UNLIMITED") != "1" && len(env_var("HEXA_MEM_CAP_MB")) == 0 {
+        parts.push("HEXA_MEM_CAP_MB=4096 ")
+    }
     return parts.join("")
 }
 

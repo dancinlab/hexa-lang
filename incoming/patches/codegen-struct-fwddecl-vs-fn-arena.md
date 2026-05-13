@@ -1,10 +1,9 @@
-# incoming patch: codegen-struct-fwddecl-vs-fn-arena — struct/enum forward decls go missing when fn arena grows past a threshold
+# incoming patch: codegen-struct-fwddecl-vs-fn-arena — RESOLVED — was module_loader hitting the 768 MB memory cap, NOT a codegen regression
 
-> **id**: `codegen-struct-fwddecl-vs-fn-arena` · **opened**: 2026-05-13 KST PM · **status**: `bug` (active build break in wilson `pool` v0.1.1 work) · **severity**: blocks adding fn count to wilson downstream
-> **trees**: `self/native/hexa_v2/codegen.*` (forward-decl emission order)
-> **source**: wilson `pool_invoke_mesh_up` + `pool_invoke_mesh_down` real impls (~5 helper fns + ~90 LOC) added to `plugins/pool/main.hexa`
-> **observed**: 2026-05-13 19:20 KST PM (Mac)
-> **reproduces**: revert to stub mesh_up/down → builds clean (17/17 smoke PASS); add real impl back → clang link errors on `SessionStartData` / `HookEvent_SessionStart` etc.
+> **id**: `codegen-struct-fwddecl-vs-fn-arena` · **opened**: 2026-05-13 KST PM · **landed**: 2026-05-13 21:10 KST PM · **status**: `fixed in-session — root cause was module_loader's 768 MB RSS cap (runtime.c::_hx_mem_cap_bytes); raised cap to 4096 MB for the module_loader child only (self/main.hexa::module_loader_env_prefix). hexa.real rebuilt.`
+> **trees**: `self/main.hexa::module_loader_env_prefix` (DONE — propagate `HEXA_MEM_CAP_MB=4096` to child unless operator override is in place)
+> **observed**: 2026-05-13 19:20 KST PM (Mac), wilson `hexa build`
+> **reproduces**: was a wilson bundle that grew past ~1100 user-fns. With this fix, wilson builds clean. Confirmed via `wilson test → 17/17 PASS` + mesh_up/down round-trip.
 
 ---
 
@@ -63,15 +62,60 @@ Only ONE extern under `core/types` (`host_state_new`). `core/types.hexa` defines
 
 In the WORKING state (with the stubs), the same wilson.c emits forward decls for all those struct constructors and enum variants. So the codegen *can* emit them — it just doesn't when fn arena grows past some threshold.
 
-## 4. Hypothesis
+## 4. Actual root cause (corrected after bisect 2026-05-13 21:00 KST)
 
-Best guess from the `bca7e3a8 fn-arena heapify` commit log entry (already-fixed bug in Sprint 2): hexa_v2 has a separate emit pass for "all struct decls" vs "all fn decls", and the order/bookkeeping when fn count grows past the arena's initial capacity drops struct decls.
+The initial hypothesis (codegen forward-decl emission threshold) was WRONG. The real cause is far simpler and visible in `hexa build`'s own output, hiding right above the clang errors:
 
-OR: a single fixed-size buffer holds all the forward decls, and adding more user fns overflows that buffer's struct portion.
+```
+[flat] module_loader → /tmp/.hexa-runtime/hexa_build_expanded.461194450892000.tmp.hexa
+[flat] warn: module_loader preprocess failed — falling back to raw src
+    [hexa-runtime] memory cap exceeded: rss=768MB > cap=768MB
+[hexa-runtime] hint: re-run with --mem-unlimited (or HEXA_MEM_UNLIMITED=1) to disable, or --mem-cap=<MB> to raise.
 
-OR: struct/enum extern emission scans only the first N entries of a name table, and N is too small.
+  [1/2] /Users/ghost/core/hexa-lang/self/native/hexa_v2 core/main.hexa build/artifacts/wilson.c 2>&1
+    OK: build/artifacts/wilson.c
+```
 
-The fix probably lives in `self/native/hexa_v2/codegen.*` — specifically the forward-decl emission stage. Look for any `len(env_fns) < SOMETHING` or fixed-`[N]` array used while emitting `extern HexaVal <ident>(...)` lines.
+`module_loader` (the per-build child process that flattens N source files into one big .hexa) hits the **default 768 MB RSS cap** (`runtime.c::_hx_mem_cap_bytes`). `cmd_build` (`self/main.hexa`) then falls back to **raw src** — i.e. it hands `hexa_v2` the unflattened `core/main.hexa` directly. The transpiler sees the `use "core/types"` / `use "plugins/..."` directives intact, takes the **`_resolve_use_emit` path** (codegen_c2.hexa:619), and that path documents at line 654: "Struct constructors are callable — register name. Arity cannot be cheaply recovered without spanning multiple lines; **leave extern emission off**." So struct names get registered for closure analysis but no `extern HexaVal SessionStartData(HexaVal, ...)` fwd decl is emitted. The downstream `SessionStartData(...)` call site is then "undeclared function" at clang.
+
+The mesh additions weren't a codegen threshold — they just pushed the flatten step's peak RSS over 768 MB. Same shape would happen for any bundle that crosses the threshold.
+
+## 5. Fix
+
+`self/main.hexa::module_loader_env_prefix` now propagates `HEXA_MEM_CAP_MB=4096` to the child module_loader process when neither `HEXA_MEM_UNLIMITED=1` nor `HEXA_MEM_CAP_MB=<N>` is operator-set. The parent `hexa build` keeps the default cap because hexa_v2 (the actual transpiler) is much lighter than the flatten step.
+
+```diff
+ fn module_loader_env_prefix() {
+-    if len(env_var("HEXA_INSTALL_DIR")) > 0 { return "" }
+-    let inst = install_dir_from_argv0()
+-    if len(inst) == 0 { return "" }
+     let mut parts = []
+-    parts.push("HEXA_INSTALL_DIR='")
+-    parts.push(inst)
+-    parts.push("' ")
++    if len(env_var("HEXA_INSTALL_DIR")) == 0 {
++        let inst = install_dir_from_argv0()
++        if len(inst) > 0 {
++            parts.push("HEXA_INSTALL_DIR='" + inst + "' ")
++        }
++    }
++    if env_var("HEXA_MEM_UNLIMITED") != "1" && len(env_var("HEXA_MEM_CAP_MB")) == 0 {
++        parts.push("HEXA_MEM_CAP_MB=4096 ")
++    }
+     return parts.join("")
+ }
+```
+
+Rebuilt `hexa.real` via the standard recipe (transpile + `tool/build_dispatch.hexa`).
+
+## 6. Better fix worth considering (not in this patch)
+
+The fallback-to-raw-src silent path is the actual hazard. When module_loader fails, we get a confusing clang-level error 100 lines later that doesn't say "you ran out of memory in the preprocess step." Options:
+
+- **(a)** Hard-fail `cmd_build` when module_loader fails — print "module_loader OOM / cap exceeded — bump HEXA_MEM_CAP_MB or use HEXA_MEM_UNLIMITED=1" and `exit(2)`. The current code's fallback path was probably meant for the no-use-directive case (already handled separately at the `__has_use_dir || __has_imp_dir` gate). For files that DO have `use` lines, raw-src is never the right answer.
+- **(b)** Have codegen_c2's `_resolve_use_emit` actually emit struct extern fwd decls — multi-line scan for fields. Then raw-src would build correctly too. Worth doing as a robustness measure but not blocking.
+
+I'd recommend (a) ASAP as a guard, and (b) as a quality-of-implementation followup.
 
 ## 5. Workaround (already applied wilson-side)
 
