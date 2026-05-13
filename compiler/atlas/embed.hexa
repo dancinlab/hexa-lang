@@ -109,6 +109,59 @@ fn _truncate_raw(raw: string) -> string {
 
 // --- node emission ---------------------------------------------------------
 
+// Emit a `[string]` literal from an array of strings.
+fn _emit_str_array(arr: array) -> string {
+    let parts = []
+    parts.push("[")
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        parts.push("\"")
+        parts.push(_escape_string(to_string(arr[i])))
+        parts.push("\"")
+        if i + 1 < n { parts.push(", ") }
+        i = i + 1
+    }
+    parts.push("]")
+    return parts.join("")
+}
+
+// Emit a GradeInfo literal.
+fn _emit_grade(g: GradeInfo) -> string {
+    let parts = []
+    parts.push("GradeInfo { value: ")
+    parts.push(to_string(g.value))
+    parts.push(", verified: ")
+    parts.push(if g.verified { "true" } else { "false" })
+    parts.push(", breakthrough: ")
+    parts.push(if g.breakthrough { "true" } else { "false" })
+    parts.push(", hypothesis: ")
+    parts.push(if g.hypothesis { "true" } else { "false" })
+    parts.push(" }")
+    return parts.join("")
+}
+
+// Emit an EdgeInfo literal.
+fn _emit_edges(e: EdgeInfo) -> string {
+    let parts = []
+    parts.push("EdgeInfo { depends_on: ")
+    parts.push(_emit_str_array(e.depends_on))
+    parts.push(", derives: ")
+    parts.push(_emit_str_array(e.derives))
+    parts.push(", applications: ")
+    parts.push(_emit_str_array(e.applications))
+    parts.push(", equivalents: ")
+    parts.push(_emit_str_array(e.equivalents))
+    parts.push(", converges: ")
+    parts.push(_emit_str_array(e.converges))
+    parts.push(", verified_by: ")
+    parts.push(_emit_str_array(e.verified_by))
+    parts.push(", breakthroughs: ")
+    parts.push(_emit_str_array(e.breakthroughs))
+    parts.push(" }")
+    return parts.join("")
+}
+
 // Emit a single `AtlasNode { ... }` literal. Returns the literal as
 // a string with no trailing comma — caller wraps in array syntax.
 fn _emit_node(n: AtlasNode) -> string {
@@ -124,6 +177,10 @@ fn _emit_node(n: AtlasNode) -> string {
     parts.push(_escape_string(n.source_file))
     parts.push("\", source_line: ")
     parts.push(to_string(n.source_line))
+    parts.push(", grade: ")
+    parts.push(_emit_grade(n.grade))
+    parts.push(", edges: ")
+    parts.push(_emit_edges(n.edges))
     parts.push(" }")
     return parts.join("")
 }
@@ -197,6 +254,11 @@ pub fn embed_atlas(idx: AtlasIndex, out_path: string) {
     parts.push(_emit_array("ATLAS_C_NODES", idx.c_nodes))
     parts.push(_emit_array("ATLAS_L_NODES", idx.l_nodes))
     parts.push(_emit_array("ATLAS_E_NODES", idx.e_nodes))
+    parts.push(_emit_array("ATLAS_F_NODES", idx.f_nodes))
+    parts.push(_emit_array("ATLAS_R_NODES", idx.r_nodes))
+    parts.push(_emit_array("ATLAS_S_NODES", idx.s_nodes))
+    parts.push(_emit_array("ATLAS_X_NODES", idx.x_nodes))
+    parts.push(_emit_array("ATLAS_Q_NODES", idx.q_nodes))
 
     let body = parts.join("")
     write_file(out_path, body)

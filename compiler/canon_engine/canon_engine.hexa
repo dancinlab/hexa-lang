@@ -144,8 +144,7 @@ pub fn canon_seal(seed_flag: string, note_flag: string) -> CanonSealResult {
         id: seal_id,
         raw: "@L " + seal_id + " :: phase3 [canon_seal] depth=" + to_string(skin_depth) + " fast=" + (if skin_fast { "true" } else { "false" }) + " atlas_bytes=" + to_string(atlas_bytes),
         source_file: "atlas.overlay.n6",
-        source_line: 1
-    }
+        source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     overlay_append(note)
     eprintln("HEXA_CANON {\"event\":\"seal\",\"seal_id\":\"" + seal_id + "\",\"path\":\"" + path + "\",\"total_seals\":" + to_string(total) + "}")
     println("  seal_id: " + seal_id)

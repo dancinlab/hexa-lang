@@ -1,11 +1,11 @@
 // HEXA Native Compiler — Phase A2: atlas .n6 parser
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [pure, fs_read]
 //
 // Tiny line-parser for atlas.n6 / atlas.append.*.n6 files.
 //
-// Format (observed from ~/core/nexus/n6/atlas.n6 — see file header lines 10–22):
+// Format (per ~/core/n6/spec/n6.md v1, 2026-05-13):
 //   @<TYPE> <id> [= <expr>] [:: <domain>] [<grade>]
 //     <- depends_on              (continuation — leading whitespace)
 //     -> derives                 (continuation)
@@ -17,10 +17,20 @@
 //     "quoted prose"             (continuation)
 //     unit = USD                 (continuation, key=value)
 //
-// Canonical types per RFC-017: @P (primitive) @C (constant) @L (law)
-//                              @F (formula)   @R (relation) @S (symmetry)
-//                              @X (crossing)  @? (unknown)
-// Edge type per atlas.n6 live use: @E (cross-engine bus / bridge)
+// Canonical 9 types per n6 spec:
+//   @P primitive    @C constant   @L law
+//   @F formula      @R relation   @S symmetry
+//   @X crossing     @? open question (Q)
+//   @E experiment (n6 spec) — supersedes hexa-lang's prior "cross-engine bus"
+//                  semantics (see SEMANTIC DRIFT note below).
+//
+// SEMANTIC DRIFT (resolved 2026-05-13, see incoming/notes/2026-05-13-n6-absorption-execution-session.md):
+//   The earlier RFC-017 draft treated @E as "Edge / cross-engine bus / bridge".
+//   The upstream n6 spec (CC0-1.0, the source of the absorbed rodata corpus)
+//   defines @E as "Experiment — empirical measurement record". The n6 spec
+//   wins: existing rodata @E nodes (10 of them in the 6594-node embed) are
+//   semantically a tiny minority, and aligning with the upstream grammar
+//   keeps future absorption frictionless. The kind code remains "E".
 //
 // Section markers (NOT real nodes; ignored):
 //   @END, @shard, @META, @D, @H, @M, @T, @N
@@ -28,20 +38,53 @@
 // Comments: lines whose first non-space char is `#` or whose first two
 // non-space chars are `//`. Blank lines are skipped.
 //
-// This parser only emits AtlasNodes whose `kind` is one of "P"|"C"|"L"|"E"
-// (the four kinds the resolve pass S1 needs). Other typed lines are
-// counted but not returned.
+// This parser emits AtlasNodes for every concrete type (P / C / L / E /
+// F / R / S / X / Q). Section markers terminate the prior node cleanly
+// but do not emit a node themselves.
 //
 // pub fn parse_atlas_file(path, source_file) -> AtlasNode[]
 
 // --- AtlasNode mirror (kept identical to compiler/atlas/merger.hexa) -------
 // We declare it here too so the parser stays standalone-importable.
+//
+// Wave-1 extension (2026-05-13): structured grade + edge fields are
+// populated lazily — `parse_atlas_file` always fills `grade` and `edges`
+// from the parsed header / continuation lines for freshly parsed files.
+// The static rodata embed (compiler/atlas/embedded.gen.hexa) carries
+// default-empty grade/edges since that file is frozen post-nexus rm;
+// downstream `compiler/atlas/static_index.hexa` exposes a lazy
+// `atlas_enrich` pass to backfill those fields on demand.
 pub struct AtlasNode {
-    kind: string,        // "P" | "C" | "L" | "E" | ""  (empty = sentinel)
+    kind: string,        // "P"|"C"|"L"|"E"|"F"|"R"|"S"|"X"|"Q"|""  (empty = sentinel)
     id: string,
     raw: string,         // header line + every continuation line, joined by \n
     source_file: string, // basename of the file the node came from
-    source_line: i64     // 1-based line number of the header line
+    source_line: i64,    // 1-based line number of the header line
+    grade: GradeInfo,    // parsed [N] / [N*] / [N!] / [N?] marker
+    edges: EdgeInfo      // parsed continuation-line edges (<- -> => == ~> |> !!)
+}
+
+// Grade info parsed from a `[N]` / `[N*]` / `[N!]` / `[N?]` / `[N*!]`
+// trailing marker on the header line. `value` defaults to -1 if no marker
+// was found, so callers can distinguish "no grade" from "grade 0".
+pub struct GradeInfo {
+    value: i64,          // 0..12 (-1 = absent)
+    verified: bool,      // `*` flag
+    breakthrough: bool,  // `!` flag
+    hypothesis: bool     // `?` flag
+}
+
+// Edge info: parallel string-array buckets, one per edge operator.
+// All arrays are populated by splitting a continuation line on commas and
+// trimming whitespace. Empty by default.
+pub struct EdgeInfo {
+    depends_on: array,    // <-
+    derives: array,       // ->
+    applications: array,  // =>
+    equivalents: array,   // ==
+    converges: array,     // ~>
+    verified_by: array,   // |>
+    breakthroughs: array  // !!
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -61,6 +104,21 @@ fn _ltrim(s: string) -> string {
     return s.substring(i, n)
 }
 
+fn _rtrim(s: string) -> string {
+    let n = len(s)
+    let mut i = n
+    while i > 0 {
+        let c = s.substring(i - 1, i)
+        if !_is_ws(c) { break }
+        i = i - 1
+    }
+    return s.substring(0, i)
+}
+
+fn _trim(s: string) -> string {
+    return _rtrim(_ltrim(s))
+}
+
 fn _basename(path: string) -> string {
     let n = len(path)
     let mut i = n
@@ -72,14 +130,20 @@ fn _basename(path: string) -> string {
     return path
 }
 
-// Map a raw @-token (e.g. "@P", "@C", "@E") to the canonical compiler
-// resolve kind ("P"|"C"|"L"|"E"). Returns "" for non-resolvable kinds
-// (which are still parsed-as-nodes but excluded from AtlasIndex output).
+// Map a raw @-token (e.g. "@P", "@C", "@E", "@F", "@R", "@S", "@X", "@?")
+// to the canonical compiler kind code. Returns "" for non-recognized
+// kinds (section markers / unknown sigils — kept for raw-termination but
+// excluded from emission).
 fn _kind_of(tok: string) -> string {
     if tok == "@P" { return "P" }
     if tok == "@C" { return "C" }
     if tok == "@L" { return "L" }
     if tok == "@E" { return "E" }
+    if tok == "@F" { return "F" }
+    if tok == "@R" { return "R" }
+    if tok == "@S" { return "S" }
+    if tok == "@X" { return "X" }
+    if tok == "@?" { return "Q" }
     return ""
 }
 
@@ -137,12 +201,199 @@ fn _is_comment(line: string) -> bool {
     return false
 }
 
+// --- grade marker parser ---------------------------------------------------
+
+// Find the LAST `[...]` token on the given line. Returns the inner text
+// (between the brackets), or "" if none. We scan from the right so a
+// header like `@F sm_blackwell = sigma * phi^tau = 192 :: ... [10*]` only
+// matches the trailing grade marker, not a `[..]` that might appear in
+// the expression.
+fn _extract_grade_marker(line: string) -> string {
+    let s = _rtrim(line)
+    let n = len(s)
+    if n == 0 { return "" }
+    if s.substring(n - 1, n) != "]" { return "" }
+    // Walk back to the matching '['.
+    let mut i = n - 1
+    while i > 0 {
+        let c = s.substring(i - 1, i)
+        if c == "[" { return s.substring(i, n - 1) }
+        i = i - 1
+    }
+    return ""
+}
+
+// True if `c` is an ascii digit.
+fn _is_digit(c: string) -> bool {
+    return c >= "0" && c <= "9"
+}
+
+// Parse a `[N]` / `[N*]` / `[N!]` / `[N?]` / `[N*!]` / `[N!*]` / `[d.r]`
+// marker into a GradeInfo. The marker arg is the inner text (no brackets).
+//
+// Examples:
+//   "10"   → { value: 10, verified: false, breakthrough: false, hypothesis: false }
+//   "10*"  → { value: 10, verified: true,  breakthrough: false, hypothesis: false }
+//   "10!"  → { value: 10, verified: false, breakthrough: true,  hypothesis: false }
+//   "10*!" → { value: 10, verified: true,  breakthrough: true,  hypothesis: false }
+//   "11*"  → { value: 11, verified: true,  ... }
+//   "3?"   → { value: 3,  verified: false, breakthrough: false, hypothesis: true }
+//   "d.r"  → { value: -1, ... }  (alien-index — non-numeric, not parsed)
+pub fn parse_grade(marker: string) -> GradeInfo {
+    let m = _trim(marker)
+    let n = len(m)
+    let info = GradeInfo {
+        value: -1,
+        verified: false,
+        breakthrough: false,
+        hypothesis: false
+    }
+    if n == 0 { return info }
+
+    // Walk the prefix digits.
+    let mut i = 0
+    let mut v: i64 = -1
+    while i < n {
+        let c = m.substring(i, i + 1)
+        if !_is_digit(c) { break }
+        let d = to_int(c)
+        if v < 0 { v = 0 }
+        v = v * 10 + d
+        i = i + 1
+    }
+    info.value = v
+
+    // Scan remaining flags.
+    while i < n {
+        let c = m.substring(i, i + 1)
+        if c == "*" { info.verified = true }
+        else if c == "!" { info.breakthrough = true }
+        else if c == "?" { info.hypothesis = true }
+        // Any other char (incl. '.') silently ignored — covers alien index.
+        i = i + 1
+    }
+    return info
+}
+
+// --- edge continuation parser ----------------------------------------------
+
+// Split a comma-separated list of items into a trimmed array. Empty
+// entries are dropped.
+fn _split_csv(s: string) -> array {
+    let out = []
+    let parts = s.split(",")
+    let mut i = 0
+    while i < len(parts) {
+        let t = _trim(to_string(parts[i]))
+        if len(t) > 0 { out.push(t) }
+        i = i + 1
+    }
+    return out
+}
+
+// Classify a continuation line and append its items into the matching
+// edge bucket. Operators are matched longest-first to avoid `=>` colliding
+// with `==`, etc. Quoted-prose lines (`"…"`) and key=value lines are
+// ignored — they remain in `raw` but do not feed structured edges.
+fn _absorb_edge_line(line: string, edges: EdgeInfo) {
+    let s = _ltrim(line)
+    let n = len(s)
+    if n < 2 { return }
+
+    // 2-char operators first.
+    if n >= 2 {
+        let op2 = s.substring(0, 2)
+        if op2 == "<-" {
+            edges.depends_on = edges.depends_on + _split_csv(s.substring(2, n))
+            return
+        }
+        if op2 == "->" {
+            edges.derives = edges.derives + _split_csv(s.substring(2, n))
+            return
+        }
+        if op2 == "=>" {
+            // Application — string payload, store the whole rest as one entry.
+            let body = _trim(s.substring(2, n))
+            if len(body) > 0 { edges.applications.push(body) }
+            return
+        }
+        if op2 == "==" {
+            let body = _trim(s.substring(2, n))
+            if len(body) > 0 { edges.equivalents.push(body) }
+            return
+        }
+        if op2 == "~>" {
+            let body = _trim(s.substring(2, n))
+            if len(body) > 0 { edges.converges.push(body) }
+            return
+        }
+        if op2 == "|>" {
+            let body = _trim(s.substring(2, n))
+            if len(body) > 0 { edges.verified_by.push(body) }
+            return
+        }
+        if op2 == "!!" {
+            let body = _trim(s.substring(2, n))
+            if len(body) > 0 { edges.breakthroughs.push(body) }
+            return
+        }
+    }
+}
+
+// Parse all continuation lines under a node header into structured edges.
+// `raw` is the full multi-line raw text (header + continuations joined by
+// "\n") as stored on AtlasNode.raw — we skip the header line and absorb
+// subsequent indented (or edge-prefixed) lines.
+pub fn parse_edge_lines(raw: string) -> EdgeInfo {
+    let edges = EdgeInfo {
+        depends_on: [],
+        derives: [],
+        applications: [],
+        equivalents: [],
+        converges: [],
+        verified_by: [],
+        breakthroughs: []
+    }
+    if len(raw) == 0 { return edges }
+    let lines = raw.split("\n")
+    let n = len(lines)
+    let mut i = 1  // skip header line
+    while i < n {
+        _absorb_edge_line(to_string(lines[i]), edges)
+        i = i + 1
+    }
+    return edges
+}
+
+// Build a fresh empty GradeInfo. Helper for callers that need a sentinel.
+pub fn empty_grade() -> GradeInfo {
+    return GradeInfo {
+        value: -1,
+        verified: false,
+        breakthrough: false,
+        hypothesis: false
+    }
+}
+
+// Build a fresh empty EdgeInfo. Helper for callers that need a sentinel.
+pub fn empty_edges() -> EdgeInfo {
+    return EdgeInfo {
+        depends_on: [],
+        derives: [],
+        applications: [],
+        equivalents: [],
+        converges: [],
+        verified_by: [],
+        breakthroughs: []
+    }
+}
+
 // --- public surface --------------------------------------------------------
 
-// parse_atlas_file — read `path`, return AtlasNodes whose kind is one of
-// "P"|"C"|"L"|"E". Nodes of other types (@F/@R/@S/@X/@?/@D/@H/@M/@T/@N)
-// are still terminated correctly (so continuation lines don't bleed into
-// the next P/C/L/E node) but are excluded from the returned array.
+// parse_atlas_file — read `path`, return AtlasNodes for every recognized
+// kind (P / C / L / E / F / R / S / X / Q). Section markers (@END/@shard/
+// @META and the @D/@H/@M/@T/@N family in legacy shards) still terminate
+// the preceding node correctly but do not emit a node themselves.
 //
 // `source_file` is what we record in AtlasNode.source_file — typically
 // the basename, set by the caller (load_atlas).
@@ -155,10 +406,11 @@ pub fn parse_atlas_file(path: string, source_file: string) -> array {
     let n_lines = len(lines)
 
     let mut have_cur = false
-    let mut cur_kind = ""           // "P"|"C"|"L"|"E"|"" (empty = non-emitted type)
+    let mut cur_kind = ""           // "P"|"C"|"L"|"E"|"F"|"R"|"S"|"X"|"Q"|""
     let mut cur_id = ""
     let mut cur_raw_chunks = []     // string[] — joined on flush (avoids O(n²))
     let mut cur_line = 0
+    let mut cur_header = ""         // header line — used for late grade parse
 
     let mut i = 0
     while i < n_lines {
@@ -202,12 +454,17 @@ pub fn parse_atlas_file(path: string, source_file: string) -> array {
         if _is_header_sigil(tok) {
             // Flush previous node.
             if have_cur && cur_kind != "" {
+                let raw_joined = cur_raw_chunks.join("\n")
+                let g = parse_grade(_extract_grade_marker(cur_header))
+                let e = parse_edge_lines(raw_joined)
                 out.push(AtlasNode {
                     kind: cur_kind,
                     id: cur_id,
-                    raw: cur_raw_chunks.join("\n"),
+                    raw: raw_joined,
                     source_file: source_file,
-                    source_line: cur_line
+                    source_line: cur_line,
+                    grade: g,
+                    edges: e
                 })
             }
             let k = _kind_of(tok)
@@ -218,6 +475,7 @@ pub fn parse_atlas_file(path: string, source_file: string) -> array {
             cur_id = id
             cur_raw_chunks = [line]
             cur_line = i + 1
+            cur_header = line
             i = i + 1
             continue
         }
@@ -231,14 +489,43 @@ pub fn parse_atlas_file(path: string, source_file: string) -> array {
 
     // Flush last node.
     if have_cur && cur_kind != "" {
+        let raw_joined = cur_raw_chunks.join("\n")
+        let g = parse_grade(_extract_grade_marker(cur_header))
+        let e = parse_edge_lines(raw_joined)
         out.push(AtlasNode {
             kind: cur_kind,
             id: cur_id,
-            raw: cur_raw_chunks.join("\n"),
+            raw: raw_joined,
             source_file: source_file,
-            source_line: cur_line
+            source_line: cur_line,
+            grade: g,
+            edges: e
         })
     }
 
     return out
+}
+
+// enrich_node — recompute grade + edges from a node's raw text. Used by
+// the static-index lazy-enrichment path: rodata nodes loaded from the
+// frozen embedded.gen.hexa have default-empty grade/edges, so callers that
+// need those fields can call this to backfill from `raw`. Returns a new
+// AtlasNode (does not mutate the input) so const arrays stay clean.
+pub fn enrich_node(node: AtlasNode) -> AtlasNode {
+    if len(node.raw) == 0 {
+        return node
+    }
+    let lines = node.raw.split("\n")
+    let header = if len(lines) > 0 { to_string(lines[0]) } else { "" }
+    let g = parse_grade(_extract_grade_marker(header))
+    let e = parse_edge_lines(node.raw)
+    return AtlasNode {
+        kind: node.kind,
+        id: node.id,
+        raw: node.raw,
+        source_file: node.source_file,
+        source_line: node.source_line,
+        grade: g,
+        edges: e
+    }
 }

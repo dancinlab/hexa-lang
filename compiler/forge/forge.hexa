@@ -167,8 +167,7 @@ pub fn forge_run(seed_flag: string, max_rounds_flag: string) -> ForgeResult {
         id: "forge_boot_" + to_string(len(_seed_t)) + "_" + to_string(skin_depth),
         raw: "@L forge_boot depth=" + to_string(skin_depth) + " fast=" + (if skin_fast { "true" } else { "false" }) + " atlas=" + to_string(atlas_bytes) + "B :: phase3 [forge]",
         source_file: "atlas.overlay.n6",
-        source_line: 1
-    }
+        source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     overlay_append(note)
     eprintln("HEXA_FORGE {\"event\":\"complete\",\"status\":\"dispatched_to_drill\"}")
     return ForgeResult {

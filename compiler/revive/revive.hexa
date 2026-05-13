@@ -146,8 +146,7 @@ pub fn revive_run(max_iter_in: i64, consec_fail_cap_in: i64, apply: bool, quiet:
         id: "revive_" + final_verdict + "_n" + to_string(iters_completed),
         raw: "@L revive verdict=" + final_verdict + " iters=" + to_string(iters_completed) + " consec_fail=" + to_string(consec_fail) + " :: phase3 [revive]",
         source_file: "atlas.overlay.n6",
-        source_line: 1
-    }
+        source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     overlay_append(note)
     return ReviveResult {
         iters_completed: iters_completed,

@@ -178,8 +178,7 @@ pub fn molt_run(seed: string, max_cycles_flag: string) -> MoltResult {
         id: "molt_best_skin_" + to_string(len(_seed_t)) + "_" + to_string(best_skin_idx),
         raw: "@L molt_best_skin idx=" + to_string(best_skin_idx) + " depth=" + to_string(best_d) + " fast=" + (if best_f { "true" } else { "false" }) + " abs=" + to_string(best_abs) + " :: phase3 [molt]",
         source_file: "atlas.overlay.n6",
-        source_line: 1
-    }
+        source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     overlay_append(note)
     eprintln("HEXA_MOLT {\"event\":\"complete\",\"best_skin_idx\":" + to_string(best_skin_idx) + ",\"best_abs\":" + to_string(best_abs) + ",\"persisted\":\"" + skin_path + "\"}")
     return MoltResult {

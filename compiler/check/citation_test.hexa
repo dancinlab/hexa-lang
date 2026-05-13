@@ -39,7 +39,9 @@ fn _mk_atlas_node(kind: string, id: string) -> AtlasNode {
         id: id,
         raw: "@" + kind + " " + id,
         source_file: "test://atlas.n6",
-        source_line: 1
+        source_line: 1,
+        grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false },
+        edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }
     }
 }
 
@@ -51,6 +53,11 @@ fn _mk_fake_atlas() -> AtlasIndex {
         c_nodes: [],
         l_nodes: l,
         e_nodes: [],
+        f_nodes: [],
+        r_nodes: [],
+        s_nodes: [],
+        x_nodes: [],
+        q_nodes: [],
         hash: "deadbeef",
         source_count: 1,
         duplicates: [],

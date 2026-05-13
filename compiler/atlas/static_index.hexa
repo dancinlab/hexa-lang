@@ -64,17 +64,27 @@ pub let ATLAS_HASH_MAX: string = ""
 // compiler-build time, not preserved across the embed boundary.
 pub fn static_atlas() -> AtlasIndex {
     // type: AtlasIndex
-    // Stage1 punch list Gap 11 — verified, all 8 AtlasIndex fields are
+    // Stage1 punch list Gap 11 — verified, all 13 AtlasIndex fields are
     // literal-initialized here so the type checker round-trips this const
     // through `_collect_item_types` cleanly when compiler/ self-loads. The
     // two arrays (`duplicates`, `skipped_oversize`) are intentionally empty
     // in the static path — those signals are merger-time only and were
     // resolved at compiler-build time.
+    //
+    // Wave-1 extension (2026-05-13): the 5 new per-kind arrays (F/R/S/X/Q)
+    // are wired in. The frozen rodata embed currently has empty F/R/S/X/Q
+    // arrays since the n6 source corpus is unavailable for regen; overlay
+    // contributions to those kinds are read via the runtime overlay path.
     return AtlasIndex {
         p_nodes: ATLAS_P_NODES,
         c_nodes: ATLAS_C_NODES,
         l_nodes: ATLAS_L_NODES,
         e_nodes: ATLAS_E_NODES,
+        f_nodes: ATLAS_F_NODES,
+        r_nodes: ATLAS_R_NODES,
+        s_nodes: ATLAS_S_NODES,
+        x_nodes: ATLAS_X_NODES,
+        q_nodes: ATLAS_Q_NODES,
         hash: ATLAS_HASH,
         source_count: ATLAS_SOURCE_COUNT,
         duplicates: [],
@@ -112,8 +122,8 @@ pub fn lookup_static(kind: string, id: string) -> AtlasNode {
 // shorter name; callers that prefer this name get a uniform pair with
 // atlas_lookup_merged below.
 pub fn atlas_lookup(id: string) -> AtlasNode {
-    // Search P → C → L → E. AtlasIndex keys are per-kind so we have to
-    // probe each bucket; a hit short-circuits.
+    // Search P → C → L → E → F → R → S → X → Q. AtlasIndex keys are per-kind
+    // so we have to probe each bucket; a hit short-circuits.
     let idx = static_atlas()
     let p = lookup(idx, "P", id)
     if p.kind != "" { return p }
@@ -123,6 +133,16 @@ pub fn atlas_lookup(id: string) -> AtlasNode {
     if l.kind != "" { return l }
     let e = lookup(idx, "E", id)
     if e.kind != "" { return e }
+    let f = lookup(idx, "F", id)
+    if f.kind != "" { return f }
+    let r = lookup(idx, "R", id)
+    if r.kind != "" { return r }
+    let s = lookup(idx, "S", id)
+    if s.kind != "" { return s }
+    let x = lookup(idx, "X", id)
+    if x.kind != "" { return x }
+    let q = lookup(idx, "Q", id)
+    if q.kind != "" { return q }
     return p
 }
 
@@ -149,6 +169,16 @@ pub fn atlas_list() -> array {
     while i < len(idx.l_nodes) { out.push(idx.l_nodes[i]); i = i + 1 }
     i = 0
     while i < len(idx.e_nodes) { out.push(idx.e_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.f_nodes) { out.push(idx.f_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.r_nodes) { out.push(idx.r_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.s_nodes) { out.push(idx.s_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.x_nodes) { out.push(idx.x_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.q_nodes) { out.push(idx.q_nodes[i]); i = i + 1 }
     return out
 }
 
@@ -177,4 +207,48 @@ pub fn atlas_list_merged() -> array {
         i = i + 1
     }
     return merged
+}
+
+// --- Wave 2.3: prefix lookup -----------------------------------------------
+//
+// atlas_prefix — return every node whose id starts with `prefix`. Linear
+// scan over the merged (rodata + overlay) view. n6 plan §7 Wave 2.3 spec.
+// The implementation is a lightweight derivation of `atlas_query.hexa` —
+// we drop the bloom / predict / cold-mmap stages since hexa-lang's atlas
+// lives in rodata, not on disk.
+pub fn atlas_prefix(prefix: string) -> array {
+    let all = atlas_list_merged()
+    let out = []
+    let pn = len(prefix)
+    if pn == 0 { return all }
+    let n = len(all)
+    let mut i = 0
+    while i < n {
+        let node = all[i]
+        if len(node.id) >= pn && node.id.substring(0, pn) == prefix {
+            out.push(node)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// --- Wave 1.5: lazy enrichment ----------------------------------------------
+//
+// atlas_enrich — fill in `grade` + `edges` on a node whose rodata embed
+// carried default values. Useful for callers that need the structured
+// edge / grade info but want to keep the static const arrays slim.
+// Delegates to `parser::enrich_node`, which re-parses the node's `raw`
+// text.
+pub fn atlas_enrich(node: AtlasNode) -> AtlasNode {
+    return enrich_node(node)
+}
+
+// atlas_lookup_enriched — same as atlas_lookup_merged but the returned
+// node has structured grade + edges populated even when it came from the
+// frozen rodata embed.
+pub fn atlas_lookup_enriched(id: string) -> AtlasNode {
+    let n = atlas_lookup_merged(id)
+    if n.kind == "" { return n }
+    return atlas_enrich(n)
 }

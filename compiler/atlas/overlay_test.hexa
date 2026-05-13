@@ -67,22 +67,19 @@ fn main() {
         id: "phase3_seed_1",
         raw: "@P phase3_seed_1 = 42 :: phase3 [discovered]",
         source_file: "atlas.overlay.n6",
-        source_line: 1
-    }
+        source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     let n2 = AtlasNode {
         kind: "C",
         id: "phase3_seed_2",
         raw: "@C phase3_seed_2 = 4.33 :: phase3 [discovered]",
         source_file: "atlas.overlay.n6",
-        source_line: 1
-    }
+        source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     let n3 = AtlasNode {
         kind: "L",
         id: "phase3_seed_3",
         raw: "@L phase3_seed_3 :: phase3 [discovered]\n  -> phase3_seed_1, phase3_seed_2",
         source_file: "atlas.overlay.n6",
-        source_line: 1
-    }
+        source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     overlay_append(n1)
     overlay_append(n2)
     overlay_append(n3)
@@ -146,8 +143,7 @@ fn main() {
         id: "n",
         raw: "@P n = 999 :: phase3 [evil_override]",
         source_file: "atlas.overlay.n6",
-        source_line: 1
-    }
+        source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     overlay_append(n_conflict)
     overlay_reset_cache()
 

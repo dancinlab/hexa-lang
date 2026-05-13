@@ -127,7 +127,7 @@ pub fn overlay_load_cached() -> array {
 }
 
 // Linear scan over an overlay node list to find a node by id.
-// Returns a sentinel `AtlasNode { kind: "", … }` on miss — matches
+// Returns a sentinel AtlasNode with kind == "" on miss — matches
 // the merger.hexa::lookup contract.
 pub fn overlay_find_by_id(nodes: array, id: string) -> AtlasNode {
     let n = len(nodes)
@@ -142,7 +142,9 @@ pub fn overlay_find_by_id(nodes: array, id: string) -> AtlasNode {
         id: id,
         raw: "",
         source_file: "",
-        source_line: 0
+        source_line: 0,
+        grade: empty_grade(),
+        edges: empty_edges()
     }
 }
 

@@ -50,21 +50,26 @@ fn _make_oversize_raw() -> string {
 
 // Build the synthetic AtlasIndex. 3 P, 2 C, 1 L, 1 E.
 fn _make_fixture() -> AtlasIndex {
-    let p1 = AtlasNode { kind: "P", id: "alpha", raw: "@P alpha :: foundation", source_file: "fixture.n6", source_line: 1 }
+    let p1 = AtlasNode { kind: "P", id: "alpha", raw: "@P alpha :: foundation", source_file: "fixture.n6", source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     // Tricky escapes: backslash, double-quote, newline, tab.
-    let p2 = AtlasNode { kind: "P", id: "beta",  raw: "@P beta\n  \"escape \\ test\"\n  with\ttab", source_file: "fixture.n6", source_line: 5 }
-    let p3 = AtlasNode { kind: "P", id: "gamma", raw: "@P gamma", source_file: "fixture.n6", source_line: 12 }
-    let c1 = AtlasNode { kind: "C", id: "phi_tau", raw: "@C phi_tau = 1.618", source_file: "fixture.n6", source_line: 20 }
-    let c2 = AtlasNode { kind: "C", id: "e_natural", raw: "@C e_natural = 2.71828", source_file: "fixture.n6", source_line: 25 }
+    let p2 = AtlasNode { kind: "P", id: "beta",  raw: "@P beta\n  \"escape \\ test\"\n  with\ttab", source_file: "fixture.n6", source_line: 5, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
+    let p3 = AtlasNode { kind: "P", id: "gamma", raw: "@P gamma", source_file: "fixture.n6", source_line: 12, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
+    let c1 = AtlasNode { kind: "C", id: "phi_tau", raw: "@C phi_tau = 1.618", source_file: "fixture.n6", source_line: 20, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
+    let c2 = AtlasNode { kind: "C", id: "e_natural", raw: "@C e_natural = 2.71828", source_file: "fixture.n6", source_line: 25, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     // Oversize raw → must be truncated by embed_atlas.
-    let l1 = AtlasNode { kind: "L", id: "law_long", raw: _make_oversize_raw(), source_file: "fixture.n6", source_line: 40 }
-    let e1 = AtlasNode { kind: "E", id: "edge_one", raw: "@E edge_one :: bridge", source_file: "fixture.n6", source_line: 80 }
+    let l1 = AtlasNode { kind: "L", id: "law_long", raw: _make_oversize_raw(), source_file: "fixture.n6", source_line: 40, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
+    let e1 = AtlasNode { kind: "E", id: "edge_one", raw: "@E edge_one :: bridge", source_file: "fixture.n6", source_line: 80, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
 
     return AtlasIndex {
         p_nodes: [p1, p2, p3],
         c_nodes: [c1, c2],
         l_nodes: [l1],
         e_nodes: [e1],
+        f_nodes: [],
+        r_nodes: [],
+        s_nodes: [],
+        x_nodes: [],
+        q_nodes: [],
         hash: "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef",
         source_count: 1,
         duplicates: [],

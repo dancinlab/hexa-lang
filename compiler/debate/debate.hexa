@@ -256,8 +256,7 @@ pub fn debate_run(seed: string, variants_n: i64, base_depth: i64, arbitrate: boo
         id: "debate_" + verdict + "_" + to_string(len(_seed_t)) + "_v" + to_string(vn) + "_d" + to_string(base),
         raw: "@L debate verdict=" + verdict + " variants=" + to_string(vn) + " base=" + to_string(base) + " :: phase3 [debate]",
         source_file: "atlas.overlay.n6",
-        source_line: 1
-    }
+        source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     overlay_append(note)
     eprintln("HEXA_DEBATE {\"event\":\"complete\",\"verdict\":\"" + verdict + "\"}")
     return DebateResult {

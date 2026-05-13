@@ -183,7 +183,9 @@ fn _find_l_node(idx: AtlasIndex, id: string) -> AtlasNode {
         id: id,
         raw: "",
         source_file: "",
-        source_line: 0
+        source_line: 0,
+        grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false },
+        edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }
     }
 }
 

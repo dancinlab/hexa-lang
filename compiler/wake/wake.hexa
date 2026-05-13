@@ -151,8 +151,7 @@ pub fn wake_run(seed: string, signal_file_flag: string, max_cycles_flag: string)
         id: "wake_summary_" + to_string(len(_seed_t)) + "_" + to_string(cycles_run),
         raw: "@L wake_summary cycles=" + to_string(cycles_run) + " fires=" + to_string(fires) + " skips=" + to_string(skips) + " :: phase3 [wake]",
         source_file: "atlas.overlay.n6",
-        source_line: 1
-    }
+        source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
     overlay_append(note)
     eprintln("HEXA_WAKE {\"event\":\"complete\",\"cycles_run\":" + to_string(cycles_run) + ",\"fires\":" + to_string(fires) + ",\"skips\":" + to_string(skips) + "}")
     return WakeResult { cycles_run: cycles_run, fires: fires, skips: skips, last_signal: last_signal }

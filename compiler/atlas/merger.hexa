@@ -37,11 +37,21 @@ use "stdlib/hash/sha256"
 // `hash` is the SHA256 hex digest over the canonicalized merge.
 // `source_count` is the number of files that contributed at least one
 // readable byte (atlas.n6 + non-empty append shards).
+// Wave-1 extension (2026-05-13): the 5 additional n6-spec kinds
+// (@F formula / @R relation / @S symmetry / @X crossing / @? open
+// question) now get their own per-kind arrays. The 4 legacy arrays
+// (p/c/l/e) stay where they are so existing consumers keep working
+// untouched.
 pub struct AtlasIndex {
-    p_nodes: array,        // AtlasNode[]
-    c_nodes: array,        // AtlasNode[]
-    l_nodes: array,        // AtlasNode[]
-    e_nodes: array,        // AtlasNode[]
+    p_nodes: array,        // AtlasNode[] — @P primitive
+    c_nodes: array,        // AtlasNode[] — @C constant
+    l_nodes: array,        // AtlasNode[] — @L law
+    e_nodes: array,        // AtlasNode[] — @E experiment (n6 spec)
+    f_nodes: array,        // AtlasNode[] — @F formula
+    r_nodes: array,        // AtlasNode[] — @R relation
+    s_nodes: array,        // AtlasNode[] — @S symmetry
+    x_nodes: array,        // AtlasNode[] — @X crossing
+    q_nodes: array,        // AtlasNode[] — @? open question
     hash: string,          // sha256 hex of canonical merged bytes
     source_count: i64,     // number of source files merged
     duplicates: array,     // string[] — "kind:id from src2 (first src1)"
@@ -124,6 +134,11 @@ fn _insert_first_wins(idx: AtlasIndex, seen, node: AtlasNode) {
     if node.kind == "C" { idx.c_nodes.push(node); return }
     if node.kind == "L" { idx.l_nodes.push(node); return }
     if node.kind == "E" { idx.e_nodes.push(node); return }
+    if node.kind == "F" { idx.f_nodes.push(node); return }
+    if node.kind == "R" { idx.r_nodes.push(node); return }
+    if node.kind == "S" { idx.s_nodes.push(node); return }
+    if node.kind == "X" { idx.x_nodes.push(node); return }
+    if node.kind == "Q" { idx.q_nodes.push(node); return }
 }
 
 // Hash strategy: rather than materialize a single mega-string
@@ -151,6 +166,11 @@ pub fn load_atlas(root: string) -> AtlasIndex {
         c_nodes: [],
         l_nodes: [],
         e_nodes: [],
+        f_nodes: [],
+        r_nodes: [],
+        s_nodes: [],
+        x_nodes: [],
+        q_nodes: [],
         hash: "",
         source_count: 0,
         duplicates: [],
@@ -225,7 +245,9 @@ pub fn lookup(idx: AtlasIndex, kind: string, id: string) -> AtlasNode {
         id: id,
         raw: "",
         source_file: "",
-        source_line: 0
+        source_line: 0,
+        grade: empty_grade(),
+        edges: empty_edges()
     }
 }
 
@@ -247,5 +269,10 @@ fn _array_for_kind(idx: AtlasIndex, kind: string) -> array {
     if kind == "C" { return idx.c_nodes }
     if kind == "L" { return idx.l_nodes }
     if kind == "E" { return idx.e_nodes }
+    if kind == "F" { return idx.f_nodes }
+    if kind == "R" { return idx.r_nodes }
+    if kind == "S" { return idx.s_nodes }
+    if kind == "X" { return idx.x_nodes }
+    if kind == "Q" { return idx.q_nodes }
     return []
 }

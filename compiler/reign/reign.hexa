@@ -259,8 +259,7 @@ pub fn reign_run(seed: string, max_cycles_flag: string) -> ReignResult {
                 id: "reign_saturation_" + to_string(len(_seed_t)) + "_" + to_string(cycle),
                 raw: "@L reign_saturation cycle=" + to_string(cycle) + " signal=" + signal + " :: phase3 [reign]",
                 source_file: "atlas.overlay.n6",
-                source_line: 1
-            }
+                source_line: 1, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
             overlay_append(note)
             break
         }
