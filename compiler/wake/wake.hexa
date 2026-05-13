@@ -1,0 +1,135 @@
+// HEXA Native Compiler — Phase 3 variant: wake (L8 reality-loop)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Port of nexus cli/run.hexa::cmd_wake (lines 4762-4815).
+//
+// Behavior: drill loop where each cycle waits for a signal-file fingerprint
+// change before firing the drill round. If the fingerprint is unchanged (or
+// the file is missing), the cycle is recorded as a skip. fires + skips
+// counts surface in the result.
+//
+// Drill dispatch shim: TODO(drill-bg-dep).
+
+use "compiler/atlas/overlay"
+use "compiler/atlas/parser"
+use "compiler/reign/reign"
+
+@phase("parse_only")
+pub struct WakeResult {
+    cycles_run: i64,
+    fires: i64,
+    skips: i64,
+    last_signal: string
+}
+
+pub fn wake_max_cycles_cap() -> i64 {
+    let v = env("NEXUS_WAKE_MAX")
+    if len(v) == 0 { return 5 }
+    let mut n: i64 = 5
+    try { n = to_int(v) } catch e { n = 5 }
+    if n < 1 { return 1 }
+    if n > 10 { return 10 }
+    return n
+}
+
+pub fn wake_cooldown_sec() -> i64 {
+    let v = env("NEXUS_WAKE_COOLDOWN_SEC")
+    if len(v) == 0 { return 0 }
+    let mut n: i64 = 0
+    try { n = to_int(v) } catch e { n = 0 }
+    if n < 0 { return 0 }
+    if n > 60 { return 60 }
+    return n
+}
+
+pub fn wake_default_signal_file() -> string {
+    let v = env("NEXUS_WAKE_SIGNAL_FILE")
+    if len(v) > 0 { return v }
+    let home = env("HOME")
+    return home + "/.hx/data/wake_signal.txt"
+}
+
+// Fingerprint = "<size>:<head_64>". MISSING when file is absent.
+pub fn wake_read_fp(path: string) -> string {
+    if !file_exists(path) { return "MISSING" }
+    let sz = file_size(path)
+    let raw = read_file(path)
+    let head_len: i64 = if len(raw) > 64 { 64 } else { len(raw) }
+    let mut head = raw.substring(0, head_len)
+    // Strip newlines from head to keep the fp on a single line.
+    head = head.replace("\n", "").replace("\r", "")
+    return to_string(sz) + ":" + head
+}
+
+fn _drill_round_shim(seed: string, cycle: i64) -> string {
+    let base = (len(seed) % 4) + 2
+    let abs_n: i64 = base + cycle
+    let mut out = ""
+    out = out + "[wake-shim] cycle=" + to_string(cycle) + "\n"
+    out = out + "total=" + to_string(abs_n) + "\n"
+    let mut j: i64 = 0
+    while j < abs_n {
+        out = out + "[EXACT abs " + to_string(j) + "]\n"
+        j = j + 1
+    }
+    return out
+}
+
+pub fn wake_run(seed: string, signal_file_flag: string, max_cycles_flag: string) -> WakeResult {
+    let _seed_t = seed.trim()
+    if len(_seed_t) == 0 {
+        eprintln("wake: --seed required")
+        return WakeResult { cycles_run: 0, fires: 0, skips: 0, last_signal: "" }
+    }
+    let cap = wake_max_cycles_cap()
+    let mut max_cycles = cap
+    if len(max_cycles_flag) > 0 {
+        try { max_cycles = to_int(max_cycles_flag) } catch e { max_cycles = cap }
+        if max_cycles < 1 { max_cycles = 1 }
+        if max_cycles > cap { max_cycles = cap }
+    }
+    let signal_file = if len(signal_file_flag) > 0 { signal_file_flag } else { wake_default_signal_file() }
+    let cooldown = wake_cooldown_sec()
+    println("wake — L8 reality-loop (signal=" + signal_file + ", max_cycles=" + to_string(max_cycles) + ")")
+    eprintln("HEXA_WAKE {\"event\":\"plan\",\"signal_file\":\"" + signal_file + "\",\"max_cycles\":" + to_string(max_cycles) + ",\"cooldown\":" + to_string(cooldown) + "}")
+    let mut prev_fp: string = ""
+    let mut fires: i64 = 0
+    let mut skips: i64 = 0
+    let mut cycles_run: i64 = 0
+    let mut last_signal: string = ""
+    let mut cycle: i64 = 0
+    while cycle < max_cycles {
+        cycle = cycle + 1
+        cycles_run = cycle
+        if cooldown > 0 && cycle > 1 {
+            exec("sleep " + to_string(cooldown))
+        }
+        let cur_fp = wake_read_fp(signal_file)
+        let changed = (cur_fp != prev_fp) && (cur_fp != "MISSING")
+        eprintln("HEXA_WAKE {\"event\":\"iter\",\"cycle\":" + to_string(cycle) + ",\"changed\":" + (if changed { "true" } else { "false" }) + "}")
+        if !changed {
+            skips = skips + 1
+            prev_fp = cur_fp
+            continue
+        }
+        let perturbed = reign_next_seed(_seed_t, cycle, "wake-fp-cycle=" + to_string(cycle))
+        let out = _drill_round_shim(perturbed, cycle)
+        let signal = reign_extract_signal(out)
+        last_signal = signal
+        fires = fires + 1
+        eprintln("HEXA_WAKE {\"event\":\"fire\",\"cycle\":" + to_string(cycle) + ",\"signal\":\"" + signal + "\"}")
+        prev_fp = cur_fp
+    }
+    let note = AtlasNode {
+        kind: "L",
+        id: "wake_summary_" + to_string(len(_seed_t)) + "_" + to_string(cycles_run),
+        raw: "@L wake_summary cycles=" + to_string(cycles_run) + " fires=" + to_string(fires) + " skips=" + to_string(skips) + " :: phase3 [wake]",
+        source_file: "atlas.overlay.n6",
+        source_line: 1
+    }
+    overlay_append(note)
+    eprintln("HEXA_WAKE {\"event\":\"complete\",\"cycles_run\":" + to_string(cycles_run) + ",\"fires\":" + to_string(fires) + ",\"skips\":" + to_string(skips) + "}")
+    return WakeResult { cycles_run: cycles_run, fires: fires, skips: skips, last_signal: last_signal }
+}

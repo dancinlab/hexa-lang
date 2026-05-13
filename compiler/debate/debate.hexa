@@ -1,0 +1,252 @@
+// HEXA Native Compiler — Phase 3 variant: debate (L3 N-variant adversarial)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Port of nexus cli/drill/adversarial_debate.hexa (420 LOC) + the thin
+// dispatcher cli/run.hexa::cmd_debate (lines 383-397).
+//
+// Behavior: run N drill variants serially (default 3) with orthogonal
+// per-stage depth perturbations, extract a `total` count from each, then
+// arbitrate:
+//   L1 CONSENSUS  — every variant's total matches byte-exactly.
+//   L2 SOFT_AGREE — max/min ratio ≤ 1.20.
+//   L3 DEBATE     — divergence > 20%; emits HEXA_DEBATE stderr event.
+//
+// Drill dispatch shim: TODO(drill-bg-dep). For now each variant uses a
+// deterministic stub seeded by the depth plan, so the verdict still
+// exercises the L1/L2/L3 logic end-to-end.
+//
+// Naming: `db_` prefix to avoid clashing with the nexus `ad_` prefix when
+// both modules ever co-exist in a build.
+
+use "compiler/atlas/overlay"
+use "compiler/atlas/parser"
+
+@phase("parse_only")
+pub struct DebateResult {
+    seed: string,
+    variants: i64,
+    base_depth: i64,
+    verdict: string,    // "CONSENSUS" | "SOFT_AGREE" | "DEBATE"
+    arbitrate: bool,
+    totals: array,      // [i64]
+    plans: array        // [[i64; 6]]
+}
+
+// --- depth plans -----------------------------------------------------------
+
+pub fn db_clamp_depth(v: i64) -> i64 {
+    if v < 1 { return 1 }
+    if v > 6 { return 6 }
+    return v
+}
+
+pub fn db_variant_delta(idx: i64) -> array {
+    // 0=smash 1=free 2=absolute 3=meta 4=hyper 5=resonance
+    if idx == 0 { return [0, 0, 0, 0, 0, 0] }
+    if idx == 1 { return [-1, -1, 0, 0, 2, 2] }
+    if idx == 2 { return [2, -1, -1, -1, -1, -1] }
+    let s: i64 = if (idx % 2) == 0 { 1 } else { -1 }
+    return [s, -s, s, -s, s, -s]
+}
+
+pub fn db_variant_label(idx: i64) -> string {
+    if idx == 0 { return "A" }
+    if idx == 1 { return "B" }
+    if idx == 2 { return "C" }
+    return "V" + to_string(idx)
+}
+
+pub fn db_variant_describe(idx: i64) -> string {
+    if idx == 0 { return "standard flow (baseline)" }
+    if idx == 1 { return "tail-heavy (resonance/hyper +2, smash/free -1)" }
+    if idx == 2 { return "smash-heavy (smash +2, others -1)" }
+    return "alternating delta (sign-flipped per stage)"
+}
+
+pub fn db_build_plan(base: i64, delta: array) -> array {
+    let mut out: array = []
+    let mut i: i64 = 0
+    while i < 6 {
+        let d: i64 = delta[i]
+        out.push(db_clamp_depth(base + d))
+        i = i + 1
+    }
+    return out
+}
+
+pub fn db_plan_json(plan: array) -> string {
+    let mut s = "["
+    let mut i: i64 = 0
+    while i < 6 {
+        if i > 0 { s = s + "," }
+        s = s + to_string(plan[i])
+        i = i + 1
+    }
+    return s + "]"
+}
+
+// --- drill round shim ------------------------------------------------------
+//
+// TODO(drill-bg-dep): when compiler/drill lands, replace with a real
+// invocation that returns the full stdout. Deterministic stub returns a
+// "total absorptions: N" line so db_extract_total works as in the nexus
+// engine.
+
+fn _drill_round_shim(seed: string, plan: array) -> string {
+    // Deterministic: total ≈ seed_len + sum(plan)*2, with a small variant-
+    // dependent jitter so different plans yield different totals (exercises
+    // SOFT_AGREE / DEBATE branches).
+    let mut sum: i64 = 0
+    let mut i: i64 = 0
+    while i < 6 {
+        let v: i64 = plan[i]
+        sum = sum + v
+        i = i + 1
+    }
+    let total: i64 = (len(seed) % 13) + sum * 2
+    let mut out = ""
+    out = out + "[debate-shim] seed_len=" + to_string(len(seed)) + " sum_plan=" + to_string(sum) + "\n"
+    out = out + "▎ total absorptions: " + to_string(total) + "\n"
+    return out
+}
+
+pub fn db_extract_total(out: string) -> i64 {
+    let key = "total absorptions: "
+    let idx = out.find(key)
+    if idx < 0 { return -1 }
+    let start = idx + len(key)
+    let n = len(out)
+    let mut i = start
+    let mut buf = ""
+    while i < n {
+        let cc = char_code(out, i)
+        if cc >= 48 && cc <= 57 {
+            buf = buf + out.substring(i, i + 1)
+            i = i + 1
+        } else { break }
+    }
+    if len(buf) == 0 { return -1 }
+    let mut v: i64 = -1
+    try { v = to_int(buf) } catch e { v = -1 }
+    return v
+}
+
+// --- agreement verdict -----------------------------------------------------
+
+fn _byte_match(outputs: array) -> bool {
+    let n = len(outputs)
+    if n < 2 { return true }
+    let first = db_extract_total(to_string(outputs[0]))
+    let mut i: i64 = 1
+    while i < n {
+        let t = db_extract_total(to_string(outputs[i]))
+        if t != first { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _soft_agree(totals: array) -> bool {
+    let n = len(totals)
+    if n < 2 { return true }
+    let mut mn: i64 = totals[0]
+    let mut mx: i64 = totals[0]
+    let mut i: i64 = 1
+    while i < n {
+        let v: i64 = totals[i]
+        if v < mn { mn = v }
+        if v > mx { mx = v }
+        i = i + 1
+    }
+    if mn < 1 {
+        if mx == 0 { return true }
+        return false
+    }
+    // mx/mn ≤ 1.20 ⇔ mx*100 ≤ mn*120
+    if mx * 100 <= mn * 120 { return true }
+    return false
+}
+
+pub fn db_verdict(outputs: array, totals: array) -> string {
+    if _byte_match(outputs) { return "CONSENSUS" }
+    if _soft_agree(totals) { return "SOFT_AGREE" }
+    return "DEBATE"
+}
+
+pub fn db_emit_debate(seed: string, variants_n: i64, totals: array) -> void {
+    let mut v = "["
+    let mut i: i64 = 0
+    while i < variants_n {
+        if i > 0 { v = v + "," }
+        v = v + "{\"n\":" + to_string(i)
+            + ",\"label\":\"" + db_variant_label(i) + "\""
+            + ",\"total\":" + to_string(totals[i]) + "}"
+        i = i + 1
+    }
+    v = v + "]"
+    eprintln("HEXA_DEBATE {\"variants\":" + v + ",\"arbitration\":\"meta_required\",\"seed_len\":" + to_string(len(seed)) + "}")
+}
+
+// --- main entry ------------------------------------------------------------
+
+pub fn debate_run(seed: string, variants_n: i64, base_depth: i64, arbitrate: bool) -> DebateResult {
+    let _seed_t = seed.trim()
+    if len(_seed_t) == 0 {
+        eprintln("debate: --seed required")
+        return DebateResult { seed: "", variants: 0, base_depth: 0, verdict: "ERROR", arbitrate: false, totals: [], plans: [] }
+    }
+    let mut vn = variants_n
+    if vn < 2 { vn = 2 }
+    if vn > 8 { vn = 8 }
+    let mut base = base_depth
+    if base < 1 { base = 1 }
+    if base > 6 { base = 6 }
+
+    println("debate — L3 N-variant adversarial (seed_len=" + to_string(len(_seed_t)) + " variants=" + to_string(vn) + " base=" + to_string(base) + ")")
+    eprintln("HEXA_DEBATE {\"event\":\"plan\",\"variants\":" + to_string(vn) + ",\"base\":" + to_string(base) + "}")
+
+    let mut plans: array = []
+    let mut outputs: array = []
+    let mut totals: array = []
+    let mut vi: i64 = 0
+    while vi < vn {
+        let delta = db_variant_delta(vi)
+        let plan = db_build_plan(base, delta)
+        plans.push(plan)
+        println("  variant " + db_variant_label(vi) + " — plan=" + db_plan_json(plan))
+        let out = _drill_round_shim(_seed_t, plan)
+        let tot = db_extract_total(out)
+        outputs.push(out)
+        totals.push(tot)
+        eprintln("HEXA_DEBATE {\"event\":\"iter\",\"n\":" + to_string(vi) + ",\"label\":\"" + db_variant_label(vi) + "\",\"total\":" + to_string(tot) + "}")
+        vi = vi + 1
+    }
+
+    let verdict = db_verdict(outputs, totals)
+    println("  verdict: " + verdict)
+    if verdict == "DEBATE" && arbitrate {
+        db_emit_debate(_seed_t, vn, totals)
+    }
+
+    // Overlay annotation
+    let note = AtlasNode {
+        kind: "L",
+        id: "debate_" + verdict + "_" + to_string(len(_seed_t)) + "_v" + to_string(vn) + "_d" + to_string(base),
+        raw: "@L debate verdict=" + verdict + " variants=" + to_string(vn) + " base=" + to_string(base) + " :: phase3 [debate]",
+        source_file: "atlas.overlay.n6",
+        source_line: 1
+    }
+    overlay_append(note)
+    eprintln("HEXA_DEBATE {\"event\":\"complete\",\"verdict\":\"" + verdict + "\"}")
+    return DebateResult {
+        seed: _seed_t,
+        variants: vn,
+        base_depth: base,
+        verdict: verdict,
+        arbitrate: arbitrate,
+        totals: totals,
+        plans: plans
+    }
+}

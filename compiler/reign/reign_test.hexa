@@ -1,0 +1,105 @@
+// HEXA Native Compiler — Phase 3 variant: reign smoke
+//
+// Hermetic: sandboxed HOME so overlay writes land in /tmp.
+
+use "compiler/atlas/overlay"
+use "compiler/reign/reign"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn _setup_sandbox() -> string {
+    let base = "/tmp/hexa_reign_smoke"
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    return base
+}
+
+fn main() {
+    println("phase-3 reign smoke")
+    let sandbox = _setup_sandbox()
+    overlay_reset_cache()
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // signal extraction — `total=N` last match wins.
+    total = total + 1
+    let s1 = reign_extract_signal("total=3\nfoo\ntotal=7\n[EXACT abs 0]\n[NEAR abs 1]\n")
+    if s1 == "abs=7,ex=1,ne=1" { pass = pass + 1; _check("extract_signal total=7,ex=1,ne=1", true, fails) }
+    else { _check("extract_signal expected abs=7,ex=1,ne=1 got " + s1, false, fails) }
+
+    // unified_abs_total preferred.
+    total = total + 1
+    let s2 = reign_extract_signal("unified_abs_total 42\ntotal=99\n")
+    if s2 == "abs=42,ex=0,ne=0" { pass = pass + 1; _check("extract_signal unified_abs_total preferred", true, fails) }
+    else { _check("extract_signal unified preferred got " + s2, false, fails) }
+
+    // stagnation: 3 identical → stagnant at k=2.
+    total = total + 1
+    let h: array = ["a", "a", "a"]
+    if reign_signal_stagnant(h, 2) { pass = pass + 1; _check("stagnant(['a','a','a'], 2) = true", true, fails) }
+    else { _check("stagnant(['a','a','a'], 2) expected true", false, fails) }
+
+    total = total + 1
+    let h2: array = ["a", "b", "a"]
+    if !reign_signal_stagnant(h2, 2) { pass = pass + 1; _check("stagnant(['a','b','a'], 2) = false", true, fails) }
+    else { _check("stagnant(['a','b','a'], 2) expected false", false, fails) }
+
+    // next_seed cap-clamp respects suffix.
+    total = total + 1
+    let ns = reign_next_seed("hello", 2, "abs=5,ex=0,ne=0")
+    if ns.find("#dream-iter=2") >= 0 { pass = pass + 1; _check("next_seed contains iter marker", true, fails) }
+    else { _check("next_seed missing iter marker: " + ns, false, fails) }
+
+    // full run — synthetic shim saturates and writes overlay node.
+    total = total + 1
+    let r = reign_run("phase3 seed for reign smoke", "5")
+    if r.cycles_run >= 2 { pass = pass + 1; _check("reign_run cycles>=2 (got " + to_string(r.cycles_run) + ")", true, fails) }
+    else { _check("reign_run cycles>=2 (got " + to_string(r.cycles_run) + ")", false, fails) }
+
+    total = total + 1
+    if r.saturated { pass = pass + 1; _check("reign_run saturated=true with shim signal stability", true, fails) }
+    else { _check("reign_run saturated=true expected", false, fails) }
+
+    total = total + 1
+    let loaded = overlay_load()
+    if len(loaded) >= 1 { pass = pass + 1; _check("overlay holds >= 1 reign saturation note", true, fails) }
+    else { _check("overlay expected >=1 entry, got " + to_string(len(loaded)), false, fails) }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/reign_test.hexa") { return true }
+    if script == "reign_test.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}

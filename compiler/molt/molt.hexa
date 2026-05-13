@@ -1,0 +1,166 @@
+// HEXA Native Compiler — Phase 3 variant: molt (L9 self-rewrite)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Port of nexus cli/run.hexa::cmd_molt (lines 4850-4917).
+//
+// Behavior: parameter-evolution sweep. Tries 5 hardcoded "skins" (depth,
+// fast) pairs, runs a drill round per skin, scores each via abs-extract
+// from the signal, persists the best skin to a JSON file (so downstream
+// `forge` can pick it up).
+//
+// Drill dispatch shim: TODO(drill-bg-dep).
+
+use "compiler/atlas/overlay"
+use "compiler/atlas/parser"
+use "compiler/reign/reign"
+
+@phase("parse_only")
+pub struct MoltSkin {
+    depth: i64,
+    fast: bool
+}
+
+@phase("parse_only")
+pub struct MoltResult {
+    best_skin_idx: i64,
+    best_depth: i64,
+    best_fast: bool,
+    best_abs: i64,
+    skins_tried: i64,
+    skin_file: string
+}
+
+pub fn molt_skin_file_path() -> string {
+    let v = env("NEXUS_MOLT_SKIN_FILE")
+    if len(v) > 0 { return v }
+    return "/tmp/hexa_molt_skin.json"
+}
+
+pub fn molt_max_cycles_cap() -> i64 {
+    let v = env("NEXUS_MOLT_MAX")
+    if len(v) == 0 { return 5 }
+    let mut n: i64 = 5
+    try { n = to_int(v) } catch e { n = 5 }
+    if n < 1 { return 1 }
+    if n > 5 { return 5 }
+    return n
+}
+
+// abs= prefix extractor — pulls the integer following "abs=" in a signal
+// string like "abs=7,ex=3,ne=1".
+pub fn molt_extract_abs(signal: string) -> i64 {
+    let idx = signal.find("abs=")
+    if idx < 0 { return 0 }
+    let mut i = idx + 4
+    let n = len(signal)
+    let mut buf = ""
+    let mut neg = false
+    if i < n && char_code(signal, i) == 45 { neg = true; i = i + 1 }
+    while i < n {
+        let cc = char_code(signal, i)
+        if cc >= 48 && cc <= 57 {
+            buf = buf + signal.substring(i, i + 1)
+            i = i + 1
+        } else { break }
+    }
+    if len(buf) == 0 { return 0 }
+    let mut v: i64 = 0
+    try { v = to_int(buf) } catch e { v = 0 }
+    if neg { v = 0 - v }
+    return v
+}
+
+// Deterministic drill round shim — abs scales with depth, mild boost when
+// fast=true so the smoke can differentiate skins.
+fn _drill_round_shim(seed: string, depth: i64, fast: bool) -> string {
+    let base = (len(seed) % 5) + 1
+    let f_bonus: i64 = if fast { 2 } else { 0 }
+    let abs_n: i64 = base + depth * 3 + f_bonus
+    let mut out = ""
+    out = out + "[molt-shim] depth=" + to_string(depth) + " fast=" + (if fast { "true" } else { "false" }) + "\n"
+    out = out + "total=" + to_string(abs_n) + "\n"
+    let mut j: i64 = 0
+    while j < abs_n {
+        out = out + "[EXACT abs " + to_string(j) + "]\n"
+        j = j + 1
+    }
+    return out
+}
+
+pub fn molt_run(seed: string, max_cycles_flag: string) -> MoltResult {
+    let _seed_t = seed.trim()
+    if len(_seed_t) == 0 {
+        eprintln("molt: --seed required")
+        return MoltResult { best_skin_idx: 0, best_depth: 1, best_fast: true, best_abs: 0, skins_tried: 0, skin_file: "" }
+    }
+    let skin_depths: array = [1, 1, 2, 2, 3]
+    let skin_fast: array  = [true, true, true, false, false]
+    let n_skins_total: i64 = 5
+    let cap = molt_max_cycles_cap()
+    let mut max_c = cap
+    if len(max_cycles_flag) > 0 {
+        try { max_c = to_int(max_cycles_flag) } catch e { max_c = cap }
+        if max_c < 1 { max_c = 1 }
+        if max_c > cap { max_c = cap }
+    }
+    let n_skins: i64 = if max_c < n_skins_total { max_c } else { n_skins_total }
+    println("molt — L9 self-rewrite (skins=" + to_string(n_skins) + "/" + to_string(n_skins_total) + ")")
+    eprintln("HEXA_MOLT {\"event\":\"plan\",\"skins\":" + to_string(n_skins) + ",\"cap\":" + to_string(cap) + "}")
+    let mut best_abs: i64 = 0
+    let mut best_skin_idx: i64 = 0
+    let mut best_signal: string = ""
+    let mut i: i64 = 0
+    while i < n_skins {
+        let d: i64 = skin_depths[i]
+        let f: bool = skin_fast[i]
+        let perturbed = reign_next_seed(_seed_t, i + 1, "molt-skin=" + to_string(i))
+        let out = _drill_round_shim(perturbed, d, f)
+        let signal = reign_extract_signal(out)
+        let abs_v = molt_extract_abs(signal)
+        eprintln("HEXA_MOLT {\"event\":\"iter\",\"i\":" + to_string(i + 1)
+            + ",\"depth\":" + to_string(d) + ",\"fast\":" + (if f { "true" } else { "false" })
+            + ",\"abs\":" + to_string(abs_v) + ",\"signal\":\"" + signal + "\"}")
+        if abs_v > best_abs {
+            best_abs = abs_v
+            best_skin_idx = i
+            best_signal = signal
+        }
+        i = i + 1
+    }
+    let best_d: i64 = skin_depths[best_skin_idx]
+    let best_f: bool = skin_fast[best_skin_idx]
+    // Persist best skin as JSON (one line, plain printf-shape — same as nexus).
+    let skin_path = molt_skin_file_path()
+    let json = "{\"best_skin_idx\":" + to_string(best_skin_idx)
+        + ",\"depth\":" + to_string(best_d)
+        + ",\"fast\":" + (if best_f { "true" } else { "false" })
+        + ",\"abs\":" + to_string(best_abs)
+        + ",\"signal\":\"" + best_signal + "\"}"
+    // Write via the file API directly (no shell quoting issues).
+    try { append_file(skin_path + ".tmp", json + "\n") } catch e { }
+    // Best-effort move via shell — append_file is append-only, so we use a
+    // truncate-and-write through the runtime's `delete_file` + append.
+    try { delete_file(skin_path) } catch e { }
+    try { append_file(skin_path, json + "\n") } catch e { }
+    try { delete_file(skin_path + ".tmp") } catch e { }
+    // Atlas overlay annotation — best skin discovery is a runtime fact.
+    let note = AtlasNode {
+        kind: "L",
+        id: "molt_best_skin_" + to_string(len(_seed_t)) + "_" + to_string(best_skin_idx),
+        raw: "@L molt_best_skin idx=" + to_string(best_skin_idx) + " depth=" + to_string(best_d) + " fast=" + (if best_f { "true" } else { "false" }) + " abs=" + to_string(best_abs) + " :: phase3 [molt]",
+        source_file: "atlas.overlay.n6",
+        source_line: 1
+    }
+    overlay_append(note)
+    eprintln("HEXA_MOLT {\"event\":\"complete\",\"best_skin_idx\":" + to_string(best_skin_idx) + ",\"best_abs\":" + to_string(best_abs) + ",\"persisted\":\"" + skin_path + "\"}")
+    return MoltResult {
+        best_skin_idx: best_skin_idx,
+        best_depth: best_d,
+        best_fast: best_f,
+        best_abs: best_abs,
+        skins_tried: n_skins,
+        skin_file: skin_path
+    }
+}

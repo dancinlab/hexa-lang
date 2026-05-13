@@ -1,0 +1,156 @@
+// HEXA Native Compiler — Phase 3 variant: revive (engine+map v2 loop)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Port of nexus cli/revive/revive.hexa (102 LOC) + cli/revive/revive_loop.hexa
+// (49 LOC) + cli/revive/revive_l0_check.hexa (90 LOC).
+//
+// Behavior: "infinite-loop" engine+map v2 — iterate until L0 fixpoint is
+// reached, max_iter is exhausted, or consecutive failures exceed a cap.
+// In nexus this runs against real engine state files; here we use a
+// deterministic shim that flips to L0-reached after a configurable iter
+// count so smokes terminate quickly.
+//
+// HARD: every entry point MUST take a finite max_iter — there is no
+// truly-infinite loop in this module. Callers (and smokes) cap it.
+//
+// L0 detection contract: the per-iter callback returns a verdict object:
+//   { reached: bool, verdict: "good"|"l1_bad"|"continue" }
+// `reached=true` short-circuits the loop with `final_verdict=l0_reached`.
+
+use "compiler/atlas/overlay"
+use "compiler/atlas/parser"
+
+@phase("parse_only")
+pub struct ReviveIterStatus {
+    iter: i64,
+    reached: bool,
+    verdict: string,      // "good" | "l1_bad" | "continue"
+    note: string
+}
+
+@phase("parse_only")
+pub struct ReviveResult {
+    iters_completed: i64,
+    consecutive_fail: i64,
+    final_verdict: string,   // "l0_reached" | "max_iter_reached" | "abort_consec_fail"
+    exit_code: i64           // 0/1/2 mirroring nexus revive
+}
+
+// --- defaults / config -----------------------------------------------------
+
+pub fn revive_default_max_iter() -> i64 {
+    let v = env("HEXA_REVIVE_MAX_ITER")
+    if len(v) == 0 { return 12 }
+    let mut n: i64 = 12
+    try { n = to_int(v) } catch e { n = 12 }
+    if n < 1 { return 1 }
+    if n > 1000 { return 1000 }
+    return n
+}
+
+pub fn revive_default_consec_fail_cap() -> i64 {
+    let v = env("HEXA_REVIVE_CONSEC_FAIL")
+    if len(v) == 0 { return 3 }
+    let mut n: i64 = 3
+    try { n = to_int(v) } catch e { n = 3 }
+    if n < 1 { return 1 }
+    if n > 100 { return 100 }
+    return n
+}
+
+// --- iter shim -------------------------------------------------------------
+//
+// TODO(drill-bg-dep + revive-master-port): nexus revive shells out to
+// tool/revive_master.hexa per iter; we approximate with a deterministic
+// staircase that goes good→good→l0_reached. Env knobs let tests force
+// failure or override the L0 step.
+
+fn _iter_shim(iter: i64) -> ReviveIterStatus {
+    let force_fail = env("HEXA_REVIVE_FORCE_FAIL") == "1"
+    let l0_at_env = env("HEXA_REVIVE_L0_AT")
+    let mut l0_at: i64 = 3
+    if len(l0_at_env) > 0 {
+        try { l0_at = to_int(l0_at_env) } catch e { l0_at = 3 }
+    }
+    if force_fail {
+        return ReviveIterStatus { iter: iter, reached: false, verdict: "l1_bad", note: "forced fail" }
+    }
+    if iter >= l0_at {
+        return ReviveIterStatus { iter: iter, reached: true, verdict: "good", note: "L0 reached" }
+    }
+    return ReviveIterStatus { iter: iter, reached: false, verdict: "good", note: "progressing" }
+}
+
+// --- main loop -------------------------------------------------------------
+
+// CRITICAL: max_iter is mandatory and capped — no infinite loop ever.
+pub fn revive_run(max_iter_in: i64, consec_fail_cap_in: i64, apply: bool, quiet: bool) -> ReviveResult {
+    let mut max_iter = max_iter_in
+    if max_iter < 1 { max_iter = revive_default_max_iter() }
+    // Hard ceiling — caller cannot ask for more than 10000 iters in one call.
+    if max_iter > 10000 { max_iter = 10000 }
+    let mut consec_cap = consec_fail_cap_in
+    if consec_cap < 1 { consec_cap = revive_default_consec_fail_cap() }
+
+    if !quiet {
+        println("revive — engine+map v2 loop (max_iter=" + to_string(max_iter) + " apply=" + (if apply { "Y" } else { "N" }) + ")")
+    }
+    eprintln("HEXA_REVIVE {\"event\":\"plan\",\"max_iter\":" + to_string(max_iter) + ",\"consec_fail_cap\":" + to_string(consec_cap) + ",\"apply\":" + (if apply { "true" } else { "false" }) + "}")
+
+    let mut iter: i64 = 1
+    let mut consec_fail: i64 = 0
+    let mut final_verdict = "max_iter_reached"
+    while iter <= max_iter {
+        let st = _iter_shim(iter)
+        if !quiet {
+            println("  iter " + to_string(iter) + "/" + to_string(max_iter) + " — verdict=" + st.verdict + " reached=" + (if st.reached { "T" } else { "F" }))
+        }
+        eprintln("HEXA_REVIVE_ITER {\"iter\":" + to_string(iter)
+            + ",\"of\":" + to_string(max_iter)
+            + ",\"verdict\":\"" + st.verdict + "\""
+            + ",\"reached\":" + (if st.reached { "true" } else { "false" }) + "}")
+        if st.reached {
+            final_verdict = "l0_reached"
+            iter = iter + 1
+            break
+        }
+        if st.verdict == "good" {
+            consec_fail = 0
+        } else {
+            consec_fail = consec_fail + 1
+            if consec_fail >= consec_cap {
+                final_verdict = "abort_consec_fail"
+                iter = iter + 1
+                break
+            }
+        }
+        iter = iter + 1
+    }
+    let iters_completed = iter - 1
+
+    let mut exit_code: i64 = 1
+    if final_verdict == "l0_reached" { exit_code = 0 }
+    else if final_verdict == "abort_consec_fail" { exit_code = 2 }
+    else { exit_code = 1 }
+
+    eprintln("HEXA_REVIVE_FINAL {\"iters_completed\":" + to_string(iters_completed)
+        + ",\"verdict\":\"" + final_verdict + "\""
+        + ",\"consecutive_fail\":" + to_string(consec_fail)
+        + ",\"exit_code\":" + to_string(exit_code) + "}")
+    let note = AtlasNode {
+        kind: "L",
+        id: "revive_" + final_verdict + "_n" + to_string(iters_completed),
+        raw: "@L revive verdict=" + final_verdict + " iters=" + to_string(iters_completed) + " consec_fail=" + to_string(consec_fail) + " :: phase3 [revive]",
+        source_file: "atlas.overlay.n6",
+        source_line: 1
+    }
+    overlay_append(note)
+    return ReviveResult {
+        iters_completed: iters_completed,
+        consecutive_fail: consec_fail,
+        final_verdict: final_verdict,
+        exit_code: exit_code
+    }
+}

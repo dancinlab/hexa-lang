@@ -1,0 +1,162 @@
+// HEXA Native Compiler — Phase 3 variant: canon (L11 transfinite seal)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Port of nexus cli/run.hexa::cmd_canon (lines 5080-5163).
+//
+// Behavior: append a one-line JSON seal entry capturing the current
+// self-state (skin, atlas size + hash) plus user seed/note. Idempotent
+// append-only — same shape as the atlas overlay surface.
+//
+// Doctrine v2 rule 5 redirect:
+//   nexus writes canon seals to `<NEXUS>/state/canon_seal.jsonl`. In the
+//   hexa-lang compiler we treat the canon log as the "rodata seed +
+//   runtime overlay" model's overlay side, so it lives next to the atlas
+//   overlay at `~/.hx/data/canon_seal.jsonl`. The path is configurable
+//   via env `HEXA_CANON_SEAL_PATH` for sandbox runs.
+//
+// Module name `canon_engine` (not `canon`) to avoid collision with the
+// nexus `canon` project-archive context that other compiler files may
+// later refer to.
+
+use "compiler/atlas/overlay"
+use "compiler/atlas/parser"
+use "compiler/forge/forge"
+
+@phase("parse_only")
+pub struct CanonSealResult {
+    seal_id: string,
+    seal_path: string,
+    appended: bool,
+    pre_lines: i64,
+    post_lines: i64,
+    total_seals: i64
+}
+
+// Canonical seal log path — overlay-adjacent under HOME/.hx/data/.
+// HEXA_CANON_SEAL_PATH lets smoke tests redirect without touching HOME.
+pub fn canon_seal_path() -> string {
+    let v = env("HEXA_CANON_SEAL_PATH")
+    if len(v) > 0 { return v }
+    let home = env("HOME")
+    if len(home) == 0 { return ".hx/data/canon_seal.jsonl" }
+    return home + "/.hx/data/canon_seal.jsonl"
+}
+
+fn _ensure_dir(path: string) -> void {
+    let last_slash = path.last_index_of("/")
+    if last_slash < 0 { return }
+    let dir = path.substring(0, last_slash)
+    mkdir(dir)
+}
+
+fn _escape_json(s: string) -> string {
+    let mut r = s.replace("\\", "\\\\")
+    r = r.replace("\"", "\\\"")
+    r = r.replace("\n", "\\n")
+    return r
+}
+
+// Count lines in a file by reading + splitting on `\n`. Returns 0 for
+// missing / empty files. The seal log is line-oriented so this matches
+// `wc -l` exactly when the file ends in `\n`.
+fn _line_count(path: string) -> i64 {
+    if !file_exists(path) { return 0 }
+    let raw = read_file(path)
+    if len(raw) == 0 { return 0 }
+    let mut n: i64 = 0
+    let total = len(raw)
+    let mut i: i64 = 0
+    while i < total {
+        if char_code(raw, i) == 10 { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+pub fn canon_seal(seed_flag: string, note_flag: string) -> CanonSealResult {
+    let _seed_t = seed_flag.trim()
+    let _note_t = note_flag.trim()
+    println("canon — L11 transfinite seal (sealing current self-state)")
+
+    // 1) skin (from molt persistence — same loader as forge).
+    let skin_path = forge_skin_file_path()
+    let skin_present = file_exists(skin_path)
+    let mut skin_depth: i64 = 1
+    let mut skin_fast: bool = true
+    if skin_present {
+        let skin_json = read_file(skin_path)
+        // Reuse forge's tiny JSON helpers via a local copy of the logic.
+        let idx_d = skin_json.find("\"depth\":")
+        if idx_d >= 0 {
+            let mut i = idx_d + 8
+            let n = len(skin_json)
+            let mut buf = ""
+            while i < n {
+                let cc = char_code(skin_json, i)
+                if cc >= 48 && cc <= 57 { buf = buf + skin_json.substring(i, i + 1); i = i + 1 }
+                else { break }
+            }
+            if len(buf) > 0 { try { skin_depth = to_int(buf) } catch e { skin_depth = 1 } }
+        }
+        let idx_f = skin_json.find("\"fast\":")
+        if idx_f >= 0 {
+            let i = idx_f + 7
+            if i + 4 <= len(skin_json) {
+                let head = skin_json.substring(i, i + 4)
+                skin_fast = (head == "true")
+            }
+        }
+    }
+    // 2) atlas overlay bytes (rule 5 overlay-side hash surface).
+    let atlas_path = overlay_path()
+    let atlas_bytes: i64 = if file_exists(atlas_path) { file_size(atlas_path) } else { 0 }
+    let atlas_lines: i64 = _line_count(atlas_path)
+    // 3) timestamps + seal_id (deterministic suffix from atlas_bytes for hermetic smoke).
+    let ts = exec("date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null").trim()
+    let ts_compact = exec("date +%Y%m%d-%H%M%S 2>/dev/null").trim()
+    let f_marker = if skin_fast { "f" } else { "s" }
+    let seal_id = "canon-" + ts_compact + "-d" + to_string(skin_depth) + f_marker + "-b" + to_string(atlas_bytes)
+    // 4) entry
+    let seed_esc = _escape_json(_seed_t)
+    let note_esc = _escape_json(_note_t)
+    let entry = "{\"ts\":\"" + ts + "\""
+        + ",\"seal_id\":\"" + seal_id + "\""
+        + ",\"sealed_by\":\"hexa_canon_engine_v1\""
+        + ",\"skin\":{\"depth\":" + to_string(skin_depth) + ",\"fast\":" + (if skin_fast { "true" } else { "false" }) + "}"
+        + ",\"atlas_overlay\":{\"bytes\":" + to_string(atlas_bytes) + ",\"lines\":" + to_string(atlas_lines) + "}"
+        + ",\"seed\":\"" + seed_esc + "\""
+        + ",\"note\":\"" + note_esc + "\"}"
+    eprintln("HEXA_CANON {\"event\":\"plan\",\"skin_present\":" + (if skin_present { "true" } else { "false" })
+        + ",\"atlas_bytes\":" + to_string(atlas_bytes) + "}")
+    // 5) append (idempotent — append-only)
+    let path = canon_seal_path()
+    _ensure_dir(path)
+    let pre = _line_count(path)
+    let mut appended = false
+    try { append_file(path, entry + "\n"); appended = true } catch e { appended = false }
+    let post = _line_count(path)
+    let total = _line_count(path)
+    // 6) atlas overlay note — this is the doctrine v2 record that a seal occurred.
+    let note = AtlasNode {
+        kind: "L",
+        id: seal_id,
+        raw: "@L " + seal_id + " :: phase3 [canon_seal] depth=" + to_string(skin_depth) + " fast=" + (if skin_fast { "true" } else { "false" }) + " atlas_bytes=" + to_string(atlas_bytes),
+        source_file: "atlas.overlay.n6",
+        source_line: 1
+    }
+    overlay_append(note)
+    eprintln("HEXA_CANON {\"event\":\"seal\",\"seal_id\":\"" + seal_id + "\",\"path\":\"" + path + "\",\"total_seals\":" + to_string(total) + "}")
+    println("  seal_id: " + seal_id)
+    println("  appended → " + path)
+    println("  total seals: " + to_string(total))
+    return CanonSealResult {
+        seal_id: seal_id,
+        seal_path: path,
+        appended: appended,
+        pre_lines: pre,
+        post_lines: post,
+        total_seals: total
+    }
+}

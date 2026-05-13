@@ -1,0 +1,119 @@
+// debate smoke — hermetic, all three verdict branches.
+
+use "compiler/atlas/overlay"
+use "compiler/debate/debate"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _setup_sandbox() -> string {
+    let base = "/tmp/hexa_debate_smoke"
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    return base
+}
+
+fn main() {
+    println("phase-3 debate smoke")
+    let sandbox = _setup_sandbox()
+    overlay_reset_cache()
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // 1) variant_delta shape
+    total = total + 1
+    let d0 = db_variant_delta(0)
+    if len(d0) == 6 && d0[0] == 0 { pass = pass + 1; _check("delta(0) = all-zero baseline", true, fails) }
+    else { _check("delta(0) shape unexpected", false, fails) }
+
+    total = total + 1
+    let d1 = db_variant_delta(1)
+    if d1[0] == -1 && d1[4] == 2 && d1[5] == 2 { pass = pass + 1; _check("delta(1) tail-heavy", true, fails) }
+    else { _check("delta(1) shape unexpected", false, fails) }
+
+    // 2) db_build_plan clamps to [1,6]
+    total = total + 1
+    let plan = db_build_plan(3, [10, -10, 0, 0, 0, 0])
+    if plan[0] == 6 && plan[1] == 1 { pass = pass + 1; _check("build_plan clamps to [1,6]", true, fails) }
+    else { _check("build_plan clamp got [" + to_string(plan[0]) + "," + to_string(plan[1]) + "]", false, fails) }
+
+    // 3) extract_total
+    total = total + 1
+    let t = db_extract_total("foo\n▎ total absorptions: 17\n")
+    if t == 17 { pass = pass + 1; _check("extract_total = 17", true, fails) }
+    else { _check("extract_total expected 17 got " + to_string(t), false, fails) }
+
+    // 4) verdict CONSENSUS when all totals match
+    total = total + 1
+    let outs_c = [
+        "▎ total absorptions: 10\n",
+        "▎ total absorptions: 10\n",
+        "▎ total absorptions: 10\n"
+    ]
+    let v_c = db_verdict(outs_c, [10, 10, 10])
+    if v_c == "CONSENSUS" { pass = pass + 1; _check("verdict CONSENSUS when totals match", true, fails) }
+    else { _check("expected CONSENSUS got " + v_c, false, fails) }
+
+    // 5) SOFT_AGREE when within 20%
+    total = total + 1
+    let outs_s = [
+        "▎ total absorptions: 100\n",
+        "▎ total absorptions: 110\n",
+        "▎ total absorptions: 115\n"
+    ]
+    let v_s = db_verdict(outs_s, [100, 110, 115])
+    if v_s == "SOFT_AGREE" { pass = pass + 1; _check("verdict SOFT_AGREE within 20%", true, fails) }
+    else { _check("expected SOFT_AGREE got " + v_s, false, fails) }
+
+    // 6) DEBATE when > 20%
+    total = total + 1
+    let outs_d = [
+        "▎ total absorptions: 100\n",
+        "▎ total absorptions: 200\n",
+        "▎ total absorptions: 50\n"
+    ]
+    let v_d = db_verdict(outs_d, [100, 200, 50])
+    if v_d == "DEBATE" { pass = pass + 1; _check("verdict DEBATE > 20% divergence", true, fails) }
+    else { _check("expected DEBATE got " + v_d, false, fails) }
+
+    // 7) full run — synthetic shim will likely DEBATE because plans diverge.
+    total = total + 1
+    let r = debate_run("phase3 debate seed for adversarial smoke", 3, 3, true)
+    if r.variants == 3 && len(r.totals) == 3 { pass = pass + 1; _check("debate_run ran 3 variants", true, fails) }
+    else { _check("debate_run variants=" + to_string(r.variants) + " totals=" + to_string(len(r.totals)), false, fails) }
+
+    total = total + 1
+    if r.verdict == "CONSENSUS" || r.verdict == "SOFT_AGREE" || r.verdict == "DEBATE" {
+        pass = pass + 1
+        _check("debate_run produced a valid verdict (" + r.verdict + ")", true, fails)
+    } else { _check("invalid verdict: " + r.verdict, false, fails) }
+
+    total = total + 1
+    let loaded = overlay_load()
+    if len(loaded) >= 1 { pass = pass + 1; _check("overlay holds >=1 debate note", true, fails) }
+    else { _check("overlay empty after debate", false, fails) }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/debate_test.hexa") { return true }
+    if s == "debate_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

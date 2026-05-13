@@ -1,0 +1,75 @@
+// molt smoke — hermetic sandbox.
+
+use "compiler/atlas/overlay"
+use "compiler/molt/molt"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _setup_sandbox() -> string {
+    let base = "/tmp/hexa_molt_smoke"
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    setenv("NEXUS_MOLT_SKIN_FILE", base + "/molt_skin.json")
+    return base
+}
+
+fn main() {
+    println("phase-3 molt smoke")
+    let sandbox = _setup_sandbox()
+    overlay_reset_cache()
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    total = total + 1
+    let a = molt_extract_abs("abs=42,ex=0,ne=0")
+    if a == 42 { pass = pass + 1; _check("extract_abs(abs=42)", true, fails) }
+    else { _check("extract_abs expected 42 got " + to_string(a), false, fails) }
+
+    total = total + 1
+    let a2 = molt_extract_abs("abs=-3,ex=0,ne=0")
+    if a2 == -3 { pass = pass + 1; _check("extract_abs(abs=-3)", true, fails) }
+    else { _check("extract_abs expected -3 got " + to_string(a2), false, fails) }
+
+    total = total + 1
+    let r = molt_run("phase3 molt smoke seed", "5")
+    if r.skins_tried == 5 { pass = pass + 1; _check("molt tried 5 skins", true, fails) }
+    else { _check("molt expected 5 skins got " + to_string(r.skins_tried), false, fails) }
+
+    total = total + 1
+    if r.best_abs > 0 { pass = pass + 1; _check("best_abs > 0", true, fails) }
+    else { _check("best_abs > 0 (got " + to_string(r.best_abs) + ")", false, fails) }
+
+    total = total + 1
+    if file_exists(r.skin_file) { pass = pass + 1; _check("skin file persisted", true, fails) }
+    else { _check("skin file missing: " + r.skin_file, false, fails) }
+
+    total = total + 1
+    let loaded = overlay_load()
+    if len(loaded) >= 1 { pass = pass + 1; _check("overlay has >=1 molt note", true, fails) }
+    else { _check("overlay empty after molt", false, fails) }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/molt_test.hexa") { return true }
+    if s == "molt_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

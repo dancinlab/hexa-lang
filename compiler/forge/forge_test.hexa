@@ -1,0 +1,78 @@
+// forge smoke — sandbox HOME + injected skin file.
+
+use "compiler/atlas/overlay"
+use "compiler/forge/forge"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _setup_sandbox() -> string {
+    let base = "/tmp/hexa_forge_smoke"
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    let skin_path = base + "/molt_skin.json"
+    setenv("NEXUS_MOLT_SKIN_FILE", skin_path)
+    // Inject a skin file so forge picks depth=3, fast=false.
+    exec("printf '%s\\n' '{\"best_skin_idx\":4,\"depth\":3,\"fast\":false,\"abs\":13}' > '" + skin_path + "'")
+    return base
+}
+
+fn main() {
+    println("phase-3 forge smoke")
+    let sandbox = _setup_sandbox()
+    overlay_reset_cache()
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // 1) seed-augment path
+    total = total + 1
+    let r1 = forge_run("phase3 forge seed", "2")
+    if r1.booted { pass = pass + 1; _check("forge booted with seed", true, fails) }
+    else { _check("forge expected booted=true", false, fails) }
+
+    total = total + 1
+    if r1.skin_depth == 3 && !r1.skin_fast { pass = pass + 1; _check("skin loaded: depth=3 fast=false", true, fails) }
+    else { _check("expected depth=3 fast=false got d=" + to_string(r1.skin_depth) + " f=" + (if r1.skin_fast { "T" } else { "F" }), false, fails) }
+
+    total = total + 1
+    if r1.synthesized_seed.find("forge-boot") >= 0 { pass = pass + 1; _check("synthesized seed has forge-boot marker", true, fails) }
+    else { _check("synthesized missing forge-boot marker: " + r1.synthesized_seed, false, fails) }
+
+    // 2) bootstrap-from-scratch path (no seed)
+    total = total + 1
+    let r2 = forge_run("", "1")
+    if r2.booted && r2.synthesized_seed.find("self-derived seed") >= 0 {
+        pass = pass + 1
+        _check("bootstrap-from-scratch uses hardcoded prefix", true, fails)
+    } else { _check("bootstrap-from-scratch failed: " + r2.synthesized_seed, false, fails) }
+
+    // 3) overlay annotated
+    total = total + 1
+    let loaded = overlay_load()
+    if len(loaded) >= 2 { pass = pass + 1; _check("overlay has >=2 forge notes", true, fails) }
+    else { _check("overlay expected >=2 got " + to_string(len(loaded)), false, fails) }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/forge_test.hexa") { return true }
+    if s == "forge_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

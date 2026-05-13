@@ -1,0 +1,247 @@
+// HEXA Native Compiler — Phase 3 variant: reign (L6 autonomous orchestrator)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Port of nexus cli/run.hexa::cmd_reign (lines 4465-4513).
+//
+// Behavior: drill loop with `--max-cycles N` cap and signal-stagnation
+// auto-STOP. Each cycle perturbs the seed by the previous round's
+// extracted signal (abs/exact/near counts). When the last K signals
+// agree (default K=2), saturate and break.
+//
+// Drill dispatch is delegated to a shim — the parallel drill BG owns
+// `compiler/drill/drill.hexa`; when it lands we swap the shim for the
+// real `drill_round`. See TODO(drill-bg-dep).
+//
+// Surface contract (deterministic, no network):
+//   reign_run(seed, max_cycles_flag) -> ReignResult
+//   reign_extract_signal(out)        -> string (abs=K,ex=E,ne=N)
+//   reign_next_seed(orig, idx, sig)  -> string (cap-clamped)
+//   reign_signal_stagnant(history,k) -> bool
+//
+// Env overrides (parity with nexus):
+//   NEXUS_REIGN_MAX  — cap on max_cycles (default 10, clamp [1,20])
+//   NEXUS_REIGN_K    — stagnation window (default 2, clamp [2,5])
+//   NEXUS_SEED_CAP   — seed length cap (default 280, clamp [30,1000])
+
+use "compiler/atlas/overlay"
+use "compiler/atlas/parser"
+
+// --- result type -----------------------------------------------------------
+
+@phase("parse_only")
+pub struct ReignResult {
+    cycles_run: i64,
+    saturated: bool,
+    last_signal: string
+}
+
+// --- env / config ----------------------------------------------------------
+
+pub fn reign_max_cycles_cap() -> i64 {
+    let v = env("NEXUS_REIGN_MAX")
+    if len(v) == 0 { return 10 }
+    let mut n: i64 = 10
+    try { n = to_int(v) } catch e { n = 10 }
+    if n < 1 { return 1 }
+    if n > 20 { return 20 }
+    return n
+}
+
+pub fn reign_stagnation_k() -> i64 {
+    let v = env("NEXUS_REIGN_K")
+    if len(v) == 0 { return 2 }
+    let mut n: i64 = 2
+    try { n = to_int(v) } catch e { n = 2 }
+    if n < 2 { return 2 }
+    if n > 5 { return 5 }
+    return n
+}
+
+fn _seed_cap() -> i64 {
+    let v = env("NEXUS_SEED_CAP")
+    if len(v) == 0 { return 280 }
+    let mut n: i64 = 280
+    try { n = to_int(v) } catch e { n = 280 }
+    if n < 30 { return 30 }
+    if n > 1000 { return 1000 }
+    return n
+}
+
+// --- signal extraction (port of _dream_extract_signal) ---------------------
+
+fn _count_marker(text: string, marker: string) -> i64 {
+    let mut n: i64 = 0
+    let mlen = len(marker)
+    let mut t = text
+    while true {
+        let idx = t.find(marker)
+        if idx < 0 { break }
+        n = n + 1
+        t = t.substring(idx + mlen, len(t))
+    }
+    return n
+}
+
+// Parse stdout from a drill round into a stable signal payload.
+// Looks for (in priority order): `unified_abs_total <N>`, `total=<N>`
+// (last match), then EXACT/NEAR marker counts.
+pub fn reign_extract_signal(out: string) -> string {
+    let mut abs_total: i64 = -1
+    let n = len(out)
+    let idx = out.find("unified_abs_total")
+    if idx >= 0 {
+        let mut i = idx + 17
+        while i < n {
+            let cc = char_code(out, i)
+            if cc >= 48 && cc <= 57 { break }
+            if cc == 10 { break }
+            i = i + 1
+        }
+        if i < n {
+            let mut buf = ""
+            while i < n {
+                let cc = char_code(out, i)
+                if cc >= 48 && cc <= 57 {
+                    buf = buf + out.substring(i, i + 1)
+                    i = i + 1
+                } else { break }
+            }
+            if len(buf) > 0 {
+                try { abs_total = to_int(buf) } catch e { abs_total = -1 }
+            }
+        }
+    }
+    if abs_total < 0 {
+        let mut t = out
+        let mut last_total: i64 = -1
+        while true {
+            let _idx = t.find("total=")
+            if _idx < 0 { break }
+            let mut i = _idx + 6
+            let tn = len(t)
+            let mut buf = ""
+            while i < tn {
+                let cc = char_code(t, i)
+                if cc >= 48 && cc <= 57 {
+                    buf = buf + t.substring(i, i + 1)
+                    i = i + 1
+                } else { break }
+            }
+            if len(buf) > 0 {
+                try { last_total = to_int(buf) } catch e {}
+            }
+            t = t.substring(_idx + 6, len(t))
+        }
+        if last_total >= 0 { abs_total = last_total }
+    }
+    let exact_n = _count_marker(out, "[EXACT")
+    let near_n  = _count_marker(out, "[NEAR")
+    return "abs=" + to_string(abs_total) + ",ex=" + to_string(exact_n) + ",ne=" + to_string(near_n)
+}
+
+// --- next seed (port of _dream_next_seed) ----------------------------------
+
+pub fn reign_next_seed(orig: string, iter_idx: i64, signal: string) -> string {
+    let suffix = " #dream-iter=" + to_string(iter_idx) + " " + signal
+    let cap = _seed_cap()
+    let max_main = cap - len(suffix)
+    let mut main = orig
+    if len(main) > max_main {
+        if max_main < 1 { main = "" } else { main = main.substring(0, max_main) }
+    }
+    return main + suffix
+}
+
+// --- stagnation (port of _reign_signal_stagnant) ---------------------------
+
+pub fn reign_signal_stagnant(history: array, k: i64) -> bool {
+    let n = len(history)
+    if n < k { return false }
+    let last = to_string(history[n - 1])
+    let mut i = n - k
+    while i < n - 1 {
+        if to_string(history[i]) != last { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// --- drill round shim ------------------------------------------------------
+//
+// TODO(drill-bg-dep): wire to `compiler/drill/drill::drill_round` once the
+// drill spine BG lands. Today we emit a deterministic synthetic line that
+// the signal extractor can parse — keeps the loop logic exercised end-to-end
+// while staying hermetic (no shell, no engine binary required).
+
+fn _drill_round_shim(seed: string, cycle: i64) -> string {
+    // Deterministic synthetic absorption count keyed off seed length + cycle.
+    // Saturates after a few cycles so reign's stagnation detector trips.
+    let base = (len(seed) % 7) + 3
+    let abs_n: i64 = if cycle < 3 { base + cycle } else { base + 3 }
+    let mut out = ""
+    out = out + "[drill-shim] cycle=" + to_string(cycle) + " seed_len=" + to_string(len(seed)) + "\n"
+    out = out + "total=" + to_string(abs_n) + "\n"
+    let mut j: i64 = 0
+    while j < abs_n {
+        out = out + "[EXACT abs " + to_string(j) + "]\n"
+        j = j + 1
+    }
+    return out
+}
+
+// --- main loop -------------------------------------------------------------
+
+pub fn reign_run(seed: string, max_cycles_flag: string) -> ReignResult {
+    let _seed_t = seed.trim()
+    if len(_seed_t) == 0 {
+        eprintln("reign: --seed required")
+        return ReignResult { cycles_run: 0, saturated: false, last_signal: "" }
+    }
+    let cap = reign_max_cycles_cap()
+    let stagnation_k = reign_stagnation_k()
+    let mut max_cycles = cap
+    if len(max_cycles_flag) > 0 {
+        try { max_cycles = to_int(max_cycles_flag) } catch e { max_cycles = cap }
+        if max_cycles < 1 { max_cycles = 1 }
+        if max_cycles > cap { max_cycles = cap }
+    }
+    println("reign — L6 autonomous orchestration (max_cycles=" + to_string(max_cycles) + ", stagnation_k=" + to_string(stagnation_k) + ")")
+    eprintln("HEXA_REIGN {\"event\":\"plan\",\"max_cycles\":" + to_string(max_cycles) + ",\"stagnation_k\":" + to_string(stagnation_k) + ",\"cap\":" + to_string(cap) + "}")
+    let mut current = _seed_t
+    let mut history: array = []
+    let mut cycles_run: i64 = 0
+    let mut saturated = false
+    let mut last_signal = ""
+    let mut cycle: i64 = 0
+    while cycle < max_cycles {
+        cycle = cycle + 1
+        cycles_run = cycle
+        let out = _drill_round_shim(current, cycle)
+        let signal = reign_extract_signal(out)
+        history.push(signal)
+        last_signal = signal
+        eprintln("HEXA_REIGN {\"event\":\"iter\",\"cycle\":" + to_string(cycle)
+            + ",\"of\":" + to_string(max_cycles)
+            + ",\"signal\":\"" + signal + "\"}")
+        if reign_signal_stagnant(history, stagnation_k) {
+            saturated = true
+            eprintln("HEXA_REIGN {\"event\":\"saturation\",\"cycle\":" + to_string(cycle)
+                + ",\"k\":" + to_string(stagnation_k) + ",\"signal\":\"" + signal + "\"}")
+            // Append a discovered saturation note to the atlas overlay (rule 5 surface).
+            let note = AtlasNode {
+                kind: "L",
+                id: "reign_saturation_" + to_string(len(_seed_t)) + "_" + to_string(cycle),
+                raw: "@L reign_saturation cycle=" + to_string(cycle) + " signal=" + signal + " :: phase3 [reign]",
+                source_file: "atlas.overlay.n6",
+                source_line: 1
+            }
+            overlay_append(note)
+            break
+        }
+        current = reign_next_seed(_seed_t, cycle + 1, signal)
+    }
+    eprintln("HEXA_REIGN {\"event\":\"complete\",\"cycles_run\":" + to_string(cycles_run) + ",\"saturated\":" + (if saturated { "true" } else { "false" }) + "}")
+    return ReignResult { cycles_run: cycles_run, saturated: saturated, last_signal: last_signal }
+}

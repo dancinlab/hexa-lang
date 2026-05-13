@@ -1,0 +1,97 @@
+// revive smoke — strict iteration cap; never loops infinitely.
+
+use "compiler/atlas/overlay"
+use "compiler/revive/revive"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _setup_sandbox() -> string {
+    let base = "/tmp/hexa_revive_smoke"
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    return base
+}
+
+fn main() {
+    println("phase-3 revive smoke")
+    let sandbox = _setup_sandbox()
+    overlay_reset_cache()
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // 1) HARD CAP: revive_run must accept max_iter and never exceed it.
+    //    Even when L0 is never reached and no failures occur, it must exit
+    //    after max_iter iterations.
+    setenv("HEXA_REVIVE_L0_AT", "9999")  // L0 effectively unreachable
+    total = total + 1
+    let r_cap = revive_run(4, 10, false, true)
+    if r_cap.iters_completed == 4 { pass = pass + 1; _check("hard cap: iters_completed=4 with max_iter=4", true, fails) }
+    else { _check("expected iters=4 got " + to_string(r_cap.iters_completed), false, fails) }
+
+    total = total + 1
+    if r_cap.final_verdict == "max_iter_reached" { pass = pass + 1; _check("verdict=max_iter_reached when cap reached", true, fails) }
+    else { _check("expected max_iter_reached got " + r_cap.final_verdict, false, fails) }
+
+    // 2) L0 reached path
+    setenv("HEXA_REVIVE_L0_AT", "3")
+    total = total + 1
+    let r_l0 = revive_run(10, 5, false, true)
+    if r_l0.final_verdict == "l0_reached" && r_l0.exit_code == 0 {
+        pass = pass + 1; _check("L0 reached path: verdict=l0_reached exit=0", true, fails)
+    } else { _check("L0 path: verdict=" + r_l0.final_verdict + " exit=" + to_string(r_l0.exit_code), false, fails) }
+
+    total = total + 1
+    if r_l0.iters_completed == 3 { pass = pass + 1; _check("L0 reached at iter 3", true, fails) }
+    else { _check("L0 expected iter 3 got " + to_string(r_l0.iters_completed), false, fails) }
+
+    // 3) consec_fail abort path
+    setenv("HEXA_REVIVE_FORCE_FAIL", "1")
+    total = total + 1
+    let r_fail = revive_run(20, 3, false, true)
+    if r_fail.final_verdict == "abort_consec_fail" && r_fail.exit_code == 2 {
+        pass = pass + 1; _check("consec_fail abort: verdict=abort_consec_fail exit=2", true, fails)
+    } else { _check("consec_fail: verdict=" + r_fail.final_verdict + " exit=" + to_string(r_fail.exit_code), false, fails) }
+
+    total = total + 1
+    if r_fail.iters_completed == 3 { pass = pass + 1; _check("abort after 3 consec fails", true, fails) }
+    else { _check("expected 3 iters got " + to_string(r_fail.iters_completed), false, fails) }
+    setenv("HEXA_REVIVE_FORCE_FAIL", "0")
+
+    // 4) Caller-supplied max_iter > 10000 is clamped (defense in depth).
+    setenv("HEXA_REVIVE_L0_AT", "2")
+    total = total + 1
+    let r_clamp = revive_run(50000, 10, false, true)
+    if r_clamp.iters_completed <= 10000 { pass = pass + 1; _check("max_iter clamped to <=10000", true, fails) }
+    else { _check("clamp failed got " + to_string(r_clamp.iters_completed), false, fails) }
+
+    // 5) Overlay notes appended
+    total = total + 1
+    let loaded = overlay_load()
+    if len(loaded) >= 3 { pass = pass + 1; _check("overlay holds >=3 revive notes", true, fails) }
+    else { _check("overlay expected >=3 got " + to_string(len(loaded)), false, fails) }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/revive_test.hexa") { return true }
+    if s == "revive_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }
