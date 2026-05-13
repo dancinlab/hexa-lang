@@ -32,8 +32,8 @@
 //
 // Catalog/diagnostic strings: ENGLISH ONLY.
 
-import "./candidate.hexa"
-import "./phases.hexa"
+use "compiler/smash/candidate"
+use "compiler/smash/phases"
 
 // Run the 9-phase pipeline on a single seed.
 pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate] {

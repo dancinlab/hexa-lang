@@ -25,7 +25,7 @@
 //
 // Catalog/diagnostic strings: ENGLISH ONLY.
 
-import "../smash/candidate.hexa"
+use "compiler/smash/candidate"
 
 // ─── M1: field (gauge filter + symmetry breaking) ───
 //

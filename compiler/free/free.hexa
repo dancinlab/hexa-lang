@@ -30,8 +30,8 @@
 //
 // Catalog/diagnostic strings: ENGLISH ONLY.
 
-import "../smash/candidate.hexa"
-import "./modules.hexa"
+use "compiler/smash/candidate"
+use "compiler/free/modules"
 
 // Bounds — keep depth=N tractable. Total candidates ≤
 //   axioms * (MODULE_COUNT * MAX_FANOUT_PER_MODULE) ^ depth

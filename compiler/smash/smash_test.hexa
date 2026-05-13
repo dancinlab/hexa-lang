@@ -12,9 +12,9 @@
 // Run:
 //   hexa run compiler/smash/smash_test.hexa
 
-import "./candidate.hexa"
-import "./phases.hexa"
-import "./smash.hexa"
+use "compiler/smash/candidate"
+use "compiler/smash/phases"
+use "compiler/smash/smash"
 
 fn _check(label: string, ok: bool, fails: array) {
     if ok { println("  PASS  " + label) }

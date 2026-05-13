@@ -14,8 +14,8 @@
 // Run:
 //   hexa run compiler/hyperarithmetic/hyperarithmetic_test.hexa
 
-import "./checks.hexa"
-import "./hyperarithmetic.hexa"
+use "compiler/hyperarithmetic/checks"
+use "compiler/hyperarithmetic/hyperarithmetic"
 
 fn _check(label: string, ok: bool, fails: array) {
     if ok { println("  PASS  " + label) }

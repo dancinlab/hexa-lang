@@ -30,7 +30,7 @@
 //
 // Catalog/diagnostic strings: ENGLISH ONLY.
 
-import "./candidate.hexa"
+use "compiler/smash/candidate"
 use "compiler/hexad/static_index"
 
 // P2 axiom-seed projection sources its 6-entry slice from the real

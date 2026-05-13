@@ -18,7 +18,7 @@
 //
 // Catalog/diagnostic strings: ENGLISH ONLY.
 
-import "./checks.hexa"
+use "compiler/hyperarithmetic/checks"
 
 pub struct HyperResult {
     prop: string,

@@ -13,9 +13,9 @@
 // Run:
 //   hexa run compiler/free/free_test.hexa
 
-import "../smash/candidate.hexa"
-import "./modules.hexa"
-import "./free.hexa"
+use "compiler/smash/candidate"
+use "compiler/free/modules"
+use "compiler/free/free"
 
 fn _check(label: string, ok: bool, fails: array) {
     if ok { println("  PASS  " + label) }
