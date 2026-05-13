@@ -1,0 +1,164 @@
+// HEXA Native Compiler — Phase 3 chain spine: A19 cross-engine pipeline
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, env_read, stderr, stdout]
+//
+// Absorbs cmd_chain from ~/core/nexus/cli/run.hexa (lines 7058-7086).
+// Upstream `nexus chain --seed "…" --engines nexus,anima,…` shells out
+// to ~/core/nexus/cli/scripts/cross_chain.hexa which fans the seed
+// across N engine binaries, each running drill, and unifies the
+// absorption totals. The absorbed surface keeps the same shape: parse
+// a comma-separated engine identifier list, dispatch drill_run per
+// engine, aggregate.
+//
+// Engine identifier is treated as the drill `--engine` flag (mk9/mk10)
+// for in-process variants. Foreign-engine bridging (anima, etc.) is
+// out of v1 scope — those engines must already be ported as separate
+// drill-variant modules. v1 supports the cross-engine pipeline shape
+// (the L3 trigger contract) using only mk9/mk10; foreign-engine
+// dispatch is a TODO.
+//
+// L3 trigger: chain implies "cross-engine debate" mode. We mark the
+// aggregate verdict with the count of engines that converged on the
+// same total (consensus). The upstream pattern is to emit
+// `unified_abs_total` in the report; we surface it on `ChainResult.unified_total`.
+//
+// Public surface:
+//   pub struct ChainResult { ... }
+//   pub fn chain_run(seed, engines_csv, opts) -> ChainResult
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+use "compiler/drill/drill"
+
+pub struct ChainEngineResult {
+    engine: string,
+    total: i64,
+    rounds: i64,
+    saturated: bool,
+    overlay_lines: i64
+}
+
+pub struct ChainResult {
+    seed: string,
+    engines: array,                  // string[] — engine ids as parsed
+    per_engine: array,               // ChainEngineResult[]
+    unified_total: i64,              // sum across engines
+    consensus_count: i64,            // engines that returned same total as max
+    deferred: array                  // string[] — engine ids we could not dispatch (foreign)
+}
+
+// Split a CSV engine list. Trims each entry and drops empties.
+pub fn parse_engines_csv(csv: string) -> array {
+    let raw = csv.split(",")
+    let mut out: array = []
+    let mut i = 0
+    while i < len(raw) {
+        let t = to_string(raw[i]).trim()
+        if len(t) > 0 { out.push(t) }
+        i = i + 1
+    }
+    return out
+}
+
+// True iff the engine id maps to an in-process drill variant. v1 supports
+// only mk9 / mk10 / nexus (default). Foreign engines (anima, …) are
+// deferred — listed in ChainResult.deferred.
+fn _is_supported_engine(id: string) -> bool {
+    if id == "mk9" || id == "mk10" { return true }
+    if id == "nexus" { return true }            // alias for default (mk9 unless env-overridden)
+    return false
+}
+
+// Map an engine id to a drill engine flag.
+fn _engine_to_drill_flag(id: string) -> string {
+    if id == "mk10" { return "mk10" }
+    return "mk9"
+}
+
+// Run a chain across engines. `opts` template is reused per engine —
+// only the engine flag varies.
+pub fn chain_run(seed: string, engines_csv: string, opts: DrillOpts) -> ChainResult {
+    let engines = parse_engines_csv(engines_csv)
+    if len(engines) == 0 {
+        eprintln("chain: --engines required (csv, e.g. mk9,mk10)")
+        return ChainResult {
+            seed: seed,
+            engines: [],
+            per_engine: [],
+            unified_total: 0,
+            consensus_count: 0,
+            deferred: []
+        }
+    }
+
+    if !opts.quiet {
+        println("chain — seed='" + seed + "' engines=" + to_string(len(engines)) + " (L3 cross-engine pipeline)")
+    }
+
+    let mut per_engine: array = []
+    let mut deferred: array = []
+    let mut totals: array = []
+    let mut unified: i64 = 0
+
+    let mut i = 0
+    while i < len(engines) {
+        let eid = to_string(engines[i])
+        if !_is_supported_engine(eid) {
+            deferred.push(eid)
+            if !opts.quiet {
+                println("  [engine " + eid + "]  deferred — foreign-engine bridge not yet wired (v1)")
+            }
+            i = i + 1
+            continue
+        }
+        let mut o = opts
+        o.engine = _engine_to_drill_flag(eid)
+        if !opts.quiet {
+            println("─── engine " + to_string(i + 1) + "/" + to_string(len(engines)) + ": " + eid + " (drill_engine=" + o.engine + ") ───")
+        }
+        let r = drill_run(seed, o)
+        per_engine.push(ChainEngineResult {
+            engine: eid,
+            total: r.total,
+            rounds: r.rounds,
+            saturated: r.saturated,
+            overlay_lines: r.overlay_lines
+        })
+        totals.push(r.total)
+        unified = unified + r.total
+        i = i + 1
+    }
+
+    // Consensus: count engines whose total equals the max total.
+    let mut max_t: i64 = 0
+    let mut k = 0
+    while k < len(totals) {
+        if totals[k] > max_t { max_t = totals[k] }
+        k = k + 1
+    }
+    let mut cons: i64 = 0
+    k = 0
+    while k < len(totals) {
+        if totals[k] == max_t { cons = cons + 1 }
+        k = k + 1
+    }
+
+    if !opts.quiet {
+        println("─── chain summary ───")
+        println("  unified_abs_total=" + to_string(unified))
+        println("  consensus=" + to_string(cons) + "/" + to_string(len(totals)) + " engines at max=" + to_string(max_t))
+        if len(deferred) > 0 {
+            println("  deferred engines: " + to_string(len(deferred)) + " (foreign bridge TODO)")
+        }
+    }
+
+    return ChainResult {
+        seed: seed,
+        engines: engines,
+        per_engine: per_engine,
+        unified_total: unified,
+        consensus_count: cons,
+        deferred: deferred
+    }
+}

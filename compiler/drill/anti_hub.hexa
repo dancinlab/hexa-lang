@@ -1,0 +1,62 @@
+// HEXA Native Compiler — Phase 3 drill spine: anti-hub env probe + telemetry
+//
+// @version 0.1.0
+// @capabilities [env_read, stderr]
+//
+// Ports the Ω-saturation cycle-5 anti-hub probe from
+// ~/core/nexus/cli/run.hexa::cmd_drill (lines 3099-3107). The doctrine:
+// drill propagates `NEXUS_DRILL_ANTI_HUB` env to child stages so the
+// blowup-internal `graph_append_edge` guard can route around super-hub
+// vertices (deg ≥ threshold). The probe simply emits a single JSON
+// telemetry line at drill entry so a postmortem can confirm the env was
+// in fact set when this process started.
+//
+// All values are read from env; no arguments. The emit is one stderr
+// line with shape:
+//
+//   NEXUS_DRILL_ANTI_HUB_TRACE {"cmd_drill_entry":true,"env_active":"...",
+//                               "env_threshold":"...","adaptive_env":"...",
+//                               "smash_timeout_sec":N}
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+// Read the anti-hub control envs and emit the JSON probe.
+pub fn anti_hub_probe_emit() -> void {
+    let env_active = env("NEXUS_DRILL_ANTI_HUB")
+    let env_threshold = env("NEXUS_DRILL_ANTI_HUB_THRESHOLD")
+    let adapt = env("NEXUS_DRILL_TIMEOUT_ADAPTIVE")
+    // smash timeout default is 180s (matches upstream); we keep it
+    // constant in the absorbed surface — there is no subprocess to time
+    // out (smash runs in-process). The field stays in the JSON so log
+    // consumers do not break.
+    let smash_to: i64 = 180
+    let mut parts = []
+    parts.push("NEXUS_DRILL_ANTI_HUB_TRACE {\"cmd_drill_entry\":true,\"env_active\":\"")
+    parts.push(env_active)
+    parts.push("\",\"env_threshold\":\"")
+    parts.push(env_threshold)
+    parts.push("\",\"adaptive_env\":\"")
+    parts.push(adapt)
+    parts.push("\",\"smash_timeout_sec\":")
+    parts.push(to_string(smash_to))
+    parts.push("}")
+    eprintln(parts.join(""))
+}
+
+// True iff anti-hub guard is enabled in this process's env.
+pub fn anti_hub_enabled() -> bool {
+    return env("NEXUS_DRILL_ANTI_HUB") == "1"
+}
+
+// Threshold for hub classification (deg ≥ N). Default 1000 mirrors the
+// upstream top-8 hub cutoff. The absorbed drill chain does not yet have
+// a real graph to apply this against — the value is emitted for telemetry
+// only.
+pub fn anti_hub_threshold() -> i64 {
+    let raw = env("NEXUS_DRILL_ANTI_HUB_THRESHOLD")
+    if len(raw) == 0 { return 1000 }
+    let mut v: i64 = 1000
+    try { v = to_int(raw) } catch e { v = 1000 }
+    if v <= 0 { return 1000 }
+    return v
+}

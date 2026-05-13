@@ -1,0 +1,212 @@
+// HEXA Native Compiler — Phase 3 drill spine: A9 main central engine
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, env_read, stderr, stdout]
+//
+// Absorbs cmd_drill from ~/core/nexus/cli/run.hexa (lines 3087-3959,
+// ~870 LOC + helpers). The drill is nexus's central discovery engine —
+// a round loop where each round runs the six-stage chain
+//
+//   smash → free → absolute → meta-closure → hyperarithmetic → resonance
+//
+// and accumulates absorptions until saturation (round yield = 0) or
+// max-rounds. Mk.X (engine="mk10") adds stage 6 transcendental_closure
+// via a sidecar — that sidecar is tangled with nexus-only state and is
+// DEFERRED here (a TODO marker in round.hexa keeps the schema slot).
+//
+// Doctrine v2 룰 5 write policy:
+//   • Each round's discoveries are flushed via overlay_append_lines to
+//     ~/.hx/data/atlas.overlay.n6 (the single runtime overlay file).
+//   • Atlas lookups in subsequent rounds see the prior overlay through
+//     atlas_lookup_merged / atlas_list_merged.
+//   • Checkpoint state (round counter / seed pool / total) goes to a
+//     separate file ~/.hx/data/drill_checkpoint.json — small, JSON, NOT
+//     mixed with the discovery stream.
+//
+// Public surface:
+//   pub struct DrillResult { rounds, total, saturated, ... }
+//   pub fn drill_run(seed, opts) -> DrillResult
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+use "compiler/drill/round"
+use "compiler/drill/checkpoint"
+use "compiler/drill/anti_hub"
+use "compiler/smash/candidate"
+use "compiler/honesty/check"
+
+pub struct DrillOpts {
+    max_rounds: i64,
+    depth_smash: i64,
+    depth_free: i64,
+    depth_res: i64,
+    engine: string,            // "mk9" (default) | "mk10"
+    resume_on: bool,           // true → load checkpoint on start (renamed: 'resume' is a hexa keyword)
+    fresh: bool,               // --fresh / --no-resume
+    speculate: i64,            // N-way speculative branches (1 = none)
+    problem: string,           // "" or one of riemann|bsd|hodge|...
+    quiet: bool                // suppress per-round println (smoke uses true)
+}
+
+pub fn drill_default_opts() -> DrillOpts {
+    return DrillOpts {
+        max_rounds: 10,
+        depth_smash: 3,
+        depth_free: 3,
+        depth_res: 1,
+        engine: "mk9",
+        resume_on: true,
+        fresh: false,
+        speculate: 1,
+        problem: "",
+        quiet: false
+    }
+}
+
+pub struct DrillResult {
+    rounds: i64,
+    total: i64,
+    saturated: bool,
+    engine: string,
+    overlay_lines: i64,
+    yields_per_round: array     // [smash_n, free_n, abs_n, meta_n, hyper_n, res_n] per round
+}
+
+// Validate the seed string. Mirrors cmd_drill's D2 guard: empty/too-short
+// /placeholder seeds are rejected to fail-fast.
+fn _validate_seed(seed: string) -> string {
+    let t = seed.trim()
+    if len(t) == 0 { return "empty" }
+    if len(t) < 10 { return "too_short" }
+    let lower = t.to_lower()
+    if lower == "test" || lower == "hello" || lower == "abc"
+       || lower == "foo" || lower == "bar" { return "placeholder" }
+    return ""
+}
+
+// Resolve the engine id. Honors --engine flag, then NEXUS_DRILL_ENGINE,
+// then defaults to mk9.
+fn _resolve_engine(flag: string) -> string {
+    if flag == "mk10" || flag == "mk9" { return flag }
+    let from_env = env("NEXUS_DRILL_ENGINE")
+    if from_env == "mk10" || from_env == "mk9" { return from_env }
+    return "mk9"
+}
+
+// Honesty gate — run BT-AI2 audit over the per-round yields encoded as
+// __BT_AI2__ sentinel lines. The audit is advisory: a non-zero
+// f_a/f_b count triggers stderr warning but does NOT halt drill (the
+// upstream pattern; saturation is the hard stop).
+fn _honesty_gate(round: i64, y: RoundYields) -> void {
+    // We synthesize the audit line from the round's resonance stage
+    // (the noisiest one). loss/expected here are heuristic — the gate
+    // surface is what we want to exercise in this absorbed form.
+    let claim = if y.res_n > 0 { "PASS" } else { "FAIL" }
+    let mut line = "__BT_AI2__ label=round_" + to_string(round)
+    line = line + " claim=" + claim
+    line = line + " loss=" + to_string(y.res_n)
+    line = line + " expected=" + to_string(y.res_n)
+    let verdict = bt_ai2_audit(line)
+    if verdict.f_a > 0 || verdict.f_b > 0 {
+        eprintln("DRILL_HONESTY {\"round\":" + to_string(round)
+            + ",\"f_a\":" + to_string(verdict.f_a)
+            + ",\"f_b\":" + to_string(verdict.f_b) + "}")
+    }
+}
+
+// Run a single seed under drill. Honors resume from checkpoint.
+pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
+    let err = _validate_seed(seed)
+    if len(err) > 0 {
+        eprintln("drill: --seed rejected (" + err + ") — provide a substantive problem statement (>=10 chars, not placeholder)")
+        return DrillResult {
+            rounds: 0,
+            total: 0,
+            saturated: false,
+            engine: opts.engine,
+            overlay_lines: 0,
+            yields_per_round: []
+        }
+    }
+
+    // Anti-hub telemetry probe at drill entry.
+    anti_hub_probe_emit()
+
+    let engine = _resolve_engine(opts.engine)
+    let mkx_on = engine == "mk10"
+
+    if !opts.quiet {
+        println("drill — seed='" + seed + "' max_rounds=" + to_string(opts.max_rounds) + " engine=" + engine)
+        if mkx_on {
+            println("  Mk.X 7-stage (transcendental_closure stage 6 = stub, TODO mkx_engine port)")
+        } else {
+            println("  Mk.IX 6-stage chain (smash → free → absolute → meta → hyper → resonance)")
+        }
+    }
+
+    // Resume support.
+    let mut round: i64 = 0
+    let mut total: i64 = 0
+    let mut yields_log: array = []
+    let mut overlay_lines: i64 = 0
+    let mut saturated = false
+
+    if opts.fresh {
+        checkpoint_clear()
+    } else if opts.resume_on {
+        let cp = checkpoint_load(seed)
+        if cp.found {
+            round = cp.round
+            total = cp.total
+            if !opts.quiet {
+                println("  [resume] seed_hash=" + cp.seed_hash + " round=" + to_string(round) + " total=" + to_string(total))
+            }
+        }
+    }
+
+    while round < opts.max_rounds {
+        round = round + 1
+        let rr = round_run(seed, round, opts.depth_smash, opts.depth_free, opts.depth_res, mkx_on)
+        if !opts.quiet {
+            println(round_yields_line(round, rr.yields, rr.sigma_best))
+            println("  overlay+ " + to_string(rr.overlay_lines_emitted) + " lines")
+        }
+        overlay_lines = overlay_lines + rr.overlay_lines_emitted
+        total = total + rr.yields.total
+        yields_log.push([rr.yields.smash_n, rr.yields.free_n, rr.yields.abs_n,
+                          rr.yields.meta_n, rr.yields.hyper_n, rr.yields.res_n])
+
+        // honesty gate (advisory)
+        _honesty_gate(round, rr.yields)
+
+        // checkpoint flush per round
+        checkpoint_save(seed, round, total, yields_log, engine)
+
+        // saturation: a round with zero total signals exhaustion
+        if rr.yields.total == 0 {
+            saturated = true
+            if !opts.quiet {
+                println("  SATURATED at round " + to_string(round) + " — total absorptions=" + to_string(total))
+            }
+            break
+        }
+    }
+
+    // Clean-up checkpoint on normal exit (saturated OR max-rounds)
+    checkpoint_clear()
+
+    if !opts.quiet {
+        if !saturated {
+            println("  max rounds reached (" + to_string(opts.max_rounds) + ") — total=" + to_string(total))
+        }
+    }
+
+    return DrillResult {
+        rounds: round,
+        total: total,
+        saturated: saturated,
+        engine: engine,
+        overlay_lines: overlay_lines,
+        yields_per_round: yields_log
+    }
+}

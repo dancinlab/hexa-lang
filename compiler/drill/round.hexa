@@ -1,0 +1,206 @@
+// HEXA Native Compiler — Phase 3 drill spine: single-round 6-stage chain
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, env_read]
+//
+// One drill round = (smash → free → absolute → meta-closure →
+// hyperarithmetic → resonance), with optional Mk.X stage 6
+// (transcendental_closure) deferred. Source: ~/core/nexus/cli/run.hexa
+// cmd_drill lines 3418-3776 (the round-loop body).
+//
+// Doctrine v2 룰 5 write policy: every discovery emitted by the chain is
+// flushed at round end via `overlay_append_lines(...)` to
+// ~/.hx/data/atlas.overlay.n6. Round N+1 then sees round N's overlay
+// through `atlas_lookup_merged` automatically (overlay_load_cached
+// invalidates on file size delta — see compiler/atlas/overlay.hexa).
+//
+// We do NOT fork subprocesses. The five engines (smash, free, absolute,
+// meta_closure, hyperarithmetic) are linked into this binary via the
+// Phase 2 absorbed surface; resonance is a closed-form proxy (see
+// resonance.hexa). The contract for `round_run` is:
+//
+//   1. Run the five engines on `seed`, accumulating `[DiscoveryCandidate]`.
+//   2. Run resonance proxy.
+//   3. Convert candidates to .n6 lines and overlay-append them.
+//   4. Return per-stage yields + the round's discoveries (so the caller
+//      can feed them as the next round's seed pool).
+
+use "compiler/smash/candidate"
+use "compiler/smash/smash"
+use "compiler/free/free"
+use "compiler/absolute/check"
+use "compiler/meta_closure/check"
+use "compiler/hyperarithmetic/hyperarithmetic"
+use "compiler/atlas/overlay"
+use "compiler/drill/resonance"
+
+pub struct RoundYields {
+    smash_n: i64,
+    free_n: i64,
+    abs_n: i64,            // 0 or 1 (verdict)
+    meta_n: i64,           // promoted_10ss + meta_closed
+    hyper_n: i64,          // 0 or 1 ([12*] candidate)
+    res_n: i64,
+    tc_n: i64,             // Mk.X transcendental_closure — 0 in Mk.IX
+    total: i64
+}
+
+pub struct RoundResult {
+    yields: RoundYields,
+    sigma_best: string,
+    overlay_lines_emitted: i64,
+    discoveries: array     // DiscoveryCandidate[] — fed forward as next round's seed pool
+}
+
+// Convert a DiscoveryCandidate into a single .n6 overlay line. We tag
+// the kind as @P (provisional axiom) for axioms and @L (link) for
+// derived. value is preserved when present, the src tag carries
+// provenance for later audit.
+fn _cand_to_n6(c: DiscoveryCandidate) -> string {
+    let kind = if c.axiom { "@P" } else { "@L" }
+    let mut parts = []
+    parts.push(kind)
+    parts.push(" ")
+    parts.push(c.id)
+    if c.value != 0.0 {
+        parts.push(" = ")
+        parts.push(to_string(c.value))
+    }
+    parts.push(" :: ")
+    parts.push(c.src)
+    if len(c.grade) > 0 {
+        parts.push(" [")
+        parts.push(c.grade)
+        parts.push("]")
+    }
+    return parts.join("")
+}
+
+// Flush a discovery set to the overlay. Returns the number of lines
+// appended (zero-discoveries → no-op, preserves overlay cleanliness).
+fn _flush_discoveries(cands: array) -> i64 {
+    if len(cands) == 0 { return 0 }
+    let mut lines = []
+    let mut i = 0
+    while i < len(cands) {
+        lines.push(_cand_to_n6(cands[i]))
+        i = i + 1
+    }
+    overlay_append_lines(lines)
+    return len(lines)
+}
+
+// Per-engine yield extraction. The Phase 2 absorbed engines return
+// typed verdicts; we map them to the upstream count contract.
+fn _smash_yield(cands: array) -> i64 {
+    return len(cands)
+}
+
+fn _free_yield(cands: array) -> i64 {
+    return len(cands)
+}
+
+fn _abs_yield(v: AbsoluteVerdict) -> i64 {
+    if v.absolute { return 1 }
+    return 0
+}
+
+fn _meta_yield(v: MetaClosureVerdict) -> i64 {
+    return v.promoted_10ss + v.meta_closed
+}
+
+fn _hyper_yield(r: HyperResult) -> i64 {
+    if r.tier12_candidate { return 1 }
+    return 0
+}
+
+// Build the discovery-line list passed into meta-closure heuristics.
+// The Phase 2 meta_closure_check expects `array of "id\\ttype\\texpr…"
+// TSV strings (see compiler/meta_closure/heuristics.hexa). We synthesize
+// from the union of smash+free candidates.
+fn _to_disc_lines(cands: array) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < len(cands) {
+        out.push(candidate_line(cands[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// Run one round. `mkx_on` toggles the Mk.X stage 6 (currently a stub —
+// returns 0 emissions; mkx_engine.hexa port is deferred).
+pub fn round_run(seed: string, round: i64, depth_smash: i64, depth_free: i64,
+                 depth_res: i64, mkx_on: bool) -> RoundResult {
+    // ─── stage 1: smash ───
+    let smash_cands = smash(seed, depth_smash)
+    let s_n = _smash_yield(smash_cands)
+
+    // ─── stage 2: free ───
+    let free_cands = free(seed, depth_free)
+    let f_n = _free_yield(free_cands)
+
+    // ─── stage 3: absolute (run on seed's canonical projection) ───
+    let abs_v = absolute_check(seed)
+    let a_n = _abs_yield(abs_v)
+
+    // ─── stage 4: meta-closure (over the union discovery set) ───
+    let mut all_cands: array = []
+    let mut i = 0
+    while i < len(smash_cands) { all_cands.push(smash_cands[i]); i = i + 1 }
+    i = 0
+    while i < len(free_cands) { all_cands.push(free_cands[i]); i = i + 1 }
+    let disc_lines = _to_disc_lines(all_cands)
+    let mc_v = meta_closure_check(disc_lines)
+    let m_n = _meta_yield(mc_v)
+
+    // ─── stage 5: hyperarithmetic (verdict over seed) ───
+    let hy_r = hyperarithmetic(seed)
+    let h_n = _hyper_yield(hy_r)
+
+    // ─── stage 6 (Mk.IX): resonance ───
+    let rr = resonance_run(seed, round, depth_res)
+
+    // ─── stage 7 (Mk.X): transcendental_closure — deferred ───
+    // The upstream sidecar (shared/engine/mkx_engine.hexa) is tangled
+    // with nexus-only state (atlas.n6 live file, AN11 PROVISIONAL gate).
+    // We ship Mk.IX in v1 and leave a 0-yield stage 6 for engine="mk10"
+    // callers so the schema does not break.
+    let tc_n: i64 = 0
+
+    let total = s_n + f_n + a_n + m_n + h_n + rr.count + tc_n
+
+    // ─── flush — single overlay write per round ───
+    let flushed = _flush_discoveries(all_cands)
+
+    return RoundResult {
+        yields: RoundYields {
+            smash_n: s_n,
+            free_n: f_n,
+            abs_n: a_n,
+            meta_n: m_n,
+            hyper_n: h_n,
+            res_n: rr.count,
+            tc_n: tc_n,
+            total: total
+        },
+        sigma_best: rr.sigma,
+        overlay_lines_emitted: flushed,
+        discoveries: all_cands
+    }
+}
+
+// Pretty-print one round's yields to a single line for the drill log.
+pub fn round_yields_line(round: i64, y: RoundYields, sigma_best: string) -> string {
+    let mut s = "  round "
+    s = s + to_string(round) + ":"
+    s = s + " smash+" + to_string(y.smash_n)
+    s = s + " free+" + to_string(y.free_n)
+    s = s + " abs=" + to_string(y.abs_n)
+    s = s + " meta=" + to_string(y.meta_n)
+    s = s + " hyper=" + to_string(y.hyper_n)
+    s = s + " res+" + to_string(y.res_n) + "(σ=" + sigma_best + ")"
+    if y.tc_n > 0 { s = s + " tc+" + to_string(y.tc_n) }
+    s = s + " total=" + to_string(y.total)
+    return s
+}

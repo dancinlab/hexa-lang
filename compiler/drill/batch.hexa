@@ -1,0 +1,122 @@
+// HEXA Native Compiler — Phase 3 drill spine: --seeds csv / --seeds-file batch
+//
+// @version 0.1.0
+// @capabilities [fs_read, stdout, stderr]
+//
+// Absorbs cmd_drill_batch from ~/core/nexus/cli/run.hexa (lines 5169-5234).
+// Per-seed seqential drill dispatch with grand-total aggregation. The
+// upstream version also runs _batch_shared_init to cache hexa_bin /
+// nexus_root / sigint state across drill invocations — in the absorbed
+// form those are no-ops (everything is in-process), so the batch is a
+// thin loop over drill_run.
+//
+// Public surface:
+//   pub fn batch_drill(seeds: [string], opts: DrillOpts) -> BatchResult
+//   pub fn parse_seeds_csv(csv: string) -> [string]
+//   pub fn read_seeds_file(path: string) -> [string]
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+use "compiler/drill/drill"
+
+pub struct BatchResult {
+    seed_count: i64,
+    grand_total: i64,
+    per_seed_totals: array,     // i64[]
+    per_seed_rounds: array,     // i64[]
+    per_seed_saturated: array   // bool[]
+}
+
+// Parse a comma-separated seed list. Trims each entry, drops empties.
+pub fn parse_seeds_csv(csv: string) -> array {
+    let raw = csv.split(",")
+    let mut out: array = []
+    let mut i = 0
+    while i < len(raw) {
+        let t = to_string(raw[i]).trim()
+        if len(t) > 0 { out.push(t) }
+        i = i + 1
+    }
+    return out
+}
+
+// Read a newline-delimited seeds file. Each line is one seed; blank
+// lines and `#` comments are ignored. Mirrors the upstream
+// `--seeds-file` contract.
+pub fn read_seeds_file(path: string) -> array {
+    let mut out: array = []
+    if !file_exists(path) {
+        eprintln("drill batch: seeds-file not found: " + path)
+        return out
+    }
+    let raw = read_file(path)
+    if len(raw) == 0 { return out }
+    let lines = raw.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let t = to_string(lines[i]).trim()
+        if len(t) == 0 { i = i + 1; continue }
+        if t.substring(0, 1) == "#" { i = i + 1; continue }
+        out.push(t)
+        i = i + 1
+    }
+    return out
+}
+
+// Sequential batch drill. Each seed runs through drill_run; grand total
+// is aggregated.
+pub fn batch_drill(seeds: array, opts: DrillOpts) -> BatchResult {
+    let n = len(seeds)
+    if n == 0 {
+        eprintln("drill batch: no seeds provided")
+        return BatchResult {
+            seed_count: 0,
+            grand_total: 0,
+            per_seed_totals: [],
+            per_seed_rounds: [],
+            per_seed_saturated: []
+        }
+    }
+
+    if !opts.quiet {
+        println("drill — batch mode (sequential), seed_count=" + to_string(n))
+    }
+
+    let mut grand_total: i64 = 0
+    let mut totals: array = []
+    let mut rounds: array = []
+    let mut sats: array = []
+
+    let mut i = 0
+    while i < n {
+        let s = to_string(seeds[i])
+        if !opts.quiet {
+            println("═══")
+            println("seed[" + to_string(i + 1) + "/" + to_string(n) + "]: " + s)
+            println("═══")
+        }
+        let r = drill_run(s, opts)
+        totals.push(r.total)
+        rounds.push(r.rounds)
+        sats.push(r.saturated)
+        grand_total = grand_total + r.total
+        i = i + 1
+    }
+
+    if !opts.quiet {
+        println("═══ BATCH DONE — seed_count=" + to_string(n) + " grand_total=" + to_string(grand_total) + " ═══")
+    }
+
+    return BatchResult {
+        seed_count: n,
+        grand_total: grand_total,
+        per_seed_totals: totals,
+        per_seed_rounds: rounds,
+        per_seed_saturated: sats
+    }
+}
+
+// TODO(future): parallel batch dispatch. The upstream `_round_parallel_fork_exec`
+// uses fork+exec subprocess parallelism keyed by `NEXUS_ROUND_PARALLEL=1`.
+// In the absorbed in-process form this would require either green-thread
+// scheduling or a real OS-thread pool — both are out of v1 scope.

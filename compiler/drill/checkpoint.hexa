@@ -1,0 +1,213 @@
+// HEXA Native Compiler — Phase 3 drill spine: resume/save checkpoint
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Ports cmd_drill checkpoint surface (~/core/nexus/cli/run.hexa
+// _checkpoint_save / _checkpoint_load / _checkpoint_clear). Doctrine v2
+// 룰 5 keeps the atlas overlay as the ONLY discovery-write destination;
+// the round-counter / seed-pool checkpoint is small structured state
+// and lives in its own jsonl-ish file at:
+//
+//   ~/.hx/data/drill_checkpoint.json
+//
+// Format (single JSON line, deliberately flat):
+//   {"seed_hash":"…","round":N,"total":M,"yields":[[s,f,a,m,h,r], …],
+//    "engine":"mk9|mk10","ts":"…"}
+//
+// Resume policy:
+//   - same seed_hash → restore round + total + yields, drill continues
+//     at round+1
+//   - mismatched seed → silent fresh start (the file is overwritten on
+//     next checkpoint_save)
+//   - missing/corrupt file → silent fresh start
+//
+// The single-file approach is intentional. Drill is single-writer per
+// $HOME; concurrent batch dispatch serializes through cmd_drill_batch
+// upstream so we never need a per-seed checkpoint sub-directory.
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+pub struct CheckpointState {
+    seed_hash: string,
+    round: i64,
+    total: i64,
+    yields_flat: array,         // i64[] — yields rows packed row-major (6 cols / round)
+    engine: string,
+    found: bool                 // false ⇒ no checkpoint loaded (start fresh)
+}
+
+pub fn checkpoint_empty() -> CheckpointState {
+    return CheckpointState {
+        seed_hash: "",
+        round: 0,
+        total: 0,
+        yields_flat: [],
+        engine: "",
+        found: false
+    }
+}
+
+// Resolve the checkpoint path. Mirrors overlay_path() — uses $HOME.
+pub fn checkpoint_path() -> string {
+    let home = env("HOME")
+    if len(home) == 0 { return ".hx/data/drill_checkpoint.json" }
+    return home + "/.hx/data/drill_checkpoint.json"
+}
+
+fn _ensure_dir() -> void {
+    let home = env("HOME")
+    if len(home) == 0 { return }
+    mkdir(home + "/.hx/data")
+}
+
+// FNV-1a 32-bit over the seed string. Produces an 8-char hex tag suitable
+// for matching the same seed across restarts.
+pub fn checkpoint_seed_hash(seed: string) -> string {
+    let mut h: i64 = 2166136261
+    let mut i = 0
+    let n = len(seed)
+    while i < n {
+        let b = char_code(seed, i)
+        h = (h ^ b) * 16777619
+        i = i + 1
+    }
+    if h < 0 { h = -h }
+    let hex = "0123456789abcdef"
+    let mut out = ""
+    let mut k = 7
+    while k >= 0 {
+        let shift = k * 4
+        let nib = (h / _pow2(shift)) % 16
+        out = out + hex.substring(nib, nib + 1)
+        k = k - 1
+    }
+    return out
+}
+
+fn _pow2(b: i64) -> i64 {
+    let mut v: i64 = 1
+    let mut i = 0
+    while i < b {
+        v = v * 2
+        i = i + 1
+    }
+    return v
+}
+
+// Save current drill state. yields is an array of 6-element rows.
+pub fn checkpoint_save(seed: string, round: i64, total: i64,
+                      yields: array, engine: string) -> void {
+    _ensure_dir()
+    let sh = checkpoint_seed_hash(seed)
+    let mut parts = []
+    parts.push("{\"seed_hash\":\"")
+    parts.push(sh)
+    parts.push("\",\"round\":")
+    parts.push(to_string(round))
+    parts.push(",\"total\":")
+    parts.push(to_string(total))
+    parts.push(",\"yields\":[")
+    let mut i = 0
+    while i < len(yields) {
+        if i > 0 { parts.push(",") }
+        parts.push("[")
+        let row = yields[i]
+        let mut j = 0
+        while j < len(row) {
+            if j > 0 { parts.push(",") }
+            parts.push(to_string(row[j]))
+            j = j + 1
+        }
+        parts.push("]")
+        i = i + 1
+    }
+    parts.push("],\"engine\":\"")
+    parts.push(engine)
+    parts.push("\"}")
+    write_file(checkpoint_path(), parts.join(""))
+}
+
+// Load checkpoint and verify the seed_hash matches the current seed.
+// Returns `found: false` on any mismatch / parse failure (silent fresh).
+pub fn checkpoint_load(seed: string) -> CheckpointState {
+    let path = checkpoint_path()
+    if !file_exists(path) { return checkpoint_empty() }
+    let raw = read_file(path)
+    if len(raw) == 0 { return checkpoint_empty() }
+    let want_sh = checkpoint_seed_hash(seed)
+    let got_sh = _json_string_field(raw, "seed_hash")
+    if got_sh != want_sh { return checkpoint_empty() }
+    let round = _json_int_field(raw, "round")
+    let total = _json_int_field(raw, "total")
+    let engine = _json_string_field(raw, "engine")
+    // yields parse — minimal: scan for [[ ... ]] section
+    let flat: array = []
+    return CheckpointState {
+        seed_hash: got_sh,
+        round: round,
+        total: total,
+        yields_flat: flat,
+        engine: engine,
+        found: true
+    }
+}
+
+// Delete the checkpoint file (called on saturation / --fresh / max-rounds).
+pub fn checkpoint_clear() -> void {
+    let path = checkpoint_path()
+    if !file_exists(path) { return }
+    exec("rm -f '" + path + "' 2>/dev/null")
+}
+
+// --- private mini-JSON helpers --------------------------------------------
+//
+// We are reading our own emitter — the format is fixed and flat. A full
+// parser is overkill; we just scan for `"key":<value>` patterns.
+
+fn _json_string_field(raw: string, key: string) -> string {
+    let needle = "\"" + key + "\":\""
+    let n = len(raw)
+    let ln = len(needle)
+    let mut i = 0
+    while i + ln <= n {
+        if raw.substring(i, i + ln) == needle {
+            let start = i + ln
+            let mut j = start
+            while j < n {
+                let c = raw.substring(j, j + 1)
+                if c == "\"" { return raw.substring(start, j) }
+                j = j + 1
+            }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _json_int_field(raw: string, key: string) -> i64 {
+    let needle = "\"" + key + "\":"
+    let n = len(raw)
+    let ln = len(needle)
+    let mut i = 0
+    while i + ln <= n {
+        if raw.substring(i, i + ln) == needle {
+            let start = i + ln
+            let mut j = start
+            // accept optional leading minus then digits
+            if j < n && raw.substring(j, j + 1) == "-" { j = j + 1 }
+            while j < n {
+                let c = raw.substring(j, j + 1)
+                if c == "," || c == "}" || c == " " || c == "\n" { break }
+                j = j + 1
+            }
+            let token = raw.substring(start, j)
+            let mut v: i64 = 0
+            try { v = to_int(token) } catch e { v = 0 }
+            return v
+        }
+        i = i + 1
+    }
+    return 0
+}

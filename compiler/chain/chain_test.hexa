@@ -1,0 +1,153 @@
+// HEXA Native Compiler — Phase 3 chain spine: chain smoke
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, env_read]
+//
+// Smoke for A19 chain. Verifies:
+//   1. CSV parsing of --engines list.
+//   2. Two-engine pipeline (mk9, mk10) runs and aggregates totals.
+//   3. Foreign engine id (e.g. "anima") goes to `deferred`, not crash.
+//   4. Hermetic — HOME relocated, overlay starts clean.
+//
+// Run:
+//   hexa run compiler/chain/chain_test.hexa
+
+use "compiler/atlas/overlay"
+use "compiler/chain/chain"
+use "compiler/drill/drill"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _setup_sandbox() -> string {
+    let base = "/tmp/chain_test_smoke"
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    return base
+}
+
+fn main() {
+    println("phase-3 chain smoke (A19)")
+
+    let sandbox = _setup_sandbox()
+    overlay_reset_cache()
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    println("")
+    println("sandbox HOME: " + sandbox)
+
+    // ─── Scenario 1: CSV parsing ───
+    println("")
+    println("scenario 1: parse_engines_csv")
+    let lst = parse_engines_csv("mk9, mk10 , anima")
+    total = total + 1
+    if len(lst) == 3 {
+        pass = pass + 1
+        _check("parse_engines_csv returns 3 entries", true, fails)
+    } else {
+        _check("parse_engines_csv (got " + to_string(len(lst)) + ")", false, fails)
+    }
+    total = total + 1
+    if to_string(lst[0]) == "mk9" && to_string(lst[1]) == "mk10" && to_string(lst[2]) == "anima" {
+        pass = pass + 1
+        _check("parse_engines_csv trims and preserves order", true, fails)
+    } else {
+        _check("parse_engines_csv trim/order — got [" + to_string(lst[0]) + "," + to_string(lst[1]) + "," + to_string(lst[2]) + "]", false, fails)
+    }
+
+    // ─── Scenario 2: two-engine pipeline ───
+    println("")
+    println("scenario 2: mk9 + mk10 chain")
+    let seed = "Hodge conjecture rational cohomology absorbed"
+    let mut opts = drill_default_opts()
+    opts.max_rounds = 1
+    opts.depth_smash = 2
+    opts.depth_free = 2
+    opts.depth_res = 1
+    opts.fresh = true
+    opts.quiet = true
+    let cr = chain_run(seed, "mk9,mk10", opts)
+    println("  per_engine: " + to_string(len(cr.per_engine)) + " · unified=" + to_string(cr.unified_total) + " · consensus=" + to_string(cr.consensus_count))
+
+    total = total + 1
+    if len(cr.per_engine) == 2 {
+        pass = pass + 1
+        _check("two-engine pipeline dispatched 2 drills", true, fails)
+    } else {
+        _check("two-engine pipeline (got " + to_string(len(cr.per_engine)) + " engines)", false, fails)
+    }
+
+    total = total + 1
+    if cr.unified_total >= 0 {
+        pass = pass + 1
+        _check("unified_total computed (>= 0)", true, fails)
+    } else {
+        _check("unified_total negative — accounting bug", false, fails)
+    }
+
+    // ─── Scenario 3: foreign engine deferred ───
+    println("")
+    println("scenario 3: foreign engine 'anima' deferred (not crash)")
+    let cr2 = chain_run(seed, "mk9,anima", opts)
+    total = total + 1
+    if len(cr2.deferred) == 1 && to_string(cr2.deferred[0]) == "anima" {
+        pass = pass + 1
+        _check("foreign engine 'anima' marked deferred", true, fails)
+    } else {
+        _check("foreign engine deferred — got " + to_string(len(cr2.deferred)) + " deferred", false, fails)
+    }
+    total = total + 1
+    if len(cr2.per_engine) == 1 {
+        pass = pass + 1
+        _check("only the supported engine ran (1)", true, fails)
+    } else {
+        _check("per_engine count after foreign deferral (got " + to_string(len(cr2.per_engine)) + ")", false, fails)
+    }
+
+    // ─── Scenario 4: consensus monotone ───
+    // With identical drill state across mk9 and mk10 (mk10 is currently a
+    // schema-only superset returning tc_n=0 from the stub), the totals
+    // should match → consensus = N.
+    println("")
+    println("scenario 4: consensus across mk9 & mk10 (Mk.X stage 6 stubbed)")
+    let cr3 = chain_run(seed, "mk9,mk10", opts)
+    total = total + 1
+    if cr3.consensus_count == 2 {
+        pass = pass + 1
+        _check("mk9 == mk10 consensus (stage 6 stub returns same totals)", true, fails)
+    } else {
+        _check("consensus count (got " + to_string(cr3.consensus_count) + "/2) — expected 2 with mk10 stub", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut k = 0
+        while k < len(fails) {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+        exit(1)
+    }
+}
+
+// is_main guard
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/chain_test.hexa") { return true }
+    if s == "chain_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

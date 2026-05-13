@@ -1,0 +1,234 @@
+// HEXA Native Compiler — Phase 3 drill spine: drill smoke
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, env_read]
+//
+// Smoke for A9 drill. Two scenarios:
+//
+//   1. Single seed, 2 rounds → drill emits overlay lines; we verify
+//      round 2 can see round 1's overlay entries via atlas_lookup_merged.
+//   2. Batch over 2 seeds → grand_total equals sum-of-per-seed-totals;
+//      both seeds produce a non-zero overlay write.
+//
+// Hermetic: $HOME is relocated to /tmp/drill_test_smoke before each run
+// so the overlay starts empty and the checkpoint file is sandboxed too.
+// Mirrors compiler/atlas/overlay_test.hexa's sandbox pattern (Phase 3
+// foundation, commit 1f1eef1b).
+//
+// Run:
+//   hexa run compiler/drill/drill_test.hexa
+
+use "compiler/atlas/overlay"
+use "compiler/atlas/static_index"
+use "compiler/drill/drill"
+use "compiler/drill/batch"
+use "compiler/drill/round"
+use "compiler/drill/resonance"
+use "compiler/drill/checkpoint"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _setup_sandbox() -> string {
+    let base = "/tmp/drill_test_smoke"
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    return base
+}
+
+fn main() {
+    println("phase-3 drill smoke (A9)")
+
+    let sandbox = _setup_sandbox()
+    overlay_reset_cache()
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    println("")
+    println("sandbox HOME: " + sandbox)
+    println("overlay path: " + overlay_path())
+
+    // ─── Scenario 1: single seed, 2 rounds — cumulative overlay write ───
+    println("")
+    println("scenario 1: single seed, 2 rounds — verify round 2 sees round 1's overlay")
+    let seed1 = "Riemann zeta zero spacing GUE deviation absorbed"
+    let mut opts1 = drill_default_opts()
+    opts1.max_rounds = 2
+    opts1.depth_smash = 2
+    opts1.depth_free = 2
+    opts1.depth_res = 1
+    opts1.quiet = false
+    opts1.fresh = true            // ignore any pre-existing checkpoint
+
+    // Baseline overlay size before drill.
+    overlay_reset_cache()
+    let pre = overlay_load()
+    println("  overlay pre-drill: " + to_string(len(pre)) + " nodes")
+
+    let res1 = drill_run(seed1, opts1)
+    println("  drill result: rounds=" + to_string(res1.rounds)
+        + " total=" + to_string(res1.total)
+        + " saturated=" + (if res1.saturated { "true" } else { "false" })
+        + " overlay_lines=" + to_string(res1.overlay_lines))
+
+    // Refresh and re-load overlay.
+    overlay_reset_cache()
+    let post = overlay_load()
+    println("  overlay post-drill: " + to_string(len(post)) + " nodes")
+
+    total = total + 1
+    if res1.rounds >= 1 {
+        pass = pass + 1
+        _check("scenario 1: drill ran at least 1 round", true, fails)
+    } else {
+        _check("scenario 1: drill ran at least 1 round (got " + to_string(res1.rounds) + ")", false, fails)
+    }
+
+    total = total + 1
+    if res1.overlay_lines > 0 {
+        pass = pass + 1
+        _check("scenario 1: drill wrote overlay entries (>0)", true, fails)
+    } else {
+        _check("scenario 1: drill wrote overlay entries (got " + to_string(res1.overlay_lines) + ")", false, fails)
+    }
+
+    total = total + 1
+    if len(post) > len(pre) {
+        pass = pass + 1
+        _check("scenario 1: overlay file grew after drill", true, fails)
+    } else {
+        _check("scenario 1: overlay file grew after drill (pre=" + to_string(len(pre)) + " post=" + to_string(len(post)) + ")", false, fails)
+    }
+
+    // Cumulative-round semantics: pick one discovered id and verify
+    // atlas_lookup_merged finds it (i.e. round N+1 would see round N's
+    // writes via the rodata+overlay merger).
+    total = total + 1
+    let mut found_via_merged = false
+    if len(post) > 0 {
+        let any_id = post[0].id
+        let hit = atlas_lookup_merged(any_id)
+        if hit.kind != "" && hit.id == any_id { found_via_merged = true }
+    }
+    if found_via_merged {
+        pass = pass + 1
+        _check("scenario 1: discovered id reachable via atlas_lookup_merged (round N+1 visibility)", true, fails)
+    } else {
+        _check("scenario 1: discovered id reachable via atlas_lookup_merged (round N+1 visibility) — no overlay entries to probe", false, fails)
+    }
+
+    // ─── Scenario 2: batch of 2 seeds ───
+    println("")
+    println("scenario 2: batch drill over 2 seeds")
+    // Reset sandbox for clean per-seed accounting.
+    _setup_sandbox()
+    overlay_reset_cache()
+
+    let seeds = [
+        "Riemann zeta zero spacing GUE deviation absorbed",
+        "Birch Swinnerton Dyer rank conjecture absorbed surface"
+    ]
+    let mut bopts = drill_default_opts()
+    bopts.max_rounds = 1
+    bopts.depth_smash = 2
+    bopts.depth_free = 2
+    bopts.depth_res = 1
+    bopts.fresh = true
+    bopts.quiet = true
+
+    let br = batch_drill(seeds, bopts)
+    println("  batch: seed_count=" + to_string(br.seed_count)
+        + " grand_total=" + to_string(br.grand_total))
+
+    total = total + 1
+    if br.seed_count == 2 {
+        pass = pass + 1
+        _check("scenario 2: batch processed both seeds", true, fails)
+    } else {
+        _check("scenario 2: batch processed both seeds (got " + to_string(br.seed_count) + ")", false, fails)
+    }
+
+    // grand_total should match sum-of-per-seed-totals.
+    let mut sum: i64 = 0
+    let mut i = 0
+    while i < len(br.per_seed_totals) {
+        sum = sum + br.per_seed_totals[i]
+        i = i + 1
+    }
+    total = total + 1
+    if br.grand_total == sum {
+        pass = pass + 1
+        _check("scenario 2: grand_total == sum-of-per-seed", true, fails)
+    } else {
+        _check("scenario 2: grand_total mismatch (got " + to_string(br.grand_total) + " vs sum " + to_string(sum) + ")", false, fails)
+    }
+
+    // Overlay should have grown for the batch.
+    overlay_reset_cache()
+    let post_b = overlay_load()
+    println("  overlay post-batch: " + to_string(len(post_b)) + " nodes")
+    total = total + 1
+    if len(post_b) > 0 {
+        pass = pass + 1
+        _check("scenario 2: batch wrote overlay entries", true, fails)
+    } else {
+        _check("scenario 2: batch wrote overlay entries (got 0)", false, fails)
+    }
+
+    // ─── Scenario 3: checkpoint hygiene — file removed after saturation ───
+    println("")
+    println("scenario 3: checkpoint hygiene (cleared on normal exit)")
+    total = total + 1
+    let cp_path = checkpoint_path()
+    let cp_exists = file_exists(cp_path)
+    if !cp_exists {
+        pass = pass + 1
+        _check("scenario 3: checkpoint cleared after drill exit", true, fails)
+    } else {
+        _check("scenario 3: checkpoint cleared after drill exit — file still present at " + cp_path, false, fails)
+    }
+
+    // ─── Scenario 4: resonance σ-grid deterministic ───
+    println("")
+    println("scenario 4: resonance σ-grid deterministic per (seed, round, sigma)")
+    let rr_a = resonance_run("deterministic_seed_42", 1, 3)
+    let rr_b = resonance_run("deterministic_seed_42", 1, 3)
+    total = total + 1
+    if rr_a.count == rr_b.count && rr_a.sigma == rr_b.sigma {
+        pass = pass + 1
+        _check("scenario 4: resonance_run reproducible across calls", true, fails)
+    } else {
+        _check("scenario 4: resonance_run reproducible (got count " + to_string(rr_a.count) + "/" + to_string(rr_b.count) + ", σ " + rr_a.sigma + "/" + rr_b.sigma + ")", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut k = 0
+        while k < len(fails) {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+        exit(1)
+    }
+}
+
+// is_main guard
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/drill_test.hexa") { return true }
+    if s == "drill_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }
