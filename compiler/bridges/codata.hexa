@@ -56,3 +56,26 @@ pub fn codata_run(_args: [string]) -> array {
     }
     return codata_fallback()
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa codata` queries the NIST CODATA 2022 constants table. The
+// adapter ignores positional args; the flag-or-positional pattern is
+// kept uniform across all 16 bridges. δ: live HTTP first, frozen cache
+// (alpha^-1 = 137.035999177) on failure.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let mut passthru: [string] = []
+    let q = cli_find_flag(args, "--query", cli_positional(args, 0, ""))
+    if len(q) > 0 { passthru.push(q) }
+    let r = codata_run(passthru)
+    let mut out = "{"
+    out = out + "\"ok\":" + (if cli_ok(r) { "true" } else { "false" })
+    out = out + ",\"stdout\":\"" + cli_stdout(r).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+    out = out + ",\"stderr\":\"" + cli_stderr(r).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+    out = out + ",\"exit_code\":" + to_string(cli_exit(r))
+    out = out + "}"
+    println(out)
+}

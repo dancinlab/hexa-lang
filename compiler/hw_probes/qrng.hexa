@@ -138,3 +138,46 @@ pub fn qrng_run(sub: string, extra: [string]) -> array {
     }
     return qrng_fallback(sub, extra)
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa qrng [status|chain|meta|selftest|collect] [--bits=N]` runs the
+// δ adapter (live `qrng` binary if available, deterministic LCG64 PRNG
+// otherwise) and prints {ok, stdout, stderr, exit_code} JSON.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let sub = cli_positional(args, 0, "status")
+    let mut extra: [string] = []
+    let mut i: i64 = 0
+    let mut seen_first: bool = false
+    while i < len(args) {
+        let cur = to_string(args[i])
+        if len(cur) >= 2 && cur.starts_with("--") {
+            // qrng accepts inline `--bits=N` form (treated as a single
+            // positional-like token, NOT a flag pair). Pass everything
+            // through that matches that pattern as an extra token.
+            if cur.contains("=") {
+                extra.push(cur)
+                i = i + 1
+            } else if (i + 1) >= len(args) {
+                i = i + 1
+            } else {
+                let nxt = to_string(args[i + 1])
+                if len(nxt) >= 2 && nxt.starts_with("--") { i = i + 1 } else { i = i + 2 }
+            }
+        } else {
+            if !seen_first { seen_first = true } else { extra.push(cur) }
+            i = i + 1
+        }
+    }
+    let r = qrng_run(sub, extra)
+    let mut out = "{"
+    out = out + "\"ok\":" + (if cli_ok(r) { "true" } else { "false" })
+    out = out + ",\"stdout\":\"" + cli_stdout(r).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+    out = out + ",\"stderr\":\"" + cli_stderr(r).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+    out = out + ",\"exit_code\":" + to_string(cli_exit(r))
+    out = out + "}"
+    println(out)
+}

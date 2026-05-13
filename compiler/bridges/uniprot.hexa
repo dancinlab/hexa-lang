@@ -49,3 +49,25 @@ pub fn uniprot_run(args: [string]) -> array {
     }
     return uniprot_fallback(acc)
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa uniprot "<accession>"` queries the UniProtKB JSON endpoint for
+// one accession (e.g. P01308 = insulin). δ: live HTTP first, frozen
+// JSON cache on failure.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let av = cli_args()
+    let q = cli_find_flag(av, "--query", cli_positional(av, 0, ""))
+    let mut passthru: [string] = []
+    if len(q) > 0 { passthru.push(q) }
+    let r = uniprot_run(passthru)
+    let mut out = "{"
+    out = out + "\"ok\":" + (if cli_ok(r) { "true" } else { "false" })
+    out = out + ",\"stdout\":\"" + cli_stdout(r).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+    out = out + ",\"stderr\":\"" + cli_stderr(r).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+    out = out + ",\"exit_code\":" + to_string(cli_exit(r))
+    out = out + "}"
+    println(out)
+}

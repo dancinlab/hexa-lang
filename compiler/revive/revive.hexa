@@ -155,3 +155,29 @@ pub fn revive_run(max_iter_in: i64, consec_fail_cap_in: i64, apply: bool, quiet:
         exit_code: exit_code
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa revive [--max-iter N] [--consec-fail N] [--apply] [--quiet]`
+// drives the engine+map v2 loop and prints {iters_completed, verdict,
+// consecutive_fail, exit_code}. `--seed` is accepted and threaded into
+// the env so the iter-shim staircase stays reproducible per invocation,
+// but the loop itself is seed-independent (revive_run signature).
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let _seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    let max_iter = cli_parse_int(cli_find_flag(args, "--max-iter", ""), 100)
+    let consec   = cli_parse_int(cli_find_flag(args, "--consec-fail", ""), 0)
+    let apply    = cli_has_flag(args, "--apply")
+    let quiet    = cli_has_flag(args, "--quiet")
+    let r = revive_run(max_iter, consec, apply, quiet)
+    let mut out = "{"
+    out = out + "\"iters_completed\":" + to_string(r.iters_completed)
+    out = out + ",\"consecutive_fail\":" + to_string(r.consecutive_fail)
+    out = out + ",\"final_verdict\":\"" + r.final_verdict + "\""
+    out = out + ",\"exit_code\":" + to_string(r.exit_code)
+    out = out + "}"
+    println(out)
+}

@@ -35,3 +35,25 @@ pub fn gw_run(_args: [string]) -> array {
     }
     return gw_fallback()
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa gw` queries the GWOSC event-list catalog. Args ignored by the
+// adapter; flag-or-positional shape is kept uniform. δ: live HTTP first,
+// 3-event GW150914-era anchor cache on failure.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let av = cli_args()
+    let q = cli_find_flag(av, "--query", cli_positional(av, 0, ""))
+    let mut passthru: [string] = []
+    if len(q) > 0 { passthru.push(q) }
+    let r = gw_run(passthru)
+    let mut out = "{"
+    out = out + "\"ok\":" + (if cli_ok(r) { "true" } else { "false" })
+    out = out + ",\"stdout\":\"" + cli_stdout(r).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+    out = out + ",\"stderr\":\"" + cli_stderr(r).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+    out = out + ",\"exit_code\":" + to_string(cli_exit(r))
+    out = out + "}"
+    println(out)
+}

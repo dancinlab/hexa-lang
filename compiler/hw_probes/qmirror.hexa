@@ -134,3 +134,39 @@ pub fn qmirror_run(sub: string, extra: [string]) -> array {
     }
     return qmirror_fallback(sub, extra)
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa qmirror [status|chsh|nist|iit|qrng|selftest] [extra args...]`
+// runs the δ adapter (live binary if available, deterministic stub
+// otherwise) and prints {ok, stdout, stderr, exit_code} JSON.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let sub = cli_positional(args, 0, "status")
+    let mut extra: [string] = []
+    let mut i: i64 = 0
+    let mut seen_first: bool = false
+    while i < len(args) {
+        let cur = to_string(args[i])
+        if len(cur) >= 2 && cur.starts_with("--") {
+            // skip flag pairs; bare flag if next is also a flag / end
+            if (i + 1) >= len(args) { i = i + 1 } else {
+                let nxt = to_string(args[i + 1])
+                if len(nxt) >= 2 && nxt.starts_with("--") { i = i + 1 } else { i = i + 2 }
+            }
+        } else {
+            if !seen_first { seen_first = true } else { extra.push(cur) }
+            i = i + 1
+        }
+    }
+    let r = qmirror_run(sub, extra)
+    let mut out = "{"
+    out = out + "\"ok\":" + (if cli_ok(r) { "true" } else { "false" })
+    out = out + ",\"stdout\":\"" + cli_stdout(r).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+    out = out + ",\"stderr\":\"" + cli_stderr(r).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+    out = out + ",\"exit_code\":" + to_string(cli_exit(r))
+    out = out + "}"
+    println(out)
+}
