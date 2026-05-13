@@ -246,36 +246,43 @@ static void _hexa_init_path_augment(void) {
 // Defaults & overrides:
 //   HEXA_MEM_UNLIMITED=1           → cap disabled
 //   HEXA_MEM_CAP_MB=<N>            → cap to N MB (must be >0)
-//   default                        → 2048 MB (2026-05-13: raised 768 → 2048
+//   default                        → 4096 MB (2026-05-14: raised 2048 → 4096
+//                                    after measuring drill_test peak at
+//                                    2.00 GiB — exactly the 2048 MB ceiling.
+//                                    History: 2026-05-13 raised 768 → 2048
 //                                    after n6 Wave 1 enriched
 //                                    compiler/atlas/embedded.gen.hexa
 //                                    [3.27 MB → 4.92 MB rodata; ~7398
 //                                    AtlasNode literals + 5 per-kind arrays
 //                                    with default GradeInfo/EdgeInfo per
-//                                    node]. The interp parse phase peaks at
-//                                    ~810 MB RSS just materializing the
-//                                    embed AST — the prior 768 MB cap fired
-//                                    on every `use "compiler/atlas/static_index"`
-//                                    smoke (static_index_test, overlay_test,
-//                                    drill_test). 2048 MB matches the
-//                                    module_loader child default and gives
-//                                    ~2.5× headroom on observed peaks.
-//                                    Operator override via HEXA_MEM_CAP_MB /
-//                                    HEXA_MEM_UNLIMITED unchanged.
-//                                    Prior 768 MB rationale (hive watcher
-//                                    runaway containment) is now handled by
-//                                    the 4 K-tick rss probe (~0xFFF stride),
-//                                    which catches bursty allocators well
-//                                    inside 2 GB. 41-file flatten+transpile
-//                                    bundles already get 4 GB via the
-//                                    module_loader_env_prefix() path in
-//                                    self/main.hexa.)
+//                                    node]. Measured RSS peaks under the
+//                                    768→2048 fix:
+//                                      static_index_test : 1.56 GiB  PASS
+//                                      overlay_test      : 1.94 GiB  PASS
+//                                      drill_test        : 2.00 GiB  FAIL
+//                                                          (cap exceeded:
+//                                                           rss=2048MB >
+//                                                           cap=2048MB)
+//                                    The drill engine adds ~400 MB of chain
+//                                    state on top of the embed parse peak;
+//                                    2048 MB was a no-headroom ceiling for
+//                                    it. Raising default → 4096 MB matches
+//                                    the module_loader child default (since
+//                                    2026-05-13, self/main.hexa:1110) and
+//                                    gives ~2× headroom on the heaviest
+//                                    observed smoke. Operator override via
+//                                    HEXA_MEM_CAP_MB / HEXA_MEM_UNLIMITED
+//                                    unchanged. Original 768 MB rationale
+//                                    (hive watcher runaway containment) is
+//                                    addressed by the 4 K-tick rss probe
+//                                    (`0xFFF` stride), which catches bursty
+//                                    allocators well inside 4 GB.
 //
 // CLI flags (parsed by the hexa wrapper script, exported as env above):
 //   --mem-unlimited                → HEXA_MEM_UNLIMITED=1
 //   --mem-cap=<N>                  → HEXA_MEM_CAP_MB=<N>
 
-static size_t _hx_mem_cap_bytes = 2048ull * 1024ull * 1024ull;  // 2048 MB default
+static size_t _hx_mem_cap_bytes = 4096ull * 1024ull * 1024ull;  // 4096 MB default
 static int    _hx_mem_cap_disabled = 0;
 static volatile uint64_t _hx_mem_tick_ctr = 0;
 
