@@ -33,6 +33,7 @@
 use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/embedded.gen"
+use "compiler/atlas/overlay"
 
 // --- drift-detection placeholders (Phase A4+) ------------------------------
 //
@@ -89,4 +90,91 @@ pub fn static_atlas() -> AtlasIndex {
 pub fn lookup_static(kind: string, id: string) -> AtlasNode {
     let idx = static_atlas()
     return lookup(idx, kind, id)
+}
+
+// --- merged lookup (rodata + runtime overlay) ------------------------------
+//
+// Phase 3 foundation (doctrine v2 룰 5, model b — "rodata seed + runtime
+// overlay"). The rodata index is the canonical seed; the overlay at
+// ~/.hx/data/atlas.overlay.n6 carries discoveries promoted at runtime
+// by drill / falsifier / telescope chains. Conflict policy: RODATA WINS.
+// An overlay entry whose (kind, id) matches a rodata entry is silently
+// dropped at lookup; the first such collision per process is logged on
+// stderr via overlay_note_conflict.
+//
+// Callers that need overlay-aware lookups should reach for these merged
+// variants. The original lookup_static / static_atlas remain in place
+// for hot paths that explicitly want the deterministic, hash-pinned
+// view (e.g. ATLAS_HASH drift checks).
+
+// atlas_lookup — convenience alias matching the spec API name from the
+// Phase 3 task description. Wraps the existing lookup_static under a
+// shorter name; callers that prefer this name get a uniform pair with
+// atlas_lookup_merged below.
+pub fn atlas_lookup(id: string) -> AtlasNode {
+    // Search P → C → L → E. AtlasIndex keys are per-kind so we have to
+    // probe each bucket; a hit short-circuits.
+    let idx = static_atlas()
+    let p = lookup(idx, "P", id)
+    if p.kind != "" { return p }
+    let c = lookup(idx, "C", id)
+    if c.kind != "" { return c }
+    let l = lookup(idx, "L", id)
+    if l.kind != "" { return l }
+    let e = lookup(idx, "E", id)
+    if e.kind != "" { return e }
+    return p
+}
+
+// atlas_lookup_merged — rodata-first, overlay-fallback lookup. Returns
+// the rodata hit if any, otherwise the overlay hit, otherwise the
+// sentinel (kind == "").
+pub fn atlas_lookup_merged(id: string) -> AtlasNode {
+    let rodata_hit = atlas_lookup(id)
+    if rodata_hit.kind != "" { return rodata_hit }
+    let overlay = overlay_load_cached()
+    return overlay_find_by_id(overlay, id)
+}
+
+// atlas_list — flat list of all rodata nodes (P + C + L + E in scan
+// order). Useful for diagnostics / reflection.
+pub fn atlas_list() -> array {
+    let idx = static_atlas()
+    let mut out = []
+    let mut i = 0
+    while i < len(idx.p_nodes) { out.push(idx.p_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.c_nodes) { out.push(idx.c_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.l_nodes) { out.push(idx.l_nodes[i]); i = i + 1 }
+    i = 0
+    while i < len(idx.e_nodes) { out.push(idx.e_nodes[i]); i = i + 1 }
+    return out
+}
+
+// atlas_list_merged — rodata followed by overlay entries whose (kind, id)
+// does NOT collide with rodata. Conflicting overlay entries are dropped
+// and the first collision per process is logged once via
+// overlay_note_conflict.
+pub fn atlas_list_merged() -> array {
+    let mut merged = atlas_list()
+    let overlay = overlay_load_cached()
+    let mut i = 0
+    while i < len(overlay) {
+        let n = overlay[i]
+        let mut dup = false
+        let mut j = 0
+        while j < len(merged) {
+            let m = merged[j]
+            if m.id == n.id && m.kind == n.kind {
+                dup = true
+                overlay_note_conflict(n.kind, n.id, m.source_file)
+                break
+            }
+            j = j + 1
+        }
+        if !dup { merged.push(n) }
+        i = i + 1
+    }
+    return merged
 }

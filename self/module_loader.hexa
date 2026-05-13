@@ -376,12 +376,30 @@ fn env_hexa_stdlib_root() {
 // <input> <output>`, so args()[1] is THIS file's path → its grandparent
 // (`<…>/self/..`) is the install dir. That covers the case where main.hexa
 // hasn't yet been rebuilt to pass HEXA_INSTALL_DIR (module_loader.hexa is
-// interpreted at run time, so a fix here is live immediately). Env var
-// (when present) wins over self-derivation — an operator/main.hexa override.
+// interpreted at run time, so a fix here is live immediately).
+//
+// Phase3 hardening — env-vs-self disambiguation: the parent hexa.real may
+// copy hexa_interp into /var/folders/.../T/ before exec, in which case
+// install_dir_from_argv0() in main.hexa derives the /tmp path and passes
+// it down as HEXA_INSTALL_DIR. Such a value is useless for repo-relative
+// `use "compiler/..."` resolution. Validate the env value: it must point
+// at a directory that holds either `self/module_loader.hexa` or a
+// `compiler/` subdir (the two anchors any real install carries). If the
+// env value fails validation, prefer the self-derived path which is
+// computed from this script's args()[1] and therefore always names a
+// real layout.
 fn env_hexa_install_dir() {
+    let self_d = ml_self_install_dir()
     let e = env_var("HEXA_INSTALL_DIR")
-    if len(e) > 0 { return e }
-    return ml_self_install_dir()
+    if len(e) > 0 {
+        // Validation: env value must look like a real install root.
+        if file_exists(ml_join_path(e, "self/module_loader.hexa")) { return e }
+        if file_exists(ml_join_path(e, "compiler")) { return e }
+        if file_exists(ml_join_path(e, "stdlib")) { return e }
+        // Stale env (typically /tmp from hexa.real's interp-copy path) —
+        // fall through to self-derivation.
+    }
+    return self_d
 }
 
 // Derive the install dir from THIS script's own path (args()[1]). Returns
@@ -518,6 +536,18 @@ fn ml_resolve_project_root(imp) {
         // RFC-016 P2 — try base / .hexa / mod.hexa variants in one shot.
         let v = ml_try_path_variants(cand)
         if len(v) > 0 { return v }
+    }
+    // Phase3 foundation — install-relative fallback for repo-root paths like
+    // `compiler/<x>/static_index`. When HEXA_LANG isn't exported (cron /
+    // launchd / subagent / sibling-cwd smoke harnesses), env_hexa_install_dir
+    // is derived from argv[0] (~/.hx/bin/hexa or repo /hexa.real) and gives
+    // us the same repo root that HEXA_LANG would. Mirrors the install-relative
+    // probe already used by ml_resolve_stdlib for `stdlib/*` paths.
+    let inst = env_hexa_install_dir()
+    if len(inst) > 0 {
+        let cand_inst = ml_join_path(inst, imp)
+        let vi = ml_try_path_variants(cand_inst)
+        if len(vi) > 0 { return vi }
     }
     let v2 = ml_try_path_variants(imp)
     if len(v2) > 0 { return v2 }

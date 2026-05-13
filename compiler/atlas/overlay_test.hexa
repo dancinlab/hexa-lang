@@ -1,0 +1,241 @@
+// HEXA Native Compiler — Phase 3 foundation: atlas overlay smoke
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Exercises the rodata+overlay merged surface introduced by
+// compiler/atlas/overlay.hexa and compiler/atlas/static_index.hexa
+// atlas_lookup_merged / atlas_list_merged.
+//
+// Strategy: relocate the overlay file to a sandbox path under
+// /tmp/atlas_overlay_test_<pid>/ before each scenario so the smoke is
+// hermetic and re-runnable. We do this by setting `HOME` to the sandbox
+// root via setenv — overlay_path() reads `env("HOME")` and resolves
+// `<HOME>/.hx/data/atlas.overlay.n6` from there.
+//
+// Scenarios:
+//   1. Append 3 fresh (non-rodata) entries → lookup_merged finds them.
+//   2. Append an entry whose id matches a rodata P node → rodata wins;
+//      overlay_note_conflict warns once on stderr.
+//   3. Multi-append batch via overlay_append_lines.
+//
+// Run:
+//   hexa run compiler/atlas/overlay_test.hexa
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/static_index"
+use "compiler/atlas/overlay"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+// Wipe + create the sandbox `<HOME>/.hx/data/` so each run starts clean.
+fn _setup_sandbox() -> string {
+    let base = "/tmp/atlas_overlay_test_smoke"
+    // Clean slate. `mkdir -p` + `rm -f` covers re-runs and racing tests.
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    return base
+}
+
+fn main() {
+    println("phase-3 atlas overlay smoke")
+
+    let sandbox = _setup_sandbox()
+    overlay_reset_cache()
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    println("")
+    println("sandbox HOME: " + sandbox)
+    println("overlay path: " + overlay_path())
+
+    // ─── Scenario 1: append 3 unique entries, verify lookup_merged ───
+    println("")
+    println("scenario 1: append 3 fresh entries")
+    let n1 = AtlasNode {
+        kind: "P",
+        id: "phase3_seed_1",
+        raw: "@P phase3_seed_1 = 42 :: phase3 [discovered]",
+        source_file: "atlas.overlay.n6",
+        source_line: 1
+    }
+    let n2 = AtlasNode {
+        kind: "C",
+        id: "phase3_seed_2",
+        raw: "@C phase3_seed_2 = 4.33 :: phase3 [discovered]",
+        source_file: "atlas.overlay.n6",
+        source_line: 1
+    }
+    let n3 = AtlasNode {
+        kind: "L",
+        id: "phase3_seed_3",
+        raw: "@L phase3_seed_3 :: phase3 [discovered]\n  -> phase3_seed_1, phase3_seed_2",
+        source_file: "atlas.overlay.n6",
+        source_line: 1
+    }
+    overlay_append(n1)
+    overlay_append(n2)
+    overlay_append(n3)
+    overlay_reset_cache()
+
+    let loaded = overlay_load()
+    println("  overlay nodes after append: " + to_string(len(loaded)))
+
+    total = total + 1
+    if len(loaded) >= 3 { pass = pass + 1; _check("overlay holds >= 3 nodes after 3 appends", true, fails) }
+    else { _check("overlay holds >= 3 nodes after 3 appends (got " + to_string(len(loaded)) + ")", false, fails) }
+
+    // lookup_merged for each id should return the overlay entry.
+    let h1 = atlas_lookup_merged("phase3_seed_1")
+    total = total + 1
+    if h1.kind == "P" && h1.id == "phase3_seed_1" {
+        pass = pass + 1
+        _check("lookup_merged(phase3_seed_1) → overlay P node", true, fails)
+    } else {
+        _check("lookup_merged(phase3_seed_1) → overlay P node (got kind=" + h1.kind + ")", false, fails)
+    }
+
+    let h2 = atlas_lookup_merged("phase3_seed_2")
+    total = total + 1
+    if h2.kind == "C" && h2.id == "phase3_seed_2" {
+        pass = pass + 1
+        _check("lookup_merged(phase3_seed_2) → overlay C node", true, fails)
+    } else {
+        _check("lookup_merged(phase3_seed_2) → overlay C node (got kind=" + h2.kind + ")", false, fails)
+    }
+
+    let h3 = atlas_lookup_merged("phase3_seed_3")
+    total = total + 1
+    if h3.kind == "L" && h3.id == "phase3_seed_3" {
+        pass = pass + 1
+        _check("lookup_merged(phase3_seed_3) → overlay L node", true, fails)
+    } else {
+        _check("lookup_merged(phase3_seed_3) → overlay L node (got kind=" + h3.kind + ")", false, fails)
+    }
+
+    // atlas_list_merged should include all 3 overlay entries plus the
+    // rodata baseline.
+    let all = atlas_list_merged()
+    let rodata_only = atlas_list()
+    let added = len(all) - len(rodata_only)
+    println("  rodata nodes: " + to_string(len(rodata_only)))
+    println("  merged nodes: " + to_string(len(all)) + " (overlay added " + to_string(added) + ")")
+    total = total + 1
+    if added >= 3 {
+        pass = pass + 1
+        _check("atlas_list_merged grew by >= 3", true, fails)
+    } else {
+        _check("atlas_list_merged grew by >= 3 (got " + to_string(added) + ")", false, fails)
+    }
+
+    // ─── Scenario 2: conflict — overlay tries to override rodata P:n ───
+    println("")
+    println("scenario 2: overlay tries to shadow rodata P:n → rodata wins")
+    let n_conflict = AtlasNode {
+        kind: "P",
+        id: "n",
+        raw: "@P n = 999 :: phase3 [evil_override]",
+        source_file: "atlas.overlay.n6",
+        source_line: 1
+    }
+    overlay_append(n_conflict)
+    overlay_reset_cache()
+
+    let h_n = atlas_lookup_merged("n")
+    total = total + 1
+    if h_n.kind == "P" && h_n.id == "n" && h_n.source_file != "atlas.overlay.n6" {
+        pass = pass + 1
+        _check("lookup_merged(n) → rodata P node (overlay shadowed)", true, fails)
+    } else {
+        _check("lookup_merged(n) → rodata P node (overlay shadowed) — got src=" + h_n.source_file, false, fails)
+    }
+
+    // atlas_list_merged should NOT include the overlay-side `n` (dup).
+    let all2 = atlas_list_merged()
+    let mut n_count = 0
+    let mut k = 0
+    while k < len(all2) {
+        let nd = all2[k]
+        if nd.id == "n" && nd.kind == "P" { n_count = n_count + 1 }
+        k = k + 1
+    }
+    total = total + 1
+    if n_count == 1 {
+        pass = pass + 1
+        _check("atlas_list_merged has exactly one P:n (rodata only)", true, fails)
+    } else {
+        _check("atlas_list_merged has exactly one P:n (got " + to_string(n_count) + ")", false, fails)
+    }
+
+    // ─── Scenario 3: batch append via overlay_append_lines ───
+    println("")
+    println("scenario 3: batch append via overlay_append_lines")
+    let batch = [
+        "@P phase3_batch_a = 1 :: phase3 [batch]",
+        "@P phase3_batch_b = 2 :: phase3 [batch]"
+    ]
+    overlay_append_lines(batch)
+    overlay_reset_cache()
+
+    let after_batch = overlay_load()
+    total = total + 1
+    if len(after_batch) >= 5 {
+        pass = pass + 1
+        _check("overlay holds >= 5 nodes after batch append", true, fails)
+    } else {
+        _check("overlay holds >= 5 nodes after batch append (got " + to_string(len(after_batch)) + ")", false, fails)
+    }
+
+    let hb = atlas_lookup_merged("phase3_batch_a")
+    total = total + 1
+    if hb.kind == "P" && hb.id == "phase3_batch_a" {
+        pass = pass + 1
+        _check("lookup_merged(phase3_batch_a) → batch P node", true, fails)
+    } else {
+        _check("lookup_merged(phase3_batch_a) → batch P node (got kind=" + hb.kind + ")", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        // Best-effort cleanup — leave the sandbox if cleanup fails, the
+        // next run blows it away anyway.
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+// --- is_main guard ---------------------------------------------------------
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/overlay_test.hexa") { return true }
+    if script == "overlay_test.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}

@@ -1,0 +1,245 @@
+// HEXA Native Compiler — Phase 3 foundation: atlas overlay surface
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Implements the runtime-mutable half of the doctrine v2 룰 5 write
+// policy ("rodata seed + runtime overlay", model b). The atlas rodata
+// embed (compiler/atlas/embedded.gen.hexa) is the canonical seed —
+// hash-pinned, deterministic, regenerated only via tool/atlas_embed_gen.
+// Anything the live system discovers at runtime (drill chain, falsifier
+// promotions, telescope-verified additions) is appended to a single
+// per-user overlay file:
+//
+//   ~/.hx/data/atlas.overlay.n6
+//
+// Format: same .n6 syntax as the rodata seed (see compiler/atlas/parser),
+// header line `@P|@C|@L|@E <id> ...` plus continuation lines. The
+// merger's first-wins policy carries through: rodata always wins on
+// (kind, id) conflict; the overlay can only ADD, never override.
+//
+// Why append-only:
+//   * Single writer, many readers — no locking required (POSIX write(2)
+//     atomicity on lines ≤ PIPE_BUF, 512 B on macOS).
+//   * Crash-safe — a partial write at most truncates the LAST line; the
+//     parser drops malformed lines.
+//   * Audit trail — the file is a tail of every discovery in insertion
+//     order; rotating is a `mv && touch` away.
+//
+// Cache invalidation:
+//   `overlay_load_cached` checks file size on every call. Size delta is
+//   the cheapest signal that anyone has appended since the last read
+//   (file_mtime is not available as a builtin yet). False positives
+//   (size unchanged but content rewritten) are theoretically possible
+//   but require an explicit truncate+rewrite, which the API never does.
+
+use "compiler/atlas/parser"
+
+// --- meta / cache ----------------------------------------------------------
+
+@phase("parse_only")
+pub struct OverlayMeta {
+    file_path: string,      // resolved ~/.hx/data/atlas.overlay.n6
+    entry_count: i64,       // number of nodes the cached array currently holds
+    last_size: i64,         // file_size at last refresh — drives invalidation
+    loaded: bool            // false until first overlay_load_cached call
+}
+
+// Module-private cache. Single overlay file per process; the cache state
+// piggybacks on it. Reset across process boundaries (intentional — the
+// overlay is the source of truth between runs).
+let mut _g_overlay_meta: OverlayMeta = OverlayMeta {
+    file_path: "",
+    entry_count: 0,
+    last_size: -1,
+    loaded: false
+}
+let mut _g_overlay_cache: [AtlasNode] = []
+
+// One-shot warning state for ID conflicts (overlay tried to override
+// a rodata id — silently dropped, but flagged once on stderr).
+let mut _g_overlay_warned_conflict: bool = false
+
+// --- path resolution -------------------------------------------------------
+
+pub fn overlay_path() -> string {
+    let home = env("HOME")
+    if len(home) == 0 { return ".hx/data/atlas.overlay.n6" }
+    return home + "/.hx/data/atlas.overlay.n6"
+}
+
+// Create ~/.hx/data/ if missing. Idempotent — mkdir -p semantics under
+// the hood. No-op on existing dir.
+pub fn overlay_ensure_dir() -> void {
+    let home = env("HOME")
+    if len(home) == 0 { return }
+    let dir = home + "/.hx/data"
+    mkdir(dir)
+}
+
+// --- read surface ----------------------------------------------------------
+
+// Parse the overlay file into AtlasNodes. Returns [] if the file is
+// missing or empty. Uses the same line-parser as the rodata seed
+// (compiler/atlas/parser::parse_atlas_file) so format identity is
+// guaranteed — anything the rodata generator can emit, the overlay
+// loader can read.
+pub fn overlay_load() -> array {
+    let path = overlay_path()
+    if !file_exists(path) { return [] }
+    if file_size(path) == 0 { return [] }
+    return parse_atlas_file(path, "atlas.overlay.n6")
+}
+
+// Cached overlay load. Refreshes the cache when the file size has
+// changed since the last call (or first call). Most lookups in the
+// hot resolve path will hit the cache; appends invalidate naturally
+// on the next call.
+pub fn overlay_load_cached() -> array {
+    let path = overlay_path()
+    if !file_exists(path) {
+        // File doesn't exist yet. Mark loaded with empty cache so we
+        // don't re-stat every call.
+        if !_g_overlay_meta.loaded {
+            _g_overlay_meta = OverlayMeta {
+                file_path: path,
+                entry_count: 0,
+                last_size: 0,
+                loaded: true
+            }
+            _g_overlay_cache = []
+        }
+        return _g_overlay_cache
+    }
+    let sz = file_size(path)
+    if _g_overlay_meta.loaded && _g_overlay_meta.last_size == sz {
+        return _g_overlay_cache
+    }
+    let nodes = parse_atlas_file(path, "atlas.overlay.n6")
+    _g_overlay_cache = nodes
+    _g_overlay_meta = OverlayMeta {
+        file_path: path,
+        entry_count: len(nodes),
+        last_size: sz,
+        loaded: true
+    }
+    return nodes
+}
+
+// Linear scan over an overlay node list to find a node by id.
+// Returns a sentinel `AtlasNode { kind: "", … }` on miss — matches
+// the merger.hexa::lookup contract.
+pub fn overlay_find_by_id(nodes: array, id: string) -> AtlasNode {
+    let n = len(nodes)
+    let mut i = 0
+    while i < n {
+        let node = nodes[i]
+        if node.id == id { return node }
+        i = i + 1
+    }
+    return AtlasNode {
+        kind: "",
+        id: id,
+        raw: "",
+        source_file: "",
+        source_line: 0
+    }
+}
+
+// --- write surface ---------------------------------------------------------
+
+// Format an AtlasNode back into a .n6 line. The node's `raw` field
+// already carries the full header + continuation block, so for
+// rodata-parsed nodes the round-trip is identity. For nodes constructed
+// in-memory (without a `raw` field set) we synthesize a minimal
+// `@<kind> <id>` header.
+fn _node_to_n6(node: AtlasNode) -> string {
+    if len(node.raw) > 0 { return node.raw }
+    let mut parts = []
+    parts.push("@")
+    parts.push(node.kind)
+    parts.push(" ")
+    parts.push(node.id)
+    return parts.join("")
+}
+
+// Append a single AtlasNode as a .n6 record. The directory is created
+// lazily on first write. No de-duplication at write time — de-dup
+// happens at lookup-merge time via the rodata-wins policy.
+pub fn overlay_append(node: AtlasNode) -> void {
+    overlay_ensure_dir()
+    let path = overlay_path()
+    let line = _node_to_n6(node)
+    let mut chunks = []
+    chunks.push(line)
+    chunks.push("\n")
+    append_file(path, chunks.join(""))
+    // Invalidate cache — next overlay_load_cached() will refresh.
+    _g_overlay_meta = OverlayMeta {
+        file_path: _g_overlay_meta.file_path,
+        entry_count: _g_overlay_meta.entry_count,
+        last_size: -1,
+        loaded: false
+    }
+}
+
+// Append a batch of raw .n6 lines verbatim. Used by drill chain for
+// flush-on-checkpoint patterns where the caller already has the
+// canonical line format (header + continuations joined by "\n").
+// Each entry in `lines` is one logical record; we add a trailing "\n"
+// between entries so the parser's blank-line guard still terminates
+// the previous block cleanly.
+pub fn overlay_append_lines(lines: array) -> void {
+    if len(lines) == 0 { return }
+    overlay_ensure_dir()
+    let path = overlay_path()
+    let mut chunks = []
+    let mut i = 0
+    while i < len(lines) {
+        chunks.push(to_string(lines[i]))
+        chunks.push("\n")
+        i = i + 1
+    }
+    append_file(path, chunks.join(""))
+    _g_overlay_meta = OverlayMeta {
+        file_path: _g_overlay_meta.file_path,
+        entry_count: _g_overlay_meta.entry_count,
+        last_size: -1,
+        loaded: false
+    }
+}
+
+// --- conflict policy -------------------------------------------------------
+
+// Called by the merged-lookup path when an overlay entry shadows a
+// rodata id. Emits a single stderr warning per process (the cache is
+// keyed on the boolean — repeated conflicts are silent so log noise
+// stays bounded on heavy drill runs).
+pub fn overlay_note_conflict(kind: string, id: string, rodata_src: string) -> void {
+    if _g_overlay_warned_conflict { return }
+    _g_overlay_warned_conflict = true
+    let mut parts = []
+    parts.push("[atlas-overlay] conflict ignored: overlay tried to override rodata ")
+    parts.push(kind)
+    parts.push(":")
+    parts.push(id)
+    parts.push(" (rodata src=")
+    parts.push(rodata_src)
+    parts.push("); rodata wins, overlay entry dropped on lookup. Further conflicts in this run are silent.")
+    eprintln(parts.join(""))
+}
+
+// Test-only helper: reset cache + warning state. Smoke tests use this
+// to make repeated load/append cycles deterministic. Production paths
+// should never call it — the cache is correct across the natural
+// process lifetime.
+pub fn overlay_reset_cache() -> void {
+    _g_overlay_meta = OverlayMeta {
+        file_path: "",
+        entry_count: 0,
+        last_size: -1,
+        loaded: false
+    }
+    _g_overlay_cache = []
+    _g_overlay_warned_conflict = false
+}

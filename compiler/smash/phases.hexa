@@ -31,24 +31,40 @@
 // Catalog/diagnostic strings: ENGLISH ONLY.
 
 import "./candidate.hexa"
+use "compiler/hexad/static_index"
 
-// Local mini-mirror of the hexad CDESM constants we project through in
-// P2. Cross-referenced against `compiler/hexad/embedded.gen` (D2 wave-1
-// absorption, hash 6c6c8e9a89...) — kept inline here only because the
-// hexa-lang module loader requires HEXA_LANG / project-root env to be
-// set for `use "compiler/..."` resolution, which the smoke harness does
-// not control. The real hexad index is the source of truth; this
-// 6-entry slice is a deterministic axiom seed pool, not the live data.
-// TODO(phase3): swap to `use "compiler/hexad/static_index"` once the
-// loader probes a sibling-dir for `compiler/...` paths.
+// P2 axiom-seed projection sources its 6-entry slice from the real
+// hexad CDESM constants index (`compiler/hexad/static_index` over
+// `compiler/hexad/embedded.gen` — D2 wave-1 absorption, hash
+// 6c6c8e9a89…). The Phase3 module-loader hardening (install-relative
+// fallback in self/module_loader.hexa::ml_resolve_project_root) makes
+// the cross-module `use "compiler/..."` path resolve from any cwd, so
+// the inlined mini-mirror that lived here through Phase 2 BG-A5 is
+// retired.
+
+fn _hexad_pick(group: string, key: string) -> f64 {
+    let e = hexad_lookup(group, key)
+    if e.kind == "f64" { return e.value_f64 }
+    // i64-typed entries (sigma.*) project up to f64 via value_i64.
+    return e.value_i64 * 1.0
+}
 
 fn _hexad_seed_names() -> [string] {
-    return ["sigma.sigma_n6", "psi.alpha", "psi.beta",
-            "sigma.tau_n6", "sigma.phi_n6", "perfect.n6"]
+    // Six deterministic CDESM coordinates the smash P2 projector wires in
+    // (n=6 attractor neighborhood). Order is fixed — index ↔ value below.
+    return ["sigma.sigma_n6", "psi.alpha", "psi.balance",
+            "sigma.tau_n6", "sigma.phi_n6", "sigma.n6"]
 }
 
 fn _hexad_seed_values() -> [f64] {
-    return [12.0, 6.0, 4.0, 4.0, 2.0, 6.0]
+    return [
+        _hexad_pick("sigma", "sigma_n6"),
+        _hexad_pick("psi",   "alpha"),
+        _hexad_pick("psi",   "balance"),
+        _hexad_pick("sigma", "tau_n6"),
+        _hexad_pick("sigma", "phi_n6"),
+        _hexad_pick("sigma", "n6")
+    ]
 }
 
 // ─── helpers ───
