@@ -1,0 +1,237 @@
+// HEXA Native Compiler — Phase 3 drill variants: A11 surge
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Source: ~/core/nexus/cli/run.hexa::cmd_surge (lines 4176–4373, ~200 LOC).
+//
+// `surge` — L4 super-orchestrator. Where omega picks the widest single
+// axis and forwards, surge takes the Cartesian product
+// (engines × variants × seeds) and runs every combination. The total
+// run count is capped (HEXA_SURGE_MAX env, default 12) to keep mac
+// 4GB RSS / hetzner 32GB concurrency safe — upstream's NEXUS_SURGE_MAX
+// constant ported verbatim.
+//
+// Per-run dispatch matches upstream:
+//   * engine != "nexus"  → cmd_chain(seed, "nexus,<engine>", "") (rc int)
+//   * engine == "nexus"  → drill_run(seed, ...) with variant_n folded
+//                          into the speculate axis
+//
+// γ policy: surge never writes the overlay; all persistence flows
+// through drill_run / chain_run shims. Phase 3 will swap the shims
+// for the real exports.
+//
+// drill_run / chain_run integration: see omega.hexa shim notes. Same
+// TODO(drill-bg-completion) applies.
+
+use "compiler/atlas/overlay"
+use "compiler/omega/omega"
+
+// ─── result struct ────────────────────────────────────────────────────
+
+@phase("parse_only")
+pub struct SurgeResult {
+    plan_total: i64,     // Cartesian count engines × variants × seeds
+    cap: i64,            // active HEXA_SURGE_MAX
+    rejected: bool,      // true → plan exceeded cap, nothing ran
+    ran: i64,            // successful runs
+    errors: i64          // runs returning non-zero rc
+}
+
+// ─── cap policy ───────────────────────────────────────────────────────
+
+// Cap source priority: HEXA_SURGE_MAX > 12. The legacy NEXUS_SURGE_MAX
+// is also honoured so existing env files keep working.
+pub fn surge_max_runs() -> i64 {
+    let v = env("HEXA_SURGE_MAX")
+    if len(v) > 0 {
+        let mut n: i64 = 12
+        try { n = to_int(v) } catch e { n = 12 }
+        if n < 1 { return 1 }
+        return n
+    }
+    let v2 = env("NEXUS_SURGE_MAX")
+    if len(v2) > 0 {
+        let mut n2: i64 = 12
+        try { n2 = to_int(v2) } catch e { n2 = 12 }
+        if n2 < 1 { return 1 }
+        return n2
+    }
+    return 12
+}
+
+// ─── plan ─────────────────────────────────────────────────────────────
+
+@phase("parse_only")
+pub struct SurgePlan {
+    engines: array,      // [string]
+    variants_n: i64,
+    seeds: array,        // [string]
+    total: i64
+}
+
+// Normalise the axis triplet. If engines_csv is empty, default to a
+// single "nexus" engine (upstream behaviour). If variants_n < 1, clamp
+// to 1. If both seeds_csv and seeds_file are empty, fall back to the
+// single `seed` arg (omega-style — surge requires at least one seed).
+pub fn surge_plan(
+    seed: string,
+    engines_csv: string,
+    variants_n: i64,
+    seeds_csv: string,
+    seeds_file: string
+) -> SurgePlan {
+    let mut engines = omega_engines_from_csv(engines_csv)
+    if len(engines) == 0 { engines = ["nexus"] }
+    let mut vn = variants_n
+    if vn < 1 { vn = 1 }
+    let mut seeds = omega_seed_batch(seeds_csv, seeds_file)
+    if len(seeds) == 0 {
+        if seed.trim().len() > 0 { seeds = [seed] }
+    }
+    let total = len(engines) * vn * len(seeds)
+    return SurgePlan {
+        engines: engines,
+        variants_n: vn,
+        seeds: seeds,
+        total: total
+    }
+}
+
+// ─── shims ────────────────────────────────────────────────────────────
+
+// Same shim contract as omega — see omega.hexa drill_run_shim.
+// TODO(drill-bg-completion).
+fn drill_run_shim(seed: string, rounds: string, depth: string, speculate: string) -> i64 {
+    let mut parts = []
+    parts.push("[surge-drill-shim] seed=")
+    parts.push(seed)
+    parts.push(" rounds=")
+    parts.push(rounds)
+    parts.push(" depth=")
+    parts.push(depth)
+    parts.push(" speculate=")
+    parts.push(speculate)
+    eprintln(parts.join(""))
+    return 0
+}
+
+fn chain_run_shim(seed: string, engines_csv: string) -> i64 {
+    let mut parts = []
+    parts.push("[surge-chain-shim] seed=")
+    parts.push(seed)
+    parts.push(" engines=")
+    parts.push(engines_csv)
+    eprintln(parts.join(""))
+    return 0
+}
+
+// ─── core dispatch ────────────────────────────────────────────────────
+
+// Run surge over the (engines × variants × seeds) Cartesian product.
+// Honours the cap — when plan.total > cap, returns rejected=true and
+// performs zero runs.
+pub fn surge_run(
+    seed: string,
+    max_rounds: string,
+    engine_flag: string,
+    preset: string,
+    master_depth: string,
+    speculate: string,
+    variants_n: i64,
+    engines_csv: string,
+    seeds_csv: string,
+    seeds_file: string
+) -> SurgeResult {
+    let depth = omega_apex_depth(master_depth)
+    let spec = omega_apex_speculate(speculate)
+    let plan = surge_plan(seed, engines_csv, variants_n, seeds_csv, seeds_file)
+    let cap = surge_max_runs()
+
+    let mut ev = []
+    ev.push("HEXA_SURGE {\"event\":\"plan\",\"engines\":")
+    ev.push(to_string(len(plan.engines)))
+    ev.push(",\"variants\":")
+    ev.push(to_string(plan.variants_n))
+    ev.push(",\"seeds\":")
+    ev.push(to_string(len(plan.seeds)))
+    ev.push(",\"total_runs\":")
+    ev.push(to_string(plan.total))
+    ev.push(",\"cap\":")
+    ev.push(to_string(cap))
+    ev.push("}")
+    eprintln(ev.join(""))
+
+    if plan.total > cap {
+        let mut rej = []
+        rej.push("HEXA_SURGE {\"event\":\"reject\",\"reason\":\"total_runs_exceeds_cap\",\"total\":")
+        rej.push(to_string(plan.total))
+        rej.push(",\"cap\":")
+        rej.push(to_string(cap))
+        rej.push("}")
+        eprintln(rej.join(""))
+        return SurgeResult {
+            plan_total: plan.total,
+            cap: cap,
+            rejected: true,
+            ran: 0,
+            errors: 0
+        }
+    }
+
+    let mut ran: i64 = 0
+    let mut errors: i64 = 0
+    let mut ei: i64 = 0
+    while ei < len(plan.engines) {
+        let eng = to_string(plan.engines[ei])
+        let mut vi: i64 = 0
+        while vi < plan.variants_n {
+            let mut si: i64 = 0
+            while si < len(plan.seeds) {
+                let sd = to_string(plan.seeds[si])
+                ran = ran + 1
+                let mut row = []
+                row.push("HEXA_SURGE {\"event\":\"run\",\"idx\":")
+                row.push(to_string(ran))
+                row.push(",\"of\":")
+                row.push(to_string(plan.total))
+                row.push(",\"engine\":\"")
+                row.push(eng)
+                row.push("\",\"variant\":")
+                row.push(to_string(vi + 1))
+                row.push(",\"seed_idx\":")
+                row.push(to_string(si + 1))
+                row.push("}")
+                eprintln(row.join(""))
+                // variants > 1 folds into speculate (upstream var_spec)
+                let var_spec = if plan.variants_n > 1 { to_string(plan.variants_n) } else { spec }
+                if eng != "nexus" {
+                    let rc = chain_run_shim(sd, "nexus," + eng)
+                    if rc != 0 { errors = errors + 1 }
+                } else {
+                    let rc2 = drill_run_shim(sd, max_rounds, depth, var_spec)
+                    if rc2 != 0 { errors = errors + 1 }
+                }
+                si = si + 1
+            }
+            vi = vi + 1
+        }
+        ei = ei + 1
+    }
+
+    let mut done = []
+    done.push("HEXA_SURGE {\"event\":\"complete\",\"ran\":")
+    done.push(to_string(ran))
+    done.push(",\"errors\":")
+    done.push(to_string(errors))
+    done.push("}")
+    eprintln(done.join(""))
+
+    return SurgeResult {
+        plan_total: plan.total,
+        cap: cap,
+        rejected: false,
+        ran: ran,
+        errors: errors
+    }
+}

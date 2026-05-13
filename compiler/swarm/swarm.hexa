@@ -1,0 +1,330 @@
+// HEXA Native Compiler — Phase 3 drill variants: A13 swarm
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Source: ~/core/nexus/cli/run.hexa::cmd_swarm (lines 4593–4762, ~170 LOC)
+// plus the helpers _swarm_max_runs / _swarm_perturb_seed / _swarm_breed /
+// _swarm_extract_abs (lines 4539–4591).
+//
+// `swarm` — L7 population-based evolutionary orchestrator. Each
+// generation drills the entire population, scores survivors by their
+// signal `abs` value, picks the top two, and breeds new children for
+// the next generation. Deterministic — same input ⇒ same final best.
+//
+// Caps:
+//   population: clamp [2, 8]
+//   generations: clamp [1, 5]
+//   total = pop × gens ≤ HEXA_SWARM_MAX > NEXUS_SWARM_MAX > 12
+//
+// Selection: top-2 by abs score, single-pass argmax (no full sort —
+// upstream comment notes hexa-lang's sort isn't stability-guaranteed,
+// so a deterministic argmax pair is the ported algorithm).
+//
+// Breeding: deterministic suffix encoding `(g, child_idx, p1, p2)` —
+// no RNG, same population → same offspring.
+//
+// γ policy: swarm never writes the overlay; drill_run_shim is the
+// boundary. TODO(drill-bg-completion).
+
+use "compiler/atlas/overlay"
+use "compiler/dream/dream"
+
+// ─── result struct ────────────────────────────────────────────────────
+
+@phase("parse_only")
+pub struct SwarmGen {
+    g: i64,              // 1-based generation index
+    scores: array,       // [i64] per-individual abs scores
+    best_score: i64      // best in-generation
+}
+
+@phase("parse_only")
+pub struct SwarmResult {
+    population: i64,
+    generations_run: i64,
+    rejected: bool,      // true → cap exceeded, nothing ran
+    best_score: i64,
+    best_gen: i64,
+    best_seed: string,
+    history: array       // [SwarmGen]
+}
+
+// ─── caps ─────────────────────────────────────────────────────────────
+
+pub fn swarm_max_runs() -> i64 {
+    let v1 = env("HEXA_SWARM_MAX")
+    if len(v1) > 0 {
+        let mut n: i64 = 12
+        try { n = to_int(v1) } catch e { n = 12 }
+        if n < 1 { return 1 }
+        return n
+    }
+    let v2 = env("NEXUS_SWARM_MAX")
+    if len(v2) > 0 {
+        let mut n2: i64 = 12
+        try { n2 = to_int(v2) } catch e { n2 = 12 }
+        if n2 < 1 { return 1 }
+        return n2
+    }
+    return 12
+}
+
+// ─── seed perturbation ───────────────────────────────────────────────
+
+// gen-1 perturbation — orig + deterministic " #swarm-i=<idx>".
+pub fn swarm_perturb_seed(orig: string, idx: i64) -> string {
+    let suffix = " #swarm-i=" + to_string(idx)
+    let max_main = 200 - len(suffix)
+    let mut main = orig
+    if len(main) > max_main {
+        if max_main < 1 { main = "" } else { main = main.substring(0, max_main) }
+    }
+    return main + suffix
+}
+
+// breeding — deterministic suffix encoding of (g, child_idx, p1, p2)
+pub fn swarm_breed(orig: string, gen: i64, child_idx: i64, p1_score: i64, p2_score: i64) -> string {
+    let mut suf = []
+    suf.push(" #swarm-g=")
+    suf.push(to_string(gen))
+    suf.push("-c=")
+    suf.push(to_string(child_idx))
+    suf.push("-p=")
+    suf.push(to_string(p1_score))
+    suf.push("+")
+    suf.push(to_string(p2_score))
+    let suffix = suf.join("")
+    let max_main = 200 - len(suffix)
+    let mut main = orig
+    if len(main) > max_main {
+        if max_main < 1 { main = "" } else { main = main.substring(0, max_main) }
+    }
+    return main + suffix
+}
+
+// ─── abs extraction ──────────────────────────────────────────────────
+
+// Parse `abs=K` from a signal payload. Returns 0 on miss (matches
+// upstream behaviour — survival pressure on parse failure is null).
+pub fn swarm_extract_abs(signal: string) -> i64 {
+    let idx = signal.index_of("abs=")
+    if idx < 0 { return 0 }
+    let mut i = idx + 4
+    let n = len(signal)
+    let mut neg = false
+    if i < n && char_code(signal, i) == 45 { neg = true; i = i + 1 } // '-'
+    let mut buf = ""
+    while i < n {
+        let cc = char_code(signal, i)
+        if cc >= 48 && cc <= 57 {
+            buf = buf + signal.substring(i, i + 1)
+            i = i + 1
+        } else { break }
+    }
+    if len(buf) == 0 { return 0 }
+    let mut v: i64 = 0
+    try { v = to_int(buf) } catch e { v = 0 }
+    if neg { v = 0 - v }
+    return v
+}
+
+// ─── drill shim ───────────────────────────────────────────────────────
+
+// Same shape as dream's capture shim — emits a deterministic stdout
+// proxy so swarm's signal scrape has something to consume.
+// TODO(drill-bg-completion).
+fn drill_run_shim_capture(seed: string, rounds: string, depth: string, speculate: string) -> string {
+    let mut parts = []
+    parts.push("[swarm-drill-shim] seed=")
+    parts.push(seed)
+    parts.push(" rounds=")
+    parts.push(rounds)
+    eprintln(parts.join(""))
+    // Score derived from seed length so different perturbations score
+    // differently — gives the GA something to select on.
+    let mut out = []
+    out.push("[EXACT] swarm-shim\n")
+    out.push("round 1 total=")
+    out.push(to_string(len(seed)))
+    out.push("\n")
+    return out.join("")
+}
+
+// ─── selection ────────────────────────────────────────────────────────
+
+// Single-pass top-2 argmax. Returns [top1_idx, top2_idx]. Ties are
+// broken in input order (first seen wins).
+pub fn swarm_top2(scores: array) -> array {
+    let n = len(scores)
+    if n == 0 { return [0, 0] }
+    if n == 1 { return [0, 0] }
+    let mut t1: i64 = 0
+    let mut s1: i64 = scores[0]
+    let mut t2: i64 = 1
+    let mut s2: i64 = scores[1]
+    if s2 > s1 {
+        let tmp_i = t1; t1 = t2; t2 = tmp_i
+        let tmp_s = s1; s1 = s2; s2 = tmp_s
+    }
+    let mut p: i64 = 2
+    while p < n {
+        let sp = scores[p]
+        if sp > s1 {
+            t2 = t1; s2 = s1
+            t1 = p;  s1 = sp
+        } else if sp > s2 {
+            t2 = p;  s2 = sp
+        }
+        p = p + 1
+    }
+    return [t1, t2]
+}
+
+// ─── core loop ────────────────────────────────────────────────────────
+
+pub fn swarm_run(
+    seed: string,
+    population_flag: string,
+    generations_flag: string,
+    max_rounds: string
+) -> SwarmResult {
+    let seed_t = seed.trim()
+    if len(seed_t) == 0 {
+        return SwarmResult {
+            population: 0, generations_run: 0, rejected: false,
+            best_score: 0, best_gen: 0, best_seed: "", history: []
+        }
+    }
+    let cap = swarm_max_runs()
+    let mut pop_n: i64 = 4
+    if len(population_flag) > 0 {
+        try { pop_n = to_int(population_flag) } catch e { pop_n = 4 }
+    }
+    if pop_n < 2 { pop_n = 2 }
+    if pop_n > 8 { pop_n = 8 }
+    let mut gens: i64 = 3
+    if len(generations_flag) > 0 {
+        try { gens = to_int(generations_flag) } catch e { gens = 3 }
+    }
+    if gens < 1 { gens = 1 }
+    if gens > 5 { gens = 5 }
+    let total = pop_n * gens
+    if total > cap {
+        let mut rej = []
+        rej.push("HEXA_SWARM {\"event\":\"reject\",\"reason\":\"total_runs_exceeds_cap\",\"total\":")
+        rej.push(to_string(total))
+        rej.push(",\"cap\":")
+        rej.push(to_string(cap))
+        rej.push("}")
+        eprintln(rej.join(""))
+        return SwarmResult {
+            population: pop_n, generations_run: 0, rejected: true,
+            best_score: 0, best_gen: 0, best_seed: "", history: []
+        }
+    }
+    let mut plan = []
+    plan.push("HEXA_SWARM {\"event\":\"plan\",\"population\":")
+    plan.push(to_string(pop_n))
+    plan.push(",\"generations\":")
+    plan.push(to_string(gens))
+    plan.push(",\"total_runs\":")
+    plan.push(to_string(total))
+    plan.push(",\"cap\":")
+    plan.push(to_string(cap))
+    plan.push("}")
+    eprintln(plan.join(""))
+
+    // gen-1 population
+    let mut population = []
+    let mut k: i64 = 0
+    while k < pop_n {
+        population.push(swarm_perturb_seed(seed_t, k))
+        k = k + 1
+    }
+
+    let mut best_score: i64 = 0
+    let mut best_seed: string = population[0]
+    let mut best_gen: i64 = 0
+    let history = []
+
+    let mut g: i64 = 0
+    while g < gens {
+        g = g + 1
+        let scores = []
+        let mut i: i64 = 0
+        while i < pop_n {
+            let out = drill_run_shim_capture(to_string(population[i]), max_rounds, "auto", "3")
+            let signal = dream_extract_signal(out)
+            let abs_v = swarm_extract_abs(signal)
+            scores.push(abs_v)
+            if abs_v > best_score {
+                best_score = abs_v
+                best_seed = to_string(population[i])
+                best_gen = g
+            }
+            i = i + 1
+        }
+        let gen_rec = SwarmGen {
+            g: g,
+            scores: scores,
+            best_score: best_score
+        }
+        history.push(gen_rec)
+        // emit gen scores
+        let mut sj = ""
+        let mut sij: i64 = 0
+        while sij < pop_n {
+            if len(sj) > 0 { sj = sj + "," }
+            sj = sj + to_string(scores[sij])
+            sij = sij + 1
+        }
+        let mut row = []
+        row.push("HEXA_SWARM {\"event\":\"gen\",\"g\":")
+        row.push(to_string(g))
+        row.push(",\"of\":")
+        row.push(to_string(gens))
+        row.push(",\"scores\":[")
+        row.push(sj)
+        row.push("],\"best\":")
+        row.push(to_string(best_score))
+        row.push("}")
+        eprintln(row.join(""))
+        if g >= gens { continue } // last gen — no breeding
+
+        // selection + breeding
+        let pick = swarm_top2(scores)
+        let top1 = pick[0]
+        let top2 = pick[1]
+        let new_pop = []
+        new_pop.push(to_string(population[top1]))
+        new_pop.push(to_string(population[top2]))
+        let mut c: i64 = 0
+        while len(new_pop) < pop_n {
+            let child = swarm_breed(seed_t, g + 1, c, scores[top1], scores[top2] + c)
+            new_pop.push(child)
+            c = c + 1
+        }
+        population = new_pop
+    }
+
+    let mut done = []
+    done.push("HEXA_SWARM {\"event\":\"complete\",\"best_score\":")
+    done.push(to_string(best_score))
+    done.push(",\"best_gen\":")
+    done.push(to_string(best_gen))
+    done.push(",\"generations_run\":")
+    done.push(to_string(gens))
+    done.push("}")
+    eprintln(done.join(""))
+
+    return SwarmResult {
+        population: pop_n,
+        generations_run: gens,
+        rejected: false,
+        best_score: best_score,
+        best_gen: best_gen,
+        best_seed: best_seed,
+        history: history
+    }
+}

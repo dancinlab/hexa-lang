@@ -1,0 +1,124 @@
+// HEXA Native Compiler — Phase 3 A12 dream smoke
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Verifies:
+//   * signal extraction (unified_abs_total / total= / markers)
+//   * next-seed cap clamping
+//   * iteration counting + history shape
+//
+//   hexa run compiler/dream/dream_test.hexa
+
+use "compiler/dream/dream"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _hermetic_home() {
+    let stamp = exec("date +%s%N 2>/dev/null").trim()
+    let tmp = "/tmp/hexa-dream-smoke-" + stamp
+    mkdir(tmp)
+    setenv("HOME", tmp)
+}
+
+fn main() {
+    println("dream A12 self-seed orchestrator smoke")
+    _hermetic_home()
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // 1) signal extraction — total= path
+    let sig1 = dream_extract_signal("[EXACT] hello\n[NEAR] world\nround 1 total=42\n")
+    total = total + 1
+    if sig1 == "abs=42,ex=1,ne=1" {
+        pass = pass + 1; _check("signal extract: total=42 ex=1 ne=1", true, fails)
+    } else {
+        _check("signal extract: total=42 ex=1 ne=1 (got " + sig1 + ")", false, fails)
+    }
+
+    // 2) signal extraction — unified_abs_total wins over total
+    let sig2 = dream_extract_signal("unified_abs_total: 99\nround 1 total=11\n")
+    total = total + 1
+    if sig2 == "abs=99,ex=0,ne=0" {
+        pass = pass + 1; _check("unified_abs_total wins over total= (abs=99)", true, fails)
+    } else {
+        _check("unified_abs_total wins (got " + sig2 + ")", false, fails)
+    }
+
+    // 3) signal extraction — empty input → abs=-1
+    let sig3 = dream_extract_signal("nothing useful here\n")
+    total = total + 1
+    if sig3 == "abs=-1,ex=0,ne=0" {
+        pass = pass + 1; _check("empty signal → abs=-1", true, fails)
+    } else {
+        _check("empty signal (got " + sig3 + ")", false, fails)
+    }
+
+    // 4) next-seed length capped — seed shorter than cap
+    setenv("HEXA_SEED_CAP", "100")
+    let ns = dream_next_seed("short_seed", 2, "abs=10,ex=0,ne=0")
+    total = total + 1
+    if len(ns) <= 100 && ns.index_of("#dream-iter=2") >= 0 {
+        pass = pass + 1; _check("next_seed length ≤ cap, carries iter marker", true, fails)
+    } else {
+        _check("next_seed length+marker (got len=" + to_string(len(ns)) + ")", false, fails)
+    }
+
+    // 5) cap clamping — set HEXA_DREAM_MAX=2, request 5 → clamped to 2
+    setenv("HEXA_DREAM_MAX", "2")
+    let r = dream_run("alpha_seed", "5", "1", "nexus", "fast", "", "")
+    total = total + 1
+    if r.iterations_run == 2 && len(r.iters) == 2 {
+        pass = pass + 1; _check("HEXA_DREAM_MAX=2 clamps iter count to 2", true, fails)
+    } else {
+        _check("clamp to 2 (got iters=" + to_string(r.iterations_run) + ")", false, fails)
+    }
+
+    // 6) per-iter history non-empty signals
+    total = total + 1
+    let mut all_ok = true
+    let mut k = 0
+    while k < len(r.iters) {
+        if len(r.iters[k].signal) == 0 { all_ok = false }
+        k = k + 1
+    }
+    if all_ok {
+        pass = pass + 1; _check("each iter records a non-empty signal", true, fails)
+    } else {
+        _check("each iter records a non-empty signal", false, fails)
+    }
+
+    // 7) seed-cap clamp — cap=30 floor honoured
+    setenv("HEXA_SEED_CAP", "5")
+    total = total + 1
+    if dream_seed_cap() == 30 {
+        pass = pass + 1; _check("HEXA_SEED_CAP=5 → clamped to 30", true, fails)
+    } else {
+        _check("seed cap clamp (got " + to_string(dream_seed_cap()) + ")", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS (dream A12 — self-seed orchestrator)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/dream_test.hexa") { return true }
+    if s == "dream_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

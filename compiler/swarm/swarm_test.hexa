@@ -1,0 +1,134 @@
+// HEXA Native Compiler — Phase 3 A13 swarm smoke
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Verifies:
+//   * perturbation / breeding determinism
+//   * abs extraction
+//   * top-2 argmax
+//   * full generation loop (population × generations)
+//   * cap rejection
+//
+//   hexa run compiler/swarm/swarm_test.hexa
+
+use "compiler/swarm/swarm"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _hermetic_home() {
+    let stamp = exec("date +%s%N 2>/dev/null").trim()
+    let tmp = "/tmp/hexa-swarm-smoke-" + stamp
+    mkdir(tmp)
+    setenv("HOME", tmp)
+}
+
+fn main() {
+    println("swarm A13 population-evolutionary smoke")
+    _hermetic_home()
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // 1) perturbation determinism — same idx → same seed
+    let p_a = swarm_perturb_seed("alpha", 3)
+    let p_b = swarm_perturb_seed("alpha", 3)
+    total = total + 1
+    if p_a == p_b && p_a.index_of("#swarm-i=3") >= 0 {
+        pass = pass + 1; _check("perturb determinism + marker", true, fails)
+    } else {
+        _check("perturb determinism (got '" + p_a + "' vs '" + p_b + "')", false, fails)
+    }
+
+    // 2) breeding determinism
+    let b_a = swarm_breed("alpha", 2, 0, 10, 5)
+    let b_b = swarm_breed("alpha", 2, 0, 10, 5)
+    total = total + 1
+    if b_a == b_b && b_a.index_of("#swarm-g=2-c=0-p=10+5") >= 0 {
+        pass = pass + 1; _check("breed determinism + marker", true, fails)
+    } else {
+        _check("breed determinism (got '" + b_a + "')", false, fails)
+    }
+
+    // 3) abs extraction — happy path
+    total = total + 1
+    if swarm_extract_abs("abs=42,ex=1,ne=0") == 42 {
+        pass = pass + 1; _check("abs extract 42", true, fails)
+    } else {
+        _check("abs extract 42 (got " + to_string(swarm_extract_abs("abs=42,ex=1,ne=0")) + ")", false, fails)
+    }
+
+    // 4) abs extraction — missing → 0
+    total = total + 1
+    if swarm_extract_abs("ex=1,ne=2") == 0 {
+        pass = pass + 1; _check("abs missing → 0", true, fails)
+    } else {
+        _check("abs missing → 0", false, fails)
+    }
+
+    // 5) top-2 — descending scores
+    let top = swarm_top2([3, 9, 1, 7, 4])
+    total = total + 1
+    if top[0] == 1 && top[1] == 3 {
+        pass = pass + 1; _check("top-2 of [3,9,1,7,4] = (1,3)", true, fails)
+    } else {
+        _check("top-2 (got " + to_string(top[0]) + "," + to_string(top[1]) + ")", false, fails)
+    }
+
+    // 6) full loop — pop=2, gens=2 → 4 runs ≤ 12 cap
+    setenv("HEXA_SWARM_MAX", "12")
+    let r = swarm_run("seed_pop", "2", "2", "1")
+    total = total + 1
+    if !r.rejected && r.population == 2 && r.generations_run == 2 && len(r.history) == 2 {
+        pass = pass + 1; _check("loop pop=2 gens=2 history=2", true, fails)
+    } else {
+        _check("loop pop=2 gens=2 (got pop=" + to_string(r.population)
+            + " gens=" + to_string(r.generations_run)
+            + " hist=" + to_string(len(r.history)) + ")", false, fails)
+    }
+
+    // 7) cap rejection — pop=8 × gens=5 = 40 > cap=10
+    setenv("HEXA_SWARM_MAX", "10")
+    let r2 = swarm_run("seed_pop", "8", "5", "1")
+    total = total + 1
+    if r2.rejected && r2.generations_run == 0 {
+        pass = pass + 1; _check("over-cap plan rejected", true, fails)
+    } else {
+        _check("over-cap rejection (got rejected=" + to_string(r2.rejected) + ")", false, fails)
+    }
+
+    // 8) determinism — same input → same best_score across two runs
+    setenv("HEXA_SWARM_MAX", "12")
+    let r3 = swarm_run("deterministic_seed", "2", "2", "1")
+    let r4 = swarm_run("deterministic_seed", "2", "2", "1")
+    total = total + 1
+    if r3.best_score == r4.best_score && r3.best_gen == r4.best_gen {
+        pass = pass + 1; _check("deterministic best_score across reruns", true, fails)
+    } else {
+        _check("determinism (got " + to_string(r3.best_score) + " vs " + to_string(r4.best_score) + ")", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS (swarm A13 — population evolutionary)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/swarm_test.hexa") { return true }
+    if s == "swarm_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

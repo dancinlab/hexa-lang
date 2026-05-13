@@ -1,0 +1,268 @@
+// HEXA Native Compiler — Phase 3 drill variants: A10 omega
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Source: ~/core/nexus/cli/run.hexa::cmd_omega (lines 4063–4176, ~115 LOC).
+//
+// `omega` — the apex L_ω orchestration entry. Dispatches a single drill
+// run, a cross-seed batch, a multi-variant fan-out, or a cross-engine
+// chain depending on which axes the caller activated. Mirrors the
+// upstream three-axis taxonomy (engines × variants × seeds) without
+// running every combination — that is `surge`'s job (A11).
+//
+// Dispatch matrix (priority order, first match wins):
+//   1) engines_csv has ≥2 entries          → "chain"  path  (L3 cross-engine)
+//   2) variants_n >= 2                     → "debate" path  (L3 fan-out)
+//   3) seeds_csv or seeds_file populated   → "batch"  path  (L3 multi-seed)
+//   4) otherwise                           → "drill"  path  (L2 single seed)
+//
+// γ policy: omega itself never writes the overlay. All persistence is
+// deferred to the inner drill_run (which owns the overlay-append
+// protocol). omega merely picks the path and forwards.
+//
+// drill_run integration: this port uses the soft-import shim
+// `drill_run_shim` declared below. The Phase 3 drill BG is landing
+// `compiler/drill/drill.hexa::drill_run(seed, rounds, ...)` in parallel;
+// when it merges, swap the shim's body to:
+//   use "compiler/drill/drill"
+//   …
+//   return drill_run(seed, rounds, ...)
+// without changing any caller. TODO(drill-bg-completion).
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+use "compiler/atlas/overlay"
+
+// ─── result struct ────────────────────────────────────────────────────
+
+@phase("parse_only")
+pub struct OmegaResult {
+    path: string,        // "drill" | "batch" | "debate" | "chain"
+    axes: i64,           // count of activated axes (0..3)
+    runs: i64,           // logical runs performed (1 for drill, N for batch/debate)
+    rc: i64              // 0 on success, non-zero on error path
+}
+
+// ─── apex preset ──────────────────────────────────────────────────────
+
+// Apex preset: when the caller doesn't pin a depth, drill uses "auto".
+// When the caller doesn't pin speculate, drill uses "3" (the upstream
+// _spec default — three-way fork on the speculative axis).
+pub fn omega_apex_depth(master_depth: string) -> string {
+    if len(master_depth) > 0 { return master_depth }
+    return "auto"
+}
+
+pub fn omega_apex_speculate(speculate_flag: string) -> string {
+    if len(speculate_flag) > 0 { return speculate_flag }
+    return "3"
+}
+
+// ─── seed batch parsing ───────────────────────────────────────────────
+
+// Comma-separated `--seeds` CSV → trimmed seed array. Empty/blank
+// entries are dropped. Matches the upstream `_seed_batch_load` shape
+// for the CSV branch (file branch is _omega_seeds_from_file).
+pub fn omega_seeds_from_csv(csv: string) -> array {
+    let mut out = []
+    if len(csv) == 0 { return out }
+    let parts = csv.split(",")
+    let mut i = 0
+    while i < len(parts) {
+        let p = parts[i].trim()
+        if len(p) > 0 { out.push(p) }
+        i = i + 1
+    }
+    return out
+}
+
+// File branch: one seed per line, skip blanks and `#` comment lines.
+pub fn omega_seeds_from_file(path: string) -> array {
+    let mut out = []
+    if len(path) == 0 { return out }
+    if !file_exists(path) { return out }
+    let raw = read_file(path)
+    let lines = raw.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i].trim()
+        if len(line) > 0 {
+            if !line.starts_with("#") { out.push(line) }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Merged seed loader — CSV first, then file. De-dup is the caller's job.
+pub fn omega_seed_batch(csv: string, file_path: string) -> array {
+    let from_csv = omega_seeds_from_csv(csv)
+    let from_file = omega_seeds_from_file(file_path)
+    let mut out = []
+    let mut i = 0
+    while i < len(from_csv)  { out.push(from_csv[i]);  i = i + 1 }
+    i = 0
+    while i < len(from_file) { out.push(from_file[i]); i = i + 1 }
+    return out
+}
+
+// ─── engines CSV parsing ──────────────────────────────────────────────
+
+pub fn omega_engines_from_csv(csv: string) -> array {
+    let mut out = []
+    if len(csv) == 0 { return out }
+    let parts = csv.split(",")
+    let mut i = 0
+    while i < len(parts) {
+        let p = parts[i].trim()
+        if len(p) > 0 { out.push(p) }
+        i = i + 1
+    }
+    return out
+}
+
+// ─── axis classification ──────────────────────────────────────────────
+
+// Decide the dispatch path from the flag triplet. Pure function — no
+// side effects, easy to unit-test.
+pub fn omega_path(engines_csv: string, variants_n: i64, seeds_csv: string, seeds_file: string) -> string {
+    let engines = omega_engines_from_csv(engines_csv)
+    let multi_engine = len(engines) >= 2
+    let multi_variant = variants_n >= 2
+    let multi_seed = (len(seeds_csv) > 0) || (len(seeds_file) > 0)
+    if multi_engine  { return "chain" }
+    if multi_variant { return "debate" }
+    if multi_seed    { return "batch" }
+    return "drill"
+}
+
+pub fn omega_axes(engines_csv: string, variants_n: i64, seeds_csv: string, seeds_file: string) -> i64 {
+    let engines = omega_engines_from_csv(engines_csv)
+    let mut n: i64 = 0
+    if len(engines) >= 2 { n = n + 1 }
+    if variants_n >= 2 { n = n + 1 }
+    if (len(seeds_csv) > 0) || (len(seeds_file) > 0) { n = n + 1 }
+    return n
+}
+
+// ─── drill_run shim ───────────────────────────────────────────────────
+
+// Soft-import shim for the inner drill round. The drill BG is landing
+// `compiler/drill/drill::drill_run(seed, rounds, depth, speculate)`
+// in parallel. Until that lands we run a deterministic stub: log to
+// stderr, emit one overlay placeholder line if requested, return rc=0.
+//
+// TODO(drill-bg-completion): replace body with
+//   use "compiler/drill/drill"
+//   return drill_run(seed, rounds, depth, speculate)
+fn drill_run_shim(seed: string, rounds: string, depth: string, speculate: string) -> i64 {
+    let mut parts = []
+    parts.push("[omega-drill-shim] seed=")
+    parts.push(seed)
+    parts.push(" rounds=")
+    parts.push(rounds)
+    parts.push(" depth=")
+    parts.push(depth)
+    parts.push(" speculate=")
+    parts.push(speculate)
+    eprintln(parts.join(""))
+    return 0
+}
+
+// Cross-engine shim — mirrors cmd_chain's rc contract.
+// TODO(chain-bg-completion): replace with `use "compiler/chain/chain"`.
+fn chain_run_shim(seed: string, engines_csv: string) -> i64 {
+    let mut parts = []
+    parts.push("[omega-chain-shim] seed=")
+    parts.push(seed)
+    parts.push(" engines=")
+    parts.push(engines_csv)
+    eprintln(parts.join(""))
+    return 0
+}
+
+// ─── core dispatch ────────────────────────────────────────────────────
+
+// Run omega with a flag bundle. Returns a typed result so callers can
+// assert behaviour in tests without parsing stdout.
+//
+//   seed         single-seed for drill/debate paths
+//   max_rounds   drill round budget (empty → drill default)
+//   engine_flag  reserved for chain path; passed through
+//   preset       drill preset name; passed through
+//   master_depth depth override; if empty, apex default "auto"
+//   speculate    speculative fork count; if empty, apex default "3"
+//   variants_n   ≥2 ⇒ debate path
+//   engines_csv  ≥2 entries ⇒ chain path (wins over variants/seeds)
+//   seeds_csv    non-empty ⇒ batch path
+//   seeds_file   non-empty ⇒ batch path (merged with csv)
+pub fn omega_run(
+    seed: string,
+    max_rounds: string,
+    engine_flag: string,
+    preset: string,
+    master_depth: string,
+    speculate: string,
+    variants_n: i64,
+    engines_csv: string,
+    seeds_csv: string,
+    seeds_file: string
+) -> OmegaResult {
+    let depth = omega_apex_depth(master_depth)
+    let spec = omega_apex_speculate(speculate)
+    let path = omega_path(engines_csv, variants_n, seeds_csv, seeds_file)
+    let axes = omega_axes(engines_csv, variants_n, seeds_csv, seeds_file)
+
+    // Surface event for any consumer tailing stderr (mirrors upstream
+    // NEXUS_OMEGA {"event":"dispatch", ...}).
+    let mut ev = []
+    ev.push("HEXA_OMEGA {\"event\":\"dispatch\",\"axes\":")
+    ev.push(to_string(axes))
+    ev.push(",\"path\":\"")
+    ev.push(path)
+    ev.push("\",\"variants\":")
+    ev.push(to_string(variants_n))
+    ev.push(",\"depth\":\"")
+    ev.push(depth)
+    ev.push("\",\"speculate\":\"")
+    ev.push(spec)
+    ev.push("\"}")
+    eprintln(ev.join(""))
+
+    if path == "chain" {
+        let rc = chain_run_shim(seed, engines_csv)
+        return OmegaResult { path: "chain", axes: axes, runs: 1, rc: rc }
+    }
+    if path == "debate" {
+        // Debate fan-out: N parallel drill runs over the same seed with
+        // distinct variant suffixes; upstream forwards to _omega_invoke_debate.
+        // The shim treats each variant as a deterministic drill call.
+        let mut i: i64 = 0
+        let mut last_rc: i64 = 0
+        while i < variants_n {
+            i = i + 1
+            let mut suf = []
+            suf.push(seed)
+            suf.push(" #omega-variant=")
+            suf.push(to_string(i))
+            let rc = drill_run_shim(suf.join(""), max_rounds, depth, spec)
+            if rc != 0 { last_rc = rc }
+        }
+        return OmegaResult { path: "debate", axes: axes, runs: variants_n, rc: last_rc }
+    }
+    if path == "batch" {
+        let seeds = omega_seed_batch(seeds_csv, seeds_file)
+        let mut i: i64 = 0
+        let mut last_rc: i64 = 0
+        while i < len(seeds) {
+            let rc = drill_run_shim(to_string(seeds[i]), max_rounds, depth, spec)
+            if rc != 0 { last_rc = rc }
+            i = i + 1
+        }
+        return OmegaResult { path: "batch", axes: axes, runs: len(seeds), rc: last_rc }
+    }
+    // default — single drill apex
+    let rc = drill_run_shim(seed, max_rounds, depth, spec)
+    return OmegaResult { path: "drill", axes: axes, runs: 1, rc: rc }
+}

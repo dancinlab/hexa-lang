@@ -1,0 +1,110 @@
+// HEXA Native Compiler — Phase 3 A10 omega smoke
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Verifies the omega dispatch matrix:
+//   * single seed   → "drill"
+//   * --seeds CSV   → "batch"
+//   * --variants N  → "debate"
+//   * --engines a,b → "chain"
+//
+// Hermetic — sets HOME to a per-run tmp dir so any overlay writes that
+// trickle through the drill shim stay contained.
+//
+//   hexa run compiler/omega/omega_test.hexa
+
+use "compiler/omega/omega"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _hermetic_home() {
+    let stamp = exec("date +%s%N 2>/dev/null").trim()
+    let tmp = "/tmp/hexa-omega-smoke-" + stamp
+    mkdir(tmp)
+    setenv("HOME", tmp)
+}
+
+fn main() {
+    println("omega A10 dispatch smoke")
+    _hermetic_home()
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // 1) single-seed → drill path
+    let r1 = omega_run("seed_alpha", "1", "nexus", "fast", "", "", 1, "", "", "")
+    total = total + 1
+    if r1.path == "drill" && r1.axes == 0 && r1.runs == 1 && r1.rc == 0 {
+        pass = pass + 1; _check("single-seed dispatches drill (axes=0, runs=1)", true, fails)
+    } else {
+        _check("single-seed dispatches drill (got path=" + r1.path
+            + " axes=" + to_string(r1.axes)
+            + " runs=" + to_string(r1.runs) + ")", false, fails)
+    }
+
+    // 2) seeds-csv → batch path
+    let r2 = omega_run("ignored", "1", "nexus", "fast", "", "", 1, "", "a,b,c", "")
+    total = total + 1
+    if r2.path == "batch" && r2.axes == 1 && r2.runs == 3 {
+        pass = pass + 1; _check("seeds CSV dispatches batch (axes=1, runs=3)", true, fails)
+    } else {
+        _check("seeds CSV dispatches batch (got path=" + r2.path
+            + " axes=" + to_string(r2.axes)
+            + " runs=" + to_string(r2.runs) + ")", false, fails)
+    }
+
+    // 3) variants=3 → debate path
+    let r3 = omega_run("seed_debate", "1", "nexus", "fast", "", "", 3, "", "", "")
+    total = total + 1
+    if r3.path == "debate" && r3.axes == 1 && r3.runs == 3 {
+        pass = pass + 1; _check("variants=3 dispatches debate (axes=1, runs=3)", true, fails)
+    } else {
+        _check("variants=3 dispatches debate (got path=" + r3.path
+            + " axes=" + to_string(r3.axes)
+            + " runs=" + to_string(r3.runs) + ")", false, fails)
+    }
+
+    // 4) engines csv ≥2 → chain path (wins over variants/seeds)
+    let r4 = omega_run("seed_chain", "1", "nexus", "fast", "", "", 4, "nexus,openai", "a,b", "")
+    total = total + 1
+    if r4.path == "chain" && r4.axes == 3 && r4.runs == 1 {
+        pass = pass + 1; _check("engines csv wins → chain (axes=3, runs=1)", true, fails)
+    } else {
+        _check("engines csv wins → chain (got path=" + r4.path
+            + " axes=" + to_string(r4.axes)
+            + " runs=" + to_string(r4.runs) + ")", false, fails)
+    }
+
+    // 5) apex defaults — empty depth → "auto", empty speculate → "3"
+    total = total + 1
+    if omega_apex_depth("") == "auto" && omega_apex_speculate("") == "3" {
+        pass = pass + 1; _check("apex defaults depth=auto speculate=3", true, fails)
+    } else {
+        _check("apex defaults depth=auto speculate=3", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS (omega A10 — dispatch matrix)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/omega_test.hexa") { return true }
+    if s == "omega_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

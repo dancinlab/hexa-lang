@@ -1,0 +1,299 @@
+// HEXA Native Compiler — Phase 3 drill variants: A12 dream
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Source: ~/core/nexus/cli/run.hexa::cmd_dream (lines 4373–4465, ~92 LOC).
+//
+// `dream` — L5 self-seed orchestrator. Runs N drill iterations where
+// each iteration's output signal becomes the next iteration's seed
+// suffix. "Dream mode" semantics — fuzzy seed evolution driven by the
+// drill's own emission stream.
+//
+// Signal extraction (faithful port of upstream `_dream_extract_signal`):
+//   1) parse `unified_abs_total=N` (chain output) — first match
+//   2) fallback: parse last `total=N` (drill round emission)
+//   3) count `[EXACT` / `[NEAR` markers
+// Payload format: "abs=K,ex=M,ne=L". Parse failure → abs=-1.
+//
+// Seed evolution (faithful port of upstream `_dream_next_seed`):
+//   next_seed = trunc(orig, cap - len(suffix)) + " #dream-iter=N " + signal
+// cap source: HEXA_SEED_CAP > NEXUS_SEED_CAP > 280, clamped [30, 1000].
+//
+// CAP: HEXA_DREAM_MAX > NEXUS_DREAM_MAX > 3, ceiling=10.
+//
+// γ policy: dream itself never writes the overlay; it forwards to
+// drill_run_shim. TODO(drill-bg-completion).
+
+use "compiler/atlas/overlay"
+
+// ─── result struct ────────────────────────────────────────────────────
+
+@phase("parse_only")
+pub struct DreamIter {
+    i: i64,              // 1-based iter index
+    seed_len: i64,       // length of the seed used in this iter
+    signal: string       // extracted signal payload "abs=K,ex=M,ne=L"
+}
+
+@phase("parse_only")
+pub struct DreamResult {
+    iterations_run: i64,
+    iters: array,        // [DreamIter]
+    final_seed: string   // last seed used
+}
+
+// ─── caps ─────────────────────────────────────────────────────────────
+
+pub fn dream_max_iters() -> i64 {
+    let v1 = env("HEXA_DREAM_MAX")
+    if len(v1) > 0 {
+        let mut n: i64 = 3
+        try { n = to_int(v1) } catch e { n = 3 }
+        if n < 1 { return 1 }
+        if n > 10 { return 10 }
+        return n
+    }
+    let v2 = env("NEXUS_DREAM_MAX")
+    if len(v2) > 0 {
+        let mut n2: i64 = 3
+        try { n2 = to_int(v2) } catch e { n2 = 3 }
+        if n2 < 1 { return 1 }
+        if n2 > 10 { return 10 }
+        return n2
+    }
+    return 3
+}
+
+pub fn dream_seed_cap() -> i64 {
+    let v1 = env("HEXA_SEED_CAP")
+    if len(v1) > 0 {
+        let mut n: i64 = 280
+        try { n = to_int(v1) } catch e { n = 280 }
+        if n < 30 { return 30 }
+        if n > 1000 { return 1000 }
+        return n
+    }
+    let v2 = env("NEXUS_SEED_CAP")
+    if len(v2) > 0 {
+        let mut n2: i64 = 280
+        try { n2 = to_int(v2) } catch e { n2 = 280 }
+        if n2 < 30 { return 30 }
+        if n2 > 1000 { return 1000 }
+        return n2
+    }
+    return 280
+}
+
+// ─── marker count ─────────────────────────────────────────────────────
+
+fn _count_marker(text: string, marker: string) -> i64 {
+    let mut count: i64 = 0
+    let mut t = text
+    while true {
+        let idx = t.index_of(marker)
+        if idx < 0 { break }
+        count = count + 1
+        t = t.substring(idx + len(marker), len(t))
+    }
+    return count
+}
+
+// ─── signal extraction ───────────────────────────────────────────────
+
+// Parse a non-negative integer starting at offset `start`. Returns
+// (parsed_value, end_index). value=-1 on no-match.
+fn _parse_int_at(s: string, start: i64) -> array {
+    let n = len(s)
+    let mut i = start
+    // skip non-digit (within line)
+    while i < n {
+        let cc = char_code(s, i)
+        if cc >= 48 && cc <= 57 { break }
+        if cc == 10 { return [-1, i] }
+        i = i + 1
+    }
+    if i >= n { return [-1, i] }
+    let mut buf = ""
+    while i < n {
+        let cc = char_code(s, i)
+        if cc >= 48 && cc <= 57 {
+            buf = buf + s.substring(i, i + 1)
+            i = i + 1
+        } else { break }
+    }
+    if len(buf) == 0 { return [-1, i] }
+    let mut v: i64 = -1
+    try { v = to_int(buf) } catch e { v = -1 }
+    return [v, i]
+}
+
+pub fn dream_extract_signal(out: string) -> string {
+    let mut abs_total: i64 = -1
+    // 1) unified_abs_total (chain output)
+    let key1 = "unified_abs_total"
+    let idx1 = out.index_of(key1)
+    if idx1 >= 0 {
+        let pair = _parse_int_at(out, idx1 + len(key1))
+        let v = pair[0]
+        if v >= 0 { abs_total = v }
+    }
+    // 2) last `total=N` (drill rounds) — scan to end of input
+    if abs_total < 0 {
+        let mut t = out
+        let mut last: i64 = -1
+        while true {
+            let i = t.index_of("total=")
+            if i < 0 { break }
+            let pair2 = _parse_int_at(t, i + 6)
+            if pair2[0] >= 0 { last = pair2[0] }
+            t = t.substring(i + 6, len(t))
+        }
+        if last >= 0 { abs_total = last }
+    }
+    let ex = _count_marker(out, "[EXACT")
+    let ne = _count_marker(out, "[NEAR")
+    let mut parts = []
+    parts.push("abs=")
+    parts.push(to_string(abs_total))
+    parts.push(",ex=")
+    parts.push(to_string(ex))
+    parts.push(",ne=")
+    parts.push(to_string(ne))
+    return parts.join("")
+}
+
+// ─── next-seed synthesis ──────────────────────────────────────────────
+
+pub fn dream_next_seed(orig: string, iter_idx: i64, signal: string) -> string {
+    let mut suf = []
+    suf.push(" #dream-iter=")
+    suf.push(to_string(iter_idx))
+    suf.push(" ")
+    suf.push(signal)
+    let suffix = suf.join("")
+    let cap = dream_seed_cap()
+    let max_main = cap - len(suffix)
+    let mut main = orig
+    if len(main) > max_main {
+        if max_main < 1 { main = "" }
+        else { main = main.substring(0, max_main) }
+    }
+    return main + suffix
+}
+
+// ─── drill_run shim ───────────────────────────────────────────────────
+
+// Drill shim with capture. The real drill_run will emit progress lines
+// to stdout; the dream loop scrapes the signal from that output. The
+// shim emits a deterministic "total=" line so the signal extractor has
+// something concrete to read in smoke tests.
+//
+// TODO(drill-bg-completion): replace with a real call:
+//   use "compiler/drill/drill"
+//   let captured = drill_run_capture(seed, rounds, depth, speculate)
+//   return captured
+fn drill_run_shim_capture(seed: string, rounds: string, depth: string, speculate: string) -> string {
+    let mut parts = []
+    parts.push("[dream-drill-shim] seed=")
+    parts.push(seed)
+    parts.push(" rounds=")
+    parts.push(rounds)
+    parts.push(" depth=")
+    parts.push(depth)
+    parts.push(" speculate=")
+    parts.push(speculate)
+    eprintln(parts.join(""))
+    // Deterministic emission so the signal extractor has a parseable
+    // "total=N" plus one [EXACT marker. Value derived from seed length
+    // so iterations produce shifting numbers — useful for dream-mode
+    // signal pressure.
+    let mut out = []
+    out.push("[EXACT] dream-shim seed_len=")
+    out.push(to_string(len(seed)))
+    out.push("\nround 1 complete total=")
+    out.push(to_string(len(seed)))
+    out.push("\n")
+    return out.join("")
+}
+
+// ─── core loop ────────────────────────────────────────────────────────
+
+pub fn dream_run(
+    seed: string,
+    iterations_flag: string,
+    max_rounds: string,
+    engine_flag: string,
+    preset: string,
+    master_depth: string,
+    speculate: string
+) -> DreamResult {
+    let seed_t = seed.trim()
+    if len(seed_t) == 0 {
+        return DreamResult {
+            iterations_run: 0,
+            iters: [],
+            final_seed: ""
+        }
+    }
+    let cap = dream_max_iters()
+    let mut iters: i64 = 3
+    if len(iterations_flag) > 0 {
+        try { iters = to_int(iterations_flag) } catch e { iters = 3 }
+        if iters < 1 { iters = 1 }
+        if iters > cap { iters = cap }
+    } else {
+        iters = if cap < 3 { cap } else { 3 }
+    }
+
+    let depth = if len(master_depth) > 0 { master_depth } else { "auto" }
+    let spec = if len(speculate) > 0 { speculate } else { "3" }
+
+    let mut ev = []
+    ev.push("HEXA_DREAM {\"event\":\"plan\",\"iterations\":")
+    ev.push(to_string(iters))
+    ev.push(",\"cap\":")
+    ev.push(to_string(cap))
+    ev.push("}")
+    eprintln(ev.join(""))
+
+    let mut current = seed_t
+    let history = []
+    let mut i: i64 = 0
+    while i < iters {
+        i = i + 1
+        let out = drill_run_shim_capture(current, max_rounds, depth, spec)
+        let signal = dream_extract_signal(out)
+        let item = DreamIter {
+            i: i,
+            seed_len: len(current),
+            signal: signal
+        }
+        history.push(item)
+        let mut row = []
+        row.push("HEXA_DREAM {\"event\":\"iter\",\"i\":")
+        row.push(to_string(i))
+        row.push(",\"of\":")
+        row.push(to_string(iters))
+        row.push(",\"seed_len\":")
+        row.push(to_string(len(current)))
+        row.push(",\"signal\":\"")
+        row.push(signal)
+        row.push("\"}")
+        eprintln(row.join(""))
+        if i < iters {
+            current = dream_next_seed(seed_t, i + 1, signal)
+        }
+    }
+    let mut done = []
+    done.push("HEXA_DREAM {\"event\":\"complete\",\"iterations\":")
+    done.push(to_string(iters))
+    done.push("}")
+    eprintln(done.join(""))
+
+    return DreamResult {
+        iterations_run: iters,
+        iters: history,
+        final_seed: current
+    }
+}
