@@ -1,5 +1,7 @@
 # `stdlib/9p.hexa` — Plan 9 9P2000.L message codec + `Attacher` interface
 
+> **status (MVP)**: `applied` (2026-05-14 KST) — `self/stdlib/p9/codec.hexa` ships the wire codec for the core message subset: Tversion/Rversion, Tattach/Rattach, Twalk/Rwalk, Topen/Ropen, Tread/Rread, Twrite/Rwrite, Tclunk/Rclunk, Rerror, plus the Qid struct, LE encode/decode helpers (u8/u16/u32/u64/str/bytes/qid), framing helpers (`p9_wrap_frame`, `p9_parse_header`), and a generic `p9_decode` dispatch. Pure hexa, no C bindings (composes with `hexa_net_read` / `hexa_net_write`). Live verified end-to-end via `/tmp/test_9p` — every encode→decode round-trip PASS including frame-size invariant (Tclunk frame=11B, header.size==11). Wilson 23/23 smoke PASS. **Deferred to v2**: getattr/setattr/readlink/readdir/fsync/rename/link/symlink/mknod/lock/getlock/xattr* (9P2000.L extras), Attacher/Session traits + `serve_attacher` message loop, async dispatch over `Tflush`.
+
 **From:** wilson (downstream) — 2026-05-13. P0 #2 of 5 in the
 `u-root/cpu` port. Companion meta: `stdlib-for-cpu-port.md`. Needs
 `stdlib/net/socket.hexa` (already in hexa stdlib for TCP; UNIX

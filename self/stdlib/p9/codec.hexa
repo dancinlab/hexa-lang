@@ -1,0 +1,448 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/p9/codec.hexa -- Plan 9 9P2000.L wire codec (MVP)
+//
+//  Pure-hexa byte-level encode/decode for the core 9P2000.L message
+//  set. No C bindings -- the codec is a thin layer over byte arrays,
+//  composable with hexa_net_read / hexa_net_write for transport.
+//
+//  Scope (MVP):
+//    Tversion/Rversion, Tattach/Rattach, Twalk/Rwalk, Topen/Ropen,
+//    Tread/Rread, Twrite/Rwrite, Tclunk/Rclunk, Rerror
+//
+//  Deferred to v2: getattr/setattr, readlink, readdir, fsync, rename,
+//  link, symlink, mknod, lock, getlock, xattrwalk, xattrcreate,
+//  remove, stat/wstat (legacy 9P2000 stat). Attacher/Session traits.
+//
+//  Wire format: all ints little-endian. Strings = u16 count + bytes.
+//  Framing: 4-byte size (includes itself) + 1-byte type + 2-byte tag
+//  + body. msize negotiated in Tversion (default 8192 + header).
+//
+//  RFC: ~/core/hexa-lang/incoming/patches/stdlib-9p-codec.md
+//  Atlas L-candidate: "frame.size == total framed bytes including the
+//  size field itself" — single invariant carrying the whole framing.
+
+// ── Message type codes (subset; 9P2000.L numbering) ──────────────
+pub let TVERSION:  int = 100
+pub let RVERSION:  int = 101
+pub let TAUTH:     int = 102
+pub let RAUTH:     int = 103
+pub let TATTACH:   int = 104
+pub let RATTACH:   int = 105
+pub let RERROR:    int = 107   // 9P2000.L: numeric ecode field
+pub let TFLUSH:    int = 108
+pub let RFLUSH:    int = 109
+pub let TWALK:     int = 110
+pub let RWALK:     int = 111
+pub let TOPEN:     int = 112   // 9P2000.L Tlopen
+pub let ROPEN:     int = 113
+pub let TCREATE:   int = 114
+pub let RCREATE:   int = 115
+pub let TREAD:     int = 116
+pub let RREAD:     int = 117
+pub let TWRITE:    int = 118
+pub let RWRITE:    int = 119
+pub let TCLUNK:    int = 120
+pub let RCLUNK:    int = 121
+
+// Special tag / fid
+pub let NOTAG:     int = 65535     // 0xFFFF — used in Tversion
+pub let NOFID:     int = 4294967295 // 0xFFFFFFFF
+pub let MSIZE_DEFAULT: int = 8192 + 24
+
+// QTYPE bits (file kind)
+pub let QTFILE:    int = 0
+pub let QTDIR:     int = 128
+pub let QTAPPEND:  int = 64
+pub let QTEXCL:    int = 32
+pub let QTAUTH:    int = 8
+pub let QTTMP:     int = 4
+pub let QTSYMLINK: int = 2
+
+// ── Qid struct: 13 bytes on the wire (qtype:u8 + ver:u32 + path:u64) ─
+pub struct Qid { qtype: int, version: int, path: int }
+
+// ── LE encode helpers — append to a [int] buffer ──────────────────
+pub fn p9_put_u8(buf: [int], v: int) -> [int] {
+    buf.push(v - (v / 256) * 256)
+    return buf
+}
+pub fn p9_put_u16(buf: [int], v: int) -> [int] {
+    let mut x = v
+    let mut i = 0
+    while i < 2 {
+        buf.push(x - (x / 256) * 256)
+        x = x / 256
+        i = i + 1
+    }
+    return buf
+}
+pub fn p9_put_u32(buf: [int], v: int) -> [int] {
+    let mut x = v
+    let mut i = 0
+    while i < 4 {
+        buf.push(x - (x / 256) * 256)
+        x = x / 256
+        i = i + 1
+    }
+    return buf
+}
+pub fn p9_put_u64(buf: [int], v: int) -> [int] {
+    let mut x = v
+    let mut i = 0
+    while i < 8 {
+        buf.push(x - (x / 256) * 256)
+        x = x / 256
+        i = i + 1
+    }
+    return buf
+}
+
+// 9P string: u16 length + raw bytes. Hexa strings encode as ASCII/UTF-8.
+pub fn p9_put_str(buf: [int], s: string) -> [int] {
+    let n = len(s)
+    let mut out = p9_put_u16(buf, n)
+    let mut i = 0
+    while i < n {
+        out.push(char_code(s, i))
+        i = i + 1
+    }
+    return out
+}
+
+// Bytes blob: just raw, NO length prefix (caller writes count separately).
+pub fn p9_put_bytes(buf: [int], bs: [int]) -> [int] {
+    let n = len(bs)
+    let mut i = 0
+    while i < n {
+        buf.push(bs[i])
+        i = i + 1
+    }
+    return buf
+}
+
+pub fn p9_put_qid(buf: [int], q: Qid) -> [int] {
+    let mut b = p9_put_u8(buf, q.qtype)
+    b = p9_put_u32(b, q.version)
+    return p9_put_u64(b, q.path)
+}
+
+// ── LE decode helpers — return {value, new_offset} pairs ──────────
+// Out-of-bounds returns offset = -1 + value = 0.
+pub fn p9_get_u8(buf: [int], off: int) -> [int] {
+    if off < 0 || off + 1 > len(buf) { return [0, -1] }
+    return [buf[off], off + 1]
+}
+pub fn p9_get_u16(buf: [int], off: int) -> [int] {
+    if off < 0 || off + 2 > len(buf) { return [0, -1] }
+    let v = buf[off] + buf[off + 1] * 256
+    return [v, off + 2]
+}
+pub fn p9_get_u32(buf: [int], off: int) -> [int] {
+    if off < 0 || off + 4 > len(buf) { return [0, -1] }
+    let mut v = 0
+    let mut i = 3
+    while i > -1 { v = v * 256 + buf[off + i] ; i = i - 1 }
+    return [v, off + 4]
+}
+pub fn p9_get_u64(buf: [int], off: int) -> [int] {
+    if off < 0 || off + 8 > len(buf) { return [0, -1] }
+    let mut v = 0
+    let mut i = 7
+    while i > -1 { v = v * 256 + buf[off + i] ; i = i - 1 }
+    return [v, off + 8]
+}
+
+// Get 9P-style string. Returns ["str_value_as_string", new_offset].
+// Encodes the parsed bytes by chr() concat — restricts to single-byte
+// content (ASCII-safe). For now p9 paths/names are ASCII; UTF-8 stays
+// as raw bytes if the caller round-trips via p9_get_bytes.
+pub fn p9_get_str(buf: [int], off: int) -> any {
+    let h = p9_get_u16(buf, off)
+    if h[1] < 0 { return ["", -1] }
+    let n = h[0]
+    let mut o = h[1]
+    if o + n > len(buf) { return ["", -1] }
+    let mut s = ""
+    let mut i = 0
+    while i < n { s = s + chr(buf[o + i]) ; i = i + 1 }
+    return [s, o + n]
+}
+
+// Get raw bytes — caller has already parsed the count. Returns
+// [out_bytes_array, new_offset].
+pub fn p9_get_bytes(buf: [int], off: int, count: int) -> any {
+    if off < 0 || off + count > len(buf) { return [[], -1] }
+    let mut out: [int] = []
+    let mut i = 0
+    while i < count { out.push(buf[off + i]) ; i = i + 1 }
+    return [out, off + count]
+}
+
+pub fn p9_get_qid(buf: [int], off: int) -> any {
+    let a = p9_get_u8(buf, off)
+    if a[1] < 0 { return [Qid { qtype: 0, version: 0, path: 0 }, -1] }
+    let b = p9_get_u32(buf, a[1])
+    if b[1] < 0 { return [Qid { qtype: 0, version: 0, path: 0 }, -1] }
+    let c = p9_get_u64(buf, b[1])
+    if c[1] < 0 { return [Qid { qtype: 0, version: 0, path: 0 }, -1] }
+    return [Qid { qtype: a[0], version: b[0], path: c[0] }, c[1]]
+}
+
+// ── Frame helpers ──────────────────────────────────────────────────
+// Every encoded message starts with `size:u32, mtype:u8, tag:u16` = 7B.
+// We build the body first, then prepend the header with size = 7 + len(body).
+fn p9_wrap_frame(mtype: int, tag: int, body: [int]) -> [int] {
+    let total = 7 + len(body)
+    let mut buf: [int] = []
+    buf = p9_put_u32(buf, total)
+    buf = p9_put_u8(buf,  mtype)
+    buf = p9_put_u16(buf, tag)
+    buf = p9_put_bytes(buf, body)
+    return buf
+}
+
+// Parse the 7-byte header. Returns {size, mtype, tag, body_offset} as
+// a map. On under-run returns map with size = 0.
+pub fn p9_parse_header(buf: [int]) -> any {
+    if len(buf) < 7 { return #{ "size": 0, "mtype": 0, "tag": 0, "body_offset": -1 } }
+    let s = p9_get_u32(buf, 0)
+    let t = p9_get_u8(buf, s[1])
+    let g = p9_get_u16(buf, t[1])
+    return #{ "size": s[0], "mtype": t[0], "tag": g[0], "body_offset": g[1] }
+}
+
+// ── Message encoders ──────────────────────────────────────────────
+// Each returns a [int] wire buffer.
+
+pub fn p9_enc_tversion(tag: int, msize: int, version: string) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, msize)
+    body = p9_put_str(body, version)
+    return p9_wrap_frame(TVERSION, tag, body)
+}
+pub fn p9_enc_rversion(tag: int, msize: int, version: string) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, msize)
+    body = p9_put_str(body, version)
+    return p9_wrap_frame(RVERSION, tag, body)
+}
+
+pub fn p9_enc_tattach(tag: int, fid: int, afid: int, uname: string, aname: string, uid: int) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, fid)
+    body = p9_put_u32(body, afid)
+    body = p9_put_str(body, uname)
+    body = p9_put_str(body, aname)
+    body = p9_put_u32(body, uid)
+    return p9_wrap_frame(TATTACH, tag, body)
+}
+pub fn p9_enc_rattach(tag: int, q: Qid) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_qid(body, q)
+    return p9_wrap_frame(RATTACH, tag, body)
+}
+
+pub fn p9_enc_twalk(tag: int, fid: int, newfid: int, wnames: [string]) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, fid)
+    body = p9_put_u32(body, newfid)
+    body = p9_put_u16(body, len(wnames))
+    let mut i = 0
+    while i < len(wnames) { body = p9_put_str(body, wnames[i]) ; i = i + 1 }
+    return p9_wrap_frame(TWALK, tag, body)
+}
+pub fn p9_enc_rwalk(tag: int, wqids: [Qid]) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u16(body, len(wqids))
+    let mut i = 0
+    while i < len(wqids) { body = p9_put_qid(body, wqids[i]) ; i = i + 1 }
+    return p9_wrap_frame(RWALK, tag, body)
+}
+
+pub fn p9_enc_topen(tag: int, fid: int, mode: int) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, fid)
+    body = p9_put_u32(body, mode)
+    return p9_wrap_frame(TOPEN, tag, body)
+}
+pub fn p9_enc_ropen(tag: int, q: Qid, iounit: int) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_qid(body, q)
+    body = p9_put_u32(body, iounit)
+    return p9_wrap_frame(ROPEN, tag, body)
+}
+
+pub fn p9_enc_tread(tag: int, fid: int, offset: int, count: int) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, fid)
+    body = p9_put_u64(body, offset)
+    body = p9_put_u32(body, count)
+    return p9_wrap_frame(TREAD, tag, body)
+}
+pub fn p9_enc_rread(tag: int, data: [int]) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, len(data))
+    body = p9_put_bytes(body, data)
+    return p9_wrap_frame(RREAD, tag, body)
+}
+
+pub fn p9_enc_twrite(tag: int, fid: int, offset: int, data: [int]) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, fid)
+    body = p9_put_u64(body, offset)
+    body = p9_put_u32(body, len(data))
+    body = p9_put_bytes(body, data)
+    return p9_wrap_frame(TWRITE, tag, body)
+}
+pub fn p9_enc_rwrite(tag: int, count: int) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, count)
+    return p9_wrap_frame(RWRITE, tag, body)
+}
+
+pub fn p9_enc_tclunk(tag: int, fid: int) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, fid)
+    return p9_wrap_frame(TCLUNK, tag, body)
+}
+pub fn p9_enc_rclunk(tag: int) -> [int] {
+    return p9_wrap_frame(RCLUNK, tag, [])
+}
+
+pub fn p9_enc_rerror(tag: int, ecode: int) -> [int] {
+    let mut body: [int] = []
+    body = p9_put_u32(body, ecode)
+    return p9_wrap_frame(RERROR, tag, body)
+}
+
+// ── Message decoders ──────────────────────────────────────────────
+// Each takes the frame buf + body_offset (from p9_parse_header) and
+// returns a map keyed by the message's field names. On under-run any
+// field that couldn't be parsed is set to a sentinel (0 / "" / void).
+
+pub fn p9_dec_tversion(buf: [int], off: int) -> any {
+    let a = p9_get_u32(buf, off)
+    let b = p9_get_str(buf, a[1])
+    return #{ "msize": a[0], "version": b[0] }
+}
+pub fn p9_dec_rversion(buf: [int], off: int) -> any {
+    return p9_dec_tversion(buf, off)   // same shape
+}
+
+pub fn p9_dec_tattach(buf: [int], off: int) -> any {
+    let a = p9_get_u32(buf, off)
+    let b = p9_get_u32(buf, a[1])
+    let c = p9_get_str(buf, b[1])
+    let d = p9_get_str(buf, c[1])
+    let e = p9_get_u32(buf, d[1])
+    return #{ "fid": a[0], "afid": b[0], "uname": c[0], "aname": d[0], "uid": e[0] }
+}
+pub fn p9_dec_rattach(buf: [int], off: int) -> any {
+    let q = p9_get_qid(buf, off)
+    return #{ "qid": q[0] }
+}
+
+pub fn p9_dec_twalk(buf: [int], off: int) -> any {
+    let a = p9_get_u32(buf, off)
+    let b = p9_get_u32(buf, a[1])
+    let n = p9_get_u16(buf, b[1])
+    let mut o = n[1]
+    let mut wnames: [string] = []
+    let mut i = 0
+    while i < n[0] {
+        let s = p9_get_str(buf, o)
+        wnames.push(s[0])
+        o = s[1]
+        i = i + 1
+    }
+    return #{ "fid": a[0], "newfid": b[0], "wnames": wnames }
+}
+pub fn p9_dec_rwalk(buf: [int], off: int) -> any {
+    let n = p9_get_u16(buf, off)
+    let mut o = n[1]
+    let mut qids: [Qid] = []
+    let mut i = 0
+    while i < n[0] {
+        let q = p9_get_qid(buf, o)
+        qids.push(q[0])
+        o = q[1]
+        i = i + 1
+    }
+    return #{ "wqids": qids }
+}
+
+pub fn p9_dec_topen(buf: [int], off: int) -> any {
+    let a = p9_get_u32(buf, off)
+    let b = p9_get_u32(buf, a[1])
+    return #{ "fid": a[0], "mode": b[0] }
+}
+pub fn p9_dec_ropen(buf: [int], off: int) -> any {
+    let q = p9_get_qid(buf, off)
+    let u = p9_get_u32(buf, q[1])
+    return #{ "qid": q[0], "iounit": u[0] }
+}
+
+pub fn p9_dec_tread(buf: [int], off: int) -> any {
+    let a = p9_get_u32(buf, off)
+    let b = p9_get_u64(buf, a[1])
+    let c = p9_get_u32(buf, b[1])
+    return #{ "fid": a[0], "offset": b[0], "count": c[0] }
+}
+pub fn p9_dec_rread(buf: [int], off: int) -> any {
+    let n = p9_get_u32(buf, off)
+    let d = p9_get_bytes(buf, n[1], n[0])
+    return #{ "data": d[0], "count": n[0] }
+}
+
+pub fn p9_dec_twrite(buf: [int], off: int) -> any {
+    let a = p9_get_u32(buf, off)
+    let b = p9_get_u64(buf, a[1])
+    let n = p9_get_u32(buf, b[1])
+    let d = p9_get_bytes(buf, n[1], n[0])
+    return #{ "fid": a[0], "offset": b[0], "count": n[0], "data": d[0] }
+}
+pub fn p9_dec_rwrite(buf: [int], off: int) -> any {
+    let n = p9_get_u32(buf, off)
+    return #{ "count": n[0] }
+}
+
+pub fn p9_dec_tclunk(buf: [int], off: int) -> any {
+    let a = p9_get_u32(buf, off)
+    return #{ "fid": a[0] }
+}
+pub fn p9_dec_rclunk(buf: [int], off: int) -> any { return #{} }
+
+pub fn p9_dec_rerror(buf: [int], off: int) -> any {
+    let n = p9_get_u32(buf, off)
+    return #{ "ecode": n[0] }
+}
+
+// ── Generic dispatch — parse header + body to a tagged map ───────
+// Returns { type:"Tversion"|..., tag, ... fields } or { type:"unknown",
+// mtype:N }. Use this for replay tests / introspection; the per-type
+// decoders are faster for hot paths.
+pub fn p9_decode(buf: [int]) -> any {
+    let h = p9_parse_header(buf)
+    let mtype = h["mtype"]
+    let off = h["body_offset"]
+    if off < 0 { return #{ "type": "malformed", "size": 0 } }
+    let mut out = #{ "tag": h["tag"], "size": h["size"] }
+    if mtype == TVERSION  { out["type"] = "Tversion" ; let d = p9_dec_tversion(buf, off); out["msize"] = d["msize"]; out["version"] = d["version"]; return out }
+    if mtype == RVERSION  { out["type"] = "Rversion" ; let d = p9_dec_rversion(buf, off); out["msize"] = d["msize"]; out["version"] = d["version"]; return out }
+    if mtype == TATTACH   { out["type"] = "Tattach"  ; let d = p9_dec_tattach(buf, off);  out["fid"] = d["fid"]; out["afid"] = d["afid"]; out["uname"] = d["uname"]; out["aname"] = d["aname"]; out["uid"] = d["uid"]; return out }
+    if mtype == RATTACH   { out["type"] = "Rattach"  ; let d = p9_dec_rattach(buf, off);  out["qid"] = d["qid"]; return out }
+    if mtype == TWALK     { out["type"] = "Twalk"    ; let d = p9_dec_twalk(buf, off);    out["fid"] = d["fid"]; out["newfid"] = d["newfid"]; out["wnames"] = d["wnames"]; return out }
+    if mtype == RWALK     { out["type"] = "Rwalk"    ; let d = p9_dec_rwalk(buf, off);    out["wqids"] = d["wqids"]; return out }
+    if mtype == TOPEN     { out["type"] = "Topen"    ; let d = p9_dec_topen(buf, off);    out["fid"] = d["fid"]; out["mode"] = d["mode"]; return out }
+    if mtype == ROPEN     { out["type"] = "Ropen"    ; let d = p9_dec_ropen(buf, off);    out["qid"] = d["qid"]; out["iounit"] = d["iounit"]; return out }
+    if mtype == TREAD     { out["type"] = "Tread"    ; let d = p9_dec_tread(buf, off);    out["fid"] = d["fid"]; out["offset"] = d["offset"]; out["count"] = d["count"]; return out }
+    if mtype == RREAD     { out["type"] = "Rread"    ; let d = p9_dec_rread(buf, off);    out["count"] = d["count"]; out["data"] = d["data"]; return out }
+    if mtype == TWRITE    { out["type"] = "Twrite"   ; let d = p9_dec_twrite(buf, off);   out["fid"] = d["fid"]; out["offset"] = d["offset"]; out["count"] = d["count"]; out["data"] = d["data"]; return out }
+    if mtype == RWRITE    { out["type"] = "Rwrite"   ; let d = p9_dec_rwrite(buf, off);   out["count"] = d["count"]; return out }
+    if mtype == TCLUNK    { out["type"] = "Tclunk"   ; let d = p9_dec_tclunk(buf, off);   out["fid"] = d["fid"]; return out }
+    if mtype == RCLUNK    { out["type"] = "Rclunk"   ; return out }
+    if mtype == RERROR    { out["type"] = "Rerror"   ; let d = p9_dec_rerror(buf, off);   out["ecode"] = d["ecode"]; return out }
+    out["type"] = "unknown"
+    out["mtype"] = mtype
+    return out
+}
