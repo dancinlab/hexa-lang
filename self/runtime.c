@@ -7580,12 +7580,18 @@ HexaVal hexa_from_char_code(HexaVal n) {
 // bytes safely representable (strlen()-using paths will truncate at the
 // first NUL, but HX_STRLEN-aware paths see the full length).
 //
-// Phase 1 policy per RFC 030: out-of-range values (b<0 or b>255) and
-// embedded NUL bytes both produce the empty string (silent error). This
-// matches the runtime's existing "soft-fail with empty result" idiom
-// (e.g. safetensors_read returning {} on parse error). A future Phase 2
-// could route to hexa_throw once a consistent error policy is decided
-// across the safetensors / json / parse builtins.
+// Phase 1 policy per RFC 030: out-of-range values (b<0 or b>255) produce the
+// empty string (silent error) — the runtime's existing "soft-fail with empty
+// result" idiom (e.g. safetensors_read returning {} on parse error).
+//
+// Phase 2 (2026-05-13, filed by wilson — incoming/patches/wilson-bytes-to-str-
+// raw-allow-nul.md): allow embedded NUL (0x00) bytes. hexa_strbuf_alloc
+// prepends a length header so HX_STRLEN is O(1) and reads the cached length;
+// HX_STRLEN-aware paths (base64_encode, json builders, etc.) handle NULs
+// natively. strlen()-using paths still truncate at the first NUL, but the
+// burden is now on those callers — the producer is fully NUL-clean. wilson's
+// tool-image::image_read (multimodal vision input) needs this for PNG IHDR
+// length fields which always have leading NULs.
 HexaVal hexa_bytes_to_str_raw(HexaVal arr) {
     if (HX_TAG(arr) != TAG_ARRAY) return hexa_str("");
     int64_t n = (int64_t)HX_ARR_LEN(arr);
@@ -7600,14 +7606,13 @@ HexaVal hexa_bytes_to_str_raw(HexaVal arr) {
             // Out-of-range → return empty per Phase 1 policy.
             return hexa_str("");
         }
-        if (b == 0) {
-            // Phase 1: forbid mid-NUL (length-aware paths could handle
-            // it but printf/concat surfaces still rely on C strlen).
-            return hexa_str("");
-        }
+        // Phase 2: embedded NUL is allowed. hexa_strbuf_alloc's length header
+        // makes the resulting string still well-formed under HX_STRLEN.
         buf[i] = (char)(b & 0xFF);
     }
-    // hexa_strbuf_alloc pre-NUL-terminates buf[n] so this is a valid C str.
+    // hexa_strbuf_alloc pre-NUL-terminates buf[n] so this is a valid C str
+    // (truncated at the first embedded NUL when read via strlen, but the
+    // length header — read by HX_STRLEN — sees the full n bytes).
     return (HexaVal){.tag=TAG_STR, .s=buf};
 }
 
@@ -7857,9 +7862,27 @@ HexaVal hexa_farr_int_fill_from_array(HexaVal h_v, HexaVal arr_v) {
     if (id < 0 || id >= _hx_iarr_count) return hexa_int(-1);
     HexaIarrEntry* e = &_hx_iarr_table[id];
     if (!e->buf) return hexa_int(-1);
-    if (!HX_IS_ARRAY(arr_v)) return hexa_int(-1);
-    int64_t  n     = HX_ARR_LEN(arr_v);
-    HexaVal* items = HX_ARR_ITEMS(arr_v);
+    // Unwrap interp-side Val struct → real TAG_ARRAY HexaVal.
+    // Under `hexa.real run`, the hexa-side `[int]` literal reaches the
+    // kernel as TAG_VALSTRUCT with tag_i == TAG_ARRAY (5) and int_val ==
+    // index into the global `array_store` (see hexa_full.hexa val_array,
+    // ~line 18272). Mirrors the T33 Fix 4 pattern at runtime.c:3530.
+    // Without this, HX_IS_ARRAY(arr_v) is false → silent -1 return.
+    // Follow-up to commit b8acb90f (RFC 036 landing); fixes T5a/b/c in
+    // chemistry_vqe/module/_rfc036_smoke.hexa.
+    HexaVal real_arr = arr_v;
+    if (HX_IS_VALSTRUCT(arr_v) && HX_VS(arr_v)
+        && HX_VSF(arr_v, tag_i) == HEXA_INTERP_TAG_ARRAY
+        && &array_store != 0
+        && HX_IS_ARRAY(array_store) && HX_ARR_ITEMS(array_store)) {
+        int64_t idx = HX_VSF(arr_v, int_val);
+        if (idx >= 0 && idx < (int64_t)HX_ARR_LEN(array_store)) {
+            real_arr = HX_ARR_ITEMS(array_store)[idx];
+        }
+    }
+    if (!HX_IS_ARRAY(real_arr)) return hexa_int(-1);
+    int64_t  n     = HX_ARR_LEN(real_arr);
+    HexaVal* items = HX_ARR_ITEMS(real_arr);
     int64_t  cap   = e->len;
     int64_t  m     = (n < cap) ? n : cap;
     for (int64_t k = 0; k < m; k++) {
