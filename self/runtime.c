@@ -6620,16 +6620,35 @@ static HexaVal farr_simplex_centroid;
 static HexaVal farr_simplex_get;
 static HexaVal farr_simplex_shrink;
 static HexaVal farr_simplex_sort;
-// RFC 039 — static carriers (registered via fn_shim).
-static HexaVal ham_pack;
+// RFC 039 — static carriers for 1-arg builtins (codegen emits hexa_call1).
 static HexaVal ham_free;
-static HexaVal ansatz_pack;
 static HexaVal ansatz_free;
-static HexaVal farr_parameter_shift_grad;
-// RFC 038 — static carrier (registered via fn_shim).
-static HexaVal farr_uccsd_apply;
-// RFC 037 — static carrier (registered via fn_shim, arity 9).
+// RFC 037 — static carrier (codegen emits hexa_call9 fallback if no special route).
 static HexaVal farr_pauli_expectation_batch;
+// RFC 038/039 — static inline wrappers for 5/7/8-arg builtins (codegen emits
+// direct C call past the 4-arg hexa_callN ceiling). Same pattern as
+// farr_pauli_exp_inplace / farr_vec_reflect / etc.
+static inline HexaVal farr_uccsd_apply(HexaVal re_v, HexaVal im_v, HexaVal theta_v,
+                                       HexaVal ansatz_v, HexaVal nq_v) {
+    return hexa_farr_uccsd_apply(re_v, im_v, theta_v, ansatz_v, nq_v);
+}
+static inline HexaVal ham_pack(HexaVal flip_v, HexaVal z_v, HexaVal y_v,
+                               HexaVal cy_v, HexaVal coef_v, HexaVal shift_v,
+                               HexaVal nq_v) {
+    return hexa_ham_pack(flip_v, z_v, y_v, cy_v, coef_v, shift_v, nq_v);
+}
+static inline HexaVal ansatz_pack(HexaVal param_idx_v, HexaVal coef_v, HexaVal flip_v,
+                                  HexaVal z_v, HexaVal y_v, HexaVal cy_v,
+                                  HexaVal hf_v, HexaVal nq_v) {
+    return hexa_ansatz_pack(param_idx_v, coef_v, flip_v, z_v, y_v, cy_v, hf_v, nq_v);
+}
+static inline HexaVal farr_parameter_shift_grad(HexaVal re_v, HexaVal im_v,
+                                                HexaVal theta_v, HexaVal grad_v,
+                                                HexaVal n_p_v, HexaVal ham_v,
+                                                HexaVal ans_v, HexaVal nq_v) {
+    return hexa_farr_parameter_shift_grad(re_v, im_v, theta_v, grad_v,
+                                          n_p_v, ham_v, ans_v, nq_v);
+}
 static inline HexaVal farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
                                              HexaVal alpha_v,
                                              HexaVal flip_v, HexaVal zmask_v,
@@ -10880,17 +10899,18 @@ static void _hexa_init_fn_shims(void) {
     farr_simplex_get                = hexa_fn_new((void*)hexa_farr_simplex_get,                4);
     farr_simplex_shrink             = hexa_fn_new((void*)hexa_farr_simplex_shrink,             3);
     farr_simplex_sort               = hexa_fn_new((void*)hexa_farr_simplex_sort,               4);
-    // RFC 039 (2026-05-13): parameter-shift gradient kernel + bundle ctors.
-    ham_pack                        = hexa_fn_new((void*)hexa_ham_pack,                        7);
+    // RFC 039 (2026-05-13): 1-arg ham_free / ansatz_free use hexa_call1 dispatch.
+    // 7-arg ham_pack / 8-arg ansatz_pack / 8-arg farr_parameter_shift_grad are
+    // emitted as direct C calls via static-inline wrappers above (past the
+    // 4-arg hexa_callN ceiling — same pattern as farr_pauli_exp_inplace).
     ham_free                        = hexa_fn_new((void*)hexa_ham_free,                        1);
-    ansatz_pack                     = hexa_fn_new((void*)hexa_ansatz_pack,                     8);
     ansatz_free                     = hexa_fn_new((void*)hexa_ansatz_free,                     1);
-    farr_parameter_shift_grad       = hexa_fn_new((void*)hexa_farr_parameter_shift_grad,       8);
-    // RFC 038 (2026-05-13): farr_uccsd_apply — UCCSD ansatz replay in one C call.
-    farr_uccsd_apply                = hexa_fn_new((void*)hexa_farr_uccsd_apply,                5);
-    // RFC 037 (2026-05-13): whole-Hamiltonian Pauli-expectation batch
-    // kernel — single C call replaces N×farr_pauli_expectation loop.
+    // RFC 037 (2026-05-13): batch kernel routes via codegen_c2.hexa special
+    // 9-arg branch to hexa_farr_pauli_expectation_batch; carrier kept for
+    // function-as-value uses.
     farr_pauli_expectation_batch    = hexa_fn_new((void*)hexa_farr_pauli_expectation_batch,    9);
+    // RFC 038 (2026-05-13): farr_uccsd_apply uses static-inline wrapper above
+    // (5-arg, past hexa_callN ceiling).
     bit_or     = hexa_fn_new((void*)_hx_bit_or,           2);
     // bt73 free-fn shims (timestamp, base64_encode, base64_decode)
     timestamp     = hexa_fn_new((void*)_bt73_timestamp_w,     0);

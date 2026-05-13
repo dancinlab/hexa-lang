@@ -10810,6 +10810,57 @@ fn call_builtin(name, args) {
         if len(args) > 3 { return val_int(farr_simplex_sort(args[0], args[1], args[2], args[3])) }
         else { return val_int(0 - 1) }
     }
+    // RFC 036 (2026-05-13): farr_int_array — packed int64_t* handle for
+    // [int] mask tables (ham_flip/ham_z/etc.). Mirrors farr_zeros/get/set/len/free
+    // shape, returns int handle. 8 builtins total.
+    if name == "farr_int_zeros" { if len(args) > 0 { return val_int(farr_int_zeros(args[0])) }                                else { return val_int(0) } }
+    if name == "farr_int_get"   { if len(args) > 1 { return val_int(farr_int_get(args[0], args[1])) }                        else { return val_int(0) } }
+    if name == "farr_int_set"   { if len(args) > 2 { let _ = farr_int_set(args[0], args[1], args[2]); return args[0] }       else { return val_void() } }
+    if name == "farr_int_len"   { if len(args) > 0 { return val_int(farr_int_len(args[0])) }                                 else { return val_int(0) } }
+    if name == "farr_int_free"  { if len(args) > 0 { let _ = farr_int_free(args[0]); return val_void() }                     else { return val_void() } }
+    if name == "farr_int_fill_from_array" { if len(args) > 1 { return val_int(farr_int_fill_from_array(args[0], args[1])) } else { return val_int(0) } }
+    if name == "farr_int_copy"  { if len(args) > 0 { return val_int(farr_int_copy(args[0])) }                                else { return val_int(0) } }
+    if name == "farr_int_sum"   { if len(args) > 0 { return val_int(farr_int_sum(args[0])) }                                 else { return val_int(0) } }
+    // RFC 037 (2026-05-13): batch Pauli expectation — single C call computes
+    // <ψ|P_k|ψ> for all N terms given farr_int handles for (flip,z,y,cy) descriptors.
+    if name == "farr_pauli_expectation_batch" {
+        // (re_h, im_h, flip_int_h, z_int_h, y_int_h, cy_int_h, n_terms, out_h, nq) → 0/-1
+        if len(args) > 8 { return val_int(farr_pauli_expectation_batch(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8])) }
+        else { return val_int(0 - 1) }
+    }
+    // RFC 038 (2026-05-13): UCCSD ansatz replay in one C call. Caller pre-resets
+    // re/im to |HF⟩ before this call.
+    if name == "farr_uccsd_apply" {
+        // (re_h, im_h, theta_h, ansatz_pack_h, n_q) → 0/-1
+        if len(args) > 4 { return val_int(farr_uccsd_apply(args[0], args[1], args[2], args[3], args[4])) }
+        else { return val_int(0 - 1) }
+    }
+    // RFC 039 (2026-05-13): parameter-shift gradient kernel + bundle constructors.
+    // ham_pack / ansatz_pack cache Hamiltonian / UCCSD-ansatz descriptors in C
+    // so the kernel can compute ∂E/∂θ_k for all k with zero hexa-side boxing.
+    if name == "ham_pack" {
+        // (flip_v, z_v, y_v, cy_v, coef_v, shift_v, nq_v) → int handle
+        if len(args) > 6 { return val_int(ham_pack(args[0], args[1], args[2], args[3], args[4], args[5], args[6])) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "ham_free" {
+        if len(args) > 0 { let _ = ham_free(args[0]); return val_int(0) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "ansatz_pack" {
+        // (param_idx, coef, flip, z, y, cy, hf, nq) → int handle
+        if len(args) > 7 { return val_int(ansatz_pack(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7])) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "ansatz_free" {
+        if len(args) > 0 { let _ = ansatz_free(args[0]); return val_int(0) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "farr_parameter_shift_grad" {
+        // (re_h, im_h, theta_h, grad_h, n_p, ham_h, ans_h, nq) → 0/-1
+        if len(args) > 7 { return val_int(farr_parameter_shift_grad(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7])) }
+        else { return val_int(0 - 1) }
+    }
     // ── End fast-path ────────────────────────────────────────────────
 
     if name == "println" {
