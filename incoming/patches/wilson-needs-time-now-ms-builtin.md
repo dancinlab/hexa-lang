@@ -54,6 +54,25 @@ Either way, the result is: hexa user code can call `time_now_ms()` (or
 Wilson currently uses `timestamp()` for the spinner tick. 1 Hz cycle = visibly
 animated but slower than Claude Code's 20 fps. Acceptable for v1.
 
+## Status — APPLIED (2026-05-13)
+
+Fix landed in `self/codegen_c2.hexa` ~ line 3937 — extended the existing
+builtin-name intercept that already maps `timestamp` / `now` / `time_now` to
+`hexa_timestamp()`. New entries:
+
+```hexa
+if name == "timestamp" || name == "now" || name == "time_now" || name == "__builtin_time_now" { return "hexa_timestamp()" }
+if name == "time_now_ms" || name == "now_ms" || name == "timestamp_ms" || name == "__builtin_time_now_ms" { return "hexa_time_ms()" }
+```
+
+So user-side `time_now_ms()`, `now_ms()`, `timestamp_ms()`, AND the wrapper
+in `self/std_time.hexa` (which calls `__builtin_time_now_ms`) all resolve
+to the existing `hexa_time_ms` C function. No runtime.c change needed.
+
+**Requires hexa_v2 rebuild** to take effect (codegen change). Once deployed,
+wilson can switch the spinner from 1 Hz `timestamp()/secs` to 5 Hz
+`time_now_ms()/200`-cell — one-line change in wilson harness-cli.
+
 ## Wilson commit that hit this
 
 `wilson f6...` (sprint 3) — tried to import `self/std_time`, compile failed

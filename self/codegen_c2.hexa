@@ -3575,6 +3575,20 @@ fn gen2_expr(node) {
             if name == "exec_stream_kill" {
                 return "hexa_exec_stream_kill(" + gen2_expr(node.args[0]) + ")"
             }
+            // bidi-stdio (2026-05-13, wilson MCP) — runtime.c has matching impls
+            // (hexa_exec_stream_open / _write / _close_stdin). Same shape as
+            // _kill above: explicit emit so user-side `exec_stream_open(cmd)` etc.
+            // resolves without hexa_call1 indirection. Filed at
+            // incoming/patches/wilson-mcp-needs-bidi-stdio.md.
+            if name == "exec_stream_open" {
+                return "hexa_exec_stream_open(" + gen2_expr(node.args[0]) + ")"
+            }
+            if name == "exec_stream_write" {
+                return "hexa_exec_stream_write(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
+            }
+            if name == "exec_stream_close_stdin" {
+                return "hexa_exec_stream_close_stdin(" + gen2_expr(node.args[0]) + ")"
+            }
             if name == "exec_capture" {
                 return "hexa_exec_capture(" + gen2_expr(node.args[0]) + ")"
             }
@@ -3934,10 +3948,12 @@ fn gen2_expr(node) {
                 // `timestamp` (hexa_full.hexa:11366 `timestamp || now`). Mirror
                 // the dispatch in AOT so removing the runtime.c `#define now
                 // timestamp` shim is safe.
-                if name == "timestamp" || name == "now" || name == "time_now" { return "hexa_timestamp()" }
+                if name == "timestamp" || name == "now" || name == "time_now" || name == "__builtin_time_now" { return "hexa_timestamp()" }
                 // Wilson 2026-05-13 — expose hexa_time_ms (monotonic ms wall clock)
                 // to user-side hexa. Filed at incoming/patches/wilson-needs-time-now-ms-builtin.md.
-                if name == "time_now_ms" || name == "now_ms" || name == "timestamp_ms" { return "hexa_time_ms()" }
+                // Also intercept `__builtin_time_now_ms` so self/std_time.hexa's wrapper
+                // body resolves (it expects the unmapped __builtin_ name).
+                if name == "time_now_ms" || name == "now_ms" || name == "timestamp_ms" || name == "__builtin_time_now_ms" { return "hexa_time_ms()" }
                 if name == "input"     { return "hexa_input(hexa_str(\"\"))" }
                 if name == "random"    { return "hexa_random()" }
                 // P7-6 zero-arg time/IO primitives (runtime.c)

@@ -73,6 +73,39 @@ Instead of two pipes (stdin + stdout), use a `socketpair(AF_UNIX, SOCK_STREAM,
 side, simpler bookkeeping, same JSON-RPC framing. Some MCP servers expect
 distinct stdin/stdout though (interactive tools), so two-pipe is more compatible.
 
+## Status — APPLIED (2026-05-13)
+
+Three new C primitives in `self/runtime.c` (additive — doesn't touch existing
+`exec_stream_async/poll/close/kill`):
+
+- `hexa_exec_stream_open(cmd)` — like async but bidi; forks /bin/sh -c, sets
+  up TWO pipes (parent has pipe_in[1] for child stdin write + pipe_out[0]
+  for child stdout read). Returns same int handle as the read-only async.
+- `hexa_exec_stream_write(handle, data)` — write to child stdin. Handles
+  short writes (loop until full data sent or error). Returns bytes written
+  or -1.
+- `hexa_exec_stream_close_stdin(handle)` — close write end (signal EOF to
+  child). Used after sending final JSON-RPC `shutdown` request, so child
+  can exit cleanly.
+
+HexaStreamSlot extended with `int stdin_fd` (-1 = read-only slot;
+exec_stream_async path inits it to -1; bidi `_open` path fills it).
+`hexa_exec_stream_close` closes `stdin_fd` too if still open.
+
+Codegen mappings in `self/codegen_c2.hexa` ~ line 3577 — `exec_stream_open`,
+`exec_stream_write`, `exec_stream_close_stdin` emit direct calls to the
+new `hexa_*` functions (same pattern as the existing `exec_stream_kill`).
+
+**Requires hexa_v2 rebuild** to take effect (codegen change). Once deployed,
+wilson's mcp plugin can fill its scaffold:
+1. Open server with `exec_stream_open(cmd)` at activate or on first call
+2. Write JSON-RPC requests via `exec_stream_write(h, json + "\n")`
+3. Poll responses via existing `exec_stream_poll(h)`
+4. On shutdown: `exec_stream_close_stdin(h)` then `exec_stream_close(h)`
+
+No socketpair-based alternative needed — two-pipe variant matches MCP servers
+that expect distinct stdin/stdout.
+
 ## Workaround in wilson (rejected)
 
 We could ship a shim shell script that does the bidirectional plumbing:

@@ -10455,6 +10455,13 @@ typedef struct {
        exec_stream_kill on that slot is best-effort fclose only & returns
        -1 (raw 91 honest C3 - prompt-kill needs the fork path). */
     pid_t pid;
+    /* v1.4 (2026-05-13, wilson MCP bidi): write-end fd of child stdin pipe
+       when slot was opened via hexa_exec_stream_open (the bidi variant).
+       -1 = read-only slot (exec_stream_async path; no stdin pipe). Used
+       by hexa_exec_stream_write to send data to the child's stdin and
+       hexa_exec_stream_close_stdin to signal EOF on the child side.
+       Filed at incoming/patches/wilson-mcp-needs-bidi-stdio.md. */
+    int   stdin_fd;
 } HexaStreamSlot;
 static HexaStreamSlot _hexa_stream_slots[HEXA_STREAM_SLOT_COUNT];
 static int _hexa_stream_slots_init = 0;
@@ -10470,6 +10477,7 @@ static void _hexa_stream_slots_ensure_init(void) {
         _hexa_stream_slots[i].eof = 0;
         _hexa_stream_slots[i].in_use = 0;
         _hexa_stream_slots[i].pid = (pid_t)-1;
+        _hexa_stream_slots[i].stdin_fd = -1;
     }
     _hexa_stream_slots_init = 1;
 }
@@ -10538,6 +10546,7 @@ HexaVal hexa_exec_stream_async_impl(HexaVal cmd) {
     _hexa_stream_slots[slot].buf_len = 0;
     _hexa_stream_slots[slot].eof = 0;
     _hexa_stream_slots[slot].in_use = 1;
+    _hexa_stream_slots[slot].stdin_fd = -1;     // exec_stream_async path is read-only
     return hexa_int((int64_t)slot);
 }
 HexaVal hexa_exec_stream_async(HexaVal cmd) {
@@ -10696,6 +10705,8 @@ HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
     s->buf_len = 0;
     s->eof = 0;
     s->in_use = 0;
+    /* v1.4 — close stdin_fd if still open (bidi path; safe no-op for read-only). */
+    if (s->stdin_fd >= 0) { close(s->stdin_fd); s->stdin_fd = -1; }
     /* Note: s->buf 보존 (재사용 위해 free 안 함; 다음 spawn 시 재초기화). */
     return hexa_int((int64_t)proper_rc);
 }
@@ -10780,4 +10791,133 @@ HexaVal exec_stream_close(HexaVal handle) {
 HexaVal exec_stream_kill(HexaVal handle) {
     return hexa_exec_stream_kill_impl(handle);
 }
+
+// ── bidi-stdio primitives (2026-05-13, wilson MCP enabler) ──
+// hexa_exec_stream_open / _write / _close_stdin extend the existing read-only
+// async stream with a *write* side. Two-pipe variant: parent gets pipefd_in[1]
+// for writing to child stdin + pipefd_out[0] for reading child stdout.
+// Filed at incoming/patches/wilson-mcp-needs-bidi-stdio.md.
+//
+// Use case: MCP servers (JSON-RPC over stdio) — wilson sends `initialize`,
+// reads `result`, sends `tools/list`, reads `result`, etc. Same pattern any
+// long-running interactive subprocess (LSP, debug adapter, custom RPC).
+//
+// API (returns same int handle the read-only flavor returns; -1 on error):
+//   hexa_exec_stream_open(cmd)      — like async but bidi; returns handle
+//   hexa_exec_stream_write(h, data) — write to child stdin; returns bytes or -1
+//   hexa_exec_stream_close_stdin(h) — close write end (signals EOF to child);
+//                                      returns 0/-1
+//
+// Reads use the same hexa_exec_stream_poll. Final cleanup is the same
+// hexa_exec_stream_close (which also closes the stdin fd if open).
+HexaVal hexa_exec_stream_open_impl(HexaVal cmd) {
+    _hexa_stream_slots_ensure_init();
+    const char* cmd_s = HX_IS_STR(cmd) ? HX_STR(cmd) : NULL;
+    if (!cmd_s) return hexa_int((int64_t)-1);
+    int slot = -1;
+    for (int i = 0; i < HEXA_STREAM_SLOT_COUNT; i++) {
+        if (!_hexa_stream_slots[i].in_use) { slot = i; break; }
+    }
+    if (slot < 0) return hexa_int((int64_t)-1);
+    if (!_hexa_stream_slots[slot].buf) {
+        _hexa_stream_slots[slot].buf = (char*)malloc(HEXA_STREAM_LINE_BUF_INITIAL);
+        if (!_hexa_stream_slots[slot].buf) return hexa_int((int64_t)-1);
+        _hexa_stream_slots[slot].buf_cap = HEXA_STREAM_LINE_BUF_INITIAL;
+    }
+    fflush(NULL);
+    // Two pipes — pipe_in for parent→child stdin, pipe_out for child→parent stdout.
+    int pipe_in[2]  = { -1, -1 };
+    int pipe_out[2] = { -1, -1 };
+    if (pipe(pipe_in) != 0) return hexa_int((int64_t)-1);
+    if (pipe(pipe_out) != 0) {
+        close(pipe_in[0]); close(pipe_in[1]);
+        return hexa_int((int64_t)-1);
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipe_in[0]); close(pipe_in[1]);
+        close(pipe_out[0]); close(pipe_out[1]);
+        return hexa_int((int64_t)-1);
+    }
+    if (pid == 0) {
+        // child
+        setpgid(0, 0);
+        // stdin ← pipe_in[0]
+        if (pipe_in[0] != STDIN_FILENO) {
+            dup2(pipe_in[0], STDIN_FILENO);
+            close(pipe_in[0]);
+        }
+        close(pipe_in[1]);
+        // stdout → pipe_out[1]
+        if (pipe_out[1] != STDOUT_FILENO) {
+            dup2(pipe_out[1], STDOUT_FILENO);
+            close(pipe_out[1]);
+        }
+        close(pipe_out[0]);
+        execl("/bin/sh", "sh", "-c", cmd_s, (char*)NULL);
+        _exit(127);
+    }
+    // parent
+    close(pipe_in[0]);
+    close(pipe_out[1]);
+    setpgid(pid, pid);
+    FILE* fp = fdopen(pipe_out[0], "r");
+    if (!fp) {
+        close(pipe_out[0]); close(pipe_in[1]);
+        kill(-pid, SIGKILL); waitpid(pid, NULL, 0);
+        return hexa_int((int64_t)-1);
+    }
+    int rfd = fileno(fp);
+    int rflags = fcntl(rfd, F_GETFL, 0);
+    if (rflags >= 0) fcntl(rfd, F_SETFL, rflags | O_NONBLOCK);
+    // stdin fd kept blocking — caller decides write strategy via exec_stream_write.
+    _hexa_stream_slots[slot].fp = fp;
+    _hexa_stream_slots[slot].pid = pid;
+    _hexa_stream_slots[slot].stdin_fd = pipe_in[1];
+    _hexa_stream_slots[slot].buf_len = 0;
+    _hexa_stream_slots[slot].eof = 0;
+    _hexa_stream_slots[slot].in_use = 1;
+    return hexa_int((int64_t)slot);
+}
+
+HexaVal hexa_exec_stream_write_impl(HexaVal handle, HexaVal data) {
+    int h = HX_IS_INT(handle) ? (int)HX_INT(handle) : -1;
+    if (h < 0 || h >= HEXA_STREAM_SLOT_COUNT) return hexa_int((int64_t)-1);
+    if (!_hexa_stream_slots[h].in_use) return hexa_int((int64_t)-1);
+    int fd = _hexa_stream_slots[h].stdin_fd;
+    if (fd < 0) return hexa_int((int64_t)-1);   // read-only slot
+    const char* s = HX_IS_STR(data) ? HX_STR(data) : NULL;
+    if (!s) return hexa_int((int64_t)-1);
+    size_t total = strlen(s);
+    size_t written = 0;
+    while (written < total) {
+        ssize_t n = write(fd, s + written, total - written);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return hexa_int((int64_t)-1);
+        }
+        if (n == 0) break;
+        written += (size_t)n;
+    }
+    return hexa_int((int64_t)written);
+}
+
+HexaVal hexa_exec_stream_close_stdin_impl(HexaVal handle) {
+    int h = HX_IS_INT(handle) ? (int)HX_INT(handle) : -1;
+    if (h < 0 || h >= HEXA_STREAM_SLOT_COUNT) return hexa_int((int64_t)-1);
+    if (!_hexa_stream_slots[h].in_use) return hexa_int((int64_t)-1);
+    int fd = _hexa_stream_slots[h].stdin_fd;
+    if (fd < 0) return hexa_int((int64_t)-1);
+    close(fd);
+    _hexa_stream_slots[h].stdin_fd = -1;
+    return hexa_int((int64_t)0);
+}
+
+// Wrappers — hexa_ prefix forwards + raw symbol aliases for codegen indirect path.
+HexaVal hexa_exec_stream_open(HexaVal cmd) { return hexa_exec_stream_open_impl(cmd); }
+HexaVal hexa_exec_stream_write(HexaVal handle, HexaVal data) { return hexa_exec_stream_write_impl(handle, data); }
+HexaVal hexa_exec_stream_close_stdin(HexaVal handle) { return hexa_exec_stream_close_stdin_impl(handle); }
+HexaVal exec_stream_open(HexaVal cmd) { return hexa_exec_stream_open_impl(cmd); }
+HexaVal exec_stream_write(HexaVal handle, HexaVal data) { return hexa_exec_stream_write_impl(handle, data); }
+HexaVal exec_stream_close_stdin(HexaVal handle) { return hexa_exec_stream_close_stdin_impl(handle); }
 
