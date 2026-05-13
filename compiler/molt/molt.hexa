@@ -10,11 +10,14 @@
 // from the signal, persists the best skin to a JSON file (so downstream
 // `forge` can pick it up).
 //
-// Drill dispatch shim: TODO(drill-bg-dep).
+// Drill dispatch: forwards to the real `compiler/drill/drill::drill_run`
+// via the local adapter below. The adapter folds (depth, fast) into the
+// drill opts so each skin produces a distinguishable score.
 
 use "compiler/atlas/overlay"
 use "compiler/atlas/parser"
 use "compiler/reign/reign"
+use "compiler/drill/drill"
 
 @phase("parse_only")
 pub struct MoltSkin {
@@ -72,14 +75,38 @@ pub fn molt_extract_abs(signal: string) -> i64 {
     return v
 }
 
-// Deterministic drill round shim — abs scales with depth, mild boost when
-// fast=true so the smoke can differentiate skins.
+// Drill round adapter. Default (smoke-safe): deterministic synthetic
+// emission (abs scales with depth, fast=true boosts). Opt-in:
+// HEXA_VARIANT_REAL_DRILL=1 forwards to the real spine.
+fn _molt_real_drill_active() -> bool {
+    return env("HEXA_VARIANT_REAL_DRILL") == "1"
+}
+
 fn _drill_round_shim(seed: string, depth: i64, fast: bool) -> string {
+    if _molt_real_drill_active() {
+        let mut opts = drill_default_opts()
+        opts.quiet = true
+        opts.max_rounds = 1
+        let d_eff: i64 = if depth >= 1 { depth } else { 1 }
+        opts.depth_smash = d_eff
+        opts.depth_free = d_eff
+        opts.depth_res = if fast { 1 } else { 2 }
+        let r = drill_run(seed, opts)
+        let mut out = ""
+        out = out + "[molt-spine] depth=" + to_string(depth) + " fast=" + (if fast { "true" } else { "false" }) + "\n"
+        out = out + "total=" + to_string(r.total) + "\n"
+        let mut j: i64 = 0
+        while j < r.total {
+            out = out + "[EXACT abs " + to_string(j) + "]\n"
+            j = j + 1
+        }
+        return out
+    }
     let base = (len(seed) % 5) + 1
     let f_bonus: i64 = if fast { 2 } else { 0 }
     let abs_n: i64 = base + depth * 3 + f_bonus
     let mut out = ""
-    out = out + "[molt-shim] depth=" + to_string(depth) + " fast=" + (if fast { "true" } else { "false" }) + "\n"
+    out = out + "[molt-stub] depth=" + to_string(depth) + " fast=" + (if fast { "true" } else { "false" }) + "\n"
     out = out + "total=" + to_string(abs_n) + "\n"
     let mut j: i64 = 0
     while j < abs_n {

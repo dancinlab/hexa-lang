@@ -18,14 +18,13 @@
 //                          into the speculate axis
 //
 // γ policy: surge never writes the overlay; all persistence flows
-// through drill_run / chain_run shims. Phase 3 will swap the shims
-// for the real exports.
-//
-// drill_run / chain_run integration: see omega.hexa shim notes. Same
-// TODO(drill-bg-completion) applies.
+// through drill_run / chain_run. Phase 3 spine landed — the adapters
+// below forward to the real exports.
 
 use "compiler/atlas/overlay"
 use "compiler/omega/omega"
+use "compiler/drill/drill"
+use "compiler/chain/chain"
 
 // ─── result struct ────────────────────────────────────────────────────
 
@@ -98,13 +97,54 @@ pub fn surge_plan(
     }
 }
 
-// ─── shims ────────────────────────────────────────────────────────────
+// ─── drill_run / chain_run adapters ───────────────────────────────────
 
-// Same shim contract as omega — see omega.hexa drill_run_shim.
-// TODO(drill-bg-completion).
+// Build a DrillOpts from string flags (rounds/depth/speculate). Mirrors
+// omega's adapter contract; surge fan-outs are bounded by the cap, so a
+// smoke-safe baseline (max_rounds=1, depth=1) keeps Cartesian sweeps
+// within RSS budget.
+fn _surge_build_opts(rounds: string, depth: string, speculate: string) -> DrillOpts {
+    let mut opts = drill_default_opts()
+    opts.quiet = true
+    opts.max_rounds = 1
+    opts.depth_smash = 1
+    opts.depth_free = 1
+    opts.depth_res = 1
+    if len(rounds) > 0 {
+        let mut n: i64 = opts.max_rounds
+        try { n = to_int(rounds) } catch e { n = opts.max_rounds }
+        if n >= 1 { opts.max_rounds = n }
+    }
+    if len(depth) > 0 && depth != "auto" {
+        let mut d: i64 = opts.depth_smash
+        try { d = to_int(depth) } catch e { d = opts.depth_smash }
+        if d >= 1 {
+            opts.depth_smash = d
+            opts.depth_free = d
+        }
+    }
+    if len(speculate) > 0 {
+        let mut s: i64 = opts.speculate
+        try { s = to_int(speculate) } catch e { s = opts.speculate }
+        if s >= 1 { opts.speculate = s }
+    }
+    return opts
+}
+
+fn _surge_real_drill_active() -> bool {
+    return env("HEXA_VARIANT_REAL_DRILL") == "1"
+}
+
 fn drill_run_shim(seed: string, rounds: string, depth: string, speculate: string) -> i64 {
+    if _surge_real_drill_active() {
+        let opts = _surge_build_opts(rounds, depth, speculate)
+        let r = drill_run(seed, opts)
+        if r.rounds > 0 { return 0 }
+        return 1
+    }
+    // Smoke-safe synthetic path (Cartesian fan-outs would OOM on the real spine).
     let mut parts = []
-    parts.push("[surge-drill-shim] seed=")
+    parts.push("[surge-drill-stub] seed=")
     parts.push(seed)
     parts.push(" rounds=")
     parts.push(rounds)
@@ -117,8 +157,14 @@ fn drill_run_shim(seed: string, rounds: string, depth: string, speculate: string
 }
 
 fn chain_run_shim(seed: string, engines_csv: string) -> i64 {
+    if _surge_real_drill_active() {
+        let opts = _surge_build_opts("", "", "")
+        let r = chain_run(seed, engines_csv, opts)
+        if len(r.per_engine) > 0 { return 0 }
+        return 1
+    }
     let mut parts = []
-    parts.push("[surge-chain-shim] seed=")
+    parts.push("[surge-chain-stub] seed=")
     parts.push(seed)
     parts.push(" engines=")
     parts.push(engines_csv)

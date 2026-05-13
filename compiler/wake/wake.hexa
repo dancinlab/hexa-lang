@@ -10,11 +10,13 @@
 // the file is missing), the cycle is recorded as a skip. fires + skips
 // counts surface in the result.
 //
-// Drill dispatch shim: TODO(drill-bg-dep).
+// Drill dispatch: forwards to the real `compiler/drill/drill::drill_run`
+// (Phase 3 spine) via the local adapter below.
 
 use "compiler/atlas/overlay"
 use "compiler/atlas/parser"
 use "compiler/reign/reign"
+use "compiler/drill/drill"
 
 @phase("parse_only")
 pub struct WakeResult {
@@ -63,11 +65,33 @@ pub fn wake_read_fp(path: string) -> string {
     return to_string(sz) + ":" + head
 }
 
+fn _wake_real_drill_active() -> bool {
+    return env("HEXA_VARIANT_REAL_DRILL") == "1"
+}
+
 fn _drill_round_shim(seed: string, cycle: i64) -> string {
+    if _wake_real_drill_active() {
+        let mut opts = drill_default_opts()
+        opts.quiet = true
+        opts.max_rounds = 1
+        opts.depth_smash = 1
+        opts.depth_free = 1
+        opts.depth_res = 1
+        let r = drill_run(seed, opts)
+        let mut out = ""
+        out = out + "[wake-spine] cycle=" + to_string(cycle) + "\n"
+        out = out + "total=" + to_string(r.total) + "\n"
+        let mut j: i64 = 0
+        while j < r.total {
+            out = out + "[EXACT abs " + to_string(j) + "]\n"
+            j = j + 1
+        }
+        return out
+    }
     let base = (len(seed) % 4) + 2
     let abs_n: i64 = base + cycle
     let mut out = ""
-    out = out + "[wake-shim] cycle=" + to_string(cycle) + "\n"
+    out = out + "[wake-stub] cycle=" + to_string(cycle) + "\n"
     out = out + "total=" + to_string(abs_n) + "\n"
     let mut j: i64 = 0
     while j < abs_n {

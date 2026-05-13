@@ -62,10 +62,12 @@ pub fn revive_default_consec_fail_cap() -> i64 {
 
 // --- iter shim -------------------------------------------------------------
 //
-// TODO(drill-bg-dep + revive-master-port): nexus revive shells out to
-// tool/revive_master.hexa per iter; we approximate with a deterministic
-// staircase that goes good→good→l0_reached. Env knobs let tests force
-// failure or override the L0 step.
+// Revive's per-iter verdict is l0_reached / l1_bad / continue — a state
+// shape distinct from drill_run's (total, rounds, saturated). Upstream
+// nexus revive shells out to tool/revive_master.hexa per iter; that
+// master is a separate engine+map v2 module not yet ported.
+// Deferred: revive-master-port. Until then the deterministic staircase
+// (good → good → l0_reached) keeps the loop contract exercised.
 
 fn _iter_shim(iter: i64) -> ReviveIterStatus {
     let force_fail = env("HEXA_REVIVE_FORCE_FAIL") == "1"

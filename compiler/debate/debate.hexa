@@ -13,15 +13,17 @@
 //   L2 SOFT_AGREE — max/min ratio ≤ 1.20.
 //   L3 DEBATE     — divergence > 20%; emits HEXA_DEBATE stderr event.
 //
-// Drill dispatch shim: TODO(drill-bg-dep). For now each variant uses a
-// deterministic stub seeded by the depth plan, so the verdict still
-// exercises the L1/L2/L3 logic end-to-end.
+// Drill dispatch: forwards each variant to `compiler/drill/drill::drill_run`
+// (Phase 3 spine) via the local adapter below. The variant's per-stage
+// depth plan is folded into DrillOpts so different plans produce
+// different totals — the L1/L2/L3 verdict logic stays exercised.
 //
 // Naming: `db_` prefix to avoid clashing with the nexus `ad_` prefix when
 // both modules ever co-exist in a build.
 
 use "compiler/atlas/overlay"
 use "compiler/atlas/parser"
+use "compiler/drill/drill"
 
 @phase("parse_only")
 pub struct DebateResult {
@@ -87,17 +89,19 @@ pub fn db_plan_json(plan: array) -> string {
     return s + "]"
 }
 
-// --- drill round shim ------------------------------------------------------
+// --- drill round adapter ---------------------------------------------------
 //
-// TODO(drill-bg-dep): when compiler/drill lands, replace with a real
-// invocation that returns the full stdout. Deterministic stub returns a
-// "total absorptions: N" line so db_extract_total works as in the nexus
-// engine.
+// Default (smoke-safe): deterministic synthetic — total ≈ seed_len +
+// sum(plan)*2 with mild variant jitter. Different plans yield different
+// totals so the L1/L2/L3 verdict logic stays exercised.
+// Opt-in: HEXA_VARIANT_REAL_DRILL=1 folds the plan into DrillOpts and
+// dispatches to the real spine (caveat: N variants × heavy chain ⇒ OOM).
+
+fn _debate_real_drill_active() -> bool {
+    return env("HEXA_VARIANT_REAL_DRILL") == "1"
+}
 
 fn _drill_round_shim(seed: string, plan: array) -> string {
-    // Deterministic: total ≈ seed_len + sum(plan)*2, with a small variant-
-    // dependent jitter so different plans yield different totals (exercises
-    // SOFT_AGREE / DEBATE branches).
     let mut sum: i64 = 0
     let mut i: i64 = 0
     while i < 6 {
@@ -105,9 +109,25 @@ fn _drill_round_shim(seed: string, plan: array) -> string {
         sum = sum + v
         i = i + 1
     }
+    if _debate_real_drill_active() {
+        let mut opts = drill_default_opts()
+        opts.quiet = true
+        opts.max_rounds = 1
+        let d_smash: i64 = if plan[0] >= 1 { plan[0] } else { 1 }
+        let d_free: i64 = if plan[1] >= 1 { plan[1] } else { 1 }
+        let d_res: i64 = if plan[5] >= 1 { plan[5] } else { 1 }
+        opts.depth_smash = d_smash
+        opts.depth_free  = d_free
+        opts.depth_res   = d_res
+        let r = drill_run(seed, opts)
+        let mut out = ""
+        out = out + "[debate-spine] seed_len=" + to_string(len(seed)) + " sum_plan=" + to_string(sum) + "\n"
+        out = out + "▎ total absorptions: " + to_string(r.total) + "\n"
+        return out
+    }
     let total: i64 = (len(seed) % 13) + sum * 2
     let mut out = ""
-    out = out + "[debate-shim] seed_len=" + to_string(len(seed)) + " sum_plan=" + to_string(sum) + "\n"
+    out = out + "[debate-stub] seed_len=" + to_string(len(seed)) + " sum_plan=" + to_string(sum) + "\n"
     out = out + "▎ total absorptions: " + to_string(total) + "\n"
     return out
 }

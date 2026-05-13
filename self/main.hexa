@@ -71,10 +71,31 @@ fn cmd_help() {
     println("                              read:  hash | stats | lookup [P|C|L|E] <id> | dump [P|C|L|E] [--json]")
     println("                              write: append-witness … | promote --staging <f.n6> | register* | pr*")
     println("                                     (* = stub; `update || PR` design — incoming/patches/, SPEC §9/§10)")
-    println("    smash|free|thinking|lens|bus|roadmap|discovery")
-    println("                            Delegate to $NEXUS/shared/bin/nexus-cli")
-    println("                              hexa smash --seed \"...\" [--depth 3]")
-    println("                              hexa free --seed \"...\" [--dfs 3]")
+    println("    thinking|lens|bus|roadmap|discovery")
+    println("                            Delegate to $NEXUS/shared/bin/nexus-cli (legacy proxy)")
+    println("")
+    println("ABSORBED VERBS (nexus → hexa-lang, 60+ in-repo entry points):")
+    println("    annotation tools (29)  pure-check, memo-check, catalog, readme, doc, codegen-hints,")
+    println("                           distill, effect-map, intent-map, meta-map, phi-map,")
+    println("                           struct-layout, self-aware, cognitive, freedom, infer, learn,")
+    println("                           safety, antivirus, serve, tenant, eval-run, n6-list,")
+    println("                           test-list, schema, law-link, harness, rule, gate-register")
+    println("    Phase 2 verifiers (3)  honesty, absolute, meta-closure")
+    println("                              hexa honesty <file>         BT-AI2 audit")
+    println("                              hexa absolute --seed \"...\"  Σ₁/Π₁ classifier")
+    println("                              hexa meta-closure [--seed]  meta-closure fixpoint")
+    println("    Phase 2 generators (3) smash, free, hyperarithmetic (hexa-native; supersedes proxy)")
+    println("                              hexa smash --seed \"...\" [--depth N]")
+    println("                              hexa free --seed \"...\" [--dfs N]")
+    println("                              hexa hyperarithmetic --prop \"...\"")
+    println("    discovery engines (13) drill, chain, omega, surge, dream, swarm, reign, molt,")
+    println("                           wake, forge, canon, debate, revive")
+    println("                              hexa drill --seed \"...\" [--rounds N] [--engine mk9|mk10]")
+    println("                              hexa chain --seed \"...\" --engines \"x,y,z\"")
+    println("    external resources(19) qmirror, akida, qrng, kick + 16 data bridges")
+    println("                           (codata, oeis, arxiv, gw, horizons, cmb, nanograv, simbad,")
+    println("                            icecube, nist-atomic, wikipedia, openalex, gaia, lhc,")
+    println("                            pubchem, uniprot)")
     println("    url <hexa://URL>        Dispatch a hexa:// URL (macOS URL handler)")
     println("                              Schemes: hexa://run?file=PATH")
     println("                                       hexa://repl?dir=PATH")
@@ -420,6 +441,164 @@ fn cmd_nexus_proxy(subcmd, extra_args) {
     let r = exec(cmd)
     if len(r) > 0 {
         println(r)
+    }
+}
+
+// ─── nexus absorption verb dispatch (2026-05-13 final consolidation) ──
+//
+// is_absorbed_verb / dispatch_absorbed: a 60+ entry dispatch surface for
+// the nexus → hexa-lang absorption project. The actual verb→script map
+// lives in _absorbed_script(): given a verb id, return the script path
+// (relative to the install dir). dispatch_absorbed() resolves to an
+// absolute path via install_dir_from_argv0() with cwd fallback, then
+// either cmd_run (for .hexa modules) or exec (for tool/hexa_annot/ bash
+// scripts).
+//
+// Surface inventory (matches incoming/notes 60+ verbs):
+//   29 annotation analyzers   (tool/hexa_annot/hexa-<name>, bash)
+//   3  Phase 2 verifiers      (honesty/absolute/meta-closure)
+//   3  Phase 2 generators     (smash/free/hyperarithmetic)
+//   13 Phase 3 drill chain    (drill/chain/omega/surge/dream/swarm/
+//                              reign/molt/wake/forge/canon/debate/revive)
+//   19 Phase 4 external       (qmirror/akida/qrng/kick + 16 bridges)
+
+fn _absorbed_script(verb) {
+    // Returns the relative script path for the verb, or "" if the verb is
+    // not in the absorption surface. Caller must absolutise.
+
+    // 29 annotation analyzers — bash scripts under tool/hexa_annot/.
+    // Use a "ANNOT:" prefix in the return so the dispatcher knows to exec
+    // (not cmd_run). Bash scripts read positional args, no .hexa runtime.
+    if verb == "pure-check"       { return "ANNOT:tool/hexa_annot/hexa-pure-check" }
+    if verb == "memo-check"       { return "ANNOT:tool/hexa_annot/hexa-memo-check" }
+    if verb == "catalog"          { return "ANNOT:tool/hexa_annot/hexa-catalog" }
+    if verb == "readme"           { return "ANNOT:tool/hexa_annot/hexa-readme" }
+    if verb == "doc"              { return "ANNOT:tool/hexa_annot/hexa-doc" }
+    if verb == "codegen-hints"    { return "ANNOT:tool/hexa_annot/hexa-codegen-hints" }
+    if verb == "distill"          { return "ANNOT:tool/hexa_annot/hexa-distill" }
+    if verb == "effect-map"       { return "ANNOT:tool/hexa_annot/hexa-effect-map" }
+    if verb == "intent-map"       { return "ANNOT:tool/hexa_annot/hexa-intent-map" }
+    if verb == "meta-map"         { return "ANNOT:tool/hexa_annot/hexa-meta-map" }
+    if verb == "phi-map"          { return "ANNOT:tool/hexa_annot/hexa-phi-map" }
+    if verb == "struct-layout"    { return "ANNOT:tool/hexa_annot/hexa-struct-layout" }
+    if verb == "self-aware"       { return "ANNOT:tool/hexa_annot/hexa-self-aware" }
+    if verb == "cognitive"        { return "ANNOT:tool/hexa_annot/hexa-cognitive" }
+    if verb == "freedom"          { return "ANNOT:tool/hexa_annot/hexa-freedom" }
+    if verb == "infer"            { return "ANNOT:tool/hexa_annot/hexa-infer" }
+    if verb == "learn"            { return "ANNOT:tool/hexa_annot/hexa-learn" }
+    if verb == "safety"           { return "ANNOT:tool/hexa_annot/hexa-safety" }
+    if verb == "antivirus"        { return "ANNOT:tool/hexa_annot/hexa-antivirus" }
+    if verb == "serve"            { return "ANNOT:tool/hexa_annot/hexa-serve" }
+    if verb == "tenant"           { return "ANNOT:tool/hexa_annot/hexa-tenant" }
+    if verb == "eval-run"         { return "ANNOT:tool/hexa_annot/hexa-eval-run" }
+    if verb == "n6-list"          { return "ANNOT:tool/hexa_annot/hexa-n6-list" }
+    if verb == "test-list"        { return "ANNOT:tool/hexa_annot/hexa-test-list" }
+    if verb == "schema"           { return "ANNOT:tool/hexa_annot/hexa-schema" }
+    if verb == "law-link"         { return "ANNOT:tool/hexa_annot/hexa-law-link" }
+    if verb == "harness"          { return "ANNOT:tool/hexa_annot/hexa-harness" }
+    if verb == "rule"             { return "ANNOT:tool/hexa_annot/hexa-rule" }
+    if verb == "gate-register"    { return "ANNOT:tool/hexa_annot/hexa-gate-register" }
+
+    // Phase 2 verifiers (3). `hexa check` for @invariant DSL is preserved
+    // (handled in the main dispatch chain elsewhere); `hexa honesty` is
+    // the new BT-AI2 audit surface.
+    if verb == "honesty"          { return "compiler/honesty/check.hexa" }
+    if verb == "absolute"         { return "compiler/absolute/check.hexa" }
+    if verb == "meta-closure"     { return "compiler/meta_closure/check.hexa" }
+
+    // Phase 2 generators (3). smash + free supersede the nexus-cli proxy.
+    if verb == "smash"            { return "compiler/smash/smash.hexa" }
+    if verb == "free"             { return "compiler/free/free.hexa" }
+    if verb == "hyperarithmetic"  { return "compiler/hyperarithmetic/hyperarithmetic.hexa" }
+
+    // Phase 3 drill chain (13).
+    if verb == "drill"            { return "compiler/drill/drill.hexa" }
+    if verb == "chain"            { return "compiler/chain/chain.hexa" }
+    if verb == "omega"            { return "compiler/omega/omega.hexa" }
+    if verb == "surge"            { return "compiler/surge/surge.hexa" }
+    if verb == "dream"            { return "compiler/dream/dream.hexa" }
+    if verb == "swarm"            { return "compiler/swarm/swarm.hexa" }
+    if verb == "reign"            { return "compiler/reign/reign.hexa" }
+    if verb == "molt"             { return "compiler/molt/molt.hexa" }
+    if verb == "wake"             { return "compiler/wake/wake.hexa" }
+    if verb == "forge"            { return "compiler/forge/forge.hexa" }
+    if verb == "canon"            { return "compiler/canon_engine/canon_engine.hexa" }
+    if verb == "debate"           { return "compiler/debate/debate.hexa" }
+    if verb == "revive"           { return "compiler/revive/revive.hexa" }
+
+    // Phase 4 external (19) — HW probes + kick + 16 bridges.
+    if verb == "qmirror"          { return "compiler/hw_probes/qmirror.hexa" }
+    if verb == "akida"            { return "compiler/hw_probes/akida.hexa" }
+    if verb == "qrng"             { return "compiler/hw_probes/qrng.hexa" }
+    if verb == "kick"             { return "compiler/kick/kick.hexa" }
+    if verb == "codata"           { return "compiler/bridges/codata.hexa" }
+    if verb == "oeis"             { return "compiler/bridges/oeis.hexa" }
+    if verb == "arxiv"            { return "compiler/bridges/arxiv.hexa" }
+    if verb == "gw"               { return "compiler/bridges/gw.hexa" }
+    if verb == "horizons"         { return "compiler/bridges/horizons.hexa" }
+    if verb == "cmb"              { return "compiler/bridges/cmb.hexa" }
+    if verb == "nanograv"         { return "compiler/bridges/nanograv.hexa" }
+    if verb == "simbad"           { return "compiler/bridges/simbad.hexa" }
+    if verb == "icecube"          { return "compiler/bridges/icecube.hexa" }
+    if verb == "nist-atomic"      { return "compiler/bridges/nist_atomic.hexa" }
+    if verb == "wikipedia"        { return "compiler/bridges/wikipedia.hexa" }
+    if verb == "openalex"         { return "compiler/bridges/openalex.hexa" }
+    if verb == "gaia"             { return "compiler/bridges/gaia.hexa" }
+    if verb == "lhc"              { return "compiler/bridges/lhc.hexa" }
+    if verb == "pubchem"          { return "compiler/bridges/pubchem.hexa" }
+    if verb == "uniprot"          { return "compiler/bridges/uniprot.hexa" }
+
+    return ""
+}
+
+fn is_absorbed_verb(verb) {
+    return len(_absorbed_script(verb)) > 0
+}
+
+fn dispatch_absorbed(verb, ab_args) {
+    let raw = _absorbed_script(verb)
+    if len(raw) == 0 {
+        println("error: unknown absorbed verb '" + verb + "'")
+        return
+    }
+
+    // Strip the "ANNOT:" prefix for bash-script dispatch (annotation tools).
+    let is_annot = len(raw) >= 6 && raw.substring(0, 6) == "ANNOT:"
+    let rel = if is_annot { raw.substring(6, len(raw)) } else { raw }
+
+    // Resolve to absolute path: install_dir_from_argv0() preferred, then
+    // cwd fallback (in-repo dev runs). Mirrors the atlas dispatch resolver.
+    let __inst = install_dir_from_argv0()
+    let mut script = rel
+    if len(__inst) > 0 {
+        let inst_path = __inst + "/" + rel
+        if file_exists(inst_path) { script = inst_path }
+    }
+    if !file_exists(script) {
+        println("error: absorbed verb '" + verb + "' script not found: " + script)
+        return
+    }
+
+    if is_annot {
+        // Bash script — exec with quoted args, mirror cmd_nexus_proxy shape.
+        let cli_q = shq(script)
+        if len(cli_q) == 0 { return }
+        let mut cmd = cli_q
+        let mut i = 0
+        while i < len(ab_args) {
+            let q = shq(ab_args[i])
+            if len(q) == 0 { return }
+            cmd = cmd + " " + q
+            i = i + 1
+        }
+        cmd = cmd + " 2>&1"
+        let r = exec(cmd)
+        if len(r) > 0 { println(r) }
+    } else {
+        // .hexa module — cmd_run dispatch. Note: most absorbed modules are
+        // libraries without a fn main(); invoking them via the CLI surface
+        // requires a per-module entry shim, tracked as a separate follow-up.
+        cmd_run(script, ab_args)
     }
 }
 
@@ -2493,9 +2672,28 @@ if len(av) < 3 {
             ai = ai + 1
         }
         cmd_run(atlas_script, atlas_args)
-    } else if sub == "smash" || sub == "free" || sub == "thinking" || sub == "lens" || sub == "bus" || sub == "roadmap" || sub == "discovery" || sub == "status-proj" || sub == "roadmap-proj" || sub == "convergence-proj" {
+    } else if is_absorbed_verb(sub) {
+        // nexus absorption surface (2026-05-13 final consolidation):
+        //
+        //   • 29 annotation analyzers     → tool/hexa_annot/hexa-<name>  (bash)
+        //   • Phase 2 verifiers   (3)     → compiler/{honesty,absolute,meta_closure}/check.hexa
+        //   • Phase 2 generators  (3)     → compiler/{smash,free,hyperarithmetic}/<name>.hexa
+        //   • Phase 3 drill chain (13)    → compiler/{drill,chain,omega,surge,dream,swarm,
+        //                                   reign,molt,wake,forge,canon_engine,debate,revive}/<name>.hexa
+        //   • Phase 4 external    (19)    → compiler/{hw_probes,kick,bridges}/<name>.hexa
+        //
+        // Annotation tools are bash; the rest are .hexa modules invoked via
+        // cmd_run (install-dir resolved via install_dir_from_argv0(), with
+        // cwd fallback for in-repo runs). Library modules without a `main()`
+        // entry will error at cmd_run time — that's the deferred CLI-shim
+        // surface; the dispatch wiring itself is what this branch establishes.
+        let mut ab_args = []
+        let mut abi = 3
+        while abi < len(av) { ab_args.push(av[abi]); abi = abi + 1 }
+        dispatch_absorbed(sub, ab_args)
+    } else if sub == "thinking" || sub == "lens" || sub == "bus" || sub == "roadmap" || sub == "discovery" || sub == "status-proj" || sub == "roadmap-proj" || sub == "convergence-proj" {
         // @cli bake: nexus-cli 위임. av[3..] 전체를 nexus-cli 에 그대로 전달.
-        // (atlas 는 위 분기에서 hexa-native 로 흡수 — RETIREMENT_PLAN §0b Phase 2.)
+        // (atlas + smash/free/… 는 위 분기에서 hexa-native 로 흡수.)
         let mut nc_args = []
         let mut ni = 3
         while ni < len(av) {

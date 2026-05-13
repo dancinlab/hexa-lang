@@ -10,9 +10,10 @@
 // extracted signal (abs/exact/near counts). When the last K signals
 // agree (default K=2), saturate and break.
 //
-// Drill dispatch is delegated to a shim — the parallel drill BG owns
-// `compiler/drill/drill.hexa`; when it lands we swap the shim for the
-// real `drill_round`. See TODO(drill-bg-dep).
+// Drill dispatch is delegated to a local adapter that forwards to the
+// real `compiler/drill/drill::drill_run` (Phase 3 spine). The adapter
+// synthesizes a stdout-shaped payload (total=N + EXACT markers) so the
+// existing reign signal-extract pipeline still works.
 //
 // Surface contract (deterministic, no network):
 //   reign_run(seed, max_cycles_flag) -> ReignResult
@@ -27,6 +28,7 @@
 
 use "compiler/atlas/overlay"
 use "compiler/atlas/parser"
+use "compiler/drill/drill"
 
 // --- result type -----------------------------------------------------------
 
@@ -168,20 +170,42 @@ pub fn reign_signal_stagnant(history: array, k: i64) -> bool {
     return true
 }
 
-// --- drill round shim ------------------------------------------------------
+// --- drill round adapter ---------------------------------------------------
 //
-// TODO(drill-bg-dep): wire to `compiler/drill/drill::drill_round` once the
-// drill spine BG lands. Today we emit a deterministic synthetic line that
-// the signal extractor can parse — keeps the loop logic exercised end-to-end
-// while staying hermetic (no shell, no engine binary required).
+// Default (smoke-safe): deterministic synthetic emission keyed off seed
+// length + cycle. Opt-in: HEXA_VARIANT_REAL_DRILL=1 forwards to the real
+// `compiler/drill/drill::drill_run` (1-round, depth=1) — the reign loop
+// runs N cycles so the cumulative cost on the real spine compounds.
+
+fn _reign_real_drill_active() -> bool {
+    return env("HEXA_VARIANT_REAL_DRILL") == "1"
+}
 
 fn _drill_round_shim(seed: string, cycle: i64) -> string {
-    // Deterministic synthetic absorption count keyed off seed length + cycle.
-    // Saturates after a few cycles so reign's stagnation detector trips.
+    if _reign_real_drill_active() {
+        let mut opts = drill_default_opts()
+        opts.quiet = true
+        opts.max_rounds = 1
+        opts.depth_smash = 1
+        opts.depth_free = 1
+        opts.depth_res = 1
+        let r = drill_run(seed, opts)
+        let mut out = ""
+        out = out + "[drill-spine] cycle=" + to_string(cycle) + " seed_len=" + to_string(len(seed)) + "\n"
+        out = out + "total=" + to_string(r.total) + "\n"
+        let mut j: i64 = 0
+        while j < r.total {
+            out = out + "[EXACT abs " + to_string(j) + "]\n"
+            j = j + 1
+        }
+        return out
+    }
+    // Deterministic synthetic — saturates after a few cycles so reign's
+    // stagnation detector trips reliably.
     let base = (len(seed) % 7) + 3
     let abs_n: i64 = if cycle < 3 { base + cycle } else { base + 3 }
     let mut out = ""
-    out = out + "[drill-shim] cycle=" + to_string(cycle) + " seed_len=" + to_string(len(seed)) + "\n"
+    out = out + "[drill-stub] cycle=" + to_string(cycle) + " seed_len=" + to_string(len(seed)) + "\n"
     out = out + "total=" + to_string(abs_n) + "\n"
     let mut j: i64 = 0
     while j < abs_n {

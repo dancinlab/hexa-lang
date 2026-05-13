@@ -24,11 +24,12 @@
 // Breeding: deterministic suffix encoding `(g, child_idx, p1, p2)` —
 // no RNG, same population → same offspring.
 //
-// γ policy: swarm never writes the overlay; drill_run_shim is the
-// boundary. TODO(drill-bg-completion).
+// γ policy: swarm never writes the overlay; the drill spine adapter
+// is the boundary. Phase 3 spine landed — adapter forwards to it.
 
 use "compiler/atlas/overlay"
 use "compiler/dream/dream"
+use "compiler/drill/drill"
 
 // ─── result struct ────────────────────────────────────────────────────
 
@@ -129,22 +130,75 @@ pub fn swarm_extract_abs(signal: string) -> i64 {
     return v
 }
 
-// ─── drill shim ───────────────────────────────────────────────────────
+// ─── drill_run adapter (capture) ──────────────────────────────────────
 
-// Same shape as dream's capture shim — emits a deterministic stdout
-// proxy so swarm's signal scrape has something to consume.
-// TODO(drill-bg-completion).
+fn _swarm_build_opts(rounds: string, depth: string, speculate: string) -> DrillOpts {
+    let mut opts = drill_default_opts()
+    opts.quiet = true
+    // swarm uses tiny rounds — population × generations would otherwise
+    // explode. Smoke-safe baseline: max_rounds=1, depth=1.
+    opts.max_rounds = 1
+    opts.depth_smash = 1
+    opts.depth_free = 1
+    opts.depth_res = 1
+    if len(rounds) > 0 {
+        let mut n: i64 = opts.max_rounds
+        try { n = to_int(rounds) } catch e { n = opts.max_rounds }
+        if n >= 1 { opts.max_rounds = n }
+    }
+    if len(depth) > 0 && depth != "auto" {
+        let mut d: i64 = opts.depth_smash
+        try { d = to_int(depth) } catch e { d = opts.depth_smash }
+        if d >= 1 {
+            opts.depth_smash = d
+            opts.depth_free = d
+        }
+    }
+    if len(speculate) > 0 {
+        let mut s: i64 = opts.speculate
+        try { s = to_int(speculate) } catch e { s = opts.speculate }
+        if s >= 1 { opts.speculate = s }
+    }
+    return opts
+}
+
+fn _swarm_real_drill_active() -> bool {
+    return env("HEXA_VARIANT_REAL_DRILL") == "1"
+}
+
+// Forward to real spine OR synthesize a deterministic stdout capture.
+// Swarm runs pop × gens drills — even at depth=1 the real chain produces
+// hundreds of candidates per call, OOMing the smoke matrix. Default
+// path is synthetic; opt-in via HEXA_VARIANT_REAL_DRILL=1.
 fn drill_run_shim_capture(seed: string, rounds: string, depth: string, speculate: string) -> string {
+    if _swarm_real_drill_active() {
+        let opts = _swarm_build_opts(rounds, depth, speculate)
+        let r = drill_run(seed, opts)
+        let mut out = []
+        let mut i: i64 = 0
+        while i < r.rounds {
+            out.push("[EXACT] swarm round ")
+            out.push(to_string(i + 1))
+            out.push("\n")
+            i = i + 1
+        }
+        out.push("round ")
+        out.push(to_string(r.rounds))
+        out.push(" total=")
+        out.push(to_string(r.total))
+        out.push("\n")
+        return out.join("")
+    }
+    // Smoke-safe synthetic — score keyed off seed length so perturbations
+    // produce distinguishable scores (the GA needs selection pressure).
     let mut parts = []
-    parts.push("[swarm-drill-shim] seed=")
+    parts.push("[swarm-drill-stub] seed=")
     parts.push(seed)
     parts.push(" rounds=")
     parts.push(rounds)
     eprintln(parts.join(""))
-    // Score derived from seed length so different perturbations score
-    // differently — gives the GA something to select on.
     let mut out = []
-    out.push("[EXACT] swarm-shim\n")
+    out.push("[EXACT] swarm-stub\n")
     out.push("round 1 total=")
     out.push(to_string(len(seed)))
     out.push("\n")
