@@ -10769,6 +10769,47 @@ fn call_builtin(name, args) {
         if len(args) > 6 { return val_float(farr_pauli_expectation(args[0], args[1], args[2], args[3], args[4], args[5], args[6])) }
         else { return val_float(0.0) }
     }
+    // RFC 035 (2026-05-13): whole-NM-step C kernels.
+    if name == "farr_simplex_centroid" {
+        // (simplex_h, out_h, n, n_best) → 0
+        if len(args) > 3 { return val_int(farr_simplex_centroid(args[0], args[1], args[2], args[3])) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "farr_vec_reflect" {
+        // (out_h, a_h, b_h, scale, n) → 0    (out = a + scale*(a-b))
+        if len(args) > 4 { return val_int(farr_vec_reflect(args[0], args[1], args[2], args[3], args[4])) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "farr_vec_blend" {
+        // (out_h, a_h, b_h, scale, n) → 0    (out = a + scale*(b-a))
+        if len(args) > 4 { return val_int(farr_vec_blend(args[0], args[1], args[2], args[3], args[4])) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "farr_vertex_copy" {
+        // (dst_simplex_h, dst_v, src_simplex_h, src_v, n) → 0
+        if len(args) > 4 { return val_int(farr_vertex_copy(args[0], args[1], args[2], args[3], args[4])) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "farr_simplex_get" {
+        // (simplex_h, v, j, n) → float
+        if len(args) > 3 { return val_float(farr_simplex_get(args[0], args[1], args[2], args[3])) }
+        else { return val_float(0.0) }
+    }
+    if name == "farr_simplex_set" {
+        // (simplex_h, v, j, n, x) → 0
+        if len(args) > 4 { return val_int(farr_simplex_set(args[0], args[1], args[2], args[3], args[4])) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "farr_simplex_shrink" {
+        // (simplex_h, n, n_vert) → 0
+        if len(args) > 2 { return val_int(farr_simplex_shrink(args[0], args[1], args[2])) }
+        else { return val_int(0 - 1) }
+    }
+    if name == "farr_simplex_sort" {
+        // (simplex_h, f_h, n, n_vert) → 0
+        if len(args) > 3 { return val_int(farr_simplex_sort(args[0], args[1], args[2], args[3])) }
+        else { return val_int(0 - 1) }
+    }
     // ── End fast-path ────────────────────────────────────────────────
 
     if name == "println" {
