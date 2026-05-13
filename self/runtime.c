@@ -8648,9 +8648,33 @@ static int64_t _hx_ans_alloc_slot(void) {
 }
 
 // ham_pack(flip[], z[], y[], cy[], coef[], shift, n_q) -> int handle.
+// Unwrap interp-side VALSTRUCT-wrapped TAG_ARRAY → raw TAG_ARRAY HexaVal.
+// Under `hexa.real run`, hexa-side `[int]`/`[float]` literals reach C kernels
+// wrapped as TAG_VALSTRUCT whose tag_i == TAG_ARRAY (5) and int_val == index
+// into the global array_store. Mirrors the unwrap in fill_from_array (~7870)
+// and hexa_val_heapify (~3530). Follow-up to commit b8acb90f to fix
+// ham_pack/ansatz_pack returning -1 on VALSTRUCT-wrapped inputs.
+static inline HexaVal _hx_unwrap_array(HexaVal v) {
+    if (HX_IS_VALSTRUCT(v) && HX_VS(v)
+        && HX_VSF(v, tag_i) == HEXA_INTERP_TAG_ARRAY
+        && &array_store != 0
+        && HX_IS_ARRAY(array_store) && HX_ARR_ITEMS(array_store)) {
+        int64_t idx = HX_VSF(v, int_val);
+        if (idx >= 0 && idx < (int64_t)HX_ARR_LEN(array_store)) {
+            return HX_ARR_ITEMS(array_store)[idx];
+        }
+    }
+    return v;
+}
+
 HexaVal hexa_ham_pack(HexaVal flip_v, HexaVal z_v, HexaVal y_v,
                       HexaVal cy_v, HexaVal coef_v,
                       HexaVal shift_v, HexaVal nq_v) {
+    flip_v = _hx_unwrap_array(flip_v);
+    z_v    = _hx_unwrap_array(z_v);
+    y_v    = _hx_unwrap_array(y_v);
+    cy_v   = _hx_unwrap_array(cy_v);
+    coef_v = _hx_unwrap_array(coef_v);
     int64_t n = hexa_len(flip_v);
     if (n <= 0 || hexa_len(z_v) != n || hexa_len(y_v) != n
         || hexa_len(cy_v) != n || hexa_len(coef_v) != n)
@@ -8695,6 +8719,12 @@ HexaVal hexa_ham_free(HexaVal h_v) {
 HexaVal hexa_ansatz_pack(HexaVal pi_v, HexaVal coef_v, HexaVal flip_v,
                          HexaVal z_v, HexaVal y_v, HexaVal cy_v,
                          HexaVal hf_v, HexaVal nq_v) {
+    pi_v   = _hx_unwrap_array(pi_v);
+    coef_v = _hx_unwrap_array(coef_v);
+    flip_v = _hx_unwrap_array(flip_v);
+    z_v    = _hx_unwrap_array(z_v);
+    y_v    = _hx_unwrap_array(y_v);
+    cy_v   = _hx_unwrap_array(cy_v);
     int64_t n = hexa_len(pi_v);
     if (n <= 0 || hexa_len(coef_v) != n || hexa_len(flip_v) != n
         || hexa_len(z_v) != n || hexa_len(y_v) != n
