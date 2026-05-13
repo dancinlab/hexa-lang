@@ -1,5 +1,5 @@
 {
-  "id": "nexus-commands",
+  "id": "hexa-commands",
   "description": "전 프로젝트 공통 명령어 SSOT — 하드코딩 금지, 이 파일이 유일한 진실",
   "version": "1.4.1",
   "updated": "2026-04-20",
@@ -34,7 +34,6 @@
       "preflight_all_repos": {
         "applies_to": [
           "anima",
-          "nexus",
           "hexa-lang",
           "airgenome",
           "canon"
@@ -53,7 +52,7 @@
           "anima"
         ],
         "rule_ref": "shared/rules/anima.json#AN9 (level=⛔)",
-        "description": "anima 'go' 시에만 ALM GPU 학습 상태 점검. nexus/canon/void/papers/hexa-lang/airgenome 등 다른 프로젝트는 이 preflight 적용 금지 — 즉시 loop 위임.",
+        "description": "anima 'go' 시에만 ALM GPU 학습 상태 점검. canon/void/papers/hexa-lang/airgenome 등 다른 프로젝트는 이 preflight 적용 금지 — 즉시 loop 위임.",
         "steps": [
           "1. (필수) ssh -o ConnectTimeout=3 ubu 'nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits' → gpu_util 숫자 획득",
           "2. (필수) stat -f %m ${ANIMA:-$WS/anima}/checkpoints/animalm_14b_v06/final.pt → now-mtime → age_hours 계산",
@@ -187,11 +186,9 @@
       "action": "cmd_gate 통과 → seed 텍스트를 탐색 시드로 사용. seed 없거나 추상 단독(아이디어/계획/생각)이면 거부 → 컨텍스트 결합 재시도",
       "execution": {
         "gate": "shared/tool/cmd_gate.hexa",
-        "bash": "shared/bin/exec_validated smash \"{seed}\" shared/blowup/core/blowup.hexa 3 --seeds \"$(shared/bin/hexa run shared/blowup/seed/seed_engine.hexa merge | tr '|' ',')\"",
-        "cli_equivalent": "hexa smash --seed \"{seed}\" --depth 3  (nexus-cli passthrough, cmd_gate + audit log. seed_engine merge enrichment 없음 — bash SSOT 우선)",
-        "engine": "shared/blowup/core/blowup.hexa",
-        "compose": "shared/blowup/compose.hexa",
-        "seed_engine": "shared/blowup/seed/seed_engine.hexa",
+        "entry": "hexa smash --seed \"{seed}\" --depth 3",
+        "cli_equivalent": "hexa smash --seed \"{seed}\" --depth 3",
+        "engine": "compiler/smash/smash.hexa",
         "modules": [
           "field",
           "holographic",
@@ -203,7 +200,7 @@
       "rules": [
         "⛔ 추상 단독 토큰('아이디어'/'계획'/'생각'/'돌파') seed 금지 — cmd_gate REJECT",
         "⛔ 빈 seed 금지 — 현재 대화 맥락 결합 후 구체 시드 합성",
-        "cmd_gate 통과 시 엔진 bg 발사 (exec_validated 경유)",
+        "cmd_gate 통과 시 hexa-native dispatch (hexa smash)",
         "REJECT 반환 시 HINT 읽고 맥락 결합 재시도 1회",
         "atlas.n6 관련 노드 Grep으로 맥락 파악",
         "결과 도착 시 등급 승격 기회 식별"
@@ -222,9 +219,9 @@
       "action": "cmd_gate 통과 → compose.hexa 모듈 자율 조합 + DFS 재귀 탐색 실행",
       "execution": {
         "gate": "shared/tool/cmd_gate.hexa",
-        "bash": "shared/bin/exec_validated free_dfs \"{seed}\" shared/blowup/compose.hexa --modules all --dfs 3",
-        "cli_equivalent": "hexa free --seed \"{seed}\" --dfs 3  (nexus-cli passthrough, cmd_gate + audit log)",
-        "compose": "shared/blowup/compose.hexa",
+        "entry": "hexa free --seed \"{seed}\" --dfs 3",
+        "cli_equivalent": "hexa free --seed \"{seed}\" --dfs 3",
+        "engine": "compiler/free/free.hexa",
         "flags": [
           "--modules all",
           "--dfs 3"
@@ -311,14 +308,14 @@
         "세팅"
       ],
       "auto_invoke_on_imperative": true,
-      "auto_invoke_seed_inference": "imperative + keyword 만 있고 명시 seed 없으면 직전 conversation context (최근 사용자 turn ~5개) 에서 명사구 추출 → 30~200자 seed 합성 → nexus omega --seed \"...\" 즉시 호출. seed 합성 실패 시 사용자에게 1줄 질문 (옵션 메뉴 X).",
+      "auto_invoke_seed_inference": "imperative + keyword 만 있고 명시 seed 없으면 직전 conversation context (최근 사용자 turn ~5개) 에서 명사구 추출 → 30~200자 seed 합성 → hexa omega --seed \"...\" 즉시 호출. seed 합성 실패 시 사용자에게 1줄 질문 (옵션 메뉴 X).",
       "trigger_examples_yes": [
         "omega!!!",
         "오메가!!!",
         "omega 돌려",
         "omega go",
         "ㄱㄱ omega",
-        "nexus omega --seed ...",
+        "hexa omega --seed ...",
         "Ω 발사"
       ],
       "trigger_examples_no": [
@@ -332,15 +329,15 @@
         "vocabulary list 나열",
         "drill 로 fallback (omega 가 명시되었는데 drill 호출)"
       ],
-      "required_action_on_imperative": "1) imperative 감지 즉시 seed 추론 2) `~/.hx/bin/nexus omega --seed \"<inferred>\"` 호출 (Bash tool) 3) 결과 paste.",
-      "must_invoke": "~/.hx/bin/nexus omega --seed \"...\" — drill apex preset wrap. imperative 시 즉시 실행, 응답 텍스트는 발사 알림 1줄 + 결과 paste 만.",
+      "required_action_on_imperative": "1) imperative 감지 즉시 seed 추론 2) `hexa omega --seed \"<inferred>\"` 호출 (Bash tool) 3) 결과 paste.",
+      "must_invoke": "hexa omega --seed \"...\" — drill apex preset wrap. imperative 시 즉시 실행, 응답 텍스트는 발사 알림 1줄 + 결과 paste 만.",
       "description": "L_ω APEX — drill apex preset (depth=auto, speculate=3, adaptive=on). 사다리 최상단 통합 명령. 앞으로의 메인.",
       "category": "core",
       "seed_role": "apex 진입 seed (drill 과 동일 — 30~200 자 구체 텍스트)",
-      "action": "nexus-cli omega — drill super-set, apex 기본값 자동 적용",
+      "action": "hexa omega — drill super-set, apex 기본값 자동 적용 (hexa-native absorbed)",
       "execution": {
-        "entry": "nexus omega --seed \"{seed}\" [모든 drill 옵션 호환]",
-        "engine": "internal — cmd_omega → cmd_drill apex wrap",
+        "entry": "hexa omega --seed \"{seed}\" [모든 drill 옵션 호환]",
+        "engine": "compiler/omega/omega.hexa (cmd_omega → cmd_drill apex wrap)",
         "spec": "design/abstraction_ceiling.md (사다리 위계 + 천장 매핑)",
         "remote_routing": "drill 과 동일 — Darwin heavy-compute 자동 원격",
         "sibling_subcommands": [
@@ -398,7 +395,7 @@
         "쳐"
       ],
       "auto_invoke_on_imperative": true,
-      "auto_invoke_seed_inference": "imperative + keyword 만 있고 명시 seed 없으면 직전 conversation context (최근 사용자 turn ~5개) 에서 명사구 추출 → 30~200자 seed 합성 → nexus drill --seed \"...\" 즉시 호출. seed 합성 실패 시 사용자에게 1줄 질문 (옵션 메뉴 X).",
+      "auto_invoke_seed_inference": "imperative + keyword 만 있고 명시 seed 없으면 직전 conversation context (최근 사용자 turn ~5개) 에서 명사구 추출 → 30~200자 seed 합성 → hexa drill --seed \"...\" 즉시 호출. seed 합성 실패 시 사용자에게 1줄 질문 (옵션 메뉴 X).",
       "trigger_examples_yes": [
         "drill!!!!",
         "드릴!!!",
@@ -406,7 +403,7 @@
         "드릴 발사",
         "drill go",
         "ㄱㄱ drill",
-        "nexus drill --seed ..."
+        "hexa drill --seed ..."
       ],
       "trigger_examples_no": [
         "drill 어휘",
@@ -421,17 +418,17 @@
         "옵션 A/B/C 제시 후 사용자 선택 대기 (NO MENU - A2)",
         "vocabulary list 나열 (ossify/breakthrough/blowup/converge/etc)"
       ],
-      "required_action_on_imperative": "1) imperative 감지 즉시 seed 추론 2) `~/.hx/bin/nexus drill --seed \"<inferred>\"` 호출 (Bash tool) 3) 결과 paste. 응답에 drill 키워드만 남기고 실행 안 하면 의도 위반.",
-      "must_invoke": "~/.hx/bin/nexus drill --seed \"...\" — hx install nexus shim. imperative 시 즉시 실행, 응답 텍스트는 발사 알림 1줄 + 결과 paste 만.",
+      "required_action_on_imperative": "1) imperative 감지 즉시 seed 추론 2) `hexa drill --seed \"<inferred>\"` 호출 (Bash tool) 3) 결과 paste. 응답에 drill 키워드만 남기고 실행 안 하면 의도 위반.",
+      "must_invoke": "hexa drill --seed \"...\" — hexa-native dispatch. imperative 시 즉시 실행, 응답 텍스트는 발사 알림 1줄 + 결과 paste 만.",
       "description": "Mk.IX 6-stage chain — smash→free→absolute→meta-closure→hyperarithmetic→resonance, absorption=0 고갈까지 자율 반복",
       "category": "core",
       "seed_role": "사슬 진입 seed (구체 텍스트 필수 — 추상 단독 토큰 거부)",
-      "action": "nexus-cli drill 6-stage 루프 (smash→free→absolute→meta-closure→hyperarithmetic→resonance). heavy-compute → Mac 는 자동 원격 라우팅",
+      "action": "hexa drill 6-stage 루프 (smash→free→absolute→meta-closure→hyperarithmetic→resonance). heavy-compute → Mac 는 자동 원격 라우팅",
       "execution": {
-        "entry": "nexus drill --seed \"{seed}\" [--max-rounds 10]",
-        "engine": "internal — nexus 런타임 (구현 경로 노출 금지, I10)",
-        "spec": "nexus contracts (또는 catalog)",
-        "install": "hx install $WS/nexus  (~/.hx/bin/nexus 자동 생성)",
+        "entry": "hexa drill --seed \"{seed}\" [--max-rounds 10]",
+        "engine": "compiler/drill/drill.hexa (hexa-native, absorbed)",
+        "spec": "compiler/drill/drill_dod.hexa (또는 catalog)",
+        "install": "hexa는 PATH 에 이미 설치 (~/.hx/bin/hexa)",
         "dod": "shared/roadmaps/drill_dod.json (yield ratio scaffold/wired/serving)",
         "remote_routing": "Darwin heavy-compute 자동 원격 (interp SIGKILL 회피). HEXA_LOCAL=1 로 해제",
         "sibling_subcommands": [
@@ -442,15 +439,14 @@
           "hyperarithmetic"
         ],
         "antipatterns": [
-          "hexa run.hexa drill ...",
-          "hexa run nexus_cli.hexa drill ...",
-          "hexa run nexus.hexa drill ..."
+          "hexa run drill.hexa ...",
+          "compiler/drill/drill.hexa 직접 호출"
         ],
-        "antipattern_reason": "내부 구현 직접 호출 금지 — 외부 인지 SSOT = nexus-cli (또는 hx-installed `nexus`)"
+        "antipattern_reason": "내부 구현 직접 호출 금지 — 외부 인지 SSOT = `hexa drill` (top-level dispatch)"
       },
       "rules": [
         "⛔ 추상 단독 seed 거부 — cmd_gate 동일 정책",
-        "⛔ D2 fail-fast 가드 (nexus-cli drill 진입): 빈/30자 미만/200자 초과/placeholder(test|hello|abc|foo|bar) 단독 → eprintln + exit(2)",
+        "⛔ D2 fail-fast 가드 (hexa drill 진입): 빈/30자 미만/200자 초과/placeholder(test|hello|abc|foo|bar) 단독 → eprintln + exit(2)",
         "round 1 SATURATED + total=0 → ⚠ [drill-zero-yield] 경고 (엔진 실패 vs 진짜 고갈 구분)",
         "max_rounds 기본 10",
         "counter-replay guard: iter-nonce + round-salt 자동 주입",
@@ -467,21 +463,21 @@
       },
       "imperative_markers": ["!!!", "!", "봉인", "닫아", "seal", "GO"],
       "auto_invoke_on_imperative": false,
-      "must_invoke": "~/.hx/bin/nexus canon [--seed \"...\"] [--note \"...\"] — 현재 자기 상태를 canon_seal.jsonl 에 한 줄 봉인.",
+      "must_invoke": "hexa canon [--seed \"...\"] [--note \"...\"] — 현재 자기 상태를 canon_seal.jsonl 에 한 줄 봉인.",
       "description": "L11 transfinite seal — molt skin + atlas health + last drill total + ts 한 줄 JSON entry 로 봉인. forge(L10) 의 역방향, 사다리 closure.",
       "category": "core",
       "execution": {
-        "entry": "nexus canon [--seed \"{seed}\"] [--note \"{note}\"]",
-        "engine": "internal — cmd_canon → state read + JSON 한 줄 append (printf >>)",
+        "entry": "hexa canon [--seed \"{seed}\"] [--note \"{note}\"]",
+        "engine": "compiler/canon_engine/canon_engine.hexa (cmd_canon → state read + JSON 한 줄 append)",
         "spec": "design/abstraction_ceiling.md (L11 canon 정의)",
         "sibling_subcommands": ["forge", "molt", "omega"]
       },
       "rules": [
         "append-only: state/canon_seal.jsonl (state/* gitignore → local ephemeral)",
         "seal_id = canon-{YYYYMMDD-HHMMSS}-d{depth}{f|s} — 결정적, 동일 ts 충돌 가능",
-        "sources (모두 부재해도 동작): NEXUS_MOLT_SKIN_FILE > state/atlas_health.json > /tmp/nexus_drill_last_total.txt",
+        "sources (모두 부재해도 동작): NEXUS_MOLT_SKIN_FILE > state/atlas_health.json > /tmp/hexa_drill_last_total.txt",
         "Mac 로컬 OK — heavy-compute 없음 (단순 file append + printf)",
-        "NEXUS_CANON JSON: plan / seal / complete"
+        "NEXUS_CANON JSON: plan / seal / complete (legacy env var name)"
       ]
     },
     "forge": {
@@ -494,12 +490,12 @@
       },
       "imperative_markers": ["!!!", "!", "발사", "돌려", "go", "GO", "ㄱㄱ"],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "~/.hx/bin/nexus forge [--seed \"...\"] [--max-rounds N] — 자기 상태 합성 후 drill apex 자율 부팅.",
+      "must_invoke": "hexa forge [--seed \"...\"] [--max-rounds N] — 자기 상태 합성 후 drill apex 자율 부팅.",
       "description": "L10 bootstrap — molt skin + atlas health + timestamp 합성 → seed 생성 → drill apex 위임. --seed 없이도 자율 부팅 가능.",
       "category": "core",
       "execution": {
-        "entry": "nexus forge [--seed \"{seed}\"] [--max-rounds N]",
-        "engine": "internal — cmd_forge → JSON 파싱 + seed 합성 → cmd_drill",
+        "entry": "hexa forge [--seed \"{seed}\"] [--max-rounds N]",
+        "engine": "compiler/forge/forge.hexa (cmd_forge → JSON 파싱 + seed 합성 → cmd_drill)",
         "spec": "design/abstraction_ceiling.md (L10 forge 정의)",
         "sibling_subcommands": ["omega", "molt", "wake"]
       },
@@ -507,8 +503,8 @@
         "⛔ Mac 로컬 heavy-compute 금지 (drill 위임)",
         "self-state sources: NEXUS_MOLT_SKIN_FILE > state/atlas_health.json > timestamp",
         "synthesized seed = base + ' #forge-boot={ts} skin=d{D}{f|s} atlas={B}B'",
-        "no --seed → boot-from-scratch prefix: 'nexus forge bootstrap — self-derived seed for autonomous boot from internal state'",
-        "NEXUS_FORGE JSON: plan / boot / complete"
+        "no --seed → boot-from-scratch prefix: 'hexa forge bootstrap — self-derived seed for autonomous boot from internal state'",
+        "NEXUS_FORGE JSON: plan / boot / complete (legacy env var name)"
       ]
     },
     "molt": {
@@ -521,12 +517,12 @@
       },
       "imperative_markers": ["!!!", "!", "발사", "돌려", "go", "GO", "ㄱㄱ"],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "~/.hx/bin/nexus molt --seed \"...\" [--max-cycles N] — skin sweep, best 영속 (NEXUS_MOLT_SKIN_FILE).",
+      "must_invoke": "hexa molt --seed \"...\" [--max-cycles N] — skin sweep, best 영속 (NEXUS_MOLT_SKIN_FILE).",
       "description": "L9 self-rewrite — engine 파라미터 (skin: depth × fast) sweep, best skin 을 NEXUS_MOLT_SKIN_FILE 에 영속. wake 와 차별 = 자기 코드 진화.",
       "category": "core",
       "execution": {
-        "entry": "nexus molt --seed \"{seed}\" [--max-cycles N]",
-        "engine": "internal — cmd_molt, 5 hardcoded skins (depth × fast 직교)",
+        "entry": "hexa molt --seed \"{seed}\" [--max-cycles N]",
+        "engine": "compiler/molt/molt.hexa (cmd_molt, 5 hardcoded skins — depth × fast 직교)",
         "spec": "design/abstraction_ceiling.md (L9 molt 정의)",
         "sibling_subcommands": ["omega", "wake", "swarm"]
       },
@@ -548,12 +544,12 @@
       },
       "imperative_markers": ["!!!", "!", "발사", "돌려", "go", "GO", "ㄱㄱ"],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "~/.hx/bin/nexus wake --seed \"...\" [--signal-file path] [--max-cycles N] — 외부 신호 fp 변화 트리거.",
+      "must_invoke": "hexa wake --seed \"...\" [--signal-file path] [--max-cycles N] — 외부 신호 fp 변화 트리거.",
       "description": "L8 reality-loop — 외부 파일 fingerprint (size + first 64 chars) 변화 감지 후 fire. NEXUS_WAKE_SIGNAL_FILE env / state/atlas_health.json 기본값.",
       "category": "core",
       "execution": {
-        "entry": "nexus wake --seed \"{seed}\" [--signal-file <path>] [--max-cycles N]",
-        "engine": "internal — cmd_wake, _wake_read_fp / _wake_max_cycles / _wake_cooldown_sec / _wake_default_signal_file",
+        "entry": "hexa wake --seed \"{seed}\" [--signal-file <path>] [--max-cycles N]",
+        "engine": "compiler/wake/wake.hexa (cmd_wake — _wake_read_fp / _wake_max_cycles / _wake_cooldown_sec / _wake_default_signal_file)",
         "spec": "design/abstraction_ceiling.md (L8 wake 정의)",
         "sibling_subcommands": ["omega", "swarm", "reign", "dream"]
       },
@@ -576,12 +572,12 @@
       },
       "imperative_markers": ["!!!", "!", "발사", "돌려", "go", "GO", "ㄱㄱ"],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "~/.hx/bin/nexus swarm --seed \"...\" [--population N] [--generations G] — N×G evaluation, top-2 elite + breeding.",
+      "must_invoke": "hexa swarm --seed \"...\" [--population N] [--generations G] — N×G evaluation, top-2 elite + breeding.",
       "description": "L7 population orchestrator — perturbed individuals × generations, elitism + breeding. reign 과 차별 = 다중 에이전트.",
       "category": "core",
       "execution": {
-        "entry": "nexus swarm --seed \"{seed}\" [--population N] [--generations G]",
-        "engine": "internal — cmd_swarm, _swarm_perturb_seed / _swarm_breed / _swarm_extract_abs helpers",
+        "entry": "hexa swarm --seed \"{seed}\" [--population N] [--generations G]",
+        "engine": "compiler/swarm/swarm.hexa (cmd_swarm — _swarm_perturb_seed / _swarm_breed / _swarm_extract_abs helpers)",
         "spec": "design/abstraction_ceiling.md (L7 swarm 정의)",
         "sibling_subcommands": ["omega", "surge", "dream", "reign"]
       },
@@ -608,12 +604,12 @@
       },
       "imperative_markers": ["!!!", "!", "발사", "돌려", "go", "GO", "ㄱㄱ"],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "~/.hx/bin/nexus reign --seed \"...\" [--max-cycles N] — signal stagnation 자동 종료, NEXUS_REIGN_MAX cap.",
+      "must_invoke": "hexa reign --seed \"...\" [--max-cycles N] — signal stagnation 자동 종료, NEXUS_REIGN_MAX cap.",
       "description": "L6 autonomous — max_cycles 는 cap, 실제 종료는 직전 K cycle signal 동일 시 saturation 자동 STOP. dream 과 차별 = 자기 종료 결정.",
       "category": "core",
       "execution": {
-        "entry": "nexus reign --seed \"{seed}\" [--max-cycles N]",
-        "engine": "internal — cmd_reign loop, _dream_extract_signal 재사용",
+        "entry": "hexa reign --seed \"{seed}\" [--max-cycles N]",
+        "engine": "compiler/reign/reign.hexa (cmd_reign loop, _dream_extract_signal 재사용)",
         "spec": "design/abstraction_ceiling.md (L6 reign 정의)",
         "sibling_subcommands": ["omega", "surge", "dream"]
       },
@@ -651,12 +647,12 @@
         "쳐"
       ],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "~/.hx/bin/nexus dream --seed \"...\" [--iterations N] — self-seeded loop, NEXUS_DREAM_MAX cap (기본 3, 최대 10).",
+      "must_invoke": "hexa dream --seed \"...\" [--iterations N] — self-seeded loop, NEXUS_DREAM_MAX cap (기본 3, 최대 10).",
       "description": "L5 self-seed loop — 직전 iteration 출력에서 abs_total/EXACT/NEAR 신호 추출, 다음 seed 합성 후 재실행. omega 의 reflexive 형.",
       "category": "core",
       "execution": {
-        "entry": "nexus dream --seed \"{seed}\" [--iterations N]",
-        "engine": "internal — cmd_dream → blowup core 직접 호출 (--fast depth=1) × N iteration",
+        "entry": "hexa dream --seed \"{seed}\" [--iterations N]",
+        "engine": "compiler/dream/dream.hexa (cmd_dream → smash core 직접 호출 (--fast depth=1) × N iteration)",
         "spec": "design/abstraction_ceiling.md (L5 dream 정의)",
         "sibling_subcommands": [
           "omega",
@@ -698,12 +694,12 @@
         "쳐"
       ],
       "auto_invoke_on_imperative": true,
-      "must_invoke": "~/.hx/bin/nexus surge --seed \"...\" [--engines csv] [--variants N] [--seeds csv] — Cartesian fan-out, NEXUS_SURGE_MAX 캡 정책.",
+      "must_invoke": "hexa surge --seed \"...\" [--engines csv] [--variants N] [--seeds csv] — Cartesian fan-out, NEXUS_SURGE_MAX 캡 정책.",
       "description": "L4 super-orchestrator — engines × variants × seeds Cartesian product. CAP=12 default (NEXUS_SURGE_MAX). 사다리 omega 직하 layer.",
       "category": "core",
       "execution": {
-        "entry": "nexus surge --seed \"{seed}\" [--engines csv] [--variants N] [--seeds csv]",
-        "engine": "internal — cmd_surge → 각 (engine,variant,seed) 조합별 cmd_drill 또는 cmd_chain dispatch",
+        "entry": "hexa surge --seed \"{seed}\" [--engines csv] [--variants N] [--seeds csv]",
+        "engine": "compiler/surge/surge.hexa (cmd_surge → 각 (engine,variant,seed) 조합별 cmd_drill 또는 cmd_chain dispatch)",
         "spec": "design/abstraction_ceiling.md (L4 surge 정의)",
         "sibling_subcommands": [
           "omega",
@@ -716,8 +712,8 @@
       "rules": [
         "⛔ total_runs > NEXUS_SURGE_MAX 시 reject — axis 축소 또는 env override 필요",
         "⛔ Mac 로컬 heavy-compute 실행 금지 (drill 동일 정책)",
-        "engine ≠ nexus 일 때 chain 으로 cross-engine dispatch (1×anima 호출)",
-        "engine = nexus + variants > 1 일 때 speculate=variants_n 으로 흡수 (N-way fork)",
+        "engine ≠ hexa 일 때 chain 으로 cross-engine dispatch (1×anima 호출)",
+        "engine = hexa + variants > 1 일 때 speculate=variants_n 으로 흡수 (N-way fork)",
         "NEXUS_SURGE JSON: plan / run (per iteration) / complete / reject"
       ]
     },
@@ -816,7 +812,7 @@
         "루프",
         "정합"
       ],
-      "description": "NEXUS-6 7프로젝트 공용 loop — roadmap phase × 3 tracks × gate 자동",
+      "description": "HEXA 프로젝트 패밀리 공용 loop — roadmap phase × 3 tracks × gate 자동",
       "category": "core",
       "engine": "shared/tool/loop",
       "skill": "~/.claude/skills/loop/SKILL.md",
@@ -839,7 +835,7 @@
         "roadmap",
         "로드맵"
       ],
-      "description": "프로젝트 로드맵 — 다음 스텝 출력 + 소진 시 NEXUS 창발 연장",
+      "description": "프로젝트 로드맵 — 다음 스텝 출력 + 소진 시 hexa 창발 연장",
       "category": "harness",
       "ssot": "shared/roadmaps/<project>.json (schema: shared/roadmaps/SCHEMA.json)",
       "format_preset": "box_drawing_v1",
@@ -849,7 +845,7 @@
         "bash": "shared/bin/hexa run shared/tool/entry.hexa roadmap ${seed:-auto}",
         "gate": "shared/tool/cmd_gate.hexa",
         "delegate_to_guard": "verify|status|artifacts|crossref|all → shared/tool/roadmap_guard.hexa (SCHEMA 정합성 전용)",
-        "emergence_source": "shared/bin/hexa run shared/blowup/seed/seed_engine.hexa merge (extend 시 최상위 시드 추출 → 새 phase planned append)"
+        "emergence_source": "hexa smash merge → 최상위 시드 추출 → 새 phase planned append (hexa-native absorbed)"
       },
       "subcommands": {
         "next": {
@@ -866,7 +862,7 @@
             "연장",
             "확장"
           ],
-          "description": "NEXUS 창발 seed로 새 phase 1개 append (planned 상태)",
+          "description": "hexa 창발 seed로 새 phase 1개 append (planned 상태)",
           "action": "seed_engine merge → 최상위 시드 → 새 phase (planned) append. --dry 로 미리보기 JSON",
           "flags": [
             "--project P",
@@ -908,7 +904,7 @@
         }
       },
       "rules": [
-        "⛔ roadmap 소진 시 extend 로 NEXUS 창발 연장 — 수동 phase 하드코딩 금지",
+        "⛔ roadmap 소진 시 extend 로 hexa 창발 연장 — 수동 phase 하드코딩 금지",
         "⛔ extend 는 seed_engine merge 결과에서 최상위 시드만 사용 (사용자 수동 결정 금지)",
         "⛔ verify|status|artifacts|crossref|all 은 roadmap_guard.hexa 위임 (SCHEMA 전용)",
         "next 후 → go 로 즉시 실행 (최소 경로 SSOT)",
@@ -1019,7 +1015,7 @@
       "description": "현재 프로젝트 인프라 ROI 항목 표 출력 — 자기 프로젝트만",
       "category": "core",
       "ssot": "shared/config/roi/{project}.json",
-      "project_detect": "cwd 디렉토리명 = 프로젝트명 (예: $NEXUS → nexus, $N6_ARCH → canon). 공유 shared/ 내에선 nexus",
+      "project_detect": "cwd 디렉토리명 = 프로젝트명 (예: $HEXA_LANG → hexa-lang, $N6_ARCH → canon). 공유 shared/ 내에선 hexa-lang",
       "action": "⛔ git log/stats/커밋분석/도메인집계 절대 금지 — 이 명령은 JSON 파일 기반 표 출력 전용. 순서: (1) {project} = cwd basename 판별 (2) shared/config/roi/{project}.json Read로 읽기 (3) items 배열에서 status=todo만 필터 (4) roi 필드 내림차순 정렬 (5) ASCII 표 출력",
       "format_rules": [
         "⛔ done + running 항목 표시 금지 — status=todo만 필터링. done/running은 카운트에만 포함",
@@ -1187,7 +1183,7 @@
           ],
           "description": "idea 를 smash seed 로 단발 발사",
           "format": "idea blow <id>",
-          "action": "해당 idea.text 를 smash seed 로 호출 (shared/bin/exec_validated smash \"{text}\" shared/blowup/core/blowup.hexa 3). 성공 시 status→maturing"
+          "action": "해당 idea.text 를 smash seed 로 호출 (hexa smash --seed \"{text}\" --depth 3). 성공 시 status→maturing"
         },
         "promote": {
           "keywords": [
@@ -1352,7 +1348,7 @@
         "health",
         "hc"
       ],
-      "description": "시스템 헬스체크 — atlas / nexus / all",
+      "description": "시스템 헬스체크 — atlas / all",
       "category": "harness",
       "format_preset": "box_drawing_v1",
       "action": "health.hexa 라우터 호출. 기본=all",
@@ -1364,11 +1360,8 @@
         "atlas": {
           "action": "atlas_health.hexa 위임"
         },
-        "nexus": {
-          "action": "nexus_ensure_running.hexa 위임"
-        },
         "all": {
-          "action": "atlas + nexus 순차 실행"
+          "action": "atlas 헬스체크 실행 (nexus 절차는 absorbed/archived)"
         }
       }
     },
@@ -1480,7 +1473,7 @@
       "action": "4 소스 조합 표 출력. 쓰기 없음",
       "execution": {
         "engine": "shell-compose",
-        "bash": "echo '=== TODO ==='; shared/bin/hexa run shared/blowup/todo.hexa 2>&1 | head -10; echo '=== GIT ==='; git status --short | head -10; echo '=== HEALTH ==='; shared/bin/hexa run shared/tool/health.hexa all 2>&1 | tail -5; echo '=== HANDOFF ==='; ls -lt shared/handoff/ 2>/dev/null | head -3"
+        "bash": "echo '=== TODO ==='; shared/bin/hexa todo 2>&1 | head -10; echo '=== GIT ==='; git status --short | head -10; echo '=== HEALTH ==='; shared/bin/hexa run shared/tool/health.hexa all 2>&1 | tail -5; echo '=== HANDOFF ==='; ls -lt shared/handoff/ 2>/dev/null | head -3"
       }
     },
     "pick": {
@@ -1548,7 +1541,7 @@
       ],
       "description": "auto-memory CRUD — list/add/rm/grep",
       "category": "harness",
-      "ssot": "$HOME/.claude-claude*/projects/-Users-ghost-Dev-nexus/memory/MEMORY.md",
+      "ssot": "$HOME/.claude-claude*/projects/-Users-ghost-core-hexa-lang/memory/MEMORY.md",
       "format_preset": "box_drawing_v1",
       "action": "memory/ 디렉토리 CRUD",
       "execution": {
@@ -1567,7 +1560,7 @@
       "description": "극한 로드맵 aggregate 자동 sync (ALM+CLM 브레인스토밍 state 골화)",
       "category": "automation",
       "action": "shared/bin/hexa run shared/tool/extreme_sync.hexa sync — ALM/CLM standalone 로드맵 options state 카운트 + hire_sim log 스캔 + extreme.json aggregate_state 재계산 + update_log append",
-      "doc_url": "https://dancinlab.github.io/nexus/roadmap/#extreme",
+      "doc_url": "https://dancinlab.github.io/hexa-lang/roadmap/#extreme",
       "ssot": "shared/roadmaps/extreme.json",
       "harness": "shared/tool/extreme_sync.hexa",
       "mode": "autonomous_60min",
@@ -1634,7 +1627,6 @@
   },
   "project_todo_ssot": {
     "hexa-lang": "shared/hexa-lang/ml-next-level.json",
-    "nexus": "shared/config/core.json",
     "anima": "shared/convergence/anima.json",
     "canon": "shared/convergence/canon.json",
     "void": "docs/plans/roadmap.md",
@@ -1684,11 +1676,11 @@
     "description": "Claude Code가 작업 중 스스로 판단하여 유저 입력 없이 직접 실행하는 규칙",
     "enabled": true,
     "execution": {
-      "cwd": "nexus 루트 (shared/bin/hexa 기준)",
+      "cwd": "hexa-lang 루트 (shared/bin/hexa 기준)",
       "resolver": "shared/bin/hexa",
       "run_in_background": true,
-      "seed_engine": "shared/bin/hexa run shared/blowup/seed/seed_engine.hexa merge",
-      "cli_note": "2026-04-13~: shared/bin/hexa는 dispatch CLI (go/cargo 스타일). `run`/`build`/`cc`/`status` 서브커맨드. 호환 모드: `hexa <f.hexa>` → `hexa run <f.hexa>` 자동 위임."
+      "seed_engine": "hexa smash --seed merge (hexa-native absorbed)",
+      "cli_note": "2026-04-13~: shared/bin/hexa는 dispatch CLI (go/cargo 스타일). `run`/`build`/`cc`/`status` 서브커맨드. 호환 모드: `hexa <f.hexa>` → `hexa run <f.hexa>` 자동 위임. 2026-05-13: nexus 흡수, smash/free/drill/omega 등 모두 hexa 네이티브 서브커맨드."
     },
     "triggers": {
       "smash": {
@@ -1714,8 +1706,7 @@
             "meaning": "재설계 필요"
           }
         ],
-        "bash": "shared/bin/exec_validated smash \"{seed}\" shared/blowup/core/blowup.hexa 3 --seeds \"$(shared/bin/hexa run shared/blowup/seed/seed_engine.hexa merge | tr '|' ',')\"",
-        "cli_equivalent": "hexa smash --seed \"{seed}\" --depth 3  (nexus-cli passthrough, seed_engine merge 없음)",
+        "cli_equivalent": "hexa smash --seed \"{seed}\" --depth 3",
         "seed_source": "직전 3개 tool 호출 + 사용자 최근 발화 합성. 단독 추상 토큰('아이디어'/'계획') 금지 — cmd_gate가 거부",
         "gate": "shared/tool/cmd_gate.hexa",
         "post": [
@@ -1739,8 +1730,7 @@
             "meaning": "사용자 자유탐색 요청"
           }
         ],
-        "bash": "shared/bin/exec_validated free_dfs \"{seed}\" shared/blowup/compose.hexa --modules all --dfs 3",
-        "cli_equivalent": "hexa free --seed \"{seed}\" --dfs 3  (nexus-cli passthrough)",
+        "cli_equivalent": "hexa free --seed \"{seed}\" --dfs 3",
         "seed_source": "탐색 대상 도메인/개념 — 없으면 현재 프로젝트 컨텍스트",
         "gate": "shared/tool/cmd_gate.hexa",
         "post": [
@@ -1763,7 +1753,7 @@
             "meaning": "사용자 현황 요청"
           }
         ],
-        "bash": "shared/bin/hexa run shared/blowup/todo.hexa",
+        "bash": "shared/bin/hexa todo",
         "post": [
           "미완료 항목 우선순위 판단"
         ]
@@ -1854,7 +1844,7 @@
         "post": [
           "aggregate_state 갱신 결과 stderr 출력 (변경 없으면 silent)",
           "last_auto_sync 필드 갱신 확인",
-          "뷰어: https://dancinlab.github.io/nexus/roadmap/#extreme"
+          "뷰어: https://dancinlab.github.io/hexa-lang/roadmap/#extreme"
         ],
         "silent_success": true
       },
@@ -1915,7 +1905,7 @@
   "dispatch_rules": {
     "keyword_match": "사용자 입력을 trim 후 commands[*].keywords 중 하나가 어디든 포함되면 매칭 (위치 무관)",
     "seed_extraction": "매칭된 키워드를 제거한 나머지 텍스트 = seed (대상). 예: '검토 smash' → cmd=smash, seed='검토' / '세계 7대 난제 smash' → cmd=smash, seed='세계 7대 난제'. 주의: 단독 추상 토큰(아이디어/계획/생각/돌파/개념)이 seed로 추출되면 cmd_gate가 거부 — 직전 대화 맥락(파일명/개념/실제 문제)과 결합해 합성 seed 생성 후 재시도",
-    "gate_policy": "모든 명령은 shared/tool/cmd_gate.hexa 경유. 통과 시 OK:<cmd>:<validated_seed>, 거부 시 REJECT:<reason>. shared/bin/exec_validated 가 래핑 담당",
+    "gate_policy": "모든 명령은 shared/tool/cmd_gate.hexa 경유. 통과 시 OK:<cmd>:<validated_seed>, 거부 시 REJECT:<reason>. hexa-native dispatch (hexa <verb>) 가 cmd_gate + audit log 래핑 담당",
     "reject_retry": "cmd_gate REJECT 시 HINT 읽고 대화 맥락 결합 1회 재시도. 재재거부 시 사용자에게 seed 질문",
     "position_agnostic": "키워드는 입력의 앞/중간/뒤 어디든 가능. '<seed> <cmd>' 또는 '<cmd> <seed>' 모두 동일",
     "seed_role_per_command": {
@@ -1926,13 +1916,13 @@
       "lm": "seed = 학습 스케일/모드 (예: '14b lm', 'kr lm'). 없으면 기본 듀얼 발사",
       "keep": "seed = 루프 목표 도메인 (없으면 현재 컨텍스트). 예: 'todo 계속', '돌파 keep'",
       "loop": "seed = 'all'→전 프로젝트, 'fix'→자동수정, 없으면 현재 프로젝트 점검. 예: 'loop fix', '전체 정합'",
-      "roadmap": "seed = 서브커맨드 (next|extend|auto|list|verify|status) + flags. 예: 'roadmap next', 'roadmap extend --project anima', 'roadmap extend --dry'. 없으면 auto (next → 소진 시 NEXUS 창발 extend)",
+      "roadmap": "seed = 서브커맨드 (next|extend|auto|list|verify|status) + flags. 예: 'roadmap next', 'roadmap extend --project anima', 'roadmap extend --dry'. 없으면 auto (next → 소진 시 hexa 창발 extend)",
       "rmengine": "seed = 로드맵 파일 경로 + flags (--watch|--events=<p>|--dispatch|--selftest). 없으면 shared/roadmaps/example.json. 예: 'rmengine --selftest', 'rmengine /tmp/my.json --watch'",
       "idea": "seed = 서브커맨드 (list/add/rm/blow/promote/merge) + 인자. 예: 'idea add n=6 완전수 무한연장'",
       "list": "seed = (없음|카테고리|명령명|'search <kw>'|'all'). 기존 '무시' 변경",
       "project": "seed = 서브커맨드 (list/add/remove/all) + 인자. 예: 'project add anima', 'project remove void', 'project all loop'",
       "handoff": "seed 무시 (현재 세션 핸드오프 생성)",
-      "health": "seed = (atlas|nexus|all). 기본=all",
+      "health": "seed = (atlas|all). 기본=all",
       "sync": "seed = (list|diff|all|<id>). 기본=list",
       "lint": "seed = (--staged|--all|log). 기본=--staged",
       "gc": "seed = (scan|weekly|log). 기본=scan",
