@@ -1,0 +1,44 @@
+// HEXA Native Compiler — Phase 4 bridge: cmb
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for Planck Cosmic Microwave Background parameters.
+// Source:   ~/core/nexus/tool/cmb_planck_bridge.hexa (390 LOC)
+// Live:     https://pla.esac.esa.int/pla/...  (Planck Legacy Archive)
+// Fallback: Planck 2018 (TT+TE+EE+lowE+lensing) baseline cosmology.
+
+import "./_common.hexa"
+
+fn _cmb_frozen() -> string {
+    return "{\"tool\":\"cmb\",\"source\":\"fallback:Planck-2018-baseline\"," +
+        "\"omega_b_h2\":0.02237," +
+        "\"omega_c_h2\":0.1200," +
+        "\"100theta_mc\":1.04092," +
+        "\"tau\":0.0544," +
+        "\"ns\":0.9649," +
+        "\"ln10A_s\":3.044," +
+        "\"H_0\":67.36," +
+        "\"sigma_8\":0.8111," +
+        "\"omega_m\":0.3153}"
+}
+
+pub fn cmb_live() -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    // Planck legacy archive doesn't expose a simple ascii endpoint;
+    // we probe the metadata page to detect reachability.
+    let url = "https://pla.esac.esa.int/pla/aio/metadata-action?RESOURCE_CLASS=COSMOLOGY"
+    let r = http_get(url, 4096)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"cmb\",\"source\":\"live:pla.esac.esa.int\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn cmb_fallback() -> array { return ok_body(_cmb_frozen()) }
+
+pub fn cmb_run(_args: [string]) -> array {
+    if http_available() {
+        let r = cmb_live()
+        if cli_ok(r) { return r }
+    }
+    return cmb_fallback()
+}

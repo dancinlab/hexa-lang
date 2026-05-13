@@ -1,0 +1,45 @@
+// HEXA Native Compiler — Phase 4 bridge: simbad
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for the SIMBAD astronomical database (CDS/Strasbourg).
+// Source:   ~/core/nexus/tool/simbad_bridge.hexa (516 LOC)
+// Live:     http://simbad.u-strasbg.fr/simbad/sim-id?Ident=<obj>&output.format=ASCII
+// Fallback: pre-baked metadata for SgrA*, Sirius, Polaris (anchor objects).
+
+import "./_common.hexa"
+
+fn _simbad_frozen(obj: string) -> string {
+    if obj == "SgrA*" || obj == "Sgr A*" {
+        return "{\"object\":\"Sgr A*\",\"ra_j2000\":\"17 45 40.041\",\"dec_j2000\":\"-29 00 28.12\",\"otype\":\"X(SuperMassive BH)\",\"distance_kpc\":8.178}"
+    }
+    if obj == "Sirius" {
+        return "{\"object\":\"Sirius\",\"ra_j2000\":\"06 45 08.917\",\"dec_j2000\":\"-16 42 58.02\",\"otype\":\"**A (binary star)\",\"distance_pc\":2.637}"
+    }
+    if obj == "Polaris" {
+        return "{\"object\":\"Polaris\",\"ra_j2000\":\"02 31 49.09\",\"dec_j2000\":\"+89 15 50.79\",\"otype\":\"V*\",\"distance_pc\":132.6}"
+    }
+    return "{\"object\":\"" + obj + "\",\"fallback_unavailable\":true,\"todo\":\"cache-population\"}"
+}
+
+pub fn simbad_live(obj: string) -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let url = "http://simbad.u-strasbg.fr/simbad/sim-id?Ident=" + obj.replace(" ", "+") + "&output.format=ASCII"
+    let r = http_get(url, 16384)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"simbad\",\"source\":\"live:simbad.u-strasbg.fr\",\"object\":\"" + obj + "\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn simbad_fallback(obj: string) -> array {
+    return ok_body("{\"tool\":\"simbad\",\"source\":\"fallback:frozen-cache\",\"data\":" + _simbad_frozen(obj) + "}")
+}
+
+pub fn simbad_run(args: [string]) -> array {
+    let obj = if len(args) > 0 { args[0] } else { "SgrA*" }
+    if http_available() {
+        let r = simbad_live(obj)
+        if cli_ok(r) { return r }
+    }
+    return simbad_fallback(obj)
+}

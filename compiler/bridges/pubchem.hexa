@@ -1,0 +1,43 @@
+// HEXA Native Compiler — Phase 4 bridge: pubchem
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for PubChem chemical compound database.
+// Source:   ~/core/nexus/tool/pubchem_bridge.hexa (663 LOC)
+// Live:     https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/<cid>/property/...
+// Fallback: water (CID=962) + caffeine (CID=2519) anchors.
+
+import "./_common.hexa"
+
+fn _pubchem_frozen(cid: string) -> string {
+    if cid == "962" {
+        return "{\"cid\":962,\"name\":\"Water\",\"formula\":\"H2O\",\"molecular_weight\":18.015,\"canonical_smiles\":\"O\"}"
+    }
+    if cid == "2519" {
+        return "{\"cid\":2519,\"name\":\"Caffeine\",\"formula\":\"C8H10N4O2\",\"molecular_weight\":194.19,\"canonical_smiles\":\"CN1C=NC2=C1C(=O)N(C(=O)N2C)C\"}"
+    }
+    return "{\"cid\":\"" + cid + "\",\"fallback_unavailable\":true,\"todo\":\"cache-population\"}"
+}
+
+pub fn pubchem_live(cid: string) -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let c = if cid.len() > 0 { cid } else { "962" }
+    let url = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/" + c + "/property/MolecularWeight,MolecularFormula,CanonicalSMILES/JSON"
+    let r = http_get(url, 8192)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"pubchem\",\"source\":\"live:pubchem.ncbi.nlm.nih.gov\",\"cid\":\"" + c + "\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn pubchem_fallback(cid: string) -> array {
+    return ok_body("{\"tool\":\"pubchem\",\"source\":\"fallback:frozen-cache\",\"data\":" + _pubchem_frozen(cid) + "}")
+}
+
+pub fn pubchem_run(args: [string]) -> array {
+    let cid = if len(args) > 0 { args[0] } else { "962" }
+    if http_available() {
+        let r = pubchem_live(cid)
+        if cli_ok(r) { return r }
+    }
+    return pubchem_fallback(cid)
+}

@@ -1,0 +1,39 @@
+// HEXA Native Compiler — Phase 4 bridge: nanograv
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for NANOGrav pulsar timing array.
+// Source:   ~/core/nexus/tool/nanograv_pulsar_bridge.hexa (380 LOC)
+// Live:     https://data.nanograv.org/...   (NANOGrav 15yr data portal)
+// Fallback: NG15 stochastic gravitational-wave background summary stats.
+
+import "./_common.hexa"
+
+fn _nanograv_frozen() -> string {
+    return "{\"tool\":\"nanograv\",\"source\":\"fallback:NG15-summary\"," +
+        "\"dataset\":\"NG 15-year\"," +
+        "\"pulsar_count\":67," +
+        "\"observation_span_yr\":16.3," +
+        "\"gwb_amplitude_log10\":-14.6," +
+        "\"gwb_spectral_index\":-2/3," +
+        "\"significance_sigma\":3.5}"
+}
+
+pub fn nanograv_live() -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let url = "https://data.nanograv.org/api/pulsars"
+    let r = http_get(url, 16384)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"nanograv\",\"source\":\"live:data.nanograv.org\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn nanograv_fallback() -> array { return ok_body(_nanograv_frozen()) }
+
+pub fn nanograv_run(_args: [string]) -> array {
+    if http_available() {
+        let r = nanograv_live()
+        if cli_ok(r) { return r }
+    }
+    return nanograv_fallback()
+}

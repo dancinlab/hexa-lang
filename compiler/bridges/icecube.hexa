@@ -1,0 +1,40 @@
+// HEXA Native Compiler — Phase 4 bridge: icecube
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for IceCube neutrino observatory.
+// Source:   ~/core/nexus/tool/icecube_neutrino_bridge.hexa (465 LOC)
+// Live:     https://icecube.wisc.edu/data-releases/
+// Fallback: IC86 high-energy starting event (HESE) summary anchors.
+
+import "./_common.hexa"
+
+fn _icecube_frozen() -> string {
+    return "{\"tool\":\"icecube\",\"source\":\"fallback:IC86-HESE-summary\"," +
+        "\"detector\":\"IC86\"," +
+        "\"livetime_yr\":7.5," +
+        "\"hese_event_count\":103," +
+        "\"astrophysical_flux_log10\":-18.0," +
+        "\"spectral_index\":2.5," +
+        "\"first_extragalactic_source\":\"TXS 0506+056\"," +
+        "\"first_extragalactic_date\":\"2017-09-22\"}"
+}
+
+pub fn icecube_live() -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let url = "https://icecube.wisc.edu/data-releases/"
+    let r = http_get(url, 8192)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"icecube\",\"source\":\"live:icecube.wisc.edu\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn icecube_fallback() -> array { return ok_body(_icecube_frozen()) }
+
+pub fn icecube_run(_args: [string]) -> array {
+    if http_available() {
+        let r = icecube_live()
+        if cli_ok(r) { return r }
+    }
+    return icecube_fallback()
+}

@@ -1,0 +1,39 @@
+// HEXA Native Compiler — Phase 4 bridge: lhc
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for CERN LHC Open Data Portal.
+// Source:   ~/core/nexus/tool/lhc_opendata_bridge.hexa (588 LOC)
+// Live:     https://opendata.cern.ch/api/records
+// Fallback: Higgs discovery anchor (125 GeV peak, ATLAS+CMS combined).
+
+import "./_common.hexa"
+
+fn _lhc_frozen() -> string {
+    return "{\"tool\":\"lhc\",\"source\":\"fallback:Higgs-discovery-anchor\"," +
+        "\"discovery\":\"Higgs boson\"," +
+        "\"announcement\":\"2012-07-04\"," +
+        "\"mass_gev\":125.10," +
+        "\"mass_uncert_gev\":0.14," +
+        "\"experiments\":[\"ATLAS\",\"CMS\"]," +
+        "\"sqrt_s_tev\":[7,8]}"
+}
+
+pub fn lhc_live() -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let url = "https://opendata.cern.ch/api/records/?size=5"
+    let r = http_get(url, 16384)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"lhc\",\"source\":\"live:opendata.cern.ch\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn lhc_fallback() -> array { return ok_body(_lhc_frozen()) }
+
+pub fn lhc_run(_args: [string]) -> array {
+    if http_available() {
+        let r = lhc_live()
+        if cli_ok(r) { return r }
+    }
+    return lhc_fallback()
+}

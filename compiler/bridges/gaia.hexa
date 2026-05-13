@@ -1,0 +1,40 @@
+// HEXA Native Compiler — Phase 4 bridge: gaia
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for ESA Gaia astrometric catalog.
+// Source:   ~/core/nexus/tool/gaia_bridge.hexa (478 LOC)
+// Live:     https://gea.esac.esa.int/tap-server/tap/sync   (ADQL queries)
+// Fallback: Gaia DR3 anchor summary stats.
+
+import "./_common.hexa"
+
+fn _gaia_frozen() -> string {
+    return "{\"tool\":\"gaia\",\"source\":\"fallback:Gaia-DR3-summary\"," +
+        "\"data_release\":\"Gaia DR3\"," +
+        "\"release_date\":\"2022-06-13\"," +
+        "\"total_sources\":1811709771," +
+        "\"with_parallax_pct\":78.0," +
+        "\"epoch\":\"J2016.0\"}"
+}
+
+pub fn gaia_live() -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    // ADQL-via-GET probe; in practice ADQL needs POST so this only
+    // verifies reachability for the smoke. δ semantics still hold.
+    let url = "https://gea.esac.esa.int/tap-server/tap/tables"
+    let r = http_get(url, 4096)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"gaia\",\"source\":\"live:gea.esac.esa.int\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn gaia_fallback() -> array { return ok_body(_gaia_frozen()) }
+
+pub fn gaia_run(_args: [string]) -> array {
+    if http_available() {
+        let r = gaia_live()
+        if cli_ok(r) { return r }
+    }
+    return gaia_fallback()
+}

@@ -1,0 +1,49 @@
+// HEXA Native Compiler — Phase 4 bridge: oeis
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for the OEIS (On-line Encyclopedia of Integer Sequences).
+// Source:   ~/core/nexus/tool/oeis_live_bridge.hexa (310 LOC)
+// Live:     https://oeis.org/<seq>/b<numeric>.txt  (b-file plaintext)
+// Fallback: hard-coded n=1..6 anchor terms for A000396 (perfect),
+//           A000203 (sigma), A000005 (tau), A000010 (phi).
+//
+// γ enforced: returns body only.
+
+import "./_common.hexa"
+
+fn _oeis_frozen(seq: string) -> string {
+    // Hard-coded n=1..6 anchor terms (same as nexus axis_oeis static table).
+    if seq == "A000396" { return "[6, 28, 496, 8128, 33550336, 8589869056]" }
+    if seq == "A000203" { return "[1, 3, 4, 7, 6, 12]" }
+    if seq == "A000005" { return "[1, 2, 2, 3, 2, 4]" }
+    if seq == "A000010" { return "[1, 1, 2, 2, 4, 2]" }
+    return "[]"
+}
+
+pub fn oeis_live(seq: string) -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    if seq.len() < 2 || seq.substring(0, 1) != "A" {
+        return fail_body("oeis: invalid seq id '" + seq + "'")
+    }
+    let tail = seq.substring(1, len(seq))
+    let url = "https://oeis.org/" + seq + "/b" + tail + ".txt"
+    let r = http_get(url, 8192)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"oeis\",\"source\":\"live:oeis.org\",\"seq\":\"" + seq + "\",\"b_file_excerpt\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn oeis_fallback(seq: string) -> array {
+    let body = "{\"tool\":\"oeis\",\"source\":\"fallback:frozen-cache\",\"seq\":\"" + seq + "\",\"first6\":" + _oeis_frozen(seq) + "}"
+    return ok_body(body)
+}
+
+pub fn oeis_run(args: [string]) -> array {
+    let seq = if len(args) > 0 { args[0] } else { "A000396" }
+    if http_available() {
+        let r = oeis_live(seq)
+        if cli_ok(r) { return r }
+    }
+    return oeis_fallback(seq)
+}

@@ -1,0 +1,40 @@
+// HEXA Native Compiler — Phase 4 bridge: horizons
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for NASA JPL Horizons solar-system ephemeris.
+// Source:   ~/core/nexus/tool/horizons_bridge.hexa (344 LOC)
+// Live:     https://ssd.jpl.nasa.gov/api/horizons.api
+// Fallback: hardcoded earth-moon orbital constants (mean values).
+
+import "./_common.hexa"
+
+fn _horizons_frozen() -> string {
+    return "{\"tool\":\"horizons\",\"source\":\"fallback:frozen-cache\"," +
+        "\"body\":\"earth-moon\"," +
+        "\"semi_major_axis_km\":384400," +
+        "\"eccentricity\":0.0549," +
+        "\"orbital_period_days\":27.32166," +
+        "\"inclination_deg\":5.145}"
+}
+
+pub fn horizons_live(body_id: string) -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let b = if body_id.len() > 0 { body_id } else { "301" }   // 301 = Moon
+    let url = "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='" + b + "'&OBJ_DATA=YES"
+    let r = http_get(url, 16384)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"horizons\",\"source\":\"live:jpl.nasa.gov\",\"body\":\"" + b + "\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn horizons_fallback() -> array { return ok_body(_horizons_frozen()) }
+
+pub fn horizons_run(args: [string]) -> array {
+    let body_id = if len(args) > 0 { args[0] } else { "301" }
+    if http_available() {
+        let r = horizons_live(body_id)
+        if cli_ok(r) { return r }
+    }
+    return horizons_fallback()
+}

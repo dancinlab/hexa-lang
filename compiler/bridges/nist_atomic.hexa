@@ -1,0 +1,42 @@
+// HEXA Native Compiler — Phase 4 bridge: nist_atomic
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for NIST Atomic Spectra Database.
+// Source:   ~/core/nexus/tool/nist_atomic_bridge.hexa (545 LOC)
+// Live:     https://physics.nist.gov/cgi-bin/ASD/lines1.pl
+// Fallback: hydrogen Balmer/Lyman series anchor wavelengths.
+
+import "./_common.hexa"
+
+fn _nist_atomic_frozen() -> string {
+    return "{\"tool\":\"nist_atomic\",\"source\":\"fallback:H-balmer-lyman\"," +
+        "\"element\":\"H\"," +
+        "\"lyman_alpha_nm\":121.567," +
+        "\"lyman_beta_nm\":102.572," +
+        "\"balmer_alpha_nm\":656.281," +
+        "\"balmer_beta_nm\":486.135," +
+        "\"balmer_gamma_nm\":434.046," +
+        "\"rydberg_const_inv_m\":10973731.568157}"
+}
+
+pub fn nist_atomic_live(element: string) -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let el = if element.len() > 0 { element } else { "H" }
+    let url = "https://physics.nist.gov/cgi-bin/ASD/lines1.pl?spectra=" + el + "&format=2&output_type=0&line_out=0"
+    let r = http_get(url, 32768)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"nist_atomic\",\"source\":\"live:physics.nist.gov\",\"element\":\"" + el + "\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn nist_atomic_fallback() -> array { return ok_body(_nist_atomic_frozen()) }
+
+pub fn nist_atomic_run(args: [string]) -> array {
+    let el = if len(args) > 0 { args[0] } else { "H" }
+    if http_available() {
+        let r = nist_atomic_live(el)
+        if cli_ok(r) { return r }
+    }
+    return nist_atomic_fallback()
+}

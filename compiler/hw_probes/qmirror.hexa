@@ -1,0 +1,136 @@
+// HEXA Native Compiler — Phase 4 external-resource absorption: qmirror probe
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ (try-live-or-fallback) adapter for the `qmirror` standalone CLI.
+// Source: `~/core/nexus/cli/qmirror.hexa` + `~/core/nexus/cli/run.hexa
+// ::cmd_qmirror` (line ~924 region).
+//
+// Live path: shells out to the standalone qmirror binary using the
+// 4-tier resolution from nexus:
+//   1. $QMIRROR_ROOT env override
+//   2. /Users/ghost/core/qmirror
+//   3. $HOME/core/qmirror
+//   4. PATH-resolved `qmirror`
+//
+// Fallback path: deterministic 8/8 cond closure stub. This mirrors
+// the already-deterministic Phase 1+2 stub the production qmirror
+// emits when no quantum backend is configured (see
+// docs/nexus_qmirror_cli_refactor_landed_2026_05_03.ai.md). The shape
+// is shape-compatible with the live `qmirror status --json` payload.
+//
+// γ enforced: returns values only. No atlas / audit / discovery
+// writes. Network/HW calls bounded by HEXA_CLI_TIMEOUT_SEC (default
+// 30 s).
+
+import "./_common.hexa"
+
+// ── resolution ──
+
+pub fn _qmirror_resolved_root() -> string {
+    let envroot = env("QMIRROR_ROOT")
+    if envroot.len() > 0 {
+        let p = envroot + "/cli/qmirror.hexa"
+        let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
+        if r == "yes" { return envroot }
+    }
+    let mac_root = "/Users/ghost/core/qmirror"
+    let mac_p = mac_root + "/cli/qmirror.hexa"
+    if exec("[ -f " + shq(mac_p) + " ] && echo yes || echo no").trim() == "yes" {
+        return mac_root
+    }
+    let home = env("HOME")
+    let home_root = home + "/core/qmirror"
+    let home_p = home_root + "/cli/qmirror.hexa"
+    if exec("[ -f " + shq(home_p) + " ] && echo yes || echo no").trim() == "yes" {
+        return home_root
+    }
+    return ""  // tier 4 = PATH-binary; no root dir
+}
+
+pub fn qmirror_live_available() -> bool {
+    if env("HEXA_FORCE_FALLBACK") == "1" { return false }
+    if _qmirror_resolved_root().len() > 0 { return true }
+    return cli_available("qmirror")
+}
+
+// ── live invocation ──
+
+pub fn qmirror_exec_live(sub: string, extra: [string]) -> array {
+    // Prefer standalone-root invocation via `hexa run`; otherwise PATH binary.
+    let root = _qmirror_resolved_root()
+    if root.len() > 0 {
+        // Build args = ["run", "<root>/cli/qmirror.hexa", sub, ...extra]
+        let cli = root + "/cli/qmirror.hexa"
+        let mut a: [string] = []
+        a.push("run")
+        a.push(cli)
+        a.push(sub)
+        let mut i = 0
+        while i < len(extra) { a.push(extra[i]); i = i + 1 }
+        // Resolve hexa binary: $HEXA_BIN or default to ~/.hx/bin/hexa
+        let hb_env = env("HEXA_BIN")
+        let hb = if hb_env.len() > 0 { hb_env } else { env("HOME") + "/.hx/bin/hexa" }
+        return exec_cli(hb, a)
+    }
+    let mut a2: [string] = []
+    a2.push(sub)
+    let mut j = 0
+    while j < len(extra) { a2.push(extra[j]); j = j + 1 }
+    return exec_cli("qmirror", a2)
+}
+
+// ── fallback: deterministic Phase 1+2 closure 8/8 cond stub ──
+//
+// Each closure condition (cond.1..cond.8) is a fixed pass under the
+// Phase 1+2 mock backend (already deterministic in production qmirror).
+// Shape mirrors `qmirror status --json` tail.
+pub fn qmirror_fallback(sub: string, _extra: [string]) -> array {
+    let s = sub
+    if s == "status" || s == "" {
+        let json = "{\n" +
+            "  \"tool\": \"qmirror\",\n" +
+            "  \"mode\": \"fallback-deterministic\",\n" +
+            "  \"closure\": {\n" +
+            "    \"cond.1_chsh\": \"PASS\",\n" +
+            "    \"cond.2_nist\": \"PASS\",\n" +
+            "    \"cond.3_bell\": \"PASS\",\n" +
+            "    \"cond.4_iit\": \"PASS\",\n" +
+            "    \"cond.5_tsirelson\": \"PASS\",\n" +
+            "    \"cond.6_kochen_specker\": \"PASS\",\n" +
+            "    \"cond.7_qrng\": \"PASS\",\n" +
+            "    \"cond.8_selftest\": \"PASS\"\n" +
+            "  },\n" +
+            "  \"verdict\": \"8/8 PASS (deterministic stub)\"\n" +
+            "}"
+        return [true, json, "", 0]
+    }
+    if s == "chsh" {
+        return [true, "{\"tool\":\"qmirror chsh\",\"mode\":\"fallback\",\"S\":2.828427,\"tsirelson\":\"PASS\"}", "", 0]
+    }
+    if s == "nist" {
+        return [true, "{\"tool\":\"qmirror nist\",\"mode\":\"fallback\",\"tier1_plus\":\"PASS\"}", "", 0]
+    }
+    if s == "iit" {
+        return [true, "{\"tool\":\"qmirror iit\",\"mode\":\"fallback\",\"phi_star\":0.500000}", "", 0]
+    }
+    if s == "qrng" {
+        return [true, "{\"tool\":\"qmirror qrng\",\"mode\":\"fallback\",\"bits\":64,\"entropy\":\"deterministic-prng\"}", "", 0]
+    }
+    if s == "selftest" {
+        return [true, "{\"tool\":\"qmirror selftest\",\"mode\":\"fallback\",\"F1_F5\":\"5/5 PASS\"}", "", 0]
+    }
+    return [false, "", "qmirror_fallback: unknown subcmd '" + s + "'", 2]
+}
+
+// ── δ dispatcher ──
+
+pub fn qmirror_run(sub: string, extra: [string]) -> array {
+    if qmirror_live_available() {
+        let r = qmirror_exec_live(sub, extra)
+        if cli_ok(r) { return r }
+        // transient failure → fall through
+    }
+    return qmirror_fallback(sub, extra)
+}

@@ -1,0 +1,42 @@
+// HEXA Native Compiler — Phase 4 bridge: wikipedia
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for Wikipedia REST summary.
+// Source:   ~/core/nexus/tool/wikipedia_summary_bridge.hexa (344 LOC)
+// Live:     https://en.wikipedia.org/api/rest_v1/page/summary/<title>
+// Fallback: empty-cache placeholder per topic; TODO(cache-population).
+
+import "./_common.hexa"
+
+fn _wikipedia_frozen(title: string) -> string {
+    if title == "Perfect_number" {
+        return "{\"title\":\"Perfect number\",\"extract\":\"A perfect number is a positive integer equal to the sum of its proper divisors. Smallest example: 6 = 1+2+3.\",\"first_perfect\":6}"
+    }
+    if title == "Fine-structure_constant" || title == "Fine_structure_constant" {
+        return "{\"title\":\"Fine-structure constant\",\"extract\":\"Dimensionless fundamental constant, alpha ≈ 1/137.036, characterizing the strength of electromagnetic interaction.\",\"alpha_inv\":137.036}"
+    }
+    return "{\"title\":\"" + title + "\",\"fallback_unavailable\":true,\"todo\":\"cache-population\"}"
+}
+
+pub fn wikipedia_live(title: string) -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + title.replace(" ", "_")
+    let r = http_get(url, 16384)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"wikipedia\",\"source\":\"live:en.wikipedia.org\",\"title\":\"" + title + "\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn wikipedia_fallback(title: string) -> array {
+    return ok_body("{\"tool\":\"wikipedia\",\"source\":\"fallback:frozen-cache\",\"data\":" + _wikipedia_frozen(title) + "}")
+}
+
+pub fn wikipedia_run(args: [string]) -> array {
+    let title = if len(args) > 0 { args[0] } else { "Perfect_number" }
+    if http_available() {
+        let r = wikipedia_live(title)
+        if cli_ok(r) { return r }
+    }
+    return wikipedia_fallback(title)
+}

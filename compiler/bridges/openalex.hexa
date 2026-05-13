@@ -1,0 +1,35 @@
+// HEXA Native Compiler — Phase 4 bridge: openalex
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for OpenAlex scholarly graph.
+// Source:   ~/core/nexus/tool/openalex_bridge.hexa (559 LOC)
+// Live:     https://api.openalex.org/works?search=<q>
+// Fallback: empty-cache placeholder; TODO(cache-population).
+
+import "./_common.hexa"
+
+fn _openalex_frozen() -> string {
+    return "{\"tool\":\"openalex\",\"source\":\"fallback:frozen-cache\",\"results\":[],\"meta\":{\"count\":0},\"fallback_unavailable\":true,\"todo\":\"cache-population\"}"
+}
+
+pub fn openalex_live(query: string) -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let q = if query.len() > 0 { query } else { "perfect+number" }
+    let url = "https://api.openalex.org/works?search=" + q + "&per-page=5"
+    let r = http_get(url, 32768)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"openalex\",\"source\":\"live:api.openalex.org\",\"query\":\"" + q + "\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn openalex_fallback() -> array { return ok_body(_openalex_frozen()) }
+
+pub fn openalex_run(args: [string]) -> array {
+    let q = if len(args) > 0 { args[0] } else { "perfect+number" }
+    if http_available() {
+        let r = openalex_live(q)
+        if cli_ok(r) { return r }
+    }
+    return openalex_fallback()
+}

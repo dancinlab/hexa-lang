@@ -1,0 +1,89 @@
+// HEXA Native Compiler — Phase 4 external-resource absorption: hw_probes smoke
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// Smoke covering all 3 HW probes (qmirror / akida / qrng). Runs each
+// under HEXA_FORCE_FALLBACK=1 (set inside the test via env mutation
+// where the interpreter supports it; otherwise the smoke runner
+// exports the var). Verifies:
+//   - δ dispatcher returns ok=true on fallback path
+//   - fallback stdout is non-empty
+//   - exit_code == 0
+//
+// Run:  HEXA_FORCE_FALLBACK=1 hexa run compiler/hw_probes/probes_test.hexa
+
+import "./_common.hexa"
+import "./qmirror.hexa"
+import "./akida.hexa"
+import "./qrng.hexa"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn main() {
+    // Force the fallback path inside the test so we exercise the δ
+    // dispatcher's deterministic branch even when the live CLI is on
+    // PATH. setenv() routes through POSIX so subsequent env() calls
+    // inside this run pick it up. The hexa.real launcher strips
+    // ad-hoc env vars at startup, so the canonical "set from shell"
+    // pattern (HEXA_FORCE_FALLBACK=1 hexa run …) does NOT propagate;
+    // setenv() inside the script is the only reliable channel.
+    setenv("HEXA_FORCE_FALLBACK", "1")
+
+    println("hw_probes Phase 4 smoke (δ try-live-or-fallback)")
+    println("HEXA_FORCE_FALLBACK = " + env("HEXA_FORCE_FALLBACK"))
+    println("")
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // ── qmirror status ──
+    let qm = qmirror_run("status", [])
+    total = total + 1
+    let qm_ok = cli_ok(qm) && cli_stdout(qm).len() > 0 && cli_exit(qm) == 0
+    if qm_ok { pass = pass + 1; _check("qmirror status (fallback) ok+stdout+exit0", true, fails) }
+    else { _check("qmirror status (fallback) ok+stdout+exit0", false, fails) }
+
+    // ── akida probe ──
+    let ak = akida_run("probe", [])
+    total = total + 1
+    let ak_ok = cli_ok(ak) && cli_stdout(ak).len() > 0 && cli_exit(ak) == 0
+    if ak_ok { pass = pass + 1; _check("akida probe (fallback) ok+stdout+exit0", true, fails) }
+    else { _check("akida probe (fallback) ok+stdout+exit0", false, fails) }
+
+    // ── akida go (full 11-falsifier sweep) ──
+    let akgo = akida_run("go", [])
+    total = total + 1
+    let akgo_ok = cli_ok(akgo) && cli_stdout(akgo).contains("11/11") && cli_exit(akgo) == 0
+    if akgo_ok { pass = pass + 1; _check("akida go (fallback) reports 11/11", true, fails) }
+    else { _check("akida go (fallback) reports 11/11", false, fails) }
+
+    // ── qrng collect 64 bits ──
+    let qr = qrng_run("collect", ["--bits=64"])
+    total = total + 1
+    let qr_ok = cli_ok(qr) && cli_stdout(qr).contains("\"bits\":64") && cli_exit(qr) == 0
+    if qr_ok { pass = pass + 1; _check("qrng collect (fallback) emits 64-bit payload", true, fails) }
+    else { _check("qrng collect (fallback) emits 64-bit payload", false, fails) }
+
+    // ── qrng determinism: same seed → same hex ──
+    let qr1 = qrng_run("collect", ["--bits=32"])
+    let qr2 = qrng_run("collect", ["--bits=32"])
+    total = total + 1
+    let qr_det = cli_stdout(qr1) == cli_stdout(qr2)
+    if qr_det { pass = pass + 1; _check("qrng fallback deterministic (same env → same hex)", true, fails) }
+    else { _check("qrng fallback deterministic (same env → same hex)", false, fails) }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) > 0 {
+        println("FAILURES:")
+        let mut i = 0
+        while i < len(fails) { println("  - " + to_string(fails[i])); i = i + 1 }
+        exit(1)
+    }
+    exit(0)
+}

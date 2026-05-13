@@ -1,0 +1,80 @@
+// HEXA Native Compiler — Phase 4 kick smoke
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// Smoke covering the kick δ dispatcher under HEXA_FORCE_FALLBACK=1.
+// Exercises every documented subcmd through kick_run() and verifies
+// the local fallback path emits a non-empty body + ok=true.
+//
+// Run:  hexa run compiler/kick/kick_test.hexa
+
+import "./../bridges/_common.hexa"
+import "./local_fallback.hexa"
+import "./kick.hexa"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _exercise(name: string, r: array, fails: array) -> bool {
+    let ok = cli_ok(r) && cli_stdout(r).len() > 0 && cli_exit(r) == 0
+    _check(name + " (fallback) ok+body+exit0", ok, fails)
+    return ok
+}
+
+fn main() {
+    setenv("HEXA_FORCE_FALLBACK", "1")
+
+    println("kick Phase 4 smoke (δ try-SSH-or-local-fallback)")
+    println("HEXA_FORCE_FALLBACK = " + env("HEXA_FORCE_FALLBACK"))
+    println("")
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // tree
+    total = total + 1
+    if _exercise("kick tree", kick_run("tree", "", []), fails) { pass = pass + 1 }
+    // bench
+    total = total + 1
+    if _exercise("kick bench", kick_run("bench", "perf-anchor", []), fails) { pass = pass + 1 }
+    // selftest
+    total = total + 1
+    if _exercise("kick selftest", kick_run("selftest", "infra-selftest", []), fails) { pass = pass + 1 }
+    // status
+    total = total + 1
+    if _exercise("kick status", kick_run("status", "", []), fails) { pass = pass + 1 }
+    // atlas
+    total = total + 1
+    if _exercise("kick atlas", kick_run("atlas", "search", []), fails) { pass = pass + 1 }
+    // lock / unlock / lock-status
+    total = total + 1
+    if _exercise("kick lock", kick_run("lock", "/tmp/x", []), fails) { pass = pass + 1 }
+    total = total + 1
+    if _exercise("kick unlock", kick_run("unlock", "/tmp/x", []), fails) { pass = pass + 1 }
+    total = total + 1
+    if _exercise("kick lock-status", kick_run("lock-status", "/tmp/x", []), fails) { pass = pass + 1 }
+    // slots
+    total = total + 1
+    if _exercise("kick slots", kick_run("slots", "", []), fails) { pass = pass + 1 }
+    // canonical topic dispatch
+    total = total + 1
+    let r_topic = kick_run("design-discovery", "", [])
+    let has_sentinel = cli_stdout(r_topic).contains("__KICK_RESULT__")
+    let topic_ok = cli_ok(r_topic) && cli_exit(r_topic) == 0 && has_sentinel
+    _check("kick <topic> dispatch emits __KICK_RESULT__ sentinel", topic_ok, fails)
+    if topic_ok { pass = pass + 1 }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) > 0 {
+        println("FAILURES:")
+        let mut i = 0
+        while i < len(fails) { println("  - " + to_string(fails[i])); i = i + 1 }
+        exit(1)
+    }
+    exit(0)
+}

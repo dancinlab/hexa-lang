@@ -1,0 +1,58 @@
+// HEXA Native Compiler — Phase 4 bridge: codata
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for CODATA 2022 fundamental constants.
+// Source:   ~/core/nexus/tool/codata_bridge.hexa (372 LOC)
+// Live:     https://physics.nist.gov/cuu/Constants/Table/allascii.txt
+// Fallback: hardcoded CODATA 2022 alpha^-1 (137.035999177 ± 0.000000021)
+//           — bit-for-bit identical to nexus `FALLBACK_ALPHA_SCALED()`.
+//
+// γ enforced: returns body only. No persistence.
+
+import "./_common.hexa"
+
+// ── frozen cache (CODATA 2022 hardcoded — port of nexus FALLBACK_*) ──
+fn _codata_frozen() -> string {
+    return "{\n" +
+        "  \"tool\": \"codata\",\n" +
+        "  \"source\": \"fallback:CODATA-2022-hardcoded\",\n" +
+        "  \"alpha_inv\": 137.035999177,\n" +
+        "  \"uncertainty\": 0.000000021,\n" +
+        "  \"hexa_sim_integer\": 137,\n" +
+        "  \"fractional_gap\": 0.035999177,\n" +
+        "  \"gap_pct_of_codata\": 0.0263\n" +
+        "}"
+}
+
+pub fn codata_live() -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let url = "https://physics.nist.gov/cuu/Constants/Table/allascii.txt"
+    let r = http_get(url, 50000)
+    if !cli_ok(r) { return r }
+    // Extract the "inverse fine-structure constant" line.
+    let body = cli_stdout(r)
+    let lines = body.split("\n")
+    let mut i = 0
+    let mut found = ""
+    while i < len(lines) {
+        let l = to_string(lines[i])
+        if l.contains("inverse fine-structure") { found = l; i = len(lines) }
+        i = i + 1
+    }
+    if found.len() == 0 { return fail_body("codata: target line not found") }
+    return ok_body("{\"tool\":\"codata\",\"source\":\"live:nist.gov\",\"raw_line\":\"" + found.replace("\"", "\\\"") + "\"}")
+}
+
+pub fn codata_fallback() -> array {
+    return ok_body(_codata_frozen())
+}
+
+pub fn codata_run(_args: [string]) -> array {
+    if http_available() {
+        let r = codata_live()
+        if cli_ok(r) { return r }
+    }
+    return codata_fallback()
+}

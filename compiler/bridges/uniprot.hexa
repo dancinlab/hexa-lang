@@ -1,0 +1,43 @@
+// HEXA Native Compiler — Phase 4 bridge: uniprot
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for UniProt protein knowledgebase.
+// Source:   ~/core/nexus/tool/uniprot_bridge.hexa (513 LOC)
+// Live:     https://rest.uniprot.org/uniprotkb/<accession>.json
+// Fallback: insulin (P01308) + hemoglobin alpha (P69905) anchors.
+
+import "./_common.hexa"
+
+fn _uniprot_frozen(acc: string) -> string {
+    if acc == "P01308" {
+        return "{\"accession\":\"P01308\",\"name\":\"Insulin\",\"organism\":\"Homo sapiens\",\"length\":110,\"sequence_prefix\":\"MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKT\"}"
+    }
+    if acc == "P69905" {
+        return "{\"accession\":\"P69905\",\"name\":\"Hemoglobin subunit alpha\",\"organism\":\"Homo sapiens\",\"length\":142,\"sequence_prefix\":\"MVLSPADKTNVKAAWGKVGAHAGEYGAEALERMFLSFPTTKTYFPHFDLSHGSAQ\"}"
+    }
+    return "{\"accession\":\"" + acc + "\",\"fallback_unavailable\":true,\"todo\":\"cache-population\"}"
+}
+
+pub fn uniprot_live(acc: string) -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let a = if acc.len() > 0 { acc } else { "P01308" }
+    let url = "https://rest.uniprot.org/uniprotkb/" + a + ".json"
+    let r = http_get(url, 32768)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"uniprot\",\"source\":\"live:rest.uniprot.org\",\"accession\":\"" + a + "\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn uniprot_fallback(acc: string) -> array {
+    return ok_body("{\"tool\":\"uniprot\",\"source\":\"fallback:frozen-cache\",\"data\":" + _uniprot_frozen(acc) + "}")
+}
+
+pub fn uniprot_run(args: [string]) -> array {
+    let acc = if len(args) > 0 { args[0] } else { "P01308" }
+    if http_available() {
+        let r = uniprot_live(acc)
+        if cli_ok(r) { return r }
+    }
+    return uniprot_fallback(acc)
+}

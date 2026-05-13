@@ -1,0 +1,37 @@
+// HEXA Native Compiler — Phase 4 bridge: gw
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// δ adapter for gravitational-wave event catalogs (GWOSC / GraceDB).
+// Source:   ~/core/nexus/tool/gw_observatory_bridge.hexa (421 LOC)
+// Live:     https://gwosc.org/api/v2/eventlist/
+// Fallback: hardcoded 3 GW150914-era events (deterministic anchor).
+
+import "./_common.hexa"
+
+fn _gw_frozen() -> string {
+    return "{\"tool\":\"gw\",\"source\":\"fallback:frozen-cache\",\"events\":[" +
+        "{\"name\":\"GW150914\",\"gpstime\":1126259462.4,\"mass_1\":36.0,\"mass_2\":29.0,\"luminosity_distance_mpc\":410}," +
+        "{\"name\":\"GW170817\",\"gpstime\":1187008882.4,\"mass_1\":1.46,\"mass_2\":1.27,\"luminosity_distance_mpc\":40}," +
+        "{\"name\":\"GW190521\",\"gpstime\":1242442967.4,\"mass_1\":85.0,\"mass_2\":66.0,\"luminosity_distance_mpc\":5300}" +
+        "],\"count_anchor\":3}"
+}
+
+pub fn gw_live() -> array {
+    if !http_available() { return fail_body("http unavailable") }
+    let url = "https://gwosc.org/api/v2/eventlist/?format=json"
+    let r = http_get(url, 65536)
+    if !cli_ok(r) { return r }
+    return ok_body("{\"tool\":\"gw\",\"source\":\"live:gwosc.org\",\"raw\":\"" + cli_stdout(r).replace("\"", "\\\"").replace("\n", "\\n") + "\"}")
+}
+
+pub fn gw_fallback() -> array { return ok_body(_gw_frozen()) }
+
+pub fn gw_run(_args: [string]) -> array {
+    if http_available() {
+        let r = gw_live()
+        if cli_ok(r) { return r }
+    }
+    return gw_fallback()
+}
