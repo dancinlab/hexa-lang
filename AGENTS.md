@@ -44,6 +44,7 @@ lattice-fit assertions. Use that entity's *own* invariants.
 
 - `LATTICE_POLICY.md` — universal real-limits standard
 - `LIMIT_BREAKTHROUGH.md` — project-specific breakthrough audit (when present)
+- `HEXA-NATIVE-ONLY.md` — drop per-RFC C kernels, reach perf parity in pure hexa AOT (axes A–H + gates G-0…G-11; see before adding RFC 036+ "another C kernel")
 - Origin: dancinlab Wave K, 2026-05-12 — user directive "n=6 격자를 강제할 필요 없어, 제한없이"
 
 ---
