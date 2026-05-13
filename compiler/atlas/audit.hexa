@@ -1,0 +1,402 @@
+// HEXA Native Compiler — Wave 2.1 atlas audit surface
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Ported from ~/core/n6/algorithms/atlas_health.hexa (CC0-1.0, absorbed 2026-05-13)
+// and ~/core/n6/algorithms/atlas_health_export.hexa (CC0-1.0, absorbed 2026-05-13).
+//
+// Produces an AuditReport over the static rodata embed, the runtime
+// overlay, or the merged view. Replaces the n6-side health module's
+// disk-backed responsibilities with pure in-memory scans against the
+// AtlasIndex / overlay arrays.
+//
+// What we keep:
+//   - entry count + per-kind histogram
+//   - grade distribution
+//   - duplicate (kind, id) detection
+//   - orphan-ref detection (any edge target that no node defines)
+//   - malformed-line detection (header without a recognizable @<KIND>)
+//   - breakthrough count (grade.breakthrough OR raw contains "[N!]")
+//   - audit_to_json — JSON serializer for CI dashboards
+//
+// What we drop (vs the n6 source):
+//   - mtime-cache sidecar (we're not disk-backed)
+//   - chflags-lock state (no immutability flags)
+//   - blowup.jsonl sidecar (no separate edge file)
+//   - shell-out paths (awk / grep / sort) — pure-hexa scan instead
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/overlay"
+// NOTE: static_index is intentionally NOT use'd here so callers can
+// audit overlay-only views without pulling the rodata embed into the
+// interp's working set. The audit_rodata/audit_merged convenience
+// wrappers live in compiler/atlas/audit_rodata.hexa instead.
+
+// --- types -----------------------------------------------------------------
+
+pub struct AuditReport {
+    audit_scope: string,      // "rodata" | "overlay" | "merged"
+    entry_count: i64,
+    p_count: i64,
+    c_count: i64,
+    l_count: i64,
+    e_count: i64,
+    f_count: i64,
+    r_count: i64,
+    s_count: i64,
+    x_count: i64,
+    q_count: i64,
+    grade_buckets: array,     // [string] — "[10*] 234" / "[10] 12" / ...
+    dup_count: i64,           // duplicate (kind, id) pairs
+    duplicates: array,        // [string] — "K:id" entries that collided
+    orphan_count: i64,        // edge targets referenced but never defined
+    orphan_sample: array,     // [string] — up to 32 sample orphan ids
+    malformed_count: i64,     // nodes whose kind == "" (sentinel)
+    breakthrough_count: i64,  // nodes flagged [!]
+    hypothesis_count: i64,    // nodes flagged [?]
+    verified_count: i64       // nodes flagged [*]
+}
+
+// --- helpers ---------------------------------------------------------------
+
+fn _empty_report(scope_name: string) -> AuditReport {
+    return AuditReport {
+        audit_scope: scope_name,
+        entry_count: 0,
+        p_count: 0, c_count: 0, l_count: 0, e_count: 0,
+        f_count: 0, r_count: 0, s_count: 0, x_count: 0, q_count: 0,
+        grade_buckets: [],
+        dup_count: 0,
+        duplicates: [],
+        orphan_count: 0,
+        orphan_sample: [],
+        malformed_count: 0,
+        breakthrough_count: 0,
+        hypothesis_count: 0,
+        verified_count: 0
+    }
+}
+
+// Find the index of `key` in parallel arrays (keys / counts), or -1.
+fn _bucket_find(keys: array, key: string) -> i64 {
+    let mut i = 0
+    while i < len(keys) {
+        if to_string(keys[i]) == key { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Render a grade marker key from a parsed GradeInfo, matching n6 ladder
+// keys: "[10*]" / "[10!]" / "[10*!]" / "[10?]" / "[10]" / "[N]". Nodes
+// without a grade marker bucket under "[--]".
+fn _grade_key(g: GradeInfo) -> string {
+    if g.value < 0 { return "[--]" }
+    let mut k = "[" + to_string(g.value)
+    if g.verified { k = k + "*" }
+    if g.breakthrough { k = k + "!" }
+    if g.hypothesis { k = k + "?" }
+    return k + "]"
+}
+
+// Increment a parallel-array bucket count for `key`.
+fn _bucket_bump(keys: array, counts: array, key: string) {
+    let idx = _bucket_find(keys, key)
+    if idx < 0 {
+        keys.push(key)
+        counts.push(1)
+        return
+    }
+    counts[idx] = counts[idx] + 1
+}
+
+// Build the assembled list of "[key] count" strings sorted by count desc.
+fn _bucket_format(keys: array, counts: array) -> array {
+    let n = len(keys)
+    // simple insertion-sort descending by count
+    let kk = []
+    let cc = []
+    let mut i = 0
+    while i < n {
+        kk.push(keys[i])
+        cc.push(counts[i])
+        i = i + 1
+    }
+    let mut a = 0
+    while a < n {
+        let mut b = a + 1
+        while b < n {
+            if cc[b] > cc[a] {
+                let tk = kk[a]; kk[a] = kk[b]; kk[b] = tk
+                let tc = cc[a]; cc[a] = cc[b]; cc[b] = tc
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let out = []
+    let mut j = 0
+    while j < n {
+        out.push(to_string(kk[j]) + " " + to_string(cc[j]))
+        j = j + 1
+    }
+    return out
+}
+
+// Bump per-kind counter on the report struct.
+fn _bump_kind(rep: AuditReport, kind: string) {
+    if kind == "P" { rep.p_count = rep.p_count + 1; return }
+    if kind == "C" { rep.c_count = rep.c_count + 1; return }
+    if kind == "L" { rep.l_count = rep.l_count + 1; return }
+    if kind == "E" { rep.e_count = rep.e_count + 1; return }
+    if kind == "F" { rep.f_count = rep.f_count + 1; return }
+    if kind == "R" { rep.r_count = rep.r_count + 1; return }
+    if kind == "S" { rep.s_count = rep.s_count + 1; return }
+    if kind == "X" { rep.x_count = rep.x_count + 1; return }
+    if kind == "Q" { rep.q_count = rep.q_count + 1; return }
+}
+
+// Detect a `[N!]` substring in raw text (covers nodes whose grade wasn't
+// parsed into structured fields — rodata embed defaults to value=-1).
+fn _raw_has_breakthrough(raw: string) -> bool {
+    return raw.index_of("!]") >= 0
+}
+
+fn _raw_has_verified(raw: string) -> bool {
+    return raw.index_of("*]") >= 0
+}
+
+fn _raw_has_hypothesis(raw: string) -> bool {
+    return raw.index_of("?]") >= 0
+}
+
+// --- core audit ------------------------------------------------------------
+
+// audit_nodes — the workhorse. Walks `nodes`, fills `rep`, builds the
+// grade histogram, detects duplicates, and computes orphan refs by
+// cross-referencing parsed edges against the defined-id set.
+fn _audit_nodes(rep: AuditReport, nodes: array) {
+    let n = len(nodes)
+    rep.entry_count = n
+    let seen = {}                  // (kind|id) -> first_index
+    let defined = {}               // id -> true (for orphan check)
+    let grade_keys = []
+    let grade_counts = []
+
+    let mut i = 0
+    while i < n {
+        let node = nodes[i]
+        // enrich grade/edges from raw if structured fields are absent.
+        let enriched = if node.grade.value < 0 && node.edges.depends_on.len() == 0
+            { enrich_node(node) } else { node }
+
+        if enriched.kind == "" {
+            rep.malformed_count = rep.malformed_count + 1
+            i = i + 1
+            continue
+        }
+
+        _bump_kind(rep, enriched.kind)
+        defined[enriched.id] = true
+
+        let key = enriched.kind + "|" + enriched.id
+        if has_key(seen, key) {
+            rep.dup_count = rep.dup_count + 1
+            if len(rep.duplicates) < 64 {
+                rep.duplicates.push(enriched.kind + ":" + enriched.id)
+            }
+        } else {
+            seen[key] = i
+        }
+
+        // Grade markers — prefer structured field, fall back to raw probe.
+        let gk = _grade_key(enriched.grade)
+        _bucket_bump(grade_keys, grade_counts, gk)
+        if enriched.grade.value >= 0 {
+            if enriched.grade.verified { rep.verified_count = rep.verified_count + 1 }
+            if enriched.grade.breakthrough { rep.breakthrough_count = rep.breakthrough_count + 1 }
+            if enriched.grade.hypothesis { rep.hypothesis_count = rep.hypothesis_count + 1 }
+        } else {
+            // raw-text fallback (covers frozen rodata).
+            if _raw_has_verified(enriched.raw) { rep.verified_count = rep.verified_count + 1 }
+            if _raw_has_breakthrough(enriched.raw) { rep.breakthrough_count = rep.breakthrough_count + 1 }
+            if _raw_has_hypothesis(enriched.raw) { rep.hypothesis_count = rep.hypothesis_count + 1 }
+        }
+
+        i = i + 1
+    }
+
+    rep.grade_buckets = _bucket_format(grade_keys, grade_counts)
+
+    // Orphan refs: collect every depends_on / derives target and see
+    // which never appear as a defined id.
+    let orphan_seen = {}
+    let mut j = 0
+    while j < n {
+        let node = nodes[j]
+        let enriched = if node.grade.value < 0 && node.edges.depends_on.len() == 0
+            { enrich_node(node) } else { node }
+        let mut e = 0
+        let deps = enriched.edges.depends_on
+        while e < len(deps) {
+            let tgt = to_string(deps[e])
+            if !has_key(defined, tgt) && !has_key(orphan_seen, tgt) {
+                orphan_seen[tgt] = true
+                rep.orphan_count = rep.orphan_count + 1
+                if len(rep.orphan_sample) < 32 {
+                    rep.orphan_sample.push(tgt)
+                }
+            }
+            e = e + 1
+        }
+        let mut d = 0
+        let drvs = enriched.edges.derives
+        while d < len(drvs) {
+            let tgt = to_string(drvs[d])
+            if !has_key(defined, tgt) && !has_key(orphan_seen, tgt) {
+                orphan_seen[tgt] = true
+                rep.orphan_count = rep.orphan_count + 1
+                if len(rep.orphan_sample) < 32 {
+                    rep.orphan_sample.push(tgt)
+                }
+            }
+            d = d + 1
+        }
+        j = j + 1
+    }
+}
+
+// --- public API ------------------------------------------------------------
+
+// audit_nodes_with_scope — audit an arbitrary node array under the
+// given scope label. The thin building block; callers compose rodata /
+// overlay / merged views and label them.
+pub fn audit_nodes_with_scope(scope_name: string, nodes: array) -> AuditReport {
+    let rep = _empty_report(scope_name)
+    _audit_nodes(rep, nodes)
+    return rep
+}
+
+// audit_overlay — audit only the runtime overlay file. Pure overlay
+// path, no rodata pull.
+pub fn audit_overlay() -> AuditReport {
+    return audit_nodes_with_scope("overlay", overlay_load_cached())
+}
+
+// audit_rodata / audit_merged live in compiler/atlas/audit_rodata.hexa —
+// they pull the static rodata embed which inflates the interp working set.
+
+// --- Wave 2.2: JSON export -------------------------------------------------
+
+fn _jesc(s: string) -> string {
+    let n = len(s)
+    let parts = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { parts.push("\\\\") }
+        else if c == "\"" { parts.push("\\\"") }
+        else if c == "\n" { parts.push("\\n") }
+        else if c == "\r" { parts.push("\\r") }
+        else if c == "\t" { parts.push("\\t") }
+        else { parts.push(c) }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+fn _str_array_json(arr: array) -> string {
+    let parts = []
+    parts.push("[")
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        parts.push("\"")
+        parts.push(_jesc(to_string(arr[i])))
+        parts.push("\"")
+        if i + 1 < n { parts.push(",") }
+        i = i + 1
+    }
+    parts.push("]")
+    return parts.join("")
+}
+
+// audit_to_json — emit a JSON object describing the report. Stable key
+// names suitable for CI dashboards / time-series.
+pub fn audit_to_json(rep: AuditReport) -> string {
+    let p = []
+    p.push("{")
+    p.push("\"scope\":\"")
+    p.push(_jesc(rep.audit_scope))
+    p.push("\",\"entry_count\":")
+    p.push(to_string(rep.entry_count))
+    p.push(",\"kind_counts\":{")
+    p.push("\"P\":" + to_string(rep.p_count))
+    p.push(",\"C\":" + to_string(rep.c_count))
+    p.push(",\"L\":" + to_string(rep.l_count))
+    p.push(",\"E\":" + to_string(rep.e_count))
+    p.push(",\"F\":" + to_string(rep.f_count))
+    p.push(",\"R\":" + to_string(rep.r_count))
+    p.push(",\"S\":" + to_string(rep.s_count))
+    p.push(",\"X\":" + to_string(rep.x_count))
+    p.push(",\"Q\":" + to_string(rep.q_count))
+    p.push("},\"grade_histogram\":")
+    p.push(_str_array_json(rep.grade_buckets))
+    p.push(",\"dup_count\":")
+    p.push(to_string(rep.dup_count))
+    p.push(",\"duplicates\":")
+    p.push(_str_array_json(rep.duplicates))
+    p.push(",\"orphan_count\":")
+    p.push(to_string(rep.orphan_count))
+    p.push(",\"orphan_sample\":")
+    p.push(_str_array_json(rep.orphan_sample))
+    p.push(",\"malformed_count\":")
+    p.push(to_string(rep.malformed_count))
+    p.push(",\"breakthrough_count\":")
+    p.push(to_string(rep.breakthrough_count))
+    p.push(",\"hypothesis_count\":")
+    p.push(to_string(rep.hypothesis_count))
+    p.push(",\"verified_count\":")
+    p.push(to_string(rep.verified_count))
+    p.push("}")
+    return p.join("")
+}
+
+// audit_to_text — human-readable rendering of the report.
+pub fn audit_to_text(rep: AuditReport) -> string {
+    let p = []
+    p.push("=== atlas audit: " + rep.audit_scope + " ===\n")
+    p.push("  entries:        " + to_string(rep.entry_count) + "\n")
+    p.push("  P primitives:   " + to_string(rep.p_count) + "\n")
+    p.push("  C constants:    " + to_string(rep.c_count) + "\n")
+    p.push("  L laws:         " + to_string(rep.l_count) + "\n")
+    p.push("  E experiments:  " + to_string(rep.e_count) + "\n")
+    p.push("  F formulas:     " + to_string(rep.f_count) + "\n")
+    p.push("  R relations:    " + to_string(rep.r_count) + "\n")
+    p.push("  S symmetries:   " + to_string(rep.s_count) + "\n")
+    p.push("  X crossings:    " + to_string(rep.x_count) + "\n")
+    p.push("  Q open questions: " + to_string(rep.q_count) + "\n")
+    p.push("  verified [*]:   " + to_string(rep.verified_count) + "\n")
+    p.push("  breakthrough [!]: " + to_string(rep.breakthrough_count) + "\n")
+    p.push("  hypothesis [?]: " + to_string(rep.hypothesis_count) + "\n")
+    p.push("  duplicates:     " + to_string(rep.dup_count) + "\n")
+    p.push("  orphan refs:    " + to_string(rep.orphan_count) + "\n")
+    p.push("  malformed:      " + to_string(rep.malformed_count) + "\n")
+    p.push("  grade histogram:\n")
+    let mut i = 0
+    while i < len(rep.grade_buckets) {
+        p.push("    " + to_string(rep.grade_buckets[i]) + "\n")
+        i = i + 1
+    }
+    if len(rep.orphan_sample) > 0 {
+        p.push("  orphan sample (up to 32):\n")
+        let mut j = 0
+        while j < len(rep.orphan_sample) {
+            p.push("    " + to_string(rep.orphan_sample[j]) + "\n")
+            j = j + 1
+        }
+    }
+    return p.join("")
+}

@@ -30,6 +30,9 @@
 use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/static_index"
+use "compiler/atlas/audit"
+use "compiler/atlas/audit_rodata"
+use "compiler/atlas/overlay"
 use "compiler/discover/promote"
 
 fn _slice_args() -> array {
@@ -83,6 +86,11 @@ fn _arr_for_kind(idx: AtlasIndex, k: string) -> array {
     if k == "C" { return idx.c_nodes }
     if k == "L" { return idx.l_nodes }
     if k == "E" { return idx.e_nodes }
+    if k == "F" { return idx.f_nodes }
+    if k == "R" { return idx.r_nodes }
+    if k == "S" { return idx.s_nodes }
+    if k == "X" { return idx.x_nodes }
+    if k == "Q" { return idx.q_nodes }
     return []
 }
 
@@ -103,39 +111,115 @@ fn cmd_hash() {
     println(idx.hash)
 }
 
-fn cmd_stats() {
-    let idx = static_atlas()
-    let p = len(idx.p_nodes)
-    let c = len(idx.c_nodes)
-    let l = len(idx.l_nodes)
-    let e = len(idx.e_nodes)
-    let total = p + c + l + e
-    println("ATLAS_HASH         " + idx.hash)
-    println("ATLAS_SOURCE_COUNT " + to_string(idx.source_count))
-    println("P primitives       " + to_string(p))
-    println("C constants        " + to_string(c))
-    println("L laws             " + to_string(l))
-    println("E edges            " + to_string(e))
-    println("total nodes        " + to_string(total))
+fn cmd_stats(rest: array) {
+    // Parse flags: --audit (full Wave 2 audit report), --format=json
+    // (machine-readable), --scope=rodata|overlay|merged (default merged
+    // when --audit, rodata otherwise for backward compat).
+    let mut do_audit = false
+    let mut fmt = "text"
+    let mut audit_scope = ""
+    let mut i = 0
+    let n = len(rest)
+    while i < n {
+        let a = to_string(rest[i])
+        if a == "--audit" { do_audit = true; i = i + 1 }
+        else if a == "--format=json" || a == "--json" { fmt = "json"; i = i + 1 }
+        else if a == "--format=text" { fmt = "text"; i = i + 1 }
+        else if a == "--scope=rodata" { audit_scope = "rodata"; i = i + 1 }
+        else if a == "--scope=overlay" { audit_scope = "overlay"; i = i + 1 }
+        else if a == "--scope=merged" { audit_scope = "merged"; i = i + 1 }
+        else { i = i + 1 }
+    }
+    if !do_audit {
+        // Legacy compact stats — keep stable for callers / CI pinning.
+        let idx = static_atlas()
+        let p = len(idx.p_nodes)
+        let c = len(idx.c_nodes)
+        let l = len(idx.l_nodes)
+        let e = len(idx.e_nodes)
+        let f = len(idx.f_nodes)
+        let r = len(idx.r_nodes)
+        let s = len(idx.s_nodes)
+        let x = len(idx.x_nodes)
+        let q = len(idx.q_nodes)
+        let total = p + c + l + e + f + r + s + x + q
+        println("ATLAS_HASH         " + idx.hash)
+        println("ATLAS_SOURCE_COUNT " + to_string(idx.source_count))
+        println("P primitives       " + to_string(p))
+        println("C constants        " + to_string(c))
+        println("L laws             " + to_string(l))
+        println("E experiments      " + to_string(e))
+        println("F formulas         " + to_string(f))
+        println("R relations        " + to_string(r))
+        println("S symmetries       " + to_string(s))
+        println("X crossings        " + to_string(x))
+        println("Q open questions   " + to_string(q))
+        println("total nodes        " + to_string(total))
+        return
+    }
+    // Full audit report.
+    if len(audit_scope) == 0 { audit_scope = "merged" }
+    let rep = if audit_scope == "rodata" { audit_rodata() }
+              else if audit_scope == "overlay" { audit_overlay() }
+              else { audit_merged() }
+    if fmt == "json" {
+        println(audit_to_json(rep))
+    } else {
+        print(audit_to_text(rep))
+    }
 }
 
 fn cmd_lookup(rest: array) {
     if len(rest) == 0 {
-        println("usage: hexa atlas lookup [P|C|L|E] <id>")
+        println("usage: hexa atlas lookup [P|C|L|E|F|R|S|X|Q] <id>")
+        println("       hexa atlas lookup --prefix=<id-prefix>")
         exit(2)
+    }
+    // --prefix=<...> short-circuit (Wave 2.3).
+    let mut prefix = ""
+    let mut positional = []
+    let mut pi = 0
+    while pi < len(rest) {
+        let a = to_string(rest[pi])
+        if a.starts_with("--prefix=") {
+            prefix = a.substring(9, len(a))
+        } else if a == "--prefix" && pi + 1 < len(rest) {
+            prefix = to_string(rest[pi + 1])
+            pi = pi + 1
+        } else {
+            positional.push(rest[pi])
+        }
+        pi = pi + 1
+    }
+    if len(prefix) > 0 {
+        let hits = atlas_prefix(prefix)
+        if len(hits) == 0 {
+            println("# no nodes match prefix: " + prefix)
+            exit(1)
+        }
+        let mut hi = 0
+        while hi < len(hits) {
+            _emit_text(hits[hi])
+            hi = hi + 1
+        }
+        return
     }
     let mut kind = ""
     let mut id = ""
-    if len(rest) >= 2 {
-        let a0 = to_string(rest[0])
-        if a0 == "P" || a0 == "C" || a0 == "L" || a0 == "E" {
+    if len(positional) >= 2 {
+        let a0 = to_string(positional[0])
+        if a0 == "P" || a0 == "C" || a0 == "L" || a0 == "E" || a0 == "F" || a0 == "R" || a0 == "S" || a0 == "X" || a0 == "Q" {
             kind = a0
-            id = to_string(rest[1])
+            id = to_string(positional[1])
         } else {
             id = a0
         }
-    } else {
-        id = to_string(rest[0])
+    } else if len(positional) == 1 {
+        id = to_string(positional[0])
+    }
+    if len(id) == 0 {
+        println("usage: hexa atlas lookup [P|C|L|E|F|R|S|X|Q] <id>")
+        exit(2)
     }
 
     if len(kind) > 0 {
@@ -147,7 +231,7 @@ fn cmd_lookup(rest: array) {
         _emit_text(n)
         return
     }
-    let kinds = ["P", "C", "L", "E"]
+    let kinds = ["P", "C", "L", "E", "F", "R", "S", "X", "Q"]
     let mut i = 0
     let mut found = 0
     while i < len(kinds) {
@@ -159,7 +243,7 @@ fn cmd_lookup(rest: array) {
         i = i + 1
     }
     if found == 0 {
-        println("# not found: " + id + " (searched P, C, L, E)")
+        println("# not found: " + id + " (searched P, C, L, E, F, R, S, X, Q)")
         exit(1)
     }
 }
@@ -171,11 +255,11 @@ fn cmd_dump(rest: array) {
     while i < len(rest) {
         let a = to_string(rest[i])
         if a == "--json" || a == "-j" { json_mode = true }
-        else if a == "P" || a == "C" || a == "L" || a == "E" { want_kind = a }
+        else if a == "P" || a == "C" || a == "L" || a == "E" || a == "F" || a == "R" || a == "S" || a == "X" || a == "Q" { want_kind = a }
         i = i + 1
     }
     let idx = static_atlas()
-    let kinds = ["P", "C", "L", "E"]
+    let kinds = ["P", "C", "L", "E", "F", "R", "S", "X", "Q"]
     let mut ki = 0
     while ki < len(kinds) {
         let k = kinds[ki]
@@ -387,9 +471,12 @@ fn cmd_help() {
     println("read subcommands (zero-I/O over compile-time embed):")
     println("  hash                    print ATLAS_HASH (embedded sha256 pin)")
     println("  stats                   per-kind counts + ATLAS_HASH + source_count")
-    println("  lookup <id>             search P, C, L, E for matching id")
-    println("  lookup <P|C|L|E> <id>   restrict to one kind")
-    println("  dump [P|C|L|E] [--json] emit all nodes (text or jsonl)")
+    println("  stats --audit [--scope=rodata|overlay|merged] [--format=json]")
+    println("                          rich audit (grades / dups / orphans / breakthroughs)")
+    println("  lookup <id>             search all 9 kinds for matching id")
+    println("  lookup <K> <id>         restrict to one kind (K ∈ {P|C|L|E|F|R|S|X|Q})")
+    println("  lookup --prefix=<p>     list nodes whose id starts with <p>")
+    println("  dump [K] [--json]       emit all nodes (text or jsonl)")
     println("")
     println("write subcommands:")
     println("  append-witness --kind <P|C|L|E> --id <id> {--raw <body> | --stdin}")
@@ -424,7 +511,7 @@ fn main() {
         i = i + 1
     }
     if sub == "hash" { cmd_hash() }
-    else if sub == "stats" { cmd_stats() }
+    else if sub == "stats" { cmd_stats(rest) }
     else if sub == "lookup" { cmd_lookup(rest) }
     else if sub == "dump" { cmd_dump(rest) }
     else if sub == "append-witness" { cmd_append_witness(rest) }

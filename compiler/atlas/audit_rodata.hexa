@@ -1,0 +1,31 @@
+// HEXA Native Compiler — Wave 2.1 atlas audit (rodata-aware wrappers)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Splits the rodata-touching audit wrappers (audit_rodata / audit_merged)
+// out of compiler/atlas/audit.hexa so that the overlay-only audit path
+// (used by hot tooling / per-shard CI checks) can be loaded without
+// pulling the multi-MB embedded.gen.hexa rodata into the interpreter's
+// working set.
+//
+// Public API mirrors the original n6 atlas_health surface:
+//   audit_rodata()  -> AuditReport over the frozen embedded.gen.hexa
+//   audit_merged()  -> AuditReport over (rodata + overlay, rodata-wins)
+//
+// Ported from ~/core/n6/algorithms/atlas_health.hexa (CC0-1.0, absorbed 2026-05-13).
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/static_index"
+use "compiler/atlas/audit"
+
+// audit_rodata — audit only the frozen embedded.gen.hexa rodata view.
+pub fn audit_rodata() -> AuditReport {
+    return audit_nodes_with_scope("rodata", atlas_list())
+}
+
+// audit_merged — audit the union view (rodata + overlay, rodata-wins).
+pub fn audit_merged() -> AuditReport {
+    return audit_nodes_with_scope("merged", atlas_list_merged())
+}
