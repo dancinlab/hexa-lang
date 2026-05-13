@@ -91,21 +91,20 @@ stdout_fmt_for() {
 
 # Match either compact JSON `{"version":"0.1",...}` or pretty-printed
 # `{\n  "version": "0.1",\n  ...}` (struct-layout / schema / n6-list / gate-register
-# use python-pretty json.dump). Both must include version 0.1 and source grep-mvp.
+# use python-pretty json.dump). Accepts both the legacy `grep-mvp` v0.1 form
+# and the AST-upgraded `ast` v0.2 form (Phase 5 absorption — 2026-05-13).
 is_valid_grep_mvp_json() {
     local s="$1"
     case "$s" in
-        '{"version":"0.1","source":"grep-mvp"'*)
-            return 0
-            ;;
-        '{'*'"version"'*'"0.1"'*'"source"'*'"grep-mvp"'*)
-            # Pretty-print form: strip whitespace then compare.
-            local compact
-            compact=$(printf '%s' "$s" | tr -d ' \t\n\r')
-            case "$compact" in
-                '{"version":"0.1","source":"grep-mvp"'*) return 0 ;;
-            esac
-            ;;
+        '{"version":"0.1","source":"grep-mvp"'*) return 0 ;;
+        '{"version":"0.2","source":"ast"'*)      return 0 ;;
+    esac
+    # Pretty-print form: strip whitespace then compare.
+    local compact
+    compact=$(printf '%s' "$s" | tr -d ' \t\n\r')
+    case "$compact" in
+        '{"version":"0.1","source":"grep-mvp"'*) return 0 ;;
+        '{"version":"0.2","source":"ast"'*)      return 0 ;;
     esac
     return 1
 }

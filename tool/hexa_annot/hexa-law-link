@@ -1,22 +1,10 @@
-#!/bin/bash
-# hexa-law-link — @law(ref="...") cross-reference checker (grep MVP, v0.1)
+#!/usr/bin/env bash
+# hexa-law-link — @law(ref="...") cross-reference checker (AST-backed)
 #
-# 입력:
+# Usage:
 #   hexa-law-link <file.hexa> [<file2.hexa> ...]
-#   hexa-law-link --dir <directory> [...]
+#   hexa-law-link --dir <directory>
 #   hexa-law-link --rules <path/to/rules.json> <files...>
-#     (default rules: <self_bin>/../../config/annot_rules.json,
-#      fall back to legacy $NEXUS/shared/rules/anima.json if NEXUS is set)
-#
-# 출력 (stdout JSON):
-#   { "version":"0.1", "source":"grep-mvp",
-#     "links":[ {fn, ref, rule_exists, rule_level, file, line} ],
-#     "summary":{ total, valid_refs, missing_refs, missing_list } }
-#
-# 인식 annotation (fn decl 바로 위 라인, stacking 허용):
-#   @law(ref="<rule_id>")
-#
-# exit 0 정상 (빈 links 포함). 1=인자 오류 / rules 파일 오류
 set -eu
 
 usage() {
@@ -27,244 +15,123 @@ EOF
     exit 1
 }
 
-# default rules path — resolve relative to this script's location.
-# tool/hexa_annot/hexa-law-link -> ../../config/annot_rules.json
-_self_bin="$(cd "$(dirname "$0")" && pwd)"
-rules_file="${_self_bin}/../../config/annot_rules.json"
-# legacy nexus fallback (only if explicitly set and present)
-if [ ! -f "$rules_file" ] && [ -n "${NEXUS:-}" ] && [ -f "${NEXUS}/shared/rules/anima.json" ]; then
-    rules_file="${NEXUS}/shared/rules/anima.json"
-fi
-files=()
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
 
-# parse args
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+# Default rules: <script_dir>/../../config/annot_rules.json
+DEFAULT_RULES="${SCRIPT_DIR}/../../config/annot_rules.json"
+RULES="$DEFAULT_RULES"
+if [ ! -f "$RULES" ] && [ -n "${NEXUS:-}" ] && [ -f "${NEXUS}/shared/rules/anima.json" ]; then
+    RULES="${NEXUS}/shared/rules/anima.json"
+fi
+
+ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --rules)
-            shift
-            [ $# -ge 1 ] || usage
-            rules_file="$1"
-            shift
-            ;;
-        --dir)
-            shift
-            [ $# -ge 1 ] || usage
-            dir="$1"
-            [ -d "$dir" ] || { echo "ERROR: directory not found: $dir" >&2; exit 1; }
-            while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$dir" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
-            shift
-            ;;
-        -h|--help)
-            usage
-            ;;
-        *)
-            [ -f "$1" ] || { echo "ERROR: file not found: $1" >&2; exit 1; }
-            files+=("$1")
-            shift
-            ;;
+            shift; [ $# -ge 1 ] || usage
+            RULES="$1"; shift ;;
+        -h|--help) usage ;;
+        *) ARGS+=("$1"); shift ;;
     esac
 done
 
-[ "${#files[@]}" -gt 0 ] || usage
-[ -f "$rules_file" ] || { echo "ERROR: rules file not found: $rules_file" >&2; exit 1; }
-
-# 규칙 인덱스 로드 — jq 가 "ID\tLEVEL" 라인을 temp 파일로 방출
-#   구조: {"rules": [{"id":"AN1","level":"🔴", ...}, ...]}
-#   level 이 없으면 "" 빈 문자열
-#   (BSD awk 는 -v 의 개행 문자열을 거부 → temp file 우회)
-rules_tmp="/tmp/.hexa-law-link.rules.$$"
-jq -r '
-    if (.rules | type) == "array" then
-        .rules[] | "\(.id)\t\(.level // "")"
-    else
-        empty
-    end
-' "$rules_file" > "$rules_tmp" 2>/dev/null || true
-
-if [ ! -s "$rules_tmp" ]; then
-    echo "WARNING: no rules found in $rules_file (expected .rules[] array with .id)" >&2
+if ! resolve_files "${ARGS[@]}"; then exit 1; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","links":[],"summary":{"total":0,"valid_refs":0,"missing_refs":0,"missing_list":[]}}\n'
+    exit 0
 fi
 
-# awk 엔진 — @law annotation 스테이징 + fn decl 바인딩
-awk -v rules_tmp="$rules_tmp" '
-function json_escape(s,   r) {
-    r = s
-    gsub(/\\/, "\\\\", r)
-    gsub(/"/, "\\\"", r)
-    gsub(/\t/, "\\t", r)
-    gsub(/\r/, "\\r", r)
-    gsub(/\n/, "\\n", r)
-    return r
-}
-function extract_ref(line,    tmp, i, ch, v) {
-    # @law(ref="...") → "..."
-    if (!match(line, /@law[[:space:]]*\(/)) return ""
-    tmp = substr(line, RSTART + RLENGTH)
-    # find ref=
-    if (!match(tmp, /ref[[:space:]]*=[[:space:]]*/)) return ""
-    tmp = substr(tmp, RSTART + RLENGTH)
-    if (substr(tmp, 1, 1) != "\"") {
-        # unquoted — up to comma/paren/space
-        if (match(tmp, /[,)[:space:]]/)) {
-            return substr(tmp, 1, RSTART - 1)
-        }
-        return tmp
-    }
-    v = ""
-    i = 2
-    while (i <= length(tmp)) {
-        ch = substr(tmp, i, 1)
-        if (ch == "\\" && i < length(tmp)) {
-            v = v substr(tmp, i + 1, 1)
-            i += 2
-            continue
-        }
-        if (ch == "\"") break
-        v = v ch
-        i++
-    }
-    return v
-}
+if [ ! -f "$RULES" ]; then
+    echo "ERROR: rules file not found: $RULES" >&2
+    exit 1
+fi
 
+TMP_TSV=$(mktemp -t hexa_law_link.XXXXXX)
+trap 'rm -f "$TMP_TSV"' EXIT
+run_ast_extract > "$TMP_TSV"
+
+awk -v rules="$RULES" '
+function jesc(s,   r) { r = s; gsub(/\\/, "\\\\", r); gsub(/"/, "\\\"", r); return r }
+function decode_esc(s,   out, i, n, c, nc) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            nc = substr(s, i + 1, 1)
+            if (nc == "n")  { out = out "\n"; i += 2; continue }
+            if (nc == "r")  { out = out "\r"; i += 2; continue }
+            if (nc == "t")  { out = out "\t"; i += 2; continue }
+            if (nc == "\\") { out = out "\\"; i += 2; continue }
+        }
+        out = out c; i++
+    }
+    return out
+}
+function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+    s = raw
+    pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+    pos = match(s, pat)
+    if (pos == 0) return ""
+    rest = substr(s, pos + RLENGTH)
+    sub(/^[ \t]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        val = ""; i = 2; n = length(rest)
+        while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\"") break
+            val = val c; i++
+        }
+        return val
+    }
+    if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+    return rest
+}
 BEGIN {
-    # parse rules index file, each line: "ID\tLEVEL"
-    n_rules = 0
-    if (length(rules_tmp) > 0) {
-        while ((getline rline < rules_tmp) > 0) {
-            if (length(rline) == 0) continue
-            split(rline, parts, "\t")
-            id = parts[1]
-            lvl = parts[2]
-            if (length(id) > 0) {
-                rule_has[id] = 1
-                rule_level[id] = lvl
-                n_rules++
-            }
-        }
-        close(rules_tmp)
+    FS = "\t"
+    # Load rules: naive parse for "id":"..." and "level":"..."
+    rule_count = 0
+    while ((getline ln < rules) > 0) all = all "\n" ln
+    close(rules)
+    # find blocks
+    n_split = split(all, blocks, /}[ \t,\n]*{/)
+    for (b = 1; b <= n_split; b++) {
+        s = blocks[b]
+        if (match(s, /"id"[ \t]*:[ \t]*"[^"]*"/)) {
+            m = substr(s, RSTART, RLENGTH); if (match(m, /:"[^"]*"/)) id = substr(m, RSTART + 2, RLENGTH - 3); else continue
+        } else continue
+        if (match(s, /"level"[ \t]*:[ \t]*"[^"]*"/)) {
+            m = substr(s, RSTART, RLENGTH); if (match(m, /:"[^"]*"/)) lv = substr(m, RSTART + 2, RLENGTH - 3); else lv = ""
+        } else lv = ""
+        rule_level[id] = lv
+        rule_exists[id] = 1
+        rule_count++
     }
-
-    n_staged = 0
-    total = 0
-    valid = 0
-    missing = 0
-    n_missing_list = 0
+    total = 0; valid = 0; missing = 0
+    body = ""; missing_body = ""
 }
-
+/^# error\t/ { next }
 {
-    is_law = ($0 ~ /^[[:space:]]*@law([[:space:]]*\()/)
-    is_fn = ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
-    is_blank = ($0 ~ /^[[:space:]]*$/)
-    is_comment = ($0 ~ /^[[:space:]]*(\/\/|#)/)
-    is_anno = is_law
-}
-
-is_law {
-    ref = extract_ref($0)
-    n_staged++
-    staged_ref[n_staged] = ref
-    staged_line[n_staged] = FNR
-    staged_file[n_staged] = FILENAME
-    next
-}
-
-is_fn && n_staged > 0 {
-    fn_name = ""
-    tmp = $0
-    sub(/^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+/, "", tmp)
-    if (match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) {
-        fn_name = substr(tmp, 1, RLENGTH)
-    }
-
-    for (s = 1; s <= n_staged; s++) {
-        ref = staged_ref[s]
-        exists = (ref in rule_has) ? 1 : 0
-        lvl = exists ? rule_level[ref] : ""
-
-        if (total > 0) printf ","
-        total++
-
-        if (exists) {
-            valid++
-            printf "{"
-            printf "\"fn\":\"%s\"", json_escape(fn_name)
-            printf ",\"ref\":\"%s\"", json_escape(ref)
-            printf ",\"rule_exists\":true"
-            printf ",\"rule_level\":\"%s\"", json_escape(lvl)
-            printf ",\"file\":\"%s\"", json_escape(staged_file[s])
-            printf ",\"line\":%d", staged_line[s]
-            printf "}"
-        } else {
-            missing++
-            # dedup missing_list
-            already = 0
-            for (m = 1; m <= n_missing_list; m++) {
-                if (missing_list[m] == ref) { already = 1; break }
-            }
-            if (!already) {
-                n_missing_list++
-                missing_list[n_missing_list] = ref
-            }
-            printf "{"
-            printf "\"fn\":\"%s\"", json_escape(fn_name)
-            printf ",\"ref\":\"%s\"", json_escape(ref)
-            printf ",\"rule_exists\":false"
-            printf ",\"rule_level\":null"
-            printf ",\"file\":\"%s\"", json_escape(staged_file[s])
-            printf ",\"line\":%d", staged_line[s]
-            printf "}"
-        }
-    }
-
-    for (s = 1; s <= n_staged; s++) {
-        delete staged_ref[s]
-        delete staged_line[s]
-        delete staged_file[s]
-    }
-    n_staged = 0
-    next
-}
-
-# blank line breaks staging (unless more annotations follow)
-(!is_anno && !is_fn && !is_comment) {
-    if (n_staged > 0 && is_blank) {
-        for (s = 1; s <= n_staged; s++) {
-            delete staged_ref[s]
-            delete staged_line[s]
-            delete staged_file[s]
-        }
-        n_staged = 0
+    kind = $1; tgtk = $2; fn = $3; file = $4; line = $5; raw = decode_esc($6)
+    if (kind != "law") next
+    if (tgtk != "fn") next
+    ref = kv_extract(raw, "ref")
+    exists = (ref in rule_exists) ? "true" : "false"
+    lvl = (ref in rule_level) ? rule_level[ref] : ""
+    if (body != "") body = body ","
+    body = body "{\"fn\":\"" jesc(fn) "\",\"ref\":\"" jesc(ref) "\",\"rule_exists\":" exists ",\"rule_level\":\"" jesc(lvl) "\",\"file\":\"" jesc(file) "\",\"line\":" line "}"
+    total++
+    if (exists == "true") valid++
+    else {
+        missing++
+        if (missing_body != "") missing_body = missing_body ","
+        missing_body = missing_body "\"" jesc(ref) "\""
     }
 }
-
 END {
-    # emit summary on stderr for main shell to capture
-    printf "%d|%d|%d|%d\n", total, valid, missing, n_missing_list > "/dev/stderr"
-    for (m = 1; m <= n_missing_list; m++) {
-        print missing_list[m] > "/dev/stderr"
-    }
-}
-' "${files[@]}" > /tmp/.hexa-law-link.$$.body 2> /tmp/.hexa-law-link.$$.summary
-
-body="$(cat /tmp/.hexa-law-link.$$.body 2>/dev/null || true)"
-summary_raw="$(cat /tmp/.hexa-law-link.$$.summary 2>/dev/null || echo '0|0|0|0')"
-rm -f /tmp/.hexa-law-link.$$.body /tmp/.hexa-law-link.$$.summary "$rules_tmp"
-
-# first line = counts, subsequent lines = missing IDs
-summary_line="$(printf '%s\n' "$summary_raw" | head -n1)"
-missing_ids="$(printf '%s\n' "$summary_raw" | tail -n +2 | sed '/^$/d' || true)"
-
-IFS='|' read -r c_total c_valid c_missing c_missing_n <<< "$summary_line"
-c_total="${c_total:-0}"
-c_valid="${c_valid:-0}"
-c_missing="${c_missing:-0}"
-
-# build missing_list JSON array via jq (handles escaping safely)
-if [ -z "$missing_ids" ]; then
-    missing_json='[]'
-else
-    missing_json="$(printf '%s\n' "$missing_ids" | jq -R . | jq -s .)"
-fi
-
-printf '{"version":"0.1","source":"grep-mvp","links":[%s],"summary":{"total":%d,"valid_refs":%d,"missing_refs":%d,"missing_list":%s}}\n' \
-    "$body" "$c_total" "$c_valid" "$c_missing" "$missing_json"
+    printf("{\"version\":\"0.2\",\"source\":\"ast\",\"links\":[%s],\"summary\":{\"total\":%d,\"valid_refs\":%d,\"missing_refs\":%d,\"missing_list\":[%s]}}\n", body, total, valid, missing, missing_body)
+}' "$TMP_TSV"

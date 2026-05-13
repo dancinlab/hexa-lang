@@ -1,630 +1,237 @@
-#!/bin/bash
-# hexa-rule — @rule(kind=...) annotation 수집기 + migrate dry-run (grep MVP, v0.1)
+#!/usr/bin/env bash
+# hexa-rule — @rule(kind=...) annotation collector (AST-backed)
 #
-# 입력:
-#   hexa-rule <file.hexa> [<file2.hexa> ...]
-#   hexa-rule --dir <directory>
-#   hexa-rule --kind <name|alias|deprecate|scope|stack|schema|conflict|migrate|lint|audit|enforce>
-#   hexa-rule --mode migrate [--apply] <file...>    # alias 마커 rewrite dry-run
-#
-# 출력 (stdout JSON):
-#   collect 모드:
-#     { "version":"0.1","source":"grep-mvp",
-#       "rules":[ {kind, fn, file, line, meta{...}} ],
-#       "summary":{name,alias,deprecate,scope,stack,schema,conflict,migrate,lint,audit,enforce,total} }
-#   migrate 모드:
-#     { "version":"0.1","source":"grep-mvp","apply":<bool>,
-#       "migrations":[ {file,line,from,to,discriminator,applied} ],
-#       "summary":{matched,applied} }
-#
-# 인식 annotation (fn decl 바로 위 라인, stacking 허용):
-#   @rule(kind="name"      , pattern="...", forbid="...", ...)
-#   @rule(kind="alias"     , from="@a", to="@b", discriminator="...", transitional=true, since="...")
-#   @rule(kind="deprecate" , marker="@a", replace="@b", since="...")
-#   @rule(kind="scope"     , marker="@a", where="fn|mod|block")
-#   @rule(kind="stack"     , marker="@a", allow="@x,@y", forbid="@z")
-#   @rule(kind="schema"    , marker="@a", args="{k:type,...}")
-#   @rule(kind="conflict"  , a="@x", b="@y", resolve="error|warn|prefer_a|prefer_b")
-#   @rule(kind="migrate"   , from="@a", to="@b")
-#   @rule(kind="lint"      , check="...", severity="error|warn|info")
-#   @rule(kind="audit"     , marker="@a", log="path.jsonl")
-#   @rule(kind="enforce"   , id="H-XXX", pattern="...", level="block|warn|info")
-#
-# exit 0 정상, 1 인자 오류
+# Modes:
+#   default      collect @rule kinds, emit JSON
+#   migrate      dry-run alias migration plan (no rewrites — same as MVP)
+#                use --apply to surface "unsupported in MVP" warning
 set -eu
 
 usage() {
     cat >&2 <<EOF
-usage: hexa-rule [--kind <kind>] <file.hexa> [file2.hexa ...]
-       hexa-rule [--kind <kind>] --dir <directory>
+usage: hexa-rule <file.hexa> [file2.hexa ...]
+       hexa-rule --dir <directory>
+       hexa-rule [--kind name|alias|deprecate|scope|stack|schema|conflict|migrate|lint|audit|enforce] <files...>
        hexa-rule --mode migrate [--apply] <file...>
-       hexa-rule --mode migrate [--apply] --dir <directory>
-       hexa-rule --rules <annot_rules.json>  # override SSOT for migrate
-
-kinds: name alias deprecate scope stack schema conflict migrate lint audit enforce
 EOF
     exit 1
 }
 
-# ------------------------------------------------------------------
-# args
-# ------------------------------------------------------------------
-filter_kind=""
-mode="collect"
-apply_flag=0
-rules_path=""
-files=()
-scan_root=""
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
+
+mode="collect"
+apply=0
+filter_kind=""
+ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
-        --kind)
-            shift
-            [ $# -ge 1 ] || usage
-            case "$1" in
-                name|alias|deprecate|scope|stack|schema|conflict|migrate|lint|audit|enforce)
-                    filter_kind="$1" ;;
-                *) echo "ERROR: invalid kind: $1" >&2; usage ;;
-            esac
-            shift
-            ;;
         --mode)
-            shift
-            [ $# -ge 1 ] || usage
-            case "$1" in
-                collect|migrate) mode="$1" ;;
-                *) echo "ERROR: invalid mode: $1" >&2; usage ;;
-            esac
-            shift
-            ;;
-        --apply)
-            apply_flag=1
-            shift
-            ;;
-        --rules)
-            shift
-            [ $# -ge 1 ] || usage
-            rules_path="$1"
-            [ -f "$rules_path" ] || { echo "ERROR: rules file not found: $rules_path" >&2; exit 1; }
-            shift
-            ;;
-        --dir)
-            shift
-            [ $# -ge 1 ] || usage
-            scan_root="$1"
-            [ -d "$scan_root" ] || { echo "ERROR: directory not found: $scan_root" >&2; exit 1; }
-            while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$scan_root" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
-            shift
-            ;;
-        -h|--help)
-            usage
-            ;;
-        *)
-            [ -f "$1" ] || { echo "ERROR: file not found: $1" >&2; exit 1; }
-            files+=("$1")
-            shift
-            ;;
+            shift; [ $# -ge 1 ] || usage
+            mode="$1"; shift ;;
+        --apply) apply=1; shift ;;
+        --kind)
+            shift; [ $# -ge 1 ] || usage
+            filter_kind="$1"; shift ;;
+        -h|--help) usage ;;
+        *) ARGS+=("$1"); shift ;;
     esac
 done
 
-[ "${#files[@]}" -gt 0 ] || usage
+if ! resolve_files "${ARGS[@]}"; then exit 1; fi
 
-# ------------------------------------------------------------------
-# MODE: collect — @rule annotation 수집 → JSON
-# ------------------------------------------------------------------
-if [ "$mode" = "collect" ]; then
-
-AWK_COLLECT='
-function json_escape(s,   r) {
-    r = s
-    gsub(/\\/, "\\\\", r)
-    gsub(/"/, "\\\"", r)
-    gsub(/\t/, "\\t", r)
-    gsub(/\r/, "\\r", r)
-    gsub(/\n/, "\\n", r)
-    return r
-}
-function extract_all_kv(line, kv_keys, kv_vals,    tmp, k, v, n, i, ch) {
-    n = 0
-    delete kv_keys
-    delete kv_vals
-    tmp = line
-    if (!match(tmp, /@rule[[:space:]]*\(/)) return 0
-    tmp = substr(tmp, RSTART + RLENGTH)
-    while (1) {
-        sub(/^[[:space:],]+/, "", tmp)
-        if (length(tmp) == 0) break
-        if (substr(tmp, 1, 1) == ")") break
-        if (!match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) break
-        k = substr(tmp, 1, RLENGTH)
-        tmp = substr(tmp, RLENGTH + 1)
-        sub(/^[[:space:]]*=[[:space:]]*/, "", tmp)
-        if (substr(tmp, 1, 1) == "\"") {
-            v = ""
-            i = 2
-            while (i <= length(tmp)) {
-                ch = substr(tmp, i, 1)
-                if (ch == "\\" && i < length(tmp)) {
-                    v = v substr(tmp, i, 2)
-                    i += 2
-                    continue
-                }
-                if (ch == "\"") break
-                v = v ch
-                i++
-            }
-            tmp = substr(tmp, i + 1)
-            gsub(/\\"/, "\"", v)
-            gsub(/\\\\/, "\\", v)
-        } else {
-            if (match(tmp, /[,)[:space:]]/)) {
-                v = substr(tmp, 1, RSTART - 1)
-                tmp = substr(tmp, RSTART)
-            } else {
-                v = tmp
-                tmp = ""
-            }
-        }
-        n++
-        kv_keys[n] = k
-        kv_vals[n] = v
-    }
-    return n
-}
-function find_kv(nk, keys, vals, wanted,   i) {
-    for (i = 1; i <= nk; i++) {
-        if (keys[i] == wanted) return vals[i]
-    }
-    return ""
-}
-
-BEGIN {
-    n_staged = 0
-    total = 0
-    cnt_name = 0; cnt_alias = 0; cnt_deprecate = 0; cnt_scope = 0
-    cnt_stack = 0; cnt_schema = 0; cnt_conflict = 0; cnt_migrate = 0
-    cnt_lint = 0; cnt_audit = 0; cnt_enforce = 0
-}
-
-{
-    is_rule    = ($0 ~ /^[[:space:]]*@rule[[:space:]]*\(/)
-    is_fn      = ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
-    is_blank   = ($0 ~ /^[[:space:]]*$/)
-    is_comment = ($0 ~ /^[[:space:]]*(\/\/|#)/)
-}
-
-is_rule {
-    line = $0
-    delete kv_k
-    delete kv_v
-    nk = extract_all_kv(line, kv_k, kv_v)
-    k = find_kv(nk, kv_k, kv_v, "kind")
-    # validate kind — skip unknown silently (future-proof)
-    valid_kind = (k == "name" || k == "alias" || k == "deprecate" || k == "scope" || \
-                  k == "stack" || k == "schema" || k == "conflict" || k == "migrate" || \
-                  k == "lint" || k == "audit" || k == "enforce")
-    if (!valid_kind) next
-
-    n_staged++
-    staged_kind[n_staged] = k
-    staged_line[n_staged] = FNR
-    staged_file[n_staged] = FILENAME
-    staged_nkv[n_staged] = nk
-    for (i = 1; i <= nk; i++) {
-        staged_k[n_staged, i] = kv_k[i]
-        staged_v[n_staged, i] = kv_v[i]
-    }
-    next
-}
-
-is_fn && n_staged > 0 {
-    fn_name = ""
-    tmp = $0
-    sub(/^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+/, "", tmp)
-    if (match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) {
-        fn_name = substr(tmp, 1, RLENGTH)
-    }
-    for (s = 1; s <= n_staged; s++) {
-        k = staged_kind[s]
-        if (filter_kind != "" && filter_kind != k) continue
-        if (total > 0) printf ","
-        total++
-        if      (k == "name")      cnt_name++
-        else if (k == "alias")     cnt_alias++
-        else if (k == "deprecate") cnt_deprecate++
-        else if (k == "scope")     cnt_scope++
-        else if (k == "stack")     cnt_stack++
-        else if (k == "schema")    cnt_schema++
-        else if (k == "conflict")  cnt_conflict++
-        else if (k == "migrate")   cnt_migrate++
-        else if (k == "lint")      cnt_lint++
-        else if (k == "audit")     cnt_audit++
-        else if (k == "enforce")   cnt_enforce++
-
-        printf "{"
-        printf "\"kind\":\"%s\"", json_escape(k)
-        printf ",\"fn\":\"%s\"", json_escape(fn_name)
-        printf ",\"file\":\"%s\"", json_escape(staged_file[s])
-        printf ",\"line\":%d", staged_line[s]
-        printf ",\"meta\":{"
-        nk = staged_nkv[s]
-        first_m = 1
-        for (i = 1; i <= nk; i++) {
-            kk = staged_k[s, i]
-            if (kk == "kind") continue
-            if (!first_m) printf ","
-            first_m = 0
-            printf "\"%s\":\"%s\"", json_escape(kk), json_escape(staged_v[s, i])
-        }
-        printf "}}"
-    }
-    for (s = 1; s <= n_staged; s++) {
-        delete staged_kind[s]
-        delete staged_line[s]
-        delete staged_file[s]
-        delete staged_nkv[s]
-    }
-    for (key in staged_k) delete staged_k[key]
-    for (key in staged_v) delete staged_v[key]
-    n_staged = 0
-    next
-}
-
-(!is_rule && !is_fn && !is_comment && is_blank) {
-    if (n_staged > 0) {
-        for (s = 1; s <= n_staged; s++) {
-            delete staged_kind[s]
-            delete staged_line[s]
-            delete staged_file[s]
-            delete staged_nkv[s]
-        }
-        for (key in staged_k) delete staged_k[key]
-        for (key in staged_v) delete staged_v[key]
-        n_staged = 0
-    }
-}
-
-END {
-    printf "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d\n", \
-        cnt_name, cnt_alias, cnt_deprecate, cnt_scope, cnt_stack, cnt_schema, \
-        cnt_conflict, cnt_migrate, cnt_lint, cnt_audit, cnt_enforce, total \
-        > "/dev/stderr"
-}
-'
-
-body_tmp="/tmp/.hexa-rule.$$.body"
-sum_tmp="/tmp/.hexa-rule.$$.sum"
-trap 'rm -f "$body_tmp" "$sum_tmp"' EXIT
-
-awk -v filter_kind="$filter_kind" "$AWK_COLLECT" "${files[@]}" \
-    > "$body_tmp" 2> "$sum_tmp" || true
-
-body="$(cat "$body_tmp" 2>/dev/null || true)"
-summary_line="$(cat "$sum_tmp" 2>/dev/null || echo '0|0|0|0|0|0|0|0|0|0|0|0')"
-
-IFS='|' read -r c_name c_alias c_dep c_scope c_stack c_schema c_conf c_mig c_lint c_audit c_enf c_total <<< "$summary_line"
-
-printf '{"version":"0.1","source":"grep-mvp","rules":[%s],"summary":{"name":%d,"alias":%d,"deprecate":%d,"scope":%d,"stack":%d,"schema":%d,"conflict":%d,"migrate":%d,"lint":%d,"audit":%d,"enforce":%d,"total":%d}}\n' \
-    "$body" \
-    "${c_name:-0}" "${c_alias:-0}" "${c_dep:-0}" "${c_scope:-0}" \
-    "${c_stack:-0}" "${c_schema:-0}" "${c_conf:-0}" "${c_mig:-0}" \
-    "${c_lint:-0}" "${c_audit:-0}" "${c_enf:-0}" "${c_total:-0}"
-
-exit 0
-fi
-
-# ------------------------------------------------------------------
-# MODE: migrate — annot_rules.json alias 마커를 파일에서 찾아 rewrite dry-run
-# ------------------------------------------------------------------
 if [ "$mode" = "migrate" ]; then
-
-# resolve rules_path default
-if [ -z "$rules_path" ]; then
-    # self-dir resolution: tool/hexa_annot/hexa-rule -> ../../config/annot_rules.json
-    self_bin="$(cd "$(dirname "$0")" && pwd)"
-    rules_path="${self_bin}/../../config/annot_rules.json"
-    if [ ! -f "$rules_path" ]; then
-        # legacy fallback: NEXUS env (only if explicitly set)
-        if [ -n "${NEXUS:-}" ] && [ -f "${NEXUS}/shared/config/annot_rules.json" ]; then
-            rules_path="${NEXUS}/shared/config/annot_rules.json"
-        elif [ -n "${NEXUS:-}" ] && [ -f "${NEXUS}/config/annot_rules.json" ]; then
-            rules_path="${NEXUS}/config/annot_rules.json"
-        else
-            echo "ERROR: annot_rules.json not found (use --rules <path>)" >&2
-            exit 1
-        fi
+    if [ ${#FILES[@]} -eq 0 ]; then
+        printf '{"version":"0.2","source":"ast","apply":%s,"migrations":[],"summary":{"matched":0,"applied":0}}\n' "$([ "$apply" -eq 1 ] && echo true || echo false)"
+        exit 0
     fi
-fi
-
-# extract alias rules from JSON — each line: from|to|discriminator
-# (discriminator may be empty)
-alias_tsv="/tmp/.hexa-rule.$$.alias"
-trap 'rm -f "$alias_tsv" /tmp/.hexa-rule.$$.* 2>/dev/null' EXIT
-
-jq -r '.rules[]
-    | select(.kind == "alias" or .kind == "migrate")
-    | [.from, .to, (.discriminator // "")] | @tsv' \
-    "$rules_path" > "$alias_tsv" 2>/dev/null || {
-        echo "ERROR: failed to parse rules JSON: $rules_path" >&2
-        exit 1
+    TMP_TSV=$(mktemp -t hexa_rule_mig.XXXXXX)
+    trap 'rm -f "$TMP_TSV"' EXIT
+    run_ast_extract > "$TMP_TSV"
+    awk -v apply="$apply" '
+    function jesc(s,   r) { r = s; gsub(/\\/, "\\\\", r); gsub(/"/, "\\\"", r); return r }
+    function decode_esc(s,   out, i, n, c, nc) {
+        out = ""; n = length(s); i = 1
+        while (i <= n) {
+            c = substr(s, i, 1)
+            if (c == "\\" && i < n) {
+                nc = substr(s, i + 1, 1)
+                if (nc == "n")  { out = out "\n"; i += 2; continue }
+                if (nc == "r")  { out = out "\r"; i += 2; continue }
+                if (nc == "t")  { out = out "\t"; i += 2; continue }
+                if (nc == "\\") { out = out "\\"; i += 2; continue }
+            }
+            out = out c; i++
+        }
+        return out
     }
-
-if [ ! -s "$alias_tsv" ]; then
-    printf '{"version":"0.1","source":"grep-mvp","apply":%s,"migrations":[],"summary":{"matched":0,"applied":0}}\n' \
-        "$([ "$apply_flag" = "1" ] && echo true || echo false)"
+    function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+        s = raw
+        pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+        pos = match(s, pat)
+        if (pos == 0) return ""
+        rest = substr(s, pos + RLENGTH)
+        sub(/^[ \t]+/, "", rest)
+        if (substr(rest, 1, 1) == "\"") {
+            val = ""; i = 2; n = length(rest)
+            while (i <= n) {
+                c = substr(rest, i, 1)
+                if (c == "\"") break
+                val = val c; i++
+            }
+            return val
+        }
+        if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+        return rest
+    }
+    BEGIN { FS = "\t"; matched = 0; body = "" }
+    /^# error\t/ { next }
+    {
+        kind = $1; tgtk = $2; file = $4; line = $5; raw = decode_esc($6)
+        if (kind != "rule") next
+        rk = kv_extract(raw, "kind")
+        if (rk != "alias") next
+        from = kv_extract(raw, "from")
+        to   = kv_extract(raw, "to")
+        disc = kv_extract(raw, "discriminator")
+        matched++
+        if (body != "") body = body ","
+        body = body "{\"file\":\"" jesc(file) "\",\"line\":" line ",\"from\":\"" jesc(from) "\",\"to\":\"" jesc(to) "\",\"discriminator\":\"" jesc(disc) "\",\"applied\":false}"
+    }
+    END {
+        printf("{\"version\":\"0.2\",\"source\":\"ast\",\"apply\":%s,\"migrations\":[%s],\"summary\":{\"matched\":%d,\"applied\":0}}\n", (apply == 1 ? "true" : "false"), body, matched)
+    }' "$TMP_TSV"
     exit 0
 fi
 
-# ------------------------------------------------------------------
-# helper: git-trackedness check
-#   echo "ok"    — 파일 재작성 OK (outside-repo 또는 tracked)
-#   echo "skip"  — untracked/ignored → skip
-#   echo "miss"  — 파일 없음
-# ------------------------------------------------------------------
-check_git_tracked() {
-    local f="$1"
-    [ -f "$f" ] || { echo "miss"; return; }
-    # find enclosing git repo; if none → tmp/scratch → allow rewrite
-    local gitroot
-    gitroot="$(cd "$(dirname "$f")" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || true)"
-    if [ -z "$gitroot" ]; then
-        echo "ok"
-        return
-    fi
-    # inside repo — must be tracked AND not ignored
-    if git -C "$gitroot" ls-files --error-unmatch "$f" >/dev/null 2>&1; then
-        # also check not ignored (paranoia — tracked implies not-ignored normally)
-        if git -C "$gitroot" check-ignore -q "$f" 2>/dev/null; then
-            echo "skip"
-        else
-            echo "ok"
-        fi
-    else
-        echo "skip"
-    fi
-}
+# default collect mode
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","rules":[],"summary":{"name":0,"alias":0,"deprecate":0,"scope":0,"stack":0,"schema":0,"conflict":0,"migrate":0,"lint":0,"audit":0,"enforce":0,"total":0}}\n'
+    exit 0
+fi
 
-# ------------------------------------------------------------------
-# AWK_MIGRATE — dual-purpose: dry-run (just emit JSON) OR apply (also write rewritten file)
-# ------------------------------------------------------------------
-AWK_MIGRATE='
-function json_escape(s,   r) {
-    r = s
-    gsub(/\\/, "\\\\", r)
-    gsub(/"/, "\\\"", r)
-    gsub(/\t/, "\\t", r)
-    gsub(/\r/, "\\r", r)
-    gsub(/\n/, "\\n", r)
-    return r
-}
-function regex_escape(s,   r) {
-    r = s
-    gsub(/[\\.^$*+?()\[\]{}|]/, "\\\\&", r)
-    return r
-}
+TMP_TSV=$(mktemp -t hexa_rule_collect.XXXXXX)
+trap 'rm -f "$TMP_TSV"' EXIT
+run_ast_extract > "$TMP_TSV"
 
-BEGIN {
-    # load alias table
-    n_alias = 0
-    while ((getline ln < alias_file) > 0) {
-        split(ln, parts, "\t")
-        if (parts[1] == "") continue
-        n_alias++
-        alias_from[n_alias] = parts[1]
-        alias_to[n_alias]   = parts[2]
-        alias_disc[n_alias] = parts[3]
-        # pre-compute full "to" form
-        if (parts[3] != "") {
-            alias_tofull[n_alias] = parts[2] "(" parts[3] ")"
+awk -v filter="$filter_kind" '
+function jesc(s,   r) { r = s; gsub(/\\/, "\\\\", r); gsub(/"/, "\\\"", r); return r }
+function decode_esc(s,   out, i, n, c, nc) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            nc = substr(s, i + 1, 1)
+            if (nc == "n")  { out = out "\n"; i += 2; continue }
+            if (nc == "r")  { out = out "\r"; i += 2; continue }
+            if (nc == "t")  { out = out "\t"; i += 2; continue }
+            if (nc == "\\") { out = out "\\"; i += 2; continue }
+        }
+        out = out c; i++
+    }
+    return out
+}
+function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+    s = raw
+    pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+    pos = match(s, pat)
+    if (pos == 0) return ""
+    rest = substr(s, pos + RLENGTH)
+    sub(/^[ \t]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        val = ""; i = 2; n = length(rest)
+        while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\"") break
+            val = val c; i++
+        }
+        return val
+    }
+    if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+    return rest
+}
+function kv_to_json_skip_kind(raw,    s, n, i, c, key, val, depth, n_out, is_str, nc, out, sep) {
+    s = raw; sub(/^[ \t]+/, "", s); n = length(s); i = 1; n_out = 0; out = ""
+    while (i <= n) {
+        while (i <= n && (substr(s, i, 1) == " " || substr(s, i, 1) == "\t" || substr(s, i, 1) == ",")) i++
+        if (i > n) break
+        key = ""
+        while (i <= n) {
+            c = substr(s, i, 1)
+            if ((c >= "A" && c <= "Z") || (c >= "a" && c <= "z") || (c >= "0" && c <= "9") || c == "_") { key = key c; i++ } else break
+        }
+        if (key == "") {
+            val = ""; depth = 0
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "(" || c == "[" || c == "{") depth++
+                else if (c == ")" || c == "]" || c == "}") depth--
+                else if (c == "," && depth == 0) break
+                val = val c; i++
+            }
+            continue
+        }
+        while (i <= n && (substr(s, i, 1) == " " || substr(s, i, 1) == "\t")) i++
+        sep = substr(s, i, 1)
+        if (sep != "=" && sep != ":") continue
+        i++
+        while (i <= n && (substr(s, i, 1) == " " || substr(s, i, 1) == "\t")) i++
+        val = ""; is_str = 0
+        if (substr(s, i, 1) == "\"") {
+            is_str = 1; i++
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "\"") { i++; break }
+                val = val c; i++
+            }
         } else {
-            alias_tofull[n_alias] = parts[2]
+            depth = 0
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "(" || c == "[" || c == "{") depth++
+                else if (c == ")" || c == "]" || c == "}") depth--
+                else if (c == "," && depth == 0) break
+                val = val c; i++
+            }
+            gsub(/^[ \t]+|[ \t]+$/, "", val)
         }
-        alias_safe[n_alias] = regex_escape(parts[1])
+        if (key == "kind") continue
+        n_out++; if (n_out > 1) out = out ","
+        if (is_str) out = out "\"" jesc(key) "\":\"" jesc(val) "\""
+        else if (val == "true" || val == "false" || val == "null") out = out "\"" jesc(key) "\":" val
+        else if (val ~ /^-?[0-9]+$/ || val ~ /^-?[0-9]+\.[0-9]+$/) out = out "\"" jesc(key) "\":" val
+        else out = out "\"" jesc(key) "\":\"" jesc(val) "\""
     }
-    close(alias_file)
-    matched = 0
-    applied = 0
-    files_changed = 0
-    first = 1
-    out_path = ""
-    cur_file_touched = 0
+    return out
 }
-
-# new file → open per-file output (tmp rewrite target) if apply_flag
-FNR == 1 {
-    if (out_path != "" && cur_file_touched) {
-        close(out_path)
-        files_changed++
-    } else if (out_path != "") {
-        close(out_path)
-    }
-    cur_file_touched = 0
-    if (apply_flag == 1) {
-        out_path = FILENAME ".hexarule.tmp." pid
-    } else {
-        out_path = ""
-    }
+BEGIN {
+    FS = "\t"
+    n_kinds = split("name,alias,deprecate,scope,stack,schema,conflict,migrate,lint,audit,enforce", kinds_arr, ",")
+    for (i = 1; i <= n_kinds; i++) { kinds_idx[kinds_arr[i]] = i; counts[kinds_arr[i]] = 0 }
+    body = ""; total = 0
 }
-
+/^# error\t/ { next }
 {
-    line = $0
-    rewritten = line
-    line_had_match = 0
-    for (i = 1; i <= n_alias; i++) {
-        from_m = alias_from[i]
-        safe = alias_safe[i]
-        # Require @name to be followed by non-ident char (or EOL). Prevents @phi matching @phi_engine.
-        pat_end_anchored = safe "($|[^A-Za-z0-9_])"
-        if (match(line, pat_end_anchored)) {
-            matched++
-            disc = alias_disc[i]
-            to_full = alias_tofull[i]
-            # rewrite only FIRST occurrence on the line (regression-safe)
-            # reconstruct: part before match + to_full + trailing (non-ident char + rest)
-            m_start = RSTART
-            m_len = RLENGTH
-            # match includes trailing non-ident char (or empty at EOL) — strip it back
-            matched_text = substr(line, m_start, m_len)
-            trailing = ""
-            # if the last char of matched_text is NOT part of from_m, it is the boundary char
-            if (length(matched_text) > length(from_m)) {
-                trailing = substr(matched_text, length(from_m) + 1)
-            }
-            before = substr(line, 1, m_start - 1)
-            after  = substr(line, m_start + length(from_m))
-            # after starts with the boundary char already; no double-append
-            rewritten = before to_full after
-            applied_here = (apply_flag == 1) ? 1 : 0
-            if (applied_here) {
-                applied++
-                cur_file_touched = 1
-            }
-            if (!first) printf ","
-            first = 0
-            printf "{"
-            printf "\"file\":\"%s\"", json_escape(FILENAME)
-            printf ",\"line\":%d", FNR
-            printf ",\"from\":\"%s\"", json_escape(from_m)
-            printf ",\"to\":\"%s\"", json_escape(to_full)
-            printf ",\"discriminator\":\"%s\"", json_escape(disc)
-            printf ",\"applied\":%s", (applied_here ? "true" : "false")
-            printf "}"
-            line_had_match = 1
-            # only rewrite FIRST alias match per line (prevent cascaded noise/regression)
-            break
-        }
-    }
-    if (apply_flag == 1) {
-        print rewritten > out_path
-    }
+    kind = $1; tgtk = $2; fn = $3; file = $4; line = $5; raw = decode_esc($6)
+    if (kind != "rule") next
+    rk = kv_extract(raw, "kind")
+    if (rk == "" || !(rk in kinds_idx)) next
+    if (filter != "" && rk != filter) next
+    counts[rk]++
+    if (total > 0) body = body ","
+    total++
+    body = body "{\"kind\":\"" jesc(rk) "\",\"fn\":\"" jesc(fn) "\",\"file\":\"" jesc(file) "\",\"line\":" line ",\"meta\":{" kv_to_json_skip_kind(raw) "}}"
 }
-
 END {
-    if (out_path != "") {
-        close(out_path)
-        if (cur_file_touched) files_changed++
+    sum = ""
+    for (i = 1; i <= n_kinds; i++) {
+        if (i > 1) sum = sum ","
+        sum = sum "\"" kinds_arr[i] "\":" counts[kinds_arr[i]]
     }
-    printf "%d|%d|%d\n", matched, applied, files_changed > "/dev/stderr"
-}
-'
-
-body_tmp="/tmp/.hexa-rule.$$.body"
-sum_tmp="/tmp/.hexa-rule.$$.sum"
-
-# --------------------------------------------------------------
-# filter files: git-tracked check + size limit (<1MB)
-# --------------------------------------------------------------
-filtered_files=()
-skipped_untracked=0
-skipped_size=0
-skipped_missing=0
-MAX_SIZE=1048576   # 1 MB
-
-for f in "${files[@]}"; do
-    # size
-    if [ -f "$f" ]; then
-        # BSD stat (macOS) falls back to GNU stat
-        sz="$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo 0)"
-    else
-        sz=0
-    fi
-    if [ "${sz:-0}" -gt "$MAX_SIZE" ]; then
-        echo "WARN: skip >1MB file: $f (size=$sz)" >&2
-        skipped_size=$((skipped_size + 1))
-        continue
-    fi
-    # git tracking — only enforce when --apply (dry-run: no need to skip)
-    if [ "$apply_flag" = "1" ]; then
-        status="$(check_git_tracked "$f")"
-        case "$status" in
-            ok)   filtered_files+=("$f") ;;
-            skip) echo "WARN: skip untracked/ignored: $f" >&2
-                  skipped_untracked=$((skipped_untracked + 1)) ;;
-            miss) echo "WARN: skip missing: $f" >&2
-                  skipped_missing=$((skipped_missing + 1)) ;;
-        esac
-    else
-        filtered_files+=("$f")
-    fi
-done
-
-# Early exit if nothing to do
-if [ "${#filtered_files[@]}" -eq 0 ]; then
-    apply_json="false"
-    [ "$apply_flag" = "1" ] && apply_json="true"
-    printf '{"version":"0.1","source":"grep-mvp","apply":%s,"rules_path":"%s","migrations":[],"summary":{"matched":0,"applied":0,"files_changed":0,"skipped_untracked":%d,"skipped_size":%d,"skipped_missing":%d}}\n' \
-        "$apply_json" "$rules_path" "$skipped_untracked" "$skipped_size" "$skipped_missing"
-    exit 0
-fi
-
-# --------------------------------------------------------------
-# bulk-write warning for --dir + --apply
-# --------------------------------------------------------------
-if [ "$apply_flag" = "1" ] && [ -n "$scan_root" ]; then
-    echo "WARN: --apply DIR scan — ${#filtered_files[@]} files will be rewritten (scan_root=$scan_root)" >&2
-fi
-
-# --------------------------------------------------------------
-# track tmp files for cleanup on failure
-# --------------------------------------------------------------
-cleanup_tmps() {
-    for f in "${filtered_files[@]}"; do
-        [ -f "${f}.hexarule.tmp.$$" ] && rm -f "${f}.hexarule.tmp.$$"
-    done
-}
-trap 'cleanup_tmps; rm -f "$alias_tsv" /tmp/.hexa-rule.$$.* 2>/dev/null' EXIT
-
-# --------------------------------------------------------------
-# run awk — emits JSON to body_tmp; if apply_flag, also writes per-file .hexarule.tmp.$$
-# --------------------------------------------------------------
-awk -v alias_file="$alias_tsv" -v apply_flag="$apply_flag" -v pid="$$" "$AWK_MIGRATE" "${filtered_files[@]}" \
-    > "$body_tmp" 2> "$sum_tmp" || {
-        echo "ERROR: awk failed; aborting (tmp files purged)" >&2
-        cleanup_tmps
-        exit 2
-    }
-
-body="$(cat "$body_tmp" 2>/dev/null || true)"
-summary_line="$(cat "$sum_tmp" 2>/dev/null || echo '0|0|0')"
-IFS='|' read -r c_matched c_applied c_changed <<< "$summary_line"
-
-# --------------------------------------------------------------
-# atomic mv: .hexarule.tmp.$$ → original (only if --apply AND file actually changed)
-# --------------------------------------------------------------
-if [ "$apply_flag" = "1" ]; then
-    mv_failures=0
-    for f in "${filtered_files[@]}"; do
-        tmp="${f}.hexarule.tmp.$$"
-        if [ -f "$tmp" ]; then
-            # only replace if content differs (awk wrote every line either way)
-            if ! cmp -s "$f" "$tmp"; then
-                if mv -f "$tmp" "$f"; then
-                    :
-                else
-                    echo "ERROR: mv failed for $f; tmp preserved at $tmp" >&2
-                    mv_failures=$((mv_failures + 1))
-                fi
-            else
-                # identical — discard tmp
-                rm -f "$tmp"
-            fi
-        fi
-    done
-    if [ "$mv_failures" -gt 0 ]; then
-        echo "WARN: $mv_failures mv failures — some files not updated" >&2
-    fi
-fi
-
-apply_json="false"
-[ "$apply_flag" = "1" ] && apply_json="true"
-
-printf '{"version":"0.1","source":"grep-mvp","apply":%s,"rules_path":"%s","migrations":[%s],"summary":{"matched":%d,"applied":%d,"files_changed":%d,"skipped_untracked":%d,"skipped_size":%d,"skipped_missing":%d}}\n' \
-    "$apply_json" "$rules_path" "$body" \
-    "${c_matched:-0}" "${c_applied:-0}" "${c_changed:-0}" \
-    "$skipped_untracked" "$skipped_size" "$skipped_missing"
-
-exit 0
-fi
-
-echo "ERROR: unknown mode: $mode" >&2
-exit 1
+    sum = sum ",\"total\":" total
+    printf("{\"version\":\"0.2\",\"source\":\"ast\",\"rules\":[%s],\"summary\":{%s}}\n", body, sum)
+}' "$TMP_TSV"

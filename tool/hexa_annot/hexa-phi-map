@@ -1,25 +1,6 @@
-#!/bin/bash
-# hexa-phi-map — anima 의식 기여 annotation 4종 통합 수집 (grep MVP, v0.1)
-#
-# 입력:
-#   hexa-phi-map <file.hexa> [<file2.hexa> ...]
-#   hexa-phi-map --dir <directory>
-#   hexa-phi-map --project anima
-#
-# 출력 (stdout JSON):
-#   { "version":"0.1", "source":"grep-mvp",
-#     "phi_fns":[...], "consciousness_fns":[...],
-#     "channel_fns":[...], "iit_fns":[...],
-#     "summary":{ phi, consciousness, channel, iit,
-#                 total_weight, tiers, channels_ids, metrics } }
-#
-# 인식 annotation (fn decl 바로 위, stacking 허용):
-#   @phi(weight=<float>, channel="<name>")
-#   @consciousness(tier="L0|L1|L2|L3")
-#   @channel(id=<int>, src="<eeg|cli|ws|...>")
-#   @iit(metric="<phi|integration|information|complexity>")
-#
-# exit 0 정상. 1=인자 오류
+#!/usr/bin/env bash
+# hexa-phi-map — anima consciousness contribution annotation extractor (AST-backed)
+# Recognizes: @phi, @consciousness, @channel, @iit
 set -eu
 
 usage() {
@@ -31,375 +12,117 @@ EOF
     exit 1
 }
 
-files=()
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
 
-# parse args
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --dir)
-            shift
-            [ $# -ge 1 ] || usage
-            dir="$1"
-            [ -d "$dir" ] || { echo "ERROR: directory not found: $dir" >&2; exit 1; }
-            while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$dir" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
-            shift
-            ;;
-        --project)
-            shift
-            [ $# -ge 1 ] || usage
-            proj="$1"
-            # Generic project root resolution: try $HOME/core/<name> then $HOME/Dev/<name>.
-            proj_root=""
-            for cand in "$HOME/core/$proj" "$HOME/Dev/$proj" "$HOME/dev/$proj"; do
-                if [ -d "$cand" ]; then proj_root="$cand"; break; fi
-            done
-            [ -n "$proj_root" ] || { echo "ERROR: project '$proj' not found (tried \$HOME/core/$proj, \$HOME/Dev/$proj)" >&2; exit 1; }
-            while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$proj_root" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
-            shift
-            ;;
-        -h|--help)
-            usage
-            ;;
-        *)
-            [ -f "$1" ] || { echo "ERROR: file not found: $1" >&2; exit 1; }
-            files+=("$1")
-            shift
-            ;;
-    esac
-done
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "${SCRIPT_DIR}/_ast_extract.sh"
 
-[ "${#files[@]}" -gt 0 ] || usage
+if [ "${1:-}" = "--project" ]; then
+    [ $# -ge 2 ] || usage
+    name="$2"
+    cand=""
+    if [ -d "$HOME/core/$name" ]; then cand="$HOME/core/$name"
+    elif [ -d "$HOME/Dev/$name" ]; then cand="$HOME/Dev/$name"
+    else echo "ERROR: project not found: $name" >&2; exit 1; fi
+    set -- --dir "$cand"
+fi
 
-# awk 엔진 — annotation 라인을 stage, fn decl 에서 flush
-# 출력:
-#   stdout: 4개 배열 본문 (구분자 sentinel 라인으로 분리)
-#   stderr: 요약 핵심값 (counts / tier+channel+metric set / total_weight)
+if ! resolve_files "$@"; then exit 1; fi
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.2","source":"ast","phi_fns":[],"consciousness_fns":[],"channel_fns":[],"iit_fns":[],"summary":{"phi":0,"consciousness":0,"channel":0,"iit":0,"total_weight":0,"tiers":[],"channels_ids":[],"metrics":[]}}\n'
+    exit 0
+fi
+
+TMP_TSV=$(mktemp -t hexa_phi_map.XXXXXX)
+trap 'rm -f "$TMP_TSV"' EXIT
+run_ast_extract > "$TMP_TSV"
+
 awk '
-function json_escape(s,   r) {
-    r = s
-    gsub(/\\/, "\\\\", r)
-    gsub(/"/, "\\\"", r)
-    gsub(/\t/, "\\t", r)
-    gsub(/\r/, "\\r", r)
-    gsub(/\n/, "\\n", r)
-    return r
-}
-function extract_all_kv(line, kv_keys, kv_vals,    tmp, k, v, n, i, ch) {
-    n = 0
-    delete kv_keys
-    delete kv_vals
-    tmp = line
-    if (!match(tmp, /@[a-z]+\(/)) return 0
-    tmp = substr(tmp, RSTART + RLENGTH)
-    while (1) {
-        sub(/^[[:space:],]+/, "", tmp)
-        if (length(tmp) == 0) break
-        if (substr(tmp, 1, 1) == ")") break
-        if (!match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) break
-        k = substr(tmp, 1, RLENGTH)
-        tmp = substr(tmp, RLENGTH + 1)
-        sub(/^[[:space:]]*=[[:space:]]*/, "", tmp)
-        if (substr(tmp, 1, 1) == "\"") {
-            v = ""
-            i = 2
-            while (i <= length(tmp)) {
-                ch = substr(tmp, i, 1)
-                if (ch == "\\" && i < length(tmp)) {
-                    v = v substr(tmp, i, 2)
-                    i += 2
-                    continue
-                }
-                if (ch == "\"") break
-                v = v ch
-                i++
-            }
-            tmp = substr(tmp, i + 1)
-            gsub(/\\"/, "\"", v)
-            gsub(/\\\\/, "\\", v)
-        } else {
-            if (match(tmp, /[,)[:space:]]/)) {
-                v = substr(tmp, 1, RSTART - 1)
-                tmp = substr(tmp, RSTART)
-            } else {
-                v = tmp
-                tmp = ""
-            }
+function jesc(s,   r) { r = s; gsub(/\\/, "\\\\", r); gsub(/"/, "\\\"", r); return r }
+function decode_esc(s,   out, i, n, c, nc) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            nc = substr(s, i + 1, 1)
+            if (nc == "n")  { out = out "\n"; i += 2; continue }
+            if (nc == "r")  { out = out "\r"; i += 2; continue }
+            if (nc == "t")  { out = out "\t"; i += 2; continue }
+            if (nc == "\\") { out = out "\\"; i += 2; continue }
         }
-        n++
-        kv_keys[n] = k
-        kv_vals[n] = v
+        out = out c; i++
     }
-    return n
+    return out
 }
-function kv_find(nkv, keys, vals, want,    i) {
-    for (i = 1; i <= nkv; i++) {
-        if (keys[i] == want) return vals[i]
+function kv_extract(raw, key,    s, pat, pos, rest, val, n, i, c, nc) {
+    s = raw
+    pat = "(^|[ \\t,(])" key "[ \\t]*[=:][ \\t]*"
+    pos = match(s, pat)
+    if (pos == 0) return ""
+    rest = substr(s, pos + RLENGTH)
+    sub(/^[ \t]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        val = ""; i = 2; n = length(rest)
+        while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\"") break
+            val = val c; i++
+        }
+        return val
     }
-    return ""
+    if (match(rest, /[,)[:space:]]/)) return substr(rest, 1, RSTART - 1)
+    return rest
 }
-
 BEGIN {
-    n_staged = 0
-    cnt_phi = 0
-    cnt_cons = 0
-    cnt_chan = 0
-    cnt_iit = 0
-    total_weight = 0.0
-    n_tiers = 0
-    n_cids = 0
-    n_metrics = 0
-    body_phi = ""
-    body_cons = ""
-    body_chan = ""
-    body_iit = ""
+    FS = "\t"
+    phi_body = ""; cons_body = ""; chan_body = ""; iit_body = ""
+    n_phi = 0; n_cons = 0; n_chan = 0; n_iit = 0
+    total_weight = 0
+    n_tiers = 0; n_chid = 0; n_metrics = 0
 }
-
+/^# error\t/ { next }
 {
-    is_phi     = ($0 ~ /^[[:space:]]*@phi([[:space:]]*\(|[[:space:]]*$)/)
-    is_cons    = ($0 ~ /^[[:space:]]*@consciousness([[:space:]]*\(|[[:space:]]*$)/)
-    is_chan    = ($0 ~ /^[[:space:]]*@channel([[:space:]]*\(|[[:space:]]*$)/)
-    is_iit     = ($0 ~ /^[[:space:]]*@iit([[:space:]]*\(|[[:space:]]*$)/)
-    is_anno    = (is_phi || is_cons || is_chan || is_iit)
-    is_fn      = ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
-    is_blank   = ($0 ~ /^[[:space:]]*$/)
-    is_comment = ($0 ~ /^[[:space:]]*(\/\/|#)/)
-}
-
-is_anno {
-    kind = ""
-    if (is_phi)       kind = "phi"
-    else if (is_cons) kind = "consciousness"
-    else if (is_chan) kind = "channel"
-    else if (is_iit)  kind = "iit"
-
-    n_staged++
-    staged_kind[n_staged] = kind
-    staged_line[n_staged] = FNR
-    staged_file[n_staged] = FILENAME
-
-    delete kv_k
-    delete kv_v
-    nk = extract_all_kv($0, kv_k, kv_v)
-    staged_nkv[n_staged] = nk
-    for (i = 1; i <= nk; i++) {
-        staged_k[n_staged, i] = kv_k[i]
-        staged_v[n_staged, i] = kv_v[i]
-    }
-    next
-}
-
-is_fn && n_staged > 0 {
-    fn_name = ""
-    tmp = $0
-    sub(/^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+/, "", tmp)
-    if (match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) {
-        fn_name = substr(tmp, 1, RLENGTH)
-    }
-
-    for (s = 1; s <= n_staged; s++) {
-        k = staged_kind[s]
-        nk = staged_nkv[s]
-        delete cur_k
-        delete cur_v
-        for (i = 1; i <= nk; i++) {
-            cur_k[i] = staged_k[s, i]
-            cur_v[i] = staged_v[s, i]
-        }
-
-        entry = "{"
-        entry = entry "\"fn\":\"" json_escape(fn_name) "\""
-
-        if (k == "phi") {
-            w_s = kv_find(nk, cur_k, cur_v, "weight")
-            ch_s = kv_find(nk, cur_k, cur_v, "channel")
-            w = w_s + 0.0
-            entry = entry ",\"weight\":" w_s
-            entry = entry ",\"channel\":\"" json_escape(ch_s) "\""
-            total_weight += w
-            if (body_phi != "") body_phi = body_phi ","
-            cnt_phi++
-        } else if (k == "consciousness") {
-            tier_s = kv_find(nk, cur_k, cur_v, "tier")
-            entry = entry ",\"tier\":\"" json_escape(tier_s) "\""
-            # tier set
-            seen = 0
-            for (t = 1; t <= n_tiers; t++) if (tier_set[t] == tier_s) { seen = 1; break }
-            if (!seen && tier_s != "") { n_tiers++; tier_set[n_tiers] = tier_s }
-            if (body_cons != "") body_cons = body_cons ","
-            cnt_cons++
-        } else if (k == "channel") {
-            id_s = kv_find(nk, cur_k, cur_v, "id")
-            src_s = kv_find(nk, cur_k, cur_v, "src")
-            id_i = int(id_s + 0)
-            entry = entry ",\"id\":" id_i
-            entry = entry ",\"src\":\"" json_escape(src_s) "\""
-            seen = 0
-            for (t = 1; t <= n_cids; t++) if (cid_set[t] == id_i) { seen = 1; break }
-            if (!seen && id_s != "") { n_cids++; cid_set[n_cids] = id_i }
-            if (body_chan != "") body_chan = body_chan ","
-            cnt_chan++
-        } else if (k == "iit") {
-            m_s = kv_find(nk, cur_k, cur_v, "metric")
-            entry = entry ",\"metric\":\"" json_escape(m_s) "\""
-            seen = 0
-            for (t = 1; t <= n_metrics; t++) if (metric_set[t] == m_s) { seen = 1; break }
-            if (!seen && m_s != "") { n_metrics++; metric_set[n_metrics] = m_s }
-            if (body_iit != "") body_iit = body_iit ","
-            cnt_iit++
-        }
-
-        entry = entry ",\"file\":\"" json_escape(staged_file[s]) "\""
-        entry = entry ",\"line\":" staged_line[s]
-        entry = entry "}"
-
-        if      (k == "phi")           body_phi  = body_phi  entry
-        else if (k == "consciousness") body_cons = body_cons entry
-        else if (k == "channel")       body_chan = body_chan entry
-        else if (k == "iit")           body_iit  = body_iit  entry
-    }
-
-    for (s = 1; s <= n_staged; s++) {
-        delete staged_kind[s]
-        delete staged_line[s]
-        delete staged_file[s]
-        delete staged_nkv[s]
-    }
-    for (key in staged_k) delete staged_k[key]
-    for (key in staged_v) delete staged_v[key]
-    n_staged = 0
-    next
-}
-
-(!is_anno && !is_fn && !is_comment) {
-    if (n_staged > 0 && is_blank) {
-        for (s = 1; s <= n_staged; s++) {
-            delete staged_kind[s]
-            delete staged_line[s]
-            delete staged_file[s]
-            delete staged_nkv[s]
-        }
-        for (key in staged_k) delete staged_k[key]
-        for (key in staged_v) delete staged_v[key]
-        n_staged = 0
+    kind = $1; tgtk = $2; fn = $3; file = $4; line = $5; raw = decode_esc($6)
+    if (tgtk != "fn") next
+    if (kind == "phi") {
+        w = kv_extract(raw, "weight")
+        ch = kv_extract(raw, "channel")
+        if (w == "") w = "0"
+        if (n_phi > 0) phi_body = phi_body ","
+        phi_body = phi_body "{\"fn\":\"" jesc(fn) "\",\"weight\":" w ",\"channel\":\"" jesc(ch) "\",\"file\":\"" jesc(file) "\",\"line\":" line "}"
+        if (w ~ /^-?[0-9]+(\.[0-9]+)?$/) total_weight = total_weight + w
+        n_phi++
+    } else if (kind == "consciousness") {
+        tier = kv_extract(raw, "tier")
+        if (n_cons > 0) cons_body = cons_body ","
+        cons_body = cons_body "{\"fn\":\"" jesc(fn) "\",\"tier\":\"" jesc(tier) "\",\"file\":\"" jesc(file) "\",\"line\":" line "}"
+        if (tier != "" && !(tier in tier_seen)) { tier_seen[tier] = 1; tiers[++n_tiers] = tier }
+        n_cons++
+    } else if (kind == "channel") {
+        cid = kv_extract(raw, "id")
+        src = kv_extract(raw, "src")
+        if (cid == "") cid = "0"
+        if (n_chan > 0) chan_body = chan_body ","
+        chan_body = chan_body "{\"fn\":\"" jesc(fn) "\",\"id\":" cid ",\"src\":\"" jesc(src) "\",\"file\":\"" jesc(file) "\",\"line\":" line "}"
+        if (cid != "" && !(cid in chid_seen)) { chid_seen[cid] = 1; chids[++n_chid] = cid }
+        n_chan++
+    } else if (kind == "iit") {
+        m = kv_extract(raw, "metric")
+        if (n_iit > 0) iit_body = iit_body ","
+        iit_body = iit_body "{\"fn\":\"" jesc(fn) "\",\"metric\":\"" jesc(m) "\",\"file\":\"" jesc(file) "\",\"line\":" line "}"
+        if (m != "" && !(m in metric_seen)) { metric_seen[m] = 1; metrics[++n_metrics] = m }
+        n_iit++
     }
 }
-
 END {
-    # stdout: 4 bodies joined by sentinel lines
-    print body_phi
-    print "__PHIMAP_SEP__"
-    print body_cons
-    print "__PHIMAP_SEP__"
-    print body_chan
-    print "__PHIMAP_SEP__"
-    print body_iit
-    print "__PHIMAP_SEP__"
-
-    # stderr: summary primitives
-    printf "CNT|%d|%d|%d|%d\n", cnt_phi, cnt_cons, cnt_chan, cnt_iit > "/dev/stderr"
-    printf "TW|%.10g\n", total_weight > "/dev/stderr"
-    tiers_join = ""
-    for (t = 1; t <= n_tiers; t++) {
-        if (t > 1) tiers_join = tiers_join ","
-        tiers_join = tiers_join tier_set[t]
-    }
-    printf "TIERS|%s\n", tiers_join > "/dev/stderr"
-    cids_join = ""
-    for (t = 1; t <= n_cids; t++) {
-        if (t > 1) cids_join = cids_join ","
-        cids_join = cids_join cid_set[t]
-    }
-    printf "CIDS|%s\n", cids_join > "/dev/stderr"
-    ms_join = ""
-    for (t = 1; t <= n_metrics; t++) {
-        if (t > 1) ms_join = ms_join ","
-        ms_join = ms_join metric_set[t]
-    }
-    printf "METRICS|%s\n", ms_join > "/dev/stderr"
-}
-' "${files[@]}" > /tmp/.hexa-phi-map.$$.body 2> /tmp/.hexa-phi-map.$$.meta
-
-# parse bodies (split by sentinel)
-body_phi=""
-body_cons=""
-body_chan=""
-body_iit=""
-idx=0
-current=""
-while IFS= read -r line; do
-    if [ "$line" = "__PHIMAP_SEP__" ]; then
-        case $idx in
-            0) body_phi="$current" ;;
-            1) body_cons="$current" ;;
-            2) body_chan="$current" ;;
-            3) body_iit="$current" ;;
-        esac
-        current=""
-        idx=$((idx+1))
-        continue
-    fi
-    if [ -z "$current" ]; then current="$line"; else current="$current$line"; fi
-done < /tmp/.hexa-phi-map.$$.body
-
-# parse stderr meta
-cnt_phi=0; cnt_cons=0; cnt_chan=0; cnt_iit=0
-total_weight=0
-tiers_csv=""
-cids_csv=""
-metrics_csv=""
-while IFS='|' read -r tag a b c d; do
-    case "$tag" in
-        CNT)   cnt_phi="$a"; cnt_cons="$b"; cnt_chan="$c"; cnt_iit="$d" ;;
-        TW)    total_weight="$a" ;;
-        TIERS) tiers_csv="$a" ;;
-        CIDS)  cids_csv="$a" ;;
-        METRICS) metrics_csv="$a" ;;
-    esac
-done < /tmp/.hexa-phi-map.$$.meta
-
-rm -f /tmp/.hexa-phi-map.$$.body /tmp/.hexa-phi-map.$$.meta
-
-# csv → JSON array helpers
-csv_to_str_array() {
-    local csv="$1"
-    [ -z "$csv" ] && { printf "[]"; return; }
-    local out="["
-    local first=1
-    local IFS_ORIG="$IFS"
-    IFS=','
-    for item in $csv; do
-        [ -z "$item" ] && continue
-        if [ $first -eq 0 ]; then out="$out,"; fi
-        out="$out\"$item\""
-        first=0
-    done
-    IFS="$IFS_ORIG"
-    out="$out]"
-    printf "%s" "$out"
-}
-csv_to_int_array() {
-    local csv="$1"
-    [ -z "$csv" ] && { printf "[]"; return; }
-    local out="["
-    local first=1
-    local IFS_ORIG="$IFS"
-    IFS=','
-    for item in $csv; do
-        [ -z "$item" ] && continue
-        if [ $first -eq 0 ]; then out="$out,"; fi
-        out="$out$item"
-        first=0
-    done
-    IFS="$IFS_ORIG"
-    out="$out]"
-    printf "%s" "$out"
-}
-
-tiers_json=$(csv_to_str_array "$tiers_csv")
-cids_json=$(csv_to_int_array "$cids_csv")
-metrics_json=$(csv_to_str_array "$metrics_csv")
-
-printf '{"version":"0.1","source":"grep-mvp","phi_fns":[%s],"consciousness_fns":[%s],"channel_fns":[%s],"iit_fns":[%s],"summary":{"phi":%d,"consciousness":%d,"channel":%d,"iit":%d,"total_weight":%s,"tiers":%s,"channels_ids":%s,"metrics":%s}}\n' \
-    "$body_phi" "$body_cons" "$body_chan" "$body_iit" \
-    "${cnt_phi:-0}" "${cnt_cons:-0}" "${cnt_chan:-0}" "${cnt_iit:-0}" \
-    "${total_weight:-0}" "$tiers_json" "$cids_json" "$metrics_json"
+    tiers_s = ""
+    for (i = 1; i <= n_tiers; i++) { if (i > 1) tiers_s = tiers_s ","; tiers_s = tiers_s "\"" jesc(tiers[i]) "\"" }
+    chid_s = ""
+    for (i = 1; i <= n_chid; i++) { if (i > 1) chid_s = chid_s ","; chid_s = chid_s chids[i] }
+    metr_s = ""
+    for (i = 1; i <= n_metrics; i++) { if (i > 1) metr_s = metr_s ","; metr_s = metr_s "\"" jesc(metrics[i]) "\"" }
+    printf("{\"version\":\"0.2\",\"source\":\"ast\",\"phi_fns\":[%s],\"consciousness_fns\":[%s],\"channel_fns\":[%s],\"iit_fns\":[%s],\"summary\":{\"phi\":%d,\"consciousness\":%d,\"channel\":%d,\"iit\":%d,\"total_weight\":%s,\"tiers\":[%s],\"channels_ids\":[%s],\"metrics\":[%s]}}\n",
+        phi_body, cons_body, chan_body, iit_body, n_phi, n_cons, n_chan, n_iit, total_weight, tiers_s, chid_s, metr_s)
+}' "$TMP_TSV"

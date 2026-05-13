@@ -1,0 +1,321 @@
+#!hexa strict
+// tool/hexa_annot/_ast_extract.hexa — AST-aware annotation extractor.
+//
+// Shared back-end for the 29 hexa_annot bash wrappers. Replaces the
+// per-script grep/awk heuristic with a single token-stream walk powered by
+// self/lexer. Output is a uniform TSV that each wrapper post-processes
+// into its tool-specific JSON shape.
+//
+// Why a token walk (not a full AST):
+//   - self/parser drops struct-targeting attributes (no `attrs` field on
+//     StructDecl) and most simple-attr fns lose argument fidelity in the
+//     comma-joined `value` field.
+//   - The token stream from self/lexer already classifies comments and
+//     string literals correctly — the entire grep-MVP precision gap
+//     ("@foo inside a comment", "@foo inside a string") closes here.
+//   - One pass, all 29 tools, no per-tool dispatch.
+//
+// Usage:
+//   hexa run tool/hexa_annot/_ast_extract.hexa <file.hexa> [<file2.hexa> ...]
+//
+// Output (stdout): one TSV row per `@<name>` annotation token. Columns:
+//   1. annot_name   — e.g. "pure", "memo", "cli"
+//   2. target_kind  — "fn" | "struct" | "enum" | "let" | "none"
+//   3. target_name  — name of the next decl, or "" for "none"
+//   4. file         — source file path (as passed on CLI)
+//   5. line         — 1-based line number of the @-token
+//   6. raw_args_esc — escaped paren-content (\n→\\n, \t→\\t, \→\\\\);
+//                     empty when annotation has no `(...)`
+//   7. body_text_esc — for fn targets, the joined-token body text
+//                      between `{...}` (same escape as raw_args); empty
+//                      otherwise. Consumed only by hexa-pure-check.
+//
+// Separator: literal tab (\x09). One row per LF.
+// Encoding note: rows are produced in source order so multi-annotation
+// stacks (e.g. `@cli` `@flag` `@flag` over one fn) appear consecutively
+// with the same target_name.
+//
+// Errors: a per-file lex failure prints a `# error\tFILE\tMSG` comment
+// line to stdout and continues with the next file (rc still 0). Callers
+// that want strict mode pipe stdout through `grep -v '^# error'` first.
+
+use "self/lexer"
+
+// ── escape helpers ───────────────────────────────────────────────
+// TSV-safe encoding. Order matters: backslash first so the others
+// don't double-escape their introduced backslashes.
+
+fn _ast_extract_esc(s: string) -> string {
+    let mut out = ""
+    let chars = s.chars()
+    let n = len(chars)
+    let mut i = 0
+    while i < n {
+        let c = chars[i]
+        if c == '\\' {
+            out = out + "\\\\"
+        } else if c == '\n' {
+            out = out + "\\n"
+        } else if c == '\r' {
+            out = out + "\\r"
+        } else if c == '\t' {
+            out = out + "\\t"
+        } else {
+            out = out + to_string(c)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── token-stream classifiers ────────────────────────────────────
+
+fn _ast_extract_is_decl_kw(kind: string) -> bool {
+    if kind == "Fn" { return true }
+    if kind == "Struct" { return true }
+    if kind == "Enum" { return true }
+    if kind == "Let" { return true }
+    if kind == "Const" { return true }
+    if kind == "Static" { return true }
+    if kind == "Async" { return true }
+    if kind == "Pure" { return true }
+    if kind == "Trait" { return true }
+    if kind == "Impl" { return true }
+    if kind == "Type" { return true }
+    return false
+}
+
+fn _ast_extract_decl_kind_for(kw: string) -> string {
+    if kw == "Fn" { return "fn" }
+    if kw == "Async" { return "fn" }
+    if kw == "Pure" { return "fn" }
+    if kw == "Struct" { return "struct" }
+    if kw == "Enum" { return "enum" }
+    if kw == "Let" { return "let" }
+    if kw == "Const" { return "let" }
+    if kw == "Static" { return "let" }
+    if kw == "Trait" { return "trait" }
+    if kw == "Impl" { return "impl" }
+    if kw == "Type" { return "type" }
+    return "none"
+}
+
+// ── core walk ───────────────────────────────────────────────────
+
+fn _ast_extract_run(path: string) {
+    // Read file. Bail with a `# error` line if unreadable.
+    let probe = exec("test -r '" + path + "' && printf yes || printf no")
+    if probe != "yes" {
+        println("# error\t" + path + "\tnot-readable")
+        return
+    }
+    let src = to_string(read_file(path))
+    // Tokenize. Lexer is tolerant; on an internal panic we still get
+    // whatever ran first.
+    let tokens = tokenize(src)
+    let n = len(tokens)
+    let mut i = 0
+    while i < n {
+        let t = tokens[i]
+        if t.kind != "At" {
+            i = i + 1
+            continue
+        }
+        // We're at `@`. Next token should be the attribute name —
+        // either an Ident or any keyword token (lexer classifies
+        // `pure`/`type`/`align`/etc. as keywords).
+        let at_line = t.line
+        i = i + 1
+        if i >= n { break }
+        let nt = tokens[i]
+        // skip lone `@` with no name — degenerate input
+        if nt.kind == "Eof" || nt.kind == "Newline" {
+            continue
+        }
+        let annot_name = nt.value
+        i = i + 1
+        // Optional parenthesized arg list. Capture verbatim by joining
+        // token values (StringLit re-quoted so semantics are preserved).
+        let mut raw_args = ""
+        if i < n && tokens[i].kind == "LParen" {
+            i = i + 1 // consume (
+            let mut depth = 1
+            let mut parts = []
+            while i < n && depth > 0 {
+                let pk = tokens[i].kind
+                if pk == "LParen" {
+                    depth = depth + 1
+                    parts.push(tokens[i].value)
+                } else if pk == "RParen" {
+                    depth = depth - 1
+                    if depth == 0 {
+                        i = i + 1 // consume )
+                        // no token contributed; break loop
+                    } else {
+                        parts.push(tokens[i].value)
+                        i = i + 1
+                    }
+                    continue
+                } else if pk == "StringLit" {
+                    parts.push("\"" + tokens[i].value + "\"")
+                    i = i + 1
+                } else if pk == "Eof" {
+                    break
+                } else if pk == "Newline" {
+                    // collapse newlines inside paren args into a space
+                    parts.push(" ")
+                    i = i + 1
+                } else {
+                    parts.push(tokens[i].value)
+                    i = i + 1
+                }
+            }
+            raw_args = parts.join(" ")
+        }
+        // Skip over any chained @annotations and `pub` visibility
+        // markers to find the target decl. We DO NOT emit the current
+        // annotation row attached to a peer @annotation — only attach
+        // to the next decl keyword.
+        let mut j = i
+        // jump over Newlines, additional Attribute markers (@x), pub, comments...
+        while j < n {
+            let jk = tokens[j].kind
+            if jk == "Newline" { j = j + 1; continue }
+            if jk == "At" {
+                // Chained annotation — bypass its (name + optional args).
+                j = j + 1
+                if j >= n { break }
+                if tokens[j].kind == "Ident" || tokens[j].kind != "At" {
+                    j = j + 1
+                }
+                if j < n && tokens[j].kind == "LParen" {
+                    let mut d2 = 1
+                    j = j + 1
+                    while j < n && d2 > 0 {
+                        let pk2 = tokens[j].kind
+                        if pk2 == "LParen" { d2 = d2 + 1 }
+                        else if pk2 == "RParen" { d2 = d2 - 1 }
+                        else if pk2 == "Eof" { break }
+                        j = j + 1
+                    }
+                }
+                continue
+            }
+            if jk == "Pub" {
+                j = j + 1
+                // optional `pub(crate)` / `pub(mod)`
+                if j < n && tokens[j].kind == "LParen" {
+                    let mut d3 = 1
+                    j = j + 1
+                    while j < n && d3 > 0 {
+                        let pk3 = tokens[j].kind
+                        if pk3 == "LParen" { d3 = d3 + 1 }
+                        else if pk3 == "RParen" { d3 = d3 - 1 }
+                        else if pk3 == "Eof" { break }
+                        j = j + 1
+                    }
+                }
+                continue
+            }
+            break
+        }
+        let mut target_kind = "none"
+        let mut target_name = ""
+        let mut body_text = ""
+        if j < n && _ast_extract_is_decl_kw(tokens[j].kind) {
+            target_kind = _ast_extract_decl_kind_for(tokens[j].kind)
+            // For Async/Pure prefixes, the actual `fn` is the next token.
+            let kw = tokens[j].kind
+            j = j + 1
+            if kw == "Async" || kw == "Pure" {
+                if j < n && tokens[j].kind == "Fn" { j = j + 1 }
+            }
+            // Capture the decl name. Most decls (fn/struct/enum/trait/
+            // let/const/static/type) take an Ident; some (impl) take a
+            // type which may include generics — we just read the next
+            // Ident-like token's value.
+            if j < n {
+                let nk = tokens[j].kind
+                if nk == "Ident" || nk == "Attribute" {
+                    target_name = tokens[j].value
+                } else {
+                    // accept keyword-as-name (rare); skip if not a name
+                    target_name = tokens[j].value
+                }
+                j = j + 1
+            }
+            // For fn targets, advance to the body block and capture it.
+            if target_kind == "fn" {
+                // skip generics + params + return-type until LBrace at depth 0.
+                let mut depth_p = 0
+                while j < n {
+                    let pk = tokens[j].kind
+                    if pk == "LBrace" && depth_p == 0 { break }
+                    if pk == "LParen" || pk == "LBracket" || pk == "Lt" {
+                        depth_p = depth_p + 1
+                    } else if pk == "RParen" || pk == "RBracket" || pk == "Gt" {
+                        if depth_p > 0 { depth_p = depth_p - 1 }
+                    } else if pk == "Eof" {
+                        break
+                    }
+                    j = j + 1
+                }
+                // capture body tokens between LBrace ... matching RBrace
+                if j < n && tokens[j].kind == "LBrace" {
+                    j = j + 1 // consume {
+                    let mut bd = 1
+                    let mut body_parts = []
+                    while j < n && bd > 0 {
+                        let pk = tokens[j].kind
+                        if pk == "LBrace" {
+                            bd = bd + 1
+                            body_parts.push(tokens[j].value)
+                        } else if pk == "RBrace" {
+                            bd = bd - 1
+                            if bd == 0 {
+                                j = j + 1
+                                continue
+                            }
+                            body_parts.push(tokens[j].value)
+                        } else if pk == "StringLit" {
+                            body_parts.push("\"" + tokens[j].value + "\"")
+                        } else if pk == "Eof" {
+                            break
+                        } else if pk == "Newline" {
+                            body_parts.push("\n")
+                        } else {
+                            body_parts.push(tokens[j].value)
+                        }
+                        j = j + 1
+                    }
+                    body_text = body_parts.join(" ")
+                }
+            }
+        }
+        // Emit TSV row.
+        let row = annot_name + "\t" + target_kind + "\t" + target_name +
+            "\t" + path + "\t" + to_string(at_line) +
+            "\t" + _ast_extract_esc(raw_args) +
+            "\t" + _ast_extract_esc(body_text)
+        println(row)
+        // Do NOT advance past the decl — leave the outer cursor at `i`
+        // (the position right after the current @args close paren).
+        // Subsequent @-tokens (the chained ones) will be visited in
+        // their own iteration and re-resolve to the same decl.
+    }
+}
+
+fn _ast_extract_main() {
+    let av = real_args()
+    if len(av) < 1 {
+        eprintln("usage: _ast_extract.hexa <file.hexa> [<file2>...]")
+        exit(2)
+    }
+    let mut k = 0
+    while k < len(av) {
+        _ast_extract_run(av[k])
+        k = k + 1
+    }
+}
+
+_ast_extract_main()
