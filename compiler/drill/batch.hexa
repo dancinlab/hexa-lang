@@ -117,6 +117,6 @@ pub fn batch_drill(seeds: array, opts: DrillOpts) -> BatchResult {
 }
 
 // TODO(future): parallel batch dispatch. The upstream `_round_parallel_fork_exec`
-// uses fork+exec subprocess parallelism keyed by `NEXUS_ROUND_PARALLEL=1`.
+// uses fork+exec subprocess parallelism keyed by `HEXA_ROUND_PARALLEL=1`.
 // In the absorbed in-process form this would require either green-thread
 // scheduling or a real OS-thread pool — both are out of v1 scope.

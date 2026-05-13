@@ -11,8 +11,9 @@
 //
 // and accumulates absorptions until saturation (round yield = 0) or
 // max-rounds. Mk.X (engine="mk10") adds stage 6 transcendental_closure
-// via a sidecar — that sidecar is tangled with nexus-only state and is
-// DEFERRED here (a TODO marker in round.hexa keeps the schema slot).
+// via a sidecar (compiler/drill/mkx.hexa) ported from nexus's
+// shared/engine/mkx_engine.hexa. AN11 governance scanner side is NOT
+// ported per doctrine v2 룰 3; the AN11 soft internal gate (math) is.
 //
 // Doctrine v2 룰 5 write policy:
 //   • Each round's discoveries are flushed via overlay_append_lines to
@@ -84,11 +85,11 @@ fn _validate_seed(seed: string) -> string {
     return ""
 }
 
-// Resolve the engine id. Honors --engine flag, then NEXUS_DRILL_ENGINE,
+// Resolve the engine id. Honors --engine flag, then HEXA_DRILL_ENGINE,
 // then defaults to mk9.
 fn _resolve_engine(flag: string) -> string {
     if flag == "mk10" || flag == "mk9" { return flag }
-    let from_env = env("NEXUS_DRILL_ENGINE")
+    let from_env = env("HEXA_DRILL_ENGINE")
     if from_env == "mk10" || from_env == "mk9" { return from_env }
     return "mk9"
 }
@@ -138,7 +139,7 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
     if !opts.quiet {
         println("drill — seed='" + seed + "' max_rounds=" + to_string(opts.max_rounds) + " engine=" + engine)
         if mkx_on {
-            println("  Mk.X 7-stage (transcendental_closure stage 6 = stub, TODO mkx_engine port)")
+            println("  Mk.X 7-stage (smash → free → absolute → meta → hyper → resonance → transcendental_closure)")
         } else {
             println("  Mk.IX 6-stage chain (smash → free → absolute → meta → hyper → resonance)")
         }
@@ -164,17 +165,31 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         }
     }
 
+    // Cumulative seed pool. Round 1 receives an empty pool; subsequent
+    // rounds receive the axiom-exprs harvested from the prior round's
+    // discoveries (Doctrine v2 룰 5 — drill discoveries seed the next
+    // round, not just the overlay). The pool is bounded inside
+    // round_run_with_pool by K_POOL.
+    let mut seed_pool: array = []
+
     while round < opts.max_rounds {
         round = round + 1
-        let rr = round_run(seed, round, opts.depth_smash, opts.depth_free, opts.depth_res, mkx_on)
+        let rr = round_run_with_pool(seed, round, opts.depth_smash, opts.depth_free,
+                                      opts.depth_res, mkx_on, seed_pool)
         if !opts.quiet {
             println(round_yields_line(round, rr.yields, rr.sigma_best))
-            println("  overlay+ " + to_string(rr.overlay_lines_emitted) + " lines")
+            println("  overlay+ " + to_string(rr.overlay_lines_emitted) + " lines"
+                + " (pool=" + to_string(len(seed_pool)) + ")")
         }
         overlay_lines = overlay_lines + rr.overlay_lines_emitted
         total = total + rr.yields.total
         yields_log.push([rr.yields.smash_n, rr.yields.free_n, rr.yields.abs_n,
                           rr.yields.meta_n, rr.yields.hyper_n, rr.yields.res_n])
+
+        // Refresh seed pool for the next round — axiom-exprs from this
+        // round's union discovery set. extract_axiom_exprs already dedupes
+        // by expr; K_POOL caps consumption inside round_run_with_pool.
+        seed_pool = extract_axiom_exprs(rr.discoveries)
 
         // honesty gate (advisory)
         _honesty_gate(round, rr.yields)

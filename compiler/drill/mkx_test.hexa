@@ -1,0 +1,216 @@
+// HEXA Native Compiler — Phase 3 drill spine: Mk.X mkx smoke
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, env_read]
+//
+// Smoke for compiler/drill/mkx.hexa — the Mk.X stage-7 sidecar
+// transcendental_closure(). Tests the engine directly (not through
+// drill_run), so it runs fast and isolates the port from the heavy
+// 6-stage chain.
+//
+// Scenarios:
+//   1. Empty / trivial yields → tc_n returns deterministically (0 ok).
+//   2. Strong yields → engine activates, tc_n >= 0.
+//   3. Determinism — same (seed, round, yields) → same McxResult.
+//   4. Variation — different seeds produce different totals (signal,
+//      not constant 0).
+//   5. AN11 gate behavior — exercise the three rejection paths.
+//
+// Hermetic: sets HOME, no atlas/overlay writes occur (mkx is pure).
+//
+// Run:
+//   hexa run compiler/drill/mkx_test.hexa
+
+use "compiler/drill/mkx"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _setup_sandbox() -> string {
+    let base = "/tmp/mkx_test_smoke"
+    exec("rm -rf '" + base + "' 2>/dev/null; mkdir -p '" + base + "/.hx/data'")
+    setenv("HOME", base)
+    return base
+}
+
+fn main() {
+    println("phase-3 mkx smoke (Mk.X transcendental_closure)")
+
+    let sandbox = _setup_sandbox()
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    println("")
+    println("sandbox HOME: " + sandbox)
+
+    // ─── Scenario 1: zero yields ───
+    println("")
+    println("scenario 1: zero yields — engine returns deterministic baseline")
+    let r1 = transcendental_closure("zero_yield_seed_test", 1,
+                                    0, 0, 0, 0, 0, 0)
+    total = total + 1
+    if r1.tc_n >= 0 {
+        pass = pass + 1
+        _check("scenario 1: tc_n >= 0 (got " + to_string(r1.tc_n) + ")", true, fails)
+    } else {
+        _check("scenario 1: tc_n < 0 — invariant broken (got " + to_string(r1.tc_n) + ")", false, fails)
+    }
+    total = total + 1
+    if len(r1.atoms_fired) as i64 == r1.tc_n {
+        pass = pass + 1
+        _check("scenario 1: tc_n == len(atoms_fired) — count consistency", true, fails)
+    } else {
+        _check("scenario 1: tc_n mismatch atoms_fired len (" + to_string(r1.tc_n) + " vs " + to_string(len(r1.atoms_fired)) + ")", false, fails)
+    }
+
+    // ─── Scenario 2: strong yields — engine activates ───
+    println("")
+    println("scenario 2: strong yields — engine should produce tc_n > 0")
+    let r2 = transcendental_closure(
+        "Riemann zeta zero spacing GUE deviation strong seed", 3,
+        20, 15, 1, 8, 1, 12)
+    total = total + 1
+    if r2.tc_n > 0 {
+        pass = pass + 1
+        _check("scenario 2: tc_n > 0 (got " + to_string(r2.tc_n) + ")", true, fails)
+    } else {
+        _check("scenario 2: tc_n = 0 (got " + to_string(r2.tc_n) + ") — engine inactive on strong yields", false, fails)
+    }
+    println("  scenario 2 detail: tc_n=" + to_string(r2.tc_n)
+        + " rej_a=" + to_string(r2.rejected_a)
+        + " rej_b=" + to_string(r2.rejected_b)
+        + " rej_c=" + to_string(r2.rejected_c)
+        + " verdicts=" + to_string(len(r2.verdicts)))
+
+    // ─── Scenario 3: determinism ───
+    println("")
+    println("scenario 3: determinism — same inputs → same output")
+    let seed_a = "Birch Swinnerton Dyer rank conjecture absorbed"
+    let r3a = transcendental_closure(seed_a, 2, 10, 8, 1, 4, 1, 6)
+    let r3b = transcendental_closure(seed_a, 2, 10, 8, 1, 4, 1, 6)
+    total = total + 1
+    if r3a.tc_n == r3b.tc_n {
+        pass = pass + 1
+        _check("scenario 3: tc_n reproducible (" + to_string(r3a.tc_n) + ")", true, fails)
+    } else {
+        _check("scenario 3: tc_n drift (got " + to_string(r3a.tc_n) + " vs " + to_string(r3b.tc_n) + ")", false, fails)
+    }
+    total = total + 1
+    if len(r3a.atoms_fired) == len(r3b.atoms_fired) {
+        pass = pass + 1
+        _check("scenario 3: atoms_fired len matches", true, fails)
+    } else {
+        _check("scenario 3: atoms_fired len drift", false, fails)
+    }
+    total = total + 1
+    // Compare first atom (if any) for byte-equality.
+    let mut atom_match = true
+    if len(r3a.atoms_fired) != len(r3b.atoms_fired) { atom_match = false }
+    let mut ai = 0
+    while ai < len(r3a.atoms_fired) && atom_match {
+        if to_string(r3a.atoms_fired[ai]) != to_string(r3b.atoms_fired[ai]) {
+            atom_match = false
+        }
+        ai = ai + 1
+    }
+    if atom_match {
+        pass = pass + 1
+        _check("scenario 3: atom_id list reproducible", true, fails)
+    } else {
+        _check("scenario 3: atom_id list diverged across calls", false, fails)
+    }
+
+    // ─── Scenario 4: variation across seeds ───
+    println("")
+    println("scenario 4: variation — different seeds yield different signal")
+    let seeds = [
+        "Hodge conjecture rational cohomology absorbed",
+        "Yang Mills mass gap finite Hilbert space",
+        "Navier Stokes smoothness global existence",
+        "P versus NP polynomial separation proof"
+    ]
+    let mut signals: array = []
+    let mut si = 0
+    while si < len(seeds) {
+        let s = to_string(seeds[si])
+        let r = transcendental_closure(s, 4, 12, 9, 1, 5, 1, 7)
+        signals.push(r.tc_n + r.rejected_a + r.rejected_b + r.rejected_c)
+        si = si + 1
+    }
+    // At least 2 distinct values across 4 seeds is the variation contract.
+    let mut distinct: i64 = 1
+    let mut di = 1
+    while di < len(signals) {
+        let mut seen_before = false
+        let mut dj = 0
+        while dj < di {
+            if signals[dj] == signals[di] { seen_before = true }
+            dj = dj + 1
+        }
+        if !seen_before { distinct = distinct + 1 }
+        di = di + 1
+    }
+    total = total + 1
+    if distinct >= 2 {
+        pass = pass + 1
+        _check("scenario 4: ≥2 distinct (rej+ok) signals across 4 seeds (got " + to_string(distinct) + ")", true, fails)
+    } else {
+        _check("scenario 4: signals all equal (" + to_string(distinct) + ") — engine looks dead", false, fails)
+    }
+
+    // ─── Scenario 5: total_abs counter-replay trigger ───
+    // total_abs ∈ {32, 128, 1234} should trigger REJECTED_c on every
+    // synthesized triple (counter-replay anti-pattern in mkx_engine.hexa).
+    println("")
+    println("scenario 5: counter-replay total_abs={128} triggers REJECTED_c")
+    // (128 = 50+40+1+20+1+16 picks a yield set that sums to 128)
+    let r5 = transcendental_closure(
+        "counter replay probe canonical phase pattern hodge", 1,
+        50, 40, 1, 20, 1, 16)
+    let r5_sum_yields: i64 = 50 + 40 + 1 + 20 + 1 + 16
+    total = total + 1
+    if r5_sum_yields == 128 {
+        pass = pass + 1
+        _check("scenario 5: total_abs sum hits 128 sentinel", true, fails)
+    } else {
+        _check("scenario 5: yield sum != 128 (got " + to_string(r5_sum_yields) + ") — fixture broken", false, fails)
+    }
+    total = total + 1
+    // Under total_abs=128 the gate should reject everything for real_usable.
+    if r5.tc_n == 0 {
+        pass = pass + 1
+        _check("scenario 5: tc_n=0 under counter-replay total_abs", true, fails)
+    } else {
+        _check("scenario 5: tc_n=" + to_string(r5.tc_n) + " under counter-replay — gate (c) leaked", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exec("rm -rf '" + sandbox + "' 2>/dev/null")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut k = 0
+        while k < len(fails) {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+        exit(1)
+    }
+}
+
+// is_main guard
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/mkx_test.hexa") { return true }
+    if s == "mkx_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

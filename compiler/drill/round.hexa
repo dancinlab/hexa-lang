@@ -4,9 +4,10 @@
 // @capabilities [fs_read, fs_write, env_read]
 //
 // One drill round = (smash → free → absolute → meta-closure →
-// hyperarithmetic → resonance), with optional Mk.X stage 6
-// (transcendental_closure) deferred. Source: ~/core/nexus/cli/run.hexa
-// cmd_drill lines 3418-3776 (the round-loop body).
+// hyperarithmetic → resonance), with optional Mk.X stage 7
+// (transcendental_closure, compiler/drill/mkx.hexa). Source:
+// ~/core/nexus/cli/run.hexa cmd_drill lines 3418-3776 + shared/engine/
+// mkx_engine.hexa for the Mk.X sidecar.
 //
 // Doctrine v2 룰 5 write policy: every discovery emitted by the chain is
 // flushed at round end via `overlay_append_lines(...)` to
@@ -33,6 +34,7 @@ use "compiler/meta_closure/check"
 use "compiler/hyperarithmetic/hyperarithmetic"
 use "compiler/atlas/overlay"
 use "compiler/drill/resonance"
+use "compiler/drill/mkx"
 
 pub struct RoundYields {
     smash_n: i64,
@@ -77,15 +79,49 @@ fn _cand_to_n6(c: DiscoveryCandidate) -> string {
 }
 
 // Flush a discovery set to the overlay. Returns the number of lines
-// appended (zero-discoveries → no-op, preserves overlay cleanliness).
+// actually appended (zero-discoveries → no-op, preserves overlay
+// cleanliness). Dedup policy: write-time, by id. We read the current
+// overlay (cached) once and skip any candidate whose id is already
+// present. This keeps the overlay file bounded across rounds even
+// when the seed-pool feedback re-emits the same discoveries.
+//
+// Rationale: atlas_list_merged already dedups against rodata at read
+// time, but it does NOT dedup overlay-vs-overlay. Without write-time
+// dedup, round 2 re-emits round 1's full discovery set, doubling the
+// overlay; round N has O(N · avg_round_yield) lines. Write-time dedup
+// keeps the file the size of the union of distinct discoveries.
 fn _flush_discoveries(cands: array) -> i64 {
     if len(cands) == 0 { return 0 }
+    let existing = overlay_load_cached()
     let mut lines = []
+    let mut seen_ids: array = []     // intra-batch dedup tracker
     let mut i = 0
     while i < len(cands) {
-        lines.push(_cand_to_n6(cands[i]))
+        let c = cands[i]
+        // Skip if id is empty (defensive).
+        if len(c.id) == 0 { i = i + 1; continue }
+        // Skip if already present in existing overlay.
+        let mut dup = false
+        let mut j = 0
+        while j < len(existing) {
+            if existing[j].id == c.id { dup = true; break }
+            j = j + 1
+        }
+        // Skip if already queued in this batch.
+        if !dup {
+            let mut k = 0
+            while k < len(seen_ids) {
+                if to_string(seen_ids[k]) == c.id { dup = true; break }
+                k = k + 1
+            }
+        }
+        if !dup {
+            lines.push(_cand_to_n6(c))
+            seen_ids.push(c.id)
+        }
         i = i + 1
     }
+    if len(lines) == 0 { return 0 }
     overlay_append_lines(lines)
     return len(lines)
 }
@@ -128,13 +164,49 @@ fn _to_disc_lines(cands: array) -> array {
     return out
 }
 
-// Run one round. `mkx_on` toggles the Mk.X stage 6 (currently a stub —
-// returns 0 emissions; mkx_engine.hexa port is deferred).
-pub fn round_run(seed: string, round: i64, depth_smash: i64, depth_free: i64,
-                 depth_res: i64, mkx_on: bool) -> RoundResult {
+// Run one round, with optional cumulative seed pool. `extra_seed_exprs`
+// is a list of expr strings carried forward from prior rounds (typically
+// the prior round's axiom discoveries). For each extra seed we run a
+// shallow smash pass (depth=1) and merge the resulting candidates into
+// the round's discovery set BEFORE the meta-closure stage. This is the
+// "cumulative atlas seeding" mechanism that distinguishes drill from a
+// single smash invocation: round N+1 explores neighborhoods of round N's
+// axioms, not just the original problem seed.
+//
+// The bound K_POOL caps the number of extra seeds we accept per round
+// (otherwise smash blows up as O(N) on round count). Beyond K_POOL we
+// pick the first K (insertion order is already deterministic).
+pub fn round_run_with_pool(seed: string, round: i64, depth_smash: i64,
+                            depth_free: i64, depth_res: i64, mkx_on: bool,
+                            extra_seed_exprs: array) -> RoundResult {
     // ─── stage 1: smash ───
     let smash_cands = smash(seed, depth_smash)
     let s_n = _smash_yield(smash_cands)
+
+    // ─── stage 1b: cumulative seed-pool smash (round N+1 absorbs N's axioms) ───
+    // K_POOL caps the pool to keep round runtime bounded. Pool seeds use
+    // depth=1 unconditionally — they are exploratory probes, not full
+    // re-runs. Discoveries from pool seeds merge into the candidate set
+    // (so meta-closure, flush, and downstream see them) but do NOT count
+    // toward `smash_n` (the yield slot keeps its "primary seed only"
+    // semantics; pool contributions surface via `total` and `discoveries`).
+    let K_POOL: i64 = 4
+    let mut pool_cands: array = []
+    let mut pool_used: i64 = 0
+    let mut ep = 0
+    while ep < len(extra_seed_exprs) && pool_used < K_POOL {
+        let ex_seed = to_string(extra_seed_exprs[ep])
+        if len(ex_seed.trim()) >= 10 {
+            let pc = smash(ex_seed, 1)
+            let mut pi = 0
+            while pi < len(pc) {
+                pool_cands.push(pc[pi])
+                pi = pi + 1
+            }
+            pool_used = pool_used + 1
+        }
+        ep = ep + 1
+    }
 
     // ─── stage 2: free ───
     let free_cands = free(seed, depth_free)
@@ -150,6 +222,8 @@ pub fn round_run(seed: string, round: i64, depth_smash: i64, depth_free: i64,
     while i < len(smash_cands) { all_cands.push(smash_cands[i]); i = i + 1 }
     i = 0
     while i < len(free_cands) { all_cands.push(free_cands[i]); i = i + 1 }
+    i = 0
+    while i < len(pool_cands) { all_cands.push(pool_cands[i]); i = i + 1 }
     let disc_lines = _to_disc_lines(all_cands)
     let mc_v = meta_closure_check(disc_lines)
     let m_n = _meta_yield(mc_v)
@@ -161,12 +235,19 @@ pub fn round_run(seed: string, round: i64, depth_smash: i64, depth_free: i64,
     // ─── stage 6 (Mk.IX): resonance ───
     let rr = resonance_run(seed, round, depth_res)
 
-    // ─── stage 7 (Mk.X): transcendental_closure — deferred ───
-    // The upstream sidecar (shared/engine/mkx_engine.hexa) is tangled
-    // with nexus-only state (atlas.n6 live file, AN11 PROVISIONAL gate).
-    // We ship Mk.IX in v1 and leave a 0-yield stage 6 for engine="mk10"
-    // callers so the schema does not break.
-    let tc_n: i64 = 0
+    // ─── stage 7 (Mk.X): transcendental_closure ───
+    // Ported from ~/core/nexus/shared/engine/mkx_engine.hexa (593 LOC).
+    // AN11 governance scanner (consciousness/an11_scanner.hexa) is
+    // intentionally NOT ported — that's a governance audit on
+    // .convergence files, doctrine v2 룰 3 (no metadata absorption
+    // beyond historical archive). The AN11 SOFT GATE inside mkx is
+    // preserved (math/algorithm side).
+    let mut tc_n: i64 = 0
+    if mkx_on {
+        let mcx = transcendental_closure(seed, round, s_n, f_n, a_n,
+                                          m_n, h_n, rr.count)
+        tc_n = mcx.tc_n
+    }
 
     let total = s_n + f_n + a_n + m_n + h_n + rr.count + tc_n
 
@@ -188,6 +269,42 @@ pub fn round_run(seed: string, round: i64, depth_smash: i64, depth_free: i64,
         overlay_lines_emitted: flushed,
         discoveries: all_cands
     }
+}
+
+// Backward-compatible entry — no seed pool, identical surface to the
+// original 6-arg `round_run`. Phase 3 callers wanting cumulative seeding
+// reach for `round_run_with_pool` directly.
+pub fn round_run(seed: string, round: i64, depth_smash: i64, depth_free: i64,
+                 depth_res: i64, mkx_on: bool) -> RoundResult {
+    let empty_pool: array = []
+    return round_run_with_pool(seed, round, depth_smash, depth_free,
+                                depth_res, mkx_on, empty_pool)
+}
+
+// Helper — extract `expr` of every axiom from a discovery array. The drill
+// loop uses this to compose the next round's seed pool from the current
+// round's axioms. We keep only axioms (not derived candidates) because
+// axioms are the "fresh" discoveries that warrant a new smash probe;
+// derived corollaries are already covered by the meta-closure stage.
+// Dedupes by expr to keep K_POOL acceptances meaningful.
+pub fn extract_axiom_exprs(cands: array) -> array {
+    let mut out: array = []
+    let mut i = 0
+    while i < len(cands) {
+        let c = cands[i]
+        if c.axiom && len(c.expr) >= 10 {
+            // dedup by expr
+            let mut dup = false
+            let mut j = 0
+            while j < len(out) {
+                if to_string(out[j]) == c.expr { dup = true; break }
+                j = j + 1
+            }
+            if !dup { out.push(c.expr) }
+        }
+        i = i + 1
+    }
+    return out
 }
 
 // Pretty-print one round's yields to a single line for the drill log.

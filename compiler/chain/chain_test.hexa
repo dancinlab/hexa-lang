@@ -109,19 +109,36 @@ fn main() {
         _check("per_engine count after foreign deferral (got " + to_string(len(cr2.per_engine)) + ")", false, fails)
     }
 
-    // ─── Scenario 4: consensus monotone ───
-    // With identical drill state across mk9 and mk10 (mk10 is currently a
-    // schema-only superset returning tc_n=0 from the stub), the totals
-    // should match → consensus = N.
+    // ─── Scenario 4: Mk.X stage 7 is additive (tc_n ≥ 0) ───
+    // After the mkx port (compiler/drill/mkx.hexa), mk10 total =
+    // mk9 total + tc_n where tc_n ≥ 0. So mk10 total ≥ mk9 total
+    // always. When tc_n == 0 we get consensus=2; when tc_n > 0 we get
+    // consensus=1 (mk10 alone at max). We assert the monotonic shape.
     println("")
-    println("scenario 4: consensus across mk9 & mk10 (Mk.X stage 6 stubbed)")
+    println("scenario 4: Mk.X additive — mk10 total >= mk9 total")
     let cr3 = chain_run(seed, "mk9,mk10", opts)
     total = total + 1
-    if cr3.consensus_count == 2 {
+    let mut mk9_total: i64 = 0
+    let mut mk10_total: i64 = 0
+    let mut pe_i = 0
+    while pe_i < len(cr3.per_engine) {
+        let pe = cr3.per_engine[pe_i]
+        if pe.engine == "mk9" { mk9_total = pe.total }
+        if pe.engine == "mk10" { mk10_total = pe.total }
+        pe_i = pe_i + 1
+    }
+    if mk10_total >= mk9_total {
         pass = pass + 1
-        _check("mk9 == mk10 consensus (stage 6 stub returns same totals)", true, fails)
+        _check("scenario 4: mk10 (" + to_string(mk10_total) + ") >= mk9 (" + to_string(mk9_total) + ")", true, fails)
     } else {
-        _check("consensus count (got " + to_string(cr3.consensus_count) + "/2) — expected 2 with mk10 stub", false, fails)
+        _check("scenario 4: mk10 (" + to_string(mk10_total) + ") < mk9 (" + to_string(mk9_total) + ") — Mk.X must be additive", false, fails)
+    }
+    total = total + 1
+    if cr3.consensus_count >= 1 && cr3.consensus_count <= 2 {
+        pass = pass + 1
+        _check("scenario 4: consensus_count in {1,2} (got " + to_string(cr3.consensus_count) + ")", true, fails)
+    } else {
+        _check("scenario 4: consensus_count out of range (got " + to_string(cr3.consensus_count) + ")", false, fails)
     }
 
     println("")
