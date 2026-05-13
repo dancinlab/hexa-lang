@@ -6524,6 +6524,46 @@ HexaVal hexa_farr_pauli_expectation(HexaVal re_v, HexaVal im_v,
                                     HexaVal flip_v, HexaVal zmask_v,
                                     HexaVal ymask_v, HexaVal cy_v,
                                     HexaVal nq_v);
+// RFC 035 (2026-05-13): whole-NM-step C kernels.
+HexaVal hexa_farr_simplex_centroid(HexaVal simplex_h_v, HexaVal out_h_v,
+                                   HexaVal n_v, HexaVal n_best_v);
+HexaVal hexa_farr_vec_reflect(HexaVal out_h_v, HexaVal a_h_v, HexaVal b_h_v,
+                              HexaVal scale_v, HexaVal n_v);
+HexaVal hexa_farr_vec_blend(HexaVal out_h_v, HexaVal a_h_v, HexaVal b_h_v,
+                            HexaVal scale_v, HexaVal n_v);
+HexaVal hexa_farr_vertex_copy(HexaVal dst_h_v, HexaVal dst_v_v,
+                              HexaVal src_h_v, HexaVal src_v_v,
+                              HexaVal n_v);
+HexaVal hexa_farr_simplex_get(HexaVal simplex_h_v, HexaVal v_v, HexaVal j_v,
+                              HexaVal n_v);
+HexaVal hexa_farr_simplex_set(HexaVal simplex_h_v, HexaVal v_v, HexaVal j_v,
+                              HexaVal n_v, HexaVal x_v);
+HexaVal hexa_farr_simplex_shrink(HexaVal simplex_h_v, HexaVal n_v,
+                                 HexaVal n_vert_v);
+HexaVal hexa_farr_simplex_sort(HexaVal simplex_h_v, HexaVal f_h_v,
+                               HexaVal n_v, HexaVal n_vert_v);
+// 5-arg builtins → static inline wrappers (past hexa_callN ceiling).
+static inline HexaVal farr_vec_reflect(HexaVal ot, HexaVal a, HexaVal b,
+                                       HexaVal s, HexaVal n) {
+    return hexa_farr_vec_reflect(ot, a, b, s, n);
+}
+static inline HexaVal farr_vec_blend(HexaVal ot, HexaVal a, HexaVal b,
+                                     HexaVal s, HexaVal n) {
+    return hexa_farr_vec_blend(ot, a, b, s, n);
+}
+static inline HexaVal farr_vertex_copy(HexaVal dh, HexaVal dv,
+                                       HexaVal sh, HexaVal sv, HexaVal n) {
+    return hexa_farr_vertex_copy(dh, dv, sh, sv, n);
+}
+static inline HexaVal farr_simplex_set(HexaVal sx, HexaVal v, HexaVal j,
+                                        HexaVal n, HexaVal x) {
+    return hexa_farr_simplex_set(sx, v, j, n, x);
+}
+// 3-arg / 4-arg builtins → static HexaVal carriers (routed through hexa_callN).
+static HexaVal farr_simplex_centroid;
+static HexaVal farr_simplex_get;
+static HexaVal farr_simplex_shrink;
+static HexaVal farr_simplex_sort;
 static inline HexaVal farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
                                              HexaVal alpha_v,
                                              HexaVal flip_v, HexaVal zmask_v,
@@ -7941,6 +7981,186 @@ HexaVal hexa_farr_pauli_expectation(HexaVal re_v, HexaVal im_v,
         sum_re += rj * ppj_re + ij * ppj_im;
     }
     return hexa_float(sum_re);
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// RFC 035 (2026-05-13): Nelder-Mead step kernels for arbitrary-maxiter
+// in-process NM. RFC 034 fixed the Pauli-loop arena pressure; the NM-side
+// vector operations (centroid, reflect, contract, expand, shrink, sort)
+// still box a HexaVal per farr scalar access (~1.5 KB per get/set), so
+// 26-dim NM at maxiter > ~250 hits the 768 MB cap. These kernels run the
+// whole NM step in C with raw double arithmetic.
+//
+// Convention: simplex stored as a single farr handle of length n_vert*n
+// doubles (vertex v occupies indices v*n .. (v+1)*n - 1). f stored as a
+// farr handle of length n_vert.
+
+// out = centroid of the FIRST n_best vertices (exclude the rest).
+// For NM the caller sorts so the worst vertex is at index n_vert-1 and
+// passes n_best = n_vert-1.
+HexaVal hexa_farr_simplex_centroid(HexaVal simplex_h_v, HexaVal out_h_v,
+                                   HexaVal n_v, HexaVal n_best_v) {
+    int64_t sx = hexa_as_num(simplex_h_v);
+    int64_t ot = hexa_as_num(out_h_v);
+    int64_t n  = hexa_as_num(n_v);
+    int64_t nb = hexa_as_num(n_best_v);
+    if (sx < 0 || sx >= _hx_farr_count) return hexa_int(-1);
+    if (ot < 0 || ot >= _hx_farr_count) return hexa_int(-1);
+    double* sp = _hx_farr_table[sx].buf;
+    double* op = _hx_farr_table[ot].buf;
+    if (!sp || !op) return hexa_int(-1);
+    if (nb <= 0) return hexa_int(-1);
+    double inv = 1.0 / (double)nb;
+    for (int64_t j = 0; j < n; j++) {
+        double acc = 0.0;
+        for (int64_t v = 0; v < nb; v++) {
+            acc += sp[v * n + j];
+        }
+        op[j] = acc * inv;
+    }
+    return hexa_int(0);
+}
+
+// out = a + scale*(a - b)   (reflection: scale=1; expansion: scale=2)
+HexaVal hexa_farr_vec_reflect(HexaVal out_h_v, HexaVal a_h_v, HexaVal b_h_v,
+                              HexaVal scale_v, HexaVal n_v) {
+    int64_t ot = hexa_as_num(out_h_v);
+    int64_t ah = hexa_as_num(a_h_v);
+    int64_t bh = hexa_as_num(b_h_v);
+    if (ot < 0 || ot >= _hx_farr_count) return hexa_int(-1);
+    if (ah < 0 || ah >= _hx_farr_count) return hexa_int(-1);
+    if (bh < 0 || bh >= _hx_farr_count) return hexa_int(-1);
+    double* op = _hx_farr_table[ot].buf;
+    double* ap = _hx_farr_table[ah].buf;
+    double* bp = _hx_farr_table[bh].buf;
+    if (!op || !ap || !bp) return hexa_int(-1);
+    double scale = __hx_to_double(scale_v);
+    int64_t n = hexa_as_num(n_v);
+    for (int64_t j = 0; j < n; j++) {
+        op[j] = ap[j] + scale * (ap[j] - bp[j]);
+    }
+    return hexa_int(0);
+}
+
+// out = a + scale*(b - a)   (blend: contraction=0.5; shrink-step=0.5)
+HexaVal hexa_farr_vec_blend(HexaVal out_h_v, HexaVal a_h_v, HexaVal b_h_v,
+                            HexaVal scale_v, HexaVal n_v) {
+    int64_t ot = hexa_as_num(out_h_v);
+    int64_t ah = hexa_as_num(a_h_v);
+    int64_t bh = hexa_as_num(b_h_v);
+    if (ot < 0 || ot >= _hx_farr_count) return hexa_int(-1);
+    if (ah < 0 || ah >= _hx_farr_count) return hexa_int(-1);
+    if (bh < 0 || bh >= _hx_farr_count) return hexa_int(-1);
+    double* op = _hx_farr_table[ot].buf;
+    double* ap = _hx_farr_table[ah].buf;
+    double* bp = _hx_farr_table[bh].buf;
+    if (!op || !ap || !bp) return hexa_int(-1);
+    double scale = __hx_to_double(scale_v);
+    int64_t n = hexa_as_num(n_v);
+    for (int64_t j = 0; j < n; j++) {
+        op[j] = ap[j] + scale * (bp[j] - ap[j]);
+    }
+    return hexa_int(0);
+}
+
+// Copy vertex src_v of src_simplex into vertex dst_v of dst_simplex.
+HexaVal hexa_farr_vertex_copy(HexaVal dst_h_v, HexaVal dst_v_v,
+                              HexaVal src_h_v, HexaVal src_v_v,
+                              HexaVal n_v) {
+    int64_t dh = hexa_as_num(dst_h_v);
+    int64_t sh = hexa_as_num(src_h_v);
+    if (dh < 0 || dh >= _hx_farr_count) return hexa_int(-1);
+    if (sh < 0 || sh >= _hx_farr_count) return hexa_int(-1);
+    double* dp = _hx_farr_table[dh].buf;
+    double* sp = _hx_farr_table[sh].buf;
+    if (!dp || !sp) return hexa_int(-1);
+    int64_t dv = hexa_as_num(dst_v_v);
+    int64_t sv = hexa_as_num(src_v_v);
+    int64_t n  = hexa_as_num(n_v);
+    for (int64_t j = 0; j < n; j++) {
+        dp[dv * n + j] = sp[sv * n + j];
+    }
+    return hexa_int(0);
+}
+
+// Read one entry of a farr buffer interpreted as a (v, j) into a simplex
+// of stride n. Returns the value as a raw double (HexaVal float).
+HexaVal hexa_farr_simplex_get(HexaVal simplex_h_v, HexaVal v_v, HexaVal j_v,
+                              HexaVal n_v) {
+    int64_t sx = hexa_as_num(simplex_h_v);
+    if (sx < 0 || sx >= _hx_farr_count) return hexa_float(0.0);
+    double* sp = _hx_farr_table[sx].buf;
+    if (!sp) return hexa_float(0.0);
+    int64_t v = hexa_as_num(v_v);
+    int64_t j = hexa_as_num(j_v);
+    int64_t n = hexa_as_num(n_v);
+    return hexa_float(sp[v * n + j]);
+}
+
+HexaVal hexa_farr_simplex_set(HexaVal simplex_h_v, HexaVal v_v, HexaVal j_v,
+                              HexaVal n_v, HexaVal x_v) {
+    int64_t sx = hexa_as_num(simplex_h_v);
+    if (sx < 0 || sx >= _hx_farr_count) return hexa_int(-1);
+    double* sp = _hx_farr_table[sx].buf;
+    if (!sp) return hexa_int(-1);
+    int64_t v = hexa_as_num(v_v);
+    int64_t j = hexa_as_num(j_v);
+    int64_t n = hexa_as_num(n_v);
+    sp[v * n + j] = __hx_to_double(x_v);
+    return hexa_int(0);
+}
+
+// Shrink simplex toward vertex 0 (the best): for v = 1..n_vert-1,
+//   simplex[v][j] = simplex[0][j] + 0.5 * (simplex[v][j] - simplex[0][j])
+// Caller is responsible for re-evaluating f for the shrunk vertices.
+HexaVal hexa_farr_simplex_shrink(HexaVal simplex_h_v, HexaVal n_v,
+                                 HexaVal n_vert_v) {
+    int64_t sx = hexa_as_num(simplex_h_v);
+    if (sx < 0 || sx >= _hx_farr_count) return hexa_int(-1);
+    double* sp = _hx_farr_table[sx].buf;
+    if (!sp) return hexa_int(-1);
+    int64_t n = hexa_as_num(n_v);
+    int64_t nv = hexa_as_num(n_vert_v);
+    double* best = sp;  // vertex 0
+    for (int64_t v = 1; v < nv; v++) {
+        double* row = sp + v * n;
+        for (int64_t j = 0; j < n; j++) {
+            row[j] = best[j] + 0.5 * (row[j] - best[j]);
+        }
+    }
+    return hexa_int(0);
+}
+
+// Insertion-sort the simplex by f (ascending). Both simplex and f are
+// reordered in place; uses a single scratch row internally.
+HexaVal hexa_farr_simplex_sort(HexaVal simplex_h_v, HexaVal f_h_v,
+                               HexaVal n_v, HexaVal n_vert_v) {
+    int64_t sx = hexa_as_num(simplex_h_v);
+    int64_t fh = hexa_as_num(f_h_v);
+    if (sx < 0 || sx >= _hx_farr_count) return hexa_int(-1);
+    if (fh < 0 || fh >= _hx_farr_count) return hexa_int(-1);
+    double* sp = _hx_farr_table[sx].buf;
+    double* fp = _hx_farr_table[fh].buf;
+    if (!sp || !fp) return hexa_int(-1);
+    int64_t n = hexa_as_num(n_v);
+    int64_t nv = hexa_as_num(n_vert_v);
+    // Heap-allocate the scratch (n can be up to ~50 in practice).
+    double* scratch = (double*)malloc((size_t)n * sizeof(double));
+    if (!scratch) return hexa_int(-1);
+    for (int64_t i = 1; i < nv; i++) {
+        double key_f = fp[i];
+        for (int64_t j = 0; j < n; j++) scratch[j] = sp[i * n + j];
+        int64_t k = i - 1;
+        while (k >= 0 && fp[k] > key_f) {
+            fp[k + 1] = fp[k];
+            for (int64_t j = 0; j < n; j++) sp[(k + 1) * n + j] = sp[k * n + j];
+            k = k - 1;
+        }
+        fp[k + 1] = key_f;
+        for (int64_t j = 0; j < n; j++) sp[(k + 1) * n + j] = scratch[j];
+    }
+    free(scratch);
+    return hexa_int(0);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -9866,6 +10086,7 @@ static void _hexa_init_net_fn_shims(void);  // fwd decl — body in native/net.c
 static void _hexa_init_os_fn_shims(void);   // fwd decl — body in native/signal_flock.c
 static void _hexa_init_exec_sha_fn_shims(void); // fwd decl — body in native/exec_argv_sha256.c
 static void _hexa_init_persistent_pipe_fn_shims(void); // fwd decl — body in native/persistent_pipe.c
+static void _hexa_init_thread_fn_shims(void); // fwd decl — body in native/thread.c (2026-05-13)
 static void _hexa_init_fn_shims(void) {
     if (_fn_shims_ready) return;
     // bootstrap free-fn shims (join, char_code, chr, bit_or)
@@ -9898,6 +10119,11 @@ static void _hexa_init_fn_shims(void) {
     // RFC 033 (2026-05-12): farr_copy + farr_add_gaussian_noise.
     farr_copy                       = hexa_fn_new((void*)hexa_farr_copy,                       1);
     farr_add_gaussian_noise         = hexa_fn_new((void*)hexa_farr_add_gaussian_noise,         2);
+    // RFC 035 (2026-05-13): 3/4-arg NM-step builtins routed through hexa_callN.
+    farr_simplex_centroid           = hexa_fn_new((void*)hexa_farr_simplex_centroid,           4);
+    farr_simplex_get                = hexa_fn_new((void*)hexa_farr_simplex_get,                4);
+    farr_simplex_shrink             = hexa_fn_new((void*)hexa_farr_simplex_shrink,             3);
+    farr_simplex_sort               = hexa_fn_new((void*)hexa_farr_simplex_sort,               4);
     bit_or     = hexa_fn_new((void*)_hx_bit_or,           2);
     // bt73 free-fn shims (timestamp, base64_encode, base64_decode)
     timestamp     = hexa_fn_new((void*)_bt73_timestamp_w,     0);
@@ -9918,6 +10144,8 @@ static void _hexa_init_fn_shims(void) {
     _hexa_init_exec_sha_fn_shims();
     // ω-runtime-1 Phase A (2026-04-26): persistent-pipe primitive shims
     _hexa_init_persistent_pipe_fn_shims();
+    // 2026-05-13: anima daemon Phase 2 — pthread + channel primitives.
+    _hexa_init_thread_fn_shims();
     _fn_shims_ready = 1;
 }
 
@@ -9959,6 +10187,24 @@ static void _hexa_init_fn_shims(void) {
  * file analogous to native/tensor_kernels.c for the hot kernel path.
  * ═══════════════════════════════════════════════════════════════════ */
 #include "native/net.c"
+
+/* ═══════════════════════════════════════════════════════════════════
+ * anima daemon Phase 2 (CHAT.md rev 2) — pthread + channel primitives
+ * for 60+ FPS frame loop with async inference worker offload.
+ *
+ *   hexa_thread_spawn(fn, arg)   → tid (>=0) or -errno
+ *   hexa_thread_join(tid)        → result HexaVal
+ *   hexa_channel_new()           → ch_id (>=0) or -errno
+ *   hexa_channel_send(ch, v)     → 0 ok / -errno
+ *   hexa_channel_recv(ch, ms)    → val or "" sentinel
+ *   hexa_channel_close(ch)       → 0 ok / -errno
+ *   hexa_sleep_ms(ms)            → 0
+ *   hexa_now_ms()                → current monotonic ms (int)
+ *
+ * Source: native/thread.c (RFC: incoming/patches/thread-channel-primitive.md)
+ * Built into hexa binaries that link -lpthread (added by cmd_build).
+ * ═══════════════════════════════════════════════════════════════════ */
+#include "native/thread.c"
 
 /* ═══════════════════════════════════════════════════════════════════
  * B20 / roadmap 55 Phase 1 — deterministic FP control-word init.

@@ -27,12 +27,16 @@
 
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/select.h>
+#include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
 
 /* This file is a partial translation unit: it is #include'd into
  * self/runtime.c (see the `#include "native/net.c"` near the bottom of
@@ -201,6 +205,71 @@ HexaVal hexa_net_set_timeout(HexaVal fd_val, HexaVal ms_val) {
     return hexa_int(0);
 }
 
+/* ── ADDED 2026-05-13: anima daemon Phase 2 (CHAT.md rev 2) prereq ──
+ * Non-blocking + select multiplex for multi-client + 60+ FPS frame loop.
+ * RFC: ~/core/hexa-lang/incoming/patches/net-nonblock-multiplex.md
+ */
+
+/* hexa_net_set_nonblock(fd) → 0 ok / -errno */
+HexaVal hexa_net_set_nonblock(HexaVal fd_val) {
+    if (!HX_IS_INT(fd_val)) return hexa_int(-EINVAL);
+    int fd = (int)HX_INT(fd_val);
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return hexa_int(-errno);
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return hexa_int(-errno);
+    return hexa_int(0);
+}
+
+/* hexa_net_select(fds_array, timeout_ms) → ready_fds_array
+ *   timeout_ms < 0  : block indefinitely
+ *   timeout_ms = 0  : poll (return immediately)
+ *   timeout_ms > 0  : block up to that long
+ *   Returns: array of fds READ-ready. Empty on timeout.
+ *   On error: single-element [-errno] array.
+ */
+HexaVal hexa_net_select(HexaVal fds_val, HexaVal timeout_ms_val) {
+    if (!HX_IS_ARRAY(fds_val)) {
+        HexaVal err = hexa_array_new();
+        err = hexa_array_push(err, hexa_int(-EINVAL));
+        return err;
+    }
+    int n = HX_ARR_LEN(fds_val);
+    fd_set readfds; FD_ZERO(&readfds);
+    int maxfd = -1;
+    for (int i = 0; i < n; i++) {
+        HexaVal v = HX_ARR_ITEMS(fds_val)[i];
+        if (!HX_IS_INT(v)) continue;
+        int fd = (int)HX_INT(v);
+        if (fd < 0 || fd >= FD_SETSIZE) {
+            HexaVal err = hexa_array_new();
+            err = hexa_array_push(err, hexa_int(-EBADF));
+            return err;
+        }
+        FD_SET(fd, &readfds);
+        if (fd > maxfd) maxfd = fd;
+    }
+    long long ms = HX_IS_INT(timeout_ms_val) ? (long long)HX_INT(timeout_ms_val) : -1;
+    struct timeval tv; struct timeval* tvp;
+    if (ms < 0) { tvp = NULL; }
+    else { tv.tv_sec = ms / 1000; tv.tv_usec = (ms % 1000) * 1000; tvp = &tv; }
+    int rc = select(maxfd + 1, &readfds, NULL, NULL, tvp);
+    if (rc < 0) {
+        HexaVal err = hexa_array_new();
+        err = hexa_array_push(err, hexa_int(-errno));
+        return err;
+    }
+    HexaVal out = hexa_array_new();
+    for (int i = 0; i < n; i++) {
+        HexaVal v = HX_ARR_ITEMS(fds_val)[i];
+        if (!HX_IS_INT(v)) continue;
+        int fd = (int)HX_INT(v);
+        if (FD_ISSET(fd, &readfds)) {
+            out = hexa_array_push(out, hexa_int(fd));
+        }
+    }
+    return out;
+}
+
 HexaVal hexa_net_write(HexaVal fd_val, HexaVal data_val) {
     int64_t fd = hexa_as_num(fd_val);
     if (fd < 0) return hexa_int(-EINVAL);
@@ -238,14 +307,19 @@ HexaVal net_read;
 HexaVal net_read_n;
 HexaVal net_set_timeout;
 HexaVal net_write;
+/* 2026-05-13: anima daemon Phase 2 — non-blocking + select multiplex */
+HexaVal net_set_nonblock;
+HexaVal net_select;
 
 static void _hexa_init_net_fn_shims(void) {
-    net_listen      = hexa_fn_new((void*)hexa_net_listen,      1);
-    net_accept      = hexa_fn_new((void*)hexa_net_accept,      1);
-    net_close       = hexa_fn_new((void*)hexa_net_close,       1);
-    net_connect     = hexa_fn_new((void*)hexa_net_connect,     1);
-    net_read        = hexa_fn_new((void*)hexa_net_read,        1);
-    net_read_n      = hexa_fn_new((void*)hexa_net_read_n,      2);
-    net_set_timeout = hexa_fn_new((void*)hexa_net_set_timeout, 2);
-    net_write       = hexa_fn_new((void*)hexa_net_write,       2);
+    net_listen        = hexa_fn_new((void*)hexa_net_listen,        1);
+    net_accept        = hexa_fn_new((void*)hexa_net_accept,        1);
+    net_close         = hexa_fn_new((void*)hexa_net_close,         1);
+    net_connect       = hexa_fn_new((void*)hexa_net_connect,       1);
+    net_read          = hexa_fn_new((void*)hexa_net_read,          1);
+    net_read_n        = hexa_fn_new((void*)hexa_net_read_n,        2);
+    net_set_timeout   = hexa_fn_new((void*)hexa_net_set_timeout,   2);
+    net_write         = hexa_fn_new((void*)hexa_net_write,         2);
+    net_set_nonblock  = hexa_fn_new((void*)hexa_net_set_nonblock,  1);
+    net_select        = hexa_fn_new((void*)hexa_net_select,        2);
 }

@@ -319,10 +319,14 @@ fn os_clang_cflags() {
     return ""
 }
 fn os_clang_ldflags() {
+    // 2026-05-13: -lpthread added for native/thread.c (pthread + channel
+    // primitives needed by anima daemon Phase 2 — CHAT.md rev 2 60+ FPS
+    // frame loop with async inference worker). macOS uses -lpthread too;
+    // libSystem makes it a no-op on Darwin but explicit is portable.
     if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" {
-        return " -lm"
+        return " -lm -lpthread"
     }
-    return ""
+    return " -lpthread"
 }
 
 // ── B20 / roadmap 55 Phase 1 — strict-FP clang flags ─────────
