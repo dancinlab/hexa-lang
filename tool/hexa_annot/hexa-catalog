@@ -1,0 +1,201 @@
+#!/bin/bash
+# hexa-catalog — hexa 소스 annotation 추출기 (grep MVP, v0.1)
+#
+# 입력:
+#   hexa-catalog <file.hexa> [<file2.hexa> ...]
+#   hexa-catalog --dir <directory>
+#
+# 출력 (stdout JSON):
+#   { "version": "0.1", "source": "grep-mvp", "commands": [ {sub, desc, file, line, flags[]} ] }
+#
+# 인식 annotation (fn decl 바로 위 라인):
+#   @cli(sub="name", desc="...")
+#   @flag(name="--x", type="str|int|bool", required=true|false, default="...", desc="...")
+#   @doc("...")         # 현재는 desc 보조
+#   @schema / @gate / @memo — 추후 확장 (지금은 무시)
+#
+# exit 0 정상 (빈 commands 포함). 1=인자 오류
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-catalog <file.hexa> [file2.hexa ...]
+       hexa-catalog --dir <directory>
+EOF
+    exit 1
+}
+
+files=()
+if [ $# -eq 0 ]; then
+    usage
+fi
+
+if [ "$1" = "--dir" ]; then
+    shift
+    [ $# -eq 1 ] || usage
+    dir="$1"
+    [ -d "$dir" ] || { echo "ERROR: directory not found: $dir" >&2; exit 1; }
+    # nullglob safe: fallback to empty
+    while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$dir" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
+else
+    for arg in "$@"; do
+        [ -f "$arg" ] || { echo "ERROR: file not found: $arg" >&2; exit 1; }
+        files+=("$arg")
+    done
+fi
+
+# awk 엔진 — annotation → JSON. 모든 파일을 단일 awk 호출에 넘김.
+# FILENAME/FNR 로 파일/라인 추적. BEGIN{blocks 초기화}; END{JSON emit}
+awk '
+function json_escape(s,   r) {
+    r = s
+    gsub(/\\/, "\\\\", r)
+    gsub(/"/, "\\\"", r)
+    gsub(/\t/, "\\t", r)
+    gsub(/\r/, "\\r", r)
+    gsub(/\n/, "\\n", r)
+    return r
+}
+function extract_kv(line, key,    re, m, val, pos, rest, quote_char) {
+    # key="value" 또는 key=value (unquoted for bool/int)
+    # 단순 전진 스캔
+    re = "[[:space:],(]" key "[[:space:]]*="
+    pos = match(line, re)
+    if (pos == 0) {
+        # 라인 시작부 매치 (key=... at start of args)
+        re = "^@[a-z]+\\([[:space:]]*" key "[[:space:]]*="
+        pos = match(line, re)
+        if (pos == 0) return ""
+    }
+    rest = substr(line, pos + RLENGTH)
+    # strip leading whitespace
+    sub(/^[[:space:]]+/, "", rest)
+    if (substr(rest, 1, 1) == "\"") {
+        # quoted string — find next unescaped "
+        val = ""
+        i = 2
+        while (i <= length(rest)) {
+            c = substr(rest, i, 1)
+            if (c == "\\" && i < length(rest)) {
+                val = val substr(rest, i, 2)
+                i += 2
+                continue
+            }
+            if (c == "\"") break
+            val = val c
+            i++
+        }
+        # unescape \" → " and \\ → \
+        gsub(/\\"/, "\"", val)
+        gsub(/\\\\/, "\\", val)
+        return val
+    } else {
+        # unquoted — up to , or ) or whitespace
+        if (match(rest, /[,)[:space:]]/)) {
+            return substr(rest, 1, RSTART - 1)
+        }
+        return rest
+    }
+}
+
+BEGIN {
+    cur_sub = ""
+    cur_desc = ""
+    n_flags = 0
+    total = 0
+    # flags staged for next fn: flag_name[i], flag_type[i], flag_req[i], flag_default[i], flag_desc[i]
+}
+
+# reset staging when a blank line or non-annotation, non-fn line breaks the block
+{
+    is_anno = ($0 ~ /^[[:space:]]*@(cli|flag|doc|schema|gate|memo)/)
+    is_fn = ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
+    is_blank = ($0 ~ /^[[:space:]]*$/)
+    is_comment = ($0 ~ /^[[:space:]]*\/\//)
+}
+
+is_anno {
+    line = $0
+    if (match(line, /^[[:space:]]*@cli/)) {
+        cur_sub = extract_kv(line, "sub")
+        d = extract_kv(line, "desc")
+        if (d != "") cur_desc = d
+    } else if (match(line, /^[[:space:]]*@flag/)) {
+        n_flags++
+        flag_name[n_flags]    = extract_kv(line, "name")
+        flag_type[n_flags]    = extract_kv(line, "type")
+        flag_req[n_flags]     = extract_kv(line, "required")
+        flag_default[n_flags] = extract_kv(line, "default")
+        flag_desc[n_flags]    = extract_kv(line, "desc")
+    } else if (match(line, /^[[:space:]]*@doc/)) {
+        # extract string inside @doc("...")
+        if (match(line, /@doc\([[:space:]]*"/)) {
+            rest = substr(line, RSTART + RLENGTH)
+            if (match(rest, /"[[:space:]]*\)/)) {
+                d = substr(rest, 1, RSTART - 1)
+                if (cur_desc == "") cur_desc = d
+            }
+        }
+    }
+    next
+}
+
+is_fn && cur_sub != "" {
+    # emit staged block
+    if (total > 0) printf ","
+    total++
+    printf "{"
+    printf "\"sub\":\"%s\"", json_escape(cur_sub)
+    printf ",\"desc\":\"%s\"", json_escape(cur_desc)
+    printf ",\"file\":\"%s\"", json_escape(FILENAME)
+    printf ",\"line\":%d", FNR
+    printf ",\"flags\":["
+    for (i = 1; i <= n_flags; i++) {
+        if (i > 1) printf ","
+        printf "{"
+        printf "\"name\":\"%s\"", json_escape(flag_name[i])
+        if (flag_type[i] != "")    printf ",\"type\":\"%s\"",    json_escape(flag_type[i])
+        if (flag_req[i] != "")     printf ",\"required\":%s",    (flag_req[i] == "true" ? "true" : "false")
+        if (flag_default[i] != "") printf ",\"default\":\"%s\"", json_escape(flag_default[i])
+        if (flag_desc[i] != "")    printf ",\"desc\":\"%s\"",    json_escape(flag_desc[i])
+        printf "}"
+    }
+    printf "]"
+    printf "}"
+    # reset staging
+    cur_sub = ""
+    cur_desc = ""
+    delete flag_name
+    delete flag_type
+    delete flag_req
+    delete flag_default
+    delete flag_desc
+    n_flags = 0
+    next
+}
+
+# blank or non-anno, non-fn breaks the block (but only if we had staging and no matching fn)
+(!is_anno && !is_fn && !is_comment) {
+    if (cur_sub != "" && is_blank) {
+        # block broken w/o fn — discard staging
+        cur_sub = ""
+        cur_desc = ""
+        delete flag_name
+        delete flag_type
+        delete flag_req
+        delete flag_default
+        delete flag_desc
+        n_flags = 0
+    }
+}
+
+END {
+    # emit wrapped JSON after the commands array body (printed inline above)
+    # handled by shell below
+}
+' "${files[@]}" > /tmp/.hexa-catalog.$$.body
+
+# wrap body
+body="$(cat /tmp/.hexa-catalog.$$.body 2>/dev/null || true)"
+rm -f /tmp/.hexa-catalog.$$.body
+printf '{"version":"0.1","source":"grep-mvp","commands":[%s]}\n' "$body"

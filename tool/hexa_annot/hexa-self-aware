@@ -1,0 +1,261 @@
+#!/bin/bash
+# hexa-self-aware — hexa-lang 컴파일러 자기인지 annotation 통합 수집기 (grep MVP, v0.1)
+#
+# 입력:
+#   hexa-self-aware <file.hexa> [<file2.hexa> ...]
+#   hexa-self-aware --dir <directory>
+#   hexa-self-aware [--kind compile_trace|ast_visible|codegen_mark|optimizer_hint|type_debug|self_check] <files...>
+#
+# 출력 (stdout JSON):
+#   { "version":"0.1", "source":"grep-mvp",
+#     "annotations":[ {kind, fn, file, line, meta{...}} ],
+#     "summary":{ compile_trace, ast_visible, codegen_mark, optimizer_hint, type_debug, self_check, total } }
+#
+# 인식 annotation (fn decl 바로 위 라인, stacking 허용):
+#   @compile_trace              — args 없음
+#   @ast_visible                — args 없음
+#   @codegen_mark(tag="<name>")
+#   @optimizer_hint(pass="<inline|cse|dce|loop_unroll>")
+#   @type_debug                 — args 없음
+#   @self_check                 — args 없음
+#
+# exit 0 정상 (빈 annotations 포함). 1=인자 오류
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-self-aware [--kind compile_trace|ast_visible|codegen_mark|optimizer_hint|type_debug|self_check] <file.hexa> [file2.hexa ...]
+       hexa-self-aware [--kind ...] --dir <directory>
+EOF
+    exit 1
+}
+
+filter_kind=""
+files=()
+
+# parse args
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kind)
+            shift
+            [ $# -ge 1 ] || usage
+            case "$1" in
+                compile_trace|ast_visible|codegen_mark|optimizer_hint|type_debug|self_check) filter_kind="$1" ;;
+                *) echo "ERROR: invalid kind: $1" >&2; usage ;;
+            esac
+            shift
+            ;;
+        --dir)
+            shift
+            [ $# -ge 1 ] || usage
+            dir="$1"
+            [ -d "$dir" ] || { echo "ERROR: directory not found: $dir" >&2; exit 1; }
+            while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$dir" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            [ -f "$1" ] || { echo "ERROR: file not found: $1" >&2; exit 1; }
+            files+=("$1")
+            shift
+            ;;
+    esac
+done
+
+[ "${#files[@]}" -gt 0 ] || usage
+
+# awk 엔진 — annotation 라인을 stage 하고 fn decl 에서 flush.
+awk -v filter_kind="$filter_kind" '
+function json_escape(s,   r) {
+    r = s
+    gsub(/\\/, "\\\\", r)
+    gsub(/"/, "\\\"", r)
+    gsub(/\t/, "\\t", r)
+    gsub(/\r/, "\\r", r)
+    gsub(/\n/, "\\n", r)
+    return r
+}
+function extract_all_kv(line, kv_keys, kv_vals,    tmp, pos, rest, c, k, v, n, i, ch) {
+    # 모든 key=value 쌍을 수집 — depth 1 only
+    n = 0
+    delete kv_keys
+    delete kv_vals
+    tmp = line
+    # find opening paren after @name
+    if (!match(tmp, /@[a-z_]+\(/)) return 0
+    tmp = substr(tmp, RSTART + RLENGTH)
+    while (1) {
+        sub(/^[[:space:],]+/, "", tmp)
+        if (length(tmp) == 0) break
+        if (substr(tmp, 1, 1) == ")") break
+        # key
+        if (!match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) break
+        k = substr(tmp, 1, RLENGTH)
+        tmp = substr(tmp, RLENGTH + 1)
+        sub(/^[[:space:]]*=[[:space:]]*/, "", tmp)
+        # value
+        if (substr(tmp, 1, 1) == "\"") {
+            v = ""
+            i = 2
+            while (i <= length(tmp)) {
+                ch = substr(tmp, i, 1)
+                if (ch == "\\" && i < length(tmp)) {
+                    v = v substr(tmp, i, 2)
+                    i += 2
+                    continue
+                }
+                if (ch == "\"") break
+                v = v ch
+                i++
+            }
+            tmp = substr(tmp, i + 1)
+            gsub(/\\"/, "\"", v)
+            gsub(/\\\\/, "\\", v)
+        } else {
+            if (match(tmp, /[,)[:space:]]/)) {
+                v = substr(tmp, 1, RSTART - 1)
+                tmp = substr(tmp, RSTART)
+            } else {
+                v = tmp
+                tmp = ""
+            }
+        }
+        n++
+        kv_keys[n] = k
+        kv_vals[n] = v
+    }
+    return n
+}
+
+BEGIN {
+    n_staged = 0
+    total = 0
+    cnt_compile_trace = 0
+    cnt_ast_visible = 0
+    cnt_codegen_mark = 0
+    cnt_optimizer_hint = 0
+    cnt_type_debug = 0
+    cnt_self_check = 0
+}
+
+{
+    is_compile_trace  = ($0 ~ /^[[:space:]]*@compile_trace([[:space:]]*\(|[[:space:]]*$|[[:space:]]*\/\/|[[:space:]]*#)/)
+    is_ast_visible    = ($0 ~ /^[[:space:]]*@ast_visible([[:space:]]*\(|[[:space:]]*$|[[:space:]]*\/\/|[[:space:]]*#)/)
+    is_codegen_mark   = ($0 ~ /^[[:space:]]*@codegen_mark([[:space:]]*\(|[[:space:]]*$)/)
+    is_optimizer_hint = ($0 ~ /^[[:space:]]*@optimizer_hint([[:space:]]*\(|[[:space:]]*$)/)
+    is_type_debug     = ($0 ~ /^[[:space:]]*@type_debug([[:space:]]*\(|[[:space:]]*$|[[:space:]]*\/\/|[[:space:]]*#)/)
+    is_self_check     = ($0 ~ /^[[:space:]]*@self_check([[:space:]]*\(|[[:space:]]*$|[[:space:]]*\/\/|[[:space:]]*#)/)
+    is_anno = (is_compile_trace || is_ast_visible || is_codegen_mark || is_optimizer_hint || is_type_debug || is_self_check)
+    is_fn = ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
+    is_blank = ($0 ~ /^[[:space:]]*$/)
+    is_comment = ($0 ~ /^[[:space:]]*(\/\/|#)/)
+}
+
+is_anno {
+    line = $0
+    kind = ""
+    if      (is_compile_trace)  kind = "compile_trace"
+    else if (is_ast_visible)    kind = "ast_visible"
+    else if (is_codegen_mark)   kind = "codegen_mark"
+    else if (is_optimizer_hint) kind = "optimizer_hint"
+    else if (is_type_debug)     kind = "type_debug"
+    else if (is_self_check)     kind = "self_check"
+
+    n_staged++
+    staged_kind[n_staged] = kind
+    staged_line[n_staged] = FNR
+    staged_file[n_staged] = FILENAME
+
+    # meta 수집 — depth 1 key=value
+    delete kv_k
+    delete kv_v
+    nk = extract_all_kv(line, kv_k, kv_v)
+    staged_nkv[n_staged] = nk
+    for (i = 1; i <= nk; i++) {
+        staged_k[n_staged, i] = kv_k[i]
+        staged_v[n_staged, i] = kv_v[i]
+    }
+    next
+}
+
+is_fn && n_staged > 0 {
+    # extract fn name
+    fn_name = ""
+    tmp = $0
+    sub(/^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+/, "", tmp)
+    if (match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) {
+        fn_name = substr(tmp, 1, RLENGTH)
+    }
+
+    # emit each staged annotation (if filter matches)
+    for (s = 1; s <= n_staged; s++) {
+        k = staged_kind[s]
+        if (filter_kind != "" && filter_kind != k) continue
+
+        if (total > 0) printf ","
+        total++
+        if      (k == "compile_trace")  cnt_compile_trace++
+        else if (k == "ast_visible")    cnt_ast_visible++
+        else if (k == "codegen_mark")   cnt_codegen_mark++
+        else if (k == "optimizer_hint") cnt_optimizer_hint++
+        else if (k == "type_debug")     cnt_type_debug++
+        else if (k == "self_check")     cnt_self_check++
+
+        printf "{"
+        printf "\"kind\":\"%s\"", json_escape(k)
+        printf ",\"fn\":\"%s\"", json_escape(fn_name)
+        printf ",\"file\":\"%s\"", json_escape(staged_file[s])
+        printf ",\"line\":%d", staged_line[s]
+        printf ",\"meta\":{"
+        nk = staged_nkv[s]
+        for (i = 1; i <= nk; i++) {
+            if (i > 1) printf ","
+            printf "\"%s\":\"%s\"", json_escape(staged_k[s, i]), json_escape(staged_v[s, i])
+        }
+        printf "}"
+        printf "}"
+    }
+
+    # reset staging
+    for (s = 1; s <= n_staged; s++) {
+        delete staged_kind[s]
+        delete staged_line[s]
+        delete staged_file[s]
+        delete staged_nkv[s]
+    }
+    for (key in staged_k) delete staged_k[key]
+    for (key in staged_v) delete staged_v[key]
+    n_staged = 0
+    next
+}
+
+# blank breaks the block (discard staging unless followed by more annos)
+(!is_anno && !is_fn && !is_comment) {
+    if (n_staged > 0 && is_blank) {
+        for (s = 1; s <= n_staged; s++) {
+            delete staged_kind[s]
+            delete staged_line[s]
+            delete staged_file[s]
+            delete staged_nkv[s]
+        }
+        for (key in staged_k) delete staged_k[key]
+        for (key in staged_v) delete staged_v[key]
+        n_staged = 0
+    }
+}
+
+END {
+    printf "%d|%d|%d|%d|%d|%d|%d\n", cnt_compile_trace, cnt_ast_visible, cnt_codegen_mark, cnt_optimizer_hint, cnt_type_debug, cnt_self_check, total > "/dev/stderr"
+}
+' "${files[@]}" > /tmp/.hexa-self-aware.$$.body 2> /tmp/.hexa-self-aware.$$.summary
+
+body="$(cat /tmp/.hexa-self-aware.$$.body 2>/dev/null || true)"
+summary_line="$(cat /tmp/.hexa-self-aware.$$.summary 2>/dev/null || echo '0|0|0|0|0|0|0')"
+rm -f /tmp/.hexa-self-aware.$$.body /tmp/.hexa-self-aware.$$.summary
+
+IFS='|' read -r c_ct c_av c_cm c_oh c_td c_sc c_total <<< "$summary_line"
+
+printf '{"version":"0.1","source":"grep-mvp","annotations":[%s],"summary":{"compile_trace":%d,"ast_visible":%d,"codegen_mark":%d,"optimizer_hint":%d,"type_debug":%d,"self_check":%d,"total":%d}}\n' \
+    "$body" "${c_ct:-0}" "${c_av:-0}" "${c_cm:-0}" "${c_oh:-0}" "${c_td:-0}" "${c_sc:-0}" "${c_total:-0}"

@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# hexa-schema — extract @schema(type="...") + struct fields → JSON Schema stdout
+# usage: hexa-schema <file.hexa> [<file2>...]
+#        hexa-schema --dir <dir>
+
+set -u
+
+print_usage() {
+    echo "usage: hexa-schema <file.hexa> [<file2>...]" >&2
+    echo "       hexa-schema --dir <dir>" >&2
+}
+
+if [ $# -lt 1 ]; then
+    print_usage
+    exit 2
+fi
+
+FILES=()
+if [ "$1" = "--dir" ]; then
+    if [ $# -lt 2 ]; then
+        print_usage
+        exit 2
+    fi
+    DIR="$2"
+    if [ ! -d "$DIR" ]; then
+        echo "hexa-schema: directory not found: $DIR" >&2
+        exit 2
+    fi
+    while IFS= read -r -d '' f; do
+        FILES+=("$f")
+    done < <(find "$DIR" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name '*.hexa' -print0 2>/dev/null)
+else
+    for f in "$@"; do
+        if [ ! -f "$f" ]; then
+            echo "hexa-schema: file not found: $f" >&2
+            exit 2
+        fi
+        FILES+=("$f")
+    done
+fi
+
+# awk does the heavy lifting: scan each file, emit JSON-escaped schema records.
+# States:
+#   0 = looking for @schema(type="...")
+#   1 = captured type; looking for `struct <Name> {`
+#   2 = inside struct body; collect `name: type` lines until `}`
+awk '
+function json_escape(s,   out, i, c, code) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") out = out "\\\\"
+        else if (c == "\"") out = out "\\\""
+        else if (c == "\n") out = out "\\n"
+        else if (c == "\r") out = out "\\r"
+        else if (c == "\t") out = out "\\t"
+        else {
+            code = -1
+            # printable ASCII 0x20..0x7e
+            if (match(c, /[\x20-\x7e]/)) out = out c
+            else {
+                # fallback: pass-through (likely utf-8 bytes)
+                out = out c
+            }
+        }
+    }
+    return out
+}
+
+function emit_record() {
+    if (have_schema && have_struct) {
+        rec = "    {\n"
+        rec = rec "      \"type\": \""   json_escape(cur_type)   "\",\n"
+        rec = rec "      \"struct\": \"" json_escape(cur_struct) "\",\n"
+        rec = rec "      \"file\": \""   json_escape(cur_file)   "\",\n"
+        rec = rec "      \"line\": "     cur_line ",\n"
+        rec = rec "      \"fields\": ["
+        if (fields_n == 0) {
+            rec = rec "]"
+        } else {
+            rec = rec "\n"
+            for (k = 1; k <= fields_n; k++) {
+                sep = (k < fields_n) ? "," : ""
+                rec = rec "        {\"name\": \"" json_escape(fnames[k]) "\", \"type\": \"" json_escape(ftypes[k]) "\"}" sep "\n"
+            }
+            rec = rec "      ]"
+        }
+        rec = rec "\n    }"
+        records[++records_n] = rec
+    }
+    cur_type = ""; cur_struct = ""; cur_line = 0
+    fields_n = 0
+    have_schema = 0; have_struct = 0
+    state = 0
+}
+
+BEGIN {
+    state = 0
+    records_n = 0
+    have_schema = 0; have_struct = 0
+    fields_n = 0
+}
+
+FNR == 1 {
+    # reset per-file
+    cur_file = FILENAME
+    if (state != 0) {
+        # discard dangling capture from previous file
+        cur_type = ""; cur_struct = ""; cur_line = 0
+        fields_n = 0
+        have_schema = 0; have_struct = 0
+        state = 0
+    }
+}
+
+{
+    line = $0
+    # strip trailing CR
+    sub(/\r$/, "", line)
+
+    if (state == 0) {
+        # look for @schema(type="...")
+        if (match(line, /@schema[[:space:]]*\([[:space:]]*type[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*\)/)) {
+            seg = substr(line, RSTART, RLENGTH)
+            # extract between quotes
+            q1 = index(seg, "\"")
+            rest = substr(seg, q1 + 1)
+            q2 = index(rest, "\"")
+            cur_type = substr(rest, 1, q2 - 1)
+            have_schema = 1
+            cur_line = FNR
+            state = 1
+            next
+        }
+    } else if (state == 1) {
+        # skip blank lines and comment-only lines
+        stripped = line
+        sub(/^[[:space:]]+/, "", stripped)
+        if (stripped == "") next
+        if (substr(stripped, 1, 2) == "//") next
+        if (substr(stripped, 1, 1) == "#")  next
+
+        # expect `struct <Name> {` possibly on this line
+        if (match(line, /struct[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\{/)) {
+            seg = substr(line, RSTART, RLENGTH)
+            # strip leading "struct" keyword
+            sub(/^struct[[:space:]]+/, "", seg)
+            # strip trailing `{` and whitespace
+            sub(/[[:space:]]*\{.*$/, "", seg)
+            cur_struct = seg
+            have_struct = 1
+            cur_line = FNR
+            fields_n = 0
+            state = 2
+            next
+        }
+        # also accept `struct Name` with `{` on next line
+        if (match(line, /^[[:space:]]*struct[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) {
+            s = line
+            sub(/^[[:space:]]*struct[[:space:]]+/, "", s)
+            sub(/[[:space:]]*$/, "", s)
+            cur_struct = s
+            have_struct = 1
+            cur_line = FNR
+            fields_n = 0
+            state = 3   # expect `{` next
+            next
+        }
+        # anything else aborts the capture
+        emit_record()
+    } else if (state == 3) {
+        stripped = line
+        sub(/^[[:space:]]+/, "", stripped)
+        if (stripped == "") next
+        if (substr(stripped, 1, 1) == "{") {
+            state = 2
+            next
+        }
+        # unexpected — drop
+        emit_record()
+    } else if (state == 2) {
+        # inside struct body; look for `}` or `name: type`
+        stripped = line
+        sub(/^[[:space:]]+/, "", stripped)
+        sub(/[[:space:]]+$/, "", stripped)
+
+        if (stripped == "") next
+        if (substr(stripped, 1, 2) == "//") next
+        if (substr(stripped, 1, 1) == "#")  next
+
+        if (substr(stripped, 1, 1) == "}") {
+            emit_record()
+            next
+        }
+
+        # strip trailing comma
+        body = stripped
+        sub(/,+[[:space:]]*$/, "", body)
+        # strip inline comment
+        idx = index(body, "//")
+        if (idx > 0) {
+            body = substr(body, 1, idx - 1)
+            sub(/[[:space:]]+$/, "", body)
+        }
+        if (body == "") next
+
+        # match `name: type`
+        colon = index(body, ":")
+        if (colon > 0) {
+            fname = substr(body, 1, colon - 1)
+            ftype = substr(body, colon + 1)
+            sub(/^[[:space:]]+/, "", fname); sub(/[[:space:]]+$/, "", fname)
+            sub(/^[[:space:]]+/, "", ftype); sub(/[[:space:]]+$/, "", ftype)
+            # strip trailing `,` or `;`
+            sub(/[,;]+$/, "", ftype)
+            sub(/[[:space:]]+$/, "", ftype)
+            if (fname != "" && ftype != "" && fname ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+                fields_n++
+                fnames[fields_n] = fname
+                ftypes[fields_n] = ftype
+            }
+        }
+    }
+}
+
+END {
+    # flush any pending (struct without closing brace is dropped)
+    if (state != 0) {
+        # If we got all the way into state 2 with fields, still emit.
+        if (state == 2 && have_struct && have_schema) {
+            emit_record()
+        } else {
+            # discard
+            have_schema = 0; have_struct = 0
+        }
+    }
+
+    printf "{\n"
+    printf "  \"version\": \"0.1\",\n"
+    printf "  \"source\": \"grep-mvp\",\n"
+    printf "  \"schemas\": ["
+    if (records_n == 0) {
+        printf "]\n"
+    } else {
+        printf "\n"
+        for (i = 1; i <= records_n; i++) {
+            printf "%s", records[i]
+            if (i < records_n) printf ","
+            printf "\n"
+        }
+        printf "  ]\n"
+    }
+    printf "}\n"
+}
+' "${FILES[@]}"

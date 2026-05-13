@@ -1,0 +1,320 @@
+#!/usr/bin/env bash
+# hexa-pure-check — detect @pure annotation violations in hexa sources (advisory).
+# Heuristic MVP: scan @pure fn bodies for side-effect patterns.
+# Usage: hexa-pure-check [--strict] <file.hexa>... | --dir <dir>
+set -euo pipefail
+
+usage() {
+    cat >&2 <<EOF
+hexa-pure-check — @pure purity violation detector (advisory)
+
+Usage:
+  hexa-pure-check [--strict] <file.hexa>...
+  hexa-pure-check [--strict] --dir <dir>
+
+Flags:
+  --strict   also flag "let mut " as a violation
+
+Output: JSON on stdout (schema v0.1).
+EOF
+    exit 2
+}
+
+STRICT=0
+ARGS=()
+for a in "$@"; do
+    case "$a" in
+        --strict) STRICT=1 ;;
+        -h|--help) usage ;;
+        *) ARGS+=("$a") ;;
+    esac
+done
+set -- "${ARGS[@]:-}"
+
+[[ $# -lt 1 || -z "${1:-}" ]] && usage
+
+FILES=()
+if [[ "$1" == "--dir" ]]; then
+    [[ $# -lt 2 ]] && usage
+    DIR="$2"
+    [[ ! -d "$DIR" ]] && { echo "error: not a directory: $DIR" >&2; exit 1; }
+    while IFS= read -r -d '' f; do
+        FILES+=("$f")
+    done < <(find "$DIR" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name '*.hexa' -print0)
+else
+    for f in "$@"; do
+        [[ ! -f "$f" ]] && { echo "error: not a file: $f" >&2; exit 1; }
+        FILES+=("$f")
+    done
+fi
+
+if [[ ${#FILES[@]} -eq 0 ]]; then
+    printf '{"version":"0.1","source":"grep-mvp","pure_fns":[],"summary":{"total":0,"clean":0,"violations":0}}\n'
+    exit 0
+fi
+
+# awk state machine: for each @pure fn, collect body between balanced {} and
+# emit one record per fn:
+#   FNNAME<TAB>FILE<TAB>LINE<TAB>VIOL1|VIOL2|...    (VIOL empty if clean)
+AWK_OUT=$(awk -v strict="$STRICT" '
+function trim(s) {
+    sub(/^[ \t\r\n]+/, "", s)
+    sub(/[ \t\r\n]+$/, "", s)
+    return s
+}
+function strip_line_comment(s,    out, i, n, c, in_str, in_chr, esc) {
+    # minimal comment stripping — keep chars inside double-quote or single-quote strings
+    out = ""
+    n = length(s)
+    in_str = 0; in_chr = 0; esc = 0
+    for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (esc) { out = out c; esc = 0; continue }
+        if (c == "\\" && (in_str || in_chr)) { out = out c; esc = 1; continue }
+        if (in_str) {
+            out = out c
+            if (c == "\"") in_str = 0
+            continue
+        }
+        if (in_chr) {
+            out = out c
+            if (c == SQ) in_chr = 0
+            continue
+        }
+        if (c == "\"") { in_str = 1; out = out c; continue }
+        if (c == SQ) { in_chr = 1; out = out c; continue }
+        if (c == "/" && i < n && substr(s, i + 1, 1) == "/") {
+            break
+        }
+        out = out c
+    }
+    return out
+}
+function count_braces(s,    i, n, c, delta, in_str, in_chr, esc) {
+    # count { minus } at top level (skip inside strings)
+    delta = 0
+    n = length(s)
+    in_str = 0; in_chr = 0; esc = 0
+    for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (esc) { esc = 0; continue }
+        if (c == "\\" && (in_str || in_chr)) { esc = 1; continue }
+        if (in_str) {
+            if (c == "\"") in_str = 0
+            continue
+        }
+        if (in_chr) {
+            if (c == SQ) in_chr = 0
+            continue
+        }
+        if (c == "\"") { in_str = 1; continue }
+        if (c == SQ) { in_chr = 1; continue }
+        if (c == "{") delta++
+        else if (c == "}") delta--
+    }
+    return delta
+}
+function scan_violations(body, strict_mode,    v, had) {
+    # returns pipe-separated violations, empty if clean
+    v = ""
+    had["exec("] = 0
+    had["print("] = 0
+    had["println("] = 0
+    had["eprintln("] = 0
+    had["env("] = 0
+    had["let mut "] = 0
+
+    if (index(body, "exec(") > 0) had["exec("] = 1
+    if (index(body, "print(") > 0) had["print("] = 1
+    if (index(body, "println(") > 0) had["println("] = 1
+    if (index(body, "eprintln(") > 0) had["eprintln("] = 1
+    if (index(body, "env(") > 0) had["env("] = 1
+    if (strict_mode == 1 && index(body, "let mut ") > 0) had["let mut "] = 1
+
+    # preserve order: exec, print, println, eprintln, env, let mut
+    if (had["exec("])    v = (v == "" ? "exec(" : v "|exec(")
+    if (had["print("])   v = (v == "" ? "print(" : v "|print(")
+    if (had["println("]) v = (v == "" ? "println(" : v "|println(")
+    if (had["eprintln("])v = (v == "" ? "eprintln(" : v "|eprintln(")
+    if (had["env("])     v = (v == "" ? "env(" : v "|env(")
+    if (had["let mut "]) v = (v == "" ? "let mut" : v "|let mut")
+    return v
+}
+function emit(fname, file, line, viol) {
+    printf("%s\t%s\t%d\t%s\n", fname, file, line, viol)
+}
+BEGIN {
+    SQ = sprintf("%c", 39)
+    pending = 0
+    pending_line = 0
+}
+FNR == 1 {
+    pending = 0
+    pending_line = 0
+}
+{
+    raw = $0
+    s = strip_line_comment(raw)
+    t = trim(s)
+
+    if (t == "") next
+
+    # detect @pure marker
+    if (match(t, /@pure([ \t]*\(|$|[ \t])/)) {
+        pending = 1
+        pending_line = FNR
+        next
+    }
+
+    if (pending == 1) {
+        # look for fn decl: allow leading keywords (pub, async, etc).
+        if (match(t, /(^|[ \t])fn[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
+            blk = substr(t, RSTART, RLENGTH)
+            if (match(blk, /fn[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
+                nm = substr(blk, RSTART, RLENGTH)
+                sub(/^fn[ \t]+/, "", nm)
+                fname = nm
+            } else {
+                fname = "?"
+            }
+
+            # find opening "{" — may be on same line or subsequent lines
+            body = ""
+            depth = 0
+            saw_open = 0
+            # scan current line first from the position after fn header
+            line_buf = s
+
+            # accumulate lines until we find "{" and then match balanced "}"
+            # but only the portion after the first "{" counts as body
+            combined = line_buf
+            # check current line for "{"
+            open_idx = 0
+            n = length(line_buf)
+            in_str = 0; in_chr = 0; esc = 0
+            for (i = 1; i <= n; i++) {
+                c = substr(line_buf, i, 1)
+                if (esc) { esc = 0; continue }
+                if (c == "\\" && (in_str || in_chr)) { esc = 1; continue }
+                if (in_str) { if (c == "\"") in_str = 0; continue }
+                if (in_chr) { if (c == SQ) in_chr = 0; continue }
+                if (c == "\"") { in_str = 1; continue }
+                if (c == SQ) { in_chr = 1; continue }
+                if (c == "{") { open_idx = i; break }
+            }
+            if (open_idx > 0) {
+                saw_open = 1
+                depth = 1
+                body = substr(line_buf, open_idx + 1)
+                # check if "}" also on same line
+                delta2 = count_braces(body)
+                # delta2 already excludes the opening { (not in body)
+                depth = 1 + delta2
+                if (depth <= 0) {
+                    # single-line body: body already contains everything up to its end
+                    # trim trailing "}" — naive: count_braces zeroed means body has balanced set
+                    # keep body as-is (contains one trailing "}" we should not scan meaningfully)
+                }
+            }
+
+            # read ahead until depth == 0
+            while (saw_open == 0 && (getline nxt) > 0) {
+                ns = strip_line_comment(nxt)
+                n2 = length(ns)
+                in_str = 0; in_chr = 0; esc = 0
+                open_idx = 0
+                for (i = 1; i <= n2; i++) {
+                    c = substr(ns, i, 1)
+                    if (esc) { esc = 0; continue }
+                    if (c == "\\" && (in_str || in_chr)) { esc = 1; continue }
+                    if (in_str) { if (c == "\"") in_str = 0; continue }
+                    if (in_chr) { if (c == SQ) in_chr = 0; continue }
+                    if (c == "\"") { in_str = 1; continue }
+                    if (c == SQ) { in_chr = 1; continue }
+                    if (c == "{") { open_idx = i; break }
+                }
+                if (open_idx > 0) {
+                    saw_open = 1
+                    depth = 1
+                    rest = substr(ns, open_idx + 1)
+                    body = rest
+                    depth = 1 + count_braces(rest)
+                }
+            }
+
+            while (saw_open == 1 && depth > 0 && (getline nxt) > 0) {
+                ns = strip_line_comment(nxt)
+                body = body "\n" ns
+                depth = depth + count_braces(ns)
+            }
+
+            viol = scan_violations(body, strict)
+            emit(fname, FILENAME, pending_line, viol)
+            pending = 0
+            pending_line = 0
+            next
+        }
+
+        # if another annotation line, keep pending (stacked annotations)
+        if (substr(t, 1, 1) == "@") next
+
+        # otherwise, drop pending (e.g. stray line)
+        pending = 0
+        pending_line = 0
+    }
+}
+' "${FILES[@]}")
+
+# JSON escape helper
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//	/\\t}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    printf '%s' "$s"
+}
+
+TOTAL=0
+CLEAN=0
+VIOL_COUNT=0
+FN_JSON=""
+FIRST=1
+
+while IFS=$'\t' read -r fname file line viol; do
+    [[ -z "${fname:-}" ]] && continue
+    TOTAL=$((TOTAL + 1))
+
+    VIOL_JSON=""
+    if [[ -n "${viol:-}" ]]; then
+        VIOL_COUNT=$((VIOL_COUNT + 1))
+        IFS='|' read -ra VS <<< "$viol"
+        VFIRST=1
+        for v in "${VS[@]}"; do
+            ve=$(json_escape "$v")
+            if [[ $VFIRST -eq 1 ]]; then
+                VIOL_JSON="\"$ve\""
+                VFIRST=0
+            else
+                VIOL_JSON="$VIOL_JSON,\"$ve\""
+            fi
+        done
+    else
+        CLEAN=$((CLEAN + 1))
+    fi
+
+    fname_e=$(json_escape "$fname")
+    file_e=$(json_escape "$file")
+    ENTRY="{\"fn\":\"$fname_e\",\"file\":\"$file_e\",\"line\":$line,\"violations\":[$VIOL_JSON]}"
+
+    if [[ $FIRST -eq 1 ]]; then
+        FN_JSON="$ENTRY"
+        FIRST=0
+    else
+        FN_JSON="$FN_JSON,$ENTRY"
+    fi
+done <<< "$AWK_OUT"
+
+printf '{"version":"0.1","source":"grep-mvp","pure_fns":[%s],"summary":{"total":%d,"clean":%d,"violations":%d}}\n' \
+    "$FN_JSON" "$TOTAL" "$CLEAN" "$VIOL_COUNT"

@@ -1,0 +1,286 @@
+#!/bin/bash
+# hexa-antivirus — AI 자체 보안/백신 annotation 통합 수집기 (grep MVP, v0.1)
+#
+# 입력:
+#   hexa-antivirus <file.hexa> [<file2.hexa> ...]
+#   hexa-antivirus --dir <directory>
+#   hexa-antivirus [--kind antivirus|quarantine|heal|integrity|sandbox|cve|rce_guard|audit|canary|patch] <files...>
+#
+# 출력 (stdout JSON):
+#   { "version":"0.1", "source":"grep-mvp",
+#     "annotations":[ {kind, fn, file, line, meta{...}} ],
+#     "summary":{ antivirus, quarantine, heal, integrity, sandbox,
+#                 cve, rce_guard, audit, canary, patch, total } }
+#
+# 인식 annotation (fn decl 바로 위 라인, stacking 허용):
+#   @antivirus(signature="<id>", action="quarantine|block|alert")
+#   @quarantine(sandbox_id="<name>", duration_s=<int>)
+#   @heal(rollback_ckpt="<path>", verify="<hash|rerun>")
+#   @integrity(hash_algo="sha256|blake3", sbom=<bool>)
+#   @sandbox(caps="<list>", timeout_s=<int>, net=<bool>)
+#   @cve(id="<CVE-...>", severity="critical|high|medium|low")
+#   @rce_guard(sanitize=<bool>, eval_deny=<bool>)
+#   @audit(log_path="<path>", retention_days=<int>)
+#   @canary(trigger="<event>", watch_metric="<name>")
+#   @patch(auto=<bool>, window_h=<int>)
+#
+# exit 0 정상 (빈 annotations 포함). 1=인자 오류
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-antivirus [--kind antivirus|quarantine|heal|integrity|sandbox|cve|rce_guard|audit|canary|patch] <file.hexa> [file2.hexa ...]
+       hexa-antivirus [--kind ...] --dir <directory>
+EOF
+    exit 1
+}
+
+filter_kind=""
+files=()
+
+# parse args
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kind)
+            shift
+            [ $# -ge 1 ] || usage
+            case "$1" in
+                antivirus|quarantine|heal|integrity|sandbox|cve|rce_guard|audit|canary|patch) filter_kind="$1" ;;
+                *) echo "ERROR: invalid kind: $1" >&2; usage ;;
+            esac
+            shift
+            ;;
+        --dir)
+            shift
+            [ $# -ge 1 ] || usage
+            dir="$1"
+            [ -d "$dir" ] || { echo "ERROR: directory not found: $dir" >&2; exit 1; }
+            while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$dir" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            [ -f "$1" ] || { echo "ERROR: file not found: $1" >&2; exit 1; }
+            files+=("$1")
+            shift
+            ;;
+    esac
+done
+
+[ "${#files[@]}" -gt 0 ] || usage
+
+# awk 엔진 — annotation 라인을 stage 하고 fn decl 에서 flush.
+awk -v filter_kind="$filter_kind" '
+function json_escape(s,   r) {
+    r = s
+    gsub(/\\/, "\\\\", r)
+    gsub(/"/, "\\\"", r)
+    gsub(/\t/, "\\t", r)
+    gsub(/\r/, "\\r", r)
+    gsub(/\n/, "\\n", r)
+    return r
+}
+function extract_all_kv(line, kv_keys, kv_vals,    tmp, pos, rest, c, k, v, n, i, ch) {
+    # 모든 key=value 쌍을 수집 — depth 1 only
+    # strip leading @name( and trailing )
+    n = 0
+    delete kv_keys
+    delete kv_vals
+    tmp = line
+    # find opening paren — support @name or @snake_name
+    if (!match(tmp, /@[a-z_]+\(/)) return 0
+    tmp = substr(tmp, RSTART + RLENGTH)
+    # strip trailing ) optional — we just scan forward
+    while (1) {
+        sub(/^[[:space:],]+/, "", tmp)
+        if (length(tmp) == 0) break
+        if (substr(tmp, 1, 1) == ")") break
+        # key
+        if (!match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) break
+        k = substr(tmp, 1, RLENGTH)
+        tmp = substr(tmp, RLENGTH + 1)
+        sub(/^[[:space:]]*=[[:space:]]*/, "", tmp)
+        # value
+        if (substr(tmp, 1, 1) == "\"") {
+            v = ""
+            i = 2
+            while (i <= length(tmp)) {
+                ch = substr(tmp, i, 1)
+                if (ch == "\\" && i < length(tmp)) {
+                    v = v substr(tmp, i, 2)
+                    i += 2
+                    continue
+                }
+                if (ch == "\"") break
+                v = v ch
+                i++
+            }
+            tmp = substr(tmp, i + 1)
+            gsub(/\\"/, "\"", v)
+            gsub(/\\\\/, "\\", v)
+        } else {
+            if (match(tmp, /[,)[:space:]]/)) {
+                v = substr(tmp, 1, RSTART - 1)
+                tmp = substr(tmp, RSTART)
+            } else {
+                v = tmp
+                tmp = ""
+            }
+        }
+        n++
+        kv_keys[n] = k
+        kv_vals[n] = v
+    }
+    return n
+}
+
+BEGIN {
+    n_staged = 0
+    total = 0
+    cnt_antivirus  = 0
+    cnt_quarantine = 0
+    cnt_heal       = 0
+    cnt_integrity  = 0
+    cnt_sandbox    = 0
+    cnt_cve        = 0
+    cnt_rce_guard  = 0
+    cnt_audit      = 0
+    cnt_canary     = 0
+    cnt_patch      = 0
+}
+
+{
+    is_antivirus  = ($0 ~ /^[[:space:]]*@antivirus([[:space:]]*\(|[[:space:]]*$)/)
+    is_quarantine = ($0 ~ /^[[:space:]]*@quarantine([[:space:]]*\(|[[:space:]]*$)/)
+    is_heal       = ($0 ~ /^[[:space:]]*@heal([[:space:]]*\(|[[:space:]]*$)/)
+    is_integrity  = ($0 ~ /^[[:space:]]*@integrity([[:space:]]*\(|[[:space:]]*$)/)
+    is_sandbox    = ($0 ~ /^[[:space:]]*@sandbox([[:space:]]*\(|[[:space:]]*$)/)
+    is_cve        = ($0 ~ /^[[:space:]]*@cve([[:space:]]*\(|[[:space:]]*$)/)
+    is_rce_guard  = ($0 ~ /^[[:space:]]*@rce_guard([[:space:]]*\(|[[:space:]]*$)/)
+    is_audit      = ($0 ~ /^[[:space:]]*@audit([[:space:]]*\(|[[:space:]]*$)/)
+    is_canary     = ($0 ~ /^[[:space:]]*@canary([[:space:]]*\(|[[:space:]]*$)/)
+    is_patch      = ($0 ~ /^[[:space:]]*@patch([[:space:]]*\(|[[:space:]]*$)/)
+    is_anno = (is_antivirus || is_quarantine || is_heal || is_integrity || is_sandbox || is_cve || is_rce_guard || is_audit || is_canary || is_patch)
+    is_fn = ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
+    is_blank = ($0 ~ /^[[:space:]]*$/)
+    is_comment = ($0 ~ /^[[:space:]]*(\/\/|#)/)
+}
+
+is_anno {
+    line = $0
+    kind = ""
+    if      (is_antivirus)  kind = "antivirus"
+    else if (is_quarantine) kind = "quarantine"
+    else if (is_heal)       kind = "heal"
+    else if (is_integrity)  kind = "integrity"
+    else if (is_sandbox)    kind = "sandbox"
+    else if (is_cve)        kind = "cve"
+    else if (is_rce_guard)  kind = "rce_guard"
+    else if (is_audit)      kind = "audit"
+    else if (is_canary)     kind = "canary"
+    else if (is_patch)      kind = "patch"
+
+    n_staged++
+    staged_kind[n_staged] = kind
+    staged_line[n_staged] = FNR
+    staged_file[n_staged] = FILENAME
+
+    # meta 수집 — depth 1 key=value
+    delete kv_k
+    delete kv_v
+    nk = extract_all_kv(line, kv_k, kv_v)
+    staged_nkv[n_staged] = nk
+    for (i = 1; i <= nk; i++) {
+        staged_k[n_staged, i] = kv_k[i]
+        staged_v[n_staged, i] = kv_v[i]
+    }
+    next
+}
+
+is_fn && n_staged > 0 {
+    # extract fn name
+    fn_name = ""
+    tmp = $0
+    sub(/^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+/, "", tmp)
+    if (match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) {
+        fn_name = substr(tmp, 1, RLENGTH)
+    }
+
+    # emit each staged annotation (if filter matches)
+    for (s = 1; s <= n_staged; s++) {
+        k = staged_kind[s]
+        if (filter_kind != "" && filter_kind != k) continue
+
+        if (total > 0) printf ","
+        total++
+        if      (k == "antivirus")  cnt_antivirus++
+        else if (k == "quarantine") cnt_quarantine++
+        else if (k == "heal")       cnt_heal++
+        else if (k == "integrity")  cnt_integrity++
+        else if (k == "sandbox")    cnt_sandbox++
+        else if (k == "cve")        cnt_cve++
+        else if (k == "rce_guard")  cnt_rce_guard++
+        else if (k == "audit")      cnt_audit++
+        else if (k == "canary")     cnt_canary++
+        else if (k == "patch")      cnt_patch++
+
+        printf "{"
+        printf "\"kind\":\"%s\"", json_escape(k)
+        printf ",\"fn\":\"%s\"", json_escape(fn_name)
+        printf ",\"file\":\"%s\"", json_escape(staged_file[s])
+        printf ",\"line\":%d", staged_line[s]
+        printf ",\"meta\":{"
+        nk = staged_nkv[s]
+        for (i = 1; i <= nk; i++) {
+            if (i > 1) printf ","
+            printf "\"%s\":\"%s\"", json_escape(staged_k[s, i]), json_escape(staged_v[s, i])
+        }
+        printf "}"
+        printf "}"
+    }
+
+    # reset staging
+    for (s = 1; s <= n_staged; s++) {
+        delete staged_kind[s]
+        delete staged_line[s]
+        delete staged_file[s]
+        delete staged_nkv[s]
+    }
+    # wipe 2D
+    for (key in staged_k) delete staged_k[key]
+    for (key in staged_v) delete staged_v[key]
+    n_staged = 0
+    next
+}
+
+# blank breaks the block (discard staging unless followed by more annos)
+(!is_anno && !is_fn && !is_comment) {
+    if (n_staged > 0 && is_blank) {
+        for (s = 1; s <= n_staged; s++) {
+            delete staged_kind[s]
+            delete staged_line[s]
+            delete staged_file[s]
+            delete staged_nkv[s]
+        }
+        for (key in staged_k) delete staged_k[key]
+        for (key in staged_v) delete staged_v[key]
+        n_staged = 0
+    }
+}
+
+END {
+    # write summary to side channel (via tmpfile below)
+    printf "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d\n", cnt_antivirus, cnt_quarantine, cnt_heal, cnt_integrity, cnt_sandbox, cnt_cve, cnt_rce_guard, cnt_audit, cnt_canary, cnt_patch, total > "/dev/stderr"
+}
+' "${files[@]}" > /tmp/.hexa-antivirus.$$.body 2> /tmp/.hexa-antivirus.$$.summary
+
+body="$(cat /tmp/.hexa-antivirus.$$.body 2>/dev/null || true)"
+summary_line="$(cat /tmp/.hexa-antivirus.$$.summary 2>/dev/null || echo '0|0|0|0|0|0|0|0|0|0|0')"
+rm -f /tmp/.hexa-antivirus.$$.body /tmp/.hexa-antivirus.$$.summary
+
+IFS='|' read -r c_av c_qu c_he c_in c_sb c_cv c_rc c_au c_ca c_pa c_total <<< "$summary_line"
+
+printf '{"version":"0.1","source":"grep-mvp","annotations":[%s],"summary":{"antivirus":%d,"quarantine":%d,"heal":%d,"integrity":%d,"sandbox":%d,"cve":%d,"rce_guard":%d,"audit":%d,"canary":%d,"patch":%d,"total":%d}}\n' \
+    "$body" "${c_av:-0}" "${c_qu:-0}" "${c_he:-0}" "${c_in:-0}" "${c_sb:-0}" "${c_cv:-0}" "${c_rc:-0}" "${c_au:-0}" "${c_ca:-0}" "${c_pa:-0}" "${c_total:-0}"

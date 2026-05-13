@@ -1,0 +1,540 @@
+#!/usr/bin/env bash
+# hexa-readme — SSOT README/CHANGELOG generator from .hexa annotations
+#
+# usage:
+#   hexa-readme <file.hexa> [<file2.hexa> ...]
+#   hexa-readme --dir <directory>
+#   hexa-readme [--mode readme|changelog|json] <files...>
+#
+# annotations (7 kinds):
+#   @readme(section="overview|usage|install|api|license", order=<int>, body="<text>")
+#   @changelog(version="<semver>", kind="added|changed|fixed|removed|deprecated|security", body="<text>")
+#   @api_doc(public=true|false, stable=true|false, body="<text>")      — attaches to next fn
+#   @example(title="<text>", body="<code>")                            — usage section code block
+#   @badge(alt="<text>", url="<image_url>", link="<click_url>")
+#   @citation(bibtex="<...>")
+#   @license(spdx="<MIT|Apache-2.0|...>")
+#
+# modes:
+#   readme     (default) render README.md to stdout
+#   changelog  render CHANGELOG.md to stdout (versions descending)
+#   json       raw annotation dump with summary
+#
+# limitations:
+#   - naive quoted-string parsing: nested quotes not supported
+#   - body may not contain literal `"` unless not-consumed; use single-line strings
+#   - multi-line annotation not supported (one annotation per line)
+#   - api_doc/example attach only to *next* non-empty, non-comment, non-annotation line matching `fn NAME(`
+
+set -u
+
+print_usage() {
+    cat >&2 <<EOF
+usage: hexa-readme [--mode readme|changelog|json] <file.hexa> [file2.hexa ...]
+       hexa-readme [--mode ...] --dir <directory>
+EOF
+    exit 2
+}
+
+mode="readme"
+files=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --mode)
+            shift
+            [ $# -ge 1 ] || print_usage
+            case "$1" in
+                readme|changelog|json) mode="$1" ;;
+                *) echo "hexa-readme: invalid mode: $1" >&2; print_usage ;;
+            esac
+            shift
+            ;;
+        --dir)
+            shift
+            [ $# -ge 1 ] || print_usage
+            dir="$1"
+            [ -d "$dir" ] || { echo "hexa-readme: directory not found: $dir" >&2; exit 2; }
+            while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$dir" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0 2>/dev/null | LC_ALL=C sort -z)
+            shift
+            ;;
+        -h|--help)
+            print_usage
+            ;;
+        --)
+            shift
+            while [ $# -gt 0 ]; do
+                [ -f "$1" ] || { echo "hexa-readme: file not found: $1" >&2; exit 2; }
+                files+=("$1"); shift
+            done
+            ;;
+        *)
+            [ -f "$1" ] || { echo "hexa-readme: file not found: $1" >&2; exit 2; }
+            files+=("$1")
+            shift
+            ;;
+    esac
+done
+
+[ "${#files[@]}" -gt 0 ] || print_usage
+
+# infer project name from first file path
+infer_project() {
+    local p="$1"
+    if [[ "$p" == */nexus/* ]]; then echo "nexus"; return; fi
+    if [[ "$p" == */hexa-lang/* ]]; then echo "hexa-lang"; return; fi
+    if [[ "$p" == */Dev/*/* ]]; then
+        local tail="${p#*/Dev/}"
+        echo "${tail%%/*}"
+        return
+    fi
+    local d
+    d=$(dirname "$p")
+    echo "$(basename "$d")"
+}
+
+PROJECT=$(infer_project "${files[0]}")
+
+# TSV stream: kind \t k1 \t v1 \t k2 \t v2 \t k3 \t v3 \t fn_sig
+# columns:
+#   readme:    kind=readme    section  order  body
+#   changelog: kind=changelog version  kind2  body
+#   api_doc:   kind=api_doc   public   stable body   fn_sig
+#   example:   kind=example   title    body
+#   badge:     kind=badge     alt      url    link
+#   citation:  kind=citation  bibtex
+#   license:   kind=license   spdx
+TMP_RECORDS=$(mktemp -t hexa_readme_records.XXXXXX)
+trap 'rm -f "$TMP_RECORDS"' EXIT
+
+for f in "${files[@]}"; do
+    awk -v FNAME="$f" '
+    function extract_str(text, key,   pat, m, inner) {
+        # returns value inside key="..." or empty
+        pat = key "[ \t]*=[ \t]*\"[^\"]*\""
+        if (match(text, pat)) {
+            m = substr(text, RSTART, RLENGTH)
+            if (match(m, /"[^"]*"/)) {
+                inner = substr(m, RSTART + 1, RLENGTH - 2)
+                return inner
+            }
+        }
+        return ""
+    }
+    function extract_int(text, key,   pat, m, val) {
+        pat = key "[ \t]*=[ \t]*-?[0-9]+"
+        if (match(text, pat)) {
+            m = substr(text, RSTART, RLENGTH)
+            if (match(m, /-?[0-9]+/)) {
+                val = substr(m, RSTART, RLENGTH)
+                return val
+            }
+        }
+        return ""
+    }
+    function extract_bool(text, key,   pat, m) {
+        pat = key "[ \t]*=[ \t]*(true|false)"
+        if (match(text, pat)) {
+            m = substr(text, RSTART, RLENGTH)
+            if (match(m, /true|false/)) {
+                return substr(m, RSTART, RLENGTH)
+            }
+        }
+        return ""
+    }
+    function tsv_esc(s,   r) {
+        r = s
+        gsub(/\t/, " ", r)
+        gsub(/\r/, "", r)
+        gsub(/\n/, " ", r)
+        return r
+    }
+    function emit_pending_fn(sig,    i) {
+        # flush pending api_doc / example that require fn sig
+        for (i = 0; i < pend_n; i++) {
+            printf "%s\t%s\t%s\t%s\t%s\t%s\n",
+                pend_kind[i], pend_a[i], pend_b[i], pend_c[i], sig, FNAME
+        }
+        pend_n = 0
+    }
+    BEGIN { pend_n = 0 }
+    {
+        line = $0
+        sub(/\r$/, "", line)
+        tline = line
+        sub(/^[ \t]+/, "", tline)
+
+        # @readme(...)
+        if (match(tline, /^@readme[ \t]*\(/)) {
+            sec = extract_str(tline, "section")
+            ord = extract_int(tline, "order")
+            body = extract_str(tline, "body")
+            if (ord == "") ord = "0"
+            printf "readme\t%s\t%s\t%s\t\t%s\n",
+                tsv_esc(sec), tsv_esc(ord), tsv_esc(body), FNAME
+            next
+        }
+        # @changelog(...)
+        if (match(tline, /^@changelog[ \t]*\(/)) {
+            ver = extract_str(tline, "version")
+            ck = extract_str(tline, "kind")
+            body = extract_str(tline, "body")
+            printf "changelog\t%s\t%s\t%s\t\t%s\n",
+                tsv_esc(ver), tsv_esc(ck), tsv_esc(body), FNAME
+            next
+        }
+        # @badge(...)
+        if (match(tline, /^@badge[ \t]*\(/)) {
+            alt = extract_str(tline, "alt")
+            url = extract_str(tline, "url")
+            link = extract_str(tline, "link")
+            printf "badge\t%s\t%s\t%s\t\t%s\n",
+                tsv_esc(alt), tsv_esc(url), tsv_esc(link), FNAME
+            next
+        }
+        # @example(...)
+        if (match(tline, /^@example[ \t]*\(/)) {
+            title = extract_str(tline, "title")
+            body = extract_str(tline, "body")
+            printf "example\t%s\t%s\t\t\t%s\n",
+                tsv_esc(title), tsv_esc(body), FNAME
+            next
+        }
+        # @citation(...)
+        if (match(tline, /^@citation[ \t]*\(/)) {
+            bib = extract_str(tline, "bibtex")
+            printf "citation\t%s\t\t\t\t%s\n",
+                tsv_esc(bib), FNAME
+            next
+        }
+        # @license(...)
+        if (match(tline, /^@license[ \t]*\(/)) {
+            spdx = extract_str(tline, "spdx")
+            printf "license\t%s\t\t\t\t%s\n",
+                tsv_esc(spdx), FNAME
+            next
+        }
+        # @api_doc(...) — stage for next fn
+        if (match(tline, /^@api_doc[ \t]*\(/)) {
+            pub = extract_bool(tline, "public")
+            stb = extract_bool(tline, "stable")
+            body = extract_str(tline, "body")
+            pend_kind[pend_n] = "api_doc"
+            pend_a[pend_n] = tsv_esc(pub)
+            pend_b[pend_n] = tsv_esc(stb)
+            pend_c[pend_n] = tsv_esc(body)
+            pend_n++
+            next
+        }
+
+        # fn decl?
+        if (pend_n > 0 && match(tline, /^fn[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
+            sig = tline
+            br = index(sig, "{")
+            if (br > 0) sig = substr(sig, 1, br - 1)
+            sub(/[ \t]+$/, "", sig)
+            sub(/^fn[ \t]+/, "", sig)
+            emit_pending_fn(tsv_esc(sig))
+            next
+        }
+
+        # blank / comment preserves pending
+        if (tline == "" || tline ~ /^\/\// || tline ~ /^#/) next
+
+        # non-fn code line drops pending (avoid misattribution)
+        if (pend_n > 0) pend_n = 0
+    }
+    END {
+        # discard dangling api_doc without matching fn
+    }
+    ' "$f" >> "$TMP_RECORDS"
+done
+
+# dispatch to renderer
+case "$mode" in
+    readme)
+        awk -F'\t' -v project="$PROJECT" '
+        BEGIN {
+            n_badge = 0
+            n_sec = 0
+            n_ex = 0
+            n_api = 0
+            n_cit = 0
+            license_spdx = ""
+        }
+        $1 == "readme" {
+            # $2=section $3=order $4=body
+            sec = $2; ord = $3 + 0; body = $4
+            if (!(sec in sec_seen)) {
+                sec_seen[sec] = 1
+                sec_names[n_sec] = sec
+                sec_order[n_sec] = ord
+                n_sec++
+            }
+            idx = sec_count[sec]++
+            sec_body[sec, idx] = body
+            # keep min order across duplicates
+            if (!(sec in sec_min_order) || ord < sec_min_order[sec]) sec_min_order[sec] = ord
+            next
+        }
+        $1 == "badge" {
+            # $2=alt $3=url $4=link
+            badge_alt[n_badge] = $2
+            badge_url[n_badge] = $3
+            badge_link[n_badge] = $4
+            n_badge++
+            next
+        }
+        $1 == "example" {
+            # $2=title $3=body
+            ex_title[n_ex] = $2
+            ex_body[n_ex] = $3
+            n_ex++
+            next
+        }
+        $1 == "api_doc" {
+            # $2=public $3=stable $4=body $5=fn_sig
+            api_pub[n_api] = $2
+            api_stb[n_api] = $3
+            api_body[n_api] = $4
+            api_sig[n_api] = $5
+            n_api++
+            next
+        }
+        $1 == "citation" {
+            # $2=bibtex
+            cit[n_cit++] = $2
+            next
+        }
+        $1 == "license" {
+            # $2=spdx
+            license_spdx = $2
+            next
+        }
+        function sort_sections(    i, j, tmp_n, tmp_o) {
+            # insertion sort by sec_min_order ascending
+            for (i = 1; i < n_sec; i++) {
+                j = i
+                while (j > 0 && sec_min_order[sec_names[j-1]] > sec_min_order[sec_names[j]]) {
+                    tmp_n = sec_names[j-1]; sec_names[j-1] = sec_names[j]; sec_names[j] = tmp_n
+                    j--
+                }
+            }
+        }
+        END {
+            # header
+            printf "# %s\n\n", project
+            # badges
+            if (n_badge > 0) {
+                line = ""
+                for (i = 0; i < n_badge; i++) {
+                    alt = badge_alt[i]; url = badge_url[i]; link = badge_link[i]
+                    if (link != "") piece = "[![" alt "](" url ")](" link ")"
+                    else            piece = "![" alt "](" url ")"
+                    if (line != "") line = line " "
+                    line = line piece
+                }
+                printf "%s\n\n", line
+            }
+            sort_sections()
+            # render sections in order — usage section gets examples appended
+            for (i = 0; i < n_sec; i++) {
+                sec = sec_names[i]
+                printf "## %s\n\n", sec
+                cnt = sec_count[sec]
+                for (k = 0; k < cnt; k++) {
+                    printf "%s\n\n", sec_body[sec, k]
+                }
+                if (sec == "usage" && n_ex > 0) {
+                    for (k = 0; k < n_ex; k++) {
+                        printf "### example: %s\n\n", ex_title[k]
+                        printf "```\n%s\n```\n\n", ex_body[k]
+                    }
+                }
+                # if api section present, inject api_doc entries
+                if (sec == "api" && n_api > 0) {
+                    for (k = 0; k < n_api; k++) {
+                        pub = api_pub[k]; stb = api_stb[k]
+                        badges = ""
+                        if (pub == "true")  badges = badges "[public]"
+                        if (pub == "false") badges = badges "[private]"
+                        if (stb == "true")  badges = badges "[stable]"
+                        if (stb == "false") badges = badges "[unstable]"
+                        sep = (badges != "") ? " " : ""
+                        printf "### %s%s%s\n\n", api_sig[k], sep, badges
+                        printf "%s\n\n", api_body[k]
+                    }
+                }
+            }
+            # if api_doc present but no "api" section, emit default api section
+            if (n_api > 0) {
+                has_api = 0
+                for (i = 0; i < n_sec; i++) if (sec_names[i] == "api") has_api = 1
+                if (!has_api) {
+                    printf "## api\n\n"
+                    for (k = 0; k < n_api; k++) {
+                        pub = api_pub[k]; stb = api_stb[k]
+                        badges = ""
+                        if (pub == "true")  badges = badges "[public]"
+                        if (pub == "false") badges = badges "[private]"
+                        if (stb == "true")  badges = badges "[stable]"
+                        if (stb == "false") badges = badges "[unstable]"
+                        sep = (badges != "") ? " " : ""
+                        printf "### %s%s%s\n\n", api_sig[k], sep, badges
+                        printf "%s\n\n", api_body[k]
+                    }
+                }
+            }
+            # license short-form (only if no "license" section from @readme)
+            if (license_spdx != "") {
+                has_license_sec = 0
+                for (i = 0; i < n_sec; i++) if (sec_names[i] == "license") has_license_sec = 1
+                if (!has_license_sec) {
+                    printf "## license\n\n%s\n\n", license_spdx
+                }
+            }
+            # citation trailer
+            if (n_cit > 0) {
+                printf "---\n\n## citation\n\n"
+                for (k = 0; k < n_cit; k++) {
+                    printf "```bibtex\n%s\n```\n\n", cit[k]
+                }
+            }
+        }
+        ' "$TMP_RECORDS"
+        ;;
+
+    changelog)
+        awk -F'\t' '
+        BEGIN {
+            n_v = 0
+        }
+        $1 == "changelog" {
+            ver = $2; ck = $3; body = $4
+            if (!(ver in ver_seen)) {
+                ver_seen[ver] = 1
+                vers[n_v++] = ver
+            }
+            # group by kind within version
+            kkey = ver "\x1f" ck
+            if (!(kkey in kind_seen)) {
+                kind_seen[kkey] = 1
+                kind_count[ver] = (ver in kind_count) ? kind_count[ver] : 0
+                kind_list[ver, kind_count[ver]] = ck
+                kind_count[ver]++
+            }
+            idx = body_count[kkey]++
+            body_items[kkey, idx] = body
+            next
+        }
+        function cap(s) {
+            if (s == "") return s
+            return toupper(substr(s, 1, 1)) substr(s, 2)
+        }
+        # semver descending compare: returns 1 if a>b, -1 if a<b, 0 if equal
+        function sver_cmp(a, b,   ap, bp, i, na, nb, va, vb) {
+            na = split(a, ap, ".")
+            nb = split(b, bp, ".")
+            n = (na > nb) ? na : nb
+            for (i = 1; i <= n; i++) {
+                va = (i <= na) ? (ap[i] + 0) : 0
+                vb = (i <= nb) ? (bp[i] + 0) : 0
+                if (va > vb) return 1
+                if (va < vb) return -1
+            }
+            return 0
+        }
+        END {
+            # sort vers descending via insertion sort
+            for (i = 1; i < n_v; i++) {
+                j = i
+                while (j > 0 && sver_cmp(vers[j-1], vers[j]) < 0) {
+                    t = vers[j-1]; vers[j-1] = vers[j]; vers[j] = t
+                    j--
+                }
+            }
+            printf "# Changelog\n\n"
+            for (i = 0; i < n_v; i++) {
+                ver = vers[i]
+                printf "## [%s]\n\n", ver
+                kc = kind_count[ver]
+                for (k = 0; k < kc; k++) {
+                    ck = kind_list[ver, k]
+                    printf "### %s\n\n", cap(ck)
+                    kkey = ver "\x1f" ck
+                    bn = body_count[kkey]
+                    for (m = 0; m < bn; m++) {
+                        printf "- %s\n", body_items[kkey, m]
+                    }
+                    printf "\n"
+                }
+            }
+        }
+        ' "$TMP_RECORDS"
+        ;;
+
+    json)
+        awk -F'\t' '
+        function jesc(s,   r) {
+            r = s
+            gsub(/\\/, "\\\\", r)
+            gsub(/"/, "\\\"", r)
+            gsub(/\t/, "\\t", r)
+            gsub(/\r/, "\\r", r)
+            gsub(/\n/, "\\n", r)
+            return r
+        }
+        BEGIN {
+            n = 0
+            c_readme = 0; c_changelog = 0; c_api_doc = 0
+            c_example = 0; c_badge = 0; c_citation = 0; c_license = 0
+        }
+        {
+            kind = $1
+            if (kind == "readme")     { a[n]="readme";    p1[n]="section"; v1[n]=$2; p2[n]="order";  v2[n]=$3; p3[n]="body"; v3[n]=$4; sig[n]="";  file[n]=$6; c_readme++ }
+            else if (kind == "changelog"){ a[n]="changelog"; p1[n]="version"; v1[n]=$2; p2[n]="kind"; v2[n]=$3; p3[n]="body"; v3[n]=$4; sig[n]="";  file[n]=$6; c_changelog++ }
+            else if (kind == "api_doc")  { a[n]="api_doc";   p1[n]="public"; v1[n]=$2;  p2[n]="stable"; v2[n]=$3; p3[n]="body"; v3[n]=$4; sig[n]=$5; file[n]=$6; c_api_doc++ }
+            else if (kind == "example")  { a[n]="example";   p1[n]="title";  v1[n]=$2;  p2[n]="body";   v2[n]=$3; p3[n]="";      v3[n]="";  sig[n]=""; file[n]=$6; c_example++ }
+            else if (kind == "badge")    { a[n]="badge";     p1[n]="alt";    v1[n]=$2;  p2[n]="url";    v2[n]=$3; p3[n]="link";  v3[n]=$4;  sig[n]=""; file[n]=$6; c_badge++ }
+            else if (kind == "citation") { a[n]="citation";  p1[n]="bibtex"; v1[n]=$2;  p2[n]="";       v2[n]="";  p3[n]="";      v3[n]="";  sig[n]=""; file[n]=$6; c_citation++ }
+            else if (kind == "license")  { a[n]="license";   p1[n]="spdx";   v1[n]=$2;  p2[n]="";       v2[n]="";  p3[n]="";      v3[n]="";  sig[n]=""; file[n]=$6; c_license++ }
+            else next
+            n++
+        }
+        END {
+            printf "{\n"
+            printf "  \"version\": \"0.1\",\n"
+            printf "  \"source\": \"grep-mvp\",\n"
+            printf "  \"annotations\": ["
+            if (n == 0) {
+                printf "],\n"
+            } else {
+                printf "\n"
+                for (i = 0; i < n; i++) {
+                    printf "    {\"kind\": \"%s\"", jesc(a[i])
+                    if (p1[i] != "") printf ", \"%s\": \"%s\"", jesc(p1[i]), jesc(v1[i])
+                    if (p2[i] != "") printf ", \"%s\": \"%s\"", jesc(p2[i]), jesc(v2[i])
+                    if (p3[i] != "") printf ", \"%s\": \"%s\"", jesc(p3[i]), jesc(v3[i])
+                    if (sig[i] != "") printf ", \"fn\": \"%s\"", jesc(sig[i])
+                    printf ", \"file\": \"%s\"", jesc(file[i])
+                    printf "}"
+                    if (i < n - 1) printf ","
+                    printf "\n"
+                }
+                printf "  ],\n"
+            }
+            printf "  \"summary\": {\n"
+            printf "    \"readme\": %d,\n", c_readme
+            printf "    \"changelog\": %d,\n", c_changelog
+            printf "    \"api_doc\": %d,\n", c_api_doc
+            printf "    \"example\": %d,\n", c_example
+            printf "    \"badge\": %d,\n", c_badge
+            printf "    \"citation\": %d,\n", c_citation
+            printf "    \"license\": %d,\n", c_license
+            printf "    \"total\": %d\n", n
+            printf "  }\n"
+            printf "}\n"
+        }
+        ' "$TMP_RECORDS"
+        ;;
+esac

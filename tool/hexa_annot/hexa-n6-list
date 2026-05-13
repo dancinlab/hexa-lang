@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# hexa-n6-list — hexa 소스에서 @n6(identity="...", domain="...") 마커 추출 → JSON
+#
+# 입력:
+#   hexa-n6-list <file.hexa> [<file2>...]
+#   hexa-n6-list --dir <directory>
+#
+# 출력 (stdout JSON):
+#   { "version": "0.1",
+#     "source": "grep-mvp",
+#     "n6_tags": [ { identity, domain, target, name, file, line }, ... ],
+#     "summary": { total, by_domain{}, unique_identities } }
+#
+# 스캔 규칙:
+#   @n6(identity="X", domain="Y")  ← pending
+#   다음 유의미 토큰이 `fn <name>` 또는 `struct <Name>` → target/name 기록
+#   domain 누락 시 "unknown"
+#   unique_identities = Set(identity) 크기
+#
+# exit 0 정상 (빈 n6_tags 포함). 2=인자 오류
+
+set -u
+
+print_usage() {
+    echo "usage: hexa-n6-list <file.hexa> [<file2>...]" >&2
+    echo "       hexa-n6-list --dir <dir>" >&2
+}
+
+if [ $# -lt 1 ]; then
+    print_usage
+    exit 2
+fi
+
+FILES=()
+if [ "$1" = "--dir" ]; then
+    if [ $# -lt 2 ]; then
+        print_usage
+        exit 2
+    fi
+    DIR="$2"
+    if [ ! -d "$DIR" ]; then
+        echo "hexa-n6-list: directory not found: $DIR" >&2
+        exit 2
+    fi
+    while IFS= read -r -d '' f; do
+        FILES+=("$f")
+    done < <(find "$DIR" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name '*.hexa' -print0 2>/dev/null)
+else
+    for f in "$@"; do
+        if [ ! -f "$f" ]; then
+            echo "hexa-n6-list: file not found: $f" >&2
+            exit 2
+        fi
+        FILES+=("$f")
+    done
+fi
+
+# 빈 파일 목록 방어 (예: --dir 에 .hexa 없음)
+if [ "${#FILES[@]}" -eq 0 ]; then
+    printf '{\n  "version": "0.1",\n  "source": "grep-mvp",\n  "n6_tags": [],\n  "summary": { "total": 0, "by_domain": {}, "unique_identities": 0 }\n}\n'
+    exit 0
+fi
+
+awk '
+function json_escape(s,   out, i, c) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") out = out "\\\\"
+        else if (c == "\"") out = out "\\\""
+        else if (c == "\n") out = out "\\n"
+        else if (c == "\r") out = out "\\r"
+        else if (c == "\t") out = out "\\t"
+        else out = out c
+    }
+    return out
+}
+
+# @n6(...) 내부에서 key="value" 추출. 없으면 "" 반환.
+function extract_kv(line, key,   re, pos, rest, val, i, c) {
+    re = "[(, \t]" key "[ \t]*=[ \t]*\""
+    pos = match(line, re)
+    if (pos == 0) return ""
+    rest = substr(line, pos + RLENGTH)
+    val = ""
+    i = 1
+    while (i <= length(rest)) {
+        c = substr(rest, i, 1)
+        if (c == "\\" && i < length(rest)) {
+            val = val substr(rest, i + 1, 1)
+            i += 2
+            continue
+        }
+        if (c == "\"") break
+        val = val c
+        i++
+    }
+    return val
+}
+
+function emit_pending(fn_or_struct, target, name, line_no,   rec) {
+    if (!have_pending) return
+    rec = "    {\n"
+    rec = rec "      \"identity\": \"" json_escape(pending_identity) "\",\n"
+    rec = rec "      \"domain\": \""   json_escape(pending_domain)   "\",\n"
+    rec = rec "      \"target\": \""   json_escape(target)           "\",\n"
+    rec = rec "      \"name\": \""     json_escape(name)             "\",\n"
+    rec = rec "      \"file\": \""     json_escape(cur_file)         "\",\n"
+    rec = rec "      \"line\": "       line_no                       "\n"
+    rec = rec "    }"
+    records[++records_n] = rec
+
+    # summary 누적
+    by_domain[pending_domain]++
+    seen_identity[pending_identity] = 1
+    total++
+
+    pending_identity = ""
+    pending_domain = ""
+    have_pending = 0
+}
+
+BEGIN {
+    records_n = 0
+    total = 0
+    have_pending = 0
+    pending_identity = ""
+    pending_domain = ""
+    cur_file = ""
+}
+
+FNR == 1 {
+    cur_file = FILENAME
+    # 파일 경계에서 dangling pending discard
+    have_pending = 0
+    pending_identity = ""
+    pending_domain = ""
+}
+
+{
+    line = $0
+    sub(/\r$/, "", line)
+
+    # 공백/주석 라인은 pending 유지 (annotation 과 decl 사이 허용)
+    stripped = line
+    sub(/^[ \t]+/, "", stripped)
+    sub(/[ \t]+$/, "", stripped)
+    if (stripped == "") next
+    if (substr(stripped, 1, 2) == "//") next
+    if (substr(stripped, 1, 1) == "#")  next
+
+    # @n6(...) 마커 감지
+    if (match(line, /@n6[[:space:]]*\(/)) {
+        # 이전 pending 이 아직 남아 있으면 (decl 매칭 실패) 버림
+        ident = extract_kv(line, "identity")
+        dom   = extract_kv(line, "domain")
+        if (ident == "") {
+            # identity 없는 @n6 은 무시 — pending 갱신 X
+            next
+        }
+        if (dom == "") dom = "unknown"
+        pending_identity = ident
+        pending_domain = dom
+        have_pending = 1
+        next
+    }
+
+    # pending 존재 + fn/struct 선언 → emit
+    if (have_pending) {
+        # fn <name>   (pub fn 포함)
+        if (match(line, /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)) {
+            seg = substr(line, RSTART, RLENGTH)
+            sub(/^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+/, "", seg)
+            emit_pending("fn", "fn", seg, FNR)
+            next
+        }
+        # struct <Name>
+        if (match(line, /^[[:space:]]*(pub[[:space:]]+)?struct[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)) {
+            seg = substr(line, RSTART, RLENGTH)
+            sub(/^[[:space:]]*(pub[[:space:]]+)?struct[[:space:]]+/, "", seg)
+            emit_pending("struct", "struct", seg, FNR)
+            next
+        }
+        # 다른 decl/문이 오면 pending discard
+        have_pending = 0
+        pending_identity = ""
+        pending_domain = ""
+    }
+}
+
+END {
+    # n6_tags
+    printf "{\n"
+    printf "  \"version\": \"0.1\",\n"
+    printf "  \"source\": \"grep-mvp\",\n"
+    printf "  \"n6_tags\": ["
+    if (records_n == 0) {
+        printf "],\n"
+    } else {
+        printf "\n"
+        for (i = 1; i <= records_n; i++) {
+            printf "%s", records[i]
+            if (i < records_n) printf ","
+            printf "\n"
+        }
+        printf "  ],\n"
+    }
+
+    # summary
+    # unique_identities
+    uniq = 0
+    for (k in seen_identity) uniq++
+
+    printf "  \"summary\": {\n"
+    printf "    \"total\": %d,\n", total
+    printf "    \"by_domain\": {"
+    # 결정적 순서: 도메인 키 정렬
+    n_dom = 0
+    for (d in by_domain) {
+        n_dom++
+        dom_keys[n_dom] = d
+    }
+    # 삽입정렬 (n 작음)
+    for (i = 2; i <= n_dom; i++) {
+        k = dom_keys[i]
+        j = i - 1
+        while (j >= 1 && dom_keys[j] > k) {
+            dom_keys[j + 1] = dom_keys[j]
+            j--
+        }
+        dom_keys[j + 1] = k
+    }
+    if (n_dom == 0) {
+        printf "},\n"
+    } else {
+        printf "\n"
+        for (i = 1; i <= n_dom; i++) {
+            d = dom_keys[i]
+            printf "      \"%s\": %d", json_escape(d), by_domain[d]
+            if (i < n_dom) printf ","
+            printf "\n"
+        }
+        printf "    },\n"
+    }
+    printf "    \"unique_identities\": %d\n", uniq
+    printf "  }\n"
+    printf "}\n"
+}
+' "${FILES[@]}"

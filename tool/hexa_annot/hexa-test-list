@@ -1,0 +1,241 @@
+#!/bin/bash
+# hexa-test-list — @test / @bench annotation discovery (grep MVP, v0.1)
+#
+# 입력:
+#   hexa-test-list <file.hexa> [<file2.hexa> ...]
+#   hexa-test-list --dir <directory>
+#   hexa-test-list --kind test|bench [files...]
+#
+# 출력 (stdout JSON):
+#   { "version": "0.1", "source": "grep-mvp",
+#     "tests":   [ {kind, fn, file, line, args[]} ],
+#     "summary": {tests: N, benches: M} }
+#
+# 인식 annotation (fn decl 바로 위 라인):
+#   @test
+#   @bench
+#
+# 스캔 규칙:
+#   - @test 또는 @bench 라인 → pending
+#   - 직후 fn decl → 목록 기록 (파일/라인/args)
+#   - blank 또는 다른 구문은 pending 파기
+#
+# exit 0 정상. 1=인자 오류
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-test-list <file.hexa> [file2.hexa ...]
+       hexa-test-list --dir <directory>
+       hexa-test-list --kind test|bench [<files or --dir>]
+EOF
+    exit 1
+}
+
+kind_filter=""
+files=()
+
+# parse args — --kind 먼저, 나머지는 파일 또는 --dir
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kind)
+            shift
+            [ $# -ge 1 ] || usage
+            case "$1" in
+                test|bench) kind_filter="$1" ;;
+                *) echo "ERROR: --kind must be 'test' or 'bench'" >&2; exit 1 ;;
+            esac
+            shift
+            ;;
+        --dir)
+            shift
+            [ $# -ge 1 ] || usage
+            dir="$1"
+            [ -d "$dir" ] || { echo "ERROR: directory not found: $dir" >&2; exit 1; }
+            while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$dir" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            [ -f "$1" ] || { echo "ERROR: file not found: $1" >&2; exit 1; }
+            files+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [ ${#files[@]} -eq 0 ]; then
+    usage
+fi
+
+# awk 엔진 — pending annotation → 다음 fn 매칭 → JSON row emit
+awk -v kind_filter="$kind_filter" '
+function json_escape(s,   r) {
+    r = s
+    gsub(/\\/, "\\\\", r)
+    gsub(/"/, "\\\"", r)
+    gsub(/\t/, "\\t", r)
+    gsub(/\r/, "\\r", r)
+    gsub(/\n/, "\\n", r)
+    return r
+}
+
+# fn decl 에서 parenthesized arg list 추출 → args[] 배열 populate
+# returns count; args_out[1..n] = arg names (type 무시, 이름만)
+function extract_args(line, args_out,   lp, rp, inner, n, i, c, depth, buf, parts_ct, parts, comma_idx, name_part, j, ch) {
+    lp = index(line, "(")
+    if (lp == 0) return 0
+    # find matching close paren (depth counting)
+    depth = 0
+    rp = 0
+    for (i = lp; i <= length(line); i++) {
+        c = substr(line, i, 1)
+        if (c == "(") depth++
+        else if (c == ")") {
+            depth--
+            if (depth == 0) { rp = i; break }
+        }
+    }
+    if (rp == 0 || rp <= lp + 1) return 0
+    inner = substr(line, lp + 1, rp - lp - 1)
+    # trim
+    sub(/^[[:space:]]+/, "", inner)
+    sub(/[[:space:]]+$/, "", inner)
+    if (inner == "") return 0
+    # split on top-level commas (respect paren/angle depth)
+    depth = 0
+    buf = ""
+    parts_ct = 0
+    for (i = 1; i <= length(inner); i++) {
+        ch = substr(inner, i, 1)
+        if (ch == "(" || ch == "[" || ch == "<") depth++
+        else if (ch == ")" || ch == "]" || ch == ">") depth--
+        if (ch == "," && depth == 0) {
+            parts_ct++
+            parts[parts_ct] = buf
+            buf = ""
+        } else {
+            buf = buf ch
+        }
+    }
+    if (buf != "") {
+        parts_ct++
+        parts[parts_ct] = buf
+    }
+    n = 0
+    for (i = 1; i <= parts_ct; i++) {
+        name_part = parts[i]
+        sub(/^[[:space:]]+/, "", name_part)
+        sub(/[[:space:]]+$/, "", name_part)
+        if (name_part == "") continue
+        # strip leading "mut " or "&"
+        sub(/^mut[[:space:]]+/, "", name_part)
+        sub(/^&[[:space:]]*/, "", name_part)
+        # arg name = prefix up to ":" or space
+        if (match(name_part, /[:[:space:]]/)) {
+            name_part = substr(name_part, 1, RSTART - 1)
+        }
+        if (name_part == "") continue
+        n++
+        args_out[n] = name_part
+    }
+    return n
+}
+
+BEGIN {
+    pending_kind = ""
+    total = 0
+    n_tests = 0
+    n_benches = 0
+}
+
+# reset pending on file change
+FNR == 1 { pending_kind = "" }
+
+{
+    is_test_anno  = ($0 ~ /^[[:space:]]*@test[[:space:]]*$/)
+    is_bench_anno = ($0 ~ /^[[:space:]]*@bench[[:space:]]*$/)
+    is_fn         = ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
+    is_blank      = ($0 ~ /^[[:space:]]*$/)
+    is_comment    = ($0 ~ /^[[:space:]]*\/\//)
+    is_anno_other = ($0 ~ /^[[:space:]]*@[a-z]+/)
+}
+
+is_test_anno  { pending_kind = "test";  next }
+is_bench_anno { pending_kind = "bench"; next }
+
+is_fn && pending_kind != "" {
+    # extract fn name
+    line = $0
+    match(line, /fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
+    fn_decl = substr(line, RSTART, RLENGTH)
+    sub(/^fn[[:space:]]+/, "", fn_decl)
+    fn_name = fn_decl
+
+    # extract args
+    delete args_list
+    n_args = extract_args(line, args_list)
+
+    # filter
+    emit = 1
+    if (kind_filter != "" && kind_filter != pending_kind) emit = 0
+
+    if (emit) {
+        if (total > 0) printf ","
+        total++
+        printf "{"
+        printf "\"kind\":\"%s\"",  json_escape(pending_kind)
+        printf ",\"fn\":\"%s\"",   json_escape(fn_name)
+        printf ",\"file\":\"%s\"", json_escape(FILENAME)
+        printf ",\"line\":%d",     FNR
+        printf ",\"args\":["
+        for (i = 1; i <= n_args; i++) {
+            if (i > 1) printf ","
+            printf "\"%s\"", json_escape(args_list[i])
+        }
+        printf "]"
+        printf "}"
+    }
+
+    # summary counters unaffected by --kind filter output, but we want filtered counts?
+    # spec says summary reflects emitted set. Use filtered counts.
+    if (emit) {
+        if (pending_kind == "test")  n_tests++
+        else if (pending_kind == "bench") n_benches++
+    }
+
+    pending_kind = ""
+    next
+}
+
+# blank or other anno or non-fn, non-comment → break pending
+(!is_test_anno && !is_bench_anno && !is_fn) {
+    if (pending_kind != "" && (is_blank || (is_anno_other && !is_comment))) {
+        pending_kind = ""
+    }
+}
+
+END {
+    # counts emitted via shell wrapper stderr side-channel
+    printf "\n__SUMMARY__ %d %d\n", n_tests, n_benches > "/dev/stderr"
+}
+' "${files[@]}" > /tmp/.hexa-test-list.$$.body 2> /tmp/.hexa-test-list.$$.err
+
+# parse summary from stderr
+summary_line="$(grep -E '^__SUMMARY__' /tmp/.hexa-test-list.$$.err 2>/dev/null | tail -1 || true)"
+n_tests=0
+n_benches=0
+if [ -n "$summary_line" ]; then
+    # shellcheck disable=SC2086
+    set -- $summary_line
+    n_tests="${2:-0}"
+    n_benches="${3:-0}"
+fi
+
+body="$(cat /tmp/.hexa-test-list.$$.body 2>/dev/null || true)"
+rm -f /tmp/.hexa-test-list.$$.body /tmp/.hexa-test-list.$$.err
+
+printf '{"version":"0.1","source":"grep-mvp","tests":[%s],"summary":{"tests":%d,"benches":%d}}\n' \
+    "$body" "$n_tests" "$n_benches"

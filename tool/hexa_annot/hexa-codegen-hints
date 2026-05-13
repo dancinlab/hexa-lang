@@ -1,0 +1,199 @@
+#!/bin/bash
+# hexa-codegen-hints — hexa 소스 codegen 힌트 annotation 추출기 (grep MVP, v0.1)
+#
+# 입력:
+#   hexa-codegen-hints <file.hexa> [<file2.hexa> ...]
+#   hexa-codegen-hints --dir <directory>
+#
+# 출력 (stdout JSON):
+#   { "version": "0.1", "source": "grep-mvp",
+#     "hints": [ {kind, fn, file, line, args} ],
+#     "summary": {inline, no_inline, cold, deprecated, total} }
+#
+# 인식 annotation (fn decl 바로 위 라인, stacking 허용):
+#   @inline
+#   @no_inline
+#   @cold
+#   @deprecated(since="1.0", reason="use new_api")
+#
+# exit 0 정상 (빈 hints 포함). 1=인자 오류
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-codegen-hints <file.hexa> [file2.hexa ...]
+       hexa-codegen-hints --dir <directory>
+EOF
+    exit 1
+}
+
+files=()
+if [ $# -eq 0 ]; then
+    usage
+fi
+
+if [ "$1" = "--dir" ]; then
+    shift
+    [ $# -eq 1 ] || usage
+    dir="$1"
+    [ -d "$dir" ] || { echo "ERROR: directory not found: $dir" >&2; exit 1; }
+    while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$dir" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
+else
+    for arg in "$@"; do
+        [ -f "$arg" ] || { echo "ERROR: file not found: $arg" >&2; exit 1; }
+        files+=("$arg")
+    done
+fi
+
+# awk 엔진 — annotation stack → fn 이름 매핑 → JSON hints body
+awk '
+function json_escape(s,   r) {
+    r = s
+    gsub(/\\/, "\\\\", r)
+    gsub(/"/, "\\\"", r)
+    gsub(/\t/, "\\t", r)
+    gsub(/\r/, "\\r", r)
+    gsub(/\n/, "\\n", r)
+    return r
+}
+function trim(s) {
+    sub(/^[[:space:]]+/, "", s)
+    sub(/[[:space:]]+$/, "", s)
+    return s
+}
+
+BEGIN {
+    n_stack = 0         # staged annotations awaiting next fn
+    total = 0
+    sum_inline = 0
+    sum_no_inline = 0
+    sum_cold = 0
+    sum_deprecated = 0
+}
+
+{
+    line = $0
+    is_inline     = (line ~ /^[[:space:]]*@inline[[:space:]]*$/)
+    is_no_inline  = (line ~ /^[[:space:]]*@no_inline[[:space:]]*$/)
+    is_cold       = (line ~ /^[[:space:]]*@cold[[:space:]]*$/)
+    is_deprecated = (line ~ /^[[:space:]]*@deprecated[[:space:]]*\(/)
+    is_anno = (is_inline || is_no_inline || is_cold || is_deprecated)
+    is_fn = (line ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
+    is_blank = (line ~ /^[[:space:]]*$/)
+    is_comment = (line ~ /^[[:space:]]*\/\//)
+}
+
+is_anno {
+    n_stack++
+    stack_line[n_stack] = FNR
+    stack_file[n_stack] = FILENAME
+    if (is_inline) {
+        stack_kind[n_stack] = "inline"
+        stack_args[n_stack] = ""
+    } else if (is_no_inline) {
+        stack_kind[n_stack] = "no_inline"
+        stack_args[n_stack] = ""
+    } else if (is_cold) {
+        stack_kind[n_stack] = "cold"
+        stack_args[n_stack] = ""
+    } else if (is_deprecated) {
+        stack_kind[n_stack] = "deprecated"
+        # raw args inside @deprecated( ... )
+        args = ""
+        if (match(line, /@deprecated[[:space:]]*\(/)) {
+            rest = substr(line, RSTART + RLENGTH)
+            # find matching closing paren at the end (simple: last ")")
+            # robust for same-line close
+            if (match(rest, /\)[[:space:]]*$/)) {
+                args = substr(rest, 1, RSTART - 1)
+            } else {
+                # fallback — strip trailing ")" if present anywhere
+                sub(/\)[[:space:]]*$/, "", rest)
+                args = rest
+            }
+        }
+        stack_args[n_stack] = trim(args)
+    }
+    next
+}
+
+is_fn && n_stack > 0 {
+    # match fn name
+    fn_name = ""
+    tmp = line
+    sub(/^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+/, "", tmp)
+    if (match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) {
+        fn_name = substr(tmp, RSTART, RLENGTH)
+    }
+    for (i = 1; i <= n_stack; i++) {
+        if (total > 0) printf ","
+        total++
+        k = stack_kind[i]
+        if (k == "inline") sum_inline++
+        else if (k == "no_inline") sum_no_inline++
+        else if (k == "cold") sum_cold++
+        else if (k == "deprecated") sum_deprecated++
+        printf "{"
+        printf "\"kind\":\"%s\"", json_escape(k)
+        printf ",\"fn\":\"%s\"", json_escape(fn_name)
+        printf ",\"file\":\"%s\"", json_escape(stack_file[i])
+        printf ",\"line\":%d", stack_line[i]
+        printf ",\"args\":\"%s\"", json_escape(stack_args[i])
+        printf "}"
+    }
+    # clear stack
+    for (i = 1; i <= n_stack; i++) {
+        delete stack_kind[i]
+        delete stack_args[i]
+        delete stack_line[i]
+        delete stack_file[i]
+    }
+    n_stack = 0
+    next
+}
+
+# blank line breaks staging when no fn appeared
+(!is_anno && !is_fn && !is_comment) {
+    if (n_stack > 0 && is_blank) {
+        for (i = 1; i <= n_stack; i++) {
+            delete stack_kind[i]
+            delete stack_args[i]
+            delete stack_line[i]
+            delete stack_file[i]
+        }
+        n_stack = 0
+    }
+}
+
+END {
+    # counts written to aux file via exit code path — emit to stderr sentinels
+    printf "\n__SUM_INLINE__=%d\n", sum_inline > "/dev/stderr"
+    printf "__SUM_NO_INLINE__=%d\n", sum_no_inline > "/dev/stderr"
+    printf "__SUM_COLD__=%d\n", sum_cold > "/dev/stderr"
+    printf "__SUM_DEPRECATED__=%d\n", sum_deprecated > "/dev/stderr"
+    printf "__SUM_TOTAL__=%d\n", total > "/dev/stderr"
+}
+' "${files[@]}" > "/tmp/.hexa-codegen-hints.$$.body" 2> "/tmp/.hexa-codegen-hints.$$.sum"
+
+body="$(cat "/tmp/.hexa-codegen-hints.$$.body" 2>/dev/null || true)"
+
+# parse summary sentinels
+sum_inline=0
+sum_no_inline=0
+sum_cold=0
+sum_deprecated=0
+sum_total=0
+while IFS='=' read -r k v; do
+    case "$k" in
+        __SUM_INLINE__)     sum_inline="$v"     ;;
+        __SUM_NO_INLINE__)  sum_no_inline="$v"  ;;
+        __SUM_COLD__)       sum_cold="$v"       ;;
+        __SUM_DEPRECATED__) sum_deprecated="$v" ;;
+        __SUM_TOTAL__)      sum_total="$v"      ;;
+    esac
+done < "/tmp/.hexa-codegen-hints.$$.sum"
+
+rm -f "/tmp/.hexa-codegen-hints.$$.body" "/tmp/.hexa-codegen-hints.$$.sum"
+
+printf '{"version":"0.1","source":"grep-mvp","hints":[%s],"summary":{"inline":%d,"no_inline":%d,"cold":%d,"deprecated":%d,"total":%d}}\n' \
+    "$body" "$sum_inline" "$sum_no_inline" "$sum_cold" "$sum_deprecated" "$sum_total"

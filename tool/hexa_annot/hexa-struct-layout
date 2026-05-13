@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+# hexa-struct-layout — extract @repr("c") / @align(N) / @pack + struct fields → layout JSON
+# usage: hexa-struct-layout <file.hexa> [<file2>...]
+#        hexa-struct-layout --dir <dir>
+
+set -u
+
+print_usage() {
+    echo "usage: hexa-struct-layout <file.hexa> [<file2>...]" >&2
+    echo "       hexa-struct-layout --dir <dir>" >&2
+}
+
+if [ $# -lt 1 ]; then
+    print_usage
+    exit 2
+fi
+
+FILES=()
+if [ "$1" = "--dir" ]; then
+    if [ $# -lt 2 ]; then
+        print_usage
+        exit 2
+    fi
+    DIR="$2"
+    if [ ! -d "$DIR" ]; then
+        echo "hexa-struct-layout: directory not found: $DIR" >&2
+        exit 2
+    fi
+    while IFS= read -r -d '' f; do
+        FILES+=("$f")
+    done < <(find "$DIR" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name '*.hexa' -print0 2>/dev/null)
+else
+    for f in "$@"; do
+        if [ ! -f "$f" ]; then
+            echo "hexa-struct-layout: file not found: $f" >&2
+            exit 2
+        fi
+        FILES+=("$f")
+    done
+fi
+
+# awk does the heavy lifting.
+# States:
+#   0 = scanning top-level; may accumulate pending @repr/@align/@pack annotations
+#   2 = inside struct body; collect `name: type` until `}`
+#   3 = saw `struct Name` on its own line; expect `{` next
+awk '
+function json_escape(s,   out, i, c) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") out = out "\\\\"
+        else if (c == "\"") out = out "\\\""
+        else if (c == "\n") out = out "\\n"
+        else if (c == "\r") out = out "\\r"
+        else if (c == "\t") out = out "\\t"
+        else {
+            if (match(c, /[\x20-\x7e]/)) out = out c
+            else out = out c
+        }
+    }
+    return out
+}
+
+function reset_pending() {
+    pend_repr = ""
+    pend_align = 0
+    pend_packed = 0
+    pend_has_repr = 0
+    pend_has_align = 0
+}
+
+function emit_record(   rec, k, sep) {
+    # only emit if struct has at least one of @repr / @align / @pack
+    if (have_struct && (cur_has_repr || cur_has_align || cur_packed)) {
+        rec = "    {\n"
+        rec = rec "      \"name\": \""   json_escape(cur_struct) "\",\n"
+        if (cur_has_repr) {
+            rec = rec "      \"repr\": \"" json_escape(cur_repr) "\",\n"
+        } else {
+            rec = rec "      \"repr\": null,\n"
+        }
+        if (cur_has_align) {
+            rec = rec "      \"align\": " cur_align ",\n"
+        } else {
+            rec = rec "      \"align\": null,\n"
+        }
+        rec = rec "      \"packed\": " (cur_packed ? "true" : "false") ",\n"
+        rec = rec "      \"file\": \""   json_escape(cur_file) "\",\n"
+        rec = rec "      \"line\": "     cur_line ",\n"
+        rec = rec "      \"fields\": ["
+        if (fields_n == 0) {
+            rec = rec "]"
+        } else {
+            rec = rec "\n"
+            for (k = 1; k <= fields_n; k++) {
+                sep = (k < fields_n) ? "," : ""
+                rec = rec "        {\"name\": \"" json_escape(fnames[k]) "\", \"type\": \"" json_escape(ftypes[k]) "\"}" sep "\n"
+            }
+            rec = rec "      ]"
+        }
+        rec = rec "\n    }"
+        records[++records_n] = rec
+
+        total_n++
+        if (cur_has_repr && cur_repr == "c") with_repr_c_n++
+        if (cur_has_align) aligned_n++
+        if (cur_packed) packed_n++
+    }
+    cur_struct = ""; cur_line = 0
+    cur_repr = ""; cur_align = 0; cur_packed = 0
+    cur_has_repr = 0; cur_has_align = 0
+    fields_n = 0
+    have_struct = 0
+    state = 0
+    reset_pending()
+}
+
+BEGIN {
+    state = 0
+    records_n = 0
+    have_struct = 0
+    fields_n = 0
+    total_n = 0
+    with_repr_c_n = 0
+    aligned_n = 0
+    packed_n = 0
+    reset_pending()
+}
+
+FNR == 1 {
+    cur_file = FILENAME
+    if (state != 0) {
+        cur_struct = ""; cur_line = 0
+        cur_repr = ""; cur_align = 0; cur_packed = 0
+        cur_has_repr = 0; cur_has_align = 0
+        fields_n = 0
+        have_struct = 0
+        state = 0
+    }
+    reset_pending()
+}
+
+{
+    line = $0
+    sub(/\r$/, "", line)
+
+    if (state == 0) {
+        # strip leading whitespace for annotation/struct detection
+        stripped = line
+        sub(/^[[:space:]]+/, "", stripped)
+
+        # blank / comment → keep pending
+        if (stripped == "") next
+        if (substr(stripped, 1, 2) == "//") next
+        if (substr(stripped, 1, 1) == "#")  next
+
+        # @repr("X")
+        if (match(line, /@repr[[:space:]]*\([[:space:]]*"[^"]*"[[:space:]]*\)/)) {
+            seg = substr(line, RSTART, RLENGTH)
+            q1 = index(seg, "\"")
+            rest = substr(seg, q1 + 1)
+            q2 = index(rest, "\"")
+            pend_repr = substr(rest, 1, q2 - 1)
+            pend_has_repr = 1
+            next
+        }
+
+        # @align(N)
+        if (match(line, /@align[[:space:]]*\([[:space:]]*[0-9]+[[:space:]]*\)/)) {
+            seg = substr(line, RSTART, RLENGTH)
+            if (match(seg, /[0-9]+/)) {
+                pend_align = substr(seg, RSTART, RLENGTH) + 0
+                pend_has_align = 1
+            }
+            next
+        }
+
+        # @pack (no args, or @pack() ) — must not match @packed or similar
+        if (match(line, /@pack[[:space:]]*(\([[:space:]]*\))?[[:space:]]*$/) \
+            || match(line, /@pack[[:space:]]*(\([[:space:]]*\))?[[:space:]]+/)) {
+            # confirm token boundary: character after "@pack" must not be alnum/underscore
+            after_pos = RSTART + 5   # length("@pack") == 5
+            nextch = substr(line, after_pos, 1)
+            if (nextch == "" || nextch == " " || nextch == "\t" || nextch == "(" || nextch == ")") {
+                pend_packed = 1
+                next
+            }
+        }
+
+        # struct <Name> { on one line
+        if (match(line, /struct[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\{/)) {
+            seg = substr(line, RSTART, RLENGTH)
+            sub(/^struct[[:space:]]+/, "", seg)
+            sub(/[[:space:]]*\{.*$/, "", seg)
+            cur_struct = seg
+            have_struct = 1
+            cur_line = FNR
+            # commit pending annotations
+            cur_repr = pend_repr; cur_has_repr = pend_has_repr
+            cur_align = pend_align; cur_has_align = pend_has_align
+            cur_packed = pend_packed
+            reset_pending()
+            fields_n = 0
+            state = 2
+            next
+        }
+
+        # struct <Name> on its own line, expect `{` next
+        if (match(line, /^[[:space:]]*struct[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) {
+            s = line
+            sub(/^[[:space:]]*struct[[:space:]]+/, "", s)
+            sub(/[[:space:]]*$/, "", s)
+            cur_struct = s
+            have_struct = 1
+            cur_line = FNR
+            cur_repr = pend_repr; cur_has_repr = pend_has_repr
+            cur_align = pend_align; cur_has_align = pend_has_align
+            cur_packed = pend_packed
+            reset_pending()
+            fields_n = 0
+            state = 3
+            next
+        }
+
+        # any other non-annotation line drops pending annotations
+        reset_pending()
+    } else if (state == 3) {
+        stripped = line
+        sub(/^[[:space:]]+/, "", stripped)
+        if (stripped == "") next
+        if (substr(stripped, 1, 1) == "{") {
+            state = 2
+            next
+        }
+        # unexpected token — discard pending struct capture
+        have_struct = 0
+        cur_struct = ""
+        cur_has_repr = 0; cur_has_align = 0; cur_packed = 0
+        state = 0
+    } else if (state == 2) {
+        stripped = line
+        sub(/^[[:space:]]+/, "", stripped)
+        sub(/[[:space:]]+$/, "", stripped)
+
+        if (stripped == "") next
+        if (substr(stripped, 1, 2) == "//") next
+        if (substr(stripped, 1, 1) == "#")  next
+
+        if (substr(stripped, 1, 1) == "}") {
+            emit_record()
+            next
+        }
+
+        body = stripped
+        sub(/,+[[:space:]]*$/, "", body)
+        idx = index(body, "//")
+        if (idx > 0) {
+            body = substr(body, 1, idx - 1)
+            sub(/[[:space:]]+$/, "", body)
+        }
+        if (body == "") next
+
+        colon = index(body, ":")
+        if (colon > 0) {
+            fname = substr(body, 1, colon - 1)
+            ftype = substr(body, colon + 1)
+            sub(/^[[:space:]]+/, "", fname); sub(/[[:space:]]+$/, "", fname)
+            sub(/^[[:space:]]+/, "", ftype); sub(/[[:space:]]+$/, "", ftype)
+            sub(/[,;]+$/, "", ftype)
+            sub(/[[:space:]]+$/, "", ftype)
+            if (fname != "" && ftype != "" && fname ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+                fields_n++
+                fnames[fields_n] = fname
+                ftypes[fields_n] = ftype
+            }
+        }
+    }
+}
+
+END {
+    if (state == 2 && have_struct) {
+        emit_record()
+    }
+
+    printf "{\n"
+    printf "  \"version\": \"0.1\",\n"
+    printf "  \"source\": \"grep-mvp\",\n"
+    printf "  \"structs\": ["
+    if (records_n == 0) {
+        printf "],\n"
+    } else {
+        printf "\n"
+        for (i = 1; i <= records_n; i++) {
+            printf "%s", records[i]
+            if (i < records_n) printf ","
+            printf "\n"
+        }
+        printf "  ],\n"
+    }
+    printf "  \"summary\": {\"total\": %d, \"with_repr_c\": %d, \"aligned\": %d, \"packed\": %d}\n", total_n, with_repr_c_n, aligned_n, packed_n
+    printf "}\n"
+}
+' "${FILES[@]}"

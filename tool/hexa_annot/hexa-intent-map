@@ -1,0 +1,330 @@
+#!/bin/bash
+# hexa-intent-map — @intent(description: "...") annotation collector → fn 의도 지도 JSON (v0.1)
+#
+# 입력:
+#   hexa-intent-map <file.hexa> [<file2.hexa> ...]
+#   hexa-intent-map --dir <directory>
+#   hexa-intent-map --project <name>           # resolves $HOME/core/<name> (legacy: $HOME/Dev/<name>)
+#
+# 출력 (stdout JSON):
+#   { "version":"0.1", "source":"grep-mvp",
+#     "intents":[ {fn, description, file, line, fallback} ],
+#     "summary":{ total, files, fallback_count } }
+#
+# 인식 패턴:
+#   @intent(description: "<text>")       다음 fn decl 로 매핑
+#   // FALLBACK: ...                      같은 줄 또는 다음 줄 → fallback:true
+#
+# 대용량 처리: --dir / --project 스캔은 grep 사전필터 + 배치 awk 로 argv blow-up 회피.
+# exit: 0 정상(빈 intents 포함), 1 인자 오류
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-intent-map <file.hexa> [file2.hexa ...]
+       hexa-intent-map --dir <directory>
+       hexa-intent-map --project anima
+EOF
+    exit 1
+}
+
+files=()
+mode="explicit"   # explicit | dir | project
+scan_root=""
+
+# parse args
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dir)
+            shift
+            [ $# -ge 1 ] || usage
+            scan_root="$1"
+            [ -d "$scan_root" ] || { echo "ERROR: directory not found: $scan_root" >&2; exit 1; }
+            mode="dir"
+            shift
+            ;;
+        --project)
+            shift
+            [ $# -ge 1 ] || usage
+            # Generic resolution: try $HOME/core/<name> first, then $HOME/Dev/<name>.
+            _proj="$1"
+            scan_root=""
+            for cand in "${HOME}/core/${_proj}" "${HOME}/Dev/${_proj}"; do
+                if [ -d "$cand" ]; then scan_root="$cand"; break; fi
+            done
+            [ -n "$scan_root" ] || { echo "ERROR: project directory not found for '$_proj' (tried \$HOME/core/$_proj, \$HOME/Dev/$_proj)" >&2; exit 1; }
+            mode="project"
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            [ -f "$1" ] || { echo "ERROR: file not found: $1" >&2; exit 1; }
+            files+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# For explicit-file mode we must have at least 1 file.
+# For dir/project mode, empty file set is valid (emit empty summary).
+if [ "$mode" = "explicit" ] && [ "${#files[@]}" -eq 0 ]; then
+    usage
+fi
+
+# awk program — stage @intent annotations, flush on next fn decl. Emits JSON
+# object fragments separated by "," (no outer brackets). Summary to stderr:
+#   <total>|<files>|<fallback_count>|<leading_comma_flag>
+# leading_comma_flag = 1 if output ends with comma (useful to chain batches).
+AWK_PROG='
+function json_escape(s,   r) {
+    r = s
+    gsub(/\\/, "\\\\", r)
+    gsub(/"/, "\\\"", r)
+    gsub(/\t/, "\\t", r)
+    gsub(/\r/, "\\r", r)
+    gsub(/\n/, "\\n", r)
+    return r
+}
+function extract_description(line,   pos, rest, val, i, c) {
+    if (!match(line, /@intent[[:space:]]*\(/)) return ""
+    rest = substr(line, RSTART + RLENGTH)
+    pos = match(rest, /description[[:space:]]*[:=][[:space:]]*/)
+    if (pos == 0) return ""
+    rest = substr(rest, pos + RLENGTH)
+    if (substr(rest, 1, 1) != "\"") return ""
+    val = ""
+    i = 2
+    while (i <= length(rest)) {
+        c = substr(rest, i, 1)
+        if (c == "\\" && i < length(rest)) {
+            val = val substr(rest, i, 2)
+            i += 2
+            continue
+        }
+        if (c == "\"") break
+        val = val c
+        i++
+    }
+    gsub(/\\"/, "\"", val)
+    gsub(/\\\\/, "\\", val)
+    return val
+}
+function has_fallback_comment(line) {
+    return (line ~ /\/\/[[:space:]]*FALLBACK:/)
+}
+
+BEGIN {
+    prefix = (ENVIRON["HIM_LEADING_COMMA"] == "1") ? "," : ""
+    n_staged = 0
+    total = 0
+    fallback_count = 0
+    file_count = 0
+    pending_fallback_check = 0
+    emitted_any = 0
+}
+
+FNR == 1 {
+    n_staged = 0
+    pending_fallback_check = 0
+}
+
+{
+    is_intent = ($0 ~ /@intent[[:space:]]*\(/)
+    is_fn = ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
+    is_blank = ($0 ~ /^[[:space:]]*$/)
+    is_fallback_comment = has_fallback_comment($0)
+}
+
+pending_fallback_check && !is_intent {
+    if (is_fallback_comment && n_staged > 0) {
+        staged_fallback[n_staged] = 1
+    }
+    pending_fallback_check = 0
+}
+
+is_intent {
+    desc = extract_description($0)
+    fb = (is_fallback_comment ? 1 : 0)
+    n_staged++
+    staged_desc[n_staged] = desc
+    staged_line[n_staged] = FNR
+    staged_file[n_staged] = FILENAME
+    staged_fallback[n_staged] = fb
+    # If @intent(...) did not include description on this line, mark slot as
+    # "desc-pending" so subsequent lines can provide it (multi-line @intent).
+    staged_desc_pending[n_staged] = (desc == "" ? 1 : 0)
+    pending_fallback_check = (fb ? 0 : 1)
+    if (!(FILENAME in seen_file)) {
+        seen_file[FILENAME] = 1
+        file_count++
+    }
+    next
+}
+
+# Continuation lines: if the most recently-staged intent had no description,
+# scan this line for `description: "..."` (multi-line @intent form). FALLBACK
+# comment on same line still applies.
+n_staged > 0 && staged_desc_pending[n_staged] && !is_fn && !is_blank {
+    if (match($0, /description[[:space:]]*[:=][[:space:]]*"/)) {
+        rest = substr($0, RSTART + RLENGTH)
+        val = ""
+        i = 1
+        while (i <= length(rest)) {
+            c = substr(rest, i, 1)
+            if (c == "\\" && i < length(rest)) { val = val substr(rest, i, 2); i += 2; continue }
+            if (c == "\"") break
+            val = val c
+            i++
+        }
+        gsub(/\\"/, "\"", val)
+        gsub(/\\\\/, "\\", val)
+        staged_desc[n_staged] = val
+        staged_desc_pending[n_staged] = 0
+    }
+    if (is_fallback_comment && !staged_fallback[n_staged]) {
+        staged_fallback[n_staged] = 1
+    }
+}
+
+is_fn && n_staged > 0 {
+    fn_name = ""
+    tmp = $0
+    sub(/^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+/, "", tmp)
+    if (match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) {
+        fn_name = substr(tmp, 1, RLENGTH)
+    }
+    for (s = 1; s <= n_staged; s++) {
+        if (!emitted_any) {
+            printf "%s", prefix
+            emitted_any = 1
+        } else {
+            printf ","
+        }
+        total++
+        fb = staged_fallback[s] ? "true" : "false"
+        if (staged_fallback[s]) fallback_count++
+        printf "{"
+        printf "\"fn\":\"%s\"", json_escape(fn_name)
+        printf ",\"description\":\"%s\"", json_escape(staged_desc[s])
+        printf ",\"file\":\"%s\"", json_escape(staged_file[s])
+        printf ",\"line\":%d", staged_line[s]
+        printf ",\"fallback\":%s", fb
+        printf "}"
+    }
+    for (s = 1; s <= n_staged; s++) {
+        delete staged_desc[s]
+        delete staged_line[s]
+        delete staged_file[s]
+        delete staged_fallback[s]
+        delete staged_desc_pending[s]
+    }
+    n_staged = 0
+    pending_fallback_check = 0
+    next
+}
+
+is_blank && n_staged > 0 {
+    for (s = 1; s <= n_staged; s++) {
+        delete staged_desc[s]
+        delete staged_line[s]
+        delete staged_file[s]
+        delete staged_fallback[s]
+        delete staged_desc_pending[s]
+    }
+    n_staged = 0
+    pending_fallback_check = 0
+}
+
+END {
+    printf "%d|%d|%d|%d\n", total, file_count, fallback_count, emitted_any > "/dev/stderr"
+}
+'
+
+tmp_body="/tmp/.hexa-intent-map.$$.body"
+tmp_sum="/tmp/.hexa-intent-map.$$.sum"
+tmp_list="/tmp/.hexa-intent-map.$$.list"
+: > "$tmp_body"
+: > "$tmp_sum"
+trap 'rm -f "$tmp_body" "$tmp_sum" "$tmp_list"' EXIT
+
+grand_total=0
+grand_files=0
+grand_fb=0
+grand_emit=0
+
+run_awk_batch() {
+    # Arguments: a chunk of file paths as "$@".
+    local emit_flag="$grand_emit"
+    HIM_LEADING_COMMA="$emit_flag" awk "$AWK_PROG" "$@" >> "$tmp_body" 2> "$tmp_sum" || true
+    local sumline
+    sumline="$(tail -n1 "$tmp_sum" 2>/dev/null || echo '0|0|0|0')"
+    local b_total b_files b_fb b_emit
+    IFS='|' read -r b_total b_files b_fb b_emit <<< "$sumline"
+    grand_total=$(( grand_total + ${b_total:-0} ))
+    grand_files=$(( grand_files + ${b_files:-0} ))
+    grand_fb=$(( grand_fb + ${b_fb:-0} ))
+    if [ "${b_emit:-0}" = "1" ]; then
+        grand_emit=1
+    fi
+}
+
+if [ "$mode" = "explicit" ]; then
+    # Single awk invocation — preserves cross-file seen_file() uniqueness.
+    run_awk_batch "${files[@]}"
+else
+    # dir / project: build file list, prefilter with grep for @intent tokens,
+    # then batch-process to avoid argv blow-up on 10k+ files.
+    find "$scan_root" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0 2>/dev/null \
+        | LC_ALL=C sort -z \
+        > "$tmp_list.0" || true
+
+    # Prefilter: only files containing '@intent' token. macOS grep -lZ does NOT
+    # null-separate reliably (just emits newline-separated), so we use --null
+    # explicitly and fall back to newline parsing if that's what we get.
+    : > "$tmp_list"
+    if [ -s "$tmp_list.0" ]; then
+        # --null works on both GNU and BSD grep for filename separator output.
+        xargs -0 grep -l --null -e '@intent' < "$tmp_list.0" 2>/dev/null >> "$tmp_list" || true
+    fi
+    rm -f "$tmp_list.0"
+
+    # Detect separator: null if file contains any NUL bytes, else newline.
+    has_null=0
+    if [ -s "$tmp_list" ]; then
+        if LC_ALL=C grep -q $'\0' "$tmp_list" 2>/dev/null; then
+            has_null=1
+        fi
+    fi
+
+    if [ -s "$tmp_list" ]; then
+        batch=()
+        if [ "$has_null" = "1" ]; then
+            while IFS= read -r -d '' f; do
+                batch+=("$f")
+                if [ "${#batch[@]}" -ge 500 ]; then
+                    run_awk_batch "${batch[@]}"
+                    batch=()
+                fi
+            done < "$tmp_list"
+        else
+            while IFS= read -r f; do
+                [ -z "$f" ] && continue
+                batch+=("$f")
+                if [ "${#batch[@]}" -ge 500 ]; then
+                    run_awk_batch "${batch[@]}"
+                    batch=()
+                fi
+            done < "$tmp_list"
+        fi
+        if [ "${#batch[@]}" -gt 0 ]; then
+            run_awk_batch "${batch[@]}"
+        fi
+    fi
+fi
+
+body="$(cat "$tmp_body" 2>/dev/null || true)"
+
+printf '{"version":"0.1","source":"grep-mvp","intents":[%s],"summary":{"total":%d,"files":%d,"fallback_count":%d}}\n' \
+    "$body" "$grand_total" "$grand_files" "$grand_fb"

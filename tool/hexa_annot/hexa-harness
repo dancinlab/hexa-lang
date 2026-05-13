@@ -1,0 +1,307 @@
+#!/bin/bash
+# hexa-harness — harness annotation 10-kind unified collector (grep MVP, v0.1)
+#
+# 입력:
+#   hexa-harness <file.hexa> [<file2.hexa> ...]
+#   hexa-harness --dir <directory>
+#   hexa-harness [--kind <name>] <files...>
+#
+# 인식 annotation (fn decl 바로 위 라인, stacking 허용):
+#   @harness(phase="prompt|pretool|post|guard|self_check")
+#   @gate(rule_id="H-*", action="block|warn|hard_reject")  -- H-* 만 카운트
+#   @dod(artifact="<path>", verify="exists|hash|grep")
+#   @verify(condition="<expr>", severity="info|warn|error|⛔")
+#   @prompt_scan(pattern="<regex>", reject=<bool>)
+#   @pre_tool_guard(tool="Bash|Edit|Write", rule="<expr>")
+#   @post(event="bash|edit|write", run="<cmd>")
+#   @mistake_log(path="<jsonl>")
+#   @lint(scope="files|commit", rule="<name>")
+#   @commit_check(allow_skip_hooks=<bool>)
+#
+# 출력 (stdout JSON):
+#   { "version":"0.1", "source":"grep-mvp",
+#     "annotations":[ {kind, fn, file, line, meta{...}} ],
+#     "summary":{ harness, gate, dod, verify, prompt_scan,
+#                 pre_tool_guard, post, mistake_log, lint, commit_check, total } }
+#
+# 주의:
+#   @gate 는 rule_id 가 "H-" 로 시작할 때만 harness gate 로 집계.
+#   그 외 @gate 는 skip (hexa-gate-register 영역).
+#
+# exit 0 정상 (빈 annotations 포함). 1=인자 오류
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-harness [--kind <name>] <file.hexa> [file2.hexa ...]
+       hexa-harness [--kind <name>] --dir <directory>
+
+kinds: harness|gate|dod|verify|prompt_scan|pre_tool_guard|post|mistake_log|lint|commit_check
+EOF
+    exit 1
+}
+
+filter_kind=""
+files=()
+
+# parse args
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kind)
+            shift
+            [ $# -ge 1 ] || usage
+            case "$1" in
+                harness|gate|dod|verify|prompt_scan|pre_tool_guard|post|mistake_log|lint|commit_check) filter_kind="$1" ;;
+                *) echo "ERROR: invalid kind: $1" >&2; usage ;;
+            esac
+            shift
+            ;;
+        --dir)
+            shift
+            [ $# -ge 1 ] || usage
+            dir="$1"
+            [ -d "$dir" ] || { echo "ERROR: directory not found: $dir" >&2; exit 1; }
+            while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$dir" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            [ -f "$1" ] || { echo "ERROR: file not found: $1" >&2; exit 1; }
+            files+=("$1")
+            shift
+            ;;
+    esac
+done
+
+[ "${#files[@]}" -gt 0 ] || usage
+
+# awk 엔진 — annotation 라인을 stage 하고 fn decl 에서 flush.
+awk -v filter_kind="$filter_kind" '
+function json_escape(s,   r) {
+    r = s
+    gsub(/\\/, "\\\\", r)
+    gsub(/"/, "\\\"", r)
+    gsub(/\t/, "\\t", r)
+    gsub(/\r/, "\\r", r)
+    gsub(/\n/, "\\n", r)
+    return r
+}
+function extract_all_kv(line, kv_keys, kv_vals,    tmp, k, v, n, i, ch) {
+    # 모든 key=value 쌍을 수집 — depth 1 only
+    n = 0
+    delete kv_keys
+    delete kv_vals
+    tmp = line
+    # find opening paren of @name(
+    if (!match(tmp, /@[a-z_]+\(/)) return 0
+    tmp = substr(tmp, RSTART + RLENGTH)
+    while (1) {
+        sub(/^[[:space:],]+/, "", tmp)
+        if (length(tmp) == 0) break
+        if (substr(tmp, 1, 1) == ")") break
+        # key
+        if (!match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) break
+        k = substr(tmp, 1, RLENGTH)
+        tmp = substr(tmp, RLENGTH + 1)
+        sub(/^[[:space:]]*=[[:space:]]*/, "", tmp)
+        # value
+        if (substr(tmp, 1, 1) == "\"") {
+            v = ""
+            i = 2
+            while (i <= length(tmp)) {
+                ch = substr(tmp, i, 1)
+                if (ch == "\\" && i < length(tmp)) {
+                    v = v substr(tmp, i, 2)
+                    i += 2
+                    continue
+                }
+                if (ch == "\"") break
+                v = v ch
+                i++
+            }
+            tmp = substr(tmp, i + 1)
+            gsub(/\\"/, "\"", v)
+            gsub(/\\\\/, "\\", v)
+        } else {
+            if (match(tmp, /[,)[:space:]]/)) {
+                v = substr(tmp, 1, RSTART - 1)
+                tmp = substr(tmp, RSTART)
+            } else {
+                v = tmp
+                tmp = ""
+            }
+        }
+        n++
+        kv_keys[n] = k
+        kv_vals[n] = v
+    }
+    return n
+}
+function get_kv(nk, kv_k_arr, kv_v_arr, key,    i) {
+    for (i = 1; i <= nk; i++) {
+        if (kv_k_arr[i] == key) return kv_v_arr[i]
+    }
+    return ""
+}
+
+BEGIN {
+    n_staged = 0
+    total = 0
+    cnt_harness        = 0
+    cnt_gate           = 0
+    cnt_dod            = 0
+    cnt_verify         = 0
+    cnt_prompt_scan    = 0
+    cnt_pre_tool_guard = 0
+    cnt_post           = 0
+    cnt_mistake_log    = 0
+    cnt_lint           = 0
+    cnt_commit_check   = 0
+}
+
+{
+    is_harness        = ($0 ~ /^[[:space:]]*@harness([[:space:]]*\(|[[:space:]]*$)/)
+    is_gate           = ($0 ~ /^[[:space:]]*@gate([[:space:]]*\(|[[:space:]]*$)/)
+    is_dod            = ($0 ~ /^[[:space:]]*@dod([[:space:]]*\(|[[:space:]]*$)/)
+    is_verify         = ($0 ~ /^[[:space:]]*@verify([[:space:]]*\(|[[:space:]]*$)/)
+    is_prompt_scan    = ($0 ~ /^[[:space:]]*@prompt_scan([[:space:]]*\(|[[:space:]]*$)/)
+    is_pre_tool_guard = ($0 ~ /^[[:space:]]*@pre_tool_guard([[:space:]]*\(|[[:space:]]*$)/)
+    is_post           = ($0 ~ /^[[:space:]]*@post([[:space:]]*\(|[[:space:]]*$)/)
+    is_mistake_log    = ($0 ~ /^[[:space:]]*@mistake_log([[:space:]]*\(|[[:space:]]*$)/)
+    is_lint           = ($0 ~ /^[[:space:]]*@lint([[:space:]]*\(|[[:space:]]*$)/)
+    is_commit_check   = ($0 ~ /^[[:space:]]*@commit_check([[:space:]]*\(|[[:space:]]*$)/)
+    is_anno = (is_harness || is_gate || is_dod || is_verify || is_prompt_scan || is_pre_tool_guard || is_post || is_mistake_log || is_lint || is_commit_check)
+    is_fn = ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
+    is_blank = ($0 ~ /^[[:space:]]*$/)
+    is_comment = ($0 ~ /^[[:space:]]*(\/\/|#)/)
+}
+
+is_anno {
+    line = $0
+    kind = ""
+    if      (is_harness)        kind = "harness"
+    else if (is_gate)           kind = "gate"
+    else if (is_dod)            kind = "dod"
+    else if (is_verify)         kind = "verify"
+    else if (is_prompt_scan)    kind = "prompt_scan"
+    else if (is_pre_tool_guard) kind = "pre_tool_guard"
+    else if (is_post)           kind = "post"
+    else if (is_mistake_log)    kind = "mistake_log"
+    else if (is_lint)           kind = "lint"
+    else if (is_commit_check)   kind = "commit_check"
+
+    # meta 수집 — depth 1 key=value
+    delete kv_k
+    delete kv_v
+    nk = extract_all_kv(line, kv_k, kv_v)
+
+    # @gate — rule_id 가 H-* 인 것만 harness gate 로 집계, 그 외 skip
+    if (kind == "gate") {
+        rid = get_kv(nk, kv_k, kv_v, "rule_id")
+        if (substr(rid, 1, 2) != "H-") {
+            next
+        }
+    }
+
+    n_staged++
+    staged_kind[n_staged] = kind
+    staged_line[n_staged] = FNR
+    staged_file[n_staged] = FILENAME
+    staged_nkv[n_staged] = nk
+    for (i = 1; i <= nk; i++) {
+        staged_k[n_staged, i] = kv_k[i]
+        staged_v[n_staged, i] = kv_v[i]
+    }
+    next
+}
+
+is_fn && n_staged > 0 {
+    # extract fn name
+    fn_name = ""
+    tmp = $0
+    sub(/^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+/, "", tmp)
+    if (match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) {
+        fn_name = substr(tmp, 1, RLENGTH)
+    }
+
+    # emit each staged annotation (if filter matches)
+    for (s = 1; s <= n_staged; s++) {
+        k = staged_kind[s]
+        if (filter_kind != "" && filter_kind != k) continue
+
+        if (total > 0) printf ","
+        total++
+        if      (k == "harness")        cnt_harness++
+        else if (k == "gate")           cnt_gate++
+        else if (k == "dod")            cnt_dod++
+        else if (k == "verify")         cnt_verify++
+        else if (k == "prompt_scan")    cnt_prompt_scan++
+        else if (k == "pre_tool_guard") cnt_pre_tool_guard++
+        else if (k == "post")           cnt_post++
+        else if (k == "mistake_log")    cnt_mistake_log++
+        else if (k == "lint")           cnt_lint++
+        else if (k == "commit_check")   cnt_commit_check++
+
+        printf "{"
+        printf "\"kind\":\"%s\"", json_escape(k)
+        printf ",\"fn\":\"%s\"", json_escape(fn_name)
+        printf ",\"file\":\"%s\"", json_escape(staged_file[s])
+        printf ",\"line\":%d", staged_line[s]
+        printf ",\"meta\":{"
+        nk = staged_nkv[s]
+        for (i = 1; i <= nk; i++) {
+            if (i > 1) printf ","
+            printf "\"%s\":\"%s\"", json_escape(staged_k[s, i]), json_escape(staged_v[s, i])
+        }
+        printf "}"
+        printf "}"
+    }
+
+    # reset staging
+    for (s = 1; s <= n_staged; s++) {
+        delete staged_kind[s]
+        delete staged_line[s]
+        delete staged_file[s]
+        delete staged_nkv[s]
+    }
+    # wipe 2D
+    for (key in staged_k) delete staged_k[key]
+    for (key in staged_v) delete staged_v[key]
+    n_staged = 0
+    next
+}
+
+# blank breaks the block (discard staging unless followed by more annos)
+(!is_anno && !is_fn && !is_comment) {
+    if (n_staged > 0 && is_blank) {
+        for (s = 1; s <= n_staged; s++) {
+            delete staged_kind[s]
+            delete staged_line[s]
+            delete staged_file[s]
+            delete staged_nkv[s]
+        }
+        for (key in staged_k) delete staged_k[key]
+        for (key in staged_v) delete staged_v[key]
+        n_staged = 0
+    }
+}
+
+END {
+    # write summary to side channel (via tmpfile below)
+    printf "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d\n", \
+        cnt_harness, cnt_gate, cnt_dod, cnt_verify, cnt_prompt_scan, \
+        cnt_pre_tool_guard, cnt_post, cnt_mistake_log, cnt_lint, cnt_commit_check, total \
+        > "/dev/stderr"
+}
+' "${files[@]}" > /tmp/.hexa-harness.$$.body 2> /tmp/.hexa-harness.$$.summary
+
+body="$(cat /tmp/.hexa-harness.$$.body 2>/dev/null || true)"
+summary_line="$(cat /tmp/.hexa-harness.$$.summary 2>/dev/null || echo '0|0|0|0|0|0|0|0|0|0|0')"
+rm -f /tmp/.hexa-harness.$$.body /tmp/.hexa-harness.$$.summary
+
+IFS='|' read -r c_harness c_gate c_dod c_verify c_pscan c_ptg c_post c_mlog c_lint c_cc c_total <<< "$summary_line"
+
+printf '{"version":"0.1","source":"grep-mvp","annotations":[%s],"summary":{"harness":%d,"gate":%d,"dod":%d,"verify":%d,"prompt_scan":%d,"pre_tool_guard":%d,"post":%d,"mistake_log":%d,"lint":%d,"commit_check":%d,"total":%d}}\n' \
+    "$body" "${c_harness:-0}" "${c_gate:-0}" "${c_dod:-0}" "${c_verify:-0}" "${c_pscan:-0}" "${c_ptg:-0}" "${c_post:-0}" "${c_mlog:-0}" "${c_lint:-0}" "${c_cc:-0}" "${c_total:-0}"

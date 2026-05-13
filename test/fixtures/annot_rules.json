@@ -1,0 +1,33 @@
+{
+  "version": "0.1",
+  "source": "hexa-lang test fixture",
+  "rules": [
+    {
+      "id": "H-001",
+      "level": "block",
+      "kind": "name",
+      "pattern": "^fn_.*",
+      "desc": "fixture rule referenced by test/fixtures/annot_sample.hexa"
+    },
+    {
+      "id": "H-002",
+      "level": "warn",
+      "kind": "audit",
+      "desc": "fixture rule for @harness gate test"
+    },
+    {
+      "id": "G-001",
+      "level": "info",
+      "kind": "enforce",
+      "desc": "fixture rule for @gate test"
+    },
+    {
+      "kind": "alias",
+      "from": "@old",
+      "to": "@new",
+      "discriminator": "x",
+      "transitional": true,
+      "since": "0.1"
+    }
+  ]
+}

@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+# hexa-memo-check — extract @memo(ttl=N) annotations from hexa sources
+# Advisory only: dumps cache key schema for future codegen metadata.
+# Usage: hexa-memo-check <file.hexa>... | --dir <dir>
+set -euo pipefail
+
+usage() {
+    cat >&2 <<EOF
+hexa-memo-check — @memo(ttl=N) cache key schema dumper (advisory)
+
+Usage:
+  hexa-memo-check <file.hexa>...
+  hexa-memo-check --dir <dir>
+
+Output: JSON on stdout (schema v0.1).
+EOF
+    exit 2
+}
+
+[[ $# -lt 1 ]] && usage
+
+FILES=()
+if [[ "$1" == "--dir" ]]; then
+    [[ $# -lt 2 ]] && usage
+    DIR="$2"
+    [[ ! -d "$DIR" ]] && { echo "error: not a directory: $DIR" >&2; exit 1; }
+    while IFS= read -r -d '' f; do
+        FILES+=("$f")
+    done < <(find "$DIR" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name '*.hexa' -print0)
+else
+    for f in "$@"; do
+        [[ ! -f "$f" ]] && { echo "error: not a file: $f" >&2; exit 1; }
+        FILES+=("$f")
+    done
+fi
+
+if [[ ${#FILES[@]} -eq 0 ]]; then
+    printf '{"version":"0.1","source":"grep-mvp","memos":[],"summary":{"total_memos":0,"min_ttl":0,"max_ttl":0}}\n'
+    exit 0
+fi
+
+# awk over all files — emit one line per memo:
+#   TTL<TAB>FNNAME<TAB>FILE<TAB>LINE<TAB>ARG1:TYPE1,ARG2:TYPE2,...
+# Then bash assembles JSON.
+AWK_OUT=$(awk '
+function trim(s) {
+    sub(/^[ \t\r\n]+/, "", s)
+    sub(/[ \t\r\n]+$/, "", s)
+    return s
+}
+function emit(ttl, fname, file, line, argstr) {
+    printf("%d\t%s\t%s\t%d\t%s\n", ttl, fname, file, line, argstr)
+}
+BEGIN {
+    pending_ttl = -1
+    pending_line = 0
+}
+FNR == 1 {
+    pending_ttl = -1
+    pending_line = 0
+}
+{
+    raw = $0
+    # strip // line comments (but not inside strings — advisory MVP)
+    s = raw
+    sub(/[ \t]*\/\/.*$/, "", s)
+    t = trim(s)
+
+    if (t == "") next
+
+    # match @memo(ttl=<int>)
+    if (match(t, /@memo[ \t]*\([ \t]*ttl[ \t]*=[ \t]*[0-9]+[ \t]*\)/)) {
+        mm = substr(t, RSTART, RLENGTH)
+        # extract digits
+        if (match(mm, /[0-9]+/)) {
+            pending_ttl = substr(mm, RSTART, RLENGTH) + 0
+            pending_line = FNR
+        }
+        next
+    }
+
+    # match fn decl: "fn <name>(<args>) ..." or "pub fn ..."
+    # only if pending_ttl active
+    if (pending_ttl >= 0) {
+        # allow leading "pub ", "async ", etc — but we only care about "fn NAME("
+        if (match(t, /(^|[ \t])fn[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
+            blk = substr(t, RSTART, RLENGTH)
+            # extract name: between "fn " and "("
+            if (match(blk, /fn[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
+                nm = substr(blk, RSTART, RLENGTH)
+                sub(/^fn[ \t]+/, "", nm)
+                fname = nm
+            } else {
+                fname = "?"
+            }
+
+            # collect full arg list — may span lines until matching ")"
+            rest = t
+            sub(/^.*fn[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/, "", rest)
+            buf = rest
+            depth = 1
+            # count parens in current buf
+            n = length(buf)
+            i = 1
+            final = ""
+            done = 0
+            while (i <= n && !done) {
+                ch = substr(buf, i, 1)
+                if (ch == "(") depth++
+                else if (ch == ")") {
+                    depth--
+                    if (depth == 0) {
+                        final = substr(buf, 1, i - 1)
+                        done = 1
+                    }
+                }
+                i++
+            }
+            # if not closed on this line, read ahead
+            while (!done && (getline nxt) > 0) {
+                sub(/[ \t]*\/\/.*$/, "", nxt)
+                nxt = trim(nxt)
+                n = length(nxt)
+                i = 1
+                while (i <= n && !done) {
+                    ch = substr(nxt, i, 1)
+                    if (ch == "(") depth++
+                    else if (ch == ")") {
+                        depth--
+                        if (depth == 0) {
+                            final = buf " " substr(nxt, 1, i - 1)
+                            done = 1
+                        }
+                    }
+                    i++
+                }
+                if (!done) buf = buf " " nxt
+            }
+
+            final = trim(final)
+
+            # parse args: split by top-level commas (depth 0)
+            argstr = ""
+            if (final != "") {
+                depth2 = 0
+                start = 1
+                len2 = length(final)
+                parts_n = 0
+                for (k = 1; k <= len2; k++) {
+                    c = substr(final, k, 1)
+                    if (c == "(" || c == "[" || c == "<") depth2++
+                    else if (c == ")" || c == "]" || c == ">") depth2--
+                    else if (c == "," && depth2 == 0) {
+                        piece = trim(substr(final, start, k - start))
+                        if (piece != "") {
+                            parts_n++
+                            parts[parts_n] = piece
+                        }
+                        start = k + 1
+                    }
+                }
+                piece = trim(substr(final, start))
+                if (piece != "") {
+                    parts_n++
+                    parts[parts_n] = piece
+                }
+
+                for (k = 1; k <= parts_n; k++) {
+                    p = parts[k]
+                    # split "name: type" — only first ":"
+                    colon = index(p, ":")
+                    if (colon > 0) {
+                        nm2 = trim(substr(p, 1, colon - 1))
+                        ty2 = trim(substr(p, colon + 1))
+                        # strip default value "= ..."
+                        eq = index(ty2, "=")
+                        if (eq > 0) ty2 = trim(substr(ty2, 1, eq - 1))
+                    } else {
+                        nm2 = p
+                        ty2 = ""
+                    }
+                    if (nm2 == "self" || nm2 == "&self" || nm2 == "&mut self") continue
+                    if (nm2 == "") continue
+                    if (argstr != "") argstr = argstr ","
+                    argstr = argstr nm2 ":" ty2
+                }
+                # clear parts
+                for (k = 1; k <= parts_n; k++) delete parts[k]
+            }
+
+            emit(pending_ttl, fname, FILENAME, pending_line, argstr)
+            pending_ttl = -1
+            pending_line = 0
+            next
+        }
+
+        # if we hit a non-blank, non-@memo, non-fn line, drop pending
+        # (e.g. comment already stripped; blank already skipped)
+        if (t !~ /^@/) {
+            pending_ttl = -1
+            pending_line = 0
+        }
+    }
+}
+' "${FILES[@]}")
+
+# JSON escape helper
+json_escape() {
+    local s="$1"
+    # escape backslashes, then quotes, then control chars
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//	/\\t}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    printf '%s' "$s"
+}
+
+TOTAL=0
+MIN_TTL=""
+MAX_TTL=""
+MEMO_JSON=""
+FIRST=1
+
+while IFS=$'\t' read -r ttl fname file line argstr; do
+    [[ -z "${ttl:-}" ]] && continue
+    TOTAL=$((TOTAL + 1))
+    if [[ -z "$MIN_TTL" ]] || (( ttl < MIN_TTL )); then MIN_TTL=$ttl; fi
+    if [[ -z "$MAX_TTL" ]] || (( ttl > MAX_TTL )); then MAX_TTL=$ttl; fi
+
+    # build args JSON + cache key template
+    ARGS_JSON=""
+    KEY="$fname"
+    if [[ -n "$argstr" ]]; then
+        IFS=',' read -ra PAIRS <<< "$argstr"
+        AFIRST=1
+        for pair in "${PAIRS[@]}"; do
+            aname="${pair%%:*}"
+            atype="${pair#*:}"
+            [[ "$aname" == "$pair" ]] && atype=""
+            aname_e=$(json_escape "$aname")
+            atype_e=$(json_escape "$atype")
+            if [[ $AFIRST -eq 1 ]]; then
+                ARGS_JSON="{\"name\":\"$aname_e\",\"type\":\"$atype_e\"}"
+                AFIRST=0
+            else
+                ARGS_JSON="$ARGS_JSON,{\"name\":\"$aname_e\",\"type\":\"$atype_e\"}"
+            fi
+            KEY="$KEY:{$aname}"
+        done
+    fi
+
+    fname_e=$(json_escape "$fname")
+    file_e=$(json_escape "$file")
+    key_e=$(json_escape "$KEY")
+
+    ENTRY="{\"fn\":\"$fname_e\",\"ttl_seconds\":$ttl,\"file\":\"$file_e\",\"line\":$line,\"args\":[$ARGS_JSON],\"cache_key_template\":\"$key_e\"}"
+
+    if [[ $FIRST -eq 1 ]]; then
+        MEMO_JSON="$ENTRY"
+        FIRST=0
+    else
+        MEMO_JSON="$MEMO_JSON,$ENTRY"
+    fi
+done <<< "$AWK_OUT"
+
+[[ -z "$MIN_TTL" ]] && MIN_TTL=0
+[[ -z "$MAX_TTL" ]] && MAX_TTL=0
+
+printf '{"version":"0.1","source":"grep-mvp","memos":[%s],"summary":{"total_memos":%d,"min_ttl":%d,"max_ttl":%d}}\n' \
+    "$MEMO_JSON" "$TOTAL" "$MIN_TTL" "$MAX_TTL"

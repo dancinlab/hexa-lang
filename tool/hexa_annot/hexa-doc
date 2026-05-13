@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# hexa-doc — extract @doc annotations and adjacent fn signatures from .hexa sources
+# usage:
+#   hexa-doc <file.hexa> [<file2.hexa> ...]
+#   hexa-doc --dir <directory>
+#
+# grammar (MVP):
+#   @doc(section="<s>", body="<b>")
+#   (blank/comment lines)
+#   fn <name>(<args>) [-> <ret>] {
+#
+# multiple @doc annotations attach to the next fn decl. groups output by section.
+# limitations: no escape handling in section/body strings; no nested paren in fn args;
+# no support for multi-line fn signatures after first `{`.
+
+set -euo pipefail
+
+usage() {
+    cat >&2 <<EOF
+usage:
+  hexa-doc <file.hexa> [<file2.hexa> ...]
+  hexa-doc --dir <directory>
+EOF
+    exit 2
+}
+
+if [[ $# -lt 1 ]]; then
+    usage
+fi
+
+# collect file list
+FILES=()
+if [[ "$1" == "--dir" ]]; then
+    if [[ $# -lt 2 ]]; then usage; fi
+    DIR="$2"
+    if [[ ! -d "$DIR" ]]; then
+        echo "hexa-doc: not a directory: $DIR" >&2
+        exit 1
+    fi
+    # portable recursive find of .hexa files, sorted
+    while IFS= read -r -d '' f; do
+        FILES+=("$f")
+    done < <(find "$DIR" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name '*.hexa' -print0 | LC_ALL=C sort -z)
+else
+    for f in "$@"; do
+        if [[ ! -f "$f" ]]; then
+            echo "hexa-doc: not a file: $f" >&2
+            exit 1
+        fi
+        FILES+=("$f")
+    done
+fi
+
+if [[ ${#FILES[@]} -eq 0 ]]; then
+    echo "hexa-doc: no .hexa files found" >&2
+    exit 1
+fi
+
+# infer project name from first file path: look for known roots, else first path component
+infer_project() {
+    local p="$1"
+    # strip leading / if absolute
+    local stripped="${p#/}"
+    # known anchors
+    if [[ "$p" == */nexus/* ]]; then
+        echo "nexus"
+        return
+    fi
+    if [[ "$p" == */hexa-lang/* ]]; then
+        echo "hexa-lang"
+        return
+    fi
+    if [[ "$p" == */Dev/*/* ]]; then
+        # take segment after /Dev/
+        local tail="${p#*/Dev/}"
+        echo "${tail%%/*}"
+        return
+    fi
+    # fallback: dir name of file
+    local d
+    d=$(dirname "$p")
+    echo "$(basename "$d")"
+}
+
+PROJECT=$(infer_project "${FILES[0]}")
+
+# emit header
+printf '# hexa-doc: %s\n\n' "$PROJECT"
+
+# extract records into a TSV stream:
+#   section \t body \t fn_signature
+# then group by section. AWK handles per-file scan; bash merges across files.
+
+TMP_RECORDS=$(mktemp -t hexa_doc_records.XXXXXX)
+trap 'rm -f "$TMP_RECORDS"' EXIT
+
+for f in "${FILES[@]}"; do
+    awk '
+    function flush_pending(sig,   i) {
+        for (i = 0; i < pend_n; i++) {
+            printf "%s\t%s\t%s\n", pend_sec[i], pend_body[i], sig
+        }
+        pend_n = 0
+    }
+    BEGIN {
+        pend_n = 0
+    }
+    {
+        line = $0
+        # strip trailing CR if any
+        sub(/\r$/, "", line)
+
+        # trimmed copy for classification
+        tline = line
+        sub(/^[ \t]+/, "", tline)
+
+        # @doc line?
+        if (match(tline, /^@doc\(/)) {
+            # extract section="..." and body="..." naively: first occurrence of each
+            sec = ""
+            body = ""
+            rest = tline
+            if (match(rest, /section[ \t]*=[ \t]*"[^"]*"/)) {
+                m = substr(rest, RSTART, RLENGTH)
+                # pull out between quotes
+                if (match(m, /"[^"]*"/)) {
+                    sec = substr(m, RSTART + 1, RLENGTH - 2)
+                }
+            }
+            if (match(rest, /body[ \t]*=[ \t]*"[^"]*"/)) {
+                m = substr(rest, RSTART, RLENGTH)
+                if (match(m, /"[^"]*"/)) {
+                    body = substr(m, RSTART + 1, RLENGTH - 2)
+                }
+            }
+            if (sec == "") sec = "_unsectioned"
+            pend_sec[pend_n] = sec
+            pend_body[pend_n] = body
+            pend_n++
+            next
+        }
+
+        # fn decl?
+        if (pend_n > 0 && match(tline, /^fn[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
+            # capture signature: up to but not including first "{"
+            sig = tline
+            br = index(sig, "{")
+            if (br > 0) {
+                sig = substr(sig, 1, br - 1)
+            }
+            # trim trailing whitespace
+            sub(/[ \t]+$/, "", sig)
+            # strip leading "fn " for cleaner header (but keep name+args+ret)
+            sub(/^fn[ \t]+/, "", sig)
+            flush_pending(sig)
+            next
+        }
+
+        # blank or comment: keep pending
+        if (tline == "" || tline ~ /^\/\// || tline ~ /^#/) {
+            next
+        }
+
+        # any other code line before a fn: drop pending (safety — do not misattribute)
+        if (pend_n > 0) {
+            pend_n = 0
+        }
+    }
+    END {
+        # unattached @doc entries are discarded in MVP
+    }
+    ' "$f" >> "$TMP_RECORDS"
+done
+
+# group by section, preserving first-seen section order and record order within section.
+# use awk to emit markdown.
+
+awk -F'\t' '
+{
+    sec = $1
+    body = $2
+    sig = $3
+    if (!(sec in seen)) {
+        seen[sec] = 1
+        order[n_sec++] = sec
+    }
+    idx = count[sec]++
+    rec_sig[sec, idx] = sig
+    rec_body[sec, idx] = body
+}
+END {
+    for (i = 0; i < n_sec; i++) {
+        sec = order[i]
+        printf "## %s\n\n", sec
+        # group consecutive records with same signature under one heading
+        prev_sig = ""
+        for (j = 0; j < count[sec]; j++) {
+            sig = rec_sig[sec, j]
+            body = rec_body[sec, j]
+            if (sig != prev_sig) {
+                printf "### %s\n\n", sig
+                prev_sig = sig
+            }
+            printf "%s\n\n", body
+        }
+        printf "---\n\n"
+    }
+}
+' "$TMP_RECORDS"

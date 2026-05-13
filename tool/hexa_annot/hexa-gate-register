@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+# hexa-gate-register — extract @gate(rule="...") annotations from hexa source
+# MVP: dry-run only, does NOT modify cmd_gate.hexa or permissions_ssot.json
+# Usage:
+#   hexa-gate-register <file.hexa>...
+#   hexa-gate-register --dir <dir>
+#   hexa-gate-register --apply <file.hexa>...   # warns + exit 1 (unsupported)
+
+set -u
+
+VERSION="0.1"
+APPLY=0
+DIR=""
+FILES=()
+
+# --- arg parse ---
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --apply)
+      APPLY=1
+      shift
+      ;;
+    --dir)
+      shift
+      if [ $# -eq 0 ]; then
+        echo "error: --dir requires an argument" >&2
+        exit 2
+      fi
+      DIR="$1"
+      shift
+      ;;
+    -h|--help)
+      cat >&2 <<EOF
+hexa-gate-register v${VERSION} — extract @gate(rule="...") annotations (dry-run MVP)
+
+Usage:
+  hexa-gate-register <file.hexa>...
+  hexa-gate-register --dir <dir>
+  hexa-gate-register --apply <file.hexa>...   # unsupported in MVP
+
+Output: JSON on stdout (gates[], summary).
+EOF
+      exit 0
+      ;;
+    --)
+      shift
+      while [ $# -gt 0 ]; do FILES+=("$1"); shift; done
+      ;;
+    -*)
+      echo "error: unknown option: $1" >&2
+      exit 2
+      ;;
+    *)
+      FILES+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# --- --apply guard (MVP not supported) ---
+if [ "$APPLY" -eq 1 ]; then
+  echo "⚠ --apply not supported in MVP — edit cmd_gate.hexa manually" >&2
+  exit 1
+fi
+
+# --- expand --dir ---
+if [ -n "$DIR" ]; then
+  if [ ! -d "$DIR" ]; then
+    echo "error: directory not found: $DIR" >&2
+    exit 2
+  fi
+  while IFS= read -r -d '' f; do
+    FILES+=("$f")
+  done < <(find "$DIR" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name '*.hexa' -print0 2>/dev/null)
+fi
+
+if [ "${#FILES[@]}" -eq 0 ]; then
+  echo "error: no input files (use <file.hexa>... or --dir <dir>)" >&2
+  exit 2
+fi
+
+# --- extract gates ---
+# Algorithm per file (awk):
+#   - on line matching /@gate\(rule="(.*)"\)/, capture rule + line number
+#   - peek forward for next line matching /^\s*fn\s+([A-Za-z_][A-Za-z0-9_]*)/
+#     → emit JSON-ish TSV record: rule<TAB>file<TAB>line<TAB>target_fn
+#   - target_fn = "" if no fn found before next @gate or EOF
+
+TOTAL=0
+RECORDS=""
+
+for f in "${FILES[@]}"; do
+  if [ ! -f "$f" ]; then
+    echo "warning: file not found, skipping: $f" >&2
+    continue
+  fi
+
+  # awk emits: <rule>\t<abspath>\t<line>\t<target_fn>\n
+  # escape path to absolute
+  abs="$f"
+  case "$abs" in
+    /*) : ;;
+    *)  abs="$(cd "$(dirname "$f")" 2>/dev/null && pwd)/$(basename "$f")" || abs="$f" ;;
+  esac
+
+  rec=$(awk -v F="$abs" '
+    BEGIN {
+      pending = 0
+      prule = ""
+      pline = 0
+    }
+    {
+      line = $0
+      # match @gate(rule="...") — allow escaped quotes \" inside
+      # strategy: anchor on @gate(rule=" and closing ") at end of expr, using a
+      # two-stage match: first confirm prefix, then take everything up to the
+      # LAST "(?=\)) in the remaining substring.
+      gstart = index(line, "@gate(rule=\"")
+      if (gstart > 0) {
+        rest = substr(line, gstart + length("@gate(rule=\""))
+        # find `")` closing — search from the right so escaped \" inside survive
+        # we scan char-by-char to honor backslash-escape
+        body = ""
+        i = 1
+        L = length(rest)
+        found = 0
+        while (i <= L) {
+          c = substr(rest, i, 1)
+          if (c == "\\" && i < L) {
+            body = body c substr(rest, i+1, 1)
+            i += 2
+            continue
+          }
+          if (c == "\"") {
+            # check next char is )
+            nc = (i < L) ? substr(rest, i+1, 1) : ""
+            if (nc == ")") {
+              found = 1
+              break
+            }
+          }
+          body = body c
+          i++
+        }
+        if (found) {
+          if (pending) {
+            printf "%s\t%s\t%d\t%s\n", prule, F, pline, ""
+          }
+          prule = body
+          pline = NR
+          pending = 1
+          next
+        }
+      }
+      if (pending) {
+        # look for `fn NAME(` or `fn NAME <` possibly preceded by modifiers/whitespace
+        if (match(line, /fn[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
+          token = substr(line, RSTART, RLENGTH)
+          sub(/^fn[ \t]+/, "", token)
+          printf "%s\t%s\t%d\t%s\n", prule, F, pline, token
+          pending = 0
+          prule = ""
+          pline = 0
+        }
+      }
+    }
+    END {
+      if (pending) {
+        printf "%s\t%s\t%d\t%s\n", prule, F, pline, ""
+      }
+    }
+  ' "$f") || rec=""
+
+  if [ -n "$rec" ]; then
+    if [ -n "$RECORDS" ]; then
+      RECORDS="${RECORDS}
+${rec}"
+    else
+      RECORDS="$rec"
+    fi
+  fi
+done
+
+# --- count + emit JSON ---
+if [ -n "$RECORDS" ]; then
+  TOTAL=$(printf '%s\n' "$RECORDS" | awk 'NF>0' | wc -l | tr -d ' ')
+else
+  TOTAL=0
+fi
+
+# JSON-escape helper (awk): escapes backslash, double-quote, control chars
+emit_json() {
+  awk -v VERSION="$VERSION" -v TOTAL="$TOTAL" '
+    function jesc(s,    out, i, c, n) {
+      out = ""
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") out = out "\\\\"
+        else if (c == "\"") out = out "\\\""
+        else if (c == "\n") out = out "\\n"
+        else if (c == "\r") out = out "\\r"
+        else if (c == "\t") out = out "\\t"
+        else out = out c
+      }
+      return out
+    }
+    BEGIN {
+      FS = "\t"
+      printf "{\n"
+      printf "  \"version\": \"0.1\",\n"
+      printf "  \"source\": \"grep-mvp\",\n"
+      printf "  \"gates\": ["
+      first = 1
+    }
+    NF >= 3 {
+      rule = $1
+      file = $2
+      line = $3
+      target = (NF >= 4) ? $4 : ""
+      if (!first) printf ","
+      printf "\n    {\n"
+      printf "      \"rule\": \"%s\",\n", jesc(rule)
+      printf "      \"file\": \"%s\",\n", jesc(file)
+      printf "      \"line\": %s,\n", line
+      printf "      \"target_fn\": \"%s\",\n", jesc(target)
+      printf "      \"applied\": false\n"
+      printf "    }"
+      first = 0
+    }
+    END {
+      if (!first) printf "\n  "
+      printf "],\n"
+      printf "  \"summary\": {\n"
+      printf "    \"total\": %d,\n", TOTAL+0
+      printf "    \"applied\": 0,\n"
+      printf "    \"dry_run\": true\n"
+      printf "  }\n"
+      printf "}\n"
+    }
+  '
+}
+
+if [ -n "$RECORDS" ]; then
+  printf '%s\n' "$RECORDS" | emit_json
+else
+  printf '' | emit_json
+fi
+
+exit 0

@@ -1,0 +1,292 @@
+#!/bin/bash
+# hexa-freedom — 자유/의지/행위주체 annotation 10종 통합 수집기 (grep MVP, v0.1)
+#
+# 입력:
+#   hexa-freedom <file.hexa> [<file2.hexa> ...]
+#   hexa-freedom --dir <directory>
+#   hexa-freedom [--kind <name>] <files...>
+#
+# 출력 (stdout JSON):
+#   { "version":"0.1", "source":"grep-mvp",
+#     "annotations":[ {kind, fn, file, line, meta{...}} ],
+#     "summary":{ free_will, autonomy, agency, choice, spontaneity,
+#                 volition, initiative, self_determined, degrees_of_freedom,
+#                 causal_power, total } }
+#
+# 인식 annotation (fn decl 바로 위 라인, stacking 허용):
+#   @free_will(degree=<float 0..1>)                          자유의지 강도
+#   @autonomy(level="reactive|proactive|self_directed")      자율성 수준
+#   @agency(actor="<id>", goal="<text>", means="<text>")     행위주체성
+#   @choice(options="<list>", selected="<id>", reason="<text>")  선택 지점
+#   @spontaneity(source="emergent|causal_break|random")      자발성 출처
+#   @volition(desire="<text>", plan="<text>", energy=<float>)  의지
+#   @initiative(trigger="internal|external", ownership="self|other")  주도성
+#   @self_determined(goal, plan, exec="self|delegate")       자기결정
+#   @degrees_of_freedom(n=<int>, axis="<list>")              수학적 자유도
+#   @causal_power(from="<agent>", to="<world>")              인과력
+#
+# exit 0 정상 (빈 annotations 포함). 1=인자 오류
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-freedom [--kind <name>] <file.hexa> [file2.hexa ...]
+       hexa-freedom [--kind ...] --dir <directory>
+  kinds: free_will autonomy agency choice spontaneity
+         volition initiative self_determined degrees_of_freedom causal_power
+EOF
+    exit 1
+}
+
+filter_kind=""
+files=()
+
+# parse args
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kind)
+            shift
+            [ $# -ge 1 ] || usage
+            case "$1" in
+                free_will|autonomy|agency|choice|spontaneity|volition|initiative|self_determined|degrees_of_freedom|causal_power) filter_kind="$1" ;;
+                *) echo "ERROR: invalid kind: $1" >&2; usage ;;
+            esac
+            shift
+            ;;
+        --dir)
+            shift
+            [ $# -ge 1 ] || usage
+            dir="$1"
+            [ -d "$dir" ] || { echo "ERROR: directory not found: $dir" >&2; exit 1; }
+            while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$dir" -type f -not -path "*/.claude/*" -not -path "*/node_modules/*" -name "*.hexa" -print0)
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            [ -f "$1" ] || { echo "ERROR: file not found: $1" >&2; exit 1; }
+            files+=("$1")
+            shift
+            ;;
+    esac
+done
+
+[ "${#files[@]}" -gt 0 ] || usage
+
+# awk 엔진 — annotation 라인을 stage 하고 fn decl 에서 flush.
+awk -v filter_kind="$filter_kind" '
+function json_escape(s,   r) {
+    r = s
+    gsub(/\\/, "\\\\", r)
+    gsub(/"/, "\\\"", r)
+    gsub(/\t/, "\\t", r)
+    gsub(/\r/, "\\r", r)
+    gsub(/\n/, "\\n", r)
+    return r
+}
+function extract_all_kv(line, kv_keys, kv_vals,    tmp, pos, rest, c, k, v, n, i, ch) {
+    # 모든 key=value 쌍을 수집 — depth 1 only
+    # strip leading @name( and trailing )
+    n = 0
+    delete kv_keys
+    delete kv_vals
+    tmp = line
+    # find opening paren — @name 이 _ 포함 가능 (degrees_of_freedom, self_determined, free_will)
+    if (!match(tmp, /@[a-z_]+\(/)) return 0
+    tmp = substr(tmp, RSTART + RLENGTH)
+    # strip trailing ) optional — we just scan forward
+    while (1) {
+        sub(/^[[:space:],]+/, "", tmp)
+        if (length(tmp) == 0) break
+        if (substr(tmp, 1, 1) == ")") break
+        # key
+        if (!match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) break
+        k = substr(tmp, 1, RLENGTH)
+        tmp = substr(tmp, RLENGTH + 1)
+        sub(/^[[:space:]]*=[[:space:]]*/, "", tmp)
+        # value
+        if (substr(tmp, 1, 1) == "\"") {
+            v = ""
+            i = 2
+            while (i <= length(tmp)) {
+                ch = substr(tmp, i, 1)
+                if (ch == "\\" && i < length(tmp)) {
+                    v = v substr(tmp, i, 2)
+                    i += 2
+                    continue
+                }
+                if (ch == "\"") break
+                v = v ch
+                i++
+            }
+            tmp = substr(tmp, i + 1)
+            gsub(/\\"/, "\"", v)
+            gsub(/\\\\/, "\\", v)
+        } else {
+            if (match(tmp, /[,)[:space:]]/)) {
+                v = substr(tmp, 1, RSTART - 1)
+                tmp = substr(tmp, RSTART)
+            } else {
+                v = tmp
+                tmp = ""
+            }
+        }
+        n++
+        kv_keys[n] = k
+        kv_vals[n] = v
+    }
+    return n
+}
+
+BEGIN {
+    n_staged = 0
+    total = 0
+    cnt_free_will = 0
+    cnt_autonomy = 0
+    cnt_agency = 0
+    cnt_choice = 0
+    cnt_spontaneity = 0
+    cnt_volition = 0
+    cnt_initiative = 0
+    cnt_self_determined = 0
+    cnt_degrees_of_freedom = 0
+    cnt_causal_power = 0
+}
+
+{
+    is_free_will          = ($0 ~ /^[[:space:]]*@free_will([[:space:]]*\(|[[:space:]]*$)/)
+    is_autonomy           = ($0 ~ /^[[:space:]]*@autonomy([[:space:]]*\(|[[:space:]]*$)/)
+    is_agency             = ($0 ~ /^[[:space:]]*@agency([[:space:]]*\(|[[:space:]]*$)/)
+    is_choice             = ($0 ~ /^[[:space:]]*@choice([[:space:]]*\(|[[:space:]]*$)/)
+    is_spontaneity        = ($0 ~ /^[[:space:]]*@spontaneity([[:space:]]*\(|[[:space:]]*$)/)
+    is_volition           = ($0 ~ /^[[:space:]]*@volition([[:space:]]*\(|[[:space:]]*$)/)
+    is_initiative         = ($0 ~ /^[[:space:]]*@initiative([[:space:]]*\(|[[:space:]]*$)/)
+    is_self_determined    = ($0 ~ /^[[:space:]]*@self_determined([[:space:]]*\(|[[:space:]]*$)/)
+    is_degrees_of_freedom = ($0 ~ /^[[:space:]]*@degrees_of_freedom([[:space:]]*\(|[[:space:]]*$)/)
+    is_causal_power       = ($0 ~ /^[[:space:]]*@causal_power([[:space:]]*\(|[[:space:]]*$)/)
+    is_anno = (is_free_will || is_autonomy || is_agency || is_choice || is_spontaneity || is_volition || is_initiative || is_self_determined || is_degrees_of_freedom || is_causal_power)
+    is_fn = ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/)
+    is_blank = ($0 ~ /^[[:space:]]*$/)
+    is_comment = ($0 ~ /^[[:space:]]*(\/\/|#)/)
+}
+
+is_anno {
+    line = $0
+    kind = ""
+    if      (is_free_will)          kind = "free_will"
+    else if (is_autonomy)           kind = "autonomy"
+    else if (is_agency)             kind = "agency"
+    else if (is_choice)             kind = "choice"
+    else if (is_spontaneity)        kind = "spontaneity"
+    else if (is_volition)           kind = "volition"
+    else if (is_initiative)         kind = "initiative"
+    else if (is_self_determined)    kind = "self_determined"
+    else if (is_degrees_of_freedom) kind = "degrees_of_freedom"
+    else if (is_causal_power)       kind = "causal_power"
+
+    n_staged++
+    staged_kind[n_staged] = kind
+    staged_line[n_staged] = FNR
+    staged_file[n_staged] = FILENAME
+
+    # meta 수집 — depth 1 key=value
+    delete kv_k
+    delete kv_v
+    nk = extract_all_kv(line, kv_k, kv_v)
+    staged_nkv[n_staged] = nk
+    for (i = 1; i <= nk; i++) {
+        staged_k[n_staged, i] = kv_k[i]
+        staged_v[n_staged, i] = kv_v[i]
+    }
+    next
+}
+
+is_fn && n_staged > 0 {
+    # extract fn name
+    fn_name = ""
+    tmp = $0
+    sub(/^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+/, "", tmp)
+    if (match(tmp, /^[A-Za-z_][A-Za-z0-9_]*/)) {
+        fn_name = substr(tmp, 1, RLENGTH)
+    }
+
+    # emit each staged annotation (if filter matches)
+    for (s = 1; s <= n_staged; s++) {
+        k = staged_kind[s]
+        if (filter_kind != "" && filter_kind != k) continue
+
+        if (total > 0) printf ","
+        total++
+        if      (k == "free_will")          cnt_free_will++
+        else if (k == "autonomy")           cnt_autonomy++
+        else if (k == "agency")             cnt_agency++
+        else if (k == "choice")             cnt_choice++
+        else if (k == "spontaneity")        cnt_spontaneity++
+        else if (k == "volition")           cnt_volition++
+        else if (k == "initiative")         cnt_initiative++
+        else if (k == "self_determined")    cnt_self_determined++
+        else if (k == "degrees_of_freedom") cnt_degrees_of_freedom++
+        else if (k == "causal_power")       cnt_causal_power++
+
+        printf "{"
+        printf "\"kind\":\"%s\"", json_escape(k)
+        printf ",\"fn\":\"%s\"", json_escape(fn_name)
+        printf ",\"file\":\"%s\"", json_escape(staged_file[s])
+        printf ",\"line\":%d", staged_line[s]
+        printf ",\"meta\":{"
+        nk = staged_nkv[s]
+        for (i = 1; i <= nk; i++) {
+            if (i > 1) printf ","
+            printf "\"%s\":\"%s\"", json_escape(staged_k[s, i]), json_escape(staged_v[s, i])
+        }
+        printf "}"
+        printf "}"
+    }
+
+    # reset staging
+    for (s = 1; s <= n_staged; s++) {
+        delete staged_kind[s]
+        delete staged_line[s]
+        delete staged_file[s]
+        delete staged_nkv[s]
+    }
+    # wipe 2D
+    for (key in staged_k) delete staged_k[key]
+    for (key in staged_v) delete staged_v[key]
+    n_staged = 0
+    next
+}
+
+# blank breaks the block (discard staging unless followed by more annos)
+(!is_anno && !is_fn && !is_comment) {
+    if (n_staged > 0 && is_blank) {
+        for (s = 1; s <= n_staged; s++) {
+            delete staged_kind[s]
+            delete staged_line[s]
+            delete staged_file[s]
+            delete staged_nkv[s]
+        }
+        for (key in staged_k) delete staged_k[key]
+        for (key in staged_v) delete staged_v[key]
+        n_staged = 0
+    }
+}
+
+END {
+    # write summary to side channel (via tmpfile below)
+    printf "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d\n", \
+        cnt_free_will, cnt_autonomy, cnt_agency, cnt_choice, cnt_spontaneity, \
+        cnt_volition, cnt_initiative, cnt_self_determined, cnt_degrees_of_freedom, cnt_causal_power, \
+        total > "/dev/stderr"
+}
+' "${files[@]}" > /tmp/.hexa-freedom.$$.body 2> /tmp/.hexa-freedom.$$.summary
+
+body="$(cat /tmp/.hexa-freedom.$$.body 2>/dev/null || true)"
+summary_line="$(cat /tmp/.hexa-freedom.$$.summary 2>/dev/null || echo '0|0|0|0|0|0|0|0|0|0|0')"
+rm -f /tmp/.hexa-freedom.$$.body /tmp/.hexa-freedom.$$.summary
+
+IFS='|' read -r c_fw c_au c_ag c_ch c_sp c_vo c_in c_sd c_df c_cp c_total <<< "$summary_line"
+
+printf '{"version":"0.1","source":"grep-mvp","annotations":[%s],"summary":{"free_will":%d,"autonomy":%d,"agency":%d,"choice":%d,"spontaneity":%d,"volition":%d,"initiative":%d,"self_determined":%d,"degrees_of_freedom":%d,"causal_power":%d,"total":%d}}\n' \
+    "$body" "${c_fw:-0}" "${c_au:-0}" "${c_ag:-0}" "${c_ch:-0}" "${c_sp:-0}" "${c_vo:-0}" "${c_in:-0}" "${c_sd:-0}" "${c_df:-0}" "${c_cp:-0}" "${c_total:-0}"
