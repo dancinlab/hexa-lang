@@ -237,3 +237,38 @@ pub fn bt_ai2_falsifier_registry_size() -> i64 {
     let xs = falsifiers_list()
     return len(xs)
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa honesty <file>` reads the file and runs bt_ai2_audit over it.
+// Usage:
+//   hexa honesty <file>
+//   hexa honesty --file <file>
+// Prints JSON-ish verdict (verdict / obs_count / f_ai2_a / f_ai2_b /
+// max_rel_err).
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let path = cli_find_flag(args, "--file", cli_positional(args, 0, ""))
+    if len(path) == 0 {
+        println("usage: hexa honesty <file>")
+        println("       hexa honesty --file <file>")
+        return
+    }
+    if !file_exists(path) {
+        eprintln("honesty: file not found: " + path)
+        return
+    }
+    let raw = read_file(path)
+    let v = bt_ai2_audit(raw)
+    let mut out = "{"
+    out = out + "\"verdict\":\"" + v.verdict + "\""
+    out = out + ",\"obs_count\":" + to_string(v.obs_count)
+    out = out + ",\"f_ai2_a\":" + to_string(v.f_ai2_a)
+    out = out + ",\"f_ai2_b\":" + to_string(v.f_ai2_b)
+    out = out + ",\"max_rel_err_label\":\"" + v.max_rel_err_label + "\""
+    out = out + ",\"file\":\"" + path + "\""
+    out = out + "}"
+    println(out)
+}

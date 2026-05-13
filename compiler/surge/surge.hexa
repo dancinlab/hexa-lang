@@ -281,3 +281,40 @@ pub fn surge_run(
         errors: errors
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa surge --seed "<expr>" [--rounds N] [--engine mk9|mk10]
+//             [--preset apex] [--depth auto|N] [--speculate N]
+//             [--variants N] [--engines "a,b,c"]
+//             [--seeds "s1,s2"] [--seeds-file path]`
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa surge --seed \"<expr>\" [--rounds N] [--engines csv]")
+        return
+    }
+    let rounds   = cli_find_flag(args, "--rounds", "")
+    let engine   = cli_find_flag(args, "--engine", "")
+    let preset   = cli_find_flag(args, "--preset", "")
+    let depth    = cli_find_flag(args, "--depth", "")
+    let spec     = cli_find_flag(args, "--speculate", "")
+    let variants = cli_parse_int(cli_find_flag(args, "--variants", ""), 1)
+    let engs_csv = cli_find_flag(args, "--engines", "")
+    let seeds    = cli_find_flag(args, "--seeds", "")
+    let seedsfp  = cli_find_flag(args, "--seeds-file", "")
+
+    let r = surge_run(seed, rounds, engine, preset, depth, spec,
+                       variants, engs_csv, seeds, seedsfp)
+    let mut out = "{"
+    out = out + "\"plan_total\":" + to_string(r.plan_total)
+    out = out + ",\"cap\":" + to_string(r.cap)
+    out = out + ",\"rejected\":" + (if r.rejected { "true" } else { "false" })
+    out = out + ",\"ran\":" + to_string(r.ran)
+    out = out + ",\"errors\":" + to_string(r.errors)
+    out = out + "}"
+    println(out)
+}

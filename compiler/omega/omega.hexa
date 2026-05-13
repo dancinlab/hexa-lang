@@ -317,3 +317,39 @@ pub fn omega_run(
     let rc = drill_run_shim(seed, max_rounds, depth, spec)
     return OmegaResult { path: "drill", axes: axes, runs: 1, rc: rc }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa omega --seed "<expr>" [--rounds N] [--engine mk9|mk10]
+//             [--preset apex] [--depth auto|N] [--speculate N]
+//             [--variants N] [--engines "a,b,c"]
+//             [--seeds "s1,s2"] [--seeds-file path]`
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa omega --seed \"<expr>\" [--rounds N] [--engine mk9|mk10]")
+        return
+    }
+    let rounds   = cli_find_flag(args, "--rounds", "")
+    let engine   = cli_find_flag(args, "--engine", "")
+    let preset   = cli_find_flag(args, "--preset", "")
+    let depth    = cli_find_flag(args, "--depth", "")
+    let spec     = cli_find_flag(args, "--speculate", "")
+    let variants = cli_parse_int(cli_find_flag(args, "--variants", ""), 1)
+    let engs_csv = cli_find_flag(args, "--engines", "")
+    let seeds    = cli_find_flag(args, "--seeds", "")
+    let seedsfp  = cli_find_flag(args, "--seeds-file", "")
+
+    let r = omega_run(seed, rounds, engine, preset, depth, spec,
+                       variants, engs_csv, seeds, seedsfp)
+    let mut out = "{"
+    out = out + "\"path\":\"" + r.path + "\""
+    out = out + ",\"axes\":" + to_string(r.axes)
+    out = out + ",\"runs\":" + to_string(r.runs)
+    out = out + ",\"rc\":" + to_string(r.rc)
+    out = out + "}"
+    println(out)
+}

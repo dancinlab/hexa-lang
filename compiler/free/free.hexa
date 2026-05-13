@@ -124,3 +124,26 @@ pub fn free_count_by_module(cands: [DiscoveryCandidate],
     }
     return n
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa free --seed "<expr>" [--dfs N]` runs the 5-module DFS compose
+// and prints {seed, dfs, total}.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    let dfs = cli_parse_int(cli_find_flag(args, "--dfs", ""), 3)
+    if len(seed) == 0 {
+        println("usage: hexa free --seed \"<expr>\" [--dfs N]")
+        return
+    }
+    let cands = free(seed, dfs)
+    let mut out = "{"
+    out = out + "\"seed\":\"" + seed + "\""
+    out = out + ",\"dfs\":" + to_string(dfs)
+    out = out + ",\"total\":" + to_string(len(cands))
+    out = out + "}"
+    println(out)
+}

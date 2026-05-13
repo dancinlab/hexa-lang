@@ -159,3 +159,25 @@ pub fn canon_seal(seed_flag: string, note_flag: string) -> CanonSealResult {
         total_seals: total
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa canon [--seed "<expr>"] [--note "<text>"]` — append a canonical
+// seal entry to the seal log.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    let note = cli_find_flag(args, "--note", "")
+    let r = canon_seal(seed, note)
+    let mut out = "{"
+    out = out + "\"seal_id\":\"" + r.seal_id + "\""
+    out = out + ",\"seal_path\":\"" + r.seal_path + "\""
+    out = out + ",\"appended\":" + (if r.appended { "true" } else { "false" })
+    out = out + ",\"pre_lines\":" + to_string(r.pre_lines)
+    out = out + ",\"post_lines\":" + to_string(r.post_lines)
+    out = out + ",\"total_seals\":" + to_string(r.total_seals)
+    out = out + "}"
+    println(out)
+}

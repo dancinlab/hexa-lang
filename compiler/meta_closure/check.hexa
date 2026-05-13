@@ -142,3 +142,60 @@ pub fn meta_closure_check_params(discoveries: array, params: MetaClosureParams) 
         closed_ids: closed_ids
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa meta-closure [--seed "<expr>"] [--file <discoveries.tsv>]`
+// Run the Mk.IX self-ref fixpoint check.
+//   --file path → newline-split discovery lines (id<TAB>type<TAB>...)
+//   --seed expr → wrapped as a single-line discovery for the audit
+// Either or both may be supplied. Outputs the verdict as JSON.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", "")
+    let path = cli_find_flag(args, "--file", cli_positional(args, 0, ""))
+
+    let mut discoveries: array = []
+    if len(path) > 0 {
+        if !file_exists(path) {
+            eprintln("meta-closure: file not found: " + path)
+            return
+        }
+        let raw = read_file(path)
+        let lines = raw.split("\n")
+        let mut li = 0
+        while li < len(lines) {
+            let line = to_string(lines[li]).trim()
+            if len(line) > 0 { discoveries.push(line) }
+            li = li + 1
+        }
+    }
+    if len(seed) > 0 {
+        // Synthesize a minimal discovery line: id, type, expr, conf,
+        // value, axiom, src. Confidence 1.0 lets the seed survive
+        // min_confidence; trace stops at this single line.
+        let line = "cli_seed\taxiom\t" + seed + "\t1.0\t0.0\t" + seed + "\tcli"
+        discoveries.push(line)
+    }
+
+    if len(discoveries) == 0 {
+        println("usage: hexa meta-closure --seed \"<expr>\"")
+        println("       hexa meta-closure --file <discoveries.tsv>")
+        return
+    }
+
+    let v = meta_closure_check(discoveries)
+    let mut out = "{"
+    out = out + "\"meta_closed\":" + to_string(v.meta_closed)
+    out = out + ",\"promoted_10ss\":" + to_string(v.promoted_10ss)
+    out = out + ",\"candidates\":" + to_string(v.candidates)
+    out = out + ",\"rejected_h1\":" + to_string(v.rejected_h1)
+    out = out + ",\"rejected_h2\":" + to_string(v.rejected_h2)
+    out = out + ",\"rejected_h3\":" + to_string(v.rejected_h3)
+    out = out + ",\"closed_ids_count\":" + to_string(len(v.closed_ids))
+    out = out + ",\"edges_count\":" + to_string(len(v.edges))
+    out = out + "}"
+    println(out)
+}

@@ -268,3 +268,27 @@ pub fn reign_run(seed: string, max_cycles_flag: string) -> ReignResult {
     eprintln("HEXA_REIGN {\"event\":\"complete\",\"cycles_run\":" + to_string(cycles_run) + ",\"saturated\":" + (if saturated { "true" } else { "false" }) + "}")
     return ReignResult { cycles_run: cycles_run, saturated: saturated, last_signal: last_signal }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa reign --seed "<expr>" [--max-cycles N]`
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa reign --seed \"<expr>\" [--max-cycles N]")
+        return
+    }
+    let max_cycles = cli_find_flag(args, "--max-cycles",
+                        cli_find_flag(args, "--rounds", ""))
+
+    let r = reign_run(seed, max_cycles)
+    let mut out = "{"
+    out = out + "\"cycles_run\":" + to_string(r.cycles_run)
+    out = out + ",\"saturated\":" + (if r.saturated { "true" } else { "false" })
+    out = out + ",\"last_signal\":\"" + r.last_signal + "\""
+    out = out + "}"
+    println(out)
+}

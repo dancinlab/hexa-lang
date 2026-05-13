@@ -82,3 +82,21 @@ pub fn count_tier12(results: [HyperResult]) -> i64 {
     }
     return n
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa hyperarithmetic --prop "<expr>"` runs the Mk.IX 5-system
+// reverse-math classifier and prints the pretty trace.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let prop = cli_find_flag(args, "--prop",
+                  cli_find_flag(args, "--seed", cli_positional(args, 0, "")))
+    if len(prop) == 0 {
+        println("usage: hexa hyperarithmetic --prop \"<expr>\"")
+        return
+    }
+    let r = hyperarithmetic(prop)
+    println(hyperarithmetic_pretty(r))
+}

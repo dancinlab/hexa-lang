@@ -190,3 +190,30 @@ pub fn molt_run(seed: string, max_cycles_flag: string) -> MoltResult {
         skin_file: skin_path
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa molt --seed "<expr>" [--max-cycles N]`
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa molt --seed \"<expr>\" [--max-cycles N]")
+        return
+    }
+    let max_cycles = cli_find_flag(args, "--max-cycles",
+                        cli_find_flag(args, "--rounds", ""))
+
+    let r = molt_run(seed, max_cycles)
+    let mut out = "{"
+    out = out + "\"best_skin_idx\":" + to_string(r.best_skin_idx)
+    out = out + ",\"best_depth\":" + to_string(r.best_depth)
+    out = out + ",\"best_fast\":" + (if r.best_fast { "true" } else { "false" })
+    out = out + ",\"best_abs\":" + to_string(r.best_abs)
+    out = out + ",\"skins_tried\":" + to_string(r.skins_tried)
+    out = out + ",\"skin_file\":\"" + r.skin_file + "\""
+    out = out + "}"
+    println(out)
+}

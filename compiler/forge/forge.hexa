@@ -180,3 +180,28 @@ pub fn forge_run(seed_flag: string, max_rounds_flag: string) -> ForgeResult {
         atlas_bytes: atlas_bytes
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa forge [--seed "<expr>"] [--max-rounds N]` — boot drill from the
+// best known skin (rolls own seed if --seed omitted).
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    let max_rounds = cli_find_flag(args, "--max-rounds",
+                        cli_find_flag(args, "--rounds", ""))
+
+    let r = forge_run(seed, max_rounds)
+    let mut out = "{"
+    out = out + "\"booted\":" + (if r.booted { "true" } else { "false" })
+    out = out + ",\"rejected\":" + (if r.rejected { "true" } else { "false" })
+    out = out + ",\"reject_reason\":\"" + r.reject_reason + "\""
+    out = out + ",\"synthesized_seed\":\"" + r.synthesized_seed + "\""
+    out = out + ",\"skin_depth\":" + to_string(r.skin_depth)
+    out = out + ",\"skin_fast\":" + (if r.skin_fast { "true" } else { "false" })
+    out = out + ",\"atlas_bytes\":" + to_string(r.atlas_bytes)
+    out = out + "}"
+    println(out)
+}

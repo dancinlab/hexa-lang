@@ -157,3 +157,32 @@ pub fn smash_count_ctype(cands: [DiscoveryCandidate], ctype: string) -> i64 {
     }
     return n
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa smash --seed "<expr>" [--depth N]` runs the 9-phase blowup
+// drill and prints {seed, depth, total, axioms, theorems, corollaries}.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    let depth = cli_parse_int(cli_find_flag(args, "--depth", ""), 3)
+    if len(seed) == 0 {
+        println("usage: hexa smash --seed \"<expr>\" [--depth N]")
+        return
+    }
+    let cands = smash(seed, depth)
+    let axioms = smash_count_ctype(cands, "axiom")
+    let theorems = smash_count_ctype(cands, "theorem")
+    let corollaries = smash_count_ctype(cands, "corollary")
+    let mut out = "{"
+    out = out + "\"seed\":\"" + seed + "\""
+    out = out + ",\"depth\":" + to_string(depth)
+    out = out + ",\"total\":" + to_string(len(cands))
+    out = out + ",\"axioms\":" + to_string(axioms)
+    out = out + ",\"theorems\":" + to_string(theorems)
+    out = out + ",\"corollaries\":" + to_string(corollaries)
+    out = out + "}"
+    println(out)
+}

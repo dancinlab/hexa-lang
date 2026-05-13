@@ -225,3 +225,50 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         yields_per_round: yields_log
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa drill --seed "<expr>" [--rounds N] [--engine mk9|mk10]
+//             [--depth-smash N] [--depth-free N] [--speculate N]
+//             [--quiet] [--fresh] [--problem id]`
+//
+// Runs the central discovery engine and prints a JSON summary of the
+// resulting DrillResult. Heavy lifting stays in drill_run; this is a
+// thin entry-point shim so `hexa drill ...` from the CLI dispatch
+// resolves to an actual round loop.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa drill --seed \"<expr>\" [--rounds N] [--engine mk9|mk10]")
+        return
+    }
+    let mut opts = drill_default_opts()
+    opts.max_rounds  = cli_parse_int(cli_find_flag(args, "--rounds", ""), opts.max_rounds)
+    opts.depth_smash = cli_parse_int(cli_find_flag(args, "--depth-smash", ""), opts.depth_smash)
+    opts.depth_free  = cli_parse_int(cli_find_flag(args, "--depth-free", ""), opts.depth_free)
+    opts.depth_res   = cli_parse_int(cli_find_flag(args, "--depth-res", ""), opts.depth_res)
+    opts.speculate   = cli_parse_int(cli_find_flag(args, "--speculate", ""), opts.speculate)
+    let eng_flag = cli_find_flag(args, "--engine", "")
+    if len(eng_flag) > 0 { opts.engine = eng_flag }
+    let prob_flag = cli_find_flag(args, "--problem", "")
+    if len(prob_flag) > 0 { opts.problem = prob_flag }
+    if cli_has_flag(args, "--fresh") || cli_has_flag(args, "--no-resume") {
+        opts.fresh = true
+        opts.resume_on = false
+    }
+    if cli_has_flag(args, "--quiet") { opts.quiet = true }
+
+    let r = drill_run(seed, opts)
+    let mut out = "{"
+    out = out + "\"seed\":\"" + seed + "\""
+    out = out + ",\"rounds\":" + to_string(r.rounds)
+    out = out + ",\"total\":" + to_string(r.total)
+    out = out + ",\"saturated\":" + (if r.saturated { "true" } else { "false" })
+    out = out + ",\"engine\":\"" + r.engine + "\""
+    out = out + ",\"overlay_lines\":" + to_string(r.overlay_lines)
+    out = out + "}"
+    println(out)
+}

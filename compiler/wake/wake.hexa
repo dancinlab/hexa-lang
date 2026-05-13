@@ -156,3 +156,29 @@ pub fn wake_run(seed: string, signal_file_flag: string, max_cycles_flag: string)
     eprintln("HEXA_WAKE {\"event\":\"complete\",\"cycles_run\":" + to_string(cycles_run) + ",\"fires\":" + to_string(fires) + ",\"skips\":" + to_string(skips) + "}")
     return WakeResult { cycles_run: cycles_run, fires: fires, skips: skips, last_signal: last_signal }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa wake --seed "<expr>" [--signal-file path] [--max-cycles N]`
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa wake --seed \"<expr>\" [--signal-file path] [--max-cycles N]")
+        return
+    }
+    let signal_file = cli_find_flag(args, "--signal-file", "")
+    let max_cycles  = cli_find_flag(args, "--max-cycles",
+                          cli_find_flag(args, "--rounds", ""))
+
+    let r = wake_run(seed, signal_file, max_cycles)
+    let mut out = "{"
+    out = out + "\"cycles_run\":" + to_string(r.cycles_run)
+    out = out + ",\"fires\":" + to_string(r.fires)
+    out = out + ",\"skips\":" + to_string(r.skips)
+    out = out + ",\"last_signal\":\"" + r.last_signal + "\""
+    out = out + "}"
+    println(out)
+}

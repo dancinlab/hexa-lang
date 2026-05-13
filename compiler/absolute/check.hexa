@@ -146,3 +146,33 @@ pub fn absolute_check(seed: string) -> AbsoluteVerdict {
         hexad_count: len(hex)
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa absolute --seed "<expr>"` runs the Mk.VIII Δ₀-absolute classifier
+// and prints the verdict as JSON.
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa absolute --seed \"<expr>\"")
+        return
+    }
+    let v = absolute_check(seed)
+    let mut out = "{"
+    out = out + "\"absolute\":" + (if v.absolute { "true" } else { "false" })
+    out = out + ",\"witness\":\"" + v.witness + "\""
+    out = out + ",\"grade\":" + to_string(v.grade)
+    out = out + ",\"seed\":\"" + v.seed + "\""
+    out = out + ",\"arithmetical\":" + (if v.arithmetical { "true" } else { "false" })
+    out = out + ",\"transitive_pass\":" + (if v.transitive_pass { "true" } else { "false" })
+    out = out + ",\"cross_axis_pass\":" + to_string(v.cross_axis_pass)
+    out = out + ",\"cross_axis_total\":" + to_string(v.cross_axis_total)
+    out = out + ",\"promoted\":" + (if v.promoted { "true" } else { "false" })
+    out = out + ",\"rules_count\":" + to_string(v.rules_count)
+    out = out + ",\"hexad_count\":" + to_string(v.hexad_count)
+    out = out + "}"
+    println(out)
+}

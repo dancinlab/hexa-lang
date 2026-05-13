@@ -382,3 +382,31 @@ pub fn swarm_run(
         history: history
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa swarm --seed "<expr>" [--population N] [--generations N] [--rounds N]`
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa swarm --seed \"<expr>\" [--population N] [--generations N]")
+        return
+    }
+    let pop  = cli_find_flag(args, "--population", "")
+    let gens = cli_find_flag(args, "--generations", "")
+    let rounds = cli_find_flag(args, "--rounds", "")
+
+    let r = swarm_run(seed, pop, gens, rounds)
+    let mut out = "{"
+    out = out + "\"population\":" + to_string(r.population)
+    out = out + ",\"generations_run\":" + to_string(r.generations_run)
+    out = out + ",\"rejected\":" + (if r.rejected { "true" } else { "false" })
+    out = out + ",\"best_score\":" + to_string(r.best_score)
+    out = out + ",\"best_gen\":" + to_string(r.best_gen)
+    out = out + ",\"best_seed\":\"" + r.best_seed + "\""
+    out = out + "}"
+    println(out)
+}

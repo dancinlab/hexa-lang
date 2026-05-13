@@ -162,3 +162,33 @@ pub fn chain_run(seed: string, engines_csv: string, opts: DrillOpts) -> ChainRes
         deferred: deferred
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa chain --seed "<expr>" --engines "drill,omega,..." [--rounds N]`
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    let engines = cli_find_flag(args, "--engines", "drill")
+    if len(seed) == 0 {
+        println("usage: hexa chain --seed \"<expr>\" --engines \"a,b,c\"")
+        return
+    }
+    let mut opts = drill_default_opts()
+    opts.max_rounds  = cli_parse_int(cli_find_flag(args, "--rounds", ""), opts.max_rounds)
+    opts.depth_smash = cli_parse_int(cli_find_flag(args, "--depth-smash", ""), opts.depth_smash)
+    if cli_has_flag(args, "--quiet") { opts.quiet = true }
+    if cli_has_flag(args, "--fresh") { opts.fresh = true; opts.resume_on = false }
+
+    let r = chain_run(seed, engines, opts)
+    let mut out = "{"
+    out = out + "\"seed\":\"" + r.seed + "\""
+    out = out + ",\"engines\":" + to_string(len(r.engines))
+    out = out + ",\"unified_total\":" + to_string(r.unified_total)
+    out = out + ",\"consensus_count\":" + to_string(r.consensus_count)
+    out = out + ",\"deferred\":" + to_string(len(r.deferred))
+    out = out + "}"
+    println(out)
+}

@@ -345,3 +345,32 @@ pub fn dream_run(
         final_seed: current
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa dream --seed "<expr>" [--iters N] [--rounds N] [--engine X]
+//             [--preset P] [--depth D] [--speculate S]`
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa dream --seed \"<expr>\" [--iters N] [--rounds N]")
+        return
+    }
+    let iters  = cli_find_flag(args, "--iters", "")
+    let rounds = cli_find_flag(args, "--rounds", "")
+    let engine = cli_find_flag(args, "--engine", "")
+    let preset = cli_find_flag(args, "--preset", "")
+    let depth  = cli_find_flag(args, "--depth", "")
+    let spec   = cli_find_flag(args, "--speculate", "")
+
+    let r = dream_run(seed, iters, rounds, engine, preset, depth, spec)
+    let mut out = "{"
+    out = out + "\"iterations_run\":" + to_string(r.iterations_run)
+    out = out + ",\"final_seed\":\"" + r.final_seed + "\""
+    out = out + ",\"iters_logged\":" + to_string(len(r.iters))
+    out = out + "}"
+    println(out)
+}

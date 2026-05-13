@@ -269,3 +269,32 @@ pub fn debate_run(seed: string, variants_n: i64, base_depth: i64, arbitrate: boo
         plans: plans
     }
 }
+
+// ── CLI entry ─────────────────────────────────────────────────────
+// `hexa debate --seed "<expr>" [--variants N] [--base-depth N] [--arbitrate]`
+
+use "compiler/_cli_args/parse"
+
+fn main() {
+    let args = cli_args()
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa debate --seed \"<expr>\" [--variants N] [--base-depth N]")
+        return
+    }
+    let variants = cli_parse_int(cli_find_flag(args, "--variants", ""), 3)
+    let base = cli_parse_int(cli_find_flag(args, "--base-depth",
+                  cli_find_flag(args, "--depth", "")), 3)
+    let arbitrate = cli_has_flag(args, "--arbitrate")
+
+    let r = debate_run(seed, variants, base, arbitrate)
+    let mut out = "{"
+    out = out + "\"seed\":\"" + r.seed + "\""
+    out = out + ",\"variants\":" + to_string(r.variants)
+    out = out + ",\"base_depth\":" + to_string(r.base_depth)
+    out = out + ",\"verdict\":\"" + r.verdict + "\""
+    out = out + ",\"arbitrate\":" + (if r.arbitrate { "true" } else { "false" })
+    out = out + ",\"totals_count\":" + to_string(len(r.totals))
+    out = out + "}"
+    println(out)
+}
