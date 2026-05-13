@@ -1,0 +1,26 @@
+// AUTO-GENERATED — do not edit. Regenerate via tool/drill_dod_embed_gen.hexa
+//
+// Wave 1 absorption: drill DoD static embed (D8).
+// Source: roadmaps/drill_dod.json in nexus repo
+
+use "compiler/drill_dod/embed"
+
+@phase("parse_only")
+pub let DRILL_DOD_HASH: string = "74c2ced29cf026c93b3073525e054204e95033732a27590b2b3308a67cfdb759"
+@phase("parse_only")
+pub let DRILL_DOD_GENERATED_AT: string = "2026-05-12T22:19:22Z"
+@phase("parse_only")
+pub let DRILL_DOD_SOURCE_COUNT: i64 = 3
+@phase("parse_only")
+pub let DRILL_DOD_TRACK: string = "drill"
+@phase("parse_only")
+pub let DRILL_DOD_DESCRIPTION: string = "Definition-of-Done tiers for the drill pipeline (smash→free→absolute chain). Each tier requires a minimum EXACT-yield ratio from seed input."
+@phase("parse_only")
+pub let DRILL_DOD_UPDATED: string = "2026-04-20"
+
+@phase("parse_only")
+pub let DRILL_DOD: [DrillDodEntry] = [
+    DrillDodEntry { name: "scaffold_done", description: "Drill pipeline wired — blowup core + absolute module + seed_engine all callable. Yield ratio >= 0.05 (5 EXACT / 100 seeds).", required: ["$NEXUS/cli/blowup/core/blowup.hexa", "$NEXUS/cli/blowup/modules/blowup_absolute.hexa", "$NEXUS/cli/blowup/seed/seed_engine.hexa"], smoke: [] },
+    DrillDodEntry { name: "wired_done", description: "Chain runnable end-to-end, yield ratio >= 0.15. atlas.n6 receives EXACT appends.", required: ["$NEXUS/n6/atlas.n6", "$NEXUS/n6/atlas.blowup.jsonl"], smoke: ["bash -c 'tail -2000 $NEXUS/n6/atlas.n6 | grep -c EXACT | awk \"{ if (\\$1 >= 1) exit 0; else exit 1 }\"'"] },
+    DrillDodEntry { name: "serving_done", description: "Mature drill — yield ratio >= 0.30 sustained over 3 successive runs, promotion to [11*] at least once.", required: ["$NEXUS/n6/atlas.n6"], smoke: ["bash -c 'grep -c \"\\[11\\*\\]\" $NEXUS/n6/atlas.n6 | awk \"{ if (\\$1 >= 2) exit 0; else exit 1 }\"'"] }
+]

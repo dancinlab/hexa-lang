@@ -1,0 +1,35 @@
+// HEXA Native Compiler — Wave 1 absorption: falsifiers static index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reads the const array produced by tool/falsifiers_embed_gen.hexa
+// (which writes compiler/falsifiers/embedded.gen.hexa) and exposes
+// the read-only API the compiler / nexus check pipeline will consume:
+//
+//   pub fn falsifiers_list() -> [FalsifierEntry]
+//   pub fn falsifiers_lookup(id: string) -> FalsifierEntry
+//
+// Lookup returns a sentinel entry (id == "") on miss — same convention
+// as compiler/atlas/static_index::lookup_static.
+
+use "compiler/falsifiers/embed"
+use "compiler/falsifiers/embedded.gen"
+
+pub fn falsifiers_list() -> [FalsifierEntry] {
+    return FALSIFIERS
+}
+
+pub fn falsifiers_lookup(id: string) -> FalsifierEntry {
+    let n = len(FALSIFIERS)
+    let mut i = 0
+    while i < n {
+        let e = FALSIFIERS[i]
+        if e.id == id { return e }
+        i = i + 1
+    }
+    return FalsifierEntry {
+        id: "", slug: "", claim: "", cmd: "", cmd_sha256: "",
+        pass: "", reason: "", fix: "", origin: ""
+    }
+}

@@ -1,0 +1,219 @@
+// tool/hexad_embed_gen.hexa — Wave 1 absorption driver (D2)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/config/hexad_constants.json,
+// emits compiler/hexad/embedded.gen.hexa.
+//
+// Run:
+//   hexa run tool/hexad_embed_gen.hexa
+
+use "compiler/hexad/embed"
+
+let DEFAULT_SRC: string = "config/hexad_constants.json"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/hexad/embedded.gen.hexa"
+let MODULE_NAME: string = "HEXAD"
+
+// --- string escape ---------------------------------------------------------
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+fn _sha256(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+// --- emit one entry --------------------------------------------------------
+fn _emit_entry(parts: array, group: string, key: string, kind: string, fv: f64, iv: i64, sv: array) {
+    parts.push("    HexadConstantEntry { group: \"")
+    parts.push(_esc(group))
+    parts.push("\", key: \"")
+    parts.push(_esc(key))
+    parts.push("\", kind: \"")
+    parts.push(_esc(kind))
+    parts.push("\", value_f64: ")
+    parts.push(to_string(fv))
+    parts.push(", value_i64: ")
+    parts.push(to_string(iv))
+    parts.push(", value_str_list: [")
+    let n = len(sv)
+    let mut i = 0
+    while i < n {
+        parts.push("\"")
+        parts.push(_esc(to_string(sv[i])))
+        parts.push("\"")
+        if i + 1 < n { parts.push(", ") }
+        i = i + 1
+    }
+    parts.push("] }")
+}
+
+// Walk a sub-object, emitting an entry per leaf. Returns count of entries
+// emitted. Skips _meta group entirely (description-only).
+fn _walk_group(parts: array, group: string, m, count_ref: array, first_ref: array) -> i64 {
+    let mut emitted = 0
+    let keys = map_keys(m)
+    let nk = len(keys)
+    let mut i = 0
+    while i < nk {
+        let k = to_string(keys[i])
+        let v = m[k]
+        let t = type_of(v)
+        let mut kind = ""
+        let mut fv: f64 = 0.0
+        let mut iv: i64 = 0
+        let sv = []
+        if t == "int" {
+            kind = "i64"
+            iv = v
+        } else if t == "float" {
+            kind = "f64"
+            fv = v
+        } else if t == "array" {
+            kind = "string_list"
+            let an = len(v)
+            let mut j = 0
+            while j < an {
+                sv.push(to_string(v[j]))
+                j = j + 1
+            }
+        } else {
+            // unknown leaf kind; skip silently.
+            i = i + 1
+            continue
+        }
+        if first_ref[0] == 0 {
+            parts.push(",\n")
+        } else {
+            first_ref[0] = 0
+        }
+        _emit_entry(parts, group, k, kind, fv, iv, sv)
+        emitted = emitted + 1
+        i = i + 1
+    }
+    count_ref[0] = count_ref[0] + emitted
+    return emitted
+}
+
+fn main() {
+    let av = argv()
+    let mut src = ""
+    if len(av) >= 3 { src = to_string(av[2]) }
+    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    let out_path = DEFAULT_OUT
+
+    println("wave1 hexad embed codegen")
+    println("  src:  " + src)
+    println("  out:  " + out_path)
+
+    let hash = _sha256(src)
+    let gen_at = _iso_utc_now()
+    let text = read_file(src)
+    let root = json_parse(text)
+
+    let parts = []
+    parts.push("// AUTO-GENERATED — do not edit. Regenerate via tool/hexad_embed_gen.hexa\n")
+    parts.push("//\n")
+    parts.push("// Wave 1 absorption: hexad CDESM constants static embed (D2).\n")
+    parts.push("// Source: config/hexad_constants.json in nexus repo\n")
+    parts.push("\n")
+    parts.push("use \"compiler/hexad/embed\"\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+
+    // body assembled into separate buffer so we can patch source_count.
+    let body = []
+    body.push("@phase(\"parse_only\")\n")
+    body.push("pub let " + MODULE_NAME + "_CONSTANTS: [HexadConstantEntry] = [\n")
+
+    // first_ref tracks whether to prepend separator ("," + newline).
+    let first_ref = [1]
+    let count_ref = [0]
+
+    // Walk top-level: each key is either a leaf (e.g. ln2) or a subgroup.
+    if type_of(root) == "map" {
+        let tkeys = map_keys(root)
+        let nk = len(tkeys)
+        let mut i = 0
+        while i < nk {
+            let gk = to_string(tkeys[i])
+            if gk == "_meta" { i = i + 1; continue }
+            let gv = root[gk]
+            let gt = type_of(gv)
+            if gt == "map" {
+                _walk_group(body, gk, gv, count_ref, first_ref)
+            } else {
+                // top-level scalar (e.g. ln2): emit under group="" with key=gk
+                let mut kind = ""
+                let mut fv: f64 = 0.0
+                let mut iv: i64 = 0
+                let sv = []
+                if gt == "int" { kind = "i64"; iv = gv }
+                else if gt == "float" { kind = "f64"; fv = gv }
+                else if gt == "array" {
+                    kind = "string_list"
+                    let an = len(gv)
+                    let mut j = 0
+                    while j < an { sv.push(to_string(gv[j])); j = j + 1 }
+                } else { i = i + 1; continue }
+                if first_ref[0] == 0 { body.push(",\n") } else { first_ref[0] = 0 }
+                _emit_entry(body, "", gk, kind, fv, iv, sv)
+                count_ref[0] = count_ref[0] + 1
+            }
+            i = i + 1
+        }
+    }
+    body.push("\n]\n")
+
+    let count = count_ref[0]
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(count) + "\n")
+    parts.push("\n")
+    parts.push(body.join(""))
+
+    write_file(out_path, parts.join(""))
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(count))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  sha256:  " + hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/hexad_embed_gen.hexa") { return true }
+    if s == "hexad_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

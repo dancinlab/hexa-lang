@@ -1,0 +1,28 @@
+// AUTO-GENERATED — do not edit. Regenerate via tool/completion_criterion_embed_gen.hexa
+//
+// Wave 1 absorption: universal completion criterion static embed (D6).
+// Source: config/projects.json -> _meta.universal_completion_criterion
+
+use "compiler/completion_criterion/embed"
+
+@phase("parse_only")
+pub let COMPLETION_CRITERION_HASH: string = "035174ac34caecbd1a760897ff6c7ab85f5f60990b8ea3f355177f9a4e8aa72b"
+@phase("parse_only")
+pub let COMPLETION_CRITERION_GENERATED_AT: string = "2026-05-12T22:17:18Z"
+@phase("parse_only")
+pub let COMPLETION_CRITERION_SOURCE_COUNT: i64 = 1
+
+@phase("parse_only")
+pub let COMPLETION_CRITERION: CompletionCriterion = CompletionCriterion {
+    name: "closed_form",
+    breakthrough_threshold: 10,
+    breakthrough_label: "돌파",
+    breakthrough_definition: "grade >= 10 = 돌파. 닫힌수학으로 완성된 항목. 10 초과(11,12,...)는 추가 돌파 단계 예약.",
+    principle: "수학적으로 완전히 떨어짐 — n=6 원시값(σ=12, φ=2, τ=4, n=6)의 유한 조합으로 환원",
+    description: "전 프로젝트 공통 완성 기준. grade_field 이름은 프로젝트마다 달라도 궁극 의미는 동일.",
+    forbidden: ["infinite_series (무한급수, 수렴 근사)", "numerical_fit (경험식, curve fitting)", "free_parameter (자유 파라미터, 튜닝 값)", "fudge_factor (맞춤 보정 상수)"],
+    allowed: ["finite_expr(σ, φ, τ, n)", "integer_combinations", "elementary_functions (exp/log/sqrt/trig)"],
+    verify_type: "symbolic_reduction",
+    verify_artifact: "verify.py — 실행 시 모든 EXACT 상수 재현 + PASS 출력",
+    violation: "verify 없는 max_grade 주장은 무효, 1단계 강등"
+}

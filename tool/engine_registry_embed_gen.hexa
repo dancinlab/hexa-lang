@@ -1,0 +1,163 @@
+// tool/engine_registry_embed_gen.hexa — Wave 1 absorption driver (D7)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/engine/engine_registry.jsonl,
+// emits compiler/engine_registry/embedded.gen.hexa.
+
+use "compiler/engine_registry/embed"
+
+let DEFAULT_SRC: string = "engine/engine_registry.jsonl"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/engine_registry/embedded.gen.hexa"
+let MODULE_NAME: string = "ENGINE_REGISTRY"
+
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+fn _sha256(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+fn _gstr(m, key: string) -> string {
+    if !has_key(m, key) { return "" }
+    let v = m[key]
+    if type_of(v) == "void" { return "" }
+    return to_string(v)
+}
+
+fn _gint(m, key: string) -> i64 {
+    if !has_key(m, key) { return 0 }
+    let v = m[key]
+    let t = type_of(v)
+    if t == "int" { return v }
+    if t == "float" { return to_int(v) }
+    return 0
+}
+
+fn _gbool(m, key: string) -> bool {
+    if !has_key(m, key) { return false }
+    let v = m[key]
+    if type_of(v) == "bool" { return v }
+    return false
+}
+
+fn main() {
+    let av = argv()
+    let mut src = ""
+    if len(av) >= 3 { src = to_string(av[2]) }
+    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    let out_path = DEFAULT_OUT
+
+    println("wave1 engine_registry embed codegen")
+    println("  src:  " + src)
+    println("  out:  " + out_path)
+
+    let hash = _sha256(src)
+    let gen_at = _iso_utc_now()
+    let text = read_file(src)
+
+    let entries = []
+    let n = len(text)
+    let mut start = 0
+    let mut i = 0
+    while i <= n {
+        if i == n || text.substring(i, i + 1) == "\n" {
+            if i > start {
+                let line = text.substring(start, i)
+                if len(line.trim()) > 0 {
+                    let o = json_parse(line)
+                    if type_of(o) == "map" { entries.push(o) }
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    let count = len(entries)
+
+    let parts = []
+    parts.push("// AUTO-GENERATED — do not edit. Regenerate via tool/engine_registry_embed_gen.hexa\n")
+    parts.push("//\n")
+    parts.push("// Wave 1 absorption: engine registry static embed (D7).\n")
+    parts.push("// Source: engine/engine_registry.jsonl in nexus repo\n")
+    parts.push("\n")
+    parts.push("use \"compiler/engine_registry/embed\"\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(count) + "\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + ": [EngineEntry] = [\n")
+
+    let mut k = 0
+    while k < count {
+        let e = entries[k]
+        parts.push("    EngineEntry { ts: ")
+        parts.push(to_string(_gint(e, "ts")))
+        parts.push(", name: \"")
+        parts.push(_esc(_gstr(e, "name")))
+        parts.push("\", score: ")
+        parts.push(to_string(_gint(e, "score")))
+        parts.push(", auto_spawned: ")
+        parts.push(if _gbool(e, "auto_spawned") { "true" } else { "false" })
+        parts.push(", bt_parent: \"")
+        parts.push(_esc(_gstr(e, "bt_parent")))
+        parts.push("\", attack_angle: \"")
+        parts.push(_esc(_gstr(e, "attack_angle")))
+        parts.push("\", path: \"")
+        parts.push(_esc(_gstr(e, "path")))
+        parts.push("\" }")
+        if k + 1 < count { parts.push(",") }
+        parts.push("\n")
+        k = k + 1
+    }
+    parts.push("]\n")
+
+    write_file(out_path, parts.join(""))
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(count))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  sha256:  " + hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/engine_registry_embed_gen.hexa") { return true }
+    if s == "engine_registry_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

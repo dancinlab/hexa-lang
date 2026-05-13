@@ -1,0 +1,187 @@
+// tool/drill_dod_embed_gen.hexa — Wave 1 absorption driver (D8)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/roadmaps/drill_dod.json,
+// emits compiler/drill_dod/embedded.gen.hexa.
+
+use "compiler/drill_dod/embed"
+
+let DEFAULT_SRC: string = "roadmaps/drill_dod.json"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/drill_dod/embedded.gen.hexa"
+let MODULE_NAME: string = "DRILL_DOD"
+
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+fn _sha256(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+fn _gstr(m, key: string) -> string {
+    if !has_key(m, key) { return "" }
+    let v = m[key]
+    if type_of(v) == "void" { return "" }
+    return to_string(v)
+}
+
+fn _garr(m, key: string) -> array {
+    let out = []
+    if !has_key(m, key) { return out }
+    let v = m[key]
+    if type_of(v) != "array" { return out }
+    let n = len(v)
+    let mut i = 0
+    while i < n {
+        out.push(to_string(v[i]))
+        i = i + 1
+    }
+    return out
+}
+
+fn _emit_str_array(parts: array, arr: array) {
+    parts.push("[")
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        parts.push("\"")
+        parts.push(_esc(to_string(arr[i])))
+        parts.push("\"")
+        if i + 1 < n { parts.push(", ") }
+        i = i + 1
+    }
+    parts.push("]")
+}
+
+fn main() {
+    let av = argv()
+    let mut src = ""
+    if len(av) >= 3 { src = to_string(av[2]) }
+    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    let out_path = DEFAULT_OUT
+
+    println("wave1 drill_dod embed codegen")
+    println("  src:  " + src)
+    println("  out:  " + out_path)
+
+    let hash = _sha256(src)
+    let gen_at = _iso_utc_now()
+    let text = read_file(src)
+    let root = json_parse(text)
+
+    let track = _gstr(root, "track")
+    let desc = _gstr(root, "description")
+    let updated = _gstr(root, "updated")
+
+    let tier_rows = []  // [{name, entry-map}]
+    if type_of(root) == "map" && has_key(root, "tiers") {
+        let tiers = root["tiers"]
+        if type_of(tiers) == "map" {
+            let ks = map_keys(tiers)
+            let n = len(ks)
+            let mut i = 0
+            while i < n {
+                let name = to_string(ks[i])
+                let e = tiers[name]
+                if type_of(e) == "map" {
+                    let row = json_parse("{}")
+                    row["name"] = name
+                    row["description"] = _gstr(e, "description")
+                    row["required"] = e["required"]
+                    row["smoke"] = e["smoke"]
+                    tier_rows.push(row)
+                }
+                i = i + 1
+            }
+        }
+    }
+    let count = len(tier_rows)
+
+    let parts = []
+    parts.push("// AUTO-GENERATED — do not edit. Regenerate via tool/drill_dod_embed_gen.hexa\n")
+    parts.push("//\n")
+    parts.push("// Wave 1 absorption: drill DoD static embed (D8).\n")
+    parts.push("// Source: roadmaps/drill_dod.json in nexus repo\n")
+    parts.push("\n")
+    parts.push("use \"compiler/drill_dod/embed\"\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(count) + "\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_TRACK: string = \"" + _esc(track) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_DESCRIPTION: string = \"" + _esc(desc) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_UPDATED: string = \"" + _esc(updated) + "\"\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + ": [DrillDodEntry] = [\n")
+
+    let mut k = 0
+    while k < count {
+        let row = tier_rows[k]
+        let required = if type_of(row["required"]) == "array" { _garr(row, "required") } else { [] }
+        let smoke = if type_of(row["smoke"]) == "array" { _garr(row, "smoke") } else { [] }
+        parts.push("    DrillDodEntry { name: \"")
+        parts.push(_esc(to_string(row["name"])))
+        parts.push("\", description: \"")
+        parts.push(_esc(to_string(row["description"])))
+        parts.push("\", required: ")
+        _emit_str_array(parts, required)
+        parts.push(", smoke: ")
+        _emit_str_array(parts, smoke)
+        parts.push(" }")
+        if k + 1 < count { parts.push(",") }
+        parts.push("\n")
+        k = k + 1
+    }
+    parts.push("]\n")
+
+    write_file(out_path, parts.join(""))
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(count))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  sha256:  " + hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/drill_dod_embed_gen.hexa") { return true }
+    if s == "drill_dod_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

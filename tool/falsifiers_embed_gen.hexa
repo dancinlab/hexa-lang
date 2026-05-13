@@ -1,0 +1,167 @@
+// tool/falsifiers_embed_gen.hexa — Wave 1 absorption driver
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/design/hexa_sim/falsifiers.jsonl,
+// emits compiler/falsifiers/embedded.gen.hexa.
+//
+// Run:
+//   hexa run tool/falsifiers_embed_gen.hexa
+
+use "compiler/falsifiers/embed"
+
+let DEFAULT_SRC: string = "design/hexa_sim/falsifiers.jsonl"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/falsifiers/embedded.gen.hexa"
+let MODULE_NAME: string = "FALSIFIERS"
+
+// --- string escape (UTF-8 passthrough; quote/backslash/control only) ------
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+// --- iso utc now -----------------------------------------------------------
+fn _iso_utc_now() -> string {
+    // LC_ALL=C to avoid Korean locale bleeding into the timestamp string.
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+// --- sha256 (lowercased hex, no filename suffix) ---------------------------
+fn _sha256(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    // shasum format: "<hash>  <path>"; take the first 64 chars.
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+// --- map field reader (string, default "") --------------------------------
+fn _get_str(m, key: string) -> string {
+    if !has_key(m, key) { return "" }
+    let v = m[key]
+    if type_of(v) == "string" { return to_string(v) }
+    if type_of(v) == "void" { return "" }
+    return to_string(v)
+}
+
+fn main() {
+    let av = argv()
+    let mut src = ""
+    if len(av) >= 3 { src = to_string(av[2]) }
+    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    let out_path = DEFAULT_OUT
+
+    println("wave1 falsifiers embed codegen")
+    println("  src:  " + src)
+    println("  out:  " + out_path)
+
+    let hash = _sha256(src)
+    let gen_at = _iso_utc_now()
+    let text = read_file(src)
+
+    // JSONL: split on newline, parse each non-empty line as object.
+    // hexa json_parse handles a single object; we manually split.
+    let entries = []
+    let n = len(text)
+    let mut start = 0
+    let mut i = 0
+    while i <= n {
+        if i == n || text.substring(i, i + 1) == "\n" {
+            if i > start {
+                let line = text.substring(start, i)
+                if len(line.trim()) > 0 {
+                    let o = json_parse(line)
+                    if type_of(o) == "map" {
+                        entries.push(o)
+                    }
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+
+    let count = len(entries)
+
+    let parts = []
+    parts.push("// AUTO-GENERATED — do not edit. Regenerate via tool/falsifiers_embed_gen.hexa\n")
+    parts.push("//\n")
+    parts.push("// Wave 1 absorption: falsifier registry static embed.\n")
+    parts.push("// Source: design/hexa_sim/falsifiers.jsonl in nexus repo\n")
+    parts.push("// Pin:    state/falsifier_registry.sha256\n")
+    parts.push("\n")
+    parts.push("use \"compiler/falsifiers/embed\"\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(count) + "\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + ": [FalsifierEntry] = [\n")
+
+    let mut k = 0
+    while k < count {
+        let e = entries[k]
+        parts.push("    FalsifierEntry { id: \"")
+        parts.push(_esc(_get_str(e, "id")))
+        parts.push("\", slug: \"")
+        parts.push(_esc(_get_str(e, "slug")))
+        parts.push("\", claim: \"")
+        parts.push(_esc(_get_str(e, "claim")))
+        parts.push("\", cmd: \"")
+        parts.push(_esc(_get_str(e, "cmd")))
+        parts.push("\", cmd_sha256: \"")
+        parts.push(_esc(_get_str(e, "cmd_sha256")))
+        parts.push("\", pass: \"")
+        parts.push(_esc(_get_str(e, "pass")))
+        parts.push("\", reason: \"")
+        parts.push(_esc(_get_str(e, "reason")))
+        parts.push("\", fix: \"")
+        parts.push(_esc(_get_str(e, "fix")))
+        parts.push("\", origin: \"")
+        parts.push(_esc(_get_str(e, "origin")))
+        parts.push("\" }")
+        if k + 1 < count { parts.push(",") }
+        parts.push("\n")
+        k = k + 1
+    }
+    parts.push("]\n")
+
+    write_file(out_path, parts.join(""))
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(count))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  sha256:  " + hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/falsifiers_embed_gen.hexa") { return true }
+    if s == "falsifiers_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

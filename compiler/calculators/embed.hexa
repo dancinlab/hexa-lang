@@ -1,0 +1,25 @@
+// HEXA Native Compiler — Wave 1 absorption: calculators registry embed
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/config/calculators.json
+//
+// JSON shape: top-level map { project: [calculator, ...] } where each
+// calculator carries {name, description, category, path, repo}. We flatten
+// by tagging each entry with its parent project so the embedded array is
+// a single list of CalculatorEntry rows. Empty projects (no calculators
+// registered yet) contribute zero rows.
+//
+// Consumer surface — compiler/calculators/static_index.hexa.
+
+@phase("parse_only")
+pub struct CalculatorEntry {
+    project: string,
+    name: string,
+    description: string,
+    category: string,
+    path: string,
+    repo: string
+}

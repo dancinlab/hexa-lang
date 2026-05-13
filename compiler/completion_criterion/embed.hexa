@@ -1,0 +1,31 @@
+// HEXA Native Compiler — Wave 1 absorption: universal completion criterion
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/config/projects.json -> _meta.universal_completion_criterion
+//
+// We extract ONLY the universal_completion_criterion sub-object; the
+// remainder of projects.json (projects list, per-project paths, …) is
+// metadata explicitly excluded from this absorption.
+//
+// The criterion is a single fixed-shape record with scalar fields plus
+// two short string lists (forbidden, allowed). We model it as one row
+// (the canonical record) and a flat kv table for cases where consumers
+// want to iterate.
+
+@phase("parse_only")
+pub struct CompletionCriterion {
+    name: string,
+    breakthrough_threshold: i64,
+    breakthrough_label: string,
+    breakthrough_definition: string,
+    principle: string,
+    description: string,
+    forbidden: [string],
+    allowed: [string],
+    verify_type: string,
+    verify_artifact: string,
+    violation: string
+}

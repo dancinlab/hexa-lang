@@ -1,0 +1,19 @@
+// HEXA Native Compiler — Wave 1 absorption: drill_dod static index
+
+use "compiler/drill_dod/embed"
+use "compiler/drill_dod/embedded.gen"
+
+pub fn drill_dod_list() -> [DrillDodEntry] {
+    return DRILL_DOD
+}
+
+pub fn drill_dod_tier(name: string) -> DrillDodEntry {
+    let n = len(DRILL_DOD)
+    let mut i = 0
+    while i < n {
+        let e = DRILL_DOD[i]
+        if e.name == name { return e }
+        i = i + 1
+    }
+    return DrillDodEntry { name: "", description: "", required: [], smoke: [] }
+}

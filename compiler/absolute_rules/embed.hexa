@@ -1,0 +1,38 @@
+// HEXA Native Compiler — Wave 1 absorption: absolute_rules embed
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/config/absolute_rules.json
+//
+// JSON shape: {_meta, common: [rule, ...], projects: { <name>: [rule, ...] }}.
+// Each rule carries:
+//   id          (str, required)
+//   rule        (str, required)
+//   level       (str, required) — e.g. "🔴", "★★★", "⛔⛔"
+//   enforcement (str, required)
+//   applies_to  (str, optional)
+//   sub_rules   ([str], optional)
+//   except      ([str], optional)
+//   see_also    ([str], optional)
+//   promoted_from (str, optional)
+//
+// We tag every rule with `section` = "common" for top-level common rules,
+// or the project key (e.g. "nexus", "anima", "hexa-lang", ...) for rules
+// nested under projects.<name>. Optional string fields default to ""; list
+// fields default to [].
+
+@phase("parse_only")
+pub struct AbsoluteRuleEntry {
+    section: string,
+    id: string,
+    rule: string,
+    level: string,
+    enforcement: string,
+    applies_to: string,
+    sub_rules: [string],
+    except: [string],
+    see_also: [string],
+    promoted_from: string
+}

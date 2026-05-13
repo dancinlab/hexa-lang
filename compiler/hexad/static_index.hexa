@@ -1,0 +1,44 @@
+// HEXA Native Compiler — Wave 1 absorption: hexad static index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Read-only facade over the embedded HEXAD_CONSTANTS table.
+//
+//   pub fn hexad_list() -> [HexadConstantEntry]
+//   pub fn hexad_lookup(group: string, key: string) -> HexadConstantEntry
+//   pub fn hexad_lookup_f64(group: string, key: string) -> f64
+//   pub fn hexad_lookup_i64(group: string, key: string) -> i64
+//
+// Lookup miss returns a sentinel entry (group == "" and key == "").
+
+use "compiler/hexad/embed"
+use "compiler/hexad/embedded.gen"
+
+pub fn hexad_list() -> [HexadConstantEntry] {
+    return HEXAD_CONSTANTS
+}
+
+pub fn hexad_lookup(group: string, key: string) -> HexadConstantEntry {
+    let n = len(HEXAD_CONSTANTS)
+    let mut i = 0
+    while i < n {
+        let e = HEXAD_CONSTANTS[i]
+        if e.group == group && e.key == key { return e }
+        i = i + 1
+    }
+    return HexadConstantEntry {
+        group: "", key: "", kind: "",
+        value_f64: 0.0, value_i64: 0, value_str_list: []
+    }
+}
+
+pub fn hexad_lookup_f64(group: string, key: string) -> f64 {
+    let e = hexad_lookup(group, key)
+    return e.value_f64
+}
+
+pub fn hexad_lookup_i64(group: string, key: string) -> i64 {
+    let e = hexad_lookup(group, key)
+    return e.value_i64
+}

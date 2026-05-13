@@ -1,0 +1,45 @@
+// HEXA Native Compiler — Wave 1 absorption: absolute_rules static index
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+//   pub fn absolute_rules_list() -> [AbsoluteRuleEntry]
+//   pub fn absolute_rules_lookup(id: string) -> AbsoluteRuleEntry
+//   pub fn absolute_rules_by_section(section: string) -> [AbsoluteRuleEntry]
+//
+// Note: `id` is unique within a section but two sections (e.g. common AI-NATIVE
+// vs a project-scoped variant) could theoretically collide. The first match
+// wins; consumers needing strict scoping should call by_section first.
+
+use "compiler/absolute_rules/embed"
+use "compiler/absolute_rules/embedded.gen"
+
+pub fn absolute_rules_list() -> [AbsoluteRuleEntry] {
+    return ABSOLUTE_RULES
+}
+
+pub fn absolute_rules_lookup(id: string) -> AbsoluteRuleEntry {
+    let n = len(ABSOLUTE_RULES)
+    let mut i = 0
+    while i < n {
+        let e = ABSOLUTE_RULES[i]
+        if e.id == id { return e }
+        i = i + 1
+    }
+    return AbsoluteRuleEntry {
+        section: "", id: "", rule: "", level: "", enforcement: "",
+        applies_to: "", sub_rules: [], except: [], see_also: [], promoted_from: ""
+    }
+}
+
+pub fn absolute_rules_by_section(section: string) -> [AbsoluteRuleEntry] {
+    let out = []
+    let n = len(ABSOLUTE_RULES)
+    let mut i = 0
+    while i < n {
+        let e = ABSOLUTE_RULES[i]
+        if e.section == section { out.push(e) }
+        i = i + 1
+    }
+    return out
+}

@@ -1,0 +1,149 @@
+// tool/lens_taxonomy_embed_gen.hexa — Wave 1 absorption driver (D9)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/config/lens_registry.json (4000 lenses),
+// emits compiler/lens_taxonomy/embedded.gen.hexa.
+
+use "compiler/lens_taxonomy/embed"
+
+let DEFAULT_SRC: string = "config/lens_registry.json"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/lens_taxonomy/embedded.gen.hexa"
+let MODULE_NAME: string = "LENS_TAXONOMY"
+
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+fn _sha256(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+fn _gstr(m, key: string) -> string {
+    if !has_key(m, key) { return "" }
+    let v = m[key]
+    if type_of(v) == "void" { return "" }
+    return to_string(v)
+}
+
+fn main() {
+    let av = argv()
+    let mut src = ""
+    if len(av) >= 3 { src = to_string(av[2]) }
+    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    let out_path = DEFAULT_OUT
+
+    println("wave1 lens_taxonomy embed codegen")
+    println("  src:  " + src)
+    println("  out:  " + out_path)
+
+    let hash = _sha256(src)
+    let gen_at = _iso_utc_now()
+    let text = read_file(src)
+    let root = json_parse(text)
+
+    let entries = []
+    if type_of(root) == "map" && has_key(root, "lenses") {
+        let arr = root["lenses"]
+        if type_of(arr) == "array" {
+            let n = len(arr)
+            let mut i = 0
+            while i < n {
+                if type_of(arr[i]) == "map" { entries.push(arr[i]) }
+                i = i + 1
+            }
+        }
+    }
+    let count = len(entries)
+
+    // Write header first; stream entries in chunks to bound peak RSS.
+    let header = []
+    header.push("// AUTO-GENERATED — do not edit. Regenerate via tool/lens_taxonomy_embed_gen.hexa\n")
+    header.push("//\n")
+    header.push("// Wave 1 absorption: lens taxonomy static embed (D9).\n")
+    header.push("// Source: config/lens_registry.json in nexus repo (4000 lenses).\n")
+    header.push("\n")
+    header.push("use \"compiler/lens_taxonomy/embed\"\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(count) + "\n")
+    header.push("\n")
+    header.push("@phase(\"parse_only\")\n")
+    header.push("pub let " + MODULE_NAME + ": [LensEntry] = [\n")
+    write_file(out_path, header.join(""))
+
+    let CHUNK: i64 = 256
+    let mut k = 0
+    while k < count {
+        let chunk = []
+        let end = if k + CHUNK < count { k + CHUNK } else { count }
+        let mut j = k
+        while j < end {
+            let e = entries[j]
+            chunk.push("    LensEntry { name: \"")
+            chunk.push(_esc(_gstr(e, "name")))
+            chunk.push("\", file: \"")
+            chunk.push(_esc(_gstr(e, "file")))
+            chunk.push("\", category: \"")
+            chunk.push(_esc(_gstr(e, "category")))
+            chunk.push("\", status: \"")
+            chunk.push(_esc(_gstr(e, "status")))
+            chunk.push("\", description: \"")
+            chunk.push(_esc(_gstr(e, "description")))
+            chunk.push("\", derived_from: \"")
+            chunk.push(_esc(_gstr(e, "derived_from")))
+            chunk.push("\" }")
+            if j + 1 < count { chunk.push(",") }
+            chunk.push("\n")
+            j = j + 1
+        }
+        append_file(out_path, chunk.join(""))
+        k = end
+    }
+    append_file(out_path, "]\n")
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(count))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  sha256:  " + hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/lens_taxonomy_embed_gen.hexa") { return true }
+    if s == "lens_taxonomy_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

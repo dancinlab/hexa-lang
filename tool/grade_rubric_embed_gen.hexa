@@ -1,0 +1,220 @@
+// tool/grade_rubric_embed_gen.hexa — Wave 1 absorption driver (D5)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/config/grade_rubric.json,
+// emits compiler/grade_rubric/embedded.gen.hexa.
+
+use "compiler/grade_rubric/embed"
+
+let DEFAULT_SRC: string = "config/grade_rubric.json"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/grade_rubric/embedded.gen.hexa"
+let MODULE_NAME: string = "GRADE_RUBRIC"
+
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+fn _sha256(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+fn _gstr(m, key: string) -> string {
+    if !has_key(m, key) { return "" }
+    let v = m[key]
+    if type_of(v) == "void" { return "" }
+    return to_string(v)
+}
+
+fn _gint(m, key: string) -> i64 {
+    if !has_key(m, key) { return 0 }
+    let v = m[key]
+    let t = type_of(v)
+    if t == "int" { return v }
+    if t == "float" { return to_int(v) }
+    return 0
+}
+
+fn main() {
+    let av = argv()
+    let mut src = ""
+    if len(av) >= 3 { src = to_string(av[2]) }
+    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    let out_path = DEFAULT_OUT
+
+    println("wave1 grade_rubric embed codegen")
+    println("  src:  " + src)
+    println("  out:  " + out_path)
+
+    let hash = _sha256(src)
+    let gen_at = _iso_utc_now()
+    let text = read_file(src)
+    let root = json_parse(text)
+
+    // Primary grades list.
+    let grades = []
+    if type_of(root) == "map" && has_key(root, "grades") {
+        let arr = root["grades"]
+        if type_of(arr) == "array" {
+            let n = len(arr)
+            let mut i = 0
+            while i < n {
+                if type_of(arr[i]) == "map" { grades.push(arr[i]) }
+                i = i + 1
+            }
+        }
+    }
+    let count = len(grades)
+
+    // KV side-tables.
+    let kv_rows = []  // [{table, key, value_kind, value_str, value_i64}]
+    fn _push_table_int(rows: array, root, name: string) {
+        if !has_key(root, name) { return }
+        let m = root[name]
+        if type_of(m) != "map" { return }
+        let ks = map_keys(m)
+        let n = len(ks)
+        let mut i = 0
+        while i < n {
+            let k = to_string(ks[i])
+            let v = m[k]
+            let r = json_parse("{}")
+            r["table"] = name
+            r["key"] = k
+            r["value_kind"] = "i64"
+            r["value_str"] = ""
+            let t = type_of(v)
+            if t == "int" { r["value_i64"] = v }
+            else if t == "float" { r["value_i64"] = to_int(v) }
+            else { r["value_i64"] = 0 }
+            rows.push(r)
+            i = i + 1
+        }
+    }
+    fn _push_table_str(rows: array, root, name: string) {
+        if !has_key(root, name) { return }
+        let m = root[name]
+        if type_of(m) != "map" { return }
+        let ks = map_keys(m)
+        let n = len(ks)
+        let mut i = 0
+        while i < n {
+            let k = to_string(ks[i])
+            let v = m[k]
+            let r = json_parse("{}")
+            r["table"] = name
+            r["key"] = k
+            r["value_kind"] = "string"
+            r["value_str"] = if type_of(v) == "void" { "" } else { to_string(v) }
+            r["value_i64"] = 0
+            rows.push(r)
+            i = i + 1
+        }
+    }
+    _push_table_int(kv_rows, root, "verify_mapping")
+    _push_table_str(kv_rows, root, "promotion")
+    _push_table_str(kv_rows, root, "demotion")
+    let kv_count = len(kv_rows)
+
+    let parts = []
+    parts.push("// AUTO-GENERATED — do not edit. Regenerate via tool/grade_rubric_embed_gen.hexa\n")
+    parts.push("//\n")
+    parts.push("// Wave 1 absorption: grade_rubric static embed (D5).\n")
+    parts.push("// Source: config/grade_rubric.json in nexus repo\n")
+    parts.push("\n")
+    parts.push("use \"compiler/grade_rubric/embed\"\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(count) + "\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + ": [GradeRubricEntry] = [\n")
+
+    let mut k = 0
+    while k < count {
+        let e = grades[k]
+        parts.push("    GradeRubricEntry { grade: ")
+        parts.push(to_string(_gint(e, "grade")))
+        parts.push(", stage: \"")
+        parts.push(_esc(_gstr(e, "stage")))
+        parts.push("\", emoji: \"")
+        parts.push(_esc(_gstr(e, "emoji")))
+        parts.push("\", criteria: \"")
+        parts.push(_esc(_gstr(e, "criteria")))
+        parts.push("\" }")
+        if k + 1 < count { parts.push(",") }
+        parts.push("\n")
+        k = k + 1
+    }
+    parts.push("]\n\n")
+
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_KV: [GradeRubricKv] = [\n")
+    let mut j = 0
+    while j < kv_count {
+        let r = kv_rows[j]
+        parts.push("    GradeRubricKv { table: \"")
+        parts.push(_esc(to_string(r["table"])))
+        parts.push("\", key: \"")
+        parts.push(_esc(to_string(r["key"])))
+        parts.push("\", value_kind: \"")
+        parts.push(_esc(to_string(r["value_kind"])))
+        parts.push("\", value_str: \"")
+        parts.push(_esc(to_string(r["value_str"])))
+        parts.push("\", value_i64: ")
+        parts.push(to_string(r["value_i64"]))
+        parts.push(" }")
+        if j + 1 < kv_count { parts.push(",") }
+        parts.push("\n")
+        j = j + 1
+    }
+    parts.push("]\n")
+
+    write_file(out_path, parts.join(""))
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(count))
+    println("  kv_rows: " + to_string(kv_count))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  sha256:  " + hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/grade_rubric_embed_gen.hexa") { return true }
+    if s == "grade_rubric_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

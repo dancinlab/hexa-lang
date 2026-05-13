@@ -1,0 +1,37 @@
+// HEXA Native Compiler — Wave 1 absorption: lens taxonomy embed
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/config/lens_registry.json  (4000 lenses)
+//
+// Only the universally-present fields plus the two near-universal ones
+// (description, derived_from) are embedded. Audit-only fields (bt,
+// hexa_engine, impl, implemented_date, implemented, features) are dropped
+// to keep the generated artifact bounded — those are deltas vs specific
+// implementation runs and can be re-queried from the SSOT JSON when
+// needed.
+//
+// Field presence in source:
+//   name           4000/4000  (always)
+//   file           4000/4000  (always)
+//   category       4000/4000  (always — one of: arts_humanities, biology,
+//                              chemistry, cognition, cross_domain, cs,
+//                              earth_science, economics, engineering,
+//                              fusion, math, meta_system, physics,
+//                              thermodynamics)
+//   status         4000/4000  (always — one of: implemented, synthesized,
+//                              forged, derived)
+//   description    2537/4000  (defaults to "")
+//   derived_from   3559/4000  (defaults to "")
+
+@phase("parse_only")
+pub struct LensEntry {
+    name: string,
+    file: string,
+    category: string,
+    status: string,
+    description: string,
+    derived_from: string
+}

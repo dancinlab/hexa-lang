@@ -1,0 +1,23 @@
+// HEXA Native Compiler — Wave 1 absorption: drill DoD embed
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/roadmaps/drill_dod.json
+//
+// JSON shape: {_meta, track, description, updated, tiers: { name: {...} }}.
+// Each tier carries:
+//   description (str), required ([str]), smoke ([str])
+// We flatten the tiers map into one DrillDodEntry per tier, preserving
+// insertion order and tagging each row with the canonical tier `name`
+// (the map key). Top-level scalars (track / updated / overall description)
+// are exposed as `pub let` constants alongside the entry list.
+
+@phase("parse_only")
+pub struct DrillDodEntry {
+    name: string,
+    description: string,
+    required: [string],
+    smoke: [string]
+}

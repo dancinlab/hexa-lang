@@ -1,0 +1,30 @@
+// HEXA Native Compiler — Wave 1 absorption: hexad CDESM constants embed
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/config/hexad_constants.json
+//
+// The source is a nested fixed-shape tree (groups: psi/gates/channels/model/
+// sigma/thresholds + ln2 scalar). We flatten each leaf into one
+// HexadConstantEntry row so the embedded table is iterable. The leaf kind
+// is one of:
+//   "f64"          — float scalar (value_f64 set)
+//   "i64"          — integer scalar (value_i64 set)
+//   "string_list"  — list of strings (value_str_list set; sole channels.names)
+//
+// Only one of value_f64 / value_i64 / value_str_list carries meaning per
+// row; the others are zero / empty. Consumers dispatch on `kind`.
+//
+// Consumer surface — compiler/hexad/static_index.hexa.
+
+@phase("parse_only")
+pub struct HexadConstantEntry {
+    group: string,
+    key: string,
+    kind: string,
+    value_f64: f64,
+    value_i64: i64,
+    value_str_list: [string]
+}

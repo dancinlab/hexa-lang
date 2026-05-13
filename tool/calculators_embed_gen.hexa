@@ -1,0 +1,162 @@
+// tool/calculators_embed_gen.hexa — Wave 1 absorption driver (D3)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Reads ~/core/nexus/config/calculators.json,
+// emits compiler/calculators/embedded.gen.hexa.
+//
+// Run:
+//   hexa run tool/calculators_embed_gen.hexa
+
+use "compiler/calculators/embed"
+
+let DEFAULT_SRC: string = "config/calculators.json"
+let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/calculators/embedded.gen.hexa"
+let MODULE_NAME: string = "CALCULATORS"
+
+fn _esc_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _esc(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_esc_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+fn _iso_utc_now() -> string {
+    return exec("LC_ALL=C date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+}
+
+fn _sha256(path: string) -> string {
+    let out = exec("LC_ALL=C shasum -a 256 " + path).trim()
+    if len(out) < 64 { return "" }
+    return out.substring(0, 64)
+}
+
+fn _gstr(m, key: string) -> string {
+    if !has_key(m, key) { return "" }
+    let v = m[key]
+    if type_of(v) == "void" { return "" }
+    return to_string(v)
+}
+
+fn main() {
+    let av = argv()
+    let mut src = ""
+    if len(av) >= 3 { src = to_string(av[2]) }
+    if len(src) == 0 { src = env("HOME") + "/core/nexus/" + DEFAULT_SRC }
+    let out_path = DEFAULT_OUT
+
+    println("wave1 calculators embed codegen")
+    println("  src:  " + src)
+    println("  out:  " + out_path)
+
+    let hash = _sha256(src)
+    let gen_at = _iso_utc_now()
+    let text = read_file(src)
+    let root = json_parse(text)
+
+    // Flatten: iterate top-level project keys, then each project's list.
+    let entries = []
+    if type_of(root) == "map" {
+        let pkeys = map_keys(root)
+        let np = len(pkeys)
+        let mut p = 0
+        while p < np {
+            let project = to_string(pkeys[p])
+            let arr = root[project]
+            if type_of(arr) == "array" {
+                let n = len(arr)
+                let mut i = 0
+                while i < n {
+                    let e = arr[i]
+                    if type_of(e) == "map" {
+                        let row = json_parse("{}")
+                        row["project"] = project
+                        row["name"] = _gstr(e, "name")
+                        row["description"] = _gstr(e, "description")
+                        row["category"] = _gstr(e, "category")
+                        row["path"] = _gstr(e, "path")
+                        row["repo"] = _gstr(e, "repo")
+                        entries.push(row)
+                    }
+                    i = i + 1
+                }
+            }
+            p = p + 1
+        }
+    }
+    let count = len(entries)
+
+    let parts = []
+    parts.push("// AUTO-GENERATED — do not edit. Regenerate via tool/calculators_embed_gen.hexa\n")
+    parts.push("//\n")
+    parts.push("// Wave 1 absorption: calculators registry static embed (D3).\n")
+    parts.push("// Source: config/calculators.json in nexus repo\n")
+    parts.push("\n")
+    parts.push("use \"compiler/calculators/embed\"\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_HASH: string = \"" + _esc(hash) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_GENERATED_AT: string = \"" + _esc(gen_at) + "\"\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + "_SOURCE_COUNT: i64 = " + to_string(count) + "\n")
+    parts.push("\n")
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let " + MODULE_NAME + ": [CalculatorEntry] = [\n")
+
+    let mut k = 0
+    while k < count {
+        let e = entries[k]
+        parts.push("    CalculatorEntry { project: \"")
+        parts.push(_esc(_gstr(e, "project")))
+        parts.push("\", name: \"")
+        parts.push(_esc(_gstr(e, "name")))
+        parts.push("\", description: \"")
+        parts.push(_esc(_gstr(e, "description")))
+        parts.push("\", category: \"")
+        parts.push(_esc(_gstr(e, "category")))
+        parts.push("\", path: \"")
+        parts.push(_esc(_gstr(e, "path")))
+        parts.push("\", repo: \"")
+        parts.push(_esc(_gstr(e, "repo")))
+        parts.push("\" }")
+        if k + 1 < count { parts.push(",") }
+        parts.push("\n")
+        k = k + 1
+    }
+    parts.push("]\n")
+
+    write_file(out_path, parts.join(""))
+
+    let sz = file_size(out_path)
+    println("")
+    println("emit:")
+    println("  entries: " + to_string(count))
+    println("  size:    " + to_string(sz) + " bytes")
+    println("  sha256:  " + hash)
+    println("  gen_at:  " + gen_at)
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/calculators_embed_gen.hexa") { return true }
+    if s == "calculators_embed_gen.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

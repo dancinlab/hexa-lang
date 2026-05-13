@@ -1,0 +1,30 @@
+// HEXA Native Compiler — Wave 1 absorption: falsifiers registry embed
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Source SSOT:
+//   ~/core/nexus/design/hexa_sim/falsifiers.jsonl  (168 entries, F1..F168)
+//   pin:  ~/core/nexus/state/falsifier_registry.sha256
+//
+// One FalsifierEntry per line in the source JSONL. Only the six fields
+// present on every entry are mandatory (id/slug/claim/cmd/cmd_sha256/pass);
+// the optional triplet reason/fix/origin is empty-string when absent in
+// the source. Other audit-only fields (atlas_target, captures_invariant,
+// raw71_mode, ...) are intentionally NOT embedded — they are deltas
+// against specific evidence runs and would churn the embed unnecessarily.
+//
+// Consumer surface — compiler/falsifiers/static_index.hexa.
+
+@phase("parse_only")
+pub struct FalsifierEntry {
+    id: string,
+    slug: string,
+    claim: string,
+    cmd: string,
+    cmd_sha256: string,
+    pass: string,
+    reason: string,
+    fix: string,
+    origin: string
+}
