@@ -1,0 +1,106 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "n6",
+  "scopeName": "source.n6",
+  "fileTypes": ["n6"],
+  "patterns": [
+    { "include": "#shebang" },
+    { "include": "#section-divider" },
+    { "include": "#box-divider" },
+    { "include": "#comment" },
+    { "include": "#entry-header" },
+    { "include": "#edge-line" }
+  ],
+  "repository": {
+    "shebang": {
+      "match": "^#!.*$",
+      "name": "comment.line.shebang.n6"
+    },
+    "section-divider": {
+      "match": "^# ── .* ──+$",
+      "name": "markup.heading.section.n6"
+    },
+    "box-divider": {
+      "match": "^# ═+$",
+      "name": "markup.heading.box.n6"
+    },
+    "comment": {
+      "match": "^#.*$",
+      "name": "comment.line.number-sign.n6"
+    },
+    "entry-header": {
+      "match": "^(@[PCLFRSXE?])\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s*(=)\\s*(.+?))?\\s+(::)\\s+(\\S+)\\s+(\\[)([^\\]]+)(\\])\\s*$",
+      "captures": {
+        "1": { "name": "keyword.control.type.n6" },
+        "2": { "name": "entity.name.atom.n6" },
+        "3": { "name": "keyword.operator.assignment.n6" },
+        "4": { "patterns": [{ "include": "#expression" }] },
+        "5": { "name": "keyword.operator.domain.n6" },
+        "6": { "name": "entity.name.namespace.domain.n6" },
+        "7": { "name": "punctuation.definition.grade.begin.n6" },
+        "8": { "patterns": [{ "include": "#grade" }] },
+        "9": { "name": "punctuation.definition.grade.end.n6" }
+      }
+    },
+    "grade": {
+      "patterns": [
+        {
+          "match": "^(\\d+)([*!?]*)$",
+          "captures": {
+            "1": { "name": "constant.numeric.grade.n6" },
+            "2": { "name": "keyword.other.grade-marker.n6" }
+          }
+        },
+        {
+          "match": "^(\\d+\\.\\d+)$",
+          "name": "constant.numeric.alien-index.n6"
+        }
+      ]
+    },
+    "edge-line": {
+      "patterns": [
+        {
+          "match": "^(\\s+)(<-|->|=>|==|~>|\\|>|!!)(\\s+)(.*)$",
+          "captures": {
+            "2": { "name": "keyword.operator.edge.n6" },
+            "4": { "patterns": [{ "include": "#expression" }] }
+          }
+        },
+        {
+          "match": "^(\\s+)(\".*\")\\s*$",
+          "captures": {
+            "2": { "name": "string.quoted.double.prose.n6" }
+          }
+        }
+      ]
+    },
+    "expression": {
+      "patterns": [
+        { "include": "#string" },
+        { "include": "#number" },
+        { "include": "#operator" },
+        { "include": "#identifier" }
+      ]
+    },
+    "string": {
+      "name": "string.quoted.double.n6",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.n6", "match": "\\\\." }
+      ]
+    },
+    "number": {
+      "name": "constant.numeric.n6",
+      "match": "-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?"
+    },
+    "operator": {
+      "name": "keyword.operator.arithmetic.n6",
+      "match": "[+\\-*/^=()]"
+    },
+    "identifier": {
+      "name": "variable.other.n6",
+      "match": "[A-Za-z_][A-Za-z0-9_]*"
+    }
+  }
+}

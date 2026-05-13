@@ -1,0 +1,46 @@
+#!/usr/bin/env n6
+# ══════════════════════════════════════════════════════════════
+# Example: relations + formulas + laws
+# ══════════════════════════════════════════════════════════════
+
+# ── 복합 상수 (Constants) ──────────────────────────────────
+
+@C sigma_sq = sigma^2 = 144 :: architecture [10*]
+  <- sigma
+  => "Ada AD102 SM = 144"
+  |> verify_alien10.py
+
+@C phi_tau = phi^tau = 16 :: architecture [10*]
+  <- phi, tau
+  == 2^4
+
+# ── 수식 (Formulas) ────────────────────────────────────────
+
+@F sm_blackwell = sigma * phi^tau = 192 :: architecture [10*]
+  <- sigma, phi, tau
+  => "Blackwell GB202 SMs"
+
+@F sm_ampere = 2^(sigma-sopfr) = 128 :: architecture [10*]
+  <- sigma, sopfr
+  => "CUDA cores/SM (Ampere+)"
+
+# ── 관계 (Relations) ───────────────────────────────────────
+
+@R perfect_number :: foundation [10*]
+  "sigma(n) = 2n — 6은 완전수"
+  <- n, sigma
+  == sigma(6) = 12 = 2*6
+
+@R sigma_decomp :: foundation [10*]
+  "sigma = phi * n"
+  <- sigma, phi, n
+  == 12 = 2 * 6
+
+# ── 법칙 (Laws) ────────────────────────────────────────────
+
+@L alpha_coupling = 0.014 :: consciousness [10*]
+  "PureField 결합 비율 alpha"
+  => "C->D 결합 강도"
+
+@L frustration_critical = 0.10 :: consciousness [10*]
+  "임계 좌절 — 10% 갈등이 최적"

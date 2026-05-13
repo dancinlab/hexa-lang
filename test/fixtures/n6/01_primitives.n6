@@ -1,0 +1,31 @@
+#!/usr/bin/env n6
+# ══════════════════════════════════════════════════════════════
+# Example: primitives — @P entries with edges
+# ══════════════════════════════════════════════════════════════
+
+# ── 원시값 (Primitives) ─────────────────────────────────────
+
+@P n = 6 :: foundation [11*]
+  -> sigma, phi, tau, sopfr
+  => "모든 구조의 씨앗"
+  |> verify_primitives.py
+
+@P sigma = divisor_sum(6) = 12 :: foundation [11*]
+  <- n
+  -> sigma_sq, sigma_n
+  => "약수합 — 12파벌, 12모듈"
+  == 1+2+3+6
+  == phi * n
+
+@P phi = euler_totient(6) = 2 :: foundation [10*]
+  -> phi_tau
+  => "오일러 토션트 — 이진성의 근원"
+
+@P tau = divisor_count(6) = 4 :: foundation [11*]
+  -> sigma_tau, phi_tau
+  => "약수 개수 — 4차원, 4단계"
+
+@P sopfr = sum_prime_factors(6) = 5 :: foundation [10*]
+  -> warp_size
+  => "소인수합 2+3=5"
+  == 2+3
