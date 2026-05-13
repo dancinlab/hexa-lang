@@ -6446,6 +6446,31 @@ static HexaVal farr_set;
 static HexaVal farr_len;
 static HexaVal farr_free;
 
+// RFC 036 (2026-05-13): farr_int_array — packed int64_t* handle table.
+// Same shape as RFC 030 farr (packed double[]), but for int64_t storage.
+// Motivation: replaces `[int]` mask tables (ham_flip, ham_z, ham_y, ham_cy,
+// exc_flip, exc_z, exc_y, exc_cy, exc_param_idx) in qmirror chemistry_vqe
+// hot loops. At 4e/6o (10 qubits, ~2-3k Pauli terms) the boxed-HexaVal
+// retention from these arrays binds the in-process NM optimizer at the
+// 768 MB cap. Packed int64_t cuts arena retention by ~50× and removes
+// the HEXA_MEM_CAP_MB=2048 workaround for 4e/6o.
+HexaVal hexa_farr_int_zeros(HexaVal n_v);
+HexaVal hexa_farr_int_get(HexaVal h_v, HexaVal i_v);
+HexaVal hexa_farr_int_set(HexaVal h_v, HexaVal i_v, HexaVal x_v);
+HexaVal hexa_farr_int_len(HexaVal h_v);
+HexaVal hexa_farr_int_fill_from_array(HexaVal h_v, HexaVal arr_v);
+HexaVal hexa_farr_int_copy(HexaVal src_v);
+HexaVal hexa_farr_int_sum(HexaVal h_v);
+HexaVal hexa_farr_int_free(HexaVal h_v);
+static HexaVal farr_int_zeros;
+static HexaVal farr_int_get;
+static HexaVal farr_int_set;
+static HexaVal farr_int_len;
+static HexaVal farr_int_fill_from_array;
+static HexaVal farr_int_copy;
+static HexaVal farr_int_sum;
+static HexaVal farr_int_free;
+
 // RFC 025 (2026-05-12): safetensors mmap-backed zero-copy load shims.
 // Mirror the farr_* pattern: bare static carriers so transpiled C
 // resolves `hexa_call*(safetensors_mmap_*, ...)` to direct calls into
@@ -7662,6 +7687,168 @@ HexaVal hexa_farr_free(HexaVal h_v) {
     }
     if (_hx_farr_freelist_n < _hx_farr_freelist_cap) {
         _hx_farr_freelist[_hx_farr_freelist_n++] = id;
+    }
+    return hexa_void();
+}
+
+// ═══════════════════════════════════════════════════════════
+// RFC 036 (2026-05-13): farr_int_array — packed int64_t* handle.
+//
+// Mirrors hexa_farr_zeros/get/set/len/free verbatim, except the buffer
+// is int64_t* (not double*). Allocator returns an integer handle; the
+// hexa-side type is `int` (same TAG_INT representation as farr handles
+// for doubles). Distinguished only by which builtins consume the id.
+//
+// Lifetime: handles are NEVER freed automatically — explicit free via
+// hexa_farr_int_free. Same model as RFC 030 farr. Memory-leak risk for
+// typical usage (one alloc per cache field, freed at process end) is
+// bounded. Out-of-bounds reads return 0; OOB writes are no-ops.
+//
+// Builtins:
+//     farr_int_zeros(n)            -> int handle    (n int64s, all 0)
+//     farr_int_get(h, i)           -> int
+//     farr_int_set(h, i, x)        -> int           (returns h for chaining)
+//     farr_int_len(h)              -> int
+//     farr_int_fill_from_array(h, arr) -> int       (bulk init from [int])
+//     farr_int_copy(src)           -> int handle    (new buf, same contents)
+//     farr_int_sum(h)              -> int           (reduction; mainly tests)
+//     farr_int_free(h)             -> void          (optional; explicit)
+// ═══════════════════════════════════════════════════════════
+
+typedef struct {
+    int64_t* buf;
+    int64_t  len;
+} HexaIarrEntry;
+
+static HexaIarrEntry* _hx_iarr_table        = NULL;
+static int64_t        _hx_iarr_count        = 0;
+static int64_t        _hx_iarr_capacity     = 0;
+static int64_t*       _hx_iarr_freelist     = NULL;
+static int64_t        _hx_iarr_freelist_n   = 0;
+static int64_t        _hx_iarr_freelist_cap = 0;
+
+HexaVal hexa_farr_int_zeros(HexaVal n_v) {
+    int64_t n = hexa_as_num(n_v);
+    if (n < 0) n = 0;
+    int64_t* buf = NULL;
+    if (n > 0) {
+        buf = (int64_t*)calloc((size_t)n, sizeof(int64_t));
+        if (!buf) {
+            fprintf(stderr, "[farr_int] OOM allocating %lld int64s\n", (long long)n);
+            exit(77);
+        }
+    }
+    int64_t id;
+    if (_hx_iarr_freelist_n > 0) {
+        id = _hx_iarr_freelist[--_hx_iarr_freelist_n];
+    } else {
+        if (_hx_iarr_count >= _hx_iarr_capacity) {
+            int64_t new_cap = _hx_iarr_capacity < 16 ? 16 : _hx_iarr_capacity * 2;
+            HexaIarrEntry* nt = (HexaIarrEntry*)realloc(_hx_iarr_table,
+                                  (size_t)new_cap * sizeof(HexaIarrEntry));
+            if (!nt) {
+                fprintf(stderr, "[farr_int] OOM growing handle table\n");
+                if (buf) free(buf);
+                exit(77);
+            }
+            _hx_iarr_table = nt;
+            _hx_iarr_capacity = new_cap;
+        }
+        id = _hx_iarr_count++;
+    }
+    _hx_iarr_table[id].buf = buf;
+    _hx_iarr_table[id].len = n;
+    return hexa_int(id);
+}
+
+HexaVal hexa_farr_int_get(HexaVal h_v, HexaVal i_v) {
+    int64_t id = hexa_as_num(h_v);
+    int64_t i  = hexa_as_num(i_v);
+    if (id < 0 || id >= _hx_iarr_count) return hexa_int(0);
+    HexaIarrEntry* e = &_hx_iarr_table[id];
+    if (!e->buf || i < 0 || i >= e->len) return hexa_int(0);
+    return hexa_int(e->buf[i]);
+}
+
+HexaVal hexa_farr_int_set(HexaVal h_v, HexaVal i_v, HexaVal x_v) {
+    int64_t id = hexa_as_num(h_v);
+    int64_t i  = hexa_as_num(i_v);
+    int64_t x  = hexa_as_num(x_v);
+    if (id < 0 || id >= _hx_iarr_count) return h_v;
+    HexaIarrEntry* e = &_hx_iarr_table[id];
+    if (!e->buf || i < 0 || i >= e->len) return h_v;
+    e->buf[i] = x;
+    return h_v;
+}
+
+HexaVal hexa_farr_int_len(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_iarr_count) return hexa_int(0);
+    return hexa_int(_hx_iarr_table[id].len);
+}
+
+// One-time migration helper: bulk-copy a hexa [int] (boxed HexaVal array)
+// into a farr_int handle. Used by cache builders to translate vendored
+// literal-returning fns (e.g. uccsd_lih_ham_flip_mask() -> [int]) into a
+// packed int64_t buffer exactly once. After this call the [int] is no
+// longer referenced and the arena reclaims it on next rewind.
+HexaVal hexa_farr_int_fill_from_array(HexaVal h_v, HexaVal arr_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_iarr_count) return hexa_int(-1);
+    HexaIarrEntry* e = &_hx_iarr_table[id];
+    if (!e->buf) return hexa_int(-1);
+    if (!HX_IS_ARRAY(arr_v)) return hexa_int(-1);
+    int64_t  n     = HX_ARR_LEN(arr_v);
+    HexaVal* items = HX_ARR_ITEMS(arr_v);
+    int64_t  cap   = e->len;
+    int64_t  m     = (n < cap) ? n : cap;
+    for (int64_t k = 0; k < m; k++) {
+        e->buf[k] = hexa_as_num(items[k]);
+    }
+    return hexa_int(m);
+}
+
+HexaVal hexa_farr_int_copy(HexaVal src_v) {
+    int64_t sid = hexa_as_num(src_v);
+    if (sid < 0 || sid >= _hx_iarr_count) return hexa_int(-1);
+    HexaIarrEntry* se = &_hx_iarr_table[sid];
+    if (!se->buf) return hexa_int(-1);
+    HexaVal dst_v = hexa_farr_int_zeros(hexa_int(se->len));
+    int64_t did = hexa_as_num(dst_v);
+    if (did < 0) return hexa_int(-1);
+    HexaIarrEntry* de = &_hx_iarr_table[did];
+    if (de->buf && se->len > 0) {
+        memcpy(de->buf, se->buf, (size_t)se->len * sizeof(int64_t));
+    }
+    return dst_v;
+}
+
+HexaVal hexa_farr_int_sum(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_iarr_count) return hexa_int(0);
+    HexaIarrEntry* e = &_hx_iarr_table[id];
+    if (!e->buf) return hexa_int(0);
+    int64_t s = 0;
+    for (int64_t k = 0; k < e->len; k++) s += e->buf[k];
+    return hexa_int(s);
+}
+
+HexaVal hexa_farr_int_free(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_iarr_count) return hexa_void();
+    HexaIarrEntry* e = &_hx_iarr_table[id];
+    if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
+    if (_hx_iarr_freelist_n >= _hx_iarr_freelist_cap) {
+        int64_t new_cap = _hx_iarr_freelist_cap < 16 ? 16 : _hx_iarr_freelist_cap * 2;
+        int64_t* nf = (int64_t*)realloc(_hx_iarr_freelist,
+                       (size_t)new_cap * sizeof(int64_t));
+        if (nf) {
+            _hx_iarr_freelist = nf;
+            _hx_iarr_freelist_cap = new_cap;
+        }
+    }
+    if (_hx_iarr_freelist_n < _hx_iarr_freelist_cap) {
+        _hx_iarr_freelist[_hx_iarr_freelist_n++] = id;
     }
     return hexa_void();
 }
@@ -10135,6 +10322,16 @@ static void _hexa_init_fn_shims(void) {
     farr_set   = hexa_fn_new((void*)hexa_farr_set,   3);
     farr_len   = hexa_fn_new((void*)hexa_farr_len,   1);
     farr_free  = hexa_fn_new((void*)hexa_farr_free,  1);
+    // RFC 036 (2026-05-13): farr_int_array shims. Replaces boxed [int]
+    // mask tables in qmirror chemistry_vqe hot loops; unblocks 4e/6o tier.
+    farr_int_zeros           = hexa_fn_new((void*)hexa_farr_int_zeros,           1);
+    farr_int_get             = hexa_fn_new((void*)hexa_farr_int_get,             2);
+    farr_int_set             = hexa_fn_new((void*)hexa_farr_int_set,             3);
+    farr_int_len             = hexa_fn_new((void*)hexa_farr_int_len,             1);
+    farr_int_fill_from_array = hexa_fn_new((void*)hexa_farr_int_fill_from_array, 2);
+    farr_int_copy            = hexa_fn_new((void*)hexa_farr_int_copy,            1);
+    farr_int_sum             = hexa_fn_new((void*)hexa_farr_int_sum,             1);
+    farr_int_free            = hexa_fn_new((void*)hexa_farr_int_free,            1);
     // RFC 025 (2026-05-12): safetensors mmap-backed zero-copy load shims.
     safetensors_mmap_open           = hexa_fn_new((void*)hexa_safetensors_mmap_open,           1);
     safetensors_mmap_header         = hexa_fn_new((void*)hexa_safetensors_mmap_header,         1);

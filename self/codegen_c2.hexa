@@ -4020,6 +4020,12 @@ fn gen2_expr(node) {
                 if name == "farr_zeros"     { return "hexa_farr_zeros(" + a0 + ")" }
                 if name == "farr_len"       { return "hexa_farr_len(" + a0 + ")" }
                 if name == "farr_free"      { return "hexa_farr_free(" + a0 + ")" }
+                // RFC 036: farr_int_array — 1-arg routes.
+                if name == "farr_int_zeros" { return "hexa_farr_int_zeros(" + a0 + ")" }
+                if name == "farr_int_len"   { return "hexa_farr_int_len("   + a0 + ")" }
+                if name == "farr_int_copy"  { return "hexa_farr_int_copy("  + a0 + ")" }
+                if name == "farr_int_sum"   { return "hexa_farr_int_sum("   + a0 + ")" }
+                if name == "farr_int_free"  { return "hexa_farr_int_free("  + a0 + ")" }
                 // RFC 033 (2026-05-12): farr_copy — explicit deep copy
                 // (memcpy under the hood, no per-elem boxing).
                 if name == "farr_copy"      { return "hexa_farr_copy(" + a0 + ")" }
@@ -4134,6 +4140,9 @@ fn gen2_expr(node) {
                 if name == "regex_split"      { return "hexa_regex_split("      + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // feat/primitive-float-array — packed-double array element access.
                 if name == "farr_get"         { return "hexa_farr_get(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                // RFC 036: farr_int_array — 2-arg routes.
+                if name == "farr_int_get"             { return "hexa_farr_int_get("             + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                if name == "farr_int_fill_from_array" { return "hexa_farr_int_fill_from_array(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // RFC 033 (2026-05-12): farr_add_gaussian_noise(target, sigma)
                 // — in-place Box-Muller perturbation, returns void.
                 if name == "farr_add_gaussian_noise" { return "hexa_farr_add_gaussian_noise(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
@@ -4155,6 +4164,8 @@ fn gen2_expr(node) {
                 if name == "regex_replace" { return "hexa_regex_replace(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // feat/primitive-float-array — packed-double array element set.
                 if name == "farr_set"      { return "hexa_farr_set(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
+                // RFC 036: farr_int_array — 3-arg routes.
+                if name == "farr_int_set"  { return "hexa_farr_int_set(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // RFC 025 (2026-05-12): safetensors mmap-backed zero-copy
                 // load. 3-arg forms (read_f32_farr / read_bytes).
                 if name == "safetensors_mmap_read_f32_farr" {
