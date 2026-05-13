@@ -11112,6 +11112,19 @@ static void _hexa_init_fn_shims(void) {
 #include "native/namespace.c"
 
 /* ═══════════════════════════════════════════════════════════════════
+ * stdlib/proc/wait — waitpid(2) wrapper for SIGCHLD reaping.
+ *
+ *   hexa_proc_wait(pid, flags)        -> map { pid, exited, signaled,
+ *                                              exit_code, term_sig,
+ *                                              raw_status } or { error, errno }
+ *   hexa_proc_wait_flag_const(name)   -> int (WNOHANG / WUNTRACED / WCONTINUED)
+ *
+ * Consumer: pty_forkexec, pool_on — any hexa fork+exec pattern that
+ * needs to reap its zombies. RFC stdlib-for-cpu-port.md P1 signal-ext.
+ * ═══════════════════════════════════════════════════════════════════ */
+#include "native/wait.c"
+
+/* ═══════════════════════════════════════════════════════════════════
  * B20 / roadmap 55 Phase 1 — deterministic FP control-word init.
  *
  * Exposes void hexa_fp_init(void). codegen_c2.hexa emits a call to it
