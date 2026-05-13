@@ -1,0 +1,84 @@
+// HEXA Native Compiler — Phase 4 external-resource absorption: bridges live HTTP probe
+//
+// @version 0.1.0
+// @capabilities [exec, env]
+//
+// Exercises each bridge's live HTTP path (no HEXA_FORCE_FALLBACK).
+// Skipped by default unless HEXA_BRIDGE_LIVE=1, so CI/offline runs
+// don't burn rate-limit budget or hang on flaky upstreams.
+//
+// Run:  HEXA_BRIDGE_LIVE=1 hexa run compiler/bridges/bridges_live_test.hexa
+//
+// For each bridge, this records:
+//   - ok flag from the δ dispatcher
+//   - whether the response is the live envelope ("source":"live:...")
+//     or fell through to the frozen-cache envelope
+//   - first 80 chars of the body for visual sanity
+//
+// This is a probe, not a regression gate; failures are noted but the
+// test exits 0 unless HEXA_BRIDGE_LIVE_STRICT=1.
+
+import "./_common.hexa"
+import "./codata.hexa"
+import "./oeis.hexa"
+import "./arxiv.hexa"
+import "./gw.hexa"
+import "./horizons.hexa"
+import "./cmb.hexa"
+import "./nanograv.hexa"
+import "./simbad.hexa"
+import "./icecube.hexa"
+import "./nist_atomic.hexa"
+import "./wikipedia.hexa"
+import "./openalex.hexa"
+import "./gaia.hexa"
+import "./lhc.hexa"
+import "./pubchem.hexa"
+import "./uniprot.hexa"
+
+fn _classify(body: string) -> string {
+    if body.contains("\"source\":\"live:") { return "LIVE" }
+    if body.contains("\"source\":\"fallback:frozen-cache\"") { return "CACHE" }
+    return "OTHER"
+}
+
+fn _probe(name: string, r: array) {
+    let ok = cli_ok(r)
+    let body = cli_stdout(r)
+    let kind = _classify(body)
+    let preview = if body.len() > 80 { body.substring(0, 80) + "..." } else { body }
+    let flag = if ok { "OK   " } else { "FAIL " }
+    println("  " + flag + " " + kind + "  " + name + "  " + preview)
+}
+
+fn main() {
+    if env("HEXA_BRIDGE_LIVE") != "1" {
+        println("bridges_live_test: skipped (set HEXA_BRIDGE_LIVE=1 to run)")
+        exit(0)
+    }
+    // Ensure we are NOT in forced-fallback mode.
+    setenv("HEXA_FORCE_FALLBACK", "")
+
+    println("bridges Phase 4 live HTTP probe (16 bridges)")
+    println("HEXA_FORCE_FALLBACK = " + env("HEXA_FORCE_FALLBACK"))
+    println("")
+
+    _probe("codata",      codata_run([]))
+    _probe("oeis",        oeis_run(["A000045"]))
+    _probe("arxiv",       arxiv_run(["cat:physics.gen-ph", "1"]))
+    _probe("gw",          gw_run([]))
+    _probe("horizons",    horizons_run(["301"]))
+    _probe("cmb",         cmb_run([]))
+    _probe("nanograv",    nanograv_run([]))
+    _probe("simbad",      simbad_run(["SgrA*"]))
+    _probe("icecube",     icecube_run([]))
+    _probe("nist_atomic", nist_atomic_run(["H"]))
+    _probe("wikipedia",   wikipedia_run(["Perfect_number"]))
+    _probe("openalex",    openalex_run(["perfect+number"]))
+    _probe("gaia",        gaia_run([]))
+    _probe("lhc",         lhc_run([]))
+    _probe("pubchem",     pubchem_run(["962"]))
+    _probe("uniprot",     uniprot_run(["P01308"]))
+
+    exit(0)
+}

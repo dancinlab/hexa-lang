@@ -6,13 +6,20 @@
 // δ adapter for Wikipedia REST summary.
 // Source:   ~/core/nexus/tool/wikipedia_summary_bridge.hexa (344 LOC)
 // Live:     https://en.wikipedia.org/api/rest_v1/page/summary/<title>
-// Fallback: empty-cache placeholder per topic; TODO(cache-population).
+// Fallback: Perfect_number (real API summary captured), Fine_structure_constant (curated).
+//
+// Frozen cache for Perfect_number:
+//   source:   https://en.wikipedia.org/api/rest_v1/page/summary/Perfect_number
+//   fetched:  2026-05-13
+//   size:     2351 bytes (raw); ~700 bytes embedded subset
+//   sha256:   628a1451b88643c8031f52a0a8ae5f59c43acc3789b26d4cb11de8b93a766ada
+// See also: compiler/bridges/_cache/wikipedia.frozen.json
 
 import "./_common.hexa"
 
 fn _wikipedia_frozen(title: string) -> string {
     if title == "Perfect_number" {
-        return "{\"title\":\"Perfect number\",\"extract\":\"A perfect number is a positive integer equal to the sum of its proper divisors. Smallest example: 6 = 1+2+3.\",\"first_perfect\":6}"
+        return "{\"title\": \"Perfect number\", \"wikibase_item\": \"Q170043\", \"pageid\": 23670, \"description\": \"Number equal to the sum of its proper divisors\", \"extract\": \"In number theory, a perfect number is a positive integer that is equal to the sum of its positive proper divisors, that is, divisors excluding the number itself. For instance, 6 has proper divisors 1, 2, and 3, and 1 + 2 + 3 = 6, so 6 is a perfect number. The next perfect number is 28, because 28 has proper divisors 1, 2, 4, 7, 14, and 1 + 2 + 4 + 7 + 14 = 28.\", \"page_url\": \"https://en.wikipedia.org/wiki/Perfect_number\"}"
     }
     if title == "Fine-structure_constant" || title == "Fine_structure_constant" {
         return "{\"title\":\"Fine-structure constant\",\"extract\":\"Dimensionless fundamental constant, alpha ≈ 1/137.036, characterizing the strength of electromagnetic interaction.\",\"alpha_inv\":137.036}"

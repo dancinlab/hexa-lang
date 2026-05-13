@@ -6,13 +6,25 @@
 // δ adapter for PubChem chemical compound database.
 // Source:   ~/core/nexus/tool/pubchem_bridge.hexa (663 LOC)
 // Live:     https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/<cid>/property/...
-// Fallback: water (CID=962) + caffeine (CID=2519) anchors.
+// Fallback: water (CID=962, real API response captured) + caffeine
+//           (CID=2519, curated anchor).
+//
+// Frozen cache for CID=962:
+//   source:   https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/962/property/MolecularWeight,MolecularFormula,CanonicalSMILES/JSON
+//   fetched:  2026-05-13
+//   size:     197 bytes
+//   sha256:   fe16d0c03d380239c00c30c131a369013d6c8abc14d0d781a0519f7cd75ff6c2
+//   note:     PubChem v2026-05 renamed CanonicalSMILES → ConnectivitySMILES.
+// See also: compiler/bridges/_cache/pubchem.frozen.json
 
 import "./_common.hexa"
 
 fn _pubchem_frozen(cid: string) -> string {
     if cid == "962" {
-        return "{\"cid\":962,\"name\":\"Water\",\"formula\":\"H2O\",\"molecular_weight\":18.015,\"canonical_smiles\":\"O\"}"
+        // Real PubChem PUG-REST response (water, CID 962), captured
+        // 2026-05-13. Schema note: ConnectivitySMILES is the new name
+        // for what older callers expect as CanonicalSMILES.
+        return "{\"cid\":962,\"name\":\"Water\",\"formula\":\"H2O\",\"molecular_weight\":18.015,\"connectivity_smiles\":\"O\",\"canonical_smiles\":\"O\",\"raw_property_table\":{\"PropertyTable\":{\"Properties\":[{\"CID\":962,\"MolecularFormula\":\"H2O\",\"MolecularWeight\":\"18.015\",\"ConnectivitySMILES\":\"O\"}]}}}"
     }
     if cid == "2519" {
         return "{\"cid\":2519,\"name\":\"Caffeine\",\"formula\":\"C8H10N4O2\",\"molecular_weight\":194.19,\"canonical_smiles\":\"CN1C=NC2=C1C(=O)N(C(=O)N2C)C\"}"

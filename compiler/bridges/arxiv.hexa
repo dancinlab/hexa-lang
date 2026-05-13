@@ -6,13 +6,22 @@
 // δ adapter for arXiv preprint metadata.
 // Source:   ~/core/nexus/tool/arxiv_realtime_bridge.hexa (310 LOC)
 // Live:     http://export.arxiv.org/api/query?search_query=<q>&max_results=<n>
-// Fallback: TODO(cache-population) — empty cache marker; returns
-//           shape-compatible placeholder so callers don't crash.
+// Fallback: one real arXiv API entry captured for the "cat:physics.gen-ph"
+//           anchor query (1 result extracted from the Atom feed).
+//
+// Frozen cache:
+//   source:   http://export.arxiv.org/api/query?search_query=cat:physics.gen-ph&max_results=1
+//   fetched:  2026-05-13
+//   size:     1814 bytes (raw Atom XML); compact JSON embedded below
+//   sha256:   f195851e890763c0e7827b2bdef216acfe5a716427297ac633b3208267857b65
+//   note:     arXiv enforces a strict rate limit (~3 calls/sec global IP)
+//             and returns HTTP 429 aggressively; expect bursty failures.
+// See also: compiler/bridges/_cache/arxiv.frozen.xml
 
 import "./_common.hexa"
 
 fn _arxiv_frozen() -> string {
-    return "{\"tool\":\"arxiv\",\"source\":\"fallback:frozen-cache\",\"results\":[],\"fallback_unavailable\":true,\"todo\":\"cache-population\"}"
+    return "{\"tool\":\"arxiv\",\"source\":\"fallback:frozen-cache\",\"query\":\"cat:physics.gen-ph\",\"total_results\":10826,\"items_per_page\":1,\"results\":[{\"id\":\"http://arxiv.org/abs/1905.02587v1\",\"title\":\"Vapor Pressure in a Paramagnetic Solid?\",\"author\":\"Manuel Malaver\",\"published\":\"2019-05-06T02:33:11Z\",\"updated\":\"2019-05-06T02:33:11Z\",\"category\":\"physics.gen-ph\",\"comment\":\"14 pages\",\"summary\":\"In this paper, we obtain an analytical expression for the vapor pressure of a paramagnetic solid for high temperatures. We have considered the behavior of magnetic materials in the presence of an external magnetic field using the thermodynamical analysis and the elements of statistical mechanics in microscopic systems. We found that the vapor pressure depends on the magnetic susceptibility of material and the external field applied.\"}]}"
 }
 
 pub fn arxiv_live(query: string, max_results: i64) -> array {

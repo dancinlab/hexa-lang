@@ -6,13 +6,21 @@
 // δ adapter for the SIMBAD astronomical database (CDS/Strasbourg).
 // Source:   ~/core/nexus/tool/simbad_bridge.hexa (516 LOC)
 // Live:     http://simbad.u-strasbg.fr/simbad/sim-id?Ident=<obj>&output.format=ASCII
-// Fallback: pre-baked metadata for SgrA*, Sirius, Polaris (anchor objects).
+// Fallback: SgrA* enriched from a live SIMBAD ASCII capture; Sirius and
+//           Polaris remain curated anchors.
+//
+// Frozen cache for SgrA*:
+//   source:   https://simbad.u-strasbg.fr/simbad/sim-id?Ident=SgrA*&output.format=ASCII
+//   fetched:  2026-05-13
+//   size:     107734 bytes (raw); 3500 bytes trimmed copy in _cache/
+//   sha256:   54b6a57fb1cf9c4b554b0af4759def3d315a7d72b6883a5ca123c6da6aed3db1
+// See also: compiler/bridges/_cache/simbad.frozen.txt
 
 import "./_common.hexa"
 
 fn _simbad_frozen(obj: string) -> string {
     if obj == "SgrA*" || obj == "Sgr A*" {
-        return "{\"object\":\"Sgr A*\",\"ra_j2000\":\"17 45 40.041\",\"dec_j2000\":\"-29 00 28.12\",\"otype\":\"X(SuperMassive BH)\",\"distance_kpc\":8.178}"
+        return "{\"object\":\"Sgr A*\",\"oid\":\"@2419046\",\"ra_j2000\":\"17 45 40.03599\",\"dec_j2000\":\"-29 00 28.1699\",\"coords_gal\":\"359.94423568 -00.04616002\",\"otype\":\"X(SuperMassive BH)\",\"distance_kpc\":8.178,\"identifiers\":[\"NAME Sagittarius A*\",\"NAME Sgr A*\",\"CXOGC J174540.0-290027\",\"AX J1745.6-2900\",\"SWIFT J1746.3-2850A\"],\"bibcode_count\":4979,\"simbad_release\":\"SIMBAD4 rel 1.8\"}"
     }
     if obj == "Sirius" {
         return "{\"object\":\"Sirius\",\"ra_j2000\":\"06 45 08.917\",\"dec_j2000\":\"-16 42 58.02\",\"otype\":\"**A (binary star)\",\"distance_pc\":2.637}"

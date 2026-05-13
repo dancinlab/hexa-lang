@@ -1,0 +1,25 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/3sGVg728OwjoZ5Os3INLRBdZ+Ys</id>
+  <title>arXiv Query: search_query=cat:physics.gen-ph&amp;id_list=&amp;start=0&amp;max_results=1</title>
+  <updated>2026-05-13T07:34:23Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=cat:physics.gen-ph&amp;start=0&amp;max_results=1&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>1</opensearch:itemsPerPage>
+  <opensearch:totalResults>10826</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/1905.02587v1</id>
+    <title>Vapor Pressure in a Paramagnetic Solid?</title>
+    <updated>2019-05-06T02:33:11Z</updated>
+    <link href="https://arxiv.org/abs/1905.02587v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1905.02587v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>In this paper, we obtain an analytical expression for the vapor pressure of a paramagnetic solid for high temperatures. We have considered the behavior of magnetic materials in the presence of an external magnetic field using the thermodynamical analysis and the elements of statistical mechanics in microscopic systems. We found that the vapor pressure depends on the magnetic susceptibility of material and the external field applied.</summary>
+    <category term="physics.gen-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2019-05-06T02:33:11Z</published>
+    <arxiv:comment>14 pages</arxiv:comment>
+    <arxiv:primary_category term="physics.gen-ph"/>
+    <author>
+      <name>Manuel Malaver</name>
+    </author>
+  </entry>
+</feed>

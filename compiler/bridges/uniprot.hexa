@@ -6,13 +6,21 @@
 // δ adapter for UniProt protein knowledgebase.
 // Source:   ~/core/nexus/tool/uniprot_bridge.hexa (513 LOC)
 // Live:     https://rest.uniprot.org/uniprotkb/<accession>.json
-// Fallback: insulin (P01308) + hemoglobin alpha (P69905) anchors.
+// Fallback: insulin (P01308, real API response captured) + hemoglobin
+//           alpha (P69905, curated anchor).
+//
+// Frozen cache for P01308:
+//   source:   https://rest.uniprot.org/uniprotkb/P01308.json?fields=accession,id,protein_name,organism_name,length,sequence
+//   fetched:  2026-05-13
+//   size:     873 bytes
+//   sha256:   6e36d213bb3cf10563cd2ecef035cf05b8e0dad2b2598ad30e3217d7efbd031f
+// See also: compiler/bridges/_cache/uniprot.frozen.json
 
 import "./_common.hexa"
 
 fn _uniprot_frozen(acc: string) -> string {
     if acc == "P01308" {
-        return "{\"accession\":\"P01308\",\"name\":\"Insulin\",\"organism\":\"Homo sapiens\",\"length\":110,\"sequence_prefix\":\"MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKT\"}"
+        return "{\"accession\":\"P01308\",\"uniProtkbId\":\"INS_HUMAN\",\"name\":\"Insulin\",\"organism\":\"Homo sapiens\",\"taxonId\":9606,\"length\":110,\"molWeight\":11981,\"sequence\":\"MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPLALEGSLQKRGIVEQCCTSICSLYQLENYCN\",\"sequence_prefix\":\"MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKT\",\"crc64\":\"C2C3B23B85E520E5\",\"uniParcId\":\"UPI00000017EA\",\"entryType\":\"UniProtKB reviewed (Swiss-Prot)\"}"
     }
     if acc == "P69905" {
         return "{\"accession\":\"P69905\",\"name\":\"Hemoglobin subunit alpha\",\"organism\":\"Homo sapiens\",\"length\":142,\"sequence_prefix\":\"MVLSPADKTNVKAAWGKVGAHAGEYGAEALERMFLSFPTTKTYFPHFDLSHGSAQ\"}"

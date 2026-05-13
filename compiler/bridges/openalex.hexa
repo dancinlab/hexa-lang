@@ -6,12 +6,20 @@
 // δ adapter for OpenAlex scholarly graph.
 // Source:   ~/core/nexus/tool/openalex_bridge.hexa (559 LOC)
 // Live:     https://api.openalex.org/works?search=<q>
-// Fallback: empty-cache placeholder; TODO(cache-population).
+// Fallback: real OpenAlex search response captured for the
+//           "perfect+number" anchor query.
+//
+// Frozen cache:
+//   source:   https://api.openalex.org/works?search=perfect+number&per_page=1&select=id,doi,title,publication_year,authorships
+//   fetched:  2026-05-13
+//   size:     926 bytes (raw); ~400 bytes embedded subset
+//   sha256:   6850ea1f86a795fbe2712c07ff0a00a319480804c9e50f5e04bb061f16642ef3
+// See also: compiler/bridges/_cache/openalex.frozen.json
 
 import "./_common.hexa"
 
 fn _openalex_frozen() -> string {
-    return "{\"tool\":\"openalex\",\"source\":\"fallback:frozen-cache\",\"results\":[],\"meta\":{\"count\":0},\"fallback_unavailable\":true,\"todo\":\"cache-population\"}"
+    return "{\"tool\":\"openalex\",\"source\":\"fallback:frozen-cache\",\"query\":\"perfect+number\",\"meta\":{\"count\": 1904022, \"page\": 1, \"per_page\": 1},\"results\":[{\"id\": \"https://openalex.org/W2164731628\", \"doi\": \"https://doi.org/10.1017/s1446788700028251\", \"title\": \"On the largest component of an odd perfect number\", \"publication_year\": 1987, \"author\": \"Graeme L. Cohen\"}]}"
 }
 
 pub fn openalex_live(query: string) -> array {
