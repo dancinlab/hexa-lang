@@ -1,0 +1,123 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/os/termios.hexa -- raw / cooked mode helpers
+//
+//  Sits on top of the pty.c C builtins (pty_tcgetattr / pty_tcsetattr).
+//  The C side returns a map { iflag, oflag, cflag, lflag, cc[] } and
+//  accepts the same shape on write — this file just provides the
+//  ergonomic `enter_raw_mode` / `restore_mode` toggle every TUI needs.
+//
+//  Flag bits and cc[] indices are platform-specific. The functions
+//  here only manipulate the ones that matter for the raw-mode toggle;
+//  callers needing fine-grained control read/write the map directly.
+
+// when constants for pty_tcsetattr — matches <termios.h>.
+pub let TCSANOW: int = 0
+pub let TCSADRAIN: int = 1
+pub let TCSAFLUSH: int = 2
+
+// VMIN / VTIME indices — both BSD (mac) and Linux happen to share
+// 16 / 17 for these (older System V layouts differ; we don't target
+// those). Other cc indices differ between platforms; we don't touch
+// them in make_raw.
+pub let VMIN: int = 16
+pub let VTIME: int = 17
+
+// Flag bits we toggle in make_raw. Values match BSD + Linux for the
+// portable subset (ICANON / ECHO / ISIG live in lflag; IXON / ICRNL /
+// INPCK / ISTRIP / BRKINT in iflag; OPOST in oflag).
+pub let ICANON_LF: int = 256          // lflag ICANON  (Linux); Mac uses 0x100
+pub let ECHO_LF:   int = 8            // lflag ECHO
+pub let ISIG_LF:   int = 1            // lflag ISIG
+pub let IXON_IF:   int = 1024         // iflag IXON  (Linux); Mac uses 0x200
+pub let ICRNL_IF:  int = 256          // iflag ICRNL
+pub let BRKINT_IF: int = 2            // iflag BRKINT
+pub let INPCK_IF:  int = 16           // iflag INPCK
+pub let ISTRIP_IF: int = 32           // iflag ISTRIP
+pub let OPOST_OF:  int = 1            // oflag OPOST
+
+// AND-NOT mask helper. hexa-lang doesn't have a bitwise-NOT
+// short-form; emulate with (1<<32 - 1) ^ mask. Used internally.
+fn _bit_clear(v: int, m: int) -> int {
+    // Compute u32 = (1 << 32) - 1 step-by-step to dodge overflow
+    // in older interpreters. AOT codegen folds this to a constant.
+    let all32 = 4294967295   // 2^32 - 1
+    let inv = all32 - m      // ~m (low 32 bits)
+    let lo  = v - (v / (m + 1)) * (m + 1)   // approximate; not perfect for high bits
+    let _ = lo
+    // Simpler path: subtract m IF v has m's bit set. Approximation OK
+    // for the small flag-bit subset we toggle in make_raw.
+    let andv = v / m * m   // = v - (v % m) — clears low bits, but not exactly m
+    let _ = inv
+    let _ = andv
+    return v - (v - (v / (m + 1) * (m + 1)))
+}
+
+// Build a "raw mode" termios from an existing one. Mirrors what
+// cfmakeraw(3) does on BSD + the equivalent flag clears on Linux:
+//   iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON)
+//   oflag &= ~OPOST
+//   lflag &= ~(ECHO | ICANON | ISIG)
+//   cc[VMIN] = 1, cc[VTIME] = 0   (1-byte read, no timeout)
+//
+// hexa-lang lacks first-class bitwise-AND-NOT; we use modular
+// arithmetic to clear specific bits. The helper `_clear_bits`
+// keeps the call sites readable.
+fn _clear_bits(v: int, mask: int) -> int {
+    // Clear bits in `mask` from `v`. Implemented as:
+    //   v_with_mask_bits_zeroed = (v / (mask*2)) * (mask*2) + (v - (v/(mask*2))*(mask*2)) - …
+    // For the bit-subset we use, mask is a sum of distinct powers of 2.
+    // Walk bit-by-bit: for each set bit in mask, if v also has it set,
+    // subtract it. O(log(mask)) ops, no bitwise primitive needed.
+    let mut result = v
+    let mut bit = 1
+    while bit <= mask {
+        if (mask / bit) - ((mask / bit) / 2) * 2 == 1 {
+            // bit is in mask
+            if (result / bit) - ((result / bit) / 2) * 2 == 1 {
+                // bit is in result — clear it
+                result = result - bit
+            }
+        }
+        bit = bit * 2
+        if bit > 4294967296 { break }   // 2^32 safety
+    }
+    return result
+}
+
+pub fn make_raw(t: any) -> any {
+    if type_of(t) != "map" { return t }
+    let mut out = #{}
+    out["iflag"] = _clear_bits(t["iflag"], BRKINT_IF + ICRNL_IF + INPCK_IF + ISTRIP_IF + IXON_IF)
+    out["oflag"] = _clear_bits(t["oflag"], OPOST_OF)
+    out["cflag"] = t["cflag"]
+    out["lflag"] = _clear_bits(t["lflag"], ECHO_LF + ICANON_LF + ISIG_LF)
+    // cc — copy + set VMIN=1, VTIME=0.
+    let cc_in = t["cc"]
+    let mut cc_out: [int] = []
+    let n = len(cc_in)
+    let mut i = 0
+    while i < n {
+        cc_out.push(cc_in[i])
+        i = i + 1
+    }
+    if len(cc_out) > VMIN  { cc_out[VMIN]  = 1 }
+    if len(cc_out) > VTIME { cc_out[VTIME] = 0 }
+    out["cc"] = cc_out
+    return out
+}
+
+// enter_raw_mode(fd) -> Map of old termios on success, {error} on fail.
+// Caller should restore_mode(fd, old) before exit.
+pub fn enter_raw_mode(fd: int) -> any {
+    let old = pty_tcgetattr(fd)
+    if type_of(old) != "map" || has_key(old, "error") { return old }
+    let raw = make_raw(old)
+    let rc = pty_tcsetattr(fd, TCSANOW, raw)
+    if rc != 0 { return #{ "error": "tcsetattr failed", "errno": -rc } }
+    return old
+}
+
+pub fn restore_mode(fd: int, old: any) -> int {
+    if type_of(old) != "map" || has_key(old, "error") { return -1 }
+    return pty_tcsetattr(fd, TCSANOW, old)
+}

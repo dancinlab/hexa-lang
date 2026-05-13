@@ -10905,6 +10905,7 @@ static void _hexa_init_os_fn_shims(void);   // fwd decl — body in native/signa
 static void _hexa_init_exec_sha_fn_shims(void); // fwd decl — body in native/exec_argv_sha256.c
 static void _hexa_init_persistent_pipe_fn_shims(void); // fwd decl — body in native/persistent_pipe.c
 static void _hexa_init_thread_fn_shims(void); // fwd decl — body in native/thread.c (2026-05-13)
+static void _hexa_init_pty_fn_shims(void);    // fwd decl — body in native/pty.c    (2026-05-13)
 static void _hexa_init_fn_shims(void) {
     if (_fn_shims_ready) return;
     // bootstrap free-fn shims (join, char_code, chr, bit_or)
@@ -10986,6 +10987,8 @@ static void _hexa_init_fn_shims(void) {
     _hexa_init_persistent_pipe_fn_shims();
     // 2026-05-13: anima daemon Phase 2 — pthread + channel primitives.
     _hexa_init_thread_fn_shims();
+    // 2026-05-13: wilson harness-cli + cpu port — pty + termios primitives.
+    _hexa_init_pty_fn_shims();
     // Wilson 2026-05-13 — std_time.hexa wrapper name shims (time_now_ms etc.)
     _hexa_init_time_fn_shims();
     _fn_shims_ready = 1;
@@ -11047,6 +11050,24 @@ static void _hexa_init_fn_shims(void) {
  * Built into hexa binaries that link -lpthread (added by cmd_build).
  * ═══════════════════════════════════════════════════════════════════ */
 #include "native/thread.c"
+
+/* ═══════════════════════════════════════════════════════════════════
+ * stdlib/os/pty + stdlib/os/termios — pseudo-terminal pair + raw mode.
+ *
+ *   hexa_pty_open()                              -> map {master, slave, slave_name} or {error}
+ *   hexa_pty_get_winsize(fd)                     -> map {rows, cols, xpix, ypix} or {error}
+ *   hexa_pty_set_winsize(fd, r, c, xp, yp)       -> 0 or -errno
+ *   hexa_tcgetattr(fd)                           -> map {iflag, oflag, cflag, lflag, cc[]} or {error}
+ *   hexa_tcsetattr(fd, when, attrs)              -> 0 or -errno
+ *   hexa_tty_isatty(fd)                          -> bool
+ *   hexa_tty_ttyname(fd)                         -> string or ""
+ *   hexa_pty_forkexec(argv, env, rows, cols)     -> map {pid, master_fd} or {error}
+ *
+ * Source: native/pty.c (RFC: incoming/patches/stdlib-os-pty.md)
+ * Cross-platform (macOS + Linux). Linux requires `-lutil` for forkpty;
+ * macOS bundles it in libsystem.
+ * ═══════════════════════════════════════════════════════════════════ */
+#include "native/pty.c"
 
 /* ═══════════════════════════════════════════════════════════════════
  * B20 / roadmap 55 Phase 1 — deterministic FP control-word init.

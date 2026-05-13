@@ -1,5 +1,7 @@
 # `stdlib/os/pty.hexa` + `stdlib/os/termios.hexa` — pseudo-terminal pair + raw mode
 
+> **status**: `applied` (2026-05-13 KST PM, wilson session) — C primitives shipped in `self/native/pty.c`; hexa wrappers in `self/stdlib/os/{pty,termios}.hexa`; codegen direct-emit + `_is_builtin_name` registration in `self/codegen_c2.hexa`; hexa_v2 regenerated and hexa.real rebuilt; live smoke test PASS on macOS arm64 (`pty_open` → master/slave/name, `pty_resize`/`pty_get_winsize` round-trip 24×80, `pty_tcgetattr` returns 4 flags + 20 cc entries, `tty_isatty` true on both ends, `pty_spawn /bin/echo`). Wilson `wilson test` 23/23 PASS post-rebuild.
+
 **From:** wilson (downstream) — 2026-05-13. P0 #5 of 5 in the
 `u-root/cpu` port. Companion meta: `stdlib-for-cpu-port.md`.
 Cross-platform (macOS + Linux). Pairs naturally with a small

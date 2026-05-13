@@ -3968,6 +3968,8 @@ fn gen2_expr(node) {
                 if name == "term_sigwinch_pending" { return "hexa_term_sigwinch_pending()" }
                 if name == "term_install_sigint"   { return "hexa_term_install_sigint()" }
                 if name == "term_sigint_pending"   { return "hexa_term_sigint_pending()" }
+                // stdlib/os/pty — 0-arg builtin (RFC stdlib-os-pty.md)
+                if name == "pty_open"              { return "hexa_pty_open()" }
                 if name == "term_isatty_stdin"     { return "hexa_term_isatty_stdin()" }
                 if name == "term_isatty_stdout"    { return "hexa_term_isatty_stdout()" }
                 if name == "term_getppid"          { return "hexa_term_getppid()" }
@@ -4094,6 +4096,11 @@ fn gen2_expr(node) {
                 if name == "sleep_ms"        { return "hexa_sleep_ms(" + a0 + ")" }
                 if name == "sleep_ns"        { return "hexa_sleep_ns(" + a0 + ")" }
                 if name == "exec_replace"    { return "hexa_exec_replace(" + a0 + ")" }
+                // stdlib/os/pty — 1-arg builtins (RFC stdlib-os-pty.md)
+                if name == "pty_get_winsize" { return "hexa_pty_get_winsize(" + a0 + ")" }
+                if name == "pty_tcgetattr"   { return "hexa_tcgetattr(" + a0 + ")" }
+                if name == "tty_isatty"      { return "hexa_tty_isatty(" + a0 + ")" }
+                if name == "tty_ttyname"     { return "hexa_tty_ttyname(" + a0 + ")" }
             }
             if len(node.args) == 2 {
                 // PTY 2-arg builtins
@@ -4179,14 +4186,24 @@ fn gen2_expr(node) {
                 if name == "safetensors_mmap_read_bytes" {
                     return "hexa_safetensors_mmap_read_bytes(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
                 }
+                // stdlib/os/pty — 3-arg builtin (RFC stdlib-os-pty.md)
+                if name == "pty_tcsetattr" {
+                    return "hexa_tcsetattr(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
+                }
             }
             if len(node.args) == 5 {
                 if name == "matmul"         { return "hexa_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // RFC 032 (2026-05-12): farr_matmul — packed-double matmul.
                 if name == "farr_matmul"    { return "hexa_farr_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                // stdlib/os/pty — 5-arg builtin (RFC stdlib-os-pty.md)
+                if name == "pty_set_winsize" {
+                    return "hexa_pty_set_winsize(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
+                }
             }
             if len(node.args) == 4 {
                 if name == "matvec"         { return "hexa_matvec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
+                // stdlib/os/pty — 4-arg builtin (RFC stdlib-os-pty.md)
+                if name == "pty_forkexec"   { return "hexa_pty_forkexec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
             }
             if len(node.args) == 6 {
                 // feat/primitive-float-array — single-qubit gate kernel.
@@ -5984,6 +6001,15 @@ fn _is_builtin_name(name) {
     if name == "sleep_s" { return true }
     if name == "sleep_ms" { return true }
     if name == "sleep_ns" { return true }
+    // stdlib/os/pty — pseudo-terminal builtins (RFC stdlib-os-pty.md)
+    if name == "pty_open" { return true }
+    if name == "pty_get_winsize" { return true }
+    if name == "pty_set_winsize" { return true }
+    if name == "pty_tcgetattr" { return true }
+    if name == "pty_tcsetattr" { return true }
+    if name == "pty_forkexec" { return true }
+    if name == "tty_isatty" { return true }
+    if name == "tty_ttyname" { return true }
     if name == "now_monotonic_s" { return true }
     if name == "mono_ns" { return true }
     if name == "utc_iso_now" { return true }
