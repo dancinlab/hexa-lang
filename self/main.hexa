@@ -138,7 +138,7 @@ fn cmd_help() {
     println("")
     println("ENV  (selected)")
     println("  HEXA_LANG               repo root override (loader, gate)")
-    println("  HEXA_MEM_UNLIMITED=1    disable 768 MB memcap (heavy regen / 4 K-row embeds)")
+    println("  HEXA_MEM_UNLIMITED=1    disable 2048 MB memcap (heavy regen / 7 K-row embeds)")
     println("  HEXA_FORCE_FALLBACK=1   skip live HTTP/HW probe, use cached fallback")
     println("  HEXA_DRILL_ENGINE       mk9 (default) | mk10 (forces transcendental_closure)")
     println("  HEXA_NO_SENTINEL=1      drop __HEXA_RC sentinel from `hexa run`")
