@@ -1,0 +1,181 @@
+// HEXA Native Compiler — Wave 2.4 prefix-scan latency benchmark
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Measures wall-clock latency of `atlas_prefix(prefix)` over the merged
+// rodata + overlay view at full atlas scale (~7398 nodes per
+// embedded.gen.hexa).
+//
+// Decision criterion for Wave 2.4 (bucket prefix_index):
+//   - p95 ≤ 50 ms  → skip Wave 2.4 (linear scan adequate)
+//   - p95 > 50 ms  → land Wave 2.4 (bucket prefix index)
+//
+// Run:
+//   hexa run compiler/atlas/prefix_bench.hexa
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/static_index"
+
+// --- helpers ---------------------------------------------------------------
+
+// percentile(sorted, p) — interpolated percentile from a sorted [i64] array.
+// p ∈ [0, 100]. Returns the lower-index sample for simplicity (matches the
+// nearest-rank convention used by many internal bench tools).
+fn percentile(sorted: array, p: i64) -> i64 {
+    let n = len(sorted)
+    if n == 0 { return 0 }
+    if n == 1 { return sorted[0] }
+    // nearest-rank: idx = ceil(p/100 * n) - 1, clamped to [0, n-1]
+    let mut idx = (p * n) / 100
+    if idx > 0 { idx = idx - 1 }
+    if idx < 0 { idx = 0 }
+    if idx >= n { idx = n - 1 }
+    return sorted[idx]
+}
+
+fn min_of(sorted: array) -> i64 {
+    if len(sorted) == 0 { return 0 }
+    return sorted[0]
+}
+
+fn max_of(sorted: array) -> i64 {
+    let n = len(sorted)
+    if n == 0 { return 0 }
+    return sorted[n - 1]
+}
+
+// pad_right(s, w) — pad s with spaces on the right to width w.
+fn pad_right(s: string, w: i64) -> string {
+    let mut out = s
+    while len(out) < w {
+        out = out + " "
+    }
+    return out
+}
+
+// pad_left(s, w) — pad s with spaces on the left to width w.
+fn pad_left(s: string, w: i64) -> string {
+    let mut out = s
+    while len(out) < w {
+        out = " " + out
+    }
+    return out
+}
+
+// --- main ------------------------------------------------------------------
+
+fn main() {
+    println("wave 2.4 atlas_prefix linear-scan latency bench")
+    println("")
+
+    // Warm the merged view once so the first measured call does not pay
+    // overlay-load cost (atlas_list_merged caches via overlay_load_cached).
+    let warm = atlas_prefix("zzzz_nonexistent_warmup_prefix")
+    println("warmup: " + to_string(len(warm)) + " matches (expected 0)")
+
+    let idx = static_atlas()
+    let total_nodes = len(idx.p_nodes) + len(idx.c_nodes) + len(idx.l_nodes)
+        + len(idx.e_nodes) + len(idx.f_nodes) + len(idx.r_nodes)
+        + len(idx.s_nodes) + len(idx.x_nodes) + len(idx.q_nodes)
+    println("rodata nodes: " + to_string(total_nodes)
+        + " (hash=" + idx.hash.substring(0, 12) + "...)")
+    println("")
+
+    // 10 representative prefixes per session spec.
+    let prefixes = [
+        "n",
+        "sigma",
+        "phi",
+        "tau",
+        "consciousness",
+        "meta_falsifier",
+        "omega_cycle",
+        "bridge",
+        "atlas_R5",
+        "commit_grouping"
+    ]
+
+    let iter = 100
+
+    // Print table header.
+    println(pad_right("prefix", 18)
+        + pad_left("matches", 10)
+        + pad_left("min(ms)", 10)
+        + pad_left("p50(ms)", 10)
+        + pad_left("p95(ms)", 10)
+        + pad_left("p99(ms)", 10)
+        + pad_left("max(ms)", 10))
+    println("-----------------------------------------------------------------------------")
+
+    let mut worst_p95: i64 = 0
+    let mut p = 0
+    while p < len(prefixes) {
+        let prefix = prefixes[p]
+
+        // First call to measure match count + warm the path for this
+        // particular prefix.
+        let first = atlas_prefix(prefix)
+        let match_count = len(first)
+
+        // Capture iter wall-clock samples in ms.
+        let mut samples = []
+        let mut i = 0
+        while i < iter {
+            let t0 = time_ms()
+            let r = atlas_prefix(prefix)
+            let dt = time_ms() - t0
+            // Touch r so the optimizer cannot eliminate the call (defensive
+            // in case a future interp pass folds the unused binding).
+            if len(r) < 0 { println("unreachable") }
+            samples.push(dt)
+            i = i + 1
+        }
+
+        let sorted = samples.sort()
+        let mn = min_of(sorted)
+        let p50 = percentile(sorted, 50)
+        let p95 = percentile(sorted, 95)
+        let p99 = percentile(sorted, 99)
+        let mx = max_of(sorted)
+
+        if p95 > worst_p95 { worst_p95 = p95 }
+
+        println(pad_right(prefix, 18)
+            + pad_left(to_string(match_count), 10)
+            + pad_left(to_string(mn), 10)
+            + pad_left(to_string(p50), 10)
+            + pad_left(to_string(p95), 10)
+            + pad_left(to_string(p99), 10)
+            + pad_left(to_string(mx), 10))
+
+        p = p + 1
+    }
+
+    println("")
+    println("worst p95 across all prefixes: " + to_string(worst_p95) + " ms")
+    println("threshold:                     50 ms")
+    println("")
+    if worst_p95 <= 50 {
+        println("DECISION: SKIP Wave 2.4 (p95 ≤ 50 ms threshold)")
+    } else {
+        println("DECISION: LAND Wave 2.4 (p95 > 50 ms threshold)")
+    }
+}
+
+// --- is_main guard ---------------------------------------------------------
+
+let _av = argv()
+
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let script = to_string(_av[1])
+    if script.ends_with("/prefix_bench.hexa") { return true }
+    if script == "prefix_bench.hexa" { return true }
+    return false
+}
+
+if _is_main() {
+    main()
+}
