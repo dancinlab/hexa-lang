@@ -1,0 +1,225 @@
+// HEXA Native Compiler — Wave 3.2 atlas topology surface
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Ported from ~/core/n6/algorithms/atlas_bootstrap.hexa (CC0-1.0, absorbed 2026-05-13).
+// We keep only the degree-centrality + hub-classifier slices; the
+// growth/recommendation/sidecar/CLI surface from the n6 original is
+// out of scope for hexa-lang's in-memory rodata model.
+//
+// Surface:
+//   compute_degree(idx) -> map<string, i64>
+//   classify_hubs(idx)  -> [HubInfo]
+//
+// Definition of degree:
+//   Wave-1 structured edges (depends_on / derives) feed the count. When a
+//   node's structured edges are empty (e.g. the frozen rodata embed
+//   where grade/edges default to empty), we fall back to a raw-text scan
+//   that picks up `<- a, b, c` / `-> x, y` continuation lines from the
+//   node's `raw` field.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+
+pub struct HubInfo {
+    id: string,
+    degree: i64,
+    tier: string   // "mega" / "major" / "rising" / "leaf"
+}
+
+// _bump_degree — find-or-append style increment of a parallel
+// (keys, counts) pair.
+fn _bump_degree(keys: array, counts: array, id: string) {
+    let n = len(keys)
+    let mut i = 0
+    while i < n {
+        if to_string(keys[i]) == id {
+            counts[i] = counts[i] + 1
+            return
+        }
+        i = i + 1
+    }
+    keys.push(id)
+    counts.push(1)
+}
+
+// Lazy raw-text fallback edge scanner. Pulls `<- a, b, c` and
+// `-> x, y` style continuation lines out of `raw` when the structured
+// edges array is empty. Returns a flat [string] of referenced ids.
+fn _raw_edge_targets(raw: string) -> array {
+    let out = []
+    if len(raw) == 0 { return out }
+    let lines = raw.split("\n")
+    let n = len(lines)
+    let mut i = 1   // skip header
+    while i < n {
+        let raw_line = to_string(lines[i])
+        // ltrim
+        let ln = len(raw_line)
+        let mut j = 0
+        while j < ln {
+            let c = raw_line.substring(j, j + 1)
+            if c != " " && c != "\t" { break }
+            j = j + 1
+        }
+        let s = raw_line.substring(j, ln)
+        if len(s) < 2 { i = i + 1; continue }
+        let op = s.substring(0, 2)
+        if op == "<-" || op == "->" {
+            let body = s.substring(2, len(s))
+            let parts = body.split(",")
+            let mut k = 0
+            while k < len(parts) {
+                let p = to_string(parts[k])
+                // trim
+                let pn = len(p)
+                let mut a = 0
+                while a < pn {
+                    let c2 = p.substring(a, a + 1)
+                    if c2 != " " && c2 != "\t" { break }
+                    a = a + 1
+                }
+                let mut b = pn
+                while b > a {
+                    let c3 = p.substring(b - 1, b)
+                    if c3 != " " && c3 != "\t" { break }
+                    b = b - 1
+                }
+                let id = p.substring(a, b)
+                if len(id) > 0 { out.push(id) }
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Walk every node in `nodes`, accumulate degree contribution. A node
+// contributes 1 to its own degree per outgoing edge AND 1 to each
+// target's degree. (Mirrors the n6 implementation, which counts every
+// from/to mention.)
+fn _accumulate(keys: array, counts: array, nodes: array) {
+    let n = len(nodes)
+    let mut i = 0
+    while i < n {
+        let node = nodes[i]
+        let id = node.id
+        // Structured edges (Wave 1).
+        let deps = node.edges.depends_on
+        let drvs = node.edges.derives
+        let mut had_structured = false
+        let mut e = 0
+        while e < len(deps) {
+            had_structured = true
+            _bump_degree(keys, counts, id)
+            _bump_degree(keys, counts, to_string(deps[e]))
+            e = e + 1
+        }
+        let mut d = 0
+        while d < len(drvs) {
+            had_structured = true
+            _bump_degree(keys, counts, id)
+            _bump_degree(keys, counts, to_string(drvs[d]))
+            d = d + 1
+        }
+        // Raw-text fallback when structured edges absent (frozen rodata).
+        if !had_structured {
+            let raw_refs = _raw_edge_targets(node.raw)
+            let mut r = 0
+            while r < len(raw_refs) {
+                _bump_degree(keys, counts, id)
+                _bump_degree(keys, counts, to_string(raw_refs[r]))
+                r = r + 1
+            }
+        }
+        i = i + 1
+    }
+}
+
+// compute_degree — return parallel (keys, counts) arrays where keys[i]
+// is the id and counts[i] is the degree. Wraps the result in an
+// AtlasDegreeMap so callers don't need to juggle the parallel layout.
+pub struct AtlasDegreeMap {
+    ids: array,      // string[]
+    degrees: array   // i64[]
+}
+
+pub fn compute_degree(idx: AtlasIndex) -> AtlasDegreeMap {
+    let keys = []
+    let counts = []
+    _accumulate(keys, counts, idx.p_nodes)
+    _accumulate(keys, counts, idx.c_nodes)
+    _accumulate(keys, counts, idx.l_nodes)
+    _accumulate(keys, counts, idx.e_nodes)
+    _accumulate(keys, counts, idx.f_nodes)
+    _accumulate(keys, counts, idx.r_nodes)
+    _accumulate(keys, counts, idx.s_nodes)
+    _accumulate(keys, counts, idx.x_nodes)
+    _accumulate(keys, counts, idx.q_nodes)
+    return AtlasDegreeMap { ids: keys, degrees: counts }
+}
+
+// degree_lookup — convenience accessor: return the degree of `id`
+// (or 0 if absent).
+pub fn degree_lookup(m: AtlasDegreeMap, id: string) -> i64 {
+    let mut i = 0
+    while i < len(m.ids) {
+        if to_string(m.ids[i]) == id { return to_int(m.degrees[i]) }
+        i = i + 1
+    }
+    return 0
+}
+
+// classify_hubs — return a list of HubInfo sorted by degree desc. Tier
+// thresholds mirror the n6 bootstrap classifier: mega>=1000, major>=100,
+// rising>=5, leaf<5.
+pub fn classify_hubs(idx: AtlasIndex) -> array {
+    let m = compute_degree(idx)
+    let n = len(m.ids)
+    let out = []
+    let mut i = 0
+    while i < n {
+        let id = to_string(m.ids[i])
+        let d = to_int(m.degrees[i])
+        let tier = if d >= 1000 { "mega" }
+                   else if d >= 100 { "major" }
+                   else if d >= 5 { "rising" }
+                   else { "leaf" }
+        out.push(HubInfo { id: id, degree: d, tier: tier })
+        i = i + 1
+    }
+    // Insertion sort by degree desc (small-N typical for the hub list).
+    let mut a = 0
+    while a < len(out) {
+        let mut b = a + 1
+        while b < len(out) {
+            if out[b].degree > out[a].degree {
+                let tmp = out[a]; out[a] = out[b]; out[b] = tmp
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return out
+}
+
+// hub_count_by_tier — small helper for diagnostic output.
+pub fn hub_count_by_tier(hubs: array) -> AtlasDegreeMap {
+    let tiers = ["mega", "major", "rising", "leaf"]
+    let counts = [0, 0, 0, 0]
+    let mut i = 0
+    while i < len(hubs) {
+        let h = hubs[i]
+        let mut j = 0
+        while j < len(tiers) {
+            if to_string(tiers[j]) == h.tier {
+                counts[j] = counts[j] + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return AtlasDegreeMap { ids: tiers, degrees: counts }
+}
