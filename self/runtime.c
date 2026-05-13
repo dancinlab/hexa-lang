@@ -6582,6 +6582,22 @@ HexaVal hexa_farr_parameter_shift_grad(HexaVal re_v, HexaVal im_v,
                                        HexaVal n_p_v,
                                        HexaVal ham_v, HexaVal ans_v,
                                        HexaVal nq_v);
+// RFC 038 (2026-05-13): farr_uccsd_apply — single-call UCCSD ansatz replay.
+// 5-arg → routed through _hexa_call5 static-carrier shim.
+HexaVal hexa_farr_uccsd_apply(HexaVal re_v, HexaVal im_v,
+                              HexaVal theta_v, HexaVal ansatz_v,
+                              HexaVal nq_v);
+// RFC 037 (2026-05-13): whole-Hamiltonian Pauli-expectation batch kernel.
+// 9-arg; past the hexa_callN ceiling → static-carrier shim. Consumes 4
+// packed-int64 farr_int handles (flip/z/y/cy) plus a shared (re, im,
+// n_qubits) state and writes n_terms doubles into out_h. Replaces the
+// per-iter `while k < n_ham: farr_pauli_expectation(...)` dispatch loop
+// in qmirror chemistry_vqe energy fns. Expected 3-5x speedup at 4e/5o.
+HexaVal hexa_farr_pauli_expectation_batch(HexaVal re_v, HexaVal im_v,
+                                          HexaVal flip_h_v, HexaVal z_h_v,
+                                          HexaVal y_h_v, HexaVal cy_h_v,
+                                          HexaVal n_terms_v, HexaVal out_h_v,
+                                          HexaVal nq_v);
 // 5-arg builtins → static inline wrappers (past hexa_callN ceiling).
 static inline HexaVal farr_vec_reflect(HexaVal ot, HexaVal a, HexaVal b,
                                        HexaVal s, HexaVal n) {
@@ -6610,6 +6626,10 @@ static HexaVal ham_free;
 static HexaVal ansatz_pack;
 static HexaVal ansatz_free;
 static HexaVal farr_parameter_shift_grad;
+// RFC 038 — static carrier (registered via fn_shim).
+static HexaVal farr_uccsd_apply;
+// RFC 037 — static carrier (registered via fn_shim, arity 9).
+static HexaVal farr_pauli_expectation_batch;
 static inline HexaVal farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
                                              HexaVal alpha_v,
                                              HexaVal flip_v, HexaVal zmask_v,
@@ -8258,6 +8278,75 @@ HexaVal hexa_farr_pauli_expectation(HexaVal re_v, HexaVal im_v,
 }
 
 // ───────────────────────────────────────────────────────────────────────
+// RFC 037 (2026-05-13): whole-Hamiltonian Pauli-expectation batch kernel.
+//
+// Computes <psi|P_k|psi> for k = 0 .. n_terms-1 in a single C call,
+// where each P_k is described by a (flip, z, y, count_Y) tuple read
+// from four packed-int64 farr_int handles (RFC 036). The N real
+// expectation values are written into the packed-double farr handle
+// out_h. Semantics are byte-identical to N invocations of
+// hexa_farr_pauli_expectation — same math kernel, same summation order.
+//
+// Replaces the per-iter hexa-side `while k < n_ham: farr_pauli_expectation(
+// re_h, im_h, flip_arr[k], z_arr[k], y_arr[k], cy_arr[k], nq)` loop in
+// qmirror chemistry_vqe energy fns. At 4e/5o (n_ham = 876) this kernel
+// avoids ~876 box/unbox round-trips per NM iter, yielding 3-5x wall.
+//
+// Returns hexa_int(0) on success, hexa_int(-1) on any handle / length
+// validation failure (silent — no print, no exit).
+// ───────────────────────────────────────────────────────────────────────
+HexaVal hexa_farr_pauli_expectation_batch(HexaVal re_v, HexaVal im_v,
+                                          HexaVal flip_h_v, HexaVal z_h_v,
+                                          HexaVal y_h_v, HexaVal cy_h_v,
+                                          HexaVal n_terms_v, HexaVal out_h_v,
+                                          HexaVal nq_v) {
+    int64_t re_id   = hexa_as_num(re_v);
+    int64_t im_id   = hexa_as_num(im_v);
+    int64_t flip_id = hexa_as_num(flip_h_v);
+    int64_t z_id    = hexa_as_num(z_h_v);
+    int64_t y_id    = hexa_as_num(y_h_v);
+    int64_t cy_id   = hexa_as_num(cy_h_v);
+    int64_t out_id  = hexa_as_num(out_h_v);
+    int64_t n_terms = hexa_as_num(n_terms_v);
+    int64_t n_q     = hexa_as_num(nq_v);
+    // Validate state-vector farr handles.
+    if (re_id  < 0 || re_id  >= _hx_farr_count) return hexa_int(-1);
+    if (im_id  < 0 || im_id  >= _hx_farr_count) return hexa_int(-1);
+    if (out_id < 0 || out_id >= _hx_farr_count) return hexa_int(-1);
+    // Validate Pauli-descriptor farr_int handles.
+    if (flip_id < 0 || flip_id >= _hx_iarr_count) return hexa_int(-1);
+    if (z_id    < 0 || z_id    >= _hx_iarr_count) return hexa_int(-1);
+    if (y_id    < 0 || y_id    >= _hx_iarr_count) return hexa_int(-1);
+    if (cy_id   < 0 || cy_id   >= _hx_iarr_count) return hexa_int(-1);
+    const double*  re   = _hx_farr_table[re_id].buf;
+    const double*  im   = _hx_farr_table[im_id].buf;
+    double*        out  = _hx_farr_table[out_id].buf;
+    const int64_t* flip = _hx_iarr_table[flip_id].buf;
+    const int64_t* zm   = _hx_iarr_table[z_id].buf;
+    const int64_t* ym   = _hx_iarr_table[y_id].buf;
+    const int64_t* cym  = _hx_iarr_table[cy_id].buf;
+    if (!re || !im || !out || !flip || !zm || !ym || !cym) return hexa_int(-1);
+    if (n_terms < 0) return hexa_int(-1);
+    // Validate lengths — all four farr_int handles must hold >= n_terms,
+    // and out must hold >= n_terms doubles.
+    if (_hx_iarr_table[flip_id].len < n_terms) return hexa_int(-1);
+    if (_hx_iarr_table[z_id].len    < n_terms) return hexa_int(-1);
+    if (_hx_iarr_table[y_id].len    < n_terms) return hexa_int(-1);
+    if (_hx_iarr_table[cy_id].len   < n_terms) return hexa_int(-1);
+    if (_hx_farr_table[out_id].len  < n_terms) return hexa_int(-1);
+    // Pure-C inner loop over the per-term math kernel. No HexaVal
+    // traffic, no arena allocation. _hx_pauli_expectation_raw is the
+    // exact same body executed by hexa_farr_pauli_expectation above
+    // (carved out by RFC 039) so per-term results are byte-identical.
+    for (int64_t k = 0; k < n_terms; k++) {
+        out[k] = _hx_pauli_expectation_raw(re, im,
+                                           flip[k], zm[k], ym[k], cym[k],
+                                           n_q);
+    }
+    return hexa_int(0);
+}
+
+// ───────────────────────────────────────────────────────────────────────
 // RFC 035 (2026-05-13): Nelder-Mead step kernels for arbitrary-maxiter
 // in-process NM. RFC 034 fixed the Pauli-loop arena pressure; the NM-side
 // vector operations (centroid, reflect, contract, expand, shrink, sort)
@@ -8683,6 +8772,91 @@ HexaVal hexa_farr_parameter_shift_grad(HexaVal re_v, HexaVal im_v,
     }
     return hexa_int(0);
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// RFC 038 (2026-05-13): farr_uccsd_apply — single-call UCCSD ansatz replay.
+//
+// Replays the entire flat-Pauli generator decomposition of a UCCSD
+// ansatz in one C call, consuming the RFC 039 HexaAnsatzEntry bundle.
+// Replaces the hexa-side `for i in 0..n_flat: farr_pauli_exp_inplace(...)`
+// pattern in chemistry_vqe/module/chemistry_vqe_cmt_uccsd_*.hexa —
+// removes the 8-HexaVal-per-iteration boxing tax and per-iter interp
+// dispatch.
+//
+// Math is byte-identical to the existing hexa-side loop because both
+// paths share `_hx_pauli_exp_raw` (RFC 039 raw helper). Per-amplitude
+// equivalence within 1e-13 is the smoke acceptance bar.
+//
+// Convention: CALLER resets re/im to |HF> before the call (see RFC 038
+// §4 for rationale — composability with downstream chained kernels).
+// The kernel never touches re/im outside of the ansatz-replay loop.
+//
+// See docs/RFC_038_farr_uccsd_apply.md (qmirror repo) for full design.
+// ───────────────────────────────────────────────────────────────────────
+
+// Private shared helper: apply the UCCSD ansatz flat-Pauli rotations
+// in-place on (re, im) using the packed ansatz descriptor. NO state
+// reset — caller controls the starting state. NO Hamiltonian contraction
+// (that's RFC 037's batch expectation kernel).
+//
+// This is the exact ansatz-replay leg of _rfc039_energy hoisted into a
+// standalone helper so RFC 038's public kernel and RFC 039's internal
+// energy routine can share one source of truth (cf. RFC 038 §9).
+static void _rfc038_apply_ansatz_raw(double* re, double* im,
+                                     const double* theta,
+                                     const HexaAnsatzEntry* ans) {
+    for (int64_t i = 0; i < ans->n_flat; i++) {
+        double alpha = theta[ans->param_idx[i]] * ans->coef[i];
+        double aa = alpha < 0.0 ? -alpha : alpha;
+        if (aa <= 1e-13) continue;
+        _hx_pauli_exp_raw(re, im, alpha,
+                          ans->flip[i], ans->z_mask[i], ans->y_mask[i],
+                          ans->count_Y[i], ans->n_qubits);
+    }
+}
+
+// farr_uccsd_apply(re_h, im_h, theta_h, ansatz_h, n_q) -> 0 (ok) / -1 (err).
+//
+// Caller-supplied re_h / im_h are length 2^n_q farr handles; the caller
+// has already set them to the desired starting state (|HF> for the
+// default chemistry-VQE path). theta_h is a length-N_params farr handle.
+// ansatz_h is the int handle returned by `ansatz_pack` (RFC 039).
+HexaVal hexa_farr_uccsd_apply(HexaVal re_v, HexaVal im_v,
+                              HexaVal theta_v, HexaVal ansatz_v,
+                              HexaVal nq_v) {
+    int64_t re_id  = hexa_as_num(re_v);
+    int64_t im_id  = hexa_as_num(im_v);
+    int64_t th_id  = hexa_as_num(theta_v);
+    int64_t ans_id = hexa_as_num(ansatz_v);
+    int64_t n_q    = hexa_as_num(nq_v);
+    if (re_id  < 0 || re_id  >= _hx_farr_count) return hexa_int(-1);
+    if (im_id  < 0 || im_id  >= _hx_farr_count) return hexa_int(-1);
+    if (th_id  < 0 || th_id  >= _hx_farr_count) return hexa_int(-1);
+    if (ans_id < 0 || ans_id >= _hx_ans_count)  return hexa_int(-1);
+    double* re = _hx_farr_table[re_id].buf;
+    double* im = _hx_farr_table[im_id].buf;
+    double* th = _hx_farr_table[th_id].buf;
+    if (!re || !im || !th) return hexa_int(-1);
+    HexaAnsatzEntry* ans = &_hx_ans_table[ans_id];
+    // Sanity check: the caller-passed n_q must agree with the packed
+    // ansatz descriptor. If they disagree the masks will index past the
+    // intended qubit count and corrupt the state — fail-fast.
+    if (ans->n_qubits != n_q) return hexa_int(-1);
+    _rfc038_apply_ansatz_raw(re, im, th, ans);
+    return hexa_int(0);
+}
+
+// Future cleanup (RFC 038 §9): _rfc039_energy can delegate its ansatz
+// replay leg to _rfc038_apply_ansatz_raw — one source of truth for the
+// flat-Pauli replay. Math-unchanged; not load-bearing for either RFC's
+// acceptance criterion.
+//
+// Dispatch wiring (lands in the apply commit, separate hexa-lang PR):
+//   if name == "farr_uccsd_apply" {
+//       if len(args) > 4 { return val_int(farr_uccsd_apply(
+//           args[0], args[1], args[2], args[3], args[4])) }
+//       else { return val_int(0 - 1) }
+//   }
 
 // NOTE: `_hx_pauli_exp_raw` and `_hx_pauli_expectation_raw` are static
 // helpers that share the math body of hexa_farr_pauli_exp_inplace /
@@ -10712,6 +10886,11 @@ static void _hexa_init_fn_shims(void) {
     ansatz_pack                     = hexa_fn_new((void*)hexa_ansatz_pack,                     8);
     ansatz_free                     = hexa_fn_new((void*)hexa_ansatz_free,                     1);
     farr_parameter_shift_grad       = hexa_fn_new((void*)hexa_farr_parameter_shift_grad,       8);
+    // RFC 038 (2026-05-13): farr_uccsd_apply — UCCSD ansatz replay in one C call.
+    farr_uccsd_apply                = hexa_fn_new((void*)hexa_farr_uccsd_apply,                5);
+    // RFC 037 (2026-05-13): whole-Hamiltonian Pauli-expectation batch
+    // kernel — single C call replaces N×farr_pauli_expectation loop.
+    farr_pauli_expectation_batch    = hexa_fn_new((void*)hexa_farr_pauli_expectation_batch,    9);
     bit_or     = hexa_fn_new((void*)_hx_bit_or,           2);
     // bt73 free-fn shims (timestamp, base64_encode, base64_decode)
     timestamp     = hexa_fn_new((void*)_bt73_timestamp_w,     0);

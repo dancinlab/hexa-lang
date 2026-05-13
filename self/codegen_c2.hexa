@@ -4203,6 +4203,19 @@ fn gen2_expr(node) {
                     return "hexa_farr_apply_cnot(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
                 }
             }
+            if len(node.args) == 9 {
+                // RFC 037 (2026-05-13): whole-Hamiltonian Pauli-expectation
+                // batch kernel. Single C call replaces the per-iter
+                // farr_pauli_expectation loop in chemistry_vqe energy fns.
+                if name == "farr_pauli_expectation_batch" {
+                    return "hexa_farr_pauli_expectation_batch("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ")"
+                }
+            }
             let nargs = len(node.args)
             if nargs == 0 { return "hexa_call0(" + name + ")" }
             if nargs == 1 { return "hexa_call1(" + name + ", " + arg_strs[0] + ")" }
