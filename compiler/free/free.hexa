@@ -1,0 +1,126 @@
+// HEXA Native Compiler — Phase 2 generator absorption: A6 free
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// `free` — compose 5-module DFS generator. Ports
+// `~/core/nexus/cli/blowup/compose.hexa` (443 LOC orchestrator) plus
+// the 5 core modules (~3000 LOC total) down to their algorithmic
+// skeleton (this dispatcher + `modules.hexa`).
+//
+// Algorithm shape:
+//   1. seed → primary axiom candidate
+//   2. DFS over the 5 modules (field / holographic / quantum / string /
+//      toe), depth-bounded by `--dfs N`
+//   3. each node in the tree feeds its outputs to all 5 modules at the
+//      next depth (full cross-product, capped at `MAX_FANOUT_PER_DEPTH`)
+//   4. return the union of every emitted candidate
+//
+// Public surface:
+//   pub fn free(seed: string, dfs_depth: i64) -> [DiscoveryCandidate]
+//
+// γ policy enforcement: NO atlas writes, NO persistence. Candidates
+// are values returned to the caller.
+//
+// Deferred sub-features (TODO Phase 3):
+//   - per-module verifier hook (currently closed-form heuristics)
+//   - module-pair interference (nexus modules cross-validate via
+//     atlas.n6 SSOT; this v1 port runs each module independently)
+//   - 5-lens consensus boost (kept in smash A5 surface only for now)
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+import "../smash/candidate.hexa"
+import "./modules.hexa"
+
+// Bounds — keep depth=N tractable. Total candidates ≤
+//   axioms * (MODULE_COUNT * MAX_FANOUT_PER_MODULE) ^ depth
+let MAX_FANOUT_PER_DEPTH: i64 = 24
+let MAX_DEPTH: i64 = 5
+
+// One DFS step: expand `frontier` by passing each candidate through
+// every module. Returns the union.
+fn _dfs_expand(frontier: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let mc = module_count()
+    let mut i = 0
+    while i < len(frontier) {
+        let seed = frontier[i]
+        let mut m = 0
+        while m < mc {
+            let kids = dispatch_module(m, seed)
+            let mut k = 0
+            while k < len(kids) {
+                if len(out) < MAX_FANOUT_PER_DEPTH * mc {
+                    out.push(kids[k])
+                }
+                k = k + 1
+            }
+            m = m + 1
+        }
+        i = i + 1
+        // bound runtime: stop if frontier blew past cap
+        if len(out) >= MAX_FANOUT_PER_DEPTH * mc { break }
+    }
+    return out
+}
+
+// Entry — runs the DFS and returns the union of every emitted
+// candidate (primary seed axiom + every depth's outputs).
+pub fn free(seed: string, dfs_depth: i64) -> [DiscoveryCandidate] {
+    let mut all: [DiscoveryCandidate] = []
+    let norm = seed.trim()
+    if len(norm) == 0 { return all }
+
+    let sh = seed_hash(norm)
+    let primary = mk_axiom(
+        "free_" + sh + "_seed",
+        norm,
+        1.0,
+        "free:seed"
+    )
+    all.push(primary)
+
+    let d = if dfs_depth > 0 { dfs_depth } else { 3 }
+    let bounded = if d > MAX_DEPTH { MAX_DEPTH } else { d }
+
+    let mut frontier: [DiscoveryCandidate] = []
+    frontier.push(primary)
+    let mut depth: i64 = 0
+    while depth < bounded {
+        let expanded = _dfs_expand(frontier)
+        if len(expanded) == 0 { break }
+        let mut e = 0
+        while e < len(expanded) {
+            all.push(expanded[e])
+            e = e + 1
+        }
+        frontier = expanded
+        depth = depth + 1
+    }
+    return all
+}
+
+// Count candidates by source-tag prefix (helper for smoke).
+pub fn free_count_by_module(cands: [DiscoveryCandidate],
+                            mod_name: string) -> i64 {
+    let needle = "free:M"
+    let n_pref = len(needle)
+    let mut n: i64 = 0
+    let mut i = 0
+    while i < len(cands) {
+        let src = cands[i].src
+        // src looks like "free:M1:field:..." — check infix
+        if len(src) > n_pref {
+            let mut j = 0
+            let mut hit = false
+            while j < len(src) - len(mod_name) {
+                if src.substring(j, j + len(mod_name)) == mod_name { hit = true }
+                j = j + 1
+            }
+            if hit { n = n + 1 }
+        }
+        i = i + 1
+    }
+    return n
+}

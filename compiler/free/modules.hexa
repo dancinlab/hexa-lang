@@ -1,0 +1,182 @@
+// HEXA Native Compiler — Phase 2 generator absorption: free 5-module DFS
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// 5 compose modules ported from `~/core/nexus/cli/blowup/modules/`:
+//   field         (Discovery Field / Gauge Filter / Symmetry Breaking)
+//   holographic   (boundary/bulk dualization)
+//   quantum       (superposed seed wavefunction evolution)
+//   string        (string-theory vibration mode seed propagation)
+//   toe           (Theory of Everything cross-domain unification)
+//
+// The nexus engines are large (each ~500-2000 LOC, each entry point an
+// independent `hexa run` invocation with its own atlas.n6 I/O chain).
+// The DFS shape is small: each module is a value-transformer that
+// takes a seed candidate and emits 1-3 derived candidates. The 5-core
+// modules together form an exec chain; this v1 port walks that chain
+// as a depth-bounded DFS over a single in-process candidate buffer.
+//
+// γ policy enforcement: pure value transforms. No atlas write.
+//
+// TODO(phase3): per-module verifier hook (each module currently uses
+// a closed-form heuristic; the nexus version cross-checks against
+// reverse-math / Δ₀-absolute / Π₀² classifiers).
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+import "../smash/candidate.hexa"
+
+// ─── M1: field (gauge filter + symmetry breaking) ───
+//
+// Source: `~/core/nexus/cli/blowup/modules/blowup_field.hexa`. The
+// nexus engine projects a seed onto a Goldstone cascade lattice and
+// emits candidates per broken-symmetry axis. v1 port: emit one
+// candidate per "broken axis" (we use 3 fixed axes: U(1), SU(2), SU(3)).
+
+pub fn m1_field(seed: DiscoveryCandidate) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let axes = ["U1", "SU2", "SU3"]
+    let mut i = 0
+    while i < 3 {
+        let axis = axes[i]
+        let c = mk_derived(
+            seed.id + "_field_" + axis,
+            "orbit",
+            "field[" + axis + "](" + seed.expr + ")",
+            seed.conf * 0.92,
+            seed.value * (i + 1) * 1.0,
+            "free:M1:field:" + axis
+        )
+        out.push(c)
+        i = i + 1
+    }
+    return out
+}
+
+// ─── M2: holographic (boundary ↔ bulk) ───
+//
+// Source: `~/core/nexus/cli/blowup/modules/blowup_holographic.hexa`.
+// Emits two candidates: the boundary projection (value/d) and the
+// bulk lift (value*d), for a fixed d=4 AdS slicing.
+
+pub fn m2_holographic(seed: DiscoveryCandidate) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let d: f64 = 4.0
+    let boundary = mk_derived(
+        seed.id + "_holo_b",
+        "dual",
+        "boundary(" + seed.expr + ")",
+        seed.conf * 0.88,
+        seed.value / d,
+        "free:M2:holographic:boundary"
+    )
+    out.push(boundary)
+    let bulk = mk_derived(
+        seed.id + "_holo_B",
+        "dual",
+        "bulk(" + seed.expr + ")",
+        seed.conf * 0.88,
+        seed.value * d,
+        "free:M2:holographic:bulk"
+    )
+    out.push(bulk)
+    return out
+}
+
+// ─── M3: quantum (superposition evolution) ───
+//
+// Source: `~/core/nexus/cli/blowup/modules/blowup_quantum.hexa`.
+// Emits one "superposed" candidate whose value is the seed value
+// shifted by a quantization factor (1/2). Mirrors nexus quantum
+// module's eigenvalue projection step.
+
+pub fn m3_quantum(seed: DiscoveryCandidate) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let quantized = mk_derived(
+        seed.id + "_quantum",
+        "closure",
+        "|ψ⟩(" + seed.expr + ")",
+        seed.conf * 0.90,
+        seed.value * 0.5,
+        "free:M3:quantum"
+    )
+    out.push(quantized)
+    return out
+}
+
+// ─── M4: string (vibration mode propagation) ───
+//
+// Source: `~/core/nexus/cli/blowup/modules/blowup_string.hexa`. Emits
+// candidates for fundamental + 1st-overtone modes. v1 port uses fixed
+// mode counts (n=1, n=2) — nexus walks up to n=10.
+
+pub fn m4_string(seed: DiscoveryCandidate) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let mut n = 1
+    while n <= 2 {
+        let c = mk_derived(
+            seed.id + "_str_n" + to_string(n),
+            "recur",
+            "mode_" + to_string(n) + "(" + seed.expr + ")",
+            seed.conf * 0.85,
+            seed.value * n * 1.0,
+            "free:M4:string:n" + to_string(n)
+        )
+        out.push(c)
+        n = n + 1
+    }
+    return out
+}
+
+// ─── M5: toe (cross-domain unification) ───
+//
+// Source: `~/core/nexus/cli/blowup/modules/blowup_toe.hexa`. The
+// nexus engine attempts a Theory-of-Everything reconciliation across
+// the previous 4 module outputs. v1 port: emit one "unified" candidate
+// whose value is the geometric mean of the seed value and a fixed
+// universal constant (using sigma_n6 = 12).
+
+pub fn m5_toe(seed: DiscoveryCandidate) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let universal: f64 = 12.0  // sigma_n6 from hexad constants
+    // Approximation: geometric-mean-ish via (a + b)/2 since we lack sqrt
+    // in the pure surface here.
+    let unified_value = (seed.value + universal) / 2.0
+    let c = mk_derived(
+        seed.id + "_toe",
+        "meta",
+        "TOE(" + seed.expr + ")",
+        seed.conf * 0.95,
+        unified_value,
+        "free:M5:toe"
+    )
+    out.push(c)
+    return out
+}
+
+// ─── Module list dispatch ───
+//
+// Returns the candidates produced by module idx ∈ {0..4} on `seed`.
+// idx out of range ⇒ empty.
+
+pub fn dispatch_module(idx: i64, seed: DiscoveryCandidate) -> [DiscoveryCandidate] {
+    if idx == 0 { return m1_field(seed) }
+    if idx == 1 { return m2_holographic(seed) }
+    if idx == 2 { return m3_quantum(seed) }
+    if idx == 3 { return m4_string(seed) }
+    if idx == 4 { return m5_toe(seed) }
+    let empty: [DiscoveryCandidate] = []
+    return empty
+}
+
+pub fn module_count() -> i64 { return 5 }
+
+pub fn module_name(idx: i64) -> string {
+    if idx == 0 { return "field" }
+    if idx == 1 { return "holographic" }
+    if idx == 2 { return "quantum" }
+    if idx == 3 { return "string" }
+    if idx == 4 { return "toe" }
+    return ""
+}

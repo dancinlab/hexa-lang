@@ -1,0 +1,119 @@
+// HEXA Native Compiler — Phase 2 generator absorption: A6 free smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Two known seeds drive the 5-module DFS:
+//   1. "atlas_n6_lattice" — depth=2 — must yield candidates from all
+//                            5 modules (field/holo/quantum/string/toe).
+//   2. "physics_unified"  — depth=3 — must yield ≥10 candidates
+//                            (5 modules × ≥2 candidates per module
+//                             at depth 1, plus depth-2/3 fanout).
+//
+// Run:
+//   hexa run compiler/free/free_test.hexa
+
+import "../smash/candidate.hexa"
+import "./modules.hexa"
+import "./free.hexa"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _has_module(cands: [DiscoveryCandidate], needle: string) -> bool {
+    let mut i = 0
+    while i < len(cands) {
+        let src = cands[i].src
+        let mut j = 0
+        let nl = len(needle)
+        while j + nl <= len(src) {
+            if src.substring(j, j + nl) == needle { return true }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    println("free A6 5-module DFS smoke")
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // ─── Seed 1: atlas_n6_lattice ───
+    println("")
+    println("seed 1: 'atlas_n6_lattice' (dfs=2)")
+    let c1 = free("atlas_n6_lattice", 2)
+    println("  candidates: " + to_string(len(c1)))
+
+    total = total + 1
+    if len(c1) > 0 { pass = pass + 1; _check("seed1: ≥1 candidate emitted", true, fails) }
+    else { _check("seed1: ≥1 candidate emitted", false, fails) }
+
+    // All 5 modules must contribute
+    let modules = ["field", "holographic", "quantum", "string", "toe"]
+    let mut covered = 0
+    let mut t = 0
+    while t < 5 {
+        if _has_module(c1, modules[t]) { covered = covered + 1 }
+        t = t + 1
+    }
+    total = total + 1
+    if covered == 5 { pass = pass + 1; _check("seed1: all 5 modules contributed", true, fails) }
+    else { _check("seed1: all 5 modules contributed (got " + to_string(covered) + "/5)", false, fails) }
+
+    // ─── Seed 2: physics_unified ───
+    println("")
+    println("seed 2: 'physics_unified' (dfs=3)")
+    let c2 = free("physics_unified", 3)
+    println("  candidates: " + to_string(len(c2)))
+
+    total = total + 1
+    if len(c2) >= 10 { pass = pass + 1; _check("seed2: ≥10 candidates", true, fails) }
+    else { _check("seed2: ≥10 candidates (got " + to_string(len(c2)) + ")", false, fails) }
+
+    // Primary axiom must exist
+    let mut has_seed = false
+    let mut i = 0
+    while i < len(c2) {
+        if c2[i].axiom && c2[i].src == "free:seed" { has_seed = true }
+        i = i + 1
+    }
+    total = total + 1
+    if has_seed { pass = pass + 1; _check("seed2: primary axiom present", true, fails) }
+    else { _check("seed2: primary axiom present", false, fails) }
+
+    // Depth grows the candidate count — depth=3 should exceed depth=1
+    let c2_shallow = free("physics_unified", 1)
+    total = total + 1
+    if len(c2) > len(c2_shallow) {
+        pass = pass + 1
+        _check("seed2: dfs=3 > dfs=1 (deeper DFS produces more)", true, fails)
+    } else {
+        _check("seed2: dfs=3 > dfs=1 (deeper DFS produces more)", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/free_test.hexa") { return true }
+    if s == "free_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

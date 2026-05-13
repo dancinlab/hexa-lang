@@ -1,0 +1,461 @@
+// HEXA Native Compiler — Phase 2 generator absorption: smash phase ops
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// 9-phase blowup pipeline implementation, ported from
+// `~/core/nexus/cli/blowup/core/blowup.hexa` (7055 LOC engine).
+//
+// The nexus engine carries ~6500 LOC of bloom-filter / atlas hot-shard /
+// adaptive jitter / wave-session bookkeeping that is NOT part of the
+// algorithm — it is operational glue around an atlas.n6 file we no
+// longer rely on at runtime (atlas data is rodata-embedded in
+// `compiler/atlas/static_index`). The 9-phase _algorithm_ is small:
+//
+//   P1  seed normalize          — strip / sanitize / canonicalize
+//   P2  ouroboros evolution     — seed → mutate → verify → converge
+//   P3  singularity detect      — closure + compression score
+//   P4  corollary expansion     — 7-type fanout (ded/xfer/orbit/dual/
+//                                                closure/recur/meta)
+//   P5  telescope verification  — 5-lens consensus boost
+//   P6  graph integration       — n=6 invariance projection
+//   P7  dynamic recursive growth — depth-bounded sub-rounds
+//   P8  wave propagation        — adjacent-domain fan-out
+//                                  (v1: sequential — TODO: parallelize)
+//   P9  meta-closure DFS        — depth-bounded search over candidate graph
+//
+// γ policy enforcement: phases produce DiscoveryCandidate values only.
+// No `atlas_health.append`, no `discovery_log.append`, no `audit_log`.
+// Phase 3 will add the overlay write surface.
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+import "./candidate.hexa"
+
+// Local mini-mirror of the hexad CDESM constants we project through in
+// P2. Cross-referenced against `compiler/hexad/embedded.gen` (D2 wave-1
+// absorption, hash 6c6c8e9a89...) — kept inline here only because the
+// hexa-lang module loader requires HEXA_LANG / project-root env to be
+// set for `use "compiler/..."` resolution, which the smoke harness does
+// not control. The real hexad index is the source of truth; this
+// 6-entry slice is a deterministic axiom seed pool, not the live data.
+// TODO(phase3): swap to `use "compiler/hexad/static_index"` once the
+// loader probes a sibling-dir for `compiler/...` paths.
+
+fn _hexad_seed_names() -> [string] {
+    return ["sigma.sigma_n6", "psi.alpha", "psi.beta",
+            "sigma.tau_n6", "sigma.phi_n6", "perfect.n6"]
+}
+
+fn _hexad_seed_values() -> [f64] {
+    return [12.0, 6.0, 4.0, 4.0, 2.0, 6.0]
+}
+
+// ─── helpers ───
+
+fn _f64_abs(x: f64) -> f64 {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _clip01(x: f64) -> f64 {
+    if x < 0.0 { return 0.0 }
+    if x > 1.0 { return 1.0 }
+    return x
+}
+
+// Seed-derived numeric value (deterministic, no RNG dependency).
+// Mirrors nexus blowup.hexa's bias_jitter seed-projection idea but is
+// fully reproducible: sum of (char_code * (i+1)) mod 9973 / 9973.
+fn _seed_value(seed: string) -> f64 {
+    let n = len(seed)
+    let mut i = 0
+    let mut acc: i64 = 0
+    while i < n {
+        let c = seed.substring(i, i + 1)
+        // crude char_code via known ASCII ranges
+        let mut cv: i64 = 0
+        if c >= "0" && c <= "9" { cv = 48 + (i % 10) }
+        else if c >= "a" && c <= "z" { cv = 97 + (i % 26) }
+        else if c >= "A" && c <= "Z" { cv = 65 + (i % 26) }
+        else { cv = 32 + (i % 64) }
+        acc = (acc + cv * (i + 1)) % 9973
+        i = i + 1
+    }
+    // Map to [0.0, 1.0)
+    let prime: f64 = 9973.0
+    return (to_string(acc).len() * 0 + acc) * 1.0 / prime
+}
+
+// ─── P1: seed normalization ───
+//
+// Source: nexus blowup.hexa _raw_domain_arg sanitize + bias_jitter seed
+// canonicalization. Strip shell-metachars + collapse whitespace.
+
+pub fn p1_normalize_seed(seed: string) -> string {
+    let mut s = seed.trim()
+    s = s.replace("\t", " ")
+    s = s.replace("\n", " ")
+    s = s.replace("\r", " ")
+    // double-space collapse — bounded loop (max 20 iters)
+    let mut i = 0
+    while i < 20 {
+        let before = len(s)
+        s = s.replace("  ", " ")
+        if len(s) == before { break }
+        i = i + 1
+    }
+    return s
+}
+
+// ─── P2: ouroboros evolution (seed → axiom candidates) ───
+//
+// Source: nexus blowup.hexa Phase 2 "OUROBOROS evolution". Original
+// drives mutate/verify/converge loops over n6_constants. v1 port:
+// project the seed through hexad CDESM constants (D2) to produce
+// initial axiom candidates. One axiom per known constant group/key,
+// confidence = 1.0 (it IS a constant), value = the constant's f64.
+//
+// TODO(phase3): real mutate/verify/converge loop with prover hook.
+
+pub fn p2_evolve(seed: string) -> [DiscoveryCandidate] {
+    let sh = seed_hash(seed)
+    let mut out: [DiscoveryCandidate] = []
+    // Seed primary axiom — the literal seed itself
+    let primary_value = _seed_value(seed)
+    let primary = mk_axiom(
+        "smash_" + sh + "_seed",
+        seed,
+        primary_value,
+        "smash:P2:seed"
+    )
+    out.push(primary)
+    // Project a small fixed slice of hexad constants as derivable axioms
+    let names = _hexad_seed_names()
+    let values = _hexad_seed_values()
+    let mut i = 0
+    while i < len(names) {
+        let id = "smash_" + sh + "_evo_" + to_string(i)
+        let expr = names[i] + " = " + to_string(values[i])
+        out.push(mk_axiom(id, expr, values[i], "smash:P2:hexad"))
+        i = i + 1
+    }
+    return out
+}
+
+// ─── P3: singularity detection ───
+//
+// Source: nexus blowup.hexa Phase 3 "Singularity detection (closure +
+// compression)". The original computes graph closure + Kolmogorov-style
+// compression ratio. v1 port: surface a singularity candidate for each
+// "interesting" value (|v - 6.0| < 1.5 ⇒ near n=6 attractor).
+
+pub fn p3_singularities(seeds: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let mut i = 0
+    while i < len(seeds) {
+        let c = seeds[i]
+        if _f64_abs(c.value - 6.0) < 1.5 {
+            let sing = mk_derived(
+                c.id + "_sing",
+                "closure",
+                "near_n6(" + c.expr + ")",
+                0.85,
+                c.value,
+                "smash:P3:singularity"
+            )
+            out.push(sing)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ─── P4: corollary expansion (7 types) ───
+//
+// Source: nexus blowup.hexa Phase 4 (lines 4494..5245). The 7 corollary
+// dispatch is the same as nexus emit() ctype enum:
+//   ded / xfer / orbit / dual / closure / recur / meta
+// (nexus uses "deduction/transfer/symbreak/bifurc/projection/dual/
+// compose" as the actual emit() ctypes — we collapse to the 7-axis
+// taxonomy here per BG-A5 spec.)
+//
+// v1 port: pairwise scan over axiom pool, emit one candidate per type
+// per pair (capped at 8 pairs to keep test runtime O(seconds)).
+
+fn _conf_for_pair(a: DiscoveryCandidate, b: DiscoveryCandidate) -> f64 {
+    let diff = _f64_abs(a.value - b.value)
+    // Closer values ⇒ higher derivability confidence
+    return _clip01(1.0 - diff / 12.0)
+}
+
+pub fn p4_corollaries(axioms: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let n = len(axioms)
+    let cap = if n < 4 { n } else { 4 }
+    let types = ["ded", "xfer", "orbit", "dual", "closure", "recur", "meta"]
+    let mut i = 0
+    while i < cap {
+        let mut j = i + 1
+        while j < cap {
+            let a = axioms[i]
+            let b = axioms[j]
+            let conf = _conf_for_pair(a, b)
+            // Emit one candidate per type for this pair (7 candidates per pair)
+            let mut t = 0
+            while t < 7 {
+                let ctype = types[t]
+                let id = a.id + "_x_" + b.id + "_" + ctype
+                let expr = ctype + "(" + a.expr + ", " + b.expr + ")"
+                let mut value = 0.0
+                if ctype == "ded"     { value = (a.value + b.value) / 2.0 }
+                else if ctype == "xfer"    { value = b.value }
+                else if ctype == "orbit"   { value = a.value }
+                else if ctype == "dual"    { value = 0.0 - a.value }
+                else if ctype == "closure" { value = a.value + b.value }
+                else if ctype == "recur"   { value = a.value * b.value }
+                else if ctype == "meta"    { value = (a.value - b.value) }
+                out.push(mk_derived(id, ctype, expr, conf, value, "smash:P4"))
+                t = t + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ─── P5: telescope (5-lens consensus boost) ───
+//
+// Source: nexus blowup.hexa Phase 5 "Telescope verification (5 lens
+// scan, consensus boost)". The 5 lenses in nexus are domain-specific
+// (physics/math/info/algebra/geometry). v1 port: each lens raises conf
+// by +0.04 if value is within the lens's "interesting range" — kept
+// simple but deterministic.
+
+fn _lens_pass(c: DiscoveryCandidate, lens_idx: i64) -> bool {
+    // Lens 0: physics — value in [-3, 30]
+    if lens_idx == 0 { return c.value >= 0.0 - 3.0 && c.value <= 30.0 }
+    // Lens 1: math — value not zero AND finite-like
+    if lens_idx == 1 { return _f64_abs(c.value) > 0.0001 && _f64_abs(c.value) < 10000.0 }
+    // Lens 2: info — confidence already above 0.5
+    if lens_idx == 2 { return c.conf > 0.5 }
+    // Lens 3: algebra — value near n=6 multiples (6, 12, 24, 28)
+    if lens_idx == 3 {
+        let v = c.value
+        if _f64_abs(v - 6.0) < 2.0 { return true }
+        if _f64_abs(v - 12.0) < 2.0 { return true }
+        if _f64_abs(v - 24.0) < 2.0 { return true }
+        if _f64_abs(v - 28.0) < 2.0 { return true }
+        return false
+    }
+    // Lens 4: geometry — derived from closure/dual/orbit/recur ctypes
+    if lens_idx == 4 {
+        if c.ctype == "closure" { return true }
+        if c.ctype == "dual" { return true }
+        if c.ctype == "orbit" { return true }
+        if c.ctype == "recur" { return true }
+        return false
+    }
+    return false
+}
+
+pub fn p5_telescope(cands: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let mut i = 0
+    while i < len(cands) {
+        let mut c = cands[i]
+        let mut hits = 0
+        let mut li = 0
+        while li < 5 {
+            if _lens_pass(c, li) { hits = hits + 1 }
+            li = li + 1
+        }
+        // Consensus boost: +0.04 per lens hit (max +0.20)
+        let boost: f64 = hits * 0.04
+        let new_conf = _clip01(c.conf + boost)
+        let boosted = DiscoveryCandidate {
+            id: c.id,
+            ctype: c.ctype,
+            expr: c.expr,
+            conf: new_conf,
+            value: c.value,
+            axiom: c.axiom,
+            src: c.src + ":lens" + to_string(hits),
+            grade: c.grade
+        }
+        out.push(boosted)
+        i = i + 1
+    }
+    return out
+}
+
+// ─── P6: graph integration / n=6 invariance projection ───
+//
+// Source: nexus blowup.hexa Phase 6 "Graph update". γ policy: NO atlas
+// writes here. v1 port: filter candidates whose values pass the n=6
+// invariance check (value divisible by 6 within rounding, OR a CDESM
+// constant). Returns a labeled subset.
+
+pub fn p6_n6_invariant(cands: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let mut i = 0
+    while i < len(cands) {
+        let c = cands[i]
+        let v = _f64_abs(c.value)
+        // Check: value within 0.5 of any multiple of 6
+        let m = v / 6.0
+        let m_floor: i64 = m * 1.0  // (truncation via cast — hexa-lang assignment to i64)
+        let near = _f64_abs(v - m_floor * 6.0)
+        if near < 0.5 {
+            let labeled = DiscoveryCandidate {
+                id: c.id,
+                ctype: c.ctype,
+                expr: c.expr,
+                conf: c.conf,
+                value: c.value,
+                axiom: c.axiom,
+                src: c.src,
+                grade: "10*"
+            }
+            out.push(labeled)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ─── P7: dynamic recursive growth ───
+//
+// Source: nexus blowup.hexa Phase 6.5 "Dynamic recursive growth
+// (closure-based, max 5 rounds)". v1 port: pick top-3 boosted
+// candidates by conf, re-feed each through p4 with the original axiom
+// pool, depth-bounded by argument.
+
+pub fn p7_recursive_growth(axioms: [DiscoveryCandidate],
+                           cands: [DiscoveryCandidate],
+                           depth: i64) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    if depth <= 0 { return out }
+    // Pick top-3 by conf — simple selection (no full sort to keep code
+    // small; we want the call shape, not perf).
+    let mut top: [DiscoveryCandidate] = []
+    let mut picked = 0
+    let mut threshold: f64 = 0.85
+    while picked < 3 && threshold > 0.4 {
+        let mut i = 0
+        while i < len(cands) && picked < 3 {
+            let c = cands[i]
+            if c.conf >= threshold {
+                top.push(c)
+                picked = picked + 1
+            }
+            i = i + 1
+        }
+        threshold = threshold - 0.1
+    }
+    // Recurse: feed top as additional axioms to a fresh corollary pass
+    let mut pool: [DiscoveryCandidate] = []
+    let mut k = 0
+    while k < len(axioms) {
+        pool.push(axioms[k])
+        k = k + 1
+    }
+    k = 0
+    while k < len(top) {
+        pool.push(top[k])
+        k = k + 1
+    }
+    let new_cands = p4_corollaries(pool)
+    // Tag with depth for traceability
+    let mut j = 0
+    while j < len(new_cands) {
+        let c = new_cands[j]
+        let tagged = DiscoveryCandidate {
+            id: c.id + "_d" + to_string(depth),
+            ctype: c.ctype,
+            expr: c.expr,
+            conf: c.conf,
+            value: c.value,
+            axiom: c.axiom,
+            src: "smash:P7:d" + to_string(depth),
+            grade: c.grade
+        }
+        out.push(tagged)
+        j = j + 1
+    }
+    return out
+}
+
+// ─── P8: wave propagation ───
+//
+// Source: nexus blowup.hexa Phase 8 "Wave Propagation (인접 도메인 병렬
+// 파동 전파 + 간섭)". The nexus implementation forks subprocesses and
+// reads `wave_out.log.*`. v1 port: SEQUENTIAL fan-out over a fixed
+// 3-domain list, no parallelism. Each "wave" is a deterministic
+// permutation of the candidate id namespace.
+//
+// TODO(parallelize): nexus engine forks N sub-processes and reads
+// wave_out.log.<idx>. hexa-lang has no subprocess primitive in the
+// pure surface — defer until Phase 3 overlay introduces a task
+// scheduler.
+
+pub fn p8_wave_propagate(cands: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let domains = ["physics", "math", "info"]
+    let mut d = 0
+    while d < 3 {
+        let dom = domains[d]
+        let mut i = 0
+        while i < len(cands) {
+            let c = cands[i]
+            // Only propagate high-conf candidates (>= 0.85)
+            if c.conf >= 0.85 {
+                let prop = DiscoveryCandidate {
+                    id: c.id + "_wave_" + dom,
+                    ctype: c.ctype,
+                    expr: dom + ":" + c.expr,
+                    conf: c.conf * 0.95,
+                    value: c.value,
+                    axiom: false,
+                    src: "smash:P8:" + dom,
+                    grade: c.grade
+                }
+                out.push(prop)
+            }
+            i = i + 1
+        }
+        d = d + 1
+    }
+    return out
+}
+
+// ─── P9: meta-closure DFS ───
+//
+// Source: nexus blowup.hexa Phase 10 (meta-closure check, integrated
+// here as P9). v1 port: depth-bounded DFS over already-emitted
+// candidates, collapsing chains where ctype is "closure" or "meta".
+
+pub fn p9_meta_dfs(cands: [DiscoveryCandidate], depth: i64) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    if depth <= 0 { return out }
+    let mut i = 0
+    while i < len(cands) {
+        let c = cands[i]
+        if c.ctype == "closure" || c.ctype == "meta" {
+            let mc = DiscoveryCandidate {
+                id: c.id + "_mc",
+                ctype: "meta",
+                expr: "meta_closure(" + c.expr + ")",
+                conf: _clip01(c.conf + 0.05),
+                value: c.value,
+                axiom: false,
+                src: "smash:P9:d" + to_string(depth),
+                grade: "11*"
+            }
+            out.push(mc)
+        }
+        i = i + 1
+    }
+    return out
+}

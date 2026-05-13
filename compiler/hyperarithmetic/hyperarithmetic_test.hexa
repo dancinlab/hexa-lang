@@ -1,0 +1,148 @@
+// HEXA Native Compiler — Phase 2 generator absorption: A8 smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// 5 known propositions exercising every verdict path:
+//   T1 "perfect_number infinite ∀N ∃m>N σ(m)=2m"      ⇒ REVERSE-UNKNOWN
+//   T2 "Vinogradov ternary Goldbach ∀n ∃p1,p2,p3"     ⇒ ABSOLUTE-PASS-PI02
+//   T3 "Sylow ∀G ∃H Sylow p-subgroup"                  ⇒ DELEGATE-MK8
+//      (no ∀∃ alternation tag — falls into Π₀¹ class)
+//   T4 "Out(S_6) ∀n≠6 trivial; Out(S_6) = Z/2"         ⇒ [12*] candidate
+//   T5 "Con(ZFC) ∀p ¬derive(p,⊥)"                       ⇒ REJECT-BLACKLIST
+//
+// Run:
+//   hexa run compiler/hyperarithmetic/hyperarithmetic_test.hexa
+
+import "./checks.hexa"
+import "./hyperarithmetic.hexa"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn main() {
+    println("hyperarithmetic A8 Π₀² 5-system smoke")
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // ─── T1: perfect number infinite ───
+    let t1 = "perfect number infinite ∀N ∃m>N σ(m)=2m"
+    let r1 = hyperarithmetic(t1)
+    println("")
+    println("T1: " + t1)
+    println("    verdict   = " + r1.verdict)
+    println("    hierarchy = " + r1.hierarchy)
+    println("    n6-inv    = " + r1.n6_invariance)
+    total = total + 1
+    if r1.hierarchy == "PI02" {
+        pass = pass + 1
+        _check("T1: hierarchy == PI02", true, fails)
+    } else {
+        _check("T1: hierarchy == PI02 (got " + r1.hierarchy + ")", false, fails)
+    }
+
+    // ─── T2: Vinogradov ternary Goldbach ───
+    let t2 = "Vinogradov ternary Goldbach ∀n odd n≥7, ∃p1,p2,p3 prime, n=p1+p2+p3"
+    let r2 = hyperarithmetic(t2)
+    println("")
+    println("T2: " + t2)
+    println("    verdict       = " + r2.verdict)
+    println("    witness-bound = " + r2.witness_bound)
+    total = total + 1
+    if r2.verdict == "ABSOLUTE-PASS-PI02" {
+        pass = pass + 1
+        _check("T2: verdict == ABSOLUTE-PASS-PI02", true, fails)
+    } else {
+        _check("T2: verdict == ABSOLUTE-PASS-PI02 (got " + r2.verdict + ")", false, fails)
+    }
+    total = total + 1
+    if len(r2.witness_bound) > 0 {
+        pass = pass + 1
+        _check("T2: witness bound non-empty", true, fails)
+    } else {
+        _check("T2: witness bound non-empty", false, fails)
+    }
+
+    // ─── T3: Sylow (Π₀¹ — DELEGATE-MK8) ───
+    // No "∀G ∃H" alternation in our heuristic-only parser without bounded
+    // markers — falls into Π₀¹.
+    let t3 = "Sylow p-subgroup for all finite G"
+    let r3 = hyperarithmetic(t3)
+    println("")
+    println("T3: " + t3)
+    println("    verdict   = " + r3.verdict)
+    println("    hierarchy = " + r3.hierarchy)
+    total = total + 1
+    if r3.verdict == "DELEGATE-MK8" {
+        pass = pass + 1
+        _check("T3: verdict == DELEGATE-MK8", true, fails)
+    } else {
+        _check("T3: verdict == DELEGATE-MK8 (got " + r3.verdict + ")", false, fails)
+    }
+
+    // ─── T4: Out(S_6) ([12*] candidate) ───
+    let t4 = "Out(S_6) = Z/2 with Out(S_n) trivial ∀n≠6; ∃ σ such that S_6 has outer automorphism"
+    let r4 = hyperarithmetic(t4)
+    println("")
+    println("T4: " + t4)
+    println("    verdict   = " + r4.verdict)
+    println("    n6-inv    = " + r4.n6_invariance)
+    println("    [12*]     = " + (if r4.tier12_candidate { "true" } else { "false" }))
+    total = total + 1
+    if r4.n6_invariance == "N6-UNIQUE" {
+        pass = pass + 1
+        _check("T4: n6_invariance == N6-UNIQUE", true, fails)
+    } else {
+        _check("T4: n6_invariance == N6-UNIQUE (got " + r4.n6_invariance + ")", false, fails)
+    }
+
+    // ─── T5: Con(ZFC) (blacklisted) ───
+    let t5 = "Con(ZFC): ∀ proof p, ¬derive(p, ⊥_ZFC)"
+    let r5 = hyperarithmetic(t5)
+    println("")
+    println("T5: " + t5)
+    println("    verdict = " + r5.verdict)
+    total = total + 1
+    if r5.verdict == "REJECT-BLACKLIST" {
+        pass = pass + 1
+        _check("T5: verdict == REJECT-BLACKLIST", true, fails)
+    } else {
+        _check("T5: verdict == REJECT-BLACKLIST (got " + r5.verdict + ")", false, fails)
+    }
+
+    // ─── Batch + count_tier12 sanity ───
+    let batch = hyperarithmetic_batch([t1, t2, t3, t4, t5])
+    println("")
+    println("batch: " + to_string(len(batch)) + " results")
+    total = total + 1
+    if len(batch) == 5 {
+        pass = pass + 1
+        _check("batch: 5 results", true, fails)
+    } else {
+        _check("batch: 5 results", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/hyperarithmetic_test.hexa") { return true }
+    if s == "hyperarithmetic_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

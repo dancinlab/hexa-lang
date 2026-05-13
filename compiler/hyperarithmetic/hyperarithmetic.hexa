@@ -1,0 +1,84 @@
+// HEXA Native Compiler — Phase 2 generator absorption: A8 hyperarithmetic
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// `hyperarithmetic` — Mk.IX Π₀² reverse-math 5-system classifier.
+// Ports `~/core/nexus/cli/blowup/modules/blowup_hyperarithmetic.hexa`
+// (531 LOC) with the algorithm preserved 1:1 — only the runner
+// scaffolding (atlas.n6 self-check, NEXUS_ENGINE_{DEAD,ERROR,WARN}
+// emit, stub-fallback include hooks) is stripped.
+//
+// Public surface:
+//   pub struct HyperResult { ... }
+//   pub fn hyperarithmetic(prop: string) -> HyperResult
+//
+// γ policy enforcement: pure verifier, no atlas writes. Verdict
+// reporting is via return value, NOT via println / stderr.
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+import "./checks.hexa"
+
+pub struct HyperResult {
+    prop: string,
+    hierarchy: string,        // "DELTA0" | "PI01" | ... | "UNSURE"
+    witness_bound: string,    // "" if no bound applies
+    reverse_math: string,     // "REVERSE-PROVEN" | "REVERSE-UNKNOWN"
+    reverse_detail: string,   // per-system breakdown
+    n6_invariance: string,    // "UNIVERSAL" | "N6-CORE" | "N6-UNIQUE" | "PERFECT-CLASS"
+    verdict: string,          // final classification (see checks.hexa H5)
+    tier12_candidate: bool    // true ⇒ [12*] grade audit candidate
+}
+
+pub fn hyperarithmetic(prop: string) -> HyperResult {
+    return HyperResult {
+        prop: prop,
+        hierarchy: pi02_detect(prop),
+        witness_bound: reduce_to_pi01(prop),
+        reverse_math: reverse_math_check(prop),
+        reverse_detail: reverse_math_detail(prop),
+        n6_invariance: n6_invariance(prop),
+        verdict: hyperarithmetic_verdict(prop),
+        tier12_candidate: is_tier12_candidate(prop)
+    }
+}
+
+// Pretty-print one HyperResult to a single string (used by smoke and
+// any caller that wants a human-readable trace).
+pub fn hyperarithmetic_pretty(r: HyperResult) -> string {
+    let cand_s = if r.tier12_candidate { "true" } else { "false" }
+    let mut out = "prop:      " + r.prop + "\n"
+    out = out + "hierarchy: " + r.hierarchy + "\n"
+    let wb = if len(r.witness_bound) == 0 { "(none)" } else { r.witness_bound }
+    out = out + "witness:   " + wb + "\n"
+    out = out + "rev-math:  " + r.reverse_math + "\n"
+    out = out + "rev-detail:" + r.reverse_detail + "\n"
+    out = out + "n6-inv:    " + r.n6_invariance + "\n"
+    out = out + "verdict:   " + r.verdict + "\n"
+    out = out + "[12*]:     " + cand_s
+    return out
+}
+
+// Batch classification — runs `hyperarithmetic` per prop and returns
+// the result list. Useful for sweeping a reverse-math corpus.
+pub fn hyperarithmetic_batch(props: [string]) -> [HyperResult] {
+    let mut out: [HyperResult] = []
+    let mut i = 0
+    while i < len(props) {
+        out.push(hyperarithmetic(props[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// Count [12*] candidates in a batch.
+pub fn count_tier12(results: [HyperResult]) -> i64 {
+    let mut n: i64 = 0
+    let mut i = 0
+    while i < len(results) {
+        if results[i].tier12_candidate { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}

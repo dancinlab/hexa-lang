@@ -1,0 +1,102 @@
+// HEXA Native Compiler — Phase 2 generator absorption: discovery candidate
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Shared candidate shape for the three discovery generators (A5/A6/A8).
+// Source: derived from `~/core/nexus/cli/blowup/core/blowup.hexa::emit`
+// (TSV `name\tctype\texpr\tconf\tvalue\taxiom\tsrc`). Lifted here as a
+// typed struct because hexa-lang does not propagate TSV strings as a
+// stable API.
+//
+// γ policy: this struct is RETURN-ONLY. No persistence path lives in
+// the Phase 2 surface — overlay/rodata write protocol is Phase 3 work.
+//
+// Field semantics:
+//   id    — stable identifier (`<algo>_<seed_hash>_<idx>`)
+//   type  — one of: "ded" | "xfer" | "orbit" | "dual" | "closure"
+//                   | "recur" | "meta" | "compose" | "verdict"
+//           (7 corollary types from blowup.hexa Phase 4 + "compose" for
+//            free.hexa DFS edges + "verdict" for hyperarithmetic H5)
+//   expr  — canonical s-expression-ish projection (free-form for now)
+//   conf  — heuristic confidence in [0.0, 1.0]
+//   value — numerical value attached to candidate (0.0 = N/A)
+//   axiom — true → candidate is a fresh axiom (not derivable from pool)
+//   src   — provenance tag ("smash:P4" / "free:M3" / "hyper:H5" / ...)
+//   grade — informal tier marker ("10*" / "11*" / "12*" / "" if unknown)
+//
+// Catalog/diagnostic strings: ENGLISH ONLY (RFC-019 §6 + repo policy).
+
+pub struct DiscoveryCandidate {
+    id: string,
+    ctype: string,
+    expr: string,
+    conf: f64,
+    value: f64,
+    axiom: bool,
+    src: string,
+    grade: string
+}
+
+// Helper — build a fresh-axiom candidate
+pub fn mk_axiom(id: string, expr: string, value: f64, src: string) -> DiscoveryCandidate {
+    return DiscoveryCandidate {
+        id: id,
+        ctype: "axiom",
+        expr: expr,
+        conf: 1.0,
+        value: value,
+        axiom: true,
+        src: src,
+        grade: ""
+    }
+}
+
+// Helper — build a derived candidate of given corollary type
+pub fn mk_derived(id: string, ctype: string, expr: string, conf: f64,
+                  value: f64, src: string) -> DiscoveryCandidate {
+    return DiscoveryCandidate {
+        id: id,
+        ctype: ctype,
+        expr: expr,
+        conf: conf,
+        value: value,
+        axiom: false,
+        src: src,
+        grade: ""
+    }
+}
+
+// Helper — empty/sentinel candidate
+pub fn empty_candidate() -> DiscoveryCandidate {
+    return DiscoveryCandidate {
+        id: "", ctype: "", expr: "", conf: 0.0, value: 0.0,
+        axiom: false, src: "", grade: ""
+    }
+}
+
+// Helper — pretty-print one candidate (single line, TSV-like)
+pub fn candidate_line(c: DiscoveryCandidate) -> string {
+    let ax = if c.axiom { "1" } else { "0" }
+    return c.id + "\t" + c.ctype + "\t" + c.expr + "\t"
+         + to_string(c.conf) + "\t" + to_string(c.value) + "\t"
+         + ax + "\t" + c.src + "\t" + c.grade
+}
+
+// Helper — simple seed hash for candidate ids
+pub fn seed_hash(seed: string) -> string {
+    let n = len(seed)
+    let mut head: string = ""
+    if n >= 16 {
+        head = seed.substring(0, 16)
+    } else {
+        head = seed
+    }
+    // Replace anything that could collide with id separators
+    let mut h = head
+    h = h.replace("\t", "_")
+    h = h.replace(" ", "_")
+    h = h.replace(":", "_")
+    h = h.replace("/", "_")
+    return "l" + to_string(n) + "_" + h
+}

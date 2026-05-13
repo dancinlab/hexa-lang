@@ -1,0 +1,279 @@
+// HEXA Native Compiler — Phase 2 generator absorption: A8 5-system checks
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// 5 reverse-math systems (Simpson Big Five) + Π₀² syntax detection +
+// witness-bound reduction + n=6 invariance check.
+//
+// Direct port (heuristics preserved) of
+// `~/core/nexus/cli/blowup/modules/blowup_hyperarithmetic.hexa` (531 LOC).
+// All atlas.n6 self-check / NEXUS_ENGINE_{DEAD,ERROR,WARN} emission
+// stripped — that scaffolding belongs to the operator/runner layer,
+// not the algorithm.
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+// ─── BLACKLIST: propositions we refuse to judge ───
+
+pub fn is_blacklisted(expr: string) -> bool {
+    if expr.contains("Con(ZFC)") { return true }
+    if expr.contains("Con(PA)") { return true }
+    if expr.contains("Con(T)") { return true }
+    if expr.contains("consistency of") { return true }
+    if expr.contains("Gödel sentence") { return true }
+    if expr.contains("Godel sentence") { return true }
+    if expr.contains("this statement is unprovable") { return true }
+    return false
+}
+
+// ─── H1: Π₀² syntax detection ───
+
+fn _has_forall(expr: string) -> bool {
+    if expr.contains("∀") { return true }
+    if expr.contains("for all") { return true }
+    if expr.contains("for every") { return true }
+    if expr.contains("every ") { return true }
+    return false
+}
+
+fn _has_exists(expr: string) -> bool {
+    if expr.contains("∃") { return true }
+    if expr.contains("exists") { return true }
+    if expr.contains("there is") { return true }
+    if expr.contains("there exists") { return true }
+    return false
+}
+
+fn _has_infinitely_many(expr: string) -> bool {
+    if expr.contains("infinitely many") { return true }
+    // "infinite" + "many" co-occurrence
+    if expr.contains("infinite") && expr.contains("many") { return true }
+    return false
+}
+
+fn _has_bounded_marker(expr: string) -> bool {
+    if !expr.contains("<") { return false }
+    if expr.contains("∀") { return true }
+    if expr.contains("∃") { return true }
+    return false
+}
+
+// ∀ appears earlier than ∃ in expr?
+fn _forall_first(expr: string) -> bool {
+    // Find first index of "∀" markers and "∃" markers
+    let fa_markers = ["∀", "for all ", "for every "]
+    let ex_markers = ["∃", "exists ", "there exists"]
+    let mut fa_idx: i64 = -1
+    let mut ex_idx: i64 = -1
+    let mut i = 0
+    while i < 3 {
+        let m = fa_markers[i]
+        let idx = expr.index_of(m)
+        if idx >= 0 {
+            if fa_idx < 0 || idx < fa_idx { fa_idx = idx }
+        }
+        let m2 = ex_markers[i]
+        let idx2 = expr.index_of(m2)
+        if idx2 >= 0 {
+            if ex_idx < 0 || idx2 < ex_idx { ex_idx = idx2 }
+        }
+        i = i + 1
+    }
+    if fa_idx < 0 { return false }
+    if ex_idx < 0 { return true }
+    return fa_idx < ex_idx
+}
+
+fn _exists_first(expr: string) -> bool {
+    let fa_markers = ["∀", "for all ", "for every "]
+    let ex_markers = ["∃", "exists ", "there exists"]
+    let mut fa_idx: i64 = -1
+    let mut ex_idx: i64 = -1
+    let mut i = 0
+    while i < 3 {
+        let idx = expr.index_of(fa_markers[i])
+        if idx >= 0 {
+            if fa_idx < 0 || idx < fa_idx { fa_idx = idx }
+        }
+        let idx2 = expr.index_of(ex_markers[i])
+        if idx2 >= 0 {
+            if ex_idx < 0 || idx2 < ex_idx { ex_idx = idx2 }
+        }
+        i = i + 1
+    }
+    if ex_idx < 0 { return false }
+    if fa_idx < 0 { return true }
+    return ex_idx < fa_idx
+}
+
+// Returns one of "DELTA0" | "PI01" | "SIGMA01" | "PI02" | "SIGMA02"
+//              | "HIGHER" | "UNSURE"
+pub fn pi02_detect(expr: string) -> string {
+    if is_blacklisted(expr) { return "UNSURE" }
+    let has_fa = _has_forall(expr)
+    let has_ex = _has_exists(expr)
+    let has_inf = _has_infinitely_many(expr)
+
+    // "infinitely many n …" ⇒ ∀N ∃n>N … ⇒ Π₀²
+    if has_inf { return "PI02" }
+
+    if !has_fa && !has_ex { return "DELTA0" }
+    if has_fa && !has_ex {
+        if _has_bounded_marker(expr) { return "DELTA0" }
+        return "PI01"
+    }
+    if !has_fa && has_ex {
+        if _has_bounded_marker(expr) { return "DELTA0" }
+        return "SIGMA01"
+    }
+    let fa_first = _forall_first(expr)
+    let ex_first = _exists_first(expr)
+    if fa_first && !ex_first { return "PI02" }
+    if ex_first && !fa_first { return "SIGMA02" }
+    // ambiguous: conventionally Π₀²
+    if expr.contains("∀") { return "PI02" }
+    return "UNSURE"
+}
+
+pub fn is_pi02(expr: string) -> bool {
+    return pi02_detect(expr) == "PI02"
+}
+
+// ─── H2: bounded witness reduction ───
+
+fn _witness_bound(expr: string) -> string {
+    if expr.contains("Bertrand") { return "2n (Chebyshev 1852)" }
+    if expr.contains("Vinogradov") { return "3n (Helfgott 2013)" }
+    if expr.contains("Sylow") { return "|G| (group order)" }
+    if expr.contains("Fermat little") { return "p (residue classes)" }
+    if expr.contains("Wilson") { return "p (residue classes)" }
+    if expr.contains("prime") && expr.contains("2n") {
+        return "2n (Bertrand-like)"
+    }
+    if expr.contains("Out(S_") { return "|S_n|! (loose finite-group bound)" }
+    if expr.contains("Out(S") { return "|S_n|! (loose finite-group bound)" }
+    return ""
+}
+
+// "" → reduction failed; else: bound string
+pub fn reduce_to_pi01(expr: string) -> string {
+    let tag = pi02_detect(expr)
+    if tag != "PI02" { return "" }
+    if is_blacklisted(expr) { return "" }
+    return _witness_bound(expr)
+}
+
+// ─── H3: reverse-math 5-system check ───
+
+// 0=UNKNOWN, 1=RCA₀, 2=WKL₀, 3=ACA₀, 4=ATR₀, 5=Π¹₁-CA₀
+pub fn rev_strength_level(expr: string) -> i64 {
+    if expr.contains("Sylow") { return 1 }
+    if expr.contains("Bertrand") { return 1 }
+    if expr.contains("Fermat little") { return 1 }
+    if expr.contains("Wilson") { return 1 }
+    if expr.contains("Vinogradov") { return 3 }
+    if expr.contains("4-color") { return 3 }
+    if expr.contains("Four color") { return 3 }
+    if expr.contains("Bolzano") { return 3 }
+    if expr.contains("König") { return 2 }
+    if expr.contains("Konig") { return 2 }
+    if expr.contains("Ramsey(3)") { return 3 }
+    if expr.contains("RT^3") { return 3 }
+    if expr.contains("Out(S_6)") { return 1 }
+    if expr.contains("Out(S") { return 1 }
+    if expr.contains("Schläfli") { return 1 }
+    if expr.contains("regular polytope") { return 1 }
+    if expr.contains("perfect number") && expr.contains("infinite") { return 0 }
+    return 0
+}
+
+// "REVERSE-PROVEN" | "REVERSE-UNKNOWN"
+pub fn reverse_math_check(expr: string) -> string {
+    if is_blacklisted(expr) { return "REVERSE-UNKNOWN" }
+    let level = rev_strength_level(expr)
+    if level == 0 { return "REVERSE-UNKNOWN" }
+    let proven_count = 5 - level + 1
+    if proven_count >= 3 { return "REVERSE-PROVEN" }
+    return "REVERSE-UNKNOWN"
+}
+
+// Per-system detail: "RCA0=PROVEN, WKL0=?, ACA0=?, ATR0=?, Pi11-CA0=?"
+pub fn reverse_math_detail(expr: string) -> string {
+    let level = rev_strength_level(expr)
+    if level == 0 { return "RCA0=?, WKL0=?, ACA0=?, ATR0=?, Pi11-CA0=?" }
+    let systems = ["RCA0", "WKL0", "ACA0", "ATR0", "Pi11-CA0"]
+    let mut out = ""
+    let mut i = 0
+    while i < 5 {
+        let tag = if i + 1 >= level { "PROVEN" } else { "?" }
+        if i > 0 { out = out + ", " }
+        out = out + systems[i] + "=" + tag
+        i = i + 1
+    }
+    return out
+}
+
+// ─── H4: n=6 invariance classification ───
+
+fn _has_n6_symbol(expr: string) -> bool {
+    if expr.contains("n=6") { return true }
+    if expr.contains("n = 6") { return true }
+    if expr.contains("S_6") { return true }
+    if expr.contains("Out(S_6)") { return true }
+    if expr.contains("6th") { return true }
+    return false
+}
+
+// "UNIVERSAL" | "N6-CORE" | "N6-UNIQUE" | "PERFECT-CLASS"
+pub fn n6_invariance(expr: string) -> string {
+    if !_has_n6_symbol(expr) { return "UNIVERSAL" }
+    if expr.contains("Out(S_6)") { return "N6-UNIQUE" }
+    if expr.contains("σ·φ=n·τ") { return "N6-UNIQUE" }
+    if expr.contains("σ(m)=2m") { return "PERFECT-CLASS" }
+    if expr.contains("perfect number") { return "PERFECT-CLASS" }
+    if expr.contains("Sylow") { return "UNIVERSAL" }
+    if expr.contains("4-color") { return "UNIVERSAL" }
+    if expr.contains("Vinogradov") { return "UNIVERSAL" }
+    return "N6-CORE"
+}
+
+// ─── H5: composite verdict ───
+//
+// Returns one of:
+//   "ABSOLUTE-PASS-PI02" — H2 bound reduction succeeded
+//   "REVERSE-PROVEN"     — H3 hit ≥3 of 5 systems
+//   "REVERSE-UNKNOWN"    — H3 indecisive
+//   "REJECT-BLACKLIST"   — Con(ZFC) / Gödel-class
+//   "REJECT-HIGHER"      — Π₀³⁺ (out of scope)
+//   "DELEGATE-MK8"       — Π₀¹ or below (Mk.VIII territory)
+//   "UNSURE"             — parser indeterminate
+
+pub fn hyperarithmetic_verdict(expr: string) -> string {
+    if is_blacklisted(expr) { return "REJECT-BLACKLIST" }
+    let tag = pi02_detect(expr)
+    if tag == "HIGHER" { return "REJECT-HIGHER" }
+    if tag == "UNSURE" { return "UNSURE" }
+    if tag == "DELTA0" || tag == "PI01" || tag == "SIGMA01" {
+        return "DELEGATE-MK8"
+    }
+    if tag == "PI02" {
+        let bound = reduce_to_pi01(expr)
+        if len(bound) > 0 { return "ABSOLUTE-PASS-PI02" }
+        let rv = reverse_math_check(expr)
+        if rv == "REVERSE-PROVEN" { return "REVERSE-PROVEN" }
+        return "REVERSE-UNKNOWN"
+    }
+    return "UNSURE"
+}
+
+// [12*] candidate: Π₀² confirmed (or bound-reduced) AND reverse-proven
+// AND n=6-non-universal. The actual grade promotion is a manual audit
+// surface — this fn returns the boolean candidacy only.
+pub fn is_tier12_candidate(expr: string) -> bool {
+    let v = hyperarithmetic_verdict(expr)
+    if v != "REVERSE-PROVEN" && v != "ABSOLUTE-PASS-PI02" { return false }
+    let inv = n6_invariance(expr)
+    if inv == "UNIVERSAL" { return false }
+    return true
+}

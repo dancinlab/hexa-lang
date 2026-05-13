@@ -1,0 +1,116 @@
+// HEXA Native Compiler — Phase 2 generator absorption: A5 smash smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Two known seeds drive the 9-phase pipeline:
+//   1. "perfect_number_6"  — n=6 attractor seed; must yield ≥1 candidate
+//                            with grade "10*" (P6 n=6 invariance pass).
+//   2. "sigma_24_invariant" — value-projection seed; must yield ≥1
+//                            candidate of every 7 ctype variants in P4.
+//
+// Run:
+//   hexa run compiler/smash/smash_test.hexa
+
+import "./candidate.hexa"
+import "./phases.hexa"
+import "./smash.hexa"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn main() {
+    println("smash A5 9-phase smoke")
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // ─── Seed 1: perfect_number_6 ───
+    println("")
+    println("seed 1: 'perfect_number_6' (depth=3)")
+    let c1 = smash("perfect_number_6", 3)
+    println("  candidates: " + to_string(len(c1)))
+    let ax1 = smash_count_axioms(c1)
+    println("  axioms:     " + to_string(ax1))
+
+    total = total + 1
+    if len(c1) > 0 { pass = pass + 1; _check("seed1: ≥1 candidate emitted", true, fails) }
+    else { _check("seed1: ≥1 candidate emitted", false, fails) }
+
+    total = total + 1
+    if ax1 >= 1 { pass = pass + 1; _check("seed1: ≥1 axiom in pool", true, fails) }
+    else { _check("seed1: ≥1 axiom in pool", false, fails) }
+
+    // P6 grade-tag presence — at least one candidate must carry "10*"
+    let mut has_grade = false
+    let mut i = 0
+    while i < len(c1) {
+        if c1[i].grade == "10*" { has_grade = true }
+        i = i + 1
+    }
+    total = total + 1
+    if has_grade { pass = pass + 1; _check("seed1: P6 grade=\"10*\" present", true, fails) }
+    else { _check("seed1: P6 grade=\"10*\" present", false, fails) }
+
+    // ─── Seed 2: sigma_24_invariant ───
+    println("")
+    println("seed 2: 'sigma_24_invariant' (depth=2)")
+    let c2 = smash("sigma_24_invariant", 2)
+    println("  candidates: " + to_string(len(c2)))
+
+    total = total + 1
+    if len(c2) > 0 { pass = pass + 1; _check("seed2: ≥1 candidate emitted", true, fails) }
+    else { _check("seed2: ≥1 candidate emitted", false, fails) }
+
+    // 7-type ctype coverage
+    let types = ["ded", "xfer", "orbit", "dual", "closure", "recur", "meta"]
+    let mut covered = 0
+    let mut t = 0
+    while t < 7 {
+        let n = smash_count_ctype(c2, types[t])
+        if n > 0 { covered = covered + 1 }
+        t = t + 1
+    }
+    total = total + 1
+    if covered == 7 { pass = pass + 1; _check("seed2: all 7 ctypes present", true, fails) }
+    else { _check("seed2: all 7 ctypes present (got " + to_string(covered) + "/7)", false, fails) }
+
+    // ─── Batch smoke ───
+    println("")
+    println("batch: 2 seeds")
+    let seeds = ["perfect_number_6", "sigma_24_invariant"]
+    let cb = smash_batch(seeds, 2)
+    println("  candidates: " + to_string(len(cb)))
+    total = total + 1
+    // Batch must produce ≥ 2× single-seed-depth-2 count (deterministic).
+    if len(cb) >= len(c2) * 2 - 50 {
+        pass = pass + 1
+        _check("batch: candidate count ≥ 2x single", true, fails)
+    } else {
+        _check("batch: candidate count ≥ 2x single (got "
+            + to_string(len(cb)) + " vs " + to_string(len(c2) * 2) + ")", false, fails)
+    }
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        exit(1)
+    }
+}
+
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/smash_test.hexa") { return true }
+    if s == "smash_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

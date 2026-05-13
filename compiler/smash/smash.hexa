@@ -1,0 +1,159 @@
+// HEXA Native Compiler — Phase 2 generator absorption: A5 smash
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// `smash` — blowup 9-phase singularity-breakthrough generator. Ports
+// `~/core/nexus/cli/blowup/core/blowup.hexa` (7055 LOC) down to its
+// algorithmic skeleton (this dispatcher + `phases.hexa`).
+//
+// Public surface:
+//   pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate]
+//   pub fn smash_batch(seeds: [string], depth: i64) -> [DiscoveryCandidate]
+//
+// Behavior: runs all 9 phases (P1..P9) deterministically and returns
+// the union of every emitted candidate. γ policy: NO persistence —
+// candidates are returned in-process; the caller decides what to do
+// with them. Phase 3 will add an overlay-write path.
+//
+// Doctrine: this file is the "absorbed algorithm" surface for A5.
+// The 6500 LOC of operational scaffolding in the nexus original
+// (bloom filter, hot-shard, jitter history, wave_session bookkeeping,
+// adaptive timeout) is intentionally NOT ported — that infrastructure
+// existed because nexus relied on atlas.n6 as a live file. In
+// hexa-lang the atlas is rodata (D0 `compiler/atlas/static_index`).
+//
+// Deferred sub-features (documented here, not in the source):
+//   - true parallelism in P8 (nexus forks per-domain subprocesses)
+//   - real ouroboros mutate/verify/converge loop in P2 (needs prover)
+//   - atlas.n6 append in P6 (γ enforced — Phase 3 overlay only)
+//   - bias_jitter self-tuning history (nexus ROI#48e)
+//   - adaptive depth cap (nexus ROI#48d)
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+import "./candidate.hexa"
+import "./phases.hexa"
+
+// Run the 9-phase pipeline on a single seed.
+pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate] {
+    let mut all: [DiscoveryCandidate] = []
+    // ─── P1: seed normalization ───
+    let norm = p1_normalize_seed(seed)
+    if len(norm) == 0 { return all }
+
+    // ─── P2: ouroboros evolution → axiom pool ───
+    let axioms = p2_evolve(norm)
+    let mut a = 0
+    while a < len(axioms) {
+        all.push(axioms[a])
+        a = a + 1
+    }
+
+    // ─── P3: singularity detection ───
+    let singularities = p3_singularities(axioms)
+    let mut s = 0
+    while s < len(singularities) {
+        all.push(singularities[s])
+        s = s + 1
+    }
+
+    // ─── P4: corollary expansion (7 types) ───
+    let p4_cands = p4_corollaries(axioms)
+    let mut c4 = 0
+    while c4 < len(p4_cands) {
+        all.push(p4_cands[c4])
+        c4 = c4 + 1
+    }
+
+    // ─── P5: telescope (5-lens consensus boost) ───
+    let p5_cands = p5_telescope(p4_cands)
+    let mut c5 = 0
+    while c5 < len(p5_cands) {
+        all.push(p5_cands[c5])
+        c5 = c5 + 1
+    }
+
+    // ─── P6: n=6 invariance projection ───
+    let p6_cands = p6_n6_invariant(p5_cands)
+    let mut c6 = 0
+    while c6 < len(p6_cands) {
+        all.push(p6_cands[c6])
+        c6 = c6 + 1
+    }
+
+    // ─── P7: dynamic recursive growth (depth-bounded) ───
+    let d = if depth > 0 { depth } else { 3 }
+    let mut cur_depth = d
+    let mut growth_input = p5_cands
+    while cur_depth > 0 {
+        let grown = p7_recursive_growth(axioms, growth_input, cur_depth)
+        let mut g = 0
+        while g < len(grown) {
+            all.push(grown[g])
+            g = g + 1
+        }
+        // feed the grown candidates back for next depth iter
+        growth_input = grown
+        cur_depth = cur_depth - 1
+        // bound runtime: if nothing was emitted, stop early
+        if len(grown) == 0 { break }
+    }
+
+    // ─── P8: wave propagation (sequential — TODO parallelize) ───
+    let p8_cands = p8_wave_propagate(p6_cands)
+    let mut c8 = 0
+    while c8 < len(p8_cands) {
+        all.push(p8_cands[c8])
+        c8 = c8 + 1
+    }
+
+    // ─── P9: meta-closure DFS ───
+    let p9_cands = p9_meta_dfs(all, d)
+    let mut c9 = 0
+    while c9 < len(p9_cands) {
+        all.push(p9_cands[c9])
+        c9 = c9 + 1
+    }
+
+    return all
+}
+
+// Crossover/batch entry — runs `smash` per seed and concatenates.
+// Mirrors nexus `cmd_smash --seeds "s1,s2,..."` shape.
+pub fn smash_batch(seeds: [string], depth: i64) -> [DiscoveryCandidate] {
+    let mut all: [DiscoveryCandidate] = []
+    let mut i = 0
+    while i < len(seeds) {
+        let one = smash(seeds[i], depth)
+        let mut j = 0
+        while j < len(one) {
+            all.push(one[j])
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return all
+}
+
+// Count candidates by axiom flag (helper for smoke + reporting).
+pub fn smash_count_axioms(cands: [DiscoveryCandidate]) -> i64 {
+    let mut n: i64 = 0
+    let mut i = 0
+    while i < len(cands) {
+        if cands[i].axiom { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// Count candidates by ctype.
+pub fn smash_count_ctype(cands: [DiscoveryCandidate], ctype: string) -> i64 {
+    let mut n: i64 = 0
+    let mut i = 0
+    while i < len(cands) {
+        if cands[i].ctype == ctype { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
