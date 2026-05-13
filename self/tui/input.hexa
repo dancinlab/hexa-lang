@@ -404,6 +404,7 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
     if final_byte == 70 { return ["key", -21, 0, 0, 0, ""] }   // F end
     if final_byte == 73 { return ["focus", 1] }                 // I focus-in
     if final_byte == 79 { return ["focus", 0] }                 // O focus-out
+    if final_byte == 90 { return ["key", -2, 0, 0, 1, ""] }     // Z shift+tab (CBT / BackTab) — wilson 2026-05-13, see incoming/patches/wilson-shift-tab-csi-Z-decode.md
     if final_byte == 126 {
         // ~ — keypad / function-key / paste
         // hive Task #58 (2026-04-29): support xterm modifier params of the

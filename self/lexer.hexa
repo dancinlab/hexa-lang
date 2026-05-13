@@ -132,7 +132,7 @@ fn is_hex_digit(ch) {
 
 // Main tokenizer function
 @compile_trace
-fn tokenize(source) {
+pub fn tokenize(source) {
     let mut tokens = []
     let chars = source.chars()
     let mut pos = 0

@@ -1778,6 +1778,10 @@ HexaVal hexa_array_reserve(HexaVal arr, int n) {
 // live (HEXA_ARRAY_ARENA=1 default). On grow beyond the arena buffer, promote
 // to heap with malloc+memcpy — the arena region cannot be realloc'd. Negative
 // `cap` encodes from_arena; abs(cap) is the real capacity.
+// Forward declaration — real impl at the per-scope-arena section below. Needed
+// so the FIX 2026-05-13 heapify call inside hexa_array_push compiles cleanly.
+HexaVal hexa_val_heapify(HexaVal v);
+
 HexaVal hexa_array_push(HexaVal arr, HexaVal item) {
     _hx_mem_tick();
     if (_hx_stats_on()) _hx_stats_array_push++;
@@ -1847,6 +1851,17 @@ HexaVal hexa_array_push(HexaVal arr, HexaVal item) {
                 HX_SET_ARR_CAP(arr, new_cap);
             }
         }
+    }
+    // FIX 2026-05-13 (wilson-fn-arena-escapes-on-push): when pushing into an
+    // array whose item buffer lives on the heap (cap >= 0), and we're inside a
+    // live fn-arena scope (mark_top > 0), the item being pushed may have been
+    // allocated in the *current* fn's arena and will be freed on
+    // __hexa_fn_arena_return — leaving a dangling handle in the heap array. Run
+    // heapify on the item so its underlying storage is promoted to the heap
+    // before insertion. Arena-resident arrays (cap < 0) share the callee's
+    // lifetime by construction and don't need this.
+    if (HX_ARR_CAP(arr) >= 0 && __hexa_val_mark_top > 0) {
+        item = hexa_val_heapify(item);
     }
     HX_ARR_ITEMS(arr)[HX_ARR_LEN(arr)] = item;
     HX_SET_ARR_LEN(arr, HX_ARR_LEN(arr) + 1);
