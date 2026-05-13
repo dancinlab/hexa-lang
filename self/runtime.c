@@ -8986,6 +8986,37 @@ HexaVal hexa_time_ms(void) {
     return hexa_int(ms);
 }
 
+// Wilson 2026-05-13 — C-level aliases for std_time.hexa wrapper names
+// (`time_now_ms`, `__builtin_time_now_ms`, etc.). The hexa-side wrappers
+// in self/std_time.hexa get `extern` forward declarations in the generated
+// C; without these symbols defined, link fails. Cheaper than the codegen
+// intercept (which also exists in codegen_c2.hexa) — no hexa_v2 rebuild
+// needed; just runtime.c recompile (every wilson build picks it up).
+// Filed at incoming/patches/wilson-needs-time-now-ms-builtin.md.
+// Wilson 2026-05-13 — TAG_FN globals for std_time.hexa wrapper names.
+// Codegen emits user-side `time_now_ms()` as `hexa_call0(time_now_ms)` —
+// it treats unrecognized fn names as HexaVal fn-ref values, NOT direct
+// C function calls. So we declare these as HexaVal globals (TAG_FN shims)
+// matching the pattern thread.c uses for thread_spawn/channel_*.
+// Initialized at startup via _hexa_init_time_fn_shims (called from
+// hexa_set_args alongside _hexa_init_thread_fn_shims).
+HexaVal time_now_ms;
+HexaVal timestamp_ms;
+HexaVal __builtin_time_now_ms;
+HexaVal time_now;
+HexaVal __builtin_time_now;
+static HexaVal _hexa_time_ms_thunk(void) { return hexa_time_ms(); }
+static HexaVal _hexa_timestamp_thunk(void) { return hexa_timestamp(); }
+static void _hexa_init_time_fn_shims(void) {
+    time_now_ms          = hexa_fn_new((void*)_hexa_time_ms_thunk,    0);
+    timestamp_ms         = hexa_fn_new((void*)_hexa_time_ms_thunk,    0);
+    __builtin_time_now_ms = hexa_fn_new((void*)_hexa_time_ms_thunk,   0);
+    time_now             = hexa_fn_new((void*)_hexa_timestamp_thunk,  0);
+    __builtin_time_now   = hexa_fn_new((void*)_hexa_timestamp_thunk,  0);
+}
+// `now_ms` and `sleep_ms` are owned by self/native/thread.c (HexaVal globals
+// initialized via _hexa_init_thread_fn_shims). We avoid those names here.
+
 // byte_len(v): length in bytes of a string, array, or map. Unlike hexa_len
 // (which rejects non-container tags), this is permissive — returns 0 on
 // anything without a measurable length. checkpoint.hexa uses it on byte
@@ -10146,6 +10177,8 @@ static void _hexa_init_fn_shims(void) {
     _hexa_init_persistent_pipe_fn_shims();
     // 2026-05-13: anima daemon Phase 2 — pthread + channel primitives.
     _hexa_init_thread_fn_shims();
+    // Wilson 2026-05-13 — std_time.hexa wrapper name shims (time_now_ms etc.)
+    _hexa_init_time_fn_shims();
     _fn_shims_ready = 1;
 }
 
