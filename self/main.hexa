@@ -1276,7 +1276,14 @@ fn cmd_build(src, out, c_only, target) {
     //   false-positive exit 0 회귀가 있었다. 이제 .c existence 를 명시 체크.
     // 산출물 디렉토리 선제 생성 (없으면 hexa_v2 가 stderr 로 실패).
     let _mk_art = exec("mkdir -p build/artifacts 2>/dev/null")
-    let trans = v2 + " " + __actual_src + " " + c_file + " 2>&1"
+    // hexa_v2 (transpiler) also runs into the 768 MB default RSS cap for
+    // large downstream programs (wilson v0.5.x peaks ~900 MB during the
+    // AST → C codegen pass). Same propagation pattern as module_loader.
+    let mut v2_env = ""
+    if env_var("HEXA_MEM_UNLIMITED") != "1" && len(env_var("HEXA_MEM_CAP_MB")) == 0 {
+        v2_env = "HEXA_MEM_CAP_MB=4096 "
+    }
+    let trans = v2_env + v2 + " " + __actual_src + " " + c_file + " 2>&1"
     println("  [1/2] " + trans)
     let r1 = exec(trans)
     if len(r1) > 0 { println("    " + r1) }
