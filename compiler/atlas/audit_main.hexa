@@ -1,0 +1,91 @@
+// HEXA Native Compiler — Wave 1 doctrine audit (CLI dispatcher)
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read]
+//
+// Standalone dispatcher for the two doctrine audits ported from
+// hexa-matter v1.2.0 (MIT). Lets agents run
+//
+//   hexa run compiler/atlas/audit_main.hexa external-entity
+//   hexa run compiler/atlas/audit_main.hexa anchor
+//   hexa run compiler/atlas/audit_main.hexa all
+//
+// without touching self/main.hexa. Future CLI surface (per the absorption
+// plan §4.1 / §5): `hexa atlas audit --doctrine` and `hexa atlas audit
+// --anchors` should dispatch here.
+//
+// This module is the only place that pulls in `compiler/atlas/static_index`
+// (and hence parses the multi-MB rodata embed). The audit modules
+// themselves expose `_in` variants taking an explicit node array, so
+// smoke tests can exercise the audit logic without paying the embed cost.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/static_index"
+use "compiler/atlas/external_entity_audit"
+use "compiler/atlas/anchor_audit"
+
+// audit_external_entities — rodata+overlay wrapper. Walks the merged
+// view and runs the external-entity scan over every node.
+pub fn audit_external_entities() -> AuditResult {
+    return audit_external_entities_in(atlas_list_merged())
+}
+
+// audit_anchors — rodata+overlay wrapper. Walks the merged view and
+// runs the anchor-presence scan over every node.
+pub fn audit_anchors() -> AuditResult {
+    return audit_anchors_in(atlas_list_merged())
+}
+
+fn _run_external() -> i64 {
+    let r = audit_external_entities()
+    println(audit_result_to_text(r))
+    if r.pass { return 0 }
+    return 1
+}
+
+fn _run_anchor() -> i64 {
+    let r = audit_anchors()
+    println(anchor_audit_to_text(r))
+    if r.pass { return 0 }
+    return 1
+}
+
+fn _run_all() -> i64 {
+    let a = _run_external()
+    let b = _run_anchor()
+    if a != 0 { return a }
+    return b
+}
+
+fn _usage() {
+    println("usage: hexa run compiler/atlas/audit_main.hexa <verb>")
+    println("  verbs: external-entity | anchor | all")
+}
+
+fn main(args: array) {
+    if len(args) < 1 {
+        _usage()
+        exit(2)
+    }
+    let verb = to_string(args[0])
+    let mut rc: i64 = 0
+    if verb == "external-entity" { rc = _run_external() }
+    else if verb == "anchor"     { rc = _run_anchor() }
+    else if verb == "all"        { rc = _run_all() }
+    else {
+        _usage()
+        rc = 2
+    }
+    exit(rc)
+}
+
+// `hexa run` populates argv() as [interp, script, ...user_args]; strip
+// the first two so `main` sees only the doctrine verb.
+let _av = argv()
+let _user_args = []
+let mut _ai = 2
+while _ai < len(_av) {
+    _user_args.push(to_string(_av[_ai]))
+    _ai = _ai + 1
+}
+main(_user_args)

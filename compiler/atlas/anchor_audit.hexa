@@ -1,0 +1,235 @@
+// HEXA Native Compiler — Wave 1 doctrine audit (anchor presence)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Ported from ~/core/hexa-matter/selftest/nist_anchor_audit.py
+// (MIT, hexa-matter v1.2.0). Doctrine v2 rules 1 + 5: real-limits-first
+// and license/citation honesty. For each atlas node that cites an
+// external limit / measurement, verify the citation includes a
+// recognized canonical anchor (NIST / CRC Handbook / ASM / Ashby /
+// IUPAC / BIPM / IEEE / ITER / JEDEC / …).
+//
+// Severity ladder:
+//   * SOFT-WARN: node references an external limit / measurement but
+//     carries no anchor keyword. Logged as a Violation with reason
+//     prefixed `WARN:`; `pass` stays true.
+//   * HARD-FAIL: node explicitly claims a `[10*]` ceiling / limit-row
+//     (per LIMIT_BREAKTHROUGH taxonomy) without an anchor. Logged with
+//     reason `FAIL:` and `pass` becomes false.
+//
+// The audit returns the same AuditResult shape as external_entity_audit
+// so callers can compose / aggregate the two.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/overlay"
+// NOTE: static_index is NOT imported here. The rodata-touching wrapper
+// `audit_anchors()` lives in compiler/atlas/audit_main.hexa so callers
+// that only need the `_in` variant don't pay the multi-MB embed parse.
+use "compiler/atlas/external_entity_audit"   // for AuditResult + Violation types
+
+// --- anchor / cue tables ---------------------------------------------------
+
+// Canonical anchor keywords. Hex-matter parity (selftest/nist_anchor_audit.py
+// ANCHOR_KEYWORDS) plus a few hexa-lang-specific additions (BIPM, IEEE,
+// JEDEC) inferred from the bridge_rules.md mirror.
+fn _anchor_keywords() -> array {
+    return [
+        "NIST",
+        "CRC Handbook",
+        "ASM",
+        "Ashby",
+        "SEMI",
+        "ASTM",
+        "Hales",
+        "Frenkel",
+        "Stefan-Boltzmann",
+        "Sze",
+        "datasheet",
+        "ISO ",
+        "JIS ",
+        "DIN ",
+        "Coey",
+        "OECD",
+        "Saddow",
+        "TAPPI",
+        "GIA",
+        "IGS",
+        "Yaghi",
+        "BASF",
+        "Furukawa",
+        "Hupp",
+        "Eddaoudi",
+        "CCDC",
+        "Graphenea",
+        "Ossila",
+        "NIMS",
+        "Phys. Rev.",
+        "Science",
+        "Nat. ",
+        "Acta",
+        "IUPAC",
+        "BIPM",
+        "IEEE",
+        "ITER",
+        "JEDEC"
+    ]
+}
+
+// Cues that the node is talking about an external limit / measurement.
+// Without one of these the node is presumed internal and we skip.
+fn _external_cues() -> array {
+    return [
+        "@vendor:", "@nist:", "@external:", "@iter:", "@astm:",
+        "@crc:", "@asm:", "@iupac:", "@semi:", "@iso:", "@measurement:",
+        "measured", "measurement",
+        "vendor", "datasheet",
+        "melting point", "boiling point",
+        "density", "tensile", "compressive",
+        "fracture", "hardness", "viscosity",
+        "thermal conductivity", "specific strength",
+        "bandgap", "band gap",
+        "k = ", "T_m =", "ρ =", "rho ="
+    ]
+}
+
+// Strong-claim markers. A node with one of these is a HARD-FAIL when no
+// anchor is present; otherwise it would be a SOFT-WARN.
+fn _hard_claim_markers() -> array {
+    return [
+        "[10*]",       // verified-ceiling grade
+        "[10!]",       // breakthrough grade
+        "[10*!]",
+        "HARD_WALL",
+        "HARD WALL",
+        "ceiling =",
+        "ceiling=",
+        "real-limit",
+        "real limit"
+    ]
+}
+
+// --- helpers ---------------------------------------------------------------
+
+fn _has_any(haystack: string, needles: array) -> bool {
+    let mut i = 0
+    while i < len(needles) {
+        if haystack.index_of(to_string(needles[i])) >= 0 { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _first_match_offset(haystack: string, needles: array) -> array {
+    let mut best = -1
+    let mut best_len = 0
+    let mut i = 0
+    while i < len(needles) {
+        let needle = to_string(needles[i])
+        let idx = haystack.index_of(needle)
+        if idx >= 0 {
+            if best < 0 || idx < best {
+                best = idx
+                best_len = len(needle)
+            }
+        }
+        i = i + 1
+    }
+    if best < 0 { return [-1, -1] }
+    return [best, best + best_len]
+}
+
+// --- core audit ------------------------------------------------------------
+
+// Classify a single node. Returns an empty Violation (node_id == "") if
+// the node is fine (either not external, or external + anchored). Returns
+// a populated Violation with `reason` prefixed `FAIL:` or `WARN:` otherwise.
+fn _classify(node: AtlasNode) -> Violation {
+    let empty = Violation { node_id: "", reason: "", span_start: -1, span_end: -1 }
+    let raw = node.raw
+    let mentions_external = _has_any(raw, _external_cues())
+    if !mentions_external { return empty }
+    if _has_any(raw, _anchor_keywords()) { return empty }
+    // No anchor — decide severity.
+    let span = _first_match_offset(raw, _external_cues())
+    let start = to_int(to_string(span[0]))
+    let endv = to_int(to_string(span[1]))
+    let hard = _has_any(raw, _hard_claim_markers())
+    let reason = if hard {
+        "FAIL: external limit/measurement claim without NIST/CRC/ASM/Ashby/IUPAC/BIPM/IEEE/ITER/JEDEC anchor"
+    } else {
+        "WARN: external reference detected without canonical anchor"
+    }
+    return Violation {
+        node_id: node.id,
+        reason: reason,
+        span_start: start,
+        span_end: endv
+    }
+}
+
+// True if a Violation is a hard-fail (reason starts with "FAIL:").
+fn _is_hard(v: Violation) -> bool {
+    let r = v.reason
+    if len(r) < 5 { return false }
+    return r.substring(0, 5) == "FAIL:"
+}
+
+// --- public API ------------------------------------------------------------
+
+// audit_anchors_in — workhorse audit. Caller supplies an arbitrary
+// node array; the rodata+overlay wrapper `audit_anchors()` lives in
+// compiler/atlas/audit_main.hexa so this module stays cheap to import.
+pub fn audit_anchors_in(nodes: array) -> AuditResult {
+    let violations = []
+    let mut hard_count = 0
+    let mut warn_count = 0
+    let mut i = 0
+    while i < len(nodes) {
+        let v = _classify(nodes[i])
+        if v.node_id != "" {
+            violations.push(v)
+            if _is_hard(v) { hard_count = hard_count + 1 }
+            else { warn_count = warn_count + 1 }
+        }
+        i = i + 1
+    }
+    let pass = hard_count == 0
+    let summary = if pass {
+        "anchor_audit PASS — " + to_string(len(nodes)) + " nodes scanned, " +
+        to_string(warn_count) + " soft-warning(s)"
+    } else {
+        "anchor_audit FAIL — " + to_string(hard_count) + " hard-fail(s), " +
+        to_string(warn_count) + " soft-warning(s) across " + to_string(len(nodes)) + " nodes"
+    }
+    return AuditResult {
+        pass: pass,
+        violations: violations,
+        summary: summary
+    }
+}
+
+// anchor_audit_to_text — render an AuditResult in human-readable form.
+// Distinct from external_entity_audit's renderer so the FAIL/WARN
+// prefix is preserved.
+pub fn anchor_audit_to_text(r: AuditResult) -> string {
+    let parts = []
+    parts.push(r.summary)
+    parts.push("\n")
+    let mut i = 0
+    while i < len(r.violations) {
+        let v = r.violations[i]
+        let tag = if _is_hard(v) { "  [FAIL] " } else { "  [WARN] " }
+        parts.push(tag)
+        parts.push(v.node_id)
+        parts.push("  @byte[")
+        parts.push(to_string(v.span_start))
+        parts.push("..")
+        parts.push(to_string(v.span_end))
+        parts.push("]  ")
+        parts.push(v.reason)
+        parts.push("\n")
+        i = i + 1
+    }
+    return parts.join("")
+}

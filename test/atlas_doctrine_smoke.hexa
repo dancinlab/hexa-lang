@@ -1,0 +1,147 @@
+// HEXA Native Compiler — Wave 1 doctrine audit smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Exercises compiler/atlas/external_entity_audit.hexa and
+// compiler/atlas/anchor_audit.hexa against small synthetic fixtures.
+// We bypass the overlay file and feed AtlasNodes directly via the
+// `_in` variants so the test stays deterministic.
+//
+// Run:
+//   hexa run test/atlas_doctrine_smoke.hexa
+//
+// Expected: RESULT: PASS
+
+use "compiler/atlas/parser"
+use "compiler/atlas/external_entity_audit"
+use "compiler/atlas/anchor_audit"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn _mk_node(kind: string, id: string, raw: string) -> AtlasNode {
+    return AtlasNode {
+        kind: kind,
+        id: id,
+        raw: raw,
+        source_file: "fixture",
+        source_line: 1,
+        grade: empty_grade(),
+        edges: empty_edges()
+    }
+}
+
+fn _main_smoke() {
+    println("wave-1 atlas doctrine smoke")
+    let fails = []
+
+    // ----------------------------------------------------------
+    // Fixture A — external_entity_audit
+    // ----------------------------------------------------------
+
+    // Known-good #1: internal n6 grammar primitive talking about itself.
+    let good1 = _mk_node(
+        "P",
+        "n",
+        "@P n = 6 :: foundation [11*]\n  -> sigma, phi, tau\n  => \"모든 구조의 씨앗\"\n  == sigma * phi = 12 (internal lattice arithmetic, no external marker)"
+    )
+    // Known-good #2: external NIST vendor reference WITHOUT lattice arithmetic
+    // (this is the well-behaved absorbed-data shape).
+    let good2 = _mk_node(
+        "C",
+        "MAT-W-melting-point",
+        "@C MAT-W-melting-point = 3695 K :: materials [10*]\n  @nist: melting point of tungsten\n  => \"NIST WebBook, CRC Handbook 105th ed. — W T_m = 3422 °C\""
+    )
+    // Violating: NIST citation co-occurring with σ·φ=24 lattice fit.
+    // Keep the violating line free of negation markers ("raw#10 c3",
+    // "anti-pattern", "must not", etc.) — those would correctly trigger
+    // the negation-context exclusion. The accompanying note lives on a
+    // separate line so the audit can flag the bad line itself.
+    let bad1 = _mk_node(
+        "C",
+        "MAT-bad-nist-fit",
+        "@C MAT-bad-nist-fit = 24 :: materials [10*]\n  @nist: external reference\n  => NIST table satisfies σ·φ=24"
+    )
+
+    let ext_result = audit_external_entities_in([good1, good2, bad1])
+    println("  external_entity_audit: " + ext_result.summary)
+    _check("external_entity_audit detects 1 violation", len(ext_result.violations) == 1, fails)
+    _check("external_entity_audit fails (pass=false)", !ext_result.pass, fails)
+    if len(ext_result.violations) >= 1 {
+        let v = ext_result.violations[0]
+        _check("violation cites the bad node id", v.node_id == "MAT-bad-nist-fit", fails)
+        _check("violation span_start is non-negative", v.span_start >= 0, fails)
+        _check("violation span_end > span_start", v.span_end > v.span_start, fails)
+    }
+
+    // Negation-context guard — a policy-prose node must NOT count as a
+    // violation even though it mentions both NIST and σ·φ=24.
+    let policy_prose = _mk_node(
+        "C",
+        "POLICY-bridge-rule-5",
+        "@C POLICY-bridge-rule-5 :: doctrine [10*]\n  @external: bridge rules\n  => \"raw#10 c3: external data must NOT carry σ·φ=24 lattice-fit\" (anti-pattern example)"
+    )
+    let neg_result = audit_external_entities_in([policy_prose])
+    _check("policy-prose with negation context passes", neg_result.pass, fails)
+
+    // ----------------------------------------------------------
+    // Fixture B — anchor_audit
+    // ----------------------------------------------------------
+
+    // NIST-anchored — measurement with proper citation.
+    let anc_good = _mk_node(
+        "C",
+        "MAT-Os-density",
+        "@C MAT-Os-density = 22.59 :: materials [10*]\n  @measurement: density of osmium\n  => \"NIST WebBook + CRC Handbook 105th ed.: ρ = 22.59 g/cm³ (densest stable element)\""
+    )
+    // No anchor + soft cue ("measured" + "vendor") — SOFT-WARN, pass stays true.
+    // Carefully avoid anchor keywords (no "datasheet", no "NIST", no "CRC", ...).
+    let anc_soft = _mk_node(
+        "C",
+        "MAT-soft-warn",
+        "@C MAT-soft-warn = some measurement :: materials [7]\n  => \"vendor (anonymous) reports measured density of unknown polymer; no canonical citation\""
+    )
+    // Hard-claim ([10*]) without an anchor — HARD-FAIL.
+    // Same: keep all anchor keywords out of the fixture text.
+    let anc_hard = _mk_node(
+        "C",
+        "MAT-hard-fail",
+        "@C MAT-hard-fail = 100 GPa :: materials [10*]\n  ceiling = real-limit tensile strength claim (vendor lab measurement; no canonical citation)"
+    )
+
+    let anc_result = audit_anchors_in([anc_good, anc_soft, anc_hard])
+    println("  anchor_audit: " + anc_result.summary)
+    _check("anchor_audit reports 2 violations (1 warn + 1 fail)", len(anc_result.violations) == 2, fails)
+    _check("anchor_audit fails on hard claim", !anc_result.pass, fails)
+
+    // Soft-only variant: NIST-anchored + soft-warn only → pass stays true.
+    let anc_soft_only = audit_anchors_in([anc_good, anc_soft])
+    _check("anchor_audit soft-only batch passes", anc_soft_only.pass, fails)
+    _check("anchor_audit soft-only has exactly 1 warn", len(anc_soft_only.violations) == 1, fails)
+
+    // ----------------------------------------------------------
+    // Result
+    // ----------------------------------------------------------
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut i = 0
+        while i < len(fails) {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}
+
+_main_smoke()

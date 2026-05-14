@@ -1,0 +1,297 @@
+// HEXA Native Compiler — Wave 1 doctrine audit (external-entity)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Ported from ~/core/hexa-matter/selftest/lattice_fit_on_external_entities_audit.py
+// (MIT, hexa-matter v1.2.0). Raw#10 C3 enforcement for the atlas substrate:
+// no n=6 lattice-arithmetic (σ(6) / τ(6) / φ(6) / J₂ / σ·φ=24, ...) applied
+// to external entities (vendor data, NIST / CRC / ASM / ITER / ASTM reference
+// tables, …). Internal n6-grammar nodes that describe themselves are fine
+// (LATTICE_POLICY §1.3 aux-only rule); the doctrine only forbids fitting
+// the lattice onto entities that have their own invariants.
+//
+// Walks `compiler/atlas/embedded.gen.hexa` rodata + the `~/.hx/data/
+// atlas.overlay.n6` overlay. For each node we test:
+//   (1) Is the node "external"? Heuristic markers, in priority order:
+//       (a) explicit `@vendor:` / `@nist:` / `@external:` / `@iter:`
+//           / `@astm:` / `@crc:` / `@asm:` / `@iupac:` token in raw.
+//       (b) a vendor / canonical-reference name occurring in raw
+//           (Wacker / Wolfspeed / Shin-Etsu / NIST / ITER / ASTM / …).
+//   (2) If yes, does raw contain a lattice-arithmetic token AND not a
+//       negation marker on the same line (matter-side parity)?
+// A node failing (2) under (1) is flagged as a Violation.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/overlay"
+// NOTE: static_index is NOT imported here. The rodata-touching wrapper
+// `audit_external_entities()` lives in compiler/atlas/audit_main.hexa so
+// callers that only need the `_in` variant (smoke tests / overlay-only
+// scans) don't pay the multi-MB embed parse cost.
+
+// --- public types ----------------------------------------------------------
+
+pub struct Violation {
+    node_id: string,
+    reason: string,
+    span_start: i64,    // byte offset into raw where the lattice token starts
+    span_end: i64       // byte offset just past the token
+}
+
+pub struct AuditResult {
+    pass: bool,
+    violations: array,    // [Violation]
+    summary: string
+}
+
+// --- markers / tokens ------------------------------------------------------
+
+// Explicit annotation tokens that mark a node as referencing an external
+// entity. Priority signal — when present, lattice tokens in the raw text
+// fail outright.
+fn _external_markers() -> array {
+    return [
+        "@vendor:", "@nist:", "@external:", "@iter:", "@astm:",
+        "@crc:", "@asm:", "@iupac:", "@semi:", "@iso:", "@jeda:", "@jedec:"
+    ]
+}
+
+// Vendor / canonical-reference names co-occurring with a lattice token are
+// treated as external-entity references (matter-side parity). Kept short —
+// extend by overlay annotation rather than ballooning this list.
+fn _vendor_names() -> array {
+    return [
+        "Wacker", "Hemlock", "Wolfspeed", "TSMC", "Samsung", "Intel",
+        "Merck", "Heraeus", "Ferrotec", "Topsil", "Siltronic", "ASML",
+        "DuPont", "Teijin", "Toray", "Hyosung", "Dyneema", "Honeywell",
+        "Hitachi Metals", "TDK", "Vacuumschmelze", "Inconel",
+        "Climeworks", "BASF", "Saint-Gobain", "Schott", "Corning",
+        "AGC", "NSG", "Ductal", "Cor-Tuf", "Heidelberg", "Lafarge",
+        "Holcim", "Stora Enso", "Mondi", "Sappi",
+        "GIA", "ITER", "Kevlar", "Vectran", "Nomex", "Heracron",
+        "NdFeB", "SmCo", "Metglas", "Finemet",
+        "ASTM", "NIST", "CRC Handbook", "ASM Handbook", "SEMI",
+        "ISO ", "JIS ", "DIN ", "AISI", "OECD", "IUPAC", "BIPM"
+    ]
+}
+
+// n=6 lattice-arithmetic tokens. Anything in this list, applied to an
+// external entity, is a doctrine violation.
+fn _lattice_tokens() -> array {
+    return [
+        "σ·τ", "sigma*tau", "sigma·tau",
+        "σ·φ", "sigma*phi", "sigma·phi",
+        "n=6 lattice", "HEXA-n=6", "n·τ", "n*tau",
+        "matches n=6", "fits n=6", "= σ·", "= sigma*",
+        "fits σ", "satisfies σ", "satisfies sigma",
+        "σ(6)", "τ(6)", "φ(6)", "J₂(6)", "J2(6)",
+        "σ·φ=24", "sigma·phi=24", "sigma*phi=24"
+    ]
+}
+
+// Negation markers — lines that explicitly FORBID the lattice-fit pattern
+// (policy prose / anti-pattern comments). These exclude an otherwise-matching
+// line from being a violation.
+fn _negation_markers() -> array {
+    return [
+        "✗",
+        "do not write", "do not apply", "must not apply", "must not",
+        "the temptation", "coincidence", "anti-pattern", "forbidden",
+        "no n=6 lattice anchoring", "no lattice anchoring",
+        "no n=6 lattice fit", "no lattice fit", "not n=6 lattice",
+        "not a lattice fit",
+        "raw#10 c3",
+        "lattice_fit_on_external_entities",
+        "lattice-fit on external entities",
+        "applies n=6 lattice formulas"
+    ]
+}
+
+// --- helpers ---------------------------------------------------------------
+
+fn _lower(s: string) -> string {
+    let n = len(s)
+    let parts = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c >= "A" && c <= "Z" {
+            parts.push(_lower_letter(c))
+        } else {
+            parts.push(c)
+        }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+fn _lower_letter(c: string) -> string {
+    if c == "A" { return "a" }
+    if c == "B" { return "b" }
+    if c == "C" { return "c" }
+    if c == "D" { return "d" }
+    if c == "E" { return "e" }
+    if c == "F" { return "f" }
+    if c == "G" { return "g" }
+    if c == "H" { return "h" }
+    if c == "I" { return "i" }
+    if c == "J" { return "j" }
+    if c == "K" { return "k" }
+    if c == "L" { return "l" }
+    if c == "M" { return "m" }
+    if c == "N" { return "n" }
+    if c == "O" { return "o" }
+    if c == "P" { return "p" }
+    if c == "Q" { return "q" }
+    if c == "R" { return "r" }
+    if c == "S" { return "s" }
+    if c == "T" { return "t" }
+    if c == "U" { return "u" }
+    if c == "V" { return "v" }
+    if c == "W" { return "w" }
+    if c == "X" { return "x" }
+    if c == "Y" { return "y" }
+    if c == "Z" { return "z" }
+    return c
+}
+
+fn _contains_any(haystack: string, needles: array) -> bool {
+    let mut i = 0
+    while i < len(needles) {
+        let needle = to_string(needles[i])
+        if haystack.index_of(needle) >= 0 { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Find the first index of any needle (returns [needle_index, char_offset]
+// or [-1, -1] if none found). Used to populate span_start / span_end on
+// a Violation.
+fn _first_match_span(haystack: string, needles: array) -> array {
+    let mut best = -1
+    let mut best_len = 0
+    let mut i = 0
+    while i < len(needles) {
+        let needle = to_string(needles[i])
+        let idx = haystack.index_of(needle)
+        if idx >= 0 {
+            if best < 0 || idx < best {
+                best = idx
+                best_len = len(needle)
+            }
+        }
+        i = i + 1
+    }
+    if best < 0 { return [-1, -1] }
+    return [best, best + best_len]
+}
+
+// True if the line containing `offset` in `haystack` is a negation context.
+fn _line_is_negation(haystack: string, offset: i64) -> bool {
+    if offset < 0 { return false }
+    // walk back to start of line
+    let mut s = offset
+    while s > 0 {
+        let c = haystack.substring(s - 1, s)
+        if c == "\n" { break }
+        s = s - 1
+    }
+    // walk forward to end of line
+    let n = len(haystack)
+    let mut e = offset
+    while e < n {
+        let c = haystack.substring(e, e + 1)
+        if c == "\n" { break }
+        e = e + 1
+    }
+    let line = haystack.substring(s, e)
+    let low = _lower(line)
+    let neg = _negation_markers()
+    let mut i = 0
+    while i < len(neg) {
+        if low.index_of(to_string(neg[i])) >= 0 { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// --- core audit ------------------------------------------------------------
+
+// Decide if a node is "external" per the heuristic.
+fn _is_external_node(node: AtlasNode) -> bool {
+    // (a) explicit annotation markers in id or raw
+    let combined = node.id + "\n" + node.raw
+    if _contains_any(combined, _external_markers()) { return true }
+    // (b) vendor / canonical-reference name occurrence in raw
+    if _contains_any(node.raw, _vendor_names()) { return true }
+    return false
+}
+
+// Scan a single node for the lattice-fit-on-external-entity violation.
+// Returns either an empty Violation (kind == "" sentinel via node_id == "")
+// or a populated one.
+fn _scan_node(node: AtlasNode) -> Violation {
+    let empty = Violation { node_id: "", reason: "", span_start: -1, span_end: -1 }
+    if !_is_external_node(node) { return empty }
+    let span = _first_match_span(node.raw, _lattice_tokens())
+    let start = to_int(to_string(span[0]))
+    let endv = to_int(to_string(span[1]))
+    if start < 0 { return empty }
+    if _line_is_negation(node.raw, start) { return empty }
+    return Violation {
+        node_id: node.id,
+        reason: "external-entity node carries n=6 lattice-arithmetic token (raw#10 C3)",
+        span_start: start,
+        span_end: endv
+    }
+}
+
+// --- public API ------------------------------------------------------------
+
+// audit_external_entities_in — workhorse audit. Caller hands in an
+// arbitrary node array (smoke tests, overlay-only scans, etc.). The
+// rodata+overlay wrapper `audit_external_entities()` lives in
+// compiler/atlas/audit_main.hexa so this module stays cheap to import.
+pub fn audit_external_entities_in(nodes: array) -> AuditResult {
+    let violations = []
+    let mut i = 0
+    while i < len(nodes) {
+        let v = _scan_node(nodes[i])
+        if v.node_id != "" { violations.push(v) }
+        i = i + 1
+    }
+    let pass = len(violations) == 0
+    let summary = if pass {
+        "external_entity_audit PASS — " + to_string(len(nodes)) + " nodes scanned, 0 violations"
+    } else {
+        "external_entity_audit FAIL — " + to_string(len(violations)) + " violation(s) across " + to_string(len(nodes)) + " nodes"
+    }
+    return AuditResult {
+        pass: pass,
+        violations: violations,
+        summary: summary
+    }
+}
+
+// audit_result_to_text — human-readable rendering.
+pub fn audit_result_to_text(r: AuditResult) -> string {
+    let parts = []
+    parts.push(r.summary)
+    parts.push("\n")
+    let mut i = 0
+    while i < len(r.violations) {
+        let v = r.violations[i]
+        parts.push("  [FAIL] ")
+        parts.push(v.node_id)
+        parts.push("  @byte[")
+        parts.push(to_string(v.span_start))
+        parts.push("..")
+        parts.push(to_string(v.span_end))
+        parts.push("]  ")
+        parts.push(v.reason)
+        parts.push("\n")
+        i = i + 1
+    }
+    return parts.join("")
+}
