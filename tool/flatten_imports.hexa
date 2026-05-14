@@ -157,6 +157,72 @@ fn fl_parse_use(line) {
     return rest.substring(0, q)
 }
 
+// 2026-05-14: stage1-bypass — handles compiler/main.hexa's import "./..." style
+// Parses an `import "<path>"` line and returns the quoted path verbatim
+// (caller-dir-relative — "./foo/bar.hexa", "../x.hexa", or "foo.hexa").
+// Returns "" if the line is not an import directive.
+fn fl_parse_import_relative(line) {
+    let t = line.trim()
+    if !t.starts_with("import \"") { return "" }
+    // t = `import "path"...`
+    let rest = t.substring(8, len(t))
+    let q = rest.index_of("\"")
+    if q < 0 { return "" }
+    return rest.substring(0, q)
+}
+
+// Resolve an `import "<path>"` directive relative to the consuming file's
+// directory. Accepts `./foo.hexa`, `../foo.hexa`, and `foo.hexa` (no leading
+// dot — treated as caller-dir-relative). Appends `.hexa` if missing.
+fn fl_resolve_import(caller_dir, path) {
+    if len(path) == 0 { return "" }
+    // Normalise extension — accept both `foo` and `foo.hexa`.
+    let mut p = path
+    let pn = len(p)
+    let has_ext = pn >= 5 && p.substring(pn - 5, pn) == ".hexa"
+    let candidate = if has_ext { p } else { p + ".hexa" }
+    // Compose caller_dir + "/" + candidate, normalising `./` and `../`.
+    // Handle simple cases: leading `./` strip; leading `../` pops one segment
+    // from caller_dir. Repeated `../` allowed.
+    let mut rel = candidate
+    let mut base = caller_dir
+    if len(base) == 0 { base = "." }
+    while rel.starts_with("./") {
+        rel = rel.substring(2, len(rel))
+    }
+    while rel.starts_with("../") {
+        rel = rel.substring(3, len(rel))
+        // Pop trailing segment of base.
+        let parts = base.split("/")
+        let bn = len(parts)
+        if bn > 1 {
+            let mut np = []
+            let mut i = 0
+            while i < bn - 1 {
+                np.push(parts[i])
+                i = i + 1
+            }
+            base = np.join("/")
+        } else {
+            base = "."
+        }
+    }
+    let mut joined = []
+    joined.push(base)
+    joined.push("/")
+    joined.push(rel)
+    let resolved = joined.join("")
+    if file_exists(resolved) { return resolved }
+    // Fallback: caller_dir + "/" + original (no strip) — defensive.
+    let mut alt = []
+    alt.push(caller_dir)
+    alt.push("/")
+    alt.push(candidate)
+    let r2 = alt.join("")
+    if file_exists(r2) { return r2 }
+    return ""
+}
+
 // ── 한 파일에서 use 라인 제거 ───────────────────────────────
 //
 // 주의: per-line iteration 만 한다. 라인 단위는 길어봐야 수백 바이트라
@@ -164,11 +230,15 @@ fn fl_parse_use(line) {
 
 fn fl_strip_uses(src) {
     // index_of 점프로 `use "` 행만 찾아 교체. split+push 16K회 제거.
-    // Fast path: no `use` and no shebang → return as-is.
+    // 2026-05-14: also strip `import "..."` lines — same treatment as `use`,
+    // emitted as a stripped-comment marker so the flat file is a valid TU.
+    // Fast path: no `use`, no `import`, no shebang → return as-is.
     let marker = "\nuse \""
+    let marker2 = "\nimport \""
     let has_uses = src.index_of(marker) >= 0 || src.starts_with("use \"")
+    let has_imports = src.index_of(marker2) >= 0 || src.starts_with("import \"")
     let has_shebang = src.starts_with("#!") || src.index_of("\n#!") >= 0
-    if !has_uses && !has_shebang { return src }
+    if !has_uses && !has_imports && !has_shebang { return src }
     let lines = src.split("\n")
     let n = len(lines)
     let mut out = []
@@ -183,16 +253,24 @@ fn fl_strip_uses(src) {
             i = i + 1
         } else {
         let dep = fl_parse_use(line)
-        if dep == "" {
+        let imp = fl_parse_import_relative(line)
+        if dep == "" && imp == "" {
             // O(N^2) 방지: in-place push, out 이 hot accumulator
             out.push(line)
-        } else {
+        } else if dep != "" {
             // Push/join the banner parts instead of `+` concat — keeps the
             // PERF concat counter clean when many files each have several uses.
             // sp 는 loop-scope 임시, 매 iter 새로 생성이므로 안전.
             let mut sp = []
             sp.push("// [flatten_imports] stripped: use \"")
             sp.push(dep)
+            sp.push("\"")
+            out.push(sp.join(""))
+        } else {
+            // import "<path>" — stripped with same marker style.
+            let mut sp = []
+            sp.push("// [flatten_imports] stripped: import \"")
+            sp.push(imp)
             sp.push("\"")
             out.push(sp.join(""))
         }
@@ -218,6 +296,23 @@ fn fl_collect_uses(src) {
         i = i + 1
     }
     return deps
+}
+
+// 2026-05-14: stage1-bypass — collect `import "./..."` directives from src.
+// Returns the raw quoted-path values (caller-dir-relative).
+fn fl_collect_imports(src) {
+    let lines = src.split("\n")
+    let n = len(lines)
+    let mut imps = []
+    let mut i = 0
+    while i < n {
+        let imp = fl_parse_import_relative(lines[i])
+        if imp != "" {
+            imps.push(imp)
+        }
+        i = i + 1
+    }
+    return imps
 }
 
 // ── 식별자 헬퍼 ─────────────────────────────────────────────
@@ -524,6 +619,30 @@ fn fl_iterative_walk(start_file) {
                         println(wp.join(""))
                     }
                     di = di - 1
+                }
+                // 2026-05-14: stage1-bypass — also handle `import "./..."`.
+                // Resolution is relative to the CONSUMING file (`top`), not
+                // start_file's dir. Mirror the `use` push-loop.
+                let imps = fl_collect_imports(src)
+                let in_ = len(imps)
+                let caller_dir = fl_dirname(top)
+                let mut ii = in_ - 1
+                while ii >= 0 {
+                    let imp_path = fl_resolve_import(caller_dir, imps[ii])
+                    if len(imp_path) > 0 {
+                        if !fl_hset_has(g_visited_hs, imp_path) {
+                            stack.push(imp_path)
+                        }
+                    } else {
+                        let mut wp = []
+                        wp.push("[flatten_imports] WARN import not found: ")
+                        wp.push(imps[ii])
+                        wp.push(" (from ")
+                        wp.push(top)
+                        wp.push(")")
+                        println(wp.join(""))
+                    }
+                    ii = ii - 1
                 }
             }
         }
