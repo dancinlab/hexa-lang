@@ -1051,11 +1051,30 @@ fn codegen_c2(ast) {
         _sl_def_i = _sl_def_i + 1
     }
     if len(_strlit_keys) > 0 {
-        parts.push("static void __hexa_strlit_init(void) {\n")
+        // Chunked emission — single __hexa_strlit_init() function with
+        // thousands of statements triggers Apple clang 21.0.0 frontend
+        // SIGILL (observed at ~8000+ stmts on compiler/main.hexa path-B
+        // transpile). Split into 500-stmt chunks and have the main init
+        // call each chunk in order.
+        let _strlit_chunk = 500
+        let mut _strlit_chunk_idx = 0
         let mut _sli = 0
         while _sli < len(_strlit_keys) {
+            if _sli % _strlit_chunk == 0 {
+                if _sli > 0 { parts.push("}\n") }
+                parts.push("static void __hexa_strlit_init_" + to_string(_strlit_chunk_idx) + "(void) {\n")
+                _strlit_chunk_idx = _strlit_chunk_idx + 1
+            }
             parts.push("    __hexa_sl_" + to_string(_strlit_ids[_sli]) + " = hexa_str(\"" + _strlit_keys[_sli] + "\");\n")
             _sli = _sli + 1
+        }
+        parts.push("}\n")
+        // Aggregator that the rest of the codegen still calls.
+        parts.push("static void __hexa_strlit_init(void) {\n")
+        let mut _ci = 0
+        while _ci < _strlit_chunk_idx {
+            parts.push("    __hexa_strlit_init_" + to_string(_ci) + "();\n")
+            _ci = _ci + 1
         }
         parts.push("}\n")
     }
@@ -6759,11 +6778,25 @@ fn codegen_c2_full(ast) {
         _sl_def_i_full = _sl_def_i_full + 1
     }
     if len(_strlit_keys) > 0 {
-        out_parts.push("static void __hexa_strlit_init(void) {\n")
+        // Chunked — see codegen_c2 mirror at ~line 1054 for rationale.
+        let _strlit_chunk_full = 500
+        let mut _strlit_chunk_idx_full = 0
         let mut _sli_full = 0
         while _sli_full < len(_strlit_keys) {
+            if _sli_full % _strlit_chunk_full == 0 {
+                if _sli_full > 0 { out_parts.push("}\n") }
+                out_parts.push("static void __hexa_strlit_init_" + to_string(_strlit_chunk_idx_full) + "(void) {\n")
+                _strlit_chunk_idx_full = _strlit_chunk_idx_full + 1
+            }
             out_parts.push("    __hexa_sl_" + to_string(_strlit_ids[_sli_full]) + " = hexa_str(\"" + _strlit_keys[_sli_full] + "\");\n")
             _sli_full = _sli_full + 1
+        }
+        out_parts.push("}\n")
+        out_parts.push("static void __hexa_strlit_init(void) {\n")
+        let mut _ci_full = 0
+        while _ci_full < _strlit_chunk_idx_full {
+            out_parts.push("    __hexa_strlit_init_" + to_string(_ci_full) + "();\n")
+            _ci_full = _ci_full + 1
         }
         out_parts.push("}\n")
     }
