@@ -1,0 +1,260 @@
+// tool/atlas_absorb_real_limits.hexa — Wave 1.2 of hexa-bio absorption (2026-05-14)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Read-only on ~/core/hexa-bio/. Emits:
+//   compiler/atlas/real_limits.gen.hexa  (21 real-limit @C nodes:
+//                                          6 Mathematical + 8 Physical + 7 Engineering)
+//
+// Source SSOT (Apache-2.0, dancinlab Wave K 2026-05-12, hexa-bio v1.1.0):
+//   ~/core/hexa-bio/LATTICE_POLICY.md  §1.2  (lines 58..88)
+//
+// Run:
+//   hexa run tool/atlas_absorb_real_limits.hexa
+//
+// Reproducibility: re-running this tool should regenerate the
+// .gen.hexa file byte-identically. The tool ALSO performs a drift
+// check against the source markdown: each declared row's `name`
+// substring must still appear on the recorded `source_line`. If a
+// row drifted, the tool prints `DRIFT` for that row but still emits
+// (manual reconciliation step).
+
+// ── string escaping (mirrors compiler/atlas/embed.hexa::_escape_string) ──
+
+fn _escape_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _escape_string(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        chunks.push(_escape_char(c))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+let _ZERO_GRADE = "GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }"
+let _ZERO_EDGES = "EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }"
+
+fn _emit_node(kind: string, id: string, raw: string, source_file: string, source_line) -> string {
+    let parts = []
+    parts.push("    AtlasNode { kind: \"")
+    parts.push(_escape_string(kind))
+    parts.push("\", id: \"")
+    parts.push(_escape_string(id))
+    parts.push("\", raw: \"")
+    parts.push(_escape_string(raw))
+    parts.push("\", source_file: \"")
+    parts.push(_escape_string(source_file))
+    parts.push("\", source_line: ")
+    parts.push(to_string(source_line))
+    parts.push(", grade: ")
+    parts.push(_ZERO_GRADE)
+    parts.push(", edges: ")
+    parts.push(_ZERO_EDGES)
+    parts.push(" }")
+    return parts.join("")
+}
+
+// ── canonical row table ────────────────────────────────────────────────
+//
+// Per absorption-plan §A: source markdown table has 21 rows across 3
+// categories. We declare them here once with the snake-name, the §1.2
+// header `name` (used for drift check), the formula/source/comment
+// triple, category tag, and source_line. Run the generator, the
+// rodata gets emitted byte-identically.
+//
+// Each row: [snake_id, header_name, formula_or_source, citation, comment, category, source_line]
+
+let _ROWS = [
+    ["shannon_entropy",            "Shannon entropy",            "H = -Sum p log p",                  "Shannon 1948 — A Mathematical Theory of Communication",                       "data / communication / compression upper bound",                                    "Mathematical", 58],
+    ["kolmogorov_complexity",      "Kolmogorov complexity",      "K(x) lower bound",                  "Kolmogorov 1965 — Three Approaches to the Quantitative Definition of Information", "algorithmic compression / learning lower bound",                                  "Mathematical", 59],
+    ["computability",              "Computability",              "Halting / Rice",                    "Turing 1936 — On Computable Numbers; Rice 1953",                              "automation ceiling — undecidability of nontrivial semantic predicates",             "Mathematical", 60],
+    ["bekenstein_bound",           "Bekenstein bound",           "S <= 2*pi*k*R*E/(hbar*c)",          "Bekenstein 1981 — Universal upper bound on the entropy-to-energy ratio",      "information density ceiling for any bounded region",                                "Mathematical", 61],
+    ["statistical_power",          "Statistical power",          "beta = f(alpha, n, effect_size)",   "Cohen 1988 — Statistical Power Analysis for the Behavioral Sciences",         "hypothesis-test power floor — sample size vs. effect-size tradeoff",                "Mathematical", 62],
+    ["pac_learning_bound",         "PAC-learning bound",         "sample_complexity ~ VC/epsilon^2",  "Valiant 1984 — A Theory of the Learnable; Vapnik-Chervonenkis 1971",          "ML generalization sample-complexity lower bound via VC dimension",                  "Mathematical", 63],
+
+    ["speed_of_light",             "Speed of light",             "c = 2.998e8 m/s",                   "CODATA 2018 (exact, since 2019 SI redefinition)",                             "information / signal propagation ceiling",                                          "Physical",     69],
+    ["planck_constant",            "Planck constant",            "hbar = 1.055e-34 J*s",              "CODATA 2018 (exact, since 2019 SI redefinition)",                             "quantum precision floor — Heisenberg-uncertainty action quantum",                   "Physical",     70],
+    ["boltzmann_constant",         "Boltzmann constant",         "k = 1.381e-23 J/K",                 "CODATA 2018 (exact, since 2019 SI redefinition)",                             "thermal-noise / Landauer erasure floor (kT*ln2 per bit)",                           "Physical",     71],
+    ["stefan_boltzmann",           "Stefan-Boltzmann",           "P = sigma*epsilon*A*T^4",           "Stefan 1879; Boltzmann 1884",                                                 "radiative heat-rejection ceiling — sets terafab-orbital radiator area ~1,300 km^2", "Physical",     72],
+    ["carnot_efficiency",          "Carnot efficiency",          "eta <= 1 - T_c/T_h",                "Carnot 1824 — Reflections on the Motive Power of Fire",                       "heat-engine efficiency upper bound; reversible Carnot cycle",                       "Physical",     73],
+    ["bremermann_limit",           "Bremermann limit",           "~1.36e50 ops/s/kg",                 "Bremermann 1962 — Optimization through evolution and recombination",          "computation-rate ceiling per unit mass (mc^2 / h)",                                 "Physical",     74],
+    ["margolus_levitin",           "Margolus-Levitin",           "n <= 2E / (pi*hbar)",               "Margolus & Levitin 1998 — The maximum speed of dynamical evolution",          "quantum-state-transition rate ceiling at energy E",                                 "Physical",     75],
+    ["bekenstein_hawking",         "Bekenstein-Hawking",         "S = A / (4*l_P^2)",                 "Bekenstein 1973; Hawking 1974/1975",                                          "black-hole entropy = quarter-area in Planck units (holographic bound)",             "Physical",     76],
+
+    ["asml_high_na_euv_throughput", "ASML High-NA EUV throughput", "~10 units/year",                  "ASML public investor disclosures (EXE:5000 ramp, 2024-2026)",                 "leading-edge semiconductor capacity ceiling — global production rate",              "Engineering",  82],
+    ["ercot_grid_capacity",        "ERCOT grid capacity",        "TX public data",                    "ERCOT public capacity reports (https://www.ercot.com)",                       "fab-power ceiling for Texas — interconnection queue + generation mix",              "Engineering",  83],
+    ["starship_reusable_cost",     "Starship reusable cost",     "$X/kg (measured)",                  "SpaceX public Starship cost disclosures; FAA launch filings",                 "orbital-deploy economic ceiling — $ per kg to LEO at scale",                        "Engineering",  84],
+    ["tceq_permit_envelope",       "TCEQ permit envelope",       "public filing",                     "TCEQ (Texas Commission on Environmental Quality) permit dockets",             "water / air environmental ceiling for fab + chemical operations in TX",             "Engineering",  85],
+    ["chips_act_remaining_funding", "CHIPS Act",                 "public statistics",                 "US Department of Commerce CHIPS Act award disclosures",                       "residual federal-subsidy ceiling for US semiconductor manufacturing",               "Engineering",  86],
+    ["human_engineer_pool",        "Human-engineer pool",        "BLS statistics",                    "US Bureau of Labor Statistics OEWS — semiconductor engineering occupations",  "workforce-ramp ceiling — labor-pool growth rate per region",                        "Engineering",  87],
+    ["patent_thicket",             "Patent thicket",             "USPTO public",                      "USPTO patent grant statistics; Patentscope",                                  "IP-free design-space ceiling — claim density in active classes",                    "Engineering",  88]
+]
+
+fn _row_raw(row) -> string {
+    let snake = to_string(row[0])
+    let formula = to_string(row[2])
+    let citation = to_string(row[3])
+    let comment = to_string(row[4])
+    let category = to_string(row[5])
+    let cat_lc =
+        if category == "Mathematical" { "mathematical" }
+        else if category == "Physical" { "physical" }
+        else { "engineering" }
+    let parts = []
+    parts.push("@C real_limits.")
+    parts.push(snake)
+    parts.push(" = ")
+    parts.push(formula)
+    parts.push(" :: real_limits.")
+    parts.push(cat_lc)
+    parts.push(" [11*]\n")
+    parts.push("  category: ")
+    parts.push(category)
+    parts.push("\n  citation: ")
+    parts.push(citation)
+    parts.push("\n  comment: ")
+    parts.push(comment)
+    return parts.join("")
+}
+
+fn _emit_real_limits() -> string {
+    let parts = []
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let REAL_LIMITS: [AtlasNode] = [\n")
+    let n = len(_ROWS)
+    let mut i = 0
+    while i < n {
+        let row = _ROWS[i]
+        let snake = to_string(row[0])
+        let source_line = row[6]
+        let raw = _row_raw(row)
+        parts.push(_emit_node("C", "real_limits." + snake, raw, "LATTICE_POLICY.md", source_line))
+        if i + 1 < n { parts.push(",") }
+        parts.push("\n")
+        i = i + 1
+    }
+    parts.push("]\n\n")
+    return parts.join("")
+}
+
+fn _emit_file() -> string {
+    let parts = []
+    parts.push("// absorbed from ~/core/hexa-bio/LATTICE_POLICY.md §1.2 (Apache-2.0, hexa-bio v1.1.0, dancinlab 2026-05-14)\n")
+    parts.push("// SSOT snapshot — regenerate via tool/atlas_absorb_real_limits.hexa\n")
+    parts.push("//\n")
+    parts.push("// REAL_LIMITS — 21 real-limit rows from LATTICE_POLICY.md §1.2:\n")
+    parts.push("//   6  Mathematical (analytic)         lines 58..63\n")
+    parts.push("//   8  Physical     (constants+laws)   lines 69..76\n")
+    parts.push("//   7  Engineering  (industry/regulatory) lines 82..88\n")
+    parts.push("//\n")
+    parts.push("// Each row is an @C AtlasNode whose `raw` carries the canonical\n")
+    parts.push("// formula/citation/comment triple. Category is encoded both in the\n")
+    parts.push("// `raw` body (`category: Mathematical|Physical|Engineering`) and in\n")
+    parts.push("// the id prefix (`real_limits.<snake_name>`).\n")
+    parts.push("//\n")
+    parts.push("// Deployment trail: LATTICE_POLICY was distributed dancinlab-wide on\n")
+    parts.push("// Wave K (2026-05-12); this file makes the §1.2 table addressable\n")
+    parts.push("// as rodata for any hexa-lang component that needs to anchor a\n")
+    parts.push("// verifier against real limits (vs. lattice tautologies).\n")
+    parts.push("\n")
+    parts.push("use \"compiler/atlas/parser\"\n")
+    parts.push("\n")
+    parts.push(_emit_real_limits())
+    parts.push("// public count accessors — let smoke tests assert without\n")
+    parts.push("// walking the parse_only-decorated array.\n")
+    parts.push("pub fn real_limits_count() -> i64 { return len(REAL_LIMITS) }\n")
+    parts.push("\n")
+    parts.push("pub fn real_limits() -> [AtlasNode] { return REAL_LIMITS }\n")
+    parts.push("\n")
+    parts.push("// Filter by category. `cat` matches the `category: ` field embedded in\n")
+    parts.push("// each node's `raw` body. Returns Mathematical (6) / Physical (8) /\n")
+    parts.push("// Engineering (7) subsets.\n")
+    parts.push("pub fn real_limits_by_category(cat: string) -> [AtlasNode] {\n")
+    parts.push("    let needle = \"category: \" + cat\n")
+    parts.push("    let out = []\n")
+    parts.push("    let n = len(REAL_LIMITS)\n")
+    parts.push("    let mut i = 0\n")
+    parts.push("    while i < n {\n")
+    parts.push("        let node = REAL_LIMITS[i]\n")
+    parts.push("        if node.raw.contains(needle) {\n")
+    parts.push("            out.push(node)\n")
+    parts.push("        }\n")
+    parts.push("        i = i + 1\n")
+    parts.push("    }\n")
+    parts.push("    return out\n")
+    parts.push("}\n")
+    return parts.join("")
+}
+
+// ── drift check (read-only against the source markdown) ────────────────
+//
+// For each row, the recorded source_line in LATTICE_POLICY.md must
+// still contain the row's header_name as a substring. This catches
+// upstream §1.2 edits without modifying anything in hexa-bio.
+
+fn _check_drift(src_path: string) -> i64 {
+    let text = read_file(src_path)
+    if len(text) == 0 {
+        println("  warn: source not readable at " + src_path + " — skipping drift check")
+        return 0
+    }
+    let lines = text.split("\n")
+    let n_lines = len(lines)
+    let n_rows = len(_ROWS)
+    let mut drift = 0
+    let mut i = 0
+    while i < n_rows {
+        let row = _ROWS[i]
+        let name = to_string(row[1])
+        let line_no = row[6]
+        if line_no < 1 || line_no > n_lines {
+            println("  DRIFT  " + name + " — source_line " + to_string(line_no) + " out of range")
+            drift = drift + 1
+        } else {
+            let line = to_string(lines[line_no - 1])
+            if !line.contains(name) {
+                println("  DRIFT  " + name + " — line " + to_string(line_no) + " does not contain header name")
+                drift = drift + 1
+            }
+        }
+        i = i + 1
+    }
+    return drift
+}
+
+// ── driver ─────────────────────────────────────────────────────────────
+
+fn main() {
+    let home = env("HOME")
+    let src = home + "/core/hexa-bio/LATTICE_POLICY.md"
+
+    println("real-limits absorption — wave 1.2")
+    println("  source: " + src)
+    println("  rows:   " + to_string(len(_ROWS)) + " (expected 21: 6 + 8 + 7)")
+
+    let drift = _check_drift(src)
+    if drift == 0 {
+        println("  drift:  OK — all rows match source line headers")
+    } else {
+        println("  drift:  " + to_string(drift) + " row(s) drifted (see above) — emitting anyway")
+    }
+
+    let out = "compiler/atlas/real_limits.gen.hexa"
+    let body = _emit_file()
+    write_file(out, body)
+    println("  wrote:  " + out + " (" + to_string(len(body)) + " bytes)")
+
+    println("done.")
+}

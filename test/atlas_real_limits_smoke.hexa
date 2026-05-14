@@ -1,0 +1,137 @@
+// test/atlas_real_limits_smoke.hexa — Wave-1.2 hexa-bio absorption smoke test
+//
+// Verifies:
+//   * REAL_LIMITS holds 21 @C nodes (LATTICE_POLICY.md §1.2 entries)
+//   * Category split:  6 Mathematical + 8 Physical + 7 Engineering
+//   * 3 spot-check rows reach the expected id + raw-header literal:
+//       Shannon entropy  -> id=real_limits.shannon_entropy
+//       Bekenstein bound -> id=real_limits.bekenstein_bound
+//       ASML High-NA EUV -> id=real_limits.asml_high_na_euv_throughput
+//   * real_limits_by_category("Mathematical"|"Physical"|"Engineering")
+//     returns the right subset sizes.
+//
+// Run:
+//   hexa run test/atlas_real_limits_smoke.hexa
+//
+// Absorbed from ~/core/hexa-bio/LATTICE_POLICY.md §1.2
+// (Apache-2.0, hexa-bio v1.1.0, dancinlab Wave K 2026-05-12).
+
+use "compiler/atlas/parser"
+use "compiler/atlas/real_limits.gen"
+
+fn _check(label: string, ok: bool, fails) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+fn _find(nodes, id: string) -> AtlasNode {
+    let n = len(nodes)
+    let mut i = 0
+    while i < n {
+        let node = nodes[i]
+        if node.id == id { return node }
+        i = i + 1
+    }
+    return AtlasNode {
+        kind: "", id: "", raw: "", source_file: "", source_line: 0,
+        grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false },
+        edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }
+    }
+}
+
+// Spot-check: the raw payload of `<id>` must contain `<needle>` as a
+// substring (typically the header line up to and including ` :: `).
+fn _raw_has(nodes, id: string, needle: string) -> bool {
+    let node = _find(nodes, id)
+    if node.kind == "" { return false }
+    return node.raw.contains(needle)
+}
+
+fn main() {
+    let fails = []
+
+    println("real-limits absorption smoke — wave 1.2")
+
+    let all = real_limits()
+    _check("REAL_LIMITS count == 21", len(all) == 21, fails)
+
+    // Category filter cardinality.
+    let math = real_limits_by_category("Mathematical")
+    let phys = real_limits_by_category("Physical")
+    let eng  = real_limits_by_category("Engineering")
+    _check("Mathematical subset count == 6", len(math) == 6, fails)
+    _check("Physical     subset count == 8", len(phys) == 8, fails)
+    _check("Engineering  subset count == 7", len(eng)  == 7, fails)
+    _check("Math + Phys + Eng == REAL_LIMITS",
+           len(math) + len(phys) + len(eng) == len(all),
+           fails)
+
+    // Spot-check 1 — Shannon entropy (Mathematical).
+    let shannon = _find(all, "real_limits.shannon_entropy")
+    _check("shannon row found", shannon.kind == "C", fails)
+    _check("shannon raw begins with @C real_limits.shannon_entropy",
+           shannon.raw.contains("@C real_limits.shannon_entropy ="),
+           fails)
+    _check("shannon raw has category: Mathematical",
+           shannon.raw.contains("category: Mathematical"),
+           fails)
+    _check("shannon source_line == 58", shannon.source_line == 58, fails)
+
+    // Spot-check 2 — Bekenstein bound (Mathematical — per source §1.2
+    // table; classed as Mathematical there, not Physical).
+    let bek = _find(all, "real_limits.bekenstein_bound")
+    _check("bekenstein row found", bek.kind == "C", fails)
+    _check("bekenstein raw begins with @C real_limits.bekenstein_bound",
+           bek.raw.contains("@C real_limits.bekenstein_bound ="),
+           fails)
+    _check("bekenstein raw has category: Mathematical",
+           bek.raw.contains("category: Mathematical"),
+           fails)
+
+    // Spot-check 3 — ASML High-NA EUV throughput (Engineering).
+    let asml = _find(all, "real_limits.asml_high_na_euv_throughput")
+    _check("asml row found", asml.kind == "C", fails)
+    _check("asml raw begins with @C real_limits.asml_high_na_euv_throughput",
+           asml.raw.contains("@C real_limits.asml_high_na_euv_throughput ="),
+           fails)
+    _check("asml raw has category: Engineering",
+           asml.raw.contains("category: Engineering"),
+           fails)
+    _check("asml source_line == 82", asml.source_line == 82, fails)
+
+    // Empty / unknown filter should yield 0.
+    let none = real_limits_by_category("Bogus")
+    _check("unknown category yields 0", len(none) == 0, fails)
+
+    // Sanity: every row is a @C with a non-empty id starting with the
+    // canonical prefix.
+    let mut bad_kind = 0
+    let mut bad_id   = 0
+    let n_all = len(all)
+    let mut i = 0
+    while i < n_all {
+        let node = all[i]
+        if node.kind != "C" { bad_kind = bad_kind + 1 }
+        if !node.id.contains("real_limits.") { bad_id = bad_id + 1 }
+        i = i + 1
+    }
+    _check("every row kind == C",          bad_kind == 0, fails)
+    _check("every row id has real_limits. prefix", bad_id == 0, fails)
+
+    let nf = len(fails)
+    println("")
+    if nf == 0 {
+        println("real-limits smoke: PASS")
+    } else {
+        println("real-limits smoke: FAIL — " + to_string(nf) + " check(s) failed")
+        let mut j = 0
+        while j < nf {
+            println("  - " + to_string(fails[j]))
+            j = j + 1
+        }
+    }
+}
