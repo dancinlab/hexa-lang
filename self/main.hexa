@@ -365,9 +365,19 @@ fn os_clang_cflags() {
     // Homebrew default install path. If nothing is found, leave the
     // symbol undefined so native/crypto_sodium.c's stubs return errors.
     let probe = exec("pkg-config --cflags libsodium 2>/dev/null")
-    if probe != "" { return base + "-DHEXA_HAS_LIBSODIUM " + probe.trim() + " " }
-    let brew_h = exec("test -f /opt/homebrew/include/sodium.h && printf '/opt/homebrew/include' || printf ''")
-    if brew_h != "" { return base + "-DHEXA_HAS_LIBSODIUM -I" + brew_h + " " }
+    if probe != "" { base = base + "-DHEXA_HAS_LIBSODIUM " + probe.trim() + " " }
+    else {
+        let brew_h = exec("test -f /opt/homebrew/include/sodium.h && printf '/opt/homebrew/include' || printf ''")
+        if brew_h != "" { base = base + "-DHEXA_HAS_LIBSODIUM -I" + brew_h + " " }
+    }
+    // 2026-05-14: OpenSSL optional bind for AES-256-CTR (passphrase-
+    // encrypted OpenSSH private keys). libsodium doesn't ship AES-256.
+    let ossl_probe = exec("pkg-config --cflags openssl 2>/dev/null")
+    if ossl_probe != "" { base = base + "-DHEXA_HAS_OPENSSL " + ossl_probe.trim() + " " }
+    else {
+        let brew_o = exec("test -f /opt/homebrew/include/openssl/evp.h && printf '/opt/homebrew/opt/openssl@3/include' || printf ''")
+        if brew_o != "" { base = base + "-DHEXA_HAS_OPENSSL -I" + brew_o + " " }
+    }
     return base
 }
 fn os_clang_ldflags() {
@@ -375,9 +385,17 @@ fn os_clang_ldflags() {
     if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" { base = " -lm -lpthread" }
     // 2026-05-14: libsodium link flags (when found via pkg-config or brew).
     let probe = exec("pkg-config --libs libsodium 2>/dev/null")
-    if probe != "" { return base + " " + probe.trim() }
-    let brew_l = exec("test -f /opt/homebrew/lib/libsodium.dylib && printf '/opt/homebrew/lib' || printf ''")
-    if brew_l != "" { return base + " -L" + brew_l + " -lsodium" }
+    if probe != "" { base = base + " " + probe.trim() }
+    else {
+        let brew_l = exec("test -f /opt/homebrew/lib/libsodium.dylib && printf '/opt/homebrew/lib' || printf ''")
+        if brew_l != "" { base = base + " -L" + brew_l + " -lsodium" }
+    }
+    let ossl_probe = exec("pkg-config --libs openssl 2>/dev/null")
+    if ossl_probe != "" { base = base + " " + ossl_probe.trim() }
+    else {
+        let brew_o = exec("test -d /opt/homebrew/opt/openssl@3/lib && printf '/opt/homebrew/opt/openssl@3/lib' || printf ''")
+        if brew_o != "" { base = base + " -L" + brew_o + " -lcrypto" }
+    }
     return base
 }
 
@@ -1009,6 +1027,26 @@ fn resolve_hexa_v2() {
 //   makes the env var actually honored by resolve_interp() (was previously
 //   ignored — relied on 4-tier hardcoded path coincidence). Allows operator
 //   override without touching dispatch infra. See state/cosmetic_polish_batch_2026_05_03/.
+// 2026-05-14: probe `hexa_interp`, then `hexa_interp.linux` / `hexa_interp.darwin`
+// at each path tier — Linux + macOS build scripts produce per-OS-suffixed
+// binaries (build/hexa_interp.linux, build/hexa_interp.darwin) and *usually*
+// also a `hexa_interp` symlink. A fresh upstream clone has only the suffixed
+// file, no symlink — without this probe `resolve_interp` returns "" and the
+// flatten step silently falls back to raw-src mode, dropping cross-module
+// forward decls (downstream symptom: clang errors "use of undeclared
+// identifier '<fn>'" when <fn> lives in a `use`d module).
+// Reported by wilson session 2026-05-14 (Step G ubu-2 build).
+fn _probe_interp_at(base) {
+    let suffixes = ["", ".linux", ".darwin"]
+    let mut i = 0
+    while i < len(suffixes) {
+        let candidate = base + suffixes[i]
+        let chk = exec("test -x '" + candidate + "' && printf yes || printf no")
+        if chk == "yes" { return candidate }
+        i = i + 1
+    }
+    return ""
+}
 fn resolve_interp() {
     // 0) $HEXA_INTERP env override (operator-controlled, highest priority).
     let env_bin = exec("printf '%s' \"$HEXA_INTERP\"")
@@ -1020,29 +1058,20 @@ fn resolve_interp() {
     }
     let inst = install_dir_from_argv0()
     if len(inst) > 0 {
-        let argv_bin = inst + "/build/hexa_interp"
-        let argv_chk = exec("test -x '" + argv_bin + "' && printf yes || printf no")
-        if argv_chk == "yes" {
-            return argv_bin
-        }
+        let hit = _probe_interp_at(inst + "/build/hexa_interp")
+        if len(hit) > 0 { return hit }
     }
-    let cwd_bin = "./build/hexa_interp"
-    let cwd_chk = exec("test -x '" + cwd_bin + "' && printf yes || printf no")
-    if cwd_chk == "yes" {
-        return cwd_bin
-    }
-    let home_bin = exec("printf '%s' \"$HEXA_LANG/build/hexa_interp\"")
-    let home_chk = exec("test -x '" + home_bin + "' && printf yes || printf no")
-    if home_chk == "yes" {
-        return home_bin
+    let hit_cwd = _probe_interp_at("./build/hexa_interp")
+    if len(hit_cwd) > 0 { return hit_cwd }
+    let home_base = exec("printf '%s' \"$HEXA_LANG/build/hexa_interp\"")
+    if len(home_base) > 0 {
+        let hit_home = _probe_interp_at(home_base)
+        if len(hit_home) > 0 { return hit_home }
     }
     // 4) container default — `/usr/local/bin/build/hexa_interp`.
     //    Dockerfile 표준 layout (hexa-runner image 측). 다른 경로면 no-op.
-    let ctr_bin = "/usr/local/bin/build/hexa_interp"
-    let ctr_chk = exec("test -x '" + ctr_bin + "' && printf yes || printf no")
-    if ctr_chk == "yes" {
-        return ctr_bin
-    }
+    let hit_ctr = _probe_interp_at("/usr/local/bin/build/hexa_interp")
+    if len(hit_ctr) > 0 { return hit_ctr }
     return ""
 }
 
