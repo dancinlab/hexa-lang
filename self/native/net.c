@@ -501,8 +501,18 @@ HexaVal hexa_net_write_bytes(HexaVal fd_val, HexaVal arr_val) {
     }
     size_t sent = 0;
     size_t total = (size_t)n;
+    int use_write = 0;
     while (sent < total) {
-        ssize_t s = send((int)fd, (const char*)(buf + sent), total - sent, 0);
+        ssize_t s;
+        if (use_write) {
+            s = write((int)fd, (const void*)(buf + sent), total - sent);
+        } else {
+            s = send((int)fd, (const char*)(buf + sent), total - sent, 0);
+            if (s < 0 && errno == ENOTSOCK) {
+                use_write = 1;
+                continue;
+            }
+        }
         if (s < 0) {
             if (errno == EINTR) continue;
             free(buf);
@@ -525,7 +535,12 @@ HexaVal hexa_net_read_bytes(HexaVal fd_val, HexaVal max_val) {
     if (max > 65536) max = 65536;
     unsigned char* buf = (unsigned char*)malloc((size_t)max);
     if (!buf) return hexa_array_new();
+    /* Try recv() first (socket fast path); fall back to read() if the
+     * fd isn't a socket — needed for pty/pipe fds. */
     ssize_t n = recv((int)fd, (char*)buf, (size_t)max, 0);
+    if (n < 0 && errno == ENOTSOCK) {
+        n = read((int)fd, buf, (size_t)max);
+    }
     if (n <= 0) { free(buf); return hexa_array_new(); }
     HexaVal out = hexa_array_new();
     for (ssize_t i = 0; i < n; i++) {

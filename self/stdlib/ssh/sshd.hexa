@@ -1,0 +1,676 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/ssh/sshd.hexa -- hexa-native SSH-2.0 server (MVP)
+//
+//  Single-shot server: listen → accept ONE connection → KEX →
+//  publickey ed25519 auth (against authorized_keys) → ONE session
+//  channel → ONE exec request → pump child stdout/stderr until
+//  it exits → CHANNEL_CLOSE → return result. Then close listener.
+//
+//  Scope:
+//    - One client, one channel, one exec — no shell, no pty
+//      request handling, no multiple channels, no rekey.
+//    - Host key + caller-provided authorized_keys path.
+//    - Spawns the requested command via pty_forkexec (works on
+//      Mac + Linux; gives us a master fd we can pump byte-wise).
+//
+//  Surface:
+//    ssh_sshd_serve_once(listen_addr, host_priv_path, host_priv_pass,
+//                        authorized_keys_path)
+//      -> { client_user, command, exit_status, bytes_in, bytes_out }
+//         | { error }
+
+use "self/stdlib/ssh/wire"
+use "self/stdlib/ssh/kex"
+use "self/stdlib/ssh/keyfile"
+use "self/stdlib/ssh/authorized_keys"
+
+let _SSHD_BANNER = "SSH-2.0-hexa_sshd_0.1"
+
+// ── Plaintext framing helpers (copies of ssh.hexa internals) ───
+fn _sd_read_exact(fd: int, n: int) -> [int] {
+    let mut out: [int] = []
+    let mut need = n
+    while need > 0 {
+        let chunk = net_read_bytes(fd, need)
+        if type_of(chunk) != "array" { return [] }
+        let got = len(chunk)
+        if got < 1 { return [] }
+        let mut i = 0
+        while i < got { out.push(chunk[i]) ; i = i + 1 }
+        need = need - got
+    }
+    return out
+}
+fn _sd_write_all(fd: int, buf: [int]) -> bool {
+    let n = net_write_bytes(fd, buf)
+    if type_of(n) != "int" { return false }
+    return n == len(buf)
+}
+fn _sd_send_plain(fd: int, seq: int, payload: [int]) -> bool {
+    return _sd_write_all(fd, ssh_wire_encode_plain(seq, payload))
+}
+fn _sd_recv_plain(fd: int) -> any {
+    let header = _sd_read_exact(fd, 4)
+    if len(header) != 4 { return #{ "error": "short hdr" } }
+    let plen = header[0] * 16777216 + header[1] * 65536 + header[2] * 256 + header[3]
+    if plen < 1 || plen > 262144 { return #{ "error": "bad plen " + str(plen) } }
+    let rest = _sd_read_exact(fd, plen)
+    if len(rest) != plen { return #{ "error": "short body" } }
+    let mut all: [int] = []
+    let mut hi = 0
+    while hi < 4 { all.push(header[hi]) ; hi = hi + 1 }
+    let mut bi = 0
+    while bi < plen { all.push(rest[bi]) ; bi = bi + 1 }
+    return ssh_wire_decode_plain(all)
+}
+fn _sd_send_enc(fd: int, seq: int, payload: [int], key64: [int]) -> bool {
+    let frame = ssh_wire_encode_chacha(seq, payload, key64)
+    if type_of(frame) != "array" { return false }
+    return _sd_write_all(fd, frame)
+}
+fn _sd_recv_enc(fd: int, seq: int, key64: [int]) -> any {
+    let hdr = _sd_read_exact(fd, 4)
+    if len(hdr) != 4 { return #{ "error": "short enc hdr" } }
+    let mut k1: [int] = []
+    let mut k2: [int] = []
+    let mut i = 0
+    while i < 32 { k1.push(key64[i])       ; i = i + 1 }
+    let mut j = 0
+    while j < 32 { k2.push(key64[32 + j])  ; j = j + 1 }
+    // Build BE nonce from seq
+    let mut nonce: [int] = []
+    let mut bytes: [int] = []
+    let mut x = seq
+    let mut ni = 0
+    while ni < 8 { bytes.push(x - (x / 256) * 256) ; x = x / 256 ; ni = ni + 1 }
+    let mut nj = 7
+    while nj > -1 { nonce.push(bytes[nj]) ; nj = nj - 1 }
+    let dec_len = chacha20_xor(k2, nonce, hdr)
+    if type_of(dec_len) != "array" { return #{ "error": "hdr dec" } }
+    let plen = dec_len[0] * 16777216 + dec_len[1] * 65536 + dec_len[2] * 256 + dec_len[3]
+    if plen < 1 || plen > 262144 { return #{ "error": "bad enc plen " + str(plen) } }
+    let body = _sd_read_exact(fd, plen + 16)
+    if len(body) != plen + 16 { return #{ "error": "short enc body" } }
+    let mut all: [int] = []
+    let mut ai = 0
+    while ai < 4 { all.push(hdr[ai]) ; ai = ai + 1 }
+    let mut bi = 0
+    while bi < plen + 16 { all.push(body[bi]) ; bi = bi + 1 }
+    return ssh_wire_decode_chacha(all, seq, key64)
+}
+
+// ── Server-side KEX ───────────────────────────────────────────
+// Server KEX flow (mirrors client kex.hexa but with reversed roles):
+//   1. Recv client KEXINIT (after banner exchange)
+//   2. Send server KEXINIT
+//   3. Recv KEX_ECDH_INIT (client ephemeral pub Q_C)
+//   4. Generate server ephemeral X25519 keypair, compute K = scalarmult(priv, Q_C)
+//   5. Build host key blob K_S (= "ssh-ed25519" || pub)
+//   6. Compute H = sha256(V_C || V_S || I_C || I_S || K_S || Q_C || Q_S || K)
+//   7. Sign H with host ed25519 priv -> sig
+//   8. Send KEX_ECDH_REPLY (K_S || Q_S || sig_blob)
+//   9. NEWKEYS exchange
+//  10. Derive 6 keys (note: roles swap relative to client — for the server,
+//      "encrypt outgoing" uses what the client treats as `enc_s2c`)
+
+fn _sd_build_kex_ecdh_reply(k_s_blob: [int], q_s: [int], sig_blob: [int]) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_u8(p, SSH_MSG_KEX_ECDH_REPLY)
+    p = ssh_put_string_bytes(p, k_s_blob)
+    p = ssh_put_string_bytes(p, q_s)
+    p = ssh_put_string_bytes(p, sig_blob)
+    return p
+}
+
+// Build the ssh-ed25519 host key blob from raw 32B pub.
+fn _sd_make_host_key_blob(host_pk: [int]) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_string(p, "ssh-ed25519")
+    p = ssh_put_string_bytes(p, host_pk)
+    return p
+}
+
+fn _sd_make_sig_blob(sig: [int]) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_string(p, "ssh-ed25519")
+    p = ssh_put_string_bytes(p, sig)
+    return p
+}
+
+// ── Userauth verification ────────────────────────────────────
+// Parse SSH_MSG_USERAUTH_REQUEST and verify signature.
+//   byte SSH_MSG_USERAUTH_REQUEST
+//   string username
+//   string "ssh-connection"
+//   string "publickey"
+//   boolean has_sig (must be true for actual auth)
+//   string algorithm_name
+//   string pubkey_blob
+//   [string signature_blob]   if has_sig
+fn _sd_parse_userauth(payload: [int]) -> any {
+    if len(payload) < 1 || payload[0] != SSH_MSG_USERAUTH_REQUEST {
+        return #{ "error": "not USERAUTH_REQUEST: " + str(payload[0]) }
+    }
+    let r1 = ssh_get_string(payload, 1)
+    if r1["off"] < 0 { return #{ "error": "bad username" } }
+    let username = ssh_bytes_to_string(r1["bytes"])
+    let r2 = ssh_get_string(payload, r1["off"])
+    if r2["off"] < 0 { return #{ "error": "bad service" } }
+    let r3 = ssh_get_string(payload, r2["off"])
+    if r3["off"] < 0 { return #{ "error": "bad method" } }
+    let method = ssh_bytes_to_string(r3["bytes"])
+    if method != "publickey" {
+        return #{ "error": "method not publickey: " + method }
+    }
+    let off = r3["off"]
+    if off + 1 > len(payload) { return #{ "error": "missing has_sig" } }
+    let has_sig = payload[off]
+    let r4 = ssh_get_string(payload, off + 1)
+    if r4["off"] < 0 { return #{ "error": "bad algo" } }
+    let algo = ssh_bytes_to_string(r4["bytes"])
+    let r5 = ssh_get_string(payload, r4["off"])
+    if r5["off"] < 0 { return #{ "error": "bad pubkey" } }
+    let pub_blob = r5["bytes"]
+    let mut sig_blob: [int] = []
+    if has_sig == 1 {
+        let r6 = ssh_get_string(payload, r5["off"])
+        if r6["off"] < 0 { return #{ "error": "bad sig" } }
+        sig_blob = r6["bytes"]
+    }
+    return #{ "username": username, "method": method, "algo": algo,
+              "has_sig": has_sig == 1, "pub_blob": pub_blob, "sig_blob": sig_blob }
+}
+
+// Re-build the bytes the client signed (must match ssh.hexa::
+// _build_userauth_sig_blob exactly).
+fn _sd_userauth_to_sign(session_id: [int], username: string, pub_blob: [int]) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_string_bytes(p, session_id)
+    p = ssh_put_u8(p, SSH_MSG_USERAUTH_REQUEST)
+    p = ssh_put_string(p, username)
+    p = ssh_put_string(p, "ssh-connection")
+    p = ssh_put_string(p, "publickey")
+    p = ssh_put_u8(p, 1)
+    p = ssh_put_string(p, "ssh-ed25519")
+    p = ssh_put_string_bytes(p, pub_blob)
+    return p
+}
+
+// ── Channel — server-side accept session + handle exec ──────
+fn _sd_parse_channel_open(payload: [int]) -> any {
+    // byte | string type | u32 sender | u32 window | u32 max_pkt
+    if payload[0] != SSH_MSG_CHANNEL_OPEN { return #{ "error": "not CHANNEL_OPEN" } }
+    let r1 = ssh_get_string(payload, 1)
+    if r1["off"] < 0 { return #{ "error": "bad ch type" } }
+    let ctype = ssh_bytes_to_string(r1["bytes"])
+    let off = r1["off"]
+    if off + 12 > len(payload) { return #{ "error": "short ch_open" } }
+    let sender = payload[off] * 16777216 + payload[off + 1] * 65536 + payload[off + 2] * 256 + payload[off + 3]
+    let window = payload[off + 4] * 16777216 + payload[off + 5] * 65536 + payload[off + 6] * 256 + payload[off + 7]
+    let maxpkt = payload[off + 8] * 16777216 + payload[off + 9] * 65536 + payload[off + 10] * 256 + payload[off + 11]
+    return #{ "type": ctype, "sender": sender, "window": window, "max_pkt": maxpkt }
+}
+
+fn _sd_build_open_confirm(remote_id: int, local_id: int, window: int, max_pkt: int) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_u8(p, SSH_MSG_CHANNEL_OPEN_CONFIRMATION)
+    p = ssh_put_u32(p, remote_id)
+    p = ssh_put_u32(p, local_id)
+    p = ssh_put_u32(p, window)
+    p = ssh_put_u32(p, max_pkt)
+    return p
+}
+
+fn _sd_build_channel_data(remote_id: int, data: [int]) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_u8(p, SSH_MSG_CHANNEL_DATA)
+    p = ssh_put_u32(p, remote_id)
+    p = ssh_put_string_bytes(p, data)
+    return p
+}
+
+fn _sd_build_exit_status(remote_id: int, status: int) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_u8(p, SSH_MSG_CHANNEL_REQUEST)
+    p = ssh_put_u32(p, remote_id)
+    p = ssh_put_string(p, "exit-status")
+    p = ssh_put_u8(p, 0)        // want_reply = false
+    p = ssh_put_u32(p, status)
+    return p
+}
+
+fn _sd_build_channel_eof(remote_id: int) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_u8(p, SSH_MSG_CHANNEL_EOF)
+    p = ssh_put_u32(p, remote_id)
+    return p
+}
+
+fn _sd_build_channel_close(remote_id: int) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_u8(p, SSH_MSG_CHANNEL_CLOSE)
+    p = ssh_put_u32(p, remote_id)
+    return p
+}
+
+fn _sd_build_channel_success(remote_id: int) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_u8(p, SSH_MSG_CHANNEL_SUCCESS)
+    p = ssh_put_u32(p, remote_id)
+    return p
+}
+
+// ── Public server entry ─────────────────────────────────────
+pub fn ssh_sshd_serve_once(listen_addr: string,
+                            host_priv_path: string, host_priv_pass: string,
+                            authorized_keys_path: string) -> any {
+    // 1. Load host key
+    let hk = ssh_keyfile_load_ed25519_pw(host_priv_path, host_priv_pass)
+    if has_key(hk, "error") {
+        return #{ "error": "host key load: " + str(hk["error"]) }
+    }
+    let host_pk = hk["pk"]
+    let host_sk = hk["sk"]
+
+    // 2. Load authorized_keys
+    let ak = ssh_authkeys_load(authorized_keys_path)
+    if has_key(ak, "error") {
+        return #{ "error": "authorized_keys load: " + str(ak["error"]) }
+    }
+    if len(ak) == 0 {
+        return #{ "error": "authorized_keys has no ed25519 entries" }
+    }
+
+    // 3. Listen + accept ONE connection
+    let lfd = net_listen(listen_addr)
+    if type_of(lfd) != "int" || lfd < 0 {
+        return #{ "error": "listen failed: " + str(lfd) }
+    }
+    let cfd = net_accept(lfd)
+    if type_of(cfd) != "int" || cfd < 0 {
+        net_close(lfd)
+        return #{ "error": "accept failed: " + str(cfd) }
+    }
+    net_close(lfd)
+
+    // 4. Banner exchange
+    let our_banner = _SSHD_BANNER
+    let banner_line = our_banner + "\r\n"
+    let mut bb: [int] = []
+    let mut bi = 0
+    while bi < len(banner_line) { bb.push(char_code(banner_line, bi)) ; bi = bi + 1 }
+    if !_sd_write_all(cfd, bb) {
+        net_close(cfd)
+        return #{ "error": "banner write" }
+    }
+    // Read client banner (a single line ending in \n)
+    let mut client_banner = ""
+    let mut last_b = 0
+    let mut nb = 0
+    while nb < 4096 {
+        let one = net_read_bytes(cfd, 1)
+        if type_of(one) != "array" || len(one) < 1 { net_close(cfd) ; return #{ "error": "no client banner" } }
+        let c = one[0]
+        if c == 10 {
+            if last_b == 13 && len(client_banner) > 0 {
+                let mut trimmed = ""
+                let mut ti = 0
+                while ti < len(client_banner) - 1 { trimmed = trimmed + chr(char_code(client_banner, ti)) ; ti = ti + 1 }
+                client_banner = trimmed
+            }
+            break
+        }
+        client_banner = client_banner + chr(c)
+        last_b = c
+        nb = nb + 1
+    }
+    if len(client_banner) < 4 { net_close(cfd) ; return #{ "error": "short client banner" } }
+
+    // 5. Recv client KEXINIT
+    let r_ck = _sd_recv_plain(cfd)
+    if has_key(r_ck, "error") { net_close(cfd) ; return #{ "error": "recv client KEXINIT: " + str(r_ck["error"]) } }
+    if r_ck["payload"][0] != SSH_MSG_KEXINIT {
+        net_close(cfd) ; return #{ "error": "expected KEXINIT got " + str(r_ck["payload"][0]) }
+    }
+    let client_kexinit = r_ck["payload"]
+
+    // 6. Send server KEXINIT (deterministic cookie — fine for MVP)
+    let mut cookie: [int] = []
+    let cks = sha512([42])
+    let mut ci = 0
+    while ci < 16 { cookie.push(cks[ci]) ; ci = ci + 1 }
+    let server_kexinit = ssh_kex_build_kexinit(cookie)
+    if !_sd_send_plain(cfd, 0, server_kexinit) {
+        net_close(cfd) ; return #{ "error": "send server KEXINIT" }
+    }
+
+    // 7. Recv KEX_ECDH_INIT
+    let r_ki = _sd_recv_plain(cfd)
+    if has_key(r_ki, "error") { net_close(cfd) ; return #{ "error": "recv KEX_ECDH_INIT: " + str(r_ki["error"]) } }
+    if r_ki["payload"][0] != SSH_MSG_KEX_ECDH_INIT {
+        net_close(cfd) ; return #{ "error": "expected KEX_ECDH_INIT got " + str(r_ki["payload"][0]) }
+    }
+    let q_c_str = ssh_get_string(r_ki["payload"], 1)
+    if q_c_str["off"] < 0 { net_close(cfd) ; return #{ "error": "bad Q_C" } }
+    let q_c = q_c_str["bytes"]
+    if len(q_c) != 32 { net_close(cfd) ; return #{ "error": "Q_C not 32B" } }
+
+    // 8. Server ephemeral keypair + shared secret
+    let eph = x25519_keypair()
+    if has_key(eph, "error") { net_close(cfd) ; return #{ "error": "x25519 keypair fail" } }
+    let q_s = eph["pub"]
+    let k_secret = x25519_scalarmult(eph["priv"], q_c)
+    if has_key(k_secret, "error") { net_close(cfd) ; return #{ "error": "scalarmult fail" } }
+
+    // 9. Host key blob + H + sig
+    let k_s_blob = _sd_make_host_key_blob(host_pk)
+    let h = ssh_kex_compute_h(client_banner, _SSHD_BANNER,
+                              client_kexinit, server_kexinit,
+                              k_s_blob, q_c, q_s, k_secret)
+    if type_of(h) != "array" { net_close(cfd) ; return #{ "error": "H fail" } }
+    let sig = ed25519_sign(host_sk, h)
+    if type_of(sig) != "array" { net_close(cfd) ; return #{ "error": "host sign fail" } }
+    let sig_blob = _sd_make_sig_blob(sig)
+    let session_id = h
+
+    // 10. Send KEX_ECDH_REPLY
+    let reply = _sd_build_kex_ecdh_reply(k_s_blob, q_s, sig_blob)
+    if !_sd_send_plain(cfd, 1, reply) {
+        net_close(cfd) ; return #{ "error": "send KEX_ECDH_REPLY" }
+    }
+
+    // 11. Derive keys; SERVER swaps client's c2s/s2c notion:
+    //     server "decrypt incoming" uses enc_c2s, "encrypt outgoing" uses enc_s2c.
+    let keys = ssh_kex_derive_keys(k_secret, h, session_id)
+    if has_key(keys, "error") { net_close(cfd) ; return #{ "error": "key derive" } }
+    let dec_key = keys["enc_c2s"]   // server decrypts client→server traffic
+    let enc_key = keys["enc_s2c"]   // server encrypts server→client traffic
+
+    // 12. NEWKEYS exchange (seq 2 both ways, plaintext)
+    let r_nk_c = _sd_recv_plain(cfd)
+    if has_key(r_nk_c, "error") { net_close(cfd) ; return #{ "error": "recv client NEWKEYS: " + str(r_nk_c["error"]) } }
+    if r_nk_c["payload"][0] != SSH_MSG_NEWKEYS {
+        net_close(cfd) ; return #{ "error": "expected client NEWKEYS got " + str(r_nk_c["payload"][0]) }
+    }
+    if !_sd_send_plain(cfd, 2, ssh_kex_build_newkeys()) {
+        net_close(cfd) ; return #{ "error": "send server NEWKEYS" }
+    }
+
+    // From now: encrypted. Sequence continues.
+    let mut c2s_seq = 3      // server-incoming seq
+    let mut s2c_seq = 3      // server-outgoing seq
+
+    // 13. SERVICE_REQUEST ssh-userauth → SERVICE_ACCEPT
+    let r_sr = _sd_recv_enc(cfd, c2s_seq, dec_key)
+    if has_key(r_sr, "error") { net_close(cfd) ; return #{ "error": "recv SERVICE_REQUEST: " + str(r_sr["error"]) } }
+    c2s_seq = c2s_seq + 1
+    if r_sr["payload"][0] != SSH_MSG_SERVICE_REQUEST {
+        net_close(cfd) ; return #{ "error": "expected SERVICE_REQUEST" }
+    }
+    let svc = ssh_get_string(r_sr["payload"], 1)
+    let svc_name = ssh_bytes_to_string(svc["bytes"])
+    if svc_name != "ssh-userauth" {
+        net_close(cfd) ; return #{ "error": "bad service: " + svc_name }
+    }
+    let mut sa: [int] = []
+    sa = ssh_put_u8(sa, SSH_MSG_SERVICE_ACCEPT)
+    sa = ssh_put_string(sa, "ssh-userauth")
+    if !_sd_send_enc(cfd, s2c_seq, sa, enc_key) {
+        net_close(cfd) ; return #{ "error": "send SERVICE_ACCEPT" }
+    }
+    s2c_seq = s2c_seq + 1
+
+    // 14. USERAUTH loop — handle RFC 4252 multi-step exchange:
+    //   client may send method="none" first (probe) → reply FAILURE + ["publickey"]
+    //   then method="publickey" has_sig=0 (probe) → reply USERAUTH_PK_OK or FAILURE
+    //   then method="publickey" has_sig=1 → verify, reply SUCCESS or FAILURE
+    let mut client_user = ""
+    let mut auth_done = false
+    let mut auth_tries = 0
+    while !auth_done && auth_tries < 8 {
+        let r_ua = _sd_recv_enc(cfd, c2s_seq, dec_key)
+        if has_key(r_ua, "error") { net_close(cfd) ; return #{ "error": "recv USERAUTH: " + str(r_ua["error"]) } }
+        c2s_seq = c2s_seq + 1
+        auth_tries = auth_tries + 1
+        let pl = r_ua["payload"]
+        if pl[0] != SSH_MSG_USERAUTH_REQUEST { continue }
+        // Parse username + method (allow non-publickey methods here).
+        let u_r = ssh_get_string(pl, 1)
+        if u_r["off"] < 0 { continue }
+        let username = ssh_bytes_to_string(u_r["bytes"])
+        let s_r = ssh_get_string(pl, u_r["off"])
+        if s_r["off"] < 0 { continue }
+        let m_r = ssh_get_string(pl, s_r["off"])
+        if m_r["off"] < 0 { continue }
+        let method = ssh_bytes_to_string(m_r["bytes"])
+        client_user = username
+        if method != "publickey" {
+            // FAILURE → allowed methods = ["publickey"]
+            let mut fail: [int] = []
+            fail = ssh_put_u8(fail, SSH_MSG_USERAUTH_FAILURE)
+            fail = ssh_put_name_list(fail, ["publickey"])
+            fail = ssh_put_u8(fail, 0)
+            if !_sd_send_enc(cfd, s2c_seq, fail, enc_key) { net_close(cfd) ; return #{ "error": "send userauth fail" } }
+            s2c_seq = s2c_seq + 1
+            continue
+        }
+        // publickey method — parse the rest
+        let ua = _sd_parse_userauth(pl)
+        if has_key(ua, "error") {
+            let mut fail2: [int] = []
+            fail2 = ssh_put_u8(fail2, SSH_MSG_USERAUTH_FAILURE)
+            fail2 = ssh_put_name_list(fail2, ["publickey"])
+            fail2 = ssh_put_u8(fail2, 0)
+            _sd_send_enc(cfd, s2c_seq, fail2, enc_key)
+            s2c_seq = s2c_seq + 1
+            continue
+        }
+        // Look up pub in authorized_keys
+        let allowed = ssh_authkeys_matches(ak, ua["pub_blob"])
+        if !allowed {
+            let mut fail3: [int] = []
+            fail3 = ssh_put_u8(fail3, SSH_MSG_USERAUTH_FAILURE)
+            fail3 = ssh_put_name_list(fail3, ["publickey"])
+            fail3 = ssh_put_u8(fail3, 0)
+            _sd_send_enc(cfd, s2c_seq, fail3, enc_key)
+            s2c_seq = s2c_seq + 1
+            continue
+        }
+        if !ua["has_sig"] {
+            // Probe — reply with SSH_MSG_USERAUTH_PK_OK (60) + algo + pubkey
+            let mut pkok: [int] = []
+            pkok = ssh_put_u8(pkok, 60)            // SSH_MSG_USERAUTH_PK_OK
+            pkok = ssh_put_string(pkok, "ssh-ed25519")
+            pkok = ssh_put_string_bytes(pkok, ua["pub_blob"])
+            _sd_send_enc(cfd, s2c_seq, pkok, enc_key)
+            s2c_seq = s2c_seq + 1
+            continue
+        }
+        // Real sig — verify
+        let to_sign = _sd_userauth_to_sign(session_id, username, ua["pub_blob"])
+        let sig_parsed = ssh_kex_parse_ed25519_sig(ua["sig_blob"])
+        if has_key(sig_parsed, "error") {
+            net_close(cfd) ; return #{ "error": "userauth sig blob parse: " + str(sig_parsed["error"]) }
+        }
+        let pk_extr = ssh_kex_parse_ed25519_hostkey(ua["pub_blob"])
+        if has_key(pk_extr, "error") {
+            net_close(cfd) ; return #{ "error": "userauth pub_blob parse" }
+        }
+        let ok_sig = ed25519_verify(pk_extr["pub"], to_sign, sig_parsed["sig"])
+        if !ok_sig {
+            let mut fail4: [int] = []
+            fail4 = ssh_put_u8(fail4, SSH_MSG_USERAUTH_FAILURE)
+            fail4 = ssh_put_name_list(fail4, ["publickey"])
+            fail4 = ssh_put_u8(fail4, 0)
+            _sd_send_enc(cfd, s2c_seq, fail4, enc_key)
+            s2c_seq = s2c_seq + 1
+            continue
+        }
+        let mut succ: [int] = []
+        succ = ssh_put_u8(succ, SSH_MSG_USERAUTH_SUCCESS)
+        if !_sd_send_enc(cfd, s2c_seq, succ, enc_key) {
+            net_close(cfd) ; return #{ "error": "send USERAUTH_SUCCESS" }
+        }
+        s2c_seq = s2c_seq + 1
+        auth_done = true
+    }
+    if !auth_done {
+        net_close(cfd) ; return #{ "error": "userauth exhausted retries" }
+    }
+
+    // 15. CHANNEL_OPEN session
+    let r_co = _sd_recv_enc(cfd, c2s_seq, dec_key)
+    if has_key(r_co, "error") { net_close(cfd) ; return #{ "error": "recv CHANNEL_OPEN: " + str(r_co["error"]) } }
+    c2s_seq = c2s_seq + 1
+    let co = _sd_parse_channel_open(r_co["payload"])
+    if has_key(co, "error") { net_close(cfd) ; return #{ "error": "ch_open: " + str(co["error"]) } }
+    if co["type"] != "session" {
+        net_close(cfd) ; return #{ "error": "channel type not session: " + str(co["type"]) }
+    }
+    let remote_id = co["sender"]
+    let local_id  = 1
+    let init_window = 2097152
+    let max_pkt = 32768
+    let conf = _sd_build_open_confirm(remote_id, local_id, init_window, max_pkt)
+    if !_sd_send_enc(cfd, s2c_seq, conf, enc_key) {
+        net_close(cfd) ; return #{ "error": "send OPEN_CONFIRMATION" }
+    }
+    s2c_seq = s2c_seq + 1
+
+    // 16. Receive CHANNEL_REQUEST exec (or env/pty-req first — skip those)
+    let mut got_exec = false
+    let mut exec_cmd = ""
+    let mut tries = 0
+    while !got_exec && tries < 8 {
+        let r_cr = _sd_recv_enc(cfd, c2s_seq, dec_key)
+        if has_key(r_cr, "error") { net_close(cfd) ; return #{ "error": "recv channel_req: " + str(r_cr["error"]) } }
+        c2s_seq = c2s_seq + 1
+        let pl = r_cr["payload"]
+        if pl[0] != SSH_MSG_CHANNEL_REQUEST { tries = tries + 1 ; continue }
+        // byte | u32 chan | string req_type | u8 want_reply | rest
+        let req_r = ssh_get_string(pl, 5)
+        if req_r["off"] < 0 { tries = tries + 1 ; continue }
+        let req_name = ssh_bytes_to_string(req_r["bytes"])
+        let want_reply = pl[req_r["off"]]
+        if req_name == "exec" {
+            let cmd_r = ssh_get_string(pl, req_r["off"] + 1)
+            if cmd_r["off"] < 0 { net_close(cfd) ; return #{ "error": "exec cmd parse" } }
+            exec_cmd = ssh_bytes_to_string(cmd_r["bytes"])
+            got_exec = true
+            if want_reply == 1 {
+                let ack = _sd_build_channel_success(remote_id)
+                _sd_send_enc(cfd, s2c_seq, ack, enc_key)
+                s2c_seq = s2c_seq + 1
+            }
+        } else {
+            // Ignore env/pty-req/... ack failure
+            if want_reply == 1 {
+                let mut fail2: [int] = []
+                fail2 = ssh_put_u8(fail2, SSH_MSG_CHANNEL_FAILURE)
+                fail2 = ssh_put_u32(fail2, remote_id)
+                _sd_send_enc(cfd, s2c_seq, fail2, enc_key)
+                s2c_seq = s2c_seq + 1
+            }
+        }
+        tries = tries + 1
+    }
+    if !got_exec { net_close(cfd) ; return #{ "error": "no exec request" } }
+
+    // 17. Spawn the requested command via pty_forkexec.
+    // argv = ["sh", "-c", exec_cmd]
+    let pr = pty_forkexec(["sh", "-c", exec_cmd], [], 24, 80)
+    if has_key(pr, "error") {
+        net_close(cfd) ; return #{ "error": "pty_forkexec: " + str(pr["error"]) }
+    }
+    let pid = pr["pid"]
+    let master_fd = pr["master_fd"]
+    let nbl = net_set_nonblock(master_fd)
+
+    // 18. Pump loop: read master_fd → CHANNEL_DATA → cfd; read cfd
+    //     CHANNEL_DATA → master_fd. Exit when child exits.
+    let mut bytes_in = 0     // remote command stdout (server → client)
+    let mut bytes_out = 0    // remote command stdin   (client → server)
+    let mut child_dead = false
+    let mut iter = 0
+    while !child_dead && iter < 1000000 {
+        // Check fd readiness with a short timeout (200ms). Returns the
+        // list of ready fd VALUES (not flags), e.g. [4] if fd 4 is ready.
+        let sel = net_select([cfd, master_fd], 200)
+        if type_of(sel) != "array" { break }
+        let mut cfd_ready = false
+        let mut master_ready = false
+        let mut si = 0
+        while si < len(sel) {
+            if sel[si] == cfd { cfd_ready = true }
+            if sel[si] == master_fd { master_ready = true }
+            si = si + 1
+        }
+        let mut moved = false
+        if master_ready {
+            let chunk = net_read_bytes(master_fd, 16384)
+            if type_of(chunk) == "array" && len(chunk) > 0 {
+                let frame = _sd_build_channel_data(remote_id, chunk)
+                if !_sd_send_enc(cfd, s2c_seq, frame, enc_key) { child_dead = true ; break }
+                s2c_seq = s2c_seq + 1
+                bytes_in = bytes_in + len(chunk)
+                moved = true
+            } else if type_of(chunk) == "array" && len(chunk) == 0 {
+                child_dead = true
+            }
+        }
+        if cfd_ready {
+            let rec = _sd_recv_enc(cfd, c2s_seq, dec_key)
+            c2s_seq = c2s_seq + 1
+            let pl = rec["payload"]
+            let t = pl[0]
+            if t == SSH_MSG_CHANNEL_DATA {
+                let s = ssh_get_string(pl, 5)
+                if s["off"] > 0 {
+                    let wn = net_write_bytes(master_fd, s["bytes"])
+                    if type_of(wn) == "int" { bytes_out = bytes_out + len(s["bytes"]) }
+                }
+                moved = true
+            }
+            // CHANNEL_EOF on its own means client won't write more
+            // stdin to us — does NOT mean the remote command is done.
+            // Only CHANNEL_CLOSE (or child exit) terminates the pump.
+            if t == SSH_MSG_CHANNEL_CLOSE { child_dead = true }
+        }
+        let reap = proc_wait(pid, proc_wait_flag_const("WNOHANG"))
+        if type_of(reap) == "map" && has_key(reap, "exited") {
+            if reap["exited"] { child_dead = true }
+        }
+        iter = iter + 1
+    }
+
+    // Reap child (blocking now to get final status)
+    let final_reap = proc_wait(pid, 0)
+    let exit_status = if type_of(final_reap) == "map" && has_key(final_reap, "exit_code") {
+        final_reap["exit_code"]
+    } else { 0 }
+
+    // Drain anything still in master_fd
+    let mut drain_iter = 0
+    while drain_iter < 16 {
+        let chunk = net_read_bytes(master_fd, 16384)
+        if type_of(chunk) != "array" || len(chunk) < 1 { break }
+        let frame = _sd_build_channel_data(remote_id, chunk)
+        _sd_send_enc(cfd, s2c_seq, frame, enc_key)
+        s2c_seq = s2c_seq + 1
+        bytes_in = bytes_in + len(chunk)
+        drain_iter = drain_iter + 1
+    }
+    net_close(master_fd)
+
+    // 19. Send exit-status + CHANNEL_EOF + CHANNEL_CLOSE
+    _sd_send_enc(cfd, s2c_seq, _sd_build_exit_status(remote_id, exit_status), enc_key)
+    s2c_seq = s2c_seq + 1
+    _sd_send_enc(cfd, s2c_seq, _sd_build_channel_eof(remote_id), enc_key)
+    s2c_seq = s2c_seq + 1
+    _sd_send_enc(cfd, s2c_seq, _sd_build_channel_close(remote_id), enc_key)
+    s2c_seq = s2c_seq + 1
+
+    net_close(cfd)
+    return #{ "client_user": client_user, "command": exec_cmd,
+              "exit_status": exit_status, "bytes_in": bytes_in, "bytes_out": bytes_out }
+}
