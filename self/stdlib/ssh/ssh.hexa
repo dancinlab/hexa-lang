@@ -410,14 +410,20 @@ pub fn ssh_dial(host: string, port: int, username: string,
         return #{ "error": "unexpected userauth resp: " + str(mt) }
     }
 
+    // Expose host key so callers can verify against known_hosts.
+    let host_pk_parsed = ssh_kex_parse_ed25519_hostkey(k_s)
+    let host_pk = if has_key(host_pk_parsed, "error") { [] } else { host_pk_parsed["pub"] }
+
     return #{
-        "fd":         fd,
-        "c2s_key":    enc_c2s,
-        "s2c_key":    enc_s2c,
-        "c2s_seq":    c2s_seq,
-        "s2c_seq":    s2c_seq,
-        "session_id": session_id,
-        "server_banner": server_banner
+        "fd":            fd,
+        "c2s_key":       enc_c2s,
+        "s2c_key":       enc_s2c,
+        "c2s_seq":       c2s_seq,
+        "s2c_seq":       s2c_seq,
+        "session_id":    session_id,
+        "server_banner": server_banner,
+        "host_pk":       host_pk,
+        "host_pk_blob":  k_s
     }
 }
 

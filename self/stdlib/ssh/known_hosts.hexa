@@ -1,0 +1,234 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/ssh/known_hosts.hexa -- ~/.ssh/known_hosts parser + TOFU
+//
+//  MVP scope: plain hostname matches only (no host patterns with `*`,
+//  no |1| hashed entries, no @cert-authority markers). ssh-ed25519
+//  keys only.
+//
+//  File format (man sshd 8 / SSH_KNOWN_HOSTS FILE FORMAT):
+//    host_pattern  key_type  base64_key  [comment]
+//  Example:
+//    ubu-1,192.168.1.50 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA... user@host
+//
+//  Surface:
+//    ssh_known_hosts_lookup(path, host) ->
+//      { status: "verified" | "missing" | "mismatch",
+//        stored_pk: [32] | none }
+//    ssh_known_hosts_append(path, host, pk) -> bool
+//    ssh_known_hosts_verify_or_tofu(path, host, observed_pk,
+//                                    strict) -> bool
+
+use "self/stdlib/ssh/keyfile"  // for ssh_base64_decode_bytes
+
+fn _split_csv(s: string) -> [string] {
+    let mut out: [string] = [""]
+    let mut idx = 0
+    let mut i = 0
+    while i < len(s) {
+        let c = char_code(s, i)
+        if c == 44 { out.push("") ; idx = idx + 1 }
+        else { out[idx] = out[idx] + chr(c) }
+        i = i + 1
+    }
+    return out
+}
+
+fn _eq_bytes(a: [int], b: [int]) -> bool {
+    if len(a) != len(b) { return false }
+    let mut i = 0
+    while i < len(a) {
+        if a[i] != b[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _hosts_match(pattern: string, host: string) -> bool {
+    // Simple equality (case-insensitive) only. No glob. Strip brackets
+    // around "[host]:port" form.
+    let mut p = pattern
+    if len(p) > 0 {
+        if char_code(p, 0) == 91 {     // '['
+            // strip [host]:port -> host
+            let mut i = 1
+            let mut h = ""
+            while i < len(p) {
+                let c = char_code(p, i)
+                if c == 93 { break }      // ']'
+                h = h + chr(c)
+                i = i + 1
+            }
+            p = h
+        }
+    }
+    if p == host { return true }
+    // case-insensitive ASCII compare
+    if len(p) != len(host) { return false }
+    let mut i = 0
+    while i < len(p) {
+        let mut a = char_code(p, i)
+        let mut b = char_code(host, i)
+        if a > 64 && a < 91 { a = a + 32 }
+        if b > 64 && b < 91 { b = b + 32 }
+        if a != b { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _parse_line(line: string) -> any {
+    // Returns { hosts: [string], key_type: string, key_b64: string }
+    //   or  { skip: true }  for comments/blank/hashed entries.
+    let trimmed = line.trim()
+    if len(trimmed) == 0 { return #{ "skip": true } }
+    if char_code(trimmed, 0) == 35 { return #{ "skip": true } }      // '#'
+    if char_code(trimmed, 0) == 124 { return #{ "skip": true } }     // '|' — hashed, skip
+    if char_code(trimmed, 0) == 64 { return #{ "skip": true } }      // '@' — markers, skip
+    // Split on whitespace into 3+ fields
+    let mut fields: [string] = [""]
+    let mut idx = 0
+    let mut i = 0
+    while i < len(trimmed) {
+        let c = char_code(trimmed, i)
+        if c == 32 || c == 9 {
+            if len(fields[idx]) > 0 { fields.push("") ; idx = idx + 1 }
+        } else {
+            fields[idx] = fields[idx] + chr(c)
+        }
+        i = i + 1
+    }
+    if len(fields) < 3 { return #{ "skip": true } }
+    return #{
+        "hosts":    _split_csv(fields[0]),
+        "key_type": fields[1],
+        "key_b64":  fields[2]
+    }
+}
+
+// Extract the raw 32-byte ed25519 pub from an SSH-format key blob
+// base64 (ssh-string "ssh-ed25519" || ssh-string 32B).
+fn _decode_ed25519_b64(b64: string) -> [int] {
+    let blob = ssh_base64_decode_bytes(b64)
+    if len(blob) < 4 + 11 + 4 + 32 { return [] }
+    // Verify "ssh-ed25519" header (length-11 string)
+    let n0 = blob[0] * 16777216 + blob[1] * 65536 + blob[2] * 256 + blob[3]
+    if n0 != 11 { return [] }
+    let label = "ssh-ed25519"
+    let mut i = 0
+    while i < 11 {
+        if blob[4 + i] != char_code(label, i) { return [] }
+        i = i + 1
+    }
+    // Length of pub (must be 32)
+    let n1 = blob[15] * 16777216 + blob[16] * 65536 + blob[17] * 256 + blob[18]
+    if n1 != 32 { return [] }
+    let mut out: [int] = []
+    let mut j = 0
+    while j < 32 { out.push(blob[19 + j]) ; j = j + 1 }
+    return out
+}
+
+pub fn ssh_known_hosts_lookup(path: string, host: string) -> any {
+    let text = read_file(path)
+    if type_of(text) != "string" { return #{ "status": "missing", "stored_pk": [] } }
+    // Iterate lines
+    let mut line = ""
+    let mut i = 0
+    let n = len(text)
+    while i < n + 1 {
+        let c = if i < n { char_code(text, i) } else { 10 }
+        if c == 10 {
+            let entry = _parse_line(line)
+            line = ""
+            if !has_key(entry, "skip") {
+                if entry["key_type"] == "ssh-ed25519" {
+                    let hosts = entry["hosts"]
+                    let mut hi = 0
+                    while hi < len(hosts) {
+                        if _hosts_match(hosts[hi], host) {
+                            let pk = _decode_ed25519_b64(entry["key_b64"])
+                            if len(pk) == 32 {
+                                return #{ "status": "verified", "stored_pk": pk }
+                            }
+                        }
+                        hi = hi + 1
+                    }
+                }
+            }
+        } else {
+            line = line + chr(c)
+        }
+        i = i + 1
+    }
+    return #{ "status": "missing", "stored_pk": [] }
+}
+
+// Append a new ssh-ed25519 line for host.
+pub fn ssh_known_hosts_append(path: string, host: string, pk: [int]) -> bool {
+    if len(pk) != 32 { return false }
+    // Build ssh wire pub blob: u32(11) || "ssh-ed25519" || u32(32) || pk
+    let mut blob: [int] = []
+    blob.push(0) ; blob.push(0) ; blob.push(0) ; blob.push(11)
+    let label = "ssh-ed25519"
+    let mut i = 0
+    while i < 11 { blob.push(char_code(label, i)) ; i = i + 1 }
+    blob.push(0) ; blob.push(0) ; blob.push(0) ; blob.push(32)
+    let mut j = 0
+    while j < 32 { blob.push(pk[j]) ; j = j + 1 }
+    // base64 encode (inline — avoids the runtime base64_encode NUL truncation)
+    let mut b64 = ""
+    let abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let bn = len(blob)
+    let mut k = 0
+    while k + 3 < bn + 1 {
+        if k + 3 > bn { break }
+        let t = blob[k] * 65536 + blob[k + 1] * 256 + blob[k + 2]
+        b64 = b64 + chr(char_code(abc, (t / 262144) - ((t / 262144) / 64) * 64))
+        b64 = b64 + chr(char_code(abc, (t / 4096)   - ((t / 4096)   / 64) * 64))
+        b64 = b64 + chr(char_code(abc, (t / 64)     - ((t / 64)     / 64) * 64))
+        b64 = b64 + chr(char_code(abc, t            -  (t           / 64) * 64))
+        k = k + 3
+    }
+    if k < bn {
+        let rem = bn - k
+        let b0 = blob[k]
+        let b1 = if rem > 1 { blob[k + 1] } else { 0 }
+        let t = b0 * 65536 + b1 * 256
+        b64 = b64 + chr(char_code(abc, (t / 262144) - ((t / 262144) / 64) * 64))
+        b64 = b64 + chr(char_code(abc, (t / 4096)   - ((t / 4096)   / 64) * 64))
+        if rem == 2 {
+            b64 = b64 + chr(char_code(abc, (t / 64) - ((t / 64) / 64) * 64))
+        } else {
+            b64 = b64 + "="
+        }
+        b64 = b64 + "="
+    }
+    let line = host + " ssh-ed25519 " + b64 + " hexa-ssh-tofu\n"
+    // Append via shell (simpler than figuring out append-mode file APIs)
+    let tmp = "/tmp/hexa_ssh_tofu_" + str(time_now_ms()) + ".tmp"
+    write_file(tmp, line)
+    let rc = exec_with_status("cat " + tmp + " >> " + path + " && rm -f " + tmp)
+    return rc[1] == 0
+}
+
+pub fn ssh_known_hosts_verify_or_tofu(path: string, host: string,
+                                       observed_pk: [int], strict: bool) -> any {
+    let r = ssh_known_hosts_lookup(path, host)
+    if r["status"] == "verified" {
+        if _eq_bytes(r["stored_pk"], observed_pk) {
+            return #{ "ok": true, "tofu": false }
+        }
+        return #{ "ok": false, "tofu": false,
+                  "error": "host key MISMATCH for " + host + " — possible MITM" }
+    }
+    // missing
+    if strict {
+        return #{ "ok": false, "tofu": false,
+                  "error": "host " + host + " not in known_hosts (strict)" }
+    }
+    let appended = ssh_known_hosts_append(path, host, observed_pk)
+    if !appended {
+        return #{ "ok": false, "tofu": true, "error": "TOFU append failed" }
+    }
+    return #{ "ok": true, "tofu": true }
+}
