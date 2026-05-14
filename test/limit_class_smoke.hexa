@@ -1,0 +1,103 @@
+// absorbed from ~/core/hexa-bio/LIMIT_BREAKTHROUGH.md (Apache-2.0, hexa-bio v1.1.0)
+//
+// test/limit_class_smoke.hexa — smoke test for compiler/lattice_policy/limit_class.hexa.
+//
+// Coverage:
+//   - 4 ctor surfaces (HARD_WALL / SOFT_WALL / BREAKABLE_WITH_TECH / UNCLEAR)
+//     each return a struct whose .kind matches the canonical uppercase tag.
+//   - parse_limit_class() round-trips each canonical tag back to its ctor.
+//   - parse_limit_class() on unrecognized input -> UNCLEAR sentinel.
+//   - limit_class_to_string() round-trips through ctor + parse.
+//
+// Run:
+//   hexa run test/limit_class_smoke.hexa
+//
+// Sentinel: __LIMIT_CLASS_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/lattice_policy/limit_class.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── T1: 4 ctor surfaces ────────────────────────────────────────────────
+
+let hw = limit_class_hard_wall()
+let sw = limit_class_soft_wall()
+let bw = limit_class_breakable_with_tech()
+let uc = limit_class_unclear()
+
+check("hard_wall.kind == HARD_WALL", hw.kind == "HARD_WALL")
+check("soft_wall.kind == SOFT_WALL", sw.kind == "SOFT_WALL")
+check("breakable.kind == BREAKABLE_WITH_TECH", bw.kind == "BREAKABLE_WITH_TECH")
+check("unclear.kind == UNCLEAR", uc.kind == "UNCLEAR")
+
+check("hard_wall.rationale non-empty", len(hw.rationale) > 0)
+check("soft_wall.rationale non-empty", len(sw.rationale) > 0)
+check("breakable.rationale non-empty", len(bw.rationale) > 0)
+check("unclear.rationale non-empty",   len(uc.rationale) > 0)
+
+// ── T2: parse_limit_class round-trip ───────────────────────────────────
+
+check("parse(HARD_WALL).kind == HARD_WALL",
+      parse_limit_class("HARD_WALL").kind == "HARD_WALL")
+check("parse(SOFT_WALL).kind == SOFT_WALL",
+      parse_limit_class("SOFT_WALL").kind == "SOFT_WALL")
+check("parse(BREAKABLE_WITH_TECH).kind == BREAKABLE_WITH_TECH",
+      parse_limit_class("BREAKABLE_WITH_TECH").kind == "BREAKABLE_WITH_TECH")
+check("parse(UNCLEAR).kind == UNCLEAR",
+      parse_limit_class("UNCLEAR").kind == "UNCLEAR")
+
+// ── T3: parse_limit_class unknown input -> UNCLEAR sentinel ────────────
+
+let bogus = parse_limit_class("BOGUS_WALL")
+check("parse(BOGUS_WALL).kind == UNCLEAR (sentinel)", bogus.kind == "UNCLEAR")
+check("parse(BOGUS_WALL).rationale identifies unrecognized input",
+      bogus.rationale == "unrecognized class string")
+
+let empty = parse_limit_class("")
+check("parse(empty string).kind == UNCLEAR", empty.kind == "UNCLEAR")
+
+// ── T4: limit_class_to_string round-trip ───────────────────────────────
+
+check("to_string(hard_wall) == HARD_WALL",
+      limit_class_to_string(hw) == "HARD_WALL")
+check("to_string(soft_wall) == SOFT_WALL",
+      limit_class_to_string(sw) == "SOFT_WALL")
+check("to_string(breakable) == BREAKABLE_WITH_TECH",
+      limit_class_to_string(bw) == "BREAKABLE_WITH_TECH")
+check("to_string(unclear) == UNCLEAR",
+      limit_class_to_string(uc) == "UNCLEAR")
+
+// Full triangle: ctor -> to_string -> parse -> kind matches original.
+let tags = ["HARD_WALL", "SOFT_WALL", "BREAKABLE_WITH_TECH", "UNCLEAR"]
+let mut i = 0
+let mut all_triangle_ok = true
+while i < len(tags) {
+    let parsed = parse_limit_class(tags[i])
+    let restr  = limit_class_to_string(parsed)
+    if restr != tags[i] { all_triangle_ok = false }
+    i = i + 1
+}
+check("ctor/parse/to_string triangle holds for all 4 tags", all_triangle_ok)
+
+// ── Summary ────────────────────────────────────────────────────────────
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  limit_class smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__LIMIT_CLASS_SMOKE__ FAIL")
+} else {
+    println("__LIMIT_CLASS_SMOKE__ PASS")
+}
