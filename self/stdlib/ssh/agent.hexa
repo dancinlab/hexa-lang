@@ -1,0 +1,138 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/ssh/agent.hexa -- ssh-agent client (draft-miller-ssh-agent)
+//
+//  Talks to an ssh-agent over $SSH_AUTH_SOCK (a Unix domain socket).
+//  Frame format:  [u32 length][u8 type][payload].
+//
+//  Messages we use:
+//    11 SSH_AGENTC_REQUEST_IDENTITIES  →  12 SSH_AGENT_IDENTITIES_ANSWER
+//    13 SSH_AGENTC_SIGN_REQUEST         →  14 SSH_AGENT_SIGN_RESPONSE
+//
+//  Surface:
+//    ssh_agent_connect(socket_path) -> fd | { error }
+//    ssh_agent_list(fd) -> [{ pub_blob, comment }] | { error }
+//    ssh_agent_sign(fd, pub_blob, data, flags) -> sig_blob | { error }
+//    ssh_agent_close(fd)
+//    ssh_agent_extract_ed25519_pk(pub_blob) -> [32] | { error }
+
+use "self/stdlib/ssh/wire"
+
+let SSH_AGENT_FAILURE                  = 5
+let SSH_AGENT_SUCCESS                  = 6
+let SSH_AGENTC_REQUEST_IDENTITIES      = 11
+let SSH_AGENT_IDENTITIES_ANSWER        = 12
+let SSH_AGENTC_SIGN_REQUEST            = 13
+let SSH_AGENT_SIGN_RESPONSE            = 14
+
+fn _agent_write_frame(fd: int, msg_type: int, payload: [int]) -> bool {
+    let mut buf: [int] = []
+    let total = 1 + len(payload)
+    buf = ssh_put_u32(buf, total)
+    buf.push(msg_type)
+    let mut i = 0
+    while i < len(payload) { buf.push(payload[i]) ; i = i + 1 }
+    let n = net_write_bytes(fd, buf)
+    if type_of(n) != "int" { return false }
+    return n == len(buf)
+}
+
+fn _agent_read_exact(fd: int, n: int) -> [int] {
+    let mut out: [int] = []
+    let mut need = n
+    while need > 0 {
+        let chunk = net_read_bytes(fd, need)
+        if type_of(chunk) != "array" { return [] }
+        let got = len(chunk)
+        if got < 1 { return [] }
+        let mut i = 0
+        while i < got { out.push(chunk[i]) ; i = i + 1 }
+        need = need - got
+    }
+    return out
+}
+
+fn _agent_read_frame(fd: int) -> any {
+    let hdr = _agent_read_exact(fd, 4)
+    if len(hdr) != 4 { return #{ "error": "agent short hdr" } }
+    let total = hdr[0] * 16777216 + hdr[1] * 65536 + hdr[2] * 256 + hdr[3]
+    if total < 1 || total > 1048576 { return #{ "error": "agent bad length: " + str(total) } }
+    let body = _agent_read_exact(fd, total)
+    if len(body) != total { return #{ "error": "agent short body" } }
+    let mt = body[0]
+    let mut payload: [int] = []
+    let mut i = 1
+    while i < total { payload.push(body[i]) ; i = i + 1 }
+    return #{ "type": mt, "payload": payload }
+}
+
+pub fn ssh_agent_connect(socket_path: string) -> any {
+    if len(socket_path) == 0 { return #{ "error": "empty socket path" } }
+    let fd = net_connect("unix:" + socket_path)
+    if type_of(fd) != "int" || fd < 0 {
+        return #{ "error": "agent unix-connect failed: " + str(fd) }
+    }
+    return fd
+}
+
+pub fn ssh_agent_close(fd: any) {
+    if type_of(fd) == "int" { net_close(fd) }
+}
+
+pub fn ssh_agent_list(fd: int) -> any {
+    if !_agent_write_frame(fd, SSH_AGENTC_REQUEST_IDENTITIES, []) {
+        return #{ "error": "agent write REQUEST_IDENTITIES" }
+    }
+    let r = _agent_read_frame(fd)
+    if has_key(r, "error") { return r }
+    if r["type"] != SSH_AGENT_IDENTITIES_ANSWER {
+        return #{ "error": "agent unexpected reply: " + str(r["type"]) }
+    }
+    let p = r["payload"]
+    if len(p) < 4 { return #{ "error": "agent ANSWER too short" } }
+    let nkeys = p[0] * 16777216 + p[1] * 65536 + p[2] * 256 + p[3]
+    let mut off = 4
+    let mut out: [any] = []
+    let mut i = 0
+    while i < nkeys {
+        let pb = ssh_get_string(p, off)
+        if pb["off"] < 0 { return #{ "error": "agent bad pub_blob at idx " + str(i) } }
+        off = pb["off"]
+        let co = ssh_get_string(p, off)
+        if co["off"] < 0 { return #{ "error": "agent bad comment at idx " + str(i) } }
+        off = co["off"]
+        out.push(#{ "pub_blob": pb["bytes"], "comment": ssh_bytes_to_string(co["bytes"]) })
+        i = i + 1
+    }
+    return out
+}
+
+pub fn ssh_agent_sign(fd: int, pub_blob: [int], data: [int], flags: int) -> any {
+    let mut payload: [int] = []
+    payload = ssh_put_string_bytes(payload, pub_blob)
+    payload = ssh_put_string_bytes(payload, data)
+    payload = ssh_put_u32(payload, flags)
+    if !_agent_write_frame(fd, SSH_AGENTC_SIGN_REQUEST, payload) {
+        return #{ "error": "agent write SIGN_REQUEST" }
+    }
+    let r = _agent_read_frame(fd)
+    if has_key(r, "error") { return r }
+    if r["type"] != SSH_AGENT_SIGN_RESPONSE {
+        return #{ "error": "agent sign reply: " + str(r["type"]) }
+    }
+    let sg = ssh_get_string(r["payload"], 0)
+    if sg["off"] < 0 { return #{ "error": "agent bad sig blob" } }
+    return sg["bytes"]
+}
+
+// Helper: pull the 32B raw ed25519 pub from an SSH-wire pub blob.
+pub fn ssh_agent_extract_ed25519_pk(pub_blob: [int]) -> any {
+    let kt = ssh_get_string(pub_blob, 0)
+    if kt["off"] < 0 { return #{ "error": "bad pub_blob (keytype)" } }
+    let name = ssh_bytes_to_string(kt["bytes"])
+    if name != "ssh-ed25519" { return #{ "error": "not ed25519: " + name } }
+    let pk = ssh_get_string(pub_blob, kt["off"])
+    if pk["off"] < 0 || len(pk["bytes"]) != 32 {
+        return #{ "error": "bad pub_blob (pk)" }
+    }
+    return pk["bytes"]
+}

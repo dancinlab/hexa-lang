@@ -22,6 +22,7 @@
 
 use "self/stdlib/ssh/wire"
 use "self/stdlib/ssh/kex"
+use "self/stdlib/ssh/agent"
 
 let _SSH_CLIENT_BANNER = "SSH-2.0-hexa_0.1"
 
@@ -201,13 +202,15 @@ fn _build_ed25519_sig_blob(sig: [int]) -> [int] {
     return p
 }
 
-fn _build_userauth_request(username: string, pk: [int], priv: [int], session_id: [int]) -> [int] {
-    let pk_blob = _build_ed25519_pub_blob(pk)
-    let to_sign = _build_userauth_sig_blob(session_id, username, pk_blob)
-    let sig = ed25519_sign(priv, to_sign)
-    if type_of(sig) != "array" { return [] }
-    let sig_blob = _build_ed25519_sig_blob(sig)
-    // Full message = same as the signed prefix (without leading session_id+SSH_MSG byte) + signature blob.
+// Bytes the signer must sign for publickey auth. Pulled out so an
+// ssh-agent caller can build this, ship it to the agent, and skip
+// having the secret key in process.
+fn _build_userauth_to_sign(username: string, pk_blob: [int], session_id: [int]) -> [int] {
+    return _build_userauth_sig_blob(session_id, username, pk_blob)
+}
+
+// Final USERAUTH_REQUEST packet given a pre-made signature blob.
+fn _build_userauth_request_with_sig_blob(username: string, pk_blob: [int], sig_blob: [int]) -> [int] {
     let mut p: [int] = []
     p = ssh_put_u8(p, SSH_MSG_USERAUTH_REQUEST)
     p = ssh_put_string(p, username)
@@ -218,6 +221,15 @@ fn _build_userauth_request(username: string, pk: [int], priv: [int], session_id:
     p = ssh_put_string_bytes(p, pk_blob)
     p = ssh_put_string_bytes(p, sig_blob)
     return p
+}
+
+fn _build_userauth_request(username: string, pk: [int], priv: [int], session_id: [int]) -> [int] {
+    let pk_blob = _build_ed25519_pub_blob(pk)
+    let to_sign = _build_userauth_to_sign(username, pk_blob, session_id)
+    let sig = ed25519_sign(priv, to_sign)
+    if type_of(sig) != "array" { return [] }
+    let sig_blob = _build_ed25519_sig_blob(sig)
+    return _build_userauth_request_with_sig_blob(username, pk_blob, sig_blob)
 }
 
 // ── Channel message helpers ───────────────────────────────────────
@@ -245,8 +257,23 @@ fn _build_channel_request_exec(remote_id: int, cmd: string) -> [int] {
 }
 
 // ── Top-level dial: TCP + banner + KEX + userauth ────────────────
+// Local-key signing (priv is sodium-layout seed||pub, 64 bytes).
 pub fn ssh_dial(host: string, port: int, username: string,
                 pk: [int], priv: [int]) -> any {
+    return _ssh_dial_core(host, port, username, "local",
+                          #{ "pk": pk, "priv": priv })
+}
+
+// ssh-agent signing — caller already has an agent_fd from
+// ssh_agent_connect() and a pub_blob from ssh_agent_list().
+pub fn ssh_dial_with_agent(host: string, port: int, username: string,
+                            pk_blob: [int], agent_fd: int) -> any {
+    return _ssh_dial_core(host, port, username, "agent",
+                          #{ "pk_blob": pk_blob, "agent_fd": agent_fd })
+}
+
+fn _ssh_dial_core(host: string, port: int, username: string,
+                   signer_kind: string, signer_data: any) -> any {
     // 1. TCP connect — net_connect takes "host:port" single string
     let addr = host + ":" + str(port)
     let fd = net_connect(addr)
@@ -383,8 +410,24 @@ pub fn ssh_dial(host: string, port: int, username: string,
         return #{ "error": "expected SERVICE_ACCEPT got " + str(r_sa["payload"][0]) }
     }
 
-    // 12. USERAUTH_REQUEST publickey ed25519
-    let ua = _build_userauth_request(username, pk, priv, session_id)
+    // 12. USERAUTH_REQUEST publickey ed25519 — sign via local key or agent.
+    let mut ua: [int] = []
+    if signer_kind == "local" {
+        let pk_local: [int] = signer_data["pk"]
+        let priv_local: [int] = signer_data["priv"]
+        ua = _build_userauth_request(username, pk_local, priv_local, session_id)
+    } else {
+        // agent: extract raw 32B pk from blob; ask agent to sign
+        let pk_blob: [int] = signer_data["pk_blob"]
+        let agent_fd: int = signer_data["agent_fd"]
+        let to_sign = _build_userauth_to_sign(username, pk_blob, session_id)
+        let sig_blob = ssh_agent_sign(agent_fd, pk_blob, to_sign, 0)
+        if type_of(sig_blob) != "array" {
+            net_close(fd)
+            return #{ "error": "agent sign failed: " + str(sig_blob) }
+        }
+        ua = _build_userauth_request_with_sig_blob(username, pk_blob, sig_blob)
+    }
     if len(ua) < 1 {
         net_close(fd)
         return #{ "error": "build userauth_request failed" }
