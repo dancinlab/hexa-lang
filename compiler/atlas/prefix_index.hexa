@@ -1,0 +1,198 @@
+// HEXA Native Compiler — Wave 2.4: prefix bucket index for atlas_prefix
+//
+// @version 0.1.0
+// @capabilities [fs_read]
+//
+// Bucket-by-first-2-char (or first-1 if id is 1 char) lookup over the
+// merged rodata+overlay view. Invalidates on overlay file size change
+// (zero-coupling auto-detect — no explicit invalidate call required from
+// the write path).
+//
+// Ported from FU2 prefix bench (commit fd368a54). The linear-scan p95
+// measured 440x over the 50 ms threshold on the 7398-node merged view;
+// this bucket cache collapses dense prefixes from "scan everything" down
+// to "scan one ASCII-keyed bucket". CC0-1.0.
+//
+// Cache invalidation strategy: cheap. We sample the overlay file's
+// byte length (file_size of ~/.hx/data/atlas.overlay.n6). Overlay writes
+// are append-only (overlay_append / overlay_append_lines), so size
+// changes monotonically with every promotion. Rodata is frozen at
+// compiler-build time and does not move at runtime — so once the bucket
+// map is built for a given overlay size + rodata snapshot, it stays
+// valid until the overlay grows. No cryptographic hash required.
+//
+// Public API:
+//   - prefix_lookup(prefix) -> [AtlasNode]
+//   - build_prefix_index()  -> PrefixIndex      (eager; normally implicit)
+//   - invalidate_prefix_index() -> void         (external hook; not required
+//                                                given fingerprint auto-detect)
+
+use "compiler/atlas/parser"
+use "compiler/atlas/merger"
+use "compiler/atlas/static_index"
+use "compiler/atlas/overlay"
+
+// PrefixIndex — bucket map plus invalidation metadata. The merged-view
+// snapshot the buckets were computed against is stored alongside so that
+// prefix_lookup can resolve indices back to the live merged list (we
+// keep a reference to the merged array rather than re-listing).
+pub struct PrefixIndex {
+    buckets: any,                  // map<string, [i64]>: 2-char (or 1-char) bucket key -> indices
+    merged: array,                 // snapshot of atlas_list_merged() at build time
+    overlay_size: i64,             // file_size(overlay_path()) at build time; -1 = no overlay
+    built_for_count: i64,          // len(merged) at build time
+    built: bool                    // false until first build
+}
+
+// Module-private cache. Built on first prefix_lookup call and rebuilt
+// when invalidate_prefix_index() is called or the overlay file size
+// changes. Reset across process boundaries (overlay is the source of
+// truth between runs, same as overlay_load_cached).
+let mut _g_prefix_index: PrefixIndex = PrefixIndex {
+    buckets: {},
+    merged: [],
+    overlay_size: -1,
+    built_for_count: 0,
+    built: false
+}
+
+// --- helpers ---------------------------------------------------------------
+
+// _bucket_key — derive the bucket key for a node id. Two-char prefix when
+// the id has at least 2 chars; one-char prefix for the rare 1-char id case
+// (e.g. the "n" foundation axiom). Empty ids land in the "" bucket but
+// callers should never query "" via this path (atlas_prefix("") returns
+// the full list anyway).
+fn _bucket_key(id: string) -> string {
+    let n = len(id)
+    if n == 0 { return "" }
+    if n == 1 { return id }
+    return id.substring(0, 2)
+}
+
+// _overlay_fingerprint — current overlay file size in bytes, or -1 if the
+// file does not yet exist. Cheap (one stat call). Monotonic with respect
+// to overlay_append / overlay_append_lines.
+fn _overlay_fingerprint() -> i64 {
+    let path = overlay_path()
+    if !file_exists(path) { return -1 }
+    return file_size(path)
+}
+
+// --- public API ------------------------------------------------------------
+
+// build_prefix_index — walk the merged view once and bucket every node id
+// by its 2-char (or 1-char) prefix. Returns the populated PrefixIndex.
+// Side effect: updates the module-private _g_prefix_index cache so the
+// next prefix_lookup call hits the freshly built buckets.
+pub fn build_prefix_index() -> PrefixIndex {
+    let merged = atlas_list_merged()
+    let buckets = {}
+    let n = len(merged)
+    let mut i = 0
+    while i < n {
+        let node = merged[i]
+        let key = _bucket_key(node.id)
+        if has_key(buckets, key) {
+            let arr = buckets[key]
+            arr.push(i)
+            buckets[key] = arr
+        } else {
+            let fresh = [i]
+            buckets[key] = fresh
+        }
+        i = i + 1
+    }
+    let idx = PrefixIndex {
+        buckets: buckets,
+        merged: merged,
+        overlay_size: _overlay_fingerprint(),
+        built_for_count: n,
+        built: true
+    }
+    _g_prefix_index = idx
+    return idx
+}
+
+// prefix_lookup — return every node whose id starts with `prefix`, via
+// the bucket cache. Falls back to the original linear scan when the
+// prefix is shorter than the bucket key (1-char prefix vs 2-char buckets)
+// or the prefix is empty. Auto-rebuilds the bucket cache when the
+// overlay file size has changed since the last build.
+//
+// Public surface mirror of atlas_prefix's shape — same return type, same
+// semantics. static_index.hexa::atlas_prefix delegates here.
+pub fn prefix_lookup(prefix: string) -> array {
+    let pn = len(prefix)
+    if pn == 0 {
+        // Same semantics as atlas_prefix("") — return the full merged view.
+        return atlas_list_merged()
+    }
+
+    // Refresh / build the cache if needed.
+    let cur_size = _overlay_fingerprint()
+    if !_g_prefix_index.built || _g_prefix_index.overlay_size != cur_size {
+        build_prefix_index()
+    }
+
+    // Prefixes shorter than the bucket key (i.e. 1 char) span many
+    // buckets; falling back to a single linear sweep is simpler than
+    // unioning hundreds of bucket lists. The original linear path is
+    // O(n) and still adequate for the rare 1-char query.
+    if pn < 2 {
+        return _linear_scan(_g_prefix_index.merged, prefix)
+    }
+
+    let key = prefix.substring(0, 2)
+    if !has_key(_g_prefix_index.buckets, key) { return [] }
+    let candidates = _g_prefix_index.buckets[key]
+    let merged = _g_prefix_index.merged
+    let out = []
+    let cn = len(candidates)
+    let mut i = 0
+    while i < cn {
+        let idx = candidates[i]
+        let node = merged[idx]
+        if len(node.id) >= pn && node.id.substring(0, pn) == prefix {
+            out.push(node)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// invalidate_prefix_index — external hook callers can use to force a
+// rebuild on the next prefix_lookup. Not strictly required given the
+// auto-detect fingerprint, but provided for callers that mutate the
+// overlay through a non-overlay.hexa path (e.g. direct file rewrite in
+// tests).
+pub fn invalidate_prefix_index() -> void {
+    _g_prefix_index = PrefixIndex {
+        buckets: {},
+        merged: [],
+        overlay_size: -1,
+        built_for_count: 0,
+        built: false
+    }
+}
+
+// --- internal --------------------------------------------------------------
+
+// _linear_scan — fallback path identical in shape to the original
+// atlas_prefix body. Used for short (< 2 char) prefixes that don't map
+// cleanly onto the 2-char bucket key.
+fn _linear_scan(merged: array, prefix: string) -> array {
+    let pn = len(prefix)
+    if pn == 0 { return merged }
+    let out = []
+    let n = len(merged)
+    let mut i = 0
+    while i < n {
+        let node = merged[i]
+        if len(node.id) >= pn && node.id.substring(0, pn) == prefix {
+            out.push(node)
+        }
+        i = i + 1
+    }
+    return out
+}

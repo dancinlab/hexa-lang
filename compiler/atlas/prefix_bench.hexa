@@ -97,7 +97,13 @@ fn main() {
         "commit_grouping"
     ]
 
-    let iter = 100
+    // Iteration count: reduced from 100 to 10 per prefix because the
+    // initial 100-iter attempt died silently after warmup (interp memory
+    // pressure suspected — each atlas_prefix() rebuilds the 7398-node
+    // merged view, so 100*10 = 1000 builds * ~7398 nodes ~= 7.4M transient
+    // AtlasNode allocations).  10*10 = 100 calls still gives a stable
+    // p50/p95 read at ms granularity.
+    let iter = 10
 
     // Print table header.
     println(pad_right("prefix", 18)

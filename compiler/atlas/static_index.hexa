@@ -34,6 +34,7 @@ use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/embedded.gen"
 use "compiler/atlas/overlay"
+use "compiler/atlas/prefix_index"
 
 // --- drift-detection placeholders (Phase A4+) ------------------------------
 //
@@ -211,12 +212,27 @@ pub fn atlas_list_merged() -> array {
 
 // --- Wave 2.3: prefix lookup -----------------------------------------------
 //
-// atlas_prefix — return every node whose id starts with `prefix`. Linear
-// scan over the merged (rodata + overlay) view. n6 plan §7 Wave 2.3 spec.
-// The implementation is a lightweight derivation of `atlas_query.hexa` —
-// we drop the bloom / predict / cold-mmap stages since hexa-lang's atlas
-// lives in rodata, not on disk.
+// atlas_prefix — return every node whose id starts with `prefix`. n6 plan
+// §7 Wave 2.3 spec.
+//
+// Wave 2.4 (commit fd368a54 prefix bench, FU2 measurement): the original
+// linear-scan body measured p95 at 440x the 50 ms threshold across the
+// 7398-node merged view (per-call cost lower-bounded at ~22 s). The hot
+// path now delegates to `prefix_lookup` (compiler/atlas/prefix_index),
+// which builds a 2-char bucket map over the merged view on first use and
+// auto-invalidates on overlay file-size change. Public signature is
+// unchanged. The linear scan body remains below as the explicit fallback
+// for the < 2-char prefix case and is exposed as `atlas_prefix_linear`
+// for parity testing.
 pub fn atlas_prefix(prefix: string) -> array {
+    return prefix_lookup(prefix)
+}
+
+// atlas_prefix_linear — the pre-Wave-2.4 linear scan. Retained as the
+// fallback for short prefixes (handled inside prefix_lookup) and exposed
+// pub for the prefix_index parity test to confirm the bucket path
+// returns the same set as the canonical sweep.
+pub fn atlas_prefix_linear(prefix: string) -> array {
     let all = atlas_list_merged()
     let out = []
     let pn = len(prefix)
