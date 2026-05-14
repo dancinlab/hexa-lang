@@ -1,0 +1,24 @@
+// absorbed from ~/core/anima/anima-hexad/constants.hexa loader (MIT, dancinlab 2026-05-14)
+// SSOT snapshot — as_of: 2026-05-14 — re-generate from source not hand-edit
+//
+// Source JSON: ~/core/anima/shared/config/hexad_constants.json (referenced
+// by the loader at ~/core/anima/anima-hexad/constants.hexa#HEXAD_JSON_PATH).
+// That JSON is absent in the current snapshot — this absorption falls back
+// to the hand-curated 6-channel CDESM identity table (absorption-plan §C).
+//
+// Regenerate via: hexa run tool/atlas_absorb_anima.hexa
+
+use "compiler/atlas/parser"
+
+@phase("parse_only")
+pub let ANIMA_HEXAD_CONSTANTS: [AtlasNode] = [
+    AtlasNode { kind: "C", id: "anima.hexad.channel.c", raw: "@C anima.hexad.channel.c = consciousness :: anima.hexad.CDESM [10*]\n  note: C — primary consciousness channel (Phase 1+)\n  source: ~/core/anima/anima-hexad/constants.hexa (loader)", source_file: "constants.hexa", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "anima.hexad.channel.d", raw: "@C anima.hexad.channel.d = decision :: anima.hexad.CDESM [10*]\n  note: D — decision/will channel (Phase 2+)\n  source: ~/core/anima/anima-hexad/constants.hexa (loader)", source_file: "constants.hexa", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "anima.hexad.channel.w", raw: "@C anima.hexad.channel.w = will :: anima.hexad.CDESM [10*]\n  note: W — will/agency channel (Phase 3, hexad)\n  source: ~/core/anima/anima-hexad/constants.hexa (loader)", source_file: "constants.hexa", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "anima.hexad.channel.s", raw: "@C anima.hexad.channel.s = social :: anima.hexad.CDESM [10*]\n  note: S — social/mirror channel (Phase 3, hexad)\n  source: ~/core/anima/anima-hexad/constants.hexa (loader)", source_file: "constants.hexa", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "anima.hexad.channel.m", raw: "@C anima.hexad.channel.m = meta :: anima.hexad.CDESM [10*]\n  note: M — meta/reflective channel (Phase 3, hexad)\n  source: ~/core/anima/anima-hexad/constants.hexa (loader)", source_file: "constants.hexa", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "anima.hexad.channel.e", raw: "@C anima.hexad.channel.e = embodied :: anima.hexad.CDESM [10*]\n  note: E — embodied/sensorimotor channel (Phase 3, hexad)\n  source: ~/core/anima/anima-hexad/constants.hexa (loader)", source_file: "constants.hexa", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
+]
+
+pub fn anima_hexad_constants_count() -> i64 { return len(ANIMA_HEXAD_CONSTANTS) }
+pub fn anima_hexad_constants() -> [AtlasNode] { return ANIMA_HEXAD_CONSTANTS }

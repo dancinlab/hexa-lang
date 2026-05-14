@@ -1,0 +1,342 @@
+// tool/atlas_absorb_anima.hexa — Wave 1 of anima-absorption-plan (2026-05-14)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Read-only on ~/core/anima/. Emits:
+//   1. compiler/atlas/anima_psi.gen.hexa     (11 Ψ-constants + 14 runtime laws)
+//   2. compiler/atlas/anima_hexad.gen.hexa   (6-channel CDESM constants)
+//
+// Source SSOTs (MIT, dancinlab):
+//   ~/core/anima/anima/config/consciousness_laws.json
+//   ~/core/anima/anima-hexad/constants.hexa  (loader, doubles as schema)
+//
+// Run:
+//   hexa run tool/atlas_absorb_anima.hexa
+//
+// Reproducibility: re-running this tool should regenerate the two
+// .gen.hexa files byte-identically (modulo the timestamp header line).
+
+// ── string escaping (mirrors compiler/atlas/embed.hexa::_escape_string) ──
+
+fn _escape_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _escape_string(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        chunks.push(_escape_char(c))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+// ── helpers ────────────────────────────────────────────────────────────
+
+fn _emit_str_array(arr) -> string {
+    let parts = []
+    parts.push("[")
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        parts.push("\"")
+        parts.push(_escape_string(to_string(arr[i])))
+        parts.push("\"")
+        if i + 1 < n { parts.push(", ") }
+        i = i + 1
+    }
+    parts.push("]")
+    return parts.join("")
+}
+
+let _ZERO_GRADE = "GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }"
+let _ZERO_EDGES = "EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }"
+
+// Emit a single AtlasNode literal with a pre-computed raw payload.
+// Used for both @C psi-constants and @L runtime laws.
+fn _emit_node(kind: string, id: string, raw: string, source_file: string, source_line) -> string {
+    let parts = []
+    parts.push("    AtlasNode { kind: \"")
+    parts.push(_escape_string(kind))
+    parts.push("\", id: \"")
+    parts.push(_escape_string(id))
+    parts.push("\", raw: \"")
+    parts.push(_escape_string(raw))
+    parts.push("\", source_file: \"")
+    parts.push(_escape_string(source_file))
+    parts.push("\", source_line: ")
+    parts.push(to_string(source_line))
+    parts.push(", grade: ")
+    parts.push(_ZERO_GRADE)
+    parts.push(", edges: ")
+    parts.push(_ZERO_EDGES)
+    parts.push(" }")
+    return parts.join("")
+}
+
+// ── psi-constant absorber (11 entries listed in the absorption plan) ──
+// The full JSON has 17 entries; the 6 phase_* sub-thresholds are
+// intentionally deferred to a follow-up wave (see report deviation).
+
+let _PSI_KEYS = [
+    "alpha",
+    "balance",
+    "steps",
+    "entropy",
+    "gate_train",
+    "gate_infer",
+    "gate_micro",
+    "f_critical",
+    "f_lethal",
+    "bio_noise",
+    "soc_glacial"
+]
+
+fn _psi_raw(name: string, entry) -> string {
+    // Pack the JSON provenance fields into the AtlasNode.raw payload
+    // (per the absorption plan §A — pack derivation/source/used_in into
+    // raw rather than extending the schema).
+    let parts = []
+    parts.push("@C anima.psi.")
+    parts.push(name)
+    parts.push(" = ")
+    parts.push(to_string(entry["value"]))
+    parts.push(" :: anima.consciousness_laws.psi_constants [10*]\n")
+    parts.push("  derivation: ")
+    parts.push(to_string(entry["derivation"]))
+    parts.push("\n")
+    parts.push("  source: ")
+    parts.push(to_string(entry["source"]))
+    if entry["used_in"] != null {
+        parts.push("\n  used_in: ")
+        let arr = entry["used_in"]
+        let n = len(arr)
+        let mut i = 0
+        while i < n {
+            if i > 0 { parts.push(", ") }
+            parts.push(to_string(arr[i]))
+            i = i + 1
+        }
+    }
+    return parts.join("")
+}
+
+fn _emit_psi_constants(psi) -> string {
+    let parts = []
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let ANIMA_PSI_CONSTANTS: [AtlasNode] = [\n")
+    let n = len(_PSI_KEYS)
+    let mut i = 0
+    while i < n {
+        let key = to_string(_PSI_KEYS[i])
+        let entry = psi[key]
+        let raw = _psi_raw(key, entry)
+        parts.push(_emit_node("C", "anima.psi." + key, raw, "consciousness_laws.json", 0))
+        if i + 1 < n { parts.push(",") }
+        parts.push("\n")
+        i = i + 1
+    }
+    parts.push("]\n\n")
+    return parts.join("")
+}
+
+// ── runtime law absorber (14 entries — L1..L14) ────────────────────────
+
+let _LAW_KEYS = ["L1","L2","L3","L4","L5","L6","L7","L8","L9","L10","L11","L12","L13","L14"]
+
+fn _law_raw(key: string, entry) -> string {
+    let parts = []
+    parts.push("@L anima.law.")
+    parts.push(key)
+    parts.push(" = ")
+    parts.push(to_string(entry["name"]))
+    parts.push(" :: anima.consciousness_laws.runtime_gate [10*]\n")
+    parts.push("  dim: ")
+    parts.push(to_string(entry["dim"]))
+    parts.push("\n  op: ")
+    parts.push(to_string(entry["op"]))
+    parts.push("\n  severity: ")
+    parts.push(to_string(entry["severity"]))
+    parts.push("\n  rule: ")
+    parts.push(to_string(entry["rule"]))
+    // Optional fields — only emit if present in JSON.
+    if entry["threshold"] != null {
+        parts.push("\n  threshold: ")
+        parts.push(to_string(entry["threshold"]))
+    }
+    if entry["threshold_low"] != null {
+        parts.push("\n  threshold_low: ")
+        parts.push(to_string(entry["threshold_low"]))
+    }
+    if entry["threshold_high"] != null {
+        parts.push("\n  threshold_high: ")
+        parts.push(to_string(entry["threshold_high"]))
+    }
+    if entry["text_fallback"] != null {
+        parts.push("\n  text_fallback: ")
+        parts.push(to_string(entry["text_fallback"]))
+    }
+    if entry["text_check"] != null {
+        parts.push("\n  text_check: ")
+        parts.push(to_string(entry["text_check"]))
+    }
+    if entry["depends_on_prior"] != null {
+        parts.push("\n  depends_on_prior: ")
+        parts.push(to_string(entry["depends_on_prior"]))
+    }
+    return parts.join("")
+}
+
+fn _emit_psi_laws(laws) -> string {
+    let parts = []
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let ANIMA_PSI_LAWS: [AtlasNode] = [\n")
+    let n = len(_LAW_KEYS)
+    let mut i = 0
+    while i < n {
+        let key = to_string(_LAW_KEYS[i])
+        let entry = laws[key]
+        let raw = _law_raw(key, entry)
+        parts.push(_emit_node("L", "anima.law." + key, raw, "consciousness_laws.json", 0))
+        if i + 1 < n { parts.push(",") }
+        parts.push("\n")
+        i = i + 1
+    }
+    parts.push("]\n\n")
+    return parts.join("")
+}
+
+// ── psi gen file header ────────────────────────────────────────────────
+
+fn _emit_psi_file(psi, laws) -> string {
+    let parts = []
+    parts.push("// absorbed from ~/core/anima/anima/config/consciousness_laws.json (MIT, dancinlab 2026-05-14)\n")
+    parts.push("// SSOT snapshot — as_of: 2026-05-14 — re-generate from source not hand-edit\n")
+    parts.push("//\n")
+    parts.push("// Regenerate via: hexa run tool/atlas_absorb_anima.hexa\n")
+    parts.push("//\n")
+    parts.push("// ANIMA_PSI_CONSTANTS — 11 Ψ-constants @C\n")
+    parts.push("// ANIMA_PSI_LAWS     — 14 runtime gate laws (L1..L14) @L\n")
+    parts.push("\n")
+    parts.push("use \"compiler/atlas/parser\"\n")
+    parts.push("\n")
+    parts.push(_emit_psi_constants(psi))
+    parts.push(_emit_psi_laws(laws))
+    parts.push("// public count accessors — let smoke tests assert without\n")
+    parts.push("// walking the parse_only-decorated arrays.\n")
+    parts.push("pub fn anima_psi_constants_count() -> i64 { return len(ANIMA_PSI_CONSTANTS) }\n")
+    parts.push("pub fn anima_psi_laws_count() -> i64 { return len(ANIMA_PSI_LAWS) }\n")
+    parts.push("\n")
+    parts.push("pub fn anima_psi_constants() -> [AtlasNode] { return ANIMA_PSI_CONSTANTS }\n")
+    parts.push("pub fn anima_psi_laws() -> [AtlasNode] { return ANIMA_PSI_LAWS }\n")
+    return parts.join("")
+}
+
+// ── CDESM hexad absorber (6 channels) ──────────────────────────────────
+//
+// The shared/config/hexad_constants.json SSOT referenced by the anima
+// loader does NOT exist on disk in this snapshot (anima-hexad's
+// constants.hexa points at /Users/ghost/Dev/anima/...  which is gone).
+// Per absorption-plan §C "If parsing JSON in hexa-lang is missing,
+// write the generator to emit a hand-curated rodata table instead,
+// but still document the source JSON path in the header." — we apply
+// the same fallback here: the 6 channel identities are well-known
+// (CDESM = c · d · e · s · m · w), the loader gives us their semantic
+// keys, and the rest is hand-curated from the constants.hexa loader.
+
+// Channel id, channel role, source-comment.
+let _CDESM_C = [
+    ["c", "consciousness",      "C — primary consciousness channel (Phase 1+)"],
+    ["d", "decision",           "D — decision/will channel (Phase 2+)"],
+    ["w", "will",               "W — will/agency channel (Phase 3, hexad)"],
+    ["s", "social",             "S — social/mirror channel (Phase 3, hexad)"],
+    ["m", "meta",               "M — meta/reflective channel (Phase 3, hexad)"],
+    ["e", "embodied",           "E — embodied/sensorimotor channel (Phase 3, hexad)"]
+]
+
+fn _emit_hexad_constants() -> string {
+    let parts = []
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let ANIMA_HEXAD_CONSTANTS: [AtlasNode] = [\n")
+    let n = len(_CDESM_C)
+    let mut i = 0
+    while i < n {
+        let row = _CDESM_C[i]
+        let cid = to_string(row[0])
+        let role = to_string(row[1])
+        let note = to_string(row[2])
+        let raw_parts = []
+        raw_parts.push("@C anima.hexad.channel.")
+        raw_parts.push(cid)
+        raw_parts.push(" = ")
+        raw_parts.push(role)
+        raw_parts.push(" :: anima.hexad.CDESM [10*]\n")
+        raw_parts.push("  note: ")
+        raw_parts.push(note)
+        raw_parts.push("\n  source: ~/core/anima/anima-hexad/constants.hexa (loader)")
+        let raw = raw_parts.join("")
+        parts.push(_emit_node("C", "anima.hexad.channel." + cid, raw, "constants.hexa", 0))
+        if i + 1 < n { parts.push(",") }
+        parts.push("\n")
+        i = i + 1
+    }
+    parts.push("]\n\n")
+    return parts.join("")
+}
+
+fn _emit_hexad_file() -> string {
+    let parts = []
+    parts.push("// absorbed from ~/core/anima/anima-hexad/constants.hexa loader (MIT, dancinlab 2026-05-14)\n")
+    parts.push("// SSOT snapshot — as_of: 2026-05-14 — re-generate from source not hand-edit\n")
+    parts.push("//\n")
+    parts.push("// Source JSON: ~/core/anima/shared/config/hexad_constants.json (referenced\n")
+    parts.push("// by the loader at ~/core/anima/anima-hexad/constants.hexa#HEXAD_JSON_PATH).\n")
+    parts.push("// That JSON is absent in the current snapshot — this absorption falls back\n")
+    parts.push("// to the hand-curated 6-channel CDESM identity table (absorption-plan §C).\n")
+    parts.push("//\n")
+    parts.push("// Regenerate via: hexa run tool/atlas_absorb_anima.hexa\n")
+    parts.push("\n")
+    parts.push("use \"compiler/atlas/parser\"\n")
+    parts.push("\n")
+    parts.push(_emit_hexad_constants())
+    parts.push("pub fn anima_hexad_constants_count() -> i64 { return len(ANIMA_HEXAD_CONSTANTS) }\n")
+    parts.push("pub fn anima_hexad_constants() -> [AtlasNode] { return ANIMA_HEXAD_CONSTANTS }\n")
+    return parts.join("")
+}
+
+// ── driver ─────────────────────────────────────────────────────────────
+
+fn main() {
+    let home = env("HOME")
+    let src_psi = home + "/core/anima/anima/config/consciousness_laws.json"
+
+    println("anima absorption — wave 1")
+    println("  source: " + src_psi)
+
+    let raw = read_file(src_psi)
+    let root = json_parse(raw)
+    let psi = root["psi_constants"]
+    let laws = root["laws"]
+
+    let psi_out = "compiler/atlas/anima_psi.gen.hexa"
+    let hexad_out = "compiler/atlas/anima_hexad.gen.hexa"
+
+    let psi_body = _emit_psi_file(psi, laws)
+    write_file(psi_out, psi_body)
+    println("  wrote: " + psi_out + " (" + to_string(len(psi_body)) + " bytes)")
+
+    let hexad_body = _emit_hexad_file()
+    write_file(hexad_out, hexad_body)
+    println("  wrote: " + hexad_out + " (" + to_string(len(hexad_body)) + " bytes)")
+
+    println("done.")
+}
