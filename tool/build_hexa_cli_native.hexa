@@ -1,0 +1,192 @@
+// ═══════════════════════════════════════════════════════════════
+//  build_hexa_cli_native.hexa — build the hexa CLI (self/main.hexa)
+//  for the current host, using the host's own clang / cc. No musl
+//  cross-compiler required; output is a dynamic ELF / Mach-O suitable
+//  for installing as `~/.hx/bin/hexa.real` (or anywhere you like).
+//
+//  Pairs with build_hexa_cli_linux.hexa (which cross-builds *from*
+//  macOS *to* Linux/musl). This native variant covers the workflow:
+//
+//     git clone https://github.com/need-singularity/hexa-lang.git
+//     cd hexa-lang
+//     HEXA_LANG=$(pwd) hexa cc                     # build hexa_v2 (transpiler)
+//     hexa tool/build_hexa_cli_native.hexa         # build hexa.real (CLI driver)
+//
+//  After that you can either symlink the output into PATH, or set
+//  HEXA_INTERP to point at it. Reported missing during 2026-05-14
+//  wilson Step G on a fresh ubu-2 clone — the only ways to rebuild
+//  hexa.real natively were ad-hoc shell incantations.
+//
+//  Usage:
+//    hexa tool/build_hexa_cli_native.hexa [-o path]
+//
+//  Env:
+//    NATIVE_CC     compiler override (default: clang on macOS+Linux,
+//                  falls back to cc if clang is absent)
+//    EXTRA_CFLAGS  append to cflags
+//
+//  Default output:
+//    build/hexa_<os>_<arch>      e.g. build/hexa_linux_x86_64
+//                                     build/hexa_darwin_arm64
+//
+//  Pipeline:
+//    1. self/native/hexa_v2 self/main.hexa build/stage1/main_native.c
+//       (regenerates the dispatch C from current main.hexa)
+//    2. <native cc> -O2 -D_GNU_SOURCE -I self <main.c> -o <out>
+//                   -lpthread -lm   (dynamic link, no -static)
+//
+//  Why not -static here: musl-static is a Linux-specific build target;
+//  on macOS / non-musl Linux a static link against glibc routinely
+//  produces broken binaries (DNS resolution, dlopen, …). For local
+//  developer installs the dynamic link is the right default; the
+//  cross-build variant keeps -static for the runner-image case.
+// ═══════════════════════════════════════════════════════════════
+
+fn _run_ok(cmd) {
+    let r = exec_with_status(cmd)
+    if r[1] != 0 {
+        eprintln("FAILED: " + cmd)
+        if r[0] != "" { eprintln(r[0]) }
+        exit(1)
+    }
+    r[0]
+}
+
+// _which: pure helper — return path of `name` on PATH, or "" if absent.
+fn _which(name) {
+    let r = exec_with_status("which " + name + " 2>/dev/null")
+    if r[1] != 0 { return "" }
+    return r[0].trim()
+}
+
+// _default_native_cc: pick the host compiler. clang preferred (matches the
+// rest of the toolchain's flag set), cc as fallback (always present on
+// any *nix dev setup).
+fn _default_native_cc() {
+    let env_cc = env("NATIVE_CC")
+    if env_cc != "" { return env_cc }
+    if _which("clang") != "" { return "clang" }
+    return "cc"
+}
+
+// _default_native_out: build/hexa_<uname-s lower>_<uname-m>. Uses shell `tr`
+// for case-fold since hexa stdlib lacks a string .to_lower method.
+fn _default_native_out(repo_root) {
+    let s = exec_with_status("uname -s | tr '[:upper:]' '[:lower:]'")[0].trim()
+    let m = exec_with_status("uname -m")[0].trim()
+    return repo_root + "/build/hexa_" + s + "_" + m
+}
+
+// _selftest: exercise the helpers without invoking the heavy build.
+fn cmd_selftest() {
+    println("[build_hexa_cli_native selftest]")
+    let mut fails = 0
+
+    let cc = _default_native_cc()
+    if cc == "" {
+        eprintln("  FAIL T1 _default_native_cc returned empty")
+        fails = fails + 1
+    } else { println("  OK   T1 _default_native_cc -> " + cc) }
+
+    let out = _default_native_out("/tmp/fake_repo")
+    if out.substring(0, len("/tmp/fake_repo/build/hexa_")) != "/tmp/fake_repo/build/hexa_" {
+        eprintln("  FAIL T2 _default_native_out: " + out)
+        fails = fails + 1
+    } else { println("  OK   T2 _default_native_out -> " + out) }
+
+    if fails == 0 {
+        println("  PASS")
+        return 0
+    }
+    eprintln("  FAILED: " + str(fails))
+    return 1
+}
+
+let _args = $args
+let mut _sti = 0
+while _sti < len(_args) {
+    if _args[_sti] == "--selftest" || _args[_sti] == "selftest" {
+        exit(cmd_selftest())
+    }
+    _sti = _sti + 1
+}
+
+// Arg parsing: -o <path>
+let mut _out_path = ""
+let mut _ai = 2
+while _ai < len(_args) {
+    let a = _args[_ai]
+    if a == "-o" && (_ai + 1) < len(_args) {
+        _ai = _ai + 1
+        _out_path = _args[_ai]
+    }
+    _ai = _ai + 1
+}
+
+let _repo_root = exec_with_status("pwd")[0].trim()
+let _uname_s = exec_with_status("uname -s")[0].trim()
+let _uname_m = exec_with_status("uname -m")[0].trim()
+
+if _out_path == "" { _out_path = _default_native_out(_repo_root) }
+let _cc = _default_native_cc()
+let _extra_cflags = env("EXTRA_CFLAGS")
+let _hexa_v2 = _repo_root + "/self/native/hexa_v2"
+let _main_hexa = _repo_root + "/self/main.hexa"
+let _stage1_c = _repo_root + "/build/stage1/main_native.c"
+let _inc = _repo_root + "/self"
+
+println("=== hexa CLI → " + _uname_s + "/" + _uname_m + " (native dynamic) ===")
+println("  source   : " + _main_hexa)
+println("  dispatch : " + _stage1_c)
+println("  output   : " + _out_path)
+println("  cc       : " + _cc)
+
+if !file_exists(_hexa_v2) {
+    eprintln("error: self/native/hexa_v2 missing — run `hexa cc` first to bootstrap the transpiler")
+    exit(1)
+}
+if !file_exists(_main_hexa) {
+    eprintln("error: source missing: " + _main_hexa)
+    exit(1)
+}
+
+let _cc_chk = exec_with_status("which " + _cc + " 2>/dev/null")
+if _cc_chk[1] != 0 || _cc_chk[0].trim() == "" {
+    eprintln("error: compiler not found: " + _cc)
+    eprintln("  set NATIVE_CC=<your-cc> or install clang")
+    exit(1)
+}
+
+_run_ok("mkdir -p " + _repo_root + "/build/stage1")
+let _out_dir_pair = exec_with_status("dirname '" + _out_path + "'")
+_run_ok("mkdir -p '" + _out_dir_pair[0].trim() + "'")
+
+// Step 1: transpile main.hexa → C.
+println("")
+println("[1/2] transpile main.hexa → stage1/main_native.c")
+_run_ok(_hexa_v2 + " " + _main_hexa + " " + _stage1_c)
+
+// Step 2: native dynamic compile. -D_GNU_SOURCE for the POSIX/Linux extras
+// runtime.c expects (unshare, setns, posix_openpt, etc. — macOS clang
+// ignores it harmlessly). -Wno-trigraphs because hexa codegen emits literal
+// `??` byte patterns inside regex/escape strings.
+let _cflags = "-O2 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096"
+let _ldflags = "-lpthread -lm"
+let _cmd = _cc + " " + _cflags + " " + _extra_cflags + " -I " + _inc + " " + _stage1_c + " -o " + _out_path + " " + _ldflags
+println("")
+println("[2/2] compile (" + _uname_s + "/" + _uname_m + ")")
+println("  " + _cmd)
+_run_ok(_cmd)
+
+let _file_info = exec_with_status("file " + _out_path)[0].trim()
+let _size = exec_with_status("wc -c < '" + _out_path + "' | tr -d ' '")[0].trim()
+
+println("")
+println("=== BUILD OK ===")
+println("  path : " + _out_path)
+println("  size : " + _size + " bytes")
+println("  file : " + _file_info)
+println("")
+println("install (optional):")
+println("  cp " + _out_path + " ~/.hx/bin/hexa.real")
+println("  # or set HEXA_INTERP=" + _out_path)
