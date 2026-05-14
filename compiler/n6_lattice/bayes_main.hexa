@@ -1,0 +1,124 @@
+// absorbed from ~/core/hexa-bio/{nanobot,ribozyme}/module/bayesian_n6_ablation.hexa (Apache-2.0, hexa-bio v1.1.0, dedup'd)
+//
+// compiler/n6_lattice/bayes_main.hexa — CLI shim for the Bayes primitive.
+//
+// Usage:
+//   hexa run compiler/n6_lattice/bayes_main.hexa bayes-audit <obs-csv>
+//   hexa run compiler/n6_lattice/bayes_main.hexa bayes-demo
+//   hexa run compiler/n6_lattice/bayes_main.hexa help
+//
+// I/O is fully isolated here. The bayes.hexa core is pure.
+// Sentinel: __N6_BAYES__ PASS|FAIL on the final line for grep-driven callers.
+
+import "compiler/n6_lattice/bayes.hexa"
+use "self/stdlib/argv_skip"
+
+fn _cli() -> [string] {
+    let raw = args()
+    let mut out: [string] = []
+    let mut i = skip_invocation_prefix(raw)
+    while i < len(raw) {
+        out.push(raw[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn _print_help() {
+    println("hexa bayes — Bayesian σ(6)=12 audit (hexa-bio absorption v1.1.0)")
+    println("")
+    println("usage:")
+    println("  hexa run compiler/n6_lattice/bayes_main.hexa <verb> [args]")
+    println("")
+    println("verbs:")
+    println("  bayes-audit <csv>   run σ(6)=12 vs uniform{5..50} on a CSV of integer observations")
+    println("  bayes-demo          run audit on built-in nanobot σ-axis demo corpus")
+    println("  help                show this message")
+}
+
+// ── CSV parser (integers only, one-per-line OR comma-separated) ─────────
+
+fn _parse_csv_text(text: string) -> [int] {
+    let mut out: [int] = []
+    let n = len(text)
+    let mut buf = ""
+    let mut i = 0
+    while i < n {
+        let ch = text.substring(i, i + 1)
+        if ch == "," || ch == "\n" || ch == "\r" || ch == " " || ch == "\t" {
+            let trimmed = buf.trim()
+            if len(trimmed) > 0 {
+                out.push(to_int(trimmed))
+            }
+            buf = ""
+        } else {
+            buf = buf + ch
+        }
+        i = i + 1
+    }
+    let last = buf.trim()
+    if len(last) > 0 {
+        out.push(to_int(last))
+    }
+    return out
+}
+
+fn _print_result(r: BayesResult) {
+    println("=== n6_lattice/bayes — σ(6)=12 vs uniform{5..50} ===")
+    println("  n_match / n_total : " + str(r.n_match) + " / " + str(r.n_total))
+    println("  log10 BF (H1/H0)  : " + str(r.log10_BF))
+    println("  posterior P(H1)   : " + str(r.posterior_a))
+    println("  posterior P(H0)   : " + str(r.posterior_b))
+    println("  evidence band     : " + r.evidence_level)
+}
+
+fn _cmd_bayes_audit(path: string) {
+    let text = read_file(path)
+    let obs = _parse_csv_text(text)
+    if len(obs) == 0 {
+        println("[bayes-audit] no observations parsed from " + path)
+        println("__N6_BAYES__ FAIL")
+        return
+    }
+    let r = sigma6_vs_uniform_audit(obs)
+    _print_result(r)
+    println("__N6_BAYES__ PASS")
+}
+
+fn _cmd_bayes_demo() {
+    // Built-in nanobot σ-axis demo corpus (subset of the n=30 corpus from
+    // hexa-bio/nanobot/module/bayesian_audit_n30.hexa). Mix of matches
+    // (12, 24, 60 multiples) and non-matches.
+    let demo = [12, 24, 12, 4, 8, 24, 4, 200, 24, 12, 16, 4, 6, 12, 60, 12, 12, 2, 12, 12, 12, 24, 4, 4, 12, 8, 4, 12, 12, 12]
+    let r = sigma6_vs_uniform_audit(demo)
+    _print_result(r)
+    println("__N6_BAYES__ PASS")
+}
+
+fn main() {
+    let cli = _cli()
+    if len(cli) == 0 {
+        _print_help()
+        return
+    }
+    let verb = cli[0]
+    if verb == "bayes-audit" {
+        if len(cli) < 2 {
+            println("[bayes-audit] missing CSV path arg")
+            _print_help()
+            return
+        }
+        _cmd_bayes_audit(cli[1])
+        return
+    }
+    if verb == "bayes-demo" {
+        _cmd_bayes_demo()
+        return
+    }
+    if verb == "help" {
+        _print_help()
+        return
+    }
+    println("[n6_lattice/bayes_main] unknown verb: " + verb)
+    _print_help()
+}

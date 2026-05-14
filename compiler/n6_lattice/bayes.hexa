@@ -1,0 +1,224 @@
+// absorbed from ~/core/hexa-bio/{nanobot,ribozyme}/module/bayesian_n6_ablation.hexa (Apache-2.0, hexa-bio v1.1.0, dedup'd)
+//
+// compiler/n6_lattice/bayes.hexa — pure-hexa Bayesian primitive for n=6
+// lattice hypothesis testing. Canonical dedup of two ~300 LOC anima
+// duplicates (nanobot + ribozyme) into a single ~150 LOC core.
+//
+// Public surface:
+//   log10_BF(observation, hypothesis_a_prior, hypothesis_b_prior,
+//            likelihood_fn_a, likelihood_fn_b) -> float
+//     - General Bayes factor: sum log10 likelihood ratios, add log prior ratio.
+//   sigma6_vs_uniform_audit(observations) -> BayesResult
+//     - σ(6)=12 (any positive multiple of 12) vs uniform on {5..50}.
+//     - Beta-Binomial conjugate (Beta(1,1) prior); H1 region = p ∈ [0.5, 1]
+//       (lattice-loadbearing), H0 region = p ∈ [0, 0.5) (decorative).
+//   evidence_band(log10_bf) -> string
+//     - Jeffreys-style band labels: decisive/very_strong/strong/moderate/weak.
+//   regularized_incomplete_beta(x, a, b) -> float
+//     - Regularized incomplete beta I_x(a,b) via Lentz continued fraction.
+//
+// Numerical methods:
+//   - log_beta_function = lgamma(a) + lgamma(b) - lgamma(a+b)
+//   - Lentz continued fraction for I_x(a,b) (Numerical Recipes 3e §6.4)
+//   - All intrinsics: log, exp, lgamma (from VM math fast-path).
+//
+// Pure stage-1: no I/O, no JSON, no exec. I/O lives in bayes_main.hexa.
+
+// ── Result struct ───────────────────────────────────────────────────────
+
+pub struct BayesResult {
+    log10_BF: float,
+    posterior_a: float,
+    posterior_b: float,
+    evidence_level: string,
+    n_match: int,
+    n_total: int
+}
+
+// ── Evidence band ───────────────────────────────────────────────────────
+//
+// Jeffreys 1961-style log10 BF banding. Symmetric: negative log10_BF
+// means evidence for H_b (returned banding is for |log10_BF|).
+
+pub fn evidence_band(log10_bf: float) -> string {
+    let mut a = log10_bf
+    if a < 0.0 { a = 0.0 - a }
+    if a > 3.0 { return "decisive" }
+    if a > 2.0 { return "very_strong" }
+    if a > 1.5 { return "strong" }
+    if a > 1.0 { return "moderate" }
+    return "weak"
+}
+
+// ── log_beta_function ───────────────────────────────────────────────────
+
+pub fn _log_beta(a: float, b: float) -> float {
+    return lgamma(a) + lgamma(b) - lgamma(a + b)
+}
+
+// ── Regularized incomplete beta I_x(a,b) via Lentz continued fraction ───
+//
+// Numerical Recipes 3e §6.4 betacf pattern. Tolerance 1e-15, cap 400 iters.
+
+pub fn regularized_incomplete_beta(x: float, a: float, b: float) -> float {
+    if x < 0.0 || x > 1.0 { return 0.0 }
+    if x == 0.0 { return 0.0 }
+    if x == 1.0 { return 1.0 }
+    if x > (a + 1.0) / (a + b + 2.0) {
+        return 1.0 - regularized_incomplete_beta(1.0 - x, b, a)
+    }
+    let log_prefactor = a * log(x) + b * log(1.0 - x) - log(a) - _log_beta(a, b)
+    let qab = a + b
+    let qap = a + 1.0
+    let qam = a - 1.0
+    let mut c = 1.0
+    let mut d = 1.0 - qab * x / qap
+    if d > 0.0 - 1.0e-300 && d < 1.0e-300 { d = 1.0e-300 }
+    d = 1.0 / d
+    let mut h = d
+    let mut m = 1
+    let max_iter = 400
+    let tol = 1.0e-15
+    while m <= max_iter {
+        let m2 = 2 * m
+        // even step
+        let aa1 = to_float(m) * (b - to_float(m)) * x / ((qam + to_float(m2)) * (a + to_float(m2)))
+        d = 1.0 + aa1 * d
+        if d > 0.0 - 1.0e-300 && d < 1.0e-300 { d = 1.0e-300 }
+        c = 1.0 + aa1 / c
+        if c > 0.0 - 1.0e-300 && c < 1.0e-300 { c = 1.0e-300 }
+        d = 1.0 / d
+        h = h * d * c
+        // odd step
+        let aa2 = 0.0 - (a + to_float(m)) * (qab + to_float(m)) * x / ((a + to_float(m2)) * (qap + to_float(m2)))
+        d = 1.0 + aa2 * d
+        if d > 0.0 - 1.0e-300 && d < 1.0e-300 { d = 1.0e-300 }
+        c = 1.0 + aa2 / c
+        if c > 0.0 - 1.0e-300 && c < 1.0e-300 { c = 1.0e-300 }
+        d = 1.0 / d
+        let delta = d * c
+        h = h * delta
+        let dd = delta - 1.0
+        let mut adelta = dd
+        if adelta < 0.0 { adelta = 0.0 - adelta }
+        if adelta < tol { break }
+        m = m + 1
+    }
+    return exp(log_prefactor) * h
+}
+
+// ── _normalize ──────────────────────────────────────────────────────────
+//
+// Normalize a pair of unnormalized posteriors (a, b) to (a', b') with
+// a' + b' = 1.0. Returns a dict with keys "a" / "b" (hexa structs cannot
+// hold heterogeneous return tuples; dict is the stage-1 norm).
+
+pub fn _normalize(a: float, b: float) {
+    let s = a + b
+    let mut na = 0.5
+    let mut nb = 0.5
+    if s > 0.0 {
+        na = a / s
+        nb = b / s
+    }
+    let r = {}
+    r["a"] = na
+    r["b"] = nb
+    return r
+}
+
+// ── _log10_likelihood ───────────────────────────────────────────────────
+//
+// Apply a likelihood-fn to a list of observations and return Σ log10 L(obs|H).
+// Caller supplies any positive function returning P(obs|H) (or proportional).
+// Zero/negative likelihoods are clamped to a tiny epsilon to keep log finite.
+
+pub fn _log10_likelihood(observations, likelihood_fn) -> float {
+    let n = len(observations)
+    let mut acc = 0.0
+    let mut i = 0
+    let log10_e = 0.43429448190325182765
+    let eps = 1.0e-300
+    while i < n {
+        let l = to_float(likelihood_fn(observations[i]))
+        let mut lc = l
+        if lc < eps { lc = eps }
+        acc = acc + log(lc) * log10_e
+        i = i + 1
+    }
+    return acc
+}
+
+// ── log10_BF — general Bayes factor with caller-supplied likelihood fns ──
+//
+//   log10 BF = log10 P(D|H_a)/P(D|H_b) + log10 prior_a/prior_b
+//   posterior_a/posterior_b derived via normalized renormalization on
+//   prior * likelihood (returned via the BayesResult struct shim).
+
+pub fn log10_BF(observation, hypothesis_a_prior: float, hypothesis_b_prior: float,
+                 likelihood_fn_a, likelihood_fn_b) -> float {
+    let lla = _log10_likelihood(observation, likelihood_fn_a)
+    let llb = _log10_likelihood(observation, likelihood_fn_b)
+    let log10_e = 0.43429448190325182765
+    let mut log_prior_a = 0.0
+    let mut log_prior_b = 0.0
+    let eps = 1.0e-300
+    let mut pa = hypothesis_a_prior
+    let mut pb = hypothesis_b_prior
+    if pa < eps { pa = eps }
+    if pb < eps { pb = eps }
+    log_prior_a = log(pa) * log10_e
+    log_prior_b = log(pb) * log10_e
+    return (lla - llb) + (log_prior_a - log_prior_b)
+}
+
+// ── sigma6_vs_uniform_audit ─────────────────────────────────────────────
+//
+// Domain-canonical audit: σ(6)=12 (H1: lattice-loadbearing) vs uniform on
+// {5..50} (H0: decorative random).
+//
+// Beta-Binomial conjugate (matches anima source semantics):
+//   k = #{ obs : obs > 0 && obs % 12 == 0 }    (n=6 lattice match count)
+//   n = len(observations)
+//   Posterior: Beta(1+k, 1+n-k)
+//   P(p < 0.5 | data) = I_0.5(1+k, 1+n-k)
+//   log10 BF_10 = log10 P(H1) / P(H0) where P(H0) = CDF at 0.5.
+
+pub fn sigma6_vs_uniform_audit(observations) -> BayesResult {
+    let n = len(observations)
+    let mut k = 0
+    let mut i = 0
+    while i < n {
+        let v = observations[i]
+        let mut iv = 0
+        if type_of(v) == "int" || type_of(v) == "float" {
+            iv = to_int(v)
+        }
+        if iv > 0 {
+            if iv == 12 || iv % 12 == 0 { k = k + 1 }
+        }
+        i = i + 1
+    }
+    let a_post = 1.0 + to_float(k)
+    let b_post = 1.0 + to_float(n - k)
+    let cdf_half = regularized_incomplete_beta(0.5, a_post, b_post)
+    let p_h1 = 1.0 - cdf_half
+    let p_h0 = cdf_half
+    let log10_e = 0.43429448190325182765
+    let mut log10_bf = 0.0
+    let eps = 1.0e-300
+    let mut p1 = p_h1
+    let mut p0 = p_h0
+    if p1 < eps { p1 = eps }
+    if p0 < eps { p0 = eps }
+    log10_bf = log(p1 / p0) * log10_e
+    let norm = _normalize(p_h1, p_h0)
+    return BayesResult {
+        log10_BF: log10_bf,
+        posterior_a: norm["a"],
+        posterior_b: norm["b"],
+        evidence_level: evidence_band(log10_bf),
+        n_match: k,
+        n_total: n
+    }
+}
