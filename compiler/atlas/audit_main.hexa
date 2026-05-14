@@ -14,27 +14,41 @@
 // plan §4.1 / §5): `hexa atlas audit --doctrine` and `hexa atlas audit
 // --anchors` should dispatch here.
 //
-// This module is the only place that pulls in `compiler/atlas/static_index`
-// (and hence parses the multi-MB rodata embed). The audit modules
-// themselves expose `_in` variants taking an explicit node array, so
-// smoke tests can exercise the audit logic without paying the embed cost.
+// Corpus source policy (2026-05-14):
+//   `compiler/atlas/static_index` materializes 6,594 nodes at module-load.
+//   Under `hexa run` (interpreter) that parse+typecheck of 7,451 deeply
+//   nested struct literals hangs >10 min. The codegen path (AOT-compiled
+//   binary) is fast — the const arrays land as rodata at 0 ms.
+//
+//   For the interpreter-dispatched CLI verb, this module reads
+//   `~/.hx/data/atlas.overlay.n6` via `parse_atlas_file()` instead. That
+//   covers the overlay corpus (drill output + sibling absorption appends)
+//   in ~3 s. The full 6,594-node rodata view will be re-enabled once
+//   `static_index` gets a lazy/streaming loader. Audit modules themselves
+//   stay rodata-agnostic — they consume an `[AtlasNode]` parameter.
 
 use "compiler/atlas/parser"
-use "compiler/atlas/static_index"
 use "compiler/atlas/external_entity_audit"
 use "compiler/atlas/anchor_audit"
 use "self/stdlib/argv_skip"
 
-// audit_external_entities — rodata+overlay wrapper. Walks the merged
-// view and runs the external-entity scan over every node.
-pub fn audit_external_entities() -> AuditResult {
-    return audit_external_entities_in(atlas_list_merged())
+let _OVERLAY_PATH: string = "/Users/ghost/.hx/data/atlas.overlay.n6"
+
+fn _load_corpus() -> array {
+    // Read the overlay corpus. If absent (fresh install), return empty —
+    // the audits still run and report 0 nodes scanned.
+    if !file_exists(_OVERLAY_PATH) {
+        return []
+    }
+    return parse_atlas_file(_OVERLAY_PATH, "atlas.overlay.n6")
 }
 
-// audit_anchors — rodata+overlay wrapper. Walks the merged view and
-// runs the anchor-presence scan over every node.
+pub fn audit_external_entities() -> AuditResult {
+    return audit_external_entities_in(_load_corpus())
+}
+
 pub fn audit_anchors() -> AuditResult {
-    return audit_anchors_in(atlas_list_merged())
+    return audit_anchors_in(_load_corpus())
 }
 
 fn _run_external() -> i64 {
