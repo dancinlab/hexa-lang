@@ -220,6 +220,12 @@ fn fl_resolve_import(caller_dir, path) {
     alt.push(candidate)
     let r2 = alt.join("")
     if file_exists(r2) { return r2 }
+    // 2026-05-14: stdlib shim escape — `stdlib/hash/sha256.hexa` is a
+    // backward-compat shim that does `import "stdlib/core/hash/sha256.hexa"`
+    // (a repo-rooted path, not `./` / `../`). Caller-dir + path doesn't
+    // exist (`stdlib/hash/stdlib/core/...`); cwd-relative does. Try cwd
+    // last so explicit relative paths still win.
+    if file_exists(candidate) { return candidate }
     return ""
 }
 
@@ -685,6 +691,39 @@ fn flatten_main() {
 
     g_base_dir = fl_dirname(target)
     fl_iterative_walk(target)
+
+    // 2026-05-14: bare-intrinsic auto-pull — `list_dir` is a hexa intrinsic
+    // historically resolved by the interpreter as a builtin (no `import`
+    // line at the call site, e.g. compiler/atlas/merger.hexa:82). hexa_v2
+    // codegen doesn't recognize it as a builtin, so the C output references
+    // an undefined identifier. We can't pull compiler/intrinsics/intrinsics.hexa
+    // directly because it mixes typed `var x: i64` / `as i64` syntax that
+    // hexa_v2_v4 parser rejects; we ship a stage0-clean re-export at
+    // tool/flatten_intrinsic_shims.hexa that mirrors only the intrinsics
+    // the bypass needs (currently: list_dir).
+    //
+    // Conservative trigger: substring match for `list_dir` anywhere in the
+    // collected sources. The shim is self-contained (no further deps), so
+    // a false-positive auto-pull adds one harmless function definition.
+    let shim_path = "tool/flatten_intrinsic_shims.hexa"
+    if file_exists(shim_path) && !fl_hset_has(g_visited_hs, shim_path) {
+        let mut needs_shim = false
+        let mut si = 0
+        while si < g_order_count {
+            let sf = g_order_parts[si]
+            let ssrc = read_file(sf)
+            if ssrc.index_of("list_dir") >= 0 {
+                needs_shim = true
+                si = g_order_count   // break
+            } else {
+                si = si + 1
+            }
+        }
+        if needs_shim {
+            println("[flatten_imports] auto-pull: intrinsic shims (list_dir referenced)")
+            fl_iterative_walk(shim_path)
+        }
+    }
 
     // g_order_parts is already a file-path array, leaves-first.
     // 2026-04-21: freelist aliasing bug — `let order_files = g_order_parts`
