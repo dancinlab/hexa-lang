@@ -122,19 +122,19 @@ fn cmd_help() {
     println("    Live path: HTTP API (~15 s timeout)  ·  Fallback: frozen cache (HEXA_FORCE_FALLBACK=1)")
     println("    e.g. hexa wikipedia \"Perfect number\"  → live → /api/rest_v1/page/summary/")
     println("")
-    println("SIBLING ABSORPTION  (Phase 5, 2026-05-14 — anima/hexa-bio/hexa-space/hexa-matter/hexa-chip)")
-    println("  anima-show <psi-constants|psi-laws|cdesm|all>     anima Ψ/laws/CDESM rodata viewer")
-    println("  lattice <verify|axis-table|cross-check>           n=6 σ·φ=n·τ=24 deductive verifier (hexa-bio)")
-    println("  atlas-audit <external-entity|anchor|all>          raw#10 C3 lattice-fit gate + NIST anchor (hexa-matter)")
-    println("  rsc <falsifier|saturation|lint|run-all>           Runnable Surface Closure recipe (hexa-space)")
-    println("  n6 <discover|mine>                                n=6 arithmetic discovery + formula miner (anima)")
-    println("  repo-audit-taxonomy <catalog.md> <manifest.toml>  filesystem ↔ catalog ↔ manifest C1/C2/C3 audit (hexa-chip)")
-    println("    e.g. hexa lattice verify              → __N6_AXIS_VERIFY__ PASS (σ·φ=n·τ=24, |S₄|=24)")
-    println("         hexa anima-show psi-constants    → 11 Ψ-constant @C rows")
+    println("ATLAS ABSORPTION  (Phase 5, 2026-05-14 — atlas-scope-only after split)")
+    println("  anima-show <psi-constants|psi-laws|cdesm|all>     anima Ψ/laws/CDESM rodata viewer (atlas rodata, 31 rows)")
+    println("  lattice <verify|axis-table|cross-check>           n=6 σ·φ=n·τ=24 deductive verifier (pure math)")
+    println("  atlas-audit <external-entity|anchor|all>          raw#10 C3 lattice-fit gate + NIST anchor (overlay corpus)")
+    println("  repo-audit-taxonomy <catalog.md> <manifest.toml>  filesystem ↔ catalog ↔ manifest C1/C2/C3 audit")
+    println("    e.g. hexa anima-show psi-constants    → 11 Ψ-constant @C rows")
+    println("         hexa lattice verify              → __N6_AXIS_VERIFY__ PASS (σ·φ=n·τ=24, |S₄|=24)")
     println("         hexa atlas-audit anchor          → NIST/CRC/ASM citation audit over overlay corpus")
-    println("         hexa rsc falsifier               → per-falsifier closure_pct ladder (0/33/67/100)")
-    println("    atlas-audit reads ~/.hx/data/atlas.overlay.n6 (~109 nodes, ~3s). Full 6,594-node")
-    println("    rodata coverage pending compiler/atlas/static_index lazy-load.")
+    println("    atlas-audit reads ~/.hx/data/atlas.overlay.n6 (~109 nodes, ~3s). Full 7,278-node")
+    println("    rodata coverage pending compiler/atlas/static_index lazy-load (see incoming/notes/).")
+    println("")
+    println("  Sister-project tools (rsc / bayes / n6 discover/mine / hexa-principle annotator etc.)")
+    println("  분리됨 — 각 sister repo 의 자체 도구로 위치. invoke via `hexa run <sister>/path/main.hexa <verb>`.")
     println("")
     println("STDLIB n=6  (compiler-internal, available as `use \"self/std_n6\"`)")
     println("  n6_lenses · n6_verify · n6_check · n6_consensus · n6_scan · n6_omega")
@@ -600,15 +600,13 @@ fn _absorbed_script(verb) {
     if verb == "pubchem"          { return "compiler/bridges/pubchem.hexa" }
     if verb == "uniprot"          { return "compiler/bridges/uniprot.hexa" }
 
-    // Phase 5 absorption (2026-05-14) — 5-project sibling absorb (anima / hexa-bio /
-    // hexa-space / hexa-matter / hexa-chip). Each verb dispatches to a standalone
-    // main.hexa shim under its target dir.
-    if verb == "anima-show"          { return "compiler/atlas/anima_main.hexa" }            // psi-constants/psi-laws/cdesm/all (anima)
-    if verb == "lattice"             { return "compiler/n6_lattice/main.hexa" }             // verify/axis-table/cross-check (hexa-bio)
-    if verb == "atlas-audit"         { return "compiler/atlas/audit_main.hexa" }            // external-entity/anchor/all (hexa-matter, overlay-only corpus)
-    if verb == "rsc"                 { return "tool/rsc/main.hexa" }                        // falsifier/lint/saturation/run-all (hexa-space)
-    if verb == "n6"                  { return "stdlib/n6/main.hexa" }                       // discover/mine (anima)
-    if verb == "repo-audit-taxonomy" { return "tool/repo_taxonomy_audit_main.hexa" }        // <catalog.md> <manifest.toml> [<root>] (hexa-chip)
+    // Phase 5 absorption (2026-05-14) — atlas + atlas-감사 verbs only (sister-project
+    // 자체 도구는 분리됨: rsc → hexa-space, n6 → anima, bayes → hexa-bio, principle → anima,
+    // etc. 분리 이력 see commit history 2026-05-14 split(scope)).
+    if verb == "anima-show"          { return "compiler/atlas/anima_main.hexa" }            // psi-constants/psi-laws/cdesm/all (anima rodata, 31 rows)
+    if verb == "lattice"             { return "compiler/n6_lattice/main.hexa" }             // verify/axis-table/cross-check (n=6 math, hexa-bio-vocabulary-but-pure-math)
+    if verb == "atlas-audit"         { return "compiler/atlas/audit_main.hexa" }            // external-entity/anchor/all (overlay corpus, hexa-matter doctrine gate)
+    if verb == "repo-audit-taxonomy" { return "tool/repo_taxonomy_audit_main.hexa" }        // <catalog.md> <manifest.toml> [<root>] (hexa-chip-origin, generalized)
 
     return ""
 }
@@ -1717,7 +1715,6 @@ fn cmd_run(file, extra_args) {
             // `use "stdlib/*"` resolves without HEXA_LANG/HEXA_STDLIB_ROOT set.
             let __ml_env = module_loader_env_prefix()
             let preproc = __ml_env + "'" + interp + "' '" + ml_source + "' '" + file + "' '" + expanded + "' 2>&1"
-            // raw#92 fail-loud: capture rc so loader exit(2) (FATAL module not
             // found) propagates instead of silently falling back to the raw
             // file. exec() drops rc → previous behavior swallowed loader
             // fail-loud, breaking CI gates for ghost-import detection.
