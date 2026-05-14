@@ -159,6 +159,58 @@ fn _hexa_name_is_reserved(s) {
     // type mismatch + link fail. Mangling to u_errno at decl+ref sides side-
     // steps the macro expansion. Same class: any libc ERRNO macro identifier.
     if s == "errno" { return true }
+    // C7/POSIX collision avoidance (2026-05-14) — these POSIX surface names
+    // collide with hexa user fns once <sys/socket.h>, <unistd.h>, etc. are
+    // pulled in by runtime.c (transitively via #include). Concrete trigger:
+    // `pub fn bind(module)` in compiler/check/bind.hexa transpiled to bare
+    // `bind(...)` and clashed with POSIX `int bind(int, const struct sockaddr*,
+    // socklen_t)`. Same class: link/connect/accept/listen/open/close/read/write
+    // /stat/fork/etc. Additive allowlist (rather than universal `u_` mangling)
+    // chosen to minimise blast radius on existing transpiles.
+    // socket — <sys/socket.h>
+    if s == "bind" { return true }
+    if s == "accept" { return true }
+    if s == "listen" { return true }
+    if s == "connect" { return true }
+    if s == "socket" { return true }
+    if s == "send" { return true }
+    if s == "recv" { return true }
+    if s == "shutdown" { return true }
+    // file I/O — <unistd.h> / <fcntl.h> / <sys/stat.h>
+    if s == "open" { return true }
+    if s == "close" { return true }
+    if s == "read" { return true }
+    if s == "write" { return true }
+    if s == "link" { return true }
+    if s == "unlink" { return true }
+    if s == "stat" { return true }
+    if s == "lstat" { return true }
+    if s == "fstat" { return true }
+    if s == "dup" { return true }
+    if s == "dup2" { return true }
+    if s == "pipe" { return true }
+    if s == "mkdir" { return true }
+    if s == "rmdir" { return true }
+    if s == "rename" { return true }
+    if s == "chdir" { return true }
+    if s == "chmod" { return true }
+    if s == "chown" { return true }
+    // process — <unistd.h> / <sys/wait.h> / <signal.h>
+    if s == "fork" { return true }
+    if s == "wait" { return true }
+    if s == "waitpid" { return true }
+    if s == "execv" { return true }
+    if s == "execve" { return true }
+    if s == "kill" { return true }
+    if s == "getpid" { return true }
+    if s == "getuid" { return true }
+    if s == "setuid" { return true }
+    // memory/string — POSIX (sometimes glibc) <strings.h>
+    if s == "index" { return true }
+    if s == "rindex" { return true }
+    // multiplexing — <sys/select.h> / <poll.h>
+    if s == "select" { return true }
+    if s == "poll" { return true }
     return false
 }
 
