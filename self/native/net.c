@@ -481,6 +481,60 @@ HexaVal hexa_net_write(HexaVal fd_val, HexaVal data_val) {
     return hexa_int((int64_t)sent);
 }
 
+/* net_write_bytes(fd, [int]) — like net_write but takes a byte array
+ * directly so NUL bytes don't truncate the payload. Required for
+ * binary wire protocols (9P codec frames carry size-u32 = bytes whose
+ * upper 3 bytes are typically 0). Returns number of bytes sent or
+ * -errno. */
+HexaVal hexa_net_write_bytes(HexaVal fd_val, HexaVal arr_val) {
+    int64_t fd = hexa_as_num(fd_val);
+    if (fd < 0) return hexa_int(-EINVAL);
+    if (!HX_IS_ARRAY(arr_val)) return hexa_int(-EINVAL);
+    int n = HX_ARR_LEN(arr_val);
+    if (n < 0) return hexa_int(-EINVAL);
+    unsigned char* buf = (unsigned char*)malloc((size_t)n + 1);
+    if (!buf) return hexa_int(-ENOMEM);
+    for (int i = 0; i < n; i++) {
+        HexaVal v = HX_ARR_ITEMS(arr_val)[i];
+        long b = HX_IS_INT(v) ? (long)HX_INT(v) : 0;
+        buf[i] = (unsigned char)(b & 0xff);
+    }
+    size_t sent = 0;
+    size_t total = (size_t)n;
+    while (sent < total) {
+        ssize_t s = send((int)fd, (const char*)(buf + sent), total - sent, 0);
+        if (s < 0) {
+            if (errno == EINTR) continue;
+            free(buf);
+            return hexa_int(-errno);
+        }
+        if (s == 0) break;
+        sent += (size_t)s;
+    }
+    free(buf);
+    return hexa_int((int64_t)sent);
+}
+
+/* net_read_bytes(fd, max) — like net_read but returns the bytes as a
+ * [int] array, so NULs are preserved. */
+HexaVal hexa_net_read_bytes(HexaVal fd_val, HexaVal max_val) {
+    int64_t fd = hexa_as_num(fd_val);
+    if (fd < 0) return hexa_array_new();
+    int max = HX_IS_INT(max_val) ? (int)HX_INT(max_val) : 4096;
+    if (max < 1) max = 1;
+    if (max > 65536) max = 65536;
+    unsigned char* buf = (unsigned char*)malloc((size_t)max);
+    if (!buf) return hexa_array_new();
+    ssize_t n = recv((int)fd, (char*)buf, (size_t)max, 0);
+    if (n <= 0) { free(buf); return hexa_array_new(); }
+    HexaVal out = hexa_array_new();
+    for (ssize_t i = 0; i < n; i++) {
+        out = hexa_array_push(out, hexa_int((int64_t)buf[i]));
+    }
+    free(buf);
+    return out;
+}
+
 /* ── TAG_FN shim globals (bootstrap bridge, 2026-04-16) ──────────────────
  * The current self/native/hexa_v2 transpiler only recognises net_listen /
  * net_accept / net_close as direct-lowered builtins. Fresh names like
@@ -505,6 +559,9 @@ HexaVal net_select;
 /* 2026-05-14: SCM_RIGHTS fd-passing (P1 signal-ext / fd-handoff) */
 HexaVal net_send_fd;
 HexaVal net_recv_fd;
+/* 2026-05-14: NUL-safe byte-array variants for binary protocols (p9 codec). */
+HexaVal net_write_bytes;
+HexaVal net_read_bytes;
 
 static void _hexa_init_net_fn_shims(void) {
     net_listen        = hexa_fn_new((void*)hexa_net_listen,        1);
@@ -519,4 +576,6 @@ static void _hexa_init_net_fn_shims(void) {
     net_select        = hexa_fn_new((void*)hexa_net_select,        2);
     net_send_fd       = hexa_fn_new((void*)hexa_net_send_fd,       3);
     net_recv_fd       = hexa_fn_new((void*)hexa_net_recv_fd,       2);
+    net_write_bytes   = hexa_fn_new((void*)hexa_net_write_bytes,   2);
+    net_read_bytes    = hexa_fn_new((void*)hexa_net_read_bytes,    2);
 }

@@ -1,0 +1,178 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/p9/server.hexa -- 9P2000.L server side (MVP)
+//
+//  Sits on top of stdlib/p9/codec.hexa. Drives the read-message ->
+//  dispatch -> write-reply loop so downstream just provides the
+//  filesystem behavior (attach root + per-file ops).
+//
+//  Surface:
+//    p9_server_state — opaque per-connection state (fid table)
+//    p9_server_new(root_dir_provider) -> state
+//    p9_server_handle_message(state, msg) -> reply_bytes
+//    p9_serve_loop(socket_fd, root_dir_provider) -> exit_rc
+//
+//  `root_dir_provider` is a callable that, given (uname, aname),
+//  returns a Qid for the root + a per-fid lookup function. For the
+//  MVP, downstream passes a static map of fid -> entry data; full
+//  Attacher trait support deferred.
+//
+//  Errno mapping follows Linux: ENOENT=2, EACCES=13, EISDIR=21,
+//  EINVAL=22, ENOSYS=38, ENOTDIR=20. Caller can extend.
+
+use "self/stdlib/p9/codec"
+
+// Per-server state: keyed by fid. Each entry is a map carrying any
+// fields the caller wants (path string + reader callback + ...).
+pub struct P9ServerState {
+    fids: any,       // map<int fid -> entry-map>
+    msize: int,
+    debug: bool
+}
+
+pub fn p9_server_new() -> P9ServerState {
+    return P9ServerState { fids: #{}, msize: MSIZE_DEFAULT, debug: false }
+}
+
+// Lookup an active fid -- void if not bound.
+pub fn p9_server_fid(state: P9ServerState, fid: int) -> any {
+    let key = str(fid)
+    if has_key(state.fids, key) { return state.fids[key] }
+    return void
+}
+
+pub fn p9_server_set_fid(state: P9ServerState, fid: int, entry: any) -> void {
+    let m = state.fids
+    m[str(fid)] = entry
+}
+
+pub fn p9_server_clear_fid(state: P9ServerState, fid: int) -> void {
+    let m = state.fids
+    let key = str(fid)
+    if has_key(m, key) {
+        // hexa-lang maps lack remove() in some toolchains; rebuild without.
+        let mut rebuilt = #{}
+        for k in keys(m) {
+            let ks = str(k)
+            if ks != key { rebuilt[ks] = m[ks] }
+        }
+        state.fids = rebuilt
+    }
+}
+
+// ── Per-message handlers ──────────────────────────────────────────
+// Each takes the decoded message map and returns reply bytes [int].
+//
+// The downstream filesystem behavior is captured in the `entry` maps
+// stored in state.fids — they carry whatever flags / paths / reader
+// callbacks the caller needs. Below we wire the wire-protocol skeleton;
+// the actual file-system semantics live in callback-shaped entry
+// fields the server invokes here.
+
+fn _err(tag: int, ecode: int) -> [int] { return p9_enc_rerror(tag, ecode) }
+
+fn _handle_tversion(state: P9ServerState, m: any) -> [int] {
+    // Negotiate msize down to whatever we can hold. For MVP, accept
+    // exactly the caller's msize (no clamping) and echo the version.
+    let neg = m["msize"]
+    state.msize = neg
+    return p9_enc_rversion(m["tag"], neg, str(m["version"]))
+}
+
+fn _handle_tattach(state: P9ServerState, m: any, root_qid: Qid) -> [int] {
+    let fid = m["fid"]
+    let entry = #{ "kind": "dir", "path": "/", "qid": root_qid }
+    p9_server_set_fid(state, fid, entry)
+    return p9_enc_rattach(m["tag"], root_qid)
+}
+
+fn _handle_twalk(state: P9ServerState, m: any, walker: any) -> [int] {
+    // walker: (entry, wnames) -> [wqids, new_entry] or void on failure.
+    let fid = m["fid"]
+    let newfid = m["newfid"]
+    let wnames = m["wnames"]
+    let parent = p9_server_fid(state, fid)
+    if type_of(parent) == "void" { return _err(m["tag"], 2) }    // ENOENT
+    let res = walker(parent, wnames)
+    if type_of(res) != "array" { return _err(m["tag"], 2) }
+    let wqids = res[0]
+    let new_entry = res[1]
+    if fid != newfid { p9_server_set_fid(state, newfid, new_entry) }
+    else             { p9_server_set_fid(state, fid, new_entry) }
+    return p9_enc_rwalk(m["tag"], wqids)
+}
+
+fn _handle_topen(state: P9ServerState, m: any) -> [int] {
+    let fid = m["fid"]
+    let entry = p9_server_fid(state, fid)
+    if type_of(entry) == "void" { return _err(m["tag"], 2) }
+    if has_key(entry, "qid") == false { return _err(m["tag"], 22) }
+    entry["open_mode"] = m["mode"]
+    let iounit = if has_key(entry, "iounit") { entry["iounit"] } else { state.msize - 24 }
+    return p9_enc_ropen(m["tag"], entry["qid"], iounit)
+}
+
+// MVP server: entries carry a `content: [int]` byte-array directly.
+// Real filesystems use callback-based readers/writers, but storing a
+// hexa fn-value in a map runs into auto-boxing issues at the codegen
+// boundary. Downstream that needs callback-style ops can wrap this
+// server with their own dispatcher.
+fn _handle_tread(state: P9ServerState, m: any) -> [int] {
+    let fid = m["fid"]
+    let entry = p9_server_fid(state, fid)
+    if type_of(entry) == "void" { return _err(m["tag"], 2) }
+    if has_key(entry, "content") == false { return _err(m["tag"], 38) }    // ENOSYS
+    let content = entry["content"]
+    let off = m["offset"]
+    let cnt = m["count"]
+    let n = len(content)
+    if off > n - 1 { return p9_enc_rread(m["tag"], []) }
+    let avail = n - off
+    let take = if cnt > avail { avail } else { cnt }
+    let mut data: [int] = []
+    let mut i = 0
+    while i < take { data.push(content[off + i]) ; i = i + 1 }
+    return p9_enc_rread(m["tag"], data)
+}
+
+fn _handle_twrite(state: P9ServerState, m: any) -> [int] {
+    let fid = m["fid"]
+    let entry = p9_server_fid(state, fid)
+    if type_of(entry) == "void" { return _err(m["tag"], 2) }
+    // Read-only MVP: actual writes need either a mutable byte buffer
+    // (replace `content`) or a callback. Reject with EROFS for now.
+    return _err(m["tag"], 30)
+}
+
+fn _handle_tclunk(state: P9ServerState, m: any) -> [int] {
+    let fid = m["fid"]
+    p9_server_clear_fid(state, fid)
+    return p9_enc_rclunk(m["tag"])
+}
+
+// Dispatch one already-decoded message; return reply bytes. Caller
+// drives the read/write socket loop separately so this fn can be
+// unit-tested + run over any transport (TCP, AF_UNIX, in-proc pair).
+pub fn p9_server_dispatch(state: P9ServerState, m: any, root_qid: Qid, walker: any) -> [int] {
+    let t = str(m["type"])
+    if t == "Tversion" { return _handle_tversion(state, m) }
+    if t == "Tattach"  { return _handle_tattach(state, m, root_qid) }
+    if t == "Twalk"    { return _handle_twalk(state, m, walker) }
+    if t == "Topen"    { return _handle_topen(state, m) }
+    if t == "Tread"    { return _handle_tread(state, m) }
+    if t == "Twrite"   { return _handle_twrite(state, m) }
+    if t == "Tclunk"   { return _handle_tclunk(state, m) }
+    return _err(m["tag"], 38)    // ENOSYS — message not implemented yet
+}
+
+// Variant without a walker callback — for tests / static-fid setups.
+// Twalk responds with ENOSYS (38); everything else routes as normal.
+pub fn p9_server_dispatch_no_walk(state: P9ServerState, m: any, root_qid: Qid) -> [int] {
+    let t = str(m["type"])
+    if t == "Tversion" { return _handle_tversion(state, m) }
+    if t == "Tattach"  { return _handle_tattach(state, m, root_qid) }
+    if t == "Topen"    { return _handle_topen(state, m) }
+    if t == "Tread"    { return _handle_tread(state, m) }
+    if t == "Twrite"   { return _handle_twrite(state, m) }
+    if t == "Tclunk"   { return _handle_tclunk(state, m) }
+    return _err(m["tag"], 38)
+}
