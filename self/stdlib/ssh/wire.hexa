@@ -1,0 +1,338 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/ssh/wire.hexa -- SSH binary packet protocol (RFC 4253 §6)
+//
+//  Pure-hexa byte-level encode/decode for SSH wire frames. Pairs with
+//  stdlib/crypto/* for chacha20-poly1305@openssh.com encryption.
+//
+//  Two operating modes:
+//    1. Plaintext (pre-NEWKEYS) -- raw packets with sha-no-MAC
+//    2. Encrypted (post-NEWKEYS) -- chacha20-poly1305@openssh.com
+//
+//  Wire format (RFC 4253 §6):
+//    uint32  packet_length        // length of (payload + padding + 1)
+//    uint8   padding_length       // 4..255, makes total length 8-aligned (16 when encrypted)
+//    byte[]  payload              // the SSH message
+//    byte[]  random_padding
+//    byte[]  mac                  // 16 bytes for chacha20-poly1305
+//
+//  The chacha20-poly1305@openssh.com cipher (commonly used by OpenSSH)
+//  splits its 64-byte key into K_1 (header cipher, 32B) and K_2 (payload
+//  cipher, 32B). The 4-byte packet_length is encrypted with K_1 using
+//  chacha20 (no Poly1305) so the receiver can decrypt the length before
+//  it has the full packet. The payload + padding is encrypted with K_2
+//  + chacha20, and the 16-byte Poly1305 MAC covers the encrypted header
+//  + encrypted payload (RFC 4253 sequence number serves as the nonce).
+//
+//  Refs:
+//   - RFC 4253 §6 (packet protocol)
+//   - https://github.com/openssh/openssh-portable/blob/master/PROTOCOL.chacha20poly1305
+//
+//  Surface:
+//    ssh_wire_encode_plain(seq, payload) -> [int]
+//    ssh_wire_encode_chacha(seq, payload, k_main, k_header) -> [int]
+//    ssh_wire_decode_plain(buf) -> map { seq, payload, frame_size } | { error }
+//    ssh_wire_decode_chacha(buf, seq, k_main, k_header) -> same shape
+//
+//  Plus name-list / string / mpint encoders used by all SSH messages.
+
+use "self/stdlib/p9/codec"     // borrows the LE put helpers — SSH is BE though
+
+// ── Big-endian primitive encoders ─────────────────────────────────
+pub fn ssh_put_u8(buf: [int], v: int) -> [int] {
+    buf.push(v - (v / 256) * 256)
+    return buf
+}
+pub fn ssh_put_u32(buf: [int], v: int) -> [int] {
+    let mut x = v
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < 4 { bytes.push(x - (x / 256) * 256) ; x = x / 256 ; i = i + 1 }
+    // emit BE = reverse of LE
+    buf.push(bytes[3])
+    buf.push(bytes[2])
+    buf.push(bytes[1])
+    buf.push(bytes[0])
+    return buf
+}
+pub fn ssh_put_u64(buf: [int], v: int) -> [int] {
+    let mut x = v
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < 8 { bytes.push(x - (x / 256) * 256) ; x = x / 256 ; i = i + 1 }
+    let mut j = 7
+    while j > -1 { buf.push(bytes[j]) ; j = j - 1 }
+    return buf
+}
+
+// SSH string: u32 length + raw bytes.
+pub fn ssh_put_string_bytes(buf: [int], bs: [int]) -> [int] {
+    let mut b = ssh_put_u32(buf, len(bs))
+    let mut i = 0
+    while i < len(bs) { b.push(bs[i]) ; i = i + 1 }
+    return b
+}
+
+pub fn ssh_put_string(buf: [int], s: string) -> [int] {
+    let n = len(s)
+    let mut b = ssh_put_u32(buf, n)
+    let mut i = 0
+    while i < n { b.push(char_code(s, i)) ; i = i + 1 }
+    return b
+}
+
+// SSH name-list: u32 length + comma-separated ASCII.
+pub fn ssh_put_name_list(buf: [int], names: [string]) -> [int] {
+    let mut joined = ""
+    let mut i = 0
+    while i < len(names) {
+        if i > 0 { joined = joined + "," }
+        joined = joined + str(names[i])
+        i = i + 1
+    }
+    return ssh_put_string(buf, joined)
+}
+
+// SSH mpint: u32 length + two's-complement BE bytes, with a leading 0x00
+// prepended when the high bit is set. For DH shared secrets and ed25519
+// signatures we pass already-formatted byte arrays.
+pub fn ssh_put_mpint_bytes(buf: [int], bs: [int]) -> [int] {
+    if len(bs) == 0 { return ssh_put_u32(buf, 0) }
+    // Strip leading zeros (canonical form).
+    let mut start = 0
+    while start < len(bs) - 1 {
+        if bs[start] != 0 { break }
+        start = start + 1
+    }
+    let leading_one_bit = bs[start] > 127
+    let core_len = len(bs) - start
+    let total = if leading_one_bit { core_len + 1 } else { core_len }
+    let mut b = ssh_put_u32(buf, total)
+    if leading_one_bit { b.push(0) }
+    let mut i = start
+    while i < len(bs) { b.push(bs[i]) ; i = i + 1 }
+    return b
+}
+
+// ── BE primitive decoders ──────────────────────────────────────────
+pub fn ssh_get_u8(buf: [int], off: int) -> [int] {
+    if off < 0 || off + 1 > len(buf) { return [0, -1] }
+    return [buf[off], off + 1]
+}
+pub fn ssh_get_u32(buf: [int], off: int) -> [int] {
+    if off < 0 || off + 4 > len(buf) { return [0, -1] }
+    let v = buf[off] * 16777216 + buf[off + 1] * 65536 + buf[off + 2] * 256 + buf[off + 3]
+    return [v, off + 4]
+}
+
+// Read SSH string -> { bytes:[int], new_off }. value is raw bytes.
+pub fn ssh_get_string(buf: [int], off: int) -> any {
+    let h = ssh_get_u32(buf, off)
+    if h[1] < 0 { return #{ "bytes": [], "off": -1 } }
+    let n = h[0]
+    let start = h[1]
+    if start + n > len(buf) { return #{ "bytes": [], "off": -1 } }
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n { out.push(buf[start + i]) ; i = i + 1 }
+    return #{ "bytes": out, "off": start + n }
+}
+
+pub fn ssh_bytes_to_string(bs: [int]) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < len(bs) { s = s + chr(bs[i]) ; i = i + 1 }
+    return s
+}
+
+// ── Plaintext packet framing (used pre-KEX) ───────────────────────
+// total = u32 packet_length + u8 padding_length + payload + padding
+// packet_length = 1 + len(payload) + padding_length
+// padding rounds total to next multiple of 8 (min 4 padding bytes).
+pub fn ssh_wire_encode_plain(seq: int, payload: [int]) -> [int] {
+    let mut buf: [int] = []
+    let payload_n = len(payload)
+    let base = 5 + payload_n   // u32 + u8 + payload
+    let block = 8
+    let pad_n = block - (base - (base / block) * block)
+    let pad_min = if pad_n < 4 { pad_n + block } else { pad_n }
+    let packet_length = 1 + payload_n + pad_min
+    buf = ssh_put_u32(buf, packet_length)
+    buf.push(pad_min)
+    let mut i = 0
+    while i < payload_n { buf.push(payload[i]) ; i = i + 1 }
+    // Padding: random bytes (we just use 0s for now — RFC permits it,
+    // but real OpenSSH uses /dev/urandom; downstream can swap in
+    // hexa_random_bytes for production).
+    let mut j = 0
+    while j < pad_min { buf.push(0) ; j = j + 1 }
+    return buf
+}
+
+// Decode a plaintext packet. Returns { payload, frame_size }.
+pub fn ssh_wire_decode_plain(buf: [int]) -> any {
+    if len(buf) < 5 { return #{ "error": "underrun" } }
+    let h = ssh_get_u32(buf, 0)
+    let packet_length = h[0]
+    if packet_length < 1 || 4 + packet_length > len(buf) {
+        return #{ "error": "size_oob", "packet_length": packet_length, "have": len(buf) }
+    }
+    let pad_n = buf[4]
+    let payload_n = packet_length - pad_n - 1
+    if payload_n < 0 { return #{ "error": "bad_padding" } }
+    let mut payload: [int] = []
+    let mut i = 0
+    while i < payload_n { payload.push(buf[5 + i]) ; i = i + 1 }
+    return #{ "payload": payload, "frame_size": 4 + packet_length }
+}
+
+// ── chacha20-poly1305@openssh.com framing ────────────────────────
+// k = 64-byte key, k1 = k[0..32] (payload), k2 = k[32..64] (header)
+// nonce = 8-byte BE sequence number
+// 1. encrypt the 4-byte packet_length with chacha20(k2, nonce)
+// 2. derive poly1305 key as first 32 bytes of chacha20(k1, nonce, block_counter=0) keystream
+// 3. encrypt payload+padding with chacha20(k1, nonce, block_counter=1)
+// 4. poly1305 MAC over (encrypted_length || encrypted_payload+padding) with that key
+//
+// For an MVP that downstream pool can use, we implement encode + decode
+// in one pass each. The 8-byte nonce is just `seq` as u64-BE.
+
+fn _split_key(k: [int]) -> any {
+    let mut k1: [int] = []      // payload key
+    let mut k2: [int] = []      // header key
+    let mut i = 0
+    while i < 32 { k1.push(k[i])       ; i = i + 1 }
+    let mut j = 0
+    while j < 32 { k2.push(k[32 + j])  ; j = j + 1 }
+    return #{ "payload": k1, "header": k2 }
+}
+
+fn _nonce8_be(seq: int) -> [int] {
+    let mut b: [int] = []
+    let mut bytes: [int] = []
+    let mut x = seq
+    let mut i = 0
+    while i < 8 { bytes.push(x - (x / 256) * 256) ; x = x / 256 ; i = i + 1 }
+    let mut j = 7
+    while j > -1 { b.push(bytes[j]) ; j = j - 1 }
+    return b
+}
+
+pub fn ssh_wire_encode_chacha(seq: int, payload: [int], k64: [int]) -> any {
+    if len(k64) != 64 { return #{ "error": "chacha key must be 64 bytes" } }
+    let ks = _split_key(k64)
+    let nonce = _nonce8_be(seq)
+    let payload_n = len(payload)
+    // chacha20-poly1305@openssh.com requires 8-byte block alignment of
+    // (1 + payload_n + pad_n) AND pad_n >= 4.
+    let base = 1 + payload_n
+    let block = 8
+    let pad_n = block - (base - (base / block) * block)
+    let pad_min = if pad_n < 4 { pad_n + block } else { pad_n }
+    let packet_length = 1 + payload_n + pad_min
+    // Header: 4-byte BE u32 packet_length encrypted with K_header
+    let mut len_bytes: [int] = []
+    len_bytes = ssh_put_u32(len_bytes, packet_length)
+    let enc_len = chacha20_xor(ks["header"], nonce, len_bytes)
+    if type_of(enc_len) != "array" { return enc_len }
+    // Body: pad-length byte + payload + padding bytes encrypted with K_payload
+    let mut body: [int] = []
+    body.push(pad_min)
+    let mut i = 0
+    while i < payload_n { body.push(payload[i]) ; i = i + 1 }
+    let mut j = 0
+    while j < pad_min { body.push(0) ; j = j + 1 }
+    // chacha20-poly1305@openssh.com uses block counter 0 to derive the
+    // poly1305 key (32 zero bytes encrypted as key) and counter 1+ for
+    // the body. libsodium's chacha20 starts at counter 0 by default,
+    // which gives us the keystream block 0. To encrypt the body at
+    // counter 1, we prepend 64 zero bytes (which use block 0) and then
+    // skip them in the output.
+    let mut zero64: [int] = []
+    let mut z = 0
+    while z < 64 { zero64.push(0) ; z = z + 1 }
+    let mut stream_input: [int] = []
+    let zn = len(zero64)
+    let mut zi = 0
+    while zi < zn { stream_input.push(zero64[zi]) ; zi = zi + 1 }
+    let bn = len(body)
+    let mut bi = 0
+    while bi < bn { stream_input.push(body[bi]) ; bi = bi + 1 }
+    let stream_out = chacha20_xor(ks["payload"], nonce, stream_input)
+    if type_of(stream_out) != "array" { return stream_out }
+    // poly1305 key = first 32 bytes of the keystream (XOR'd against
+    // 64 zero bytes which gives raw keystream).
+    let mut poly_key: [int] = []
+    let mut pk = 0
+    while pk < 32 { poly_key.push(stream_out[pk]) ; pk = pk + 1 }
+    let mut enc_body: [int] = []
+    let mut ei = 0
+    while ei < bn { enc_body.push(stream_out[64 + ei]) ; ei = ei + 1 }
+    // MAC input = enc_len || enc_body
+    let mut mac_input: [int] = []
+    let mut mi = 0
+    while mi < len(enc_len) { mac_input.push(enc_len[mi]) ; mi = mi + 1 }
+    let mut mi2 = 0
+    while mi2 < len(enc_body) { mac_input.push(enc_body[mi2]) ; mi2 = mi2 + 1 }
+    let tag = poly1305_onetimeauth(poly_key, mac_input)
+    if type_of(tag) != "array" { return tag }
+    // Wire = enc_len || enc_body || tag
+    let mut out: [int] = []
+    let mut oi = 0
+    while oi < len(enc_len) { out.push(enc_len[oi]) ; oi = oi + 1 }
+    let mut oj = 0
+    while oj < len(enc_body) { out.push(enc_body[oj]) ; oj = oj + 1 }
+    let mut ot = 0
+    while ot < len(tag) { out.push(tag[ot]) ; ot = ot + 1 }
+    return out
+}
+
+// Decrypt one chacha20-poly1305@openssh.com framed packet.
+// Caller has already collected len(buf) >= 4 + packet_length + 16 bytes.
+pub fn ssh_wire_decode_chacha(buf: [int], seq: int, k64: [int]) -> any {
+    if len(k64) != 64 { return #{ "error": "chacha key must be 64 bytes" } }
+    let ks = _split_key(k64)
+    let nonce = _nonce8_be(seq)
+    // 1. decrypt header (first 4 bytes) -> packet_length
+    let mut enc_len: [int] = [buf[0], buf[1], buf[2], buf[3]]
+    let dec_len = chacha20_xor(ks["header"], nonce, enc_len)
+    if type_of(dec_len) != "array" { return dec_len }
+    let plen = dec_len[0] * 16777216 + dec_len[1] * 65536 + dec_len[2] * 256 + dec_len[3]
+    if plen < 1 || plen > 65535 { return #{ "error": "bad packet_length", "plen": plen } }
+    if 4 + plen + 16 > len(buf) { return #{ "error": "underrun", "need": 4 + plen + 16, "have": len(buf) } }
+    // 2. derive poly1305 key from first 32 bytes of keystream-at-counter-0
+    let mut zero64: [int] = []
+    let mut z = 0
+    while z < 64 { zero64.push(0) ; z = z + 1 }
+    let mut bod_in = zero64
+    let mut bi = 0
+    while bi < plen { bod_in.push(buf[4 + bi]) ; bi = bi + 1 }
+    let stream_out = chacha20_xor(ks["payload"], nonce, bod_in)
+    if type_of(stream_out) != "array" { return stream_out }
+    let mut poly_key: [int] = []
+    let mut pk = 0
+    while pk < 32 { poly_key.push(stream_out[pk]) ; pk = pk + 1 }
+    // 3. verify MAC
+    let mut mac_input: [int] = []
+    let mut mi = 0
+    while mi < 4 + plen { mac_input.push(buf[mi]) ; mi = mi + 1 }
+    let expect_tag = poly1305_onetimeauth(poly_key, mac_input)
+    if type_of(expect_tag) != "array" { return expect_tag }
+    let mut tag_ok = true
+    let mut ti = 0
+    while ti < 16 {
+        if buf[4 + plen + ti] != expect_tag[ti] { tag_ok = false; break }
+        ti = ti + 1
+    }
+    if !tag_ok { return #{ "error": "tag mismatch" } }
+    // 4. extract decrypted body from stream_out[64..]
+    let mut body: [int] = []
+    let mut bj = 0
+    while bj < plen { body.push(stream_out[64 + bj]) ; bj = bj + 1 }
+    let pad_n = body[0]
+    let payload_n = plen - 1 - pad_n
+    if payload_n < 0 { return #{ "error": "bad_padding" } }
+    let mut payload: [int] = []
+    let mut p = 0
+    while p < payload_n { payload.push(body[1 + p]) ; p = p + 1 }
+    return #{ "payload": payload, "frame_size": 4 + plen + 16 }
+}

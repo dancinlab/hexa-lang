@@ -4114,6 +4114,7 @@ fn gen2_expr(node) {
                 if name == "proc_wait_flag_const"    { return "hexa_proc_wait_flag_const(" + a0 + ")" }
                 // stdlib/crypto — 1-arg primitives (RFC ssh-client crypto suite)
                 if name == "sha512"                  { return "hexa_sha512(" + a0 + ")" }
+                if name == "sha256_bytes"            { return "hexa_sha256_bytes(" + a0 + ")" }
             }
             if len(node.args) == 2 {
                 // stdlib/os/mount + namespace — 2-arg (RFC stdlib-os-{mount,namespace}-linux.md)
@@ -4132,6 +4133,7 @@ fn gen2_expr(node) {
                 // stdlib/crypto — 2-arg primitives (RFC ssh-client)
                 if name == "ed25519_sign"   { return "hexa_ed25519_sign(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "x25519_scalarmult" { return "hexa_x25519_scalarmult(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                if name == "poly1305_onetimeauth" { return "hexa_poly1305_onetimeauth(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // PTY 2-arg builtins
                 if name == "term_fd_read"   { return "hexa_term_fd_read(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "term_fd_write"  { return "hexa_term_fd_write(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
@@ -4226,6 +4228,9 @@ fn gen2_expr(node) {
                 // stdlib/crypto — 3-arg primitives (RFC ssh-client)
                 if name == "ed25519_verify" {
                     return "hexa_ed25519_verify(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
+                }
+                if name == "chacha20_xor" {
+                    return "hexa_chacha20_xor(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
                 }
             }
             if len(node.args) == 5 {
@@ -6080,11 +6085,14 @@ fn _is_builtin_name(name) {
     // stdlib/crypto — libsodium-backed primitives (RFC ssh-client)
     if name == "libsodium_available" { return true }
     if name == "sha512" { return true }
+    if name == "sha256_bytes" { return true }
     if name == "ed25519_keypair" { return true }
     if name == "ed25519_sign" { return true }
     if name == "ed25519_verify" { return true }
     if name == "x25519_keypair" { return true }
     if name == "x25519_scalarmult" { return true }
+    if name == "chacha20_xor" { return true }
+    if name == "poly1305_onetimeauth" { return true }
     if name == "chacha20_poly1305_encrypt" { return true }
     if name == "chacha20_poly1305_decrypt" { return true }
     if name == "now_monotonic_s" { return true }

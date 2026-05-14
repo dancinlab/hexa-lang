@@ -94,6 +94,26 @@ HexaVal hexa_sha512(HexaVal data_val) {
 #endif
 }
 
+/* SHA-256 over byte array (needed for SSH curve25519-sha256 KEX
+ * exchange-hash). The existing `hexa_sha256` in exec_argv_sha256.c
+ * takes a string and returns a hex-string — kept for that surface;
+ * this one is the raw bytes→bytes flavour. */
+HexaVal hexa_sha256_bytes(HexaVal data_val) {
+#ifdef HEXA_HAS_LIBSODIUM
+    if (!_ensure_sodium()) return _crypto_error("libsodium init failed");
+    size_t n = 0;
+    unsigned char* in = _arr_to_bytes(data_val, &n);
+    if (!in) return _crypto_error("sha256_bytes: bad input");
+    unsigned char out[crypto_hash_sha256_BYTES];
+    crypto_hash_sha256(out, in, n);
+    free(in);
+    return _bytes_to_arr(out, crypto_hash_sha256_BYTES);
+#else
+    (void)data_val;
+    return _crypto_error("libsodium not linked into this build");
+#endif
+}
+
 /* ed25519 key-pair generation */
 HexaVal hexa_ed25519_keypair(void) {
 #ifdef HEXA_HAS_LIBSODIUM
@@ -193,6 +213,58 @@ HexaVal hexa_x25519_scalarmult(HexaVal scalar_val, HexaVal point_val) {
     return _bytes_to_arr(out, sizeof(out));
 #else
     (void)scalar_val; (void)point_val;
+    return _crypto_error("libsodium not linked");
+#endif
+}
+
+/* ChaCha20 keystream XOR (no Poly1305). Used by SSH's
+ * chacha20-poly1305@openssh.com to encrypt the 4-byte packet_length
+ * header with a separate key from the payload. Nonce is 8 bytes
+ * (SSH sequence number, big-endian), key is 32 bytes. */
+HexaVal hexa_chacha20_xor(HexaVal key_v, HexaVal nonce_v, HexaVal data_v) {
+#ifdef HEXA_HAS_LIBSODIUM
+    if (!_ensure_sodium()) return _crypto_error("libsodium init failed");
+    size_t kn = 0, nn = 0, dn = 0;
+    unsigned char* k = _arr_to_bytes(key_v,   &kn);
+    unsigned char* n = _arr_to_bytes(nonce_v, &nn);
+    unsigned char* d = _arr_to_bytes(data_v,  &dn);
+    if (!k || kn != crypto_stream_chacha20_KEYBYTES ||
+        !n || nn != crypto_stream_chacha20_NONCEBYTES ||
+        !d) {
+        if (k) free(k); if (n) free(n); if (d) free(d);
+        return _crypto_error("chacha20_xor: key=32 nonce=8 required");
+    }
+    unsigned char* out = (unsigned char*)malloc(dn);
+    int rc = crypto_stream_chacha20_xor(out, d, dn, n, k);
+    HexaVal res;
+    if (rc == 0) { res = _bytes_to_arr(out, dn); }
+    else { res = _crypto_error("chacha20_xor failed"); }
+    free(k); free(n); free(d); free(out);
+    return res;
+#else
+    (void)key_v; (void)nonce_v; (void)data_v;
+    return _crypto_error("libsodium not linked");
+#endif
+}
+
+/* Poly1305 one-shot MAC. Used for SSH chacha20-poly1305@openssh.com
+ * separately from the AEAD wrapper. key = 32 bytes, msg = any. */
+HexaVal hexa_poly1305_onetimeauth(HexaVal key_v, HexaVal msg_v) {
+#ifdef HEXA_HAS_LIBSODIUM
+    if (!_ensure_sodium()) return _crypto_error("libsodium init failed");
+    size_t kn = 0, mn = 0;
+    unsigned char* k = _arr_to_bytes(key_v, &kn);
+    unsigned char* m = _arr_to_bytes(msg_v, &mn);
+    if (!k || kn != crypto_onetimeauth_poly1305_KEYBYTES) {
+        if (k) free(k); if (m) free(m);
+        return _crypto_error("poly1305: key must be 32 bytes");
+    }
+    unsigned char tag[crypto_onetimeauth_poly1305_BYTES];
+    crypto_onetimeauth_poly1305(tag, m, mn, k);
+    free(k); if (m) free(m);
+    return _bytes_to_arr(tag, sizeof(tag));
+#else
+    (void)key_v; (void)msg_v;
     return _crypto_error("libsodium not linked");
 #endif
 }

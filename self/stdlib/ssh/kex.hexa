@@ -1,0 +1,238 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/ssh/kex.hexa -- SSH curve25519-sha256 KEX (RFC 8731)
+//
+//  KEX state machine pieces. The driving loop lives in ssh.hexa; this
+//  module provides:
+//
+//    1. ssh_kex_build_kexinit(cookie) -> bytes  -- build SSH_MSG_KEXINIT
+//    2. ssh_kex_parse_kex_reply(payload) -> map -- parse SSH_MSG_KEX_ECDH_REPLY
+//    3. ssh_kex_compute_h(v_c, v_s, i_c, i_s, k_s, q_c, q_s, k_mpint) -> [int]
+//    4. ssh_kex_verify_signature(k_s, sig_blob, h) -> bool
+//    5. ssh_kex_derive_keys(k_mpint, h, session_id) -> map of 6 keys
+//
+//  Algorithm choices are fixed for MVP:
+//    kex            : curve25519-sha256
+//    host key       : ssh-ed25519
+//    cipher c->s/s->c : chacha20-poly1305@openssh.com
+//    mac c->s/s->c   : <implicit, AEAD>
+//    compression    : none
+//    languages      : <empty>
+
+use "self/stdlib/ssh/wire"
+
+// SSH message type constants (subset)
+pub let SSH_MSG_KEXINIT          = 20
+pub let SSH_MSG_NEWKEYS          = 21
+pub let SSH_MSG_KEX_ECDH_INIT    = 30
+pub let SSH_MSG_KEX_ECDH_REPLY   = 31
+pub let SSH_MSG_SERVICE_REQUEST  = 5
+pub let SSH_MSG_SERVICE_ACCEPT   = 6
+pub let SSH_MSG_USERAUTH_REQUEST = 50
+pub let SSH_MSG_USERAUTH_FAILURE = 51
+pub let SSH_MSG_USERAUTH_SUCCESS = 52
+pub let SSH_MSG_GLOBAL_REQUEST   = 80
+pub let SSH_MSG_CHANNEL_OPEN     = 90
+pub let SSH_MSG_CHANNEL_OPEN_CONFIRMATION = 91
+pub let SSH_MSG_CHANNEL_OPEN_FAILURE      = 92
+pub let SSH_MSG_CHANNEL_WINDOW_ADJUST     = 93
+pub let SSH_MSG_CHANNEL_DATA              = 94
+pub let SSH_MSG_CHANNEL_EXTENDED_DATA     = 95
+pub let SSH_MSG_CHANNEL_EOF               = 96
+pub let SSH_MSG_CHANNEL_CLOSE             = 97
+pub let SSH_MSG_CHANNEL_REQUEST           = 98
+pub let SSH_MSG_CHANNEL_SUCCESS           = 99
+pub let SSH_MSG_CHANNEL_FAILURE           = 100
+
+// Build SSH_MSG_KEXINIT payload (excluding the packet framing — wire.hexa adds that).
+//   byte    SSH_MSG_KEXINIT  (=20)
+//   byte[16] cookie          (random)
+//   name-list kex_algorithms
+//   name-list server_host_key_algorithms
+//   name-list encryption_algorithms_client_to_server
+//   name-list encryption_algorithms_server_to_client
+//   name-list mac_algorithms_client_to_server
+//   name-list mac_algorithms_server_to_client
+//   name-list compression_algorithms_client_to_server
+//   name-list compression_algorithms_server_to_client
+//   name-list languages_client_to_server
+//   name-list languages_server_to_client
+//   boolean   first_kex_packet_follows  (0)
+//   uint32    reserved                  (0)
+pub fn ssh_kex_build_kexinit(cookie: [int]) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_u8(p, SSH_MSG_KEXINIT)
+    if len(cookie) != 16 {
+        // pad / truncate to 16 — safer than failing silently downstream
+        let mut i = 0
+        while i < 16 {
+            if i < len(cookie) { p.push(cookie[i]) } else { p.push(0) }
+            i = i + 1
+        }
+    } else {
+        let mut i = 0
+        while i < 16 { p.push(cookie[i]) ; i = i + 1 }
+    }
+    p = ssh_put_name_list(p, ["curve25519-sha256", "curve25519-sha256@libssh.org"])
+    p = ssh_put_name_list(p, ["ssh-ed25519"])
+    p = ssh_put_name_list(p, ["chacha20-poly1305@openssh.com"])
+    p = ssh_put_name_list(p, ["chacha20-poly1305@openssh.com"])
+    p = ssh_put_name_list(p, ["hmac-sha2-256"])     // unused with AEAD but field required
+    p = ssh_put_name_list(p, ["hmac-sha2-256"])
+    p = ssh_put_name_list(p, ["none"])
+    p = ssh_put_name_list(p, ["none"])
+    p = ssh_put_name_list(p, [])
+    p = ssh_put_name_list(p, [])
+    p = ssh_put_u8(p, 0)        // first_kex_packet_follows
+    p = ssh_put_u32(p, 0)       // reserved
+    return p
+}
+
+// Parse SSH_MSG_KEX_ECDH_REPLY:
+//   byte    SSH_MSG_KEX_ECDH_REPLY  (=31)
+//   string  K_S                (server public host key, opaque blob)
+//   string  Q_S                (server ephemeral X25519 pub, 32 bytes)
+//   string  signature          (opaque blob, ssh-ed25519 over H)
+pub fn ssh_kex_parse_kex_reply(payload: [int]) -> any {
+    if len(payload) < 1 || payload[0] != SSH_MSG_KEX_ECDH_REPLY {
+        return #{ "error": "not KEX_ECDH_REPLY" }
+    }
+    let r1 = ssh_get_string(payload, 1)
+    if r1["off"] < 0 { return #{ "error": "bad K_S" } }
+    let r2 = ssh_get_string(payload, r1["off"])
+    if r2["off"] < 0 { return #{ "error": "bad Q_S" } }
+    let r3 = ssh_get_string(payload, r2["off"])
+    if r3["off"] < 0 { return #{ "error": "bad signature" } }
+    return #{ "k_s": r1["bytes"], "q_s": r2["bytes"], "signature_blob": r3["bytes"] }
+}
+
+// Build SSH_MSG_KEX_ECDH_INIT:
+//   byte    SSH_MSG_KEX_ECDH_INIT  (=30)
+//   string  Q_C  (client ephemeral X25519 pub, 32 bytes)
+pub fn ssh_kex_build_kex_ecdh_init(q_c: [int]) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_u8(p, SSH_MSG_KEX_ECDH_INIT)
+    p = ssh_put_string_bytes(p, q_c)
+    return p
+}
+
+// Compute exchange hash H per RFC 8731:
+//   H = SHA256( string(V_C) || string(V_S) || string(I_C) || string(I_S) ||
+//               string(K_S) || string(Q_C) || string(Q_S) || mpint(K) )
+//   where V_C/V_S are identification strings without CRLF, I_C/I_S are the
+//   raw KEXINIT payloads (the entire SSH_MSG_KEXINIT message bodies).
+pub fn ssh_kex_compute_h(v_c: string, v_s: string,
+                          i_c: [int], i_s: [int],
+                          k_s: [int], q_c: [int], q_s: [int],
+                          k_secret: [int]) -> any {
+    let mut buf: [int] = []
+    buf = ssh_put_string(buf, v_c)
+    buf = ssh_put_string(buf, v_s)
+    buf = ssh_put_string_bytes(buf, i_c)
+    buf = ssh_put_string_bytes(buf, i_s)
+    buf = ssh_put_string_bytes(buf, k_s)
+    buf = ssh_put_string_bytes(buf, q_c)
+    buf = ssh_put_string_bytes(buf, q_s)
+    buf = ssh_put_mpint_bytes(buf, k_secret)
+    return sha256_bytes(buf)
+}
+
+// Parse an ssh-ed25519 host key blob:
+//   string "ssh-ed25519"
+//   string <32-byte pub>
+pub fn ssh_kex_parse_ed25519_hostkey(k_s: [int]) -> any {
+    let r1 = ssh_get_string(k_s, 0)
+    if r1["off"] < 0 { return #{ "error": "bad host key blob" } }
+    let name = ssh_bytes_to_string(r1["bytes"])
+    if name != "ssh-ed25519" { return #{ "error": "host key not ed25519: " + name } }
+    let r2 = ssh_get_string(k_s, r1["off"])
+    if r2["off"] < 0 { return #{ "error": "bad host key pub" } }
+    if len(r2["bytes"]) != 32 { return #{ "error": "ed25519 pub must be 32 bytes" } }
+    return #{ "pub": r2["bytes"] }
+}
+
+// Parse signature blob:
+//   string "ssh-ed25519"
+//   string <64-byte signature>
+pub fn ssh_kex_parse_ed25519_sig(sig_blob: [int]) -> any {
+    let r1 = ssh_get_string(sig_blob, 0)
+    if r1["off"] < 0 { return #{ "error": "bad sig blob" } }
+    let name = ssh_bytes_to_string(r1["bytes"])
+    if name != "ssh-ed25519" { return #{ "error": "sig not ed25519: " + name } }
+    let r2 = ssh_get_string(sig_blob, r1["off"])
+    if r2["off"] < 0 { return #{ "error": "bad sig bytes" } }
+    return #{ "sig": r2["bytes"] }
+}
+
+pub fn ssh_kex_verify_signature(k_s: [int], sig_blob: [int], h: [int]) -> bool {
+    let hk = ssh_kex_parse_ed25519_hostkey(k_s)
+    if has_key(hk, "error") { return false }
+    let sp = ssh_kex_parse_ed25519_sig(sig_blob)
+    if has_key(sp, "error") { return false }
+    return ed25519_verify(hk["pub"], h, sp["sig"])
+}
+
+// Derive a single key letter per RFC 4253 §7.2:
+//   K1 = HASH(K || H || X || session_id)         where X is "A".."F"
+//   K2 = HASH(K || H || K1)
+//   K3 = HASH(K || H || K1 || K2)
+//   ...
+// Concatenate until we have at least `nbytes` bytes; truncate to nbytes.
+fn _derive_key(k_mpint_payload: [int], h: [int], letter: int,
+               session_id: [int], nbytes: int) -> [int] {
+    // Compose K1 input: mpint(K) || H || single-byte letter || session_id
+    let mut k1_in: [int] = []
+    let mut acc = ssh_put_mpint_bytes(k1_in, k_mpint_payload)
+    let mut i = 0
+    while i < len(h) { acc.push(h[i]) ; i = i + 1 }
+    acc.push(letter)
+    let mut j = 0
+    while j < len(session_id) { acc.push(session_id[j]) ; j = j + 1 }
+    let mut out: [int] = []
+    let first = sha256_bytes(acc)
+    if type_of(first) != "array" { return [] }
+    let mut o = 0
+    while o < len(first) { out.push(first[o]) ; o = o + 1 }
+    // Extend if needed
+    while len(out) < nbytes {
+        let mut nxt: [int] = []
+        nxt = ssh_put_mpint_bytes(nxt, k_mpint_payload)
+        let mut hi = 0
+        while hi < len(h) { nxt.push(h[hi]) ; hi = hi + 1 }
+        let mut oi = 0
+        while oi < len(out) { nxt.push(out[oi]) ; oi = oi + 1 }
+        let chunk = sha256_bytes(nxt)
+        if type_of(chunk) != "array" { return [] }
+        let mut ci = 0
+        while ci < len(chunk) { out.push(chunk[ci]) ; ci = ci + 1 }
+    }
+    // Truncate
+    let mut trunc: [int] = []
+    let mut ti = 0
+    while ti < nbytes { trunc.push(out[ti]) ; ti = ti + 1 }
+    return trunc
+}
+
+// Derive all 6 keys. For chacha20-poly1305@openssh.com:
+//   IV C->S (A): 0 bytes
+//   IV S->C (B): 0 bytes
+//   Enc key C->S (C): 64 bytes
+//   Enc key S->C (D): 64 bytes
+//   MAC C->S (E): 0 bytes (implicit AEAD)
+//   MAC S->C (F): 0 bytes
+// Returns map { "enc_c2s": [int 64], "enc_s2c": [int 64] }
+pub fn ssh_kex_derive_keys(k_mpint_payload: [int], h: [int], session_id: [int]) -> any {
+    let a_letter = 65        // 'A'
+    let b_letter = 66
+    let c_letter = 67
+    let d_letter = 68
+    // Don't bother computing 0-byte IVs/MACs.
+    let enc_c2s = _derive_key(k_mpint_payload, h, c_letter, session_id, 64)
+    let enc_s2c = _derive_key(k_mpint_payload, h, d_letter, session_id, 64)
+    return #{ "enc_c2s": enc_c2s, "enc_s2c": enc_s2c }
+}
+
+pub fn ssh_kex_build_newkeys() -> [int] {
+    let mut p: [int] = []
+    p.push(SSH_MSG_NEWKEYS)
+    return p
+}
