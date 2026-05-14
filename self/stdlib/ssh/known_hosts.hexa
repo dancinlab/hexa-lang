@@ -20,7 +20,7 @@
 
 use "self/stdlib/ssh/keyfile"  // for ssh_base64_decode_bytes
 
-fn _split_csv(s: string) -> [string] {
+fn _kh_split_csv(s: string) -> [string] {
     let mut out: [string] = [""]
     let mut idx = 0
     let mut i = 0
@@ -99,7 +99,7 @@ fn _parse_line(line: string) -> any {
     }
     if len(fields) < 3 { return #{ "skip": true } }
     return #{
-        "hosts":    _split_csv(fields[0]),
+        "hosts":    _kh_split_csv(fields[0]),
         "key_type": fields[1],
         "key_b64":  fields[2]
     }
