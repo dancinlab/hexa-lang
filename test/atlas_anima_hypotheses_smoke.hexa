@@ -1,0 +1,137 @@
+// test/atlas_anima_hypotheses_smoke.hexa — Wave 1.6 anima hypothesis-registry smoke
+//
+// Verifies the registry absorption emitted by
+// tool/atlas_absorb_anima_hypotheses.hexa:
+//
+//   * ~/.hx/data/atlas.overlay.n6 carries the BEGIN/END markers.
+//   * The block holds ≥ 191 @? anima.hypothesis.* rows.
+//   * Spot-check 4 rows: H_001, H_050, H_100, H_191 — each row has
+//     the expected id literal in its raw header and a `status = "..."`
+//     line in its continuation.
+//   * parse_atlas_file() can read the overlay end-to-end and recognize
+//     all anima.hypothesis.* nodes as kind="Q".
+//
+// Run:
+//   hexa run test/atlas_anima_hypotheses_smoke.hexa
+
+use "compiler/atlas/parser"
+use "compiler/atlas/overlay"
+
+let _BEGIN = "# ===== ANIMA HYPOTHESIS REGISTRY ABSORPTION 2026-05-14 BEGIN ====="
+let _END   = "# ===== ANIMA HYPOTHESIS REGISTRY ABSORPTION 2026-05-14 END ====="
+
+fn _check(label: string, ok: bool, fails) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+// Find an AtlasNode by exact `id`. Returns sentinel (kind == "") on miss.
+fn _find(nodes, id: string) -> AtlasNode {
+    let n = len(nodes)
+    let mut i = 0
+    while i < n {
+        let node = nodes[i]
+        if node.id == id { return node }
+        i = i + 1
+    }
+    return AtlasNode {
+        kind: "", id: "", raw: "", source_file: "", source_line: 0,
+        grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false },
+        edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }
+    }
+}
+
+fn _count_anima_hypothesis_nodes(nodes) -> i64 {
+    let n = len(nodes)
+    let mut i = 0
+    let mut c = 0
+    let prefix = "anima.hypothesis."
+    let lp = len(prefix)
+    while i < n {
+        let node = nodes[i]
+        if len(node.id) >= lp && node.id.substring(0, lp) == prefix {
+            c = c + 1
+        }
+        i = i + 1
+    }
+    return c
+}
+
+fn main() {
+    let fails = []
+
+    println("anima hypothesis-registry smoke — wave 1.6")
+
+    let path = overlay_path()
+    _check("overlay file exists", file_exists(path), fails)
+    if !file_exists(path) {
+        println("anima hypotheses smoke: FAIL — overlay file missing.")
+        return
+    }
+
+    let body = read_file(path)
+    _check("overlay BEGIN marker present", body.contains(_BEGIN), fails)
+    _check("overlay END   marker present", body.contains(_END),   fails)
+
+    // Raw line count — splitting on newline keeps the test independent
+    // of parse_atlas_file (we still run that below for end-to-end).
+    let lines = body.split("\n")
+    let mut rows = 0
+    let mut i = 0
+    let n = len(lines)
+    let needle = "@? anima.hypothesis."
+    let lneedle = len(needle)
+    while i < n {
+        let line = to_string(lines[i])
+        if len(line) >= lneedle && line.substring(0, lneedle) == needle {
+            rows = rows + 1
+        }
+        i = i + 1
+    }
+    _check("@? anima.hypothesis.* rows >= 191", rows >= 191, fails)
+    println("    (observed " + to_string(rows) + " rows)")
+
+    // Spot-check via parse_atlas_file — exercises the full parser path
+    // including continuation-line handling.
+    let nodes = parse_atlas_file(path, "atlas.overlay.n6")
+    _check("parse_atlas_file produced > 0 nodes", len(nodes) > 0, fails)
+
+    let n_anima = _count_anima_hypothesis_nodes(nodes)
+    _check("parse_atlas_file sees >= 191 anima.hypothesis.* nodes", n_anima >= 191, fails)
+    println("    (parser saw " + to_string(n_anima) + " hypothesis nodes)")
+
+    // Per-spot id + raw shape.
+    let spots = ["H_001", "H_050", "H_100", "H_191"]
+    let mut s = 0
+    while s < len(spots) {
+        let hid = to_string(spots[s])
+        let target = "anima.hypothesis." + hid
+        let node = _find(nodes, target)
+        _check("spot " + hid + ": found node", node.kind == "Q", fails)
+        if node.kind == "Q" {
+            _check("spot " + hid + ": kind=Q (@?)", node.kind == "Q", fails)
+            _check("spot " + hid + ": raw header contains id", node.raw.contains(target), fails)
+            _check("spot " + hid + ": raw carries [needs-review] grade", node.raw.contains("[needs-review]"), fails)
+            _check("spot " + hid + ": raw carries `status = `", node.raw.contains("status = \""), fails)
+            _check("spot " + hid + ": raw carries `source = `", node.raw.contains("source = \"anima/hypotheses/" + hid), fails)
+        }
+        s = s + 1
+    }
+
+    let nf = len(fails)
+    println("")
+    if nf == 0 {
+        println("anima hypotheses smoke: PASS")
+    } else {
+        println("anima hypotheses smoke: FAIL — " + to_string(nf) + " check(s) failed")
+        let mut k = 0
+        while k < nf {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+    }
+}
