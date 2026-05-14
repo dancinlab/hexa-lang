@@ -89,6 +89,21 @@ fn _x86_op_label(name: string) -> LOperand {
     }
 }
 
+// B5 follow-up — `_op_mem` was defined only in arm64_darwin.hexa but
+// called from x86_64 SSA-spill paths via splice. After the B5 backend-
+// prefix rename, x86_64's call sites became `_x86_op_mem` with no
+// matching definition. Add the mirror here.
+fn _x86_op_mem(base: string, offset: i64) -> LOperand {
+    return LOperand {
+        kind: "mem",
+        reg: _x86_empty_preg(),
+        imm: 0,
+        mem_base: _x86_preg_gpr(base),
+        mem_offset: offset,
+        label: ""
+    }
+}
+
 fn _x86_instr0(op: string, comment: string) -> LInstr {
     return LInstr { op: op, args: [], comment: comment }
 }
