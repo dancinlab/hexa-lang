@@ -1,0 +1,91 @@
+// absorbed from ~/core/hexa-space/verify/run_all.hexa (MIT, hexa-space v1.0.0)
+// test/rsc_smoke.hexa — shape-only smoke test for the tool/rsc/ substrate.
+//
+// @version 0.1.0
+// @capabilities [fs_read, exec]
+//
+// Calls falsifier_audit + saturation_check + lint_numerics against the
+// real hexa-lang corpus and asserts the return shape is well-formed.
+// PASS verdicts are NOT required — the real corpus may legitimately
+// fail saturation during a ramp. We only verify:
+//
+//   #1 the audit functions are callable and return a struct
+//   #2 totals are non-negative integers
+//   #3 the result invariants hold (passing <= total, min_pct in 0..100,
+//      failed_checks <= total_checks)
+//
+// Exit 0 on shape-valid, exit 1 on shape-violation.
+
+use "tool/rsc/falsifier_audit"
+use "tool/rsc/saturation_check"
+use "tool/rsc/lint_numerics"
+
+let mut RUN  = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: string) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+}
+
+fn main() {
+    println("========================================================================")
+    println("  test/rsc_smoke — tool/rsc/ shape audit")
+    println("========================================================================")
+
+    // ── Falsifier audit ─────────────────────────────────────────────
+    println("")
+    println("-- falsifier audit --")
+    let fa = rsc_falsifier_audit()
+    _check(fa.total >= 0, "falsifier.total >= 0  (" + to_string(fa.total) + ")")
+    _check(fa.passing >= 0, "falsifier.passing >= 0  (" + to_string(fa.passing) + ")")
+    _check(fa.passing <= fa.total, "falsifier.passing <= total")
+    _check(fa.min_pct >= 0 && fa.min_pct <= 100,
+           "falsifier.min_pct in 0..100  (" + to_string(fa.min_pct) + ")")
+    _check(len(fa.results) == fa.total, "falsifier.results length matches total")
+
+    // ── Lint ────────────────────────────────────────────────────────
+    println("")
+    println("-- numerics lint --")
+    let lint = rsc_lint_numerics()
+    _check(lint.total_files >= 0, "lint.total_files >= 0  (" + to_string(lint.total_files) + ")")
+    _check(lint.total_checks >= 0, "lint.total_checks >= 0  (" + to_string(lint.total_checks) + ")")
+    _check(lint.failed_checks >= 0, "lint.failed_checks >= 0  (" + to_string(lint.failed_checks) + ")")
+    _check(lint.failed_checks <= lint.total_checks, "lint.failed_checks <= total_checks")
+    _check(lint.total_checks == lint.total_files * 5,
+           "lint.total_checks == files * 5")
+
+    // ── Saturation ─────────────────────────────────────────────────
+    println("")
+    println("-- saturation probe --")
+    let sat = rsc_saturation_check()
+    _check(sat.inv_count >= 0, "saturation.inv_count >= 0  (" + to_string(sat.inv_count) + ")")
+    _check(sat.inv_floor >= 0, "saturation.inv_floor >= 0  (" + to_string(sat.inv_floor) + ")")
+    _check(sat.entries >= 0, "saturation.entries >= 0  (" + to_string(sat.entries) + ")")
+    _check(sat.min_t2 >= 0, "saturation.min_t2 >= 0  (" + to_string(sat.min_t2) + ")")
+
+    // ── Cross-check ────────────────────────────────────────────────
+    println("")
+    println("-- cross-check --")
+    _check(sat.entries == fa.total,
+           "saturation.entries == falsifier.total  (" +
+             to_string(sat.entries) + " == " + to_string(fa.total) + ")")
+
+    println("")
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + to_string(pass_n) + "/" + to_string(RUN) + " shape assertions pass")
+    println("  (note: a FAIL verdict on the underlying gates is acceptable —")
+    println("   this smoke test verifies the RETURN SHAPE, not gate verdicts.)")
+    if FAIL > 0 {
+        println("__HEXA_LANG_RSC_SMOKE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_LANG_RSC_SMOKE__ PASS")
+    exit(0)
+}

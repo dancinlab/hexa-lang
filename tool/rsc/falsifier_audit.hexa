@@ -1,0 +1,145 @@
+// absorbed from ~/core/hexa-space/verify/falsifier_check.hexa (MIT, hexa-space v1.0.0)
+// tool/rsc/falsifier_audit.hexa — per-falsifier closure_pct ladder + aggregate.
+//
+// @version 0.1.0
+// @capabilities [fs_read, exec]
+//
+// Walks the registry from tool/rsc/registry.hexa and reports the
+// 0/33/67/100% closure ladder per falsifier:
+//
+//     T1 algebraic  — calc_*.hexa  exists on disk
+//     T2 numerical  — numerics_*.hexa exists on disk (≥1 in stack)
+//     T3 empirical  — pin.* / archive marker present (hardware closure)
+//
+// closure_pct = (passing_tiers / 3) * 100  rounded to {0,33,67,100}.
+//
+// Sentinel: __HEXA_LANG_RSC_FALSIFIER__ PASS|FAIL — <n>/<m> at <pct>%
+//
+// PASS criterion (configurable via env HEXA_RSC_FLOOR_PCT, default 67):
+//   every entry's closure_pct >= floor AND at least 1 entry exists.
+
+use "tool/rsc/registry"
+
+pub struct TierResult {
+    name: string,
+    board: string,
+    t1_ok: bool,
+    t2_ok: bool,
+    t2_count: i64,
+    t3_ok: bool,
+    pct: i64
+}
+
+pub struct AuditResult {
+    pass: bool,
+    total: i64,
+    passing: i64,
+    min_pct: i64,
+    results: [TierResult]
+}
+
+fn _floor() -> i64 {
+    let raw = env("HEXA_RSC_FLOOR_PCT")
+    if len(raw) > 0 { return to_int(raw) }
+    return 67
+}
+
+fn _closure_pct(t1: bool, t2: bool, t3: bool) -> i64 {
+    let mut k = 0
+    if t1 { k = k + 1 }
+    if t2 { k = k + 1 }
+    if t3 { k = k + 1 }
+    if k == 0 { return 0 }
+    if k == 1 { return 33 }
+    if k == 2 { return 67 }
+    return 100
+}
+
+fn _mark(ok: bool) -> string {
+    if ok { return "v" }
+    return "x"
+}
+
+fn _eval(entry: FalsifierEntry) -> TierResult {
+    let t1_ok = len(entry.t1_paths) > 0
+    let t2_n  = len(entry.t2_paths)
+    let t2_ok = t2_n >= 1
+    let t3_ok = len(entry.t3_paths) > 0
+    let pct = _closure_pct(t1_ok, t2_ok, t3_ok)
+    return TierResult {
+        name: entry.name,
+        board: entry.board,
+        t1_ok: t1_ok,
+        t2_ok: t2_ok,
+        t2_count: t2_n,
+        t3_ok: t3_ok,
+        pct: pct
+    }
+}
+
+fn _print_row(r: TierResult) {
+    println("  " + r.name +
+        "  T1 " + _mark(r.t1_ok) +
+        "   T2 " + _mark(r.t2_ok) + " (x" + to_string(r.t2_count) + " stack)" +
+        "   T3 " + _mark(r.t3_ok) +
+        "   = " + to_string(r.pct) + "%")
+}
+
+pub fn rsc_falsifier_audit() -> AuditResult {
+    let reg = rsc_registry()
+    let floor = _floor()
+    let mut results = []
+    let mut passing = 0
+    let mut min_pct = 100
+    let mut i = 0
+    while i < len(reg) {
+        let r = _eval(reg[i])
+        results.push(r)
+        if r.pct >= floor { passing = passing + 1 }
+        if r.pct < min_pct { min_pct = r.pct }
+        i = i + 1
+    }
+    let total = len(reg)
+    if total == 0 { min_pct = 0 }
+    let ok = (total > 0) && (passing == total)
+    return AuditResult {
+        pass: ok,
+        total: total,
+        passing: passing,
+        min_pct: min_pct,
+        results: results
+    }
+}
+
+pub fn rsc_falsifier_audit_print() -> AuditResult {
+    let floor = _floor()
+    println("========================================================================")
+    println("  hexa-lang RSC — falsifier closure-progress tracker")
+    println("  ladder: T1 + T2 + T3 -> 0/33/67/100%  (floor=" + to_string(floor) + "%)")
+    println("========================================================================")
+    println("  root: " + rsc_root())
+    println("")
+
+    let result = rsc_falsifier_audit()
+    let mut i = 0
+    while i < len(result.results) {
+        _print_row(result.results[i])
+        i = i + 1
+    }
+
+    println("")
+    println("========================================================================")
+    println("  " + to_string(result.passing) + "/" + to_string(result.total) +
+            " falsifiers reach floor (>=" + to_string(floor) + "%)")
+    println("  min closure across registry = " + to_string(result.min_pct) + "%")
+    if result.pass {
+        println("__HEXA_LANG_RSC_FALSIFIER__ PASS - " +
+                to_string(result.passing) + "/" + to_string(result.total) +
+                " at " + to_string(result.min_pct) + "%")
+    } else {
+        println("__HEXA_LANG_RSC_FALSIFIER__ FAIL - " +
+                to_string(result.passing) + "/" + to_string(result.total) +
+                " at " + to_string(result.min_pct) + "%")
+    }
+    return result
+}

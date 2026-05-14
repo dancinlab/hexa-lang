@@ -1,0 +1,128 @@
+// absorbed from ~/core/hexa-space/verify/falsifier_check.hexa (MIT, hexa-space v1.0.0)
+// tool/rsc/registry.hexa — RSC discovery layer for hexa-lang's falsifier corpus.
+//
+// @version 0.1.0
+// @capabilities [fs_read, exec]
+//
+// Hexa-lang has TWO falsifier surfaces today:
+//   (a) compiler/falsifiers/embedded.gen.hexa — 168 FalsifierEntry rows,
+//       SINGLE `cmd` per entry (no T1/T2/T3 split). Comes from nexus repo.
+//   (b) firmware/boards/<board>/verify/*.hexa — per-board T1 (calc_*) +
+//       T2 (numerics_*) on-disk scripts. The closest analog to hexa-space's
+//       F-SPACE-{1..4} ladder.
+//
+// This registry treats (b) as the canonical RSC surface (because that's
+// where the tier split actually exists on disk) and emits one entry per
+// board with on-disk T1/T2/T3 path lists. (a) is left to its compiler
+// pipeline consumer (compiler/falsifiers/static_index.hexa).
+//
+// Heuristic (per the absorption plan):
+//   - T1 paths: firmware/boards/<board>/verify/calc_*.hexa
+//   - T2 paths: firmware/boards/<board>/verify/numerics_*.hexa
+//   - T3 paths: firmware/boards/<board>/state/pin.* + .archive markers
+//
+// If no boards are discoverable, the registry falls back to a small
+// static placeholder (rtsc / chip / space) and logs a warning sentinel.
+
+pub struct FalsifierEntry {
+    name: string,
+    board: string,
+    t1_paths: [string],
+    t2_paths: [string],
+    t3_paths: [string]
+}
+
+fn _home() -> string {
+    let h = env("HOME")
+    if len(h) > 0 { return h }
+    return "/Users/ghost"
+}
+
+fn _root() -> string {
+    let r = env("HEXA_LANG_ROOT")
+    if len(r) > 0 { return r }
+    return _home() + "/core/hexa-lang"
+}
+
+pub fn rsc_root() -> string { return _root() }
+
+// shell helper — returns sorted, newline-trimmed lines.
+fn _ls(pattern: string) -> [string] {
+    let cmd = "ls " + pattern + " 2>/dev/null | sort"
+    let r = exec_with_status(cmd)
+    let raw = to_string(r[0])
+    let lines = raw.split("\n")
+    let mut out = []
+    let mut i = 0
+    while i < len(lines) {
+        let p = lines[i].trim()
+        if len(p) > 0 { out.push(p) }
+        i = i + 1
+    }
+    return out
+}
+
+fn _list_boards() -> [string] {
+    let cmd = "ls -d " + _root() + "/firmware/boards/*/ 2>/dev/null | sort"
+    let r = exec_with_status(cmd)
+    let raw = to_string(r[0])
+    let lines = raw.split("\n")
+    let mut out = []
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i].trim()
+        if len(line) > 0 {
+            // strip trailing slash + basename
+            let no_slash = if line.ends_with("/") { line.slice(0, len(line) - 1) } else { line }
+            let parts = no_slash.split("/")
+            let board = parts[len(parts) - 1]
+            if len(board) > 0 { out.push(board) }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn _scan_board(board: string) -> FalsifierEntry {
+    let base = _root() + "/firmware/boards/" + board
+    let t1 = _ls(base + "/verify/calc_*.hexa")
+    let t2 = _ls(base + "/verify/numerics_*.hexa")
+    let t3 = _ls(base + "/state/pin.*")
+    return FalsifierEntry {
+        name: "F-" + board.to_upper() + "-CLOSURE",
+        board: board,
+        t1_paths: t1,
+        t2_paths: t2,
+        t3_paths: t3
+    }
+}
+
+fn _static_fallback() -> [FalsifierEntry] {
+    println("__HEXA_LANG_RSC_REGISTRY__ WARN — no firmware/boards/* found, using static fallback")
+    let mut out = []
+    out.push(FalsifierEntry {
+        name: "F-RTSC-CLOSURE", board: "rtsc",
+        t1_paths: [], t2_paths: [], t3_paths: []
+    })
+    out.push(FalsifierEntry {
+        name: "F-CHIP-CLOSURE", board: "chip",
+        t1_paths: [], t2_paths: [], t3_paths: []
+    })
+    out.push(FalsifierEntry {
+        name: "F-SPACE-CLOSURE", board: "space",
+        t1_paths: [], t2_paths: [], t3_paths: []
+    })
+    return out
+}
+
+pub fn rsc_registry() -> [FalsifierEntry] {
+    let boards = _list_boards()
+    if len(boards) == 0 { return _static_fallback() }
+    let mut out = []
+    let mut i = 0
+    while i < len(boards) {
+        out.push(_scan_board(boards[i]))
+        i = i + 1
+    }
+    return out
+}
