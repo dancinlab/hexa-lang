@@ -1,0 +1,90 @@
+// HEXA Native Compiler — REPL entrypoint (Phase C, SPEC §5 option B)
+//
+// Tiny interactive loop on top of eval.hexa. Reads stdin lines, wraps
+// each as `fn __repl() { <line> }`, parses, type-skips, then evaluates.
+//
+//   pub fn repl_main() -> i64
+//
+// Conventions:
+//   * `quit` / `exit` → exit 0
+//   * `let x = …` → binds into the persistent REPL env (no print)
+//   * any other expr → eval + print result (unless void)
+//
+// Persistence model: the REPL keeps a single accumulator string of all
+// `let` bindings seen so far, re-parses on every line. This keeps repl.hexa
+// ~50 LOC and avoids threading EvalEnv across stdin reads (which would
+// require mutable module-level state for env, an unnecessary complication
+// at this scaffold stage). Optimisation deferred to next phase.
+
+import "../lex/tokens.hexa"
+import "../lex/lexer.hexa"
+import "../parse/ast.hexa"
+import "../parse/parser.hexa"
+import "./eval.hexa"
+
+fn _starts_with_repl(s: string, p: string) -> bool {
+    let sc = s.chars()
+    let pc = p.chars()
+    if len(pc) > len(sc) { return false }
+    let mut i = 0
+    while i < len(pc) {
+        if sc[i] != pc[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _is_blank(s: string) -> bool {
+    let chars = s.chars()
+    let mut i = 0
+    while i < len(chars) {
+        let c = chars[i]
+        if c != ' ' && c != '\t' && c != '\n' && c != '\r' { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// Wrap a REPL line so parser sees a complete module.
+// `accum` carries prior `let` bindings (one per line).
+fn _wrap(accum: string, line: string) -> string {
+    return "fn main() {\n" + accum + "    " + line + "\n}"
+}
+
+fn _wrap_print(accum: string, line: string) -> string {
+    // Wrap so the expression is println'd at the end. Stage0 lacks a way
+    // to retrieve the last-stmt value of a Block expression from the
+    // outside, so we materialise the result via println(to_string(...)).
+    return "fn main() {\n" + accum + "    println(to_string(" + line + "))\n}"
+}
+
+fn _eval_line(accum: string, src: string) {
+    let toks = lex(src, "<repl>")
+    let m = parse(toks, "<repl>")
+    let _rc = eval_module(m)
+}
+
+pub fn repl_main() -> i64 {
+    println("hexa repl (eval scaffold · SPEC §5 option B)")
+    println("type `quit` to exit.")
+    let mut accum = ""
+    let mut running = true
+    while running {
+        print("> ")
+        let line = input()
+        if len(line) == 0 { running = false; break }       // EOF
+        if _is_blank(line) { continue }
+        if line == "quit" || line == "exit" { running = false; break }
+        if _starts_with_repl(line, "let ") {
+            // Persist binding into accumulator.
+            accum = accum + "    " + line + "\n"
+            let src = _wrap(accum, "")
+            _eval_line(accum, src)
+            continue
+        }
+        // Print the expression result.
+        let src = _wrap_print(accum, line)
+        _eval_line(accum, src)
+    }
+    return 0
+}

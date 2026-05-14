@@ -1,0 +1,481 @@
+// HEXA Native Compiler — AST Evaluator (Phase C, SPEC §5 option B)
+//
+// Minimal tree-walking AST evaluator. Replaces ~20K LOC `hexa_interp`
+// runtime for `hexa repl` interactive use + `hexa run --interp` opt-in.
+//
+//   pub fn eval_module(module: Module) -> i64
+//   pub fn eval_expr(env: EvalEnv, e: Expr) -> EvalResult
+//
+// Closes B3 / B4 / B5 phase-F closure criteria. Reuses parser AST shapes
+// from `compiler/parse/ast.hexa`. Control-flow propagation via `ctrl`
+// string on EvalResult: "" | "return" | "break" | "continue" (unwrapped
+// at call / loop boundaries). Stage0 caveats: tuple returns → struct
+// bundle; struct field mutation → immutable-rebuild on EvalEnv.
+
+import "../lex/tokens.hexa"
+import "../parse/ast.hexa"
+
+// ── Value ───────────────────────────────────────────────────────
+
+pub struct EvalVal {
+    kind: string,        // "int"|"float"|"string"|"bool"|"void"|"fn"
+    int_val: i64,
+    float_val: f64,
+    string_val: string,
+    bool_val: bool,
+    fn_decl_id: i64,     // index into env.fns when kind == "fn"
+    fn_env_id: i64       // captured-env id (0 = global, future use)
+}
+
+fn _v(k: string) -> EvalVal {
+    return EvalVal { kind: k, int_val: 0, float_val: 0.0, string_val: "", bool_val: false, fn_decl_id: -1, fn_env_id: 0 }
+}
+fn _val_void() -> EvalVal { return _v("void") }
+fn _val_int(n: i64) -> EvalVal { let mut x = _v("int"); x.int_val = n; return x }
+fn _val_float(f: f64) -> EvalVal { let mut x = _v("float"); x.float_val = f; return x }
+fn _val_string(s: string) -> EvalVal { let mut x = _v("string"); x.string_val = s; return x }
+fn _val_bool(b: bool) -> EvalVal { let mut x = _v("bool"); x.bool_val = b; return x }
+fn _val_fn(id: i64) -> EvalVal { let mut x = _v("fn"); x.fn_decl_id = id; return x }
+
+// ── Env ─────────────────────────────────────────────────────────
+
+pub struct EvalEnv {
+    names: [string],
+    vals: [EvalVal],
+    parent_id: i64,      // -1 for root env (not yet used)
+    fns: [Item]          // module-level fn table (Item.kind == Fn)
+}
+
+fn _env_new(fns: [Item]) -> EvalEnv {
+    return EvalEnv { names: [], vals: [], parent_id: -1, fns: fns }
+}
+
+fn _env_bind(env: EvalEnv, name: string, v: EvalVal) -> EvalEnv {
+    let mut ns = env.names
+    let mut vs = env.vals
+    ns.push(name); vs.push(v)
+    return EvalEnv { names: ns, vals: vs, parent_id: env.parent_id, fns: env.fns }
+}
+
+fn _env_assign(env: EvalEnv, name: string, v: EvalVal) -> EvalEnv {
+    let mut ns = env.names
+    let mut vs = env.vals
+    let mut i = len(ns) - 1
+    while i >= 0 {
+        if ns[i] == name {
+            vs[i] = v
+            return EvalEnv { names: ns, vals: vs, parent_id: env.parent_id, fns: env.fns }
+        }
+        i = i - 1
+    }
+    return _env_bind(env, name, v)
+}
+
+fn _env_lookup(env: EvalEnv, name: string) -> EvalVal {
+    let mut i = len(env.names) - 1
+    while i >= 0 {
+        if env.names[i] == name { return env.vals[i] }
+        i = i - 1
+    }
+    let m = len(env.fns)
+    let mut k = 0
+    while k < m {
+        if env.fns[k].name == name { return _val_fn(k) }
+        k = k + 1
+    }
+    return _val_void()
+}
+
+// ── Result + control flow ───────────────────────────────────────
+
+pub struct EvalResult {
+    val: EvalVal,
+    env: EvalEnv,
+    ctrl: string         // "" | "return" | "break" | "continue" | "miss" (builtin)
+}
+
+fn _ok(env: EvalEnv, v: EvalVal) -> EvalResult { return EvalResult { val: v, env: env, ctrl: "" } }
+fn _ret(env: EvalEnv, v: EvalVal) -> EvalResult { return EvalResult { val: v, env: env, ctrl: "return" } }
+
+// ── Value formatting (println / to_string) ──────────────────────
+
+pub fn eval_val_to_string(v: EvalVal) -> string {
+    if v.kind == "int"    { return to_string(v.int_val) }
+    if v.kind == "float"  { return to_string(v.float_val) }
+    if v.kind == "string" { return v.string_val }
+    if v.kind == "bool"   { if v.bool_val { return "true" } else { return "false" } }
+    if v.kind == "fn"     { return "<fn#" + to_string(v.fn_decl_id) + ">" }
+    return "()"
+}
+
+fn _truthy(v: EvalVal) -> bool {
+    if v.kind == "bool"  { return v.bool_val }
+    if v.kind == "int"   { return v.int_val != 0 }
+    if v.kind == "float" { return v.float_val != 0.0 }
+    return false
+}
+
+// ── Digit/int parsing (no char arithmetic in stage0) ────────────
+
+fn _digit_val(c: char) -> i64 {
+    if c == '0' { return 0 } if c == '1' { return 1 } if c == '2' { return 2 }
+    if c == '3' { return 3 } if c == '4' { return 4 } if c == '5' { return 5 }
+    if c == '6' { return 6 } if c == '7' { return 7 } if c == '8' { return 8 }
+    if c == '9' { return 9 }
+    return -1
+}
+
+fn _parse_int(s: string) -> i64 {
+    let chars = s.chars()
+    let n = len(chars)
+    if n == 0 { return 0 }
+    let mut i = 0
+    let mut neg = false
+    if chars[0] == '-' { neg = true; i = 1 }
+    let mut v: i64 = 0
+    while i < n {
+        let d = _digit_val(chars[i])
+        if d >= 0 { v = v * 10 + d }
+        i = i + 1
+    }
+    if neg { return -v }
+    return v
+}
+
+fn _parse_float(s: string) -> f64 {
+    // Cheap fixed-point shim. Deferred: full IEEE-754 parsing.
+    let chars = s.chars()
+    let mut ip: i64 = 0
+    let mut fp: i64 = 0
+    let mut fd: i64 = 1
+    let mut dot = false
+    let mut i = 0
+    let mut neg = false
+    if len(chars) > 0 && chars[0] == '-' { neg = true; i = 1 }
+    while i < len(chars) {
+        let c = chars[i]
+        if c == '.' { dot = true }
+        else {
+            let d = _digit_val(c)
+            if d >= 0 {
+                if dot { fp = fp * 10 + d; fd = fd * 10 } else { ip = ip * 10 + d }
+            }
+        }
+        i = i + 1
+    }
+    let mut f = (ip as f64) + ((fp as f64) / (fd as f64))
+    if neg { f = 0.0 - f }
+    return f
+}
+
+// ── ExprKind dispatch ───────────────────────────────────────────
+
+pub fn eval_expr(env: EvalEnv, e: Expr) -> EvalResult {
+    return match e.kind {
+        ExprKind::LiteralInt    -> _ok(env, _val_int(_parse_int(e.text))),
+        ExprKind::LiteralFloat  -> _ok(env, _val_float(_parse_float(e.text))),
+        ExprKind::LiteralString -> _ok(env, _val_string(e.text)),
+        ExprKind::LiteralBool   -> _ok(env, _val_bool(e.text == "true")),
+        ExprKind::LiteralChar   -> _ok(env, _val_string(e.text)),
+        ExprKind::Ident         -> _ok(env, _env_lookup(env, e.text)),
+        ExprKind::AtlasRef      -> _ok(env, _val_void()),
+        ExprKind::Wildcard      -> _ok(env, _val_void()),
+        ExprKind::BinOp         -> _eval_binop(env, e),
+        ExprKind::UnOp          -> _eval_unop(env, e),
+        ExprKind::Call          -> _eval_call(env, e),
+        ExprKind::Block         -> _eval_block(env, e),
+        ExprKind::If            -> _eval_if(env, e),
+        ExprKind::While         -> _eval_while(env, e),
+        ExprKind::Return        -> _eval_return(env, e),
+        ExprKind::Let           -> _eval_let(env, e),
+        ExprKind::Assign        -> _eval_assign(env, e),
+        ExprKind::Field         -> _ok(env, _val_void()),
+        ExprKind::Index         -> _ok(env, _val_void()),
+        ExprKind::For           -> _ok(env, _val_void()),
+        ExprKind::Match         -> _ok(env, _val_void()),
+        ExprKind::StructLit     -> _ok(env, _val_void()),
+        ExprKind::EnumPath      -> _ok(env, _val_void())
+    }
+}
+
+// ── BinOp / UnOp ────────────────────────────────────────────────
+
+fn _eval_binop(env: EvalEnv, e: Expr) -> EvalResult {
+    let lr = eval_expr(env, e.children[0])
+    if lr.ctrl != "" { return lr }
+    let rr = eval_expr(lr.env, e.children[1])
+    if rr.ctrl != "" { return rr }
+    let lv = lr.val
+    let rv = rr.val
+    let op = e.text
+    let env2 = rr.env
+    if lv.kind == "int" && rv.kind == "int" {
+        let a = lv.int_val
+        let b = rv.int_val
+        if op == "+"  { return _ok(env2, _val_int(a + b)) }
+        if op == "-"  { return _ok(env2, _val_int(a - b)) }
+        if op == "*"  { return _ok(env2, _val_int(a * b)) }
+        if op == "/"  { if b == 0 { return _ok(env2, _val_int(0)) } ; return _ok(env2, _val_int(a / b)) }
+        if op == "%"  { if b == 0 { return _ok(env2, _val_int(0)) } ; return _ok(env2, _val_int(a % b)) }
+        if op == "==" { return _ok(env2, _val_bool(a == b)) }
+        if op == "!=" { return _ok(env2, _val_bool(a != b)) }
+        if op == "<"  { return _ok(env2, _val_bool(a <  b)) }
+        if op == "<=" { return _ok(env2, _val_bool(a <= b)) }
+        if op == ">"  { return _ok(env2, _val_bool(a >  b)) }
+        if op == ">=" { return _ok(env2, _val_bool(a >= b)) }
+    }
+    if (lv.kind == "float" || lv.kind == "int") && (rv.kind == "float" || rv.kind == "int") {
+        let mut a = 0.0
+        let mut b = 0.0
+        if lv.kind == "float" { a = lv.float_val } else { a = lv.int_val as f64 }
+        if rv.kind == "float" { b = rv.float_val } else { b = rv.int_val as f64 }
+        if op == "+"  { return _ok(env2, _val_float(a + b)) }
+        if op == "-"  { return _ok(env2, _val_float(a - b)) }
+        if op == "*"  { return _ok(env2, _val_float(a * b)) }
+        if op == "/"  { return _ok(env2, _val_float(a / b)) }
+        if op == "==" { return _ok(env2, _val_bool(a == b)) }
+        if op == "!=" { return _ok(env2, _val_bool(a != b)) }
+        if op == "<"  { return _ok(env2, _val_bool(a <  b)) }
+        if op == "<=" { return _ok(env2, _val_bool(a <= b)) }
+        if op == ">"  { return _ok(env2, _val_bool(a >  b)) }
+        if op == ">=" { return _ok(env2, _val_bool(a >= b)) }
+    }
+    if lv.kind == "string" && rv.kind == "string" {
+        if op == "+"  { return _ok(env2, _val_string(lv.string_val + rv.string_val)) }
+        if op == "==" { return _ok(env2, _val_bool(lv.string_val == rv.string_val)) }
+        if op == "!=" { return _ok(env2, _val_bool(lv.string_val != rv.string_val)) }
+    }
+    if lv.kind == "bool" && rv.kind == "bool" {
+        if op == "&&" { return _ok(env2, _val_bool(lv.bool_val && rv.bool_val)) }
+        if op == "||" { return _ok(env2, _val_bool(lv.bool_val || rv.bool_val)) }
+        if op == "==" { return _ok(env2, _val_bool(lv.bool_val == rv.bool_val)) }
+        if op == "!=" { return _ok(env2, _val_bool(lv.bool_val != rv.bool_val)) }
+    }
+    return _ok(env2, _val_void())
+}
+
+fn _eval_unop(env: EvalEnv, e: Expr) -> EvalResult {
+    let r = eval_expr(env, e.children[0])
+    if r.ctrl != "" { return r }
+    let v = r.val
+    if e.text == "-" {
+        if v.kind == "int"   { return _ok(r.env, _val_int(0 - v.int_val)) }
+        if v.kind == "float" { return _ok(r.env, _val_float(0.0 - v.float_val)) }
+    }
+    if e.text == "!" { return _ok(r.env, _val_bool(!_truthy(v))) }
+    return _ok(r.env, _val_void())
+}
+
+// ── Call ────────────────────────────────────────────────────────
+
+fn _is_ident(k: ExprKind) -> bool {
+    return match k { ExprKind::Ident -> true, _ -> false }
+}
+
+fn _eval_call(env: EvalEnv, e: Expr) -> EvalResult {
+    let callee = e.children[0]
+    let mut cur = env
+    let mut args: [EvalVal] = []
+    let mut i = 1
+    while i < len(e.children) {
+        let ar = eval_expr(cur, e.children[i])
+        if ar.ctrl != "" { return ar }
+        cur = ar.env
+        args.push(ar.val)
+        i = i + 1
+    }
+    if _is_ident(callee.kind) {
+        let bi = _try_builtin(cur, callee.text, args)
+        if bi.ctrl != "miss" { return bi }
+    }
+    let mut decl_id: i64 = -1
+    if _is_ident(callee.kind) {
+        let m = len(cur.fns)
+        let mut k = 0
+        while k < m {
+            if cur.fns[k].name == callee.text { decl_id = k; break }
+            k = k + 1
+        }
+    } else {
+        let cr = eval_expr(cur, callee)
+        if cr.ctrl != "" { return cr }
+        cur = cr.env
+        if cr.val.kind == "fn" { decl_id = cr.val.fn_decl_id }
+    }
+    if decl_id < 0 { return _ok(cur, _val_void()) }
+    let decl = cur.fns[decl_id]
+    let mut callee_env = _env_new(cur.fns)
+    let np = len(decl.params)
+    let mut p = 0
+    while p < np && p < len(args) {
+        callee_env = _env_bind(callee_env, decl.params[p].name, args[p])
+        p = p + 1
+    }
+    let br = eval_expr(callee_env, decl.body)
+    if br.ctrl == "return" { return _ok(cur, br.val) }
+    return _ok(cur, br.val)
+}
+
+// ── Builtins ────────────────────────────────────────────────────
+// Returns ctrl == "miss" to signal "not a builtin" (user fn lookup next).
+
+fn _miss(env: EvalEnv) -> EvalResult {
+    return EvalResult { val: _val_void(), env: env, ctrl: "miss" }
+}
+
+fn _try_builtin(env: EvalEnv, name: string, args: [EvalVal]) -> EvalResult {
+    if name == "println" || name == "print" {
+        let mut s = ""
+        let mut i = 0
+        while i < len(args) {
+            if i > 0 { s = s + " " }
+            s = s + eval_val_to_string(args[i])
+            i = i + 1
+        }
+        if name == "println" { println(s) } else { print(s) }
+        return _ok(env, _val_void())
+    }
+    if name == "to_string" {
+        if len(args) > 0 { return _ok(env, _val_string(eval_val_to_string(args[0]))) }
+        return _ok(env, _val_string(""))
+    }
+    if name == "len" {
+        if len(args) > 0 {
+            let a = args[0]
+            if a.kind == "string" { return _ok(env, _val_int(len(a.string_val))) }
+        }
+        return _ok(env, _val_int(0))
+    }
+    return _miss(env)
+}
+
+// ── Block / If / While ──────────────────────────────────────────
+
+fn _eval_block(env: EvalEnv, e: Expr) -> EvalResult {
+    let mut cur = env
+    let mut last = _val_void()
+    let mut i = 0
+    while i < len(e.children) {
+        let r = eval_expr(cur, e.children[i])
+        if r.ctrl != "" { return r }
+        cur = r.env
+        last = r.val
+        i = i + 1
+    }
+    return _ok(cur, last)
+}
+
+fn _eval_if(env: EvalEnv, e: Expr) -> EvalResult {
+    let cr = eval_expr(env, e.children[0])
+    if cr.ctrl != "" { return cr }
+    if _truthy(cr.val) { return eval_expr(cr.env, e.children[1]) }
+    if len(e.children) >= 3 { return eval_expr(cr.env, e.children[2]) }
+    return _ok(cr.env, _val_void())
+}
+
+fn _eval_while(env: EvalEnv, e: Expr) -> EvalResult {
+    let mut cur = env
+    let mut steps = 0
+    while steps < 1000000 {
+        let cr = eval_expr(cur, e.children[0])
+        if cr.ctrl != "" { return cr }
+        cur = cr.env
+        if !_truthy(cr.val) { break }
+        let br = eval_expr(cur, e.children[1])
+        cur = br.env
+        if br.ctrl == "return" { return br }
+        if br.ctrl == "break" { break }
+        steps = steps + 1
+    }
+    return _ok(cur, _val_void())
+}
+
+// ── Return / Let / Assign ───────────────────────────────────────
+
+fn _eval_return(env: EvalEnv, e: Expr) -> EvalResult {
+    if len(e.children) == 0 { return _ret(env, _val_void()) }
+    let r = eval_expr(env, e.children[0])
+    if r.ctrl != "" { return r }
+    return _ret(r.env, r.val)
+}
+
+fn _starts_with(s: string, prefix: string) -> bool {
+    let sc = s.chars()
+    let pc = prefix.chars()
+    if len(pc) > len(sc) { return false }
+    let mut i = 0
+    while i < len(pc) {
+        if sc[i] != pc[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _slice_from(s: string, start: i64) -> string {
+    let sc = s.chars()
+    let mut out = ""
+    let mut i = start
+    while i < len(sc) {
+        out = out + to_string(sc[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn _eval_let(env: EvalEnv, e: Expr) -> EvalResult {
+    let mut name = e.text
+    if _starts_with(name, "mut:") { name = _slice_from(name, 4) }
+    if len(e.children) == 0 { return _ok(_env_bind(env, name, _val_void()), _val_void()) }
+    let r = eval_expr(env, e.children[0])
+    if r.ctrl != "" { return r }
+    return _ok(_env_bind(r.env, name, r.val), _val_void())
+}
+
+fn _eval_assign(env: EvalEnv, e: Expr) -> EvalResult {
+    let r = eval_expr(env, e.children[1])
+    if r.ctrl != "" { return r }
+    let target = e.children[0]
+    if _is_ident(target.kind) { return _ok(_env_assign(r.env, target.text, r.val), _val_void()) }
+    return _ok(r.env, _val_void())
+}
+
+// ── Module driver ───────────────────────────────────────────────
+
+fn _is_fn_item(k: ItemKind) -> bool {
+    return match k { ItemKind::Fn -> true, _ -> false }
+}
+
+fn _is_let_item(k: ItemKind) -> bool {
+    return match k { ItemKind::Let -> true, _ -> false }
+}
+
+pub fn eval_module(module: Module) -> i64 {
+    let mut fns: [Item] = []
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if _is_fn_item(it.kind) { fns.push(it) }
+        i = i + 1
+    }
+    let mut env = _env_new(fns)
+    let mut j = 0
+    while j < len(module.items) {
+        let it = module.items[j]
+        if _is_let_item(it.kind) {
+            let r = eval_expr(env, it.body)
+            env = _env_bind(r.env, it.name, r.val)
+        }
+        j = j + 1
+    }
+    let m = len(env.fns)
+    let mut k = 0
+    while k < m {
+        if env.fns[k].name == "main" {
+            let r = eval_expr(env, env.fns[k].body)
+            if r.val.kind == "int" { return r.val.int_val }
+            return 0
+        }
+        k = k + 1
+    }
+    return 0
+}

@@ -1,0 +1,115 @@
+// HEXA Native Compiler — AST Evaluator smoke test (Phase C, SPEC §5 B)
+//
+// Lex + parse a series of small hexa snippets, evaluate them, and check
+// the resulting integer (via a `main()` that returns i64).
+//
+// Exits 0 on all-PASS, 1 on any FAIL.
+
+import "../lex/tokens.hexa"
+import "../lex/lexer.hexa"
+import "../parse/ast.hexa"
+import "../parse/parser.hexa"
+import "./eval.hexa"
+
+let mut g_ok = true
+let mut g_pass = 0
+let mut g_fail = 0
+
+fn _run(label: string, src: string, expected: i64) {
+    let toks = lex(src, "<eval-test>")
+    let m = parse(toks, "<eval-test>")
+    let got = eval_module(m)
+    if got == expected {
+        println("  PASS " + label + " => " + to_string(got))
+        g_pass = g_pass + 1
+    } else {
+        println("  FAIL " + label + " => got=" + to_string(got) + " expected=" + to_string(expected))
+        g_ok = false
+        g_fail = g_fail + 1
+    }
+}
+
+// case 1: arithmetic — 2 + 2 == 4
+fn case_arithmetic() {
+    let src = "fn main() -> i64 { return 2 + 2 }"
+    _run("arithmetic 2+2", src, 4)
+}
+
+// case 2: nested binop — (1 + 2) * 3 == 9
+fn case_nested_binop() {
+    let src = "fn main() -> i64 { return (1 + 2) * 3 }"
+    _run("nested (1+2)*3", src, 9)
+}
+
+// case 3: fn call — add(2, 3) == 5
+fn case_fn_call() {
+    let src = "fn add(a: i64, b: i64) -> i64 { return a + b }\nfn main() -> i64 { return add(2, 3) }"
+    _run("fn call add(2,3)", src, 5)
+}
+
+// case 4: if branch — if true { 1 } else { 2 } == 1
+fn case_if_branch() {
+    let src = "fn main() -> i64 { if true { return 1 } else { return 2 } }"
+    _run("if true branch", src, 1)
+}
+
+// case 5: if else branch — if false { 1 } else { 2 } == 2
+fn case_if_else_branch() {
+    let src = "fn main() -> i64 { if false { return 1 } else { return 2 } }"
+    _run("if false branch", src, 2)
+}
+
+// case 6: variable — let x = 7; x + x == 14
+fn case_variable() {
+    let src = "fn main() -> i64 { let x = 7; return x + x }"
+    _run("let x=7; x+x", src, 14)
+}
+
+// case 7: while loop — sum 1..=10 = 55
+fn case_while_loop() {
+    let src = "fn main() -> i64 { let mut s = 0; let mut i = 1; while i <= 10 { s = s + i; i = i + 1 }; return s }"
+    _run("while sum 1..=10", src, 55)
+}
+
+// case 8: closure-style fn — two fns with distinct envs
+fn case_two_fns() {
+    let src = "fn double(x: i64) -> i64 { return x * 2 }\nfn triple(x: i64) -> i64 { return x * 3 }\nfn main() -> i64 { return double(5) + triple(7) }"
+    // 10 + 21 = 31
+    _run("double(5)+triple(7)", src, 31)
+}
+
+// case 9: recursive fn — fact(5) = 120
+fn case_recursive() {
+    let src = "fn fact(n: i64) -> i64 { if n <= 1 { return 1 } else { return n * fact(n - 1) } }\nfn main() -> i64 { return fact(5) }"
+    _run("recursive fact(5)", src, 120)
+}
+
+// case 10: builtins — println + to_string (smoke; main returns 0)
+fn case_builtins() {
+    let src = "fn main() -> i64 { println(to_string(42)); return 0 }"
+    _run("println+to_string smoke", src, 0)
+}
+
+println("══════════════════════════════════════════════")
+println("  HEXA Compiler — AST Eval Smoke Test (Phase C)")
+println("══════════════════════════════════════════════")
+case_arithmetic()
+case_nested_binop()
+case_fn_call()
+case_if_branch()
+case_if_else_branch()
+case_variable()
+case_while_loop()
+case_two_fns()
+case_recursive()
+case_builtins()
+println("")
+println("══════════════════════════════════════════════")
+println("  pass=" + to_string(g_pass) + " fail=" + to_string(g_fail))
+if g_ok {
+    println("  PASS: all eval cases match contract.")
+} else {
+    println("  FAIL: eval contract not satisfied.")
+}
+println("══════════════════════════════════════════════")
+if !g_ok { exit(1) }
