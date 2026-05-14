@@ -1,0 +1,217 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/ssh/keyfile.hexa -- OpenSSH PEM ed25519 key loader
+//
+//  Parses ~/.ssh/id_ed25519 (unencrypted ed25519 only — passphrase-
+//  encrypted keys would need bcrypt KDF, defer to a follow-up).
+//
+//  OpenSSH PEM ed25519 wire format:
+//    "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+//    <base64 of binary blob, wrapped at 70-char lines>
+//    "-----END OPENSSH PRIVATE KEY-----\n"
+//
+//  Binary blob layout (RFC-style, all multi-byte ints big-endian):
+//    "openssh-key-v1\0"           (15 bytes magic, includes trailing NUL)
+//    string  ciphername           ("none" for unencrypted)
+//    string  kdfname              ("none")
+//    string  kdfoptions           ("")
+//    uint32  number_of_keys       (1)
+//    string  pubkey_blob          (ssh wire pub: "ssh-ed25519" || 32B)
+//    string  encrypted_privkey    (cleartext if cipher=none)
+//      uint32  checkint
+//      uint32  checkint                (same as previous, sanity check)
+//      string  key_type             ("ssh-ed25519")
+//      string  pub_key              (32 bytes)
+//      string  priv_key             (64 bytes, sodium-layout seed||pub)
+//      string  comment
+//      byte[]  padding              (1, 2, 3, ...)
+//
+//  Surface:
+//    ssh_keyfile_load_ed25519(path) -> { pk:[32], sk:[64] } | { error }
+
+use "self/stdlib/ssh/wire"   // ssh_get_u32 / ssh_get_string
+
+let _SSH_OPENSSH_MAGIC = "openssh-key-v1"
+
+// ── base64 decode ([byte] in -> [byte] out, NUL-safe) ─────────────
+fn _b64_val(c: int) -> int {
+    if c > 64 && c < 91  { return c - 65 }        // 'A'..'Z' -> 0..25
+    if c > 96 && c < 123 { return c - 71 }        // 'a'..'z' -> 26..51
+    if c > 47 && c < 58  { return c + 4 }         // '0'..'9' -> 52..61
+    if c == 43           { return 62 }            // '+'
+    if c == 47           { return 63 }            // '/'
+    return -1
+}
+
+fn ssh_base64_decode_bytes(s: string) -> [int] {
+    let mut out: [int] = []
+    let mut bits = 0
+    let mut vbits = 0
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = char_code(s, i)
+        i = i + 1
+        if c == 61 { break }    // '='
+        let v = _b64_val(c)
+        if v < 0 { continue }   // skip whitespace/newlines
+        bits = bits * 64 + v
+        vbits = vbits + 6
+        if vbits > 7 {
+            vbits = vbits - 8
+            let mut div = 1
+            let mut d = 0
+            while d < vbits { div = div * 2 ; d = d + 1 }
+            let byte = (bits / div) - ((bits / div) / 256) * 256
+            out.push(byte)
+            bits = bits - (bits / div) * div
+        }
+    }
+    return out
+}
+
+fn _strip_pem_header(s: string) -> string {
+    // Strip the two -----BEGIN/-----END lines plus any whitespace.
+    // We keep base64 characters and skip the rest — easier than line-based parsing.
+    let mut out = ""
+    let mut i = 0
+    let n = len(s)
+    let mut in_header = false
+    let mut at_start_of_line = true
+    while i < n {
+        let c = char_code(s, i)
+        if at_start_of_line && c == 45 {       // '-'
+            in_header = true
+        }
+        if in_header {
+            if c == 10 { in_header = false ; at_start_of_line = true }
+            i = i + 1
+            continue
+        }
+        if c == 10 || c == 13 || c == 32 || c == 9 {
+            at_start_of_line = (c == 10)
+            i = i + 1
+            continue
+        }
+        at_start_of_line = false
+        out = out + chr(c)
+        i = i + 1
+    }
+    return out
+}
+
+// Read an SSH-string from a byte array (u32 length + bytes).
+fn _read_ssh_str(buf: [int], off: int) -> any {
+    if off + 4 > len(buf) { return #{ "bytes": [], "off": -1 } }
+    let n = buf[off] * 16777216 + buf[off + 1] * 65536 + buf[off + 2] * 256 + buf[off + 3]
+    if off + 4 + n > len(buf) { return #{ "bytes": [], "off": -1 } }
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n { out.push(buf[off + 4 + i]) ; i = i + 1 }
+    return #{ "bytes": out, "off": off + 4 + n }
+}
+
+fn _ascii(bs: [int]) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < len(bs) { s = s + chr(bs[i]) ; i = i + 1 }
+    return s
+}
+
+pub fn ssh_keyfile_load_ed25519(path: string) -> any {
+    // Read whole file as text (PEM is ASCII).
+    let text = read_file(path)
+    if type_of(text) != "string" { return #{ "error": "cannot read " + path } }
+
+    // Quick check
+    let mut has_begin = false
+    let mut i = 0
+    let needle = "-----BEGIN OPENSSH PRIVATE KEY-----"
+    while i < len(text) - len(needle) + 1 {
+        let mut ok = true
+        let mut j = 0
+        while j < len(needle) {
+            if char_code(text, i + j) != char_code(needle, j) { ok = false; break }
+            j = j + 1
+        }
+        if ok { has_begin = true; break }
+        i = i + 1
+    }
+    if !has_begin { return #{ "error": "not an OpenSSH private key file" } }
+
+    let b64 = _strip_pem_header(text)
+    let blob = ssh_base64_decode_bytes(b64)
+    if len(blob) < 15 { return #{ "error": "blob too short" } }
+
+    // Magic
+    let magic = _SSH_OPENSSH_MAGIC
+    let mut mi = 0
+    while mi < len(magic) {
+        if blob[mi] != char_code(magic, mi) { return #{ "error": "bad magic" } }
+        mi = mi + 1
+    }
+    if blob[14] != 0 { return #{ "error": "missing NUL after magic" } }
+    let mut off = 15
+
+    // ciphername
+    let r1 = _read_ssh_str(blob, off)
+    if r1["off"] < 0 { return #{ "error": "bad ciphername" } }
+    let ciphername = _ascii(r1["bytes"])
+    off = r1["off"]
+    if ciphername != "none" {
+        return #{ "error": "encrypted keys not supported (cipher=" + ciphername + ")" }
+    }
+
+    // kdfname + kdfoptions (both must be "none"/"" for unencrypted)
+    let r2 = _read_ssh_str(blob, off)
+    if r2["off"] < 0 { return #{ "error": "bad kdfname" } }
+    off = r2["off"]
+    let r3 = _read_ssh_str(blob, off)
+    if r3["off"] < 0 { return #{ "error": "bad kdfoptions" } }
+    off = r3["off"]
+
+    // number_of_keys (u32, must be 1)
+    if off + 4 > len(blob) { return #{ "error": "missing key count" } }
+    let nkeys = blob[off] * 16777216 + blob[off + 1] * 65536 + blob[off + 2] * 256 + blob[off + 3]
+    off = off + 4
+    if nkeys != 1 { return #{ "error": "multi-key files not supported" } }
+
+    // public key blob (we mostly skip — derive pub from priv later)
+    let r4 = _read_ssh_str(blob, off)
+    if r4["off"] < 0 { return #{ "error": "bad pubkey blob" } }
+    let pub_blob = r4["bytes"]
+    off = r4["off"]
+
+    // Encrypted private key section (cleartext since cipher=none)
+    let r5 = _read_ssh_str(blob, off)
+    if r5["off"] < 0 { return #{ "error": "bad encrypted_privkey" } }
+    let priv_section = r5["bytes"]
+
+    // Parse inside priv_section:
+    //   checkint, checkint, ssh-string keytype, ssh-string pub, ssh-string priv, ssh-string comment
+    if len(priv_section) < 8 { return #{ "error": "priv_section too short" } }
+    let c1 = priv_section[0] * 16777216 + priv_section[1] * 65536 + priv_section[2] * 256 + priv_section[3]
+    let c2 = priv_section[4] * 16777216 + priv_section[5] * 65536 + priv_section[6] * 256 + priv_section[7]
+    if c1 != c2 { return #{ "error": "checkint mismatch (likely wrong passphrase)" } }
+    let mut p_off = 8
+
+    let rt = _read_ssh_str(priv_section, p_off)
+    if rt["off"] < 0 { return #{ "error": "bad inner keytype" } }
+    let ktype = _ascii(rt["bytes"])
+    p_off = rt["off"]
+    if ktype != "ssh-ed25519" {
+        return #{ "error": "expected ssh-ed25519, got " + ktype }
+    }
+
+    let rp = _read_ssh_str(priv_section, p_off)
+    if rp["off"] < 0 { return #{ "error": "bad inner pubkey" } }
+    let pk = rp["bytes"]
+    p_off = rp["off"]
+    if len(pk) != 32 { return #{ "error": "inner pubkey not 32B" } }
+
+    let rs = _read_ssh_str(priv_section, p_off)
+    if rs["off"] < 0 { return #{ "error": "bad inner privkey" } }
+    let sk = rs["bytes"]
+    if len(sk) != 64 { return #{ "error": "inner privkey not 64B" } }
+
+    return #{ "pk": pk, "sk": sk, "pub_blob": pub_blob }
+}
