@@ -23,6 +23,7 @@ use "compiler/atlas/parser"
 use "compiler/atlas/static_index"
 use "compiler/atlas/external_entity_audit"
 use "compiler/atlas/anchor_audit"
+use "self/stdlib/argv_skip"
 
 // audit_external_entities — rodata+overlay wrapper. Walks the merged
 // view and runs the external-entity scan over every node.
@@ -62,12 +63,24 @@ fn _usage() {
     println("  verbs: external-entity | anchor | all")
 }
 
+fn _cli() -> [string] {
+    let raw = args()
+    let mut out: [string] = []
+    let mut i = skip_invocation_prefix(raw)
+    while i < len(raw) {
+        out.push(raw[i])
+        i = i + 1
+    }
+    return out
+}
+
 fn main(args: array) {
-    if len(args) < 1 {
+    let argv = _cli()
+    if len(argv) < 1 {
         _usage()
         exit(2)
     }
-    let verb = to_string(args[0])
+    let verb = to_string(argv[0])
     let mut rc: i64 = 0
     if verb == "external-entity" { rc = _run_external() }
     else if verb == "anchor"     { rc = _run_anchor() }
@@ -78,14 +91,3 @@ fn main(args: array) {
     }
     exit(rc)
 }
-
-// `hexa run` populates argv() as [interp, script, ...user_args]; strip
-// the first two so `main` sees only the doctrine verb.
-let _av = argv()
-let _user_args = []
-let mut _ai = 2
-while _ai < len(_av) {
-    _user_args.push(to_string(_av[_ai]))
-    _ai = _ai + 1
-}
-main(_user_args)

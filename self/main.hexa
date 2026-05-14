@@ -122,6 +122,18 @@ fn cmd_help() {
     println("    Live path: HTTP API (~15 s timeout)  ·  Fallback: frozen cache (HEXA_FORCE_FALLBACK=1)")
     println("    e.g. hexa wikipedia \"Perfect number\"  → live → /api/rest_v1/page/summary/")
     println("")
+    println("SIBLING ABSORPTION  (Phase 5, 2026-05-14 — anima/hexa-bio/hexa-space/hexa-matter/hexa-chip)")
+    println("  anima-show <psi-constants|psi-laws|cdesm|all>     anima Ψ/laws/CDESM rodata viewer")
+    println("  lattice <verify|axis-table|cross-check>           n=6 σ·φ=n·τ=24 deductive verifier (hexa-bio)")
+    println("  rsc <falsifier|saturation|lint|run-all>           Runnable Surface Closure recipe (hexa-space)")
+    println("  n6 <discover|mine>                                n=6 arithmetic discovery + formula miner (anima)")
+    println("  repo-audit-taxonomy <catalog.md> <manifest.toml>  filesystem ↔ catalog ↔ manifest C1/C2/C3 audit (hexa-chip)")
+    println("    e.g. hexa lattice verify              → __N6_AXIS_VERIFY__ PASS (σ·φ=n·τ=24, |S₄|=24)")
+    println("         hexa anima-show psi-constants    → 11 Ψ-constant @C rows")
+    println("         hexa rsc falsifier               → per-falsifier closure_pct ladder (0/33/67/100)")
+    println("  atlas-audit  (hexa-matter doctrine gates) — deferred (static_index lazy-loader pending)")
+    println("    invoke directly: hexa run compiler/atlas/audit_main.hexa <external-entity|anchor|all>")
+    println("")
     println("STDLIB n=6  (compiler-internal, available as `use \"self/std_n6\"`)")
     println("  n6_lenses · n6_verify · n6_check · n6_consensus · n6_scan · n6_omega")
     println("    User-facing utility for σ/φ/τ/n=6 constant checks (6 Omega lens API)")
@@ -585,6 +597,21 @@ fn _absorbed_script(verb) {
     if verb == "lhc"              { return "compiler/bridges/lhc.hexa" }
     if verb == "pubchem"          { return "compiler/bridges/pubchem.hexa" }
     if verb == "uniprot"          { return "compiler/bridges/uniprot.hexa" }
+
+    // Phase 5 absorption (2026-05-14) — 5-project sibling absorb (anima / hexa-bio /
+    // hexa-space / hexa-matter / hexa-chip). Each verb dispatches to a standalone
+    // main.hexa shim under its target dir.
+    if verb == "anima-show"          { return "compiler/atlas/anima_main.hexa" }            // psi-constants/psi-laws/cdesm/all (anima)
+    if verb == "lattice"             { return "compiler/n6_lattice/main.hexa" }             // verify/axis-table/cross-check (hexa-bio)
+    if verb == "rsc"                 { return "tool/rsc/main.hexa" }                        // falsifier/lint/saturation/run-all (hexa-space)
+    if verb == "n6"                  { return "stdlib/n6/main.hexa" }                       // discover/mine (anima)
+    if verb == "repo-audit-taxonomy" { return "tool/repo_taxonomy_audit_main.hexa" }        // <catalog.md> <manifest.toml> [<root>] (hexa-chip)
+    // `atlas-audit` (hexa-matter doctrine gates) intentionally NOT wired here:
+    // its `use "compiler/atlas/static_index"` triggers a multi-minute embed parse
+    // under the interpreter (rodata path hangs >10 min in module-load). Audit code
+    // itself is correct — invoke via `hexa run compiler/atlas/audit_main.hexa <verb>`
+    // or the smoke test (`test/atlas_doctrine_smoke.hexa` PASSES via `_in` variants).
+    // Re-wire after static_index gets a lazy/streaming loader.
 
     return ""
 }
