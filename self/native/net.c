@@ -37,6 +37,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <sys/uio.h>
 
 /* This file is a partial translation unit: it is #include'd into
  * self/runtime.c (see the `#include "native/net.c"` near the bottom of
@@ -253,6 +254,117 @@ HexaVal hexa_net_select(HexaVal fds_val, HexaVal timeout_ms_val) {
     return out;
 }
 
+/* ── SCM_RIGHTS fd-passing over AF_UNIX (RFC P1 signal-ext / fd-passing) ──
+ *
+ *   net_send_fd(sock_fd, fd_to_send, payload_str)  -> 0 / -errno
+ *   net_recv_fd(sock_fd, max_payload_bytes)        -> map { fd, data, error?, errno? }
+ *
+ * The classic POSIX recipe for handing a kernel fd from one process
+ * to another across a connected AF_UNIX socket. Payload bytes are
+ * required by some BSD variants (1+ data byte must travel with the
+ * cmsg) so net_send_fd sends at least a single 0 byte if the caller
+ * passes "".  net_recv_fd allocates a `max_payload`-byte buffer and
+ * captures the first received fd (multi-fd cmsg arrays are out of
+ * MVP scope -- callers needing multiple fds per message can loop).
+ *
+ * Cross-platform POSIX (macOS + Linux). Both have sendmsg(2) and
+ * SCM_RIGHTS in the kernel ABI.
+ */
+
+HexaVal hexa_net_send_fd(HexaVal sock_v, HexaVal fd_v, HexaVal payload_v) {
+    if (!HX_IS_INT(sock_v) || !HX_IS_INT(fd_v)) return hexa_int((int64_t)-EINVAL);
+    int sock = (int)HX_INT(sock_v);
+    int send_fd = (int)HX_INT(fd_v);
+    /* Payload: empty string still emits a single 0 byte so BSD/Mac
+     * doesn't reject the message (some kernels require >=1 data byte
+     * for the cmsg-only case). */
+    const char* p = HX_IS_STR(payload_v) ? HX_STR(payload_v) : "";
+    size_t plen = strlen(p);
+    char fallback = '\0';
+    struct iovec iov;
+    if (plen == 0) { iov.iov_base = &fallback; iov.iov_len = 1; }
+    else           { iov.iov_base = (void*)p;  iov.iov_len = plen; }
+    /* cmsg buffer sized for exactly one fd. */
+    union {
+        char buf[CMSG_SPACE(sizeof(int))];
+        struct cmsghdr align;
+    } cmsg_buf;
+    memset(&cmsg_buf, 0, sizeof(cmsg_buf));
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov     = &iov;
+    msg.msg_iovlen  = 1;
+    msg.msg_control = cmsg_buf.buf;
+    msg.msg_controllen = sizeof(cmsg_buf.buf);
+    struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type  = SCM_RIGHTS;
+    cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
+    int* fd_ptr = (int*)CMSG_DATA(cmsg);
+    *fd_ptr = send_fd;
+    if (sendmsg(sock, &msg, 0) < 0) return hexa_int((int64_t)-errno);
+    return hexa_int(0);
+}
+
+HexaVal hexa_net_recv_fd(HexaVal sock_v, HexaVal max_payload_v) {
+    HexaVal out = hexa_map_new();
+    if (!HX_IS_INT(sock_v)) {
+        hexa_map_set(out, "error", hexa_str("net_recv_fd: bad sock fd"));
+        hexa_map_set(out, "errno", hexa_int((int64_t)EINVAL));
+        hexa_map_set(out, "fd",    hexa_int((int64_t)-1));
+        return out;
+    }
+    int sock = (int)HX_INT(sock_v);
+    int max_n = HX_IS_INT(max_payload_v) ? (int)HX_INT(max_payload_v) : 4096;
+    if (max_n < 1) max_n = 1;
+    if (max_n > 65536) max_n = 65536;
+    char* buf = (char*)malloc((size_t)max_n + 1);
+    if (!buf) {
+        hexa_map_set(out, "error", hexa_str("net_recv_fd: malloc failed"));
+        hexa_map_set(out, "errno", hexa_int((int64_t)ENOMEM));
+        hexa_map_set(out, "fd",    hexa_int((int64_t)-1));
+        return out;
+    }
+    struct iovec iov;
+    iov.iov_base = buf;
+    iov.iov_len  = (size_t)max_n;
+    union {
+        char cbuf[CMSG_SPACE(sizeof(int))];
+        struct cmsghdr align;
+    } cmsg_buf;
+    memset(&cmsg_buf, 0, sizeof(cmsg_buf));
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov     = &iov;
+    msg.msg_iovlen  = 1;
+    msg.msg_control = cmsg_buf.cbuf;
+    msg.msg_controllen = sizeof(cmsg_buf.cbuf);
+    ssize_t n = recvmsg(sock, &msg, 0);
+    if (n < 0) {
+        int e = errno;
+        free(buf);
+        hexa_map_set(out, "error", hexa_str(strerror(e)));
+        hexa_map_set(out, "errno", hexa_int((int64_t)e));
+        hexa_map_set(out, "fd",    hexa_int((int64_t)-1));
+        return out;
+    }
+    int recv_fd = -1;
+    struct cmsghdr* cmsg;
+    for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+        if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+            int* fdp = (int*)CMSG_DATA(cmsg);
+            recv_fd = *fdp;
+            break;
+        }
+    }
+    buf[n] = '\0';
+    hexa_map_set(out, "fd",   hexa_int((int64_t)recv_fd));
+    hexa_map_set(out, "data", hexa_str(buf));
+    hexa_map_set(out, "len",  hexa_int((int64_t)n));
+    free(buf);
+    return out;
+}
+
 HexaVal hexa_net_connect(HexaVal addr_val) {
     const char* addr = hexa_to_cstring(addr_val);
     struct sockaddr_storage sa;
@@ -390,6 +502,9 @@ HexaVal net_write;
 /* 2026-05-13: anima daemon Phase 2 — non-blocking + select multiplex */
 HexaVal net_set_nonblock;
 HexaVal net_select;
+/* 2026-05-14: SCM_RIGHTS fd-passing (P1 signal-ext / fd-handoff) */
+HexaVal net_send_fd;
+HexaVal net_recv_fd;
 
 static void _hexa_init_net_fn_shims(void) {
     net_listen        = hexa_fn_new((void*)hexa_net_listen,        1);
@@ -402,4 +517,6 @@ static void _hexa_init_net_fn_shims(void) {
     net_write         = hexa_fn_new((void*)hexa_net_write,         2);
     net_set_nonblock  = hexa_fn_new((void*)hexa_net_set_nonblock,  1);
     net_select        = hexa_fn_new((void*)hexa_net_select,        2);
+    net_send_fd       = hexa_fn_new((void*)hexa_net_send_fd,       3);
+    net_recv_fd       = hexa_fn_new((void*)hexa_net_recv_fd,       2);
 }

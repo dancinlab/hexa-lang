@@ -4118,6 +4118,8 @@ fn gen2_expr(node) {
                 if name == "net_select"{ return "hexa_net_select(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // stdlib/proc/wait — 2-arg waitpid wrapper (RFC signal-ext P1)
                 if name == "proc_wait" { return "hexa_proc_wait(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                // net — 2-arg SCM_RIGHTS fd-passing recv (RFC P1)
+                if name == "net_recv_fd" { return "hexa_net_recv_fd(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // PTY 2-arg builtins
                 if name == "term_fd_read"   { return "hexa_term_fd_read(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "term_fd_write"  { return "hexa_term_fd_write(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
@@ -4204,6 +4206,10 @@ fn gen2_expr(node) {
                 // stdlib/os/pty — 3-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_tcsetattr" {
                     return "hexa_tcsetattr(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
+                }
+                // net — 3-arg SCM_RIGHTS fd-passing send (RFC P1)
+                if name == "net_send_fd" {
+                    return "hexa_net_send_fd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
                 }
             }
             if len(node.args) == 5 {
@@ -6042,6 +6048,9 @@ fn _is_builtin_name(name) {
     // stdlib/proc/wait — waitpid wrapper (RFC signal-ext P1)
     if name == "proc_wait" { return true }
     if name == "proc_wait_flag_const" { return true }
+    // net — SCM_RIGHTS fd-passing (RFC P1)
+    if name == "net_send_fd" { return true }
+    if name == "net_recv_fd" { return true }
     if name == "now_monotonic_s" { return true }
     if name == "mono_ns" { return true }
     if name == "utc_iso_now" { return true }
