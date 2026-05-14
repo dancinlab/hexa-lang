@@ -245,6 +245,44 @@ fn fl_strip_uses(src) {
     let has_imports = src.index_of(marker2) >= 0 || src.starts_with("import \"")
     let has_shebang = src.starts_with("#!") || src.index_of("\n#!") >= 0
     if !has_uses && !has_imports && !has_shebang { return src }
+    // Fix #1 extension — large-source split avoidance.
+    // For large generated files (compiler/atlas/embedded.gen.hexa @ 4.6 MB,
+    // 7331 lines), split("\n") allocates ~7K permanent substrings (the hexa
+    // runtime has no string GC). By hexa convention `use`/`import` directives
+    // live ONLY in the header (before any pub decl / data table / fn body).
+    // For sources larger than the split cap, strip the head and append the
+    // untouched tail verbatim. If a use/import leaks past the cap in some
+    // non-conventional file, hexa_v2_v4 will fail loudly with an unresolved
+    // `use` at the C level — which is the correct behavior (no silent breakage).
+    let SPLIT_CAP_BYTES = 131072      // 128 KB head budget — covers any practical header
+    let src_len = len(src)
+    if src_len > SPLIT_CAP_BYTES {
+        // Snap split point forward to the next "\n" so we never cut mid-line.
+        // Take a small window (4 KB) after the cap and find the newline locally
+        // — avoids 2-arg index_of's byte-by-byte interp path on multi-MB inputs.
+        let mut head_end = SPLIT_CAP_BYTES
+        let win_end = if SPLIT_CAP_BYTES + 4096 < src_len { SPLIT_CAP_BYTES + 4096 } else { src_len }
+        let win = src.substring(SPLIT_CAP_BYTES, win_end)
+        let rel_nl = win.index_of("\n")
+        if rel_nl < 0 {
+            // No newline within 4 KB after cap — unusual; fall back.
+            return fl_strip_uses_inner(src)
+        }
+        head_end = SPLIT_CAP_BYTES + rel_nl + 1
+        let head = src.substring(0, head_end)
+        let stripped_head = fl_strip_uses_inner(head)
+        let tail = src.substring(head_end, src_len)
+        let mut parts = []
+        parts.push(stripped_head)
+        parts.push(tail)
+        return parts.join("")
+    }
+    return fl_strip_uses_inner(src)
+}
+
+// Inner implementation — the original split-based stripper. Safe to call
+// on small inputs (< ~128 KB); fl_strip_uses gates large sources.
+fn fl_strip_uses_inner(src) {
     let lines = src.split("\n")
     let n = len(lines)
     let mut out = []
@@ -288,12 +326,27 @@ fn fl_strip_uses(src) {
 
 // ── 한 파일에서 use 의존성 목록 추출 ────────────────────────
 
+// Fix #1 extension — for very large sources (e.g. compiler/atlas/embedded.gen.hexa
+// at 4.6 MB / 7331 lines), the full `src.split("\n")` allocates ~7K permanent
+// substrings (the hexa runtime has no string GC). For 3 split passes per file
+// (collect_uses + collect_imports + strip_uses), peak RSS on a 5-file walk hit
+// 4 GB. Mitigation: by convention, `use` / `import` directives appear only at
+// the TOP of any hexa source file (before any pub decl, lattice/atlas data
+// table, etc). We cap the split-scan at HEADER_CAP_BYTES and walk the
+// large-source tail with `index_of("\n", pos)` jumps that allocate one
+// substring per line only when a use/import is matched (rare). Body of
+// large generated files is read once but never split.
+let HEADER_CAP_BYTES_USES = 65536    // 64 KB header — enough for hundreds of uses
+
 fn fl_collect_uses(src) {
-    let lines = src.split("\n")
-    let n = len(lines)
+    let n = len(src)
+    let cap = if n < HEADER_CAP_BYTES_USES { n } else { HEADER_CAP_BYTES_USES }
+    let head = if cap < n { src.substring(0, cap) } else { src }
+    let lines = head.split("\n")
+    let nl = len(lines)
     let mut deps = []
     let mut i = 0
-    while i < n {
+    while i < nl {
         let dep = fl_parse_use(lines[i])
         if dep != "" {
             // O(N^2) 방지: in-place push, deps 단일 mut
@@ -307,11 +360,14 @@ fn fl_collect_uses(src) {
 // 2026-05-14: stage1-bypass — collect `import "./..."` directives from src.
 // Returns the raw quoted-path values (caller-dir-relative).
 fn fl_collect_imports(src) {
-    let lines = src.split("\n")
-    let n = len(lines)
+    let n = len(src)
+    let cap = if n < HEADER_CAP_BYTES_USES { n } else { HEADER_CAP_BYTES_USES }
+    let head = if cap < n { src.substring(0, cap) } else { src }
+    let lines = head.split("\n")
+    let nl = len(lines)
     let mut imps = []
     let mut i = 0
-    while i < n {
+    while i < nl {
         let imp = fl_parse_import_relative(lines[i])
         if imp != "" {
             imps.push(imp)
@@ -575,8 +631,16 @@ fn fl_iterative_walk(start_file) {
 
     let MARKER = "<<EMIT>>"
     let mut stack = []
+    // Fix #1b — cycle-breaker. The atlas subtree contains circular `use`
+    // imports (e.g. static_index ↔ prefix_index), which previously caused
+    // the iterative walk to infinitely re-discover files because the visited
+    // bit was only flipped at EMIT, not DISCOVER. We now also track an
+    // `on_stack` set: when a discovered dep is already on the in-flight stack,
+    // we skip pushing it (the existing frame will emit it eventually).
+    let mut on_stack_hs = fl_hset_new()
 
     stack.push(start_file)
+    on_stack_hs = fl_hset_add(on_stack_hs, start_file)
 
     while len(stack) > 0 {
         let top_idx = len(stack) - 1
@@ -614,8 +678,9 @@ fn fl_iterative_walk(start_file) {
                     //   c) dep path may already be repo-rooted (self/ml/…)
                     let dep_path = fl_resolve_use(deps[di])
                     if len(dep_path) > 0 {
-                        if !fl_hset_has(g_visited_hs, dep_path) {
+                        if !fl_hset_has(g_visited_hs, dep_path) && !fl_hset_has(on_stack_hs, dep_path) {
                             stack.push(dep_path)
+                            on_stack_hs = fl_hset_add(on_stack_hs, dep_path)
                         }
                     } else {
                         let mut wp = []
@@ -636,8 +701,9 @@ fn fl_iterative_walk(start_file) {
                 while ii >= 0 {
                     let imp_path = fl_resolve_import(caller_dir, imps[ii])
                     if len(imp_path) > 0 {
-                        if !fl_hset_has(g_visited_hs, imp_path) {
+                        if !fl_hset_has(g_visited_hs, imp_path) && !fl_hset_has(on_stack_hs, imp_path) {
                             stack.push(imp_path)
+                            on_stack_hs = fl_hset_add(on_stack_hs, imp_path)
                         }
                     } else {
                         let mut wp = []
@@ -759,22 +825,34 @@ fn flatten_main() {
     let mut fi = 0
     while fi < m {
         let f = g_order_parts[fi]
-        let src = read_file(f)
-        let decls = fl_scan_private_decls(src)
-        let dn = len(decls)
-        let mut di = 0
-        while di < dn {
-            let nm = decls[di]
-            if fl_hset_has(seen_decls_hs, nm) {
-                // Seen before — mark as collided (if not already)
-                if !fl_hset_has(collided_hs, nm) {
-                    collided_hs = fl_hset_add(collided_hs, nm)
-                    collided_parts.push(nm)
+        // Fix #1 — *.gen.hexa skip (per C7-prep stage1-bypass scaling probe).
+        // Large generated files (e.g. compiler/atlas/embedded.gen.hexa @ 4.8 MB)
+        // caused the full-compiler flatten to OOM at 4 GB because
+        // fl_scan_private_decls + fl_word_replace each call src.split("\n"),
+        // allocating ~75K permanent substrings per pass (the hexa runtime has
+        // no string GC). Generated files use auto-emitted pub identifiers that
+        // are unique by convention (atlas index hashes, embedded byte tables,
+        // anima_psi/anima_hexad tables) — no realistic collision risk — so we
+        // omit them from BOTH the collision-detect scan here and the
+        // collision-mangle word-replace at the emit loop below.
+        if !fl_basename(f).ends_with(".gen.hexa") {
+            let src = read_file(f)
+            let decls = fl_scan_private_decls(src)
+            let dn = len(decls)
+            let mut di = 0
+            while di < dn {
+                let nm = decls[di]
+                if fl_hset_has(seen_decls_hs, nm) {
+                    // Seen before — mark as collided (if not already)
+                    if !fl_hset_has(collided_hs, nm) {
+                        collided_hs = fl_hset_add(collided_hs, nm)
+                        collided_parts.push(nm)
+                    }
+                } else {
+                    seen_decls_hs = fl_hset_add(seen_decls_hs, nm)
                 }
-            } else {
-                seen_decls_hs = fl_hset_add(seen_decls_hs, nm)
+                di = di + 1
             }
-            di = di + 1
         }
         fi = fi + 1
     }
@@ -814,9 +892,13 @@ fn flatten_main() {
         let f = g_order_parts[idx]
         let body = read_file(f)
 
-        // Mangle collided private decls with file-prefix
+        // Fix #1 — *.gen.hexa skip the mangle pass (see collision-detect note
+        // above). fl_strip_uses still runs since generated files do contain
+        // `use` directives. read_file alone is fine (embedded.gen.hexa flatten
+        // peaks at 277 MB; the OOM was from the split-based mangle).
+        let is_gen = fl_basename(f).ends_with(".gen.hexa")
         let mut body_mut = body
-        if collided_count > 0 {
+        if collided_count > 0 && !is_gen {
             let decls = fl_scan_private_decls(body)
             let prefix = fl_mangle_prefix(f)
             let dn = len(decls)
@@ -842,6 +924,9 @@ fn flatten_main() {
         let mut begin_parts = []
         begin_parts.push("\n// ----- BEGIN ")
         begin_parts.push(base_name)
+        if is_gen {
+            begin_parts.push(" (mangle skipped — Fix #1)")
+        }
         begin_parts.push(" -----\n")
         flat_parts.push(begin_parts.join(""))
         flat_parts.push(stripped)
