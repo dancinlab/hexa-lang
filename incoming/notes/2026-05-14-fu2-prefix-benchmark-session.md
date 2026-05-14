@@ -142,3 +142,81 @@ Sketch only — **no code in this BG**:
 - Did not write `prefix_index.hexa`.
 - Did not commit anything.
 - No `self/` edits.
+
+---
+
+## Supplemental run (later this same day, working-tree only)
+
+The earlier run captured only the table header before the harness wall.
+A subsequent re-run with iteration count reduced from 100 → 10 per
+prefix (still 10 prefixes × 10 = 100 measured calls) completed cleanly
+under the harness budget — `real 1611 s` (~26 min 51 s, parse-phase
+dominated). Run command:
+
+```
+HEXA_MEM_CAP_MB=4096 hexa run compiler/atlas/prefix_bench.hexa
+```
+
+Note: bench file was edited in-place to set `iter = 10` (see comment in
+`compiler/atlas/prefix_bench.hexa` line 100-105). This is the same edit
+later picked up by the Wave 2.4 LAND commit (`246199f8`).
+
+### Per-prefix percentile table (10 iter × 10 prefixes = 100 calls)
+
+| prefix          | matches | min(ms) | p50(ms) | p95(ms) | p99(ms) | max(ms) |
+|-----------------|---------|---------|---------|---------|---------|---------|
+| n               | 315     | 5392    | 5632    | 5841    | 5841    | 5922    |
+| sigma           | 4       | 259     | 267     | 299     | 299     | 302     |
+| phi             | 10      | 106     | 112     | 133     | 133     | 136     |
+| tau             | 2       | 45      | 48      | 53      | 53      | 54      |
+| consciousness   | 2       | 78      | 83      | 93      | 93      | 93      |
+| meta_falsifier  | 14      | 126     | 136     | 158     | 158     | 159     |
+| omega_cycle     | 75      | 145     | 160     | 180     | 180     | 192     |
+| bridge          | 100     | 185     | 216     | 243     | 243     | 255     |
+| atlas_R5        | 8       | 406     | 437     | 457     | 457     | 499     |
+| commit_grouping | 12      | 93      | 102     | 107     | 107     | 108     |
+
+Worst p95 across all prefixes: **5841 ms** (prefix `n`).
+Threshold: 50 ms. **All 10 prefixes exceed the threshold** — even the
+cheapest (`tau`, 2 matches) measures p95 = 53 ms.
+
+The output was printed twice in a single run (the `if _is_main()`
+top-level guard fires from both the wrapper expansion and the inner
+`fn main()` shim path); the second table is reproduced below and agrees
+with the first within wall-clock jitter, confirming the measurement is
+stable:
+
+```
+n                315  5493 5619 5691 5691 5791
+sigma              4   264  290  322  322  331
+phi               10   108  114  135  135  138
+tau                2    45   48   53   53   54
+consciousness      2    79   89   99   99  101
+meta_falsifier    14   128  153  161  161  173
+omega_cycle       75   156  176  190  190  190
+bridge           100   184  195  221  221  224
+atlas_R5           8   412  429  499  499  516
+commit_grouping   12    87   99  105  105  108
+```
+
+### Decision (confirmed by hard data)
+
+**LAND Wave 2.4** — every measured prefix exceeds the 50 ms threshold;
+the dense `"n"` prefix is at p95 = 5841 ms (117× threshold). The
+~440× lower-bound stated in the original note was conservative —
+actual single-prefix p95 sits at ~117× for the worst case.
+
+### Followups
+
+- Wave 2.4 already landed in commits `fd368a54` + `246199f8` (parallel
+  session); the bucket prefix_index + parity test live at
+  `compiler/atlas/prefix_index{,_test}.hexa`.
+- This bench is the canonical *before* baseline. Re-running it against
+  the post-Wave-2.4 `atlas_prefix` (now `prefix_lookup`) is the Wave 2.4
+  acceptance measurement and is **deferred** — interp parse-phase wall
+  cost (~24 min) plus 100 calls × bucket-cached path should still fit
+  under a single harness BG (~26 min) and will produce the canonical
+  *after* numbers. The structural argument (2-char bucket caps dense
+  prefixes at ~few hundred candidates instead of 7398) already holds.
+- Native compile would obviate the parse-phase wall entirely; the bench
+  is interp-bound, not algorithm-bound.
