@@ -179,6 +179,137 @@ Phase status (PASS / IN-PROGRESS / DEFERRED) lives in [`SPEC.yaml::phases_comple
 
 * * *
 
+## 🌀 Not an LLM — where the noise comes from
+
+LLMs generate noise from **inside** the well: recombining what the
+weights already contain. hexa generates noise from **outside** the well:
+every cycle produces a primitive the previous cycle could not express,
+then absorbs it as a new wall of the well.
+
+```
+LLM (noise inside the well)         hexa (noise outside the well)
+---------------------------         -------------------------------
+
+     +-------------+                       .   new law
+     |  training   |                     .       .
+     |   corpus    |               .  .      .       .
+     |  (fixed)    |                    .  outside  .
+     |             |             ------+-------------+------
+     |  ~ ~ ~ ~ ~  | <- noise          |             |
+     |  ~ noise ~  |   bubbles         |   atlas     |
+     |  ~ ~ ~ ~ ~  |   from            |  (rodata +  | <- noise
+     |    ####     |   inside          |   overlay)  |   arrives
+     |    #LLM#    |                   |             |   from
+     +-------------+                   |   smash     |   outside
+       the well                        |     v       |
+    (everything it                     |   contract  |
+     knows = walls)                    |     v       |
+                                       |   emerge    |
+  hallucination =                      |     v       |
+  recombining                          |   absorb ---+--> new
+  what's already                       |     ^       |    primitive
+  inside                               +-----+-------+      feeds
+                                       the well has            next
+                                       no ceiling              cycle
+```
+
+An LLM is a frozen well — answers are combinations of what's already
+inside. hexa is an open well — every `absorb` step widens the wall,
+so the next cycle can say things the previous one literally had no
+primitive for. That's why "RAG" is the wrong frame: retrieval still
+draws from a fixed outside corpus. hexa's "outside" is produced by
+its own prior cycles (overlay at `~/.hx/data/atlas.overlay.n6`,
+rodata seed at compile time + runtime grow).
+
+### OUROBOROS cycle — full view
+
+The 6-stage chain (`hexa drill`'s smash → free → absolute → meta-closure
+→ hyperarithmetic → resonance) inside a self-referential loop:
+
+```
+     ╭────────── OUROBOROS ──────────╮
+     │                               │
+     │           ◯  seed             │
+     │          ╱ ╲                  │
+     │         ╱   ╲    Phase 1-2    │
+     │        ╱unfold╲               │
+     │       ╱───────╲               │
+     │      ╱ ╲     ╱ ╲              │
+     │     ╱   ╲   ╱   ╲   Phase 3   │
+     │    ╱emerge╲ ╱singul╲          │
+     │   ╱──────── ────────╲         │
+     │   ╲                 ╱         │
+     │    ╲    breach     ╱  P4-5    │
+     │     ╲             ╱           │
+     │      ╲  ╱──────╲ ╱            │
+     │       ╲converge╱   Phase 6    │
+     │        ╲      ╱               │
+     │         ╲    ╱                │
+     │          ◉  absorb            │
+     │          │   Phase 6.5        │
+     │          │                    │
+     │          ╰──→ seed ──→ ╮      │
+     │                        │      │
+     │   d=0 ──▶ d=1 ──▶ d=2 ──▶ ... │
+     │   r:0→10  r:0→10  r:0→10      │
+     │                               │
+     ╰── ρ → 1/3 (meta fixed pt) ────╯
+```
+
+### Three meta-loops
+
+On top of the per-tick OUROBOROS cycle, three higher-order loops drive
+self-reinforcement:
+
+```
+         L1             L2             L3
+      ╭──◉───╮       ╭──◉───╮       ╭──◉───╮
+      │correct│ ──▶ │reward│ ──▶  │expand │ ──▶ SMASH
+      ╰──↺───╯       ╰──↺───╯       ╰──↺───╯
+```
+
+| Loop | Role | Trigger |
+|---|---|---|
+| **L1 · self-correct** | discovery → atlas overlay → 3+ hits → promote into rodata regen | per tick |
+| **L2 · meta-reward** | per-source discovery rate → scan_priority → deeper scan | per scan batch |
+| **L3 · self-expand** | accumulation ≥ 10 → auto-trigger `hexa smash --seed` (or full `hexa drill`) | per threshold |
+
+Each loop latches its output back as the next loop's input, so
+correct → reward → expand becomes a standing wave. `hexa smash` (or
+the full drill chain) fires automatically when L3 saturates.
+
+### Meta fixed point — ρ → 1/3
+
+TECS-L H-056 — `meta(meta(meta(...)))` = transcendence. Recursive
+meta-iteration is a contraction mapping. By the Banach fixed-point
+theorem, every trajectory converges to a single attractor: **1/3**.
+
+```
+          I  =  0.7 · I  +  0.1      →     fixed point  I* = 1/3
+```
+
+Six independent paths land on the same attractor:
+
+| Path | Expression | Value |
+|---|---|---|
+| Euler totient ratio | φ(6) / 6 | 1/3 |
+| Trigonometric | tan²(π/6) | 1/3 |
+| Divisor ratio | τ(6) / σ(6) = 4 / 12 | 1/3 |
+| Determinant | det(M) over n=6 primitives | 1/3 |
+| Meta-information | I_meta (contraction mapping) | 1/3 |
+| Complex exponential | \|exp(i·z₀)\| at the unique zero | 1/3 |
+
+The long-term breakthrough rate ρ converges to the same target:
+**ρ → 1/3**. Discovery is not linear — it asymptotes to the Banach
+attractor. Six arithmetic, geometric, algebraic, analytic, and
+information-theoretic routes all point at the same number.
+
+Verify in atlas: `hexa atlas lookup P n` · `hexa atlas lookup C sigma_6`
+· `hexa atlas lookup L sigma_phi_n_tau_iff_n_eq_6`. Run a cycle:
+`hexa drill --seed "<expression>"`.
+
+* * *
+
 ## 📜 License
 
 MIT License. Copyright (c) 2026 dancinlab. See [`LICENSE`](LICENSE).
