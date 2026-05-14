@@ -717,25 +717,40 @@ pub fn ssh_sshd_handle_fd(cfd: int,
     net_set_nonblock(stderr_fd)
 
     // 18. Pump loop: stdout/stderr → CHANNEL_DATA/EXTENDED_DATA → cfd;
-    //     cfd CHANNEL_DATA → stdin_fd. Exit when child exits + both stdio EOF.
+    //     cfd CHANNEL_DATA → stdin_fd or agent forwarded fd by channel id.
+    let session_local_id = local_id        // typically 1
+    let agent_local_id   = 2
     let mut bytes_in = 0
     let mut bytes_out = 0
     let mut child_dead = false
     let mut stdout_eof = false
     let mut stderr_eof = false
     let mut stdin_closed = false
+    let mut agent_forwarded_fd: int = -1     // accepted Unix-socket connection (one at a time, MVP)
+    let mut agent_remote_channel_id: int = -1  // client's id for our agent channel
+    let mut agent_pending_open = false        // we've sent CHANNEL_OPEN, awaiting confirm
     let mut iter = 0
     while !child_dead && iter < 1000000 {
-        let sel = net_select([cfd, stdout_fd, stderr_fd], 200)
+        // Build dynamic fd list: cfd + child stdio + agent listen + agent fwd
+        let mut fds: [int] = [cfd]
+        if !stdout_eof { fds.push(stdout_fd) }
+        if !stderr_eof { fds.push(stderr_fd) }
+        if agent_listen_fd > -1 && agent_forwarded_fd < 0 && !agent_pending_open { fds.push(agent_listen_fd) }
+        if agent_forwarded_fd > -1 && agent_remote_channel_id > -1 { fds.push(agent_forwarded_fd) }
+        let sel = net_select(fds, 200)
         if type_of(sel) != "array" { break }
         let mut cfd_ready = false
         let mut stdout_ready = false
         let mut stderr_ready = false
+        let mut agent_listen_ready = false
+        let mut agent_fwd_ready = false
         let mut si = 0
         while si < len(sel) {
-            if sel[si] == cfd       { cfd_ready    = true }
-            if sel[si] == stdout_fd { stdout_ready = true }
-            if sel[si] == stderr_fd { stderr_ready = true }
+            if sel[si] == cfd              { cfd_ready          = true }
+            if sel[si] == stdout_fd        { stdout_ready       = true }
+            if sel[si] == stderr_fd        { stderr_ready       = true }
+            if sel[si] == agent_listen_fd  { agent_listen_ready = true }
+            if sel[si] == agent_forwarded_fd { agent_fwd_ready  = true }
             si = si + 1
         }
         if stdout_ready && !stdout_eof {
@@ -760,14 +775,50 @@ pub fn ssh_sshd_handle_fd(cfd: int,
                 stderr_eof = true
             }
         }
+        // Agent-forwarding: accept a connection from the child's
+        // ssh-agent client and open a CHANNEL to the real ssh-agent
+        // on the client side.
+        if agent_listen_ready {
+            let nfd = net_accept(agent_listen_fd)
+            if type_of(nfd) == "int" && nfd > -1 {
+                agent_forwarded_fd = nfd
+                net_set_nonblock(nfd)
+                let mut p: [int] = []
+                p = ssh_put_u8(p, SSH_MSG_CHANNEL_OPEN)
+                p = ssh_put_string(p, "auth-agent@openssh.com")
+                p = ssh_put_u32(p, agent_local_id)
+                p = ssh_put_u32(p, 2097152)
+                p = ssh_put_u32(p, 32768)
+                _sd_send_enc(cfd, s2c_seq, p, enc_key)
+                s2c_seq = s2c_seq + 1
+                agent_pending_open = true
+            }
+        }
+        if agent_fwd_ready && agent_remote_channel_id > -1 {
+            let chunk = net_read_bytes(agent_forwarded_fd, 16384)
+            if type_of(chunk) == "array" && len(chunk) > 0 {
+                let frame = _sd_build_channel_data(agent_remote_channel_id, chunk)
+                _sd_send_enc(cfd, s2c_seq, frame, enc_key)
+                s2c_seq = s2c_seq + 1
+            } else if type_of(chunk) == "array" && len(chunk) == 0 {
+                // child's agent connection closed
+                let eof_frame = _sd_build_channel_eof(agent_remote_channel_id)
+                _sd_send_enc(cfd, s2c_seq, eof_frame, enc_key)
+                s2c_seq = s2c_seq + 1
+                let cls_frame = _sd_build_channel_close(agent_remote_channel_id)
+                _sd_send_enc(cfd, s2c_seq, cls_frame, enc_key)
+                s2c_seq = s2c_seq + 1
+                net_close(agent_forwarded_fd)
+                agent_forwarded_fd = -1
+                agent_remote_channel_id = -1
+            }
+        }
         if cfd_ready {
             let rec = _sd_recv_enc(cfd, c2s_seq, dec_key)
             if has_key(rec, "error") { child_dead = true ; break }
             c2s_seq = c2s_seq + 1
             let pl = rec["payload"]
             let t = pl[0]
-            // RFC 4253 §9: client-initiated rekey arrives as SSH_MSG_KEXINIT
-            // mid-stream. Run an encrypted KEX flow and swap to new keys.
             if t == SSH_MSG_KEXINIT {
                 let rk = _sd_rekey(cfd, c2s_seq, s2c_seq, dec_key, enc_key,
                                     host_pk, host_sk, session_id,
@@ -778,17 +829,52 @@ pub fn ssh_sshd_handle_fd(cfd: int,
                 dec_key = rk["dec_key"]
                 enc_key = rk["enc_key"]
             }
-            if t == SSH_MSG_CHANNEL_DATA {
-                let s = ssh_get_string(pl, 5)
-                if s["off"] > 0 && !stdin_closed {
-                    let wn = net_write_bytes(stdin_fd, s["bytes"])
-                    if type_of(wn) == "int" { bytes_out = bytes_out + len(s["bytes"]) }
+            if t == SSH_MSG_CHANNEL_OPEN_CONFIRMATION && agent_pending_open {
+                // byte | u32 our_local | u32 their_sender | u32 window | u32 maxpkt
+                let r1 = ssh_get_u32(pl, 1)
+                let r2 = ssh_get_u32(pl, r1[1])
+                if r1[0] == agent_local_id {
+                    agent_remote_channel_id = r2[0]
+                    agent_pending_open = false
                 }
             }
-            if t == SSH_MSG_CHANNEL_EOF && !stdin_closed {
-                net_close(stdin_fd) ; stdin_closed = true
+            if t == SSH_MSG_CHANNEL_OPEN_FAILURE && agent_pending_open {
+                let r1 = ssh_get_u32(pl, 1)
+                if r1[0] == agent_local_id {
+                    agent_pending_open = false
+                    if agent_forwarded_fd > -1 { net_close(agent_forwarded_fd) ; agent_forwarded_fd = -1 }
+                }
             }
-            if t == SSH_MSG_CHANNEL_CLOSE { child_dead = true }
+            if t == SSH_MSG_CHANNEL_DATA {
+                // byte | u32 recipient_channel | string data
+                let r1 = ssh_get_u32(pl, 1)
+                let chan_id = r1[0]
+                let s = ssh_get_string(pl, 5)
+                if s["off"] > 0 {
+                    if chan_id == session_local_id && !stdin_closed {
+                        let wn = net_write_bytes(stdin_fd, s["bytes"])
+                        if type_of(wn) == "int" { bytes_out = bytes_out + len(s["bytes"]) }
+                    } else if chan_id == agent_local_id && agent_forwarded_fd > -1 {
+                        net_write_bytes(agent_forwarded_fd, s["bytes"])
+                    }
+                }
+            }
+            if t == SSH_MSG_CHANNEL_EOF {
+                let r1 = ssh_get_u32(pl, 1)
+                if r1[0] == session_local_id && !stdin_closed {
+                    net_close(stdin_fd) ; stdin_closed = true
+                }
+                // EOF on agent channel: stop reading from forwarded_fd
+                // (we keep writing till CHANNEL_CLOSE)
+            }
+            if t == SSH_MSG_CHANNEL_CLOSE {
+                let r1 = ssh_get_u32(pl, 1)
+                if r1[0] == session_local_id { child_dead = true }
+                if r1[0] == agent_local_id && agent_forwarded_fd > -1 {
+                    net_close(agent_forwarded_fd) ; agent_forwarded_fd = -1
+                    agent_remote_channel_id = -1
+                }
+            }
         }
         let reap = proc_wait(pid, proc_wait_flag_const("WNOHANG"))
         if type_of(reap) == "map" && has_key(reap, "exited") {

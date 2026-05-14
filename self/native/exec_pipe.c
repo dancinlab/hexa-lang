@@ -79,11 +79,15 @@ HexaVal hexa_exec_pipe_open(HexaVal argv_v, HexaVal env_v) {
         close(p_stdin[0]);  close(p_stdin[1]);
         close(p_stdout[0]); close(p_stdout[1]);
         close(p_stderr[0]); close(p_stderr[1]);
+        /* execvp does PATH lookup, which we need for short names like
+         * "sh". When an envp[] is supplied, switch `environ` over so
+         * the child inherits exactly those vars but execvp still
+         * finds the binary on PATH. */
         if (envp && envc > 0) {
-            execve(argv[0], argv, envp);
-        } else {
-            execvp(argv[0], argv);
+            extern char** environ;
+            environ = envp;
         }
+        execvp(argv[0], argv);
         /* exec failed */
         _exit(127);
     }
