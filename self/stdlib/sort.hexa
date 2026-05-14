@@ -1,0 +1,156 @@
+// ═══════════════════════════════════════════════════════════
+//  self/stdlib/sort.hexa — HEXA-native stable sort utilities
+//
+//  Why not runtime/C: the runtime `hexa_array_sort` (qsort-based)
+//  comparator only handles int/float — strings, structs, and maps
+//  silently sort to identity. Until that ships, this stdlib module
+//  provides:
+//
+//      sort_by(xs, key_fn) -> [T]   stable, ascending by key
+//      sort_desc_by(xs, key_fn) -> [T]   stable, descending by key
+//      sort_asc(xs) -> [T]          stable, ascending by value (identity key)
+//      sort_desc(xs) -> [T]         stable, descending by value
+//
+//  Algorithm: bottom-up iterative merge sort over an item+key parallel
+//  array. O(n log n) compares, O(n log n) key-fn calls (keys precomputed
+//  once). Stability: equal-key elements keep their input order — wilson's
+//  event_bus depends on this for predictable hook execution.
+//
+//  Usage:
+//      use "stdlib/sort"
+//      struct Sub { name: string, prio: int }
+//      let xs = [Sub{name:"a",prio:1}, Sub{name:"b",prio:3}]
+//      let high_first = sort_desc_by(xs, fn(s) { return s.prio })
+// ═══════════════════════════════════════════════════════════
+
+// Precompute keys, then bottom-up stable merge sort. ascending.
+pub fn sort_by(xs, key_fn) {
+    let n = len(xs)
+    if n < 2 { return xs }
+
+    // copy items + precompute keys
+    let mut items = []
+    let mut keys = []
+    let mut i = 0
+    while i < n {
+        items.push(xs[i])
+        keys.push(key_fn(xs[i]))
+        i = i + 1
+    }
+
+    // bottom-up merge sort, doubling width each pass
+    let mut width = 1
+    while width < n {
+        let mut start = 0
+        while start < n {
+            let left = start
+            let mut mid = start + width
+            if mid > n { mid = n }
+            let mut right = start + width + width
+            if right > n { right = n }
+            _merge_in_place(items, keys, left, mid, right)
+            start = start + width + width
+        }
+        width = width + width
+    }
+    return items
+}
+
+// Descending = sort ascending then reverse (preserves stability when reversed
+// over equal keys? — NO, reverse breaks stability. Instead negate the
+// comparison directly via a wrapper.) Use a sentinel: build a separate path.
+pub fn sort_desc_by(xs, key_fn) {
+    let n = len(xs)
+    if n < 2 { return xs }
+    let mut items = []
+    let mut keys = []
+    let mut i = 0
+    while i < n {
+        items.push(xs[i])
+        keys.push(key_fn(xs[i]))
+        i = i + 1
+    }
+    let mut width = 1
+    while width < n {
+        let mut start = 0
+        while start < n {
+            let left = start
+            let mut mid = start + width
+            if mid > n { mid = n }
+            let mut right = start + width + width
+            if right > n { right = n }
+            _merge_in_place_desc(items, keys, left, mid, right)
+            start = start + width + width
+        }
+        width = width + width
+    }
+    return items
+}
+
+// Identity-key sorts — ascending / descending by value.
+pub fn sort_asc(xs) { return sort_by(xs, _identity) }
+pub fn sort_desc(xs) { return sort_desc_by(xs, _identity) }
+
+// ── internals ──────────────────────────────────────────────
+
+fn _identity(x) { return x }
+
+// Stable merge of items[left..mid) and items[mid..right) into items[left..right).
+// Uses temp buffers so equal-key elements keep their relative order.
+fn _merge_in_place(items, keys, left, mid, right) {
+    let mut buf_items = []
+    let mut buf_keys = []
+    let mut li = left
+    let mut ri = mid
+    while li < mid && ri < right {
+        // ascending: take left when key_left <= key_right (stable: ties → left first)
+        if keys[ri] < keys[li] {
+            buf_items.push(items[ri]) ; buf_keys.push(keys[ri]) ; ri = ri + 1
+        } else {
+            buf_items.push(items[li]) ; buf_keys.push(keys[li]) ; li = li + 1
+        }
+    }
+    while li < mid {
+        buf_items.push(items[li]) ; buf_keys.push(keys[li]) ; li = li + 1
+    }
+    while ri < right {
+        buf_items.push(items[ri]) ; buf_keys.push(keys[ri]) ; ri = ri + 1
+    }
+    let mut bi = 0
+    let mut wi = left
+    while wi < right {
+        items[wi] = buf_items[bi]
+        keys[wi] = buf_keys[bi]
+        bi = bi + 1
+        wi = wi + 1
+    }
+}
+
+// Same as _merge_in_place but descending: take left when key_left >= key_right.
+fn _merge_in_place_desc(items, keys, left, mid, right) {
+    let mut buf_items = []
+    let mut buf_keys = []
+    let mut li = left
+    let mut ri = mid
+    while li < mid && ri < right {
+        if keys[li] < keys[ri] {
+            buf_items.push(items[ri]) ; buf_keys.push(keys[ri]) ; ri = ri + 1
+        } else {
+            buf_items.push(items[li]) ; buf_keys.push(keys[li]) ; li = li + 1
+        }
+    }
+    while li < mid {
+        buf_items.push(items[li]) ; buf_keys.push(keys[li]) ; li = li + 1
+    }
+    while ri < right {
+        buf_items.push(items[ri]) ; buf_keys.push(keys[ri]) ; ri = ri + 1
+    }
+    let mut bi = 0
+    let mut wi = left
+    while wi < right {
+        items[wi] = buf_items[bi]
+        keys[wi] = buf_keys[bi]
+        bi = bi + 1
+        wi = wi + 1
+    }
+}
