@@ -11125,6 +11125,29 @@ static void _hexa_init_fn_shims(void) {
 #include "native/wait.c"
 
 /* ═══════════════════════════════════════════════════════════════════
+ * stdlib/crypto — libsodium-backed primitives for SSH (and any
+ * downstream that needs vetted modern crypto).
+ *
+ *   hexa_libsodium_available()         -> bool
+ *   hexa_sha512(data)                  -> [int] 64
+ *   hexa_ed25519_keypair()              -> map { pub, priv }
+ *   hexa_ed25519_sign(priv, msg)        -> [int] 64
+ *   hexa_ed25519_verify(pub, msg, sig)  -> bool
+ *   hexa_x25519_keypair()                -> map { pub, priv }
+ *   hexa_x25519_scalarmult(scalar, point)-> [int] 32 | { error }
+ *   hexa_chacha20_poly1305_encrypt(key, nonce, aad, pt) -> [int] | { error }
+ *   hexa_chacha20_poly1305_decrypt(key, nonce, aad, ct) -> [int] | { error }
+ *
+ * Linking: when cmd_build detects libsodium via pkg-config, it adds
+ * -DHEXA_HAS_LIBSODIUM + -lsodium and these are real. Without
+ * libsodium they return { error: "libsodium not linked" } — caller
+ * should check `libsodium_available()` first.
+ *
+ * RFC: incoming/patches/stdlib-ssh-client.md (crypto suite prereq)
+ * ═══════════════════════════════════════════════════════════════════ */
+#include "native/crypto_sodium.c"
+
+/* ═══════════════════════════════════════════════════════════════════
  * B20 / roadmap 55 Phase 1 — deterministic FP control-word init.
  *
  * Exposes void hexa_fp_init(void). codegen_c2.hexa emits a call to it

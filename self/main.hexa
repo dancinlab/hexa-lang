@@ -358,20 +358,27 @@ fn cmd_status() {
 // 수학 심볼(sqrt/pow/fmod) 은 자동 링크 안 됨 → `-lm`.
 // macOS libSystem 은 두 플래그 모두 무의미하므로 Darwin 에서는 빈 문자열.
 fn os_clang_cflags() {
-    if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" {
-        return "-D_GNU_SOURCE "
-    }
-    return ""
+    let mut base = ""
+    if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" { base = "-D_GNU_SOURCE " }
+    // 2026-05-14: libsodium optional bind for stdlib/crypto + SSH client.
+    // Probe via pkg-config; on Mac without pkg-config, fall back to the
+    // Homebrew default install path. If nothing is found, leave the
+    // symbol undefined so native/crypto_sodium.c's stubs return errors.
+    let probe = exec("pkg-config --cflags libsodium 2>/dev/null")
+    if probe != "" { return base + "-DHEXA_HAS_LIBSODIUM " + probe.trim() + " " }
+    let brew_h = exec("test -f /opt/homebrew/include/sodium.h && printf '/opt/homebrew/include' || printf ''")
+    if brew_h != "" { return base + "-DHEXA_HAS_LIBSODIUM -I" + brew_h + " " }
+    return base
 }
 fn os_clang_ldflags() {
-    // 2026-05-13: -lpthread added for native/thread.c (pthread + channel
-    // primitives needed by anima daemon Phase 2 — CHAT.md rev 2 60+ FPS
-    // frame loop with async inference worker). macOS uses -lpthread too;
-    // libSystem makes it a no-op on Darwin but explicit is portable.
-    if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" {
-        return " -lm -lpthread"
-    }
-    return " -lpthread"
+    let mut base = " -lpthread"
+    if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" { base = " -lm -lpthread" }
+    // 2026-05-14: libsodium link flags (when found via pkg-config or brew).
+    let probe = exec("pkg-config --libs libsodium 2>/dev/null")
+    if probe != "" { return base + " " + probe.trim() }
+    let brew_l = exec("test -f /opt/homebrew/lib/libsodium.dylib && printf '/opt/homebrew/lib' || printf ''")
+    if brew_l != "" { return base + " -L" + brew_l + " -lsodium" }
+    return base
 }
 
 // ── B20 / roadmap 55 Phase 1 — strict-FP clang flags ─────────

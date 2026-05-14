@@ -3970,6 +3970,10 @@ fn gen2_expr(node) {
                 if name == "term_sigint_pending"   { return "hexa_term_sigint_pending()" }
                 // stdlib/os/pty — 0-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_open"              { return "hexa_pty_open()" }
+                // stdlib/crypto — 0-arg primitives (RFC ssh-client)
+                if name == "libsodium_available"   { return "hexa_libsodium_available()" }
+                if name == "ed25519_keypair"       { return "hexa_ed25519_keypair()" }
+                if name == "x25519_keypair"        { return "hexa_x25519_keypair()" }
                 if name == "term_isatty_stdin"     { return "hexa_term_isatty_stdin()" }
                 if name == "term_isatty_stdout"    { return "hexa_term_isatty_stdout()" }
                 if name == "term_getppid"          { return "hexa_term_getppid()" }
@@ -4108,6 +4112,8 @@ fn gen2_expr(node) {
                 if name == "net_set_nonblock"        { return "hexa_net_set_nonblock(" + a0 + ")" }
                 // stdlib/proc/wait — flag constant lookup (RFC signal-ext P1)
                 if name == "proc_wait_flag_const"    { return "hexa_proc_wait_flag_const(" + a0 + ")" }
+                // stdlib/crypto — 1-arg primitives (RFC ssh-client crypto suite)
+                if name == "sha512"                  { return "hexa_sha512(" + a0 + ")" }
             }
             if len(node.args) == 2 {
                 // stdlib/os/mount + namespace — 2-arg (RFC stdlib-os-{mount,namespace}-linux.md)
@@ -4123,6 +4129,9 @@ fn gen2_expr(node) {
                 // net — NUL-safe byte-array variants (for p9 codec / binary)
                 if name == "net_write_bytes"{ return "hexa_net_write_bytes(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "net_read_bytes" { return "hexa_net_read_bytes(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                // stdlib/crypto — 2-arg primitives (RFC ssh-client)
+                if name == "ed25519_sign"   { return "hexa_ed25519_sign(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                if name == "x25519_scalarmult" { return "hexa_x25519_scalarmult(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // PTY 2-arg builtins
                 if name == "term_fd_read"   { return "hexa_term_fd_read(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "term_fd_write"  { return "hexa_term_fd_write(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
@@ -4214,6 +4223,10 @@ fn gen2_expr(node) {
                 if name == "net_send_fd" {
                     return "hexa_net_send_fd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
                 }
+                // stdlib/crypto — 3-arg primitives (RFC ssh-client)
+                if name == "ed25519_verify" {
+                    return "hexa_ed25519_verify(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
+                }
             }
             if len(node.args) == 5 {
                 if name == "matmul"         { return "hexa_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
@@ -4232,6 +4245,13 @@ fn gen2_expr(node) {
                 if name == "matvec"         { return "hexa_matvec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
                 // stdlib/os/pty — 4-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_forkexec"   { return "hexa_pty_forkexec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
+                // stdlib/crypto — 4-arg AEAD (RFC ssh-client)
+                if name == "chacha20_poly1305_encrypt" {
+                    return "hexa_chacha20_poly1305_encrypt(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                if name == "chacha20_poly1305_decrypt" {
+                    return "hexa_chacha20_poly1305_decrypt(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
             }
             if len(node.args) == 6 {
                 // feat/primitive-float-array — single-qubit gate kernel.
@@ -6057,6 +6077,16 @@ fn _is_builtin_name(name) {
     // net — NUL-safe byte-array I/O (for p9 codec / binary protocols)
     if name == "net_write_bytes" { return true }
     if name == "net_read_bytes" { return true }
+    // stdlib/crypto — libsodium-backed primitives (RFC ssh-client)
+    if name == "libsodium_available" { return true }
+    if name == "sha512" { return true }
+    if name == "ed25519_keypair" { return true }
+    if name == "ed25519_sign" { return true }
+    if name == "ed25519_verify" { return true }
+    if name == "x25519_keypair" { return true }
+    if name == "x25519_scalarmult" { return true }
+    if name == "chacha20_poly1305_encrypt" { return true }
+    if name == "chacha20_poly1305_decrypt" { return true }
     if name == "now_monotonic_s" { return true }
     if name == "mono_ns" { return true }
     if name == "utc_iso_now" { return true }
