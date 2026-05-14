@@ -117,7 +117,13 @@ fn _ascii(bs: [int]) -> string {
     return s
 }
 
+// Back-compat wrapper: unencrypted key load.
 pub fn ssh_keyfile_load_ed25519(path: string) -> any {
+    return ssh_keyfile_load_ed25519_pw(path, "")
+}
+
+// Full surface: pass empty passphrase for unencrypted keys.
+pub fn ssh_keyfile_load_ed25519_pw(path: string, passphrase: string) -> any {
     // Read whole file as text (PEM is ASCII).
     let text = read_file(path)
     if type_of(text) != "string" { return #{ "error": "cannot read " + path } }
@@ -157,17 +163,26 @@ pub fn ssh_keyfile_load_ed25519(path: string) -> any {
     if r1["off"] < 0 { return #{ "error": "bad ciphername" } }
     let ciphername = _ascii(r1["bytes"])
     off = r1["off"]
-    if ciphername != "none" {
-        return #{ "error": "encrypted keys not supported (cipher=" + ciphername + ")" }
+    let encrypted = ciphername != "none"
+    if encrypted && ciphername != "aes256-ctr" {
+        return #{ "error": "cipher not supported: " + ciphername + " (only aes256-ctr)" }
+    }
+    if encrypted && len(passphrase) == 0 {
+        return #{ "error": "key is encrypted (cipher=" + ciphername + "); passphrase required" }
     }
 
-    // kdfname + kdfoptions (both must be "none"/"" for unencrypted)
+    // kdfname + kdfoptions
     let r2 = _read_ssh_str(blob, off)
     if r2["off"] < 0 { return #{ "error": "bad kdfname" } }
+    let kdfname = _ascii(r2["bytes"])
     off = r2["off"]
     let r3 = _read_ssh_str(blob, off)
     if r3["off"] < 0 { return #{ "error": "bad kdfoptions" } }
+    let kdfoptions = r3["bytes"]
     off = r3["off"]
+    if encrypted && kdfname != "bcrypt" {
+        return #{ "error": "kdf not supported: " + kdfname + " (only bcrypt)" }
+    }
 
     // number_of_keys (u32, must be 1)
     if off + 4 > len(blob) { return #{ "error": "missing key count" } }
@@ -181,10 +196,39 @@ pub fn ssh_keyfile_load_ed25519(path: string) -> any {
     let pub_blob = r4["bytes"]
     off = r4["off"]
 
-    // Encrypted private key section (cleartext since cipher=none)
+    // Encrypted private key section (cleartext if cipher=none, else
+    // AES-256-CTR over bcrypt-derived key+iv)
     let r5 = _read_ssh_str(blob, off)
     if r5["off"] < 0 { return #{ "error": "bad encrypted_privkey" } }
-    let priv_section = r5["bytes"]
+    let mut priv_section = r5["bytes"]
+    if encrypted {
+        // kdfoptions = ssh-string(salt) || u32_be(rounds)
+        let salt_r = _read_ssh_str(kdfoptions, 0)
+        if salt_r["off"] < 0 { return #{ "error": "bad bcrypt kdfoptions (salt)" } }
+        let salt = salt_r["bytes"]
+        let so = salt_r["off"]
+        if so + 4 > len(kdfoptions) { return #{ "error": "bad bcrypt rounds" } }
+        let rounds = kdfoptions[so] * 16777216 + kdfoptions[so + 1] * 65536
+                   + kdfoptions[so + 2] * 256   + kdfoptions[so + 3]
+        // Derive 48 bytes: first 32 = AES-256 key, next 16 = IV.
+        let mut pw_bytes: [int] = []
+        let mut pi = 0
+        while pi < len(passphrase) { pw_bytes.push(char_code(passphrase, pi)) ; pi = pi + 1 }
+        let derived = bcrypt_pbkdf(pw_bytes, salt, rounds, 48)
+        if type_of(derived) != "array" {
+            return #{ "error": "bcrypt_pbkdf failed: " + str(derived) }
+        }
+        let mut key: [int] = []
+        let mut iv: [int]  = []
+        let mut di = 0
+        while di < 32 { key.push(derived[di])  ; di = di + 1 }
+        while di < 48 { iv.push(derived[di])   ; di = di + 1 }
+        let dec = aes256_ctr_xor(key, iv, priv_section)
+        if type_of(dec) != "array" {
+            return #{ "error": "aes256_ctr decrypt failed: " + str(dec) }
+        }
+        priv_section = dec
+    }
 
     // Parse inside priv_section:
     //   checkint, checkint, ssh-string keytype, ssh-string pub, ssh-string priv, ssh-string comment

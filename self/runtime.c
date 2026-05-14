@@ -11146,6 +11146,8 @@ static void _hexa_init_fn_shims(void) {
  * RFC: incoming/patches/stdlib-ssh-client.md (crypto suite prereq)
  * ═══════════════════════════════════════════════════════════════════ */
 #include "native/crypto_sodium.c"
+#include "native/crypto_blowfish.c"
+#include "native/crypto_openssl.c"
 
 /* ═══════════════════════════════════════════════════════════════════
  * B20 / roadmap 55 Phase 1 — deterministic FP control-word init.
