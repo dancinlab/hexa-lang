@@ -125,6 +125,13 @@
   rule = "AI-assisted commits include trailer: Co-Authored-By: <model> <noreply@anthropic.com>"
   @> AGENTS.md
 
+@D g_arch_vs_log_split := "v1.2 architecture-vs-history split" :: governance [required d=2026-05-14 active]
+  rule = "UPPERCASE.tape files are EDITABLE architecture (latest-wins per id). Append-only event history lives in UPPERCASE.log.tape siblings."
+  why = "hexa-lang is the substrate · spec changes evolve continuously; locking them as append-only created noisy histories. v1.2 splits architecture (.tape) from history (.log.tape)."
+  applies-to = "AGENTS.tape · all UPPERCASE.tape root files (notably the existing TAPE-AUDIT.md ledger which may have a .tape sibling)"
+  authority = "[@x_tape_spec] §Domain-tape sibling §Architecture-vs-history split"
+  @> AGENTS.md
+
 # ─── §4 Forbidden patterns ───────────────────────────────────────────
 
 @F f1 := "lattice-fit-on-external-language" :: governance [required deny:write]
@@ -189,6 +196,9 @@
 
 @N n3 := "incoming-patches-from-consumers" :: note [active]
   text = "wilson, echoes, anima, getting-started, hexa-* family — all file upstream patch requests at incoming/patches/<descriptive>.md, one concept per file. Emoji '넣었다' marks delivery."
+
+@N n_log_separation := "hexa-lang specific" :: note [active]
+  text = "hexa-lang's stdlib/RFC/codegen progress lands as commits — each commit hook should append @A entries to per-domain .log.tape (e.g. CODEGEN.log.tape, STDLIB.log.tape) rather than mutating the architecture .tape files."
 
 # ─── §7 Generator hooks ──────────────────────────────────────────────
 
