@@ -1,0 +1,201 @@
+// HEXA — anima stdlib absorption smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Verifies the four anima-absorbed stdlib modules (phi, topology, n6/discover,
+// n6/miner) behave per the absorption plan (incoming/notes/2026-05-14-anima-absorption-plan.md).
+
+import "stdlib/phi.hexa"
+import "stdlib/topology.hexa"
+import "stdlib/n6/discover.hexa"
+import "stdlib/n6/miner.hexa"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut first_fail = ""
+
+fn check(name: string, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("FAIL " + name)
+    }
+}
+
+fn close_f(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    if d < 0.0 { return (0.0 - d) <= tol }
+    return d <= tol
+}
+
+fn main() {
+    // ────────────────────────────────────────────────────────────────
+    // phi.hexa
+    // ────────────────────────────────────────────────────────────────
+
+    // T1: phi_scaling(6, 0.014) = 0.014 · 6^(7/12)
+    //     6^(7/12) ≈ exp((7/12) * ln(6)) ≈ exp(0.58333 * 1.79176) ≈ exp(1.04519) ≈ 2.8438
+    //     ⇒ 0.014 · 2.8438 ≈ 0.03981
+    let ps6 = phi_scaling(6, 0.014)
+    println("T1 phi_scaling(6, 0.014) = " + to_string(ps6))
+    check("T1.phi_scaling_n=6_alpha=0.014",
+          close_f(ps6, 0.014 * pow(6.0, 7.0 / 12.0), 1.0e-6))
+    check("T1.phi_scaling_positive", ps6 > 0.0)
+
+    // T2: phi_scaling(1, alpha) = alpha (by definition: 1^anything = 1).
+    let ps1 = phi_scaling(1, 0.014)
+    check("T2.phi_scaling_n=1", close_f(ps1, 0.014, 1.0e-9))
+
+    // T3: phi_iit on a 4x4 ring-coupled adjacency. State = [1,0,1,0].
+    // Build adjacency manually so we know it's well-formed.
+    let mut adj4 = []
+    let mut i = 0
+    while i < 4 {
+        let mut row = []
+        let mut j = 0
+        while j < 4 {
+            if i == j { row.push(0.0) } else { row.push(0.0) }
+            j = j + 1
+        }
+        adj4.push(row)
+        i = i + 1
+    }
+    // ring edges
+    adj4[0][1] = 1.0; adj4[1][0] = 1.0
+    adj4[1][2] = 1.0; adj4[2][1] = 1.0
+    adj4[2][3] = 1.0; adj4[3][2] = 1.0
+    adj4[3][0] = 1.0; adj4[0][3] = 1.0
+    let state4 = [1, 0, 1, 0]
+    let phi4 = phi_iit(adj4, state4)
+    println("T3 phi_iit(ring4, [1,0,1,0]) = " + to_string(phi4))
+    check("T3.phi_iit_nonneg", phi4 >= 0.0)
+
+    // T4: phi_spectral on the same ring4. Should be > 0 and ≤ 1.
+    let phs = phi_spectral(adj4)
+    println("T4 phi_spectral(ring4) = " + to_string(phs))
+    check("T4.phi_spectral_in_unit_interval", phs >= 0.0 && phs <= 1.0001)
+    check("T4.phi_spectral_positive_for_nontrivial", phs > 0.0)
+
+    // ────────────────────────────────────────────────────────────────
+    // topology.hexa
+    // ────────────────────────────────────────────────────────────────
+
+    // T5: topology_ring(6) is a 6x6 boolean matrix with exactly 12 true entries
+    let ring6 = topology_ring(6)
+    check("T5.ring6_n", len(ring6) == 6)
+    check("T5.ring6_row0_len", len(ring6[0]) == 6)
+    let mut trues = 0
+    let mut ri = 0
+    while ri < 6 {
+        let mut rj = 0
+        while rj < 6 {
+            if ring6[ri][rj] { trues = trues + 1 }
+            rj = rj + 1
+        }
+        ri = ri + 1
+    }
+    println("T5 ring6 trues = " + to_string(trues))
+    check("T5.ring6_exactly_12_trues", trues == 12)
+
+    // T6: topology_analyze(ring6) — sensible stats.
+    let st = topology_analyze(ring6)
+    println("T6 ring6 stats: edges=" + to_string(st.edges) +
+            " avg_deg=" + to_string(st.avg_degree) +
+            " avg_cc=" + to_string(st.avg_clustering) +
+            " avg_path=" + to_string(st.avg_path_length))
+    check("T6.ring6_edges", st.edges == 6)         // 6 undirected edges
+    check("T6.ring6_avg_deg", close_f(st.avg_degree, 2.0, 1.0e-9))
+    check("T6.ring6_cc_zero", close_f(st.avg_clustering, 0.0, 1.0e-9))
+    // ring6 mean path length = (1+2+3+2+1)·6 / (6·5) = 9/5 = 1.8
+    check("T6.ring6_avg_path", close_f(st.avg_path_length, 1.8, 1.0e-6))
+
+    // T7: topology_star(6) — 1 hub (deg 5), 5 leaves (deg 1).
+    let star6 = topology_star(6)
+    let stst = topology_analyze(star6)
+    check("T7.star6_edges", stst.edges == 5)
+    check("T7.star6_max_deg", stst.max_degree == 5)
+    check("T7.star6_min_deg", stst.min_degree == 1)
+
+    // ────────────────────────────────────────────────────────────────
+    // n6/discover.hexa
+    // ────────────────────────────────────────────────────────────────
+
+    // T8: op_collision(2, 3) = (2·3) mod 12 = 6
+    let c23 = op_collision(2, 3)
+    println("T8 op_collision(2,3) = " + to_string(c23))
+    check("T8.op_collision_2_3", c23 == 6)
+
+    // T9: op_inverse(5) = 24 - 5 = 19
+    check("T9.op_inverse_5", op_inverse(5) == 19)
+    // op_inverse(0) = 0 (fixed point)
+    check("T9.op_inverse_0", op_inverse(0) == 0)
+
+    // T10: op_compose(2, 3) = op_collision(2, op_inverse(3)) = op_collision(2, 21)
+    //      (2 · 21) mod 12 = 42 mod 12 = 6
+    check("T10.op_compose_2_3", op_compose(2, 3) == 6)
+
+    // T11: discover_relations over seeds → at least 1 INVERSE + 1 COLLISION
+    let seeds = [2, 3, 4]
+    let rels = discover_relations(seeds)
+    let mut inv_seen = 0
+    let mut col_seen = 0
+    let mut comp_seen = 0
+    let mut k = 0
+    while k < len(rels) {
+        let r = rels[k]
+        if r.op == "INVERSE"   { inv_seen   = inv_seen + 1 }
+        if r.op == "COLLISION" { col_seen   = col_seen + 1 }
+        if r.op == "COMPOSE"   { comp_seen  = comp_seen + 1 }
+        k = k + 1
+    }
+    println("T11 discover_relations(seeds=[2,3,4]) " +
+            "INVERSE=" + to_string(inv_seen) +
+            " COLLISION=" + to_string(col_seen) +
+            " COMPOSE=" + to_string(comp_seen))
+    check("T11.has_inverse", inv_seen >= 3)        // one per unique seed
+    check("T11.has_collision", col_seen == 9)      // 3*3 ordered pairs
+    check("T11.has_compose", comp_seen == 9)
+    check("T11.total_at_least_1", len(rels) >= 1)
+
+    // ────────────────────────────────────────────────────────────────
+    // n6/miner.hexa
+    // ────────────────────────────────────────────────────────────────
+
+    // T12: mine_formulas_depth3 against target=24 (= sigma(6)·phi(6) = J2(6))
+    // with n6 primitives → should find at least one formula. e.g. sigma*phi = 12*2 = 24.
+    let targets24 = [24.0]
+    let prims = [2.0, 4.0, 5.0, 6.0, 12.0]   // phi, tau, sopfr, n, sigma
+    let formulas = mine_formulas_depth3(targets24, prims)
+    println("T12 mine_formulas_depth3 found " + to_string(len(formulas)) + " matches for target=24")
+    check("T12.depth3_at_least_one_match", len(formulas) >= 1)
+    // sanity: at least one formula must have fitness very close to 1.0
+    let mut best_fit = 0.0
+    let mut fi = 0
+    while fi < len(formulas) {
+        let f = formulas[fi]
+        if f.fitness > best_fit { best_fit = f.fitness }
+        fi = fi + 1
+    }
+    check("T12.depth3_best_fitness", best_fit > 0.999)
+
+    // T13: GA refinement against a target ≈ 0.5 = phi/tau using {2.0, 4.0}.
+    let targets_half = [0.5]
+    let prims_two = [2.0, 4.0]
+    let ga_out = mine_formulas_ga(targets_half, prims_two, 200)
+    println("T13 mine_formulas_ga(target=0.5) hits=" + to_string(len(ga_out)))
+    check("T13.ga_returns_at_least_one", len(ga_out) >= 1)
+
+    // ────────────────────────────────────────────────────────────────
+    // summary
+    // ────────────────────────────────────────────────────────────────
+    println("PASS " + to_string(pass_count) + "/" + to_string(total_count))
+    if first_fail != "" {
+        println("first fail: " + first_fail)
+        println("__ANIMA_STDLIB_SMOKE__ FAIL")
+        exit(1)
+    }
+    println("__ANIMA_STDLIB_SMOKE__ PASS")
+}

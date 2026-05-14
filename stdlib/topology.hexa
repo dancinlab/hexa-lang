@@ -1,0 +1,343 @@
+// HEXA Standard Library — topology
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// absorbed from ~/core/anima/anima-core/topology.hexa (MIT, dancinlab 2026-05-14)
+//
+// Graph topology generators + analysers. Pure stage-1 — no I/O, no FFI.
+//
+// Diet vs the 363-LOC anima original:
+//   - drop JSON Ψ-constants loader (`_psi_load`) — `topology_small_world`
+//     accepts rewiring probability `p` as a parameter.
+//   - drop the demo `main()` (CLI verb lives in stdlib/n6/main.hexa).
+//   - replace anima's float-matrix encoding with `bool` matrices in the public
+//     surface (the underlying boolean adjacency is what graph metrics depend
+//     on); internal helpers keep using bool.
+//   - add `topology_scale_free` (Barabási-Albert) which the anima source omits
+//     despite the docstring referencing scale-free graphs.
+//   - bundle the metrics into a `TopologyStats` struct returned by
+//     `topology_analyze`.
+//
+// Disambiguation: `compiler/atlas/topology.hexa` exists in this repo but
+// computes atlas-graph degree centrality / hub classification over the
+// rodata embed — a different graph (atlas nodes) and a different surface
+// (`compute_degree`, `classify_hubs`). The two modules do not collide;
+// this one lives at `stdlib/topology` and operates on raw adjacency
+// matrices. See the absorption note at the top.
+//
+// Public surface:
+//   pub struct TopologyStats { ... }
+//   pub fn topology_ring(n: int) -> [[bool]]
+//   pub fn topology_small_world(n: int, k: int, p: float) -> [[bool]]
+//   pub fn topology_scale_free(n: int, m: int) -> [[bool]]
+//   pub fn topology_star(n: int) -> [[bool]]
+//   pub fn topology_analyze(adj: [[bool]]) -> TopologyStats
+
+let _TOPO_EPS = 0.00001
+
+pub struct TopologyStats {
+    n: int,
+    edges: int,
+    avg_degree: float,
+    avg_clustering: float,
+    avg_path_length: float,
+    max_degree: int,
+    min_degree: int
+}
+
+// ── builders ───────────────────────────────────────────────────────────────
+
+fn _empty_adj(n: int) -> array {
+    let mut adj = []
+    let mut i = 0
+    while i < n {
+        let mut row = []
+        let mut j = 0
+        while j < n {
+            row.push(false)
+            j = j + 1
+        }
+        adj.push(row)
+        i = i + 1
+    }
+    return adj
+}
+
+// ── topology_ring — undirected ring of n nodes (each connected to ±1) ──────
+
+pub fn topology_ring(n: int) -> array {
+    let mut adj = _empty_adj(n)
+    if n < 2 { return adj }
+    let mut i = 0
+    while i < n {
+        let left = (i - 1 + n) % n
+        let right = (i + 1) % n
+        adj[i][left] = true
+        adj[i][right] = true
+        i = i + 1
+    }
+    return adj
+}
+
+// ── topology_star — hub-and-spoke (node 0 is hub) ──────────────────────────
+
+pub fn topology_star(n: int) -> array {
+    let mut adj = _empty_adj(n)
+    if n < 2 { return adj }
+    let mut i = 1
+    while i < n {
+        adj[0][i] = true
+        adj[i][0] = true
+        i = i + 1
+    }
+    return adj
+}
+
+// ── topology_small_world — Watts-Strogatz: ring lattice (k-nearest) + ───────
+// random rewiring with probability `p`. Uses the global `random()` builtin —
+// callers wanting determinism should seed it externally.
+
+pub fn topology_small_world(n: int, k: int, p: float) -> array {
+    let mut adj = _empty_adj(n)
+    if n < 2 { return adj }
+    // start: ring lattice — each node connected to k nearest on each side
+    let mut i = 0
+    while i < n {
+        let mut ki = 1
+        while ki <= k {
+            let right = (i + ki) % n
+            let left = (i - ki + n) % n
+            adj[i][right] = true
+            adj[i][left] = true
+            adj[right][i] = true
+            adj[left][i] = true
+            ki = ki + 1
+        }
+        i = i + 1
+    }
+    // rewire: for each forward edge (i, i+ki) try to relocate target
+    i = 0
+    while i < n {
+        let mut ki = 1
+        while ki <= k {
+            let right = (i + ki) % n
+            if adj[i][right] {
+                if random() < p {
+                    // pick a non-self, non-existing target
+                    let new_t = to_int(random() * to_float(n)) % n
+                    if new_t != i {
+                        if !adj[i][new_t] {
+                            adj[i][right] = false
+                            adj[right][i] = false
+                            adj[i][new_t] = true
+                            adj[new_t][i] = true
+                        }
+                    }
+                }
+            }
+            ki = ki + 1
+        }
+        i = i + 1
+    }
+    return adj
+}
+
+// ── topology_scale_free — Barabási-Albert preferential attachment ──────────
+//
+// Start with an `m`-clique seed; add nodes one at a time, each with `m` edges
+// attached preferentially to existing high-degree nodes.
+
+pub fn topology_scale_free(n: int, m: int) -> array {
+    let mut adj = _empty_adj(n)
+    if n < 2 || m < 1 { return adj }
+    let seed = if m + 1 < n { m + 1 } else { n }
+    // seed = small complete graph on first `seed` nodes
+    let mut i = 0
+    while i < seed {
+        let mut j = 0
+        while j < seed {
+            if i != j { adj[i][j] = true }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    // grow
+    let mut new_node = seed
+    while new_node < n {
+        // gather degrees for nodes < new_node
+        let mut deg_sum = 0
+        let mut k = 0
+        while k < new_node {
+            let mut d = 0
+            let mut j = 0
+            while j < new_node {
+                if adj[k][j] { d = d + 1 }
+                j = j + 1
+            }
+            deg_sum = deg_sum + d
+            k = k + 1
+        }
+        // attach `m` edges using preferential attachment (with replacement
+        // rejection so we don't create duplicates / self-loops).
+        let mut added = 0
+        let mut guard = 0
+        while added < m && guard < 200 {
+            let r = random() * to_float(deg_sum)
+            let mut cum = 0.0
+            let mut target = 0
+            let mut kk = 0
+            while kk < new_node {
+                let mut d = 0
+                let mut j = 0
+                while j < new_node {
+                    if adj[kk][j] { d = d + 1 }
+                    j = j + 1
+                }
+                cum = cum + to_float(d)
+                if cum >= r {
+                    target = kk
+                    kk = new_node  // break
+                } else {
+                    kk = kk + 1
+                }
+            }
+            if !adj[new_node][target] && target != new_node {
+                adj[new_node][target] = true
+                adj[target][new_node] = true
+                added = added + 1
+            }
+            guard = guard + 1
+        }
+        new_node = new_node + 1
+    }
+    return adj
+}
+
+// ── topology_analyze — clustering coefficient, avg path length, degree dist
+
+fn _degree(adj: array, node: int) -> int {
+    let n = len(adj)
+    let mut d = 0
+    let mut j = 0
+    while j < n {
+        if adj[node][j] { d = d + 1 }
+        j = j + 1
+    }
+    return d
+}
+
+fn _local_clustering(adj: array, node: int) -> float {
+    let n = len(adj)
+    let mut neighbors = []
+    let mut j = 0
+    while j < n {
+        if adj[node][j] { neighbors.push(j) }
+        j = j + 1
+    }
+    let k = len(neighbors)
+    if k < 2 { return 0.0 }
+    let mut triangles = 0
+    let mut a = 0
+    while a < k {
+        let mut b = a + 1
+        while b < k {
+            if adj[neighbors[a]][neighbors[b]] { triangles = triangles + 1 }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return to_float(2 * triangles) / to_float(k * (k - 1))
+}
+
+// BFS path lengths from `src`. Returns array of dists (or -1 if unreachable).
+fn _bfs_dists(adj: array, src: int) -> array {
+    let n = len(adj)
+    let mut dist = []
+    let mut i = 0
+    while i < n {
+        dist.push(0 - 1)   // -1 sentinel
+        i = i + 1
+    }
+    dist[src] = 0
+    let mut queue = []
+    queue.push(src)
+    let mut head = 0
+    while head < len(queue) {
+        let u = queue[head]
+        head = head + 1
+        let mut v = 0
+        while v < n {
+            if adj[u][v] {
+                if dist[v] < 0 {
+                    dist[v] = dist[u] + 1
+                    queue.push(v)
+                }
+            }
+            v = v + 1
+        }
+    }
+    return dist
+}
+
+pub fn topology_analyze(adj: array) -> TopologyStats {
+    let n = len(adj)
+    if n < 1 {
+        return TopologyStats { n: 0, edges: 0, avg_degree: 0.0, avg_clustering: 0.0,
+                               avg_path_length: 0.0, max_degree: 0, min_degree: 0 }
+    }
+    // edges + degree dist
+    let mut edges = 0
+    let mut max_d = 0
+    let mut min_d = n
+    let mut deg_sum = 0
+    let mut i = 0
+    while i < n {
+        let d = _degree(adj, i)
+        deg_sum = deg_sum + d
+        if d > max_d { max_d = d }
+        if d < min_d { min_d = d }
+        let mut j = i + 1
+        while j < n {
+            if adj[i][j] { edges = edges + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    // clustering
+    let mut cc_sum = 0.0
+    i = 0
+    while i < n {
+        cc_sum = cc_sum + _local_clustering(adj, i)
+        i = i + 1
+    }
+    let cc_avg = cc_sum / to_float(n)
+    // avg path length (mean over reachable pairs)
+    let mut path_sum = 0.0
+    let mut path_cnt = 0
+    i = 0
+    while i < n {
+        let dists = _bfs_dists(adj, i)
+        let mut j = 0
+        while j < n {
+            if j != i {
+                if dists[j] > 0 {
+                    path_sum = path_sum + to_float(dists[j])
+                    path_cnt = path_cnt + 1
+                }
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let path_avg = if path_cnt > 0 { path_sum / to_float(path_cnt) } else { 0.0 }
+    return TopologyStats {
+        n: n,
+        edges: edges,
+        avg_degree: to_float(deg_sum) / to_float(n),
+        avg_clustering: cc_avg,
+        avg_path_length: path_avg,
+        max_degree: max_d,
+        min_degree: if min_d == n { 0 } else { min_d }
+    }
+}
