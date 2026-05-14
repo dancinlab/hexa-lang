@@ -156,6 +156,36 @@
   evidence = "build/stage1/hexa = 58952 B, mtime Apr 13 (stale Q1 stub); build/stage{2,3}/hexa same mtime; build/fixpoint_report.json mode=scaffold, converged=0"
   unblocks = "@open_wallclock"
 
+@N stage1_binary_landed := "stage-1-binary-produced-path-b" :: status [d=2026-05-15 ok]
+  fact = "FIRST stage-1 native binary produced via path-B (hexa_v2 transpile pipeline) — 10.4 MB arm64 Mach-O at build/stage1/hexa"
+  pipeline <<~EOF
+    1. tool/flatten_imports.hexa compiler/main.hexa → /tmp/main_flat_v11.hexa (25,526 lines, 633 MB peak, 6.6 s)
+    2. HEXA_VAL_ARENA=0 HEXA_MEM_UNLIMITED=1 hexa_v2.new flat.hexa → main_v13.c (6.94 MB, 65 s, 8.7 GB peak)
+    3. clang -O0 -c main_v13.c → main_v13.o (13.6 MB, ~38 min)
+    4. clang main_v13.o → /tmp/stage1_full (10.4 MB Mach-O 64-bit arm64)
+  EOF
+  smoke = "stage1_full compiler/main.hexa --emit=asm -o h.s tests/m0/hello.hexa → 347-byte .s ✓"
+  fixes_required <<~EOF
+    Codegen fixes that landed during this drive (12 substantive commits on c7-stack-spill):
+      C7 stack-spill         (x86_64 push + arm64 per-fn region)        09597f3c
+      B5 helper rename       (3-backend backend-prefix)                  da7abe87
+      flatten extension      (import "./..." handling)                   c1cfdd80
+      COMPILE-ONLY.tape doc                                              141decaf
+      POSIX mangle           (38 POSIX names → _hexa_name_is_reserved)   9f9e9799
+      enum prelude           (#define before fn bodies)                  085e73e6
+      extern shim            (list_dir/sha256_hex stdlib pull-in)        02f41a4d
+      *.gen.hexa skip        (flatten mangle bypass on gen files)        460fd899
+      parser O(N²)+x86_op_mem (kinds-array short-circuit + mirror)       ca11632c
+      mkdir route + hoist    (mkdir POSIX route + local-decl mangle)     a9be975e
+      strlit chunking        (500-stmt chunks)                           07af043c
+      array statement-expr   (>64 elems flat instead of nested)          4cab70d4
+  EOF
+  doctrine_note = "stage-0 = hexa_v2 transpile pipeline (per HEXA-NATIVE-ONLY.md §F fallback-C-emission permission) is the de-facto first-cut path-B route — SPEC §5 stage-0 table's `hexa_interp` row needs amendment to recognize this dual stage-0 path. Doctrine decision pending."
+
+@N open_wallclock_resolved := "wall-clock-bypass-d-2026-05-15" :: status [d=2026-05-15 ok]
+  fact = "Stage-0 interpreter 21-min wall-clock bottleneck BYPASSED via path-B (hexa_v2 transpile + clang). No algorithmic fix needed for interp itself — retired by displacement."
+  ~> open_wallclock
+
 # ─── §5 Critical path to E2 ──────────────────────────────────────────
 
 @D critical_path := "e2-critical-path-d-2026-05-14" :: plan [active]
