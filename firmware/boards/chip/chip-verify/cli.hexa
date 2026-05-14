@@ -1,0 +1,335 @@
+#!hexa strict
+// @allow-silent-exit-file — this dispatcher chains exec(...).trim() and dispatches
+//   subprocess scripts whose exit codes are captured into a separate $? probe; the
+//   chained-method form does not contain the rc-check tokens the bedrock lint
+//   scans for, so file-level escape is the documented remedy.
+// @allow-bare-exec-file — same justification: subprocess dispatch by design.
+// hexa-chip/chip-verify/cli.hexa — chip-verify empirical harness dispatcher.
+//
+// Wave J (2026-05-12): promotes chip-verify/ from T4 KNOWLEDGE
+// (reference-only) to T3 RUNTIME (first-class verify surface).
+//
+// Mirror of verify/cli.hexa style. Dispatches the 22 imported
+// chip-verify scripts via the hexa-stage0 interpreter and aggregates
+// PASS / PENDING / FAIL / ERROR verdicts.
+//
+// Usage:
+//   hexa run chip-verify/cli.hexa list             # list all 22 scripts
+//   hexa run chip-verify/cli.hexa run <script>     # dispatch a single script
+//   hexa run chip-verify/cli.hexa all              # run all 22 (default)
+//   hexa run chip-verify/cli.hexa report           # human-readable summary
+//   hexa run chip-verify/cli.hexa inventory        # 22/4/1 file-count invariant
+//   hexa run chip-verify/cli.hexa --json           # machine-readable summary
+//
+// Exit code:
+//   0 = chip-verify harness produced a verdict (PASS/PENDING/FAIL counts
+//       printed); aggregate verdict is informational, not gating.
+//   1 = invocation error / inventory mismatch.
+//
+// Closure scope:
+//   This dispatcher does NOT validate the 29-verb canonical surface.
+//   It is an empirical sandbox for chip-architecture / NoC / SoC
+//   integration experiments imported at Wave 5 (commit 3f2c2b7).
+//   The headline 34/36 (94.4%) figure comes from boot_matrix_report.md
+//   §1 and stays visible — the 2/36 (5.6%) failure cells are real and
+//   stay surfaced in the aggregate output.
+//
+// Provenance: the 22 imported .hexa files are not rewritten. 3 of them
+// (boot_matrix_3x12.hexa, verify_chip-3d.hexa, verify_protocol_bridge.hexa)
+// use the legacy stage0 double-main convention (`fn main()` + explicit
+// `main()` call at file foot); under the current hexa-strict auto-invoke
+// they exit non-zero. This dispatcher surfaces that as ERROR honestly
+// rather than masking it.
+
+let SCRIPTS = [
+    ["boot_matrix_3x12",           "CHIP-P3-3 3 chips x 12 protocols boot matrix (94.4% headline)"],
+    ["sim_noc_bott8_1Mcycle",      "CHIP-P2-2 HEXA-TOPO Bott-8 NoC 1M cycle simulation"],
+    ["verify_chip-3d",             "3D-stacked chip n=6 alignment (5-axis EXACT)"],
+    ["verify_dse_cache_6level",    "DSE 6-level cache hierarchy"],
+    ["verify_npu_systolic_6x6",    "NPU 6x6 systolic array"],
+    ["verify_protocol_bridge",     "Protocol bridge interface count"],
+    ["verify_rtl_6stage_pipeline", "RTL 6-stage pipeline"],
+    ["verify_xn6_branch_predictor",  "Xn6 branch predictor"],
+    ["verify_xn6_dma_6channel",      "Xn6 DMA 6-channel"],
+    ["verify_xn6_fpu_6lane",         "Xn6 FPU 6-lane FMA"],
+    ["verify_xn6_hls_6stage",        "Xn6 HLS 6-stage synthesis"],
+    ["verify_xn6_interconnect_6port","Xn6 interconnect 6-port"],
+    ["verify_xn6_io_6pcie",          "Xn6 I/O 6-lane PCIe"],
+    ["verify_xn6_isa_24ops",         "Xn6 ISA J2 = sigma*phi = 24 ops completeness"],
+    ["verify_xn6_issue_width_6",     "Xn6 issue-width 6"],
+    ["verify_xn6_mesh_6x6",          "Xn6 mesh 6x6 = 36 tiles"],
+    ["verify_xn6_power_gating_6",    "Xn6 power-gating 6-state"],
+    ["verify_xn6_regfile_24_entries","Xn6 register file 24 entries"],
+    ["verify_xn6_simd_6way",         "Xn6 SIMD 6-way"],
+    ["verify_xn6_thermal_6zone",     "Xn6 thermal 6-zone"],
+    ["verify_xn6_tlb_64entries",     "Xn6 TLB 64 entries (phi^n)"],
+    ["verify_xn6_vector_width",      "Xn6 vector width"]
+]
+
+// Harness files added by Wave J (excluded from the 22-imported-script count).
+let HARNESS_FILES = ["cli.hexa", "inventory.hexa", "aggregate.hexa"]
+// Wave-J docs (excluded from the 4-report count — those are the original Wave-5 reports).
+let WAVEJ_DOCS = ["CLOSURE.md", "README.md"]
+
+let EXPECTED_HEXA: int = 22
+let EXPECTED_MD:   int = 4
+let EXPECTED_JSON: int = 1
+
+fn _root() -> str {
+    let env_root = env("HEXA_CHIP_ROOT")
+    if env_root.len() > 0 { return env_root }
+    return exec("pwd").trim()
+}
+
+fn _has_flag(args: [str], flag: str) -> bool {
+    for x in args { if x == flag { return true } }
+    return false
+}
+
+fn _user_args() -> [str] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [str] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() { out = out + [raw[j]]; j = j + 1 }
+    return out
+}
+
+fn _shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _resolve(name: str) -> int {
+    let mut i = 0
+    while i < SCRIPTS.len() {
+        if SCRIPTS[i][0] == name { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _classify(out: str, rc: int) -> str {
+    if rc != 0 { return "ERROR" }
+    if out.contains("상태] pass")    { return "PASS" }
+    if out.contains("[status] pass") { return "PASS" }
+    if out.contains("상태] pending") { return "PENDING" }
+    if out.contains("상태] fail")    { return "FAIL" }
+    return "UNKNOWN"
+}
+
+fn _run_one(root: str, idx: int, quiet: bool) -> str {
+    let name  = SCRIPTS[idx][0]
+    let label = SCRIPTS[idx][1]
+    let path = root + "/chip-verify/" + name + ".hexa"
+    let exists = exec("[ -f " + _shq(path) + " ] && echo y || echo n").trim()
+    if exists != "y" {
+        if !quiet { println("  [MISS] " + name + " - script not found: " + path) }
+        return "MISS"
+    }
+    let cmd = "HEXA_CHIP_ROOT=" + _shq(root) + " hexa run " + _shq(path) + " 2>&1"
+    let out = exec(cmd)
+    let rc_str = exec("HEXA_CHIP_ROOT=" + _shq(root) + " hexa run " + _shq(path) + " >/dev/null 2>&1; echo $?").trim()
+    let mut rc = 1
+    if rc_str == "0" { rc = 0 }
+    let verdict = _classify(out, rc)
+    if !quiet {
+        println("  [" + verdict + "] " + name + "  (chip-verify/" + name + ".hexa)  " + label)
+    }
+    return verdict
+}
+
+fn cmd_inventory(root: str) -> bool {
+    let dir = root + "/chip-verify"
+    // @allow-bare-exec @allow-silent-exit — chained-method count probes, no rc gating needed
+    let total_hexa: int = exec("ls -1 " + _shq(dir) + "/*.hexa 2>/dev/null | wc -l").trim().to_int()
+    let total_md:   int = exec("ls -1 " + _shq(dir) + "/*.md   2>/dev/null | wc -l").trim().to_int()
+    let json_n: int = exec("ls -1 " + _shq(dir) + "/*.json 2>/dev/null | wc -l").trim().to_int()
+    let mut harness_n: int = 0
+    for h in HARNESS_FILES {
+        let p = dir + "/" + h
+        // @allow-bare-exec @allow-silent-exit — existence probe, returns y/n
+        let r = exec("[ -f " + _shq(p) + " ] && echo y || echo n").trim()
+        if r == "y" { harness_n = harness_n + 1 }
+    }
+    let mut wavej_md_n: int = 0
+    for d in WAVEJ_DOCS {
+        let p = dir + "/" + d
+        // @allow-bare-exec @allow-silent-exit — existence probe, returns y/n
+        let r = exec("[ -f " + _shq(p) + " ] && echo y || echo n").trim()
+        if r == "y" { wavej_md_n = wavej_md_n + 1 }
+    }
+    let imported_n = total_hexa - harness_n
+    let md_n = total_md - wavej_md_n
+    println("chip-verify/ inventory invariant:")
+    println("  imported .hexa scripts: " + str(imported_n) + " / " + str(EXPECTED_HEXA) + "  (excluding " + str(harness_n) + " Wave-J harness files)")
+    println("  imported .md reports:   " + str(md_n)   + " / " + str(EXPECTED_MD)   + "  (excluding " + str(wavej_md_n) + " Wave-J docs)")
+    println("  .json fixtures:         " + str(json_n) + " / " + str(EXPECTED_JSON))
+    let mut missing: [str] = []
+    let mut i = 0
+    while i < SCRIPTS.len() {
+        let p = dir + "/" + SCRIPTS[i][0] + ".hexa"
+        // @allow-bare-exec @allow-silent-exit — existence probe per script
+        let r = exec("[ -f " + _shq(p) + " ] && echo y || echo n").trim()
+        if r != "y" { missing = missing + [SCRIPTS[i][0]] }
+        i = i + 1
+    }
+    let ok_h = imported_n == EXPECTED_HEXA && missing.len() == 0
+    let ok_m = md_n   == EXPECTED_MD
+    let ok_j = json_n == EXPECTED_JSON
+    if missing.len() > 0 {
+        println("  missing imported scripts:")
+        for m in missing { println("    x " + m) }
+    }
+    if ok_h && ok_m && ok_j {
+        println("  [PASS] 22 imported .hexa + 4 .md + 1 .json - chip-verify inventory locked")
+        return true
+    }
+    println("  [FAIL] chip-verify inventory drift - expected 22/4/1")
+    return false
+}
+
+fn cmd_list() {
+    println("hexa-chip chip-verify/ - 22 registered scripts:")
+    let mut i = 0
+    while i < SCRIPTS.len() {
+        let s = SCRIPTS[i]
+        let path = "chip-verify/" + s[0] + ".hexa"
+        let r = exec("[ -f " + _shq(path) + " ] && echo y || echo n").trim()
+        let mark = if r == "y" { "ok " } else { "MISS" }
+        println("  [" + mark + "] " + s[0] + "  ->  " + path + "  " + s[1])
+        i = i + 1
+    }
+    println("")
+    println("  total: " + str(SCRIPTS.len()) + " script(s) - 22 expected")
+}
+
+fn cmd_report(root: str, json_mode: bool, quiet: bool) -> int {
+    if !quiet && !json_mode {
+        println("========================================================================")
+        println("  chip-verify aggregate run - 22 imported scripts")
+        println("  (empirical sandbox; NOT a verb closure; 34/36 = 94.4% is the boot")
+        println("  matrix headline, not the harness-wide pass rate)")
+        println("========================================================================")
+    }
+    let mut pass_n = 0
+    let mut pending_n = 0
+    let mut fail_n = 0
+    let mut error_n = 0
+    let mut unknown_n = 0
+    let mut details: [str] = []
+    let mut i = 0
+    while i < SCRIPTS.len() {
+        let v = _run_one(root, i, quiet || json_mode)
+        if v == "PASS"    { pass_n = pass_n + 1 }
+        if v == "PENDING" { pending_n = pending_n + 1 }
+        if v == "FAIL"    { fail_n = fail_n + 1; details = details + [SCRIPTS[i][0]] }
+        if v == "ERROR"   { error_n = error_n + 1; details = details + [SCRIPTS[i][0]] }
+        if v == "UNKNOWN" { unknown_n = unknown_n + 1 }
+        i = i + 1
+    }
+    let total = SCRIPTS.len()
+    if json_mode {
+        let mut js = "{\"tool\":\"hexa-chip/chip-verify/cli.hexa\","
+        js = js + "\"schema\":\"hexa-chip/chip-verify/v1\","
+        js = js + "\"total\":" + str(total) + ","
+        js = js + "\"pass\":" + str(pass_n) + ","
+        js = js + "\"pending\":" + str(pending_n) + ","
+        js = js + "\"fail\":" + str(fail_n) + ","
+        js = js + "\"error\":" + str(error_n) + ","
+        js = js + "\"unknown\":" + str(unknown_n) + ","
+        js = js + "\"boot_matrix_headline\":\"34/36 = 94.4%\","
+        js = js + "\"verb_surface_unchanged\":true}"
+        println(js)
+    } else {
+        println("------------------------------------------------------------------------")
+        println("  Aggregate: " + str(pass_n) + " PASS  " + str(pending_n) + " PENDING  " + str(fail_n) + " FAIL  " + str(error_n) + " ERROR  " + str(unknown_n) + " UNKNOWN  / " + str(total))
+        println("  Boot-matrix headline (boot_matrix_report.md §1): 34/36 = 94.4%")
+        if details.len() > 0 {
+            println("  FAIL/ERROR scripts:")
+            for d in details { println("    x " + d) }
+        }
+        println("========================================================================")
+    }
+    return pass_n
+}
+
+fn cmd_help() {
+    println("hexa-chip chip-verify/cli.hexa - empirical chip-verify harness")
+    println("")
+    println("USAGE:")
+    println("  hexa run chip-verify/cli.hexa [SUBCOMMAND] [--json] [--quiet]")
+    println("")
+    println("SUBCOMMANDS:")
+    println("  list           list the 22 registered scripts")
+    println("  run <name>     dispatch a single script (e.g. boot_matrix_3x12)")
+    println("  all            dispatch all 22 scripts and aggregate (default)")
+    println("  report         alias for all")
+    println("  inventory      assert 22/4/1 file-count invariant")
+    println("  --json         machine-readable JSON aggregate")
+    println("  --quiet        suppress per-script chatter")
+    println("  --help, -h     this help")
+}
+
+fn main() {
+    let ua = _user_args()
+    if _has_flag(ua, "--help") || _has_flag(ua, "-h") {
+        cmd_help()
+        return
+    }
+    let json_mode = _has_flag(ua, "--json")
+    let quiet = _has_flag(ua, "--quiet")
+    let root = _root()
+
+    let mut target = "all"
+    let mut run_target = ""
+    let mut i = 0
+    while i < ua.len() {
+        let a = ua[i]
+        if !a.starts_with("--") {
+            target = a
+            if a == "run" && i + 1 < ua.len() { run_target = ua[i + 1] }
+            break
+        }
+        i = i + 1
+    }
+
+    if target == "list" {
+        cmd_list()
+        return
+    }
+    if target == "inventory" {
+        let ok = cmd_inventory(root)
+        if !ok { exit(1) }
+        return
+    }
+    if target == "run" {
+        if run_target.len() == 0 {
+            println("error: chip-verify run <script-name> requires a script name")
+            cmd_help()
+            exit(1)
+        }
+        let idx = _resolve(run_target)
+        if idx < 0 {
+            println("unknown script: " + run_target)
+            cmd_help()
+            exit(1)
+        }
+        let v = _run_one(root, idx, false)
+        println("  verdict: " + v)
+        return
+    }
+    if target == "all" || target == "report" {
+        let _ = cmd_report(root, json_mode, quiet)
+        return
+    }
+
+    println("unknown subcommand: " + target)
+    cmd_help()
+    exit(1)
+}

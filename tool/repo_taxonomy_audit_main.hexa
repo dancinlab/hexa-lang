@@ -1,0 +1,75 @@
+// absorbed from ~/core/hexa-chip/verify_catalog.py (MIT, hexa-chip 2026-05-14)
+// tool/repo_taxonomy_audit_main.hexa — standalone CLI for repo_taxonomy_audit.
+//
+// Usage:
+//   hexa run tool/repo_taxonomy_audit_main.hexa <catalog.md> <manifest.toml> [<root_dir>]
+//
+// Exit 0 = all checks PASS, 1 = any FAIL.
+
+use "tool/repo_taxonomy_audit"
+
+fn _read_file_or_empty(path: string) -> string {
+    if !file_exists(path) { return "" }
+    return read_file(path)
+}
+
+// Pull user args from argv, skipping the interpreter prefix and script path.
+fn _user_args() -> [string] {
+    let raw = args()
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut out: [string] = []
+    let mut j = sidx + 1
+    if sidx < 0 { j = 0 }
+    while j < raw.len() {
+        out = out + [raw[j]]
+        j = j + 1
+    }
+    return out
+}
+
+fn main() {
+    let ua = _user_args()
+    if ua.len() < 2 {
+        println("usage: hexa run tool/repo_taxonomy_audit_main.hexa <catalog.md> <manifest.toml> [<root_dir>]")
+        exit(2)
+    }
+    let catalog_path = ua[0]
+    let manifest_path = ua[1]
+    let mut root_dir = "."
+    if ua.len() >= 3 { root_dir = ua[2] }
+
+    let catalog_md = _read_file_or_empty(catalog_path)
+    let manifest_toml = _read_file_or_empty(manifest_path)
+    if catalog_md.len() == 0 {
+        println("error: catalog not readable: " + catalog_path)
+        exit(2)
+    }
+    if manifest_toml.len() == 0 {
+        println("error: manifest not readable: " + manifest_path)
+        exit(2)
+    }
+
+    println("================================================================")
+    println("  tool/repo_taxonomy_audit — CATALOG vs manifest vs filesystem")
+    println("================================================================")
+    println("  catalog:  " + catalog_path)
+    println("  manifest: " + manifest_path)
+    println("  root_dir: " + root_dir)
+    println("")
+
+    let r = audit_all(catalog_md, manifest_toml, root_dir)
+    for line in r.issues { println(line) }
+    println("")
+    println("================================================================")
+    if r.ok {
+        println("  OVERALL: PASS")
+        return
+    }
+    println("  OVERALL: FAIL (" + str(r.issues.len()) + " issue(s))")
+    exit(1)
+}

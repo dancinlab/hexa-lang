@@ -1,0 +1,18 @@
+#!hexa strict
+// hexa-chip/chip-verify/aggregate.hexa — Wave-J aggregate runner.
+//
+// Runs all 22 imported chip-verify scripts via the cli.hexa dispatcher
+// and prints a JSON summary {total, pass, pending, fail, error, unknown,
+// boot_matrix_headline, verb_surface_unchanged}.
+//
+// Exit code is always 0 — empirical sandbox is informational, not gating.
+// The 34/36 (94.4%) boot-matrix headline is surfaced in the JSON output;
+// the 2/36 (5.6%) failure cells stay visible per the closure honesty rule.
+
+fn main() {
+    let root = env("HEXA_CHIP_ROOT")
+    let r = if root.len() > 0 { root } else { exec("pwd").trim() }  // @allow-bare-exec @allow-silent-exit
+    let cmd = "HEXA_CHIP_ROOT='" + r.replace("'", "'\\''") + "' hexa run '" + r.replace("'", "'\\''") + "/chip-verify/cli.hexa' report --json"
+    let out = exec(cmd + " 2>&1")  // @allow-bare-exec @allow-silent-exit
+    println(out.trim())
+}

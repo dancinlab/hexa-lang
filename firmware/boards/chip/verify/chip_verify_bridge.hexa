@@ -1,0 +1,32 @@
+#!hexa strict
+// @allow-bare-exec-file — bridge dispatcher: delegates to chip-verify/cli.hexa.
+// @allow-silent-exit-file — same reason.
+// hexa-chip/verify/chip_verify_bridge.hexa — Wave J bridge.
+//
+// Cross-tier bridge that lets the unified verify/cli.hexa dispatcher include
+// the chip-verify empirical harness as one additional check. This script
+// invokes `chip-verify/cli.hexa inventory` (the only chip-verify check that
+// can pass/fail deterministically — the aggregate-script run yields mixed
+// PASS/PENDING/FAIL/ERROR by design and is informational).
+//
+// Exit code:
+//   0 = chip-verify inventory invariant holds (22 .hexa + 4 .md + 1 .json)
+//   1 = inventory drift detected.
+//
+// The verb-level closure (29-verb / 6-group) is unaffected by this bridge.
+
+fn main() {
+    let root = env("HEXA_CHIP_ROOT")
+    let r = if root.len() > 0 { root } else { exec("pwd").trim() }  // @allow-bare-exec @allow-silent-exit
+    let cmd = "HEXA_CHIP_ROOT='" + r.replace("'", "'\\''") + "' hexa run '" + r.replace("'", "'\\''") + "/chip-verify/cli.hexa' inventory"
+    let out = exec(cmd + " 2>&1")  // @allow-bare-exec @allow-silent-exit
+    let rc_str = exec(cmd + " >/dev/null 2>&1; echo $?").trim()  // @allow-bare-exec @allow-silent-exit
+    println(out.trim())
+    println("")
+    let agg_cmd = "HEXA_CHIP_ROOT='" + r.replace("'", "'\\''") + "' hexa run '" + r.replace("'", "'\\''") + "/chip-verify/cli.hexa' report --json"
+    let agg_out = exec(agg_cmd + " 2>&1").trim()  // @allow-bare-exec @allow-silent-exit
+    println("  chip-verify aggregate (informational, not gating):")
+    println("  " + agg_out)
+    println("  boot-matrix headline (chip-verify/boot_matrix_report.md): 34/36 = 94.4%")
+    if rc_str != "0" { exit(1) }
+}

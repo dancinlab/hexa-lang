@@ -47,6 +47,23 @@ DoD:
 ## §A.3 Cycle history
 
 - **Cycle 0 (2026-05-06)** — v1.0.0 initial extraction from canon@c0f1f570. 28 verb / 7 그룹 cp -R.
+- **Cycle 2 (2026-05-13 — Wave L: green-core run_all + 100% bookkeeping closure)** —
+  Sister-substrate pattern lands. Adds `verify/run_all.hexa` canonical
+  `.hexa` orchestrator (~190 lines) running 27 green-core subscripts
+  (T1×4 + T2×11 + T3×3 + inventory×4 + meta×4) and emitting
+  `__HEXA_CHIP_RUN_ALL__ PASS — 27/27 green`. Fixes `lint_numerics`
+  inventory drift (14→15 entries adding `numerics_gpgpu_projection`)
+  + `cross_doc_audit` 29/30-verb tolerance (Phase G iter 9 admitted
+  hexa_ai_native_n6). 4 falsifier-tripped subject scripts
+  (`empirical_process` / `numerics_spice_corner` /
+  `numerics_power_thermal` / `numerics_gpgpu_projection`) stay on disk
+  verbatim — Samsung Moore retraction (log2/gen=0.478 < 0.5), post-GAA
+  flattening (SF2→SF2P=0.114 << 0.4), HBM4 BW envelope drift, and
+  stdlib/hal/compute vendor-token drift are HONEST signals preserved
+  per `LATTICE_POLICY.md` real-limits-first contract. 100% bookkeeping
+  closure (green-core) ≠ chip-physics settled; `chip-verify/` 34/36 =
+  94.4% boot-matrix headline still stands. 29-verb / 6-group canonical
+  surface and SPEC_FIRST verdict unchanged.
 
 ## §A.4 Falsifier preregister
 

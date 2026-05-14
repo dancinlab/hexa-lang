@@ -15,3 +15,13 @@ build/out/
 .DS_Store
 *.swp
 *~
+
+# Python cache (terafab verify scripts + tests)
+__pycache__/
+*.pyc
+
+# Mk.II poll cycle log (terafab/poll_mk2.py append target — Wave G)
+terafab/mk2-poll.log
+
+# Mk.II poll cycle log (exynos/poll_exynos_mk2.py append target — Wave H)
+exynos/mk2-poll.log

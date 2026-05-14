@@ -125,7 +125,7 @@ fn check_roadmap(root: str) -> [str] {
     return errs
 }
 
-// ----- check 4: CLI dispatcher 29-verb -----
+// ----- check 4: CLI dispatcher 29-verb (or 30-verb post-Phase-G iter 9) -----
 fn check_cli(root: str) -> [str] {
     let txt = _read(root, "cli/hexa-chip.hexa")
     let mut errs: [str] = []
@@ -135,13 +135,15 @@ fn check_cli(root: str) -> [str] {
     }
     // CLI source escapes the JSON literal as `\"verbs_total\":29` so a plain
     // substring match needs the backslash-bytes preserved. We check both the
-    // escaped form (in source) and the prose headline.
-    let has_json_literal = txt.contains("verbs_total") && txt.contains(":29")
+    // escaped form (in source) and the prose headline. Phase G iter 9
+    // (hexa_ai_native_n6) bumped the dispatcher to 30; both counts are
+    // accepted here until hexa.toml catches up.
+    let has_json_literal = txt.contains("verbs_total") && (txt.contains(":29") || txt.contains(":30"))
     if !has_json_literal {
-        errs = errs + ["cli/hexa-chip.hexa: 'verbs_total ... :29' literal not found"]
+        errs = errs + ["cli/hexa-chip.hexa: 'verbs_total ... :29|:30' literal not found"]
     }
-    if !(txt.contains("29-verb") || txt.contains("29 verbs")) {
-        errs = errs + ["cli/hexa-chip.hexa: 29-verb prose not found"]
+    if !(txt.contains("29-verb") || txt.contains("29 verbs") || txt.contains("30-verb") || txt.contains("30 verbs")) {
+        errs = errs + ["cli/hexa-chip.hexa: 29|30-verb prose not found"]
     }
     return errs
 }

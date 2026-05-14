@@ -1,0 +1,22 @@
+#!hexa strict
+// hexa-chip/chip-verify/inventory.hexa — Wave-J inventory invariant guard.
+//
+// Asserts that chip-verify/ holds exactly the Wave-5 imported corpus:
+//   22 imported .hexa scripts (the empirical chip-verify experiments)
+//      + Wave-J harness files (cli.hexa, inventory.hexa, aggregate.hexa)
+//    4 .md reports (boot_matrix_report.md, soc_bench_promotion_report.md,
+//                    stage0_rerun_report.md, verify_chain.md)
+//    1 .json fixture (boot_matrix_3x12.json)
+//
+// Thin wrapper — delegates to `chip-verify/cli.hexa inventory`. Exit 0 on
+// PASS, exit 1 on inventory drift.
+
+fn main() {
+    let root = env("HEXA_CHIP_ROOT")
+    let r = if root.len() > 0 { root } else { exec("pwd").trim() }  // @allow-bare-exec @allow-silent-exit
+    let cmd = "HEXA_CHIP_ROOT='" + r.replace("'", "'\\''") + "' hexa run '" + r.replace("'", "'\\''") + "/chip-verify/cli.hexa' inventory"
+    let out = exec(cmd + " 2>&1")  // @allow-bare-exec @allow-silent-exit
+    let rc_str = exec(cmd + " >/dev/null 2>&1; echo $?").trim()  // @allow-bare-exec @allow-silent-exit
+    println(out.trim())
+    if rc_str != "0" { exit(1) }
+}

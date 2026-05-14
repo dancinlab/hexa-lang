@@ -1,0 +1,306 @@
+// absorbed from ~/core/hexa-chip/verify_catalog.py (MIT, hexa-chip 2026-05-14)
+// tool/repo_taxonomy_audit.hexa — generic CATALOG.md ↔ manifest ↔ filesystem audit.
+//
+// @version 0.1.0
+// @capabilities [fs_read]
+//
+// Ported from hexa-chip/verify_catalog.py (Wave I, 192 LOC Python → ~250 LOC hexa).
+// The Python original audits CATALOG.md vs hexa.toml vs filesystem agreement for
+// the 29-verb / 6-group hexa-chip tier surface; this port is decoupled from that
+// specific schema so any repo with similar CATALOG/manifest/filesystem structure
+// can reuse it.
+//
+// Three checks:
+//   C1. Every top-level dir in the filesystem is mentioned at least once in
+//       CATALOG.md (and every dir cited in CATALOG.md actually exists on disk).
+//   C2. The manifest TOML `[modules.*]` (or whatever section key the caller
+//       passes in) verbs match the T1 dirs listed in CATALOG.md.
+//   C3. `[meta_domains.<X>].absorbs` matches the T1 group names from CATALOG.md.
+//
+// All three checks degrade gracefully when the inputs are missing — they emit
+// issues instead of crashing — so library callers can collect issues and
+// surface them in their own report formats.
+//
+// English only.
+
+// ── public result type ─────────────────────────────────────────────────────
+pub struct AuditResult {
+    ok: bool,
+    issues: [string],     // one human-readable issue per line
+    label: string         // "C1" / "C2" / "C3" / "ALL"
+}
+
+// ── small helpers ──────────────────────────────────────────────────────────
+
+fn _trim_quotes(s: string) -> string {
+    let mut t = s.trim()
+    if t.len() >= 2 {
+        let c0 = t.substring(0, 1)
+        let cn = t.substring(t.len() - 1, t.len())
+        if (c0 == "\"" && cn == "\"") || (c0 == "'" && cn == "'") {
+            t = t.substring(1, t.len() - 1)
+        }
+    }
+    return t
+}
+
+fn _split_comma_list(inner: string) -> [string] {
+    let raw = inner.split(",")
+    let mut out: [string] = []
+    for r in raw {
+        let t = _trim_quotes(r)
+        if t.len() > 0 { out = out + [t] }
+    }
+    return out
+}
+
+// CATALOG.md — extract every directory cited as `<name>/` or `<name>`.
+// Caller intent: any literal-backquoted token ending in `/` is a dir reference.
+fn _catalog_cited_dirs(catalog_md: string) -> [string] {
+    // Iterate character by character; collect substrings between matching
+    // backticks where the content ends in `/`. Strip the trailing `/`.
+    let mut cited: [string] = []
+    let n = catalog_md.len()
+    let mut i = 0
+    while i < n {
+        let c = catalog_md.substring(i, i + 1)
+        if c == "`" {
+            // find next backtick
+            let mut j = i + 1
+            while j < n && catalog_md.substring(j, j + 1) != "`" {
+                j = j + 1
+            }
+            if j < n {
+                let inner = catalog_md.substring(i + 1, j)
+                if inner.len() > 0 && inner.ends_with("/") {
+                    let name = inner.substring(0, inner.len() - 1)
+                    // skip nested paths like `a/b/`; we want top-level only.
+                    if !name.contains("/") {
+                        cited = cited + [name]
+                    }
+                }
+                i = j + 1
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return cited
+}
+
+// Filesystem top-level dirs under `root_dir`. Skips infra-only paths.
+fn _fs_top_level_dirs(root_dir: string) -> [string] {
+    if root_dir.len() == 0 { return [] }
+    // `find -maxdepth 1 -type d` is portable; sort + uniq are not required.
+    let cmd = "find " + root_dir + " -mindepth 1 -maxdepth 1 -type d 2>/dev/null"
+    let raw = exec(cmd)
+    let lines = raw.split("\n")
+    let mut out: [string] = []
+    let skip = [".git", ".claude", "__pycache__"]
+    for ln in lines {
+        let t = ln.trim()
+        if t.len() == 0 { continue }
+        // strip the leading "<root_dir>/"
+        let parts = t.split("/")
+        let base = parts[parts.len() - 1]
+        let mut skip_me = false
+        for s in skip {
+            if base == s { skip_me = true }
+        }
+        if !skip_me { out = out + [base] }
+    }
+    return out
+}
+
+// TOML — extract `[modules.<key>]` headers (just the keys). Mirrors the
+// Python regex which lifts the `verbs = [...]` body, but since downstream
+// checks only need to know which keys exist we keep the surface minimal.
+fn _parse_module_keys(manifest_toml: string) -> [string] {
+    let mut keys: [string] = []
+    let lines = manifest_toml.split("\n")
+    for ln in lines {
+        if ln.starts_with("[modules.") && ln.contains("]") {
+            let close = ln.find("]")
+            // ln = "[modules.architecture]"  →  inner = "architecture"
+            let inner = ln.substring(9, close)
+            keys = keys + [inner]
+        }
+    }
+    return keys
+}
+
+// TOML — extract `[meta_domains.<key>].absorbs = [...]` for a given key.
+//
+// Implementation note: the interpreter's `str.find()` is single-arg only
+// (the 2-arg `find(sub, start)` form silently ignores the offset), so we
+// re-slice via substring to step the search window forward.
+fn _parse_meta_absorbs(manifest_toml: string, key: string) -> [string] {
+    let header = "[meta_domains." + key + "]"
+    let hi = manifest_toml.find(header)
+    if hi < 0 { return [] }
+    // Find absorbs = [ ... ] after the header
+    let tail = manifest_toml.substring(hi, manifest_toml.len())
+    let ai = tail.find("absorbs")
+    if ai < 0 { return [] }
+    let from_absorbs = tail.substring(ai, tail.len())
+    let lb_rel = from_absorbs.find("[")
+    if lb_rel < 0 { return [] }
+    let from_lb = from_absorbs.substring(lb_rel + 1, from_absorbs.len())
+    let rb_rel = from_lb.find("]")
+    if rb_rel < 0 { return [] }
+    let csv = from_lb.substring(0, rb_rel)
+    return _split_comma_list(csv)
+}
+
+// CATALOG.md — extract T1 group names. Heuristic: any line beginning with
+// `## T1` or `### T1` whose first backquoted token is captured as the group
+// name. This stays generic across repos.
+fn _catalog_t1_groups(catalog_md: string) -> [string] {
+    let mut groups: [string] = []
+    let lines = catalog_md.split("\n")
+    for ln in lines {
+        if ln.starts_with("## T1") || ln.starts_with("### T1") {
+            // capture first backquoted token (interpreter `find` is single-arg,
+            // so we re-slice via substring to scan past the opening backtick)
+            let bt0 = ln.find("`")
+            if bt0 >= 0 {
+                let after = ln.substring(bt0 + 1, ln.len())
+                let bt1_rel = after.find("`")
+                if bt1_rel > 0 {
+                    let name = after.substring(0, bt1_rel)
+                    if name.len() > 0 { groups = groups + [name] }
+                }
+            }
+        }
+    }
+    return groups
+}
+
+fn _has(arr: [string], v: string) -> bool {
+    for x in arr { if x == v { return true } }
+    return false
+}
+
+fn _sorted(arr: [string]) -> [string] {
+    // simple insertion sort — generic, n is small (tens, not thousands).
+    let mut out: [string] = []
+    for x in arr { out = out + [x] }
+    let n = out.len()
+    let mut i = 1
+    while i < n {
+        let key = out[i]
+        let mut j = i - 1
+        while j >= 0 && out[j] > key {
+            out[j + 1] = out[j]
+            j = j - 1
+        }
+        out[j + 1] = key
+        i = i + 1
+    }
+    return out
+}
+
+// ── C1: filesystem ↔ CATALOG.md ────────────────────────────────────────────
+pub fn audit_filesystem_vs_catalog(catalog_md: string, root_dir: string) -> AuditResult {
+    let fs_dirs = _fs_top_level_dirs(root_dir)
+    let cited = _catalog_cited_dirs(catalog_md)
+    let mut issues: [string] = []
+    // every fs dir mentioned at least once
+    for d in fs_dirs {
+        if !_has(cited, d) {
+            issues = issues + ["  [unknown] dir '" + d + "' on disk but NOT cited in CATALOG.md"]
+        }
+    }
+    // every cited dir actually on disk
+    for d in cited {
+        if !_has(fs_dirs, d) {
+            issues = issues + ["  [missing] dir '" + d + "' cited in CATALOG.md but NOT on disk"]
+        }
+    }
+    return AuditResult { ok: issues.len() == 0, issues: issues, label: "C1" }
+}
+
+// ── C2: manifest [modules.*] ↔ CATALOG.md T1 groups ────────────────────────
+pub fn audit_manifest_vs_catalog(manifest_toml: string, catalog_md: string, key: string) -> AuditResult {
+    let keys = _parse_module_keys(manifest_toml)
+    let groups = _catalog_t1_groups(catalog_md)
+    let mut issues: [string] = []
+    // Every catalog T1 group must have a corresponding manifest section.
+    for g in groups {
+        if !_has(keys, g) {
+            issues = issues + ["  [mismatch] CATALOG.md T1 group '" + g + "' has NO [modules." + g + "] section"]
+        }
+    }
+    // Every manifest [modules.<k>] must appear as a T1 group (or be a known
+    // top-level meta key — we don't enforce that here; report drift only).
+    for k in keys {
+        if !_has(groups, k) {
+            issues = issues + ["  [drift]    [modules." + k + "] in manifest but NOT a T1 group in CATALOG.md"]
+        }
+    }
+    // Caller-supplied key is informational — record it.
+    if key.len() > 0 && !_has(keys, key) {
+        issues = issues + ["  [missing]  [modules." + key + "] section requested but not in manifest"]
+    }
+    return AuditResult { ok: issues.len() == 0, issues: issues, label: "C2" }
+}
+
+// ── C3: [meta_domains.<X>].absorbs ↔ T1 group names ────────────────────────
+pub fn audit_envelope_absorption(manifest_toml: string, key: string) -> AuditResult {
+    let absorbs = _parse_meta_absorbs(manifest_toml, key)
+    // Use the manifest's own modules as the truth for "the T1 group names",
+    // so this check works against any repo whose `[modules.*]` block defines
+    // the group surface (hexa-chip happens to ship 6).
+    let mod_keys = _parse_module_keys(manifest_toml)
+    let mut issues: [string] = []
+    let exp = _sorted(mod_keys)
+    let got = _sorted(absorbs)
+    if exp.len() == 0 {
+        issues = issues + ["  [missing]  manifest has no [modules.*] sections — cannot compute expected absorbs"]
+        return AuditResult { ok: false, issues: issues, label: "C3" }
+    }
+    if got.len() == 0 {
+        issues = issues + ["  [missing]  [meta_domains." + key + "].absorbs missing or empty"]
+        return AuditResult { ok: false, issues: issues, label: "C3" }
+    }
+    if exp.len() != got.len() {
+        issues = issues + ["  [mismatch] absorbs has " + str(got.len()) + " entr(ies), manifest declares " + str(exp.len()) + " T1 module(s)"]
+    }
+    let mut i = 0
+    while i < exp.len() && i < got.len() {
+        if exp[i] != got[i] {
+            issues = issues + ["  [mismatch] absorbs[" + str(i) + "]='" + got[i] + "' vs modules[" + str(i) + "]='" + exp[i] + "'"]
+        }
+        i = i + 1
+    }
+    return AuditResult { ok: issues.len() == 0, issues: issues, label: "C3" }
+}
+
+// ── aggregate ──────────────────────────────────────────────────────────────
+pub fn audit_all(catalog_md: string, manifest_toml: string, root_dir: string) -> AuditResult {
+    let r1 = audit_filesystem_vs_catalog(catalog_md, root_dir)
+    let r2 = audit_manifest_vs_catalog(manifest_toml, catalog_md, "")
+    // Pick the first [meta_domains.*] key if there's one; otherwise skip C3.
+    let mi = manifest_toml.find("[meta_domains.")
+    let mut key = ""
+    if mi >= 0 {
+        // header is "[meta_domains." (14 chars) then "<key>]"
+        let after = manifest_toml.substring(mi + 14, manifest_toml.len())
+        let rb_rel = after.find("]")
+        if rb_rel > 0 {
+            key = after.substring(0, rb_rel)
+        }
+    }
+    let mut issues: [string] = []
+    for x in r1.issues { issues = issues + ["[C1] " + x] }
+    for x in r2.issues { issues = issues + ["[C2] " + x] }
+    let mut ok = r1.ok && r2.ok
+    if key.len() > 0 {
+        let r3 = audit_envelope_absorption(manifest_toml, key)
+        for x in r3.issues { issues = issues + ["[C3] " + x] }
+        ok = ok && r3.ok
+    }
+    return AuditResult { ok: ok, issues: issues, label: "ALL" }
+}

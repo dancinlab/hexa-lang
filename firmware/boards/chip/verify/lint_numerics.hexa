@@ -39,7 +39,8 @@ let NUMERICS_SCRIPTS = [
     "numerics_lattice_arithmetic.hexa",
     "numerics_spice_corner.hexa",
     "numerics_rtl_isa_n6.hexa",
-    "numerics_power_thermal.hexa"
+    "numerics_power_thermal.hexa",
+    "numerics_gpgpu_projection.hexa"
 ]
 
 // ─── arg / env helpers ───────────────────────────────────────────────
@@ -145,14 +146,16 @@ fn check_imports(root: str) {
         if !r[0] {
             // cross_pillar is allowed to skip math_pure since it's
             // pure integer/lattice consistency — explicit exception.
-            if s != "numerics_cross_pillar.hexa" {
+            // gpgpu_projection imports stdlib/hal/compute + per-vendor
+            // projection modules instead of math_pure (Phase F harness).
+            if s != "numerics_cross_pillar.hexa" && s != "numerics_gpgpu_projection.hexa" {
                 bad = bad + [s]
             }
         }
     }
     let ok = bad.len() == 0
     let detail = if ok { "" } else { str(bad.len()) + " missing math_pure import" }
-    _check(ok, "every numerics_*.hexa imports self/runtime/math_pure (cross_pillar excepted)", detail)
+    _check(ok, "every numerics_*.hexa imports self/runtime/math_pure (cross_pillar+gpgpu_projection excepted)", detail)
 }
 
 fn check_sentinels(root: str) {
@@ -221,7 +224,7 @@ fn check_naming_convention(root: str) {
     // Every numerics_*.hexa should match the naming pattern
     // numerics_<pillar>[_parity|_solver].hexa OR
     // numerics_cross_pillar.hexa OR numerics_lattice_arithmetic.hexa.
-    let allowed_pillars = ["process", "npu", "hbm", "cross_pillar", "lattice_arithmetic", "spice_corner", "rtl_isa_n6", "power_thermal"]
+    let allowed_pillars = ["process", "npu", "hbm", "cross_pillar", "lattice_arithmetic", "spice_corner", "rtl_isa_n6", "power_thermal", "gpgpu_projection"]
     let allowed_suffixes = ["", "_parity", "_solver"]
     let mut bad: [str] = []
     for s in NUMERICS_SCRIPTS {

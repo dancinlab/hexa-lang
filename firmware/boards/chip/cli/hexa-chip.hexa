@@ -205,6 +205,97 @@ fn cmd_show(a: [str]) {
     _audit("show", v, 0)
 }
 
+// ─── subcommand: terafab (meta-domain envelope summary) ───
+//
+// terafab is *not* a verb — it is the outer envelope absorbing all 6
+// hexa-chip groups (architecture · design · process · packaging ·
+// accelerator · consciousness). This subcmd dumps the F-TERAFAB-1..10
+// falsifier register, the closure verdict from hexa.toml
+// [meta_domain_closure].verdict, and pointers to terafab/terafab.md
+// + terafab/CLOSURE.md. No verb counts are touched (28/6 surface unchanged).
+
+fn cmd_terafab(a: [str]) {
+    let envelope = "terafab — meta-domain wrapping 6 groups (architecture/design/process/packaging/accelerator/consciousness)"
+
+    // Falsifier register — sourced from terafab/terafab.md §7 (Mk.I 1..7) +
+    // terafab/falsifier-mk2-scaffold.md §3 (Mk.II 8..10).
+    let f_ids = [
+        "F-TERAFAB-1",  "F-TERAFAB-2",  "F-TERAFAB-3",
+        "F-TERAFAB-4",  "F-TERAFAB-5",  "F-TERAFAB-6",
+        "F-TERAFAB-7",  "F-TERAFAB-8",  "F-TERAFAB-9",
+        "F-TERAFAB-10"
+    ]
+    let f_summaries = [
+        "Prototype capex stays at $55B initial / $119B total",
+        "DRAM/HBM under same roof as logic (no inbound shipping)",
+        "Full-scale capex within $5–13T analyst envelope",
+        "Orbital share viable iff Starship reusable launch ≤ $200/kg by 2032",
+        "1 TW AI-compute/yr delivered (audited by 2035, terminal)",
+        "Intel 14A volume by 2030 (no slip past 2031)",
+        "n=6 lattice projection beats chance (Mk.I p≈0.86 → reformulate Mk.II)",
+        "Groundbreaking → first-tool-install latency ≤ J₂ = 24 mo",
+        "Austin utility envelope ≥ 500 MW & ≥ 10 ML/day",
+        "Workforce ramp ≥ 500 net engineering hires/quarter through 2027"
+    ]
+
+    // Closure verdict mirrored from hexa.toml [meta_domain_closure].verdict.
+    let verdict = "SPEC_PLUS_RUNNABLE"
+
+    if json_mode(a) {
+        let mut js = "{\"hexa_chip\":\"" + VERSION + "\",\"subcmd\":\"terafab\","
+        js = js + "\"envelope\":\"" + envelope + "\","
+        js = js + "\"verdict\":\"" + verdict + "\","
+        js = js + "\"falsifier_count\":10,"
+        js = js + "\"falsifiers\":["
+        let mut i = 0
+        while i < f_ids.len() {
+            if i > 0 { js = js + "," }
+            js = js + "{\"id\":\"" + f_ids[i] + "\",\"summary\":\"" + f_summaries[i] + "\"}"
+            i = i + 1
+        }
+        js = js + "]}"
+        println(js)
+        _audit("terafab", "", 0)
+        return
+    }
+
+    println("hexa-chip " + VERSION + " — terafab meta-domain envelope")
+    println("")
+    println("  " + envelope)
+    println("")
+    println("  Falsifier register (10 = 7 Mk.I + 3 Mk.II)")
+    println("  ─────────────────────────────────────────────────────────────────────")
+    let mut i = 0
+    while i < f_ids.len() {
+        let n = i + 1
+        let prefix = "   " + str(n) + ".  " + f_ids[i]
+        println(prefix + "  — " + f_summaries[i])
+        i = i + 1
+    }
+    println("  ─────────────────────────────────────────────────────────────────────")
+    println("")
+    println("  Closure verdict (hexa.toml [meta_domain_closure].verdict): " + verdict)
+    println("")
+    println("  Pointers:")
+    println("    • terafab/terafab.md         (15-section meta-domain spec)")
+    println("    • terafab/CLOSURE.md         (closure declaration + invariants)")
+    println("    • terafab/falsifier-mk2-scaffold.md   (Mk.II reformulation)")
+    println("    • terafab/verify_terafab.py  (runnable falsifier dispatcher)")
+    println("    • terafab/cross_doc_audit.py (cross-doc agreement audit)")
+    println("")
+    println("  Re-verification recipe:")
+    println("    python3 $HEXA_CHIP_ROOT/terafab/cross_doc_audit.py")
+    println("    python3 $HEXA_CHIP_ROOT/terafab/verify_terafab.py")
+    println("")
+    println("  Caveats (raw#10 honest C3):")
+    println("    1. terafab is a META-DOMAIN, not a verb — verb counts unchanged.")
+    println("    2. F-TERAFAB-1..6 are bench-only at Mk.I (data-arrival pending).")
+    println("    3. F-TERAFAB-7 χ² weak at Mk.I (p≈0.86); reformulation deferred Mk.II.")
+    println("    4. n=6 lattice projection is coincidence registry, not derivation.")
+    println("    5. Zero NDA / proprietary content; every claim traces to terafab.md §15.")
+    _audit("terafab", "", 0)
+}
+
 // ─── subcommand: selftest ───
 
 fn cmd_selftest(a: [str]) {
@@ -760,6 +851,7 @@ fn cmd_help() {
     println("  status          group + verb count table + caveats")
     println("  show <verb>     echo spec path for a single verb")
     println("  selftest        verify all 30 verb dirs present")
+    println("  terafab         meta-domain envelope + 10 falsifiers + closure verdict")
     println("")
     println("verify subcommands (Phase D + Phase E + Phase F artifact sweeps):")
     println("  verify firmware-mcu    enumerate firmware/mcu/*.hexa controllers")
@@ -828,6 +920,8 @@ fn main() {
         cmd_show(a)
     } else if sub == "selftest" {
         cmd_selftest(a)
+    } else if sub == "terafab" {
+        cmd_terafab(a)
     } else if sub == "verify" {
         if a.len() >= 4 {
             let target = a[3]
