@@ -222,7 +222,7 @@ end-to-end (no Python, no shell-only logic).
 | cousin (PET cyclotron, antimatter)   | [`dancinlab/hexa-antimatter`](https://github.com/dancinlab/hexa-antimatter) | parallel acceleration use case      |
 | Stage-3 propulsion dependent         | [`dancinlab/hexa-ufo`](https://github.com/dancinlab/hexa-ufo)               | downstream propulsion consumer      |
 
-Provenance: extracted from [`canon`](https://github.com/dancinlab/canon) at SHA `c0f1f570` on 2026-05-06.
+Provenance: extracted from [`canon`](https://github.com/dancinlab/echoes) at SHA `c0f1f570` on 2026-05-06.
 
 Sister repo (peer extraction): [`dancinlab/lumiere`](https://github.com/dancinlab/lumiere) — camera-filter + hexa-main-character apps-axis.
 
