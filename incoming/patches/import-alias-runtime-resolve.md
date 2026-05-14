@@ -69,7 +69,59 @@ fn main() {
 
 ---
 
-## 2. 가설 (코드 미열람, 외부 관찰만)
+## 2.0 Internal code inspection (2026-05-14 update)
+
+`self/native/parser_v2.c:495-513` 의 `parse_stmt()` 안 `ImportStmt` 처리:
+
+```c
+if (hexa_truthy(hexa_eq(hexa_map_get(tok, "value"), hexa_str("import")))) {
+    p_advance();
+    HexaVal path = hexa_str("");
+    if (hexa_truthy(hexa_eq(p_peek_kind(), hexa_str("StringLit")))) {
+        HexaVal str_tok = p_advance();
+        path = hexa_map_get(str_tok, "value");
+    }
+    return hexa_map_set(..., "kind", "ImportStmt"), "name", path, ...
+}
+```
+
+**Two-part diagnosis confirmed**:
+
+1. **Parser 가 `as <alias>` 토큰 skip** — `import "path"` 직후 `as <alias>` 가 있으면
+   파서는 다음 statement 의 시작으로 잘못 처리 가능. 또는 silent ignore. ImportStmt
+   node 에 `alias` field 누락.
+
+2. **Module load mechanism 미발견** — ImportStmt 를 *처리* 하는 곳 (parse_stmt 이외
+   codegen 또는 interp layer) 에서 (a) 모듈 file 을 parse, (b) 그 모듈의 fns 를
+   alias-prefixed 로 caller scope 에 등록 — 이 단계가 누락 또는 alias 없이만 작동.
+
+stdlib import (e.g. `import "/home/aiden/core/hexa-lang/stdlib/safetensors.hexa"`) 가
+작동하는 점은 *non-alias path* 가 별도 mechanism (caller scope 직접 등록) 으로 가능
+하다는 시사. user-alias 가 *추가* (additive) 작업이 필요.
+
+**Patch scope (concrete edits, upstream maintainer 작업 권장)**:
+
+(I) `parser_v2.c:495-513` 의 ImportStmt 파서:
+- `import "path"` 직후 `Ident` 토큰 + `value=="as"` peek
+- 다음 토큰 `Ident` 가 alias 이름
+- ImportStmt node 에 `alias` field 추가 (default "" if no alias)
+
+(II) module loader (위치 추후 추적 필요 — `interp.c` 또는 `codegen_*.c`):
+- ImportStmt 가 처리될 때:
+  - resolve `path` to absolute
+  - parse the module file → fn definitions
+  - if `alias` non-empty: register each fn as `__mod_<alias>__<fn_name>`
+  - if `alias` empty: register fns as `<fn_name>` (stdlib behavior, current)
+- caller scope 의 `<alias>.<fn_name>(...)` 호출 → mangled name lookup
+
+(III) caller scope 의 `<alias>.<fn_name>` parser:
+- 이미 mangling `__mod_<alias>__<fn_name>` 로 호출되는 것은 확인됨 (runtime error
+  메시지 `undefined function: __mod_ip__apply` 에서 검증).
+- → caller 측 mangling 은 작동, **provider 측 (module loader) 등록만 누락**.
+
+---
+
+## 2. 가설 (코드 미열람, 외부 관찰만 — pre-2026-05-14 inspection)
 
 `Parse error → Runtime error` 전환 사실:
 - parser 가 `import "..." as <alias>` 받아들임 (no parse error)
