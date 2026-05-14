@@ -144,7 +144,12 @@ fn _arm64_reg_for_local(local_id: i64) -> string {
 pub struct RegMap {
     ids: [i64],
     regs: [string],
-    slots: [i64]
+    slots: [i64],
+    // C7 — per-fn outgoing-call overflow region (bytes, 16-aligned),
+    // pre-allocated at prologue bottom. _arm_spill_offset shifts every
+    // SSA spill access above this region so per-call stack-spill stores
+    // can use [sp, #(i-8)*8] without disturbing SSA offsets.
+    call_overflow_bytes: i64
 }
 
 pub struct ArmAllocResult {
@@ -439,7 +444,12 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
     let rem = frame - (frame / 16) * 16
     if rem != 0 { frame = frame + (16 - rem) }
 
-    let map = RegMap { ids: map_ids, regs: map_regs, slots: map_slots }
+    let map = RegMap {
+        ids: map_ids,
+        regs: map_regs,
+        slots: map_slots,
+        call_overflow_bytes: 0   // filled in by _arm64_lower_func once max-overflow is known
+    }
     return ArmAllocResult { map: map, frame_size: frame }
 }
 
@@ -459,8 +469,8 @@ fn _arm_is_spilled(rm: RegMap, id: i64) -> bool {
 
 fn _arm_spill_offset(rm: RegMap, id: i64) -> i64 {
     let idx = _arm_index_of(rm.ids, id)
-    if idx < 0 { return 0 }
-    return rm.slots[idx]
+    if idx < 0 { return rm.call_overflow_bytes }
+    return rm.slots[idx] + rm.call_overflow_bytes
 }
 
 // String literal → rodata label map. `keys[i]` is a literal string
@@ -573,7 +583,34 @@ fn _arm64_arg_reg(idx: i64) -> string {
     if idx == 5 { return "x5" }
     if idx == 6 { return "x6" }
     if idx == 7 { return "x7" }
-    return "x0" // overflow → stack (TODO: spill)
+    return "x0" // overflow handled at call site via stack-spill (C7)
+}
+
+// C7 — scan all _STMT_CALL stmts in `mf` and return the maximum number
+// of overflow args (args 9+) across all calls. The per-fn outgoing-call
+// overflow region is sized once from this maximum and reused at every
+// call site, so we don't sub/add sp mid-frame (which would invalidate
+// sp-relative SSA spill offsets).
+fn _arm64_max_call_overflow(mf: MFunc) -> i64 {
+    let mut max_overflow = 0
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.kind == _STMT_CALL {
+                let n = len(s.args)
+                if n > 8 {
+                    let overflow = n - 8
+                    if overflow > max_overflow { max_overflow = overflow }
+                }
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return max_overflow
 }
 
 // ── Statement lowering (C6 — RegMap-aware) ───────────────────
@@ -695,8 +732,17 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         return buf
     }
     if s.kind == _STMT_CALL {
+        // C7 — AAPCS64 arm64 stack spill for args 9+.
+        // Args 9+ live at [sp, #0], [sp, #8], ..., with sp held 16-byte
+        // aligned at every memory access. Unlike x86_64, SSA spill access
+        // is sp-relative, so a per-call sub/add would corrupt SSA offsets.
+        // Instead the per-fn outgoing-call overflow region is pre-allocated
+        // at the bottom of the frame (rm.call_overflow_bytes is non-zero
+        // when this fn has any overflow call), and _arm_spill_offset shifts
+        // SSA offsets above it. Here we just `str` into the reserved slots.
+        let arg_n = len(s.args)
         let mut i = 0
-        while i < len(s.args) {
+        while i < arg_n {
             let scratch = _arm64_arg_reg(i)
             if i < 8 {
                 buf = _arm64_op_rm(buf, s.args[i], st, rm, scratch)
@@ -704,8 +750,13 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 let dst_reg = _op_reg(scratch)
                 buf.push(_instr2("mov", dst_reg, src, "arg " + to_string(i)))
             } else {
-                buf.push(_instr0("nop",
-                    "TODO: spill arg " + to_string(i) + " to stack"))
+                buf = _arm64_op_rm(buf, s.args[i], st, rm, "x9")
+                let src = _arm64_op_resolve(s.args[i], st, rm, "x9")
+                buf.push(_instr2("mov", _op_reg("x9"), src,
+                    "C7: load arg " + to_string(i) + " to scratch x9"))
+                let off = (i - 8) * 8
+                buf.push(_instr2("str", _op_reg("x9"), _op_mem("sp", off),
+                    "C7: spill arg " + to_string(i) + " to [sp, #" + to_string(off) + "]"))
             }
             i = i + 1
         }
@@ -724,10 +775,13 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             let src = _arm64_op_resolve(s.args[0], st, rm, "x9")
             buf.push(_instr2("mov", _op_reg("x0"), src, "set return value"))
         }
-        if spill_frame > 0 {
+        // C7 — epilogue frees spill_frame + call-overflow region (both
+        // allocated in a single prologue sub; see _arm64_lower_func).
+        let epilogue_total = spill_frame + rm.call_overflow_bytes
+        if epilogue_total > 0 {
             buf.push(_instr3("add", _op_reg("sp"), _op_reg("sp"),
-                             _op_label("#" + to_string(spill_frame)),
-                             "epilogue: free spill frame"))
+                             _op_label("#" + to_string(epilogue_total)),
+                             "epilogue: free spill+call-overflow frame"))
         }
         buf.push(_instr3("ldp", _op_reg("x29"), _op_reg("x30"),
                          _op_label("[sp], #16"), "epilogue: restore fp/lr"))
@@ -794,8 +848,24 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     // the spill frame and the body can resolve operands through the
     // assigned RegMap.
     let alloc = _arm64_assign_regs(mf)
-    let rm = alloc.map
     let spill_frame = alloc.frame_size
+
+    // C7 — pre-allocate the maximum outgoing-call overflow region in
+    // bytes (16-aligned). Reused by every call site in this fn so we
+    // don't sub/add sp mid-frame. SSA spill offsets are shifted above
+    // this region via rm.call_overflow_bytes (see _arm_spill_offset).
+    let max_overflow = _arm64_max_call_overflow(mf)
+    let mut call_overflow_bytes = 0
+    if max_overflow > 0 {
+        call_overflow_bytes = ((max_overflow * 8 + 15) / 16) * 16
+    }
+    let rm = RegMap {
+        ids: alloc.map.ids,
+        regs: alloc.map.regs,
+        slots: alloc.map.slots,
+        call_overflow_bytes: call_overflow_bytes
+    }
+    let total_frame = spill_frame + call_overflow_bytes
 
     // Prologue
     instrs.push(_instr3(
@@ -807,11 +877,13 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     ))
     instrs.push(_instr2("mov", _op_reg("x29"), _op_reg("sp"), "prologue: set fp"))
 
-    // Spill-frame allocation (after fp/lr save).
-    if spill_frame > 0 {
+    // Spill-frame allocation (after fp/lr save). Covers both the SSA
+    // spill region (top) and the outgoing-call overflow region (bottom).
+    if total_frame > 0 {
         instrs.push(_instr3("sub", _op_reg("sp"), _op_reg("sp"),
-                            _op_label("#" + to_string(spill_frame)),
-                            "prologue: alloc spill frame"))
+                            _op_label("#" + to_string(total_frame)),
+                            "prologue: alloc " + to_string(spill_frame) +
+                            "B spill + " + to_string(call_overflow_bytes) + "B call-overflow"))
     }
 
     // Move incoming params x0..x7 into their assigned regs / spill slots.
@@ -855,15 +927,15 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
                 name: mf.name,
                 target: "arm64-apple-darwin",
                 instrs: instrs,
-                frame_size: 16 + spill_frame,
+                frame_size: 16 + total_frame,
                 callee_saved: []
             }
         }
     }
-    if spill_frame > 0 {
+    if total_frame > 0 {
         instrs.push(_instr3("add", _op_reg("sp"), _op_reg("sp"),
-                            _op_label("#" + to_string(spill_frame)),
-                            "epilogue: free spill frame"))
+                            _op_label("#" + to_string(total_frame)),
+                            "epilogue: free spill+call-overflow frame"))
     }
     instrs.push(_instr3("ldp", _op_reg("x29"), _op_reg("x30"),
                         _op_label("[sp], #16"), "epilogue: restore fp/lr"))
@@ -873,7 +945,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         name: mf.name,
         target: "arm64-apple-darwin",
         instrs: instrs,
-        frame_size: 16 + spill_frame,
+        frame_size: 16 + total_frame,
         callee_saved: []
     }
 }
