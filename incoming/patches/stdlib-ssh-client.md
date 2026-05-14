@@ -1,13 +1,36 @@
-# `stdlib/net/ssh.hexa` — SSH client (then server)
+# `stdlib/net/ssh.hexa` — SSH client + server (BOTH PHASES LANDED)
 
-**STATUS 2026-05-14: client MVP LANDED** (commit 2d978169) — see
-`self/stdlib/ssh/{wire,kex,ssh}.hexa`. Surface intentionally simpler
-than the original draft below: `ssh_dial(host,port,user,pk,sk) ->
-conn` + `ssh_exec(conn,cmd) -> {stdout,stderr,exit_status}`. No
-struct config / agent / known_hosts / port forwarding yet — those
-are P2 extensions. Stage-A pool transport (`exec("ssh")`) still
-works for now; the new stdlib unblocks pool stage-C (`exec("ssh")`
-disappears). Server side still TODO (Phase 2 below).
+**STATUS 2026-05-14: FULL STACK LANDED — client + server + hardening**
+
+**Client** (commit `2d978169`): `self/stdlib/ssh/{wire,kex,ssh}.hexa`.
+Surface: `ssh_dial(host,port,user,pk,sk) -> conn` + `ssh_exec(conn,
+cmd) -> {stdout,stderr,exit_status}`. Subsequent landings added
+`keyfile` (PEM ed25519, unencrypted + bcrypt-encrypted), `agent`
+(ssh-agent protocol over $SSH_AUTH_SOCK), `known_hosts` (TOFU + verify).
+
+**Server** (commits `c3a36e96` → `b62fb495`):
+`self/stdlib/ssh/{authorized_keys,sshd}.hexa`. Surface:
+`ssh_sshd_serve_once(listen, host_priv, host_pass, auth_keys)` +
+`ssh_sshd_handle_fd(cfd, ...)` (for forking daemons).
+
+**Hardening landed**:
+- Sequential daemon mode (`HEXA_SSHD_LOOP=1`) — `52e12469`
+- Separated stdout/stderr (`exec_pipe_open` native — drops pty) — `52e12469`
+- Forking daemon (`proc_fork` + handle_fd split) — `befc5fa2`+`3e9ce3e6`
+- Rekey (RFC 4253 §9 mid-stream KEX) — `7fa0cb2b`
+- ssh-agent forwarding (server-side bidi proxy, `ssh -A`) — `77b2295a`+`b62fb495`
+
+End-to-end verified against OpenSSH 10.2 (Mac client):
+- KEX + auth + exec + stdout/stderr → green
+- Multi-client concurrent (HEXA_SSHD_FORK=1) → 3/3 green
+- Rekey under RekeyLimit=1K with 5K transfer → multiple rekeys, all green
+- `ssh -A ... 'ssh-add -l'` → forwarded `ssh-add -l` returns the keys
+  on the local agent (proves the server↔client agent channel proxy works)
+
+The SSH stack is now symmetric and feature-complete for the cpu-pattern
+plus general single-shot exec/agent use cases. Production-grade
+generic SSH server (multi-channel beyond agent, shell/pty-req, port
+forwarding, SFTP subsystem, audit hooks) is out of scope for this RFC.
 
 **From:** wilson (downstream) — 2026-05-13. P0 #1 of 5 in the
 `u-root/cpu` port — **largest, OK to land last**. Companion meta:
