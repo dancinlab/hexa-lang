@@ -628,17 +628,18 @@ pub fn ssh_sshd_handle_fd(cfd: int,
     }
     s2c_seq = s2c_seq + 1
 
-    // 16. Receive CHANNEL_REQUEST exec (or env/pty-req first — skip those)
+    // 16. Receive CHANNEL_REQUEST exec (also accept env/pty-req/auth-agent-req).
     let mut got_exec = false
     let mut exec_cmd = ""
+    let mut agent_sock_path = ""
+    let mut agent_listen_fd: int = -1
     let mut tries = 0
-    while !got_exec && tries < 8 {
+    while !got_exec && tries < 16 {
         let r_cr = _sd_recv_enc(cfd, c2s_seq, dec_key)
         if has_key(r_cr, "error") { net_close(cfd) ; return #{ "error": "recv channel_req: " + str(r_cr["error"]) } }
         c2s_seq = c2s_seq + 1
         let pl = r_cr["payload"]
         if pl[0] != SSH_MSG_CHANNEL_REQUEST { tries = tries + 1 ; continue }
-        // byte | u32 chan | string req_type | u8 want_reply | rest
         let req_r = ssh_get_string(pl, 5)
         if req_r["off"] < 0 { tries = tries + 1 ; continue }
         let req_name = ssh_bytes_to_string(req_r["bytes"])
@@ -653,8 +654,32 @@ pub fn ssh_sshd_handle_fd(cfd: int,
                 _sd_send_enc(cfd, s2c_seq, ack, enc_key)
                 s2c_seq = s2c_seq + 1
             }
+        } else if req_name == "auth-agent-req@openssh.com" {
+            // RFC: enable ssh-agent forwarding for this session. Server
+            // creates a Unix socket the child can connect to. (Actual
+            // forwarding of bytes to the client's agent is handled in
+            // the pump loop once the channel framework is in place — for
+            // this MVP we listen but only accept; full bidi proxy is the
+            // next iteration.)
+            agent_sock_path = "/tmp/hexa-ssh-agent-" + str(time_now_ms()) + ".sock"
+            let lf = net_listen("unix:" + agent_sock_path)
+            if type_of(lf) == "int" && lf > -1 {
+                agent_listen_fd = lf
+                if want_reply == 1 {
+                    let ack = _sd_build_channel_success(remote_id)
+                    _sd_send_enc(cfd, s2c_seq, ack, enc_key)
+                    s2c_seq = s2c_seq + 1
+                }
+            } else {
+                if want_reply == 1 {
+                    let mut faila: [int] = []
+                    faila = ssh_put_u8(faila, SSH_MSG_CHANNEL_FAILURE)
+                    faila = ssh_put_u32(faila, remote_id)
+                    _sd_send_enc(cfd, s2c_seq, faila, enc_key)
+                    s2c_seq = s2c_seq + 1
+                }
+            }
         } else {
-            // Ignore env/pty-req/... ack failure
             if want_reply == 1 {
                 let mut fail2: [int] = []
                 fail2 = ssh_put_u8(fail2, SSH_MSG_CHANNEL_FAILURE)
@@ -667,10 +692,20 @@ pub fn ssh_sshd_handle_fd(cfd: int,
     }
     if !got_exec { net_close(cfd) ; return #{ "error": "no exec request" } }
 
-    // 17. Spawn the requested command via pty_forkexec.
-    // argv = ["sh", "-c", exec_cmd]
-    // Separate stdout/stderr so we can route stderr → CHANNEL_EXTENDED_DATA(1).
-    let pr = exec_pipe_open(["sh", "-c", exec_cmd], [])
+    // 17. Spawn the requested command via exec_pipe_open.
+    // Separate stdout/stderr → CHANNEL_DATA / CHANNEL_EXTENDED_DATA(1).
+    let mut env_list: [string] = []
+    if agent_listen_fd > -1 {
+        // Child connects to this socket; full forwarding handled in
+        // the pump loop on next iteration.
+        env_list.push("SSH_AUTH_SOCK=" + agent_sock_path)
+        // execvp needs PATH; without an envp[] we'd inherit, but
+        // since we supply one we have to pass PATH too.
+        env_list.push("PATH=" + env("PATH"))
+        env_list.push("HOME=" + env("HOME"))
+        env_list.push("USER=" + env("USER"))
+    }
+    let pr = exec_pipe_open(["sh", "-c", exec_cmd], env_list)
     if has_key(pr, "error") {
         net_close(cfd) ; return #{ "error": "exec_pipe_open: " + str(pr["error"]) }
     }
@@ -802,6 +837,11 @@ pub fn ssh_sshd_handle_fd(cfd: int,
     s2c_seq = s2c_seq + 1
 
     net_close(cfd)
+    if agent_listen_fd > -1 {
+        net_close(agent_listen_fd)
+        exec("rm -f " + agent_sock_path)
+    }
     return #{ "client_user": client_user, "command": exec_cmd,
-              "exit_status": exit_status, "bytes_in": bytes_in, "bytes_out": bytes_out }
+              "exit_status": exit_status, "bytes_in": bytes_in, "bytes_out": bytes_out,
+              "agent_forwarded": agent_listen_fd > -1 }
 }
