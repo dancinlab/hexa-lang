@@ -4681,9 +4681,24 @@ fn gen2_expr(node) {
     }
 
     if k == "Array" {
+        let nitems = len(node.items)
+        // For large array literals, deeply-nested hexa_array_push(...)
+        // chains overflow clang's parser stack (observed SIGILL on
+        // ATLAS_P_NODES with ~7000 elements). Switch to GNU statement
+        // expression with a sequence of pushes — flat instead of nested.
+        if nitems > 64 {
+            let mut out = "({ HexaVal __arr_lit = hexa_array_new(); "
+            let mut ai = 0
+            while ai < nitems {
+                out = out + "hexa_array_push(__arr_lit, " + gen2_expr(node.items[ai]) + "); "
+                ai = ai + 1
+            }
+            out = out + "__arr_lit; })"
+            return out
+        }
         let mut out = "hexa_array_new()"
         let mut ai = 0
-        while ai < len(node.items) {
+        while ai < nitems {
             out = "hexa_array_push(" + out + ", " + gen2_expr(node.items[ai]) + ")"
             ai = ai + 1
         }
