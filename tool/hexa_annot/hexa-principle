@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# absorbed from ~/core/anima/README.md §Philosophy (MIT, dancinlab 2026-05-14)
+#
+# hexa-principle — 8-principle PHILOSOPHY annotation extractor.
+#
+# Recognises:
+#   @principle("<name>")             — annotation form (.hexa or .md)
+#   @principle(name="<name>")        — keyword form
+#   bare 8-principle string literal  — docstring or markdown table cell
+#   Law <n> citation                 — extra "law_ref" rows
+#
+# Source of truth for the 8 names + strength mapping:
+#   ./_principles.tsv (8 rows, derived from ~/core/anima/README.md lines 91–98)
+#
+# Strength taxonomy:
+#   EMPIRICAL — backed by a falsification experiment with measurable result
+#   POLICY    — chosen identity boundary without comparative experiment
+#   DESIGN    — architectural description, not falsifiable
+#
+# Output (stdout, JSON v0.1.0):
+#   {
+#     "version":"0.1.0",
+#     "source":"ast",
+#     "file":"<path>",
+#     "principles":[
+#       {"name":"NO SYSTEM PROMPT","strength":"EMPIRICAL","refs":[<line>...],
+#        "forms":[<form>...]},
+#       ...
+#     ],
+#     "law_refs":[{"law":N,"line":<line>}, ...],
+#     "summary":{"principles":<count>,"law_refs":<count>}
+#   }
+
+set -eu
+
+usage() {
+    cat >&2 <<EOF
+usage: hexa-principle <file.hexa|file.md> [file2 ...]
+       hexa-principle --dir <directory>
+       hexa-principle --project anima
+EOF
+    exit 1
+}
+
+case "${1:-}" in
+    -h|--help|"") usage ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+EXTRACT="${SCRIPT_DIR}/_principle_extract.sh"
+if [ ! -x "$EXTRACT" ]; then
+    if [ ! -f "$EXTRACT" ]; then
+        echo "error: backend extractor not found: $EXTRACT" >&2
+        exit 1
+    fi
+    # Allow bash-sourced execution even if +x bit is missing.
+    EXTRACT="bash $EXTRACT"
+fi
+
+# --- resolve file list ----------------------------------------------------
+FILES=()
+if [ "$1" = "--project" ]; then
+    [ $# -ge 2 ] || usage
+    name="$2"
+    cand=""
+    if [ -d "$HOME/core/$name" ]; then cand="$HOME/core/$name"
+    elif [ -d "$HOME/Dev/$name" ]; then cand="$HOME/Dev/$name"
+    else echo "error: project not found: $name" >&2; exit 1; fi
+    while IFS= read -r -d '' f; do FILES+=("$f"); done < <(
+        find "$cand" -type f \( -name '*.hexa' -o -name '*.md' \) \
+            -not -path "*/.git/*" -not -path "*/node_modules/*" -print0
+    )
+elif [ "$1" = "--dir" ]; then
+    [ $# -ge 2 ] || usage
+    dir="$2"
+    if [ ! -d "$dir" ]; then echo "error: not a directory: $dir" >&2; exit 1; fi
+    while IFS= read -r -d '' f; do FILES+=("$f"); done < <(
+        find "$dir" -type f \( -name '*.hexa' -o -name '*.md' \) \
+            -not -path "*/.git/*" -not -path "*/node_modules/*" -print0
+    )
+else
+    for f in "$@"; do
+        if [ ! -f "$f" ]; then echo "error: not a file: $f" >&2; exit 1; fi
+        FILES+=("$f")
+    done
+fi
+
+# Empty fileset → emit empty envelope and exit 0.
+if [ ${#FILES[@]} -eq 0 ]; then
+    printf '{"version":"0.1.0","source":"ast","file":"","principles":[],"law_refs":[],"summary":{"principles":0,"law_refs":0}}\n'
+    exit 0
+fi
+
+# --- run extractor on each file → single TSV stream ----------------------
+# Format expected: <name>\t<strength>\t<lineno>\t<form>\t<file>
+TMP=$(mktemp -t hexa_principle.XXXXXX)
+trap 'rm -f "$TMP"' EXIT
+for f in "${FILES[@]}"; do
+    $EXTRACT "$f" | awk -v file="$f" 'BEGIN{FS="\t";OFS="\t"} {print $1, $2, $3, $4, file}' >> "$TMP"
+done
+
+# --- aggregate TSV → JSON envelope ---------------------------------------
+# Multi-file behaviour: when invoked with a single file, "file" field is that
+# file's path. With multiple files (--dir / multi-arg), the per-row file
+# context is embedded in each principles[].refs[] entry as {file,line}.
+FIRST_FILE="${FILES[0]}"
+MULTI=0
+if [ ${#FILES[@]} -gt 1 ]; then MULTI=1; fi
+
+awk -v first_file="$FIRST_FILE" -v multi="$MULTI" '
+function jesc(s,   r) {
+    r = s
+    gsub(/\\/, "\\\\", r)
+    gsub(/"/, "\\\"", r)
+    gsub(/\t/, "\\t", r)
+    gsub(/\r/, "\\r", r)
+    gsub(/\n/, "\\n", r)
+    return r
+}
+BEGIN { FS = "\t"; n_pr = 0; n_law = 0 }
+{
+    name = $1; strn = $2; ln = $3; form = $4; file = $5
+    if (name == "") next
+    if (strn == "LAW") {
+        if (n_law > 0) law_body = law_body ","
+        if (multi) law_body = law_body "{\"law\":" substr(name, 5) ",\"file\":\"" jesc(file) "\",\"line\":" ln "}"
+        else       law_body = law_body "{\"law\":" substr(name, 5) ",\"line\":" ln "}"
+        n_law++
+        next
+    }
+    # Group by (name + strength) so that UNKNOWN names stay distinct.
+    key = name "|" strn
+    if (!(key in pr_seen)) {
+        pr_seen[key] = ++n_pr
+        pr_name[n_pr] = name
+        pr_str[n_pr]  = strn
+        pr_refs[n_pr] = ""
+        pr_nref[n_pr] = 0
+        pr_forms[n_pr] = ""
+        pr_form_seen[n_pr, ""] = 0
+    }
+    idx = pr_seen[key]
+    if (pr_nref[idx] > 0) pr_refs[idx] = pr_refs[idx] ","
+    if (multi) pr_refs[idx] = pr_refs[idx] "{\"file\":\"" jesc(file) "\",\"line\":" ln "}"
+    else       pr_refs[idx] = pr_refs[idx] ln
+    pr_nref[idx]++
+    if (!((idx SUBSEP form) in form_seen)) {
+        form_seen[idx, form] = 1
+        if (pr_forms[idx] != "") pr_forms[idx] = pr_forms[idx] ","
+        pr_forms[idx] = pr_forms[idx] "\"" jesc(form) "\""
+    }
+}
+END {
+    body = ""
+    for (i = 1; i <= n_pr; i++) {
+        if (i > 1) body = body ","
+        body = body "{\"name\":\"" jesc(pr_name[i]) "\""
+        body = body ",\"strength\":\"" jesc(pr_str[i]) "\""
+        body = body ",\"refs\":[" pr_refs[i] "]"
+        body = body ",\"forms\":[" pr_forms[i] "]"
+        body = body "}"
+    }
+    file_field = (multi ? "" : first_file)
+    printf("{\"version\":\"0.1.0\",\"source\":\"ast\",\"file\":\"%s\",\"principles\":[%s],\"law_refs\":[%s],\"summary\":{\"principles\":%d,\"law_refs\":%d}}\n",
+        jesc(file_field), body, law_body, n_pr, n_law)
+}
+' "$TMP"
