@@ -247,10 +247,11 @@ fn _build_channel_request_exec(remote_id: int, cmd: string) -> [int] {
 // ── Top-level dial: TCP + banner + KEX + userauth ────────────────
 pub fn ssh_dial(host: string, port: int, username: string,
                 pk: [int], priv: [int]) -> any {
-    // 1. TCP connect
-    let fd = net_connect(host, port)
+    // 1. TCP connect — net_connect takes "host:port" single string
+    let addr = host + ":" + str(port)
+    let fd = net_connect(addr)
     if type_of(fd) != "int" || fd < 0 {
-        return #{ "error": "tcp connect failed: " + str(fd) }
+        return #{ "error": "tcp connect failed: " + str(fd) + " addr=" + addr }
     }
 
     // 2. Banner exchange
