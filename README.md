@@ -1,21 +1,62 @@
-# hexa-lang
+<p align="center">
+  <img src="docs/logo.svg" width="140" alt="hexa-lang">
+</p>
 
-> An atlas of laws bound to the compiler. The stricter the gate, the cleaner the code that passes.
+<h1 align="center">💎 hexa-lang</h1>
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19404816.svg)](https://doi.org/10.5281/zenodo.19404816)
-[![phase A0–B5](https://img.shields.io/badge/phase-A0%E2%80%93B5%20PASS-brightgreen.svg)](SPEC.yaml)
-[![D1](https://img.shields.io/badge/D1-PASS-brightgreen.svg)](SPEC.yaml)
-[![D2](https://img.shields.io/badge/D2-SCAFFOLD-yellow.svg)](SPEC.yaml)
-[![M0](https://img.shields.io/badge/M0-PASS-brightgreen.svg)](tests/m0)
-[![wilson-build](https://img.shields.io/badge/wilson--build-PASS-brightgreen.svg)](SPEC.yaml)
-[![atlas](https://img.shields.io/badge/atlas-hash%20pinned-blue.svg)](SPEC.yaml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<p align="center"><strong>Native compiler with atlas-bound theorems</strong> — strict-lint · citation-enforced · no LLVM · no C-transpile</p>
 
-A native compiler that carries its own theorem 사전 (dictionary) inside the binary. No LLVM. No C-transpile. Every formula in your code either cites the atlas or the build refuses to start.
+<p align="center">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <a href=".github/workflows/lint.yml"><img alt="CI" src="https://github.com/dancinlab/hexa-lang/actions/workflows/lint.yml/badge.svg"></a>
+  <a href="https://doi.org/10.5281/zenodo.19404816"><img alt="DOI" src="https://zenodo.org/badge/DOI/10.5281/zenodo.19404816.svg"></a>
+  <img alt="Phase" src="https://img.shields.io/badge/phase-A0%E2%80%93B5%20PASS-success">
+  <img alt="M0" src="https://img.shields.io/badge/M0-PASS-success">
+  <img alt="Atlas" src="https://img.shields.io/badge/atlas-hash%20pinned-informational">
+  <img alt="Sibling" src="https://img.shields.io/badge/sibling-n6%20·%20hxc%20·%20n12%20·%20tape-blueviolet">
+</p>
 
-* * *
+<p align="center">Atlas-bound · strict-lint · 8-stage gate · ε self-proof · n=6 perfect-number primitives · self-hosted</p>
 
-## 🧱 Pipeline
+---
+
+`hexa-lang` is a native compiler that carries its own theorem 사전 (dictionary) inside the binary. No LLVM. No C-transpile. Every formula in your code either cites the atlas or the build refuses to start. The stricter the gate, the cleaner the code that passes.
+
+> [!NOTE]
+> Sister of [`n6`](https://github.com/dancinlab/n6) (semantic atom layer — atlas serialisation format), [`hxc`](https://github.com/dancinlab/hxc) (byte-canonical wire), and [`tape`](https://github.com/dancinlab/tape) (operational trace). hexa-lang's atlas overlay at `~/.hx/data/atlas.overlay.n6` and the rodata seed are both `.n6` — discovered laws promote into the live atlas through n6 grammar. The `wilson` agent ([`dancinlab/wilson`](https://github.com/dancinlab/wilson)) is built end-to-end on hexa-lang.
+
+## At a glance
+
+```hexa
+@cite(L[sigma_phi_n_tau_iff_n_eq_6])
+fn perfect_at_six() -> bool {
+    let n = 6
+    return sigma(n) == 2 * n          // σ(6) = 12 = 2·6
+        && phi(n) * tau(n) == 8       // φ(6)·τ(6) = 2·4 = 8 = σ(n)−n−φ(n)+1
+}
+
+// Untouched citation = HX8004 fatal at compile time:
+//
+//   error[HX8004]: formula-bearing function does not cite atlas L[*]
+//     --> src/foo.hexa:14:1
+//      |
+//   14 | fn area_of_circle(r: f64) -> f64 {
+//      | ^^^^^^^^^^^^^^^^^ formula here
+//      = note: cite an atlas law via `@cite(L[id])` or declare `@grace(HX8004, until=, reason=)`
+//      = help:  hexa atlas search "πr²"   →  L[circle_area]
+```
+
+The compiler stays parked unless every formula either cites the atlas, has an active `@verify`, or carries an explicit `@grace`. There is no "we'll fix it after." There is no binary.
+
+## Why hexa-lang
+
+LLMs answer by recombining what their weights already contain — noise from **inside** a frozen well. hexa-lang generates from **outside** the well: every compile cycle produces a primitive the previous cycle could not express, then absorbs it as a new wall (`@verify` → atlas promote → tombstone retroactive sweep). The atlas grows; hallucination is mechanically excluded because every claim must trace to a citation.
+
+The second pillar is **enforcement at the build gate**, not at runtime. Eight strict-lint stages (S0 parse → S1 resolve → S2 bind → S3 type → S4 domain → S5 units → S6 equational `@verify` → S7 proof `@prove` → S8 citation `HX8004`) reject formula-bearing code that doesn't cite. No annotations means no formula. No formula in a non-cited function means a hard error.
+
+Third: **n=6 perfect-number primitives**. The compiler is a 셰프 (chef) with a 4.2 MB atlas baked statically into the binary — 60,760 lines of P (primitives) / C (constants) / L (laws) / E (errors). Citing `L[sigma_phi_n_tau_iff_n_eq_6]` is one keystroke; if the law is wrong, every dependent gets a tombstone cascade with an auto-PR.
+
+## Pipeline
 
 ```
    .hexa source
@@ -40,7 +81,7 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
 
 * * *
 
-## 🎯 What just landed (Cycle close 2026-05-11)
+## Status
 
 The closure round's fixed points, with witnesses on disk:
 
@@ -61,7 +102,7 @@ Snapshot derived from `git log` on main; full tables at `SPEC.yaml::phases_compl
 
 * * *
 
-## 📐 Decisions (the spine)
+## Decisions (the spine)
 
 Six choices that shape everything else, pinned in [`SPEC.yaml`](SPEC.yaml):
 
@@ -79,12 +120,39 @@ Full record: 14+ pinned decisions, all traceable to RFC-017 through RFC-020.
 ## Install
 
 ```bash
+# Single-line bootstrap — installs `hexa` + `hx` (the package manager) + atlas
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/main/install.sh)"
+
+# Verify
+hexa --version
+hx --version
 ```
+
+The installer drops `hexa`, `hx`, `hexa_ld`, and the atlas seed into `~/.hx/`; binary path is added to your shell's PATH via the relevant rc file. Self-update: `hexa self-update` (compares against the published manifest, atomic swap of `~/.hx/bin/hexa_real`).
+
+## Run
+
+```bash
+hexa parse <file>.hexa                 # cheapest signal — syntax + reserved-word + @plugin attr check
+hexa build <entry>.hexa -o build/X     # full pipeline → static binary
+hexa cc <file>.hexa -o build/X.o       # just lower → object (HIR → MIR → LIR → emit)
+hexa run <file>.hexa [<args>...]       # interpreter — bootstrap stage0 + selftest fallback
+hexa explain HX8004                    # what does this diagnostic mean
+hexa atlas search "<query>"            # search atlas for a primitive / law / constant
+hexa atlas lookup L <id>               # exact citation lookup
+hexa atlas register <file>             # register a new @verify result
+hexa drill --seed "<expr>"             # OUROBOROS smash → ... → absorb cycle
+
+hx install <package>                   # install a hexa package by name (looks up dancinlab GitHub by default)
+hx update                              # pull updates for all installed packages
+hx list                                # what's installed under ~/.hx/bin/
+```
+
+The interpreter is intentionally slower than the compiled path — every release-grade build goes through `hexa build`. `hexa run` exists for stage0 bootstrap and per-file scripting.
 
 * * *
 
-## ⚙️ Architecture (the cooking metaphor)
+## Architecture (the cooking metaphor)
 
 From [`doc/atlas_lint_easy_explainer.md`](doc/atlas_lint_easy_explainer.md):
 
@@ -96,7 +164,7 @@ The **strict lint** is the 품질 검사관 (QC inspector) — it stands at the 
 
 * * *
 
-## 📜 Strict-lint stages
+## Strict-lint stages
 
 Eight checks, six always fatal, two opt-in via annotation:
 
@@ -112,7 +180,7 @@ Eight checks, six always fatal, two opt-in via annotation:
 
 * * *
 
-## 🛡️ Atlas SSOT cycle (ε self-proof)
+## Atlas SSOT cycle (ε self-proof)
 
 ```
    @verify fn f(...) { ... }                     ← author writes a theorem
@@ -144,7 +212,7 @@ Citing a tombstoned `L[id]` fires `HX1099` and fails the build. Bypass is `@grac
 
 * * *
 
-## 💎 Highlights
+## Highlights
 
 - transitioned from interpreter to native compiler — no LLVM, no C-transpile
 - 4.2 MB atlas baked statically into the compiler binary; runtime cost 0 ms
@@ -158,7 +226,7 @@ Citing a tombstoned `L[id]` fires `HX1099` and fails the build. Bypass is `@grac
 
 * * *
 
-## 🚧 Roadmap
+## Roadmap
 
 - **stage 1: P0 host-OOM closed at current scale** (A1+A2 → peak ~782 MB, was 3 510 MB); the remaining open work toward a full stage-1 binary is the compiler-driver gaps (Gaps 1–16) + a fixed-point (stage2 == stage3) re-estimate — see [`doc/stage1_punch_list_v2.md`](doc/stage1_punch_list_v2.md).
 - biggest unknowns: MIR/LIR coverage on real `compiler/` source (closures, growable arrays, nested struct construction, `match` on user enums) and what a *successful* self-compile diagnostic trace actually looks like.
@@ -168,7 +236,7 @@ Phase status (PASS / IN-PROGRESS / DEFERRED) lives in [`SPEC.yaml::phases_comple
 
 * * *
 
-## 📚 RFCs + docs
+## RFCs + docs
 
 - [RFC-017 — atlas n6 embedding + strict lint](proposals/rfc_017_atlas_n6_embedding_and_strict_lint.md)
 - [RFC-018 — native codegen spec](proposals/rfc_018_native_codegen_spec.md)
@@ -179,7 +247,21 @@ Phase status (PASS / IN-PROGRESS / DEFERRED) lives in [`SPEC.yaml::phases_comple
 
 * * *
 
-## 🌀 Not an LLM — where the noise comes from
+## tape integration
+
+hexa-lang's runtime and history surfaces are wired into [`.tape`](https://github.com/dancinlab/tape) — the operational trace sister format. Three placements at this repo's root:
+
+| Placement | What |
+|---|---|
+| [`IDENTITY.tape`](IDENTITY.tape) | hexa-lang agent identity SSOT — birth / scope / origin / principle / version. The compiler's self-description, machine-canonical. |
+| [`PROMOTION.tape`](PROMOTION.tape) | rule-promotion ledger — `@A` events for major raw rule landings (raw 109..126 propagation, toolchain post-fix, `bytes_to_str_raw` Phase 2, etc.) |
+| [`TAPE-AUDIT.md`](TAPE-AUDIT.md) | cross-repo `.tape` adoption audit (hexa-lang has the strongest dogfood opportunity: `.raw-audit/` 80%-tape-shaped, 28,695 cargo markers + 7 root domain `.md` files) |
+
+`.raw-audit/` (hash-chained 143-line log) is **DESIGN ledger** (preserved by sentinel `.PRESERVE-AS-SSOT` — see [`~/core/atlas/PRESERVE-AS-SSOT.md`](https://github.com/dancinlab/atlas/blob/main/PRESERVE-AS-SSOT.md)). The `state/markers/` cargo (28k+ files) is migration candidate via `tape markers-to-tape`.
+
+* * *
+
+## Not an LLM — where the noise comes from
 
 LLMs generate noise from **inside** the well: recombining what the
 weights already contain. hexa generates noise from **outside** the well:
@@ -310,13 +392,48 @@ Verify in atlas: `hexa atlas lookup P n` · `hexa atlas lookup C sigma_6`
 
 * * *
 
-## 📜 License
+## Repo layout
+
+```
+hexa-lang/
+├── README.md
+├── LICENSE                       MIT
+├── AGENTS.md                     AI agent harness file (agents.md standard)
+├── CLAUDE.md                     symlink → AGENTS.md
+├── SPEC.yaml                     authoritative decision record (14+ pinned decisions)
+├── SPEC.md                       auto-rendered from SPEC.yaml
+├── IDENTITY.tape · PROMOTION.tape · TAPE-AUDIT.md   tape sibling files
+├── FLOW.md · LATTICE_POLICY.md · LIMIT_BREAKTHROUGH.md · PLAN.md · ROADMAP.md   domain SSOTs
+├── compiler/                     lex · parse · resolve · bind · types · domain · units · citation · lower · mono · MIR · LIR · emit
+├── self/                         self-hosted compiler entry points
+│   ├── main.hexa                 the `hexa` binary entry
+│   ├── runtime.c                 C runtime backing (interp + native shared bits)
+│   ├── stdlib/                   atlas-aware standard library (semver / json / channel / thread / proc / time / ...)
+│   ├── tui/                      raw-mode TUI primitives (render / input / widgets)
+│   └── native/                   thread.c · channel.c · time.c — C-backed runtime
+├── stdlib/                       canonical stdlib (use "stdlib/*")
+├── tool/                         hexa CLI subcommand drivers (build / cc / run / drill / atlas / explain / ...)
+├── tests/                        m0 · selftest · regression
+├── proposals/                    RFC-017..020 + future RFCs
+├── doc/                          runbooks, audits, explainers
+├── convergence/                  cross-repo propagation tracking (.PRESERVE-AS-SSOT)
+├── .raw-audit/                   hash-chained rule-promotion history (.PRESERVE-AS-SSOT)
+├── state/                        gitignored runtime hook markers (cargo — migration candidate)
+├── build/                        gitignored hexa build artifacts
+└── incoming/                     downstream patch reports (wilson · qmirror · etc.)
+```
+
+Full doc index: [`AGENTS.md`](AGENTS.md) + [`doc/`](doc/) + [`SPEC.yaml`](SPEC.yaml).
+
+* * *
+
+## License
 
 MIT License. Copyright (c) 2026 dancinlab. See [`LICENSE`](LICENSE).
 
 * * *
 
-## 🤝 Contributing
+## Contributing
 
 Strict lint is the contract. Every PR runs through S0–S5 + S8. The only opt-out is `@grace(HXxxxx, until=, reason=)` on a single item, and every `@grace` emits HX9000 at every compile. CI fails the merge unless `Acked-grace: HXxxxx by <reviewer>` rides along.
 
