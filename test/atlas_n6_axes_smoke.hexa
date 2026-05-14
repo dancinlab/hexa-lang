@@ -1,0 +1,104 @@
+// test/atlas_n6_axes_smoke.hexa — Wave 2.2 n6_axes atlas-rodata smoke test
+//
+// Verifies:
+//   * N6_AXES holds 5 @P nodes (RIBOZYME / VIROCAPSID / NANOBOT / WEAVE / QUANTUM)
+//   * n6_axis_by_name("ribozyme") returns the correct node
+//   * All 5 axes embed the n=6 master identity (sigma*phi = n*tau = 24)
+//     in their raw payload — substring-anchored on "(12)", "(4)", "(2)", "(24)".
+//
+// Run:
+//   hexa run test/atlas_n6_axes_smoke.hexa
+//
+// Absorbed alongside compiler/atlas/n6_axes.gen.hexa (Apache-2.0, hexa-bio v1.1.0,
+// dancinlab 2026-05-14).
+
+use "compiler/atlas/parser"
+use "compiler/atlas/n6_axes.gen"
+
+fn _check(label: string, ok: bool, fails) {
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label)
+        fails.push(label)
+    }
+}
+
+// Verify the raw payload encodes every literal needed to reconstruct
+// sigma*phi = n*tau = J2 = 24 (anchored by substring presence).
+fn _has_master_identity(node: AtlasNode) -> bool {
+    if node.kind != "P" { return false }
+    let r = node.raw
+    if !r.contains("(12)") { return false }
+    if !r.contains("(4)")  { return false }
+    if !r.contains("(2)")  { return false }
+    if !r.contains("(24)") { return false }
+    if !r.contains("master_identity: sigma*phi = n*tau = 24") { return false }
+    return true
+}
+
+fn main() {
+    let fails = []
+
+    println("n6_axes absorption smoke — wave 2.2")
+
+    let axes = n6_axes()
+
+    _check("N6_AXES count == 5", len(axes) == 5, fails)
+    _check("n6_axes_count() == 5", n6_axes_count() == 5, fails)
+
+    // by_name lookup spot check.
+    let r = n6_axis_by_name("ribozyme")
+    _check("by_name(ribozyme) kind == P",          r.kind == "P",                       fails)
+    _check("by_name(ribozyme) id == n6_axes.ribozyme", r.id == "n6_axes.ribozyme",      fails)
+    _check("by_name(ribozyme) header contains '= RIBOZYME ::'",
+           r.raw.contains("= RIBOZYME ::"), fails)
+    _check("by_name(ribozyme) header contains hammerhead detail",
+           r.raw.contains("Symons 1981 hammerhead"), fails)
+
+    // Uppercase form also resolves.
+    let r2 = n6_axis_by_name("VIROCAPSID")
+    _check("by_name(VIROCAPSID) id == n6_axes.virocapsid",
+           r2.id == "n6_axes.virocapsid", fails)
+
+    // Unknown name returns sentinel.
+    let r3 = n6_axis_by_name("does_not_exist")
+    _check("by_name(unknown) kind == \"\"", r3.kind == "", fails)
+
+    // Master identity present for all 5 axes.
+    let mut idx = 0
+    let names = ["RIBOZYME", "VIROCAPSID", "NANOBOT", "WEAVE", "QUANTUM"]
+    while idx < len(axes) {
+        let node = axes[idx]
+        let label = "axis[" + to_string(idx) + "] master_identity sigma*phi = n*tau = 24"
+        _check(label, _has_master_identity(node), fails)
+        // Each axis's raw payload also must reference its canonical uppercase name.
+        let name_label = "axis[" + to_string(idx) + "] raw contains '" + names[idx] + "'"
+        _check(name_label, node.raw.contains(names[idx]), fails)
+        idx = idx + 1
+    }
+
+    // Grade marker: all 5 axes are graded 10 (verified by verify.hexa::verify_all()).
+    let mut k = 0
+    while k < len(axes) {
+        let n = axes[k]
+        let label = "axis[" + to_string(k) + "] grade.value == 10"
+        _check(label, n.grade.value == 10, fails)
+        let vlabel = "axis[" + to_string(k) + "] grade.verified == true"
+        _check(vlabel, n.grade.verified, fails)
+        k = k + 1
+    }
+
+    let nf = len(fails)
+    println("")
+    if nf == 0 {
+        println("n6_axes smoke: PASS")
+    } else {
+        println("n6_axes smoke: FAIL — " + to_string(nf) + " check(s) failed")
+        let mut i = 0
+        while i < nf {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+    }
+}

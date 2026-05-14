@@ -1,0 +1,57 @@
+// absorbed from ~/core/hexa-bio/quantum/module/n6_lattice_check.hexa (Apache-2.0, hexa-bio v1.1.0, dancinlab 2026-05-14)
+// SSOT snapshot — as_of: 2026-05-14 — re-generate from source not hand-edit
+//
+// N6_AXES — 5 @P nodes (RIBOZYME / VIROCAPSID / NANOBOT / WEAVE / QUANTUM)
+//
+// Each row records the canonical meaning of sigma(6)=12 / tau(6)=4 / phi(6)=2 /
+// J2=24 for one of the 5 hexa-bio axes. Grade = 10 (verified by
+// compiler/n6_lattice/verify.hexa::verify_all() — sigma/tau/phi/J2 + master
+// identity all PASS deterministically).
+//
+// Intentional duplication: compiler/n6_lattice/axis_table.hexa already exposes
+// the same 5-axis rodata as `N6Axis` structs for the lattice-verify subsystem.
+// This file re-expresses the same data as atlas AtlasNode rodata so that
+// atlas-format consumers (anima_main, anchor_audit, etc.) can iterate axes
+// alongside @C / @L / other primitives without an axis_table-specific path.
+//
+// Regenerate via: hexa run tool/atlas_absorb_hexa_bio.hexa  (planned)
+
+use "compiler/atlas/parser"
+
+@phase("parse_only")
+pub let N6_AXES: [AtlasNode] = [
+    AtlasNode { kind: "P", id: "n6_axes.ribozyme", raw: "@P n6_axes.ribozyme = RIBOZYME :: n6_axes.bio [10*]\n  sigma: 12-nt catalytic core (Symons 1981 hammerhead) (12)\n  tau: 4-state reaction ladder (substrate/TS/cleaved/released) (4)\n  phi: cleaved-vs-intact phosphodiester binary (2)\n  J2: trigonal-bipyramidal phosphate TS pose-equivalence (24)\n  master_identity: sigma*phi = n*tau = 24", source_file: "n6_lattice_check.hexa", source_line: 38, grade: GradeInfo { value: 10, verified: true, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "P", id: "n6_axes.virocapsid", raw: "@P n6_axes.virocapsid = VIROCAPSID :: n6_axes.bio [10*]\n  sigma: 12-pentamer for T=1 icosahedral capsid (Caspar-Klug) (12)\n  tau: 4 assembly states (apo/dimer/trimer/closed) (4)\n  phi: open-vs-closed cage binary (2)\n  J2: icosahedral 24-fold symmetry (T=1 fold) (24)\n  master_identity: sigma*phi = n*tau = 24", source_file: "n6_lattice_check.hexa", source_line: 43, grade: GradeInfo { value: 10, verified: true, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "P", id: "n6_axes.nanobot", raw: "@P n6_axes.nanobot = NANOBOT :: n6_axes.substrate [10*]\n  sigma: 12 actuation nodes (mechanical degrees of freedom) (12)\n  tau: 4-state actuation ladder (rest/load/work/release) (4)\n  phi: engaged-vs-released binary (2)\n  J2: actuation-cycle 24-step sequence (24)\n  master_identity: sigma*phi = n*tau = 24", source_file: "n6_lattice_check.hexa", source_line: 48, grade: GradeInfo { value: 10, verified: true, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "P", id: "n6_axes.weave", raw: "@P n6_axes.weave = WEAVE :: n6_axes.bio [10*]\n  sigma: 12 base-pair turn (DNA helix structural period) (12)\n  tau: 4-base alphabet (A/T/G/C) (4)\n  phi: duplex-vs-single-strand binary (2)\n  J2: double-helix 24-fold helical symmetry (B-DNA period) (24)\n  master_identity: sigma*phi = n*tau = 24", source_file: "n6_lattice_check.hexa", source_line: 53, grade: GradeInfo { value: 10, verified: true, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "P", id: "n6_axes.quantum", raw: "@P n6_axes.quantum = QUANTUM :: n6_axes.substrate [10*]\n  sigma: H2 6-Pauli expansion (Kandala 2017) x 2 qubits = 12 ops (12)\n  tau: H2 ansatz d=1 hardware-efficient (Ry-Ry-CNOT-Ry-Ry, 4 params) (4)\n  phi: binary fold-marker via best_idx (0 vs other) (2)\n  J2: sigma*tau = H2 falsifier evaluation surface area (24)\n  master_identity: sigma*phi = n*tau = 24", source_file: "n6_lattice_check.hexa", source_line: 58, grade: GradeInfo { value: 10, verified: true, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
+]
+
+// public count accessor — smoke tests assert without walking the
+// parse_only-decorated array directly.
+pub fn n6_axes_count() -> i64 { return len(N6_AXES) }
+
+pub fn n6_axes() -> [AtlasNode] { return N6_AXES }
+
+// Convenience lookup by short axis name (case-insensitive on RIBOZYME vs
+// ribozyme — both forms accepted). Returns the empty-kind sentinel node
+// when no axis matches; callers should check `result.kind == ""`.
+pub fn n6_axis_by_name(name: string) -> AtlasNode {
+    let nodes = N6_AXES
+    let mut i = 0
+    while i < len(nodes) {
+        let n = nodes[i]
+        // Match the id suffix after `n6_axes.` (lowercase form) or the
+        // uppercase label embedded in the raw header (e.g. "= RIBOZYME ::").
+        let id_suffix = "n6_axes." + name
+        if n.id == id_suffix { return n }
+        let upper_needle = "= " + name + " ::"
+        if n.raw.contains(upper_needle) { return n }
+        i = i + 1
+    }
+    return AtlasNode {
+        kind: "", id: "", raw: "", source_file: "", source_line: 0,
+        grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false },
+        edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }
+    }
+}
