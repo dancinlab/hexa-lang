@@ -229,6 +229,16 @@ fn _sd_build_channel_data(remote_id: int, data: [int]) -> [int] {
     return p
 }
 
+// CHANNEL_EXTENDED_DATA frame for stderr. data_type=1 is SSH_EXTENDED_DATA_STDERR.
+fn _sd_build_channel_extended(remote_id: int, data_type: int, data: [int]) -> [int] {
+    let mut p: [int] = []
+    p = ssh_put_u8(p, SSH_MSG_CHANNEL_EXTENDED_DATA)
+    p = ssh_put_u32(p, remote_id)
+    p = ssh_put_u32(p, data_type)
+    p = ssh_put_string_bytes(p, data)
+    return p
+}
+
 fn _sd_build_exit_status(remote_id: int, status: int) -> [int] {
     let mut p: [int] = []
     p = ssh_put_u8(p, SSH_MSG_CHANNEL_REQUEST)
@@ -578,67 +588,83 @@ pub fn ssh_sshd_serve_once(listen_addr: string,
 
     // 17. Spawn the requested command via pty_forkexec.
     // argv = ["sh", "-c", exec_cmd]
-    let pr = pty_forkexec(["sh", "-c", exec_cmd], [], 24, 80)
+    // Separate stdout/stderr so we can route stderr → CHANNEL_EXTENDED_DATA(1).
+    let pr = exec_pipe_open(["sh", "-c", exec_cmd], [])
     if has_key(pr, "error") {
-        net_close(cfd) ; return #{ "error": "pty_forkexec: " + str(pr["error"]) }
+        net_close(cfd) ; return #{ "error": "exec_pipe_open: " + str(pr["error"]) }
     }
     let pid = pr["pid"]
-    let master_fd = pr["master_fd"]
-    let nbl = net_set_nonblock(master_fd)
+    let stdout_fd = pr["stdout_fd"]
+    let stderr_fd = pr["stderr_fd"]
+    let stdin_fd  = pr["stdin_fd"]
+    net_set_nonblock(stdout_fd)
+    net_set_nonblock(stderr_fd)
 
-    // 18. Pump loop: read master_fd → CHANNEL_DATA → cfd; read cfd
-    //     CHANNEL_DATA → master_fd. Exit when child exits.
-    let mut bytes_in = 0     // remote command stdout (server → client)
-    let mut bytes_out = 0    // remote command stdin   (client → server)
+    // 18. Pump loop: stdout/stderr → CHANNEL_DATA/EXTENDED_DATA → cfd;
+    //     cfd CHANNEL_DATA → stdin_fd. Exit when child exits + both stdio EOF.
+    let mut bytes_in = 0
+    let mut bytes_out = 0
     let mut child_dead = false
+    let mut stdout_eof = false
+    let mut stderr_eof = false
+    let mut stdin_closed = false
     let mut iter = 0
     while !child_dead && iter < 1000000 {
-        // Check fd readiness with a short timeout (200ms). Returns the
-        // list of ready fd VALUES (not flags), e.g. [4] if fd 4 is ready.
-        let sel = net_select([cfd, master_fd], 200)
+        let sel = net_select([cfd, stdout_fd, stderr_fd], 200)
         if type_of(sel) != "array" { break }
         let mut cfd_ready = false
-        let mut master_ready = false
+        let mut stdout_ready = false
+        let mut stderr_ready = false
         let mut si = 0
         while si < len(sel) {
-            if sel[si] == cfd { cfd_ready = true }
-            if sel[si] == master_fd { master_ready = true }
+            if sel[si] == cfd       { cfd_ready    = true }
+            if sel[si] == stdout_fd { stdout_ready = true }
+            if sel[si] == stderr_fd { stderr_ready = true }
             si = si + 1
         }
-        let mut moved = false
-        if master_ready {
-            let chunk = net_read_bytes(master_fd, 16384)
+        if stdout_ready && !stdout_eof {
+            let chunk = net_read_bytes(stdout_fd, 16384)
             if type_of(chunk) == "array" && len(chunk) > 0 {
                 let frame = _sd_build_channel_data(remote_id, chunk)
                 if !_sd_send_enc(cfd, s2c_seq, frame, enc_key) { child_dead = true ; break }
                 s2c_seq = s2c_seq + 1
                 bytes_in = bytes_in + len(chunk)
-                moved = true
             } else if type_of(chunk) == "array" && len(chunk) == 0 {
-                child_dead = true
+                stdout_eof = true
+            }
+        }
+        if stderr_ready && !stderr_eof {
+            let chunk = net_read_bytes(stderr_fd, 16384)
+            if type_of(chunk) == "array" && len(chunk) > 0 {
+                let frame = _sd_build_channel_extended(remote_id, 1, chunk)
+                if !_sd_send_enc(cfd, s2c_seq, frame, enc_key) { child_dead = true ; break }
+                s2c_seq = s2c_seq + 1
+                bytes_in = bytes_in + len(chunk)
+            } else if type_of(chunk) == "array" && len(chunk) == 0 {
+                stderr_eof = true
             }
         }
         if cfd_ready {
             let rec = _sd_recv_enc(cfd, c2s_seq, dec_key)
+            if has_key(rec, "error") { child_dead = true ; break }
             c2s_seq = c2s_seq + 1
             let pl = rec["payload"]
             let t = pl[0]
             if t == SSH_MSG_CHANNEL_DATA {
                 let s = ssh_get_string(pl, 5)
-                if s["off"] > 0 {
-                    let wn = net_write_bytes(master_fd, s["bytes"])
+                if s["off"] > 0 && !stdin_closed {
+                    let wn = net_write_bytes(stdin_fd, s["bytes"])
                     if type_of(wn) == "int" { bytes_out = bytes_out + len(s["bytes"]) }
                 }
-                moved = true
             }
-            // CHANNEL_EOF on its own means client won't write more
-            // stdin to us — does NOT mean the remote command is done.
-            // Only CHANNEL_CLOSE (or child exit) terminates the pump.
+            if t == SSH_MSG_CHANNEL_EOF && !stdin_closed {
+                net_close(stdin_fd) ; stdin_closed = true
+            }
             if t == SSH_MSG_CHANNEL_CLOSE { child_dead = true }
         }
         let reap = proc_wait(pid, proc_wait_flag_const("WNOHANG"))
         if type_of(reap) == "map" && has_key(reap, "exited") {
-            if reap["exited"] { child_dead = true }
+            if reap["exited"] && stdout_eof && stderr_eof { child_dead = true }
         }
         iter = iter + 1
     }
@@ -649,10 +675,10 @@ pub fn ssh_sshd_serve_once(listen_addr: string,
         final_reap["exit_code"]
     } else { 0 }
 
-    // Drain anything still in master_fd
+    // Drain remaining stdout/stderr
     let mut drain_iter = 0
     while drain_iter < 16 {
-        let chunk = net_read_bytes(master_fd, 16384)
+        let chunk = net_read_bytes(stdout_fd, 16384)
         if type_of(chunk) != "array" || len(chunk) < 1 { break }
         let frame = _sd_build_channel_data(remote_id, chunk)
         _sd_send_enc(cfd, s2c_seq, frame, enc_key)
@@ -660,7 +686,19 @@ pub fn ssh_sshd_serve_once(listen_addr: string,
         bytes_in = bytes_in + len(chunk)
         drain_iter = drain_iter + 1
     }
-    net_close(master_fd)
+    // Drain stderr too
+    let mut drain_e = 0
+    while drain_e < 16 {
+        let chunk = net_read_bytes(stderr_fd, 16384)
+        if type_of(chunk) != "array" || len(chunk) < 1 { break }
+        let frame = _sd_build_channel_extended(remote_id, 1, chunk)
+        _sd_send_enc(cfd, s2c_seq, frame, enc_key)
+        s2c_seq = s2c_seq + 1
+        bytes_in = bytes_in + len(chunk)
+        drain_e = drain_e + 1
+    }
+    net_close(stdout_fd) ; net_close(stderr_fd)
+    if !stdin_closed { net_close(stdin_fd) }
 
     // 19. Send exit-status + CHANNEL_EOF + CHANNEL_CLOSE
     _sd_send_enc(cfd, s2c_seq, _sd_build_exit_status(remote_id, exit_status), enc_key)

@@ -4130,6 +4130,8 @@ fn gen2_expr(node) {
                 // net — NUL-safe byte-array variants (for p9 codec / binary)
                 if name == "net_write_bytes"{ return "hexa_net_write_bytes(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "net_read_bytes" { return "hexa_net_read_bytes(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                // stdlib/os/exec_pipe — fork+exec with stdout/stderr separated
+                if name == "exec_pipe_open" { return "hexa_exec_pipe_open(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // stdlib/crypto — 2-arg primitives (RFC ssh-client)
                 if name == "ed25519_sign"   { return "hexa_ed25519_sign(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "x25519_scalarmult" { return "hexa_x25519_scalarmult(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
@@ -4254,6 +4256,7 @@ fn gen2_expr(node) {
                 if name == "matvec"         { return "hexa_matvec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
                 // stdlib/os/pty — 4-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_forkexec"   { return "hexa_pty_forkexec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
+                // stdlib/os/exec_pipe — fork+exec with separated stdout/stderr (RFC ssh-server stderr)
                 // stdlib/crypto — 4-arg AEAD (RFC ssh-client)
                 if name == "chacha20_poly1305_encrypt" {
                     return "hexa_chacha20_poly1305_encrypt(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
@@ -6090,6 +6093,7 @@ fn _is_builtin_name(name) {
     // net — NUL-safe byte-array I/O (for p9 codec / binary protocols)
     if name == "net_write_bytes" { return true }
     if name == "net_read_bytes" { return true }
+    if name == "exec_pipe_open" { return true }
     // stdlib/crypto — libsodium-backed primitives (RFC ssh-client)
     if name == "libsodium_available" { return true }
     if name == "sha512" { return true }
