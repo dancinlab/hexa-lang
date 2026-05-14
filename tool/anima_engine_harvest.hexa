@@ -1,0 +1,422 @@
+// tool/anima_engine_harvest.hexa — Wave 5 of anima-absorption-plan (2026-05-14)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// REVIEW BEFORE PROMOTE
+// =====================
+// This tool produces *candidate* atlas rows from anima-engines docstrings.
+// It does NOT write to any atlas file. All output is to incoming/notes/
+// for human review. Citations are extracted verbatim from comments — the
+// tool cannot verify their accuracy. Every candidate carries either
+// grade=needs-review or hypothesis=open. A reviewer must cherry-pick
+// approved rows into ~/.hx/data/atlas.overlay.n6 manually.
+//
+// Read-only on ~/core/anima/. Emits:
+//   1. incoming/notes/2026-05-14-anima-engine-harvest-candidates.md
+//   2. incoming/notes/2026-05-14-anima-engine-harvest-candidates.n6
+//
+// Sources scanned (MIT, dancinlab):
+//   ~/core/anima/anima-engines/*.hexa (excluding tests/)
+//
+// Run:
+//   hexa run tool/anima_engine_harvest.hexa
+//
+// Reproducibility: stable wrt source files (sorted by filename). Re-running
+// regenerates the two notes files byte-identically (modulo timestamp).
+
+pub struct HarvestRec {
+    ok: bool,
+    file: string,
+    basename: string,
+    roadmap_id: string,
+    title: string,
+    citations: array,    // [string]
+    primitives: array,   // [string]
+    kind: string,        // "@P" | "@L" | "@?"
+    reason: string       // skip reason if !ok
+}
+
+fn _empty_rec() -> HarvestRec {
+    return HarvestRec {
+        ok: false, file: "", basename: "", roadmap_id: "", title: "",
+        citations: [], primitives: [], kind: "@?", reason: ""
+    }
+}
+
+// Shell-escape for safe inclusion in printf '%s' "..."
+fn _shell_escape(s: string) -> string {
+    let n = len(s)
+    let parts = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" {
+            parts.push("\\\\")
+        } else if c == "\"" {
+            parts.push("\\\"")
+        } else if c == "$" {
+            parts.push("\\$")
+        } else if c == "`" {
+            parts.push("\\`")
+        } else {
+            parts.push(c)
+        }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// ── helpers ────────────────────────────────────────────────────────────
+
+fn _list_engine_files() -> array {
+    let home = env("HOME")
+    let root = home + "/core/anima/anima-engines"
+    let raw = exec("ls -1 " + root + "/*.hexa 2>/dev/null | sort").trim()
+    if raw == "" { return [] }
+    return raw.split("\n")
+}
+
+// Read the docstring header — lines from start until the first non-comment,
+// non-blank line. Anima engines use `// ...` headers spanning 5-80 lines.
+fn _read_header(path: string) -> string {
+    let cmd = "awk 'NR>80 {exit} /^[[:space:]]*\\/\\// || /^[[:space:]]*$/ {print; next} {exit}' '" + path + "' 2>/dev/null"
+    return exec(cmd)
+}
+
+// Extract roadmap phenomenon ID like "P51", "P125", "CLM-P3-1".
+fn _extract_roadmap_id(path: string) -> string {
+    let cmd = "head -1 '" + path + "' | grep -oE '(CLM-P[0-9]+-[0-9]+|PHYS-P[0-9]+-[0-9]+|P[0-9]+(-[0-9]+)?)' | head -1"
+    return exec(cmd).trim()
+}
+
+// Extract citations of the form `Author YYYY` or `Author & Author2 YYYY`.
+fn _extract_citations(path: string) -> array {
+    let pat = "[A-Z][a-zA-Z-]+( (&|and|et al\\.?|\\+) [A-Z][a-zA-Z-]+)* [12][0-9]{3}[a-z]?"
+    let cmd = "awk 'NR>80 {exit} /^[[:space:]]*\\/\\//{print} !/^[[:space:]]*\\/\\// && !/^[[:space:]]*$/ {exit}' '" + path + "' 2>/dev/null | grep -oE '" + pat + "' | sort -u"
+    let raw = exec(cmd).trim()
+    if raw == "" { return [] }
+    return raw.split("\n")
+}
+
+// Extract primitive axis lines like `//   [0]  HUE   — ...`
+// or `//   0. shadow — ...` (numbered/bulleted axis enumerations).
+fn _extract_primitives(path: string) -> array {
+    let pat = "^[[:space:]]*//[[:space:]]+(\\[[0-9]+\\][[:space:]]+[A-Z_][A-Za-z0-9_-]*|[0-9]+\\.[[:space:]]+[a-zA-Z_][a-zA-Z0-9_-]*)"
+    let cmd = "awk 'NR>80 {exit} {print}' '" + path + "' 2>/dev/null | grep -E '" + pat + "' | head -20"
+    let raw = exec(cmd).trim()
+    if raw == "" { return [] }
+    return raw.split("\n")
+}
+
+// Extract first-line title after `// filename.hexa —`.
+fn _extract_title(path: string) -> string {
+    let cmd = "head -1 '" + path + "' | sed -E 's|^[[:space:]]*//[[:space:]]*||; s|^[a-z_./-]+\\.hexa[[:space:]]*[—-][[:space:]]*||; s|═+||g' | tr -d '\\n'"
+    return exec(cmd).trim()
+}
+
+fn _basename(path: string) -> string {
+    return exec("basename '" + path + "' .hexa").trim()
+}
+
+// ── per-file harvest ───────────────────────────────────────────────────
+
+fn _harvest_one(path: string) -> HarvestRec {
+    let header = _read_header(path)
+    if header == "" {
+        return HarvestRec {
+            ok: false, file: path, basename: _basename(path),
+            roadmap_id: "", title: "", citations: [], primitives: [],
+            kind: "@?", reason: "empty-header"
+        }
+    }
+    let rid = _extract_roadmap_id(path)
+    let title = _extract_title(path)
+    let citations = _extract_citations(path)
+    let primitives = _extract_primitives(path)
+    let bn = _basename(path)
+    let mut kind = "@?"
+    if len(primitives) > 0 {
+        kind = "@P"
+    } else if len(citations) > 0 {
+        kind = "@L"
+    }
+    return HarvestRec {
+        ok: true, file: path, basename: bn, roadmap_id: rid,
+        title: title, citations: citations, primitives: primitives,
+        kind: kind, reason: ""
+    }
+}
+
+// ── emitters ───────────────────────────────────────────────────────────
+
+fn _emit_md_section(rec: HarvestRec) -> string {
+    let parts = []
+    parts.push("### anima-engines/")
+    parts.push(rec.basename)
+    parts.push(".hexa")
+    if rec.roadmap_id != "" {
+        parts.push(" (")
+        parts.push(rec.roadmap_id)
+        parts.push(")")
+    }
+    parts.push("\n")
+    if rec.title != "" {
+        parts.push("- title: ")
+        parts.push(rec.title)
+        parts.push("\n")
+    }
+    let np = len(rec.primitives)
+    let mut i = 0
+    while i < np {
+        parts.push("- @P ")
+        parts.push(rec.basename)
+        parts.push(".primitive raw=\"")
+        parts.push(rec.primitives[i].trim())
+        parts.push("\" grade=needs-review\n")
+        i = i + 1
+    }
+    let nc = len(rec.citations)
+    let mut j = 0
+    while j < nc {
+        parts.push("- @L ")
+        parts.push(rec.basename)
+        parts.push(".cite source=\"")
+        parts.push(rec.citations[j].trim())
+        parts.push("\" grade=needs-review\n")
+        j = j + 1
+    }
+    if np == 0 && nc == 0 {
+        parts.push("- @? ")
+        parts.push(rec.basename)
+        parts.push(".open-hypothesis raw=\"")
+        parts.push(rec.title)
+        parts.push("\" hypothesis=open\n")
+    }
+    parts.push("\n")
+    return parts.join("")
+}
+
+fn _emit_n6_section(rec: HarvestRec) -> string {
+    let parts = []
+    let bn = rec.basename
+    let np = len(rec.primitives)
+    let mut i = 0
+    while i < np {
+        let p = rec.primitives[i].trim()
+        parts.push("@P anima.engine.")
+        parts.push(bn)
+        parts.push(".primitive_")
+        parts.push(to_string(i))
+        parts.push(" = \"")
+        parts.push(_n6_escape(p))
+        parts.push("\" :: anima.engines [needs-review]\n")
+        parts.push("  scanned_from = \"anima-engines/")
+        parts.push(bn)
+        parts.push(".hexa:header\"\n")
+        i = i + 1
+    }
+    let nc = len(rec.citations)
+    let mut j = 0
+    while j < nc {
+        let c = rec.citations[j].trim()
+        parts.push("@L anima.engine.")
+        parts.push(bn)
+        parts.push(".citation_")
+        parts.push(to_string(j))
+        parts.push(" = \"")
+        parts.push(_n6_escape(rec.title))
+        parts.push("\" :: anima.engines [needs-review]\n")
+        parts.push("  source = \"")
+        parts.push(_n6_escape(c))
+        parts.push("\"\n")
+        parts.push("  scanned_from = \"anima-engines/")
+        parts.push(bn)
+        parts.push(".hexa:header\"\n")
+        j = j + 1
+    }
+    if np == 0 && nc == 0 {
+        parts.push("@? anima.engine.")
+        parts.push(bn)
+        parts.push(".open = \"")
+        parts.push(_n6_escape(rec.title))
+        parts.push("\" :: anima.engines [hypothesis=open]\n")
+        parts.push("  scanned_from = \"anima-engines/")
+        parts.push(bn)
+        parts.push(".hexa:header\"\n")
+    }
+    return parts.join("")
+}
+
+fn _n6_escape(s: string) -> string {
+    let n = len(s)
+    let parts = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\"" {
+            parts.push("\\\"")
+        } else if c == "\\" {
+            parts.push("\\\\")
+        } else if c == "\n" {
+            parts.push(" ")
+        } else {
+            parts.push(c)
+        }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// ── driver ─────────────────────────────────────────────────────────────
+
+fn main() {
+    let files = _list_engine_files()
+    let n_total = len(files)
+    println("anima engine harvest — Wave 5")
+    println("  scanned-root: ~/core/anima/anima-engines/")
+    println("  files-found:  " + to_string(n_total))
+
+    let md_parts = []
+    let n6_parts = []
+    let mut n_processed = 0
+    let mut n_skipped   = 0
+    let mut n_p_rows    = 0
+    let mut n_l_rows    = 0
+    let mut n_q_rows    = 0
+    let mut n_cites_total = 0
+    let mut n_prims_total = 0
+    let skipped_examples = []
+
+    // dedup citation strings across whole scan (first-occurrence wins).
+    // parallel arrays — keys + duplicate-hit counts.
+    let cite_seen_keys = []
+    let cite_seen_vals = []
+
+    let mut i = 0
+    while i < n_total {
+        let path = files[i]
+        let rec = _harvest_one(path)
+        if rec.ok == false {
+            n_skipped = n_skipped + 1
+            if len(skipped_examples) < 5 {
+                skipped_examples.push(rec.file + " (" + rec.reason + ")")
+            }
+        } else {
+            n_processed = n_processed + 1
+            let np = len(rec.primitives)
+            let nc = len(rec.citations)
+            n_prims_total = n_prims_total + np
+            n_cites_total = n_cites_total + nc
+            if np > 0 { n_p_rows = n_p_rows + np }
+            if nc > 0 { n_l_rows = n_l_rows + nc }
+            if np == 0 && nc == 0 { n_q_rows = n_q_rows + 1 }
+            md_parts.push(_emit_md_section(rec))
+            n6_parts.push(_emit_n6_section(rec))
+            let mut k = 0
+            while k < len(rec.citations) {
+                let c = rec.citations[k].trim()
+                let mut found = -1
+                let mut q = 0
+                while q < len(cite_seen_keys) {
+                    if cite_seen_keys[q] == c {
+                        found = q
+                        break
+                    }
+                    q = q + 1
+                }
+                if found < 0 {
+                    cite_seen_keys.push(c)
+                    cite_seen_vals.push(1)
+                } else {
+                    cite_seen_vals[found] = cite_seen_vals[found] + 1
+                }
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+
+    let unique_citations = len(cite_seen_keys)
+
+    // ── compose markdown
+    let md = []
+    md.push("# Anima engine docstring harvest — candidates (2026-05-14)\n\n")
+    md.push("> **REVIEW BEFORE PROMOTE** — candidates only. No atlas writes.\n")
+    md.push("> Generated by `tool/anima_engine_harvest.hexa` (Wave 5 of anima-absorption-plan).\n")
+    md.push("> Source: `~/core/anima/anima-engines/*.hexa` (MIT, dancinlab 2026-05-14).\n")
+    md.push("> Citations extracted verbatim — accuracy NOT verified.\n\n")
+    md.push("## Statistics\n\n")
+    md.push("- files-scanned: " + to_string(n_total) + "\n")
+    md.push("- files-processed: " + to_string(n_processed) + "\n")
+    md.push("- files-skipped: " + to_string(n_skipped) + "\n")
+    md.push("- primitive rows (@P): " + to_string(n_p_rows) + "\n")
+    md.push("- law/citation rows (@L): " + to_string(n_l_rows) + "\n")
+    md.push("- open-hypothesis rows (@?): " + to_string(n_q_rows) + "\n")
+    md.push("- unique citation tokens (dedup): " + to_string(unique_citations) + "\n")
+    md.push("- total citation occurrences: " + to_string(n_cites_total) + "\n")
+    md.push("- total primitive list entries: " + to_string(n_prims_total) + "\n\n")
+    if n_skipped > 0 {
+        md.push("### Skipped files (header pattern unmatched)\n\n")
+        let mut s = 0
+        while s < len(skipped_examples) {
+            md.push("- " + skipped_examples[s] + "\n")
+            s = s + 1
+        }
+        md.push("\n")
+    }
+    md.push("## Patterns recognised\n\n")
+    md.push("- **roadmap-id**: regex `(CLM-P[0-9]+-[0-9]+|PHYS-P[0-9]+-[0-9]+|P[0-9]+(-[0-9]+)?)` — matches the phenomenon ID on line 1\n")
+    md.push("- **citation**: regex `[A-Z][a-zA-Z-]+( (&|and|et al\\.?|\\+) [A-Z][a-zA-Z-]+)* [12][0-9]{3}[a-z]?` — Author YYYY / Author1 & Author2 YYYY / Author et al. YYYY\n")
+    md.push("- **primitive**: line matches `^//\\s+(\\[N\\]\\s+LABEL|N.\\s+label)` — numbered/bracketed axis enumeration in comment block\n")
+    md.push("- **header span**: first 80 lines, comments + blanks only (awk-bounded)\n\n")
+    md.push("## Top citations by frequency (dedup, all files)\n\n")
+    // bubble-sort the top 30 by count
+    let topk = 30
+    let mut s1 = 0
+    while s1 < len(cite_seen_keys) {
+        let mut s2 = s1 + 1
+        while s2 < len(cite_seen_keys) {
+            if cite_seen_vals[s2] > cite_seen_vals[s1] {
+                let tk = cite_seen_keys[s1]
+                let tv = cite_seen_vals[s1]
+                cite_seen_keys[s1] = cite_seen_keys[s2]
+                cite_seen_vals[s1] = cite_seen_vals[s2]
+                cite_seen_keys[s2] = tk
+                cite_seen_vals[s2] = tv
+            }
+            s2 = s2 + 1
+        }
+        s1 = s1 + 1
+    }
+    let mut t = 0
+    let tmax = len(cite_seen_keys)
+    let limit = if topk < tmax { topk } else { tmax }
+    while t < limit {
+        md.push("- " + cite_seen_keys[t] + "  (x" + to_string(cite_seen_vals[t]) + ")\n")
+        t = t + 1
+    }
+    md.push("\n")
+    md.push("## Per-file candidates\n\n")
+    md.push(md_parts.join(""))
+
+    // ── compose n6
+    let n6 = []
+    n6.push("# absorbed from ~/core/anima/anima-engines/ (MIT, dancinlab 2026-05-14)\n")
+    n6.push("# REVIEW BEFORE PROMOTE — candidates only; do NOT append to atlas.overlay.n6 without review.\n")
+    n6.push("# Generated by tool/anima_engine_harvest.hexa.\n")
+    n6.push("\n")
+    n6.push(n6_parts.join(""))
+
+    let md_path = "incoming/notes/2026-05-14-anima-engine-harvest-candidates.md"
+    let n6_path = "incoming/notes/2026-05-14-anima-engine-harvest-candidates.n6"
+    let md_body = md.join("")
+    let n6_body = n6.join("")
+    write_file(md_path, md_body)
+    write_file(n6_path, n6_body)
+    println("  wrote: " + md_path + " (" + to_string(len(md_body)) + " bytes)")
+    println("  wrote: " + n6_path + " (" + to_string(len(n6_body)) + " bytes)")
+    println("  unique-citations: " + to_string(unique_citations))
+    println("  rows: @P=" + to_string(n_p_rows) + " @L=" + to_string(n_l_rows) + " @?=" + to_string(n_q_rows))
+    println("done. REVIEW BEFORE PROMOTE.")
+}
