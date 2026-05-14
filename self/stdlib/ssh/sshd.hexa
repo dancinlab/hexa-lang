@@ -137,6 +137,77 @@ fn _sd_make_sig_blob(sig: [int]) -> [int] {
     return p
 }
 
+// Server-side rekey (RFC 4253 §9). Called by the pump loop when it
+// receives SSH_MSG_KEXINIT mid-stream. Runs the encrypted KEX flow
+// using the CURRENT keys, then derives NEW keys (session_id stays at
+// the original H per RFC). Sequence counters keep incrementing.
+fn _sd_rekey(
+    cfd: int,
+    c2s_seq: int, s2c_seq: int,
+    cur_dec_key: [int], cur_enc_key: [int],
+    host_pk: [int], host_sk: [int],
+    session_id: [int],
+    client_banner: string,
+    first_client_kexinit: [int]
+) -> any {
+    let mut cs = c2s_seq
+    let mut ss = s2c_seq
+    let mut cookie: [int] = []
+    let cks = sha512([time_now_ms()])
+    let mut ci = 0
+    while ci < 16 { cookie.push(cks[ci]) ; ci = ci + 1 }
+    let server_kexinit = ssh_kex_build_kexinit(cookie)
+    if !_sd_send_enc(cfd, ss, server_kexinit, cur_enc_key) {
+        return #{ "error": "rekey send KEXINIT" }
+    }
+    ss = ss + 1
+    let r_ki = _sd_recv_enc(cfd, cs, cur_dec_key)
+    if has_key(r_ki, "error") { return #{ "error": "rekey recv KEX_ECDH_INIT: " + str(r_ki["error"]) } }
+    cs = cs + 1
+    if r_ki["payload"][0] != SSH_MSG_KEX_ECDH_INIT {
+        return #{ "error": "rekey: expected KEX_ECDH_INIT got " + str(r_ki["payload"][0]) }
+    }
+    let q_c_str = ssh_get_string(r_ki["payload"], 1)
+    if q_c_str["off"] < 0 { return #{ "error": "rekey bad Q_C" } }
+    let q_c = q_c_str["bytes"]
+    if len(q_c) != 32 { return #{ "error": "rekey Q_C not 32B" } }
+    let eph = x25519_keypair()
+    if has_key(eph, "error") { return #{ "error": "rekey eph keypair" } }
+    let q_s = eph["pub"]
+    let k_secret = x25519_scalarmult(eph["priv"], q_c)
+    if has_key(k_secret, "error") { return #{ "error": "rekey scalarmult" } }
+    let k_s_blob = _sd_make_host_key_blob(host_pk)
+    let h = ssh_kex_compute_h(client_banner, _SSHD_BANNER,
+                              first_client_kexinit, server_kexinit,
+                              k_s_blob, q_c, q_s, k_secret)
+    if type_of(h) != "array" { return #{ "error": "rekey H" } }
+    let sig = ed25519_sign(host_sk, h)
+    if type_of(sig) != "array" { return #{ "error": "rekey host sign" } }
+    let sig_blob = _sd_make_sig_blob(sig)
+    let reply = _sd_build_kex_ecdh_reply(k_s_blob, q_s, sig_blob)
+    if !_sd_send_enc(cfd, ss, reply, cur_enc_key) {
+        return #{ "error": "rekey send KEX_ECDH_REPLY" }
+    }
+    ss = ss + 1
+    let new_keys = ssh_kex_derive_keys(k_secret, h, session_id)
+    if has_key(new_keys, "error") { return #{ "error": "rekey key derive" } }
+    let r_nk = _sd_recv_enc(cfd, cs, cur_dec_key)
+    if has_key(r_nk, "error") { return #{ "error": "rekey recv NEWKEYS: " + str(r_nk["error"]) } }
+    cs = cs + 1
+    if r_nk["payload"][0] != SSH_MSG_NEWKEYS {
+        return #{ "error": "rekey expected client NEWKEYS" }
+    }
+    if !_sd_send_enc(cfd, ss, ssh_kex_build_newkeys(), cur_enc_key) {
+        return #{ "error": "rekey send NEWKEYS" }
+    }
+    ss = ss + 1
+    return #{
+        "c2s_seq": cs, "s2c_seq": ss,
+        "dec_key": new_keys["enc_c2s"],
+        "enc_key": new_keys["enc_s2c"]
+    }
+}
+
 // ── Userauth verification ────────────────────────────────────
 // Parse SSH_MSG_USERAUTH_REQUEST and verify signature.
 //   byte SSH_MSG_USERAUTH_REQUEST
@@ -403,8 +474,8 @@ pub fn ssh_sshd_handle_fd(cfd: int,
     //     server "decrypt incoming" uses enc_c2s, "encrypt outgoing" uses enc_s2c.
     let keys = ssh_kex_derive_keys(k_secret, h, session_id)
     if has_key(keys, "error") { net_close(cfd) ; return #{ "error": "key derive" } }
-    let dec_key = keys["enc_c2s"]   // server decrypts client→server traffic
-    let enc_key = keys["enc_s2c"]   // server encrypts server→client traffic
+    let mut dec_key = keys["enc_c2s"]   // server decrypts client→server traffic
+    let mut enc_key = keys["enc_s2c"]   // server encrypts server→client traffic
 
     // 12. NEWKEYS exchange (seq 2 both ways, plaintext)
     let r_nk_c = _sd_recv_plain(cfd)
@@ -660,6 +731,18 @@ pub fn ssh_sshd_handle_fd(cfd: int,
             c2s_seq = c2s_seq + 1
             let pl = rec["payload"]
             let t = pl[0]
+            // RFC 4253 §9: client-initiated rekey arrives as SSH_MSG_KEXINIT
+            // mid-stream. Run an encrypted KEX flow and swap to new keys.
+            if t == SSH_MSG_KEXINIT {
+                let rk = _sd_rekey(cfd, c2s_seq, s2c_seq, dec_key, enc_key,
+                                    host_pk, host_sk, session_id,
+                                    client_banner, pl)
+                if has_key(rk, "error") { child_dead = true ; break }
+                c2s_seq = rk["c2s_seq"]
+                s2c_seq = rk["s2c_seq"]
+                dec_key = rk["dec_key"]
+                enc_key = rk["enc_key"]
+            }
             if t == SSH_MSG_CHANNEL_DATA {
                 let s = ssh_get_string(pl, 5)
                 if s["off"] > 0 && !stdin_closed {
