@@ -1,0 +1,106 @@
+// absorbed from ~/core/hexa-bio/selftest/n6_axis_computational_verification.py (Apache-2.0, hexa-bio v1.1.0)
+//
+// test/n6_lattice_smoke.hexa — smoke test for compiler/n6_lattice/.
+//
+// Coverage:
+//   - verify_sigma / verify_tau / verify_phi / verify_J2 / verify_master_identity
+//     all return true for n=6 (and the aggregate verdict is PASS).
+//   - n6_axes() returns exactly 5 rows with the canonical names.
+//   - cross_check() reports 0 drift on all 4 invariants and verdict PASS.
+//
+// Run:
+//   hexa run test/n6_lattice_smoke.hexa
+//
+// Sentinel: __N6_LATTICE_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/n6_lattice/verify.hexa"
+import "compiler/n6_lattice/axis_table.hexa"
+import "compiler/n6_lattice/cross_check.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── T1: per-axis verifier surfaces ──────────────────────────────────────
+
+check("verify_sigma() returns true", verify_sigma())
+check("verify_tau()   returns true", verify_tau())
+check("verify_phi()   returns true", verify_phi())
+check("verify_J2()    returns true", verify_J2())
+check("verify_master_identity() returns true", verify_master_identity())
+
+// ── T2: aggregate verifier ──────────────────────────────────────────────
+
+let r = verify_all()
+check("verify_all().verdict == PASS", r.verdict == "PASS")
+check("verify_all().n_pass == 5", r.n_pass == 5)
+check("verify_all().n_total == 5", r.n_total == 5)
+check("verify_all() emits 5 checks", len(r.checks) == 5)
+
+// ── T3: axis table ──────────────────────────────────────────────────────
+
+let xs = n6_axes()
+check("n6_axes() returns exactly 5 rows", len(xs) == 5)
+check("axes[0].name == RIBOZYME", xs[0].name == "RIBOZYME")
+check("axes[1].name == VIROCAPSID", xs[1].name == "VIROCAPSID")
+check("axes[2].name == NANOBOT", xs[2].name == "NANOBOT")
+check("axes[3].name == WEAVE", xs[3].name == "WEAVE")
+check("axes[4].name == QUANTUM", xs[4].name == "QUANTUM")
+
+let mut all_literals_match = true
+let mut i = 0
+while i < len(xs) {
+    if xs[i].sigma != 12 { all_literals_match = false }
+    if xs[i].tau   != 4  { all_literals_match = false }
+    if xs[i].phi   != 2  { all_literals_match = false }
+    if xs[i].J2    != 24 { all_literals_match = false }
+    i = i + 1
+}
+check("every axis row has sigma=12 tau=4 phi=2 J2=24", all_literals_match)
+
+check("n6_axis_by_name(RIBOZYME) round-trips", n6_axis_by_name("RIBOZYME").name == "RIBOZYME")
+check("n6_axis_by_name(BOGUS) returns sentinel 'unknown'", n6_axis_by_name("BOGUS").name == "unknown")
+check("check_axis(RIBOZYME) == true", check_axis("RIBOZYME") == true)
+check("check_axis(WEAVE) == true", check_axis("WEAVE") == true)
+check("check_axis(QUANTUM) == true", check_axis("QUANTUM") == true)
+check("check_axis(BOGUS) == false", check_axis("BOGUS") == false)
+
+// ── T4: cross-axis drift detector ───────────────────────────────────────
+
+let cr = cross_check()
+check("cross_check().verdict == PASS", cr.verdict == "PASS")
+check("cross_check().n_pass == 5", cr.n_pass == 5)
+check("cross_check().n_total == 5", cr.n_total == 5)
+check("cross_check() sigma_drift == 0", cr.sigma_drift == 0)
+check("cross_check() tau_drift   == 0", cr.tau_drift   == 0)
+check("cross_check() phi_drift   == 0", cr.phi_drift   == 0)
+check("cross_check() J2_drift    == 0", cr.J2_drift    == 0)
+
+let mut all_rows_ok = true
+let mut k = 0
+while k < len(cr.rows) {
+    if !cr.rows[k].all_ok { all_rows_ok = false }
+    k = k + 1
+}
+check("every cross_check row has all_ok=true", all_rows_ok)
+
+// ── Summary ─────────────────────────────────────────────────────────────
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  n6_lattice smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__N6_LATTICE_SMOKE__ FAIL")
+} else {
+    println("__N6_LATTICE_SMOKE__ PASS")
+}
