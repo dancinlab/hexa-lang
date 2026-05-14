@@ -1,0 +1,87 @@
+// Smoke — incoming/poc/static_index_lazy_v0.hexa works as advertised.
+//
+// @capabilities [fs_read]
+//
+// Validates:
+//   1. First call to poc_static_atlas_from() loads + caches the fixture
+//      and reports the expected node counts (10 P, 31 C, 5 L, 5 E = 51).
+//   2. Subsequent calls hit the in-memory cache. We verify both
+//      (a) cache-identity (same index across N warm calls) and
+//      (b) timing: N=200 warm-call sweep <= cold-load wall time. Exact
+//      ms-precision is not required (interp clock is `timestamp()` →
+//      seconds), so we use a generous wall-clock fence rather than a
+//      micro-benchmark.
+//   3. poc_atlas_lookup("p_alpha") and ("c_pi") hit; an unknown id misses.
+//
+// Exit code 0 on full PASS, 1 on any FAIL.
+
+use "incoming/poc/static_index_lazy_v0"
+
+fn _assert(label: string, cond: bool, fails: array) -> array {
+    if cond {
+        println("PASS " + label)
+    } else {
+        println("FAIL " + label)
+        fails.push(label)
+    }
+    return fails
+}
+
+pub fn main() {
+    let mut fails: array = []
+    let fixture = "incoming/poc/static_index_lazy_v0_fixture.n6"
+
+    // Reset cache so we measure a cold load.
+    poc_reset_cache()
+
+    let t0 = timestamp()
+    let idx1 = poc_static_atlas_from(fixture)
+    let t1 = timestamp()
+    let cold_s = t1 - t0
+
+    // Sweep 200 warm calls. The cache path should still finish on the
+    // same wall-clock second as the cold load (or faster).
+    let t2 = timestamp()
+    let mut warm_idx_last = idx1
+    let mut k = 0
+    while k < 200 {
+        warm_idx_last = poc_static_atlas_from(fixture)
+        k = k + 1
+    }
+    let t3 = timestamp()
+    let warm_total_s = t3 - t2
+
+    println("cold-load-s " + to_string(cold_s))
+    println("warm-200x-total-s " + to_string(warm_total_s))
+
+    // Count expectations match the fixture (10 P / 31 C / 5 L / 5 E).
+    fails = _assert("p_nodes == 10", len(idx1.p_nodes) == 10, fails)
+    fails = _assert("c_nodes == 31", len(idx1.c_nodes) == 31, fails)
+    fails = _assert("l_nodes == 5",  len(idx1.l_nodes) == 5,  fails)
+    fails = _assert("e_nodes == 5",  len(idx1.e_nodes) == 5,  fails)
+
+    // Cache: identity preserved across calls (hash carries over).
+    fails = _assert("hash preserved", idx1.hash == warm_idx_last.hash, fails)
+    fails = _assert("hash non-empty", len(idx1.hash) > 0, fails)
+
+    // 200 warm calls should fit inside the cold-load second budget. If
+    // each warm call had to re-read+re-parse the fixture, this loop would
+    // take ~200× cold_s; the assertion fences that regression.
+    let cache_wins = warm_total_s <= cold_s + 1
+    fails = _assert("200 warm calls <= cold+1s (cache wins)", cache_wins, fails)
+
+    // Lookup hits.
+    let p_alpha = poc_atlas_lookup("p_alpha")
+    fails = _assert("lookup p_alpha kind==P", p_alpha.kind == "P", fails)
+    let c_pi = poc_atlas_lookup("c_pi")
+    fails = _assert("lookup c_pi kind==C", c_pi.kind == "C", fails)
+    let miss = poc_atlas_lookup("nonexistent_id_xyz")
+    fails = _assert("lookup miss sentinel kind==\"\"", miss.kind == "", fails)
+
+    if len(fails) == 0 {
+        println("RESULT PASS (PoC lazy-load smoke)")
+        return
+    }
+    println("RESULT FAIL " + to_string(len(fails)) + " failed")
+    exit(1)
+}
