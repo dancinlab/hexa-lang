@@ -11149,6 +11149,7 @@ static void _hexa_init_fn_shims(void) {
 #include "native/crypto_blowfish.c"
 #include "native/crypto_openssl.c"
 #include "native/exec_pipe.c"
+#include "native/proc_fork.c"
 
 /* ═══════════════════════════════════════════════════════════════════
  * B20 / roadmap 55 Phase 1 — deterministic FP control-word init.

@@ -3956,6 +3956,10 @@ fn gen2_expr(node) {
                 if name == "time_now_ms" || name == "now_ms" || name == "timestamp_ms" || name == "__builtin_time_now_ms" { return "hexa_time_ms()" }
                 if name == "input"     { return "hexa_input(hexa_str(\"\"))" }
                 if name == "random"    { return "hexa_random()" }
+                // stdlib/os/proc — 0-arg fork helpers (RFC sshd-forking-daemon)
+                if name == "proc_fork"          { return "hexa_proc_fork()" }
+                if name == "proc_setsid"        { return "hexa_proc_setsid()" }
+                if name == "proc_reap_zombies"  { return "hexa_proc_reap_zombies()" }
                 // P7-6 zero-arg time/IO primitives (runtime.c)
                 if name == "read_stdin"       { return "hexa_read_stdin()" }
                 // TUI-PRIM L1 builtins (zero-arg variants — kick T1.A)
@@ -6094,6 +6098,9 @@ fn _is_builtin_name(name) {
     if name == "net_write_bytes" { return true }
     if name == "net_read_bytes" { return true }
     if name == "exec_pipe_open" { return true }
+    if name == "proc_fork" { return true }
+    if name == "proc_setsid" { return true }
+    if name == "proc_reap_zombies" { return true }
     // stdlib/crypto — libsodium-backed primitives (RFC ssh-client)
     if name == "libsodium_available" { return true }
     if name == "sha512" { return true }

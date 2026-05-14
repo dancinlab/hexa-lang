@@ -274,24 +274,6 @@ fn _sd_build_channel_success(remote_id: int) -> [int] {
 pub fn ssh_sshd_serve_once(listen_addr: string,
                             host_priv_path: string, host_priv_pass: string,
                             authorized_keys_path: string) -> any {
-    // 1. Load host key
-    let hk = ssh_keyfile_load_ed25519_pw(host_priv_path, host_priv_pass)
-    if has_key(hk, "error") {
-        return #{ "error": "host key load: " + str(hk["error"]) }
-    }
-    let host_pk = hk["pk"]
-    let host_sk = hk["sk"]
-
-    // 2. Load authorized_keys
-    let ak = ssh_authkeys_load(authorized_keys_path)
-    if has_key(ak, "error") {
-        return #{ "error": "authorized_keys load: " + str(ak["error"]) }
-    }
-    if len(ak) == 0 {
-        return #{ "error": "authorized_keys has no ed25519 entries" }
-    }
-
-    // 3. Listen + accept ONE connection
     let lfd = net_listen(listen_addr)
     if type_of(lfd) != "int" || lfd < 0 {
         return #{ "error": "listen failed: " + str(lfd) }
@@ -302,6 +284,34 @@ pub fn ssh_sshd_serve_once(listen_addr: string,
         return #{ "error": "accept failed: " + str(cfd) }
     }
     net_close(lfd)
+    return ssh_sshd_handle_fd(cfd, host_priv_path, host_priv_pass, authorized_keys_path)
+}
+
+// Handle one already-accepted connection. Closes cfd before returning.
+// Designed so a forking daemon (parent listens + accepts, fork, child
+// closes listen fd and calls this) re-uses the same protocol logic.
+pub fn ssh_sshd_handle_fd(cfd: int,
+                           host_priv_path: string, host_priv_pass: string,
+                           authorized_keys_path: string) -> any {
+    // 1. Load host key
+    let hk = ssh_keyfile_load_ed25519_pw(host_priv_path, host_priv_pass)
+    if has_key(hk, "error") {
+        net_close(cfd)
+        return #{ "error": "host key load: " + str(hk["error"]) }
+    }
+    let host_pk = hk["pk"]
+    let host_sk = hk["sk"]
+
+    // 2. Load authorized_keys
+    let ak = ssh_authkeys_load(authorized_keys_path)
+    if has_key(ak, "error") {
+        net_close(cfd)
+        return #{ "error": "authorized_keys load: " + str(ak["error"]) }
+    }
+    if len(ak) == 0 {
+        net_close(cfd)
+        return #{ "error": "authorized_keys has no ed25519 entries" }
+    }
 
     // 4. Banner exchange
     let our_banner = _SSHD_BANNER
