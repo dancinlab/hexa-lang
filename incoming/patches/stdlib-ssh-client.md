@@ -1,5 +1,14 @@
 # `stdlib/net/ssh.hexa` — SSH client (then server)
 
+**STATUS 2026-05-14: client MVP LANDED** (commit 2d978169) — see
+`self/stdlib/ssh/{wire,kex,ssh}.hexa`. Surface intentionally simpler
+than the original draft below: `ssh_dial(host,port,user,pk,sk) ->
+conn` + `ssh_exec(conn,cmd) -> {stdout,stderr,exit_status}`. No
+struct config / agent / known_hosts / port forwarding yet — those
+are P2 extensions. Stage-A pool transport (`exec("ssh")`) still
+works for now; the new stdlib unblocks pool stage-C (`exec("ssh")`
+disappears). Server side still TODO (Phase 2 below).
+
 **From:** wilson (downstream) — 2026-05-13. P0 #1 of 5 in the
 `u-root/cpu` port — **largest, OK to land last**. Companion meta:
 `stdlib-for-cpu-port.md`. Until this lands, downstream code stays on
