@@ -1,0 +1,115 @@
+// HEXA Native Compiler — Wave 3 doctrine audit (CLI dispatcher)
+//
+// @version 0.1.0
+// @capabilities [pure, fs_read]
+//
+// absorbed from ~/core/hexa-matter/selftest/{hardwall_provenance,
+// falsifier_wellformed,cross_link_integrity}_audit.py (MIT,
+// hexa-matter v1.2.0).
+//
+// Standalone dispatcher for the three Wave-3 audits. Lets agents run
+//
+//   hexa run compiler/atlas/audit_wave3_main.hexa hardwall
+//   hexa run compiler/atlas/audit_wave3_main.hexa falsifier
+//   hexa run compiler/atlas/audit_wave3_main.hexa cross-link
+//   hexa run compiler/atlas/audit_wave3_main.hexa all
+//
+// without touching self/main.hexa. Future CLI surface: `hexa atlas-audit
+// <verb>` should dispatch here (or merge into audit_main.hexa's verb set).
+//
+// Corpus source policy: overlay-only (see audit_main.hexa for rationale
+// — `static_index` materializes 6,594 nodes at module-load which hangs
+// `hexa run` >10 min). The AOT codegen path is fast; this CLI module
+// reads `~/.hx/data/atlas.overlay.n6` via `parse_atlas_file()` instead.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/hardwall_audit"
+use "compiler/atlas/falsifier_wellformed_audit"
+use "compiler/atlas/cross_link_audit"
+use "self/stdlib/argv_skip"
+
+let _OVERLAY_PATH: string = "/Users/ghost/.hx/data/atlas.overlay.n6"
+
+fn _load_corpus() -> array {
+    if !file_exists(_OVERLAY_PATH) {
+        return []
+    }
+    return parse_atlas_file(_OVERLAY_PATH, "atlas.overlay.n6")
+}
+
+pub fn audit_hardwalls() -> AuditResult {
+    return audit_hardwalls_in(_load_corpus())
+}
+
+pub fn audit_falsifier_wellformed() -> AuditResult {
+    return audit_falsifier_wellformed_in(_load_corpus())
+}
+
+pub fn audit_cross_links() -> AuditResult {
+    return audit_cross_links_in(_load_corpus())
+}
+
+fn _run_hardwall() -> i64 {
+    let r = audit_hardwalls()
+    println(hardwall_audit_to_text(r))
+    if r.pass { return 0 }
+    return 1
+}
+
+fn _run_falsifier() -> i64 {
+    let r = audit_falsifier_wellformed()
+    println(falsifier_audit_to_text(r))
+    if r.pass { return 0 }
+    return 1
+}
+
+fn _run_cross_link() -> i64 {
+    let r = audit_cross_links()
+    println(cross_link_audit_to_text(r))
+    if r.pass { return 0 }
+    return 1
+}
+
+fn _run_all() -> i64 {
+    let a = _run_hardwall()
+    let b = _run_falsifier()
+    let c = _run_cross_link()
+    if a != 0 { return a }
+    if b != 0 { return b }
+    return c
+}
+
+fn _usage() {
+    println("usage: hexa run compiler/atlas/audit_wave3_main.hexa <verb>")
+    println("  verbs: hardwall | falsifier | cross-link | all")
+}
+
+fn _cli() -> [string] {
+    let raw = args()
+    let mut out: [string] = []
+    let mut i = skip_invocation_prefix(raw)
+    while i < len(raw) {
+        out.push(raw[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn main(args: array) {
+    let argv = _cli()
+    if len(argv) < 1 {
+        _usage()
+        exit(2)
+    }
+    let verb = to_string(argv[0])
+    let mut rc: i64 = 0
+    if verb == "hardwall"        { rc = _run_hardwall() }
+    else if verb == "falsifier"  { rc = _run_falsifier() }
+    else if verb == "cross-link" { rc = _run_cross_link() }
+    else if verb == "all"        { rc = _run_all() }
+    else {
+        _usage()
+        rc = 2
+    }
+    exit(rc)
+}

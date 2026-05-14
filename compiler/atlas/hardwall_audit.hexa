@@ -1,0 +1,113 @@
+// HEXA Native Compiler — Wave 3 doctrine audit (hardwall provenance)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// absorbed from ~/core/hexa-matter/selftest/hardwall_provenance_audit.py
+// (MIT, hexa-matter v1.2.0).
+//
+// hexa-lang adaptation: instead of regex-scanning markdown for HARD_WALL /
+// SOFT_WALL / UNCLEAR / UNPROVEN honesty tokens with a curated citation
+// allowlist, this audit operates on the structured atlas grammar. A node
+// claims a "ceiling" (HARD_WALL equivalent) by carrying a `[10*]` grade —
+// i.e. `grade.value == 10 && grade.verified`. For every such claim we
+// require ONE of:
+//
+//   (a) `!!` breakthrough edge present  (`grade.breakthrough || len(edges.breakthroughs) > 0`)
+//   (b) `|>` verified_by script reference present (`len(edges.verified_by) > 0`)
+//
+// Either token traces the claim back to a breakthrough log or a runnable
+// verifier — the same role citations play in hexa-matter's markdown corpus.
+// A `[10*]` node with neither is a provenance violation.
+//
+// Conservative scope: only flags nodes that actively make a ceiling claim
+// (`[10*]`). Lower grades, hypothesis markers, and ungraded nodes are
+// passthrough — they aren't claims to begin with.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/external_entity_audit"   // for AuditResult + Violation types
+
+// --- internal helpers ------------------------------------------------------
+
+// True if the node carries a `[10*]` ceiling claim (or higher verified
+// grade, e.g. `[11*]`). Mirror of hexa-matter's HARD_WALL token detection
+// in the structured grammar.
+fn _is_ceiling_claim(node: AtlasNode) -> bool {
+    if node.grade.value < 10 { return false }
+    if !node.grade.verified { return false }
+    return true
+}
+
+// True if the node has provenance: either a `!!` breakthrough flag/edge
+// OR a `|>` verified_by reference.
+fn _has_provenance(node: AtlasNode) -> bool {
+    if node.grade.breakthrough { return true }
+    if len(node.edges.breakthroughs) > 0 { return true }
+    if len(node.edges.verified_by) > 0 { return true }
+    return false
+}
+
+// Scan a single node. Returns an empty Violation if the node is fine
+// (not a ceiling claim, or ceiling+provenance present). Otherwise
+// returns a populated Violation.
+fn _scan_hardwall(node: AtlasNode) -> Violation {
+    let empty = Violation { node_id: "", reason: "", span_start: -1, span_end: -1 }
+    if !_is_ceiling_claim(node) { return empty }
+    if _has_provenance(node) { return empty }
+    return Violation {
+        node_id: node.id,
+        reason: "FAIL: ceiling claim [10*] without !! breakthrough or |> verified_by provenance",
+        span_start: 0,
+        span_end: len(node.raw)
+    }
+}
+
+// --- public API ------------------------------------------------------------
+
+// audit_hardwalls_in — workhorse audit. Caller supplies an arbitrary
+// node array; the rodata+overlay wrapper `audit_hardwalls()` lives in
+// compiler/atlas/audit_wave3_main.hexa so this module stays cheap to
+// import.
+pub fn audit_hardwalls_in(nodes: array) -> AuditResult {
+    let violations = []
+    let mut claims = 0
+    let mut i = 0
+    while i < len(nodes) {
+        let n = nodes[i]
+        if _is_ceiling_claim(n) { claims = claims + 1 }
+        let v = _scan_hardwall(n)
+        if v.node_id != "" { violations.push(v) }
+        i = i + 1
+    }
+    let pass = len(violations) == 0
+    let summary = if pass {
+        "hardwall_audit PASS — " + to_string(len(nodes)) + " nodes scanned, " +
+        to_string(claims) + " ceiling claim(s), 0 untraceable"
+    } else {
+        "hardwall_audit FAIL — " + to_string(len(violations)) + " untraceable ceiling claim(s) of " +
+        to_string(claims) + " across " + to_string(len(nodes)) + " nodes"
+    }
+    return AuditResult {
+        pass: pass,
+        violations: violations,
+        summary: summary
+    }
+}
+
+// hardwall_audit_to_text — human-readable rendering.
+pub fn hardwall_audit_to_text(r: AuditResult) -> string {
+    let parts = []
+    parts.push(r.summary)
+    parts.push("\n")
+    let mut i = 0
+    while i < len(r.violations) {
+        let v = r.violations[i]
+        parts.push("  [FAIL] ")
+        parts.push(v.node_id)
+        parts.push("  ")
+        parts.push(v.reason)
+        parts.push("\n")
+        i = i + 1
+    }
+    return parts.join("")
+}

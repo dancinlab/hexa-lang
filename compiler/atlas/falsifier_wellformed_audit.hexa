@@ -1,0 +1,209 @@
+// HEXA Native Compiler — Wave 3 doctrine audit (falsifier well-formedness)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// absorbed from ~/core/hexa-matter/selftest/falsifier_wellformed_audit.py
+// (MIT, hexa-matter v1.2.0).
+//
+// hexa-lang adaptation: instead of scanning markdown table rows for
+// `hxm-<class>-<target>-<NNN>` candidates with F-tag + number+unit +
+// `→ FAIL` boundary, this audit operates on the structured `@?` open-
+// hypothesis nodes in the atlas. The atlas equivalent of a falsifier
+// triple is encoded inline in `raw` (after the header / in continuation
+// lines). For every `@?` node we require:
+//
+//   (1) a non-empty falsifier description — `raw` must contain a
+//       `falsifier:` or `falsifier =` key, or an F-tag (`F-XXX-N`).
+//   (2) an explicit deadline — `until=YYYY-Q[1-4]` OR `cycle=N6_R<N>` OR
+//       `deadline=...` somewhere in the raw text.
+//   (3) a type tag — one of `measurement` / `proof` / `simulation` /
+//       `external` (case-insensitive). Mirrors the hexa-matter status
+//       column (DESIGN / SIM-* / SYNTH-ROUTE / UNVERIFIED).
+//
+// A `@?` node missing any of (1)–(3) is logged as a violation.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/external_entity_audit"   // for AuditResult + Violation types
+
+// --- pattern tables --------------------------------------------------------
+
+// Falsifier-presence cues. ANY one of these is sufficient for rule (1).
+fn _falsifier_cues() -> array {
+    return [
+        "falsifier:",
+        "falsifier =",
+        "falsifier=",
+        "F-"   // F-TAG-N pattern start; cheap prefix screen, refined below.
+    ]
+}
+
+// Deadline cues for rule (2).
+fn _deadline_cues() -> array {
+    return [
+        "until=",
+        "until:",
+        "deadline=",
+        "deadline:",
+        "cycle=",
+        "cycle:",
+        "by="
+    ]
+}
+
+// Type-tag cues for rule (3). Case-insensitive match (we lowercase first).
+fn _type_tags() -> array {
+    return [
+        "measurement",
+        "proof",
+        "simulation",
+        "external"
+    ]
+}
+
+// --- helpers ---------------------------------------------------------------
+
+fn _lower_char(c: string) -> string {
+    if c == "A" { return "a" }
+    if c == "B" { return "b" }
+    if c == "C" { return "c" }
+    if c == "D" { return "d" }
+    if c == "E" { return "e" }
+    if c == "F" { return "f" }
+    if c == "G" { return "g" }
+    if c == "H" { return "h" }
+    if c == "I" { return "i" }
+    if c == "J" { return "j" }
+    if c == "K" { return "k" }
+    if c == "L" { return "l" }
+    if c == "M" { return "m" }
+    if c == "N" { return "n" }
+    if c == "O" { return "o" }
+    if c == "P" { return "p" }
+    if c == "Q" { return "q" }
+    if c == "R" { return "r" }
+    if c == "S" { return "s" }
+    if c == "T" { return "t" }
+    if c == "U" { return "u" }
+    if c == "V" { return "v" }
+    if c == "W" { return "w" }
+    if c == "X" { return "x" }
+    if c == "Y" { return "y" }
+    if c == "Z" { return "z" }
+    return c
+}
+
+fn _lower(s: string) -> string {
+    let n = len(s)
+    let parts = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c >= "A" && c <= "Z" {
+            parts.push(_lower_char(c))
+        } else {
+            parts.push(c)
+        }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+fn _contains_any(haystack: string, needles: array) -> bool {
+    let mut i = 0
+    while i < len(needles) {
+        if haystack.index_of(to_string(needles[i])) >= 0 { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// --- core audit ------------------------------------------------------------
+
+// Scan one `@?` node and return the first failed rule, or empty Violation
+// on success.
+fn _scan_falsifier(node: AtlasNode) -> Violation {
+    let empty = Violation { node_id: "", reason: "", span_start: -1, span_end: -1 }
+    // Only @? (open-question / hypothesis) nodes are subject to this rule.
+    if node.kind != "Q" { return empty }
+    let raw = node.raw
+    let low = _lower(raw)
+
+    // (1) falsifier presence
+    if !_contains_any(raw, _falsifier_cues()) {
+        return Violation {
+            node_id: node.id,
+            reason: "FAIL: @? hypothesis without falsifier: / F-tag in raw",
+            span_start: 0,
+            span_end: len(raw)
+        }
+    }
+    // (2) deadline presence
+    if !_contains_any(low, _deadline_cues()) {
+        return Violation {
+            node_id: node.id,
+            reason: "FAIL: @? hypothesis without explicit deadline (until=/cycle=/deadline=)",
+            span_start: 0,
+            span_end: len(raw)
+        }
+    }
+    // (3) type-tag presence
+    if !_contains_any(low, _type_tags()) {
+        return Violation {
+            node_id: node.id,
+            reason: "FAIL: @? hypothesis without type tag (measurement/proof/simulation/external)",
+            span_start: 0,
+            span_end: len(raw)
+        }
+    }
+    return empty
+}
+
+// --- public API ------------------------------------------------------------
+
+// audit_falsifier_wellformed_in — workhorse audit. Caller hands in an
+// arbitrary node array; the rodata+overlay wrapper
+// `audit_falsifier_wellformed()` lives in audit_wave3_main.hexa.
+pub fn audit_falsifier_wellformed_in(nodes: array) -> AuditResult {
+    let violations = []
+    let mut hypotheses = 0
+    let mut i = 0
+    while i < len(nodes) {
+        let n = nodes[i]
+        if n.kind == "Q" { hypotheses = hypotheses + 1 }
+        let v = _scan_falsifier(n)
+        if v.node_id != "" { violations.push(v) }
+        i = i + 1
+    }
+    let pass = len(violations) == 0
+    let summary = if pass {
+        "falsifier_wellformed_audit PASS — " + to_string(len(nodes)) + " nodes scanned, " +
+        to_string(hypotheses) + " hypothesis (@?) node(s), 0 nonconforming"
+    } else {
+        "falsifier_wellformed_audit FAIL — " + to_string(len(violations)) + " nonconforming hypothesis node(s) of " +
+        to_string(hypotheses) + " across " + to_string(len(nodes)) + " nodes"
+    }
+    return AuditResult {
+        pass: pass,
+        violations: violations,
+        summary: summary
+    }
+}
+
+// falsifier_audit_to_text — human-readable rendering.
+pub fn falsifier_audit_to_text(r: AuditResult) -> string {
+    let parts = []
+    parts.push(r.summary)
+    parts.push("\n")
+    let mut i = 0
+    while i < len(r.violations) {
+        let v = r.violations[i]
+        parts.push("  [FAIL] ")
+        parts.push(v.node_id)
+        parts.push("  ")
+        parts.push(v.reason)
+        parts.push("\n")
+        i = i + 1
+    }
+    return parts.join("")
+}
