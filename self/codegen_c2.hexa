@@ -868,7 +868,8 @@ fn codegen_c2(ast) {
             }
             if _cnt > 1 {
                 _main_decls.push(_mlnm)
-                _main_hoists.push("    HexaVal " + _mlnm + " = hexa_void();\n")
+                // POSIX collision fix (see line ~1306 for fn-local mirror).
+                _main_hoists.push("    HexaVal " + _hexa_mangle_ident(_mlnm) + " = hexa_void();\n")
             }
         }
         _mli = _mli + 1
@@ -1297,7 +1298,13 @@ fn gen2_fn_decl(node) {
             if cnt > 1 {
                 _hoisted.push(nm)
                 _gen2_declared_names.push(nm)
-                hoists.push("    HexaVal " + nm + " = hexa_void();\n")
+                // POSIX collision fix: mangle hoisted local-var decl
+                // (mirrors the existing mangle at the LetStmt site at
+                // line ~2106). Without this, `let close = peek()` hoists
+                // as `HexaVal close = hexa_void();` (bare) while the
+                // assignment emits `u_close = peek();` (mangled), causing
+                // "undeclared identifier u_close" in clang.
+                hoists.push("    HexaVal " + _hexa_mangle_ident(nm) + " = hexa_void();\n")
             }
         }
         ii = ii + 1
@@ -3628,6 +3635,14 @@ fn gen2_expr(node) {
             }
             if name == "exec" {
                 return "hexa_exec(" + gen2_expr(node.args[0]) + ")"
+            }
+            // mkdir(path) — interpreter has it as builtin; AOT path needs
+            // routing to POSIX `mkdir(path, 0755)` since `mkdir` collides
+            // with POSIX `bind`/`open`/etc-style POSIX surface (cf 9f9e9799
+            // mangle allowlist). Returns hexa_void() so call sites in
+            // statement position type-check.
+            if name == "mkdir" {
+                return "((void)mkdir(HX_STR(" + gen2_expr(node.args[0]) + "), 0755), hexa_void())"
             }
             if name == "exec_with_status" {
                 return "hexa_exec_with_status(" + gen2_expr(node.args[0]) + ")"
@@ -6583,7 +6598,8 @@ fn codegen_c2_full(ast) {
             }
             if _cnt_full > 1 {
                 _main_decls_full.push(_mlnm_full)
-                _main_hoists_full.push("    HexaVal " + _mlnm_full + " = hexa_void();\n")
+                // POSIX collision fix (see line ~1306 for fn-local mirror).
+                _main_hoists_full.push("    HexaVal " + _hexa_mangle_ident(_mlnm_full) + " = hexa_void();\n")
             }
         }
         _mli_full = _mli_full + 1
