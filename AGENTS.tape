@@ -50,6 +50,8 @@
 
 @I id001 := "hexa-lang" :: identity-claim [d=2026-05-14 active]
   kind = "native compiler with atlas-bound theorems"
+  brief = "native compiler with atlas-bound theorems · 8 strict-lint stages · no LLVM · no C-transpile"
+  parent = "dancinlab"
   axes = "8 strict-lint stages · citation-enforced · no LLVM · no C-transpile"
   signature = "💎 perfect-number programming language · n=6 primitives"
   consumers = "wilson (downstream — runtime/agent) · echoes (downstream — discoveries) · all hexa-* repos"
@@ -99,7 +101,6 @@
 @D g4 := "honesty-obligation-external" :: governance [required deny:write]
   rule = "Claims about external compilers / language ecosystems (Rust · Swift · Zig · OCaml · GHC · LLVM · MSVC · gcc · clang) must NOT include lattice-fit assertions."
   remedy = "Use that ecosystem's OWN invariants (Rust's borrow-checker · GHC's type-class lookup · LLVM's SSA · etc.)"
-  authority = "raw#10 C3 · [@x_lattice_policy] §1.3"
   @> AGENTS.md
 
 @D g5 := "hexa-native-only" :: governance [required deny:write]
@@ -128,7 +129,6 @@
 
 @F f1 := "lattice-fit-on-external-language" :: governance [required deny:write]
   pattern = "applying n=6 lattice as derivation rule to Rust / Swift / Zig / OCaml / GHC / LLVM / MSVC / gcc / clang internals"
-  why = "raw#10 C3 — external compilers use their own published invariants"
   exception = "values may coincidentally match — observation OK, derivation NOT OK"
 
 @F f2 := "llvm-c-transpile-backend" :: governance [required deny:write]
@@ -163,7 +163,6 @@
   url = "https://github.com/dancinlab/wilson/blob/main/AGENTS.tape"
   scope = "downstream-to-upstream patch flow — wilson, echoes, anima file at incoming/patches/"
 
-@X x_raw_10_c3 := "echoes raw#10 C3" :: governance-decision [d=2026-04-21 active]
   scope = "honest-caveat origin · forbidden lattice-fit on external entities"
 
 @X x_tape_spec := "tape v1.2 spec" :: spec [d=2026-05-14 active]
