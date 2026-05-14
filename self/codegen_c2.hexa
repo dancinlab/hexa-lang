@@ -805,6 +805,17 @@ fn codegen_c2(ast) {
     // Collect sections as arrays, join at end
     let mut fwd_parts = []
     let mut global_parts = []
+    // C7-prep / stage1-bypass: enum #defines must precede ANY code that
+    // references them (fn bodies, lambda defs, fnref thunks). For normal
+    // single-file source this happens for free because EnumDecls precede
+    // FnDecls in source order; for FLATTENED sources (tool/flatten_imports)
+    // the enum decls from downstream files (compiler/diag/catalog.hexa,
+    // compiler/check/ast.hexa, …) get inlined AFTER fn bodies from earlier
+    // files (self/main.hexa) that reference them via match expressions on
+    // enum values. Collect enums into a dedicated section so they emit
+    // BEFORE fn_parts regardless of source position. See bind_flat probe
+    // 261 → 2 errors (closing 259 enum forward-reference errors).
+    let mut enum_parts = []
     let mut fn_parts = []
     // init_parts: global variable initialization only (LetMutStmt, LetStmt,
     // ComptimeConst, ExternFnDecl dlopen). Emitted as a separate C function
@@ -891,7 +902,10 @@ fn codegen_c2(ast) {
             fwd_parts.push(gen2_struct_forward(ast[i]) + "\n")
             fn_parts.push(gen2_struct_decl(ast[i]) + "\n\n")
         } else if k == "EnumDecl" {
-            fn_parts.push(gen2_enum_decl(ast[i]) + "\n")
+            // C7-prep / stage1-bypass: route to enum_parts (emitted as a
+            // prelude block before fn_parts) so flattened-source consumers
+            // see the #define macros before any fn body that references them.
+            enum_parts.push(gen2_enum_decl(ast[i]) + "\n")
         } else if k == "ImplBlock" {
             let ib = gen2_impl_block(ast[i])
             fwd_parts.push(ib.forward)
@@ -1016,6 +1030,15 @@ fn codegen_c2(ast) {
     parts.push(fwd_parts.join(""))
     parts.push("\n")
     parts.push(global_parts.join(""))
+    parts.push("\n")
+    // C7-prep / stage1-bypass enum-ordering fix: emit ALL enum #defines
+    // here as a prelude block, BEFORE any code that may reference enum
+    // constants (lambda defs, fnref thunks, fn bodies). For source-order
+    // input the original behavior is preserved (enums emitted before fns
+    // anyway); for FLATTENED input (tool/flatten_imports inlining several
+    // .hexa files) this guarantees the #defines precede fn bodies even
+    // when the original file order interleaves them.
+    parts.push(enum_parts.join(""))
     parts.push("\n")
     // M4: string literal deduplication — static HexaVal slots + init function
     // rt#32-SL: decls emitted via deterministic _strlit_counter loop (mirror
@@ -6519,6 +6542,12 @@ fn codegen_c2_full(ast) {
     // Collect sections as arrays, join at end (avoid O(n²) concat)
     let mut fwd_parts = []
     let mut global_parts = []
+    // C7-prep / stage1-bypass enum-ordering fix (mirror of codegen_c2):
+    // dedicated enum_parts emitted before fn_parts so flattened-source
+    // inputs (multi-module merge from tool/flatten_imports) produce a
+    // .c file where every enum #define precedes every fn body that may
+    // reference it via match expressions on enum values.
+    let mut enum_parts = []
     let mut fn_parts = []
     // init_parts: global variable initialization only (LetMutStmt, LetStmt,
     // ComptimeConst, ExternFnDecl dlopen). Kept in sync with codegen_c2.
@@ -6586,7 +6615,9 @@ fn codegen_c2_full(ast) {
             fwd_parts.push(gen2_struct_forward(ast[i]) + "\n")
             fn_parts.push(gen2_struct_decl(ast[i]) + "\n\n")
         } else if k == "EnumDecl" {
-            fn_parts.push(gen2_enum_decl(ast[i]) + "\n")
+            // C7-prep / stage1-bypass: route to enum_parts (mirror of
+            // codegen_c2). Emitted as a prelude block before fn_parts.
+            enum_parts.push(gen2_enum_decl(ast[i]) + "\n")
         } else if k == "ImplBlock" {
             let ib = gen2_impl_block(ast[i])
             fwd_parts.push(ib.forward)
@@ -6692,6 +6723,17 @@ fn codegen_c2_full(ast) {
     out_parts.push(fwd_parts.join(""))
     out_parts.push("\n")
     out_parts.push(global_parts.join(""))
+    out_parts.push("\n")
+    // C7-prep / stage1-bypass enum-ordering fix (mirror of codegen_c2):
+    // emit ALL enum #defines as a prelude block BEFORE any code that may
+    // reference enum constants (lambda defs, fnref thunks, fn bodies).
+    // Without this, FLATTENED inputs (tool/flatten_imports merging multiple
+    // .hexa files) produce .c where enum #defines from downstream files
+    // come AFTER fn bodies from earlier files that match on enum values,
+    // causing 250+ "use of undeclared identifier <Enum>_<Variant>" errors
+    // in clang. See compiler/check/bind probe: 261 → 2 (closes 259 enum
+    // forward-reference errors; remaining 2 are flatten gaps).
+    out_parts.push(enum_parts.join(""))
     out_parts.push("\n")
     // rt#32-SL: emit string literal static slots + init function (mirror of
     // codegen_c2 main emit path). Deterministic loop from _strlit_counter.
