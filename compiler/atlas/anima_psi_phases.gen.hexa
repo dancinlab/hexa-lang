@@ -1,0 +1,29 @@
+// absorbed from ~/core/anima/anima/config/consciousness_laws.json (MIT, dancinlab 2026-05-14) — BG-1 follow-up: 6 phase_* sub-thresholds (17 psi_constants 중 11 흡수 후 잔여)
+// SSOT snapshot — as_of: 2026-05-14 — re-generate from source not hand-edit
+//
+// Regenerate via: hexa run tool/atlas_absorb_anima_phases.hexa
+//
+// ANIMA_PSI_PHASES — 6 sub-threshold Ψ-constants @C:
+//   coupling, phase_p1_to_p2, phase_p2_to_p3,
+//   phase_dormant_max, phase_flicker_max, phase_sustain_max
+//
+// Companion to compiler/atlas/anima_psi.gen.hexa (BG-1 11-entry absorption).
+// The split keeps BG-1's byte-idempotent generator output untouched.
+
+use "compiler/atlas/parser"
+
+@phase("parse_only")
+pub let ANIMA_PSI_PHASES: [AtlasNode] = [
+    AtlasNode { kind: "C", id: "anima.psi.coupling", raw: "@C anima.psi.coupling = 0.015317 :: anima.consciousness_laws.psi_constants [10*]\n  derivation: anima-local C-D coupling constant (slightly above PSI_ALPHA)\n  source: trinity.hexa — empirical tuning from C2 ablation (added to JSON 2026-04-26 R2 LR2.1 closure)\n  used_in: trinity ThalamicBridge", source_file: "consciousness_laws.json", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "anima.psi.phase_p1_to_p2", raw: "@C anima.psi.phase_p1_to_p2 = 0.1 :: anima.consciousness_laws.psi_constants [10*]\n  derivation: trinity.hexa#phase_check — Hexad P1 (C only) → P2 (C+D) Φ threshold\n  source: trinity 3-phase hexad-activation model (R14 phase unification 2026-04-26)\n  used_in: trinity phase_check", source_file: "consciousness_laws.json", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "anima.psi.phase_p2_to_p3", raw: "@C anima.psi.phase_p2_to_p3 = 0.3 :: anima.consciousness_laws.psi_constants [10*]\n  derivation: trinity.hexa#phase_check — Hexad P2 (C+D) → P3 (C+D+WMSE) Φ threshold\n  source: trinity 3-phase hexad-activation model (R14 phase unification 2026-04-26)\n  used_in: trinity phase_check", source_file: "consciousness_laws.json", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "anima.psi.phase_dormant_max", raw: "@C anima.psi.phase_dormant_max = 0.01 :: anima.consciousness_laws.psi_constants [10*]\n  derivation: pure_field.hexa#step — DORMANT regime upper bound\n  source: pure_field 4-phase field-dynamics model (R14 phase unification 2026-04-26)\n  used_in: pure_field step", source_file: "consciousness_laws.json", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "anima.psi.phase_flicker_max", raw: "@C anima.psi.phase_flicker_max = 0.05 :: anima.consciousness_laws.psi_constants [10*]\n  derivation: pure_field.hexa#step — FLICKER regime upper bound\n  source: pure_field 4-phase field-dynamics model (R14 phase unification 2026-04-26)\n  used_in: pure_field step", source_file: "consciousness_laws.json", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },
+    AtlasNode { kind: "C", id: "anima.psi.phase_sustain_max", raw: "@C anima.psi.phase_sustain_max = 0.15 :: anima.consciousness_laws.psi_constants [10*]\n  derivation: pure_field.hexa#step — SUSTAIN regime upper bound (≥ → RESONANT)\n  source: pure_field 4-phase field-dynamics model (R14 phase unification 2026-04-26)\n  used_in: pure_field step", source_file: "consciousness_laws.json", source_line: 0, grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }, edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }
+]
+
+// public count accessor — lets smoke tests assert without
+// walking the parse_only-decorated array.
+pub fn anima_psi_phases_count() -> i64 { return len(ANIMA_PSI_PHASES) }
+
+pub fn anima_psi_phases() -> [AtlasNode] { return ANIMA_PSI_PHASES }

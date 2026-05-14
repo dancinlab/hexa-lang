@@ -1,0 +1,183 @@
+// tool/atlas_absorb_anima_phases.hexa — BG-1 follow-up (2026-05-14)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+//
+// Read-only on ~/core/anima/. Emits:
+//   1. compiler/atlas/anima_psi_phases.gen.hexa  (6 sub-threshold Ψ-constants)
+//
+// Companion to tool/atlas_absorb_anima.hexa — that wave covered the 11
+// non-phase psi_constants entries; this generator covers the remaining
+// 6 (17 total in consciousness_laws.json#psi_constants). The split keeps
+// BG-1's byte-idempotent anima_psi.gen.hexa output untouched.
+//
+// Source SSOT (MIT, dancinlab):
+//   ~/core/anima/anima/config/consciousness_laws.json
+//
+// Run:
+//   hexa run tool/atlas_absorb_anima_phases.hexa
+//
+// Reproducibility: re-running this tool regenerates the .gen.hexa file
+// byte-identically (modulo the timestamp header line).
+
+// ── string escaping (mirrors compiler/atlas/embed.hexa::_escape_string) ──
+
+fn _escape_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+
+fn _escape_string(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        chunks.push(_escape_char(c))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+// ── helpers ────────────────────────────────────────────────────────────
+
+let _ZERO_GRADE = "GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }"
+let _ZERO_EDGES = "EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }"
+
+// Emit a single AtlasNode literal with a pre-computed raw payload.
+fn _emit_node(kind: string, id: string, raw: string, source_file: string, source_line) -> string {
+    let parts = []
+    parts.push("    AtlasNode { kind: \"")
+    parts.push(_escape_string(kind))
+    parts.push("\", id: \"")
+    parts.push(_escape_string(id))
+    parts.push("\", raw: \"")
+    parts.push(_escape_string(raw))
+    parts.push("\", source_file: \"")
+    parts.push(_escape_string(source_file))
+    parts.push("\", source_line: ")
+    parts.push(to_string(source_line))
+    parts.push(", grade: ")
+    parts.push(_ZERO_GRADE)
+    parts.push(", edges: ")
+    parts.push(_ZERO_EDGES)
+    parts.push(" }")
+    return parts.join("")
+}
+
+// ── psi-phase absorber (6 sub-threshold entries) ──────────────────────
+//
+// BG-1 (anima_psi.gen.hexa) covered these 11 entries:
+//   alpha, balance, steps, entropy, gate_train, gate_infer, gate_micro,
+//   f_critical, f_lethal, bio_noise, soc_glacial.
+// This follow-up covers the remaining 6 — all sub-threshold / phase
+// transition constants used by trinity#phase_check and pure_field#step:
+
+let _PHASE_KEYS = [
+    "coupling",
+    "phase_p1_to_p2",
+    "phase_p2_to_p3",
+    "phase_dormant_max",
+    "phase_flicker_max",
+    "phase_sustain_max"
+]
+
+fn _psi_raw(name: string, entry) -> string {
+    // Mirrors tool/atlas_absorb_anima.hexa::_psi_raw — pack JSON
+    // provenance (derivation/source/used_in) into AtlasNode.raw rather
+    // than extending the schema.
+    let parts = []
+    parts.push("@C anima.psi.")
+    parts.push(name)
+    parts.push(" = ")
+    parts.push(to_string(entry["value"]))
+    parts.push(" :: anima.consciousness_laws.psi_constants [10*]\n")
+    parts.push("  derivation: ")
+    parts.push(to_string(entry["derivation"]))
+    parts.push("\n")
+    parts.push("  source: ")
+    parts.push(to_string(entry["source"]))
+    if entry["used_in"] != null {
+        parts.push("\n  used_in: ")
+        let arr = entry["used_in"]
+        let n = len(arr)
+        let mut i = 0
+        while i < n {
+            if i > 0 { parts.push(", ") }
+            parts.push(to_string(arr[i]))
+            i = i + 1
+        }
+    }
+    return parts.join("")
+}
+
+fn _emit_psi_phases(psi) -> string {
+    let parts = []
+    parts.push("@phase(\"parse_only\")\n")
+    parts.push("pub let ANIMA_PSI_PHASES: [AtlasNode] = [\n")
+    let n = len(_PHASE_KEYS)
+    let mut i = 0
+    while i < n {
+        let key = to_string(_PHASE_KEYS[i])
+        let entry = psi[key]
+        let raw = _psi_raw(key, entry)
+        parts.push(_emit_node("C", "anima.psi." + key, raw, "consciousness_laws.json", 0))
+        if i + 1 < n { parts.push(",") }
+        parts.push("\n")
+        i = i + 1
+    }
+    parts.push("]\n\n")
+    return parts.join("")
+}
+
+// ── gen file header ────────────────────────────────────────────────────
+
+fn _emit_file(psi) -> string {
+    let parts = []
+    parts.push("// absorbed from ~/core/anima/anima/config/consciousness_laws.json (MIT, dancinlab 2026-05-14) — BG-1 follow-up: 6 phase_* sub-thresholds (17 psi_constants 중 11 흡수 후 잔여)\n")
+    parts.push("// SSOT snapshot — as_of: 2026-05-14 — re-generate from source not hand-edit\n")
+    parts.push("//\n")
+    parts.push("// Regenerate via: hexa run tool/atlas_absorb_anima_phases.hexa\n")
+    parts.push("//\n")
+    parts.push("// ANIMA_PSI_PHASES — 6 sub-threshold Ψ-constants @C:\n")
+    parts.push("//   coupling, phase_p1_to_p2, phase_p2_to_p3,\n")
+    parts.push("//   phase_dormant_max, phase_flicker_max, phase_sustain_max\n")
+    parts.push("//\n")
+    parts.push("// Companion to compiler/atlas/anima_psi.gen.hexa (BG-1 11-entry absorption).\n")
+    parts.push("// The split keeps BG-1's byte-idempotent generator output untouched.\n")
+    parts.push("\n")
+    parts.push("use \"compiler/atlas/parser\"\n")
+    parts.push("\n")
+    parts.push(_emit_psi_phases(psi))
+    parts.push("// public count accessor — lets smoke tests assert without\n")
+    parts.push("// walking the parse_only-decorated array.\n")
+    parts.push("pub fn anima_psi_phases_count() -> i64 { return len(ANIMA_PSI_PHASES) }\n")
+    parts.push("\n")
+    parts.push("pub fn anima_psi_phases() -> [AtlasNode] { return ANIMA_PSI_PHASES }\n")
+    return parts.join("")
+}
+
+// ── driver ─────────────────────────────────────────────────────────────
+
+fn main() {
+    let home = env("HOME")
+    let src_psi = home + "/core/anima/anima/config/consciousness_laws.json"
+
+    println("anima absorption — BG-1 follow-up (6 phase_* sub-thresholds)")
+    println("  source: " + src_psi)
+
+    let raw = read_file(src_psi)
+    let root = json_parse(raw)
+    let psi = root["psi_constants"]
+
+    let out = "compiler/atlas/anima_psi_phases.gen.hexa"
+    let body = _emit_file(psi)
+    write_file(out, body)
+    println("  wrote: " + out + " (" + to_string(len(body)) + " bytes)")
+
+    println("done.")
+}
