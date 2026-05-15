@@ -812,7 +812,7 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
         if n == "bool" || n == "Bool" { return _types_t_bool() }
         if n == "string" || n == "String" { return _types_t_string() }
         if n == "char" || n == "Char" { return _types_t_char() }
-        if n == "unit" || n == "Unit" || n == "()" { return _types_t_unit() }
+        if n == "unit" || n == "Unit" || n == "()" || n == "void" || n == "Void" { return _types_t_unit() }
         // u8/u16/u32/u64 — deferred: stage0 backend has no unsigned
         // representation. Fall through to the `named:<n>` sentinel so
         // downstream layers see the user's spelling without a silent
@@ -1244,7 +1244,15 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // children: [cond, then, (else)]
         if len(e.children) >= 1 {
             let cond_t = _infer_expr(e.children[0], env, ctx, out)
-            if !_types_equal(cond_t, _types_t_bool()) {
+            // Only a KNOWN, non-unit type that isn't bool is a genuine
+            // condition mismatch (`if 5 {`). An unresolved call infers
+            // unit (call-checker returns _types_t_unit() when the callee
+            // fn type isn't modeled — flat-splice / forward-ref), and an
+            // untracked local infers empty; neither can be asserted ≠ bool.
+            // Tolerate both, mirroring _types_equal's unknown contract and
+            // the binop unknown-operand guard — no g3 weakening (real
+            // kind≠bool mismatches still report).
+            if len(cond_t.kind) > 0 && cond_t.kind != "unit" && !_types_equal(cond_t, _types_t_bool()) {
                 _emit_hx3001(_types_t_bool(), cond_t, e.children[0].span, out)
             }
         }
@@ -1271,7 +1279,15 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     if _types_is_while(e.kind) {
         if len(e.children) >= 1 {
             let cond_t = _infer_expr(e.children[0], env, ctx, out)
-            if !_types_equal(cond_t, _types_t_bool()) {
+            // Only a KNOWN, non-unit type that isn't bool is a genuine
+            // condition mismatch (`if 5 {`). An unresolved call infers
+            // unit (call-checker returns _types_t_unit() when the callee
+            // fn type isn't modeled — flat-splice / forward-ref), and an
+            // untracked local infers empty; neither can be asserted ≠ bool.
+            // Tolerate both, mirroring _types_equal's unknown contract and
+            // the binop unknown-operand guard — no g3 weakening (real
+            // kind≠bool mismatches still report).
+            if len(cond_t.kind) > 0 && cond_t.kind != "unit" && !_types_equal(cond_t, _types_t_bool()) {
                 _emit_hx3001(_types_t_bool(), cond_t, e.children[0].span, out)
             }
         }
@@ -1302,7 +1318,17 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // Validate against enclosing fn return type. _types_assignable
         // permits the standard integer-literal coercion (e.g. `return 0`
         // for an `-> i32` fn) so the M0 baseline type-checks.
-        if len(frame_ret.kind) > 0 {
+        //
+        // frame_ret.kind == "unit" means the fn has no concrete declared
+        // return (annotation absent → defaulted to unit, or explicit
+        // void/unit). hexa (legacy-proven) allows return-type-less fns
+        // that return a value — the type is inferred, not a mismatch.
+        // Strict-checking those false-fired HX3004 on every
+        // `fn fs_exists(path) { … return r == "1" }`-class helper.
+        // Tolerate unit/void/unannotated (mirrors _types_equal's unknown
+        // contract); concretely-typed returns (`-> bool` / `-> i64` …)
+        // still strict-check, so real mismatches report (no g3 weakening).
+        if len(frame_ret.kind) > 0 && frame_ret.kind != "unit" {
             if !_types_assignable(frame_ret, val_t, val_src) {
                 _emit_hx3004(frame_name, frame_ret, val_t, e.span, out)
             }
@@ -1447,6 +1473,7 @@ fn _is_builtin_method(name: string) -> bool {
         "split" -> true, "trim" -> true, "replace" -> true, "repeat" -> true,
         "starts_with" -> true, "ends_with" -> true, "substring" -> true,
         "index_of" -> true, "rfind" -> true, "last_index_of" -> true,
+        "char_code_at" -> true,
         "keys" -> true, "values" -> true, "contains_key" -> true,
         "has_key" -> true, "has" -> true, "remove" -> true, "get" -> true,
         "set" -> true, "pop" -> true, "shift" -> true, "reverse" -> true,

@@ -741,6 +741,12 @@ fn _bind_builtin_names() -> [string] {
     // compile. ("true"/"false" carried from legacy are harmless as
     // scope names — the parser emits KwTrue/KwFalse, never Ident.)
     return [
+        // Free-call host builtins missing from the legacy-mirrored set —
+        // used as `join(a,b)` / `has_key(m,k)` / `append_file(p,s)` /
+        // `char_code_at(s,i)` in compiler/+self/ (legacy codegen_c2
+        // _is_builtin_name free-call forms; runtime hexa_str_char_code_at
+        // / hexa_map_contains_key / rt_append_file). Last HX2001 residual.
+        "append_file", "char_code_at", "has_key", "join",
         "abs", "aes256_ctr_xor", "append", "args", "argv", "bcrypt_pbkdf", "byte_len", "bytes_to_f32_le",
         "bytes_to_f64_le", "ceil", "chacha20_poly1305_decrypt", "chacha20_poly1305_encrypt", "chacha20_xor", "chars", "clock_ms", "copy_file",
         "cos", "crc32", "dict_keys", "ed25519_keypair", "ed25519_sign", "ed25519_verify", "env", "eprint",
