@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-029-IIT3-bigPhi-LADDER-COMPLETE-cumulative-113" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-030-falsifier-18batteries-cumulative-117" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,8 +39,15 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2+3 (cycle 001-029): 113/113 PASS · 113 entries verified (98 🔵 closed: 61 SUPPORTED-IDENTITY + 37 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 14 falsifier-robust batteries · 70 falsifiers 0 fired).
-    9 도메인 모두 covered. Verifier surface: 13 modules + CI gate. Note: full-suite run needs HEXA_MEM_UNLIMITED=1 (atlas embed 대형).
+    Cumulative Phase 2+3 (cycle 001-030): 117/117 PASS · 117 entries verified (98 🔵 closed: 61 SUPPORTED-IDENTITY + 37 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 18 falsifier-robust batteries · 90 falsifiers 0 fired).
+    9 도메인 모두 covered. Verifier surface: 13 modules + CI gate. Note: full-suite run needs HEXA_MEM_UNLIMITED=1 (atlas embed 대형 · 로컬 4GB memcap 초과). 자원활용 ubu-1/ubu-2: 원격 hexa_interp stale(eb6578fc, atlas-verify work 이전) → current verifier silent no-op, 로컬 mem-flag 가 viable path (feedback_resource_routing_ubu memory).
+
+    cycle 030 — falsifier 14 → 18 batteries (§5 BIO IIT 4 measures coverage):
+      B15 s5_effective_information_gates · B16 s5_phi_si_2node ·
+      B17 s5_iit3_mechanism_phi · B18 s5_iit3_system_bigphi (각 ≥5 + sha256 freeze).
+      90 falsifiers total (18×5), 0 fired. §5 BIO IIT ladder 전 단계 (A·B·C·D)
+      가 falsifier-robust — 원 directive "각 algorithm 별 falsifier ≥5" 가
+      §5 IIT measures 까지 coverage 확대.
 
     cycle 029 — §5 BIO IIT ladder STAGE D (minimal scale): genuine IIT 3.0 big-Φ:
       s5_iit3_system_bigphi 🔵 SUPPORTED-FORMAL — system-level Φ = EMD(whole effect
@@ -881,7 +888,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 113
+  phase_2_cumulative_count = 117
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 

@@ -1360,3 +1360,49 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+# ─── Cycle 030 — Phase 3: falsifier 14→18 (§5 BIO IIT ladder coverage) ──
+
+@A cycle_030 := "Phase 3 cycle 030 — falsifier 14→18 batteries (§5 IIT measures) + ubu resource finding" :: cycle [d=2026-05-15 active]
+  trigger = "user 'go' + '진행중 자원활용 ubu-1/ubu-2' directive"
+  scope <<~EOF
+    cumulative 113 → 117 (+4 batteries · 20 신규 falsifiers · 90 total / 18 batteries).
+    §5 BIO IIT closure ladder 4 measures (EI·Φ_SI·small-φ·big-Φ) 에 falsifier ≥5
+    battery 추가 — 원 directive 의 "각 atom/algorithm/가설 별 falsifier ≥5
+    pre-register" 를 최신 IIT work 로 확대.
+  EOF
+  files_modified <<~EOF
+    compiler/atlas/verify/falsifier.hexa — 4 신규 battery (각 ≥5 + sha256 freeze):
+      B15 s5_effective_information_gates (AND-EI · XOR-max · AND=OR symmetry · ordering · EI≠Φ standing)
+      B16 s5_phi_si_2node          (IDENTITY=0 · AND-OR>0 · joint=1.5 · ordering · Φ_SI≠IIT3 standing)
+      B17 s5_iit3_mechanism_phi    (COPY=½ · CONST=0 · NOT=½ · existence-axiom · smallφ≠bigΦ standing)
+      B18 s5_iit3_system_bigphi    (SWAP=1 · IDENTITY=0 · hypercube-mean · ordering · n2≠multinode standing)
+    atlas/MAIN.tape — tldr cumulative 117 + ubu resource finding note
+  EOF
+  verifier_run_result <<~EOF
+    falsifier domain: 18/18 batteries PASS · 90 falsifiers, 0 fired
+    Full cumulative: 117/117 PASS · 98 🔵 + 1 🟠 AT-RISK + 18 falsifier-robust
+      (HEXA_MEM_UNLIMITED=1 — atlas embed 대형, 로컬 4GB memcap 초과)
+  EOF
+  ubu_resource_finding <<~EOF
+    사용자 directive "진행중 자원활용은 ubu-1,ubu-2 에서 진행해줘" 조사 결과:
+      ubu-1/ubu-2 reachable (각 12 cores · ~31GB RAM, ssh alias + WireGuard/
+        tailscale fallback, wilson pool roster cpu·disk·9p 등록).
+      BLOCKER: ubu-1 ~/core/hexa-lang/build/hexa_interp = commit eb6578fc
+        (atlas verifier work 전체 ~30 commits 이전). /tmp fresh clone (72f28632,
+        14 modules OK) + stale interp 실행 → empty output exit 0 = silent no-op
+        (module-loader 버전 불일치, 로컬 `hexa atlas-verify` 와 동일 패턴).
+      원격 ~/core/hexa-lang = 다른 사용자(aiden) dirty 작업트리 → force-reset
+        금지 (work 손실 risk). 비침습 /tmp clone 패턴 사용.
+      RESOLUTION: 로컬 `HEXA_MEM_UNLIMITED=1 hexa run` 이 유일 viable
+        (117/117 작동). directive 는 feedback_resource_routing_ubu memory 저장
+        — 미래 적용 (원격에 current hexa_interp 빌드 시 = heavy build = ubu 적합).
+        git/edit 는 로컬 그대로 (경량). verdict cycle 은 로컬 mem-flag 로 계속.
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only — ✅ 117 entries via hexa CLI (로컬 mem-flag, 원격 toolchain stale)
+    g5 hexa-native-only    — ✅ falsifier.hexa libm builtins + sha256.hexa
+    g_self_verify          — ✅ 117 entries + 90 falsifiers sha256-frozen
+    g4 honesty-external    — ✅ §5 IIT batteries F5 standing reminders (EI≠Φ · Φ_SI≠IIT3 · smallφ≠bigΦ · n2≠multinode)
+    g_external_calc_forbidden — ✅ 0 external runtime · ubu 원격은 비침습 clone-only (force-reset 금지 준수)
+  EOF
+

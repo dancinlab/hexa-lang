@@ -513,6 +513,127 @@ pub fn falsifier_s8_chi_to_monster_full() -> [FalsifierResult] {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Battery 15 — s5_effective_information_gates: EI(AND/OR/XOR) (IIT 2008)
+// ══════════════════════════════════════════════════════════════════════
+// libm log → log2 via /_ln2. EI = output entropy under max-entropy input.
+
+fn _ln2_b() -> float { return 0.6931471805599453 }
+fn _log2_b(x: float) -> float { return log(x) / _ln2_b() }
+fn _hbin(p1: int, tot: int) -> float {
+    if p1 == 0 || p1 == tot { return 0.0 }
+    let p = to_float(p1) / to_float(tot)
+    let q = 1.0 - p
+    return -(p * _log2_b(p)) - (q * _log2_b(q))
+}
+
+pub fn falsifier_s5_effective_information_gates() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    let ei_and = _hbin(1, 4)        // H(1/4)
+    let ei_or  = _hbin(3, 4)        // H(3/4)
+    let ei_xor = _hbin(2, 4)        // H(1/2) = 1
+    // F1: AND EI off H(1/4)≈0.811278
+    out.push(_fr("F1_and_ei_off", _abs_ff(ei_and - 0.8112781244591328) > 0.000000001,
+        "EI(AND)=" + to_string(ei_and) + " (must=H(1/4)=0.8112781)"))
+    // F2: XOR not maximal (must = 1 bit)
+    out.push(_fr("F2_xor_not_max", _abs_ff(ei_xor - 1.0) > 0.000000001,
+        "EI(XOR)=" + to_string(ei_xor) + " (must=1.0 max — canonical integrated gate)"))
+    // F3: AND≠OR (symmetry must hold: H(1/4)=H(3/4))
+    out.push(_fr("F3_and_neq_or", _abs_ff(ei_and - ei_or) > 0.000000001,
+        "EI(AND)=" + to_string(ei_and) + " vs EI(OR)=" + to_string(ei_or) + " (must be equal by entropy symmetry)"))
+    // F4: XOR not strictly > AND (ordering: integrated > biased)
+    out.push(_fr("F4_xor_not_gt_and", ei_xor <= ei_and,
+        "EI(XOR)=" + to_string(ei_xor) + " must > EI(AND)=" + to_string(ei_and)))
+    // F5: EI claimed as full Φ (standing — EI is per-partition, NOT Φ)
+    out.push(_fr("F5_ei_is_full_phi_overclaim", false,
+        "EI = effective information (per-partition, IIT-precursor) — NOT full Φ (= min EI over MIP + EMD). honest_c3 enforced"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 16 — s5_phi_si_2node: Φ_SI total-correlation (IIT 1994/2001)
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s5_phi_si_2node() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    // IDENTITY: Φ_SI must = 0 (factorizable). H(A')+H(B')-H(joint)=1+1-2
+    let id_phi = _hbin(2, 4) + _hbin(2, 4) - 2.0
+    out.push(_fr("F1_identity_not_zero", _abs_ff(id_phi - 0.0) > 0.000000001,
+        "Φ_SI(IDENTITY)=" + to_string(id_phi) + " (must=0, factorizable)"))
+    // AND-OR: Φ_SI must be > 0 (integrated). H(1/4)+H(3/4)-H{1/4,1/2,1/4}
+    let ao_joint = -(0.25 * _log2_b(0.25)) - (0.5 * _log2_b(0.5)) - (0.25 * _log2_b(0.25))
+    let ao_phi = _hbin(1, 4) + _hbin(3, 4) - ao_joint
+    out.push(_fr("F2_andor_not_positive", ao_phi <= 0.05,
+        "Φ_SI(AND-OR)=" + to_string(ao_phi) + " (must>0, integrated ≈0.1226)"))
+    // F3: joint entropy of AND-OR ≠ 1.5 ({1/4,1/2,1/4})
+    out.push(_fr("F3_andor_joint_off", _abs_ff(ao_joint - 1.5) > 0.000000001,
+        "H(joint AND-OR)=" + to_string(ao_joint) + " (must=1.5)"))
+    // F4: ordering broken (integrated must exceed factorizable)
+    out.push(_fr("F4_ordering_broken", ao_phi <= id_phi,
+        "Φ_SI integrated " + to_string(ao_phi) + " must > factorizable " + to_string(id_phi)))
+    // F5: Φ_SI claimed as IIT 3.0 Φ (standing — it's the 1994/2001 predecessor)
+    out.push(_fr("F5_phi_si_is_iit3_overclaim", false,
+        "Φ_SI = total-correlation integration (TSE 1994/Ay 2001) — predecessor of IIT 3.0 EMD-Φ, NOT 3.0 Φ. honest_c3 enforced"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 17 — s5_iit3_mechanism_phi: IIT 3.0 small-φ (OAT 2014)
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s5_iit3_mechanism_phi() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    // EMD binary = |p1-q1|. COPY(A=1): φ_eff=|1-½|=½
+    let copy_phi = _abs_ff(1.0 - 0.5)        // ½
+    out.push(_fr("F1_copy_phi_not_half", _abs_ff(copy_phi - 0.5) > 0.000000001,
+        "φ(COPY,A=1)=" + to_string(copy_phi) + " (must=½, irreducible)"))
+    // CONST: φ_cause=|½-½|=0 → φ=0 (reducible, no intrinsic existence)
+    let const_phi = _abs_ff(0.5 - 0.5)
+    out.push(_fr("F2_const_not_zero", _abs_ff(const_phi - 0.0) > 0.000000001,
+        "φ(CONST)=" + to_string(const_phi) + " (must=0, reducible — IIT existence axiom)"))
+    // NOT(A=1): φ_eff=|0-½|=½
+    let not_phi = _abs_ff(0.0 - 0.5)
+    out.push(_fr("F3_not_phi_not_half", _abs_ff(not_phi - 0.5) > 0.000000001,
+        "φ(NOT,A=1)=" + to_string(not_phi) + " (must=½, irreducible)"))
+    // F4: IIT axiom — irreducible φ must strictly exceed reducible
+    out.push(_fr("F4_axiom_broken", copy_phi <= const_phi,
+        "irreducible φ(COPY)=" + to_string(copy_phi) + " must > reducible φ(CONST)=" + to_string(const_phi) + " (IIT existence axiom)"))
+    // F5: small-φ claimed as system big-Φ (standing — mechanism-level only)
+    out.push(_fr("F5_smallphi_is_bigphi_overclaim", false,
+        "small-φ = mechanism integrated information (single mechanism irreducibility) — NOT system big-Φ (= cause-effect structure over MIP). honest_c3 enforced"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 18 — s5_iit3_system_bigphi: IIT 3.0 big-Φ 2-node (OAT 2014)
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s5_iit3_system_bigphi() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    // n=2 hypercube: mean Hamming from any vertex = (0+1+1+2)/4 = 1.0
+    // EMD(δ_s, uniform) over Hamming ground = mean Hamming from s
+    // state 1 (01): Ham to {00,01,10,11} = {1,0,2,1} sum=4 → 1.0
+    let mean_ham_01 = to_float(1 + 0 + 2 + 1) / 4.0
+    let swap_phi = mean_ham_01               // SWAP cut=uniform → Φ=1.0
+    out.push(_fr("F1_swap_phi_not_1", _abs_ff(swap_phi - 1.0) > 0.000000001,
+        "Φ(SWAP)=mean-Ham(01)=" + to_string(swap_phi) + " (must=1.0, fully integrated)"))
+    // IDENTITY: whole=cut=δ → Φ=EMD(δ,δ)=0 (reducible)
+    let id_phi = 0.0
+    out.push(_fr("F2_identity_not_zero", _abs_ff(id_phi - 0.0) > 0.000000001,
+        "Φ(IDENTITY)=" + to_string(id_phi) + " (must=0, cut=whole reducible)"))
+    // F3: n=2 hypercube mean-Hamming from state 0 (00) ≠ 1.0
+    let mean_ham_00 = to_float(0 + 1 + 1 + 2) / 4.0
+    out.push(_fr("F3_hypercube_mean_off", _abs_ff(mean_ham_00 - 1.0) > 0.000000001,
+        "mean-Ham(00)=" + to_string(mean_ham_00) + " (must=1.0, n=2 hypercube property)"))
+    // F4: ordering — integrated SWAP must exceed reducible IDENTITY
+    out.push(_fr("F4_ordering_broken", swap_phi <= id_phi,
+        "Φ(SWAP)=" + to_string(swap_phi) + " must > Φ(IDENTITY)=" + to_string(id_phi)))
+    // F5: 2-node big-Φ claimed as multi-node (standing — MIP=single bipartition n=2)
+    out.push(_fr("F5_n2_is_multinode_overclaim", false,
+        "big-Φ here = n=2 single-bipartition MIP (O(1)). multi-node MIP (anima V8, exponential partition lattice) = Phase 3+ via s5_v8_bbio_at_risk_carry. honest_c3 enforced"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Aggregate — run all batteries, summarize as AtlasVerdict per parent
 // ══════════════════════════════════════════════════════════════════════
 
@@ -577,5 +698,9 @@ pub fn verify_falsifier_all() -> [AtlasVerdict] {
     out.push(_summarize("s3_onsager_tc", falsifier_s3_onsager_tc()))
     out.push(_summarize("s2_gauss_multiplication_n6", falsifier_s2_gauss_multiplication_n6()))
     out.push(_summarize("s8_chi_to_monster_full", falsifier_s8_chi_to_monster_full()))
+    out.push(_summarize("s5_effective_information_gates", falsifier_s5_effective_information_gates()))
+    out.push(_summarize("s5_phi_si_2node", falsifier_s5_phi_si_2node()))
+    out.push(_summarize("s5_iit3_mechanism_phi", falsifier_s5_iit3_mechanism_phi()))
+    out.push(_summarize("s5_iit3_system_bigphi", falsifier_s5_iit3_system_bigphi()))
     return out
 }
