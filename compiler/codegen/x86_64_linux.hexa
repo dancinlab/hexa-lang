@@ -615,6 +615,40 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                     st: X86StrTab, rm: X86RegMap, spill_frame: i64) -> [LInstr] {
     let mut buf = out
     if s.kind == _STMT_ASSIGN {
+        // array_lit constructor: dst = hexa_array_new(); then
+        // hexa_array_push(dst, e_i) per element (push returns the array →
+        // recapture into dst each step). Element count is grammar-capped
+        // at 1024 (parser HX0013 truncates over-cap to 0 children) so this
+        // emit is O(n) bounded — no compile-time O(n²). Runtime-call shape
+        // mirrors the proven concat idiom in _STMT_BINOP below (the single
+        // source of truth for emitting a runtime call in this pass).
+        // NOTE: cross-call dst-preservation hardening + full rebuild
+        // verification are the rebuild-gated follow (Track-A monolithic-TU
+        // clang wall — see COMPILE-ONLY @N loop_closure_consolidation);
+        // logic parity with the existing concat/idiv emits.
+        if s.op == "array_lit" {
+            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            buf.push(_x86_instr1("call", _x86_op_label("hexa_array_new"),
+                             "array_lit: new array"))
+            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                             "array_lit: capture new array"))
+            let mut i = 0
+            while i < len(s.args) {
+                buf = _x86_op_rm(buf, s.args[i], st, rm, "r10")
+                let v = _x86_op_resolve(s.args[i], st, rm, "r10")
+                buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), v,
+                                 "array_lit: elem " + to_string(i)))
+                buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), dst,
+                                 "array_lit: arr arg"))
+                buf.push(_x86_instr1("call", _x86_op_label("hexa_array_push"),
+                                 "array_lit: push elem " + to_string(i)))
+                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                                 "array_lit: recapture array"))
+                i = i + 1
+            }
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            return buf
+        }
         if len(s.args) >= 1 {
             let mut src_scratch = "r10"
             if _x86_is_spilled(rm, s.dst.id) { src_scratch = "r11" }
