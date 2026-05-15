@@ -1,5 +1,5 @@
 #!hexa strict
-// tool/os_level_lock.hexa — raw#0 OS-level file lock (tiered)
+// tool/os_level_lock.hexa — OS-level file lock (tiered)
 //
 // PURPOSE
 //   Pre-commit hooks and PreToolUse hooks are bypassable. Kernel EPERM
@@ -7,20 +7,19 @@
 //   flags, or Linux `chattr +i`) is the only real enforcement for SSOT.
 //
 //   This tool applies / removes / inspects OS-level immutable flags on
-//   the raw#0 lock target set (5 SSOT + raw#12 grandfather list) at
-//   three tiers of strictness.
+//   a tiered set of repo files.
 //
-// LEVELS (tiered lock, 2026-04-20)
+// LEVELS (tiered lock)
 //   Level 0 — readonly filesystem permissions only (fallback when the
 //             platform does not support immutable flags). No sudo.
 //   Level 1 — macOS `chflags uchg` / Linux `chattr +i` (best-effort).
 //             Owner-removable without sudo on macOS; root required on
-//             Linux. DEFAULT for all 5 SSOT — allows `hx install` flow
+//             Linux. DEFAULT for required SSOT — allows `hx install` flow
 //             to work without demanding sudo up-front.
 //   Level 2 — macOS `chflags schg` (system immutable) / Linux
 //             `chattr +i` with root. REQUIRES sudo to set or clear.
-//             Opt-in via `./hx harden`. Protects .raw .own from even
-//             an accidental root-less remove.
+//             Opt-in via `./hx harden`. Currently no targets at L2 by
+//             default (re-populate `_critical_targets()` to enable).
 //
 // USAGE
 //   ./hexa tool/os_level_lock.hexa lock           — Level 1 apply (uchg)
@@ -39,81 +38,57 @@
 //           either set or clear, so L1≡L2 semantically on Linux).
 //   Other — Level 0 (no-op with warning).
 //
-// TARGETS  (2026-04-20 raw#1 E2 — scope expansion)
-//   tier1_required    : 4 SSOT (.raw .own .ext .roadmap) — must
-//                       exist; verify fails if missing / < L1
-//   tier2_required    : 6 infra (self/raw_loader.hexa, tool/raw_all.hexa,
-//                       tool/hx_unlock.hexa, tool/os_level_lock.hexa,
-//                       tool/raw_audit.hexa, .raw-audit) — must exist
-//                       and be locked; mutable infra defeats SSOT
-//                       enforcement.
+// TARGETS
+//   tier1_required    : machine SSOT (.roadmap) — must exist + locked
+//   tier2_required    : enforcer infra (hx_lock, hx_unlock, this file) —
+//                       must exist and be locked; mutable enforcer
+//                       defeats SSOT integrity.
 //   tier2_optional    : build artifacts (build/hexa_interp) — locked
 //                       when present, warned (not failed) when absent.
-//   optional          : raw#12 grandfather bans — locked if present on
-//                       disk, skipped silently if absent.
-//   critical (L2)     : subset of tier1 — default {.raw .own}, the set
-//                       `hx harden` promotes to Level 2 (schg)
-//   non_critical (L1) : tier1 − critical — stays at Level 1 always
+//   optional          : AI-tool config grandfather bans — locked if
+//                       present, skipped silently if absent.
+//   critical (L2)     : subset of tier1 promoted by `hx harden`; empty
+//                       by default.
 //
-//   REENTRY FLOW after lock (tier2 includes this file):
-//     ./hexa tool/hx_unlock.hexa --reason "<why>" --roadmap-ref <id>
-//       → .raw-audit append + nouchg on the target
+//   REENTRY FLOW after lock:
+//     ./hexa tool/hx_unlock.hexa --reason "<why>"
+//       → nouchg on the target
 //       → edit → stage → commit
 //       → ./hexa tool/os_level_lock.hexa lock   # re-lock
-//
-//   Names are declared inline rather than hardcoded at call sites
-//   (raw#14 — values belong in SSOT, but the target list IS an SSOT
-//   declaration here, so centralized).
 
 use "self/stdlib/ai_err"
 
-// ─── target lists (raw#0 scope) ─────────────────────────────────
+// ─── target lists ───────────────────────────────────────────────
 //
-// Scope is tiered (2026-04-20, raw#1 E2):
-//   _tier1_required — 4 SSOT (.raw .own .ext .roadmap). MUST exist,
-//                     MUST be locked. Core invariant surface of raw#0.
-//   _tier2_required — 6 infra files that implement / enforce the SSOT
-//                     semantics (parser, dispatcher, unlock wrapper,
-//                     self-lock, audit writer, audit log). If they are
-//                     mutable, the SSOT guarantees are bypassable, so
-//                     they MUST be locked alongside tier1.
-//   _tier2_optional — build artifacts (build/hexa_interp). Locked when
-//                     present, skipped without warning when absent.
+// Tiers:
+//   _tier1_required — machine SSOT. MUST exist, MUST be locked.
+//   _tier2_required — files implementing / enforcing the lock semantics.
+//                     If mutable, the lock is bypassable.
+//   _tier2_optional — build artifacts. Locked when present, skipped
+//                     without warning when absent.
 //   _required_targets() = tier1 ∪ tier2_required — used by lock/unlock/
 //                         verify (every command treats both tiers the
 //                         same at the enforcement layer).
 
 fn _tier1_required() -> array {
-    // 4 SSOT — raw/own/ext/roadmap. .loop retired 2026-04-21 per raw#17
-    // (absorbed into .own), so only four tier1 entries remain. Re-adding
-    // .loop here would reopen the retired SSOT axis.
-    return [".raw", ".own", ".ext", ".roadmap"]
+    // Machine roadmap SSOT — required to exist + locked.
+    return [".roadmap"]
 }
 
 fn _tier2_required() -> array {
-    // 6 infra targets — the SSOT parser, orchestrator, unlock flow, self
-    // lock tool, audit writer, and audit log. Mutable infra = bypassable
-    // SSOT. MUST exist (except .raw-audit, which is seeded lazily — we
-    // still include it; path-exists guard in cmd_lock covers first-run).
+    // Enforcer infra — the lock/unlock tools themselves. Mutable infra
+    // = bypassable SSOT, so these stay integrity-locked.
     return [
-        "self/raw_loader.hexa",
-        "tool/raw_all.hexa",
+        "tool/hx_lock.hexa",
         "tool/hx_unlock.hexa",
-        "tool/os_level_lock.hexa",
-        "tool/raw_audit.hexa",
-        ".raw-audit"
+        "tool/os_level_lock.hexa"
     ]
 }
 
 fn _tier2_optional() -> array {
     // Build artifact — present only after rebuild_interp. Locked when
-    // present so a regenerated binary can't be silently swapped; warn-not-
-    // fail on absent (raw#0 tree clones before first build).
-    //
-    // Also includes OS-level watcher tools (raw#13 git-hook ban, raw#33
-    // raw-family English): these implement raw-rule enforcement so they
-    // must stay integrity-locked, but are not core SSOT — warn-not-fail
-    // on absent (a stripped-down checkout may omit them).
+    // present so a regenerated binary can't be silently swapped; warn-
+    // not-fail on absent (fresh tree clones before first build).
     return [
         "build/hexa_interp",
         "tool/git_hook_ban_watcher.hexa",
@@ -131,7 +106,7 @@ fn _required_targets() -> array {
 }
 
 fn _optional_targets() -> array {
-    // raw#12 grandfather bans. Locked if present; skipped if absent.
+    // AI-tool config grandfather bans. Locked if present; skipped if absent.
     return [
         "CLAUDE.md",
         "AGENTS.md",
@@ -148,84 +123,15 @@ fn _optional_targets() -> array {
 
 pub fn _critical_targets() -> array {
     // Level 2 candidates — the most sensitive SSOT. `hx harden` promotes
-    // these to schg; `hx downgrade` reverts to L1.
-    return [".raw", ".own"]
+    // these to schg; `hx downgrade` reverts to L1. Currently empty —
+    // re-populate if a target warrants schg-grade protection.
+    return []
 }
 
 pub fn _non_critical_targets() -> array {
     // Stays at Level 1 regardless of harden — legitimate edit flow is
     // frequent enough that schg would cause friction without benefit.
-    // .loop retired (raw#17 absorbed into .own).
-    return [".ext", ".roadmap"]
-}
-
-// ─── canonical .raw resolution + follower-repo detection ────────
-//
-// 2026-04-26 hive 마이그레이션 이후, follower repo (hexa-lang/anima/
-// airgenome/canon/...) 의 로컬 `.raw` 는 retired 되고 canonical
-// L0 SSOT 는 `/Users/ghost/core/hive/.raw` 한 곳에만 존재한다. Follower
-// 들은 `.raw-ref` 로 hive 를 추종한다.
-//
-// `verify` 가 tier1 SSOT 의 chflags 상태를 점검할 때:
-//   1) cwd `.raw` 존재 → 그대로 사용 (hive 자신, 또는 legacy repo)
-//   2) cwd `.raw` 없음 + cwd `.raw-ref` 존재 → `.raw-ref` 의 `source`
-//      필드를 파싱하여 sister-repo 경로
-//      (`/Users/ghost/core/<repo>/.raw`) 로 resolve, hive `.raw` 의
-//      chflags 를 검사
-//   3) `.ext` / `.roadmap` 은 follower 가 소유하지 않으므로 missing 시
-//      SKIP-with-reason (FAIL 아님)
-//   4) `.raw-ref` 도 없으면 canonical owner 로 간주, missing = FAIL
-//      (기존 동작 유지)
-//
-// raw#8 HEXA-ONLY self-host bootstrap 제약상 tool 간 import 를 늘리지
-// 않고, tool/raw_all.hexa 의 _resolve_canonical_raw_path() 와 동일한
-// 로직을 인라인으로 복제한다. 두 사본이 분기되면 raw_all 의 그것이
-// canonical 이다 (이 파일은 tier2 enforcer side).
-// — inlined from tool/raw_all.hexa (lines 175-231, 2026-04-26)
-
-fn _resolve_canonical_raw_path() -> string {
-    if file_exists(".raw") { return ".raw" }
-    if !file_exists(".raw-ref") { return "" }
-    let src_text = to_string(read_file(".raw-ref"))
-    let lines = split(src_text, "\n")
-    let mut source = ""
-    for ln in lines {
-        let s = ln.trim()
-        if len(s) == 0 { continue }
-        if s.substring(0, 1) == "#" { continue }
-        // raw_sync `.raw-ref` grammar: 2-space indented `source <url>`.
-        // After trim() the leading indent is gone, so we match the
-        // bare `source ` prefix.
-        if len(s) >= 7 && s.substring(0, 7) == "source " {
-            source = s.substring(7, len(s)).trim()
-            break
-        }
-    }
-    if source == "" { return "" }
-    // Strip optional `protocol://` prefix.
-    if source.index_of("://") >= 0 {
-        let p = source.index_of("://")
-        source = source.substring(p + 3, len(source))
-    }
-    // Map github.com/<org>/<repo> → /Users/ghost/core/<repo>/.raw —
-    // matches the sister-repo monorepo convention. Last `/` segment
-    // is the repo name.
-    let slash = source.last_index_of("/")
-    if slash < 0 { return "" }
-    let repo = source.substring(slash + 1, len(source))
-    if repo == "" { return "" }
-    let candidate_parts = ["/Users/ghost/core/", repo, "/.raw"]
-    let candidate = candidate_parts.join("")
-    if file_exists(candidate) { return candidate }
-    return ""
-}
-
-fn _is_follower_repo() -> bool {
-    // A repo is a "follower" iff it has no local `.raw` SSOT but does
-    // carry a `.raw-ref` pointer to the hive canonical. Hive itself
-    // (canonical owner) has `.raw` and no `.raw-ref` → not a follower.
-    if file_exists(".raw") { return false }
-    return file_exists(".raw-ref")
+    return [".roadmap"]
 }
 
 // ─── environment helpers ────────────────────────────────────────
@@ -455,7 +361,7 @@ fn cmd_lock() -> int {
         }
     }
 
-    // raw#12 grandfather bans (optional_targets): existing semantics.
+    // AI-tool config grandfather bans (optional_targets): existing semantics.
     for rel in _optional_targets() {
         let abs = root + "/" + rel
         if !_path_exists(abs) {
@@ -500,7 +406,7 @@ fn cmd_unlock() -> int {
     let mut skipped_already = 0
     let mut failures = []
 
-    // tier1 ∪ tier2_required ∪ tier2_optional ∪ optional(raw#12)
+    // tier1 ∪ tier2_required ∪ tier2_optional ∪ optional
     let targets = _required_targets() + _optional_targets()
     for rel in targets {
         let abs = root + "/" + rel
@@ -843,7 +749,7 @@ fn cmd_status() -> int {
     let linux = _is_linux()
     let supported = darwin || linux
 
-    println("── raw#0 os-level lock status (tiered) ──")
+    println("── os-level lock status (tiered) ──")
     if !supported {
         println("  platform: UNSUPPORTED (Level 0 fallback)")
     } else if darwin {
@@ -915,7 +821,7 @@ fn cmd_status() -> int {
     }
 
     println("")
-    println("optional raw#12 bans (grandfather):")
+    println("optional grandfather bans:")
     for rel in _optional_targets() {
         let abs = root + "/" + rel
         if !_path_exists(abs) {
@@ -945,53 +851,10 @@ fn cmd_verify() -> int {
     }
     let root = _pwd()
     let mut fails = []
-    let mut follower_skips = []
+    let follower_skips = []
 
-    // 2026-04-26 hive-migration follower-repo handling:
-    //   `.raw`      → resolve via `.raw-ref` to hive canonical, check
-    //                 chflags there. Empty resolve = FAIL.
-    //   `.ext` /
-    //   `.roadmap`  → on follower repos (no local `.raw`, has
-    //                 `.raw-ref`), missing = SKIP (not owned locally).
-    //                 On canonical owner (hive), missing = FAIL
-    //                 (existing behavior).
-    let follower = _is_follower_repo()
-
-    // tier1 + tier2_required — missing = hard fail (with follower exceptions)
+    // tier1 + tier2_required — missing = hard fail
     for rel in _tier1_required() {
-        if rel == ".raw" {
-            let canon = _resolve_canonical_raw_path()
-            if canon == "" {
-                fails.push(rel + " (missing)")
-            } else {
-                // canon is ".raw" (relative, cwd of canonical owner) or
-                // absolute path to hive's `.raw` (follower repo).
-                if canon.substring(0, 1) != "/" {
-                    let abs_local = root + "/" + canon
-                    if _detect_level(abs_local) < 1 {
-                        fails.push(rel + " (unlocked, < L1)")
-                    }
-                } else {
-                    if _detect_level(canon) < 1 {
-                        fails.push(rel + " (unlocked, < L1 @ " + canon + ")")
-                    }
-                }
-            }
-            continue
-        }
-        let is_ext_or_roadmap = rel == ".ext" || rel == ".roadmap"
-        if is_ext_or_roadmap && follower {
-            let abs = root + "/" + rel
-            let pe = _path_exists(abs)
-            if !pe {
-                follower_skips.push(rel + " (follower-repo, no local " + rel + ")")
-            } else {
-                if _detect_level(abs) < 1 {
-                    fails.push(rel + " (unlocked, < L1)")
-                }
-            }
-            continue
-        }
         let abs = root + "/" + rel
         if !_path_exists(abs) {
             fails.push(rel + " (missing)")
@@ -1038,7 +901,7 @@ fn cmd_verify() -> int {
         }
         return 0
     }
-    eprintln("raw#0 verify FAILED — the following targets are below Level 1:")
+    eprintln("os-level verify FAILED — the following targets are below Level 1:")
     for f in fails { eprintln("  - " + f) }
     if len(follower_skips) > 0 {
         eprintln("")
@@ -1093,7 +956,7 @@ if _is_main() {
     }
 
     // 2026-04-20: default to `verify` when called with no args —
-    // raw_all orchestrator invokes `hexa tool/os_level_lock.hexa` with no
+    // External orchestrator may invoke `hexa tool/os_level_lock.hexa` with no
     // subcommand and expects a read-only health check (exit 0 = locked OK,
     // exit 1 = any SSOT < L1). `verify` is that read-only mode.
     // Explicit subcommands (lock/unlock/status/...) still behave as before.
