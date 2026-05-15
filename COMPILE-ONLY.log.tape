@@ -517,3 +517,45 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
   @> COMPILE-ONLY.tape
 
+@A selfcompile_oom_scope_correction := "SCOPE CORRECTION: array-literal EXPRESSION is wholly unimplemented in new compiler/* (not a codegen port)" :: measurement [d=2026-05-16 ok]
+  ~> selfcompile_oom_rootcause
+  step = "`go` → began the codegen port; tracing the new pipeline revealed the codegen-port plan is WRONG."
+  finding <<~EOF
+    The new compiler/* pipeline has ZERO array-literal-EXPRESSION support
+    end-to-end — empirically + by source:
+      • parser: parse_primary (compiler/parse/parser.hexa) has NO `[` case.
+        Only LBracket uses are parse_type (`[T]` TYPE sugar) and parse_postfix
+        (`a[i]` INDEX). An array-literal value `[e0,e1,…]` falls to the
+        unrecognized-token fallback.
+      • AST: compiler/parse/ast.hexa ExprKind has NO Array/ArrayLit variant.
+      • lower / hir_to_mir / codegen/* / emit/asm: NO array-construction path
+        (grep array_new|array_push|ArrayLit = ∅).
+      • EMPIRICAL: stage1_ci on `let t=[1,2,3]` →
+          HX2001 undefined name `[` · `,` · `,` · … (4 diags), still emits .s
+          under --ignore-errors. Legacy self/parser.hexa DOES parse it
+          (kind \"Array\", self/parser.hexa:2364/2386) — which is why the
+          legacy-built host/hexa_v2 works and only the NEW compiler chokes.
+  EOF
+  reframe = "This single gap explains BOTH symptoms at once: (1) a LARGE fraction of the 1803 HX2001 is `[` / `,` undefined-name — one pair per array literal, and compiler/*+self/* use array literals pervasively; (2) the O(n²) self-compile OOM is error-RECOVERY over the 7400-element embedded-atlas array literal — every element emits placeholder Idents + HexaError records carrying the long `raw:\"…\"` span text; N such records with long strings = O(n²) memory. int[]/short-string stay cheap because the recovery records are tiny; long strings make the O(n²) catastrophic. Host interp is immune because the legacy parser parses the array (no recovery)."
+  supersedes_plan = "The `selfcompile_oom_rootcause` fix_plan (port ca11632c/4cab70d4/07af043c) is RETRACTED — those are C-transpile-specific (GNU statement-expr, __hexa_strlit_init chunking) for self/codegen_c2.hexa's C backend; the new pipeline emits ASM and lacks array literals ENTIRELY, so there is nothing to 'port into'. 4cab70d4/07af043c do not apply to an asm backend; ca11632c's codegen half is already in compiler/codegen/x86_64_linux.hexa."
+  real_fix_scope <<~EOF
+    Implement array-literal EXPRESSIONS across the new compiler/* pipeline —
+    same NATURE as the landed front-end operator-lowering track (a missing
+    expression production) but larger, 6 stages:
+      1. ast.hexa            + ExprKind::ArrayLit (children = elements)
+      2. parser.hexa         parse_primary: `[` → comma-sep elems → ArrayLit
+                             (incl empty `[]`); mirror legacy self/parser.hexa
+                             :2364 semantics, NOT its dict-AST shape.
+      3. ast_to_hir.hexa     ArrayLit → HIR (array alloc + N element stores)
+      4. hir_to_mir.hexa     → MIR
+      5. codegen/{x86_64_linux,arm64_darwin,thumbv7em}.hexa → array build
+      6. emit/asm.hexa       string-table interplay for element string lits
+    CRITICAL: the construction MUST be loop/chunk-based, NOT N inline stores,
+    or it reintroduces the compile-time O(n²) at 7400 elements (the lesson
+    behind legacy 4cab70d4/07af043c, re-expressed for an asm backend).
+  EOF
+  verify_loop = "Unchanged & cheap: rebuild stage1 (hexa_v2 transpile flat + clang -O0 ≈ 8 min) → `stage1 build test/regression/codegen_array_struct_longstr_oom.hexa` @N=2000 < 200 MB AND `let t=[1,2,3]` → 0 HX2001. Then full self-compile → G6 (HX2001 1803 drops by the array-`[`/`,` class too) → stage-2 → stage-3 → E2."
+  status = "Scope CORRECTED & fully specified. This is a substantial, well-defined feature implementation track (`new-compiler-array-literals`), NOT a 3-commit port. Same family as the integrated operator-lowering fix (a062e25f) — array-literal `[…]` is simply the next, larger, unimplemented expression production. Honest deliverable of this push: prevented a wrong codegen-port attempt and pinned the true gate as a 6-stage feature with a committed reproducer + criterion."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
+  @> COMPILE-ONLY.tape
+

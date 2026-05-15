@@ -7,12 +7,22 @@
 // N≈7400 → linear ~11 GiB/s → OOM @ 251 GiB in 52 s).
 //
 // PROVEN-INNOCENT (host interp RUN of this exact source at N=4000 = 1 MB / 1 s):
-//   runtime array/heapify · parser · bind · resolve · types — all O(1)/fine.
-// CULPRIT: NEW compiler/* codegen path ONLY (stage1 --emit=asm).
-// FIX: port legacy self/codegen_c2.hexa O(n²) array-literal/strlit fixes
-//   ca11632c (O(N²) array-literal hang) · 4cab70d4 (>64 elems → GNU
-//   statement-expr) · 07af043c (chunk __hexa_strlit_init 500-stmt slices)
-//   into the new compiler/lower|codegen|emit pipeline.
+//   runtime array/heapify · legacy parser · bind · resolve · types — fine.
+// CULPRIT (root-caused, scope-corrected — see COMPILE-ONLY.log.tape
+//   @A selfcompile_oom_scope_correction): the NEW compiler/* pipeline has
+//   NO array-literal-EXPRESSION support at all (parser parse_primary has no
+//   `[` case; ast.hexa has no ExprKind::ArrayLit; lower/mir/codegen/emit
+//   have no array-construction path). `let t=[…]` → HX2001 `undefined name
+//   '[' / ','` per array literal; on the 7400-elem embedded-atlas array the
+//   error-RECOVERY records (placeholder + HexaError carrying long span text)
+//   accumulate O(n²) → the OOM. This is ALSO a large slice of the 1803
+//   HX2001 (one `[`+`,` pair per array literal, used pervasively).
+// FIX (NOT a codegen port — that plan is retracted): implement array-literal
+//   expressions across all 6 pipeline stages (ast + parser + ast_to_hir +
+//   hir_to_mir + codegen/* + emit/asm), construction loop/chunk-based to
+//   avoid reintroducing compile-time O(n²) at scale. Track:
+//   `new-compiler-array-literals` (same family as the landed operator-
+//   lowering fix; the next, larger, unimplemented expression production).
 //
 // PASS CRITERION: `hexa build` (new stage1) of this file at N=2000 peaks
 //   < 200 MB (currently ~4 GB). At N=250/500/1000 it already completes; the
