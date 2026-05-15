@@ -1656,3 +1656,28 @@
     - The 🟠 AT-RISK s5_iit_3_0_oizumi_2014 carry continues anima H_182 surrogate-vs-real Φ gap; no upgrade proposed (g_external_calc_forbidden).
   EOF
   note = "Provenance upgrade ONLY — existing s3_ising_critical (🔵), s6_cmb_n_s_closed_form (🔵), s6_planck_units_count (🔵) verifier-leg verdicts are UNTOUCHED. The new entries supply primary-source citation anchors that ride alongside the existing closed-form / verifier verdicts. No ~> supersedes edges added (this is additive, not replacement)."
+
+# ─── Cycle 034 — appended via tool/atlas_cycle_append ──────────
+
+@A cycle_034 := "Phase 3 cycle 034 — tool/atlas_cycle_append landed (D4 log-append automation)" :: cycle [d=2026-05-16 active]
+  trigger = "user 'all go' directive — cycle_032 deferred-work registry D4 (log-append automation) recommended-order #1"
+  scope <<~EOF
+    Build tool/atlas_cycle_append.hexa (hexa-native CLI, ~300 lines) + smoke test test/atlas_cycle_append_smoke.hexa (~120 lines, 19 checks). Design decision per cycle_032 D4 registry note: hexa-tool form (NOT git-hook) — "wilson g_verify_hexa_cli_only 와 일관" + .git/hooks 는 shared infra 라 안전성 ↓. CLI 는 explicit invocation + reviewable. Tool reads structured cycle-draft.md (Title + 5 required sections trigger/scope/files/verifier_run_result/governance_check + optional note), validates them, scans atlas/MAIN.log.tape for max cycle_NNN, computes next, emits a tape v1.2 @A entry following cycle_032 idiom (heredoc for multi-line, quoted-string for single-line), appends via read_file_safe + concat + write_file_safe. Dry-run mode prints to stdout, skips write. This very entry is the first self-dogfood invocation — cycle_034 announces the tool itself.
+  EOF
+  files <<~EOF
+    tool/atlas_cycle_append.hexa
+    test/atlas_cycle_append_smoke.hexa
+    atlas/MAIN.log.tape (this cycle entry, via the tool itself — append-only)
+  EOF
+  verifier_run_result <<~EOF
+    atlas_cycle_append smoke: PASS (19/19 checks — pure fmt, validator, cycle-number scan, heredoc emit, dry-run path)
+    atlas-verify smoke: PASS (118/118 verdicts hold + ledger live=118 vs declared=118 consistent) — re-run post-append in step 6 to confirm cycle_034 append did not break ledger consistency
+  EOF
+  governance_check <<~EOF
+    g_arch_vs_log_split — ✅ append-only respected; tool NEVER mutates existing entries (read_file_safe → concat → write_file_safe, no in-place edit of cycle_001..cycle_033)
+    g5 hexa-native-only   — ✅ pure hexa, no LLVM / no C-transpile architecture; the only exec call is `date +%Y-%m-%d` for default timestamp (overridable via --date) — same idiom as tool/atlas_cli.hexa::_now_ms
+    g_self_verify         — ✅ tool's correctness verified by test/atlas_cycle_append_smoke.hexa + this very dogfood invocation (the tool is its own first user)
+    g_tier_default_insufficient — ✅ no 🔵 claim attached; this is tooling, not a verdict
+    g8 commit trailer     — pending parent agent commit
+  EOF
+  note = "D5 / D6 / D1 are next recommended-order entries in the deferred-work registry. D4's landing means subsequent cycles no longer need hand-written @A entries — `hexa run tool/atlas_cycle_append.hexa <draft.md>` is now the canonical path. The tool itself is a thin shell over pure formatter `build_entry_from_draft(draft_text, existing_log_text, date_str) -> [err, entry, cyc]` which the smoke test exercises directly (no fs touch)."
