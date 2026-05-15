@@ -1,4 +1,4 @@
-// Smoke — incoming/poc/static_index_lazy_v0.hexa works as advertised.
+// Smoke — inbox/poc/static_index_lazy_v0.hexa works as advertised.
 //
 // @capabilities [fs_read]
 //
@@ -15,7 +15,7 @@
 //
 // Exit code 0 on full PASS, 1 on any FAIL.
 
-use "incoming/poc/static_index_lazy_v0"
+use "inbox/poc/static_index_lazy_v0"
 
 fn _assert(label: string, cond: bool, fails: array) -> array {
     if cond {
@@ -29,7 +29,7 @@ fn _assert(label: string, cond: bool, fails: array) -> array {
 
 pub fn main() {
     let mut fails: array = []
-    let fixture = "incoming/poc/static_index_lazy_v0_fixture.n6"
+    let fixture = "inbox/poc/static_index_lazy_v0_fixture.n6"
 
     // Reset cache so we measure a cold load.
     poc_reset_cache()

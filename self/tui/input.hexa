@@ -69,7 +69,7 @@ let mut _paste_active = 0
 // instead of arriving as a single ["paste", payload] event). Now we accumulate
 // raw bytes into an int array (push is O(1)) and call bytes_to_str_raw once at
 // the close marker. (Local hotfix for wilson; same change proposed upstream as
-// incoming/patches/tui-input-paste-buf-quadratic.md.)
+// inbox/patches/tui-input-paste-buf-quadratic.md.)
 let mut _paste_bytes: [int] = []
 // Bytes injected from outside the L1 stdin pipeline (e.g. T1.C Surface 4
 // JSON-RPC `key` method) — drained before falling through to
@@ -256,7 +256,7 @@ fn _decode_one() -> array {
         // forwards Shift+Enter as ESC+CR to the app). We collapse both ESC+CR
         // and ESC+LF into ["key", -1, 0, 1, 0, ""] (enter with alt=1) so the
         // editor branches on alt to insert a newline instead of submitting.
-        // (wilson 2026-05-13, see incoming/patches/wilson-shift-enter-newline.md.)
+        // (wilson 2026-05-13, see inbox/patches/wilson-shift-enter-newline.md.)
         if b2 == 13 || b2 == 10 {
             return ["key", -1, 0, 1, 0, ""]
         }
@@ -414,7 +414,7 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
     if final_byte == 70 { return ["key", -21, 0, 0, 0, ""] }   // F end
     if final_byte == 73 { return ["focus", 1] }                 // I focus-in
     if final_byte == 79 { return ["focus", 0] }                 // O focus-out
-    if final_byte == 90 { return ["key", -2, 0, 0, 1, ""] }     // Z shift+tab (CBT / BackTab) — wilson 2026-05-13, see incoming/patches/wilson-shift-tab-csi-Z-decode.md
+    if final_byte == 90 { return ["key", -2, 0, 0, 1, ""] }     // Z shift+tab (CBT / BackTab) — wilson 2026-05-13, see inbox/patches/wilson-shift-tab-csi-Z-decode.md
     if final_byte == 117 {
         // CSI u — kitty keyboard protocol: ESC[<codepoint>;<modifier>u
         // (e.g. ESC[13;2u = Shift+Enter). Modifier bitmap follows xterm
@@ -423,7 +423,7 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
         // CSI u (ghostty / kitty / WezTerm / recent iTerm2 with proto enabled)
         // produce a Shift+Enter event without needing the ESC+CR mapping.
         // Other codepoints fall through as ["err", "csi-u-unsupported-cp"].
-        // (wilson 2026-05-13, see incoming/patches/wilson-shift-enter-newline.md.)
+        // (wilson 2026-05-13, see inbox/patches/wilson-shift-enter-newline.md.)
         let _u_parts = _split_semi(params)
         let _u_cp = if len(_u_parts) > 0 { _atoi(to_string(_u_parts[0])) } else { _atoi(params) }
         let _u_mod = if len(_u_parts) >= 2 { _atoi(to_string(_u_parts[1])) } else { 1 }

@@ -5,7 +5,7 @@
 **Selftest**: `stdlib/test/test_channel.hexa` — 21/21 PASS (interp, macOS arm64)
 **Driver**: anima chat autonomous-speech roadmap 2026-05-08, decision 4c
 (L2 multi-agent dialogue + L5 long-running daemon prereq); **v0.2.0** driver =
-`stdlib/jsonl_pool` (wilson swarm — `incoming/patches/wilson-pi-port-6-gap-prereq.md` G6).
+`stdlib/jsonl_pool` (wilson swarm — `inbox/patches/wilson-pi-port-6-gap-prereq.md` G6).
 
 **v0.2.0 (2026-05-13, additive — the original 6-symbol surface is unchanged):**
 - `channel_send_sync(fd, msg) -> bool` — synchronous send (no `()&` backgrounding).

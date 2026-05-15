@@ -1,24 +1,24 @@
-// tool/inbox_promote.hexa — archiver for matured incoming/PATCHES.yaml entries
+// tool/inbox_promote.hexa — archiver for matured inbox/PATCHES.yaml entries
 //
 // @tool(slug="inbox_promote", desc="archive applied PATCHES.yaml entries older than N_DAYS into manifest_log.jsonl")
 // @usage(hexa tool/inbox_promote.hexa [--days N] [--dry-run])
 // @exit_codes(0=ok or no-op, 1=error reading/writing inbox files, 2=arg error)
 //
 // PURPOSE
-//   Walks incoming/PATCHES.yaml. For every entry whose status is
+//   Walks inbox/PATCHES.yaml. For every entry whose status is
 //   `applied` and whose `applied_at` (YYYY-MM-DD) is older than
 //   `today - N_DAYS` (default 14), the tool:
-//     1. appends a JSON line to incoming/manifest_log.jsonl with the
+//     1. appends a JSON line to inbox/manifest_log.jsonl with the
 //        original fields plus status="archived", promoted_at=<today>,
 //     2. removes the matured entry from PATCHES.yaml.
 //
 //   Entries with status pending / pending_external are never touched.
-//   Files outside `incoming/` are never modified.
+//   Files outside `inbox/` are never modified.
 //
 // CONSERVATIVE
 //   --dry-run prints the would-archive list and exits 0 without writing
 //   anything. The default mode also performs a single backup of
-//   PATCHES.yaml at incoming/PATCHES.yaml.bak before rewriting.
+//   PATCHES.yaml at inbox/PATCHES.yaml.bak before rewriting.
 
 fn _str(x) -> string {
     let t = type_of(x)
@@ -214,8 +214,8 @@ while ai < len(cli) {
     ai = ai + 1
 }
 
-let MANIFEST = "incoming/PATCHES.yaml"
-let LOG = "incoming/manifest_log.jsonl"
+let MANIFEST = "inbox/PATCHES.yaml"
+let LOG = "inbox/manifest_log.jsonl"
 
 if !_file_exists(MANIFEST) {
     println("inbox_promote: manifest not found: " + MANIFEST)

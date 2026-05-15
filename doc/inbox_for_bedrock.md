@@ -9,7 +9,7 @@
 
 Bedrock workflows that need an upstream change to `hexa-lang` (language
 feature, stdlib helper, runtime fix) MUST route the patch through this
-repo's `incoming/` inbox until the new native compiler binary reaches
+repo's `inbox/` inbox until the new native compiler binary reaches
 its stage 3 fixed point. This avoids silent drift between the two
 coexisting trees:
 
@@ -24,7 +24,7 @@ bootstrap.
 
 1. Open an external `hexa-lang` session, ship the change to `main`
    (single focused commit).
-2. Add an entry to `incoming/PATCHES.yaml` with `id`, `source_commit`,
+2. Add an entry to `inbox/PATCHES.yaml` with `id`, `source_commit`,
    `source_files`, `compiler_impact`, `selftest_delta`, and the
    primary `downstream_consumer`.
 3. Run `tool/inbox_sync.hexa` to verify the entry is well-formed and

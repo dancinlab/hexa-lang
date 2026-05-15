@@ -3,7 +3,7 @@
 **Status**: preview (since 2026-05-09)
 **Module**: `stdlib/cancel.hexa`
 **Selftest**: `stdlib/test/test_cancel.hexa` — 23/23 PASS (interp, macOS arm64)
-**Driver**: wilson core port G3 prereq (`incoming/PATCHES.yaml#wilson-pi-port-6-gap-prereq`)
+**Driver**: wilson core port G3 prereq (`inbox/PATCHES.yaml#wilson-pi-port-6-gap-prereq`)
 **Spec companion**: `proposals/rfc_022_async_model.md` §6
 
 ## TL;DR
@@ -129,4 +129,4 @@ The wire types in this file are deliberately one-byte-equivalent (`bool` + `stri
 - `proposals/rfc_022_async_model.md` — async model RFC (G2). §3 establishes that stage 1 is single-threaded; §6 establishes the Token integration contract.
 - `self/async_runtime.hexa` — cooperative scheduler *pattern library*. Not wired to eval today.
 - `stdlib/channel.hexa` — mkfifo IPC, the only currently-functional cross-process concurrency primitive. Channels and Tokens compose: a recv loop polls its Token between blocking recvs.
-- `incoming/PATCHES.yaml#wilson-pi-port-6-gap-prereq` — wilson core port entry; G3 = this module.
+- `inbox/PATCHES.yaml#wilson-pi-port-6-gap-prereq` — wilson core port entry; G3 = this module.

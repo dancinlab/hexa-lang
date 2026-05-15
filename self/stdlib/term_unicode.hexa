@@ -60,7 +60,7 @@ fn _u8_decode(s: string, idx: i64) -> array {
     // UTF-8 char get decoded as cp=0 (silently mis-classified as a C0 control
     // by cp_width → render_flush treated wide chars as width 1 → 1-cell gap
     // after every CJK / emoji glyph). Diagnosis trace + probe results in
-    // incoming/patches/self-stdlib-term-unicode-u8-decode-char-code-bug.md.
+    // inbox/patches/self-stdlib-term-unicode-u8-decode-char-code-bug.md.
     let b0 = char_code(s, idx)
     if b0 < 128 {
         return [b0, 1]

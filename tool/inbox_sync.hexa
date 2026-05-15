@@ -1,11 +1,11 @@
-// tool/inbox_sync.hexa — verifier for incoming/PATCHES.yaml
+// tool/inbox_sync.hexa — verifier for inbox/PATCHES.yaml
 //
-// @tool(slug="inbox_sync", desc="verify incoming/PATCHES.yaml entries — well-formedness + source_files exist")
+// @tool(slug="inbox_sync", desc="verify inbox/PATCHES.yaml entries — well-formedness + source_files exist")
 // @usage(hexa tool/inbox_sync.hexa)
 // @exit_codes(0=all entries well-formed, 1=at least one entry malformed, 2=manifest missing)
 //
 // PURPOSE
-//   Read incoming/PATCHES.yaml. For each entry, check:
+//   Read inbox/PATCHES.yaml. For each entry, check:
 //     status pending          — well-formed entry; report "head_or_main"
 //                               (no SHA verification — the inbox trusts
 //                                the recorded source_commit at this stage)
@@ -76,7 +76,7 @@ fn _kv(line: string) -> array {
     return [k, v]
 }
 
-// Parse incoming/PATCHES.yaml into an array of entries.
+// Parse inbox/PATCHES.yaml into an array of entries.
 // Each entry is a map-like array of [key, value] pairs. Multi-line
 // "source_files" lists ("- path") and pipe-block scalars are flattened
 // into a single comma-joined string for reporting purposes.
@@ -170,7 +170,7 @@ fn _truncate(s: string, width: int) -> string {
 }
 
 // ── main ───────────────────────────────────────────────
-let MANIFEST = "incoming/PATCHES.yaml"
+let MANIFEST = "inbox/PATCHES.yaml"
 
 if !_file_exists(MANIFEST) {
     println("inbox_sync: manifest not found: " + MANIFEST)

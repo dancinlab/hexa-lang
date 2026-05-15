@@ -683,7 +683,7 @@ fn codegen_c2(ast) {
     // header doesn't yet re-export the runtime_hi_gen.c `static` rt_* stdlib
     // helpers. Set HEXA_USE_RUNTIME_C=1 to revert to the legacy include and
     // keep building until the header migration is complete.
-    // (Patch issue: incoming/patches/runtime-h-incomplete-after-phase-1-3-b.md)
+    // (Patch issue: inbox/patches/runtime-h-incomplete-after-phase-1-3-b.md)
     let runtime_inc = if env("HEXA_USE_RUNTIME_C") != "" { "runtime.c" } else { "runtime.h" }
     parts.push("#include \"" + runtime_inc + "\"\n\n")
 
@@ -3249,7 +3249,7 @@ fn gen2_expr(node) {
             // `Dispatcher { handler: my_fn, ... }` emits `Dispatcher(my_fn, ...)`
             // where my_fn is C fn-pointer typed `HexaVal (HexaVal)`, not the
             // `HexaVal` the constructor expects → clang error. Filed at
-            // incoming/patches/struct-fn-field-wrap.md (2026-05-14).
+            // inbox/patches/struct-fn-field-wrap.md (2026-05-14).
             let _sfv = node.fields[si].left
             let mut _sfv_expr = gen2_expr(_sfv)
             if type_of(_sfv) != "string" && _sfv.kind == "Ident" && _is_known_fn_global(_sfv.name) {
@@ -3618,7 +3618,7 @@ fn gen2_expr(node) {
             // (hexa_exec_stream_open / _write / _close_stdin). Same shape as
             // _kill above: explicit emit so user-side `exec_stream_open(cmd)` etc.
             // resolves without hexa_call1 indirection. Filed at
-            // incoming/patches/wilson-mcp-needs-bidi-stdio.md.
+            // inbox/patches/wilson-mcp-needs-bidi-stdio.md.
             if name == "exec_stream_open" {
                 return "hexa_exec_stream_open(" + gen2_expr(node.args[0]) + ")"
             }
@@ -3989,7 +3989,7 @@ fn gen2_expr(node) {
                 // timestamp` shim is safe.
                 if name == "timestamp" || name == "now" || name == "time_now" || name == "__builtin_time_now" { return "hexa_timestamp()" }
                 // Wilson 2026-05-13 — expose hexa_time_ms (monotonic ms wall clock)
-                // to user-side hexa. Filed at incoming/patches/wilson-needs-time-now-ms-builtin.md.
+                // to user-side hexa. Filed at inbox/patches/wilson-needs-time-now-ms-builtin.md.
                 // Also intercept `__builtin_time_now_ms` so self/std_time.hexa's wrapper
                 // body resolves (it expects the unmapped __builtin_ name).
                 if name == "time_now_ms" || name == "now_ms" || name == "timestamp_ms" || name == "__builtin_time_now_ms" { return "hexa_time_ms()" }

@@ -17,7 +17,7 @@
 //  Framing: 4-byte size (includes itself) + 1-byte type + 2-byte tag
 //  + body. msize negotiated in Tversion (default 8192 + header).
 //
-//  RFC: ~/core/hexa-lang/incoming/patches/stdlib-9p-codec.md
+//  RFC: ~/core/hexa-lang/inbox/patches/stdlib-9p-codec.md
 //  Atlas L-candidate: "frame.size == total framed bytes including the
 //  size field itself" — single invariant carrying the whole framing.
 

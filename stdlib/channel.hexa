@@ -14,7 +14,7 @@
 //             surfaced as write(2) block; ordered w.r.t. subsequent sends; FIFO-gone → false)
 //             + channel_recv_lines (unbuffered sysread → drain all buffered lines in one
 //             shot — channel_recv alone loses lines 2..N when several are buffered).
-//             Driver: stdlib/jsonl_pool (wilson swarm — incoming/patches/wilson-pi-port-6-gap-prereq).
+//             Driver: stdlib/jsonl_pool (wilson swarm — inbox/patches/wilson-pi-port-6-gap-prereq).
 //  @maintainer anima-core
 //  @priority P0
 //

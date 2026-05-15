@@ -15,7 +15,7 @@
 //  @since 2026-05-13
 //  @maintainer hexa-core
 //  @priority P1
-//  @rfc incoming/patches/wilson-pi-port-6-gap-prereq.md (G6) — .roadmap.stdlib S-NEW-JSONL-POOL
+//  @rfc inbox/patches/wilson-pi-port-6-gap-prereq.md (G6) — .roadmap.stdlib S-NEW-JSONL-POOL
 //  @changelog 0.2.0 (2026-05-13) — + pool_grow(pool, n) (spawn extra cells against the
 //             cmd_tmpl saved at pool_spawn). + pool_request_cancellable /
 //             pool_recv_any_cancellable / pool_broadcast_cancellable accepting a duck-typed
@@ -24,7 +24,7 @@
 //             unchanged (the new variants are siblings). Driver: wilson swarm — thread
 //             ToolCtx.cancel into pool_request, allow `/swarm spawn N` to grow incrementally.
 //
-//  ── PROBLEM (wilson swarm — incoming/patches/wilson-pi-port-6-gap-prereq, G6) ──
+//  ── PROBLEM (wilson swarm — inbox/patches/wilson-pi-port-6-gap-prereq, G6) ──
 //
 //  wilson's swarm (P5) and out-of-proc plugin IPC need: spawn N child
 //  processes — each = `wilson --harness rpc`, or any worker that speaks

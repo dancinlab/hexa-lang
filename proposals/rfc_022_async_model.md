@@ -5,7 +5,7 @@
 - **Author date**: 2026-05-10
 - **Predecessors**: RFC-018 (native codegen spec), RFC-021 (daemon mode)
 - **Companion deliverable**: stdlib/cancel.hexa (G3 — cooperative cancellation Token)
-- **Block dependency**: wilson core port (incoming/PATCHES.yaml#wilson-pi-port-6-gap-prereq) — G2 of {G1, G2, G3} prereq triple
+- **Block dependency**: wilson core port (inbox/PATCHES.yaml#wilson-pi-port-6-gap-prereq) — G2 of {G1, G2, G3} prereq triple
 - **Style template**: RFC-018 (numbered sections, divergence table, surface-impact bullets)
 - **Affected areas (eventual)**: `self/parser.hexa` (AsyncFnDecl already lands), `self/lexer.hexa` (async/await keywords already reserved), `self/codegen_c2.hexa` (currently ignores Await — see §4), `self/hexa_full.hexa` (interpreter — Await is identity, see §3.2), `self/async_runtime.hexa` (cooperative scheduler ground truth), `stdlib/channel.hexa` (FIFO IPC), `stdlib/cancel.hexa` (this RFC §6).
 
@@ -262,7 +262,7 @@ Run: `$HOME/.hx/bin/hexa_real run stdlib/test/test_cancel.hexa` → `PASS: stdli
 - `stdlib/cancel.hexa` (G3 — this RFC §6)
 - `proposals/rfc_018_native_codegen_spec.md` (compile pipeline)
 - `proposals/rfc_021_daemon_mode.md` (daemon as L3 in fork-storm ladder)
-- `incoming/PATCHES.yaml#wilson-pi-port-6-gap-prereq` (downstream consumer entry)
+- `inbox/PATCHES.yaml#wilson-pi-port-6-gap-prereq` (downstream consumer entry)
 
 ---
 

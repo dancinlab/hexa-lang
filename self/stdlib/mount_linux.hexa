@@ -19,7 +19,7 @@
 //
 // Upstream-of-truth: this file is the placeholder for what will become
 // a real mount(2) syscall binding inside the runtime. The handoff note
-// `incoming/patches/stdlib-os-mount-linux.md` carries the full request
+// `inbox/patches/stdlib-os-mount-linux.md` carries the full request
 // (target syscall signatures, error model, @platform gate). When that
 // lands, the exec-wrappers below get re-pointed at the builtin and the
 // callers keep the same import path.

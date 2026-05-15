@@ -24,7 +24,7 @@
 //   @E experiment (n6 spec) — supersedes hexa-lang's prior "cross-engine bus"
 //                  semantics (see SEMANTIC DRIFT note below).
 //
-// SEMANTIC DRIFT (resolved 2026-05-13, see incoming/notes/2026-05-13-n6-absorption-execution-session.md):
+// SEMANTIC DRIFT (resolved 2026-05-13, see inbox/notes/2026-05-13-n6-absorption-execution-session.md):
 //   The earlier RFC-017 draft treated @E as "Edge / cross-engine bus / bridge".
 //   The upstream n6 spec (CC0-1.0, the source of the absorbed rodata corpus)
 //   defines @E as "Experiment — empirical measurement record". The n6 spec

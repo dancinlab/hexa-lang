@@ -114,5 +114,5 @@ if best == "" { return reject("no installed " + name + " satisfies " + wanted_ra
 
 - `stdlib/semver.hexa` — implementation + header doc.
 - `stdlib/test/test_semver.hexa` — selftest.
-- `incoming/PATCHES.yaml#stdlib-semver` — the patch entry.
+- `inbox/PATCHES.yaml#stdlib-semver` — the patch entry.
 - https://semver.org/spec/v2.0.0.html — the spec this implements (with the caveats above).

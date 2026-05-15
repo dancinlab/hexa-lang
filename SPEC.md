@@ -553,8 +553,8 @@ two trees coexist and stdlib patches need verification across both.
 
 | Surface | Path |
 |---|---|
-| Manifest | `incoming/PATCHES.yaml` |
-| Audit log | `incoming/manifest_log.jsonl` |
+| Manifest | `inbox/PATCHES.yaml` |
+| Audit log | `inbox/manifest_log.jsonl` |
 | Sync tool | `tool/inbox_sync.hexa` |
 | Promote tool | `tool/inbox_promote.hexa` |
 | Bedrock advisory | `doc/inbox_for_bedrock.md` |
@@ -789,7 +789,7 @@ side closed (`hexa build core/main.hexa` → `wilson 0.0.1`).
 | `hexa cc` / `hexa cc --regen` resolve `hexa_cc.c` / SSOT modules / `-I` via `$HEXA_LANG > install_dir > ./self` (not cwd) — works out-of-tree | PASS | 731f41d6 |
 | `self/stdlib/law_io.hexa` selftest `main()` → `tool/law_io_selftest.hexa` (u_main collision on flatten) | PASS | a5de44e2 |
 | `~/.hx/bin/hexa_real` + `~/.hx/packages/hexa/hexa.real` re-promoted from HEAD `46016739` (sha cd817981…; manifest_log row) | PASS | dae438ee |
-| wilson `hexa build core/main.hexa` → `OK: built build/wilson` → `wilson 0.0.1` (hello, harness-cli/print/rpc, tool-core, provider-claude-cli/anthropic, agents-md) — hexa-lang side of wilson CLOSED | PASS | 340c3788 (closure note `incoming/notes/2026-05-11-wilson-hexa-lang-closure.md`) |
+| wilson `hexa build core/main.hexa` → `OK: built build/wilson` → `wilson 0.0.1` (hello, harness-cli/print/rpc, tool-core, provider-claude-cli/anthropic, agents-md) — hexa-lang side of wilson CLOSED | PASS | 340c3788 (closure note `inbox/notes/2026-05-11-wilson-hexa-lang-closure.md`) |
 
 ---
 

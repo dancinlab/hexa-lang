@@ -18,7 +18,7 @@
 //       register       — STUB: lex→parse→discover_check→write_staging for a project file's
 //                        `@discover`-annotated fns. Needs the compiler frontend wired into a
 //                        `tool/atlas_register.hexa` companion — spec in
-//                        incoming/patches/hexa-cli-atlas-register-update-or-pr.md.
+//                        inbox/patches/hexa-cli-atlas-register-update-or-pr.md.
 //       pr             — STUB: the `PR` fallback (branch + promote-in-fork + `gh pr create`).
 //
 // Wired from self/main.hexa: `hexa atlas <sub-sub> [args]`.
@@ -438,12 +438,12 @@ fn cmd_promote(rest: array) {
 // write the proposals via compiler/discover/staging.hexa::write_staging. That
 // pulls the compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse)
 // into this tool — so it belongs in a `tool/atlas_register.hexa` companion, not
-// here (this tool is otherwise zero-frontend). Tracked: incoming/patches/hexa-cli-atlas-register-update-or-pr.md.
+// here (this tool is otherwise zero-frontend). Tracked: inbox/patches/hexa-cli-atlas-register-update-or-pr.md.
 fn cmd_register(rest: array) {
     println("hexa atlas register: NOT YET WIRED.")
     println("  intended: lex→parse <file.hexa> → discover_check(Module) → write_staging — needs the")
     println("  compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse) wired into a")
-    println("  `tool/atlas_register.hexa` companion. Spec: incoming/patches/hexa-cli-atlas-register-update-or-pr.md")
+    println("  `tool/atlas_register.hexa` companion. Spec: inbox/patches/hexa-cli-atlas-register-update-or-pr.md")
     println("  workaround: stage a node by hand —")
     println("    hexa atlas append-witness --kind L --id <id> {--raw <body> | --stdin}")
     println("  then fold it:  hexa atlas promote --staging <atlas.append.witness-*.n6>")
@@ -457,7 +457,7 @@ fn cmd_register(rest: array) {
 fn cmd_pr(rest: array) {
     println("hexa atlas pr: NOT YET WIRED.")
     println("  intended: branch + `hexa atlas promote` (in your hexa-lang clone) + `gh pr create` against origin —")
-    println("  the `PR` fallback of `update || PR` for non-owners. Spec: incoming/patches/hexa-cli-atlas-register-update-or-pr.md")
+    println("  the `PR` fallback of `update || PR` for non-owners. Spec: inbox/patches/hexa-cli-atlas-register-update-or-pr.md")
     println("  manual PR for now:")
     println("    cd <your hexa-lang clone> && git switch -c atlas-<id>")
     println("    hexa atlas promote --staging <shard.n6>")
@@ -491,7 +491,7 @@ fn cmd_help() {
     println("  register <file.hexa>    [STUB] lex→parse→discover_check→write_staging for the file's")
     println("                          @discover-annotated fns. (needs the compiler frontend — see note)")
     println("  pr                      [STUB] the `PR` fallback: branch + promote-in-fork + gh pr create.")
-    println("                          (see incoming/patches/hexa-cli-atlas-register-update-or-pr.md)")
+    println("                          (see inbox/patches/hexa-cli-atlas-register-update-or-pr.md)")
     println("")
     println("data lives compile-time in compiler/atlas/embedded.gen.hexa")
     println("(regenerate via:  hexa run tool/atlas_embed_gen.hexa)")

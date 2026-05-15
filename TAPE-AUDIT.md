@@ -8,7 +8,7 @@ Heaviest of the four siblings. Concrete inventory:
 
 - **Class-T candidates:** `state/*.jsonl` (10: `aot_cache_gc`, `convergence`, `cross_repo_links`, `discovery_absorption`, `format_witness_*`, `hx_meta_telemetry`, …). Schema-repetitive append-only. `state/hxc/` already mirrors them as `.hxc`.
 - **CARGO:** `state/markers/` carries **28,695** `*.marker` files (no reader, classic cargo). `.hook-statusline.jsonl` is 3.5 MB. Prune or re-encode as `.tape` `@T marker_emit` rows.
-- **Queue:** `incoming/patches/` (37 files) + `INBOX.md` + `PATCHES.yaml` — Class-T candidate.
+- **Queue:** `inbox/patches/` (37 files) + `INBOX.md` + `PATCHES.yaml` — Class-T candidate.
 
 ## B. Identity surface
 
@@ -20,7 +20,7 @@ Empty `AGENTS.md` (zero bytes) + symlinked `CLAUDE.md`. Identity carried implici
 
 ## D. Per-run / per-event history
 
-The crown jewel. Active streams: measurement pilots (`format_witness_*.jsonl`, `convergence.jsonl`, `hx_meta_telemetry.jsonl`), patch-promotion queue (`incoming/patches/`), atlas-callers (`state/atlas_n6_callers.tsv`), continuous scans (`state/hx_continuous_scan_*.json`). All Class-T. A unified `promotion.tape` + `pilots.tape` + `patches.tape` set would replace ad-hoc JSONL with typed/edged/graded events and dogfood the format the project itself co-developed.
+The crown jewel. Active streams: measurement pilots (`format_witness_*.jsonl`, `convergence.jsonl`, `hx_meta_telemetry.jsonl`), patch-promotion queue (`inbox/patches/`), atlas-callers (`state/atlas_n6_callers.tsv`), continuous scans (`state/hx_continuous_scan_*.json`). All Class-T. A unified `promotion.tape` + `pilots.tape` + `patches.tape` set would replace ad-hoc JSONL with typed/edged/graded events and dogfood the format the project itself co-developed.
 
 ## E. Promotion candidates
 

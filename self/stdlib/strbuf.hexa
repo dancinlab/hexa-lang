@@ -11,7 +11,7 @@
 // stream collectors that fn may never return, the arena fills and the
 // runtime memcap (4 GB default) aborts the process. The same trap
 // recurs wherever someone writes the most natural "append to string"
-// idiom — see ~/core/hexa-lang/incoming/patches/
+// idiom — see ~/core/hexa-lang/inbox/patches/
 // string-concat-in-unbounded-loop-quadratic-rss.md for the catalogue
 // (and its predecessor tui-input-paste-buf-quadratic.md).
 //

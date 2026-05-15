@@ -3,7 +3,7 @@
 //
 //  Selftest for stdlib/jsonl_pool — JSONL-demux subprocess pool.
 //
-//  Acceptance (incoming/patches/wilson-pi-port-6-gap-prereq.md — S-NEW-JSONL-POOL):
+//  Acceptance (inbox/patches/wilson-pi-port-6-gap-prereq.md — S-NEW-JSONL-POOL):
 //    0. 4-cell echo pool spawns; all 4 children alive.
 //    1. pool_request single round-trip (auto-minted id echoed back).
 //    2. concurrent 20 requests, id-correct demux — send 20, then collect 20

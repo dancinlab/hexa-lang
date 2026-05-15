@@ -133,7 +133,7 @@ fn cmd_help() {
     println("    e.g. hexa lattice verify              → __N6_AXIS_VERIFY__ PASS (σ·φ=n·τ=24, |S₄|=24)")
     println("         hexa atlas-audit anchor          → NIST/CRC/ASM citation audit over overlay corpus")
     println("    atlas-audit reads ~/.hx/data/atlas.overlay.n6 (~109 nodes, ~3s). Full 7,278-node")
-    println("    rodata coverage pending compiler/atlas/static_index lazy-load (see incoming/notes/).")
+    println("    rodata coverage pending compiler/atlas/static_index lazy-load (see inbox/notes/).")
     println("")
     println("  Sister-project tools (rsc / bayes / n6 discover/mine / hexa-principle annotator etc.)")
     println("  분리됨 — 각 sister repo 의 자체 도구로 위치. invoke via `hexa run <sister>/path/main.hexa <verb>`.")
@@ -943,7 +943,7 @@ fn shq(s) {
 // either cmd_run (for .hexa modules) or exec (for tool/hexa_annot/ bash
 // scripts).
 //
-// Surface inventory (matches incoming/notes 60+ verbs):
+// Surface inventory (matches inbox/notes 60+ verbs):
 //   29 annotation analyzers   (tool/hexa_annot/hexa-<name>, bash)
 //   3  Phase 2 verifiers      (honesty/absolute/meta-closure)
 //   3  Phase 2 generators     (smash/free/hyperarithmetic)

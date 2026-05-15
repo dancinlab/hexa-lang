@@ -16,7 +16,7 @@
 //
 //  ── PROBLEM (wilson core port — G3 prereq, 2026-05-09) ────────────────────
 //
-//  wilson core port (incoming/PATCHES.yaml#wilson-pi-port-6-gap-prereq) needs
+//  wilson core port (inbox/PATCHES.yaml#wilson-pi-port-6-gap-prereq) needs
 //  a cooperative cancellation primitive that callers can poll inside long
 //  loops or pass to async tasks (RFC-022 §6). The hexa async surface today
 //  is cooperative round-robin (see self/async_runtime.hexa); there is no

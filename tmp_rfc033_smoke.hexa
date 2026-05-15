@@ -3,7 +3,7 @@
 // tmp_rfc033_smoke.hexa — RFC 033 farr_copy + farr_add_gaussian_noise smoke
 //
 // Builtin: hexa_farr_copy + hexa_farr_add_gaussian_noise in self/runtime.c.
-// Reference: incoming/rfc_drafts_2026_05_12/rfc_033_farr_copy_and_gaussian.md
+// Reference: inbox/rfc_drafts_2026_05_12/rfc_033_farr_copy_and_gaussian.md
 //
 // Falsifier coverage (≥9 required; ship 10):
 //

@@ -108,7 +108,7 @@ Second session same day (ubu-1 ControlMaster after ubu-2 auth fail). Added:
 > outer if 의 다음 statement 를 skip 하지 못함. parser.hexa 의 `c0 != "@"`
 > branch 가 ws-push + fallback-push 를 모두 실행 → continuation 라인 odd-dup.
 
-상세 minimal repro 와 fix 경로: [RFC-029](../incoming/rfc_drafts_2026_05_12/rfc_029_continue_scope_nested_if.md).
+상세 minimal repro 와 fix 경로: [RFC-029](../inbox/rfc_drafts_2026_05_12/rfc_029_continue_scope_nested_if.md).
 memory entry: `feedback_hexa_interp_nested_continue.md`.
 
 #### 적용된 fix (최종 형태 — RFC-029 Phase 1/2/3 모두 완료)
@@ -203,7 +203,7 @@ relations get corrupted data.
 The re-promote cycle should be followed by a fresh regen against current
 macOS-canonical atlas.n6 to land a clean embed.
 
-Detailed session log: `incoming/notes/2026-05-12-atlas-absorption-phase3-and-interp-drift.md`.
+Detailed session log: `inbox/notes/2026-05-12-atlas-absorption-phase3-and-interp-drift.md`.
 
 ---
 
@@ -218,7 +218,7 @@ Detailed session log: `incoming/notes/2026-05-12-atlas-absorption-phase3-and-int
 
 ### regen 친화도 friction (2026-05-12, 후속 fix `150e0220`)
 
-Linux GNU 호스트에서 `hexa run tool/atlas_embed_gen.hexa` 실행 시 3 false start. Root cause: `self/hexa_full.hexa::file_size` 빌트인이 BSD `stat -f %z` 먼저 시도 → GNU `stat -f` 는 filesystem-info 모드라 `%z` 가 undefined → locale-formatted 메타데이터를 **STDOUT** 에 emit ("`  파일: ...\n    ID: ...`") → `2>/dev/null` 로 못 막음 → `to_int` 가 진짜 garbage 처리. `150e0220` 에서 GNU-first 순서로 뒤집고 `LC_ALL=C` 가드 추가. 단 deployed `~/.hx/packages/hexa/build/hexa_interp` 바이너리는 다음 re-promote 사이클까지 구 로직 유지 → 그 동안 Linux 사용자는 여전히 `env LC_ALL=C PATH=<stat shim>:$PATH` 워크어라운드 필요. 세부는 `incoming/notes/2026-05-12-atlas-n6-absorption-session.md` §B.
+Linux GNU 호스트에서 `hexa run tool/atlas_embed_gen.hexa` 실행 시 3 false start. Root cause: `self/hexa_full.hexa::file_size` 빌트인이 BSD `stat -f %z` 먼저 시도 → GNU `stat -f` 는 filesystem-info 모드라 `%z` 가 undefined → locale-formatted 메타데이터를 **STDOUT** 에 emit ("`  파일: ...\n    ID: ...`") → `2>/dev/null` 로 못 막음 → `to_int` 가 진짜 garbage 처리. `150e0220` 에서 GNU-first 순서로 뒤집고 `LC_ALL=C` 가드 추가. 단 deployed `~/.hx/packages/hexa/build/hexa_interp` 바이너리는 다음 re-promote 사이클까지 구 로직 유지 → 그 동안 Linux 사용자는 여전히 `env LC_ALL=C PATH=<stat shim>:$PATH` 워크어라운드 필요. 세부는 `inbox/notes/2026-05-12-atlas-n6-absorption-session.md` §B.
 
 ### 폐기 가능성 — 즉시 가능한 것 vs 후속
 

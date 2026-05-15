@@ -15,7 +15,7 @@
 //
 // Latency is not measured here (the hexa interp does not expose a
 // monotonic clock from this scope); refer to the bash audit captured
-// in incoming/notes/2026-05-13-bridge-cache-live-validation-session.md
+// in inbox/notes/2026-05-13-bridge-cache-live-validation-session.md
 // for wall-clock numbers from the shell-level audit.
 //
 // Run:  HEXA_BRIDGE_LIVE=1 hexa run compiler/bridges/bridges_live_audit.hexa
@@ -88,6 +88,6 @@ fn main() {
     _row("uniprot    ", uniprot_run(["P01308"]))
 
     println("")
-    println("Audit complete. See incoming/notes/2026-05-13-bridge-cache-live-validation-session.md for shell-level latency table.")
+    println("Audit complete. See inbox/notes/2026-05-13-bridge-cache-live-validation-session.md for shell-level latency table.")
     exit(0)
 }

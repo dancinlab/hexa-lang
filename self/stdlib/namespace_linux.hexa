@@ -21,7 +21,7 @@
 // Upstream-of-truth: this file is the placeholder for what will become
 // real unshare(2)/setns(2)/pivot_root(2) syscall bindings inside the
 // runtime. The handoff note
-// `incoming/patches/stdlib-os-namespace-linux.md` carries the full
+// `inbox/patches/stdlib-os-namespace-linux.md` carries the full
 // request (target syscall signatures, error model, recommended
 // `SpawnOpts.namespaces` extension on stdlib/exec).
 //

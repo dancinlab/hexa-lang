@@ -1092,9 +1092,9 @@ stdlib_evolution:
       selftest: test_semver 110/110
   inbox_protocol:
     decision_2026_05_09: incoming_dir_until_native_compiler_v1
-    directory: incoming/
-    manifest: incoming/PATCHES.yaml
-    audit_log: incoming/manifest_log.jsonl
+    directory: inbox/
+    manifest: inbox/PATCHES.yaml
+    audit_log: inbox/manifest_log.jsonl
     sync_tool: tool/inbox_sync.hexa
     promote_tool: tool/inbox_promote.hexa
     sunset_trigger: stage_3_fixed_point
@@ -1305,7 +1305,7 @@ phases_completed_2026_05_10:
     status: PASS
     evidence: "03d5070b feat(incoming+tool+spec): upstream-patch inbox until stage 3"
     notes: |
-      incoming/PATCHES.yaml + tool/inbox_sync.hexa +
+      inbox/PATCHES.yaml + tool/inbox_sync.hexa +
       tool/inbox_promote.hexa + doc/inbox_for_bedrock.md.
       Sunsets at stage 3 fixed point.
 
@@ -1483,4 +1483,4 @@ phases_completed_2026_05_11_closure:
     evidence: "dae438ee build(stage0): re-promote hexa_real (46016739) — exec_stream_kill + fnref thunks + un-doubled hexa_cc.c; sha cd817981… (~/.hx/bin/hexa_real + ~/.hx/packages/hexa/hexa.real)"
   wilson_hexa_lang_side_closed:
     status: PASS
-    evidence: "340c3788 doc(inbox): wilson<->hexa-lang closure — VERIFIED, wilson hexa build → wilson 0.0.1; all follow-ups landed (closure note incoming/notes/2026-05-11-wilson-hexa-lang-closure.md)"
+    evidence: "340c3788 doc(inbox): wilson<->hexa-lang closure — VERIFIED, wilson hexa build → wilson 0.0.1; all follow-ups landed (closure note inbox/notes/2026-05-11-wilson-hexa-lang-closure.md)"

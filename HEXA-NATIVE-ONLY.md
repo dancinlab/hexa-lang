@@ -278,8 +278,8 @@ bench that fails to reach within an order-of-magnitude of these limits.
 
 ## §7 References
 
-- RFC 032 — `farr_matmul` native builtin (`incoming/rfc_drafts_2026_05_12/rfc_032_farr_matmul_native_builtin.md`)
-- RFC 033 — `farr_copy` + Gaussian noise (`incoming/rfc_drafts_2026_05_12/rfc_033_farr_copy_and_gaussian.md`)
+- RFC 032 — `farr_matmul` native builtin (`inbox/rfc_drafts_2026_05_12/rfc_032_farr_matmul_native_builtin.md`)
+- RFC 033 — `farr_copy` + Gaussian noise (`inbox/rfc_drafts_2026_05_12/rfc_033_farr_copy_and_gaussian.md`)
 - RFC 034 — Pauli kernels (in-source, `self/runtime.c:7814`; no markdown draft yet)
 - RFC 035 — NM-step kernels (in-source, `self/runtime.c:7987`; no markdown draft yet)
 - Codegen surface — `self/codegen_c2.hexa:4117` (farr_get) / `:4138` (farr_set)

@@ -21,7 +21,7 @@
 | 📜 **MAIN.log.tape** | append-only cycle history (cycle 001-031) — verifier sprint · tier change · stdlib contribution · falsifier fire · governance check 기록 |
 | 🔬 **VERIFY.tape** | 3-stage protocol · falsifier ≥5 pre-register declarative + executable (falsifier.hexa) · sha256 freeze · tier→stage mapping · phase_3_landed |
 | 📖 **AGENTS.tape** | atlas-area governance (anima g1~g8 carry + g_self_verify + g_tier_default_insufficient + g_external_calc_forbidden) · `CLAUDE.md` 는 symlink |
-| 📦 **incoming/** | 새 verdict 제출 통로 (downstream consumer 또는 external contributor 가 patch markdown 한 개 = 한 개념). project incoming/patches/ 와 동일 패턴. |
+| 📦 **inbox/** | 새 verdict 제출 통로 (downstream consumer 또는 external contributor 가 patch markdown 한 개 = 한 개념). project inbox/patches/ 와 동일 패턴. |
 
 ## 🧭 9 도메인 split
 
@@ -89,7 +89,7 @@ n6-replication tier 모델 carry:
 
 | Stage | 단계 | 위치 |
 |-------|------|------|
-| 1 | submit | `atlas/incoming/<descriptive-name>.md` (한 개념 = 한 파일) |
+| 1 | submit | `atlas/inbox/<descriptive-name>.md` (한 개념 = 한 파일) |
 | 2 | review | reviewer 가 verdict tier 부여 + falsifier ≥5 작성 |
 | 3 | merge | `atlas/MAIN.tape` 의 해당 § 도메인 section append |
 | 4 | log | `atlas/MAIN.log.tape` (auto, append-only · g_arch_vs_log_split 적용) |
@@ -113,7 +113,7 @@ atlas verdict 는 두 layer 동시 보존:
 | 📁 `MAIN.tape` | 9-domain verdict SSOT |
 | 📁 `VERIFY.tape` | 3-stage protocol + falsifier ≥5 spec |
 | 📁 `AGENTS.tape` | atlas-area governance (`CLAUDE.md` symlink) |
-| 📁 `incoming/` | submission 통로 |
+| 📁 `inbox/` | submission 통로 |
 | 🔧 `../compiler/atlas/embedded.gen.hexa` | atlas atom rodata (frozen, ~410 entries) |
 | 🔧 `../compiler/atlas/verify/` | hexa-native verifier engines — 13 modules: foundation·math·top·cosmo·bridges·chem·phys·transcendental·eng·geo·bio·cross·modular·falsifier |
 | 🔧 `../tool/atlas_verify.hexa` | CLI entry point — `hexa run tool/atlas_verify.hexa [--domain D]` (작동 중) |
@@ -129,7 +129,7 @@ atlas verdict 는 두 layer 동시 보존:
 
 | Phase | scope | status |
 |-------|-------|--------|
-| **Phase 1** | spec layer (5 files + incoming/) · archive-TECS-L T-proofs anchor seed · default tier 🟠 INSUFFICIENT | ✅ 2026-05-15 LANDED |
+| **Phase 1** | spec layer (5 files + inbox/) · archive-TECS-L T-proofs anchor seed · default tier 🟠 INSUFFICIENT | ✅ 2026-05-15 LANDED |
 | **Phase 2** | engine layer · Stage 1 hexa-native (stdlib/core/math) · Stage 2 libm transcendental · domain verifiers · `tool/atlas_verify.hexa` CLI · cycle 001-018 cumulative 82 | ✅ 2026-05-15 LANDED |
 | **Phase 3** | Stage 3 cross-meta · falsifier executable + sha256 freeze (18 batteries) · CI gate (strict-lint stage 9 surrogate) · T2-01 full chain · §5 BIO IIT ladder · wilson governance priority-1 carry · cycle 019-031 cumulative 118 | ✅ 2026-05-15 LANDED |
 | **Phase 3+ deferred** | anima-scale many-node MIP (Bell(n) super-exp, PyPhi 1.2.0 carry) · true 컴파일러 strict-lint stage 9 (build-time HX-code) · hexa dispatcher binary rebuild (`hexa atlas-verify` 활성화) · MAIN.log.tape append automation (commit hook) · ubu-1/2 current-interp build (원격 toolchain) | ⚪ deferred |
