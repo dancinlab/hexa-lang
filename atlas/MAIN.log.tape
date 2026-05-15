@@ -1406,3 +1406,51 @@
     g_external_calc_forbidden — ✅ 0 external runtime · ubu 원격은 비침습 clone-only (force-reset 금지 준수)
   EOF
 
+# ─── Cycle 031 — Phase 3: §5 BIO IIT 3.0 big-Φ n=3 GENUINE MIP search ──
+
+@A cycle_031 := "Phase 3 cycle 031 — §5 BIO IIT 3.0 n=3 genuine MIP search (deferred algorithm)" :: cycle [d=2026-05-15 active]
+  trigger = "user 'go' — Phase 3 continuation, deferred multi-node MIP 알고리즘 hexa-native 입증"
+  scope <<~EOF
+    cumulative 117 → 118 (+1). §5 BIO Stage D 의 핵심 deferred 항목 — multi-node
+    MIP search 알고리즘 — 을 tractable scale(n=3)에서 GENUINE hexa-native 구현.
+    n=2 single-bipartition (cycle 029) → n=3 bipartition lattice 전수 argmin.
+  EOF
+  files_modified <<~EOF
+    compiler/atlas/verify/bio.hexa — +1 verifier s5_iit3_bigphi_3node_mip +
+      _severed_count_ring + _ring_part helpers. 3-node {A,B,C} bipartitions
+      {A}|{BC}·{B}|{AC}·{C}|{AB} 전수 enumerate, per-cut Φ = (severed effect
+      bits)·½ (Hamming-ground EMD δ vs δ⊗uniform), MIP = argmin:
+        RING A'=C,B'=A,C'=B: every cut severs exactly 2 effect bits → Φ=1.0
+          (ring symmetry, all 3 bipartitions equal) → big-Φ=MIP Φ=1.0
+        IDENTITY A'=A,B'=B,C'=C: src==node always → 0 severed all cuts → Φ=0
+        integrated(1.0) > reducible(0) ✓ · MIP argmin enumerated ✓
+    atlas/MAIN.tape — tldr cumulative 118 + Stage D n=3 MIP note
+  EOF
+  verifier_run_result <<~EOF
+    bio domain: 6/6 PASS (v8_at_risk 🟠 + EI 🔵 + Φ_SI 🔵 + small-φ 🔵 +
+      bigΦ-n2 🔵 + bigΦ-n3-MIP 🔵)
+    Full cumulative: 118/118 PASS · 99 🔵 + 1 🟠 AT-RISK + 18 falsifier-robust
+  EOF
+  mip_algorithm_significance <<~EOF
+    "multi-node MIP search" 는 §5 IIT ladder 의 가장 깊은 deferred 항목이었음
+    (Stage D full version). cycle 029 는 n=2 (single trivial bipartition,
+    MIP search 자명). cycle 031 은 n=3 — bipartition lattice 가 3개 non-trivial
+    cut → 실제 argmin enumeration 발생 = GENUINE MIP 알고리즘 hexa-native.
+    이로써 MIP 알고리즘 자체는 입증 완료. 남은 carry =
+    anima V8 (HH/STDP/NMDA) 의 many-node scale-up — partition lattice 가
+    Bell(n) (n=3:5, n=4:15, n=10:115975, super-exponential) 로 폭증, anima 가
+    PyPhi 1.2.0 (Python) 으로 수행한 영역. 알고리즘 ≠ scale: hexa-native MIP
+    알고리즘 demonstrated, anima-scale execution 은 s5_v8_bbio_at_risk_carry.
+
+    §5 BIO IIT closure ladder 최종:
+      A EI 2008 · B Φ_SI 1994 · C small-φ 2014 · D big-Φ n=2 · D' big-Φ n=3 MIP
+      = 5 genuine hexa-native + 1 honest carry (anima many-node PyPhi).
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only — ✅ 118 entries via hexa CLI (로컬 mem-flag)
+    g5 hexa-native-only    — ✅ MIP enumeration + Hamming-EMD 실제 hexa 계산 (no PyPhi)
+    g_self_verify          — ✅ genuine MIP argmin search actual hexa computation
+    g4 honesty-external    — ✅ algorithm(hexa-native, n=3) vs anima-scale(carry, Bell(n)) 명확 분리
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+

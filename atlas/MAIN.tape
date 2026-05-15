@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-030-falsifier-18batteries-cumulative-117" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-031-IIT3-n3-MIP-cumulative-118" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,7 +39,16 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2+3 (cycle 001-030): 117/117 PASS · 117 entries verified (98 🔵 closed: 61 SUPPORTED-IDENTITY + 37 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 18 falsifier-robust batteries · 90 falsifiers 0 fired).
+    Cumulative Phase 2+3 (cycle 001-031): 118/118 PASS · 118 entries verified (99 🔵 closed: 61 SUPPORTED-IDENTITY + 38 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 18 falsifier-robust batteries · 90 falsifiers 0 fired).
+
+    cycle 031 — §5 BIO Stage D 심화: IIT 3.0 big-Φ n=3 GENUINE MIP search:
+      s5_iit3_bigphi_3node_mip 🔵 SUPPORTED-FORMAL — deferred 였던 multi-node MIP
+        알고리즘을 tractable scale(n=3)에서 hexa-native 구현. bipartition lattice
+        {A}|{BC}·{B}|{AC}·{C}|{AB} 전수 + Φ=EMD argmin = MIP. RING(A'=C,B'=A,C'=B)
+        각 cut 2 effect-bit sever → Φ=1.0 (ring-symmetric MIP) · IDENTITY 0 sever
+        → Φ=0 · integrated>reducible ✓. n=2 single-bipartition → n=3 genuine
+        argmin search 로 전진. anima V8 many-node (super-exponential Bell(n)
+        partition lattice, PyPhi 1.2.0) 만 carry (s5_v8_bbio_at_risk_carry).
     9 도메인 모두 covered. Verifier surface: 13 modules + CI gate. Note: full-suite run needs HEXA_MEM_UNLIMITED=1 (atlas embed 대형 · 로컬 4GB memcap 초과). 자원활용 ubu-1/ubu-2: 원격 hexa_interp stale(eb6578fc, atlas-verify work 이전) → current verifier silent no-op, 로컬 mem-flag 가 viable path (feedback_resource_routing_ubu memory).
 
     cycle 030 — falsifier 14 → 18 batteries (§5 BIO IIT 4 measures coverage):
@@ -888,7 +897,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 117
+  phase_2_cumulative_count = 118
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 
