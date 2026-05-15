@@ -745,3 +745,24 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
   @> COMPILE-ONLY.tape
 
+@A loop_arm64_assembles_clean := "ARM64 operand materialization complete — stage-1 .s assembles to .o (0 asm errors)" :: milestone [d=2026-05-16 ok]
+  ~> loop_stage3_is_codegen_gated_not_diff
+  == loop_stage2_self_compile_clean
+  resolved <<~EOF
+    The @? estimate "MAJOR ... order of magnitude larger than a
+    byte-diff ... NOT a loop-tick patch" was OVER-cautious for the
+    ASSEMBLE gate: the codegen operand model decomposed into 3 clean
+    loop-tick units and is now done. clang -c -arch arm64
+    /tmp/s4_out.s → rc=0, 0 errors, 1.19 MB Mach-O arm64 .o.
+    3578 → 0 assembler errors:
+      9a1faa7f  adrp(@PAGE)+add(@PAGEOFF) addr materialization
+                (const_str/global)                  3578 → 2332
+      7260c1af  movz/movk large-const_int (_path_hash __tag)
+                + arith Xn/Xm reg-materialize
+                + cbz reg-materialize         2332 → 77 → 5 → 0
+  EOF
+  honest_state = "loop_stage2_self_compile_clean (0 diagnostics) STILL holds and is unaffected (codegen runs post-checks; total=0 every run). NEW: stage-1's self-emitted ARM64 asm now assembles cleanly. But .o-assembles is NOT yet stage-3: it proves syntactic validity, NOT that the stage-2 binary LINKS, RUNS, and emits byte-identical output. String `==`/`!=` is still pointer/value compare not a hexa_str_eq runtime dispatch (assembles but may mis-execute) — the genuine remaining unknown is runtime correctness + byte-equal, measurable only by link→run→diff. No fabrication: the .o is real (file(1) confirms Mach-O arm64), the run is not yet done."
+  next = "stage-3 proper (next loop tick, distinct coherent unit): link /tmp/s4_out.o + self/runtime.c + libs → stage-2 binary (entry-point / runtime-symbol resolution is the new unknown); run stage-2 self-compile of flat4.hexa → stage-2 .s; byte-diff vs stage-1 /tmp/s4_out.s. Byte-equal ⇒ fixed point ⇒ E2 unblocked. Any delta or runtime fault is a real codegen bug to root-cause (string-eq dispatch the prime suspect), NOT a tolerance."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
+  @> COMPILE-ONLY.tape
+
