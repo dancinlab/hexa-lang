@@ -224,6 +224,49 @@
   next_step = "Either: (a) tighten the typechecker passes, OR (b) add a `--ignore-errors` bootstrap-only flag that lets codegen proceed despite type diagnostics, gating bootstrap fixed-point separately from typechecker maturity."
   unblocks_for = "stage 3 byte-equal fixed point (currently can't run because stage 2 binary not produced)"
 
+@N stage2_codegen_clean := "stage 2 self-compile: codegen+assemble PASS (2435→0); link blocked on front-end resolution" :: status [d=2026-05-15 partial]
+  ~> stage2_partial
+  fact = "Path (b) chosen (HEXA_IGNORE_ERRORS=1, commit 58a3760e). With it, stage 1 reaches codegen. The emitted x86_64-linux-gnu asm then exposed THREE codegen-operand bugs + a symbol-namespacing collision, all now fixed; stage2c.s assembles with ZERO GNU-as errors."
+  codegen_fixes <<~EOF
+    The ARM64 cmp fix (fb09d4bf) had NO x86_64 equivalent. Stage 2 targets
+    x86_64-linux-gnu (host-detected on the Linux build box), so three
+    distinct x86_64 codegen bugs surfaced:
+      1. `cmp 0, 0`  — x86 cmp LHS must be reg/mem; materialize const_int
+         LHS into a_scratch (r10) before cmp.
+      2. `test 0, 0` — same class in BR_COND; materialize cond into r10.
+      3. `idiv dst, b` — x86 idiv is single-operand (rdx:rax / divisor →
+         rax). Emit `mov rax,a; cqo; [mov r11,b if imm]; idiv divisor;
+         mov dst,rax`.
+    Commit: c7-stack-spill 90345921 (compiler/codegen/x86_64_linux.hexa).
+  EOF
+  symbol_fix <<~EOF
+    26 residual "symbol already defined" errors: 4 file-local (non-pub)
+    helper families (_trim ×2, _ltrim ×5, _rtrim ×3, _array_for_kind ×2)
+    with DISTINCT bodies across modules. flatten concatenates without
+    namespacing (the deferred "Phase C.2 static symbol resolution"). md5
+    confirmed bodies non-dedup-able. Minimal-blast fix: per-module rename
+    of definition + in-file callers (file-local → no cross-file callers).
+    Commit: c7-stack-spill 3fe7bae0 (8 modules).
+  EOF
+  as_error_trajectory = "2435 (cmp/test/idiv) → 38 (cmp+test fixed) → 26 (idiv fixed) → 0 (symbols renamed). stage2c.o = 364 KB x86_64 ELF, clean."
+  build_env = "Local macOS clang OOM-killed the 7 MB+540 KB monolithic TU (Killed:9). ubu-1 went unreachable mid-run (SSH banner timeout). Completed on ubu-2 (12c/30 GB x86_64): runtime.c needs `-include execinfo.h -Wno-error=implicit-function-declaration` on Linux clang-18 (macOS clang was lax); main_v13.c is self-contained (#include runtime.c) so link WITHOUT a separate runtime.o."
+  new_blocker <<~EOF
+    Linking stage2c.o → stage2 binary fails with undefined references:
+    `main`, `is_alpha`, `is_alphanumeric`, `chars`, `len`, `to_string`,
+    `<callee>` ×594. These are the REAL content of the 3804 suppressed
+    front-end diagnostics — NOT codegen. Breakdown:
+      HX2001 1803 — `<callee>` 594 (fn resolution) + operator tokens
+        misparsed as names ([ ] ! , | & = 1000+) + idents (line/p_pos/
+        continue/break ~200)
+      HX3001 994 / HX2002 993 / HX3002 9 / HX3004 1
+    Operator-token-as-undefined-name implies the self-host parser's
+    expression lowering (index/logical/bitwise/tuple) is incomplete —
+    a front-end (parse/bind/resolve) gap, adjacent to 7da77859, NOT the
+    codegen/symbol layer (which is now clean).
+  EOF
+  next_step = "Front-end resolution track (separate from codegen): (1) parser expression-lowering for [ ] ! , | & — operator tokens must not reach the binder as Ident; (2) HX2002 993 cross-module pub/private (_collect_item_types splice path); (3) HX2001 <callee> 594 receiver-type plumbing; (4) HX3001 994 _types_assignable coercion. Codegen+assemble track is CLOSED."
+  unblocks_for = "stage 3 byte-equal fixed point — still gated, but the gate moved from codegen/assemble (closed) to front-end name-resolution"
+
 # ─── §5 Critical path to E2 ──────────────────────────────────────────
 
 @D critical_path := "e2-critical-path-d-2026-05-14" :: plan [active]
