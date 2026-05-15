@@ -1,0 +1,82 @@
+// test/ftl_tribunal_smoke.hexa — smoke for symbolic/ftl_tribunal.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values reproduced from archive-TECS-L/.shared/calc/ftl_tribunal.py
+// (commit 4ee05c39; MECHANISMS list + print_statistics):
+//   15 mechanisms total. overall-verdict breakdown:
+//     ALLOWED      = 2  {#6 Cherenkov, #11 Metric Expansion}
+//     CONDITIONAL  = 4  {#2 Alcubierre, #3 Wormholes, #9 Casimir, #12 Krasnikov}
+//     ILLUSORY     = 3  {#5 Hartman, #7 Phase v>c, #8 Group v}
+//     FORBIDDEN    = 2  {#1 Tachyons, #4 EPR Entanglement}
+//     SPECULATIVE  = 4  {#10 T-duality, #13 VSL, #14 NCG, #15 LQG}
+//   #1 Tachyons: causality "Violated" → FORBIDDEN
+//   #2 Alcubierre: GR "Valid metric solution" → CONDITIONAL
+//   #4 EPR: causality "No-signaling theorem" → FORBIDDEN
+//   #11 Metric Expansion → ALLOWED
+//   conditional_set has exactly 4 entries
+//
+// Run:  hexa run test/ftl_tribunal_smoke.hexa
+// Sentinel: __FTL_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/ftl_tribunal.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── table shape ─────────────────────────────────────────────────────────
+let ms = ftl_mechanisms()
+check("ftl_mechanisms() has 15 entries", len(ms) == 15)
+check("mechanism #1 is Tachyons", ms[0].name == "Tachyons" && ms[0].number == 1)
+check("mechanism #15 is LQG", ms[14].name == "Loop Quantum Gravity (LQG)" && ms[14].number == 15)
+
+// ── per-mechanism verdicts ──────────────────────────────────────────────
+check("#1 Tachyons → FORBIDDEN", ftl_mechanism(1).overall == "FORBIDDEN")
+check("#1 Tachyons causality == Violated", ftl_mechanism(1).causality == "Violated")
+check("#2 Alcubierre → CONDITIONAL", ftl_mechanism(2).overall == "CONDITIONAL")
+check("#2 Alcubierre GR == Valid metric solution", ftl_mechanism(2).gr == "Valid metric solution")
+check("#4 EPR → FORBIDDEN", ftl_mechanism(4).overall == "FORBIDDEN")
+check("#4 EPR causality == No-signaling theorem", ftl_mechanism(4).causality == "No-signaling theorem")
+check("#5 Hartman → ILLUSORY", ftl_mechanism(5).overall == "ILLUSORY")
+check("#6 Cherenkov → ALLOWED", ftl_mechanism(6).overall == "ALLOWED")
+check("#11 Metric Expansion → ALLOWED", ftl_mechanism(11).overall == "ALLOWED")
+check("#13 VSL → SPECULATIVE", ftl_mechanism(13).overall == "SPECULATIVE")
+check("ftl_mechanism(99) not found (number 0)", ftl_mechanism(99).number == 0)
+
+// ── statistics breakdown ────────────────────────────────────────────────
+check("count ALLOWED == 2",     ftl_count("ALLOWED") == 2)
+check("count CONDITIONAL == 4", ftl_count("CONDITIONAL") == 4)
+check("count ILLUSORY == 3",    ftl_count("ILLUSORY") == 3)
+check("count FORBIDDEN == 2",   ftl_count("FORBIDDEN") == 2)
+check("count SPECULATIVE == 4", ftl_count("SPECULATIVE") == 4)
+
+let st = ftl_statistics()
+check("statistics total == 15", st.total == 15)
+check("statistics sum == 15 (2+4+3+2+4)",
+      st.allowed + st.conditional + st.illusory + st.forbidden + st.speculative == 15)
+
+// ── "what would it take" CONDITIONAL set ────────────────────────────────
+let cs = ftl_conditional_set()
+check("conditional_set has 4 entries", len(cs) == 4)
+check("conditional_set[0] is #2 Alcubierre", cs[0].number == 2)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  ftl_tribunal smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__FTL_SMOKE__ FAIL")
+} else {
+    println("__FTL_SMOKE__ PASS")
+}
