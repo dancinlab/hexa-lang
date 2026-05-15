@@ -768,3 +768,37 @@
   outcome = "REVERTED — measure-first principle ([@measure_first] in COMPILE-SPEED.tape) rejects changes without measurable wins. Output byte-identical, no regression, but no detectable benefit either."
   why_no_win = "step 1 already short-circuited the dominant primitive-return site (__hexa_fn_arena_return). Other heapify callers (recursive walks) hit primitive tags less often than the parser return path — and even when they do, the switch's `default: return v;` already returns immediately. The extra branch saves at most the indirect-jump cost, which clang -O2 may already have collapsed."
   artifacts_cleaned = "/tmp/phase3b/hexa_v2.bak2.<ts>, hexa_v2.new2 — removed; runtime.c reverted to step-1 state"
+
+# ─── 2026-05-15  PHASE 3.B step 3 audit (parser leaf @no_arena) — DEFERRED ───
+
+@N phase3b_step3_audit := "parser-leaf @no_arena candidate audit" :: investigation [d=2026-05-15 ok]
+  scope = "Identify hot parser leaf fns where @no_arena suppresses __hexa_fn_arena_enter/return emission entirely (stronger than step 1's primitive short-circuit — kills the whole wrap pair)."
+  current_state <<~EOF
+    @no_arena coverage today (grep `^@no_arena` self/*.hexa):
+      self/hexa_full.hexa:18381   (ω-interp-1 helper)
+      self/hexa_full.hexa:18418   (write-back helper)
+    self/parser.hexa:               0 occurrences
+    self/codegen_c2.hexa:           0 occurrences
+    Parser leaves carry @pure only (e.g. p_peek_kind, p_advance) — @pure ≠ @no_arena.
+  EOF
+  hot_leaf_candidates <<~EOF
+    From sample hot-list (PHASE 3.B step 1 baseline):
+      p_peek_kind  +16    280 hits   → returns TAG_STR (token.kind), heap-resident, no arena dep
+      p_peek       (path)  ~12 hits  → returns TAG_VALSTRUCT (Token), lexer-heap, no arena dep
+      p_advance    +28      17 hits  → returns TAG_VALSTRUCT (Token), same
+      p_expect     +68      14 hits  → may throw; uses p_peek + p_advance; mostly safe
+      p_skip_newlines + 76  28 hits  → loops p_peek_kind == "Newline"; safe
+    All five are pure-leaf wrappers over heap-allocated lexer tokens. @no_arena
+    would suppress the wrap pair entirely (~ -10-15 % theoretical, exceeding step 1).
+  EOF
+  blocker = "self-host re-bootstrap required: edit parser.hexa → regen hexa_cc.c via working hexa.real → rebuild hexa_v2 → verify codegen still emits without wraps. Sequence is risk-class above runtime.c micro-patches."
+  outcome = "Audit complete; patch DEFERRED to a dedicated session. Architecture tape @opt_token_kind_enum already captures the larger parser-side ROI cluster; both should share the same bootstrap cycle."
+  next_session_inputs <<~EOF
+    1. Snapshot working hexa.real + hexa_v2 to /tmp before any edit.
+    2. Patch parser.hexa: add `@no_arena` line above p_peek, p_peek_kind, p_advance.
+    3. `hexa cc --regen` → produces hexa_cc.c.new; mv to hexa_cc.c.
+    4. Rebuild hexa_v2 (cmd_cc flow with -O2 + runtime.o link).
+    5. Verify codegen_c2.hexa output byte-identical (no semantic regression).
+    6. 5-run bench; gate ≥ 5 % user-time delta on codegen_c2.hexa.
+    7. If pass: commit + push. If fail: revert from /tmp snapshot.
+  EOF
