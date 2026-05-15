@@ -9,7 +9,7 @@ self-loop.
 
 배경
  - hexa-lang 은 self-hosting 언어 (Stage0 C bootstrap → Stage1 → Stage2),
-   60+ tool/*.hexa, stdlib, raw#N 규칙 생태계. 사용자가 수동으로 건강도·
+   60+ tool/*.hexa, stdlib, lint rule 생태계. 사용자가 수동으로 건강도·
    드리프트·기술부채를 관찰하는 것은 불가능.
  - 현재 세션에서 즉시 드러난 패턴:
    - homebrew hexa 0.2.0 vs repo-local 최신 build 간 codegen/parse 드리프트
@@ -30,7 +30,7 @@ self-loop.
 |---|---|---|
 | 1 | compile/codegen/selftest blocker 인벤토리 | 1 |
 | 2 | 무손실 ROI 인벤토리 (dup/dead/missing/stale) | 1 |
-| 3 | meta 자동화 (stage·stdlib·bench·coverage·drift·cert·AOT·graph·raw#N·pattern) | 10 |
+| 3 | meta 자동화 (stage·stdlib·bench·coverage·drift·cert·AOT·graph·pattern) | 10 |
 | 4 | hexa CLI 확장 (doctor/health/drift/stdlib-gap/bench-gate/cert-chain/promote) | subcommand 7 |
 | 5 | 연속 실행 (12h cron + git pre-push + history archive) | 1 |
 | 6 | **meta-evolution** (self-observing / gap-proposer / declarative scanner) | 3 |
@@ -47,7 +47,7 @@ self-loop.
  - `state/stage0_build_audit.json` (C bootstrap 결과)
  - `state/stage1_build_audit.json` (self-host 1차)
  - `state/stage2_build_audit.json` (self-host 2차 — 존재 시)
- - `state/raw_all_last.json` (raw#N 규칙 집계)
+ - (retired rule-aggregate state)
  - `state/codegen_error_log.jsonl` (CODEGEN ERROR 수집 — 본 제안 구현 시 자동 누적 시작)
  - `tool/*.hexa --selftest` 일괄 실행 결과
  - `build/` 산출물 mtime / size / SHA
@@ -61,7 +61,7 @@ self-loop.
   "ts": "<iso>",
   "blockers": [
     {"id": "blk-auto-N", "kind": "parse_error | codegen_error | stage_drift |
-       selftest_fail | raw_all_violation | bench_regression | cert_orphan |
+       selftest_fail | | bench_regression | cert_orphan |
        aot_stale", "source": "<file:line or tool name>",
      "description": "...", "evidence": "<audit json path:field>",
      "first_seen_ts": "<iso>", "last_seen_ts": "<iso>", "age_hours": N,
@@ -90,7 +90,7 @@ self-loop.
  - `dead_fn` — static call graph 에서 도달 불가 함수
  - `missing_selftest` — `fn main()` 는 있지만 `--selftest` 분기 없음
  - `missing_header_doc` — 상단 주석 블록이 없거나 10줄 미만
- - `missing_raw_ref` — raw#N 언급이 없는 tool (규칙 고아)
+ - `missing_rule_ref` — rule-id reference 가 없는 tool (규칙 고아)
  - `aot_bin_stale` — `bin/<stem>` 이 source 보다 오래됨
  - `stdlib_gap` — `json_str / json_str_array / parse_header` 같은 패턴이
    n-gram 반복 — stdlib API 승격 후보
@@ -147,12 +147,6 @@ Stage0 / Stage1 / Stage2 parity + 재현성.
  - `doc/lang_spec.md` (또는 canonical spec) 의 키워드·함수 vs 실제 Stage0
  - 스펙에 있지만 미구현 / 구현됐지만 미문서화 양쪽 리스트
  - 출력: `state/hx_api_drift.json` + `docs/hx_api_drift.md`
-
-### 3.6 raw#N coverage — `tool/hx_raw_coverage.hexa`
- - `raw#1..N` 각 규칙별로 enforcement scanner 존재 여부
- - 규칙이 `.roadmap` / `docs/` 에는 있지만 lint 없음 → "rule orphan"
- - tool 이 raw#N 을 참조하지만 실제 규칙 ID 가 존재하지 않음 → "stale ref"
- - 출력: `state/hx_raw_coverage.json`
 
 ### 3.7 cert chain — `tool/hx_cert_chain.hexa`
  - `.meta2-cert/` DAG traversal
@@ -246,7 +240,7 @@ git `pre-push` hook (권고, opt-in):
 
 입력:
  - `git log --since=90d` commit message 에서 "fix/workaround/hotfix" 패턴
- - `.raw-audit` 의 `emergency_edit` / `FORCED` lock 빈도
+ - `audit ledger 의 `emergency_edit` / `FORCED` lock 빈도
  - incident report (docs/incidents/*.md 있다면)
  - 사용자가 수동으로 수정한 drift 가 Phase 1-5 의 어떤 scanner 도 잡지 못했는지
  - `CODEGEN ERROR` / `unhandled method` 처럼 stage0 내부에서 발생한 runtime
@@ -310,14 +304,14 @@ Working dir: /Users/ghost/core/hexa-lang  (self meta system SSOT)
   - $HEXA_LANG/state/                     (engine + meta outputs)
   - $HEXA_LANG/build/                     (stage0/1/2 산출물)
   - $HEXA_LANG/.meta2-cert/               (self-host cert chain)
-  - $HEXA_LANG/.raw-audit                 (uchg hash chain)
+  - $HEXA_LANG/<audit-ledger>          (uchg hash chain)
 memory:
   - project_hexa_lang_self.md · project_meta_evolution.md
 
 Task: hexa-lang 자체에 대한 6-Phase meta system 구현.
  Phase 1 — compile/codegen/selftest blocker inventory
  Phase 2 — 무손실 ROI (dup helper / dead fn / missing selftest / stale AOT)
- Phase 3 — meta 자동화 10 (stage·stdlib·bench·selftest·api·raw#N·cert·AOT·graph·pattern)
+ Phase 3 — meta 자동화 (stage·stdlib·bench·selftest·api·cert·AOT·graph·pattern)
  Phase 4 — hexa CLI 확장 (doctor/health/drift/stdlib-gap/bench-gate/cert-chain/promote)
  Phase 5 — continuous (12h launchd + git pre-push)
  Phase 6 — meta-evolution (self-telemetry · gap-proposer · declarative scanner DSL)
@@ -330,7 +324,7 @@ Task: hexa-lang 자체에 대한 6-Phase meta system 구현.
 
 ═══════════════════════════════════════════════════════════
 ## Hard constraints
- - raw#9 hexa-only (python/bash helper 최소화)
+ - hexa-only (python/bash helper 최소화)
  - DO NOT modify .roadmap (uchg + user gate)
  - DO NOT auto-commit
  - 모든 도구 idempotent + dry-run + --selftest 지원
@@ -411,8 +405,8 @@ Under 400 words.
  - regression test auto-add when bug fixed
 
 ### E. Meta quality gates
- - raw#N lint coverage (every rule has scanner)
- - `.raw-audit` hash chain continuous verify
+ - lint rule coverage (every rule has scanner)
+ - audit ledger hash chain continuous verify
  - `emergency_edit` / `FORCED` lock frequency (anti-pattern if high)
  - PR → merge lead time
  - CI failure rate per class
@@ -478,7 +472,7 @@ Under 400 words.
  - consensus required for structural changes
 
 ### N. Crisis mode
- - 장애 플레이북 (raw_all 영구 FAIL 시)
+ - 장애 플레이북 (lint orchestrator 영구 FAIL 시)
  - incident 리포트 자동 템플릿
  - post-mortem linker (incident → related PR)
  - cascade 감지 (1 failure → 다른 failure 유발)
@@ -511,7 +505,7 @@ Under 400 words.
  - RFC pipeline
 
 ### S. Ontology / semantics
- - 프로젝트 개념 (edu_cell, raw#N, β main, CP1/2, AGI v0.1) → machine-readable
+ - 프로젝트 개념 (edu_cell, β main, CP1/2, AGI v0.1) → machine-readable
  - semantic search (자연어 → hexa tool)
  - 지식 그래프
  - cross-reference linker
@@ -607,7 +601,7 @@ Under 400 words.
   후원.
 - `docs/migration_nexus_to_hexalang_20260422.md` — hexa-lang SSOT 이관
   결정 문서 (본 제안이 self-hosting 가정)
-- `.raw-audit` — uchg hash chain (Phase 3.6 raw#N coverage 감시 대상)
+- `<audit-ledger>` — uchg hash chain (lint coverage 감시 대상)
 - `tool/roadmap_watcher.hexa` — 본 세션에 unlock-window guard 추가됨
   (Phase 1 blocker scanner 가 향후 이런 후행 수정을 선제 탐지할 수 있어야 함)
 

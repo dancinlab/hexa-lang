@@ -47,7 +47,7 @@ roadmap meta engine scaffolds (hexa-lang 로 이관됨):
 | bench regression | ✅ hx_bench_drift | ❌ | ❌ | ❌ | ❌ |
 | selftest coverage | ✅ hx_coverage_scan | ❌ | ❌ | ❌ | ❌ |
 | lang spec vs impl drift | ✅ hx_api_drift | N/A | N/A | N/A | N/A |
-| rule enforcement (raw#N) | ✅ hx_raw_coverage | ❌ loop-rules 는 n6 것 | 🟡 loop-rules.json | ❌ | ❌ |
+| rule enforcement | (retired tool) | ❌ loop-rules 는 n6 것 | 🟡 loop-rules.json | ❌ | ❌ |
 | cert chain integrity | ✅ hx_cert_chain | ❌ | ❌ | 🟡 cert tools 별도 | ❌ |
 | AOT binary staleness | ✅ hx_aot_stale | ❌ | ❌ | ❌ | ❌ |
 | tool graph / orphan | ✅ hx_tool_graph | ❌ | ❌ | ❌ | ❌ |
@@ -135,9 +135,9 @@ roadmap meta engine scaffolds (hexa-lang 로 이관됨):
 | hexa-lang `hx_tool_graph` | airgenome · n6 공통 | stems 대신 `modules/*.hexa` 또는 `engine/*.hexa` 로 sweep |
 | hexa-lang `hx_aot_stale` | airgenome · n6 | bin/ 스캔 패턴 동형 |
 | hexa-lang `hx_pattern_mine` | airgenome (forge log n-gram) · n6 (techniques n-gram) | 입력 dir 만 교체 |
-| hexa-lang `hx_raw_coverage` | n6 `n6_loop_rule_exec` | loop-rules.json 재사용 (원래 n6 것) — 양방향 흡수 |
+| (retired rule-coverage tool) | n6 `n6_loop_rule_exec` | loop-rules.json 재사용 (원래 n6 것) |
 | hexa-lang `hx_meta_telemetry` | 전 repo 공통 | schema 통일 → meta_telemetry.jsonl 표준화 |
-| hexa-lang `hx_meta_gap_proposer` | 전 repo 공통 | git log + .raw-audit grep 동일 로직 |
+| hexa-lang `hx_meta_gap_proposer` | 전 repo 공통 | git log grep 동일 로직 |
 | hexa-lang `hx_declare_scanner` | 전 repo 공통 | `scanners/*.meta.hexa` DSL 표준화 |
 | **anima `proposal_cluster_detect`** | **hexa-lang proposal_inbox** | inbox 에 cluster 축 도입 (현재 없음) |
 | **anima `proposal_conflict_detect`** | **hexa-lang proposal_inbox** | 상충하는 제안 자동 감지 |
