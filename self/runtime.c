@@ -3666,6 +3666,16 @@ void __hexa_fn_arena_enter(void) {
 HexaVal __hexa_fn_arena_return(HexaVal ret) {
     if (!hexa_val_arena_on()) return ret;
     if (__hexa_val_mark_top <= 0) return ret;  // no matching push — defensive
+    // perf-3B: primitive tags carry no arena-backed storage, so the
+    // hexa_val_heapify call + its switch dispatch is pure overhead.
+    // Pratt-descent parser fns return int/bool dozens of times per token,
+    // and sample showed __hexa_fn_arena_return + hexa_val_heapify ≈ 23% of
+    // hexa_v2 user-time on codegen_c2.hexa. Short-circuit primitives here.
+    int tag = HX_TAG(ret);
+    if (tag == TAG_INT || tag == TAG_FLOAT || tag == TAG_BOOL || tag == TAG_VOID) {
+        hexa_val_arena_scope_pop();
+        return ret;
+    }
     ret = hexa_val_heapify(ret);
     hexa_val_arena_scope_pop();
     return ret;

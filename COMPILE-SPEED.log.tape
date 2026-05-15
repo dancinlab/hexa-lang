@@ -656,3 +656,80 @@
     /tmp/hexa_v2.bak.<timestamp>            (pre-PHASE-1.6 hexa_v2 binary)
     /tmp/hexa_cc.c.bak.<timestamp>          (pre-PHASE-1.6 hexa_cc.c)
   EOF
+
+# ─── 2026-05-15  PHASE 3.B  parser heap-pressure investigation ────────
+
+@N phase3b_sample_pre := "sample profile — pre-patch hexa_v2 on codegen_c2.hexa" :: measurement [d=2026-05-15 ok]
+  source = "self/codegen_c2.hexa (335 KB · 6798 lines)"
+  cmd = `./self/native/hexa_v2 self/codegen_c2.hexa /tmp/c2.c & sample $! 5 1`
+  samples_collected = 3986
+  hot_leaves <<~EOF
+    Stack-frequency from `Total number in stack (recursive counted multiple)`:
+      hexa_val_heapify           +1108   4754   (40 % of stack-presence)
+      hexa_val_heapify           +0      2311   (entry point — direct calls)
+      hexa_val_heapify           +548    1213
+      __hexa_fn_arena_return     +140     921   (THE caller — heapify launch site)
+      hexa_val_heapify           +1224    530
+      _platform_strcmp                     513   (377+136 — token kind compare)
+      p_peek_kind                +16      280   (Pratt-descent token check)
+      parse_expr/pipe/null_coal/...        162-221 each  (call-chain noise)
+  EOF
+  finding <<~EOF
+    `__hexa_fn_arena_return` → `hexa_val_heapify` ≈ 23 % of user-time. Codegen
+    inserts `__hexa_fn_arena_enter / __hexa_fn_arena_return` on every fn (per
+    STRUCTURAL-7), and the return path calls hexa_val_heapify unconditionally.
+    Pratt-descent fns return TAG_INT / TAG_BOOL hundreds of times per token, so
+    primitive returns pay the full hexa_val_heapify call + switch dispatch even
+    though the switch default returns the value unchanged.
+  EOF
+
+@A phase3b_patch := "runtime.c __hexa_fn_arena_return primitive-tag short-circuit" :: change [d=2026-05-15 ok]
+  file = "self/runtime.c"
+  loc = "lines 3666-3679 (around the existing __hexa_fn_arena_return body)"
+  diff <<~EOF
+    +    int tag = HX_TAG(ret);
+    +    if (tag == TAG_INT || tag == TAG_FLOAT || tag == TAG_BOOL || tag == TAG_VOID) {
+    +        hexa_val_arena_scope_pop();
+    +        return ret;
+    +    }
+  EOF
+  rationale = "Primitive Vals carry no arena pointers; the heapify call is pure overhead. Skip the call + switch dispatch + fn-call epilogue."
+  risk = "low — same final state (Val returned, arena popped) for the primitive path; non-primitives unchanged"
+
+@N phase3b_bench_post := "3-run bench post-patch — old vs new hexa_v2" :: measurement [d=2026-05-15 ok]
+  build_flags = "clang -O2 (matched main.hexa cmd_cc — equal 1.43 MB Mach-O size)"
+  codegen_c2_hexa <<~EOF
+    old user (3 runs): 4.59 · 5.31 · 4.97   avg 4.96 s
+    new user (3 runs): 4.41 · 4.47 · 4.98   avg 4.62 s
+    delta: ~6.9 % faster on 335-KB self-host input
+  EOF
+  main_hexa <<~EOF
+    old user (3 runs): 0.33 · 0.35 · 0.35   avg 0.343 s
+    new user (3 runs): 0.35 · 0.34 · 0.34   avg 0.343 s
+    delta: no change (already too fast for heap-pressure to dominate)
+  EOF
+  size_sensitivity = "wins concentrate on large inputs where Pratt-descent fn return count explodes"
+
+@N phase3b_sample_post := "resample post-patch — confirms heap-pressure relief" :: measurement [d=2026-05-15 ok]
+  hot_leaves <<~EOF
+    hexa_val_heapify    +1108   4754 → 4399   ( -7.5 %)
+    hexa_val_heapify    +0      2311 → 1791   (-22.5 %)  ← entry-point cost gone
+    hexa_val_heapify    +548    1213 → 1045   (-13.8 %)
+    __hexa_fn_arena_return offset shifted; hits 921 → 826  (-10.3 %)
+    output (codegen_c2.new.c)                 byte-identical to pre-patch
+  EOF
+  conclusion = "primitive-tag short-circuit absorbs the dominant heapify entry path; deeper recursive cost (TAG_ARRAY / TAG_VALSTRUCT walks) untouched and remains the next ceiling"
+
+@D phase3b_status := "PHASE 3.B step 1 landed; remaining ROI ranked" :: roadmap [d=2026-05-15 active]
+  done <<~EOF
+    - runtime.c __hexa_fn_arena_return primitive short-circuit (+7 %, codegen_c2.hexa)
+    - self/native/hexa_v2 rebuilt -O2, byte-identical codegen output
+    - backup at /tmp/phase3b/hexa_v2.bak.<ts>
+  EOF
+  next_candidates <<~EOF
+    - token-kind comparison via strcmp → enum int (p_peek_kind 280 + strcmp 513 ≈ 20 %)
+      bigger payoff, but parser-wide change (separate session)
+    - hexa_val_heapify TAG_VALSTRUCT walk (rt 32-L) — caller-side @no_arena annotations
+      already partially in place (ROI-45); remaining sites need audit
+    - hexa_array_push +324 (72 hits) — grow path malloc; hexa_strbuf_dup_n called via strdup (9 hits)
+  EOF

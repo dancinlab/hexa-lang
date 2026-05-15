@@ -108,12 +108,31 @@
   status = "NOT YET MEASURED — must bench (on top of rank 1 baseline) before promoting to default"
   why_rank_2 = "trivial effort, but small absolute payoff and only meaningful after rank 1 lands"
 
-@D opt_parallel_lint := "RANK 3 — parallelize strict-lint stages in hexa_v2" :: proposal [d=2026-05-15 draft]
+@D opt_parser_heapify_shortcircuit := "RANK 2.5 — parser heap-pressure short-circuit" :: proposal [d=2026-05-15 active ok]
+  roi_rank = 2.5
+  rule = "In runtime.c::__hexa_fn_arena_return, short-circuit the hexa_val_heapify call when the return Val carries a primitive tag (TAG_INT/FLOAT/BOOL/VOID)."
+  expected_speedup = "~7 % user-time on codegen_c2.hexa (4.96 s → 4.62 s · 3-run avg). Larger inputs win more (Pratt-descent fn return count scales with token count)."
+  evidence = "COMPILE-SPEED.log.tape @phase3b_sample_pre / @phase3b_bench_post / @phase3b_sample_post (sample shows __hexa_fn_arena_return + hexa_val_heapify ≈ 23 % of user-time; post-patch entry-point hits -22.5 %)"
+  status = "LANDED 2026-05-15 — see commit on `main` (runtime.c +6 lines, hexa_v2 rebuilt -O2)"
+  cost = "5-line C patch · 1 hexa_v2 rebuild · byte-identical codegen output (verified)"
+  risk = "low — preserves the (heapify-skip, arena-pop, return) invariant for the primitive path; non-primitives unchanged"
+  blast_radius = "every `hexa run` of any program with non-trivial parsing; stacks orthogonally with [@opt_precompile_runtime]"
+
+@D opt_token_kind_enum := "RANK 3 — replace strcmp-based token kind compare with int enum" :: proposal [d=2026-05-15 draft]
   roi_rank = 3
+  rule = "Parser's p_peek_kind currently compares token kind via strcmp on the string-form kind name. Replace with int enum and integer compare."
+  expected_speedup = "potentially ~10-13 % user-time (sample: _platform_strcmp 513 hits + p_peek_kind 280 hits ≈ 20 % of stack-presence)"
+  blocked_on = "parser-wide refactor — every kind producer and consumer must switch. Higher risk, separate session."
+  evidence = "COMPILE-SPEED.log.tape @phase3b_sample_pre (hot leaves)"
+  why_rank_3 = "bigger headline payoff than rank 2.5 but parser-wide churn cost. Land rank 2.5 first; sequence rank 3 after PHASE 1 atlas stability."
+
+@D opt_parallel_lint := "RANK 4 — parallelize strict-lint stages in hexa_v2" :: proposal [d=2026-05-15 draft]
+  roi_rank = 4
   rule = "Of the 8 strict-lint stages, those without cross-deps (e.g. citation match || formula well-formedness) could run on threads."
   expected_speedup = "UNKNOWN — depends on actual per-stage cost share. Tiny programs total hexa_v2 = 0.01 s (no win); self-host MAY help (separate axis — see [@finding_self_host])."
   blocked_on = "per-stage timing instrumentation in hexa_v2 — must measure before optimizing"
-  why_rank_3 = "speculative + blocked + targets a different axis than rank 1/2"
+  why_rank_4 = "demoted from rank 3 after PHASE 3.B reframed the parser-side hot path. Speculative + blocked + targets a different axis than rank 1/2/2.5/3."
+  ~> "former rank 3 — see PHASE 3.B which captured the actual parser heap-pressure ROI"
 
 @D opt_pch_runtime := "RANK 4 (fallback alt) — precompiled-header for runtime.c" :: proposal [d=2026-05-15 active optional]
   roi_rank = 4
