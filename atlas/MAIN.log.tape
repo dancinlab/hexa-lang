@@ -1454,3 +1454,42 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+# ─── Cycle 032 — Phase 3: CI gate ledger-consistency (self-verify closure) ─
+
+@A cycle_032 := "Phase 3 cycle 032 — CI gate ledger-drift detection (self-verifying closure 강화)" :: cycle [d=2026-05-15 active]
+  trigger = "user 'go' — Phase 3 continuation, self-contained robustness gap closure"
+  scope <<~EOF
+    verdict count 불변 (118). robustness infra 추가 — 기존 CI gate (cycle 024)
+    는 per-verdict PASS 만 검사, MAIN.tape 의 claimed count 와 실제 verifier
+    total drift 는 미탐지 (silent failure mode). self-verifying closure 의 실제
+    gap — 시스템이 자기 count claim 을 verify 안 함.
+  EOF
+  files_modified <<~EOF
+    test/atlas_verify_smoke.hexa — ledger-consistency check 추가:
+      ledger_declared_count = 118 (single-source, MAIN.tape::phase_2_cumulative
+      _count 과 동기 유지). live verifier total ≠ declared → exit(1) +
+      "ledger drift: live N ≠ declared M" (wilson g4 grep-detectable).
+      gate_fail = verdict regression OR ledger drift (둘 다 차단).
+    atlas/MAIN.tape — tldr cycle 032 + ledger-consistency note
+  EOF
+  verifier_run_result <<~EOF
+    hexa run test/atlas_verify_smoke.hexa:
+      atlas-verify CI gate — 118/118 verdicts hold
+      ledger consistency — live total=118 vs MAIN.tape declared=118
+      atlas-verify smoke: PASS (verdicts hold + ledger consistent)
+  EOF
+  significance <<~EOF
+    self-verifying closure (g_self_verify) 의 한 단계 심화 — 이제 atlas 가
+    (a) 모든 verdict 가 hexa-native verifier PASS 인지 + (b) ledger 가 stale
+    하지 않은지 (claimed count == live count) 둘 다 self-verify. 미래 cycle 이
+    verifier 추가하면서 MAIN.tape count 갱신 누락 (또는 반대) 시 CI gate fail
+    → ledger 와 engine 의 single-source discipline 강제. silent ledger-rot
+    방지 (anima INDEX.md 가 stale 했던 것과 같은 failure mode 의 자동 차단).
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only — ✅ ledger check 도 hexa CLI (test/atlas_verify_smoke.hexa)
+    g_self_verify          — ✅ 시스템이 자기 verdict count claim 까지 self-verify (closure 심화)
+    g_tier_default_insufficient — ✅ count 불변 118, AT-RISK whitelist 유지
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+

@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-031-IIT3-n3-MIP-cumulative-118" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-032-ledger-consistency-CIgate-cumulative-118" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -40,6 +40,15 @@
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
     Cumulative Phase 2+3 (cycle 001-031): 118/118 PASS · 118 entries verified (99 🔵 closed: 61 SUPPORTED-IDENTITY + 38 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 18 falsifier-robust batteries · 90 falsifiers 0 fired).
+
+    cycle 032 — CI gate ledger-consistency check (self-verifying closure 강화):
+      test/atlas_verify_smoke.hexa 에 ledger drift 탐지 추가 — live verifier
+      total 이 MAIN.tape::phase_2_cumulative_count (= LEDGER_DECLARED_COUNT 118)
+      과 불일치 시 exit(1). 기존엔 per-verdict PASS 만 검사 → ledger 가 stale
+      해도 미탐지 (silent failure). 이제 시스템이 자기 count claim 도 self-verify.
+      single-source discipline: cycle 마다 MAIN.tape count + smoke LEDGER_
+      DECLARED_COUNT 동시 갱신, drift = CI fail. verdict count 불변 (118),
+      robustness infra 추가.
 
     cycle 031 — §5 BIO Stage D 심화: IIT 3.0 big-Φ n=3 GENUINE MIP search:
       s5_iit3_bigphi_3node_mip 🔵 SUPPORTED-FORMAL — deferred 였던 multi-node MIP

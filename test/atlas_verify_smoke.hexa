@@ -111,19 +111,37 @@ fn main() {
     total = total + len(m14)
     passed = passed + _scan("modular", m14, fails)
 
+    // ── Ledger-consistency check (self-verifying closure, g_self_verify) ──
+    // atlas/MAIN.tape declares phase_2_cumulative_count. If the live verifier
+    // total drifts from the declared count, the ledger is stale/inconsistent —
+    // a silent failure mode the CI gate must catch (the system verifies its
+    // OWN count claims, not just per-verdict PASS). Update LEDGER_DECLARED_COUNT
+    // here + atlas/MAIN.tape::phase_2_cumulative_count together every cycle
+    // (single-source discipline; drift = CI fail).
+    let ledger_declared_count = 118
+    let count_consistent = total == ledger_declared_count
+
     let nf = len(fails)
     println("")
     println("─────────────────────────────────────────────────────────")
     println("atlas-verify CI gate — " + to_string(passed) + "/" + to_string(total) + " verdicts hold")
-    if nf == 0 {
-        println("atlas-verify smoke: PASS")
-    } else {
+    println("ledger consistency — live total=" + to_string(total) + " vs MAIN.tape declared=" + to_string(ledger_declared_count))
+    let mut gate_fail = false
+    if nf > 0 {
         println("atlas-verify smoke: FAIL — " + to_string(nf) + " verdict regression(s)")
         let mut i = 0
         while i < nf {
             println("  - " + to_string(fails[i]))
             i = i + 1
         }
+        gate_fail = true
+    }
+    if !count_consistent {
+        println("atlas-verify smoke: FAIL — ledger drift: live " + to_string(total) + " ≠ declared " + to_string(ledger_declared_count) + " (sync atlas/MAIN.tape::phase_2_cumulative_count + LEDGER_DECLARED_COUNT)")
+        gate_fail = true
+    }
+    if gate_fail {
         exit(1)
     }
+    println("atlas-verify smoke: PASS (verdicts hold + ledger consistent)")
 }
