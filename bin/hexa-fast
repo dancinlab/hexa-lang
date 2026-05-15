@@ -27,6 +27,7 @@ usage:
   hexa-fast <input.hexa> <output-binary>     compile only
   hexa-fast run <input.hexa> [args...]       compile + exec (cached binary)
   hexa-fast bench <input.hexa>               A/B baseline vs runtime.h path
+  hexa-fast check                            smoke runtime.h ABI surface
   hexa-fast clean                            wipe ~/.hexa-cache
 
   hexa-run is a symlink that auto-implies `run`:
@@ -124,6 +125,19 @@ deep_hash() {
 }
 
 case ${1:-} in
+    check)
+        SMOKE="$REPO_ROOT/tests/runtime_h_smoke.c"
+        [ -f "$SMOKE" ] || { echo "hexa-fast: missing $SMOKE" >&2; exit 1; }
+        OUT="${TMPDIR:-/tmp}/hexa-fast-check-$$.o"
+        trap 'rm -f "$OUT"' EXIT
+        if clang $CFLAGS -c "$SMOKE" -I"$REPO_ROOT/self" -o "$OUT" 2>&1; then
+            echo "hexa-fast: runtime.h surface OK ($(wc -l <"$SMOKE") lines, all symbols resolved)"
+            exit 0
+        else
+            echo "hexa-fast: runtime.h surface FAILED — see clang errors above" >&2
+            exit 1
+        fi
+        ;;
     bench)
         shift
         [ $# -eq 1 ] || usage
