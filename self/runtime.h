@@ -673,4 +673,35 @@ HexaVal adamw_step(HexaVal p, HexaVal g, HexaVal m, HexaVal v,
                    HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
                    HexaVal eps, HexaVal wd, HexaVal t);                 /* runtime.c — RFC 034 (11-arg direct) */
 
+/* ── anima RFC 035 (2026-05-16): bf16/fp16 mixed-precision training ──
+ * Depends on RFC 034. bf16 storage round-trip + loss-scaled, skip-on-
+ * nonfinite mixed-precision AdamW (f64 master weight, low-prec grad).
+ * anima HEXAD/PLAN.md Phase 5 lower-memory D-training. Defs: runtime.c.
+ * (Distinct from the 2026-05-13 internal NM-step "RFC 035" — that one
+ *  is farr_simplex_*; this draft RFC's namespace is bf16/adamw_mixed.) */
+HexaVal hexa_farr_to_bf16(HexaVal src_v, HexaVal dst_v, HexaVal n_v);   /* runtime.c — RFC 035 */
+HexaVal hexa_farr_from_bf16(HexaVal src_v, HexaVal dst_v, HexaVal n_v); /* runtime.c — RFC 035 */
+HexaVal hexa_adamw_step_mixed(HexaVal p_v, HexaVal g_v, HexaVal m_v,
+                              HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                              HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                              HexaVal wd_v, HexaVal t_v, HexaVal ls_v);  /* runtime.c — RFC 035 */
+extern HexaVal farr_to_bf16;                                           /* runtime.c — RFC 035 fn carrier */
+extern HexaVal farr_from_bf16;                                         /* runtime.c — RFC 035 fn carrier */
+HexaVal adamw_step_mixed(HexaVal p, HexaVal g, HexaVal m, HexaVal v,
+                         HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                         HexaVal eps, HexaVal wd, HexaVal t,
+                         HexaVal ls);                                   /* runtime.c — RFC 035 (12-arg direct) */
+
+/* ── anima RFC 036 (2026-05-16): phi_rs MI/Φ byte-equal primitive ────
+ * Native C replica of phi_rs::mi_from_paired_vectors + spatial-Φ
+ * pipeline (deterministic numeric core). The ACTUAL phi_rs Rust FFI
+ * link is a NAMED BLOCKER (phi_rs is PyO3-cdylib, no extern "C" ABI) —
+ * see rfc_036 §"FFI shim (named blocker)". Defs: runtime.c. */
+HexaVal hexa_phi_mi_pair(HexaVal a_v, HexaVal b_v, HexaVal n_v,
+                         HexaVal nb_v);                                 /* runtime.c — RFC 036 */
+HexaVal hexa_phi_spatial(HexaVal st_v, HexaVal nc_v, HexaVal dim_v,
+                         HexaVal nb_v);                                 /* runtime.c — RFC 036 */
+extern HexaVal phi_mi_pair;                                            /* runtime.c — RFC 036 fn carrier */
+extern HexaVal phi_spatial;                                            /* runtime.c — RFC 036 fn carrier */
+
 #endif /* HEXA_RUNTIME_H */

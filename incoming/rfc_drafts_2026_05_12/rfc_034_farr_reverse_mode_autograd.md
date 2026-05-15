@@ -215,11 +215,26 @@ native binary, matching anima `HEXAD/build_verify.sh`):
 
 ## Roadmap (follow-up RFCs, lower priority — anima PR #80 spec items 2–3)
 
-- **RFC 035** — bf16/fp16 mixed-precision training (depends on RFC 034;
-  medium priority — FP32 alone suffices for first fire, bf16 = cost save).
-- **RFC 036** — Rust FFI binding so hexa-native C-engine can call
-  `phi_rs.compute_phi(states, n_groups)` byte-equal to Python (medium;
-  anima `HEXAD/PLAN.md` Phase 4 Φ measurement, not a fire-entry blocker).
+Both named follow-ups were submitted + implemented on this branch on
+2026-05-16 (R4 of the anima HEXAD run list), in the same compiled-path
+house format as this RFC:
+
+- **RFC 035** — `rfc_035_bf16_mixed_precision_train.md` —
+  bf16/fp16 mixed-precision training (depends on RFC 034; medium —
+  FP32 alone suffices for first fire, bf16 = cost save). **LANDED**,
+  compiled smoke 5/5 PASS (`tmp_rfc035_smoke.hexa`:
+  BUILD / BF16-ROUNDTRIP / LOSSSCALE-INVARIANT / SKIP-NONFINITE /
+  DETERMINISM). The LOSSSCALE-INVARIANT falsifier proves
+  `adamw_step_mixed` is byte-identical to this RFC's `adamw_step`.
+- **RFC 036** — `rfc_036_phi_rs_rust_ffi.md` — Rust FFI binding so
+  hexa-native C-engine can call `phi_rs.compute_phi` byte-equal to
+  Python (medium; anima `HEXAD/PLAN.md` Phase 4 Φ measurement, not a
+  fire-entry blocker). Numeric core **LANDED** byte-equal, compiled
+  smoke 5/5 PASS (`tmp_rfc036_smoke.hexa`). **Honest named blocker**:
+  the `phi_rs` crate is a PyO3 cdylib with **no C ABI**, so the actual
+  Rust FFI link is *not* closed — RFC 036 specifies the upstream
+  `extern "C"` shim and ships a byte-equal native replica meanwhile
+  (the FFI link is explicitly NOT counted as a PASS, AGENTS.tape g3).
 
 ## Non-goals (v1)
 

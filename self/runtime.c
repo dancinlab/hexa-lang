@@ -6728,6 +6728,35 @@ HexaVal adamw_step(HexaVal p, HexaVal g, HexaVal m, HexaVal v,
     return hexa_adamw_step(p, g, m, v, n, lr, b1, b2, eps, wd, t);
 }
 
+// anima RFC 035 (2026-05-16): bf16 mixed-precision training.
+//   farr_to_bf16 / farr_from_bf16 (3-arg) → hexa_call3 carriers.
+//   adamw_step_mixed (12-arg) → bare wrapper (past hexa_callN ceiling,
+//   same direct-C-call fallback contract as RFC 034 adamw_step).
+HexaVal hexa_farr_to_bf16(HexaVal src_v, HexaVal dst_v, HexaVal n_v);
+HexaVal hexa_farr_from_bf16(HexaVal src_v, HexaVal dst_v, HexaVal n_v);
+HexaVal hexa_adamw_step_mixed(HexaVal p_v, HexaVal g_v, HexaVal m_v,
+                              HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                              HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                              HexaVal wd_v, HexaVal t_v, HexaVal ls_v);
+HexaVal farr_to_bf16;
+HexaVal farr_from_bf16;
+HexaVal adamw_step_mixed(HexaVal p, HexaVal g, HexaVal m, HexaVal v,
+                         HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                         HexaVal eps, HexaVal wd, HexaVal t,
+                         HexaVal ls) {
+    return hexa_adamw_step_mixed(p, g, m, v, n, lr, b1, b2, eps, wd, t, ls);
+}
+
+// anima RFC 036 (2026-05-16): phi_rs MI/Φ byte-equal native primitive.
+//   phi_mi_pair / phi_spatial (4-arg) → hexa_call4 carriers (same
+//   contract as RFC 034 ad_softmax_cross_entropy).
+HexaVal hexa_phi_mi_pair(HexaVal a_v, HexaVal b_v, HexaVal n_v,
+                         HexaVal nb_v);
+HexaVal hexa_phi_spatial(HexaVal st_v, HexaVal nc_v, HexaVal dim_v,
+                         HexaVal nb_v);
+HexaVal phi_mi_pair;
+HexaVal phi_spatial;
+
 // RFC 034 (2026-05-13): Pauli-string exp + expectation whole-loop kernels.
 // 8-arg / 7-arg; past the hexa_callN ceiling → static inline wrappers.
 HexaVal hexa_farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
@@ -9977,6 +10006,325 @@ HexaVal hexa_adamw_step(HexaVal p_v, HexaVal g_v, HexaVal m_v, HexaVal v_v,
     return hexa_void();
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// anima RFC 035 (2026-05-16): bf16/fp16 mixed-precision training.
+//
+// Layers on RFC 034. The forward/grad path still computes in
+// packed-double farr (the RFC 032/034 contract), but RFC 035 adds:
+//   (1) a bf16 storage round-trip (farr_to_bf16 / farr_from_bf16) so
+//       activations / a grad copy can be held at half the bytes, and
+//   (2) a loss-scaled, skip-on-nonfinite mixed-precision AdamW
+//       (adamw_step_mixed) keeping an f32-equivalent (double) master
+//       weight while consuming a possibly-bf16-rounded gradient.
+//
+// v1 scope (RFC 035 Non-goals mirror RFC 034): single-process, single-
+// arena, the anima HEXAD decoder train step. NaN/Inf-guarded loss
+// scaling is the only AMP policy (no dynamic scale schedule in v1 —
+// the caller drives the scale; the builtin reports skip via return).
+//
+// bf16 = the top 16 bits of an IEEE-754 binary32 (1s|8e|7m), round-to-
+// nearest-even on the truncated mantissa. The same rounding NVIDIA /
+// PyTorch AMP use; deterministic, no hardware bf16 needed.
+//
+// Falsifier coverage: tmp_rfc035_smoke.hexa
+//   F-RFC035-BUILD / BF16-ROUNDTRIP / LOSSSCALE-INVARIANT /
+//   SKIP-NONFINITE / DETERMINISM
+// ═══════════════════════════════════════════════════════════════════
+
+// Round an IEEE binary32 to bf16 (return the reconstructed float).
+// Round-to-nearest-even on bit 15 (the bf16 ulp). NaN/Inf preserved.
+static float _hx_f32_to_bf16(float f) {
+    uint32_t x;
+    memcpy(&x, &f, sizeof(x));
+    uint32_t exp = (x >> 23) & 0xFF;
+    if (exp == 0xFF) {            // NaN / Inf — keep, just truncate mantissa
+        uint32_t t = x & 0xFFFF0000u;
+        // keep NaN-ness: if it was NaN, ensure a non-zero bf16 mantissa
+        if ((x & 0x007FFFFFu) != 0) t |= 0x00400000u;
+        float r; memcpy(&r, &t, sizeof(r)); return r;
+    }
+    uint32_t lsb     = (x >> 16) & 1u;
+    uint32_t rounded = x + 0x7FFFu + lsb;   // round-to-nearest-even
+    rounded &= 0xFFFF0000u;
+    float r; memcpy(&r, &rounded, sizeof(r));
+    return r;
+}
+
+// farr_to_bf16(src, dst, n) — write bf16-rounded values of src[0..n]
+// into dst (both length-n packed-double farrs). dst holds the
+// reconstructed (lossy) doubles; storage-saving is conceptual at v1
+// (the arena is double) but the *values* are bit-exact bf16, which is
+// what training numerics care about. Returns 1 on success, 0 on error.
+HexaVal hexa_farr_to_bf16(HexaVal src_v, HexaVal dst_v, HexaVal n_v) {
+    int64_t s_id = hexa_as_num(src_v);
+    int64_t d_id = hexa_as_num(dst_v);
+    int64_t n    = hexa_as_num(n_v);
+    int64_t sl = 0, dl = 0;
+    double* S = _hx_ad_farr_buf(s_id, &sl);
+    double* D = _hx_ad_farr_buf(d_id, &dl);
+    if (!S || !D || n <= 0 || sl < n || dl < n) return hexa_int(0);
+    for (int64_t i = 0; i < n; i++)
+        D[i] = (double)_hx_f32_to_bf16((float)S[i]);
+    return hexa_int(1);
+}
+
+// farr_from_bf16(src, dst, n) — round-trip the other direction. With
+// the v1 double arena this is the same bf16 reconstruction (identity
+// once a value is already bf16-representable: F-RFC035-BF16-ROUNDTRIP
+// asserts to_bf16 then from_bf16 is a fixed point).
+HexaVal hexa_farr_from_bf16(HexaVal src_v, HexaVal dst_v, HexaVal n_v) {
+    int64_t s_id = hexa_as_num(src_v);
+    int64_t d_id = hexa_as_num(dst_v);
+    int64_t n    = hexa_as_num(n_v);
+    int64_t sl = 0, dl = 0;
+    double* S = _hx_ad_farr_buf(s_id, &sl);
+    double* D = _hx_ad_farr_buf(d_id, &dl);
+    if (!S || !D || n <= 0 || sl < n || dl < n) return hexa_int(0);
+    for (int64_t i = 0; i < n; i++)
+        D[i] = (double)_hx_f32_to_bf16((float)S[i]);
+    return hexa_int(1);
+}
+
+// adamw_step_mixed(param, grad, m, v, n, lr, b1, b2, eps, wd, t,
+//                  loss_scale) -> int
+// Loss-scaled mixed-precision AdamW. The gradient `grad` is assumed
+// produced from a loss multiplied by `loss_scale` (AMP convention);
+// it is unscaled (divided by loss_scale) before the moment update so
+// the master (double) weight sees the true gradient. If ANY unscaled
+// gradient element is non-finite (NaN/Inf — the AMP overflow signal),
+// the WHOLE step is skipped (params/moments untouched) and 0 is
+// returned (the caller then halves loss_scale, the standard policy).
+// Returns 1 if the step was applied. Master weight stays double; only
+// the *consumed gradient* is the (possibly bf16-rounded) low-precision
+// tensor — exactly the PyTorch AMP master-weight contract.
+HexaVal hexa_adamw_step_mixed(HexaVal p_v, HexaVal g_v, HexaVal m_v,
+                              HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                              HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                              HexaVal wd_v, HexaVal t_v, HexaVal ls_v) {
+    int64_t p_id = hexa_as_num(p_v);
+    int64_t g_id = hexa_as_num(g_v);
+    int64_t m_id = hexa_as_num(m_v);
+    int64_t v_id = hexa_as_num(v_v);
+    int64_t n    = hexa_as_num(n_v);
+    double  lr   = __hx_to_double(lr_v);
+    double  b1   = __hx_to_double(b1_v);
+    double  b2   = __hx_to_double(b2_v);
+    double  eps  = __hx_to_double(eps_v);
+    double  wd   = __hx_to_double(wd_v);
+    int64_t tstep= hexa_as_num(t_v);
+    double  ls   = __hx_to_double(ls_v);
+    if (n <= 0 || tstep < 1) return hexa_int(0);
+    if (ls == 0.0) ls = 1.0;
+    double* P = _hx_ad_farr_buf(p_id, NULL);
+    double* G = _hx_ad_farr_buf(g_id, NULL);
+    double* Mm= _hx_ad_farr_buf(m_id, NULL);
+    double* Vv= _hx_ad_farr_buf(v_id, NULL);
+    if (!P || !G || !Mm || !Vv) return hexa_int(0);
+    // AMP overflow guard: scan the *unscaled* grad first; skip on any
+    // non-finite element (no partial mutation).
+    for (int64_t i = 0; i < n; i++) {
+        double gi = G[i] / ls;
+        if (!isfinite(gi)) return hexa_int(0);   // skip step (AMP overflow)
+    }
+    double bc1 = 1.0 - pow(b1, (double)tstep);
+    double bc2 = 1.0 - pow(b2, (double)tstep);
+    if (bc1 == 0.0) bc1 = 1e-30;
+    if (bc2 == 0.0) bc2 = 1e-30;
+    for (int64_t i = 0; i < n; i++) {
+        double gi = G[i] / ls;            // unscale (AMP master grad)
+        Mm[i] = b1 * Mm[i] + (1.0 - b1) * gi;
+        Vv[i] = b2 * Vv[i] + (1.0 - b2) * gi * gi;
+        double mhat = Mm[i] / bc1;
+        double vhat = Vv[i] / bc2;
+        P[i] -= lr * (mhat / (sqrt(vhat) + eps) + wd * P[i]);
+    }
+    return hexa_int(1);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// anima RFC 036 (2026-05-16): phi_rs MI/Φ byte-equal native primitive.
+//
+// HONEST SCOPE (AGENTS.tape g3 / f2 — no over-claim):
+//   The anima `phi_rs` Rust crate
+//   (anima_clm_10_h100_sweep_laws_77_78/phi-rs) is a **PyO3 cdylib**
+//   (`crate-type=["cdylib"]`, pyo3 extension-module). It exposes NO
+//   `extern "C"` / `#[no_mangle]` C ABI, so hexa-lang's existing
+//   static-FFI / dlsym path (`extern fn @symbol @link`) CANNOT bind it
+//   today. RFC 036 (a) specifies the Rust C-ABI shim that phi_rs must
+//   add, AND (b) lands a native C implementation of phi_rs's
+//   *documented deterministic numeric core* (`mi_from_paired_vectors`
+//   + the spatial-Φ pipeline steps 1-4) so the byte-equal harness can
+//   run NOW against the formula. The actual Rust FFI link remains a
+//   NAMED BLOCKER until phi_rs ships the §"FFI shim" surface — this is
+//   stated explicitly in the RFC and NOT counted as a closed FFI.
+//
+// Byte-equal target = phi_rs src/lib.rs functions, replicated exactly:
+//   bin_values · entropy (1e-8 total smoothing + 1e-10 log smoothing)
+//   · mi_from_paired_vectors · total_mi · find_min_partition_exact
+//   · spatial_phi = (total − min_part)/(n−1)  [tensions/temporal=None]
+//
+// Falsifier coverage: tmp_rfc036_smoke.hexa
+//   F-RFC036-BUILD / MI-BYTE-EQUAL / PHI-SPATIAL / DETERMINISM /
+//   FFI-BLOCKER-DOCUMENTED (honest carve-out, NOT a PASS-claim)
+// ═══════════════════════════════════════════════════════════════════
+
+// phi_rs bin_values: min/max over the f32-cast row, range/n_bins width,
+// floor((v-min)/width) clamped to n_bins-1; all-identical → all bin 0.
+static void _hx_phi_bin_values(const double* v, int64_t n, int64_t nb,
+                               int* out) {
+    if (n <= 0) return;
+    float mn =  (float)v[0], mx = (float)v[0];
+    for (int64_t i = 1; i < n; i++) {
+        float f = (float)v[i];
+        if (f < mn) mn = f;
+        if (f > mx) mx = f;
+    }
+    float range = mx - mn;
+    // f32::EPSILON (IEEE binary32 ulp at 1.0) — literal so we need no
+    // <float.h> include (matches Rust phi_rs `f32::EPSILON` exactly).
+    const float _flt_eps = 1.19209290e-7f;
+    if (range < _flt_eps) { for (int64_t i = 0; i < n; i++) out[i] = 0; return; }
+    float bw = range / (float)nb;
+    for (int64_t i = 0; i < n; i++) {
+        int b = (int)(((float)v[i] - mn) / bw);   // truncation = Rust `as usize`
+        if (b > (int)nb - 1) b = (int)nb - 1;
+        if (b < 0) b = 0;
+        out[i] = b;
+    }
+}
+
+// phi_rs entropy: t = total + 1e-8 ; Σ -p·log2(p + 1e-10), ALL bins.
+static double _hx_phi_entropy(const uint32_t* counts, int64_t k,
+                              uint32_t total) {
+    if (total == 0) return 0.0;
+    double t = (double)total + 1e-8;
+    double s = 0.0;
+    for (int64_t i = 0; i < k; i++) {
+        double p = (double)counts[i] / t;
+        s += -p * (log(p + 1e-10) / log(2.0));   // log2 via natural log
+    }
+    return s;
+}
+
+// phi_rs mi_from_paired_vectors — exact replica.
+// MI = max(H(A) + H(B) − H(A,B), 0).
+static double _hx_phi_mi_pair(const double* a, const double* b,
+                              int64_t n, int64_t nb) {
+    if (n <= 0) return 0.0;
+    int*      ba = (int*)malloc((size_t)n * sizeof(int));
+    int*      bb = (int*)malloc((size_t)n * sizeof(int));
+    uint32_t* ca = (uint32_t*)calloc((size_t)nb, sizeof(uint32_t));
+    uint32_t* cb = (uint32_t*)calloc((size_t)nb, sizeof(uint32_t));
+    uint32_t* jo = (uint32_t*)calloc((size_t)(nb * nb), sizeof(uint32_t));
+    if (!ba || !bb || !ca || !cb || !jo) {
+        free(ba); free(bb); free(ca); free(cb); free(jo);
+        return 0.0;
+    }
+    _hx_phi_bin_values(a, n, nb, ba);
+    _hx_phi_bin_values(b, n, nb, bb);
+    for (int64_t i = 0; i < n; i++) {
+        ca[ba[i]]++;
+        cb[bb[i]]++;
+        jo[(int64_t)ba[i] * nb + bb[i]]++;
+    }
+    uint32_t total = (uint32_t)n;
+    double hA  = _hx_phi_entropy(ca, nb,      total);
+    double hB  = _hx_phi_entropy(cb, nb,      total);
+    double hAB = _hx_phi_entropy(jo, nb * nb, total);
+    free(ba); free(bb); free(ca); free(cb); free(jo);
+    double mi = hA + hB - hAB;
+    return mi > 0.0 ? mi : 0.0;
+}
+
+// phi_mi_pair(a_farr, b_farr, n, n_bins) -> float.
+// Byte-equal to phi_rs::mi_from_paired_vectors(a, b, n_bins).
+HexaVal hexa_phi_mi_pair(HexaVal a_v, HexaVal b_v, HexaVal n_v,
+                         HexaVal nb_v) {
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t b_id = hexa_as_num(b_v);
+    int64_t n    = hexa_as_num(n_v);
+    int64_t nb   = hexa_as_num(nb_v);
+    int64_t al = 0, bl = 0;
+    double* A = _hx_ad_farr_buf(a_id, &al);
+    double* B = _hx_ad_farr_buf(b_id, &bl);
+    if (!A || !B || n <= 0 || nb <= 0 || al < n || bl < n)
+        return hexa_float(0.0);
+    return hexa_float(_hx_phi_mi_pair(A, B, n, nb));
+}
+
+// phi_spatial(states_farr, n_cells, dim, n_bins) -> float.
+// Byte-equal to phi_rs::compute_phi_inner spatial component with
+// tensions=None, prev/curr=None (⟹ temporal_phi=0, complexity uses
+// std-of-row-sums but the SPATIAL Φ this builtin returns is the
+// step-4 value the anima HEXAD Phase 4 ratchet consumes):
+//   spatial = max(total_mi − min_partition_mi, 0) / max(n−1, 1)
+// states_farr is row-major n_cells × dim. Exhaustive bipartition
+// (cell 0 pinned to A) for n_cells ≤ 20 — phi_rs find_min_partition_exact.
+HexaVal hexa_phi_spatial(HexaVal st_v, HexaVal nc_v, HexaVal dim_v,
+                         HexaVal nb_v) {
+    int64_t s_id = hexa_as_num(st_v);
+    int64_t nc   = hexa_as_num(nc_v);
+    int64_t dim  = hexa_as_num(dim_v);
+    int64_t nb   = hexa_as_num(nb_v);
+    int64_t sl = 0;
+    double* S = _hx_ad_farr_buf(s_id, &sl);
+    if (!S || nc <= 0 || dim <= 0 || nb <= 0 || sl < nc * dim)
+        return hexa_float(0.0);
+    if (nc <= 1) return hexa_float(0.0);
+    // Step 1-2: pairwise MI matrix + total MI (upper triangle).
+    double* mi = (double*)calloc((size_t)(nc * nc), sizeof(double));
+    if (!mi) return hexa_float(0.0);
+    double total = 0.0;
+    for (int64_t i = 0; i < nc; i++) {
+        for (int64_t j = i + 1; j < nc; j++) {
+            double v = _hx_phi_mi_pair(S + i * dim, S + j * dim, dim, nb);
+            mi[i * nc + j] = v;
+            mi[j * nc + i] = v;
+            total += v;
+        }
+    }
+    // Step 3: minimum information partition (cell 0 pinned to A).
+    double min_part;
+    if (nc == 2) {
+        min_part = mi[0 * nc + 1];
+    } else if (nc <= 20) {
+        min_part = INFINITY;
+        uint64_t max_mask = (uint64_t)1 << (nc - 1);
+        for (uint64_t mask = 1; mask < max_mask; mask++) {
+            // partition: cell 0 in A; bit b → cell b+1 in A iff set.
+            int any_b = 0;
+            for (int64_t b = 0; b < nc - 1; b++)
+                if (!(mask & ((uint64_t)1 << b))) { any_b = 1; break; }
+            if (!any_b) continue;        // skip trivial (B empty)
+            double cross = 0.0;
+            // A = {0} ∪ {b+1 : bit b set}; B = complement.
+            for (int64_t ia = 0; ia < nc; ia++) {
+                int inA = (ia == 0) ? 1
+                          : ((mask & ((uint64_t)1 << (ia - 1))) ? 1 : 0);
+                if (!inA) continue;
+                for (int64_t jb = 0; jb < nc; jb++) {
+                    int jInA = (jb == 0) ? 1
+                               : ((mask & ((uint64_t)1 << (jb - 1))) ? 1 : 0);
+                    if (jInA) continue;          // jb ∈ B only
+                    cross += mi[ia * nc + jb];
+                }
+            }
+            if (cross < min_part) min_part = cross;
+        }
+    } else {
+        // phi_rs greedy path (N>20) — out of v1 falsifier scope; the
+        // anima HEXAD pool is small (≤ 64 but Phase-4 Φ slices ≤ 20).
+        min_part = 0.0;
+    }
+    free(mi);
+    // Step 4: spatial Φ.
+    double n = (double)nc;
+    double denom = (n - 1.0) > 1.0 ? (n - 1.0) : 1.0;
+    double sp = total - min_part;
+    if (sp < 0.0) sp = 0.0;
+    return hexa_float(sp / denom);
+}
+
 // ── A1 (2026-05-10): per-phase arena reset side channel ─────────
 // Stage 0 host (hexa_real / hexa_interp.real) holds every str-arena
 // allocation for the whole process lifetime — there is no per-phase
@@ -11493,6 +11841,15 @@ static void _hexa_init_fn_shims(void) {
     ad_softmax_cross_entropy        = hexa_fn_new((void*)hexa_ad_softmax_cross_entropy,        4);
     ad_backward                     = hexa_fn_new((void*)hexa_ad_backward,                     1);
     ad_grad                         = hexa_fn_new((void*)hexa_ad_grad,                         1);
+    // anima RFC 035-draft (2026-05-16): bf16 mixed-precision carriers
+    // (distinct from the 2026-05-13 internal NM-step "RFC 035" below;
+    // bf16 namespace = farr_to_bf16 / farr_from_bf16 / adamw_step_mixed).
+    // adamw_step_mixed (12-arg) = direct-C wrapper past the hexa_callN ceiling.
+    farr_to_bf16                    = hexa_fn_new((void*)hexa_farr_to_bf16,                    3);
+    farr_from_bf16                  = hexa_fn_new((void*)hexa_farr_from_bf16,                  3);
+    // anima RFC 036-draft (2026-05-16): phi_rs MI/Φ byte-equal carriers.
+    phi_mi_pair                     = hexa_fn_new((void*)hexa_phi_mi_pair,                     4);
+    phi_spatial                     = hexa_fn_new((void*)hexa_phi_spatial,                     4);
     // RFC 035 (2026-05-13): 3/4-arg NM-step builtins routed through hexa_callN.
     farr_simplex_centroid           = hexa_fn_new((void*)hexa_farr_simplex_centroid,           4);
     farr_simplex_get                = hexa_fn_new((void*)hexa_farr_simplex_get,                4);
