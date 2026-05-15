@@ -641,3 +641,46 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_hxc_spec]"
   @> COMPILE-ONLY.tape
 
+@A loop_rebuild_unblocked_first_selfcompile := "Track-A wall broken → first end-to-end stage-1 self-compile; residual MEASURED and driven 2774→217 (−92%) in one tick" :: milestone [d=2026-05-16 ok]
+  ~> loop_codegen_program_source_complete
+  <- rebuild_unblock_candidate
+  resolved <<~EOF
+    rebuild_unblock_candidate (draft) is APPLIED + EMPIRICALLY VERIFIED
+    (994931cf). The `honest_state`/`next_gate` of
+    [@loop_codegen_program_source_complete] — "full verify is
+    rebuild-gated, period; NEW residual cannot be predicted statically;
+    not a loop-tick" — is now SUPERSEDED: the rebuild ran, on Mac, in
+    this loop, no cloud.
+
+    Track-A monolithic-TU clang wall (the long-standing 40–53 min
+    unbounded blocker): clang -O0 on flat.c now 2 s. flatten emits
+    atlas/embedded.gen.hexa stub → flat.hexa 5.6 MB→0.72 MB,
+    AtlasNode 7416→18. Full chain flatten→hexa_v2→clang→stage-1
+    runs in ~4 s; stage-1 self-compile of flattened compiler/main.hexa
+    completes S1_EXIT=0, ~28 s, ~10–16 GB RSS, emits 3.59 MB .s.
+    The "can't predict residual" unknown is now a MEASURED number.
+  EOF
+  measured_residual <<~EOF
+    First clean run:  total 2774 = HX3001 1452 · HX2001 1307 · HX3004 15.
+    Driven to:        total  217 = HX2001  182 · HX3001   20 · HX3004 15.
+    HX0013 0 throughout (array-lit / O(n²) grammar cap empirically holds;
+    the OOM was array-lit error-recovery O(n²), now confirmed fixed —
+    stage-1 completes in 28 s / linear RSS, no blowup).
+  EOF
+  fixes <<~EOF
+    Each fix re-ran the full pipeline and verified the delta + no
+    regression (HX3004 baseline 15, HX0013 0, S1_EXIT=0, .s stable):
+      287670af feat(types) builtin method-call selector != unresolved
+                (Field{text:m}, m in gen2_method_builtin 31-set) . −887 HX2001
+      15956b14 fix(types)  binop unknown-operand tolerance + comparison
+                yields bool (mirrors _types_equal contract) ..... −1227 HX3001
+      58ea77f0 fix(types)  string `+` concatenation yields string . −205 HX3001
+      a7d063f0 fix(bind)   ArrayLit != struct-lit (was routing array
+                elements' field-name wrappers as free idents) .... −238 HX2001
+  EOF
+  remaining = "217: HX2001 182 (break/continue keyword 62 + flatten cross-file mutable globals p_*/_g_* ~80 + misc params) · HX3001 20 (expected bool got unit) · HX3004 15 (baseline)."
+  next = "break/continue is a REAL compile-path feature gap (no KwBreak/KwContinue token, no ExprKind::Break/Continue) — codegen would mis-emit them as variable refs, so this is a correctness fix not just a diag. Scoped clean: reuse STMT_BR via a loop-context stack in hir_to_mir (while/for push (header_id, after_id); break->BR after, continue->BR header) + lexer/tokens/ast/parser mirror-Return + the 85-site ExprKind::Return exhaustive-match sweep (Break/Continue arms = copy Return's value; the exhaustive-match-no-wildcard hazard — same class as the a7d063f0 bug — demands ALL 85 arms, no partial commit). NO codegen-backend change (break/continue become ordinary block branches codegen already emits as jmp). Then module-globals (flatten cross-file mutable) next."
+  verification = "stage-1 self-compile of flattened compiler/main.hexa, HEXA_MEM_UNLIMITED=1 HEXA_VAL_ARENA=0 HEXA_IGNORE_ERRORS=1, --emit=asm. Each commit message carries its empirical before->after. Branch on main, unpushed (user-merge-gate)."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
+  @> COMPILE-ONLY.tape
+
