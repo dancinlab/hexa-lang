@@ -919,17 +919,26 @@ fn _types_lookup_def(env: TypeEnv, name: string, caller_file: string) -> LookupR
         }
         j = j + 1
     }
-    // Pass 3: name exists privately, but in a foreign module — surface
-    // the privacy violation (caller emits HX2002).
+    // Pass 3: name exists privately in a foreign ORIGIN file. Under the
+    // Option-A flat splice (self/module_loader + tool/flatten_imports),
+    // all imported files are inlined into ONE compilation unit — the
+    // per-source-file privacy boundary is dissolved (a namespaced
+    // WorldModule is the deferred follow-up, see parser.hexa header).
+    // So a non-pub binding from another origin file IS legitimately in
+    // scope here; RESOLVE it (return its type) instead of raising the
+    // HX2002 cross-module-privacy false-positive (993 in stage-2 self-
+    // compile). Genuinely-undefined names still fall through to the
+    // not-found return below → HX2001 (no real-error masking; this only
+    // relaxes the case where the name provably EXISTS as a binding).
     let mut k = 0
     while k < len(bucket) {
         let b = env.entries[bucket[k]]
         if b.name == name && !b.is_pub {
             return LookupResult {
-                found: false,
-                typ: _types_empty_type(),
-                private_other_module: true,
-                other_module_file: b.module_file
+                found: true,
+                typ: b.typ,
+                private_other_module: false,
+                other_module_file: ""
             }
         }
         k = k + 1
