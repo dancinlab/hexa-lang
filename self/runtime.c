@@ -1239,7 +1239,10 @@ HexaVal hexa_void() { return (HexaVal){.tag=TAG_VOID}; }
 // the real tag in vs->tag_i) fell through and cast the vs pointer bits to
 // double — producing garbage. Centralising here lets to_float / exp / sin /
 // cos / log / log10 / round share one correct unwrap.
-static inline double __hx_to_double(HexaVal v) {
+/* PHASE 1.2.B (2026-05-15): de-staticized. Was `static inline`; runtime.h-built
+ * user.c needs cross-TU access for hexa_add_slow + float arithmetic. Loses
+ * inlining for cross-TU callers — acceptable (cold-ish path). */
+double __hx_to_double(HexaVal v) {
     if (HX_IS_FLOAT(v)) return HX_FLOAT(v);
     if (HX_IS_INT(v))   return (double)HX_INT(v);
     // ComptimeConst eval: to_float("3.14") at compile time needs string parsing.
@@ -2347,9 +2350,12 @@ HexaVal hexa_map_get(HexaVal m, const char* key) {
 //
 // Gate: HEXA_IC_STATS=1 dumps per-process hit/miss totals at exit.
 
-static uint64_t g_hexa_ic_hits   = 0;
+/* PHASE 1.2.B (2026-05-15): hits + stats_enabled de-staticized for cross-TU
+ * use by the hexa_map_get_ic macro emitted into runtime.h. misses stays
+ * static (only read inside this TU's hexa_ic_dump_stats). */
+uint64_t g_hexa_ic_hits   = 0;
 static uint64_t g_hexa_ic_misses = 0;
-static int      g_hexa_ic_stats_enabled   = -1; // -1=unchecked, 0=off, 1=on
+int      g_hexa_ic_stats_enabled   = -1; // -1=unchecked, 0=off, 1=on
 static int      g_hexa_ic_stats_installed = 0;
 
 static void hexa_ic_dump_stats(void) {
@@ -2380,7 +2386,10 @@ static inline int hexa_ic_stats_on(void) {
 // when HEXA_IC_STATS is unset.
 // rt#32-N build-fix: rt#37 referenced m.map.{keys,vals} which were removed by
 // rt#32-G when map storage moved to HexaMapTable. Redirect through .tbl.
-static HexaVal hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic) {
+/* PHASE 1.2.B (2026-05-15): de-staticized. Slow-path fallback for the
+ * hexa_map_get_ic hot-path macro emitted into runtime.h — user.c TUs link
+ * against this. */
+HexaVal hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic) {
     if (hexa_ic_stats_on()) { ic->misses++; g_hexa_ic_misses++; }
     if (HX_IS_MAP(m) && HX_MAP_TBL(m)) {
         HexaMapTable* t = HX_MAP_TBL(m);
@@ -4301,7 +4310,9 @@ void hexa_eprint_val(HexaVal v) {
 #include <setjmp.h>
 #define HEXA_MAX_TRY 64
 static jmp_buf* __hexa_try_stack[HEXA_MAX_TRY];
-static int __hexa_try_top = 0;
+/* PHASE 1.2.B (2026-05-15): de-staticized. Try-stack depth marker read by
+ * hexa_v2-emitted try/catch lowering in user.c. */
+int __hexa_try_top = 0;
 static HexaVal __hexa_error_val;
 
 void __hexa_try_push(jmp_buf* jb) { if (__hexa_try_top < HEXA_MAX_TRY) __hexa_try_stack[__hexa_try_top++] = jb; }
@@ -4646,7 +4657,9 @@ HexaVal hexa_type_of(HexaVal v) {
 
 // ROI-37: rename impl to _slow so the macro below can inline the int+int
 // fast path without function-call ABI overhead.
-static HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
+/* PHASE 1.2.B (2026-05-15): de-staticized. Slow-path fallback for the
+ * hexa_add macro emitted into runtime.h — user.c TUs link against this. */
+HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) + HX_INT(b));
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b)) {
         // T39: unwrap via __hx_to_double so TAG_VALSTRUCT wrappers don't
