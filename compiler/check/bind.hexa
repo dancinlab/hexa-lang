@@ -369,7 +369,15 @@ fn _is_enum_path_kind(k: ExprKind) -> bool {
 
 fn _is_struct_lit_kind(k: ExprKind) -> bool {
     return match k {
-        ExprKind::ArrayLit -> true,
+        // ArrayLit must NOT be classed as a struct-lit: the struct-lit
+        // branch descends f.children (the value under each field-name
+        // wrapper). For an array of struct-lits, e.children are the
+        // StructLit elements and f.children are their field-name Ident
+        // wrappers — descending them resolved `code:`/`title:`/… as free
+        // names (the 238 stage-2 self-compile HX2001 flood). Falling to
+        // the generic tail instead walks each element via _bind_walk_expr,
+        // so each StructLit element hits this branch correctly.
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> true,
         ExprKind::LiteralInt -> false,
         ExprKind::LiteralFloat -> false,
