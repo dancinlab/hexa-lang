@@ -1,0 +1,133 @@
+// compiler/atlas/symbolic/vortex_math_verifier.hexa — Tesla 3,6,9 audit
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of archive-TECS-L .shared/calc/vortex_math_verifier.py
+// (TECS-L absorption, git commit 2362285a). Each of 10 vortex-math claims
+// is reduced to a deterministic mathematical kernel and assigned a fixed
+// verdict. The kernels (digit-root, (Z/9Z)* unit group, doubling orbit
+// mod 9, Pisano period, regular-n-gon plane tiling) are exact integer
+// procedures — zero external dependency (g5 hexa-native-only).
+//
+// Verdict ladder (verbatim from source):
+//   PROVEN · TRIVIAL · CHERRY-PICK · COINCIDENCE
+//   OVER-INTERPRETED · MIXED · NON-SCIENTIFIC
+//
+// Cross-link: atlas/inbox/_tecsl_calculator_port_manifest.md §C ·
+// stdlib/core/math.hexa (fib).
+
+import "stdlib/core/math.hexa"
+
+// ── number-theoretic kernels ───────────────────────────────────────────
+
+// digit_root(n): repeated digital sum; 0→0, else 1+((n−1) mod 9) so a
+// multiple of 9 maps to 9 (the casting-out-nines convention).
+pub fn digit_root(n: int) -> int {
+    let m = if n < 0 { -n } else { n }
+    if m == 0 { return 0 }
+    let r = m % 9
+    if r == 0 { return 9 }
+    return r
+}
+
+// pow_mod(base, exp, m): modular exponentiation (square-and-multiply).
+pub fn pow_mod(base: int, exp: int, m: int) -> int {
+    if m == 1 { return 0 }
+    let mut result = 1
+    let mut b = base % m
+    let mut e = exp
+    while e > 0 {
+        if e % 2 == 1 { result = (result * b) % m }
+        b = (b * b) % m
+        e = e / 2
+    }
+    return result
+}
+
+// claim1_base_misses_369(base): does the multiplicative cycle of `base`
+// in Z/9Z ever hit {0,3,6}?  True iff gcd(base,9)=1 (units never touch
+// the ideal 3·Z/9Z). Returns true = "misses 3,6,9" (claim holds).
+pub fn claim1_base_misses_369(base: int) -> bool {
+    let mut i = 0
+    while i < 30 {
+        let v = pow_mod(base, i, 9)
+        if v == 0 || v == 3 || v == 6 { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// claim2 doubling map f(x)=2x mod 9 on digit-root residues 1..9
+// (0 represented as 9). period of the orbit starting at `start`.
+pub fn doubling_orbit_period(start: int) -> int {
+    let s0 = if start % 9 == 0 { 9 } else { start % 9 }
+    let mut x = (2 * s0) % 9
+    if x == 0 { x = 9 }
+    let mut steps = 1
+    while x != s0 {
+        x = (2 * x) % 9
+        if x == 0 { x = 9 }
+        steps = steps + 1
+        if steps > 100 { return -1 }   // safety; never reached for mod 9
+    }
+    return steps
+}
+
+// pisano_period(m): least p>0 with F[p]≡0 and F[p+1]≡1 (mod m).
+pub fn pisano_period(m: int) -> int {
+    if m <= 1 { return 1 }
+    let mut a = 0
+    let mut b = 1
+    let mut p = 0
+    while p < m * m + 10 {
+        let t = (a + b) % m
+        a = b
+        b = t
+        p = p + 1
+        if a == 0 && b == 1 { return p }
+    }
+    return -1
+}
+
+// interior_angle_times2(n): 2·(interior angle of regular n-gon) in degrees,
+// kept integer = 2·180·(n−2)/n only when it divides evenly; we instead test
+// tileability directly: a regular n-gon tiles the plane iff
+// 360·n is divisible by 180·(n−2), i.e. (interior angle) divides 360.
+pub fn regular_ngon_tiles(n: int) -> bool {
+    if n < 3 { return false }
+    // interior angle = 180(n−2)/n.  360 / angle = 360n / (180(n−2))
+    //               = 2n / (n−2).  tiles ⇔ (n−2) | 2n  with quotient ≥ 3.
+    let denom = n - 2
+    if denom <= 0 { return false }
+    if (2 * n) % denom != 0 { return false }
+    let q = (2 * n) / denom
+    return q >= 3
+}
+
+// ── per-claim verdicts (fixed, source-faithful) ────────────────────────
+
+pub fn vortex_verdict(claim: int) -> string {
+    if claim == 1 { return "PROVEN" }            // gcd(2,9)=1 ⇒ units miss {0,3,6}
+    if claim == 2 { return "PROVEN" }            // ideal 3Z/9Z closed under doubling
+    if claim == 3 { return "NON-SCIENTIFIC" }    // "key to universe" unfalsifiable
+    if claim == 4 { return "CHERRY-PICK" }       // 360 digit-root 9 is 1/9 chance
+    if claim == 5 { return "MIXED" }             // codon triplets real, rest cherry-pick
+    if claim == 6 { return "COINCIDENCE" }       // Solfeggio chosen for digit roots
+    if claim == 7 { return "PROVEN" }            // Pisano π(9)=24 theorem
+    if claim == 8 { return "TRIVIAL" }           // hexagon=6 triangles elementary
+    if claim == 9 { return "OVER-INTERPRETED" }  // mod-9 real, energy claims not
+    if claim == 10 { return "NON-SCIENTIFIC" }   // poetic labels, no definitions
+    return "UNKNOWN"
+}
+
+// Whole-audit verdict vector (claims 1..10).
+pub fn vortex_all_verdicts() -> [string] {
+    let mut v: [string] = []
+    let mut c = 1
+    while c <= 10 {
+        v.push(vortex_verdict(c))
+        c = c + 1
+    }
+    return v
+}

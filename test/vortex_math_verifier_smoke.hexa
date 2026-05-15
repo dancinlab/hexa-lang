@@ -1,0 +1,87 @@
+// test/vortex_math_verifier_smoke.hexa — smoke for symbolic/vortex_math_verifier.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values reproduced from .shared/calc/vortex_math_verifier.py
+// (claim docstrings + in-code asserts):
+//   digit_root(360) = 9                       (Claim 4)
+//   digit_root(64)  = 1                        (Claim 5: 64=4^3, NOT 9)
+//   claim1_base_misses_369(2)  = true          (Claim 1: gcd(2,9)=1)
+//   claim1_base_misses_369(3)  = false         (3 hits the ideal)
+//   doubling_orbit_period(3)   = 2             (Claim 2: 3↔6)
+//   doubling_orbit_period(9)   = 1             (Claim 2: 9 fixed point)
+//   doubling_orbit_period(1)   = 6             (Claim 9: 1,2,4,8,7,5 — φ(9)=6)
+//   pisano_period(9)  = 24                     (Claim 7: π(9)=24)
+//   pisano_period(10) = 60 · π(7)=16 · π(8)=12 (Claim 7 comparison table)
+//   regular_ngon_tiles(3/4/6)=true; 5/7/8=false (Claim 8)
+//   verdicts vector matches source print_verdict() outputs
+//
+// Run:  hexa run test/vortex_math_verifier_smoke.hexa
+// Sentinel: __VORTEX_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/vortex_math_verifier.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── kernels ─────────────────────────────────────────────────────────────
+
+check("digit_root(360) == 9", digit_root(360) == 9)
+check("digit_root(64) == 1 (64=4^3, cherry-pick fails)", digit_root(64) == 1)
+check("digit_root(9) == 9", digit_root(9) == 9)
+
+check("claim1_base_misses_369(2) == true", claim1_base_misses_369(2))
+check("claim1_base_misses_369(4) == true", claim1_base_misses_369(4))
+check("claim1_base_misses_369(3) == false", !claim1_base_misses_369(3))
+
+check("doubling_orbit_period(3) == 2 (3↔6)", doubling_orbit_period(3) == 2)
+check("doubling_orbit_period(6) == 2 (6↔3)", doubling_orbit_period(6) == 2)
+check("doubling_orbit_period(9) == 1 (fixed point)", doubling_orbit_period(9) == 1)
+check("doubling_orbit_period(1) == 6 (period φ(9)=6)", doubling_orbit_period(1) == 6)
+
+check("pisano_period(9) == 24", pisano_period(9) == 24)
+check("pisano_period(10) == 60", pisano_period(10) == 60)
+check("pisano_period(7) == 16", pisano_period(7) == 16)
+check("pisano_period(8) == 12", pisano_period(8) == 12)
+
+check("regular_ngon_tiles(3) == true", regular_ngon_tiles(3))
+check("regular_ngon_tiles(4) == true", regular_ngon_tiles(4))
+check("regular_ngon_tiles(6) == true", regular_ngon_tiles(6))
+check("regular_ngon_tiles(5) == false", !regular_ngon_tiles(5))
+check("regular_ngon_tiles(7) == false", !regular_ngon_tiles(7))
+check("regular_ngon_tiles(8) == false", !regular_ngon_tiles(8))
+
+// ── verdicts ────────────────────────────────────────────────────────────
+
+check("verdict(1)  == PROVEN",           vortex_verdict(1) == "PROVEN")
+check("verdict(3)  == NON-SCIENTIFIC",   vortex_verdict(3) == "NON-SCIENTIFIC")
+check("verdict(4)  == CHERRY-PICK",      vortex_verdict(4) == "CHERRY-PICK")
+check("verdict(6)  == COINCIDENCE",      vortex_verdict(6) == "COINCIDENCE")
+check("verdict(7)  == PROVEN",           vortex_verdict(7) == "PROVEN")
+check("verdict(9)  == OVER-INTERPRETED", vortex_verdict(9) == "OVER-INTERPRETED")
+
+let vs = vortex_all_verdicts()
+check("all_verdicts() has 10 entries", len(vs) == 10)
+check("all_verdicts()[0] == PROVEN (claim 1)", vs[0] == "PROVEN")
+check("all_verdicts()[9] == NON-SCIENTIFIC (claim 10)", vs[9] == "NON-SCIENTIFIC")
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  vortex_math_verifier smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__VORTEX_SMOKE__ FAIL")
+} else {
+    println("__VORTEX_SMOKE__ PASS")
+}
