@@ -55,7 +55,7 @@ pub fn registry_filter_excluded(names: [string], exclude: [string]) -> [string]
 
 1. **Stage0 dispatch trim is partial.** anima `rng_registry_collect()` uses an inlined switch over canonical names because hexa stage0 has no fn-pointers / dyn-call. autodiscover trims `rng_registry_names()` (12 LOC → ~3) and meta-table boilerplate (~5 LOC), but the per-source collect inline cannot be removed without runtime traits.
 2. **`ls(1)` external dependency.** Minimal Alpine images and airgapped distros may lack `ls`; the wrapper returns `[]` in that case (silent).
-3. **Newline-in-filename unhandled.** Convention assumes ASCII module names (raw 271 enforced).
+3. **Newline-in-filename unhandled.** Convention assumes ASCII module names (enforced).
 4. **No symlink discrimination.** BSD `ls` follows file symlinks by default; Linux GNU `ls` ditto. Symlinked `.hexa` files appear as regular entries.
 5. **Case-sensitive suffix.** `.hexa` and `.HEXA` are distinct.
 6. **README* not auto-excluded.** Caller passes README/dotfile bases to `registry_filter_excluded` if needed (in practice `.ai.md` extension already filters them out).

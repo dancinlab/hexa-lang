@@ -17,7 +17,7 @@
 //   safetensors, qrng_anu, sqlite, proc, http, websocket, http2,
 //   registry_autodiscover) historically embedded their reference values
 //   inline inside test_<m>.hexa as string/int literals. Cross-module the
-//   pattern was ad-hoc — `_pcg32_reference`-style helpers, raw#37 transient
+//   pattern was ad-hoc — `_pcg32_reference`-style helpers, transient
 //   constants — every module re-invented its own assertion shape.
 //
 // FIX (additive, no runtime.c change)

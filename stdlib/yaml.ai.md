@@ -11,7 +11,7 @@ phase: alpha (Friction 0)
 
 # stdlib/yaml (AI-native)
 
-Minimum-viable YAML parser scoped to `.ai.md` frontmatter blocks (raw 271 convention) and flat `key: value` text. **Not a full YAML implementation** — see Caveats.
+Minimum-viable YAML parser scoped to `.ai.md` frontmatter blocks (convention) and flat `key: value` text. **Not a full YAML implementation** — see Caveats.
 
 ## TL;DR
 
@@ -70,7 +70,7 @@ pub fn yaml_validate_keys(m: map, required: [string])  -> [string]   // missing 
 
 ## Sister consumer
 
-raw 271 README.ai.md frontmatter validation across anima / anima-eeg / airgenome. Today consumers either ignore frontmatter or hand-roll regex; this module centralizes the parser so AI agents can rely on identical semantics for `schema:`, `last_updated:`, `ssot:`, `markers:` keys.
+README.ai.md frontmatter validation across anima / anima-eeg / airgenome. Today consumers either ignore frontmatter or hand-roll regex; this module centralizes the parser so AI agents can rely on identical semantics for `schema:`, `last_updated:`, `ssot:`, `markers:` keys.
 
 ## Selftest
 

@@ -7,7 +7,7 @@
 // Phase α (Friction 0) — AI-native module landed 2026-05-02.
 //
 // Purpose: parse YAML frontmatter blocks at the head of `.ai.md` documents
-// (raw 271 README.ai.md convention) and any flat YAML key:value text. This
+// (README.ai.md convention) and any flat YAML key:value text. This
 // is *not* a full YAML implementation — see Caveats. It is the minimum
 // surface needed to:
 //   (a) extract a `--- ... ---` frontmatter block from a document body,
@@ -47,7 +47,7 @@
 // Extract the YAML frontmatter block from text. Returns the content between
 // the leading `---` and the matching closing `---` (exclusive of markers).
 // Returns "" if no frontmatter exists. Frontmatter must start at offset 0
-// (modulo BOM / leading blank lines), per raw 271 convention.
+// (modulo BOM / leading blank lines), per README.ai.md frontmatter convention.
 pub fn yaml_frontmatter_extract(text: string) -> string {
     if len(text) == 0 { return "" }
     let lines = text.split("\n")

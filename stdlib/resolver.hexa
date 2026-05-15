@@ -12,7 +12,7 @@
 // @priority P1
 //
 // PROBLEM
-//   The resolver at ~/.hx/bin/hexa (raw 44 hard-landing) auto-routes any
+//   The resolver at ~/.hx/bin/hexa (docker hard-landing) auto-routes any
 //   *.hexa script under a Darwin host into the persistent `hexa-exec`
 //   Linux container. Tools that produce host-bound output (Mach-O dylib
 //   from cc -O2 -dynamiclib, codesign, chflags, launchctl, sandbox-exec,

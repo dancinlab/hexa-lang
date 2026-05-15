@@ -165,7 +165,7 @@ fn _emit_raw66_trailer(hook_files: array, hook_dirs: array, mode: string, root: 
                 + ",\"expected\":\"empty .git/hooks/* (only .sample files), no .githooks/.husky/.git-hooks dirs\""
                 + ",\"removed_files\":" + to_string(removed_f)
                 + ",\"removed_dirs\":" + to_string(removed_d)
-                + ",\"reason\":\"git-hook-ban: hooks bypass raw-family governance, run outside SSOT (.raw + .own), and are not visible to abstraction-ladder telemetry\""
+                + ",\"reason\":\"git-hook-ban: hooks bypass governance, run outside SSOT, and are not visible to abstraction-ladder telemetry\""
                 + ",\"fix\":[" + _join_quoted(fixes) + "]"
                 + ",\"enforce_layer\":\"os-level (chflags uchg .git/hooks/) + launchd watcher (this tool)\""
                 + "}\n"

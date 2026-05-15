@@ -26,7 +26,7 @@
 //   2. Symbolic links followed iff `ls` follows them on the host (BSD
 //      default: yes for files, no for dir entries).
 //   3. Filenames containing `\n` not handled — `ls` line-split breaks.
-//      ASCII module-name convention assumed (raw 271 enforces).
+//      ASCII module-name convention assumed (enforced).
 //   4. README.* and *.ai.md are NOT auto-excluded — caller passes them
 //      via `registry_filter_excluded` if desired.
 //   5. Suffix match is case-sensitive. ".hexa" ≠ ".HEXA".

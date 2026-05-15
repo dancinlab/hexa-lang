@@ -62,7 +62,7 @@ fn main() -> void {
     chk_eq_str("no_frontmatter_extract", yaml_frontmatter_extract(no_fm), "")
     chk_eq_str("no_frontmatter_strip", yaml_strip_frontmatter(no_fm), no_fm)
 
-    // ── Case 3: valid frontmatter (raw 271 ai-native shape).
+    // ── Case 3: valid frontmatter (ai-native shape).
     let valid = "---\nschema: anima/modules/rng/ai-native/1\nlast_updated: 2026-05-02\nstatus: landed\n---\n# Body\n\ncontent here\n"
     let fm_valid = yaml_frontmatter_extract(valid)
     let m_valid = yaml_parse_flat(fm_valid)
