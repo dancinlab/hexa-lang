@@ -4133,6 +4133,8 @@ fn gen2_expr(node) {
                 if name == "mono_ns"          { return "hexa_mono_ns()" }
                 if name == "utc_iso_now"      { return "hexa_utc_iso_now()" }
                 if name == "utc_compact_now"  { return "hexa_utc_compact_now()" }
+                // anima RFC 034 (2026-05-16): farr autograd — 0-arg tape open.
+                if name == "ad_tape_begin"    { return "hexa_ad_tape_begin()" }
             }
             if len(node.args) == 1 {
                 let a0 = arg_strs[0]
@@ -4187,6 +4189,10 @@ fn gen2_expr(node) {
                 // RFC 033 (2026-05-12): farr_copy — explicit deep copy
                 // (memcpy under the hood, no per-elem boxing).
                 if name == "farr_copy"      { return "hexa_farr_copy(" + a0 + ")" }
+                // anima RFC 034 (2026-05-16): farr autograd — 1-arg forms.
+                if name == "ad_tape_end"    { return "hexa_ad_tape_end(" + a0 + ")" }
+                if name == "ad_backward"    { return "hexa_ad_backward(" + a0 + ")" }
+                if name == "ad_grad"        { return "hexa_ad_grad(" + a0 + ")" }
                 // RFC 025 (2026-05-12): safetensors mmap-backed zero-copy
                 // load. 1-arg forms (open/close/header/data_offset/size).
                 if name == "safetensors_mmap_open"        { return "hexa_safetensors_mmap_open(" + a0 + ")" }
@@ -4356,6 +4362,11 @@ fn gen2_expr(node) {
                 if name == "regex_replace" { return "hexa_regex_replace(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // feat/primitive-float-array — packed-double array element set.
                 if name == "farr_set"      { return "hexa_farr_set(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
+                // anima RFC 035 (2026-05-16): bf16 storage round-trip
+                // (src, dst, n). SSOT for hexa cc --regen; the committed
+                // transpiler reaches these via the hexa_call3 fallback.
+                if name == "farr_to_bf16"   { return "hexa_farr_to_bf16(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
+                if name == "farr_from_bf16" { return "hexa_farr_from_bf16(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // RFC 036: farr_int_array — 3-arg routes.
                 if name == "farr_int_set"  { return "hexa_farr_int_set(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // RFC 025 (2026-05-12): safetensors mmap-backed zero-copy
@@ -4395,6 +4406,9 @@ fn gen2_expr(node) {
                 if name == "matmul"         { return "hexa_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // RFC 032 (2026-05-12): farr_matmul — packed-double matmul.
                 if name == "farr_matmul"    { return "hexa_farr_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                // anima RFC 034 (2026-05-16): farr autograd — ad_matmul
+                // (5-arg; forward = farr_matmul + records backward).
+                if name == "ad_matmul"      { return "hexa_ad_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // stdlib/os/pty — 5-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_set_winsize" {
                     return "hexa_pty_set_winsize(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
@@ -4419,6 +4433,19 @@ fn gen2_expr(node) {
                 }
                 if name == "chacha20_poly1305_decrypt" {
                     return "hexa_chacha20_poly1305_decrypt(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                // anima RFC 034 (2026-05-16): farr autograd — fused softmax
+                // cross-entropy (returns scalar loss; records B-D-4 grad).
+                if name == "ad_softmax_cross_entropy" {
+                    return "hexa_ad_softmax_cross_entropy(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                // anima RFC 036 (2026-05-16): phi_rs MI/Φ byte-equal.
+                // phi_mi_pair(a,b,n,n_bins) / phi_spatial(states,nc,dim,n_bins).
+                if name == "phi_mi_pair" {
+                    return "hexa_phi_mi_pair(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                if name == "phi_spatial" {
+                    return "hexa_phi_spatial(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
                 }
             }
             if len(node.args) == 6 {
@@ -4447,6 +4474,33 @@ fn gen2_expr(node) {
                         + arg_strs[4] + ", " + arg_strs[5] + ", "
                         + arg_strs[6] + ", " + arg_strs[7] + ", "
                         + arg_strs[8] + ")"
+                }
+            }
+            if len(node.args) == 11 {
+                // anima RFC 034 (2026-05-16): farr autograd — fused AdamW
+                // step (param, grad, m, v, n, lr, b1, b2, eps, wd, t).
+                if name == "adamw_step" {
+                    return "hexa_adamw_step("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ", "
+                        + arg_strs[10] + ")"
+                }
+            }
+            if len(node.args) == 12 {
+                // anima RFC 035 (2026-05-16): loss-scaled mixed-precision
+                // AdamW (param, grad, m, v, n, lr, b1, b2, eps, wd, t,
+                // loss_scale). Returns 1 if applied, 0 if AMP-overflow skip.
+                if name == "adamw_step_mixed" {
+                    return "hexa_adamw_step_mixed("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ", "
+                        + arg_strs[10] + ", " + arg_strs[11] + ")"
                 }
             }
             let nargs = len(node.args)
