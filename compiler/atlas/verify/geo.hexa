@@ -1,0 +1,53 @@
+// compiler/atlas/verify/geo.hexa — §7 GEO verifier (Stage 1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native Stage 1 verification for atlas/MAIN.tape §7 GEO.
+// Atlas-internal arithmetic only (e.g. crystal_systems = σ-sopfr = 7);
+// agreement with empirical geological/crystallographic facts is OBSERVATION
+// per g2 lattice-as-tool, NOT derivation.
+
+import "compiler/atlas/verify/foundation.hexa"
+import "stdlib/core/math.hexa"
+
+fn _vd_geo(entry_id: string, tier: string, pass: bool, detail: string) -> AtlasVerdict {
+    return AtlasVerdict {
+        entry_id: entry_id,
+        domain: "§7 GEO",
+        tier: tier,
+        pass: pass,
+        detail: detail,
+        stage: "Stage 1 — symbolic identity (hexa-native)"
+    }
+}
+
+fn _tier_geo(ok: bool) -> string {
+    if ok { return "🔵 SUPPORTED-IDENTITY" }
+    return "🔴 FALSIFIED"
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s7_geo_crystal_systems — atlas embed GEO-crystal-systems = σ-sopfr = 7
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §7 GEO [@L GEO-crystal-systems]. Atlas internal: σ(6)-sopfr(6)
+// = 12-5 = 7. External: 7 crystal systems (cubic, tetragonal, orthorhombic,
+// hexagonal, trigonal, monoclinic, triclinic — Bravais 1848). OBSERVATION.
+
+pub fn verify_s7_geo_crystal_systems() -> AtlasVerdict {
+    let s = sigma(6)
+    let sop = sopfr(6)
+    let computed = s - sop                 // 7
+    let bravais_crystal_systems = 7
+    let ok = computed == 7 && computed == bravais_crystal_systems
+    let detail = "σ(6)-sopfr(6) = " + to_string(s) + "-" + to_string(sop) + " = " + to_string(computed) + " · Bravais 1848 crystal systems = " + to_string(bravais_crystal_systems) + " (OBSERVATION per g2 — geological/crystallographic fact, NOT derivation)"
+    return _vd_geo("s7_geo_crystal_systems", _tier_geo(ok), ok, detail)
+}
+
+// ── Aggregate ───────────────────────────────────────────────────────────
+
+pub fn verify_geo_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s7_geo_crystal_systems())
+    return out
+}

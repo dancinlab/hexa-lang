@@ -1,0 +1,61 @@
+// compiler/atlas/verify/bio.hexa — §5 BIO verifier (Stage 1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native verification for atlas/MAIN.tape §5 BIO.
+// V8 B-bio (anima H_182 carry) carries 🟠 AT-RISK tier — surrogate vs formal
+// PyPhi mismatch CONFIRMED. Verifier closes the *mismatch statement* (PASS),
+// NOT the underlying biological mechanism claim.
+//
+// Cross-link: atlas/MAIN.tape §5 · anima H_182 + Hc_B1..B10 · g_external_calc_forbidden.
+
+import "compiler/atlas/verify/foundation.hexa"
+import "stdlib/core/math.hexa"
+
+fn _vd_bio(entry_id: string, tier: string, pass: bool, detail: string) -> AtlasVerdict {
+    return AtlasVerdict {
+        entry_id: entry_id,
+        domain: "§5 BIO",
+        tier: tier,
+        pass: pass,
+        detail: detail,
+        stage: "Stage 1 — symbolic identity (hexa-native, anima carry)"
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s5_v8_bbio_at_risk_carry — anima H_182 + Hc_B1..B10 V8 B-bio mismatch
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §5 BIO V8 B-bio carry from anima.
+// anima Hc_B1..B10 V8 B-bio 10 mechanism (HH/STDP/NMDA/등) real impl 0/10
+// Φ ≥ 0.5 (Mean=0.034, Max=0.339 Hc_B2 STDP).
+// Surrogate (anima Φ★ proxy): 78.5%
+// Formal (PyPhi 1.2.0 IIT 3.0): 0.358 < 0.5 threshold
+// → surrogate-vs-real gap CONFIRMED.
+// Verifier closes the MISMATCH STATEMENT (math fact: 78.5% high but 0.358 < 0.5)
+// — NOT the underlying biological mechanism claim. tier = 🟠 AT-RISK (special).
+
+pub fn verify_s5_v8_bbio_at_risk_carry() -> AtlasVerdict {
+    let surrogate_pct = 785             // 78.5% scaled by 10 (integer)
+    let formal_phi_milli = 358          // 0.358 scaled by 1000 (integer)
+    let phi_threshold_milli = 500       // 0.5 scaled by 1000
+    let surrogate_high = surrogate_pct >= 500    // ≥ 50% surrogate
+    let formal_below = formal_phi_milli < phi_threshold_milli   // formal Φ < 0.5
+    let mismatch_confirmed = surrogate_high && formal_below
+    // Mean of Hc_B1..B10 = 0.034 (scaled by 1000 = 34)
+    let hc_b_mean_milli = 34
+    let max_hc_b2_milli = 339            // Hc_B2 STDP max
+    let all_below_threshold = max_hc_b2_milli < phi_threshold_milli
+    let ok = mismatch_confirmed && all_below_threshold
+    let detail = "anima V8 B-bio (10 mechanisms HH/STDP/NMDA/...): surrogate Φ★=78.5% high · formal PyPhi Φ=0.358 < 0.5 threshold (Mean=0.034, Max Hc_B2 STDP=0.339) — MISMATCH CONFIRMED → 🟠 AT-RISK (verifier closes mismatch statement, NOT mechanism claim)"
+    return _vd_bio("s5_v8_bbio_at_risk_carry", "🟠 AT-RISK (Phase 2 cycle 017 anima carry — surrogate-vs-formal mismatch confirmed)", ok, detail)
+}
+
+// ── Aggregate ───────────────────────────────────────────────────────────
+
+pub fn verify_bio_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s5_v8_bbio_at_risk_carry())
+    return out
+}

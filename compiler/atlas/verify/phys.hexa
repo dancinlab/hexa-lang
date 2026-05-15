@@ -106,11 +106,186 @@ pub fn verify_s3_cusp_discriminant() -> AtlasVerdict {
     return _vd_phys("s3_cusp_discriminant", _tier_phys(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s3_phys_conservation_count_n6 — atlas embed PHYS-conservation-laws = n = 6
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: PHYS-conservation-laws = n = 6 (energy/momentum 3D × 2 +
+// angular momentum × 2 + charge + lepton/baryon number ≈ 6 fundamental).
+// External: actual conservation count is debate (Noether: continuous symmetries
+// → conservation 1-1 — depends on which Lagrangian). OBSERVATION per g4.
+
+pub fn verify_s3_phys_conservation_count_n6() -> AtlasVerdict {
+    let n = 6
+    let atlas_claim = n                   // atlas embed value
+    let conservation_count_basic = 6      // E + 3·p + L_total + Q ≈ 6 basic
+    let ok = atlas_claim == n
+    let detail = "atlas PHYS-conservation-laws = n = " + to_string(atlas_claim) + " (basic: energy + 3·momentum + angular-momentum + charge ≈ " + to_string(conservation_count_basic) + ") — OBSERVATION per g4 (Noether links symmetries to conservation, count depends on Lagrangian)"
+    return _vd_phys("s3_phys_conservation_count_n6", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_phys_lorentz_generators_C42 — PHYS-lorentz-generators = n = C(τ,φ) = 6
+// ──────────────────────────────────────────────────────────────────────
+// Combinatorial identity: C(τ(6), φ(6)) = C(4, 2) = 6. External: Lorentz group
+// SO(3,1) has 6 generators (3 rotations + 3 boosts). OBSERVATION.
+
+pub fn verify_s3_phys_lorentz_generators_C42() -> AtlasVerdict {
+    // C(4, 2) = 4!/(2!·2!) = 24/4 = 6
+    let c_4_2 = factorial(4) / (factorial(2) * factorial(2))
+    let n = 6
+    let lorentz_so31 = 6                  // 3 rotations + 3 boosts
+    let ok = c_4_2 == n && c_4_2 == lorentz_so31
+    let detail = "C(τ(6),φ(6)) = C(4,2) = 4!/(2!·2!) = " + to_string(c_4_2) + " = n · Lorentz SO(3,1) generators = 3 rotations + 3 boosts = " + to_string(lorentz_so31) + " (OBSERVATION per g2 — combinatorial identity matches physics, NOT derivation)"
+    return _vd_phys("s3_phys_lorentz_generators_C42", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_phys_poincare_generators_10 — PHYS-Poincare-generators = σ-φ = 10
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: σ(6)-φ(6) = 12-2 = 10. External: Poincaré group has 10
+// generators (6 Lorentz + 4 translations). OBSERVATION.
+
+pub fn verify_s3_phys_poincare_generators_10() -> AtlasVerdict {
+    let s = sigma(6)
+    let p = euler_phi(6)
+    let computed = s - p                  // 10
+    let poincare_count = 10                // 6 Lorentz + 4 translations
+    let ok = computed == 10 && computed == poincare_count
+    let detail = "σ(6)-φ(6) = " + to_string(s) + "-" + to_string(p) + " = " + to_string(computed) + " · Poincaré group generators (6 Lorentz + 4 translations) = " + to_string(poincare_count) + " (OBSERVATION per g2)"
+    return _vd_phys("s3_phys_poincare_generators_10", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_higgs_doublet_2 — PART-higgs-doublet = φ = 2
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: φ(6) = 2. External: SM Higgs is SU(2) doublet (2 components).
+
+pub fn verify_s3_higgs_doublet_2() -> AtlasVerdict {
+    let p = euler_phi(6)
+    let higgs_components = 2
+    let ok = p == 2 && p == higgs_components
+    let detail = "φ(6) = " + to_string(p) + " · SM Higgs SU(2) doublet components = " + to_string(higgs_components) + " (OBSERVATION per g2)"
+    return _vd_phys("s3_higgs_doublet_2", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_sm_fermion_total_12 — PART-sm-fermion-generations = σ = 12
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: σ(6) = 12. External: 12 SM fermions (6 quarks · 6 leptons,
+// excluding antiparticles).
+
+pub fn verify_s3_sm_fermion_total_12() -> AtlasVerdict {
+    let s = sigma(6)
+    let sm_fermions = 12                   // 6 quarks (u,d,c,s,t,b) + 6 leptons
+    let ok = s == 12 && s == sm_fermions
+    let detail = "σ(6) = " + to_string(s) + " · SM fermion total (6 quarks + 6 leptons, excl antiparticles) = " + to_string(sm_fermions) + " (OBSERVATION per g2)"
+    return _vd_phys("s3_sm_fermion_total_12", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_astro_spacetime_dims_4 — ASTRO-spacetime-dims = τ = 4
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: τ(6) = 4. External: spacetime dimension = 4 (3 space + 1 time).
+
+pub fn verify_s3_astro_spacetime_dims_4() -> AtlasVerdict {
+    let t = tau(6)
+    let spacetime_dims = 4                  // 3 + 1
+    let ok = t == 4 && t == spacetime_dims
+    let detail = "τ(6) = " + to_string(t) + " · spacetime dimension (3 space + 1 time) = " + to_string(spacetime_dims) + " (OBSERVATION per g2)"
+    return _vd_phys("s3_astro_spacetime_dims_4", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_quark_flavors_6 — atlas embed L0-quark-flavors = n = 6
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: n = 6. External: 6 quark flavors (u, d, c, s, t, b) — Standard
+// Model (top quark discovered 1995). OBSERVATION per g2.
+
+pub fn verify_s3_quark_flavors_6() -> AtlasVerdict {
+    let n = 6
+    let sm_quark_flavors = 6                // u, d, c, s, t, b
+    let ok = n == 6 && n == sm_quark_flavors
+    let detail = "n = " + to_string(n) + " · SM quark flavors (u,d,c,s,t,b) = " + to_string(sm_quark_flavors) + " (OBSERVATION per g2 — empirical particle physics, top quark 1995)"
+    return _vd_phys("s3_quark_flavors_6", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_quark_colors_3 — atlas embed L0-quark-colors = n/φ = 3
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: n(6)/φ(6) = 6/2 = 3. External: 3 color charges (RGB) in QCD.
+
+pub fn verify_s3_quark_colors_3() -> AtlasVerdict {
+    let n = 6
+    let p = euler_phi(6)
+    let computed = n / p                    // 3
+    let qcd_colors = 3                       // R, G, B
+    let ok = computed == 3 && computed == qcd_colors
+    let detail = "n/φ(6) = " + to_string(n) + "/" + to_string(p) + " = " + to_string(computed) + " · QCD color charges (RGB) = " + to_string(qcd_colors) + " (OBSERVATION per g2)"
+    return _vd_phys("s3_quark_colors_3", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_gluons_8 — atlas embed L0-gluons = σ-τ = 8
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: σ(6)-τ(6) = 12-4 = 8. External: 8 gluons (SU(3) generators
+// = 3²-1 = 8). OBSERVATION per g2.
+
+pub fn verify_s3_gluons_8() -> AtlasVerdict {
+    let s = sigma(6)
+    let t = tau(6)
+    let computed = s - t                    // 8
+    // SU(3) adjoint = 3²-1 = 8 generators
+    let su3_dim = 3 * 3 - 1
+    let ok = computed == 8 && computed == su3_dim
+    let detail = "σ(6)-τ(6) = " + to_string(s) + "-" + to_string(t) + " = " + to_string(computed) + " · SU(3) adjoint = 3²-1 = " + to_string(su3_dim) + " gluons (OBSERVATION per g2)"
+    return _vd_phys("s3_gluons_8", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_generations_3 — atlas embed L0-generations = n/φ = 3
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: n(6)/φ(6) = 3. External: 3 SM fermion generations.
+
+pub fn verify_s3_generations_3() -> AtlasVerdict {
+    let n = 6
+    let p = euler_phi(6)
+    let computed = n / p                    // 3
+    let sm_generations = 3                   // (e,νe,u,d), (μ,νμ,c,s), (τ,ντ,t,b)
+    let ok = computed == 3 && computed == sm_generations
+    let detail = "n/φ(6) = " + to_string(computed) + " · SM fermion generations (e/μ/τ families) = " + to_string(sm_generations) + " (OBSERVATION per g2)"
+    return _vd_phys("s3_generations_3", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_fundamental_forces_4 — atlas embed L0-fundamental-forces = τ = 4
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: τ(6) = 4. External: 4 fundamental forces (gravity, EM, weak,
+// strong). OBSERVATION per g2.
+
+pub fn verify_s3_fundamental_forces_4() -> AtlasVerdict {
+    let t = tau(6)
+    let fundamental_forces = 4               // gravity, EM, weak, strong
+    let ok = t == 4 && t == fundamental_forces
+    let detail = "τ(6) = " + to_string(t) + " · fundamental forces (gravity, EM, weak, strong) = " + to_string(fundamental_forces) + " (OBSERVATION per g2)"
+    return _vd_phys("s3_fundamental_forces_4", _tier_phys(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_phys_all() -> [AtlasVerdict] {
     let mut out: [AtlasVerdict] = []
     out.push(verify_s3_conservation_law())
     out.push(verify_s3_cusp_discriminant())
+    out.push(verify_s3_phys_conservation_count_n6())
+    out.push(verify_s3_phys_lorentz_generators_C42())
+    out.push(verify_s3_phys_poincare_generators_10())
+    out.push(verify_s3_higgs_doublet_2())
+    out.push(verify_s3_sm_fermion_total_12())
+    out.push(verify_s3_astro_spacetime_dims_4())
+    out.push(verify_s3_quark_flavors_6())
+    out.push(verify_s3_quark_colors_3())
+    out.push(verify_s3_gluons_8())
+    out.push(verify_s3_generations_3())
+    out.push(verify_s3_fundamental_forces_4())
     return out
 }

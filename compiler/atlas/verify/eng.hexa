@@ -1,0 +1,92 @@
+// compiler/atlas/verify/eng.hexa — §9 ENG verifier (Stage 1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native Stage 1 verification for atlas/MAIN.tape §9 ENG.
+// Closes ONLY the atlas-internal arithmetic (e.g. 2^sopfr(6)=32) — agreement
+// with external entities (Nvidia GPU CUDA warp_size=32, RFC 768 UDP header
+// 8 bytes, ISO 7498 OSI 7 layers) is OBSERVATION per g4 honesty-obligation-
+// external + g2 lattice-as-tool, NOT derivation.
+//
+// Cross-link: atlas/MAIN.tape §9 · compiler/atlas/verify/foundation.hexa
+// (AtlasVerdict struct shared) · stdlib/core/math.hexa.
+
+import "compiler/atlas/verify/foundation.hexa"
+import "stdlib/core/math.hexa"
+
+fn _vd_eng(entry_id: string, tier: string, pass: bool, detail: string) -> AtlasVerdict {
+    return AtlasVerdict {
+        entry_id: entry_id,
+        domain: "§9 ENG",
+        tier: tier,
+        pass: pass,
+        detail: detail,
+        stage: "Stage 1 — symbolic identity (hexa-native)"
+    }
+}
+
+fn _tier_eng(ok: bool) -> string {
+    if ok { return "🔵 SUPPORTED-IDENTITY" }
+    return "🔴 FALSIFIED"
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s9_warp_size_arithmetic — atlas embed warp_size = 2^sopfr(6) = 32
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §9 ENG [@C warp_size]. Atlas internal: 2^sopfr(6) = 2^5 = 32.
+// External: Nvidia GPU CUDA standard warp size = 32 (since 2007).
+// Verifier closes arithmetic ONLY — agreement is OBSERVATION per g2/g4.
+
+pub fn verify_s9_warp_size_arithmetic() -> AtlasVerdict {
+    let sop = sopfr(6)              // 5
+    let computed = pow(2, sop)      // 2^5 = 32
+    let nvidia_warp_size = 32       // CUDA standard
+    let arithmetic_ok = computed == 32
+    let observation_match = computed == nvidia_warp_size   // observation only
+    let ok = arithmetic_ok
+    let detail = "2^sopfr(6) = 2^" + to_string(sop) + " = " + to_string(computed) + " · Nvidia CUDA warp_size = " + to_string(nvidia_warp_size) + " (OBSERVATION per g2/g4 — atlas internal arithmetic closes; external entity correspondence NOT derivation)"
+    return _vd_eng("s9_warp_size_arithmetic", _tier_eng(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s9_net_udp_header_arithmetic — atlas embed NET-UDP-header = σ-τ = 8
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §9 ENG [@P NET-UDP-header-8]. Atlas internal: σ(6)-τ(6) = 12-4 = 8.
+// External: RFC 768 (1980) UDP header = 8 bytes. OBSERVATION per g4.
+
+pub fn verify_s9_net_udp_header_arithmetic() -> AtlasVerdict {
+    let s = sigma(6)
+    let t = tau(6)
+    let computed = s - t                  // 12 - 4 = 8
+    let rfc_768_udp_bytes = 8
+    let ok = computed == 8 && computed == rfc_768_udp_bytes
+    let detail = "σ(6)-τ(6) = " + to_string(s) + "-" + to_string(t) + " = " + to_string(computed) + " · RFC 768 UDP header = " + to_string(rfc_768_udp_bytes) + " bytes (OBSERVATION per g4 — IETF standard, atlas atlas internal arithmetic only)"
+    return _vd_eng("s9_net_udp_header_arithmetic", _tier_eng(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s9_net_osi_layers_arithmetic — atlas embed NET-OSI = σ-sopfr = 7
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §9 ENG [@P NET-OSI-7]. σ(6)-sopfr(6) = 12-5 = 7.
+// External: ISO 7498 (1984) OSI model = 7 layers. OBSERVATION per g4.
+
+pub fn verify_s9_net_osi_layers_arithmetic() -> AtlasVerdict {
+    let s = sigma(6)
+    let sop = sopfr(6)
+    let computed = s - sop                 // 12 - 5 = 7
+    let iso_7498_layers = 7
+    let ok = computed == 7 && computed == iso_7498_layers
+    let detail = "σ(6)-sopfr(6) = " + to_string(s) + "-" + to_string(sop) + " = " + to_string(computed) + " · ISO 7498 OSI layers = " + to_string(iso_7498_layers) + " (OBSERVATION per g4 — ISO standard, atlas internal arithmetic only)"
+    return _vd_eng("s9_net_osi_layers_arithmetic", _tier_eng(ok), ok, detail)
+}
+
+// ── Aggregate ───────────────────────────────────────────────────────────
+
+pub fn verify_eng_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s9_warp_size_arithmetic())
+    out.push(verify_s9_net_udp_header_arithmetic())
+    out.push(verify_s9_net_osi_layers_arithmetic())
+    return out
+}

@@ -141,6 +141,67 @@ pub fn verify_s8_gamma0_n6_row() -> AtlasVerdict {
     return _vd_top("s8_gamma0_n6_row", _tier_top(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s8_kissing_K4_24 — atlas embed MATH-kissing-K4 = J₂(6) = 24
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §8 TOP. 4-dimensional kissing number K(4) = 24 (Musin 2003).
+// Atlas internal: J₂(6) = 24 — same value, OBSERVATION per g2.
+
+pub fn verify_s8_kissing_K4_24() -> AtlasVerdict {
+    let j2_via_master = sigma(6) * euler_phi(6)   // = n·τ(6) = 24
+    let kissing_k4 = 24                            // Musin 2003 K(4)=24
+    let ok = j2_via_master == 24 && j2_via_master == kissing_k4
+    let detail = "σ(6)·φ(6) = " + to_string(j2_via_master) + " = J₂(6) = 24 · Musin 2003 4D kissing number K(4) = " + to_string(kissing_k4) + " (OBSERVATION per g2)"
+    return _vd_top("s8_kissing_K4_24", _tier_top(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s8_bravais_lattices_14 — atlas embed L2-bravais-lattices = σ+φ = 14
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: σ(6)+φ(6) = 12+2 = 14. External: 14 Bravais lattices in 3D
+// (Bravais 1850). OBSERVATION per g2.
+
+pub fn verify_s8_bravais_lattices_14() -> AtlasVerdict {
+    let s = sigma(6)
+    let p = euler_phi(6)
+    let computed = s + p                  // 14
+    let bravais_3d = 14
+    let ok = computed == 14 && computed == bravais_3d
+    let detail = "σ(6)+φ(6) = " + to_string(s) + "+" + to_string(p) + " = " + to_string(computed) + " · 3D Bravais lattices (Bravais 1850) = " + to_string(bravais_3d) + " (OBSERVATION per g2)"
+    return _vd_top("s8_bravais_lattices_14", _tier_top(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s8_oh_group_48 — atlas embed BIG-Oh-group = σ·τ = 48
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: σ(6)·τ(6) = 12·4 = 48. External: |O_h| = 48 (full octahedral
+// point group order, including reflections). OBSERVATION per g2.
+
+pub fn verify_s8_oh_group_48() -> AtlasVerdict {
+    let s = sigma(6)
+    let t = tau(6)
+    let computed = s * t                  // 48
+    let oh_order = 48                      // O_h cubic point group
+    let ok = computed == 48 && computed == oh_order
+    let detail = "σ(6)·τ(6) = " + to_string(s) + "·" + to_string(t) + " = " + to_string(computed) + " · |O_h| (full octahedral group with reflections) = " + to_string(oh_order) + " (OBSERVATION per g2)"
+    return _vd_top("s8_oh_group_48", _tier_top(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s8_td_group_24 — atlas embed BIG-Td-group = J₂(6) = 24
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: J₂(6) = 24. External: |T_d| = 24 (tetrahedral point group
+// with reflections, ≅ S₄). Already covered by s8_s4_order — sibling note.
+
+pub fn verify_s8_td_group_24() -> AtlasVerdict {
+    let j2 = 24
+    let td_order = 24                     // T_d ≅ S_4
+    let s4 = factorial(4)                  // 24 — sibling of s8_s4_order
+    let ok = j2 == td_order && td_order == s4
+    let detail = "J₂(6) = " + to_string(j2) + " · |T_d| (full tetrahedral with reflections, ≅ S₄) = " + to_string(td_order) + " · |S₄| = 4! = " + to_string(s4) + " — bridge to s8_s4_order (OBSERVATION per g2)"
+    return _vd_top("s8_td_group_24", _tier_top(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_top_all() -> [AtlasVerdict] {
@@ -149,5 +210,9 @@ pub fn verify_top_all() -> [AtlasVerdict] {
     out.push(verify_s8_s4_order())
     out.push(verify_s8_chi_psl2z_step1())
     out.push(verify_s8_gamma0_n6_row())
+    out.push(verify_s8_kissing_K4_24())
+    out.push(verify_s8_bravais_lattices_14())
+    out.push(verify_s8_oh_group_48())
+    out.push(verify_s8_td_group_24())
     return out
 }

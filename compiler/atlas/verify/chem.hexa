@@ -54,10 +54,41 @@ pub fn verify_s4_carbon_z6() -> AtlasVerdict {
     return _vd_chem("s4_carbon_z6", _tier_chem(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s4_period_table_periods — atlas embed CHEM-period-table-periods = σ-sopfr = 7
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: σ(6)-sopfr(6) = 12-5 = 7. External: 7 periods in IUPAC
+// periodic table (currently 7, ending at Og element 118). OBSERVATION per g2.
+
+pub fn verify_s4_period_table_periods() -> AtlasVerdict {
+    let s = sigma(6)
+    let sop = sopfr(6)
+    let computed = s - sop                 // 7
+    let iupac_periods = 7                  // currently 7 (period 8 superheavy hypothetical)
+    let ok = computed == 7 && computed == iupac_periods
+    let detail = "σ(6)-sopfr(6) = " + to_string(s) + "-" + to_string(sop) + " = " + to_string(computed) + " · IUPAC periodic table periods = " + to_string(iupac_periods) + " (current, ending at Og Z=118) (OBSERVATION per g2 — periodic table is empirical chemistry classification)"
+    return _vd_chem("s4_period_table_periods", _tier_chem(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s4_magnesium_z12 — atlas embed L1-magnesium-Z12 = σ(6) = 12
+// ──────────────────────────────────────────────────────────────────────
+// Atlas internal: σ(6) = 12. External: Mg atomic number Z(Mg) = 12. OBSERVATION.
+
+pub fn verify_s4_magnesium_z12() -> AtlasVerdict {
+    let s = sigma(6)                       // 12
+    let mg_z = 12                           // Mg periodic table position
+    let ok = s == 12 && s == mg_z
+    let detail = "σ(6) = " + to_string(s) + " · Mg atomic number Z = " + to_string(mg_z) + " (OBSERVATION per g2 — empirical periodic table fact)"
+    return _vd_chem("s4_magnesium_z12", _tier_chem(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_chem_all() -> [AtlasVerdict] {
     let mut out: [AtlasVerdict] = []
     out.push(verify_s4_carbon_z6())
+    out.push(verify_s4_period_table_periods())
+    out.push(verify_s4_magnesium_z12())
     return out
 }

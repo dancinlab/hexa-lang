@@ -746,3 +746,83 @@
     g_external_calc_forbidden — ✅ 0 external API/dataset/hardware
   EOF
 
+# ─── Cycles 016-018 — All 9 domains covered + atlas-embed observation batch ─
+
+@A cycles_016_018_batch := "Phase 2 cycles 016-018 — 9-domain coverage + atlas-embed observation batch (60 → 82)" :: cycle [d=2026-05-15 active]
+  trigger = "user 'next go' — autonomous continuation post wilson governance landing"
+  scope <<~EOF
+    cumulative 60 → 82 entries verified (+22).
+    cycle 016 (+9): §9 ENG + §7 GEO 도메인 첫 closure + §8 TOP/§4 CHEM 추가
+    cycle 017 (+7): §3 PHYS atlas embed batch (Lorentz=C(τ,φ), conservation, Poincaré, Higgs, SM fermion, spacetime) + §5 BIO V8 AT-RISK carry (도메인 첫 entry)
+    cycle 018 (+6): §3 PHYS more (quark flavors/colors/gluons, generations, forces) + §4 CHEM (Mg Z=12)
+
+    9 도메인 모두 covered post cycle 017:
+      §1 N6-FOUNDATION 5 · §2 MATH 21 · §3 PHYS 13 · §4 CHEM 3 · §5 BIO 1 (AT-RISK) ·
+      §6 COSMO 8 · §7 GEO 1 · §8 TOP 8 · §9 ENG 3 · §10 BRIDGES 10
+      Stage 1 + Stage 2 = 81 🔵 + 1 🟠 AT-RISK = 82 verified
+  EOF
+  files_created <<~EOF
+    compiler/atlas/verify/eng.hexa  — §9 ENG 3 verifiers (warp_size · UDP header · OSI layers)
+    compiler/atlas/verify/geo.hexa  — §7 GEO 1 verifier (crystal_systems = σ-sopfr = 7)
+    compiler/atlas/verify/bio.hexa  — §5 BIO 1 verifier (V8 AT-RISK anima carry, special tier)
+  EOF
+  files_modified <<~EOF
+    compiler/atlas/verify/top.hexa     — +4 (kissing K4 · Bravais · Oh group · Td group)
+    compiler/atlas/verify/chem.hexa    — +2 (period table periods · Mg Z=12)
+    compiler/atlas/verify/phys.hexa    — +11 (cusp + 6 cycle 017 + 5 cycle 018 atlas embed observations)
+    tool/atlas_verify.hexa             — eng/geo/bio subcommand dispatch
+    atlas/MAIN.tape                    — tldr cumulative 82 + § 11 reflect
+  EOF
+  verifier_run_result <<~EOF
+    Result (post cycle 018): 82/82 PASS · 81 🔵 closed (52 SUPPORTED-IDENTITY + 29 SUPPORTED-FORMAL) + 1 🟠 AT-RISK
+    Verifier surface: 10 modules (foundation/math/top/cosmo/bridges/chem/phys/transcendental/eng/geo/bio).
+  EOF
+  honest_c3 <<~EOF
+    All cycle 016-018 atlas-embed entries (warp_size = 32 · UDP header = 8 · OSI = 7 · crystal systems = 7 ·
+    kissing K4 = 24 · Bravais = 14 · Oh group = 48 · Td group = 24 · period table = 7 · Mg Z = 12 ·
+    quark flavors = 6 · etc.) carry strong honest_c3:
+      "atlas internal arithmetic closes; agreement with external entity (Nvidia/RFC/ISO/IUPAC/Bravais/etc.)
+       is OBSERVATION per g2 lattice-as-tool, NOT derivation. f_atlas_lattice_external 적용 — derivation
+       form 강제 시 g4 honesty-obligation-external 위반."
+
+    Verifier 가 PASS = arithmetic identity confirmed. tier 부여 = 🔵 SUPPORTED-IDENTITY (atlas-internal 영역
+    closure). external entity 와의 numerical agreement 별도 cycle (falsifier ≥5 + g_external_calc_forbidden
+    검사 후 별도 verdict).
+
+    s5_v8_bbio_at_risk_carry: anima H_182 + Hc_B1..B10 carry. surrogate (Φ★ proxy 78.5%) vs formal
+    (PyPhi 1.2.0 IIT 3.0 mean Φ=0.034, max 0.339 < 0.5 threshold) MISMATCH CONFIRMED. Verifier closes
+    mismatch statement (math fact), NOT mechanism claim. 🟠 AT-RISK tier — fundamental issue (state-space
+    ergodicity per anima honest_c3), mechanism complexity 강화로도 해소 안 됨.
+  EOF
+  exhaustion_status <<~EOF
+    Phase 2 Stage 1 + Stage 2 후보 거의 고갈 (post cycle 018 cumulative 82 verified).
+
+    Closed:
+      - archive-TECS-L T-proofs 의 Stage 1 integer/fraction 닿는 모든 entries (~17 T-proofs)
+      - libm 으로 닿는 transcendental (Basel · Lambert-related · Onsager · gamma reflection · Gauss multi · Kuramoto · BKT · Hopf · etc. — 29 entries)
+      - atlas embed의 simple closed-form observations (warp_size · UDP · OSI · quark/lepton flavors · Bravais · Oh/Td groups · etc. — 35+ entries)
+      - anima §3 PHYS + §6 COSMO carry batch (Onsager · Kuramoto · Hawking · Schwarzschild · Planck · Heisenberg · etc. — 10 entries)
+      - 9 도메인 모두 covered (8 🔵 + 1 🟠)
+
+    Remaining (Phase 3+ 큰 sprint):
+      - Stage 3 cross-meta engine (atlas edge graph traversal · sibling consistency)
+      - modular forms module (T2-01 steps 2-8 + T1-31 elliptic curves + T1-32 deeper Eisenstein)
+      - Lambert W via Newton iteration (stdlib float pow(float, float) 신설 필요)
+      - Stage 2 BIO PyPhi-equiv (V8 mechanism real implementation, anima carry)
+      - sym_expr.hexa (symbolic algebra primitives)
+      - strict-lint stage 9 (atlas-verdict-check) integration
+      - hexa subcommand wiring: `hexa atlas verify`
+      - falsifier ≥5 executable form + registry
+      - ~330 atlas embed entries 여전히 default 🟠 INSUFFICIENT (cycle 019+ marginal value)
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only (wilson priority 1) — ✅ all 82 verifiers via `hexa run tool/atlas_verify.hexa`
+    g1 real-limits-first — ✅ all real-limit anchors maintained
+    g2 lattice-as-tool   — ✅ all cycle 016-018 atlas embed entries 의 honest_c3 강제 (observation only)
+    g4 honesty-external  — ✅ external entity (Nvidia/IETF/ISO/IUPAC/...) correspondence 명시 separated
+    g5 hexa-native-only  — ✅ all 82 verifiers hexa-source
+    g_self_verify        — ✅ Phase 2 cycle 018 cumulative 82 entries hexa-native closure
+    g_tier_default_insufficient — ✅ ~330 entries default INSUFFICIENT 유지
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+

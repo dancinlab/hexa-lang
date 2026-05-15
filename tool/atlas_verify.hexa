@@ -19,6 +19,9 @@ use "compiler/atlas/verify/bridges"
 use "compiler/atlas/verify/chem"
 use "compiler/atlas/verify/phys"
 use "compiler/atlas/verify/transcendental"
+use "compiler/atlas/verify/eng"
+use "compiler/atlas/verify/geo"
+use "compiler/atlas/verify/bio"
 
 fn _slice_args() -> array {
     let av = args()
@@ -182,6 +185,42 @@ fn main() {
         println("")
         println("§3 PHYS:")
         let vs = verify_phys_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "eng" || domain == "§9" {
+        println("")
+        println("§9 ENG:")
+        let vs = verify_eng_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "geo" || domain == "§7" {
+        println("")
+        println("§7 GEO:")
+        let vs = verify_geo_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "bio" || domain == "§5" {
+        println("")
+        println("§5 BIO:")
+        let vs = verify_bio_all()
         let mut j = 0
         while j < len(vs) {
             _print_verdict(vs[j])
