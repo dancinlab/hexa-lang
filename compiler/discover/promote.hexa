@@ -60,7 +60,7 @@ fn _is_ws_char(c: string) -> bool {
     return c == " " || c == "\t"
 }
 
-fn _ltrim(s: string) -> string {
+fn _ltrim_promote(s: string) -> string {
     let n = len(s)
     let mut i = 0
     while i < n {
@@ -71,7 +71,7 @@ fn _ltrim(s: string) -> string {
     return s.substring(i, n)
 }
 
-fn _rtrim(s: string) -> string {
+fn _rtrim_promote(s: string) -> string {
     let n = len(s)
     let mut i = n
     while i > 0 {
@@ -152,7 +152,7 @@ fn _parse_header(line: string) -> StagingProposal {
         if c != " " && c != "@" && c != "\t" { break }
         j = j + 1
     }
-    p.proof_hash = _rtrim(line.substring(j, n))
+    p.proof_hash = _rtrim_promote(line.substring(j, n))
     return p
 }
 
@@ -179,15 +179,15 @@ pub fn parse_staging_file(path: string) -> array {
             continue
         }
         if have_cur {
-            let stripped = _ltrim(line)
+            let stripped = _ltrim_promote(line)
             if _starts_with(stripped, "defined_at:") {
-                cur.defined_at = _ltrim(stripped.substring(len("defined_at:"), len(stripped)))
+                cur.defined_at = _ltrim_promote(stripped.substring(len("defined_at:"), len(stripped)))
             } else if _starts_with(stripped, "normalized_form:") {
-                cur.normalized_form = _ltrim(stripped.substring(len("normalized_form:"), len(stripped)))
+                cur.normalized_form = _ltrim_promote(stripped.substring(len("normalized_form:"), len(stripped)))
             } else if _starts_with(stripped, "params:") {
-                cur.params = _ltrim(stripped.substring(len("params:"), len(stripped)))
+                cur.params = _ltrim_promote(stripped.substring(len("params:"), len(stripped)))
             } else if _starts_with(stripped, "verifier:") {
-                cur.verifier = _ltrim(stripped.substring(len("verifier:"), len(stripped)))
+                cur.verifier = _ltrim_promote(stripped.substring(len("verifier:"), len(stripped)))
             }
         }
         i = i + 1
@@ -206,9 +206,9 @@ fn _extract_existing_proof_hash(raw: string) -> string {
     let lines = raw.split("\n")
     let mut i = 0
     while i < len(lines) {
-        let s = _ltrim(lines[i])
+        let s = _ltrim_promote(lines[i])
         if _starts_with(s, "proof_hash:") {
-            return _ltrim(s.substring(len("proof_hash:"), len(s)))
+            return _ltrim_promote(s.substring(len("proof_hash:"), len(s)))
         }
         i = i + 1
     }

@@ -93,7 +93,7 @@ fn _is_ws(c: string) -> bool {
     return c == " " || c == "\t"
 }
 
-fn _ltrim(s: string) -> string {
+fn _ltrim_aparser(s: string) -> string {
     let n = len(s)
     let mut i = 0
     while i < n {
@@ -104,7 +104,7 @@ fn _ltrim(s: string) -> string {
     return s.substring(i, n)
 }
 
-fn _rtrim(s: string) -> string {
+fn _rtrim_aparser(s: string) -> string {
     let n = len(s)
     let mut i = n
     while i > 0 {
@@ -115,8 +115,8 @@ fn _rtrim(s: string) -> string {
     return s.substring(0, i)
 }
 
-fn _trim(s: string) -> string {
-    return _rtrim(_ltrim(s))
+fn _trim_aparser(s: string) -> string {
+    return _rtrim_aparser(_ltrim_aparser(s))
 }
 
 fn _basename(path: string) -> string {
@@ -176,7 +176,7 @@ fn _first_token(line: string) -> string {
 // run, stopping at whitespace OR `=` OR `::`. (The atlas examples show
 // `@P n = 6 :: foundation [11*]` — id = "n".)
 fn _extract_id(rest: string) -> string {
-    let s = _ltrim(rest)
+    let s = _ltrim_aparser(rest)
     let n = len(s)
     let mut i = 0
     while i < n {
@@ -194,7 +194,7 @@ fn _extract_id(rest: string) -> string {
 
 // Returns true if the line is a comment (`#...` or `//...`) after lstrip.
 fn _is_comment(line: string) -> bool {
-    let s = _ltrim(line)
+    let s = _ltrim_aparser(line)
     if len(s) == 0 { return true }
     if s.substring(0, 1) == "#" { return true }
     if len(s) >= 2 && s.substring(0, 2) == "//" { return true }
@@ -209,7 +209,7 @@ fn _is_comment(line: string) -> bool {
 // matches the trailing grade marker, not a `[..]` that might appear in
 // the expression.
 fn _extract_grade_marker(line: string) -> string {
-    let s = _rtrim(line)
+    let s = _rtrim_aparser(line)
     let n = len(s)
     if n == 0 { return "" }
     if s.substring(n - 1, n) != "]" { return "" }
@@ -240,7 +240,7 @@ fn _is_digit(c: string) -> bool {
 //   "3?"   → { value: 3,  verified: false, breakthrough: false, hypothesis: true }
 //   "d.r"  → { value: -1, ... }  (alien-index — non-numeric, not parsed)
 pub fn parse_grade(marker: string) -> GradeInfo {
-    let m = _trim(marker)
+    let m = _trim_aparser(marker)
     let n = len(m)
     let info = GradeInfo {
         value: -1,
@@ -284,7 +284,7 @@ fn _split_csv(s: string) -> array {
     let parts = s.split(",")
     let mut i = 0
     while i < len(parts) {
-        let t = _trim(to_string(parts[i]))
+        let t = _trim_aparser(to_string(parts[i]))
         if len(t) > 0 { out.push(t) }
         i = i + 1
     }
@@ -296,7 +296,7 @@ fn _split_csv(s: string) -> array {
 // with `==`, etc. Quoted-prose lines (`"…"`) and key=value lines are
 // ignored — they remain in `raw` but do not feed structured edges.
 fn _absorb_edge_line(line: string, edges: EdgeInfo) {
-    let s = _ltrim(line)
+    let s = _ltrim_aparser(line)
     let n = len(s)
     if n < 2 { return }
 
@@ -313,27 +313,27 @@ fn _absorb_edge_line(line: string, edges: EdgeInfo) {
         }
         if op2 == "=>" {
             // Application — string payload, store the whole rest as one entry.
-            let body = _trim(s.substring(2, n))
+            let body = _trim_aparser(s.substring(2, n))
             if len(body) > 0 { edges.applications.push(body) }
             return
         }
         if op2 == "==" {
-            let body = _trim(s.substring(2, n))
+            let body = _trim_aparser(s.substring(2, n))
             if len(body) > 0 { edges.equivalents.push(body) }
             return
         }
         if op2 == "~>" {
-            let body = _trim(s.substring(2, n))
+            let body = _trim_aparser(s.substring(2, n))
             if len(body) > 0 { edges.converges.push(body) }
             return
         }
         if op2 == "|>" {
-            let body = _trim(s.substring(2, n))
+            let body = _trim_aparser(s.substring(2, n))
             if len(body) > 0 { edges.verified_by.push(body) }
             return
         }
         if op2 == "!!" {
-            let body = _trim(s.substring(2, n))
+            let body = _trim_aparser(s.substring(2, n))
             if len(body) > 0 { edges.breakthroughs.push(body) }
             return
         }
