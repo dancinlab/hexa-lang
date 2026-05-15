@@ -559,3 +559,31 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
   @> COMPILE-ONLY.tape
 
+@A array_literal_landed_and_verified := "array-literal feature + grammar-enforced O(n²) cap — LANDED & empirically verified (no rebuild needed)" :: measurement [d=2026-05-16 ok]
+  <- selfcompile_oom_scope_correction
+  commits <<~EOF
+    4833a388 feat(new-compiler): array-literal expressions [e0,…]/[]
+             — ast.hexa +ExprKind::ArrayLit · parser.hexa parse_primary `[`
+             production · 10 files / 85 exhaustive ExprKind arms mirrored
+             1:1 from StructLit (tag_of-class hazard handled) · name-map
+             "array_lit". Lowering is generic (HExpr.kind=name-string).
+    fe6ef751 feat(compile-path): GRAMMAR-ENFORCE O(n²)-free — array-literal
+             element cap. catalog.hexa +HX0013 (Error,S0); parser.hexa
+             array-lit production: len(elems) > 1024 → _push_parse_diag.
+             Compile path ONLY — interpreter (self/parser.hexa) exempt.
+  EOF
+  verification = "Fast local proof via host-interp executing the NEW parser SOURCE (same technique that verified the operator-lowering fix — NO slow stage1 rebuild). hexa_real run of a harness importing compiler/lex/lexer + compiler/parse/parser + ast:"
+  results <<~EOF
+    SMALL  `let x=[1,2,3]`  → parse_diags=0 · array_lit nodes=1
+                              (WAS: 4× HX2001 `undefined name '['/','`)
+    BIG    2001-elem literal → parse_diags=1 · array_lit nodes=1 ·
+                              diag[0].code = HX0013
+                              (WAS: ~2000 HX2001 error-recovery flood)
+    RSS    2000-elem parse   → peak 2 MB / 9 s
+                              (WAS: ~4 GB → O(n²) → 251 GiB/52 s OOM)
+  EOF
+  conclusion = "BOTH commits empirically confirmed. (1) Array literals now parse to ExprKind::ArrayLit — the per-element error-recovery O(n²) that drove the 231 GiB self-compile OOM is ELIMINATED at the parser (RSS 4 GB→2 MB). (2) The >1024 cap fires exactly ONE clean HX0013 instead of thousands of HX2001 — the compile path is now GRAMMAR-STRUCTURALLY O(n²)-free, per directive, with the interpreter untouched. The embedded-atlas 7400-element const arrays (static_atlas fallback) will now surface as a single HX0013 directing to the HXC sidecar (Path Y, @D g_hxc) rather than O(n²)-codegen — the architecturally-blessed resolution."
+  residual = "static_atlas()'s const-literal fallback `return AtlasIndex { p_nodes: ATLAS_P_NODES, … }` (compiler/atlas/embedded.gen.hexa, ~7400 elems) still in the build graph → a clean full self-compile will emit HX0013 on it (correct enforcement behaviour). Completing Path-Y migration (drop the giant-literal fallback so HXC is the sole atlas source) is the follow-on; it has a clean-checkout-robustness tradeoff and is a deliberate architectural decision, intentionally NOT made unilaterally here. Full stage-2/3/E2 also still needs hir_to_mir/codegen array-CONSTRUCTION for small literals (generic lower already routes them; codegen of ≤1024-elem arrays is the remaining downstream work — bounded, no O(n²) by the cap)."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
+  @> COMPILE-ONLY.tape
+
