@@ -232,8 +232,34 @@ fn _thumb_cmp_cond(op: string) -> string {
 fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: ThumbStrTab) -> [LInstr] {
     let mut buf = out
     if s.kind == STMT_ASSIGN {
-        // mov dst, src — Thumb-2 accepts both reg and imm12 forms.
         let dst = _thumb_op_reg(_thumb_reg_for_local(s.dst.id))
+        // array_lit constructor (mirror of x86_64 269bb61d / arm64
+        // c2a14a9f; AAPCS: args r0/r1, bl, r0 return). dst =
+        // hexa_array_new(); per element hexa_array_push(dst, e_i) →
+        // recapture r0. ≤1024 bounded by HX0013 → O(n). Runtime-call
+        // shape parity with the shipped concat idiom below.
+        // rebuild-verification DEFERRED (Track-A clang wall).
+        if s.op == "array_lit" {
+            buf.push(_thumb_instr1("bl", _thumb_op_label("hexa_array_new"),
+                             "array_lit: new array"))
+            buf.push(_thumb_instr2("mov", dst, _thumb_op_reg("r0"),
+                             "array_lit: capture new array"))
+            let mut i = 0
+            while i < len(s.args) {
+                let v = _thumb_op_for_operand_st(s.args[i], st)
+                buf.push(_thumb_instr2("mov", _thumb_op_reg("r1"), v,
+                                 "array_lit: elem " + to_string(i)))
+                buf.push(_thumb_instr2("mov", _thumb_op_reg("r0"), dst,
+                                 "array_lit: arr arg"))
+                buf.push(_thumb_instr1("bl", _thumb_op_label("hexa_array_push"),
+                                 "array_lit: push elem " + to_string(i)))
+                buf.push(_thumb_instr2("mov", dst, _thumb_op_reg("r0"),
+                                 "array_lit: recapture array"))
+                i = i + 1
+            }
+            return buf
+        }
+        // mov dst, src — Thumb-2 accepts both reg and imm12 forms.
         if len(s.args) >= 1 {
             let src = _thumb_op_for_operand_st(s.args[0], st)
             buf.push(_thumb_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
