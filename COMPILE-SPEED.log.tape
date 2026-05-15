@@ -332,3 +332,37 @@
     Min observed: 4.43× · Max: 7.89× · Avg: 5.7×.
   EOF
   conclusion = "PHASE 1.3 fast path delivers ≥ 4× user-time across the entire bench size distribution — no regression band found. Architecture is production-ready for opt-in use."
+
+# ─── 2026-05-15  PHASE 1.3.A — hexa-fast `run` subcommand ────────────
+
+@A phase_1_3_a_run := "hexa-fast run subcommand + binary cache" :: artifact [d=2026-05-15 ok]
+  step = "Add `run` mode to bin/hexa-fast: compile + exec with a content-keyed binary cache. Drop-in replacement for `hexa run` workflows."
+  cache_key = "bin-<sha256(runtime.c)[:8]>-<sha256(src)[:16]>-<sha256(CFLAGS)[:8]>"
+  bench_fib_rec <<~EOF
+    Cold (first call, src not cached):
+      compile + link + exec = real 1.82 s · user 0.19 s
+      (0.6 s runtime.o cache miss + 0.13 s user.c compile + 0.05 s fib(30) eval)
+    Warm (binary cached, just exec):
+      real 0.47 s · user 0.20 s
+      (no compile at all — just kernel exec + program runtime)
+  EOF
+  vs_baseline <<~EOF
+    Baseline equivalent for iterative dev (`hexa-cc` + clang + exec, every time):
+      ≈ 0.62 s user + 0.05 s program eval ≈ 0.67 s per cycle
+    hexa-fast run (warm cache):
+      0.20 s — ≈ 3.3× user-time speedup per cycle, every cycle.
+    Compile is one-time on source change; every other invocation is bare exec.
+  EOF
+  known_limits <<~EOF
+    - Binary cache invalidation keys only the entrypoint .hexa file. Imports
+      (e.g. `import x.hexa`) are NOT in the hash — modifying an imported file
+      doesn't invalidate the cached binary. Workaround: `rm -rf ~/.hexa-cache`
+      forces full rebuild. Proper fix: walk imports + hash transitively.
+    - Compile errors during cold build still write nothing to cache (clang exit
+      code surfaces immediately), so a failing source doesn't poison the cache.
+  EOF
+  ux <<~EOF
+    Backward-compatible: `hexa-fast <src> <out>` still compiles to a binary.
+    New: `hexa-fast run <src> [args...]` compiles (if needed) + execs.
+    Both share the same runtime.o cache.
+  EOF

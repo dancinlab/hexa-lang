@@ -3,35 +3,36 @@
 # PHASE 1.3 (2026-05-15): bypass the legacy `#include "runtime.c"` emit by
 # sed-swapping post hexa_v2 output, then link against ~/.hexa-cache/runtime-<sha>.o.
 #
-# Usage: bin/hexa-fast <input.hexa> <output-binary>
-# Speed: 7.8× user-time vs default `hexa-cc + clang` for small programs.
-#        See COMPILE-SPEED.log.tape @phase_1_2_b_done (commit ddd7ffb1).
+# Usage:
+#   hexa-fast <input.hexa> <output-binary>           # compile to binary
+#   hexa-fast run <input.hexa> [args...]             # compile + exec (drop-in for `hexa run`)
 #
-# Cache: ~/.hexa-cache/runtime-<sha256(runtime.c)>.o
-#        - rebuilt on every runtime.c content change
-#        - HEXA_CACHE_DIR env var overrides location
+# Speed: 4.4–7.9× user-time vs default `hexa-cc + clang` across bench/* (avg 5.7×).
+#        See COMPILE-SPEED.log.tape @bench_sample_coverage (commit 8c29d75f).
+#
+# Cache:  ~/.hexa-cache/runtime-<sha256(runtime.c)>.o  +  bin-<sha256(src)>
+#         keyed by content; rebuilt on source change. HEXA_CACHE_DIR overrides.
+# Flags:  HEXA_FAST_CFLAGS (default -O0)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [ $# -lt 2 ]; then
+usage() {
     cat <<EOF >&2
-usage: hexa-fast <input.hexa> <output-binary>
+usage:
+  hexa-fast <input.hexa> <output-binary>     compile only
+  hexa-fast run <input.hexa> [args...]       compile + exec (with cached binary)
 
-Compiles a .hexa file via the runtime.h fast path:
-  1. hexa_v2 emits a tmp .c file
-  2. sed swaps  #include "runtime.c"  →  #include "runtime.h"
-  3. clang links user.c against ~/.hexa-cache/runtime-<sha>.o
-
-  CC flags:   override with HEXA_FAST_CFLAGS env var (default -O0)
-  cache dir:  HEXA_CACHE_DIR (default ~/.hexa-cache)
+env:
+  HEXA_FAST_CFLAGS   clang flags (default: -O0)
+  HEXA_CACHE_DIR     cache location (default: ~/.hexa-cache)
 EOF
     exit 2
-fi
-SRC=$1
-OUT=$2
+}
+
+[ $# -ge 1 ] || usage
 
 HEXA_V2="$REPO_ROOT/self/native/hexa_v2"
 RUNTIME_C="$REPO_ROOT/self/runtime.c"
@@ -43,18 +44,41 @@ mkdir -p "$CACHE_DIR"
 [ -x "$HEXA_V2" ] || { echo "hexa-fast: missing $HEXA_V2" >&2; exit 1; }
 [ -f "$RUNTIME_H" ] || { echo "hexa-fast: missing $RUNTIME_H" >&2; exit 1; }
 
-# runtime.o cache keyed by sha256(runtime.c). Rebuilt only when source changes.
+# runtime.o cache keyed by sha256(runtime.c).
 RT_SHA=$(shasum -a 256 "$RUNTIME_C" | awk '{print $1}')
 RT_O="$CACHE_DIR/runtime-$RT_SHA.o"
 if [ ! -f "$RT_O" ]; then
     clang $CFLAGS -c "$RUNTIME_C" -o "$RT_O"
 fi
 
-# tmp .c needs the .c extension so clang treats it as C source
-TMP_C="${TMPDIR:-/tmp}/hexa-fast-$$-$RANDOM.c"
-trap 'rm -f "$TMP_C" "$TMP_C.bak"' EXIT
+# Build a binary for SRC into OUT. Sets BIN=OUT on success.
+build() {
+    local SRC=$1 OUT=$2
+    local TMP_C="${TMPDIR:-/tmp}/hexa-fast-$$-$RANDOM.c"
+    "$HEXA_V2" "$SRC" "$TMP_C" >/dev/null
+    sed -i.bak 's|#include "runtime.c"|#include "runtime.h"|' "$TMP_C"
+    clang $CFLAGS -o "$OUT" "$TMP_C" "$RT_O" -I"$REPO_ROOT/self"
+    rm -f "$TMP_C" "$TMP_C.bak"
+}
 
-"$HEXA_V2" "$SRC" "$TMP_C" >/dev/null
-sed -i.bak 's|#include "runtime.c"|#include "runtime.h"|' "$TMP_C"
-
-clang $CFLAGS -o "$OUT" "$TMP_C" "$RT_O" -I"$REPO_ROOT/self"
+case ${1:-} in
+    run)
+        shift
+        [ $# -ge 1 ] || usage
+        SRC=$1; shift
+        [ -f "$SRC" ] || { echo "hexa-fast: no such file: $SRC" >&2; exit 1; }
+        # Binary cache: keyed by sha256(src) + sha256(runtime.c) + CFLAGS so any
+        # change to src OR runtime OR flags forces a rebuild.
+        SRC_SHA=$(shasum -a 256 "$SRC" | awk '{print $1}')
+        FLAGS_SHA=$(printf '%s' "$CFLAGS" | shasum -a 256 | awk '{print $1}')
+        BIN="$CACHE_DIR/bin-${RT_SHA:0:8}-${SRC_SHA:0:16}-${FLAGS_SHA:0:8}"
+        if [ ! -x "$BIN" ]; then
+            build "$SRC" "$BIN"
+        fi
+        exec "$BIN" "$@"
+        ;;
+    *)
+        [ $# -eq 2 ] || usage
+        build "$1" "$2"
+        ;;
+esac
