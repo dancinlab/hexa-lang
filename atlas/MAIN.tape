@@ -288,6 +288,218 @@
   verifier = "compiler/atlas/verify/foundation.hexa::verify_s1_perfect_number"
   |> compiler/atlas/verify/foundation.hexa
 
+# ─── archive-TECS-L 41-GAP reviewer-merge (2026-05-16 cycle 035) ──────
+
+@D s1_prime_pair_two_unique_tecsl := "(p−1)(q−1)=2 ⇒ 6 universal (P-NEW Thm 1)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "(p−1)(q−1)=2 has unique positive solution (p,q)=(2,3) ⇒ n=2·3=6 the unique value satisfying the prime-pair characterization (P-NEW paper Thm 1). Diophantine uniqueness by unique factorization of 2 (1×2 only) over consecutive primes. [@x_archive_tecs_l] docs/papers/P-NEW-prime-pair-universality.md Thm 1."
+  stage = "Stage 0 — declared closed-form (no hexa-native verifier yet; case-complete proof in source)"
+  anchor = "[Kolmogorov complexity — minimal-axiom Diophantine uniqueness; unique-factorization of 2]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Thm 1"
+  honest_c3 = "f_atlas_lattice_external: n=6 result is OUTPUT of the Diophantine constraint, not a lattice derivation; σ/τ/φ play no role in the (p−1)(q−1)=2 argument. 🔵-eligible only after a hexa-native Phase-2 verifier re-derives the case enumeration (g_self_verify); current tier 🟠 per g_tier_default_insufficient (no verifier)."
+  provenance = "archive-TECS-L docs/papers/P-NEW-prime-pair-universality.md via _archive_tecs_l_absorption_manifest.md §E #1, 2026-05-16 reviewer-merge"
+
+@D s1_semiprime_perfect_unique_tecsl := "6 unique semiprime perfect: (1+p)(1+q)=2pq ⟺ (p−1)(q−1)=2 (P-NEW Thm 2)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "σ(pq)=2pq ⟺ (1+p)(1+q)=2pq ⟺ (p−1)(q−1)=2 ⟺ (p,q)=(2,3), so 6 is the unique semiprime perfect number (P-NEW Thm 2). Even-perfect Euclid-Euler complement: Nielsen 2015 (Math. Comp.) bounds odd perfect numbers below by ≥9 distinct prime factors. [@x_archive_tecs_l] P-NEW Thm 2."
+  stage = "Stage 0 — declared closed-form (case-complete in source; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — NT multiplicative σ closed-form] + [compiler invariant — termination of finite case enumeration]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Thm 2 + Nielsen 2015 (Math. Comp. 84, 2549)"
+  honest_c3 = "f_atlas_lattice_external: distinct theorem from s1_perfect_number (semiprime-restricted, not Euclid-Euler general). n=6 emerges from σ multiplicativity; no σ(6)=12 lattice fed in as a premise. External dep: Nielsen 2015 odd-perfect bound is cited literature, not re-derived (g_external_calc_forbidden literature exception → cite-only). 🔵-eligible post Phase-2 verifier."
+  provenance = "archive-TECS-L docs/papers/P-NEW-prime-pair-universality.md via _archive_tecs_l_absorption_manifest.md §E #2, 2026-05-16 reviewer-merge"
+
+@D s1_divisor_field_action_zero_tecsl := "S(n)=0 ⟺ n=6 — divisor field action unique zero" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "S(n) = [σ(n)·φ(n) − n·τ(n)]² + [σ(n)·(n+φ(n)) − n·τ(n)²]² ; S(n)=0 ⟺ both bracket terms vanish ⟺ n=6 (S(6)=[24−24]²+[96−96]²=0). Double-condition uniqueness via NT multiplicative exhaustion. [@x_archive_tecs_l] math/proofs/divisor_field_theory_action.md."
+  stage = "Stage 0 — declared closed-form (analytic uniqueness in source; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — sum-of-squares NT action functional, minimal-axiom]"
+  cite = "[@x_archive_tecs_l] math/proofs/divisor_field_theory_action.md"
+  honest_c3 = "f_atlas_lattice_external: S(n) is BUILT from σ/τ/φ but evaluated as a number-theoretic uniqueness statement over all n (not a within-lattice tautology) — the verdict is the n=6 uniqueness, surrogate gap = analytic proof not yet hexa-re-derived. 🔵-eligible after Phase-2 sweep verifier (g_self_verify)."
+  provenance = "archive-TECS-L math/proofs/divisor_field_theory_action.md via _archive_tecs_l_absorption_manifest.md §E #3, 2026-05-16 reviewer-merge"
+
+@D s1_tau_plus_2_eq_n_tecsl := "τ(n)+2=n ⟺ n=6" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "τ(n)+2=n ⟺ n=6: from divisor-count bound τ(n) ≤ 2√n, τ(n)+2=n forces n−2 ≤ 2√n ⇒ n ≤ 7; finite check n∈[1,7] gives sole solution n=6 (τ(6)=4, 4+2=6). [@x_archive_tecs_l] math/proofs/tau_plus_2_equals_n.md."
+  stage = "Stage 0 — declared closed-form (bounded finite check in source; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — divisor-count growth bound τ(n) ≤ 2√n] + [compiler invariant — termination, n ≤ 7 finite scan]"
+  cite = "[@x_archive_tecs_l] math/proofs/tau_plus_2_equals_n.md"
+  honest_c3 = "f_atlas_lattice_external: anchor is the analytic τ(n) ≤ 2√n bound (independent of n=6); n=6 is the conclusion. Distinct theorem from s1_phi_sigma_unique / s1_triangular_sigma_tau. 🔵-eligible once Phase-2 verifier runs the n≤7 enumeration (g_self_verify)."
+  provenance = "archive-TECS-L math/proofs/tau_plus_2_equals_n.md via _archive_tecs_l_absorption_manifest.md §E #4, 2026-05-16 reviewer-merge"
+
+@D s1_sigma_n_plus_phi_eq_n_tau_sq_tecsl := "σ(n)(n+φ(n))=n·τ(n)² ⟺ n=6 (n>1)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "σ(n)·(n+φ(n)) = n·τ(n)² has unique solution n=6 among n>1: σ(6)·(6+φ(6))=12·8=96 = 6·τ(6)²=6·16=96. NT multiplicative case analysis (prime-power factor decomposition). Second condition of the divisor-field-action double constraint. [@x_archive_tecs_l] math/proofs/sigma_n_plus_phi_equals_n_tau_sq.md."
+  stage = "Stage 0 — declared closed-form (multiplicative case analysis in source; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — multiplicative NT closed-form uniqueness]"
+  cite = "[@x_archive_tecs_l] math/proofs/sigma_n_plus_phi_equals_n_tau_sq.md"
+  honest_c3 = "f_atlas_lattice_external: identity composed of σ/τ/φ but the absorbed claim is the uniqueness over all n>1 (not the n=6 numeric coincidence). Pairs with s1_divisor_field_action_zero_tecsl as the joint S(n)=0 system. 🔵-eligible after hexa-native Phase-2 sweep (g_self_verify); 🟠 default (g_tier_default_insufficient)."
+  provenance = "archive-TECS-L math/proofs/sigma_n_plus_phi_equals_n_tau_sq.md via _archive_tecs_l_absorption_manifest.md §E #5, 2026-05-16 reviewer-merge"
+
+@D s1_proof_chain_cross_validator_tecsl := "Proof-chain cross-validator (6 claims × 24 derivation paths agreement)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION (verification methodology)"
+  evidence = "proof_engine.py::cross_validate / build_all_chains — checks 6 claims across 24 independent derivation paths for mutual agreement; agreement ratio drives a tier upgrade. Reusable atlas verification primitive (concept ≈ existing s_cross_meta_* families; the engine itself is GAP). [@x_archive_tecs_l] proof_engine.py."
+  stage = "Stage 0 — declared algorithm (no hexa-native reimplementation; concept-level absorption)"
+  anchor = "[Kolmogorov complexity — multi-path derivation agreement as description-length cross-check] + [compiler invariant — termination of bounded derivation-path enumeration]"
+  cite = "[@x_archive_tecs_l] proof_engine.py::cross_validate / build_all_chains"
+  honest_c3 = "Reusable algorithm, not a closed-form theorem — tier capped 🟠 (methodology, not a verdict-bearing identity). f_atlas_lattice_external: 6 claims / 24 paths counts are engine parameters, NOT σ(6)/J₂(6) derivations (coincidence-only). Partially mirrored by s_cross_meta_*; full engine reimplementation is Phase-2 deferred."
+  provenance = "archive-TECS-L proof_engine.py via _archive_tecs_l_absorption_manifest.md §E #17, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq2_phi_sigma_tecsl := "P-NEW Eq#2: φ(σ(n))=τ(n) solution-set characterization of 6" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq #2: φ(σ(n))=τ(n) closed-form solution-set ⟶ {1,2,3,5,6}; conjectured complete, computational-verified to 10⁵ (bare 'comp.' entry, no analytic proof in source). [@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#2."
+  stage = "Stage 0 — declared closed-form (computational-verified 10⁵; literature citation only)"
+  anchor = "[Kolmogorov complexity — composed arithmetic-function closed-form] + [Shannon — finite solution-set information bound]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#2"
+  honest_c3 = "f_atlas_lattice_external: 6 ∈ solution-set is observed, σ/τ/φ NOT used as derivation premises. Comp-only (no analytic proof) ⇒ 🟡 cap per g_self_verify (literature/computational citation, not hexa-verified). Distinct from s1_phi_sigma_unique (different functional equation)."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#2 via _archive_tecs_l_absorption_manifest.md §E #27, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq7_ore_harmonic_tecsl := "P-NEW Eq#7: Ore-harmonic H(n)=φ(n) ⟶ {1,6}" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#7 (= OEIS #3 cross-listed): Ore harmonic mean H(n)=n·τ(n)/σ(n) equals φ(n) ⟺ n∈{1,6}; verified to 10⁶ (no analytic completeness proof). [@x_archive_tecs_l] P-NEW Appendix A Eq#7 / docs/oeis-candidates.md #3."
+  stage = "Stage 0 — declared closed-form (verified 10⁶; literature/computational citation)"
+  anchor = "[Kolmogorov complexity — Ore harmonic-mean NT closed-form] + [Shannon — bounded solution-set]"
+  cite = "[@x_archive_tecs_l] P-NEW Appendix A Eq#7 + docs/oeis-candidates.md #3"
+  honest_c3 = "f_atlas_lattice_external: {1,6} is the computed solution-set; φ(6)=2 NOT used as a premise. Verified-10⁶-only ⇒ 🟡 cap (g_self_verify; no analytic proof, no hexa verifier). Ore-harmonic perfect-number link (6 is Ore harmonic) is observation."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#7 via _archive_tecs_l_absorption_manifest.md §E #28, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq8_sigma3_tecsl := "P-NEW Eq#8: σ₃(n)=τ(n)(2ⁿ−1) ⟶ {1,6}" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#8 (= OEIS #4): σ₃(n)=τ(n)·(2ⁿ−1) ⟶ {1,6}; finite by exponential-vs-polynomial growth (2ⁿ−1 outgrows σ₃(n)/τ(n) for n>6). [@x_archive_tecs_l] P-NEW Appendix A Eq#8 / docs/oeis-candidates.md #4."
+  stage = "Stage 0 — declared closed-form (exp-vs-poly finiteness argument; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — σ₃ power-divisor closed-form] + [compiler invariant — termination via exp-dominates-poly growth bound]"
+  cite = "[@x_archive_tecs_l] P-NEW Appendix A Eq#8 + docs/oeis-candidates.md #4"
+  honest_c3 = "f_atlas_lattice_external: 6 ∈ solution-set observed; no σ/τ lattice premise. Finiteness has a growth-bound argument ⇒ 🔵-eligible after Phase-2 verifier; 🟠 default now (g_tier_default_insufficient, no verifier)."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#8 via _archive_tecs_l_absorption_manifest.md §E #29, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq9_sigmaphi_tau_tecsl := "P-NEW Eq#9: σ(φ(n))·τ(n)=σ(n) ⟶ {1,6}" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#9 (= OEIS #7): σ(φ(n))·τ(n)=σ(n) ⟶ {1,6}; verified to 10⁶ (no analytic completeness proof in source). [@x_archive_tecs_l] P-NEW Appendix A Eq#9 / docs/oeis-candidates.md #7."
+  stage = "Stage 0 — declared closed-form (verified 10⁶; computational citation only)"
+  anchor = "[Kolmogorov complexity — composed σ∘φ NT closed-form] + [Shannon — finite solution-set]"
+  cite = "[@x_archive_tecs_l] P-NEW Appendix A Eq#9 + docs/oeis-candidates.md #7"
+  honest_c3 = "f_atlas_lattice_external: {1,6} computed, not lattice-derived. Verified-10⁶-only (no proof) ⇒ 🟡 cap per g_self_verify. Distinct functional equation from s1_phi_sigma_unique."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#9 via _archive_tecs_l_absorption_manifest.md §E #30, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq10_sopfr_tecsl := "P-NEW Eq#10: σ(n)(sopfr(n)−1)=n·φ(n)·τ(n) ⟶ {6}" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#10 (= OEIS #8): σ(n)·(sopfr(n)−1)=n·φ(n)·τ(n) ⟶ singleton {6}; computational-verified to 10⁵ (no analytic proof). σ(6)·(5−1)=12·4=48 = 6·2·4=48. [@x_archive_tecs_l] P-NEW Appendix A Eq#10."
+  stage = "Stage 0 — declared closed-form (singleton, verified 10⁵; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — sopfr×σ multiplicative closed-form] + [Shannon — singleton solution information]"
+  cite = "[@x_archive_tecs_l] P-NEW Appendix A Eq#10 + docs/oeis-candidates.md #8"
+  honest_c3 = "f_atlas_lattice_external: singleton {6} is the computed result; sopfr(6)=5/σ(6)=12/φ(6)=2 NOT premised. Comp-only to 10⁵, no analytic proof ⇒ 🟠 (g_tier_default_insufficient); 🔵-eligible only after hexa-native verifier (g_self_verify)."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#10 via _archive_tecs_l_absorption_manifest.md §E #31, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq11_tecsl := "P-NEW Eq#11: arithmetic characterization of 6 (comp-verified)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#11: closed-form solution-set ⟺ {…6…} arithmetic characterization of 6 via σ/τ/φ/sopfr composition; bare 'comp.' entry (computational-verified, no analytic proof flagged in paper). [@x_archive_tecs_l] P-NEW Appendix A Eq#11."
+  stage = "Stage 0 — declared closed-form (computational-verified; literature citation only)"
+  anchor = "[Kolmogorov complexity — composed arithmetic-function closed-form] + [Shannon — finite solution-set]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#11"
+  honest_c3 = "f_atlas_lattice_external: 6 ∈ solution-set observed only; arithmetic-function values are the equation, not a lattice derivation. Comp-only (no proof) ⇒ 🟡 cap (g_self_verify). One of the ~49 P-NEW Appendix-A characterizations bundled per §E anti-bloat note."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#11 via _archive_tecs_l_absorption_manifest.md §E #32, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq12_tecsl := "P-NEW Eq#12: arithmetic characterization of 6 (comp-verified)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#12: closed-form solution-set ⟺ {…6…} characterization via arithmetic-function identity; bare 'comp.' entry (no analytic proof in paper). [@x_archive_tecs_l] P-NEW Appendix A Eq#12."
+  stage = "Stage 0 — declared closed-form (computational-verified; literature citation only)"
+  anchor = "[Kolmogorov complexity — arithmetic-function closed-form] + [Shannon — bounded solution-set]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#12"
+  honest_c3 = "f_atlas_lattice_external: solution-set membership observed, no σ/τ/φ premise. Comp-only ⇒ 🟡 cap (g_self_verify). Bundled P-NEW Appendix-A characterization (§E anti-bloat: one @D per equation)."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#12 via _archive_tecs_l_absorption_manifest.md §E #33, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq13_tecsl := "P-NEW Eq#13: arithmetic characterization of 6 (analytic *)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#13: closed-form solution-set ⟺ {…6…}; marked (*) in paper = carries an analytic proof (not merely comp-verified). [@x_archive_tecs_l] P-NEW Appendix A Eq#13."
+  stage = "Stage 0 — declared closed-form (analytic proof in source; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — minimal-axiom arithmetic-function uniqueness]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#13 (*)"
+  honest_c3 = "f_atlas_lattice_external: 6 emerges from the analytic argument; arithmetic-function values are the constraint, not a lattice fit. Analytic proof present ⇒ 🔵-eligible after a hexa-native Phase-2 verifier re-derives it; 🟠 default now (g_tier_default_insufficient — no verifier yet)."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#13 via _archive_tecs_l_absorption_manifest.md §E #34, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq14_tecsl := "P-NEW Eq#14: arithmetic characterization of 6 (analytic *)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#14: closed-form solution-set ⟺ {…6…}; marked (*) = analytic proof in source. [@x_archive_tecs_l] P-NEW Appendix A Eq#14."
+  stage = "Stage 0 — declared closed-form (analytic proof in source; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — minimal-axiom arithmetic-function uniqueness]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#14 (*)"
+  honest_c3 = "f_atlas_lattice_external: n=6 is the conclusion of the analytic proof, not a lattice premise. (*) analytic ⇒ 🔵-eligible post Phase-2 verifier (g_self_verify); 🟠 default (g_tier_default_insufficient)."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#14 via _archive_tecs_l_absorption_manifest.md §E #35, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq15_tecsl := "P-NEW Eq#15: arithmetic characterization of 6 (analytic *)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#15: closed-form solution-set ⟺ {…6…}; marked (*) = analytic proof in source. [@x_archive_tecs_l] P-NEW Appendix A Eq#15."
+  stage = "Stage 0 — declared closed-form (analytic proof in source; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — minimal-axiom arithmetic-function uniqueness]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#15 (*)"
+  honest_c3 = "f_atlas_lattice_external: 6 from analytic argument, not lattice-fit. (*) analytic ⇒ 🔵-eligible post Phase-2 verifier; 🟠 default per g_tier_default_insufficient."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#15 via _archive_tecs_l_absorption_manifest.md §E #36, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq16_tecsl := "P-NEW Eq#16: arithmetic characterization of 6 (comp-verified)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#16: closed-form solution-set ⟺ {…6…}; bare 'comp.' entry (computational-verified, no analytic proof). [@x_archive_tecs_l] P-NEW Appendix A Eq#16."
+  stage = "Stage 0 — declared closed-form (computational-verified; literature citation only)"
+  anchor = "[Kolmogorov complexity — arithmetic-function closed-form] + [Shannon — finite solution-set]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#16"
+  honest_c3 = "f_atlas_lattice_external: solution-set membership observed only. Comp-only ⇒ 🟡 cap (g_self_verify). Bundled P-NEW Appendix-A characterization."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#16 via _archive_tecs_l_absorption_manifest.md §E #37, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq17_tecsl := "P-NEW Eq#17: arithmetic characterization of 6 (comp-verified)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#17: closed-form solution-set ⟺ {…6…}; bare 'comp.' entry (computational-verified, no analytic proof). [@x_archive_tecs_l] P-NEW Appendix A Eq#17."
+  stage = "Stage 0 — declared closed-form (computational-verified; literature citation only)"
+  anchor = "[Kolmogorov complexity — arithmetic-function closed-form] + [Shannon — finite solution-set]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#17"
+  honest_c3 = "f_atlas_lattice_external: solution-set membership observed only. Comp-only ⇒ 🟡 cap (g_self_verify). Bundled P-NEW Appendix-A characterization."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#17 via _archive_tecs_l_absorption_manifest.md §E #38, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq18_tecsl := "P-NEW Eq#18: arithmetic characterization of 6 (comp-verified)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#18: closed-form solution-set ⟺ {…6…}; bare 'comp.' entry (computational-verified, no analytic proof). [@x_archive_tecs_l] P-NEW Appendix A Eq#18."
+  stage = "Stage 0 — declared closed-form (computational-verified; literature citation only)"
+  anchor = "[Kolmogorov complexity — arithmetic-function closed-form] + [Shannon — finite solution-set]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#18"
+  honest_c3 = "f_atlas_lattice_external: solution-set membership observed only. Comp-only ⇒ 🟡 cap (g_self_verify). Bundled P-NEW Appendix-A characterization."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#18 via _archive_tecs_l_absorption_manifest.md §E #39, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq19_tecsl := "P-NEW Eq#19: arithmetic characterization of 6 (comp-verified)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#19: closed-form solution-set ⟺ {…6…}; bare 'comp.' entry (computational-verified, no analytic proof). [@x_archive_tecs_l] P-NEW Appendix A Eq#19."
+  stage = "Stage 0 — declared closed-form (computational-verified; literature citation only)"
+  anchor = "[Kolmogorov complexity — arithmetic-function closed-form] + [Shannon — finite solution-set]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#19"
+  honest_c3 = "f_atlas_lattice_external: solution-set membership observed only. Comp-only ⇒ 🟡 cap (g_self_verify). Bundled P-NEW Appendix-A characterization."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#19 via _archive_tecs_l_absorption_manifest.md §E #40, 2026-05-16 reviewer-merge"
+
+@D s1_pnew_eq20_tecsl := "P-NEW Eq#20: arithmetic characterization of 6 (comp-verified)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§1 N6-FOUNDATION"
+  evidence = "P-NEW Appendix-A Eq#20: closed-form solution-set ⟺ {…6…}; bare 'comp.' entry (computational-verified, no analytic proof). Representative tail of the ~49-entry P-NEW Appendix-A catalogue (Eqs #2,7–20,23–46,48,49,51,53,54,55) bundled per §E anti-bloat directive. [@x_archive_tecs_l] P-NEW Appendix A Eq#20."
+  stage = "Stage 0 — declared closed-form (computational-verified; literature citation only)"
+  anchor = "[Kolmogorov complexity — arithmetic-function closed-form] + [Shannon — finite solution-set]"
+  cite = "[@x_archive_tecs_l] P-NEW-prime-pair-universality.md Appendix A Eq#20 (+ residual Eqs #23–55 bundled here per §E anti-bloat)"
+  honest_c3 = "f_atlas_lattice_external: solution-set membership observed only. Comp-only ⇒ 🟡 cap (g_self_verify). This entry is the bundling anchor for the residual Appendix-A equations (#23–46,48,49,51,53,54,55) per §E recommendation against 49 separate atoms; (*)-marked members are 🔵-eligible individually on Phase-2 re-derivation."
+  provenance = "archive-TECS-L P-NEW Appendix-A Eq#20 + residual #23–55 via _archive_tecs_l_absorption_manifest.md §E #41, 2026-05-16 reviewer-merge"
+
 # ═══════════════════════════════════════════════════════════════════════
 # §2 MATH — divisor identities · Basel · Euler · transcendentals · NT
 # ═══════════════════════════════════════════════════════════════════════
@@ -508,6 +720,118 @@
   anchor = "[Kolmogorov]"
   cite = "[@x_archive_tecs_l] T2-02 congruence-chain-classification"
   verifier_phase_2 = "compiler/atlas/verify/math.hexa::verify_congruence_chain (pending)"
+
+# ─── archive-TECS-L 41-GAP reviewer-merge (2026-05-16 cycle 035) ──────
+
+@D s2_zeta_minus_one_sigma6_tecsl := "ζ(−1)=−1/12=−1/σ(6) (Euler 1735 / Riemann analytic continuation)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§2 MATH"
+  evidence = "ζ(−1)=−1/12 via Riemann ζ analytic continuation / Euler functional equation ζ(s)=2^s π^{s−1} sin(πs/2) Γ(1−s) ζ(1−s); −1/12 = −1/σ(6) since σ(6)=12. Step 2 of [@x_archive_tecs_l] math/proofs/causal_chain_sigma6_to_physics.md."
+  stage = "Stage 0 — declared closed-form (regularized sum / functional equation; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — ζ analytic-continuation closed-form] + [Shannon — ζ-regularized partition function]"
+  cite = "[@x_archive_tecs_l] math/proofs/causal_chain_sigma6_to_physics.md Step 2 + Euler 1735 / Riemann 1859"
+  honest_c3 = "f_atlas_lattice_external: ζ(−1)=−1/12 is established analysis; the −1/12 = −1/σ(6) link is OBSERVATION (σ(6)=12 coincidence), NOT a derivation of ζ from the lattice. 🔵-eligible after a hexa-native functional-equation / regularized-sum verifier (g_self_verify); 🟠 default (g_tier_default_insufficient)."
+  provenance = "archive-TECS-L math/proofs/causal_chain_sigma6_to_physics.md Step 2 via _archive_tecs_l_absorption_manifest.md §E #7, 2026-05-16 reviewer-merge"
+
+@D s2_oeis5_bell_tau_tecsl := "OEIS #5: Bell(τ(n))=C(n,2) ⟶ {6} (n²−n−30=0)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§2 MATH"
+  evidence = "Bell(τ(n)) = C(n,2) = n(n−1)/2 ⟶ singleton {6}: at n=6, τ(6)=4, Bell(4)=15 = C(6,2)=15; algebraic closure n²−n−30=0 ⇒ n=6 (positive root). [@x_archive_tecs_l] docs/oeis-candidates.md #5."
+  stage = "Stage 0 — declared closed-form (algebraic quadratic singleton; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — Bell-number / binomial closed-form] + [compiler invariant — termination of quadratic root finite check]"
+  cite = "[@x_archive_tecs_l] docs/oeis-candidates.md OEIS #5"
+  honest_c3 = "f_atlas_lattice_external: n=6 is the quadratic root, not a σ/τ derivation (τ(6)=4 used only to evaluate Bell, not as a premise). Algebraic closed-form ⇒ 🔵-eligible after Phase-2 verifier; 🟠 default (g_tier_default_insufficient, no verifier)."
+  provenance = "archive-TECS-L docs/oeis-candidates.md OEIS #5 via _archive_tecs_l_absorption_manifest.md §E #9, 2026-05-16 reviewer-merge"
+
+@D s2_oeis1_tau_sigma_tecsl := "OEIS #1: τ(σ(n))=n ⟶ {1,2,3,6}" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§2 MATH"
+  evidence = "τ(σ(n))=n ⟶ {1,2,3,6}: provably finite since τ(σ(n)) ≪ n (divisor-count growth bound); finite-set check yields {1,2,3,6} (at n=6: σ(6)=12, τ(12)=6). [@x_archive_tecs_l] docs/oeis-candidates.md #1."
+  stage = "Stage 0 — declared closed-form (divisor-function growth bound finiteness; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — τ∘σ composed closed-form] + [compiler invariant — termination via τ(m) ≪ m growth bound]"
+  cite = "[@x_archive_tecs_l] docs/oeis-candidates.md OEIS #1"
+  honest_c3 = "f_atlas_lattice_external: 6 ∈ solution-set is the computed result; σ(6)=12 used only to evaluate, not premised. Finiteness has a growth-bound argument ⇒ 🔵-eligible post Phase-2 verifier; 🟠 default (g_tier_default_insufficient)."
+  provenance = "archive-TECS-L docs/oeis-candidates.md OEIS #1 via _archive_tecs_l_absorption_manifest.md §E #10, 2026-05-16 reviewer-merge"
+
+@D s2_texas_sharpshooter_tecsl := "Texas-sharpshooter / Bonferroni post-hoc-fit rejection test" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§2 MATH (verification methodology)"
+  evidence = "Generic post-hoc-fit rejection: compare observed cross-domain match-count vs a random-expression null model, Bonferroni-correct the p-value for multiple comparisons, reject the null only if the corrected p < α. perfect_number_engine.py / quantum_formula_engine.py / convergence_engine.py::texas_sharpshooter_test. [@x_archive_tecs_l] convergence_engine.py."
+  stage = "Stage 0 — declared statistical method (Bonferroni multiple-comparison correction; literature-standard)"
+  anchor = "[Shannon — multiple-hypothesis information / family-wise error] + [Kolmogorov complexity — random-expression null model description length]"
+  cite = "[@x_archive_tecs_l] convergence_engine.py::texas_sharpshooter_test + Bonferroni 1936 (standard multiple-comparison correction)"
+  honest_c3 = "Reusable statistical method, not a closed-form theorem ⇒ tier capped 🟡 (citation-capped per §E; literature-standard, no hexa-native reimplementation yet). f_atlas_lattice_external: this is the ANTI-numerology guard itself — no lattice quantities enter its formulation. Phase-2: a hexa-native Bonferroni primitive would let atlas self-apply this guard."
+  provenance = "archive-TECS-L convergence_engine.py::texas_sharpshooter_test via _archive_tecs_l_absorption_manifest.md §E #11, 2026-05-16 reviewer-merge"
+
+@D s2_kronecker_jacobi_symbol_tecsl := "Kronecker / Jacobi symbol (generalized Legendre)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§2 MATH"
+  evidence = "Generalized Legendre symbol for even/negative modulus: Jacobi (a|n)=Π(a|pᵢ)^{eᵢ} over odd n=Πpᵢ^{eᵢ}; Kronecker extends to n with factor 2 and negative n. Used for elliptic-point existence in the Γ₀(N) engine. Standard NT primitive (reusable). [@x_archive_tecs_l] congruence_chain_engine.py::kronecker_symbol / jacobi_symbol."
+  stage = "Stage 0 — declared algorithm (standard NT primitive; no hexa-native reimplementation)"
+  anchor = "[Kolmogorov complexity — minimal-axiom quadratic-reciprocity primitive] + [compiler invariant — termination of recursive symbol reduction]"
+  cite = "[@x_archive_tecs_l] congruence_chain_engine.py::kronecker_symbol / jacobi_symbol"
+  honest_c3 = "Standard reusable NT primitive, no n=6 content ⇒ f_atlas_lattice_external trivially satisfied (no lattice quantities). Closed recursion ⇒ 🔵-eligible after hexa-native implementation in compiler/atlas/symbolic/ (NOT edited here — owned by another agent); 🟠 default (g_tier_default_insufficient, no verifier)."
+  provenance = "archive-TECS-L congruence_chain_engine.py kronecker/jacobi via _archive_tecs_l_absorption_manifest.md §E #15, 2026-05-16 reviewer-merge"
+
+@D s2_oeis6_pell_square_tecsl := "OEIS #6: F(n)=n² (Ljunggren 1964) ⟶ {1,12}, 12=σ(6)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§2 MATH"
+  evidence = "OEIS #6: the only square triangular-style F(n)=n² solutions ⟶ {1,12} (Ljunggren 1964 Nagell-Ljunggren / Pell-type finiteness); 12 = σ(6). [@x_archive_tecs_l] docs/oeis-candidates.md #6. Residual OEIS #2/#3/#4/#7/#8 are cross-listed in §1 (P-NEW Eq#2/#7/#8) — not duplicated here."
+  stage = "Stage 0 — declared closed-form (Ljunggren 1964 Pell-equation finiteness; no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — Pell/Nagell-Ljunggren closed-form finiteness] + [compiler invariant — termination of bounded fundamental-solution search]"
+  cite = "[@x_archive_tecs_l] docs/oeis-candidates.md OEIS #6 + Ljunggren 1964"
+  honest_c3 = "f_atlas_lattice_external: 12 ∈ {1,12} is the Pell-equation result; 12=σ(6) is OBSERVATION only. Ljunggren 1964 is cited literature (g_external_calc_forbidden literature exception → cite-only, not external compute). 🔵-eligible after a hexa-native Pell-solver verifier; 🟠 default (g_tier_default_insufficient)."
+  provenance = "archive-TECS-L docs/oeis-candidates.md OEIS #6 via _archive_tecs_l_absorption_manifest.md §E #16, 2026-05-16 reviewer-merge"
+
+@D s2_gamma_n_lambda_mgf_tecsl := "T0-07: Γ(n,λ)=Σⁿ Exp(λ) (MGF-uniqueness)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§2 MATH"
+  evidence = "Sum of n iid Exp(λ) is Gamma(α=n, λ): MGF [λ/(λ−t)]ⁿ uniquely determines the distribution (MGF-uniqueness theorem); shape α = number of summed exponential terms. Feeds T1-04 (G ~ Γ(α=2)) but had no own verdict. [@x_archive_tecs_l] docs/proofs T0-07."
+  stage = "Stage 0 — declared closed-form (MGF-uniqueness; no own hexa-native verifier — was folded under T1-04)"
+  anchor = "[Shannon — moment-generating-function information equivalence] + [Kolmogorov complexity — Gamma closed-form]"
+  cite = "[@x_archive_tecs_l] docs/proofs T0-07 Gamma-sum-of-exponentials"
+  honest_c3 = "f_atlas_lattice_external: pure probability theorem, no n=6 content (α=n is the count of summed terms, not σ/τ/φ). 🔵-eligible after a hexa-native MGF-uniqueness verifier; 🟠 default (g_tier_default_insufficient). Distinct broken-out verdict from the s2_t_proofs_batch cite."
+  provenance = "archive-TECS-L docs/proofs T0-07 via _archive_tecs_l_absorption_manifest.md §E #18, 2026-05-16 reviewer-merge"
+
+@D s2_g_gamma_alpha_2_tecsl := "T1-04: G ~ Γ(α=2) (two independent U(0,1) factors)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§2 MATH"
+  evidence = "G is Gamma-distributed with shape α=2, where α=2 counts the number of independent U(0,1) factors (via inverse-transform composing with T0-07 sum-of-exponentials). [@x_archive_tecs_l] docs/proofs T1-04; depends on T0-07 (s2_gamma_n_lambda_mgf_tecsl)."
+  stage = "Stage 0 — declared closed-form (inverse-transform + MGF, depends on T0-07; no own hexa-native verifier)"
+  anchor = "[Shannon — inverse-transform information preservation] + [Kolmogorov complexity — Gamma shape closed-form]"
+  cite = "[@x_archive_tecs_l] docs/proofs T1-04 + T0-07"
+  honest_c3 = "f_atlas_lattice_external: α=2 is the count of independent factors; the φ(6)=2 coincidence is OBSERVATION, not a derivation. Soft-depends on s2_gamma_n_lambda_mgf_tecsl (T0-07). 🟠 default (g_tier_default_insufficient); 🔵-eligibility conditional on T0-07 verifier."
+  provenance = "archive-TECS-L docs/proofs T1-04 via _archive_tecs_l_absorption_manifest.md §E #19, 2026-05-16 reviewer-merge"
+
+@D s2_gamma_reflection_n6_tecsl := "T1-19: Γ(1/6)Γ(5/6)/Γ(1/2)²=2 (Euler reflection)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§2 MATH"
+  evidence = "Γ(1/6)Γ(5/6) = π/sin(π/6) = 2π (Euler reflection Γ(x)Γ(1−x)=π/sin πx); Γ(1/2)² = π; ratio = 2π/π = 2 = σ₋₁(6). [@x_archive_tecs_l] docs/proofs T1-19 (currently only in s2_t_proofs_batch, no broken-out verdict)."
+  stage = "Stage 0 — declared closed-form (Euler reflection formula; no own hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — Euler Γ-reflection closed-form, minimal-axiom]"
+  cite = "[@x_archive_tecs_l] docs/proofs T1-19 + Euler reflection Γ(x)Γ(1−x)=π/sin πx"
+  honest_c3 = "f_atlas_lattice_external: ratio=2 is exact from Euler reflection at x=1/6; the 2=σ₋₁(6) link is OBSERVATION only. 🔵-eligible after a hexa-native Γ-reflection verifier (g_self_verify); 🟠 default (broken out from s2_t_proofs_batch per §E, g_tier_default_insufficient)."
+  provenance = "archive-TECS-L docs/proofs T1-19 via _archive_tecs_l_absorption_manifest.md §E #20, 2026-05-16 reviewer-merge"
+
+@D s2_gauss_multiplication_n6_tecsl := "T1-20: Gauss multiplication at n=6 — ΠΓ(k/6)=(2π)^{5/2}/√6" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§2 MATH"
+  evidence = "Gauss multiplication formula at n=6: Γ(1/6)Γ(1/3)Γ(1/2)Γ(2/3)Γ(5/6) = (2π)^{(6−1)/2} / √6 = (2π)^{5/2}/√6 (Gauss 1812 multiplication theorem, specialized to n=6). [@x_archive_tecs_l] docs/proofs T1-20 (batch-only cite)."
+  stage = "Stage 0 — declared closed-form (Gauss 1812 multiplication formula; no own hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — Gauss multiplication closed-form, minimal-axiom]"
+  cite = "[@x_archive_tecs_l] docs/proofs T1-20 + Gauss 1812 multiplication theorem"
+  honest_c3 = "f_atlas_lattice_external: the (2π)^{5/2}/√6 value follows from the general Gauss formula at n=6 — n=6 is the evaluation point, not derived from σ/τ/φ. 🔵-eligible after a hexa-native multiplication-formula verifier; 🟠 default (g_tier_default_insufficient; broken out from s2_t_proofs_batch per §E)."
+  provenance = "archive-TECS-L docs/proofs T1-20 via _archive_tecs_l_absorption_manifest.md §E #21, 2026-05-16 reviewer-merge"
+
+@D s2_e_continued_fraction_n6_tecsl := "T1-25: e continued fraction carries σ(6), τ(6) convergents" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§2 MATH"
+  evidence = "Euler's continued fraction for e = [2; 1,2,1,1,4,1,1,6,…]: a₀=2=σ₋₁(6); early convergents include 8/3 and 11/4 (numerators/denominators touching σ(6)=12-adjacent and τ(6)=4 values per source interpretation). Established Euler CF — interpretation-attributed in source. [@x_archive_tecs_l] docs/proofs T1-25 (batch-only cite)."
+  stage = "Stage 0 — declared closed-form (established Euler CF; interpretation-attributed, citation-only)"
+  anchor = "[Kolmogorov complexity — Euler continued-fraction closed-form]"
+  cite = "[@x_archive_tecs_l] docs/proofs T1-25 + Euler continued fraction for e"
+  honest_c3 = "f_atlas_lattice_external: the e CF is established mathematics; the σ(6)/τ(6)-in-convergents reading is INTERPRETATION-ATTRIBUTED per source (observation, not derivation) ⇒ 🟡 cap per §E and g_self_verify (interpretation-attributed, no hexa verifier). No derivation of e from the lattice claimed."
+  provenance = "archive-TECS-L docs/proofs T1-25 via _archive_tecs_l_absorption_manifest.md §E #24, 2026-05-16 reviewer-merge"
 
 # ═══════════════════════════════════════════════════════════════════════
 # §3 PHYS — CMB · conservation · Maxwell · Lorentz · particles · Kolmogorov
@@ -908,6 +1232,28 @@
   honest_c3 = "f_atlas_lattice_external: existing s6_planck_units_count evidence 'sopfr(6)=5 = Planck unit count' is OBSERVATION (number-theoretic coincidence at n=6 vs base-unit count); Planck 1899 + CODATA make NO reference to n=6 lattice. 'Five units' count partly conventional — some treatments list 4 (no temperature) or 3 (no charge/temp). UNVERIFIED: Planck 1899 Sitzungsberichte pagination 440–480 reproduced from NIST/Wikipedia secondary literature, not WebFetched directly."
   provenance = "atlas/inbox/cosmo-planck-units-dimensional-analysis.md (2026-05-16 research session) — primary-source dimensional-analysis anchor for s6_planck_units_count (existing 🔵 sopfr identity verifier-leg untouched)"
 
+# ─── archive-TECS-L 41-GAP reviewer-merge (2026-05-16 cycle 035) ──────
+
+@D s6_koide_divisor_functional_tecsl := "Koide K(6)=2/3, δ(6)=2/9 — lepton mass 2-from-1" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§6 COSMO (lepton-mass physics)"
+  evidence = "Divisor-Koide functional K(n)=n·τ(n)²/σ(n)²: K(6)=6·16/144=96/144=2/3; δ(6)=2/9; the source reconstructs 2 lepton masses from 1 with ~0.006% agreement, with K/K_min=2 a Cauchy-Schwarz saturation. [@x_archive_tecs_l] math/proofs/koide_from_R1.md."
+  stage = "Stage 0 — declared closed-form (PDG-anchored model identification; no hexa-native verifier)"
+  anchor = "[ℏ] + [c] (lepton-mass scale; PDG 2024 lepton masses, 9 ppm) + [Kolmogorov complexity — Cauchy-Schwarz saturation K/K_min=2]"
+  cite = "[@x_archive_tecs_l] math/proofs/koide_from_R1.md + PDG 2024 lepton masses"
+  honest_c3 = "Tier capped 🟡 (PDG lepton mass is an EXTERNAL measurement; model-identification is a postulate per source honesty ledger — g_external_calc_forbidden literature exception, no hexa-native compute of measured masses). f_atlas_lattice_external: K(6)=2/3 is a within-lattice value (built from σ(6),τ(6)); the 0.006% match to measured Koide is OBSERVATION-NOT-DERIVATION — atlas must NOT claim the lattice predicts lepton masses. Surrogate gap: model-identification step is a postulate."
+  provenance = "archive-TECS-L math/proofs/koide_from_R1.md via _archive_tecs_l_absorption_manifest.md §E #6, 2026-05-16 reviewer-merge"
+
+@D s6_causal_chain_string_d_tecsl := "causal_chain σ6→physics string-D = 26/10/4 (CONJECTURAL)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§6 COSMO (string-theory dimension — CONJECTURAL)"
+  evidence = "Source chains σ(6)-derived integers to critical string dimensions D=26 (bosonic), D=10 (superstring), D=4 (compactified), CONJECTURAL per source (depends on unproven string-theory framework). Only Steps 1–2 of the causal chain (χ=−1/6 topology; ζ(−1)=−1/12) are math 🔵-eligible; the string-D step is NOT. [@x_archive_tecs_l] math/proofs/causal_chain_sigma6_to_physics.md."
+  stage = "Stage 0 — declared (CONJECTURAL string-theory dependency; no hexa-native verifier, none possible for the conjectural step)"
+  anchor = "[ℏ] + [c] (relativistic-quantum string scale) — string-D itself is not a closed real limit; Steps 1–2 anchored via [Kolmogorov complexity] (topology / ζ-continuation)"
+  cite = "[@x_archive_tecs_l] math/proofs/causal_chain_sigma6_to_physics.md (string-D step) + Polyakov 1981 critical dimension (literature)"
+  honest_c3 = "MUST be marked CONJECTURAL — the D=26/10/4 step depends on string theory (unconfirmed physics) ⇒ 🟡 cap with mandatory honest-caveat per §E. f_atlas_lattice_external: σ(6)→D mapping is the source's conjectural ansatz, NOT a derivation; atlas treats it as observation-only. Steps 1–2 are separately captured by s2_zeta_minus_one_sigma6_tecsl / s8_chi_psl2z_step1 — this entry covers ONLY the conjectural string-D tail."
+  provenance = "archive-TECS-L math/proofs/causal_chain_sigma6_to_physics.md string-D via _archive_tecs_l_absorption_manifest.md §E #26, 2026-05-16 reviewer-merge"
+
 # ═══════════════════════════════════════════════════════════════════════
 # §7 GEO — earth layers · planetary · geological boundaries
 # ═══════════════════════════════════════════════════════════════════════
@@ -995,6 +1341,48 @@
   honest_c3 = "verifier closes step 1 만. T2-01 의 8-step chain (steps 2-8: 12 = 1/(-χ)·2 · j-invariant · Ramanujan Δ · Dedekind η · Monster moonshine) 은 modular form module + stdlib float 미완 → deferred."
   verifier = "compiler/atlas/verify/top.hexa::verify_s8_chi_psl2z_step1"
   |> compiler/atlas/verify/top.hexa
+
+# ─── archive-TECS-L 41-GAP reviewer-merge (2026-05-16 cycle 035) ──────
+
+@D s8_mu_eq_sigma_squarefree_tecsl := "μ(N)=σ(N) ⟺ N squarefree (T2-03 / Γ₀ engine)" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§8 TOP (modular-curve invariants)"
+  evidence = "Modular-curve index μ(N)=N·Π_{p|N}(1+1/p) equals σ(N)=Π(p^{e+1}−1)/(p−1) ⟺ N squarefree (each prime exponent = 1, so both reduce to Π(pᵢ+1)). T2-03 Hypothesis-261 proven leg. [@x_archive_tecs_l] congruence_chain_engine.py / T2-03; generalizes the N=6 row of s8_gamma0_n6_row."
+  stage = "Stage 0 — declared closed-form ⟺ proof (multiplicative Π(pᵢ+1); no hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — multiplicative Π(pᵢ+1) closed-form, minimal-axiom ⟺]"
+  cite = "[@x_archive_tecs_l] T2-03 + congruence_chain_engine.py (μ=σ squarefree theorem)"
+  honest_c3 = "f_atlas_lattice_external: μ=σ ⟺ squarefree is a general NT/modular theorem; the N=6 'Perfect number! mu=sig' note (s8_gamma0_n6_row) is the n=6 INSTANCE (observation), not a derivation. The squarefree theorem is the GAP that s8_gamma0_n6_row only partially covered. 🔵-eligible after a hexa-native μ/σ sweep verifier; 🟠 default (g_tier_default_insufficient)."
+  provenance = "archive-TECS-L T2-03 congruence_chain_engine.py via _archive_tecs_l_absorption_manifest.md §E #8, 2026-05-16 reviewer-merge"
+
+@D s8_dim_sk_gamma0_riemann_roch_tecsl := "dim S_k(Γ₀(N)) Riemann-Roch cusp-form dimension" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§8 TOP (modular-form dimensions)"
+  evidence = "Exact weight-k cusp-form dimension dim S_k(Γ₀(N)) via the Riemann-Roch / valence formula on the modular curve X₀(N) (genus g, cusps c, elliptic points e2,e3); congruence_chain_engine.py::dim_cusp_forms / first_cusp_form_weight. Reusable modular-form algorithm. [@x_archive_tecs_l] congruence_chain_engine.py."
+  stage = "Stage 0 — declared algorithm (Riemann-Roch on modular curve; no hexa-native reimplementation)"
+  anchor = "[Kolmogorov complexity — Riemann-Roch dimension closed-form] + [compiler invariant — termination of finite dimension formula]"
+  cite = "[@x_archive_tecs_l] congruence_chain_engine.py::dim_cusp_forms / first_cusp_form_weight"
+  honest_c3 = "Reusable modular-form algorithm; no n=6 premise (general N) ⇒ f_atlas_lattice_external trivially satisfied (any σ(6)=12 in dim S₁₂=1 is observation, cf. s8_chi_to_monster Step 5). 🔵-eligible after a hexa-native Riemann-Roch verifier (NOT compiler/atlas/symbolic/ — owned elsewhere); 🟠 default (g_tier_default_insufficient)."
+  provenance = "archive-TECS-L congruence_chain_engine.py dim_cusp_forms via _archive_tecs_l_absorption_manifest.md §E #13, 2026-05-16 reviewer-merge"
+
+@D s8_gamma0_invariant_engine_tecsl := "Γ₀(N) invariant engine (μ, cusps, e2, e3, genus) general N" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§8 TOP (modular-curve invariants)"
+  evidence = "General-N modular-curve invariant computation: μ(N)=N·Π(1+1/p); cusps=Σ_{d|N}φ(gcd(d,N/d)); e2,e3 via Kronecker/Jacobi residue conditions; genus = 1 + μ/12 − e2/4 − e3/3 − cusps/2. Only the N=6 row is absorbed (s8_gamma0_n6_row); the general engine is GAP. [@x_archive_tecs_l] congruence_chain_engine.py::gamma0_index/cusps/elliptic2/elliptic3/genus."
+  stage = "Stage 0 — declared algorithm (exact modular-curve invariants, general N; no hexa-native reimplementation)"
+  anchor = "[Kolmogorov complexity — modular-curve invariant closed-forms] + [compiler invariant — termination of divisor-sum invariant computation]"
+  cite = "[@x_archive_tecs_l] congruence_chain_engine.py::gamma0_index/cusps/elliptic2/elliptic3/genus"
+  honest_c3 = "Reusable general-N engine; the N=6 instance (s8_gamma0_n6_row, 🔵) is UNTOUCHED — this entry covers only the un-absorbed general algorithm. f_atlas_lattice_external: general-N invariants have no n=6 premise; μ(6)=σ(6)=12 is the special-case observation. 🔵-eligible after hexa-native reimplementation; 🟠 default (g_tier_default_insufficient)."
+  provenance = "archive-TECS-L congruence_chain_engine.py Γ₀(N) engine via _archive_tecs_l_absorption_manifest.md §E #14, 2026-05-16 reviewer-merge"
+
+@D s8_modular_forms_sigma6_constants_tecsl := "T1-32: modular-forms 12=σ(6) structural-constant set" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§8 TOP (modular-form structural constants)"
+  evidence = "Modular-form structural constants where 12=σ(6) recurs: weight-k dimension ⌊k/12⌋; Δ = η²⁴ (exponent 24 = 2·σ(6) = J₂(6)); Γ₀(6) index = 12; Von Staudt-Clausen denominator-12. [@x_archive_tecs_l] docs/proofs T1-32 (currently batch-only cite in s2_t_proofs_batch, no broken-out verdict)."
+  stage = "Stage 0 — declared closed-form set (modular-form Riemann-Roch / Von Staudt-Clausen; no own hexa-native verifier)"
+  anchor = "[Kolmogorov complexity — modular-form structural-constant closed-forms (dim ⌊k/12⌋, η²⁴, Von Staudt-Clausen)]"
+  cite = "[@x_archive_tecs_l] docs/proofs T1-32 + Von Staudt-Clausen theorem"
+  honest_c3 = "f_atlas_lattice_external: 12 appears in modular-form theory for its own reasons (lcm(4,6), η²⁴ exponent 24); the 12=σ(6)/24=J₂(6) links are OBSERVATION, consistent with but not derived from the lattice (cf. s8_chi_to_monster). Broken out from s2_t_proofs_batch per §E. 🔵-eligible per sub-identity after Phase-2 verifier; 🟠 default (g_tier_default_insufficient)."
+  provenance = "archive-TECS-L docs/proofs T1-32 via _archive_tecs_l_absorption_manifest.md §E #22, 2026-05-16 reviewer-merge"
 
 # ═══════════════════════════════════════════════════════════════════════
 # §9 ENG — GPU SM · network · compiler invariants
@@ -1109,6 +1497,38 @@
   honest_c3 = "stronger geometric realization: S₄ ≅ rotational symmetry group of octahedron/cube (order 24). 더 강한 verifier 는 §1 s1_master_identity_geometric (icosahedron V-E+F=2 + Cayley closure)."
   verifier = "compiler/atlas/verify/bridges.hexa::verify_s10_master_identity_24"
   |> compiler/atlas/verify/bridges.hexa
+
+# ─── archive-TECS-L 41-GAP reviewer-merge (2026-05-16 cycle 035) ──────
+
+@D s10_convergence_cluster_tecsl := "Convergence-cluster multi-domain attractor grouping" :: verdict [d=2026-05-16 active]
+  status = "🟠 INSUFFICIENT"
+  axis = "§10 BRIDGES (verification methodology)"
+  evidence = "Group formulas converging to the same value from ≥k distinct domains; a structural-vs-coincidental discriminator (a cross-domain attractor only counts if ≥k independent domains land on it). convergence_engine.py::ConvergenceCluster / get_convergence_points. [@x_archive_tecs_l] convergence_engine.py."
+  stage = "Stage 0 — declared algorithm (multi-domain clustering discriminator; no hexa-native reimplementation)"
+  anchor = "[Kolmogorov complexity — minimum-description-length structural-vs-coincidental discriminator] + [Shannon — cross-domain mutual-information of an attractor]"
+  cite = "[@x_archive_tecs_l] convergence_engine.py::ConvergenceCluster / get_convergence_points"
+  honest_c3 = "Reusable bridge-verification methodology, not a closed-form theorem ⇒ tier capped 🟠. f_atlas_lattice_external: the discriminator's job is precisely to REJECT coincidental lattice matches — no σ/τ/φ enters its formulation. Phase-2: a hexa-native clustering primitive would let §10 self-apply the structural-vs-coincidental gate."
+  provenance = "archive-TECS-L convergence_engine.py::ConvergenceCluster via _archive_tecs_l_absorption_manifest.md §E #12, 2026-05-16 reviewer-merge"
+
+@D s10_log6_2_plus_log6_3_137_tecsl := "T1-18: log₆(2)+log₆(3)=137 (mod 137) discrete-log" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§10 BRIDGES (MATH discrete-log ↔ α-number)"
+  evidence = "Discrete logs base 6 mod 137: ind₆(2)=38, ind₆(3)=99, 38+99=137 ≡ 1 (mod 136=φ(137)) since 6=2·3 ⇒ ind₆(2)+ind₆(3)=ind₆(6)=1. Semi-trivial (a consequence of 6=2·3 and ord₁₃₇(6)=136). [@x_archive_tecs_l] docs/proofs T1-18 (batch-only cite)."
+  stage = "Stage 0 — declared closed-form (semi-trivial discrete-log identity; citation-only)"
+  anchor = "[Kolmogorov complexity — discrete-log additive structure mod 137]"
+  cite = "[@x_archive_tecs_l] docs/proofs T1-18 (semi-trivial discrete-log)"
+  honest_c3 = "SEMI-TRIVIAL with mandatory honest-caveat per §E: 38+99=137 holds because 6=2·3 and the sum ≡ 1 (mod 136) is the trivial part; the literal '=137' is the coincidence that ind₆(2)+ind₆(3) happens to equal 137 as integers ⇒ 🟡 cap (g_self_verify). f_atlas_lattice_external: 137 is the α-number observation, NOT derived from σ/τ/φ."
+  provenance = "archive-TECS-L docs/proofs T1-18 via _archive_tecs_l_absorption_manifest.md §E #23, 2026-05-16 reviewer-merge"
+
+@D s10_four_island_e_gamma_tecsl := "T1-08: 4-island bridge 5/(6·17)+√3 ≈ e^γ (0.00011%) APPROX" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§10 BRIDGES (4-island APPROXIMATION — not exact)"
+  evidence = "5/(6·17) + √3 ≈ 1.78107 vs e^γ ≈ 1.78107 (Euler-Mascheroni γ via Mertens' theorem), agreement ≈ 0.00011% — APPROXIMATION, NOT an exact identity. [@x_archive_tecs_l] docs/proofs T1-08 (cited as approx in s10_cross_island_bridges)."
+  stage = "Stage 0 — declared APPROXIMATION (numerical agreement only; no exact closed-form)"
+  anchor = "[Kolmogorov complexity — Euler-Mascheroni γ via Mertens product] (NOTE: agreement is approximate, not a real-limit-anchored identity)"
+  cite = "[@x_archive_tecs_l] docs/proofs T1-08 + Euler-Mascheroni γ (Mertens 1874)"
+  honest_c3 = "MANDATORY honest-caveat per §E: this is an APPROXIMATION (0.00011% numerical coincidence), NOT an exact identity ⇒ 🟡 cap, can NEVER reach 🔵 (no exact closed-form exists). f_atlas_lattice_external: 5,6,17 appearing is a numerology-risk coincidence — atlas records it as observation-only and the Texas-sharpshooter guard (s2_texas_sharpshooter_tecsl) should be applied before any structural claim."
+  provenance = "archive-TECS-L docs/proofs T1-08 via _archive_tecs_l_absorption_manifest.md §E #25, 2026-05-16 reviewer-merge"
 
 # ═══════════════════════════════════════════════════════════════════════
 # §11 🔵 CLOSED INVENTORY — cross-domain at-a-glance

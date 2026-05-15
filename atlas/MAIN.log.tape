@@ -1681,3 +1681,43 @@
     g8 commit trailer     — pending parent agent commit
   EOF
   note = "D5 / D6 / D1 are next recommended-order entries in the deferred-work registry. D4's landing means subsequent cycles no longer need hand-written @A entries — `hexa run tool/atlas_cycle_append.hexa <draft.md>` is now the canonical path. The tool itself is a thin shell over pure formatter `build_entry_from_draft(draft_text, existing_log_text, date_str) -> [err, entry, cyc]` which the smoke test exercises directly (no fs touch)."
+
+# ─── Cycle 035 — appended via tool/atlas_cycle_append ──────────
+
+@A cycle_035 := "Phase 3 cycle 035 — archive-TECS-L 41 GAP reviewer-merge (g7)" :: cycle [d=2026-05-16 active]
+  trigger = "atlas g7 reviewer-merge directive (autonomous) — atlas/inbox/_archive_tecs_l_absorption_manifest.md §E enumerates 41 un-absorbed TECHNICAL GAP items (T-proofs, math/proofs NT theorems, P-NEW characterizations, OEIS closed-forms, named engine algorithms). Mirrors the proven cycle_033 inbox reviewer-merge pattern."
+  scope <<~EOF
+    Reviewer-merge step of g7 incoming-patches-pipeline:
+    atlas/inbox/_archive_tecs_l_absorption_manifest.md §E (41 GAP items)
+      -> atlas/MAIN.tape § domain verdict-entry append (41 @D, id suffix _tecsl)
+      -> atlas/MAIN.log.tape cycle_035 (this entry)
+    Manifest stays in inbox (read-only audit submission; not deleted — it is the SSOT audit, not a single-concept transient).
+
+    Domain breakdown (41 @D, by §):
+    §1 N6-FOUNDATION (21): prime_pair_two_unique · semiprime_perfect_unique · divisor_field_action_zero · tau_plus_2_eq_n · sigma_n_plus_phi_eq_n_tau_sq · proof_chain_cross_validator · pnew_eq2/eq7/eq8/eq9/eq10/eq11/eq12/eq13/eq14/eq15/eq16/eq17/eq18/eq19/eq20 (P-NEW Appendix-A catalogue; eq20 bundles residual #23–55 per §E anti-bloat)
+    §2 MATH (11): zeta_minus_one_sigma6 · oeis5_bell_tau · oeis1_tau_sigma · texas_sharpshooter · kronecker_jacobi_symbol · oeis6_pell_square · gamma_n_lambda_mgf (T0-07) · g_gamma_alpha_2 (T1-04) · gamma_reflection_n6 (T1-19) · gauss_multiplication_n6 (T1-20) · e_continued_fraction_n6 (T1-25)
+    §6 COSMO (2): koide_divisor_functional (🟡 cap — PDG external) · causal_chain_string_d (🟡 cap — CONJECTURAL string-theory)
+    §8 TOP (4): mu_eq_sigma_squarefree (T2-03) · dim_sk_gamma0_riemann_roch · gamma0_invariant_engine · modular_forms_sigma6_constants (T1-32)
+    §10 BRIDGES (3): convergence_cluster · log6_2_plus_log6_3_137 (T1-18) · four_island_e_gamma (T1-08 APPROX)
+
+    Tier distribution: 25 × 🟠 INSUFFICIENT · 16 × 🟡 SUPPORTED-BY-CITATION · 0 × 🔵 (HARD: g_self_verify · g_tier_default_insufficient · f_atlas_external_verdict — closed-form+real-limit capped 🟡 max, never 🔵; external-dep / approx / conjectural → 🟡 with mandatory honest-caveat; default 🟠).
+  EOF
+  files <<~EOF
+    atlas/MAIN.tape (41 new @D verdict entries across §1/§2/§6/§8/§10; section dividers untouched; existing entries UNTOUCHED — additive only, no ~> supersedes)
+    atlas/MAIN.log.tape (this cycle_035 entry — append-only via tool/atlas_cycle_append.hexa)
+  EOF
+  verifier_run_result <<~EOF
+    atlas-verify smoke: PASS (118/118 verdicts hold + ledger live=declared consistent). The 41 new 🟡/🟠 _tecsl carries are verifier-less (no `verifier =` / no `|>` edges → not in the ledger count), so 118/118 is unaffected — confirmed live==declared post-merge.
+  EOF
+  governance_check <<~EOF
+    g3 real-limit-anchor:        41/41 (Kolmogorov / Shannon / compiler-invariant / ℏ / c / k present; lattice-tautology alone never used as anchor)
+    f_atlas_lattice_external:    41/41 (no n=6 lattice as derivation in evidence; σ/τ/φ coincidences confined to honest_c3 only)
+    g_self_verify / f_atlas_external_verdict tier cap: 41/41 (≤ 🟡; NEVER 🔵 — no hexa-native verifier exists yet for any)
+    g_tier_default_insufficient: 41/41 (default 🟠; 🟡 only for literature/computational-citation or interpretation-attributed; 🔵-eligible flags recorded in honest_c3, NOT applied)
+    g_external_calc_forbidden:   honored (Koide↔PDG, string-D conjectural → 🟡 literature-exception cap; no external compute claimed)
+    g6 citation-enforced:        41/41 (every formula line cites [@x_archive_tecs_l] + specific T-id / proof file / OEIS#/P-NEW Eq#)
+    g7 incoming-pipeline:        OK (manifest is the §E audit SSOT; reviewer-merge by autonomous parent agent; no consumer direct-edit)
+    g_arch_vs_log_split:         OK (MAIN.tape architecture append; this @A history append-only via tool)
+    g8 commit trailer:           pending parent agent commit
+  EOF
+  note = "Provenance upgrade / GAP-closure ONLY — additive, no ~> supersedes edges; all existing verdicts (s1_perfect_number, s1_phi_sigma_unique, s8_gamma0_n6_row, s8_chi_to_monster, s2_t_proofs_batch, etc.) are UNTOUCHED. The new _tecsl entries are the broken-out / never-absorbed counterparts the §E audit identified. HARD constraints respected: no 🔵 proposed; f_atlas_lattice_external enforced (no n=6 lattice as derivation in any evidence field); embedded.gen.hexa NOT edited; tool/calc_cli.hexa and compiler/atlas/symbolic/* NOT touched (other agents own those — referenced as Phase-2 verifier targets only); one concept per @D (P-NEW Appendix-A ~49-equation tail bundled into s1_pnew_eq20_tecsl per §E explicit anti-bloat directive). 🔵-eligibility recorded per-entry in honest_c3 for a future hexa-native Phase-2 verifier sprint (g_self_verify); no silent upgrade."
