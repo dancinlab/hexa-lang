@@ -1419,9 +1419,16 @@ fn cmd_build(src, out, c_only, target) {
     } else if !file_exists(__self_dir + "/runtime.c") {
         if file_exists("./self/runtime.c") { __self_dir = "./self" }
     }
+    // PHASE 1.3.B (2026-05-15) follow-up: codegen now emits `#include "runtime.h"`
+    // which exposes signatures only. The bodies live in runtime.c (which until
+    // recently was directly #include'd from user.c, so this never came up).
+    // To compile-and-link in one shot we add runtime.c to the clang invocation
+    // as a second TU. Long-term (path 2 of the patch file), ship a precompiled
+    // runtime.o and link against it; for now compile-from-source.
+    let __runtime_c = __self_dir + "/runtime.c"
     let mut compile = ""
     if len(target) == 0 {
-        compile = "clang -O2 " + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        compile = "clang -O2 " + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {
@@ -1444,7 +1451,7 @@ fn cmd_build(src, out, c_only, target) {
             cf_target = "-D_GNU_SOURCE "
             ldf_target = " -lm"
         }
-        compile = "zig cc -O2 -target " + zt + static_f + " " + cf_target + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " -o '" + tmp + "'" + ldf_target + " 2>&1"
+        compile = "zig cc -O2 -target " + zt + static_f + " " + cf_target + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + ldf_target + " 2>&1"
     }
     println("  [2/2] " + compile)
     let r2 = exec(compile)

@@ -7,15 +7,18 @@
 #   2) awk extracts [static HexaVal __hexa_sl_0 .. rt_str_center closing]
 #   3) sed renames __hexa_sl_* -> __hexa_rt_sl_* and __hexa_strlit_init ->
 #      __hexa_rt_strlit_init (avoid collision with user gen.c in same TU)
-#   4) sed marks rt_str_* definitions `static` (internal linkage; shims in
-#      runtime.c still export hexa_str_* with external linkage)
-#   5) appends __attribute__((constructor)) so statics are populated before
+#   4) appends __attribute__((constructor)) so statics are populated before
 #      main() runs — runtime.c has no entry of its own.
 #
 # This file is included by self/runtime.c AFTER the definition of
 # hexa_str_join (runtime.c ~L3872) because rt_str_pad_left/pad_right/
 # repeat/center/lines depend on hexa_str_join (and rt_str_lines on
 # rt_str_split which is defined inside this file).
+#
+# PHASE 1.3.B follow-up (2026-05-15): rt_str_* are NON-static now so user.c
+# (which codegen now points at runtime.h instead of runtime.c) can resolve
+# them at link time. Step 4 of the original pipeline (sed-re-static the
+# rt_str_*) is removed; forward decls live in runtime.h.
 #
 # hxa-20260423-003 M1-lite Step 4.
 
@@ -42,10 +45,16 @@ fi
 // GENERATED FROM self/runtime_hi.hexa — do not edit manually.
 // Source of truth: self/runtime_hi.hexa (M1-lite hi-layer SSOT).
 // Reproduce: tool/extract_runtime_hi.sh (runs self/native/hexa_v2 then
-// strips main/selftest, renames __hexa_sl_* -> __hexa_rt_sl_*, and marks
-// rt_str_* as static).
+// strips main/selftest, renames __hexa_sl_* -> __hexa_rt_sl_*).
 // Included from self/runtime.c AFTER hexa_str_join is defined.
 // (hxa-20260423-003 Step 4 — extraction replaces hand-port rt_str_*)
+//
+// PHASE 1.3.B follow-up (2026-05-15): rt_str_* are NON-static now so they're
+// reachable from user.c when codegen emits `#include "runtime.h"` (the new
+// default — see codegen_c2.hexa:679). Header forward decls live in
+// runtime.h's "rt_* high-layer stdlib (runtime_hi_gen.c)" block. Internal
+// `__hexa_rt_sl_*` constants stay file-scoped static — they're only used
+// by the bodies in this file.
 
 HDR
 
@@ -57,7 +66,6 @@ HDR
   | sed -E '
       s/__hexa_sl_/__hexa_rt_sl_/g;
       s/__hexa_strlit_init/__hexa_rt_strlit_init/g;
-      s/^HexaVal (rt_str_[a-z_]+)\(/static HexaVal \1(/g;
     '
 
   cat <<'FTR'

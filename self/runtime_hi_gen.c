@@ -1,10 +1,16 @@
 // GENERATED FROM self/runtime_hi.hexa — do not edit manually.
 // Source of truth: self/runtime_hi.hexa (M1-lite hi-layer SSOT).
 // Reproduce: tool/extract_runtime_hi.sh (runs self/native/hexa_v2 then
-// strips main/selftest, renames __hexa_sl_* -> __hexa_rt_sl_*, and marks
-// rt_str_* as static).
+// strips main/selftest, renames __hexa_sl_* -> __hexa_rt_sl_*).
 // Included from self/runtime.c AFTER hexa_str_join is defined.
 // (hxa-20260423-003 Step 4 — extraction replaces hand-port rt_str_*)
+//
+// PHASE 1.3.B follow-up (2026-05-15): rt_str_* are NON-static now so they're
+// reachable from user.c when codegen emits `#include "runtime.h"` (the new
+// default — see codegen_c2.hexa:679). Header forward decls live in
+// runtime.h's "rt_* high-layer stdlib (runtime_hi_gen.c)" block. Internal
+// `__hexa_rt_sl_*` constants stay file-scoped static — they're only used
+// by the bodies in this file.
 
 static HexaVal __hexa_rt_sl_0;
 static HexaVal __hexa_rt_sl_1;
@@ -37,7 +43,7 @@ static void __hexa_rt_strlit_init(void) {
     __hexa_rt_sl_13 = hexa_str("runtime_hi: selftest FAIL");
 }
 
-static HexaVal rt_str_split(HexaVal s, HexaVal delim) {
+HexaVal rt_str_split(HexaVal s, HexaVal delim) {
     __hexa_fn_arena_enter();
     HexaVal out = hexa_array_new();
     if (hexa_truthy(hexa_eq(hexa_int(hexa_len(delim)), hexa_int(0)))) {
@@ -62,14 +68,14 @@ static HexaVal rt_str_split(HexaVal s, HexaVal delim) {
 }
 
 
-static HexaVal rt_str_lines(HexaVal s) {
+HexaVal rt_str_lines(HexaVal s) {
     __hexa_fn_arena_enter();
     return __hexa_fn_arena_return(rt_str_split(s, __hexa_rt_sl_0));
     return __hexa_fn_arena_return(hexa_void());
 }
 
 
-static HexaVal rt_str_pad_left(HexaVal s, HexaVal width, HexaVal pad) {
+HexaVal rt_str_pad_left(HexaVal s, HexaVal width, HexaVal pad) {
     __hexa_fn_arena_enter();
     HexaVal slen = hexa_int(hexa_len(s));
     HexaVal plen = hexa_int(hexa_len(pad));
@@ -96,7 +102,7 @@ static HexaVal rt_str_pad_left(HexaVal s, HexaVal width, HexaVal pad) {
 }
 
 
-static HexaVal rt_str_pad_right(HexaVal s, HexaVal width, HexaVal pad) {
+HexaVal rt_str_pad_right(HexaVal s, HexaVal width, HexaVal pad) {
     __hexa_fn_arena_enter();
     HexaVal slen = hexa_int(hexa_len(s));
     HexaVal plen = hexa_int(hexa_len(pad));
@@ -123,7 +129,7 @@ static HexaVal rt_str_pad_right(HexaVal s, HexaVal width, HexaVal pad) {
 }
 
 
-static HexaVal rt_str_repeat(HexaVal s, HexaVal count) {
+HexaVal rt_str_repeat(HexaVal s, HexaVal count) {
     __hexa_fn_arena_enter();
     if (hexa_truthy(hexa_cmp_le(count, hexa_int(0)))) {
         return __hexa_fn_arena_return(__hexa_rt_sl_1);
@@ -139,7 +145,7 @@ static HexaVal rt_str_repeat(HexaVal s, HexaVal count) {
 }
 
 
-static HexaVal rt_str_center(HexaVal s, HexaVal width, HexaVal pad) {
+HexaVal rt_str_center(HexaVal s, HexaVal width, HexaVal pad) {
     __hexa_fn_arena_enter();
     HexaVal slen = hexa_int(hexa_len(s));
     HexaVal plen = hexa_int(hexa_len(pad));

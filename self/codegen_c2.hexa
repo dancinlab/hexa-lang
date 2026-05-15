@@ -676,7 +676,16 @@ fn codegen_c2(ast) {
     // the entire 12K-LOC runtime.c per build. See COMPILE-SPEED.tape +
     // bin/hexa-fast (the wrapper that mechanically did this via sed
     // before this commit promoted the change into codegen itself).
-    parts.push("#include \"runtime.h\"\n\n")
+    //
+    // Escape hatch (2026-05-15) — downstream projects that aren't yet ready
+    // for the runtime.o linkage model (= the monolithic compile path most of
+    // them still use today) hit "undeclared function" errors because the
+    // header doesn't yet re-export the runtime_hi_gen.c `static` rt_* stdlib
+    // helpers. Set HEXA_USE_RUNTIME_C=1 to revert to the legacy include and
+    // keep building until the header migration is complete.
+    // (Patch issue: incoming/patches/runtime-h-incomplete-after-phase-1-3-b.md)
+    let runtime_inc = if env("HEXA_USE_RUNTIME_C") != "" { "runtime.c" } else { "runtime.h" }
+    parts.push("#include \"" + runtime_inc + "\"\n\n")
 
     // ── C3: collect known global names for closure free-var analysis ──
     _known_fn_globals = []

@@ -254,6 +254,18 @@ HexaVal hexa_json_stringify(HexaVal v);               /* runtime.c:10639 — Hex
 HexaVal hexa_bytes_to_str_raw(HexaVal arr);           /* runtime.c:7718 — byte array → raw string */
 HexaVal rt_append_file(HexaVal path, HexaVal content); /* runtime.c:9830 — fs append (HexaVal-typed wrapper) */
 HexaVal rt_str_to_lower(HexaVal s);                   /* runtime.c:5407 — ASCII lowercase */
+
+/* rt_* high-layer stdlib (runtime_hi_gen.c — autogen from runtime_hi.hexa
+ * via tool/extract_runtime_hi.sh). PHASE 1.3.B (2026-05-15): de-static'd
+ * so user.c → runtime.h can resolve at link time. */
+HexaVal rt_str_split(HexaVal s, HexaVal delim);       /* runtime_hi_gen.c:40 */
+HexaVal rt_str_lines(HexaVal s);                      /* runtime_hi_gen.c:65 — split("\n") wrapper */
+HexaVal rt_str_pad_left(HexaVal s, HexaVal width, HexaVal pad);  /* runtime_hi_gen.c:72 */
+HexaVal rt_str_pad_right(HexaVal s, HexaVal width, HexaVal pad); /* runtime_hi_gen.c:99 */
+HexaVal rt_str_repeat(HexaVal s, HexaVal count);      /* runtime_hi_gen.c:126 */
+HexaVal rt_str_center(HexaVal s, HexaVal width, HexaVal pad);    /* runtime_hi_gen.c:142 */
+int     rt_str_ends_with(HexaVal s, HexaVal suffix);  /* runtime.c:3781 — non-static, int return */
+
 HexaVal hexa_map_remove(HexaVal m, const char* key);  /* runtime.c:2606 — Robin-Hood delete */
 HexaVal hexa_find_poly(HexaVal obj, HexaVal arg);     /* runtime.c:7007 — generic .find() */
 HexaVal hexa_dict_keys(HexaVal m);                    /* runtime.c:9948 — alias of hexa_map_keys */
@@ -278,6 +290,12 @@ HexaVal hexa_bcrypt_pbkdf(HexaVal pass, HexaVal salt, HexaVal rounds, HexaVal ke
 /* exec stream (long-running child process IO) */
 HexaVal hexa_exec_stream_open(HexaVal cmd);                          /* runtime.c:11961 */
 HexaVal hexa_exec_stream_close_stdin(HexaVal handle);                /* runtime.c:11963 */
+HexaVal hexa_exec_stream_write(HexaVal handle, HexaVal data);        /* runtime.c:11962 */
+/* exec_stream_* — raw-symbol variants (no hexa_ prefix) used by callers that
+ * pass them through `hexa_call1(exec_stream_async, …)` _Generic dispatch. */
+HexaVal exec_stream_async(HexaVal cmd);                              /* runtime.c:11826 */
+HexaVal exec_stream_poll(HexaVal handle);                            /* runtime.c:11829 */
+HexaVal exec_stream_close(HexaVal handle);                           /* runtime.c:11832 */
 
 /* Network primitives (native/net.c — POSIX socket wrappers; codegen emits
  * direct calls so they must be declared here for clean user.c compile). */
