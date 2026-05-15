@@ -707,6 +707,39 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
             return buf
         }
+        // struct_lit constructor (map-backed; mirror of x86_64 a351b1c9
+        // in AAPCS64: x0=map, x1=key const char*, x2=val HexaVal, bl,
+        // x0 return). MIR args = [type_str, k0_str, v0, ...] (2a790d85);
+        // const_str key → .rodata label = const char* (map_set ABI).
+        // type_str ignored in map-backed v1. Runtime-call parity with
+        // array_lit/concat; rebuild-verification deferred (Track-A wall).
+        if s.op == "struct_lit" && len(s.args) >= 1 {
+            let dst = _arm64_op_reg(_arm64_dst_reg(rm, s.dst.id))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_new"),
+                             "struct_lit: new map"))
+            buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"),
+                             "struct_lit: capture new map"))
+            let mut i = 1
+            while i + 1 < len(s.args) {
+                buf = _arm64_op_rm(buf, s.args[i], st, rm, "x9")
+                let key = _arm64_op_resolve(s.args[i], st, rm, "x9")
+                buf = _arm64_op_rm(buf, s.args[i + 1], st, rm, "x10")
+                let val = _arm64_op_resolve(s.args[i + 1], st, rm, "x10")
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), key,
+                                 "struct_lit: field key"))
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x2"), val,
+                                 "struct_lit: field val"))
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x0"), dst,
+                                 "struct_lit: map arg"))
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_set"),
+                                 "struct_lit: set field"))
+                buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"),
+                                 "struct_lit: recapture map"))
+                i = i + 2
+            }
+            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
+            return buf
+        }
         if len(s.args) >= 1 {
             let mut src_scratch = "x9"
             if _arm_is_spilled(rm, s.dst.id) { src_scratch = "x10" }
