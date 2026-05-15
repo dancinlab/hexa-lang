@@ -269,3 +269,152 @@
   EOF
   next_step = "Front-end resolution track (separate from codegen): (1) parser expression-lowering for [ ] ! , | & — operator tokens must not reach the binder as Ident; (2) HX2002 993 cross-module pub/private (_collect_item_types splice path); (3) HX2001 <callee> 594 receiver-type plumbing; (4) HX3001 994 _types_assignable coercion. Codegen+assemble track is CLOSED."
   unblocks_for = "stage 3 byte-equal fixed point — still gated, but the gate moved from codegen/assemble (closed) to front-end name-resolution"
+
+# ─── 2026-05-16  Carried from frontend-expr-lowering — bootstrap/build verification history (3 commits: 386475bf c1f0e79f 7bae7973; 122ab8c4 tag_of = dup of d694ce9e, skipped) ───
+
+
+# ─── 2026-05-16  Front-end track — empirical verification attempts ───
+
+@A frontend_tag_of_bug := "empirical bug: tag_of() exhaustive match missed +9 variants" :: measurement [d=2026-05-16 ok]
+  <- frontend_expr_operators
+  step = "Static grep on c30de87a landing scanned for 'match TokenKind' / ': TokenKind ->' patterns and reported no exhaustive switches needing the +9 variants. WRONG — `tag_of` in compiler/parse/parser.hexa uses `match k { TokenKind::… -> str }` over EVERY variant without a wildcard arm. `same_kind` routes all compares through tag_of, so unknown variants returned arbitrary strings (interp first-arm fall-through), silently breaking `check_kind` for new tokens. Empirical surface — found only when the live probe on RunPod showed `tag_of(TokenKind::Bang) == \"Ident\"`."
+  fix_commit = "122ab8c4 (frontend-expr-lowering) / d694ce9e (stage2-verify) — adds AmpAmp/PipePipe/Amp/Pipe/Caret/Tilde/Bang/Shl/Shr arms"
+  lesson = "future hexa-side enum extensions must check exhaustive-match-no-wildcard patterns more broadly than 'match\\s+.*\\.kind'. Or: add a `_ -> \"_UNKNOWN_\"` wildcard + a CI lint that flags it."
+  authority = "[@x_spec_15_e2]"
+
+@? frontend_verify_blocked_by_bootstrap_staleness := "stage-2 verification BLOCKED by bootstrap chain staleness" :: anomaly [d=2026-05-16 partial]
+  <- frontend_expr_operators
+  context = "User selected option (C) cloud-box path. Provisioned RunPod RTX PRO 6000 SECURE (188 GB RAM, Ubuntu 24.04, glibc 2.39) — memory wall removed; bootstrap chain mismatches are now the wall."
+  failures <<~EOF
+    Three staleness mismatches surfaced sequentially:
+
+    1. hexa_interp.linux (in repo build/, May 15 15:42)
+         — needs GLIBC_2.38 (only ubu24.04+ has it)
+         — its enum-match runtime knows TokenKind variants AT BUILD TIME;
+           when source adds +9 variants the match treats them as the first
+           arm. tag_of(TokenKind::Bang) returned "Ident" empirically.
+         — verdict: live-interp probe of new parser fundamentally blocked
+
+    2. build/hexa_v2_linux (the transpiler, May 15 15:42)
+         — transpile compiler/main.hexa succeeds but emits C referencing
+           runtime symbols with signatures CURRENT runtime.c uses differently.
+           clang error: `HexaVal sdk = hexa_str_trim(hexa_exec(…))` —
+           hexa_exec now returns int, not HexaVal. 14 errors.
+         — verdict: stale transpiler-vs-runtime gap
+
+    3. clang self/native/hexa_cc.c + self/runtime.c (fresh, May 16)
+         — compiles cleanly to /tmp/hexa_v2_fresh (1.5 MB ELF).
+         — transpile runs, but emitted C references identifiers not declared
+           by current header set: `undeclared identifier 'Severity_Error'`
+           (etc). hexa_cc.c's embedded transpiler doesn't emit prelude
+           #defines for some enum variants the current sources use.
+         — verdict: hexa_cc.c (the bootstrap monolith) lags current sources
+  EOF
+  cost = "~$1 RunPod total — RTX 3090 probe (terminated quickly) + RTX PRO 6000 SECURE ~30 min. Pod terminated, no ongoing cost."
+  diagnosis = "Bootstrap chain in delicate state — build/hexa_v2_linux + build/hexa_interp.linux + self/native/hexa_cc.c + self/runtime.c + compiler/* drift unevenly. Each verify path trips a different mismatch. Front-end fix structurally correct (faithful legacy port, hexa parse clean on all 4 edited files, lex of single-char operators verified producing TokenKind::Bang on pod live probe) — measuring the HX2001 1803 → drop NUMBER requires producing a current-bin stage 1, which itself requires a refreshed bootstrap."
+  paths_forward <<~EOF
+    A. Refresh bootstrap chain (separate sub-track):
+       i.  `hexa cc --regen` on a known-good host to regenerate hexa_cc.c
+           from current sources, then re-ship + re-attempt verification
+       ii. OR rebuild build/hexa_interp.linux + hexa_v2_linux from current
+           sources (needs a working hexa_v2 OR a known-good cross-build host)
+    B. Accept structural evidence as sufficient for THIS track:
+       i.   hexa parse clean on all 4 edited files (c30de87a + 122ab8c4)
+       ii.  lexer empirically produces TokenKind::Bang for `!` on RunPod live probe
+       iii. faithful legacy port (no invented grammar)
+       Defer HX2001 1803 → drop NUMERIC measurement to path A landing.
+    C. Architectural memory-fix in interp (parallel) — strbuf trap landing
+       on main (ed04d3e1) addresses one O(n²) source but NOT the 30 GiB
+       monolithic-TU peak; not on this track's critical path.
+  EOF
+  next_gate = "user decision: path A (bootstrap refresh, multi-hour) vs path B (accept + close as best-effort verified) vs other"
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc]"
+
+
+# ─── 2026-05-16  Front-end track — Path A pursued: bootstrap refresh + build-pipeline gap ───
+
+@A path_a_bootstrap_refresh := "Path A: hexa cc --regen → fresh hexa_v2 (macOS arm64 + Linux x86_64)" :: measurement [d=2026-05-16 ok]
+  <- frontend_verify_blocked_by_bootstrap_staleness
+  step = "User chose option α (G6 strict + hexa-native). Pursued bootstrap refresh:"
+  ok <<~EOF
+    1. Local macOS arm64: `hexa cc --regen` works.
+       [1/4] transpile self/{lexer,parser,type_checker,codegen_c2}.hexa (~30s — NOT the 21min
+              slow path; that's full self-compile not SSOT regen)
+       [2/4] merge → self/native/hexa_cc.c.new (1.43 MB, 22037 lines)
+       [3/4] clang HOST BUG: `-x c` flag also applies to runtime.o → "not valid UTF-8".
+              Workaround: `-x c hexa_cc.c.new -x none runtime.o` succeeds → 1.45 MB arm64.
+       Smoke transpile single-file with enums: emits `#define Severity_Error hexa_int(0)`
+       prelude. 085e73e6 fix VERIFIED in fresh binary.
+
+    2. RunPod Linux (RTX PRO 6000 SECURE 188GiB ubu24.04 glibc 2.39):
+       Shipped hexa_cc.c.new + tree. `clang -x c hexa_cc.c.new -x none runtime.c -o
+       hexa_v2_linux_fresh` → 1.52 MB ELF. probe_enum.hexa smoke: emits #define Severity_*
+       prelude correctly. Fix WORKS on single-file inputs.
+  EOF
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc]"
+
+@? path_a_build_pipeline_scaffold_gap := "hexa_linux build compiler/main.hexa — multi-file emit scaffold incomplete" :: anomaly [d=2026-05-16 partial]
+  <- path_a_bootstrap_refresh
+  context = "With fresh hexa_v2 (enum-prelude fix verified single-file) in place at self/native/hexa_v2, ran `./build/hexa_linux build compiler/main.hexa`."
+  finding <<~EOF
+    Same 3 undeclared-Severity errors as pre-refresh. Direct inspection of
+    build/artifacts/stage1_v14.c (74 KB): emits `extern HexaVal foo(...)` for EVERY imported
+    function — multi-file projection with EXTERN STUBS only, NO inlined bodies, NO enum decls
+    from imported modules. The single-file enum-prelude fix (085e73e6) operates per-file,
+    but `hexa_linux build`'s multi-file orchestration projects to ONE C file of externs.
+
+    The verified-on-probe enum-prelude emission proves the codegen fix is intact in the fresh
+    binary; the multi-file build path simply doesn't traverse imports for body emission.
+  EOF
+  diagnosis = "`hexa_linux build` (entry: self/main.hexa::build) is a SCAFFOLD for the new compiler/* multi-file entry, not a complete multi-file linker pipeline. Per-import per-file C emission + multi-c clang link is NOT wired up. Symptom: 1 .c file with 200+ unresolved externs. Front-end fix is structurally correct in isolation but unreachable through this build path."
+  paths_forward <<~EOF
+    AA. Complete hexa_linux build multi-file pipeline — per-import C emit + multi-input clang
+        link. Architectural, ~1-2 days. Owner: build/CLI track, not front-end track.
+    AB. Manual flatten-then-transpile chain — flatten all imports into single .hexa, fresh
+        hexa_v2 transpile → C WITH enum prelude, clang link. Blocker tried: Mac flatten hits
+        4GB hexa runtime memcap; HEXA_MEM_UNLIMITED=1 + Mac 24GiB → OOM thrash. RunPod 188GiB
+        would work but requires another pod cycle (~$1-2 + 30min).
+    AC. Bypass build, write minimal driver script that imports new lexer+parser, processes
+        compiler+self/*.hexa, prints HX2001 count. Blocker: build/hexa_interp.linux runtime
+        enum cache is build-time fixed; new TokenKind variants hit first-arm fall-through
+        empirically observed earlier. Need fresh hexa_interp built from current sources.
+  EOF
+  cost_to_date = "~$2 RunPod total (all pods terminated). Multiple boxes, multiple staleness fixes, multiple build chains attempted."
+  empirical_grade = "G3 + 085e73e6-fix-verified-single-file (lexer single-char Bang on pod live probe + enum-prelude emission on probe_enum.hexa) + G2 (faithful reference port) + G1 (hexa parse clean). G4-G6 require AA/AB/AC sub-track. Predictive G6 from architecture data: 1803 → ~803 (operator-as-Ident class = ~1000 = mechanically eliminated by fix)."
+  next_gate = "user decision: (1) Cycle close with G3 + predictive G6 [tape-recorded]; OR (2) AB on RunPod (~$1-2 + ~30min — completion probable); OR (3) AA — multi-day separate sub-track"
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
+  @> COMPILE-ONLY.tape
+
+
+# ─── 2026-05-16  Front-end track — AB attempted: module_loader memory blowup ───
+
+@? path_ab_module_loader_blowup := "AB flatten chain blocked: module_loader RSS blows to 165 GiB then crashes" :: anomaly [d=2026-05-16 partial]
+  <- path_a_build_pipeline_scaffold_gap
+  context = "User: `compile-only go`. Pursued AB (manual flatten → single-file transpile → clang). RunPod 188 GiB SECURE pod (mqpwtmxbw856k6). Original hexa_cc.c → hexa_v2_orig Linux ELF built clean (1.5 MB). flatten via `hexa_interp.linux self/module_loader.hexa compiler/main.hexa /tmp/flattened.hexa`."
+  finding <<~EOF
+    module_loader RSS growth, steady ~10.8 GiB / 30 s, monotone linear:
+      01:32 31.9G · 02:02 42.1G · 03:03 63.2G · 04:33 96.1G · 06:03 129.7G
+      07:03 153.6G · 07:34 165.5G · 08:04 → process gone, /tmp/flattened.hexa
+      NOT produced. 188 GiB box + crash.
+    Linear unbounded accumulation = O(n²) / monotone-arena class blowup,
+    NOT a constant-overhead memory wall. ~165 GiB to flatten the self-host
+    compiler tree (compiler/* + self/* imports) into one source.
+  EOF
+  diagnosis = "module_loader's import-flatten accumulator grows unbounded — same CLASS as the `acc = acc + chunk` O(n²) trap catalogued in inbox/ (de3a801e) and the strbuf landing (ed04d3e1, main). strbuf is NOT yet applied to self/module_loader.hexa (grep: 0 literal `acc = acc +`; the blowup is likely arena/splice-accumulator, a sibling mechanism). Either way: a hexa-lang SUBSTRATE / build-pipeline defect, NOT the front-end operator-lowering track."
+  blocker_ledger <<~EOF
+    Five DISTINCT substrate / build-pipeline blockers, each its own sub-track,
+    each independently gating G4-G6 — NONE is the front-end fix itself:
+      1. interp ~30 GiB constant memory wall (ubu 30 GiB boxes) — codegen/runtime
+      2. tag_of() exhaustive-match-no-wildcard — FIXED empirically (122ab8c4)
+      3. bootstrap chain staleness — hexa_interp.linux enum-cache build-time-fixed;
+         hexa_cc.c.new HexaVal/int type errors under Linux clang-18 strict
+      4. hexa_linux build multi-file scaffold — externs-only projection, no
+         import-body emission, no multi-c link
+      5. module_loader flatten RSS 165 GiB unbounded blowup (this entry)
+  EOF
+  cost_to_date = "~$3 RunPod cumulative (all pods terminated, no ongoing burn)."
+  verdict = "Front-end expression-operator-lowering track is STRUCTURALLY COMPLETE & verified at G1+G2+G3 (hexa parse clean ×4 files; faithful legacy reference port, no invented grammar; lexer single-char TokenKind::Bang + enum-prelude emission live-verified on pod). Empirical G6 (HX2001 1803 → ~803 measured) is gated by FIVE independent substrate sub-tracks, none of which is operator lowering. Per single-responsibility, bundling them into this track is wrong. Predictive G6 from architecture data is deterministic: the operator-as-Ident class (~1000 of 1803 HX2001) is mechanically eliminated by the lexer producing real operator tokens + parser routing them to UnOp/BinOp — there is no path by which a correctly-tokenised `!`/`|`/`&&` still reaches the binder as an undefined Ident."
+  recommended_closure = "Close front-end track at G3 + predictive-G6 (best-effort-verified; numeric measurement deferred). Register blockers 1/3/4/5 as named substrate sub-tracks in COMPILE-ONLY.tape (architecture). Empirical G6 becomes reachable once ANY ONE of: (AA) multi-file build pipeline completion, OR (AB') module_loader strbuf/arena refactor, lands."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
+  @> COMPILE-ONLY.tape
+
