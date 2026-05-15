@@ -901,7 +901,40 @@ fn flatten_main() {
         // then main.hexa's pipeline runs.
         let idx = ei
         let f = g_order_parts[idx]
-        let body = read_file(f)
+        let mut body = read_file(f)
+
+        // Fix #2 — atlas embed stub (Track-A monolithic-TU clang wall).
+        // compiler/atlas/embedded.gen.hexa is a 4.6 MB / 7451-line
+        // ~7400-element AtlasNode const-array fixture. legacy hexa_v2
+        // emits it verbatim into flat.c → clang -O0 on the ~8 MB single
+        // TU runs 40-53 min unbounded (the rebuild gate). static_atlas()
+        // reads dist/atlas.hxc (committed sidecar) FIRST and only falls
+        // back to these consts when the sidecar is absent (@D g_hxc /
+        // Path Y), so for the bootstrap self-compile the const data is
+        // dead at runtime. Substitute a SYMBOL-COMPLETE empty stub (all
+        // 12 pub exports, same types) so every ATLAS_*_NODES/HASH/
+        // SOURCE_COUNT reference still resolves while flat.c shrinks
+        // ~4.6 MB → tiny. EXACT-path gated (only this atlas fixture, not
+        // other *.gen.hexa); committed fixture untouched (flatten-time
+        // only); statically symbol-verified; trivially reversible.
+        if f.ends_with("atlas/embedded.gen.hexa") {
+            let mut sp = []
+            sp.push("use \"compiler/atlas/parser\"")
+            sp.push("@phase(\"parse_only\")")
+            sp.push("pub let ATLAS_HASH: string = \"\"")
+            sp.push("@phase(\"parse_only\")")
+            sp.push("pub let ATLAS_SOURCE_COUNT: i64 = 0")
+            sp.push("@phase(\"parse_only\")")
+            sp.push("pub let ATLAS_GENERATED_AT: string = \"\"")
+            let kinds = ["P", "C", "L", "E", "F", "R", "S", "X", "Q"]
+            let mut ki = 0
+            while ki < len(kinds) {
+                sp.push("@phase(\"parse_only\")")
+                sp.push("pub let ATLAS_" + kinds[ki] + "_NODES: [AtlasNode] = []")
+                ki = ki + 1
+            }
+            body = sp.join("\n") + "\n"
+        }
 
         // Fix #1 — *.gen.hexa skip the mangle pass (see collision-detect note
         // above). fl_strip_uses still runs since generated files do contain
