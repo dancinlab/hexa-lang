@@ -710,7 +710,16 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
 
             let cond = _arm64_cmp_cond(s.op)
             if len(cond) > 0 {
-                buf.push(_arm64_instr2("cmp", a, b, "binop " + s.op))
+                // ARM64 cmp form: `cmp Rn, Rm` OR `cmp Rn, #imm`. The first
+                // operand MUST be a register. If LHS lowered to an immediate
+                // (e.g. const_int operand), materialize it into x10 first.
+                let mut a_real = a
+                if s.args[0].kind == "const_int" {
+                    buf.push(_arm64_instr2("mov", _arm64_op_reg(a_scratch), a,
+                                     "materialize cmp lhs to reg"))
+                    a_real = _arm64_op_reg(a_scratch)
+                }
+                buf.push(_arm64_instr2("cmp", a_real, b, "binop " + s.op))
                 buf.push(_arm64_instr2("cset", dst, _arm64_op_label(cond),
                                  "binop " + s.op + " → bool"))
                 buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
