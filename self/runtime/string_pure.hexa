@@ -671,21 +671,44 @@ pub fn format_pure(fmt, arg) {
 // ── format_n_pure ────────────────────────────────────────────────
 // Mirrors hexa_format_n (runtime.c:2736). Multi-arg: replaces each
 // `{}` with successive elements of `args` array.
+//
+// Was previously written as `result = before + arg + after` inside the
+// arg loop — each iteration rebuilt the entire prior string (O(|result|))
+// → total O(N·|result_final|) = quadratic in N. Switched to a single
+// linear scan of `fmt`, emitting literal segments + replacements into a
+// strbuf. One join allocation at finish. See
+// incoming/patches/string-concat-in-unbounded-loop-quadratic-rss.md.
+//
+// Note: shadowed at runtime by runtime/format_pure.hexa's richer version
+// (which also handles `{:.N}` precision specs). Kept as the historical
+// reference impl + for callers that import string_pure standalone.
 pub fn format_n_pure(fmt, args) {
     if type_of(fmt) != "string" { return fmt }
     if type_of(args) != "array" { return fmt }
-    let n = len(args)
-    let mut result = fmt
+    let nargs = len(args)
+    let out = strbuf_new()
+    let mut cursor = 0
     let mut ai = 0
-    while ai < n {
-        let idx = str_index_of_pure(result, "{}")
-        if idx < 0 { return result }
-        let before = result.substring(0, idx)
-        let after = result.substring(idx + 2, len(result))
-        result = before + to_string(args[ai]) + after
+    while ai < nargs {
+        let rest = fmt.substring(cursor, len(fmt))
+        let rel = str_index_of_pure(rest, "{}")
+        if rel < 0 {
+            // No more placeholders → emit remainder and exit
+            strbuf_push(out, rest)
+            return strbuf_finish(out)
+        }
+        // Emit literal segment before the placeholder, then the arg.
+        if rel > 0 { strbuf_push(out, rest.substring(0, rel)) }
+        strbuf_push(out, to_string(args[ai]))
+        cursor = cursor + rel + 2
         ai = ai + 1
     }
-    result
+    // Args exhausted — emit any remaining format tail verbatim
+    // (matches original semantics: trailing `{}` past args is preserved).
+    if cursor < len(fmt) {
+        strbuf_push(out, fmt.substring(cursor, len(fmt)))
+    }
+    strbuf_finish(out)
 }
 
 // ── str_capitalize_pure ──────────────────────────────────────────

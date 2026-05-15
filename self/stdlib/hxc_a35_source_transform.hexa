@@ -78,6 +78,11 @@
 //     A35 source-transform      — pre-A1-raw, schema-aware, source-level rewrite
 //     Sigil ^o LOWERCASE distinct from all uppercase ^A..^Z and lowercase ^c/^v/^w.
 
+// stdlib/strbuf — O(n) string-builder. Used by _parse_json_row to avoid
+// O(n²) `key = key + ch` / `val = val + ch` accumulator traps on wide
+// JSONL rows. See incoming/patches/string-concat-in-unbounded-loop-quadratic-rss.md.
+use "stdlib/strbuf"
+
 const A35_MIN_LINES = 2                  // schema_detect minimum lines
 const A35_TOKEN_DICT_MAX = 64            // Stage 3 dict cap (C3: keep small for first tick)
 const A35_TOKEN_DICT_RATIO_X100 = 10     // distinct ≤ 10% of rows triggers token
@@ -254,14 +259,17 @@ fn _parse_json_row(line: string) -> array {
         // Expect quoted key
         if c != "\"" { break }
         let mut j: i64 = i + 1
-        let mut key = ""
+        // key/val collected via strbuf — was `key = key + chunk` per byte,
+        // which is O(n²) for wide JSONL rows (A35 PASS-4 live-fire risk).
+        let key_buf = strbuf_new()
         while j < n - 1 {
             let cj = line.substring(j, j + 1)
-            if cj == "\\" && j + 1 < n - 1 { key = key + line.substring(j, j + 2); j = j + 2; continue }
+            if cj == "\\" && j + 1 < n - 1 { strbuf_push(key_buf, line.substring(j, j + 2)); j = j + 2; continue }
             if cj == "\"" { break }
-            key = key + cj
+            strbuf_push(key_buf, cj)
             j = j + 1
         }
+        let key = strbuf_finish(key_buf)
         i = j + 1
         // Skip whitespace + ':'
         while i < n - 1 {
@@ -270,25 +278,26 @@ fn _parse_json_row(line: string) -> array {
             break
         }
         // Read value (raw substring until top-level comma or final '}').
-        let mut val = ""
+        let val_buf = strbuf_new()
         let mut depth: i64 = 0
         let mut in_str: bool = false
         while i < n - 1 {
             let ci = line.substring(i, i + 1)
             if in_str {
-                val = val + ci
-                if ci == "\\" && i + 1 < n - 1 { val = val + line.substring(i + 1, i + 2); i = i + 2; continue }
+                strbuf_push(val_buf, ci)
+                if ci == "\\" && i + 1 < n - 1 { strbuf_push(val_buf, line.substring(i + 1, i + 2)); i = i + 2; continue }
                 if ci == "\"" { in_str = false }
                 i = i + 1
                 continue
             }
-            if ci == "\"" { in_str = true; val = val + ci; i = i + 1; continue }
+            if ci == "\"" { in_str = true; strbuf_push(val_buf, ci); i = i + 1; continue }
             if ci == "{" || ci == "[" { depth = depth + 1 }
             if ci == "}" || ci == "]" { depth = depth - 1 }
             if ci == "," && depth == 0 { break }
-            val = val + ci
+            strbuf_push(val_buf, ci)
             i = i + 1
         }
+        let val = strbuf_finish(val_buf)
         // Trim trailing whitespace from val
         let mut vlen: i64 = len(val)
         while vlen > 0 {
