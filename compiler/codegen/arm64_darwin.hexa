@@ -677,6 +677,36 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                     st: ArmStrTab, rm: RegMap, spill_frame: i64) -> [LInstr] {
     let mut buf = out
     if s.kind == _STMT_ASSIGN {
+        // array_lit constructor (mirror of x86_64_linux.hexa 269bb61d;
+        // AAPCS64: args x0/x1, call via bl, return x0). dst =
+        // hexa_array_new(); per element hexa_array_push(dst, e_i) →
+        // recapture x0. Grammar-capped ≤1024 by HX0013 → O(n) bounded.
+        // Runtime-call shape mirrors the proven concat idiom below.
+        // rebuild-verification DEFERRED (Track-A clang wall) — logic
+        // parity with shipped concat emit.
+        if s.op == "array_lit" {
+            let dst = _arm64_op_reg(_arm64_dst_reg(rm, s.dst.id))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_array_new"),
+                             "array_lit: new array"))
+            buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"),
+                             "array_lit: capture new array"))
+            let mut i = 0
+            while i < len(s.args) {
+                buf = _arm64_op_rm(buf, s.args[i], st, rm, "x9")
+                let v = _arm64_op_resolve(s.args[i], st, rm, "x9")
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), v,
+                                 "array_lit: elem " + to_string(i)))
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x0"), dst,
+                                 "array_lit: arr arg"))
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_array_push"),
+                                 "array_lit: push elem " + to_string(i)))
+                buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"),
+                                 "array_lit: recapture array"))
+                i = i + 1
+            }
+            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
+            return buf
+        }
         if len(s.args) >= 1 {
             let mut src_scratch = "x9"
             if _arm_is_spilled(rm, s.dst.id) { src_scratch = "x10" }
