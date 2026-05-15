@@ -32,6 +32,7 @@
 #include <stdlib.h>    /* exit, atoi, getenv from try/catch lowering */
 #include <setjmp.h>    /* try/catch lowers to setjmp/longjmp + __hexa_try_* */
 #include <math.h>      /* hexa_v2 emits direct log/sin/cos/exp calls for math intrinsics */
+#include <sys/stat.h>  /* hexa_v2 emits bare mkdir(path,0755) for stdlib mkdir_p */
 
 /* ── Tagged value layout (mirrors runtime.c lines 908–996) ── */
 
@@ -329,6 +330,13 @@ void hexa_fp_init(void);     /* native/fp_init.c:37 */
 /* native/mount.c */
 HexaVal hexa_mount(HexaVal src_v, HexaVal tgt_v, HexaVal fs_v, HexaVal flags_v, HexaVal data_v);     /* native/mount.c:27 */
 HexaVal hexa_umount(HexaVal tgt_v, HexaVal flags_v);     /* native/mount.c:44 */
+
+/* runtime.c core helpers the 2026-05-15 auto-gen grep missed (defined in
+ * runtime.c but only forward-declared inside its own TU). Multi-file
+ * flatten emits cross-TU calls to these, so the consuming user.c TU needs
+ * the decls to avoid implicit-int → HexaVal init errors. */
+HexaVal hexa_str_char_code_at(HexaVal s, HexaVal idx); /* runtime.c:3891 */
+HexaVal rt_file_size(HexaVal path);                    /* runtime.c:5110 */
 
 /* native/namespace.c */
 HexaVal hexa_unshare(HexaVal flags_v);     /* native/namespace.c:37 */
