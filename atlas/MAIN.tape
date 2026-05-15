@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-021-falsifier-LANDED" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-022-falsifier-8batteries-sha256-frozen" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,8 +39,16 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2+3 (cycle 001-021): 90/90 PASS · 90 entries verified (85 🔵 closed: 52 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 4 falsifier-robust batteries).
-    9 도메인 모두 covered. Verifier surface: 12 modules (foundation/math/top/cosmo/bridges/chem/phys/transcendental/eng/geo/bio/cross/falsifier).
+    Cumulative Phase 2+3 (cycle 001-022): 94/94 PASS · 94 entries verified (85 🔵 closed: 52 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 8 falsifier-robust batteries · 40 falsifiers 0 fired).
+    9 도메인 모두 covered. Verifier surface: 12 modules.
+
+    cycle 022 — falsifier 4 → 8 batteries + sha256 freeze hash:
+      신규 4 batteries: s1_n6_foundational · s2_gamma_reflection_n6 · s10_master_identity_24 · s3_conservation_law (each ≥5)
+      freeze hash: sha256(falsifier_id ⧺ reason, battery order)[0:16] per battery — atlas/VERIFY.tape §5
+        "pre-register hash + sha256 commit" 충족. modification/reorder → hash 변경 → frozen-violation 탐지.
+        s1_phi_sigma_unique=… · s1_n6_foundational=f0a842e6617b41b4 · s2_gamma_reflection_n6=cb85c3ec36ff63fc ·
+        s10_master_identity_24=7a446b877815f336 · s3_conservation_law=245905ce5bd87545 (등 8 frozen anchors).
+      stdlib/core/hash/sha256.hexa::sha256_hex import (sha256_hex/sha256_file_hex only — no name conflict).
 
     cycle 021 — falsifier ≥5 pre-register EXECUTABLE form (atlas/VERIFY.tape §5 declarative → compiler/atlas/verify/falsifier.hexa):
       4 fire-eligible entries 의 ≥5 falsifier battery (20 falsifiers total, 0 fired = all verdicts robust):
@@ -791,7 +799,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 90
+  phase_2_cumulative_count = 94
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 

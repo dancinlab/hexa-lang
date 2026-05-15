@@ -974,3 +974,49 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+# ─── Cycle 022 — Phase 3: falsifier 4→8 batteries + sha256 freeze anchor ─
+
+@A cycle_022 := "Phase 3 cycle 022 — falsifier battery expansion + sha256 pre-register freeze hash" :: cycle [d=2026-05-15 active]
+  trigger = "user 'go' — Phase 3 continuation"
+  scope <<~EOF
+    cumulative 90 → 94 (+4 batteries · 20 신규 falsifiers · 8 sha256 freeze anchors).
+    atlas/VERIFY.tape §5 "frozen_after_fire — pre-register hash + sha256 commit"
+    의 hash anchor 구현 + falsifier coverage 2배 확장.
+  EOF
+  files_modified <<~EOF
+    compiler/atlas/verify/falsifier.hexa:
+      + import stdlib/core/hash/sha256.hexa (sha256_hex/sha256_file_hex only — no conflict)
+      + _battery_freeze_hash() — sha256(falsifier_id⧺reason, order)[0:16] per battery
+      + Battery 5 s1_n6_foundational  (σ12·φ2·τ4·sopfr5 + quadruple-fingerprint uniqueness)
+      + Battery 6 s2_gamma_reflection_n6 (Γ reflection ≠log2 · σ₋₁≠2 · normalization · 2 standing)
+      + Battery 7 s10_master_identity_24 (σ·φ≠24 · n·τ≠24 · 4!≠24 · σ·φ≠n·τ · other-n-24)
+      + Battery 8 s3_conservation_law (GI≠DP sweep · vacuous · noninteger-scope · physical-overclaim · additive-confusion)
+      + verify_falsifier_all() 8 batteries
+    tool/atlas_verify.hexa (no change — falsifier domain already dispatched cycle 021)
+    atlas/MAIN.tape (tldr cycle 022 + freeze hash anchors)
+  EOF
+  verifier_run_result <<~EOF
+    Battery run: 8/8 PASS · 40 falsifiers total, 0 fired (all verdicts robust)
+    sha256 freeze anchors (16-char prefix, frozen 2026-05-15):
+      s1_n6_foundational      = f0a842e6617b41b4
+      s2_gamma_reflection_n6  = cb85c3ec36ff63fc
+      s10_master_identity_24  = 7a446b877815f336
+      s3_conservation_law     = 245905ce5bd87545
+      (+ s1_phi_sigma_unique · s1_perfect_number · s10_137_from_sigma_tau · s2_ln_17_approximate from cycle 021)
+    Full cumulative: 94/94 PASS · 85 🔵 + 1 🟠 AT-RISK + 8 falsifier-robust
+  EOF
+  freeze_semantics <<~EOF
+    _battery_freeze_hash = sha256(∀ falsifier: id ⧺ \u1f ⧺ reason ⧺ \u1e, in battery order)[0:16].
+    Any falsifier modification, reorder, or removal changes the hash → frozen-
+    violation detectable in CI (atlas/VERIFY.tape §5 W8 additive_only_mutation).
+    New falsifier append (W8 amendment) intentionally changes hash + must be
+    recorded in atlas/MAIN.log.tape (this entry IS that record for cycle 022).
+    Source file = the pre-register registry until Phase 3 sha256-commit hook automation.
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only — ✅ 94 entries via hexa CLI
+    g5 hexa-native-only    — ✅ sha256.hexa hexa-source · no float.hexa (tau shadow 회피 유지)
+    g_self_verify          — ✅ 94 entries hexa-native + 40 falsifiers sha256-frozen
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+

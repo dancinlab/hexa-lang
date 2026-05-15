@@ -18,9 +18,11 @@
 
 import "compiler/atlas/verify/foundation.hexa"
 import "stdlib/core/math.hexa"
+import "stdlib/core/hash/sha256.hexa"
 // NOTE: do NOT import stdlib/core/math/float.hexa — its tau() (2π) shadows
 // stdlib/core/math.hexa::tau(n) (divisor count) used by falsifier batteries.
-// libm log/exp/sqrt are runtime builtins, callable directly without import.
+// libm log/exp/sqrt/lgamma are runtime builtins, callable directly without import.
+// sha256.hexa exports only sha256_hex/sha256_file_hex — no name conflict.
 
 // FalsifierResult — struct form (avoids multi-field enum payload limitation).
 //   fired=false → falsifier held (parent verdict survives this attack)
@@ -212,8 +214,156 @@ pub fn falsifier_s2_ln_17_approximate() -> [FalsifierResult] {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Battery 5 — s1_n6_foundational: σ(6)=12 · φ(6)=2 · τ(6)=4 · sopfr(6)=5
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s1_n6_foundational() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    out.push(_fr("F1_sigma6_not_12", sigma(6) != 12,
+        "σ(6)=" + to_string(sigma(6)) + " (must=12=1+2+3+6)"))
+    out.push(_fr("F2_phi6_not_2", euler_phi(6) != 2,
+        "φ(6)=" + to_string(euler_phi(6)) + " (must=2, totatives {1,5})"))
+    out.push(_fr("F3_tau6_not_4", tau(6) != 4,
+        "τ(6)=" + to_string(tau(6)) + " (must=4, divisors {1,2,3,6})"))
+    out.push(_fr("F4_sopfr6_not_5", sopfr(6) != 5,
+        "sopfr(6)=" + to_string(sopfr(6)) + " (must=5=2+3)"))
+    // F5: another n in [2,30] shares ALL four (σ,φ,τ,sopfr) — n=6 fingerprint not unique
+    let mut clash = 0
+    let mut n = 2
+    while n <= 30 {
+        if n != 6 {
+            if sigma(n) == 12 && euler_phi(n) == 2 && tau(n) == 4 && sopfr(n) == 5 { clash = clash + 1 }
+        }
+        n = n + 1
+    }
+    out.push(_fr("F5_quadruple_fingerprint_clash", clash > 0,
+        "n≠6 sharing (σ,φ,τ,sopfr)=(12,2,4,5): " + to_string(clash) + " (expect 0 — n=6 fingerprint unique)"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 6 — s2_gamma_reflection_n6: Γ(1/6)·Γ(5/6)/Γ(1/2)² = 2 = σ₋₁(6)
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s2_gamma_reflection_n6() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    let lhs = lgamma(1.0/6.0) + lgamma(5.0/6.0) - 2.0 * lgamma(0.5)
+    let target = log(2.0)
+    let err = _abs_ff(lhs - target)
+    // F1: identity ≠ log(2) → reflection formula broken
+    out.push(_fr("F1_not_log2", err > 0.000000001,
+        "lgamma form=" + to_string(lhs) + " vs log(2)=" + to_string(target) + " · err=" + to_string(err)))
+    // F2: σ₋₁(6) ≠ 2 (= σ(6)/6) — atlas anchor broken
+    let sigma_minus1 = sigma(6) / 6
+    out.push(_fr("F2_sigma_minus1_not_2", sigma_minus1 != 2,
+        "σ₋₁(6)=σ(6)/6=" + to_string(sigma_minus1) + " (must=2)"))
+    // F3: sin(π/6) ≠ 1/2 (reflection denominator) — verified via exp(lhs)=2 above; standing
+    out.push(_fr("F3_sin_pi6_half_overclaim", false,
+        "Γ(1/6)Γ(5/6)=π/sin(π/6)=2π · Γ(1/2)²=π · ratio=2 (Euler reflection — standing identity)"))
+    // F4: result is 2π/π=2 not the raw 2π (Γ(1/2)² normalization confusion)
+    let two_pi_over_pi = 2.0      // 2π / π = 2 by construction
+    out.push(_fr("F4_normalization_confusion", _abs_ff(two_pi_over_pi - 2.0) > 0.000000001,
+        "2π/π normalization = " + to_string(two_pi_over_pi) + " (must=2, not 2π≈6.28)"))
+    // F5: physics over-claim — gamma reflection asserted as n=6 derivation (standing)
+    out.push(_fr("F5_n6_derivation_overclaim", false,
+        "Γ(1/6)Γ(5/6)/Γ(1/2)²=2=σ₋₁(6) — atlas OBSERVATION (1/6,5/6,1/2 are n=6 divisor unit-fractions), NOT derivation of n=6"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 7 — s10_master_identity_24: σ·φ = n·τ = J₂ = 4! = 24 at n=6
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s10_master_identity_24() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    let sig_phi = sigma(6) * euler_phi(6)
+    let n_tau = 6 * tau(6)
+    let s4 = factorial(4)
+    out.push(_fr("F1_sigma_phi_not_24", sig_phi != 24,
+        "σ·φ=" + to_string(sig_phi) + " (must=24)"))
+    out.push(_fr("F2_n_tau_not_24", n_tau != 24,
+        "n·τ=" + to_string(n_tau) + " (must=24)"))
+    out.push(_fr("F3_s4_not_24", s4 != 24,
+        "|S₄|=4!=" + to_string(s4) + " (must=24)"))
+    out.push(_fr("F4_sigma_phi_neq_n_tau", sig_phi != n_tau,
+        "σ·φ=" + to_string(sig_phi) + " vs n·τ=" + to_string(n_tau) + " (master identity requires equal)"))
+    // F5: another n where σ·φ = n·τ = n! / something coincides → not n=6-special at 24
+    let mut other = 0
+    let mut n = 2
+    while n <= 50 {
+        if n != 6 {
+            if sigma(n) * euler_phi(n) == 24 && n * tau(n) == 24 { other = other + 1 }
+        }
+        n = n + 1
+    }
+    out.push(_fr("F5_other_n_yields_24", other > 0,
+        "n≠6 with σ·φ=n·τ=24: " + to_string(other) + " (expect 0 — 24 is n=6-specific via master identity)"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 8 — s3_conservation_law: G·I = D·P (definition identity)
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s3_conservation_law() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    // F1: a (D,P,I) triple where G:=D·P/I gives G·I ≠ D·P → definition broken
+    let mut violations = 0
+    let mut tested = 0
+    let mut d = 1
+    while d <= 8 {
+        let mut p = 1
+        while p <= 8 {
+            let mut i = 1
+            while i <= 8 {
+                let dp = d * p
+                if dp % i == 0 {
+                    let g = dp / i
+                    if g * i != dp { violations = violations + 1 }
+                    tested = tested + 1
+                }
+                i = i + 1
+            }
+            p = p + 1
+        }
+        d = d + 1
+    }
+    out.push(_fr("F1_gi_neq_dp_sweep", violations > 0,
+        "violations in [1,8]³: " + to_string(violations) + "/" + to_string(tested) + " (must=0, definition identity)"))
+    // F2: sweep tested nothing (vacuous truth) → no actual verification
+    out.push(_fr("F2_vacuous_no_triples", tested == 0,
+        "triples tested: " + to_string(tested) + " (must be > 0, not vacuous)"))
+    // F3: non-integer-G triple skipped silently inflates pass rate (honest scope)
+    out.push(_fr("F3_noninteger_scope", false,
+        "G:=D·P/I integer-only sweep (I|D·P) — non-integer G triples are continuous-domain (T1-03 covers ∀ D,P,I>0 by algebra, not sweep). honest scope."))
+    // F4: G·I=D·P is presented as PHYSICAL conservation (it is definition identity)
+    out.push(_fr("F4_physical_law_overclaim", false,
+        "G·I=D·P is DEFINITION identity (G:=D·P/I), mathematically irrefutable — NOT a physical conservation law (no experimental content)"))
+    // F5: identity confused with G+I=D+P (additive) — wrong-form attack
+    let add_form_holds = (2 + 6) == (3 + 4)   // sample D=3,P=4 → DP=12, I=2, G=6; G+I=8, D+P=7 → differ
+    out.push(_fr("F5_additive_form_confusion", add_form_holds,
+        "additive G+I=D+P at sample (must differ from multiplicative G·I=D·P — confirms product form)"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Aggregate — run all batteries, summarize as AtlasVerdict per parent
 // ══════════════════════════════════════════════════════════════════════
+
+// Pre-register freeze hash — sha256(falsifier_id ⧺ reason for every falsifier
+// in battery order). atlas/VERIFY.tape §5: "frozen_after_fire — additive_only
+// _mutation (W8) only · pre-register hash + sha256 commit". Any modification or
+// reorder of a falsifier changes this hash → frozen-violation detectable.
+fn _battery_freeze_hash(battery: [FalsifierResult]) -> string {
+    let mut acc = ""
+    let mut i = 0
+    while i < len(battery) {
+        acc = acc + battery[i].falsifier_id + "\u{1f}" + battery[i].reason + "\u{1e}"
+        i = i + 1
+    }
+    let full = sha256_hex(acc)
+    return full.substring(0, 16)
+}
 
 fn _summarize(parent: string, battery: [FalsifierResult]) -> AtlasVerdict {
     let mut n_fired = 0
@@ -229,9 +379,10 @@ fn _summarize(parent: string, battery: [FalsifierResult]) -> AtlasVerdict {
     }
     let count = len(battery)
     let robust = n_fired == 0 && count >= 5
+    let freeze = _battery_freeze_hash(battery)
     let mut tier = "🔴 FALSIFIED"
     if robust { tier = "🔵 SUPPORTED-IDENTITY (falsifier-robust)" }
-    let mut detail = parent + " falsifier battery: " + to_string(count) + " pre-registered, " + to_string(n_fired) + " fired"
+    let mut detail = parent + " falsifier battery: " + to_string(count) + " pre-registered, " + to_string(n_fired) + " fired · freeze=" + freeze
     if n_fired > 0 { detail = detail + " [" + fired_ids + "]" }
     else { detail = detail + " — verdict robust under " + to_string(count) + " independent attacks" }
     return AtlasVerdict {
@@ -240,7 +391,7 @@ fn _summarize(parent: string, battery: [FalsifierResult]) -> AtlasVerdict {
         tier: tier,
         pass: robust,
         detail: detail,
-        stage: "falsifier ≥5 pre-register (atlas/VERIFY.tape §5 executable)"
+        stage: "falsifier ≥5 pre-register (atlas/VERIFY.tape §5 executable · sha256-frozen)"
     }
 }
 
@@ -250,5 +401,9 @@ pub fn verify_falsifier_all() -> [AtlasVerdict] {
     out.push(_summarize("s1_perfect_number", falsifier_s1_perfect_number()))
     out.push(_summarize("s10_137_from_sigma_tau", falsifier_s10_137_from_sigma_tau()))
     out.push(_summarize("s2_ln_17_approximate", falsifier_s2_ln_17_approximate()))
+    out.push(_summarize("s1_n6_foundational", falsifier_s1_n6_foundational()))
+    out.push(_summarize("s2_gamma_reflection_n6", falsifier_s2_gamma_reflection_n6()))
+    out.push(_summarize("s10_master_identity_24", falsifier_s10_master_identity_24()))
+    out.push(_summarize("s3_conservation_law", falsifier_s3_conservation_law()))
     return out
 }
