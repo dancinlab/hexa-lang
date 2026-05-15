@@ -533,3 +533,70 @@
         Else DEFER.
   EOF
   recommendation = "PHASE 3.A is worth ~2 hours of careful instrumentation work for the large-source/regen win. PHASE 1's headline win (5.9× default, 8.41× avg across bench/*) already covers >95 % of user workflows. Sequence: ship PHASE 3.A when there's appetite for self-host iteration cycles, not blocking on daily-workflow optimization."
+
+# ─── 2026-05-15  PHASE 3.A — external profile (macOS `sample`) reframes target ─
+
+@A phase_3_a_sample := "hexa_v2 phase profile via macOS `sample` — parse owns 99.3%" :: measurement [d=2026-05-15 ok]
+  step = "Profile hexa_v2 externally (no source instrumentation, no rebuild) using macOS `sample` to capture call stacks during 4 s of hexa_v2 transpiling self/codegen_c2.hexa (334 KB SSOT, hexa_v2 share = 5.0 s = 63 % of total compile wall)."
+  method = "Start hexa_v2 in background, attach `sample $PID 4`, harvest stack frequencies."
+  top_level_distribution <<~EOF
+    Total samples in main thread: 3155
+      parse()                : 3134  (99.3 %)
+      other (lex, codegen)   :   21  (  0.7 %)
+  EOF
+  parse_internal_hotspots <<~EOF
+    Within parse():
+      hexa_val_heapify       : 2997 + 1895 + 530 + 306 = 5728 (multi-return-point fan-in)
+      __hexa_fn_arena_return :  548
+      p_peek_kind            :  173
+      _platform_strcmp       :  150  (libsystem — string comparisons)
+      DYLD-STUB strcmp       :  147
+      parse_expr             :  118
+      parse_pipe             :  113
+      parse_null_coal        :  112
+      parse_bit_ops          :  111
+      parse_comparison       :  111
+      parse_and              :  110
+  EOF
+  reframe <<~EOF
+    Hypothesis (PHASE 3 entry): "the 8 strict-lint stages of hexa_v2 are
+    candidates for parallel execution; instrumentation will reveal which stage
+    dominates." — REJECTED by measurement. The lint stages are not the
+    dominant cost. parse() is, at 99.3 %.
+
+    Within parse, the cost is dominated by `hexa_val_heapify` — the runtime
+    function that promotes stack-allocated HexaVal values to heap-backed
+    arena slots. This is called transitively from every parse_* level
+    (parse_expr → parse_pipe → parse_null_coal → parse_bit_ops → ...).
+    parse() is inherently sequential (token stream reading), so naive
+    parallelization is out — but heapify pressure has well-known levers
+    (caller-side stack-promotion, lifetime regions, arena bulk-rewind).
+
+    Conclusion: the original PHASE 3 plan ("parallelize 8 strict-lint
+    stages") is the wrong target. Real lever is parse-time HexaVal heap
+    pressure reduction — which is a runtime + codegen optimization, not
+    a threading change.
+  EOF
+  new_phase_3_plan <<~EOF
+    PHASE 3 (revised, opt-in for the regen / large-source path):
+      3.A done — external profile via `sample`. Result: parse + hexa_val_heapify.
+      3.B — heap-pressure reduction:
+        Option 1 (codegen-side):
+          Identify parse_* functions that heapify-then-immediately-drop. Add
+          arena-marker push/pop around them so values can stack-allocate
+          within a parse-expression scope.
+        Option 2 (runtime-side):
+          Make hexa_val_heapify a fast no-op when the value already lives in
+          the active arena page (currently re-heapifies into a new slot).
+        Option 3 (parser-rewrite):
+          Move parse_* return values to caller-owned out-params (eliminate
+          return-by-value HexaVal copies, source of many heapifies).
+      3.C — re-profile with `sample`; check if parse share drops below the
+            20 % threshold. If yes, PHASE 3 closed. If not, iterate.
+
+    Effort: 3.B options 1 / 2 = moderate (4–8 hr). Option 3 = large (~day).
+    Block: needs detailed reading of self/parser.hexa to identify heapify
+    hot spots; that work is out of scope for the current session's compile-
+    speed track. Filed for follow-up.
+  EOF
+  commit = "37f6a1d0 (gate measurement); this entry is the external-profile result on top"
