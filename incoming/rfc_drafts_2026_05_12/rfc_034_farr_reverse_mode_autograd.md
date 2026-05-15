@@ -85,9 +85,13 @@ acceptance test a deterministic gradient to check.
 
 ## Acceptance criteria (falsifier-ready)
 
-A `tmp_rfc034_smoke.hexa` must, via `hexa run` (no Python, no BLAS):
+A `tmp_rfc034_smoke.hexa` must, via the **compiled** path
+(`hexa build tmp_rfc034_smoke.hexa -o <bin> && ./<bin>`, no Python, no BLAS —
+the interpreter `hexa run` is being deprecated, so acceptance is gated on the
+native binary, matching anima `HEXAD/build_verify.sh`):
 
-1. **PARSE** — file parses cleanly (`hexa parse`).
+1. **BUILD+PARSE** — `hexa build` produces a native binary with no clang
+   redefinition errors (lib/entrypoint split if cross-file imports).
 2. **GRAD-EXACT** — for `ad_softmax_cross_entropy` on a fixed small logits
    farr + target, `ad_grad(logits)` equals `softmax(logits) − onehot(t)`
    element-wise within `1e-9` (matches anima B-D-4 sympy identity).
