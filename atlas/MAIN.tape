@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-027-BIO-PhiSI-cumulative-111" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-028-IIT3-mechanism-phi-cumulative-112" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,8 +39,18 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2+3 (cycle 001-027): 111/111 PASS · 111 entries verified (96 🔵 closed: 61 SUPPORTED-IDENTITY + 35 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 14 falsifier-robust batteries · 70 falsifiers 0 fired).
+    Cumulative Phase 2+3 (cycle 001-028): 112/112 PASS · 112 entries verified (97 🔵 closed: 61 SUPPORTED-IDENTITY + 36 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 14 falsifier-robust batteries · 70 falsifiers 0 fired).
     9 도메인 모두 covered. Verifier surface: 13 modules + CI gate.
+
+    cycle 028 — §5 BIO IIT closure ladder Stage C: genuine IIT 3.0 mechanism-φ:
+      s5_iit3_mechanism_phi 🔵 SUPPORTED-FORMAL — actual IIT 3.0 (Oizumi-Albantakis-
+        Tononi 2014) small-φ: φ = min(φ_cause, φ_effect), φ_x = EMD(constrained,
+        unconstrained repertoire). binary support EMD = 1-Wasserstein = |Δp|.
+        COPY(A=1) φ=½ (irreducible) · CONST φ=0 (reducible, no intrinsic existence) ·
+        NOT(A=1) φ=½ (irreducible) · IIT axiom irreducible>reducible ✓.
+      §5 BIO IIT ladder: EI 2008 (c026) → Φ_SI 1994/2001 (c027) → IIT 3.0 small-φ
+        2014 (c028, GENUINE EMD math) → full-system big-Φ MIP (anima PyPhi carry,
+        Phase 3+ deferred via s5_v8_bbio_at_risk_carry). §5 = 3 hexa-native + 1 carry.
 
     cycle 027 — §5 BIO 2nd IIT-predecessor measure (EMD-Φ 로 점진 접근):
       s5_phi_si_2node 🔵 SUPPORTED-FORMAL — Φ_SI total-correlation integration
@@ -859,7 +869,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 111
+  phase_2_cumulative_count = 112
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 

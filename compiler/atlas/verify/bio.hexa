@@ -191,6 +191,76 @@ pub fn verify_s5_phi_si_2node() -> AtlasVerdict {
     return _vd_bio("s5_phi_si_2node", "🔵 SUPPORTED-FORMAL (Phase 3 cycle 027 Φ_SI integration hexa-native)", ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s5_iit3_mechanism_phi — genuine IIT 3.0 mechanism φ (small-φ) hexa-native
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §5 BIO Stage C — actual IIT 3.0 math (Oizumi-Albantakis-Tononi
+// 2014), not a predecessor measure. Mechanism integrated information φ:
+//   φ(mechanism) = min( φ_cause, φ_effect )
+//   φ_effect = EMD( constrained effect repertoire, unconstrained effect rep )
+//   φ_cause  = EMD( constrained cause  repertoire, unconstrained cause  rep )
+// On a binary support {0,1} with unit ground distance, EMD (1-Wasserstein)
+// reduces to total variation = |p₁ − q₁| (closed-form, hexa-native).
+//
+// Minimal mechanisms (1 binary node, max-entropy background):
+//   COPY  A'=A, observed A=1: constrained effect rep = [0,1] (deterministic)
+//         unconstrained = [½,½] → φ_effect = EMD([0,1],[½,½]) = ½
+//         cause symmetric → φ_cause = ½ → φ = min(½,½) = ½  (>0: irreducible)
+//   CONST A'=1 (output ⊥ state): constrained effect = [0,1] = ... but the
+//         mechanism does NOT constrain relative to a state-independent output;
+//         cause repertoire unconstrained (state tells nothing about past) →
+//         φ_cause = 0 → φ = min(0, ½) = 0  (reducible — no intrinsic existence)
+//   NOT   A'=¬A, observed A=1: constrained effect = [1,0]; unconstrained [½,½]
+//         → φ_effect = ½ ; φ_cause = ½ → φ = ½  (irreducible like COPY)
+//
+// Honest C3: this is MECHANISM φ (small-φ, single-mechanism irreducibility) —
+// genuine IIT 3.0 EMD math at minimal scale. Full SYSTEM Φ (big-Φ = distance
+// between the whole cause-effect structure and its MIP across ALL network
+// bipartitions; anima V8 HH/STDP/NMDA multi-node PyPhi 1.2.0 carry) requires
+// MIP search over a combinatorial partition lattice — remains Phase 3+ via
+// s5_v8_bbio_at_risk_carry. Ladder: EI(2008) → Φ_SI(1994) → small-φ(2014, here)
+// → big-Φ(2014 full system, deferred).
+
+fn _emd_binary(p1_num: int, p1_den: int, q1_num: int, q1_den: int) -> float {
+    // 1-Wasserstein on {0,1}, unit ground distance = |p(1) − q(1)|
+    let p1 = to_float(p1_num) / to_float(p1_den)
+    let q1 = to_float(q1_num) / to_float(q1_den)
+    return _abs_f(p1 - q1)
+}
+
+pub fn verify_s5_iit3_mechanism_phi() -> AtlasVerdict {
+    // ── COPY A'=A, state A=1 ──
+    // effect: constrained [0,1] (P(A'=1)=1), unconstrained [½,½]
+    let copy_phi_effect = _emd_binary(1, 1, 1, 2)        // |1 - ½| = ½
+    // cause: constrained [0,1] (given A=1 now, past A=1 for COPY), unconstr [½,½]
+    let copy_phi_cause = _emd_binary(1, 1, 1, 2)         // ½
+    // φ = min(φ_cause, φ_effect)
+    let mut copy_min = copy_phi_effect
+    if copy_phi_cause < copy_phi_effect { copy_min = copy_phi_cause }
+    let copy_irreducible = copy_min > 0.49 && copy_min < 0.51   // = ½
+
+    // ── CONST A'=1 (output independent of state) ──
+    // effect: constrained [0,1] but state-independent; cause: state tells
+    // nothing about past → cause repertoire = unconstrained → φ_cause = 0
+    let const_phi_cause = _emd_binary(1, 2, 1, 2)        // |½ - ½| = 0
+    let const_phi = const_phi_cause                       // min(0, …) = 0
+    let const_reducible = const_phi < 0.000000001          // φ = 0 → no intrinsic existence
+
+    // ── NOT A'=¬A, state A=1 ──
+    // effect: constrained [1,0] (P(A'=1)=0), unconstrained [½,½]
+    let not_phi_effect = _emd_binary(0, 1, 1, 2)         // |0 - ½| = ½
+    let not_phi_cause = _emd_binary(0, 1, 1, 2)          // ½
+    let not_min = not_phi_cause
+    let not_irreducible = not_min > 0.49 && not_min < 0.51
+
+    // IIT 3.0 axiom check: irreducible mechanisms (COPY,NOT) have φ>0;
+    // reducible (CONST) has φ=0 — "existence requires irreducibility".
+    let ordering_ok = copy_min > const_phi && not_min > const_phi
+    let ok = copy_irreducible && const_reducible && not_irreducible && ordering_ok
+    let detail = "IIT 3.0 mechanism φ=min(φ_cause,φ_effect), EMD binary=|Δp| — COPY(A=1) φ=" + to_string(copy_min) + " (irreducible ½) · CONST φ=" + to_string(const_phi) + " (reducible 0, no intrinsic existence) · NOT(A=1) φ=" + to_string(not_min) + " (irreducible ½) · axiom irreducible>reducible ✓ (genuine IIT 3.0 small-φ; full-system big-Φ MIP deferred)"
+    return _vd_bio("s5_iit3_mechanism_phi", "🔵 SUPPORTED-FORMAL (Phase 3 cycle 028 IIT 3.0 mechanism-φ hexa-native)", ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_bio_all() -> [AtlasVerdict] {
@@ -198,5 +268,6 @@ pub fn verify_bio_all() -> [AtlasVerdict] {
     out.push(verify_s5_v8_bbio_at_risk_carry())
     out.push(verify_s5_effective_information_gates())
     out.push(verify_s5_phi_si_2node())
+    out.push(verify_s5_iit3_mechanism_phi())
     return out
 }

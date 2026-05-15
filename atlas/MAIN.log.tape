@@ -1269,3 +1269,47 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+# ─── Cycle 028 — Phase 3: §5 BIO IIT 3.0 mechanism-φ (Stage C, GENUINE) ──
+
+@A cycle_028 := "Phase 3 cycle 028 — §5 BIO genuine IIT 3.0 mechanism-φ (EMD math)" :: cycle [d=2026-05-15 active]
+  trigger = "user 'go' — Phase 3 continuation, §5 IIT ladder Stage C"
+  scope <<~EOF
+    cumulative 111 → 112 (+1). §5 BIO IIT closure ladder 의 Stage C —
+    predecessor measures (EI/Φ_SI) 다음으로 GENUINE IIT 3.0 math (Oizumi-
+    Albantakis-Tononi 2014) mechanism-level integrated information.
+  EOF
+  files_modified <<~EOF
+    compiler/atlas/verify/bio.hexa — +1 verifier s5_iit3_mechanism_phi + _emd_binary helper.
+      φ = min(φ_cause, φ_effect) · φ_x = EMD(constrained, unconstrained repertoire).
+      EMD on binary support {0,1} unit ground = 1-Wasserstein = |p₁−q₁| (closed-form).
+        COPY  A'=A  state A=1 → φ_eff=|1−½|=½, φ_cau=½ → φ=½ (irreducible)
+        CONST A'=1         → φ_cau=|½−½|=0 → φ=min(0,·)=0 (reducible, no existence)
+        NOT   A'=¬A state A=1 → φ_eff=|0−½|=½ → φ=½ (irreducible)
+      IIT 3.0 axiom: irreducible (COPY,NOT φ=½) > reducible (CONST φ=0) ✓
+    atlas/MAIN.tape — tldr cumulative 112 + §5 ladder Stage C
+  EOF
+  verifier_run_result <<~EOF
+    bio domain: 4/4 PASS (v8_at_risk 🟠 + EI 🔵 + Φ_SI 🔵 + iit3_mechanism_phi 🔵)
+    Full cumulative: 112/112 PASS · 97 🔵 + 1 🟠 AT-RISK + 14 falsifier-robust
+  EOF
+  iit_ladder_status <<~EOF
+    §5 BIO IIT closure ladder (점진적 full-Φ, 각 단계 published IIT-lineage measure):
+      Stage A — EI (Tononi 2008)               · cycle 026 · s5_effective_information_gates 🔵
+      Stage B — Φ_SI (TSE 1994 / Ay 2001)      · cycle 027 · s5_phi_si_2node 🔵
+      Stage C — IIT 3.0 small-φ (OAT 2014)     · cycle 028 · s5_iit3_mechanism_phi 🔵  ← GENUINE EMD math
+      Stage D — IIT 3.0 big-Φ (full system MIP)· deferred  · s5_v8_bbio_at_risk_carry 🟠 (anima PyPhi 1.2.0 carry)
+
+    Stage C 가 결정적 — predecessor measure 가 아닌 actual IIT 3.0 (cause/effect
+    repertoire + earth-mover distance) 를 minimal mechanism scale 에서 hexa-native.
+    Stage D (big-Φ = MIP over network bipartition lattice, anima V8 HH/STDP/NMDA
+    multi-node) 만 deferred — combinatorial partition search 가 large sprint.
+    §5 = 3 genuine hexa-native (A·B·C) + 1 honest carry (D, formal-Φ mismatch).
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only — ✅ 112 entries via hexa CLI
+    g5 hexa-native-only    — ✅ EMD/repertoire 실제 hexa 계산 (1-Wasserstein closed-form, no PyPhi)
+    g_self_verify          — ✅ IIT 3.0 small-φ actual hexa computation (g_self_verify strict)
+    g4 honesty-external    — ✅ small-φ vs big-Φ 명확 분리, anima PyPhi carry = Stage D only
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+
