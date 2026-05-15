@@ -733,3 +733,38 @@
       already partially in place (ROI-45); remaining sites need audit
     - hexa_array_push +324 (72 hits) — grow path malloc; hexa_strbuf_dup_n called via strdup (9 hits)
   EOF
+
+# ─── 2026-05-15  PHASE 2 (opt_dev_flags) gate measurement ─────────────
+
+@N phase2_dev_flags_bench := "dev-flag bundle marginal on PHASE 3.B baseline" :: measurement [d=2026-05-15 ok]
+  cmd = `HEXA_FAST_CFLAGS="-O0 [...]" bin/hexa-fast <bench>`
+  flag_bundle = "-O0 -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables"
+  results <<~EOF
+    bench/fib_rec.hexa         baseline 0.55 s   new 0.55 s   delta 0 %
+    bench/bubble_sort_n256.hexa baseline 0.563 s  new 0.55 s   delta ~2 %  (within noise)
+  EOF
+  conclusion = "below 5 % gate (COMPILE-SPEED.tape @action_queue abort_conditions). At -O0 the stack-protector + unwind-tables cost is negligible vs codegen wall."
+
+@D phase2_status := "PHASE 2 (opt_dev_flags) ABORTED per abort_conditions" :: roadmap [d=2026-05-15 superseded]
+  rule = "Do NOT promote opt_dev_flags to default — measured marginal < 5 % gate."
+  evidence = "[@phase2_dev_flags_bench]"
+  ~> "abort signal — keep architecture entry as `optional` only; revisit if -O0 ever changes default"
+
+# ─── 2026-05-15  PHASE 3.B step 2 (heapify entry short-circuit) — DEFERRED ───
+
+@N phase3b_step2_attempt := "hexa_val_heapify entry primitive short-circuit" :: measurement [d=2026-05-15 cancelled]
+  hypothesis = "Add the same primitive-tag fast-path inside hexa_val_heapify itself (before the switch) so recursive walks (VALSTRUCT 8-field, ARRAY items, MAP order_vals) and OTHER callers (array_push, closure env, return path) also skip dispatch."
+  patch <<~EOF
+    int __t = HX_TAG(v);
+    if (__t == TAG_INT || __t == TAG_FLOAT || __t == TAG_BOOL || __t == TAG_VOID) return v;
+    switch (__t) { ... }
+  EOF
+  bench_codegen_c2 <<~EOF
+    5-run user-time (PHASE 3.B step 1 baseline vs step 2):
+      step 1 (sorted): 3.67 · 3.98 · 4.87 · 5.36 · 7.25   trimmed-mean 4.74 s
+      step 2 (sorted): 3.92 · 4.52 · 4.55 · 4.98 · 7.91   trimmed-mean 4.68 s
+      delta: ~1 % — within measurement variance
+  EOF
+  outcome = "REVERTED — measure-first principle ([@measure_first] in COMPILE-SPEED.tape) rejects changes without measurable wins. Output byte-identical, no regression, but no detectable benefit either."
+  why_no_win = "step 1 already short-circuited the dominant primitive-return site (__hexa_fn_arena_return). Other heapify callers (recursive walks) hit primitive tags less often than the parser return path — and even when they do, the switch's `default: return v;` already returns immediately. The extra branch saves at most the indirect-jump cost, which clang -O2 may already have collapsed."
+  artifacts_cleaned = "/tmp/phase3b/hexa_v2.bak2.<ts>, hexa_v2.new2 — removed; runtime.c reverted to step-1 state"
