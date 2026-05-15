@@ -1363,6 +1363,14 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
     }
 
     if _is_arith_op(op) {
+        // String concatenation: `+` with a string operand yields a string
+        // (the legacy runtime hexa_add stringifies the other side). Without
+        // this, `dir + "/" + rel` and `"x=" + to_string(n)` fall through
+        // the numeric gate to the non-numeric mismatch emit and false-fire
+        // HX3001 `expected string, got string` (the 205 residual).
+        if op == "+" && (lt.kind == "string" || rt.kind == "string") {
+            return _types_t_string()
+        }
         // Both sides must be numeric AND of the same kind.
         if _types_is_numeric(lt) && _types_is_numeric(rt) {
             if !_types_equal(lt, rt) {
