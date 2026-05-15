@@ -897,10 +897,29 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx2 = _add_edge(ctx2, cur_block_id, arm_id)
             } else if pat.kind == "enum_path" {
                 let tag_v = _path_hash(pat.text)
-                let mut ctx3 = _fresh_local(ctx2, pat.typ, "tag_eq")
+                // enum_path is map-backed ({"__tag": hash, "__pN": …},
+                // 5008ac18). Extract the discriminant via the symmetric
+                // map-get (op="field" → hexa_map_get, 3-backend codegen)
+                // BEFORE the tag compare. Was: cmp scrut_op (the whole
+                // map) vs int → always false after the map-backed switch.
+                let mut ctx3 = _fresh_local(ctx2, pat.typ, "scrut_tag")
+                let tag_dst = ctx3.locals[len(ctx3.locals) - 1]
+                let mut tag_args: [Operand] = []
+                tag_args.push(scrut_op)
+                tag_args.push(_const_str_op("__tag"))
+                let tag_get = Stmt {
+                    kind: STMT_ASSIGN,
+                    dst: tag_dst,
+                    op: "field",
+                    args: tag_args,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx3 = _push_stmt(ctx3, tag_get)
+                ctx3 = _fresh_local(ctx3, pat.typ, "tag_eq")
                 let cmp_dst = ctx3.locals[len(ctx3.locals) - 1]
                 let mut cmp_args: [Operand] = []
-                cmp_args.push(scrut_op)
+                cmp_args.push(_local_op(tag_dst.id))
                 cmp_args.push(_const_int_op(tag_v))
                 let cmp = Stmt {
                     kind: STMT_BINOP,
