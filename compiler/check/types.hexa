@@ -1343,6 +1343,25 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
     let rt = _infer_expr(e.children[1], env, ctx, out)
     let op = e.text
 
+    // Unknown operand type — local-var typing is a v1 stub, so an Ident
+    // operand frequently infers an empty Type. _types_equal already
+    // encodes "either side unknown → tolerate"; the arith branch's
+    // _types_is_numeric gate does NOT (empty kind → not numeric →
+    // unconditional mismatch emit). Apply the same tolerance here, before
+    // the numeric gate, so `pos = pos + 1`-class lines don't false-fire
+    // HX3001 (this was the dominant stage-2 self-compile residual, ~1452).
+    if len(lt.kind) == 0 || len(rt.kind) == 0 {
+        // A comparison yields bool regardless of operand types — returning
+        // an operand type here mis-types `if c == '0'` (untyped param c
+        // infers empty) as char/i64/string, which then false-fires
+        // HX3001 `expected bool, got <X>` at the enclosing if/while
+        // condition (the bool/i64=405 + bool/string=304 + bool/char=132
+        // residual). Arith keeps the known operand's numeric type.
+        if _types_is_compare_op(op) { return _types_t_bool() }
+        if len(lt.kind) > 0 { return lt }
+        return rt
+    }
+
     if _is_arith_op(op) {
         // Both sides must be numeric AND of the same kind.
         if _types_is_numeric(lt) && _types_is_numeric(rt) {
