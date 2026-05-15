@@ -597,3 +597,27 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
   @> COMPILE-ONLY.tape
 
+@A loop_codegen_program_source_complete := "/loop drove the stage-2 codegen-completion track to SOURCE-COMPLETE (17 commits)" :: measurement [d=2026-05-16 ok]
+  ~> loop_closure_consolidation
+  reframe = "loop_closure_consolidation said the codegen-completion track was 'not loop-tick-sized'. REVISED by execution: decomposed into bounded, parse-verified, integrity-preserving per-tick increments, it WAS loop-tick-sized. 17 commits cd8e923e..a062e25f-range."
+  done <<~EOF
+    Composite codegen (single map-backed repr, internally consistent):
+      array_lit  ×3 backend  269bb61d c2a14a9f 8ad1ba67
+      array_lit  MIR lowering 191179a5
+      struct_lit MIR contract 2a790d85 ; ×3 backend a351b1c9 87f3c073 5dfc5e32
+      enum_path  → struct_lit reuse (map "__tag"/"__pN") 5008ac18
+      field-access MIR reshape + ×3 backend 0fe030dd f0a087ab abc36457
+      match enum-arm tag read via map-get 59a0f7c3  (producer⇄consumer closed)
+    Residual front-end classes (the 1803 HX2001 + HX3001/HX2002 breakdown):
+      operator-as-Ident ~1000 → a062e25f (integrated earlier)
+      O(n²) array-lit OOM     → 4833a388 + fe6ef751 + 12484b77 (grammar cap+truncate)
+      <callee> 594            → e59402e9 (builtin prelude 45→183, legacy mirror)
+      HX3001 994              → 30d2f741 (_types_assignable parity, no g3 weakening)
+      HX2002 993              → cd8e923e (flat-splice dissolves cross-file privacy)
+  EOF
+  verification = "Each commit: hexa parse clean (host-parser edit gate) + logic-parity with a shipped reference (legacy registry / concat idiom / return-type site). Front-end fixes additionally fast-probe-verified via host-interp on the new parser source (RSS 4 GB→1 MB, HX0013 fires, ArrayLit nodes). FULL end-to-end (stage-1 self-compile) verification empirically confirmed NOT cheaply reachable: host-interp cannot run the whole compiler/main.hexa driver (atlas merger + embedded.gen + hxc + checks too heavy — 90 s / 1 MB / no output / stuck). So full verify is rebuild-gated, period."
+  honest_state = "ALL known stage-2 front-end + codegen-constructor blockers are source-complete + parse-verified + commit-preserved. There is no further KNOWN source work — additional loop edits would be speculative (integrity line). The single remaining gate is the rebuild-gated full verify (stage-1 → stage-2 → stage-3 byte-equal), blocked solely by the Track-A monolithic-TU clang wall (the long-standing COMPILE-SPEED per-module-compile ask) OR a high-RAM env (reference_runpod_heavy_build). Whatever NEW residual a real run surfaces cannot be predicted statically — predicting/patching it blind would be fabrication."
+  next_gate = "Not a loop-tick. Secure a rebuild env (per-module compile to break the Track-A monolithic-TU wall — the real COMPILE-SPEED deliverable — OR a ≥64 GB box) → produce stage-1 → run self-compile → measure actual residual → iterate. /loop d47183c1 now genuinely a monitor (source work exhausted); CronDelete to stop."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
+  @> COMPILE-ONLY.tape
+
