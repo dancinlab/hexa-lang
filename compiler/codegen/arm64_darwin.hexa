@@ -740,6 +740,28 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
             return buf
         }
+        // field access (map-backed; mirror of x86_64 0fe030dd in
+        // AAPCS64: x0=base, x1=key const char*, bl hexa_map_get, x0).
+        // args = [base, "<name>"_str]; const_str key → .rodata label.
+        // Parity with shipped array_lit/struct_lit; rebuild-verification
+        // deferred (Track-A clang wall).
+        if s.op == "field" && len(s.args) >= 2 {
+            let dst = _arm64_op_reg(_arm64_dst_reg(rm, s.dst.id))
+            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x9")
+            let base = _arm64_op_resolve(s.args[0], st, rm, "x9")
+            buf = _arm64_op_rm(buf, s.args[1], st, rm, "x10")
+            let key = _arm64_op_resolve(s.args[1], st, rm, "x10")
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x0"), base,
+                             "field: map base"))
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), key,
+                             "field: key"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_get"),
+                             "field: hexa_map_get"))
+            buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"),
+                             "field: capture result"))
+            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
+            return buf
+        }
         if len(s.args) >= 1 {
             let mut src_scratch = "x9"
             if _arm_is_spilled(rm, s.dst.id) { src_scratch = "x10" }
