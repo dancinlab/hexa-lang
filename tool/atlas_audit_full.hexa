@@ -1,0 +1,111 @@
+// HEXA Native Compiler — Wave 1 doctrine audit (AOT full-corpus wrapper)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Mirror of compiler/atlas/audit_main.hexa but loads the FULL rodata
+// corpus (embedded.gen + real_limits.gen + materials_limits.gen +
+// n6_axes.gen) instead of the ~/.hx/data/atlas.overlay.n6 file.
+//
+// Rationale (per audit_main.hexa lines 17-28):
+//   `static_index` materializes 6,594+ nodes at module-load. Under the
+//   interpreter the parse+typecheck of 7,400+ deeply-nested struct
+//   literals hangs >10 min. The AOT path (hexa-fast / hexa build) emits
+//   the const arrays as rodata at zero runtime cost. This wrapper exists
+//   to validate that claim and unblock "Layer 4" full-corpus audit.
+//
+// Invocation (must be AOT — DO NOT `hexa run` this file):
+//   bin/hexa-fast run tool/atlas_audit_full.hexa external-entity
+//   bin/hexa-fast run tool/atlas_audit_full.hexa anchor
+//   bin/hexa-fast run tool/atlas_audit_full.hexa all
+//
+// Output: corpus-size line + the same AuditResult text as audit_main.
+
+use "compiler/atlas/parser"
+use "compiler/atlas/external_entity_audit"
+use "compiler/atlas/anchor_audit"
+use "compiler/atlas/static_index"
+use "compiler/atlas/real_limits.gen"
+use "compiler/atlas/materials_limits.gen"
+use "compiler/atlas/n6_axes.gen"
+use "self/stdlib/argv_skip"
+
+// _load_corpus_full — assemble [AtlasNode] from all four rodata sources.
+// Mirrors static_index::atlas_list() then appends the three add-on
+// arrays that static_index does NOT pull in.
+fn _load_corpus_full() -> array {
+    let mut out = atlas_list()  // 9 per-kind arrays from embedded.gen
+    let mut i = 0
+    while i < len(REAL_LIMITS) {
+        out.push(REAL_LIMITS[i])
+        i = i + 1
+    }
+    i = 0
+    while i < len(MATERIALS_LIMITS) {
+        out.push(MATERIALS_LIMITS[i])
+        i = i + 1
+    }
+    i = 0
+    while i < len(N6_AXES) {
+        out.push(N6_AXES[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn _run_external(corpus: array) -> i64 {
+    let r = audit_external_entities_in(corpus)
+    println(audit_result_to_text(r))
+    if r.pass { return 0 }
+    return 1
+}
+
+fn _run_anchor(corpus: array) -> i64 {
+    let r = audit_anchors_in(corpus)
+    println(anchor_audit_to_text(r))
+    if r.pass { return 0 }
+    return 1
+}
+
+fn _run_all(corpus: array) -> i64 {
+    let a = _run_external(corpus)
+    let b = _run_anchor(corpus)
+    if a != 0 { return a }
+    return b
+}
+
+fn _usage() {
+    println("usage: hexa-fast run tool/atlas_audit_full.hexa <verb>")
+    println("  verbs: external-entity | anchor | all")
+}
+
+fn _cli() -> [string] {
+    let raw = args()
+    let mut out: [string] = []
+    let mut i = skip_invocation_prefix(raw)
+    while i < len(raw) {
+        out.push(raw[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    let argv = _cli()
+    if len(argv) < 1 {
+        _usage()
+        exit(2)
+    }
+    let verb = to_string(argv[0])
+    let corpus = _load_corpus_full()
+    println("[atlas-audit-full] corpus size = " + to_string(len(corpus)) + " nodes")
+    let mut rc: i64 = 0
+    if verb == "external-entity" { rc = _run_external(corpus) }
+    else if verb == "anchor"     { rc = _run_anchor(corpus) }
+    else if verb == "all"        { rc = _run_all(corpus) }
+    else {
+        _usage()
+        rc = 2
+    }
+    exit(rc)
+}

@@ -43,7 +43,11 @@ fn _escape_string(s: string) -> string {
     return chunks.join("")
 }
 
-let _ZERO_GRADE = "GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }"
+// All 21 §1.2 rows are real-limit ground truth (g1 real-limits-first).
+// raw body already tags each row [11*] (verified-ceiling); the structured
+// GradeInfo now matches, so consumers filtering `grade.verified == true`
+// see the same set as text-pattern scans for [11*].
+let _VERIFIED_GRADE = "GradeInfo { value: 11, verified: true, breakthrough: false, hypothesis: false }"
 let _ZERO_EDGES = "EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }"
 
 fn _emit_node(kind: string, id: string, raw: string, source_file: string, source_line) -> string {
@@ -59,7 +63,7 @@ fn _emit_node(kind: string, id: string, raw: string, source_file: string, source
     parts.push("\", source_line: ")
     parts.push(to_string(source_line))
     parts.push(", grade: ")
-    parts.push(_ZERO_GRADE)
+    parts.push(_VERIFIED_GRADE)
     parts.push(", edges: ")
     parts.push(_ZERO_EDGES)
     parts.push(" }")

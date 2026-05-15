@@ -284,6 +284,24 @@ consciousness.hexa ─┼─ target esp32  → no_std Rust → flash      ✅ co
   └─────────────────────────────────────────────────────────────┘
 ```
 
+## 후속 작업 — Atlas Layer 4: full-corpus AOT audit (2026-05-15 추가)
+
+기존 Phase 1-16 외에 발견된 follow-up. atlas self-verification 세션(2026-05-15)에서 차단 확인. interpreter 는 7,398-노드 rodata(`compiler/atlas/embedded.gen.hexa`, 4.9 MB 단일 struct-literal)에 대해 hang(>10 min) — `compiler/atlas/audit_main.hexa:17-28` 문서화. AOT 경로로 우회하려면 다음 3개 compiler-internal 차단을 해결해야 함.
+
+| # | 작업 | 차단 원인 | 후보 해결책 |
+|---|------|----------|-------------|
+| 17-1 | flat module_loader streaming | `[flat] module_loader` 가 7,398-원소 단일 struct-literal 입력 시 4 GB RSS cap 초과; cap 해제하면 3 분+ hang. (`embedded.gen.hexa`) | (a) loader 를 array-element 단위로 stream, 또는 (b) `embedded.gen.hexa` 를 ≤100-노드 단위로 shard 분할 |
+| 17-2 | cross-module `pub let` rodata emit | single-file codegen 이 `use`d 모듈의 `pub let X = [...]` 본체를 emit 안 함 — `extern HexaVal X(...)` 전방선언만 발산하여 clang link 실패 | (a) 정적으로 도달 가능한 `pub let` 본체를 consumer C 로 emit, 또는 (b) per-module `.o` → link 경로 추가 |
+| 17-3 | `fn main(args)` ↔ `u_main()` arity | `fn main(args: array)` 선언 시 `hexa_v2` 가 `u_main()` 0-arg call-site emit. (`self/codegen_c2.hexa`) | call-site 발산을 `u_main(args)` 로 수정 |
+
+**관련 산출물 (이번 세션)**
+- `tool/atlas_audit_full.hexa` — 차단된 채로 commit. 17-1+17-2 해결 후 그대로 작동해야 함 (seed)
+- `compiler/atlas/aliases.gen.hexa` + `test/atlas_aliases_smoke.hexa` — Layer 3 alias 메커니즘 (Layer 4 와 무관, 작동)
+
+**우회**: 17번 phase 완료 전에는 interpreter 가 overlay corpus(현재 3 노드)에만 audit 가능 — atlas doctrine 의 실효 coverage 가 미진.
+
+---
+
 ## HEXA만의 불가침 영역
 
 1. **n=6 수학적 완전성**: 모든 설계 상수가 하나의 정리에서 유도 (σ·φ=n·τ ⟺ n=6)

@@ -1,0 +1,167 @@
+// compiler/atlas/aliases.gen.hexa — verified-root → natural-language alias map
+//
+// Atlas Layer 3.0 bootstrap: the 24 g3-compliant verified roots in
+// real_limits.gen.hexa + materials_limits.gen.hexa carry canonical ids of the
+// form `real_limits.<snake>` and `materials_limits.<snake>`. The 7,398 nodes
+// in embedded.gen.hexa never use those canonical ids — they cite the same
+// concepts under natural-language surface forms ("Shannon entropy",
+// "Planck length", "Bekenstein bound", "Hawking", "graphene", …) or under
+// older hyphenated ids (`HBIO-*`, `cycle-25-26-*`).
+//
+// This file holds an additive alias table mapping each verified root to its
+// surface-form siblings, so that cross-link audits / merger passes can bridge
+// the two naming conventions without rewriting either .gen.hexa source.
+//
+// ── Scope ──────────────────────────────────────────────────────────────────
+//   Only roots with ≥1 plausible alias hit in embedded.gen.hexa are listed.
+//   Engineering rows (ASML / ERCOT / Starship / TCEQ / CHIPS / BLS / USPTO)
+//   currently have 0 hits and are omitted. n6_axes.* (RIBOZYME / VIROCAPSID /
+//   …) are excluded because they are NO LONGER verified (g3 demotion).
+//
+// ── Confidence scale (0..100) ──────────────────────────────────────────────
+//   100  exact citation-text match (e.g. "Shannon 1948 — A Mathematical Theory")
+//    90  surface form quoted in cite/comment (e.g. "Bekenstein bound")
+//    80  unambiguous surname / short tag (e.g. "Bekenstein", "Hales")
+//    70  generic phrase that may collide with other concepts ("entropy",
+//        "Boltzmann" without "constant", "diamond" as material vs object)
+//
+// ── Status ─────────────────────────────────────────────────────────────────
+//   Generator-targeted but currently hand-authored.
+//   Regenerate via: tool/atlas_build_aliases.hexa (planned).
+
+use "compiler/atlas/parser"
+
+pub struct AtlasAlias {
+    canonical_id: string,
+    aliases: array,    // [string] — natural-language phrases or alt-ids
+    confidence: i64    // 0..100, 100 = exact citation, lower = phrase-match
+}
+
+@phase("parse_only")
+pub let ATLAS_ALIASES: [AtlasAlias] = [
+    // --- real_limits.* (Mathematical) ----------------------------------
+    AtlasAlias {
+        canonical_id: "real_limits.shannon_entropy",
+        aliases: ["Shannon entropy", "Shannon 1948", "Shannon"],
+        confidence: 90
+    },
+    AtlasAlias {
+        canonical_id: "real_limits.kolmogorov_complexity",
+        aliases: ["Kolmogorov complexity", "Kolmogorov 1965", "Kolmogorov"],
+        confidence: 90
+    },
+    AtlasAlias {
+        canonical_id: "real_limits.computability",
+        aliases: ["halting problem", "Turing 1936", "Rice 1953", "Turing"],
+        confidence: 90
+    },
+    AtlasAlias {
+        canonical_id: "real_limits.bekenstein_bound",
+        aliases: ["Bekenstein bound", "Bekenstein 1981", "Bekenstein"],
+        confidence: 90
+    },
+    AtlasAlias {
+        canonical_id: "real_limits.statistical_power",
+        aliases: ["Cohen 1988", "statistical power"],
+        confidence: 100
+    },
+    AtlasAlias {
+        canonical_id: "real_limits.pac_learning_bound",
+        aliases: ["PAC learning", "VC dimension", "Vapnik-Chervonenkis"],
+        confidence: 80
+    },
+
+    // --- real_limits.* (Physical) --------------------------------------
+    AtlasAlias {
+        canonical_id: "real_limits.speed_of_light",
+        aliases: ["speed of light", "c (CODATA)", "CODATA 2018 c"],
+        confidence: 90
+    },
+    AtlasAlias {
+        canonical_id: "real_limits.planck_constant",
+        aliases: ["Planck constant", "hbar", "reduced Planck", "Planck"],
+        confidence: 80
+    },
+    AtlasAlias {
+        canonical_id: "real_limits.boltzmann_constant",
+        aliases: ["Boltzmann constant", "Landauer", "k_B", "Boltzmann"],
+        confidence: 80
+    },
+    AtlasAlias {
+        canonical_id: "real_limits.stefan_boltzmann",
+        aliases: ["Stefan-Boltzmann", "Stefan 1879", "Boltzmann 1884"],
+        confidence: 90
+    },
+    AtlasAlias {
+        canonical_id: "real_limits.carnot_efficiency",
+        aliases: ["Carnot", "Carnot efficiency", "Carnot 1824"],
+        confidence: 90
+    },
+    AtlasAlias {
+        canonical_id: "real_limits.bekenstein_hawking",
+        aliases: ["Bekenstein-Hawking", "Hawking 1974", "black hole entropy", "holographic bound"],
+        confidence: 90
+    },
+
+    // --- materials_limits.* --------------------------------------------
+    AtlasAlias {
+        canonical_id: "materials_limits.melting_point_tahfc_alloy",
+        aliases: ["Ta4HfC5", "tantalum hafnium carbide", "Cedillos-Barraza 2016", "Hafnium"],
+        confidence: 80
+    },
+    AtlasAlias {
+        canonical_id: "materials_limits.c12_diamond_thermal_k",
+        aliases: ["isotopically pure diamond", "12C diamond", "thermal conductivity", "diamond"],
+        confidence: 70
+    },
+    AtlasAlias {
+        canonical_id: "materials_limits.hales_packing",
+        aliases: ["Hales packing", "Kepler conjecture", "Hales 2017", "packing fraction"],
+        confidence: 90
+    }
+]
+
+// --- accessors --------------------------------------------------------------
+
+pub fn atlas_aliases() -> [AtlasAlias] { return ATLAS_ALIASES }
+
+pub fn atlas_aliases_count() -> i64 { return len(ATLAS_ALIASES) }
+
+// aliases_for — return the alias list registered for a canonical root id,
+// or [] if no entry exists. Linear scan over ATLAS_ALIASES.
+pub fn aliases_for(canonical_id: string) -> [string] {
+    let table = ATLAS_ALIASES
+    let n = len(table)
+    let mut i = 0
+    while i < n {
+        let entry = table[i]
+        if entry.canonical_id == canonical_id {
+            return entry.aliases
+        }
+        i = i + 1
+    }
+    return []
+}
+
+// canonical_for — reverse lookup. Given a surface-form alias string, return
+// the canonical id that owns it (case-sensitive exact match against any of
+// the entries in `aliases`). Returns "" when no entry claims the alias.
+pub fn canonical_for(alias: string) -> string {
+    let table = ATLAS_ALIASES
+    let n = len(table)
+    let mut i = 0
+    while i < n {
+        let entry = table[i]
+        let als = entry.aliases
+        let m = len(als)
+        let mut j = 0
+        while j < m {
+            if als[j] == alias {
+                return entry.canonical_id
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
