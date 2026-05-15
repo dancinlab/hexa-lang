@@ -798,15 +798,32 @@ fn _types_env_define_attr(env: TypeEnv, name: string, def: DefId, t: Type,
     // A3 — keep the hash index in lockstep with `entries`. If the env was
     // hand-built without a primed bucket array (legacy test path), seed
     // it once on first define so subsequent operations stay O(1) avg.
-    let mut buckets = env.buckets
-    if len(buckets) == 0 {
+    //
+    // Stage1 punch list — bucket-aliasing fix: hexa_struct_pack_map
+    // shallow-clones array fields (entries, buckets) per ROI #148 to
+    // break sibling-struct aliasing, BUT the inner [i64] bucket arrays
+    // remain shared across all derived envs. If we mutated env.buckets[h]
+    // in place, every env sharing that inner would see the new index —
+    // and a derived env with a SMALLER entries snapshot would then OOB
+    // when looking up names hashing to h. Fix: build a fresh outer
+    // buckets and a fresh inner for the affected slot, leaving
+    // env.buckets untouched so old envs remain self-consistent.
+    let mut buckets: [[i64]] = []
+    if len(env.buckets) == 0 {
+        // Hand-built env without buckets — seed fresh from entries.
         buckets = _types_empty_buckets()
-        // Re-bucket any pre-existing entries so the index stays consistent.
         let mut k = 0
         while k < len(env.entries) {
             let hk = _types_hash_name(env.entries[k].name)
-            buckets[hk] = buckets[hk].push(k)
+            buckets[hk] = buckets[hk].push(k)  // safe: buckets is fresh
             k = k + 1
+        }
+    } else {
+        // Clone outer (shallow per slot — inner [i64] are read-only here).
+        let mut bi = 0
+        while bi < len(env.buckets) {
+            buckets.push(env.buckets[bi])
+            bi = bi + 1
         }
     }
     let mut entries = env.entries
@@ -819,7 +836,15 @@ fn _types_env_define_attr(env: TypeEnv, name: string, def: DefId, t: Type,
         module_file: module_file
     })
     let h = _types_hash_name(name)
-    buckets[h] = buckets[h].push(new_idx)
+    // Build a FRESH inner for slot h — don't mutate env.buckets[h] inner.
+    let mut new_inner: [i64] = []
+    let mut bj = 0
+    while bj < len(buckets[h]) {
+        new_inner.push(buckets[h][bj])
+        bj = bj + 1
+    }
+    new_inner.push(new_idx)
+    buckets[h] = new_inner  // safe: buckets is our fresh outer
     return TypeEnv { entries: entries, buckets: buckets }
 }
 
