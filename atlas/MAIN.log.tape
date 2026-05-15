@@ -1313,3 +1313,50 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+# ─── Cycle 029 — Phase 3: §5 BIO IIT 3.0 big-Φ (Stage D minimal, LADDER COMPLETE) ─
+
+@A cycle_029 := "Phase 3 cycle 029 — §5 BIO genuine IIT 3.0 big-Φ (Stage D minimal scale)" :: cycle [d=2026-05-15 active]
+  trigger = "user 'go' — Phase 3 continuation, §5 IIT ladder Stage D"
+  scope <<~EOF
+    cumulative 112 → 113 (+1). §5 BIO IIT closure ladder 의 Stage D —
+    system-level big-Φ. n=2 single-bipartition MIP (combinatorial explosion
+    n≥3 deferred). ladder A·B·C·D 가 minimal scale 에서 genuine hexa-native 완성.
+  EOF
+  files_modified <<~EOF
+    compiler/atlas/verify/bio.hexa — +1 verifier s5_iit3_system_bigphi + _hamming4 +
+      _emd_delta_uniform4 helpers. big-Φ = EMD(whole effect rep, MIP-cut rep),
+      MIP = {A}|{B} (only bipartition at n=2). Hamming-ground 1-Wasserstein:
+        IDENTITY A'=A,B'=B from (1,0): whole=δ_{10}, cut=δ_{10} → Φ=0 (reducible)
+        SWAP A'=B,B'=A from (1,0): whole=δ_{01}, cut=uniform → Φ=mean-Ham(01)=1.0
+        n=2 hypercube mean-Hamming from any vertex = (0+1+1+2)/4 = 1.0 ✓
+    atlas/MAIN.tape — tldr cumulative 113 + ladder COMPLETE note
+  EOF
+  verifier_run_result <<~EOF
+    bio domain: 5/5 PASS (v8_at_risk 🟠 + EI 🔵 + Φ_SI 🔵 + iit3_mech_φ 🔵 + iit3_bigΦ 🔵)
+    Full cumulative: 113/113 PASS · 98 🔵 + 1 🟠 AT-RISK + 14 falsifier-robust
+      (full-suite run: HEXA_MEM_UNLIMITED=1 — atlas embed 대형, interp memcap 4096MB 초과)
+  EOF
+  iit_ladder_complete <<~EOF
+    §5 BIO IIT closure ladder COMPLETE at minimal scale (each genuine hexa-native):
+      Stage A — EI (Tononi 2008)                · c026 · s5_effective_information_gates 🔵
+      Stage B — Φ_SI (TSE 1994 / Ay 2001)       · c027 · s5_phi_si_2node 🔵
+      Stage C — IIT 3.0 small-φ (OAT 2014)      · c028 · s5_iit3_mechanism_phi 🔵
+      Stage D — IIT 3.0 big-Φ (OAT 2014, n=2)   · c029 · s5_iit3_system_bigphi 🔵
+      ───────────────────────────────────────────────────────────────────────
+      Carry  — big-Φ multi-node (anima V8 HH/STDP/NMDA PyPhi 1.2.0, MIP over
+               exponential partition lattice) · s5_v8_bbio_at_risk_carry 🟠
+
+    §5 BIO 가 anima pure-carry 에서 4 genuine hexa-native IIT measures (EI →
+    Φ_SI → small-φ → big-Φ minimal) + 1 honest carry 로 전환 완료. 남은 deferred
+    = multi-node MIP combinatorial search (n≥3 partition lattice) — genuinely
+    large sprint, anima 가 PyPhi 1.2.0 (Python) 으로 수행한 영역. g_self_verify
+    strict 준수 (모든 stage actual hexa computation, anima 결과 cite 아님).
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only — ✅ 113 entries via hexa CLI
+    g5 hexa-native-only    — ✅ big-Φ EMD/Hamming 실제 hexa 계산 (no PyPhi)
+    g_self_verify          — ✅ IIT 3.0 big-Φ (n=2) actual hexa computation
+    g4 honesty-external    — ✅ minimal-scale vs multi-node MIP 명확 분리 (anima carry = multi-node only)
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+
