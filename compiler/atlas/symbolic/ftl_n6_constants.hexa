@@ -1,0 +1,168 @@
+// compiler/atlas/symbolic/ftl_n6_constants.hexa — n=6 constants matcher
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of archive-TECS-L .shared/calc/ftl_n6_constants.py
+// (TECS-L absorption, git commit ecf0462b). Builds the deterministic n=6
+// arithmetic-function value table (σ,τ,φ,sopfr,rad,μ,ψ,J2 + closed-form
+// ratios / products / π / e combinations), then grades how well any target
+// constant matches the closest n=6 expression on a fixed % -error ladder:
+//
+//   EXACT       err == 0
+//   STRONG      err < 0.1 %
+//   APPROXIMATE err < 2 %
+//   WEAK        err < 5 %
+//   NO MATCH    err >= 5 %  (an honest, expected outcome)
+//
+// The Monte-Carlo Texas-sharpshooter from the Python source is intentionally
+// NOT ported here (it is the canonical-extract backlog item #3); the
+// verdict-gating core is the deterministic grade ladder + best-match search.
+// Zero external dependency (g5 hexa-native-only).
+//
+// Cross-link: atlas/inbox/_tecsl_calculator_port_manifest.md §C ·
+// stdlib/core/math/float.hexa (pi/e via inline constants).
+
+// ── n=6 expression table ────────────────────────────────────────────────
+
+pub struct N6Expr {
+    name: string,
+    value: float
+}
+
+fn _pi() -> float { return 3.141592653589793 }
+fn _e()  -> float { return 2.718281828459045 }
+
+// Faithful subset of N6_VALUES (the entries reachable without an unbounded
+// factorial blowup; sigma! = 479001600 is kept as a plain literal).
+pub fn n6_expr_table() -> [N6Expr] {
+    let pi = _pi()
+    let e = _e()
+    let mut t: [N6Expr] = []
+    // primary arithmetic functions of n=6
+    t.push(N6Expr { name: "n",        value: 6.0 })
+    t.push(N6Expr { name: "sigma",    value: 12.0 })
+    t.push(N6Expr { name: "tau",      value: 4.0 })
+    t.push(N6Expr { name: "phi",      value: 2.0 })
+    t.push(N6Expr { name: "sopfr",    value: 5.0 })
+    t.push(N6Expr { name: "rad",      value: 6.0 })
+    t.push(N6Expr { name: "lambda",   value: 2.0 })
+    t.push(N6Expr { name: "mu",       value: 1.0 })
+    t.push(N6Expr { name: "psi",      value: 12.0 })
+    t.push(N6Expr { name: "J2",       value: 24.0 })
+    // simple ratios / products
+    t.push(N6Expr { name: "sigma/tau",  value: 3.0 })
+    t.push(N6Expr { name: "sigma/phi",  value: 6.0 })
+    t.push(N6Expr { name: "n/phi",      value: 3.0 })
+    t.push(N6Expr { name: "n/tau",      value: 1.5 })
+    t.push(N6Expr { name: "tau+sopfr",  value: 9.0 })
+    t.push(N6Expr { name: "n^2",        value: 36.0 })
+    t.push(N6Expr { name: "sigma*phi",  value: 24.0 })
+    t.push(N6Expr { name: "sigma+mu",   value: 13.0 })
+    t.push(N6Expr { name: "n+1",        value: 7.0 })
+    t.push(N6Expr { name: "n-1",        value: 5.0 })
+    t.push(N6Expr { name: "n!",         value: 720.0 })
+    t.push(N6Expr { name: "sigma!",     value: 479001600.0 })
+    t.push(N6Expr { name: "tau!",       value: 24.0 })
+    t.push(N6Expr { name: "n*sigma",    value: 72.0 })
+    t.push(N6Expr { name: "sigma+n",    value: 18.0 })
+    t.push(N6Expr { name: "sigma-n",    value: 6.0 })
+    t.push(N6Expr { name: "tau*phi",    value: 8.0 })
+    t.push(N6Expr { name: "tau*sopfr",  value: 20.0 })
+    t.push(N6Expr { name: "sigma*sopfr",value: 60.0 })
+    t.push(N6Expr { name: "n*sopfr",    value: 30.0 })
+    t.push(N6Expr { name: "n*tau",      value: 24.0 })
+    t.push(N6Expr { name: "sigma^2",    value: 144.0 })
+    t.push(N6Expr { name: "n^3",        value: 216.0 })
+    t.push(N6Expr { name: "phi^2",      value: 4.0 })
+    // transcendental combinations
+    t.push(N6Expr { name: "2*pi",   value: 2.0 * pi })
+    t.push(N6Expr { name: "4*pi",   value: 4.0 * pi })
+    t.push(N6Expr { name: "8*pi",   value: 8.0 * pi })
+    t.push(N6Expr { name: "pi",     value: pi })
+    t.push(N6Expr { name: "pi^2",   value: pi * pi })
+    t.push(N6Expr { name: "n*pi",   value: 6.0 * pi })
+    t.push(N6Expr { name: "sigma*pi", value: 12.0 * pi })
+    t.push(N6Expr { name: "n*pi^2", value: 6.0 * pi * pi })
+    t.push(N6Expr { name: "2^n",    value: 64.0 })
+    t.push(N6Expr { name: "3^n",    value: 729.0 })
+    t.push(N6Expr { name: "e",      value: e })
+    t.push(N6Expr { name: "1/e",    value: 1.0 / e })
+    t.push(N6Expr { name: "ln2",    value: log(2.0) })
+    t.push(N6Expr { name: "ln3",    value: log(3.0) })
+    t.push(N6Expr { name: "ln6",    value: log(6.0) })
+    t.push(N6Expr { name: "n*e",    value: 6.0 * e })
+    t.push(N6Expr { name: "sigma*e",value: 12.0 * e })
+    // project-known expressions
+    t.push(N6Expr { name: "6*pi^5",      value: 6.0 * pi * pi * pi * pi * pi })
+    t.push(N6Expr { name: "3/(sigma+mu)",value: 3.0 / 13.0 })
+    t.push(N6Expr { name: "sigma*n+mu",  value: 73.0 })
+    t.push(N6Expr { name: "(n+1)/sigma", value: 7.0 / 12.0 })
+    t.push(N6Expr { name: "n^3/sopfr",   value: 216.0 / 5.0 })
+    t.push(N6Expr { name: "sigma/n",     value: 2.0 })
+    t.push(N6Expr { name: "n/sigma",     value: 0.5 })
+    t.push(N6Expr { name: "sopfr/n",     value: 5.0 / 6.0 })
+    t.push(N6Expr { name: "1/n",         value: 1.0 / 6.0 })
+    t.push(N6Expr { name: "1/sigma",     value: 1.0 / 12.0 })
+    t.push(N6Expr { name: "1/tau",       value: 0.25 })
+    return t
+}
+
+fn _absf(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+// grade ladder (verbatim thresholds from source grade_match()).
+pub fn grade_match(error_pct: float) -> string {
+    if error_pct == 0.0 { return "EXACT" }
+    if error_pct < 0.1  { return "STRONG" }
+    if error_pct < 2.0  { return "APPROXIMATE" }
+    if error_pct < 5.0  { return "WEAK" }
+    return "NO MATCH"
+}
+
+pub struct N6Match {
+    expr: string,
+    expr_value: float,
+    error_pct: float,
+    grade: string
+}
+
+// find_best_match: closest n=6 expression to `value` by % relative error.
+pub fn n6_find_best_match(value: float) -> N6Match {
+    let t = n6_expr_table()
+    let mut best_err = 1.0e30
+    let mut best_name = "NONE"
+    let mut best_val = 0.0
+    let mut i = 0
+    while i < len(t) {
+        let v = t[i].value
+        if v != 0.0 && value != 0.0 {
+            let err = _absf(value - v) / _absf(value) * 100.0
+            if err < best_err {
+                best_err = err
+                best_name = t[i].name
+                best_val = v
+            }
+        }
+        i = i + 1
+    }
+    return N6Match {
+        expr: best_name,
+        expr_value: best_val,
+        error_pct: best_err,
+        grade: grade_match(best_err)
+    }
+}
+
+// verify_known: % error of a constant vs an asserted expected expression.
+pub fn n6_verify_known(value: float, expected: float) -> N6Match {
+    let err = _absf(value - expected) / _absf(value) * 100.0
+    return N6Match {
+        expr: "expected",
+        expr_value: expected,
+        error_pct: err,
+        grade: grade_match(err)
+    }
+}
