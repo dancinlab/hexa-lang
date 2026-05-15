@@ -290,6 +290,25 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
             }
             return buf
         }
+        // field access (map-backed; mirror of x86_64 0fe030dd / arm64
+        // f0a087ab in Thumb EABI: r0=base, r1=key const char*, bl
+        // hexa_map_get, r0→dst). args = [base, "<name>"_str]. field-
+        // access codegen now complete on all three backends. Parity
+        // with shipped array_lit/struct_lit; rebuild-verification
+        // deferred (Track-A clang wall).
+        if s.op == "field" && len(s.args) >= 2 {
+            let base = _thumb_op_for_operand_st(s.args[0], st)
+            let key = _thumb_op_for_operand_st(s.args[1], st)
+            buf.push(_thumb_instr2("mov", _thumb_op_reg("r0"), base,
+                             "field: map base"))
+            buf.push(_thumb_instr2("mov", _thumb_op_reg("r1"), key,
+                             "field: key"))
+            buf.push(_thumb_instr1("bl", _thumb_op_label("hexa_map_get"),
+                             "field: hexa_map_get"))
+            buf.push(_thumb_instr2("mov", dst, _thumb_op_reg("r0"),
+                             "field: capture result"))
+            return buf
+        }
         // mov dst, src — Thumb-2 accepts both reg and imm12 forms.
         if len(s.args) >= 1 {
             let src = _thumb_op_for_operand_st(s.args[0], st)
