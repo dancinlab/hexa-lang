@@ -186,6 +186,44 @@
   fact = "Stage-0 interpreter 21-min wall-clock bottleneck BYPASSED via path-B (hexa_v2 transpile + clang). No algorithmic fix needed for interp itself — retired by displacement."
   ~> open_wallclock
 
+@N stage1_oob_fixed := "type-env bucket-aliasing OOB" :: status [d=2026-05-15 ok]
+  fact = "Stage-1 binary previously panicked `index N out of bounds (len N)` whenever a fn body referenced a top-level let across a fn-param hash collision (e.g. `_MAX_FILE_BYTES` lookup inside `load_atlas` after `_insert_first_wins`'s `node` param hashed to bucket 2). Backtrace pinned to `_types_lookup_def` at `env.entries[bucket[i]]`."
+  root_cause <<~EOF
+    self/runtime.c::hexa_struct_pack_map shallow-clones array struct fields
+    (ROI #148, anti sibling-struct aliasing) — but only the OUTER arrays.
+    The INNER [i64] bucket arrays inside TypeEnv.buckets stayed shared by
+    reference across every derived env. _types_env_define_attr did
+    `buckets[h] = buckets[h].push(new_idx)` which mutated the shared inner;
+    new_idx was computed against the LOCAL entries length, but a derived
+    env with a SMALLER entries snapshot then OOB'd on the leaked index.
+  EOF
+  fix = "compiler/check/types.hexa::_types_env_define_attr — clone outer buckets, build a fresh inner for the affected slot, leave env.buckets untouched (commit 6e608046)"
+  diagnostic_aid = "self/runtime.c — opt-in HEXA_OOB_TRACE env var prints backtrace before throw (gated, zero overhead)"
+  verification = "merger.hexa head -190 stage-1 run: index 14 OOB → 84 normal diagnostics. All previously-failing files (overlay/builder/units/citation/bind) now produce diagnostics instead of crashing."
+
+@N stage1_builtin_prelude := "host-runtime builtins pre-registered" :: status [d=2026-05-15 ok]
+  fact = "compiler/check/bind.hexa registers ~40 host intrinsics (println/exec/env/to_string/len/file_*/sha256_*/etc.) in the module-level BindScope at the top of `bind()`."
+  why = "Without this pre-pass, every builtin call surfaced as HX2001 (unknown callee) — stage 2 self-compile flooded thousands of false positives that masked real type errors and made gating impossible."
+  fix = "commit 7da77859 — _bind_builtin_names() flat list, O(N) prelude registration"
+  delta = "stage-2 self-compile: 4548 → 3799 diagnostics (~750 spurious HX2001 eliminated)"
+
+@N stage2_partial := "stage 2 self-compile: typecheck-only PASS, gate fails" :: status [d=2026-05-15 partial]
+  fact = "stage 1 binary (with bucket-OOB + builtin-prelude fixes) successfully runs the full pipeline through type_check on compiler/main.hexa — no more compiler-internal crashes."
+  remaining_diags = "3799 total: HX2001 (1800 unknown ident, mostly methods misclassified as free) · HX3001 (994 type-assignable mismatch) · HX2002 (991 private-name cross-module) · HX3002 (9 arity) · HX4001 (4 ℝ-narrowing warning)"
+  blockers <<~EOF
+    HX2002 (991): cross-file pub/private resolution gap — many imports of
+      pub items still surface as private-from-foreign-module. Likely
+      `_collect_item_types` doesn't propagate is_pub/owning_file correctly
+      through the splice path.
+    HX2001 (1800): residual after builtin prelude — likely method calls
+      where receiver type isn't inferred (so codegen falls into Ident
+      bucket instead of Field). Needs receiver-type plumbing.
+    HX3001 (994): _types_assignable too strict on numeric coercions and
+      enum-variant payloads.
+  EOF
+  next_step = "Either: (a) tighten the typechecker passes, OR (b) add a `--ignore-errors` bootstrap-only flag that lets codegen proceed despite type diagnostics, gating bootstrap fixed-point separately from typechecker maturity."
+  unblocks_for = "stage 3 byte-equal fixed point (currently can't run because stage 2 binary not produced)"
+
 # ─── §5 Critical path to E2 ──────────────────────────────────────────
 
 @D critical_path := "e2-critical-path-d-2026-05-14" :: plan [active]
