@@ -67,6 +67,11 @@ use "runtime/range_pure"
 use "runtime/ipv4_pure"
 use "runtime/arena_pure"
 
+// stdlib primitives consumed by pure runtime modules (e.g. format_pure +
+// string_pure use strbuf to avoid O(n²) `s = s + chunk` accumulator traps —
+// see incoming/patches/string-concat-in-unbounded-loop-quadratic-rss.md).
+use "stdlib/strbuf"
+
 // ── T3 Phase A: declarative @invariant DSL (replaces shell-grep above) ──
 // 위 주석형 invariant 는 R1 (보존 우선) 으로 그대로 유지하되, 본 phase 에서는
 // AST 기반 checker 가 인식하는 정식 InvariantDecl 노드로 I1 을 병기한다.

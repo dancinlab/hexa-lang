@@ -101,12 +101,17 @@ pub fn format_pure(fmt, arg) {
 // Multi-arg format with {} and {:.N} placeholders. Matches hexa_format_n
 // (runtime.c:2736). Unmatched placeholders (args list shorter than
 // placeholder count) are emitted verbatim.
+//
+// Uses stdlib/strbuf to avoid the O(n²) `out = out + chunk` arena trap
+// (see incoming/patches/string-concat-in-unbounded-loop-quadratic-rss.md).
+// strbuf is available because hexa_full.hexa imports stdlib/strbuf into
+// the flattened namespace before this module.
 pub fn format_n_pure(fmt, args) {
     if type_of(fmt) != "string" { return fmt }
     if type_of(args) != "array"  { return fmt }
     let n = len(fmt)
     let argc = len(args)
-    let mut out = ""
+    let out = strbuf_new()
     let mut i = 0
     let mut ai = 0
     while i < n {
@@ -116,7 +121,7 @@ pub fn format_n_pure(fmt, args) {
             let close_rel = fmt.substring(i, n).index_of("}")
             if close_rel < 0 {
                 // No close → literal
-                out = out + c
+                strbuf_push(out, c)
                 i = i + 1
             } else {
                 let close = i + close_rel
@@ -135,16 +140,16 @@ pub fn format_n_pure(fmt, args) {
                         }
                         pi = pi + 1
                     }
-                    out = out + format_float_prec(arg, prec)
+                    strbuf_push(out, format_float_prec(arg, prec))
                 } else {
-                    out = out + to_string(arg)
+                    strbuf_push(out, to_string(arg))
                 }
                 i = close + 1
             }
         } else {
-            out = out + c
+            strbuf_push(out, c)
             i = i + 1
         }
     }
-    out
+    strbuf_finish(out)
 }
