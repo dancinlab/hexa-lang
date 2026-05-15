@@ -154,3 +154,53 @@
   fact = "self/runtime.c was edited locally to drop `static` on hexa_add_slow (smoke unblock), but NOT committed in this session — pre-existing unrelated unstaged changes in runtime.c (e.g. hexa_array_shift addition) prevented a clean isolated commit."
   proposal = "next session: bundle PHASE 1.2.A de-staticization sweep as ONE focused commit on runtime.c, separate from any pre-existing scratch work."
   risk = "without the patch, self/runtime.h-built user.c will not link. Header file ships with a status comment naming the dependency."
+
+# ─── 2026-05-15  PHASE 1.2.A — runtime.h compile-coverage growth ─────
+
+@A phase_1_2_a_grow := "runtime.h iterative growth to compile-cover hexa_cc.c" :: measurement [d=2026-05-15 ok]
+  step = "[@action_queue] 1.2 expansion — keep adding extern decls + cascade types to runtime.h until both tiny2.c AND hexa_cc.c (21 763 LOC self-host compiler) clang-compile-clean against it"
+  method <<~EOF
+    1. sed `#include "runtime.c"` → `#include "runtime.h"` in target user.c
+    2. clang -O0 -c → collect undeclared-identifier errors
+    3. grep each missing identifier in runtime.c for its signature
+    4. add extern decl (or macro definition if it's a macro) to runtime.h
+    5. loop until zero compile errors
+  EOF
+  iterations = 6
+  starting_surface = "9 fn decls + minimal HexaVal types (~50 lines)"
+  ending_surface = "≈ 50 fn decls + 5 macros + 5 type defs + 1 hot-path macro + extern globals (246 lines)"
+
+@N phase_1_2_a_bench := "compile bench across program sizes" :: measurement [d=2026-05-15 ok]
+  tiny_program <<~EOF
+    test_tiny2.hexa (10-line src → 35-line user.c)
+      baseline (#include runtime.c):  real 1.07 s · user 0.62 s
+      new (runtime.h + runtime.o):    real 0.13 s · user 0.08 s
+      speedup:                        ≈ 7.8× user / 8.2× wall
+  EOF
+  big_program <<~EOF
+    self/native/hexa_cc.c (21 763-line user.c — the self-host compiler)
+      baseline (#include runtime.c):  real 7.95 s · user 5.07 s
+      new (runtime.h, compile-only):  real 6.70 s · user 4.27 s
+      speedup:                        ≈ 1.19× user / 1.19× wall
+  EOF
+  interpretation <<~EOF
+    Speedup factor depends on (user-code LOC) / (runtime.c LOC) ratio:
+      tiny program (35 LOC) ÷ runtime.c (12 K LOC) ≈ 0.003   → 7.8× win (runtime.c was 99% of cost)
+      big program (21 K LOC) ÷ runtime.c (12 K LOC) ≈ 1.8     → 1.2× win (program code dominates)
+
+    Implication: most LSP/test/REPL workflows compile small programs → near 7× wins.
+    Self-host stage1 stays in the orthogonal `open_wallclock` axis (interp dispatch, not clang) — not addressed here.
+  EOF
+
+@D phase_1_2_a_link_pending := "runtime.c de-static patches needed for LINK on hexa_cc.c" :: status [d=2026-05-15 partial]
+  fact = "Front-end compile of hexa_cc_h.c clean (0 errors). Link not yet attempted; will fail on the additional statics that surfaced during macro audit."
+  patches_needed <<~EOF
+    runtime.c:1242  __hx_to_double           — drop `static inline`, keep as extern
+    runtime.c:2350  g_hexa_ic_hits           — drop `static`
+    runtime.c:2352  g_hexa_ic_stats_enabled  — drop `static`
+    runtime.c:2383  hexa_map_get_ic_slow     — drop `static`
+    runtime.c:4386  __hexa_try_top           — drop `static` (was in PHASE 1.1 must-expose list, now confirmed)
+    runtime.c:4731  hexa_add_slow            — drop `static` (already applied locally, uncommitted)
+  EOF
+  estimated_loc_change = "6 lines"
+  proposal = "PHASE 1.2.B: separate focused commit. Apply patches, then bench LINK on hexa_cc.c. Expect link clean + same compile-only speedup factor."
