@@ -1372,6 +1372,28 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
     return lt
 }
 
+// Builtin method-style names dispatched on the receiver, not free
+// identifiers. Faithfully mirrored from the proven legacy receiver
+// dispatch self/codegen_c2.hexa::gen2_method_builtin (31 names). When the
+// call's callee is `Field{text:<m>}` with <m> in this set, the method is
+// resolved by codegen against the receiver — types must NOT treat the
+// selector as an unresolved free name (that was the stage-2 self-compile
+// `.push(...)`-class HX2001 flood, ~870 of 1307).
+fn _is_builtin_method(name: string) -> bool {
+    return match name {
+        "push" -> true, "append" -> true, "len" -> true, "chars" -> true,
+        "contains" -> true, "join" -> true, "to_upper" -> true, "to_lower" -> true,
+        "split" -> true, "trim" -> true, "replace" -> true, "repeat" -> true,
+        "starts_with" -> true, "ends_with" -> true, "substring" -> true,
+        "index_of" -> true, "rfind" -> true, "last_index_of" -> true,
+        "keys" -> true, "values" -> true, "contains_key" -> true,
+        "has_key" -> true, "has" -> true, "remove" -> true, "get" -> true,
+        "set" -> true, "pop" -> true, "shift" -> true, "reverse" -> true,
+        "sort" -> true, "sort_by" -> true,
+        _ -> false,
+    }
+}
+
 // ── Call checker ─────────────────────────────────────────────
 
 fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
@@ -1383,6 +1405,7 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     // Best-effort callee name for diagnostics.
     let mut name = "<callee>"
     if _types_is_ident(callee.kind) && len(callee.text) > 0 { name = callee.text }
+    else if callee.kind == ExprKind::Field && len(callee.text) > 0 { name = callee.text }
 
     // Walk args first so inner errors surface even when callee resolution fails.
     let mut arg_types: [Type] = []
@@ -1413,7 +1436,13 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // to avoid double-firing on the same name. Field / Index /
             // Call-result / other non-Ident callees that don't resolve to
             // fn types land here as the unique HX2001 source.
-            _emit_hx2001_callee(name, callee.span, out)
+            //
+            // Exception: `recv.<m>(...)` where <m> is a builtin method
+            // (gen2_method_builtin set) — dispatched by codegen on the
+            // receiver, so the selector is NOT an unresolved free name.
+            if !(callee.kind == ExprKind::Field && _is_builtin_method(callee.text)) {
+                _emit_hx2001_callee(name, callee.span, out)
+            }
         }
         // Callee not resolved as fn — skip arity/argument checks; return value
         // type unknown.
