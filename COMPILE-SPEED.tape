@@ -26,16 +26,18 @@
 #   COMPILE-SPEED = HOW FAST that path runs (measure-first, then fix).
 #
 # v1.2 architecture-vs-history split: this .tape file holds the current
-# architecture state (latest-wins per id). Re-measurement runs should be
-# appended to a COMPILE-SPEED.log.tape sibling, NOT mutate this file.
+# architecture state (latest-wins per id) — pipeline shape, findings,
+# proposals, forbidden patterns, action queue. Per-build measurement
+# runs are appended to COMPILE-SPEED.log.tape (append-only sibling).
 
 @V := "tape" :: spec [active]
   version = "1.2"
 
-# ─── §1 Identity ─────────────────────────────────────────────────────
-
 @I id001 := "hexa-lang.compile-speed-audit" :: identity-claim [d=2026-05-15 active]
   kind = "performance audit + improvement roadmap for the .hexa → C → clang pipeline"
+  brief = "compile-speed substrate — measure-first principle + ROI-ranked proposals + phased action queue"
+  parent = "dancinlab/hexa-lang"
+  sibling-log = "COMPILE-SPEED.log.tape"
   scope = "wall-clock compile time of user programs (small) AND self-host stage1 (large)"
   doctrine = "measure-first — `/usr/bin/time -l` + `clang -ftime-report` before any optimization decision"
   consumers = "build driver authors · hexa_v2 codegen contributors · downstream tooling (LSP, hexa run)"
@@ -60,43 +62,11 @@
   self_host_loc = "21 763 (self/native/hexa_cc.c — typical large output)"
   authority = "[@x_hexa_native_only] [@x_compile_only]"
 
-# ─── §4 Baseline measurements (d=2026-05-15) ─────────────────────────
-
-@N bench_tiny := "tiny program baseline" :: measurement [d=2026-05-15 ok]
-  source = "self/test_tiny2.hexa (10 lines, 1 function)"
-  hexa_v2_wall = "0.01 s"
-  hexa_v2_rss = "3.4 MB"
-  clang_wall = "1.07 s real · 0.62 user · 0.10 sys"
-  clang_rss = "78 MB"
-  ratio = "clang ≈ 100× slower than hexa_v2 on tiny programs"
-  command = `/usr/bin/time -l self/native/hexa_v2 self/test_tiny2.hexa /tmp/tiny2.c && /usr/bin/time -l clang -O0 -o /tmp/tiny2 /tmp/tiny2.c -I self`
-  env = "macOS 25.4.0 arm64 · Apple clang (Xcode toolchain)"
-
-@N bench_ftime_report := "clang internal phase breakdown" :: measurement [d=2026-05-15 ok]
-  source = "tiny2.c (35 emitted lines + `#include runtime.c`)"
-  breakdown <<~EOF
-    Machine code generation : 65.3 %  wall  (0.89 s)
-    Front end (parse+sema)  : 24.6 %  wall  (0.34 s)
-    LLVM IR generation      :  6.7 %  wall  (0.09 s)
-    Optimizer (-O0)         :  3.3 %  wall  (0.05 s)
-  EOF
-  total_wall = "1.36 s (ftime-report self-reported, slightly above /usr/bin/time due to instrumentation)"
-  command = `clang -O0 -ftime-report -o tiny2 tiny2.c -I self`
-
-@N bench_phases := "clang phase decomposition by flag" :: measurement [d=2026-05-15 ok]
-  results <<~EOF
-    clang -E (preprocess only)         : 0.15 s
-    clang -fsyntax-only (no codegen)   : 0.28 s
-    clang -O0 -c runtime.c → .o (once) : 0.88 s   ← ≈ 82 % of tiny-build wall
-    clang -O0 full link (current)      : 1.07 s   (baseline)
-  EOF
-  interpretation = "runtime.c codegen alone ≈ 0.88 s; emitted EVERY build because user.c does `#include \"runtime.c\"`. precompiling once shifts that cost to one-time."
-
 # ─── §5 Findings ─────────────────────────────────────────────────────
 
 @D finding_tiny := "tiny-program bottleneck = runtime.c re-codegen" :: finding [d=2026-05-15 active]
   rule = "On user programs ≤ 1 K LOC, ≈ 80 % of wall-clock compile time is clang re-codegening the 12 K LOC runtime.c that's #included into every translation unit."
-  evidence = "[@bench_tiny] [@bench_ftime_report] [@bench_phases]"
+  evidence = "see COMPILE-SPEED.log.tape @bench_tiny / @bench_ftime_report / @bench_phases (d=2026-05-15)"
   why = "self/runtime.c is included as source by every generated user.c; clang cannot cache across TU boundaries without a header/.o split"
   blast_radius = "every `hexa run x.hexa` · every test · every LSP path that codegens"
 
@@ -119,7 +89,7 @@
   roi_rank = 1
   rule = "Replace `#include \"runtime.c\"` in generated user.c with `#include \"runtime.h\"` (extern decls) + final-link against a prebuilt runtime.o."
   expected_speedup = "small programs: 1.07 s → ~0.2 s (≈ 5× faster). Self-host stage1 final-link step: -0.9 s (negligible at 21-min scale, but free)."
-  evidence = "[@bench_phases] — runtime.o build = 0.88 s; that cost moves from per-build to once-per-runtime-change (sha256-keyed cache)"
+  evidence = "see COMPILE-SPEED.log.tape @bench_phases — runtime.o build = 0.88 s; that cost moves from per-build to once-per-runtime-change (sha256-keyed cache)"
   cost <<~EOF
     1. Audit self/runtime.c — list every `static` symbol that becomes externally
        visible after the split; rename/namespace-prefix conflicts before exposing.
@@ -209,8 +179,8 @@
   url = "https://github.com/dancinlab/hexa-lang/blob/main/HEXA-NATIVE-ONLY.md"
   scope = "no LLVM backend as architecture; clang serves only as the C → machine-code stage of the AOT pipeline"
 
-@X x_open_wallclock := "COMPILE-ONLY.tape @open_wallclock" :: status [active]
-  url = "https://github.com/dancinlab/hexa-lang/blob/main/COMPILE-ONLY.tape"
+@X x_open_wallclock := "COMPILE-ONLY.log.tape @open_wallclock" :: status [active]
+  url = "https://github.com/dancinlab/hexa-lang/blob/main/COMPILE-ONLY.log.tape"
   scope = "stage1 self-compile wall-clock (~21 min) — orthogonal axis from this file's small-program findings"
 
 @X x_spec_5 := "SPEC.md §5 (Bootstrap)" :: spec [active]
