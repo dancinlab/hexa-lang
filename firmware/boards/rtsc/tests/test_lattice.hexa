@@ -5,7 +5,7 @@
 // Run:
 //     hexa run tests/test_lattice.hexa
 //
-// Authority: own 1 (n=6 master identity).
+// Authority: n=6 master identity.
 
 fn main() {
     let root = env("HEXA_RTSC_ROOT")

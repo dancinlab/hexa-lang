@@ -20,7 +20,7 @@
 | Fix a `.hexa` file that fails `verify/all.hexa` | ✅ welcome |
 | Update `firmware/doc/board_v0_*.md` with corrected vendor SKUs | ✅ welcome |
 | Add a new `state/*_LOG.hexa` fixture row from a public-domain announcement | ✅ welcome |
-| Replace fixture rows in `state/*` with **fabricated** data | ❌ not welcome (raw#10 honest C3) |
+| Replace fixture rows in `state/*` with **fabricated** data | ❌ not welcome (honest C3) |
 | Claim empirical closure without Stage-1+ hardware | ❌ retract |
 | Inflate sigma³ / sigma⁶ scaling targets without evidence | ❌ retract |
 
@@ -81,7 +81,7 @@ If any of these report FAIL, **do not open the PR**.  Fix it first.
   - `docs(<scope>): description`  for MD updates
 - **Always update CHANGELOG.md `[Unreleased]` section** with one line per chunk.
 - **Cross-link to** the relevant `.roadmap.hexa_antimatter §A.x` row if applicable.
-- **Honest C3 (raw#10)** — if your numerics show a gap vs published, document the gap as a falsifier rather than fitting around it.
+- **Honest C3 ** — if your numerics show a gap vs published, document the gap as a falsifier rather than fitting around it.
 
 ---
 

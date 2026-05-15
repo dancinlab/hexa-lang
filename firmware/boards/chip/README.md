@@ -129,7 +129,7 @@ subcommands:
 - `hexa-chip show <verb>` — echo spec path for a single verb
 - `hexa-chip selftest` — verify all 28 verb directories present
 
-### Caveats (raw#10 honest C3)
+### Caveats (honest C3)
 
 1. **28/28 verbs are spec-only at v1.0.0.** Each verb is a directory
    tree extracted from `canon/domains/compute/<name>/` at
@@ -221,7 +221,7 @@ These 4 are **NOT** numerical bugs. They are **falsifiers doing their job**:
 Moore's law genuinely flattened post-GAA; HBM4 spec drift is real; the
 hexa-lang `stdlib/hal/compute` projection module's emitted surface has
 moved on from the per-vendor launch tokens those checks key on. Per
-raw#10 honest C3, we expose tripped falsifiers rather than retro-fitting
+honest C3, we expose tripped falsifiers rather than retro-fitting
 the bands.
 
 Run them directly to inspect the tripped state:
@@ -252,7 +252,7 @@ introspection.
 
 Per `LATTICE_POLICY.md`: lattice tautologies (σ·φ = n·τ = 24) alone are
 NOT sufficient verification — the numerics_* tier carries the
-real-limits anchors. Per raw#10 C3: no n=6 lattice-fit is pinned on
+real-limits anchors. Per C3: no n=6 lattice-fit is pinned on
 external entities (TSMC, Samsung, ASML, Intel use their own published
 invariants).
 

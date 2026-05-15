@@ -6,7 +6,7 @@ paths each file was pulled from, so that any change in this repo can be
 traced back to (or propagated upstream to) the source-of-truth.
 
 > **2026-05-07 (post-pattern-alignment)**: structural pattern aligned to
-> `hexa-sscb` mk2 own_v1 — `.own` + `README.ai.md` + `verify/` +
+> `hexa-sscb` mk2  — legacy SSOT + `README.ai.md` + `verify/` +
 > `doc/lineage/` landing. v1.0.0 directory layout (`rtsc/` + `sc/` flat)
 > preserved for additive compatibility; v1.1.0 will move `rtsc/` →
 > `core/rtsc/` + `module/applications/` per the sscb pattern.
@@ -43,7 +43,7 @@ traced back to (or propagated upstream to) the source-of-truth.
 | `install.hexa` | _created fresh_ during extraction (2026-05-06) | Mirrors `hexa-bio/install.hexa` pattern. |
 | `hexa.toml` | _created fresh_ during extraction (2026-05-06) | Package manifest for `hx install hexa-rtsc`. |
 | `.roadmap.hexa_rtsc` | _created fresh_ during extraction (2026-05-06) | Cross-cutting tracker — invariant lattice + release cadence + falsifier preregister. |
-| `.own` | _created fresh_ 2026-05-07 | Project-local SSOT (mk2 own_v1). Pattern-aligned to hexa-sscb. |
+| legacy SSOT | _created fresh_ 2026-05-07 | Project-local SSOT (mk2 ). Pattern-aligned to hexa-sscb. |
 | `README.ai.md` | _created fresh_ 2026-05-07 | AI-native handoff (raw 271 mandate). |
 | `doc/lineage/origin.md` | _created fresh_ 2026-05-07 | This file. |
 | `verify/*.hexa` | _created fresh_ 2026-05-07 | Runnable invariant audit landing. |
@@ -59,10 +59,10 @@ The extraction template was inherited from sibling `hexa-bio` v1.0.0
 | `hexa-rtsc` | energy / superconductor | 2026-05-06 | 0/2 wired (SPEC_ONLY) |
 | `hexa-sscb` | compute / DC breaker | 2026-05-06 | n/a — doc-first repo |
 
-`hexa-sscb` is the structural pattern reference (own_v1 schema +
+`hexa-sscb` is the structural pattern reference ( schema +
 `core/<feature>/` + `module/<feature>/` + `verify/` + `tests/` + `build/`
 + `doc/lineage/` triplet). hexa-rtsc adopts the additive subset on
-2026-05-07 (`.own` + `README.ai.md` + `verify/` + `doc/lineage/`); the
+2026-05-07 (legacy SSOT + `README.ai.md` + `verify/` + `doc/lineage/`); the
 `core/<feature>/` + `module/<feature>/` directory split is reserved for
 v1.1.0.
 
@@ -74,12 +74,12 @@ If you change a file in `rtsc/` or `sc/` here and want to push it upstream:
 2. If the change touches the n=6 lattice (σ/τ/φ/Hc2), also update
    `.roadmap.hexa_rtsc` §A.1 and re-run `verify/lattice_check.hexa`.
 3. If the change touches a falsifier (F-RTSC-{1,2,3} or F-SC-{1,2,3}),
-   also update `.roadmap.hexa_rtsc` §A.4 and `.own` own 2 decl rows
+   also update `.roadmap.hexa_rtsc` §A.4 and legacy falsifier rule decl rows
    simultaneously — never split.
 
 ## Empirical SSOT — UNPROVEN
 
-Per `.own` own 2 (`hexa-rtsc-empirical-unproven-contractual`): RT-SC is
+Per legacy falsifier contractual rule (`hexa-rtsc-empirical-unproven-contractual`): RT-SC is
 academically **unproven** as of 2026-05. LK-99 (2023) and subsequent
 room-temp candidates have not been independently replicated. This
 repository ships a **closed-form candidate spec + falsifier preregister**,
@@ -88,4 +88,4 @@ out-of-repo (would require materials lab).
 
 If you change `cli/hexa-rtsc.hexa` to remove the "sentinel only — does
 NOT validate empirical claim" caveat from any verb output: **stop** —
-that's a raw 91 honest C3 violation and a direct own 2 breach.
+that's a honest-C3 violation and a direct falsifier breach.

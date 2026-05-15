@@ -17,12 +17,12 @@
 //
 // Status: spec-first SSOT; computational scaffolding wired through
 //   factory/tabletop/pet_cyclotron .hexa modules + verify/ analyzers.
-//   Empirical antimatter operation remains out of scope (raw#10 honest C3).
+//   Empirical antimatter operation remains out of scope (honest C3).
 //
 // Constraints:
-//   raw#9   — hexa-only orchestration; no python bridge
-//   raw#15  — write-confined (audit log only)
-//   raw#10  — honest C3: 3/3 verbs wired computationally; 0/3 wired empirically
+//     — hexa-only orchestration; no python bridge
+//    — write-confined (audit log only)
+//    — honest C3: 3/3 verbs wired computationally; 0/3 wired empirically
 //
 // Cost: $0 (Mac local; pure arithmetic + SSOT text scans).
 
@@ -57,11 +57,11 @@ fn json_mode(a: [str]) -> bool {
     return has_flag(a, "--json")
 }
 
-// ─── caveat printer (raw#10 honest C3) ───
+// ─── caveat printer (honest C3) ───
 
 fn _print_caveats() {
     println("")
-    println("--- caveats (raw#10 C3) ---")
+    println("--- caveats (C3) ---")
     println("  1. 3/3 verbs wired COMPUTATIONALLY (n=6 arithmetic + SSOT text scan)")
     println("     0/3 verbs wired EMPIRICALLY (no apparatus, no clinical operation).")
     println("  2. n=6 Dirac-mirror lattice (sigma=12, tau=4, phi=2, J2=24) is proven")

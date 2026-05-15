@@ -2,7 +2,7 @@
 
 > **Snapshot date:** 2026-05-07 · **Verb:** `aerospace_transport` (engineering group)
 > **Sources:** WebSearch sweep 2026-05-07 (see §Sources)
-> **Honest C3 (raw#10):** This is a *point-in-time* compilation; the
+> **Honest C3 :** This is a *point-in-time* compilation; the
 > upstream world updates daily. Treat slugs as stable, dates as soft.
 
 ---
@@ -239,5 +239,5 @@ Master identity holds: σ·φ = n·τ = 12·2 = 6·4 = **24**.
 - **Compiled:** 2026-05-07 via WebSearch sweep (sister of canon data discipline).
 - **Verb owner:** `aerospace_transport` (engineering group).
 - **Cost:** $0 — text/CLI only, no API calls beyond WebSearch.
-- **raw#10 honest C3:** dates marked `NET` are *no-earlier-than* targets;
+- **honest C3:** dates marked `NET` are *no-earlier-than* targets;
   Mars/HLS dates carry explicit risk markers; do not treat as commitments.

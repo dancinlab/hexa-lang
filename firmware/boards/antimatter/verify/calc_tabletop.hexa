@@ -38,7 +38,7 @@
 //
 // Authority: tabletop/tabletop-antimatter.md §1 WHY + §2 COMPARE + §4 STRUCT +
 //            §5 FLOW · .roadmap.hexa_antimatter §A.1 master row + §A.4 F-AM-2.
-// raw#9 hexa-only · raw#10 honest C3: T1 algebraic closure only — closed-form
+// hexa-only · honest C3: T1 algebraic closure only — closed-form
 //   numerics (T2) lands separately in numerics_tabletop*.hexa, empirical
 //   apparatus (T3) is Stage-1+ TBD.
 

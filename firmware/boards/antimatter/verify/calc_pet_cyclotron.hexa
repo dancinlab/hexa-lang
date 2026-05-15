@@ -34,7 +34,7 @@
 //
 // Authority: pet_cyclotron/pet-cyclotron.md §1 WHY + §4 STRUCT + §5 core
 //   numerics + §7 FALSIFIER · .roadmap.hexa_antimatter §A.4 F-AM-1.
-// raw#9 hexa-only · raw#10 honest C3: T1 algebraic closure only — closed-form
+// hexa-only · honest C3: T1 algebraic closure only — closed-form
 //   numerics (T2) lands separately in numerics_pet_cyclotron*.hexa, empirical
 //   apparatus (T3, hospital-cyclotron op) is Stage-1+ TBD.
 

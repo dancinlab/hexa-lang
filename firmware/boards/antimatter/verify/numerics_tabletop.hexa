@@ -29,7 +29,7 @@
 //
 // Authority: tabletop/tabletop-antimatter.md §1 WHY + §4 STRUCT + §5 FLOW ·
 //   .roadmap.hexa_antimatter §A.4 F-AM-2 + §0 terminal-goal 1.7e12 p̄/s.
-// raw#9 hexa-only · raw#10 honest C3: closed-form numerical agreement only —
+// hexa-only · honest C3: closed-form numerical agreement only —
 //   parity vs published CERN data lives in numerics_tabletop_parity.hexa
 //   (next chunk), empirical Stage-1+ TBD.
 

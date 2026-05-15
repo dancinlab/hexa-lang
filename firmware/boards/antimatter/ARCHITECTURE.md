@@ -151,7 +151,7 @@ Looking for: σ=12, τ=4, φ=2, J₂=24 markers + per-pillar n=6 numbers (R=10 c
 
 ---
 
-## §6 The honest negative (raw#10 C3)
+## §6 The honest negative (C3)
 
 This repo carries **honest negatives** on purpose — places where the n=6 closed form disagrees with measurement.  These are NOT bugs; they're documented falsifiers.  The closure-depth-accumulation loop is allowed to *bookkeeping-close* a falsifier (T1 + T2 + T3-paper) without resolving the underlying scientific gap.  Resolving the gap requires Stage-1+ hardware.
 

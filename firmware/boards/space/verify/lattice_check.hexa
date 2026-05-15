@@ -29,7 +29,7 @@ fn hexa_space_root() -> str {
 
 let ROOT = hexa_space_root()
 
-// ── canonical n=6 lattice values (own 1 of hexa-space) ──────────────────
+// ── canonical n=6 lattice values (n=6 lattice — hexa-space) ──────────────────
 let SIGMA_6 = 12     // σ(6) — sum-of-divisors
 let TAU_6   = 4      // τ(6) — divisor count
 let PHI_6   = 2      // φ(6) — Euler totient
@@ -232,7 +232,7 @@ fn check_ops_verify_present() {
            "missing: " + missing.join(", "))
 }
 
-// Check 11: hexa.toml [closure] verdict declared (raw#10 C3 honesty)
+// Check 11: hexa.toml [closure] verdict declared (C3 honesty)
 fn check_hexa_toml_honesty() {
     let txt = _read(ROOT + "/hexa.toml")
     if txt.len() == 0 {
@@ -241,7 +241,7 @@ fn check_hexa_toml_honesty() {
     }
     let ok_v = _has(txt, "verdict") &&
                (_has(txt, "SPECS_ONLY") || _has(txt, "SPEC_PLUS_OPS_LATTICE"))
-    _check(ok_v, "hexa.toml [closure] verdict declared (raw#10 C3)",
+    _check(ok_v, "hexa.toml [closure] verdict declared (C3)",
            "honest scope declaration present")
     let ok_27 = _has(txt, "verbs_total = 27") || _has(txt, "verbs_total=27")
     _check(ok_27, "hexa.toml [closure] verbs_total = 27",

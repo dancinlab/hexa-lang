@@ -8,7 +8,7 @@
 ## Repository scope
 
 ### Q1. Does this repo synthesize anti-hydrogen?
-**No.**  This is a substrate spec — paper specifications + closed-form algebra + numerical sim.  No working apparatus, no clinical PET cyclotron, no real p̄ capture.  Per raw#10 honest C3 (see `factory/antimatter-factory.md §0`).
+**No.**  This is a substrate spec — paper specifications + closed-form algebra + numerical sim.  No working apparatus, no clinical PET cyclotron, no real p̄ capture.  Per honest C3 (see `factory/antimatter-factory.md §0`).
 
 ### Q2. Why are there 4 `verify/empirical_*_inspire.hexa` if there's no real apparatus?
 They query the INSPIRE-HEP API (with offline fixtures via `HEXA_ANTIMATTER_OFFLINE=1`) for the **published-paper existence** of milestone results.  This is the T3 *paper-feed* tier — closes T3 in bookkeeping but **not** in empirical fact.  Real T3 closure happens at Stage-1+ when `state/*_LOG.hexa` ingests live data.

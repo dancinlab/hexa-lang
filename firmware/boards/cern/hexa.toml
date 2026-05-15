@@ -68,7 +68,7 @@ docs = [
 [dependencies]
 hexa-lang = ">=1.0.0"
 
-# ── Closure provenance (raw#10 honest C3) ─────────────────
+# ── Closure provenance (honest C3) ─────────────────
 # v1.0.0 closure: 3 pillar specs imported, .hexa CLI TBD.
 # v1.1.0-pre: .hexa verify + build + tests surface lands. Specs unchanged.
 [closure]
@@ -82,7 +82,7 @@ tests_pass = "4/4 (selftest + lattice + calculators + cli_verify)"
 verdict = "SPECS_ONLY"
 extracted_from = "canon/domains/physics/{mini,particle,classical-mechanics}-accelerator/ @ c0f1f570"
 
-# ── Scope honesty (raw#10 C3) ─────────────────────────────
+# ── Scope honesty (C3) ─────────────────────────────
 [scope]
 honest_scope = "v1.0.0 ships 3 pillar specs (.md) + placeholder CLI dispatcher. Empirical wiring (laser-plasma sandbox, parent integration, classical baseline solver) deferred. n=6 sigma-cascade 6-order comparison vs LHC 7 TeV/27km + DESY 1 GeV/m is design-target, not measured."
 not_scope = ["actual particle acceleration (this is a spec/design package, not hardware control)", "LHC/DESY data ingestion (no live feed)", "Geant4/MAD-X bridge", "real-time beam diagnostics"]

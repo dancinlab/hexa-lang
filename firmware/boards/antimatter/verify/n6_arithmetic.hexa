@@ -16,7 +16,7 @@
 //     hexa run verify/n6_arithmetic.hexa     # exit 0 = identity holds
 //
 // Authority: README §Why, .roadmap §A.1, hexa.toml [scope] n6_lattice_caveat.
-// raw#9 hexa-only, raw#10 honest C3 (lattice is algebraic conjecture for any
+// hexa-only, honest C3 (lattice is algebraic conjecture for any
 // antimatter axis — this verifier proves it for the integer 6 only, not
 // for the empirical antimatter substrate).
 

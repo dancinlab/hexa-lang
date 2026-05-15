@@ -4,7 +4,7 @@
 // Sister of hexa-sscb/verify/cross_doc_audit.py — same shape (parse 4 .md /
 // .hexa surfaces, assert lattice numbers and falsifier IDs agree).
 //
-// Verifies the n=6 lattice numbers declared in .own own 1 are present and
+// Verifies the n=6 lattice numbers are present and
 // consistent across:
 //   - rtsc/room-temp-sc.md  (RT-SC spec, T1 canonical)
 //   - sc/superconductor.md  (SC spec, T1 canonical)
@@ -12,12 +12,12 @@
 //   - .roadmap.hexa_rtsc    (§A.1 invariant lattice — must echo spec values)
 //
 // Also verifies all 6 falsifier IDs (F-RTSC-{1,2,3} + F-SC-{1,2,3}) appear
-// in spec / cli / roadmap surfaces (per .own own 2 enforce-layer rationale).
+// in spec / cli / roadmap surfaces.
 //
 // Run:
 //     hexa run verify/cross_doc_audit.hexa     # exit 0 = all invariants hold
 //
-// Authority: own 1 (n=6 master identity); own 2 (falsifier monotone).
+// Authority: n=6 master identity; falsifier monotone.
 
 let mut FAIL_COUNT = 0
 let mut PASS_COUNT = 0
@@ -85,16 +85,16 @@ fn check_falsifiers_in(label: str, text: str) {
     }
 }
 
-// ─── code-scope guard (own 3) ───
+// ─── code-scope guard  ───
 
 fn check_code_scope() {
-    // own 3 declares 4 permitted code locations: cli/, verify/, tests/, module/.
+    // legacy code-scope rule declared 4 permitted code locations: cli/, verify/, tests/, module/.
     // Outside those, only .md / .json / .toml / Makefile / .gitignore /
-    // LICENSE / install.hexa (root hook) / .roadmap.hexa_rtsc / .own /
+    // LICENSE / install.hexa (root hook) / .roadmap.hexa_rtsc /
     // README*.md are allowed. Detect rogue .hexa or other code files at
     // unexpected paths.
     let allowed_dirs: [str] = ["./cli", "./verify", "./tests", "./module", "./rtsc", "./sc", "./doc"]
-    // rtsc/ + sc/ are spec dirs — own 3 grants v1.0.0 grandfather to *-verify.hexa
+    // rtsc/ + sc/ are spec dirs — legacy code-scope rule granted v1.0.0 grandfather to *-verify.hexa
     // there until v1.1.0 splits them out. doc/ is human-only.
     // Find all .hexa files outside cli/verify/tests/module/rtsc.
     let raw = exec("find . -name '*.hexa' -not -path './.git/*' -not -path './state/*' 2>/dev/null").trim()
@@ -112,7 +112,7 @@ fn check_code_scope() {
         if matched == false { rogue = rogue + [p] }
     }
     if rogue.len() == 0 {
-        check("code-scope (own 3): no rogue .hexa outside permitted dirs",
+        check("code-scope : no rogue .hexa outside permitted dirs",
             true, "scanned cli/ verify/ tests/ module/ rtsc/ sc/ + install.hexa")
     } else {
         let mut s = ""
@@ -120,7 +120,7 @@ fn check_code_scope() {
             if s.len() > 0 { s = s + ", " }
             s = s + r
         }
-        check("code-scope (own 3): rogue .hexa found", false, s)
+        check("code-scope : rogue .hexa found", false, s)
     }
 }
 
@@ -135,7 +135,6 @@ fn main() {
     let sc_md     = read_file("sc/superconductor.md")
     let cli_hexa  = read_file("cli/hexa-rtsc.hexa")
     let roadmap   = read_file(".roadmap.hexa_rtsc")
-    let own_file  = read_file(".own")
 
     // Lattice tokens: every spec-bearing surface must show σ=12, τ=4, φ=2,
     // Hc2=48 in some recognizable form.
@@ -156,9 +155,8 @@ fn main() {
     // Falsifier presence.
     check_falsifiers_in("cli/hexa-rtsc.hexa", cli_hexa)
     check_falsifiers_in(".roadmap.hexa_rtsc", roadmap)
-    check_falsifiers_in(".own own 2 decl rows", own_file)
 
-    // Code-scope (own 3) guard.
+    // Code-scope guard.
     check_code_scope()
 
     println("========================================================================")

@@ -88,7 +88,7 @@ Selftest delta post-absorb (2026-05-10):
 - `verify/lattice_check.hexa`: **10/10 PASS**.
 - `verify/falsifier_check.hexa`: **49/49 PASS**.
 - `verify/cross_doc_audit.hexa`: 7/8 (pre-existing upstream — flags
-  `firmware/sim/*.hexa` as rogue per upstream `own 3` code-scope rule;
+  `firmware/sim/*.hexa` as rogue per upstream legacy code-scope code-scope rule;
   NOT a regression from absorb).
 - HDL (12/12 iverilog) + MCU (15/15 cargo) layers require iverilog +
   cargo toolchains; not re-run during absorb. Upstream Phase D+

@@ -10,7 +10,7 @@
 // Run:
 //     hexa run selftest/selftest.hexa
 //
-// raw#9 hexa-only · raw#10 honest C3: PASS sentinels reflect lattice
+// hexa-only · honest C3: PASS sentinels reflect lattice
 // arithmetic + module wiring, NOT empirical antimatter validation.
 
 fn root() -> str {

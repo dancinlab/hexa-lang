@@ -385,7 +385,7 @@ hexa run cli/hexa-space.hexa spacex group starship
 **27-verb 통합 substrate · RSC saturated (sat-1 ✓ + sat-2 ✓ at 2026-05-08) ·
 4/4 falsifiers @ 67 % closure · Phase A-E ✓ · Phase F funding-gated.**
 
-### Honest closure C3 (raw#10)
+### Honest closure C3 
 
 - 11 canonical verbs at v1.0.0 ship as **spec-only** (`.md` design docs).
 - **20 pillar `verify_<verb>.hexa` scripts** test n=6 **bookkeeping closure**
@@ -448,7 +448,7 @@ hexa run $HEXA_SPACE_ROOT/cli/hexa-space.hexa group operations
 
 The repo is **dependency-free** (no Python, no native build). All 27
 verb spec files are pure markdown. The 16 ops `verify_*.hexa`
-scripts are pure hexa-lang (raw#9 STRICT — no Python).
+scripts are pure hexa-lang (STRICT — no Python).
 
 ---
 

@@ -46,7 +46,7 @@
 // Run:
 //     hexa run verify/run_all.hexa     # exit 0 = all 27 subscripts PASS
 //
-// HONESTY (closure-honesty-contract per .own own 2):
+// HONESTY (closure-honesty-contract):
 //
 //   PASS here means RC=0 from each of the 27 green-core subscripts —
 //   bookkeeping closure of the verified-empirically-stable core, NOT
@@ -60,7 +60,7 @@
 //   real-limits anchors (Moore log2-ratio band, JEDEC HBM bus/speed
 //   gates, NPU dataflow τ=4, etc. — see LIMIT_BREAKTHROUGH.md).
 //
-//   Per raw#10 C3: TSMC / Samsung / Intel / external fabs use their
+//   Per C3: TSMC / Samsung / Intel / external fabs use their
 //   own published invariants; this orchestrator does NOT pin n=6
 //   lattice anchors on external entities — those checks live in
 //   inventory/cross-doc only.

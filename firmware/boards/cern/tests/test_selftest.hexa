@@ -9,7 +9,7 @@
 //
 // Cost: $0 (filesystem checks only).
 //
-// raw#10 C3: this is a verb-count check — it does NOT validate empirical
+// C3: this is a verb-count check — it does NOT validate empirical
 // claims, only that the v1.0.0 spec extraction landed.
 
 let HOME = env("HOME")

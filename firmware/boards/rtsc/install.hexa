@@ -10,15 +10,15 @@
 //
 // Mirrors hexa-bio/install.hexa pattern (sister extraction 2026-05-04).
 //
-// Responsibilities (each idempotent, raw#9 STRICT — no .py creation,
+// Responsibilities (each idempotent, STRICT — no .py creation,
 // no shellout to system python3):
 //   1. Pre-install: no Python deps required (spec-only release).
 //   2. Post-install: run `hexa-rtsc selftest` via the freshly-staged
 //      cli/hexa-rtsc.hexa. Selftest output captured; non-PASS = warn-only
 //      (CLI dispatcher is placeholder TBD for v1.0.0).
 //
-// raw#9 hexa-only, raw#11 snake_case, raw#15 no-hardcode.
-// raw#10 honest C3: see hexa-rtsc/README.md "Status" + "Caveats" section.
+// hexa-only, snake_case, no-hardcode.
+// honest C3: see hexa-rtsc/README.md "Status" + "Caveats" section.
 
 fn run_quick_selftest(root: str) -> bool {
     let cli = root + "/cli/hexa-rtsc.hexa"

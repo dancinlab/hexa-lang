@@ -75,7 +75,6 @@ hexa-rtsc/                          T0 (repo root)
 │
 ├── cli/                            T0 (single-entry router; hexa-rtsc.hexa)
 ├── tests/                          T0 (hexa native test runner)
-├── .own                            T0 (project-local SSOT, mk2 own_v1)
 ├── .roadmap.hexa_rtsc              T0 — release cadence, §A.6 hardware path,
 │                                       §A.6.1 Phase A→D+ recommended order
 ├── hexa.toml                       T0 (package manifest for `hx install`)
@@ -92,11 +91,11 @@ Imports flow **T0 → T1 → T2** only. firmware/ is T0 sibling to verify/
 2. **RT-SC empirical-unproven contract**: every public artifact (CLI verb
    output, README badges, status table) MUST surface "UNPROVEN" /
    "sentinel only — does NOT validate empirical claim" alongside any
-   `__HEXA_RTSC_*__ PASS` line. raw#10 honest C3 mandate.
+   `__HEXA_RTSC_*__ PASS` line. honest C3 mandate.
 3. **Falsifier monotone**: F-RTSC-{1,2,3} + F-SC-{1,2,3} status flips
    only `OPEN → CONFIRMED` or `OPEN → DEMOTED`. **Never** silently retract.
 4. **hexa-only orchestration**: code lives in `cli/` `verify/` `tests/`
-   `module/` only, .hexa primary (raw#9). No Python bridge.
+   `module/` only, .hexa primary . No Python bridge.
 
 ## Edit policy
 
@@ -114,7 +113,7 @@ Imports flow **T0 → T1 → T2** only. firmware/ is T0 sibling to verify/
 |---|---|
 | Add a new RT-SC candidate material | `rtsc/room-temp-sc.md` (then propagate to roadmap §A.4 falsifier preregister) |
 | Tighten a lattice number | `rtsc/room-temp-sc.md` + `sc/superconductor.md` (spec wins) |
-| Adjust falsifier disposition | `.roadmap.hexa_rtsc` §A.4 + `.own` own 2 decl row + `cli/hexa-rtsc.hexa` falsifier table |
+| Adjust falsifier disposition | `.roadmap.hexa_rtsc` §A.4 + legacy falsifier rule decl row + `cli/hexa-rtsc.hexa` falsifier table |
 | Add a new verify check | `verify/<name>.hexa` + lint inventory (recipe §4 5-invariant) |
 | Add a Stage-1+ hardware spec | `doc/<bench>_v0.md` per §A.6.1 Stage A template |
 | Add a sim-firmware module | `firmware/sim/<name>.hexa` + `verify/run_all.hexa` SCRIPTS |
@@ -147,4 +146,4 @@ remains §A.6 Step 4 deliverable — out of code-layer scope, ~$225k +
 
 This repo was extracted from `canon` on **2026-05-06**.
 Source commits: see [`doc/lineage/origin.md`](doc/lineage/origin.md).
-Structural pattern aligned to `hexa-sscb` mk2 own_v1 on **2026-05-07**.
+Structural pattern aligned to `hexa-sscb` mk2  on **2026-05-07**.

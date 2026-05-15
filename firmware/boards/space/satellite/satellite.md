@@ -53,7 +53,7 @@ J₂·σ²** — within 2.4% of the lattice target 15,360.
 | Ground gateway | sopfr=5 teleport classes |
 | Direct-to-Cell | σ=12 cellular bands, 5G NR over Starlink |
 
-## §4 STATUS (raw#10 honest C3)
+## §4 STATUS (honest C3)
 
 - v1.0.0: SPEC_ONLY (this `.md` + `verify_satellite.hexa`).
 - Verify script checks lattice arithmetic; does NOT simulate RF link

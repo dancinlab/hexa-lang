@@ -829,7 +829,7 @@ CPU emulation reference + Python verification code. n=6 constants auto-derived f
 
 > Archived 2026-04-21 from former `hexa1_spec_v1.md` (PRD-P1-4, dated
 > 2026-04-16, grade `[7] EMPIRICAL`). Preserved here so that `chip-hexa1/`
-> contains a single canonical .md (own 3: one-doc-per-domain). Content
+> contains a single canonical .md (one-doc-per-domain). Content
 > below is the engineering-oriented first-silicon prototype spec; it
 > complements the canonical document above, which is the up-to-date
 > domain-level n=6 architecture record.

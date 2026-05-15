@@ -15,8 +15,8 @@
 // Root resolution: $PETITE_CERN_ROOT env, else inferred from $0 dirname.
 //
 // Constraints:
-//   raw#9   — hexa-only orchestration
-//   raw#10  — honest C3 (specs only, .hexa CLI TBD)
+//     — hexa-only orchestration
+//    — honest C3 (specs only, .hexa CLI TBD)
 //
 // Cost: $0 (Mac local; placeholder dispatcher only).
 //
@@ -83,11 +83,11 @@ fn _file_exists(p: str) -> bool {
     return r == "yes"
 }
 
-// ─── caveat printer (raw#10 honest C3) ───
+// ─── caveat printer (honest C3) ───
 
 fn _print_caveats() {
     println("")
-    println("--- caveats (raw#10 C3) ---")
+    println("--- caveats (C3) ---")
     println("  1. v1.0.0 ships specs-only (3 pillar .md docs). .hexa CLI dispatchers TBD.")
     println("  2. n=6 sigma-cascade 6-order claim (precision ×10, throughput ×144,")
     println("     energy ÷12, size ÷10, error ÷144, lifetime ×48) is design-target ceiling,")

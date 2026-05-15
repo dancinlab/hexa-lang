@@ -35,9 +35,9 @@
 // Root resolution: $HEXA_SPACE_ROOT env, else inferred from $0 dirname.
 //
 // Constraints:
-//   raw#9   — hexa-only orchestration; no Python deps.
-//   raw#15  — write-confined (audit log only).
-//   raw#10  — honest C3: this is SPEC-FIRST; verb modules are .md design docs,
+//     — hexa-only orchestration; no Python deps.
+//    — write-confined (audit log only).
+//    — honest C3: this is SPEC-FIRST; verb modules are .md design docs,
 //             not executable empirical sandboxes. Working .hexa CLI TBD.
 //
 // Cost: $0 (Mac local; placeholder dispatcher reads spec files only).
@@ -154,11 +154,11 @@ fn _audit(subcmd: str, args_str: str, exit_code: int) {
     exec("echo " + shq(line) + " >> " + shq(LOG_PATH) + " 2>/dev/null")
 }
 
-// ─── caveat printer (raw#10 honest C3) ───
+// ─── caveat printer (honest C3) ───
 
 fn _print_caveats() {
     println("")
-    println("--- caveats (raw#10 C3) ---")
+    println("--- caveats (C3) ---")
     println("  1. canonical 11 verbs ship as .md design docs (no empirical sandbox).")
     println("     operations 16 verbs additionally ship verify_*.hexa lattice-closure")
     println("     scripts that test n=6 BOOKKEEPING — not physics.")

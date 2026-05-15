@@ -51,7 +51,7 @@ hexa-space group observation           # astrodynamics + 2 more
 hexa-space group life                  # astrobiology, medicine
 ```
 
-## Honest C3 caveats (raw#10)
+## Honest C3 caveats 
 
 1. **SPEC_ONLY at v1.0.0** — all 11 verbs ship as `.md` design docs, not
    executable empirical sandboxes. The CLI dispatcher enumerates verbs and

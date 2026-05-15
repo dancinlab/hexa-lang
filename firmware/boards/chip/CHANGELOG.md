@@ -38,7 +38,7 @@ per `LATTICE_POLICY.md` real-limits-first contract.
   scripts (Samsung Moore retraction, post-GAA flattening, HBM4 BW
   envelope drift, GPGPU vendor surface drift).
 
-**Honesty notes (raw#10 C3 preserved)**:
+**Honesty notes (C3 preserved)**:
 - The 4 excluded scripts (`empirical_process` / `numerics_spice_corner`
   / `numerics_power_thermal` / `numerics_gpgpu_projection`) stay on
   disk verbatim — no thresholds widened, no expected-token lists
@@ -48,7 +48,7 @@ per `LATTICE_POLICY.md` real-limits-first contract.
   documents the 34/36 = 94.4 % boot-matrix headline; Moore retraction
   + HBM4 spec drift + stdlib/hal/compute surface drift are real today.
 - Per `LATTICE_POLICY.md`: lattice tautologies (σ·φ = n·τ = 24) alone
-  are NOT sufficient verification. Per raw#10 C3: no n=6 lattice fit
+  are NOT sufficient verification. Per C3: no n=6 lattice fit
   is pinned on TSMC / Samsung / ASML / Intel — those vendors use their
   own published invariants.
 - No new external claims, no NDA content, no proprietary fab data.
@@ -84,7 +84,7 @@ repository root articulating the rule:
 - `CATALOG.md` T0 META row added pointing to `LATTICE_POLICY.md` +
   `SESSION_LOG_2026-05-12.md`.
 
-**What this wave does NOT touch** (raw#10 C3):
+**What this wave does NOT touch** (C3):
 - `terafab/verify_terafab.py` — 6/6 HARD checks unchanged.
 - `exynos/verify_exynos.py` — 7/7 HARD checks unchanged.
 - `chip-verify/cli.hexa` + Wave J runtime promotion (`29a2c14`) — unchanged.
@@ -1126,7 +1126,7 @@ Stage-1+ tape-out cycles per recipe §9. Loop continues toward sat-2
 - `hexa.toml` — package manifest with 7-group `[modules.<group>]` tables.
 - MIT license, README (Korea-fab heritage tone), CHANGELOG.
 
-### Honest scope (raw#10 C3)
+### Honest scope (C3)
 
 - **0 of 28 verbs is empirically wired** at v1.0.0. All verbs ship as
   spec directories (the cp -R'd `canon/domains/compute/<name>/`

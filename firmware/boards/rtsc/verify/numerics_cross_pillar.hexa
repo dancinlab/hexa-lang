@@ -62,7 +62,7 @@
 // Run:
 //     hexa run verify/numerics_cross_pillar.hexa     # exit 0 = locked
 //
-// Authority: own 1 (n=6 lattice SSOT) + recipe §1 slot #7 (cross-cutter
+// Authority: n=6 lattice SSOT + recipe §1 slot #7 (cross-cutter
 // T2) + §4 (5-invariant lint).  Sister of hexa-cern's
 // verify/numerics_cross_pillar.hexa (3-pillar variant — wakefield /
 // lwfa / collider). hexa-rtsc has 4 pillars (BCS / McMillan / Hc2 /

@@ -614,7 +614,7 @@ Toward full sat-1: numerics_pet_cyclotron_solver lifts F-AM-1 → T2×3.
 - Cross-link to sister substrates: `hexa-cern` (accelerator cousin), `hexa-ufo`
   (Stage-3 propulsion fuel dependency), `hexa-bio` (molecular toolkit, HEXA family).
 
-### Honest scope (raw#10 C3)
+### Honest scope (C3)
 - 0/3 verbs empirically wired — all 3 ship as **spec stubs** with declarative
   `.md` SSOT only. Working `.hexa` CLI is **TBD**.
 - n=6 Dirac-mirror lattice (σ=12, τ=4, φ=2, J₂=24) is an algebraic conjecture

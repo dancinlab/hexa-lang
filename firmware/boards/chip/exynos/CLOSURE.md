@@ -95,7 +95,7 @@ by `verify_exynos.py` and/or the extended `terafab/cross_doc_audit.py`
    The honest reading is that the §4 lattice table is a *registration
    of coincidences*, not a derivation.
 
-## §4 Closure caveats (raw#10 honest C3)
+## §4 Closure caveats (honest C3)
 
 Honest readings of what this closure does not yet prove:
 

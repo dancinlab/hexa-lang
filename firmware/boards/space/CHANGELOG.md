@@ -276,7 +276,7 @@ provenance). Begins closure-depth accumulation against `.roadmap.hexa_space
   preregister, canonical-pillar n=6 lattice tokens (cosmic / starship /
   astrodynamics / astronomy / obs_astronomy / astrobiology / medicine),
   J₂ cross-pillar token sweep (≥ 6 of 11 hits), 16/16 ops `verify_*.hexa`
-  presence, and `hexa.toml [closure]` raw#10 C3 honesty.
+  presence, and `hexa.toml [closure]` C3 honesty.
   Sentinel `__HEXA_SPACE_LATTICE__ PASS` — **24/24 EXACT**.
 - `cli/hexa-space.hexa` — `verify` subcmd extended with cross-cutter
   resolution (`TOP_VERIFY_ALIASES`); `verify lattice` proxies the new
@@ -343,7 +343,7 @@ verify_*.hexa companion. **16/16 emit `__HEXA_<VERB>_VERIFY__ PASS`.**
   JS-style: 2nd arg = *length*) and made `selftest`/`status`/`group`
   crash with `index 1 out of bounds`. Now all three pass.
 
-### Closure update (raw#10 honest C3)
+### Closure update (honest C3)
 
 - 27 verbs total: 11 canonical (unchanged spec-only) + 16 operations
   (spec + verify_*.hexa lattice-closure). Verdict bumped to
@@ -376,13 +376,13 @@ verify_*.hexa companion. **16/16 emit `__HEXA_<VERB>_VERIFY__ PASS`.**
   `group <core|engineering|observation|life>`, `selftest`, `help`,
   `--version`.
 - `tests/test_selftest.hexa` smoke harness (11-verb count check).
-- `install.hexa` hx hook (raw#9 STRICT — hexa-only orchestration; zero
+- `install.hexa` hx hook (STRICT — hexa-only orchestration; zero
   Python deps).
 - MIT license, README, CHANGELOG, hexa.toml manifest.
 - GitHub-only distribution (canonical at
   <https://github.com/dancinlab/hexa-space>).
 
-### Honest scope (raw#10 C3)
+### Honest scope (C3)
 - 11/11 verbs ship as **spec-only** (`.md` design docs).
 - **0/11 verbs** have a working empirical sandbox in this repo at v1.0.0.
 - The CLI dispatcher is a **placeholder** — it enumerates verbs / groups

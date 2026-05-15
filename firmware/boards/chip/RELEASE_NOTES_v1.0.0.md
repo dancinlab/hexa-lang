@@ -70,7 +70,7 @@ ls $HEXA_CHIP_ROOT/architecture/   # browse verb spec directly
 | consciousness   | 2 | conscious_chip · conscious_soc                                     |
 | **total**       |**28**|                                                                |
 
-## Honest C3 caveats (raw#10)
+## Honest C3 caveats 
 
 1. **0/28 verbs empirically wired.** All 28 verbs are spec-only
    directory trees at v1.0.0. The CLI dispatcher is a placeholder that

@@ -14,7 +14,7 @@
 //
 // Sentinel: __HEXA_ANTIMATTER_FACTORY__ PASS  (selftest contract).
 //
-// raw#9 hexa-only · raw#10 honest C3: numbers are *candidate spec*; no
+// hexa-only · honest C3: numbers are *candidate spec*; no
 // working factory operates from this module.
 
 let SIGMA = 12

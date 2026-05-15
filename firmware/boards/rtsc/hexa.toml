@@ -63,7 +63,7 @@ verify_hexa = [
 [dependencies]
 hexa-lang = ">=1.0.0"
 
-# ── Closure provenance (raw#10 honest C3) ─────────────────
+# ── Closure provenance (honest C3) ─────────────────
 # v1.0.0 closure: 0/2 verbs WIRED — spec-only release.
 # RT-SC empirical claim (Tc=300K, R=0) is academically UNPROVEN.
 # This substrate ships n=6 closed-form candidate + falsifier preregister.
@@ -74,7 +74,7 @@ verbs_stub = 2
 verdict = "SPEC_ONLY"
 extracted_from = "canon/domains/energy/{room-temp-sc,superconductor}/ @ c0f1f570"
 
-# ── Scope honesty (raw#10 C3) ─────────────────────────────
+# ── Scope honesty (C3) ─────────────────────────────
 [scope]
 honest_scope = "RTSC + SC: n=6 closed-form candidate spec (σ(6)·τ(6)=48T Hc2, φ(6)=2 Cooper pair boson, Tc target 300K, Abrikosov CN=6 hexagonal lattice) + falsifier preregister tables. NO empirical sandbox at v1.0.0; no working .hexa CLI dispatcher."
 not_scope = ["wet-lab synthesis (LK-99 / cuprate / iron-pnictide)", "DFT band-structure prediction", "BCS gap-equation numerical solver", "Meissner phase-field PDE simulation"]

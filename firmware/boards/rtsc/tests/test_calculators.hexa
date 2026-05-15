@@ -15,7 +15,7 @@
 // Run:
 //     hexa run tests/test_calculators.hexa
 //
-// Authority: own 1 (n=6 lattice) + recipe T1/T2 closure-progression contract.
+// Authority: n=6 lattice + recipe T1/T2 closure-progression contract.
 
 let CALCULATORS: [[str]] = [
     ["verify/calc_bcs.hexa",      "__HEXA_RTSC_CALC_BCS__ PASS"],

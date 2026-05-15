@@ -89,7 +89,7 @@ RK4 ODE integration + relativistic correction + 4-effort published parity per fa
 
 ---
 
-## What's still NOT in v1.1.0 (honest scope, raw#10 C3)
+## What's still NOT in v1.1.0 (honest scope, C3)
 
 - **No PCBs.** Phase E1 KiCad files are scoped but not generated.
 - **No flashed firmware.** Rust skeletons compile but require physical boards to flash.

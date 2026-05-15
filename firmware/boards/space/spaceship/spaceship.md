@@ -53,7 +53,7 @@ counts collapse onto the n=6 lattice without rounding:
 | Heat shield tiles | J₂² area-tile classes |
 | Header tank | σ-channel propellant valve manifold |
 
-## §4 STATUS (raw#10 honest C3)
+## §4 STATUS (honest C3)
 
 - v1.0.0 ship: SPEC_ONLY (this `.md` + `verify_spaceship.hexa`).
 - Empirical sandbox (flight-dyn solver, Raptor sim) is **NOT** in repo.

@@ -56,7 +56,7 @@ abort regimes (proceed / divert / abort-to-orbit / abort-to-pad).
 | Optimus-on-Mars | sopfr=5 robot units (2026/27 window) |
 | Edge inference fabric | J₂=24 cores per ship × n=6 ships = 144 cores/wave |
 
-## §4 STATUS (raw#10 honest C3)
+## §4 STATUS (honest C3)
 
 - v1.0.0: SPEC_ONLY (this `.md` + `verify_space_ai_center.hexa`).
 - Verify script tests counts; does NOT run any neural inference.

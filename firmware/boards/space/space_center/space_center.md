@@ -57,7 +57,7 @@ operator-shifts/day**, anchoring the J₂ identity at the operations layer.
 | VSFB SLC-4E | F9 polar (CA) |
 | GSE / chilldown / SQD | τ-regime cryogenic timing |
 
-## §4 STATUS (raw#10 honest C3)
+## §4 STATUS (honest C3)
 
 - v1.0.0: SPEC_ONLY (this `.md` + `verify_space_center.hexa`).
 - Verify script checks **center counts vs lattice**; does NOT simulate

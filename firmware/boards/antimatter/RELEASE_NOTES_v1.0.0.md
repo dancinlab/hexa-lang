@@ -31,7 +31,7 @@ master identity:   σ · φ = n · τ = 24
 - `hexa.toml` manifest, `install.hexa` hx hook, `tests/test_selftest.hexa`.
 - README with §Why / §Verbs / §Status / §Install / §Cross-link / §License.
 
-## What's NOT in v1.0.0 (honest scope, raw#10 C3)
+## What's NOT in v1.0.0 (honest scope, C3)
 
 - **No working numerical sandbox.** The `.hexa` CLI is a placeholder; all 3 verbs
   print sentinels only.

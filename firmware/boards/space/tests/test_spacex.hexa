@@ -10,7 +10,7 @@
 //   5. cli/hexa-space.hexa selftest still reports 11/11 (regression guard
 //      after the substr→split fix in _split_pipe)
 //
-// raw#10 honest C3:
+// honest C3:
 //   - This is a smoke test, not a coverage test. It catches sentinel
 //     drift, not subtle off-by-one in the registry.
 //   - Total=23 is the snapshot baseline (2026-05-07). Bump when the

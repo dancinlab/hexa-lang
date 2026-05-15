@@ -4,19 +4,19 @@
 //
 // Pass criterion: 28/28 checks passed + __HEXA_RTSC_FALSIFIER__ PASS sentinel.
 // Composition:
-//   6 (roadmap §A.4 row+status) + 6 (.own own 2 mirror) + 6 (cli surface)
+//   6 (roadmap §A.4 row+status) + 6 (cli surface)
 //   + 1 (banned-status / silent-retract) + 6 T1-presence (4×calc_*.hexa per F)
 //   + 3 T2-presence (F-SC-{1,2,3} T2 = numerics_bcs.hexa) = 28.
 // F-SC-{1,2,3} now at 67% closure (T1+T2). F-RTSC-{1,2,3} at 33% (T1 only).
 // Catches:
-//   - missing F-RTSC-{1,2,3} / F-SC-{1,2,3} ID in cli / roadmap / .own
+//   - missing F-RTSC-{1,2,3} / F-SC-{1,2,3} ID in cli / roadmap
 //   - banned status tokens (RETRACTED / WITHDRAWN / PENDING / TBD) on rows
 //   - declared tier script (Fk_T*_SCRIPTS) missing on disk
 //
 // Run:
 //     hexa run tests/test_falsifier.hexa
 //
-// Authority: own 2 (RT-SC empirical-unproven contractual + falsifier monotone).
+// Authority: RT-SC empirical-unproven contractual + falsifier monotone.
 
 fn main() {
     let root = env("HEXA_RTSC_ROOT")

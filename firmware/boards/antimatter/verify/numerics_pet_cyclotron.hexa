@@ -26,7 +26,7 @@
 //
 // Authority: pet_cyclotron/pet-cyclotron.md §1 WHY + §4 STRUCT + §5 core
 //   numerics + §6 VERIFY · .roadmap.hexa_antimatter §A.4 F-AM-1.
-// raw#9 hexa-only · raw#10 honest C3: closed-form numerical only —
+// hexa-only · honest C3: closed-form numerical only —
 //   parity vs hospital-cyclotron public spec → numerics_pet_cyclotron_parity
 //   (future chunk); empirical Stage-1+ TBD.
 

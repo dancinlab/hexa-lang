@@ -56,7 +56,7 @@ caps at **180,000 cores ≈ σ²·n·sopfr(6) × scale = 12·12·6·5 ≈ 4320 �
 | Inter-sat optical link | σ=12 wavelength channels |
 | Ground gateway | sopfr=5 teleport classes (matches `satellite` verb) |
 
-## §4 STATUS (raw#10 honest C3)
+## §4 STATUS (honest C3)
 
 - v1.0.0: SPEC_ONLY (this `.md` + `verify_space_datacenter.hexa`).
 - The Musk "space computing power market" announcement is a stated

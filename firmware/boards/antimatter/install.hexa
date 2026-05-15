@@ -10,14 +10,14 @@
 //
 // Mirrors hexa-bio/install.hexa pattern (commit 2026-05-04).
 //
-// Responsibilities (each idempotent, raw#9 STRICT — no .py creation):
+// Responsibilities (each idempotent, STRICT — no .py creation):
 //   1. Pre-install: no-op (spec-first; no python deps at v1.0.0).
 //   2. Post-install: run `hexa-antimatter selftest` via the freshly-staged
 //      cli/hexa-antimatter.hexa. Selftest output captured; non-PASS = warn-only
 //      (placeholder CLI always prints sentinels).
 //
-// raw#9 hexa-only, raw#11 snake_case, raw#15 no-hardcode.
-// raw#10 honest C3: see hexa-antimatter/README.md "Status" section.
+// hexa-only, snake_case, no-hardcode.
+// honest C3: see hexa-antimatter/README.md "Status" section.
 
 fn run_quick_selftest(root: str) -> bool {
     let cli = root + "/cli/hexa-antimatter.hexa"

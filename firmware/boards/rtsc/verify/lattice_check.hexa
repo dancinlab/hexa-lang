@@ -1,7 +1,7 @@
 #!hexa strict
 // hexa-rtsc/verify/lattice_check.hexa — n=6 master identity audit (.hexa primary).
 //
-// Validates the n=6 closed-form candidate lattice declared in .own own 1:
+// Validates the n=6 closed-form candidate lattice:
 //   sigma(6) ≡ 12   (BCS specific-heat molecule + 12-vertex Cooper-pair shell)
 //   tau(6)   ≡ 4    (4-phase ladder)
 //   phi(6)   ≡ 2    (Cooper pair = 2-electron boson)
@@ -9,12 +9,12 @@
 //   master   ≡ sigma · phi == n · tau == 24
 //
 // Sister of hexa-sscb/verify/sscb_verify.py — same shape (10/10 PASS sentinel +
-// FALSIFIERS list), but in .hexa per raw#9 hexa-only-orchestration.
+// FALSIFIERS list), but in .hexa per hexa-only-orchestration.
 //
 // Run:
 //     hexa run verify/lattice_check.hexa     # exit 0 = all PASS
 //
-// Authority: own 1 (n=6 master identity); raw#9 (hexa-only); raw#10 (honest C3).
+// Authority: n=6 master identity; (hexa-only); (honest C3).
 
 let VERSION = "1.0.0"
 
@@ -160,7 +160,7 @@ fn test_j2_mathieu() {
 
 fn print_falsifiers() {
     println("")
-    println("  §11 FALSIFIERS (preregister, OPEN per .own own 2):")
+    println("  §11 FALSIFIERS (preregister, OPEN):")
     println("    ✗ F-RTSC-1: Tc(measured) < 250 K       → DEMOTE n=6 Tc=300K")
     println("    ✗ F-RTSC-2: Hc2 < 30 T at 4.2 K        → DEMOTE σ·τ=48 closed-form")
     println("    ✗ F-RTSC-3: no Meissner expulsion      → DEMOTE φ=2 boson")

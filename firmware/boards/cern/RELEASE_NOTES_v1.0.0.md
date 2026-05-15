@@ -30,7 +30,7 @@ A petite, peer-of-Lumière standalone bundle distilling the canon **accelerator*
 
 ---
 
-## Honesty (raw#10 C3)
+## Honesty (C3)
 
 > **specs only, .hexa CLI TBD.** Empirical wiring deferred to Stage-1+ benchtop builds.
 

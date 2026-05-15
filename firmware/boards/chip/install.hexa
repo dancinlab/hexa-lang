@@ -13,7 +13,7 @@
 // (no Python aux deps); post-install runs a quick selftest counting
 // verb directories.
 //
-// raw#9 hexa-only, raw#11 snake_case, raw#15 no-hardcode, raw#10 honest C3.
+// hexa-only, snake_case, no-hardcode, honest C3.
 
 fn run_quick_selftest(root: str) -> bool {
     let cli = root + "/cli/hexa-chip.hexa"

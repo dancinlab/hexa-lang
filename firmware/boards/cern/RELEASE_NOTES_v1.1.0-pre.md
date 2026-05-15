@@ -77,7 +77,7 @@ hexa run tests/test_all.hexa   # 4/4 PASS, exit 0
 
 ---
 
-## Honest scope (raw#10 C3)
+## Honest scope (C3)
 
 The verify surface confirms **algebraic + cross-doc** consistency only.
 Empirical falsifiers F-PCERN-1/2/3 remain UNVERIFIED v1.0 — there is

@@ -30,9 +30,9 @@
 // Per-verb sub-routers are spec-only at v1.0.0; dispatch echoes spec path.
 //
 // Constraints:
-//   raw#9   — hexa-only orchestration; no Python deps
-//   raw#15  — write-confined (audit log only)
-//   raw#10  — honest C3 caveats embedded
+//     — hexa-only orchestration; no Python deps
+//    — write-confined (audit log only)
+//    — honest C3 caveats embedded
 //
 // Cost: $0 (Mac local; spec-first; no compute invoked).
 
@@ -122,11 +122,11 @@ fn _verb_dir_exists(v: str) -> bool {
     return r == "yes"
 }
 
-// ─── caveat printer (raw#10 honest C3) ───
+// ─── caveat printer (honest C3) ───
 
 fn _print_caveats() {
     println("")
-    println("--- caveats (raw#10 C3) ---")
+    println("--- caveats (C3) ---")
     println("  1. v1.1.0 is SPEC-FIRST. 30/30 verbs ship as spec directories;")
     println("     29 extracted from canon@c0f1f570 + 1 (hexa_ai_native_n6)")
     println("     added Phase G iter 9. Per-verb working .hexa CLI sandboxes are TBD.")
@@ -287,7 +287,7 @@ fn cmd_terafab(a: [str]) {
     println("    python3 $HEXA_CHIP_ROOT/terafab/cross_doc_audit.py")
     println("    python3 $HEXA_CHIP_ROOT/terafab/verify_terafab.py")
     println("")
-    println("  Caveats (raw#10 honest C3):")
+    println("  Caveats (honest C3):")
     println("    1. terafab is a META-DOMAIN, not a verb — verb counts unchanged.")
     println("    2. F-TERAFAB-1..6 are bench-only at Mk.I (data-arrival pending).")
     println("    3. F-TERAFAB-7 χ² weak at Mk.I (p≈0.86); reformulation deferred Mk.II.")

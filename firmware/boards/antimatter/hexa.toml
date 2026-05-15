@@ -64,7 +64,7 @@ hexa = [
 [dependencies]
 hexa-lang = ">=1.0.0"
 
-# ── Closure provenance (raw#10 honest C3) ─────────────────
+# ── Closure provenance (honest C3) ─────────────────
 # v1.0.0 closure: 3/3 verbs wired COMPUTATIONALLY (n=6 arithmetic + SSOT
 # text-scan + 4-step verifier orchestrator). 0/3 wired EMPIRICALLY (no
 # apparatus, no clinical operation). The CLI is functional, not placeholder.
@@ -79,7 +79,7 @@ verifier_sweep = "verify/all.hexa — 4/4 PASS (n6 + cross-doc + release-ladder 
 extracted_from = "canon/domains/physics/ @ 2026-05-06 (SHA c0f1f570)"
 upstream_marker = "canon/domains/physics/{antimatter-factory,tabletop-antimatter,pet-cyclotron}/"
 
-# ── Scope honesty (raw#10 C3) ─────────────────────────────
+# ── Scope honesty (C3) ─────────────────────────────
 [scope]
 honest_scope = "3-verb antimatter substrate, computational-wired. FACTORY / TABLETOP / PET-CYCLOTRON each emit n=6-derived numbers from a working .hexa module; verify/all.hexa orchestrates 4 step verifiers (n6 algebra, cross-doc audit, release ladder, selftest). Working APPARATUS is out of scope."
 not_scope = ["working antiproton production (no facility)", "Penning trap empirical fit (no apparatus)", "PET cyclotron operation (clinical out-of-repo)", "anti-H synthesis (theoretical only)"]

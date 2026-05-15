@@ -6,7 +6,7 @@
 //   2. Every verify_*.hexa exists and emits __HEXA_<VERB>_VERIFY__ PASS.
 //   3. cli/hexa-space.hexa `ops verify-all` proxy reports 16/16.
 //
-// raw#10 honest C3:
+// honest C3:
 //   - PASS = "all 16 ops verbs ship + lattice arithmetic closes" — NOT
 //     a claim about SpaceX physics. The verify scripts test bookkeeping
 //     identities only.

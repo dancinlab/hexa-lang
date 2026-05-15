@@ -37,7 +37,7 @@ duty cycle:  pulsed (~Hz)  → continuous                     qualitative step-c
 
 ---
 
-## Honesty (raw#10 C3)
+## Honesty (C3)
 
 1. The HEXA column is **design-target ceiling**. v1.0.0 ships specs only — no benchtop hardware yet.
 2. LHC and DESY columns are public-domain figures (CERN Annual Report; DESY FLASHForward / LUX publications); no live data feed or proprietary calibration in this repo.

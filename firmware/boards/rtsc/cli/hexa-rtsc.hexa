@@ -11,16 +11,16 @@
 //   help        — this help
 //   --version   — print version
 //
-// HONEST STATUS (raw#10 C3):
+// HONEST STATUS (C3):
 //   RT-SC is academically UNPROVEN as of 2026-05. LK-99 (2023) and
 //   subsequent candidates have not been independently replicated.
 //   This v1.0.0 CLI dispatcher is a PLACEHOLDER — no working empirical
 //   sandbox; verbs print spec excerpt + falsifier preregister only.
 //
 // Constraints:
-//   raw#9   — hexa-only orchestration; no python bridge
-//   raw#15  — write-confined (audit log only)
-//   raw#10  — honest C3 caveats embedded
+//     — hexa-only orchestration; no python bridge
+//    — write-confined (audit log only)
+//    — honest C3 caveats embedded
 //
 // Cost: $0 (Mac local; pure spec-print, no compute).
 
@@ -81,11 +81,11 @@ fn _file_exists(p: str) -> bool {
     return r == "yes"
 }
 
-// ─── caveat printer (raw#10 honest C3) ───
+// ─── caveat printer (honest C3) ───
 
 fn _print_caveats() {
     println("")
-    println("--- caveats (raw#10 C3) ---")
+    println("--- caveats (C3) ---")
     println("  1. RT-SC is academically UNPROVEN (LK-99 etc. unsettled). v1.0.0 ships")
     println("     spec + falsifier preregister only — no working empirical sandbox.")
     println("  2. CLI dispatcher is PLACEHOLDER TBD; verbs print spec excerpt only.")
@@ -265,7 +265,7 @@ fn cmd_lattice(a: [str]) {
     if lhs == rhs && lhs == 24 {
         println("                     ✓ holds (J₂ = 24, Mathieu M₂₄)")
     } else {
-        println("                     ✗ BROKEN — own 1 violation")
+        println("                     ✗ BROKEN — lattice violation")
     }
     println("")
     println("  derived:           Hc2 = σ·τ = " + str(hc2) + " T  (critical magnetic field gate)")
@@ -376,21 +376,18 @@ fn cmd_verify(a: [str]) {
 fn cmd_selftest(a: [str]) {
     let ok_rtsc = _file_exists(SPEC_RTSC)
     let ok_sc   = _file_exists(SPEC_SC)
-    let ok_own  = _file_exists(HR + "/.own")
     let ok_ai   = _file_exists(HR + "/README.ai.md")
     let ok_v1   = _file_exists(HR + "/verify/lattice_check.hexa")
     let ok_v2   = _file_exists(HR + "/verify/cross_doc_audit.hexa")
     let ok_v3   = _file_exists(HR + "/verify/falsifier_check.hexa")
     let ok_lin  = _file_exists(HR + "/doc/lineage/origin.md")
 
-    println("hexa-rtsc selftest — sentinel sweep (specs + own_v1 pattern + verify/)")
+    println("hexa-rtsc selftest — sentinel sweep (specs + verify/)")
     println("")
     if ok_rtsc { println("  [OK]  rtsc spec    : " + SPEC_RTSC) }
     else       { println("  [!!]  rtsc spec    : MISSING " + SPEC_RTSC) }
     if ok_sc   { println("  [OK]  sc   spec    : " + SPEC_SC) }
     else       { println("  [!!]  sc   spec    : MISSING " + SPEC_SC) }
-    if ok_own  { println("  [OK]  .own own_v1  : " + HR + "/.own") }
-    else       { println("  [!!]  .own own_v1  : MISSING " + HR + "/.own") }
     if ok_ai   { println("  [OK]  README.ai.md : " + HR + "/README.ai.md") }
     else       { println("  [!!]  README.ai.md : MISSING") }
     if ok_v1   { println("  [OK]  verify/lattice_check.hexa") }
@@ -441,7 +438,7 @@ fn cmd_help() {
     println("  status          0/2-wired verb table + verdict + caveats")
     println("  lattice         live-compute n=6 closed-form (σ τ φ Hc2 master)")
     println("  verify          run all verify/*.hexa invariant audits")
-    println("  selftest        sentinel sweep (specs + own_v1 + verify/ landing)")
+    println("  selftest        sentinel sweep (specs + legacy-ssot + verify/ landing)")
     println("")
     println("global flags:")
     println("  --version       show version")

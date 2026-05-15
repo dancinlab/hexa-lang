@@ -128,7 +128,7 @@ note = "Outer envelope wrapping the 6 hexa-chip groups under Intel IDM 2.0 + Int
 [dependencies]
 hexa-lang = ">=1.0.0"
 
-# ── Closure provenance (raw#10 honest C3) ─────────────────
+# ── Closure provenance (honest C3) ─────────────────
 # v1.0.0 closure: 28-verb spec-first extraction. Working .hexa CLI dispatcher
 # is a placeholder router that lists groups + verbs; per-verb sandboxes are
 # spec-only at this release.
@@ -142,7 +142,7 @@ extracted_from = "canon/domains/compute/ @ c0f1f570"
 spec_count_caveat = "kick-spec one-liner read '28-verb / 7-group'; explicit verb_map enumerated 29 verbs across 6 group categories. v1.0.0 honors the line-by-line map."
 runnable_surface = "verify/cli.hexa (5 checks) + verify/verb_runner.hexa (29 sandboxes) + tests/run_tests.hexa (4 tests) — make ci aggregates"
 
-# ── Scope honesty (raw#10 C3) ─────────────────────────────
+# ── Scope honesty (C3) ─────────────────────────────
 [scope]
 honest_scope = "29-verb 통합 chip substrate (6 그룹: architecture + design + process + packaging + accelerator + consciousness). Spec-first; per-verb working .hexa CLI sandboxes TBD. Korea-fab heritage tone (Samsung·SK·Hynix)."
 not_scope = [

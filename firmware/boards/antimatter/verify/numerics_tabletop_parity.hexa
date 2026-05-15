@@ -30,7 +30,7 @@
 // Authority: tabletop/tabletop-antimatter.md §1 WHY + §2 COMPARE +
 //   §6 EVOLVE Mk.V · .roadmap.hexa_antimatter §A.4 F-AM-2 + §0 terminal
 //   goal 1.7×10¹² p̄/s.
-// raw#9 hexa-only · raw#10 honest C3: closed-form numerical only.
+// hexa-only · honest C3: closed-form numerical only.
 
 use "self/runtime/math_pure"
 

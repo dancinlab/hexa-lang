@@ -31,7 +31,7 @@
 // Authority: factory/antimatter-factory.md §8 BLOWUP (cite lines for
 //   N_0, tau_0, $_0) · tabletop/tabletop-antimatter.md §1/§2 (cite CERN
 //   AD = 3e7 /s) · .roadmap.hexa_antimatter §A.4 F-AM-3.
-// raw#9 hexa-only · raw#10 honest C3: this script does NOT pull live
+// hexa-only · honest C3: this script does NOT pull live
 //   data — published baseline values are static citations.  T3 closes
 //   only when an empirical run-feed lands.
 

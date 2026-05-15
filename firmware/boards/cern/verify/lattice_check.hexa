@@ -33,7 +33,7 @@ fn hexa_cern_root() -> str {
 
 let ROOT = hexa_cern_root()
 
-// ── canonical n=6 lattice values (own 1 of hexa-cern) ────────────────────
+// ── canonical n=6 lattice values (n=6 lattice — hexa-cern) ────────────────────
 let SIGMA_6   = 12      // σ(6) — sum-of-divisors
 let TAU_6     = 4       // τ(6) — divisor count
 let PHI_6     = 2       // φ(6) — Euler totient
@@ -227,7 +227,7 @@ fn check_hexa_toml_honesty() {
         return
     }
     let ok = _contains(txt, "verdict") && _contains(txt, "SPECS_ONLY")
-    _check(ok, "hexa.toml [closure] verdict = SPECS_ONLY (raw#10 C3)",
+    _check(ok, "hexa.toml [closure] verdict = SPECS_ONLY (C3)",
            "honest scope declaration present")
 }
 

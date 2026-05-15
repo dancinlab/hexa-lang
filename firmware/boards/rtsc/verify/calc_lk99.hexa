@@ -330,7 +330,7 @@ fn check_hexatoml_unproven() {
            "")
     _check(_has(toml, "UNPROVEN") || _has(toml, "unproven"),
            "hexa.toml: academic_status = UNPROVEN flag present",
-           "raw#10 honest C3 contractual")
+           "honest C3 contractual")
     _check(_has(toml, "unsettled"),
            "hexa.toml: 'unsettled' modifier present",
            "")
@@ -343,7 +343,7 @@ let FALSIFIERS = [
     "F-RTSC-1 dual — substrate family count ≠ 12 (σ(6)) needed for known SC mechanisms → DEMOTE σ=12 cardinality bin",
     "F-RTSC-1 dual — phase ladder count ≠ 4 (τ(6)) for valid SC discovery → DEMOTE τ=4 phase quartet",
     "false-positive multiplier break — observed RT-SC claim hit rate ≠ 1/10 (σ-φ) → DEMOTE σ-φ heuristic",
-    "negative-result silent drop — any RT-SC retraction missing from catalog → R4 (own 2 monotone) violation",
+    "negative-result silent drop — any RT-SC retraction missing from catalog → R4 (falsifier monotone) violation",
     "confirmed-at-ambient counter-example — find any ambient T+P SC at Tc≥300K with N≥4 reproductions → F-RTSC-1 closes positive (RT-SC achieved)",
 ]
 
@@ -409,7 +409,7 @@ fn main() {
     check_spec_anchors()
     println("")
 
-    println("  hexa.toml UNPROVEN flag (raw#10 honest C3):")
+    println("  hexa.toml UNPROVEN flag (honest C3):")
     check_hexatoml_unproven()
 
     println("")

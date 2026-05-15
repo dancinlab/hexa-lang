@@ -1092,7 +1092,7 @@ inventory) + §2 (7-step cycle). closure-depth accumulation begin.
   Each falsifier (F-RTSC-{1,2,3} + F-SC-{1,2,3}) now emits T1/T2/T3 tier
   status + closure pct (0/33/67/100). F-SC-{1,2,3} at 33% (T1 = calc_bcs);
   F-RTSC-{1,2,3} at 0% (no T1 yet). Existing monotone-audit (roadmap §A.4
-  row+status / .own own 2 mirror / cli surface / banned-status) retained.
+  row+status / cli surface / banned-status) retained.
   **22/22 PASS** · sentinel `__HEXA_RTSC_FALSIFIER__ PASS`.
 - **`tests/test_calculators.hexa`** (recipe §1 build/tests) — registered
   (filename, sentinel) for calc_bcs.hexa; grows per future calc_/numerics_
@@ -1138,7 +1138,7 @@ inventory) + §2 (7-step cycle). closure-depth accumulation begin.
   §Install, §Cross-link (3 downstream consumers), §License.
 - MIT License.
 
-### Honest scope (raw#10 C3)
+### Honest scope (C3)
 
 - RT-SC is academically **UNPROVEN** as of 2026-05; LK-99 and subsequent
   candidates have not been independently replicated.

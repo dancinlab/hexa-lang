@@ -10,14 +10,14 @@
 //
 // Mirrors hexa-bio/install.hexa pattern (commit 2026-05-04).
 //
-// Responsibilities (each idempotent, raw#9 STRICT — no Python required):
+// Responsibilities (each idempotent, STRICT — no Python required):
 //   1. Pre-install: nothing (spec-only repo; zero deps).
 //   2. Post-install: run `hexa-space selftest` via the freshly-staged
 //      cli/hexa-space.hexa. Selftest output captured; non-PASS = warn-only
 //      (not a blocker — placeholder dispatcher always passes verb-count check).
 //
-// raw#9 hexa-only, raw#11 snake_case, raw#15 no-hardcode.
-// raw#10 honest C3: see hexa-space/README.md "Status" section.
+// hexa-only, snake_case, no-hardcode.
+// honest C3: see hexa-space/README.md "Status" section.
 
 fn run_quick_selftest(root: str) -> bool {
     let cli = root + "/cli/hexa-space.hexa"

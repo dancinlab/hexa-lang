@@ -52,7 +52,7 @@ identity:
     substrate: Bi_2 Se_3 topological insulator
     field electrodes: 6-arm gate (hexagonal)
     spin-orbit coupling: Rashba alpha = 10 meV*nm
-    field modes: 6 channels x 2 spin-up/down = 12 sigma modes
+    field modes: 6 channels x 2 spin-up/legacy-ssot = 12 sigma modes
 ```
 
 **n=6 fit**: topological insulator has 6 Dirac points (triangular-lattice BZ symmetry). sigma(6)=12 = 6 Dirac x 2 spin. tau=4 = field-induced phase interpolation 4-stage.

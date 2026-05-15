@@ -17,7 +17,7 @@
 // Format (one program per line, pipe-separated):
 //   slug|name|status|net|group
 //
-// raw#10: this is a *snapshot* analyzer; refresh entries when the .md
+// : this is a *snapshot* analyzer; refresh entries when the .md
 // updates. The slug is the stable identifier.
 //
 // Cost: $0 (Mac local, stdout only).

@@ -14,7 +14,7 @@ requires:
 
 This document is the canonical index for the HEXA chip-design catalog. Each row
 in the table below is an independent sub-domain, restructured into its own
-`hexa-<name>/hexa-<name>.md` directory (own 3: one-doc-per-domain). The
+`hexa-<name>/hexa-<name>.md` directory (one-doc-per-domain). The
 comparison material originally kept in `chip-roadmap-comparison.md` has been
 merged here so that `chip-design/` contains a single canonical .md at the root.
 
@@ -171,7 +171,7 @@ and needs one authored (see falsifier gate §7).
 ## Provenance
 
 - 2026-04-21 — restructured from flat layout (13 loose .md + 11 loose
-  verify scripts) into 12 sub-domain directories to comply with **own 3**
+  verify scripts) into 12 sub-domain directories to comply with code-scope rule
   (one-doc-per-domain). `chip-roadmap-comparison.md` merged into this
   canonical index and deleted.
 - Previous canonical: `chip-roadmap-comparison` v2 (829 lines) — full §7

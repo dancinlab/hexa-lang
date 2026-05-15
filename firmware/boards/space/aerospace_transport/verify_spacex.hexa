@@ -5,7 +5,7 @@
 // Pattern parity with engineering/verify_space-engineering.hexa and
 // aerospace/verify_aerospace.hexa (n=6 invariant calculator).
 //
-// raw#10 honest C3:
+// honest C3:
 //   - Numbers below are *manually transcribed* from spacex_intel_2026.md
 //     (snapshot 2026-05-07). They are **not** parsed dynamically; refresh
 //     them when the .md is updated.

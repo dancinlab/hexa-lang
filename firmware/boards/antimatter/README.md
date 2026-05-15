@@ -122,7 +122,7 @@ hexa-antimatter/
 
 ## § Status
 
-**v1.1.0 RSC code-layer FINAL.  3-verb substrate.  `RSC_SATURATED__ STOP` + 4/4 falsifier 100% bookkeeping closure.  No working apparatus (raw#10 honest C3).**
+**v1.1.0 RSC code-layer FINAL.  3-verb substrate.  `RSC_SATURATED__ STOP` + 4/4 falsifier 100% bookkeeping closure.  No working apparatus (honest C3).**
 
 - **3/3 verbs wired computationally** — each verb derives candidate numbers from the n=6 lattice (`σ·τ=48`, `σ²=144`, `σ-φ=10`, `σ³=1728`, `σ⁶≈3×10⁶`) at runtime.  `0/3 wired empirically`.
 - `.hexa` CLI now dispatches 30+ `verify` sub-targets across **25 verify scripts** (4 cross-cutter + 4 calc T1 + 14 numerics T2 + 4 empirical T3 + 3 meta).  `verify all` runs the 38-step aggregator.

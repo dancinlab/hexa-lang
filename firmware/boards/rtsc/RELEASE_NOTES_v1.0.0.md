@@ -32,7 +32,7 @@ sandbox. RT-SC is **academically unproven** (LK-99 et al. unsettled).
 - **GitHub-only distribution** — canonical at
   <https://github.com/dancinlab/hexa-rtsc>.
 
-## Honest status (raw#10 C3)
+## Honest status (C3)
 
 > **RT-SC is academically UNPROVEN.** LK-99 (2023) and subsequent room-temp
 > candidates have **not been independently replicated**. This v1.0.0 release

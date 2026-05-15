@@ -27,8 +27,8 @@
 //
 // Authority: factory/antimatter-factory.md §7 VERIFY (TP-1 through TP-10) +
 //   §8 BLOWUP (B⁴ confinement) · .roadmap.hexa_antimatter §A.4 F-AM-3.
-// raw#9 hexa-only (math_pure stays in pure-hexa space — no python bridge) ·
-//   raw#10 honest C3: closed-form numerical agreement only — empirical
+// hexa-only (math_pure stays in pure-hexa space — no python bridge) ·
+//   honest C3: closed-form numerical agreement only — empirical
 //   apparatus (T3) remains Stage-1+ TBD.
 
 use "self/runtime/math_pure"

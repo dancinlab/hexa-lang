@@ -77,7 +77,7 @@ from `canon/domains/energy/{room-temp-sc,superconductor}/` (SHA
 Verdict: **bookkeeping closure 100 %**, empirical claim **NOT verified**.
 The lattice machinery + sim parity + sim-firmware + HDL/MCU build are
 fully wired: 35 verify/*.hexa scripts + 4 sim-firmware + 12/12 iverilog
-testbench + 15/15 cargo unit tests pass end-to-end. Per `.own` own 2:
+testbench + 15/15 cargo unit tests pass end-to-end. Per legacy falsifier rule:
 a `__HEXA_RTSC_*__ PASS` sentinel **never** validates the empirical
 RT-SC claim — only that the closed form is regression-locked at the
 code-layer for future bench comparison.
@@ -166,7 +166,7 @@ hexa run $HEXA_RTSC_ROOT/cli/hexa-rtsc.hexa selftest
 ### Quick Start
 
 ```bash
-hexa-rtsc selftest      # sentinel sweep — specs + own_v1 + verify/ landing
+hexa-rtsc selftest      # sentinel sweep — specs +  + verify/ landing
 hexa-rtsc status        # verb table + verdict + caveats
 hexa-rtsc lattice       # live-compute n=6 closed-form (σ τ φ Hc2 master)
 hexa-rtsc verify        # run all verify/*.hexa invariant audits (35 scripts)
@@ -280,7 +280,6 @@ hexa-rtsc/
 ├── LICENSE                       ← MIT
 ├── CHANGELOG.md
 ├── RELEASE_NOTES_v1.0.0.md
-├── .own                          ← project-local SSOT (mk2 own_v1) — n=6 lattice + falsifier + code-scope
 ├── .roadmap.hexa_rtsc            ← cross-cutting tracker — release cadence + falsifier preregister
 ├── hexa.toml                     ← package manifest (entry/[[bin]] auto-detected by hx)
 ├── install.hexa                  ← hx pre/post hook
@@ -313,7 +312,7 @@ follows **hive raw.mk2 arch.001** — the canonical core-hierarchy pattern
 shared with sister substrates `hexa-sscb` (compute axis, doc-first) and
 `hexa-bio` (molecular toolkit). v1.0.0 keeps `rtsc/` + `sc/` flat; v1.1.0
 will split them into `core/rtsc/` + `core/sc/` + `module/applications/`
-per `.own` own 3 + `doc/lineage/origin.md` migration plan.
+per legacy code-scope rule + `doc/lineage/origin.md` migration plan.
 
 ---
 
@@ -325,8 +324,8 @@ per `.own` own 3 + `doc/lineage/origin.md` migration plan.
   (SHA `c0f1f570`, 2026-05-06).
 - CLI dispatcher created **fresh** at extraction; `lattice` + `verify`
   subcommands wired 2026-05-07.
-- Structural pattern (.own + README.ai.md + verify/ + doc/lineage/)
-  aligned to `hexa-sscb` mk2 own_v1 on 2026-05-07.
+- Structural pattern (README.ai.md + verify/ + doc/lineage/)
+  aligned to `hexa-sscb` mk2 on 2026-05-07.
 - Sister-of-substrates extraction template: `hexa-bio` v1.0.0
   (dancinlab/hexa-bio, 2026-05-04).
 - Full file-by-file provenance: [`doc/lineage/origin.md`](doc/lineage/origin.md).

@@ -14,7 +14,7 @@
 // Run:
 //     hexa run tests/test_verify.hexa
 //
-// Authority: own 1 (lattice), own 2 (falsifier), own 3 (code-scope) +
+// Authority: lattice, falsifier, code-scope +
 //            recipe §7.2/§7.3 (saturation predicate).
 
 fn main() {

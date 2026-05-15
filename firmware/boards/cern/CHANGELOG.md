@@ -628,7 +628,7 @@ All new code is `.hexa` (zero `.py` added). Audits the v1.0.0 frozen specs witho
 - `cli/hexa-cern.hexa` main routing — only the FIRST positional token triggers global `--help`, so sub-positioned flags (e.g. `verify --help`) reach their subcommand's own help branch.
 - `.gitignore` — `state/` patterns now match `**/state/` (build/state markers ignored); `build/out/` + `*.pdf` ignored, but `build/Makefile` + `build/header.tex` tracked.
 
-### Honesty (raw#10 C3)
+### Honesty (C3)
 - The verify surface confirms **algebraic + cross-doc** consistency only. Empirical falsifiers F-PCERN-1/2/3 remain UNVERIFIED v1.0 (no Stage-1+ benchtop build yet). Numerical solvers (laser pulse → electron energy parity, σ-cascade integration, classical Hamiltonian τ=4 phase numerics) target v1.1.0 / v1.2.0.
 
 ---
@@ -649,7 +649,7 @@ All new code is `.hexa` (zero `.py` added). Audits the v1.0.0 frozen specs witho
 - `docs/cern_baseline.md` — LHC 7 TeV/27 km vs DESY 1 GeV/m vs HEXA σ-φ=10 GeV/m comparison table.
 - README §Why · §Verbs · §Verification + §Status · §Install · §Cross-link · §License.
 
-### Honesty (raw#10 C3)
+### Honesty (C3)
 - **specs only, .hexa CLI TBD.** Empirical wiring (laser-plasma sandbox, parent integration, classical baseline solver) deferred to Stage-1+ benchtop builds.
 - n=6 σ-cascade 6-order claim (precision ×10, throughput ×144, energy ÷12, size ÷10, error ÷144, lifetime ×48) is a **design-target ceiling**, not a measurement.
 - LHC 7 TeV/27 km + DESY 1 GeV/m comparison is paper-only.

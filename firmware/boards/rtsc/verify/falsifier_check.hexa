@@ -5,10 +5,10 @@
 // .roadmap.hexa_rtsc §A.4 declares 6 falsifiers (F-RTSC-{1,2,3} +
 // F-SC-{1,2,3}). This script does TWO jobs:
 //
-//   (a) MONOTONE AUDIT — each ID surfaces in roadmap §A.4 / .own own 2 /
+//   (a) MONOTONE AUDIT — each ID surfaces in roadmap §A.4 /
 //       cli/hexa-rtsc.hexa, with status ∈ {OPEN, CONFIRMED, DEMOTED}.
 //       No banned tokens (RETRACTED / WITHDRAWN / PENDING / TBD) on any
-//       falsifier row. (own 2 monotone contract.)
+//       falsifier row. (falsifier monotone contract.)
 //
 //   (b) CLOSURE-PROGRESS — for each falsifier, accumulate evidence over
 //       three tiers and report closure_pct (0/33/67/100):
@@ -29,7 +29,7 @@
 // Run:
 //     hexa run verify/falsifier_check.hexa     # exit 0 = monotone + closure-locked
 //
-// Authority: own 1 (n=6 lattice) + own 2 (RT-SC empirical-unproven +
+// Authority: n=6 lattice + RT-SC empirical-unproven +
 //            falsifier monotone). Recipe ref: docs/runnable_surface_recipe.md.
 
 let VERSION = "1.0.0"
@@ -48,7 +48,6 @@ fn _root() -> str {
 
 let ROOT = _root()
 let DOC_ROADMAP = ROOT + "/.roadmap.hexa_rtsc"
-let DOC_OWN     = ROOT + "/.own"
 let DOC_CLI     = ROOT + "/cli/hexa-rtsc.hexa"
 let VERIFY_DIR  = ROOT + "/verify"
 
@@ -234,13 +233,6 @@ fn audit_roadmap(roadmap: str) {
     }
 }
 
-fn audit_own(own_text: str) {
-    for id in FALSIFIER_IDS {
-        let ok = own_text.contains(id)
-        _check(ok, ".own own 2 decl: " + id + " mirrored",
-            if ok { "found" } else { "missing in own 2" })
-    }
-}
 
 fn audit_cli(cli_text: str) {
     for id in FALSIFIER_IDS {
@@ -319,16 +311,11 @@ fn main() {
     _emit_falsifier(F6_ID, F6_RETRACT, F6_T1_SCRIPTS, F6_T2_SCRIPTS, F6_T3_SCRIPTS, F6_T3_DESCRIPTION)
 
     let roadmap   = read_file(DOC_ROADMAP)
-    let own_file  = read_file(DOC_OWN)
     let cli_text  = read_file(DOC_CLI)
 
     println("")
     println("  Roadmap §A.4 row + status audit:")
     audit_roadmap(roadmap)
-
-    println("")
-    println("  .own own 2 mirror audit:")
-    audit_own(own_file)
 
     println("")
     println("  CLI surface audit:")
