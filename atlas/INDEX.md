@@ -1,14 +1,25 @@
 # 🗺️ atlas — verification SSOT INDEX
 
-> hexa-lang built-in atlas verdict ledger. anima 의 verdict 검증 기준 (2026-05-15 LANDED) 을 atlas (compiler/atlas/embedded.gen.hexa ~410 entries) 에 적용.
+> hexa-lang built-in atlas verdict ledger. anima 의 verdict 검증 기준 (2026-05-15) 을 atlas (compiler/atlas/embedded.gen.hexa ~410 entries) 에 적용.
 > Self-verifying closure: atlas 로 들어오는 모든 entry 는 atlas 자체로 검증 (외부 sympy/PyPhi 의존 X) · 필요한 계산 시스템 모두 hexa-native 빌트인.
 
-## 🟢 핵심 4 파일
+## 📊 현재 상태 (cycle 001-031, 2026-05-15)
+
+> **118/118 PASS** · 99 🔵 closed (61 SUPPORTED-IDENTITY + 38 SUPPORTED-FORMAL) · 1 🟠 AT-RISK (§5 BIO anima carry) · **18 falsifier-robust battery (90 falsifiers, 0 fired, sha256-frozen)** · 9 도메인 모두 covered · 13 verifier 모듈 + CI gate.
+>
+> 3-stage 전부 가동: **Stage 1** symbolic (integer/fraction, foundation/math/top/cosmo/bridges/chem/phys/eng/geo) · **Stage 2** numerical (libm sqrt/log/exp/lgamma + Newton, transcendental) · **Stage 3** cross-meta sibling consistency (cross.hexa, anima W9 hexa-native).
+>
+> 주요 closure: archive-TECS-L T-proofs (T0/T1/T2 ~17) · T2-01 χ→Monster **full 8-step chain** (modular.hexa) · §5 BIO **IIT closure ladder** (EI 2008 → Φ_SI 1994 → IIT 3.0 small-φ → big-Φ n=2 → n=3 genuine MIP search; anima many-node PyPhi 1.2.0 = carry).
+>
+> 실행: `HEXA_MEM_UNLIMITED=1 hexa run tool/atlas_verify.hexa [--domain D]` (full-suite 로컬 4GB memcap 초과 → mem-flag 필수) · CI gate: `hexa run test/atlas_verify_smoke.hexa`. `hexa atlas-verify` source-wired (정식 dispatcher binary rebuild 시 활성화).
+
+## 🟢 핵심 파일
 
 | 파일 | 한 줄 설명 |
 |------|-----------|
-| 🎯 **MAIN.tape** | 9 도메인 verdict SSOT (MATH / PHYS / CHEM / BIO / COSMO / GEO / TOP / ENG / FOUNDATION) + § BRIDGES + § 🔵 CLOSED INVENTORY + § FALSIFIED / PARTIAL / INSUFFICIENT / DEFERRED |
-| 🔬 **VERIFY.tape** | 3-stage protocol (Stage 1 symbolic / Stage 2 numerical sim / Stage 3 cross-meta) · falsifier ≥5 pre-register declarative format · tier→stage mapping · hexa-native verifier registry |
+| 🎯 **MAIN.tape** | 9 도메인 verdict SSOT (MATH / PHYS / CHEM / BIO / COSMO / GEO / TOP / ENG / FOUNDATION) + § BRIDGES + § 🔵 CLOSED INVENTORY + § FALSIFIED / PARTIAL / INSUFFICIENT / DEFERRED · architecture-current (g_arch_vs_log_split) |
+| 📜 **MAIN.log.tape** | append-only cycle history (cycle 001-031) — verifier sprint · tier change · stdlib contribution · falsifier fire · governance check 기록 |
+| 🔬 **VERIFY.tape** | 3-stage protocol · falsifier ≥5 pre-register declarative + executable (falsifier.hexa) · sha256 freeze · tier→stage mapping · phase_3_landed |
 | 📖 **AGENTS.tape** | atlas-area governance (anima g1~g8 carry + g_self_verify + g_tier_default_insufficient + g_external_calc_forbidden) · `CLAUDE.md` 는 symlink |
 | 📦 **incoming/** | 새 verdict 제출 통로 (downstream consumer 또는 external contributor 가 patch markdown 한 개 = 한 개념). project incoming/patches/ 와 동일 패턴. |
 
@@ -91,9 +102,9 @@ atlas verdict 는 두 layer 동시 보존:
 | Layer | 위치 | 역할 | 누가 읽음 |
 |-------|------|------|----------|
 | **spec** | `atlas/*.tape` (this directory) | 사람 읽는 verdict ledger | reviewer · contributor · LLM agent |
-| **engine** | `compiler/atlas/verify/*.hexa` (Phase 2+) | 컴파일러 실행 verifier | hexa compiler · CI · `hexa atlas verify` CLI |
+| **engine** | `compiler/atlas/verify/*.hexa` (13 modules, LANDED) | hexa-native verifier | `hexa run tool/atlas_verify.hexa` · CI gate `test/atlas_verify_smoke.hexa` |
 
-두 layer 사이 SSOT 동기화는 codegen tool (`tool/atlas_verify_gen.hexa` Phase 2 신설). spec 이 단일 SSOT, engine 은 generated.
+두 layer 사이 SSOT 동기화: spec (MAIN.tape entry) 가 verdict SSOT, engine (verify/*.hexa) 가 hand-written hexa-native verifier (codegen 아닌 직접 구현 — verifier field 가 cross-link). cycle 마다 verifier PASS → MAIN.tape tier upgrade + MAIN.log.tape append.
 
 ## 🔗 cross-links
 
@@ -104,8 +115,10 @@ atlas verdict 는 두 layer 동시 보존:
 | 📁 `AGENTS.tape` | atlas-area governance (`CLAUDE.md` symlink) |
 | 📁 `incoming/` | submission 통로 |
 | 🔧 `../compiler/atlas/embedded.gen.hexa` | atlas atom rodata (frozen, ~410 entries) |
-| 🔧 `../compiler/atlas/verify/` | hexa-native verifier engines (Phase 2+) |
-| 🔧 `../tool/atlas_verify.hexa` | CLI entry point (Phase 2+) |
+| 🔧 `../compiler/atlas/verify/` | hexa-native verifier engines — 13 modules: foundation·math·top·cosmo·bridges·chem·phys·transcendental·eng·geo·bio·cross·modular·falsifier |
+| 🔧 `../tool/atlas_verify.hexa` | CLI entry point — `hexa run tool/atlas_verify.hexa [--domain D]` (작동 중) |
+| 🔧 `../test/atlas_verify_smoke.hexa` | CI gate (strict-lint stage 9 surrogate) — 14-module 회귀 gate, exit(1) on regression |
+| 🌐 `~/core/wilson/plugins/governance/main.hexa` | wilson governance priority-1 `verification-via-hexa-cli-only` (atlas carry) |
 | 🌐 `../AGENTS.tape` | project-level governance (g_arch_vs_log_split + lattice-as-tool + real-limits-first 기반) |
 | 🌐 `../LATTICE_POLICY.md` | dancinlab-wide real-limits-first standard |
 | 🌐 `../HEXA-NATIVE-ONLY.md` | self-hosted 정책 — atlas verifier 의 hexa-native 의무 근거 |
@@ -116,6 +129,7 @@ atlas verdict 는 두 layer 동시 보존:
 
 | Phase | scope | status |
 |-------|-------|--------|
-| **Phase 1** | spec layer (this 4 files + incoming/) · archive-TECS-L T-proofs 43 anchor seed · default tier 🟠 INSUFFICIENT for un-verdicted | ✅ 2026-05-15 LANDED |
-| **Phase 2** | engine layer · `compiler/atlas/symbolic/` (Stage 1 hexa-native) · domain verifiers · `tool/atlas_verify.hexa` CLI · `--tier 1` 동작 | 🔄 next session+ |
-| **Phase 3** | strict-lint stage 9 (atlas-verdict-check) · falsifier executable form · `atlas/MAIN.log.tape` automation · wilson/echoes bridge | ⚪ deferred |
+| **Phase 1** | spec layer (5 files + incoming/) · archive-TECS-L T-proofs anchor seed · default tier 🟠 INSUFFICIENT | ✅ 2026-05-15 LANDED |
+| **Phase 2** | engine layer · Stage 1 hexa-native (stdlib/core/math) · Stage 2 libm transcendental · domain verifiers · `tool/atlas_verify.hexa` CLI · cycle 001-018 cumulative 82 | ✅ 2026-05-15 LANDED |
+| **Phase 3** | Stage 3 cross-meta · falsifier executable + sha256 freeze (18 batteries) · CI gate (strict-lint stage 9 surrogate) · T2-01 full chain · §5 BIO IIT ladder · wilson governance priority-1 carry · cycle 019-031 cumulative 118 | ✅ 2026-05-15 LANDED |
+| **Phase 3+ deferred** | anima-scale many-node MIP (Bell(n) super-exp, PyPhi 1.2.0 carry) · true 컴파일러 strict-lint stage 9 (build-time HX-code) · hexa dispatcher binary rebuild (`hexa atlas-verify` 활성화) · MAIN.log.tape append automation (commit hook) · ubu-1/2 current-interp build (원격 toolchain) | ⚪ deferred |
