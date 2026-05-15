@@ -317,6 +317,75 @@ fn _set_returned(ctx: LowerCtx, v: bool) -> LowerCtx {
     }
 }
 
+// Resolve break/continue sentinel STMT_BR targets (emitted by
+// _lower_hexpr's "break"/"continue" handlers) to the enclosing loop's
+// real block ids: -7001 → after_id (loop exit), -7002 → header_id
+// (loop test). Runs at the end of every while-lowering. Nested loops
+// resolve innermost-first — the inner while's lowering runs this over
+// its own body before the outer fixup ever sees those sentinels, so
+// each break/continue binds to its tightest loop. Mirrors the
+// _push_stmt_to block-rebuild idiom; also wires the CFG edge so
+// regalloc / liveness sees the jump (parity with the back-edge path).
+fn _patch_loop_sentinels(ctx: LowerCtx, after_id: i64, header_id: i64) -> LowerCtx {
+    let mut blocks = ctx.blocks
+    let mut ef: [i64] = []
+    let mut et: [i64] = []
+    let mut i = 0
+    while i < len(blocks) {
+        let b = blocks[i]
+        let mut stmts = b.stmts
+        let mut changed = false
+        let mut j = 0
+        while j < len(stmts) {
+            let s = stmts[j]
+            if s.kind == STMT_BR && (s.target_block == -7001 || s.target_block == -7002) {
+                let mut tgt = header_id
+                if s.target_block == -7001 { tgt = after_id }
+                stmts[j] = Stmt {
+                    kind: s.kind,
+                    dst: s.dst,
+                    op: s.op,
+                    args: s.args,
+                    target_block: tgt,
+                    target_block_else: s.target_block_else
+                }
+                ef.push(b.id)
+                et.push(tgt)
+                changed = true
+            }
+            j = j + 1
+        }
+        if changed {
+            blocks[i] = Block {
+                id: b.id,
+                stmts: stmts,
+                preds: b.preds,
+                succs: b.succs
+            }
+        }
+        i = i + 1
+    }
+    let mut ctx2 = LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: ctx.locals,
+        blocks: blocks,
+        cur_block: ctx.cur_block,
+        bindings: ctx.bindings,
+        frame_starts: ctx.frame_starts,
+        globals: ctx.globals,
+        has_returned: ctx.has_returned
+    }
+    let mut e = 0
+    while e < len(ef) {
+        ctx2 = _add_edge(ctx2, ef[e], et[e])
+        e = e + 1
+    }
+    return ctx2
+}
+
 // ── Bindings ────────────────────────────────────────────────
 
 fn _bind(ctx: LowerCtx, name: string, local_id: i64) -> LowerCtx {
@@ -439,6 +508,8 @@ fn _is_known_hexpr_kind(k: string) -> bool {
     if k == "unop" { return true }
     if k == "call" { return true }
     if k == "return" { return true }
+    if k == "break" { return true }
+    if k == "continue" { return true }
     if k == "let" { return true }
     if k == "assign" { return true }
     if k == "block" { return true }
@@ -599,6 +670,43 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             target_block_else: -1
         }
         ctx2 = _push_stmt(ctx2, s)
+        ctx2 = _set_returned(ctx2, true)
+        return _no_value(ctx2)
+    }
+
+    // ── break / continue → sentinel STMT_BR, patched by the
+    // enclosing while-lowering (see _patch_loop_sentinels). Sentinel
+    // targets -7001 (break → loop `after`) / -7002 (continue → loop
+    // `header`) are well outside any real block id (≥0) or the -1
+    // non-branch marker. Like return, this terminates the block
+    // (_set_returned) so no fall-through back-edge is appended after.
+    // Nested loops bind innermost: the inner while's lowering runs its
+    // own _patch_loop_sentinels during the outer body lowering, so
+    // inner sentinels are resolved to concrete ids before the outer
+    // fixup runs and only ever sees its own level's sentinels.
+    if k == "break" {
+        let s = Stmt {
+            kind: STMT_BR,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: -7001,
+            target_block_else: -1
+        }
+        let mut ctx2 = _push_stmt(ctx, s)
+        ctx2 = _set_returned(ctx2, true)
+        return _no_value(ctx2)
+    }
+    if k == "continue" {
+        let s = Stmt {
+            kind: STMT_BR,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: -7002,
+            target_block_else: -1
+        }
+        let mut ctx2 = _push_stmt(ctx, s)
         ctx2 = _set_returned(ctx2, true)
         return _no_value(ctx2)
     }
@@ -822,6 +930,9 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         ctx2 = _set_cur_block(ctx2, body_id)
         let br_b = _lower_hexpr(ctx2, e.children[1])
         ctx2 = br_b.ctx
+        // Resolve any break/continue sentinels emitted while lowering
+        // this loop body to this loop's after/header (innermost-first).
+        ctx2 = _patch_loop_sentinels(ctx2, after_id, header_id)
         if !ctx2.has_returned {
             let body_end = ctx2.cur_block
             let back = Stmt {

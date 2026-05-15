@@ -67,6 +67,8 @@ pub enum ExprKind {
     For,             // for x in iter { body } — A1.5
     Match,           // match expr { pat -> body, ... } — A1.5
     Return,
+    Break,           // break (loop control) — A1.5
+    Continue,        // continue (loop control) — A1.5
     Let,
     Assign,
     Field,
@@ -138,6 +140,8 @@ fn _ast_is_string_lit(k: ExprKind) -> bool {
         ExprKind::For -> false,
         ExprKind::Match -> false,
         ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
         ExprKind::Let -> false,
         ExprKind::Assign -> false,
         ExprKind::Field -> false,

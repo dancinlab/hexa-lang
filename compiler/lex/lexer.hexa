@@ -64,6 +64,8 @@ fn keyword_kind(word: string) -> TokenKind {
     if word == "let" { return TokenKind::KwLet }
     if word == "mut" { return TokenKind::KwMut }
     if word == "return" { return TokenKind::KwReturn }
+    if word == "break" { return TokenKind::KwBreak }
+    if word == "continue" { return TokenKind::KwContinue }
     if word == "if" { return TokenKind::KwIf }
     if word == "else" { return TokenKind::KwElse }
     if word == "while" { return TokenKind::KwWhile }

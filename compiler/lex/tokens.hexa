@@ -73,6 +73,8 @@ pub enum TokenKind {
     KwLet,
     KwMut,
     KwReturn,
+    KwBreak,
+    KwContinue,
     KwIf,
     KwElse,
     KwWhile,

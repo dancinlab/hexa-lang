@@ -156,6 +156,8 @@ fn _resolve_is_atlas_ref_kind(k: ExprKind) -> bool {
         ExprKind::For -> false,
         ExprKind::Match -> false,
         ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
         ExprKind::Let -> false,
         ExprKind::Assign -> false,
         ExprKind::Field -> false,

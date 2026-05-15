@@ -164,6 +164,8 @@ fn tag_of(k: TokenKind) -> string {
         TokenKind::KwLet -> "KwLet",
         TokenKind::KwMut -> "KwMut",
         TokenKind::KwReturn -> "KwReturn",
+        TokenKind::KwBreak -> "KwBreak",
+        TokenKind::KwContinue -> "KwContinue",
         TokenKind::KwIf -> "KwIf",
         TokenKind::KwElse -> "KwElse",
         TokenKind::KwWhile -> "KwWhile",
@@ -773,6 +775,12 @@ fn parse_primary() -> Expr {
     if check_kind(TokenKind::KwReturn) {
         return parse_return_expr()
     }
+    if check_kind(TokenKind::KwBreak) {
+        return parse_break_expr()
+    }
+    if check_kind(TokenKind::KwContinue) {
+        return parse_continue_expr()
+    }
     if check_kind(TokenKind::KwLet) {
         return parse_let_expr()
     }
@@ -1014,6 +1022,33 @@ fn parse_return_expr() -> Expr {
         span: kw.span,
         text: "",
         children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+// break / continue — loop control, value-less, no children. Mirrors
+// parse_return_expr minus the value child (RFC-018 §A1 subset; bare
+// form only, no labels — every loop in compiler/+self/ uses bare).
+fn parse_break_expr() -> Expr {
+    let kw = peek()
+    advance()
+    return Expr {
+        kind: ExprKind::Break,
+        span: kw.span,
+        text: "",
+        children: [],
+        atlas_ref: empty_atlas()
+    }
+}
+
+fn parse_continue_expr() -> Expr {
+    let kw = peek()
+    advance()
+    return Expr {
+        kind: ExprKind::Continue,
+        span: kw.span,
+        text: "",
+        children: [],
         atlas_ref: empty_atlas()
     }
 }
