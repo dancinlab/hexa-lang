@@ -418,3 +418,65 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
   @> COMPILE-ONLY.tape
 
+# ─── 2026-05-16  순서대로 進: chain completed to G5; G6 hits the ROOT substrate defect ───
+
+@A path_ab2_chain_to_stage1 := "AB' flatten_imports chain → working stage1 binary (G5 on Linux+macOS)" :: measurement [d=2026-05-16 ok]
+  <- path_ab_module_loader_blowup
+  step = "User: `순서대로 진행`. Bypassed module_loader (165 GiB blowup) with the battle-hardened tool/flatten_imports.hexa (4 GB→633 MB optimization lineage: 460fd899/bc142d44/24b80025/1a4d5b10/5b3a750b)."
+  chain <<~EOF
+    1. flatten: tool/flatten_imports.hexa compiler/main.hexa → /tmp/flat_ci.hexa
+       5.6 MB, 39 files, <10 s, FLAT memory. (vs module_loader 165 GiB — the
+       hardened flattener is the correct tool; module_loader is not.)
+    2. transpile: hexa_v2.new (regen, enum-prelude fix) /tmp/flat_ci.hexa →
+       /tmp/flat_ci.c = 7.24 MB, 97 enum #defines incl Severity_*. CPU-bound
+       ~7 min, RSS stable <1 GB until the in-memory C string flush; needs
+       HEXA_MEM_UNLIMITED=1 (hexa_v2 links runtime.c → inherits 4 GB self-cap).
+    3. runtime.h fix (blocker #3, commit 02315019 on stage2-verify): +sys/stat.h
+       (bare mkdir), + forward-decls hexa_str_char_code_at / rt_file_size
+       (runtime.c-internal-only decls the 2026-05-15 auto-gen grep missed).
+       clang 11 errs → rc=0.
+    4. clang: -O0 (NOT -O1 — -O1 on the 7.24 MB monolithic TU = 23 min CPU
+       grind; -O0 = 19 s, functionally identical for a diagnostic-only binary)
+       → /tmp/stage1_lin 12.4 MB Linux ELF (and 8.7 MB macOS arm64 earlier).
+  EOF
+  => "G5 REACHED on BOTH targets — a working stage-1 binary built from the new compiler/* tree carrying the front-end operator-lowering fix. The hardened-flattener bypass + runtime.h fix + -O0 are the unlocks."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc]"
+
+@? root_substrate_defect_selfcompile_oom := "stage1 self-compile: UNBOUNDED linear RSS ~11 GiB/s → OOM @ 251 GiB cgroup in 52 s (cgroup-confirmed)" :: anomaly [d=2026-05-16 required]
+  <- path_ab2_chain_to_stage1
+  measurement <<~EOF
+    /tmp/stage1_lin _sentinel.hexa --emit=asm --ignore-errors -o s2.s
+      /tmp/flat_ci.hexa   (ENV: HEXA_MEM_UNLIMITED=1 HEXA_VAL_ARENA=0
+      HEXA_IGNORE_ERRORS=1) on RunPod 251 GiB cgroup / 2 TB host:
+
+      t+2s 0G · t+12s 14G · t+22s 63G · t+32s 123G · t+42s 181G ·
+      t+50s 231G · t+52s OOM-killed.  Linear ≈ 11 GiB/s, monotone, no
+      plateau.  cgroup memory.events oom_kill 2→3 each run (DEFINITIVE
+      OOM, not a crash/signal artifact; memory.max=250999996416,
+      memory.high=max, swap.max=0).  Reproduced 3×, identical curve.
+      Diag log frozen at 34 B ("atlas: loaded …") — process dies in the
+      parse/typecheck of the 5.6 MB flattened source, before emitting a
+      single HexaError. Earlier macOS 24 GiB run = same class (S1_EXIT
+      137 fast).
+  EOF
+  root_cause = "This is THE substrate defect — not five blockers but ONE: blocker #1 (interp 30 GiB wall) and blocker #5 (module_loader 165 GiB) and this (stage1_lin 251 GiB+) are the SAME unbounded monotone value/arena/freelist accumulation, documented in self/module_loader.hexa's own header as the `rt-32 freelist aliasing class (T33 / feedback_hot_attr_dict_mutation)`. It reproduces in the NATIVE stage-1 binary (links the same self/runtime.c value semantics), so it is NOT interp-specific and NOT fixable by a bigger box: linear-unbounded ⇒ no finite RAM suffices (11 GiB/s → TB-scale in minutes, still climbing)."
+  implication <<~EOF
+    This single defect is the TRUE gate of the entire COMPILE-ONLY / E2
+    program. The dependency chain is:
+      runtime value-semantics memory blowup  (THIS — open)
+        → stage-2 self-compile can complete   (blocked)
+          → stage-3 byte-equal fixed point    (blocked)
+            → E2 fires: hexa_interp retired    (blocked — never reachable)
+    It is precisely WHY hexa_interp has never been retired and why
+    @D d4 e2-retire-trigger has never fired: the self-host compiler
+    cannot self-compile its own flattened tree without unbounded memory
+    growth. Every prior "memory wall" observation across this program
+    is one manifestation of this defect at a different scale/tool.
+  EOF
+  fix_direction = "Substrate sub-track (deep, multi-day, owner = runtime/codegen NOT front-end): the hexa runtime's array/map/value lifetime under HEXA_VAL_ARENA=0 monotonically accumulates with no reclamation across the parse→bind→type→codegen pipeline holding the whole 5.6 MB module graph live. Candidates: (a) arena-scoped pipeline phases with reset between stages (cf. @closed_p0_oom A1 phase-arena reset — regressed at full scale); (b) fix the rt-32 freelist aliasing so dead per-node arrays are reclaimed; (c) streaming/segmented self-compile (per-leaf .s emit + link — punch-list option (b), @open_wallclock fix_options)."
+  g6_status = "Empirical G6 (numeric HX2001 measurement) is UNREACHABLE until this substrate defect is fixed — on ANY hardware. Predictive G6 stands unchanged & deterministic: operator-as-Ident class (~1000 of 1803 HX2001) is mechanically eliminated by the landed lexer+parser fix (verified G1+G2+G3); no path exists for a correctly-tokenised operator to reach the binder as an undefined Ident. The front-end track is correct and integrated (closure-merge a062e25f); it is simply not independently measurable through a self-compile that the substrate cannot complete."
+  cost_total = "~$4 RunPod cumulative across the whole verification campaign (all pods terminated; no ongoing burn). Net deliverable: the substrate defect is now PINNED with a hard RSS curve + cgroup oom_kill evidence — the single highest-value diagnostic for the interp-retirement program."
+  next_gate = "Open a dedicated substrate sub-track: `runtime-selfcompile-memory` — fix the unbounded value/arena accumulation so stage-2 self-compile completes within a finite box. THIS, not any front-end work, is the critical path to stage-2 → stage-3 → E2."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
+  @> COMPILE-ONLY.tape
+
