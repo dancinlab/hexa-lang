@@ -2573,11 +2573,24 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "pop" {
         return "hexa_array_pop(" + obj_expr + ")"
     }
+    if method == "shift" {
+        return "hexa_array_shift(" + obj_expr + ")"
+    }
     if method == "reverse" {
         return "hexa_array_reverse(" + obj_expr + ")"
     }
     if method == "sort" {
         return "hexa_array_sort(" + obj_expr + ")"
+    }
+    if method == "sort_by" {
+        // auto-wrap bare fn-refs as TAG_FN HexaVal (mirrors line 4573 in the
+        // indirect-call path). Lambdas and pre-wrapped values pass through.
+        let _sb_arg = args[0]
+        let mut _sb_arg_expr = gen2_expr(_sb_arg)
+        if type_of(_sb_arg) != "string" && _sb_arg.kind == "Ident" && _is_known_fn_global(_sb_arg.name) {
+            _sb_arg_expr = "hexa_fn_new((void*)" + _hexa_mangle_ident(_sb_arg.name) + ", 0)"
+        }
+        return "hexa_array_sort_by(" + obj_expr + ", " + _sb_arg_expr + ")"
     }
     // bt 55 — in-place array length shrink; caller must reassign.
     if method == "truncate" {
@@ -3216,7 +3229,19 @@ fn gen2_expr(node) {
         let mut arg_strs = []
         let mut si = 0
         while si < len(node.fields) {
-            arg_strs.push(gen2_expr(node.fields[si].left))
+            // auto-wrap bare fn-ref fields as TAG_FN HexaVal (mirrors the
+            // indirect-call wrap at the gen2_method_builtin sort_by arm and
+            // the general callsite at line 4573). Without this, passing
+            // `Dispatcher { handler: my_fn, ... }` emits `Dispatcher(my_fn, ...)`
+            // where my_fn is C fn-pointer typed `HexaVal (HexaVal)`, not the
+            // `HexaVal` the constructor expects → clang error. Filed at
+            // incoming/patches/struct-fn-field-wrap.md (2026-05-14).
+            let _sfv = node.fields[si].left
+            let mut _sfv_expr = gen2_expr(_sfv)
+            if type_of(_sfv) != "string" && _sfv.kind == "Ident" && _is_known_fn_global(_sfv.name) {
+                _sfv_expr = "hexa_fn_new((void*)" + _hexa_mangle_ident(_sfv.name) + ", 0)"
+            }
+            arg_strs.push(_sfv_expr)
             si = si + 1
         }
         return name + "(" + arg_strs.join(", ") + ")"
@@ -4489,11 +4514,23 @@ fn gen2_expr(node) {
             if method == "pop" {
                 return "hexa_array_pop(" + obj + ")"
             }
+            if method == "shift" {
+                return "hexa_array_shift(" + obj + ")"
+            }
             if method == "reverse" {
                 return "hexa_array_reverse(" + obj + ")"
             }
             if method == "sort" {
                 return "hexa_array_sort(" + obj + ")"
+            }
+            if method == "sort_by" {
+                // mirror the gen2_method_builtin arm: auto-wrap bare fn-refs.
+                let _sb_arg = node.args[0]
+                let mut _sb_arg_expr = gen2_expr(_sb_arg)
+                if type_of(_sb_arg) != "string" && _sb_arg.kind == "Ident" && _is_known_fn_global(_sb_arg.name) {
+                    _sb_arg_expr = "hexa_fn_new((void*)" + _hexa_mangle_ident(_sb_arg.name) + ", 0)"
+                }
+                return "hexa_array_sort_by(" + obj + ", " + _sb_arg_expr + ")"
             }
             // bt 55 — in-place array length shrink; caller must reassign.
             if method == "truncate" {

@@ -1748,7 +1748,28 @@ fn contract_wrap_returns(body, ens_expr, fn_name, ens_text) {
 // decreases x — structural
 fn parse_type_annotation() {
     let mut base = ""
-    if p_peek_kind() == "Star" {
+    // DIAGNOSTIC v3 — `fn(<paren-group>) [-> <type>]`. Param list skipped via
+    // paren-depth counter (no recursion — recursion into parse_type_annotation
+    // here caused an OOM in self-host transpile, see ROI session 2026-05-15).
+    // Return type uses recursion (one call, terminates on inner type).
+    if p_peek_kind() == "Fn" {
+        p_advance()
+        if p_peek_kind() == "LParen" {
+            p_advance()
+            let mut _depth = 1
+            while _depth > 0 && p_peek_kind() != "Eof" {
+                let _k = p_peek_kind()
+                if _k == "LParen" { _depth = _depth + 1 }
+                if _k == "RParen" { _depth = _depth - 1 }
+                p_advance()
+            }
+        }
+        if p_peek_kind() == "Arrow" {
+            p_advance()
+            let _ret = parse_type_annotation()
+        }
+        base = "any"
+    } else if p_peek_kind() == "Star" {
         p_advance() // consume '*'
         base = "*" + p_expect_ident()
     } else if p_peek_kind() == "LBracket" {

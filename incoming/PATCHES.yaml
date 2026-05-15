@@ -436,3 +436,88 @@
     already get it via the repo's regenerated hexa_v2 + self/runtime.c.
     Reporter: wilson (provider-claude-cli poll loop).
   detail: patches/stdlib-subsecond-sleep.md
+
+- id: stdlib-arr-shift
+  source_commit: pending
+  source_files:
+    - self/runtime.c
+    - self/codegen_c2.hexa
+  compiler_impact: |
+    runtime.c: hexa_array_shift (in-place HX_SET_ARR_LEN shrink, mirror of
+    hexa_array_pop's front-side). codegen_c2.hexa: 2 sites add `if method
+    == "shift"` next to the existing `pop` arms (lines 2573, 4489). Regen
+    via `hexa cc --regen` produces hexa_v2 that emits hexa_array_shift(...)
+    instead of the prior CODEGEN ERROR.
+  selftest_delta: no selftest yet — verified via inline reproducer
+    `let mut xs=[1,2,3]; xs.shift() == 1; len(xs) == 2` in compiled mode
+  downstream_consumer: |
+    wilson harness-cli input buffer (front-pop pattern). Also pattern f3
+    in wilson AGENTS.tape (forbidden-pattern), now resolved.
+  status: applied
+  applied_at: 2026-05-15
+  opened: 2026-05-14
+  detail: patches/stdlib-arr-shift.md
+
+- id: stdlib-sort-by
+  source_commit: pending
+  source_files:
+    - self/runtime.c
+    - self/codegen_c2.hexa
+  compiler_impact: |
+    runtime.c: hexa_sort_cmp extended to handle strings (lexicographic via
+    strcmp) and mixed int/float (promote to double). Fixes the silent
+    identity-sort bug where `["c","a","b"].sort() == ["c","a","b"]`. Adds
+    hexa_array_sort_by(arr, key_fn) — stable bottom-up merge sort over
+    parallel (item, key) arrays, key precomputed once per element via
+    hexa_call1. codegen_c2.hexa: 2 sites add `if method == "sort_by"`
+    arms with bare fn-ref auto-wrap (`hexa_fn_new((void*)<mangled>, 0)`)
+    so `arr.sort_by(my_key_fn)` works without lambda wrap.
+  selftest_delta: no selftest yet — verified via inline reproducer
+    `["c","a","b"].sort() == ["a","b","c"]` AND stable sort_by with
+    tied-priority items preserving input order in compiled mode
+  downstream_consumer: |
+    wilson core/event_bus.hexa _sort_by_priority_desc (hand-rolled O(n^2)
+    insertion sort can now delegate to runtime). Also wilson
+    self/stdlib/sort.hexa (pure-hexa fallback) remains for descending
+    case since runtime sort_by is ascending only.
+  status: applied
+  applied_at: 2026-05-15
+  opened: 2026-05-14
+  detail: patches/stdlib-sort.md
+
+- id: struct-fn-field-wrap
+  source_commit: pending
+  source_files:
+    - self/codegen_c2.hexa
+    - self/parser.hexa
+  compiler_impact: |
+    Two halves, both landed 2026-05-15:
+    (1) codegen_c2.hexa StructInit arm (line 3224 area) — when a field
+        value is a bare Ident resolving to a known fn-global, auto-wrap
+        as `hexa_fn_new((void*)<mangled>, 0)` before passing to the
+        constructor. Mirrors the indirect-call-path wrap at line 4573.
+    (2) parser.hexa parse_type_annotation (line 1749 area) — adds an
+        `Fn` arm accepting `fn(T1, T2, ...) -> Tret` as a type
+        annotation. Param list skipped via paren-depth counter (NO
+        recursion — recursive form OOMs the self-host transpile even
+        though `regen` clang-smoke passes; see patches/struct-fn-field-
+        wrap.md for the v1→v2→v3 diagnostic trail). Return type uses
+        a single recursive call (terminates on inner type). Base
+        flattened to "any" so downstream codegen treats fn-typed
+        fields identically to any-typed fields.
+    Net effect: users can write `struct D { handler: fn(string)->string }`
+    and `let d = D { handler: my_fn }` and have `type_of(d.handler) == "fn"`
+    at runtime. Verified on simple, multi-field, and nested fn-as-param
+    cases.
+  selftest_delta: no selftest yet — verified via inline reproducers
+    (simple, multi-field, nested fn-as-param-type)
+  downstream_consumer: |
+    wilson core/dispatch_table.hexa 28-arm string-keyed if-chain — can
+    eventually be replaced by closure-typed struct fields once method-
+    call dispatch on struct fn-fields is plumbed (separate codegen
+    work; currently `obj.fn_field(arg)` doesn't dispatch — workaround
+    is `hexa_call1(obj.fn_field, arg)`).
+  status: applied
+  applied_at: 2026-05-15
+  opened: 2026-05-14
+  detail: patches/struct-fn-field-wrap.md

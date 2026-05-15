@@ -3880,6 +3880,22 @@ HexaVal hexa_array_pop(HexaVal arr) {
     return HX_ARR_ITEMS(arr)[HX_ARR_LEN(arr) - 1];
 }
 
+// Shift: remove + return first element. Mirrors `pop` but front-side. In-place
+// length shrink via HX_SET_ARR_LEN (same pattern as hexa_array_truncate at
+// line 2033). Returns void on empty array. Filed 2026-05-14 (incoming/patches/
+// stdlib-arr-shift.md — wilson harness-cli input buffer was the originating
+// use case; pattern f3 in wilson AGENTS.tape).
+HexaVal hexa_array_shift(HexaVal arr) {
+    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
+    HexaVal first = HX_ARR_ITEMS(arr)[0];
+    int n = HX_ARR_LEN(arr);
+    for (int i = 0; i < n - 1; i++) {
+        HX_ARR_ITEMS(arr)[i] = HX_ARR_ITEMS(arr)[i + 1];
+    }
+    HX_SET_ARR_LEN(arr, n - 1);
+    return first;
+}
+
 HexaVal hexa_array_reverse(HexaVal arr) {
     // Polymorphic — string.reverse() / array.reverse() share codegen emit.
     // Previously fell through for strings ("abc".reverse() → "abc" no-op)
@@ -3900,10 +3916,26 @@ HexaVal hexa_array_reverse(HexaVal arr) {
     return result;
 }
 
+// Generic value comparator used by hexa_array_sort + hexa_array_sort_by.
+// 2026-05-14: added string lexicographic compare — prior version returned
+// 0 for any non-numeric pair, causing `["c","a","b"].sort() == ["c","a","b"]`
+// (silent identity-sort). Filed at incoming/patches/stdlib-sort.md.
+// Returns 0 for incomparable / cross-type pairs (caller treats as "tie" —
+// stable sorts preserve insertion order on ties).
 static int hexa_sort_cmp(const void* a, const void* b) {
     HexaVal va = *(const HexaVal*)a, vb = *(const HexaVal*)b;
     if (HX_IS_INT(va) && HX_IS_INT(vb)) return HX_INT(va) < HX_INT(vb) ? -1 : HX_INT(va) > HX_INT(vb) ? 1 : 0;
     if (HX_IS_FLOAT(va) && HX_IS_FLOAT(vb)) return HX_FLOAT(va) < HX_FLOAT(vb) ? -1 : HX_FLOAT(va) > HX_FLOAT(vb) ? 1 : 0;
+    if (HX_IS_STR(va) && HX_IS_STR(vb)) {
+        int r = strcmp(HX_STR(va), HX_STR(vb));
+        return r < 0 ? -1 : r > 0 ? 1 : 0;
+    }
+    // mixed-numeric (int vs float): promote to float for the compare
+    if ((HX_IS_INT(va) || HX_IS_FLOAT(va)) && (HX_IS_INT(vb) || HX_IS_FLOAT(vb))) {
+        double da = HX_IS_INT(va) ? (double)HX_INT(va) : HX_FLOAT(va);
+        double db = HX_IS_INT(vb) ? (double)HX_INT(vb) : HX_FLOAT(vb);
+        return da < db ? -1 : da > db ? 1 : 0;
+    }
     return 0;
 }
 
@@ -3923,6 +3955,56 @@ HexaVal hexa_array_sort(HexaVal arr) {
         result = hexa_array_push(result, HX_ARR_ITEMS(arr)[i]);
     }
     qsort(HX_ARR_ITEMS(result), HX_ARR_LEN(result), sizeof(HexaVal), hexa_sort_cmp);
+    return result;
+}
+
+// Stable sort by precomputed keys. Closure invoked once per element via
+// hexa_call1 to derive the sort key; bottom-up iterative merge sort over a
+// parallel (item, key) buffer. Stability matters for downstream callers
+// (e.g. wilson event_bus priority ordering). Comparator is hexa_sort_cmp
+// (which handles int/float/string after 2026-05-14; mixed types tie).
+// Filed at incoming/patches/stdlib-sort.md.
+HexaVal hexa_array_sort_by(HexaVal arr, HexaVal key_fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    int n = HX_ARR_LEN(arr);
+    HexaVal result = hexa_array_new();
+    for (int i = 0; i < n; i++) {
+        result = hexa_array_push(result, HX_ARR_ITEMS(arr)[i]);
+    }
+    if (n < 2) return result;
+
+    HexaVal* items = HX_ARR_ITEMS(result);
+    HexaVal* keys = (HexaVal*)malloc(sizeof(HexaVal) * n);
+    for (int i = 0; i < n; i++) keys[i] = hexa_call1(key_fn, items[i]);
+
+    HexaVal* tmp_items = (HexaVal*)malloc(sizeof(HexaVal) * n);
+    HexaVal* tmp_keys  = (HexaVal*)malloc(sizeof(HexaVal) * n);
+
+    for (int width = 1; width < n; width *= 2) {
+        for (int start = 0; start < n; start += 2 * width) {
+            int left  = start;
+            int mid   = start + width;       if (mid   > n) mid   = n;
+            int right = start + 2 * width;   if (right > n) right = n;
+            int li = left, ri = mid, ki = left;
+            while (li < mid && ri < right) {
+                // stable: take right side only when strictly less; ties → left first
+                if (hexa_sort_cmp(&keys[ri], &keys[li]) < 0) {
+                    tmp_items[ki] = items[ri]; tmp_keys[ki] = keys[ri]; ri++;
+                } else {
+                    tmp_items[ki] = items[li]; tmp_keys[ki] = keys[li]; li++;
+                }
+                ki++;
+            }
+            while (li < mid)   { tmp_items[ki] = items[li]; tmp_keys[ki] = keys[li]; li++; ki++; }
+            while (ri < right) { tmp_items[ki] = items[ri]; tmp_keys[ki] = keys[ri]; ri++; ki++; }
+            for (int j = left; j < right; j++) {
+                items[j] = tmp_items[j];
+                keys[j]  = tmp_keys[j];
+            }
+        }
+    }
+
+    free(tmp_items); free(tmp_keys); free(keys);
     return result;
 }
 

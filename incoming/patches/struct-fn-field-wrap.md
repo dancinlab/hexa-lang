@@ -3,6 +3,26 @@
 **Filed by:** wilson. ROI audit 2026-05-14 (f2 forbidden pattern in `dancinlab/wilson` AGENTS.tape — closure-as-struct-method workaround). Verified 2026-05-14 with reproducer below.
 
 **Date:** 2026-05-14.
+**Status (2026-05-15):** ✅ **FULLY LANDED**
+
+Two halves of the fix:
+
+1. **Constructor auto-wrap** (`codegen_c2.hexa` StructInit arm, line 3224 area) — passing a bare fn-ref to a field of type `any` correctly wraps as `hexa_fn_new((void*)<mangled>, 0)`. Verified: `type_of(d.handler) == "fn"` post-construct.
+
+2. **Parser arm** (`parser.hexa` `parse_type_annotation`, line 1749) — accepts `handler: fn(T1, T2) -> Tret` as a field type. Multiple struct fields with various sigs (incl. `fn()`, `fn(string,int)->bool`, nested `fn(fn(int)->int,int)->int`) all parse to `type_of == "fn"` at runtime.
+
+### Diagnostic notes on the parser arm
+
+The first attempt (recursive `parse_type_annotation()` calls for every param type) caused an OOM in the regenerated `hexa_v2` — the binary was killed by `HEXA_MEM_CAP_MB=4096` on EVERY input including trivial `fn main() {}`, despite the `hexa cc --regen` clang-compile smoke test passing. Binary search via two intermediate versions identified the failure mode:
+
+| variant | param parsing | return parsing | result |
+|---------|---------------|----------------|--------|
+| v1 (first attempt) | `parse_type_annotation()` recursive + while-Comma loop | `parse_type_annotation()` recursive | **OOM on every input** |
+| v2 (minimal) | LParen/RParen paren-depth skip, no recursion | single Ident consume only | trivial OK, `[string]` return fails |
+| v3 (final, landed) | paren-depth skip, no recursion | single `parse_type_annotation()` call | all cases pass ✓ |
+
+Root cause of the v1 OOM is **multi-recursion into `parse_type_annotation` from within itself**: even though each `parse_type_annotation` call should terminate on input, having the recursive call AND the while-Comma loop inside the same arm somehow blew up the regenerated hexa_v2 at runtime on inputs that don't even exercise the new arm. Self-host transpile pipeline does something subtle with that call shape — not yet diagnosed. The v3 form (single recursion site for return type, paren-counting for params) sidesteps the issue and handles arbitrary param/return complexity.
+
 **Severity:** ergonomic + cost-routing. Forces plugin authors to use string-keyed if-chain dispatchers (see `core/dispatch_table.hexa` 28-arm cascade). Cumulative wilson cost: 5-15% turn latency at scale (per ROI a3).
 
 ## Reproducer (compiled mode)
