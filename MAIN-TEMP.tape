@@ -3,19 +3,19 @@
 # MAIN-TEMP.tape — anima absorption scrub ledger (2026-05-15)
 # ══════════════════════════════════════════════════════════════════════
 # 임시 ledger — anima → hexa-lang/atlas 흡수 path 일단 보류.
-# anima 측 directive 2026-05-15: PROVEN.tape 가 verdict SSOT,
+# anima 측 directive 2026-05-15: MAIN.tape 가 verdict SSOT,
 # atlas overlay/rodata 이분법 보류 → hexa-lang 안 anima 흡수 artifact scrub.
 #
 # revoke keyword (atlas absorption 재개 시): "ATLAS RESUME"
-# anima-side SSOT: ~/core/anima/PROVEN.tape
+# anima-side SSOT: ~/core/anima/MAIN.tape
 
 @V := "tape" :: spec [active]
   version = "1.2"
 
 @N scrub_directive := "anima absorption scrub 2026-05-15" :: governance [d=2026-05-15 active]
   source = "~/core/anima — user directive 2026-05-15"
-  reason = "PROVEN.tape (verdict 4-class SUPPORTED/FALSIFIED/PARTIAL/INSUFFICIENT) 가 atlas overlay/rodata 이분법 보다 nuanced — anima 흡수 path 일단 보류"
-  anima_ssot = "~/core/anima/PROVEN.tape"
+  reason = "MAIN.tape (verdict 4-class SUPPORTED/FALSIFIED/PARTIAL/INSUFFICIENT) 가 atlas overlay/rodata 이분법 보다 nuanced — anima 흡수 path 일단 보류"
+  anima_ssot = "~/core/anima/MAIN.tape"
   resume_keyword = "ATLAS RESUME"
 
 @N scrubbed_commits := "6 absorb(anima) commits — 2026-05-14" :: history [active]
@@ -68,8 +68,8 @@
   scrub_action = "absorbed-from-anima section 194개 (lines 5, 849, 981, 1123-... hypothesis-rows + 2 historical absorption shards) 제거"
 
 @D anima_ssot_proven_tape := "anima verdict SSOT 선언" :: governance [d=2026-05-15 required active]
-  rule = "anima 가설 verdict source = PROVEN.tape ONLY (atlas overlay 아님)"
-  cross_link = "https://github.com/dancinlab/anima/blob/main/PROVEN.tape"
+  rule = "anima 가설 verdict source = MAIN.tape ONLY (atlas overlay 아님)"
+  cross_link = "https://github.com/dancinlab/anima/blob/main/MAIN.tape"
   scope = "318 hypothesis files (A 격리 20 + B 격리 107 + legacy 191)"
   protocol = "VERIFY.tape 3-stage (math sympy / physics sim / cross-meta) 통과 verdict 만 SSOT 등재"
 
