@@ -155,3 +155,60 @@
   next_gate = "ubu-1/ubu-2 stage-2 self-compile re-run → confirm HX2001 1803 drops (expect ≥ ~1000 fewer: the operator-token-as-Ident class). Then: closure-|x| ExprKind::Lambda sub-track; HX2002 993 cross-module pub/private; HX2001 <callee> 594 receiver-type plumbing; HX3001 994 coercion. Not locally runnable (monolithic-TU clang OOM)."
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc]"
   @> COMPILE-ONLY.tape
+
+# ─── 2026-05-16  Front-end track — empirical verification attempts ───
+
+@A frontend_tag_of_bug := "empirical bug: tag_of() exhaustive match missed +9 variants" :: measurement [d=2026-05-16 ok]
+  <- frontend_expr_operators
+  step = "Static grep on c30de87a landing scanned for 'match TokenKind' / ': TokenKind ->' patterns and reported no exhaustive switches needing the +9 variants. WRONG — `tag_of` in compiler/parse/parser.hexa uses `match k { TokenKind::… -> str }` over EVERY variant without a wildcard arm. `same_kind` routes all compares through tag_of, so unknown variants returned arbitrary strings (interp first-arm fall-through), silently breaking `check_kind` for new tokens. Empirical surface — found only when the live probe on RunPod showed `tag_of(TokenKind::Bang) == \"Ident\"`."
+  fix_commit = "122ab8c4 (frontend-expr-lowering) / d694ce9e (stage2-verify) — adds AmpAmp/PipePipe/Amp/Pipe/Caret/Tilde/Bang/Shl/Shr arms"
+  lesson = "future hexa-side enum extensions must check exhaustive-match-no-wildcard patterns more broadly than 'match\\s+.*\\.kind'. Or: add a `_ -> \"_UNKNOWN_\"` wildcard + a CI lint that flags it."
+  authority = "[@x_spec_15_e2]"
+
+@? frontend_verify_blocked_by_bootstrap_staleness := "stage-2 verification BLOCKED by bootstrap chain staleness" :: anomaly [d=2026-05-16 partial]
+  <- frontend_expr_operators
+  context = "User selected option (C) cloud-box path. Provisioned RunPod RTX PRO 6000 SECURE (188 GB RAM, Ubuntu 24.04, glibc 2.39) — memory wall removed; bootstrap chain mismatches are now the wall."
+  failures <<~EOF
+    Three staleness mismatches surfaced sequentially:
+
+    1. hexa_interp.linux (in repo build/, May 15 15:42)
+         — needs GLIBC_2.38 (only ubu24.04+ has it)
+         — its enum-match runtime knows TokenKind variants AT BUILD TIME;
+           when source adds +9 variants the match treats them as the first
+           arm. tag_of(TokenKind::Bang) returned "Ident" empirically.
+         — verdict: live-interp probe of new parser fundamentally blocked
+
+    2. build/hexa_v2_linux (the transpiler, May 15 15:42)
+         — transpile compiler/main.hexa succeeds but emits C referencing
+           runtime symbols with signatures CURRENT runtime.c uses differently.
+           clang error: `HexaVal sdk = hexa_str_trim(hexa_exec(…))` —
+           hexa_exec now returns int, not HexaVal. 14 errors.
+         — verdict: stale transpiler-vs-runtime gap
+
+    3. clang self/native/hexa_cc.c + self/runtime.c (fresh, May 16)
+         — compiles cleanly to /tmp/hexa_v2_fresh (1.5 MB ELF).
+         — transpile runs, but emitted C references identifiers not declared
+           by current header set: `undeclared identifier 'Severity_Error'`
+           (etc). hexa_cc.c's embedded transpiler doesn't emit prelude
+           #defines for some enum variants the current sources use.
+         — verdict: hexa_cc.c (the bootstrap monolith) lags current sources
+  EOF
+  cost = "~$1 RunPod total — RTX 3090 probe (terminated quickly) + RTX PRO 6000 SECURE ~30 min. Pod terminated, no ongoing cost."
+  diagnosis = "Bootstrap chain in delicate state — build/hexa_v2_linux + build/hexa_interp.linux + self/native/hexa_cc.c + self/runtime.c + compiler/* drift unevenly. Each verify path trips a different mismatch. Front-end fix structurally correct (faithful legacy port, hexa parse clean on all 4 edited files, lex of single-char operators verified producing TokenKind::Bang on pod live probe) — measuring the HX2001 1803 → drop NUMBER requires producing a current-bin stage 1, which itself requires a refreshed bootstrap."
+  paths_forward <<~EOF
+    A. Refresh bootstrap chain (separate sub-track):
+       i.  `hexa cc --regen` on a known-good host to regenerate hexa_cc.c
+           from current sources, then re-ship + re-attempt verification
+       ii. OR rebuild build/hexa_interp.linux + hexa_v2_linux from current
+           sources (needs a working hexa_v2 OR a known-good cross-build host)
+    B. Accept structural evidence as sufficient for THIS track:
+       i.   hexa parse clean on all 4 edited files (c30de87a + 122ab8c4)
+       ii.  lexer empirically produces TokenKind::Bang for `!` on RunPod live probe
+       iii. faithful legacy port (no invented grammar)
+       Defer HX2001 1803 → drop NUMERIC measurement to path A landing.
+    C. Architectural memory-fix in interp (parallel) — strbuf trap landing
+       on main (ed04d3e1) addresses one O(n²) source but NOT the 30 GiB
+       monolithic-TU peak; not on this track's critical path.
+  EOF
+  next_gate = "user decision: path A (bootstrap refresh, multi-hour) vs path B (accept + close as best-effort verified) vs other"
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc]"
