@@ -116,23 +116,65 @@ fn _unicode_width(cp: int) -> int {
 // pre-compute layout (e.g. centering wide-char content).
 pub fn text_unicode_width(cp: int) -> int { return _unicode_width(cp) }
 
+// Skip a terminal escape sequence starting at s[i] (s[i] == 0x1B / ESC).
+// Returns the byte index just past the sequence. Escape sequences occupy
+// ZERO display columns, so text_visual_width must not count their bytes
+// (counting them as 1 cell each is the long-standing "escape-byte width
+// trap" that desynced downstream cursor/wrap math — see inbox patch
+// text-visual-width-ansi-aware). Handles:
+//   CSI            ESC '[' … final byte 0x40-0x7E   (e.g. SGR ESC[38;2;R;G;Bm)
+//   OSC/APC/DCS/PM/SOS  ESC ']'|'_'|'P'|'^'|'X' … BEL (0x07) or ST (ESC '\')
+//   2-byte         ESC <c>                          (c not one of the above)
+// APC (ESC '_' … BEL) is wilson's CURSOR_MARKER form; OSC '8' is hyperlinks.
+fn _skip_escape(s: string, i: int, n: int) -> int {
+    let mut j = i + 1
+    if j >= n { return j }                       // lone ESC at end-of-string
+    let c = char_code(s, j)
+    j = j + 1
+    if c == 91 {                                 // '[' CSI — until final 0x40..0x7E
+        while j < n {
+            let f = char_code(s, j)
+            j = j + 1
+            if f >= 64 && f <= 126 { return j }
+        }
+        return j
+    }
+    if c == 93 || c == 95 || c == 80 || c == 94 || c == 88 {
+        // OSC ']' / APC '_' / DCS 'P' / PM '^' / SOS 'X' — until BEL or ST
+        while j < n {
+            let b = char_code(s, j)
+            if b == 7 { return j + 1 }            // BEL terminator
+            if b == 27 && j + 1 < n && char_code(s, j + 1) == 92 { return j + 2 }  // ESC '\' ST
+            j = j + 1
+        }
+        return j
+    }
+    return j                                     // 2-byte ESC <c> (c consumed)
+}
+
 // Public visual width of a UTF-8 string. Sums per-codepoint width
-// (text_unicode_width). Invalid utf-8 bytes count as 1 cell each
-// (mirrors text_draw's skip-1 fallback). Used by callers that need
-// cursor / layout column alignment for CJK / emoji input.
+// (text_unicode_width). Terminal escape sequences (ESC …) are zero-width
+// and skipped. Invalid utf-8 bytes count as 1 cell each (mirrors
+// text_draw's skip-1 fallback). Used by callers that need cursor /
+// layout column alignment for CJK / emoji / SGR-styled input.
 pub fn text_visual_width(s: string) -> int {
     let mut w = 0
     let mut i = 0
     let n = len(s)
     while i < n {
-        let step = _utf8_step(s, i)
-        if step[1] == 0 {
-            // Invalid utf-8 byte — count as 1 cell, advance 1 byte
-            w = w + 1
-            i = i + 1
+        if char_code(s, i) == 27 {
+            // ESC — terminal escape sequence, zero display width
+            i = _skip_escape(s, i, n)
         } else {
-            w = w + _unicode_width(step[0])
-            i = i + step[1]
+            let step = _utf8_step(s, i)
+            if step[1] == 0 {
+                // Invalid utf-8 byte — count as 1 cell, advance 1 byte
+                w = w + 1
+                i = i + 1
+            } else {
+                w = w + _unicode_width(step[0])
+                i = i + step[1]
+            }
         }
     }
     return w
@@ -191,6 +233,19 @@ pub fn text_selftest() -> int {
     let n6 = text_draw(0, 4, "A中", 2, -1, -1, 0)
     // 'A' fits at col 0; '中' needs cols 1+2 but only 1 left → truncated
     if n6 != 1 { return 17 }
+
+    // text_visual_width skips zero-width escape sequences (escape-byte
+    // trap). ESC = chr(27), BEL = chr(7) (same idiom as self/tui/render.hexa).
+    let esc = chr(27)
+    let bel = chr(7)
+    // CSI SGR-wrapped "ab" -> 2 cells, not 2 + escape bytes
+    if text_visual_width(esc + "[38;2;1;2;3m" + "ab" + esc + "[0m") != 2 { return 18 }
+    // APC (wilson CURSOR_MARKER form: ESC _ ... BEL) -> zero width
+    if text_visual_width("x" + esc + "_wilson:c" + bel + "y") != 2 { return 19 }
+    // OSC-8 hyperlink (ESC ] ... BEL) wrapping "L" -> 1 cell
+    if text_visual_width(esc + "]8;;u" + bel + "L" + esc + "]8;;" + bel) != 1 { return 20 }
+    // bare CJK unaffected: 中 = 2 + a = 1 = 3
+    if text_visual_width("中a") != 3 { return 21 }
 
     println("text selftest OK")
     return 0
