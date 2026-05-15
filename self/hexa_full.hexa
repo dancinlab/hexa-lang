@@ -1183,6 +1183,7 @@ fn p_format_errors() {
 
 // ── Helpers ─────────────────────────────────────────────────
 
+@no_arena
 fn p_peek() {
     if p_pos >= len(p_tokens) {
         return Token { kind: "Eof", value: "", line: 0, col: 0 }
@@ -1190,6 +1191,7 @@ fn p_peek() {
     return p_tokens[p_pos]
 }
 
+@no_arena
 fn p_peek_kind() {
     return p_peek().kind
 }
@@ -1206,6 +1208,7 @@ fn p_at_end() {
     return p_peek_kind() == "Eof"
 }
 
+@no_arena
 fn p_advance() {
     let tok = p_peek()
     p_pos = p_pos + 1

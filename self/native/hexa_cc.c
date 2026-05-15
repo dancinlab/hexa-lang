@@ -3174,19 +3174,17 @@ HexaVal p_format_errors(void) {
 
 
 HexaVal p_peek(void) {
-    __hexa_fn_arena_enter();
     if (hexa_truthy(hexa_cmp_ge(p_pos, hexa_int(hexa_len(p_tokens))))) {
-        return __hexa_fn_arena_return(Token(__hexa_parser_sl_59, __hexa_parser_sl_1, hexa_int(0), hexa_int(0)));
+        return Token(__hexa_parser_sl_59, __hexa_parser_sl_1, hexa_int(0), hexa_int(0));
     }
-    return __hexa_fn_arena_return(hexa_index_get(p_tokens, p_pos));
-    return __hexa_fn_arena_return(hexa_void());
+    return hexa_index_get(p_tokens, p_pos);
+    return hexa_void();
 }
 
 
 HexaVal p_peek_kind(void) {
-    __hexa_fn_arena_enter();
-    return __hexa_fn_arena_return(hexa_map_get_ic(p_peek(), "kind", &__hexa_parser_ic_31));
-    return __hexa_fn_arena_return(hexa_void());
+    return hexa_map_get_ic(p_peek(), "kind", &__hexa_parser_ic_31);
+    return hexa_void();
 }
 
 

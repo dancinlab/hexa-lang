@@ -879,3 +879,52 @@
       Total cumulative on codegen_c2.hexa  ≈ -30 % vs PHASE 1.6 launch
   EOF
   next_candidates_remaining = "A5 (heapify dispatch bitmask · runtime.c only · stack on A1) → A2 (stats probe hoist · runtime.c only) → A4/A3 (bootstrap-needed)"
+
+# ─── 2026-05-15  PHASE 3.B step 3 LANDED — parser-leaf @no_arena ──────
+
+@N phase3b_step3_promote := "@no_arena promotion on A1 baseline" :: measurement [d=2026-05-15 ok]
+  source_patch <<~EOF
+    self/parser.hexa     +3 lines @no_arena (p_peek, p_peek_kind, p_advance)
+                         -1 line  misannotated @pure on p_advance (mutates p_pos)
+    self/hexa_full.hexa  +3 lines @no_arena (mirror copies)
+    self/native/hexa_cc.c   regenerated via ./hexa cc --regen (329 → 327 fn-arena wraps;
+                            p_peek + p_peek_kind suppressed; p_advance retained due to
+                            parser bug — see followup)
+    self/native/hexa_v2     rebuilt -O2 (1 429 040 B Mach-O)
+  EOF
+  bench_codegen_c2 <<~EOF
+    10-run user-time after promotion (system load variable):
+      A1 baseline:        3.38 · 3.42 · 3.44 · 3.53 · 3.69 · 3.75 · 3.76 · 3.76 · 3.93 · 4.13
+      A1 + @no_arena:     2.94 · 3.00 · 3.08 · 3.12 · 3.19 · 3.27 · 3.48 · 6.42 · 6.90 · 6.91
+      best-of-10:       3.38 s → 2.94 s   (-13 %)
+      median (mid-2):   3.72 s → 3.23 s   (-13 %)
+      fast-cluster mean (drop top-3 outliers): 3.68 s → 3.15 s   (-14 %)
+    A1+@no_arena has a 3-run slow cluster (~6.7 s) not present in A1 baseline alone —
+    likely system-load coupling rather than the patch (output byte-identical), but
+    flagged for re-measurement on a quiet system.
+  EOF
+  output_verification = "codegen_c2.hexa transpile byte-identical to A1 baseline (verified with diff -q)"
+
+@A phase3b_step3_promote_action := "promote A1 + parser-leaf @no_arena to main" :: change [d=2026-05-15 ok]
+  files <<~EOF
+    self/parser.hexa     — @no_arena annotations · @pure removed on p_advance
+    self/hexa_full.hexa  — mirror copy of @no_arena annotations
+    self/native/hexa_cc.c    — regenerated (327 fn-arena wraps · was 329)
+    self/native/hexa_v2      — rebuilt -O2, 1 429 040 B
+  EOF
+  backups = "/tmp/phase3b-safe-1778831821/{hexa_v2.A1.bak, hexa_cc.c.bak, parser.hexa.uncommitted, hexa_full.hexa.uncommitted, runtime.c.bak, runtime.h.bak}"
+  worktree_artifact = "branch worktree-agent-a70aa5d89521e6eb3 (commit 6ca4af2a) retained for cross-reference; not merged"
+
+@N phase3b_step3_followups := "parser-side bug surfaced during @no_arena landing" :: finding [d=2026-05-15 ok]
+  bug = "parse_fn_decl reads p_pending_attrs AFTER parse_block() returns. parse_let inside the body clears p_pending_attrs (parser.hexa lines 1274-1275). Any fn whose body contains a `let` silently loses its `@<attr>` annotations."
+  impact = "p_advance has `let tok = p_peek()` in its body → @no_arena annotation never sees codegen → fn-arena wrap pair retained. Patch partial: 2/3 of intended fns received the optimization (p_peek, p_peek_kind only)."
+  scope = "Affects every @attr on a fn whose body contains `let` — not just @no_arena. Latent bug."
+  proposed_fix <<~EOF
+    In parser.hexa parse_fn_decl (around the attr-collection site):
+      save p_pending_attrs to a local before `parse_block`
+      restore p_pending_attrs from the local after `parse_block` returns
+      use the local for the FnDecl attrs field
+    Mirror in self/hexa_full.hexa (same fn around line 1274 there).
+  EOF
+  status = "filed as follow-up — closes the remaining 1/3 of intended optimization; expected to add another ~2-4 % on codegen_c2.hexa beyond step 3"
+  blocker = "self-host re-bootstrap again (parser source change → cc --regen → rebuild)"

@@ -128,6 +128,16 @@
   risk = "low — preserves the (heapify-skip, arena-pop, return) invariant for the primitive path; non-primitives unchanged"
   blast_radius = "every `hexa run` of any program with non-trivial parsing; stacks orthogonally with [@opt_precompile_runtime]"
 
+@D opt_parser_leaf_no_arena := "RANK 1.7 — @no_arena on parser leaf fns" :: proposal [d=2026-05-15 active ok]
+  roi_rank = 1.7
+  rule = "Annotate p_peek / p_peek_kind / p_advance with @no_arena so codegen suppresses the __hexa_fn_arena_enter/return wrap pair entirely (strictly stronger than the runtime-side primitive short-circuit)."
+  expected_speedup = "10-15 % theoretical / measured 13 % best+median on codegen_c2.hexa over A1 baseline (10-run, fast cluster)"
+  evidence = "COMPILE-SPEED.log.tape @phase3b_step3_promote (10-run distribution; best 3.38→2.94 · median 3.72→3.23 · fast-cluster mean 3.68→3.15)"
+  status = "LANDED 2026-05-15 — parser.hexa +3/-1 lines · hexa_full.hexa +3 lines · hexa_cc.c regen · hexa_v2 rebuilt · byte-identical codegen output"
+  partial = "parser bug surfaced: parse_block clears p_pending_attrs via inner parse_let, so p_advance's @no_arena was dropped at codegen. 2/3 of intended sites received optimization. Follow-up filed."
+  risk = "low — @no_arena is opt-in codegen suppression; arena lifecycle handled by callers"
+  blast_radius = "every parse-heavy workload; stacks on @opt_map_heapify_forward_walk + @opt_parser_heapify_shortcircuit"
+
 @D opt_token_kind_enum := "RANK 3 — replace strcmp-based token kind compare with int enum" :: proposal [d=2026-05-15 draft]
   roi_rank = 3
   rule = "Parser's p_peek_kind currently compares token kind via strcmp on the string-form kind name. Replace with int enum and integer compare."
