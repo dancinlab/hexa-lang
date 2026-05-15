@@ -279,6 +279,8 @@ HexaVal hexa_to_int(HexaVal v);                       /* runtime.c:5214 — coer
 HexaVal hexa_chacha20_xor(HexaVal key, HexaVal nonce, HexaVal data); /* native/crypto_sodium.c:224 */
 HexaVal hexa_poly1305_onetimeauth(HexaVal key, HexaVal msg);         /* native/crypto_sodium.c:252 */
 HexaVal hexa_sha256_bytes(HexaVal data);                             /* native/crypto_sodium.c:101 */
+HexaVal hexa_sha256(HexaVal s_val);                                  /* native/exec_argv_sha256.c:290 */
+HexaVal hexa_sha256_file(HexaVal path_val);                          /* native/exec_argv_sha256.c:303 */
 HexaVal hexa_ed25519_verify(HexaVal pub, HexaVal msg, HexaVal sig);  /* native/crypto_sodium.c:160 */
 HexaVal hexa_sha512(HexaVal data);                                   /* native/crypto_sodium.c:81 */
 HexaVal hexa_ed25519_sign(HexaVal priv, HexaVal msg);                /* native/crypto_sodium.c:135 */
