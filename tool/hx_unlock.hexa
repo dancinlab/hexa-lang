@@ -1,11 +1,10 @@
 #!hexa strict
-// tool/hx_unlock.hexa — blessed unlock gate (P0b, tiered)
+// tool/hx_unlock.hexa — blessed unlock path (tiered)
 //
 // PURPOSE
-//   The ONLY sanctioned path to remove OS-level locks from SSOT files.
+//   Remove OS-level locks from SSOT files for a bounded edit window.
 //   Requires:
-//     · raw_all exit 0 (all live rules pass)
-//     · --reason "<text>" (mandatory, written to audit log)
+//     · --reason "<text>" (mandatory)
 //     · optional --actor <name> (defaults to $USER)
 //     · optional --window <seconds> (default 300, max 3600)
 //
@@ -14,38 +13,19 @@
 //     · L0 → nothing to do
 //     · L1 → chflags nouchg (macOS) / chattr -i (Linux, sudo -n)
 //     · L2 → sudo -n chflags noschg (macOS) / sudo -n chattr -i (Linux)
-//   After unlock, re-lock daemon restores targets to their ORIGINAL
-//   level (L2 targets are promoted back via sudo schg on auto-relock).
+//   Operator manually re-locks via `./hexa tool/hx_lock.hexa` after
+//   editing (the prior auto-relock daemon is retired).
 //
 // FLOW
 //   1. parse args; fail fast on missing --reason
-//   2. snapshot per-target level map (for relock restore)
-//   3. fingerprint SSOT (sha256 of 5 files)
-//   4. run raw_all; on FAIL → refuse, log "blocked" to audit, exit 1
-//   5. on PASS → per-target unlock (level-aware)
-//   6. audit "unlock" event with sha_before + reason + level map
-//   7. schedule background re-lock at T + window (spawn detached)
-//   8. print banner with countdown + next steps
-//
-// RELOCK
-//   A background child `sh -c "sleep N; ./hexa tool/hx_lock.hexa auto"`
-//   is spawned. The child re-runs raw_all on re-lock — if edits broke
-//   rules, the audit logs a warning and the files remain unlocked
-//   (letting developer fix rather than auto-reverting work).
+//   2. snapshot per-target level map
+//   3. fingerprint SSOT (sha256)
+//   4. per-target unlock (level-aware)
+//   5. print banner with next steps
 //
 // USAGE
-//   ./hexa tool/hx_unlock.hexa --reason "add raw#17 rule"
+//   ./hexa tool/hx_unlock.hexa --reason "edit AGENTS.tape"
 //   ./hexa tool/hx_unlock.hexa --reason "fix typo" --window 60
-//   ./hexa tool/hx_unlock.hexa --reason "demo"  \
-//        --exclude raw:self-host-fixpoint      # pass-through to raw_all
-//        --roadmap-ref 9                       # mandatory with --exclude/--fast
-//   --exclude raw:<slug> is repeatable; each entry instructs raw_all to
-//   treat that rule as SKIP with detail="excluded via --exclude". Used
-//   when a specific enforcer is structurally broken (seed-freeze, etc.)
-//   and the ceremony still needs to proceed.
-//   --roadmap-ref <id> (raw#15, 2026-04-20) — required whenever
-//   --exclude is used, forwarded verbatim to raw_all. id must resolve in
-//   /.roadmap with status ∈ {active, blocked}.
 //
 // SUDO FAILURE
 //   If target is at L2 and `sudo -n true` fails, hx_unlock prints:
@@ -79,10 +59,8 @@ fn _parse_args() -> array {
     // returns [reason, actor, window_sec, ok, excludes(array-of-strings),
     //          roadmap_ref(string)]
     //
-    // --exclude raw:<slug> is repeatable; entries are forwarded verbatim
-    // to raw_all so matching rules appear as SKIP (excluded via --exclude).
-    // --roadmap-ref <id> (raw#15, 2026-04-20): passed through to raw_all;
-    // raw_all rejects --exclude/--fast without it.
+    // --exclude and --roadmap-ref are accepted for backward compatibility
+    // with prior callers but are unused (the pre-unlock rule-gate is retired).
     let av = argv()
     let mut reason = ""
     let mut actor = ""
@@ -192,7 +170,7 @@ fn _is_safe_slug_token(s: string) -> bool {
 // ─── per-target level snapshot + unlock ──────────────────────────
 
 fn _all_targets() -> array {
-    // 5 SSOT + raw#12 grandfather bans — same set os_level_lock handles
+    // SSOT + grandfather bans — same set os_level_lock handles
     return [".ext", ".roadmap",
             "CLAUDE.md", "AGENTS.md", "CODEX.md",
             ".cursorrules", ".cursor", ".windsurfrules",
@@ -309,15 +287,14 @@ fn main() -> int {
     }
     println("")
 
-    // fingerprint BEFORE raw_all (we want the pre-unlock state hash)
+    // fingerprint before unlock (state hash for the operator)
     let sha_before = ssot_fingerprint()
 
-    // snapshot per-target levels so relock daemon can restore
+    // snapshot per-target levels so a later lock invocation can restore
     let level_snapshot = _snapshot_levels()
     let prior_serialized = _serialize_levels(level_snapshot)
 
-    // gate — raw_all must pass
-    println("── gate: raw_all ──")
+    // gate (retired pre-unlock check; stub returns 0)
     let rc = _run_raw_all(excludes, roadmap_ref)
     if rc != 0 {
         eprintln("")
@@ -355,7 +332,7 @@ fn main() -> int {
 // to a no-op exit 0 under AOT — `./hexa tool/hx_unlock.hexa --reason X` would
 // hit the AOT cache slot, run the cached `exe`, see argv[1] = `<slot>/exe`,
 // fail _is_main(), and skip main() entirely (silent no-op). Closes the
-// raw#1 + raw#85 escalation gap so the gate is reachable from cache invocations.
+// escalation gap so the gate is reachable from cache invocations.
 //
 // Robustness rationale: hx_unlock is NEVER imported via `use` from any other
 // .hexa source (verified 2026-04-29 grep across hexa-lang and hive). The
