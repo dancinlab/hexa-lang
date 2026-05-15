@@ -639,6 +639,28 @@ HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
 HexaVal hexa_farr_copy(HexaVal src_v);                                 /* runtime.c — RFC 033 */
 HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v); /* runtime.c — RFC 033 */
 
+/* ── safetensors mmap-backed zero-copy load (RFC 025) ──────────────
+ * codegen_c2.hexa lowers safetensors_mmap_* builtins to direct
+ * `hexa_safetensors_mmap_*` calls (1-arg: open/header/data_offset/
+ * size/close; 3-arg: read_f32_farr/read_bf16_to_f32_farr/read_bytes).
+ * Same runtime.h-split contract as the farr ABI above: the generated
+ * user.c TU only #include "runtime.h", so without these prototypes
+ * clang implicit-ints them and mis-inits `HexaVal h = ..._open(p)`
+ * from int (anima HEXAD/CHAT/chat_lib.hexa R2 Phase-5 wire blocker).
+ * Bodies (SSOT) + interp fn_shim carriers: self/runtime.c. */
+HexaVal hexa_safetensors_mmap_open(HexaVal path_v);                    /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_header(HexaVal h_v);                     /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_data_offset(HexaVal h_v);               /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_size(HexaVal h_v);                       /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_read_f32_farr(HexaVal h_v, HexaVal off_v,
+                                            HexaVal n_v);              /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_read_bf16_to_f32_farr(HexaVal h_v,
+                                                    HexaVal off_v,
+                                                    HexaVal n_v);      /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_read_bytes(HexaVal h_v, HexaVal off_v,
+                                         HexaVal n_v);                 /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_close(HexaVal h_v);                      /* runtime.c — RFC 025 */
+
 /* ── anima RFC 034 (2026-05-16): farr reverse-mode autograd ─────────
  * CE-softmax (closed B-D-4 Jacobian) + AdamW pure-hexa training step.
  * anima HEXAD/PLAN.md Phase 5 unblock. Definitions: self/runtime.c.
