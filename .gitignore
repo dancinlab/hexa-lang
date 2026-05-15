@@ -131,3 +131,6 @@ archive/
 docs/_site/
 /bin/hexa-daemon-serve
 self/runtime.o
+# root-anchored throwaway hexa_v2 compile target (was mis-ingested as a
+# CLAUDE.md project-instruction file — generated C, never source)
+/A
