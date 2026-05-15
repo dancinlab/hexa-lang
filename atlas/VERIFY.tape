@@ -219,12 +219,21 @@
     domain dispatch (math.hexa 부터)
     Stage 1 으로 닿는 anchor entry 들 🔵 SUPPORTED-IDENTITY upgrade
   EOF
+  phase_3_landed <<~EOF
+    ✅ Stage 2 hexa-native (libm sqrt/log/exp/lgamma + Newton — cycle 008-015·019)
+    ✅ Stage 3 cross-meta engine (compiler/atlas/verify/cross.hexa — cycle 019)
+    ✅ Falsifier executable form + sha256 freeze registry (falsifier.hexa — cycle 021-022)
+    ✅ strict-lint stage 9 atlas-verdict-check (test/atlas_verify_smoke.hexa CI gate — cycle 024;
+       14-module full-suite regression gate, exit(1) + grep-detectable FAIL string,
+       runnable via `hexa run test/atlas_verify_smoke.hexa`)
+    ✅ T2-01 χ→Monster full 8-step chain (modular.hexa — cycle 023)
+  EOF
   phase_3_deferred <<~EOF
-    Stage 2 hexa-native (ode_solver + linalg + 도메인별 sim)
-    Stage 3 cross-meta engine
-    Falsifier executable form + registry
-    strict-lint stage 9 atlas-verdict-check
-    atlas/MAIN.log.tape append automation
+    Stage 2 BIO PyPhi-equiv (V8 mechanism real impl — anima carry, IIT 3.0 large sprint)
+    atlas/MAIN.log.tape append automation (commit hook)
+    hexa dispatcher binary rebuild → `hexa atlas-verify` activation (currently source-wired)
+    falsifier sha256-commit hook automation (currently source = registry)
     wilson chat 통합 (wilson atlas verify)
     HTML 시각화 (atlas/MAIN.tape → static HTML codegen)
+    falsifier batteries 나머지 ~85 🔵 entries 확장 (현재 8 batteries)
   EOF

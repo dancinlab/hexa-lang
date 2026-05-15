@@ -1,0 +1,129 @@
+// test/atlas_verify_smoke.hexa — atlas verdict CI gate (strict-lint stage 9 surrogate)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// atlas/VERIFY.tape Phase 3 "strict-lint stage 9 (atlas-verdict-check)" — the
+// self-contained test-harness form. Runs the FULL atlas verifier suite across
+// all 13 modules and FAILS the build if any verdict regresses (a verifier that
+// was 🔵 closed now FALSIFIED → CI gate fires).
+//
+// Run:   hexa run test/atlas_verify_smoke.hexa
+// CI:    non-zero exit on any regression (exit(1)) + "atlas-verify smoke: FAIL"
+//        string for grep-based detection (wilson g4 exit-code-untrusted).
+//
+// wilson g_verify_hexa_cli_only (priority 1): this IS the hexa-CLI verification
+// gate — no external tooling. Cross-link: atlas/VERIFY.tape · atlas/MAIN.tape.
+
+use "compiler/atlas/verify/foundation"
+use "compiler/atlas/verify/math"
+use "compiler/atlas/verify/top"
+use "compiler/atlas/verify/cosmo"
+use "compiler/atlas/verify/bridges"
+use "compiler/atlas/verify/chem"
+use "compiler/atlas/verify/phys"
+use "compiler/atlas/verify/transcendental"
+use "compiler/atlas/verify/eng"
+use "compiler/atlas/verify/geo"
+use "compiler/atlas/verify/bio"
+use "compiler/atlas/verify/cross"
+use "compiler/atlas/verify/falsifier"
+use "compiler/atlas/verify/modular"
+
+fn _scan(label: string, vs: [AtlasVerdict], fails) -> int {
+    let mut i = 0
+    let mut n_pass = 0
+    while i < len(vs) {
+        if vs[i].pass {
+            n_pass = n_pass + 1
+        } else {
+            // AT-RISK is an expected non-pass tier (anima carry) — not a regression.
+            let is_at_risk = vs[i].tier.contains("AT-RISK")
+            if !is_at_risk {
+                fails.push(label + "::" + vs[i].entry_id + " [" + vs[i].tier + "]")
+            } else {
+                n_pass = n_pass + 1   // AT-RISK counts as expected (carries mismatch statement)
+            }
+        }
+        i = i + 1
+    }
+    return n_pass
+}
+
+fn main() {
+    let mut fails = []
+    let mut total = 0
+    let mut passed = 0
+
+    let m1 = verify_foundation_all()
+    total = total + len(m1)
+    passed = passed + _scan("foundation", m1, fails)
+
+    let m2 = verify_math_all()
+    total = total + len(m2)
+    passed = passed + _scan("math", m2, fails)
+
+    let m3 = verify_top_all()
+    total = total + len(m3)
+    passed = passed + _scan("top", m3, fails)
+
+    let m4 = verify_cosmo_all()
+    total = total + len(m4)
+    passed = passed + _scan("cosmo", m4, fails)
+
+    let m5 = verify_bridges_all()
+    total = total + len(m5)
+    passed = passed + _scan("bridges", m5, fails)
+
+    let m6 = verify_chem_all()
+    total = total + len(m6)
+    passed = passed + _scan("chem", m6, fails)
+
+    let m7 = verify_phys_all()
+    total = total + len(m7)
+    passed = passed + _scan("phys", m7, fails)
+
+    let m8 = verify_transcendental_all()
+    total = total + len(m8)
+    passed = passed + _scan("transcendental", m8, fails)
+
+    let m9 = verify_eng_all()
+    total = total + len(m9)
+    passed = passed + _scan("eng", m9, fails)
+
+    let m10 = verify_geo_all()
+    total = total + len(m10)
+    passed = passed + _scan("geo", m10, fails)
+
+    let m11 = verify_bio_all()
+    total = total + len(m11)
+    passed = passed + _scan("bio", m11, fails)
+
+    let m12 = verify_cross_all()
+    total = total + len(m12)
+    passed = passed + _scan("cross", m12, fails)
+
+    let m13 = verify_falsifier_all()
+    total = total + len(m13)
+    passed = passed + _scan("falsifier", m13, fails)
+
+    let m14 = verify_modular_all()
+    total = total + len(m14)
+    passed = passed + _scan("modular", m14, fails)
+
+    let nf = len(fails)
+    println("")
+    println("─────────────────────────────────────────────────────────")
+    println("atlas-verify CI gate — " + to_string(passed) + "/" + to_string(total) + " verdicts hold")
+    if nf == 0 {
+        println("atlas-verify smoke: PASS")
+    } else {
+        println("atlas-verify smoke: FAIL — " + to_string(nf) + " verdict regression(s)")
+        let mut i = 0
+        while i < nf {
+            println("  - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}

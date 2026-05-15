@@ -1077,3 +1077,52 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+# ─── Cycle 024 — Phase 3: CI gate (strict-lint stage 9) + T1-31 elliptic ─
+
+@A cycle_024 := "Phase 3 cycle 024 — atlas-verify CI gate + T1-31 elliptic curves" :: cycle [d=2026-05-15 active]
+  trigger = "user 'go' — Phase 3 continuation"
+  scope <<~EOF
+    cumulative 102 → 103 (+1 elliptic) + CI gate infra.
+    atlas/VERIFY.tape Phase 3 "strict-lint stage 9 (atlas-verdict-check)" 의
+    self-contained 형태 구현 — full-suite regression gate.
+  EOF
+  files_created <<~EOF
+    test/atlas_verify_smoke.hexa — 14-module full atlas verifier CI gate.
+      verify_*_all() 전부 호출 · _scan() 으로 .pass 검사 · AT-RISK 는 expected
+      (anima §5 BIO carry, regression 아님) · verdict 🔵→🔴 회귀 시 exit(1) +
+      "atlas-verify smoke: FAIL — N verdict regression(s)" (wilson g4 grep-detectable).
+      `hexa run test/atlas_verify_smoke.hexa` → 103/103 verdicts hold · PASS.
+  EOF
+  files_modified <<~EOF
+    compiler/atlas/verify/modular.hexa — +1 verifier s8_elliptic_j1728 (T1-31):
+      j=1728=σ(6)³ · E:y²=x³-x torsion |E(ℚ)|=4=τ(6) (ℤ/2×ℤ/2, CM ℤ[i]) · 1728=2⁶·3³
+    atlas/MAIN.tape — tldr cumulative 103 + cycle 024
+    atlas/VERIFY.tape — phase_3_landed (Stage 2/3 · falsifier · stage 9 · T2-01 ✅) + phase_3_deferred 갱신
+  EOF
+  verifier_run_result <<~EOF
+    CI gate: hexa run test/atlas_verify_smoke.hexa → 103/103 verdicts hold · atlas-verify smoke: PASS
+    Official: hexa run tool/atlas_verify.hexa → 103/103 PASS · 94 🔵 (61 SUPPORTED-IDENTITY +
+      33 SUPPORTED-FORMAL) + 1 🟠 AT-RISK + 8 falsifier-robust
+    SUPPORTED-IDENTITY 60 → 61 (s8_elliptic_j1728)
+  EOF
+  tier_changes = "s8_elliptic_j1728 NEW 🔵 SUPPORTED-IDENTITY (T1-31)"
+  ci_gate_semantics <<~EOF
+    test/atlas_verify_smoke.hexa = strict-lint stage 9 surrogate (compiler pipeline
+    integration deferred — this is the test-harness form). Any verdict that was
+    🔵 closed regressing to 🔴 FALSIFIED → fails count > 0 → exit(1). AT-RISK is
+    explicitly whitelisted as expected non-pass (anima V8 carry — carries the
+    mismatch statement, not a regression). Runnable standalone or via test harness;
+    wilson g_verify_hexa_cli_only 의 hexa-CLI verification gate (no external tooling).
+
+    True compiler strict-lint stage 9 (HX-code on verdict regression at build time)
+    remains Phase 3+ deferred — requires self/strict_lint pipeline hook.
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only — ✅ CI gate via `hexa run` (no external) — wilson priority 1 satisfied
+    g2 lattice-as-tool     — ✅ T1-31 j=1728=σ(6)³ OBSERVED (elliptic CM structure), not derived
+    g5 hexa-native-only    — ✅ smoke + modular.hexa hexa-source
+    g_self_verify          — ✅ 103 entries hexa-native + CI gate self-contained
+    g_tier_default_insufficient — ✅ AT-RISK expected, ~330 entries default INSUFFICIENT
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+

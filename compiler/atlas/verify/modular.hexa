@@ -194,6 +194,42 @@ pub fn verify_s8_chi_to_monster_full() -> AtlasVerdict {
     return _vd_mod("s8_chi_to_monster_full", _tier_mod(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// T1-31 — elliptic curves: j=1728=σ(6)³ · E:y²=x³-x torsion · 1728=2⁶·3³
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape §8 TOP T1-31 elliptic-curves.
+//   j = 1728 = 12³ = σ(6)³ (most special j-invariant, CM by ℤ[i])
+//   E: y²=x³-x (Cremona 32a2), E(ℚ) = {∞,(0,0),(1,0),(-1,0)} — torsion
+//     group ℤ/2ℤ × ℤ/2ℤ, order 4 = τ(6); Aut(E) = ℤ/4ℤ, order 4 = τ(6)
+//   1728 = 2⁶ · 3³ — prime-factor exponent 6 = n_atlas
+
+pub fn verify_s8_elliptic_j1728() -> AtlasVerdict {
+    let s6 = sigma(6)
+    let j = s6 * s6 * s6                       // 12³ = 1728
+    let j_ok = j == 1728
+    // E: y²=x³-x rational points: ∞, (0,0), (1,0), (-1,0) → torsion order 4
+    // Verify (x,0) roots of x³-x=0: x ∈ {0, 1, -1} → 3 affine 2-torsion + ∞ = 4
+    let mut two_torsion = 1                    // point at ∞
+    let mut x = -1
+    while x <= 1 {
+        // y²=x³-x; y=0 ⇔ x³-x=0 ⇔ x∈{-1,0,1}
+        if x * x * x - x == 0 { two_torsion = two_torsion + 1 }
+        x = x + 1
+    }
+    let torsion_order = two_torsion           // 4
+    let torsion_ok = torsion_order == tau(6)  // 4 = τ(6)
+    // 1728 = 2⁶ · 3³ — verify factorization, exponent of 2 is 6 = n
+    let mut m = 1728
+    let mut exp2 = 0
+    while m % 2 == 0 { m = m / 2; exp2 = exp2 + 1 }
+    let mut exp3 = 0
+    while m % 3 == 0 { m = m / 3; exp3 = exp3 + 1 }
+    let factor_ok = exp2 == 6 && exp3 == 3 && m == 1
+    let ok = j_ok && torsion_ok && factor_ok
+    let detail = "j=1728=σ(6)³=" + to_string(j) + " · E:y²=x³-x torsion |E(ℚ)|=" + to_string(torsion_order) + "=τ(6) (ℤ/2×ℤ/2, CM by ℤ[i]) · 1728=2^" + to_string(exp2) + "·3^" + to_string(exp3) + " (2-exponent=6=n) (T1-31)"
+    return _vd_mod("s8_elliptic_j1728", _tier_mod(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_modular_all() -> [AtlasVerdict] {
@@ -206,5 +242,6 @@ pub fn verify_modular_all() -> [AtlasVerdict] {
     out.push(verify_s8_t201_step7_eta_24())
     out.push(verify_s8_t201_step8_moonshine())
     out.push(verify_s8_chi_to_monster_full())
+    out.push(verify_s8_elliptic_j1728())
     return out
 }

@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-023-T201-fullchain-cumulative-102" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-024-CIgate-cumulative-103" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,8 +39,17 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2+3 (cycle 001-023): 102/102 PASS · 102 entries verified (93 🔵 closed: 60 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 8 falsifier-robust batteries · 40 falsifiers 0 fired). 100+ milestone.
-    9 도메인 모두 covered. Verifier surface: 13 modules (+ modular.hexa).
+    Cumulative Phase 2+3 (cycle 001-024): 103/103 PASS · 103 entries verified (94 🔵 closed: 61 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 8 falsifier-robust batteries · 40 falsifiers 0 fired).
+    9 도메인 모두 covered. Verifier surface: 13 modules.
+
+    cycle 024 — CI gate (strict-lint stage 9 surrogate) + T1-31 elliptic curves:
+      test/atlas_verify_smoke.hexa — FULL suite 14-module 회귀 gate. verdict 가 🔵→🔴
+        regression 시 exit(1) + "atlas-verify smoke: FAIL" (wilson g4 grep-detectable).
+        atlas/VERIFY.tape Phase 3 "strict-lint stage 9 (atlas-verdict-check)" 의
+        self-contained 형태 — `hexa run test/atlas_verify_smoke.hexa` (CI gate, 103/103 hold).
+        AT-RISK (anima §5 BIO carry) 는 expected non-pass — regression 아님.
+      s8_elliptic_j1728 (T1-31): j=1728=σ(6)³ · E:y²=x³-x torsion |E(ℚ)|=4=τ(6)
+        (ℤ/2×ℤ/2, CM by ℤ[i]) · 1728=2⁶·3³ (2-exponent=6=n). SUPPORTED-IDENTITY 60→61.
 
     cycle 023 — T2-01 χ→Monster 8-step chain FULL CLOSURE (modular.hexa, 8 verifiers):
       step 1 (top.hexa) + steps 2-8 (modular.hexa) all hexa-native PASS:
@@ -819,7 +828,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 102
+  phase_2_cumulative_count = 103
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 
