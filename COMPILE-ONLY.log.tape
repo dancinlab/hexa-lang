@@ -83,3 +83,43 @@
   fact = "tests/bootstrap/run_bootstrap.sh live run reports DEFERRED — stage 2 smoke OK, stage 3 fixed-point cannot run (no stage 1 binary on disk)."
   evidence = "build/stage1/hexa = 58952 B, mtime Apr 13 (stale Q1 stub); build/stage{2,3}/hexa same mtime; build/fixpoint_report.json mode=scaffold, converged=0"
   unblocks = "@open_wallclock"
+
+# ─── 2026-05-15  Track B — stage 2 codegen+assemble closure (c7-stack-spill) ───
+
+@A stage2_codegen_landed := "stage 2 codegen+assemble PASS — GNU-as 2435→0" :: measurement [d=2026-05-15 ok]
+  == open_stages_23
+  step = "Path (b): HEXA_IGNORE_ERRORS=1 (58a3760e) lets stage 1 reach codegen; the emitted x86_64-linux-gnu asm then surfaced 3 codegen-operand bugs + 1 symbol-namespacing collision — all fixed."
+  commits <<~EOF
+    58a3760e feat(main)          — --ignore-errors / HEXA_IGNORE_ERRORS bootstrap escape
+    2c1e6f46 fix(flatten)        — leaves-first order (module-level lets init before pipeline)
+    fb09d4bf fix(codegen-arm64)  — cmp lhs must be register, not immediate (no x86 twin)
+    90345921 fix(codegen-x86_64) — cmp/test lhs materialize (r10) + idiv single-operand seq
+    3fe7bae0 fix(modules)        — per-module rename of 4 colliding file-local helper families
+    7d725286 doc(compile-only)   — §4 @N stage2_codegen_clean (architecture, ~> stage2_partial)
+    branch = c7-stack-spill (worktree agent-a92a7dd5f698cf370, unpushed — user merge gate)
+  EOF
+  |> "GNU-as error trajectory 2435 → 38 (cmp+test) → 26 (idiv) → 0 (symbols). stage2c.o = 364 KB x86_64 ELF, assembles clean."
+  build_env = "Local macOS clang OOM-killed the 7 MB+540 KB monolithic TU (Killed:9); ubu-1 unreachable mid-run (SSH banner timeout); completed cross-build on ubu-2 (12c/30 GB x86_64). Linux clang-18 runtime.c needs `-include execinfo.h -Wno-error=implicit-function-declaration`; main_v13.c self-contained (#include runtime.c) — link WITHOUT separate runtime.o, -no-pie + non-pie runtime."
+  => "codegen+assemble track CLOSED — the interp-retirement gate stack's stage-2 blocker is no longer in codegen/symbol layer"
+  @> COMPILE-ONLY.tape
+  authority = "[@x_bootstrap_doc] [@x_spec_5]"
+
+@N gate_moved_frontend := "stage-2 blocker moved: codegen → front-end name-resolution" :: status [d=2026-05-15 partial]
+  <- stage2_codegen_landed
+  fact = "Linking stage2c.o → stage2 binary fails with undefined refs: main / is_alpha / is_alphanumeric / chars / len / to_string / <callee> ×594. These ARE the real content of the 3804 HEXA_IGNORE_ERRORS-suppressed FRONT-END diagnostics — not codegen."
+  diagnostic_breakdown <<~EOF
+    HX2001 1803 — <callee> 594 (fn resolution) + operator tokens [ ] ! , | &
+                  misparsed as undefined names (~1000) + idents ~200
+    HX3001  994 — _types_assignable coercion
+    HX2002  993 — cross-module pub/private (_collect_item_types splice path)
+    HX3002    9 / HX3004 1
+  EOF
+  root_cause = "operator-token-as-undefined-name ⇒ self-host parser expression-lowering (index/logical/bitwise/tuple) incomplete — a parse/bind/resolve gap, adjacent to 7da77859 fix(bind); architectural, separate track from codegen."
+  next_step = "(1) parser expr-lowering [ ] ! , | & so operator tokens don't reach binder as Ident; (2) HX2002 cross-module pub/private; (3) HX2001 <callee> receiver-type plumbing; (4) HX3001 coercion. OR: PR/merge the 6-commit codegen track first."
+  unblocks = "@phase_f_closure_criteria A1 (stage3 byte-equal) — still gated, gate relocated not removed"
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc]"
+
+@N ubu1_recovered := "build-env: ubu-1 reachable again" :: status [d=2026-05-15 ok]
+  <- stage2_codegen_landed
+  fact = "ubu-1 (Linux aiden-B650M-K, kernel 6.17.0-23-generic, x86_64) SSH-reachable again after the mid-run banner-timeout outage that forced the ubu-2 cross-build fallback. Both x86_64 build boxes now available for the front-end track."
+  caveat = "Heavy builds still route to ubu-1/ubu-2 (local macOS clang OOMs the monolithic TU). Remote pattern: /tmp fresh clone, never force-reset the aiden worktree."
