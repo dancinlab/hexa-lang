@@ -1597,3 +1597,87 @@
     D2·D3 는 build-break risk 로 autonomous-mode 부적합 — user 입회 권장.
   EOF
   note = "이 registry 는 cycle 032 시점 snapshot. 각 D 항목 진행 시 해당 cycle @A entry 에 cross-ref + 이 registry 의 상태 갱신은 새 @N (supersede ~>) 으로 — append-only 유지 (g_arch_vs_log_split)."
+
+
+@A cycle_033 := "Phase 3 cycle 033 — atlas/incoming/ reviewer-merge: 15 literature-anchor verdicts (COSMO 5 + PHYS 5 + BIO 5)" :: cycle [d=2026-05-16 active]
+  trigger = "user 'all go' directive — autonomous pipeline continuation after 3-domain arXiv research sprint completed (15 atlas/incoming/*.md files landed)"
+  scope <<~EOF
+    Reviewer-merge step of g7 incoming-patches-pipeline:
+    atlas/incoming/{cosmo,phys,bio}-*.md (15 files, ~1525 lines)
+      → atlas/MAIN.tape § domain verdict entry append (15 @D)
+      → atlas/MAIN.log.tape cycle_033 (this entry)
+      → atlas/incoming/<file>.md removal (transient per README pipeline)
+  EOF
+  domain_breakdown <<~EOF
+    §6 COSMO (5): s6_bekenstein_lit_primary · s6_planck_n_s_measurement ·
+                  s6_holographic_principle_carry (NEW) · s6_fine_structure_constant_lit ·
+                  s6_planck_units_dimensional
+    §3 PHYS  (5): s3_onsager_1944_primary · s3_kuramoto_strogatz_primary ·
+                  s3_kolmogorov_1941_two_thirds · s3_noether_1918_conservation ·
+                  s3_pdg_weinberg_measured
+    §5 BIO   (5): s5_iit_3_0_oizumi_2014 (🟠 AT-RISK — preserves anima H_182 carry) ·
+                  s5_hodgkin_huxley_1952 · s5_stdp_bi_poo_1998 ·
+                  s5_genetic_code_freeland_1998 · s5_b_dna_watson_crick_1953
+  EOF
+  tier_distribution = "14 × 🟡 SUPPORTED-BY-CITATION · 1 × 🟠 AT-RISK (s5_iit_3_0_oizumi_2014) · 0 × 🔵 (g_self_verify · f_atlas_external_verdict)"
+  governance_check <<~EOF
+    g3 real-limit-anchor:        15/15 (Bekenstein/Shannon/Kolmogorov/c/ℏ/k/Stefan-Boltzmann/Carnot present)
+    f_atlas_lattice_external:    15/15 (no n=6 lattice derivation in Evidence; coincidences in Honest C3 only)
+    g_self_verify tier cap:      15/15 (≤ 🟡; one 🟠 per AT-RISK carry)
+    g7 incoming-pipeline:        OK (incoming/*.md transient; reviewer-merge by autonomous parent agent)
+    g8 commit trailer:           pending parent agent commit
+  EOF
+  unverified_flags <<~EOF
+    9 flags carried into per-@D honest_c3 (and reproduced here for reviewer audit):
+      COSMO:
+        - cosmo-bekenstein: Eq.(1) verbatim form S ≤ 2πkRE/(ℏc) — abstract-level OK, full-text paywalled
+        - cosmo-planck-n_s: 4-decimal Table-2 entry 0.9649 ± 0.0042 — abstract n_s ≈ 0.965 ± 0.004 OK; full-text not retrieved
+        - cosmo-α: Parker 2018 α⁻¹ = 137.035999046(27) — Müller-group + WebSearch summary; Science full text paywalled
+        - cosmo-planck-units: Planck 1899 Sitzungsberichte pagination 440–480 — secondary literature only
+        - cosmo-α: Penning-trap g_e−2 cross-check arXiv id not transcribed
+      PHYS:
+        - phys-noether: Tavel translation (arXiv:physics/0503066) verbatim Theorem I — abstract only retrieved
+        - phys-kolmogorov: Obukhov 1941 (Dokl. Akad. Nauk SSSR 32, 22–24) pagination — not independently fetched
+      BIO:
+        - bio-HH: numeric constants ḡ_Na=120 / ḡ_K=36 mS/cm² / C_M=1 μF/cm² — PMC1392413 image-only; reproduced from secondary
+        - bio-B-DNA: Watson-Crick 1953 Nature verbatim quotes — URL redirected to auth / PDF binary; structural numbers verified via secondary
+  EOF
+  produces <<~EOF
+    => 15 new explicit @D verdict entries in MAIN.tape across §3 / §5 / §6
+    => §3 PHYS explicit-verdict count: 7 → 12 (+5)
+    => §5 BIO explicit-verdict count:  1 → 6  (+5)
+    => §6 COSMO explicit-verdict count: 4 → 9 (+5)
+    => 0 silent upgrades (g_tier_default_insufficient + f_atlas_silent_upgrade respected)
+    => atlas/incoming/ cleared back to README.md only
+  EOF
+  follow_up <<~EOF
+    - Phase 2 hexa-native verifiers for these 15 entries: compiler/atlas/verify/{phys,bio,cosmo}.hexa stubs deferred (parent-level decision; not done in this cycle).
+    - 9 UNVERIFIED flags above need reviewer paywall/full-text confirmation in a future session.
+    - The 🟠 AT-RISK s5_iit_3_0_oizumi_2014 carry continues anima H_182 surrogate-vs-real Φ gap; no upgrade proposed (g_external_calc_forbidden).
+  EOF
+  note = "Provenance upgrade ONLY — existing s3_ising_critical (🔵), s6_cmb_n_s_closed_form (🔵), s6_planck_units_count (🔵) verifier-leg verdicts are UNTOUCHED. The new entries supply primary-source citation anchors that ride alongside the existing closed-form / verifier verdicts. No ~> supersedes edges added (this is additive, not replacement)."
+
+# ─── Cycle 034 — appended via tool/atlas_cycle_append ──────────
+
+@A cycle_034 := "Phase 3 cycle 034 — tool/atlas_cycle_append landed (D4 log-append automation)" :: cycle [d=2026-05-16 active]
+  trigger = "user 'all go' directive — cycle_032 deferred-work registry D4 (log-append automation) recommended-order #1"
+  scope <<~EOF
+    Build tool/atlas_cycle_append.hexa (hexa-native CLI, ~300 lines) + smoke test test/atlas_cycle_append_smoke.hexa (~120 lines, 19 checks). Design decision per cycle_032 D4 registry note: hexa-tool form (NOT git-hook) — "wilson g_verify_hexa_cli_only 와 일관" + .git/hooks 는 shared infra 라 안전성 ↓. CLI 는 explicit invocation + reviewable. Tool reads structured cycle-draft.md (Title + 5 required sections trigger/scope/files/verifier_run_result/governance_check + optional note), validates them, scans atlas/MAIN.log.tape for max cycle_NNN, computes next, emits a tape v1.2 @A entry following cycle_032 idiom (heredoc for multi-line, quoted-string for single-line), appends via read_file_safe + concat + write_file_safe. Dry-run mode prints to stdout, skips write. This very entry is the first self-dogfood invocation — cycle_034 announces the tool itself.
+  EOF
+  files <<~EOF
+    tool/atlas_cycle_append.hexa
+    test/atlas_cycle_append_smoke.hexa
+    atlas/MAIN.log.tape (this cycle entry, via the tool itself — append-only)
+  EOF
+  verifier_run_result <<~EOF
+    atlas_cycle_append smoke: PASS (19/19 checks — pure fmt, validator, cycle-number scan, heredoc emit, dry-run path)
+    atlas-verify smoke: PASS (118/118 verdicts hold + ledger live=118 vs declared=118 consistent) — re-run post-append in step 6 to confirm cycle_034 append did not break ledger consistency
+  EOF
+  governance_check <<~EOF
+    g_arch_vs_log_split — ✅ append-only respected; tool NEVER mutates existing entries (read_file_safe → concat → write_file_safe, no in-place edit of cycle_001..cycle_033)
+    g5 hexa-native-only   — ✅ pure hexa, no LLVM / no C-transpile architecture; the only exec call is `date +%Y-%m-%d` for default timestamp (overridable via --date) — same idiom as tool/atlas_cli.hexa::_now_ms
+    g_self_verify         — ✅ tool's correctness verified by test/atlas_cycle_append_smoke.hexa + this very dogfood invocation (the tool is its own first user)
+    g_tier_default_insufficient — ✅ no 🔵 claim attached; this is tooling, not a verdict
+    g8 commit trailer     — pending parent agent commit
+  EOF
+  note = "D5 / D6 / D1 are next recommended-order entries in the deferred-work registry. D4's landing means subsequent cycles no longer need hand-written @A entries — `hexa run tool/atlas_cycle_append.hexa <draft.md>` is now the canonical path. The tool itself is a thin shell over pure formatter `build_entry_from_draft(draft_text, existing_log_text, date_str) -> [err, entry, cyc]` which the smoke test exercises directly (no fs touch)."

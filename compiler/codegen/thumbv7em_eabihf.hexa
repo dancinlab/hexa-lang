@@ -53,76 +53,76 @@ import "../ir/lir.hexa"
 
 // ── PReg / LOperand helpers ──────────────────────────────────
 
-fn _preg_gpr(name: string) -> PReg {
+fn _thumb_preg_gpr(name: string) -> PReg {
     return PReg { name: name, kind: "gpr" }
 }
 
-fn _empty_preg() -> PReg {
+fn _thumb_empty_preg() -> PReg {
     return PReg { name: "", kind: "" }
 }
 
-fn _op_reg(name: string) -> LOperand {
+fn _thumb_op_reg(name: string) -> LOperand {
     return LOperand {
         kind: "reg",
-        reg: _preg_gpr(name),
+        reg: _thumb_preg_gpr(name),
         imm: 0,
-        mem_base: _empty_preg(),
+        mem_base: _thumb_empty_preg(),
         mem_offset: 0,
         label: ""
     }
 }
 
-fn _op_imm(value: i64) -> LOperand {
+fn _thumb_op_imm(value: i64) -> LOperand {
     return LOperand {
         kind: "imm",
-        reg: _empty_preg(),
+        reg: _thumb_empty_preg(),
         imm: value,
-        mem_base: _empty_preg(),
+        mem_base: _thumb_empty_preg(),
         mem_offset: 0,
         label: ""
     }
 }
 
-fn _op_label(name: string) -> LOperand {
+fn _thumb_op_label(name: string) -> LOperand {
     return LOperand {
         kind: "label",
-        reg: _empty_preg(),
+        reg: _thumb_empty_preg(),
         imm: 0,
-        mem_base: _empty_preg(),
+        mem_base: _thumb_empty_preg(),
         mem_offset: 0,
         label: name
     }
 }
 
-fn _op_mem(base: string, offset: i64) -> LOperand {
+fn _thumb_op_mem(base: string, offset: i64) -> LOperand {
     return LOperand {
         kind: "mem",
-        reg: _empty_preg(),
+        reg: _thumb_empty_preg(),
         imm: 0,
-        mem_base: _preg_gpr(base),
+        mem_base: _thumb_preg_gpr(base),
         mem_offset: offset,
         label: ""
     }
 }
 
-fn _instr0(op: string, comment: string) -> LInstr {
+fn _thumb_instr0(op: string, comment: string) -> LInstr {
     return LInstr { op: op, args: [], comment: comment }
 }
 
-fn _instr1(op: string, a: LOperand, comment: string) -> LInstr {
+fn _thumb_instr1(op: string, a: LOperand, comment: string) -> LInstr {
     let mut xs = []
     xs.push(a)
     return LInstr { op: op, args: xs, comment: comment }
 }
 
-fn _instr2(op: string, a: LOperand, b: LOperand, comment: string) -> LInstr {
+fn _thumb_instr2(op: string, a: LOperand, b: LOperand, comment: string) -> LInstr {
     let mut xs = []
     xs.push(a)
     xs.push(b)
     return LInstr { op: op, args: xs, comment: comment }
 }
 
-fn _instr3(op: string, a: LOperand, b: LOperand, c: LOperand, comment: string) -> LInstr {
+fn _thumb_instr3(op: string, a: LOperand, b: LOperand, c: LOperand, comment: string) -> LInstr {
     let mut xs = []
     xs.push(a)
     xs.push(b)
@@ -175,20 +175,20 @@ fn _thumb_strtab_lookup(st: ThumbStrTab, s: string) -> string {
 
 fn _thumb_op_for_operand_st(o: Operand, st: ThumbStrTab) -> LOperand {
     if o.kind == "local" {
-        return _op_reg(_thumb_reg_for_local(o.local_id))
+        return _thumb_op_reg(_thumb_reg_for_local(o.local_id))
     }
     if o.kind == "const_int" {
-        return _op_imm(o.int_val)
+        return _thumb_op_imm(o.int_val)
     }
     if o.kind == "global" {
-        return _op_label("g" + to_string(o.global_id))
+        return _thumb_op_label("g" + to_string(o.global_id))
     }
     if o.kind == "const_str" {
         let lbl = _thumb_strtab_lookup(st, o.str_val)
-        if len(lbl) > 0 { return _op_label(lbl) }
-        return _op_label(o.str_val)
+        if len(lbl) > 0 { return _thumb_op_label(lbl) }
+        return _thumb_op_label(o.str_val)
     }
-    return _op_imm(0)
+    return _thumb_op_imm(0)
 }
 
 // ── Block label helper ───────────────────────────────────────
@@ -233,15 +233,15 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
     let mut buf = out
     if s.kind == STMT_ASSIGN {
         // mov dst, src — Thumb-2 accepts both reg and imm12 forms.
-        let dst = _op_reg(_thumb_reg_for_local(s.dst.id))
+        let dst = _thumb_op_reg(_thumb_reg_for_local(s.dst.id))
         if len(s.args) >= 1 {
             let src = _thumb_op_for_operand_st(s.args[0], st)
-            buf.push(_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
+            buf.push(_thumb_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
         }
         return buf
     }
     if s.kind == STMT_BINOP {
-        let dst = _op_reg(_thumb_reg_for_local(s.dst.id))
+        let dst = _thumb_op_reg(_thumb_reg_for_local(s.dst.id))
         if len(s.args) >= 2 {
             let a = _thumb_op_for_operand_st(s.args[0], st)
             let b = _thumb_op_for_operand_st(s.args[1], st)
@@ -250,11 +250,11 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
             // (AAPCS first two arg regs) and `bl hexa_str_concat`.
             // Result lands in r0 → mov into dst.
             if _thumb_is_concat(s.op) {
-                buf.push(_instr2("mov", _op_reg("r0"), a, "concat arg0"))
-                buf.push(_instr2("mov", _op_reg("r1"), b, "concat arg1"))
-                buf.push(_instr1("bl", _op_label("hexa_str_concat"),
+                buf.push(_thumb_instr2("mov", _thumb_op_reg("r0"), a, "concat arg0"))
+                buf.push(_thumb_instr2("mov", _thumb_op_reg("r1"), b, "concat arg1"))
+                buf.push(_thumb_instr1("bl", _thumb_op_label("hexa_str_concat"),
                                  "call runtime: hexa_str_concat"))
-                buf.push(_instr2("mov", dst, _op_reg("r0"), "capture concat result"))
+                buf.push(_thumb_instr2("mov", dst, _thumb_op_reg("r0"), "capture concat result"))
                 return buf
             }
 
@@ -272,11 +272,11 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
             // can fold to ITE when the regalloc tracks live-out.
             let cond = _thumb_cmp_cond(s.op)
             if len(cond) > 0 {
-                buf.push(_instr2("cmp", a, b, "binop " + s.op))
+                buf.push(_thumb_instr2("cmp", a, b, "binop " + s.op))
                 // dst <- 0 ; if <cond> dst <- 1  (uses `it <cond>` sugar)
-                buf.push(_instr2("mov", dst, _op_imm(0), "binop " + s.op + " → 0"))
-                buf.push(_instr1("it", _op_label(cond), "IT-block: " + cond))
-                buf.push(_instr2("mov" + cond, dst, _op_imm(1),
+                buf.push(_thumb_instr2("mov", dst, _thumb_op_imm(0), "binop " + s.op + " → 0"))
+                buf.push(_thumb_instr1("it", _thumb_op_label(cond), "IT-block: " + cond))
+                buf.push(_thumb_instr2("mov" + cond, dst, _thumb_op_imm(1),
                                  "binop " + s.op + " → 1 if " + cond))
                 return buf
             }
@@ -292,7 +292,7 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
             if _thumb_is_bit_and(s.op)   { mnemonic = "and" }
             if _thumb_is_bit_or(s.op)    { mnemonic = "orr" }
             if _thumb_is_bit_xor(s.op)   { mnemonic = "eor" }
-            buf.push(_instr3(mnemonic, dst, a, b, "binop " + s.op))
+            buf.push(_thumb_instr3(mnemonic, dst, a, b, "binop " + s.op))
         }
         return buf
     }
@@ -304,36 +304,36 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
         while i < len(s.args) {
             let src = _thumb_op_for_operand_st(s.args[i], st)
             if i < 4 {
-                let dst_reg = _op_reg(_thumb_arg_reg(i))
-                buf.push(_instr2("mov", dst_reg, src, "arg " + to_string(i)))
+                let dst_reg = _thumb_op_reg(_thumb_arg_reg(i))
+                buf.push(_thumb_instr2("mov", dst_reg, src, "arg " + to_string(i)))
             } else {
-                buf.push(_instr0("nop",
+                buf.push(_thumb_instr0("nop",
                     "TODO: spill arg " + to_string(i) + " to stack"))
             }
             i = i + 1
         }
         let target = s.op // call target name carried in s.op
-        buf.push(_instr1("bl", _op_label(target), "call " + target))
+        buf.push(_thumb_instr1("bl", _thumb_op_label(target), "call " + target))
         if s.dst.id >= 0 {
-            let dst = _op_reg(_thumb_reg_for_local(s.dst.id))
-            buf.push(_instr2("mov", dst, _op_reg("r0"), "capture call result"))
+            let dst = _thumb_op_reg(_thumb_reg_for_local(s.dst.id))
+            buf.push(_thumb_instr2("mov", dst, _thumb_op_reg("r0"), "capture call result"))
         }
         return buf
     }
     if s.kind == STMT_RETURN {
         if len(s.args) >= 1 {
             let src = _thumb_op_for_operand_st(s.args[0], st)
-            buf.push(_instr2("mov", _op_reg("r0"), src, "set return value"))
+            buf.push(_thumb_instr2("mov", _thumb_op_reg("r0"), src, "set return value"))
         }
         // Epilogue: `pop {r4-r11, pc}` restores callee-saved regs and
         // returns via pc pop (no separate `bx lr` needed).
-        buf.push(_instr1("pop", _op_label("{r4-r11, pc}"),
+        buf.push(_thumb_instr1("pop", _thumb_op_label("{r4-r11, pc}"),
                          "epilogue: restore + return"))
         return buf
     }
     if s.kind == STMT_BR {
         let lab = _thumb_block_label(modhash, fname, s.target_block)
-        buf.push(_instr1("b", _op_label(lab), "branch"))
+        buf.push(_thumb_instr1("b", _thumb_op_label(lab), "branch"))
         return buf
     }
     if s.kind == STMT_BR_COND {
@@ -343,11 +343,11 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
         if len(s.args) > 0 {
             let cond = _thumb_op_for_operand_st(s.args[0], st)
             let else_lab = _thumb_block_label(modhash, fname, s.target_block_else)
-            buf.push(_instr2("cbz", cond, _op_label(else_lab),
+            buf.push(_thumb_instr2("cbz", cond, _thumb_op_label(else_lab),
                              "br_cond: zero -> else"))
         }
         let then_lab = _thumb_block_label(modhash, fname, s.target_block)
-        buf.push(_instr1("b", _op_label(then_lab), "branch -> then"))
+        buf.push(_thumb_instr1("b", _thumb_op_label(then_lab), "branch -> then"))
         return buf
     }
     if s.kind == "load" {
@@ -355,14 +355,14 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
         // range is limited (12-bit unsigned); larger offsets need a
         // pre-add to a scratch reg. v1 trusts the assembler's literal
         // pool synthesis path.
-        let dst = _op_reg(_thumb_reg_for_local(s.dst.id))
+        let dst = _thumb_op_reg(_thumb_reg_for_local(s.dst.id))
         if len(s.args) >= 1 {
             let base_op = _thumb_op_for_operand_st(s.args[0], st)
             let mut off = 0
             if len(s.args) >= 2 && s.args[1].kind == "const_int" {
                 off = s.args[1].int_val
             }
-            buf.push(_instr2("ldr", dst, _op_mem(base_op.reg.name, off),
+            buf.push(_thumb_instr2("ldr", dst, _thumb_op_mem(base_op.reg.name, off),
                              "load"))
         }
         return buf
@@ -376,13 +376,13 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
             if len(s.args) >= 3 && s.args[2].kind == "const_int" {
                 off = s.args[2].int_val
             }
-            buf.push(_instr2("str", src, _op_mem(base_op.reg.name, off),
+            buf.push(_thumb_instr2("str", src, _thumb_op_mem(base_op.reg.name, off),
                              "store"))
         }
         return buf
     }
     // Unhandled (arena_*, etc.) — emit a comment-only nop for v1.
-    buf.push(_instr0("nop", "unhandled stmt kind " + s.kind))
+    buf.push(_thumb_instr0("nop", "unhandled stmt kind " + s.kind))
     return buf
 }
 
@@ -394,9 +394,9 @@ fn _thumb_lower_func(mf: MFunc, st: ThumbStrTab, modhash: string) -> LFunc {
     // Prologue: callee-saved register save + frame pointer setup.
     //   push {r4-r11, lr}
     //   mov  r7, sp
-    instrs.push(_instr1("push", _op_label("{r4-r11, lr}"),
+    instrs.push(_thumb_instr1("push", _thumb_op_label("{r4-r11, lr}"),
                         "prologue: save callee-saved + lr"))
-    instrs.push(_instr2("mov", _op_reg("r7"), _op_reg("sp"),
+    instrs.push(_thumb_instr2("mov", _thumb_op_reg("r7"), _thumb_op_reg("sp"),
                         "prologue: set fp"))
 
     // Move incoming params r0..r3 into their assigned local registers.
@@ -406,7 +406,7 @@ fn _thumb_lower_func(mf: MFunc, st: ThumbStrTab, modhash: string) -> LFunc {
             let dst_name = _thumb_reg_for_local(mf.params[p].id)
             let src_name = "r" + to_string(p)
             if dst_name != src_name {
-                instrs.push(_instr2("mov", _op_reg(dst_name), _op_reg(src_name),
+                instrs.push(_thumb_instr2("mov", _thumb_op_reg(dst_name), _thumb_op_reg(src_name),
                                     "ingress param"))
             }
         }
@@ -418,7 +418,7 @@ fn _thumb_lower_func(mf: MFunc, st: ThumbStrTab, modhash: string) -> LFunc {
     let mut bi = 0
     while bi < len(mf.blocks) {
         let blk = mf.blocks[bi]
-        instrs.push(_instr0("label", _thumb_block_label(modhash, mf.name, blk.id)))
+        instrs.push(_thumb_instr0("label", _thumb_block_label(modhash, mf.name, blk.id)))
         let mut si = 0
         while si < len(blk.stmts) {
             instrs = _emit_thumb_stmt(instrs, modhash, mf.name, blk.stmts[si], st)
@@ -440,7 +440,7 @@ fn _thumb_lower_func(mf: MFunc, st: ThumbStrTab, modhash: string) -> LFunc {
             }
         }
     }
-    instrs.push(_instr1("pop", _op_label("{r4-r11, pc}"),
+    instrs.push(_thumb_instr1("pop", _thumb_op_label("{r4-r11, pc}"),
                         "epilogue: restore + return"))
 
     return LFunc {

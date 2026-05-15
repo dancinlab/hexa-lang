@@ -348,6 +348,26 @@ pub fn lex(source: string, file: string) -> [Token] {
                 tokens.push(mk_tok(TokenKind::Ge, ">=", sp))
                 pos = pos + 2
                 col = col + 2
+            } else if ch == '<' && pos + 1 < n && chars[pos + 1] == '<' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::Shl, "<<", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '>' && pos + 1 < n && chars[pos + 1] == '>' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::Shr, ">>", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '&' && pos + 1 < n && chars[pos + 1] == '&' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::AmpAmp, "&&", sp))
+                pos = pos + 2
+                col = col + 2
+            } else if ch == '|' && pos + 1 < n && chars[pos + 1] == '|' {
+                let sp = mk_span(file, line, start_col, 2)
+                tokens.push(mk_tok(TokenKind::PipePipe, "||", sp))
+                pos = pos + 2
+                col = col + 2
             } else if ch == '(' {
                 tokens.push(mk_tok(TokenKind::LParen, "(", mk_span(file, line, start_col, 1)))
                 pos = pos + 1
@@ -422,6 +442,29 @@ pub fn lex(source: string, file: string) -> [Token] {
                 col = col + 1
             } else if ch == '.' {
                 tokens.push(mk_tok(TokenKind::Dot, ".", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '!' {
+                // != already consumed as Neq in the multi-char section above.
+                tokens.push(mk_tok(TokenKind::Bang, "!", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '&' {
+                // && already consumed as AmpAmp above.
+                tokens.push(mk_tok(TokenKind::Amp, "&", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '|' {
+                // || already consumed as PipePipe above.
+                tokens.push(mk_tok(TokenKind::Pipe, "|", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '^' {
+                tokens.push(mk_tok(TokenKind::Caret, "^", mk_span(file, line, start_col, 1)))
+                pos = pos + 1
+                col = col + 1
+            } else if ch == '~' {
+                tokens.push(mk_tok(TokenKind::Tilde, "~", mk_span(file, line, start_col, 1)))
                 pos = pos + 1
                 col = col + 1
             } else {

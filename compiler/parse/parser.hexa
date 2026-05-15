@@ -149,6 +149,15 @@ fn tag_of(k: TokenKind) -> string {
         TokenKind::Star -> "Star",
         TokenKind::Slash -> "Slash",
         TokenKind::Percent -> "Percent",
+        TokenKind::AmpAmp -> "AmpAmp",
+        TokenKind::PipePipe -> "PipePipe",
+        TokenKind::Amp -> "Amp",
+        TokenKind::Pipe -> "Pipe",
+        TokenKind::Caret -> "Caret",
+        TokenKind::Tilde -> "Tilde",
+        TokenKind::Bang -> "Bang",
+        TokenKind::Shl -> "Shl",
+        TokenKind::Shr -> "Shr",
         TokenKind::At -> "At",
         TokenKind::Dot -> "Dot",
         TokenKind::KwFn -> "KwFn",
@@ -343,7 +352,7 @@ fn parse_expr() -> Expr {
 // with `text` set to the operator literal so the checker can distinguish a
 // pure assignment from a read-modify-write later (RFC-018 §A1).
 fn parse_assignment() -> Expr {
-    let lhs = parse_equality()
+    let lhs = parse_logical_or()
     if check_kind(TokenKind::Eq) || check_kind(TokenKind::PlusEq) || check_kind(TokenKind::MinusEq) || check_kind(TokenKind::StarEq) || check_kind(TokenKind::SlashEq) {
         let op = advance()
         let rhs = parse_assignment()
@@ -359,6 +368,70 @@ fn parse_assignment() -> Expr {
         }
     }
     return lhs
+}
+
+// Binary precedence ladder ported faithfully from the proven legacy parser
+// (self/parser.hexa parse_or / parse_and / parse_bit_ops). Loosest→tightest:
+//   ||  <  &&  <  (& | ^ << >>)  <  == !=  <  < <= > >=  <  + -  <  * /  < unary
+// Each level mirrors parse_equality's shape exactly (ExprKind::BinOp,
+// text = operator literal so the binder/lowering reads the op off `text`).
+fn parse_logical_or() -> Expr {
+    let mut left = parse_logical_and()
+    while check_kind(TokenKind::PipePipe) {
+        let op = advance()
+        let right = parse_logical_and()
+        let mut kids = []
+        kids.push(left)
+        kids.push(right)
+        left = Expr {
+            kind: ExprKind::BinOp,
+            span: op.span,
+            text: op.text,
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    return left
+}
+
+fn parse_logical_and() -> Expr {
+    let mut left = parse_bitwise()
+    while check_kind(TokenKind::AmpAmp) {
+        let op = advance()
+        let right = parse_bitwise()
+        let mut kids = []
+        kids.push(left)
+        kids.push(right)
+        left = Expr {
+            kind: ExprKind::BinOp,
+            span: op.span,
+            text: op.text,
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    return left
+}
+
+// Bitwise & | ^ and shifts << >> — C-like, between && and == (ref:
+// self/parser.hexa "Level 5.2b" parse_bit_ops).
+fn parse_bitwise() -> Expr {
+    let mut left = parse_equality()
+    while check_kind(TokenKind::Amp) || check_kind(TokenKind::Pipe) || check_kind(TokenKind::Caret) || check_kind(TokenKind::Shl) || check_kind(TokenKind::Shr) {
+        let op = advance()
+        let right = parse_equality()
+        let mut kids = []
+        kids.push(left)
+        kids.push(right)
+        left = Expr {
+            kind: ExprKind::BinOp,
+            span: op.span,
+            text: op.text,
+            children: kids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    return left
 }
 
 fn parse_equality() -> Expr {
@@ -438,7 +511,11 @@ fn parse_multiplicative() -> Expr {
 }
 
 fn parse_unary() -> Expr {
-    if check_kind(TokenKind::Minus) {
+    // Prefix operators: - (negate), ! (logical not), ~ (bitwise not).
+    // text = op literal so lowering/codegen dispatches on the operator
+    // (was hardcoded "-"; legacy self/parser.hexa parse_unary handles the
+    // same Minus/Not/BitNot set).
+    if check_kind(TokenKind::Minus) || check_kind(TokenKind::Bang) || check_kind(TokenKind::Tilde) {
         let op = advance()
         let inner = parse_unary()
         let mut kids = []
@@ -446,7 +523,7 @@ fn parse_unary() -> Expr {
         return Expr {
             kind: ExprKind::UnOp,
             span: op.span,
-            text: "-",
+            text: op.text,
             children: kids,
             atlas_ref: empty_atlas()
         }

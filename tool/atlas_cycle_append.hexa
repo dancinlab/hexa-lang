@@ -1,0 +1,459 @@
+// tool/atlas_cycle_append.hexa — atlas/MAIN.log.tape cycle entry appender (D4)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+// @status RUNNABLE — Phase 3 (D4 log-append automation, cycle 034 dogfood)
+//
+// Purpose
+// -------
+// Replace hand-written @A cycle_NNN entries in atlas/MAIN.log.tape with a
+// hexa-native CLI tool. Reads a structured cycle-draft.md (one entry per
+// invocation), validates required sections, auto-computes the next
+// cycle_NNN number by scanning the log, emits a well-formed tape v1.2
+// @A entry following the cycle_032 / cycle_033 idiom, and appends to
+// atlas/MAIN.log.tape via read_file_safe + concat + write_file_safe.
+//
+// Decision (cycle_032 deferred-work registry D4): hexa-tool form (NOT
+// a git hook) — "wilson g_verify_hexa_cli_only 와 일관" + .git/hooks 는
+// shared infra 라 안전성 ↓. CLI 는 explicit invocation + reviewable.
+//
+// Tool interface
+// --------------
+//   hexa run tool/atlas_cycle_append.hexa <cycle-draft.md> [--dry-run] [--date YYYY-MM-DD]
+//
+// Input file format (cycle-draft.md, human-authored)
+// --------------------------------------------------
+//   # Title: <short one-line cycle title>
+//
+//   ## trigger
+//   <one or more lines>
+//
+//   ## scope
+//   <prose body — wraps in <<~EOF … EOF when multi-line>
+//
+//   ## files
+//   <list of files touched, one per line>
+//
+//   ## verifier_run_result
+//   <smoke test outcome, e.g. "atlas_verify_smoke: 118/118 PASS · ledger live=118 vs declared=118">
+//
+//   ## governance_check
+//   <which @D rules respected>
+//
+//   ## note (optional)
+//   <closing note>
+//
+// Behavior
+// --------
+//   1. Parse args: required <cycle-draft.md> positional, optional --dry-run,
+//      optional --date YYYY-MM-DD (default = `date +%Y-%m-%d` via exec).
+//   2. Validate the draft has all 5 required sections (trigger / scope /
+//      files / verifier_run_result / governance_check) and a Title.
+//      Missing → exit(1) + clear error citing the missing section.
+//   3. Scan atlas/MAIN.log.tape for max existing `cycle_NNN`, compute
+//      next = max+1, format zero-padded 3-digit.
+//   4. Emit a tape @A entry. Multi-line sections → `<<~EOF … EOF`,
+//      single-line → bare quoted string. Indentation matches existing
+//      cycle entries (2-space body indent, 4-space body-of-heredoc).
+//   5. In write mode, append "\n" + section-separator + entry to
+//      atlas/MAIN.log.tape. In --dry-run, print to stdout, skip write.
+//
+// Governance respected
+// --------------------
+//   g_arch_vs_log_split — append-only; tool NEVER mutates existing entries.
+//   g5 hexa-native-only — no LLVM / no C-transpile; reads via fs stdlib,
+//     writes via fs stdlib. Only exec usage is `date +%Y-%m-%d` (default
+//     timestamp; overridable via --date for fully-pure invocation).
+//   g_self_verify       — tool is its OWN test target (cycle_034 dogfood).
+
+use "self/stdlib/fs"           // read_file_safe, write_file_safe
+
+// ───────────────────────── small string helpers ─────────────────────
+
+fn _zpad3(n: int) -> string {
+    if n < 10 { return "00" + to_string(n) }
+    if n < 100 { return "0" + to_string(n) }
+    return to_string(n)
+}
+
+// Trim leading + trailing whitespace from each line preserving the empty
+// lines (we use this only for section-body normalization).
+fn _rtrim(s: string) -> string {
+    let mut i = len(s)
+    while i > 0 {
+        let c = s.substring(i - 1, i)
+        if c == " " || c == "\t" || c == "\r" { i = i - 1 } else { break }
+    }
+    return s.substring(0, i)
+}
+
+// Is the line empty (after right-trim)?
+fn _is_blank(s: string) -> bool {
+    return _rtrim(s).trim() == ""
+}
+
+// Strip trailing blank lines from an array of lines.
+fn _strip_trailing_blank(lines: array) -> array {
+    let mut n = len(lines)
+    while n > 0 {
+        if _is_blank(to_string(lines[n - 1])) { n = n - 1 } else { break }
+    }
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out.push(to_string(lines[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// Indent every line of `s` by `pad` spaces. Empty lines become "".
+fn _indent(s: string, pad: string) -> string {
+    let lines = s.split("\n")
+    let mut out = []
+    let mut i = 0
+    while i < len(lines) {
+        let l = to_string(lines[i])
+        if _is_blank(l) {
+            out.push("")
+        } else {
+            out.push(pad + l)
+        }
+        i = i + 1
+    }
+    let mut r = ""
+    let mut j = 0
+    while j < len(out) {
+        if j > 0 { r = r + "\n" }
+        r = r + to_string(out[j])
+        j = j + 1
+    }
+    return r
+}
+
+// ───────────────────────── draft parser ─────────────────────────
+
+// Parse the draft markdown into a dict of section → body string.
+// Returns array of [name, body] pairs. Title is stored as ["__title__", "..."].
+fn _parse_draft(text: string) -> array {
+    let lines = text.split("\n")
+    let mut sections = []
+    let mut title = ""
+    let mut cur_name = ""
+    let mut cur_buf = []
+    let mut i = 0
+    while i < len(lines) {
+        let raw = to_string(lines[i])
+        let l = _rtrim(raw)
+        if l.starts_with("# Title:") {
+            title = l.substring(len("# Title:"), len(l)).trim()
+        } else if l.starts_with("# ") && !l.starts_with("## ") && title == "" {
+            // Bare `# <title>` form (without `Title:` prefix) — also accept.
+            title = l.substring(2, len(l)).trim()
+        } else if l.starts_with("## ") {
+            // Close previous section if any.
+            if cur_name != "" {
+                let body = _join_lines(_strip_trailing_blank(cur_buf))
+                sections.push([cur_name, body])
+            }
+            cur_name = l.substring(3, len(l)).trim()
+            cur_buf = []
+        } else {
+            if cur_name != "" {
+                cur_buf.push(l)
+            }
+        }
+        i = i + 1
+    }
+    if cur_name != "" {
+        let body = _join_lines(_strip_trailing_blank(cur_buf))
+        sections.push([cur_name, body])
+    }
+    // Title at index 0 for stable access.
+    let mut out = []
+    out.push(["__title__", title])
+    let mut k = 0
+    while k < len(sections) {
+        out.push(sections[k])
+        k = k + 1
+    }
+    return out
+}
+
+fn _join_lines(lines: array) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(lines) {
+        if i > 0 { out = out + "\n" }
+        out = out + to_string(lines[i])
+        i = i + 1
+    }
+    return out
+}
+
+// Lookup helper — returns "" if not present.
+fn _get_section(sections: array, name: string) -> string {
+    let mut i = 0
+    while i < len(sections) {
+        let pair = sections[i]
+        if to_string(pair[0]) == name {
+            return to_string(pair[1])
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _has_section(sections: array, name: string) -> bool {
+    let mut i = 0
+    while i < len(sections) {
+        let pair = sections[i]
+        if to_string(pair[0]) == name {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// ───────────────────────── cycle-number scanner ─────────────────────
+
+// Scan atlas/MAIN.log.tape text for max existing `@A cycle_NNN :=`.
+// Returns 0 if none found.
+fn _max_cycle_num(log_text: string) -> int {
+    let lines = log_text.split("\n")
+    let mut best = 0
+    let lm = "@A cycle_"
+    let mut i = 0
+    while i < len(lines) {
+        let l = to_string(lines[i])
+        if l.starts_with(lm) {
+            // Extract the 3-digit number following "@A cycle_"
+            let rest = l.substring(len(lm), len(l))
+            // Read up to 3 ascii-digit chars.
+            let mut k = 0
+            let mut digs = ""
+            while k < len(rest) && k < 6 {
+                let c = rest.substring(k, k + 1)
+                if c == "0" || c == "1" || c == "2" || c == "3" || c == "4"
+                   || c == "5" || c == "6" || c == "7" || c == "8" || c == "9" {
+                    digs = digs + c
+                    k = k + 1
+                } else {
+                    break
+                }
+            }
+            if len(digs) > 0 {
+                let n = to_int(digs)
+                if n > best { best = n }
+            }
+        }
+        i = i + 1
+    }
+    return best
+}
+
+// ───────────────────────── entry formatter ─────────────────────────
+
+// Decide whether a section body is "single-line" (one physical line, no
+// trailing newline) or "multi-line" (heredoc-needed).
+fn _is_single_line(body: string) -> bool {
+    let t = body.trim()
+    if t == "" { return true }
+    return t.index_of("\n") < 0
+}
+
+// Escape a single-line value for inclusion in a `field = "..."` form.
+// We escape `\` and `"`. Newlines are not expected here (caller guards).
+fn _qescape(s: string) -> string {
+    let s1 = s.replace("\\", "\\\\")
+    return s1.replace("\"", "\\\"")
+}
+
+// Emit one body field. For single-line bodies → `  <name> = "<value>"`.
+// For multi-line → `  <name> <<~EOF\n    <body lines>\n  EOF`.
+// `force_heredoc=true` forces heredoc form even for single-line bodies —
+// used for fields whose canonical idiom in cycle_032 / cycle_033 is the
+// heredoc shape (scope · files · verifier_run_result · governance_check).
+fn _emit_field(name: string, body: string, force_heredoc: bool) -> string {
+    let normalized = body.trim()
+    if _is_single_line(normalized) && !force_heredoc {
+        return "  " + name + " = \"" + _qescape(normalized) + "\""
+    }
+    let indented = _indent(normalized, "    ")
+    return "  " + name + " <<~EOF\n" + indented + "\n  EOF"
+}
+
+// Build the @A cycle_NNN entry text.
+fn _format_entry(cycle_num: int, title: string, date_str: string,
+                 trigger: string, scope_body: string, files_body: string,
+                 verifier_run_result: string, governance_check: string,
+                 note: string) -> string {
+    let cyc = _zpad3(cycle_num)
+    let header_sep = "# ─── Cycle " + cyc + " — appended via tool/atlas_cycle_append ──────────"
+
+    let mut out = header_sep + "\n\n"
+    out = out + "@A cycle_" + cyc + " := \"" + _qescape(title) + "\" :: cycle [d=" + date_str + " active]\n"
+    // trigger: single-line-eligible (existing cycles use bare quoted form).
+    out = out + _emit_field("trigger", trigger, false) + "\n"
+    // scope · files · verifier_run_result · governance_check: heredoc-canonical
+    // per cycle_032 / cycle_033 idiom (even when body fits on one line, the
+    // heredoc shape keeps grep-friendly anchors `<<~EOF` consistent).
+    out = out + _emit_field("scope", scope_body, true) + "\n"
+    out = out + _emit_field("files", files_body, true) + "\n"
+    out = out + _emit_field("verifier_run_result", verifier_run_result, true) + "\n"
+    out = out + _emit_field("governance_check", governance_check, true)
+    if note.trim() != "" {
+        // note: single-line-eligible (cycle_033 uses bare quoted form).
+        out = out + "\n" + _emit_field("note", note, false)
+    }
+    return out
+}
+
+// ───────────────────────── validator ─────────────────────────
+
+// Validate the parsed draft. Returns "" if OK, otherwise a clear error.
+fn _validate(sections: array) -> string {
+    let title = _get_section(sections, "__title__")
+    if title.trim() == "" {
+        return "missing required Title (use `# Title: <text>` or `# <text>` on the first line)"
+    }
+    let required = ["trigger", "scope", "files", "verifier_run_result", "governance_check"]
+    let mut i = 0
+    while i < len(required) {
+        let name = to_string(required[i])
+        if !_has_section(sections, name) {
+            return "missing required section: `## " + name + "`"
+        }
+        if _get_section(sections, name).trim() == "" {
+            return "required section `## " + name + "` is empty"
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ───────────────────────── high-level build ─────────────────────────
+
+// Pure formatter: given a draft text and existing log text, produce the
+// emitted entry text + chosen cycle number, OR a non-empty error string.
+// Returns array [err, entry_text, cycle_num_str]. err == "" on success.
+fn build_entry_from_draft(draft_text: string, existing_log_text: string,
+                          date_str: string) -> array {
+    let sections = _parse_draft(draft_text)
+    let err = _validate(sections)
+    if err != "" {
+        return [err, "", ""]
+    }
+    let title = _get_section(sections, "__title__")
+    let trigger = _get_section(sections, "trigger")
+    let scope_body = _get_section(sections, "scope")
+    let files_body = _get_section(sections, "files")
+    let vres = _get_section(sections, "verifier_run_result")
+    let gov = _get_section(sections, "governance_check")
+    let note = _get_section(sections, "note")
+    let next_n = _max_cycle_num(existing_log_text) + 1
+    let entry = _format_entry(next_n, title, date_str, trigger, scope_body,
+                              files_body, vres, gov, note)
+    return ["", entry, _zpad3(next_n)]
+}
+
+// ───────────────────────── CLI ─────────────────────────
+
+fn _today_yyyymmdd() -> string {
+    // POSIX `date +%Y-%m-%d` — same pattern atlas_cli.hexa uses for _now_ms.
+    let s = to_string(exec("date +%Y-%m-%d 2>/dev/null")).trim()
+    if len(s) == 10 { return s }
+    return ""
+}
+
+fn _print_usage() {
+    println("usage: hexa run tool/atlas_cycle_append.hexa <cycle-draft.md> [--dry-run] [--date YYYY-MM-DD]")
+}
+
+fn main() {
+    let av = args()
+    // av[0] = interp, av[1] = this script, av[2..] = user args.
+    let mut draft_path = ""
+    let mut dry_run = false
+    let mut override_date = ""
+    let mut i = 2
+    while i < len(av) {
+        let a = to_string(av[i])
+        if a == "--dry-run" {
+            dry_run = true
+            i = i + 1
+        } else if a == "--date" {
+            if i + 1 >= len(av) {
+                println("atlas_cycle_append: --date requires YYYY-MM-DD argument")
+                _print_usage()
+                exit(1)
+            }
+            override_date = to_string(av[i + 1])
+            i = i + 2
+        } else if a == "--help" || a == "-h" {
+            _print_usage()
+            return
+        } else if a.starts_with("--") {
+            println("atlas_cycle_append: unknown flag: " + a)
+            _print_usage()
+            exit(1)
+        } else {
+            if draft_path == "" {
+                draft_path = a
+            } else {
+                println("atlas_cycle_append: too many positional args (got `" + a + "` after `" + draft_path + "`)")
+                _print_usage()
+                exit(1)
+            }
+            i = i + 1
+        }
+    }
+    if draft_path == "" {
+        println("atlas_cycle_append: missing required <cycle-draft.md> argument")
+        _print_usage()
+        exit(1)
+    }
+    let draft_text = read_file_safe(draft_path)
+    if draft_text == "" {
+        println("atlas_cycle_append: draft file not found or empty: " + draft_path)
+        exit(1)
+    }
+    let log_path = "atlas/MAIN.log.tape"
+    let log_text = read_file_safe(log_path)
+    if log_text == "" {
+        println("atlas_cycle_append: " + log_path + " not found or empty (cwd = repo root?)")
+        exit(1)
+    }
+    let date_str = if override_date != "" { override_date } else { _today_yyyymmdd() }
+    if date_str == "" {
+        println("atlas_cycle_append: could not resolve today's date via `date` exec; pass --date YYYY-MM-DD")
+        exit(1)
+    }
+    let built = build_entry_from_draft(draft_text, log_text, date_str)
+    let err = to_string(built[0])
+    if err != "" {
+        println("atlas_cycle_append: draft validation failed — " + err)
+        exit(1)
+    }
+    let entry = to_string(built[1])
+    let cyc = to_string(built[2])
+    if dry_run {
+        println("[dry-run] would append cycle_" + cyc + " (" + to_string(len(entry)) + " bytes) to " + log_path)
+        println("─────────────────────────────────────────────────────────")
+        println(entry)
+        println("─────────────────────────────────────────────────────────")
+        return
+    }
+    // Append-only: existing content + "\n\n" + entry + "\n".
+    // The log file ends with a single `\n`; one blank line + section
+    // separator is the existing inter-cycle convention.
+    let tail = if log_text.substring(len(log_text) - 1, len(log_text)) == "\n" { "" } else { "\n" }
+    let new_text = log_text + tail + "\n" + entry + "\n"
+    let ok = write_file_safe(log_path, new_text)
+    if !ok {
+        println("atlas_cycle_append: write FAILED → " + log_path)
+        exit(1)
+    }
+    println("appended cycle_" + cyc + " to " + log_path + " (" + to_string(len(new_text) - len(log_text)) + " new bytes; total " + to_string(len(new_text)) + ")")
+}

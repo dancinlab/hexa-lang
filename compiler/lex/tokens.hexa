@@ -54,6 +54,17 @@ pub enum TokenKind {
     Star,
     Slash,
     Percent,
+    // Logical / bitwise / shift — expression-lowering port.
+    // Ref: self/parser.hexa precedence cascade + self/lexer.hexa maximal-munch.
+    AmpAmp,        // &&  logical and
+    PipePipe,      // ||  logical or
+    Amp,           // &   bitwise and
+    Pipe,          // |   bitwise or  (closure |x| still routes via primary — deferred sub-track)
+    Caret,         // ^   bitwise xor
+    Tilde,         // ~   bitwise not (unary prefix)
+    Bang,          // !   logical not (unary prefix; != stays Neq via maximal munch)
+    Shl,           // <<  shift left
+    Shr,           // >>  shift right
     At,
     Dot,
 

@@ -123,3 +123,149 @@
   <- stage2_codegen_landed
   fact = "ubu-1 (Linux aiden-B650M-K, kernel 6.17.0-23-generic, x86_64) SSH-reachable again after the mid-run banner-timeout outage that forced the ubu-2 cross-build fallback. Both x86_64 build boxes now available for the front-end track."
   caveat = "Heavy builds still route to ubu-1/ubu-2 (local macOS clang OOMs the monolithic TU). Remote pattern: /tmp fresh clone, never force-reset the aiden worktree."
+
+# ─── 2026-05-15  Front-end track — expression-operator lowering (branch) ───
+
+@A frontend_expr_operators := "self-host parser: + operator lowering ! ~ & | ^ << >> && ||" :: measurement [d=2026-05-15 partial]
+  <- gate_moved_frontend
+  step = "Root-caused the operator-token-as-Ident leak: compiler/lex/lexer.hexa unknown-char fallback (TokenKind::Ident) → parser parse_primary fallback (ExprKind::Ident) → binder HX2001. The new self-host parser had NO token kinds or productions for ! ~ & | ^ << >> && || (only - unary and == != < <= > >= + - * / %). Legacy self/parser.hexa+lexer.hexa already implement them — faithful port, no invented grammar."
+  changes <<~EOF
+    tokens.hexa  +9 TokenKind: AmpAmp PipePipe Amp Pipe Caret Tilde Bang Shl Shr
+    lexer.hexa   maximal-munch: && || << >> (multi-char) ; ! & | ^ ~ (single,
+                 pre-fallback; != still Neq, && pre &, || pre |)
+    parser.hexa  parse_unary += Bang/Tilde (text=op.text, was const "-");
+                 +parse_logical_or/_and/_bitwise; parse_assignment descends
+                 via parse_logical_or. Precedence loosest→tightest:
+                 || < && < (& | ^ << >>) < == != < cmp < +- < */ < unary
+                 (ref: self/parser.hexa parse_or/parse_and/parse_bit_ops)
+  EOF
+  census = "stage-2 input (compiler/+self/ *.hexa): !x 2724 · && 7932 · || 11251 · &|^ 1026 · <<>> 297 · ~ 63 — all heavily used, confirms the leak scale"
+  |> "hexa parse clean on all 3 edited files (host-parser edit-level gate); no exhaustive TokenKind match exists to break on the +9 variants"
+  branch = "frontend-expr-lowering @ c30de87a (off main 237faa9e; NOT pushed/merged — unverified parser surgery kept off main, mirrors codegen track's c7-stack-spill user-merge gate)"
+  deferred <<~EOF
+    Closure |x| / zero-arg || lambda is OUT of this increment: the new
+    AST (compiler/parse/ast.hexa ExprKind) has NO Lambda/Closure variant;
+    porting it is a cross-cutting AST + bind + lower + codegen change, not
+    expression-operator lowering. After this change a primary-position `|`
+    still hits the Ident fallback — but ONLY at genuine closure sites
+    (~the real .map(|x| …) cases); every bitwise/operator `|` now parses
+    correctly. Net: HX2001 operator leaks for ! ~ & ^ << >> && || and
+    bitwise-| eliminated; closure-| residual is the next sub-track.
+  EOF
+  next_gate = "ubu-1/ubu-2 stage-2 self-compile re-run → confirm HX2001 1803 drops (expect ≥ ~1000 fewer: the operator-token-as-Ident class). Then: closure-|x| ExprKind::Lambda sub-track; HX2002 993 cross-module pub/private; HX2001 <callee> 594 receiver-type plumbing; HX3001 994 coercion. Not locally runnable (monolithic-TU clang OOM)."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc]"
+  @> COMPILE-ONLY.tape
+
+# ─── 2026-05-16  Carried from stage2-verify merge — stage-1 binary + stage-2 codegen progress (g_arch_vs_log_split) ───
+#   6 @N status entries (d=2026-05-15) moved out of COMPILE-ONLY.tape (v1.2 architecture-only) into this append-only sibling. Architecture .tape kept main v1.2-split form (--ours); these history rows carried here so no progress record is lost.
+
+@N stage1_binary_landed := "stage-1-binary-produced-path-b" :: status [d=2026-05-15 ok]
+  fact = "FIRST stage-1 native binary produced via path-B (hexa_v2 transpile pipeline) — 10.4 MB arm64 Mach-O at build/stage1/hexa"
+  pipeline <<~EOF
+    1. tool/flatten_imports.hexa compiler/main.hexa → /tmp/main_flat_v11.hexa (25,526 lines, 633 MB peak, 6.6 s)
+    2. HEXA_VAL_ARENA=0 HEXA_MEM_UNLIMITED=1 hexa_v2.new flat.hexa → main_v13.c (6.94 MB, 65 s, 8.7 GB peak)
+    3. clang -O0 -c main_v13.c → main_v13.o (13.6 MB, ~38 min)
+    4. clang main_v13.o → /tmp/stage1_full (10.4 MB Mach-O 64-bit arm64)
+  EOF
+  smoke = "stage1_full compiler/main.hexa --emit=asm -o h.s tests/m0/hello.hexa → 347-byte .s ✓"
+  fixes_required <<~EOF
+    Codegen fixes that landed during this drive (12 substantive commits on c7-stack-spill):
+      C7 stack-spill         (x86_64 push + arm64 per-fn region)        09597f3c
+      B5 helper rename       (3-backend backend-prefix)                  da7abe87
+      flatten extension      (import "./..." handling)                   c1cfdd80
+      COMPILE-ONLY.tape doc                                              141decaf
+      POSIX mangle           (38 POSIX names → _hexa_name_is_reserved)   9f9e9799
+      enum prelude           (#define before fn bodies)                  085e73e6
+      extern shim            (list_dir/sha256_hex stdlib pull-in)        02f41a4d
+      *.gen.hexa skip        (flatten mangle bypass on gen files)        460fd899
+      parser O(N²)+x86_op_mem (kinds-array short-circuit + mirror)       ca11632c
+      mkdir route + hoist    (mkdir POSIX route + local-decl mangle)     a9be975e
+      strlit chunking        (500-stmt chunks)                           07af043c
+      array statement-expr   (>64 elems flat instead of nested)          4cab70d4
+  EOF
+  doctrine_note = "stage-0 = hexa_v2 transpile pipeline (per HEXA-NATIVE-ONLY.md §F fallback-C-emission permission) is the de-facto first-cut path-B route — SPEC §5 stage-0 table's `hexa_interp` row needs amendment to recognize this dual stage-0 path. Doctrine decision pending."
+
+@N open_wallclock_resolved := "wall-clock-bypass-d-2026-05-15" :: status [d=2026-05-15 ok]
+  fact = "Stage-0 interpreter 21-min wall-clock bottleneck BYPASSED via path-B (hexa_v2 transpile + clang). No algorithmic fix needed for interp itself — retired by displacement."
+  ~> open_wallclock
+
+@N stage1_oob_fixed := "type-env bucket-aliasing OOB" :: status [d=2026-05-15 ok]
+  fact = "Stage-1 binary previously panicked `index N out of bounds (len N)` whenever a fn body referenced a top-level let across a fn-param hash collision (e.g. `_MAX_FILE_BYTES` lookup inside `load_atlas` after `_insert_first_wins`'s `node` param hashed to bucket 2). Backtrace pinned to `_types_lookup_def` at `env.entries[bucket[i]]`."
+  root_cause <<~EOF
+    self/runtime.c::hexa_struct_pack_map shallow-clones array struct fields
+    (ROI #148, anti sibling-struct aliasing) — but only the OUTER arrays.
+    The INNER [i64] bucket arrays inside TypeEnv.buckets stayed shared by
+    reference across every derived env. _types_env_define_attr did
+    `buckets[h] = buckets[h].push(new_idx)` which mutated the shared inner;
+    new_idx was computed against the LOCAL entries length, but a derived
+    env with a SMALLER entries snapshot then OOB'd on the leaked index.
+  EOF
+  fix = "compiler/check/types.hexa::_types_env_define_attr — clone outer buckets, build a fresh inner for the affected slot, leave env.buckets untouched (commit 6e608046)"
+  diagnostic_aid = "self/runtime.c — opt-in HEXA_OOB_TRACE env var prints backtrace before throw (gated, zero overhead)"
+  verification = "merger.hexa head -190 stage-1 run: index 14 OOB → 84 normal diagnostics. All previously-failing files (overlay/builder/units/citation/bind) now produce diagnostics instead of crashing."
+
+@N stage1_builtin_prelude := "host-runtime builtins pre-registered" :: status [d=2026-05-15 ok]
+  fact = "compiler/check/bind.hexa registers ~40 host intrinsics (println/exec/env/to_string/len/file_*/sha256_*/etc.) in the module-level BindScope at the top of `bind()`."
+  why = "Without this pre-pass, every builtin call surfaced as HX2001 (unknown callee) — stage 2 self-compile flooded thousands of false positives that masked real type errors and made gating impossible."
+  fix = "commit 7da77859 — _bind_builtin_names() flat list, O(N) prelude registration"
+  delta = "stage-2 self-compile: 4548 → 3799 diagnostics (~750 spurious HX2001 eliminated)"
+
+@N stage2_partial := "stage 2 self-compile: typecheck-only PASS, gate fails" :: status [d=2026-05-15 partial]
+  fact = "stage 1 binary (with bucket-OOB + builtin-prelude fixes) successfully runs the full pipeline through type_check on compiler/main.hexa — no more compiler-internal crashes."
+  remaining_diags = "3799 total: HX2001 (1800 unknown ident, mostly methods misclassified as free) · HX3001 (994 type-assignable mismatch) · HX2002 (991 private-name cross-module) · HX3002 (9 arity) · HX4001 (4 ℝ-narrowing warning)"
+  blockers <<~EOF
+    HX2002 (991): cross-file pub/private resolution gap — many imports of
+      pub items still surface as private-from-foreign-module. Likely
+      `_collect_item_types` doesn't propagate is_pub/owning_file correctly
+      through the splice path.
+    HX2001 (1800): residual after builtin prelude — likely method calls
+      where receiver type isn't inferred (so codegen falls into Ident
+      bucket instead of Field). Needs receiver-type plumbing.
+    HX3001 (994): _types_assignable too strict on numeric coercions and
+      enum-variant payloads.
+  EOF
+  next_step = "Either: (a) tighten the typechecker passes, OR (b) add a `--ignore-errors` bootstrap-only flag that lets codegen proceed despite type diagnostics, gating bootstrap fixed-point separately from typechecker maturity."
+  unblocks_for = "stage 3 byte-equal fixed point (currently can't run because stage 2 binary not produced)"
+
+@N stage2_codegen_clean := "stage 2 self-compile: codegen+assemble PASS (2435→0); link blocked on front-end resolution" :: status [d=2026-05-15 partial]
+  ~> stage2_partial
+  fact = "Path (b) chosen (HEXA_IGNORE_ERRORS=1, commit 58a3760e). With it, stage 1 reaches codegen. The emitted x86_64-linux-gnu asm then exposed THREE codegen-operand bugs + a symbol-namespacing collision, all now fixed; stage2c.s assembles with ZERO GNU-as errors."
+  codegen_fixes <<~EOF
+    The ARM64 cmp fix (fb09d4bf) had NO x86_64 equivalent. Stage 2 targets
+    x86_64-linux-gnu (host-detected on the Linux build box), so three
+    distinct x86_64 codegen bugs surfaced:
+      1. `cmp 0, 0`  — x86 cmp LHS must be reg/mem; materialize const_int
+         LHS into a_scratch (r10) before cmp.
+      2. `test 0, 0` — same class in BR_COND; materialize cond into r10.
+      3. `idiv dst, b` — x86 idiv is single-operand (rdx:rax / divisor →
+         rax). Emit `mov rax,a; cqo; [mov r11,b if imm]; idiv divisor;
+         mov dst,rax`.
+    Commit: c7-stack-spill 90345921 (compiler/codegen/x86_64_linux.hexa).
+  EOF
+  symbol_fix <<~EOF
+    26 residual "symbol already defined" errors: 4 file-local (non-pub)
+    helper families (_trim ×2, _ltrim ×5, _rtrim ×3, _array_for_kind ×2)
+    with DISTINCT bodies across modules. flatten concatenates without
+    namespacing (the deferred "Phase C.2 static symbol resolution"). md5
+    confirmed bodies non-dedup-able. Minimal-blast fix: per-module rename
+    of definition + in-file callers (file-local → no cross-file callers).
+    Commit: c7-stack-spill 3fe7bae0 (8 modules).
+  EOF
+  as_error_trajectory = "2435 (cmp/test/idiv) → 38 (cmp+test fixed) → 26 (idiv fixed) → 0 (symbols renamed). stage2c.o = 364 KB x86_64 ELF, clean."
+  build_env = "Local macOS clang OOM-killed the 7 MB+540 KB monolithic TU (Killed:9). ubu-1 went unreachable mid-run (SSH banner timeout). Completed on ubu-2 (12c/30 GB x86_64): runtime.c needs `-include execinfo.h -Wno-error=implicit-function-declaration` on Linux clang-18 (macOS clang was lax); main_v13.c is self-contained (#include runtime.c) so link WITHOUT a separate runtime.o."
+  new_blocker <<~EOF
+    Linking stage2c.o → stage2 binary fails with undefined references:
+    `main`, `is_alpha`, `is_alphanumeric`, `chars`, `len`, `to_string`,
+    `<callee>` ×594. These are the REAL content of the 3804 suppressed
+    front-end diagnostics — NOT codegen. Breakdown:
+      HX2001 1803 — `<callee>` 594 (fn resolution) + operator tokens
+        misparsed as names ([ ] ! , | & = 1000+) + idents (line/p_pos/
+        continue/break ~200)
+      HX3001 994 / HX2002 993 / HX3002 9 / HX3004 1
+    Operator-token-as-undefined-name implies the self-host parser's
+    expression lowering (index/logical/bitwise/tuple) is incomplete —
+    a front-end (parse/bind/resolve) gap, adjacent to 7da77859, NOT the
+    codegen/symbol layer (which is now clean).
+  EOF
+  next_step = "Front-end resolution track (separate from codegen): (1) parser expression-lowering for [ ] ! , | & — operator tokens must not reach the binder as Ident; (2) HX2002 993 cross-module pub/private (_collect_item_types splice path); (3) HX2001 <callee> 594 receiver-type plumbing; (4) HX3001 994 _types_assignable coercion. Codegen+assemble track is CLOSED."
+  unblocks_for = "stage 3 byte-equal fixed point — still gated, but the gate moved from codegen/assemble (closed) to front-end name-resolution"

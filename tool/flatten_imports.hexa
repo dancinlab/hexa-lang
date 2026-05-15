@@ -157,6 +157,78 @@ fn fl_parse_use(line) {
     return rest.substring(0, q)
 }
 
+// 2026-05-14: stage1-bypass — handles compiler/main.hexa's import "./..." style
+// Parses an `import "<path>"` line and returns the quoted path verbatim
+// (caller-dir-relative — "./foo/bar.hexa", "../x.hexa", or "foo.hexa").
+// Returns "" if the line is not an import directive.
+fn fl_parse_import_relative(line) {
+    let t = line.trim()
+    if !t.starts_with("import \"") { return "" }
+    // t = `import "path"...`
+    let rest = t.substring(8, len(t))
+    let q = rest.index_of("\"")
+    if q < 0 { return "" }
+    return rest.substring(0, q)
+}
+
+// Resolve an `import "<path>"` directive relative to the consuming file's
+// directory. Accepts `./foo.hexa`, `../foo.hexa`, and `foo.hexa` (no leading
+// dot — treated as caller-dir-relative). Appends `.hexa` if missing.
+fn fl_resolve_import(caller_dir, path) {
+    if len(path) == 0 { return "" }
+    // Normalise extension — accept both `foo` and `foo.hexa`.
+    let mut p = path
+    let pn = len(p)
+    let has_ext = pn >= 5 && p.substring(pn - 5, pn) == ".hexa"
+    let candidate = if has_ext { p } else { p + ".hexa" }
+    // Compose caller_dir + "/" + candidate, normalising `./` and `../`.
+    // Handle simple cases: leading `./` strip; leading `../` pops one segment
+    // from caller_dir. Repeated `../` allowed.
+    let mut rel = candidate
+    let mut base = caller_dir
+    if len(base) == 0 { base = "." }
+    while rel.starts_with("./") {
+        rel = rel.substring(2, len(rel))
+    }
+    while rel.starts_with("../") {
+        rel = rel.substring(3, len(rel))
+        // Pop trailing segment of base.
+        let parts = base.split("/")
+        let bn = len(parts)
+        if bn > 1 {
+            let mut np = []
+            let mut i = 0
+            while i < bn - 1 {
+                np.push(parts[i])
+                i = i + 1
+            }
+            base = np.join("/")
+        } else {
+            base = "."
+        }
+    }
+    let mut joined = []
+    joined.push(base)
+    joined.push("/")
+    joined.push(rel)
+    let resolved = joined.join("")
+    if file_exists(resolved) { return resolved }
+    // Fallback: caller_dir + "/" + original (no strip) — defensive.
+    let mut alt = []
+    alt.push(caller_dir)
+    alt.push("/")
+    alt.push(candidate)
+    let r2 = alt.join("")
+    if file_exists(r2) { return r2 }
+    // 2026-05-14: stdlib shim escape — `stdlib/hash/sha256.hexa` is a
+    // backward-compat shim that does `import "stdlib/core/hash/sha256.hexa"`
+    // (a repo-rooted path, not `./` / `../`). Caller-dir + path doesn't
+    // exist (`stdlib/hash/stdlib/core/...`); cwd-relative does. Try cwd
+    // last so explicit relative paths still win.
+    if file_exists(candidate) { return candidate }
+    return ""
+}
+
 // ── 한 파일에서 use 라인 제거 ───────────────────────────────
 //
 // 주의: per-line iteration 만 한다. 라인 단위는 길어봐야 수백 바이트라
@@ -164,11 +236,53 @@ fn fl_parse_use(line) {
 
 fn fl_strip_uses(src) {
     // index_of 점프로 `use "` 행만 찾아 교체. split+push 16K회 제거.
-    // Fast path: no `use` and no shebang → return as-is.
+    // 2026-05-14: also strip `import "..."` lines — same treatment as `use`,
+    // emitted as a stripped-comment marker so the flat file is a valid TU.
+    // Fast path: no `use`, no `import`, no shebang → return as-is.
     let marker = "\nuse \""
+    let marker2 = "\nimport \""
     let has_uses = src.index_of(marker) >= 0 || src.starts_with("use \"")
+    let has_imports = src.index_of(marker2) >= 0 || src.starts_with("import \"")
     let has_shebang = src.starts_with("#!") || src.index_of("\n#!") >= 0
-    if !has_uses && !has_shebang { return src }
+    if !has_uses && !has_imports && !has_shebang { return src }
+    // Fix #1 extension — large-source split avoidance.
+    // For large generated files (compiler/atlas/embedded.gen.hexa @ 4.6 MB,
+    // 7331 lines), split("\n") allocates ~7K permanent substrings (the hexa
+    // runtime has no string GC). By hexa convention `use`/`import` directives
+    // live ONLY in the header (before any pub decl / data table / fn body).
+    // For sources larger than the split cap, strip the head and append the
+    // untouched tail verbatim. If a use/import leaks past the cap in some
+    // non-conventional file, hexa_v2_v4 will fail loudly with an unresolved
+    // `use` at the C level — which is the correct behavior (no silent breakage).
+    let SPLIT_CAP_BYTES = 131072      // 128 KB head budget — covers any practical header
+    let src_len = len(src)
+    if src_len > SPLIT_CAP_BYTES {
+        // Snap split point forward to the next "\n" so we never cut mid-line.
+        // Take a small window (4 KB) after the cap and find the newline locally
+        // — avoids 2-arg index_of's byte-by-byte interp path on multi-MB inputs.
+        let mut head_end = SPLIT_CAP_BYTES
+        let win_end = if SPLIT_CAP_BYTES + 4096 < src_len { SPLIT_CAP_BYTES + 4096 } else { src_len }
+        let win = src.substring(SPLIT_CAP_BYTES, win_end)
+        let rel_nl = win.index_of("\n")
+        if rel_nl < 0 {
+            // No newline within 4 KB after cap — unusual; fall back.
+            return fl_strip_uses_inner(src)
+        }
+        head_end = SPLIT_CAP_BYTES + rel_nl + 1
+        let head = src.substring(0, head_end)
+        let stripped_head = fl_strip_uses_inner(head)
+        let tail = src.substring(head_end, src_len)
+        let mut parts = []
+        parts.push(stripped_head)
+        parts.push(tail)
+        return parts.join("")
+    }
+    return fl_strip_uses_inner(src)
+}
+
+// Inner implementation — the original split-based stripper. Safe to call
+// on small inputs (< ~128 KB); fl_strip_uses gates large sources.
+fn fl_strip_uses_inner(src) {
     let lines = src.split("\n")
     let n = len(lines)
     let mut out = []
@@ -183,16 +297,24 @@ fn fl_strip_uses(src) {
             i = i + 1
         } else {
         let dep = fl_parse_use(line)
-        if dep == "" {
+        let imp = fl_parse_import_relative(line)
+        if dep == "" && imp == "" {
             // O(N^2) 방지: in-place push, out 이 hot accumulator
             out.push(line)
-        } else {
+        } else if dep != "" {
             // Push/join the banner parts instead of `+` concat — keeps the
             // PERF concat counter clean when many files each have several uses.
             // sp 는 loop-scope 임시, 매 iter 새로 생성이므로 안전.
             let mut sp = []
             sp.push("// [flatten_imports] stripped: use \"")
             sp.push(dep)
+            sp.push("\"")
+            out.push(sp.join(""))
+        } else {
+            // import "<path>" — stripped with same marker style.
+            let mut sp = []
+            sp.push("// [flatten_imports] stripped: import \"")
+            sp.push(imp)
             sp.push("\"")
             out.push(sp.join(""))
         }
@@ -204,12 +326,27 @@ fn fl_strip_uses(src) {
 
 // ── 한 파일에서 use 의존성 목록 추출 ────────────────────────
 
+// Fix #1 extension — for very large sources (e.g. compiler/atlas/embedded.gen.hexa
+// at 4.6 MB / 7331 lines), the full `src.split("\n")` allocates ~7K permanent
+// substrings (the hexa runtime has no string GC). For 3 split passes per file
+// (collect_uses + collect_imports + strip_uses), peak RSS on a 5-file walk hit
+// 4 GB. Mitigation: by convention, `use` / `import` directives appear only at
+// the TOP of any hexa source file (before any pub decl, lattice/atlas data
+// table, etc). We cap the split-scan at HEADER_CAP_BYTES and walk the
+// large-source tail with `index_of("\n", pos)` jumps that allocate one
+// substring per line only when a use/import is matched (rare). Body of
+// large generated files is read once but never split.
+let HEADER_CAP_BYTES_USES = 65536    // 64 KB header — enough for hundreds of uses
+
 fn fl_collect_uses(src) {
-    let lines = src.split("\n")
-    let n = len(lines)
+    let n = len(src)
+    let cap = if n < HEADER_CAP_BYTES_USES { n } else { HEADER_CAP_BYTES_USES }
+    let head = if cap < n { src.substring(0, cap) } else { src }
+    let lines = head.split("\n")
+    let nl = len(lines)
     let mut deps = []
     let mut i = 0
-    while i < n {
+    while i < nl {
         let dep = fl_parse_use(lines[i])
         if dep != "" {
             // O(N^2) 방지: in-place push, deps 단일 mut
@@ -218,6 +355,26 @@ fn fl_collect_uses(src) {
         i = i + 1
     }
     return deps
+}
+
+// 2026-05-14: stage1-bypass — collect `import "./..."` directives from src.
+// Returns the raw quoted-path values (caller-dir-relative).
+fn fl_collect_imports(src) {
+    let n = len(src)
+    let cap = if n < HEADER_CAP_BYTES_USES { n } else { HEADER_CAP_BYTES_USES }
+    let head = if cap < n { src.substring(0, cap) } else { src }
+    let lines = head.split("\n")
+    let nl = len(lines)
+    let mut imps = []
+    let mut i = 0
+    while i < nl {
+        let imp = fl_parse_import_relative(lines[i])
+        if imp != "" {
+            imps.push(imp)
+        }
+        i = i + 1
+    }
+    return imps
 }
 
 // ── 식별자 헬퍼 ─────────────────────────────────────────────
@@ -474,8 +631,16 @@ fn fl_iterative_walk(start_file) {
 
     let MARKER = "<<EMIT>>"
     let mut stack = []
+    // Fix #1b — cycle-breaker. The atlas subtree contains circular `use`
+    // imports (e.g. static_index ↔ prefix_index), which previously caused
+    // the iterative walk to infinitely re-discover files because the visited
+    // bit was only flipped at EMIT, not DISCOVER. We now also track an
+    // `on_stack` set: when a discovered dep is already on the in-flight stack,
+    // we skip pushing it (the existing frame will emit it eventually).
+    let mut on_stack_hs = fl_hset_new()
 
     stack.push(start_file)
+    on_stack_hs = fl_hset_add(on_stack_hs, start_file)
 
     while len(stack) > 0 {
         let top_idx = len(stack) - 1
@@ -513,8 +678,9 @@ fn fl_iterative_walk(start_file) {
                     //   c) dep path may already be repo-rooted (self/ml/…)
                     let dep_path = fl_resolve_use(deps[di])
                     if len(dep_path) > 0 {
-                        if !fl_hset_has(g_visited_hs, dep_path) {
+                        if !fl_hset_has(g_visited_hs, dep_path) && !fl_hset_has(on_stack_hs, dep_path) {
                             stack.push(dep_path)
+                            on_stack_hs = fl_hset_add(on_stack_hs, dep_path)
                         }
                     } else {
                         let mut wp = []
@@ -524,6 +690,31 @@ fn fl_iterative_walk(start_file) {
                         println(wp.join(""))
                     }
                     di = di - 1
+                }
+                // 2026-05-14: stage1-bypass — also handle `import "./..."`.
+                // Resolution is relative to the CONSUMING file (`top`), not
+                // start_file's dir. Mirror the `use` push-loop.
+                let imps = fl_collect_imports(src)
+                let in_ = len(imps)
+                let caller_dir = fl_dirname(top)
+                let mut ii = in_ - 1
+                while ii >= 0 {
+                    let imp_path = fl_resolve_import(caller_dir, imps[ii])
+                    if len(imp_path) > 0 {
+                        if !fl_hset_has(g_visited_hs, imp_path) && !fl_hset_has(on_stack_hs, imp_path) {
+                            stack.push(imp_path)
+                            on_stack_hs = fl_hset_add(on_stack_hs, imp_path)
+                        }
+                    } else {
+                        let mut wp = []
+                        wp.push("[flatten_imports] WARN import not found: ")
+                        wp.push(imps[ii])
+                        wp.push(" (from ")
+                        wp.push(top)
+                        wp.push(")")
+                        println(wp.join(""))
+                    }
+                    ii = ii - 1
                 }
             }
         }
@@ -567,6 +758,39 @@ fn flatten_main() {
     g_base_dir = fl_dirname(target)
     fl_iterative_walk(target)
 
+    // 2026-05-14: bare-intrinsic auto-pull — `list_dir` is a hexa intrinsic
+    // historically resolved by the interpreter as a builtin (no `import`
+    // line at the call site, e.g. compiler/atlas/merger.hexa:82). hexa_v2
+    // codegen doesn't recognize it as a builtin, so the C output references
+    // an undefined identifier. We can't pull compiler/intrinsics/intrinsics.hexa
+    // directly because it mixes typed `var x: i64` / `as i64` syntax that
+    // hexa_v2_v4 parser rejects; we ship a stage0-clean re-export at
+    // tool/flatten_intrinsic_shims.hexa that mirrors only the intrinsics
+    // the bypass needs (currently: list_dir).
+    //
+    // Conservative trigger: substring match for `list_dir` anywhere in the
+    // collected sources. The shim is self-contained (no further deps), so
+    // a false-positive auto-pull adds one harmless function definition.
+    let shim_path = "tool/flatten_intrinsic_shims.hexa"
+    if file_exists(shim_path) && !fl_hset_has(g_visited_hs, shim_path) {
+        let mut needs_shim = false
+        let mut si = 0
+        while si < g_order_count {
+            let sf = g_order_parts[si]
+            let ssrc = read_file(sf)
+            if ssrc.index_of("list_dir") >= 0 {
+                needs_shim = true
+                si = g_order_count   // break
+            } else {
+                si = si + 1
+            }
+        }
+        if needs_shim {
+            println("[flatten_imports] auto-pull: intrinsic shims (list_dir referenced)")
+            fl_iterative_walk(shim_path)
+        }
+    }
+
     // g_order_parts is already a file-path array, leaves-first.
     // 2026-04-21: freelist aliasing bug — `let order_files = g_order_parts`
     // causes the alias to read back as empty even when g_order_parts has N entries
@@ -601,22 +825,34 @@ fn flatten_main() {
     let mut fi = 0
     while fi < m {
         let f = g_order_parts[fi]
-        let src = read_file(f)
-        let decls = fl_scan_private_decls(src)
-        let dn = len(decls)
-        let mut di = 0
-        while di < dn {
-            let nm = decls[di]
-            if fl_hset_has(seen_decls_hs, nm) {
-                // Seen before — mark as collided (if not already)
-                if !fl_hset_has(collided_hs, nm) {
-                    collided_hs = fl_hset_add(collided_hs, nm)
-                    collided_parts.push(nm)
+        // Fix #1 — *.gen.hexa skip (per C7-prep stage1-bypass scaling probe).
+        // Large generated files (e.g. compiler/atlas/embedded.gen.hexa @ 4.8 MB)
+        // caused the full-compiler flatten to OOM at 4 GB because
+        // fl_scan_private_decls + fl_word_replace each call src.split("\n"),
+        // allocating ~75K permanent substrings per pass (the hexa runtime has
+        // no string GC). Generated files use auto-emitted pub identifiers that
+        // are unique by convention (atlas index hashes, embedded byte tables,
+        // anima_psi/anima_hexad tables) — no realistic collision risk — so we
+        // omit them from BOTH the collision-detect scan here and the
+        // collision-mangle word-replace at the emit loop below.
+        if !fl_basename(f).ends_with(".gen.hexa") {
+            let src = read_file(f)
+            let decls = fl_scan_private_decls(src)
+            let dn = len(decls)
+            let mut di = 0
+            while di < dn {
+                let nm = decls[di]
+                if fl_hset_has(seen_decls_hs, nm) {
+                    // Seen before — mark as collided (if not already)
+                    if !fl_hset_has(collided_hs, nm) {
+                        collided_hs = fl_hset_add(collided_hs, nm)
+                        collided_parts.push(nm)
+                    }
+                } else {
+                    seen_decls_hs = fl_hset_add(seen_decls_hs, nm)
                 }
-            } else {
-                seen_decls_hs = fl_hset_add(seen_decls_hs, nm)
+                di = di + 1
             }
-            di = di + 1
         }
         fi = fi + 1
     }
@@ -644,7 +880,7 @@ fn flatten_main() {
     flat_parts.push("// === FLATTENED by tool/flatten_imports.hexa ===\n")
     flat_parts.push("// target: " + target + "\n")
     flat_parts.push("// files:  " + str(m) + "\n")
-    flat_parts.push("// order:  reverse-topo (root-first, leaves-last)\n")
+    flat_parts.push("// order:  topo (leaves-first, root-last) — module-level lets must initialize before root's pipeline runs\n")
     if collided_count > 0 {
         flat_parts.push("// mangled: " + collided_display + "\n")
     }
@@ -652,13 +888,28 @@ fn flatten_main() {
 
     let mut ei = 0
     while ei < m {
-        let idx = m - 1 - ei
+        // Stage1 punch list — leaves-first order. The previous root-first
+        // order put compiler/main.hexa's top-level pipeline statements
+        // (phase_log("pipeline_start"); lex(...); parse(...); ... exit(0))
+        // BEFORE the imports' top-level let initializations (e.g.
+        // `pub let TARGET_DARWIN_ARM64 = "..."` in compiler/emit/asm.hexa).
+        // Codegen flattens both into main() in source order — so the lets
+        // landed AFTER the exit(0) as dead code, leaving TARGET_* uninit.
+        // Result: `_is_darwin(target)` always returned false, codegen
+        // emitted `.intel_syntax noprefix` on arm64-darwin, assembler choked.
+        // Fix: reverse the iteration so leaves come first → lets initialize,
+        // then main.hexa's pipeline runs.
+        let idx = ei
         let f = g_order_parts[idx]
         let body = read_file(f)
 
-        // Mangle collided private decls with file-prefix
+        // Fix #1 — *.gen.hexa skip the mangle pass (see collision-detect note
+        // above). fl_strip_uses still runs since generated files do contain
+        // `use` directives. read_file alone is fine (embedded.gen.hexa flatten
+        // peaks at 277 MB; the OOM was from the split-based mangle).
+        let is_gen = fl_basename(f).ends_with(".gen.hexa")
         let mut body_mut = body
-        if collided_count > 0 {
+        if collided_count > 0 && !is_gen {
             let decls = fl_scan_private_decls(body)
             let prefix = fl_mangle_prefix(f)
             let dn = len(decls)
@@ -684,6 +935,9 @@ fn flatten_main() {
         let mut begin_parts = []
         begin_parts.push("\n// ----- BEGIN ")
         begin_parts.push(base_name)
+        if is_gen {
+            begin_parts.push(" (mangle skipped — Fix #1)")
+        }
         begin_parts.push(" -----\n")
         flat_parts.push(begin_parts.join(""))
         flat_parts.push(stripped)

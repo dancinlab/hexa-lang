@@ -1,0 +1,27 @@
+// tool/flatten_intrinsic_shims.hexa — stage0-clean re-exports of intrinsics
+// the flatten_imports auto-pull pass needs but cannot pull from the real
+// intrinsics module (compiler/intrinsics/intrinsics.hexa) because that
+// module mixes typed declarations (`var x: i64`, `as i64` casts) which
+// hexa_v2_v4 parser rejects.
+//
+// Why this lives in tool/ (not compiler/ or stdlib/):
+//   The flatten_imports stage1-bypass is a TOOL convention used to feed
+//   hexa_v2_v4 (the legacy transpiler). The real native compiler uses
+//   compiler/intrinsics/intrinsics.hexa directly. This shim is bypass-only
+//   scaffolding — it should NOT be referenced from compiler/ or stdlib/
+//   sources.
+//
+// 1:1 source equivalence (verified 2026-05-14):
+//   list_dir — copy of compiler/intrinsics/intrinsics.hexa:289
+//
+// When stage1 lands and hexa_v2_v4 retires, this file becomes vestigial
+// and can be deleted along with the auto-pull hook in flatten_imports.hexa.
+
+pub fn list_dir(path: string) -> [string] {
+    if path == "" { return [] }
+    let q = path.replace("'", "'\\''")
+    // @allow-bare-exec — v0 intrinsic body forks `ls -1` exactly once.
+    let raw = exec("ls -1 '" + q + "' 2>/dev/null").trim()
+    if raw == "" { return [] }
+    return raw.split("\n")
+}

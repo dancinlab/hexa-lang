@@ -159,6 +159,58 @@ fn _hexa_name_is_reserved(s) {
     // type mismatch + link fail. Mangling to u_errno at decl+ref sides side-
     // steps the macro expansion. Same class: any libc ERRNO macro identifier.
     if s == "errno" { return true }
+    // C7/POSIX collision avoidance (2026-05-14) — these POSIX surface names
+    // collide with hexa user fns once <sys/socket.h>, <unistd.h>, etc. are
+    // pulled in by runtime.c (transitively via #include). Concrete trigger:
+    // `pub fn bind(module)` in compiler/check/bind.hexa transpiled to bare
+    // `bind(...)` and clashed with POSIX `int bind(int, const struct sockaddr*,
+    // socklen_t)`. Same class: link/connect/accept/listen/open/close/read/write
+    // /stat/fork/etc. Additive allowlist (rather than universal `u_` mangling)
+    // chosen to minimise blast radius on existing transpiles.
+    // socket — <sys/socket.h>
+    if s == "bind" { return true }
+    if s == "accept" { return true }
+    if s == "listen" { return true }
+    if s == "connect" { return true }
+    if s == "socket" { return true }
+    if s == "send" { return true }
+    if s == "recv" { return true }
+    if s == "shutdown" { return true }
+    // file I/O — <unistd.h> / <fcntl.h> / <sys/stat.h>
+    if s == "open" { return true }
+    if s == "close" { return true }
+    if s == "read" { return true }
+    if s == "write" { return true }
+    if s == "link" { return true }
+    if s == "unlink" { return true }
+    if s == "stat" { return true }
+    if s == "lstat" { return true }
+    if s == "fstat" { return true }
+    if s == "dup" { return true }
+    if s == "dup2" { return true }
+    if s == "pipe" { return true }
+    if s == "mkdir" { return true }
+    if s == "rmdir" { return true }
+    if s == "rename" { return true }
+    if s == "chdir" { return true }
+    if s == "chmod" { return true }
+    if s == "chown" { return true }
+    // process — <unistd.h> / <sys/wait.h> / <signal.h>
+    if s == "fork" { return true }
+    if s == "wait" { return true }
+    if s == "waitpid" { return true }
+    if s == "execv" { return true }
+    if s == "execve" { return true }
+    if s == "kill" { return true }
+    if s == "getpid" { return true }
+    if s == "getuid" { return true }
+    if s == "setuid" { return true }
+    // memory/string — POSIX (sometimes glibc) <strings.h>
+    if s == "index" { return true }
+    if s == "rindex" { return true }
+    // multiplexing — <sys/select.h> / <poll.h>
+    if s == "select" { return true }
+    if s == "poll" { return true }
     return false
 }
 
@@ -767,6 +819,17 @@ fn codegen_c2(ast) {
     // Collect sections as arrays, join at end
     let mut fwd_parts = []
     let mut global_parts = []
+    // C7-prep / stage1-bypass: enum #defines must precede ANY code that
+    // references them (fn bodies, lambda defs, fnref thunks). For normal
+    // single-file source this happens for free because EnumDecls precede
+    // FnDecls in source order; for FLATTENED sources (tool/flatten_imports)
+    // the enum decls from downstream files (compiler/diag/catalog.hexa,
+    // compiler/check/ast.hexa, …) get inlined AFTER fn bodies from earlier
+    // files (self/main.hexa) that reference them via match expressions on
+    // enum values. Collect enums into a dedicated section so they emit
+    // BEFORE fn_parts regardless of source position. See bind_flat probe
+    // 261 → 2 errors (closing 259 enum forward-reference errors).
+    let mut enum_parts = []
     let mut fn_parts = []
     // init_parts: global variable initialization only (LetMutStmt, LetStmt,
     // ComptimeConst, ExternFnDecl dlopen). Emitted as a separate C function
@@ -819,7 +882,8 @@ fn codegen_c2(ast) {
             }
             if _cnt > 1 {
                 _main_decls.push(_mlnm)
-                _main_hoists.push("    HexaVal " + _mlnm + " = hexa_void();\n")
+                // POSIX collision fix (see line ~1306 for fn-local mirror).
+                _main_hoists.push("    HexaVal " + _hexa_mangle_ident(_mlnm) + " = hexa_void();\n")
             }
         }
         _mli = _mli + 1
@@ -853,7 +917,10 @@ fn codegen_c2(ast) {
             fwd_parts.push(gen2_struct_forward(ast[i]) + "\n")
             fn_parts.push(gen2_struct_decl(ast[i]) + "\n\n")
         } else if k == "EnumDecl" {
-            fn_parts.push(gen2_enum_decl(ast[i]) + "\n")
+            // C7-prep / stage1-bypass: route to enum_parts (emitted as a
+            // prelude block before fn_parts) so flattened-source consumers
+            // see the #define macros before any fn body that references them.
+            enum_parts.push(gen2_enum_decl(ast[i]) + "\n")
         } else if k == "ImplBlock" {
             let ib = gen2_impl_block(ast[i])
             fwd_parts.push(ib.forward)
@@ -979,6 +1046,15 @@ fn codegen_c2(ast) {
     parts.push("\n")
     parts.push(global_parts.join(""))
     parts.push("\n")
+    // C7-prep / stage1-bypass enum-ordering fix: emit ALL enum #defines
+    // here as a prelude block, BEFORE any code that may reference enum
+    // constants (lambda defs, fnref thunks, fn bodies). For source-order
+    // input the original behavior is preserved (enums emitted before fns
+    // anyway); for FLATTENED input (tool/flatten_imports inlining several
+    // .hexa files) this guarantees the #defines precede fn bodies even
+    // when the original file order interleaves them.
+    parts.push(enum_parts.join(""))
+    parts.push("\n")
     // M4: string literal deduplication — static HexaVal slots + init function
     // rt#32-SL: decls emitted via deterministic _strlit_counter loop (mirror
     // of fcf275f4 IC fix). Prior _strlit_def_parts module-array push triggered
@@ -989,11 +1065,30 @@ fn codegen_c2(ast) {
         _sl_def_i = _sl_def_i + 1
     }
     if len(_strlit_keys) > 0 {
-        parts.push("static void __hexa_strlit_init(void) {\n")
+        // Chunked emission — single __hexa_strlit_init() function with
+        // thousands of statements triggers Apple clang 21.0.0 frontend
+        // SIGILL (observed at ~8000+ stmts on compiler/main.hexa path-B
+        // transpile). Split into 500-stmt chunks and have the main init
+        // call each chunk in order.
+        let _strlit_chunk = 500
+        let mut _strlit_chunk_idx = 0
         let mut _sli = 0
         while _sli < len(_strlit_keys) {
+            if _sli % _strlit_chunk == 0 {
+                if _sli > 0 { parts.push("}\n") }
+                parts.push("static void __hexa_strlit_init_" + to_string(_strlit_chunk_idx) + "(void) {\n")
+                _strlit_chunk_idx = _strlit_chunk_idx + 1
+            }
             parts.push("    __hexa_sl_" + to_string(_strlit_ids[_sli]) + " = hexa_str(\"" + _strlit_keys[_sli] + "\");\n")
             _sli = _sli + 1
+        }
+        parts.push("}\n")
+        // Aggregator that the rest of the codegen still calls.
+        parts.push("static void __hexa_strlit_init(void) {\n")
+        let mut _ci = 0
+        while _ci < _strlit_chunk_idx {
+            parts.push("    __hexa_strlit_init_" + to_string(_ci) + "();\n")
+            _ci = _ci + 1
         }
         parts.push("}\n")
     }
@@ -1236,7 +1331,13 @@ fn gen2_fn_decl(node) {
             if cnt > 1 {
                 _hoisted.push(nm)
                 _gen2_declared_names.push(nm)
-                hoists.push("    HexaVal " + nm + " = hexa_void();\n")
+                // POSIX collision fix: mangle hoisted local-var decl
+                // (mirrors the existing mangle at the LetStmt site at
+                // line ~2106). Without this, `let close = peek()` hoists
+                // as `HexaVal close = hexa_void();` (bare) while the
+                // assignment emits `u_close = peek();` (mangled), causing
+                // "undeclared identifier u_close" in clang.
+                hoists.push("    HexaVal " + _hexa_mangle_ident(nm) + " = hexa_void();\n")
             }
         }
         ii = ii + 1
@@ -3593,6 +3694,14 @@ fn gen2_expr(node) {
             if name == "exec" {
                 return "hexa_exec(" + gen2_expr(node.args[0]) + ")"
             }
+            // mkdir(path) — interpreter has it as builtin; AOT path needs
+            // routing to POSIX `mkdir(path, 0755)` since `mkdir` collides
+            // with POSIX `bind`/`open`/etc-style POSIX surface (cf 9f9e9799
+            // mangle allowlist). Returns hexa_void() so call sites in
+            // statement position type-check.
+            if name == "mkdir" {
+                return "((void)mkdir(HX_STR(" + gen2_expr(node.args[0]) + "), 0755), hexa_void())"
+            }
             if name == "exec_with_status" {
                 return "hexa_exec_with_status(" + gen2_expr(node.args[0]) + ")"
             }
@@ -4627,9 +4736,24 @@ fn gen2_expr(node) {
     }
 
     if k == "Array" {
+        let nitems = len(node.items)
+        // For large array literals, deeply-nested hexa_array_push(...)
+        // chains overflow clang's parser stack (observed SIGILL on
+        // ATLAS_P_NODES with ~7000 elements). Switch to GNU statement
+        // expression with a sequence of pushes — flat instead of nested.
+        if nitems > 64 {
+            let mut out = "({ HexaVal __arr_lit = hexa_array_new(); "
+            let mut ai = 0
+            while ai < nitems {
+                out = out + "hexa_array_push(__arr_lit, " + gen2_expr(node.items[ai]) + "); "
+                ai = ai + 1
+            }
+            out = out + "__arr_lit; })"
+            return out
+        }
         let mut out = "hexa_array_new()"
         let mut ai = 0
-        while ai < len(node.items) {
+        while ai < nitems {
             out = "hexa_array_push(" + out + ", " + gen2_expr(node.items[ai]) + ")"
             ai = ai + 1
         }
@@ -6525,6 +6649,12 @@ fn codegen_c2_full(ast) {
     // Collect sections as arrays, join at end (avoid O(n²) concat)
     let mut fwd_parts = []
     let mut global_parts = []
+    // C7-prep / stage1-bypass enum-ordering fix (mirror of codegen_c2):
+    // dedicated enum_parts emitted before fn_parts so flattened-source
+    // inputs (multi-module merge from tool/flatten_imports) produce a
+    // .c file where every enum #define precedes every fn body that may
+    // reference it via match expressions on enum values.
+    let mut enum_parts = []
     let mut fn_parts = []
     // init_parts: global variable initialization only (LetMutStmt, LetStmt,
     // ComptimeConst, ExternFnDecl dlopen). Kept in sync with codegen_c2.
@@ -6560,7 +6690,8 @@ fn codegen_c2_full(ast) {
             }
             if _cnt_full > 1 {
                 _main_decls_full.push(_mlnm_full)
-                _main_hoists_full.push("    HexaVal " + _mlnm_full + " = hexa_void();\n")
+                // POSIX collision fix (see line ~1306 for fn-local mirror).
+                _main_hoists_full.push("    HexaVal " + _hexa_mangle_ident(_mlnm_full) + " = hexa_void();\n")
             }
         }
         _mli_full = _mli_full + 1
@@ -6592,7 +6723,9 @@ fn codegen_c2_full(ast) {
             fwd_parts.push(gen2_struct_forward(ast[i]) + "\n")
             fn_parts.push(gen2_struct_decl(ast[i]) + "\n\n")
         } else if k == "EnumDecl" {
-            fn_parts.push(gen2_enum_decl(ast[i]) + "\n")
+            // C7-prep / stage1-bypass: route to enum_parts (mirror of
+            // codegen_c2). Emitted as a prelude block before fn_parts.
+            enum_parts.push(gen2_enum_decl(ast[i]) + "\n")
         } else if k == "ImplBlock" {
             let ib = gen2_impl_block(ast[i])
             fwd_parts.push(ib.forward)
@@ -6701,6 +6834,17 @@ fn codegen_c2_full(ast) {
     out_parts.push("\n")
     out_parts.push(global_parts.join(""))
     out_parts.push("\n")
+    // C7-prep / stage1-bypass enum-ordering fix (mirror of codegen_c2):
+    // emit ALL enum #defines as a prelude block BEFORE any code that may
+    // reference enum constants (lambda defs, fnref thunks, fn bodies).
+    // Without this, FLATTENED inputs (tool/flatten_imports merging multiple
+    // .hexa files) produce .c where enum #defines from downstream files
+    // come AFTER fn bodies from earlier files that match on enum values,
+    // causing 250+ "use of undeclared identifier <Enum>_<Variant>" errors
+    // in clang. See compiler/check/bind probe: 261 → 2 (closes 259 enum
+    // forward-reference errors; remaining 2 are flatten gaps).
+    out_parts.push(enum_parts.join(""))
+    out_parts.push("\n")
     // rt#32-SL: emit string literal static slots + init function (mirror of
     // codegen_c2 main emit path). Deterministic loop from _strlit_counter.
     let mut _sl_def_i_full = 0
@@ -6709,11 +6853,25 @@ fn codegen_c2_full(ast) {
         _sl_def_i_full = _sl_def_i_full + 1
     }
     if len(_strlit_keys) > 0 {
-        out_parts.push("static void __hexa_strlit_init(void) {\n")
+        // Chunked — see codegen_c2 mirror at ~line 1054 for rationale.
+        let _strlit_chunk_full = 500
+        let mut _strlit_chunk_idx_full = 0
         let mut _sli_full = 0
         while _sli_full < len(_strlit_keys) {
+            if _sli_full % _strlit_chunk_full == 0 {
+                if _sli_full > 0 { out_parts.push("}\n") }
+                out_parts.push("static void __hexa_strlit_init_" + to_string(_strlit_chunk_idx_full) + "(void) {\n")
+                _strlit_chunk_idx_full = _strlit_chunk_idx_full + 1
+            }
             out_parts.push("    __hexa_sl_" + to_string(_strlit_ids[_sli_full]) + " = hexa_str(\"" + _strlit_keys[_sli_full] + "\");\n")
             _sli_full = _sli_full + 1
+        }
+        out_parts.push("}\n")
+        out_parts.push("static void __hexa_strlit_init(void) {\n")
+        let mut _ci_full = 0
+        while _ci_full < _strlit_chunk_idx_full {
+            out_parts.push("    __hexa_strlit_init_" + to_string(_ci_full) + "();\n")
+            _ci_full = _ci_full + 1
         }
         out_parts.push("}\n")
     }
