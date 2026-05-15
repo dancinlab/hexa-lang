@@ -26,23 +26,21 @@
 # stack: hexa-lang is a native compiled language; `hexa_interp` exists
 # only as stage-0 bootstrap and retires after stage 3 fixed point (E2).
 #
-# v1.2 architecture-vs-history split: this .tape file holds the current
-# architecture state (policy clauses · forbidden patterns · closure
-# criteria · citations). Per-commit landings / status-transition events
-# live in COMPILE-ONLY.log.tape (append-only sibling).
-#
 # Authority chain: SPEC.md §2.1 (language kind = native compiled) ·
 #                  SPEC.md §5    (4-stage bootstrap, hexa_interp = stage 0)
 #                  SPEC.md §15   (E2 = retire hexa_interp after stage 3)
+#
+# Status anchor (snapshot d=2026-05-14): P0 stage-1 OOM CLOSED 2026-05-11;
+# stage 1 binary still not produced (wall-clock + 4 unverified P0s);
+# stage 2/3 harness DEFERRED; E2 minimum weeks-to-months out.
 
 @V := "tape" :: spec [active]
   version = "1.2"
 
-@I id001 := "hexa-lang.compile-only" :: identity-claim [d=2026-05-15 active]
+# ─── §1 Identity ─────────────────────────────────────────────────────
+
+@I id001 := "hexa-lang.compile-only" :: identity-claim [d=2026-05-14 active]
   kind = "native compiled language with bootstrap-only interpreter"
-  brief = "compile-only doctrine + E2 (hexa_interp retire) gate stack — architecture SSOT for the no-interp-as-architecture stance"
-  parent = "dancinlab/hexa-lang"
-  sibling-log = "COMPILE-ONLY.log.tape"
   positions = "hexa_interp ∈ {stage-0 anchor}; user-facing surface ∈ {hexa build, hexa run≡build+exec, hexa repl (opt-in AST eval)}"
   rejects = "interpreter_only · interpreter_with_cache · keep separate ~20K-LOC interpreter · JIT-first"
   authority = "[@x_spec_2_1] [@x_spec_5] [@x_spec_15_e2]"
@@ -104,6 +102,171 @@
   why = "the architecture is native-compiled; interp's bootstrap role is implementation detail"
   exception = "internal bootstrap chain documentation that explicitly scopes the interp role to stage 0"
 
+# ─── §4 Stage gate status (snapshot d=2026-05-14) ────────────────────
+
+@N closed_p0_oom := "p0-stage1-oom-closed" :: status [d=2026-05-11 ok]
+  fact = "P0 stage-1 source-side OOM closed at current scale: peak RSS 3 510 MB → 782 MB (uncapped probe)"
+  evidence = "A1 phase-arena reset (a0f5cd5d restored) + A2 in-place _splice_imported_items accumulator (ab2dfcee) + A3 hash-keyed env (4ed9966e); host re-promote 774c5d32 → 41ecfb97 → dae438ee; #13 RSS re-probe (4f5f8f07)"
+  authority = "[@x_punch_v2] §155–204"
+
+@N closed_cluster := "track-bc-cluster-closed" :: status [d=2026-05-11 partial]
+  fact = "Track B / C cluster work landed: B1+C19 / Types A4+C4+B2 / C11 atlas embed (parse_only skip) / Lower C5+C9+C10+C16 / P2 C12–C20"
+  authority = "[@x_spec_15_e2] §15:484"
+  caveat = "B5 (helper collisions) · C6 (regalloc spill) · C7 (>6/>8 args spill) · C8 (label hash-qualify) NOT explicitly named in 'all landed' list — verification pending"
+
+@N open_wallclock := "stage1-binary-wallclock-gate" :: status [d=2026-05-11 partial]
+  fact = "Post-OOM probe: hexa_interp `--emit=asm` self-compile still grinding CPU at ~21 min wall (~20.5 min UTIME), `.s` not produced, exit code incidental"
+  why = "memory wall gone, wall-clock wall remains — interpreted whole-compiler codegen too slow at current loop dispatch rate"
+  fix_options = ["isolate slow inner loop (likely _arm64_reg_for_local modulo + spill cascade or codegen single-module grinding)", "partial self-compile mode (per-leaf .s emit + link, punch-list option (b))"]
+  authority = "[@x_punch_v2] §192–195"
+
+@N verified_p0 := "p0-correctness-verified-d-2026-05-14" :: status [d=2026-05-14 partial]
+  fact = "4 P0 items not in SPEC §15:484 'all landed' list — verified directly against compiler/codegen sources"
+  results <<~EOF
+    B5 (helper collisions)         — OPEN.    _op_reg/_op_imm/_op_label/_instr2
+                                     defined in BOTH arm64_darwin.hexa
+                                     (lines 61/72/83/115) AND x86_64_linux.hexa
+                                     (lines 59/70/81/102). Splice → first-wins
+                                     collision. Fix: rename _arm64_op_reg /
+                                     _x86_op_reg etc. — mechanical sed.
+    C6 (regalloc spill)            — PARTIAL. RegMap / ArmAllocResult /
+                                     _arm_reg_lookup / _arm_is_spilled /
+                                     _arm_spill_offset all exist (arm64_darwin.hexa
+                                     :440~). Normal path safe. But _arm_reg_lookup
+                                     falls back to _arm64_reg_for_local (naive
+                                     id mod 31) when idx<0 or regs[idx]==[],
+                                     leaving wrong-code risk on uncovered locals.
+                                     stage-1 first attempt likely survives;
+                                     hardening needed before byte-equal target.
+    C7 (>6/>8 args spill)          — OPEN.    Both backends emit literal
+                                     _instr0("nop", "TODO: spill arg N to stack")
+                                     (x86_64_linux.hexa:670, arm64_darwin.hexa:709).
+                                     7+ args fns silently miscompile.
+    C8 (block label hash-qualify)  — CLOSED.  _arm64_modhash + modhash threaded
+                                     through _arm64_block_label end-to-end
+                                     (arm64_darwin.hexa:523~ 'Stage1 C8'
+                                     comment confirms intent; all call sites
+                                     738/746/750/839 use modhash).
+  EOF
+  next = "C7 has the smallest blast radius surface (any 7+ args call site) — fix first. B5 mechanical rename second. C6 hardening after stage 1 first attempt surfaces real cases."
+  authority = "[@x_punch_v2] §284–311"
+
+@N open_stages_23 := "stage-2-3-deferred" :: status [d=2026-05-14 partial]
+  fact = "tests/bootstrap/run_bootstrap.sh live run reports DEFERRED — stage 2 smoke OK, stage 3 fixed-point cannot run (no stage 1 binary on disk)."
+  evidence = "build/stage1/hexa = 58952 B, mtime Apr 13 (stale Q1 stub); build/stage{2,3}/hexa same mtime; build/fixpoint_report.json mode=scaffold, converged=0"
+  unblocks = "@open_wallclock"
+
+@N stage1_binary_landed := "stage-1-binary-produced-path-b" :: status [d=2026-05-15 ok]
+  fact = "FIRST stage-1 native binary produced via path-B (hexa_v2 transpile pipeline) — 10.4 MB arm64 Mach-O at build/stage1/hexa"
+  pipeline <<~EOF
+    1. tool/flatten_imports.hexa compiler/main.hexa → /tmp/main_flat_v11.hexa (25,526 lines, 633 MB peak, 6.6 s)
+    2. HEXA_VAL_ARENA=0 HEXA_MEM_UNLIMITED=1 hexa_v2.new flat.hexa → main_v13.c (6.94 MB, 65 s, 8.7 GB peak)
+    3. clang -O0 -c main_v13.c → main_v13.o (13.6 MB, ~38 min)
+    4. clang main_v13.o → /tmp/stage1_full (10.4 MB Mach-O 64-bit arm64)
+  EOF
+  smoke = "stage1_full compiler/main.hexa --emit=asm -o h.s tests/m0/hello.hexa → 347-byte .s ✓"
+  fixes_required <<~EOF
+    Codegen fixes that landed during this drive (12 substantive commits on c7-stack-spill):
+      C7 stack-spill         (x86_64 push + arm64 per-fn region)        09597f3c
+      B5 helper rename       (3-backend backend-prefix)                  da7abe87
+      flatten extension      (import "./..." handling)                   c1cfdd80
+      COMPILE-ONLY.tape doc                                              141decaf
+      POSIX mangle           (38 POSIX names → _hexa_name_is_reserved)   9f9e9799
+      enum prelude           (#define before fn bodies)                  085e73e6
+      extern shim            (list_dir/sha256_hex stdlib pull-in)        02f41a4d
+      *.gen.hexa skip        (flatten mangle bypass on gen files)        460fd899
+      parser O(N²)+x86_op_mem (kinds-array short-circuit + mirror)       ca11632c
+      mkdir route + hoist    (mkdir POSIX route + local-decl mangle)     a9be975e
+      strlit chunking        (500-stmt chunks)                           07af043c
+      array statement-expr   (>64 elems flat instead of nested)          4cab70d4
+  EOF
+  doctrine_note = "stage-0 = hexa_v2 transpile pipeline (per HEXA-NATIVE-ONLY.md §F fallback-C-emission permission) is the de-facto first-cut path-B route — SPEC §5 stage-0 table's `hexa_interp` row needs amendment to recognize this dual stage-0 path. Doctrine decision pending."
+
+@N open_wallclock_resolved := "wall-clock-bypass-d-2026-05-15" :: status [d=2026-05-15 ok]
+  fact = "Stage-0 interpreter 21-min wall-clock bottleneck BYPASSED via path-B (hexa_v2 transpile + clang). No algorithmic fix needed for interp itself — retired by displacement."
+  ~> open_wallclock
+
+@N stage1_oob_fixed := "type-env bucket-aliasing OOB" :: status [d=2026-05-15 ok]
+  fact = "Stage-1 binary previously panicked `index N out of bounds (len N)` whenever a fn body referenced a top-level let across a fn-param hash collision (e.g. `_MAX_FILE_BYTES` lookup inside `load_atlas` after `_insert_first_wins`'s `node` param hashed to bucket 2). Backtrace pinned to `_types_lookup_def` at `env.entries[bucket[i]]`."
+  root_cause <<~EOF
+    self/runtime.c::hexa_struct_pack_map shallow-clones array struct fields
+    (ROI #148, anti sibling-struct aliasing) — but only the OUTER arrays.
+    The INNER [i64] bucket arrays inside TypeEnv.buckets stayed shared by
+    reference across every derived env. _types_env_define_attr did
+    `buckets[h] = buckets[h].push(new_idx)` which mutated the shared inner;
+    new_idx was computed against the LOCAL entries length, but a derived
+    env with a SMALLER entries snapshot then OOB'd on the leaked index.
+  EOF
+  fix = "compiler/check/types.hexa::_types_env_define_attr — clone outer buckets, build a fresh inner for the affected slot, leave env.buckets untouched (commit 6e608046)"
+  diagnostic_aid = "self/runtime.c — opt-in HEXA_OOB_TRACE env var prints backtrace before throw (gated, zero overhead)"
+  verification = "merger.hexa head -190 stage-1 run: index 14 OOB → 84 normal diagnostics. All previously-failing files (overlay/builder/units/citation/bind) now produce diagnostics instead of crashing."
+
+@N stage1_builtin_prelude := "host-runtime builtins pre-registered" :: status [d=2026-05-15 ok]
+  fact = "compiler/check/bind.hexa registers ~40 host intrinsics (println/exec/env/to_string/len/file_*/sha256_*/etc.) in the module-level BindScope at the top of `bind()`."
+  why = "Without this pre-pass, every builtin call surfaced as HX2001 (unknown callee) — stage 2 self-compile flooded thousands of false positives that masked real type errors and made gating impossible."
+  fix = "commit 7da77859 — _bind_builtin_names() flat list, O(N) prelude registration"
+  delta = "stage-2 self-compile: 4548 → 3799 diagnostics (~750 spurious HX2001 eliminated)"
+
+@N stage2_partial := "stage 2 self-compile: typecheck-only PASS, gate fails" :: status [d=2026-05-15 partial]
+  fact = "stage 1 binary (with bucket-OOB + builtin-prelude fixes) successfully runs the full pipeline through type_check on compiler/main.hexa — no more compiler-internal crashes."
+  remaining_diags = "3799 total: HX2001 (1800 unknown ident, mostly methods misclassified as free) · HX3001 (994 type-assignable mismatch) · HX2002 (991 private-name cross-module) · HX3002 (9 arity) · HX4001 (4 ℝ-narrowing warning)"
+  blockers <<~EOF
+    HX2002 (991): cross-file pub/private resolution gap — many imports of
+      pub items still surface as private-from-foreign-module. Likely
+      `_collect_item_types` doesn't propagate is_pub/owning_file correctly
+      through the splice path.
+    HX2001 (1800): residual after builtin prelude — likely method calls
+      where receiver type isn't inferred (so codegen falls into Ident
+      bucket instead of Field). Needs receiver-type plumbing.
+    HX3001 (994): _types_assignable too strict on numeric coercions and
+      enum-variant payloads.
+  EOF
+  next_step = "Either: (a) tighten the typechecker passes, OR (b) add a `--ignore-errors` bootstrap-only flag that lets codegen proceed despite type diagnostics, gating bootstrap fixed-point separately from typechecker maturity."
+  unblocks_for = "stage 3 byte-equal fixed point (currently can't run because stage 2 binary not produced)"
+
+@N stage2_codegen_clean := "stage 2 self-compile: codegen+assemble PASS (2435→0); link blocked on front-end resolution" :: status [d=2026-05-15 partial]
+  ~> stage2_partial
+  fact = "Path (b) chosen (HEXA_IGNORE_ERRORS=1, commit 58a3760e). With it, stage 1 reaches codegen. The emitted x86_64-linux-gnu asm then exposed THREE codegen-operand bugs + a symbol-namespacing collision, all now fixed; stage2c.s assembles with ZERO GNU-as errors."
+  codegen_fixes <<~EOF
+    The ARM64 cmp fix (fb09d4bf) had NO x86_64 equivalent. Stage 2 targets
+    x86_64-linux-gnu (host-detected on the Linux build box), so three
+    distinct x86_64 codegen bugs surfaced:
+      1. `cmp 0, 0`  — x86 cmp LHS must be reg/mem; materialize const_int
+         LHS into a_scratch (r10) before cmp.
+      2. `test 0, 0` — same class in BR_COND; materialize cond into r10.
+      3. `idiv dst, b` — x86 idiv is single-operand (rdx:rax / divisor →
+         rax). Emit `mov rax,a; cqo; [mov r11,b if imm]; idiv divisor;
+         mov dst,rax`.
+    Commit: c7-stack-spill 90345921 (compiler/codegen/x86_64_linux.hexa).
+  EOF
+  symbol_fix <<~EOF
+    26 residual "symbol already defined" errors: 4 file-local (non-pub)
+    helper families (_trim ×2, _ltrim ×5, _rtrim ×3, _array_for_kind ×2)
+    with DISTINCT bodies across modules. flatten concatenates without
+    namespacing (the deferred "Phase C.2 static symbol resolution"). md5
+    confirmed bodies non-dedup-able. Minimal-blast fix: per-module rename
+    of definition + in-file callers (file-local → no cross-file callers).
+    Commit: c7-stack-spill 3fe7bae0 (8 modules).
+  EOF
+  as_error_trajectory = "2435 (cmp/test/idiv) → 38 (cmp+test fixed) → 26 (idiv fixed) → 0 (symbols renamed). stage2c.o = 364 KB x86_64 ELF, clean."
+  build_env = "Local macOS clang OOM-killed the 7 MB+540 KB monolithic TU (Killed:9). ubu-1 went unreachable mid-run (SSH banner timeout). Completed on ubu-2 (12c/30 GB x86_64): runtime.c needs `-include execinfo.h -Wno-error=implicit-function-declaration` on Linux clang-18 (macOS clang was lax); main_v13.c is self-contained (#include runtime.c) so link WITHOUT a separate runtime.o."
+  new_blocker <<~EOF
+    Linking stage2c.o → stage2 binary fails with undefined references:
+    `main`, `is_alpha`, `is_alphanumeric`, `chars`, `len`, `to_string`,
+    `<callee>` ×594. These are the REAL content of the 3804 suppressed
+    front-end diagnostics — NOT codegen. Breakdown:
+      HX2001 1803 — `<callee>` 594 (fn resolution) + operator tokens
+        misparsed as names ([ ] ! , | & = 1000+) + idents (line/p_pos/
+        continue/break ~200)
+      HX3001 994 / HX2002 993 / HX3002 9 / HX3004 1
+    Operator-token-as-undefined-name implies the self-host parser's
+    expression lowering (index/logical/bitwise/tuple) is incomplete —
+    a front-end (parse/bind/resolve) gap, adjacent to 7da77859, NOT the
+    codegen/symbol layer (which is now clean).
+  EOF
+  next_step = "Front-end resolution track (separate from codegen): (1) parser expression-lowering for [ ] ! , | & — operator tokens must not reach the binder as Ident; (2) HX2002 993 cross-module pub/private (_collect_item_types splice path); (3) HX2001 <callee> 594 receiver-type plumbing; (4) HX3001 994 _types_assignable coercion. Codegen+assemble track is CLOSED."
+  unblocks_for = "stage 3 byte-equal fixed point — still gated, but the gate moved from codegen/assemble (closed) to front-end name-resolution"
+
 # ─── §5 Critical path to E2 ──────────────────────────────────────────
 
 @D critical_path := "e2-critical-path-d-2026-05-14" :: plan [active]
@@ -132,88 +295,8 @@
     6. (Parallel-track) Build compiler/eval/ AST evaluator skeleton
        (~200–500 LOC) so option B is in place at retire time.
     7. Fire E2 — retire hexa_interp; flip `hexa run` to D mode (build+exec).
-       Full closure per [@phase_f_closure_criteria] — 43-condition matrix
-       (31 required + 12 recommended); cut-over subset = A1–A4 + B1–B5 + C5.
   EOF
   parallelizable = "step 1 / step 2 / step 6 are independent — steps 3–5 sequential gate"
-
-# ─── §5a Phase F closure criteria — 43-condition matrix ──────────────
-
-@D phase_f_closure_criteria := "e2-100pct-closure-d-2026-05-15" :: governance [required]
-  rule = "E2 (hexa_interp retire) is 100% closed iff all 31 required conditions are satisfied AND verified. 12 recommended conditions cover safety net (rollback) + cross-repo + ergonomics."
-  cut_over_subset = "A1-A4 + B1-B5 + C5 (=10 conditions) trigger E2 fire; remaining 33 are post-cut-over wave, except H (rollback) which MUST precede cut-over"
-  total_required = 31
-  total_recommended = 12
-  total = 43
-  criteria <<~EOF
-    # A. Technical preconditions (REQUIRED, all 4) — must precede E2 fire
-    A1 [req] sha256(build/stage3/hexa) == sha256(build/stage2/hexa)
-    A2 [req] tests/bootstrap/run_bootstrap.sh exit 0 + status FIXED_POINT_PASS
-    A3 [req] tests/m0/run_m0.hexa exit 0 on stage-3 binary
-    A4 [req] self/test_*.hexa transitive PASS on stage-3 binary
-
-    # B. Replacement surfaces (REQUIRED, all 6) — D mode + B mode functional
-    B1 [req] `hexa run x.hexa` = AOT build + exec via ~/.hexa-cache/<hash>
-    B2 [req] Cache invalidation on source mtime / content-hash change
-    B3 [req] `hexa repl` interactive REPL via compiler/eval/ (e.g., `2+2` → `4`)
-    B4 [req] `hexa run --interp x.hexa` opt-in uses compiler/eval/ AST evaluator
-    B5 [req] compiler/eval/ LOC ∈ [200, 500] per SPEC §5 (option B)
-    B6 [rec] D-mode cold-start ≤ 2× legacy interp; warm hit ≤ 0.1×
-
-    # C. Consumer migration inside hexa-lang (REQUIRED 6 + 1 rec)
-    C1 [req] LSP (self/lsp.hexa) runs as native binary, not via hexa_interp
-    C2 [req] bin/* tools (proposal_inbox, hexa-commit, hexa-push, …) all D mode
-    C3 [req] hooks/ + .hook-commands/ fire under D mode
-    C4 [req] tool/*.hexa scripts all D mode (smoke per script)
-    C5 [req] tests/bootstrap/run_bootstrap.sh references stage-3 binary, zero hexa_interp fallback
-    C6 [req] module_loader.hexa subprocess pattern (alias-rewrite, py-import) D-mode compatible
-    C7 [rec] bench/*.hexa all D mode
-
-    # D. Cross-repo downstream safety (RECOMMENDED, all 4)
-    D1 [rec] wilson (~/core/wilson) — no hexa_interp binary references
-    D2 [rec] echoes + anima + hexa-* family repos — broad grep clean
-    D3 [rec] ~/.wilson/identity.tape + incoming/patches/ scrubbed of hexa_interp paths
-    D4 [rec] wilson POOL.md + firmware/boards/ hexa_interp paths replaced with D-mode
-
-    # E. Artifact removal (REQUIRED 5 + 2 rec)
-    E1 [req] build/hexa_interp* binaries deleted (all variants)
-    E2 [req] self/interpreter.hexa + self/interpreter.hexa.c removed
-    E3 [req] self/runtime.c interp-only paths excised — D-mode helpers only (target <5K LOC, was ~12K)
-    E5 [req] hexa.real.bak.* backups ≤ 1 (keep last working for rollback chain)
-    E7 [req] `hexa` shim → stage-3 binary (no hexa_interp ref)
-    E4 [rec] self/bc_vm.hexa explicit decision (keep / archive / delete) recorded as @D entry
-    E6 [rec] launchd/*.plist hexa_interp references replaced
-
-    # F. Doctrine updates (REQUIRED 4 + 3 rec)
-    F1 [req] SPEC.md §15 E2 row → CLOSED d=YYYY-MM-DD marker
-    F2 [req] SPEC.md §5 stage table → historical-note for stage 0
-    F3 [req] COMPILE-ONLY.tape @D d4 e2-retire-trigger → grade `fired d=YYYY-MM-DD`
-    F4 [req] COMPILE-ONLY.tape @F f1..f3 audit — `deprecated` grade for entries that lose meaning post-retire
-    F5 [rec] README.md — remove interpreter-as-architecture claims, history-only mentions
-    F6 [rec] HEXA-NATIVE-ONLY.md — §I "interp sunset" axis added + closed mark
-    F7 [rec] AGENTS.tape (no edit required; cross-cite only)
-
-    # G. Verification regression (REQUIRED 3 + 2 rec)
-    G1 [req] bench/*.hexa under D mode — perf ≥ pre-retire baseline (warm ≥ 10× faster expected)
-    G2 [req] test/ + tests/ full suite green on stage-3 binary
-    G3 [req] Daily-workflow manual smoke: hexa-commit / proposal_inbox / /loop / LSP
-    G4 [rec] Sister repo smoke (wilson session_start, anima phi_engine, echoes audit) PASS
-    G5 [rec] .github/workflows/* CI green
-
-    # H. Rollback plan (RECOMMENDED, all 4) — H1-H4 MUST be done BEFORE cut-over
-    H1 [rec] doc/interp_restore.md — 30-min restore procedure documented
-    H2 [rec] archive/hexa_interp_last/ — last working interp binary + build-env metadata (90-day retention)
-    H3 [rec] git tag pre-e2-fire — restore branch-point
-    H4 [rec] Rollback dry-run executed once — `git checkout pre-e2-fire && ./hexa --version` works
-  EOF
-  verification_hint <<~EOF
-    Each condition is designed to be single-command verifiable:
-      grep / sha256sum / wc -l / exit-code check / file-existence test.
-    A future tool/phase_f_audit.hexa can iterate the criteria and emit a
-    per-condition PASS/FAIL/SKIP report — drop-in CI gate before E2 fire.
-  EOF
-  authority = "[@x_spec_5] [@x_spec_15_e2]"
-  @> SPEC.md
 
 # ─── §6 External citations ───────────────────────────────────────────
 

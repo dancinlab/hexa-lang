@@ -1992,6 +1992,11 @@ HexaVal hexa_array_get(HexaVal arr, int64_t idx) {
     if (idx < 0 || idx >= HX_ARR_LEN(arr)) {
         char _buf[128];
         snprintf(_buf, sizeof(_buf), "index %lld out of bounds (len %d)", (long long)idx, HX_ARR_LEN(arr));
+        if (getenv("HEXA_OOB_TRACE")) {
+            void* _bt[32]; int _n = backtrace(_bt, 32);
+            fprintf(stderr, "[OOB] %s\n", _buf);
+            backtrace_symbols_fd(_bt, _n, 2);
+        }
         hexa_throw(hexa_str(_buf));
         return hexa_void();
     }

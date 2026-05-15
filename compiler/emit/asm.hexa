@@ -75,17 +75,13 @@ fn _fmt_imm(target: string, imm: i64) -> string {
 
 fn _fmt_mem(target: string, op: LOperand) -> string {
     if _is_darwin(target) {
-        // Apple ARM64 memory: `[base, #offset]`
-        if op.mem_offset == 0 {
-            return "[" + op.mem_base.name + "]"
-        }
+        // Apple ARM64 memory: `[base, #offset]` — always emit the
+        // explicit `#offset`, even at offset 0, so the C7 spill stores
+        // for arg 9 land as `[sp, #0]` (matches tests/m0/many_args_test.hexa).
         return "[" + op.mem_base.name + ", #" + to_string(op.mem_offset) + "]"
     }
     if _is_thumb(target) {
         // ARM Thumb-2 memory: `[base, #offset]` — same shape as ARM64.
-        if op.mem_offset == 0 {
-            return "[" + op.mem_base.name + "]"
-        }
         return "[" + op.mem_base.name + ", #" + to_string(op.mem_offset) + "]"
     }
     // Intel x86 memory: `[base + offset]`
@@ -111,6 +107,7 @@ fn _fmt_label(target: string, label: string) -> string {
     if first == "_" { return label }   // already prefixed
     if first == "[" { return label }   // raw addressing-mode literal (e.g. `[sp], #16`)
     if first == "{" { return label }   // ARM register list literal (e.g. `{r4-r11, lr}`)
+    if first == "#" { return label }   // ARM immediate literal (e.g. `#16`) — never a symbol
     if _is_darwin(target) { return "_" + label }
     return label
 }

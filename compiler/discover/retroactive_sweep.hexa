@@ -28,7 +28,7 @@ fn _is_ws_char(c: string) -> bool {
     return c == " " || c == "\t"
 }
 
-fn _ltrim(s: string) -> string {
+fn _ltrim_rsweep(s: string) -> string {
     let n = len(s)
     let mut i = 0
     while i < n {
@@ -49,9 +49,9 @@ fn _extract_kv(raw: string, key_with_colon: string) -> string {
     let lines = raw.split("\n")
     let mut i = 0
     while i < len(lines) {
-        let s = _ltrim(lines[i])
+        let s = _ltrim_rsweep(lines[i])
         if _starts_with(s, key_with_colon) {
-            return _ltrim(s.substring(len(key_with_colon), len(s)))
+            return _ltrim_rsweep(s.substring(len(key_with_colon), len(s)))
         }
         i = i + 1
     }
@@ -135,12 +135,12 @@ fn _scan_atlas_file_l_nodes(atlas_root: string) -> array {
         }
         // Continuation line.
         if have_cur {
-            let s = _ltrim(line)
+            let s = _ltrim_rsweep(line)
             if _starts_with(s, "verifier_version:") {
-                let v = _ltrim(s.substring(len("verifier_version:"), len(s)))
+                let v = _ltrim_rsweep(s.substring(len("verifier_version:"), len(s)))
                 if len(cur_ver) == 0 { cur_ver = v }
             } else if _starts_with(s, "normalized_form:") {
-                let v = _ltrim(s.substring(len("normalized_form:"), len(s)))
+                let v = _ltrim_rsweep(s.substring(len("normalized_form:"), len(s)))
                 if len(cur_norm) == 0 { cur_norm = v }
             }
         }

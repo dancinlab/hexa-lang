@@ -689,12 +689,51 @@ fn _is_import_kind(k: ItemKind) -> bool {
 
 // ── Public entry ─────────────────────────────────────────────
 
+// Built-in identifiers that are always in scope (host runtime intrinsics).
+// Stage1 punch list — without this list every builtin call surfaces as
+// HX2001 (unknown callee) and every stage-2 self-compile attempt floods
+// thousands of false-positive diagnostics. Names are kept as a flat array
+// so the prelude registration is O(N) once per module bind. Method-style
+// builtins (.push, .trim, .substring) are NOT in this list — they are
+// resolved as field accesses, not free identifiers.
+fn _bind_builtin_names() -> [string] {
+    return [
+        // I/O
+        "println", "eprintln", "print", "eprint", "read_stdin", "read_line",
+        // Process / env
+        "exec", "env", "getenv", "args", "exit", "panic", "getpid",
+        // Conversions
+        "to_string", "to_int", "to_float", "type_of",
+        // Collections / strings
+        "len", "trim", "to_lower", "to_upper", "chars", "substring",
+        // Filesystem
+        "file_exists", "file_size", "file_modtime", "read_file",
+        "write_file", "list_dir", "mkdir", "copy_file", "remove_file",
+        "rename_file", "read_lines",
+        // Hash
+        "sha256", "sha256_file", "sha256_hex", "hash_string", "crc32",
+        // Math
+        "abs", "min", "max",
+        // Time
+        "now_unix_ms", "clock_ms", "nanos"
+    ]
+}
+
 pub fn bind(module: Module) -> array {
     let mut out = []
     let mod_file = module.file
 
-    // ── Pre-pass: top-level item names into the module-level scope.
+    // ── Pre-pass: register host-runtime builtins so identifier lookups
+    // don't surface as HX2001. Anchored to mod_file so the same scope
+    // shape is exercised regardless of import topology.
     let mut sc = _push_scope(_new_scopes())
+    let bnames = _bind_builtin_names()
+    let mut bi = 0
+    while bi < len(bnames) {
+        sc = _define(sc, bnames[bi], mod_file)
+        bi = bi + 1
+    }
+    // ── Pre-pass: top-level item names into the module-level scope.
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]

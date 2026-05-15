@@ -1084,7 +1084,7 @@ fn _resolve_atlas(aref: AtlasRef, atlas: AtlasIndex) -> AtlasBinding {
     if len(aref.kind) == 0 {
         return _empty_atlas_binding()
     }
-    let arr = _array_for_kind(atlas, aref.kind)
+    let arr = _array_for_kind_a2h(atlas, aref.kind)
     let mut idx = -1
     let mut i = 0
     while i < len(arr) {
@@ -1103,7 +1103,7 @@ fn _resolve_atlas(aref: AtlasRef, atlas: AtlasIndex) -> AtlasBinding {
     }
 }
 
-fn _array_for_kind(atlas: AtlasIndex, kind: string) -> array {
+fn _array_for_kind_a2h(atlas: AtlasIndex, kind: string) -> array {
     if kind == "P" { return atlas.p_nodes }
     if kind == "C" { return atlas.c_nodes }
     if kind == "L" { return atlas.l_nodes }

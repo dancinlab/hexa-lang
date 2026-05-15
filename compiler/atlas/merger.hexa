@@ -233,7 +233,7 @@ pub fn load_atlas(root: string) -> AtlasIndex {
 // over per-kind arrays is fine for A2. A3 swaps in a packed perfect
 // hash at compiler-build time.
 pub fn lookup(idx: AtlasIndex, kind: string, id: string) -> AtlasNode {
-    let arr = _array_for_kind(idx, kind)
+    let arr = _array_for_kind_merger(idx, kind)
     let mut i = 0
     while i < len(arr) {
         let n = arr[i]
@@ -264,7 +264,7 @@ fn _basename_of(path: string) -> string {
     return path
 }
 
-fn _array_for_kind(idx: AtlasIndex, kind: string) -> array {
+fn _array_for_kind_merger(idx: AtlasIndex, kind: string) -> array {
     if kind == "P" { return idx.p_nodes }
     if kind == "C" { return idx.c_nodes }
     if kind == "L" { return idx.l_nodes }

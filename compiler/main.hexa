@@ -129,6 +129,7 @@ fn print_help() {
     println("  -v, --verbose          print build-temp dir and intermediate paths to stderr")
     println("  --strict-citations     treat S8 citation diagnostics as fatal (default: off)")
     println("  --no-strict-citations  demote S8 citation diagnostics to warnings (default)")
+    println("  --ignore-errors        proceed to codegen despite typecheck errors (bootstrap escape; HEXA_IGNORE_ERRORS=1)")
     println("  --version              print version and exit")
     println("  --help                 print this help and exit")
     println("")
@@ -310,6 +311,14 @@ let mut strict_citations = false
 let _strict_env = env("HEXA_STRICT_CITATIONS")
 if _strict_env == "1" { strict_citations = true }
 
+// Stage1 punch list — `--ignore-errors` lets codegen proceed despite
+// type-check Errors. Bootstrap-only escape hatch: lets stage 2 self-compile
+// produce a binary while typechecker maturity catches up. Set
+// HEXA_IGNORE_ERRORS=1 to default-on.
+let mut ignore_errors = false
+let _ie_env = env("HEXA_IGNORE_ERRORS")
+if _ie_env == "1" { ignore_errors = true }
+
 // --opt=LEVEL default: $HEXA_OPT_LEVEL if set+parseable (0..3), else 0.
 let _opt_env = env("HEXA_OPT_LEVEL")
 let mut opt_level: i64 = 0
@@ -370,6 +379,10 @@ while ai < len(user_argv) {
         ai = ai + 1
     } else if a == "--no-strict-citations" {
         strict_citations = false
+        ai = ai + 1
+    } else if a == "--ignore-errors" {
+        // Bootstrap escape: codegen even if typecheck errors present.
+        ignore_errors = true
         ai = ai + 1
     } else if len(a) >= 1 && a.chars()[0] == '-' {
         eprintln("hexa-compiler: warning: unknown flag `" + a + "` (ignored)")
@@ -524,8 +537,12 @@ if strict_citations {
 _render_all(diags, error_format)
 
 if _has_errors(diags) {
-    eprintln("hexa-compiler: " + to_string(len(diags)) + " diagnostic(s); aborting before codegen")
-    exit(1)
+    if ignore_errors {
+        eprintln("hexa-compiler: " + to_string(len(diags)) + " diagnostic(s); --ignore-errors set, proceeding to codegen")
+    } else {
+        eprintln("hexa-compiler: " + to_string(len(diags)) + " diagnostic(s); aborting before codegen")
+        exit(1)
+    }
 }
 
 // Phase boundary 2: parse + all analysis passes done. The Module + diags
