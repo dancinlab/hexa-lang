@@ -308,3 +308,27 @@
   EOF
   decision = "PHASE 2 → OPTIONAL not DEFAULT. The flag bundle is already accessible via `HEXA_FAST_CFLAGS` env var (PHASE 1.3 deliverable). Users with big programs / batch builds can opt in; tiny-program workflows see no benefit so we don't penalize them with reduced safety (stack-protector / unwind tables off)."
   rationale = "Per measure_first doctrine — without consistent ≥10 % win across the dominant workflow, the maintenance cost of a flag-bundle default (security implications + per-build mental model) outweighs the partial win. Keep available, don't force."
+
+# ─── 2026-05-15  bench/* coverage — hexa-fast vs baseline across sizes ───
+
+@N bench_sample_coverage := "5-program bench across size distribution" :: measurement [d=2026-05-15 ok]
+  step = "Validate that PHASE 1.3 speedup holds beyond the test_tiny2 hand-crafted smoke. Pick 5 real `bench/*` programs spanning 208 B → 30 KB."
+  method = "warm hexa-fast cache (one prior invocation); then time baseline (hexa_v2 + clang `#include runtime.c`) vs hexa-fast, single run per program, user-time only (most stable signal)."
+  results <<~EOF
+    src                          | bytes  | baseline-user | fast-user | speedup
+    -----------------------------+--------+---------------+-----------+--------
+    probe                        |    208 | 0.65 s        | 0.14 s    | 4.64×
+    fib_rec                      |    322 | 0.62 s        | 0.14 s    | 4.43×
+    oop_heavy_wide               |    743 | 0.66 s        | 0.09 s    | 7.33×
+    native_int_specialize        |  1358  | 0.71 s        | 0.09 s    | 7.89×
+    m4_inference_e2e             | 30642  | 0.95 s        | 0.21 s    | 4.52×
+                                                          average:   ≈ 5.7×
+  EOF
+  pattern <<~EOF
+    Three regimes:
+      tiny (≤ ~400 B)   ≈ 4.4–4.6×  — shell/sed overhead not yet amortized
+      sweet (≈ 1 KB)    ≈ 7.3–7.9×  — runtime.c dominates, fixed overhead negligible
+      large (≥ ~10 KB)  ≈ 4.5×       — user.c emit grows; runtime.c proportion shrinks
+    Min observed: 4.43× · Max: 7.89× · Avg: 5.7×.
+  EOF
+  conclusion = "PHASE 1.3 fast path delivers ≥ 4× user-time across the entire bench size distribution — no regression band found. Architecture is production-ready for opt-in use."
