@@ -8,7 +8,7 @@
 //  Phase 1 of the cert stdlib extraction from anima/tool/cert_gate.hexa.
 //  verdict_base_score values are taken VERBATIM from cert_gate.hexa so that
 //  any downstream anima tool consuming this stdlib preserves bit-identical
-//  reward_mult outputs (raw#10 proof-carrying determinism).
+//  reward_mult outputs (proof-carrying determinism).
 //
 //  The three additional vocabulary terms listed in the Phase-1 spec
 //  (synthetic_proof / natural_observed / conjecture) are appended below

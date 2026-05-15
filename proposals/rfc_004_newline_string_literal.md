@@ -52,7 +52,7 @@ Strictly a bug fix where `\n` is currently broken. If `\n` already works in some
   - `"\t" == chr(9)`, `"\r" == chr(13)`, `"\\" == chr(92)`, `"\"" == chr(34)`
   - `len("\n") == 1`
 
-## Falsifier (raw#71)
+## Falsifier (falsifier)
 
 INVALIDATED iff `"\n\r\t\\\"\0"` produces the exact 6-byte sequence `[0x0A, 0x0D, 0x09, 0x5C, 0x22, 0x00]` under BOTH interpreter and AOT.
 

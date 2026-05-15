@@ -62,7 +62,7 @@ Agent B (본 commit — test + docs + loop proposal):
                          │                             │                          │
                          ▼                             ▼                          ▼
                 ┌────────────────┐         ┌──────────────────────┐      ┌─────────────────┐
-                │   .chain SSOT  │         │  .chain-state/<id>/  │      │  .raw-audit     │
+                │   .chain SSOT  │         │  .chain-state/<id>/  │      │  audit     │
                 │  (raw_loader)  │         │    step_<X>_ok       │      │ (append-only)   │
                 │                │         │   (chflags uchg)     │      │                 │
                 └────────────────┘         └──────────────────────┘      └─────────────────┘
@@ -77,7 +77,7 @@ Agent B (본 commit — test + docs + loop proposal):
 ```
 
 - 세로축: declarative (`.chain`) ↔ runtime (`.chain-state`) ↔
-  paper trail (`.raw-audit`).
+  paper trail (`audit`).
 - 가로축: trigger (cron / CLI) → runner → state writes.
 
 ## 4. 회귀 매트릭스 / Regression matrix
@@ -105,7 +105,7 @@ Agent B (본 commit — test + docs + loop proposal):
 - **Follow-up Q1 — hourly drift frequency**: `loop#4 hourly` 가 실제로
   몇 번/일 drift 를 잡는지 2주 관찰 후 daily 로 완화 여부 결정.
 - **Follow-up Q2 — marker log → raw_audit**: chain 진행 marker 를
-  자동으로 `.raw-audit` append 할지 여부. 현재는 reset 만 기록.
+  자동으로 `audit` append 할지 여부. 현재는 reset 만 기록.
 - **Follow-up Q3 — timeout / cron 충돌 정책**: `.loop interval` 과
   `step.X.timeout` 이 동시에 제약할 때 우선순위 결정.
 - **Follow-up Q4 — chain doctor cycle detection**: 현재는 간단 DFS —
@@ -115,7 +115,7 @@ Agent B (본 commit — test + docs + loop proposal):
 
 - `doc/runbook/raw_chain.md`                    — 공식 runbook
 - `doc/plans/loop_chain_integration_20260420.md` — `.loop` 확장 패치
-- `doc/plans/raw17_convergence_add_20260420.md`  — raw#17 (fixpoint)
+- `doc/plans/raw17_convergence_add_20260420.md`  — follow-up (fixpoint)
                                                    과 release chain 연결
 - `doc/plans/raw_os_level_enforcement_brainstorm_20260420.json` —
   OS-level enforcement 설계 맥락 (chain marker 도 동일 철학)

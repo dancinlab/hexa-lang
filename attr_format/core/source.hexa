@@ -12,7 +12,7 @@
 //   the router to swap attr-format versions via config without touching
 //   consumer code (lint / parser / catalog tools).
 //
-// raw#9 hexa-only strict. raw#15 SSOT this file for the AttrFormat contract.
+// hexa-only strict. no-hardcode SSOT this file for the AttrFormat contract.
 //
 // CONTRACT (every attr-format module must export):
 //   fn attr_format_meta_<name>() -> AttrFormatMeta
@@ -28,11 +28,11 @@
 // PRESERVED FILES (audit at landing time, MUST remain byte-identical):
 //   hexa-lang/self/parser.hexa            (per-attr inline switch 591-865)
 //   hexa-lang/self/attrs/attrs.json       (24-attr catalog SSOT)
-//   hive/tool/attr_usage_lint.hexa        (raw 3 ai-native 24 attr coverage)
+//   hive/tool/attr_usage_lint.hexa        (attr-usage ai-native 24 attr coverage)
 //   hexa-lang/tool/ai_native_lint.hexa    (ai-native lint)
 //   hexa-lang/tool/ai_native_scan.hexa    (file/dir naming hygiene)
 //
-// raw#10 caveats:
+// honest-caveat caveats:
 //   (1) v2/v3/v4 are spec-only stubs — Phase β/δ impl deferred. They
 //       export schema_meta + spec-pinned shapes, but parse/validate/expand
 //       return SPEC-PENDING sentinels.

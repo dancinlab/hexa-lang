@@ -15,7 +15,7 @@
 //   v4 → v3 → v2 → v1 lowering chain. Until Phase β/δ impl lands, v2/v3/v4
 //   parse return SPEC-PENDING and the chain falls through to v1.
 //
-// raw#9 hexa-only strict. raw#10:
+// hexa-only strict. honest-caveat:
 //   (1) Lower chain logic is spec-only for v2/v3/v4. v1 default fully
 //       functional via comment-form grep.
 //   (2) Composition expand (v4 → v3) algorithm pinned by Phase δ §4.3

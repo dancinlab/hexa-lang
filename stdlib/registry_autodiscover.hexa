@@ -12,7 +12,7 @@
 // writes a switch over canonical names; with autodiscover the enumeration
 // step is one stdlib call.
 //
-// raw 9 hexa-only — pure stdlib using `exec("ls ...")` for portability
+// hexa-only — pure stdlib using `exec("ls ...")` for portability
 // across BSD (Mac) and GNU (Linux). No find(1) flags depended on.
 //
 // API:
@@ -20,7 +20,7 @@
 //   registry_build_dispatch(dir, suffix)      -> map     // name → full path
 //   registry_filter_excluded(names, exclude)  -> [str]   // names \ exclude
 //
-// Limits (raw#10):
+// Limits (honest-caveat):
 //   1. Only direct children scanned. Subdirectories ignored — caller
 //      recurses if needed (anima rng intentionally flat).
 //   2. Symbolic links followed iff `ls` follows them on the host (BSD

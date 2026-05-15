@@ -74,7 +74,7 @@
 // stdlib/http2 are untouched — http_get_with_headers / http2_get
 // signatures and behavior preserved.
 //
-// ── HONEST C3 (raw#91) ──────────────────────────────────────────────
+// ── HONEST C3 (C3) ──────────────────────────────────────────────
 //   1. AOT-only streaming. The runtime exposes `exec_stream` and
 //      `exec_stream_async/poll/close` as native builtins, but they are
 //      currently registered only on the AOT/codegen lowering path
@@ -104,7 +104,7 @@
 //
 //   4. Handle-form line drain is best-effort: exec_stream_poll uses
 //      O_NONBLOCK fgets-like semantics with a 1MB per-slot line cap.
-//      Lines longer than 1MB are silently truncated (raw#91 ack).
+//      Lines longer than 1MB are silently truncated (ack).
 //      For SSE this is acceptable — `data: <token>` payloads are
 //      tens of bytes for chat tokens, kilobytes for full-message
 //      events; a 1MB SSE line indicates a misuse.
@@ -164,7 +164,7 @@
 //       }
 //   }
 //
-// raw#9 hexa-only-strict: pure hexa wrapper, exec_stream(curl ...)
+// hexa-only-strict: pure hexa wrapper, exec_stream(curl ...)
 //   shell-out — identical pattern to stdlib/http and stdlib/http2.
 
 // _sse_shell_escape — single-quote wrap with internal quote escape.

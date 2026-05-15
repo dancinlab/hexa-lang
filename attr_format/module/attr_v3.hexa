@@ -21,7 +21,7 @@
 //
 // IMPL STATUS: STUB-FROM-SPEC. Schema/contract surface only.
 //
-// raw#10:
+// honest-caveat:
 //   (1) parse() returns SPEC-PENDING — depends on v2 AST.
 //   (2) Schema definition syntax (`attr tool { ... }`) is itself v3
 //       grammar — depends on Phase β grammar ext.

@@ -193,5 +193,5 @@ A → B → C 는 "v2.0.0 빌드 직전" 까지 본 repo 가 자체적으로 닫
 
 - **(R1)** `~/core/canon/` canonical SSOT 수정 금지 — symlink 소스, repo 는 consumer
 - **(R2)** Empirical SSOT 미정 (v1.2.0 closed-form module land 시 fix)
-- **(R3)** Witness = raw 108 schema → registry append-only (sister hexa-bio 패턴)
+- **(R3)** Witness = honest-caveat8 schema → registry append-only (sister hexa-bio 패턴)
 - **(R4)** Negative-result (LK-99 등) 명시 등재 — silent drop 금지

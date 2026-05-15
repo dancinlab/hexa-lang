@@ -56,7 +56,7 @@
 //
 // Breaking risk: 0. New module, new symbols.
 //
-// Caveats (raw#91):
+// Caveats (C3):
 //   · websocat is NOT a default install on macOS or stock Linux. The
 //     python3 fallback covers most environments but is one-shot only
 //     (no streaming). For streaming workloads the operator must
@@ -73,7 +73,7 @@
 //     limit is python-int / hexa-string practical (a few MB).
 //   · Close opcode 0x8 sent on exit; close-code is hard-coded 1000 (Normal).
 //
-// raw#9 hexa-only-strict: hexa source emits the python helper inline
+// hexa-only-strict: hexa source emits the python helper inline
 // — no separate file shipped. Caller's filesystem stays clean
 // (proc_run_with_stdin's tempfile is /tmp + auto-unlinked).
 

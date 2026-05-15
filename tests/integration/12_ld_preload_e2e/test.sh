@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 12_ld_preload_e2e — Phase 11 LD_PRELOAD enforce smoke-test (raw#7 F5/F6 + raw#8/#9).
+# 12_ld_preload_e2e — Phase 11 LD_PRELOAD enforce smoke-test (OS-level F5/F6 + follow-up/#9).
 #
 # Verifies that hexa-runner image (production Dockerfile docker/runner/Dockerfile)
 # carries native_gate.so as LD_PRELOAD and the shim returns EPERM at the VFS
@@ -8,9 +8,9 @@
 # of busybox-static / hexa-cli static-musl bypass surfaces.
 #
 # Test matrix (6 cases):
-#   T1  raw#9/raw#8  /work/banned.py            → expect EPERM (errno=1)
-#   T2  raw#7 F5     /work/core/hexa-lang/foo/loner.txt    → expect EPERM
-#   T3  raw#7 F6     /work/core/hexa-lang/foo/foo.txt      → expect EPERM
+#   T1  hexa-only/follow-up  /work/banned.py            → expect EPERM (errno=1)
+#   T2  OS-level F5     /work/core/hexa-lang/foo/loner.txt    → expect EPERM
+#   T3  OS-level F6     /work/core/hexa-lang/foo/foo.txt      → expect EPERM
 #   T4  allowlist    /work/legitimate.txt       → expect OK
 #   T5  opt-out      CLAUDX_NO_SANDBOX=1 + .py  → expect OK
 #   T6  fopen("w")   /work/banned_fopen.py      → expect EPERM

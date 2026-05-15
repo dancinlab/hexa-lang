@@ -68,7 +68,7 @@ Potentially breaking for any existing source that contains a literal `\x` or `\u
   - UTF-8 round-trip for `é` ↔ `é`
   - Malformed `\xZZ` raises lex error
 
-## Falsifier (raw#71)
+## Falsifier (falsifier)
 
 INVALIDATED iff:
 1. `len("\x1b") == 1` AND `ord("\x1b"[0]) == 27` in both interpreter and AOT

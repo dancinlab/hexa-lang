@@ -63,7 +63,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # distroless runtime stage then COPY's just the .so (no toolchain bloat
 # in the shipped image) and ENV LD_PRELOAD activates it for every
 # containerized hexa invocation.  This is the actual enforcement layer
-# for raw#7 F5/F6 + raw#6 F4 + raw#8 file-naming + raw#13 git-hook-ban
+# for OS-level F5/F6 + F4 + follow-up file-naming + follow-up git-hook-ban
 # on Linux — macOS host stays advisory due to SIP per Mac→docker
 # hard-landing policy 2026-04-25.
 
@@ -227,13 +227,13 @@ COPY self/module_loader.hexa /usr/local/bin/self/module_loader.hexa
 COPY self/stdlib              /usr/local/bin/self/stdlib
 ENV HEXA_STDLIB_ROOT=/usr/local/bin/self/stdlib
 
-# ω-runner-7 (2026-04-26): native_gate.so + LD_PRELOAD (raw#7 OS enforce).
+# ω-runner-7 (2026-04-26): native_gate.so + LD_PRELOAD (OS-level OS enforce).
 # The .so was compiled in the builder stage from self/native/native_gate.c
 # matching this platform's TARGETARCH.  ENV LD_PRELOAD makes every process
 # spawned in the container — hexa CLI, tini-wrapped child, popen("sh -c …")
 # subshells via busybox — inherit the shim.  EPERM is returned at the VFS
-# syscall boundary for raw#7 F5/F6 + raw#6 F4 + raw#8 file-naming +
-# raw#13 git-hook-ban deny rules before any byte hits disk.  Per
+# syscall boundary for OS-level F5/F6 + F4 + follow-up file-naming +
+# follow-up git-hook-ban deny rules before any byte hits disk.  Per
 # Mac→docker hard-landing policy 2026-04-25 this is the *actual* enforcer
 # on darwin hosts (macOS SIP blocks DYLD_INSERT_LIBRARIES on signed bins,
 # so the host shim is advisory; Linux containers carry the real teeth).

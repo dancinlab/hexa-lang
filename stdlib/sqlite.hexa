@@ -25,7 +25,7 @@
 //     · Linux: `apt install sqlite3` / `dnf install sqlite` puts the same
 //       binary in PATH. The shared library is `libsqlite3.so` but we'd
 //       need a runtime.c-level dlopen path to call it — out-of-scope for
-//       a stdlib module (`raw#9 hexa-only-strict`).
+//       a stdlib module (`hexa-only-strict`).
 //     · Performance: sqlite3 CLI startup is ~2ms — negligible vs network
 //       I/O. For 1000-row inserts we batch into one `.dump`-style
 //       transaction (see _exec_script) so cost amortizes.

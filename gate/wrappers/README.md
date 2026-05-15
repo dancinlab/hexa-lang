@@ -30,7 +30,7 @@ The installer builds five binaries into `bin/` and drops a default
 | `AG_GATE_FORCE_LOCAL=1` | Force local execution; skip remote decision.           |
 | `AG_GATE_FORCE_REMOTE=1`| Force remote dispatch; local fallback only on failure. |
 | `AG_GATE_DEBUG=1`       | Verbose trace of the decide pipeline to stderr.        |
-| `CLAUDX_NO_SANDBOX=1`   | Related but different layer — disables `raw#8` write-  |
+| `CLAUDX_NO_SANDBOX=1`   | Related but different layer — disables `follow-up` write-  |
 |                         | block (sandbox-exec / LD_PRELOAD), not these wrappers. |
 
 ## Status
@@ -126,7 +126,7 @@ Typical fixes:
 
 Two enforcement layers, independent:
 
-- **raw#8 (write-block)** — `sandbox-exec` (macOS) + `LD_PRELOAD` (Linux).
+- **follow-up (write-block)** — `sandbox-exec` (macOS) + `LD_PRELOAD` (Linux).
   Governed by `CLAUDX_NO_SANDBOX`. Not affected by anything in this dir.
 - **compute-routing** — these wrappers. Governed by `CLAUDX_NO_WRAPPER` and
   the `AG_GATE_*` knobs above.

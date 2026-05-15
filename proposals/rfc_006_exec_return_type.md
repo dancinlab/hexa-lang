@@ -6,7 +6,7 @@
 - **Priority**: P2 (was P1; lowered after correction — implementation cost dropped from ~90 LoC new builtins to lint+docs only)
 - **Source convergence**: convergence/hexa_lang_upstream_2026_04_28_anima_eeg_gaps.convergence (6th gap, surfaced during anima-eeg B11 eeg_setup unified menu work)
 
-## Correction Notice (raw#91 C3 — honest disclosure)
+## Correction Notice (hexa-only1 C3 — honest disclosure)
 
 **Original RFC (2026-04-28 commit 2cb2b95c) PROPOSED 3 NEW BUILTINS** — `exec_capture(cmd) -> string`, `exec_status(cmd) -> int`, `exec_both(cmd) -> (int, string)`.
 
@@ -22,7 +22,7 @@
 
 Live evidence — `exec_with_status` is already in production use across **9 anima-eeg helpers** (calibrate.hexa:340, eeg_recorder.hexa:367, experiment.hexa:416, collect.hexa:316, realtime.hexa:414, eeg_brainflow_sanity.hexa:282, eeg_ftdi_latency_fix.hexa:270, etc.) and inside hexa-lang itself (self/main.hexa:1700, 1966 for AOT preprocessor invocation).
 
-**Reason the original RFC missed this**: the author audited the user-facing `exec()` surface and the recently-added `exec_stream()` but did not search the runtime.c symbol table for `hexa_exec_*` companions. raw#91 C3: this is a research-discipline failure, disclosed and corrected here rather than silently rewriting history.
+**Reason the original RFC missed this**: the author audited the user-facing `exec()` surface and the recently-added `exec_stream()` but did not search the runtime.c symbol table for `hexa_exec_*` companions. hexa-only1 C3: this is a research-discipline failure, disclosed and corrected here rather than silently rewriting history.
 
 **RFC scope therefore narrows from "add 3 new APIs" to "prevent mis-use of the existing 3-API surface via lint + docs"**. See Proposed Change below.
 
@@ -101,7 +101,7 @@ Strictly additive. No breaking change. No new builtins. No runtime.c modificatio
 | **TOTAL** | **~90 LoC** | **~70 LoC** |
 | **Hours** | 4-6h | **2-3h** |
 
-## Falsifier (raw#71) — UPDATED
+## Falsifier (falsifier) — UPDATED
 
 INVALIDATED iff:
 1. Lint emits a warning for every `exec(cmd) == 0` / `exec(cmd) != 0` / `exec(cmd) == N` pattern in the anima-eeg + hexa-lang corpus.
@@ -125,12 +125,12 @@ INVALIDATED iff:
 
 Placeholder ID: `hexa-lang/issues/TBD-g6-exec-return-type-lint-and-docs` (renamed from `-semantics` after correction).
 
-## Honesty Disclosure (raw#91 C3)
+## Honesty Disclosure (hexa-only1 C3)
 
 **Original RFC research gap**: I proposed adding `exec_status` / `exec_capture` / `exec_both` as new builtins without searching the runtime.c symbol table; had I done so, I would have found `hexa_exec_with_status` (runtime.c:3235), `hexa_exec_stream` (runtime.c:3182), and `hexa_exec_capture` (runtime.c:6373) — all 3 of the proposed builtins already exist (one with a different name: `exec_with_status` instead of `exec_both`; another with extra capability: `exec_capture` returns 3-tuple [out, err, rc] not 2-tuple).
 
 **Live-use evidence I missed**: 9 anima-eeg helpers were already calling `exec_with_status` correctly at the time the original RFC was written. The pattern `let r = exec_with_status(cmd); if r[1] == 0 { ... }` is in production. The only thing missing is **discoverability** (no doc cheat-sheet, no lint to redirect users from `exec(cmd) == 0`).
 
-**Why the correction is being filed as an in-place RFC rewrite, not a "supersedes" RFC**: the original RFC document landed 30 minutes ago; no downstream consumer has acted on it yet. raw#10 honest-disclosure: rewrite + correction-notice block at top is more truthful than leaving misleading content in proposals/. Original commit 2cb2b95c remains in git history for audit.
+**Why the correction is being filed as an in-place RFC rewrite, not a "supersedes" RFC**: the original RFC document landed 30 minutes ago; no downstream consumer has acted on it yet. honest-caveat honest-disclosure: rewrite + correction-notice block at top is more truthful than leaving misleading content in proposals/. Original commit 2cb2b95c remains in git history for audit.
 
-**Cross-link**: raw#91 C3 retraction filed; this RFC supersedes the original "add 3 builtins" framing. Convergence file gap 6 entry will be updated to match.
+**Cross-link**: hexa-only1 C3 retraction filed; this RFC supersedes the original "add 3 builtins" framing. Convergence file gap 6 entry will be updated to match.

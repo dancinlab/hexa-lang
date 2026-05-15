@@ -9,9 +9,9 @@ loop. Today the only built-in is `find(needle)` which always returns the
 first match index — which is the wrong semantics whenever the prefix
 already contains the needle character.
 
-**Anchor**: hive raw 147 (`prefix-aware-find-mandate`, NEW 2026-04-28,
+**Anchor**: hive magic-number7 (`prefix-aware-find-mandate`, NEW 2026-04-28,
 severity warn).
-**Workaround pattern label**: `find_after` (raw 159 NARROW lint matrix row 2).
+**Workaround pattern label**: `find_after` (no-hardcode9 NARROW lint matrix row 2).
 **Signal kind**: stdlib-gap.
 **Severity to request**: medium — small stdlib addition, broad
 bug-class retirement; aligns with the `starts_with` proposal.
@@ -105,12 +105,12 @@ if starts_with(line, "# tree:") {
 Same argument as `starts_with`: every repo invents this independently the
 moment they touch a colon-separated, space-separated, or comment-prefixed
 format. A 10-LoC stdlib helper retires the bug class globally and lets
-the raw 159 lint's P3 (`find_after-emul`) detector fire on regressions
+the no-hardcode9 lint's P3 (`find_after-emul`) detector fire on regressions
 instead of expected code.
 
 ## Companion lint
 
-After this lands, the AST lint described in raw 147 — "flag `find(...)`
+After this lands, the AST lint described in magic-number7 — "flag `find(...)`
 immediately followed by `substring(...)` where the substring start
 implies prefix-skip intent" — becomes mechanically actionable: every flag
 has a one-line rewrite to `find_after`, instead of a per-site
@@ -120,14 +120,14 @@ has a one-line rewrite to `find_after`, instead of a per-site
 
 - Drop-in replacement for the most common bug shape (`find(x)` followed by
   `substring(idx + len(x), ...)` with prefix > 0).
-- The raw 159 lint's P3 row will start firing on remaining hand-rolls,
+- The no-hardcode9 lint's P3 row will start firing on remaining hand-rolls,
   driving them to zero.
 - Raw 147's `prefix-aware-find-mandate` is satisfied at the language
   level — no need for project-specific lint rules.
 
 ## Evidence anchors
 
-- hive `.raw` L4899-4944 — raw 147 registration.
+- hive baseline L4899-4944 — magic-number7 registration.
 - `/Users/ghost/core/anima/docs/hxc_phase8_closure_20260428.md` — Phase 8
   P8 root cause + concrete bug (Bug 4).
 - `/Users/ghost/core/hive/tool/raw159_upstream_lint_minimal.hexa` — P3

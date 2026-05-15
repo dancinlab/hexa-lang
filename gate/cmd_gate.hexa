@@ -12,7 +12,7 @@
 //   훅 없이 cmd_gate 단일 디스패처로 강제됨.
 
 let HOME_PATH = env("HOME")
-// hexa_home 해소 — env-driven (raw 44 docker hard-landing 동반)
+// hexa_home 해소 — env-driven (docker hard-landing 동반)
 fn _resolve_hexa_home() -> str {
     let hh = env("HEXA_HOME")
     if hh.len() > 0 { return hh }

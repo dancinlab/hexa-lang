@@ -22,7 +22,7 @@ if exec("some-command") == 0 {
 - The bug is observed only when the success branch has a visible UI/state change that doesn't happen.
 - Class: silent-wrong correctness bug. Same severity class as RFC-005 (AOT slice equality silent-fail).
 
-## Live-fire evidence (raw#159 concrete-evidence preference)
+## Live-fire evidence (no-hardcode9 concrete-evidence preference)
 
 anima-eeg B11 audit (2026-04-28) flagged **9 BUG-class instances** of this pattern across helper modules (calibrate.hexa, eeg_recorder.hexa, experiment.hexa, etc.). All were patched to the correct form `let r = exec_with_status(cmd); if r[1] == 0 { ... }` after the audit caught them — but a hexa-level lint would have caught them at parse time.
 
@@ -82,7 +82,7 @@ Optional follow-up: promote warning to error after one cycle of dogfood + fix-up
   - Negative cases (must NOT fire): `let body = exec("ls")` (string usage), `exec_with_status(cmd)[1] == 0` (correct form)
 - **Total**: ~40 LoC, **1-2h**
 
-## Falsifier (raw#71)
+## Falsifier (falsifier)
 
 INVALIDATED iff:
 1. Lint fires on every positive test case (3+ patterns above).
@@ -109,9 +109,9 @@ Placeholder ID: `hexa-lang/issues/TBD-g6b-exec-eq-int-lint-rule`
 ## Cross-references
 
 - RFC-006 (revised): the documentation + decision-tree counterpart to this lint. Both should land together; doc tells users which API to use, lint catches the cases they got wrong.
-- raw#159 hexa-lang upstream-proposal-mandate: this RFC is direct downstream of an in-the-wild correctness bug found across 9 production hexa files.
+- no-hardcode9 hexa-lang upstream-proposal-mandate: this RFC is direct downstream of an in-the-wild correctness bug found across 9 production hexa files.
 
-## Honesty Disclosure (raw#91 C3)
+## Honesty Disclosure (hexa-only1 C3)
 
 This RFC was split out from RFC-006 after RFC-006's original "add 3 new builtins" framing was retracted (the proposed builtins already exist). The lint rule is the most actionable, smallest-surface deliverable from the original RFC and benefits from standing as its own document — independent priority (P1, vs RFC-006's P2 for docs), independent landing, independent falsifier.
 

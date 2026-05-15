@@ -30,7 +30,7 @@
 // Breaking risk: 0. New module, new symbols. stdlib/http and
 // stdlib/net/http_client remain canonical for HTTP/1.1 paths.
 //
-// Caveats (raw#91):
+// Caveats (C3):
 //   · curl is a hard dependency (same as stdlib/http). The build MUST
 //     have nghttp2 linked; on macOS BSD curl 7.50+ this is default
 //     (`curl --version | grep -i http2`). On airgap Alpine the package
@@ -60,7 +60,7 @@
 //     so this is implicit. Older curl on RHEL 7 may negotiate 1.0/1.1
 //     and silently fall back to HTTP/1.1.
 //
-// raw#9 hexa-only-strict: pure hexa wrapper, exec("curl ...") shell-out.
+// hexa-only-strict: pure hexa wrapper, exec("curl ...") shell-out.
 
 use "stdlib/proc"
 

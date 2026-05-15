@@ -3,7 +3,7 @@
 // @version 0.1.0
 // @capabilities [fs_write]
 //
-//  stdlib/cert/writer.hexa — canonical raw#10 proof-carrying JSON writer
+//  stdlib/cert/writer.hexa — canonical proof-carrying JSON writer
 //
 //  Output schema (stdlib.cert.v1):
 //    {
@@ -56,7 +56,7 @@ fn _cert_shell_escape(s) {
     return out
 }
 
-// Write a canonical raw#10 JSON result. `extra` is a caller-supplied
+// Write a canonical canonical JSON result. `extra` is a caller-supplied
 // string (usually "" or a pre-rendered JSON fragment) appended into the
 // "extra" field verbatim.
 pub fn write_result(path, schema, gate, selftest_pass, extra) {

@@ -46,7 +46,7 @@
 //     sleep), the golden covers a deterministic sub-helper (parser, escape,
 //     dtype-table) — see fixtures/<module>/golden_*.json `notes` field.
 //
-// raw#9 hexa-only-strict: pure hexa, zero exec(), zero new C builtin.
+// hexa-only-strict: pure hexa, zero exec(), zero new C builtin.
 // Built on runtime json_parse + json_stringify + read_file.
 
 use "stdlib/json"

@@ -20,7 +20,7 @@
 // or hand-rolls a regex/line-scan helper. This stdlib centralizes the
 // parser so AI agents (and lint tools) can rely on identical semantics.
 //
-// raw 9 hexa-only — no python/awk delegation. Pure stdlib.
+// hexa-only — no python/awk delegation. Pure stdlib.
 //
 // API:
 //   yaml_frontmatter_extract(text)       -> str   // body between --- markers, "" if absent
@@ -29,7 +29,7 @@
 //   yaml_validate_keys(m, required)      -> [str] // missing keys ([] = OK)
 //   yaml_strip_frontmatter(text)         -> str   // body with frontmatter removed (post-parse use)
 //
-// Limits (raw#10):
+// Limits (honest-caveat):
 //   1. Nested YAML rejected. Lines indented past `key:` collapse to the
 //      raw remainder string of the parent key — value is `""` for nested
 //      maps. Caller must treat such keys as opaque blobs.
@@ -138,7 +138,7 @@ fn _yaml_unquote(v: string) -> string {
 // Parse a flat YAML text (no nesting) into a `key -> string` map.
 // Lines that begin with whitespace + `-` (list items) are dropped; nested
 // children of a parent key are dropped (parent value becomes "" by the
-// time we reach the next top-level key). See raw#10 limit (1).
+// time we reach the next top-level key). See honest-caveat limit (1).
 pub fn yaml_parse_flat(text: string) -> map {
     let result = #{}
     if len(text) == 0 { return result }
@@ -159,7 +159,7 @@ pub fn yaml_parse_flat(text: string) -> map {
 
         // Indented child line — only top-level keys are flat-parsed.
         // raw_line begins with whitespace? skip (treat as nested under
-        // most-recent top-level key, which we drop per raw#10 limit 1).
+        // most-recent top-level key, which we drop per honest-caveat limit 1).
         let first_char = raw_line.substring(0, 1)
         if first_char == " " || first_char == "\t" {
             continue

@@ -10,7 +10,7 @@ ssot:
 preserved_unchanged:
   parser:     hexa-lang/self/parser.hexa            # per-attr inline switch lines 591-865
   catalog:    hexa-lang/self/attrs/attrs.json       # 24-attr catalog SSOT
-  lint_v1:    hive/tool/attr_usage_lint.hexa        # raw 3 ai-native 24 attr coverage
+  lint_v1:    hive/tool/attr_usage_lint.hexa        # attr-usage ai-native 24 attr coverage
   lint_ai:    hexa-lang/tool/ai_native_lint.hexa    # ai-native lint
   scan_ai:    hexa-lang/tool/ai_native_scan.hexa    # file/dir naming hygiene
 spec_cross_link:
@@ -198,7 +198,7 @@ Per-version wiring hint:
 - **v3 typed params** (`attr_v3.hexa`): introduce `attr <name> { key: type required/optional }` schema syntax; 6 builtin schemas pre-pinned. Phase β §5 spec.
 - **v4 composition** (`attr_v4.hexa`): introduce `@module { ... }` group attr; AST transform group → individual; migration tool `hexa migrate attr-stack-to-group`. Phase δ §4 spec.
 
-## raw#10 caveats (read before relying)
+## honest-caveat caveats (read before relying)
 
 1. **v2/v3/v4 parse() returns SPEC-PENDING** — cannot call as if functional. Check `r.ok` and dispatch on `meta.status == "WRAPPED"` first.
 2. **v1 catalog list is duplicated** in `attr_format_catalog_v1()`, `attr_format_registry_catalog("v1")`, `_v1_catalog()` (in main aggregator), and `attr_usage_lint.hexa:KNOWN_ATTRS`. SSOT is `attrs.json`. Any divergence = build break (lint should catch).
@@ -206,7 +206,7 @@ Per-version wiring hint:
 4. **Composition expand (v4 → v3 lower) algorithm is pinned by Phase δ §4.3 but not impl-verified**. Round-trip property (parse → expand → emit → parse stable) is required at impl time but currently untestable.
 5. **`hexa-lang/config/attr_format_sources.json` is tracked** (unlike `anima/config/rng_sources.json` which is gitignored). Changes to this file = governance event.
 6. **The 5 preserved files (parser.hexa, attrs.json, attr_usage_lint.hexa, ai_native_lint.hexa, ai_native_scan.hexa) are NOT migrated** — they remain SSOT for their respective concerns. This abstraction wraps them; migration to the router is opt-in per consumer.
-7. **`exec("printenv X")` is used for env override resolution** — same env-visibility quirk as `anima/core/rng/router.hexa` (raw#10 §7) may apply in some shell contexts. Direct module dispatch always works.
+7. **`exec("printenv X")` is used for env override resolution** — same env-visibility quirk as `anima/core/rng/router.hexa` (honest-caveat §7) may apply in some shell contexts. Direct module dispatch always works.
 8. **v1 mode heuristic (`if i < 8 { "file" } else { "decl" }`) is approximate** — real boundary depends on the first non-attr / non-comment statement. v2 AST will have proper placement detection.
 9. **Spec link drift** — Phase β/δ specs may change line numbers; `spec_doc` field uses `#L1` / `#L10` / `#L12` anchors that should remain stable. If a spec is restructured, update both the meta and the registry.
 10. **Mac-local strict** — all selftests run via `hexa` resolver darwin-bypass; no GPU / heavy compute.
@@ -244,7 +244,7 @@ shas at land time. After any edit, re-pin via `shasum -a 256` and update this ta
 
 ## Cross-link to sister Levels
 
-- **Level 0 (prototype)**: `anima/anima/{core,modules}/rng/` — 6-source RNG abstraction (raw 270/271/272/273 conformant).
+- **Level 0 (prototype)**: `anima/anima/{core,modules}/rng/` — 6-source RNG abstraction (RNG abstraction conformant).
 - **Level 1 (raw)**: `BG-raw-format` — raw evolution wrapper (in flight).
 - **Level 2 (hxc)**: `BG-hxc-format` — hxc evolution wrapper (in flight).
 - **Level 3a (grammar)**: `hexa-lang/{core,modules}/grammar_format/` — grammar evolution wrapper (in flight by sister BG).

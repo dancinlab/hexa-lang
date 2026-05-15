@@ -135,7 +135,7 @@ OUT OF SCOPE for v1; tracked as future extension.
 
 **Total estimated impl scope**: ~470 LoC across 5 files.
 
-## §5 Falsifiers (raw#71)
+## §5 Falsifiers (falsifier)
 
 1. After `parallel { let a = f1(); let b = f2() }`, reading `a` or `b` returns wrong
    value (e.g. uninitialized) → fail (join barrier broken).
@@ -153,7 +153,7 @@ See `proposals/composability_a1_a5_b2_b5/fixtures/a5_parallel_block.hexa` —
 6 cases covering join barrier, scope hoisting, sequential degradation, worker pool
 init, side-effect non-determinism (within), determinism (across).
 
-## §7 raw#10 caveats
+## §7 honest-caveat caveats
 
 1. Worker pool is **per-process** — multiple `parallel { }` blocks in one program
    share one pool. Nested `parallel { parallel { ... } }` is allowed but inner block

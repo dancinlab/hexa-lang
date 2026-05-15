@@ -163,7 +163,7 @@ implementation can be a regular fn, attr is sugar.
 
 **Total estimated impl scope**: ~455 LoC across 4 files.
 
-## §5 Falsifiers (raw#71)
+## §5 Falsifiers (falsifier)
 
 1. `@selftest(cases=2)` fn calls `selftest_case(...)` once → aggregator must FAIL
    with "case count mismatch: declared 2, observed 1".
@@ -184,7 +184,7 @@ See `proposals/composability_a1_a5_b2_b5/fixtures/b5_selftest_contract.hexa` —
 pass, byte-identical fail (negative), max_ms warn, max_ms fail, sentinel emit (B2
 composition), aggregator empty-module, aggregator multi-fn.
 
-## §7 raw#10 caveats
+## §7 honest-caveat caveats
 
 1. Static case count requires parser to count `selftest_case(...)` calls — if the
    call is dynamic (`if cond { selftest_case(...) }`), static count is approximate
@@ -194,7 +194,7 @@ composition), aggregator empty-module, aggregator multi-fn.
    pinpoint the offending line; debugging that is on the author.
 3. Sub-process re-run for byte-identical doubles wall-time of the selftest. Aggregator
    should report "selftest took 200ms (×2 = 400ms wall)" so authors aren't surprised.
-4. `cost_usd` field is for AI-native ledger scraping (raw 270/271/272/273) — actual
+4. `cost_usd` field is for AI-native ledger scraping (follow-up/271/272/273) — actual
    cost tracking is out-of-scope for this RFC; field is forward-compat metadata.
 5. Aggregator is per-module by default; cross-module aggregation is a sister RFC
    (deferred). v1: each module runs its own aggregator; CI calls each in turn.

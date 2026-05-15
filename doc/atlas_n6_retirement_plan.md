@@ -168,7 +168,7 @@ makes any further automated absorption unsafe:
    header and body (resets parser state). Encoded into shard emit format.
 
 2. **Continuation-line corruption** (worse): when parser DOES return a
-   node, the `.raw` is mangled — odd-indexed continuation lines
+   node, the baseline is mangled — odd-indexed continuation lines
    duplicate, even-indexed drop. Dogfood input of 5 continuation lines
    (`<-`, `->`, `=>`, `==`, `|>`) parsed to 6 lines with `->` and `==`
    dropped, the others doubled.
@@ -195,7 +195,7 @@ the same buggy interp. **Node counts and the file digest are correct**
 (parser handles node-boundaries fine — only continuation accumulation
 drifts), but the `raw` field of every multi-line P/C/L/E node has the
 duplicate/drop pattern in its continuation lines. Smoke `hash` / `stats`
-PASS because they don't inspect `.raw` semantics. Downstream consumers
+PASS because they don't inspect baseline semantics. Downstream consumers
 that only need `(kind, id, [11*]-tier, source_file)` are unaffected;
 consumers that read `raw` for the `<-` / `->` / `==` / `|>` body
 relations get corrupted data.

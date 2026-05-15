@@ -72,8 +72,8 @@ fn _guard_noname_v_match(s: str) -> str {
 // R1 HEXA-FIRST / L0 / R28 / R29 / R34 / H-NOARCHIVE / H-NONAME-V / H-NOHOOK / H-SESSION-LOCK
 // ═══════════════════════════════════════════════════════════
 
-// R1 HEXA-FIRST: .py/.rs/.sh/.toml 신규 파일 차단 (raw#9 hexa-only)
-// raw#66 ai-native enrichment: hive sandbox_deny_enrich 로 cause+remedy 유도.
+// R1 HEXA-FIRST: .py/.rs/.sh/.toml 신규 파일 차단 (hexa-only)
+// ai-native enrichment: hive sandbox_deny_enrich 로 cause+remedy 유도.
 // SSOT: /Users/ghost/core/hive/tool/sandbox_deny_enrich.hexa _fix_candidates("hexa-only-suffix")
 // 본 hook 은 OS-level EPERM 발생 전에 미리 차단 + 동일한 ai-native 메시지 emit.
 fn check_forbidden_ext(tool: str, file_path: str) -> str {
@@ -85,7 +85,7 @@ fn check_forbidden_ext(tool: str, file_path: str) -> str {
     if exists == "y" { return "" }
 
     // Bare fallback — emitted if enricher / hexa / jq missing.
-    let bare = "REJECT: " + file_path + " — .py/.rs/.sh/.toml 신규 작성 금지 (HEXA-FIRST R1, raw#9). .hexa wrapper 로 작성 (runtime emit → /tmp/<stem>_helper.<ext> + exec)."
+    let bare = "REJECT: " + file_path + " — .py/.rs/.sh/.toml 신규 작성 금지 (HEXA-FIRST R1). .hexa wrapper 로 작성 (runtime emit → /tmp/<stem>_helper.<ext> + exec)."
 
     let enricher = HOME + "/core/hive/tool/sandbox_deny_enrich.hexa"
     let have_enricher = to_string(exec("test -f '" + enricher + "' && echo y || echo n")).trim()  // @allow-bare-exec
@@ -105,7 +105,7 @@ fn check_forbidden_ext(tool: str, file_path: str) -> str {
     let _ = exec("rm -f '" + tmp + "'")  // @allow-bare-exec
     if reason.len() == 0 { return bare }
 
-    let mut out = "REJECT: " + file_path + " — raw#9 hexa-only-suffix (HEXA-FIRST R1) ‖ cause: " + reason + " ‖ remedy:"
+    let mut out = "REJECT: " + file_path + " — hexa-only-suffix (HEXA-FIRST R1) ‖ cause: " + reason + " ‖ remedy:"
     let lines = fixes_raw.split("\n")
     let mut i = 0
     for ln in lines {
@@ -977,7 +977,7 @@ fn _proj_entry_allowlist() -> str {
 
     // hexa-lang 은 토글 gating — hive raw.hexa_lang_improvement (defaultOn=false).
     // hive runtime 이 toggle ON 시 HIVE_HEXA_LANG_IMPROVEMENT=1 전파.
-    // 미전파 / 토글 OFF 시 hexa-lang 진입 차단 (raw 91 honest reporting:
+    // 미전파 / 토글 OFF 시 hexa-lang 진입 차단 (honest reporting:
     // edit 대신 follow-up note 로 보고).
     if env("HIVE_HEXA_LANG_IMPROVEMENT") == "1" { lst = "hexa-lang," + lst }
 

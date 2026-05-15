@@ -18,7 +18,7 @@ Filename-driven enumeration of `<dir>/*.<suffix>` modules, producing a name → 
 - `registry_scan_dir(dir, ".hexa")` — basenames stripped of suffix; `[]` on missing dir.
 - `registry_build_dispatch(dir, ".hexa")` — `name -> "dir/name.hexa"` map.
 - `registry_filter_excluded(names, [exclude...])` — set difference.
-- Stage0 hexa lacks fn-pointers → autodiscover trims **enumeration boilerplate**, not the inlined collect dispatch (raw#10 limit 1).
+- Stage0 hexa lacks fn-pointers → autodiscover trims **enumeration boilerplate**, not the inlined collect dispatch (honest-caveat limit 1).
 
 ## API surface
 
@@ -48,7 +48,7 @@ pub fn registry_filter_excluded(names: [string], exclude: [string]) -> [string]
 | Dotfile (`.hidden.hexa`) | dropped (leading-dot filter) |
 | `README.ai.md` (no `.hexa` suffix) | excluded by suffix filter |
 | Subdirectory with `.hexa` files | NOT recursed (flat-only) |
-| Filename containing `\n` | breaks `ls` line-split (raw#10 limit 3) |
+| Filename containing `\n` | breaks `ls` line-split (honest-caveat limit 3) |
 | Trailing slash on dir | path joined without doubled `/` |
 
 ## Caveats (full list in marker)
@@ -72,7 +72,7 @@ pub fn registry_filter_excluded(names: [string], exclude: [string]) -> [string]
 | struct + helpers (sha/hex) | 89 | 89 (unchanged) | 0 |
 | **Total** | **339** | **~316** | **-23 (~7%)** |
 
-raw#10: full 1/3 LOC reduction (target ~110 LOC) requires Stage1 hexa fn-pointer / dyn-call — not in scope for Phase α.
+honest-caveat: full 1/3 LOC reduction (target ~110 LOC) requires Stage1 hexa fn-pointer / dyn-call — not in scope for Phase α.
 
 ## Selftest
 

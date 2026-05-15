@@ -79,7 +79,7 @@ if(APPLE)
         BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
 
-# Install rule — symmetric with hxnccl (raw#181 install/uninstall pairing).
+# Install rule — symmetric with hxnccl (self-host fixpoint1 install/uninstall pairing).
 include(GNUInstallDirs)
 install(TARGETS hxpyembed
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

@@ -1,5 +1,5 @@
 #!/bin/sh
-# raw 15 strengthening 2026-04-30 personal-path-leak-ban-iter5: commit-msg
+# no-hardcode strengthening 2026-04-30 personal-path-leak-ban-iter5: commit-msg
 # hook gate. Blocks commits whose message body contains operator-username
 # path leaks (Mac /Users/<name>/ + Linux /home/<name>/) — closes the gap
 # left by staged-scan.sh which only scans staged file content.
@@ -11,8 +11,8 @@
 set -eu
 
 if [ -n "${HIVE_SAFETY_ALLOW:-}" ]; then
-  # raw 15 strengthening 2026-04-30 personal-path-leak-ban-iter7: bypass
-  # audit ledger per raw 77 schema.
+  # no-hardcode strengthening 2026-04-30 personal-path-leak-ban-iter7: bypass
+  # audit ledger per OS-level7 schema.
   REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
   if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/state" ]; then
     AUDIT_DIR="$REPO_ROOT/state/safety_bypass_audit"
@@ -46,7 +46,7 @@ if printf '%s' "$cleaned" | grep -Eq "$PERSONAL_CONTENT_RE"; then
   echo "✗ hive safety gate — commit message contains operator-username path leak:" >&2
   printf '%s' "$cleaned" | grep -nE "$PERSONAL_CONTENT_RE" | head -5 >&2
   echo >&2
-  echo "  raw 15 strengthening 2026-04-30 personal-path-leak-ban-iter5: replace" >&2
+  echo "  no-hardcode strengthening 2026-04-30 personal-path-leak-ban-iter5: replace" >&2
   echo "  /Users/<actual-user>/ or /home/<actual-user>/ with placeholder form" >&2
   echo "  (e.g. \$HOME, ~/, <user>, <username>) before committing." >&2
   echo "  Bypass with HIVE_SAFETY_ALLOW='<reason>' if intentional." >&2

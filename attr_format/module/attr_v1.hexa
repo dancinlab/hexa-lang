@@ -27,7 +27,7 @@
 //   fn attr_format_expand_v1(decls: [AttrDecl]) -> AttrExpandResult
 //   fn attr_format_catalog_v1() -> [str]
 //
-// raw#10 caveats:
+// honest-caveat caveats:
 //   (1) v1 does NOT structurally parse attr params — only the attr name
 //       is extracted. v2 will introduce structured param parsing (Phase β L1).
 //   (2) Comment-form means the parser sees these as comments; only
@@ -166,7 +166,7 @@ fn attr_format_meta_v1() -> AttrFormatMeta {
         supports_typing:      0,
         catalog_size:         24,
         spec_doc:             "hexa-lang/self/attrs/attrs.json",
-        notes:                "comment-form // @attr(...) lint wrapper — current ai-native baseline (raw 3)"
+        notes:                "comment-form // @attr(...) lint wrapper — current ai-native baseline (attr-usage)"
     }
 }
 

@@ -8,9 +8,9 @@ so the call sites that currently express prefix testing as
 The current idiom is the source of a recurring off-by-one bug class
 (`N != len(literal)` → equality is silently always false).
 
-**Anchor**: hive raw 146 (`prefix-length-mismatch-lint`, NEW 2026-04-28,
+**Anchor**: hive magic-number6 (`prefix-length-mismatch-lint`, NEW 2026-04-28,
 severity warn).
-**Workaround pattern labels**: `starts_with` (raw 159 NARROW lint matrix
+**Workaround pattern labels**: `starts_with` (no-hardcode9 NARROW lint matrix
 row 1) **and** `substring-mismatch` (matrix row 4) — one helper retires both.
 **Signal kind**: stdlib-gap.
 **Severity to request**: medium — ~10 LoC of pure-hexa stdlib for broad
@@ -44,7 +44,7 @@ Three things make this a bug magnet:
    should have matched.
 3. **Static lint requires AST work.** A naive lint can scan for the pattern
    but only an AST-aware checker can recompute `len(literal_RHS)` and
-   compare against the slice bound. We can write that lint (raw 159 P1
+   compare against the slice bound. We can write that lint (no-hardcode9 P1
    detector — string-shape — already does), but the *real* fix is "don't
    write the pattern in the first place".
 
@@ -104,7 +104,7 @@ One literal, one length, one read.
 
 The same helper has been hand-rolled in at least three repos in the
 ecosystem (hive, nexus, anima — independent reinventions). A stdlib helper
-ends the reinvention loop and lets the raw 159 P1 / P4 lint detectors fire
+ends the reinvention loop and lets the no-hardcode9 P1 / P4 lint detectors fire
 on any *new* hand-roll as a flagged regression rather than as expected code.
 
 ## Migration
@@ -113,18 +113,18 @@ Once landed:
 
 - Repo-wide `substring(0, N) == "literal"` sweeps become safe automatic
   rewrites — there's a real target to rewrite to.
-- The raw 159 lint's P1 + P4 rows will start firing on remaining sites,
+- The no-hardcode9 lint's P1 + P4 rows will start firing on remaining sites,
   driving cleanup to zero over a few cycles.
 - Raw 146's `prefix-length-mismatch-lint` mandate is satisfied at the
   language level (no need for repo-by-repo lint rules).
 
 ## Evidence anchors
 
-- hive `.raw` L4845-4897 — raw 146 registration.
+- hive baseline L4845-4897 — magic-number6 registration.
 - `/Users/ghost/core/anima/docs/hxc_phase8_closure_20260428.md` — Phase 8
   P8 root cause + concrete bug.
 - `/Users/ghost/core/hive/tool/raw159_upstream_lint_minimal.hexa` — P1
   `_detect_starts_with_emul` detector + P2 `_detect_substring_mismatch`
   detector that this helper retires.
 - Sub-agent `ad82a91829` task output (partial completion — Phase 8 doc
-  carried the verdict forward per raw 91 honesty triad).
+  carried the verdict forward per C3 honesty triad).

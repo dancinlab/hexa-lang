@@ -49,7 +49,7 @@ falsifiers:
       - markdown_prose:   "*.md (documentation; not executable)"
       - lint_internals:   "tool/lint_macho_gate*.hexa, tool/wrappers/* (the gate itself)"
       - test_fixtures:    "test/, _spec_runner_selftest_fixtures/, _bench_runner_selftest_fixtures/"
-      - cache_dirs:       ".hexa-cache/, .raw-cache/, .hook-commands/, .meta2-cert/, .l5-discovery/"
+      - cache_dirs:       ".hexa-cache/, .hook-commands/, .meta2-cert/"
     severity: warn
     block_phase: C
 

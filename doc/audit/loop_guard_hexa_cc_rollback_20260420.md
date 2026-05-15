@@ -13,10 +13,10 @@ Paired with `project_hexa_v2_circular_rebuild_20260417.md` (ROI #152): the on-di
 
 ### 1. "loop-guard" does not exist as a C-rewriter
 
-- `tool/loop_lint.hexa` is the only `*loop*.hexa` in tool/. It validates `.loop` SSOT (raw#16 recurring-task registry — interval/cmd/why keys). It neither reads nor writes `*.c` files. Confirmed by grep on the full file (217 LOC, pure string validation + exit).
+- `tool/loop_lint.hexa` is the only `*loop*.hexa` in tool/. It validates `.loop` SSOT (follow-up recurring-task registry — interval/cmd/why keys). It neither reads nor writes `*.c` files. Confirmed by grep on the full file (217 LOC, pure string validation + exit).
 - No `tool/loop_guard.hexa` exists. No `*guard*.hexa` exists in tool/.
 - No shell script references `hexa_cc.c`. No pre-commit hook installed (`.git/hooks/` only has `.sample` files).
-- No launchd agent touches hexa_cc.c: `com.hexa-lang.relock.plist` runs `relock_daemon.hexa` (raw#1 P0d relock watcher — no C I/O); `io.hexa.watchd` also has zero `hexa_cc` references.
+- No launchd agent touches hexa_cc.c: `com.hexa-lang.relock.plist` runs `relock_daemon.hexa` (follow-up P0d relock watcher — no C I/O); `io.hexa.watchd` also has zero `hexa_cc` references.
 - Only 5 tool/ `*.hexa` files reference `hexa_cc.c` by name: `rebuild_stage0.hexa`, `build_stage0.hexa`, `build_hexa_v2_linux.hexa`, `cross_compile_linux.hexa`, `check_ssot_sync.hexa`. None is a "lint --fix" that rewrites the file; they only **build from** or **hash** it.
 
 ### 2. Current hexa_cc.c state = post-fix
@@ -66,5 +66,5 @@ The `seed_freeze` memory note (`feedback_seed_freeze.md`) was written **during**
 - /Users/ghost/Dev/hexa-lang/tool/rebuild_stage0.hexa (build-from, not rewrite)
 - /Users/ghost/Dev/hexa-lang/tool/relock_daemon.hexa (no `hexa_cc` hits)
 - /Users/ghost/Dev/hexa-lang/tool/watchd.hexa (no `hexa_cc` hits)
-- /Users/ghost/Dev/hexa-lang/launchd/com.hexa-lang.relock.plist (raw#1 relock watcher, unrelated)
+- /Users/ghost/Dev/hexa-lang/launchd/com.hexa-lang.relock.plist (follow-up relock watcher, unrelated)
 - /Users/ghost/Dev/hexa-lang/.git/hooks/ (samples only, no active hooks)

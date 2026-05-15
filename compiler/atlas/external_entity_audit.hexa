@@ -100,7 +100,7 @@ fn _negation_markers() -> array {
         "no n=6 lattice anchoring", "no lattice anchoring",
         "no n=6 lattice fit", "no lattice fit", "not n=6 lattice",
         "not a lattice fit",
-        "raw#10 c3",
+        "honest c3",
         "lattice_fit_on_external_entities",
         "lattice-fit on external entities",
         "applies n=6 lattice formulas"
@@ -241,7 +241,7 @@ fn _scan_node(node: AtlasNode) -> Violation {
     if _line_is_negation(node.raw, start) { return empty }
     return Violation {
         node_id: node.id,
-        reason: "external-entity node carries n=6 lattice-arithmetic token (raw#10 C3)",
+        reason: "external-entity node carries n=6 lattice-arithmetic token (honest C3)",
         span_start: start,
         span_end: endv
     }

@@ -15,7 +15,7 @@
 //   curl 은 BSD (macOS) / GNU/Linux 양쪽에서 base 설치이고, ω-hexa-1
 //   portability 제약 (H1) 안에서 가장 가벼운 client-side HTTP 솔루션이다.
 //
-// Tradeoffs (raw#10):
+// Tradeoffs (honest-caveat):
 //   · 외부 binary 의존: curl 미설치 환경에서는 동작 불가.
 //   · stdout 만 읽음 — header/status code 별도 옵션 (-w '%{http_code}')
 //     으로 추가 fetch. body 만 필요할 때 fast-path.

@@ -1,6 +1,6 @@
 # hexa-lang Proposals Index
 
-Upstream RFCs filed against hexa-lang per raw#159 hexa-lang-upstream-proposal-mandate.
+Upstream RFCs filed against hexa-lang per no-hardcode9 hexa-lang-upstream-proposal-mandate.
 
 Source: every workaround landed in a downstream consumer (hive/anima/nexus) MUST be paired with an RFC here. This index is the human-authoritative landing surface for proposal documents.
 
@@ -32,11 +32,11 @@ Source: anima HXC A33 PASS 4 (hash-chain match-find) — commit `509f3ea3d`. F-A
 
 ## RFC bundle 2026-04-30 — hive cli_mvp exec("date") hot-path scan (downstream-adoption gap)
 
-Source: hive `packages/coding-agent/hexa/cli_mvp.hexa` 2026-04-30 hot-path scan (`_session_uuid_gen` line 2036 + auth slot expiry line 2242). Both sites still spawn `date +%s` (~5-10 ms macOS spawn cost) despite native `time_now()` primitive shipped in `hxa-20260424-008` (2026-04-24, commit `dfbd2ee1`). Scope re-baselined from "add primitive" to "document + lint + cross-repo migrate" after pre-write fact-check found primitive already extant (raw 91 in-place correction; precedent RFC-006).
+Source: hive `packages/coding-agent/hexa/cli_mvp.hexa` 2026-04-30 hot-path scan (`_session_uuid_gen` line 2036 + auth slot expiry line 2242). Both sites still spawn `date +%s` (~5-10 ms macOS spawn cost) despite native `time_now()` primitive shipped in `hxa-20260424-008` (2026-04-24, commit `dfbd2ee1`). Scope re-baselined from "add primitive" to "document + lint + cross-repo migrate" after pre-write fact-check found primitive already extant (C3 in-place correction; precedent RFC-006).
 
 | RFC | Slug | Priority | Status | Subsystem | Source |
 |-----|------|----------|--------|-----------|--------|
-| [011](rfc_011_exec_date_to_native_time_migration.md) | exec("date +%s") → native time primitive migration mandate | P1 | proposed | docs + lint + migration (raw 47 cross-repo sweep) | hive cli_mvp.hexa hot-path 2026-04-30 |
+| [011](rfc_011_exec_date_to_native_time_migration.md) | exec("date +%s") → native time primitive migration mandate | P1 | proposed | docs + lint + migration (follow-up cross-repo sweep) | hive cli_mvp.hexa hot-path 2026-04-30 |
 
 ## Priority distribution
 
@@ -58,24 +58,24 @@ Source: hive `packages/coding-agent/hexa/cli_mvp.hexa` 2026-04-30 hot-path scan 
 - **interp builtin (hexa_full.hexa)** — RFC-010 (int_map / sparse_int_array type-tag dispatch + native array backing)
 - **linter / parser_pass** — RFC-007 (exec()==int rule), RFC-011 (exec("date +%s") perf lint)
 - **docs** — RFC-006 (exec() decision tree cheat-sheet), RFC-011 (stdlib_time_quickref + native primitive visibility)
-- **cross-repo migration mandate** — RFC-011 (raw 47 sweep across hive/nexus/anima/airgenome/canon)
+- **cross-repo migration mandate** — RFC-011 (follow-up sweep across hive/nexus/anima/airgenome/canon)
 
 ## Cross-cutting recommendations
 
-- **Interpreter↔AOT parity meta-falsifier** — Every new stdlib method or builtin SHOULD ship with a regression test that runs under BOTH interpreter and AOT modes and asserts identical observable behavior. Strengthened by RFC-005 + RFC-009: every AOT codegen change MUST additionally pass raw#18 3-stage fixpoint re-proof (stage1 builds stage2; stage2 builds itself = stage3; stage3 binary-equal stage2 ⇒ fixpoint).
+- **Interpreter↔AOT parity meta-falsifier** — Every new stdlib method or builtin SHOULD ship with a regression test that runs under BOTH interpreter and AOT modes and asserts identical observable behavior. Strengthened by RFC-005 + RFC-009: every AOT codegen change MUST additionally pass self-host fixpoint 3-stage fixpoint re-proof (stage1 builds stage2; stage2 builds itself = stage3; stage3 binary-equal stage2 ⇒ fixpoint).
 - **AOT codegen ==-dispatch family** — RFC-005 (string slice == literal) + RFC-009 (int_returning_fn() == int literal) share root cause: AOT codegen `==`-dispatch produces non-value-comparison semantics. Recommend bundled `self/codegen_c2.hexa` investigation cycle covering both gaps in one pass with shared regression-test harness.
 - **String-literal escape policy unification** — RFC-003 + RFC-004 should land together as a single lexer-escape sweep; the falsifier surface differs (basic vs hex/unicode) but the lexer change is co-located.
 - **Real-time / autonomous-agent tools as canonical dogfood targets** — anima-eeg yielded 5 gaps in one D-day session; subsequent same-day work yielded 4 more. Recommend formally declaring `anima-eeg`, `anima-clm-eeg/tool/mk_xii_*`, and similar real-time + autonomous-agent tool families as recurring hexa-lang dogfood / gap-sourcing targets.
 
-## Honesty disclosures (raw#91 C3)
+## Honesty disclosures (hexa-only1 C3)
 
 - All `Tracking` IDs in individual RFCs follow placeholder format `hexa-lang/issues/TBD-<slug>` — no real issue tracker entries filed. Format mirrors the convention in `convergence/hexa_lang_upstream_2026_04_28_anima_eeg_gaps.convergence`.
-- RFC-006 was corrected in-place 2026-04-28 (raw#91 C3 honest disclosure): original framing proposed 3 new builtins; fact-check discovered the equivalent surface already exists in `runtime.c` (`hexa_exec_with_status` line 3235, `hexa_exec_stream` line 3182, `hexa_exec_capture` line 6373). RFC-006 scope narrowed to lint+docs; lint deliverable split out as RFC-007.
+- RFC-006 was corrected in-place 2026-04-28 (hexa-only1 C3 honest disclosure): original framing proposed 3 new builtins; fact-check discovered the equivalent surface already exists in `runtime.c` (`hexa_exec_with_status` line 3235, `hexa_exec_stream` line 3182, `hexa_exec_capture` line 6373). RFC-006 scope narrowed to lint+docs; lint deliverable split out as RFC-007.
 - RFC-001 status `partial-landed`: capture+split wrapper over `exec_with_status` landed in `self/stdlib/proc.hexa` with 5/5 selftest PASS; the streaming iterator form (`for line in popen_lines(...)` consuming subprocess stdout incrementally) and `process_spawn() -> Process` handle are NOT landed and require new C builtin (pipe + fork + readline loop). Tracked as a separate cycle.
 
 ## Process
 
-- New RFCs: allocate the next sequential number; one .md per gap; sections (Problem, Proposed API/Change, Compatibility, Implementation Scope, Falsifier raw#71, Effort Estimate, Retire Conditions, Tracking) per template established by 001-005.
+- New RFCs: allocate the next sequential number; one .md per gap; sections (Problem, Proposed API/Change, Compatibility, Implementation Scope, Falsifier falsifier, Effort Estimate, Retire Conditions, Tracking) per template established by 001-005.
 - Update this index when RFCs are added or status changes.
 - Update `.roadmap` (hexa-lang-internal SSOT) with corresponding `roadmap RFC-NNN <status>` block + `priority P0|P1|P2` + `source-evidence <file:line>` lines.
-- Reference impl skeleton .hexa files MAY accompany an RFC under raw#9 hexa-only-strict (RFCs themselves are .md docs).
+- Reference impl skeleton .hexa files MAY accompany an RFC under hexa-only-strict (RFCs themselves are .md docs).

@@ -208,7 +208,7 @@ For a COMPUTE route (parse URL, dispatch hexa script, transform) → hexa resolv
 For ANY new scope: add a row to `hexa_url_modules.ai.md` documenting input/output/
 exit/sentinel/example.
 
-## raw#10 caveats
+## honest-caveat caveats
 
 1. **No docker → host bridge.** hexa-resolver scripts inside the docker sandbox
    cannot exec `~/.hx/bin/<anything>` or `/bin/echo` etc. Always check the

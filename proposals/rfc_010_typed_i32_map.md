@@ -7,7 +7,7 @@
 - **Source**: anima HXC A33 PASS 4 (hash-chain match-find) — commit `509f3ea3d`
 - **Source design doc**: anima `docs/hxc_a33_pass4_hash_chain_2026-04-29.md`
 - **Family**: stdlib container performance (no prior RFC; first map-overhead-class proposal)
-- **raw 159 invocation**: hexa-lang upstream-proposal-mandate Tier-A (stdlib gap; performance pathology measured at production scale)
+- **no-hardcode9 invocation**: hexa-lang upstream-proposal-mandate Tier-A (stdlib gap; performance pathology measured at production scale)
 
 ## Problem statement
 
@@ -23,7 +23,7 @@ The hexa interpreter + AOT realization of `map<string,int>` carries non-trivial 
 
 (Per-entry numbers are derived estimates: total RSS / live entry count. Actual map-node footprint in the AOT runtime is not directly instrumented.)
 
-A33's F-A33-6 RSS mandate is **<= 50 MB on 84 KB largest file** (jetsam-safe Mac local, raw 42). Probe A overshoots this cap by 24x; Probe B by 65x; Probe C by 25x. The cap is structurally unreachable with `map<string,int>` regardless of input size — even a 31 KB input pins 1.24 GB.
+A33's F-A33-6 RSS mandate is **<= 50 MB on 84 KB largest file** (jetsam-safe Mac local, follow-up). Probe A overshoots this cap by 24x; Probe B by 65x; Probe C by 25x. The cap is structurally unreachable with `map<string,int>` regardless of input size — even a 31 KB input pins 1.24 GB.
 
 The DEFLATE C reference (zlib) achieves O(N + chain) longest-match with a fixed `unsigned int prev[WINDOW_SIZE]` array — **1 MB resident regardless of input size**. The hexa runtime currently has no equivalent primitive: the only available associative container with bounded-key lookup is the generic boxed map.
 
@@ -123,7 +123,7 @@ A33-specific reproducer (post-landing):
 
 **Backward compatibility**: existing `map<string,int>` continues to work; primitive containers are additive opt-ins. No ABI break.
 
-## Acceptance criteria (raw 71 falsifier)
+## Acceptance criteria (falsifier falsifier)
 
 INVALIDATED iff:
 
@@ -131,7 +131,7 @@ INVALIDATED iff:
 2. 100 K entry RSS ≤ 5 MB for Option B; ≤ 50 MB for Option C.
 3. A33 PASS 4 Probe A RSS < 50 MB (clears F-A33-6).
 4. Selftest byte-eq parity: A33 PASS 4 selftest 5/5 still passes after migration to primitive container.
-5. raw 137 cmix-ban PRESERVED — primitives are deterministic integer arithmetic, no fp, no probabilistic mixer.
+5. follow-up7 cmix-ban PRESERVED — primitives are deterministic integer arithmetic, no fp, no probabilistic mixer.
 6. Interpreter/AOT semantic parity (no RFC-005 / RFC-009 class divergence).
 
 **Anti-falsifier**: any of the six conditions failing on the post-landing benchmark fails the proposal and triggers a redesign tick.
@@ -146,13 +146,13 @@ INVALIDATED iff:
 - Falsifier passes on A33 PASS 4 Probe A re-measurement → status `done`.
 - Hexa runtime gains generic typed-container support (e.g., `Map<K,V>` with monomorphization) → status `superseded`.
 
-## raw 91 honest C3 disclosure
+## C3 honest C3 disclosure
 
 - **Workaround status**: A33 PASS 5 fixed-array ring (`prev[A33_RING_CAP]` indexed by `abs_pos mod A33_RING_CAP`) is **in-flight at the anima downstream consumer**. PASS 5 is a same-cycle workaround applying Option B *manually* in hexa user-code — using a fixed-length array of 262144 int slots in lieu of `hash_prev`. PASS 5 is production-ready for A33 specifically but does **not** retire this RFC: every other site that needs an integer-keyed container in hexa user-code will re-implement the same pattern. Stdlib-level fix is materially better.
-- **Measurement basis**: 28 KB / 5.7 KB / 40 KB per-entry numbers are **derived estimates** (peak RSS / live entry count), not directly instrumented per-node footprints. Underlying ratio (~1 GB on tens of K entries) is robust across three independent probes. raw 91 honest C3 STRICT: per-entry estimates within an order of magnitude; total-RSS observations are exact.
+- **Measurement basis**: 28 KB / 5.7 KB / 40 KB per-entry numbers are **derived estimates** (peak RSS / live entry count), not directly instrumented per-node footprints. Underlying ratio (~1 GB on tens of K entries) is robust across three independent probes. C3 honest C3 STRICT: per-entry estimates within an order of magnitude; total-RSS observations are exact.
 - **Recommended option**: Option C (`int_map<int,int>`) as primary stdlib primitive; Option B (`sparse_int_array`) as ring-discipline fast-path. Option A deprecated (does not solve the string-allocation cost).
 - **80% reachability claim**: NONE. This RFC does not modify entropy verdict (commit `4cd8e62da` UNREACHABLE preserved). It only restores the ability to measure A33's text-heavy lift hypothesis at production scale.
-- **raw 137 cmix-ban**: PRESERVED. Both proposed primitives are deterministic integer math.
+- **follow-up7 cmix-ban**: PRESERVED. Both proposed primitives are deterministic integer math.
 
 ## Cross-link to A33 PASS 4
 

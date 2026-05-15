@@ -177,9 +177,9 @@ Phase 3 build steps:
 3. Set `DYLD_LIBRARY_PATH` or use `@link("/abs/path/libhxllama.dylib")`.
 4. Hexa `extern fn` declarations resolve via `hexa_ffi_dlopen`'s search path.
 
-## raw#9 disposition
+## hexa-only disposition
 
-raw#9 says "stdlib should be hexa-only". C FFI is the ONE explicit escape
+hexa-only doctrine says "stdlib should be hexa-only". C FFI is the ONE explicit escape
 hatch — and even then, the surface is implemented in HEXA (`stdlib/c_ffi.hexa`
 is `.hexa`, not `.c`). The C side is just `runtime.c` (already shipped and
 part of the bootstrap kernel — not a per-module shim). Any new library

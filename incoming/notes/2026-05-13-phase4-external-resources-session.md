@@ -186,7 +186,7 @@ HEXA_FORCE_FALLBACK = 1
 
 ### Mac-fallback-forbidden directive REVOKED
 
-The 2026-04-29 user directive (raw 40+42 / hard-fail-no-mac-fallback
+The 2026-04-29 user directive (follow-up+42 / hard-fail-no-mac-fallback
 path at `~/core/nexus/cli/run.hexa::_kick_run` lines 6313-6334) is
 REVOKED per 2026-05-13 user decision. The Phase 4 adapter treats
 kick as ordinary δ — SSH ubu2 live + local sub-pipeline fallback,

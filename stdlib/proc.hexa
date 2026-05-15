@@ -383,7 +383,7 @@ fn proc_reap(pid: int) -> bool {
 // Breaking risk: 0. Both functions are new symbols; no existing call
 // site is modified. `exec()` callers untouched.
 //
-// Caveats (raw#91):
+// Caveats (C3):
 //   · Temp-file write is not atomic against concurrent invokers; the
 //     nonce uses now_epoch + len(stdin_str) which collides only if two
 //     calls in the same wall-clock second happen with identical-length

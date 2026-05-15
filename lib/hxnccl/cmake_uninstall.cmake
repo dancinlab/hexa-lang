@@ -6,7 +6,7 @@
 # Usage (driven by Makefile target):
 #   cmake -DMANIFEST=<build>/install_manifest.txt -P cmake_uninstall.cmake
 #
-# raw#181 (asymmetric build script) compliance — pairs with install(TARGETS).
+# self-host fixpoint1 (asymmetric build script) compliance — pairs with install(TARGETS).
 
 if(NOT DEFINED MANIFEST)
     set(MANIFEST "${CMAKE_BINARY_DIR}/install_manifest.txt")

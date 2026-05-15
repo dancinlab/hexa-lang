@@ -139,9 +139,9 @@
 //      @link("/opt/homebrew/lib/libsqlite3.dylib")
 //      extern fn sqlite3_open(...)
 //
-//  ── HEXA-ONLY PHILOSOPHY (raw#9 disposition) ──────────────────────────────
+//  ── HEXA-ONLY PHILOSOPHY (hexa-only disposition) ──────────────────────────────
 //
-//  raw#9 says "stdlib should be hexa-only". C FFI is the ONE explicit
+//  hexa-only doctrine says "stdlib should be hexa-only". C FFI is the ONE explicit
 //  escape hatch — and even then, the surface is implemented in HEXA (this
 //  file is .hexa, not .c). The C side is just runtime.c (already shipped),
 //  which is itself part of the bootstrap kernel — not a per-module shim.

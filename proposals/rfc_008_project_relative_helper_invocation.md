@@ -14,9 +14,9 @@ hexa runtime `exec()` / `exec_with_status()` / `exec_stream()` resolve subproces
 Concrete failure mode (anima-eeg, 2026-04-28):
 - BrainFlow + supporting telemetry libs are installed only inside `.venv-eeg/bin/python` (project venv).
 - A hexa helper that calls `exec("python3 helper.py ...")` finds the **system** `python3`, which lacks BrainFlow.
-- Result: helper-py raises `ModuleNotFoundError: brainflow` and the tool's segment FAILs with no obvious cause from the hexa side (raw#10 honest-warning fires after the failure, not before).
+- Result: helper-py raises `ModuleNotFoundError: brainflow` and the tool's segment FAILs with no obvious cause from the hexa side (honest-caveat honest-warning fires after the failure, not before).
 
-## Live-fire evidence (raw#159 concrete-evidence preference)
+## Live-fire evidence (no-hardcode9 concrete-evidence preference)
 
 Two same-day failures in anima-eeg (2026-04-28):
 
@@ -49,11 +49,11 @@ let cmd = py + " /tmp/helper.py --flag"
 let r = exec_with_status(cmd)
 ```
 
-Resolution order (raw#10 fallback chain, fail-loud at the end):
+Resolution order (honest-caveat fallback chain, fail-loud at the end):
 1. `<project_root>/.venv-eeg/bin/python` — anima-eeg pattern (most specific)
 2. `<project_root>/.venv/bin/python` — Python standard
 3. `ENV ANIMA_EEG_VENV_PYTHON` — explicit override
-4. `which python3` from PATH — last resort, **emits raw#10 honest-warning to stderr** noting that no project-local interpreter was found
+4. `which python3` from PATH — last resort, **emits honest-caveat honest-warning to stderr** noting that no project-local interpreter was found
 
 ### Form B — Generalized helper-kind dispatch (broader scope)
 
@@ -82,22 +82,22 @@ No runtime behavior change for `exec()` / `exec_with_status()` / `exec_stream()`
   - Positive: project_root contains `.venv-eeg/bin/python` → returns that path
   - Positive: project_root contains `.venv/bin/python` (no .venv-eeg) → returns that path
   - Positive: `ANIMA_EEG_VENV_PYTHON` env set, no venv dirs → returns env value
-  - Fallback: no venv, no env → returns `which python3` result + raw#10 warning emitted to stderr
+  - Fallback: no venv, no env → returns `which python3` result + honest-caveat warning emitted to stderr
 - **Total**: ~60 LoC, **1-2h**
 
 No new builtin needed. No runtime.c change. Pure stdlib + filesystem stat.
 
-## Falsifier (raw#71)
+## Falsifier (falsifier)
 
 INVALIDATED iff:
 1. `project_python(root)` returns the correct path under all 4 fallback-chain conditions on a synthetic test corpus (4 setups, 4 expected paths).
-2. Fallback-4 (system `python3`) emits a raw#10 honest-warning to stderr (visible to caller) rather than silently returning the system path.
+2. Fallback-4 (system `python3`) emits a honest-caveat honest-warning to stderr (visible to caller) rather than silently returning the system path.
 3. anima-eeg's 6 helpers (B11 eeg_setup dispatch family) can migrate from hard-coded `.venv-eeg/bin/python` to `project_python(...)` without any behavioral regression in selftest suite.
 4. Across hive/anima/nexus tree, 0 false-positive resolutions (no project_root mistakenly resolving to an unrelated venv via path-walk surprises).
 
 **Anti-falsifier**: any case where `project_python(root)` returns a path to an interpreter that lacks the project's pinned dependencies (i.e. silent drift continues), or any case where the system-python fallback fires without emitting the warning, fails the proposal.
 
-## Falsifier — RFC-retire (raw#71 retire-rule)
+## Falsifier — RFC-retire (falsifier retire-rule)
 
 Retire conditions (RFC becomes unnecessary, not just done):
 
@@ -124,13 +124,13 @@ Placeholder ID: `hexa-lang/issues/TBD-g7-project-relative-helper-invocation`
 
 - RFC-001 (popen_lines): same `exec()` family. RFC-008 affects **which** binary is exec'd; RFC-001 affects **how** stdout is consumed. Orthogonal but co-resident in `self/stdlib/proc.hexa`.
 - RFC-006 / RFC-007 (exec semantics + lint): pattern parallel — exec family has multiple silent-drift surfaces (return-type, helper-PATH). This RFC addresses the helper-PATH surface; RFCs 006/007 address the return-type surface.
-- raw#159 hexa-lang upstream-proposal-mandate: same-day in-the-wild evidence (2 anima-eeg helpers + 1 dispatcher-family of 6) qualifies as concrete-evidence-preferred.
+- no-hardcode9 hexa-lang upstream-proposal-mandate: same-day in-the-wild evidence (2 anima-eeg helpers + 1 dispatcher-family of 6) qualifies as concrete-evidence-preferred.
 
-## Honesty Disclosure (raw#91 C3)
+## Honesty Disclosure (hexa-only1 C3)
 
-- **Scope honesty**: this RFC originates **mid-fix** for eeg_recorder.hexa (still in progress as of 2026-04-28T19:23). The fix landing in anima-eeg is independent of this RFC; anima-eeg can hard-code the venv path today and the RFC is the upstream mandate (raw#159) to prevent the next helper from drifting.
+- **Scope honesty**: this RFC originates **mid-fix** for eeg_recorder.hexa (still in progress as of 2026-04-28T19:23). The fix landing in anima-eeg is independent of this RFC; anima-eeg can hard-code the venv path today and the RFC is the upstream mandate (no-hardcode9) to prevent the next helper from drifting.
 - **Generality honesty**: Form B (helper-kind dispatch) is speculative — only Python is in-evidence. Recommend landing Form A first; defer Form B until a 2nd helper-kind shows up in the wild.
-- **Fallback-4 raw#10 surface**: the system-python fallback path **must** emit the warning; if implementation silently falls through without warning, the RFC is anti-falsified (the warning is the load-bearing safety net). Implementer must dogfood the warning surface in the regression test.
+- **Fallback-4 honest-caveat surface**: the system-python fallback path **must** emit the warning; if implementation silently falls through without warning, the RFC is anti-falsified (the warning is the load-bearing safety net). Implementer must dogfood the warning surface in the regression test.
 - **No silent-drift claim**: this RFC does not eliminate the possibility of project_python returning a venv that itself lacks the needed dependencies. It only eliminates the case where **the wrong interpreter** is chosen. Dependency-completeness in the venv is a project-side discipline (e.g. `.venv-eeg/requirements.txt` audit).
 
 ## Landing Record (2026-04-28)
@@ -140,10 +140,10 @@ Placeholder ID: `hexa-lang/issues/TBD-g7-project-relative-helper-invocation`
 - **Selftest**: `__PATH_SELFTEST__ PASS n=25 fail=0` (was n=20 pre-RFC-008; +5 cases for project_python: .venv-eeg / .venv / preference-order / fallback-4 / trailing-slash idempotency).
 - **Live evidence**:
   - `project_python("/Users/ghost/core/anima")` → `/Users/ghost/core/anima/.venv-eeg/bin/python` (correct).
-  - No-venv → `python3` + raw 10 stderr warn fires (verified eyeball — fallback-4 anti-falsifier check satisfied).
+  - No-venv → `python3` + honest-caveat stderr warn fires (verified eyeball — fallback-4 anti-falsifier check satisfied).
   - `ANIMA_EEG_VENV_PYTHON=/custom/path` override → `/custom/path` (step-3 env override).
-  - Generic `PROJECT_PYTHON=/generic/python` also honored (added per raw 91 generality concern — anima-eeg-only naming was too narrow).
-- **raw 18 self-host fixpoint**: 0 impact. `self/stdlib/path.hexa` is not imported by the self-host compiler chain (verified via grep over `self/`); module is consumer-side only.
+  - Generic `PROJECT_PYTHON=/generic/python` also honored (added per C3 generality concern — anima-eeg-only naming was too narrow).
+- **self-host fixpoint self-host fixpoint**: 0 impact. `self/stdlib/path.hexa` is not imported by the self-host compiler chain (verified via grep over `self/`); module is consumer-side only.
 - **Form B (helper-kind dispatch) deferred**: as recommended in §"Proposed API". Will land iff a 2nd helper-kind (Node/Lua/Ruby) shows in-the-wild evidence.
 - **anima-eeg helper migration**: deferred to anima-eeg side commits. Sample migration call form: `let py = project_python("/Users/ghost/core/anima")` then `exec(py + " /tmp/helper.py ...")` replaces hard-coded `.venv-eeg/bin/python`.
 - **Cross-platform note**: implementation is POSIX-only (`bin/python` shim). Linux uses identical `.venv-eeg/bin/python` layout — verified by inspection of venv standard. Windows (`Scripts/python.exe`) is out of scope per RFC-008 §"Compatibility" (hexa runtime target is Mac + Linux per `path.hexa` header).

@@ -202,7 +202,7 @@ Each `anima-engines/*_phi.hexa` opens with a structured docstring containing **t
 | `anima-physics/.venv/` | 916 MB | Python virtualenv |
 | `checkpoints/` | 333 MB | Model snapshots |
 | `anima-tribev2-pilot/` | 36 MB | Experiment branch |
-| `recordings/`, `logs/`, `models/`, `dist/`, `build/`, `bench/`, `build_v*/`, `experiments/`, `hypotheses_candidates/`, `tmp/`, `raw_archive/`, `.raw-audit*/`, `__pycache__/`, `__pyphi_cache__/`, `.venv-eeg/`, `.hxc_*/`, `.playwright-mcp/`, `.pytest_cache/`, `.meta2-cert/`, `.growth/` | combined ~150 MB | Build / experiment / test artefacts |
+| `recordings/`, `logs/`, `models/`, `dist/`, `build/`, `bench/`, `build_v*/`, `experiments/`, `hypotheses_candidates/`, `tmp/`, `raw_archive/`, `audit*/`, `__pycache__/`, `__pyphi_cache__/`, `.venv-eeg/`, `.hxc_*/`, `.playwright-mcp/`, `.pytest_cache/`, `.meta2-cert/`, `.growth/` | combined ~150 MB | Build / experiment / test artefacts |
 | `anima_chat.hexa`, `anima_chat_aot.hexa` | 300 K LOC combined | Generated AOT bundle of the engine suite — re-derive from sources, don't absorb |
 | `anima-physics/{esp32,arduino,fpga,verilog,cmos,analog,trapped_ion,superconducting,photonic-hw}/` | ~150 KB | HDL / MCU firmware; out of hexa-lang scope |
 | `anima-voice/{transformer,vocoder,audio_token_predictor,dsp_core}.hexa` | ~300 KB | ML inference tied to corpus |

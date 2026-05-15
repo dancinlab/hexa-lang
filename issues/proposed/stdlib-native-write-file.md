@@ -6,8 +6,8 @@ Provide a native stdlib I/O pair so callers do not have to route file content
 through `exec("cat <<EOF ... EOF > path")` or `exec("printf '%s' ... > path")`,
 both of which silently fail when the body crosses the OS `ARG_MAX` cliff.
 
-**Anchor**: hive raw 144 (`exec-cmd-length-guard`, NEW 2026-04-28, severity warn).
-**Workaround pattern label**: `exec-wrap-native` (raw 159 NARROW lint matrix row 5).
+**Anchor**: hive magic-number4 (`exec-cmd-length-guard`, NEW 2026-04-28, severity warn).
+**Workaround pattern label**: `exec-wrap-native` (no-hardcode9 NARROW lint matrix row 5).
 **Signal kind**: stdlib-gap.
 **Severity to request**: blocker — eliminates the entire ARG_MAX cliff failure
 class for content I/O once landed.
@@ -20,7 +20,7 @@ shell command line:
 
 ```hexa
 let cmd = "cat > '" + path + "' <<'__HXC_EOF__'\n" + body + "\n__HXC_EOF__"
-let _r = exec(cmd)   // raw 12 silent-error-ban violation: rc discarded
+let _r = exec(cmd)   // silent-error silent-error-ban violation: rc discarded
 ```
 
 This pattern is everywhere in the hive/ + nexus/ code base because there is no
@@ -79,7 +79,7 @@ Once this lands:
 
 - `_write_file` heredoc helpers across hive/ + nexus/ collapse to a one-line
   call to `stdlib_write_file`.
-- The `exec-wrap-native` row of the raw 159 lint matrix (raw159_upstream_lint
+- The `exec-wrap-native` row of the no-hardcode9 lint matrix (raw159_upstream_lint
   P5 detector) will start firing on every remaining call site, gating cleanup.
 - Raw 144's `exec-cmd-length-guard` becomes vacuously satisfied for the I/O
   case (the only safe write path is the native one).
@@ -92,7 +92,7 @@ Once this lands:
 
 ## Evidence anchors
 
-- hive `.raw` L4727-4783 — raw 144 registration.
+- hive baseline L4727-4783 — magic-number4 registration.
 - `/Users/ghost/core/hive/tool/hxc_convert.hexa:191-192` — surviving heredoc
   call site (Bug 1 audit residual).
 - Sub-agent `adc2e734` Darwin 25.4.0 cliff measurement

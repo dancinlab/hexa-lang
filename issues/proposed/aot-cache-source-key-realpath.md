@@ -10,9 +10,9 @@ point to the same physical file via a file symlink therefore hash to different
 cache slots, and the AOT layer rebuilds both — neither slot ever sees the
 other's fingerprint.
 
-**Anchor**: hive raw 145 (`aot-cache-canonical-path`, NEW 2026-04-28,
+**Anchor**: hive magic-number5 (`aot-cache-canonical-path`, NEW 2026-04-28,
 severity warn).
-**Workaround pattern label**: `realpath` (raw 159 NARROW lint matrix row 3).
+**Workaround pattern label**: `realpath` (no-hardcode9 NARROW lint matrix row 3).
 **Signal kind**: runtime-bug.
 **Severity to request**: high — correctness; cache-invariant violation.
 
@@ -118,7 +118,7 @@ users is "your cache directory grows half as fast and warm hits actually warm".
 
 ## Evidence anchors
 
-- hive `.raw` L4785-4843 — raw 145 registration.
+- hive baseline L4785-4843 — magic-number5 registration.
 - `/Users/ghost/core/hexa-lang/self/main.hexa:1071-1088` — current
   `source_key` (note: nexus ω-cycle 2026-04-28 already merged the realpath
   patch locally; this issue formalizes it upstream so other consumers

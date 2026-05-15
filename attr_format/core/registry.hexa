@@ -6,7 +6,7 @@
 //
 // hexa-lang/attr_format/core/registry.hexa — version → module dispatch
 //
-// raw#9 hexa-only strict. Stage0 has no first-class fn pointers / dyn-call,
+// hexa-only strict. Stage0 has no first-class fn pointers / dyn-call,
 // so the registry uses a switch-style dispatch over canonical version names.
 // Each branch inlines the meta from the sibling module + invokes a local
 // shim for parse/validate/expand (kept byte-identical with module SSOT).
@@ -18,7 +18,7 @@
 //   v4   — composition `@module {...}`          (SPEC-STUB,  Phase δ L12)
 //   v5   — future placeholder                   (FUTURE-STUB)
 //
-// raw#10:
+// honest-caveat:
 //   (1) Inlined dispatch is verbose but matches hexa stage0 capabilities.
 //       When trait/dyn-call lands, this collapses to HashMap<&str, &dyn>.
 //   (2) v1 catalog list is duplicated here (24 attrs) and in attr_format/module/attr_v1.hexa.

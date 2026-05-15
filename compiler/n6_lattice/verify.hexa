@@ -3,7 +3,7 @@
 // compiler/n6_lattice/verify.hexa — pure-hexa deductive verifier for the n=6
 // invariant lattice claims (sigma(6)=12, tau(6)=4, phi(6)=2, J2=24).
 //
-// Scope (raw#10 honest C3):
+// Scope (honest C3):
 //   This is the deductive structural / arithmetic / geometric / group-theoretic
 //   verification surface only. The bio-MVP-regression block of the upstream
 //   Python script (RIBOZYME_KCAT_PER_MIN, NANOBOT_WORK_PER_CYCLE_KT, etc.) is

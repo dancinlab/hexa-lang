@@ -41,7 +41,7 @@ fn sample_emit() {
     ai_ok("os-lock/status", [
         ["platform", "darwin"],
         [".raw", "L2-schg"],
-        [".own", "L2-schg"]
+        ["legacy-baseline", "L2-schg"]
     ])
 }
 

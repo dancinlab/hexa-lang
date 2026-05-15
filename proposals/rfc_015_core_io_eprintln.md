@@ -37,7 +37,7 @@ shell escape 우회의 측정 가능한 부담:
   `fork+execve` 호출 — 매 warn 당 ms order overhead.
 - shell quoting 위험: msg 내 special char (`"`, `$`, backtick) 의 escape 누락 시 shell
   injection 위험.
-- silent-error-ban (raw 12) 정합으로 매 silent-failure path 가 stderr warn 발산 — hot path
+- silent-error-ban (silent-error) 정합으로 매 silent-failure path 가 stderr warn 발산 — hot path
   에 stderr warn 이 누적 호출되면 fork cost 가 누적.
 
 각 도구의 hand-roll 측 hit site 패턴:
@@ -66,7 +66,7 @@ fn eprintln(s: str) -> void
     // stderr 로 string + newline 출력.
     // println 의 stderr 버전 — stdout 측 정상 출력과 분리.
     // syscall write(2, buf, len) 직접 호출 (shell escape 우회 X).
-    // 실패 시 silent (stderr 자체 실패는 escalate 불가 — raw 12 silent-error-ban 의
+    // 실패 시 silent (stderr 자체 실패는 escalate 불가 — silent-error silent-error-ban 의
     // "stderr 자체 실패는 silent" 측 예외 항목).
 
 fn stderr_write(s: str) -> int
@@ -126,7 +126,7 @@ fn eprintln_with_prefix(prefix: str, msg: str) -> void {
    literal 출력 — fork-based shell escape 우회의 부재 검증.
 
 추가 edge: fd=2 closed (process 가 stderr close 후 호출) → `stderr_write` 가 -1 반환 +
-caller silent (raw 12 silent-error-ban 정합으로 caller 측 escalate 부담은 caller 책임).
+caller silent (silent-error silent-error-ban 정합으로 caller 측 escalate 부담은 caller 책임).
 
 ## §5 Breaking changes — none (additive new builtin)
 
@@ -180,7 +180,7 @@ stderr explicit warn channel — additive new fns in core.io module.
 - API signatures match §2 freeze (`eprintln(s) -> void`, `stderr_write(s) -> int`).
 - 8 test cases pass (incl. edge: empty / UTF-8 multibyte / fd=2 closed).
 - native syscall write(2) dispatch verified (fork-based shell escape 우회 X).
-- silent-error-ban (raw 12) 정합 — fd=2 실패 시 caller 측 silent 가 보장.
+- silent-error-ban (silent-error) 정합 — fd=2 실패 시 caller 측 silent 가 보장.
 - 기존 `println` 동작 unchanged (regression test).
 
 ## §8 Dependencies — none (internal)
@@ -200,7 +200,7 @@ C1. 본 RFC 는 spec only — reference impl land 는 별도 cycle (proposal acc
 C2. PR #47 merged 2026-05-04T11:48:58Z cite 는 Track BG mission directive 의 user-provided
     context — sibling repo `git log` verification 은 own 1 hexa-lang sibling repo 정합.
 C3. `stderr_write` 의 fd=2 closed edge case 는 caller 측 silent-error-ban 정합 — 본 fn
-    자체가 -1 반환 + caller 가 escalate 불가 (raw 12 silent-error-ban 의 "stderr 자체
+    자체가 -1 반환 + caller 가 escalate 불가 (silent-error silent-error-ban 의 "stderr 자체
     실패는 silent" 측 예외 항목).
 C4. shell escape 우회의 fork cost 측정값 (ms order) 은 own 2 honest estimate — stage1
     native syscall dispatch land 시 actual ns/op 측정은 future B-bench cycle. Track AV §8

@@ -6,7 +6,7 @@
 //
 // hexa-lang/attr_format/core/attr_format_main.hexa — attr-format entry-point + selftest aggregator
 //
-// raw#9 hexa-only strict. Aggregates selftest evidence from:
+// hexa-only strict. Aggregates selftest evidence from:
 //   hexa-lang/attr_format/core/source.hexa
 //   hexa-lang/attr_format/core/registry.hexa
 //   hexa-lang/attr_format/core/router.hexa

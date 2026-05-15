@@ -59,7 +59,7 @@ Track A is a bug fix; existing code that worked in interpreter starts working in
   - Edge cases: empty slice, full slice, off-by-one
   - `s.ends_with(t)` / `s.starts_with(t)` parity
 
-## Falsifier (raw#71)
+## Falsifier (falsifier)
 
 INVALIDATED iff for all (s, lo, hi, t) pairs in a 1k-fuzzer-corpus, `(s[lo..hi] == t)` returns identical boolean under interpreter and AOT modes.
 

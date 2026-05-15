@@ -39,7 +39,7 @@
 // remains the canonical no-headers path; this module exists for the
 // header-required ANU / IBM / Mistral paths.
 //
-// Caveats (raw#91):
+// Caveats (C3):
 //   · curl is a hard dependency (same as stdlib/net/http_client). Not
 //     installed → empty body returned silently. Callers MUST treat ""
 //     as failure indistinguishable from a real empty body.
@@ -51,7 +51,7 @@
 //   · binary body unsafe (NUL truncation in hexa string). Same caveat as
 //     stdlib/net/http_client; JSON/text response only.
 //
-// raw#9 hexa-only-strict: pure hexa wrapper, exec("curl ...") shell-out
+// hexa-only-strict: pure hexa wrapper, exec("curl ...") shell-out
 //   identical to stdlib/net/http_client (no new C builtin needed).
 
 // _http_shell_escape — single-quote wrap with internal quote escape.
@@ -175,7 +175,7 @@ pub fn http_build_header_flags(headers) -> string {
 // Body containing literal NUL byte unsafe (hexa string truncation; same caveat
 // as http_get_with_headers).
 //
-// raw#9 hexa-only-strict: pure hexa wrapper; exec("curl -X POST ...") shellout.
+// hexa-only-strict: pure hexa wrapper; exec("curl -X POST ...") shellout.
 pub fn http_post_with_headers(url: string, headers, body: string, timeout_sec: int) -> string {
     if len(url) == 0 { return "" }
     let t = if timeout_sec > 0 { timeout_sec } else { 30 }

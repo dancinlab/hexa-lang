@@ -128,7 +128,7 @@ Per-op fork+exec overhead is the dominant cost (~5-10 ms). For LLM dialogue loop
 
 The 5-cycle ping-pong selftest completes in ~150 ms total wall-clock — comfortably below the 3000 ms recv timeout used per cycle.
 
-## Known limits (raw#91 — be honest)
+## Known limits (be honest)
 
 - **Line size**: a single line is whatever fits in the kernel pipe buffer (PIPE_BUF=512 atomic on macOS, 4096 on Linux; total buffer 65536 default). Lines larger than the buffer split across multiple `read(2)`s — perl's `<$fh>` handles this, but extremely large lines (> 1 MB) will starve the writer until the reader drains. Practical recommendation: keep individual messages under 64 KB. Not enforced.
 

@@ -17,7 +17,7 @@
 //
 // IMPL STATUS: STUB-FROM-SPEC. Schema/contract surface only.
 //
-// raw#10:
+// honest-caveat:
 //   (1) parse() returns SPEC-PENDING — depends on v3 typed AST + grammar
 //       block-attr support (Phase δ §5.3 grammar ext).
 //   (2) expand() algorithm is pinned by spec §4.3 but not impl:

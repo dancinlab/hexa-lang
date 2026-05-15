@@ -5,7 +5,7 @@
 - **Severity**: ergonomic (workaround exists but adds string-parsing overhead and brittleness)
 - **Priority**: P1
 - **Source convergence**: convergence/hexa_lang_upstream_2026_04_28_anima_eeg_gaps.convergence (gap 2)
-- **Landing**: self/hexa_full.hexa:16699 (interp dispatch) + self/codegen_c2.hexa:2534, 4082 (AOT codegen — 2 sites: gen2_method_builtin + gen2_expr fallback) + test/regression/map_has_method.hexa (5/5 PASS — empty / present / absent / empty-string-key / parity-with-contains_key — raw#71 falsifier verified). Total: ~14 LoC added.
+- **Landing**: self/hexa_full.hexa:16699 (interp dispatch) + self/codegen_c2.hexa:2534, 4082 (AOT codegen — 2 sites: gen2_method_builtin + gen2_expr fallback) + test/regression/map_has_method.hexa (5/5 PASS — empty / present / absent / empty-string-key / parity-with-contains_key — falsifier verified). Total: ~14 LoC added.
 
 ## Problem
 
@@ -54,7 +54,7 @@ Strictly additive. Method-resolution table grows by 4 entries (`has`, `get`, `ke
   - Ensure map dispatches `.has/.get/.keys/.values` to stdlib intrinsics under both interpreter and AOT
 - **Regression test** (interpreter + AOT dual-run): `test/regression/map_methods.hexa` (~20 LoC)
 
-## Falsifier (raw#71)
+## Falsifier (falsifier)
 
 INVALIDATED iff:
 1. `m.has(k)` returns boolean equal to `k in keys(m)` for all (k, m) pairs in a 1k-pair fuzzer

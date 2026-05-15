@@ -1,7 +1,7 @@
-# raw#14 Magic-Number Parser-Level Detection — Design
+# magic-number Magic-Number Parser-Level Detection — Design
 
 **Date:** 2026-04-19
-**Scope:** unblock `.roadmap` entry 8 (deferred — "raw#14 magic-number detection, parser-level")
+**Scope:** unblock `.roadmap` entry 8 (deferred — "magic-number detection, parser-level")
 **Depends-on:** hexa AST literal position info (currently missing)
 **Today's enforcer:** `tool/no_hardcode_lint.hexa` (grep + `"..."` heuristic, no magic-number rule)
 
@@ -59,7 +59,7 @@ New tool: `tool/magic_number_lint.hexa` — sibling of `no_hardcode_lint.hexa`.
    - any literal inside a `range` expr (`0..n`) — allowed (iteration, not magic)
    - any literal used as array literal index/size annotation — allowed
 5. Remaining hits → report `path:line:col value=<lit>`
-6. Baseline: `.magic-baseline` (same shape as `.hardcode-baseline`); `--bake` / `--list` / `--warn` / `--block` flags mirror raw#14 enforcer
+6. Baseline: `.magic-baseline` (same shape as `.hardcode-baseline`); `--bake` / `--list` / `--warn` / `--block` flags mirror magic-number enforcer
 
 **Exit contract:** mirror `no_hardcode_lint.hexa` — `--bake` writes grandfather list, default `--block` exits 1, `--warn` exits 0.
 
@@ -72,10 +72,10 @@ New tool: `tool/magic_number_lint.hexa` — sibling of `no_hardcode_lint.hexa`.
 1. land 2a + 2b (`Expr.line/col` + parser threading) — behind a no-op (nothing reads the fields yet)
 2. rebootstrap stage0 (existing P7-6 pipeline)
 3. ship `tool/magic_number_lint.hexa` + `.magic-baseline` initial bake
-4. promote `.raw` raw#14 scope line "magic numbers" from informational → enforced; flip roadmap entry 8 from `deferred` to `live`
-5. graduate allow-list constants (`-1,0,1,2`) into `.own` so reviewers can adjust without code change
+4. promote baseline magic-number scope line "magic numbers" from informational → enforced; flip roadmap entry 8 from `deferred` to `live`
+5. graduate allow-list constants (`-1,0,1,2`) into owner so reviewers can adjust without code change
 
 ## 5. Open questions
 
-- tag ident-use-sites too? useful for "unused named const" rule, out of raw#14 scope — defer
+- tag ident-use-sites too? useful for "unused named const" rule, out of magic-number scope — defer
 - multi-file SSOT tracking (one `.hexa` defines `let PORT`, another uses literal `8080`) — requires cross-file symbol table; defer to a follow-up after single-file works

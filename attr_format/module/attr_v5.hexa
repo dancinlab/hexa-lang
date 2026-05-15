@@ -15,7 +15,7 @@
 //
 // IMPL STATUS: FUTURE-STUB. No spec doc; meta exists for registry symmetry.
 //
-// raw#10:
+// honest-caveat:
 //   (1) catalog_size=0 — no attrs declared yet at v5.
 //   (2) parse/validate/expand all return SPEC-PENDING with explicit "no spec yet" message.
 //   (3) When v5 candidate is chosen, this module gets a real spec doc + impl

@@ -22,7 +22,7 @@
 // replaced by `parse_attr_decl()` returning AttrDecl. That impl is the
 // scope of Phase β implementation cycle.
 //
-// raw#10:
+// honest-caveat:
 //   (1) parse() returns SPEC-PENDING — no AST hook in stage0.
 //   (2) Meta is correct; consumers can dispatch on m.supports_typing/
 //       m.supports_composition without depending on impl.

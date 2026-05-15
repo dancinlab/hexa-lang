@@ -85,7 +85,7 @@ Required fields in attr:
 - `pattern`: str, must contain `{name}`-like placeholders for every field declared.
 
 Optional:
-- `catalog`: str, path to a JSON file that aggregates registered sentinels (raw 270 conformant). If absent, sentinel is local-only.
+- `catalog`: str, path to a JSON file that aggregates registered sentinels (follow-up conformant). If absent, sentinel is local-only.
 - `mode`: str, one of `"selftest" | "runtime" | "both"` (default `"both"`).
 
 ### §2.2 Emit-form (matches the declaration)
@@ -112,7 +112,7 @@ if parsed != nil && parsed.name == "SCHED_RESULT" {
 }
 ```
 
-### §2.4 Catalog-form (optional, raw 270 SSOT)
+### §2.4 Catalog-form (optional, follow-up SSOT)
 
 `hexa-lang/state/markers/sentinels/<bucket>.json`:
 ```json
@@ -171,12 +171,12 @@ matches a declared `@sentinel(...)` attr in the same module OR catalog.
 
 **Catalog side** (`hexa-lang/state/markers/sentinels/`, NEW dir):
 - Initial catalog files per bucket (e.g. `sched.json`, `format.json`, `selftest.json`).
-- raw 270 schema (handoff field for AI consumers).
+- follow-up schema (handoff field for AI consumers).
 - Effort: ~30 LoC of JSON per bucket; bucket population follows opt-in adoption.
 
 **Total estimated impl scope**: ~330 LoC across 4 files (excl. catalog data).
 
-## §5 Falsifiers (raw#71)
+## §5 Falsifiers (falsifier)
 
 1. `@sentinel(name="X")` (missing `__` prefix/suffix) — must error at parse/lint time.
 2. `sentinel_emit("Y", verdict="PASS")` where no `@sentinel(name="__Y__", ...)` exists →
@@ -194,7 +194,7 @@ See `proposals/composability_a1_a5_b2_b5/fixtures/b2_sentinel_structured.hexa` �
 8 cases covering decl, emit, parse, missing-field error, name-format error,
 catalog round-trip, comment-form silent-ignore, scraper round-trip.
 
-## §7 raw#10 caveats
+## §7 honest-caveat caveats
 
 1. Soft-doc comment-form is **NOT migrated**. The two forms coexist forever —
    comment-form is for human readers, attr-form is for tooling.
@@ -204,7 +204,7 @@ catalog round-trip, comment-form silent-ignore, scraper round-trip.
    into a static array; runtime reflection deferred.
 3. `pattern` rendering is naive `{key}` substitution — no escaping. If a field value
    contains `{` or `}`, behavior is undefined for v1. Document explicitly.
-4. Catalog file is raw 270 conformant (schema + ai-native fields). Drift between
+4. Catalog file is follow-up conformant (schema + ai-native fields). Drift between
    catalog and `@sentinel` decl = lint error (SSOT violation).
 5. `sentinel_emit` returns the rendered string AND prints it. If the caller only wants
    the string (e.g. write to log file without stdout), use `sentinel_render()` (sister

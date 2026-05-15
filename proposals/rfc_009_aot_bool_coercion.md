@@ -95,17 +95,17 @@ Track A is a bug fix. Code that worked in interpreter starts working in AOT. Cod
   - Sentinel cases: `fn() == 0`, `fn() == -1`, `fn() == 2`
   - Indirect form: `let r = fn(); r == 1` (works today; regression canary)
   - Negative form: `fn() != 1`, `fn() >= 1`, `fn() < 1` parity
-- **raw#18 self-host fixpoint re-proof**: codegen change implies a 3-stage rebuild
+- **self-host fixpoint re-proof**: codegen change implies a 3-stage rebuild
   - stage1 = current bootstrap compiler builds new compiler
   - stage2 = new compiler builds itself
   - stage3 = stage2-compiler builds itself; binary-equal stage2 ⇒ fixpoint
   - run full hexa-lang regression suite to catch any compiler-side site that depended on the bug behavior
 
-## Falsifier (raw#71)
+## Falsifier (falsifier)
 
 INVALIDATED iff for all (fn, k) pairs in a fuzzer-corpus where `fn() -> int` and `fn()` returns int value `v`, the expression `fn() == k` evaluates to `(v == k)` under BOTH interpreter and AOT modes.
 
-Three concrete falsifier instances (raw#71 plurality):
+Three concrete falsifier instances (falsifier plurality):
 
 1. **Direct sentinel**: `fn returns_one() -> int { return 1 }` ; assert `returns_one() == 1` is true under both modes.
 2. **Computed value**: `fn count_chars(s: string, c: string) -> int { /* count occurrences */ }` ; assert `count_chars("aaa", "a") == 3` is true under both modes.
@@ -116,13 +116,13 @@ Three concrete falsifier instances (raw#71 plurality):
 ## Effort Estimate
 
 - LoC: ~50-80 (codegen) + ~50 (regression test) = **~100-130 LoC**
-- Hours: **8-14h** (codegen surface investigation + AOT test harness + raw#18 3-stage fixpoint re-proof)
-- Higher than RFC-005 because of raw#18 fixpoint re-proof requirement (compiler-side rebuild + binary-equal verification).
+- Hours: **8-14h** (codegen surface investigation + AOT test harness + self-host fixpoint 3-stage fixpoint re-proof)
+- Higher than RFC-005 because of self-host fixpoint fixpoint re-proof requirement (compiler-side rebuild + binary-equal verification).
 
 ## Retire Conditions
 
 - Falsifier passes (all 3 anti-falsifiers + fuzzer corpus) → status `done`
-- raw#18 fixpoint re-proof PASS (stage3 binary-equal stage2) → status `done`
+- self-host fixpoint fixpoint re-proof PASS (stage3 binary-equal stage2) → status `done`
 - Track A blocked on codegen rewrite cost → fall back to Track B + document Track A as `parked` (Track B alone is partial-mitigation, not full fix; user must remember the let-bind workaround)
 
 ## Tracking
@@ -131,7 +131,7 @@ Placeholder ID: `hexa-lang/issues/TBD-g9-aot-bool-coercion-int-call-eq`
 
 Family relation: same root-cause class as gap-5 (RFC-005). Recommend bundling the codegen-investigation cycle so both `==` dispatch divergences (string slice + int call) land in a single `self/codegen_c2.hexa` fix-cycle.
 
-## Honesty Disclosures (raw#91 C3)
+## Honesty Disclosures (hexa-only1 C3)
 
 - T17's mk_xii_eeg_corroboration.hexa already deploys the `>= 0` workaround; this RFC documents the upstream gap so the next int-sentinel site does not silently drift.
 - The "broader anima audit 18,975 files" number is a UPPER BOUND — most of those matches are built-in calls (`len()`, `file_bytes()`, `argv()` indices) which are NOT confirmed affected. The TRUE at-risk count requires a parser-pass / type-aware audit deferred to a downstream cycle.

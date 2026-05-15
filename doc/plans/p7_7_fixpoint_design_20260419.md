@@ -147,4 +147,4 @@ Overall confidence 12h: **~60%**. Higher than ROI #143's 45% because the tool al
 - `doc/plans/roi_143_p7_7_fixpoint.md` — prior P7-7 plan (this plan's parent)
 - `doc/plans/roi_149_deep_import_chain.md` — upstream use-chain fix
 - `doc/plans/runtime_c_purge.md` — downstream consumer (blocked on #152 + #153)
-- `.own` rule 1 — "stage0 wrapper 경유" (seed invariant)
+- owner rule 1 — "stage0 wrapper 경유" (seed invariant)

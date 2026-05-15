@@ -44,9 +44,9 @@
 //
 //  CONSTRAINTS
 //    raw#9  hexa-only (no external deps)
-//    raw#10 proof-carrying
-//    raw#11 snake_case
-//    raw#15 no-hardcode (schema version is the only constant)
+//    proof-carrying
+//    snake_case-convention
+//    no-hardcode (schema version is the only constant)
 // ════════════════════════════════════════════════════════════════════════════
 
 // ── Schema version ──────────────────────────────────────────────────────────

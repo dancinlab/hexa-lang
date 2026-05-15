@@ -104,7 +104,7 @@ under interpreter and AOT for the following operations:
 
 **Total estimated impl scope**: ~160 LoC across 3 files.
 
-## §5 Falsifiers (raw#71)
+## §5 Falsifiers (falsifier)
 
 1. `cb(42)` in AOT produces a different stdout byte than `my_handler(42)` → fail.
 2. `[my_handler, other][0](x)` in AOT crashes or returns wrong value → fail.
@@ -117,7 +117,7 @@ See `proposals/composability_a1_a5_b2_b5/fixtures/a1_fn_pointer.hexa` — 7 case
 covering each row of §2 contract table (direct invoke, pass-as-arg, return-from-fn,
 store-in-array, store-in-struct, nil-compare, type_of).
 
-## §7 raw#10 caveats
+## §7 honest-caveat caveats
 
 1. Current AOT switch-trampoline emulation in `parallel_scheduler.hexa` is NOT a bug —
    it predates the typed slot contract and works correctly. This RFC is about enabling

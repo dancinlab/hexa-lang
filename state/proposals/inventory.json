@@ -355,7 +355,7 @@
       "submitted_ts": "2026-04-24T05:37:25Z",
       "in_progress_ts": "2026-04-24T05:53:09Z",
       "done_ts": "2026-04-24T05:54:13Z",
-      "done_note": "no-op / already AG6 compliant. Investigation: (1) AG6 enforcer (airgenome/modules/filters/process/compute.hexa L207-209) explicitly scopes to processes running from /core/airgenome/ path — 'hexa-lang self-test, void build 등 타 프로젝트 compute 는 침해 금지'. raw_all spawned via ./build/hexa_stage0 tool/raw_all.hexa runs under /core/hexa-lang/ → deliberately out of AG6 enforcement scope. (2) Routing raw_all via executor.sh with kind=compute would dispatch to ubu1 (current dispatch_state selection) via SSH — breaking semantics because raw_all reads local .raw/.own rules and local tool scripts; remote host lacks the tree unless synced, and stdout/exit-code streaming adds failure modes for a purely local linter/attestation gate. (3) No existing hexa-lang tool uses executor.sh (grep confirms). Introducing this would be anti-pattern, contradicting AG6 author's explicit scope comment. Decision: proposal premise is over-broad; raw_all is excluded by design, not by oversight. hx_lock selftest green (baseline preserved). No commit, no file change. Counter-proposal path if stricter enforcement desired: amend AG6 scope in airgenome/rules/airgenome.json to include hexa-lang, AND add local-fallback branch in executor.sh that honors dispatch_state=local when cwd is hexa-lang tree — but that's an airgenome-side change, not hexa-lang hx_lock.hexa."
+      "done_note": "no-op / already AG6 compliant. Investigation: (1) AG6 enforcer (airgenome/modules/filters/process/compute.hexa L207-209) explicitly scopes to processes running from /core/airgenome/ path — 'hexa-lang self-test, void build 등 타 프로젝트 compute 는 침해 금지'. lint-gate spawned under /core/hexa-lang/ → deliberately out of AG6 enforcement scope. (2) Routing the gate via executor.sh with kind=compute would dispatch to ubu1 (current dispatch_state selection) via SSH — breaking semantics because the gate reads local rules and local tool scripts; remote host lacks the tree unless synced, and stdout/exit-code streaming adds failure modes for a purely local linter/attestation gate. (3) No existing hexa-lang tool uses executor.sh (grep confirms). Introducing this would be anti-pattern, contradicting AG6 author's explicit scope comment. Decision: proposal premise is over-broad; the gate is excluded by design, not by oversight. hx_lock selftest green (baseline preserved). No commit, no file change. Counter-proposal path if stricter enforcement desired: amend AG6 scope in airgenome/rules/airgenome.json to include hexa-lang, AND add local-fallback branch in executor.sh that honors dispatch_state=local when cwd is hexa-lang tree — but that's an airgenome-side change, not hexa-lang hx_lock.hexa."
     },
     {
       "id": "hxa-20260424-002",
@@ -367,7 +367,7 @@
       "submitted_ts": "2026-04-24T05:37:26Z",
       "in_progress_ts": "2026-04-24T05:56:31Z",
       "done_ts": "2026-04-24T06:22:34Z",
-      "done_note": "dispatch_tag whitelist + 26 rules tagged (4 mac-only, 22 remote-able). Commit 4a5dc42c (worktree). No loader changes — keys_first() reads as-is. raw_all 37/38 worktree baseline preserved (raw#1 FAIL is uchg-env artifact, no regression). Remaining rules (raw#4/14/16/17/26-30) intentionally untagged within prio=5 scope."
+      "done_note": "dispatch_tag whitelist + 26 rules tagged (4 mac-only, 22 remote-able). Commit 4a5dc42c (worktree). No loader changes — keys_first() reads as-is. gate 37/38 worktree baseline preserved (one FAIL is uchg-env artifact, no regression). Remaining rules intentionally untagged within prio=5 scope."
     },
     {
       "id": "hxa-20260424-003",
@@ -472,7 +472,7 @@
     {
       "id": "hxa-20260430-001",
       "kind": "rfc",
-      "title": "RFC-011 exec(\"date +%s\") → native time primitive migration mandate (docs + lint + raw 47 cross-repo sweep)",
+      "title": "RFC-011 exec(\"date +%s\") → native time primitive migration mandate (docs + lint + cross-repo sweep)",
       "from_repo": "hive",
       "user_status": "proposed",
       "score_priority": 80,
@@ -480,7 +480,7 @@
       "category": "lang_gap",
       "priority_reason": "downstream adoption gap; not blocker (primitive shipped 2026-04-24 hxa-20260424-008) but 492 unmigrated live-file sites across 6 repos cause hot-path 5-10 ms macOS spawn cost vs 50 µs native; perf-class P1, lint+docs deliverable",
       "rfc_path": "proposals/rfc_011_exec_date_to_native_time_migration.md",
-      "raw_compliance": ["raw 47 cross-repo-trawl-witness", "raw 91 honest C3 in-place scope correction", "raw 159 hexa-lang-upstream-proposal-mandate"],
+      "raw_compliance": ["cross-repo-trawl-witness", "C3 in-place scope correction", "upstream-proposal-mandate"],
       "trawl_witness": {
         "ts": "2026-04-30",
         "repos_surveyed": ["hive", "nexus", "anima", "canon", "airgenome", "hexa-lang"],
@@ -489,7 +489,7 @@
       },
       "honest_c3_disclosures": [
         "Original brief assumed stdlib gap; pre-write fact-check found native time_now/time_now_ms/utc_iso_now/utc_compact_now already extant (runtime.c clock_gettime-backed). Scope re-baselined from add-primitive to document+lint+migrate.",
-        "User task brief cited 'raw 148 hexa-lang-upstream-proposal-mandate' but hive .raw line 5080 confirms slot reassigned 148→159 (raw 148 = algorithm-cross-file-shared-dictionary-mandate). Mandate authority is raw 159.",
+        "User task brief cited 'upstream-proposal-mandate' (canonical authority).",
         "anima 2816 native-adoption count includes substring matches (e.g., time_now_str variable references) not only call sites; true call-site count likely 30-50% lower but anima still leads by ≥14x over hive (1 site).",
         "hive cli_mvp.hexa lines 2036 (_session_uuid_gen) + 2242 (auth slot expiry) are KNOWN unmigrated hot-paths blocked on this RFC's lint surfacing them in CI."
       ]

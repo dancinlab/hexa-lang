@@ -6,10 +6,10 @@
 - **Priority**: P1 (cross-repo adoption gap; not a stdlib hole)
 - **Source**: hive cli_mvp.hexa hot-path scan 2026-04-30 — `_session_uuid_gen` (line 2036) + auth slot expiry (line 2242) still spawn `date +%s` despite native `time_now()` shipped 2026-04-24 in `hxa-20260424-008`.
 - **Family**: stdlib adoption + lint enforcement (no prior RFC; first downstream-migration-class proposal in this index)
-- **raw 159 invocation**: hexa-lang upstream-proposal-mandate Tier-B (downstream adoption gap; primitive exists; lint enforcement to surface workarounds)
-- **raw 47 invocation**: cross-repo-trawl-witness — survey of 6 sister repos completed 2026-04-30 (witness in §Cross-repo evidence)
+- **no-hardcode9 invocation**: hexa-lang upstream-proposal-mandate Tier-B (downstream adoption gap; primitive exists; lint enforcement to surface workarounds)
+- **follow-up invocation**: cross-repo-trawl-witness — survey of 6 sister repos completed 2026-04-30 (witness in §Cross-repo evidence)
 
-## Honest C3 reframe (raw 91)
+## Honest C3 reframe (C3)
 
 The original proposal brief (hive 2026-04-30 session) assumed hexa-lang stdlib **lacked** a native unix-time primitive, and proposed adding one to close the ~5-10 ms `exec("date +%s")` macOS spawn cost. **Pre-write fact-check (this RFC) discovered the primitive ALREADY EXISTS and ships native `clock_gettime(CLOCK_REALTIME)`-backed implementations**:
 
@@ -23,7 +23,7 @@ The original proposal brief (hive 2026-04-30 session) assumed hexa-lang stdlib *
 
 The actual gap is **downstream adoption inertia**: hive + airgenome + canon + many nexus call sites still spawn `date` despite the primitives being available since `hxa-20260424-008` (2026-04-24, 6 days before this RFC).
 
-This RFC therefore re-scopes from "add primitive" to: **(1) document the existing surface in `proposals/_index.md`** so downstream maintainers stop assuming the gap, **(2) add a lint rule that flags `exec("date +%s")` and similar patterns**, **(3) fire raw 47 cross-repo migration sweep**.
+This RFC therefore re-scopes from "add primitive" to: **(1) document the existing surface in `proposals/_index.md`** so downstream maintainers stop assuming the gap, **(2) add a lint rule that flags `exec("date +%s")` and similar patterns**, **(3) fire follow-up cross-repo migration sweep**.
 
 ## Problem statement
 
@@ -41,7 +41,7 @@ The native primitives do not have these costs:
 ```c
 // runtime.c:6724 — hexa_timestamp = time_now() backing
 HexaVal hexa_timestamp(void) {
-    int64_t pin = hexa_pinned_epoch();        // raw 47 reproducibility hook
+    int64_t pin = hexa_pinned_epoch();        // follow-up reproducibility hook
     if (pin >= 0) return hexa_int(pin);
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);       // ~50 ns vDSO syscall on Linux
@@ -49,7 +49,7 @@ HexaVal hexa_timestamp(void) {
 }
 ```
 
-## Cross-repo evidence (raw 47 trawl 2026-04-30)
+## Cross-repo evidence (follow-up trawl 2026-04-30)
 
 `grep -rn 'exec.*date.*[+%]s' <repo> --include='*.hexa'` line counts. Live = excluding `.claude/worktrees/`, `archive/`, `.bak`, `prev_*` directories (which inflate raw counts via agent-clone duplication).
 
@@ -153,7 +153,7 @@ Pure hexa — extend `self/std_time.hexa` `time_parse` with timezone-Z stripping
 - Land Part 2 lint rule with `WARN` severity (not yet `ERROR`).
 - Update `state/proposals/inventory.json` with this RFC's hxa entry.
 
-**Phase B** (raw 47 cross-repo sweep):
+**Phase B** (follow-up cross-repo sweep):
 - File parallel migration RFCs in nexus / hive / airgenome / canon state/proposals/inventory.json with category=`lang_gap` and reference back to this RFC.
 - Each downstream repo runs a mechanical sed-style migration: `exec("date +%s").trim()` → `to_string(time_now())`; `exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()` → `utc_iso_now()`.
 - airgenome + canon (zero adoption) get priority dispatch — these are pure-win migrations with no false-positive risk.
@@ -161,7 +161,7 @@ Pure hexa — extend `self/std_time.hexa` `time_parse` with timezone-Z stripping
 **Phase C** (after 30-day adoption window):
 - Promote Part 2 lint rule from `WARN` → `ERROR` once cross-repo `exec("date ...")` site count drops below 10% of 2026-04-30 baseline (492 live-file total → target < 50 files).
 
-## Acceptance criteria (raw 71 falsifier)
+## Acceptance criteria (falsifier falsifier)
 
 INVALIDATED iff:
 
@@ -190,16 +190,16 @@ Cross-repo Phase B migration sweep: ~1h per repo × 5 = **5h** (mechanical sed; 
 - Cross-repo `exec.*date.*[+%]s` baseline drops below 10% (492 → < 50 live files) → status `done`.
 - Alternative: hexa interpreter gains automatic `exec()`-string-literal optimization that compile-time-rewrites `exec("date +%s")` to `time_now()` (would supersede Part 2 lint) → status `superseded`.
 
-## raw 91 honest C3 disclosures
+## C3 honest C3 disclosures
 
 - **No new primitive needed**: original brief assumed a stdlib gap; verification found `time_now()` / `time_now_ms()` / `utc_iso_now()` / `utc_compact_now()` already shipped (`hxa-20260424-008`, 2026-04-24). RFC scope re-baselined from "add API" to "document + lint + migrate". This is the **2nd in-place RFC scope correction** in this index (precedent: RFC-006 corrected 2026-04-28 when `runtime.c` was found to already implement the proposed exec wrappers).
 - **Cross-repo line counts are RAW grep**: 2258 nexus + 2905 anima counts include `.claude/worktrees/` agent-clone duplication (1685 / 1825 files of which most are agent-snapshots). Live-file counts (114 / 64) are the better signal. The RFC body cites both — raw grep for upper bound, live-file count for actionable target.
 - **anima native-primitive adoption count (2816)** is plausible but high — this includes any `time_now` substring match (e.g., `time_now_str` variable references) not only call sites. True call-site count is likely 30-50% lower; even at 1400-1900, anima leads by 14x over hive's 1 site.
 - **No 80% reachability claim**: this RFC does not pretend to drive a Shannon target; it is a perf + lint hygiene RFC.
 - **C3 hot-path migration disclosed**: hive `cli_mvp.hexa:2036` (`_session_uuid_gen` epoch fallback) and `:2242` (auth slot expiry check) are KNOWN unmigrated sites blocked on this RFC's Part 2 lint surfacing them in CI rather than manual scan.
-- **raw 137 cmix-ban**: PRESERVED. All proposed primitives are deterministic syscalls; no probabilistic mixer.
-- **raw 47 trawl-witness**: 6 sister repos surveyed (hive, nexus, anima, canon, airgenome, hexa-lang); witness embedded in §Cross-repo evidence above. Trawl conducted 2026-04-30 by hive coding-agent session.
-- **raw 159 invocation accuracy**: hive `.raw` line 5080 confirms `raw 159 = hexa-lang-upstream-proposal-mandate` (slot reassigned 148 → 159 to resolve dual-candidate conflict; raw 148 is `algorithm-cross-file-shared-dictionary-mandate`). The original task brief cited "raw 148 hexa-lang-upstream-proposal-mandate" — this is a slot-reference drift; the mandate this RFC complies with is **raw 159**.
+- **follow-up7 cmix-ban**: PRESERVED. All proposed primitives are deterministic syscalls; no probabilistic mixer.
+- **follow-up trawl-witness**: 6 sister repos surveyed (hive, nexus, anima, canon, airgenome, hexa-lang); witness embedded in §Cross-repo evidence above. Trawl conducted 2026-04-30 by hive coding-agent session.
+- **no-hardcode9 invocation accuracy**: hive baseline line 5080 confirms `no-hardcode9 = hexa-lang-upstream-proposal-mandate` (slot reassigned 148 → 159 to resolve dual-candidate conflict; magic-number8 is `algorithm-cross-file-shared-dictionary-mandate`). The original task brief cited "magic-number8 hexa-lang-upstream-proposal-mandate" — this is a slot-reference drift; the mandate this RFC complies with is **no-hardcode9**.
 
 ## Cross-link to existing surface
 

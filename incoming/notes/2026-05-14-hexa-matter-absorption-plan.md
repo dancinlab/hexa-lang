@@ -91,7 +91,7 @@ The matter-side enforces this via:
 - `LATTICE_POLICY.md` (mirror of the universal policy) +
 - `LIMIT_BREAKTHROUGH.md` (Wave M real-limits audit, 12 universal + 12
   silicon-specific limits with HARD/SOFT/BREAKABLE classification) +
-- `selftest/lattice_fit_on_external_entities_audit.py` (raw#10 C3 honesty
+- `selftest/lattice_fit_on_external_entities_audit.py` (honest-caveat C3 honesty
   guard — fails if any post-policy spec applies n=6 lattice formulas to
   vendor / NIST / ITER / ASTM data) +
 - `selftest/nist_anchor_audit.py` (verifies citations resolve to
@@ -126,7 +126,7 @@ Matlantis · OMat24 · COD · OQMD · AFLOW · NOMAD · NIMS MatNavi ·
 Catalysis-Hub · 5 universal force fields) with a single discipline:
 - `--selftest` is **offline-replay only** (bundled fixtures, exit 0);
 - live API calls gated behind `--live`;
-- raw#10 C3 enforced — no n=6 lattice-fit on absorbed external data;
+- honest-caveat C3 enforced — no n=6 lattice-fit on absorbed external data;
 - License honesty matrix per `SOURCES.md` per adapter;
 - "PREDICTED, NOT SYNTHESIZED" preserved on GNoME/OMat24/Matlantis.
 
@@ -164,7 +164,7 @@ bridge-rules contract** (4 rules from `AGENTS.md` §"Bridge rules") as
 Doctrine v2's 5 rules (as I understand them from the atlas absorption
 precedent + the user's framing):
 1. **Real-limits-first** — no fit-to-convenient-number.
-2. **No lattice-fit on external entities** (raw#10 C3).
+2. **No lattice-fit on external entities** (honest-caveat C3).
 3. **Predictions ≠ measurements** — preserve provenance.
 4. **Offline / deterministic verification** in CI.
 5. **License + citation honesty** per absorbed artifact.
@@ -199,9 +199,9 @@ precedent + the user's framing):
 - **What it does (matter-side):** walks every spec doc, fails if it
   finds `σ(6)` / `τ(6)` / `J₂` arithmetic applied to vendor (Wacker /
   Wolfspeed / Shin-Etsu / …) or canonical reference (NIST / ITER /
-  ASTM) data tables — raw#10 C3 enforcement.
+  ASTM) data tables — honest-caveat C3 enforcement.
 - **Target (hexa-lang):** walks `embedded.gen.hexa` + overlay nodes;
-  fails if any node `.raw` contains lattice-arithmetic applied to a
+  fails if any node baseline contains lattice-arithmetic applied to a
   marker-tagged external entity (`@vendor:` · `@nist:` · `@external:`).
 - **Wire to:** `selftest/atlas_doctrine_smoke.sh` (new gate) and
   `hexa atlas audit --doctrine` CLI surface.

@@ -12,7 +12,7 @@ catalog scope:       4 entry-point layers, every verb reachable from a hexa inte
 
 ## Abstract
 
-Five distinct command surfaces converge on the user-visible `nexus` brand: (1) `engine/nexus_cli.hexa` exposes ~32 hive-facing verbs with audit-log + caller tracking, (2) `cli/run.hexa` exposes ~50 top-level verbs with 200+ second-level branches — by far the largest internal surface, (3) seven `bin/` standalone bash/python wrappers handle launchd / app-lifecycle / Hetzner offload, (4) 28 `bin/hexa-*` scripts are pure-grep annotation extractors (clear absorption candidates), and (5) the spec sidecar `nexus_cli_spec.json` enumerates exactly **19 hive-public verbs**, leaving roughly **60+ verbs undocumented** to outside callers. Surprising findings: `nexus check` and `nexus kick` are entirely absent from the spec despite being the two most-cited recent governance entries; `nexus honesty` is dead (deprecated 2026-05-06, absorbed into `check` as BT-AI2 auto-audit); `nexus solve` is also dead (delegated to `hxq solve` in hexa-lang); `kick run` has a **hard-fail Mac fallback ban** from raw 40+42 + 2026-04-29 user directive.
+Five distinct command surfaces converge on the user-visible `nexus` brand: (1) `engine/nexus_cli.hexa` exposes ~32 hive-facing verbs with audit-log + caller tracking, (2) `cli/run.hexa` exposes ~50 top-level verbs with 200+ second-level branches — by far the largest internal surface, (3) seven `bin/` standalone bash/python wrappers handle launchd / app-lifecycle / Hetzner offload, (4) 28 `bin/hexa-*` scripts are pure-grep annotation extractors (clear absorption candidates), and (5) the spec sidecar `nexus_cli_spec.json` enumerates exactly **19 hive-public verbs**, leaving roughly **60+ verbs undocumented** to outside callers. Surprising findings: `nexus check` and `nexus kick` are entirely absent from the spec despite being the two most-cited recent governance entries; `nexus honesty` is dead (deprecated 2026-05-06, absorbed into `check` as BT-AI2 auto-audit); `nexus solve` is also dead (delegated to `hxq solve` in hexa-lang); `kick run` has a **hard-fail Mac fallback ban** from follow-up+42 + 2026-04-29 user directive.
 
 ---
 
@@ -108,7 +108,7 @@ Bash wrapper: `~/core/nexus/bin/nexus-cli`. Sub-routing into `subcmd_help(sub)` 
 | `qrng` | `cmd_qrng` L1021 | `nexus-cli qrng <sub>` | `cli/qrng.hexa` standalone | ✗ | ❌ live ANU calls |
 | `mc` | `cmd_mc` L1039 | `nexus-cli mc <sub>` | `cli/mc.hexa` Monte-Carlo standalone | ✗ | ❌ heavy compute |
 
-### 2.4 Governance / lint (raw 99 cross-repo)
+### 2.4 Governance / lint (hexa-only9 cross-repo)
 
 | name | dispatcher | backend | spec | absorption |
 |---|---|---|---|---|
@@ -177,7 +177,7 @@ Authoritative grade per `cmd_help` lines 244–283.
 | `revive` | (inline shim) | engines+maps v2 infinite loop; delegates `cli/revive/revive.hexa` | – | `--max-iter N`, `--apply`, `--quiet` | ❌ writes |
 | `solve` | (inline shim) | **dead** — deprecated, delegates to `hxq solve` (hexa-lang) or prints guidance | – | `--route "<problem>"` | ❌ moved out |
 | `canary` | (inline) | L1/L4 verdict direct call; delegates `tool/canary_drill.hexa` | – | passthrough | ❌ heavy probe |
-| `omega-monitor` | (inline) | raw 71 falsifier monitor — `hive_test_latency` ω-cycle; delegates `tool/raw81_omega_cycle_monitor.hexa` | – | `check`/`report`/`status` | ❌ live state |
+| `omega-monitor` | (inline) | falsifier falsifier monitor — `hive_test_latency` ω-cycle; delegates `tool/raw81_omega_cycle_monitor.hexa` | – | `check`/`report`/`status` | ❌ live state |
 | `meta-closure` | `cmd_meta_closure` L5350 | Phase 10 closure (single-shot) | L2 | `--seed` | ❌ remote |
 | `hyperarithmetic` | `cmd_hyperarithmetic` L5357 | Π₀² reverse-math (single-shot) | L2 | `--prop` | ❌ remote |
 | `promote` | `cmd_promote` L5367 | manual grade promotion via atlas_health.hexa | – | `--id`, `--grade`, `--audit-log` | ❌ writes atlas |
@@ -187,7 +187,7 @@ Authoritative grade per `cmd_help` lines 244–283.
 | name | dispatcher | role | nested | absorption |
 |---|---|---|---|---|
 | `atlas` | `cmd_atlas` L5383 | atlas.n6 routing | `search`, `append --node\|--edge`, `absorb [--target nexus] [--glob] [--archive] [--dry-run]`, legacy fwd to atlas_health.hexa | search ★★★, append/absorb ❌ writes |
-| `lock` | `cmd_lock_unlock` L5471 | per-file `chflags uchg` + audit ledger (raw 1 + raw 85); sets `HIVE_CLI_PARENT=1` | – | ❌ filesystem mutation |
+| `lock` | `cmd_lock_unlock` L5471 | per-file `chflags uchg` + audit ledger (follow-up + follow-up5); sets `HIVE_CLI_PARENT=1` | – | ❌ filesystem mutation |
 | `unlock` | `cmd_lock_unlock` L5471 | per-file `chflags nouchg` | – | ❌ filesystem mutation |
 | `lock-status` | `cmd_lock_unlock` L5471 | display chflags + recent audit entries | – | ★★★ read-only |
 
@@ -247,7 +247,7 @@ Witness emit format for the `__NEXUS_CHECK__` sentinel itself: `n6/atlas.append.
 
 **Dispatcher:** `cmd_kick` in `cli/run.hexa` L6607.
 **Helpers:** `_kick_help` L6192, `_kick_tree` L6226, `_kick_bench` L6237, `_kick_selftest` L6263, `_kick_run` L6286, `_kick_status` L6536.
-**Semantics:** `kick ≡ ω-cycle`. Canonical CLI shape: `nexus kick <topic> [flags...]`. Unknown sub treated as topic (raw 91 honest C3 transparency + raw 168 canonical shape, see L6630–6650).
+**Semantics:** `kick ≡ ω-cycle`. Canonical CLI shape: `nexus kick <topic> [flags...]`. Unknown sub treated as topic (C3 honest C3 transparency + follow-up8 canonical shape, see L6630–6650).
 
 Sub-command graph:
 
@@ -271,16 +271,16 @@ Noise injection types (canonical diagram: `~/core/diagrams/llm_vs_nexus_noise.md
 - **beta** — QRNG byte (real ANU when `KICK_BETA_REAL_ANU=1`, urandom fallback per obs_2)
 - **gamma** — empirical bridge selected by beta-byte from 16 registered bridges
 
-**Mac fallback hard-fail (raw 40+42 + 2026-04-29 user directive, L6313–6334):**
+**Mac fallback hard-fail (follow-up+42 + 2026-04-29 user directive, L6313–6334):**
 - `uname -s == "Darwin"` ⇒ `_kick_run` mandatorily forwards over SSH to `NEXUS_KICK_FORWARD_HOST` (default: `ubu2`, since hetzner removed from fleet 2026-05-01).
-- 8s `ssh BatchMode` probe; on failure → **hard-fail exit 2 + raw 66 reason trailer**. No Mac local fallback exists. No opt-in escape hatch.
+- 8s `ssh BatchMode` probe; on failure → **hard-fail exit 2 + ai-native reason trailer**. No Mac local fallback exists. No opt-in escape hatch.
 - Audit append: `state/audit/kick_auto_forward.jsonl` records every forward / hard-fail.
 - Remote inner: `cd ~/core/nexus && NEXUS_KICK_SKIP_OAUTH_GATE=1 NEXUS_KICK_SKIP_PREFLIGHT=1 ~/.hx/bin/hexa run cli/run.hexa <fwd-args>`.
 
-**Authorized hive-cli fallback (raw 99 stage-3 + raw 100, L6377+):** if remote returns `__KICK_RESULT__ FAIL` AND `all-claude-slots-exhausted`, invoke `hive_kick_dispatch.hexa` as the canonical authorized internal fallback. Only fires for OAuth-saturation; other FAIL modes are not coerced.
+**Authorized hive-cli fallback (hexa-only9 stage-3 + honest-caveat0, L6377+):** if remote returns `__KICK_RESULT__ FAIL` AND `all-claude-slots-exhausted`, invoke `hive_kick_dispatch.hexa` as the canonical authorized internal fallback. Only fires for OAuth-saturation; other FAIL modes are not coerced.
 
-**Sentinel:** `__KICK_RESULT__ <PASS|FAIL> witness=<path> tier1=<N> falsifier_pass=<N>` (raw 80).
-**Error trailer:** `reason=<slug> fix=<directive>` (raw 66).
+**Sentinel:** `__KICK_RESULT__ <PASS|FAIL> witness=<path> tier1=<N> falsifier_pass=<N>` (follow-up0).
+**Error trailer:** `reason=<slug> fix=<directive>` (ai-native).
 **Witness landing:** `design/kick/<YYYY-MM-DD>_<topic-slug>_omega_cycle.json`.
 **Architecture doc:** `design/kick/2026-04-26_kick_architecture_omega_cycle.json`.
 
@@ -322,14 +322,14 @@ Originating in `CANON/domains/physics/simulation-theory/`. 24 sub-commands; full
 | `provenance <id>` | Tier-2 i15 | git first/last commit hash for atlas fact id | bash |
 | `diff-per-type [<commit>]` | Tier-2 i9 | atlas commit diff @type-classified | bash |
 | `dashboard [--out PATH]` | Tier-2 i13 | 4-repo (nexus+n6+anima+hexa-lang) unified status | bash |
-| `precommit [--install-hook]` | Tier-2 i14 | staged atlas grade-format / dup-id sanity | bash, raw 25 lock-aware |
-| `collision-check` | – | cross-shard (type,id) watchdog; CONFLICT exit 76 (raw 23) | bash |
+| `precommit [--install-hook]` | Tier-2 i14 | staged atlas grade-format / dup-id sanity | bash, follow-up lock-aware |
+| `collision-check` | – | cross-shard (type,id) watchdog; CONFLICT exit 76 (follow-up) | bash |
 | `status-all [--brief\|--full]` | – | 5-atlas-tools page summary | – |
 | `timeline-rotate [--check]` | – | `atlas_health_timeline.jsonl` size rotator (default 5000 lines) | – |
-| `falsifier-health [--quiet\|--json]` | – | 24 falsifier registry CLEAN/HIT/ERROR + timeline | raw 71 report-only |
+| `falsifier-health [--quiet\|--json]` | – | 24 falsifier registry CLEAN/HIT/ERROR + timeline | falsifier report-only |
 | `bridge-health [--quiet\|--json]` | – | 16-bridge `--selftest` PASS/FAIL/OFFLINE-FALLBACK + timeline | – |
 | `health-check-all [--quiet]` | – | cron wrapper: falsifier + bridge + status-all | – |
-| `grade-promote [--limit N]` | Tier-2 i6 | [7] heuristic entries → SUGGEST mode, manual-only (raw 71) | – |
+| `grade-promote [--limit N]` | Tier-2 i6 | [7] heuristic entries → SUGGEST mode, manual-only (falsifier) | – |
 | `bridge-aging [--bridge NAME]` | Tier-2 i10 | URL response schema drift monitor | snapshot-based |
 | `index [--lookup ID]` | Tier-1 i1 | atlas (id→line, 9166 entries) O(1) lookup | bash, dedup accel |
 | `falsifier-spawn` | Tier-1 i11 | high-grade atlas → F# candidate auto-spawn | suggest-only |
@@ -458,7 +458,7 @@ Common interface (all):
 ### Highest-impact spec gaps
 
 1. **`nexus check`** — fully documented in its own sub-block but easy to miss because it's not in main `subcommands` map. Recommend promoting.
-2. **`nexus kick`** — entirely absent. Has 200+ lines of dispatcher and the canonical ω-cycle CLI shape. Critical for raw 168 / closed-loop iter-3.
+2. **`nexus kick`** — entirely absent. Has 200+ lines of dispatcher and the canonical ω-cycle CLI shape. Critical for follow-up8 / closed-loop iter-3.
 3. **The L0…L11 ladder** (`canon`, `forge`, `molt`, `wake`, `swarm`, `reign`, `dream`, `surge`, `omega`) — none documented. `omega` is described in cmd_help as **the main entry point**.
 4. **`hexa-sim`** — 24-subcmd surface, the entire n=6 simulation toolchain, hidden.
 5. **`universe`** — 11-sub × 21-topology grid, hidden.
@@ -504,7 +504,7 @@ Heavy compute (drill / smash / free / omega / dream / surge / swarm / reign / mo
 
 2. **`nexus honesty` is dead but the absorption left a witness emitter.** Killed 2026-05-06, replaced by inline BT-AI2 audit inside `cmd_check`. The audit auto-emits `n6/atlas.append.honesty_bit-*.n6` shards using strict thresholds (≥0.05 / ≤0.01, hard-coded consts to defeat Goodhart drift). The token grammar (`__BT_AI2__ label=... claim=... loss=... expected=...`) is now an inline protocol that every `check_*.hexa` domain can opt into; absent tokens silently skip.
 
-3. **`nexus kick` is a hard-fail Mac fortress.** Per 2026-04-29 user directive verbatim ("mac 이용 , mac fallback , mac 으로 우회 kick 실행 모두 관련 폐기"), kick on Darwin MUST SSH-forward (default ubu2) and hard-fails if the host is unreachable — no local opt-in escape exists. Plus an authorized hive-cli fallback at L6377 fires *only* for `all-claude-slots-exhausted` (raw 99 stage-3 + raw 100), nothing else. This is the most policy-heavy verb in the codebase, and it is entirely absent from `nexus_cli_spec.json`.
+3. **`nexus kick` is a hard-fail Mac fortress.** Per 2026-04-29 user directive verbatim ("mac 이용 , mac fallback , mac 으로 우회 kick 실행 모두 관련 폐기"), kick on Darwin MUST SSH-forward (default ubu2) and hard-fails if the host is unreachable — no local opt-in escape exists. Plus an authorized hive-cli fallback at L6377 fires *only* for `all-claude-slots-exhausted` (hexa-only9 stage-3 + honest-caveat0), nothing else. This is the most policy-heavy verb in the codebase, and it is entirely absent from `nexus_cli_spec.json`.
 
 ---
 

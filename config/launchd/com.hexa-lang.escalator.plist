@@ -5,7 +5,7 @@
   com.hexa-lang.escalator — unsandboxed escalation daemon.
 
   Purpose: bypass Claude Code session's sandbox for operations Claude cannot
-  perform directly (writes to raw#8 F3 test_*.hexa, launchctl bootstrap,
+  perform directly (writes to follow-up F3 test_*.hexa, launchctl bootstrap,
   etc.). Claude Code writes JSON requests to /tmp/hexa_escalate/*.req;
   this daemon wakes every 2s, processes the queue, writes *.result.
 

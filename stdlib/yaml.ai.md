@@ -51,7 +51,7 @@ pub fn yaml_validate_keys(m: map, required: [string])  -> [string]   // missing 
 | `""` (empty) | extract → `""`, parse → `#{}` |
 | Frontmatter without closing `---` | extract → `""` (defensive — treats unterminated as none) |
 | Non-frontmatter text | extract → `""`, strip → text unchanged |
-| Nested YAML | child lines dropped, parent value `""` (raw#10 limit 1) |
+| Nested YAML | child lines dropped, parent value `""` (honest-caveat limit 1) |
 | Comment lines (`# ...`) | dropped |
 | List items (`- foo`) | dropped (flat parser only) |
 | Inline `# comment` after value | NOT stripped (URLs containing `#` preserved) |

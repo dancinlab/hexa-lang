@@ -63,7 +63,7 @@ Edge continuation lines (`<-` `->` etc.) are not parsed structurally — they ar
 
 | n6 type | grade-marker semantics | hexa-lang status | gap |
 |---|---|---|---|
-| `@P` primitive | irreducible foundational value | covered (`ATLAS_P_NODES`, 567 nodes) | edges + grade unparsed (lives in `.raw` only) |
+| `@P` primitive | irreducible foundational value | covered (`ATLAS_P_NODES`, 567 nodes) | edges + grade unparsed (lives in baseline only) |
 | `@C` constant | computed from primitives | covered (`ATLAS_C_NODES`, 6201 nodes) | as above |
 | `@L` law | qualitative invariant | covered (`ATLAS_L_NODES`, 620 nodes) | as above |
 | `@F` formula | explicit functional form | **dropped at parse** | header sigil recognized for termination but kind="" → not emitted |
@@ -79,7 +79,7 @@ Edge continuation lines (`<-` `->` etc.) are not parsed structurally — they ar
 
 | Operator | Name | hexa-lang status |
 |---|---|---|
-| `<-` | depends_on | concatenated into `.raw`, not structured |
+| `<-` | depends_on | concatenated into baseline, not structured |
 | `->` | derives | as above |
 | `=>` | application (prose) | as above |
 | `==` | equivalent (symbolic) | as above |
@@ -87,11 +87,11 @@ Edge continuation lines (`<-` `->` etc.) are not parsed structurally — they ar
 | `\|>` | verified_by (script ref) | as above |
 | `!!` | breakthrough (citation) | as above |
 
-**Gap:** **all 7 provenance edges are unstructured.** Queries like "what derives X" or "show me every `[10!]` breakthrough" require regex against `.raw`, not field access. The existing parser only sets `kind / id / raw / source_file / source_line`.
+**Gap:** **all 7 provenance edges are unstructured.** Queries like "what derives X" or "show me every `[10!]` breakthrough" require regex against baseline, not field access. The existing parser only sets `kind / id / raw / source_file / source_line`.
 
 ### Grade markers
 
-n6 specifies `[N]` / `[N*]` / `[N!]` / `[N?]` / `[10*!]` / `[11*]` / `[d.r]` (alien-index). hexa-lang **does not parse the grade** — the trailing `[...]` lives inside `.raw` as text. There is no `AtlasNode.grade` field, no `verified` boolean, no breakthrough flag.
+n6 specifies `[N]` / `[N*]` / `[N!]` / `[N?]` / `[10*!]` / `[11*]` / `[d.r]` (alien-index). hexa-lang **does not parse the grade** — the trailing `[...]` lives inside baseline as text. There is no `AtlasNode.grade` field, no `verified` boolean, no breakthrough flag.
 
 ## 3. Algorithm comparison
 

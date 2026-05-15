@@ -8,7 +8,7 @@ date: 2026-04-20
 # `.loop` chain integration — 제안 패치 / proposal
 
 `.loop` SSOT 에 chain-triggered loop entry 두 건을 추가하는 공식
-제안. `.loop` 는 raw#16 으로 잠겨 있어 직접 편집 불가 — unlock
+제안. `.loop` 는 follow-up 으로 잠겨 있어 직접 편집 불가 — unlock
 ceremony 를 거친 뒤 sed/manual edit 를 가하고 즉시 재잠금한다.
 
 ## 1. 배경 / Context
@@ -21,7 +21,7 @@ fixpoint archive) 두 건. 각각 `verify_fixpoint.hexa` /
 - `.loop` 는 해당 chain 을 trigger 하는 얇은 래퍼가 된다.
 
 이로써 (a) cron schedule 은 `.loop` 한 곳, (b) step 시퀀스는 `.chain`
-한 곳으로 **완전히 분리** — raw#0 "SSOT 유일성" 원칙과 합치.
+한 곳으로 **완전히 분리** — forward-chain "SSOT 유일성" 원칙과 합치.
 
 ## 2. 제안 변경 / Proposed additions
 
@@ -83,7 +83,7 @@ loop 4 live "hourly convergence check"
 EOF
 
 # 3. 문법 검증
-./build/hexa_stage0 tool/raw_all.hexa --only raw 16
+./build/hexa_stage0 tool/raw_all.hexa --only follow-up
 
 # 4. chain 실제 dry-run
 ./build/hexa_stage0 tool/chain_runner.hexa run daily-check raw_all
@@ -105,7 +105,7 @@ EOF
 # loop 3 / loop 4 블록 삭제 (sed 또는 수작업).
 #   head -<lineno> .loop > .loop.new && mv .loop.new .loop
 
-./build/hexa_stage0 tool/raw_all.hexa --only raw 16
+./build/hexa_stage0 tool/raw_all.hexa --only follow-up
 ./build/hexa_stage0 tool/hx_lock.hexa
 ./hx commit -m "revert(.loop): drop loop#3 #4 — chain integration aborted"
 ```
@@ -117,7 +117,7 @@ audit log (`raw_audit.hexa tail 20`) 에 unlock / edit / rollback
 
 - (Q1) hourly convergence 가 실제 drift 를 몇 번/일 발생시키는지 측정
   필요 — 과도하면 daily 로 회귀.
-- (Q2) chain-runner 가 stdout 에 뿌리는 marker log 를 `.raw-audit` 으로
+- (Q2) chain-runner 가 stdout 에 뿌리는 marker log 를 `audit` 으로
   자동 append 할지 결정 필요 (현재는 chain_reset 만 append).
 - (Q3) `.loop` cron expr 와 chain 의 `step.X.timeout` 이 충돌하면 누가
   이기나 — 설계 고정 필요.

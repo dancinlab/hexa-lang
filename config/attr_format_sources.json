@@ -30,7 +30,7 @@
       "catalog_size": 24,
       "spec_doc": "hexa-lang/self/attrs/attrs.json",
       "module": "hexa-lang/attr_format/module/attr_v1.hexa",
-      "notes": "comment-form // @attr(...) lint wrapper — current ai-native baseline (raw 3 / 24-attr catalog)"
+      "notes": "comment-form // @attr(...) lint wrapper — current ai-native baseline (attr-usage / 24-attr catalog)"
     },
     "v2": {
       "version": 2,
