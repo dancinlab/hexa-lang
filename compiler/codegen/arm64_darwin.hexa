@@ -631,12 +631,50 @@ fn _arm64_store_spill(buf: [LInstr], rm: RegMap, id: i64, src_reg: string) -> [L
     return out
 }
 
+// Build a >12-bit constant into `reg` via movz + up to 3 movk. ARM64
+// cmp immediates are ≤12-bit and mov/movz ≤16-bit; enum/struct __tag
+// values are djb2 _path_hash ints far exceeding that — they emitted as
+// `cmp xN,#<hash>` / `mov xN,#<hash>` (1945+314 of the 2332 residual
+// stage-1-.s assembler errors). Halfwords via /%65536 (callers gate on
+// value>4095, always positive). `#h, lsl #N` is one #-prefixed label so
+// emit/asm _fmt_label renders it verbatim (no platform prefix).
+fn _arm64_emit_imm_to_reg(buf: [LInstr], reg: string, value: i64) -> [LInstr] {
+    let mut out = buf
+    let h0 = value % 65536
+    let h1 = (value / 65536) % 65536
+    let h2 = (value / 65536 / 65536) % 65536
+    let h3 = (value / 65536 / 65536 / 65536) % 65536
+    out.push(_arm64_instr2("movz", _arm64_op_reg(reg),
+                     _arm64_op_label("#" + to_string(h0)), "imm 0-15"))
+    if h1 != 0 {
+        out.push(_arm64_instr2("movk", _arm64_op_reg(reg),
+                     _arm64_op_label("#" + to_string(h1) + ", lsl #16"), "imm 16-31"))
+    }
+    if h2 != 0 {
+        out.push(_arm64_instr2("movk", _arm64_op_reg(reg),
+                     _arm64_op_label("#" + to_string(h2) + ", lsl #32"), "imm 32-47"))
+    }
+    if h3 != 0 {
+        out.push(_arm64_instr2("movk", _arm64_op_reg(reg),
+                     _arm64_op_label("#" + to_string(h3) + ", lsl #48"), "imm 48-63"))
+    }
+    return out
+}
+
 fn _arm64_op_rm(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
                 scratch: string) -> [LInstr] {
     let mut out = buf
     if o.kind == "local" {
         if _arm_is_spilled(rm, o.local_id) {
             out = _arm64_load_spill(out, rm, o.local_id, scratch)
+        }
+    }
+    // Large const_int (e.g. _path_hash __tag) → movz/movk into scratch;
+    // _arm64_op_resolve returns reg(scratch). Small (≤4095) stay
+    // immediate (valid in cmp/add/mov — unchanged, no regression).
+    if o.kind == "const_int" {
+        if o.int_val > 4095 {
+            out = _arm64_emit_imm_to_reg(out, scratch, o.int_val)
         }
     }
     // const_str / global → PC-relative address materialization. ARM64
@@ -675,7 +713,12 @@ fn _arm64_op_resolve(o: Operand, st: ArmStrTab, rm: RegMap,
         }
         return _arm64_op_reg(_arm_reg_lookup(rm, o.local_id))
     }
-    if o.kind == "const_int" { return _arm64_op_imm(o.int_val) }
+    if o.kind == "const_int" {
+        // >4095 was movz/movk-materialized into scratch by _arm64_op_rm
+        // (ARM64 cmp imm ≤12-bit); small values stay immediate.
+        if o.int_val > 4095 { return _arm64_op_reg(scratch) }
+        return _arm64_op_imm(o.int_val)
+    }
     // global / const_str: address already materialized into `scratch`
     // by _arm64_op_rm (adrp+add). Return the register, not the label —
     // emitting the bare label is invalid ARM64.
@@ -844,7 +887,26 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if _is_bit_and(s.op)   { mnemonic = "and" }
             if _is_bit_or(s.op)    { mnemonic = "orr" }
             if _is_bit_xor(s.op)   { mnemonic = "eor" }
-            buf.push(_arm64_instr3(mnemonic, dst, a, b, "binop " + s.op))
+            // ARM64 data-processing: Xn (first source) MUST be a register;
+            // mul/sdiv/udiv/and/orr/eor have NO immediate form at all.
+            // A small const_int operand resolves to an immediate, so
+            // `add xD,#0,#0`-class invalid instrs were emitted (the final
+            // 77 stage-1-.s assembler errors). Materialize any immediate
+            // source into its scratch first (mirrors the cmp-path idiom
+            // above); large const_int is already reg via _arm64_op_rm.
+            let mut a_real = a
+            if a.kind == "imm" {
+                buf.push(_arm64_instr2("mov", _arm64_op_reg(a_scratch), a,
+                                 "materialize arith lhs"))
+                a_real = _arm64_op_reg(a_scratch)
+            }
+            let mut b_real = b
+            if b.kind == "imm" {
+                buf.push(_arm64_instr2("mov", _arm64_op_reg(b_scratch), b,
+                                 "materialize arith rhs"))
+                b_real = _arm64_op_reg(b_scratch)
+            }
+            buf.push(_arm64_instr3(mnemonic, dst, a_real, b_real, "binop " + s.op))
             buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
         }
         return buf
@@ -914,7 +976,16 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     if s.kind == _STMT_BR_COND {
         if len(s.args) > 0 {
             buf = _arm64_op_rm(buf, s.args[0], st, rm, "x9")
-            let cond = _arm64_op_resolve(s.args[0], st, rm, "x9")
+            let cond0 = _arm64_op_resolve(s.args[0], st, rm, "x9")
+            // cbz needs a register operand; a constant condition resolves
+            // to an immediate (`cbz #0,…` invalid — the final 5 stage-1-.s
+            // assembler errors). Materialize into x9 first.
+            let mut cond = cond0
+            if cond0.kind == "imm" {
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x9"), cond0,
+                                 "materialize br_cond to reg"))
+                cond = _arm64_op_reg("x9")
+            }
             let else_lab = _arm64_block_label(modhash, fname, s.target_block_else)
             buf.push(_arm64_instr2("cbz", cond, _arm64_op_label(else_lab),
                              "br_cond: zero -> else"))
