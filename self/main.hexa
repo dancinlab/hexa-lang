@@ -57,6 +57,8 @@ fn cmd_help() {
     println("  url <hexa://URL>                        Dispatch hexa:// URL (macOS handler)")
     println("                                            schemes: run?file=· · repl?dir=· · install?pkg=·")
     println("  convergence dump|dump-meta <file>       Scan @convergence metadata (3 formats: A/B/C)")
+    println("  tape <file.tape>                        Read/validate .tape v1.2 (native C-compiled)")
+    println("  hxc <file.hxc>                          Decode HXC v2 wire sidecar (native, schema-agnostic)")
     println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
@@ -365,6 +367,422 @@ fn cmd_status() {
     println("  SSOT .hexa:  " + self_cnt + " files")
     let art_cnt = exec("ls build/artifacts 2>/dev/null | wc -l | tr -d ' \\n'")
     println("  artifacts:   " + art_cnt + " files")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  L2 absorption — native .tape v1.2 reader + generic HXC v2 decoder
+//
+//  Inlined (A′) so `hexa tape <f>` / `hexa hxc <f>` are C-compiled
+//  builtins with no `use` (the transpiler emits extern-only for `use`,
+//  which would force build_dispatch surgery). SSOT of the parsing logic
+//  is vendored from the sibling repo ~/core/tape/algorithms (tape_grep/
+//  tape_index) and compiler/atlas/hxc_loader.hexa; verified standalone
+//  via interp before this inline. Uses main.hexa's own read_file /
+//  file_exists builtins (no stdlib/fs dependency).
+// ═══════════════════════════════════════════════════════════════════
+
+// One parsed .tape header + its continuation-block summary.
+pub struct TapeEntry {
+    typ: string,        // single char after `@` (S U A T R H D K P ? I X F N C L V)
+    eid: string,        // entry id token (may be "" for `@V := ...`)
+    domain: string,     // token after ` :: ` (domain / kind)
+    grade: string,      // raw bracket payload, e.g. "T2 N48 ok" or "required"
+    nbody: i64,         // count of 2-space continuation lines
+    nedges: i64,        // continuation lines that begin with an edge operator
+    lineno: i64,        // 1-based header line number
+    ok: bool            // header well-formed (tape_absorb step-1, lenient)
+}
+
+pub struct HxcTable {
+    tag: string,        // schema tag (e.g. "atlas")
+    cols: array,        // [string] ordered column names
+    rows: array,        // [[string]] one cell-array per @<tag> row
+    nrows: i64
+}
+
+// Closed 17-type alphabet (tape v1.2): runtime S U A T R H D K P ? ·
+// foundation I · declarative X F N C L V. (fn, not a top-level `let`,
+// to keep main.hexa's no-top-level-statement invariant.)
+fn _tape_types() -> string {
+    return "SUATRHDKP?IXFNCLV"
+}
+
+fn _tape_is_type(t: string) -> bool {
+    if t.len() != 1 { return false }
+    let tt = _tape_types()
+    let mut i: i64 = 0
+    while i < tt.len() {
+        if tt.substring(i, i + 1) == t { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// A header is a column-0 line: `@` + a valid type char + a space (or EOL).
+fn _tape_is_header(line: string) -> bool {
+    if line.len() < 2 { return false }
+    if line.substring(0, 1) != "@" { return false }
+    let t = line.substring(1, 2)
+    if !_tape_is_type(t) { return false }
+    if line.len() == 2 { return true }
+    return line.substring(2, 3) == " "
+}
+
+fn _tape_header_type(line: string) -> string {
+    if line.len() < 2 { return "" }
+    return line.substring(1, 2)
+}
+
+// First token after ` :: ` — the domain (runtime) or kind (declarative).
+fn _tape_header_domain(line: string) -> string {
+    let parts = line.split(" :: ")
+    if len(parts) < 2 { return "" }
+    let rest = parts[1]
+    let toks = rest.split(" ")
+    if len(toks) < 1 { return "" }
+    return toks[0].trim()
+}
+
+// Entry id: the token after the type, before ` = ` / ` := ` / ` :: `.
+// Returns "" when absent (e.g. `@V := "tape" :: spec`).
+fn _tape_header_id(line: string) -> string {
+    if line.len() < 4 { return "" }
+    let after = line.substring(3, line.len())   // strip `@T `
+    let toks = after.split(" ")
+    if len(toks) < 1 { return "" }
+    let first = toks[0].trim()
+    if first == ":=" || first == "=" || first == "::" { return "" }
+    return first
+}
+
+// Raw grade-bracket payload: between the LAST `[` and the next `]`.
+fn _tape_grade_payload(line: string) -> string {
+    let mut lb: i64 = -1
+    let mut rb: i64 = -1
+    let mut i: i64 = 0
+    while i < line.len() {
+        let c = line.substring(i, i + 1)
+        if c == "[" { lb = i }
+        if c == "]" {
+            if lb >= 0 && rb < 0 { rb = i }
+        }
+        i = i + 1
+    }
+    if lb < 0 { return "" }
+    if rb < lb { return "" }
+    return line.substring(lb + 1, rb)
+}
+
+// Lenient tape_absorb step-1: valid type + ` :: ` + non-empty domain.
+fn _tape_well_formed(line: string) -> bool {
+    if !_tape_is_header(line) { return false }
+    if !line.contains(" :: ") { return false }
+    if _tape_header_domain(line).len() == 0 { return false }
+    return true
+}
+
+// An edge continuation line: two leading spaces + a v1.2 edge operator.
+fn _tape_is_edge_line(line: string) -> bool {
+    if line.len() < 4 { return false }
+    if line.substring(0, 2) != "  " { return false }
+    let body = line.substring(2, line.len()).trim()
+    if body.len() < 2 { return false }
+    let op2 = body.substring(0, 2)
+    if op2 == "<-" || op2 == "->" || op2 == "=>" || op2 == "==" { return true }
+    if op2 == "~>" || op2 == "|>" || op2 == "!!" || op2 == "<:" { return true }
+    if op2 == ":>" || op2 == "?>" || op2 == "!>" || op2 == "@>" { return true }
+    return false
+}
+
+// Parse a full .tape text into [TapeEntry] via continuation look-ahead
+// (each struct built once — no arr[i].field lvalue, which the codebase
+// has no precedent for).
+fn tape_parse(text: string) -> array {
+    let lines = text.split("\n")
+    let mut out = []
+    let n = len(lines)
+    let mut i: i64 = 0
+    while i < n {
+        let ln = lines[i]
+        let lno = i + 1
+        if ln.len() == 0 {
+            i = i + 1
+            continue
+        }
+        if ln.substring(0, 1) == "#" {       // comment / shebang / divider
+            i = i + 1
+            continue
+        }
+        if _tape_is_header(ln) {
+            let mut nbody: i64 = 0
+            let mut nedges: i64 = 0
+            let mut j: i64 = i + 1
+            while j < n {
+                let cl = lines[j]
+                if cl.len() == 0 { break }            // blank → block end
+                if _tape_is_header(cl) { break }      // next header → block end
+                if cl.len() >= 2 && cl.substring(0, 2) == "  " {
+                    nbody = nbody + 1
+                    if _tape_is_edge_line(cl) { nedges = nedges + 1 }
+                    j = j + 1
+                } else {
+                    break                              // non-indented → block end
+                }
+            }
+            out.push(TapeEntry {
+                typ: _tape_header_type(ln),
+                eid: _tape_header_id(ln),
+                domain: _tape_header_domain(ln),
+                grade: _tape_grade_payload(ln),
+                nbody: nbody,
+                nedges: nedges,
+                lineno: lno,
+                ok: _tape_well_formed(ln)
+            })
+            i = j
+            continue
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// `hexa tape <file>` — read, parse, print a structured reader dump.
+// rc: 0 = all headers well-formed · 1 = malformed present · 2 = io err.
+fn tape_dump(path: string) -> i64 {
+    if !file_exists(path) {
+        eprintln("tape: file not found: " + path)
+        return 2
+    }
+    let text = read_file(path)
+    let entries = tape_parse(text)
+    let n = len(entries)
+    if n == 0 {
+        println("tape: " + path + " — 0 entries")
+        return 0
+    }
+    let mut malformed: i64 = 0
+    let mut tot_edges: i64 = 0
+    let mut i: i64 = 0
+    while i < n {
+        let e = entries[i]
+        if !e.ok { malformed = malformed + 1 }
+        tot_edges = tot_edges + e.nedges
+        let flag = if e.ok { "  " } else { "!!" }
+        let gr = if e.grade.len() > 0 { " [" + e.grade + "]" } else { "" }
+        let ids = if e.eid.len() > 0 { " " + e.eid } else { "" }
+        println(flag + " L" + to_string(e.lineno)
+            + "  @" + e.typ + ids
+            + " :: " + e.domain + gr
+            + "  (body=" + to_string(e.nbody)
+            + " edges=" + to_string(e.nedges) + ")")
+        i = i + 1
+    }
+    let tt = _tape_types()
+    let mut hist = ""
+    let mut ti: i64 = 0
+    while ti < tt.len() {
+        let t = tt.substring(ti, ti + 1)
+        let mut c: i64 = 0
+        let mut j: i64 = 0
+        while j < n {
+            if entries[j].typ == t { c = c + 1 }
+            j = j + 1
+        }
+        if c > 0 {
+            if hist.len() > 0 { hist = hist + " " }
+            hist = hist + "@" + t + "=" + to_string(c)
+        }
+        ti = ti + 1
+    }
+    println("──")
+    println("tape: " + path + " — " + to_string(n) + " entries, "
+        + to_string(tot_edges) + " edges, "
+        + to_string(malformed) + " malformed")
+    println("types: " + hist)
+    if malformed > 0 { return 1 }
+    return 0
+}
+
+// ── HXC v2 generic decode (generalized from compiler/atlas/hxc_loader) ─
+
+// Count trailing backslashes; true if odd (escaped-pipe false split).
+fn _hxc_ends_odd_bs(s: string) -> bool {
+    let n = len(s)
+    let mut k = 0
+    let mut j = n - 1
+    while j >= 0 {
+        if s.substring(j, j + 1) == "\\" {
+            k = k + 1
+            j = j - 1
+        } else {
+            break
+        }
+    }
+    return (k - (k / 2) * 2) == 1
+}
+
+// Split a pipe row WITHOUT splitting on `\|`: over-split on the O(N)
+// builtin, then re-merge cells whose left part ended in odd backslashes.
+fn _hxc_split_pipes(s: string) -> array {
+    let parts = s.split("|")
+    let mut out = []
+    let mut i = 0
+    while i < len(parts) {
+        let mut cur = parts[i]
+        while _hxc_ends_odd_bs(cur) && i + 1 < len(parts) {
+            cur = cur + "|" + parts[i + 1]
+            i = i + 1
+        }
+        out.push(cur)
+        i = i + 1
+    }
+    return out
+}
+
+// Reverse the encoder escape (`\|`→`|`, `\\`→`\`) via a single
+// sentinel-free left-to-right scan. Only `\`-bearing cells reach here.
+fn _hxc_unesc_pipe(s: string) -> string {
+    if !s.contains("\\") { return s }
+    let mut out = ""
+    let n = s.len()
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" && i + 1 < n {
+            let nx = s.substring(i + 1, i + 2)
+            if nx == "|" {
+                out = out + "|"
+                i = i + 2
+            } else if nx == "\\" {
+                out = out + "\\"
+                i = i + 2
+            } else {
+                out = out + c
+                i = i + 1
+            }
+        } else {
+            out = out + c
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// Decode HXC v2 text into a schema-agnostic table. Const columns are
+// appended after active schema columns and materialized into every row
+// (full logical table, the way hxc_loader rebuilds dense rows — but with
+// no hard-coded column set).
+fn hxc_decode(text: string) -> HxcTable {
+    let lines = text.split("\n")
+    let mut tag = ""
+    let mut active_cols = []
+    let mut const_names = []
+    let mut const_vals = []
+    let mut rows = []
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        i = i + 1
+        if len(line) == 0 { continue }
+        if line.starts_with("# const:") {
+            let body = line.substring(8, len(line))
+            let eq = body.index_of("=")
+            if eq < 0 { continue }
+            let cname = body.substring(0, eq)
+            let cval = body.substring(eq + 1, len(body))
+            const_names.push(cname)
+            const_vals.push(cval)
+            continue
+        }
+        if line.starts_with("# schema:") {
+            let rest = line.substring(9, len(line)).trim()
+            if rest == "" { continue }
+            let toks = rest.split(" ")
+            if len(toks) >= 1 { tag = toks[0] }
+            let mut j = 1
+            while j < len(toks) {
+                let t = toks[j].trim()
+                if t.len() > 0 { active_cols.push(t) }
+                j = j + 1
+            }
+            continue
+        }
+        if line.starts_with("#") { continue }
+        if line.substring(0, 1) == "@" {
+            let sp = line.index_of(" ")
+            if sp < 0 { continue }
+            let row_tag = line.substring(1, sp)
+            if tag != "" && row_tag != tag { continue }
+            let payload = line.substring(sp + 1, len(line))
+            let raw_cells = _hxc_split_pipes(payload)
+            let mut row = []
+            let mut k = 0
+            while k < len(raw_cells) {
+                row.push(_hxc_unesc_pipe(raw_cells[k]))
+                k = k + 1
+            }
+            let mut cv = 0
+            while cv < len(const_vals) {
+                row.push(_hxc_unesc_pipe(const_vals[cv]))
+                cv = cv + 1
+            }
+            rows.push(row)
+            continue
+        }
+    }
+    let mut cols = []
+    let mut a = 0
+    while a < len(active_cols) { cols.push(active_cols[a]); a = a + 1 }
+    let mut b = 0
+    while b < len(const_names) { cols.push(const_names[b]); b = b + 1 }
+    return HxcTable {
+        tag: tag,
+        cols: cols,
+        rows: rows,
+        nrows: len(rows)
+    }
+}
+
+// `hexa hxc <file>` — decode + print schema and self-describing rows.
+fn hxc_dump(path: string) -> i64 {
+    if !file_exists(path) {
+        eprintln("hxc: file not found: " + path)
+        return 2
+    }
+    let text = read_file(path)
+    if text == "" {
+        println("hxc: " + path + " — empty")
+        return 0
+    }
+    let tbl = hxc_decode(text)
+    println("hxc: " + path + "  tag=" + tbl.tag
+        + "  cols=" + to_string(len(tbl.cols))
+        + "  rows=" + to_string(tbl.nrows))
+    let mut sch = ""
+    let mut i = 0
+    while i < len(tbl.cols) {
+        if sch.len() > 0 { sch = sch + " " }
+        sch = sch + tbl.cols[i]
+        i = i + 1
+    }
+    println("schema: " + sch)
+    println("──")
+    let mut r = 0
+    while r < len(tbl.rows) {
+        let row = tbl.rows[r]
+        let mut out = "r" + to_string(r) + "  "
+        let mut c = 0
+        while c < len(row) {
+            let cname = if c < len(tbl.cols) { tbl.cols[c] } else { "col" + to_string(c) }
+            if c > 0 { out = out + " | " }
+            out = out + cname + "=" + row[c]
+            c = c + 1
+        }
+        println(out)
+        r = r + 1
+    }
+    return 0
 }
 
 // ── OS-specific clang flags (Mac vs Linux/glibc) ────────────
@@ -2755,6 +3173,24 @@ if len(av) < 3 {
                 ti = ti + 1
             }
             cmd_run(test_script, test_args)
+        }
+    } else if sub == "tape" {
+        // L2: native .tape v1.2 reader (inlined, C-compiled — no cmd_run).
+        if len(av) < 4 {
+            println("error: 'tape' requires <file>")
+            println("usage: hexa tape <file.tape>")
+            exit(2)
+        } else {
+            exit(tape_dump(av[3]))
+        }
+    } else if sub == "hxc" {
+        // L2: generic HXC v2 wire decoder (inlined, C-compiled).
+        if len(av) < 4 {
+            println("error: 'hxc' requires <file>")
+            println("usage: hexa hxc <file.hxc>")
+            exit(2)
+        } else {
+            exit(hxc_dump(av[3]))
         }
     } else if sub == "init" {
         // scaffold <dir>/project.hexa via tool/init_project.hexa
