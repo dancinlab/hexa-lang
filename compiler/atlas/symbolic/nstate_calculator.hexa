@@ -1,0 +1,56 @@
+// compiler/atlas/symbolic/nstate_calculator.hexa — N-state golden-zone calculator
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of archive-TECS-L/nstate_calculator.py (TECS-L absorption).
+// Two closed-form transcendental relations for the N-state generalization
+// "golden zone":
+//
+//   width(N)  = ln((N+1)/N)
+//   upper     = 1/2                  (fixed)
+//   lower     = 1/2 − width(N)
+//   center    = (upper + lower) / 2
+//
+// Inverse direction (given a target width w, recover N):
+//   N = round( 1 / (e^w − 1) )
+//
+// Both directions are exact libm-backed compositions (log / exp). No
+// external Python/numpy dependency (g5 hexa-native-only).
+//
+// Cross-link: atlas/inbox/_tecsl_calculator_port_manifest.md §B ·
+// stdlib/core/math/float.hexa (libm log/exp).
+
+// ── GoldenZone result ──────────────────────────────────────────────────
+
+pub struct GoldenZone {
+    n: int,
+    width: float,
+    upper: float,
+    lower: float,
+    center: float
+}
+
+// width(N) = ln((N+1)/N) — entropy-style band width for an N-state system.
+pub fn nstate_width(n: int) -> float {
+    let nf = to_float(n)
+    return log((nf + 1.0) / nf)
+}
+
+// Full golden-zone record for state count N.
+pub fn nstate_golden_zone(n: int) -> GoldenZone {
+    let w = nstate_width(n)
+    let upper = 0.5
+    let lower = upper - w
+    let center = (upper + lower) / 2.0
+    return GoldenZone { n: n, width: w, upper: upper, lower: lower, center: center }
+}
+
+// Inverse: which integer N produces (closest to) target width `w`?
+//   w = ln((N+1)/N)  ⇒  e^w = (N+1)/N = 1 + 1/N  ⇒  N = 1/(e^w − 1)
+pub fn nstate_find_n_for_width(w: float) -> int {
+    let raw = 1.0 / (exp(w) - 1.0)
+    // round-half-up to nearest integer
+    let mut r = raw + 0.5
+    return to_int(r)
+}

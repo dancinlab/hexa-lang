@@ -1,0 +1,68 @@
+// test/nstate_calculator_smoke.hexa — smoke for symbolic/nstate_calculator.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values reproduced from archive-TECS-L/nstate_calculator.py
+// (golden_zone / find_n_for_width docstring + default table):
+//   width(6)   = ln(7/6)     = 0.15415067982725836
+//   width(3)   = ln(4/3)     = 0.28768207245178085
+//   width(137) = ln(138/137) = 0.007272759329079878
+//   find_n_for_width(0.15415067982725836) = 6   (inverse round-trip)
+//   find_n_for_width(0.118)               = 8   (docstring --find example)
+//   golden_zone(6): upper=0.5, lower=0.5−w, center=(upper+lower)/2
+//
+// Run:  hexa run test/nstate_calculator_smoke.hexa
+// Sentinel: __NSTATE_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/nstate_calculator.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn approx(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    let ad = if d < 0.0 { -d } else { d }
+    return ad < tol
+}
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+let tol = 0.000000001
+
+check("width(6) = ln(7/6) ≈ 0.15415067982725836",
+      approx(nstate_width(6), 0.15415067982725836, tol))
+check("width(3) = ln(4/3) ≈ 0.28768207245178085",
+      approx(nstate_width(3), 0.28768207245178085, tol))
+check("width(137) = ln(138/137) ≈ 0.007272759329079878",
+      approx(nstate_width(137), 0.007272759329079878, tol))
+
+check("find_n_for_width(width(6)) round-trips to 6",
+      nstate_find_n_for_width(nstate_width(6)) == 6)
+check("find_n_for_width(0.118) = 8 (docstring --find example)",
+      nstate_find_n_for_width(0.118) == 8)
+
+let gz = nstate_golden_zone(6)
+check("golden_zone(6).upper == 0.5", approx(gz.upper, 0.5, tol))
+check("golden_zone(6).lower == 0.5 − width(6)",
+      approx(gz.lower, 0.5 - 0.15415067982725836, tol))
+check("golden_zone(6).center == (upper+lower)/2",
+      approx(gz.center, (gz.upper + gz.lower) / 2.0, tol))
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  nstate_calculator smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__NSTATE_SMOKE__ FAIL")
+} else {
+    println("__NSTATE_SMOKE__ PASS")
+}
