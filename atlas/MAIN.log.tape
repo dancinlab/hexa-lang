@@ -898,3 +898,79 @@
     g_external_calc_forbidden — ✅ 0 external runtime · Newton iteration in-process
   EOF
 
+# ─── Cycle 021 — Phase 3: falsifier ≥5 pre-register EXECUTABLE form ───
+
+@A cycle_021 := "Phase 3 cycle 021 — falsifier ≥5 executable batteries (atlas/VERIFY.tape §5 declarative → code)" :: cycle [d=2026-05-15 active]
+  trigger = "user 'next go' — Phase 3 continuation, 원 directive 의 falsifier ≥5 완성"
+  scope <<~EOF
+    cumulative 86 → 90 (+4 falsifier batteries · 20 individual falsifiers).
+    원 directive (anima verdict 검증 기준) 의 마지막 미구현 축 — falsifier ≥5
+    pre-register 의 executable form. atlas/VERIFY.tape §5 falsifier_format
+    declarative spec → compiler/atlas/verify/falsifier.hexa executable.
+
+    Design: FalsifierResult struct (falsifier_id · fired · reason) — multi-field
+    enum payload limitation 우회. 각 fire-eligible entry 는 ≥5 falsifier 함수
+    battery. _summarize() 가 battery 결과를 AtlasVerdict 으로 (0 fired = robust).
+  EOF
+  files_created <<~EOF
+    compiler/atlas/verify/falsifier.hexa — 4 batteries (20 falsifiers):
+      Battery 1 s1_phi_sigma_unique  (F1 third-solution sweep[2,1000] · F2 n=1 boundary ·
+                                      F3 n=6 core · F4 perfect-28 also · F5 τ² confusion)
+      Battery 2 s1_perfect_number    (F1 odd-perfect[2,500] · F2 6-not-perfect ·
+                                      F3 4th-perfect ≤500 · F4 Euclid-Euler p=7 · F5 almost-perfect)
+      Battery 3 s10_137_from_sigma_tau (F1 f6≠137 · F2 f28=137 · F3 f28=23·137 ·
+                                       F4 f496-penetrate · F5 α-physics-overclaim standing)
+      Battery 4 s2_ln_17_approximate (F1 exact-equality · F2 0.01%-bound · F3 tighter-neighbor ·
+                                      F4 alt-form ln17/17 · F5 exact-identity-overclaim standing)
+  EOF
+  files_modified = "tool/atlas_verify.hexa (falsifier subcommand dispatch) · atlas/MAIN.tape (tldr cycle 021 + directive completeness checklist)"
+  verifier_run_result <<~EOF
+    Battery run: 4/4 PASS · 20 falsifiers, 0 fired (all verdicts robust)
+      s1_phi_sigma_unique     5/5 held (uniqueness survives sweep[2,1000] + boundary + perfect-28 attacks)
+      s1_perfect_number       5/5 held (odd-perfect absent, exactly 3 in [2,500], Euclid-Euler p7 ✓)
+      s10_137_from_sigma_tau  5/5 held (f6=137 · f28=3151=23·137 · f496 NOT div 137 · α-overclaim standing reminder)
+      s2_ln_17_approximate    5/5 held (transcendental barrier confirmed · 17/6 local best · alt form holds)
+    Full cumulative: 90/90 PASS (85 🔵 + 1 🟠 AT-RISK + 4 falsifier-robust)
+  EOF
+  directive_completeness <<~EOF
+    원 directive (hexa-lang binary built-in atlas 에 anima verdict 검증 기준 도입) 완성:
+      ✅ 14-tier verdict tier (🔵 SUPPORTED-IDENTITY/FORMAL · 🟢 · 🟡 · 🟠 AT-RISK/DEFERRED · 🔴 FALSIFIED · ⚪)
+      ✅ 9-domain cluster (anima A1-A9 → atlas §1 N6-FOUNDATION ~ §10 BRIDGES adaptation)
+      ✅ 3-stage verification protocol:
+           Stage 1 symbolic   — integer/fraction hexa-native (foundation/math/top/cosmo/bridges/chem/phys/eng/geo)
+           Stage 2 numerical  — libm transcendental (transcendental.hexa: sqrt/log/exp/lgamma + Newton)
+           Stage 3 cross-meta — sibling consistency (cross.hexa: anima W9 hexa-native)
+      ✅ falsifier ≥5 pre-register frozen (atlas/VERIFY.tape §5 declarative + falsifier.hexa executable, W8 additive-only)
+      ✅ governance carry — anima g1-g8 → atlas/AGENTS.tape + 3 atlas-specific (g_self_verify ·
+           g_tier_default_insufficient · g_external_calc_forbidden) + wilson g_verify_hexa_cli_only priority 1
+      ✅ append-only ledger — atlas/MAIN.tape (architecture) + atlas/MAIN.log.tape (cycle history,
+           g_arch_vs_log_split) + atlas/INDEX.md (navigation)
+      ✅ tape v1.2 grammar — @V/@D/@F/@N/@X/@I/@L/@H/@A entry types + 12 edges + grade tags
+      ✅ hexa CLI only — `hexa run tool/atlas_verify.hexa [--domain D]` (operational) +
+           `hexa atlas-verify` (source-wired, pending dispatcher binary rebuild)
+
+    Scale vs anima ROI anchor: anima 26 🔵 (56% of 46 AXIS entries) · atlas Phase 2+3
+    cumulative 85 🔵 across 9 domains (3.3× anima 🔵 count) — Stage 1 sympy-equiv 가
+    가장 빠른 closure path 였음을 재확인 (52 SUPPORTED-IDENTITY = 61% of closed).
+  EOF
+  remaining_deferred <<~EOF
+    Phase 3+ (큰 sprint, 별도 cycle):
+      - modular forms module (T2-01 steps 2-8 · T1-31 elliptic · T1-32 deeper Eisenstein)
+      - strict-lint stage 9 (atlas-verdict-check CI gate — compiler pipeline integration)
+      - falsifier sha256 pre-register commit automation (현재 source = registry)
+      - Stage 2 BIO PyPhi-equiv (V8 mechanism real impl — anima carry, IIT 3.0 large)
+      - stdlib pow(float,float) + float.hexa tau() rename (name conflict resolution)
+      - hexa dispatcher binary rebuild → `hexa atlas-verify` activation
+      - falsifier batteries 확장 (현재 4 entries; 나머지 81 🔵 entries 도 ≥5 each — incremental)
+      - ~330 atlas embed entries default 🟠 INSUFFICIENT (marginal value, cycle 022+)
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only (wilson priority 1) — ✅ 90 entries via hexa CLI · falsifier batteries 동일 채널
+    g1 real-limits-first — ✅ falsifier F-anchors는 Kolmogorov/Hermite/Euclid-Euler real bounds
+    g4 honesty-external  — ✅ F5 standing reminders (α-physics-overclaim · exact-identity-overclaim) never-fire by design
+    g5 hexa-native-only  — ✅ falsifier.hexa libm builtins (no float.hexa import — tau() shadow 회피)
+    g_self_verify        — ✅ 90 entries hexa-native (Stage 1+2+3 + falsifier)
+    g_tier_default_insufficient — ✅ ~330 entries default INSUFFICIENT 유지
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+

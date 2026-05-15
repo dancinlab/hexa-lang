@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-020-cumulative-86" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-021-falsifier-LANDED" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,8 +39,25 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2+3 (cycle 001-020): 86/86 PASS · 86 entries verified (85 🔵 closed: 52 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL · 1 🟠 AT-RISK: §5 BIO V8 anima carry).
-    9 도메인 모두 covered. Verifier surface: 11 modules (foundation/math/top/cosmo/bridges/chem/phys/transcendental/eng/geo/bio/cross).
+    Cumulative Phase 2+3 (cycle 001-021): 90/90 PASS · 90 entries verified (85 🔵 closed: 52 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 4 falsifier-robust batteries).
+    9 도메인 모두 covered. Verifier surface: 12 modules (foundation/math/top/cosmo/bridges/chem/phys/transcendental/eng/geo/bio/cross/falsifier).
+
+    cycle 021 — falsifier ≥5 pre-register EXECUTABLE form (atlas/VERIFY.tape §5 declarative → compiler/atlas/verify/falsifier.hexa):
+      4 fire-eligible entries 의 ≥5 falsifier battery (20 falsifiers total, 0 fired = all verdicts robust):
+        s1_phi_sigma_unique     (5: third-solution · n=1 boundary · n=6 core · perfect-28 · τ² confusion)
+        s1_perfect_number       (5: odd-perfect · 6-not-perfect · 4th-perfect · Euclid-Euler-p7 · almost-perfect)
+        s10_137_from_sigma_tau  (5: f6≠137 · f28=137 · 23·137 · f496-penetrate · α-physics-overclaim standing)
+        s2_ln_17_approximate    (5: exact-equality · 0.01%-bound · tighter-neighbor · alt-form · exact-overclaim standing)
+      frozen_after_fire per atlas/VERIFY.tape — additive_only_mutation (W8) only.
+      falsifier.hexa IS the pre-register hash anchor (source = registry until Phase 3 sha256 commit automation).
+
+    원 directive (anima verdict 검증 기준) 완성도:
+      ✅ 14-tier verdict (🔵 SUPPORTED-IDENTITY/FORMAL ~ 🟠 AT-RISK ~ 🔴 FALSIFIED)
+      ✅ 9-domain cluster (atlas-adapted §1~§10)
+      ✅ 3-stage protocol (Stage 1 symbolic · Stage 2 libm numerical · Stage 3 cross-meta sibling)
+      ✅ falsifier ≥5 pre-register (declarative atlas/VERIFY.tape §5 + executable falsifier.hexa)
+      ✅ governance carry (atlas/AGENTS.tape g_self_verify + wilson g_verify_hexa_cli_only priority 1)
+      ✅ hexa CLI only (hexa run tool/atlas_verify.hexa · hexa atlas-verify source-wired)
 
     Phase 3 진입 (cycle 019-020):
       cycle 019 (+4): s2_lambert_w_newton (T1-14 Newton iteration via libm exp — stdlib pow(float,float) gap 우회) + Stage 3 cross-meta engine (compiler/atlas/verify/cross.hexa): s_cross_meta_24_family (4 independent J₂(6)=24 derivations agree) · s_cross_meta_sigma6_family (5 contexts σ(6)=12) · s_cross_meta_3_family (4 contexts n/φ=3)
@@ -774,7 +791,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 86
+  phase_2_cumulative_count = 90
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 

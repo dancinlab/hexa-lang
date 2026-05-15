@@ -23,6 +23,7 @@ use "compiler/atlas/verify/eng"
 use "compiler/atlas/verify/geo"
 use "compiler/atlas/verify/bio"
 use "compiler/atlas/verify/cross"
+use "compiler/atlas/verify/falsifier"
 
 fn _slice_args() -> array {
     let av = args()
@@ -246,6 +247,18 @@ fn main() {
         println("")
         println("Stage 3 — cross-meta sibling consistency:")
         let vs = verify_cross_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "falsifier" {
+        println("")
+        println("Falsifier ≥5 pre-register batteries (atlas/VERIFY.tape §5):")
+        let vs = verify_falsifier_all()
         let mut j = 0
         while j < len(vs) {
             _print_verdict(vs[j])
