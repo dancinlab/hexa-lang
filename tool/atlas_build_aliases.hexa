@@ -1,0 +1,337 @@
+// tool/atlas_build_aliases.hexa — Atlas Layer 3.0 alias-table generator
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, exec]
+//
+// Generates: compiler/atlas/aliases.gen.hexa  (verified-root → surface-form
+//                                              alias map; one AtlasAlias per
+//                                              root that has ≥1 hit in
+//                                              embedded.gen.hexa)
+//
+// Source inputs (parse_only sourcing of verified roots, not byte-mined):
+//   compiler/atlas/real_limits.gen.hexa       (21 verified roots — 6M + 8P + 7E)
+//   compiler/atlas/materials_limits.gen.hexa  (~21 rows; 3 carry `verified:true`)
+//
+// Mining target:
+//   compiler/atlas/embedded.gen.hexa          (7,398 nodes · 4.9 MB · shell grep -c)
+//
+// Run:
+//   ./hexa run tool/atlas_build_aliases.hexa
+//
+// Reproducibility:
+//   The CURATED discovery-term table below is hand-curated against the
+//   real_limits + materials_limits citation columns. Re-running this tool
+//   should regenerate aliases.gen.hexa byte-identically for the same
+//   embedded.gen.hexa snapshot. The data array body is the only part that
+//   changes between runs; the struct definition + accessors are emitted
+//   verbatim from a single template string in `_emit_footer`.
+//
+// Note:
+//   `.raw` / `.own` formats are RETIRED in the dancinlab ecosystem
+//   (2026-05-15 user signal). This tool does not reference them.
+
+// ── string escaping (mirrors compiler/atlas/embed.hexa::_escape_string) ──
+
+fn _escape_char(c: string) -> string {
+    if c == "\\" { return "\\\\" }
+    if c == "\"" { return "\\\"" }
+    if c == "\n" { return "\\n" }
+    if c == "\r" { return "\\r" }
+    if c == "\t" { return "\\t" }
+    return c
+}
+fn _escape_string(s: string) -> string {
+    let n = len(s)
+    let chunks = []
+    let mut i = 0
+    while i < n {
+        chunks.push(_escape_char(s.substring(i, i + 1)))
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+// ── curated discovery-term table ────────────────────────────────────
+//
+// One row per verified root we expect to alias. Format:
+//   [canonical_id, comment_tag, [aliases...], canonical_citation_marker, force_emit]
+//
+// `force_emit` (0 | 1) — when 1, the entry is emitted even if all aliases
+// yield 0 hits in embedded.gen.hexa. Used for roots that are load-bearing
+// for downstream cross-link audits / smoke tests (e.g. hales_packing,
+// pac_learning_bound) where the alias map is a stable API contract even
+// if the embedded corpus hasn't picked up references yet.
+
+let _CURATED = [
+    // --- real_limits.* (Mathematical) ----------------------------------
+    ["real_limits.shannon_entropy",       "Mathematical",
+     ["Shannon entropy", "Shannon 1948", "Shannon"], "Shannon 1948", 0],
+    ["real_limits.kolmogorov_complexity", "Mathematical",
+     ["Kolmogorov complexity", "Kolmogorov 1965", "Kolmogorov"], "Kolmogorov 1965", 0],
+    ["real_limits.computability",         "Mathematical",
+     ["halting problem", "Turing 1936", "Rice 1953", "Turing"], "Turing 1936", 0],
+    ["real_limits.bekenstein_bound",      "Mathematical",
+     ["Bekenstein bound", "Bekenstein 1981", "Bekenstein"], "Bekenstein 1981", 0],
+    ["real_limits.statistical_power",     "Mathematical",
+     ["Cohen 1988", "statistical power"], "Cohen 1988", 0],
+    ["real_limits.pac_learning_bound",    "Mathematical",
+     ["PAC learning", "VC dimension", "Vapnik-Chervonenkis"], "Vapnik-Chervonenkis 1971", 1],
+
+    // --- real_limits.* (Physical) --------------------------------------
+    ["real_limits.speed_of_light",        "Physical",
+     ["speed of light", "c (CODATA)", "CODATA 2018 c"], "CODATA 2018", 0],
+    ["real_limits.planck_constant",       "Physical",
+     ["Planck constant", "hbar", "reduced Planck", "Planck"], "CODATA 2018", 0],
+    ["real_limits.boltzmann_constant",    "Physical",
+     ["Boltzmann constant", "Landauer", "k_B", "Boltzmann"], "CODATA 2018", 0],
+    ["real_limits.stefan_boltzmann",      "Physical",
+     ["Stefan-Boltzmann", "Stefan 1879", "Boltzmann 1884"], "Stefan 1879", 0],
+    ["real_limits.carnot_efficiency",     "Physical",
+     ["Carnot", "Carnot efficiency", "Carnot 1824"], "Carnot 1824", 0],
+    ["real_limits.bekenstein_hawking",    "Physical",
+     ["Bekenstein-Hawking", "Hawking 1974", "black hole entropy", "holographic bound"], "Hawking 1974", 0],
+    // Cross-namespace bridges — embedded.gen.hexa has these under
+    // `physics_information.<id>_limit` namespace; the alias maps the bare
+    // form back to canonical real_limits.* (C3 audit 2026-05-15).
+    ["real_limits.bremermann_limit",      "Physical",
+     ["bremermann_limit", "Bremermann 1962", "Bremermann"], "bremermann_limit", 0],
+    ["real_limits.margolus_levitin",      "Physical",
+     ["margolus_levitin_limit", "Margolus & Levitin 1998", "Margolus-Levitin"], "margolus_levitin_limit", 0],
+
+    // --- materials_limits.* (verified subset) --------------------------
+    ["materials_limits.melting_point_tahfc_alloy", "Materials",
+     ["Ta4HfC5", "tantalum hafnium carbide", "Cedillos-Barraza 2016", "Hafnium"], "Cedillos-Barraza", 0],
+    ["materials_limits.c12_diamond_thermal_k",     "Materials",
+     ["isotopically pure diamond", "12C diamond", "thermal conductivity", "diamond"], "Wei L. et al", 0],
+    ["materials_limits.hales_packing",             "Materials",
+     ["Hales packing", "Kepler conjecture", "Hales 2017", "packing fraction"], "Hales T.C.", 1]
+]
+
+// Verified roots we explicitly EXPECT zero hits for (drift report only —
+// if any of these flip to ≥1 hit we want to know).
+let _OMITTED = [
+    // bremermann_limit / margolus_levitin moved to _CURATED 2026-05-15 — they
+    // exist in embedded.gen.hexa under physics_information namespace with bare
+    // id form (see embedded.gen.hexa:6556,6560), so alias bridging applies.
+    ["real_limits.asml_high_na_euv_throughput", ["ASML High-NA EUV", "EXE:5000"]],
+    ["real_limits.ercot_grid_capacity",   ["ERCOT"]],
+    ["real_limits.starship_reusable_cost", ["Starship reusable", "SpaceX"]],
+    ["real_limits.tceq_permit_envelope",  ["TCEQ"]],
+    ["real_limits.chips_act_remaining_funding", ["CHIPS Act"]],
+    ["real_limits.human_engineer_pool",   ["BLS statistics", "human-engineer pool"]],
+    ["real_limits.patent_thicket",        ["USPTO", "patent thicket"]]
+]
+
+// ── shell-grep counter ─────────────────────────────────────────────
+//
+// Uses `grep -c -F "<term>" <file>` (fixed-string, count-lines).
+// -F avoids regex metachar surprises on terms like "Boltzmann-Stefan".
+// We escape double-quotes and backslashes for the shell argument; terms
+// happen to be free of single-quote / dollar / backtick characters by
+// curation, so we wrap the term in double-quotes.
+
+fn _shell_escape_dq(s: string) -> string {
+    let n = len(s)
+    let out = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out.push("\\\\") }
+        else if c == "\"" { out.push("\\\"") }
+        else if c == "$"  { out.push("\\$") }
+        else if c == "`"  { out.push("\\`") }
+        else { out.push(c) }
+        i = i + 1
+    }
+    return out.join("")
+}
+fn _grep_count(term: string, path: string) -> i64 {
+    let cmd = "grep -c -F \"" + _shell_escape_dq(term) + "\" " + path + " 2>/dev/null || true"
+    let out = to_string(exec(cmd)).trim()
+    if len(out) == 0 { return 0 }
+    return to_i64(out)
+}
+
+// ── confidence heuristic ────────────────────────────────────────────
+//
+//   100 — canonical citation marker appears verbatim (e.g. "Shannon 1948")
+//    90 — surface phrase quoted in cite/comment (e.g. "Bekenstein bound")
+//    80 — unambiguous surname / short tag (e.g. "Bekenstein", "Hales")
+//    70 — generic phrase that may collide ("diamond", "Boltzmann" alone)
+//
+// We pick the SINGLE highest grade applicable across the alias list.
+// Generic-collision penalty kicks in when (a) the term is a single word,
+// (b) the hit count is much higher than other terms in the same root.
+
+fn _is_generic_collision(aliases, hits) -> bool {
+    let n = len(aliases)
+    let mut max_hits = 0
+    let mut max_idx = -1
+    let mut i = 0
+    while i < n {
+        let h = to_i64(hits[i])
+        if h > max_hits { max_hits = h; max_idx = i }
+        i = i + 1
+    }
+    if max_idx < 0 { return false }
+    let top = to_string(aliases[max_idx])
+    if top.contains(" ") { return false }
+    if top.contains("-") { return false }
+    return true
+}
+fn _confidence(canonical_marker: string, aliases, hits, path: string) -> i64 {
+    if _grep_count(canonical_marker, path) >= 1 { return 100 }
+    let n = len(aliases)
+    let mut i = 0
+    while i < n {
+        let a = to_string(aliases[i])
+        if to_i64(hits[i]) >= 1 {
+            if a.contains(" 19") || a.contains(" 20") { return 90 }
+        }
+        i = i + 1
+    }
+    if _is_generic_collision(aliases, hits) { return 70 }
+    return 80
+}
+
+// ── emit: per-entry AtlasAlias literal ─────────────────────────────
+
+fn _emit_alias_entry(canonical_id: string, aliases, confidence: i64) -> string {
+    let parts = []
+    parts.push("    AtlasAlias {\n")
+    parts.push("        canonical_id: \"")
+    parts.push(_escape_string(canonical_id))
+    parts.push("\",\n        aliases: [")
+    let n = len(aliases)
+    let mut i = 0
+    while i < n {
+        if i > 0 { parts.push(", ") }
+        parts.push("\"")
+        parts.push(_escape_string(to_string(aliases[i])))
+        parts.push("\"")
+        i = i + 1
+    }
+    parts.push("],\n        confidence: ")
+    parts.push(to_string(confidence))
+    parts.push("\n    }")
+    return parts.join("")
+}
+
+// ── emit: file header + struct + footer ────────────────────────────
+
+let _HEADER_TEMPLATE = "// compiler/atlas/aliases.gen.hexa — verified-root → natural-language alias map\n//\n// Atlas Layer 3.0 bootstrap: the 24 g3-compliant verified roots in\n// real_limits.gen.hexa + materials_limits.gen.hexa carry canonical ids of the\n// form `real_limits.<snake>` and `materials_limits.<snake>`. The 7,398 nodes\n// in embedded.gen.hexa never use those canonical ids — they cite the same\n// concepts under natural-language surface forms (\"Shannon entropy\",\n// \"Planck length\", \"Bekenstein bound\", \"Hawking\", \"graphene\", …) or under\n// older hyphenated ids (`HBIO-*`, `cycle-25-26-*`).\n//\n// This file holds an additive alias table mapping each verified root to its\n// surface-form siblings, so that cross-link audits / merger passes can bridge\n// the two naming conventions without rewriting either .gen.hexa source.\n//\n// ── Scope ──────────────────────────────────────────────────────────────────\n//   Only roots with ≥1 plausible alias hit in embedded.gen.hexa are listed.\n//   Engineering rows (ASML / ERCOT / Starship / TCEQ / CHIPS / BLS / USPTO)\n//   currently have 0 hits and are omitted. Bremermann + Margolus-Levitin\n//   similarly omitted (zero embedded references).\n//\n// ── Confidence scale (0..100) ──────────────────────────────────────────────\n//   100  exact citation-text match (e.g. \"Shannon 1948 — A Mathematical Theory\")\n//    90  surface form quoted in cite/comment (e.g. \"Bekenstein bound\")\n//    80  unambiguous surname / short tag (e.g. \"Bekenstein\", \"Hales\")\n//    70  generic phrase that may collide with other concepts (\"entropy\",\n//        \"Boltzmann\" without \"constant\", \"diamond\" as material vs object)\n//\n// ── Status ─────────────────────────────────────────────────────────────────\n//   GENERATED by tool/atlas_build_aliases.hexa — do not hand-edit.\n//   Regenerate via: ./hexa run tool/atlas_build_aliases.hexa\n\nuse \"compiler/atlas/parser\"\n\npub struct AtlasAlias {\n    canonical_id: string,\n    aliases: array,    // [string] — natural-language phrases or alt-ids\n    confidence: i64    // 0..100, 100 = exact citation, lower = phrase-match\n}\n\n@phase(\"parse_only\")\npub let ATLAS_ALIASES: [AtlasAlias] = [\n"
+
+let _FOOTER_TEMPLATE = "\n]\n\n// --- accessors --------------------------------------------------------------\n\npub fn atlas_aliases() -> [AtlasAlias] { return ATLAS_ALIASES }\n\npub fn atlas_aliases_count() -> i64 { return len(ATLAS_ALIASES) }\n\n// aliases_for — return the alias list registered for a canonical root id,\n// or [] if no entry exists. Linear scan over ATLAS_ALIASES.\npub fn aliases_for(canonical_id: string) -> [string] {\n    let table = ATLAS_ALIASES\n    let n = len(table)\n    let mut i = 0\n    while i < n {\n        let entry = table[i]\n        if entry.canonical_id == canonical_id {\n            return entry.aliases\n        }\n        i = i + 1\n    }\n    return []\n}\n\n// canonical_for — reverse lookup. Given a surface-form alias string, return\n// the canonical id that owns it (case-sensitive exact match against any of\n// the entries in `aliases`). Returns \"\" when no entry claims the alias.\npub fn canonical_for(alias: string) -> string {\n    let table = ATLAS_ALIASES\n    let n = len(table)\n    let mut i = 0\n    while i < n {\n        let entry = table[i]\n        let als = entry.aliases\n        let m = len(als)\n        let mut j = 0\n        while j < m {\n            if als[j] == alias {\n                return entry.canonical_id\n            }\n            j = j + 1\n        }\n        i = i + 1\n    }\n    return \"\"\n}\n"
+
+fn _emit_header() -> string { return _HEADER_TEMPLATE }
+fn _emit_footer() -> string { return _FOOTER_TEMPLATE }
+
+// ── driver ────────────────────────────────────────────────────────
+
+fn main() {
+    let embedded = "compiler/atlas/embedded.gen.hexa"
+
+    println("atlas aliases builder — layer 3.0")
+    println("  source-roots: compiler/atlas/real_limits.gen.hexa + materials_limits.gen.hexa")
+    println("  mining-target: " + embedded)
+    println("  curated rows: " + to_string(len(_CURATED)) + "; omitted: " + to_string(len(_OMITTED)))
+    println("")
+
+    // Pass 1 — emitted entries
+    let parts = []
+    parts.push(_emit_header())
+
+    let n = len(_CURATED)
+    let mut i = 0
+    let mut emitted = 0
+    let mut last_tag = ""
+    while i < n {
+        let row = _CURATED[i]
+        let cid = to_string(row[0])
+        let tag = to_string(row[1])
+        let aliases = row[2]
+        let marker = to_string(row[3])
+        let force_emit = to_i64(row[4])
+
+        // count hits per alias
+        let na = len(aliases)
+        let hits = []
+        let mut any_hit = 0
+        let mut j = 0
+        while j < na {
+            let h = _grep_count(to_string(aliases[j]), embedded)
+            hits.push(h)
+            if h >= 1 { any_hit = any_hit + 1 }
+            j = j + 1
+        }
+
+        if any_hit == 0 && force_emit == 0 {
+            println("  SKIP  " + cid + " — 0 hits across " + to_string(na) + " term(s)")
+        } else {
+            let conf = if any_hit == 0 { 80 } else { _confidence(marker, aliases, hits, embedded) }
+            let tag_force = if any_hit == 0 { " (forced — 0 hits)" } else { "" }
+            // category header comment on tag transition
+            if tag != last_tag {
+                if emitted > 0 { parts.push(",\n") }
+                if tag == "Mathematical" {
+                    parts.push("\n    // --- real_limits.* (Mathematical) ----------------------------------\n")
+                } else if tag == "Physical" {
+                    parts.push("\n    // --- real_limits.* (Physical) --------------------------------------\n")
+                } else if tag == "Materials" {
+                    parts.push("\n    // --- materials_limits.* --------------------------------------------\n")
+                }
+                last_tag = tag
+            } else {
+                parts.push(",\n")
+            }
+            parts.push(_emit_alias_entry(cid, aliases, conf))
+            // print summary line
+            let mut sum_str = ""
+            let mut k = 0
+            while k < na {
+                if k > 0 { sum_str = sum_str + ", " }
+                sum_str = sum_str + to_string(aliases[k]) + "=" + to_string(hits[k])
+                k = k + 1
+            }
+            println("  EMIT  " + cid + " [conf=" + to_string(conf) + "]" + tag_force + " (" + sum_str + ")")
+            emitted = emitted + 1
+        }
+        i = i + 1
+    }
+
+    parts.push(_emit_footer())
+
+    // Pass 2 — omitted-roots drift check
+    println("")
+    println("  --- omitted-root drift check (expected 0 hits) ---")
+    let no = len(_OMITTED)
+    let mut o = 0
+    let mut surprises = 0
+    while o < no {
+        let row = _OMITTED[o]
+        let cid = to_string(row[0])
+        let terms = row[1]
+        let nt = len(terms)
+        let mut t = 0
+        let mut total = 0
+        while t < nt {
+            total = total + _grep_count(to_string(terms[t]), embedded)
+            t = t + 1
+        }
+        if total > 0 {
+            println("  DRIFT " + cid + " — " + to_string(total) + " unexpected hit(s); consider adding to _CURATED")
+            surprises = surprises + 1
+        }
+        o = o + 1
+    }
+    if surprises == 0 {
+        println("  drift: OK — all omitted roots remain at 0 hits")
+    }
+
+    let body = parts.join("")
+    let out = "compiler/atlas/aliases.gen.hexa"
+    write_file(out, body)
+    println("")
+    println("  wrote: " + out + " (" + to_string(len(body)) + " bytes, " + to_string(emitted) + " entries)")
+    println("done.")
+}

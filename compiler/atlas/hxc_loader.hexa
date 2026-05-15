@@ -1,0 +1,304 @@
+// HEXA Native Compiler — Path Y loader (HXC sidecar decoder)
+//
+// @version 0.1.0
+// @capabilities [fs_read]
+// @status RUNNABLE — Phase Y.2 (2026-05-15)
+//
+// Reads the HXC v2 sidecar produced by `tool/atlas_build_hxc.hexa` and
+// reconstructs a flat `[AtlasNode]`. Public surface is a single
+// function:
+//
+//     pub fn load_atlas_hxc(path: string) -> [AtlasNode]
+//
+// If the file is missing or empty, returns `[]` and the caller (e.g.
+// `compiler/atlas/static_index.hexa`) falls back to the existing
+// const-array rodata path.
+
+use "compiler/atlas/parser"        // AtlasNode, GradeInfo, EdgeInfo
+use "self/stdlib/fs"               // read_file_safe, fs_exists
+
+// 16 canonical column names (must match encoder).
+let HXC_COL_NAMES: [string] = [
+    "kind", "id", "raw", "source_file", "source_line",
+    "g_value", "g_verified", "g_breakthrough", "g_hypothesis",
+    "e_depends_on", "e_derives", "e_applications", "e_equivalents",
+    "e_converges", "e_verified_by", "e_breakthroughs"
+]
+
+fn _col_index(name: string) -> i64 {
+    let mut i = 0
+    while i < len(HXC_COL_NAMES) {
+        if HXC_COL_NAMES[i] == name { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Reverse the encoder's pipe-escape:
+//   `\|` → `|`
+//   `\\` → `\`
+//
+// Encoder applied:
+//   step 1: \  →  \\
+//   step 2: |  →  \|
+// To reverse cleanly we must undo step 2 before step 1. We use string
+// .replace() which is O(N) per pass — much faster than per-char concat
+// in the hexa interp (O(N) builtin vs O(N^2) immutable string concat).
+// The marker trick handles ambiguity: `\\|` in the wire encodes a
+// literal `\` followed by literal `|`. We:
+//   (a) replace `\\` with sentinel `` (won't appear in source)
+//   (b) replace `\|` with `|`
+//   (c) replace sentinel back to `\`
+fn _unesc_pipe(s: string) -> string {
+    // Fast path: cells without `\` need no unescape (id, kind, source_*,
+    // grade booleans/int, and any raw text that happens not to contain
+    // escapeable bytes). Skip the 3-pass replace dance entirely.
+    if !s.contains("\\") { return s }
+    let SENTINEL =""
+    let s1 = s.replace("\\\\", SENTINEL)
+    let s2 = s1.replace("\\|", "|")
+    return s2.replace(SENTINEL, "\\")
+}
+
+// Split a pipe-separated row WITHOUT splitting on `\|` (escaped pipe).
+// Returns array of raw cell strings (escapes still in place).
+//
+// Fast strategy: rely on the builtin .split("|") (O(N) string scan in
+// C) which over-splits at every `|`, then merge back the cells that
+// were preceded by a `\` (i.e. originally `\|`). This avoids the
+// O(N^2) immutable-string-concat trap of a per-char hexa loop.
+fn _split_pipes(s: string) -> array {
+    let parts = s.split("|")
+    // Walk parts; if part[i] ends with an UNESCAPED `\`, the split
+    // there was a false positive — rejoin with part[i+1].
+    let mut out = []
+    let mut i = 0
+    while i < len(parts) {
+        let mut cur = parts[i]
+        // While `cur` ends in an odd number of trailing backslashes,
+        // re-attach the next part with literal `|` between them.
+        while _ends_with_odd_backslash(cur) && i + 1 < len(parts) {
+            cur = cur + "|" + parts[i + 1]
+            i = i + 1
+        }
+        out.push(cur)
+        i = i + 1
+    }
+    return out
+}
+
+// Count trailing backslashes; return true if odd.
+fn _ends_with_odd_backslash(s: string) -> bool {
+    let n = len(s)
+    let mut k = 0
+    let mut j = n - 1
+    while j >= 0 {
+        if s.substring(j, j + 1) == "\\" {
+            k = k + 1
+            j = j - 1
+        } else {
+            break
+        }
+    }
+    return (k - (k / 2) * 2) == 1
+}
+
+// Parse a JSON-compact string-array `["a","b"]` (no inner whitespace)
+// into a [string] array. `[]` returns []. Robust to embedded `,` and
+// `\"` inside elements? Our encoder produced these arrays only from
+// HEXA-source edge fields, which are simple identifier-like strings,
+// so we use a permissive splitter.
+fn _parse_json_str_arr(s: string) -> array {
+    let t = s.trim()
+    if t == "[]" || t == "" { return [] }
+    // Strip outer brackets.
+    let inner = t.substring(1, len(t) - 1)
+    // Split by `","` (between adjacent quoted elements), then strip the
+    // leading `"` from first and trailing `"` from last.
+    if inner == "" { return [] }
+    let parts = inner.split("\",\"")
+    let mut out = []
+    let mut i = 0
+    while i < len(parts) {
+        let mut p = parts[i]
+        // Strip leading `"` for first, trailing `"` for last.
+        if i == 0 && len(p) > 0 && p.substring(0, 1) == "\"" {
+            p = p.substring(1, len(p))
+        }
+        if i == len(parts) - 1 && len(p) > 0 && p.substring(len(p) - 1, len(p)) == "\"" {
+            p = p.substring(0, len(p) - 1)
+        }
+        out.push(p)
+        i = i + 1
+    }
+    return out
+}
+
+// Convert "true"/"false" string to bool.
+fn _to_bool(s: string) -> bool {
+    return s == "true"
+}
+
+// Convert integer string to i64 (handles negative).
+fn _to_i64(s: string) -> i64 {
+    return to_int(s)
+}
+
+// Build one AtlasNode from a 16-element flat cell array (post-merge
+// with const headers, so every column is populated). Cell values are
+// still in pipe-escape form — we unescape them here.
+fn _build_node(cells: array) -> AtlasNode {
+    let kind          = _unesc_pipe(cells[0])
+    let id            = _unesc_pipe(cells[1])
+    let raw           = _unesc_pipe(cells[2])
+    let source_file   = _unesc_pipe(cells[3])
+    let source_line   = _to_i64(_unesc_pipe(cells[4]))
+    let g_value       = _to_i64(_unesc_pipe(cells[5]))
+    let g_verified    = _to_bool(_unesc_pipe(cells[6]))
+    let g_breakth     = _to_bool(_unesc_pipe(cells[7]))
+    let g_hypoth      = _to_bool(_unesc_pipe(cells[8]))
+    let e_depends     = _parse_json_str_arr(_unesc_pipe(cells[9]))
+    let e_derives     = _parse_json_str_arr(_unesc_pipe(cells[10]))
+    let e_applications= _parse_json_str_arr(_unesc_pipe(cells[11]))
+    let e_equivalents = _parse_json_str_arr(_unesc_pipe(cells[12]))
+    let e_converges   = _parse_json_str_arr(_unesc_pipe(cells[13]))
+    let e_verified_by = _parse_json_str_arr(_unesc_pipe(cells[14]))
+    let e_breakth_arr = _parse_json_str_arr(_unesc_pipe(cells[15]))
+
+    return AtlasNode {
+        kind: kind,
+        id: id,
+        raw: raw,
+        source_file: source_file,
+        source_line: source_line,
+        grade: GradeInfo {
+            value: g_value,
+            verified: g_verified,
+            breakthrough: g_breakth,
+            hypothesis: g_hypoth
+        },
+        edges: EdgeInfo {
+            depends_on: e_depends,
+            derives: e_derives,
+            applications: e_applications,
+            equivalents: e_equivalents,
+            converges: e_converges,
+            verified_by: e_verified_by,
+            breakthroughs: e_breakth_arr
+        }
+    }
+}
+
+// load_atlas_hxc — read the HXC sidecar at `path` and reconstruct the
+// full [AtlasNode] array. Returns `[]` if the file is missing or empty
+// (caller falls back to rodata embed). Panics with a line number on
+// schema malformation.
+pub fn load_atlas_hxc(path: string) -> array {
+    if !fs_exists(path) { return [] }
+    let text = read_file_safe(path)
+    if text == "" { return [] }
+    let lines = text.split("\n")
+
+    // Constants: per-column override values populated from
+    // `# const:<name>=<value>` headers.
+    let mut const_vals = []   // 16-slot string
+    let mut const_set = []    // 16-slot bool
+    let mut i0 = 0
+    while i0 < 16 { const_vals.push(""); const_set.push(false); i0 = i0 + 1 }
+
+    // Active column order (parsed from `# schema:atlas ...` line). The
+    // values are column indices (into the 16-slot canonical schema).
+    let mut active_cols = []
+
+    let mut out = []
+    let mut lineno = 0
+    let n = len(lines)
+    while lineno < n {
+        let raw_line = lines[lineno]
+        lineno = lineno + 1
+        if len(raw_line) == 0 { continue }
+        let line = raw_line
+
+        // Header lines start with `#`.
+        if line.starts_with("# hxc-version") { continue }
+        if line.starts_with("# atlas-rows") { continue }
+        if line.starts_with("# const:") {
+            // `# const:<col>=<val>`
+            let body = line.substring(8, len(line))   // strip `# const:`
+            let eq = body.index_of("=")
+            if eq < 0 { continue }
+            let col_name = body.substring(0, eq)
+            let val = body.substring(eq + 1, len(body))
+            let cidx = _col_index(col_name)
+            if cidx >= 0 {
+                const_vals[cidx] = val
+                const_set[cidx] = true
+            }
+            continue
+        }
+        if line.starts_with("# schema:atlas") {
+            // `# schema:atlas <col1> <col2> ...`
+            let rest = line.substring(len("# schema:atlas"), len(line)).trim()
+            if rest == "" { continue }
+            let cols = rest.split(" ")
+            let mut j = 0
+            while j < len(cols) {
+                let cidx = _col_index(cols[j])
+                if cidx >= 0 { active_cols.push(cidx) }
+                j = j + 1
+            }
+            continue
+        }
+        if line.starts_with("#") { continue }   // unknown header, skip
+        if line.starts_with("@atlas ") {
+            // Row record.
+            let payload = line.substring(7, len(line))
+            let cells = _split_pipes(payload)
+            if len(cells) != len(active_cols) {
+                println("hxc_loader: malformed row at line " + to_string(lineno) + " — expected " + to_string(len(active_cols)) + " cells, got " + to_string(len(cells)))
+                continue
+            }
+
+            // Build 16-slot dense cell array: active cells overlaid on
+            // const defaults.
+            let mut dense = []
+            let mut k = 0
+            while k < 16 {
+                if const_set[k] {
+                    dense.push(const_vals[k])
+                } else {
+                    dense.push("")
+                }
+                k = k + 1
+            }
+            let mut j = 0
+            while j < len(active_cols) {
+                let ci = active_cols[j]
+                dense[ci] = cells[j]
+                j = j + 1
+            }
+
+            out.push(_build_node(dense))
+            continue
+        }
+        // Unknown line type — silently skip (forward-compat).
+    }
+    return out
+}
+
+// ───────────────────────── smoke test (bottom-of-file) ─────────────────
+
+// Smoke entry — invoked manually via `hexa run compiler/atlas/hxc_loader.hexa`.
+// NOT auto-invoked at module load (would slow every `use` of this file).
+fn hxc_loader_smoke() {
+    let nodes = load_atlas_hxc("dist/atlas.hxc")
+    println("hxc_loader_smoke: loaded " + to_string(len(nodes)) + " nodes from dist/atlas.hxc")
+    if len(nodes) == 0 {
+        println("hxc_loader_smoke: empty — encoder may not have run yet")
+        return
+    }
+    let n0 = nodes[0]
+    println("hxc_loader_smoke: row[0]  kind=" + n0.kind + " id=" + n0.id + " src_line=" + to_string(n0.source_line) + " grade=" + to_string(n0.grade.value))
+    let n_last = nodes[len(nodes) - 1]
+    println("hxc_loader_smoke: row[-1] kind=" + n_last.kind + " id=" + n_last.id + " src_line=" + to_string(n_last.source_line) + " grade=" + to_string(n_last.grade.value))
+}

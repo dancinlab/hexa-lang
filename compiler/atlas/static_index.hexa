@@ -35,6 +35,7 @@ use "compiler/atlas/merger"
 use "compiler/atlas/embedded.gen"
 use "compiler/atlas/overlay"
 use "compiler/atlas/prefix_index"
+use "compiler/atlas/hxc_loader"     // Path Y — HXC sidecar fast path
 
 // --- drift-detection placeholders (Phase A4+) ------------------------------
 //
@@ -64,6 +65,20 @@ pub let ATLAS_HASH_MAX: string = ""
 // static path — those are merger-time signals and were resolved at
 // compiler-build time, not preserved across the embed boundary.
 pub fn static_atlas() -> AtlasIndex {
+    // Path Y (2026-05-15) — TWO-TIER FALLBACK:
+    //   1. Try dist/atlas.hxc (the HXC sidecar). If present, bucket
+    //      [AtlasNode] by kind and serve from that. Bypasses the
+    //      10-min interp hang on the 7,398-row embedded.gen.hexa
+    //      const-literal load.
+    //   2. If sidecar is missing or empty, fall back to the source
+    //      rodata path (ATLAS_*_NODES from embedded.gen.hexa).
+    let hxc_nodes = load_atlas_hxc("dist/atlas.hxc")
+    if len(hxc_nodes) > 0 {
+        println("atlas: loaded " + to_string(len(hxc_nodes)) + " nodes from hxc")
+        return _bucket_by_kind(hxc_nodes)
+    }
+    println("atlas: loaded " + to_string(_count_rodata()) + " nodes from source")
+
     // type: AtlasIndex
     // Stage1 punch list Gap 11 — verified, all 13 AtlasIndex fields are
     // literal-initialized here so the type checker round-trips this const
@@ -91,6 +106,55 @@ pub fn static_atlas() -> AtlasIndex {
         duplicates: [],
         skipped_oversize: []
     }
+}
+
+// _bucket_by_kind — partition a flat [AtlasNode] into the 9 per-kind
+// arrays expected by AtlasIndex. Used by the HXC-sidecar fast path.
+fn _bucket_by_kind(nodes: array) -> AtlasIndex {
+    let mut p_nodes = []
+    let mut c_nodes = []
+    let mut l_nodes = []
+    let mut e_nodes = []
+    let mut f_nodes = []
+    let mut r_nodes = []
+    let mut s_nodes = []
+    let mut x_nodes = []
+    let mut q_nodes = []
+    let mut i = 0
+    while i < len(nodes) {
+        let n = nodes[i]
+        if      n.kind == "P" { p_nodes.push(n) }
+        else if n.kind == "C" { c_nodes.push(n) }
+        else if n.kind == "L" { l_nodes.push(n) }
+        else if n.kind == "E" { e_nodes.push(n) }
+        else if n.kind == "F" { f_nodes.push(n) }
+        else if n.kind == "R" { r_nodes.push(n) }
+        else if n.kind == "S" { s_nodes.push(n) }
+        else if n.kind == "X" { x_nodes.push(n) }
+        else if n.kind == "Q" { q_nodes.push(n) }
+        i = i + 1
+    }
+    return AtlasIndex {
+        p_nodes: p_nodes,
+        c_nodes: c_nodes,
+        l_nodes: l_nodes,
+        e_nodes: e_nodes,
+        f_nodes: f_nodes,
+        r_nodes: r_nodes,
+        s_nodes: s_nodes,
+        x_nodes: x_nodes,
+        q_nodes: q_nodes,
+        hash: ATLAS_HASH,
+        source_count: ATLAS_SOURCE_COUNT,
+        duplicates: [],
+        skipped_oversize: []
+    }
+}
+
+fn _count_rodata() -> i64 {
+    return len(ATLAS_P_NODES) + len(ATLAS_C_NODES) + len(ATLAS_L_NODES) +
+           len(ATLAS_E_NODES) + len(ATLAS_F_NODES) + len(ATLAS_R_NODES) +
+           len(ATLAS_S_NODES) + len(ATLAS_X_NODES) + len(ATLAS_Q_NODES)
 }
 
 // lookup_static — same signature as merger.hexa::lookup. Linear scan

@@ -132,6 +132,14 @@
   authority = "[@x_tape_spec] §Domain-tape sibling §Architecture-vs-history split"
   @> AGENTS.md
 
+@D g_hxc := "hxc-wire-storage-format" :: governance [recommended d=2026-05-15 active]
+  rule = "Machine-readable surfaces (JSON / JSONL / config-blob streams) emit / consume via HXC v2 byte-canonical wire format."
+  scope = "atlas rodata sidecar · audit ledger streams · dispatch envelopes · witness rows · cycle-JSON artifacts · any structured stream previously encoded as JSON / JSONL"
+  out-of-scope = "human-edit SSOT (markdown · RFC · prose) and governance rules (this file's @D entries) stay in markdown / tape v1.2. HXC absorbs the machine side, NOT the human-author side."
+  why = "JSON/JSONL surfaces deliver measured 27-96% byte savings on schema-rich streams via HXC's A1-A35 deterministic codec chain. Atlas Layer 4 sidecar (compiler/atlas/hxc_loader.hexa + dist/atlas.hxc) is the canonical in-repo example."
+  authority = "[@x_hxc_spec]"
+  @> AGENTS.md
+
 # ─── §4 Forbidden patterns ───────────────────────────────────────────
 
 @F f1 := "lattice-fit-on-external-language" :: governance [required deny:write]
@@ -179,6 +187,11 @@
 @X x_tape_audit := "TAPE-AUDIT.md" :: ledger [active]
   url = "https://github.com/dancinlab/hexa-lang/blob/main/TAPE-AUDIT.md"
   scope = "tape v1.x adoption ledger for this repo"
+
+@X x_hxc_spec := "HXC v2 spec" :: spec [d=2026-05-15 active]
+  url = "https://github.com/dancinlab/hxc/blob/main/spec/hxc.md"
+  scope = "byte-canonical wire / storage format for AI-native pipelines · KV-cache prefix stable · 31 deterministic algorithms (A1-A35) · ASCII-stable line-oriented · absorbs JSON/JSONL surfaces"
+  in-repo-example = "compiler/atlas/hxc_loader.hexa + tool/atlas_build_hxc.hexa + dist/atlas.hxc (Atlas Layer 4 sidecar)"
 
 # ─── §6 Notes ────────────────────────────────────────────────────────
 

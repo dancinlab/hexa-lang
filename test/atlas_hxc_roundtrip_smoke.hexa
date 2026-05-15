@@ -1,0 +1,143 @@
+// test/atlas_hxc_roundtrip_smoke.hexa — Path Y end-to-end roundtrip
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+// @status RUNNABLE — Phase Y.4 (2026-05-15)
+//
+// Walks the full Path Y pipeline:
+//   1. (assumes encoder has been run; if not, hint to run it)
+//   2. Loads dist/atlas.hxc via hxc_loader::load_atlas_hxc
+//   3. Sanity-checks total count is in the expected 7,440..7,460 range
+//   4. Spot-checks 5 representative nodes by id for byte-equality of
+//      core fields (kind, id, source_line, source_file, grade.value).
+//
+// Spot-check expectations come from compiler/atlas/embedded.gen.hexa
+// row 1 (id="n", line=25), and the satellite anchors (real_limits.*,
+// materials_limits.*, n6_axes.*).
+
+use "compiler/atlas/parser"
+use "compiler/atlas/hxc_loader"
+use "self/stdlib/fs"
+
+fn _find_by_id(nodes: array, id: string) -> AtlasNode {
+    let mut i = 0
+    while i < len(nodes) {
+        let n = nodes[i]
+        if n.id == id { return n }
+        i = i + 1
+    }
+    return AtlasNode {
+        kind: "",
+        id: "",
+        raw: "",
+        source_file: "",
+        source_line: -1,
+        grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false },
+        edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] }
+    }
+}
+
+fn _assert_eq(label: string, got: string, want: string, fails: array) -> array {
+    if got == want {
+        println("  PASS " + label + " = " + got)
+        return fails
+    }
+    println("  FAIL " + label + " — got `" + got + "`, want `" + want + "`")
+    fails.push(label)
+    return fails
+}
+
+fn _assert_eq_i(label: string, got: i64, want: i64, fails: array) -> array {
+    return _assert_eq(label, to_string(got), to_string(want), fails)
+}
+
+fn _assert_eq_b(label: string, got: bool, want: bool, fails: array) -> array {
+    let gs = if got { "true" } else { "false" }
+    let ws = if want { "true" } else { "false" }
+    return _assert_eq(label, gs, ws, fails)
+}
+
+fn main() {
+    let path = "dist/atlas.hxc"
+    if !fs_exists(path) {
+        println("atlas_hxc_roundtrip_smoke: FAIL — " + path + " missing")
+        println("                            run: hexa run tool/atlas_build_hxc.hexa")
+        exit(1)
+    }
+    println("atlas_hxc_roundtrip_smoke: loading " + path + " ...")
+    let nodes = load_atlas_hxc(path)
+    println("  loaded " + to_string(len(nodes)) + " nodes")
+
+    let mut fails = []
+
+    // (1) Count check
+    if len(nodes) >= 7440 && len(nodes) <= 7460 {
+        println("  PASS node count in expected 7,440..7,460 range")
+    } else {
+        println("  FAIL node count " + to_string(len(nodes)) + " out of expected 7,440..7,460")
+        fails.push("count")
+    }
+
+    // (2) Spot 1: id="n" — first primitive, kind=P, line=25, grade=-1
+    let n1 = _find_by_id(nodes, "n")
+    fails = _assert_eq("n.kind",         n1.kind,        "P",        fails)
+    fails = _assert_eq("n.source_file",  n1.source_file, "atlas.n6", fails)
+    fails = _assert_eq_i("n.source_line",n1.source_line, 25,         fails)
+    fails = _assert_eq_i("n.grade.value",n1.grade.value, -1,         fails)
+    fails = _assert_eq_b("n.grade.hypothesis", n1.grade.hypothesis, false, fails)
+
+    // (3) Spot 2: id="sigma" — line=30, kind=P
+    let n2 = _find_by_id(nodes, "sigma")
+    fails = _assert_eq("sigma.kind",         n2.kind,        "P",        fails)
+    fails = _assert_eq_i("sigma.source_line",n2.source_line, 30,         fails)
+
+    // (4) Spot 3: real_limits.speed_of_light — kind=C, grade=11, verified=true
+    let n3 = _find_by_id(nodes, "real_limits.speed_of_light")
+    fails = _assert_eq("speed_of_light.kind",         n3.kind,        "C", fails)
+    fails = _assert_eq("speed_of_light.source_file",  n3.source_file, "LATTICE_POLICY.md", fails)
+    fails = _assert_eq_i("speed_of_light.grade.value",n3.grade.value, 11,  fails)
+    fails = _assert_eq_b("speed_of_light.verified",   n3.grade.verified, true, fails)
+
+    // (5) Spot 4: real_limits.shannon_entropy — first row of satellite
+    let n4 = _find_by_id(nodes, "real_limits.shannon_entropy")
+    fails = _assert_eq("shannon.kind",         n4.kind,        "C", fails)
+    fails = _assert_eq_i("shannon.grade.value",n4.grade.value, 11,  fails)
+
+    // (6) Spot 5: n6_axes.ribozyme — n6 axis row
+    let n5 = _find_by_id(nodes, "n6_axes.ribozyme")
+    fails = _assert_eq("ribozyme.kind",          n5.kind,        "P", fails)
+    fails = _assert_eq("ribozyme.source_file",   n5.source_file, "n6_lattice_check.hexa", fails)
+    fails = _assert_eq_i("ribozyme.grade.value", n5.grade.value, 10,  fails)
+    fails = _assert_eq_b("ribozyme.verified",    n5.grade.verified, true, fails)
+
+    // (7) Round-trip on `raw` substring — verify multi-line raw made it through.
+    if n1.raw.contains("@P n = 6") && n1.raw.contains("verify_primitives.py") {
+        println("  PASS n.raw contains header + verify clause")
+    } else {
+        println("  FAIL n.raw missing expected substrings")
+        println("       got first 200 chars: " + n1.raw.substring(0, if len(n1.raw) > 200 { 200 } else { len(n1.raw) }))
+        fails.push("n.raw")
+    }
+
+    // (8) Edges sanity — all 7 edge arrays present (even if empty)
+    if len(n1.edges.depends_on) == 0 && len(n1.edges.derives) == 0 && len(n1.edges.breakthroughs) == 0 {
+        println("  PASS n.edges arrays populated as empty (const-fold reverse OK)")
+    } else {
+        println("  FAIL n.edges arrays unexpected non-empty")
+        fails.push("n.edges")
+    }
+
+    println("")
+    if len(fails) == 0 {
+        println("atlas_hxc_roundtrip_smoke: PASS (" + to_string(len(nodes)) + " nodes, all spot-checks ok)")
+        exit(0)
+    } else {
+        println("atlas_hxc_roundtrip_smoke: FAIL — " + to_string(len(fails)) + " assertion(s)")
+        let mut i = 0
+        while i < len(fails) {
+            println("    - " + to_string(fails[i]))
+            i = i + 1
+        }
+        exit(1)
+    }
+}

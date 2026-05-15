@@ -1,0 +1,460 @@
+// tool/atlas_build_hxc.hexa — Path Y encoder (HXC sidecar for atlas)
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write]
+// @status RUNNABLE — Phase Y.1 (2026-05-15)
+//
+// Purpose
+// -------
+// Replace `compiler/atlas/embedded.gen.hexa` (4.9 MB, 7,398 source-level
+// `AtlasNode { ... }` struct literals — root cause of the 10-min interp
+// hang in module_loader) with a byte-canonical HXC v2 sidecar at
+// `dist/atlas.hxc`.
+//
+// This tool runs once at build-time. It reads the 4 .gen.hexa rodata
+// source files as TEXT (NOT via `use` — that would trigger the very
+// hang we're fixing), parses out the AtlasNode literals with a small
+// landmark-based tokenizer, and emits an HXC stream with const-column
+// fold (A13) + tree-dedup of empty edge arrays.
+//
+// Inputs (read as text):
+//   compiler/atlas/embedded.gen.hexa         (7,398 nodes)
+//   compiler/atlas/real_limits.gen.hexa      (   21 nodes)
+//   compiler/atlas/materials_limits.gen.hexa (   24 nodes)
+//   compiler/atlas/n6_axes.gen.hexa          (    5 nodes)
+// Total: 7,448 AtlasNode rows.
+//
+// Output:
+//   dist/atlas.hxc — HXC v2 stream (schema header + const headers + tree
+//   headers + N row records).
+
+use "self/stdlib/fs"           // read_file_safe, write_file_safe, mkdir_p
+
+// ───────────────────────── tokenizer ─────────────────────────────────
+//
+// Each AtlasNode literal occupies exactly one source line of the form:
+//   `    AtlasNode { kind: "X", id: "Y", raw: "...", source_file: "F",
+//    source_line: N, grade: GradeInfo { value: V, verified: B,
+//    breakthrough: B, hypothesis: B }, edges: EdgeInfo {
+//    depends_on: [...], derives: [...], applications: [...],
+//    equivalents: [...], converges: [...], verified_by: [...],
+//    breakthroughs: [...] } },`
+//
+// We tokenize via FIXED landmark substrings. The landmarks are unique
+// per-row (each AtlasNode literal contains each landmark exactly once
+// at the field boundary) so right/left-anchored split is deterministic.
+
+// Strip an `[...]` array literal from a field block and return the JSON-
+// equivalent payload string. Empty array -> "[]". Non-empty:
+// `["a", "b"]` (Hexa source already quotes the elements, so we just
+// normalize whitespace).
+fn _norm_arr(s: string) -> string {
+    let t = s.trim()
+    // Hexa source either has `[]` or `["x", "y", ...]`. We canonicalize
+    // to compact JSON form: `[]` or `["x","y"]` (no inner spaces).
+    if t == "[]" { return "[]" }
+    // Strip leading `[` and trailing `]`, split by ", "
+    let inner = t.substring(1, len(t) - 1)
+    let parts = inner.split(", ")
+    let mut out = "["
+    let mut i = 0
+    while i < len(parts) {
+        if i > 0 { out = out + "," }
+        out = out + parts[i]
+        i = i + 1
+    }
+    return out + "]"
+}
+
+// Extract the substring between landmark1 (the START of a quoted field)
+// and landmark2 (the END marker, which is a delimiter that NEVER occurs
+// inside the field value). Returns "" if either landmark is missing.
+fn _between(s: string, lm1: string, lm2: string) -> string {
+    let i1 = s.index_of(lm1)
+    if i1 < 0 { return "" }
+    let start = i1 + len(lm1)
+    // Hexa interp lacks .index_of_from — slice + re-index instead.
+    let tail = s.substring(start, len(s))
+    let off = tail.index_of(lm2)
+    if off < 0 { return "" }
+    return tail.substring(0, off)
+}
+
+// Parse one `    AtlasNode { ... },` line into a 16-tuple array of
+// columns: [kind, id, raw, source_file, source_line, g_value,
+// g_verified, g_breakthrough, g_hypothesis, e_depends_on, e_derives,
+// e_applications, e_equivalents, e_converges, e_verified_by,
+// e_breakthroughs].
+//
+// Forward-scan parser. Each landmark string below appears EXACTLY
+// ONCE per line (verified — `, source_file:` count == row count
+// across embedded.gen.hexa) so .index_of is unambiguous and a single
+// progressive walk suffices.
+fn _parse_row(line: string) -> array {
+    // 1. kind — between `    AtlasNode { kind: "` and `", id: "`
+    let kind_lm = "    AtlasNode { kind: \""
+    if !line.starts_with(kind_lm) { return [] }
+    let id_split = "\", id: \""
+    let kind_end = line.index_of(id_split)
+    if kind_end < 0 { return [] }
+    let kind_val = line.substring(len(kind_lm), kind_end)
+
+    // 2. id — between `", id: "` and `", raw: "`
+    let raw_split = "\", raw: \""
+    let id_start = kind_end + len(id_split)
+    let raw_end = line.index_of(raw_split)
+    if raw_end < 0 || raw_end < id_start { return [] }
+    let id_val = line.substring(id_start, raw_end)
+
+    // 3. raw — between `", raw: "` and `", source_file: "` (this is
+    //    the SOLE occurrence per row — `source_file` landmark is a
+    //    unique anchor).
+    let srcfile_split = "\", source_file: \""
+    let raw_start = raw_end + len(raw_split)
+    let srcfile_end = line.index_of(srcfile_split)
+    if srcfile_end < 0 || srcfile_end < raw_start { return [] }
+    let raw_val = line.substring(raw_start, srcfile_end)
+
+    // 4. source_file — between `", source_file: "` and `", source_line: `
+    let srcline_split = "\", source_line: "
+    let srcfile_start = srcfile_end + len(srcfile_split)
+    let srcline_end = line.index_of(srcline_split)
+    if srcline_end < 0 || srcline_end < srcfile_start { return [] }
+    let src_file = line.substring(srcfile_start, srcline_end)
+
+    // 5. source_line — bare integer between `, source_line: ` and `, grade:`
+    let grade_split = ", grade: GradeInfo { value: "
+    let srcline_start = srcline_end + len(srcline_split)
+    let grade_start = line.index_of(grade_split)
+    if grade_start < 0 || grade_start < srcline_start { return [] }
+    let src_line = line.substring(srcline_start, grade_start)
+
+    // 6-9. grade — `value: V, verified: B, breakthrough: B, hypothesis: B }`
+    let g_val_start = grade_start + len(grade_split)
+    let verified_split = ", verified: "
+    let g_val_end_tail = line.substring(g_val_start, len(line))
+    let g_val_off = g_val_end_tail.index_of(verified_split)
+    if g_val_off < 0 { return [] }
+    let g_value_str = g_val_end_tail.substring(0, g_val_off)
+
+    let g_verified_start = g_val_start + g_val_off + len(verified_split)
+    let breakthrough_split = ", breakthrough: "
+    let g_verified_tail = line.substring(g_verified_start, len(line))
+    let g_verified_off = g_verified_tail.index_of(breakthrough_split)
+    if g_verified_off < 0 { return [] }
+    let g_verified = g_verified_tail.substring(0, g_verified_off)
+
+    let g_breakth_start = g_verified_start + g_verified_off + len(breakthrough_split)
+    let hypothesis_split = ", hypothesis: "
+    let g_breakth_tail = line.substring(g_breakth_start, len(line))
+    let g_breakth_off = g_breakth_tail.index_of(hypothesis_split)
+    if g_breakth_off < 0 { return [] }
+    let g_breakth = g_breakth_tail.substring(0, g_breakth_off)
+
+    let g_hypoth_start = g_breakth_start + g_breakth_off + len(hypothesis_split)
+    let edges_split = " }, edges: EdgeInfo { depends_on: "
+    let g_hypoth_tail = line.substring(g_hypoth_start, len(line))
+    let g_hypoth_off = g_hypoth_tail.index_of(edges_split)
+    if g_hypoth_off < 0 { return [] }
+    let g_hypoth = g_hypoth_tail.substring(0, g_hypoth_off)
+
+    // 10-16. edges — 7 arrays separated by known per-key landmarks.
+    let edges_start = g_hypoth_start + g_hypoth_off + len(edges_split)
+    let edges_text = line.substring(edges_start, len(line))
+    // edges_text = `[...], derives: [...], applications: [...], equivalents: [...], converges: [...], verified_by: [...], breakthroughs: [...] } },`
+
+    let lm_d = ", derives: "
+    let i_d = edges_text.index_of(lm_d)
+    if i_d < 0 { return [] }
+    let e_depends = _norm_arr(edges_text.substring(0, i_d))
+
+    let after_d_start = i_d + len(lm_d)
+    let after_d = edges_text.substring(after_d_start, len(edges_text))
+    let lm_a = ", applications: "
+    let i_a = after_d.index_of(lm_a)
+    if i_a < 0 { return [] }
+    let e_derives = _norm_arr(after_d.substring(0, i_a))
+
+    let after_a = after_d.substring(i_a + len(lm_a), len(after_d))
+    let lm_e = ", equivalents: "
+    let i_e = after_a.index_of(lm_e)
+    if i_e < 0 { return [] }
+    let e_applications = _norm_arr(after_a.substring(0, i_e))
+
+    let after_e = after_a.substring(i_e + len(lm_e), len(after_a))
+    let lm_c = ", converges: "
+    let i_c = after_e.index_of(lm_c)
+    if i_c < 0 { return [] }
+    let e_equivalents = _norm_arr(after_e.substring(0, i_c))
+
+    let after_c = after_e.substring(i_c + len(lm_c), len(after_e))
+    let lm_v = ", verified_by: "
+    let i_v = after_c.index_of(lm_v)
+    if i_v < 0 { return [] }
+    let e_converges = _norm_arr(after_c.substring(0, i_v))
+
+    let after_v = after_c.substring(i_v + len(lm_v), len(after_c))
+    let lm_b = ", breakthroughs: "
+    let i_b = after_v.index_of(lm_b)
+    if i_b < 0 { return [] }
+    let e_verified_by = _norm_arr(after_v.substring(0, i_b))
+
+    let after_b = after_v.substring(i_b + len(lm_b), len(after_v))
+    // after_b = `[...] } },`
+    let lm_end = " } }"
+    let i_end = after_b.index_of(lm_end)
+    if i_end < 0 { return [] }
+    let e_breakthrough_arr = _norm_arr(after_b.substring(0, i_end))
+
+    return [
+        kind_val,           // 0
+        id_val,             // 1
+        raw_val,            // 2  (still in source-escape form: \n, \", \\)
+        src_file,           // 3
+        src_line,           // 4
+        g_value_str,        // 5
+        g_verified,         // 6
+        g_breakth,          // 7
+        g_hypoth,           // 8
+        e_depends,          // 9
+        e_derives,          // 10
+        e_applications,     // 11
+        e_equivalents,      // 12
+        e_converges,        // 13
+        e_verified_by,      // 14
+        e_breakthrough_arr  // 15
+    ]
+}
+
+// ───────────────────────── HXC escape ─────────────────────────
+//
+// HXC pipe-delimited row format: `|` in a value must be escaped as `\|`,
+// and backslash must be escaped as `\\`. We DO NOT touch the source-form
+// `\n` and `\"` inside raw fields — they remain as the literal two-byte
+// sequences `\` `n` / `\` `"`. The decoder reverses pipe-escape only.
+//
+// Order of operations: escape `\` first, then `|` (to avoid double-
+// escape of the `\` we just added).
+fn _esc_pipe(s: string) -> string {
+    let s1 = s.replace("\\", "\\\\")
+    return s1.replace("|", "\\|")
+}
+
+// ───────────────────────── encoder ─────────────────────────
+
+fn _parse_gen_file(path: string) -> array {
+    let text = read_file_safe(path)
+    if text == "" { return [] }
+    let lines = text.split("\n")
+    let mut rows = []
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i]
+        if ln.starts_with("    AtlasNode { kind:") {
+            let row = _parse_row(ln)
+            if len(row) == 16 { rows.push(row) }
+        }
+        i = i + 1
+    }
+    return rows
+}
+
+// SCHEMA column order (16 fields, names match the encoder spec):
+let SCHEMA_COLS: [string] = [
+    "kind", "id", "raw", "source_file", "source_line",
+    "g_value", "g_verified", "g_breakthrough", "g_hypothesis",
+    "e_depends_on", "e_derives", "e_applications", "e_equivalents",
+    "e_converges", "e_verified_by", "e_breakthroughs"
+]
+
+fn _join_with(arr: array, sep: string) -> string {
+    // Chunked-join: builds O(sqrt(N)) intermediate strings to avoid the
+    // O(N^2) blowup of naive left-fold (`out + sep + arr[i]` on each
+    // step copies the running string, which the hexa interp does NOT
+    // share-buffer). For 7,460 lines × ~400 B each this is the
+    // difference between ~3 MB and ~11 GB of cumulative allocation.
+    let n = len(arr)
+    if n == 0 { return "" }
+    if n == 1 { return to_string(arr[0]) }
+    let CHUNK = 64
+    let mut chunks = []
+    let mut i = 0
+    while i < n {
+        let mut piece = to_string(arr[i])
+        let mut j = i + 1
+        let lim = if i + CHUNK < n { i + CHUNK } else { n }
+        while j < lim {
+            piece = piece + sep + to_string(arr[j])
+            j = j + 1
+        }
+        chunks.push(piece)
+        i = lim
+    }
+    // Merge chunks pairwise until one remains (binary reduction).
+    while len(chunks) > 1 {
+        let mut merged = []
+        let mut k = 0
+        while k < len(chunks) {
+            if k + 1 < len(chunks) {
+                merged.push(chunks[k] + sep + chunks[k + 1])
+                k = k + 2
+            } else {
+                merged.push(chunks[k])
+                k = k + 1
+            }
+        }
+        chunks = merged
+    }
+    return chunks[0]
+}
+
+// Detect const columns (same value in EVERY row) and dominant-value
+// tree-dedup candidates (same value in >=10 rows). Returns a struct-
+// shaped array: [is_const(bool), const_val(string), tree_label_or_empty]
+// per column index 0..15. We use simple linear scan + first-value
+// remembrance.
+fn _analyze_columns(rows: array) -> array {
+    let ncols = 16
+    let mut first_vals = []
+    let mut all_same = []  // bool per col
+    let mut counts = []    // dict (id -> count) — represented as parallel arrays per col
+
+    // Initialize
+    let mut c = 0
+    while c < ncols {
+        first_vals.push("")
+        all_same.push(true)
+        c = c + 1
+    }
+
+    if len(rows) == 0 { return [] }
+    let first = rows[0]
+    c = 0
+    while c < ncols { first_vals[c] = first[c]; c = c + 1 }
+
+    let mut r = 1
+    while r < len(rows) {
+        let row = rows[r]
+        c = 0
+        while c < ncols {
+            if all_same[c] {
+                if row[c] != first_vals[c] { all_same[c] = false }
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+
+    // Build analysis result: per-col [is_const, const_val].
+    let mut analysis = []
+    c = 0
+    while c < ncols {
+        analysis.push([all_same[c], first_vals[c]])
+        c = c + 1
+    }
+    return analysis
+}
+
+// Encode `rows` into an HXC byte stream. Const-column-folded schema:
+// 1. Emit `# const:<col>=<val>` for every column that's globally const.
+// 2. Emit `# schema:atlas <col1> <col2> ...` with NON-const columns only.
+// 3. Emit one row per AtlasNode with NON-const pipe-separated values.
+//
+// Tree-dedup: we observe that empty `[]` arrays dominate the 7 edge
+// columns. If ALL rows have `[]` for an edge col it becomes a const
+// (folded out completely). Mixed cases stay as inline values — the
+// shared `[]` value still benefits from short rep (2 bytes).
+fn atlas_encode_hxc(rows: array) -> string {
+    let analysis = _analyze_columns(rows)
+
+    let mut out_lines = []
+    out_lines.push("# hxc-version 2")
+    out_lines.push("# atlas-rows " + to_string(len(rows)))
+
+    // Const headers.
+    let mut const_cols = []  // names
+    let mut active_cols = [] // indices into SCHEMA_COLS that are NOT const
+    let mut c = 0
+    while c < 16 {
+        let a = analysis[c]
+        if a[0] {
+            out_lines.push("# const:" + SCHEMA_COLS[c] + "=" + _esc_pipe(to_string(a[1])))
+            const_cols.push(SCHEMA_COLS[c])
+        } else {
+            active_cols.push(c)
+        }
+        c = c + 1
+    }
+
+    // Schema header (non-const columns only).
+    let mut sch = "# schema:atlas"
+    let mut i = 0
+    while i < len(active_cols) {
+        sch = sch + " " + SCHEMA_COLS[active_cols[i]]
+        i = i + 1
+    }
+    out_lines.push(sch)
+
+    // Row records.
+    let mut r = 0
+    while r < len(rows) {
+        let row = rows[r]
+        let mut cells = []
+        i = 0
+        while i < len(active_cols) {
+            cells.push(_esc_pipe(to_string(row[active_cols[i]])))
+            i = i + 1
+        }
+        out_lines.push("@atlas " + _join_with(cells, "|"))
+        r = r + 1
+    }
+
+    return _join_with(out_lines, "\n") + "\n"
+}
+
+// ───────────────────────── main ─────────────────────────
+
+fn main() {
+    let av = args()
+    let mut out_path = "dist/atlas.hxc"
+    if len(av) >= 3 { out_path = to_string(av[2]) }
+
+    println("atlas_build_hxc: parsing rodata source files...")
+    let rows_embedded = _parse_gen_file("compiler/atlas/embedded.gen.hexa")
+    println("  embedded.gen.hexa:        " + to_string(len(rows_embedded)) + " nodes")
+    let rows_real = _parse_gen_file("compiler/atlas/real_limits.gen.hexa")
+    println("  real_limits.gen.hexa:     " + to_string(len(rows_real)) + " nodes")
+    let rows_mat = _parse_gen_file("compiler/atlas/materials_limits.gen.hexa")
+    println("  materials_limits.gen.hexa:" + to_string(len(rows_mat)) + " nodes")
+    let rows_n6 = _parse_gen_file("compiler/atlas/n6_axes.gen.hexa")
+    println("  n6_axes.gen.hexa:         " + to_string(len(rows_n6)) + " nodes")
+
+    let mut all = []
+    let mut i = 0
+    while i < len(rows_embedded) { all.push(rows_embedded[i]) ; i = i + 1 }
+    i = 0
+    while i < len(rows_real) { all.push(rows_real[i]) ; i = i + 1 }
+    i = 0
+    while i < len(rows_mat) { all.push(rows_mat[i]) ; i = i + 1 }
+    i = 0
+    while i < len(rows_n6) { all.push(rows_n6[i]) ; i = i + 1 }
+    println("atlas_build_hxc: merged " + to_string(len(all)) + " nodes total")
+
+    println("atlas_build_hxc: encoding HXC stream...")
+    let hxc = atlas_encode_hxc(all)
+    println("  encoded bytes: " + to_string(len(hxc)))
+
+    // Ensure dist/ exists.
+    let _ = mkdir_p("dist")
+    let ok = write_file_safe(out_path, hxc)
+    if !ok {
+        println("atlas_build_hxc: write FAILED → " + out_path)
+        return
+    }
+    println("atlas_build_hxc: wrote " + to_string(len(hxc)) + " bytes → " + out_path)
+
+    // Source size for compression ratio reporting.
+    let src_bytes = lstat_size("compiler/atlas/embedded.gen.hexa")
+    let pct = if src_bytes > 0 { (len(hxc) * 100) / src_bytes } else { 0 }
+    println("atlas_build_hxc: source rodata " + to_string(src_bytes) + " bytes; sidecar is " + to_string(pct) + "% of source")
+}

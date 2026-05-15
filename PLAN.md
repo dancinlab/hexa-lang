@@ -300,7 +300,34 @@ consciousness.hexa ─┼─ target esp32  → no_std Rust → flash      ✅ co
 
 **우회**: 17번 phase 완료 전에는 interpreter 가 overlay corpus(현재 3 노드)에만 audit 가능 — atlas doctrine 의 실효 coverage 가 미진.
 
----
+### 17.X — Path X: `@embed` 디렉티브 신규 추가 (선택지 1)
+
+새 언어 기능 — source 의 const array 를 컴파일러 binary 내부 rodata 로 정적 동봉.
+
+| # | 작업 | 파일:라인 (대상) | 비고 |
+|---|------|----------------|------|
+| 17.X-1 | parser 가 `@embed("path/to/file.hxc")` 어트리뷰트 인식 | `self/parser.hexa` (attribute parsing 경로) | 기존 `@phase("parse_only")` 패턴 참고 |
+| 17.X-2 | codegen 이 embed 된 데이터를 C `static const unsigned char[]` 로 발산 | `self/codegen_c2.hexa` | `xxd -i` 등가 emit; rodata 섹션 배치 |
+| 17.X-3 | runtime 에 `embed_get(name) -> bytes` 룩업 API | `self/runtime.c` (또는 hexa stdlib) | 컴파일 시 등록된 심볼 테이블 |
+| 17.X-4 | atlas 소비 측 — `compiler/atlas/static_index.hexa` 가 `@embed` 사용해 `compiler/atlas/embedded.gen.hexa` 대체 | `compiler/atlas/static_index.hexa` | 기존 source-level rodata 제거 |
+
+**장점**: 단일 binary 배포 (`hexa` CLI 가 atlas 모두 포함). **단점**: 컴파일러 binary 5MB+ 비대; atlas 변경시 hexa 재빌드.
+
+### 17.Z — Path Z: flat module_loader streaming 정공법 (선택지 2)
+
+컴파일러 내부 수정 — 거대한 struct-literal array 를 element 단위로 stream parse.
+
+| # | 작업 | 파일:라인 (대상) | 비고 |
+|---|------|----------------|------|
+| 17.Z-1 | module_loader 가 array literal 을 element-by-element 로 yield | flatten/loader 단계 (정확한 경로는 `hexa build -O0 --trace` 출력 분석으로 식별) | RSS cap 우회 핵심 |
+| 17.Z-2 | typecheck 도 streaming-friendly 하게 — 7,398 노드를 동일 타입으로 fast-path | typecheck phase | 동질 element 가속 |
+| 17.Z-3 | `pub let` cross-module rodata emit (PLAN.md 17-2 와 통합) | codegen | single-file fallback 제거 또는 multi-module link 경로 신설 |
+
+**장점**: 신규 언어 기능 불필요, 모든 const-array 자동 혜택. **단점**: 작업량 가장 큼 (flatten + typecheck + codegen 3단계 모두 손).
+
+### 17.Y — Path Y: HXC sidecar (선택지 3 — 진행 중)
+
+`tool/atlas_build_hxc.hexa` 한 번 생성 → `dist/atlas.hxc` 런타임 로드. feasibility 결과 도착 시 17.Y-N 항목으로 채움.
 
 ## HEXA만의 불가침 영역
 
