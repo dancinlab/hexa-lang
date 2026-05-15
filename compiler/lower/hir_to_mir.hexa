@@ -1234,11 +1234,22 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // Tag is a deterministic hash of the path text (matches the match
     // arm comparison in the same pass).
     if k == "enum_path" {
+        // Lowered as a map-backed value REUSING the proven 3-backend
+        // struct_lit codegen (a351b1c9/87f3c073/5dfc5e32): emit
+        // op="struct_lit" with args = [ "enum_"+name, "__tag", <hash>,
+        // "__p0", p0, "__p1", p1, ... ]. The enum value is the map
+        // { "__tag": path_hash, "__pN": payloadN }; the match consumer
+        // reads the tag via the symmetric hexa_map_get(v,"__tag")
+        // (match-tag track). Zero new codegen — single repr (map) for
+        // struct + enum keeps construct/access symmetric.
         let mut ctx2 = ctx
         let mut args: [Operand] = []
+        args.push(_const_str_op("enum_" + e.text))
+        args.push(_const_str_op("__tag"))
         args.push(_const_int_op(_path_hash(e.text)))
         let mut i = 0
         while i < len(e.children) {
+            args.push(_const_str_op("__p" + to_string(i)))
             let r = _lower_hexpr(ctx2, e.children[i])
             ctx2 = r.ctx
             args.push(r.operand)
@@ -1249,7 +1260,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let s = Stmt {
             kind: STMT_ASSIGN,
             dst: dst,
-            op: "enum_path",
+            op: "struct_lit",
             args: args,
             target_block: -1,
             target_block_else: -1
