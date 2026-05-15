@@ -1157,16 +1157,25 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // recurse the values (so a Bar nested inside Foo emits its own
     // struct_lit assignment first, then Foo references that local).
     if k == "struct_lit" {
+        // MIR shape (codegen contract): args = [ type_name_str,
+        //   key0_str, val0, key1_str, val1, ... ] so the backend can
+        //   emit hexa_struct_pack_map(type, n, keys, vals). Previously
+        //   field NAMES + type were dropped (values-only) → struct_lit
+        //   was uncodegennable. field_lit HExpr.text is the field name
+        //   (ast_to_hir.hexa:1673). Bounded by source field count.
         let mut ctx2 = ctx
         let mut field_ops: [Operand] = []
+        field_ops.push(_const_str_op(e.text))
         let mut i = 0
         while i < len(e.children) {
             let f = e.children[i]
             if f.kind == "field_lit" && len(f.children) > 0 {
+                field_ops.push(_const_str_op(f.text))
                 let r = _lower_hexpr(ctx2, f.children[0])
                 ctx2 = r.ctx
                 field_ops.push(r.operand)
             } else {
+                field_ops.push(_const_str_op(""))
                 let r = _lower_hexpr(ctx2, f)
                 ctx2 = r.ctx
                 field_ops.push(r.operand)
