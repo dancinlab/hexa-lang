@@ -726,8 +726,26 @@ fn parse_primary() -> Expr {
         // O(n²) is structurally impossible, not merely avoided by a
         // runtime path that still leaves the const-literal in the build.
         // Fix: runtime construction, or the HXC sidecar (@D g_hxc).
+        // Over the cap: emit HX0013 AND TRUNCATE the children to empty. The
+        // diagnostic alone is not enough — the bootstrap path runs with
+        // HEXA_IGNORE_ERRORS=1 (thousands of unrelated front-end diags), so
+        // a diagnostic-only cap would still hand a multi-thousand-child
+        // ArrayLit to lower/codegen → the O(n²) returns. Dropping the
+        // children makes the compile path O(n²)-free in ALL modes (clean
+        // AND ignore-errors). Semantics: an oversize literal has no
+        // compile-time value — serve it at runtime / via the HXC sidecar
+        // (@D g_hxc). For the embedded-atlas arrays this is sound:
+        // static_atlas() prefers dist/atlas.hxc and only falls back to the
+        // const arrays when the sidecar is absent.
         if len(elems) > 1024 {
             _push_parse_diag("HX0013", lb.span, to_string(len(elems)))
+            return Expr {
+                kind: ExprKind::ArrayLit,
+                span: lb.span,
+                text: "",
+                children: [],
+                atlas_ref: empty_atlas()
+            }
         }
         return Expr {
             kind: ExprKind::ArrayLit,
