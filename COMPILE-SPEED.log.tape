@@ -279,3 +279,32 @@
   EOF
   status = "opt-in. Default `hexa-cc` path unchanged. Users adopting hexa-fast see the speedup immediately."
   next = "PHASE 1.3.B (codegen integration) — patch self/codegen_c2.hexa:674 to emit `#include \"runtime.h\"` directly, then rebuild hexa_v2. Sequence after current uncommitted codegen work is resolved upstream."
+
+# ─── 2026-05-15  PHASE 2 — dev-mode clang flag bundle (RANK 2 measurement) ─
+
+@A phase_2_devflags := "dev_flags A/B measurement on PHASE 1.3 baseline" :: measurement [d=2026-05-15 partial]
+  step = "[@action_queue] 2.1 — measure -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables bundle on top of PHASE 1.3 (`hexa-fast` warm-cache) baseline"
+  tiny_program_3x <<~EOF
+    A (default -O0):
+      real 0.25 · user 0.13 · sys 0.10
+      real 0.25 · user 0.13 · sys 0.09
+      real 0.26 · user 0.14 · sys 0.10
+    B (-O0 + dev flag bundle):
+      real 0.27 · user 0.14 · sys 0.10
+      real 0.25 · user 0.14 · sys 0.10
+      real 0.26 · user 0.14 · sys 0.10
+    Marginal: ~0 % (B slightly slower; within noise band).
+  EOF
+  big_program <<~EOF
+    A (default -O0):    real 7.00 · user 4.73 · sys 0.24
+    B (+ dev bundle):   real 6.25 · user 4.65 · sys 0.22
+    Marginal: wall -10.7 %, user -1.7 %.
+  EOF
+  gate_evaluation <<~EOF
+    Gate (action_queue step 2.2): "promote only if ≥ 10 % marginal AND no regressions"
+      tiny program:  ≈ 0 % marginal → FAIL gate
+      big program:   wall passes 10 % threshold; user-time does not
+    Mixed signal → do NOT promote to a hard default.
+  EOF
+  decision = "PHASE 2 → OPTIONAL not DEFAULT. The flag bundle is already accessible via `HEXA_FAST_CFLAGS` env var (PHASE 1.3 deliverable). Users with big programs / batch builds can opt in; tiny-program workflows see no benefit so we don't penalize them with reduced safety (stack-protector / unwind tables off)."
+  rationale = "Per measure_first doctrine — without consistent ≥10 % win across the dominant workflow, the maintenance cost of a flag-bundle default (security implications + per-build mental model) outweighs the partial win. Keep available, don't force."
