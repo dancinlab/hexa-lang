@@ -6684,6 +6684,50 @@ HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v);
 static HexaVal farr_copy;
 static HexaVal farr_add_gaussian_noise;
 
+// anima RFC 034 (2026-05-16): farr reverse-mode autograd.
+//   0/1-arg (tape_begin/tape_end/backward/grad) → hexa_call0/1 carriers.
+//   4-arg (softmax_cross_entropy) → hexa_call4 carrier.
+//   5-arg (ad_matmul) + 11-arg (adamw_step) → static inline wrappers
+//   (past the 4-arg hexa_callN ceiling; codegen emits a direct C call,
+//   same pattern as RFC 032 farr_apply_cnot / RFC 038 farr_uccsd_apply).
+HexaVal hexa_ad_tape_begin(void);
+HexaVal hexa_ad_tape_end(HexaVal tid_v);
+HexaVal hexa_ad_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                       HexaVal b_v, HexaVal bc_v);
+HexaVal hexa_ad_softmax_cross_entropy(HexaVal logits_v, HexaVal nr_v,
+                                      HexaVal nc_v, HexaVal tgt_v);
+HexaVal hexa_ad_backward(HexaVal tid_v);
+HexaVal hexa_ad_grad(HexaVal param_v);
+HexaVal hexa_adamw_step(HexaVal p_v, HexaVal g_v, HexaVal m_v, HexaVal v_v,
+                        HexaVal n_v, HexaVal lr_v, HexaVal b1_v, HexaVal b2_v,
+                        HexaVal eps_v, HexaVal wd_v, HexaVal t_v);
+// External linkage (NOT static): the committed hexa_v2 codegen lowers
+// these via the generic fallback — `hexa_call0(ad_tape_begin)` /
+// `hexa_call1(ad_backward, …)` / `hexa_call4(ad_softmax_cross_entropy,
+// …)` for ≤4-arg (needs a visible HexaVal carrier), and bare
+// `ad_matmul(…)` / `adamw_step(…)` for ≥5-arg (needs a visible
+// function). The user.c TU sees only runtime.h, so these MUST have
+// external linkage + a runtime.h decl (no codegen branch required —
+// same fallback contract RFC 038 farr_uccsd_apply relies on, made
+// link-clean for the multi-TU runtime.h split). The codegen_c2.hexa
+// branches are additionally provided so a future `hexa cc --regen`
+// emits the direct typed `hexa_ad_*` call; both paths are valid.
+HexaVal ad_tape_begin;
+HexaVal ad_tape_end;
+HexaVal ad_softmax_cross_entropy;
+HexaVal ad_backward;
+HexaVal ad_grad;
+HexaVal ad_matmul(HexaVal a, HexaVal ar, HexaVal ac,
+                  HexaVal b, HexaVal bc) {
+    return hexa_ad_matmul(a, ar, ac, b, bc);
+}
+HexaVal adamw_step(HexaVal p, HexaVal g, HexaVal m, HexaVal v,
+                   HexaVal n, HexaVal lr, HexaVal b1,
+                   HexaVal b2, HexaVal eps, HexaVal wd,
+                   HexaVal t) {
+    return hexa_adamw_step(p, g, m, v, n, lr, b1, b2, eps, wd, t);
+}
+
 // RFC 034 (2026-05-13): Pauli-string exp + expectation whole-loop kernels.
 // 8-arg / 7-arg; past the hexa_callN ceiling → static inline wrappers.
 HexaVal hexa_farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
@@ -9586,6 +9630,353 @@ HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v) {
     return hexa_void();
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// anima RFC 034 (2026-05-16): farr reverse-mode autograd.
+//
+// Minimal tape-based reverse-mode AD layered on the existing packed-
+// double farr typed-arena (RFC 030/032/033). v1 = FP32-equivalent
+// (double internally), single-process, single-arena. Scope is exactly
+// the anima HEXAD 6-module decoder train step: one linear layer +
+// softmax-cross-entropy + AdamW. Zero HexaVal boxing in the reverse
+// sweep (every backward closure walks raw double* — the RFC 032
+// matmul contract, extended to gradients).
+//
+// Surface (anima/HEXAD/PLAN.md Phase 5 unblock):
+//   ad_tape_begin() -> int
+//   ad_tape_end(tape_id) -> void
+//   ad_matmul(A,Ar,Ac,B,Bc) -> int          (wraps RFC 032 farr_matmul)
+//   ad_softmax_cross_entropy(logits,nr,nc,targets) -> float
+//   ad_backward(tape_id) -> void
+//   ad_grad(param_farr) -> int               (grad farr_id for a leaf)
+//   adamw_step(p,g,m,v,n,lr,b1,b2,eps,wd,t) -> void
+//
+// The softmax-CE logit-Jacobian is the closed-form anima B-D-4 sympy
+// identity   ∂CE/∂z_i = softmax(z)_i − [i = t]   (verified ∀ z in
+// anima state/verify_hexad_blue_2026_05_15/blue_falsifier.py B-D-4).
+// Implemented fused/native so the acceptance test has a deterministic
+// gradient oracle (no composed tape for the single most common loss).
+//
+// Falsifier coverage: tmp_rfc034_smoke.hexa
+//   F-RFC034-BUILD / GRAD-EXACT / LOSS-DECREASES / PARAM-MUTATED / DETERMINISM
+// ═══════════════════════════════════════════════════════════════════
+
+// Backward op kinds recorded on the tape.
+#define _HX_AD_OP_MATMUL  1
+#define _HX_AD_OP_SMCE    2
+
+typedef struct {
+    int      kind;       // _HX_AD_OP_*
+    int64_t  a_id;       // matmul: A farr ; smce: logits farr
+    int64_t  b_id;       // matmul: B farr ; smce: targets farr
+    int64_t  out_id;     // matmul: C farr ; smce: unused (-1)
+    int64_t  m;          // matmul: A rows ; smce: n_rows
+    int64_t  k;          // matmul: A cols ; smce: n_cols
+    int64_t  n;          // matmul: B cols ; smce: unused
+} HexaAdNode;
+
+typedef struct {
+    HexaAdNode* nodes;
+    int64_t     count;
+    int64_t     cap;
+    int         active;
+} HexaAdTape;
+
+// Single-arena v1 (RFC 034 Non-goals: single-process). One tape table;
+// at most one tape is "active" at a time (the anima train loop opens /
+// closes a fresh tape per step). grad map is global (param farr_id →
+// grad farr_id), persisting across steps so adamw_step can read it.
+static HexaAdTape* _hx_ad_tapes      = NULL;
+static int64_t     _hx_ad_tape_count = 0;
+static int64_t     _hx_ad_tape_cap   = 0;
+static int64_t     _hx_ad_active     = -1;   // active tape id, -1 = none
+
+// grad registry: parallel arrays param_farr_id -> grad_farr_id.
+static int64_t* _hx_ad_grad_param = NULL;
+static int64_t* _hx_ad_grad_grad  = NULL;
+static int64_t  _hx_ad_grad_n     = 0;
+static int64_t  _hx_ad_grad_cap   = 0;
+
+static double* _hx_ad_farr_buf(int64_t id, int64_t* len_out) {
+    if (id < 0 || id >= _hx_farr_count) return NULL;
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    if (len_out) *len_out = e->len;
+    return e->buf;
+}
+
+// Register / overwrite grad farr handle for a param leaf. The grad
+// buffer is owned by the registry; ad_backward reallocs it zeroed.
+static void _hx_ad_grad_put(int64_t param_id, int64_t grad_id) {
+    for (int64_t i = 0; i < _hx_ad_grad_n; i++) {
+        if (_hx_ad_grad_param[i] == param_id) {
+            _hx_ad_grad_grad[i] = grad_id;
+            return;
+        }
+    }
+    if (_hx_ad_grad_n >= _hx_ad_grad_cap) {
+        int64_t nc = _hx_ad_grad_cap < 16 ? 16 : _hx_ad_grad_cap * 2;
+        int64_t* np = (int64_t*)realloc(_hx_ad_grad_param, (size_t)nc * sizeof(int64_t));
+        int64_t* ng = (int64_t*)realloc(_hx_ad_grad_grad,  (size_t)nc * sizeof(int64_t));
+        if (!np || !ng) { fprintf(stderr, "[ad] OOM grad registry\n"); exit(77); }
+        _hx_ad_grad_param = np; _hx_ad_grad_grad = ng; _hx_ad_grad_cap = nc;
+    }
+    _hx_ad_grad_param[_hx_ad_grad_n] = param_id;
+    _hx_ad_grad_grad[_hx_ad_grad_n]  = grad_id;
+    _hx_ad_grad_n++;
+}
+
+static int64_t _hx_ad_grad_get(int64_t param_id) {
+    for (int64_t i = 0; i < _hx_ad_grad_n; i++)
+        if (_hx_ad_grad_param[i] == param_id) return _hx_ad_grad_grad[i];
+    return -1;
+}
+
+// ad_tape_begin() -> tape_id (also set active).
+HexaVal hexa_ad_tape_begin(void) {
+    int64_t id = -1;
+    for (int64_t i = 0; i < _hx_ad_tape_count; i++) {
+        if (!_hx_ad_tapes[i].active && _hx_ad_tapes[i].nodes == NULL) { id = i; break; }
+    }
+    if (id < 0) {
+        if (_hx_ad_tape_count >= _hx_ad_tape_cap) {
+            int64_t nc = _hx_ad_tape_cap < 8 ? 8 : _hx_ad_tape_cap * 2;
+            HexaAdTape* nt = (HexaAdTape*)realloc(_hx_ad_tapes,
+                                (size_t)nc * sizeof(HexaAdTape));
+            if (!nt) { fprintf(stderr, "[ad] OOM tape table\n"); exit(77); }
+            _hx_ad_tapes = nt;
+            _hx_ad_tape_cap = nc;
+        }
+        id = _hx_ad_tape_count++;
+    }
+    _hx_ad_tapes[id].nodes  = NULL;
+    _hx_ad_tapes[id].count  = 0;
+    _hx_ad_tapes[id].cap    = 0;
+    _hx_ad_tapes[id].active = 1;
+    _hx_ad_active = id;
+    return hexa_int(id);
+}
+
+// ad_tape_end(tape_id) -> void. Frees the op list; the active marker
+// clears so the next ad_tape_begin reuses the slot.
+HexaVal hexa_ad_tape_end(HexaVal tid_v) {
+    int64_t id = hexa_as_num(tid_v);
+    if (id < 0 || id >= _hx_ad_tape_count) return hexa_void();
+    HexaAdTape* t = &_hx_ad_tapes[id];
+    if (t->nodes) { free(t->nodes); t->nodes = NULL; }
+    t->count = 0; t->cap = 0; t->active = 0;
+    if (_hx_ad_active == id) _hx_ad_active = -1;
+    return hexa_void();
+}
+
+static void _hx_ad_record(int kind, int64_t a, int64_t b, int64_t out,
+                          int64_t m, int64_t k, int64_t n) {
+    if (_hx_ad_active < 0 || _hx_ad_active >= _hx_ad_tape_count) return;
+    HexaAdTape* t = &_hx_ad_tapes[_hx_ad_active];
+    if (t->count >= t->cap) {
+        int64_t nc = t->cap < 16 ? 16 : t->cap * 2;
+        HexaAdNode* nn = (HexaAdNode*)realloc(t->nodes,
+                            (size_t)nc * sizeof(HexaAdNode));
+        if (!nn) { fprintf(stderr, "[ad] OOM tape nodes\n"); exit(77); }
+        t->nodes = nn; t->cap = nc;
+    }
+    HexaAdNode* nd = &t->nodes[t->count++];
+    nd->kind = kind; nd->a_id = a; nd->b_id = b; nd->out_id = out;
+    nd->m = m; nd->k = k; nd->n = n;
+}
+
+// ad_matmul(A,Ar,Ac,B,Bc) -> C_farr_id. Forward = RFC 032 farr_matmul;
+// records the backward (dA = dC @ Bᵀ ; dB = Aᵀ @ dC).
+HexaVal hexa_ad_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                       HexaVal b_v, HexaVal bc_v) {
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t M    = hexa_as_num(ar_v);
+    int64_t K    = hexa_as_num(ac_v);
+    int64_t b_id = hexa_as_num(b_v);
+    int64_t N    = hexa_as_num(bc_v);
+    HexaVal c_h  = hexa_farr_matmul(a_v, ar_v, ac_v, b_v, bc_v);
+    int64_t c_id = HX_INT(c_h);
+    if (c_id < 0) return c_h;            // shape error propagates
+    _hx_ad_record(_HX_AD_OP_MATMUL, a_id, b_id, c_id, M, K, N);
+    return c_h;
+}
+
+// ad_softmax_cross_entropy(logits, n_rows, n_cols, targets) -> float.
+// Returns mean CE over the n_rows examples (each row = a length n_cols
+// logit vector; targets farr holds n_rows class indices). Records the
+// closed-form B-D-4 logit gradient ∂L/∂logits = (softmax − onehot)/n_rows.
+HexaVal hexa_ad_softmax_cross_entropy(HexaVal logits_v, HexaVal nr_v,
+                                      HexaVal nc_v, HexaVal tgt_v) {
+    int64_t lg_id = hexa_as_num(logits_v);
+    int64_t R     = hexa_as_num(nr_v);
+    int64_t C     = hexa_as_num(nc_v);
+    int64_t tg_id = hexa_as_num(tgt_v);
+    int64_t lg_len = 0, tg_len = 0;
+    double* lg = _hx_ad_farr_buf(lg_id, &lg_len);
+    double* tg = _hx_ad_farr_buf(tg_id, &tg_len);
+    if (!lg || !tg || R <= 0 || C <= 0) return hexa_float(0.0);
+    if (lg_len < R * C || tg_len < R)   return hexa_float(0.0);
+    double total = 0.0;
+    for (int64_t r = 0; r < R; r++) {
+        const double* z = lg + r * C;
+        // numerically-stable softmax: subtract row max.
+        double zmax = z[0];
+        for (int64_t j = 1; j < C; j++) if (z[j] > zmax) zmax = z[j];
+        double s = 0.0;
+        for (int64_t j = 0; j < C; j++) s += exp(z[j] - zmax);
+        int64_t tcls = (int64_t)(tg[r] + 0.5);   // class index (round)
+        if (tcls < 0) tcls = 0;
+        if (tcls >= C) tcls = C - 1;
+        // CE = -log softmax(z)_t = (zmax - z_t) + log Σ exp(z - zmax)
+        double ce = (zmax - z[tcls]) + log(s);
+        total += ce;
+    }
+    _hx_ad_record(_HX_AD_OP_SMCE, lg_id, tg_id, -1, R, C, 0);
+    return hexa_float(total / (double)R);
+}
+
+// Ensure a zeroed grad farr of length n for param leaf `param_id`,
+// returning its farr_id. Reuses the registered handle if its length
+// matches, else (re)allocates.
+static int64_t _hx_ad_grad_ensure(int64_t param_id, int64_t n) {
+    int64_t g = _hx_ad_grad_get(param_id);
+    if (g >= 0 && g < _hx_farr_count && _hx_farr_table[g].buf
+        && _hx_farr_table[g].len == n) {
+        memset(_hx_farr_table[g].buf, 0, (size_t)n * sizeof(double));
+        return g;
+    }
+    HexaVal gh = hexa_farr_zeros(hexa_int(n));
+    int64_t gid = HX_INT(gh);
+    _hx_ad_grad_put(param_id, gid);
+    return gid;
+}
+
+// ad_backward(tape_id) -> void. Reverse sweep. v1 supports the anima
+// train-step graph exactly: a single ad_matmul (X @ W -> logits)
+// feeding one ad_softmax_cross_entropy. The CE node seeds dlogits via
+// the closed B-D-4 identity; the matmul node backprops dW = Xᵀ @ dC
+// (the param gradient anima's AdamW consumes) and dA = dC @ Bᵀ.
+HexaVal hexa_ad_backward(HexaVal tid_v) {
+    int64_t id = hexa_as_num(tid_v);
+    if (id < 0 || id >= _hx_ad_tape_count) return hexa_void();
+    HexaAdTape* t = &_hx_ad_tapes[id];
+    if (!t->nodes || t->count <= 0) return hexa_void();
+
+    // dC accumulator keyed by farr_id (the loss-side cotangent). v1
+    // graph is a chain, so a small linear map suffices.
+    // Reverse walk.
+    for (int64_t qi = t->count - 1; qi >= 0; qi--) {
+        HexaAdNode* nd = &t->nodes[qi];
+        if (nd->kind == _HX_AD_OP_SMCE) {
+            int64_t R = nd->m, C = nd->k;
+            int64_t lg_len = 0, tg_len = 0;
+            double* lg = _hx_ad_farr_buf(nd->a_id, &lg_len);
+            double* tg = _hx_ad_farr_buf(nd->b_id, &tg_len);
+            if (!lg || !tg) continue;
+            int64_t g = _hx_ad_grad_ensure(nd->a_id, R * C);
+            double* dz = _hx_farr_table[g].buf;
+            for (int64_t r = 0; r < R; r++) {
+                const double* z = lg + r * C;
+                double* d = dz + r * C;
+                double zmax = z[0];
+                for (int64_t j = 1; j < C; j++) if (z[j] > zmax) zmax = z[j];
+                double s = 0.0;
+                for (int64_t j = 0; j < C; j++) s += exp(z[j] - zmax);
+                int64_t tcls = (int64_t)(tg[r] + 0.5);
+                if (tcls < 0) tcls = 0;
+                if (tcls >= C) tcls = C - 1;
+                // B-D-4: ∂L/∂z_i = softmax(z)_i − [i=t], averaged over R.
+                for (int64_t j = 0; j < C; j++) {
+                    double sm = exp(z[j] - zmax) / s;
+                    d[j] = (sm - (j == tcls ? 1.0 : 0.0)) / (double)R;
+                }
+            }
+        } else if (nd->kind == _HX_AD_OP_MATMUL) {
+            // Forward C = A(MxK) @ B(KxN). Upstream cotangent dC lives
+            // in the grad slot of out_id (seeded by the CE node above
+            // when out_id == its logits farr).
+            int64_t M = nd->m, K = nd->k, N = nd->n;
+            int64_t dc_id = _hx_ad_grad_get(nd->out_id);
+            double* dC = (dc_id >= 0) ? _hx_farr_table[dc_id].buf : NULL;
+            int64_t a_len = 0, b_len = 0;
+            double* A = _hx_ad_farr_buf(nd->a_id, &a_len);
+            double* B = _hx_ad_farr_buf(nd->b_id, &b_len);
+            if (!dC || !A || !B) continue;
+            // dB = Aᵀ @ dC  (K x N) — the param (weight) gradient.
+            int64_t gB = _hx_ad_grad_ensure(nd->b_id, K * N);
+            double* dB = _hx_farr_table[gB].buf;
+            for (int64_t kk = 0; kk < K; kk++) {
+                for (int64_t i = 0; i < M; i++) {
+                    double a_ik = A[i * K + kk];
+                    const double* dCi = dC + i * N;
+                    double* dBk = dB + kk * N;
+                    for (int64_t j = 0; j < N; j++)
+                        dBk[j] += a_ik * dCi[j];
+                }
+            }
+            // dA = dC @ Bᵀ  (M x K) — input cotangent (chain upstream).
+            int64_t gA = _hx_ad_grad_ensure(nd->a_id, M * K);
+            double* dA = _hx_farr_table[gA].buf;
+            for (int64_t i = 0; i < M; i++) {
+                const double* dCi = dC + i * N;
+                double* dAi = dA + i * K;
+                for (int64_t kk = 0; kk < K; kk++) {
+                    const double* Bk = B + kk * N;
+                    double acc = 0.0;
+                    for (int64_t j = 0; j < N; j++)
+                        acc += dCi[j] * Bk[j];
+                    dAi[kk] = acc;
+                }
+            }
+        }
+    }
+    return hexa_void();
+}
+
+// ad_grad(param_farr) -> grad farr_id (-1 if no grad recorded).
+HexaVal hexa_ad_grad(HexaVal param_v) {
+    int64_t pid = hexa_as_num(param_v);
+    return hexa_int(_hx_ad_grad_get(pid));
+}
+
+// adamw_step(param, grad, m, v, n, lr, beta1, beta2, eps, wd, t).
+// Single fused in-place AdamW (decoupled weight decay, Loshchilov &
+// Hutter 2019). All of param/grad/m/v are length-n packed-double farrs;
+// t is the 1-based step (bias correction). No HexaVal in the loop.
+HexaVal hexa_adamw_step(HexaVal p_v, HexaVal g_v, HexaVal m_v, HexaVal v_v,
+                        HexaVal n_v, HexaVal lr_v, HexaVal b1_v, HexaVal b2_v,
+                        HexaVal eps_v, HexaVal wd_v, HexaVal t_v) {
+    int64_t p_id = hexa_as_num(p_v);
+    int64_t g_id = hexa_as_num(g_v);
+    int64_t m_id = hexa_as_num(m_v);
+    int64_t v_id = hexa_as_num(v_v);
+    int64_t n    = hexa_as_num(n_v);
+    double  lr   = __hx_to_double(lr_v);
+    double  b1   = __hx_to_double(b1_v);
+    double  b2   = __hx_to_double(b2_v);
+    double  eps  = __hx_to_double(eps_v);
+    double  wd   = __hx_to_double(wd_v);
+    int64_t tstep= hexa_as_num(t_v);
+    if (n <= 0 || tstep < 1) return hexa_void();
+    double* P = _hx_ad_farr_buf(p_id, NULL);
+    double* G = _hx_ad_farr_buf(g_id, NULL);
+    double* Mm= _hx_ad_farr_buf(m_id, NULL);
+    double* Vv= _hx_ad_farr_buf(v_id, NULL);
+    if (!P || !G || !Mm || !Vv) return hexa_void();
+    double bc1 = 1.0 - pow(b1, (double)tstep);
+    double bc2 = 1.0 - pow(b2, (double)tstep);
+    if (bc1 == 0.0) bc1 = 1e-30;
+    if (bc2 == 0.0) bc2 = 1e-30;
+    for (int64_t i = 0; i < n; i++) {
+        double gi = G[i];
+        Mm[i] = b1 * Mm[i] + (1.0 - b1) * gi;
+        Vv[i] = b2 * Vv[i] + (1.0 - b2) * gi * gi;
+        double mhat = Mm[i] / bc1;
+        double vhat = Vv[i] / bc2;
+        // decoupled weight decay applied to the param directly.
+        P[i] -= lr * (mhat / (sqrt(vhat) + eps) + wd * P[i]);
+    }
+    return hexa_void();
+}
+
 // ── A1 (2026-05-10): per-phase arena reset side channel ─────────
 // Stage 0 host (hexa_real / hexa_interp.real) holds every str-arena
 // allocation for the whole process lifetime — there is no per-phase
@@ -11094,6 +11485,14 @@ static void _hexa_init_fn_shims(void) {
     // RFC 033 (2026-05-12): farr_copy + farr_add_gaussian_noise.
     farr_copy                       = hexa_fn_new((void*)hexa_farr_copy,                       1);
     farr_add_gaussian_noise         = hexa_fn_new((void*)hexa_farr_add_gaussian_noise,         2);
+    // anima RFC 034 (2026-05-16): farr reverse-mode autograd carriers.
+    // ad_matmul (5-arg) + adamw_step (11-arg) use static-inline wrappers
+    // (direct C call past the hexa_callN ceiling) — no carrier needed.
+    ad_tape_begin                   = hexa_fn_new((void*)hexa_ad_tape_begin,                   0);
+    ad_tape_end                     = hexa_fn_new((void*)hexa_ad_tape_end,                     1);
+    ad_softmax_cross_entropy        = hexa_fn_new((void*)hexa_ad_softmax_cross_entropy,        4);
+    ad_backward                     = hexa_fn_new((void*)hexa_ad_backward,                     1);
+    ad_grad                         = hexa_fn_new((void*)hexa_ad_grad,                         1);
     // RFC 035 (2026-05-13): 3/4-arg NM-step builtins routed through hexa_callN.
     farr_simplex_centroid           = hexa_fn_new((void*)hexa_farr_simplex_centroid,           4);
     farr_simplex_get                = hexa_fn_new((void*)hexa_farr_simplex_get,                4);

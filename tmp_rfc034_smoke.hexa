@@ -1,0 +1,246 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_rfc034_smoke.hexa — anima RFC 034 farr reverse-mode autograd smoke
+//
+// Builtins (self/runtime.c, anima RFC 034 block):
+//   ad_tape_begin / ad_tape_end / ad_matmul / ad_softmax_cross_entropy /
+//   ad_backward / ad_grad / adamw_step
+// Reference: incoming/rfc_drafts_2026_05_12/rfc_034_farr_reverse_mode_autograd.md
+// Oracle:    anima state/verify_hexad_blue_2026_05_15/blue_falsifier.py B-D-4
+//            ∂CE/∂z_i = softmax(z)_i − [i = t]   (sympy-verified ∀ z)
+//
+// Acceptance — gated on the COMPILED native binary (hexa build … && ./bin),
+// no Python, no BLAS (interp `hexa run` is deprecating):
+//
+//   1 BUILD+PARSE     — this file compiles to a native binary (gate = the
+//                        build step; if you can run this, BUILD passed).
+//   2 GRAD-EXACT      — ad_grad(logits) == softmax(logits) − onehot(t)
+//                        element-wise within 1e-9 (B-D-4 identity).
+//   3 LOSS-DECREASES  — 20-step ad_matmul→CE→backward→adamw_step loop on a
+//                        fixed-seed linear layer: loss[19] < loss[0].
+//   4 PARAM-MUTATED   — sum(W) after 20 steps != sum(W) before.
+//   5 DETERMINISM     — same seed → byte-identical loss trajectory twice.
+//
+// 5/5 PASS → RFC 034 landable; anima HEXAD/PLAN.md Phase 5 unblocks.
+// ════════════════════════════════════════════════════════════════════════
+
+fn abs_d(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// Deterministic 64-bit LCG (Numerical Recipes constants), independent of
+// the C-side gaussian RNG. Seed-fixed → byte-identical trajectories.
+fn lcg_next(state: int) -> int {
+    // (state * 6364136223846793005 + 1442695040888963407) mod 2^63-ish.
+    // hexa int is 64-bit signed; mask to keep it positive & bounded.
+    let s = state * 6364136223846793005 + 1442695040888963407
+    let m = s % 2147483647
+    if m < 0 { return 0 - m }
+    return m
+}
+
+// Uniform in [-1, 1) from an LCG state value.
+fn lcg_unit(v: int) -> float {
+    let f = (to_float(v) / 2147483647.0)
+    return f * 2.0 - 1.0
+}
+
+// Build a fixed-seed (M x N) random linear layer into a fresh farr.
+fn build_W(seed: int, rows: int, cols: int) -> int {
+    let w = farr_zeros(rows * cols)
+    let mut st = seed
+    let mut i = 0
+    while i < rows * cols {
+        st = lcg_next(st)
+        let _ = farr_set(w, i, lcg_unit(st) * 0.5)
+        i = i + 1
+    }
+    return w
+}
+
+// One full 20-step training run; returns loss[0] and loss[19] packed in
+// a 2-elem farr [first, last] (plus writes the trajectory into traj).
+fn train_run(seed: int, traj: int) -> int {
+    // Problem: X (B x D) fixed inputs, W (D x C) learned, CE over B rows.
+    let B = 4
+    let D = 3
+    let C = 5
+
+    // Fixed input matrix X (B x D) — deterministic, not learned.
+    let X = farr_zeros(B * D)
+    let mut xs = seed * 7 + 13
+    let mut xi = 0
+    while xi < B * D {
+        xs = lcg_next(xs)
+        let _ = farr_set(X, xi, lcg_unit(xs))
+        xi = xi + 1
+    }
+    // Fixed targets (B class indices in [0, C)).
+    let tg = farr_zeros(B)
+    let _ = farr_set(tg, 0, 1.0)
+    let _ = farr_set(tg, 1, 3.0)
+    let _ = farr_set(tg, 2, 0.0)
+    let _ = farr_set(tg, 3, 4.0)
+
+    let W = build_W(seed, D, C)
+    let nW = D * C
+    // AdamW moment buffers.
+    let m = farr_zeros(nW)
+    let v = farr_zeros(nW)
+
+    let mut step = 0
+    while step < 20 {
+        let tape = ad_tape_begin()
+        let logits = ad_matmul(X, B, D, W, C)
+        let loss = ad_softmax_cross_entropy(logits, B, C, tg)
+        let _ = farr_set(traj, step, loss)
+        ad_backward(tape)
+        let gW = ad_grad(W)
+        // AdamW: lr=0.1, b1=0.9, b2=0.999, eps=1e-8, wd=0.0, t=step+1.
+        adamw_step(W, gW, m, v, nW, 0.1, 0.9, 0.999, 0.00000001, 0.0, step + 1)
+        ad_tape_end(tape)
+        let _ = farr_free(logits)
+        step = step + 1
+    }
+
+    // Pack [sum(W)] into traj slot 20 for the PARAM-MUTATED check.
+    let mut wsum = 0.0
+    let mut wi = 0
+    while wi < nW {
+        wsum = wsum + farr_get(W, wi)
+        wi = wi + 1
+    }
+    let _ = farr_set(traj, 20, wsum)
+
+    let _ = farr_free(X)
+    let _ = farr_free(tg)
+    let _ = farr_free(W)
+    let _ = farr_free(m)
+    let _ = farr_free(v)
+    return 1
+}
+
+fn main() {
+    let mut pass = 0
+    let total = 5
+
+    // ── Falsifier 1: BUILD+PARSE ────────────────────────────────────
+    // Reaching main() in the compiled binary IS the BUILD pass — the
+    // build step (clang on runtime.c + this file) gated it.
+    println("PASS  F-RFC034-BUILD  native binary built + entered main()")
+    pass = pass + 1
+
+    // ── Falsifier 2: GRAD-EXACT (anima B-D-4 oracle) ────────────────
+    // Fixed 1x5 logits, target class t=2. ad_grad must equal
+    // softmax(z) − onehot(t) within 1e-9, ∀ element.
+    let zlog = farr_zeros(5)
+    let _ = farr_set(zlog, 0, 0.0 - 1.2)
+    let _ = farr_set(zlog, 1, 0.7)
+    let _ = farr_set(zlog, 2, 2.3)
+    let _ = farr_set(zlog, 3, 0.0 - 0.4)
+    let _ = farr_set(zlog, 4, 1.1)
+    let tg1 = farr_zeros(1)
+    let _ = farr_set(tg1, 0, 2.0)   // target class index = 2
+
+    let tp = ad_tape_begin()
+    let _ = ad_softmax_cross_entropy(zlog, 1, 5, tg1)
+    ad_backward(tp)
+    let g = ad_grad(zlog)
+
+    // Reference softmax in hexa (independent of the C kernel).
+    let mut zmax = farr_get(zlog, 0)
+    let mut j = 1
+    while j < 5 {
+        if farr_get(zlog, j) > zmax { zmax = farr_get(zlog, j) }
+        j = j + 1
+    }
+    let mut ssum = 0.0
+    let mut k = 0
+    while k < 5 {
+        ssum = ssum + exp(farr_get(zlog, k) - zmax)
+        k = k + 1
+    }
+    let mut grad_ok = true
+    let mut worst = 0.0
+    let mut idx = 0
+    while idx < 5 {
+        let sm = exp(farr_get(zlog, idx) - zmax) / ssum
+        let mut want = sm
+        if idx == 2 { want = sm - 1.0 }
+        let got = farr_get(g, idx)
+        let err = abs_d(got - want)
+        if err > worst { worst = err }
+        if err > 0.000000001 { grad_ok = false }
+        idx = idx + 1
+    }
+    if grad_ok {
+        println("PASS  F-RFC034-GRAD-EXACT  max|grad−(softmax−onehot)|=" + to_string(worst) + " < 1e-9 (B-D-4)")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC034-GRAD-EXACT  max err=" + to_string(worst))
+    }
+    ad_tape_end(tp)
+    let _ = farr_free(zlog)
+    let _ = farr_free(tg1)
+
+    // ── Falsifier 3: LOSS-DECREASES + 4: PARAM-MUTATED ──────────────
+    let trajA = farr_zeros(21)   // 20 losses + 1 wsum slot
+    let _ = train_run(42, trajA)
+    let loss0 = farr_get(trajA, 0)
+    let loss19 = farr_get(trajA, 19)
+    if loss19 < loss0 {
+        println("PASS  F-RFC034-LOSS-DECREASES  loss[0]=" + to_string(loss0) + " -> loss[19]=" + to_string(loss19))
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC034-LOSS-DECREASES  loss[0]=" + to_string(loss0) + " loss[19]=" + to_string(loss19))
+    }
+
+    // PARAM-MUTATED: W before training (rebuild same seed) vs sum after.
+    let W0 = build_W(42, 3, 5)
+    let mut w0sum = 0.0
+    let mut wj = 0
+    while wj < 15 {
+        w0sum = w0sum + farr_get(W0, wj)
+        wj = wj + 1
+    }
+    let _ = farr_free(W0)
+    let wAfter = farr_get(trajA, 20)
+    if abs_d(wAfter - w0sum) > 0.000001 {
+        println("PASS  F-RFC034-PARAM-MUTATED  sum(W) " + to_string(w0sum) + " -> " + to_string(wAfter))
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC034-PARAM-MUTATED  unchanged sum(W)=" + to_string(w0sum))
+    }
+
+    // ── Falsifier 5: DETERMINISM ────────────────────────────────────
+    let trajB = farr_zeros(21)
+    let _ = train_run(42, trajB)
+    let mut det_ok = true
+    let mut worst_d = 0.0
+    let mut di = 0
+    while di < 20 {
+        let a = farr_get(trajA, di)
+        let b = farr_get(trajB, di)
+        let e = abs_d(a - b)
+        if e > worst_d { worst_d = e }
+        if a != b { det_ok = false }
+        di = di + 1
+    }
+    if det_ok {
+        println("PASS  F-RFC034-DETERMINISM  two seed=42 runs byte-identical (max diff=" + to_string(worst_d) + ")")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC034-DETERMINISM  trajectories diverged (max diff=" + to_string(worst_d) + ")")
+    }
+    let _ = farr_free(trajA)
+    let _ = farr_free(trajB)
+
+    println("")
+    println("=== RFC034 smoke: " + to_string(pass) + "/" + to_string(total) + " PASS ===")
+    if pass == total {
+        println("PASS — anima RFC 034 farr autograd works end-to-end (compiled)")
+    } else {
+        println("FAIL — RFC 034 smoke incomplete")
+    }
+}

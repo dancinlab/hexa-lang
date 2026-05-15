@@ -623,4 +623,54 @@ static inline HexaVal __hexa_exec_stream_wrap_hv(HexaVal cmd, HexaVal cb) {
     HexaVal: __hexa_exec_stream_wrap_hv, \
     default: __hexa_exec_stream_wrap_fp)((cmd), (cb))
 
+/* ── packed-double farr ABI (RFC 030/032/033) ──────────────────────
+ * The codegen lowers farr_zeros/get/set/len/free + farr_matmul/copy to
+ * direct `hexa_farr_*` calls; the runtime.h split (PHASE 1.2/1.3) must
+ * declare them so the user.c TU does not implicit-int them (which would
+ * otherwise mis-init `HexaVal h = hexa_farr_zeros(n)` from int). SSOT:
+ * self/runtime.c. */
+HexaVal hexa_farr_zeros(HexaVal n_v);                                  /* runtime.c */
+HexaVal hexa_farr_get(HexaVal h_v, HexaVal i_v);                       /* runtime.c */
+HexaVal hexa_farr_set(HexaVal h_v, HexaVal i_v, HexaVal x_v);          /* runtime.c */
+HexaVal hexa_farr_len(HexaVal h_v);                                    /* runtime.c */
+HexaVal hexa_farr_free(HexaVal h_v);                                   /* runtime.c */
+HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                         HexaVal b_v, HexaVal bc_v);                    /* runtime.c — RFC 032 */
+HexaVal hexa_farr_copy(HexaVal src_v);                                 /* runtime.c — RFC 033 */
+HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v); /* runtime.c — RFC 033 */
+
+/* ── anima RFC 034 (2026-05-16): farr reverse-mode autograd ─────────
+ * CE-softmax (closed B-D-4 Jacobian) + AdamW pure-hexa training step.
+ * anima HEXAD/PLAN.md Phase 5 unblock. Definitions: self/runtime.c.
+ *
+ * Native impls (hexa_ad_* / hexa_adamw_step) — used by the interp
+ * dispatch + a future `hexa cc --regen`'d typed codegen path. */
+HexaVal hexa_ad_tape_begin(void);                                      /* runtime.c — RFC 034 */
+HexaVal hexa_ad_tape_end(HexaVal tid_v);                               /* runtime.c — RFC 034 */
+HexaVal hexa_ad_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                       HexaVal b_v, HexaVal bc_v);                      /* runtime.c — RFC 034 */
+HexaVal hexa_ad_softmax_cross_entropy(HexaVal logits_v, HexaVal nr_v,
+                                      HexaVal nc_v, HexaVal tgt_v);     /* runtime.c — RFC 034 */
+HexaVal hexa_ad_backward(HexaVal tid_v);                               /* runtime.c — RFC 034 */
+HexaVal hexa_ad_grad(HexaVal param_v);                                 /* runtime.c — RFC 034 */
+HexaVal hexa_adamw_step(HexaVal p_v, HexaVal g_v, HexaVal m_v, HexaVal v_v,
+                        HexaVal n_v, HexaVal lr_v, HexaVal b1_v, HexaVal b2_v,
+                        HexaVal eps_v, HexaVal wd_v, HexaVal t_v);      /* runtime.c — RFC 034 */
+/* Generic-fallback symbols the CURRENT committed hexa_v2 codegen emits
+ * (no codegen branch needed): ≤4-arg → hexa_callN(<carrier>, …) needs
+ * a visible HexaVal carrier; ≥5-arg → bare ad_matmul(…)/adamw_step(…)
+ * direct call needs a visible function. External linkage in runtime.c.
+ * This is what makes the *compiled* smoke link with the unmodified
+ * committed transpiler (no hexa_cc.c rebaseline). */
+extern HexaVal ad_tape_begin;                                          /* runtime.c — RFC 034 fn carrier */
+extern HexaVal ad_tape_end;                                            /* runtime.c — RFC 034 fn carrier */
+extern HexaVal ad_softmax_cross_entropy;                               /* runtime.c — RFC 034 fn carrier */
+extern HexaVal ad_backward;                                            /* runtime.c — RFC 034 fn carrier */
+extern HexaVal ad_grad;                                                /* runtime.c — RFC 034 fn carrier */
+HexaVal ad_matmul(HexaVal a, HexaVal ar, HexaVal ac,
+                  HexaVal b, HexaVal bc);                               /* runtime.c — RFC 034 (5-arg direct) */
+HexaVal adamw_step(HexaVal p, HexaVal g, HexaVal m, HexaVal v,
+                   HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                   HexaVal eps, HexaVal wd, HexaVal t);                 /* runtime.c — RFC 034 (11-arg direct) */
+
 #endif /* HEXA_RUNTIME_H */
