@@ -685,6 +685,28 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
             return buf
         }
+        // field access (map-backed, symmetric to struct_lit/enum_path):
+        //   args = [base, "<name>"_str] → dst = hexa_map_get(base, key).
+        // key const_str → .rodata label = const char* (map_get ABI).
+        // Parity with the shipped array_lit/struct_lit emits; rebuild-
+        // verification deferred (Track-A clang wall).
+        if s.op == "field" && len(s.args) >= 2 {
+            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10")
+            let base = _x86_op_resolve(s.args[0], st, rm, "r10")
+            buf = _x86_op_rm(buf, s.args[1], st, rm, "r11")
+            let key = _x86_op_resolve(s.args[1], st, rm, "r11")
+            buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), base,
+                             "field: map base"))
+            buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), key,
+                             "field: key"))
+            buf.push(_x86_instr1("call", _x86_op_label("hexa_map_get"),
+                             "field: hexa_map_get"))
+            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                             "field: capture result"))
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            return buf
+        }
         if len(s.args) >= 1 {
             let mut src_scratch = "r10"
             if _x86_is_spilled(rm, s.dst.id) { src_scratch = "r11" }

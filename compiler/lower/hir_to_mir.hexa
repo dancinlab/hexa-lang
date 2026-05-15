@@ -1271,16 +1271,24 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── field: base.name → STMT_ASSIGN op="field" args=[base] ─
     if k == "field" {
+        // Map-backed access symmetric to the map-backed struct/enum
+        // constructor: op="field", args=[base, "<name>"_str] → codegen
+        // emits hexa_map_get(base, key). (Was op="field."+name with the
+        // name fused into the op string — reshaped so the key rides as
+        // a const_str operand resolving to a .rodata label = the
+        // hexa_map_get const char* key ABI. "field." op had no consumer
+        // yet, so the reshape is safe.)
         if len(e.children) < 1 { return _no_value(ctx) }
         let r = _lower_hexpr(ctx, e.children[0])
         let mut ctx2 = _fresh_local(r.ctx, e.typ, "field_" + e.text)
         let dst = ctx2.locals[len(ctx2.locals) - 1]
         let mut args: [Operand] = []
         args.push(r.operand)
+        args.push(_const_str_op(e.text))
         let s = Stmt {
             kind: STMT_ASSIGN,
             dst: dst,
-            op: "field." + e.text,
+            op: "field",
             args: args,
             target_block: -1,
             target_block_else: -1
