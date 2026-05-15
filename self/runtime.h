@@ -31,6 +31,7 @@
 #include <ctype.h>     /* user.c may call isalpha/isalnum/isdigit directly */
 #include <stdlib.h>    /* exit, atoi, getenv from try/catch lowering */
 #include <setjmp.h>    /* try/catch lowers to setjmp/longjmp + __hexa_try_* */
+#include <math.h>      /* hexa_v2 emits direct log/sin/cos/exp calls for math intrinsics */
 
 /* ── Tagged value layout (mirrors runtime.c lines 908–996) ── */
 
@@ -114,9 +115,12 @@ typedef struct HexaIC {
  */
 #define HX_TAG(v)        ((v).tag)
 #define HX_INT(v)        ((v).i)
+#define HX_INT_U(v)      ((uint64_t)(v).i)
 #define HX_BOOL(v)       ((v).b)
 #define HX_STR(v)        ((v).s)
+#define HX_FLOAT(v)      ((v).f)
 #define HX_IS_INT(v)     ((v).tag == TAG_INT)
+#define HX_IS_FLOAT(v)   ((v).tag == TAG_FLOAT)
 #define HX_IS_STR(v)     ((v).tag == TAG_STR)
 #define HX_IS_MAP(v)     ((v).tag == TAG_MAP)
 #define HX_IS_ARRAY(v)   ((v).tag == TAG_ARRAY)
@@ -217,6 +221,7 @@ HexaVal hexa_contains_poly(HexaVal obj, HexaVal arg);   /* runtime.c:6972 */
 HexaVal hexa_type_of(HexaVal v);                        /* runtime.c:4704 */
 
 /* diagnostics */
+void    hexa_print_val(HexaVal v);                    /* runtime.c:4436 */
 void    hexa_eprint_val(HexaVal v);                   /* runtime.c:4343 */
 
 /* try/catch lowering (codegen emits __hexa_try_push/pop around fn bodies
@@ -259,6 +264,33 @@ HexaVal         hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic);
 HexaVal hexa_exit(HexaVal code);                        /* runtime.c:7518 */
 void    hexa_throw(HexaVal err);                        /* runtime.c:4398 */
 HexaVal hexa_env_var(HexaVal name);                     /* runtime.c:9608 */
+HexaVal hexa_clock(void);                               /* runtime.c:6514 */
+int64_t hexa_as_num(HexaVal v);                         /* runtime.c:1262 */
+
+/* math */
+HexaVal hexa_sqrt(HexaVal v);                           /* runtime.c:5152 */
+HexaVal hexa_pow(HexaVal base, HexaVal exp);            /* runtime.c:5156 */
+HexaVal hexa_rms_norm(HexaVal x, HexaVal gamma, HexaVal eps); /* runtime.c:10846 */
+
+/* FFI (raw pointer / extern dispatch + dlopen/dlsym; latter two are
+ * de-staticized to expose to runtime.h consumers — runtime.c:5658, 5782) */
+HexaVal hexa_extern_call(void* fn_ptr, HexaVal* hargs, int nargs, int ret_kind); /* runtime.c:5846 */
+HexaVal hexa_ptr_alloc(HexaVal size);                   /* runtime.c:6241 */
+HexaVal hexa_ptr_free(HexaVal ptr, HexaVal size);       /* runtime.c:6248 */
+void*   hexa_ffi_dlopen(const char* lib_name);          /* runtime.c:5658 (was static) */
+void*   hexa_ffi_dlsym(void* handle, const char* symbol); /* runtime.c:5782 (was static) */
+
+/* Tensor-kernel raw-pointer ops. DEFINED in self/native/tensor_kernels.c
+ * (NOT runtime.c) — programs using these must link the tensor_kernels.o
+ * artifact in addition to runtime.o. clm_train_bench / hxblas_linux /
+ * m4_inference_e2e are the main consumers. */
+HexaVal hexa_ptr_read_f32(HexaVal ptr, HexaVal offset);                  /* tensor_kernels.c:64 */
+HexaVal hexa_ptr_read_i32(HexaVal ptr, HexaVal offset);                  /* tensor_kernels.c:73 */
+HexaVal hexa_ptr_write_f32(HexaVal ptr, HexaVal offset, HexaVal val);    /* tensor_kernels.c:37 */
+HexaVal hexa_ptr_write_i32(HexaVal ptr, HexaVal offset, HexaVal val);    /* tensor_kernels.c:46 */
+
+/* string queries */
+int64_t hexa_str_last_index_of(HexaVal s, HexaVal sub); /* runtime.c:3831 */
 
 /* arena (codegen wraps fn bodies) */
 void    __hexa_fn_arena_enter(void);                  /* runtime.c:3652 */

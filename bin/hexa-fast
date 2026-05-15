@@ -26,7 +26,7 @@ usage() {
 usage:
   hexa-fast <input.hexa> <output-binary>     compile only
   hexa-fast run <input.hexa> [args...]       compile + exec (cached binary)
-  hexa-fast bench <input.hexa>               A/B baseline vs runtime.h path
+  hexa-fast bench [--json] <input.hexa>      A/B baseline vs runtime.h path
   hexa-fast check                            smoke runtime.h ABI surface
   hexa-fast clean                            wipe ~/.hexa-cache
 
@@ -140,6 +140,8 @@ case ${1:-} in
         ;;
     bench)
         shift
+        BENCH_JSON=0
+        if [ "${1:-}" = "--json" ]; then BENCH_JSON=1; shift; fi
         [ $# -eq 1 ] || usage
         SRC=$1
         [ -f "$SRC" ] || { echo "hexa-fast: no such file: $SRC" >&2; exit 1; }
@@ -161,11 +163,17 @@ case ${1:-} in
         new_user=$( { /usr/bin/time -p clang $CFLAGS -o "$NEW_BIN" "$NEW_C" "$RT_O" -I"$REPO_ROOT/self" 2>&1 1>/dev/null ; } 2>&1 | awk '/^user/{print $2}')
         # report
         bytes=$(wc -c <"$SRC")
-        speedup=$(awk -v b=$baseline_user -v n=$new_user 'BEGIN{ if (n>0) printf "%.2fx", b/n; else print "n/a" }')
-        printf "src        : %s (%d bytes)\n" "$SRC" "$bytes"
-        printf "baseline   : %s s user  (clang + #include runtime.c)\n" "$baseline_user"
-        printf "new path   : %s s user  (clang + runtime.h, runtime.o cached)\n" "$new_user"
-        printf "speedup    : %s\n" "$speedup"
+        speedup=$(awk -v b=$baseline_user -v n=$new_user 'BEGIN{ if (n>0) printf "%.2f", b/n; else print 0 }')
+        if [ $BENCH_JSON -eq 1 ]; then
+            # Single-line JSON object — easy to grep, jq, or stream into JSONL.
+            printf '{"src":"%s","bytes":%d,"baseline_user":%s,"new_user":%s,"speedup":%s}\n' \
+                "$SRC" "$bytes" "$baseline_user" "$new_user" "$speedup"
+        else
+            printf "src        : %s (%d bytes)\n" "$SRC" "$bytes"
+            printf "baseline   : %s s user  (clang + #include runtime.c)\n" "$baseline_user"
+            printf "new path   : %s s user  (clang + runtime.h, runtime.o cached)\n" "$new_user"
+            printf "speedup    : %sx\n" "$speedup"
+        fi
         exit 0
         ;;
     run)

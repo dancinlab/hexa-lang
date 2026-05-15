@@ -5655,7 +5655,10 @@ static int hexa_ffi_extract_libname(const char* path, char* out_name, size_t out
     return 1;
 }
 
-static void* hexa_ffi_dlopen(const char* lib_name) {
+/* PHASE 1.5 (2026-05-15): de-staticized. hexa_v2 emits direct calls to
+ * hexa_ffi_dlopen/dlsym from user.c for FFI shim setup; runtime.h-built
+ * user.c needs cross-TU access. */
+void* hexa_ffi_dlopen(const char* lib_name) {
     if (!lib_name || lib_name[0] == '\0') {
         return dlopen(NULL, RTLD_LAZY);
     }
@@ -5779,7 +5782,8 @@ static void* hexa_ffi_dlopen(const char* lib_name) {
 }
 
 // Resolve a symbol from an already-opened library handle.
-static void* hexa_ffi_dlsym(void* handle, const char* symbol) {
+/* PHASE 1.5 (2026-05-15): de-staticized (paired with hexa_ffi_dlopen above). */
+void* hexa_ffi_dlsym(void* handle, const char* symbol) {
     void* sym = dlsym(handle, symbol);
     if (!sym) {
         fprintf(stderr, "[hexa-ffi] dlsym failed for '%s': %s\n", symbol, dlerror());
