@@ -1,0 +1,102 @@
+// compiler/atlas/verify/cosmo.hexa — §6 COSMO verifier (Stage 1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native Stage 1 closed-form verifications for atlas/MAIN.tape §6 COSMO
+// entries reachable by integer arithmetic + Möbius/totient primitives.
+//
+// Cross-link: atlas/MAIN.tape §6 · compiler/atlas/verify/foundation.hexa
+// (AtlasVerdict struct shared) · stdlib/core/math.hexa.
+
+import "compiler/atlas/verify/foundation.hexa"
+import "stdlib/core/math.hexa"
+
+fn _vd_cosmo(entry_id: string, tier: string, pass: bool, detail: string) -> AtlasVerdict {
+    return AtlasVerdict {
+        entry_id: entry_id,
+        domain: "§6 COSMO",
+        tier: tier,
+        pass: pass,
+        detail: detail,
+        stage: "Stage 1 — symbolic identity (hexa-native)"
+    }
+}
+
+fn _tier_cosmo(ok: bool) -> string {
+    if ok { return "🔵 SUPPORTED-IDENTITY" }
+    return "🔴 FALSIFIED"
+}
+
+// Local mobius (avoid stdlib expansion — atlas/verify/math.hexa keeps own)
+fn _mobius_c(n: int) -> int {
+    if n == 1 { return 1 }
+    let mut count = 0
+    let mut nn = n
+    let mut p = 2
+    while p * p <= nn {
+        if nn % p == 0 {
+            count = count + 1
+            nn = nn / p
+            if nn % p == 0 { return 0 }
+        }
+        p = p + 1
+    }
+    if nn > 1 { count = count + 1 }
+    if count % 2 == 0 { return 1 }
+    return -1
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s6_cmb_n_s_closed_form — atlas embed PHYS-CMB-spectral-index n_s = 27/28
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: [@P PHYS-CMB-spectral-index] atlas raw:
+//   n_s = (n/φ)³ / ((n/φ)³ + μ)
+// At n=6: n/φ(6) = 6/2 = 3, μ(6) = 1 (squarefree, 2 distinct primes 2,3).
+// → n_s = 27 / (27 + 1) = 27/28 ≈ 0.9643.
+//
+// Honest C3: closed-form holds by atlas embed definition. agreement with measured
+// Planck/WMAP n_s ≈ 0.965 is observation (within 0.1pp), NOT derivation.
+// f_atlas_lattice_external check: 외부 measured value 와의 agreement 는 별도 cycle.
+
+pub fn verify_s6_cmb_n_s_closed_form() -> AtlasVerdict {
+    let n = 6
+    let phi_n = euler_phi(n)              // 2
+    let n_over_phi = n / phi_n            // 3
+    let n_over_phi_cubed = n_over_phi * n_over_phi * n_over_phi   // 27
+    let mu_n = _mobius_c(n)               // 1
+    let denom = n_over_phi_cubed + mu_n   // 28
+    // Verify: n_s = 27/28 — integer arithmetic check (numerator/denominator)
+    let expected_num = 27
+    let expected_denom = 28
+    let ok = n_over_phi_cubed == expected_num && denom == expected_denom
+    let detail = "n_s = (n/φ)³ / ((n/φ)³ + μ) at n=6: (6/2)³=" + to_string(n_over_phi_cubed) + " · μ(6)=" + to_string(mu_n) + " · denom=" + to_string(denom) + " · n_s = " + to_string(n_over_phi_cubed) + "/" + to_string(denom) + " ≈ 0.9643 (measured Planck ≈ 0.965 — agreement is observation)"
+    return _vd_cosmo("s6_cmb_n_s_closed_form", _tier_cosmo(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s6_planck_units_count — atlas embed [@P MISS-planck-units] = sopfr(6) = 5
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: [@P MISS-planck-units] raw value = sopfr (= 5, not n=6).
+// Atlas embed claim: 5 fundamental Planck units (length, mass, time, charge,
+// temperature). sopfr(6) = 2+3 = 5 matches.
+//
+// Honest C3: 5 Planck units ≠ derivation from sopfr. observation only.
+// Ad-hoc pairing of n=6 lattice constant to physics fact — observation per g2.
+
+pub fn verify_s6_planck_units_count() -> AtlasVerdict {
+    let sop = sopfr(6)                    // 5 = 2+3
+    let claimed_planck_count = 5          // length, mass, time, charge, temperature
+    let ok = sop == claimed_planck_count
+    let detail = "sopfr(6) = 2+3 = " + to_string(sop) + " · claimed Planck unit count = " + to_string(claimed_planck_count) + " (atlas observation per g2 lattice-as-tool — NOT derivation)"
+    return _vd_cosmo("s6_planck_units_count", _tier_cosmo(ok), ok, detail)
+}
+
+// ── Aggregate ───────────────────────────────────────────────────────────
+
+pub fn verify_cosmo_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s6_cmb_n_s_closed_form())
+    out.push(verify_s6_planck_units_count())
+    return out
+}

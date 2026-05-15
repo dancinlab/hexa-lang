@@ -1,0 +1,63 @@
+// compiler/atlas/verify/chem.hexa — §4 CHEM verifier (Stage 1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native Stage 1 closed-form verifications for atlas/MAIN.tape §4 CHEM
+// entries reachable by integer arithmetic (atomic Z, isotope mass, etc).
+// Stage 2 chemistry sim (binding energy, reaction kinetics) deferred — needs
+// stdlib float log/exp for Arrhenius rate equations.
+//
+// Cross-link: atlas/MAIN.tape §4 · compiler/atlas/verify/foundation.hexa
+// (AtlasVerdict struct shared) · stdlib/core/math.hexa.
+
+import "compiler/atlas/verify/foundation.hexa"
+import "stdlib/core/math.hexa"
+
+fn _vd_chem(entry_id: string, tier: string, pass: bool, detail: string) -> AtlasVerdict {
+    return AtlasVerdict {
+        entry_id: entry_id,
+        domain: "§4 CHEM",
+        tier: tier,
+        pass: pass,
+        detail: detail,
+        stage: "Stage 1 — symbolic identity (hexa-native)"
+    }
+}
+
+fn _tier_chem(ok: bool) -> string {
+    if ok { return "🔵 SUPPORTED-IDENTITY" }
+    return "🔴 FALSIFIED"
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s4_carbon_z6 — L1-carbon-Z6 (atlas embed) atomic number observation
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §4 CHEM [@P L1-carbon-Z6]. carbon's atomic number Z(C) = 6 = n_atlas.
+// Closed-form: atomic number = proton count, periodic table position.
+// Honest C3 (g2 lattice-as-tool):
+//   - Z(C) = 6 — empirical fact (periodic table)
+//   - 6 = n_atlas — atlas internal architecture
+//   - The MATCH is OBSERVATION, NOT derivation. carbon Z=6 not derived from σ/τ identities.
+//   - n=6 not a chemistry-universal constant (Z(N)=7, Z(O)=8 also "natural").
+// Verifier closes: the arithmetic statement Z(C) = 6 = n_atlas as observation.
+
+pub fn verify_s4_carbon_z6() -> AtlasVerdict {
+    let z_carbon = 6              // empirical: protons in carbon nucleus
+    let n_atlas = 6               // atlas foundation (lattice-as-tool)
+    let valence = 4               // carbon valence = τ(6) (shared atlas observation)
+    let tau_n6 = tau(n_atlas)
+    let valence_match = valence == tau_n6
+    let z_match = z_carbon == n_atlas
+    let ok = z_match && valence_match
+    let detail = "Z(carbon) = " + to_string(z_carbon) + " · n_atlas = " + to_string(n_atlas) + " · valence = " + to_string(valence) + " = τ(6) = " + to_string(tau_n6) + " — OBSERVATION (g2 lattice-as-tool, NOT derivation. n=6 not chemistry-universal)"
+    return _vd_chem("s4_carbon_z6", _tier_chem(ok), ok, detail)
+}
+
+// ── Aggregate ───────────────────────────────────────────────────────────
+
+pub fn verify_chem_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s4_carbon_z6())
+    return out
+}

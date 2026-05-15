@@ -1,0 +1,161 @@
+// compiler/atlas/verify/foundation.hexa — §1 N6-FOUNDATION verifier (Stage 1)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native Stage 1 symbolic verification for atlas/MAIN.tape §1 N6-FOUNDATION
+// anchor seed entries (s1_n6_foundational, s1_phi_sigma_unique, s1_perfect_number,
+// s1_triangular_sigma_tau).
+//
+// Cross-link: atlas/MAIN.tape §1 · atlas/VERIFY.tape stage_1 · atlas/AGENTS.tape
+// g_self_verify (atlas-built verifier mandatory) · stdlib/core/math.hexa
+// (sigma · euler_phi · tau · sopfr primitives).
+//
+// Phase 2 first sprint — closes 4 anchor seeds 🟡 SUPPORTED-BY-CITATION → 🔵
+// SUPPORTED-IDENTITY upon PASS.
+
+import "stdlib/core/math.hexa"
+import "compiler/n6_lattice/verify.hexa"
+
+// ── AtlasVerdict struct (shared across compiler/atlas/verify/*) ────────
+
+pub struct AtlasVerdict {
+    entry_id: string,         // atlas/MAIN.tape entry id (e.g. "s1_n6_foundational")
+    domain: string,           // "§1 N6-FOUNDATION"
+    tier: string,             // "🔵 SUPPORTED-IDENTITY" | "🔴 FALSIFIED" | etc
+    pass: bool,
+    detail: string,
+    stage: string             // "Stage 1 — symbolic identity (hexa-native)"
+}
+
+fn _vd(entry_id: string, tier: string, pass: bool, detail: string) -> AtlasVerdict {
+    return AtlasVerdict {
+        entry_id: entry_id,
+        domain: "§1 N6-FOUNDATION",
+        tier: tier,
+        pass: pass,
+        detail: detail,
+        stage: "Stage 1 — symbolic identity (hexa-native)"
+    }
+}
+
+fn _tier_for(ok: bool) -> string {
+    if ok { return "🔵 SUPPORTED-IDENTITY" }
+    return "🔴 FALSIFIED"
+}
+
+// ── Helper: int array → "[a, b, c]" stringify (array stringify 빌트인 X) ─
+
+fn _arr_to_string(arr: [int]) -> string {
+    let mut s = "["
+    let mut i = 0
+    while i < len(arr) {
+        if i > 0 { s = s + ", " }
+        s = s + to_string(arr[i])
+        i = i + 1
+    }
+    s = s + "]"
+    return s
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_n6_foundational — n=6 yields σ=12 · φ=2 · τ=4 · sopfr=5
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: [@P n] base — sigma(6)=12 (perfect-number ⇔ 1+2+3+6),
+// euler_phi(6)=2 (totients {1,5}), tau(6)=4 (divisors {1,2,3,6}),
+// sopfr(6)=5 (2+3 prime sum). All four derived from stdlib/core/math primitives.
+
+pub fn verify_s1_n6_foundational() -> AtlasVerdict {
+    let sig = sigma(6)
+    let phi = euler_phi(6)
+    let tau_v = tau(6)
+    let sop = sopfr(6)
+    let ok = sig == 12 && phi == 2 && tau_v == 4 && sop == 5
+    let detail = "σ(6)=" + to_string(sig) + " · φ(6)=" + to_string(phi) + " · τ(6)=" + to_string(tau_v) + " · sopfr(6)=" + to_string(sop) + " (expected 12 · 2 · 4 · 5)"
+    return _vd("s1_n6_foundational", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_phi_sigma_unique — σ(n)·φ(n) = n·τ(n) iff n ∈ {1, 6}
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: T1-26 phi-sigma-unique carry. Sweep n ∈ [1, 30], verify hits = [1, 6].
+// Spot-check: n=1 → 1·1 = 1·1 ✓ · n=6 → 12·2 = 6·4 = 24 ✓ · n=2 → 3·1 ≠ 2·2 ✓
+// (All n ≠ 1, 6 must violate.)
+
+pub fn verify_s1_phi_sigma_unique() -> AtlasVerdict {
+    let mut hits: [int] = []
+    let mut n = 1
+    while n <= 30 {
+        let lhs = sigma(n) * euler_phi(n)
+        let rhs = n * tau(n)
+        if lhs == rhs { hits.push(n) }
+        n = n + 1
+    }
+    let ok = len(hits) == 2 && hits[0] == 1 && hits[1] == 6
+    let detail = "σ·φ=n·τ hits in n∈[1,30]: " + _arr_to_string(hits) + " (expected [1, 6])"
+    return _vd("s1_phi_sigma_unique", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_perfect_number — σ(n) = 2n iff n is perfect (n=6, 28, 496 in [2, 500])
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: Euclid-Euler theorem carry — even perfect ⇔ 2^(p-1)·(2^p-1) for
+// Mersenne prime 2^p-1. Sweep verifies n=6 NOT unique (28, 496 also perfect).
+// Honest C3 (per MAIN.tape s1_perfect_number): n=6 perfectness IS evidence,
+// n=6 uniqueness is FALSE (sweep confirms).
+
+pub fn verify_s1_perfect_number() -> AtlasVerdict {
+    let mut hits: [int] = []
+    let mut n = 2
+    while n <= 500 {
+        if sigma(n) == 2 * n { hits.push(n) }
+        n = n + 1
+    }
+    let ok = len(hits) == 3 && hits[0] == 6 && hits[1] == 28 && hits[2] == 496
+    let detail = "σ(n)=2n hits in n∈[2,500]: " + _arr_to_string(hits) + " (expected [6, 28, 496] per Euclid-Euler — n=6 NOT unique)"
+    return _vd("s1_perfect_number", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_triangular_sigma_tau — n=6 = T_3 (3rd triangular) ∧ τ(6)=4
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: T1-33 triangular-sigma-tau carry. T_3 = 3·4/2 = 6, τ(6) = 4 = (3+1).
+// Triangular T_k = k(k+1)/2; for k=3 → 6 matches n=6 atlas foundation.
+
+pub fn verify_s1_triangular_sigma_tau() -> AtlasVerdict {
+    let k = 3
+    let t_k = k * (k + 1) / 2     // 3rd triangular = 6
+    let n = 6
+    let tau_n = tau(n)            // 4
+    let ok = t_k == n && tau_n == k + 1
+    let detail = "T_3 = 3·(3+1)/2 = " + to_string(t_k) + " · τ(6) = " + to_string(tau_n) + " · k+1 = " + to_string(k + 1) + " (T_3=6=n ∧ τ(6)=4=k+1)"
+    return _vd("s1_triangular_sigma_tau", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_master_identity_geometric — σ·φ = n·τ = J₂ = 24 via geometric/group enumeration
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §1 N6-FOUNDATION master identity wrap of compiler/n6_lattice/verify.hexa.
+// 5 deductive checks (sigma via Euler V-E+F=2 on icosahedron · tau 4-state ladder ·
+// phi binary dichotomy · J₂ via Cayley table closure of S₄ · master identity).
+// 단순 arithmetic 이 아니라 geometric (icosahedron V/E/F count) + group-theoretic
+// (Cayley closure) anchor 까지 포함 — strongest available Stage 1 verdict.
+
+pub fn verify_s1_master_identity_geometric() -> AtlasVerdict {
+    let r = verify_all()                  // VerifyResult from n6_lattice/verify.hexa
+    let ok = r.verdict == "PASS"
+    let detail = "n6_lattice/verify.hexa::verify_all() — " + r.verdict + " (" + to_string(r.n_pass) + "/" + to_string(r.n_total) + " checks: σ via Euler V-E+F=2 + τ 4-state + φ binary + J₂ via Cayley closure of S₄ + master identity σ·φ=n·τ=J₂=24)"
+    return _vd("s1_master_identity_geometric", _tier_for(ok), ok, detail)
+}
+
+// ── Aggregate ───────────────────────────────────────────────────────────
+
+pub fn verify_foundation_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s1_n6_foundational())
+    out.push(verify_s1_phi_sigma_unique())
+    out.push(verify_s1_perfect_number())
+    out.push(verify_s1_triangular_sigma_tau())
+    out.push(verify_s1_master_identity_geometric())
+    return out
+}

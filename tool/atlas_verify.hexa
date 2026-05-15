@@ -1,0 +1,190 @@
+// tool/atlas_verify.hexa — `hexa run tool/atlas_verify.hexa [--tier 1] [--domain D]`
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Phase 2 Stage 1 hexa-native verdict verifier dispatch.
+// Runs all currently-implemented Stage 1 verifiers from compiler/atlas/verify/
+// and prints PASS/FAIL per atlas/MAIN.tape entry id with verdict tier.
+//
+// Cross-link: atlas/MAIN.tape (verdict SSOT — entries upgrade 🟡 SUPPORTED-BY-
+// CITATION → 🔵 SUPPORTED-IDENTITY upon Stage 1 PASS) · atlas/VERIFY.tape §6
+// tier_build (CLI plan) · compiler/atlas/verify/{foundation,math}.hexa.
+
+use "compiler/atlas/verify/foundation"
+use "compiler/atlas/verify/math"
+use "compiler/atlas/verify/top"
+use "compiler/atlas/verify/cosmo"
+use "compiler/atlas/verify/bridges"
+use "compiler/atlas/verify/chem"
+use "compiler/atlas/verify/phys"
+
+fn _slice_args() -> array {
+    let av = args()
+    let n = len(av)
+    let mut out = []
+    let mut i = 1
+    while i < n {
+        out.push(av[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn _print_verdict(v: AtlasVerdict) {
+    let mut mark = "FAIL"
+    if v.pass { mark = "PASS" }
+    println("  " + mark + "  " + v.entry_id + "  [" + v.tier + "]")
+    println("        domain: " + v.domain)
+    println("        stage:  " + v.stage)
+    println("        " + v.detail)
+}
+
+fn _print_summary(verdicts: [AtlasVerdict]) {
+    let mut n_pass = 0
+    let mut n_blue = 0
+    let mut i = 0
+    while i < len(verdicts) {
+        if verdicts[i].pass { n_pass = n_pass + 1 }
+        if verdicts[i].tier == "🔵 SUPPORTED-IDENTITY" { n_blue = n_blue + 1 }
+        i = i + 1
+    }
+    println("")
+    println("─────────────────────────────────────────────────────────────────")
+    println("Summary: " + to_string(n_pass) + "/" + to_string(len(verdicts)) + " PASS · " + to_string(n_blue) + " entries 🔵 SUPPORTED-IDENTITY closed")
+    println("Stage 1 hexa-native (Phase 2) — atlas/MAIN.tape upgrade eligible")
+}
+
+fn _print_help() {
+    println("hexa run tool/atlas_verify.hexa [--tier 1] [--domain D]")
+    println("")
+    println("Options:")
+    println("  --tier N         (default: 1) — Stage 1 symbolic only currently")
+    println("  --domain D       filter by domain: foundation · math (or §1 / §2)")
+    println("  --help           show this help")
+    println("")
+    println("Domains implemented (Phase 2 cycle 003):")
+    println("  §1 N6-FOUNDATION  5 verifiers (incl. master_identity_geometric — n6_lattice/verify wrap)")
+    println("  §2 MATH           8 verifiers (NT identities + Möbius inversion + sign-group + Euler product truncation)")
+    println("  §6 COSMO          2 verifiers (CMB n_s closed-form + Planck units count)")
+    println("  §8 TOP            2 verifiers (S₃ representation + S₄ order bridge)")
+    println("  §10 BRIDGES       2 verifiers (137-from-σ/τ T1-23 + master-identity-24 NT↔TOP)")
+}
+
+fn main() {
+    let argv = _slice_args()
+    let mut domain = ""
+    let mut want_help = false
+    let mut i = 0
+    while i < len(argv) {
+        let a = to_string(argv[i])
+        if a == "--domain" {
+            if i + 1 < len(argv) {
+                domain = to_string(argv[i + 1])
+                i = i + 1
+            }
+        } else if a == "--help" || a == "-h" {
+            want_help = true
+        } else if a == "--tier" {
+            // tier currently always 1 (Stage 1 only) — accept and ignore for forward-compat
+            if i + 1 < len(argv) { i = i + 1 }
+        }
+        i = i + 1
+    }
+
+    if want_help {
+        _print_help()
+        return
+    }
+
+    println("atlas verify — Stage 1 hexa-native (Phase 2)")
+    println("=================================================================")
+
+    let mut all: [AtlasVerdict] = []
+
+    if domain == "" || domain == "foundation" || domain == "§1" {
+        println("")
+        println("§1 N6-FOUNDATION:")
+        let vs = verify_foundation_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "math" || domain == "§2" {
+        println("")
+        println("§2 MATH:")
+        let vs = verify_math_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "cosmo" || domain == "§6" {
+        println("")
+        println("§6 COSMO:")
+        let vs = verify_cosmo_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "top" || domain == "§8" {
+        println("")
+        println("§8 TOP:")
+        let vs = verify_top_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "bridges" || domain == "§10" {
+        println("")
+        println("§10 BRIDGES:")
+        let vs = verify_bridges_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "chem" || domain == "§4" {
+        println("")
+        println("§4 CHEM:")
+        let vs = verify_chem_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "phys" || domain == "§3" {
+        println("")
+        println("§3 PHYS:")
+        let vs = verify_phys_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    _print_summary(all)
+}
