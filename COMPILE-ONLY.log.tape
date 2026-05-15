@@ -266,3 +266,35 @@
   next_gate = "user decision: (1) Cycle close with G3 + predictive G6 [tape-recorded]; OR (2) AB on RunPod (~$1-2 + ~30min — completion probable); OR (3) AA — multi-day separate sub-track"
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
   @> COMPILE-ONLY.tape
+
+# ─── 2026-05-16  Front-end track — AB attempted: module_loader memory blowup ───
+
+@? path_ab_module_loader_blowup := "AB flatten chain blocked: module_loader RSS blows to 165 GiB then crashes" :: anomaly [d=2026-05-16 partial]
+  <- path_a_build_pipeline_scaffold_gap
+  context = "User: `compile-only go`. Pursued AB (manual flatten → single-file transpile → clang). RunPod 188 GiB SECURE pod (mqpwtmxbw856k6). Original hexa_cc.c → hexa_v2_orig Linux ELF built clean (1.5 MB). flatten via `hexa_interp.linux self/module_loader.hexa compiler/main.hexa /tmp/flattened.hexa`."
+  finding <<~EOF
+    module_loader RSS growth, steady ~10.8 GiB / 30 s, monotone linear:
+      01:32 31.9G · 02:02 42.1G · 03:03 63.2G · 04:33 96.1G · 06:03 129.7G
+      07:03 153.6G · 07:34 165.5G · 08:04 → process gone, /tmp/flattened.hexa
+      NOT produced. 188 GiB box + crash.
+    Linear unbounded accumulation = O(n²) / monotone-arena class blowup,
+    NOT a constant-overhead memory wall. ~165 GiB to flatten the self-host
+    compiler tree (compiler/* + self/* imports) into one source.
+  EOF
+  diagnosis = "module_loader's import-flatten accumulator grows unbounded — same CLASS as the `acc = acc + chunk` O(n²) trap catalogued in inbox/ (de3a801e) and the strbuf landing (ed04d3e1, main). strbuf is NOT yet applied to self/module_loader.hexa (grep: 0 literal `acc = acc +`; the blowup is likely arena/splice-accumulator, a sibling mechanism). Either way: a hexa-lang SUBSTRATE / build-pipeline defect, NOT the front-end operator-lowering track."
+  blocker_ledger <<~EOF
+    Five DISTINCT substrate / build-pipeline blockers, each its own sub-track,
+    each independently gating G4-G6 — NONE is the front-end fix itself:
+      1. interp ~30 GiB constant memory wall (ubu 30 GiB boxes) — codegen/runtime
+      2. tag_of() exhaustive-match-no-wildcard — FIXED empirically (122ab8c4)
+      3. bootstrap chain staleness — hexa_interp.linux enum-cache build-time-fixed;
+         hexa_cc.c.new HexaVal/int type errors under Linux clang-18 strict
+      4. hexa_linux build multi-file scaffold — externs-only projection, no
+         import-body emission, no multi-c link
+      5. module_loader flatten RSS 165 GiB unbounded blowup (this entry)
+  EOF
+  cost_to_date = "~$3 RunPod cumulative (all pods terminated, no ongoing burn)."
+  verdict = "Front-end expression-operator-lowering track is STRUCTURALLY COMPLETE & verified at G1+G2+G3 (hexa parse clean ×4 files; faithful legacy reference port, no invented grammar; lexer single-char TokenKind::Bang + enum-prelude emission live-verified on pod). Empirical G6 (HX2001 1803 → ~803 measured) is gated by FIVE independent substrate sub-tracks, none of which is operator lowering. Per single-responsibility, bundling them into this track is wrong. Predictive G6 from architecture data is deterministic: the operator-as-Ident class (~1000 of 1803 HX2001) is mechanically eliminated by the lexer producing real operator tokens + parser routing them to UnOp/BinOp — there is no path by which a correctly-tokenised `!`/`|`/`&&` still reaches the binder as an undefined Ident."
+  recommended_closure = "Close front-end track at G3 + predictive-G6 (best-effort-verified; numeric measurement deferred). Register blockers 1/3/4/5 as named substrate sub-tracks in COMPILE-ONLY.tape (architecture). Empirical G6 becomes reachable once ANY ONE of: (AA) multi-file build pipeline completion, OR (AB') module_loader strbuf/arena refactor, lands."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
+  @> COMPILE-ONLY.tape
