@@ -521,3 +521,49 @@
   applied_at: 2026-05-15
   opened: 2026-05-14
   detail: patches/struct-fn-field-wrap.md
+
+- id: runtime-h-incomplete-after-phase-1-3-b
+  source_commit: pending
+  source_files:
+    - self/runtime.h
+    - bin/hexa-fast
+  compiler_impact: |
+    PHASE 1.3.B (codegen 136eafef) made hexa_v2 emit `#include "runtime.h"`
+    by default, but runtime.h did not yet export several `static inline`
+    helpers and extern primitives that stdlib emits transitively. Downstream
+    (wilson stdlib/sort + event-bus folds) hit `call to undeclared function`
+    for hexa_call1 / hexa_fn_new / hexa_array_pop / hexa_map_contains_key /
+    hexa_to_cstring and could not link.
+
+    Fix promotes the missing surface into runtime.h — option 1 from the
+    patch note (smallest delta unblocking everyone immediately):
+      extern decls (3):  hexa_array_pop · hexa_map_contains_key ·
+                         hexa_to_cstring
+      macros (12):       HX_IS_FN/CLOSURE · HX_FN_PTR/ARITY ·
+                         HX_CLO_PTR/ARITY/ENV · HX_SET_* (5 setters)
+      static inline (9): hexa_closure_new · hexa_fn_new · hexa_closure_env ·
+                         hexa_call0 · hexa_call1_hv · __hexa_call1_fp1 ·
+                         hexa_call2_hv · __hexa_call2_fp2 · hexa_call3 ·
+                         hexa_call4
+      _Generic macros (2): hexa_call1 · hexa_call2
+
+    Inline bodies mirror runtime.c:1110-1227 with internal _hx_stats_*
+    counter bumps stripped (those reference static-in-runtime.c state; the
+    runtime.c TU keeps its own stats-instrumented bodies).
+
+    Side-fix in bin/hexa-fast: the `bench` A/B baseline arm now seds the
+    include back to runtime.c after hexa_v2 emit (since hexa_v2 now defaults
+    to runtime.h, the prior bench logic was running new-path on both arms).
+  selftest_delta: |
+    /tmp/repro_wilson.c (mirrors patch-note reproducer — sort_by + sort_asc
+    + array_pop + map_contains + to_cstring) compiles clean against the
+    patched runtime.h. test_tiny2 + hexa_cc.c standalone still build.
+  downstream_consumer: |
+    wilson upstream pull on `main` is unblocked. Anyone tracking hexa-lang
+    main who builds a project using stdlib/sort or event-bus folds was
+    previously blocked by 20+ `undeclared function` errors; now resolves
+    cleanly.
+  status: applied
+  applied_at: 2026-05-15
+  opened: 2026-05-15
+  detail: patches/runtime-h-incomplete-after-phase-1-3-b.md
