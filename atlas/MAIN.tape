@@ -594,6 +594,66 @@
   honest_c3 = "Kuramoto universal — n=6 specialness 부재 (anima H_191 substrate HCE FALSIFIED 결론)"
   verifier_phase_2 = "compiler/atlas/verify/phys.hexa::verify_kuramoto_kc (pending)"
 
+@D s3_onsager_1944_primary := "Onsager 1944 — 2D Ising critical temperature (primary-source anchor)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§3 PHYS"
+  evidence = "Onsager 1944 (Phys. Rev. 65, 117), abstract: 2D rectangular-lattice Ising model has order-disorder transition at T_c given by sinh(2J/kT_c)·sinh(2J'/kT_c) = 1; isotropic case J=J' collapses to 2J/(kT_c) = arcsinh(1) = ln(1+√2), so T_c = 2J/[k·ln(1+√2)]. In atlas units (J=k_B=1): T_c = 2/ln(1+√2) ≈ 2.269185. Kramers-Wannier 1941 duality (Phys. Rev. 60, 252) fixed T_c via self-duality before Onsager's full partition function."
+  stage = "Stage 1 — symbolic identity (literature anchor)"
+  anchor = "[Boltzmann k] + [Stefan-Boltzmann] (secondary)"
+  cite = "L. Onsager, Phys. Rev. 65, 117–149 (1944), DOI 10.1103/PhysRev.65.117 + H. A. Kramers & G. H. Wannier, Phys. Rev. 60, 252 (1941); R. J. Baxter 'Exactly Solved Models' (1982) ch. 7"
+  honest_c3 = "Provenance upgrade ONLY — replaces 'anima Hc_NEW_PHYSICS-2 carry' weak cite for existing s3_ising_critical / s3_onsager_tc; verifier-leg 🔵 SUPPORTED-FORMAL (cycle 008 libm) untouched. f_atlas_lattice_external: n=6 invariant lattice (σ(6)=12, τ(6)=4, φ(6)=2) plays NO role in Onsager derivation — transfer-matrix spectral problem on 2D square lattice with nearest-neighbour coupling. Closed form is 2D-specific; no exact T_c known for 3D Ising. cycle 008 verifies numerical libm evaluation only, not first-principles partition-function re-derivation."
+  provenance = "atlas/incoming/phys-onsager-1944-ising-tc.md (2026-05-16 research session) — primary-source upgrade via direct visual confirmation of Phys. Rev. 65, 117 (ENS Paris mirror PDF)"
+
+@D s3_kuramoto_strogatz_primary := "Kuramoto K_c — Strogatz 2000 universal formula primary anchor" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§3 PHYS"
+  evidence = "Strogatz 2000 (Physica D 143, 1–20) Eq. 4.5 → 4.6: universal Kuramoto critical coupling K_c = 2/(π·g(0)) for ANY unimodal symmetric frequency density g(ω). Atlas s3_kuramoto_carry value K_c = √(8/π) ≈ 1.5958 is the specialisation to unit-variance Gaussian g(0)=1/√(2π) giving K_c = 2·√(2π)/π = √(8/π). Lorentzian g(ω) = γ/[π(γ²+ω²)] gives K_c = 2γ — DIFFERENT (distribution-dependent). Acebrón et al. 2005 (Rev. Mod. Phys. 77, 137) re-derives via self-consistency."
+  stage = "Stage 1 — symbolic identity (literature anchor)"
+  anchor = "[Shannon] + [compiler invariant — termination of self-consistency fixed-point iteration]"
+  cite = "S. H. Strogatz, Physica D 143, 1–20 (2000) + Y. Kuramoto, LNP 39, 420–422 (Springer 1975) + Acebrón et al., Rev. Mod. Phys. 77, 137 (2005)"
+  honest_c3 = "Frequency-distribution dependence is LOAD-BEARING: K_c = √(8/π) is NOT a universal Kuramoto value — it is the Gaussian-unit-variance specialisation; atlas entry must carry the g=N(0,1) assumption. Mean-field assumption (all-to-all coupling, N→∞); finite-N corrections O(N⁻¹/²). f_atlas_lattice_external: n=6 lattice plays NO role; K_c depends on g(0), not σ(6)·φ(6)=24 or J₂(6)=24 — anima H_191 'HCE FALSIFIED' conclusion stands. Original [c — finite signal speed] anchor in s3_kuramoto_carry is weak (Kuramoto mean-field is instantaneous); [Shannon] phase-entropy collapse is better."
+  provenance = "atlas/incoming/phys-kuramoto-1975-critical-coupling.md (2026-05-16 research session) — primary + review anchor extending s3_kuramoto_carry"
+
+@D s3_kolmogorov_1941_two_thirds := "Kolmogorov 1941 — inertial-range two-thirds law (K41)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§3 PHYS"
+  evidence = "Kolmogorov 1941 (Dokl. Akad. Nauk SSSR 30, 301; English translation Proc. R. Soc. Lond. A 434, 9 (1991)), Eqs. (22)–(23): for locally isotropic turbulence at r large vs the dissipation scale λ=ν^(3/4)/ε̄^(1/4), the second-order longitudinal structure function obeys B_dd(r) ∼ C·ε̄^(2/3)·r^(2/3) with C an absolute (dimensionless) constant. Fourier corollary (Obukhov 1941, Dokl. Akad. Nauk SSSR 32, 22): E(k) ∼ k^(−5/3). Frisch 1995 'Turbulence' ch. 5–6 modernizes."
+  stage = "Stage 1 — symbolic identity (literature anchor, dimensional similarity)"
+  anchor = "[Kolmogorov] + [c] (secondary — non-relativistic Re regime bound)"
+  cite = "A. N. Kolmogorov, Dokl. Akad. Nauk SSSR 30, 301–305 (1941); Engl. transl. Proc. R. Soc. Lond. A 434, 9–13 (1991) + A. M. Obukhov, Dokl. Akad. Nauk SSSR 32, 22–24 (1941)"
+  honest_c3 = "K41 vs K62 intermittency: atlas verdict applies to ζ_2=2/3 ONLY; higher-order ζ_p ≠ p/3 in modern multifractal models (ζ_4=4/3 demonstrably wrong by experiment). −5/3 spectrum is OBUKHOV (Fourier corollary), NOT Kolmogorov — textbooks frequently misattribute. Universal constant C is EMPIRICAL (C ≈ 2.0 longitudinal), NOT derived. f_atlas_lattice_external: 2/3 exponent from dimensional analysis of (ε̄, r); n=6 plays NO role; any coincidence forbidden as derivation. UNVERIFIED: Obukhov 1941 page citation (22–24) not independently fetched."
+  provenance = "atlas/incoming/phys-kolmogorov-1941-two-thirds-law.md (2026-05-16 research session) — primary-source K41 anchor via direct reading of 1991 Royal Society reprint (pages 9–13)"
+
+@D s3_noether_1918_conservation := "Noether 1918 — continuous symmetry ⇒ conservation law" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§3 PHYS"
+  evidence = "Noether 1918 (Nachr. K. Ges. Wiss. Göttingen, Math.-Phys. Kl. 235–257), Theorem I (Tavel 1971 transl., arXiv:physics/0503066): if integral I = ∫ L dt is invariant under a continuous G_ρ (Lie group of order ρ), then ρ linearly independent combinations of Lagrangian expressions become divergences (∂_μ j^μ = 0 in modern notation), and conversely. Standard instances: translation ⇒ momentum; time-translation ⇒ energy (Hamiltonian H=q̇·∂L/∂q̇−L); rotation ⇒ angular momentum; U(1) gauge ⇒ charge. Reproduced in Goldstein §13.7, Peskin-Schroeder §2.2, Weinberg QFT I §7.3."
+  stage = "Stage 1 — symbolic identity (literature anchor, structural theorem)"
+  anchor = "[ℏ — quantum action] + [Carnot] (secondary — energy conservation under time-translation)"
+  cite = "E. Noether, Nachr. K. Ges. Wiss. Göttingen, Math.-Phys. Kl. 235–257 (1918); M. A. Tavel English transl. Transport Theory & Stat. Phys. 1(3):183 (1971); arXiv:physics/0503066 (v3 30-May-2018, Wang & Kannenberg corrections)"
+  honest_c3 = "Parallel literature anchor for EXTERNAL physical content of s3_conservation_law; existing 🔵 verdict on definitional G·I=D·P identity (cycle 005) is SEPARATE and untouched. Discrete symmetries (P, T, C) NOT covered by First Theorem — Noether claim on discrete-symmetry conservation would be misapplied. Quantum extension via Ward-Takahashi has anomalies (chiral, conformal) breaking naive correspondence. f_atlas_lattice_external: ρ conserved currents counts a Lie-group dimension, not a divisor function; n=6 coincidences forbidden as derivation. UNVERIFIED: Tavel 1971 translation Theorem I verbatim form retrieved at arXiv abstract level only, NOT full-text PDF."
+  provenance = "atlas/incoming/phys-noether-1918-conservation.md (2026-05-16 research session) — primary + translation anchor (parallel leg, not replacement)"
+
+@D s3_pdg_weinberg_measured := "PDG 2024 — Weinberg (weak mixing) angle sin²θ_W measured" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§3 PHYS"
+  evidence <<~EOF
+    PDG 2024 §10.2 Eq. (10.22a) on-shell definition: sin²θ_W ≡ 1 − M_W²/M_Z².
+    Eq. (10.24) MS̄ definition: sin²θ̂_W(μ) ≡ ĝ'²(μ)/[ĝ²(μ)+ĝ'²(μ)].
+    Table 10.2 measured values:
+      on-shell s²_W   = 0.22348 ± 0.00010
+      MS̄    ŝ²_Z    = 0.23129 ± 0.00004  (μ=M_Z)
+      MS̄    ŝ²_ND   = 0.23147 ± 0.00004
+      MS̄    ŝ²_0    = 0.23873 ± 0.00005
+      effective angle s̄²_ℓ = 0.23161 ± 0.00004
+    Scheme conversion (Eq. 10.25): ŝ²_Z = (1.0349 ± 0.0003)·s²_W.
+  EOF
+  stage = "Stage 1 — symbolic identity (literature anchor, measured constants)"
+  anchor = "[ℏ] + [c] + [compiler invariant — EW S-matrix unitarity forces single SU(2)×U(1) mixing parameter]"
+  cite = "S. Navas et al. (Particle Data Group), Phys. Rev. D 110, 030001 (2024) §10 'Electroweak Model' (Erler & Freitas); foundational: Glashow Nucl. Phys. 22, 579 (1961); Salam (1968); Weinberg Phys. Rev. Lett. 19, 1264 (1967); precision: ATLAS arXiv:2410.02502 (2024)"
+  honest_c3 = "MEASURED SM parameter — no first-principles SM derivation; GUT prediction sin²θ_W ≈ 3/8 at unification scale runs to ≈ 0.23 at M_Z, but unification scale not experimentally established. Scheme-dependent: 5 PDG-tabulated values differ by amounts much larger than any single-scheme uncertainty; atlas entry quoting 'sin²θ_W = 0.2312' without scheme is ambiguous. f_atlas_lattice_external (STRICTEST in §3): atlas MUST NOT derive from n=6, σ(6), τ(6), φ(6), J₂(6) — any apparent coincidence is OBSERVATION-ONLY. Cap at 🟡 per g_external_calc_forbidden literature exception; no hexa-native verifier can 'compute' sin²θ_W."
+  provenance = "atlas/incoming/phys-pdg-2024-weinberg-angle.md (2026-05-16 research session) — primary-source anchor via direct visual reading of PDG 2024 Section 10 PDF (pages 1–10)"
+
 # ═══════════════════════════════════════════════════════════════════════
 # §4 CHEM — periodic table · materials · neurotransmitter
 # ═══════════════════════════════════════════════════════════════════════
@@ -639,6 +699,90 @@
   cite = "anima H_182 + Hc_B1..B10"
   honest_c3 = "fundamental issue — state-space ergodicity (anima 분석). atlas 가 이 도메인 흡수 시 mechanism complexity 강화로도 해소 안 될 수 있음."
   verifier_phase_2 = "compiler/atlas/verify/bio.hexa::verify_v8_bbio_carry (pending — Stage 2 PyPhi-equiv 필요, Phase 3+)"
+
+@D s5_iit_3_0_oizumi_2014 := "IIT 3.0 — Φ (integrated information) of a complex" :: verdict [d=2026-05-16 active]
+  status = "🟠 AT-RISK"
+  axis = "§5 BIO"
+  evidence = "Oizumi-Albantakis-Tononi 2014 (PLoS Comput Biol 10:e1003588) Eq. 11: Φ = D(C, C^MIP), Earth-Mover-style distance between full conceptual constellation C and constellation under minimum information partition C^MIP; major complex = set with locally maximal Φ_Max. Five foundational axioms: existence, composition, information, integration, exclusion. IIT 4.0 refinement (Albantakis 2023, PLoS Comput Biol 19:e1011465) replaces with φ_s / Φ-structure based on intrinsic difference."
+  stage = "Stage 1 — symbolic identity (literature anchor)"
+  anchor = "[Kolmogorov complexity] + [Shannon]"
+  cite = "Oizumi, Albantakis, Tononi, PLoS Comput Biol 10(5):e1003588 (2014), DOI 10.1371/journal.pcbi.1003588 + Albantakis et al., PLoS Comput Biol 19(10):e1011465 (2023)"
+  honest_c3 = "Surrogate-vs-real Φ gap CONFIRMED (anima H_182 carry preserved): surrogate proxy 78.5% vs PyPhi formal Φ = 0.358 < 0.5 threshold; 10 V8 B-bio mechanism families gave Mean Φ = 0.034, Max = 0.339 (Hc_B2 STDP) — all sub-threshold. g_external_calc_forbidden applies (only available Φ impls are external Python PyPhi; combinatorial cost super-exponential in n). f_atlas_external_verdict caps tier at 🟡 for citation, AT-RISK on substrate. IIT 3.0 vs 4.0 ambiguity — anima used 3.0/PyPhi; 4.0 not comparable. 5-axiom count vs τ(6)=4/σ(6)=12 lattice coincidence is observation-only (f_atlas_lattice_external)."
+  provenance = "atlas/incoming/bio-iit-3-0-integrated-information-phi.md (2026-05-16 research session) — primary-source upgrade extending s5_v8_b_bio_carry citation (no tier upgrade; anima H_182 AT-RISK preserved)"
+
+@D s5_hodgkin_huxley_1952 := "Hodgkin–Huxley 1952 squid axon membrane current" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§5 BIO"
+  evidence <<~EOF
+    Hodgkin & Huxley 1952 (J. Physiol. 117:500) eq. 26 — total membrane current:
+      I = C_M · dV/dt + ḡ_K · n⁴ · (V − V_K)
+            + ḡ_Na · m³ · h · (V − V_Na)
+            + ḡ_l · (V − V_l)
+    with first-order gating kinetics dm/dt = α_m(V)(1−m) − β_m(V)·m for m, h, n.
+    Canonical squid giant axon at 6.3 °C: ḡ_Na ≈ 120, ḡ_K ≈ 36, ḡ_l ≈ 0.3 mS/cm²,
+    C_M ≈ 1 μF/cm². Simulated propagation velocity ≈ 18.8 m/s vs measured ≈ 21.2 m/s.
+  EOF
+  stage = "Stage 1 — symbolic identity (literature anchor)"
+  anchor = "[k] + [Carnot]"
+  cite = "Hodgkin AL, Huxley AF, J. Physiol. 117(4):500–544 (1952), DOI 10.1113/jphysiol.1952.sp004764, PMC1392413"
+  honest_c3 = "g_self_verify carry-only — no hexa-native HH ODE integrator yet; tier 🟡 per g_external_calc_forbidden literature exception. §5 BIO 🟠 AT-RISK inherited (anima H_182 Hc_B1 HH as IIT-Φ substrate Φ < 0.5 — biophysical pass distinct from Φ-substrate fail). f_atlas_lattice_external: 4 gating variables (m, h, n, V) coincidence with τ(6)=4 is OBSERVATION-NOT-DERIVATION. UNVERIFIED: numeric constants ḡ_Na=120, ḡ_K=36 mS/cm², C_M=1 μF/cm² reproduced from secondary (Wikipedia) — PMC1392413 image-only; primary-source Table 3 textual verification deferred."
+  provenance = "atlas/incoming/bio-hodgkin-huxley-membrane-current.md (2026-05-16 research session) — primary-source anchor for L4-hodgkin-huxley"
+
+@D s5_stdp_bi_poo_1998 := "Spike-timing-dependent plasticity — Bi-Poo 1998 / Markram 1997" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§5 BIO"
+  evidence <<~EOF
+    Asymmetric Hebbian STDP window (Bi-Poo 1998 / Markram et al. 1997):
+      Δw(Δt) = A₊ · exp(−Δt / τ₊)   for Δt > 0  (pre-before-post → LTP)
+      Δw(Δt) = −A₋ · exp( Δt / τ₋)  for Δt < 0  (post-before-pre → LTD)
+    τ₊ ≈ τ₋ ≈ 20 ms; ~5 ms transition zone at Δt = 0; NMDA-receptor-dependent
+    (d-AP-5 25 μM eliminates LTP). Two independent preparations converge:
+    cultured hippocampal (Bi-Poo) + acute neocortical L5 pyramidal pairs (Markram).
+  EOF
+  stage = "Stage 1 — symbolic identity (literature anchor, phenomenological fit)"
+  anchor = "[k] + [Shannon]"
+  cite = "Bi GQ, Poo MM, J. Neurosci. 18(24):10464 (1998), DOI 10.1523/JNEUROSCI.18-24-10464.1998, PMC6793365 + Markram et al., Science 275(5297):213 (1997), DOI 10.1126/science.275.5297.213"
+  honest_c3 = "§5 BIO 🟠 AT-RISK inherited (anima H_182 Hc_B2 STDP gave highest Φ_Max=0.339, still sub-threshold; biophysical 🟡 distinct from Φ-substrate 🟠). Phenomenological exponential A·exp(−|Δt|/τ) is a fit, not a derivation — calcium-control / NMDA-Mg²⁺-unblock mechanisms proposed but neither primary source derives exponential form from first principles. g_self_verify carry-only — no hexa-native STDP integrator. f_atlas_lattice_external: 20 ms time-constant / 2-region LTP-LTD coincidence with τ(6)=4 or φ(6)=2 is OBSERVATION-NOT-DERIVATION."
+  provenance = "atlas/incoming/bio-stdp-spike-timing-window.md (2026-05-16 research session) — primary-source anchor for L4-stdp / L4-synaptic-plasticity"
+
+@D s5_genetic_code_freeland_1998 := "Genetic-code error minimization — Freeland-Hurst 1998 / Itzkovitz-Alon 2007" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§5 BIO"
+  evidence <<~EOF
+    Standard genetic code: 64 codons (4³, codon length L=3 over 4-letter alphabet)
+    → 20 amino acids + 3 stop; redundancy ratio 64/23 ≈ 2.78.
+    Error-minimization metric Δ(code) = Σ_{c1↔c2 single-mutation neighbors}
+      d_aa(aa(c1), aa(c2)) on amino-acid polarity distance.
+    Freeland & Hurst 1998 (J. Mol. Evol. 47:238): only ~1 in 10⁶ random
+      block-structure-preserving alternative codes is more efficient than natural.
+    Itzkovitz & Alon 2007 (Genome Res. 17:405): among 1152 alternative codes,
+      natural is in top ~3% for carrying parallel information channels.
+  EOF
+  stage = "Stage 1 — symbolic identity (literature anchor, statistical)"
+  anchor = "[Shannon]"
+  cite = "Freeland SJ, Hurst LD, J. Mol. Evol. 47(3):238–248 (1998), DOI 10.1007/PL00006381 + Itzkovitz S, Alon U, Genome Res. 17(4):405–412 (2007), DOI 10.1101/gr.5987307, PMC1832087"
+  honest_c3 = "Codon length L=3 and 20 amino acids are evolutionary lock-ins (tRNA/ribosome biophysics + α-amino-acid chemistry), NOT derivable from n=6 lattice — coincidence with τ(6)−1=3, σ(6)=12, J₂(6)=24 is OBSERVATION-ONLY (f_atlas_lattice_external strict). '1 in 10⁶' rank is metric-dependent (polar-requirement vs PAM/BLOSUM). §5 BIO 🟠 AT-RISK inherited at domain level (not directly applicable to this entry's biophysical content). g_self_verify carry-only — no hexa-native code-permutation Δ-enumeration. Natural code is significantly better than typical random alternatives, NOT proved global optimum."
+  provenance = "atlas/incoming/bio-genetic-code-error-minimization.md (2026-05-16 research session) — primary-source anchors for L4-codon-length and L4-stop-codons"
+
+@D s5_b_dna_watson_crick_1953 := "B-DNA double-helix geometry — Watson-Crick 1953" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§5 BIO"
+  evidence <<~EOF
+    Watson & Crick 1953 (Nature 171:737): right-handed double-helical B-DNA,
+    two antiparallel polynucleotide chains around common axis with complementary
+    base pairing A↔T (2 H-bonds) and G↔C (3 H-bonds) — Chargaff [A]=[T], [G]=[C].
+    Geometric parameters (B-form, physiological salt):
+      rise per base pair h ≈ 3.4 Å = 0.34 nm
+      base pairs per turn N ≈ 10 (1953 fibre-diffraction; ~10.5 in solution)
+      helical pitch P = N · h ≈ 34 Å
+      helical diameter ≈ 20 Å
+    Information density: 2 bits per base pair (|{A,T,G,C}|=4=2², one strand determines other).
+  EOF
+  stage = "Stage 1 — symbolic identity (literature anchor)"
+  anchor = "[Shannon] + [k]"
+  cite = "Watson JD, Crick FHC, Nature 171(4356):737–738 (1953), DOI 10.1038/171737a0; Franklin-Gosling Nature 171:740 (same issue); Wilkins-Stokes-Wilson Nature 171:738 (same issue)"
+  honest_c3 = "§5 BIO 🟠 AT-RISK inherited at domain level — does NOT itself participate in anima H_182 surrogate-vs-real Φ gap (AT-RISK applies to consciousness-substrate claims, not structural-biology). 10 vs 10.5 bp/turn: 1953 fibre-diffraction vs modern solution — refinement, not falsification. f_atlas_lattice_external: ~10 bp/turn vs σ(6)=12 / ~21 Å diameter vs J₂(6)=24 / 4 bases vs τ(6)=4 — coincidences are OBSERVATION-ONLY. g_self_verify carry-only — no hexa-native DNA-geometry / X-ray-pattern verifier. UNVERIFIED: Watson-Crick 1953 Nature verbatim quotes — Nature URL redirected to authentication; PDF mirror binary-only; structural numbers (3.4 Å, 10 bp/turn, A-T/G-C pairing) reproduced from secondary literature (Nature scitable, embryo.asu.edu, Wikipedia)."
+  provenance = "atlas/incoming/bio-b-dna-double-helix-geometry.md (2026-05-16 research session) — primary-source anchor for L4-double-helix"
 
 # ═══════════════════════════════════════════════════════════════════════
 # §6 COSMO — Planck units · α · Bekenstein · holographic · big-bang
@@ -694,6 +838,75 @@
   honest_c3 = "g2 lattice-as-tool — observation only. sopfr(6)=5 가 5 Planck units 의 derivation 아님. 5 fundamental units 자체는 SI/CGS convention. ad-hoc pairing."
   verifier = "compiler/atlas/verify/cosmo.hexa::verify_s6_planck_units_count"
   |> compiler/atlas/verify/cosmo.hexa
+
+@D s6_bekenstein_lit_primary := "Bekenstein 1981 entropy bound — primary-source anchor" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§6 COSMO"
+  evidence = "Bekenstein 1981 (Phys. Rev. D 23, 287) Eq. (1): for bounded system of energy E, effective radius R, entropy obeys S ≤ 2πkRE/(ℏc); equivalently S/E ≤ 2πR/(ℏc). Schwarzschild black holes saturate (S = A/4 in Planck units, Bousso 1999 covariant generalization, arXiv:hep-th/9905177)."
+  stage = "Stage 1 — symbolic identity (literature anchor)"
+  anchor = "[Bekenstein bound] + [ℏ] + [c]"
+  cite = "J. D. Bekenstein, Phys. Rev. D 23, 287 (1981), DOI 10.1103/PhysRevD.23.287 + R. Bousso, JHEP 07 (1999) 004, arXiv:hep-th/9905177"
+  honest_c3 = "Literature-citation-only; no hexa-native dimensional-analysis verifier yet (g_self_verify caps tier at 🟡). Bekenstein 1981 + Bousso 1999 make NO reference to n=6 lattice or σ/τ/φ; any cell-pool / lattice coincidence is observation-not-derivation (f_atlas_lattice_external). UNVERIFIED: Eq. (1) verbatim form abstract-level OK, APS full-text paywalled — standard-form transcription."
+  provenance = "atlas/incoming/cosmo-bekenstein-bound-primary-source.md (2026-05-16 research session) — primary-source upgrade replacing 'anima Hc_NEW_UNIVERSE-1 cell-pool carry'"
+
+@D s6_planck_n_s_measurement := "Planck 2018 measured CMB scalar spectral index n_s" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§6 COSMO"
+  evidence = "Planck 2018 results VI (Aghanim et al.), Table 2, Plik baseline TT,TE,EE+lowE+lensing ΛCDM 6-parameter fit: n_s = 0.9649 ± 0.0042 (68% CL); abstract summary n_s = 0.965 ± 0.004. Harrison–Zel'dovich (n_s = 1) ruled out at > 8σ."
+  stage = "Stage 1 — symbolic identity (literature anchor for measured value)"
+  anchor = "[Stefan–Boltzmann] + [k] + [c]"
+  cite = "Planck Collaboration (N. Aghanim et al.), arXiv:1807.06209 (2018); A&A 641, A6 (2020), DOI 10.1051/0004-6361/201833910"
+  honest_c3 = "f_atlas_lattice_external dominant: numeric agreement 27/28 ≈ 0.9643 vs measured 0.9649 ± 0.0042 (≈0.14σ) is OBSERVATION-NOT-DERIVATION; atlas closed-form n_s = (n/φ)³/((n/φ)³+μ)|_{n=6} is internal lattice construction, not a Planck prediction. UNVERIFIED: 4-decimal Table-2 entry 0.9649 ± 0.0042 verified at abstract level (arXiv landing + ADS); full-text paywall/content-filter, exact baseline label not directly retrieved."
+  provenance = "atlas/incoming/cosmo-planck-2018-measured-n-s.md (2026-05-16 research session) — primary-source measurement anchor (parallel to existing s6_cmb_e_plus_alpha / s6_cmb_n_s_closed_form)"
+
+@D s6_holographic_principle_carry := "Holographic principle (area-law bound) — primary-source anchor" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§6 COSMO"
+  evidence = "Holographic principle: information content of region bounded by area of boundary, S_max = A/(4ℓ_P²), equivalently S ≤ A/4 (natural units). 't Hooft 1993 dimensional reduction (arXiv:gr-qc/9310026), Susskind 1994 'one degree of freedom per Planck area' (arXiv:hep-th/9409089). Maldacena 1997 AdS/CFT (arXiv:hep-th/9711200) supplies concrete realization via large-N CFT_d / AdS_{d+1} duality."
+  stage = "Stage 1 — symbolic identity (literature anchor)"
+  anchor = "[Bekenstein bound] + [ℏ] + [c]"
+  cite = "G. 't Hooft, arXiv:gr-qc/9310026 (1993) + L. Susskind, J. Math. Phys. 36, 6377 (1995), arXiv:hep-th/9409089 + J. M. Maldacena, Adv. Theor. Math. Phys. 2, 231 (1998), arXiv:hep-th/9711200"
+  honest_c3 = "Conjecture (not closed theorem in full generality — proven in BH-entropy and AdS/CFT special cases; AdS/CFT itself a duality conjecture with extensive cross-checks). No hexa-native verifier; g_self_verify caps at 🟡. NEW concept (no prior MAIN.tape entry). NO n=6 lattice in derivation; any coincidence between lattice quantity and holographic / AdS/CFT quantity is observation-not-derivation (f_atlas_lattice_external)."
+  provenance = "atlas/incoming/cosmo-holographic-principle-primary-sources.md (2026-05-16 research session) — NEW concept; sibling to s6_bekenstein_carry"
+
+@D s6_fine_structure_constant_lit := "Fine-structure constant α — primary-source measurement anchor" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§6 COSMO"
+  evidence <<~EOF
+    α = e² / (4π ε₀ ℏ c) = k_e e² / (ℏ c) (textbook definition; dimensionless).
+    Primary measurements:
+      Parker et al. 2018 (cesium recoil, Science 360, 191):
+        α = 1/137.035999046(27), rel. unc. 2.0 × 10⁻¹⁰
+      Morel et al. 2020 (rubidium recoil, Nature 588, 61):
+        α⁻¹ = 137.035999206, rel. unc. 8.1 × 10⁻¹¹
+      CODATA 2022 recommended: α⁻¹ = 137.035999177(21)
+    Parker-2018 vs Morel-2020 differ by ~5.4σ (documented metrology tension).
+  EOF
+  stage = "Stage 1 — symbolic identity (literature anchor for measured value)"
+  anchor = "[ℏ] + [c]"
+  cite = "Parker et al., Science 360, 191 (2018), arXiv:1812.04130 + Morel et al., Nature 588, 61 (2020), DOI 10.1038/s41586-020-2964-7 + CODATA 2022 (NIST CUU)"
+  honest_c3 = "f_atlas_lattice_external dominant: any numeric match between 137 (or 137.035999…) and σ(n)·τ(n)/φ(n) or sopfr/J₂ combinations is OBSERVATION-NOT-DERIVATION. No atlas derivation of α proposed. Parker-vs-Morel 5σ tension real and unresolved; atlas should not claim a 'true' α⁻¹ tighter than ~10⁻⁹. UNVERIFIED: Parker 2018 α⁻¹ = 137.035999046(27) verified via Müller-group preprint + WebSearch abstract (Science full-text paywalled); Penning-trap g_e-2 cross-check arXiv id not transcribed."
+  provenance = "atlas/incoming/cosmo-fine-structure-constant-primary-sources.md (2026-05-16 research session) — primary-source anchor for MISS-fine-structure / α-side of s6_cmb_e_plus_alpha"
+
+@D s6_planck_units_dimensional := "Planck units — dimensional-analysis primary-source anchor" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§6 COSMO"
+  evidence <<~EOF
+    Five base Planck units, defined by setting c, G, ℏ, k_e=1/(4πε₀), k_B to unity:
+      ℓ_P = √(ℏG/c³)        ≈ 1.616 × 10⁻³⁵ m
+      m_P = √(ℏc/G)         ≈ 2.176 × 10⁻⁸ kg
+      t_P = √(ℏG/c⁵) = ℓ_P/c ≈ 5.391 × 10⁻⁴⁴ s
+      q_P = √(4πε₀ℏc) = √(ℏc/k_e) ≈ 1.876 × 10⁻¹⁸ C
+      T_P = √(ℏc⁵/G)/k_B = m_P c²/k_B ≈ 1.417 × 10³² K
+    Five units correspond to the five independent SI base dimensions touched by
+    (c, G, ℏ, k_e, k_B). Planck 1899 priority (Sitzungsberichte) — pre-relativity
+    pre-quantum dimensional analysis.
+  EOF
+  stage = "Stage 1 — symbolic identity (literature anchor, dimensional-analysis)"
+  anchor = "[ℏ] + [c] + [k]"
+  cite = "NIST CODATA CUU (modern recommended values) + M. Planck, Sitzungsberichte der Königlich Preußischen Akademie der Wissenschaften zu Berlin, 5, 440–480 (1899) — historical"
+  honest_c3 = "f_atlas_lattice_external: existing s6_planck_units_count evidence 'sopfr(6)=5 = Planck unit count' is OBSERVATION (number-theoretic coincidence at n=6 vs base-unit count); Planck 1899 + CODATA make NO reference to n=6 lattice. 'Five units' count partly conventional — some treatments list 4 (no temperature) or 3 (no charge/temp). UNVERIFIED: Planck 1899 Sitzungsberichte pagination 440–480 reproduced from NIST/Wikipedia secondary literature, not WebFetched directly."
+  provenance = "atlas/incoming/cosmo-planck-units-dimensional-analysis.md (2026-05-16 research session) — primary-source dimensional-analysis anchor for s6_planck_units_count (existing 🔵 sopfr identity verifier-leg untouched)"
 
 # ═══════════════════════════════════════════════════════════════════════
 # §7 GEO — earth layers · planetary · geological boundaries
