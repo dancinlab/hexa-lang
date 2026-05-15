@@ -492,3 +492,44 @@
     a single clang invocation.
   EOF
   conclusion = "PHASE 1.3.B win confirmed across the entire bench corpus. No regressions; the only failures are pre-existing source-side issues (missing module / convention violation)."
+
+# ─── 2026-05-15  PHASE 3 — hexa_v2 share measurement (instrumentation prereq) ─
+
+@N phase_3_share := "hexa_v2 share of total compile wall, by source size" :: measurement [d=2026-05-15 ok]
+  step = "[@action_queue] 3.1 — measure hexa_v2 (front-end) share of total compile wall as a function of source size, to decide whether PHASE 3 internal instrumentation is justified per the 10% threshold gate."
+  method = "Time hexa_v2 emit and clang -O0 user.o link (against precompiled runtime.o) separately for 5 sources spanning 208 B → 334 KB."
+  results <<~EOF
+    Program                       | bytes    | hexa_v2 user | clang user | hexa_v2 share
+    ------------------------------+----------+--------------+------------+--------------
+    probe.hexa                    |    208 B |     0.00 s   |   0.09 s   |   0 %
+    oop_heavy.hexa                |    776 B |     0.00 s   |   0.04 s   |   0 %
+    clm_train_bench.hexa          | 14.8 KB  |     0.03 s   |   0.06 s   |  33 %
+    m4_inference_e2e.hexa         | 30.6 KB  |     0.08 s   |   0.07 s   |  53 %
+    codegen_c2.hexa (SSOT)        |  334 KB  |     5.01 s   |   2.99 s   |  63 %
+  EOF
+  gate_check <<~EOF
+    Per action_queue step 3.2: "if any single stage > 20 % of hexa_v2 wall
+    AND hexa_v2 > 10 % of total compile wall, evaluate parallelization."
+
+    hexa_v2 > 10 % of total wall:
+      day-to-day workflows (≤ 5 KB)     : NO   (hexa_v2 share ≈ 0 %)
+      mid-sized programs (≈ 15 KB)      : YES  (33 %)
+      large programs (≥ 30 KB)          : YES  (53 %+)
+      SSOT regen (codegen_c2 etc.)      : YES  (63 %)
+  EOF
+  decision <<~EOF
+    PHASE 3 is JUSTIFIED for the regen/large-source path, NOT for daily workflows.
+    Splitting follow-up:
+      PHASE 3.A (deferred — moderate effort)
+        Internal per-stage timing in hexa_v2 source (.hexa files):
+          1. Find entry point (likely self/main.hexa) and stage dispatch
+          2. Add `--time` flag printing per-stage elapsed (lex/parse/typecheck/codegen/lint)
+          3. Regen + rebuild + bench codegen_c2.hexa to see which stage dominates
+        Outcome question: of the 5 s hexa_v2 spends on codegen_c2.hexa,
+        which of the 8 lint stages owns it? Until measured, parallelization
+        target is unknown.
+      PHASE 3.B (after 3.A)
+        If a stage > 20% AND has no cross-stage deps, parallelize via thread.
+        Else DEFER.
+  EOF
+  recommendation = "PHASE 3.A is worth ~2 hours of careful instrumentation work for the large-source/regen win. PHASE 1's headline win (5.9× default, 8.41× avg across bench/*) already covers >95 % of user workflows. Sequence: ship PHASE 3.A when there's appetite for self-host iteration cycles, not blocking on daily-workflow optimization."
