@@ -212,3 +212,57 @@
   EOF
   next_gate = "user decision: path A (bootstrap refresh, multi-hour) vs path B (accept + close as best-effort verified) vs other"
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc]"
+
+# ─── 2026-05-16  Front-end track — Path A pursued: bootstrap refresh + build-pipeline gap ───
+
+@A path_a_bootstrap_refresh := "Path A: hexa cc --regen → fresh hexa_v2 (macOS arm64 + Linux x86_64)" :: measurement [d=2026-05-16 ok]
+  <- frontend_verify_blocked_by_bootstrap_staleness
+  step = "User chose option α (G6 strict + hexa-native). Pursued bootstrap refresh:"
+  ok <<~EOF
+    1. Local macOS arm64: `hexa cc --regen` works.
+       [1/4] transpile self/{lexer,parser,type_checker,codegen_c2}.hexa (~30s — NOT the 21min
+              slow path; that's full self-compile not SSOT regen)
+       [2/4] merge → self/native/hexa_cc.c.new (1.43 MB, 22037 lines)
+       [3/4] clang HOST BUG: `-x c` flag also applies to runtime.o → "not valid UTF-8".
+              Workaround: `-x c hexa_cc.c.new -x none runtime.o` succeeds → 1.45 MB arm64.
+       Smoke transpile single-file with enums: emits `#define Severity_Error hexa_int(0)`
+       prelude. 085e73e6 fix VERIFIED in fresh binary.
+
+    2. RunPod Linux (RTX PRO 6000 SECURE 188GiB ubu24.04 glibc 2.39):
+       Shipped hexa_cc.c.new + tree. `clang -x c hexa_cc.c.new -x none runtime.c -o
+       hexa_v2_linux_fresh` → 1.52 MB ELF. probe_enum.hexa smoke: emits #define Severity_*
+       prelude correctly. Fix WORKS on single-file inputs.
+  EOF
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc]"
+
+@? path_a_build_pipeline_scaffold_gap := "hexa_linux build compiler/main.hexa — multi-file emit scaffold incomplete" :: anomaly [d=2026-05-16 partial]
+  <- path_a_bootstrap_refresh
+  context = "With fresh hexa_v2 (enum-prelude fix verified single-file) in place at self/native/hexa_v2, ran `./build/hexa_linux build compiler/main.hexa`."
+  finding <<~EOF
+    Same 3 undeclared-Severity errors as pre-refresh. Direct inspection of
+    build/artifacts/stage1_v14.c (74 KB): emits `extern HexaVal foo(...)` for EVERY imported
+    function — multi-file projection with EXTERN STUBS only, NO inlined bodies, NO enum decls
+    from imported modules. The single-file enum-prelude fix (085e73e6) operates per-file,
+    but `hexa_linux build`'s multi-file orchestration projects to ONE C file of externs.
+
+    The verified-on-probe enum-prelude emission proves the codegen fix is intact in the fresh
+    binary; the multi-file build path simply doesn't traverse imports for body emission.
+  EOF
+  diagnosis = "`hexa_linux build` (entry: self/main.hexa::build) is a SCAFFOLD for the new compiler/* multi-file entry, not a complete multi-file linker pipeline. Per-import per-file C emission + multi-c clang link is NOT wired up. Symptom: 1 .c file with 200+ unresolved externs. Front-end fix is structurally correct in isolation but unreachable through this build path."
+  paths_forward <<~EOF
+    AA. Complete hexa_linux build multi-file pipeline — per-import C emit + multi-input clang
+        link. Architectural, ~1-2 days. Owner: build/CLI track, not front-end track.
+    AB. Manual flatten-then-transpile chain — flatten all imports into single .hexa, fresh
+        hexa_v2 transpile → C WITH enum prelude, clang link. Blocker tried: Mac flatten hits
+        4GB hexa runtime memcap; HEXA_MEM_UNLIMITED=1 + Mac 24GiB → OOM thrash. RunPod 188GiB
+        would work but requires another pod cycle (~$1-2 + 30min).
+    AC. Bypass build, write minimal driver script that imports new lexer+parser, processes
+        compiler+self/*.hexa, prints HX2001 count. Blocker: build/hexa_interp.linux runtime
+        enum cache is build-time fixed; new TokenKind variants hit first-arm fall-through
+        empirically observed earlier. Need fresh hexa_interp built from current sources.
+  EOF
+  cost_to_date = "~$2 RunPod total (all pods terminated). Multiple boxes, multiple staleness fixes, multiple build chains attempted."
+  empirical_grade = "G3 + 085e73e6-fix-verified-single-file (lexer single-char Bang on pod live probe + enum-prelude emission on probe_enum.hexa) + G2 (faithful reference port) + G1 (hexa parse clean). G4-G6 require AA/AB/AC sub-track. Predictive G6 from architecture data: 1803 → ~803 (operator-as-Ident class = ~1000 = mechanically eliminated by fix)."
+  next_gate = "user decision: (1) Cycle close with G3 + predictive G6 [tape-recorded]; OR (2) AB on RunPod (~$1-2 + ~30min — completion probable); OR (3) AA — multi-day separate sub-track"
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
+  @> COMPILE-ONLY.tape
