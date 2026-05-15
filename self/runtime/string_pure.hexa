@@ -656,60 +656,20 @@ pub fn from_char_code_pure(code) {
     from_char_code(code)
 }
 
-// ── format_pure ──────────────────────────────────────────────────
-// Mirrors hexa_format (runtime.c:2720). Single-arg: replaces the
-// first `{}` in the format string with `to_string(arg)`.
-pub fn format_pure(fmt, arg) {
-    if type_of(fmt) != "string" { return fmt }
-    let idx = str_index_of_pure(fmt, "{}")
-    if idx < 0 { return fmt }
-    let before = fmt.substring(0, idx)
-    let after = fmt.substring(idx + 2, len(fmt))
-    before + to_string(arg) + after
-}
-
-// ── format_n_pure ────────────────────────────────────────────────
-// Mirrors hexa_format_n (runtime.c:2736). Multi-arg: replaces each
-// `{}` with successive elements of `args` array.
+// ── format_pure / format_n_pure — moved to runtime/format_pure.hexa ──
 //
-// Was previously written as `result = before + arg + after` inside the
-// arg loop — each iteration rebuilt the entire prior string (O(|result|))
-// → total O(N·|result_final|) = quadratic in N. Switched to a single
-// linear scan of `fmt`, emitting literal segments + replacements into a
-// strbuf. One join allocation at finish. See
-// incoming/patches/string-concat-in-unbounded-loop-quadratic-rss.md.
+// These two were duplicated here AND in runtime/format_pure.hexa. In
+// every real build (self/hexa_full.hexa) string_pure is imported BEFORE
+// format_pure, so the namespace-flatten last-wins rule meant this copy
+// was ALWAYS shadowed by format_pure.hexa's richer version (which also
+// handles `{:.N}` precision specs). No code imports string_pure
+// standalone for these symbols (the only non-test importer is
+// hexa_full.hexa, which also pulls format_pure.hexa; test_string_pure /
+// test_format_pure inline their own fixture copies). The duplication
+// was pure divergence risk with zero live consumers — removed so
+// runtime/format_pure.hexa is the single SSOT.
 //
-// Note: shadowed at runtime by runtime/format_pure.hexa's richer version
-// (which also handles `{:.N}` precision specs). Kept as the historical
-// reference impl + for callers that import string_pure standalone.
-pub fn format_n_pure(fmt, args) {
-    if type_of(fmt) != "string" { return fmt }
-    if type_of(args) != "array" { return fmt }
-    let nargs = len(args)
-    let out = strbuf_new()
-    let mut cursor = 0
-    let mut ai = 0
-    while ai < nargs {
-        let rest = fmt.substring(cursor, len(fmt))
-        let rel = str_index_of_pure(rest, "{}")
-        if rel < 0 {
-            // No more placeholders → emit remainder and exit
-            strbuf_push(out, rest)
-            return strbuf_finish(out)
-        }
-        // Emit literal segment before the placeholder, then the arg.
-        if rel > 0 { strbuf_push(out, rest.substring(0, rel)) }
-        strbuf_push(out, to_string(args[ai]))
-        cursor = cursor + rel + 2
-        ai = ai + 1
-    }
-    // Args exhausted — emit any remaining format tail verbatim
-    // (matches original semantics: trailing `{}` past args is preserved).
-    if cursor < len(fmt) {
-        strbuf_push(out, fmt.substring(cursor, len(fmt)))
-    }
-    strbuf_finish(out)
-}
+// See incoming/patches/format-n-pure-dup-and-ge-le-in-format-pure.md.
 
 // ── str_capitalize_pure ──────────────────────────────────────────
 // Capitalizes the first character of the string (a..z -> A..Z).
