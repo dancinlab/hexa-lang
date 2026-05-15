@@ -259,6 +259,37 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
             }
             return buf
         }
+        // struct_lit constructor (map-backed; mirror of x86_64 a351b1c9 /
+        // arm64 87f3c073 in Thumb EABI: r0=map, r1=key const char*,
+        // r2=val HexaVal, bl, r0 return). MIR args = [type_str, k0_str,
+        // v0, ...] (2a790d85); const_str key → .rodata label = const
+        // char* (map_set ABI). type_str ignored in map-backed v1.
+        // Parity with the shipped array_lit/concat emits; rebuild-
+        // verification deferred (Track-A clang wall). struct_lit codegen
+        // now complete on ALL THREE backends.
+        if s.op == "struct_lit" && len(s.args) >= 1 {
+            buf.push(_thumb_instr1("bl", _thumb_op_label("hexa_map_new"),
+                             "struct_lit: new map"))
+            buf.push(_thumb_instr2("mov", dst, _thumb_op_reg("r0"),
+                             "struct_lit: capture new map"))
+            let mut i = 1
+            while i + 1 < len(s.args) {
+                let key = _thumb_op_for_operand_st(s.args[i], st)
+                let val = _thumb_op_for_operand_st(s.args[i + 1], st)
+                buf.push(_thumb_instr2("mov", _thumb_op_reg("r1"), key,
+                                 "struct_lit: field key"))
+                buf.push(_thumb_instr2("mov", _thumb_op_reg("r2"), val,
+                                 "struct_lit: field val"))
+                buf.push(_thumb_instr2("mov", _thumb_op_reg("r0"), dst,
+                                 "struct_lit: map arg"))
+                buf.push(_thumb_instr1("bl", _thumb_op_label("hexa_map_set"),
+                                 "struct_lit: set field"))
+                buf.push(_thumb_instr2("mov", dst, _thumb_op_reg("r0"),
+                                 "struct_lit: recapture map"))
+                i = i + 2
+            }
+            return buf
+        }
         // mov dst, src — Thumb-2 accepts both reg and imm12 forms.
         if len(s.args) >= 1 {
             let src = _thumb_op_for_operand_st(s.args[0], st)
