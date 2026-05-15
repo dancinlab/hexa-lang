@@ -3207,11 +3207,10 @@ HexaVal p_at_end(void) {
 
 
 HexaVal p_advance(void) {
-    __hexa_fn_arena_enter();
     HexaVal tok = p_peek();
     p_pos = hexa_add(p_pos, hexa_int(1));
-    return __hexa_fn_arena_return(tok);
-    return __hexa_fn_arena_return(hexa_void());
+    return tok;
+    return hexa_void();
 }
 
 
@@ -4531,8 +4530,9 @@ HexaVal parse_fn_decl(void) {
         p_advance();
         ret = parse_type_annotation();
     }
-    HexaVal body = parse_block();
     HexaVal attrs = p_pending_attrs;
+    p_pending_attrs = __hexa_parser_sl_1;
+    HexaVal body = parse_block();
     p_pending_attrs = __hexa_parser_sl_1;
     p_pending_max_depth = hexa_sub(hexa_int(0), hexa_int(1));
     HexaVal annot_str = __hexa_parser_sl_1;

@@ -2247,9 +2247,13 @@ fn parse_fn_decl() {
         p_advance()
         ret = parse_type_annotation()
     }
-    let body = parse_block()
-    // M0: consume any pending @attrs into FnDecl.value (comma-separated)
+    // FIX (parser-bug-2026-05-15): capture pending @attrs BEFORE parse_block.
+    // parse_let / parse_stmt clear p_pending_attrs at every body stmt, so the
+    // capture must happen pre-block. p_advance's @no_arena was lost this way
+    // during PHASE 3.B step 3. Mirrors parser.hexa fix.
     let attrs = p_pending_attrs
+    p_pending_attrs = ""
+    let body = parse_block()
     p_pending_attrs = ""
 
     // M0+: consume typed annotations (@cli/@flag/@doc/@schema/@gate/@memo)

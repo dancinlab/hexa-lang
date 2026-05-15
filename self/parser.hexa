@@ -1597,9 +1597,17 @@ fn parse_fn_decl() {
         p_advance()
         ret = parse_type_annotation()
     }
-    let body = parse_block()
-    // M0: consume any pending @attrs into FnDecl.value (comma-separated)
+    // FIX (parser-bug-2026-05-15): capture pending @attrs BEFORE parse_block.
+    // parse_let inside the body resets p_pending_attrs to "" (line 1274) and
+    // parse_stmt does the same at every stmt entry (lines 596, 694). Any fn
+    // whose body contains stmts silently lost its @<attr> annotations because
+    // the capture happened AFTER the block. p_advance's @no_arena vanished
+    // this way during PHASE 3.B step 3.
     let attrs = p_pending_attrs
+    p_pending_attrs = ""
+    let body = parse_block()
+    // Defensive post-block clear (parse_let / parse_stmt already clears, but
+    // this guards against any new stmt kind that forgets to).
     p_pending_attrs = ""
     // τ-bound: reset per-fn macro_depth capture
     p_pending_max_depth = -1

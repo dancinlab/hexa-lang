@@ -928,3 +928,58 @@
   EOF
   status = "filed as follow-up — closes the remaining 1/3 of intended optimization; expected to add another ~2-4 % on codegen_c2.hexa beyond step 3"
   blocker = "self-host re-bootstrap again (parser source change → cc --regen → rebuild)"
+
+# ─── 2026-05-15  PHASE 3.B step 4 — parser bug fix + p_advance @no_arena ──
+
+@A phase3b_step4_patch := "parse_fn_decl captures p_pending_attrs BEFORE parse_block" :: change [d=2026-05-15 ok]
+  files <<~EOF
+    self/parser.hexa     — parse_fn_decl: attrs capture moved before parse_block;
+                           defensive post-block clear retained
+    self/hexa_full.hexa  — mirror of same fix
+  EOF
+  diff_summary <<~EOF
+    let body = parse_block()                    →    let attrs = p_pending_attrs
+    let attrs = p_pending_attrs                       p_pending_attrs = ""
+    p_pending_attrs = ""                              let body = parse_block()
+                                                      p_pending_attrs = ""  // defensive
+  EOF
+  why = "parse_let / parse_stmt clear p_pending_attrs at every body stmt; capture after parse_block returned dropped p_advance's @no_arena (and any future @attr on fns with let-bodies)."
+
+@N phase3b_step4_bootstrap := "two-cycle re-bootstrap to land the fix" :: process [d=2026-05-15 ok]
+  problem = "self-host paradox: parser.hexa fix transpiled by main hexa_v2 — but main hexa_v2 itself has the buggy parse_fn_decl, so it can't see attrs that get cleared. First cc --regen produces hexa_cc.c.new with the fix-source but buggy-codegen output (wrap count 327, p_advance retained)."
+  resolution <<~EOF
+    Cycle 1: cc --regen with buggy hexa_v2  →  hexa_cc.c.new (fix source, buggy codegen)
+             build hexa_v2.cycle1 (fix-source binary)
+    Cycle 2: cc --regen with hexa_v2.cycle1 →  hexa_cc.c.new (fix-codegen — wrap 326)
+             build hexa_v2.cycle2  (final)
+  EOF
+  evidence = "p_advance body in cycle-2 hexa_cc.c lacks __hexa_fn_arena_enter / __hexa_fn_arena_return; wrap count 326 (was 327 in step 3)."
+
+@N phase3b_step4_bench := "10-run bench post step 4 vs step 3" :: measurement [d=2026-05-15 ok]
+  source = "self/codegen_c2.hexa (335 KB)"
+  build = "clang -O2 (1 445 552 B Mach-O)"
+  output_diff = "byte-identical to step 3 codegen"
+  step4_runs = "2.73 · 2.91 · 3.16 · 3.18 · 3.22 · 3.25 · 3.43 · 3.50 · 3.54 · 3.59"
+  stats <<~EOF
+    best-of-10:      2.73 s   (A1 baseline 3.38 s → -19 % / step 3 baseline 2.94 s → -7 %)
+    median (mid-2):  3.235 s  (A1 3.72 s → -13 % / step 3 3.23 s ≈ same)
+    trimmed mean:    3.29 s   (A1 3.68 s → -10.6 % / step 3 fast-cluster 3.15 s ≈ same)
+  EOF
+  distribution_note = "step 4 distribution is stable — no slow outliers as step 3 had (~6.7 s). Same median/mean range, but tighter spread. Likely a function of system load at measurement time rather than the patch."
+  cumulative <<~EOF
+    PHASE 1.6 launch  ≈ 4.96 s
+    step 1            ≈ 4.62 s   (-7 %)
+    step 2 (A1)       ≈ 3.48 s   (-30 % cumulative)
+    step 3            ≈ 3.23 s   (-35 % cumulative)
+    step 4            ≈ 3.235 s  (-35 % cumulative; same median, stable distribution + 7 % best-run win)
+  EOF
+
+@D phase3b_step4_status := "PHASE 3.B step 4 LANDED — parser bug fix completes the @no_arena triad" :: roadmap [d=2026-05-15 active]
+  done <<~EOF
+    - parser.hexa + hexa_full.hexa parse_fn_decl save attrs before parse_block
+    - 2-cycle self-host re-bootstrap (cycle 1 → fix-source binary; cycle 2 → fix-codegen binary)
+    - self/native/hexa_cc.c regen — wrap 327 → 326 (p_advance wrap now suppressed)
+    - self/native/hexa_v2 rebuilt -O2, byte-identical codegen output
+    - backups: /tmp/phase3b-step4-1778833235/{parser.hexa.preStep4, hexa_full.hexa.preStep4, hexa_cc.c.preStep4, hexa_v2.preStep4, hexa_v2.step4final}
+  EOF
+  cumulative_summary = "PHASE 1.6 → step 4 codegen_c2.hexa median: 4.96 s → 3.235 s (-35 %)"
