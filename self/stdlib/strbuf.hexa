@@ -1,0 +1,67 @@
+// self/stdlib/strbuf.hexa — string-builder primitive
+//
+// Why this exists
+// ───────────────
+//
+// hexa-lang strings are immutable; every `acc = acc + chunk` in a loop
+// allocates a fresh `len(acc)+len(chunk)`-byte buffer in the arena.
+// An N-iteration accumulator therefore costs O(N²·avg|chunk|) allocation
+// churn. With HEXA_STR_ARENA=1 (default) those intermediates stay live
+// until the enclosing fn returns; for tool drivers / paste decoders /
+// stream collectors that fn may never return, the arena fills and the
+// runtime memcap (4 GB default) aborts the process. The same trap
+// recurs wherever someone writes the most natural "append to string"
+// idiom — see ~/core/hexa-lang/incoming/patches/
+// string-concat-in-unbounded-loop-quadratic-rss.md for the catalogue
+// (and its predecessor tui-input-paste-buf-quadratic.md).
+//
+// strbuf collects chunks into a flat [string] array and `.join`s once
+// at the end — a single O(total_bytes) allocation, no quadratic blowup.
+// Implementation is intentionally just an aliased [string]; the
+// strbuf_* surface keeps the door open for a future C-level builder
+// without breaking callers.
+//
+// Idiom
+// ─────
+//
+//     use "stdlib/strbuf"
+//     ...
+//     let b = strbuf_new()
+//     while reading {
+//         strbuf_push(b, line)
+//     }
+//     let out = strbuf_finish(b)
+//
+// Mutation through the parameter persists across the call boundary
+// (verified interp + compiled, 2026-05-16) — no return-and-reassign
+// dance is needed at call sites.
+
+// Allocate an empty builder.
+fn strbuf_new() {
+    return []
+}
+
+// Append a chunk. Amortised O(|s|) — backing array geometric growth.
+fn strbuf_push(b, s) {
+    b.push(s)
+}
+
+// Materialise the joined string. Single O(total_bytes) allocation.
+// The buffer is left intact (callers typically discard it).
+fn strbuf_finish(b) {
+    return b.join("")
+}
+
+// Total bytes across all pushed chunks. O(N) in number of chunks
+// (not total bytes). Useful for size-cap checks in stream readers
+// before paying the finish() allocation.
+fn strbuf_len(b) {
+    let mut total = 0
+    for c in b { total = total + len(c) }
+    return total
+}
+
+// Number of chunks pushed so far (independent of byte length).
+fn strbuf_chunks(b) {
+    return len(b)
+}

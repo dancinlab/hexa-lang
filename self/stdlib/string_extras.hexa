@@ -10,6 +10,11 @@
 // str_is_digit, str_is_alpha, str_is_alnum, str_pad_left, str_pad_right,
 // str_to_upper, str_to_lower, str_lines, str_words.
 //
+// String-builder primitive (strbuf_*) lives in its own file —
+// self/stdlib/strbuf.hexa — to keep it importable from compiled paths
+// (this file has a pre-existing codegen issue with str_pad_left →
+// hexa_pad_left, undeclared in runtime.c).
+//
 // All functions are pure and use only builtins + char indexing.
 
 // ── Trim helpers ───────────────────────────────────────────
@@ -283,3 +288,4 @@ fn str_ends_with(s, suffix) {
 fn str_repeat(s, n) {
     return s.repeat(n)
 }
+
