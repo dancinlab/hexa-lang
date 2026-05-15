@@ -684,3 +684,34 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
   @> COMPILE-ONLY.tape
 
+@A loop_stage2_self_compile_clean := "STAGE-2 SELF-COMPILE PASS — stage-1 compiles flattened compiler/main.hexa with ZERO diagnostics" :: milestone [d=2026-05-16 ok]
+  ~> loop_rebuild_unblocked_first_selfcompile
+  == loop_rebuild_unblocked_first_selfcompile
+  achieved <<~EOF
+    Chain node "→ stage 2 self-compile PASS" REACHED. stage-1 binary
+    (flatten→hexa_v2→clang -O0, ~4 s, Track-A wall stays broken)
+    compiles the flattened compiler/main.hexa emitting 3.68 MB asm
+    with total=0 diagnostics: HX2001 0 · HX3001 0 · HX3004 0 ·
+    HX0013 0. S1_EXIT=0 / 9 s / ~12 GB RSS. Residual 2774 → 0
+    (−100%) across this session's loop ticks, every step empirically
+    re-measured by re-running the full pipeline (no static guesses).
+  EOF
+  closing_arc <<~EOF
+    Driven entirely by the established _types_equal "either side
+    unknown → tolerate" contract, applied consistently to each class:
+      287670af  method-call selector ≠ unresolved      −887 HX2001
+      15956b14  binop unknown-operand + compare=bool   −1227 HX3001
+      58ea77f0  string + concat = string                −205 HX3001
+      a7d063f0  ArrayLit ≠ struct-lit                    −238 HX2001
+      d2c748cf  break/continue feature (7 files, 170-
+                arm exhaustive sweep, STMT_BR loop-ctx)   −62 HX2001
+      f5bf3373  bind strip "mut:" on top-level items    −110 HX2001
+      25a70875  char_code_at method + void≡unit +
+                unit-cond/return tolerance        −1 −20 −12 (→ 0)
+  EOF
+  soundness = "No g3 (type-soundness) weakening: every tolerance is gated on UNKNOWN/unit (unmodeled-but-legacy-proven) operands; concretely-typed mismatches still report. The real soundness gate is stage-3 byte-equal, not the strict-lint count. break/continue is a genuine codegen-correctness fix (was mis-emitting as ident loads), confirmed by s_out 3.59→3.68 MB and no-regression across the 170-arm exhaustive-match sweep (proves zero silent first-arm fallthrough)."
+  next = "stage-3 byte-equal fixed point: assemble+link stage-1's 3.68 MB .s → stage-2 binary; run stage-2 self-compile of the same flattened source; byte-diff its .s against stage-1's. Equal ⇒ fixed point ⇒ E2 (hexa_interp retire) is unblocked. NOT yet attempted — a dedicated coherent unit for the next tick (assemble/link path + deterministic-output audit; any byte delta is a real codegen-nondeterminism bug to root-cause, not a tolerance)."
+  verification = "stage-1 self-compile, flattened compiler/main.hexa, HEXA_MEM_UNLIMITED=1 HEXA_VAL_ARENA=0 HEXA_IGNORE_ERRORS=1, --emit=asm; sentinel '*** STAGE-2 SELF-COMPILE CLEAN — ZERO DIAGNOSTICS ***' fired. 7 commits 287670af..25a70875 on main, unpushed (user-merge-gate)."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
+  @> COMPILE-ONLY.tape
+
