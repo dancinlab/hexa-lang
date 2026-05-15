@@ -1,0 +1,92 @@
+// test/convergence_cluster_smoke.hexa — smoke for symbolic/convergence_cluster.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference behaviour from archive-TECS-L/convergence_engine.py
+// ConvergenceCluster (.add / .get_convergence_points / score):
+//   threshold 0.001. Add 1.0@d0, 1.0005@d1, 1.0003@d2, 5.0@d0, 1.0002@d0:
+//     → 2 clusters. cluster0: 4 paths (3 distinct domains {0,1,2}),
+//       center = running mean = 1.00025 ; cluster1: the 5.0 outlier.
+//   independent_domains(c0)=3 → convergence point at min_domains=3,
+//     not at min_domains=4.
+//   score(c0, target=1.0): err=0.00025 → base=−log10(err)≈3.602,
+//     domain_bonus=(3−1)·20=40, no exact bonus → ≈ 43.602.
+//   convergence_points(min=3)=1 cluster; (min=2)=1 cluster.
+//   A perfectly-coincident 3-domain cluster (err→0) gets the +50 exact bonus.
+//
+// Run:  hexa run test/convergence_cluster_smoke.hexa
+// Sentinel: __CVC_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/convergence_cluster.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+fn approx(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    if d < 0.0 { return (0.0 - d) < tol }
+    return d < tol
+}
+
+// ── online clustering + running-mean recenter ───────────────────────────
+let mut cs = new_cluster_set(0.001)
+cs = cluster_add(cs, 1.0, 0)
+cs = cluster_add(cs, 1.0005, 1)
+cs = cluster_add(cs, 1.0003, 2)
+cs = cluster_add(cs, 5.0, 0)
+cs = cluster_add(cs, 1.0002, 0)
+
+check("2 clusters formed (1.000x group + 5.0 outlier)", len(cs.clusters) == 2)
+
+let c0 = cs.clusters[0]
+let c1 = cs.clusters[1]
+check("cluster0 has 4 paths", c0.count == 4)
+check("cluster0 center == running mean 1.00025", approx(c0.center, 1.00025, 0.000001))
+check("cluster1 is the 5.0 outlier (1 path)", c1.count == 1 && approx(c1.center, 5.0, 0.000001))
+
+// ── strict independent-domain count ─────────────────────────────────────
+check("independent_domains(c0) == 3 ({0,1,2})", independent_domains(c0) == 3)
+check("independent_domains(c1) == 1", independent_domains(c1) == 1)
+check("c0 is convergence point @ min=3", is_convergence_point(c0, 3))
+check("c0 NOT convergence point @ min=4", !is_convergence_point(c0, 4))
+check("c1 NOT convergence point @ min=2", !is_convergence_point(c1, 2))
+
+// ── deterministic score ─────────────────────────────────────────────────
+check("score(c0, target=1.0) ≈ 43.602 (base 3.602 + 2·20)",
+      approx(convergence_score(c0, 1.0), 43.602, 0.05))
+
+// exact-coincidence cluster gets the +50 exact bonus
+let mut cs2 = new_cluster_set(0.001)
+cs2 = cluster_add(cs2, 2.5, 0)
+cs2 = cluster_add(cs2, 2.5, 1)
+cs2 = cluster_add(cs2, 2.5, 2)
+let e0 = cs2.clusters[0]
+check("exact 3-domain cluster: indep == 3", independent_domains(e0) == 3)
+check("score(exact, target=2.5) >= 90 (exact bonus +50 + domain 40)",
+      convergence_score(e0, 2.5) >= 90.0)
+
+// ── convergence_points filter ───────────────────────────────────────────
+check("convergence_points(min=3) → 1 cluster", len(convergence_points(cs, 3)) == 1)
+check("convergence_points(min=2) → 1 cluster", len(convergence_points(cs, 2)) == 1)
+check("convergence_points(min=4) → 0 clusters", len(convergence_points(cs, 4)) == 0)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  convergence_cluster smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__CVC_SMOKE__ FAIL")
+} else {
+    println("__CVC_SMOKE__ PASS")
+}
