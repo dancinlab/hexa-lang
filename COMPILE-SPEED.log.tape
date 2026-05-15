@@ -204,3 +204,50 @@
   EOF
   estimated_loc_change = "6 lines"
   proposal = "PHASE 1.2.B: separate focused commit. Apply patches, then bench LINK on hexa_cc.c. Expect link clean + same compile-only speedup factor."
+
+# ─── 2026-05-15  PHASE 1.2.B — 6 de-statics applied + link validated ─
+
+@A phase_1_2_b_done := "PHASE 1.2.B execution result" :: measurement [d=2026-05-15 ok]
+  step = "[@phase_1_2_a_link_pending] resolved — 6 de-statics applied as one focused commit (ddd7ffb1) isolated from pre-existing unstaged work via tempfile-stash technique"
+  commit = "ddd7ffb1"
+  patches_applied <<~EOF
+    self/runtime.c — 6 hunks, 19 insertions / 6 deletions:
+      __hx_to_double           drop `static inline` (loses inlining for cross-TU; acceptable)
+      g_hexa_ic_hits           drop `static`
+      g_hexa_ic_stats_enabled  drop `static`
+      hexa_map_get_ic_slow     drop `static`
+      __hexa_try_top           drop `static`
+      hexa_add_slow            drop `static`
+  EOF
+  link_validation <<~EOF
+    hexa_cc.c (21 763 LOC) via runtime.h + runtime.o:
+      compile:  0 errors
+      link:     0 errors (3 trigraph warnings — pre-existing in source)
+      run:      ./hexa_cc_h_bin /tmp/hello.hexa /tmp/hello.c → exit 0, valid 17-line C output
+  EOF
+  bench_e2e <<~EOF
+    Big-program full compile+link wall:
+      baseline (#include "runtime.c"):  real 17.33 s · user 5.40 s
+      new (runtime.h + runtime.o):      real 17.57 s · user 4.82 s
+      user-time speedup: 1.12×
+      wall basically unchanged — link phase dominates and didn't change.
+
+    Tiny-program (test_tiny2.hexa) carry-over from 1.2.A:
+      baseline:  user 0.62 s · wall 1.07 s
+      new:       user 0.08 s · wall 0.13 s
+      speedup: 7.8× user / 8.2× wall
+  EOF
+  interpretation <<~EOF
+    The win is real on small programs (LSP/test/REPL/`hexa run` workflows)
+    where runtime.c was ~99% of compile cost. On the giant self-host case
+    the link phase is the new bottleneck (wall ~13 s of the 17.57 s total
+    is ld stitching all the runtime.o + user.o symbols). Per-program LOC
+    determines whether we see 7.8× or 1.1×.
+
+    Architecture fully validated end-to-end through hexa_cc.c. No further
+    de-statics needed (the audit surface is now empirically closed). PHASE
+    1.3 (patch hexa_v2 codegen to emit `#include "runtime.h"` by default)
+    is the next leverage point — flips every `hexa run`/test into the new
+    fast path automatically.
+  EOF
+  next = "PHASE 1.3 — hexa_v2 codegen patch: emit `#include \"runtime.h\"` instead of `#include \"runtime.c\"`. Plus driver patch (PHASE 1.4) to sha256-cache runtime.o once."
