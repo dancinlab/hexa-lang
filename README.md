@@ -150,6 +150,17 @@ hx list                                # what's installed under ~/.hx/bin/
 
 The interpreter is intentionally slower than the compiled path — every release-grade build goes through `hexa build`. `hexa run` exists for stage0 bootstrap and per-file scripting.
 
+### Compile speed
+
+`hexa cc` now emits `#include "runtime.h"` by default and the precompiled `runtime.o` is linked instead of re-codegened per build. On bench/*: 28-program avg **8.41× user-time** vs the old `#include "runtime.c"` path (peak 17.25× on small-to-medium user code where `runtime.c` was the dominant per-build cost). Repro: `bin/hexa-fast bench <file>.hexa`. Full history at [`COMPILE-SPEED.tape`](COMPILE-SPEED.tape) (architecture) and [`COMPILE-SPEED.log.tape`](COMPILE-SPEED.log.tape) (measurement events).
+
+```bash
+bin/hexa-fast <src.hexa> <bin>          # explicit compile (uses runtime.h + runtime.o cache)
+bin/hexa-run  <src.hexa> [args...]      # compile-or-reuse-cached + exec (drop-in for `hexa run`)
+bin/hexa-fast bench <src.hexa>          # show baseline vs new-path A/B for any file
+bin/hexa-fast clean                     # wipe ~/.hexa-cache
+```
+
 * * *
 
 ## Architecture (the cooking metaphor)
