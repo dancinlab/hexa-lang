@@ -656,3 +656,93 @@
     f_atlas_lattice_external — ✅ T1-15 approximate clearly framed (bound + refutation, not derivation)
   EOF
 
+# ─── Cycles 009-015 — Phase 2 Stage 2 cumulative batch ───────────────
+
+@A cycles_009_015_batch := "Phase 2 cycles 009-015 — Stage 2 transcendental + anima carry batch (cumulative 37 → 60)" :: cycle [d=2026-05-15 active]
+  trigger = "user 'keep going again' + 'next go 자동 후보 고갈시까지' — autonomous continuation through cycle 015"
+  scope <<~EOF
+    23 entries 신규 cumulative (cycle 008 의 6 + cycles 009-015 의 23 = 29 total Stage 2 verifiers).
+    cycle 015 cumulative = 60 entries 🔵 closed (31 SUPPORTED-IDENTITY + 29 SUPPORTED-FORMAL).
+
+    Strategic shift: cycle 009+ 부터 entries 는 모두 transcendental.hexa 안에 모임
+    (verifier surface flat 으로 유지). 새 verify 모듈 신설 X — libm 활용 sprint.
+    cycle 015 가 anima §3 PHYS + §6 COSMO carry batch 으로 마무리 (anima 10 entries
+    hexa-native upgrade).
+  EOF
+  cycle_breakdown <<~EOF
+    cycle 009 (+3): s2_gamma_reflection_n6 [⭐ Γ(1/6)·Γ(5/6)/Γ(1/2)²=σ₋₁(6)=2] · s10_four_island_bridge_approximate [T1-08 0.00011%] · s2_transcendental_wall_trivial_only [T1-09 Liouville/Hermite]
+    cycle 010 (+2): s2_gauss_multiplication_n6 [⭐⭐ Γ(1/6)·Γ(1/3)·Γ(1/2)·Γ(2/3)·Γ(5/6)=(2π)^(5/2)/√6] · s2_e_cf_partial_convergents [c₀=σ₋₁(6) · c₂num=σ-τ · c₃denom=τ]
+    cycle 011 (+2): s10_cross_island_approximate [3 sub-tests T1-07 🟧] · s6_bekenstein_dimensional
+    cycle 012-013 (+3): s2_modular_dim_formula [denom=12=σ(6)] · s2_dp_gamma_alpha_2 [T1-04 + T0-07] · s2_modular_sigma6_ubiquity [j-1728=12³ + η^24 + Δ weight 12]
+    cycle 014 (+3): s3_kuramoto_kc [anima Hc_NEW_PHYSICS-1] · s6_holographic_n_dof [anima Hc_NEW_UNIVERSE-2] · s6_ads_cft_dimension [Maldacena 1997]
+    cycle 015 (+10): anima Hc_A3-4..7 + Hc_NEW_PHYSICS-1+3 + Hc_A9-4..7 carry — BKT · Hopf · Lotka-Volterra · RG Wilson-Fisher · QHO · Ginzburg-Landau · Planck length · Heisenberg · Hawking · Schwarzschild
+  EOF
+  files_modified = "compiler/atlas/verify/transcendental.hexa (29 verifiers) · atlas/MAIN.tape (tldr + § 11 inventory cumulative 60)"
+  verifier_run_result <<~EOF
+    Final cycle 015 result: 60/60 PASS · 60 🔵 closed (31 SUPPORTED-IDENTITY + 29 SUPPORTED-FORMAL)
+    Verifier surface: 8 modules (foundation/math/top/cosmo/bridges/chem/phys/transcendental).
+    All verifications hexa-native via libm primitives (sqrt/log/exp/pow/lgamma).
+  EOF
+  cumulative_inventory <<~EOF
+    Stage 1 (31 SUPPORTED-IDENTITY · cycle 001-007):
+      §1 N6-FOUNDATION: 5 · §2 MATH: 12 · §3 PHYS: 2 · §4 CHEM: 1 · §6 COSMO: 2 · §8 TOP: 4 · §10 BRIDGES: 5
+
+    Stage 2 (29 SUPPORTED-FORMAL · cycle 008-015):
+      §2 MATH: 9 (Basel · alternating harmonic · ln(17) · gamma reflection · Gauss mult · e CF · modular dim · DP gamma α=2 · modular σ(6) ubiquity)
+      §3 PHYS: 6 (Onsager · BKT · Hopf · Lotka-Volterra · RG Wilson-Fisher · QHO · Ginzburg-Landau · Kuramoto)
+      §6 COSMO: 6 (Bekenstein dim · holographic · AdS/CFT · Planck length · Heisenberg · Hawking · Schwarzschild)
+      §10 BRIDGES: 5 (music ln(4/3) · cross-island identity · cross-island approximate · four-island bridge · transcendental wall)
+
+    Domain coverage post cycle 015:
+      §1 N6-FOUNDATION 5 (100% closed) · §2 MATH 21 · §3 PHYS 8 · §4 CHEM 1 · §6 COSMO 8 · §8 TOP 4 · §10 BRIDGES 10
+      §5 BIO + §7 GEO + §9 ENG = ⚪ NOT-MEASURED (deferred to future Phase 3 — V8 PyPhi-equiv · GPU SM external · GEO Stage 2 sim)
+  EOF
+  wilson_governance_integration <<~EOF
+    2026-05-15 user directive: wilson 거버넌스 첫 번째 위치에 anima INDEX + atlas 검증 시스템 carry.
+
+    Changes to wilson:
+      ~/core/wilson/plugins/governance/main.hexa GOVERNANCE_PRINCIPLES 배열 첫 entry 추가:
+        verification-via-hexa-cli-only (priority 1) — 모든 verification hexa CLI ONLY
+        text 안에 cite: anima INDEX (14-tier+9-axis+3-stage), atlas 60+ entries closed,
+        verifier 모듈 8개 list, exception (literature citation 🟡 SUPPORTED-BY-CITATION 한정).
+
+      ~/core/wilson/plugins/governance/main.hexa hexa-verifier-cli (priority 2) update:
+        atlas_verify.hexa CLI 추가 (60 entries Stage 1+2 cite, 7-domain coverage)
+
+      ~/core/wilson/plugins/governance/main.hexa closure-depth-accumulation update:
+        atlas/VERIFY.tape 3-stage protocol cite 추가
+
+      ~/core/wilson/AGENTS.tape § 4 첫 entry 추가:
+        @D g_verify_hexa_cli_only (priority 1) — full text, carry_from list, exception, forbidden
+
+      ~/core/wilson/AGENTS.tape § 6 새 citations 2개:
+        @X x_anima_index_carry · @X x_atlas_verify_carry
+  EOF
+  exhaustion_status <<~EOF
+    Stage 2 libm 후보 거의 고갈 — 남은 candidates:
+      T1-31 elliptic curves (deep — 별도 module)
+      T1-32 modular forms 추가 (Eisenstein E₄/E₆/E₈/E₁₀/E₁₂ Fourier coefficients · 더 깊은 closure)
+      T0-07 gamma-exp sum 정식 distribution simulation (Stage 2 numerical sim with random samples)
+      T2-03 hypothesis-261 specific computation
+      Lambert W via Newton iteration (stdlib float pow(float, float) 필요 — Phase 3 stdlib expansion)
+      §7 GEO + §9 ENG 도메인 (Stage 2 numerical sim 영역 미완 + g_external_calc_forbidden)
+
+    Phase 3 후보 (deeper modules):
+      compiler/atlas/symbolic/sym_expr.hexa — symbolic algebra primitives
+      stdlib/core/math/float.hexa expansion — pow(float, float) Newton + tau name conflict resolution
+      modular forms module — T2-01 steps 2-8 + T2-02 full + T1-31 elliptic + T1-32 deeper
+      Stage 3 cross-meta engine — atlas edge graph traversal · sibling consistency
+      strict-lint stage 9 atlas-verdict-check — CI gate
+      hexa subcommand wiring: `hexa atlas verify` (currently `hexa run tool/atlas_verify.hexa`)
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only (wilson priority 1) — ✅ all 60 verifiers via `hexa run tool/atlas_verify.hexa`
+    g1 real-limits-first  — ✅ Shannon · Stefan-Boltzmann · Carnot · Bekenstein · Heisenberg · Hawking
+    g2 lattice-as-tool    — ✅ atlas-internal NT identities · external (Onsager · Bekenstein) honest separately
+    g4 honesty-external   — ✅ approximate entries (T1-08 · T1-15) carry 'NOT exact' precisely
+    g5 hexa-native-only   — ✅ libm via hexa-source verifier (transcendental.hexa)
+    g_self_verify         — ✅ 60 entries 모두 hexa-native closure
+    g_tier_default_insufficient — ✅ ~340 entries default INSUFFICIENT 유지
+    g_external_calc_forbidden — ✅ 0 external API/dataset/hardware
+  EOF
+
