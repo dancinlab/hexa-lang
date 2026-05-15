@@ -25,7 +25,12 @@ usage() {
     cat <<EOF >&2
 usage:
   hexa-fast <input.hexa> <output-binary>     compile only
-  hexa-fast run <input.hexa> [args...]       compile + exec (with cached binary)
+  hexa-fast run <input.hexa> [args...]       compile + exec (cached binary)
+  hexa-fast bench <input.hexa>               A/B baseline vs runtime.h path
+  hexa-fast clean                            wipe ~/.hexa-cache
+
+  hexa-run is a symlink that auto-implies `run`:
+  hexa-run <input.hexa> [args...]            same as: hexa-fast run …
 
 env:
   HEXA_FAST_CFLAGS   clang flags (default: -O0)
@@ -46,10 +51,24 @@ RUNTIME_C="$REPO_ROOT/self/runtime.c"
 RUNTIME_H="$REPO_ROOT/self/runtime.h"
 CACHE_DIR="${HEXA_CACHE_DIR:-$HOME/.hexa-cache}"
 CFLAGS="${HEXA_FAST_CFLAGS:--O0}"
-mkdir -p "$CACHE_DIR"
+
+# `clean` doesn't need runtime.o; check it first so we don't build-then-wipe.
+if [ "${1:-}" = "clean" ]; then
+    if [ -d "$CACHE_DIR" ]; then
+        count=$(find "$CACHE_DIR" -maxdepth 1 -mindepth 1 | wc -l | tr -d ' ')
+        find "$CACHE_DIR" -maxdepth 1 -mindepth 1 -exec rm -rf {} +
+        echo "hexa-fast: wiped $count cache entr$([ "$count" = 1 ] && echo y || echo ies) from $CACHE_DIR"
+    else
+        echo "hexa-fast: nothing to clean ($CACHE_DIR does not exist)"
+    fi
+    exit 0
+fi
 
 [ -x "$HEXA_V2" ] || { echo "hexa-fast: missing $HEXA_V2" >&2; exit 1; }
 [ -f "$RUNTIME_H" ] || { echo "hexa-fast: missing $RUNTIME_H" >&2; exit 1; }
+
+# All non-clean subcommands need the cache dir.
+mkdir -p "$CACHE_DIR"
 
 # runtime.o cache keyed by sha256(runtime.c).
 RT_SHA=$(shasum -a 256 "$RUNTIME_C" | awk '{print $1}')
@@ -105,6 +124,37 @@ deep_hash() {
 }
 
 case ${1:-} in
+    bench)
+        shift
+        [ $# -eq 1 ] || usage
+        SRC=$1
+        [ -f "$SRC" ] || { echo "hexa-fast: no such file: $SRC" >&2; exit 1; }
+        # baseline: legacy `#include "runtime.c"` path
+        BL_C="${TMPDIR:-/tmp}/hexa-bench-baseline-$$.c"
+        BL_BIN="${TMPDIR:-/tmp}/hexa-bench-baseline-$$.bin"
+        trap 'rm -f "$BL_C" "$BL_BIN"' EXIT
+        "$HEXA_V2" "$SRC" "$BL_C" >/dev/null
+        # warm any disk caches
+        clang $CFLAGS -o "$BL_BIN" "$BL_C" -I"$REPO_ROOT/self" 2>/dev/null
+        baseline_user=$( { /usr/bin/time -p clang $CFLAGS -o "$BL_BIN" "$BL_C" -I"$REPO_ROOT/self" 2>&1 1>/dev/null ; } 2>&1 | awk '/^user/{print $2}')
+        # new path: runtime.h + cached runtime.o
+        NEW_BIN="${TMPDIR:-/tmp}/hexa-bench-new-$$.bin"
+        build "$SRC" "$NEW_BIN" 2>/dev/null  # warm
+        new_user=$( { /usr/bin/time -p bash -c "
+            $HEXA_V2 '$SRC' '$BL_C' >/dev/null
+            sed -i.bak 's|#include \"runtime.c\"|#include \"runtime.h\"|' '$BL_C'
+            clang $CFLAGS -o '$NEW_BIN' '$BL_C' '$RT_O' -I'$REPO_ROOT/self'
+        " 2>&1 1>/dev/null ; } 2>&1 | awk '/^user/{print $2}')
+        rm -f "$NEW_BIN" "$BL_C.bak"
+        # report
+        bytes=$(wc -c <"$SRC")
+        speedup=$(awk -v b=$baseline_user -v n=$new_user 'BEGIN{ if (n>0) printf "%.2fx", b/n; else print "n/a" }')
+        printf "src        : %s (%d bytes)\n" "$SRC" "$bytes"
+        printf "baseline   : %s s user  (clang + #include runtime.c)\n" "$baseline_user"
+        printf "new path   : %s s user  (clang + runtime.h, runtime.o cached)\n" "$new_user"
+        printf "speedup    : %s\n" "$speedup"
+        exit 0
+        ;;
     run)
         shift
         [ $# -ge 1 ] || usage
