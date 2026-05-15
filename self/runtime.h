@@ -207,6 +207,23 @@ void    hexa_arena_reset(void);                       /* runtime.c:3076 */
 /* array lifecycle */
 HexaVal hexa_array_free(HexaVal arr);                 /* runtime.c:7182 */
 
+/* ── slice family (codegen-emitted, impl in runtime.c) ─────────────
+ * codegen_c2.hexa lowers array `.slice`/`.slice_fast` (lines 2909-2913,
+ * 4738-4742, 4937), `str.slice` (cg_string_sym "str_slice", line 327),
+ * and `tensor_slice` (lines 3542-3543, 4352) to direct `hexa_*` calls.
+ * The C impls exist (runtime.c:6964/1931/6954/11456) and were
+ * forward-declared ONLY in runtime.c (lines 820/822/838/860) — never
+ * in runtime.h. The AOT-generated user.c TU only `#include "runtime.h"`,
+ * so clang implicit-int'd them → `assigning to 'HexaVal' from
+ * incompatible type 'int'` on any build transitively using them
+ * (anima HEXAD/CHAT/chat_lib.hexa:2455 `ids.slice(0, nids-1)` blocker).
+ * Decl-only, additive; signatures byte-match the runtime.c forward-decls.
+ * Same root-cause class + fix shape as the safetensors_mmap_* decls. */
+HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end);      /* runtime.c:6964 */
+HexaVal hexa_array_slice_fast(HexaVal arr, HexaVal start, HexaVal end); /* runtime.c:1931 */
+HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end);          /* runtime.c:6954 */
+HexaVal hexa_tensor_slice(HexaVal a, HexaVal lo, HexaVal hi);           /* runtime.c:11456 */
+
 /* container indexing */
 HexaVal hexa_index_get(HexaVal container, HexaVal key); /* runtime.c:2643 */
 HexaVal hexa_array_pop(HexaVal arr);                    /* runtime.c:3878 */
