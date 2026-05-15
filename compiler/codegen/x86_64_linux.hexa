@@ -649,6 +649,42 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
             return buf
         }
+        // struct_lit constructor (map-backed). MIR args =
+        //   [type_str, k0_str, v0, k1_str, v1, ...] (2a790d85).
+        // dst = hexa_map_new(); per field hexa_map_set(dst, key, val).
+        // key resolves to a .rodata label = const char* (exactly the
+        // hexa_map_set key ABI — no HexaVal wrap); val is a HexaVal.
+        // type_str (args[0]) is carried for a later typed-struct tag;
+        // map-backed v1 ignores it. Bounded by source field count.
+        // Runtime-call shape parity with array_lit/concat; rebuild-
+        // verification deferred (Track-A clang wall).
+        if s.op == "struct_lit" && len(s.args) >= 1 {
+            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            buf.push(_x86_instr1("call", _x86_op_label("hexa_map_new"),
+                             "struct_lit: new map"))
+            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                             "struct_lit: capture new map"))
+            let mut i = 1
+            while i + 1 < len(s.args) {
+                buf = _x86_op_rm(buf, s.args[i], st, rm, "r10")
+                let key = _x86_op_resolve(s.args[i], st, rm, "r10")
+                buf = _x86_op_rm(buf, s.args[i + 1], st, rm, "r11")
+                let val = _x86_op_resolve(s.args[i + 1], st, rm, "r11")
+                buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), key,
+                                 "struct_lit: field key"))
+                buf.push(_x86_instr2("mov", _x86_op_reg("rdx"), val,
+                                 "struct_lit: field val"))
+                buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), dst,
+                                 "struct_lit: map arg"))
+                buf.push(_x86_instr1("call", _x86_op_label("hexa_map_set"),
+                                 "struct_lit: set field"))
+                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                                 "struct_lit: recapture map"))
+                i = i + 2
+            }
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            return buf
+        }
         if len(s.args) >= 1 {
             let mut src_scratch = "r10"
             if _x86_is_spilled(rm, s.dst.id) { src_scratch = "r11" }
