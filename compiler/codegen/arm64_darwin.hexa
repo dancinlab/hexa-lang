@@ -639,6 +639,31 @@ fn _arm64_op_rm(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
             out = _arm64_load_spill(out, rm, o.local_id, scratch)
         }
     }
+    // const_str / global → PC-relative address materialization. ARM64
+    // cannot use a label as a bare mov/cmp operand; the address must be
+    // built with adrp(@PAGE) + add(@PAGEOFF) into a register. Without
+    // this every string/global ref emitted `mov xN,.LCstrM` /
+    // `cmp xN,.LCstrM` — 3368 of the 3578 stage-1-.s assembler errors.
+    // _arm64_op_resolve returns reg(scratch) for these (address built
+    // here). Labels render verbatim via emit/asm _fmt_label.
+    if o.kind == "const_str" {
+        let cl = _arm64_strtab_lookup(st, o.str_val)
+        let mut nm = cl
+        if len(nm) == 0 { nm = o.str_val }
+        out.push(_arm64_instr2("adrp", _arm64_op_reg(scratch),
+                         _arm64_op_label(nm + "@PAGE"), "addr page: " + nm))
+        out.push(_arm64_instr3("add", _arm64_op_reg(scratch),
+                         _arm64_op_reg(scratch),
+                         _arm64_op_label(nm + "@PAGEOFF"), "addr off: " + nm))
+    }
+    if o.kind == "global" {
+        let gl = "g" + to_string(o.global_id)
+        out.push(_arm64_instr2("adrp", _arm64_op_reg(scratch),
+                         _arm64_op_label(gl + "@PAGE"), "addr page: " + gl))
+        out.push(_arm64_instr3("add", _arm64_op_reg(scratch),
+                         _arm64_op_reg(scratch),
+                         _arm64_op_label(gl + "@PAGEOFF"), "addr off: " + gl))
+    }
     return out
 }
 
@@ -651,12 +676,11 @@ fn _arm64_op_resolve(o: Operand, st: ArmStrTab, rm: RegMap,
         return _arm64_op_reg(_arm_reg_lookup(rm, o.local_id))
     }
     if o.kind == "const_int" { return _arm64_op_imm(o.int_val) }
-    if o.kind == "global"    { return _arm64_op_label("g" + to_string(o.global_id)) }
-    if o.kind == "const_str" {
-        let lbl = _arm64_strtab_lookup(st, o.str_val)
-        if len(lbl) > 0 { return _arm64_op_label(lbl) }
-        return _arm64_op_label(o.str_val)
-    }
+    // global / const_str: address already materialized into `scratch`
+    // by _arm64_op_rm (adrp+add). Return the register, not the label —
+    // emitting the bare label is invalid ARM64.
+    if o.kind == "global"    { return _arm64_op_reg(scratch) }
+    if o.kind == "const_str" { return _arm64_op_reg(scratch) }
     return _arm64_op_imm(0)
 }
 
