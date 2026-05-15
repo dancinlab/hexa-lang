@@ -18,7 +18,7 @@
 @I a_inherit := "atlas-area governance inheritance" :: identity-claim [d=2026-05-15 active]
   rule = "atlas/ 디렉토리는 project-level ../AGENTS.tape g1~g8 + LATTICE_POLICY.md + HEXA-NATIVE-ONLY.md 의 모든 거버넌스를 inherit. 본 파일은 atlas-area specific 추가/특화 만 정의."
   why = "single-source governance — atlas 만의 별도 룰 만들지 말고 project 룰 carry"
-  apply = "atlas/MAIN.tape verdict entry 작성 시 g1 (real-limits-first) · g2 (lattice-as-tool) · g4 (honesty-obligation-external) · g5 (hexa-native-only) · g6 (citation-enforced) · g7 (incoming-patches-pipeline) · g_arch_vs_log_split 모두 자동 적용"
+  apply = "atlas/MAIN.tape verdict entry 작성 시 g1 (real-limits-first) · g2 (lattice-as-tool) · g4 (honesty-obligation-external) · g5 (hexa-native-only) · g6 (citation-enforced) · g7 (inbox-patches-pipeline) · g_arch_vs_log_split 모두 자동 적용"
 
 # ─── §2 anima g1~g8 carry (atlas adaptation) ─────────────────────────
 
@@ -60,9 +60,9 @@
   apply = "MAIN.tape verdict entry body 의 formula 는 atlas entry id 로 cite (e.g. evidence = 'σ(6)=12 [@P sigma]'). bare formula 거부."
   authority = "../SPEC.md"
 
-@D g7 := "incoming-patches-pipeline (atlas)" :: governance [required carry-from:anima]
-  rule = "atlas 외부 (downstream wilson/echoes/anima · external contributor) 의 새 verdict 제출은 atlas/incoming/<descriptive-name>.md (한 개념 = 한 파일) 통과."
-  flow = "[downstream consumer 또는 external] → atlas/incoming/ → reviewer verdict tier 부여 + falsifier ≥5 → atlas/MAIN.tape 의 해당 § 도메인 append → atlas/MAIN.log.tape append (Phase 3)"
+@D g7 := "inbox-patches-pipeline (atlas)" :: governance [required carry-from:anima]
+  rule = "atlas 외부 (downstream wilson/echoes/anima · external contributor) 의 새 verdict 제출은 atlas/inbox/<descriptive-name>.md (한 개념 = 한 파일) 통과."
+  flow = "[downstream consumer 또는 external] → atlas/inbox/ → reviewer verdict tier 부여 + falsifier ≥5 → atlas/MAIN.tape 의 해당 § 도메인 append → atlas/MAIN.log.tape append (Phase 3)"
   forbidden = "consumer 또는 external 가 atlas/MAIN.tape 직접 편집"
 
 @D g8 := "commit-trailer-co-author" :: governance [recommended carry-from:anima]

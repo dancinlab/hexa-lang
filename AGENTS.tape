@@ -59,7 +59,7 @@
 @I id002 := "hexa-lang.upstream-position" :: identity-claim [d=2026-05-14 active]
   <: id001
   rule = "hexa-lang is the bottom of the dancinlab dependency stack — downstream projects (wilson, echoes, anima, hexa-*) consume; nothing imports from them"
-  apply = "when wilson hits a hexa-lang gap, the patch goes to ~/core/hexa-lang/incoming/patches/<descriptive-name>.md (one concept per file), then to upstream — never inline-patched from the consumer"
+  apply = "when wilson hits a hexa-lang gap, the patch goes to ~/core/hexa-lang/inbox/patches/<descriptive-name>.md (one concept per file), then to upstream — never inline-patched from the consumer"
 
 # ─── §2 Repo layout ──────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@
   LATTICE_POLICY.md -> "project-local copy of dancinlab-wide real-limits standard"
   LIMIT_BREAKTHROUGH.md -> "project-specific limits + breakthrough audit"
   TAPE-AUDIT.md -> "tape v1.x adoption ledger for this repo"
-  incoming/patches/ -> "external-contributed patch markdowns (one concept per file)"
+  inbox/patches/ -> "external-contributed patch markdowns (one concept per file)"
 
 # ─── §3 Governance rules ─────────────────────────────────────────────
 
@@ -115,10 +115,10 @@
   authority = "[@x_spec]"
   @> AGENTS.md
 
-@D g7 := "incoming-patches-pipeline" :: governance [required]
-  rule = "External patches arrive at incoming/patches/<descriptive-name>.md — one concept per file."
-  flow = "[downstream consumer] → file at incoming/patches/ → upstream review → integration to self/ + RFC log"
-  forbidden = "downstream consumers (wilson, echoes) editing hexa-lang directly without going through incoming/patches/"
+@D g7 := "inbox-patches-pipeline" :: governance [required]
+  rule = "External patches arrive at inbox/patches/<descriptive-name>.md — one concept per file."
+  flow = "[downstream consumer] → file at inbox/patches/ → upstream review → integration to self/ + RFC log"
+  forbidden = "downstream consumers (wilson, echoes) editing hexa-lang directly without going through inbox/patches/"
   @> AGENTS.md
 
 @D g8 := "commit-trailer-co-author" :: governance [recommended]
@@ -152,7 +152,7 @@
   exception = "fallback C emission (already exists for portability) — but not part of the architecture spec"
 
 @F f3 := "consumer-direct-edit" :: governance [required deny:write]
-  pattern = "wilson / echoes / anima / hexa-* consumer repo editing hexa-lang directly without going through incoming/patches/"
+  pattern = "wilson / echoes / anima / hexa-* consumer repo editing hexa-lang directly without going through inbox/patches/"
   why = "upstream-downstream invariant; one-way flow per [@x_handoff]"
 
 # ─── §5 External citations ───────────────────────────────────────────
@@ -176,7 +176,7 @@
 
 @X x_handoff := "wilson AGENTS.tape g7 hexa-lang-handoff-protocol" :: principle [d=2026-05-14 active]
   url = "https://github.com/dancinlab/wilson/blob/main/AGENTS.tape"
-  scope = "downstream-to-upstream patch flow — wilson, echoes, anima file at incoming/patches/"
+  scope = "downstream-to-upstream patch flow — wilson, echoes, anima file at inbox/patches/"
 
   scope = "honest-caveat origin · forbidden lattice-fit on external entities"
 
@@ -207,8 +207,8 @@
 @N n2 := "atlas-binding-citation" :: note [active]
   text = "Every theorem-bearing line must @cite the atlas. Strict-lint stage 4 rejects formula code without a citation marker."
 
-@N n3 := "incoming-patches-from-consumers" :: note [active]
-  text = "wilson, echoes, anima, getting-started, hexa-* family — all file upstream patch requests at incoming/patches/<descriptive>.md, one concept per file. Emoji '넣었다' marks delivery."
+@N n3 := "inbox-patches-from-consumers" :: note [active]
+  text = "wilson, echoes, anima, getting-started, hexa-* family — all file upstream patch requests at inbox/patches/<descriptive>.md, one concept per file. Emoji '넣었다' marks delivery."
 
 @N n_log_separation := "hexa-lang specific" :: note [active]
   text = "hexa-lang's stdlib/RFC/codegen progress lands as commits — each commit hook should append @A entries to per-domain .log.tape (e.g. CODEGEN.log.tape, STDLIB.log.tape) rather than mutating the architecture .tape files."
@@ -216,7 +216,7 @@
 # ─── §7 Generator hooks ──────────────────────────────────────────────
 
 @H h1 := "agents-md-replaced" :: generator [active]
-  note = "AGENTS.md (54-line wrapper) replaced by this AGENTS.tape — LATTICE_POLICY rules are now @D g1..g4, hexa-native-only is g5, citation-enforced is g6, incoming-patches is g7."
+  note = "AGENTS.md (54-line wrapper) replaced by this AGENTS.tape — LATTICE_POLICY rules are now @D g1..g4, hexa-native-only is g5, citation-enforced is g6, inbox-patches is g7."
   fallback = "tape_to_agents_md (planned) can regenerate AGENTS.md from this file for tools that don't speak .tape natively"
 
 @H h2 := "claude-md-symlink" :: generator [active]

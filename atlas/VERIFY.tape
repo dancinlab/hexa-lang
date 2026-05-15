@@ -195,7 +195,7 @@
 
 @D cycle := "verdict cycle protocol" :: protocol [d=2026-05-15 active]
   steps <<~EOF
-    1. Submit: atlas/incoming/<descriptive-name>.md (한 개념 = 한 파일)
+    1. Submit: atlas/inbox/<descriptive-name>.md (한 개념 = 한 파일)
     2. Reviewer attaches verdict tier (default 🟠 INSUFFICIENT) + axis (도메인 §X) +
        evidence + anchor (real-limit per g3) + falsifier ≥5 pre-register
     3. Falsifier fire pre-register hash frozen + committed
@@ -211,7 +211,7 @@
 # ─── §9 Phase rollout ────────────────────────────────────────────────
 
 @D phase_rollout := "VERIFY.tape phase plan" :: roadmap [d=2026-05-15 active]
-  phase_1_done = "spec layer (本 VERIFY.tape + MAIN.tape + INDEX.md + AGENTS.tape + incoming/) — 2026-05-15"
+  phase_1_done = "spec layer (本 VERIFY.tape + MAIN.tape + INDEX.md + AGENTS.tape + inbox/) — 2026-05-15"
   phase_2_next <<~EOF
     Stage 1 hexa-native: compiler/atlas/symbolic/ (number theory + sym_expr + verifier)
     tool/atlas_verify.hexa CLI entry point

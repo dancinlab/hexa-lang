@@ -4,7 +4,7 @@
 # ══════════════════════════════════════════════════════════════════════
 # Cross-link: INDEX.md (overview), VERIFY.tape (3-stage protocol),
 # AGENTS.tape (atlas-area governance — g_self_verify · g_tier_default_insufficient · CLAUDE.md symlink),
-# incoming/ (submission 통로), ../compiler/atlas/embedded.gen.hexa (atom rodata
+# inbox/ (submission 통로), ../compiler/atlas/embedded.gen.hexa (atom rodata
 # ~410 entries, frozen).
 #
 # Phase 1 = anchor seed only. archive-TECS-L docs/proofs T0/T1/T2 43 proofs +
@@ -1055,7 +1055,7 @@
 @N phase_rollout := "Phase 1 → 2 → 3 transition" :: roadmap [d=2026-05-15 active]
   body <<~EOF
     Phase 1 (THIS file, 2026-05-15 LANDED):
-      ✅ atlas/INDEX.md · MAIN.tape · VERIFY.tape · AGENTS.tape (CLAUDE.md symlink) · incoming/README.md
+      ✅ atlas/INDEX.md · MAIN.tape · VERIFY.tape · AGENTS.tape (CLAUDE.md symlink) · inbox/README.md
       ✅ 9-domain split + § BRIDGES + § 🔵 CLOSED + § 🔴 / 🟡 / 🟠 INSUFFICIENT / DEFERRED
       ✅ T-proofs 43 anchor seed cite (🟡 SUPPORTED-BY-CITATION tier — Phase 1 carry)
       ✅ default tier 🟠 INSUFFICIENT for ~380 un-verdicted atlas embeds

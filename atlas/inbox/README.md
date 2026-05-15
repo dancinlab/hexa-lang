@@ -93,7 +93,7 @@ verdict 의 한계 / 미검증 영역 / 외부 의존 영역.
 
 - [ ] atlas/MAIN.tape § <도메인> section append
 - [ ] atlas/MAIN.log.tape append (Phase 3 시 automation)
-- [ ] atlas/inbox/<file>.md → 삭제 (architecture .tape 이 SSOT, incoming 은 transient)
+- [ ] atlas/inbox/<file>.md → 삭제 (architecture .tape 이 SSOT, inbox 은 transient)
 - [ ] Phase 2+: compiler/atlas/verify/<domain>.hexa 에 verifier stub 추가
 
 ## Cross-link

@@ -172,7 +172,7 @@
     # D. Cross-repo downstream safety (RECOMMENDED, all 4)
     D1 [rec] wilson (~/core/wilson) — no hexa_interp binary references
     D2 [rec] echoes + anima + hexa-* family repos — broad grep clean
-    D3 [rec] ~/.wilson/identity.tape + incoming/patches/ scrubbed of hexa_interp paths
+    D3 [rec] ~/.wilson/identity.tape + inbox/patches/ scrubbed of hexa_interp paths
     D4 [rec] wilson POOL.md + firmware/boards/ hexa_interp paths replaced with D-mode
 
     # E. Artifact removal (REQUIRED 5 + 2 rec)
