@@ -1,0 +1,97 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_arrayslice_smoke.hexa — array `.slice(a,b)` compiled-path smoke
+//
+// Builtin: hexa_array_slice in self/runtime.c:6964 (codegen_c2.hexa lowers
+// array `.slice` → direct `hexa_array_slice(obj, a, b)` call, line 2910/4739).
+// Fix under test: self/runtime.h slice-family extern decl block (decl-only,
+// additive — same root-cause class as safetensors_mmap_* PR #49).
+//
+// Falsifier coverage (ship 8):
+//   MID-VALS   : [10,20,30,40,50].slice(1,4) == [20,30,40] (element-exact)
+//   MID-LEN    : len of that slice == 3
+//   FULL-VALS  : slice(0,n) returns the whole array, element-exact
+//   FULL-LEN   : len(slice(0,n)) == n
+//   EMPTY-LEN  : slice(2,2) is empty (len 0)
+//   PREFIX     : slice(0, n-1) drops exactly the last element (chat_lib pattern)
+//   NONDESTRUCT: source array unchanged after slice
+//   DETERMINISM: two identical slice calls give byte-identical results
+// ════════════════════════════════════════════════════════════════════════
+
+fn check(label: string, ok: bool, detail: string) {
+    if ok {
+        println("PASS  " + label + "  " + detail)
+        return 1
+    }
+    println("FAIL  " + label + "  " + detail)
+    return 0
+}
+
+fn arr_eq(a, b) -> bool {
+    if len(a) != len(b) { return false }
+    let mut i = 0
+    while i < len(a) {
+        if a[i] != b[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    let base = [10, 20, 30, 40, 50]
+
+    // MID-VALS / MID-LEN
+    let mid = base.slice(1, 4)
+    total = total + 1
+    pass = pass + check("MID-VALS", arr_eq(mid, [20, 30, 40]),
+                        "got len=" + to_string(len(mid)))
+    total = total + 1
+    pass = pass + check("MID-LEN", len(mid) == 3,
+                        "len=" + to_string(len(mid)))
+
+    // FULL-VALS / FULL-LEN
+    let full = base.slice(0, 5)
+    total = total + 1
+    pass = pass + check("FULL-VALS", arr_eq(full, [10, 20, 30, 40, 50]),
+                        "len=" + to_string(len(full)))
+    total = total + 1
+    pass = pass + check("FULL-LEN", len(full) == 5,
+                        "len=" + to_string(len(full)))
+
+    // EMPTY-LEN
+    let empt = base.slice(2, 2)
+    total = total + 1
+    pass = pass + check("EMPTY-LEN", len(empt) == 0,
+                        "len=" + to_string(len(empt)))
+
+    // PREFIX — exact chat_lib.hexa:2455 pattern: ids.slice(0, nids - 1)
+    let nids = len(base)
+    let prefix = base.slice(0, nids - 1)
+    total = total + 1
+    pass = pass + check("PREFIX", arr_eq(prefix, [10, 20, 30, 40]),
+                        "len=" + to_string(len(prefix)))
+
+    // NONDESTRUCT — base must be untouched
+    total = total + 1
+    pass = pass + check("NONDESTRUCT", arr_eq(base, [10, 20, 30, 40, 50]),
+                        "base len=" + to_string(len(base)))
+
+    // DETERMINISM — same call twice == byte-identical
+    let d1 = base.slice(1, 4)
+    let d2 = base.slice(1, 4)
+    total = total + 1
+    pass = pass + check("DETERMINISM", arr_eq(d1, d2),
+                        "d1=d2 len=" + to_string(len(d1)))
+
+    println("")
+    println("RESULT  " + to_string(pass) + "/" + to_string(total) + " PASS")
+    if pass == total {
+        println("ALL-PASS")
+        return 0
+    }
+    println("SOME-FAIL")
+    return 1
+}
