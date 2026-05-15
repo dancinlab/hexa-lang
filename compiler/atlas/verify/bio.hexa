@@ -52,10 +52,73 @@ pub fn verify_s5_v8_bbio_at_risk_carry() -> AtlasVerdict {
     return _vd_bio("s5_v8_bbio_at_risk_carry", "🟠 AT-RISK (Phase 2 cycle 017 anima carry — surrogate-vs-formal mismatch confirmed)", ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s5_effective_information_gates — Tononi EI (IIT-precursor) hexa-native
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §5 BIO Stage 2 — moves §5 from pure anima-carry to a real
+// hexa-native IIT-precursor computation. Effective Information (Tononi 2008,
+// the EI in Φ = min over partitions of effective information) for a
+// deterministic n-input logic gate under maximum-entropy input:
+//   EI = H(output distribution) when inputs ~ Uniform({0,1}ⁿ)
+// (for a deterministic system EI reduces to output entropy under max-entropy
+//  input — the system's intrinsic cause-effect power, IIT 3.0 precursor).
+//
+// Closed-form per gate (libm log → log2 = ln/ln2):
+//   AND(2): outputs {0,0,0,1} → P(1)=1/4 · H = -¾log₂¾ - ¼log₂¼ ≈ 0.811 bits
+//   XOR(2): outputs {0,1,1,0} → P(0)=P(1)=1/2 · H = 1.0 bit (max — XOR is
+//           the canonical maximally-integrated 2-input gate, IIT exemplar)
+//   OR(2):  outputs {0,1,1,1} → P(1)=3/4 · H ≈ 0.811 bits
+//
+// Honest C3: this is EI (the per-partition quantity), NOT full Φ (= min EI
+// over the MIP across all bipartitions + cause/effect repertoire EMD). Full
+// IIT 3.0 Φ (anima PyPhi 1.2.0 carry, Hc_1283/H_011) requires TPM + MIP
+// search + earth-mover distance — Phase 3+ large sprint (s5_v8_bbio_at_risk
+// _carry remains the formal-Φ mismatch carrier). This verifier closes the
+// IIT-PRECURSOR (deterministic-gate EI) as hexa-native — §5 no longer pure-carry.
+
+fn _abs_f(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+fn _ln2() -> float { return 0.6931471805599453 }
+
+fn _log2_f(x: float) -> float {
+    return log(x) / _ln2()
+}
+
+fn _binary_entropy(p1_num: int, total: int) -> float {
+    // H(p) = -p·log₂p - (1-p)·log₂(1-p), p = p1_num/total
+    if p1_num == 0 || p1_num == total { return 0.0 }
+    let p = to_float(p1_num) / to_float(total)
+    let q = 1.0 - p
+    return -(p * _log2_f(p)) - (q * _log2_f(q))
+}
+
+pub fn verify_s5_effective_information_gates() -> AtlasVerdict {
+    // AND(2): 4 input states, output=1 only for (1,1) → P(1)=1/4
+    let ei_and = _binary_entropy(1, 4)
+    // OR(2): output=0 only for (0,0) → P(1)=3/4
+    let ei_or = _binary_entropy(3, 4)
+    // XOR(2): output=1 for (0,1),(1,0) → P(1)=2/4=1/2 → max entropy 1.0
+    let ei_xor = _binary_entropy(2, 4)
+    let ref_and = 0.8112781244591328       // H(1/4)
+    let ref_xor = 1.0                        // H(1/2) = max
+    let and_ok = _abs_f(ei_and - ref_and) < 0.000000001
+    let or_ok = _abs_f(ei_or - ref_and) < 0.000000001   // OR symmetric to AND
+    let xor_max = _abs_f(ei_xor - ref_xor) < 0.000000001
+    // IIT exemplar: XOR is maximally integrated 2-input gate (EI = 1 bit = max)
+    let xor_is_max = ei_xor > ei_and && ei_xor > ei_or && xor_max
+    let ok = and_ok && or_ok && xor_max && xor_is_max
+    let detail = "EI(AND)=H(1/4)=" + to_string(ei_and) + " · EI(OR)=H(3/4)=" + to_string(ei_or) + " · EI(XOR)=H(1/2)=" + to_string(ei_xor) + " (max 1 bit — XOR canonical maximally-integrated IIT exemplar) · IIT-precursor hexa-native closed; full Φ (MIP+EMD) deferred"
+    return _vd_bio("s5_effective_information_gates", "🔵 SUPPORTED-FORMAL (Phase 3 cycle 026 IIT-precursor hexa-native)", ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_bio_all() -> [AtlasVerdict] {
     let mut out: [AtlasVerdict] = []
     out.push(verify_s5_v8_bbio_at_risk_carry())
+    out.push(verify_s5_effective_information_gates())
     return out
 }

@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-025-falsifier-14batteries-cumulative-109" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-026-BIO-EI-cumulative-110" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,8 +39,19 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2+3 (cycle 001-025): 109/109 PASS · 109 entries verified (94 🔵 closed: 61 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 14 falsifier-robust batteries · 70 falsifiers 0 fired).
+    Cumulative Phase 2+3 (cycle 001-026): 110/110 PASS · 110 entries verified (95 🔵 closed: 61 SUPPORTED-IDENTITY + 34 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 14 falsifier-robust batteries · 70 falsifiers 0 fired).
     9 도메인 모두 covered. Verifier surface: 13 modules + CI gate.
+
+    cycle 026 — §5 BIO pure-carry → 실제 hexa-native Stage 2 (IIT-precursor):
+      s5_effective_information_gates 🔵 SUPPORTED-FORMAL — Tononi EI (effective information,
+        Φ 의 per-partition 구성요소) deterministic logic gate hexa-native 계산:
+        EI(AND)=H(1/4)=0.811278 · EI(OR)=H(3/4)=0.811278 · EI(XOR)=H(1/2)=1.0 bit
+        (XOR = canonical maximally-integrated 2-input gate, IIT exemplar).
+      §5 BIO 가 anima pure-carry 에서 실제 hexa-native IIT computation 보유로 전진.
+      Honest C3: EI 는 IIT-PRECURSOR (per-partition), full Φ (= min EI over MIP +
+        cause/effect repertoire EMD) 아님. full IIT 3.0 Φ (anima PyPhi 1.2.0 carry
+        Hc_1283/H_011) 은 TPM + MIP search + earth-mover distance — Phase 3+ large
+        sprint. s5_v8_bbio_at_risk_carry 가 formal-Φ mismatch carrier 로 유지.
 
     cycle 025 — falsifier 8 → 14 batteries (원 directive "각 atom/algorithm/가설 별 falsifier ≥5"):
       신규 6: s2_perfect_euclid_euler · s2_euler_product_truncation · s8_s3_representation ·
@@ -836,7 +847,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 109
+  phase_2_cumulative_count = 110
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 

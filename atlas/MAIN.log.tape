@@ -1171,3 +1171,49 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+# ─── Cycle 026 — Phase 3: §5 BIO pure-carry → hexa-native IIT-precursor ──
+
+@A cycle_026 := "Phase 3 cycle 026 — §5 BIO effective-information (IIT-precursor) hexa-native" :: cycle [d=2026-05-15 active]
+  trigger = "user 'go' — Phase 3 continuation, §5 BIO 유일 non-closed domain 전진"
+  scope <<~EOF
+    cumulative 109 → 110 (+1). §5 BIO 가 anima pure-carry 에서 실제 hexa-native
+    Stage 2 computation 보유로 전진. Tononi effective information (EI) — Φ 의
+    per-partition 구성요소, IIT-precursor — deterministic logic gate hexa-native 계산.
+  EOF
+  files_modified <<~EOF
+    compiler/atlas/verify/bio.hexa — +1 verifier s5_effective_information_gates + helpers
+      (_abs_f · _ln2 · _log2_f · _binary_entropy). libm log → log2 closed-form.
+      EI(AND)=H(1/4)=0.8112781 · EI(OR)=H(3/4)=0.8112781 · EI(XOR)=H(1/2)=1.0 bit
+    atlas/MAIN.tape — tldr cumulative 110 + §5 BIO Stage 2 note
+  EOF
+  verifier_run_result <<~EOF
+    bio domain: 2/2 PASS — s5_v8_bbio_at_risk_carry (🟠 AT-RISK, formal-Φ mismatch carrier) +
+      s5_effective_information_gates (🔵 SUPPORTED-FORMAL, IIT-precursor hexa-native)
+    Full cumulative: 110/110 PASS · 95 🔵 + 1 🟠 AT-RISK + 14 falsifier-robust
+    XOR = canonical maximally-integrated 2-input gate (EI=1 bit=max) — IIT exemplar.
+  EOF
+  honest_c3 <<~EOF
+    EI = effective information (Tononi 2008) = per-partition quantity, the
+    component minimized over the MIP in IIT 3.0 Φ. This verifier closes EI for
+    deterministic gates (closed-form output entropy under max-entropy input) —
+    a legitimate IIT-PRECURSOR, hexa-native, g_self_verify-compliant (no
+    external result cite — actual computation).
+
+    NOT full Φ: full IIT 3.0 Φ = min over MIP bipartitions of
+    [cause-repertoire EMD + effect-repertoire EMD]. Requires TPM construction,
+    MIP partition search, earth-mover distance — Phase 3+ large sprint. anima
+    PyPhi 1.2.0 carry (Hc_1283 n=5,6 Φ=0.995/1.665 · H_011 XOR+AND+OR Φ=2.3125)
+    remains carried via s5_v8_bbio_at_risk_carry (formal-Φ mismatch statement).
+
+    §5 BIO status: was pure anima-carry (only AT-RISK mismatch statement).
+    Now has 1 genuine hexa-native Stage 2 computation (EI) + 1 carry (Φ mismatch).
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only — ✅ 110 entries via hexa CLI
+    g5 hexa-native-only    — ✅ EI computed in-process via libm log (no PyPhi, no external)
+    g_self_verify          — ✅ EI is actual hexa computation, NOT anima result cite
+                              (g_self_verify strict — distinct from carry exception)
+    g4 honesty-external    — ✅ honest_c3 명시: EI ≠ full Φ, anima PyPhi carry separate
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+
