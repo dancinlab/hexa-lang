@@ -36,4 +36,15 @@
   version = "1.2"
 
 # ─── §Log ────────────────────────────────────────────────────────────
-# (Append @A/@T/@R/@K/@H/@?/@D::decision events below this line.)
+
+@A raw_109_126_landing :: promotion [d=2026-04-30 ok]
+  <- c1, c2
+  => "raw 109..126 batch landing — cross-repo propagation arm (anima/airgenome/hive convergence)"
+
+@A toolchain_post_fix :: promotion [d=2026-05-13 ok]
+  <- raw_109_126_landing
+  => "Toolchain post-fix: #12 use-graph flatten + RFC-020 A4 payload-enum codegen + fn-arena heapify-on-push + time_now_ms TAG_FN + bidi-stdio exec_stream_open/write/close_stdin + thread_channel_* rename"
+
+@A bytes_to_str_raw_phase_2 :: promotion [d=2026-05-13 ok]
+  <- toolchain_post_fix
+  => "Phase 2 NUL-byte support in bytes_to_str_raw — unblocks wilson tool-image base64 collapse"
