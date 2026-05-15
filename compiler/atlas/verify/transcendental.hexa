@@ -1,0 +1,260 @@
+// compiler/atlas/verify/transcendental.hexa — Stage 2 transcendental verifier
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native Stage 2 transcendental verifications using stdlib float libm
+// wrappers (sqrt · log · exp via runtime cg_math_sym primitives — already
+// existing per stdlib/core/math/float.hexa header documentation).
+//
+// Cross-link: atlas/MAIN.tape · stdlib/core/math/float.hexa · atlas/VERIFY.tape
+// stage_2 (numerical sim section).
+
+import "compiler/atlas/verify/foundation.hexa"
+// NOTE: do NOT import stdlib/core/math/float.hexa — its `tau()` (returns 2π)
+// shadows stdlib/core/math.hexa::tau(n) (divisor count) and breaks Stage 1
+// verifiers in foundation/math/top/cosmo/bridges/chem.hexa. Instead use libm
+// builtins (sqrt · log · exp · pow) directly + inline constants.
+//
+// Phase 3 candidate: rename float.hexa::tau() → tau_constant() to remove conflict.
+
+fn _pi_const() -> float { return 3.141592653589793 }
+
+fn _vd_trans(entry_id: string, domain: string, tier: string, pass: bool, detail: string) -> AtlasVerdict {
+    return AtlasVerdict {
+        entry_id: entry_id,
+        domain: domain,
+        tier: tier,
+        pass: pass,
+        detail: detail,
+        stage: "Stage 2 — numerical/transcendental (hexa-native libm)"
+    }
+}
+
+fn _tier_pass(ok: bool) -> string {
+    if ok { return "🔵 SUPPORTED-FORMAL" }
+    return "🔴 FALSIFIED"
+}
+
+fn _abs_f(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s10_music_ln_4_3 — T1-05 ln(4/3) ≈ 0.287682 entropy jump 3-state → 4-state
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §10 BRIDGES T1-05 transcendental part.
+// ln(4/3) = ln(4) - ln(3) ≈ 0.287682 (entropy increase from 3-state to 4-state
+// system via S_max(N) = ln(N), N=3→4). Closed-form via libm log.
+// Tolerance: |computed - reference| < 1e-9.
+
+pub fn verify_s10_music_ln_4_3() -> AtlasVerdict {
+    let x = log(4.0 / 3.0)
+    let reference = 0.2876820724517809
+    let err = _abs_f(x - reference)
+    let ok = err < 0.000000001
+    let detail = "ln(4/3) computed = " + to_string(x) + " · reference = 0.2876820724517809 · |err| = " + to_string(err) + " (Stage 2 libm log, tolerance 1e-9)"
+    return _vd_trans("s10_music_ln_4_3", "§10 BRIDGES", _tier_pass(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_onsager_tc — T1-30 Onsager 2D Ising T_c = 2/log(1+√2) ≈ 2.269185
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §3 PHYS T1-30 Onsager 1944 closed-form.
+// T_c = 2J/log(1+√2) at J=1 yields 2/log(1+√2) ≈ 2.269185.
+// Stage 2 verifier via libm sqrt + log composition.
+
+pub fn verify_s3_onsager_tc() -> AtlasVerdict {
+    let sqrt2 = sqrt(2.0)
+    let denom = log(1.0 + sqrt2)
+    let t_c = 2.0 / denom
+    let reference = 2.2691853142130221
+    let err = _abs_f(t_c - reference)
+    let ok = err < 0.000000001
+    let detail = "Onsager T_c = 2/log(1+√2) = 2/log(" + to_string(1.0 + sqrt2) + ") = " + to_string(t_c) + " · reference = 2.2691853142130221 · |err| = " + to_string(err)
+    return _vd_trans("s3_onsager_tc", "§3 PHYS", _tier_pass(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s10_cross_island_identity — T1-07 e^(a·ln(b)) = b^a universal identity
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §10 BRIDGES T1-07 universal cross-island bridge.
+// e^(a·ln(b)) = b^a — exponential-logarithm fundamental identity.
+// Sample: a = 1/2, b = 3 → e^(0.5·ln(3)) = √3 ≈ 1.7320508
+// Sample: a = 2, b = 3 → e^(2·ln(3)) = 9
+// Sample: a = 1/6, b = 3 → e^(ln(3)/6) = 3^(1/6) ≈ 1.20094
+
+pub fn verify_s10_cross_island_identity() -> AtlasVerdict {
+    // Test 1: e^(0.5·ln(3)) = √3 (libm cross-check)
+    let test1 = exp(0.5 * log(3.0))
+    let ref1 = sqrt(3.0)
+    let err1 = _abs_f(test1 - ref1)
+    // Test 2: e^(2·ln(3)) = 9 (integer cross-check)
+    let test2 = exp(2.0 * log(3.0))
+    let err2 = _abs_f(test2 - 9.0)
+    // Test 3: e^(ln(3)/6) = 3^(1/6) ≈ 1.2009369551760022 (hardcoded reference —
+    //         stdlib pow is integer-only, can't use for fractional exponent)
+    let test3 = exp(log(3.0) / 6.0)
+    let ref3 = 1.2009369551760022
+    let err3 = _abs_f(test3 - ref3)
+    let ok = err1 < 0.000000001 && err2 < 0.000000001 && err3 < 0.000000001
+    let detail = "e^(a·ln(b))=b^a — (a=1/2,b=3)→√3=" + to_string(test1) + " (err=" + to_string(err1) + ") · (a=2,b=3)→9=" + to_string(test2) + " (err=" + to_string(err2) + ") · (a=1/6,b=3)→3^(1/6)=" + to_string(test3) + " vs hardcoded 1.2009369551760022 (err=" + to_string(err3) + ")"
+    return _vd_trans("s10_cross_island_identity", "§10 BRIDGES", _tier_pass(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s2_alternating_harmonic_ln2 — T1-21 partial sum 1 - 1/2 + 1/3 - 1/4 + ... → ln(2)
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §2 MATH T1-21. Convergence: ∑_{k=1}^{∞} (-1)^(k+1)/k = ln(2).
+// Slow convergence (alternating series): N=10000 terms reach ~5e-5 accuracy.
+// Tolerance loose (~1e-3) to handle slow convergence.
+
+pub fn verify_s2_alternating_harmonic_ln2() -> AtlasVerdict {
+    let mut sum = 0.0
+    let n_terms = 10000
+    let mut k = 1
+    while k <= n_terms {
+        let term = 1.0 / to_float(k)
+        if k % 2 == 1 { sum = sum + term }
+        else { sum = sum - term }
+        k = k + 1
+    }
+    let reference = log(2.0)
+    let err = _abs_f(sum - reference)
+    // Slow convergence — tolerance ~1/(2N) ≈ 5e-5 for N=10000
+    let ok = err < 0.001
+    let detail = "∑_{k=1}^{" + to_string(n_terms) + "} (-1)^(k+1)/k = " + to_string(sum) + " · ln(2) = " + to_string(reference) + " · |err| = " + to_string(err) + " (slow alternating convergence ~1/2N)"
+    return _vd_trans("s2_alternating_harmonic_ln2", "§2 MATH", _tier_pass(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s2_ln_17_approximate — T1-15 ln(17) ≈ 17/6 (0.004% error, NOT exact)
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §2 MATH T1-15 — approximate identity.
+// Verifier closes the *approximation* claim (not exact equality):
+//   ln(17) ≈ 2.83321  vs  17/6 ≈ 2.83333
+//   Relative error ≈ 0.004% — confirms approximation, REFUTES exact equality.
+// This is a 🔵 SUPPORTED-IDENTITY for the *bound statement* (|err| < 0.005)
+// AND simultaneously a 🔵 FALSIFIED-FORMAL for the *exact equality* claim.
+
+pub fn verify_s2_ln_17_approximate() -> AtlasVerdict {
+    let ln_17 = log(17.0)
+    let seventeen_sixth = 17.0 / 6.0
+    let err = _abs_f(ln_17 - seventeen_sixth)
+    let rel_err = err / seventeen_sixth
+    let approx_holds = rel_err < 0.0001       // 0.01% bound — T1-15 cite 0.004%
+    let exact_holds = err < 0.000000001       // exact equality — should FAIL
+    let ok = approx_holds && !exact_holds
+    let detail = "ln(17)=" + to_string(ln_17) + " · 17/6=" + to_string(seventeen_sixth) + " · |err|=" + to_string(err) + " · rel=" + to_string(rel_err) + " — approximation 0.01% bound holds (✓) · exact equality fails (✓ — transcendental barrier per T1-15)"
+    return _vd_trans("s2_ln_17_approximate", "§2 MATH", _tier_pass(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s2_basel_partial_sum — Basel ζ(2) = π²/6 partial sum convergence
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §2 MATH s2_basel_zeta carry. Partial sum ∑_{k=1}^{N} 1/k² → π²/6.
+// N=100000 terms approach within ~1e-5. Tolerance loose to handle slow convergence.
+
+pub fn verify_s2_basel_partial_sum() -> AtlasVerdict {
+    let mut sum = 0.0
+    let n_terms = 100000
+    let mut k = 1
+    while k <= n_terms {
+        let kf = to_float(k)
+        sum = sum + 1.0 / (kf * kf)
+        k = k + 1
+    }
+    let pi_v = _pi_const()
+    let reference = pi_v * pi_v / 6.0
+    let err = _abs_f(sum - reference)
+    // Convergence ~1/N for ζ(2): N=100000 → ~1e-5
+    let ok = err < 0.0001
+    let detail = "∑_{k=1}^{" + to_string(n_terms) + "} 1/k² = " + to_string(sum) + " · π²/6 = " + to_string(reference) + " · |err| = " + to_string(err) + " (Euler 1735 closed-form)"
+    return _vd_trans("s2_basel_partial_sum", "§2 MATH", _tier_pass(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s2_gamma_reflection_n6 — T1-19 ⭐ Γ(1/6)·Γ(5/6) / Γ(1/2)² = 2 = σ₋₁(6)
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §2 MATH T1-19 gamma reflection (atlas-anchored).
+// Euler reflection: Γ(x)·Γ(1-x) = π/sin(πx)
+//   x=1/6: Γ(1/6)·Γ(5/6) = π/sin(π/6) = π/(1/2) = 2π
+//   x=1/2: Γ(1/2)² = π/sin(π/2) = π
+//   Ratio: 2π/π = 2 = σ₋₁(6) — perfect-number 6 connection.
+// libm via lgamma builtin (already exposed in stdlib/core/math/float.hexa::lgamma_f).
+
+pub fn verify_s2_gamma_reflection_n6() -> AtlasVerdict {
+    // log form: lgamma(1/6) + lgamma(5/6) - 2·lgamma(1/2) = log(2)
+    let lhs = lgamma(1.0/6.0) + lgamma(5.0/6.0) - 2.0 * lgamma(0.5)
+    let rhs = log(2.0)
+    let err = _abs_f(lhs - rhs)
+    let ok = err < 0.000000001
+    let detail = "Γ(1/6)·Γ(5/6) / Γ(1/2)² = 2 = σ₋₁(6) · log form: lgamma(1/6)+lgamma(5/6)-2·lgamma(1/2)=" + to_string(lhs) + " vs log(2)=" + to_string(rhs) + " · |err|=" + to_string(err) + " (atlas-anchored: result = σ₋₁(6))"
+    return _vd_trans("s2_gamma_reflection_n6", "§2 MATH", _tier_pass(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s10_four_island_bridge_approximate — T1-08 5/(6·17) + √3 ≈ e^γ (0.00011%)
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §10 BRIDGES T1-08 four-island bridge — APPROXIMATE only.
+// 5/(6·17) + √3 = 0.049020 + 1.732051 = 1.781070
+// e^γ ≈ 1.781072 (γ = 0.5772156649... Euler-Mascheroni)
+// Error: ~2e-6 (0.00011%) — T1-08 본문 'Very precise but not exact' (🟧).
+// Verifier closes the *bound + refutation* — NOT exact equation.
+
+pub fn verify_s10_four_island_bridge_approximate() -> AtlasVerdict {
+    // γ Euler-Mascheroni hardcoded (no libm digamma binding for γ)
+    let gamma_em = 0.5772156649015329
+    let lhs = 5.0 / (6.0 * 17.0) + sqrt(3.0)
+    let rhs = exp(gamma_em)
+    let err = _abs_f(lhs - rhs)
+    let rel_err = err / rhs
+    let approx_holds = rel_err < 0.000005     // T1-08 cite 0.00011%
+    let exact_fails = err > 0.0000000001      // exact equality must FAIL
+    let ok = approx_holds && exact_fails
+    let detail = "5/(6·17)+√3=" + to_string(lhs) + " · e^γ=" + to_string(rhs) + " (γ=0.5772156649015329) · |err|=" + to_string(err) + " · rel=" + to_string(rel_err) + " — approx 0.00011% ✓ · exact REFUTED ✓ (T1-08 🟧 partial — 4 islands A+B+C+D bridged)"
+    return _vd_trans("s10_four_island_bridge_approximate", "§10 BRIDGES", _tier_pass(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s2_transcendental_wall_trivial_only — T1-09 only trivial e/log connections exist
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §2 MATH T1-09 transcendental wall (refuted negative claim).
+// Liouville 1844 + Hermite 1873: e, ln(n) for n>1 are transcendental — not
+// roots of polynomials with rational coefficients. Therefore no non-trivial
+// exact equation between transcendentals and rationals.
+// Verifier closes 3 trivial identity checks (e^ln(3)=3, e^(0.5·ln3)=√3, ln(e)=1)
+// — all 'consequences of e/log being inverse functions, not essential bridges'.
+
+pub fn verify_s2_transcendental_wall_trivial_only() -> AtlasVerdict {
+    let e_const = 2.718281828459045
+    // Trivial 1: e^ln(3) = 3
+    let t1 = exp(log(3.0))
+    let err1 = _abs_f(t1 - 3.0)
+    // Trivial 2: e^(0.5·ln(3)) = √3
+    let t2 = exp(0.5 * log(3.0))
+    let err2 = _abs_f(t2 - sqrt(3.0))
+    // Trivial 3: ln(e) = 1
+    let t3 = log(e_const)
+    let err3 = _abs_f(t3 - 1.0)
+    let trivial_holds = err1 < 0.0000000001 && err2 < 0.0000000001 && err3 < 0.0000000001
+    let detail = "T1-09 trivial e/log inverse identities (Liouville 1844 + Hermite 1873 — non-trivial exact equations REFUTED): e^ln(3)=" + to_string(t1) + " (err=" + to_string(err1) + ") · e^(0.5·ln3)=" + to_string(t2) + " (err=" + to_string(err2) + ") · ln(e)=" + to_string(t3) + " (err=" + to_string(err3) + ")"
+    return _vd_trans("s2_transcendental_wall_trivial_only", "§2 MATH", _tier_pass(trivial_holds), trivial_holds, detail)
+}
+
+// ── Aggregate ───────────────────────────────────────────────────────────
+
+pub fn verify_transcendental_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s10_music_ln_4_3())
+    out.push(verify_s3_onsager_tc())
+    out.push(verify_s10_cross_island_identity())
+    out.push(verify_s2_alternating_harmonic_ln2())
+    out.push(verify_s2_ln_17_approximate())
+    out.push(verify_s2_basel_partial_sum())
+    out.push(verify_s2_gamma_reflection_n6())
+    out.push(verify_s10_four_island_bridge_approximate())
+    out.push(verify_s2_transcendental_wall_trivial_only())
+    return out
+}

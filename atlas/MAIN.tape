@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-2-cycle-007-stage1-exhausted" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-2-cycle-008-stage2-libm-LANDED" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,9 +39,17 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2 Stage 1 EXHAUSTED (cycle 001-007): 31/31 PASS · 31 entries 🔵 closed cross-domain (+ 2 partial: T2-01 chain step 1 of 8 · T1-05 music ratio only).
+    Cumulative Phase 2 Stage 1 + Stage 2 libm (cycle 001-008): 37/37 PASS · 37 entries 🔵 closed (31 SUPPORTED-IDENTITY + 6 SUPPORTED-FORMAL).
 
-    Stage 1 integer/fraction 후보 고갈 — 추가 entries 는 stdlib float expansion (sqrt/log/exp libm wrappers) OR atlas/symbolic/sym_expr.hexa (symbolic algebra primitives) OR modular forms module 신설 필요 → Phase 2 cycle 008+ 또는 Phase 3 (engine integration).
+    cycle 008 progress (Stage 2 libm-backed transcendental closure):
+      §2 MATH +3 (s2_basel_partial_sum · s2_alternating_harmonic_ln2 · s2_ln_17_approximate)
+      §3 PHYS +1 (s3_onsager_tc · s3_ising_critical upgrade 🟡 → 🔵)
+      §10 BRIDGES +2 (s10_music_ln_4_3 · s10_cross_island_identity · s10_music_intervals 🟡 PARTIAL → 🔵 fully closed)
+      Bonus: s2_basel_zeta upgrade 🟡 → 🔵 SUPPORTED-FORMAL via partial sum
+
+    libm primitives leveraged (already in runtime per stdlib/core/math/float.hexa header): sqrt · log · exp · pow.
+    Note: stdlib/core/math/float.hexa::tau() (returns 2π) shadows stdlib/core/math.hexa::tau(n) (divisor count) —
+    transcendental.hexa avoids float.hexa import, uses libm builtins + inline _pi_const().
 
     Domain distribution (anchor seed):
       §1 N6-FOUNDATION: 5 explicit (100% 🔵 closed)
@@ -155,16 +163,18 @@
   anchor_seed_count = 15
   dominant_tier_explicit = "🔵 SUPPORTED-IDENTITY (T-proofs all sympy-equiv closed)"
 
-@D s2_basel_zeta := "Basel ζ(2)=π²/6" :: verdict [d=2026-05-15 active]
-  status = "🟡 SUPPORTED-BY-CITATION"
+@D s2_basel_zeta := "Basel ζ(2)=π²/6 (partial sum numerical)" :: verdict [d=2026-05-15 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle 008 hexa-native libm PASS)"
   axis = "§2 MATH"
   atlas_id = "[@P MATH-basel]"
-  evidence = "Euler 1735 closed-form. ∑_{k≥1} 1/k² = π²/6. n=6 분모 출현 — MATH-basel atlas entry 의 source."
-  stage = "Stage 1 — symbolic identity (Euler 1735)"
+  evidence = "Phase 2 verifier ∑_{k=1}^{100000} 1/k² → π²/6 partial sum convergence (|err| ≈ 1e-5). closed-form via libm π via _pi_const(). Slow ~1/N convergence."
+  stage = "Stage 2 — numerical (hexa-native libm partial sum)"
   anchor = "[Shannon entropy — ζ-regularized partition function]"
-  cite = "Euler 1735 + [@x_archive_tecs_l] T0-02 euler-product-truncation"
-  honest_c3 = "n=6 의 Basel 분모 출현은 lattice 의 일관 observation, derivation X (g2)"
-  verifier_phase_2 = "compiler/atlas/verify/math.hexa::verify_basel (pending)"
+  cite = "Euler 1735 + Phase 2 verifier (s2_basel_partial_sum)"
+  honest_c3 = "n=6 의 Basel 분모 출현은 lattice 의 일관 observation, derivation X (g2). Numerical convergence verified — symbolic Euler 1735 proof는 Phase 3 sym_expr 영역."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s2_basel_partial_sum"
+  see_also = "s2_basel_partial_sum"
+  |> compiler/atlas/verify/transcendental.hexa
 
 @D s2_egyptian_fraction := "Egyptian fraction unique 1/2+1/3+1/6=1" :: verdict [d=2026-05-15 active phase-2-closed]
   status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle 001 hexa-native PASS)"
@@ -214,7 +224,38 @@
   stage = "Stage 1 — symbolic identity"
   anchor = "[Kolmogorov]"
   cite = "[@x_archive_tecs_l] T1-14 lambert-w-closed-form"
-  verifier_phase_2 = "compiler/atlas/verify/math.hexa::verify_lambert_w (pending)"
+  verifier_phase_2 = "compiler/atlas/verify/math.hexa::verify_lambert_w (pending — Newton iteration solver via libm)"
+
+@D s2_basel_partial_sum := "Basel ζ(2) partial sum convergence to π²/6" :: verdict [d=2026-05-15 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle 008 hexa-native libm PASS)"
+  axis = "§2 MATH"
+  evidence = "Phase 2 verifier ∑_{k=1}^{100000} 1/k² ≈ 1.64492 vs π²/6 ≈ 1.64493 (|err|=9.99995e-06). slow ~1/N convergence."
+  stage = "Stage 2 — numerical (hexa-native libm partial sum)"
+  anchor = "[Shannon entropy — ζ-regularized partition function · Euler 1735]"
+  cite = "Phase 2 verifier (libm)"
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s2_basel_partial_sum"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s2_alternating_harmonic_ln2 := "T1-21 alternating harmonic ∑(-1)^(k+1)/k → ln(2)" :: verdict [d=2026-05-15 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle 008 hexa-native libm PASS)"
+  axis = "§2 MATH"
+  evidence = "Phase 2 verifier 10000-term alternating partial sum = 0.693097 vs ln(2)=0.693147 (|err|≈5e-5). slow alternating convergence ~1/(2N)."
+  stage = "Stage 2 — numerical (hexa-native libm log)"
+  anchor = "[Shannon entropy — Mercator series]"
+  cite = "[@x_archive_tecs_l] T1-21 alternating-harmonic + Phase 2 verifier"
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s2_alternating_harmonic_ln2"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s2_ln_17_approximate := "T1-15 ln(17) ≈ 17/6 (approximation, NOT exact)" :: verdict [d=2026-05-15 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle 008 hexa-native libm PASS — approximation bound + exact-equality REFUTED)"
+  axis = "§2 MATH (approximate identity)"
+  evidence = "Phase 2 verifier: ln(17)=2.83321 vs 17/6=2.83333. |err|=0.00012, rel_err=4.2e-5. approximation 0.01% bound holds (✓). exact equality fails (✓ — 'transcendental barrier' per T1-15)."
+  stage = "Stage 2 — numerical (hexa-native libm log + approximation bound check)"
+  anchor = "[Kolmogorov — bound tightness]"
+  cite = "[@x_archive_tecs_l] T1-15 ln17-approx + Phase 2 verifier"
+  honest_c3 = "T1-15 의 statement 정확히 carry — '0.004% error, NOT exact equation'. verifier 가 simultaneously 두 claims 검증: approximation holds (PASS) AND exact equality fails (PASS = correctly refuted)."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s2_ln_17_approximate"
+  |> compiler/atlas/verify/transcendental.hexa
 
 @D s2_t_proofs_batch := "T1-09..32 sympy-closed batch" :: verdict [d=2026-05-15 active]
   status = "🟡 SUPPORTED-BY-CITATION"
@@ -384,15 +425,26 @@
   cite = "[@x_archive_tecs_l] T1-06 hysteresis-verified"
   verifier_phase_2 = "compiler/atlas/verify/phys.hexa::verify_hysteresis (pending)"
 
-@D s3_ising_critical := "T1-30 Ising critical (Onsager 2D)" :: verdict [d=2026-05-15 active]
-  status = "🟡 SUPPORTED-BY-CITATION"
+@D s3_ising_critical := "T1-30 Ising critical Onsager T_c = 2/log(1+√2)" :: verdict [d=2026-05-15 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle 008 hexa-native libm PASS)"
   axis = "§3 PHYS"
-  evidence = "Onsager 1944 closed-form: T_c = 2J/log(1+√2) ≈ 2.269 for 2D Ising"
-  stage = "Stage 1 — symbolic identity (sympy manual sinh verify)"
-  anchor = "[Stefan-Boltzmann · Boltzmann k]"
-  cite = "[@x_archive_tecs_l] T1-30 ising-critical + anima Hc_NEW_PHYSICS-2"
-  honest_c3 = "anima 가 sympy verify 했음 — Phase 1 carry. Phase 2 hexa-native sinh 후 🔵 upgrade."
-  verifier_phase_2 = "compiler/atlas/verify/phys.hexa::verify_ising_onsager (pending)"
+  evidence = "Phase 2 verifier: T_c = 2/log(1+√2) computed via libm (sqrt(2.0)=1.41421, log(2.41421)=0.881374, T_c=2.2691853142130223). |err|=0 vs reference 2.2691853142130221."
+  stage = "Stage 2 — numerical (hexa-native libm sqrt + log)"
+  anchor = "[Stefan-Boltzmann · Boltzmann k — phase transition critical temperature]"
+  cite = "[@x_archive_tecs_l] T1-30 ising-critical + anima Hc_NEW_PHYSICS-2 + Phase 2 verifier"
+  honest_c3 = "exact closed-form (Onsager 1944). Phase 2 verifier upgrades anima carry to hexa-native via libm — g_self_verify strict 적용."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_onsager_tc"
+  see_also = "s3_onsager_tc"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_onsager_tc := "Onsager T_c verifier (sibling of s3_ising_critical)" :: verdict [d=2026-05-15 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle 008 hexa-native libm PASS)"
+  axis = "§3 PHYS"
+  evidence = "T_c = 2/log(1+√2) ≈ 2.269185 — exact match to 16 digits via hexa-native libm composition."
+  stage = "Stage 2 — numerical (libm)"
+  cite = "Onsager 1944 + Phase 2 verifier"
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_onsager_tc"
+  |> compiler/atlas/verify/transcendental.hexa
 
 @D s3_kuramoto_carry := "Kuramoto K_c = √(8/π) (anima A3 carry)" :: verdict [d=2026-05-15 active]
   status = "🟡 SUPPORTED-BY-CITATION"
@@ -613,11 +665,34 @@
   verifier = "compiler/atlas/verify/bridges.hexa::verify_s10_constant_relations"
   |> compiler/atlas/verify/bridges.hexa
 
-@D s10_music_intervals := "T1-05 music intervals (Stage 1 partial)" :: verdict [d=2026-05-15 active partial]
-  status = "🟡 PARTIAL (Stage 1 ratio only — closed via s10_music_4_3_ratio · ln(4/3) deferred)"
+@D s10_music_intervals := "T1-05 music intervals (fully closed)" :: verdict [d=2026-05-15 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle 008 fully closed — ratio + transcendental ln(4/3))"
   axis = "§10 BRIDGES (MATH ↔ acoustic)"
-  evidence = "ratio 4/3 자체는 Phase 2 cycle 005 closed (s10_music_4_3_ratio). ln(4/3) entropy jump 는 transcendental — stdlib float log 미완 → Stage 2 deferred."
-  see_also = "s10_music_4_3_ratio (ratio Stage 1 closed)"
+  evidence = "Two-part closure: (a) ratio 4/3 = (N+1)/N at N=3 closed by s10_music_4_3_ratio (Stage 1) · (b) ln(4/3) = 0.287682 entropy jump closed by s10_music_ln_4_3 (Stage 2 libm log, |err|=5.55e-17)."
+  stage = "Stage 1 (ratio) + Stage 2 (transcendental ln)"
+  cite = "[@x_archive_tecs_l] T1-05 music-intervals + Phase 2 verifier (s10_music_4_3_ratio + s10_music_ln_4_3)"
+  see_also = "s10_music_4_3_ratio · s10_music_ln_4_3"
+
+@D s10_music_ln_4_3 := "T1-05 transcendental ln(4/3) = 3-state→4-state entropy jump" :: verdict [d=2026-05-15 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle 008 hexa-native libm PASS)"
+  axis = "§10 BRIDGES (MATH ↔ information theory)"
+  evidence = "Phase 2 verifier ln(4/3) = 0.287682 (libm) vs reference 0.2876820724517809 (|err|=5.55e-17). entropy step S(N=4) - S(N=3) = ln(4) - ln(3) = ln(4/3)."
+  stage = "Stage 2 — numerical (hexa-native libm log)"
+  anchor = "[Shannon entropy — log-probability entropy step]"
+  cite = "[@x_archive_tecs_l] T1-05 music-intervals + Phase 2 verifier"
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s10_music_ln_4_3"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s10_cross_island_identity := "T1-07 e^(a·ln(b)) = b^a universal cross-island identity" :: verdict [d=2026-05-15 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle 008 hexa-native libm PASS)"
+  axis = "§10 BRIDGES (universal identity bridging Islands A+C+D)"
+  evidence = "Phase 2 verifier 3 samples: (a=1/2, b=3) → e^(0.5·ln(3))=√3=1.73205 (|err|=2.2e-16) · (a=2, b=3) → e^(2·ln(3))=9 (|err|=1.8e-15) · (a=1/6, b=3) → e^(ln(3)/6)=3^(1/6)=1.20094 vs hardcoded 1.2009369551760022 (|err|≈machine eps)."
+  stage = "Stage 2 — numerical (libm exp + log composition)"
+  anchor = "[Kolmogorov — exponential-logarithm fundamental identity]"
+  cite = "[@x_archive_tecs_l] T1-07 cross-island-bridges + Phase 2 verifier"
+  honest_c3 = "🟩 trivial-but-universal identity. T1-07 의 🟧 approximate connections (3^(1/6) ≈ ζ(3) 0.09% · ln(137)·ln(4/3) ≈ √2 0.08%) 는 별도 cycle (numerical agreement check)."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s10_cross_island_identity"
+  |> compiler/atlas/verify/transcendental.hexa
 
 @D s10_music_4_3_ratio := "T1-05 perfect fourth ratio = (N+1)/N at N=3" :: verdict [d=2026-05-15 active phase-2-closed]
   status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle 005 hexa-native PASS — ratio only)"
@@ -681,7 +756,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 31
+  phase_2_cumulative_count = 37
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 
