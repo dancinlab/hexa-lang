@@ -1,0 +1,95 @@
+// test/perfect_number_engine_smoke.hexa — smoke for symbolic/perfect_number_engine.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values reproduced from archive-TECS-L/perfect_number_engine.py
+// (build_atom_pool / binary_ops / triviality_score / search):
+//   atom pool: 4 perfect numbers × 7 atoms = 28 atoms
+//   s(P6)=12, t(P6)=4, ph(P6)=2  (PERFECT_NUMBERS[6] σ/τ/φ)
+//   s-1(P6)=2  (σ₋₁ = 2 perfect-number definition)
+//   search_best(56)  → t(P6)*t(P8128) = 56,  err 0  (EXACT)
+//   search_best(14)  → s(P6)+ph(P6)  = 14,  err 0  (EXACT, cross-PN)
+//   search_best(137) → t(P496)+pf127(P8128) = 137, err 0 (EXACT, cross-PN)
+//   search_best(1836.15267343) → closest 1778, err ≈ 3.167%
+//   triviality_score: identity+single-atom → 0; cross-PN(2) → 7
+//
+// Run:  hexa run test/perfect_number_engine_smoke.hexa
+// Sentinel: __PNENG_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/perfect_number_engine.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn approx(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    let ad = if d < 0.0 { -d } else { d }
+    return ad < tol
+}
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+let tol = 0.000001
+
+// ── atom pool ───────────────────────────────────────────────────────────
+
+let atoms = build_atom_pool()
+check("atom pool has 28 atoms (4 PN × 7)", len(atoms) == 28)
+
+// locate σ/τ/φ of P6 (first 7 atoms are P6's)
+check("atoms[0] is P6 value 6.0",  approx(atoms[0].value, 6.0, tol))
+check("atoms[1] is s(P6) = 12.0",  approx(atoms[1].value, 12.0, tol))
+check("atoms[2] is t(P6) = 4.0",   approx(atoms[2].value, 4.0, tol))
+check("atoms[3] is ph(P6) = 2.0",  approx(atoms[3].value, 2.0, tol))
+check("atoms[4] is s-1(P6) = 2.0 (σ₋₁ perfect-number def)", approx(atoms[4].value, 2.0, tol))
+
+// ── binary_value ────────────────────────────────────────────────────────
+
+check("binary_value(28,2,4) [28/2] == 14", approx(binary_value(28.0, 2.0, 4), 14.0, tol))
+check("binary_value(12,4,3) [12*4] == 48", approx(binary_value(12.0, 4.0, 3), 48.0, tol))
+check("binary_value(12,2,1) [12-2] == 10", approx(binary_value(12.0, 2.0, 1), 10.0, tol))
+
+// ── triviality_score ────────────────────────────────────────────────────
+
+check("triviality(identity, no-op, 1pn, 1ft) == 0",
+      triviality_score(true, false, 1, 1) == 0)
+check("triviality(no-identity, op, 2pn cross, 1ft) == 7",
+      triviality_score(false, true, 2, 1) == 7)
+check("triviality(no-identity, op, 3pn, 2ft) == 9",
+      triviality_score(false, true, 3, 2) == 9)
+
+// ── search_best ─────────────────────────────────────────────────────────
+
+let m56 = search_best(56.0)
+check("search_best(56) error_pct == 0 (EXACT)", approx(m56.error_pct, 0.0, tol))
+check("search_best(56) formula_value == 56", approx(m56.formula_value, 56.0, tol))
+
+let m14 = search_best(14.0)
+check("search_best(14) error_pct == 0 (EXACT)", approx(m14.error_pct, 0.0, tol))
+
+let m137 = search_best(137.0)
+check("search_best(137) error_pct == 0 (EXACT, cross-PN)", approx(m137.error_pct, 0.0, tol))
+check("search_best(137) value == 137", approx(m137.formula_value, 137.0, tol))
+
+let m1836 = search_best(1836.15267343)
+check("search_best(1836.15) closest value == 1778", approx(m1836.formula_value, 1778.0, tol))
+check("search_best(1836.15) error ≈ 3.167%", approx(m1836.error_pct, 3.1670935794989608, 0.0001))
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  perfect_number_engine smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__PNENG_SMOKE__ FAIL")
+} else {
+    println("__PNENG_SMOKE__ PASS")
+}

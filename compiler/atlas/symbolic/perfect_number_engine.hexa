@@ -1,0 +1,160 @@
+// compiler/atlas/symbolic/perfect_number_engine.hexa — perfect-number atom engine
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of archive-TECS-L/perfect_number_engine.py (TECS-L
+// absorption). Ports the DETERMINISTIC core only:
+//
+//   (1) build_atom_pool — divisor-function atoms (P, σ(P), τ(P), φ(P),
+//       σ₋₁(P)=2, prime factors) for the even perfect numbers
+//       {6, 28, 496, 8128} (Euclid-Euler).
+//   (2) binary_ops — exact arithmetic on two atoms (+ − × ÷, integer
+//       combination C(a,b), triangular T(a+b+1)).
+//   (3) triviality_score — non-triviality scorer (identity / single-atom
+//       penalties; cross-perfect-number + function-diversity bonuses).
+//   (4) search_best — closest binary-op formula to a target by % error.
+//
+// The random Monte-Carlo Texas-sharpshooter is NOT ported (it is the
+// canonical-extract backlog item #3; verdict-gating value is the
+// deterministic atom pool + triviality scorer). Atoms carry their
+// perfect-number origin and function-type as integer tags, so the scorer
+// is exact and string-parse-free. Zero external dependency (g5).
+//
+// Cross-link: atlas/inbox/_tecsl_calculator_port_manifest.md §B ·
+// _archive_tecs_l_absorption_manifest.md §C (triviality-score GAP) ·
+// stdlib/core/math.hexa.
+
+import "stdlib/core/math.hexa"
+
+// function-type tags: 0=P (the number) 1=σ 2=τ 3=φ 4=σ₋₁ 5=prime-factor
+pub struct Atom {
+    name: string,
+    value: float,
+    origin: int,    // perfect number 6 / 28 / 496 / 8128 (0 = none)
+    ftype: int      // function-type tag above
+}
+
+// build_atom_pool — divisor-function atoms for {6,28,496,8128}.
+pub fn build_atom_pool() -> [Atom] {
+    // perfect-number table: [p, sigma, tau, phi, pf_a, pf_b]
+    let pns = [
+        [6, 12, 4, 2, 2, 3],
+        [28, 56, 6, 12, 2, 7],
+        [496, 992, 10, 240, 2, 31],
+        [8128, 16256, 14, 4096, 2, 127]
+    ]
+    let mut atoms: [Atom] = []
+    let mut i = 0
+    while i < len(pns) {
+        let row = pns[i]
+        let p = row[0]
+        let tag = "P" + to_string(p)
+        atoms.push(Atom { name: tag,           value: to_float(p),      origin: p, ftype: 0 })
+        atoms.push(Atom { name: "s(" + tag + ")",  value: to_float(row[1]), origin: p, ftype: 1 })
+        atoms.push(Atom { name: "t(" + tag + ")",  value: to_float(row[2]), origin: p, ftype: 2 })
+        atoms.push(Atom { name: "ph(" + tag + ")", value: to_float(row[3]), origin: p, ftype: 3 })
+        atoms.push(Atom { name: "s-1(" + tag + ")",value: 2.0,              origin: p, ftype: 4 })
+        atoms.push(Atom { name: "pf" + to_string(row[4]) + "(" + tag + ")", value: to_float(row[4]), origin: p, ftype: 5 })
+        atoms.push(Atom { name: "pf" + to_string(row[5]) + "(" + tag + ")", value: to_float(row[5]), origin: p, ftype: 5 })
+        i = i + 1
+    }
+    return atoms
+}
+
+fn _absf(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+// binary combination value for two atoms; opcode:
+//   0 a+b  1 a-b  2 b-a  3 a*b  4 a/b  5 b/a
+pub fn binary_value(a: float, b: float, op: int) -> float {
+    if op == 0 { return a + b }
+    if op == 1 { return a - b }
+    if op == 2 { return b - a }
+    if op == 3 { return a * b }
+    if op == 4 { if b != 0.0 { return a / b } return 0.0 }
+    if op == 5 { if a != 0.0 { return b / a } return 0.0 }
+    return 0.0
+}
+
+// triangular T(m) = m(m-1)/2 (source uses s=a+b+1 then s(s-1)/2).
+pub fn triangular_sum(a: float, b: float) -> float {
+    let s = a + b + 1.0
+    return s * (s - 1.0) / 2.0
+}
+
+// triviality_score — deterministic non-triviality scorer.
+// Base 5; identity-map penalty −4 (formula is the lone P{target});
+// single-atom penalty −3 (no operator); cross-perfect-number bonus +2
+// (≥2 distinct origins), +1 more (≥3); function-diversity bonus +1
+// (≥2 distinct ftypes). Clamped at 0.  `n_pn` = #distinct perfect-number
+// origins in the formula, `n_ftype` = #distinct function types,
+// `has_op` = an operator is present, `is_identity` = lone-P identity map.
+pub fn triviality_score(is_identity: bool, has_op: bool, n_pn: int, n_ftype: int) -> int {
+    let mut score = 5
+    if is_identity { score = score - 4 }
+    if !has_op { score = score - 3 }
+    if n_pn >= 2 { score = score + 2 }
+    if n_pn >= 3 { score = score + 1 }
+    if n_ftype >= 2 { score = score + 1 }
+    if score < 0 { return 0 }
+    return score
+}
+
+pub struct PNMatch {
+    formula: string,
+    formula_value: float,
+    target: float,
+    error_pct: float,
+    nontrivial: int
+}
+
+// search_best — over all atom pairs × 6 binary ops, the closest formula to
+// `target` (relative %), with its non-triviality score.
+pub fn search_best(target: float) -> PNMatch {
+    let atoms = build_atom_pool()
+    let n = len(atoms)
+    let mut best_err = 1.0e30
+    let mut best_formula = "NONE"
+    let mut best_val = 0.0
+    let mut best_score = 0
+    let mut i = 0
+    while i < n {
+        let mut j = i
+        while j < n {
+            let aa = atoms[i]
+            let ab = atoms[j]
+            let mut op = 0
+            while op < 6 {
+                let v = binary_value(aa.value, ab.value, op)
+                if v != 0.0 && target != 0.0 {
+                    let err = _absf(v - target) / _absf(target) * 100.0
+                    if err < best_err {
+                        best_err = err
+                        best_val = v
+                        // distinct origins / ftypes among the two atoms
+                        let mut n_pn = 1
+                        if aa.origin != ab.origin { n_pn = 2 }
+                        let mut n_ft = 1
+                        if aa.ftype != ab.ftype { n_ft = 2 }
+                        best_score = triviality_score(false, true, n_pn, n_ft)
+                        let opn = ["+", "-", "r-", "*", "/", "r/"]
+                        best_formula = aa.name + opn[op] + ab.name
+                    }
+                }
+                op = op + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return PNMatch {
+        formula: best_formula,
+        formula_value: best_val,
+        target: target,
+        error_pct: best_err,
+        nontrivial: best_score
+    }
+}
