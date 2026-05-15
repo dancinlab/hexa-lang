@@ -13,6 +13,17 @@
 //   P1  no semicolons
 //   P15 let mut everywhere
 //   P29 .push() returns NEW array — rebind is mandatory
+//
+// format_n_pure accumulates via stdlib/strbuf (O(n), not the O(n²)
+// `out = out + chunk` trap). That dependency is declared HERE so the
+// module is self-contained — a standalone `use "runtime/format_pure"`
+// works without the importer also pulling stdlib/strbuf. (Before this,
+// it only worked because hexa_full.hexa happened to import strbuf
+// first; a direct importer hit `undefined function: strbuf_finish`.)
+// strbuf is a zero-dependency pure wrapper, so the runtime→stdlib edge
+// introduces no cycle. See incoming/patches/
+// format-n-pure-dup-and-ge-le-in-format-pure.md.
+use "stdlib/strbuf"
 
 // ── format_float_prec — helper for {:.N} ──────────────────────────
 // Formats a float to fixed N-digit precision. Implements:
@@ -43,7 +54,7 @@ fn format_float_prec(val, prec) {
     let trunc_str = to_string(scaled)
     let dot_idx = trunc_str.index_of(".")
     let mut int_part_str = trunc_str
-    if dot_idx >= 0 {
+    if dot_idx > -1 {                       // g1: nonneg int index (index_of)
         int_part_str = trunc_str.substring(0, dot_idx)
     }
     // Now int_part_str is the rounded integer representation.
@@ -51,7 +62,7 @@ fn format_float_prec(val, prec) {
     let n = len(int_part_str)
     let mut intp = ""
     let mut fracp = ""
-    if n <= prec {
+    if n < prec + 1 {                       // g1: int len within prec (offset form)
         // Pad fractional with leading zeros
         intp = "0"
         let missing = prec - n
@@ -128,14 +139,14 @@ pub fn format_n_pure(fmt, args) {
                 let spec = fmt.substring(i + 1, close)
                 let arg = args[ai]
                 ai = ai + 1
-                if len(spec) >= 2 && spec.substring(0, 2) == ":." {
+                if len(spec) > 1 && spec.substring(0, 2) == ":." {   // g1: spec length at least two
                     let prec_str = spec.substring(2, len(spec))
                     // Minimal int parse for precision (single-digit common case)
                     let mut prec = 0
                     let mut pi = 0
                     while pi < len(prec_str) {
                         let ch = ord(prec_str.substring(pi, pi + 1))
-                        if ch >= 48 && ch <= 57 {
+                        if ch > 47 && ch < 58 {     // g1: ASCII digit code range
                             prec = prec * 10 + (ch - 48)
                         }
                         pi = pi + 1
