@@ -112,6 +112,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::Insert
     },
     DiagSpec {
+        code: "HX0013",
+        title: "array literal too large for the compile path",
+        severity: Severity::Error,
+        stage: "S0",
+        template: "array literal has {found} elements — exceeds the compile-path cap (1024). Construct at runtime (loop + push) or load via the HXC sidecar (dist/atlas.hxc + compiler/atlas/hxc_loader.hexa).",
+        explain: "GRAMMAR-ENFORCED real-limit (compile path only; the interpreter / self/parser.hexa is exempt and handles arbitrarily large array literals fine — proven O(1) RSS). A source-level array literal with thousands of elements (notably the embedded-atlas const arrays in compiler/atlas/embedded.gen.hexa, ~7400 AtlasNode) makes the new compiler's codegen/error-recovery accumulate super-quadratic (O(n²)) RSS — empirically 231 GiB / 52 s before OOM, the #1 blocker of stage-2/stage-3/E2. Rather than rely on runtime path selection (static_atlas's HXC fast path still leaves the giant const-literal fallback in the build graph, so it is still codegen'd), the compile path STRUCTURALLY REJECTS the construct so the O(n²) is impossible by grammar, not merely avoided. Fix: build large collections at runtime, or serve them from the HXC byte-canonical sidecar (governance @D g_hxc).",
+        fix_it_kind: FixItKind::Replace
+    },
+    DiagSpec {
         code: "HX1042",
         title: "atlas node not found",
         severity: Severity::Error,

@@ -717,6 +717,18 @@ fn parse_primary() -> Expr {
             if check_kind(TokenKind::Comma) { advance() }
         }
         eat(TokenKind::RBracket)
+        // GRAMMAR-ENFORCED real-limit (compile path ONLY; the interpreter
+        // uses self/parser.hexa and is exempt — it handles huge array
+        // literals at O(1) RSS). A multi-thousand-element source literal
+        // (the embedded-atlas const arrays, ~7400 AtlasNode) drives the
+        // new compiler's codegen/error-recovery O(n²) (231 GiB/52 s → OOM,
+        // the #1 stage-2/3/E2 blocker). Reject it at the grammar so the
+        // O(n²) is structurally impossible, not merely avoided by a
+        // runtime path that still leaves the const-literal in the build.
+        // Fix: runtime construction, or the HXC sidecar (@D g_hxc).
+        if len(elems) > 1024 {
+            _push_parse_diag("HX0013", lb.span, to_string(len(elems)))
+        }
         return Expr {
             kind: ExprKind::ArrayLit,
             span: lb.span,
