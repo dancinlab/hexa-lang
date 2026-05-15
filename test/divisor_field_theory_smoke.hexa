@@ -1,0 +1,82 @@
+// test/divisor_field_theory_smoke.hexa — smoke for symbolic/divisor_field_theory.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values from archive-TECS-L/.shared/calc/divisor_field_theory.py
+// (commit 4ee05c39) + the manifest's classic perfect-number action:
+//   classic action  P(n)=σ(n)−2n
+//     P(6)=0, P(28)=0  (perfect)         P(12)=+4 (abundant)  P(8)=−1 (deficient)
+//     perfect_solutions[1,500] = {6, 28, 496}
+//   combined action  S(n)=[σφ−nτ]² + [σ(n+φ)−nτ²]²
+//     S(1): term1=0, term2=1 → S=1     S(6): term1=0, term2=0 → S=0
+//     action_zero[1,500] = {6}         (n=1 fails the 2nd residual)
+//   R(n)=σφ/(nτ):  R(6)=1.0 ; R=1 solutions [1,200] = {1, 6}
+//
+// Run:  hexa run test/divisor_field_theory_smoke.hexa
+// Sentinel: __DFT_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/divisor_field_theory.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+fn approx(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    if d < 0.0 { return (0.0 - d) < tol }
+    return d < tol
+}
+
+// ── arithmetic primitives ───────────────────────────────────────────────
+check("dft_sigma(6) == 12", dft_sigma(6) == 12)
+check("dft_tau(6) == 4",    dft_tau(6) == 4)
+check("dft_phi(6) == 2",    dft_phi(6) == 2)
+
+// ── classic perfect-number action P(n)=σ(n)−2n ──────────────────────────
+check("P(6) == 0 (perfect)",  perfect_action(6) == 0)
+check("P(28) == 0 (perfect)", perfect_action(28) == 0)
+check("is_perfect(6)",  is_perfect(6))
+check("is_perfect(28)", is_perfect(28))
+check("!is_perfect(12)", !is_perfect(12))
+check("abundance_class(12) == +1 (abundant)", abundance_class(12) == 1)
+check("abundance_class(8) == -1 (deficient)", abundance_class(8) == -1)
+check("abundance_class(6) == 0 (perfect)",    abundance_class(6) == 0)
+let ps = perfect_solutions(500)
+check("perfect_solutions[1,500] == {6,28,496}",
+      len(ps) == 3 && ps[0] == 6 && ps[1] == 28 && ps[2] == 496)
+
+// ── combined divisor-field action S(n) ──────────────────────────────────
+let a1 = compute_action(1)
+check("S(1): term1=0, term2=1, S=1", a1.term1 == 0 && a1.term2 == 1 && a1.action == 1)
+let a6 = compute_action(6)
+check("S(6): term1=0, term2=0, S=0", a6.term1 == 0 && a6.term2 == 0 && a6.action == 0)
+check("divisor_field_action(6) == 0", divisor_field_action(6) == 0)
+check("divisor_field_action(1) == 1", divisor_field_action(1) == 1)
+let az = action_zero_solutions(500)
+check("action_zero[1,500] == {6}", len(az) == 1 && az[0] == 6)
+
+// ── R(n) = σφ/(nτ) ──────────────────────────────────────────────────────
+check("r_factor(6) == 1.0", approx(r_factor(6), 1.0, 0.000001))
+let ro = r_one_solutions(200)
+check("R=1 solutions [1,200] == {1,6}",
+      len(ro) == 2 && ro[0] == 1 && ro[1] == 6)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  divisor_field_theory smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__DFT_SMOKE__ FAIL")
+} else {
+    println("__DFT_SMOKE__ PASS")
+}
