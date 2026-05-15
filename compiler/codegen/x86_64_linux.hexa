@@ -651,7 +651,18 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
 
             let suf = _x86_setcc_suffix(s.op)
             if len(suf) > 0 {
-                buf.push(_x86_instr2("cmp", a, b, "binop " + s.op))
+                // x86 `cmp` first operand must be reg/mem, not imm. When the
+                // LHS lowered to an immediate (const_int operand) we'd emit
+                // `cmp 0, 0` which GNU as rejects ("operand type mismatch").
+                // Materialize the LHS into a_scratch first. Mirrors the
+                // arm64_darwin.hexa fix (fb09d4bf).
+                let mut a_real = a
+                if s.args[0].kind == "const_int" {
+                    buf.push(_x86_instr2("mov", _x86_op_reg(a_scratch), a,
+                                     "materialize cmp lhs to reg"))
+                    a_real = _x86_op_reg(a_scratch)
+                }
+                buf.push(_x86_instr2("cmp", a_real, b, "binop " + s.op))
                 buf.push(_x86_instr1("set" + suf, _x86_op_reg("al"),
                                  "binop " + s.op + " → al"))
                 buf.push(_x86_instr2("movzx", dst, _x86_op_reg("al"),
@@ -660,12 +671,30 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 return buf
             }
 
+            if _x86_is_arith_div(s.op) {
+                // x86 idiv is single-operand: dividend in rdx:rax, divisor
+                // reg/mem (NOT imm), quotient → rax. The generic 2-operand
+                // `idiv dst, b` emit below is invalid on x86 (GNU as rejects
+                // "operand type mismatch"). Emit the proper sequence.
+                buf.push(_x86_instr2("mov", _x86_op_reg("rax"), a, "idiv dividend → rax"))
+                buf.push(_x86_instr0("cqo", "sign-extend rax into rdx:rax"))
+                let mut divisor = b
+                if s.args[1].kind == "const_int" {
+                    buf.push(_x86_instr2("mov", _x86_op_reg(b_scratch), b,
+                                     "materialize idiv divisor to reg"))
+                    divisor = _x86_op_reg(b_scratch)
+                }
+                buf.push(_x86_instr1("idiv", divisor, "binop /"))
+                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                                 "idiv quotient → dst"))
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                return buf
+            }
             buf.push(_x86_instr2("mov", dst, a, "binop lhs into dst"))
             let mut mnemonic = "add"
             if _x86_is_arith_add(s.op) { mnemonic = "add" }
             if _x86_is_arith_sub(s.op) { mnemonic = "sub" }
             if _x86_is_arith_mul(s.op) { mnemonic = "imul" }
-            if _x86_is_arith_div(s.op) { mnemonic = "idiv" }
             if _x86_is_bit_and(s.op)   { mnemonic = "and" }
             if _x86_is_bit_or(s.op)    { mnemonic = "or"  }
             if _x86_is_bit_xor(s.op)   { mnemonic = "xor" }
@@ -753,7 +782,16 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         if len(s.args) > 0 {
             buf = _x86_op_rm(buf, s.args[0], st, rm, "r10")
             let cond = _x86_op_resolve(s.args[0], st, rm, "r10")
-            buf.push(_x86_instr2("test", cond, cond, "br_cond test"))
+            // x86 `test` first operand must be reg/mem, not imm. A const_int
+            // condition would emit `test 0, 0` (rejected by GNU as).
+            // Materialize into r10 first. Mirrors the cmp fix above.
+            let mut cond_real = cond
+            if s.args[0].kind == "const_int" {
+                buf.push(_x86_instr2("mov", _x86_op_reg("r10"), cond,
+                                 "materialize test cond to reg"))
+                cond_real = _x86_op_reg("r10")
+            }
+            buf.push(_x86_instr2("test", cond_real, cond_real, "br_cond test"))
             let else_lab = _x86_64_block_label(modhash, fname, s.target_block_else)
             buf.push(_x86_instr1("jz", _x86_op_label(else_lab), "jump-if-zero -> else"))
         }
