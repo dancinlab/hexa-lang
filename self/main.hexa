@@ -463,13 +463,32 @@ fn cmd_cc() {
     //          에서도 runtime.c 를 찾지 못했다. 본 수정으로 Mac/Linux 양쪽
     //          에서 안정화. null-char warning 2건은 non-fatal — 무시.
     let uname = exec("uname 2>/dev/null | tr -d ' \\n\\t'")
+    // PHASE 1.6 (2026-05-15): build runtime.o ahead of hexa_cc.c so the
+    // generated transpiler links against the precompiled runtime instead of
+    // re-codegenning runtime.c inline. Saves ~8 s user-time per regen on this
+    // ~33 K LOC TU (measured 26.47 s → 18.30 s with -O2). The .o is cached
+    // adjacent to runtime.c; rebuild only when runtime.c is newer.
+    let rt_c = __hxroot + "/self/runtime.c"
+    let rt_o = __hxroot + "/self/runtime.o"
+    let rt_stamp = exec("[ '" + rt_o + "' -nt '" + rt_c + "' ] && printf cached || printf stale")
+    if rt_stamp == "stale" {
+        let mut rt_cmd = ""
+        if uname == "Linux" {
+            rt_cmd = "clang -O2 -D_GNU_SOURCE -c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
+        } else {
+            rt_cmd = "clang -O2 -c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
+        }
+        println("  [rt] " + rt_cmd)
+        let rt_out = exec(rt_cmd)
+        if len(rt_out) > 0 { println(rt_out) }
+    }
     let mut cmd = ""
     if uname == "Linux" {
-        cmd = "clang -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' -o '" + __hxroot + "/self/native/hexa_v2' -lm 2>&1"
+        cmd = "clang -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/self/native/hexa_v2' -lm 2>&1"
     } else {
         // macOS (Darwin) — libSystem 이 libm 자동 포함, _GNU_SOURCE 무의미.
-        // 단, `-I self` 는 runtime.c 경로 해석에 반드시 필요.
-        cmd = "clang -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' -o '" + __hxroot + "/self/native/hexa_v2' 2>&1"
+        // 단, `-I self` 는 runtime.h 경로 해석에 반드시 필요.
+        cmd = "clang -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/self/native/hexa_v2' 2>&1"
     }
     println("  " + cmd)
     let r = exec(cmd)
@@ -718,7 +737,10 @@ fn merge_modules_awk(out_path) {
     if len(rename_write) > 0 { println("    rename-write: " + rename_write) }
     // Write header/footer via heredoc (quoted delimiter — no shell expansion).
     // Avoids shell_quote's double-quote wrapping which breaks on embedded `"`.
-    let header_cmd = "cat > " + out_path + " <<'__HDR_EOF__'\n// HEXA self-hosted compiler — regenerated via `hexa cc --regen`\n#include \"runtime.c\"\n\n__HDR_EOF__"
+    // PHASE 1.6 (2026-05-15): emit `runtime.h` so the regenerated transpiler
+    // links against the precompiled runtime.o (built ahead in the rebuild
+    // step above) instead of re-codegenning runtime.c inline every cycle.
+    let header_cmd = "cat > " + out_path + " <<'__HDR_EOF__'\n// HEXA self-hosted compiler — regenerated via `hexa cc --regen`\n#include \"runtime.h\"\n\n__HDR_EOF__"
     exec(header_cmd)
     // append each module (awk-filtered) with section marker
     let sections = ["lexer|/tmp/_lexer.c", "parser|/tmp/_parser.c", "type_checker|/tmp/_tc.c", "codegen_c2|/tmp/_cg.c"]
@@ -821,7 +843,10 @@ fn cmd_regen_cc() {
     //   default bracket nesting limit (256) blows up on such files. Bumping
     //   to 4096 unblocks the ALM hexa-first launcher; real fix is to emit
     //   a loop or single large literal in codegen_c2, tracked separately.
-    let cc = "clang -O2 " + os_clang_cflags() + "-I '" + __hxroot + "/self' -x c -Wno-trigraphs -fbracket-depth=4096 " + out_new + " -o /tmp/hexa_v2.new" + os_clang_ldflags() + " 2>&1 | head -40"
+    // PHASE 1.6 (2026-05-15): step-3 smoke compile now links self/runtime.o
+    // (built by cmd_cc rebuild step ahead) so the failure-tolerated smoke
+    // actually exercises the same link arrangement as the real rebuild.
+    let cc = "clang -O2 " + os_clang_cflags() + "-I '" + __hxroot + "/self' -x c -Wno-trigraphs -fbracket-depth=4096 " + out_new + " '" + __hxroot + "/self/runtime.o' -o /tmp/hexa_v2.new" + os_clang_ldflags() + " 2>&1 | head -40"
     println("  " + cc)
     let cc_out = exec(cc)
     if len(cc_out) > 0 { println(cc_out) }

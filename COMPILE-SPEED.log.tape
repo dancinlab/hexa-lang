@@ -600,3 +600,59 @@
     speed track. Filed for follow-up.
   EOF
   commit = "37f6a1d0 (gate measurement); this entry is the external-profile result on top"
+
+# ─── 2026-05-15  PHASE 1.6 — self-host regen path uses runtime.h too ──
+
+@A phase_1_6_self_host := "hexa_cc.c regen → runtime.h + runtime.o link" :: artifact [d=2026-05-15 ok]
+  step = "Close the last `#include \"runtime.c\"` left in the toolchain — the self-hosted transpiler hexa_cc.c itself. With PHASE 1.3.B the codegen emits runtime.h for user.c outputs, but hexa_cc.c (the regen'd merge of 4 SSOT modules) had `runtime.c` hard-coded in main.hexa's merge step. Switching it lets `hexa cc` rebuild use the same precompiled-runtime path."
+  patches <<~EOF
+    self/main.hexa — two-place patch (driven through hexa.real binary):
+      (a) merge header   `#include "runtime.c"` → `#include "runtime.h"`
+                          (line ~742, the cat<<__HDR_EOF__ in merge_modules_awk)
+      (b) cmd_cc rebuild
+          - build self/runtime.o from runtime.c once (cached by -nt mtime)
+          - link self/runtime.o in the final clang invocation that produces hexa_v2
+      (c) cmd_regen_cc step-3 smoke
+          - same runtime.o link, so the failure-tolerated smoke mirrors the
+            real rebuild link arrangement
+
+    self/runtime.h — additions to cover signals main.hexa emits:
+      hexa_mono_ns                          extern decl  (runtime.c:10044)
+      hexa_exec_stream_impl                 extern decl  (runtime.c:4215)
+      __hexa_exec_stream_wrap_fp/_hv        static inline (mirror runtime.c:4262/4265)
+      hexa_exec_stream                      _Generic macro
+
+    .gitignore — add self/runtime.o (build artifact, sha-cached locally)
+  EOF
+  rebuild_chain <<~EOF
+    To activate (one-time, this commit):
+      1. hexa_v2 self/main.hexa /tmp/main.c     (current binary, emits runtime.h)
+      2. clang main.c runtime.o + libs → hexa.real.new
+      3. mv hexa.real.new ./hexa.real           (promote)
+      4. ./hexa cc --regen                       (produces hexa_cc.c.new with runtime.h)
+      5. mv hexa_cc.c.new → hexa_cc.c           (promote)
+      6. ./hexa cc                               (cmd_cc builds runtime.o + links → new hexa_v2)
+    After this, every subsequent `hexa cc` (rebuild) runs through the new fast path.
+  EOF
+  bench_regen_rebuild <<~EOF
+    Pre-PHASE-1.6 (clang hexa_cc.c with `#include "runtime.c"`):
+      real 35.20 s · user 26.47 s · sys 0.65 s
+    Post-PHASE-1.6 (clang hexa_cc.c with `#include "runtime.h"` + runtime.o link):
+      real 41.04 s · user 21.51 s · sys 0.74 s    # cmd_cc actual: includes runtime.o build first run
+      real 29.53 s · user 18.30 s · sys 0.55 s    # cached runtime.o (warm)
+    Savings per rebuild after warm runtime.o:  ~5.7 s wall · ~8.2 s user (1.45× user / 1.19× wall).
+  EOF
+  invariants_preserved <<~EOF
+    - Existing `hexa cc` / `hexa cc --regen` user contract unchanged
+    - Output binary (new hexa_v2) STILL emits `#include "runtime.h"` for user.c
+      (PHASE 1.3.B behavior preserved)
+    - `bin/hexa-fast check` smoke passes (runtime.h surface 0 failures)
+    - `bin/hexa-fast bench bench/fib_rec.hexa` reports 7.22× speedup, no change
+    - hexa.real is gitignored (not tracked); user rebuilds from main.hexa via this commit
+  EOF
+  backup_paths <<~EOF
+    /tmp/hexa.real.bak.<timestamp>          (pre-PHASE-1.6 hexa.real binary)
+    /tmp/main.hexa.bak.<timestamp>          (pre-patch main.hexa source)
+    /tmp/hexa_v2.bak.<timestamp>            (pre-PHASE-1.6 hexa_v2 binary)
+    /tmp/hexa_cc.c.bak.<timestamp>          (pre-PHASE-1.6 hexa_cc.c)
+  EOF

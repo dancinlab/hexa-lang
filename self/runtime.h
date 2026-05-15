@@ -224,6 +224,68 @@ HexaVal hexa_type_of(HexaVal v);                        /* runtime.c:4704 */
 void    hexa_print_val(HexaVal v);                    /* runtime.c:4436 */
 void    hexa_eprint_val(HexaVal v);                   /* runtime.c:4343 */
 
+/* missing symbols flagged 2026-05-15 by wilson clean build against runtime.h
+ * (see incoming/patches/runtime-h-incomplete-after-phase-1-3-b.md). All seven
+ * are non-static functions in runtime.c — the gap was a header authoring miss,
+ * not a `static` issue. Each line cites its definition for SSOT re-sync. */
+HexaVal hexa_map_keys(HexaVal m);                     /* runtime.c:2430 — ordered key array */
+HexaVal hexa_json_parse(HexaVal s);                   /* runtime.c:10538 — JSON → HexaVal */
+HexaVal hexa_str_substr(HexaVal s, HexaVal start, HexaVal len); /* runtime.c:7495 — (start, length) overload distinct from hexa_str_substring(start, end) */
+HexaVal hexa_input(HexaVal prompt);                   /* runtime.c:7616 — line-input prompt */
+HexaVal hexa_read_stdin(void);                        /* runtime.c:9962 — full-stdin slurp */
+HexaVal hexa_exec_with_status(HexaVal cmd);           /* runtime.c:4281 — exec returning {rc, stdout, stderr} */
+HexaVal hexa_timestamp(void);                         /* runtime.c:9877 — UNIX millis */
+HexaVal hexa_from_char_code(HexaVal n);               /* runtime.c:7668 — int → 1-char string */
+HexaVal hexa_sleep_ms(HexaVal ms);                    /* runtime.c:10000 — non-blocking-ish sleep */
+HexaVal hexa_term_winsize_rows(void);                 /* runtime.c:11340 — terminal rows (TIOCGWINSZ) */
+HexaVal hexa_term_winsize_cols(void);                 /* runtime.c:11345 — terminal cols (TIOCGWINSZ) */
+HexaVal hexa_term_write_str(HexaVal s);               /* runtime.c:11357 — write(2) raw bytes to STDOUT_FILENO */
+HexaVal hexa_term_raw_enter(void);                    /* runtime.c:11337 — termios cfmakeraw + tcsetattr */
+HexaVal hexa_term_raw_restore(void);                  /* runtime.c:11338 — restore saved termios */
+HexaVal hexa_term_poll_stdin(HexaVal ms);             /* runtime.c:11351 — poll(2) STDIN for `ms` */
+HexaVal hexa_term_read_byte(void);                    /* runtime.c:11355 — read(2) 1 byte from STDIN */
+HexaVal hexa_term_install_sigwinch(void);             /* runtime.c:11366 — install SIGWINCH handler */
+HexaVal hexa_term_sigwinch_pending(void);             /* runtime.c:11367 — drain SIGWINCH-pending flag */
+HexaVal hexa_term_install_sigint(void);               /* runtime.c:11368 — install SIGINT handler */
+HexaVal hexa_term_sigint_pending(void);               /* runtime.c:11369 — drain SIGINT-pending flag */
+HexaVal hexa_term_getppid(void);                      /* runtime.c:11372 — getppid() as HexaVal int */
+HexaVal hexa_time_ms(void);                           /* runtime.c:9889 — monotonic millis (CLOCK_MONOTONIC) */
+HexaVal hexa_json_stringify(HexaVal v);               /* runtime.c:10639 — HexaVal → JSON */
+HexaVal hexa_bytes_to_str_raw(HexaVal arr);           /* runtime.c:7718 — byte array → raw string */
+HexaVal rt_append_file(HexaVal path, HexaVal content); /* runtime.c:9830 — fs append (HexaVal-typed wrapper) */
+HexaVal rt_str_to_lower(HexaVal s);                   /* runtime.c:5407 — ASCII lowercase */
+HexaVal hexa_map_remove(HexaVal m, const char* key);  /* runtime.c:2606 — Robin-Hood delete */
+HexaVal hexa_find_poly(HexaVal obj, HexaVal arg);     /* runtime.c:7007 — generic .find() */
+HexaVal hexa_dict_keys(HexaVal m);                    /* runtime.c:9948 — alias of hexa_map_keys */
+HexaVal hexa_base64_encode(HexaVal s);                /* runtime.c:10931 — RFC 4648 */
+HexaVal rt_read_file_bytes(HexaVal path);             /* runtime.c:4957 — fs read → byte array */
+HexaVal hexa_to_int(HexaVal v);                       /* runtime.c:5214 — coerce-to-int */
+
+/* libsodium-backed crypto primitives (live in native/crypto_sodium.c when
+ * HEXA_HAS_LIBSODIUM; codegen emits direct calls regardless, so the header
+ * must declare them so user.c compiles cleanly. Link with -lsodium when used). */
+HexaVal hexa_chacha20_xor(HexaVal key, HexaVal nonce, HexaVal data); /* native/crypto_sodium.c:224 */
+HexaVal hexa_poly1305_onetimeauth(HexaVal key, HexaVal msg);         /* native/crypto_sodium.c:252 */
+HexaVal hexa_sha256_bytes(HexaVal data);                             /* native/crypto_sodium.c:101 */
+HexaVal hexa_ed25519_verify(HexaVal pub, HexaVal msg, HexaVal sig);  /* native/crypto_sodium.c:160 */
+HexaVal hexa_sha512(HexaVal data);                                   /* native/crypto_sodium.c:81 */
+HexaVal hexa_ed25519_sign(HexaVal priv, HexaVal msg);                /* native/crypto_sodium.c:135 */
+HexaVal hexa_x25519_keypair(void);                                   /* native/crypto_sodium.c:181 */
+HexaVal hexa_x25519_scalarmult(HexaVal scalar, HexaVal point);       /* native/crypto_sodium.c:198 */
+HexaVal hexa_aes256_ctr_xor(HexaVal key, HexaVal iv, HexaVal data);  /* native/crypto_openssl.c:20 (HEXA_HAS_OPENSSL) */
+HexaVal hexa_bcrypt_pbkdf(HexaVal pass, HexaVal salt, HexaVal rounds, HexaVal keylen); /* native/crypto_blowfish.c:457 */
+
+/* exec stream (long-running child process IO) */
+HexaVal hexa_exec_stream_open(HexaVal cmd);                          /* runtime.c:11961 */
+HexaVal hexa_exec_stream_close_stdin(HexaVal handle);                /* runtime.c:11963 */
+
+/* Network primitives (native/net.c — POSIX socket wrappers; codegen emits
+ * direct calls so they must be declared here for clean user.c compile). */
+HexaVal hexa_net_connect(HexaVal addr);                  /* native/net.c:368 — connect("host:port") → fd */
+HexaVal hexa_net_write_bytes(HexaVal fd, HexaVal arr);   /* native/net.c:489 — write(fd, byte_arr) */
+HexaVal hexa_net_read_bytes(HexaVal fd, HexaVal maxlen); /* native/net.c:530 — read(fd, max) → byte_arr */
+HexaVal hexa_net_close(HexaVal fd);                      /* native/net.c:168 */
+
 /* try/catch lowering (codegen emits __hexa_try_push/pop around fn bodies
  * with non-void try-blocks; __hexa_try_top is read as a saved-depth marker)
  * DE-STATIC NEEDED in runtime.c (line 4386): drop `static` on __hexa_try_top. */
@@ -265,7 +327,12 @@ HexaVal hexa_exit(HexaVal code);                        /* runtime.c:7518 */
 void    hexa_throw(HexaVal err);                        /* runtime.c:4398 */
 HexaVal hexa_env_var(HexaVal name);                     /* runtime.c:9608 */
 HexaVal hexa_clock(void);                               /* runtime.c:6514 */
+HexaVal hexa_mono_ns(void);                             /* runtime.c:10044 */
 int64_t hexa_as_num(HexaVal v);                         /* runtime.c:1262 */
+
+/* exec streaming impl decl (wrappers + _Generic macro live at the bottom
+ * of this header, after hexa_fn_new is in scope). */
+HexaVal hexa_exec_stream_impl(HexaVal cmd, HexaVal on_line);  /* runtime.c:4215 */
 
 /* math */
 HexaVal hexa_sqrt(HexaVal v);                           /* runtime.c:5152 */
@@ -405,5 +472,20 @@ static inline HexaVal hexa_call4(HexaVal f, HexaVal a1, HexaVal a2, HexaVal a3, 
     }
     return hexa_void();
 }
+
+/* ── exec_stream wrappers (declared after hexa_fn_new is in scope) ──
+ * Mirrors runtime.c:4262-4272. The hexa_v2 codegen emits
+ *   `hexa_exec_stream(cmd, on_line_ident)` with a raw C fn-pointer as the
+ * second arg; _Generic picks the wrap that boxes it into a TAG_FN HexaVal
+ * before forwarding to hexa_exec_stream_impl. */
+static inline HexaVal __hexa_exec_stream_wrap_fp(HexaVal cmd, HexaVal (*fp)(HexaVal)) {
+    return hexa_exec_stream_impl(cmd, hexa_fn_new((void*)fp, 1));
+}
+static inline HexaVal __hexa_exec_stream_wrap_hv(HexaVal cmd, HexaVal cb) {
+    return hexa_exec_stream_impl(cmd, cb);
+}
+#define hexa_exec_stream(cmd, cb) _Generic((cb), \
+    HexaVal: __hexa_exec_stream_wrap_hv, \
+    default: __hexa_exec_stream_wrap_fp)((cmd), (cb))
 
 #endif /* HEXA_RUNTIME_H */
