@@ -1212,7 +1212,13 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         }
         if len(e.children) >= 3 {
             else_t = _infer_expr(e.children[2], env, ctx, out)
-            if !_types_equal(then_t, else_t) {
+            // _types_assignable (not bare _types_equal) for parity with
+            // the return-type site (1257): keeps unknown + same-kind
+            // tolerance AND adds int/float literal coercion so
+            // `if c { 0i32 } else { 0 }` stops false-flagging HX3001.
+            // Genuine kind≠kind non-literal mismatches still report —
+            // no type-soundness weakening (g3).
+            if !_types_assignable(then_t, else_t, e.children[2]) {
                 _emit_hx3001(then_t, else_t, e.span, out)
             }
         }
@@ -1275,7 +1281,11 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         if len(e.children) >= 2 {
             let lhs_t = _infer_expr(e.children[0], env, ctx, out)
             let rhs_t = _infer_expr(e.children[1], env, ctx, out)
-            if !_types_equal(lhs_t, rhs_t) {
+            // _types_assignable (not bare _types_equal) — parity with
+            // the return-type site: `x: i32 = 0` (rhs lit i64) and
+            // unknown-side cases stop false-flagging HX3001; genuine
+            // kind≠kind non-literal mismatches still report (g3 intact).
+            if !_types_assignable(lhs_t, rhs_t, e.children[1]) {
                 _emit_hx3001(lhs_t, rhs_t, e.span, out)
             }
         }
