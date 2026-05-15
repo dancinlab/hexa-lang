@@ -67,6 +67,7 @@ fn cmd_help() {
     println("  atlas append-witness <stage>...         Write staging shard")
     println("  atlas promote --staging <f.n6>          Write to live (* register/pr = stub)")
     println("  atlas-verify [--domain D] [--tier N]     Verdict ledger — 86 entries Stage 1+2+3 hexa-native")
+    println("  calc <engine> [args]                    TECS-L calculators (nstate/vortex/n6/perfect/congruence/gamma0)")
     println("    e.g. hexa atlas lookup P n            → @P n = 6 :: foundation [11*]")
     println("    e.g. hexa atlas-verify --domain math  → §2 MATH verifiers PASS/FAIL + |err|")
     println("")
@@ -3219,6 +3220,24 @@ if len(av) < 3 {
         } else {
             cmd_url(av[3])
         }
+    } else if sub == "calc" {
+        // TECS-L calculators absorbed hexa-native (compiler/atlas/symbolic/*).
+        // Single CLI surface (NOT one file per calculator); algorithms shared
+        // with compiler/atlas/verify/* so verdict-gating and `hexa calc` use
+        // one hexa-native impl (g_self_verify). Zero fs I/O, zero nexus dep.
+        let __inst_c = install_dir_from_argv0()
+        let mut calc_script = "tool/calc_cli.hexa"
+        if len(__inst_c) > 0 {
+            let inst_path_c = __inst_c + "/tool/calc_cli.hexa"
+            if file_exists(inst_path_c) { calc_script = inst_path_c }
+        }
+        let mut calc_args = []
+        let mut ci = 3
+        while ci < len(av) {
+            calc_args.push(av[ci])
+            ci = ci + 1
+        }
+        cmd_run(calc_script, calc_args)
     } else if sub == "atlas" {
         // ATLAS_N6_RETIREMENT_PLAN.md §0b Phase 2: hexa-native atlas surface.
         // tool/atlas_cli.hexa reads the embedded static_atlas() — zero fs I/O,

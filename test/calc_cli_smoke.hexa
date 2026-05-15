@@ -1,0 +1,80 @@
+// test/calc_cli_smoke.hexa — smoke for the unified `hexa calc` surface.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// tool/calc_cli.hexa is a thin dispatch over the 5 hexa-native TECS-L
+// calculators in compiler/atlas/symbolic/*. This smoke exercises the
+// representative value of EACH engine the CLI exposes (the same outputs
+// `hexa calc <engine>` prints), so a regression in any wired calculator
+// fails the single gate. Reference values reproduced from the engines'
+// own ported smokes / Python docstrings:
+//   nstate_width(6)            ≈ 0.154151   (golden zone upper = 0.5)
+//   digit_root(6)=6 · doubling_orbit_period(6)=2 · pisano_period(6)=24
+//   factorize(6)=2·3 · euler_phi(6)=2 · mobius(6)=1 · sigma_k(6,1)=12
+//   isotropy_lcm(1)=lcm{1,2,3}=6   (SL(2,Z) self-ref = first perfect number)
+//   search_best(28) → exact (err 0%)  [28 is a perfect number]
+//
+// Run:  hexa run test/calc_cli_smoke.hexa
+// Sentinel: __CALC_CLI_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/nstate_calculator.hexa"
+import "compiler/atlas/symbolic/vortex_math_verifier.hexa"
+import "compiler/atlas/symbolic/ftl_n6_constants.hexa"
+import "compiler/atlas/symbolic/perfect_number_engine.hexa"
+import "compiler/atlas/symbolic/congruence_chain_engine.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+fn approx(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    if d < 0.0 { return (0.0 - d) < tol }
+    return d < tol
+}
+
+// ── nstate engine (hexa calc nstate 6) ──────────────────────────────────
+check("nstate_width(6) ≈ 0.154151", approx(nstate_width(6), 0.154151, 0.0001))
+let gz6 = nstate_golden_zone(6)
+check("nstate golden_zone(6).upper == 0.5", approx(gz6.upper, 0.5, 0.0001))
+
+// ── vortex engine (hexa calc vortex 6) ──────────────────────────────────
+check("digit_root(6) == 6", digit_root(6) == 6)
+check("doubling_orbit_period(6) == 2", doubling_orbit_period(6) == 2)
+check("pisano_period(6) == 24", pisano_period(6) == 24)
+check("vortex_all_verdicts has 10 entries", len(vortex_all_verdicts()) == 10)
+
+// ── n6 engine (hexa calc n6 <value>) ────────────────────────────────────
+let m144 = n6_find_best_match(144.0)
+check("n6_find_best_match(144) error% < 0.001 (sigma^2 exact)", m144.error_pct < 0.001)
+
+// ── perfect engine (hexa calc perfect 28) ───────────────────────────────
+let pm28 = search_best(28.0)
+check("search_best(28) exact (err% < 0.001)", pm28.error_pct < 0.001)
+
+// ── congruence engine (hexa calc congruence 6 / gamma0 1) ───────────────
+let f6 = factorize(6)
+check("factorize(6) = 2 primes (2,3)", len(f6.primes) == 2)
+check("euler_phi(6) == 2", euler_phi(6) == 2)
+check("mobius(6) == 1", mobius(6) == 1)
+check("sigma_k(6,1) == 12", sigma_k(6, 1) == 12)
+check("isotropy_lcm(1) == 6 (SL(2,Z) self-ref)", isotropy_lcm(1) == 6)
+
+println("═══════════════════════════════════════════════════════════")
+println("  calc_cli smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__CALC_CLI_SMOKE__ FAIL")
+} else {
+    println("__CALC_CLI_SMOKE__ PASS")
+}

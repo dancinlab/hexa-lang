@@ -1,0 +1,219 @@
+// tool/calc_cli.hexa — `hexa calc {nstate|vortex|n6|perfect|congruence|gamma0|list}`
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Single CLI surface over the TECS-L calculators ported hexa-native into
+// compiler/atlas/symbolic/ (TECS-L absorption, Wave 1). One tool, one verb
+// `hexa calc <engine> [args]` — NOT one file per calculator. Mirrors the
+// tool/atlas_cli.hexa dispatch pattern; wired from self/main.hexa
+// _absorbed_script() ("calc" → this file), activates on the next dispatcher
+// rebuild (same as `hexa atlas-verify`). Runnable now directly:
+//   hexa run tool/calc_cli.hexa <engine> [args]
+//
+// Layering: algorithms live in compiler/atlas/symbolic/* (the SSOT, also
+// `use`d by compiler/atlas/verify/* so verdict-gating and `hexa calc` share
+// one hexa-native implementation — g_self_verify). This file is the surface.
+
+use "compiler/atlas/symbolic/nstate_calculator"
+use "compiler/atlas/symbolic/vortex_math_verifier"
+use "compiler/atlas/symbolic/ftl_n6_constants"
+use "compiler/atlas/symbolic/perfect_number_engine"
+use "compiler/atlas/symbolic/congruence_chain_engine"
+
+fn _is_sub(a) -> bool {
+    return a == "nstate" || a == "nstate-find" || a == "vortex" || a == "vortex-verdicts"
+        || a == "n6" || a == "n6-table" || a == "perfect" || a == "perfect-bin"
+        || a == "congruence" || a == "gamma0"
+        || a == "list" || a == "help" || a == "--help" || a == "-h"
+}
+
+fn _slice_args() -> array {
+    let av = args()
+    let n = len(av)
+    let mut i = 1
+    while i < n {
+        let a = to_string(av[i])
+        if _is_sub(a) {
+            let mut out = []
+            let mut j = i
+            while j < n {
+                out.push(av[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    // fallback (mirror tool/atlas_cli.hexa): `hexa run tool/calc_cli.hexa <sub> ...`
+    // — argv[0..1] are runner/script, real args start at index 2.
+    if n >= 3 {
+        let mut out = []
+        let mut j = 2
+        while j < n {
+            out.push(av[j])
+            j = j + 1
+        }
+        return out
+    }
+    return []
+}
+
+fn cmd_help() {
+    println("hexa calc — TECS-L calculators (hexa-native)")
+    println("")
+    println("usage: hexa calc <engine> [args]")
+    println("")
+    println("engines:")
+    println("  nstate <n>            n-state width + golden zone")
+    println("  nstate-find <width>   smallest n whose width <= <width>")
+    println("  vortex <n>            digit-root · doubling-orbit · Pisano period")
+    println("  vortex-verdicts       Tesla 3-6-9 / vortex claim verdicts")
+    println("  n6 <value>            closest n=6 closed-form expr to <value>")
+    println("  n6-table              the n=6 expression table")
+    println("  perfect <target>      best perfect-number atom formula for <target>")
+    println("  perfect-bin <a> <b> <op>   binary op over atoms (op 0..5)")
+    println("  congruence <n>        factor · phi · mobius · sigma_1")
+    println("  gamma0 <n>            Gamma0(n) index/cusps/genus + forcing chain")
+    println("  list                  list engines (this)")
+}
+
+fn _need(rest, k, usage) -> bool {
+    if len(rest) < k {
+        println("error: " + usage)
+        exit(2)
+        return false
+    }
+    return true
+}
+
+fn cmd_nstate(rest) {
+    _need(rest, 2, "usage: hexa calc nstate <n>")
+    let n = to_int(to_string(rest[1]))
+    let w = nstate_width(n)
+    let gz = nstate_golden_zone(n)
+    println("nstate n=" + to_string(n))
+    println("  width  = " + to_string(w))
+    println("  zone   = [" + to_string(gz.lower) + ", " + to_string(gz.upper) + "]  center=" + to_string(gz.center))
+}
+
+fn cmd_nstate_find(rest) {
+    _need(rest, 2, "usage: hexa calc nstate-find <width>")
+    let wv = to_float(to_string(rest[1]))
+    println("nstate-find width<=" + to_string(wv) + "  → n=" + to_string(nstate_find_n_for_width(wv)))
+}
+
+fn cmd_vortex(rest) {
+    _need(rest, 2, "usage: hexa calc vortex <n>")
+    let n = to_int(to_string(rest[1]))
+    println("vortex n=" + to_string(n))
+    println("  digit_root          = " + to_string(digit_root(n)))
+    println("  doubling_orbit_per. = " + to_string(doubling_orbit_period(n)))
+    println("  pisano_period       = " + to_string(pisano_period(n)))
+}
+
+fn cmd_vortex_verdicts() {
+    let vs = vortex_all_verdicts()
+    let mut i = 0
+    while i < len(vs) {
+        println("  [" + to_string(i + 1) + "] " + to_string(vs[i]))
+        i = i + 1
+    }
+}
+
+fn cmd_n6(rest) {
+    _need(rest, 2, "usage: hexa calc n6 <value>")
+    let v = to_float(to_string(rest[1]))
+    let m = n6_find_best_match(v)
+    println("n6 value=" + to_string(v))
+    println("  expr   = " + m.expr + " = " + to_string(m.expr_value))
+    println("  error% = " + to_string(m.error_pct) + "  grade=" + m.grade)
+}
+
+fn cmd_n6_table() {
+    let t = n6_expr_table()
+    let mut i = 0
+    while i < len(t) {
+        println("  " + t[i].name + " = " + to_string(t[i].value))
+        i = i + 1
+    }
+}
+
+fn cmd_perfect(rest) {
+    _need(rest, 2, "usage: hexa calc perfect <target>")
+    let tv = to_float(to_string(rest[1]))
+    let m = search_best(tv)
+    println("perfect target=" + to_string(tv))
+    println("  formula = " + m.formula + " = " + to_string(m.formula_value))
+    println("  error%  = " + to_string(m.error_pct) + "  nontrivial=" + to_string(m.nontrivial))
+}
+
+fn cmd_perfect_bin(rest) {
+    _need(rest, 4, "usage: hexa calc perfect-bin <a> <b> <op0..5>")
+    let a = to_float(to_string(rest[1]))
+    let b = to_float(to_string(rest[2]))
+    let op = to_int(to_string(rest[3]))
+    println("perfect-bin " + to_string(a) + " op" + to_string(op) + " " + to_string(b)
+        + " = " + to_string(binary_value(a, b, op)))
+}
+
+fn cmd_congruence(rest) {
+    _need(rest, 2, "usage: hexa calc congruence <n>")
+    let n = to_int(to_string(rest[1]))
+    let f = factorize(n)
+    let mut fs = ""
+    let mut i = 0
+    while i < len(f.primes) {
+        if i > 0 { fs = fs + " · " }
+        fs = fs + to_string(f.primes[i]) + "^" + to_string(f.exps[i])
+        i = i + 1
+    }
+    println("congruence n=" + to_string(n))
+    println("  factor  = " + fs)
+    println("  phi     = " + to_string(euler_phi(n)))
+    println("  mobius  = " + to_string(mobius(n)))
+    println("  sigma_1 = " + to_string(sigma_k(n, 1)))
+}
+
+fn cmd_gamma0(rest) {
+    _need(rest, 2, "usage: hexa calc gamma0 <n>")
+    let n = to_int(to_string(rest[1]))
+    let fc = forcing_chain(n)
+    println("gamma0 n=" + to_string(n))
+    println("  index   = " + to_string(fc.index))
+    println("  cusps   = " + to_string(fc.cusps))
+    println("  genus   = " + to_string(gamma0_genus(n)))
+    println("  iso_lcm = " + to_string(fc.iso_lcm))
+    println("  lcm·cusps == sigma_1 : " + to_string(fc.lcm_times_cusps_eq_sigma))
+}
+
+fn main() {
+    let a = _slice_args()
+    if len(a) == 0 {
+        cmd_help()
+        return
+    }
+    let sub = to_string(a[0])
+    let mut rest = []
+    let mut i = 0
+    while i < len(a) {
+        rest.push(a[i])
+        i = i + 1
+    }
+    if sub == "nstate" { cmd_nstate(rest) }
+    else if sub == "nstate-find" { cmd_nstate_find(rest) }
+    else if sub == "vortex" { cmd_vortex(rest) }
+    else if sub == "vortex-verdicts" { cmd_vortex_verdicts() }
+    else if sub == "n6" { cmd_n6(rest) }
+    else if sub == "n6-table" { cmd_n6_table() }
+    else if sub == "perfect" { cmd_perfect(rest) }
+    else if sub == "perfect-bin" { cmd_perfect_bin(rest) }
+    else if sub == "congruence" { cmd_congruence(rest) }
+    else if sub == "gamma0" { cmd_gamma0(rest) }
+    else if sub == "list" || sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
+    else {
+        println("error: unknown engine: " + sub)
+        cmd_help()
+        exit(2)
+    }
+}
