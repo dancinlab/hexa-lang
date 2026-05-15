@@ -251,3 +251,31 @@
     fast path automatically.
   EOF
   next = "PHASE 1.3 — hexa_v2 codegen patch: emit `#include \"runtime.h\"` instead of `#include \"runtime.c\"`. Plus driver patch (PHASE 1.4) to sha256-cache runtime.o once."
+
+# ─── 2026-05-15  PHASE 1.3 — opt-in `bin/hexa-fast` wrapper ──────────
+
+@A phase_1_3_wrapper := "bin/hexa-fast — user-visible fast compile path" :: artifact [d=2026-05-15 ok]
+  step = "PHASE 1.3 shipped as an opt-in wrapper rather than a hexa_v2 codegen patch. Rationale: codegen_c2.hexa had ±39 lines of pre-existing uncommitted changes (and hexa_cc.c was regenerated, hexa_v2 binary rebuilt) — adding a codegen change on top would entangle commits. The wrapper gives users the speedup TODAY without touching the toolchain SSOT."
+  artifact = "bin/hexa-fast"
+  responsibilities <<~EOF
+    1. shell out to self/native/hexa_v2  →  /tmp/u.c   (cost ≈ 0.01s)
+    2. sed `#include "runtime.c"` → `#include "runtime.h"`   (cost ≈ 0)
+    3. sha256-cache self/runtime.c → ~/.hexa-cache/runtime-<sha>.o (cold = 0.6s user; warm = noop)
+    4. clang link user.c + cached runtime.o → output binary
+  EOF
+  bench <<~EOF
+    Cold cache (first invocation):
+      real 3.05 s · user 0.72 s · sys 0.33 s   # includes runtime.o build
+
+    Warm cache (subsequent calls):
+      real 0.29 s · user 0.13 s · sys 0.09 s   # 4.8× user / 3.7× wall vs baseline
+    Baseline (`hexa-cc` + clang `#include runtime.c`):
+      real 1.07 s · user 0.62 s · sys 0.09 s
+  EOF
+  overhead_vs_manual = "manual smoke (1.2.A bench) was 0.08 s user — wrapper adds ~0.05 s for bash + shasum + awk + sed + clang spawn. Acceptable for a CLI shim."
+  configuration <<~EOF
+    HEXA_FAST_CFLAGS   override default `-O0` (e.g. `-O2 -g` for prod)
+    HEXA_CACHE_DIR     override default ~/.hexa-cache
+  EOF
+  status = "opt-in. Default `hexa-cc` path unchanged. Users adopting hexa-fast see the speedup immediately."
+  next = "PHASE 1.3.B (codegen integration) — patch self/codegen_c2.hexa:674 to emit `#include \"runtime.h\"` directly, then rebuild hexa_v2. Sequence after current uncommitted codegen work is resolved upstream."

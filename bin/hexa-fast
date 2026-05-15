@@ -1,0 +1,60 @@
+#!/bin/bash
+# bin/hexa-fast — opt-in fast compile path via runtime.h + cached runtime.o
+# PHASE 1.3 (2026-05-15): bypass the legacy `#include "runtime.c"` emit by
+# sed-swapping post hexa_v2 output, then link against ~/.hexa-cache/runtime-<sha>.o.
+#
+# Usage: bin/hexa-fast <input.hexa> <output-binary>
+# Speed: 7.8× user-time vs default `hexa-cc + clang` for small programs.
+#        See COMPILE-SPEED.log.tape @phase_1_2_b_done (commit ddd7ffb1).
+#
+# Cache: ~/.hexa-cache/runtime-<sha256(runtime.c)>.o
+#        - rebuilt on every runtime.c content change
+#        - HEXA_CACHE_DIR env var overrides location
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [ $# -lt 2 ]; then
+    cat <<EOF >&2
+usage: hexa-fast <input.hexa> <output-binary>
+
+Compiles a .hexa file via the runtime.h fast path:
+  1. hexa_v2 emits a tmp .c file
+  2. sed swaps  #include "runtime.c"  →  #include "runtime.h"
+  3. clang links user.c against ~/.hexa-cache/runtime-<sha>.o
+
+  CC flags:   override with HEXA_FAST_CFLAGS env var (default -O0)
+  cache dir:  HEXA_CACHE_DIR (default ~/.hexa-cache)
+EOF
+    exit 2
+fi
+SRC=$1
+OUT=$2
+
+HEXA_V2="$REPO_ROOT/self/native/hexa_v2"
+RUNTIME_C="$REPO_ROOT/self/runtime.c"
+RUNTIME_H="$REPO_ROOT/self/runtime.h"
+CACHE_DIR="${HEXA_CACHE_DIR:-$HOME/.hexa-cache}"
+CFLAGS="${HEXA_FAST_CFLAGS:--O0}"
+mkdir -p "$CACHE_DIR"
+
+[ -x "$HEXA_V2" ] || { echo "hexa-fast: missing $HEXA_V2" >&2; exit 1; }
+[ -f "$RUNTIME_H" ] || { echo "hexa-fast: missing $RUNTIME_H" >&2; exit 1; }
+
+# runtime.o cache keyed by sha256(runtime.c). Rebuilt only when source changes.
+RT_SHA=$(shasum -a 256 "$RUNTIME_C" | awk '{print $1}')
+RT_O="$CACHE_DIR/runtime-$RT_SHA.o"
+if [ ! -f "$RT_O" ]; then
+    clang $CFLAGS -c "$RUNTIME_C" -o "$RT_O"
+fi
+
+# tmp .c needs the .c extension so clang treats it as C source
+TMP_C="${TMPDIR:-/tmp}/hexa-fast-$$-$RANDOM.c"
+trap 'rm -f "$TMP_C" "$TMP_C.bak"' EXIT
+
+"$HEXA_V2" "$SRC" "$TMP_C" >/dev/null
+sed -i.bak 's|#include "runtime.c"|#include "runtime.h"|' "$TMP_C"
+
+clang $CFLAGS -o "$OUT" "$TMP_C" "$RT_O" -I"$REPO_ROOT/self"
