@@ -265,10 +265,10 @@ hexa-lang's runtime and history surfaces are wired into [`.tape`](https://github
 | Placement | What |
 |---|---|
 | [`IDENTITY.tape`](IDENTITY.tape) | hexa-lang agent identity SSOT — birth / scope / origin / principle / version. The compiler's self-description, machine-canonical. |
-| [`PROMOTION.tape`](PROMOTION.tape) | rule-promotion ledger — `@A` events for major raw rule landings (raw 109..126 propagation, toolchain post-fix, `bytes_to_str_raw` Phase 2, etc.) |
-| [`TAPE-AUDIT.md`](TAPE-AUDIT.md) | cross-repo `.tape` adoption audit (hexa-lang has the strongest dogfood opportunity: `.raw-audit/` 80%-tape-shaped, 28,695 cargo markers + 7 root domain `.md` files) |
+| [`PROMOTION.tape`](PROMOTION.tape) | rule-promotion ledger — `@A` events for major rule landings (toolchain post-fix, `bytes_to_str_raw` Phase 2, etc.) |
+| [`TAPE-AUDIT.md`](TAPE-AUDIT.md) | cross-repo `.tape` adoption audit (28,695 cargo markers + 7 root domain `.md` files highlighted as primary migration candidates) |
 
-`.raw-audit/` (hash-chained 143-line log) is **DESIGN ledger** (preserved by sentinel `.PRESERVE-AS-SSOT` — see [`~/core/atlas/PRESERVE-AS-SSOT.md`](https://github.com/dancinlab/atlas/blob/main/PRESERVE-AS-SSOT.md)). The `state/markers/` cargo (28k+ files) is migration candidate via `tape markers-to-tape`.
+The `state/markers/` cargo (28k+ files) is migration candidate via `tape markers-to-tape`.
 
 * * *
 
@@ -428,7 +428,6 @@ hexa-lang/
 ├── proposals/                    RFC-017..020 + future RFCs
 ├── doc/                          runbooks, audits, explainers
 ├── convergence/                  cross-repo propagation tracking (.PRESERVE-AS-SSOT)
-├── .raw-audit/                   hash-chained rule-promotion history (.PRESERVE-AS-SSOT)
 ├── state/                        gitignored runtime hook markers (cargo — migration candidate)
 ├── build/                        gitignored hexa build artifacts
 └── incoming/                     downstream patch reports (wilson · qmirror · etc.)

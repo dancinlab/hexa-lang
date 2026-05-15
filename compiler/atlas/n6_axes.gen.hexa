@@ -22,7 +22,7 @@
 // atlas-format consumers (anima_main, anchor_audit, etc.) can iterate axes
 // alongside @C / @L / other primitives without an axis_table-specific path.
 //
-// Regenerate via: hexa run tool/atlas_absorb_hexa_bio.hexa  (planned)
+// Regenerate via: hexa run tool/atlas_absorb_hexa_bio.hexa
 
 use "compiler/atlas/parser"
 
