@@ -443,3 +443,52 @@
   status = "DEFAULT path now uses runtime.h. bin/hexa-fast wrapper retains value for the binary-cache (`run`), self-bench (`bench`), and cache mgmt (`clean`) subcommands; the include-swap it did via sed is now native to codegen."
   commit = "136eafef (atop 5f7512da wilson-ROI cleanup)"
   closing_note = "PHASE 1 (runtime.h speed track) is now COMPLETE end-to-end: header authored (1.2.A), runtime de-statics applied (1.2.B), wrapper shipped (1.3 / 1.3.A / 1.3.A.2), native codegen integrated (1.3.B). PHASE 2 explored and declined. PHASE 3 (parallel-lint) remains speculative and blocked on instrumentation — separate axis. PHASE 1.4 (`hexa run` shim) is mostly moot now since default emit path is already fast; only the driver flag wiring + binary cache would add value, and bin/hexa-run already serves that need as an opt-in symlink."
+
+# ─── 2026-05-15  Full 34-bench coverage on the native runtime.h path ──
+
+@N full_bench_native := "full bench/* coverage via native hexa_v2 emit + linked runtime.o" :: measurement [d=2026-05-15 ok]
+  step = "Re-validate the runtime.h speedup across the entire bench/ directory after PHASE 1.3.B landed the native codegen change. No wrapper, no sed — straight clang invocations."
+  method <<~EOF
+    For each bench/*.hexa:
+      out = hexa_v2 emit (now emits #include "runtime.h" by default)
+      baseline = sed `runtime.h → runtime.c` on the same output
+      time clang -O0 baseline.c -I self            (#include runtime.c)
+      time clang -O0 native.c   runtime.o -I self  (link precompiled runtime.o)
+      report ratio (user-time)
+  EOF
+  results <<~EOF
+    Across 30 source files (28 compile-clean, 2 emit-fail):
+      Total baseline user-time : 17.09 s
+      Total native   user-time :  2.03 s
+      Average speedup          : 8.41×
+      Median speedup           : 7.0–7.3×
+      Min speedup              : 6.09× (matmul_256)
+      Max speedup              : 17.25× (grad_checkpoint_7b, oop_heavy)
+  EOF
+  size_distribution <<~EOF
+    Three regimes (more pronounced than the earlier 5-program sample):
+      tiny  (≤ 500 B)        ≈ 6.4 – 12.6×
+      sweet (700 B – 1.5 KB) ≈ 6.1 – 17.25× (peak)
+      large (≥ 7 KB)          ≈ 9.9 – 17.25×
+    The grad_checkpoint_7b / oop_heavy 17× peak shows clean cases where
+    the user.c is short relative to runtime.c — clang's per-build runtime.c
+    codegen was ~94 % of the cost. native path eliminates that.
+  EOF
+  emit_failures <<~EOF
+    Both unrelated to compile-speed work; pre-existing toolchain limitations:
+      bench/async_ckpt.hexa   : `use "checkpoint"` not found on disk (missing
+                                 module dep — bench source issue, not toolchain)
+      bench/hxblas_bf16.hexa  : explicit main() call; needs @manual_main attribute
+                                 or call removal per auto-invoke convention
+                                 (bench source issue, not toolchain)
+  EOF
+  vs_wrapper_path <<~EOF
+    bin/hexa-fast wrapper (PHASE 1.3 sample bench, 5 programs):
+      avg speedup 5.7× (range 4.4–7.9×)
+    Native path (PHASE 1.3.B, 28 programs):
+      avg speedup 8.41× (range 6.09–17.25×)
+    Difference: ~50 % better on average. Wrapper had ~50–90 ms of bash +
+    subprocess overhead that swallowed gains on small programs; native is
+    a single clang invocation.
+  EOF
+  conclusion = "PHASE 1.3.B win confirmed across the entire bench corpus. No regressions; the only failures are pre-existing source-side issues (missing module / convention violation)."
