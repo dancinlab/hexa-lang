@@ -19,19 +19,17 @@
 # Full spec: ~/core/tape/spec/tape.md (or github.com/dancinlab/tape)
 # ══════════════════════════════════════════════════════════════════════
 #
-# PROMOTION.tape — raw-rule promotion criteria (architecture SSOT)
+# PROMOTION.tape — promotion criteria (architecture SSOT)
 #
-# The full hash-chained log lives in ~/core/hexa-lang/.raw-audit/
-# (DESIGN ledger — .PRESERVE-AS-SSOT inside `convergence/` dir).
 # This .tape captures the current promotion-gate policy (what counts as
-# "promoted"). Major promotion landings (raw-N batches, toolchain post-fixes,
-# stdlib module promotions) are appended to PROMOTION.log.tape.
+# "promoted"). Major promotion landings (toolchain post-fixes, stdlib
+# module promotions) are appended to PROMOTION.log.tape.
 
 @V := "tape" :: spec [active]
   version = "1.2"
 
 @I id001 := "hexa-lang.promotion" :: identity-claim [d=2026-05-15 active]
-  kind = "raw-rule → atlas promotion gate stack"
+  kind = "atlas promotion gate stack"
   brief = "stdlib / atlas promotion criteria — what must hold for a verified contribution to auto-register as an atlas L[*] node"
   parent = "dancinlab/hexa-lang"
   sibling-log = "PROMOTION.log.tape"
@@ -44,4 +42,4 @@
 
 @D c2 := "promotion.update_or_pr" :: promotion [d=2026-05-14 ok]
   text = "Verified contributions auto-register as new atlas L[*] nodes via promote.hexa"
-  proof = ".raw-audit/ hash-chained entries"
+  proof = "compiler/discover/promote.hexa registration path"

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# bin/hexa-push — canonical git-push entry per raw 176 (hive/.raw L6785).
+# bin/hexa-push — canonical git-push entry per safety policy.
 # Idempotency: same invocation on synced tree = no-op.
 # Safety gate INLINE: ff-only + protected-ref-block + auto pull-rebase 1x retry.
 # Bypass: HEXA_SAFETY_ALLOW=<reason> (user-explicit only).
 set -euo pipefail
 
-# ─── argv-level block (raw 176 bans) ───
+# ─── argv-level block (safety policy bans) ───
 for arg in "$@"; do
   case "$arg" in
     --force|-f|--force-with-lease|--mirror)
-      echo "hexa-push: BLOCKED argv '$arg' — raw 176 bans force-push" >&2
+      echo "hexa-push: BLOCKED argv '$arg' — safety policy bans force-push" >&2
       echo "reason=argv-banned-by-raw-176 fix=1) remove '$arg' 2) HEXA_SAFETY_ALLOW='<reason>' git push --force # explicit user-only path bypasses hexa-push entirely" >&2
       exit 13
       ;;
   esac
 done
 
-# ─── protected-ref check helper (raw 176 safety gate inline, fix-B) ───
-# 외부 의존 0: pure bash + git rev-parse 만 (raw 13 git-hook ban 호환).
+# ─── protected-ref check helper (safety gate inline, fix-B) ───
+# 외부 의존 0: pure bash + git rev-parse 만 (git-hook ban 호환).
 # Default protected refs: main + master + hive/main. Override via HEXA_PUSH_PROTECTED_REFS env (콤마 separated).
 _is_protected_ref() {
   local branch="$1"
@@ -66,7 +66,7 @@ fi
 
 # ─── dry-run ───
 if [ "${1:-}" = "--dry-run" ]; then
-  echo "hexa-push DRY-RUN: would push current branch per raw 176"
+  echo "hexa-push DRY-RUN: would push current branch per safety policy"
   git status -sb 2>&1 || true
   exit 0
 fi
@@ -81,7 +81,7 @@ fi
 # ─── protected-ref block (fix-B) ───
 SAFETY_ALLOW="${HEXA_SAFETY_ALLOW:-}"
 if [ "$(_is_protected_ref "$BRANCH")" = "PROTECTED" ] && [ -z "$SAFETY_ALLOW" ]; then
-  echo "hexa-push: BLOCKED — branch '$BRANCH' is in protected-refs list (raw 176 safety gate)" >&2
+  echo "hexa-push: BLOCKED — branch '$BRANCH' is in protected-refs list (safety gate)" >&2
   echo "reason=protected-ref-block protected=\${HEXA_PUSH_PROTECTED_REFS:-main,master,hive/main}" >&2
   echo "fix=1) push from non-protected branch then merge via PR  2) HEXA_SAFETY_ALLOW='<reason>' hexa-push  # explicit user-only" >&2
   exit 16
@@ -90,7 +90,7 @@ fi
 # ─── idempotency: 0 ahead = no-op ───
 AHEAD="$(git rev-list --count "@{u}..HEAD" 2>/dev/null || echo '?')"
 if [ "$AHEAD" = "0" ]; then
-  echo "hexa-push: 0 ahead — no-op (raw 65 idempotency)"
+  echo "hexa-push: 0 ahead — no-op (idempotency)"
   exit 0
 fi
 
@@ -110,7 +110,7 @@ fi
 # Classify failure type before deciding retry
 FAILURE_KIND="$(_is_non_ff_failure "$PUSH_OUT")"
 if [ "$FAILURE_KIND" = "NON_FF" ]; then
-  echo "hexa-push: non-FF detected — auto pull --rebase 1x retry per raw 176" >&2
+  echo "hexa-push: non-FF detected — auto pull --rebase 1x retry per safety policy" >&2
   if git pull --rebase origin "$BRANCH" && git push origin "$BRANCH"; then
     echo "hexa-push: ok-after-rebase (branch=$BRANCH)"
     exit 0
@@ -119,7 +119,7 @@ if [ "$FAILURE_KIND" = "NON_FF" ]; then
   echo "reason=non-ff-rebase-conflict fix=1) git status  2) resolve  3) git rebase --continue && hexa-push" >&2
   exit 15
 fi
-# Non-FF 외 실패 (auth / network / 기타) → rebase 시도 안 함, raw 66 ai-native trailer
+# Non-FF 외 실패 (auth / network / 기타) → rebase 시도 안 함, ai-native trailer
 echo "hexa-push: FAIL — push rejected for non-rebase-able reason" >&2
 echo "$PUSH_OUT" >&2
 echo "reason=push-failed-non-ff-classifier-other fix=1) check stderr above  2) auth: gh auth status / git config  3) network: ping origin host  4) retry hexa-push manually after fix" >&2

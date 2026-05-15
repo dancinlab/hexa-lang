@@ -90,22 +90,6 @@ shared/state/
 self/native/hexa_v2.pre_nightly_rebuild_*
 self/native/hexa_v2.pre_*
 
-# raw#0 attestation HMAC key — repo-private, must mirror as CI secret
-.raw-attest-key
-
-# raw#0 P1d sha256 fast-path cache — per-user runtime state, invalidated
-# on every SSOT edit (fingerprint shift). Safe to delete; regenerated.
-.raw-cache/
-
-# raw#15 roadmap progress snapshot — regenerated every raw_all run.
-# Observational dashboard artifact, no commit noise.
-.raw-status/
-
-# raw#1 hash-chain migration backups — snapshot of pre-chain .raw-audit
-# written once at migration time and on each rotate. Local-only archives.
-.raw-audit.pre-chain
-.raw-audit.pre-chain.*
-
 # Compiled native shared libraries under self/native — built locally from
 # the .c/.cu sources in the same directory. Do not ship binaries.
 self/native/*.dylib
@@ -134,7 +118,7 @@ test/regression/*/state/
 # Pre-Claude-Code snapshot backups (automatic safety copies)
 hexa.pre-cc-backup-*
 
-# raw#34 working-tree backup blanket patterns (cycle 30 cleanup)
+# Working-tree backup blanket patterns
 # git history is canonical recovery path; .bak* in working tree forbidden
 .roadmap.bak.*
 *.hexa.bak

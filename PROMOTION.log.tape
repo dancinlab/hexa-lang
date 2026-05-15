@@ -22,29 +22,25 @@
 # PROMOTION.log.tape — append-only history sibling of PROMOTION.tape
 # (per tape v1.2 architecture-vs-history split, AGENTS.tape @D g_arch_vs_log_split).
 #
-# Architecture-current declarative entries (the raw-rule promotion policy
-# and current milestones) live in PROMOTION.tape (editable, latest-wins
-# per id). This file is the append-only stream of new promotion landings:
+# Architecture-current declarative entries (the promotion policy and
+# current milestones) live in PROMOTION.tape (editable, latest-wins per
+# id). This file is the append-only stream of new promotion landings:
 # @A milestone events, @T promote.hexa invocations, @R atlas-register
 # results, @K verification costs, @? promotion failures.
-#
-# Note: the canonical hash-chained promotion log remains at
-# ~/core/hexa-lang/.raw-audit/ (DESIGN ledger · .PRESERVE-AS-SSOT).
-# This tape sibling is the typed/grep-friendly milestone projection.
 
 @V := "tape" :: spec [active]
   version = "1.2"
 
 # ─── §Log ────────────────────────────────────────────────────────────
 
-@A raw_109_126_landing :: promotion [d=2026-04-30 ok]
+@A cross_repo_propagation_apr_2026 :: promotion [d=2026-04-30 ok]
   <- c1, c2
-  => "raw 109..126 batch landing — cross-repo propagation arm (anima/airgenome/hive convergence)"
+  => "cross-repo propagation arm (anima/airgenome/hive convergence)"
 
 @A toolchain_post_fix :: promotion [d=2026-05-13 ok]
-  <- raw_109_126_landing
+  <- cross_repo_propagation_apr_2026
   => "Toolchain post-fix: #12 use-graph flatten + RFC-020 A4 payload-enum codegen + fn-arena heapify-on-push + time_now_ms TAG_FN + bidi-stdio exec_stream_open/write/close_stdin + thread_channel_* rename"
 
-@A bytes_to_str_raw_phase_2 :: promotion [d=2026-05-13 ok]
+@A bytes_to_str_phase_2 :: promotion [d=2026-05-13 ok]
   <- toolchain_post_fix
-  => "Phase 2 NUL-byte support in bytes_to_str_raw — unblocks wilson tool-image base64 collapse"
+  => "Phase 2 NUL-byte support in bytes_to_str — unblocks wilson tool-image base64 collapse"

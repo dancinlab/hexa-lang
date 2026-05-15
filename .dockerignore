@@ -14,14 +14,14 @@
 !build/hexa_interp_linux_x86_64
 !docker/
 # 2026-04-26: bake module_loader + stdlib so bind-mount-less containers
-# can resolve `use "stdlib/X"` (raw#92 fail-loud gap closure).
+# can resolve `use "stdlib/X"` (module-loader fail-loud gap closure).
 !self/
 !self/module_loader.hexa
 !self/stdlib/
 !self/stdlib/**
 # 2026-04-26 ω-runner-7: include native_gate.c so the builder stage can
 # compile native_gate.so and bake LD_PRELOAD into the runtime image
-# (raw#7 OS-level enforce; macOS host stays advisory due to SIP, Linux
+# (OS-level enforce; macOS host stays advisory due to SIP, Linux
 # container is the actual enforcer per Mac→docker hard-landing policy).
 !self/native/
 !self/native/native_gate.c

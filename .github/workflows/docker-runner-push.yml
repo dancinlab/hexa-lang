@@ -1,7 +1,7 @@
 # docker-runner-push.yml — build + push hexa-runner image to ghcr.io
 #
 # PURPOSE
-#   raw#7 LD_PRELOAD distribution: the hexa-runner Linux container is the
+#   LD_PRELOAD distribution: the hexa-runner Linux container is the
 #   only environment where OS-level enforce (native_gate.so / EPERM at
 #   VFS syscalls) actually has teeth (macOS SIP blocks DYLD on signed
 #   bins per Mac→docker hard-landing policy 2026-04-25). For that

@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# bin/hexa-commit — canonical git-commit entry per raw 176 (hive/.raw L6785).
+# bin/hexa-commit — canonical git-commit entry per safety policy.
 # Idempotency: same invocation on clean tree = no-op (no spurious commit).
-# Safety gate INLINE (raw 168 minimum-viable): secret-scan + argv-block + co-author-trailer.
+# Safety gate INLINE (minimum-viable): secret-scan + argv-block + co-author-trailer.
 # Bypass: HEXA_SAFETY_ALLOW=<reason> (user-explicit-set only; AI agent MUST NOT auto-set).
 # Selftest: hexa-commit --selftest
 set -euo pipefail
 
-# ─── argv-level block (raw 176 bans) ───
+# ─── argv-level block (safety policy bans) ───
 for arg in "$@"; do
   case "$arg" in
     --no-verify|--no-gpg-sign)
-      echo "hexa-commit: BLOCKED argv '$arg' — raw 176 bans (use HEXA_SAFETY_ALLOW=<reason> for explicit user-authorized override)" >&2
+      echo "hexa-commit: BLOCKED argv '$arg' — safety policy bans (use HEXA_SAFETY_ALLOW=<reason> for explicit user-authorized override)" >&2
       echo "reason=argv-banned-by-raw-176 fix=1) remove '$arg' 2) HEXA_SAFETY_ALLOW='<reason>' hexa-commit ... # explicit only" >&2
       exit 13
       ;;
   esac
 done
 
-# ─── secret-scan helper (raw 176 safety gate inline) — string + file content ───
-# 외부 의존 0: bash + grep 만 (raw 9 hexa-only 예외 = bin shell-script 표면).
+# ─── secret-scan helper (safety gate inline) — string + file content ───
+# 외부 의존 0: bash + grep 만 (hexa-only 예외 = bin shell-script 표면).
 _secret_match() {
   local val="$1"
   if echo "$val" | grep -qE '(AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32,}|-----BEGIN.*PRIVATE KEY-----)'; then
@@ -77,18 +77,18 @@ fi
 
 # ─── dry-run mode ───
 if [ "${1:-}" = "--dry-run" ]; then
-  echo "hexa-commit DRY-RUN: would stage + commit per raw 176"
+  echo "hexa-commit DRY-RUN: would stage + commit per safety policy"
   git status --short 2>&1 || true
   exit 0
 fi
 
 # ─── idempotency: clean tree = no-op ───
 if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
-  echo "hexa-commit: clean tree — no-op (raw 65 idempotency)"
+  echo "hexa-commit: clean tree — no-op (idempotency)"
   exit 0
 fi
 
-# ─── auto-stage CHANGED files only (NO git add -A / .) per raw 176 bans ───
+# ─── auto-stage CHANGED files only (NO git add -A / .) per safety policy bans ───
 # Enumerate modified + untracked, secret-scan each, exclude on match unless HEXA_SAFETY_ALLOW set.
 SAFETY_ALLOW="${HEXA_SAFETY_ALLOW:-}"
 staged_count=0
@@ -135,7 +135,7 @@ if [ -z "$MSG" ]; then
 fi
 TRAILER="Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
-# ─── audit emit (raw 77 schema) ───
+# ─── audit emit (audit schema) ───
 AUDIT="${HEXA_COMMIT_AUDIT:-state/hexa_commit_audit/audit.jsonl}"
 mkdir -p "$(dirname "$AUDIT")" 2>/dev/null || true
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
