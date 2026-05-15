@@ -706,25 +706,38 @@ fn _is_import_kind(k: ItemKind) -> bool {
 // builtins (.push, .trim, .substring) are NOT in this list — they are
 // resolved as field accesses, not free identifiers.
 fn _bind_builtin_names() -> [string] {
+    // Full host-runtime builtin set — faithfully mirrored from the
+    // proven legacy registry self/codegen_c2.hexa::_is_builtin_name
+    // (156 names) unioned with the prior new-binder set. The prior list
+    // had only 45 entries → ~138 host builtins (net_*/term_*/pty_*/
+    // regex_*/tensor_*/crypto/json_*/…) that compiler/+self/ call were
+    // unresolved → the `<callee>` 594 HX2001 flood in stage-2 self-
+    // compile. ("true"/"false" carried from legacy are harmless as
+    // scope names — the parser emits KwTrue/KwFalse, never Ident.)
     return [
-        // I/O
-        "println", "eprintln", "print", "eprint", "read_stdin", "read_line",
-        // Process / env
-        "exec", "env", "getenv", "args", "exit", "panic", "getpid",
-        // Conversions
-        "to_string", "to_int", "to_float", "type_of",
-        // Collections / strings
-        "len", "trim", "to_lower", "to_upper", "chars", "substring",
-        // Filesystem
-        "file_exists", "file_size", "file_modtime", "read_file",
-        "write_file", "list_dir", "mkdir", "copy_file", "remove_file",
-        "rename_file", "read_lines",
-        // Hash
-        "sha256", "sha256_file", "sha256_hex", "hash_string", "crc32",
-        // Math
-        "abs", "min", "max",
-        // Time
-        "now_unix_ms", "clock_ms", "nanos"
+        "abs", "aes256_ctr_xor", "append", "args", "argv", "bcrypt_pbkdf", "byte_len", "bytes_to_f32_le",
+        "bytes_to_f64_le", "ceil", "chacha20_poly1305_decrypt", "chacha20_poly1305_encrypt", "chacha20_xor", "chars", "clock_ms", "copy_file",
+        "cos", "crc32", "dict_keys", "ed25519_keypair", "ed25519_sign", "ed25519_verify", "env", "eprint",
+        "eprintln", "exec_pipe_open", "exec_stream_kill", "exec_with_status", "exec", "exit", "exp", "f32_to_bytes_le",
+        "f64_to_bytes_le", "false", "file_exists", "file_modtime", "file_size_native", "file_size", "floor", "format",
+        "getenv", "getpid", "hash_string", "http_get", "is_alpha", "is_alphanumeric", "is_digit", "json_decode",
+        "json_encode", "json_parse", "json_stringify", "len", "libsodium_available", "list_dir", "ln", "log",
+        "log10", "matmul", "max", "min", "mkdir", "mono_ns", "mount", "namespace_clone_const",
+        "nanos", "net_accept", "net_close", "net_connect", "net_listen", "net_read_bytes", "net_read_n", "net_read",
+        "net_recv_fd", "net_select", "net_send_fd", "net_set_nonblock", "net_set_timeout", "net_write_bytes", "net_write", "now_monotonic_s",
+        "now_unix_ms", "panic", "pivot_root", "poly1305_onetimeauth", "pow", "print", "println", "proc_fork",
+        "proc_reap_zombies", "proc_setsid", "proc_wait_flag_const", "proc_wait", "pty_forkexec", "pty_get_winsize", "pty_open", "pty_set_winsize",
+        "pty_tcgetattr", "pty_tcsetattr", "read_bytes_at", "read_file_bytes", "read_file", "read_line", "read_lines", "read_stdin",
+        "real_args", "regex_findall", "regex_match_full", "regex_match", "regex_replace", "regex_search", "regex_split", "remove_file",
+        "rename_file", "rms_norm", "round", "script_path", "setns", "sha256_bytes", "sha256_file", "sha256_hex",
+        "sha256", "sha512", "sin", "sleep_ms", "sleep_ns", "sleep_s", "softmax", "split",
+        "sqrt", "substring", "swiglu_vec", "tensor_add", "tensor_dot", "tensor_mul_scalar", "tensor_ones", "tensor_slice",
+        "tensor_zeros", "term_fd_close", "term_fd_poll", "term_fd_read", "term_fd_write", "term_getppid", "term_install_sigint", "term_install_sigwinch",
+        "term_isatty_stdin", "term_isatty_stdout", "term_poll_stdin", "term_pty_reap", "term_pty_spawn_sh", "term_raw_enter", "term_raw_restore", "term_read_byte",
+        "term_sigint_pending", "term_sigwinch_pending", "term_winsize_cols", "term_winsize_rows", "term_write_str", "time_ms", "to_bool", "to_float",
+        "to_int", "to_lower", "to_string", "to_upper", "trim", "true", "tty_isatty", "tty_ttyname",
+        "type_of", "u_floor", "umount", "unshare", "utc_compact_now", "utc_iso_format", "utc_iso_now", "utc_iso_parse",
+        "write_bytes_append_v", "write_bytes_append", "write_bytes_v", "write_bytes", "write_file", "x25519_keypair", "x25519_scalarmult"
     ]
 }
 
