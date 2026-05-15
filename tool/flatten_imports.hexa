@@ -880,7 +880,7 @@ fn flatten_main() {
     flat_parts.push("// === FLATTENED by tool/flatten_imports.hexa ===\n")
     flat_parts.push("// target: " + target + "\n")
     flat_parts.push("// files:  " + str(m) + "\n")
-    flat_parts.push("// order:  reverse-topo (root-first, leaves-last)\n")
+    flat_parts.push("// order:  topo (leaves-first, root-last) — module-level lets must initialize before root's pipeline runs\n")
     if collided_count > 0 {
         flat_parts.push("// mangled: " + collided_display + "\n")
     }
@@ -888,7 +888,18 @@ fn flatten_main() {
 
     let mut ei = 0
     while ei < m {
-        let idx = m - 1 - ei
+        // Stage1 punch list — leaves-first order. The previous root-first
+        // order put compiler/main.hexa's top-level pipeline statements
+        // (phase_log("pipeline_start"); lex(...); parse(...); ... exit(0))
+        // BEFORE the imports' top-level let initializations (e.g.
+        // `pub let TARGET_DARWIN_ARM64 = "..."` in compiler/emit/asm.hexa).
+        // Codegen flattens both into main() in source order — so the lets
+        // landed AFTER the exit(0) as dead code, leaving TARGET_* uninit.
+        // Result: `_is_darwin(target)` always returned false, codegen
+        // emitted `.intel_syntax noprefix` on arm64-darwin, assembler choked.
+        // Fix: reverse the iteration so leaves come first → lets initialize,
+        // then main.hexa's pipeline runs.
+        let idx = ei
         let f = g_order_parts[idx]
         let body = read_file(f)
 
