@@ -108,6 +108,16 @@
   status = "NOT YET MEASURED — must bench (on top of rank 1 baseline) before promoting to default"
   why_rank_2 = "trivial effort, but small absolute payoff and only meaningful after rank 1 lands"
 
+@D opt_map_heapify_forward_walk := "RANK 1.5 — TAG_MAP heapify forward-walk slots[]" :: proposal [d=2026-05-15 active ok]
+  roi_rank = 1.5
+  rule = "In hexa_val_heapify TAG_MAP heap-table branch, walk slots[] (using slots[].order_idx, ROI-24) instead of order_vals[]+hmap_find per entry. Eliminates FNV1a hash + linear-probe strcmp per map entry."
+  expected_speedup = "12-18 % (B-agent disassembly prediction) / measured 20-31 % on codegen_c2.hexa (10-run distribution; median -31 %, best-of-10 -24 %, trimmed-mean -20 %)"
+  evidence = "COMPILE-SPEED.log.tape @phase3b_a1_analysis / @phase3b_a1_bench (d=2026-05-15). Sample +1108 = 32 % of stack-presence + _platform_strcmp = 5 % both attributable."
+  status = "LANDED 2026-05-15 — runtime.c +11 −8 lines · hexa_v2 rebuilt -O2 · byte-identical codegen output"
+  cost = "11-line C patch · 1 hexa_v2 rebuild · slots[].order_idx invariant already maintained by every map-set path"
+  risk = "low — slot ↔ order_vals is 1:1 bijection; correctness follows from ROI-24 invariant; verified byte-identical"
+  blast_radius = "every workload that heapifies maps (parser AST, codegen scratch maps, struct fields with TAG_MAP). Stacks orthogonally with @opt_precompile_runtime + @opt_parser_heapify_shortcircuit."
+
 @D opt_parser_heapify_shortcircuit := "RANK 2.5 — parser heap-pressure short-circuit" :: proposal [d=2026-05-15 active ok]
   roi_rank = 2.5
   rule = "In runtime.c::__hexa_fn_arena_return, short-circuit the hexa_val_heapify call when the return Val carries a primitive tag (TAG_INT/FLOAT/BOOL/VOID)."

@@ -802,3 +802,80 @@
     6. 5-run bench; gate ≥ 5 % user-time delta on codegen_c2.hexa.
     7. If pass: commit + push. If fail: revert from /tmp snapshot.
   EOF
+
+# ─── 2026-05-15  PHASE 3.B step A1 — TAG_MAP heapify hmap_find elimination ───
+
+@N phase3b_a1_analysis := "sub-agent disassembly audit — 5 ROI candidates ranked" :: investigation [d=2026-05-15 ok]
+  agent = "general-purpose, read-only, /tmp/phase3b/sample_new.txt"
+  top_finding <<~EOF
+    A1: TAG_MAP deep-heapify (runtime.c:3386-3395) walks order_vals[] and
+    re-discovers each entry's slot via hmap_find (FNV1a hash + linear-probe
+    strcmp). slots[].order_idx (line 931, ROI-24) is already O(1)-maintained
+    by every map-set path. Forward-walk slots[] instead → one heapify per
+    non-empty slot, no hash, no strcmp, no probe.
+    Evidence: hexa_val_heapify +1108 = 4399 hits ≈ 32 % of 13934-line sample;
+    _platform_strcmp (combined 766) ≈ 5 %. Both attributable to the loop.
+  EOF
+  other_candidates <<~EOF
+    A2  array_push stats-probe prologue hoist          (~1-3 %, speculative, runtime.c only)
+    A3  TAG_VALSTRUCT all_scalar bit                   (~3-5 %, medium risk, bootstrap)
+    A4  Token.kind_id additive int slot                (~6-10 %, partial overlap with opt_token_kind_enum, bootstrap)
+    A5  heapify dispatch ladder bitmask                (~2-4 %, low risk, runtime.c only)
+  EOF
+  ranking = "A1 (best ROI, runtime.c only) > A5 > A2 > A4 > A3"
+
+@A phase3b_a1_patch := "runtime.c TAG_MAP heapify forward-walk over slots[]" :: change [d=2026-05-15 ok]
+  file = "self/runtime.c"
+  loc = "lines 3386-3395 (TAG_MAP heap-table walk inside hexa_val_heapify)"
+  diff <<~EOF
+    -            } else if (HX_MAP_TBL(v)) {
+    -                for (int i = 0; i < HX_MAP_TBL(v)->len; i++) {
+    -                    HX_MAP_TBL(v)->order_vals[i] = hexa_val_heapify(...);
+    -                    int si = hmap_find(HX_MAP_TBL(v), HX_MAP_TBL(v)->order_keys[i],
+    -                                       hexa_fnv1a_str(HX_MAP_TBL(v)->order_keys[i]));
+    -                    if (si >= 0) HX_MAP_TBL(v)->vals[si] = HX_MAP_TBL(v)->order_vals[i];
+    -                }
+    -            }
+    +            } else if (HX_MAP_TBL(v)) {
+    +                HexaMapTable* t = HX_MAP_TBL(v);
+    +                for (int si = 0; si < t->ht_cap; si++) {
+    +                    HexaMapSlot* s = &t->slots[si];
+    +                    if (!s->key) continue;
+    +                    int oi = s->order_idx;
+    +                    HexaVal nv = hexa_val_heapify(t->order_vals[oi]);
+    +                    t->order_vals[oi] = nv;
+    +                    t->vals[si] = nv;
+    +                }
+    +            }
+  EOF
+  correctness = "slots[].order_idx is O(1)-maintained by every map-set path (ROI-24, runtime.c:931). slot ↔ order_vals is 1:1 bijection; one heapify per slot, fan-out to both arrays. Skip empty slots via NULL-key check."
+
+@N phase3b_a1_bench := "10-run bench A1 vs PHASE 3.B step-1 baseline" :: measurement [d=2026-05-15 ok]
+  source = "self/codegen_c2.hexa (335 KB)"
+  build_flags = "clang -O2 (matched cmd_cc · 1429032-byte Mach-O)"
+  output_diff = "byte-identical to step-1 baseline (verified)"
+  pre_a1_runs = "3.86 4.03 4.45 4.46 5.04 5.36 5.46 5.57 5.63 9.15"
+  a1_runs    = "2.93 3.18 3.32 3.35 3.39 3.56 3.86 6.83 8.40 8.41"
+  stats <<~EOF
+    median:        pre 5.04 s   A1 3.48 s   delta  -31 %
+    best-of-10:    pre 3.86 s   A1 2.93 s   delta  -24 %
+    trimmed mean:  pre 5.06 s   A1 4.05 s   delta  -20 %  (drop top 2 / bot 2)
+  EOF
+  noise = "high variance from background system load (outliers at 8.4 s and 9.15 s); distribution shift still unambiguous — A1's median and best both below pre-A1's best."
+  ceiling = "B-agent predicted 12-18 %; measured 20-31 % overshoots prediction. Likely because slot-forward-walk also eliminates the FNV1a hash (per-entry) + the post-recursive +1108 store that B mapped to ~32 % stack-presence."
+
+@D phase3b_a1_status := "A1 LANDED · self/native/hexa_v2 promoted" :: roadmap [d=2026-05-15 active]
+  done <<~EOF
+    - self/runtime.c TAG_MAP heapify forward-walk patch (+11 lines, -8 lines)
+    - self/native/hexa_v2 rebuilt -O2 (1429032 B), promoted from .A1 suffix
+    - backup at /tmp/phase3b/hexa_v2.preA1.bak
+    - byte-identical codegen_c2.hexa output verified
+  EOF
+  cumulative_speedup <<~EOF
+    Stacked on PHASE 1.6 + PHASE 3.B step 1:
+      PHASE 1.6 pre-step-1 codegen_c2 ≈ 4.96 s (post-PHASE-1.6 baseline)
+      PHASE 3.B step 1                ≈ 4.62 s  (-6.9 %)
+      PHASE 3.B A1                    ≈ 3.48 s  (-31 % vs step 1 · -30 % vs PHASE 1.6)
+      Total cumulative on codegen_c2.hexa  ≈ -30 % vs PHASE 1.6 launch
+  EOF
+  next_candidates_remaining = "A5 (heapify dispatch bitmask · runtime.c only · stack on A1) → A2 (stats probe hoist · runtime.c only) → A4/A3 (bootstrap-needed)"

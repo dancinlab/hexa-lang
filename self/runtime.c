@@ -3384,13 +3384,21 @@ HexaVal hexa_val_heapify(HexaVal v) {
                 HX_SET_MAP_TBL(v, heap_tbl);
                 HX_SET_MAP_LEN(v, heap_tbl ? heap_tbl->len : 0);
             } else if (HX_MAP_TBL(v)) {
-                // Heap table — but its values may include arena maps. Walk.
-                for (int i = 0; i < HX_MAP_TBL(v)->len; i++) {
-                    HX_MAP_TBL(v)->order_vals[i] = hexa_val_heapify(HX_MAP_TBL(v)->order_vals[i]);
-                    // Also fix the hash slot's mirror so later lookups see the heap copy.
-                    int si = hmap_find(HX_MAP_TBL(v), HX_MAP_TBL(v)->order_keys[i],
-                                       hexa_fnv1a_str(HX_MAP_TBL(v)->order_keys[i]));
-                    if (si >= 0) HX_MAP_TBL(v)->vals[si] = HX_MAP_TBL(v)->order_vals[i];
+                // perf-3B-A1: slots[].order_idx (ROI-24, line 931) is O(1)-maintained
+                // by every map-set path, so the slot→order index is already known.
+                // Original used hmap_find (FNV1a + strcmp probe) per entry — the
+                // sample profile attributed ~32 % of stack-presence to +1108 (the
+                // post-recursive store) and ~5 % to _platform_strcmp. Forward-walk
+                // slots[] instead: one heapify per non-empty slot, fan-out to both
+                // arrays from a single computed index. No hash, no probe, no strcmp.
+                HexaMapTable* t = HX_MAP_TBL(v);
+                for (int si = 0; si < t->ht_cap; si++) {
+                    HexaMapSlot* s = &t->slots[si];
+                    if (!s->key) continue;
+                    int oi = s->order_idx;
+                    HexaVal nv = hexa_val_heapify(t->order_vals[oi]);
+                    t->order_vals[oi] = nv;
+                    t->vals[si] = nv;
                 }
             }
             return v;
