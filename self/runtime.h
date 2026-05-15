@@ -112,15 +112,29 @@ typedef struct HexaIC {
  * macro here AND expose hexa_add_slow as extern (runtime.c patched: drop
  * `static` on line 4731).
  */
-#define HX_TAG(v)     ((v).tag)
-#define HX_INT(v)     ((v).i)
-#define HX_BOOL(v)    ((v).b)
-#define HX_STR(v)     ((v).s)
-#define HX_IS_INT(v)   ((v).tag == TAG_INT)
-#define HX_IS_STR(v)   ((v).tag == TAG_STR)
-#define HX_IS_MAP(v)   ((v).tag == TAG_MAP)
-#define HX_IS_ARRAY(v) ((v).tag == TAG_ARRAY)
-#define HX_MAP_TBL(v)  (HX_IS_MAP(v) ? (v).map_ptr->tbl : (HexaMapTable*)0)
+#define HX_TAG(v)        ((v).tag)
+#define HX_INT(v)        ((v).i)
+#define HX_BOOL(v)       ((v).b)
+#define HX_STR(v)        ((v).s)
+#define HX_IS_INT(v)     ((v).tag == TAG_INT)
+#define HX_IS_STR(v)     ((v).tag == TAG_STR)
+#define HX_IS_MAP(v)     ((v).tag == TAG_MAP)
+#define HX_IS_ARRAY(v)   ((v).tag == TAG_ARRAY)
+#define HX_IS_FN(v)      ((v).tag == TAG_FN)
+#define HX_IS_CLOSURE(v) ((v).tag == TAG_CLOSURE)
+#define HX_MAP_TBL(v)    (HX_IS_MAP(v) ? (v).map_ptr->tbl : (HexaMapTable*)0)
+
+/* HexaFn / HexaClo descriptor field accessors (read + write) */
+#define HX_FN_PTR(v)         ((v).fn_ptr_d->fn_ptr)
+#define HX_FN_ARITY(v)       ((v).fn_ptr_d->arity)
+#define HX_CLO_PTR(v)        ((v).clo_ptr->fn_ptr)
+#define HX_CLO_ARITY(v)      ((v).clo_ptr->arity)
+#define HX_CLO_ENV(v)        ((v).clo_ptr->env_box)
+#define HX_SET_FN_PTR_D(v, p)  ((v).fn_ptr_d = (p))
+#define HX_SET_CLO_PTR_D(v, p) ((v).clo_ptr = (p))
+#define HX_SET_CLO_PTR(v, p)   ((v).clo_ptr->fn_ptr = (p))
+#define HX_SET_CLO_ARITY(v, n) ((v).clo_ptr->arity = (n))
+#define HX_SET_CLO_ENV(v, p)   ((v).clo_ptr->env_box = (p))
 
 HexaVal hexa_add_slow(HexaVal a, HexaVal b);          /* runtime.c:4731 (was static) */
 double  __hx_to_double(HexaVal v);                    /* runtime.c:1242 (was `static inline`) */
@@ -190,6 +204,13 @@ HexaVal hexa_array_free(HexaVal arr);                 /* runtime.c:7182 */
 
 /* container indexing */
 HexaVal hexa_index_get(HexaVal container, HexaVal key); /* runtime.c:2643 */
+HexaVal hexa_array_pop(HexaVal arr);                    /* runtime.c:3878 */
+
+/* map predicates */
+int     hexa_map_contains_key(HexaVal m, const char* key); /* runtime.c:2452 */
+
+/* conversion */
+const char* hexa_to_cstring(HexaVal v);                 /* runtime.c:1287 */
 HexaVal hexa_index_set(HexaVal container, HexaVal key, HexaVal val); /* runtime.c:2685 */
 HexaVal hexa_iter_get(HexaVal v, int64_t idx);          /* runtime.c:2673 */
 HexaVal hexa_contains_poly(HexaVal obj, HexaVal arg);   /* runtime.c:6972 */
@@ -242,5 +263,115 @@ HexaVal hexa_env_var(HexaVal name);                     /* runtime.c:9608 */
 /* arena (codegen wraps fn bodies) */
 void    __hexa_fn_arena_enter(void);                  /* runtime.c:3652 */
 HexaVal __hexa_fn_arena_return(HexaVal ret);          /* runtime.c:3657 */
+
+/* ── Closures + fn-pointer call dispatch (header-defined static inline)
+ *
+ * These mirror runtime.c:1110–1227. Stripped of internal _hx_stats_* counter
+ * bumps that referenced static-in-runtime.c symbols; behavior is identical
+ * from the caller's perspective (closures + fn-pointer values still create /
+ * dispatch correctly), only the per-TU stat accounting differs. The runtime.c
+ * TU still has the original stats-instrumented bodies for its own callers.
+ *
+ * Filed as fix for incoming/patches/runtime-h-incomplete-after-phase-1-3-b.md
+ * (wilson stdlib/sort + event-bus folds hit `_undeclared` link errors against
+ * the post-PHASE-1.3.B runtime.h surface).
+ */
+
+static inline HexaVal hexa_closure_new(void* fn_ptr, int arity, HexaVal env_arr) {
+    HexaVal v = {.tag=TAG_CLOSURE};
+    HX_SET_CLO_PTR_D(v, (HexaClo*)calloc(1, sizeof(HexaClo)));
+    HX_SET_CLO_PTR(v, fn_ptr);
+    HX_SET_CLO_ARITY(v, arity);
+    HX_SET_CLO_ENV(v, (HexaVal*)malloc(sizeof(HexaVal)));
+    *HX_CLO_ENV(v) = env_arr;
+    return v;
+}
+
+static inline HexaVal hexa_fn_new(void* fn_ptr, int arity) {
+    HexaVal v = {.tag=TAG_FN};
+    HX_SET_FN_PTR_D(v, (HexaFn*)calloc(1, sizeof(HexaFn)));
+    HX_FN_PTR(v) = fn_ptr;
+    HX_FN_ARITY(v) = arity;
+    return v;
+}
+
+static inline HexaVal hexa_closure_env(HexaVal c) {
+    if (!HX_IS_CLOSURE(c) || !HX_CLO_ENV(c)) return hexa_array_new();
+    return *HX_CLO_ENV(c);
+}
+
+static inline HexaVal hexa_call0(HexaVal f) {
+    if (HX_IS_CLOSURE(f)) {
+        HexaVal (*fp)(HexaVal) = (HexaVal(*)(HexaVal))HX_CLO_PTR(f);
+        return fp(hexa_closure_env(f));
+    }
+    if (HX_IS_FN(f)) {
+        HexaVal (*fp)(void) = (HexaVal(*)(void))HX_FN_PTR(f);
+        return fp();
+    }
+    return hexa_void();
+}
+
+static inline HexaVal hexa_call1_hv(HexaVal f, HexaVal a1) {
+    if (HX_IS_CLOSURE(f)) {
+        HexaVal (*fp)(HexaVal, HexaVal) = (HexaVal(*)(HexaVal, HexaVal))HX_CLO_PTR(f);
+        return fp(hexa_closure_env(f), a1);
+    }
+    if (HX_IS_FN(f)) {
+        HexaVal (*fp)(HexaVal) = (HexaVal(*)(HexaVal))HX_FN_PTR(f);
+        return fp(a1);
+    }
+    return hexa_void();
+}
+static inline HexaVal __hexa_call1_fp1(HexaVal (*fp)(HexaVal), HexaVal a1) {
+    return fp(a1);
+}
+#define hexa_call1(f, a1) _Generic((f), \
+    HexaVal: hexa_call1_hv, \
+    HexaVal (*)(HexaVal): __hexa_call1_fp1, \
+    default: hexa_call1_hv)((f), (a1))
+
+static inline HexaVal hexa_call2_hv(HexaVal f, HexaVal a1, HexaVal a2) {
+    if (HX_IS_CLOSURE(f)) {
+        HexaVal (*fp)(HexaVal, HexaVal, HexaVal) = (HexaVal(*)(HexaVal, HexaVal, HexaVal))HX_CLO_PTR(f);
+        return fp(hexa_closure_env(f), a1, a2);
+    }
+    if (HX_IS_FN(f)) {
+        HexaVal (*fp)(HexaVal, HexaVal) = (HexaVal(*)(HexaVal, HexaVal))HX_FN_PTR(f);
+        return fp(a1, a2);
+    }
+    return hexa_void();
+}
+static inline HexaVal __hexa_call2_fp2(HexaVal (*fp)(HexaVal, HexaVal), HexaVal a1, HexaVal a2) {
+    return fp(a1, a2);
+}
+#define hexa_call2(f, a1, a2) _Generic((f), \
+    HexaVal: hexa_call2_hv, \
+    HexaVal (*)(HexaVal, HexaVal): __hexa_call2_fp2, \
+    default: hexa_call2_hv)((f), (a1), (a2))
+
+static inline HexaVal hexa_call3(HexaVal f, HexaVal a1, HexaVal a2, HexaVal a3) {
+    if (HX_IS_CLOSURE(f)) {
+        HexaVal (*fp)(HexaVal, HexaVal, HexaVal, HexaVal) = (HexaVal(*)(HexaVal, HexaVal, HexaVal, HexaVal))HX_CLO_PTR(f);
+        return fp(hexa_closure_env(f), a1, a2, a3);
+    }
+    if (HX_IS_FN(f)) {
+        HexaVal (*fp)(HexaVal, HexaVal, HexaVal) = (HexaVal(*)(HexaVal, HexaVal, HexaVal))HX_FN_PTR(f);
+        return fp(a1, a2, a3);
+    }
+    return hexa_void();
+}
+
+static inline HexaVal hexa_call4(HexaVal f, HexaVal a1, HexaVal a2, HexaVal a3, HexaVal a4) {
+    if (HX_IS_CLOSURE(f)) {
+        HexaVal (*fp)(HexaVal, HexaVal, HexaVal, HexaVal, HexaVal) = (HexaVal(*)(HexaVal, HexaVal, HexaVal, HexaVal, HexaVal))HX_CLO_PTR(f);
+        return fp(hexa_closure_env(f), a1, a2, a3, a4);
+    }
+    if (HX_IS_FN(f)) {
+        HexaVal (*fp)(HexaVal, HexaVal, HexaVal, HexaVal) = (HexaVal(*)(HexaVal, HexaVal, HexaVal, HexaVal))HX_FN_PTR(f);
+        return fp(a1, a2, a3, a4);
+    }
+    return hexa_void();
+}
 
 #endif /* HEXA_RUNTIME_H */

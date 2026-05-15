@@ -129,23 +129,22 @@ case ${1:-} in
         [ $# -eq 1 ] || usage
         SRC=$1
         [ -f "$SRC" ] || { echo "hexa-fast: no such file: $SRC" >&2; exit 1; }
-        # baseline: legacy `#include "runtime.c"` path
+        # As of PHASE 1.3.B, hexa_v2 emits #include "runtime.h" by default.
+        # For the BASELINE arm we mechanically sed it back to runtime.c so
+        # clang sees the legacy `#include "runtime.c"` standalone TU.
         BL_C="${TMPDIR:-/tmp}/hexa-bench-baseline-$$.c"
         BL_BIN="${TMPDIR:-/tmp}/hexa-bench-baseline-$$.bin"
-        trap 'rm -f "$BL_C" "$BL_BIN"' EXIT
-        "$HEXA_V2" "$SRC" "$BL_C" >/dev/null
+        NEW_C="${TMPDIR:-/tmp}/hexa-bench-new-$$.c"
+        NEW_BIN="${TMPDIR:-/tmp}/hexa-bench-new-$$.bin"
+        trap 'rm -f "$BL_C" "$BL_BIN" "$BL_C.bak" "$NEW_C" "$NEW_BIN"' EXIT
+        "$HEXA_V2" "$SRC" "$NEW_C" >/dev/null
+        # baseline = same C with the include flipped back
+        sed 's|#include "runtime.h"|#include "runtime.c"|' "$NEW_C" > "$BL_C"
         # warm any disk caches
         clang $CFLAGS -o "$BL_BIN" "$BL_C" -I"$REPO_ROOT/self" 2>/dev/null
         baseline_user=$( { /usr/bin/time -p clang $CFLAGS -o "$BL_BIN" "$BL_C" -I"$REPO_ROOT/self" 2>&1 1>/dev/null ; } 2>&1 | awk '/^user/{print $2}')
-        # new path: runtime.h + cached runtime.o
-        NEW_BIN="${TMPDIR:-/tmp}/hexa-bench-new-$$.bin"
-        build "$SRC" "$NEW_BIN" 2>/dev/null  # warm
-        new_user=$( { /usr/bin/time -p bash -c "
-            $HEXA_V2 '$SRC' '$BL_C' >/dev/null
-            sed -i.bak 's|#include \"runtime.c\"|#include \"runtime.h\"|' '$BL_C'
-            clang $CFLAGS -o '$NEW_BIN' '$BL_C' '$RT_O' -I'$REPO_ROOT/self'
-        " 2>&1 1>/dev/null ; } 2>&1 | awk '/^user/{print $2}')
-        rm -f "$NEW_BIN" "$BL_C.bak"
+        clang $CFLAGS -o "$NEW_BIN" "$NEW_C" "$RT_O" -I"$REPO_ROOT/self" 2>/dev/null
+        new_user=$( { /usr/bin/time -p clang $CFLAGS -o "$NEW_BIN" "$NEW_C" "$RT_O" -I"$REPO_ROOT/self" 2>&1 1>/dev/null ; } 2>&1 | awk '/^user/{print $2}')
         # report
         bytes=$(wc -c <"$SRC")
         speedup=$(awk -v b=$baseline_user -v n=$new_user 'BEGIN{ if (n>0) printf "%.2fx", b/n; else print "n/a" }')
