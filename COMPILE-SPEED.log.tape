@@ -120,3 +120,37 @@
 @X x_compile_speed := "COMPILE-SPEED.tape" :: doctrine [active]
   url = "https://github.com/dancinlab/hexa-lang/blob/main/COMPILE-SPEED.tape"
   scope = "architecture SSOT — proposals, findings, action queue (latest-wins). This .log.tape is its event history (append-only)."
+
+# ─── 2026-05-15  PHASE 1.2 first-cut smoke — architecture validated ──
+
+@A phase_1_2_smoke := "minimal runtime.h vs `#include runtime.c` bench" :: measurement [d=2026-05-15 ok]
+  step = "[@action_queue] 1.2/1.3/1.4 collapsed into a hand-driven smoke test on a minimal user.c (no hexa_v2 codegen patch yet)"
+  artifacts <<~EOF
+    self/runtime.h           (NEW · ~50 decls covering tiny-smoke surface)
+    /tmp/hexa-compile-bench/test_user.c   (hand-crafted user.c using runtime.h)
+    /tmp/hexa-compile-bench/runtime.o     (clang -O0 -c self/runtime.c)
+  EOF
+  baseline_full_include <<~EOF
+    /usr/bin/time -p clang -O0 -o tiny2_baseline tiny2.c -I self
+      real 1.68 s · user 0.62 s · sys 0.09 s    # user.c does #include "runtime.c"
+  EOF
+  new_path_runtime_h_link <<~EOF
+    /usr/bin/time -p clang -O0 -c self/runtime.c -o runtime.o
+      real 1.98 s · user 0.60 s · sys 0.07 s    # one-time per runtime.c change (cache target)
+    /usr/bin/time -p clang -O0 -o test_user_new test_user.c runtime.o -I self
+      real 0.36 s · user 0.08 s · sys 0.07 s    # ← per-build cost after runtime.o cached
+  EOF
+  speedup = "user-time 0.62 → 0.08 ≈ 7.75× faster than baseline (target was 5×); wall 1.07 → 0.36 ≈ 3× faster"
+  binary_output = "hello from runtime.h \\n argv.len=5 \\n [exit=0]"  # 3 CLI args + argv[0] + null sentinel = 5 (vs baseline's hung infinite loop)
+
+@D phase_1_2_finding := "PHASE 1.1 audit was INCOMPLETE — macro expansion missed" :: finding [d=2026-05-15 active]
+  finding = "Many `hexa_*` calls in hexa_v2-emitted user.c are MACROS (e.g. hexa_add at runtime.c:4757) that expand to internal `static` helpers (e.g. hexa_add_slow at runtime.c:4731). PHASE 1.1's grep-based audit found the explicit identifiers but missed macro-expansion targets."
+  evidence = "first-cut runtime.h linked test_user.c failed with `Undefined symbols: _hexa_add` — investigation revealed hexa_add is `#define hexa_add(A,B) ({...; hexa_add_slow(...);})`"
+  impact = "true must-expose surface is LARGER than 40 symbols. Need to add a pre-processing pass to the audit: expand runtime.c macros first, then grep static-fn body references."
+  mitigation_for_smoke = "patched runtime.c:4731 — dropped `static` on hexa_add_slow (one line). Smoke validated. Same pattern likely needed for hexa_mul, hexa_eq, hexa_cmp_lt, etc. (all macro-wrapped fast paths)."
+  next = "PHASE 1.2.A — re-do audit with macro expansion: `clang -E self/runtime.c -dD | grep -E 'static.*hexa_'` to enumerate macros + their static-helper targets. Then mechanical sed-pass to de-staticize all targets at once."
+
+@N phase_1_2_runtime_c_patch_pending := "runtime.c hexa_add_slow de-static — uncommitted" :: status [d=2026-05-15 partial]
+  fact = "self/runtime.c was edited locally to drop `static` on hexa_add_slow (smoke unblock), but NOT committed in this session — pre-existing unrelated unstaged changes in runtime.c (e.g. hexa_array_shift addition) prevented a clean isolated commit."
+  proposal = "next session: bundle PHASE 1.2.A de-staticization sweep as ONE focused commit on runtime.c, separate from any pre-existing scratch work."
+  risk = "without the patch, self/runtime.h-built user.c will not link. Header file ships with a status comment naming the dependency."
