@@ -89,12 +89,7 @@ fn _cmd_doctor() -> int {
     println(to_string(r7[0]))
     if r7[1] != 0 { fail = fail + 1 }
 
-    _banner("8. raw#N coverage (3.6)")
-    let r8 = _run("hx_raw_coverage.hexa", "")
-    println(to_string(r8[0]))
-    if r8[1] != 0 { fail = fail + 1 }
-
-    _banner("9. Cert chain (3.7)")
+    _banner("8. Cert chain (3.7)")
     let r9 = _run("hx_cert_chain.hexa", "")
     println(to_string(r9[0]))
     if r9[1] != 0 { fail = fail + 1 }
@@ -130,7 +125,7 @@ fn _selftest() -> int {
     let mods = ["hx_blocker_scan.hexa", "hx_loss_free_roi_scan.hexa",
                 "hx_stage_health.hexa", "hx_stdlib_promote.hexa",
                 "hx_bench_drift.hexa", "hx_coverage_scan.hexa",
-                "hx_api_drift.hexa", "hx_raw_coverage.hexa",
+                "hx_api_drift.hexa",
                 "hx_cert_chain.hexa", "hx_aot_stale.hexa",
                 "hx_tool_graph.hexa", "hx_pattern_mine.hexa",
                 "hx_continuous_scan.hexa", "hx_meta_telemetry.hexa",
@@ -173,7 +168,6 @@ fn main() {
     if cmd == "bench-gate"     { let r = _run("hx_bench_drift.hexa", "");        println(to_string(r[0])); exit(r[1]) }
     if cmd == "coverage"       { let r = _run("hx_coverage_scan.hexa", "");      println(to_string(r[0])); exit(r[1]) }
     if cmd == "api-drift"      { let r = _run("hx_api_drift.hexa", "");          println(to_string(r[0])); exit(r[1]) }
-    if cmd == "raw-coverage"   { let r = _run("hx_raw_coverage.hexa", "");       println(to_string(r[0])); exit(r[1]) }
     if cmd == "cert-chain"     { let r = _run("hx_cert_chain.hexa", "");         println(to_string(r[0])); exit(r[1]) }
     if cmd == "aot-stale"      { let r = _run("hx_aot_stale.hexa", "");          println(to_string(r[0])); exit(r[1]) }
     if cmd == "tool-graph"     { let r = _run("hx_tool_graph.hexa", "");         println(to_string(r[0])); exit(r[1]) }

@@ -190,7 +190,7 @@ fn _valid_header_status(s: string) -> bool {
 //   TBD          (explicit unknown)
 // Rationale: long-horizon roadmap items 는 day-level 정확도가 없다. 강제하면
 // .roadmap 작성자가 fake 날짜를 박거나 TBD 로 회피 → signal 손실. 이 형식은
-// raw_attestation/raw-verify.yml bash port 와 정렬된다.
+// attestation / verify bash port 와 정렬된다.
 fn _valid_eta(s: string) -> bool {
     if s == "TBD" { return true }
     let n = len(s)
@@ -306,7 +306,7 @@ fn _find_rule(rules: array, id: string) -> array {
 //   ""                                    → missing           → handled by done-gate
 //
 // Paths are repo-relative (resolved against _pwd()). file_exists() accepts
-// both files and directories (raw_attestation uses test -e — same semantics).
+// both files and directories (test -e semantics).
 fn _proof_path_exists(rel: string) -> bool {
     let p = rel.trim()
     if len(p) == 0 { return false }

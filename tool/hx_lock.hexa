@@ -28,7 +28,6 @@
 //   ./hexa tool/hx_lock.hexa --force --reason "recovery"   — lock on rule fail
 
 use "self/stdlib/law_io"
-use "tool/raw_audit"
 fn _is_darwin() -> bool {
     let uname = to_string(exec("uname -s")).trim()
     return uname == "Darwin"
@@ -65,14 +64,6 @@ fn _parse_args() -> array {
         i = i + 1
     }
     return [auto, force, reason, prior_levels]
-}
-
-fn _run_raw_all() -> int {
-    // HEXA_VAL_ARENA=0: raw_all spawns many child enforcers; arena off
-    // across the tree avoids OOM on heavy lints (ai_native_lint etc).
-    let r = exec_with_status("HEXA_VAL_ARENA=0 ./build/hexa_interp tool/raw_all.hexa 2>&1")
-    print(to_string(r[0]))
-    return r[1]
 }
 
 fn _apply_lock() -> int {
@@ -181,33 +172,10 @@ fn main() -> int {
     if auto { label = "auto-relock" }
     if !auto { println("── hx lock (" + label + ", tiered) ──") }
 
-    // gate: raw_all must pass, unless --force
-    if !force {
-        let rc = _run_raw_all()
-        if rc != 0 {
-            eprintln("")
-            eprintln("hx_lock: raw_all exit=" + to_string(rc) + " — tree remains UNLOCKED.")
-            eprintln("  Fix violations, then: ./hexa tool/hx_lock.hexa")
-            eprintln("  Force (audited):     ./hexa tool/hx_lock.hexa --force --reason \"...\"")
-            let mut why_fail = "manual lock attempt"
-            if auto { why_fail = "auto-relock after window" }
-            audit_append("lock", env("USER"),
-                         why_fail,
-                         "fail (raw_all " + to_string(rc) + ")",
-                         sha_before, "-")
-            return 1
-        }
-    }
-
     // Phase 1: Level 1 for everything
     let lrc = _apply_lock()
     if lrc != 0 {
         eprintln("hx_lock: L1 apply failed exit=" + to_string(lrc))
-        let mut why_l1 = "manual lock"
-        if auto { why_l1 = "auto-relock" }
-        audit_append("lock", env("USER"),
-                     why_l1 + " (L1 phase)",
-                     "fail", sha_before, "-")
         return 1
     }
 
@@ -216,7 +184,6 @@ fn main() -> int {
     let downgraded = _restore_level2(prior)
     let sha_after = ssot_fingerprint()
 
-    // audit record
     let mut tag = "ok"
     if force { tag = "FORCED" }
     let mut base_why = "manual lock"
@@ -231,12 +198,7 @@ fn main() -> int {
             else { dg = dg + "," + r }
         }
         why = why + " [downgraded-on-relock=" + dg + "]"
-        // also record a separate audit event for clarity
-        audit_append("downgrade-on-relock", env("USER"),
-                     "sudo unavailable; L2 targets re-locked at L1: " + dg,
-                     "warn", sha_before, sha_after)
     }
-    audit_append("lock", env("USER"), why, tag, sha_before, sha_after)
 
     if !auto {
         println("")

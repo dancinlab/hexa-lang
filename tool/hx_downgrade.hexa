@@ -24,7 +24,6 @@
 //   record remains coherent across platforms.
 
 use "self/stdlib/law_io"
-use "tool/raw_audit"
 use "tool/os_level_lock"
 fn _is_darwin() -> bool {
     let uname = to_string(exec("uname -s")).trim()

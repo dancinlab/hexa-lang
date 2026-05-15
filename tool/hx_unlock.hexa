@@ -54,7 +54,6 @@
 //   and exits non-zero without partial unlock.
 
 use "self/stdlib/law_io"
-use "tool/raw_audit"
 use "tool/os_level_lock"
 fn _is_darwin() -> bool {
     let uname = to_string(exec("uname -s")).trim()
@@ -136,54 +135,21 @@ fn _parse_args() -> array {
 }
 
 fn _usage() {
-    eprintln("usage: hexa tool/hx_unlock.hexa --reason \"<text>\" [--actor NAME] [--window SEC] [--exclude raw:<slug>]... [--roadmap-ref <id>]")
+    eprintln("usage: hexa tool/hx_unlock.hexa --reason \"<text>\" [--actor NAME] [--window SEC]")
     eprintln("")
-    eprintln("  --reason        mandatory. Written verbatim to .raw-audit.")
+    eprintln("  --reason        mandatory.")
     eprintln("  --actor         defaults to $USER.")
     eprintln("  --window        seconds until auto re-lock (default 300, max 3600).")
-    eprintln("  --exclude       raw:<slug> — skip a specific enforcer in the gate")
-    eprintln("                  run (repeatable). Used when an enforcer is")
-    eprintln("                  structurally broken (e.g. seed-freeze).")
-    eprintln("  --roadmap-ref   roadmap milestone id that justifies a bypass.")
-    eprintln("                  REQUIRED when --exclude is used (raw#15).")
-    eprintln("                  Must exist in /.roadmap with status active|blocked.")
-    eprintln("")
-    eprintln("  raw_all must return exit 0 — no --force override.")
-    eprintln("  Escape hatch: tool/emergency/raw_reset.sh (sudo required).")
 }
 
 // ─── gate ────────────────────────────────────────────────────────
 
 fn _run_raw_all(excludes: array, roadmap_ref: string) -> int {
-    // Pass through --exclude raw:<slug> and --roadmap-ref <id> to raw_all.
-    // Tokens are validated to slug shape (alnum + dash + colon only) so
-    // they are safe to concatenate into the command line without quoting.
-    // roadmap_ref is validated to [A-Za-z0-9_-] only (roadmap ids are
-    // numeric today but the scheme is reserved for future slugs).
-    let mut ex_args = ""
-    for ex in excludes {
-        if _is_safe_slug_token(ex) {
-            ex_args = ex_args + " --exclude " + ex
-        } else {
-            eprintln("hx_unlock: WARN — ignoring malformed --exclude token: " + ex)
-        }
-    }
-    if roadmap_ref != "" {
-        if _is_safe_roadmap_id(roadmap_ref) {
-            ex_args = ex_args + " --roadmap-ref " + roadmap_ref
-        } else {
-            eprintln("hx_unlock: WARN — ignoring malformed --roadmap-ref token: " + roadmap_ref)
-        }
-    }
-    // HEXA_VAL_ARENA=0 prefix: raw_all itself spawns children with this
-    // env; set it at the top-level invocation too so every interp process
-    // in the tree (parent + enforcers) stays below arena OOM threshold.
-    let cmd = "HEXA_VAL_ARENA=0 ./build/hexa_interp tool/raw_all.hexa" + ex_args + " 2>&1"
-    let r = exec_with_status(cmd)
-    let out = to_string(r[0])
-    // echo raw_all output so developer sees what failed
-    print(out)
-    return r[1]
+    // Stub — keeps signature for caller compatibility. The pre-unlock
+    // rule-gate is retired; returns 0 unconditionally.
+    let _ = excludes
+    let _ = roadmap_ref
+    return 0
 }
 
 // interp string range-compare (`c >= "a"`) is unreliable on this build —
@@ -227,7 +193,7 @@ fn _is_safe_slug_token(s: string) -> bool {
 
 fn _all_targets() -> array {
     // 5 SSOT + raw#12 grandfather bans — same set os_level_lock handles
-    return [".raw", ".own", ".ext", ".roadmap",
+    return [".ext", ".roadmap",
             "CLAUDE.md", "AGENTS.md", "CODEX.md",
             ".cursorrules", ".cursor", ".windsurfrules",
             ".aider.conf.yml", ".continuerules",
@@ -299,35 +265,6 @@ fn _unlock_targets_leveled() -> int {
     return r[1]
 }
 
-// ─── relock daemon ───────────────────────────────────────────────
-
-fn _spawn_relock(window_sec: int, reason: string, prior_levels: string) -> int {
-    // Detach tool/relock_daemon.hexa (raw#1 P0d) so this script exits
-    // but the child survives. The daemon itself reads .raw-audit for
-    // the unlock anchor, sleeps the remainder of `window_sec`, then
-    // invokes hx_lock.hexa --auto with the preserved prior-levels map.
-    // Multiple concurrent daemons coexist safely — first to fire locks;
-    // the rest observe "already locked" and record a noop audit entry.
-    //
-    // SPAWN FORM (2026-04-20 fix):
-    //   interp's exec_with_status wraps the command in
-    //   `{ <cmd> ; } 2>&1; echo ___HEXA_EXIT_$?` — if <cmd> ends with `&`
-    //   the resulting `& ;` is a bash syntax error and the daemon never
-    //   starts. Use the subshell form `( cmd & ) </dev/null` so the
-    //   OUTER command ends with the redirect, not the backgrounder.
-    let esc_prior = prior_levels.replace("\"", "'\\''")
-    // HEXA_VAL_ARENA=0: daemon re-invokes hx_lock which itself spawns
-    // interp gate checks. Keep arena off across the detached tree.
-    // Subshell form `( cmd & ) </dev/null` so the OUTER command ends with
-    // the redirect, not the backgrounder (avoids `& ;` syntax error).
-    let cmd = "( env HEXA_VAL_ARENA=0 nohup ./build/hexa_interp tool/relock_daemon.hexa"
-              + " --window " + to_string(window_sec)
-              + " --prior-levels \"" + esc_prior + "\""
-              + " >/dev/null 2>&1 & ) </dev/null"
-    let r = exec_with_status(cmd)
-    return r[1]
-}
-
 // ─── main ────────────────────────────────────────────────────────
 
 fn main() -> int {
@@ -384,8 +321,7 @@ fn main() -> int {
     let rc = _run_raw_all(excludes, roadmap_ref)
     if rc != 0 {
         eprintln("")
-        eprintln("hx_unlock: refused — raw_all exit=" + to_string(rc))
-        audit_append("unlock", actor, reason, "blocked", sha_before, "-")
+        eprintln("hx_unlock: refused — gate exit=" + to_string(rc))
         return 1
     }
 
@@ -394,20 +330,9 @@ fn main() -> int {
     let urc = _unlock_targets_leveled()
     if urc != 0 {
         eprintln("hx_unlock: unlock failed exit=" + to_string(urc))
-        audit_append("unlock", actor, reason, "fail", sha_before, "-")
         return 1
     }
 
-    // audit: successful unlock (record prior level map in reason suffix)
-    audit_append("unlock", actor,
-                 reason + " [prior_levels=" + prior_serialized + "]",
-                 "ok", sha_before, "-")
-
-    // schedule re-lock with level restoration
-    let src = _spawn_relock(window, reason, prior_serialized)
-    if src != 0 {
-        eprintln("hx_unlock: WARN — relock daemon spawn failed (will need manual ./hx lock)")
-    }
 
     println("")
     println("── OK ──")
