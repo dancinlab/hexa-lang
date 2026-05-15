@@ -306,6 +306,113 @@ HexaVal hexa_net_write_bytes(HexaVal fd, HexaVal arr);   /* native/net.c:489 —
 HexaVal hexa_net_read_bytes(HexaVal fd, HexaVal maxlen); /* native/net.c:530 — read(fd, max) → byte_arr */
 HexaVal hexa_net_close(HexaVal fd);                      /* native/net.c:168 */
 
+/* ── Additional native/*.c forward-decls (auto-generated 2026-05-15) ──
+ * Sourced from grep of self/native/*.c hexa_* definitions; ensures user.c
+ * compiled by hexa_v2 codegen never relies on implicit-decl. Link only
+ * the platform-applicable .o files (gated by HEXA_HAS_* macros). */
+/* native/crypto_sodium.c */
+HexaVal hexa_ed25519_keypair(void);     /* native/crypto_sodium.c:118 */
+HexaVal hexa_chacha20_poly1305_encrypt(HexaVal key_v, HexaVal nonce_v, HexaVal aad_v, HexaVal pt_v);     /* native/crypto_sodium.c:276 */
+HexaVal hexa_chacha20_poly1305_decrypt(HexaVal key_v, HexaVal nonce_v, HexaVal aad_v, HexaVal ct_v);     /* native/crypto_sodium.c:308 */
+HexaVal hexa_libsodium_available(void);     /* native/crypto_sodium.c:42 */
+
+/* native/exec_argv_sha256.c */
+HexaVal hexa_exec_argv(HexaVal argv_val);     /* native/exec_argv_sha256.c:174 */
+HexaVal hexa_exec_argv_with_status(HexaVal argv_val);     /* native/exec_argv_sha256.c:178 */
+
+/* native/exec_pipe.c */
+HexaVal hexa_exec_pipe_open(HexaVal argv_v, HexaVal env_v);     /* native/exec_pipe.c:27 */
+
+/* native/fp_init.c */
+void hexa_fp_init(void);     /* native/fp_init.c:37 */
+
+/* native/mount.c */
+HexaVal hexa_mount(HexaVal src_v, HexaVal tgt_v, HexaVal fs_v, HexaVal flags_v, HexaVal data_v);     /* native/mount.c:27 */
+HexaVal hexa_umount(HexaVal tgt_v, HexaVal flags_v);     /* native/mount.c:44 */
+
+/* native/namespace.c */
+HexaVal hexa_unshare(HexaVal flags_v);     /* native/namespace.c:37 */
+HexaVal hexa_setns(HexaVal fd_v, HexaVal nstype_v);     /* native/namespace.c:48 */
+HexaVal hexa_pivot_root(HexaVal new_root_v, HexaVal put_old_v);     /* native/namespace.c:59 */
+HexaVal hexa_namespace_clone_const(HexaVal name_v);     /* native/namespace.c:76 */
+
+/* native/net.c */
+HexaVal hexa_net_listen(HexaVal addr_val);     /* native/net.c:129 */
+HexaVal hexa_net_accept(HexaVal listen_val);     /* native/net.c:160 */
+HexaVal hexa_net_set_nonblock(HexaVal fd_val);     /* native/net.c:183 */
+HexaVal hexa_net_select(HexaVal fds_val, HexaVal timeout_ms_val);     /* native/net.c:206 */
+HexaVal hexa_net_send_fd(HexaVal sock_v, HexaVal fd_v, HexaVal payload_v);     /* native/net.c:274 */
+HexaVal hexa_net_recv_fd(HexaVal sock_v, HexaVal max_payload_v);     /* native/net.c:309 */
+HexaVal hexa_net_read(HexaVal fd_val);     /* native/net.c:386 */
+HexaVal hexa_net_read_n(HexaVal fd_val, HexaVal n_val);     /* native/net.c:415 */
+HexaVal hexa_net_set_timeout(HexaVal fd_val, HexaVal ms_val);     /* native/net.c:447 */
+HexaVal hexa_net_write(HexaVal fd_val, HexaVal data_val);     /* native/net.c:465 */
+
+/* native/persistent_pipe.c */
+HexaVal hexa_pipe_spawn(HexaVal cmd_val);     /* native/persistent_pipe.c:152 */
+HexaVal hexa_pipe_send_line(HexaVal h_val, HexaVal payload_val);     /* native/persistent_pipe.c:234 */
+HexaVal hexa_pipe_recv_line(HexaVal h_val, HexaVal timeout_val);     /* native/persistent_pipe.c:270 */
+HexaVal hexa_pipe_close(HexaVal h_val);     /* native/persistent_pipe.c:345 */
+HexaVal hexa_pipe_alive(HexaVal h_val);     /* native/persistent_pipe.c:388 */
+
+/* native/proc_fork.c */
+HexaVal hexa_proc_fork(void);     /* native/proc_fork.c:16 */
+HexaVal hexa_proc_setsid(void);     /* native/proc_fork.c:22 */
+HexaVal hexa_proc_reap_zombies(void);     /* native/proc_fork.c:28 */
+
+/* native/pty.c */
+HexaVal hexa_tcsetattr(HexaVal fd_v, HexaVal when_v, HexaVal attrs_v);     /* native/pty.c:117 */
+HexaVal hexa_tty_isatty(HexaVal fd_v);     /* native/pty.c:145 */
+HexaVal hexa_tty_ttyname(HexaVal fd_v);     /* native/pty.c:150 */
+HexaVal hexa_pty_forkexec(HexaVal argv_v, HexaVal env_v, HexaVal rows_v, HexaVal cols_v);     /* native/pty.c:166 */
+HexaVal hexa_pty_open(void);     /* native/pty.c:47 */
+HexaVal hexa_pty_get_winsize(HexaVal fd_v);     /* native/pty.c:74 */
+HexaVal hexa_pty_set_winsize(HexaVal fd_v, HexaVal r_v, HexaVal c_v, HexaVal xp_v, HexaVal yp_v);     /* native/pty.c:87 */
+HexaVal hexa_tcgetattr(HexaVal fd_v);     /* native/pty.c:99 */
+
+/* native/signal_flock.c */
+HexaVal hexa_os_sig_install(HexaVal sig_val, HexaVal name_val);     /* native/signal_flock.c:103 */
+HexaVal hexa_os_sig_uninstall(HexaVal sig_val);     /* native/signal_flock.c:124 */
+HexaVal hexa_os_sig_current(HexaVal sig_val);     /* native/signal_flock.c:138 */
+HexaVal hexa_os_sig_raise(HexaVal sig_val);     /* native/signal_flock.c:146 */
+HexaVal hexa_os_sig_kill(HexaVal pid_val, HexaVal sig_val);     /* native/signal_flock.c:153 */
+HexaVal hexa_os_sig_drain(void);     /* native/signal_flock.c:163 */
+HexaVal hexa_os_sig_block(HexaVal arr_val);     /* native/signal_flock.c:196 */
+HexaVal hexa_os_sig_unblock(HexaVal arr_val);     /* native/signal_flock.c:200 */
+HexaVal hexa_os_flock_open(HexaVal path_val, HexaVal mode_val);     /* native/signal_flock.c:212 */
+HexaVal hexa_os_flock_close(HexaVal fd_val);     /* native/signal_flock.c:241 */
+HexaVal hexa_os_getpid(void);     /* native/signal_flock.c:252 */
+HexaVal hexa_os_sig_pipe_fd(void);     /* native/signal_flock.c:97 */
+
+/* native/tensor_kernels.c */
+HexaVal hexa_f32_to_bytes_le(HexaVal val);     /* native/tensor_kernels.c:107 */
+HexaVal hexa_bytes_to_f32_le(HexaVal arr, HexaVal offset);     /* native/tensor_kernels.c:120 */
+HexaVal hexa_f64_to_bytes_le(HexaVal val);     /* native/tensor_kernels.c:139 */
+HexaVal hexa_bytes_to_f64_le(HexaVal arr, HexaVal offset);     /* native/tensor_kernels.c:152 */
+HexaVal hexa_bytes_to_f32_le_v(HexaVal arr, HexaVal offset);     /* native/tensor_kernels.c:176 */
+HexaVal hexa_bytes_to_f64_le_v(HexaVal arr, HexaVal offset);     /* native/tensor_kernels.c:200 */
+HexaVal hexa_struct_pack_f32(HexaVal* args, int nargs);     /* native/tensor_kernels.c:241 */
+HexaVal hexa_struct_unpack_f32(HexaVal ptr, HexaVal index);     /* native/tensor_kernels.c:251 */
+HexaVal hexa_tensor_new(HexaVal r, HexaVal c);     /* native/tensor_kernels.c:263 */
+HexaVal hexa_tensor_randn(HexaVal r, HexaVal c);     /* native/tensor_kernels.c:272 */
+HexaVal hexa_tensor_data_ptr(HexaVal tv);     /* native/tensor_kernels.c:284 */
+HexaVal hexa_tensor_from_ptr(HexaVal p, HexaVal r, HexaVal c);     /* native/tensor_kernels.c:289 */
+HexaVal hexa_ptr_read_f64(HexaVal ptr, HexaVal offset);     /* native/tensor_kernels.c:55 */
+
+/* native/thread.c */
+HexaVal hexa_thread_join(HexaVal tid_val);     /* native/thread.c:112 */
+HexaVal hexa_channel_new(void);     /* native/thread.c:129 */
+HexaVal hexa_channel_send(HexaVal ch_val, HexaVal v);     /* native/thread.c:152 */
+HexaVal hexa_channel_recv(HexaVal ch_val, HexaVal timeout_ms_val);     /* native/thread.c:178 */
+HexaVal hexa_channel_close(HexaVal ch_val);     /* native/thread.c:219 */
+HexaVal hexa_now_ms(void);     /* native/thread.c:236 */
+HexaVal hexa_thread_spawn(HexaVal fn_val, HexaVal arg_val);     /* native/thread.c:81 */
+
+/* native/wait.c */
+HexaVal hexa_proc_wait(HexaVal pid_v, HexaVal flags_v);     /* native/wait.c:21 */
+HexaVal hexa_proc_wait_flag_const(HexaVal name_v);     /* native/wait.c:58 */
+
+
 /* try/catch lowering (codegen emits __hexa_try_push/pop around fn bodies
  * with non-void try-blocks; __hexa_try_top is read as a saved-depth marker)
  * DE-STATIC NEEDED in runtime.c (line 4386): drop `static` on __hexa_try_top. */
