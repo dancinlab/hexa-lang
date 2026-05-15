@@ -1,0 +1,31 @@
+// REGRESSION REPRODUCER — substrate blocker `runtime-selfcompile-memory`
+// (COMPILE-ONLY.log.tape @? root_substrate_defect_selfcompile_oom).
+//
+// Compiling an array literal of N struct-literals whose fields include a
+// LONG string literal makes the NEW compiler/* codegen|lower|emit blow RSS
+// super-quadratically (cliff ~1000→2000 elements; full embedded-atlas
+// N≈7400 → linear ~11 GiB/s → OOM @ 251 GiB in 52 s).
+//
+// PROVEN-INNOCENT (host interp RUN of this exact source at N=4000 = 1 MB / 1 s):
+//   runtime array/heapify · parser · bind · resolve · types — all O(1)/fine.
+// CULPRIT: NEW compiler/* codegen path ONLY (stage1 --emit=asm).
+// FIX: port legacy self/codegen_c2.hexa O(n²) array-literal/strlit fixes
+//   ca11632c (O(N²) array-literal hang) · 4cab70d4 (>64 elems → GNU
+//   statement-expr) · 07af043c (chunk __hexa_strlit_init 500-stmt slices)
+//   into the new compiler/lower|codegen|emit pipeline.
+//
+// PASS CRITERION: `hexa build` (new stage1) of this file at N=2000 peaks
+//   < 200 MB (currently ~4 GB). At N=250/500/1000 it already completes; the
+//   cliff is 1000→2000.
+struct AN { k: string, id: string, raw: string, g: i64 }
+fn build() -> [AN] {
+    let t = [
+        AN { k: "C", id: "NODE-0", raw: "@C NODE-0 = some atlas content payload number 0 :: domain [10] => derived claim 0", g: 0 },
+        AN { k: "C", id: "NODE-1", raw: "@C NODE-1 = some atlas content payload number 1 :: domain [10] => derived claim 1", g: 1 },
+        AN { k: "C", id: "NODE-2", raw: "@C NODE-2 = some atlas content payload number 2 :: domain [10] => derived claim 2", g: 2 }
+        // … generator emits N of these; see test harness. 3 kept here as the
+        // canonical shape (array-of-struct-with-long-string-literal).
+    ]
+    return t
+}
+fn main() { let x = build(); println(to_string(len(x))) }

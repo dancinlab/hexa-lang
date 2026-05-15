@@ -480,3 +480,40 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
   @> COMPILE-ONLY.tape
 
+# ─── 2026-05-16  substrate sub-track: ROOT-CAUSE fully localized (codegen, not runtime) ───
+
+@A selfcompile_oom_rootcause := "ROOT-CAUSE: O(n²) is NEW-compiler codegen of array-literal-of-struct-with-long-string — NOT runtime" :: measurement [d=2026-05-16 ok]
+  ~> root_substrate_defect_selfcompile_oom
+  step = "User `ok go` → substrate sub-track. Localized via minimal reproducer + variable isolation + pass isolation. Cost: $0 (all local Mac, stage1_ci built earlier)."
+  reproducer = "test/regression/codegen_array_struct_longstr_oom.hexa (committed). Generator: array of N `AN { k,id,raw:<LONG str>,g }` struct-literals."
+  isolation_matrix <<~EOF
+    stage1_ci compiling, peak RSS:
+      tiny (1 fn)                       : 3 MB  done   → fixed-init NOT the cause
+      int[] N=2000 (no struct/string)   : 10 MB done   → array length NOT the cause
+      struct{} N=2000 SHORT string      : 9 MB  done   → struct-in-array NOT the cause
+      struct{} N=2000 LONG  string      : 4 GB  (cliff)→ LONG STRING LITERAL × many = cause
+      struct{} N=250/500/1000 LONG      : 3-8 MB done  → cliff is 1000→2000 (super-quadratic)
+    Pass isolation — host interp RUN of the IDENTICAL N=2000 AND N=4000 source
+    (exercises runtime array/heapify + parser + bind + resolve + types, NO codegen):
+      → 1 MB, 1 s, correct output.  DEFINITIVE: runtime/parser/bind/types ALL innocent.
+    ⇒ The O(n²) is EXCLUSIVELY in the NEW compiler/* codegen|lower|emit path
+      (stage1 --emit=asm), triggered by many long string literals inside an
+      array-of-struct literal.
+  EOF
+  correction = "Earlier framing as a deep runtime value/arena/freelist defect (blocker #1≡#5) is REVISED: runtime semantics are proven fine (interp run of N=4000 = 1 MB). hexa_array_push's per-push hexa_val_heapify (FIX 2026-05-13) + recursive TAG_ARRAY hexa_val_heapify (runtime.c:3384) are O(n) not O(n²) and are NOT the trigger. The blowup is the self-host COMPILER's codegen of the literal, scale-equivalent to the embedded-atlas array (compiler/atlas/embedded.gen.hexa ≈ 7400 AtlasNode literals) — which is exactly what every full self-compile chokes on right after `atlas: loaded … nodes`."
+  fix_plan <<~EOF
+    Port the THREE proven legacy codegen O(n²) fixes from self/codegen_c2.hexa
+    into the NEW compiler pipeline (compiler/lower/{ast_to_hir,hir_to_mir} +
+    compiler/codegen/* + compiler/emit/asm.hexa):
+      ca11632c  fix(parser,codegen): O(N²) array-literal hang
+      4cab70d4  fix(codegen): array literal > 64 elements → GNU statement-expr
+      07af043c  fix(codegen): chunk __hexa_strlit_init to 500-stmt slices
+    The legacy transpiler (hexa_v2 = self/codegen_c2.hexa) HAS these — which is
+    why hexa_v2 transpiles flat_ci.hexa fine; the NEW compiler/* codegen never
+    received them. Tractable, scoped codegen port — NOT a runtime rewrite.
+  EOF
+  verify_loop = "Local + cheap: rebuild stage1 (hexa_v2 transpile flat + clang -O0, ~8 min) then `stage1 build test/regression/codegen_array_struct_longstr_oom.hexa` at N=2000 → expect peak < 200 MB (currently ~4 GB). No cloud, no full self-compile needed for the unit signal; full self-compile (→ G6 / stage-2 / stage-3 / E2) follows once the cliff is gone."
+  status = "Root-cause COMPLETE & locally reproducible. Implementation (3-commit codegen port into compiler/lower|codegen|emit) is the next focused task — bounded, with a known-good legacy reference to mirror. This converts the entire E2 program's #1 blocker from 'mysterious memory wall' to a scoped codegen port."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only]"
+  @> COMPILE-ONLY.tape
+
