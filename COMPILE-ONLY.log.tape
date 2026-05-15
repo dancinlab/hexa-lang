@@ -123,3 +123,35 @@
   <- stage2_codegen_landed
   fact = "ubu-1 (Linux aiden-B650M-K, kernel 6.17.0-23-generic, x86_64) SSH-reachable again after the mid-run banner-timeout outage that forced the ubu-2 cross-build fallback. Both x86_64 build boxes now available for the front-end track."
   caveat = "Heavy builds still route to ubu-1/ubu-2 (local macOS clang OOMs the monolithic TU). Remote pattern: /tmp fresh clone, never force-reset the aiden worktree."
+
+# ─── 2026-05-15  Front-end track — expression-operator lowering (branch) ───
+
+@A frontend_expr_operators := "self-host parser: + operator lowering ! ~ & | ^ << >> && ||" :: measurement [d=2026-05-15 partial]
+  <- gate_moved_frontend
+  step = "Root-caused the operator-token-as-Ident leak: compiler/lex/lexer.hexa unknown-char fallback (TokenKind::Ident) → parser parse_primary fallback (ExprKind::Ident) → binder HX2001. The new self-host parser had NO token kinds or productions for ! ~ & | ^ << >> && || (only - unary and == != < <= > >= + - * / %). Legacy self/parser.hexa+lexer.hexa already implement them — faithful port, no invented grammar."
+  changes <<~EOF
+    tokens.hexa  +9 TokenKind: AmpAmp PipePipe Amp Pipe Caret Tilde Bang Shl Shr
+    lexer.hexa   maximal-munch: && || << >> (multi-char) ; ! & | ^ ~ (single,
+                 pre-fallback; != still Neq, && pre &, || pre |)
+    parser.hexa  parse_unary += Bang/Tilde (text=op.text, was const "-");
+                 +parse_logical_or/_and/_bitwise; parse_assignment descends
+                 via parse_logical_or. Precedence loosest→tightest:
+                 || < && < (& | ^ << >>) < == != < cmp < +- < */ < unary
+                 (ref: self/parser.hexa parse_or/parse_and/parse_bit_ops)
+  EOF
+  census = "stage-2 input (compiler/+self/ *.hexa): !x 2724 · && 7932 · || 11251 · &|^ 1026 · <<>> 297 · ~ 63 — all heavily used, confirms the leak scale"
+  |> "hexa parse clean on all 3 edited files (host-parser edit-level gate); no exhaustive TokenKind match exists to break on the +9 variants"
+  branch = "frontend-expr-lowering @ c30de87a (off main 237faa9e; NOT pushed/merged — unverified parser surgery kept off main, mirrors codegen track's c7-stack-spill user-merge gate)"
+  deferred <<~EOF
+    Closure |x| / zero-arg || lambda is OUT of this increment: the new
+    AST (compiler/parse/ast.hexa ExprKind) has NO Lambda/Closure variant;
+    porting it is a cross-cutting AST + bind + lower + codegen change, not
+    expression-operator lowering. After this change a primary-position `|`
+    still hits the Ident fallback — but ONLY at genuine closure sites
+    (~the real .map(|x| …) cases); every bitwise/operator `|` now parses
+    correctly. Net: HX2001 operator leaks for ! ~ & ^ << >> && || and
+    bitwise-| eliminated; closure-| residual is the next sub-track.
+  EOF
+  next_gate = "ubu-1/ubu-2 stage-2 self-compile re-run → confirm HX2001 1803 drops (expect ≥ ~1000 fewer: the operator-token-as-Ident class). Then: closure-|x| ExprKind::Lambda sub-track; HX2002 993 cross-module pub/private; HX2001 <callee> 594 receiver-type plumbing; HX3001 994 coercion. Not locally runnable (monolithic-TU clang OOM)."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc]"
+  @> COMPILE-ONLY.tape
