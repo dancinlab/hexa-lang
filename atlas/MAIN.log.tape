@@ -826,3 +826,75 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+# ─── Cycles 019-020 — Phase 3: Lambert W + Stage 3 cross-meta + CLI wiring ─
+
+@A cycles_019_020_batch := "Phase 3 cycles 019-020 — Lambert W Newton + Stage 3 cross-meta engine + hexa atlas-verify wiring (82 → 86)" :: cycle [d=2026-05-15 active]
+  trigger = "user 'next go' — Phase 3 entry post Phase 2 exhaustion"
+  scope <<~EOF
+    cumulative 82 → 86 (+4). Phase 3 진입 — Stage 3 cross-meta engine + Lambert W
+    Newton iteration + 정식 CLI subcommand wiring.
+
+    cycle 019 (+4):
+      s2_lambert_w_newton — T1-14 lambert-w-closed-form. W(x·eˣ)=x via Newton
+        iteration (w_{n+1} = w_n - (w_n·eᵂ - z)/(eᵂ·(w_n+1))) using libm exp.
+        stdlib pow(float,float) gap 우회 (Newton 으로 fractional power 불필요).
+        Samples W(e)=1, W(2e²)=2, W(0.5·e^0.5)=0.5 — all |err| < 1e-6.
+      compiler/atlas/verify/cross.hexa (Stage 3 cross-meta — anima W9 sibling consistency):
+        s_cross_meta_24_family — 24 via 4 independent derivations (4! · σ·φ · n·τ ·
+          Möbius J₂(6)) all agree → §1↔§8↔§10 coherence
+        s_cross_meta_sigma6_family — σ(6)=12 across 5 contexts (divisor sum ·
+          Ramanujan Δ weight · SM fermions · Mg Z · Bravais-φ) all agree
+        s_cross_meta_3_family — n/φ=3 across 4 contexts (QCD colors · fermion gens ·
+          S₃ conj classes) all agree
+
+    cycle 020 — `hexa atlas-verify` subcommand wiring:
+      self/main.hexa::_absorbed_script — `if verb == "atlas-verify" { return "tool/atlas_verify.hexa" }`
+      help text — atlas-verify entry added (line 62-68 atlas section)
+      wilson g_verify_hexa_cli_only 의 정식 CLI surface.
+      source-level 완료. hexa cc rebuilt transpiler OK. 정식 hexa binary rebuild
+      (self/main.hexa → main.c → clang) 시 `hexa atlas-verify` 활성화.
+      현재 작동 CLI: `hexa run tool/atlas_verify.hexa [--domain D]` (86/86 verified).
+  EOF
+  files_created = "compiler/atlas/verify/cross.hexa — Stage 3 cross-meta (3 sibling-consistency verifiers)"
+  files_modified <<~EOF
+    compiler/atlas/verify/transcendental.hexa  — +1 verifier (s2_lambert_w_newton + _lambert_w helper)
+    self/main.hexa                             — atlas-verify verb + help text (source-level, pending binary rebuild)
+    tool/atlas_verify.hexa                     — cross subcommand dispatch
+    atlas/MAIN.tape                            — tldr Phase 3 cumulative 86
+  EOF
+  verifier_run_result <<~EOF
+    Result: 86/86 PASS · 85 🔵 closed (52 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL) + 1 🟠 AT-RISK
+    Verifier surface: 11 modules (foundation/math/top/cosmo/bridges/chem/phys/transcendental/eng/geo/bio/cross)
+    Stage 3 cross-meta first closure — anima W9 sibling consistency hexa-native.
+  EOF
+  tier_changes <<~EOF
+    s2_lambert_w_newton        NEW 🔵 SUPPORTED-FORMAL (T1-14)
+    s_cross_meta_24_family     NEW 🔵 SUPPORTED-FORMAL (Stage 3)
+    s_cross_meta_sigma6_family NEW 🔵 SUPPORTED-FORMAL (Stage 3)
+    s_cross_meta_3_family      NEW 🔵 SUPPORTED-FORMAL (Stage 3)
+  EOF
+  blockers_encountered <<~EOF
+    `hexa atlas-verify` requires full hexa binary rebuild (self/main.hexa →
+    main.c → clang), NOT just `hexa cc` (transpiler hexa_cc.c only). Source-
+    level wiring complete + `hexa cc` rebuilt OK; verb activates on next
+    formal `hexa` dispatcher binary rebuild. Workaround in place:
+    `hexa run tool/atlas_verify.hexa` (already operational, wilson governance
+    g_verify_hexa_cli_only cite).
+  EOF
+  remaining_phase_3 <<~EOF
+    - modular forms module (T2-01 steps 2-8 · T1-31 elliptic curves · T1-32 deeper Eisenstein)
+    - strict-lint stage 9 (atlas-verdict-check CI gate)
+    - falsifier ≥5 executable form + registry (atlas/VERIFY.tape §5 declarative → executable)
+    - Stage 2 BIO PyPhi-equiv (V8 mechanism real impl — anima carry, large sprint)
+    - stdlib pow(float,float) + float.hexa tau() name conflict resolution
+    - hexa binary rebuild → `hexa atlas-verify` activation
+    - ~330 atlas embed entries default 🟠 INSUFFICIENT (cycle 021+ marginal value)
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only (wilson priority 1) — ✅ 86 via `hexa run tool/atlas_verify.hexa` + `hexa atlas-verify` source-wired
+    g1 real-limits-first — ✅ Lambert W Kolmogorov · cross-meta minimal-axiom
+    g5 hexa-native-only  — ✅ Newton iteration replaces external pow · cross.hexa hexa-source
+    g_self_verify        — ✅ 86 entries hexa-native closure (Stage 1+2+3)
+    g_external_calc_forbidden — ✅ 0 external runtime · Newton iteration in-process
+  EOF
+

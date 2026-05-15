@@ -699,10 +699,54 @@ pub fn verify_s6_schwarzschild_radius() -> AtlasVerdict {
     return _vd_trans("s6_schwarzschild_radius", "§6 COSMO", _tier_pass(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s2_lambert_w_newton — T1-14 Lambert W via Newton iteration W(x·eˣ) = x
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §2 MATH T1-14 lambert-w-closed-form.
+// W(z) solves W·eᵂ = z. Newton: w_{n+1} = w_n - (w_n·eᵂⁿ - z)/(eᵂⁿ·(w_n+1)).
+// Identity verification: W(x·eˣ) = x for sample x values (Phase 3 — Newton
+// iteration replaces stdlib pow(float,float) gap).
+
+fn _lambert_w(z: float) -> float {
+    // Initial guess: ln(1+z) for z >= 0 (decent for moderate z)
+    let mut w = 0.5
+    if z > 1.0 { w = log(z) }
+    let mut iter = 0
+    while iter < 60 {
+        let ew = exp(w)
+        let f = w * ew - z
+        let fp = ew * (w + 1.0)
+        let w_next = w - f / fp
+        w = w_next
+        iter = iter + 1
+    }
+    return w
+}
+
+pub fn verify_s2_lambert_w_newton() -> AtlasVerdict {
+    // W(x·eˣ) = x for x = 1, 2, 0.5
+    let x1 = 1.0
+    let z1 = x1 * exp(x1)              // 1·e¹ = e
+    let w1 = _lambert_w(z1)
+    let err1 = _abs_f(w1 - x1)
+    let x2 = 2.0
+    let z2 = x2 * exp(x2)              // 2·e²
+    let w2 = _lambert_w(z2)
+    let err2 = _abs_f(w2 - x2)
+    let x3 = 0.5
+    let z3 = x3 * exp(x3)
+    let w3 = _lambert_w(z3)
+    let err3 = _abs_f(w3 - x3)
+    let ok = err1 < 0.000001 && err2 < 0.000001 && err3 < 0.000001
+    let detail = "Lambert W(x·eˣ)=x Newton iter — W(e)=" + to_string(w1) + " (err=" + to_string(err1) + ") · W(2e²)=" + to_string(w2) + " (err=" + to_string(err2) + ") · W(0.5·e^0.5)=" + to_string(w3) + " (err=" + to_string(err3) + ") · Phase 3 Newton replaces stdlib pow(float,float) gap"
+    return _vd_trans("s2_lambert_w_newton", "§2 MATH", _tier_pass(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_transcendental_all() -> [AtlasVerdict] {
     let mut out: [AtlasVerdict] = []
+    out.push(verify_s2_lambert_w_newton())
     out.push(verify_s10_music_ln_4_3())
     out.push(verify_s3_onsager_tc())
     out.push(verify_s10_cross_island_identity())

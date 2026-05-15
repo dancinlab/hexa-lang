@@ -64,7 +64,9 @@ fn cmd_help() {
     println("  atlas dump <P|C|L|E> [--json]           Read full kind")
     println("  atlas append-witness <stage>...         Write staging shard")
     println("  atlas promote --staging <f.n6>          Write to live (* register/pr = stub)")
+    println("  atlas-verify [--domain D] [--tier N]     Verdict ledger — 86 entries Stage 1+2+3 hexa-native")
     println("    e.g. hexa atlas lookup P n            → @P n = 6 :: foundation [11*]")
+    println("    e.g. hexa atlas-verify --domain math  → §2 MATH verifiers PASS/FAIL + |err|")
     println("")
     println("ANNOTATION ANALYZERS (29, AST-based via self/lexer.tokenize)")
     println("  pure-check  memo-check  catalog  readme  doc  codegen-hints  distill")
@@ -623,6 +625,7 @@ fn _absorbed_script(verb) {
     // 2026-05-15 anima absorption scrubbed (see MAIN-TEMP.tape) — atlas-show verb removed
     if verb == "lattice"             { return "compiler/n6_lattice/main.hexa" }             // verify/axis-table/cross-check (n=6 math, hexa-bio-vocabulary-but-pure-math)
     if verb == "atlas-audit"         { return "compiler/atlas/audit_main.hexa" }            // external-entity/anchor/all (overlay corpus, hexa-matter doctrine gate)
+    if verb == "atlas-verify"        { return "tool/atlas_verify.hexa" }                    // atlas verdict ledger — 86 entries Stage 1+2+3 hexa-native [--domain D] (wilson g_verify_hexa_cli_only)
     if verb == "repo-audit-taxonomy" { return "tool/repo_taxonomy_audit_main.hexa" }        // <catalog.md> <manifest.toml> [<root>] (hexa-chip-origin, generalized)
 
     return ""

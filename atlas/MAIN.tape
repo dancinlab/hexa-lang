@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-2-cycle-018-LANDED-cumulative-82" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-020-cumulative-86" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,9 +39,14 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2 (cycle 001-018): 82/82 PASS · 82 entries verified (81 🔵 closed: 52 SUPPORTED-IDENTITY + 29 SUPPORTED-FORMAL · 1 🟠 AT-RISK: §5 BIO V8 anima carry).
-    9 도메인 모두 covered (cycle 016 §9 ENG + §7 GEO 첫 closure · cycle 017 §5 BIO V8 AT-RISK 첫 entry).
-    Verifier surface: 10 modules (foundation/math/top/cosmo/bridges/chem/phys/transcendental/eng/geo/bio).
+    Cumulative Phase 2+3 (cycle 001-020): 86/86 PASS · 86 entries verified (85 🔵 closed: 52 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL · 1 🟠 AT-RISK: §5 BIO V8 anima carry).
+    9 도메인 모두 covered. Verifier surface: 11 modules (foundation/math/top/cosmo/bridges/chem/phys/transcendental/eng/geo/bio/cross).
+
+    Phase 3 진입 (cycle 019-020):
+      cycle 019 (+4): s2_lambert_w_newton (T1-14 Newton iteration via libm exp — stdlib pow(float,float) gap 우회) + Stage 3 cross-meta engine (compiler/atlas/verify/cross.hexa): s_cross_meta_24_family (4 independent J₂(6)=24 derivations agree) · s_cross_meta_sigma6_family (5 contexts σ(6)=12) · s_cross_meta_3_family (4 contexts n/φ=3)
+      cycle 020: `hexa atlas-verify` subcommand wiring (self/main.hexa::_absorbed_script + help text) — wilson g_verify_hexa_cli_only 의 정식 CLI surface. source-level 완료, 정식 hexa binary rebuild (self/main.hexa → main.c → clang) 시 활성화. 현재 작동 CLI: `hexa run tool/atlas_verify.hexa [--domain D]`.
+
+    Stage 3 cross-meta = anima W9 sibling consistency 의 hexa-native 구현 — 동일 atlas 상수 (24, 12, 3) 가 독립 derivation 들에서 일관되는지 검증.
 
     cycle 008-015 progress (Stage 2 libm-backed transcendental closure, +29 entries cumulative):
 
@@ -769,7 +774,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 82
+  phase_2_cumulative_count = 86
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 

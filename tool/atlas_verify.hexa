@@ -22,6 +22,7 @@ use "compiler/atlas/verify/transcendental"
 use "compiler/atlas/verify/eng"
 use "compiler/atlas/verify/geo"
 use "compiler/atlas/verify/bio"
+use "compiler/atlas/verify/cross"
 
 fn _slice_args() -> array {
     let av = args()
@@ -233,6 +234,18 @@ fn main() {
         println("")
         println("Stage 2 — transcendental (libm-backed):")
         let vs = verify_transcendental_all()
+        let mut j = 0
+        while j < len(vs) {
+            _print_verdict(vs[j])
+            all.push(vs[j])
+            j = j + 1
+        }
+    }
+
+    if domain == "" || domain == "cross" || domain == "stage3" {
+        println("")
+        println("Stage 3 — cross-meta sibling consistency:")
+        let vs = verify_cross_all()
         let mut j = 0
         while j < len(vs) {
             _print_verdict(vs[j])
