@@ -22,7 +22,7 @@
 //   - parse stub returns ok=0 with sentinel message pointing to spec doc
 //   - validate_strict stub returns L1/L2/L10 placeholder issues per spec §3-§5
 //
-// raw#9 hexa-only strict. raw#10 caveats:
+// hexa-only strict.   caveats:
 //   (1) parser/lexer changes NOT made — self/parser.hexa (4404L) + self/lexer.hexa
 //       (784L) remain byte-identical. v2 grammar surface is pure spec until
 //       impl cycle.

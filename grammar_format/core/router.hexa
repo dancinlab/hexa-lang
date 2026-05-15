@@ -22,7 +22,7 @@
 //   HEXA_GRAMMAR_VERSION       — single version forced (no fallback)
 //   HEXA_GRAMMAR_FALLBACK_CHAIN — comma-separated fallback chain
 //
-// raw#9 hexa-only strict. raw#10:
+// hexa-only strict. note:
 //   (1) Router uses the registry's switch dispatch. Adding a new grammar
 //       version = update registry + add to default chain in
 //       hexa-lang/config/grammar_format_sources.json.

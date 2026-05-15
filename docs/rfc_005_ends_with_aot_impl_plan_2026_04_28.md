@@ -1,10 +1,10 @@
 # RFC-005 Implementation Plan — ends_with()/starts_with() & slice-equality AOT codegen fix
 
 - **Date**: 2026-04-28
-- **Status**: plan (impl deferred — codegen change → raw#18 self-host fixpoint risk)
+- **Status**: plan (impl deferred — codegen change → self-host fixpoint risk)
 - **Source RFC**: `proposals/rfc_005_ends_with_aot_codegen.md` (commit `2cb2b95c`)
 - **Author scope**: plan-only agent (per parent task) — does not modify codegen
-- **Constraints**: raw#9 hexa-only · raw#10 honest C3 · raw#18 self-host fixpoint · raw#159 hexa-lang upstream-proposal-mandate · raw#71 falsifier
+- **Constraints**: hexa-only · honest C3 · self-host fixpoint · upstream-proposal mandate · falsifier
 - **Empirical seed**: anima-eeg argv parsers (5 files), all already migrated to method-form
 
 ## 1. Codegen Analysis — Verified Root Cause
@@ -80,9 +80,9 @@ A polymorphic `hexa_slice` was never written.
 | **Where change lives** | `self/codegen_c2.hexa:4282` + `self/runtime.c` (new `hexa_slice`) | `self/parser.hexa` + new normalize pass | `self/linter.hexa` |
 | **LoC** | ~30 (codegen) + ~20 (runtime polymorphic shim) + ~30 (regression test) = **~80** | ~50 (AST pattern match `BinOp(==, Slice(s,a,b), StringLit)` → method) + ~30 test = **~80** | ~25 (rule) + ~15 docs = **~40** |
 | **Coverage** | Full — every `s[a..b] == t` works in AOT identically to interp | Partial — only literal RHS; `s[a..b] == other_var` still fails | Zero runtime fix; coverage = whatever user grep / lint reads |
-| **raw#18 fixpoint impact** | **HIGH** — codegen byte-output changes for any program using slice; v3→v4→v3 cycle requires byte-identical re-attainment proof | **MEDIUM** — AST shape change for matched patterns; v3 build depends on whether self-host emits this pattern (grep: 0 occurrences in `self/`) | **NONE** — linter is opt-in; codegen unchanged |
-| **raw#71 falsifier** | Direct hit: 1k-fuzzer corpus interp/AOT parity | Partial — fuzzer only on literal-RHS subset; non-literal RHS still falsifies | Doesn't satisfy falsifier (silent-wrong still ships) |
-| **raw#10 honesty** | Honest fix | Honest within scope; must document non-literal-RHS gap | Mitigation only; landmine remains |
+| **self-host fixpoint impact** | **HIGH** — codegen byte-output changes for any program using slice; v3→v4→v3 cycle requires byte-identical re-attainment proof | **MEDIUM** — AST shape change for matched patterns; v3 build depends on whether self-host emits this pattern (grep: 0 occurrences in `self/`) | **NONE** — linter is opt-in; codegen unchanged |
+| **falsifier** | Direct hit: 1k-fuzzer corpus interp/AOT parity | Partial — fuzzer only on literal-RHS subset; non-literal RHS still falsifies | Doesn't satisfy falsifier (silent-wrong still ships) |
+| **honesty** | Honest fix | Honest within scope; must document non-literal-RHS gap | Mitigation only; landmine remains |
 | **Implementation risk** | Medium-high — `hexa_slice` polymorphic shim needs str/array discrimination; slice on `argv()[0]` (TAG_STR via str_concat result) edge cases | Medium — parser pass ordering with type-inference unknown; parser change usually triggers AST consumer churn | Low — additive, isolated |
 | **Breaks existing AOT?** | Should not — array-slice semantics preserved when operand is array | Should not — rewrite preserves semantics for matched pattern | Cannot break anything (warning only) |
 | **Time-to-land** | ~6-10h (RFC estimate) + fixpoint re-cert (~1-2 cycles) | ~4-6h + fixpoint re-cert | ~1-2h, no fixpoint impact |
@@ -101,7 +101,7 @@ A polymorphic `hexa_slice` was never written.
   1. Add `hexa_slice(HexaVal v, HexaVal a, HexaVal b)` polymorphic shim in `runtime.c`
      (str → `hexa_str_slice`; else → `hexa_array_slice`)
   2. Change `codegen_c2.hexa:4292` to emit `hexa_slice(...)` instead of `hexa_array_slice(...)`
-  3. Run raw#18 fixpoint: v3 build → emit v4 → emit v3' → compare bytes (`tool/fixpoint_compare.hexa`)
+  3. Run self-host fixpoint: v3 build → emit v4 → emit v3' → compare bytes (`tool/fixpoint_compare.hexa`)
   4. If v3 != v3' (expected, since `hexa_array_slice` strings change to `hexa_slice` strings),
      iterate v3'→v4'→v3'' until banach-fixpoint (per `.roadmap` SH-Ω convention)
 - **Path B is rejected** (partial coverage, no clear advantage over A; parser pass ordering risk)
@@ -114,7 +114,7 @@ of every slice-using `.hexa` file changes, which mechanically invalidates the ca
 v3 build artifact and forces a fresh fixpoint iteration. The user's `.roadmap` SH-Ω
 machinery is sensitive to this; the parent task explicitly orders plan-only.
 
-## 4. raw#18 Self-Host Fixpoint Impact — Per Path
+## 4. self-host fixpoint Self-Host Fixpoint Impact — Per Path
 
 | Path | v3 codegen byte change | runtime.c byte change | fixpoint re-cert needed |
 |---|---|---|---|
@@ -167,7 +167,7 @@ fn main() {
 
 Falsifier driver: 1k random-fuzz corpus generator
 (`tool/fuzz_slice_eq.hexa`, ~40 LoC) compares interp vs AOT booleans. Single
-divergence = anti-falsifier. (raw#71)
+divergence = anti-falsifier. (falsifier)
 
 ## 6. Empirical Fail-Case Inventory — anima-eeg
 
@@ -184,14 +184,14 @@ divergence = anti-falsifier. (raw#71)
 | `eeg_brainflow_sanity.hexa`, `eeg_ftdi_latency_fix.hexa`, `collect.hexa`, `experiment.hexa` | (only `starts_with(prefix)` for line parsing) | uses method | clean |
 
 **Conclusion**: anima-eeg is fully migrated. Lint rule (Path C) immediately catches
-any future regression in this repo and any new caller (raw#9 hexa-only constraint
+any future regression in this repo and any new caller (hexa-only constraint
 makes this the only language path forward).
 
 Wider audit recommended (separate cycle): `grep -rn "\[.*\.\..*\] ==" $WS/**/*.hexa`
 across `airgenome`, `hexa-lang/self`, `nexus` to find other latent silent-wrong
 sites.
 
-## 7. Plan-Only Limits (raw#10 / raw#91 honest C3)
+## 7. Plan-Only Limits (honest-caveat / C3 honest C3)
 
 1. **Plan agent did not modify codegen.** Path C lint rule is implementable here
    in principle (no codegen impact) but parent task explicitly says plan-only —
@@ -217,7 +217,7 @@ sites.
 1. **Now (no codegen)**: Path C lint rule + commit + RFC-005 status updated
    to `mitigation-shipped, root-fix-deferred`
 2. **Next cycle (codegen)**: Path A — `hexa_slice` polymorphic runtime shim +
-   codegen swap + regression test + fuzzer + raw#18 fixpoint re-cert
+   codegen swap + regression test + fuzzer + self-host fixpoint re-cert
 3. **After A lands**: RFC-005 status → `done`; lint rule downgraded from
    warn-by-default to opt-in (still useful for older AOT toolchains)
 

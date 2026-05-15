@@ -24,7 +24,7 @@
 //   - L12 attr composition:    ~1 month
 // Depends on Phase β (parser ext) + Phase γ (strict semantic) per spec §6 timeline.
 //
-// raw#9 hexa-only strict. raw#10 caveats:
+// hexa-only strict.   caveats:
 //   (1) parser/code-generator changes NOT made.
 //   (2) breaking_changes=1 — v1.x EOL recommendation 90d post-v2 release per
 //       spec Appendix A.

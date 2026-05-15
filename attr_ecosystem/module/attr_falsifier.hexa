@@ -1,5 +1,5 @@
 #!hexa strict
-// @tool(slug="attr_falsifier", desc="hexa-lang @falsifier(id, desc, observable, action_on_fail) — inline preregistered falsification clause (raw 92 spirit, mk2 new)")
+// @tool(slug="attr_falsifier", desc="hexa-lang @falsifier(id, desc, observable, action_on_fail) — inline preregistered falsification clause (ai-native spirit, mk2 new)")
 // @sentinel(__ATTR_FALSIFIER__ <PASS|FAIL> mode=<selftest>)
 // @usage(hexa hexa-lang/attr_ecosystem/module/attr_falsifier.hexa)
 // @resolver-bypass(reason="local module selftest, no network/heavy compute")

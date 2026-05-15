@@ -103,9 +103,9 @@ pub fn qrng_anu_live_enabled() -> bool
 selftest 안에서는 `let live_env = env("ANIMA_QRNG_LIVE")` 로 main top 에서
 한 번 읽고, 이후 분기에서 그 변수를 사용한다. 함수-내부 중첩 호출 후에는
 `env()` 의 가시성이 hexa-lang interp 에서 일시적으로 잃어버리는 동작이
-관측됐기 때문 (raw#10 caveat 5 참조).
+관측됐기 때문 (honest caveat 5 참조).
 
-## §4 — raw#10 caveats
+## §4 — honest caveats
 
 1. **외부 binary curl 의존**. macOS / 대부분의 Linux 배포판은 base 설치이지만,
    minimal Alpine + airgapped 환경에서는 curl 이 없을 수 있다. 실패 시

@@ -477,10 +477,14 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
             if _mok_code >= 32 && _mok_code < 127 { return ["key", _mok_code, _mok_ctrl, _mok_alt, _mok_shift, chr(_mok_code)] }
             return ["err", "csi-modifyotherkeys-unsupported-code"]
         }
+        if n == 1  { return ["key", -20, _ctrl_f, _alt_f, _shift_f, ""] }   // home (CSI 1 ~ — screen-256color / linux / rxvt)
         if n == 2  { return ["key", -22, _ctrl_f, _alt_f, _shift_f, ""] }   // ins
         if n == 3  { return ["key", -23, _ctrl_f, _alt_f, _shift_f, ""] }   // del
+        if n == 4  { return ["key", -21, _ctrl_f, _alt_f, _shift_f, ""] }   // end  (CSI 4 ~ — screen-256color / linux / rxvt)
         if n == 5  { return ["key", -24, 0, 0, 0, ""] }   // pgup
         if n == 6  { return ["key", -25, 0, 0, 0, ""] }   // pgdn
+        if n == 7  { return ["key", -20, _ctrl_f, _alt_f, _shift_f, ""] }   // home (rxvt alt code)
+        if n == 8  { return ["key", -21, _ctrl_f, _alt_f, _shift_f, ""] }   // end  (rxvt alt code)
         if n == 11 { return ["key", -30, 0, 0, 0, ""] }   // F1
         if n == 12 { return ["key", -31, 0, 0, 0, ""] }   // F2
         if n == 13 { return ["key", -32, 0, 0, 0, ""] }   // F3

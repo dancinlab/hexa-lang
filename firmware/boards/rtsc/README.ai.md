@@ -1,6 +1,6 @@
 # hexa-rtsc — AI-native handoff
 
-> Conformance: hive raw 271 (readme-ai-native-mandate). This file is the
+> Conformance: the readme-ai-native mandate. This file is the
 > canonical entry point for AI agents (Claude / Hexa / etc.) operating on
 > this repository. Human entry point is [`README.md`](README.md).
 

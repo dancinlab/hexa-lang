@@ -13,7 +13,7 @@ related: HEXA_F1~F6 falsifier chain (orpheus)
 
 > 본 문서는 brainstorming 산출물. impl ranking 은 §3, §1 참조.
 > 정량 estimate 는 모두 "가정 → 결론" 형태로 명시. 가정이 깨지면 estimate 도 무효.
-> hexa-lang 철학(raw 9: hexa-only / mk2 schema 정합) 위반 idea 는 REJECT 명시.
+> hexa-lang 철학(hexa-only) 위반 idea 는 REJECT 명시.
 
 ---
 
@@ -514,7 +514,7 @@ Z105. **Hxc-specific peephole**: ~1.05x · 중기 · compat · F1
 - **Z18 UPX**: trades start-time.
 - **Z19 stack-protector strip**: trades safety.
 
-### "raw 9 hexa-only" 정합성 점검
+### "hexa-only" 정합성 점검
 
 - **C01 computed goto**: C-side 변경 (bc_vm.hexa 생성 코드만). hexa source layer unchanged → OK.
 - **B20 NaN-boxing**: `HexaVal` 변경. hexa_nanbox.h 이미 source 에 있음 → 적용 시 hexa-source-invisible.

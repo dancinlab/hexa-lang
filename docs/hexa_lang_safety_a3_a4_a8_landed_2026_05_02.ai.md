@@ -3,7 +3,7 @@
 > Schema: `hexa-lang/handoffs/safety_a3_a4_a8_landed/1`
 > Session: BG-HX1 sub-agent
 > Directives: omega-cycle (6-step) + silent-land marker + AI-native +
-> raw 270/271/272/273 + BR-NO-USER-VERBATIM + friendly preset +
+> spec cluster + BR-NO-USER-VERBATIM + friendly preset +
 > migration FORBIDDEN (additive-only)
 > Cap: 180min · Cost: $0 (mac-local) · Destructive: 0 · Migration: 0
 > File-scope decoupled from BG-HL (`a1b63ac5`), which only touches
@@ -33,7 +33,7 @@ is OFF. Lint A4/A8 emit `warn` only — no exit code change.
 | `/Users/<user>/core/hexa-lang/self/lexer.hexa`                                     | source of tier-2 keyword kinds (Proof, Theorem, …) |
 | `/Users/<user>/core/hexa-lang/self/linter.hexa`                                    | A4 + A8 patch site                              |
 | `/Users/<user>/core/hexa-lang/test/regression/reserved_keyword_guard.hexa`         | tier-1 P51 reference (Borrow/Own/Move)          |
-| `/Users/<user>/core/hexa-lang/.raw-audit` raw 15                                   | no-hardcode SSOT (defer-until 2026-06)          |
+| `/Users/<user>/core/hexa-lang/audit ledger` no-hardcode rule                                   | no-hardcode SSOT (defer-until 2026-06)          |
 | `/Users/<user>/core/hexa-lang/docs/interpreter_stale_root_cause_20260423.md`       | known runtime blocker for full lint exec smoke  |
 
 ## A3 — reserved-keyword tier-2 hard-fail
@@ -140,7 +140,7 @@ upgrade A4 to a hard fail once the borrow syntax is decided
 
 ### Current behavior (baseline)
 
-`raw 15` (no-hardcode) defers absolute-path scanning to 2026-06 because
+no-hardcode rule (no-hardcode) defers absolute-path scanning to 2026-06 because
 the literal scanner is unfinished and 354 violations remain in the
 backlog. Meanwhile the canonical leak vectors are:
 
@@ -175,7 +175,7 @@ relative `8080`).
 > "extract to config/dev_paths.json or require env var explicitly"
 
 The first half is a positive-direction nudge toward a repo-relative
-config (which `raw 15` does NOT forbid), the second half restates the
+config (which no-hardcode rule does NOT forbid), the second half restates the
 strict path (require + clear error). Either resolves the leak.
 
 ## Verification matrix
@@ -190,7 +190,7 @@ strict path (require + clear error). Either resolves the leak.
 | Full lint exec on A4/A8 fixtures                                      | **DEFERRED** — see caveats §5   |
 | Full lint exec on tier-2 fixture under `HEXA_RESERVED_TIER2=1`        | **DEFERRED** — see caveats §5   |
 
-## raw#10 honest caveats (5)
+## honest caveats (5)
 
 1. **Interp-stale rebuild blocker** — `docs/interpreter_stale_root_cause_20260423.md`
    documents that `./hexa.real run self/linter.hexa <file>` produces
@@ -241,7 +241,7 @@ strict path (require + clear error). Either resolves the leak.
 | P2  | A3 corpus sweep — flip `HEXA_RESERVED_TIER2=1` in CI strict gate | $0   | 1-2h     |
 | P3  | A4 lint clean-pass on `self/` (dogfood)                          | $0   | 1h       |
 | P4  | A8 lint clean-pass on `self/`, `tool/`, `stdlib/`                | $0   | 1h       |
-| P5  | A4 v2 with proper scope stack (raw 15 escalation)                | $0   | 2h       |
+| P5  | A4 v2 with proper scope stack (no-hardcode rule escalation)                | $0   | 2h       |
 
 ## Status
 

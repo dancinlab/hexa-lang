@@ -2,8 +2,8 @@
 
 - **Date**: 2026-04-28
 - **Status**: stdlib v2 landed (json.hexa wrappers + selftest); runtime catch deferred
-- **Author scope**: stdlib + docs only (raw#9, raw#159) — does not modify hexa runtime
-- **Constraints**: raw#9 hexa-only · raw#10 honest C3 · raw#18 self-host fixpoint risk · raw#71 falsifier · raw#91 no_silent_errors · raw#159 hexa-lang upstream-proposal-mandate
+- **Author scope**: stdlib + docs only (lint rules) — does not modify hexa runtime
+- **Constraints**: hexa-only · honest C3 · self-host fixpoint risk · falsifier · no-silent-errors · upstream-proposal mandate
 - **Empirical seed**: papers/tool/zenodo_publish.hexa + osf_publish.hexa (4/4 selftests PASS after 2026-04-28 sub-agent migration to read_file + json_parse)
 
 ---
@@ -18,15 +18,15 @@
 exec("python3 -c 'import sys,json; print(json.load(sys.stdin))' < manifest.json")
 ```
 
-In a distroless docker safe-landing build (raw#44 minimal-image invariant), `python3` is absent. Result: hard failure of the publish pipeline. A `HEXA_LOCAL=1` mitigation works only on the dev host and **violates raw#9 hexa-only invariant** on the wire.
+In a distroless docker safe-landing build (minimal-image invariant), `python3` is absent. Result: hard failure of the publish pipeline. A `HEXA_LOCAL=1` mitigation works only on the dev host and **violates hexa-only invariant** on the wire.
 
 ### 1.2 Cross-sister scope
 
-A canonical-tree-only scan (excluding `.claude/worktrees/` and `archive/`) finds **25 hexa source files** with `python3 -c '...json.load|json.dump...'` patterns spread across `nexus/`, `canon/`, `anima/`, `hive/`, and `papers/`. Each is a structural raw#9 violation that can be retired by `use "self/stdlib/json"`.
+A canonical-tree-only scan (excluding `.claude/worktrees/` and `archive/`) finds **25 hexa source files** with `python3 -c '...json.load|json.dump...'` patterns spread across `nexus/`, `canon/`, `anima/`, `hive/`, and `papers/`. Each is a hexa-only-invariant violation that can be retired by `use "self/stdlib/json"`.
 
 (Note: a broader `python3 -c` count yields ~2,873 hits — the bulk are `time.time()*1000` shims unrelated to JSON. Those are tracked separately under `goal_hexa_native_time_stdlib`.)
 
-### 1.3 Upstream-of-truth (raw#159)
+### 1.3 Upstream-of-truth (upstream-proposal)
 
 This module is the single canonical wrapper sister repos consume:
 
@@ -50,7 +50,7 @@ Re-implementing per repo splinters the contract and drifts honesty disclosures.
 | `json_parse_or_throw(text)` | `(string) -> value` | `eprintln + exit 1` on `json_parse_safe → [false,...]`. |
 | `json_stringify_pretty(v)` | `(any) -> string` | Naming alias for the runtime `json_stringify` builtin. Total over hexa-native types. |
 
-Runtime builtins exposed (compiled into `hexa.real`, NOT modifiable from stdlib without raw#18 fixpoint risk):
+Runtime builtins exposed (compiled into `hexa.real`, NOT modifiable from stdlib without self-host fixpoint risk):
 
 - `json_parse(text: string) -> any` — see §3 honest disclosures.
 - `json_stringify(v: any) -> string` — total.
@@ -60,7 +60,7 @@ Runtime builtins exposed (compiled into `hexa.real`, NOT modifiable from stdlib 
 
 ---
 
-## 3. Runtime `json_parse` — empirical contract (raw#91 C3)
+## 3. Runtime `json_parse` — empirical contract (C3)
 
 Probed via `./hexa run` against the current `hexa.real` (Mach-O arm64, build 2026-04-27 perf32 swap):
 
@@ -122,7 +122,7 @@ Not tested. Likely L1 paths.
 
 A runtime-level fix in `self/runtime.c` for `json_parse`'s `to_int` crash path would let `json_parse_safe` become genuinely safe. This is **deferred** because:
 
-- `self/runtime.c` is part of the self-hosted toolchain (raw#18 fixpoint risk).
+- `self/runtime.c` is part of the self-hosted toolchain (self-host fixpoint risk).
 - Any change must preserve the bootstrap stage's runtime parity.
 - A safer fix is a sentinel-returning variant `json_parse_lenient` exposed as a new builtin, leaving `json_parse` semantics frozen.
 
@@ -135,7 +135,7 @@ Tracked under: `goal_hexa_runtime_json_safe` (new).
 `papers/tool/zenodo_publish.hexa` defines two local helpers `_map_str` / `_map_arr` that defend against `void` field access on `json_parse`-derived maps. **Not promoted to stdlib here** because:
 
 - The shape (return `""` for missing) is papers-specific (manifest schema).
-- Promotion broadens the stdlib API surface and creates raw#18 fixpoint pressure.
+- Promotion broadens the stdlib API surface and creates self-host fixpoint pressure.
 - Callers can re-define trivially in 12 lines.
 
 If 3+ sister repos converge on the same shape, promote then. (Tracking: `goal_stdlib_map_field_safe`.)
@@ -144,9 +144,9 @@ If 3+ sister repos converge on the same shape, promote then. (Tracking: `goal_st
 
 ## 6. Changes landed in this RFC
 
-1. `self/stdlib/json.hexa` header expanded with explicit raw#91 L1–L4 disclosures and the cross-sister upstream-of-truth statement.
+1. `self/stdlib/json.hexa` header expanded with explicit L1–L4 disclosures and the cross-sister upstream-of-truth statement.
 2. `json_parse_safe` short-circuits empty input to honour `[false, void]` contract (L2 fix).
-3. Selftest 3 (invalid bare text) **converted to a documented skip** with comment explaining L1 — n is no longer incremented for the unwrappable case (raw#91 honest count).
+3. Selftest 3 (invalid bare text) **converted to a documented skip** with comment explaining L1 — n is no longer incremented for the unwrappable case (honest count).
 4. Three new selftests added:
    - case 9: cross-sister manifest-shape parse (papers regression guard)
    - case 10: unicode escape `é → é`
@@ -155,7 +155,7 @@ If 3+ sister repos converge on the same shape, promote then. (Tracking: `goal_st
 
 ---
 
-## 7. Falsifiers (raw#71)
+## 7. Falsifiers (falsifier)
 
 - **F-JSON-1** (FAIL): `./hexa run self/stdlib/json.hexa --selftest` does not emit `__JSON_SELFTEST__ PASS n=10 fail=0`.
 - **F-JSON-2** (FAIL): a sister repo using `use "self/stdlib/json"` and `json_parse_safe` on a known-good manifest gets back `[false, ...]` for a successful parse.
@@ -171,6 +171,6 @@ For each of the 25 canonical python3-JSON sites:
 2. Replace `exec("python3 -c '...json.dump...'") + redirect` with `write_file(<path>, json_stringify(<obj>))`.
 3. If the site touches manifest-shape (string field that may be missing), copy `_map_str`/`_map_arr` (12 lines) until §5 promotes them.
 4. Add a 1-paragraph migration comment cite-block referencing this RFC's date.
-5. Verify selftest still passes; update tool's own raw#91 C3 disclosure if behaviour shifted.
+5. Verify selftest still passes; update tool's own C3 disclosure if behaviour shifted.
 
 The papers/zenodo_publish + osf_publish migration (2026-04-28) is the worked example.

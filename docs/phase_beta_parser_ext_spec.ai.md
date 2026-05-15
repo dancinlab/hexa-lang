@@ -101,7 +101,7 @@ FnDecl.attrs (existing `string`) gets a sister field `attrs_typed: string` (seri
 
 ```hexa
 #!hexa strict
-@tool(slug="foo_runner", desc="raw 3 entrypoint")
+@tool(slug="foo_runner", desc="attr-usage entrypoint")
 @sentinel(__FOO_RUNNER__ <PASS|FAIL>)
 @usage(hexa tool/foo_runner.hexa)
 
@@ -124,7 +124,7 @@ After parse, AST root contains `FileAttrs{[tool, sentinel, usage]}` and `helper`
 |---|---|---|
 | `#!hexa strict` | strict | file-level @tool required (compile error if missing); silent error patterns → error (Phase γ) |
 | `#!hexa lax` | lax | warn-only (matches current `// @raw117_exempt` legacy path) |
-| `#!/usr/bin/env hexa` | default | follows `--default-strict` CLI flag (default: strict, since 2026-04-18 raw 11) |
+| `#!/usr/bin/env hexa` | default | follows `--default-strict` CLI flag (default: strict, since 2026-04-18 ai-native) |
 | (no shebang) | default | same as above |
 | Mid-file `#!hexa …` | error | already enforced (lexer.hexa:745-754) |
 
@@ -350,7 +350,7 @@ L2 blocks L10 (strict mode is the trigger for type validation).
 
 **Validation**: byte-equivalence test — parse pre-migration file with comment-attr backward-compat enabled, parse post-migration file with new AttrDecl path; serialize both to canonical JSON; require sha256 equality.
 
-## §8 raw#10 caveats
+## §8 honest caveats
 
 1. **AST-level breaking change for downstream codegen** — `FnDecl.attrs` serialized-string consumers (codegen_c2:gen2_has_attr) require shim during transition; risk: stale codegen path reads `attrs_typed` field that doesn't exist yet → compile error in interpreter bootstrap. Mitigation: introduce `attrs_typed` as optional field with empty default for 1 cycle.
 2. **L1 file-level vs decl-level ambiguity** — current `parse_stmt` while-loop attaches all `@attr` to *next decl*. New `parse_file_attrs()` must define cutoff: "first non-attr non-comment non-newline token". Edge case: `#!hexa strict\n@tool(...)\n\n// big header comment\n\nfn main(){}` — file-level vs decl-level depends on whether comment counts as separator.

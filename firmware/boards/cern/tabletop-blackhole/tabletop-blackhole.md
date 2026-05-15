@@ -65,7 +65,7 @@ HEXA-UFO §23 event-horizon realization draft:
 ## §4 EXACT (Python verification)
 
 ```python
-# raw 91 C3: this block verifies n=6 number-theoretic properties (computed
+# C3: this block verifies n=6 number-theoretic properties (computed
 # from divisor primitives, NOT hardcoded). Stage-specific physics claims in
 # this section (B-field sigma.tau=48 T, sonic horizon L_h=sigma-phi=10 um,
 # T_BEC ~ 100/(sigma.phi) nK coefficient, phonon tau=4 modes, BH lifetime

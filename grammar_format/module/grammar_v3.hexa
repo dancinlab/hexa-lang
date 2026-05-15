@@ -21,7 +21,7 @@
 // cycle (~4 weeks per spec §11). Depends on Phase β impl (this module's spec
 // inherits Phase β @attr AST + strict-mode infrastructure).
 //
-// raw#9 hexa-only strict. raw#10 caveats:
+// hexa-only strict.   caveats:
 //   (1) parser/type-checker changes NOT made — self/parser.hexa unchanged.
 //   (2) breaking_changes=1 — `pub fn` keyword removal at d30+ per spec §3.2
 //       requires synchronized cross-repo migration (3,445 sites primary tree).

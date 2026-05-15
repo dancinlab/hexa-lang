@@ -16,7 +16,7 @@
 //   typed / composition / future), attr_ecosystem wraps the *catalog*
 //   of cross-cutting attrs that hive-side rules want to formalize.
 //
-// raw#9 hexa-only strict. Additive-only — no migration.
+// hexa-only strict. Additive-only — no migration.
 //
 // CONTRACT (every attr-ecosystem module must export):
 //   fn attr_<name>_meta()                       -> AttrFormatMeta
@@ -36,7 +36,7 @@
 //   B9 attr_ecosystem/module/attr_env_required.hexa
 //      @env_required(name[, fallback])  + resolve(decl)
 //
-// raw#10 caveats
+//   caveats
 //   (1) Each module is self-contained — no cross-module imports.
 //       Aggregator (attr_ecosystem_main.hexa) drives selftests.
 //   (2) The 5 modules use struct mirrors of AttrFormatMeta /

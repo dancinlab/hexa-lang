@@ -20,7 +20,7 @@
 //   - Compile-time staged evaluation
 //   - Capability-based security
 //
-// raw#9 hexa-only strict. raw#10 caveats:
+// hexa-only strict.   caveats:
 //   (1) NO spec exists for v5 — this module returns "TBD" sentinel.
 //   (2) compat_v5 returns 0 for ALL targets (including v5 itself) until
 //       phase epsilon spec is committed.

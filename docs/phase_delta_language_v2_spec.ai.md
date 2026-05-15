@@ -51,7 +51,7 @@ Phase δ는 hexa-lang v1.x 위에 **3가지 syntactic affordance**를 v2 candida
 - `fn rng_result_ok` 4 파일 모두
 - 합계: **20 redundant declarations** (5 × 4)
 
-raw 270/271/272 가 enforce하는 4-core file 패턴이 manual mirror를 강요. struct 갱신 시 4 파일 동기 수정 필수 (drift risk = 4 sites).
+spec cluster 가 enforce하는 4-core file 패턴이 manual mirror를 강요. struct 갱신 시 4 파일 동기 수정 필수 (drift risk = 4 sites).
 
 ### §2.2 v2 syntax
 
@@ -73,7 +73,7 @@ Parser가 `@module <name> { ... }` block 인식 → **4-core file 자동 생성*
 3. `<module>/<name>_router.hexa` — priority + env-overrides
 4. `<module>/<name>_main.hexa` — selftest aggregator + entry-point
 
-raw 272 의 file structure consistency = grammar-level **자동** 보장.
+spec consistency mandate 의 file structure consistency = grammar-level **자동** 보장.
 
 ### §2.4 absense semantics
 
@@ -219,13 +219,13 @@ AST transform: `@module { tool: T, sentinel: S, usage: U, resolver-bypass: R }`
 - 마지막 v1.x release는 LTS 명시 (security-only patch 6개월 추가)
 - v2 release 시점에 v1 EOL 날짜를 release notes 명시
 
-## §8 raw#10 caveats — Implementation risk 정량화
+## §8 honest caveats — Implementation risk 정량화
 
 | # | caveat | risk level |
 |---|--------|------------|
 | 1 | hexa-lang stage0 parser는 block-style attr 미지원 → grammar ext 선행 (Phase β 의존) | HIGH |
 | 2 | L5 code generator = parser가 disk write 야기 → side-effect dependency, AOT cache 무효화 trigger 신규 | HIGH |
-| 3 | v1 4-core file 패턴은 raw 270/271/272 enforce — L5 가 raw spec 자체를 deprecate해야 (raw revision dependency) | HIGH |
+| 3 | v1 4-core file 패턴은 spec cluster enforce — L5 가 raw spec 자체를 deprecate해야 (raw revision dependency) | HIGH |
 | 4 | L6 typed use는 IDE/LSP support 없으면 "그냥 syntax sugar" — LSP integration이 v2-rc 동시 land 필요 | MEDIUM |
 | 5 | L12 attr composition은 expand AST가 source location 유지해야 stacktrace 보존 — non-trivial | MEDIUM |
 | 6 | anima 의 attr 사용은 현재 **comment-form** (`// @tool(...)`) — 실제 attr syntax 활성화가 v2 prerequisite | MEDIUM |
@@ -302,7 +302,7 @@ mitigation 전략은 별도 문서 (`phase_delta_risk_mitigation.ai.md`) 로 분
 - [ ] impl checklist 14 step 모두 명시 (§5)
 - [ ] v2 roadmap 4 phase timeline 명시 (§6)
 - [ ] backward compat 3-stage ramp 명시 (§7)
-- [ ] 15 raw#10 caveats 정량화 (§8)
+- [ ] 15 honest caveats 정량화 (§8)
 - [ ] PoC LOC reduction estimate (§9)
 - [ ] file index sha-pin 골격 (§10)
 - [ ] marker land

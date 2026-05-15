@@ -1,4 +1,4 @@
-# Resolver SWR + Pure-Marker Carve-Out — 2026-04-27 (raw#84)
+# Resolver SWR + Pure-Marker Carve-Out — 2026-04-27 (hook policy)
 
 ## Trigger
 `hive --dev` startup measured at 5502ms cold. `HIVE_TIMING=1
@@ -70,7 +70,7 @@ caches.
 ### Backward compat
 - `--version`, `--help`, `lsp` still hit the darwin-bypass-marker path.
 - `HEXA_RESOLVER_NO_REROUTE=1` short-circuit unchanged.
-- Negative cache (60s, raw#82) preserved.
+- Negative cache (60s, darwin-resolver-bypass) preserved.
 - HEXA_PREFER_LOCAL_ON_HEXA preserved.
 - Routing cache (5s positive TTL) preserved — F4 sits on the
   *connectivity* probe layer, not the routing layer.

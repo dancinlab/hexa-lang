@@ -276,7 +276,7 @@ also stay upper-bounded by current cryogenic SC technology.
 ```
 hexa-rtsc/
 ├── README.md                     ← this file (public landing)
-├── README.ai.md                  ← AI-native handoff (raw 271)
+├── README.ai.md                  ← AI-native handoff
 ├── LICENSE                       ← MIT
 ├── CHANGELOG.md
 ├── RELEASE_NOTES_v1.0.0.md

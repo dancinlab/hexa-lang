@@ -14,7 +14,7 @@
 // Level 3a (Level 3a recursive dogfooding) — Level 1 raw_format + Level 2
 // hxc_format 의 평행 sister, hexa-lang grammar 자체를 core+module modular.
 //
-// raw#9 hexa-only strict. raw#15 SSOT this file for the grammar contract.
+// hexa-only strict. SSOT this file for the grammar contract.
 //
 // CONTRACT (every grammar version module must export):
 //   fn grammar_meta_<vname>() -> GrammarSchema
@@ -36,7 +36,7 @@
 //   hexa-lang/docs/phase_gamma_strict_semantic_spec.ai.md → grammar_v3 (mk3)
 //   hexa-lang/docs/phase_delta_language_v2_spec.ai.md   → grammar_v4 (mk4)
 //
-// raw#10 caveats:
+//   caveats:
 //   (1) v2/v3/v4 모듈은 spec only stub — 실제 parser 변경 없음.
 //   (2) GrammarSchema interface = mk1 (현재 lexer/parser surface) 추출.
 //       mk2/mk3/mk4 spec 흡수는 schema 표면만 정확하게, parse impl 은 미구현.

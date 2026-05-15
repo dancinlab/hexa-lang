@@ -44,7 +44,7 @@ traced back to (or propagated upstream to) the source-of-truth.
 | `hexa.toml` | _created fresh_ during extraction (2026-05-06) | Package manifest for `hx install hexa-rtsc`. |
 | `.roadmap.hexa_rtsc` | _created fresh_ during extraction (2026-05-06) | Cross-cutting tracker — invariant lattice + release cadence + falsifier preregister. |
 | legacy SSOT | _created fresh_ 2026-05-07 | Project-local SSOT (mk2 ). Pattern-aligned to hexa-sscb. |
-| `README.ai.md` | _created fresh_ 2026-05-07 | AI-native handoff (raw 271 mandate). |
+| `README.ai.md` | _created fresh_ 2026-05-07 | AI-native handoff (readme-ai-native mandate). |
 | `doc/lineage/origin.md` | _created fresh_ 2026-05-07 | This file. |
 | `verify/*.hexa` | _created fresh_ 2026-05-07 | Runnable invariant audit landing. |
 

@@ -30,7 +30,7 @@ Plain text, four lines:
 ```
 timestamp=2026-04-20T10:30:45Z
 exit_code=0
-cmd=./build/hexa_stage0 tool/raw_all.hexa
+cmd=./build/hexa_stage0 tool/<lint-orchestrator>.hexa
 ttl=3600
 ```
 
@@ -40,7 +40,7 @@ ttl=3600
 |----------|---------------|----------------------------|
 | macOS    | `chflags uchg`| Darwin VFS rejects writes with `EPERM` even for the owner until `nouchg` is set |
 | Linux    | `chattr +i`   | ext/xfs VFS immutable bit; requires `CAP_LINUX_IMMUTABLE` (sudo) |
-| Linux (sandbox, no sudo) | `chmod 0444` | soft fallback; `chain_runner` records `lock=soft` in `.raw-audit` so downstream tooling can detect unprivileged environments |
+| Linux (sandbox, no sudo) | `chmod 0444` | soft fallback; `chain_runner` records `lock=soft` in the audit ledger so downstream tooling can detect unprivileged environments |
 
 `chain_runner status <id>` explicitly flags any marker whose lock state
 no longer matches the expected kernel-level lock (`[UNLOCKED — tamper
@@ -55,7 +55,7 @@ the audited reset ceremony:
 ./hx chain reset <chain_id> --reason "<text>"
 ```
 
-`--reason` is mandatory — the string is recorded in `.raw-audit` on a
+`--reason` is mandatory — the string is recorded in the audit ledger on a
 `chain-reset` line together with the actor, the chain id, and the
 number of markers cleared. The runner will:
 
@@ -73,14 +73,14 @@ would make it trivial for a downstream tool — or a distracted human —
 to fabricate progress by dropping a file. Putting the "did step X
 succeed?" signal behind a kernel-enforced immutable flag means the
 answer is only "yes" if `chain_runner` itself wrote it and the OS
-accepted the lock. This aligns with the raw#0 philosophy: the kernel,
+accepted the lock. This aligns with the kernel-level enforcement philosophy: the kernel,
 not a script, is the source of truth.
 
 ## Relationship to other SSOT
 
 - `/.chain` — **chain definitions** (source of truth for step graph)
 - `/.chain-state/` — **marker store** (runtime progress; not in VCS except for this README)
-- `/.raw-audit` — **event log** (every `chain-step` / `chain-reset` / `chain-blocked` event appended)
+- `<audit-ledger>` — **event log** (every `chain-step` / `chain-reset` / `chain-blocked` event appended)
 
 `.chain-state/` marker files themselves are intentionally not tracked
 by git: they are machine-written, per-checkout, and recreated on demand

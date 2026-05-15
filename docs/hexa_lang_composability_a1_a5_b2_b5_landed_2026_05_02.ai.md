@@ -6,7 +6,7 @@ session_directives:
   - omega-cycle (6-step default)
   - silent-land marker protocol
   - AI-native (machine-validatable peer SSOT)
-  - raw 270/271/272/273
+  - spec cluster
   - BR-NO-USER-VERBATIM
   - friendly preset
   - 마이그레이션 절대 금지 (additive-only)
@@ -150,7 +150,7 @@ to surface the negative test).
 
 측 측 측 측 측 측 measure 측 측. 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측.
 
-## §7 raw#10 caveats (read before relying)
+## §7 honest caveats (read before relying)
 
 1. **Fixtures pass under current runtime via baseline forms** — the post-impl form
    must additionally pass; baseline does not validate the §2 contract for each axis.

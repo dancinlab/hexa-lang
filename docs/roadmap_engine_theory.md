@@ -116,7 +116,7 @@ T_p = parallel time on p processors
 | critical path | `roadmap_critical_path.hexa` | T1 #36 | T_∞ = span(DAG) |
 | parallel groups | `roadmap_parallel.hexa` | T1 #37 | π 의 병렬 가능 layer |
 | status flip | `roadmap_status_flip.hexa` | T1 #38 | state transition S_k → S_{k+1} |
-| evidence verifier | `roadmap_evidence.hexa` | T1 #39 | proof-carrying (raw#10) |
+| evidence verifier | `roadmap_evidence.hexa` | T1 #39 | proof-carrying (honest-caveat) |
 | progress agg | `roadmap_progress.hexa` | T1 #40 | step-k cumulative |
 | Phase Gate 100% ★ | `roadmap_phase_gate.hexa` | T1 #41 | invariant 2 ε-strict |
 | span(DAG) | `roadmap_span_dag.hexa` | T6 #46 | Brent/Graham bound |
@@ -187,5 +187,5 @@ Sequential (위배):                    Critical path (span 적용):
 
 ---
 
-*raw#9 strict — hexa-only deterministic, no LLM, no Python.*
-*raw#10 proof-carrying — every claim above has commit SHA.*
+*hexa-only — hexa-only deterministic, no LLM, no Python.*
+*honest-caveat proof-carrying — every claim above has commit SHA.*

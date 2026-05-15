@@ -6,7 +6,7 @@ session_directives:
   - omega-cycle (6-step default)
   - silent-land marker protocol
   - AI-native (machine-validatable peer SSOT)
-  - raw 270/271/272/273 (collapsed → hive arch.001 mk2 cluster)
+  - spec cluster (collapsed → hive arch.001 mk2 cluster)
   - BR-NO-USER-VERBATIM (no verbatim user-prompt embedding)
   - friendly preset (response-style: friendly)
   - migration absolutely forbidden (additive-only)
@@ -38,7 +38,7 @@ ssot_predecessors:
 ### B3 `@falsifier(id, desc, observable, action_on_fail)`
 
 - **signature** — `@falsifier(id="<slug>", desc="<>= 8 chars>", observable="<measurable>", action_on_fail="warn"|"block"|"quarantine")`
-- **semantics** — 측 측 declaration 측 inline preregistered falsification clause 측 부착. 측 4 키 측 모두 required. 측 raw 92 정신 측 mk2 신규.
+- **semantics** — 측 측 declaration 측 inline preregistered falsification clause 측 부착. 측 4 키 측 모두 required. 측 ai-native canonical 정신 측 mk2 신규.
 - **id 검증** — `[a-z0-9_]{2,40}`. BAD-ID `BAD-ID`, `X` (too short), 41-char (too long).
 - **desc 검증** — `>= 8 chars` (warn-only when shorter; not error).
 - **observable 검증** — present check only (free-form string, v2 측 typed schema 측 후속).
@@ -147,11 +147,11 @@ Aggregator stdout (with hexa-resolver line stripped) sha256 (2 runs identical):
 - **sister core dogfood**: `attr_format/core/` (Level 3b WRAPPED v1..v5, format evolution axis).
 - **sister modules**: `attr_format/module/attr_v1.hexa..attr_v5.hexa` (5-version cluster).
 - **catalog SSOT**: `self/attrs/attrs.json` 측 **untouched** (24 entries 측 보존 — additive frame).
-- **attr enforcer SSOT**: `self/attrs/_registry.hexa` 측 **untouched** — 측 측 5 신규 attr 측 측 측 별개 ecosystem cluster 측 측 측 추가 측 단지 모니터링/lint 측 측 sister tool 측 측 consume 측. 측 본 register 측 추가 측 measured 후속 cycle 측 측 (raw#10 caveat-c).
+- **attr enforcer SSOT**: `self/attrs/_registry.hexa` 측 **untouched** — 측 측 5 신규 attr 측 측 측 별개 ecosystem cluster 측 측 측 추가 측 단지 모니터링/lint 측 측 sister tool 측 측 consume 측. 측 본 register 측 추가 측 measured 후속 cycle 측 측 (honest caveat-c).
 - **handoff sister**: `docs/hexa_lang_self_mk2_tuning_landed_2026_05_02.ai.md` (peer .roadmap.<domain> SSOT scaffold land).
 - **format-evolution sister handoff**: `attr_format/core/attr_format_main.hexa` doc-comment header.
 
-## §5 raw#10 honest caveats
+## §5 honest caveats
 
 (a) **Validation only** — 측 본 5 module 측 attr enforcer (parse + validate + emit) 측 only. action_on_fail dispatch (B3) / lint suppression (B6) / build exclusion (B7) / env resolution at runtime entry (B9) / cross-file fs verify (B4) 측 측 측 sister tool 측 owns. 측 본 land 측 측 측 sister tool 측 미연결 측 — 측 후속 cycle 측 측 wire-up 측 별도.
 
@@ -165,7 +165,7 @@ Aggregator stdout (with hexa-resolver line stripped) sha256 (2 runs identical):
 
 (f) **byte-identical 2-run** — aggregator stdout sha256 측 측 측 stripping `hexa-resolver:` 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 측 (deterministic fixture + no timestamps + no network).
 
-(g) **friendly preset 측 적용** — 측 본 doc 측 측 friendly tone (한글 설명 + markdown table + explicit caveat 측) 측 적용. 측 raw#10 honest 측 측 hidden 측 0.
+(g) **friendly preset 측 적용** — 측 본 doc 측 측 friendly tone (한글 설명 + markdown table + explicit caveat 측) 측 적용. 측 honest 측 측 hidden 측 0.
 
 (h) **destructive 0 / migration 0** — 기존 file 측 측 touch 측 0. 측 8 신규 file 측 측 only. 측 본 land 측 측 backward-incompatible change 측 0.
 

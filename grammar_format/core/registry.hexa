@@ -5,7 +5,7 @@
 // @sentinel(__GRAMMAR_FORMAT_REGISTRY__ <PASS|FAIL> mode=selftest)
 // @usage(hexa run hexa-lang/grammar_format/core/registry.hexa)
 //
-// raw#9 hexa-only strict. Stage0 has no first-class fn pointers / dyn-call,
+// hexa-only strict. Stage0 has no first-class fn pointers / dyn-call,
 // so the registry uses a switch-style dispatch over canonical grammar version
 // names. Each branch returns the schema metadata for that version; the actual
 // parse/lex/validate impl is dispatched by router.hexa.
@@ -17,7 +17,7 @@
 //   grammar_v4        — Phase δ: @module + typed use + composition (STUB-FROM-SPEC, Phase δ)
 //   grammar_v5        — future placeholder              (STUB-FUTURE,    Phase ε)
 //
-// raw#10:
+// note:
 //   (1) Inlined dispatch matches hexa stage0 capabilities.
 //   (2) v2/v3/v4 metadata absorbed from spec docs (phase_*.ai.md). Their parse
 //       impl is intentionally a stub; users must use v1 for actual parsing

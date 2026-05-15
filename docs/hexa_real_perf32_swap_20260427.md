@@ -1,4 +1,4 @@
-# hexa.real perf-32 Swap — 2026-04-27 (raw#85)
+# hexa.real perf-32 Swap — 2026-04-27 (escalation policy)
 
 ## Trigger
 hexa-lang 자체 개선 — `hexa.real` (raw interp 폴백 경로) 가 `hexa` Mach-O
@@ -67,7 +67,7 @@ hexa 0.1.0-dispatch  ✓
 ### Backward compat
 - `~/.hx/bin/hexa` resolver 의 `REAL_HEXA="$HOME/.hx/packages/hexa/hexa"`
   기본값은 hexa Mach-O 였으므로 영향 없음.
-- `tool/{rebuild_interp,raw_all,build_train_gpu_c}.hexa` 등은 `./build/hexa.real`
+- `tool/{rebuild_interp,lint-orchestrator,build_train_gpu_c}.hexa` 등은 `./build/hexa.real`
   (다른 파일) 참조 — 영향 없음.
 - `tool/{law_check,roadmap_integrate,emit_hxi}.hexa` 는 주석/설명용 언급
   뿐 — 영향 없음.

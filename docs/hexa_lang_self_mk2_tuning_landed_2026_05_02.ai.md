@@ -6,11 +6,11 @@ session_directives:
   - omega-cycle (6-step default)
   - silent-land marker protocol
   - AI-native (machine-validatable peer SSOT)
-  - raw 270/271/272/273 (collapsed → hive arch.001 mk2 cluster)
+  - spec cluster (collapsed → hive arch.001 mk2 cluster)
   - BR-NO-USER-VERBATIM (no verbatim user-prompt embedding)
   - friendly preset (response-style: friendly)
   - 마이그레이션 절대 금지 (additive-only)
-goal: "hexa-lang 자체 mk2 tuning — peer .roadmap.<domain> SSOT 측 additive 측 5종 신규 + raw 270 triplet plan"
+goal: "hexa-lang 자체 mk2 tuning — peer .roadmap.<domain> SSOT 측 additive 측 5종 신규 + spec mandate triplet plan"
 repo: /Users/<user>/core/hexa-lang
 budget:
   cap_min: 90
@@ -97,23 +97,23 @@ ssot_predecessor: /Users/<user>/core/hexa-lang/.roadmap.hexa-lang  (sha256 9ec15
 
 총 5종 × 4 lines = 20 lines additive 측 5 신규 SSOT files. 마이그레이션 측 0. 기존 file 측 touch 측 0.
 
-### Phase 2 측 candidate 측 측 미선택 (raw#10 honest)
+### Phase 2 측 candidate 측 측 미선택 (honest)
 
 - `.roadmap.tui` — `.roadmap.hexa-lang.excludes={tui,deferred}` 측 명시 측 deferred 측 — 측 peer SSOT 측 추가 측 redundant 측 측 하지 않음.
 - `.roadmap.ml` — `self/ml` 510 files 측 측 hexa-lang excludes 측 implicit (ML 측 별개 milestone) 측 — 측 본 session scope 측 외.
 - `.roadmap.attrs` / `.roadmap.opt` — 측 size 측 작아 측 (각 71/22 entries) 측 측 standalone peer SSOT 측 ROI 측 낮음 측 측 — 측 미선택 측 (측 후속 측 cycle 측 측 evaluate).
 - `.roadmap.bench` / `.roadmap.gate` / `.roadmap.experiment` 등 — 측 1-3 entries 측 측 standalone SSOT 측 oversize 측 — 측 미선택.
 
-## §3 Phase 3 — raw 270 triplet plan
+## §3 Phase 3 — spec mandate triplet plan
 
-### §3.1 raw 270/271/272/273 측 mk2 측 collapse 측 status
+### §3.1 spec cluster 측 mk2 측 collapse 측 status
 
-- mk1 raw 270 (core-module-architecture-mandate) + 271 (readme-ai-native-mandate) + 272 (core-module-file-structure-consistency) + 273 (core-hierarchy-connection-direction) 측 4 rule cluster 측 — hive `.raw.mk2` `arch.001` 측 단일 canonical pattern 측 collapse 측 (2026-05-02 land, semantic-equivalent=true, mk1-status=new).
+- mk1 spec mandate (core-module-architecture-mandate) + 271 (readme-ai-native-mandate) + 272 (core-module-file-structure-consistency) + 273 (core-hierarchy-connection-direction) 측 4 rule cluster 측 — hive `legacy` `arch.001` 측 단일 canonical pattern 측 collapse 측 (2026-05-02 land, semantic-equivalent=true, mk1-status=new).
 - enforce: hive-agent layer × tool/ai_native_module_readme_lint.hexa × severity=warn × ramp=warn-to-block-by 2026-08-02.
 - 4-core file pattern: `core/<feature>/{source,registry,router,<feature>_main}.hexa` + `modules/<feature>/{README.ai.md, <impl_n>.hexa}`.
 - 측 hexa-lang 측 측 cluster 측 측 측 sister-repo 측 동일 측 scope 측 측 적용 측 (decl="all hive sister repos (hive/anima/nexus/n6/airgenome/papers/hexa-lang/anima-eeg/anima-clm-eeg)").
 
-### §3.2 hexa-lang 측 측 raw 270 (= mk2 arch.001) compliance 측 triplet plan
+### §3.2 hexa-lang 측 측 spec mandate (= mk2 arch.001) compliance 측 triplet plan
 
 | triplet ID | scope | current state | proposed action | 마이그레이션 | est LoC |
 |---|---|---|---|---|---|
@@ -123,7 +123,7 @@ ssot_predecessor: /Users/<user>/core/hexa-lang/.roadmap.hexa-lang  (sha256 9ec15
 
 triplet 측 측 핵심 측 — T-arch-3 측 측 lint warn ramp 측 (warn-to-block-by 2026-08-02) 측 측 측 측 측 시점 측 측 측 measured 측 measured (measure pre-emptively in additive-only frame).
 
-### §3.3 raw 270 triplet 측 BR-NO-USER-VERBATIM 측 compliance 측 cross-check
+### §3.3 spec mandate triplet 측 BR-NO-USER-VERBATIM 측 compliance 측 cross-check
 
 본 doc 측 측 사용자 측 prompt 측 raw text 측 측 verbatim 측 미포함 (BR-NO-USER-VERBATIM 준수).
 
@@ -142,20 +142,20 @@ triplet 측 측 핵심 측 — T-arch-3 측 측 lint warn ramp 측 (warn-to-bloc
 ### marker
 - `/Users/<user>/core/hexa-lang/state/markers/hexa_lang_self_mk2_tuning_landed.marker` (이번 land 측 silent-land 방지 측 protocol marker)
 
-## §5 raw#10 honest caveat
+## §5 honest caveat
 
 (a) **scaffold-only**: 5종 peer SSOT 측 측 PROPOSED 측 entries 측 측 entry-action 측 미실행 측 — 측 다음 측 cycle 측 ST1/CG1/TL1/RT1/LP1 측 sub-task 측 측 측 actually-execute 측 측 단계 측 분리.
 (b) **lint-validation deferred**: peer .roadmap.<domain> 측 schema 측 .roadmap.hexa-lang 측 측 prefix 측 측 alignment 측 측 측 측 lint tool 측 hexa-lang side 측 측 측 측 본 session 측 측 측 unverified — 측 측 측 본 land 측 측 측 prefix-naming convention 측 측 sister .roadmap.<domain> 측 측 측 측 측 측 follows.
 (c) **`.roadmap.hexa-lang` 측 측 unchanged**: cond.1/cond.2 측 evidence 측 push 측 측 측 ST3/CG3 측 측 측 후속 측 — 측 본 land 측 측 측 cond array 측 mutate 측 0.
 (d) **`self/ml` excluded**: 측 510 files 측 측 ML 측 별개 milestone 측 측 측 본 mk2 tuning scope 측 외 — 측 측 측 측 별도 `.roadmap.ml` 측 측 측 후속 cycle 측 측 evaluate 측 (선택적).
-(e) **friendly preset 측 적용**: 측 본 doc 측 측 friendly tone 측 (한글 + 측 markdown headers + 측 explicit caveat 측) 측 적용. 측 raw#10 honest 측 측 hidden 측 0.
+(e) **friendly preset 측 적용**: 측 본 doc 측 측 friendly tone 측 (한글 + 측 markdown headers + 측 explicit caveat 측) 측 적용. 측 honest 측 측 hidden 측 0.
 (f) **destructive 0 / migration 0**: 기존 file 측 측 touch 측 0. 측 5 신규 file 측 측 only.
 
 ## §6 cross-link
 
 - `.roadmap.hexa-lang` (main, cond.1+cond.2 측 mirror)
-- `grammar_format/core/`, `attr_format/core/` (Level 3a 측 LANDED 측 dogfood, raw 270 mk2 arch.001 측 compliance)
-- hive `.raw.mk2` `arch.001` (collapsed canonical, 2026-05-02 land)
+- `grammar_format/core/`, `attr_format/core/` (Level 3a 측 LANDED 측 dogfood, spec mandate mk2 arch.001 측 compliance)
+- hive `legacy` `arch.001` (collapsed canonical, 2026-05-02 land)
 - `.gitignore` 측 측 untouched (additive only — 측 본 5 SSOT 측 측 git tracked 측 측 측 권장)
 
 ## §7 next-cycle suggestions (PROPOSED only)

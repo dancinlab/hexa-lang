@@ -6,7 +6,7 @@
 //
 // Reference: proposals/rfc_002_map_methods.md
 //
-// Falsifier (raw#71):
+// Falsifier:
 //   m.has(k) returns boolean equal to membership for all (k,m) pairs.
 //   Behavior identical in interpreter AND AOT modes.
 

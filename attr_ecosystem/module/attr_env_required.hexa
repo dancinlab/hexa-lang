@@ -31,7 +31,7 @@
 // RAW#10 CAVEATS
 //   (1) The runtime check uses `exec("printenv NAME")` for portability
 //       (env_var() is not always available in stage0 builds). Same
-//       quirk as `anima/core/rng/router.hexa` (raw#10 §7).
+//       quirk as `anima/core/rng/router.hexa` (  §7).
 //   (2) fallback is treated as a string; numeric env vars get string
 //       treatment (caller parses).
 //   (3) The attr does NOT mutate process env — it only checks +

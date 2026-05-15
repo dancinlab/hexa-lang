@@ -177,7 +177,7 @@ their numbers as reference identifiers; all other items carry no number.
 - Affects: every resolver-side route that builds paths from `$WS` (cmd/list,
   cmd/<name>, gate/drill, gate/entry).
 - Workaround: hardcode SSOT path or use `__file__`-relative resolution.
-- Cite: `hexa-lang/gate/hexa_url_core.ai.md` raw#10 caveat #11 (discovered
+- Cite: `hexa-lang/gate/hexa_url_core.ai.md` honest caveat (discovered
   2026-05-02 via cmd/list smoke).
 
 ### 3.5 docker route stdout duplication
@@ -186,7 +186,7 @@ their numbers as reference identifiers; all other items carry no number.
 - Limitation: `route=docker` mode appears to print stdout twice in some cases.
 - Workaround: prefer bash dispatcher for routes where exact stdout matters
   (e.g., `fmt=json` envelopes).
-- Cite: `hexa-lang/gate/hexa_url_core.ai.md` raw#10 caveat #2.
+- Cite: `hexa-lang/gate/hexa_url_core.ai.md` honest caveat.
 
 ## Category 4 — macOS integration
 
@@ -222,7 +222,7 @@ their numbers as reference identifiers; all other items carry no number.
 - Plan: `hive/sync/verify_url_registration.hexa` (lsregister plan § S-22.4).
 - Until 4.1 + 4.2 land, the `~/.hx/bin/hexa-url-handler.sh` bash dispatcher
   carries the **raw-9-exemption** carve-out as the macOS LaunchServices entry
-  point. Cite: `hexa-lang/gate/hexa_url_core.ai.md` raw#10 caveat #5 ("macOS
+  point. Cite: `hexa-lang/gate/hexa_url_core.ai.md` honest caveat ("macOS
   LaunchServices registration is manual").
 
 ## Category 5 — Ergonomics
@@ -243,7 +243,7 @@ their numbers as reference identifiers; all other items carry no number.
   `~/.hive/state/fix_audit/mech_A_hexa_url.jsonl` grow unbounded (~1 line per
   invocation).
 - Workaround: monitor and run `logrotate` manually when files cross ~10MB.
-- Cite: `hexa-lang/gate/hexa_url_core.ai.md` raw#10 caveat #7.
+- Cite: `hexa-lang/gate/hexa_url_core.ai.md` honest caveat.
 
 ## Status summary
 
@@ -284,7 +284,7 @@ Closed: 9. Open: 9 (3 by design, 4 with workarounds, 2 deferred to S-22.x).
 - mk2 apex inventory entry:
   `hive/spec/mk2_apex.spec.yaml § inventory.12_invisible_sync`.
 
-## raw#10 caveats
+## honest caveats
 
 1. The previously cited "9/10 hexa-lang upstream gaps" carryover phrasing has
    no source enumeration. This catalog supersedes it. Any consumer that still
@@ -299,7 +299,7 @@ Closed: 9. Open: 9 (3 by design, 4 with workarounds, 2 deferred to S-22.x).
    a separate proposal under `hexa-lang/proposals/` is the right surface.
 4. Category 3 OPEN items are honest workaround records, not unfinished work:
    3.3 is a sandbox isolation property (closing it would weaken the sandbox);
-   3.4 / 3.5 are docker-runtime quirks tracked in raw#10 caveats and worked
+   3.4 / 3.5 are docker-runtime quirks tracked in honest caveats and worked
    around by the dispatcher decision matrix.
 5. This document is authored in English per
    `hive/spec/mk2_ecosystem_catalog.spec.yaml § BR-MK2-AI-NATIVE-ENGLISH-ONLY`

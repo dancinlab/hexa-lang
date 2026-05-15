@@ -80,6 +80,7 @@ pub fn sigma(n) {
 }
 
 pub fn euler_phi(n) {
+    if n == 1 { return 1 }
     let count = 0
     let i = 1
     while i < n {

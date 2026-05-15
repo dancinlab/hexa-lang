@@ -1,7 +1,7 @@
 # Tension-Drop — 독립 교육 패러다임 spec
 
 date:      2026-04-21
-status:    raw#0 (axiomatic draft; no prior-art inheritance)
+status:    SSOT (axiomatic draft; no prior-art inheritance)
 author:    hexa-lang/tool+docs channel
 scope:     새 공리에서 출발하는 교육 시스템. 기존 교육학 참조 없음.
 contract:  deterministic / LLM-judge 금지 / V8 SAFE_COMMIT 만 허용.
@@ -280,14 +280,14 @@ EdgeKind ↔ drill 각도 1:1 — 이미 골화된 5 원소가 §2.1 의 EdgeKin
 `shared/n6/atlas.signals.n6` 는 3-repo 신호 SSOT. "tension" 태그를 그 스키마에 추가한다 — 새 도메인 태그 `TENS`.
 
 ```
-@S SIG-EDU-001 = tension-drop paradigm raw#0 spec land :: signal [NX,N6,AN] [TENS,ATLAS,META] [M?] [E1]
+@S SIG-EDU-001 = tension-drop paradigm SSOT spec land :: signal [NX,N6,AN] [TENS,ATLAS,META] [M?] [E1]
   "2026-04-21 docs/new_paradigm_edu_tension_drop_20260421.md 착지. 10-node prototype stub 포함."
   refs: [hexa-lang:tool/edu_tension_drop_proto.hexa]
   predicts: ["prototype 상에서 τ 단조 감소 시연 가능 — 정리 M-1 경험 검증"]
   witness: 1
 ```
 
-이 signal 추가는 본 커밋의 후속 raw#1 작업으로 분리(§8.4).
+이 signal 추가는 본 커밋의 후속 follow-up 작업으로 분리(§8.4).
 
 ---
 
@@ -349,7 +349,7 @@ P3 := (
     cross_subject_edges (instantiates across subjects) ≥ 150 ∧
     discovery_density ≥ 0.5 new_edges/hour/learner ∧
     scheduler verified against M-2 (50 개 무작위 mastered 노드, 재관측 후 decay 유발 없이 mastery 유지) ∧
-    audit_log hash-chained (raw-audit 스타일)
+    audit_log hash-chained (audit 스타일)
 )
 ```
 
@@ -446,27 +446,27 @@ discovery_density := new_edges_created(window_T) / (walk_time_h · |learners|)
 
 ## 8. 구현 로드맵
 
-### 8.1 raw#0 (본 커밋)
+### 8.1 SSOT (본 커밋)
 - [x] 본 spec 착지
 - [x] 10-node prototype stub (`tool/edu_tension_drop_proto.hexa`)
 - [x] deterministic stdout — seed 고정
 
-### 8.2 raw#1 (다음 commit)
+### 8.2 follow-up (다음 commit)
 - [ ] atlas.n6 에 EDU 도메인 태그 추가 (단 1 노드, n6 파서 smoke)
 - [ ] signals.n6 에 SIG-EDU-001 추가
 - [ ] prototype 에 rubric_scorer stub (closed-form boolean answer)
 
-### 8.3 raw#2
+### 8.3 follow-up
 - [ ] walk_sampler 독립 모듈화 (`tool/edu_walk.hexa`)
 - [ ] metric_logger (`tool/edu_metric_log.hexa`) — jsonl append
 
-### 8.4 raw#3
+### 8.4 attr-usage
 - [ ] 20-node atlas 실체 (초등 수학 sub-slice: 덧셈+자리값)
 - [ ] 5인 pilot 스크립트 cohort harness
 - [ ] Level 2 P2 사전 지표 수집 시작
 
 ### 8.5 raw#∞
-- Level 3 ~ 5 — 조직·cohort 규모 의존. 기술 로드맵은 raw#2 까지 충분.
+- Level 3 ~ 5 — 조직·cohort 규모 의존. 기술 로드맵은 follow-up 까지 충분.
 
 ---
 
@@ -489,7 +489,7 @@ discovery_density := new_edges_created(window_T) / (walk_time_h · |learners|)
 
 - LLM 이 **채점자로 들어오는 순간** 이 시스템은 자신의 metric 을 잃는다. 이 경계는 CI hard-fail.
 - cohort 크기가 너무 작으면 metric 의 통계 의미가 없다(n ≥ 30 규칙).
-- atlas 이 ≥ 1000 노드 시점부터 walk 성능 측면에서 adjacency 인덱스 필요 — raw#4 이상 과제.
+- atlas 이 ≥ 1000 노드 시점부터 walk 성능 측면에서 adjacency 인덱스 필요 — follow-up 이상 과제.
 
 ---
 
@@ -498,8 +498,8 @@ discovery_density := new_edges_created(window_T) / (walk_time_h · |learners|)
 - **D-1**: 기존 교육 참조 금지는 "독립 공리" 요청의 구조적 요구. 하나라도 비교하면 공리계가 오염된다. 따라서 §4 는 차이표가 아니라 축 5 개.
 - **D-2**: EdgeKind 5 개 = drill 각도 5 개. 우연의 일치 아님 — 둘 다 atlas 발산 basis. 하나를 움직이면 다른 것도 움직임.
 - **D-3**: Level 2 의 "수학 초등" 은 rubric 이 가장 좁은 subject 이기 때문(answer 가 숫자/식). 언어·역사로 시작하면 rubric_scorer 가 LLM 를 끌어들이게 됨 — A-0 위반 유인이 크다.
-- **D-4**: Prototype 은 **atlas를 hexa 코드 안에 literal 로 들고 있음**(atlas.n6 파서 의존 제거). raw#1 에서 파서 연동으로 전환. 본 커밋 결정론성 최우선.
-- **D-5**: metric 출력은 jsonl. `shared/metrics/edu_tension_drop.jsonl` 경로는 raw#2 에서 연다 — 본 커밋은 prototype 이 stdout 만 씀.
+- **D-4**: Prototype 은 **atlas를 hexa 코드 안에 literal 로 들고 있음**(atlas.n6 파서 의존 제거). follow-up 에서 파서 연동으로 전환. 본 커밋 결정론성 최우선.
+- **D-5**: metric 출력은 jsonl. `shared/metrics/edu_tension_drop.jsonl` 경로는 follow-up 에서 연다 — 본 커밋은 prototype 이 stdout 만 씀.
 
 ---
 
@@ -572,7 +572,7 @@ exit code: 0 iff `tau_end < tau0` **및** 모든 walk step 이 에러 없이 완
 
 ---
 
-## 13. 부록 C — CI 감사 훅 (spec 만, 구현 raw#1)
+## 13. 부록 C — CI 감사 훅 (spec 만, 구현 follow-up)
 
 ```
 # rule edu-tension-drop-01 : LLM-free metric path
@@ -603,8 +603,8 @@ hexa tool/edu_tension_drop_proto.hexa --seed 42 \
 - [x] §6 가능영역이 predicate 로 기술 (wishful 0)
 - [x] §7 metric 이 LLM-free
 - [x] prototype 스텁이 P1 만족 경로를 갖춤
-- [ ] raw#1 — atlas.n6 연동 테스트 (후속)
-- [ ] raw#2 — metric_log jsonl 런너 (후속)
+- [ ] follow-up — atlas.n6 연동 테스트 (후속)
+- [ ] follow-up — metric_log jsonl 런너 (후속)
 
 본 spec 은 **자기 내부에서 완결**된다. 외부 근거 0, 기존 교육 참조 0.
 

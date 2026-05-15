@@ -18,7 +18,7 @@
 // the canonical hexa CLI (`hexa run <file>`). This module exists to satisfy
 // the grammar_format core+module pattern (Level 3a recursive dogfooding).
 //
-// raw#9 hexa-only strict. raw#10 caveats:
+// hexa-only strict.   caveats:
 //   (1) Wrapper does NOT invoke the canonical parser (stage0 has no
 //       cross-file fn import). Real parsing remains in self/lexer.hexa
 //       + self/parser.hexa.

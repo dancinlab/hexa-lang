@@ -5,9 +5,9 @@ status: spec-only
 phase: gamma
 depends_on:
   - phase_beta_parser_extension (BG-β concurrent)
-  - raw#3 attr-usage
-  - raw#10 silent_error
-  - raw#11 ai-native-enforce
+  - attr-usage
+  - honest-caveat
+  - ai-native
 predecessor_specs:
   - self/raws/silent_error.hexa
   - self/stdlib_result.hexa
@@ -26,7 +26,7 @@ items:
 
 Spec-only. Implementation deferred to a separate cycle (~1 month estimate). Phase γ
 extends Phase β (parser ext: @attr AST + strict mode + attr typing) with three
-strict-mode semantic rules that close raw#10 and raw#11 in the type/decl layer.
+strict-mode semantic rules that close honest-caveat and ai-native in the type/decl layer.
 
 ## §1 TL;DR
 
@@ -36,7 +36,7 @@ strict-mode semantic rules that close raw#10 and raw#11 in the type/decl layer.
 | L8 | `@public` vs `pub fn` | `pub fn` deprecated; `@public fn` is canonical | warn (30d ramp → error) | 0 `@public fn` in primary tree (greenfield) |
 | L9 | fail-loud `Result<T,E>` | unhandled `Err` (caller does not match/?/unwrap_or_panic) → compile error | unchanged | 1 `Result<>` site (anima ready/) |
 
-3 items together convert raw#10 (silent_error lint) and raw#11 (ai-native-enforce)
+3 items together convert honest-caveat (silent_error lint) and ai-native (ai-native-enforce)
 from line-scan-time enforcement into compile-time enforcement. Migration risk dominated
 by L4 (3,445 sites) — automation script in §7 covers the bulk; manual review for
 slug/desc population on @export.
@@ -45,7 +45,7 @@ slug/desc population on @export.
 
 ### §2.1 Rule
 
-Strict mode (raw#11 ai-native-enforce already gates strict-by-default for the
+Strict mode (ai-native already gates strict-by-default for the
 primary tree): every `pub fn` declaration MUST carry **exactly one** of the
 following attributes immediately preceding the signature:
 
@@ -67,14 +67,14 @@ error[L4]: pub fn requires @public or @export(...) attr in strict mode
 93 | pub fn rng_registry_names() -> [str] {
    | ^^^^^^ missing @public or @export(...)
    |
-   = note: strict mode = raw#11 ai-native-enforce default for primary tree
+   = note: strict mode = ai-native default for primary tree
    = help: add `@public` (visibility-only) or `@export(slug=..., desc=...)` (registry-grade)
    = grandfather: add file path to `.hexa-lang-pub-fn-grandfather` to defer (30d ramp)
 ```
 
 ### §2.2 Rationale
 
-- raw#3 @attr-usage requires every visibility/intent declaration to carry attr metadata
+- attr-usage requires every visibility/intent declaration to carry attr metadata
   for AI-native discovery. `pub fn` without attr → invisible to lint/registry/LSP.
 - `@export(slug, desc)` populates the same registry as @tool/@module — enables
   `hexa registry list --visibility public` cross-tree query without ad-hoc grep.
@@ -189,18 +189,18 @@ http_get(url); next_step()               // ERROR L9: discarded by sequencing
 - Enclosing fn MUST return `Result<_, E'>` where `E: Into<E'>` (or identical).
 - Type mismatch → compile error `E_PHASE_GAMMA_L9_RETHROW_TYPE_MISMATCH`.
 
-### §4.5 Interaction with raw#10 silent_error lint
+### §4.5 Interaction with honest-caveat lint
 
-raw#10 (line-scan) handles `exit(N≠0)` + `empty catch`. L9 (type-checker) handles
+honest-caveat (line-scan) handles `exit(N≠0)` + `empty catch`. L9 (type-checker) handles
 `Result<>` discard. Together: 3 silent-error vectors closed at compile time:
 | Vector | Layer | Status |
 |--------|-------|--------|
-| `exit(N≠0)` no msg | line-scan raw#10 | already enforced |
-| `catch e {}` empty | line-scan raw#10 | already enforced |
+| `exit(N≠0)` no msg | line-scan honest-caveat | already enforced |
+| `catch e {}` empty | line-scan honest-caveat | already enforced |
 | `Result<>` discarded | type-check L9 | NEW Phase γ |
 
-raw#10 (b) `let _ = <error-return fn>()` — was deferred Tier 2 in raw#10. **L9 closes
-raw#10 (b) at the type-system layer**, supersedes the deferred line-scan approach.
+honest-caveat (b) `let _ = <error-return fn>()` — was deferred Tier 2 in honest-caveat. **L9 closes
+honest-caveat (b) at the type-system layer**, supersedes the deferred line-scan approach.
 
 ### §4.6 Selftest fixtures (7)
 
@@ -325,7 +325,7 @@ hexa tool/attr_audit.hexa --check pub-fn-pair <root>
 # expected: 0 orphans
 ```
 
-## §8 raw#10 caveats (honest limitations)
+## §8 honest caveats (honest limitations)
 
 1. **Type-system change = largest impact**: L9 requires Result-flow tracking in the
    type-checker. Phase β parser ext alone is insufficient — L9 needs Phase β +
@@ -369,14 +369,14 @@ Phase γ depends on Phase β deliverables:
 | Type-checker basic infra | L9 Result<> flow | L9 |
 
 **If Phase β does NOT deliver type-checker infra**: Phase γ.L9 is forced to a line-scan
-fallback (analogue to raw#10 silent_error.hexa) — strictly weaker. **Recommendation**:
+fallback (analogue to honest-caveat.hexa) — strictly weaker. **Recommendation**:
 co-land Phase β type-checker stubs even if minimal (Result<>-only matcher is sufficient).
 
 ## §10 File index sha-pin
 
 | Path | Role | sha256 (Phase γ d0 baseline) |
 |------|------|-------------------------------|
-| `/Users/<user>/core/hexa-lang/self/raws/silent_error.hexa` | raw#10 line-scan predecessor | _pin at impl-cycle d0_ |
+| `/Users/<user>/core/hexa-lang/self/raws/silent_error.hexa` | honest-caveat line-scan predecessor | _pin at impl-cycle d0_ |
 | `/Users/<user>/core/hexa-lang/self/stdlib_result.hexa` | Result<T,E> stdlib (opt-in) | _pin at impl-cycle d0_ |
 | `/Users/<user>/core/hexa-lang/self/attrs/allow_silent_exit.hexa` | grandfather attr template | _pin at impl-cycle d0_ |
 | `/Users/<user>/core/hexa-lang/docs/phase_gamma_strict_semantic_spec.ai.md` | this spec | _self-sha at land time_ |
@@ -399,6 +399,6 @@ exact predecessor revision used by the impl.
 - `pub` keyword removal (separate Phase γ.1, post-d30)
 - Cross-repo migration (anima, hive) — handled by per-repo migration cycles consuming
   this spec
-- raw#10 line-scan retirement (raw#10 retained as belt-and-suspenders even after L9 lands)
+- honest-caveat line-scan retirement (honest-caveat retained as belt-and-suspenders even after L9 lands)
 - `@private`, `@internal`, `@friend` attrs (separate Phase δ visibility refinement)
 - ABI stability — `@export(slug, desc)` registers metadata, NOT a stable ABI contract

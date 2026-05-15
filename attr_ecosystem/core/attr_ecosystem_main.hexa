@@ -7,7 +7,7 @@
 // hexa-lang/attr_ecosystem/core/attr_ecosystem_main.hexa
 //   Aggregator selftest for the 5-attr ecosystem (B3/B4/B6/B7/B9)
 //
-// raw#9 hexa-only strict. Aggregates selftest evidence from:
+// hexa-only strict. Aggregates selftest evidence from:
 //   hexa-lang/attr_ecosystem/core/source.hexa
 //   hexa-lang/attr_ecosystem/core/registry.hexa
 //   hexa-lang/attr_ecosystem/module/attr_falsifier.hexa

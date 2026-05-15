@@ -18,27 +18,27 @@
 
 **범례**: ✅ = real-v1 완성 · 🟡 = partial/stub · ❌ = 미구현 · 🆕 = 이번 세션 신규
 
-| # | 프로젝트 | 역할 | 메타 엔진 | 로드맵 엔진 | proposal_inbox | .raw baseline | drill hook | 비고 |
+| # | 프로젝트 | 역할 | 메타 엔진 | 로드맵 엔진 | proposal_inbox | baseline | drill hook | 비고 |
 |---|---------|------|-----------|-------------|-----------------|---------------|------------|------|
-| 1 | **nexus** | discovery-engine 🔭 | 27 roadmap_*, atlas_* 다수 ✅ | 본래 엔진 고향 ✅ | ✅ v1 | ✅ (.raw 소유 없음, hexa-lang mirror) | ✅ | 78 pending (창발 활발) |
-| 2 | **anima** | consciousness-engine 🧠 | 14 proposal_* ✅ (cluster/conflict/lineage/dashboard) | ✅ roadmap_ingest + mean_pct 91 | ✅ v1 (45 entries) | 🟡 (.raw-ref mirror) | ✅ | 50 super-proposal done (매우 활발) |
-| 3 | **canon** | system-design 🏗️ | 0 (제안서만 664L) | 🟡 loop-rules.json | ✅ v1 | ✅ .raw-ref | ✅ | proposal-only 상태 |
-| 4 | **papers** | paper-distribution 📄 | ❌ | ❌ | ✅ v1 (신규) | ✅ .raw-ref | ✅ 🆕 | Zenodo/DOI 자동화 미연결 |
-| 5 | **hexa-lang** | language ⬡ | **16/16 real-v1** ✅ | 13 stub (nexus 이관) | ✅ v1 | ✅ .raw SSOT | ✅ | 유일 .raw 원본 소유 |
-| 6 | **void** | terminal 🧬 | ❌ | ❌ | ✅ v1 🆕 | ✅ .raw-ref | ✅ 🆕 | ghostty fork, P1 grid-mode |
-| 7 | **airgenome** | os-scanner 🧬 | 4 real (ring/forge/divergence) + 6 stub | ❌ | ✅ v1 | ✅ .raw-ref 🆕 | ✅ | Linux binary 미빌드 blocker |
+| 1 | **nexus** | discovery-engine 🔭 | 27 roadmap_*, atlas_* 다수 ✅ | 본래 엔진 고향 ✅ | ✅ v1 | ✅ (no SSOT, hexa-lang mirror) | ✅ | 78 pending (창발 활발) |
+| 2 | **anima** | consciousness-engine 🧠 | 14 proposal_* ✅ (cluster/conflict/lineage/dashboard) | ✅ roadmap_ingest + mean_pct 91 | ✅ v1 (45 entries) | 🟡 (mirror mirror) | ✅ | 50 super-proposal done (매우 활발) |
+| 3 | **canon** | system-design 🏗️ | 0 (제안서만 664L) | 🟡 loop-rules.json | ✅ v1 | ✅ mirror | ✅ | proposal-only 상태 |
+| 4 | **papers** | paper-distribution 📄 | ❌ | ❌ | ✅ v1 (신규) | ✅ mirror | ✅ 🆕 | Zenodo/DOI 자동화 미연결 |
+| 5 | **hexa-lang** | language ⬡ | **16/16 real-v1** ✅ | 13 stub (nexus 이관) | ✅ v1 | ✅ SSOT | ✅ | 유일 SSOT 소유 |
+| 6 | **void** | terminal 🧬 | ❌ | ❌ | ✅ v1 🆕 | ✅ mirror | ✅ 🆕 | ghostty fork, P1 grid-mode |
+| 7 | **airgenome** | os-scanner 🧬 | 4 real (ring/forge/divergence) + 6 stub | ❌ | ✅ v1 | ✅ mirror 🆕 | ✅ | Linux binary 미빌드 blocker |
 | 8 | contribution | paper-submission-hub 📚 | ❌ | ❌ | ❌ (미등록) | ❌ | ❌ | aux, 미사용 |
 | 9 | openclaw | singularity-feed 🐾 | ❌ | ❌ | ❌ | ❌ | ❌ | aux, 미사용 |
 | 10 | skynet-timer | landing-page ⏲️ | ❌ | ❌ | ❌ | ❌ | ❌ | launch_ops, web |
 | 11 | x (twitter) | ops 𝕏 | ❌ | ❌ | ❌ | ❌ | ❌ | launch_ops, API |
 | 12 | youtoyou | concept 📺 | ❌ | ❌ | ❌ | ❌ | ❌ | launch_ops, 컨셉 |
-| +α | **secret, contact** (private) | 저장소/외부소통 | — | — | ✅ v1 🆕 | ✅ .raw-ref 🆕 | ✅ 🆕 | private repo, 공개 금지 |
-| +α | hexa-os | kernel/boot/driver | ❌ | ❌ | ✅ v1 🆕 | ✅ .raw-ref 🆕 | ✅ 🆕 | OS 실험 |
+| +α | **secret, contact** (private) | 저장소/외부소통 | — | — | ✅ v1 🆕 | ✅ mirror 🆕 | ✅ 🆕 | private repo, 공개 금지 |
+| +α | hexa-os | kernel/boot/driver | ❌ | ❌ | ✅ v1 🆕 | ✅ mirror 🆕 | ✅ 🆕 | OS 실험 |
 
 ### 핵심 관찰
 1. **core 7 + hexa-os + secret + contact** (10 repo) = proposal_inbox 합류 완료
 2. **aux / launch_ops 5 repo** (contribution/openclaw/skynet-timer/x/youtoyou) = 아직 미합류
-3. hexa-lang 만 진짜 `.raw` 소유자 (L0 SSOT), 나머지는 `.raw-ref` mirror pin
+3. hexa-lang 만 진짜 baseline 소유자 (L0 SSOT), 나머지는 `mirror` mirror pin
 4. anima 의 proposal 관리 성숙도 최고 (14 tool) — 다른 repo 가 흡수 가치
 5. nexus 는 창발 특성상 구조적 진화 (schema/atlas 재계산) 빈도 가장 높음
 
@@ -415,7 +415,7 @@ prompt_scan.hexa 의 check_evolution_plan 이 자동 처리.
 2. `.roadmap` 은 roadmap_with_unlock.hexa 경유만
 3. hooks 우회 (`--no-verify`) 금지
 4. cross-repo 쓰기는 proposal_inbox submit 로만
-5. `.raw` (hexa-lang 전용) 제외하고 다른 repo 는 `.raw-ref` mirror
+5. baseline (hexa-lang 전용) 제외하고 다른 repo 는 `mirror` mirror
 6. private repo (secret, contact) push 시 public 차단 ( `.workspace` visibility=private)
 7. convention_cross_repo_blocker priority_floor=95 강제
 8. advisory 는 prio 75 고정

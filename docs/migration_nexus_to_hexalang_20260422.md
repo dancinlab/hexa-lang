@@ -58,8 +58,8 @@ cleanup separately (deprecated code).
 ### 6. uchg flow for `.roadmap` edits
 Any `.roadmap` change must go through `tool/roadmap_with_unlock.hexa`
 (trap-guarded unlock/run/relock) or the full `tool/hx_unlock.hexa` path with
-`raw_all` gate + audit append. Do NOT `chflags` directly — breaks the
-`.raw-audit` hash chain.
+`lint-orchestrator` gate + audit append. Do NOT `chflags` directly — breaks the
+audit ledger hash chain.
 
 ### 7. Phase 1-3 real logic (13 stubs → full)
 Each stub currently emits `{status: "stub", ...}` payload. Per spec in
@@ -90,6 +90,6 @@ Phase 1-3 tools pass end-to-end on a real repo.
 - `docs/roadmap_engine_continuous_meta_proposal_20260422.md` — full spec
 - `docs/loss_free_roi_brainstorm_20260422.md` — β main acceleration items
   (overlaps with Phase 2 ROI scanner motivation)
-- `.raw-audit` — any `.roadmap` touching events must be logged there
+- audit ledger — any `.roadmap` touching events must be logged there
 - `tool/roadmap_with_unlock.hexa` — low-ceremony `.roadmap` edit helper
 - `tool/hx_unlock.hexa` — full audit-chain unlock path

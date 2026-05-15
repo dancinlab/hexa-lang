@@ -1,6 +1,6 @@
 // HX-safety A8 (BG-HX1, 2026-05-02) — env() lazy default lint fixture.
 //
-// raw 15 (no-hardcode) classifies absolute personal paths committed to
+// no-hardcode rule classifies absolute personal paths committed to
 // source as a leak of per-developer location. The most common vector is
 // `env(KEY, "/Users/...")` 2-arg fallback OR top-of-file
 // `env("HOME") + "/Dev/<personal>/..."` concatenation.
