@@ -621,3 +621,23 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
   @> COMPILE-ONLY.tape
 
+@N rebuild_unblock_candidate := "Track-A wall unblock candidate: flatten-emit embedded.gen.hexa as empty stub" :: note [d=2026-05-16 draft]
+  <- loop_codegen_program_source_complete
+  candidate <<~EOF
+    Track-A monolithic-TU clang wall is driven mostly by flat.c size:
+    legacy hexa_v2 emits compiler/atlas/embedded.gen.hexa's ~7400-element
+    AtlasNode array as a 4.6 MB C static initializer (the HX0013 parser
+    cap is in the NEW compiler only, NOT hexa_v2). Candidate: in
+    tool/flatten_imports.hexa emit loop (~905, `let body = read_file(f)`),
+    substitute a minimal STUB for compiler/atlas/embedded.gen.hexa —
+    `pub let ATLAS_{P,C,L,E,F,R,S,X,Q}_NODES = []` + `ATLAS_HASH = ""` +
+    `ATLAS_SOURCE_COUNT = 0` — so static_atlas()'s fallback still resolves
+    while flat.c shrinks ~4.6 MB → tiny, making clang -O0 fast and the
+    rebuild gate reachable WITHOUT cloud.
+  EOF
+  soundness = "Aligned with @D g_hxc / Path Y: static_atlas() reads dist/atlas.hxc (committed 2.9 MB) FIRST; the const fallback is dead at runtime when the sidecar is present, and the bootstrap COMPILE never needs atlas DATA. Committed embedded.gen.hexa fixture untouched — only the flatten-time bootstrap input is stubbed."
+  why_not_a_loop_edit = "NOT a safe unilateral loop-tick change: (1) flatten_imports is on EVERY `hexa build` path — broad blast radius; (2) multiple embedded.gen.hexa exist (atlas/absolute_rules/falsifiers/…) — which are dead-fallback vs load-bearing is a correctness judgement, not a filename heuristic; (3) verification is CIRCULAR — confirming the stub needs the very rebuild it unblocks (Track-A). Blind application = the integrity line. A scoped DECISION for a dedicated build-track pass (alongside the more fundamental per-module-compile COMPILE-SPEED work), recorded so it is not lost."
+  status = "draft candidate, NOT applied. Rebuild gate remains outside loop-tick scope; this advances the closure ANALYSIS (a concrete soundness-vetted risk-scoped unblock now exists) without fabricating an unverifiable edit."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_hxc_spec]"
+  @> COMPILE-ONLY.tape
+
