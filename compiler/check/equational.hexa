@@ -69,6 +69,7 @@ fn _eq_is_lit_int_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -97,6 +98,7 @@ fn _eq_is_ident_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -125,6 +127,7 @@ fn _eq_is_binop_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -153,6 +156,7 @@ fn _eq_is_unop_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -181,6 +185,7 @@ fn _eq_is_return_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -209,6 +214,7 @@ fn _eq_is_block_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false

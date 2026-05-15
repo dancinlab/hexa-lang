@@ -73,6 +73,7 @@ pub enum ExprKind {
     Index,
     StructLit,       // Foo { x: 1, y: 2 } — A1.5
     EnumPath,        // Foo::Bar / Foo::Bar(payload) — A1.5
+    ArrayLit,        // [e0, e1, ...] / [] — children = elements
     Wildcard         // _ pattern — A1.5
 }
 
@@ -141,6 +142,7 @@ fn _ast_is_string_lit(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false

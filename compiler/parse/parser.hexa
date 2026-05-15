@@ -703,6 +703,28 @@ fn parse_primary() -> Expr {
         eat(TokenKind::RParen)
         return inner
     }
+    // Array literal `[e0, e1, ...]` / `[]` — children = element exprs.
+    // Mirrors legacy self/parser.hexa kind "Array". Consuming the whole
+    // bracket form HERE is what removes the per-element error-recovery
+    // HX2001 flood (`undefined name '[' / ','`) that drove the O(n²)
+    // self-compile RSS blowup on the ~7400-element embedded-atlas array.
+    if check_kind(TokenKind::LBracket) {
+        let lb = peek()
+        advance()
+        let mut elems = []
+        while !check_kind(TokenKind::RBracket) && !at_eof() {
+            elems.push(parse_expr())
+            if check_kind(TokenKind::Comma) { advance() }
+        }
+        eat(TokenKind::RBracket)
+        return Expr {
+            kind: ExprKind::ArrayLit,
+            span: lb.span,
+            text: "",
+            children: elems,
+            atlas_ref: empty_atlas()
+        }
+    }
     if check_kind(TokenKind::LBrace) {
         return parse_block_expr()
     }

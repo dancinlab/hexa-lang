@@ -186,6 +186,7 @@ fn _bind_is_ident_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -214,6 +215,7 @@ fn _bind_is_block_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -242,6 +244,7 @@ fn _is_for_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -270,6 +273,7 @@ fn _is_let_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -298,6 +302,7 @@ fn _bind_is_match_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -326,6 +331,7 @@ fn _is_field_kind(k: ExprKind) -> bool {
         ExprKind::Let -> false,
         ExprKind::Assign -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -355,6 +361,7 @@ fn _is_enum_path_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::Wildcard -> false
     }
@@ -362,6 +369,7 @@ fn _is_enum_path_kind(k: ExprKind) -> bool {
 
 fn _is_struct_lit_kind(k: ExprKind) -> bool {
     return match k {
+        ExprKind::ArrayLit -> true,
         ExprKind::StructLit -> true,
         ExprKind::LiteralInt -> false,
         ExprKind::LiteralFloat -> false,
@@ -411,6 +419,7 @@ fn _is_wildcard_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false
     }

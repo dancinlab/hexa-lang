@@ -160,6 +160,7 @@ fn _resolve_is_atlas_ref_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false

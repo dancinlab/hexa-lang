@@ -149,6 +149,7 @@ fn _citation_is_atlas_ref_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -229,6 +230,7 @@ fn _is_assign_kind(k: ExprKind) -> bool {
         ExprKind::Let -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -257,6 +259,7 @@ fn _citation_is_ident_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
@@ -285,6 +288,7 @@ fn _is_string_lit_kind(k: ExprKind) -> bool {
         ExprKind::Assign -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false
