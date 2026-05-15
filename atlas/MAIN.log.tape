@@ -1493,3 +1493,107 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+
+# ─── Deferred-work registry (잔여, as of cycle 032 · 2026-05-15) ───────
+
+@N deferred_registry := "atlas verdict system 잔여 작업 통합 registry" :: note [d=2026-05-15 active]
+  context <<~EOF
+    원 directive (hexa-lang binary built-in atlas 에 anima verdict 검증 기준
+    도입) 는 cycle 001-032 에 걸쳐 완성·견고화·문서화·self-verify 강화 완료.
+    핵심 검증축 전부 동작:
+      14-tier verdict · 9-domain cluster · 3-stage protocol (Stage 1 symbolic /
+      Stage 2 libm numerical / Stage 3 cross-meta) · falsifier ≥5 sha256-frozen
+      (18 batteries · 90 falsifiers) · governance carry (atlas/AGENTS.tape g1~g8
+      + g_self_verify + 2 · wilson g_verify_hexa_cli_only priority-1) ·
+      CI gate (verdict regression + ledger drift) · hexa CLI only.
+    Cumulative: 118/118 PASS · 99 🔵 (61 SUPPORTED-IDENTITY + 38 SUPPORTED-
+    FORMAL) + 1 🟠 AT-RISK + 18 falsifier-robust · 13 verifier modules.
+
+    아래는 의도적으로 deferred 한 잔여 — 모두 genuinely large/risky sprint
+    (autonomous-mode 부적합, hardcoded rung 추가 같은 busywork 아님). 별도
+    집중 세션 필요. 우선순위는 user directive 따름.
+  EOF
+  D1_anima_scale_mip <<~EOF
+    제목: anima-scale many-node MIP (IIT 3.0 big-Φ full system)
+    상태: 알고리즘 hexa-native 입증 완료 (cycle 031, n=3 genuine bipartition
+          lattice argmin). scale-up 만 잔여.
+    내용: anima V8 (HH/STDP/NMDA) 은 many-node 생물 TPM. MIP partition lattice
+          가 Bell(n) super-exponential (n=4:15, n=10:115975) + per-mechanism
+          cause/effect repertoire EMD over actual transition matrices (단순
+          severed-bit closed-form 아님). anima 가 PyPhi 1.2.0 (Python) 으로
+          수행한 영역.
+    carrier: s5_v8_bbio_at_risk_carry 🟠 (formal-Φ mismatch statement 유지)
+    난이도: large sprint — 실제 TPM 파서 + cause/effect repertoire +
+          earth-mover transport solver + Bell(n) partition enumerator.
+          hexa-native PyPhi-equivalent engine 신설.
+    blocker: 없음 (알고리즘 demonstrated). 순수 scale + engine generality 작업.
+  EOF
+  D2_strict_lint_stage9 <<~EOF
+    제목: true 컴파일러 strict-lint stage 9 (atlas-verdict-check, build-time)
+    상태: surrogate 형태 LANDED (cycle 024 test/atlas_verify_smoke.hexa,
+          test-harness 회귀 gate + cycle 032 ledger drift). build-time 미구현.
+    내용: verdict-bearing entry 가 verifier PASS 아니면 컴파일 HX-code 로 build
+          reject. self/strict_lint pipeline 의 stage 9 로 통합 (현재 8 stages).
+    난이도: risky — self/ 컴파일러 파이프라인 hook. strict-lint stage 추가는
+          전체 build 에 영향. 잘못되면 모든 .hexa 컴파일 깨짐.
+    blocker: self/strict_lint stage 추가 지점 파악 + HX-code 할당 + 회귀 test.
+          autonomous-mode 부적합 (build-break risk).
+  EOF
+  D3_dispatcher_rebuild <<~EOF
+    제목: hexa dispatcher binary rebuild → `hexa atlas-verify` 활성화
+    상태: verb source-wired 완료 (cycle 020 self/main.hexa::_absorbed_script +
+          help text). `hexa cc` (transpiler) rebuilt OK. dispatcher binary 미빌드.
+    내용: `hexa atlas-verify` 작동하려면 self/main.hexa → main.c → clang
+          (self-host stage2 fixpoint, `./hexa build self/main.hexa`). 현재
+          작동 CLI 는 `hexa run tool/atlas_verify.hexa` (wilson g_verify_hexa_
+          cli_only 충족, 118/118).
+    난이도: risky — self-host fixpoint. 실패 시 `hexa` 명령 자체 손상.
+    blocker: autonomous-mode 부적합 (binary-break risk). 정식 build cycle 또는
+          user 입회 하 진행 권장. 다음 정식 hexa binary rebuild 시 자동 활성화.
+  EOF
+  D4_log_append_automation <<~EOF
+    제목: atlas/MAIN.log.tape append automation (commit hook)
+    상태: 미구현 (cycle 마다 hand-written @A entry).
+    내용: g_arch_vs_log_split — log 는 append-only. commit hook 또는 hexa tool
+          (tool/atlas_cycle_append.hexa) 로 구조화된 @A cycle entry 자동 append
+          (trigger·scope·files·verifier_run_result·governance_check 필드 강제).
+    난이도: moderate — git hook 은 shared infra (.git/hooks, 신중). hexa tool
+          형태가 더 안전 (wilson g_verify_hexa_cli_only 와 일관).
+    blocker: 없음 (self-contained 가능). git-hook vs hexa-tool 설계 결정 필요.
+  EOF
+  D5_ubu_current_interp <<~EOF
+    제목: ubu-1/ubu-2 current hexa_interp build (원격 toolchain 확보)
+    상태: 조사 완료 (cycle 030). ubu-1/2 reachable (12c·31GB) but build/
+          hexa_interp = commit eb6578fc (atlas-verify work 전체 이전 ~30
+          commits) → current verifier silent no-op.
+    내용: 사용자 directive "진행중 자원활용은 ubu-1,ubu-2" 충족하려면 원격에
+          current hexa_interp 빌드 필요 = heavy build (12-core ubu 적합).
+    제약: 원격 ~/core/hexa-lang = 다른 사용자(aiden) dirty 작업트리 →
+          force-reset 금지 (work 손실 risk). 비침습 패턴: /tmp fresh clone +
+          git fetch origin main → interp 빌드 (bootstrap toolchain 필요).
+    난이도: moderate-large — interp bootstrap on shared host. C 소스 clang
+          빌드 경로 확인 필요 (hexa 없이 build 가능 시 안전).
+    blocker: feedback_resource_routing_ubu memory 저장됨. 로컬 HEXA_MEM_
+          UNLIMITED=1 이 현재 viable path. 원격 빌드는 별도 sprint.
+  EOF
+  D6_general_iit_engine <<~EOF
+    제목: 일반 n-node IIT 3.0 engine (per-system hardcode → reusable)
+    상태: 미구현. 현재 §5 BIO verifiers 는 per-system hardcoded
+          (COPY/NOT/SWAP/RING/IDENTITY). D1 의 prerequisite.
+    내용: TPM 입력 받는 generic IIT 3.0 함수 (n-node, arbitrary deterministic/
+          stochastic TPM, cause/effect repertoire, EMD, MIP). compiler/atlas/
+          symbolic/iit.hexa 신설. n=2,3,4 ring/identity 로 demonstrate.
+    난이도: large — D1 과 합쳐 진행 권장 (engine 일반화 = scale-up 의 토대).
+    blocker: 없음. 설계 sprint.
+  EOF
+  recommended_order <<~EOF
+    user-directive 우선. directive 부재 시 ROI 순:
+      1. D4 log-append automation (self-contained · per-cycle 수작업 제거 · 즉효)
+      2. D6 general IIT engine (D1 토대 · §5 hardcode 제거 · reusable)
+      3. D1 anima-scale MIP (D6 위에 · large but algorithm proven)
+      4. D5 ubu current-interp (resource directive 충족 · 원격 heavy build)
+      5. D3 dispatcher rebuild (정식 build cycle 권장 · autonomous 부적합)
+      6. D2 strict-lint stage 9 (highest risk · build pipeline · 신중)
+    D2·D3 는 build-break risk 로 autonomous-mode 부적합 — user 입회 권장.
+  EOF
+  note = "이 registry 는 cycle 032 시점 snapshot. 각 D 항목 진행 시 해당 cycle @A entry 에 cross-ref + 이 registry 의 상태 갱신은 새 @N (supersede ~>) 으로 — append-only 유지 (g_arch_vs_log_split)."
