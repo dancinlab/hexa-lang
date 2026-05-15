@@ -715,3 +715,33 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
   @> COMPILE-ONLY.tape
 
+@? loop_stage3_is_codegen_gated_not_diff := "stage-3 attempted: stage-1 .s does NOT assemble — gated on codegen-backend completion, NOT a byte-diff" :: anomaly [d=2026-05-16 active]
+  ~> loop_stage2_self_compile_clean
+  <- loop_stage2_self_compile_clean
+  finding <<~EOF
+    Executed loop_stage2_self_compile_clean's `next` (assemble
+    stage-1's .s → stage-2). RESULT: `clang -c -arch arm64
+    /tmp/s4_out.s` → rc=1, 3578 assembler errors. stage-3 is NOT
+    reachable as a byte-diff — the .s is not a linkable artifact.
+    This corrects the prior `next` (which assumed .s assembles):
+    measure-don't-predict surfaced a much larger real scope.
+  EOF
+  error_classes <<~EOF
+    3054 × `cmp x10, .LCstrN`           string `binop ==` emitted as
+            register-vs-label compare. ARM64 can't compare a label
+            literal; string equality must materialize the address
+            AND dispatch to a runtime str-eq, not pointer-cmp.
+     314 × `mov x2, #1392138852`        struct_lit field VAL: a
+            string's packed bytes emitted as a raw oversized
+            immediate (should be adrp+add of its .LCstr, like keys
+            — keys are ALSO wrong, `mov x1,.LCstrN`).
+     210 × `add x10, #0, #0 ; binop +`  binop operands never
+            materialized into registers — #0 placeholders survive
+            to emission (operand/regalloc model incomplete).
+  EOF
+  root_cause = "compiler/codegen/arm64_darwin.hexa has ZERO adrp/@PAGE/@PAGEOFF (grep count 0) — the backend has NO PC-relative address materialization at all; x86_64_linux.hexa has only 3 lea/rip refs. New backends are ~1200-1270 lines each vs the proven legacy self/codegen_c2.hexa 7195 lines (≈17%). The new compiler/codegen/* emit a STRUCTURAL SKELETON (struct_lit/array_lit/field/match-tag/binop SHAPES with placeholder operands), not correct machine code."
+  honest_state = "loop_stage2_self_compile_clean is REAL and significant: front-end + resolve + bind + types + lower run the full flattened compiler with ZERO diagnostics — that milestone stands. But 'stage-2 self-compile PASS' means the pipeline runs clean through codegen, NOT that the emitted asm is correct/linkable. stage-3 byte-equal is gated on a MAJOR codegen-backend completion (address materialization + operand register model + string/comparison runtime dispatch across arm64_darwin + x86_64_linux + thumbv7em), an order of magnitude larger than a byte-diff. Not a loop-tick patch — the integrity line forbids half-building a ~6 kLOC backend in a tick tail or fabricating a stage-3 result."
+  next = "Dedicated codegen-backend track (NOT a loop tick): port the proven self/codegen_c2.hexa operand/address/string-op model to compiler/codegen/arm64_darwin.hexa (primary host) — (1) adrp/@PAGE+@PAGEOFF .LCstr address materialization; (2) struct_lit key+val as address loads not immediates; (3) string `==`/`!=` → hexa_str_eq runtime dispatch; (4) binop operand→register materialization (kill #0 placeholders). Re-attempt assemble→stage-2→stage-3 byte-diff only AFTER `clang -c` rc=0. The 9-commit front-end/lowering closure (287670af..f288fc44) is preserved and unaffected."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
+  @> COMPILE-ONLY.tape
+
