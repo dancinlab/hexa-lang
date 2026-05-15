@@ -20,11 +20,21 @@ use "compiler/atlas/symbolic/vortex_math_verifier"
 use "compiler/atlas/symbolic/ftl_n6_constants"
 use "compiler/atlas/symbolic/perfect_number_engine"
 use "compiler/atlas/symbolic/congruence_chain_engine"
+use "compiler/atlas/symbolic/physics_constant_engine"
+use "compiler/atlas/symbolic/texas_sharpshooter"
+use "compiler/atlas/symbolic/ftl_tribunal"
+use "compiler/atlas/symbolic/sigma_phi_tau_uniqueness"
+use "compiler/atlas/symbolic/divisor_field_theory"
+use "compiler/atlas/symbolic/three_root_theorem"
+use "compiler/atlas/symbolic/convergence_cluster"
 
 fn _is_sub(a) -> bool {
     return a == "nstate" || a == "nstate-find" || a == "vortex" || a == "vortex-verdicts"
         || a == "n6" || a == "n6-table" || a == "perfect" || a == "perfect-bin"
         || a == "congruence" || a == "gamma0"
+        || a == "physics" || a == "texas" || a == "ftl" || a == "ftl-stats"
+        || a == "sigma-phi-tau" || a == "divisor-field" || a == "three-root"
+        || a == "converge"
         || a == "list" || a == "help" || a == "--help" || a == "-h"
 }
 
@@ -75,6 +85,14 @@ fn cmd_help() {
     println("  perfect-bin <a> <b> <op>   binary op over atoms (op 0..5)")
     println("  congruence <n>        factor · phi · mobius · sigma_1")
     println("  gamma0 <n>            Gamma0(n) index/cusps/genus + forcing chain")
+    println("  physics <value>       closest sigma/tau expr to a physical constant")
+    println("  texas                 Texas-Sharpshooter Bonferroni verdicts (8 disc.)")
+    println("  ftl <n>               FTL mechanism n (1..15): GR/QM/causality verdict")
+    println("  ftl-stats             FTL tribunal 15-mechanism verdict breakdown")
+    println("  sigma-phi-tau <n>     n=6-uniqueness theorem family check at n")
+    println("  divisor-field <n>     action P(n)=sigma-2n + S(n) combined action")
+    println("  three-root <n>        rad=n & sigma=n*phi & tau=phi^2 (n=6 unique)")
+    println("  converge              multi-domain convergence-cluster demo")
     println("  list                  list engines (this)")
 }
 
@@ -187,6 +205,106 @@ fn cmd_gamma0(rest) {
     println("  lcm·cusps == sigma_1 : " + to_string(fc.lcm_times_cusps_eq_sigma))
 }
 
+fn cmd_physics(rest) {
+    _need(rest, 2, "usage: hexa calc physics <value>")
+    let v = to_float(to_string(rest[1]))
+    let m = find_best_match(v)
+    println("physics value=" + to_string(v))
+    println("  expr   = " + m.expr + " = " + to_string(m.calc_value))
+    println("  error% = " + to_string(m.error_pct))
+}
+
+fn cmd_texas() {
+    let rs = run_all()
+    let mut i = 0
+    while i < len(rs) {
+        let r = rs[i]
+        println("  " + r.name)
+        println("    hits=" + to_string(r.hits) + " total=" + to_string(r.total)
+            + " p=" + to_string(r.p_single) + " bonf=" + to_string(r.p_bonf)
+            + " → " + r.verdict)
+        i = i + 1
+    }
+}
+
+fn cmd_ftl(rest) {
+    _need(rest, 2, "usage: hexa calc ftl <n=1..15>")
+    let n = to_int(to_string(rest[1]))
+    let m = ftl_mechanism(n)
+    if m.number == 0 {
+        println("error: no FTL mechanism #" + to_string(n) + " (1..15)")
+        return
+    }
+    println("ftl #" + to_string(m.number) + " " + m.name)
+    println("  GR        = " + m.gr)
+    println("  QM        = " + m.qm)
+    println("  causality = " + m.causality)
+    println("  VERDICT   = " + m.overall)
+}
+
+fn cmd_ftl_stats() {
+    let st = ftl_statistics()
+    println("ftl tribunal — " + to_string(st.total) + " mechanisms")
+    println("  ALLOWED     = " + to_string(st.allowed))
+    println("  CONDITIONAL = " + to_string(st.conditional))
+    println("  ILLUSORY    = " + to_string(st.illusory))
+    println("  FORBIDDEN   = " + to_string(st.forbidden))
+    println("  SPECULATIVE = " + to_string(st.speculative))
+}
+
+fn cmd_sigma_phi_tau(rest) {
+    _need(rest, 2, "usage: hexa calc sigma-phi-tau <n>")
+    let n = to_int(to_string(rest[1]))
+    println("sigma-phi-tau n=" + to_string(n))
+    println("  sigma=" + to_string(spt_sigma(n)) + " phi=" + to_string(spt_phi(n))
+        + " tau=" + to_string(spt_tau(n)))
+    println("  THM-A sigma=n*phi      : " + to_string(thm_a_holds(n)))
+    println("  THM-B tau+2=n          : " + to_string(thm_b_holds(n)))
+    println("  THM-C sigma(n+phi)=ntau2: " + to_string(thm_c_holds(n)))
+    println("  THM-D sigma*phi=n*tau  : " + to_string(thm_d_holds(n)))
+}
+
+fn cmd_divisor_field(rest) {
+    _need(rest, 2, "usage: hexa calc divisor-field <n>")
+    let n = to_int(to_string(rest[1]))
+    let a = compute_action(n)
+    println("divisor-field n=" + to_string(n))
+    println("  P(n)=sigma-2n = " + to_string(perfect_action(n))
+        + "  (class " + to_string(abundance_class(n)) + ": -1 def/0 perf/1 abund)")
+    println("  S(n) term1    = " + to_string(a.term1))
+    println("  S(n) term2    = " + to_string(a.term2))
+    println("  S(n)          = " + to_string(a.action))
+    println("  R(n)          = " + to_string(r_factor(n)))
+}
+
+fn cmd_three_root(rest) {
+    _need(rest, 2, "usage: hexa calc three-root <n>")
+    let n = to_int(to_string(rest[1]))
+    println("three-root n=" + to_string(n))
+    println("  A rad(n)=n       : " + to_string(cond_a_squarefree(n)))
+    println("  B sigma=n*phi    : " + to_string(cond_b_sigma_nphi(n)))
+    println("  C tau=phi^2      : " + to_string(cond_c_tau_phi2(n)))
+    println("  A&B&C (n=6 only) : " + to_string(three_root_holds(n)))
+}
+
+fn cmd_converge() {
+    // demo: ln(4/3)-style multi-domain convergence (3 independent domains).
+    let mut cs = new_cluster_set(0.001)
+    cs = cluster_add(cs, 1.0, 0)
+    cs = cluster_add(cs, 1.0005, 1)
+    cs = cluster_add(cs, 1.0003, 2)
+    cs = cluster_add(cs, 5.0, 0)
+    let cp = convergence_points(cs, 3)
+    println("converge demo (threshold 0.001)")
+    println("  clusters          = " + to_string(len(cs.clusters)))
+    println("  convergence pts@3 = " + to_string(len(cp)))
+    if len(cp) > 0 {
+        println("  center            = " + to_string(cp[0].center))
+        println("  indep domains     = " + to_string(independent_domains(cp[0])))
+        println("  score(t=1.0)      = " + to_string(convergence_score(cp[0], 1.0)))
+    }
+}
+
 fn main() {
     let a = _slice_args()
     if len(a) == 0 {
@@ -210,6 +328,14 @@ fn main() {
     else if sub == "perfect-bin" { cmd_perfect_bin(rest) }
     else if sub == "congruence" { cmd_congruence(rest) }
     else if sub == "gamma0" { cmd_gamma0(rest) }
+    else if sub == "physics" { cmd_physics(rest) }
+    else if sub == "texas" { cmd_texas() }
+    else if sub == "ftl" { cmd_ftl(rest) }
+    else if sub == "ftl-stats" { cmd_ftl_stats() }
+    else if sub == "sigma-phi-tau" { cmd_sigma_phi_tau(rest) }
+    else if sub == "divisor-field" { cmd_divisor_field(rest) }
+    else if sub == "three-root" { cmd_three_root(rest) }
+    else if sub == "converge" { cmd_converge() }
     else if sub == "list" || sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
     else {
         println("error: unknown engine: " + sub)

@@ -33,14 +33,32 @@
 | of which: numerology-risk post-hoc σ/τ fitters (source self-flagged) | ~30 |
 | of which: duplicate/superseded by a kept sibling | ~24 |
 | of which: pure metadata / CSV / display-only | ~89 |
-| **WAVE 1 executed this session** | **6 ported (5 PASS · 1 DEFERRED)** |
-| **§Backlog (prioritized PORT items not in Wave 1)** | **34** |
+| **WAVE 1 executed** | **6 ported (5 PASS · 1 DEFERRED)** |
+| **WAVE 2 executed this session** | **7 ported (7 PASS · 0 DEFERRED)** |
+| **§Backlog (prioritized PORT items remaining)** | **27** |
 
 Wave-1 PASS: `perfect_number_engine`, `nstate_calculator`,
 `vortex_math_verifier`, `ftl_n6_constants`, `congruence_chain_engine`.
-Wave-1 DEFERRED: `physics_constant_engine` (combinatorial expression
-generator — 3-fix budget hit on array-of-tuple idiom; backlog'd as a
-trimmed deterministic core).
+Wave-1 DEFERRED: `physics_constant_engine` → resolved in Wave 2.
+
+Wave-2 PASS (all smoke green): `physics_constant_engine` (#1),
+`texas_sharpshooter` (#3), `ftl_tribunal` (#6),
+`sigma_phi_tau_uniqueness` (#7 — the σ/φ/τ n=6-unique theorem family,
+closes absorption §D GAP #1), `divisor_field_theory` (#9 — closes
+absorption §D, action S(n)=0 ⟺ n∈{1,6} + classic P(n)=σ−2n perfect
+characterization), `three_root_theorem` (#8 — closes absorption §D,
+rad=n ∧ σ=nφ ∧ τ=φ² n=6-unique with closed Fermat-prime proof),
+`convergence_cluster` (#4). Items #2 (proof_engine) and #5 (dfs_engine /
+tesla_369_dfs) were assessed lower closed-form clarity (scattered hand-built
+ProofChain closures / delegation to an external `tecsrs` Rust engine
+respectively) and deferred to a later wave — they remain in §Backlog.
+
+Wave-2 architecture note: §Backlog #7 suggested *extending*
+`compiler/atlas/verify/modular.hexa`, but that file is a tightly-scoped
+T2-01 verdict verifier with its own `AtlasVerdict` contract; per the
+Wave-1 one-engine-one-file convention the family landed as a standalone
+`compiler/atlas/symbolic/sigma_phi_tau_uniqueness.hexa` (verify/* may
+`use` it for verdict-gating later).
 
 ---
 
@@ -129,7 +147,25 @@ verify_H_CX_/verify_new_major_hypotheses_* one-off hypothesis harnesses
 | vortex_math_verifier | `compiler/atlas/symbolic/vortex_math_verifier.hexa` | `test/vortex_math_verifier_smoke.hexa` | **PASS** |
 | ftl_n6_constants | `compiler/atlas/symbolic/ftl_n6_constants.hexa` | `test/ftl_n6_constants_smoke.hexa` | **PASS** |
 | congruence_chain_engine | `compiler/atlas/symbolic/congruence_chain_engine.hexa` | `test/congruence_chain_engine_smoke.hexa` | **PASS** |
-| physics_constant_engine | (deferred) | — | **DEFERRED** → §Backlog #1 |
+| physics_constant_engine | (deferred) | — | **DEFERRED** → resolved Wave 2 |
+
+---
+
+## §D2 Wave 2 execution log
+
+| Engine | hexa path | smoke test | Result |
+|--------|-----------|------------|--------|
+| physics_constant_engine | `compiler/atlas/symbolic/physics_constant_engine.hexa` | `test/physics_constant_engine_smoke.hexa` | **PASS** (21/21) |
+| texas_sharpshooter | `compiler/atlas/symbolic/texas_sharpshooter.hexa` | `test/texas_sharpshooter_smoke.hexa` | **PASS** (20/20) |
+| ftl_tribunal | `compiler/atlas/symbolic/ftl_tribunal.hexa` | `test/ftl_tribunal_smoke.hexa` | **PASS** (23/23) |
+| sigma_phi_tau_uniqueness | `compiler/atlas/symbolic/sigma_phi_tau_uniqueness.hexa` | `test/sigma_phi_tau_uniqueness_smoke.hexa` | **PASS** (24/24) |
+| divisor_field_theory | `compiler/atlas/symbolic/divisor_field_theory.hexa` | `test/divisor_field_theory_smoke.hexa` | **PASS** (19/19) |
+| three_root_theorem | `compiler/atlas/symbolic/three_root_theorem.hexa` | `test/three_root_theorem_smoke.hexa` | **PASS** (24/24) |
+| convergence_cluster | `compiler/atlas/symbolic/convergence_cluster.hexa` | `test/convergence_cluster_smoke.hexa` | **PASS** (15/15) |
+
+All 7 wired into `tool/calc_cli.hexa` (subcommands: `physics`, `texas`,
+`ftl`, `ftl-stats`, `sigma-phi-tau`, `divisor-field`, `three-root`,
+`converge`); `test/calc_cli_smoke.hexa` extended 13→26 checks, PASS.
 
 ---
 
@@ -137,28 +173,35 @@ verify_H_CX_/verify_new_major_hypotheses_* one-off hypothesis harnesses
 
 Priority order = (closed-form clarity × verdict-gating value), highest first.
 
-1. **physics_constant_engine** — trim to deterministic σ/τ derived-const table
-   + best-match-by-%err (drop the random texas-sharpshooter; that ports once
-   as #3). Target `symbolic/physics_constant_engine.hexa`.
+1. ~~**physics_constant_engine**~~ — **DONE Wave 2**
+   (`symbolic/physics_constant_engine.hexa`, deterministic core; the random
+   texas-sharpshooter ported separately as #3).
 2. **proof_engine** — ProofChain tier classifier (Tier0/1/2-3 from step-rigor
    + numeric closure). Target `verify/proof_tier.hexa`.
-3. **texas_sharpshooter (canonical)** — single Bonferroni multiple-comparison
-   p-value kernel. Consumers: texas_quantum, tesla_369_crossdomain,
-   perfect_number_engine. Target `symbolic/texas_sharpshooter.hexa`.
-4. **convergence_engine** — convergence-cluster (≥3-domain agreement) detector.
-   Target `symbolic/convergence_cluster.hexa`.
+   *(Wave-2 assessed: scattered hand-built ProofChain closures, lower
+   closed-form clarity — deferred to a later wave.)*
+3. ~~**texas_sharpshooter (canonical)**~~ — **DONE Wave 2**
+   (`symbolic/texas_sharpshooter.hexa`, Bonferroni + deterministic 1D/2D/3D
+   scans; the np.random Monte-Carlo half intentionally not ported — g1
+   deterministic-dispatch + anti-bloat).
+4. ~~**convergence_engine**~~ — **DONE Wave 2** (`symbolic/convergence_cluster
+   .hexa`, the ConvergenceCluster online-clustering + independent-domain
+   scoring kernel; domain-constant catalog plumbing left to callers).
 5. **dfs_engine + tesla_369_dfs** — bounded-depth DFS expression search kernel.
    Target `symbolic/dfs_search.hexa`.
-6. **ftl_tribunal** — 15-mechanism × 3-axis FTL verdict table.
-   Target `symbolic/ftl_tribunal.hexa`.
-7. **σ/φ/τ n=6-uniqueness theorem family** — combined verifier for
-   verify_sigma_phi_n / verify_tau_plus_2 / verify_sigma_n_phi_tau /
-   sigma_phi_ntau_proof / n6_uniqueness_tester. Closes absorption-manifest
-   §D GAP #1. Target: extend `compiler/atlas/verify/modular.hexa`.
-8. **prove_3root_theorem** — rad=n ∧ σ=nφ ∧ τ=φ² simultaneous uniqueness.
-   Target `symbolic/three_root_theorem.hexa`.
-9. **divisor_field_theory** — Action S(n)=σ(n)−2n, S(n)=0 ⟺ perfect.
-   Target `symbolic/divisor_field_theory.hexa`.
+   *(Wave-2 assessed: the Python delegates the actual search to an external
+   `tecsrs` Rust engine — no closed-form kernel in the .py itself; deferred.)*
+6. ~~**ftl_tribunal**~~ — **DONE Wave 2** (`symbolic/ftl_tribunal.hexa`,
+   fixed 15×3 verdict table + statistics; long prose explanations not ported).
+7. ~~**σ/φ/τ n=6-uniqueness theorem family**~~ — **DONE Wave 2**
+   (`symbolic/sigma_phi_tau_uniqueness.hexa` — standalone engine, not a
+   modular.hexa extension; closes absorption-manifest §D GAP #1).
+8. ~~**prove_3root_theorem**~~ — **DONE Wave 2**
+   (`symbolic/three_root_theorem.hexa`, with the closed-form Fermat-prime
+   proof kernel; closes absorption §D).
+9. ~~**divisor_field_theory**~~ — **DONE Wave 2**
+   (`symbolic/divisor_field_theory.hexa`, classic P(n)=σ−2n perfect
+   characterization + the source's combined S(n) action; closes absorption §D).
 10. **catalan** → add to `stdlib/core/math.hexa` (Cₙ=binomial(2n,n)/(n+1)).
 11. **binomial** → add `binomial(n,k)` to `stdlib/core/math.hexa`.
 12. **partition_count** → add integer-partition count to `stdlib/core/math.hexa`.

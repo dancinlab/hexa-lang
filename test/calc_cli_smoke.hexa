@@ -23,6 +23,13 @@ import "compiler/atlas/symbolic/vortex_math_verifier.hexa"
 import "compiler/atlas/symbolic/ftl_n6_constants.hexa"
 import "compiler/atlas/symbolic/perfect_number_engine.hexa"
 import "compiler/atlas/symbolic/congruence_chain_engine.hexa"
+import "compiler/atlas/symbolic/physics_constant_engine.hexa"
+import "compiler/atlas/symbolic/texas_sharpshooter.hexa"
+import "compiler/atlas/symbolic/ftl_tribunal.hexa"
+import "compiler/atlas/symbolic/sigma_phi_tau_uniqueness.hexa"
+import "compiler/atlas/symbolic/divisor_field_theory.hexa"
+import "compiler/atlas/symbolic/three_root_theorem.hexa"
+import "compiler/atlas/symbolic/convergence_cluster.hexa"
 
 let mut PASS = 0
 let mut FAIL = 0
@@ -69,6 +76,42 @@ check("euler_phi(6) == 2", euler_phi(6) == 2)
 check("mobius(6) == 1", mobius(6) == 1)
 check("sigma_k(6,1) == 12", sigma_k(6, 1) == 12)
 check("isotropy_lcm(1) == 6 (SL(2,Z) self-ref)", isotropy_lcm(1) == 6)
+
+// ── Wave-2 engines (one representative value each) ──────────────────────
+
+// physics engine (hexa calc physics 137.036) — exact base const "137"
+let pm = find_best_match(137.0)
+check("physics find_best_match(137) exact (err% < 1e-6)", pm.error_pct < 0.000001)
+
+// texas engine (hexa calc texas) — Bonferroni kernel, fixed values
+check("texas bonferroni_p(0.001,8) == 0.008", approx(bonferroni_p(0.001, 8), 0.008, 0.0001))
+check("texas verdict(0.008) == structural", verdict(0.008) == "structural")
+
+// ftl tribunal (hexa calc ftl 2 / ftl-stats)
+check("ftl mechanism #2 → CONDITIONAL", ftl_mechanism(2).overall == "CONDITIONAL")
+check("ftl tribunal has 15 mechanisms", len(ftl_mechanisms()) == 15)
+
+// sigma-phi-tau family (hexa calc sigma-phi-tau 6)
+check("THM-D σφ=nτ holds at n=6", thm_d_holds(6))
+check("THM-B τ+2=n holds only at n=6 (fails n=7)", thm_b_holds(6) && !thm_b_holds(7))
+
+// divisor-field (hexa calc divisor-field 6) — S(6)=0, P(6)=0 (perfect)
+check("divisor_field_action(6) == 0", divisor_field_action(6) == 0)
+check("perfect_action(6) == 0 (6 is perfect)", perfect_action(6) == 0)
+
+// three-root (hexa calc three-root 6) — A∧B∧C unique at n=6
+check("three_root_holds(6) == true", three_root_holds(6))
+check("three_root NOT at n=12", !three_root_holds(12))
+
+// converge (hexa calc converge) — 3-domain convergence point
+let mut ccs = new_cluster_set(0.001)
+ccs = cluster_add(ccs, 1.0, 0)
+ccs = cluster_add(ccs, 1.0005, 1)
+ccs = cluster_add(ccs, 1.0003, 2)
+check("converge: 3 independent domains in cluster0",
+      independent_domains(ccs.clusters[0]) == 3)
+check("converge: convergence_points(min=3) == 1",
+      len(convergence_points(ccs, 3)) == 1)
 
 println("═══════════════════════════════════════════════════════════")
 println("  calc_cli smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
