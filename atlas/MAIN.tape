@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-2-cycle-008-stage2-libm-LANDED" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-2-cycle-015-LANDED-cumulative-60" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,17 +39,28 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2 Stage 1 + Stage 2 libm (cycle 001-008): 37/37 PASS · 37 entries 🔵 closed (31 SUPPORTED-IDENTITY + 6 SUPPORTED-FORMAL).
+    Cumulative Phase 2 Stage 1 + Stage 2 libm (cycle 001-015): 60/60 PASS · 60 entries 🔵 closed (31 SUPPORTED-IDENTITY + 29 SUPPORTED-FORMAL).
 
-    cycle 008 progress (Stage 2 libm-backed transcendental closure):
-      §2 MATH +3 (s2_basel_partial_sum · s2_alternating_harmonic_ln2 · s2_ln_17_approximate)
-      §3 PHYS +1 (s3_onsager_tc · s3_ising_critical upgrade 🟡 → 🔵)
-      §10 BRIDGES +2 (s10_music_ln_4_3 · s10_cross_island_identity · s10_music_intervals 🟡 PARTIAL → 🔵 fully closed)
-      Bonus: s2_basel_zeta upgrade 🟡 → 🔵 SUPPORTED-FORMAL via partial sum
+    cycle 008-015 progress (Stage 2 libm-backed transcendental closure, +29 entries cumulative):
 
-    libm primitives leveraged (already in runtime per stdlib/core/math/float.hexa header): sqrt · log · exp · pow.
+    cycle 008 (+6): Basel ζ(2) partial sum · alternating harmonic ln(2) · ln(17) approximate · Onsager T_c · cross-island identity · music ln(4/3)
+    cycle 009 (+3): Γ(1/6)·Γ(5/6)/Γ(1/2)²=σ₋₁(6)=2 · four-island bridge approximate · transcendental wall trivial-only
+    cycle 010 (+2): Gauss multiplication n=6 · e continued fraction convergents
+    cycle 011 (+2): cross-island approximate (3^(1/6)≈ζ(3) · 5/6+1/e≈ζ(3) · ln(137)·ln(4/3)≈√2) · Bekenstein dimensional
+    cycle 012-013 (+3): modular dim formula · D×P gamma α=2 · modular σ(6)=12 ubiquity (j-invariant 1728=12³ + Dedekind η^24 + Δ weight 12)
+    cycle 014 (+3): Kuramoto K_c=√(8/π) · holographic N_dof · AdS/CFT d_bulk=d_boundary+1
+    cycle 015 (+10): BKT T_BKT=πJ/2 · Hopf r=√μ · Lotka-Volterra fixed (γ/δ,α/β) · RG Wilson-Fisher g*=16π²ε/3 · QHO E_n=ℏω(n+1/2) · Ginzburg-Landau φ²=-a/(2b) · Planck ℓ_P=√(ℏG/c³) · Heisenberg Δx·Δp≥ℏ/2 · Hawking S=A/4 · Schwarzschild r_s=2GM/c²
+
+    cycle 008-015 의 모든 신규 verifier 는 compiler/atlas/verify/transcendental.hexa 에 모임 (29 verifiers).
+    cycle 015 의 anima §3 PHYS + §6 COSMO carry batch (10 entries) 가 hexa-native libm 으로 anima carry 흡수.
+
+    libm primitives leveraged (already in runtime per stdlib/core/math/float.hexa header): sqrt · log · exp · pow · lgamma.
     Note: stdlib/core/math/float.hexa::tau() (returns 2π) shadows stdlib/core/math.hexa::tau(n) (divisor count) —
     transcendental.hexa avoids float.hexa import, uses libm builtins + inline _pi_const().
+
+    wilson governance (2026-05-15): wilson 의 plugins/governance/main.hexa 첫 번째 principle 로
+    `verification-via-hexa-cli-only` 등록 — anima INDEX + atlas verdict system carry. 모든 검증
+    process 가 hexa CLI (`hexa run tool/atlas_verify.hexa`) 통해서만 진행하도록 wilson-level governance 강제.
 
     Domain distribution (anchor seed):
       §1 N6-FOUNDATION: 5 explicit (100% 🔵 closed)
@@ -756,7 +767,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 37
+  phase_2_cumulative_count = 60
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 
