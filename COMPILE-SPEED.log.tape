@@ -354,15 +354,51 @@
     Compile is one-time on source change; every other invocation is bare exec.
   EOF
   known_limits <<~EOF
-    - Binary cache invalidation keys only the entrypoint .hexa file. Imports
-      (e.g. `import x.hexa`) are NOT in the hash — modifying an imported file
-      doesn't invalidate the cached binary. Workaround: `rm -rf ~/.hexa-cache`
-      forces full rebuild. Proper fix: walk imports + hash transitively.
     - Compile errors during cold build still write nothing to cache (clang exit
       code surfaces immediately), so a failing source doesn't poison the cache.
+    - (Resolved 2026-05-15 — see @phase_1_3_a_deep_hash) Transitive import hash
+      now walks `import "X"` / `from "X" import …` so editing an imported file
+      invalidates the cached binary.
   EOF
   ux <<~EOF
     Backward-compatible: `hexa-fast <src> <out>` still compiles to a binary.
     New: `hexa-fast run <src> [args...]` compiles (if needed) + execs.
     Both share the same runtime.o cache.
   EOF
+
+# ─── 2026-05-15  PHASE 1.3.A.2 — transitive import hash + `hexa-run` shortcut ─
+
+@A phase_1_3_a_deep_hash := "deep_hash + hexa-run symlink — correctness + UX" :: artifact [d=2026-05-15 ok]
+  step = "Close the cache-key correctness gap noted at @phase_1_3_a_run known_limits: imports were not in the hash, so edits to imported files left the cached binary stale. Add BFS-based transitive sha256 walk + `hexa-run` symlink that auto-implies `run` mode."
+  artifacts <<~EOF
+    bin/hexa-fast      adds deep_hash() function + uses it for SRC_SHA
+                       detects $0 = hexa-run → auto-prepends `run` arg
+    bin/hexa-run       symlink → hexa-fast
+  EOF
+  deep_hash_algorithm <<~EOF
+    BFS over the import graph with a visited-set guard against cycles:
+      grep `import "X"` / `from "X" import …` from each file
+      Resolve X by trying:
+        <src_dir>/X            (relative)
+        <REPO_ROOT>/X           (repo-root)
+        <REPO_ROOT>/self/X      (self-prefix fallback)
+      Hash every resolved file; record `UNRESOLVED:X` literal for misses so
+      missing/moved imports still invalidate the cache.
+      Final cache key = sha256(concat(per-file hashes + UNRESOLVED markers))
+  EOF
+  invalidation_proof <<~EOF
+    Test:  /tmp/dh-proj/main.hexa imports /tmp/dh-proj/lib.hexa.
+    Run `hexa-fast run main.hexa` (with `bash -x`) twice with lib content edits.
+      lib=v1 →  BIN=/tmp/cache/bin-de4e2194-c20dfad9f4501cc9-16428280
+      lib=v2 →  BIN=/tmp/cache/bin-de4e2194-9785a93d743e0faa-16428280  (different)
+      lib=v1 →  BIN=/tmp/cache/bin-de4e2194-c20dfad9f4501cc9-16428280  (matches first)
+    Editing lib.hexa changes the cached BIN path → correct invalidation.
+  EOF
+  overhead <<~EOF
+    Cost vs no-deep-hash run-mode warm path:
+      before:  real 0.47 s   (per @phase_1_3_a_run on fib_rec)
+      after:   real 0.56 s   (avg of 2 warm runs, deep_hash adds ~90 ms)
+    Net vs baseline (full recompile per cycle): still ≈ 1.9× faster per warm cycle.
+    Trade: correctness > 90 ms. No silent-stale-binary class of bug.
+  EOF
+  ux_addition = "`hexa-run <src> [args...]` is now a single-word command (no `run` keyword needed) when invoked via the symlink. Drop-in for users who want a shorter daily command."

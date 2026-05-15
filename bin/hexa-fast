@@ -10,8 +10,10 @@
 # Speed: 4.4–7.9× user-time vs default `hexa-cc + clang` across bench/* (avg 5.7×).
 #        See COMPILE-SPEED.log.tape @bench_sample_coverage (commit 8c29d75f).
 #
-# Cache:  ~/.hexa-cache/runtime-<sha256(runtime.c)>.o  +  bin-<sha256(src)>
-#         keyed by content; rebuilt on source change. HEXA_CACHE_DIR overrides.
+# Cache:  ~/.hexa-cache/runtime-<sha256(runtime.c)>.o
+#         ~/.hexa-cache/bin-<rt><deep-sha(src+imports)><flags>
+#         deep-sha walks `import "..."` / `from "..." import ...` transitively
+#         so editing an imported file invalidates the cached binary.
 # Flags:  HEXA_FAST_CFLAGS (default -O0)
 
 set -euo pipefail
@@ -33,6 +35,11 @@ EOF
 }
 
 [ $# -ge 1 ] || usage
+
+# When invoked as `hexa-run`, default to `run` mode (no need to type `run` arg).
+case "$(basename "$0")" in
+    hexa-run) set -- run "$@" ;;
+esac
 
 HEXA_V2="$REPO_ROOT/self/native/hexa_v2"
 RUNTIME_C="$REPO_ROOT/self/runtime.c"
@@ -61,6 +68,42 @@ build() {
     rm -f "$TMP_C" "$TMP_C.bak"
 }
 
+# Transitive sha256 over SRC + all reachable imports.
+# Imports matched: `import "X"` and `from "X" import …` (with optional `as Y`).
+# Resolution heuristic: try <src_dir>/X, then <REPO_ROOT>/X, then
+# <REPO_ROOT>/self/X. Unresolved paths are hashed as literals so missing/moved
+# imports still invalidate. BFS with visited-set guard against cycles.
+deep_hash() {
+    local entry=$1
+    local seen=() queue=("$entry") agg=""
+    while [ ${#queue[@]} -gt 0 ]; do
+        local cur="${queue[0]}"
+        queue=("${queue[@]:1}")
+        local s skip=0
+        for s in "${seen[@]:-}"; do [ "$s" = "$cur" ] && skip=1 && break; done
+        [ $skip -eq 1 ] && continue
+        seen+=("$cur")
+        agg="$agg$(shasum -a 256 "$cur" 2>/dev/null | awk '{print $1}')"
+        local imp target dir
+        dir="$(dirname "$cur")"
+        while IFS= read -r imp; do
+            [ -z "$imp" ] && continue
+            target=""
+            if   [ -f "$dir/$imp" ]; then              target="$dir/$imp"
+            elif [ -f "$REPO_ROOT/$imp" ]; then        target="$REPO_ROOT/$imp"
+            elif [ -f "$REPO_ROOT/self/$imp" ]; then   target="$REPO_ROOT/self/$imp"
+            fi
+            if [ -n "$target" ]; then
+                queue+=("$target")
+            else
+                agg="$agg UNRESOLVED:$imp"
+            fi
+        done < <(grep -hE '^[[:space:]]*(import|from)[[:space:]]+"[^"]+"' "$cur" 2>/dev/null \
+                  | sed -E 's/^[[:space:]]*(import|from)[[:space:]]+"([^"]+)".*/\2/')
+    done
+    printf '%s' "$agg" | shasum -a 256 | awk '{print $1}'
+}
+
 case ${1:-} in
     run)
         shift
@@ -69,7 +112,7 @@ case ${1:-} in
         [ -f "$SRC" ] || { echo "hexa-fast: no such file: $SRC" >&2; exit 1; }
         # Binary cache: keyed by sha256(src) + sha256(runtime.c) + CFLAGS so any
         # change to src OR runtime OR flags forces a rebuild.
-        SRC_SHA=$(shasum -a 256 "$SRC" | awk '{print $1}')
+        SRC_SHA=$(deep_hash "$SRC")
         FLAGS_SHA=$(printf '%s' "$CFLAGS" | shasum -a 256 | awk '{print $1}')
         BIN="$CACHE_DIR/bin-${RT_SHA:0:8}-${SRC_SHA:0:16}-${FLAGS_SHA:0:8}"
         if [ ! -x "$BIN" ]; then
