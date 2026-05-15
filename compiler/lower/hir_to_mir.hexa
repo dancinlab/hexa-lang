@@ -1187,6 +1187,38 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx2, _local_op(dst.id))
     }
 
+    // ── array_lit: [e0, e1, ...] → STMT_ASSIGN op="array_lit" args=[elems]
+    //
+    // Direct mirror of struct_lit minus the field_lit unwrap (array
+    // elements are plain child exprs, no field names). codegen lowers
+    // op="array_lit" to a hexa_array_new + per-element hexa_array_push
+    // sequence. Element count is grammar-capped at 1024 (parser HX0013
+    // truncates over-cap literals to zero children), so this loop is
+    // O(n) bounded — the compile-path O(n²) is structurally impossible.
+    if k == "array_lit" {
+        let mut ctx2 = ctx
+        let mut elem_ops: [Operand] = []
+        let mut i = 0
+        while i < len(e.children) {
+            let r = _lower_hexpr(ctx2, e.children[i])
+            ctx2 = r.ctx
+            elem_ops.push(r.operand)
+            i = i + 1
+        }
+        ctx2 = _fresh_local(ctx2, e.typ, "array")
+        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let s = Stmt {
+            kind: STMT_ASSIGN,
+            dst: dst,
+            op: "array_lit",
+            args: elem_ops,
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, s)
+        return _value(ctx2, _local_op(dst.id))
+    }
+
     // ── enum_path → constructor (constant tag + lowered payload) ─
     //
     // Stage1 Gap 14 (idiom 1 producer side): variant construction.
