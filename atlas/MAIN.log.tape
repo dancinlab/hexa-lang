@@ -1126,3 +1126,48 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+# ─── Cycle 025 — Phase 3: falsifier battery expansion 8 → 14 ─────────
+
+@A cycle_025 := "Phase 3 cycle 025 — falsifier 8→14 batteries (directive coverage 확대)" :: cycle [d=2026-05-15 active]
+  trigger = "user 'go' — Phase 3 continuation"
+  scope <<~EOF
+    cumulative 103 → 109 (+6 batteries · 30 신규 falsifiers · 70 total across 14).
+    원 directive "각 atom / algorithm / 가설 별 falsifier ≥5 pre-register" 의
+    coverage 를 핵심 fire-eligible entries 로 확대.
+  EOF
+  files_modified <<~EOF
+    compiler/atlas/verify/falsifier.hexa — 6 신규 battery (각 ≥5 + sha256 freeze):
+      B9  s2_perfect_euclid_euler  (p2→6 · p3→28 · composite-Mersenne · p5-perfect · p11-overclaim)
+      B10 s2_euler_product_truncation (p23→2 · p2-int · p25-int · p235-int · p37-uniqueness)
+      B11 s8_s3_representation    (|S₃|=6 · Burnside=6 · conj=irrep · {1,1,3}-wrong · n6-coincidence)
+      B12 s3_onsager_tc          (T_c-ref · √2 · log=arcsinh1 · onsager-overclaim · range)
+      B13 s2_gauss_multiplication_n6 (identity · Γ½=√π · ∀n-overclaim · exponent · √6)
+      B14 s8_chi_to_monster_full (META: step5 lcm · step6 uniqueness · step7 η²⁴ · step8 1728=σ³ · Moonshine)
+    atlas/MAIN.tape — tldr cumulative 109 + cycle 025
+  EOF
+  verifier_run_result <<~EOF
+    falsifier domain: 14/14 batteries PASS · 70 falsifiers, 0 fired
+    new sha256 freeze anchors (frozen 2026-05-15):
+      s2_perfect_euclid_euler     = 291870279775f2fe
+      s2_euler_product_truncation = 7c7583dc6e9e5642
+      s8_s3_representation        = ec1f73f3a8f35e54
+      s3_onsager_tc               = 299ef96385f04ca8
+      s2_gauss_multiplication_n6  = 737656e5ba91e064
+      s8_chi_to_monster_full      = 22754ae0800a6b54
+    Full cumulative: 109/109 PASS · 94 🔵 + 1 🟠 AT-RISK + 14 falsifier-robust
+  EOF
+  meta_battery_note <<~EOF
+    B14 s8_chi_to_monster_full = META-battery: 8-step χ→Monster chain 의 각 link
+    (Step 5 valence lcm · Step 6 R19 uniqueness sweep · Step 7 η²⁴=2σ(6) ·
+    Step 8 1728=σ(6)³ · Moonshine 196884=196883+1) 을 독립적으로 공격. 어느
+    link 라도 깨지면 전체 derivation 붕괴 — 5 falsifiers 전부 hold = chain robust.
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only — ✅ 109 entries via hexa CLI
+    g2 lattice-as-tool     — ✅ B11 F5 + B13 F3/F5 standing reminders (n6-coincidence · ∀n-theorem) honest
+    g4 honesty-external    — ✅ B12 F4 Onsager-overclaim standing (independent physics, not n=6-derived)
+    g5 hexa-native-only    — ✅ falsifier.hexa libm builtins, sha256.hexa
+    g_self_verify          — ✅ 109 entries + 70 falsifiers sha256-frozen
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+

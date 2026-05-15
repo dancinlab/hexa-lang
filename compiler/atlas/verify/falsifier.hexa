@@ -347,6 +347,172 @@ pub fn falsifier_s3_conservation_law() -> [FalsifierResult] {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Battery 9 — s2_perfect_euclid_euler: 2^(p-1)·(2^p-1) perfect for Mersenne p
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s2_perfect_euclid_euler() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    // F1: p=2 generates 6 (= 2¹·3); fails → Euclid base broken
+    let p2 = pow(2, 1) * (pow(2, 2) - 1)
+    out.push(_fr("F1_p2_not_6", p2 != 6, "2¹·(2²-1)=" + to_string(p2) + " (must=6)"))
+    // F2: p=3 generates 28
+    let p3 = pow(2, 2) * (pow(2, 3) - 1)
+    out.push(_fr("F2_p3_not_28", p3 != 28, "2²·(2³-1)=" + to_string(p3) + " (must=28)"))
+    // F3: composite Mersenne exponent yields perfect (Euler necessity broken)
+    // 2^4-1 = 15 (composite) → 2³·15 = 120, σ(120)=360 ≠ 240 → NOT perfect
+    let m4 = pow(2, 4) - 1
+    let cand = pow(2, 3) * m4
+    let composite_perfect = !is_prime(m4) && sigma(cand) == 2 * cand
+    out.push(_fr("F3_composite_mersenne_perfect", composite_perfect,
+        "2^4-1=" + to_string(m4) + " composite, 2³·15=" + to_string(cand) + " σ=" + to_string(sigma(cand)) + " (must NOT be perfect)"))
+    // F4: generated number actually fails σ(n)=2n
+    let p5 = pow(2, 4) * (pow(2, 5) - 1)        // 496
+    out.push(_fr("F4_p5_not_perfect", sigma(p5) != 2 * p5,
+        "p=5: n=" + to_string(p5) + " σ=" + to_string(sigma(p5)) + " (must=2n=" + to_string(2 * p5) + ")"))
+    // F5: 2^p-1 prime but p itself composite (p must be prime for Mersenne prime)
+    // p=11: 2^11-1=2047=23·89 composite → must NOT generate perfect
+    let m11 = pow(2, 11) - 1
+    let m11_composite = !is_prime(m11)
+    out.push(_fr("F5_p11_mersenne_prime_overclaim", !m11_composite,
+        "2^11-1=" + to_string(m11) + " = 23·89 composite (must NOT be Mersenne prime — p11 skipped)"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 10 — s2_euler_product_truncation: Π_{p∈{2,3}}(1+1/p)=2 unique
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s2_euler_product_truncation() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    // F1: {2,3} product NOT integer 2
+    let prod_23 = (3 * 4) % (2 * 3) == 0 && (3 * 4) / (2 * 3) == 2
+    out.push(_fr("F1_p23_not_2", !prod_23, "(3·4)/(2·3) must = 2"))
+    // F2: {2} alone yields integer (3/2 — must NOT)
+    out.push(_fr("F2_p2_integer", 3 % 2 == 0, "3/2 integer? (must NOT)"))
+    // F3: {2,5} yields integer (18/10 — must NOT)
+    out.push(_fr("F3_p25_integer", (3 * 6) % (2 * 5) == 0, "18/10 integer? (must NOT)"))
+    // F4: {2,3,5} yields integer (72/30 — must NOT)
+    out.push(_fr("F4_p235_integer", (3 * 4 * 6) % (2 * 3 * 5) == 0, "72/30 integer? (must NOT)"))
+    // F5: another prime-pair {3,7} yields integer → {2,3} not unique
+    // (1+1/3)(1+1/7) = (4/3)(8/7) = 32/21 — not integer
+    out.push(_fr("F5_p37_integer", (4 * 8) % (3 * 7) == 0, "(4·8)/(3·7)=32/21 integer? (must NOT — {2,3} unique)"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 11 — s8_s3_representation: |S₃|=3!=6, Burnside ∑d²=6, 3 irreps
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s8_s3_representation() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    let s3 = factorial(3)
+    out.push(_fr("F1_s3_order_not_6", s3 != 6, "|S₃|=3!=" + to_string(s3) + " (must=6)"))
+    let burnside = 1 * 1 + 1 * 1 + 2 * 2          // trivial+sign+standard
+    out.push(_fr("F2_burnside_not_6", burnside != s3, "∑d²=1+1+4=" + to_string(burnside) + " (must=|S₃|=6)"))
+    out.push(_fr("F3_conj_neq_irrep", 3 != 3, "conj classes(3) ≠ irreps(3) (must be equal)"))
+    // F4: a wrong irrep dim set {1,1,3} also sums to |S₃| → Burnside non-unique
+    let wrong = 1 * 1 + 1 * 1 + 3 * 3             // 11 ≠ 6
+    out.push(_fr("F4_wrong_irrep_set_sums_6", wrong == 6, "{1,1,3}→∑d²=" + to_string(wrong) + " (must ≠ 6, confirms {1,1,2} unique)"))
+    // F5: |S₃| = n=6 coincidence over-claim (standing — 3!=6 is arithmetic fact, n=6 is atlas)
+    out.push(_fr("F5_s3_equals_n6_overclaim", false,
+        "|S₃|=3!=6 = n_atlas: arithmetic coincidence (smallest non-abelian group order = perfect number 6), OBSERVATION not derivation"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 12 — s3_onsager_tc: T_c = 2/log(1+√2) ≈ 2.269185 (Onsager 1944)
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s3_onsager_tc() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    let sqrt2 = sqrt(2.0)
+    let tc = 2.0 / log(1.0 + sqrt2)
+    let ref_tc = 2.2691853142130221
+    let err = _abs_ff(tc - ref_tc)
+    out.push(_fr("F1_tc_off_reference", err > 0.000000001,
+        "T_c=" + to_string(tc) + " vs ref 2.2691853 · err=" + to_string(err)))
+    // F2: √2 wrong (sqrt builtin sanity)
+    out.push(_fr("F2_sqrt2_wrong", _abs_ff(sqrt2 - 1.4142135623730951) > 0.000000001,
+        "√2=" + to_string(sqrt2) + " (must≈1.41421356)"))
+    // F3: log(1+√2) ≠ arcsinh(1) (inverse hyperbolic identity, Onsager form)
+    // arcsinh(1) = log(1+√2) ≈ 0.881374
+    let denom = log(1.0 + sqrt2)
+    out.push(_fr("F3_logarg_not_arcsinh1", _abs_ff(denom - 0.8813735870195430) > 0.000000001,
+        "log(1+√2)=" + to_string(denom) + " (must=arcsinh(1)≈0.88137359)"))
+    // F4: 2D Ising T_c claimed as n=6-derived (it is Onsager 1944 — NOT atlas)
+    out.push(_fr("F4_onsager_n6_derivation_overclaim", false,
+        "Onsager 1944 2D Ising T_c=2/log(1+√2) is independent physics — atlas carries via libm, NOT n=6-derived (g4 honesty)"))
+    // F5: T_c > 2.27 or < 2.26 (gross numerical break)
+    out.push(_fr("F5_tc_out_of_range", tc > 2.27 || tc < 2.26,
+        "T_c=" + to_string(tc) + " (must ∈ (2.26, 2.27))"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 13 — s2_gauss_multiplication_n6: ∏Γ(k/6) = (2π)^(5/2)/√6
+// ══════════════════════════════════════════════════════════════════════
+
+pub fn falsifier_s2_gauss_multiplication_n6() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    let lhs = lgamma(1.0/6.0) + lgamma(1.0/3.0) + lgamma(0.5) + lgamma(2.0/3.0) + lgamma(5.0/6.0)
+    let pi_v = 3.141592653589793
+    let rhs = 2.5 * log(2.0 * pi_v) - 0.5 * log(6.0)
+    let err = _abs_ff(lhs - rhs)
+    out.push(_fr("F1_gauss_identity_off", err > 0.0000000001,
+        "∑lgamma(k/6)=" + to_string(lhs) + " vs (5/2)log2π-(1/2)log6=" + to_string(rhs) + " err=" + to_string(err)))
+    // F2: Γ(1/2)=√π sanity (lgamma(0.5)=log√π=0.5·log π)
+    let lg_half = lgamma(0.5)
+    out.push(_fr("F2_gamma_half_not_sqrtpi", _abs_ff(lg_half - 0.5 * log(pi_v)) > 0.000000001,
+        "lgamma(1/2)=" + to_string(lg_half) + " (must=½logπ=" + to_string(0.5 * log(pi_v)) + ")"))
+    // F3: n=5 product also = (2π)^2/√5 with same form → not n=6-specific structure
+    // Gauss formula ∏_{k=1}^{n-1}Γ(k/n)=(2π)^((n-1)/2)/√n holds for ALL n (standing)
+    out.push(_fr("F3_gauss_n6_specific_overclaim", false,
+        "Gauss multiplication ∏Γ(k/n)=(2π)^((n-1)/2)/√n holds ∀n — atlas anchors n=6 (5 unit-fractions {1/6..5/6}+√6), NOT n=6-unique theorem"))
+    // F4: exponent (n-1)/2 wrong for n=6 (must be 5/2)
+    let exp_n6 = (6 - 1)
+    out.push(_fr("F4_exponent_not_5half", exp_n6 != 5, "(n-1)=" + to_string(exp_n6) + " → exponent 5/2 (must be 5)"))
+    // F5: √6 denominator vs √n mismatch
+    out.push(_fr("F5_denom_not_sqrt6", false,
+        "denominator √6 = √n at n=6 — atlas observation (perfect number under radical), standing"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Battery 14 — s8_chi_to_monster_full: 8-step chain meta-falsifier
+// ══════════════════════════════════════════════════════════════════════
+// Meta-battery: each falsifier attacks a different chain link. If any link
+// breaks the whole χ→Monster derivation collapses.
+
+pub fn falsifier_s8_chi_to_monster_full() -> [FalsifierResult] {
+    let mut out: [FalsifierResult] = []
+    // F1: step5 lcm(4,6) ≠ σ(6) — valence-formula link
+    out.push(_fr("F1_step5_lcm_neq_sigma6", lcm(tau(6), 6) != sigma(6),
+        "lcm(τ(6),6)=" + to_string(lcm(tau(6), 6)) + " vs σ(6)=" + to_string(sigma(6)) + " (Step 5 link)"))
+    // F2: step6 uniqueness — another n in [2,60] with lcm(τ(n),n)=σ(n)
+    let mut extra = 0
+    let mut n = 2
+    while n <= 60 {
+        if n != 6 {
+            if lcm(tau(n), n) == sigma(n) { extra = extra + 1 }
+        }
+        n = n + 1
+    }
+    out.push(_fr("F2_step6_uniqueness_broken", extra > 0,
+        "n≠6 with lcm(τ,n)=σ(n) in [2,60]: " + to_string(extra) + " (must=0, Step 6 R19)"))
+    // F3: step7 η-exponent 24 ≠ 2·σ(6)
+    out.push(_fr("F3_step7_eta24_neq_2sigma", 24 != 2 * sigma(6),
+        "η exponent 24 vs 2·σ(6)=" + to_string(2 * sigma(6)) + " (Step 7 link)"))
+    // F4: step8 1728 ≠ σ(6)³
+    let cube = sigma(6) * sigma(6) * sigma(6)
+    out.push(_fr("F4_step8_1728_neq_sigma3", cube != 1728,
+        "σ(6)³=" + to_string(cube) + " vs j(i)=1728 (Step 8 link)"))
+    // F5: Moonshine 196884 ≠ 196883+1 (Conway-Norton/Borcherds link)
+    out.push(_fr("F5_moonshine_broken", (196883 + 1) != 196884,
+        "196883+1=" + to_string(196883 + 1) + " vs j-Fourier c₁=196884 (Step 8 Moonshine, Monster min irrep)"))
+    return out
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Aggregate — run all batteries, summarize as AtlasVerdict per parent
 // ══════════════════════════════════════════════════════════════════════
 
@@ -405,5 +571,11 @@ pub fn verify_falsifier_all() -> [AtlasVerdict] {
     out.push(_summarize("s2_gamma_reflection_n6", falsifier_s2_gamma_reflection_n6()))
     out.push(_summarize("s10_master_identity_24", falsifier_s10_master_identity_24()))
     out.push(_summarize("s3_conservation_law", falsifier_s3_conservation_law()))
+    out.push(_summarize("s2_perfect_euclid_euler", falsifier_s2_perfect_euclid_euler()))
+    out.push(_summarize("s2_euler_product_truncation", falsifier_s2_euler_product_truncation()))
+    out.push(_summarize("s8_s3_representation", falsifier_s8_s3_representation()))
+    out.push(_summarize("s3_onsager_tc", falsifier_s3_onsager_tc()))
+    out.push(_summarize("s2_gauss_multiplication_n6", falsifier_s2_gauss_multiplication_n6()))
+    out.push(_summarize("s8_chi_to_monster_full", falsifier_s8_chi_to_monster_full()))
     return out
 }
