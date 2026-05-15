@@ -786,8 +786,16 @@ pub fn bind(module: Module) -> array {
     while i < len(module.items) {
         let it = module.items[i]
         if !_is_import_kind(it.kind) {
-            if len(it.name) > 0 {
-                sc = _define(sc, it.name, mod_file)
+            // Top-level `let mut X` carries it.name = "mut:X" (parser
+            // parse_let_item). Without stripping, the module scope held
+            // "mut:X" while every reference looks up "X" → HX2001 on
+            // every mutable module global (p_*/_g_* parser+overlay state,
+            // ~80 in stage-2 self-compile). _bind_let_name is a no-op on
+            // unprefixed Fn/Struct/Enum names, so this is safe for all
+            // item kinds — mirrors the let-EXPR branch (_bind_let_name).
+            let it_nm = _bind_let_name(it.name)
+            if len(it_nm) > 0 {
+                sc = _define(sc, it_nm, mod_file)
             }
         }
         i = i + 1
