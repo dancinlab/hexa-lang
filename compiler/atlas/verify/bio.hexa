@@ -114,11 +114,89 @@ pub fn verify_s5_effective_information_gates() -> AtlasVerdict {
     return _vd_bio("s5_effective_information_gates", "🔵 SUPPORTED-FORMAL (Phase 3 cycle 026 IIT-precursor hexa-native)", ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s5_phi_si_2node — Φ_SI total-correlation integration (IIT 2004 predecessor)
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape: §5 BIO Stage 2 — second hexa-native IIT measure, one step closer
+// to full Φ than EI. Stochastic-interaction / total-correlation integration
+// (Tononi-Sporns-Edelman 1994 / Ay 2001, the measure IIT 3.0's EMD-Φ supersedes):
+//   Φ_SI = [Σᵢ H(node_i output)] − H(joint output)
+// over the output distribution induced by maximum-entropy input. Captures
+// integration: 0 iff the system factorizes (parts independent), > 0 iff the
+// update rule creates cross-node correlation.
+//
+// 2-node deterministic systems (4 input states uniform → 4 output states):
+//   INDEP (A'=A, B'=B identity):       output uniform → Φ_SI = 1+1-2 = 0  (no integration)
+//   SWAP  (A'=B, B'=A):                output uniform → Φ_SI = 1+1-2 = 0  (permutation, no corr)
+//   AND-OR (A'=A∧B, B'=A∨B):           output {(0,0),(0,1),(0,1),(1,1)}
+//                                       → A' P(1)=1/4, B' P(1)=3/4, joint 3 distinct
+//                                       → Φ_SI > 0  (integration: A',B' correlated)
+//
+// Honest C3: Φ_SI is the 1994/2001 integration measure (total correlation of
+// the output) — a legitimate IIT predecessor, NOT IIT 3.0 Φ (= min over MIP
+// of cause/effect-repertoire EMD; anima PyPhi 1.2.0 carry). Full 3.0 Φ
+// (TPM + MIP + earth-mover) remains Phase 3+ sprint via s5_v8_bbio_at_risk_carry.
+
+fn _joint_entropy_4(c0: int, c1: int, c2: int, c3: int, total: int) -> float {
+    // H over up to 4 joint outcomes with counts c0..c3, normalized by total
+    let mut h = 0.0
+    let mut i = 0
+    while i < 4 {
+        let mut c = c0
+        if i == 1 { c = c1 }
+        if i == 2 { c = c2 }
+        if i == 3 { c = c3 }
+        if c > 0 {
+            let p = to_float(c) / to_float(total)
+            h = h - (p * _log2_f(p))
+        }
+        i = i + 1
+    }
+    return h
+}
+
+pub fn verify_s5_phi_si_2node() -> AtlasVerdict {
+    // ── Config 1: IDENTITY (A'=A, B'=B) — factorizable, Φ_SI must = 0 ──
+    // 4 inputs (00,01,10,11) → outputs identical. joint: each of 4 once.
+    // H(A')=1, H(B')=1, H(joint)=2 → Φ_SI = 0
+    let id_hA = _binary_entropy(2, 4)         // A'=A: P(1)=2/4
+    let id_hB = _binary_entropy(2, 4)
+    let id_joint = _joint_entropy_4(1, 1, 1, 1, 4)   // 4 distinct → H=2
+    let phi_id = id_hA + id_hB - id_joint
+    let id_ok = _abs_f(phi_id - 0.0) < 0.000000001
+
+    // ── Config 2: SWAP (A'=B, B'=A) — permutation, Φ_SI must = 0 ──
+    // inputs→outputs: 00→00, 01→10, 10→01, 11→11. joint still 4 distinct.
+    let sw_hA = _binary_entropy(2, 4)         // A'=B over inputs: P(1)=2/4
+    let sw_hB = _binary_entropy(2, 4)
+    let sw_joint = _joint_entropy_4(1, 1, 1, 1, 4)
+    let phi_sw = sw_hA + sw_hB - sw_joint
+    let sw_ok = _abs_f(phi_sw - 0.0) < 0.000000001
+
+    // ── Config 3: AND-OR (A'=A∧B, B'=A∨B) — integrated, Φ_SI > 0 ──
+    // inputs: 00→(0,0) 01→(0,1) 10→(0,1) 11→(1,1)
+    // A' (=A∧B): P(1)=1/4 ;  B' (=A∨B): P(1)=3/4
+    // joint outcomes: (0,0)×1, (0,1)×2, (1,1)×1  → counts {1,2,1} over 3 states
+    let ao_hA = _binary_entropy(1, 4)         // A∧B: P(1)=1/4
+    let ao_hB = _binary_entropy(3, 4)         // A∨B: P(1)=3/4
+    let ao_joint = _joint_entropy_4(1, 2, 1, 0, 4)   // (0,0)1 (0,1)2 (1,1)1
+    let phi_ao = ao_hA + ao_hB - ao_joint
+    // expected: H(1/4)+H(3/4) - H({1/4,1/2,1/4}) = 0.8113+0.8113 - 1.5 = 0.1226
+    let ao_integrated = phi_ao > 0.05         // strictly positive integration
+    // monotone: integrated config has Φ_SI strictly above factorizable (0)
+    let ordering_ok = phi_ao > phi_id && phi_ao > phi_sw
+
+    let ok = id_ok && sw_ok && ao_integrated && ordering_ok
+    let detail = "Φ_SI total-correlation — IDENTITY=" + to_string(phi_id) + " (factorizable, 0) · SWAP=" + to_string(phi_sw) + " (permutation, 0) · AND-OR=" + to_string(phi_ao) + " (>0 integrated: A'=A∧B P¼, B'=A∨B P¾, joint{¼,½,¼}) · monotone factorizable<integrated ✓ (IIT 2004 predecessor; full 3.0 EMD-Φ deferred)"
+    return _vd_bio("s5_phi_si_2node", "🔵 SUPPORTED-FORMAL (Phase 3 cycle 027 Φ_SI integration hexa-native)", ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_bio_all() -> [AtlasVerdict] {
     let mut out: [AtlasVerdict] = []
     out.push(verify_s5_v8_bbio_at_risk_carry())
     out.push(verify_s5_effective_information_gates())
+    out.push(verify_s5_phi_si_2node())
     return out
 }

@@ -1217,3 +1217,55 @@
     g_external_calc_forbidden — ✅ 0 external runtime
   EOF
 
+# ─── Cycle 027 — Phase 3: §5 BIO Φ_SI integration (IIT 2004 predecessor) ──
+
+@A cycle_027 := "Phase 3 cycle 027 — §5 BIO Φ_SI total-correlation + dispatcher-rebuild defer" :: cycle [d=2026-05-15 active]
+  trigger = "user 'go' — Phase 3 continuation"
+  scope <<~EOF
+    cumulative 110 → 111 (+1). §5 BIO IIT closure ladder 두 번째 단계 —
+    EI 2008 (cycle 026) 다음으로 Φ_SI total-correlation integration
+    (Tononi-Sporns-Edelman 1994 / Ay 2001), IIT 3.0 EMD-Φ 의 직계 predecessor.
+  EOF
+  files_modified <<~EOF
+    compiler/atlas/verify/bio.hexa — +1 verifier s5_phi_si_2node + _joint_entropy_4 helper.
+      Φ_SI = Σ H(node out) − H(joint out), 3 configs:
+        IDENTITY (A'=A,B'=B) → 1+1−2 = 0 (factorizable)
+        SWAP (A'=B,B'=A) → 1+1−2 = 0 (permutation, no correlation created)
+        AND-OR (A'=A∧B,B'=A∨B) → H(¼)+H(¾)−H{¼,½,¼} = 0.8113+0.8113−1.5 = 0.1226 > 0
+      monotone: factorizable(0) < integrated(0.1226) ✓
+    atlas/MAIN.tape — tldr cumulative 111 + §5 IIT ladder note
+  EOF
+  verifier_run_result <<~EOF
+    bio domain: 3/3 PASS (s5_v8_bbio_at_risk_carry 🟠 + s5_effective_information_gates 🔵 +
+      s5_phi_si_2node 🔵)
+    Full cumulative: 111/111 PASS · 96 🔵 + 1 🟠 AT-RISK + 14 falsifier-robust
+  EOF
+  iit_closure_ladder <<~EOF
+    §5 BIO 의 IIT 측정 ladder (점진적 full-Φ 접근, 각 단계 hexa-native + honest):
+      Stage A — EI (Tononi 2008, effective information): cycle 026 s5_effective_information_gates
+                deterministic gate output entropy. per-partition quantity.
+      Stage B — Φ_SI (TSE 1994 / Ay 2001, total correlation): cycle 027 s5_phi_si_2node
+                Σ H(node) − H(joint). integration measure, factorizable→0.
+      Stage C — full IIT 3.0 Φ (Oizumi-Albantakis-Tononi 2014, EMD over MIP):
+                TPM + cause/effect repertoire + earth-mover + MIP search.
+                anima PyPhi 1.2.0 carry (Hc_1283/H_011). Phase 3+ large sprint —
+                s5_v8_bbio_at_risk_carry 가 formal-Φ mismatch carrier 유지.
+    각 stage 는 legitimate IIT-lineage measure (개별 인용가능 published), full Φ
+    아님을 honest_c3 로 명시. g_self_verify strict 준수 (실제 hexa 계산).
+  EOF
+  dispatcher_rebuild_defer <<~EOF
+    hexa atlas-verify 활성화 = `./hexa build self/main.hexa` (self-host stage2
+    fixpoint, self/main.hexa→main.c→clang). 자율 모드에서 dispatcher binary
+    rebuild 은 실패 시 `hexa` 명령 자체 손상 risk → 명시적 defer (abort 조건 회피).
+    `hexa run tool/atlas_verify.hexa [--domain D]` 가 이미 wilson
+    g_verify_hexa_cli_only priority-1 충족 (111/111 PASS 작동 중). verb 는
+    source-wired (cycle 020) — 다음 정식 build cycle 에 자동 활성화.
+  EOF
+  governance_check <<~EOF
+    g_verify_hexa_cli_only — ✅ 111 entries via hexa CLI (dispatcher rebuild defer, run-path 작동)
+    g5 hexa-native-only    — ✅ Φ_SI 실제 hexa 계산 (libm log, no PyPhi)
+    g_self_verify          — ✅ EI + Φ_SI 둘 다 actual hexa computation, anima cite 아님
+    g4 honesty-external    — ✅ IIT ladder 각 stage published-measure 명시, full Φ deferred honest
+    g_external_calc_forbidden — ✅ 0 external runtime
+  EOF
+

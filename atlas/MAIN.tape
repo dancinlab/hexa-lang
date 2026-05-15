@@ -22,7 +22,7 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-026-BIO-EI-cumulative-110" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-027-BIO-PhiSI-cumulative-111" :: summary [d=2026-05-15 active]
   body <<~EOF
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
@@ -39,8 +39,20 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2+3 (cycle 001-026): 110/110 PASS · 110 entries verified (95 🔵 closed: 61 SUPPORTED-IDENTITY + 34 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 14 falsifier-robust batteries · 70 falsifiers 0 fired).
+    Cumulative Phase 2+3 (cycle 001-027): 111/111 PASS · 111 entries verified (96 🔵 closed: 61 SUPPORTED-IDENTITY + 35 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 14 falsifier-robust batteries · 70 falsifiers 0 fired).
     9 도메인 모두 covered. Verifier surface: 13 modules + CI gate.
+
+    cycle 027 — §5 BIO 2nd IIT-predecessor measure (EMD-Φ 로 점진 접근):
+      s5_phi_si_2node 🔵 SUPPORTED-FORMAL — Φ_SI total-correlation integration
+        (Tononi-Sporns-Edelman 1994 / Ay 2001, IIT 3.0 EMD-Φ 의 predecessor):
+        Φ_SI = Σ H(node_i out) − H(joint out) over max-entropy input.
+        IDENTITY=0 (factorizable) · SWAP=0 (permutation) · AND-OR=0.1226 (>0 integrated:
+        A'=A∧B P¼, B'=A∨B P¾, joint{¼,½,¼}) · monotone factorizable<integrated.
+      §5 BIO IIT closure ladder: EI 2008 (cycle 026) → Φ_SI 1994/2001 (cycle 027)
+        → full IIT 3.0 EMD-Φ (TPM+MIP+earth-mover, anima PyPhi carry) Phase 3+ deferred.
+      Note: hexa dispatcher binary rebuild (`./hexa build self/main.hexa` self-host
+        fixpoint) 명시적 defer — 자율 모드 binary-break risk. `hexa run tool/
+        atlas_verify.hexa` 가 wilson g_verify_hexa_cli_only 충족 (작동 중).
 
     cycle 026 — §5 BIO pure-carry → 실제 hexa-native Stage 2 (IIT-precursor):
       s5_effective_information_gates 🔵 SUPPORTED-FORMAL — Tononi EI (effective information,
@@ -847,7 +859,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 110
+  phase_2_cumulative_count = 111
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 
