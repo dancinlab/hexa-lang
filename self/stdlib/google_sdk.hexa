@@ -3,7 +3,7 @@
 // AI-NATIVE COMMENT BLOCK
 // ─────────────────────────────────────────────────────────────────
 // RATIONALE
-//   Third of 5 vendor SDK shims (raw 91 INDEP-3) unblocking the hive
+//   Third of 5 vendor SDK shims (C3 INDEP-3) unblocking the hive
 //   packages/ai/ port. Hive .ts side imports `@google/genai` and
 //   calls `client.models.generateContentStream(params)`. We expose
 //   pure-hexa request build + streaming parse + delta extractors,
@@ -29,7 +29,7 @@
 //   The Vertex AI variant uses Google Application Default Credentials
 //   (OAuth2 + IAM) — that's a separate `vertex_sdk` port (deferred).
 //
-// CAVEATS (raw 91 honest C3)
+// CAVEATS (C3 honest C3)
 //   C1. Same TLS-via-curl shellout. Pure-hexa for build + parse.
 //   C2. Function calling: parts[i].functionCall.{name,args} arrives
 //       complete in a single chunk (Google does NOT delta-stream the
@@ -43,7 +43,7 @@
 //       a no-op. Defense: google_send injects `?alt=sse` automatically.
 //   C5. No incremental streaming — same RFC-001 streaming GAP-B.
 //
-// raw 159 GAP
+// no-hardcode9 GAP
 //   GAP-A (HTTPS native), GAP-B (streaming subprocess line iter).
 //   Plus: Vertex AI = OAuth2 ADC + GCP project routing — deferred to
 //   future `vertex_sdk` port (depends on GAP-A and Google ADC chain).

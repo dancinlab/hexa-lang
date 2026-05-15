@@ -5,7 +5,7 @@
 //   into one of Ω = {build, exp, learn, boot, verify} and computes per-
 //   step bottleneck cost.
 //
-// CLASSIFIER (deterministic, hexa-only — raw#9)
+// CLASSIFIER (deterministic, hexa-only)
 //   track ∈ {ffi, native, build, perf, bootstrap}          → build
 //   track ∈ {ai-native, self-host}                          → build
 //   track ∈ {hybrid, cell, lora}                            → learn

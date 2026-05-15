@@ -3,7 +3,7 @@
 // AI-NATIVE COMMENT BLOCK
 // ─────────────────────────────────────────────────────────────────
 // RATIONALE
-//   Fourth of 5 vendor SDK shims (raw 91 INDEP-3) unblocking the hive
+//   Fourth of 5 vendor SDK shims (C3 INDEP-3) unblocking the hive
 //   packages/ai/ port. Hive .ts side imports `@mistralai/mistralai`
 //   and calls `mistral.chat.stream(payload)`. Mistral's wire shape
 //   is an OpenAI-compat chat-completions superset with a couple of
@@ -24,7 +24,7 @@
 // AUTH SCHEME
 //   Bearer token — env MISTRAL_API_KEY -> Authorization header.
 //
-// CAVEATS (raw 91 honest C3)
+// CAVEATS (C3 honest C3)
 //   C1. Same TLS-via-curl shellout. Pure-hexa for build + parse.
 //   C2. Mistral tool-call IDs are constrained to 9 alphanum chars
 //       (MISTRAL_TOOL_CALL_ID_LENGTH=9). Caller should pre-normalize
@@ -36,15 +36,15 @@
 //   C4. promptMode="reasoning" + reasoningEffort gating is model-
 //       specific (Magistral / Codestral / Mistral Large 2.x). This
 //       shim passes them through unconditionally — caller MUST check
-//       model capabilities upstream (raw 91 no_silent_errors).
+//       model capabilities upstream (C3 no_silent_errors).
 //
-// raw 159 GAP
+// no-hardcode9 GAP
 //   GAP-A (HTTPS native), GAP-B (streaming subprocess line iter).
 //   GAP-C: short hash for Mistral tool-call ID coercion. A 9-char
 //          deterministic hash function is needed when caller IDs
 //          exceed length / contain non-alphanum. hive ports
 //          `utils/hash.shortHash` — recommend porting to
-//          self/stdlib/hash (separate module, raw 159 follow-up).
+//          self/stdlib/hash (separate module, no-hardcode9 follow-up).
 //
 // EXPORTS
 //   mistral_build_request(opts: map) -> string

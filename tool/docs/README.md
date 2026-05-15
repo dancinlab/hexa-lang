@@ -12,7 +12,7 @@ Auto-generated from `stdlib/**/*.hexa` docstrings by [`tool/docs_gen.py`](../doc
 
 | Module | Title | Public fns |
 |---|---|---|
-| [`anima_audio_worker`](anima_audio_worker.md) | persistent python audio worker (raw 9 hexa-only) | 0 |
+| [`anima_audio_worker`](anima_audio_worker.md) | persistent python audio worker (hexa-only) | 0 |
 | [`bytes`](bytes.md) | byte/uint conversions (P1 — qmirror per-shot perf) | 6 |
 | [`collections`](collections.md) | collections | 11 |
 | [`consciousness`](consciousness.md) | Hexa Consciousness Standard Library (Anima-native) | 0 |
@@ -44,7 +44,7 @@ Auto-generated from `stdlib/**/*.hexa` docstrings by [`tool/docs_gen.py`](../doc
 | [`cert/reward`](cert__reward.md) | soft reward-shaping multiplier | 2 |
 | [`cert/selftest`](cert__selftest.md) | triplet verification + determinism probe | 2 |
 | [`cert/verdict`](cert__verdict.md) | verdict vocabulary → satisfaction score | 2 |
-| [`cert/writer`](cert__writer.md) | canonical raw#10 proof-carrying JSON writer | 1 |
+| [`cert/writer`](cert__writer.md) | canonical proof-carrying JSON writer | 1 |
 
 ### `ckpt`
 

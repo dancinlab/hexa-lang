@@ -2,7 +2,7 @@
 
 **Status:** stable mechanism (promoted from C10 ad-hoc workaround, 2026-05-04).
 
-The `hexa` resolver at `~/.hx/bin/hexa` (raw 44 hard-landing) auto-routes any
+The `hexa` resolver at `~/.hx/bin/hexa` (follow-up4 hard-landing) auto-routes any
 `*.hexa` invocation on Darwin into the persistent `hexa-exec` Linux container.
 This guarantees CPU/RAM caps that macOS lacks, but breaks any pipeline whose
 output is **architecture-bound to the host** (e.g. `cc -O2 -dynamiclib`
@@ -68,7 +68,7 @@ if resolver_in_container() {
 | `HEXA_RESOLVER_NO_REROUTE=1`         | bypass once (in-container re-entry guard)     |
 | `HEXA_RESOLVER_NO_DARWIN_BYPASS=1`   | disable marker check (force docker)           |
 | `HEXA_RESOLVER_NO_DARWIN_MARKER=1`   | disable cheap-subcmd carve-out                |
-| `HEXA_RESOLVER_NO_METADATA_BYPASS=1` | disable metadata-only argv carve-out (raw#103)|
+| `HEXA_RESOLVER_NO_METADATA_BYPASS=1` | disable metadata-only argv carve-out (honest-caveat3)|
 | `HEXA_LOCAL=1`                       | emergency Mac-local exec, skip all probes     |
 | `HEXA_RESOLVER_IN_CONTAINER=1`       | (container ↔ child contract; do not set on host) |
 | `HEXA_SHIM_NO_DARWIN_LANDING=1`      | interp-shim only: skip darwin landing rule    |
@@ -98,8 +98,8 @@ Filter with `2>&1 | grep '^hexa-resolver:'` for routing audit.
 
 ## See also
 
-- `~/.hx/bin/hexa` (canonical resolver, raw 44)
+- `~/.hx/bin/hexa` (canonical resolver, follow-up4)
 - `tool/install_interp_shim.hexa::iss_fallback_shim_content` (interp-layer mirror)
 - `stdlib/resolver.hexa` (programmatic introspection)
 - `stdlib/test/test_resolver.hexa` (selftest verifying the bypass mechanism)
-- `docs/resolver_routing_fix_20260427.md` (raw#84 SWR + pure marker design notes)
+- `docs/resolver_routing_fix_20260427.md` (stage0-rename4 SWR + pure marker design notes)

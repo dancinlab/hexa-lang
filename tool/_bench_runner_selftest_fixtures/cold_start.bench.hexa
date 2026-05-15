@@ -4,7 +4,7 @@
 // Workload: render_init + render_put + render_flush + render_close 1 round-trip.
 // Bench runner (v0 ms-amortized) measures process-startup + parse + run union.
 //
-// raw 91 C3: ms granularity collapses sub-ms inner loop. The COLD-START bench
+// C3: ms granularity collapses sub-ms inner loop. The COLD-START bench
 // is the one bench where ms granularity is honest — startup dominates flush.
 //
 // 3-way axis: hexa-native (this) vs Ink (packages/tui) vs OpenTUI (deferred).

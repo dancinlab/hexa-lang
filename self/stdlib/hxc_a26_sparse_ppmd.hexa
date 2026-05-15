@@ -1,12 +1,12 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native HXC sparse PPM-D pipeline (A26 first tick)")
-// @tool(slug="hxc-a26-sparse-ppmd", desc="HXC algorithm A26: sparse PPM-D order-5 with Howard 1993 escape e_d=0.5 — text-heavy class CEILING attack post-A18 d631a902 batch land. Pure hexa raw 9 + raw 18 self-host (integer-only, table-driven, no fp ops, no neural mixer per raw 137). FIRST TICK BUILD: PASS 1 (sparse context tree spec, FNV-1a slot index, integer-only freq tables + escape count) + PASS 2 (a26_build forward sweep) + PASS 2.5 (a26_lookup + a26_estimate_bits in-sample estimator, NOT wire-coder) + PASS 3 (5-fixture selftest). SUBSEQUENT TICK (2026-04-28): AOT build LANDED (raw 18 byte-identical to interp 5/5 selftest PASS); LIVE FIRE on small text-heavy fixtures (n6_readme 1-4KB, paper-draft 1KB) PASS for F-A26-1 (estimator < A18 v2 actual) and F-A26-3 (hit-rate ≥10%); F-A26-4 memory falsifier TRIPPED at ≥4KB scale (peak 355MB on 4KB, 1.2GB on 8KB — production-class corpora 79KB-9.92MB infeasible); F-A26-6 escape minimality TRIPPED across 3 text-heavy fixtures (e_d=0.25 monotonically beats e_d=0.5, delta <0.2%); wire coder PROMOTION DEFERRED per honest C3 — implementing a coder that cannot scale past 4KB is gold-plating in face of TRIPPED memory falsifier. See witness $HOME/core/anima/state/format_witness/2026-04-28_a26_subsequent_tick_live_fire.jsonl. raw 137 cmix-ban MAINTAINED: A26 = deterministic integer FNV-1a + integer Howard-D escape, NOT cmix-class.")
+// @tool(slug="hxc-a26-sparse-ppmd", desc="HXC algorithm A26: sparse PPM-D order-5 with Howard 1993 escape e_d=0.5 — text-heavy class CEILING attack post-A18 d631a902 batch land. Pure hexa hexa-only + self-host fixpoint self-host (integer-only, table-driven, no fp ops, no neural mixer per ai-config-ban). FIRST TICK BUILD: PASS 1 (sparse context tree spec, FNV-1a slot index, integer-only freq tables + escape count) + PASS 2 (a26_build forward sweep) + PASS 2.5 (a26_lookup + a26_estimate_bits in-sample estimator, NOT wire-coder) + PASS 3 (5-fixture selftest). SUBSEQUENT TICK (2026-04-28): AOT build LANDED (self-host fixpoint byte-identical to interp 5/5 selftest PASS); LIVE FIRE on small text-heavy fixtures (n6_readme 1-4KB, paper-draft 1KB) PASS for F-A26-1 (estimator < A18 v2 actual) and F-A26-3 (hit-rate ≥10%); F-A26-4 memory falsifier TRIPPED at ≥4KB scale (peak 355MB on 4KB, 1.2GB on 8KB — production-class corpora 79KB-9.92MB infeasible); F-A26-6 escape minimality TRIPPED across 3 text-heavy fixtures (e_d=0.25 monotonically beats e_d=0.5, delta <0.2%); wire coder PROMOTION DEFERRED per honest C3 — implementing a coder that cannot scale past 4KB is gold-plating in face of TRIPPED memory falsifier. See witness $HOME/core/anima/state/format_witness/2026-04-28_a26_subsequent_tick_live_fire.jsonl. ai-config-ban cmix-ban MAINTAINED: A26 = deterministic integer FNV-1a + integer Howard-D escape, NOT cmix-class.")
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a26_sparse_ppmd.hexa --selftest)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a26_sparse_ppmd.hexa build <in>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args)
 //
-// First-tick scope (raw 91 honest C3):
+// First-tick scope (C3 honest C3):
 //
 //   PASS 1 — sparse context tree spec
 //     A26_MAX_ORDER = 5 (orders 0..5 inclusive).
@@ -17,9 +17,9 @@
 //     hash is ONLY a budget anchor; correctness uses the literal ctx).
 //     Frequency table per context: alphabet=256 byte counts + escape count.
 //     Howard 1993 PPM-D: escape probability e_d = 0.5 → escape_count = max(1,
-//     num_distinct_symbols / 2). Integer-only deterministic (raw 137).
+//     num_distinct_symbols / 2). Integer-only deterministic (ai-config-ban).
 //     Build pass: single forward sweep over input bytes, O(n) time.
-//     Idempotent: build is pure function of input bytes (raw 65/68).
+//     Idempotent: build is pure function of input bytes (idempotency/68).
 //
 //   PASS 2 — a26_build(text) -> A26ContextTree
 //     Returns array of 6 sparse maps (orders 0..5). Each map: ctx_string ->
@@ -37,15 +37,15 @@
 //     F2: round-trip byte-eq, JSON 234 B fixture          → wire = identity
 //          passthrough on first-tick (no encoder yet); decoded == original via
 //          stored buffer (sanity invariant).
-//     F3: short-input passthrough (raw 65)                → enc == identity
+//     F3: short-input passthrough (idempotency)                → enc == identity
 //     F4: PPM-D Howard escape unit test                    → e_d ≈ 0.5 integer
-//     F5: a26_estimate_bits ≥ 1.0 bit/byte sanity floor on 1KB English (raw 91
+//     F5: a26_estimate_bits ≥ 1.0 bit/byte sanity floor on 1KB English (C3
 //          honest C3 — estimator must NOT fabricate sub-Shannon entropy on a
 //          small training sample).
 //
 //   PASS 4 — LIVE FIRE production-class measurement DEFERRED to subsequent tick.
 //
-// Falsifier preregister (raw 71):
+// Falsifier preregister (falsifier):
 //     F-A26-1: a26_estimate_bits NOT < A18 v2 actual bits on text-heavy →
 //              retract A26 text-heavy hypothesis (subsequent-tick LIVE FIRE gate).
 //     F-A26-2: round-trip byte-eq fail on any selftest fixture → retract
@@ -61,17 +61,17 @@
 //     F-A26-6: PPM-D Howard e_d = 0.5 NOT minimal across {0.3, 0.5, 0.7} →
 //              retract Howard escape tuning. (Subsequent-tick sweep gate.)
 //
-// raw 137 cmix-ban compliance:
+// ai-config-ban cmix-ban compliance:
 //     A26 = sparse PPM-D order-5 with deterministic integer FNV-1a hash slot
 //     index, integer-only frequency tables, integer-only Howard e_d=0.5 escape
 //     count (= max(1, distinct/2)). NO fp ops. NO neural mixer. NO
 //     non-deterministic similarity. Build + lookup + estimator all
-//     deterministic (raw 65/68 idempotent: same input → same context tree).
+//     deterministic (idempotency/68 idempotent: same input → same context tree).
 
 const A26_MAX_ORDER = 5
 const A26_ALPHABET = 256
 const A26_RAW_BITS_PER_BYTE = 8
-const A26_MIN_BYTES = 32              // below this: identity passthrough (raw 65)
+const A26_MIN_BYTES = 32              // below this: identity passthrough (idempotency)
 const A26_CTX_LIMIT = 65536           // per-order context cap (memory budget)
 const A26_HIT_RATE_GATE = 30          // F-A26-3 first-tick gate (≥30% on 1KB English)
 const A26_FNV_OFFSET = 2166136261     // FNV-1a 32-bit offset basis (deterministic)
@@ -164,7 +164,7 @@ fn _table_count(tbl, ctx: string, sym: string) -> int {
 // _ppmd_escape_count: Howard 1993 PPM-D e_d = 0.5 → integer escape count
 // = max(1, distinct/2). This gives deterministic escape probability ≈
 // distinct / (2*total + distinct) which converges to 0.5 * distinct/total
-// for large counts (the Howard PPM-D limit). Integer-only, raw 137 compliant.
+// for large counts (the Howard PPM-D limit). Integer-only, ai-config-ban compliant.
 fn _ppmd_escape_count(tbl, ctx: string) -> int {
     let d = _table_distinct(tbl, ctx)
     let e = d / 2
@@ -258,7 +258,7 @@ fn a26_lookup(tree: array, buf: string, p: int) -> array {
     return [-1, A26_PROB_SCALE / A26_ALPHABET, 0]
 }
 
-// _ilog2_ceil: integer ceiling-log2 (raw 137: integer-only). Used as the
+// _ilog2_ceil: integer ceiling-log2 (ai-config-ban: integer-only). Used as the
 // integer-bits proxy for -log2(prob); for prob_x10000 = p, bits ≈
 // log2(10000/p) = log2(10000) - log2(p).
 fn _ilog2_ceil(x: int) -> int {
@@ -286,7 +286,7 @@ fn _bits_from_prob_x10000(prob_x10000: int) -> int {
 // model. PASS 2.5 in-sample estimator only — NOT a wire coder. Walks each
 // byte through a26_lookup and accumulates bits via integer log2.
 //
-// raw 91 honest C3: this estimator REPORTS the model's in-sample bits/byte
+// C3 honest C3: this estimator REPORTS the model's in-sample bits/byte
 // bound. It does NOT subtract escape bits at non-matching orders explicitly
 // (escape bits are folded into the order-fallback bits via the integer
 // log2 ratio expansion + a per-order-stepdown additive). This matches the
@@ -342,13 +342,13 @@ fn a26_hit_rate(tree: array, buf: string) -> int {
 }
 
 // a26_encode: first-tick PASS 4 — wire encoder DEFERRED to subsequent tick.
-// First-tick semantics: identity passthrough below MIN_BYTES, raw 65/68
+// First-tick semantics: identity passthrough below MIN_BYTES, idempotency/68
 // idempotent. For inputs ≥ MIN_BYTES, return identity (no wire-coder yet);
 // the in-sample bits estimator is the SAVING-AXIS lever for this tick.
 fn a26_encode(text: string) -> string {
     let n: i64 = len(text)
     if n < A26_MIN_BYTES { return text }
-    // Subsequent-tick: wire = A18 v2 first-tick pattern (deferred). raw 91
+    // Subsequent-tick: wire = A18 v2 first-tick pattern (deferred). C3
     // honest C3: identity is the FIRST-TICK wire to keep the estimator-only
     // contract explicit; no fabricated saving on wire axis.
     return text
@@ -396,7 +396,7 @@ fn _selftest() -> int {
     // ─── Fixture 2: round-trip byte-eq, JSON 234 B ───
     //   Falsifier on fail: F-A26-2 (entire A26 first-tick retracted).
     //   First-tick wire = identity passthrough; round-trip MUST preserve bytes
-    //   trivially via a26_encode → a26_decode (raw 65/68 idempotent).
+    //   trivially via a26_encode → a26_decode (idempotency/68 idempotent).
     let json_234 = "{\"ts\":\"2026-04-28T00:00:00Z\",\"event\":\"convergence\",\"value\":1.0,\"saving\":0.97}\n{\"ts\":\"2026-04-28T00:01:00Z\",\"event\":\"convergence\",\"value\":2.0,\"saving\":0.97}\n{\"ts\":\"2026-04-28T00:02:00Z\",\"event\":\"convergence\",\"value\":3.0,\"saving\":0.97}\n"
     let enc2 = a26_encode(json_234)
     let dec2 = a26_decode(enc2)
@@ -409,13 +409,13 @@ fn _selftest() -> int {
                 + to_string(len(dec2)) + ", expected 234) → F-A26-2 TRIPPED (A26 first-tick retracted)")
     }
 
-    // ─── Fixture 3: short-input passthrough (raw 65 idempotent) ───
+    // ─── Fixture 3: short-input passthrough (idempotency idempotent) ───
     let tiny = "abc123"
     let enc3 = a26_encode(tiny)
     let enc3b = a26_encode(enc3)
     if enc3 == tiny && enc3b == tiny {
         pass = pass + 1
-        println("  PASS: fixture-3 short-input passthrough idempotent (raw 65 + 68)")
+        println("  PASS: fixture-3 short-input passthrough idempotent (idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-3 short-input idempotency broken → F-A26-2 TRIPPED")
@@ -452,7 +452,7 @@ fn _selftest() -> int {
     }
 
     // ─── Fixture 5: a26_estimate_bits ≥ 1.0 bit/byte sanity floor on 1KB English ───
-    //   raw 91 honest C3: estimator must NOT fabricate sub-Shannon entropy on
+    //   C3 honest C3: estimator must NOT fabricate sub-Shannon entropy on
     //   small training samples. Shannon English ≥ ~0.65 bit/byte asymptotically;
     //   on 1KB in-sample with order-5 PPM-D the bound should be ≥ 1.0 bit/byte
     //   (warm-up bytes + escape steps prevent fabricated zero-entropy claims).

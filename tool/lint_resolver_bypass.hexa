@@ -134,7 +134,7 @@ fn _selftest(ssot_path) {
 
     // Build a "drifted consumer" that has only the first pattern but is
     // missing all the rest. The lint MUST flag this. Use .fixture
-    // extension (not .sh) to satisfy law_io raw#7 HEXA-ONLY ban —
+    // extension (not .sh) to satisfy law_io OS-level HEXA-ONLY ban —
     // these are throwaway test fixtures, not real shell scripts.
     let drifted = "#!/bin/bash\n# drifted copy — only carries the first SSOT pattern\ngrep -qE '" + pats[0] + "' \"$@\"\n"
     let drifted_path = "/tmp/hexa_lint_resolver_bypass_drifted.fixture"

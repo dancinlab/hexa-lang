@@ -1,6 +1,6 @@
 // tool/os_atomic_write.hexa — #14 atomic file write (tmp + fsync + rename)
 //
-// PURPOSE (raw#9 strict)
+// PURPOSE (hexa-only-strict)
 //   Drop-in replacement for direct `write_file(path, content)` that provides
 //   crash-safety. Sequence:
 //       1. write content to  "<path>.tmp.<pid>.<epoch>"
@@ -11,7 +11,7 @@
 //   Crash between steps 1 and 3 leaves dest untouched — the partial write is
 //   stranded as ".tmp.*" and reaped by the cleanup pass. Crash between 3 and 4
 //   leaves the new content in place but possibly not yet on disk (kernel will
-//   flush). For .roadmap / .raw-audit durability, this is sufficient — the
+//   flush). For .roadmap / audit durability, this is sufficient — the
 //   next commit will either see the new content or the pre-rename state.
 //
 // CLI

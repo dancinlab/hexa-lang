@@ -18,19 +18,19 @@
 //      of hexa-native MCP servers, with byte-equivalent wire-protocol
 //      output to the JS reference (verified by selftest).
 //
-//  RAW-COMPLIANCE
-//      raw 9        — pure hexa, zero exec(), zero JS deps. Stdin via
+//  COMPLIANCE
+//      hexa-only    — pure hexa, zero exec(), zero JS deps. Stdin via
 //                     self/stdlib/stdin (read_lines slurp), JSON via
 //                     self/stdlib/json (json_parse_safe / json_stringify),
 //                     stdout via println. No FS, no spawn.
-//      raw 91       — no_silent_errors. Bad JSON on the wire elicits a
+//      C3       — no_silent_errors. Bad JSON on the wire elicits a
 //                     JSON-RPC parse-error response (-32700) when an id
 //                     is recoverable; structurally bad lines (no JSON at
-//                     all) emit a stderr warning per raw 92 and skip.
-//      raw 18       — self-host fixpoint. This file does not introduce
+//                     all) emit a stderr warning per module-loader-fatal and skip.
+//      self-host fixpoint       — self-host fixpoint. This file does not introduce
 //                     any new runtime builtin; everything is layered on
 //                     existing primitives.
-//      raw 159      — hexa-lang upstream-of-truth. hive ports
+//      no-hardcode9      — hexa-lang upstream-of-truth. hive ports
 //                     `use "self/stdlib/mcp_server"` and never
 //                     re-implements the SDK locally.
 //
@@ -363,7 +363,7 @@ pub fn mcp_server_run(srv) {
             if parsed[0] {
                 mcp_dispatch(srv, parsed[1])
             } else {
-                // raw 91/92: log non-recoverable parse failures to stderr.
+                // C3/92: log non-recoverable parse failures to stderr.
                 eprintln("[mcp_server] parse failure on line " + to_string(i) +
                          ": " + trimmed.substring(0, 80))
             }

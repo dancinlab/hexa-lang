@@ -121,7 +121,7 @@ fn iss_fallback_shim_content(hexa_dir) {
     "    fi\n" +
     "    exec \"$REAL\" \"$@\"\n" +
     "fi\n" +
-    "# raw 82 root-fix (2026-04-26 nexus kick): darwin host without bypass marker\n" +
+    "# darwin-resolver-bypass root-fix (2026-04-26 nexus kick): darwin host without bypass marker\n" +
     "# routes to hexa-exec container. Mirrors ~/.hx/bin/hexa _darwin_bypass_check.\n" +
     "# Closes fork-per-module + module_loader + launchd PATH-leak entry-points\n" +
     "# (callers reaching this shim directly bypass ~/.hx/bin/hexa resolver).\n" +
@@ -136,7 +136,7 @@ fn iss_fallback_shim_content(hexa_dir) {
     "        _shim_docker=\"${DOCKER_BIN:-docker}\"\n" +
     "        _shim_name=\"${HEXA_DOCKER_NAME:-hexa-exec}\"\n" +
     "        if \"$_shim_docker\" inspect -f '{{.State.Running}}' \"$_shim_name\" 2>/dev/null | grep -q '^true$'; then\n" +
-    "            # raw#107 fix (2026-05-03): re-route to container's hexa_interp\n" +
+    "            # honest-caveat7 fix (2026-05-03): re-route to container's hexa_interp\n" +
     "            # binary (NOT /usr/local/bin/hexa CLI dispatcher). This shim IS\n" +
     "            # the interp shim — its callers (cmd_run, try_cache_exec,\n" +
     "            # aot_build_slot pre-flatten step) pass `<script.hexa> <args...>`\n" +

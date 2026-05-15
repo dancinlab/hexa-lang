@@ -105,7 +105,7 @@ fn _parse_line(line: string) -> any {
     }
 }
 
-// Extract the raw 32-byte ed25519 pub from an SSH-format key blob
+// Extract the attr-usage2-byte ed25519 pub from an SSH-format key blob
 // base64 (ssh-string "ssh-ed25519" || ssh-string 32B).
 fn _decode_ed25519_b64(b64: string) -> [int] {
     let blob = ssh_base64_decode_bytes(b64)

@@ -10,7 +10,7 @@
 // Prior in-process ns-bench (commit 1e878482 Mac arm64): p50 0.236ms
 //   → 1.25× over Ink baseline.
 //
-// raw 91 C3: ms-granularity outer measure of 100 iters → expect total in
+// C3: ms-granularity outer measure of 100 iters → expect total in
 // the tens of ms range; the per-iter signal is still recoverable via
 // total_ms / 100 amortization at the bench_runner level.
 

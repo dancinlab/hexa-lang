@@ -36,7 +36,7 @@ Breaking risk: 0. New module, new symbols. stdlib/net/http_client
 remains the canonical no-headers path; this module exists for the
 header-required ANU / IBM / Mistral paths.
 
-Caveats (raw#91):
+Caveats (C3):
   · curl is a hard dependency (same as stdlib/net/http_client). Not
     installed → empty body returned silently. Callers MUST treat ""
     as failure indistinguishable from a real empty body.
@@ -48,7 +48,7 @@ Caveats (raw#91):
   · binary body unsafe (NUL truncation in hexa string). Same caveat as
     stdlib/net/http_client; JSON/text response only.
 
-raw#9 hexa-only-strict: pure hexa wrapper, exec("curl ...") shell-out
+hexa-only-strict: pure hexa wrapper, exec("curl ...") shell-out
   identical to stdlib/net/http_client (no new C builtin needed).
 
 _shell_escape — single-quote wrap with internal quote escape.

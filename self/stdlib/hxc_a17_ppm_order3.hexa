@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="hxc-a17-ppm-order3", desc="HXC algorithm A17: PPMd-style order-3 context modeling with escape-method-D fallback to order-2 / order-1 / order-0 / raw-uniform-256. Targets the residual gap to Shannon 3rd-order entropy bound (~84% on text-heavy corpora) and the raw-137 universal 80% target. Pure-hexa raw 9 + raw 18 self-host (integer-only, no external libs). COMPLETE — PASS 1 build + PASS 2 range encode + PASS 3 range decode + 5 selftest fixtures. raw 91 honest C3 disclosure: PPM-D escape chain implemented as nested binary range events; in-sample bound 87% on synthetic text; LIVE FIRE measured on 3 champions.")
+// @tool(slug="hxc-a17-ppm-order3", desc="HXC algorithm A17: PPMd-style order-3 context modeling with escape-method-D fallback to order-2 / order-1 / order-0 / raw-uniform-256. Targets the residual gap to Shannon 3rd-order entropy bound (~84% on text-heavy corpora) and the cmix-ban universal 80% target. Pure-hexa hexa-only + self-host fixpoint self-host (integer-only, no external libs). COMPLETE — PASS 1 build + PASS 2 range encode + PASS 3 range decode + 5 selftest fixtures. C3 honest C3 disclosure: PPM-D escape chain implemented as nested binary range events; in-sample bound 87% on synthetic text; LIVE FIRE measured on 3 champions.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a17_ppm_order3.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a17_ppm_order3.hexa build <in>           // PASS 1 only — prints stats)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a17_ppm_order3.hexa encode <in> <out>)
@@ -44,11 +44,11 @@
 // where the first N=3 bytes ride out raw (no preceding context), then range
 // coding kicks in. (To be implemented PASS 2.)
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //     - encode(decode(x)) == x for any A17 stream
 //     - decode(encode(y)) == y for any byte stream
 //
-// Falsifiers preregistered (raw 71):
+// Falsifiers preregistered (falsifier):
 //     F-A17-1: saving < 0.50 byte-eq on text-heavy fixture → reject.
 //     F-A17-2: encode/decode round-trip not byte-eq → reject.
 //     F-A17-3: encode latency > 200ms per 1KB → reject.
@@ -57,7 +57,7 @@
 // Layering:
 //     A16 (separate agent in flight) sits between A15 and A17. A17 consumes
 //     the residual byte stream after A16 to push toward the 84% Shannon-3
-//     bound — A16+A17 layered savings target = raw-137 universal 80%.
+//     bound — A16+A17 layered savings target = cmix-ban universal 80%.
 
 const A17_ORDER_MAX = 3
 const A17_ALPHABET = 256
@@ -70,7 +70,7 @@ const A17_BOT = 16777216            // 2^24 — renormalize threshold
 // Wire base64url alphabet — same as A16 for canonical interop.
 const A17_B64_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
-// Wire base85 alphabet (raw 157 sigil-safe — 94 printable ASCII minus
+// Wire base85 alphabet (no-hardcode7 sigil-safe — 94 printable ASCII minus
 // `# @ " ' | ~ ! \ space` = 85 effective chars). Identical to A16
 // A16_B85_ALPHA for cross-codec interop. Expansion 5/4 = 1.25 (vs base64url
 // 4/3 = 1.333) → ~6.25pp wire overhead reduction. Applied via ^B sigil
@@ -80,7 +80,7 @@ const A17_B64_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 const A17_B85_ALPHA = "$%&()*+,-./0123456789:;<=>?ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{}"
 const A17_B85_BASE = 85
 
-// raw#5 attr-naming compliance: a string-canonical input is converted ONCE to
+// attr-naming compliance: a string-canonical input is converted ONCE to
 // an int byte-array (`bytes_arr[i]` returns ordinal 0..255). All downstream
 // PASS 1/2/3 byte access flows through `_byte_at(bytes_arr, i) -> int`. The
 // pre-conversion eliminates per-call substring overhead and resolves the
@@ -150,7 +150,7 @@ fn _ctx_at(s: string, p: int, k: int) -> string {
 
 // ───────── O(n·k) PPM table: incremental sorted-key + rank cache ─────────
 //
-// raw 91 honest C3 disclosure: the previous _ranked_keys did a fresh bubble
+// C3 honest C3 disclosure: the previous _ranked_keys did a fresh bubble
 // sort of distinct symbols at every byte position (twice per byte: one in
 // encode loop for hit detection, one for rank emission), and _rank_of did a
 // linear scan. For an N-byte input with avg-fanout-K per context, this gave
@@ -158,7 +158,7 @@ fn _ctx_at(s: string, p: int, k: int) -> string {
 // — both contributors to F-A17-4 super-linear memory.
 //
 // 2026-04-28 F-A17-4 array-swap (mirroring A18 e789a5f9 / d2f7a67a int-array
-// hash_head[16384] pattern, raw 137 cmix-ban — deterministic data structure
+// hash_head[16384] pattern, ai-config-ban cmix-ban — deterministic data structure
 // swap, no neural mixer):
 //
 // Inner per-context maps `count_inner` and `rank_inner` (which were the
@@ -190,7 +190,7 @@ fn _ctx_at(s: string, p: int, k: int) -> string {
 // by alphabet 256, but typically tiny per-context on text). Existing-symbol
 // update remains O(1).
 //
-// raw 65/68 idempotent: encoder/decoder use the SAME _table_inc; lock-step
+// idempotency/68 idempotent: encoder/decoder use the SAME _table_inc; lock-step
 // preserved (count_arr / rank_arr both init to fixed-size 256 arrays so the
 // integer-canonical content is bit-identical between the two endpoints).
 
@@ -401,7 +401,7 @@ fn a17_estimate_bytes(tables: array, buf: string) -> int {
 
 // ───────────────── PASS 2 / PASS 3: bit-stream codec ─────────────────
 //
-// raw 91 honest C3: rather than implement a full 32-bit byte-emitting range
+// C3 honest C3: rather than implement a full 32-bit byte-emitting range
 // coder (~250 LoC of integer-pinned arithmetic with carry propagation —
 // reused from A16 where it is already proven), we ship a SIMPLER prefix code
 // that nonetheless exercises the full PPM-D escape-method-D context fallback
@@ -417,7 +417,7 @@ fn a17_estimate_bytes(tables: array, buf: string) -> int {
 //      10 = order-1 hit, then ilog2_ceil(distinct_at_ctx1) bits of rank
 //      11 = order-0 fallback OR raw, disambiguated by a 1-bit subtag:
 //             0 = order-0 hit, then ilog2_ceil(distinct_at_order0) bits
-//             1 = raw 8-bit literal byte
+//             1 = stage0-rename-bit literal byte
 //
 // First A17_ORDER_MAX bytes always ride raw (no full-order context yet) —
 // emit `11 1 <8-bit byte>` for those positions.
@@ -427,7 +427,7 @@ fn a17_estimate_bytes(tables: array, buf: string) -> int {
 
 // Legacy _ranked_keys / _rank_of removed — replaced by O(1) cached lookups
 // in _table_keys / _table_rank (see incremental insertion-sort in _table_inc).
-// raw 91 honest C3: prior implementation was the F-A17-4 jetsam root cause —
+// C3 honest C3: prior implementation was the F-A17-4 jetsam root cause —
 // per-byte bubble sort O(K²) over distinct symbols at each context.
 
 // Push n LSBs of value into bits-array (MSB-first per group). bits is an
@@ -552,7 +552,7 @@ fn _b64u_dec(s: string, n_bytes: int) -> array {
     return out
 }
 
-// ───────────────── base85 byte<->char (raw 157 wire, A16-compatible) ─────────────────
+// ───────────────── base85 byte<->char (no-hardcode7 wire, A16-compatible) ─────────────────
 //
 // Pack 4 bytes (u32) into 5 base85 chars (85^5 = 4,437,053,125 > 2^32, safe).
 // Expansion = 5/4 = 1.25 vs base64url 4/3 = 1.333 → -6.25pp wire overhead.
@@ -750,7 +750,7 @@ fn _a17_emit_bits(v1_text: string) -> array {
     return [bits, alphabet, n]
 }
 
-// raw 157 base85 wire variant — sigil-safe (^Q marker), expansion 5/4.
+// no-hardcode7 base85 wire variant — sigil-safe (^Q marker), expansion 5/4.
 // Header tag `v=order-3-d-b85` lets decode auto-detect wire format.
 fn _a17_encode_force_b85(v1_text: string) -> string {
     let triple = _a17_emit_bits(v1_text)
@@ -765,7 +765,7 @@ fn _a17_encode_force_b85(v1_text: string) -> string {
     return header + "\n" + alphabet + "\n^Q" + payload + "\n"
 }
 
-// raw 157 b85 wire — try-and-revert wrapper (raw 142 D2): only return b85
+// no-hardcode7 b85 wire — try-and-revert wrapper (magic-number2 D2): only return b85
 // stream if strictly smaller than v1 input (no-regression invariant).
 fn a17_encode_b85(v1_text: string) -> string {
     let n: i64 = len(v1_text)
@@ -896,7 +896,7 @@ fn a17_decode(v2_text: string) -> string {
         handle_ord.push(if len(h) > 0 { ord(h) } else { -1 })
         hi = hi + 1
     }
-    // Body marker — ^P (b64 default) or ^Q (b85 raw 157 wire). Detect at alpha_end+1.
+    // Body marker — ^P (b64 default) or ^Q (b85 no-hardcode7 wire). Detect at alpha_end+1.
     let pmark: i64 = alpha_end + 1
     if pmark + 2 > total { return v2_text }
     let sigil = v2_text.substring(pmark, pmark + 2)
@@ -1068,7 +1068,7 @@ fn _selftest() -> int {
         println("  FAIL: fixture-4 100-row corpus round-trip lost")
     }
 
-    // Fixture 5: small fixture (<MIN_BYTES) → identity passthrough (raw 65).
+    // Fixture 5: small fixture (<MIN_BYTES) → identity passthrough (idempotency).
     let tiny = "abc"
     let enc5 = a17_encode(tiny)
     if enc5 == tiny {
@@ -1079,8 +1079,8 @@ fn _selftest() -> int {
         println("  FAIL: fixture-5 small-input wrongly fired")
     }
 
-    // ───── raw 157 base85 wire fixtures (A17 b85 swap) ─────
-    println("# raw 157 base85 wire fixtures")
+    // ───── no-hardcode7 base85 wire fixtures (A17 b85 swap) ─────
+    println("# no-hardcode7 base85 wire fixtures")
 
     // Fixture 6: b85 English round-trip + b85 ≤ b64 invariant (F-RAW157-1).
     let enc6_b85 = _a17_encode_force_b85(buf)

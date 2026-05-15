@@ -1,6 +1,6 @@
 // tool/spec_runner.hexa — hexa-native *.spec.hexa runner (omega cycle 2026-04-29).
 //
-// Forked from tool/run_tests.hexa (raw 168 minimum-viable cut):
+// Forked from tool/run_tests.hexa (follow-up8 minimum-viable cut):
 //   STRIPPED — isolation directives, per-spec timeout, @skip / @only directives.
 //   KEPT     — walker + exec + sentinel-parse + tally + nonzero-on-fail.
 //
@@ -57,7 +57,7 @@ fn discover(target: string, pattern: string) -> array {
 //
 // Strict on the canonical "(n/n)" / "(k of n)" forms. Non-numeric parentheticals
 // (e.g. "selftest: PASS (some prose)") are treated as PASS but recorded as 1/1
-// so the runner still emits a tally — see raw 91 C3 disclosure.
+// so the runner still emits a tally — see C3 disclosure.
 fn _last_nonempty(text: string) -> string {
     let lines = text.split("\n")
     let mut i = len(lines) - 1
@@ -88,7 +88,7 @@ fn parse_sentinel(stdout_text: string) -> array {
                 if n > 0 { return ["PASS", n, 0] }
             }
         }
-        // non-conforming PASS — degrade to 1/1 (raw 91 C3 disclosure stamps in summary)
+        // non-conforming PASS — degrade to 1/1 (C3 disclosure stamps in summary)
         return ["PASS", 1, 0]
     }
     if line.starts_with("selftest: FAIL") {
@@ -170,7 +170,7 @@ println("")
 println("=== TOTAL: " + to_string(pass_count) + "/" + to_string(total_specs) + " specs PASS, " + to_string(total_failed_assertions) + " assertions failed ===")
 
 if unk_count > 0 {
-    println("=== " + to_string(unk_count) + " spec(s) emitted no recognizable sentinel — see raw 91 C3 ===")
+    println("=== " + to_string(unk_count) + " spec(s) emitted no recognizable sentinel — see C3 ===")
 }
 
 if len(failed_specs) > 0 {

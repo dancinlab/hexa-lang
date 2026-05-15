@@ -4,16 +4,16 @@
 // Spec source: hive/packages/coding-agent/hexa/cli_mvp.hexa
 //   _prefs_detect_locale (lines 2361-2386) + _label_localized (lines 2473-2504,
 //   cycle κ-1 commit 22bf7ac11). cli_mvp 내부 hardcoded mapping → stdlib 추출
-//   (단일 reader 정합 raw 47 cross-repo universal mandate).
+//   (단일 reader 정합 cross-repo-trawl cross-repo universal mandate).
 //
 // Cross-repo: hive / nexus / anima / hexa-lang / airgenome / canon —
 // 5 sister repos 공유. Single SSOT, no per-repo duplication.
 //
-// raw 175 carve-out: i18n string-literal content within source code preserved
+// convergence-add5 carve-out: i18n string-literal content within source code preserved
 // (라벨 텍스트 비-ASCII 허용 — 디스플레이 surface, comment/identifier 아님).
 //
-// raw 12 silent-error-ban: locale detect 실패 시 "" (empty) 반환 → caller가
-// fallback "en" 적용. label lookup miss 시 key 자체 반환 (raw 91 honest disclosure).
+// silent-error silent-error-ban: locale detect 실패 시 "" (empty) 반환 → caller가
+// fallback "en" 적용. label lookup miss 시 key 자체 반환 (C3 honest disclosure).
 //
 // Exports:
 //   i18n_detect_locale() -> string                 — macOS AppleLanguages + $LANG
@@ -65,7 +65,7 @@ fn i18n_detect_locale() -> string {
 }
 
 // Label lookup — explicit locale. Caller passes ko/ja/zh/en (or anything else
-// → falls through to en). Empty / unknown lang → en. Unknown key → key (raw 91).
+// → falls through to en). Empty / unknown lang → en. Unknown key → key (C3).
 fn i18n_label(key: string, lang: string) -> string {
     if lang == "ko" {
         // label.* — PREFS row labels
@@ -74,7 +74,7 @@ fn i18n_label(key: string, lang: string) -> string {
         if key == "label.reply_style" { return "회신 스타일" }
         if key == "label.hive_bypass" { return "hive 권한 우회" }
         // help.* — section headers
-        if key == "help.prefs_header" { return "raw 203 PREFS — Enter 순환, ↑↓ 선택" }
+        if key == "help.prefs_header" { return "lock-flags3 PREFS — Enter 순환, ↑↓ 선택" }
         if key == "help.command_header" { return "명령어 — / 입력으로 시작" }
         if key == "help.meta_header" { return "메타 — 참조 정보" }
         if key == "help.roadmap_header" { return "로드맵 — 향후 작업" }
@@ -97,7 +97,7 @@ fn i18n_label(key: string, lang: string) -> string {
         if key == "label.reply_language" { return "返信言語" }
         if key == "label.reply_style" { return "返信スタイル" }
         if key == "label.hive_bypass" { return "hive バイパス" }
-        if key == "help.prefs_header" { return "raw 203 PREFS — Enter 切替, ↑↓ 選択" }
+        if key == "help.prefs_header" { return "lock-flags3 PREFS — Enter 切替, ↑↓ 選択" }
         if key == "help.command_header" { return "コマンド — / で開始" }
         if key == "help.meta_header" { return "メタ — 参照情報" }
         if key == "help.roadmap_header" { return "ロードマップ — 今後の作業" }
@@ -118,7 +118,7 @@ fn i18n_label(key: string, lang: string) -> string {
         if key == "label.reply_language" { return "回复语言" }
         if key == "label.reply_style" { return "回复风格" }
         if key == "label.hive_bypass" { return "hive 旁路" }
-        if key == "help.prefs_header" { return "raw 203 PREFS — Enter 循环, ↑↓ 选择" }
+        if key == "help.prefs_header" { return "lock-flags3 PREFS — Enter 循环, ↑↓ 选择" }
         if key == "help.command_header" { return "命令 — 输入 / 开始" }
         if key == "help.meta_header" { return "元数据 — 参考信息" }
         if key == "help.roadmap_header" { return "路线图 — 后续工作" }
@@ -139,7 +139,7 @@ fn i18n_label(key: string, lang: string) -> string {
     if key == "label.reply_language" { return "Reply language" }
     if key == "label.reply_style" { return "Reply style" }
     if key == "label.hive_bypass" { return "hive bypass" }
-    if key == "help.prefs_header" { return "raw 203 PREFS — Enter cycles, ↑↓ select" }
+    if key == "help.prefs_header" { return "lock-flags3 PREFS — Enter cycles, ↑↓ select" }
     if key == "help.command_header" { return "Commands — start with /" }
     if key == "help.meta_header" { return "Meta — reference info" }
     if key == "help.roadmap_header" { return "Roadmap — upcoming work" }
@@ -154,7 +154,7 @@ fn i18n_label(key: string, lang: string) -> string {
     if key == "common.back" { return "Back" }
     if key == "common.select" { return "Select" }
     if key == "common.help" { return "Help" }
-    // Unknown key — return key itself (raw 91 honest disclosure).
+    // Unknown key — return key itself (C3 honest disclosure).
     return key
 }
 
@@ -198,19 +198,19 @@ if _selftest {
     // T5-T8: help.prefs_header × 4 locale
     _n = _n + 1
     let _ko2 = i18n_label("help.prefs_header", "ko")
-    if !_ko2.starts_with("raw 203") { _fail = _fail + 1; eprintln("[T5] ko help.prefs_header bad: " + _ko2) }
+    if !_ko2.starts_with("lock-flags3") { _fail = _fail + 1; eprintln("[T5] ko help.prefs_header bad: " + _ko2) }
 
     _n = _n + 1
     let _ja2 = i18n_label("help.prefs_header", "ja")
-    if !_ja2.starts_with("raw 203") { _fail = _fail + 1; eprintln("[T6] ja help.prefs_header bad: " + _ja2) }
+    if !_ja2.starts_with("lock-flags3") { _fail = _fail + 1; eprintln("[T6] ja help.prefs_header bad: " + _ja2) }
 
     _n = _n + 1
     let _zh2 = i18n_label("help.prefs_header", "zh")
-    if !_zh2.starts_with("raw 203") { _fail = _fail + 1; eprintln("[T7] zh help.prefs_header bad: " + _zh2) }
+    if !_zh2.starts_with("lock-flags3") { _fail = _fail + 1; eprintln("[T7] zh help.prefs_header bad: " + _zh2) }
 
     _n = _n + 1
     let _en2 = i18n_label("help.prefs_header", "en")
-    if !_en2.starts_with("raw 203") { _fail = _fail + 1; eprintln("[T8] en help.prefs_header bad: " + _en2) }
+    if !_en2.starts_with("lock-flags3") { _fail = _fail + 1; eprintln("[T8] en help.prefs_header bad: " + _en2) }
 
     // T9-T12: status.live × 4 locale (non-empty + not equal to key)
     _n = _n + 1
@@ -263,7 +263,7 @@ if _selftest {
     let _en5 = i18n_label("help.command_header", "en")
     if _en5 != "Commands — start with /" { _fail = _fail + 1; eprintln("[T20] en help.command_header bad: " + _en5) }
 
-    // T21: unknown key returns key itself (raw 91 honest disclosure)
+    // T21: unknown key returns key itself (C3 honest disclosure)
     _n = _n + 1
     let _unk = i18n_label("nonexistent.key", "ko")
     if _unk != "nonexistent.key" { _fail = _fail + 1; eprintln("[T21] unknown key should return key, got: " + _unk) }

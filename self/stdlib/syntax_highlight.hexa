@@ -23,10 +23,10 @@
 // Unknown / out-of-set languages → return HTML-escaped text wrapped in
 // a single span (mirrors hljs's plain fallback). Never throws.
 //
-// raw 9 (pure hexa): zero exec(), zero external libs.
-// raw 91 (no_silent_errors): unknown language flagged via prefix line
+// hexa-only (pure): zero exec(), zero external libs.
+// C3 (no_silent_errors): unknown language flagged via prefix line
 //   in fallback mode is opt-in (caller passes strict=true).
-// raw 159 (hexa-lang-upstream-proposal-mandate): hive ports
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): hive ports
 //   `use "self/stdlib/syntax_highlight"`.
 //
 // --selftest mode:

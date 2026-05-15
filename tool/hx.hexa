@@ -1,14 +1,14 @@
 #!hexa strict
-// tool/hx.hexa — SSOT unified entry point (raw#0 top-level wrapper)
+// tool/hx.hexa — SSOT unified entry point (top-level wrapper)
 //
 // PURPOSE
-//   Single developer-facing CLI that replaces bare `git` for the raw#0
+//   Single developer-facing CLI that replaces bare `git` for the SSOT
 //   SSOT workflow. Dispatches to raw_all, hx_unlock, hx_lock, git, and
 //   raw_audit in the right order so every state transition is audited
 //   and every commit/push carries a raw-all attestation trailer.
 //
 //   The philosophy: `git commit` and `git push` are dangerous because
-//   they have no idea whether .raw / .own / .ext / .roadmap / .loop
+//   they have no idea whether .ext / .roadmap / .loop
 //   are still consistent. `./hx commit` and `./hx push` refuse unless
 //   raw_all exits 0, stamp the pre-push SSOT fingerprint into the
 //   commit message, and append an audit line.
@@ -366,12 +366,12 @@ fn _cmd_status() -> int {
 
     // 2. last audit entry
     println("── last audit entry ──")
-    let audit_check = exec_with_status("test -f .raw-audit")
+    let audit_check = exec_with_status("test -f audit")
     if audit_check[1] == 0 {
-        let tail = to_string(exec("tail -n 3 .raw-audit"))
+        let tail = to_string(exec("tail -n 3 audit"))
         print(tail)
     } else {
-        println("(no .raw-audit yet)")
+        println("(no audit yet)")
     }
     println("")
 
@@ -396,10 +396,10 @@ fn _tool_exists(path: string) -> bool {
 
 fn _cmd_init(args: array) -> int {
     // 최초 설치 wrapper — delegate to tool/hx_init.hexa.
-    // 이미 .raw-audit 있으면 초기화 완료 상태로 간주하고 경고 후 exit.
-    let audited = exec_with_status("test -f .raw-audit")
+    // 이미 audit 있으면 초기화 완료 상태로 간주하고 경고 후 exit.
+    let audited = exec_with_status("test -f audit")
     if audited[1] == 0 {
-        eprintln("hx init: .raw-audit already present — repository already initialized")
+        eprintln("hx init: audit already present — repository already initialized")
         eprintln("hx init: use `./hx status` to inspect current level, or rm -rf state first")
         return 1
     }
@@ -640,7 +640,7 @@ fn _usage() {
     eprintln("  commit/push refuse unless raw_all exit 0. Every commit carries a")
     eprintln("  `raw-all-attest: raw-all-attest:v1:<sha>:<ts>:<hmac>` trailer")
     eprintln("  (HMAC-signed; verified server-side by raw-verify.yml). Every")
-    eprintln("  state transition is appended to .raw-audit.")
+    eprintln("  state transition is appended to audit.")
     eprintln("")
     eprintln("EXAMPLE (fixpoint workflow)")
     eprintln("  ./hx fixpoint check                       # scaffold drift report")

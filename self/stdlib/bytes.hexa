@@ -23,12 +23,12 @@
 //
 // Breaking risk: 0. New module, all new symbols.
 //
-// Caveats (raw#91): byte values outside 0..255 silently wrong · only low
+// Caveats (C3): byte values outside 0..255 silently wrong · only low
 // 53 bits used in unit_float (mantissa fit) · pure-hexa arithmetic loops,
 // no SIMD (KB-scale conversions should profile and possibly move to a
 // future C builtin).
 //
-// raw#9 hexa-only-strict: pure hexa, zero exec(), zero new C builtin.
+// hexa-only-strict: pure hexa, zero exec(), zero new C builtin.
 
 fn bytes_to_uint64(b, offset: int) -> int {
     if offset < 0 { return 0 }
@@ -168,7 +168,7 @@ fn uint64_to_unit_float(u: int) -> float {
 //    bytes_fold_file_chunked(path, n, init, fold) — fold over chunks
 //    bytes_count_byte_in_file(path, b, n)      — count occurrences of byte b
 //
-//  raw#9 hexa-only-strict: pure hexa, zero exec(), zero new C builtin.
+//  hexa-only-strict: pure hexa, zero exec(), zero new C builtin.
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn bytes_interp_chunk_default() -> int {

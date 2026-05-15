@@ -20,7 +20,7 @@
 //      term_program()             -> string    // $TERM_PROGRAM or ""
 //      term_term()                -> string    // $TERM
 //
-//  CAVEATS (raw 91 honest)
+//  CAVEATS (C3 honest)
 //      * isTTY detection uses `[ -t 1 ]` shell test via `exec()`. This
 //        is correct but fork-per-call. Memoize in caller hot loops.
 //      * size detection uses `stty size` (rows cols) → env COLUMNS/LINES

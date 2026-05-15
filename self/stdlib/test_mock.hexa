@@ -5,11 +5,11 @@
 //   const fn = vi.fn(() => 42);   fn(arg);   expect(fn).toHaveBeenCalledWith(arg);
 //   vi.mock('../module', () => ({ ... }));
 //
-// raw 9  (pure-hexa):     external libs = 0.
-// raw 18 (self-host fixpoint): zero new builtins.
-// raw 91 (no_silent_errors): mock_get / mock_calls return well-defined
+// hexa-only (pure):     external libs = 0.
+// self-host fixpoint (self-host fixpoint): zero new builtins.
+// C3 (no_silent_errors): mock_get / mock_calls return well-defined
 //   sentinels on lookup miss; never silent void.
-// raw 159 (hexa-lang-upstream-proposal-mandate): hive ports use this
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): hive ports use this
 //   module instead of re-implementing spy plumbing.
 //
 // ── Why id-based not closure-captured spies ──────────────────────────
@@ -32,7 +32,7 @@
 // `mock_get_return(id)` inside their fake. This is the same pattern
 // hand-rolled in many vitest tests via `vi.fn().mockImplementation(...)`.
 //
-// ── Known gaps (raw 91 honest) ───────────────────────────────────────
+// ── Known gaps (C3 honest) ───────────────────────────────────────
 //   G1. NO `vi.mock('module-path', factory)` — that requires linker-level
 //       module replacement. Honestly stubbed: a no-op `vi_mock_module()`
 //       that records the request to a manual-review log and returns

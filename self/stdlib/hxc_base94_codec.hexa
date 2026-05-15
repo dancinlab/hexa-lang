@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="hxc-base94-codec", desc="HXC wire codec — printable-ASCII base94 production module replacing base64url for entropy-coder family payloads (A16 / A17 / A18 / future A20+). raw 157 mandate (hxc-wire-encoding-base94-mandate). Empirical 1.243 expansion vs base64url 1.333 — n6 atlas wire-only bench 2026-04-28 yields +6.51pp on A16 byte-canonical ceiling. raw 92 ai-native-canonical compat: alphabet excludes LF/NUL/space ⇒ ^A line-prefix scope safe. raw 9 hexa-only / raw 18 self-host fixpoint compatible (integer-only big-int, no floats, no external libs).")
+// @tool(slug="hxc-base94-codec", desc="HXC wire codec — printable-ASCII base94 production module replacing base64url for entropy-coder family payloads (A16 / A17 / A18 / future A20+). no-hardcode7 mandate (hxc-wire-encoding-base94-mandate). Empirical 1.243 expansion vs base64url 1.333 — n6 atlas wire-only bench 2026-04-28 yields +6.51pp on A16 byte-canonical ceiling. module-loader-fatal ai-native-canonical compat: alphabet excludes LF/NUL/space ⇒ ^A line-prefix scope safe. hexa-only / self-host fixpoint self-host fixpoint compatible (integer-only big-int, no floats, no external libs).")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_base94_codec.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_base94_codec.hexa bench <file>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args)
@@ -23,22 +23,22 @@
 // multiply-by-i64 + divmod-by-i64 in O(N) per byte. For 41-byte (~21 limb) blocks,
 // this is bounded constant-cost per block.
 //
-// raw 92 ai-native-canonical compat: base94 alphabet (ASCII 33..126) excludes
+// module-loader-fatal ai-native-canonical compat: base94 alphabet (ASCII 33..126) excludes
 // LF (0x0A) + NUL (0x00) + space (0x20) by construction. HXC sigil collision
 // (^A line-prefix scope): mitigated by emitting AFTER the `^A` sigil only —
 // parser-prefix terminates on LF, not on metachars inside the payload. In-line
 // payload (non-^A) requires alphabet restriction to ~85 chars (DEFER per raw
 // 157 scope: A16/A17/A18 production paths use ^C sigil for base94 wire which
-// is line-prefixed, raw 92 compat by construction).
+// is line-prefixed, module-loader-fatal compat by construction).
 //
 // Asymptotic expansion: 51 chars / 41 bytes ≈ 1.244, vs base64url 4/3 = 1.333.
 //   Saving relative to base64url on entropy-coded payloads = (1.333 - 1.244) / 1.333 ≈ 6.7%
 //   On A16 force-encode path: net byte-saving lifts ~6.5pp (n6 atlas 2.81% → 9.32%).
 //
-// Falsifiers (raw 71 preregistered for raw 157):
+// Falsifiers (falsifier preregistered for no-hardcode7):
 //   F-W94-1: round-trip byte-eq fail on any random byte fixture → reject.
 //   F-W94-2: encode latency > 200ms / KB → reject (perf budget; advisory).
-//   F-W94-3: alphabet contains LF / NUL / space → reject (raw 92 collision).
+//   F-W94-3: alphabet contains LF / NUL / space → reject (module-loader-fatal collision).
 //   F-W94-4: expansion > 1.250 on inputs >= 1KB → reject (no theoretical gain over base64url).
 
 // ASCII codes 33..126 = 94 chars (printable, excludes space + DEL).
@@ -274,11 +274,11 @@ fn b94_decode_to_bytes(s: string) -> array {
 // ───────────────── selftest: ≥8 fixtures ─────────────────
 
 fn _selftest() -> int {
-    println("# hxc_base94_codec selftest (raw 157 production module)")
+    println("# hxc_base94_codec selftest (no-hardcode7 production module)")
     let mut pass = 0
     let mut fail = 0
 
-    // Fixture 1: alphabet length = 94, excludes LF/NUL/space (raw 92 line-canonical compat).
+    // Fixture 1: alphabet length = 94, excludes LF/NUL/space (module-loader-fatal line-canonical compat).
     let alpha_n: i64 = len(B94_ALPHA)
     let mut has_lf = false
     let mut has_nul = false
@@ -293,7 +293,7 @@ fn _selftest() -> int {
     }
     if alpha_n == 94 && !has_lf && !has_nul && !has_space {
         pass = pass + 1
-        println("  PASS: fixture-1 alphabet len=94 + raw 92 compat (LF/NUL/space excluded)")
+        println("  PASS: fixture-1 alphabet len=94 + module-loader-fatal compat (LF/NUL/space excluded)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-1 alphabet violation len=" + to_string(alpha_n) + " lf=" + to_string(has_lf) + " nul=" + to_string(has_nul) + " sp=" + to_string(has_space))

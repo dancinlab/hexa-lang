@@ -22,7 +22,7 @@
 //  EXPORTS
 //      decode_input(buf: string) -> [consumed: i64, events: array]
 //
-//  CAVEATS (raw 91 honest)
+//  CAVEATS (C3 honest)
 //      * Subset of xterm/VT recognized — covers common keys: arrows,
 //        Home/End/PageUp/PageDown, F1-F12, Tab, Enter, Backspace,
 //        Escape (alone), Ctrl+A..Z, bracketed paste (CSI 200~/201~),

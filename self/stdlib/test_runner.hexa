@@ -5,13 +5,13 @@
 //
 //   hexa run self/stdlib/test_runner.hexa --discover packages/audit/test
 //
-// raw 9  (pure-hexa):     external libs = 0 — fs.hexa + exec only.
-// raw 18 (self-host fixpoint): zero new builtins. The runner runs other
+// hexa-only (pure):     external libs = 0 — fs.hexa + exec only.
+// self-host fixpoint (self-host fixpoint): zero new builtins. The runner runs other
 //   .test.hexa files via `exec("hexa run ...")` (sub-process) and parses
 //   their `__TEST_RUNNER_RESULT__` summary lines.
-// raw 91 (no_silent_errors): every discovered file's exit/parse status is
+// C3 (no_silent_errors): every discovered file's exit/parse status is
 //   reflected in the aggregate summary; missing summary line → FAIL.
-// raw 159 (hexa-lang-upstream-proposal-mandate): hive sister-repo CIs
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): hive sister-repo CIs
 //   `hexa run self/stdlib/test_runner.hexa --discover ...` instead of
 //   wrapping vitest in shell.
 //
@@ -37,7 +37,7 @@
 // JSONL record per file (when --jsonl set):
 //   {"file":"...","verdict":"PASS|FAIL","total":N,"pass":P,"fail":F,"raw":"..."}
 //
-// ── Known gaps (raw 91 honest) ───────────────────────────────────────
+// ── Known gaps (C3 honest) ───────────────────────────────────────
 //   G1. No parallelism. Files run serially because hexa exec() is sync
 //       and thread/spawn primitives aren't exposed at stdlib level.
 //   G2. Per-test (within-file) selection (`--testNamePattern`) is NOT

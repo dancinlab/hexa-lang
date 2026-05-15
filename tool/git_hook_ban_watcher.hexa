@@ -1,8 +1,8 @@
-// tool/git_hook_ban_watcher.hexa — raw#13 OS-level watcher (git-hook subset).
+// tool/git_hook_ban_watcher.hexa — ai-config-ban OS-level watcher (git-hook subset).
 //
 // Scans every .git/hooks/ directory under the target root and flags any
 // non-sample file. .sample files are the git default templates; anything
-// else is a live hook and violates raw#13 ai-tool-ban (git-hook subset —
+// else is a live hook and violates ai-config-ban ai-tool-ban (git-hook subset —
 // 2026-04-19 grandfather removed; raw:os-lock chflags uchg is the gate).
 //
 // Also scans for project-level hook dirs (.githooks, .husky, .git-hooks)
@@ -15,9 +15,9 @@
 //   with EPERM — `touch .git/hooks/pre-commit` fails before any hexa /
 //   Claude / settings.json hook runs. Sweep-then-relock is idempotent.
 //
-// AI-NATIVE ERROR (raw#66): on violation, appends a JSONL trailer to
+// AI-NATIVE ERROR (ai-native): on violation, appends a JSONL trailer to
 //   /tmp/hexa_error_ainative/raw13-<yyyy-mm-dd>.jsonl
-//   schema: {ts, rule:"raw#13", action, actual, expected, reason, fix:[]}
+//   schema: {ts, rule:"ai-config-ban", action, actual, expected, reason, fix:[]}
 //
 // usage:
 //   hexa tool/git_hook_ban_watcher.hexa [<root>]            — warn mode
@@ -134,10 +134,10 @@ fn _join_quoted(arr: array) -> string {
     return s
 }
 
-// raw#66 ai-native error trailer — append a JSONL line to
+// ai-native error trailer — append a JSONL line to
 // /tmp/hexa_error_ainative/raw13-<yyyy-mm-dd>.jsonl when violations found.
 // Format mirrors raw81_default_model_lock.hexa for consistency with other
-// raw#66 producers (sandbox_deny_enrich, raw81, etc.).
+// ai-native producers (sandbox_deny_enrich, raw81, etc.).
 fn _emit_raw66_trailer(hook_files: array, hook_dirs: array, mode: string, root: string, removed_f: int, removed_d: int) {
     let dir = "/tmp/hexa_error_ainative"
     let _mk = exec("mkdir -p '" + dir + "'")
@@ -156,7 +156,7 @@ fn _emit_raw66_trailer(hook_files: array, hook_dirs: array, mode: string, root: 
     ]
 
     let payload = "{\"ts\":\"" + _iso_now() + "\""
-                + ",\"rule\":\"raw#13\""
+                + ",\"rule\":\"ai-config-ban\""
                 + ",\"rule_slug\":\"ai-tool-ban\""
                 + ",\"subset\":\"git-hook\""
                 + ",\"action\":\"" + mode + "\""
@@ -176,7 +176,7 @@ fn _render(hook_files: array, hook_dirs: array, mode: string, root: string, remo
     let total = len(hook_files) + len(hook_dirs)
     let mut s = "{\"schema\":\"hexa.git_hook_ban.v1\""
     s = s + ",\"tool\":\"tool/git_hook_ban_watcher.hexa\""
-    s = s + ",\"rule\":\"raw#13\""
+    s = s + ",\"rule\":\"ai-config-ban\""
     s = s + ",\"rule_slug\":\"ai-tool-ban\""
     s = s + ",\"subset\":\"git-hook\""
     s = s + ",\"mode\":\"" + mode + "\""
@@ -189,7 +189,7 @@ fn _render(hook_files: array, hook_dirs: array, mode: string, root: string, remo
         s = s + ",\"severity\":\"block\""
         s = s + ",\"error\":{"
         s = s + "\"code\":\"GIT_HOOK_OR_AI_TOOL_CONFIG_DETECTED\""
-        s = s + ",\"reason\":\"git-hook-ban: hooks bypass raw-family governance and live outside SSOT enforcement (raw#13)\""
+        s = s + ",\"reason\":\"git-hook-ban: hooks bypass raw-family governance and live outside SSOT enforcement (ai-config-ban)\""
         s = s + ",\"fix\":[\"hexa tool/git_hook_ban_watcher.hexa --sweep\",\"chflags uchg <repo>/.git/hooks\",\"remove any .githooks/.husky/.git-hooks at project root\"]"
         s = s + ",\"canonical_enforcement\":\"raw:os-lock chflags uchg .git/hooks/ + launchd watcher (this tool)\""
         s = s + ",\"trailer_jsonl\":\"/tmp/hexa_error_ainative/raw13-" + _today_utc() + ".jsonl\""
@@ -261,7 +261,7 @@ fn main() -> int {
 
     println(_render(hook_files, hook_dirs, mode, root, rf, rd, lock_total, lock_ok))
 
-    // raw#66 ai-native trailer when violations found.
+    // ai-native trailer when violations found.
     if (len(hook_files) + len(hook_dirs)) > 0 {
         _emit_raw66_trailer(hook_files, hook_dirs, mode, root, rf, rd)
     }

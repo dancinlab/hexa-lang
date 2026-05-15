@@ -1,13 +1,13 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native HXC cross-repo dictionary LZ77 rolling 256KB context buffer (A33 PASS 4 — hash-chain match-find + production scale)")
-// @tool(slug="hxc-a33-cross-repo-dict", desc="HXC algorithm A33: CROSS-REPO concatenated-corpus LZ77 with 256KB rolling ring buffer (window crosses file boundaries; previous-N-file content remains as context). Per design doc $HOME/core/anima/docs/hxc_a33_cross_repo_dict_design_2026-04-28.md + PASS 4 delta $HOME/core/anima/docs/hxc_a33_pass4_hash_chain_2026-04-29.md. Targets entropy verdict path #1 (cross_repo_dictionary_LZ77 64KB+ window) per $HOME/core/anima/state/format_witness/2026-04-28_anima_n6_entropy_floor_measurement.jsonl. Pure hexa raw 9 + raw 18 self-host (integer-only LZ77 match-find + LEB128 varint, no fp ops, no neural mixer per raw 137). PASS 4 BUILD: PASS 1 design doc + PASS 2 skeleton + PASS 2.5 held-out anima+n6 seed buffer + PASS 3 5/5 fixture selftest (interp + AOT byte-identical) + PASS 4 hash-chain match-find replaces naive O(max_dist*max_len) → O(N + chain_walk) + 5MB stratified MEASURED. raw 137 cmix-ban MAINTAINED: greedy longest-match + integer compare + LEB128 varint + modulo ring buffer arithmetic, NOT cmix-class. raw 156 placement axis: post-A1 secondary-stacking, multi-file SESSION ONLY (single-file CLI invocation reverts to identity per raw 142 D2 try-and-revert). NON-OVERLAP: A19 v2 = per-corpus shared dict top-N tokens via ^Z; A33 = LZ77 rolling window via ^h, references CAN cross file boundary.")
+// @tool(slug="hxc-a33-cross-repo-dict", desc="HXC algorithm A33: CROSS-REPO concatenated-corpus LZ77 with 256KB rolling ring buffer (window crosses file boundaries; previous-N-file content remains as context). Per design doc $HOME/core/anima/docs/hxc_a33_cross_repo_dict_design_2026-04-28.md + PASS 4 delta $HOME/core/anima/docs/hxc_a33_pass4_hash_chain_2026-04-29.md. Targets entropy verdict path #1 (cross_repo_dictionary_LZ77 64KB+ window) per $HOME/core/anima/state/format_witness/2026-04-28_anima_n6_entropy_floor_measurement.jsonl. Pure hexa hexa-only + self-host fixpoint self-host (integer-only LZ77 match-find + LEB128 varint, no fp ops, no neural mixer per ai-config-ban). PASS 4 BUILD: PASS 1 design doc + PASS 2 skeleton + PASS 2.5 held-out anima+n6 seed buffer + PASS 3 5/5 fixture selftest (interp + AOT byte-identical) + PASS 4 hash-chain match-find replaces naive O(max_dist*max_len) → O(N + chain_walk) + 5MB stratified MEASURED. ai-config-ban cmix-ban MAINTAINED: greedy longest-match + integer compare + LEB128 varint + modulo ring buffer arithmetic, NOT cmix-class. no-hardcode6 placement axis: post-A1 secondary-stacking, multi-file SESSION ONLY (single-file CLI invocation reverts to identity per magic-number2 D2 try-and-revert). NON-OVERLAP: A19 v2 = per-corpus shared dict top-N tokens via ^Z; A33 = LZ77 rolling window via ^h, references CAN cross file boundary.")
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a33_cross_repo_dict.hexa --selftest)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a33_cross_repo_dict.hexa encode <in> <out>)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a33_cross_repo_dict.hexa decode <in> <out>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args, 4=decode-mismatch)
 //
-// PASS 4 scope (raw 91 honest C3 STRICT):
+// PASS 4 scope (C3 honest C3 STRICT):
 //
 //   PASS 1 — design doc (companion file in anima/docs/, NOT in this module).
 //
@@ -30,7 +30,7 @@
 //       F2: ring buffer push 4096 bytes; verify get_back at known offsets.
 //       F3: varint round-trip on integers {0, 63, 64, 4095, 4096, 8191, 32767}.
 //       F4: match-find on synthetic ring with known content + upcoming prefix.
-//       F5: short-input passthrough (raw 65/68; below MIN_SESSION_BYTES).
+//       F5: short-input passthrough (idempotency/68; below MIN_SESSION_BYTES).
 //
 //   PASS 4 — hash-chain match-find + 5MB stratified MEASURED:
 //       3-byte hash key (15-bit, 32768 buckets) → linked list of recent
@@ -41,31 +41,31 @@
 //       Match semantics IDENTICAL to PASS 2 naive: greedy longest match
 //       wins, byte-eq compare, RLE wrap supported. F-A33-1/2/4/6 evaluated
 //       against 5MB stratified concatenated corpus (text/json/mixed/struct).
-//       raw 137 cmix-ban PRESERVED: hash-chain is deterministic
+//       ai-config-ban cmix-ban PRESERVED: hash-chain is deterministic
 //       structural acceleration, NOT a probabilistic mixer.
 //
-// Falsifier preregister (raw 71, mirrored from design doc §4):
+// Falsifier preregister (falsifier, mirrored from design doc §4):
 //   F-A33-1: text-heavy class lift on 5MB stratified concatenated < +5pp vs A29 v3 → DEFERRED
 //   F-A33-2: aggregate 6-repo MEASURED < 70%                                       → DEFERRED
 //   F-A33-3: round-trip byte-eq fails on any 5/5 selftest fixture                  → first-tick PRIMARY GATE
 //   F-A33-4: seed buffer overhead amortized < 0pp → identity revert                → DEFERRED
 //   F-A33-5: dict context buffer state cannot be reproduced from manifest          → structurally guarded by F1 round-trip
-//   F-A33-6: session memory peak > 50MB on 6-repo (raw 42 jetsam)                  → DEFERRED
+//   F-A33-6: session memory peak > 50MB on 6-repo (follow-up jetsam)                  → DEFERRED
 //
-// raw 137 cmix-ban compliance:
+// ai-config-ban cmix-ban compliance:
 //     greedy longest-match + integer byte compare + LEB128 unsigned varint +
 //     ring buffer modulo arithmetic. ALL deterministic. NO fp ops. NO neural
 //     mixer. NO non-deterministic similarity. Encode + decode both deterministic
-//     (raw 65/68 idempotent: same (manifest, seed, files) → byte-identical wire).
+//     (idempotency/68 idempotent: same (manifest, seed, files) → byte-identical wire).
 //
-// raw 156 placement axis:
+// no-hardcode6 placement axis:
 //     A33 = post-A1 secondary-stacking. multi-file SESSION ONLY. Single-file CLI
-//     invocation reverts to identity (raw 142 D2 try-and-revert). NON-OVERLAP
+//     invocation reverts to identity (magic-number2 D2 try-and-revert). NON-OVERLAP
 //     with A19 v2 (per-corpus shared dict via ^Z) and A18 (per-file LZ-PPM via
 //     ^L..^Q). Sigil ^h is LOWERCASE alphabetic, distinct from all uppercase
 //     ^A..^Z and from ^a/^b/^c.
 //
-// FIRST-TICK BYTE-RANGE LIMITATION (raw 91 honest C3 disclosure):
+// FIRST-TICK BYTE-RANGE LIMITATION (C3 honest C3 disclosure):
 //     hexa string primitives use UTF-8 encoding internally. chr(0) returns
 //     empty string in some hexa builds, and chr(128..255) returns 2-byte
 //     UTF-8 sequences. To preserve byte-eq round-trip on first-tick selftest,
@@ -80,15 +80,15 @@
 const A33_RING_CAP = 262144                 // 256KB rolling window
 const A33_MATCH_MIN = 4                     // below 4 bytes ref cost dominates
 const A33_MATCH_MAX = 258                   // mirrors DEFLATE
-const A33_MIN_SESSION_BYTES = 4096          // raw 156: < 4KB → identity passthrough
-const A33_MIN_FILE_COUNT = 2                // raw 156: single-file → identity
+const A33_MIN_SESSION_BYTES = 4096          // no-hardcode6: < 4KB → identity passthrough
+const A33_MIN_FILE_COUNT = 2                // no-hardcode6: single-file → identity
 const A33_SIGIL_BYTE_1 = 94                 // '^'
 const A33_SIGIL_BYTE_2 = 104                // 'h'
 const A33_HEADER_PREFIX = "# a33:s1 v=cross-repo-lz77-v1"
 const A33_VARINT_BASE = 64                  // printable-safe 6-bit chunks (continuation = +64)
 const A33_VARINT_MAX_BYTES = 5              // covers values up to 64^5 = 1073741824
 
-// PASS 4 hash-chain constants (raw 137 deterministic structural acceleration).
+// PASS 4 hash-chain constants (ai-config-ban deterministic structural acceleration).
 const A33_HASH_BUCKETS = 32768              // 2^15, balances mem (256KB head array) vs collision
 const A33_HASH_MASK = 32767                 // A33_HASH_BUCKETS - 1
 const A33_MAX_CHAIN = 1024                  // per-bucket chain walk bound (F-A33-6 latency cap)
@@ -160,7 +160,7 @@ fn _codes_to_str(codes: array) -> string {
 //               Fixed 2 MB ceiling (262144 * 8B). Replaces PASS 4
 //               map<string,int> — zlib/DEFLATE classic pattern.
 //
-// PASS 5 RSS-FIX RATIONALE (raw 91 honest C3 disclosure):
+// PASS 5 RSS-FIX RATIONALE (C3 honest C3 disclosure):
 //   PASS 4 stored both hash arrays inside the ring tuple. _a33_ring_push
 //   returned the ring per call, and __hexa_fn_arena_return → hexa_val_heapify
 //   walks ALL items of any returned array recursively. With hash_prev as a
@@ -176,7 +176,7 @@ fn _codes_to_str(codes: array) -> string {
 // PASS 4 NOTE: hash-chain replaces naive O(max_dist × max_len) match-find
 // with O(N + chain_walk_bounded). Chain bound = A33_MAX_CHAIN = 1024
 // per F-A33-6 latency / RSS cap. Stale entries (back_dist > A33_RING_CAP)
-// skipped during walk. raw 137 cmix-ban PRESERVED — hash-chain is
+// skipped during walk. ai-config-ban cmix-ban PRESERVED — hash-chain is
 // deterministic structural acceleration, not a probabilistic mixer.
 
 fn _a33_hash3_codes(c0: int, c1: int, c2: int) -> int {
@@ -338,7 +338,7 @@ fn _a33_ring_get_at_abs(codes: array, write_idx: int, n_filled: int, abs_pos: in
 // PRINTABILITY NOTE: final-byte values 0..31 include control bytes; for first
 // tick this is acceptable because varint sits BETWEEN sigil and next-byte and
 // the decoder uses byte-at-position semantics, not line-prefix detection.
-// raw 92 sigil-line constraint applies to LINE PREFIX only; varint payload
+// module-loader-fatal sigil-line constraint applies to LINE PREFIX only; varint payload
 // is a structured byte sequence within the ^h reference, not a top-level line.
 
 fn _a33_varint_encode(n: int) -> string {
@@ -421,7 +421,7 @@ fn _a33_varint_decode(stream: string, p: int) -> array {
 // which on 5MB with L≈64 (typical text) is ~80M byte compares vs naive
 // 5MB × 256K window × 258 max-len ≈ 3.3 × 10^14 — a ~4M× speedup.
 //
-// raw 137 cmix-ban PRESERVED: hash function is integer multiply/add/mod,
+// ai-config-ban cmix-ban PRESERVED: hash function is integer multiply/add/mod,
 // chain walk is deterministic (FIFO insertion), match comparison is
 // byte-eq integer compare. No probabilistic mixer. No fp ops.
 
@@ -489,7 +489,7 @@ fn _a33_find_longest_match(codes: array, write_idx: int, n_filled: int, hash_hea
     return _a33_find_longest_match_codes(codes, write_idx, n_filled, hash_head, hash_prev, upc, p, max_dist, max_len)
 }
 
-// _a33_find_longest_match_codes_naive: PASS 2 baseline retained for raw 142
+// _a33_find_longest_match_codes_naive: PASS 2 baseline retained for magic-number2
 // D2 revert capability and selftest cross-validation. NOT used by encode in
 // PASS 4+ production path. PASS 5: signature updated to match new ring
 // representation (codes/idx/filled separate).
@@ -746,8 +746,8 @@ fn _a33_decode_codes(stream_codes: array, seed_codes: array, n_expected: int) ->
 // runs LZ77 over the concatenated stream with seed (string), returns
 // [body_string, raw_total_bytes, encoded_bytes, mode_string].
 //
-// raw 142 D2 try-and-revert: if encoded_len ≥ raw_len → identity (raw concat).
-// raw 156: if total < A33_MIN_SESSION_BYTES OR n_files < A33_MIN_FILE_COUNT
+// magic-number2 D2 try-and-revert: if encoded_len ≥ raw_len → identity (raw concat).
+// no-hardcode6: if total < A33_MIN_SESSION_BYTES OR n_files < A33_MIN_FILE_COUNT
 //          → identity.
 fn a33_session_encode(files_text: array, seed: string) -> array {
     return a33_session_encode_opts(files_text, seed, A33_MIN_SESSION_BYTES)
@@ -932,7 +932,7 @@ fn _selftest() -> int {
                 + " expected dist=6 len=6 → F-A33-3 TRIPPED")
     }
 
-    // ─── F5: short-input passthrough (raw 65 + 68) ───
+    // ─── F5: short-input passthrough (idempotency + 68) ───
     //   Falsifier: F-A33-3 (idempotency).
     //   Single-file 6-byte input via session_encode → identity (n_files=1
     //   below A33_MIN_FILE_COUNT=2).
@@ -944,7 +944,7 @@ fn _selftest() -> int {
     let body5b: string = res5b[0]
     if body5 == tiny5 && body5b == tiny5 && mode5 == "identity_single_file" {
         pass = pass + 1
-        println("  PASS: F5 short-input passthrough idempotent (raw 65 + 68) mode=" + mode5)
+        println("  PASS: F5 short-input passthrough idempotent (idempotency + 68) mode=" + mode5)
     } else {
         fail = fail + 1
         println("  FAIL: F5 short-input idempotency broken body5_len="
@@ -965,7 +965,7 @@ fn _selftest() -> int {
 //   Reads manifest (one path per line), reads seed file, concatenates files,
 //   encodes with seed-pre-loaded ring, decodes, verifies byte-eq, prints
 //   one JSONL line summarizing raw_bytes / enc_bytes / saving_pct / byte_eq /
-//   mode / file_count. raw 91 honest C3 STRICT — outputs MEASURED only,
+//   mode / file_count. C3 honest C3 STRICT — outputs MEASURED only,
 //   no projection.
 
 fn _read_lines_strip(path: string) -> array {
@@ -1110,9 +1110,9 @@ fn main() {
         exit(_session_roundtrip(manifest, seed))
     }
     if has_encode || has_decode {
-        // Single-file CLI is HONESTLY identity-revert for A33 (raw 156:
+        // Single-file CLI is HONESTLY identity-revert for A33 (no-hardcode6:
         // multi-file SESSION required; single-file invocation reverts per
-        // raw 142 D2). This CLI exists for dispatcher harness exposure.
+        // magic-number2 D2). This CLI exists for dispatcher harness exposure.
         let mut sub_idx: i64 = 0
         let mut q: i64 = 0
         while q < len(av) {

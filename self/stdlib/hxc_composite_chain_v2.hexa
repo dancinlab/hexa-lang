@@ -4,7 +4,7 @@ use "self/stdlib/hxc_a29_deflate"
 use "self/stdlib/hxc_a30_bwt_mtf"
 
 // @resolver-bypass(reason="darwin-native HXC composite-chain v2 internal-byte fast-path — follow-on tick per a657d6c1 §10")
-// @tool(slug="hxc-composite-chain-v2", desc="HXC composite chain v2 INTERNAL-BYTE FAST-PATH — A29 internal payload bytes (b64 envelope skipped) → A30 pipeline → single composite b64 envelope. C-PRIMARY ONLY (C1 = A29→A30). Sigil ^d (re-used; raw 92 sigil-line compliant). Wire header `# cc:s2 v=composite-byte-v1 chain=C1`. 5-fixture internal-byte round-trip + 3-fixture D2 try-revert + 5KB micro-LIVE-FIRE break-even s2 measurement vs theoretical 24.8%. raw 142 D2: encode_v2 returns shortest of {composite_v2, A29_alone, A30_alone, identity}. NO 6-repo full sweep (deferred). NO production deploy. raw 91 honest C3 STRICT: this tick = follow-on internal-byte first-tick + 5KB micro-LIVE-FIRE; F-CC-7 break-even gate measured.")
+// @tool(slug="hxc-composite-chain-v2", desc="HXC composite chain v2 INTERNAL-BYTE FAST-PATH — A29 internal payload bytes (b64 envelope skipped) → A30 pipeline → single composite b64 envelope. C-PRIMARY ONLY (C1 = A29→A30). Sigil ^d (re-used; module-loader-fatal sigil-line compliant). Wire header `# cc:s2 v=composite-byte-v1 chain=C1`. 5-fixture internal-byte round-trip + 3-fixture D2 try-revert + 5KB micro-LIVE-FIRE break-even s2 measurement vs theoretical 24.8%. magic-number2 D2: encode_v2 returns shortest of {composite_v2, A29_alone, A30_alone, identity}. NO 6-repo full sweep (deferred). NO production deploy. C3 honest C3 STRICT: this tick = follow-on internal-byte first-tick + 5KB micro-LIVE-FIRE; F-CC-7 break-even gate measured.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_composite_chain_v2.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_composite_chain_v2.hexa --micro-live-fire)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_composite_chain_v2.hexa encode <in> <out>)
@@ -63,36 +63,36 @@ use "self/stdlib/hxc_a30_bwt_mtf"
 //   The 24.8% figure is the conservative break-even when A29 wire ≈ identity input
 //   (i.e., A29 is at its compression ceiling and any further saving comes from A30).
 //
-// Idempotency (raw 65 + 68 + 137):
+// Idempotency (idempotency + 68 + 137):
 //   - decode_v2(encode_v2(s)) == s for any s.
 //   - encode_v2(encode_v2(s)) == encode_v2(s) (header short-circuit).
 //   - non-composite-v2 input → cc2_decode passthrough.
 //   - encode is byte-deterministic (composes deterministic A29 + A30).
 //
-// raw 142 D2 (try-revert) — STRICT:
+// magic-number2 D2 (try-revert) — STRICT:
 //   encode_v2 returns shortest of {composite_v2, A29_alone, A30_alone, identity}.
 //   Guarantees composite never inflates aggregate vs current SOTA. Worst case = +0pp.
 //
-// raw 156 placement-orthogonality:
+// no-hardcode6 placement-orthogonality:
 //   Composite v2 = NEW axis (sequential algorithm composition with internal-byte
 //   stage interface). NOT orthogonal to A29/A30 — composite SUBSUMES them as inner
 //   stages. COMPLEMENTARY to A25 dispatcher; coexist as orthogonal axes IF
 //   composite passes follow-on F-CC-7 gate.
 //
-// raw 137 cmix-ban compliance:
+// ai-config-ban cmix-ban compliance:
 //   Composite v2 = sequential composition of deterministic algorithms (A29 v1 +
 //   A30 v1). All inner stages are deterministic, integer-only, no fp ops, no
 //   neural mixer. Output is bit-for-bit reproducible.
 //
-// Falsifiers (raw 71, this tick):
-//   F-CC2-1: round-trip byte-eq fails on any of 5 selftest fixtures → REJECT (raw 65/68).
+// Falsifiers (falsifier, this tick):
+//   F-CC2-1: round-trip byte-eq fails on any of 5 selftest fixtures → REJECT (idempotency/68).
 //   F-CC2-2: composite_v2 size > min(A29, A30, identity) for any fixture →
 //            D2 try-revert returns the smaller candidate (verified by selftest).
 //   F-CC2-3: 5KB micro-LIVE-FIRE break-even s2 < 24.8% on majority of fixtures
 //            → C-PRIMARY composite anti-lever; honest C3 catalog "below break-even".
 //   F-CC2-4: header parse ambiguity (composite v2 collides with A29/A30) → REJECT.
 //
-// Deferred (raw 91 honest C3):
+// Deferred (C3 honest C3):
 //   - 6-repo full sweep (gated on F-CC2-3 pass).
 //   - F-CC-4..8 LIVE FIRE production gates (gated on micro-LIVE-FIRE pass + 6-repo).
 //   - A25 dispatcher integration (gated on F-CC-4 aggregate ≥ 78.65%).
@@ -401,15 +401,15 @@ fn _cc2_c1_force(s: string) -> string {
     return _cc2_wrap(a30_payload_bytes, n, n_a29p, n_a30p, a29_t, a30_p, a30_r)
 }
 
-// ───────────────── public encode / decode (raw 142 D2 try-revert) ─────────────────
+// ───────────────── public encode / decode (magic-number2 D2 try-revert) ─────────────────
 
 fn cc2_encode(s: string) -> string {
-    // raw 142 D2 STRICT: returns shortest of {composite_v2, A29-alone, A30-alone, identity}.
+    // magic-number2 D2 STRICT: returns shortest of {composite_v2, A29-alone, A30-alone, identity}.
     let n: i64 = len(s)
     if n < CC2_MIN_BYTES { return s }
     let prefix_len: i64 = len(CC2_HEADER_PREFIX)
     if n >= prefix_len && s.substring(0, prefix_len) == CC2_HEADER_PREFIX { return s }
-    // Detect already-A29 / already-A30 input and passthrough (raw 65/68).
+    // Detect already-A29 / already-A30 input and passthrough (idempotency/68).
     if n >= 7 && s.substring(0, 7) == "# a29:s" { return s }
     if n >= 7 && s.substring(0, 7) == "# a30:s" { return s }
 
@@ -417,7 +417,7 @@ fn cc2_encode(s: string) -> string {
     let a29 = a29_encode(s)
     let a30 = a30_encode(s)
 
-    // raw 142 D2: pick shortest among {cc, a29, a30, identity}.
+    // magic-number2 D2: pick shortest among {cc, a29, a30, identity}.
     let mut best = s
     let mut best_n: i64 = n
     if len(cc) < best_n { best = cc; best_n = len(cc) }
@@ -506,7 +506,7 @@ fn _cc2_assert_d2_revert(label: string, fixture: string) -> int {
 // ───────────────── micro-LIVE-FIRE 5KB stratified ─────────────────
 //
 // 5 fixtures × ~5KB each. Builds via repetition of seed phrases (deterministic,
-// raw 137 cmix-ban — no random sampling). Measures composite_v2 size, A29 size,
+// ai-config-ban cmix-ban — no random sampling). Measures composite_v2 size, A29 size,
 // A30 size, identity size, computes s2 = saving on A29 payload by A30, reports
 // break-even verdict vs 24.8% theoretical threshold.
 
@@ -543,7 +543,7 @@ fn _cc2_live_fire_one(label: string, fixture: string) -> array {
     }
     let s2_pct: i64 = if n_a29p > 0 { ((n_a29p - n_a30p) * 100) / n_a29p } else { 0 }
 
-    // raw 142 D2: pick shortest among {cc, a29, a30, identity}.
+    // magic-number2 D2: pick shortest among {cc, a29, a30, identity}.
     let mut winner = "identity"
     let mut best: i64 = n
     if n_cc < best { winner = "composite-v2"; best = n_cc }
@@ -588,7 +588,7 @@ fn _micro_live_fire() -> int {
     s2_sum = s2_sum + r_json[6]
 
     // Fixture C: Korean / multibyte UTF-8 (Korean class).
-    let seed_kor = "안녕하세요 세계 — 합성 체인 v2 internal-byte fast-path. 한글 + 영문 혼합 fixture for byte-eq round-trip. composite chain hexa raw 9 + raw 18 self-host. "
+    let seed_kor = "안녕하세요 세계 — 합성 체인 v2 internal-byte fast-path. 한글 + 영문 혼합 fixture for byte-eq round-trip. composite chain hexa hexa-only + self-host fixpoint self-host. "
     let fix_kor = _cc2_repeat(seed_kor, 5120)
     let r_kor = _cc2_live_fire_one("F-C korean 5KB  ", fix_kor)
     total = total + 1
@@ -645,19 +645,19 @@ fn _selftest_cc2() -> int {
     while k2 < 12 { buf_json = buf_json + phrase_json; k2 = k2 + 1 }
     if _cc2_assert_round_trip("F2-JSON", buf_json) == 0 { pass = pass + 1 } else { fail = fail + 1 }
 
-    let phrase_kor = "안녕 세계 — 합성 체인 v2 internal-byte fast-path. composite chain hexa raw 9 + raw 18. "
+    let phrase_kor = "안녕 세계 — 합성 체인 v2 internal-byte fast-path. composite chain hexa hexa-only + self-host fixpoint. "
     let mut buf_kor = ""
     let mut k3 = 0
     while k3 < 8 { buf_kor = buf_kor + phrase_kor; k3 = k3 + 1 }
     if _cc2_assert_round_trip("F3-Korean", buf_kor) == 0 { pass = pass + 1 } else { fail = fail + 1 }
 
-    let phrase_prose = "On 2026-04-28, internal-byte fast-path lands. The witness ledger advances by 1 entry. raw 91 honest C3. "
+    let phrase_prose = "On 2026-04-28, internal-byte fast-path lands. The witness ledger advances by 1 entry. C3 honest C3. "
     let mut buf_prose = ""
     let mut k4 = 0
     while k4 < 12 { buf_prose = buf_prose + phrase_prose; k4 = k4 + 1 }
     if _cc2_assert_round_trip("F4-Prose", buf_prose) == 0 { pass = pass + 1 } else { fail = fail + 1 }
 
-    let phrase_mixed = "Mixed: English {\"k\":1} 안녕 — composite-v2 internal-byte. raw 9 + raw 18 + raw 142 D2. "
+    let phrase_mixed = "Mixed: English {\"k\":1} 안녕 — composite-v2 internal-byte. hexa-only + self-host fixpoint + magic-number2 D2. "
     let mut buf_mixed = ""
     let mut k5 = 0
     while k5 < 12 { buf_mixed = buf_mixed + phrase_mixed; k5 = k5 + 1 }
@@ -672,7 +672,7 @@ fn _selftest_cc2() -> int {
     let aux1 = cc2_encode(buf_eng)
     let aux2 = cc2_encode(aux1)
     if aux2 == aux1 {
-        println("  AUX:  cc2_encode idempotent on encoded stream (header short-circuit OK, raw 65 + 68)")
+        println("  AUX:  cc2_encode idempotent on encoded stream (header short-circuit OK, idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: AUX cc2_encode not idempotent on encoded stream")
@@ -680,7 +680,7 @@ fn _selftest_cc2() -> int {
 
     let aux_pt = cc2_decode("not-a-composite-stream")
     if aux_pt == "not-a-composite-stream" {
-        println("  AUX:  cc2_decode passthrough on non-composite input (raw 65 + 68)")
+        println("  AUX:  cc2_decode passthrough on non-composite input (idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: AUX cc2_decode passthrough broken")
@@ -689,7 +689,7 @@ fn _selftest_cc2() -> int {
     let tiny = "abc"
     let enc_tiny = cc2_encode(tiny)
     if enc_tiny == tiny {
-        println("  AUX:  cc2_encode short-input passthrough (n < CC2_MIN_BYTES, raw 65)")
+        println("  AUX:  cc2_encode short-input passthrough (n < CC2_MIN_BYTES, idempotency)")
     } else {
         fail = fail + 1
         println("  FAIL: AUX short-input passthrough broken")
@@ -697,7 +697,7 @@ fn _selftest_cc2() -> int {
 
     println("Results: " + to_string(pass) + " PASS / " + to_string(fail) + " FAIL")
     println("__HXC_COMPOSITE_CHAIN_V2_SELFTEST__ " + (if fail == 0 { "PASS" } else { "FAIL" })
-            + " (INTERNAL-BYTE FAST-PATH: 5 round-trip fixtures + 3 D2 try-revert + 3 AUX; A29 v1 + A30 v1 read-only consume; SINGLE composite b64 envelope; 5KB micro-LIVE-FIRE separate via --micro-live-fire; 6-repo sweep / A25 integration / F-CC-4..8 LIVE FIRE DEFERRED per raw 91 honest C3)")
+            + " (INTERNAL-BYTE FAST-PATH: 5 round-trip fixtures + 3 D2 try-revert + 3 AUX; A29 v1 + A30 v1 read-only consume; SINGLE composite b64 envelope; 5KB micro-LIVE-FIRE separate via --micro-live-fire; 6-repo sweep / A25 integration / F-CC-4..8 LIVE FIRE DEFERRED per C3 honest C3)")
     if fail == 0 { return 0 }
     return 1
 }

@@ -8,10 +8,10 @@
 //   The hexa runtime exposes `json_parse` + `json_stringify` builtins.
 //   This module wraps them with a status-bearing API.
 //
-// Pure hexa (raw 9): zero exec(), zero external libs — delegates to
+// Pure hexa (hexa-only): zero exec(), zero external libs — delegates to
 // runtime builtins for the actual parsing.
 //
-// raw 91 (no_silent_errors) HONEST DISCLOSURES — see docs/stdlib_json_rfc_2026_04_28.md
+// C3 (no_silent_errors) HONEST DISCLOSURES — see docs/stdlib_json_rfc_2026_04_28.md
 //   L1. The runtime `json_parse` builtin is NOT total over arbitrary
 //       string input. For many malformed inputs it raises a hard
 //       runtime error (e.g. `to_int: not an integer: "..."`) that
@@ -29,12 +29,12 @@
 //   L4. Number precision: integers up to 10^18 round-trip; full
 //       IEEE-754 / arbitrary-precision is NOT guaranteed.
 //
-// raw 91 (no_silent_errors):
+// C3 (no_silent_errors):
 //   - json_parse_safe returns [ok, value] tuple — caller MUST check ok.
 //   - json_parse_or_throw raises (eprintln + exit 1) on bad input.
 //   - json_stringify is total (never fails on hexa-native types).
 //
-// raw 159 (hexa-lang-upstream-proposal-mandate):
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate):
 //   This module is the upstream-of-truth for hive's + papers' + n6's
 //   json ops. Sister repos `use "self/stdlib/json"` and never
 //   re-implement these.
@@ -324,7 +324,7 @@ fn _json_selftest() {
         }
     }
 
-    // 11. large integer round-trip (raw 91 L4 boundary check).
+    // 11. large integer round-trip (C3 L4 boundary check).
     n = n + 1
     let r11 = json_parse_safe("{\"big\":1000000000000000000}")
     if !r11[0] {

@@ -9,7 +9,7 @@ _yaml_
 Phase α (Friction 0) — AI-native module landed 2026-05-02.
 
 Purpose: parse YAML frontmatter blocks at the head of `.ai.md` documents
-(raw 271 README.ai.md convention) and any flat YAML key:value text. This
+(follow-up1 README.ai.md convention) and any flat YAML key:value text. This
 is *not* a full YAML implementation — see Caveats. It is the minimum
 surface needed to:
   (a) extract a `--- ... ---` frontmatter block from a document body,
@@ -22,7 +22,7 @@ Sister-repo unblock: anima/anima-eeg/airgenome/etc. each ship multiple
 or hand-rolls a regex/line-scan helper. This stdlib centralizes the
 parser so AI agents (and lint tools) can rely on identical semantics.
 
-raw 9 hexa-only — no python/awk delegation. Pure stdlib.
+hexa-only — no python/awk delegation. Pure stdlib.
 
 API:
   yaml_frontmatter_extract(text)       -> str   // body between --- markers, "" if absent
@@ -31,7 +31,7 @@ API:
   yaml_validate_keys(m, required)      -> [str] // missing keys ([] = OK)
   yaml_strip_frontmatter(text)         -> str   // body with frontmatter removed (post-parse use)
 
-Limits (raw#10):
+Limits (honest-caveat):
   1. Nested YAML rejected. Lines indented past `key:` collapse to the
      raw remainder string of the parent key — value is `""` for nested
      maps. Caller must treat such keys as opaque blobs.
@@ -49,7 +49,7 @@ Limits (raw#10):
 Extract the YAML frontmatter block from text. Returns the content between
 the leading `---` and the matching closing `---` (exclusive of markers).
 Returns "" if no frontmatter exists. Frontmatter must start at offset 0
-(modulo BOM / leading blank lines), per raw 271 convention.
+(modulo BOM / leading blank lines), per follow-up1 convention.
 
 ## Functions
 
@@ -95,7 +95,7 @@ pub fn yaml_parse_flat(text: string) -> map
 Parse a flat YAML text (no nesting) into a `key -> string` map.
 Lines that begin with whitespace + `-` (list items) are dropped; nested
 children of a parent key are dropped (parent value becomes "" by the
-time we reach the next top-level key). See raw#10 limit (1).
+time we reach the next top-level key). See honest-caveat limit (1).
 
 ### <a id="fn-yaml-get"></a>`fn yaml_get`
 

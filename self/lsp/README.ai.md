@@ -33,7 +33,7 @@ IDE consumers can plan integration without reading the source.
 | `textDocument/didChange` | notif | ✅ | `handle_did_change` | Re-runs law_check (full sync) |
 | `textDocument/willSave` | notif | ✅ | `handle_will_save` | No-op (notification spec) |
 | `textDocument/willSaveWaitUntil` | request | ✅ (stub) | `handle_will_save_wait_until` | Always returns `[]` — TextEdit auto-fix is Step 3+ |
-| `textDocument/didSave` | notif | ✅ | `handle_did_save` | Legacy law gate + per-rule (raw#9/#11/#12) granular diagnostics |
+| `textDocument/didSave` | notif | ✅ | `handle_did_save` | Legacy law gate + per-rule (lint-rules) granular diagnostics |
 | `shutdown` | request | ✅ | `handle_shutdown` | Returns null |
 | `exit` | notif | ✅ | (process exit 0) | |
 | `textDocument/completion` | request | ❌ Step 3+ | — | not advertised in capabilities |
@@ -49,12 +49,12 @@ Granular per-rule diagnostics emitted by `raw_diagnostics.hexa`:
 
 | Rule | Enforcer | Severity | Notes |
 |---|---|---|---|
-| raw#9 (hexa-only) | `tool/hexa_only_lint.hexa` | Error (1) | Banned-extension on staged paths |
-| raw#11 (ai-native-enforce) | `tool/ai_native_lint.hexa` | Error (1) | `path:line:col: [tag L# ...] msg` parsing |
-| raw#12 (silent-error) | `tool/error_propagation_lint.hexa` | Error (1) | `level[@rule] locus: msg` parsing |
+| hexa-only | `tool/hexa_only_lint.hexa` | Error (1) | Banned-extension on staged paths |
+| ai-native (ai-native-enforce) | `tool/ai_native_lint.hexa` | Error (1) | `path:line:col: [tag L# ...] msg` parsing |
+| silent-error (silent-error) | `tool/error_propagation_lint.hexa` | Error (1) | `level[@rule] locus: msg` parsing |
 
 Skipped on per-keystroke save (cost > benefit):
-raw#10 proof-carrying · raw#15 no-hardcode · raw#18 self-host-fixpoint.
+honest-caveat proof-carrying · no-hardcode no-hardcode · self-host fixpoint self-host-fixpoint.
 
 ## IDE compatibility notes
 - **VS Code**: Use `vscode-languageclient` with stdio transport. The skeleton

@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="hxc-a19-cross-file-fed", desc="HXC algorithm A19: cross-file federation shared dictionary. Many-small-files saturation unblock — promote schema/header/enum/prefix patterns from per-file dictionaries to ONE repo-level shared dictionary (state/hxc/_shared_dict.hxc). Per-file streams reference shared entries via ^D<id> sigil. Companion to A9 BPE single-file (which closed 0pp delta on small files — agent aafff73d verdict); cross-file vocabulary fusion is the effective unblock per design doc d6cbb81c. Pure hexa raw 9 + raw 18 self-host (no external libs, no neural mixer, integer-only). FULL — PASS 1 scanner + PASS 2 dict builder + PASS 3 per-file encode + PASS 4 decode + 5/5 selftest fixtures landed (agent loveiu99 second-tick 2026-04-28). raw 91 honest C3: aggregator picks top-K shared candidates by score = total_bytes - ref_overhead; encode does newline-anchored substitution on header lines only, data rows untouched.")
+// @tool(slug="hxc-a19-cross-file-fed", desc="HXC algorithm A19: cross-file federation shared dictionary. Many-small-files saturation unblock — promote schema/header/enum/prefix patterns from per-file dictionaries to ONE repo-level shared dictionary (state/hxc/_shared_dict.hxc). Per-file streams reference shared entries via ^D<id> sigil. Companion to A9 BPE single-file (which closed 0pp delta on small files — agent aafff73d verdict); cross-file vocabulary fusion is the effective unblock per design doc d6cbb81c. Pure hexa hexa-only + self-host fixpoint self-host (no external libs, no neural mixer, integer-only). FULL — PASS 1 scanner + PASS 2 dict builder + PASS 3 per-file encode + PASS 4 decode + 5/5 selftest fixtures landed (agent loveiu99 second-tick 2026-04-28). C3 honest C3: aggregator picks top-K shared candidates by score = total_bytes - ref_overhead; encode does newline-anchored substitution on header lines only, data rows untouched.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a19_cross_file_fed.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a19_cross_file_fed.hexa scan <corpus-root>)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a19_cross_file_fed.hexa build-dict <corpus-root> <dict-out>)
@@ -37,25 +37,25 @@
 //
 //   PASS 4 — decode (LANDED):
 //     - read footer, load + djb2-checksum-validate `_shared_dict.hxc`
-//     - corrupt dict → exit code 4 (raw 91 honest C3 fallback signal)
+//     - corrupt dict → exit code 4 (C3 honest C3 fallback signal)
 //     - build id → pattern reverse map; substitute `^D<id>` with pattern
 //
 // Sigil: `^D<dict_id>` — shared-dict reference. Cells starting literal `^D`
 // get escape `^D^` prefix (PASS 3 detail).
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //     encode(decode(x)) == x for any A19 stream
 //     decode(encode(y)) == y for any byte stream
 //     PASS 1 scanner is read-only — idempotent by construction
 //
-// Falsifiers preregistered (raw 71, raw 91 honest C3):
+// Falsifiers preregistered (falsifier, C3 honest C3):
 //     F-A19-1: byte-weighted saving < 0.05 on multi-file corpus → reject A19
 //              (per-file dict was already optimal; cross-file overhead waste)
 //     F-A19-2: shared dict missing/checksum-mismatch at decode → fallback to
 //              embed mode OR hard fail (configurable; PASS 4 detail)
 //     F-A19-3: encode latency > 100ms per 1KB content → reject (would block
 //              hxc_migrate single-pass throughput)
-//     F-A19-4: round-trip byte-eq fail on multi-file corpus → reject (raw 65/68)
+//     F-A19-4: round-trip byte-eq fail on multi-file corpus → reject (idempotency/68)
 
 const A19_SIGIL = "^D"
 const A19_DICT_FORMAT_VERSION = "v1"
@@ -76,7 +76,7 @@ const A19_TAG_DELTA = "delta"
 
 // ───────────────────────── shared dict file format ─────────────────────────
 //
-// `state/hxc/_shared_dict.hxc` text layout (raw 9 hexa-only readable):
+// `state/hxc/_shared_dict.hxc` text layout (hexa-only readable):
 //
 //   # hxc-shared-dict v1
 //   # corpus: <root_path>
@@ -123,7 +123,7 @@ fn _shell_escape(s: string) -> string {
 
 // _list_files — enumerate files under root matching glob extensions.
 // exts: array of bare extensions (e.g. ["hxc", "jsonl"]). Empty → no filter.
-// Uses POSIX `find` (raw 9 hexa-only allows shell exec; consistent with A7 _ts_iso).
+// Uses POSIX `find` (hexa-only allows shell exec; consistent with A7 _ts_iso).
 fn _list_files(root: string, exts: array) -> array {
     if len(root) == 0 { return [] }
     let mut cmd = "find " + _shell_escape(root) + " -type f"
@@ -219,7 +219,7 @@ fn _canonical_key(tag: string, key: string, body: string) -> string {
 
 // ───────────────────────── F9 fix: schema-id normalization (PASS 0) ─────────────────────────
 //
-// Problem (F-A19-1 root cause, raw 91 honest C3):
+// Problem (F-A19-1 root cause, C3 honest C3):
 //   A1 emits per-file auto-incrementing schema IDs (s1, s2, ...). When the SAME
 //   logical schema (same field list, same name) appears in different files
 //   under different per-file IDs, the canonical key `(tag, key=s1, body=fields)`
@@ -244,7 +244,7 @@ fn _canonical_key(tag: string, key: string, body: string) -> string {
 //      replace the per-file s<N> in the `key` slot with the canonical-id;
 //      for `<id>.<col>` style keys, split, normalize the id half, rejoin.
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //   - PASS 0 is read-only over inputs (only mutates the in-memory id map)
 //   - canonical-id is deterministic given fingerprint → re-running PASS 0 on
 //     normalized inputs gives the same map (canonical-id is its own fingerprint)
@@ -271,7 +271,7 @@ fn _djb2(s: string) -> int {
     return h
 }
 
-// _char_code — minimal ASCII char-to-int (raw 9: hexa-only fallback via
+// _char_code — minimal ASCII char-to-int (hexa-only fallback via
 // substring-equality scan; we only need stable hashing, so naive is fine).
 fn _char_code(c: string) -> int {
     if len(c) == 0 { return 0 }
@@ -595,7 +595,7 @@ fn a19_filter_cross_file(scan_out: array) -> array {
 // ───────────────────────── PASS 2 — dict builder ─────────────────────────
 
 // _ref_overhead_bytes — bytes consumed by `^D<id>` reference (assume id ≤ 4 digits
-// for top-K=256 default; cap = 6 bytes for "^D9999"). raw 91 honest: precise
+// for top-K=256 default; cap = 6 bytes for "^D9999"). C3 honest: precise
 // cost is len("^D") + digits(id) + 1 (LF retained) but we use 6-byte upper bound
 // so scoring is conservative (under-promotes patterns near break-even).
 const A19_REF_OVERHEAD_BYTES = 6
@@ -718,7 +718,7 @@ fn _checksum_djb2(s: string) -> int {
     while i < len(s) {
         let c = _byte_at(s, i)
         // approximate ord(c): use index-of in printable table; stub via integer
-        // hash on the character cell. raw 91 honest: this is a string-hash
+        // hash on the character cell. C3 honest: this is a string-hash
         // surrogate (collision-tolerant integrity check, NOT cryptographic).
         let mut ch = 0
         // simple bucketing — XOR low bits of len(prev) + position
@@ -765,7 +765,7 @@ fn a19_emit_dict(root: string, chosen: array) -> string {
 // ───────────────────────── PASS 4 — dict load + reverse map ─────────────────────────
 
 // _safe_parse_int — tolerate trailing garbage; return -1 on non-digit prefix.
-// Matches PASS 4 "raw 91 honest C3 fallback" requirement: corrupted checksum
+// Matches PASS 4 "C3 honest C3 fallback" requirement: corrupted checksum
 // must NOT crash the loader — it returns valid=0 to signal fallback.
 fn _safe_parse_int(s: string) -> int {
     let t = s.trim()
@@ -778,7 +778,7 @@ fn _safe_parse_int(s: string) -> int {
     while i < len(t) {
         let c = _byte_at(t, i)
         if c < "0" || c > "9" { break }
-        // Convert digit char → int via subtraction trick (raw 9 hexa-only):
+        // Convert digit char → int via subtraction trick (hexa-only):
         // tabulate via if-ladder (no ord() builtin needed).
         let mut d = 0
         if c == "0" { d = 0 }
@@ -871,7 +871,7 @@ fn a19_parse_dict(dict_text: string) -> array {
     // Validity:
     //   no checksum line at all   → "1" (legacy / unsigned dict — accept)
     //   checksum present + match  → "1"
-    //   checksum present, malformed or mismatch → "0"  (raw 91 C3 fallback path)
+    //   checksum present, malformed or mismatch → "0"  (C3 fallback path)
     let mut valid = "1"
     if cksum_seen {
         if stored_cksum != computed { valid = "0" }
@@ -950,7 +950,7 @@ fn a19_encode_file(text: string, parsed: array, dict_path: string) -> string {
         }
         i = i + 1
     }
-    // Trailing-LF handling (raw 65/68 byte-eq):
+    // Trailing-LF handling (idempotency/68 byte-eq):
     //   split("a\nb\n", "\n") → ["a","b",""] — the empty trailing slot already
     //   encodes the final LF when re-joined with "\n". If we ALSO append a
     //   "\n" via _byte_at heuristic we double-LF. So we use ONLY the join.
@@ -970,11 +970,11 @@ fn a19_encode_file(text: string, parsed: array, dict_path: string) -> string {
         }
     }
     let encoded = out_lines.join("\n")
-    // Try-and-revert (raw 65/68 idempotent contract): if encoded grew or stayed
+    // Try-and-revert (idempotency/68 idempotent contract): if encoded grew or stayed
     // the same vs original, return original verbatim. The footer's per-file cost
     // (~65B for typical dict-path) means small files with few substitutions
     // are net-negative — passthrough preserves byte-eq + saves wire bytes.
-    // raw 91 honest C3: this changes file_count distribution from "any sub" to
+    // C3 honest C3: this changes file_count distribution from "any sub" to
     // "saving > footer cost", aligning per-file behavior with corpus aggregate.
     if substitutions == 0 || len(encoded) >= len(text) {
         return text
@@ -1018,7 +1018,7 @@ fn a19_decode_file(text: string, parsed: array) -> string {
                     i = i + 1
                     continue
                 }
-                // raw 91 honest C3: missing/invalid dict id → fallback (keep literal).
+                // C3 honest C3: missing/invalid dict id → fallback (keep literal).
             }
         }
         out_lines.push(l)
@@ -1030,7 +1030,7 @@ fn a19_decode_file(text: string, parsed: array) -> string {
 
 // ───────────────────────── PASS 0.5 — encode-side id-rewrite ─────────────────────────
 //
-// Problem (F9 PASS 0 follow-up, raw 91 honest C3 from a89f3328):
+// Problem (F9 PASS 0 follow-up, C3 honest C3 from a89f3328):
 //   PASS 0 fixed the CENSUS axis: cross-file s1/s2 with same fingerprint now
 //   collapse into ONE canonical bucket so PASS 2 dict builder counts file_count
 //   correctly. BUT the dict still serializes patterns with the FIRST encountered
@@ -1049,13 +1049,13 @@ fn a19_decode_file(text: string, parsed: array) -> string {
 //   6. Decode reverses: parse footer, expand `^D<id>` to canonical pattern, then
 //      apply reverse map (Sxxx → s1) to recover per-file declaration form.
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //   - encode(decode(x)) == x: footer carries id_map; decode restores per-file ids
 //   - decode(encode(y)) == y: encode is purely substitution + footer; reversing
 //     the substitution AND stripping the footer recovers original byte stream
 //   - try-and-revert preserved: if encoded_v2 length >= original, return original
 //
-// Falsifier (preregistered, raw 71):
+// Falsifier (preregistered, falsifier):
 //   F-A19-6: encode(decode(x)) byte-eq fail on adversarial corpus → reject
 //            PASS 0.5 (encode-side rewrite breaks idempotency).
 
@@ -1332,7 +1332,7 @@ fn a19_decode_file_v2(text: string, parsed: array) -> string {
     let mut i = 0
     while i < len(lines) {
         let l = lines[i]
-        // Drop both v1 and v2 footer lines (raw 91 honest: we accept either).
+        // Drop both v1 and v2 footer lines (C3 honest: we accept either).
         if l.index_of("# shared-dict-ref:") == 0 { i = i + 1; continue }
         if l.index_of(A19_FOOTER_V2_PREFIX) == 0 { i = i + 1; continue }
         if len(l) >= 3 && _byte_at(l, 0) == "^" && _byte_at(l, 1) == "D"
@@ -1581,7 +1581,7 @@ fn _selftest() -> int {
     let bad_valid = bad_parsed[4]
     if bad_valid[0] == "0" {
         pass = pass + 1
-        println("  PASS: PASS 4 corrupted-checksum detected (raw 91 C3 fallback path)")
+        println("  PASS: PASS 4 corrupted-checksum detected (C3 fallback path)")
     } else {
         fail = fail + 1
         println("  FAIL: PASS 4 corrupted-checksum NOT detected: " + bad_valid[0])
@@ -1643,7 +1643,7 @@ fn _selftest() -> int {
                 + to_string(len(solo_text)) + " → " + to_string(len(solo_enc)) + ")")
     }
 
-    // ───── F9 fix: schema-id normalization PASS 0 fixtures (raw 71 retire) ─────
+    // ───── F9 fix: schema-id normalization PASS 0 fixtures (falsifier retire) ─────
     //
     // Five fixtures exercise the canonical-id derivation:
     //   F9-1: collision detection — two files using s1/s2 for same fields → same canonical-id
@@ -1754,7 +1754,7 @@ fn _selftest() -> int {
     //   F9-9: adversarial corpus census-encode parity — files declare same
     //         schemas in different s<N> orderings; v2 encode shrinks each.
     //   F9-10: break-even at small file size — v2 try-and-revert returns
-    //          original when footer overhead > savings (raw 65/68 contract).
+    //          original when footer overhead > savings (idempotency/68 contract).
 
     let f95_root = "/tmp/hxc_a19_f95_pass05_corpus"
     let _f95_mkdir = exec("mkdir -p " + _shell_escape(f95_root))
@@ -2064,7 +2064,7 @@ fn main() {
         let parsed = a19_parse_dict(dict_text)
         let pv = parsed[4]
         if pv[0] != "1" {
-            eprintln("# a19 decode: dict checksum mismatch — raw 91 C3 fallback would apply")
+            eprintln("# a19 decode: dict checksum mismatch — C3 fallback would apply")
             exit(4)
         }
         let in_text = to_string(read_file(in_path))
@@ -2104,7 +2104,7 @@ fn main() {
         let parsed = a19_parse_dict(dict_text)
         let pv = parsed[4]
         if pv[0] != "1" {
-            eprintln("# a19 decode-v2: dict checksum mismatch — raw 91 C3 fallback would apply")
+            eprintln("# a19 decode-v2: dict checksum mismatch — C3 fallback would apply")
             exit(4)
         }
         let in_text = to_string(read_file(in_path))

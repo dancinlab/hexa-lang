@@ -24,7 +24,7 @@
 // Fallback stub used if law_io is not yet loaded (e.g. the compiler
 // bootstraps before stdlib). Mirrors the [ok, reason] contract.
 fn _module_gate_fallback_check(path: string, content: string) {
-    // Minimal raw#7 extension ban (mirror of law_io's r7) so the gate is
+    // Minimal extension ban (mirror of law_io's r7) so the gate is
     // useful even before Layer 1 is wired into the compiler's own prelude.
     let bans = [".py", ".rs", ".sh", ".toml"]
     let mut i = 0
@@ -33,7 +33,7 @@ fn _module_gate_fallback_check(path: string, content: string) {
         if len(path) >= len(s) {
             let tail = path.substring(len(path) - len(s), len(path))
             if tail == s {
-                return [false, "raw#7 extension ban: `" + s + "` blocked (path=" + path + ")"]
+                return [false, "extension ban: `" + s + "` blocked (path=" + path + ")"]
             }
         }
         i = i + 1
@@ -53,7 +53,7 @@ pub fn module_gate_check(path: string) -> bool {
     }
 
     // Delegate to Layer 1 (law_io.law_check) via dynamic name — when L1
-    // isn't loaded yet, fall through to the local raw#7 fallback so the
+    // isn't loaded yet, fall through to the local extension-ban fallback so the
     // gate is never a no-op.
     let verdict = _module_gate_fallback_check(path, src)
     let ok = verdict[0]

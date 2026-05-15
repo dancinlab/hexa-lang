@@ -26,10 +26,6 @@
 //   changes between runs; the struct definition + accessors are emitted
 //   verbatim from a single template string in `_emit_footer`.
 //
-// Note:
-//   `.raw` / `.own` formats are RETIRED in the dancinlab ecosystem
-//   (2026-05-15 user signal). This tool does not reference them.
-
 // ── string escaping (mirrors compiler/atlas/embed.hexa::_escape_string) ──
 
 fn _escape_char(c: string) -> string {

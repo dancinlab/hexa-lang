@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="hxc-a12-column-prefix", desc="HXC algorithm A12: column-prefix dictionary. Detects per-column shared N-char prefixes (≥8 chars, ≥80% rows) — typical case: ISO-8601 ts columns share `YYYY-MM-DDTHH` window. Dictionary-encodes prefix as 1-byte symbol, emits suffix verbatim. Pure-hexa, raw 9 hexa-only. Targets aot_cache_gc.jsonl ts column 70%→77% gap.")
+// @tool(slug="hxc-a12-column-prefix", desc="HXC algorithm A12: column-prefix dictionary. Detects per-column shared N-char prefixes (≥8 chars, ≥80% rows) — typical case: ISO-8601 ts columns share `YYYY-MM-DDTHH` window. Dictionary-encodes prefix as 1-byte symbol, emits suffix verbatim. Pure-hexa, hexa-only. Targets aot_cache_gc.jsonl ts column 70%→77% gap.")
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a12_column_prefix.hexa --selftest)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a12_column_prefix.hexa encode <hxc.in> <hxc.out>)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a12_column_prefix.hexa decode <hxc.in> <hxc.out>)
@@ -19,19 +19,19 @@
 //   PASS 2 (per-row encode):
 //     For each value v in eligible column c with detected prefix p:
 //       If v starts with p → emit `^Xsuffix` where ^X is 1-byte symbol from dict.
-//       Else → emit verbatim (raw 91 honest C3 — no false-positive replacement).
+//       Else → emit verbatim (C3 honest C3 — no false-positive replacement).
 //
 //   Header format: `# col-prefix:<col_id> <symbol>=<prefix>` per column per prefix.
-//   Symbol-prefix sigil: `^` (matches A8 convention, raw 65 + 68 idempotent
+//   Symbol-prefix sigil: `^` (matches A8 convention, idempotency + 68 idempotent
 //   composability — A8 cat-symbols have no ambiguity with A12 prefix-symbols
 //   because A12 marker is `^P<X>` triple-byte while A8 is `^<X>` double-byte).
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //   - encode(decode(x)) == x for any A12 stream
 //   - decode(encode(y)) == y for any HXC v1 stream
 //   - encode(encode(y)) byte-equal encode(y) when no detection (singleton).
 //
-// Falsifiers (raw 71 contract):
+// Falsifiers (falsifier contract):
 //   F-A12-1: saving < 0.05 byte-eq on synthetic ts-column fixture → reject.
 //   F-A12-2: encode/decode round-trip not byte-eq → reject.
 //   F-A12-3: false-positive replacement (verbatim cell starting with `^P` in raw

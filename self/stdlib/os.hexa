@@ -3,16 +3,16 @@
 // Resolves part of hive blocker `goal_hexa_native_fs_stdlib`.
 // Provides node:os and process.env equivalents needed by
 // `scripts/install-extensions.mjs` (homedir, getenv) and the rest
-// of the hive .mjs surface. Pure hexa (raw 9 hexa-only): single
+// of the hive .mjs surface. Pure hexa (hexa-only): single
 // exec() fallback for $HOME / `id -u -n`.
 //
-// raw 91 (no_silent_errors):
+// C3 (no_silent_errors):
 //   getenv() returns "" on missing instead of throwing — caller
 //   distinguishes via `=="" && !env_has(name)`. homedir() falls
 //   back to `/Users/<id -un>` (Mac) or `/home/<id -un>` (Linux)
 //   if $HOME is unset, and ultimately to "/" with a stderr warn.
 //
-// raw 159 (hexa-lang-upstream-proposal-mandate):
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate):
 //   This module is the upstream-of-truth for hive's os ops. hive
 //   ports `use "self/stdlib/os"` and never re-implements these.
 //

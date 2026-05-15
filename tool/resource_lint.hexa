@@ -29,7 +29,7 @@
 //   - scoring-weight numeric, in [0.0, 1.0] inclusive
 //   - capabilities non-empty (csv-string)
 //
-// Pattern mirrors raw#13 ext_lint.hexa: same raw-format DSL parser,
+// Pattern mirrors ai-config-ban ext_lint.hexa: same raw-format DSL parser,
 // same status whitelist, same kind-specific check dispatch.
 
 // ─── YAML SSOT loader (2026-05-07: raw-format DSL → YAML migration) ──────

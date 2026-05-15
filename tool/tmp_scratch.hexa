@@ -1,4 +1,4 @@
-// tool/tmp_scratch.hexa — shared scratch-path helper (raw#14 no-hardcode migration)
+// tool/tmp_scratch.hexa — shared scratch-path helper (magic-number no-hardcode migration)
 //
 // Usage:
 //   use "tool/tmp_scratch"

@@ -21,7 +21,7 @@
 //
 // Breaking risk: 0. New module, new symbols.
 //
-// Caveats (raw#91): curl hard dep · header newline injection unchecked
+// Caveats (C3): curl hard dep · header newline injection unchecked
 // (callers pre-validate) · binary body unsafe (NUL truncation) · empty
 // body indistinguishable from failure (use status variant for diagnostics).
 

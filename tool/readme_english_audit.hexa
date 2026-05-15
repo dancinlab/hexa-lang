@@ -3,7 +3,7 @@
 // 목적:
 //   dancinlab org 5개 repo (canon, nexus, hexa-lang, anima, papers)
 //   의 루트 README.md 에 CJK (한글 / 일본어 / 중국어) 혼재 여부를 감지.
-//   arXiv 호환 + 국제 기여 우선 정책 (.own #1 doc-english-required) 의 enforce path.
+//   arXiv 호환 + 국제 기여 우선 정책 (doc-english-required) 의 enforce path.
 //
 // 실행:
 //   hexa tool/readme_english_audit.hexa               # 기본 (5 repo)
@@ -35,9 +35,9 @@
 //   기호   ✅ ❌ — – ‒ … 「」 『』  단위  ° ℃ μm Å
 //
 // 규칙:
-//   raw#9  hexa only (grep 는 read-only 단일 도우미 exec; hexa 가 주어)
-//   raw#10 proof-carrying — 각 FAIL 은 (repo, line, class, sample) 구조적 emit
-//   raw#11 snake_case
+//   hexa-only (grep 는 read-only 단일 도우미 exec; hexa 가 주어)
+//   proof-carrying — 각 FAIL 은 (repo, line, class, sample) 구조적 emit
+//   ai-native snake_case
 //   own#1  doc-english-required enforce path
 //   own#14 readme-sealed-required 위반 시 sealed hash 재계산 필요
 

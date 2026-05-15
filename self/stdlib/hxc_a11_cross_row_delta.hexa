@@ -1,14 +1,14 @@
 #!hexa strict
 // self/stdlib/hxc_a11_cross_row_delta.hexa — A11 cross-row delta encoding for HXC
 //
-// @module(slug="hxc_a11_cross_row_delta", desc="HXC v2 algorithm A11 — per-(schema, column) cross-row delta encoding for monotonic columns (timestamps + counters + sequence ids). ISO-8601 timestamps reduce to second-deltas; integer counters reduce to +1 increments. Targets log-class JSONL; closes ~15-25pp on log corpora that A1+A7+A10 leave on the table (raw 137 80% Pareto target).")
+// @module(slug="hxc_a11_cross_row_delta", desc="HXC v2 algorithm A11 — per-(schema, column) cross-row delta encoding for monotonic columns (timestamps + counters + sequence ids). ISO-8601 timestamps reduce to second-deltas; integer counters reduce to +1 increments. Targets log-class JSONL; closes ~15-25pp on log corpora that A1+A7+A10 leave on the table (ai-config-ban7 80% Pareto target).")
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a11_cross_row_delta.hexa --selftest)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a11_cross_row_delta.hexa encode <hxc.in> <hxc.out>)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a11_cross_row_delta.hexa decode <hxc.in> <hxc.out>)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a11_cross_row_delta.hexa measure <hxc.in>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args, 4=decode-mismatch)
 // @omega-saturation-exempt("operational utility — single-pass codec; saturation applies to the algorithm's place in the HXC catalog, not to this driver script")
-// @resolver-bypass("darwin-native; subprocess-safe; no plug-in side-effects; raw 100 line 52 covers")
+// @resolver-bypass("darwin-native; subprocess-safe; no plug-in side-effects; honest-caveat0 line 52 covers")
 //
 // Algorithm sketch:
 //   PASS 1 (monotonic detection):
@@ -44,24 +44,24 @@
 //         interleave with non-delta text values at original column indices
 //     - Emit canonical HXC v1 row `@<sid> v1|...|vN`.
 //
-// Streaming-prefix invariant (raw 92 A5):
+// Streaming-prefix invariant (module-loader-fatal A5):
 //   Each `@<id>!a11 ...\n` row is independently decodable WITH the header context
 //   (`# delta:<sid> ...`) loaded first. Same invariant as A7 / A10. Trailing partial
 //   row buffered until LF.
 //
-// Idempotency (raw 65) + byte-eq (raw 68):
+// Idempotency (idempotency) + byte-eq (follow-up):
 //   - encode(decode(x)) == x for any A11 stream where headers + state intact
 //   - decode(encode(y)) == y for any HXC v1 stream where detection picks same
 //     monotonic columns (deterministic)
 //   - canonical zigzag + LEB128 + base64url has unique encoding per int → byte-eq
 //
-// Falsifier (raw 91 C3, preregistered):
+// Falsifier (C3, preregistered):
 //   F-A11-1: saving < 0.05 on a >=10-row monotonic-column-rich JSONL (>=2 monotonic
 //            cols per row, e.g. timestamp + counter) → retire A11.
 //   F-A11-2: encode/decode round-trip not byte-eq on selftest fixture → reject.
 //   F-A11-3: false-positive monotonic detection (column declared monotonic but
-//            actually has v[i] < v[i-1] for some i) → reject (raw 91 honest spec).
-//   F-A11-4: decode latency > 200us/row on selftest → reject (raw 42 jetsam).
+//            actually has v[i] < v[i-1] for some i) → reject (C3 honest spec).
+//   F-A11-4: decode latency > 200us/row on selftest → reject (follow-up jetsam).
 
 use "self/stdlib/argv_skip"
 
@@ -426,7 +426,7 @@ fn _parse_row(line: string) -> array {
 // columns whose values are monotonically non-decreasing AND uniformly typed
 // (all int OR all iso-ts). Returns an array of [schema_id, [[col_idx, ctype], ...]].
 //
-// raw 91 honest: requires >= 2 rows per schema (single-row schemas yield no benefit).
+// C3 honest: requires >= 2 rows per schema (single-row schemas yield no benefit).
 // On false candidates (e.g. one out-of-order value), the column is dropped from the
 // delta set — round-trip safety preserved.
 pub fn detect_monotonic_columns(v1_text: string) -> array {
@@ -821,7 +821,7 @@ pub fn a11_decode(v2_text: string) -> string {
             s = s + 1
         }
         if sidx < 0 {
-            // schema not registered — passthrough (raw 12: surface, don't silently drop)
+            // schema not registered — passthrough (silent-error: surface, don't silently drop)
             out_lines.push(l)
             i = i + 1
             continue
@@ -1013,8 +1013,8 @@ fn _selftest() -> i64 {
     if _assert(empty_back == empty_back2, "empty fixture decode idempotent") != 0 { return 1 }
     println("    empty idempotent: ok (v2=" + to_string(len(empty_v2)) + "B)")
 
-    // Idempotency (raw 65): re-encoding decoded output is byte-eq
-    println("  idempotency (raw 65 + 68):")
+    // Idempotency (idempotency): re-encoding decoded output is byte-eq
+    println("  idempotency (idempotency + 68):")
     let log_again = a11_encode(log_back)
     if _assert(log_again == log_v2, "encode idempotency byte-eq fail\n  log_v2.len=" + to_string(len(log_v2)) + "\n  log_again.len=" + to_string(len(log_again))) != 0 {
         return 1
@@ -1023,9 +1023,9 @@ fn _selftest() -> i64 {
     if _assert(log_back2 == log_back, "decode idempotency byte-eq") != 0 { return 1 }
     println("    encode∘decode∘encode = encode (byte-eq); decode∘decode = decode")
 
-    // Streaming-prefix invariant (raw 92 A5): each prefix is independently decodable
+    // Streaming-prefix invariant (module-loader-fatal A5): each prefix is independently decodable
     // when fed full-line. Truncating mid-row would not be valid (intentional).
-    println("  streaming-prefix invariant (raw 92 A5):")
+    println("  streaming-prefix invariant (module-loader-fatal A5):")
     let v2_lines = split(log_v2, "\n")
     let mut acc = ""
     let mut li = 0

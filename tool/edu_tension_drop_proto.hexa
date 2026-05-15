@@ -1,5 +1,5 @@
 #!hexa lax
-// tool/edu_tension_drop_proto.hexa — tension-drop 교육 패러다임 raw#0 prototype
+// tool/edu_tension_drop_proto.hexa — tension-drop 교육 패러다임 prototype
 //
 // Spec: docs/new_paradigm_edu_tension_drop_20260421.md
 // Level 1 P1 predicate target:
@@ -13,9 +13,9 @@
 //
 // Output: stdout jsonl events (init / walk / intervene / outcome / tau / final)
 //
-// Non-goals (raw#0):
-//   - atlas.n6 parser integration (raw#1)
-//   - metric_logger jsonl file output (raw#2)
+// Non-goals (prototype):
+//   - atlas.n6 parser integration (follow-up)
+//   - metric_logger jsonl file output (follow-up)
 //   - discovery (new edges) — Discovery Permission axis = 0 for proto
 //
 // Determinism: LCG RNG seeded from --seed, no wall-clock, no env() reads

@@ -1,6 +1,6 @@
 #!hexa lax
 // rebuild_interp.hexa — safe wrapper around build_interp.hexa with layered cache
-// (scratch paths via tool/tmp_scratch — raw#14 no-hardcode migration 2026-04-20)
+// (scratch paths via tool/tmp_scratch — magic-number no-hardcode migration 2026-04-20)
 use "tool/tmp_scratch"
 
 //
@@ -423,7 +423,7 @@ if env("NO_CACHE") != "" {
     let smoke_prefix = if env("WITH_SMOKE") == "" { "NO_SMOKE=1 " } else { "" }
     // 2026-04-20 fix: prefer build/hexa_interp over ./hexa (see main
     // path above for root-cause notes on argv[1] expansion).
-    // 2026-04-25 raw 44: ./hexa is wrapper → use build/hexa.real for
+    // 2026-04-25 follow-up4: ./hexa is wrapper → use build/hexa.real for
     // bare dispatcher fallback (avoid resolver during build).
     let real_bin = if file_exists(hexa_dir + "/build/hexa.real") { hexa_dir + "/build/hexa.real" } else { "./hexa" }
     let mut legacy_runner = real_bin
@@ -452,7 +452,7 @@ let root_hexa = hexa_dir + "/self/hexa_full.hexa"
 if !file_exists(root_hexa) || !file_exists(flatten_script) {
     eprintln("[rebuild_interp] missing root inputs — falling back to legacy")
     // 2026-04-20 fix: prefer build/hexa_interp over ./hexa.
-    // 2026-04-25 raw 44: ./hexa is wrapper → use build/hexa.real bare.
+    // 2026-04-25 follow-up4: ./hexa is wrapper → use build/hexa.real bare.
     let fb_real_bin = if file_exists(hexa_dir + "/build/hexa.real") { hexa_dir + "/build/hexa.real" } else { "./hexa" }
     let mut fb_runner = fb_real_bin
     let mut fb_prefix = ""
@@ -627,7 +627,7 @@ if env("FORCE") == "" && file_exists(link_cache_bin) {
         // 2026-04-20: invoke via interp shim so install_interp_shim
         // resolves hexa_dir correctly (./hexa native launcher mangles
         // argv[1] to a temp path).
-        // 2026-04-25 raw 44: ./hexa is wrapper → bare dispatcher fallback.
+        // 2026-04-25 follow-up4: ./hexa is wrapper → bare dispatcher fallback.
         let cs_real_bin = if file_exists(hexa_dir + "/build/hexa.real") { hexa_dir + "/build/hexa.real" } else { "./hexa" }
         let mut cs_runner = cs_real_bin
         let mut cs_prefix = ""
@@ -984,7 +984,7 @@ if out_check3[1] == 0 {
 // rebuild lands the Mac back in the 2026-04-18 panic trap (N parallel
 // uncapped spawns → compressor blowup).
 // 2026-04-20: invoke via interp shim (./hexa mangles argv[1]).
-// 2026-04-25 raw 44: ./hexa is wrapper → bare dispatcher fallback.
+// 2026-04-25 follow-up4: ./hexa is wrapper → bare dispatcher fallback.
 let ish_real_bin = if file_exists(hexa_dir + "/build/hexa.real") { hexa_dir + "/build/hexa.real" } else { "./hexa" }
 let mut ish_runner = ish_real_bin
 let mut ish_prefix = ""

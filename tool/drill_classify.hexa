@@ -11,7 +11,7 @@
 //
 // POLICY
 //   * no LLM judge — hash equality + structural overlap only
-//   * atlas.n6 (canon canonical, see raw#24) is the SSOT primitive set
+//   * atlas.n6 (canon canonical) is the SSOT primitive set
 //   * deterministic over the same (history, atlas) pair
 //
 // USAGE

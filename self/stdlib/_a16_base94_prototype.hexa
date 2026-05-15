@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="a16-base94-prototype", desc="HXC A16 wire encoding prototype: base94 (printable ASCII) replacement for base64url. Trims asymptotic 4/3 (33%) expansion to 8/6.555 (22%). raw 157 candidate (hxc-wire-encoding-base94-mandate). Selftest only — production switch gated by raw 157 promotion.")
+// @tool(slug="a16-base94-prototype", desc="HXC A16 wire encoding prototype: base94 (printable ASCII) replacement for base64url. Trims asymptotic 4/3 (33%) expansion to 8/6.555 (22%). no-hardcode7 candidate (hxc-wire-encoding-base94-mandate). Selftest only — production switch gated by no-hardcode7 promotion.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/_a16_base94_prototype.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/_a16_base94_prototype.hexa encode <bytes-as-hex> )
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/_a16_base94_prototype.hexa decode <base94-string>)
@@ -25,7 +25,7 @@
 //   multiply-by-i64 + divmod-by-i64 in O(N) per byte. For 41-byte (~21 limb) blocks,
 //   this is bounded constant-cost per block.
 //
-// raw 92 ai-native-canonical compat: base94 alphabet excludes LF (0x0A) by construction.
+// module-loader-fatal ai-native-canonical compat: base94 alphabet excludes LF (0x0A) by construction.
 // HXC sigil collision (^A line-prefix scope): mitigated by emitting AFTER the `^A`
 // sigil only — parser-prefix terminates on LF, not on metachars inside the payload.
 //
@@ -33,16 +33,16 @@
 //   Saving relative to base64url on entropy-coded payloads = (1.333 - 1.244) / 1.333 = 6.7%
 //   On A16 force-encode path: net byte-saving lifts ~8-10pp.
 //
-// Falsifiers (raw 71 preregistered):
+// Falsifiers (falsifier preregistered):
 //   F-B94-1: round-trip byte-eq fail on any random byte fixture → reject.
 //   F-B94-2: encode latency > 5ms / KB → reject (perf budget; advisory).
-//   F-B94-3: alphabet contains LF / NUL / `# @ space \" ' | ~ !` → reject (raw 92 collision).
+//   F-B94-3: alphabet contains LF / NUL / `# @ space \" ' | ~ !` → reject (module-loader-fatal collision).
 //   F-B94-4: expansion > 1.250 on inputs >= 1KB → reject (no theoretical gain over base64url).
 
 // ASCII codes 33..126 = 94 chars (printable, excludes space + DEL).
 // We DO accept overlap with HXC structural metacharacters because the encoded
 // stream is consumed only after `^A` line-prefix sigil where parser-prefix
-// terminates on LF only. Lint enforces this contract per raw 157 (proposed).
+// terminates on LF only. Lint enforces this contract per no-hardcode7 (proposed).
 const A16_B94_ALPHA = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 
 // Block geometry: 41 bytes (328 bits) ↔ 51 base94 chars (≈334.28 bits available).
@@ -367,7 +367,7 @@ fn _selftest() -> int {
 
     // Fixture 6: alphabet collision check — alphabet MUST exclude LF (0x0A) and NUL (0x00).
     // We accept HXC structural metacharacters # @ space " ' | ~ ! inside base94 alphabet
-    // because raw 92 mandate restricts collision-sensitive parser-prefix to LF terminators
+    // because module-loader-fatal mandate restricts collision-sensitive parser-prefix to LF terminators
     // when base94 stream appears AFTER ^A line-prefix sigil.
     let mut has_lf = false
     let mut has_nul = false
@@ -382,10 +382,10 @@ fn _selftest() -> int {
     }
     if !has_lf && !has_nul && !has_space {
         pass = pass + 1
-        println("  PASS: fixture-6 alphabet excludes LF/NUL/space (raw 92 line-canonical compat)")
+        println("  PASS: fixture-6 alphabet excludes LF/NUL/space (module-loader-fatal line-canonical compat)")
     } else {
         fail = fail + 1
-        println("  FAIL: fixture-6 alphabet contains LF/NUL/space (raw 92 violation)")
+        println("  FAIL: fixture-6 alphabet contains LF/NUL/space (module-loader-fatal violation)")
     }
 
     // Fixture 7: empty input edge case.
@@ -415,7 +415,7 @@ fn _bench(in_path: string) -> int {
         eprintln("# bench: empty input")
         return 2
     }
-    // Convert string → byte array (raw 91 honest C3: this path treats each char
+    // Convert string → byte array (C3 honest C3: this path treats each char
     // as 1 byte; multi-byte UTF-8 is mishandled. Real measurement is byte-len-
     // approximate. Use shell `wc -c` for true byte count cross-check.).
     let mut bytes = []

@@ -1,7 +1,7 @@
 // tool/bench_runner.hexa — pure-hexa, ms-amortized benchmark runner (v0)
 //
 // Origin: hive/design/kick/2026-04-29_hexa-native-bench-framework_omega_cycle.json
-//         raw 100 fallback (kick file absent at task time)
+//         honest-caveat0 fallback (kick file absent at task time)
 //
 // Schema (state/perf/<date>_bench.jsonl row):
 //   {ts, file, iters, warmup, total_ms, avg_ms, ops_per_sec,
@@ -15,18 +15,18 @@
 //   --output <path>  default state/perf/<YYYY-MM-DD>_bench.jsonl
 //   --selftest       run pure-helper selftest, exit 0/1
 //
-// raw 91 C3 disclosures (ms-granularity hides):
+// C3 disclosures (ms-granularity hides):
 //   1. sub-ms tight-loop signals (collapsed into 1ms floor)
 //   2. process startup vs parse vs run breakdown (only union measured)
 //   3. cache-line / branch-predict variance (sub-iteration, lost)
 //   v1 (ns-precise) deferred until __builtin_time_now_ns lands.
 //
-// raw 9 hexa-only:
+// hexa-only:
 //   wall clock = time_ms() in-process (hexa_time_ms in runtime.c).
 //   exec() is allowed for non-time concerns (find / date stamping /
 //   file append) but never substitutes for the timing primitive.
 //
-// raw 168 minimum-viable:
+// follow-up8 minimum-viable:
 //   180-220 LoC ceiling. Statistical-significance harness (p50/p95/
 //   stddev/CI) deferred to v1.
 
@@ -51,7 +51,7 @@ fn jsonl_escape(s) {
 }
 
 fn today_utc() {
-    // exec() is allowed for *non-time* concerns (raw 9 only forbids
+    // exec() is allowed for *non-time* concerns (hexa-only only forbids
     // shell-out for the wall-clock primitive, which we honor by using
     // time_ms below).
     let raw = exec("date -u +%Y-%m-%d 2>/dev/null").trim()
@@ -105,7 +105,7 @@ fn run_bench_once(bench_path) {
     //
     // Implementation note: invoke via the user-stage wrapper
     // `~/.hx/bin/hexa` to honor the `@resolver-bypass(...)` marker
-    // in the bench fixture (raw 82 darwin landing). A direct call to
+    // in the bench fixture (darwin-resolver-bypass darwin landing). A direct call to
     // `hexa.real` from a parent under hexa-lang/tool/ gets sandboxed
     // by the watcher and fails with `syntax error: line 1` (popen
     // sees the binary as a script). The wrapper resolves cleanly.

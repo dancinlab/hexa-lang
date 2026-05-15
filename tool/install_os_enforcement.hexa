@@ -1,7 +1,7 @@
 // tool/install_os_enforcement.hexa — installer for Tier-2 OS enforcement suite
 //
 // PURPOSE
-//   Deterministic installer (raw#9 strict) that wires up the five Tier-2 tools:
+//   Deterministic installer (hexa-only-strict) that wires up the five Tier-2 tools:
 //
 //     os_hook_fix.hexa         — #16 interp deadlock detector
 //     os_atomic_write.hexa     — #14 crash-safe writer
@@ -46,7 +46,7 @@ fn _repos() -> array {
 fn _precommit_shim(home: string) -> string {
     let mut p = []
     p.push("#!/bin/sh\n")
-    p.push("# auto-installed by tool/install_os_enforcement.hexa — Tier 2 raw#9 strict\n")
+    p.push("# auto-installed by tool/install_os_enforcement.hexa — Tier 2 hexa-only-strict\n")
     p.push("# BEGIN os_l1_pre_commit_hook\n")
     p.push("STAGE0=\"")
     p.push(_interp_real(home))
@@ -66,7 +66,7 @@ fn _precommit_shim(home: string) -> string {
 fn _postcommit_shim(home: string) -> string {
     let mut p = []
     p.push("#!/bin/sh\n")
-    p.push("# auto-installed by tool/install_os_enforcement.hexa — Tier 2 raw#9 strict\n")
+    p.push("# auto-installed by tool/install_os_enforcement.hexa — Tier 2 hexa-only-strict\n")
     p.push("# BEGIN os_l5_post_commit_hook\n")
     p.push("STAGE0=\"")
     p.push(_interp_real(home))

@@ -32,25 +32,25 @@
 //     - For each `@<id>!a8 ...` row: split body, expand `^<sym>` → original value at
 //       declared categorical columns. Non-categorical columns pass through.
 //
-// Streaming-prefix invariant (raw 92 A5):
+// Streaming-prefix invariant (module-loader-fatal A5):
 //   `# enum:` headers precede `@<id>!a8` rows. Each row independently decodable
 //   given headers. Same prefix-resumability contract as A7/A10.
 //
-// Idempotency (raw 65) + byte-eq (raw 68):
+// Idempotency (idempotency) + byte-eq (follow-up):
 //   - encode(decode(x)) == x  for any A8 stream
 //   - decode(encode(y)) == y  for any HXC v1 stream
 //   - Symbol id assignment is deterministic (sorted descending freq, ties broken
 //     by insertion order via a stable scan) → byte-eq guaranteed.
 //
-// Falsifier (raw 91 C3, preregistered):
+// Falsifier (C3, preregistered):
 //   F-A8-1: combined-saving < 0.05 (HXC-A8 bytes >= 0.95 * HXC-v1 bytes) on a
 //           categorical-rich JSONL ≥10 rows with ≥1 column having unique <=16
 //           and >=3 occurrences → retire A8.
 //   F-A8-2: encode/decode round-trip not byte-eq on selftest fixture → reject.
 //   F-A8-3: decode latency > 200us/row on selftest in pure-hexa interpreted mode
-//           → reject (raw 42 jetsam, accounting for hexa interpreter overhead).
+//           → reject (follow-up jetsam, accounting for hexa interpreter overhead).
 //
-// Complementarity with A7 (raw 91 C7):
+// Complementarity with A7 (C3 C7):
 //   A7 = per-row column-conditional arithmetic coder (Shannon-near optimal, but
 //        amortizes over per-row range-coder state; works best on integer-rich rows).
 //   A8 = column-marginal Huffman-style enum (1-byte-per-occurrence ceiling, but
@@ -846,7 +846,7 @@ fn _test_idempotency() -> i64 {
     let back = a8_decode(v2)
     let back2 = a8_decode(back)
     if _assert(back2 == back, "decode idempotency") != 0 { return 1 }
-    println("  idempotency (raw 65): ok")
+    println("  idempotency (idempotency): ok")
     return 0
 }
 

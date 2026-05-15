@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native HXC sparse-context PPM pipeline")
-// @tool(slug="hxc-a23-sparse-ppm", desc="HXC algorithm A23: sparse-context PPM order-N (N>=5) with rare-context pruning + escape mechanism + memory-bounded context tree. Phase 12 P1 entry — post-A18 order-N saving-axis approach. Pure hexa raw 9 + raw 18 self-host (integer-only, table-driven, no fp ops, no neural mixer per raw 137). FIRST TICK BUILD: PASS 1 (data-structure setup) + PASS 2 (encode order-5 lookup + escape) + PASS 3 (decode reverse) + PASS 4 (5-fixture selftest). raw 91 honest C3: this tick is the first-tick scope per Phase 12 forward-design ad3f9442; full algorithm complete, full LIVE FIRE on heterogeneous corpora deferred to follow-on tick. Sigil ^V (post-A22 ^D, post-A20 ^U, post-A18 ^M). Header v=sparse-ppm-v1. Compatible-with-A18 wire layout (different sigil + version tag). raw 137 cmix-ban MAINTAINED: A23 is deterministic integer table lookup, NOT cmix-class.")
+// @tool(slug="hxc-a23-sparse-ppm", desc="HXC algorithm A23: sparse-context PPM order-N (N>=5) with rare-context pruning + escape mechanism + memory-bounded context tree. Phase 12 P1 entry — post-A18 order-N saving-axis approach. Pure hexa hexa-only + self-host fixpoint self-host (integer-only, table-driven, no fp ops, no neural mixer per ai-config-ban). FIRST TICK BUILD: PASS 1 (data-structure setup) + PASS 2 (encode order-5 lookup + escape) + PASS 3 (decode reverse) + PASS 4 (5-fixture selftest). C3 honest C3: this tick is the first-tick scope per Phase 12 forward-design ad3f9442; full algorithm complete, full LIVE FIRE on heterogeneous corpora deferred to follow-on tick. Sigil ^V (post-A22 ^D, post-A20 ^U, post-A18 ^M). Header v=sparse-ppm-v1. Compatible-with-A18 wire layout (different sigil + version tag). ai-config-ban cmix-ban MAINTAINED: A23 is deterministic integer table lookup, NOT cmix-class.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a23_sparse_ppm.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a23_sparse_ppm.hexa build <in>)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a23_sparse_ppm.hexa encode <in> <out>)
@@ -23,7 +23,7 @@
 //     Stream-encoded with adaptive order-1 byte-context range coder (mirroring
 //     A18 v2 wire — proven 81% saving on Korean fixture). The order-5 sparse
 //     model is the IN-SAMPLE bits estimator + lookup-hit-rate gate; the wire
-//     coder keeps the same alphabet=256 byte-context model. raw 91 honest C3:
+//     coder keeps the same alphabet=256 byte-context model. C3 honest C3:
 //     full order-5 entropy coding deferred to v2 wire (follow-on tick) to keep
 //     first-tick LoC budget; the approach is identical to A18's PPM-build vs
 //     wire-coder split (A18 uses LZ-token order-1 coder; A23 uses byte order-1
@@ -38,17 +38,17 @@
 //     F2: Korean / multibyte UTF-8.
 //     F3: ledger / structured-audit JSONL.
 //     F4: large-text (English repetition for order-5 hit rate).
-//     F5: passthrough (under MIN_BYTES, raw 65 idempotent).
+//     F5: passthrough (under MIN_BYTES, idempotency idempotent).
 //
 // Sigil: `^V<sparse-ppm-stream>` — single combined line.
 // Stream layout: `# a23:s1 v=sparse-ppm-v1 n=<input_bytes> o=<order_max>\n^V<base64url-body>\n`
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //     - encode(decode(x)) == x for any A23 stream
 //     - decode(encode(y)) == y for any byte stream
-//     - encode is byte-deterministic (same input → same output, raw 137)
+//     - encode is byte-deterministic (same input → same output, ai-config-ban)
 //
-// Falsifiers preregistered (raw 71):
+// Falsifiers preregistered (falsifier):
 //     F-A23-1: A23 saving < 50% on text-heavy class with order-5+ context → reject.
 //     F-A23-2: encode/decode round-trip not byte-eq → reject.
 //     F-A23-3: encode latency > 200ms/KB on interp budget → reject.
@@ -56,12 +56,12 @@
 //     F-A23-5: production-chain post-A18 placement standalone-vs-in-chain
 //              delta < 1pp (chain-amortize axis, F-A20-5 mirror) → reject.
 //
-// raw 137 cmix-ban compliance:
+// ai-config-ban cmix-ban compliance:
 //     A23 = sparse PPM with deterministic integer lookup tables. No fp ops, no
 //     neural mixer, no non-deterministic similarity. Wire coder is the same
 //     adaptive order-1 byte-context range coder proven in A18 v2 (deterministic).
 //
-// raw 91 honest C3 (first tick scope):
+// C3 honest C3 (first tick scope):
 //     - PASS 1 build (sparse context tree) IMPLEMENTED.
 //     - PASS 2 encode (order-1 byte-context range coder, A18-v2-mirrored) IMPLEMENTED.
 //     - PASS 2.5 order-5 lookup + escape mechanism IMPLEMENTED as in-sample
@@ -199,7 +199,7 @@ fn a23_lookup(tables: array, buf: string, p: int) -> int {
 
 // ───────────────── adaptive order-1 byte-context range coder (mirrors A18 v2) ─────────────────
 //
-// raw 91 honest C3: first-tick wire coder = same proven order-1 byte-context
+// C3 honest C3: first-tick wire coder = same proven order-1 byte-context
 // adaptive range coder used in A18 v2 (Korean fixture 81% saving). The
 // order-5 sparse-context model is the SAVING-LEVER reported as in-sample
 // estimator + lookup-hit-rate; the wire coder is byte-context order-1
@@ -482,7 +482,7 @@ fn _a23_encode_force(text: string) -> string {
 
 // ───────────────── v2 wire — order-2 PPM-D-style escape coder (follow-on tick) ─────────────────
 //
-// raw 91 honest C3 disclosure (v2 wire scope):
+// C3 honest C3 disclosure (v2 wire scope):
 //     v2 wire = adaptive order-2 byte-context PPM with PPM-D-style escape
 //     mechanism. The `o=5` header field documents the IN-SAMPLE bound model
 //     (a23_build orders 0..5); the WIRE coder is order-2 (lazy sparse map for
@@ -918,7 +918,7 @@ fn _a23_encode_force_v2(text: string) -> string {
     return header + "\n" + body + "\n"
 }
 
-// a23_encode: try-and-revert raw 142 D2 — return shortest of {a23-v2, a23-v1, identity}.
+// a23_encode: try-and-revert magic-number2 D2 — return shortest of {a23-v2, a23-v1, identity}.
 fn a23_encode(text: string) -> string {
     let n: i64 = len(text)
     if n < A23_MIN_BYTES { return text }
@@ -1042,7 +1042,7 @@ fn a23_hit_rate(tables: array, buf: string) -> int {
     return (hits * 100) / total
 }
 
-// ───────────────── selftest (5 fixtures, raw 91 honest C3 first-tick scope) ─────────────────
+// ───────────────── selftest (5 fixtures, C3 honest C3 first-tick scope) ─────────────────
 
 fn _selftest() -> int {
     println("# hxc_a23_sparse_ppm selftest (FIRST TICK BUILD — PASS 1+2+3 + 5 fixtures)")
@@ -1065,7 +1065,7 @@ fn _selftest() -> int {
     }
 
     // Fixture 2 (Korean / multibyte UTF-8 byte-array round-trip).
-    let kor = "안녕 세계 — 곰파 연결 ω-cycle. 압축 알고리즘 A23 자기-호스트 hexa raw 9. "
+    let kor = "안녕 세계 — 곰파 연결 ω-cycle. 압축 알고리즘 A23 자기-호스트 hexa hexa-only. "
     let mut buf_kor = ""
     let mut k2 = 0
     while k2 < 12 { buf_kor = buf_kor + kor; k2 = k2 + 1 }
@@ -1136,13 +1136,13 @@ fn _selftest() -> int {
                 + " got_len=" + to_string(len(dec4)))
     }
 
-    // Fixture 5 (passthrough idempotent — raw 65 + 68).
+    // Fixture 5 (passthrough idempotent — idempotency + 68).
     let tiny = "abc123"
     let enc5 = a23_encode(tiny)
     let enc5b = a23_encode(enc5)
     if enc5 == tiny && enc5b == tiny {
         pass = pass + 1
-        println("  PASS: fixture-5 short-input passthrough idempotent (raw 65 + 68)")
+        println("  PASS: fixture-5 short-input passthrough idempotent (idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-5 short-input idempotency broken")
@@ -1174,7 +1174,7 @@ fn _selftest() -> int {
     }
 
     // Fixture 7 (v2 wire Korean multibyte byte-eq).
-    let kor_v2 = "안녕 세계 — 곰파 연결 ω-cycle. 압축 알고리즘 A23 v2 wire 자기-호스트 hexa raw 9. "
+    let kor_v2 = "안녕 세계 — 곰파 연결 ω-cycle. 압축 알고리즘 A23 v2 wire 자기-호스트 hexa hexa-only. "
     let mut buf_kor_v2 = ""
     let mut k7 = 0
     while k7 < 12 { buf_kor_v2 = buf_kor_v2 + kor_v2; k7 = k7 + 1 }

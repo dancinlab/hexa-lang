@@ -22,7 +22,7 @@
 //
 // USAGE
 //   hexa tool/audit_shim_ssot.hexa             — run audit, exit 0 OK / 1 drift
-//   hexa tool/audit_shim_ssot.hexa --json      — JSON output (raw#33 AI-native)
+//   hexa tool/audit_shim_ssot.hexa --json      — JSON output (attr-usage3 AI-native)
 //   hexa tool/audit_shim_ssot.hexa --witness   — deliberately corrupt then
 //                                                 verify the audit catches it,
 //                                                 then restore. Exit 0 only if
@@ -41,7 +41,7 @@
 //
 // CADENCE
 //   Designed to run cheaply (~50ms) on every:
-//     * git pre-push (manual install — no .git/hooks per raw#13)
+//     * git pre-push (manual install — no .git/hooks per ai-config-ban)
 //     * launchd 60s sweep (com.hexa-lang.foreign-ext-sweep style)
 //     * manual `hexa audit-shim` slot once dispatched
 
@@ -124,13 +124,13 @@ fn _esc(s: string) -> string {
 
 // _is_uchg_locked — macOS-only: returns true iff `path` has the BSD uchg
 // (user-immutable) flag set via chflags. Used by --witness mode to skip
-// gracefully when the target shim is uchg-locked (raw#9 hardens
+// gracefully when the target shim is uchg-locked (hexa-only hardens
 // build/hexa_interp this way to prevent silent overwrites).
 //
 // Mechanism: `stat -f "%Sf" PATH` prints the comma-separated symbolic flag
 // list ("-" if no flags, "uchg" / "uchg,uappnd" / etc. if flagged). Grep
 // for the literal "uchg" token. Non-macOS hosts return false (the chflags
-// uchg mechanism doesn't exist there; raw#9 is macOS-specific).
+// uchg mechanism doesn't exist there; hexa-only enforcement is macOS-specific).
 fn _is_uchg_locked(path: string) -> bool {
     let kernel = exec("uname -s").trim()
     if kernel != "Darwin" { return false }
@@ -330,7 +330,7 @@ fn _witness(repo_root: string) -> int {
     //
     // Pre-fix defect: the witness's injection write (safe_write_file) and the
     // post-witness recovery cp both silently no-op / fail on uchg-locked
-    // targets. raw#9 hardens build/hexa_interp with chflags uchg precisely to
+    // targets. hexa-only hardens build/hexa_interp with chflags uchg precisely to
     // prevent silent overwrites — which means the witness's deliberate
     // self-corruption stunt cannot run against the live shim. The detector's
     // PRODUCTION capabilities (default audit + --json + --selftest) are
@@ -339,7 +339,7 @@ fn _witness(repo_root: string) -> int {
     // from "audit's self-test refused to run because the target is hardened".
     if _is_uchg_locked(live_path) {
         println("[witness] SKIP — target uchg-locked (path=" + live_path + ")")
-        println("[witness] rationale: chflags uchg (raw#9) blocks injection write + recovery cp.")
+        println("[witness] rationale: chflags uchg (hexa-only) blocks injection write + recovery cp.")
         println("[witness] to exercise the witness, run against an unlocked fixture or chflags nouchg first.")
         return 0
     }

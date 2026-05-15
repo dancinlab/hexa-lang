@@ -3,7 +3,7 @@
 // AI-NATIVE COMMENT BLOCK
 // ─────────────────────────────────────────────────────────────────
 // RATIONALE
-//   Fifth of 5 vendor SDK shims (raw 91 INDEP-3) for the hive
+//   Fifth of 5 vendor SDK shims (C3 INDEP-3) for the hive
 //   packages/ai/ port. Bedrock is the heaviest blocker because the
 //   .ts side imports `@aws-sdk/client-bedrock-runtime` which depends
 //   on:
@@ -11,9 +11,9 @@
 //     2. AWS event-stream binary framing (vnd.amazon.eventstream)
 //     3. Bedrock ConverseStream typed-message vocabulary
 //   Hexa-lang stdlib has neither HMAC-SHA256 nor a binary event-stream
-//   parser — see raw 159 GAP-D / GAP-E below.
+//   parser — see no-hardcode9 GAP-D / GAP-E below.
 //
-//   raw 91 honest C3 (concrete-clear-conservative) decision:
+//   C3 honest C3 (concrete-clear-conservative) decision:
 //     SigV4 path: DEFER (return exit-1 stub with explicit unblock
 //                 condition).
 //     Bearer-token path: LANDED (Bedrock now supports
@@ -49,16 +49,16 @@
 //     identity tied to the token. No regional STS roundtrip.
 //   SECONDARY (DEFERRED): SigV4 with AWS access-key/secret/session.
 //     Requires HMAC-SHA256 + SHA256 hex-digest builtins not present
-//     in the hexa runtime today. See raw 159 GAP-D.
+//     in the hexa runtime today. See no-hardcode9 GAP-D.
 //
-// CAVEATS (raw 91 honest C3)
+// CAVEATS (C3 honest C3)
 //   C1. The bearer-token send() works for plain converse (non-stream)
 //       and for converse-stream IF the caller writes their own binary
 //       event-stream parser. We provide JSON extractors that work on
 //       the post-decode payload — the binary frame splitter itself is
-//       NOT in this shim (raw 159 GAP-E).
+//       NOT in this shim (no-hardcode9 GAP-E).
 //   C2. SigV4 send is a DEFER stub: it eprintln's a structured ai-err
-//       message and exit-1's. This is intentionally LOUD — raw 91
+//       message and exit-1's. This is intentionally LOUD — C3
 //       no_silent_errors. Caller must use bearer auth or call out to
 //       the AWS CLI as a workaround.
 //   C3. Region is part of the URL host: the caller passes `region` as
@@ -66,7 +66,7 @@
 //   C4. Pure-hexa for build + JSON-payload extract. send_bearer() exec's
 //       /usr/bin/curl. Same TLS-via-curl shellout as siblings.
 //
-// raw 159 GAP
+// no-hardcode9 GAP
 //   GAP-D (NEW, this shim): native crypto.hmac_sha256 + crypto.sha256
 //          builtins required for SigV4 chain:
 //             k_date    = HMAC(k_secret, date)
@@ -235,7 +235,7 @@ pub fn bedrock_extract_tool_calls_from_payloads(payloads) -> array {
 //
 // Returns [ok, body]. When streaming=true, body is the raw
 // vnd.amazon.eventstream binary blob (caller must decode with the
-// future event-stream parser — raw 159 GAP-E). When streaming=false
+// future event-stream parser — no-hardcode9 GAP-E). When streaming=false
 // caller should set body opts.streaming=false and POST to the
 // /converse endpoint instead — we currently always hit converse-
 // stream. (Alternate /converse endpoint is left as a follow-up
@@ -268,17 +268,17 @@ pub fn bedrock_send_bearer(token: string, body_json: string, region: string, mod
 
 // ─── send (SigV4 — DEFERRED) ────────────────────────────────
 //
-// HONEST DEFER (raw 91 no_silent_errors): emit ai-native error and
+// HONEST DEFER (C3 no_silent_errors): emit ai-native error and
 // exit 1. The caller cannot proceed silently — they must either:
 //   (a) set AWS_BEARER_TOKEN_BEDROCK and use bedrock_send_bearer
 //   (b) shell out to `aws bedrock-runtime invoke-model` themselves
-//   (c) wait for raw 159 GAP-D (rfc_011_crypto_hmac) to land
+//   (c) wait for no-hardcode9 GAP-D (rfc_011_crypto_hmac) to land
 pub fn bedrock_send_sigv4(access_key: string, secret_key: string, session_token: string, body_json: string, region: string, model_id: string, streaming: bool) -> array {
     ai_err_exit("bedrock-sdk", "sigv4-deferred", [
         ["cause", "hexa runtime lacks HMAC-SHA256 + SHA256 builtins required for AWS SigV4 signing"],
         ["remedy", "set AWS_BEARER_TOKEN_BEDROCK and call bedrock_send_bearer instead"],
         ["remedy", "or shell out to 'aws bedrock-runtime invoke-model' from caller"],
-        ["remedy", "or wait for rfc_011_crypto_hmac (raw 159 GAP-D)"],
+        ["remedy", "or wait for rfc_011_crypto_hmac (no-hardcode9 GAP-D)"],
         ["ref", "self/stdlib/bedrock_sdk.hexa raw-159-GAP-D"],
         ["region", region],
         ["model_id", model_id]

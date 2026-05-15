@@ -334,7 +334,7 @@ def parse_fn_bodies(hexa_text: str) -> Dict[str, str]:
 
 def own_preamble(hexa_path: str, out_path: str, cfg: Dict[str, float],
                  features: Dict[str, bool]) -> str:
-    """Standard .own 2-header preamble for tool/transient_py/*.
+    """Standard 2-header preamble for tool/transient_py/*.
 
     Header 1 — provenance: source hexa file, transpiler version, timestamp.
     Header 2 — config + feature manifest (so reviewers can diff features
@@ -344,13 +344,13 @@ def own_preamble(hexa_path: str, out_path: str, cfg: Dict[str, float],
     feat_str = ",".join(k for k, v in features.items() if v) or "none"
     cfg_str = " ".join(f"{k}={cfg[k]}" for k in CONFIG_KEYS)
     return (
-        f"# .own/1 transient_py provenance\n"
+        f"# transient_py provenance\n"
         f"#   source:     {hexa_path}\n"
         f"#   transpiler: tool/transient_py/atp_transpile.py (Mk.III)\n"
         f"#   generated:  {ts}\n"
         f"#   target:     {out_path}\n"
         f"#   gate:       F-VLM-TRANSPILE-1\n"
-        f"# .own/2 transient_py manifest\n"
+        f"# transient_py manifest\n"
         f"#   features:   {feat_str}\n"
         f"#   config:     {cfg_str}\n"
         f"#   regenerate: python {os.path.relpath(__file__, start=os.getcwd())}\n"

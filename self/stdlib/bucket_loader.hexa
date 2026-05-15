@@ -16,8 +16,8 @@
 //   bucket_loader_parse_end(body) -> [any]                    — .end parser
 //   bucket_loader_parse_roadmap(body) -> [any]                — .roadmap parser
 //
-// raw 12 silent-error-ban: parse 실패 시 [] 반환 (caller fallback 책임).
-// raw 49 additive-first: cli_mvp 측 _<X>_parse_ssot 함수와 같은 본체 (parity).
+// silent-error silent-error-ban: parse 실패 시 [] 반환 (caller fallback 책임).
+// additive-first: cli_mvp 측 _<X>_parse_ssot 함수와 같은 본체 (parity).
 //
 // --selftest:
 //   RAW_BUCKET_LOADER_SELFTEST=1 hexa run self/stdlib/bucket_loader.hexa --selftest
@@ -25,7 +25,7 @@
 
 use "self/stdlib/fs"
 
-// raw 248 cycle ζ-3/4 (2026-04-30 7-bucket closure) — generic SSOT walk-up
+// follow-up8 cycle ζ-3/4 (2026-04-30 7-bucket closure) — generic SSOT walk-up
 // (cache-less variant; called once per bucket-entry, no perf concern).
 // Spec source: hive cli_mvp.hexa _ssot_walk_up (line ~1265).
 fn bucket_loader_walk_up(filename: string) -> string {
@@ -191,7 +191,7 @@ fn bucket_loader_parse_end(body: string) -> any {
     return out
 }
 
-// raw 248 cycle ζ-2 (2026-04-30 partial closure deferred land) — .roadmap parser.
+// follow-up8 cycle ζ-2 (2026-04-30 partial closure deferred land) — .roadmap parser.
 // .roadmap 형식: markdown list `- <status> [<id>] <slug> — <description>` (hive 고유).
 // status ∈ {done, planned, blocked, wip, deferred, archived}.
 // v1.1 (2026-04-30): each entry now carries `status` field for filter/sort.
@@ -236,7 +236,7 @@ fn bucket_loader_parse_roadmap(body: string) -> any {
 }
 
 // ─── --selftest mode (env-gated to avoid hijacking consumer --selftest) ─
-// raw 91 honest C3 (raw_toggle.hexa v1.1 pattern mirror): top-level --selftest
+// C3 honest C3 (raw_toggle.hexa v1.1 pattern mirror): top-level --selftest
 // argv parse는 consumer (file_naming_lint --selftest 등)의 selftest invocation
 // hijack 위험. RAW_BUCKET_LOADER_SELFTEST=1 env gate — env 미설정 시 selftest
 // skip, consumer selftest 정상 진행.

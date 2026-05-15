@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="A26 F-A26-6 Howard escape sweep harness — measures e_d ∈ {0.3, 0.5, 0.7} bits/byte on small text fixture")
-// @tool(slug="hxc-a26-escape-sweep", desc="A26 F-A26-6 falsifier resolver: sweep Howard escape e_d across {0.3, 0.5, 0.7} on a small text fixture and report the minimum-bits choice. raw 91 honest C3 — runs ONLY on small fixtures (≤1KB) due to F-A26-4 memory budget trip; sweep validates the e_d=0.5 minimality claim within the feasible scale.")
+// @tool(slug="hxc-a26-escape-sweep", desc="A26 F-A26-6 falsifier resolver: sweep Howard escape e_d across {0.3, 0.5, 0.7} on a small text fixture and report the minimum-bits choice. C3 honest C3 — runs ONLY on small fixtures (≤1KB) due to F-A26-4 memory budget trip; sweep validates the e_d=0.5 minimality claim within the feasible scale.")
 // @usage(hexa hxc_a26_escape_sweep.hexa --selftest)
 // @usage(hexa hxc_a26_escape_sweep.hexa <text_file>)
 // @exit_codes(0=ok, 1=fail, 2=io-error, 3=bad-args)

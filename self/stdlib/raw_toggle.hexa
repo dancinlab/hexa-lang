@@ -6,18 +6,18 @@
 //    _raw_toggles_load_map / _raw_toggles_effective / _raw_toggles_persist).
 //
 // Cross-repo: 5 sister repos (hive / nexus / anima / hexa-lang / airgenome /
-// canon) — raw 47 cross-repo universal mandate. Single SSOT reader,
+// canon) — cross-repo-trawl cross-repo universal mandate. Single SSOT reader,
 // no per-repo duplication.
 //
 // SSOT location:
 //   <repo>/state/raw_toggles/state.json — current toggle states
-//   <repo>/state/raw_toggles/audit.jsonl — append-only audit ledger (raw 77)
+//   <repo>/state/raw_toggles/audit.jsonl — append-only audit ledger (audit-schema)
 //   $HIVE_RAW_TOGGLES_HOME — env override for test isolation
 //
-// raw 12 silent-error-ban: load failures return empty map (default-on per
+// silent-error silent-error-ban: load failures return empty map (default-on per
 // caller's catalog defaultOn).
 //
-// raw 195 r33: writes via tmp+rename (atomic) — caller must NOT direct-write
+// atomic writes via tmp+rename (atomic) — caller must NOT direct-write
 // state.json (M5 lint enforces).
 //
 // Exports:
@@ -132,7 +132,7 @@ fn raw_toggle_map_refresh() -> int {
     return 0
 }
 
-// raw 248 cycle P1 v1.5 (2026-05-01) — env-change cache invalidation.
+// follow-up8 cycle P1 v1.5 (2026-05-01) — env-change cache invalidation.
 // HIVE_RAW_TOGGLES_HOME env가 런타임 변경되는 test environment에서 root_cache
 // stale 방지. Test verb 측에서 setenv 직후 호출.
 fn raw_toggle_root_reset() -> int {
@@ -142,8 +142,8 @@ fn raw_toggle_root_reset() -> int {
     return 0
 }
 
-// raw 248 cycle v1.6 (2026-05-01) — fine-grained reset variants for
-// callers needing partial cache invalidation. raw 49 additive-first:
+// follow-up8 cycle v1.6 (2026-05-01) — fine-grained reset variants for
+// callers needing partial cache invalidation. additive-first:
 // raw_toggle_root_reset() coarse-grained variant 보존 (두 함수 union).
 
 fn raw_toggle_root_cache_only_reset() -> int {
@@ -182,7 +182,7 @@ fn raw_toggle_persist(slug: string, enabled: bool, default_on: bool) -> int {
         rows_json = rows_json + _row
         i = i + 1
     }
-    let body_out = "{\"schema\":\"raw_toggles.state_v1\",\"schema_ref\":\"raw 202 + raw 77\",\"rows\":[" + rows_json + "]}"
+    let body_out = "{\"schema\":\"raw_toggles.state_v1\",\"schema_ref\":\"lock-flags2 + audit-schema\",\"rows\":[" + rows_json + "]}"
     let tmp = path + ".tmp.$$"
     let _w = exec("printf '%s' '" + body_out.replace("'", "'\\''") + "' > '" + tmp + "' 2>/dev/null && mv '" + tmp + "' '" + path + "' 2>/dev/null")
     let mut enabled_str = "false"
@@ -195,7 +195,7 @@ fn raw_toggle_persist(slug: string, enabled: bool, default_on: bool) -> int {
 }
 
 // ─── --selftest mode (env-gated to avoid hijacking consumer --selftest) ─
-// raw 91 honest C3-RTSS-1 (2026-04-30 cycle β agent B post-mortem):
+// C3 honest C3-RTSS-1 (2026-04-30 cycle β agent B post-mortem):
 // 직전 v1.0은 top-level --selftest argv parse만 해서 consumer
 // (file_naming_lint --selftest 등)의 selftest invocation을 hijack했음.
 // v1.1: RAW_TOGGLE_SELFTEST=1 env gate 추가 — env 미설정 시 selftest skip,

@@ -17,7 +17,7 @@
 //   hexa run self/stdlib/test_proc_async.hexa
 //
 // Emits:  __PROC_ASYNC_TEST__ <PASS|FAIL> total=N pass=P fail=F
-// Exits 1 on any failure (raw#91 no_silent_errors).
+// Exits 1 on any failure (C3 no_silent_errors).
 
 let mut __total = 0
 let mut __pass = 0

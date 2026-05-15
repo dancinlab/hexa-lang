@@ -1,9 +1,9 @@
-// tool/roadmap_verify_pre_commit.hexa — OS-level pre-commit gate (raw#15 live doc)
+// tool/roadmap_verify_pre_commit.hexa — OS-level pre-commit gate (no-hardcode live doc)
 //
 // PURPOSE
 //   git pre-commit hook entry. Runs deterministically (no Claude interpretation)
 //   at commit time. Parses the current repo's .roadmap, detects gate tags in the
-//   commit message (form: "[<CP_OR_RULE>]" — e.g. "[P1.AN11.c]", "[CP1]", "[raw#9]"),
+//   commit message (form: "[<CP_OR_RULE>]" — e.g. "[P1.AN11.c]", "[CP1]", "[hexa-only]"),
 //   verifies evidence, optionally flips □→✓ markers, and appends a raw_audit event.
 //
 // STDIN / ENV
@@ -16,13 +16,13 @@
 //
 // SIDE EFFECTS (ok path only)
 //   - stage update to .roadmap if gate flips applied (□ → ✓ + SHA stamp)
-//   - append 1 line to .raw-audit via tool/raw_audit.hexa (hash-chained)
+//   - append 1 line to audit via tool/raw_audit.hexa (hash-chained)
 //
 // DESIGN
 //   - Deterministic: uses only regex/contains on commit_msg + changed_files.
 //   - Pass-through: if commit_msg has NO gate tags, exit 0 immediately (non-blocking).
 //   - Conservative: evidence-missing → REJECT; malformed .roadmap → REJECT with diag.
-//   - hexa-only (raw#9); bash shim is 1-liner (see tool/install_roadmap_hooks.hexa).
+//   - hexa-only (hexa-only); bash shim is 1-liner (see tool/install_roadmap_hooks.hexa).
 
 // raw_audit coupling is via CLI shell-out — avoids hexa `use` path friction
 // from arbitrary repos (pre-commit runs with repo cwd, not hexa-lang).
@@ -216,7 +216,7 @@ fn _cmd_selftest() -> int {
     if _rstrip("  abc")   != "  abc" { eprintln("FAIL: _rstrip leading"); return 1 }
     // 2) _looks_gate_tag discriminates gate-like vs scope-like tags
     if _looks_gate_tag("CP1") == false      { eprintln("FAIL: gate CP"); return 1 }
-    if _looks_gate_tag("raw#9") == false    { eprintln("FAIL: gate raw#"); return 1 }
+    if _looks_gate_tag("hexa-only") == false    { eprintln("FAIL: gate tag"); return 1 }
     if _looks_gate_tag("P1.AN11.c") == false{ eprintln("FAIL: gate P+AN"); return 1 }
     if _looks_gate_tag("workspace_sync")    { eprintln("FAIL: scope accepted"); return 1 }
     if _looks_gate_tag("")                  { eprintln("FAIL: empty accepted"); return 1 }

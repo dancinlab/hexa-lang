@@ -1,12 +1,12 @@
-// tool/roadmap_watcher.hexa — launchd-invoked live-roadmap snapshotter (raw#15)
+// tool/roadmap_watcher.hexa — launchd-invoked live-roadmap snapshotter (no-hardcode)
 //
 // PURPOSE
 //   Every 60s (launchd StartInterval), scan each configured repo's .roadmap,
 //   compute verification progress, and append a JSONL snapshot line to
 //   $HOME/.airgenome/roadmap_snapshot.jsonl.
 //
-//   Also enforces chflags uchg on .roadmap and chflags uappnd on .raw-audit,
-//   restoring the lock if it has been broken (OS-level invariant — raw#24),
+//   Also enforces chflags uchg on .roadmap and chflags uappnd on audit,
+//   restoring the lock if it has been broken (OS-level invariant),
 //   UNLESS a bounded hx_unlock window is currently active (see below).
 //
 // REPO LIST
@@ -23,7 +23,7 @@
 //   percent          — integer 0..100
 //   last_modified    — mtime in ISO-8601
 //   chflags_ok       — whether uchg is currently set on .roadmap
-//   raw_audit_uappnd — whether uappnd is currently set on .raw-audit
+//   raw_audit_uappnd — whether uappnd is currently set on audit
 //   unlock_active    — true when hx_unlock's grace window is in effect
 //
 // OUTPUT
@@ -31,11 +31,11 @@
 //
 // INVARIANTS ENFORCED
 //   - .roadmap missing uchg    → re-applied (unless unlock window active)
-//   - .raw-audit missing uappnd → re-applied
+//   - audit missing uappnd → re-applied
 //   (Only on darwin. Linux: no-op.)
 //
 // UNLOCK-WINDOW AWARENESS (2026-04-22)
-//   Reads the repo's .raw-audit for the most recent `| unlock | ok |` entry
+//   Reads the repo's audit for the most recent `| unlock | ok |` entry
 //   and compares it with the most recent `| lock |` / `| relock-auto |`.
 //   If the latest terminal event is an unlock that occurred within
 //   HEXA_RELOCK_GRACE_SEC seconds (default 300, matches hx_unlock default
@@ -95,7 +95,7 @@ fn _restore_chflag(path: string, flag: string) -> bool {
 // hx_unlock opens a bounded write window (default 300s) by clearing uchg
 // and scheduling a relock_daemon child. Without this guard, the 60s
 // watcher tick clobbered the window after ~60s by re-applying uchg
-// unconditionally. We now read .raw-audit to determine whether an
+// unconditionally. We now read audit to determine whether an
 // unlock grace is currently in effect per repo.
 
 fn _parse_int_digits(s: string) -> int {
@@ -163,7 +163,7 @@ fn _mtime_epoch(path: string) -> int {
     return _parse_int_digits(to_string(exec(cmd)).trim())
 }
 
-// Scan the tail of .raw-audit for the most recent unlock/lock/relock-auto
+// Scan the tail of audit for the most recent unlock/lock/relock-auto
 // event. Returns ["kind", "iso_ts"] or ["", ""] if none found.
 // We only read the tail (last 200 lines) to bound work — all recent edits
 // live there for any realistic audit rotation cadence.
@@ -230,7 +230,7 @@ fn _mtime_iso(path: string) -> string {
 fn _scan_repo(home: string, name: string) -> string {
     let repo = home + "/core/" + name
     let rpath = repo + "/.roadmap"
-    let apath = repo + "/.raw-audit"
+    let apath = repo + "/audit"
 
     let chk = exec_with_status("test -f '" + rpath + "'")
     if chk[1] != 0 {
@@ -280,7 +280,7 @@ fn _scan_repo(home: string, name: string) -> string {
     } else if !chflags_ok && fresh_edit {
         eprintln("[SKIP-FRESH-EDIT mtime=" + to_string(rm_mtime) + "] " + rpath + " (age=" + to_string(now_epoch - rm_mtime) + "s < " + to_string(fresh_grace) + "s)")
     }
-    // .raw-audit uappnd is separate from unlock window semantics (hx_unlock
+    // audit uappnd is separate from unlock window semantics (hx_unlock
     // does not clear it); always restore if missing.
     if audit_exists[1] == 0 && !raw_audit_ok {
         let _ = _restore_chflag(apath, "uappnd")

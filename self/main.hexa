@@ -124,7 +124,7 @@ fn cmd_help() {
     println("")
     println("ATLAS ABSORPTION  (Phase 5, 2026-05-14 — atlas-scope-only after split)")
     println("  lattice <verify|axis-table|cross-check>           n=6 σ·φ=n·τ=24 deductive verifier (pure math)")
-    println("  atlas-audit <external-entity|anchor|all>          raw#10 C3 lattice-fit gate + NIST anchor (overlay corpus)")
+    println("  atlas-audit <external-entity|anchor|all>          honest-caveat C3 lattice-fit gate + NIST anchor (overlay corpus)")
     println("  repo-audit-taxonomy <catalog.md> <manifest.toml>  filesystem ↔ catalog ↔ manifest C1/C2/C3 audit")
     println("    e.g. hexa lattice verify              → __N6_AXIS_VERIFY__ PASS (σ·φ=n·τ=24, |S₄|=24)")
     println("         hexa atlas-audit anchor          → NIST/CRC/ASM citation audit over overlay corpus")
@@ -1602,7 +1602,7 @@ fn run_stream_with_sentinel(cmd) {
     return rc
 }
 
-// raw 159 (2026-04-28): `--no-sentinel` / HEXA_NO_SENTINEL=1 mode.
+// no-hardcode9 (2026-04-28): `--no-sentinel` / HEXA_NO_SENTINEL=1 mode.
 //
 // Background: cmd_run inject `; echo __HEXA_RC=$?`
 // into the shell wrapper so the parent dispatcher can recover the
@@ -1843,7 +1843,7 @@ fn cmd_run(file, extra_args) {
     let parent_stderr_tty = !force_temp && exec("[ -t 2 ] && printf yes || printf no").trim() == "yes"
     let stderr_tmp = if parent_stderr_tty { "" } else { runtime_tmpname("run_err") }
     let stderr_redirect = if parent_stderr_tty { "" } else { " 2>'" + stderr_tmp + "'" }
-    // raw 159: --no-sentinel / HEXA_NO_SENTINEL=1 keeps stdout byte-clean
+    // no-hardcode9: --no-sentinel / HEXA_NO_SENTINEL=1 keeps stdout byte-clean
     // by routing rc through a sidechannel file. Default behavior
     // preserves the legacy `__HEXA_RC=N` stdout sentinel (backward
     // compat for callers that already strip it on their end, e.g.
@@ -2526,7 +2526,7 @@ if len(av) < 3 {
             //     bc_vm_run() call) execute identically with or without
             //     the flag — the env var is purely advisory until the
             //     AST→bc bridge exists.
-            // raw 159 (2026-04-28): `--no-sentinel` opt-in flag — same
+            // no-hardcode9 (2026-04-28): `--no-sentinel` opt-in flag — same
             //   accepted positions and flag-strip semantics as `--vm`.
             //   Suppresses the trailing `__HEXA_RC=N` stdout sentinel
             //   (rc routed through a sidechannel file instead). Equivalent

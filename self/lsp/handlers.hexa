@@ -4,7 +4,6 @@
 // 실제 구현은 law_check.hexa 호출 → 결과 파싱 → LSP 형식 변환.
 
 use "self/lsp/protocol"
-use "self/lsp/raw_diagnostics"
 // LP4-IMPORT-SURFACE (RFC-016 wiring) — import-resolve-fail squiggles.
 use "self/lsp/import_diagnostics"
 
@@ -102,9 +101,6 @@ pub fn handle_will_save_wait_until(msg: string) -> string {
 }
 
 // ─── didSave — 저장 후 최종 점검 ───────────────────────
-// P3-1 (2026-04-20): fold raw#9/#11/#12 enforcer output into LSP Diagnostics
-// so editors (VSCode extension etc.) show squiggles inline instead of
-// surfacing violations only at commit. See self/lsp/raw_diagnostics.hexa.
 pub fn handle_did_save(msg: string) {
     let uri = extract_uri(msg)
     if uri == "" { return }
@@ -113,19 +109,14 @@ pub fn handle_did_save(msg: string) {
     // Legacy high-level law gate (still honored for coarse block/pass signal).
     let pass = _law_check_path(path)
     let legacy = if pass { [] } else {
-        [diagnostic(0, 0, 0, 0, 1, "raw", "저장된 파일 law 위반 — 수정 필요")]
+        [diagnostic(0, 0, 0, 0, 1, "law", "저장된 파일 law 위반 — 수정 필요")]
     }
-
-    // Per-rule granular diagnostics (raw#9 + raw#11 + raw#12).
-    // Fail-open: collect_for_file returns [] on any spawn/parse failure.
-    let granular = collect_for_file(path)
 
     // LP4-IMPORT-SURFACE — RFC-016 import resolve diagnostics.
     let import_fails = collect_imports_for_file(path)
 
     let mut all = []
     for d in legacy       { all.push(d) }
-    for d in granular     { all.push(d) }
     for d in import_fails { all.push(d) }
 
     let mut body = "[]"

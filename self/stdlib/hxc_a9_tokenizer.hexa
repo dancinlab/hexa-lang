@@ -1,13 +1,13 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="hxc-a9-tokenizer", desc="HXC algorithm A9: hexa-native BPE tokenizer (Phase 9 P1 minimal viable). Per-schema corpus-wide vocabulary build via byte-pair encoding; greedy longest-match encoding. Pure-hexa raw 9. Targets natural-language text repetition that A4/A8/A12/A13 (structural) do not capture (anima alm_r13, hive raw_addition_requests, nexus meta_engine_evolution_log).")
+// @tool(slug="hxc-a9-tokenizer", desc="HXC algorithm A9: hexa-native BPE tokenizer (Phase 9 P1 minimal viable). Per-schema corpus-wide vocabulary build via byte-pair encoding; greedy longest-match encoding. Pure-hexa hexa-only. Targets natural-language text repetition that A4/A8/A12/A13 (structural) do not capture (anima alm_r13, hive raw_addition_requests, nexus meta_engine_evolution_log).")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a9_tokenizer.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a9_tokenizer.hexa encode <hxc.in> <hxc.out>)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a9_tokenizer.hexa decode <hxc.in> <hxc.out>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args, 4=decode-mismatch)
 //
-// Algorithm spec (raw 9 hexa-only · raw 18 self-host fixpoint · raw 65+68 idempotent):
+// Algorithm spec (hexa-only · self-host fixpoint self-host fixpoint · idempotency+68 idempotent):
 //   PASS 1 (build): for each schema, concatenate all row bodies separated by NUL.
 //                   Iteratively find most-frequent adjacent byte-pair, merge into
 //                   new token until V tokens reached (default V=64, capped to bound
@@ -29,12 +29,12 @@
 //                                    @s1 ^T<base64-bpe-bytes>
 //                                    @s1 ^T<base64-bpe-bytes>
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //   - encode(decode(x)) == x for any A9 stream
 //   - decode(encode(y)) == y for any HXC v1 stream
 //   - same input + same vocabulary build (deterministic argmax) → byte-eq output
 //
-// Falsifiers (raw 71 contract):
+// Falsifiers (falsifier contract):
 //   F-A9-1: saving < 0.10 byte-eq on synthetic English-text fixture → reject
 //   F-A9-2: encode/decode round-trip not byte-eq → reject
 //   F-A9-3: encode latency > 50ms per 1KB content → reject (pure-hexa interp cost)
@@ -43,7 +43,7 @@
 // @attr(complexity="O(V*N) build + O(N*V) encode greedy", memory="O(V + N)")
 
 const A9_MIN_ROWS = 8
-const A9_VOCAB_SIZE = 64           // bounded; raw 91 honest C3: pure-hexa interp
+const A9_VOCAB_SIZE = 64           // bounded; C3 honest C3: pure-hexa interp
                                    // BPE PASS1 is O(V*N) where N = corpus bytes;
                                    // V=64 keeps PASS 1 < few seconds on 1MB corpus.
 const A9_TOKEN_MARKER = 254        // 0xFE — invalid UTF-8 lead → unambiguous
@@ -410,7 +410,7 @@ fn _decode_symbols(syms: array, vocab: array) -> array {
             }
             if !found {
                 // Unknown token — preserve as-is via marker (shouldn't happen if
-                // vocab matches encoder). raw 91 honest C3.
+                // vocab matches encoder). C3 honest C3.
                 out.push(63)  // '?' literal
             }
         }
@@ -752,7 +752,7 @@ fn _selftest() -> int {
 
     // Fixture 4: round-trip byte-eq verification on 100-row corpus (smaller for speed).
     // Use 30 rows instead of 100 — pure-hexa BPE on 100 rows × 80 chars = 8KB
-    // would be ~30+ seconds. raw 91 honest C3.
+    // would be ~30+ seconds. C3 honest C3.
     let mut rows4 = []
     let mut m = 0
     while m < 30 {

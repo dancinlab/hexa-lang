@@ -10,7 +10,7 @@
 //         (3) entry["verdict"] ∈ {VERIFIED, PARTIAL}
 //         (4) prev_index_sha equals either "GENESIS" or sha256(prev_line)
 //     - If all entries pass → append an advance event to
-//       hexa-lang/.raw-audit with event=meta2_chain_verified.
+//       hexa-lang/audit with event=meta2_chain_verified.
 //
 // CLI
 //   hexa tool/verify_meta2_chain.hexa --check
@@ -153,14 +153,14 @@ fn verify_chain() -> array {
     return [ok, reasons, len(entries), prev_computed]
 }
 
-// Append "meta2_chain_verified" event to hexa-lang/.raw-audit.
+// Append "meta2_chain_verified" event to hexa-lang/audit.
 // Line shape: ISO | event | actor | reason | result | before_sha | after_sha | line_sha
-// (matches existing .raw-audit format — see raw_audit.hexa).
+// (matches existing audit format — see raw_audit.hexa).
 fn append_raw_audit(entry_count: int, chain_tail: string) -> bool {
     let home = _home()
-    let audit_path = home + "/core/hexa-lang/.raw-audit"
+    let audit_path = home + "/core/hexa-lang/audit"
     if !_path_exists(audit_path) {
-        eprintln("raw-audit missing: " + audit_path)
+        eprintln("audit missing: " + audit_path)
         return false
     }
     // Read last non-empty data line for prev_line_sha.
@@ -251,10 +251,10 @@ fn _cmd_append() -> int {
     }
     let ok = append_raw_audit(r[2], to_string(r[3]))
     if !ok {
-        eprintln("raw-audit append failed")
+        eprintln("audit append failed")
         return 1
     }
-    println("meta² chain verified + raw-audit advance event appended (entries=" + to_string(r[2]) + ")")
+    println("meta² chain verified + audit advance event appended (entries=" + to_string(r[2]) + ")")
     return 0
 }
 

@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="hxc-a13-constant-column", desc="HXC algorithm A13: constant-column elimination. Detects columns where ALL rows share identical value (any type: int/string/bool). Emits constant in schema header, removes column from per-row data + corresponding pipe separator. Pure-hexa, raw 9. Targets aot_cache_gc.jsonl int-constant cols (days_threshold=30, evicted_count=0, freed_kb=0) that A8 missed (A8 string-categorical only).")
+// @tool(slug="hxc-a13-constant-column", desc="HXC algorithm A13: constant-column elimination. Detects columns where ALL rows share identical value (any type: int/string/bool). Emits constant in schema header, removes column from per-row data + corresponding pipe separator. Pure-hexa, hexa-only. Targets aot_cache_gc.jsonl int-constant cols (days_threshold=30, evicted_count=0, freed_kb=0) that A8 missed (A8 string-categorical only).")
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a13_constant_column.hexa --selftest)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a13_constant_column.hexa encode <hxc.in> <hxc.out>)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a13_constant_column.hexa decode <hxc.in> <hxc.out>)
@@ -20,11 +20,11 @@
 //     Parse `# const:` headers into per-schema const map.
 //     Per row: insert constant values at correct col positions.
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //   - encode(decode(x)) == x for any A13 stream
 //   - decode(encode(y)) == y for any HXC v1 stream
 //
-// Falsifiers (raw 71 contract):
+// Falsifiers (falsifier contract):
 //   F-A13-1: saving < 0.02 byte-eq on synthetic constant-col fixture → reject.
 //   F-A13-2: encode/decode round-trip not byte-eq → reject.
 
@@ -37,7 +37,7 @@ fn _split_top_level_pipes(s: string) -> array {
     // quote-bearing values (e.g., A12 strips ts column prefix `"2026-04-2`, leaving
     // suffix `5T14:19:09Z"` with unmatched closing quote). Quote-aware split would
     // misinterpret the orphan `"` as opening a string scope and merge subsequent
-    // cells. Use simple pipe split (raw 91 honest C3) since post-transformation
+    // cells. Use simple pipe split (C3 honest C3) since post-transformation
     // cells reliably have no embedded pipe chars.
     let mut segs = []
     let mut start = 0

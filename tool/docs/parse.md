@@ -16,7 +16,7 @@ input) where input may be malformed but pipeline must continue.
 
 Source: RFC `to_int_safe` (airgenome 2026-04-30 wave 4 cross-repo evidence —
 5+ scattered local helpers in airgenome alone, ~17 across 5 sister repos).
-Option A pure-hexa stdlib fn (raw 9 hexa-only compliant).
+Option A pure-hexa stdlib fn (hexa-only compliant).
 
 Behavior table:
   "0.0"    → 0

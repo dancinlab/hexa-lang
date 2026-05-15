@@ -417,7 +417,7 @@ fn _ssh_dial_core(host: string, port: int, username: string,
         let priv_local: [int] = signer_data["priv"]
         ua = _build_userauth_request(username, pk_local, priv_local, session_id)
     } else {
-        // agent: extract raw 32B pk from blob; ask agent to sign
+        // agent: extract attr-usage2B pk from blob; ask agent to sign
         let pk_blob: [int] = signer_data["pk_blob"]
         let agent_fd: int = signer_data["agent_fd"]
         let to_sign = _build_userauth_to_sign(username, pk_blob, session_id)

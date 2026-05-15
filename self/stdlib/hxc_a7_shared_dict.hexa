@@ -27,18 +27,18 @@
 //     - read `# dict:` headers → freq tables
 //     - for each `@<id>!a7 <b85>` row: base85-decode → range-decode → reconstruct values
 //
-// Streaming-prefix invariant (raw 92 A5):
+// Streaming-prefix invariant (module-loader-fatal A5):
 //   Each `@<id>!a7 ...\n` row is independently decodable. Header lines come first.
 //   Trailing partial row buffered until LF. Same invariant as HXC v1.
 //
-// Falsifier (raw 91 C3):
+// Falsifier (C3):
 //   F-A7-1: combined-saving < 0.50 on a schema-repetition rich JSONL ≥10 rows
 //           (HXC-v1 already yields ~0.27 saving via A1+A2; A7 incremental target
 //           is ~0.30 saving over v1 to hit 0.50 combined). Retire A7 if not met
 //           on real corpora (atlas / honesty_audit / format_witness/*.hxc).
-//   F-A7-2: encode/decode roundtrip not byte-eq on selftest fixture → reject (raw 68).
+//   F-A7-2: encode/decode roundtrip not byte-eq on selftest fixture → reject (follow-up).
 //   F-A7-3: decode latency > 1ms/row on selftest in pure-hexa interpreted mode
-//           → reject (raw 42 jetsam, accounting for hexa interpreter overhead;
+//           → reject (follow-up jetsam, accounting for hexa interpreter overhead;
 //           native-codegen target remains <10us/row but is out of scope for v1).
 
 use "self/stdlib/argv_skip"
@@ -1040,7 +1040,7 @@ fn _selftest() -> i64 {
     println("  fixture v1=" + to_string(v1_b) + "B  v2=" + to_string(v2_b) + "B")
     let ratio_pct: i64 = (v2_b * 100) / v1_b
     println("  v2/v1 ratio = " + to_string(ratio_pct) + "%")
-    // Falsifier F-A7-1 (registered, raw 91 C3): saving < 0.50 ⇒ retire A7.
+    // Falsifier F-A7-1 (registered, C3): saving < 0.50 ⇒ retire A7.
     // Saving is *combined* with HXC v1 baseline. Per docs/hxc_physical_math_limit_saturation_20260427_landing.md:
     //   - A1+A2 baseline gives ~0.27 saving on schema-rich JSONL (atlas)
     //   - A7 must close the remaining ~0.17pp Shannon gap to hit 0.50 combined
@@ -1050,7 +1050,7 @@ fn _selftest() -> i64 {
     // `measure` subcommand against state/format_witness/*.hxc artifacts where
     // both A1+A2 and A7 cumulative effects are visible.
     //
-    // Hard floor for this fixture (raw 65 idempotent + raw 68 byte-eq cross-host):
+    // Hard floor for this fixture (idempotency idempotent + follow-up byte-eq cross-host):
     //   ratio < 110% (no >10% regression — proves coder isn't pathologically expanding)
     // Soft target (incremental):
     //   ratio < 90% on real schema-repetition corpus (atlas, hive ledger surfaces)
@@ -1058,7 +1058,7 @@ fn _selftest() -> i64 {
     println("  no-regression vs v1: ok (ratio < 110%)")
 
     // Test 8: streaming-prefix invariant — every `\n`-terminated prefix decodes
-    // to a byte-eq prefix of the original (raw 92 A5).
+    // to a byte-eq prefix of the original (module-loader-fatal A5).
     let v2_lines = split(v2, "\n")
     let mut acc = ""
     let mut li = 0
@@ -1075,7 +1075,7 @@ fn _selftest() -> i64 {
     }
     println("  streaming-prefix invariant: ok (" + to_string(li) + " prefix classes resumable)")
 
-    // Test 9: latency budget (raw 42 jetsam) — pure-hexa interp budget:
+    // Test 9: latency budget (follow-up jetsam) — pure-hexa interp budget:
     //   encode <100ms/row (hard), decode <1ms/row (relaxed from 10us native-codegen target)
     let n_rows: i64 = 100   // 60 audit + 40 cycle
     let t0 = _us_now()

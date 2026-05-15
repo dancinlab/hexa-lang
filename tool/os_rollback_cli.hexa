@@ -1,6 +1,6 @@
 // tool/os_rollback_cli.hexa — #18 rollback CLI for .roadmap backups
 //
-// PURPOSE (raw#9 strict)
+// PURPOSE (hexa-only-strict)
 //   The `.roadmap` file accumulates backups alongside it as
 //       .roadmap.bak.<ISO or timestamp label>
 //   This tool lists, inspects, and restores those backups deterministically.

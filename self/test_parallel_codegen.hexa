@@ -4,7 +4,7 @@
 
 use "self/stdlib/law_io"
 
-// 2026-04-25 raw 44: prefer bare dispatcher (test runs build artifacts).
+// 2026-04-25 docker-hard-landing: prefer bare dispatcher (test runs build artifacts).
 let HEXA_BIN = if file_exists("./build/hexa.real") { "./build/hexa.real" } else { "./hexa" }
 
 let mut pass_count = 0

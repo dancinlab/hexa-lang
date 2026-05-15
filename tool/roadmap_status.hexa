@@ -1,4 +1,4 @@
-// tool/roadmap_status.hexa — raw#15 progress view (.roadmap SSOT)
+// tool/roadmap_status.hexa — no-hardcode progress view (.roadmap SSOT)
 //
 // Renders an ASCII progress view of the hexa-lang project roadmap, keyed
 // by track × checkpoint. Pure hexa — reads /.roadmap via read_file().

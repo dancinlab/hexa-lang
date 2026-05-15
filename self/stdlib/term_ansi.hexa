@@ -61,7 +61,7 @@
 
 // ── Core constants ────────────────────────────────────────────────
 // ESC = 0x1b. BEL = 0x07. Built from char codes since hexa string
-// literals don't currently support \xNN (raw 159 upstream gap).
+// literals don't currently support \xNN (no-hardcode9 upstream gap).
 fn _esc() -> string { return from_char_code(27) }
 fn _bel_ch() -> string { return from_char_code(7) }
 fn _bs_ch() -> string { return from_char_code(8) }

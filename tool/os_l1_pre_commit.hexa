@@ -1,13 +1,13 @@
 // tool/os_l1_pre_commit.hexa — #9 L1 pre-commit gate (deadlock-safe)
 //
-// PURPOSE (raw#9 strict)
+// PURPOSE (hexa-only-strict)
 //   Supersedes roadmap_verify_pre_commit.hexa as the Tier-2 canonical entry.
 //   The behavior is a superset:
 //     * Pre-flight: detect a hung/stale hexa_interp lock (#16) and either
 //       (a) reap it automatically, or (b) bypass by running interp.real direct.
 //     * Gate-tag extraction & evidence verification — identical to the
 //       predecessor (same rules, same rejection messages).
-//     * Optional □→✓ marker flip in .roadmap, chflags-aware (raw#11).
+//     * Optional □→✓ marker flip in .roadmap, chflags-aware (ai-native).
 //     * raw_audit append on OK paths.
 //
 // CLI

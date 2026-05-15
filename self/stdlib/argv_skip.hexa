@@ -27,7 +27,7 @@
 //   }
 //
 // REFERENCES
-//   ~/core/hive/.raw-audit  (BUG#2 incident 2026-04-27)
+//   ~/core/hive/audit  (BUG#2 incident 2026-04-27)
 //   ~/core/hive/tool/subagent_dispatch.hexa  (canonical inline fix, lines 507-538)
 
 // _argv_basename — extract the last "/"-segment of a path string.
@@ -55,7 +55,7 @@ fn _argv_basename(p) {
 // hexa.real, hexa.real.new_async, hexa.known_good, hexa.linux,
 // hexa_v2_linux, exe, etc. Also retains the legacy 6-pattern
 // ends_with fallback for regression safety.
-// raw 91 honest C3: starts_with("hexa") admits any future binary
+// C3 honest C3: starts_with("hexa") admits any future binary
 // whose basename begins with "hexa" (e.g., random `hexa_clone_test`)
 // — false-positive risk accepted as the trade-off for robust coverage.
 fn _is_interp_binary(a) {
@@ -77,7 +77,7 @@ fn _is_interp_binary(a) {
 pub fn skip_invocation_prefix(raw: array) -> i64 {
     let mut i: i64 = 0
     // Skip leading interpreter binary path(s). Mac duplicates the binary path;
-    // Linux has it once. Robust pattern (2026-04-30, raw 91 honest C3):
+    // Linux has it once. Robust pattern (2026-04-30, C3 honest C3):
     // basename starts_with("hexa") OR basename == "exe" — covers all
     // /Users/ghost/core/hexa-lang/build/hexa_interp_* variants without
     // an exhaustive ends_with whitelist. Legacy 6-pattern ends_with

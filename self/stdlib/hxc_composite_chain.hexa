@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native HXC composite-chain (multi-algorithm pipeline) skeleton — first-tick scope, design doc /Users/ghost/core/anima/docs/hxc_composite_chain_design_2026_04_28.md")
-// @tool(slug="hxc-composite-chain", desc="HXC composite chain: A29+A30+A23 stack pipeline (multi-algorithm sequential composition). FIRST-TICK SKELETON ONLY — wire format + sigil + 3-fixture selftest byte-eq round-trip + raw 142 D2 try-revert structural enforcement. NO measured saving / NO LIVE FIRE / NO 6-repo sweep / NO A25 dispatcher integration this turn. Pure hexa raw 9 + raw 18 self-host. raw 137 cmix-ban MAINTAINED (composite of deterministic algorithms = deterministic pipeline). raw 91 honest C3 STRICT: skeleton scope = correctness gate, NOT saving claim. raw 156 placement-orthogonality: composite chain is a NEW axis (sequential composition), distinct from A25 dispatcher's per-file winner-selection axis. Two skeleton chain candidates: C1=A29→A30 (DEFLATE bitstream → BWT-MTF-RLE) + C3=A30→A23 (BWT-clustered bytes → sparse PPM). Sigil ^d (lowercase, raw 92 sigil-line compliant; disjoint from ^a/^b/^c/^V/^X/^Y/^Z + uppercase ^A..^Z). Header v=composite-v1 chain={C1,C3}.")
+// @tool(slug="hxc-composite-chain", desc="HXC composite chain: A29+A30+A23 stack pipeline (multi-algorithm sequential composition). FIRST-TICK SKELETON ONLY — wire format + sigil + 3-fixture selftest byte-eq round-trip + magic-number2 D2 try-revert structural enforcement. NO measured saving / NO LIVE FIRE / NO 6-repo sweep / NO A25 dispatcher integration this turn. Pure hexa hexa-only + self-host fixpoint self-host. ai-config-ban cmix-ban MAINTAINED (composite of deterministic algorithms = deterministic pipeline). C3 honest C3 STRICT: skeleton scope = correctness gate, NOT saving claim. no-hardcode6 placement-orthogonality: composite chain is a NEW axis (sequential composition), distinct from A25 dispatcher's per-file winner-selection axis. Two skeleton chain candidates: C1=A29→A30 (DEFLATE bitstream → BWT-MTF-RLE) + C3=A30→A23 (BWT-clustered bytes → sparse PPM). Sigil ^d (lowercase, module-loader-fatal sigil-line compliant; disjoint from ^a/^b/^c/^V/^X/^Y/^Z + uppercase ^A..^Z). Header v=composite-v1 chain={C1,C3}.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_composite_chain.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_composite_chain.hexa encode --chain C1 <in> <out>)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_composite_chain.hexa encode --chain C3 <in> <out>)
@@ -30,7 +30,7 @@
 //     CAVEAT: wire-level chain (string→string) means stage-2 sees b64
 //     alphabet input from stage-1's body. Per design §4.3, this is
 //     theoretically anti-compressive (b64 ≈ uniform 64-char distribution).
-//     Skeleton selftest expects D2 try-revert (raw 142) to return identity
+//     Skeleton selftest expects D2 try-revert (magic-number2) to return identity
 //     for all fixtures. Internal-byte fast-path deferred to follow-on tick.
 //
 //   PASS 3 — C-SECONDARY (C3 = A30 → A23) wire-level skeleton:
@@ -70,45 +70,45 @@
 //     F3: JSON-mixed structured round-trip on C1 + C3.
 //
 //     Selftest reports composite_len vs identity_len for each fixture +
-//     chain. raw 142 D2 try-revert verified by `cc_encode` returning
+//     chain. magic-number2 D2 try-revert verified by `cc_encode` returning
 //     identity when composite_len >= input_len.
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //     - decode_composite(encode_composite(s, tag)) == s for tag ∈ {C1,C3}
 //     - encode_composite(encode_composite(s, tag), tag) == encode_composite(s, tag)
 //       (header-detect short-circuit)
 //     - non-composite input → decode_composite passthrough
-//     - encode is byte-deterministic (raw 137)
+//     - encode is byte-deterministic (ai-config-ban)
 //
-// raw 142 D2 try-revert:
+// magic-number2 D2 try-revert:
 //     cc_encode returns shortest of {composite-encoded, identity}. If
 //     composite output >= raw input, identity is returned. This guarantees
 //     composite never inflates aggregate vs current SOTA (76.24% A25
 //     dispatcher) — worst case = +0pp.
 //
-// raw 156 placement-orthogonality:
+// no-hardcode6 placement-orthogonality:
 //     Composite chain placement axis = sequential algorithm composition
 //     (NEW axis). NOT orthogonal to A29/A30/A23 — composite SUBSUMES them
 //     as inner stages. Composite is COMPLEMENTARY to A25 dispatcher (per-
 //     file winner selection); they may coexist as orthogonal axes IF
 //     composite passes follow-on LIVE FIRE gate.
 //
-// Falsifiers preregistered (raw 71, per design doc §6):
+// Falsifiers preregistered (falsifier, per design doc §6):
 //     F-CC-1: round-trip byte-eq fails on any of 3 fixtures × 2 chains
-//             → REJECT (raw 65 + 68).
+//             → REJECT (idempotency + 68).
 //     F-CC-2: composite encode for any fixture > identity wrapper
-//             → revert to identity per raw 142 D2 (verified by selftest).
+//             → revert to identity per magic-number2 D2 (verified by selftest).
 //     F-CC-3: header parse ambiguity (composite header collides with
 //             A29/A30/A23 header) → REJECT; sigil ^d enforced disjoint.
 //     F-CC-4..8: LIVE FIRE / micro-LIVE-FIRE follow-on tick falsifiers
 //                (see design doc §6).
 //
-// raw 137 cmix-ban compliance:
+// ai-config-ban cmix-ban compliance:
 //     Composite chain = sequential composition of deterministic algorithms
 //     (A29/A30/A23). All inner stages are deterministic, integer-only,
 //     no fp ops, no neural mixer. Composite is bit-for-bit reproducible.
 //
-// raw 91 honest C3 (first-tick scope):
+// C3 honest C3 (first-tick scope):
 //     - PASS 1 chain dispatcher IMPLEMENTED.
 //     - PASS 2 C-PRIMARY wire-level skeleton IMPLEMENTED.
 //     - PASS 3 C-SECONDARY wire-level skeleton IMPLEMENTED.
@@ -122,7 +122,7 @@
 //       falsification rate = pre-registered prediction (saving=0 expected
 //       on wire-level skeleton), NOT measured this tick.
 
-const CC_MIN_BYTES = 64       // below this: identity passthrough (raw 65/68)
+const CC_MIN_BYTES = 64       // below this: identity passthrough (idempotency/68)
 const CC_HEADER_PREFIX = "# cc:s1"
 const CC_SIGIL = "^d"
 const CC_CHAIN_C1 = "C1"      // A29 → A30
@@ -133,7 +133,7 @@ const CC_VERSION = "composite-v1"
 //
 // First-tick skeleton: instead of importing the full A29/A30/A23 modules
 // (which would require module-system support not yet self-hosted at this
-// tick — raw 18 self-host fixpoint forbids cross-module imports until the
+// tick — self-host fixpoint self-host fixpoint forbids cross-module imports until the
 // loader is hexa-native), we delegate to the inner algorithms via the
 // hexa interp's exec primitive in PRODUCTION wrapper, but INLINE simple
 // stub-encoders for SKELETON SELFTEST.
@@ -161,7 +161,7 @@ const CC_VERSION = "composite-v1"
 //
 // These stubs are byte-eq round-trip lossless by construction (identity
 // on payload + header wrapper) — they let us validate the COMPOSITE wire
-// format + chain dispatcher + raw 142 D2 try-revert structural contract
+// format + chain dispatcher + magic-number2 D2 try-revert structural contract
 // without conflating with the A29/A30/A23 module-internal correctness
 // (which is verified by THEIR own selftests).
 //
@@ -355,7 +355,7 @@ fn cc_encode(s: string, chain_tag: string) -> string {
             return s
         }
     }
-    // raw 142 D2 try-revert: composite must shrink or revert to identity
+    // magic-number2 D2 try-revert: composite must shrink or revert to identity
     if len(enc) < n { return enc }
     return s
 }
@@ -363,7 +363,7 @@ fn cc_encode(s: string, chain_tag: string) -> string {
 fn cc_decode(z: string) -> string {
     let unwrapped = _cc_unwrap(z)
     if len(unwrapped) == 0 {
-        // Not a composite stream — passthrough (raw 65 + 68)
+        // Not a composite stream — passthrough (idempotency + 68)
         return z
     }
     let chain_tag = unwrapped[0]
@@ -399,7 +399,7 @@ fn _cc_assert_round_trip(label: string, fixture: string, chain_tag: string) -> i
 }
 
 fn _cc_assert_d2_revert(label: string, fixture: string, chain_tag: string) -> int {
-    // raw 142 D2 try-revert verification: cc_encode must NOT inflate.
+    // magic-number2 D2 try-revert verification: cc_encode must NOT inflate.
     // It returns either compressed-stream OR identity, never an inflated stream.
     let n_in: i64 = len(fixture)
     let enc = cc_encode(fixture, chain_tag)
@@ -435,7 +435,7 @@ fn _selftest_cc() -> int {
     if r_c1_eng == 0 && r_c3_eng == 0 && d_c1_eng == 0 && d_c3_eng == 0 { pass = pass + 1 } else { fail = fail + 1 }
 
     // ─── Fixture 2: Korean / multibyte UTF-8 ───
-    let kor = "안녕 세계 — 합성 체인 first-tick. composite chain hexa raw 9 + raw 18. "
+    let kor = "안녕 세계 — 합성 체인 first-tick. composite chain hexa hexa-only + self-host fixpoint. "
     let mut buf_kor = ""
     let mut k2 = 0
     while k2 < 3 { buf_kor = buf_kor + kor; k2 = k2 + 1 }
@@ -460,7 +460,7 @@ fn _selftest_cc() -> int {
     let aux = cc_encode(buf_eng, CC_CHAIN_C1)
     let aux2 = cc_encode(aux, CC_CHAIN_C1)
     if aux2 == aux {
-        println("  AUX:  cc_encode idempotent on encoded stream (header short-circuit OK, raw 65 + 68)")
+        println("  AUX:  cc_encode idempotent on encoded stream (header short-circuit OK, idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: AUX cc_encode not idempotent on encoded stream")
@@ -469,7 +469,7 @@ fn _selftest_cc() -> int {
     // ─── Auxiliary: cc_decode passthrough on non-composite input ───
     let aux_pt = cc_decode("not-a-composite-stream")
     if aux_pt == "not-a-composite-stream" {
-        println("  AUX:  cc_decode passthrough on non-composite input (raw 65 + 68)")
+        println("  AUX:  cc_decode passthrough on non-composite input (idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: AUX cc_decode passthrough broken")
@@ -479,7 +479,7 @@ fn _selftest_cc() -> int {
     let tiny = "abc"
     let enc_tiny = cc_encode(tiny, CC_CHAIN_C1)
     if enc_tiny == tiny {
-        println("  AUX:  cc_encode short-input passthrough (n < CC_MIN_BYTES, raw 65 idempotent)")
+        println("  AUX:  cc_encode short-input passthrough (n < CC_MIN_BYTES, idempotency idempotent)")
     } else {
         fail = fail + 1
         println("  FAIL: AUX short-input passthrough broken")
@@ -487,7 +487,7 @@ fn _selftest_cc() -> int {
 
     println("Results: " + to_string(pass) + " PASS / " + to_string(fail) + " FAIL")
     println("__HXC_COMPOSITE_CHAIN_SELFTEST__ " + (if fail == 0 { "PASS" } else { "FAIL" })
-            + " (FIRST-TICK SKELETON: PASS 1 dispatcher + PASS 2 C1=A29→A30 + PASS 3 C3=A30→A23 + PASS 4 wire ^d sigil + 3 fixtures × 2 chains byte-eq + D2 try-revert structural; LIVE FIRE / 6-repo / A25 integration / internal-byte fast-path DEFERRED per raw 91 honest C3)")
+            + " (FIRST-TICK SKELETON: PASS 1 dispatcher + PASS 2 C1=A29→A30 + PASS 3 C3=A30→A23 + PASS 4 wire ^d sigil + 3 fixtures × 2 chains byte-eq + D2 try-revert structural; LIVE FIRE / 6-repo / A25 integration / internal-byte fast-path DEFERRED per C3 honest C3)")
     if fail == 0 { return 0 }
     return 1
 }

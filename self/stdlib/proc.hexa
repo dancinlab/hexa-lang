@@ -6,11 +6,11 @@
 // RFC-001 (P0 BLOCKER) — popen_lines() / process_spawn() streaming subprocess
 //   proposals/rfc_001_popen_lines.md
 //
-// raw#9 hexa-only-strict — wrapper over existing exec_with_status() builtin.
-//   No C runtime change, no self-host fixpoint risk (raw#18). Cost: collects
+// hexa-only-strict — wrapper over existing exec_with_status() builtin.
+//   No C runtime change, no self-host fixpoint risk (self-host fixpoint). Cost: collects
 //   entire stdout before splitting (NOT true incremental streaming).
 //
-// raw#10 honest C3 (concrete-clear-conservative): this implementation
+// honest-caveat honest C3 (concrete-clear-conservative): this implementation
 //   FULLY CAPTURES the subprocess stdout into a single buffer and THEN
 //   splits on '\n'. It is a strict superset of `exec(cmd) + manual split`
 //   ergonomics. The RFC-001 streaming-iterator form (per-line emit while
@@ -19,7 +19,7 @@
 //   tracked as a separate cycle. See RFC-001 "Falsifier" — the streaming
 //   sub-second-latency requirement is NOT satisfied by this wrapper.
 //
-// raw#159 hexa-lang upstream-proposal-mandate — anima-eeg gap-1 ergonomic
+// no-hardcode9 hexa-lang upstream-proposal-mandate — anima-eeg gap-1 ergonomic
 //   close: hexa scripts can `for line in popen_lines(...)` instead of the
 //   `let body = exec(...); for line in split(body, "\n")` boilerplate.
 //
@@ -142,7 +142,7 @@ fn popen_lines(cmd: string) -> [string] {
 // Breaking risk: 0. Both functions are new symbols; popen_lines /
 // popen_lines_with_status / _selftest_main untouched.
 //
-// Caveats (raw#91):
+// Caveats (C3):
 //   · Temp-file write is not atomic against concurrent invokers; the
 //     nonce uses now_epoch + len(stdin_str) which collides only if two
 //     calls in the same wall-clock second happen with identical-length
@@ -253,7 +253,7 @@ fn proc_run_json_bridge(cmd: string, payload) {
 //     handle.done=true with rc = 143 (128+SIGTERM) so a subsequent poll
 //     reports terminated rather than spinning on a now-deleted rc file.
 //
-// Known limits (raw#91 honest): kill is best-effort — a grandchild that
+// Known limits (C3 honest): kill is best-effort — a grandchild that
 // `cmd` itself daemonised (double-fork) can outlive the SIGKILL; for the
 // claude-CLI use case (a single node process) this is adequate. For a
 // hard process-GROUP kill use the `exec_stream_async` + `exec_stream_kill`

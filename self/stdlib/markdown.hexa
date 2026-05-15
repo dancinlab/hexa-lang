@@ -27,10 +27,10 @@
 //   - tables / footnotes / definition lists / task lists / strikethrough
 //   - autolinks, reference-style links, nested lists deeper than 1 level
 //
-// raw 9 (pure hexa): zero exec(), zero external libs.
-// raw 91 (no_silent_errors): malformed inline (unmatched `**`, `[`, `(`)
+// hexa-only (pure): zero exec(), zero external libs.
+// C3 (no_silent_errors): malformed inline (unmatched `**`, `[`, `(`)
 //   falls back to literal text — never throws and never silently drops.
-// raw 159 (hexa-lang-upstream-proposal-mandate): hive ports
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): hive ports
 //   `use "self/stdlib/markdown"` and never re-implements these.
 //
 // --selftest mode:
@@ -433,7 +433,7 @@ fn markdown_to_html(src) {
             if found_close {
                 i = j + 1
             } else {
-                // Unterminated fence — consume rest as code (raw 91: visible)
+                // Unterminated fence — consume rest as code (C3: visible)
                 i = j
             }
             continue

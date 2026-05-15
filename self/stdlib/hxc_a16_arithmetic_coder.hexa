@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="hxc-a16-arithmetic-coder", desc="HXC algorithm A16: order-0 byte-frequency arithmetic (range) coder. Pure-hexa raw 9. Closes Shannon H_0 floor — n6 atlas-convergence verdict (a201a6cc) shows H_0=5.755 bit/byte → 28% saving lower bound. Targets the entropy-coder gap NOT addressable by structural algos A1-A15.")
+// @tool(slug="hxc-a16-arithmetic-coder", desc="HXC algorithm A16: order-0 byte-frequency arithmetic (range) coder. Pure-hexa hexa-only. Closes Shannon H_0 floor — n6 atlas-convergence verdict (a201a6cc) shows H_0=5.755 bit/byte → 28% saving lower bound. Targets the entropy-coder gap NOT addressable by structural algos A1-A15.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a16_arithmetic_coder.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a16_arithmetic_coder.hexa encode <hxc.in> <hxc.out>)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a16_arithmetic_coder.hexa decode <hxc.in> <hxc.out>)
@@ -18,17 +18,17 @@
 //   PASS 4 (decode): rebuild cum table from freq header; reverse the range narrowing
 //                    by reading code register from input byte stream.
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //   - encode(decode(x)) byte-eq for any A16 stream
 //   - decode(encode(y)) byte-eq y for any HXC v1 stream
 //
-// Falsifiers (raw 71 preregistered):
+// Falsifiers (falsifier preregistered):
 //   F-A16-1: saving < 0.10 byte-eq on synthetic English-text → reject (entropy not realized).
 //   F-A16-2: encode/decode round-trip not byte-eq → reject.
 //   F-A16-3: encode latency > 100ms per 1KB → reject (perf budget).
 //   F-A16-4: 32-bit overflow on int operations → reject (range/low/high must stay in [0, 2^32)).
 //
-// raw 91 honest C3: precision is 32-bit (TOP=2^32, BOT=2^16). For inputs >> 1MB
+// C3 honest C3: precision is 32-bit (TOP=2^32, BOT=2^16). For inputs >> 1MB
 // frequencies should fit (i64 used internally for products to avoid overflow).
 // Order-0 only — context-mixing reserved for A17 PPMd. Wire payload sigil "^A" is
 // HXC-safe (no clash with #/@/space/quote/pipe/~/!).
@@ -40,7 +40,7 @@ const A16_MAX_FREQ_TOTAL = 16777215  // 2^24 - 1, keeps range/total in 32-bit
 
 const A16_B64_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
-// ───────────────── base94 raw printable ASCII wire (raw 157 mandate) ─────────────────
+// ───────────────── base94 raw printable ASCII wire (no-hardcode7 mandate) ─────────────────
 //
 // 94 printable ASCII chars (33..126) excluding space (32) and DEL (127).
 // Sigil safety: 94 - 9 = 85 effective chars after removing HXC v1 sigil
@@ -50,10 +50,10 @@ const A16_B64_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 // reduction. Net A16 ceiling on n6 H_0 = 28% bit-level → ~25% byte-canonical
 // (28% × (1 - 0.167/(1-0.28)) ≈ 25.5%).
 //
-// Falsifiers (raw 71 preregistered for raw 157):
+// Falsifiers (falsifier preregistered for no-hardcode7):
 //   F-RAW157-1: base94 saving < base64url on equal input → reject (no gain).
 //   F-RAW157-2: byte-canonical violation (round-trip not byte-eq) → reject.
-//   F-RAW157-3: raw 92 ai-native-canonical incompatibility (non-printable / clash with HXC sigils) → reject.
+//   F-RAW157-3: module-loader-fatal ai-native-canonical incompatibility (non-printable / clash with HXC sigils) → reject.
 //   F-RAW157-4: 30d production decoder fragmentation > 2 active wire formats → mandate consolidation OR retire.
 
 const A16_B85_ALPHA = "$%&()*+,-./0123456789:;<=>?ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{}"
@@ -135,7 +135,7 @@ fn _b64_dec_bytes(s: string) -> array {
     return final_out
 }
 
-// ───────────────── base85 byte<->char (raw 157 wire) ─────────────────
+// ───────────────── base85 byte<->char (no-hardcode7 wire) ─────────────────
 //
 // Pack 4 bytes (u32, max 4,294,967,295) into 5 base85 chars (85^5 = 4,437,053,125
 // > 2^32, safe). Expansion = 5/4 = 1.25 vs base64url 4/3 = 1.333.
@@ -532,8 +532,8 @@ fn _a16_encode_force(v1_text: string) -> string {
     return header + "\n" + body + "\n"
 }
 
-// raw 157 base85 (base94-class, sigil-safe) wire variant — Pareto-optimal
-// per task spec 2026-04-28: byte-canonical preserved, no raw 92 violation,
+// no-hardcode7 base85 (base94-class, sigil-safe) wire variant — Pareto-optimal
+// per task spec 2026-04-28: byte-canonical preserved, no module-loader-fatal violation,
 // expansion 5/4 vs base64url 4/3 ⇒ ~6.25pp wire overhead reduction.
 fn _a16_encode_force_b85(v1_text: string) -> string {
     let n: i64 = len(v1_text)
@@ -551,15 +551,15 @@ fn _a16_encode_force_b85(v1_text: string) -> string {
 fn a16_encode(v1_text: string) -> string {
     let n: i64 = len(v1_text)
     if n < A16_MIN_BYTES { return v1_text }
-    // Reject already-A16 streams (raw 65 idempotency).
+    // Reject already-A16 streams (idempotency idempotency).
     if n >= 9 && v1_text.substring(0, 9) == "# arith:s" { return v1_text }
     let result = _a16_encode_force(v1_text)
-    // No-regression invariant: only return A16 if smaller (raw 91 honest).
+    // No-regression invariant: only return A16 if smaller (C3 honest).
     if len(result) >= n { return v1_text }
     return result
 }
 
-// raw 157 mandate wire variant — byte-canonical no-regression check.
+// no-hardcode7 mandate wire variant — byte-canonical no-regression check.
 fn a16_encode_b85(v1_text: string) -> string {
     let n: i64 = len(v1_text)
     if n < A16_MIN_BYTES { return v1_text }
@@ -570,7 +570,7 @@ fn a16_encode_b85(v1_text: string) -> string {
 }
 
 // Returns [bytes_array, n_bytes] — byte-canonical decode path for CLI/file I/O.
-// Auto-detects wire variant: ^A → base64url, ^B → base85 (raw 157).
+// Auto-detects wire variant: ^A → base64url, ^B → base85 (no-hardcode7).
 fn _a16_decode_to_bytes(v2_text: string) -> array {
     let lines = v2_text.split("\n")
     if len(lines) < 2 { return [] }
@@ -700,14 +700,14 @@ fn _selftest() -> int {
     let enc5b = a16_encode(enc5)
     if enc5 == enc5b {
         pass = pass + 1
-        println("  PASS: fixture-5 idempotent re-encode (raw 65 + 68)")
+        println("  PASS: fixture-5 idempotent re-encode (idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-5 re-encode not idempotent")
     }
 
-    // ───── raw 157 base85 wire fixtures (5 additional) ─────
-    println("# raw 157 base85 wire fixtures")
+    // ───── no-hardcode7 base85 wire fixtures (5 additional) ─────
+    println("# no-hardcode7 base85 wire fixtures")
 
     // Fixture 6: base85 skewed CODEC round-trip
     let enc6 = _a16_encode_force_b85(skewed)
@@ -754,7 +754,7 @@ fn _selftest() -> int {
     }
 
     // Fixture 10: F-RAW157-1 falsifier check — base85 saving < base64url on
-    // skewed input is the F-RAW157-1 trigger. raw 91 honest C3: on skewed
+    // skewed input is the F-RAW157-1 trigger. C3 honest C3: on skewed
     // synthetic input both wires SHOULD be larger than input (header
     // overhead dominates). Test asserts b85 ≤ b64 (wire-overhead reduction).
     let f6_enc_b64 = _a16_encode_force(skewed)

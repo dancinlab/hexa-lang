@@ -5,11 +5,11 @@
 // `packages/coding-agent/src/core/export-html/template.js` (lines 591–595)
 // with a pure-hexa equivalent that does not depend on a browser DOM.
 //
-// raw 9 (pure hexa): zero exec(), zero external libs.
-// raw 91 (no_silent_errors): unknown var refs in render() raise eprintln + exit 1
+// hexa-only (pure): zero exec(), zero external libs.
+// C3 (no_silent_errors): unknown var refs in render() raise eprintln + exit 1
 //   when --strict mode is requested (default: leave the `${var}` token intact
 //   for visibility, mirroring shell `set -u` opt-in semantics).
-// raw 159 (hexa-lang-upstream-proposal-mandate): hive ports
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): hive ports
 //   `use "self/stdlib/html_template"` and never re-implements these.
 //
 // --selftest mode:
@@ -139,7 +139,7 @@ fn _render_impl(template, vars, escape) {
                     i = j + 1
                     continue
                 }
-                // Not found: leave verbatim (raw 91 — visible, not silent).
+                // Not found: leave verbatim (C3 — visible, not silent).
                 out = out + "${" + name + "}"
                 i = j + 1
                 continue
@@ -230,7 +230,7 @@ fn _html_template_selftest() {
         fail = fail + 1
     }
 
-    // 8. unknown var → left verbatim (raw 91)
+    // 8. unknown var → left verbatim (C3)
     n = n + 1
     let vars3 = #{"a": "X"}
     let r8 = html_render("${a}/${missing}", vars3)

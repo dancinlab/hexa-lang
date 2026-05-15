@@ -13,10 +13,10 @@
 // file naming, content shape) for the project's docs/ tree. See
 // docs/formats/doc.md (in any consuming project) for the spec.
 //
-// Pattern mirrors raw#13 ext_lint.hexa: same raw-format DSL parser,
+// Pattern mirrors ai-config-ban ext_lint.hexa: same raw-format DSL parser,
 // same status whitelist, same kind-specific check dispatch.
 
-// ─── inlined raw_loader (seed-freeze: interp module loader unavailable) ───
+// ─── inlined legacy_loader (seed-freeze: interp module loader unavailable) ───
 fn _rstrip(s: string) -> string {
     let mut end = len(s)
     while end > 0 {

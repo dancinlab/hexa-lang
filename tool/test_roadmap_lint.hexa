@@ -1,4 +1,4 @@
-// tool/test_roadmap_lint.hexa — unit tests for checkpoint DSL (raw#15)
+// tool/test_roadmap_lint.hexa — unit tests for checkpoint DSL (no-hardcode)
 //
 // Tests the new V1-V5 validations by invoking _parse_roadmap_text directly
 // on synthetic inputs. Uses the same module functions as roadmap_lint.hexa.

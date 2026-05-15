@@ -8,7 +8,7 @@
 // Prior in-process ns-bench (commit fca43e81 Mac arm64): p50 0.155ms (155µs)
 //   → 105× over Ink. Per-fixture-spawn we expect process startup to dominate.
 //
-// raw 91 C3: ms-amortized hides the 100-iter inner-loop signal. The honest
+// C3: ms-amortized hides the 100-iter inner-loop signal. The honest
 // v0 reading is "startup + 100 flush union", which is still useful for the
 // 3-way comparison since Ink/OpenTUI fixtures pay the same startup tax.
 

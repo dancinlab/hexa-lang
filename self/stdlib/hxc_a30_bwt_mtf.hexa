@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native HXC BWT+MTF+RLE+entropy block-sort pipeline (A30 first-tick — text-heavy SECONDARY recommendation per a875c76c §3.2)")
-// @tool(slug="hxc-a30-bwt-mtf", desc="HXC algorithm A30: Burrows-Wheeler 1994 + Bentley-McIlroy 1986 MTF + run-length encoding + simple entropy coder (bzip2-class block-sort). Phase 12 SECONDARY entry — text-heavy CEILING attack via block-sort context-clustering, paradigm-orthogonal to A18 forward-prediction LZ77+PPM. Pure hexa raw 9 + raw 18 self-host (integer-only deterministic transforms, no fp ops, no neural mixer per raw 137). FIRST-TICK BUILD: PASS 1 (BWT forward + inverse via simple O(n^2 log n) suffix sort — SAIS deferred to v2 per first-tick simplicity directive) + PASS 2 (MTF transform + inverse) + PASS 3 (RLE on MTF output + inverse) + PASS 3.5 (simple static-frequency entropy via order-1 byte-context range coder mirroring A23 v1 wire) + PASS 4 (encode/decode wire ^b sigil) + 5-fixture selftest byte-eq. PASS 5 LIVE FIRE production-class measurement DEFERRED to subsequent tick per raw 91 honest C3. raw 137 cmix-ban MAINTAINED: BWT/MTF/RLE all deterministic integer transforms, entropy coder = proven A23 v1 order-1 byte-context range coder (deterministic), NOT cmix-class.")
+// @tool(slug="hxc-a30-bwt-mtf", desc="HXC algorithm A30: Burrows-Wheeler 1994 + Bentley-McIlroy 1986 MTF + run-length encoding + simple entropy coder (bzip2-class block-sort). Phase 12 SECONDARY entry — text-heavy CEILING attack via block-sort context-clustering, paradigm-orthogonal to A18 forward-prediction LZ77+PPM. Pure hexa hexa-only + self-host fixpoint self-host (integer-only deterministic transforms, no fp ops, no neural mixer per ai-config-ban). FIRST-TICK BUILD: PASS 1 (BWT forward + inverse via simple O(n^2 log n) suffix sort — SAIS deferred to v2 per first-tick simplicity directive) + PASS 2 (MTF transform + inverse) + PASS 3 (RLE on MTF output + inverse) + PASS 3.5 (simple static-frequency entropy via order-1 byte-context range coder mirroring A23 v1 wire) + PASS 4 (encode/decode wire ^b sigil) + 5-fixture selftest byte-eq. PASS 5 LIVE FIRE production-class measurement DEFERRED to subsequent tick per C3 honest C3. ai-config-ban cmix-ban MAINTAINED: BWT/MTF/RLE all deterministic integer transforms, entropy coder = proven A23 v1 order-1 byte-context range coder (deterministic), NOT cmix-class.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a30_bwt_mtf.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a30_bwt_mtf.hexa encode <in> <out>)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a30_bwt_mtf.hexa decode <in> <out>)
@@ -10,7 +10,7 @@
 // Spec (first-tick scope):
 //
 //   PASS 1 — BWT (Burrows-Wheeler Transform) forward + inverse:
-//     forward: take input block (≤A30_BLOCK_MAX = 79KB cap per raw 42 + F-A30-7),
+//     forward: take input block (≤A30_BLOCK_MAX = 79KB cap per follow-up + F-A30-7),
 //              construct all N rotations, sort lexicographically, output last
 //              column + primary index (position of original string in sorted
 //              rotations). First-tick uses simple O(n^2 log n) suffix-array
@@ -54,13 +54,13 @@
 //
 //   PASS 3.5 — Entropy coder (order-1 byte-context range coder):
 //     Mirrors A23 v1 wire (proven 81% saving on Korean fixture). Order-1
-//     byte-context adaptive range coder over 256-alphabet. raw 91 honest C3:
+//     byte-context adaptive range coder over 256-alphabet. C3 honest C3:
 //     this is the same coder used by A23 v1 — deterministic, fast, no header
 //     dictionary. Subsequent-tick may inline a Huffman tree (header overhead
 //     ~36KB) for static-frequency optimization, but order-1 adaptive is the
 //     safe default that keeps the entropy stage proven.
 //
-//   PASS 4 — encode/decode wire (sigil ^b, raw 92 sigil-line compliant):
+//   PASS 4 — encode/decode wire (sigil ^b, module-loader-fatal sigil-line compliant):
 //     Stream layout: `# a30:s1 v=bwt-mtf-rle-v1 n=<input_bytes> p=<primary_idx>\n^b<base64url-body>\n`
 //     Sigil ^b (lowercase b — distinct from A18 ^L/^M/^N/^O/^P/^Q, A23 ^V/^W,
 //     A24 ^X, A19 ^Z, A24v2 ^[, A26v2 ^Y, A26v3 ^\\). The ^b sigil reflects
@@ -72,36 +72,36 @@
 //
 //   PASS 5 — LIVE FIRE production-class measurement DEFERRED to subsequent tick.
 //     First-tick scope = byte-eq round-trip on 5 fixtures (small/bounded);
-//     SAIS upgrade + 6-repo full sweep deferred per raw 91 honest C3.
+//     SAIS upgrade + 6-repo full sweep deferred per C3 honest C3.
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //     - encode(decode(x)) == x for any A30 stream (well-formed)
 //     - decode(encode(y)) == y for any byte stream of length ≥ A30_MIN_BYTES
-//     - encode is byte-deterministic (same input → same output, raw 137)
-//     - tiny inputs (< A30_MIN_BYTES) → identity passthrough (raw 65 idempotent)
+//     - encode is byte-deterministic (same input → same output, ai-config-ban)
+//     - tiny inputs (< A30_MIN_BYTES) → identity passthrough (idempotency idempotent)
 //
-// Falsifiers preregistered (raw 71 — F-A30-1..7 from a875c76c §3.2):
+// Falsifiers preregistered (falsifier — F-A30-1..7 from a875c76c §3.2):
 //     F-A30-1: text-heavy class lift < +8pp on 5MB stratified → reject
 //              (BWT advantage minimal; subsequent-tick LIVE FIRE measures).
 //     F-A30-2: mixed class lift < +3pp on 5MB stratified → reject.
 //     F-A30-3: round-trip byte-eq fails on any block size → reject.
 //              (selftest = primary first-tick gate.)
-//     F-A30-4: SAIS construction memory > 50MB on 79KB → reject (raw 42).
+//     F-A30-4: SAIS construction memory > 50MB on 79KB → reject (follow-up).
 //              (NOT MEASURED first-tick — naive sort instead; v2 measures.)
 //     F-A30-5: SAIS construction time > 500ms / 79KB hexa interp → reject.
 //              (NOT MEASURED first-tick — naive sort; v2 measures.)
-//     F-A30-6: aggregate < 78.65% on 6-repo full sweep → reject raw 137 v8.
+//     F-A30-6: aggregate < 78.65% on 6-repo full sweep → reject ai-config-ban v8.
 //              (LIVE FIRE deferred subsequent-tick.)
 //     F-A30-7: block size > 79KB chosen → memory blowup → reject; cap at
 //              A30_BLOCK_MAX = 79KB enforced in encode wire.
 //
-// raw 137 cmix-ban compliance:
+// ai-config-ban cmix-ban compliance:
 //     A30 = deterministic block-sort + integer transforms + adaptive integer
 //     range coder. NO fp ops. NO neural mixer. NO non-deterministic
 //     similarity. BWT/MTF/RLE all permutations or table-driven; entropy is
 //     proven order-1 byte-context adaptive (same as A23 v1).
 //
-// raw 91 honest C3 (first-tick scope):
+// C3 honest C3 (first-tick scope):
 //     - PASS 1 BWT forward+inverse via NAIVE O(n^2 log n) suffix sort
 //       (SAIS deferred to v2 next-tick; selftest fixtures kept small).
 //     - PASS 2 MTF forward+inverse IMPLEMENTED.
@@ -114,9 +114,9 @@
 //     - F-A30-4, F-A30-5 NOT MEASURED first-tick (SAIS not yet implemented).
 //     - F-A30-7 STRUCTURALLY ENFORCED via A30_BLOCK_MAX cap.
 
-const A30_BLOCK_MAX = 81920           // 79KB-class cap per raw 42 + F-A30-7
+const A30_BLOCK_MAX = 81920           // 79KB-class cap per follow-up + F-A30-7
 const A30_ALPHABET = 256
-const A30_MIN_BYTES = 32              // below this: identity passthrough (raw 65)
+const A30_MIN_BYTES = 32              // below this: identity passthrough (idempotency)
 const A30_TOP = 4294967296            // 2^32 (range coder constant)
 const A30_BOT = 16777216              // 2^24
 const A30_MAX_FREQ_TOTAL = 16777215   // 2^24 - 1
@@ -694,7 +694,7 @@ fn _a30_encode_force(text: string) -> string {
     return header + "\n" + body + "\n"
 }
 
-// a30_encode: try-and-revert (raw 142 D2). Return shortest of {a30, identity}.
+// a30_encode: try-and-revert (magic-number2 D2). Return shortest of {a30, identity}.
 fn a30_encode(text: string) -> string {
     let n: i64 = len(text)
     if n < A30_MIN_BYTES { return text }
@@ -740,7 +740,7 @@ fn _a30_decode_to_bytes(stream: string) -> array {
 fn a30_decode(stream: string) -> string {
     let bytes = _a30_decode_to_bytes(stream)
     if len(bytes) == 0 {
-        // not an A30 stream — return as-is (raw 65 idempotent)
+        // not an A30 stream — return as-is (idempotency idempotent)
         return stream
     }
     return _a30_bytes_to_str(bytes)
@@ -788,7 +788,7 @@ fn _selftest_a30() -> int {
     }
 
     // ─── Fixture 2: Korean / multibyte UTF-8 round-trip ───
-    let kor = "안녕 세계 — A30 BWT+MTF+RLE first-tick. 압축 알고리즘 hexa raw 9. "
+    let kor = "안녕 세계 — A30 BWT+MTF+RLE first-tick. 압축 알고리즘 hexa hexa-only. "
     let mut buf_kor = ""
     let mut k2 = 0
     while k2 < 4 { buf_kor = buf_kor + kor; k2 = k2 + 1 }
@@ -832,13 +832,13 @@ fn _selftest_a30() -> int {
                 + " got_len=" + to_string(len(dec3)))
     }
 
-    // ─── Fixture 4: passthrough idempotent (raw 65 + 68) ───
+    // ─── Fixture 4: passthrough idempotent (idempotency + 68) ───
     let tiny = "abc123"
     let enc4 = a30_encode(tiny)
     let enc4b = a30_encode(enc4)
     if enc4 == tiny && enc4b == tiny {
         pass = pass + 1
-        println("  PASS: fixture-4 short-input passthrough idempotent (raw 65 + 68)")
+        println("  PASS: fixture-4 short-input passthrough idempotent (idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-4 short-input idempotency broken (enc4_len="

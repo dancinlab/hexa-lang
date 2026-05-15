@@ -325,7 +325,7 @@ fn cmd_lint_all() -> int {
     return 0
 }
 
-// ─── caller-side detect (raw 102 strengthen-existing) ──────────
+// ─── caller-side detect (honest-caveat2 strengthen-existing) ──────────
 //
 // For every .hexa under HEXA_LANG (or the user-specified --caller-detect
 // root) emit the list of files that import a stdlib module with known

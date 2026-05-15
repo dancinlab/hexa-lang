@@ -5,13 +5,13 @@
 // compression/memory await a runnable hexa-native test framework).
 // Without this module, every ported `*.test.ts` had to stay archived.
 //
-// raw 9  (pure-hexa):     external libs = 0. mono_ns + exec + std builtins only.
-// raw 18 (self-host fixpoint): zero new builtins. self/stdlib/test_self.test.hexa
+// hexa-only (pure):     external libs = 0. mono_ns + exec + std builtins only.
+// self-host fixpoint (self-host fixpoint): zero new builtins. self/stdlib/test_self.test.hexa
 //   exercises this framework using this framework — fixpoint preserved.
-// raw 91 (no_silent_errors): every assert failure is captured into the
+// C3 (no_silent_errors): every assert failure is captured into the
 //   _test_results table with location + got/expected; the runner's final
 //   line is FAIL-or-PASS, never silent.
-// raw 159 (hexa-lang-upstream-proposal-mandate): hive sister-repo ports
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): hive sister-repo ports
 //   `use "self/stdlib/test"` and never re-implement describe/it.
 //
 // ── Why eager execution (not vitest's lazy registry) ─────────────────
@@ -39,7 +39,7 @@
 //                               return [total, pass, fail].
 //   test_clear()              — reset all module state (re-run support).
 //
-// ── known gaps (raw 91 honest) ───────────────────────────────────────
+// ── known gaps (C3 honest) ───────────────────────────────────────
 //   G1. Nested describes share a SINGLE before_each/after_each slot per
 //       module load — vitest gives each describe its own. Workaround:
 //       call before_each(fn2) to override before each sub-describe.

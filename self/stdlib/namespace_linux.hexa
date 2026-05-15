@@ -13,7 +13,7 @@
 // Design:
 //   - shell out for the syscall; never silent — every op verifies
 //     post-state by stat-ing /proc/self/ns/<kind> or comparing the
-//     inode of /proc/<pid>/ns/<kind> against the parent's (raw 91).
+//     inode of /proc/<pid>/ns/<kind> against the parent's (C3).
 //   - CLONE_NEW* flag constants are the canonical values from
 //     <sched.h>. Same names so the eventual runtime builtin can drop
 //     in with the same identifiers.
@@ -33,11 +33,11 @@
 //
 //   CLONE_NEW* flag constants (u32)
 
-// raw 91 (no_silent_errors): namespace ops verify via current_ns_inode()
+// C3 (no_silent_errors): namespace ops verify via current_ns_inode()
 // where possible. unshare-then-exec verifies that the child's ns inode
 // differs from the parent's after fork.
 
-// raw 159 (hexa-lang-upstream-proposal-mandate): this file is itself
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): this file is itself
 // an upstream proposal placeholder. Downstream (wilson pool) imports
 // `use "self/stdlib/namespace_linux"` and never re-implements.
 

@@ -41,7 +41,7 @@ let _logic_fixpoint = #{
         "other": "skip (compile fail)"
     },
     "use_cases": [
-        "self-host interp fixpoint (raw#0 P7)",
+        "self-host interp fixpoint (P7)",
         "cross-platform v3==v4 (arm64 ↔ x86_64)",
         "drift commit bisection (last-30d)"
     ]
@@ -129,7 +129,7 @@ let _logic_event_loop = #{
         "bracket":   "no interval narrowing (lo/hi 좁히기 없음)",
         "atomize":   "no finite subproblem counter (V*(G)=0 도달 없음)"
     },
-    "rationale": "dogfooding consistency — hive raw#36 4-카테고리 캐논화 정렬. network-drain 패턴은 본질적으로 fixpoint/bracket/atomize 어디에도 매핑 안 됨; lint(_valid_triad_values) 가 이미 인식 중인 4번째 카테고리를 catalog 에 동기화."
+    "rationale": "dogfooding consistency — hive attr-usage6 4-카테고리 캐논화 정렬. network-drain 패턴은 본질적으로 fixpoint/bracket/atomize 어디에도 매핑 안 됨; lint(_valid_triad_values) 가 이미 인식 중인 4번째 카테고리를 catalog 에 동기화."
 }
 
 // ─── 상호 관계 ─────────────────────────────────────────────────
@@ -177,7 +177,7 @@ fn cmd_selftest() -> i64 {
     if _catalog_meta["version"] != "1.0" {
         eprintln("FAIL: catalog version drift"); return 1
     }
-    // 2) each of the 4 logic entries carries id + ko + shape (raw#36 alignment)
+    // 2) each of the 4 logic entries carries id + ko + shape (attr-usage6 alignment)
     if _logic_fixpoint["id"]   != "fixpoint"   { eprintln("FAIL: fixpoint id"); return 1 }
     if _logic_bracket["id"]    != "bracket"    { eprintln("FAIL: bracket id"); return 1 }
     if _logic_atomize["id"]    != "atomize"    { eprintln("FAIL: atomize id"); return 1 }

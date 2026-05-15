@@ -1,19 +1,19 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native HXC A24 v2 bounded n-gram + class-gate first-tick (F-A24-3 latency retraction option a+b combined)")
-// @tool(slug="hxc-a24-v2-bounded", desc="HXC algorithm A24 v2: BOUNDED n-gram grammar induction with class-gate first-tick (F-A24-3 latency retraction option a+b combined). v1 (^X, fc1160b3) tripped F-A24-3 hard: 75.9% files (164/216) hit 5s timeout; 39KB JSON took 40+ seconds (>1000ms/KB) due to PASS 1 O(N×L×K) n-gram scan with K=65000 unique × 6 lengths = 390K candidate sort. v2 attacks 4 axes simultaneously: (1) drop A24_NGRAM_LENGTHS_v2 to {3,4} only (6→2 lengths, 3x scan reduction); (2) raise A24_MIN_BYTES_v2 to 1024 (raw 142 D2 pre-gate; below 1KB always identity passthrough); (3) hard-cap A24_MAX_INPUT_BYTES_v2 at 65536 (above 64KB always identity to bound K); (4) hard-cap A24_MAX_NGRAMS_v2 at 4096 (cap K, bound O(K²) sort to 16M ops worst-case). NEW sigil ^[ (post-A19 ^Z, A24 v1 ^X). raw 137 cmix-ban MAINTAINED: integer-only deterministic n-gram + greedy frequency-saving rule selection, NOT cmix-class. raw 91 honest C3 first-tick scope: PASS 1 (bounded scan) + PASS 2 (a24v2_build with K-cap) + PASS 2.5 (in-sample estimator) + PASS 3 (5 fixtures + 3 latency probes) + PASS 4 LIVE FIRE deferred to subsequent tick.")
+// @tool(slug="hxc-a24-v2-bounded", desc="HXC algorithm A24 v2: BOUNDED n-gram grammar induction with class-gate first-tick (F-A24-3 latency retraction option a+b combined). v1 (^X, fc1160b3) tripped F-A24-3 hard: 75.9% files (164/216) hit 5s timeout; 39KB JSON took 40+ seconds (>1000ms/KB) due to PASS 1 O(N×L×K) n-gram scan with K=65000 unique × 6 lengths = 390K candidate sort. v2 attacks 4 axes simultaneously: (1) drop A24_NGRAM_LENGTHS_v2 to {3,4} only (6→2 lengths, 3x scan reduction); (2) raise A24_MIN_BYTES_v2 to 1024 (magic-number2 D2 pre-gate; below 1KB always identity passthrough); (3) hard-cap A24_MAX_INPUT_BYTES_v2 at 65536 (above 64KB always identity to bound K); (4) hard-cap A24_MAX_NGRAMS_v2 at 4096 (cap K, bound O(K²) sort to 16M ops worst-case). NEW sigil ^[ (post-A19 ^Z, A24 v1 ^X). ai-config-ban cmix-ban MAINTAINED: integer-only deterministic n-gram + greedy frequency-saving rule selection, NOT cmix-class. C3 honest C3 first-tick scope: PASS 1 (bounded scan) + PASS 2 (a24v2_build with K-cap) + PASS 2.5 (in-sample estimator) + PASS 3 (5 fixtures + 3 latency probes) + PASS 4 LIVE FIRE deferred to subsequent tick.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a24_v2_bounded.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a24_v2_bounded.hexa build <in>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args)
 //
-// First-tick scope (raw 91 honest C3):
+// First-tick scope (C3 honest C3):
 //
 //   PASS 1 — bounded n-gram scan spec
 //     A24_NGRAM_LENGTHS_v2 = {3, 4} only (drop 2, 5, 6, 8 — 6 lengths → 2 lengths,
 //     3x scan-cost reduction). Length-2 is too short to save anything (marker+id=3
 //     bytes already exceeds L=2 raw bytes). Length-5/6/8 contribute marginal
 //     coverage on JSON-heavy at heavy O(K) cost.
-//     A24_MIN_BYTES_v2 = 1024 (raw 142 D2 pre-gate). Below 1KB the rule-table
+//     A24_MIN_BYTES_v2 = 1024 (magic-number2 D2 pre-gate). Below 1KB the rule-table
 //     overhead always exceeds savings on first-tick wire — identity passthrough.
 //     A24_MAX_INPUT_BYTES_v2 = 65536 (hard cap). Above 64KB unique n-gram count
 //     K grows beyond budget; identity passthrough preserves byte-eq invariant
@@ -38,13 +38,13 @@
 //     with the v2 bounded rule set. Returns post-tokenization byte count.
 //
 //   PASS 3 — selftest fixtures (5 + 3 latency probes)
-//     F1: byte-eq mixed-JSON (raw 142 D2 try-revert below MIN_BYTES — small
+//     F1: byte-eq mixed-JSON (magic-number2 D2 try-revert below MIN_BYTES — small
 //          fixture forces identity passthrough; verifies pre-gate honored).
-//     F2: byte-eq Korean multibyte (raw 137 byte-faithful round-trip).
+//     F2: byte-eq Korean multibyte (ai-config-ban byte-faithful round-trip).
 //     F3: byte-eq large-text 4KB-32KB (forces real bounded-n-gram path).
 //     F4: PCFG escape unit (rule_marker 254 / escape 255 escape-unit test).
 //     F5: bits/byte sanity floor on 4KB English (estimator does NOT fabricate
-//          sub-1.0 bit/byte on small samples, raw 91 honest C3).
+//          sub-1.0 bit/byte on small samples, C3 honest C3).
 //     F-A24-V2-LAT-1: ≤500ms wallclock on 1KB English (vs v1 1000ms+/KB).
 //          Structural proxy: input ≤ A24_MAX_INPUT_BYTES_v2 AND ngram count
 //          ≤ A24_MAX_NGRAMS_v2 → bounded by 4096²≪16M ops budget.
@@ -56,7 +56,7 @@
 //     (subsequent-tick wire promotion + dispatcher pool re-measurement gated
 //     by F-A24-V2 latency PASS).
 //
-// Falsifier preregister (raw 71):
+// Falsifier preregister (falsifier):
 //     F-A24-V2-1: a24v2 saving < 5% on text-heavy class (vs v1 0.23% wins
 //                 0/216 in dispatcher pool) → grammar induction fundamental
 //                 for production-class corpora; recommend retraction.
@@ -69,12 +69,12 @@
 //     F-A24-V2-5: bounded ngram_lengths={3,4} NOT minimal vs {3,4,5} →
 //                 length-5 is essential; retract length-drop budget cut.
 //
-// raw 137 cmix-ban compliance:
+// ai-config-ban cmix-ban compliance:
 //     A24 v2 = bounded greedy frequency-saving n-gram rule synthesis with
 //     integer-only counts, integer-only saving formula, deterministic insertion
 //     sort, deterministic greedy rule-budget. NO fp ops. NO neural mixer. NO
 //     non-deterministic similarity. Build pass + tokenization + estimator all
-//     deterministic (raw 65/68 idempotent: same input → same rule set).
+//     deterministic (idempotency/68 idempotent: same input → same rule set).
 //
 // CONCURRENT ORTHOGONALITY (3 concurrent agents in-flight):
 //     - A26 v2 bounded (different agent, hxc_a26_v2_bounded.hexa, sigil ^Y).
@@ -86,7 +86,7 @@
 //     (v1 preserved unchanged), hxc_a26_v2_bounded.hexa, hxc_a19_cross_file_dict.hexa,
 //     OR hxc_a25_type_aware.hexa.
 
-const A24_V2_MIN_BYTES = 1024              // raise from v1 64 → 1024 (raw 142 D2)
+const A24_V2_MIN_BYTES = 1024              // raise from v1 64 → 1024 (magic-number2 D2)
 const A24_V2_MAX_INPUT_BYTES = 65536       // hard cap; above this → identity revert
 const A24_V2_MIN_FREQ = 4                  // rule promotion threshold (count >= this)
 const A24_V2_MAX_RULES = 4096              // memory budget — absolute rule count cap
@@ -437,14 +437,14 @@ fn a24v2_decode(stream: string) -> string {
 // Decoder reads back: parse header → n, r. b64-decode body. Read r rule entries.
 // Stream-decode tokenized section.
 //
-// raw 142 D2 try-and-revert: a24v2_encode_v3 returns shortest of {wire_v3,
+// magic-number2 D2 try-and-revert: a24v2_encode_v3 returns shortest of {wire_v3,
 // identity}. If rule dictionary + tokenized + b64 + header overhead exceeds
 // raw input bytes, identity wins.
 //
-// raw 137 cmix-ban: deterministic integer pack/unpack only. No fp ops.
-// raw 65/68 idempotent: same input → same wire output (byte-identical).
+// ai-config-ban cmix-ban: deterministic integer pack/unpack only. No fp ops.
+// idempotency/68 idempotent: same input → same wire output (byte-identical).
 
-// ─── b64url codec (interop with A18/A23/A29; NOT shared due to raw 18 self-host) ───
+// ─── b64url codec (interop with A18/A23/A29; NOT shared due to self-host fixpoint self-host) ───
 
 const A24_V2_B64_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
@@ -611,7 +611,7 @@ fn _a24v2_encode_v3_force(text: string) -> string {
     return header + "\n" + body + "\n"
 }
 
-// a24v2_encode_v3: try-and-revert (raw 142 D2) — return shortest of {wire_v3, identity}.
+// a24v2_encode_v3: try-and-revert (magic-number2 D2) — return shortest of {wire_v3, identity}.
 // Below MIN_BYTES or above MAX_INPUT_BYTES → identity passthrough.
 fn a24v2_encode_v3(text: string) -> string {
     let n: i64 = len(text)
@@ -704,7 +704,7 @@ fn _selftest_v2() -> int {
     let mut pass = 0
     let mut fail = 0
 
-    // ─── Fixture 1: byte-eq mixed-JSON below MIN_BYTES (raw 142 D2 try-revert) ───
+    // ─── Fixture 1: byte-eq mixed-JSON below MIN_BYTES (magic-number2 D2 try-revert) ───
     //   234 B JSON < A24_V2_MIN_BYTES (1024) → identity passthrough invariant.
     //   Falsifier on fail: F-A24-V2-2 (entire v2 first-tick retracted).
     let json_234 = "{\"ts\":\"2026-04-28T00:00:00Z\",\"event\":\"convergence\",\"value\":1.0,\"saving\":0.97}\n{\"ts\":\"2026-04-28T00:01:00Z\",\"event\":\"convergence\",\"value\":2.0,\"saving\":0.97}\n{\"ts\":\"2026-04-28T00:02:00Z\",\"event\":\"convergence\",\"value\":3.0,\"saving\":0.97}\n"
@@ -712,18 +712,18 @@ fn _selftest_v2() -> int {
     let dec1 = a24v2_decode(enc1)
     if dec1 == json_234 && len(json_234) == 234 && enc1 == json_234 {
         pass = pass + 1
-        println("  PASS: fixture-1 byte-eq mixed-JSON 234 B (raw 142 D2 pre-gate honored — below MIN_BYTES=1024 → identity passthrough)")
+        println("  PASS: fixture-1 byte-eq mixed-JSON 234 B (magic-number2 D2 pre-gate honored — below MIN_BYTES=1024 → identity passthrough)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-1 byte-eq broken (got_len="
                 + to_string(len(dec1)) + ", expected 234) → F-A24-V2-2 TRIPPED")
     }
 
-    // ─── Fixture 2: byte-eq Korean multibyte (raw 137 byte-faithful) ───
+    // ─── Fixture 2: byte-eq Korean multibyte (ai-config-ban byte-faithful) ───
     //   Korean multibyte string padded to >= 1KB to enter the bounded n-gram path.
     //   Round-trip preserves byte-identical output at the encode/decode boundary.
     //   Falsifier on fail: F-A24-V2-2.
-    let kor = "안녕 세계 — 곰파 연결 ω-cycle. 압축 알고리즘 A24 v2 bounded n-gram. 자기-호스트 hexa raw 9. "
+    let kor = "안녕 세계 — 곰파 연결 ω-cycle. 압축 알고리즘 A24 v2 bounded n-gram. 자기-호스트 hexa hexa-only. "
     let mut buf_kor = ""
     let mut k2 = 0
     while k2 < 16 { buf_kor = buf_kor + kor; k2 = k2 + 1 }
@@ -741,7 +741,7 @@ fn _selftest_v2() -> int {
     if ok2 && nk >= A24_V2_MIN_BYTES {
         pass = pass + 1
         println("  PASS: fixture-2 byte-eq Korean multibyte n=" + to_string(nk)
-                + " B (raw 137 byte-faithful round-trip)")
+                + " B (ai-config-ban byte-faithful round-trip)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-2 Korean byte-eq broken nk=" + to_string(nk)
@@ -783,7 +783,7 @@ fn _selftest_v2() -> int {
     //   This is the dual of v1's tokenization invariant — the rule_marker
     //   path is the saving lever. We avoid testing chr(254/255) escape
     //   directly because hexa string concatenation through chr(b≥128)
-    //   triggers UTF-8 expansion (raw 137 byte-faithfulness contract uses
+    //   triggers UTF-8 expansion (ai-config-ban byte-faithfulness contract uses
     //   byte arrays, not strings, for high-byte content).
     let mut tiny_rules = []
     tiny_rules.push(["abcd", 2, 1, 4])
@@ -805,7 +805,7 @@ fn _selftest_v2() -> int {
 
     // ─── Fixture 5: bits/byte sanity floor on 4KB English ───
     //   Estimator must NOT fabricate sub-1.0 bit/byte on small training
-    //   samples (raw 91 honest C3). At 4KB English with bounded {3,4}-gram
+    //   samples (C3 honest C3). At 4KB English with bounded {3,4}-gram
     //   rules, expect bits/byte ≥ 1.0.
     let rules5 = a24v2_synthesize_rules(buf_4k)
     let bits5 = a24v2_estimate_bits(buf_4k, rules5)
@@ -930,7 +930,7 @@ fn _selftest_v2() -> int {
     // ─── F-A24-V3-WIRE-2: byte-eq round-trip Korean multibyte ───
     //   Multibyte safety: high-byte content (UTF-8 Korean) must round-trip
     //   byte-identical via the byte-array decode path.
-    let kor3 = "안녕 세계 — 곰파 연결 ω-cycle. 압축 알고리즘 A24 v2 wire ship. 자기-호스트 hexa raw 9. "
+    let kor3 = "안녕 세계 — 곰파 연결 ω-cycle. 압축 알고리즘 A24 v2 wire ship. 자기-호스트 hexa hexa-only. "
     let mut w2_buf = ""
     let mut w2k = 0
     while w2k < 16 { w2_buf = w2_buf + kor3; w2k = w2k + 1 }
@@ -948,7 +948,7 @@ fn _selftest_v2() -> int {
         pass = pass + 1
         println("  PASS: F-A24-V3-WIRE-2 Korean multibyte byte-eq round-trip n="
                 + to_string(w2_n) + " B → wire=" + to_string(len(w2_enc))
-                + " B (raw 137 byte-faithful)")
+                + " B (ai-config-ban byte-faithful)")
     } else {
         fail = fail + 1
         println("  FAIL: F-A24-V3-WIRE-2 Korean multibyte byte-eq broken (got_len="
@@ -984,14 +984,14 @@ fn _selftest_v2() -> int {
     }
 
     // ─── F-A24-V3-WIRE-4: try-and-revert under MIN_BYTES → identity ───
-    //   raw 142 D2 honored: 234B JSON < MIN_BYTES → a24v2_encode_v3 returns
+    //   magic-number2 D2 honored: 234B JSON < MIN_BYTES → a24v2_encode_v3 returns
     //   identity (NOT wire). Decode of pure identity returns input unchanged.
     let w4_input = "{\"ts\":\"2026-04-28T00:00:00Z\",\"event\":\"convergence\",\"value\":1.0,\"saving\":0.97}\n{\"ts\":\"2026-04-28T00:01:00Z\",\"event\":\"convergence\",\"value\":2.0,\"saving\":0.97}\n{\"ts\":\"2026-04-28T00:02:00Z\",\"event\":\"convergence\",\"value\":3.0,\"saving\":0.97}\n"
     let w4_enc = a24v2_encode_v3(w4_input)
     let w4_dec = a24v2_decode_v3(w4_enc)
     if w4_enc == w4_input && w4_dec == w4_input && len(w4_input) == 234 {
         pass = pass + 1
-        println("  PASS: F-A24-V3-WIRE-4 234B JSON < MIN_BYTES=1024 → identity (raw 142 D2 try-revert honored)")
+        println("  PASS: F-A24-V3-WIRE-4 234B JSON < MIN_BYTES=1024 → identity (magic-number2 D2 try-revert honored)")
     } else {
         fail = fail + 1
         println("  FAIL: F-A24-V3-WIRE-4 try-revert pre-gate broken (enc_eq_in="
@@ -1036,7 +1036,7 @@ fn _selftest_v2() -> int {
         pass = pass + 1
         println("  PASS: F-A24-V3-WIRE-5 try-revert shortest wire=" + to_string(len(w5_v3))
                 + " vs identity=" + to_string(w5_n) + " → picked "
-                + to_string(len(w5_enc)) + " (raw 142 D2 shortest-of selection honored)")
+                + to_string(len(w5_enc)) + " (magic-number2 D2 shortest-of selection honored)")
     } else {
         fail = fail + 1
         println("  FAIL: F-A24-V3-WIRE-5 try-revert shortest selection broken (enc_len="

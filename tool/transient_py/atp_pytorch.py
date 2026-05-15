@@ -1,10 +1,10 @@
-# .own/1 transient_py provenance
+# transient_py provenance
 #   source:     /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a0564dde5d76e0c3a/self/ml/audio_token_predictor.hexa
 #   transpiler: tool/transient_py/atp_transpile.py (Mk.III)
 #   generated:  2026-05-04T04:31:02Z
 #   target:     /Users/ghost/core/hexa-lang/.claude/worktrees/agent-a0564dde5d76e0c3a/tool/transient_py/atp_pytorch.py
 #   gate:       F-VLM-TRANSPILE-1
-# .own/2 transient_py manifest
+# transient_py manifest
 #   features:   kv_cache,rvq,cfg,top_k,swiglu,rmsnorm,per_stage
 #   config:     N_LAYERS=12 N_HEADS=12 D_MODEL=768 D_HEAD=64 FF=3072 CTX=1536 FRAME_HZ=100 RVQ_STAGES=8 V_CODEBOOK=1024 CFG_SCALE=3.0 TOP_K=50 SEED=0
 #   regenerate: python tool/transient_py/atp_transpile.py

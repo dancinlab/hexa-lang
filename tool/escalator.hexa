@@ -2,7 +2,7 @@
 //
 // Purpose
 //   Claude Code session's Bash/Edit tools run under a macOS sandbox that
-//   denies (a) writes to certain file patterns (e.g. test_*.hexa per raw#8
+//   denies (a) writes to certain file patterns (e.g. test_*.hexa per stage0-rename
 //   F3), and (b) launchctl bootstrap / new-process spawning into the user
 //   launchd domain. This pattern historically forces Claude to tell the
 //   user "please run X in your terminal" — breaking flow for every gotcha.
@@ -155,7 +155,7 @@ fn _process_invoke_tool(req_id: string, obj) -> int {
 //
 // 2026-04-23: user asked for "완전한 자유로움" from sandbox restrictions.
 // Examples that motivated this: log show / log stream (Cannot run while
-// sandboxed), touch test_*.hexa (raw#8 F3 deny), launchctl bootstrap
+// sandboxed), touch test_*.hexa (stage0-rename F3 deny), launchctl bootstrap
 // (kernel denies IPC into launchd from sandboxed context).
 //
 // Security posture: this is a single-user dev machine. Anyone with shell

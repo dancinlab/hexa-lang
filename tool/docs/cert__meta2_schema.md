@@ -46,10 +46,10 @@ _Meta^2 breakthrough certificate schema_
    0.0000001 → 1e-07 drift.
 
  CONSTRAINTS
-   raw#9  hexa-only (no external deps)
-   raw#10 proof-carrying
-   raw#11 snake_case
-   raw#15 no-hardcode (schema version is the only constant)
+   hexa-only (no external deps)
+   proof-carrying
+   ai-native snake_case
+   no-hardcode (schema version is the only constant)
 
 ── Schema version ──────────────────────────────────────────────────────────
 

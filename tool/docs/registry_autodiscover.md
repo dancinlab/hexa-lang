@@ -14,7 +14,7 @@ repo. The classic pattern (anima/core/rng/registry.hexa, 339 LOC) hand-
 writes a switch over canonical names; with autodiscover the enumeration
 step is one stdlib call.
 
-raw 9 hexa-only — pure stdlib using `exec("ls ...")` for portability
+hexa-only — pure stdlib using `exec("ls ...")` for portability
 across BSD (Mac) and GNU (Linux). No find(1) flags depended on.
 
 API:
@@ -22,13 +22,13 @@ API:
   registry_build_dispatch(dir, suffix)      -> map     // name → full path
   registry_filter_excluded(names, exclude)  -> [str]   // names \ exclude
 
-Limits (raw#10):
+Limits (honest-caveat):
   1. Only direct children scanned. Subdirectories ignored — caller
      recurses if needed (anima rng intentionally flat).
   2. Symbolic links followed iff `ls` follows them on the host (BSD
      default: yes for files, no for dir entries).
   3. Filenames containing `\n` not handled — `ls` line-split breaks.
-     ASCII module-name convention assumed (raw 271 enforces).
+     ASCII module-name convention assumed (follow-up1 enforces).
   4. README.* and *.ai.md are NOT auto-excluded — caller passes them
      via `registry_filter_excluded` if desired.
   5. Suffix match is case-sensitive. ".hexa" ≠ ".HEXA".

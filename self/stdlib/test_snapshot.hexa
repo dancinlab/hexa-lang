@@ -5,11 +5,11 @@
 // comparison. Provides on-disk `<test>.snap` storage with first-run
 // auto-write semantics + subsequent-run compare semantics.
 //
-// raw 9  (pure-hexa):     external libs = 0 — uses self/stdlib/fs.
-// raw 18 (self-host fixpoint): zero new builtins.
-// raw 91 (no_silent_errors): mismatch records via test_record_failure;
+// hexa-only (pure):     external libs = 0 — uses self/stdlib/fs.
+// self-host fixpoint (self-host fixpoint): zero new builtins.
+// C3 (no_silent_errors): mismatch records via test_record_failure;
 //   first-run write is ALWAYS announced on stdout (never silent).
-// raw 159 (hexa-lang-upstream-proposal-mandate): hive snapshot ports use
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): hive snapshot ports use
 //   this module instead of re-implementing snap I/O.
 //
 // ── On-disk format ───────────────────────────────────────────────────
@@ -30,10 +30,10 @@
 //   snapshot_clear(snap_path)                — delete the snap file
 //   snapshot_serialize(v)                    — debug; returns canonical form
 //
-// ── Known gaps (raw 91 honest) ───────────────────────────────────────
+// ── Known gaps (C3 honest) ───────────────────────────────────────
 //   G1. NO color diff. Mismatch message is plain `expected=... got=...`.
 //       Color requires ANSI handling + termcap detection — not blocked
-//       at language level, but explicitly deferred (raw 91 honest stub).
+//       at language level, but explicitly deferred (C3 honest stub).
 //   G2. NO inline snapshots (`toMatchInlineSnapshot`). The interp can't
 //       rewrite source files mid-run.
 //   G3. Serialization of nested maps/objects uses json_stringify, which
@@ -105,7 +105,7 @@ fn _snap_dedent(s) {
 }
 
 // Read all records from a snap file. Returns array of [name, body].
-// On missing file, returns []. raw 91: never throws on missing.
+// On missing file, returns []. C3: never throws on missing.
 fn _snap_read_records(snap_path) {
     let content = read_file_safe(snap_path)
     if content == "" { return [] }

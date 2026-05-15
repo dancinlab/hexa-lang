@@ -25,7 +25,7 @@
 //   <blank line>
 //
 // CONTRACT
-//   - Writes to stderr via eprintln (never silent — raw#12 compliance).
+//   - Writes to stderr via eprintln (never silent — silent-error compliance).
 //   - ai_err_exit MUST emit the payload BEFORE exit(); never silent-exit.
 //   - `fields` is array of [key, value] pairs; repeated `remedy` allowed.
 //   - `domain` and `code` are kebab-case (parser convention).

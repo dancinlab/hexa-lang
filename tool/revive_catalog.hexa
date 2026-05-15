@@ -238,7 +238,7 @@ fn _selftest_rc() -> int {
     let u = _consumer_revive["uses"]
     if u["fixpoint"]["tool"].index_of("fixpoint_bisect.hexa") < 0 { eprintln("FAIL: fixpoint tool"); return 1 }
     if u["bracket"]["tool"].index_of("bracket.hexa") < 0 { eprintln("FAIL: bracket tool"); return 1 }
-    // 3) router carries the 4 raw#36 categories (fixpoint/bracket/atomize/event-loop)
+    // 3) router carries the 4 attr-usage6 categories (fixpoint/bracket/atomize/event-loop)
     if _problem_router["version"] != "1.1" { eprintln("FAIL: router version drift"); return 1 }
     let rules = _problem_router["rules"]
     let mut have = #{ "fixpoint": false, "bracket": false, "atomize": false, "event-loop": false }

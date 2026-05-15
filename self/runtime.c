@@ -11467,7 +11467,7 @@ HexaVal hexa_term_pty_reap(HexaVal pid) {
 
 // ── exec_stream_async / poll / close stub primitives (KI-4 fix, 2026-05-01) ──
 // Origin: hive 7-bucket closure cycle KI-4 fix. cli_mvp.hexa async streaming
-// (raw 168 minimum-viable input-during-processing) 23 caller가 이 primitive
+// (follow-up8 minimum-viable input-during-processing) 23 caller가 이 primitive
 // 의존. 직전 hexa-lang commit drift로 native impl 부재 → cli_mvp build fail.
 //
 // Real impl semantics (v1.8, KI-4 stub → actual async impl 2026-05-01):
@@ -11483,12 +11483,12 @@ HexaVal hexa_term_pty_reap(HexaVal pid) {
 //
 // v1.1 enhancements (2026-05-01):
 //   - Dynamic line buffer: 8KB initial → realloc doubling up to 1MB cap (raw
-//     49 additive-first growth). raw 12 silent-error-ban 정합 (long line
-//     truncate 회피; 단 1MB cap 도달 시 silent drop 잔존 — raw 91 honest C3).
+//     49 additive-first growth). silent-error silent-error-ban 정합 (long line
+//     truncate 회피; 단 1MB cap 도달 시 silent drop 잔존 — C3 honest C3).
 //   - pclose rc proper decode: WIFEXITED → WEXITSTATUS, WIFSIGNALED →
 //     -WTERMSIG. Caller가 표준 exit code 패턴 (`if rc == 0`) 사용 가능.
 //
-// raw 91 honest C3: 8-slot table (single-process limit). Concurrent stream >8
+// C3 honest C3: 8-slot table (single-process limit). Concurrent stream >8
 // 시 spawn fail (-1 return → caller sync fallback). cli_mvp는 _stream_handle
 // 단일 slot이므로 충분. realloc fail / 1MB cap hit 시 silent drop — v1.2에서
 // stderr advisory 추가 예정.
@@ -11501,10 +11501,10 @@ HexaVal hexa_term_pty_reap(HexaVal pid) {
 
 #define HEXA_STREAM_SLOT_COUNT 8
 #define HEXA_STREAM_LINE_BUF_INITIAL 8192
-#define HEXA_STREAM_LINE_BUF_MAX 1048576  /* 1MB cap (raw 49 additive-first growth) */
+#define HEXA_STREAM_LINE_BUF_MAX 1048576  /* 1MB cap (additive-first growth) */
 typedef struct {
     FILE* fp;
-    char* buf;          /* dynamic alloc (v1.1 raw 12 long-line truncate 회피) */
+    char* buf;          /* dynamic alloc (v1.1 silent-error long-line truncate 회피) */
     int   buf_cap;      /* current capacity */
     int   buf_len;      /* current length */
     int   eof;
@@ -11515,7 +11515,7 @@ typedef struct {
        instead of popen(), so pid == child sh pid == the group leader pgid.
        pid <= 0 -> legacy popen fallback (fork/pipe failed): no pid, so
        exec_stream_kill on that slot is best-effort fclose only & returns
-       -1 (raw 91 honest C3 - prompt-kill needs the fork path). */
+       -1 (C3 honest C3 - prompt-kill needs the fork path). */
     pid_t pid;
     /* v1.4 (2026-05-13, wilson MCP bidi): write-end fd of child stdin pipe
        when slot was opened via hexa_exec_stream_open (the bidi variant).
@@ -11637,9 +11637,9 @@ HexaVal hexa_exec_stream_async(HexaVal cmd) {
  *   if done { return 1 }            // _stream_finish triggers
  *   if len(line) == 0 { return 0 }  // EAGAIN — wait next tick
  *
- * raw 91 honest C3: per-call drain ≤1 line. cli_mvp loops up to 64 times
+ * C3 honest C3: per-call drain ≤1 line. cli_mvp loops up to 64 times
  * per tick → 64 lines/tick max throughput. SSE typical throughput well
- * within bounds. raw 168 minimum-viable.
+ * within bounds. follow-up8 minimum-viable.
  */
 HexaVal hexa_exec_stream_poll_impl(HexaVal handle) {
     _hexa_stream_slots_ensure_init();
@@ -11683,7 +11683,7 @@ HexaVal hexa_exec_stream_poll_impl(HexaVal handle) {
                         s->buf_cap = new_cap;
                         s->buf[s->buf_len++] = c;
                     }
-                    /* realloc fail / 1MB cap hit 시 silent drop. raw 91 honest C3. */
+                    /* realloc fail / 1MB cap hit 시 silent drop. C3 honest C3. */
                 }
             }
             /* Rescan from `start` (newly-appended region) for first newline. */
@@ -11750,7 +11750,7 @@ HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
     } else {
         raw_rc = pclose(s->fp);  /* legacy popen fallback */
     }
-    /* v1.1 WIFEXITED + WEXITSTATUS proper rc decode (raw 91 honest C3 — caller가
+    /* v1.1 WIFEXITED + WEXITSTATUS proper rc decode (C3 honest C3 — caller가
        표준 exit code 패턴 사용 가능). Signal exit 시 negative signal 반환. */
     int proper_rc;
     if (raw_rc == -1) {
@@ -11785,7 +11785,7 @@ HexaVal hexa_exec_stream_close(HexaVal handle) {
 //           signal (the SIGTERM/SIGKILL we sent), or its own WEXITSTATUS if it
 //           happened to exit cleanly during the grace window.
 //   -1    : stale/invalid handle, or a popen-fallback slot with no usable pid
-//           (raw 91 honest C3 -- prompt-kill needs exec_stream_async's fork
+//           (C3 honest C3 -- prompt-kill needs exec_stream_async's fork
 //           path; on a popen slot the pipe is still fclose'd but the child is
 //           only reaped opportunistically and rc is -1).
 HexaVal hexa_exec_stream_kill_impl(HexaVal handle) {

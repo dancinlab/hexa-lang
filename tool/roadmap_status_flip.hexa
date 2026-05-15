@@ -6,7 +6,7 @@
 //     planned → active   (evidence of started work)
 //     active  → done     (exit_criteria satisfied)
 //   Conservative: DOES NOT flip automatically unless --apply flag given.
-//   Respects raw#1 chflags uchg — opens write window minimally.
+//   Respects chflags uchg — opens write window minimally.
 //
 // EVIDENCE SIGNALS
 //   planned→active :  proof/cert file exists  OR  referenced in recent commit

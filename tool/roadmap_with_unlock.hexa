@@ -1,5 +1,5 @@
 #!hexa strict
-// tool/roadmap_with_unlock.hexa — atomic unlock/run/relock wrapper (raw#0-lite)
+// tool/roadmap_with_unlock.hexa — atomic unlock/run/relock wrapper (lite)
 //
 // PURPOSE
 //   Agents (and humans) editing .roadmap currently do a 3-step dance:
@@ -14,7 +14,7 @@
 //   so even a hard kill of THIS process still leaves the file relocked.
 //
 //   This is a LOW-CEREMONY path — it does NOT run raw_all, does NOT write
-//   to .raw-audit, and is NOT a replacement for tool/hx_unlock.hexa.
+//   to audit, and is NOT a replacement for tool/hx_unlock.hexa.
 //   Use it when:
 //     · the edit is a single contained command (sed / python / script)
 //     · ceremony would be heavier than the edit itself

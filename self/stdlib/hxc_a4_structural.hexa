@@ -1,7 +1,7 @@
 #!hexa strict
 // self/stdlib/hxc_a4_structural.hexa — A4 content-addressed sub-tree dedup
 //
-// @module(slug="hxc_a4_structural", desc="HXC v2 algorithm A4 — content-addressed structural sub-tree dedup. Walks all `@<id>` row payloads, extracts balanced {…} and […] sub-strings (sub-objects / sub-arrays embedded in JSON-like values), hashes them with FNV-32, and replaces top-N most-frequent sub-trees with single-byte ref tokens. Targets the saving-ceiling left open by A1+A7+A10 on multi-schema heterogeneous JSONL where per-(schema,col) dictionaries do not span cross-schema repetition (raw 137 atlas 0.91 percent saving regime).")
+// @module(slug="hxc_a4_structural", desc="HXC v2 algorithm A4 — content-addressed structural sub-tree dedup. Walks all `@<id>` row payloads, extracts balanced {…} and […] sub-strings (sub-objects / sub-arrays embedded in JSON-like values), hashes them with FNV-32, and replaces top-N most-frequent sub-trees with single-byte ref tokens. Targets the saving-ceiling left open by A1+A7+A10 on multi-schema heterogeneous JSONL where per-(schema,col) dictionaries do not span cross-schema repetition (ai-config-ban7 atlas 0.91 percent saving regime).")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a4_structural.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a4_structural.hexa encode <hxc-v1.in> <hxc-v2.out>)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a4_structural.hexa decode <hxc-v2.in> <hxc-v1.out>)
@@ -32,7 +32,7 @@
 //       balanced subtree starting here matches a kept hash. If yes, emit the
 //       ref token `\x01<id_char>` (2 bytes) and advance past the matched span.
 //       Else emit the literal char.
-//     - The body byte `\x01` (SOH) is verified absent from the input (raw 12
+//     - The body byte `\x01` (SOH) is verified absent from the input (silent-error
 //       silent-error-ban: any pre-existing SOH in input aborts encode with
 //       error 4). For all surveyed HXC corpora to date, SOH absence holds.
 //
@@ -45,14 +45,14 @@
 //     - Read `# tree:` headers → ref table indexed by id_char.
 //     - For each row, walk bytes; on `\x01`, read next 1 byte as id_char,
 //       look up bytes, splice in. Else copy literal.
-//     - Idempotent + byte-eq (raw 65 + 68): every input byte either copies
+//     - Idempotent + byte-eq (idempotency + 68): every input byte either copies
 //       through unchanged or follows a deterministic ref→bytes lookup.
 //
-// Falsifier (raw 91 C3, preregistered):
+// Falsifier (C3, preregistered):
 //   F-A4-1: hash collision with mismatched bytes during PASS 1 → drop conflicting
 //           entry (fail-closed; never silently substitute wrong bytes). If
 //           collisions cause >5% candidate-tree loss → log warning, continue.
-//   F-A4-2: encode/decode roundtrip not byte-eq on selftest fixture → reject (raw 68).
+//   F-A4-2: encode/decode roundtrip not byte-eq on selftest fixture → reject (follow-up).
 //   F-A4-3: input contains `\x01` SOH byte → reject with exit 4 (cannot mark refs
 //           safely without ambiguity); fix by promoting to a richer sigil scheme.
 //   F-A4-4: combined-saving < 0.02 (≥2 percent over HXC v1) on a multi-schema
@@ -523,7 +523,7 @@ fn a4_encode(v1_text: string) -> string {
     let mut ci: i64 = 0
     while ci < len(v1_text) {
         if char_code(v1_text, ci) == A4_SIGIL {
-            eprintln("a4: input contains \\x01 SOH byte at offset " + to_string(ci) + " — refusing to encode (raw 12 silent-error-ban)")
+            eprintln("a4: input contains \\x01 SOH byte at offset " + to_string(ci) + " — refusing to encode (silent-error silent-error-ban)")
             return v1_text
         }
         ci = ci + 1

@@ -261,7 +261,7 @@ fn _lint(src: string) -> array {
             continue
         }
         if tok == "checkpoint" {
-            // full-form checkpoint (raw#15 DSL) — not schema-required but accept
+            // full-form checkpoint (no-hardcode DSL) — not schema-required but accept
             entry_count = entry_count + 1
             kind = "cp-full"
             open_line = lineno

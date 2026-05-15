@@ -8,7 +8,7 @@
 //     - every dependency (depends-on) is status=done
 //
 //   NO soft pass. NO bypass. If a single predicate is <100%, advance is
-//   REJECTED. raw#10 proof-carrying symmetry enforced. No --no-verify.
+//   REJECTED. proof-carrying symmetry enforced. No --no-verify.
 //   Mirrors invariant: Σ_k ΔI_k ≥ K(G|S₀) — each step k must close its
 //   information requirement before step k+1 proceeds.
 //
@@ -238,7 +238,7 @@ fn check(repo: string, id: string) -> int {
     eprintln("Phase Gate REJECT (ε-strict, <100%) — " + repo + "#" + id)
     for reason in r[1] { eprintln("  " + reason) }
     eprintln("")
-    eprintln("  No bypass permitted (raw#10 / --no-verify denied).")
+    eprintln("  No bypass permitted (honest-caveat / --no-verify denied).")
     return 1
 }
 

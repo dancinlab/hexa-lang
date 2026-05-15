@@ -23,7 +23,7 @@
 # Exit codes:
 #   0 = pass     1 = lint violation     2 = bad usage / internal error
 #
-# raw#9 hexa-only spirit: the linter itself is shell because it must run in
+# hexa-only spirit: the linter itself is shell because it must run in
 # pre-commit / CI before the hexa toolchain is necessarily built (bootstrap
 # concern). Body of work is `git`/`grep`/`awk` — no python/jq.
 

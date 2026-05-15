@@ -23,7 +23,7 @@
 //      is_east_asian_wide(cp) -> bool
 //        Per UAX #11. Subset suitable for CJK + emoji block.
 //
-//  CAVEATS (raw 91 honest C3)
+//  CAVEATS (C3 honest C3)
 //      * Width tables are SUBSETS — covers Latin + CJK + common
 //        emoji + private-use ranges. Edge cases (Mongolian,
 //        Tifinagh, recent emoji additions) may misreport. For
@@ -38,7 +38,7 @@
 //  RAW 159 UPSTREAM GAP
 //      Native UTF-8 codepoint iterator + general-category lookup
 //      in hexa runtime would replace this module's hand-rolled
-//      decoder. Tracked under raw 159.
+//      decoder. Tracked under no-hardcode9.
 //
 //  USAGE
 //      use "self/stdlib/term_unicode"

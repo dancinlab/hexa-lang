@@ -8,7 +8,7 @@
 // boilerplate (~700 LoC verbose per script).
 //
 // Design:
-//   - pure hexa (raw 9 hexa-only) — zero external libs.
+//   - pure hexa (hexa-only) — zero external libs.
 //   - delegates to runtime builtins where present (file_exists,
 //     read_file, write_file, mkdir, list_dir, dir_exists,
 //     delete_file, append_file).
@@ -17,13 +17,13 @@
 //   - never panics on missing files: file_exists==false on missing,
 //     read_file_safe→"" on missing, etc. — Node fs/sync semantics.
 //
-// raw 91 (no_silent_errors):
+// C3 (no_silent_errors):
 //   shell wrappers redirect stderr to /dev/null but ALWAYS verify
 //   the post-condition (file present / absent / link points where
 //   expected) before returning success. A failed verification
 //   returns false / "" so callers can fail-loud upstream.
 //
-// raw 159 (hexa-lang-upstream-proposal-mandate):
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate):
 //   This module is the upstream-of-truth for hive's fs ops. hive ports
 //   `use "self/stdlib/fs"` and never re-implements these.
 //
@@ -123,7 +123,7 @@ fn read_file_safe(path) {
 
 // ── write_file_safe ─────────────────────────────────────────
 // Writes content to path. Returns true on success. Caller should
-// pre-create parent dir via mkdir_p() if needed. raw 91: verifies
+// pre-create parent dir via mkdir_p() if needed. C3: verifies
 // post-condition (file exists after write).
 fn write_file_safe(path, content) {
     write_file(to_string(path), to_string(content))
@@ -177,7 +177,7 @@ fn fs_symlink(target, link_path) {
 // ── fs_unlink ───────────────────────────────────────────────
 // Removes a file or symlink (NOT a directory — use a separate
 // rm-rf wrapper for dirs). Returns true on success or if path
-// was already missing (idempotent — raw 65). For broken
+// was already missing (idempotent — idempotency). For broken
 // symlinks, `rm -f` works where the `delete_file` builtin
 // sometimes does not.
 fn fs_unlink(path) {
@@ -352,7 +352,7 @@ fn _fs_selftest() {
         fail = fail + 1
     }
 
-    // 16. fs_unlink missing -> idempotent true (raw 65)
+    // 16. fs_unlink missing -> idempotent true (idempotency)
     n = n + 1
     if !fs_unlink(scratch + "/never_existed") {
         eprintln("FAIL 20 unlink(missing) should be idempotent true")

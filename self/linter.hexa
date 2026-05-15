@@ -466,7 +466,7 @@ fn check_array_param_mutation(lines) {
     return results
 }
 
-// ── A8: env() personal-path-leak (raw 15) ───────────────
+// ── A8: env() personal-path-leak (no-hardcode) ───────────────
 // HX-safety A8 (BG-HX1, 2026-05-02): top-of-file `env(KEY)` followed by
 // concatenation that bakes a personal absolute path (e.g.
 // `env("HOME") + "/Dev/hexa-lang/..."` or `env_or("X", "/Users/<user>/...")`),
@@ -532,7 +532,7 @@ fn check_env_personal_path_default(lines) {
                     level: "warn",
                     line: i,
                     rule: "A8",
-                    msg: "top-of-file env() concat with personal path fragment '" + ss + "' — leaks per-developer location into committed source (raw 15)"
+                    msg: "top-of-file env() concat with personal path fragment '" + ss + "' — leaks per-developer location into committed source (no-hardcode)"
                 })
                 break
             }
@@ -616,7 +616,7 @@ fn lint_file(path) {
     // A4: array param mutation visibility (BG-HX1)
     let r_a4 = check_array_param_mutation(lines)
     for m in r_a4 { all.push(m) }
-    // A8: env() personal-path-leak (BG-HX1, raw 15)
+    // A8: env() personal-path-leak (BG-HX1, no-hardcode)
     let r8 = check_env_personal_path_default(lines)
     for m in r8 { all.push(m) }
 

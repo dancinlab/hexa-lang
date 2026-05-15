@@ -7,7 +7,7 @@
 // guide toward acceptable evidence.
 //
 // Design: seed C (structural co-occurrence). See drill report.
-// Scope : raw#10 proof-carrying + own 4 bt-solution-claim-ban.
+// Scope : proof-carrying + own 4 bt-solution-claim-ban.
 // Deps  : hexa-only, zero external dependency, no git hook usage.
 //
 // Usage:
@@ -351,7 +351,7 @@ fn emit_json(source: string, hits: array, severity: string) -> string {
     s = s + "\"severity\":\"" + severity + "\","
     s = s + "\"verdict\":\"" + verdict + "\","
     s = s + "\"source\":\"" + _esc(source) + "\","
-    s = s + "\"message\":\"LLM self-verification is forbidden. A statement is not evidence (raw#10 proof-carrying, own 4 bt-solution-claim-ban).\","
+    s = s + "\"message\":\"LLM self-verification is forbidden. A statement is not evidence (proof-carrying, own 4 bt-solution-claim-ban).\","
     s = s + "\"claims_total\":" + to_string(len(hits)) + ","
     s = s + "\"claims_missing_evidence\":" + to_string(len(warn_items)) + ","
     s = s + "\"hits\":["

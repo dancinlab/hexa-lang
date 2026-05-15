@@ -1,15 +1,15 @@
-// tool/backup_file_lint.hexa — raw#34 enforcer (no-backup-files in working tree)
+// tool/backup_file_lint.hexa — attr-usage4 enforcer (no-backup-files in working tree)
 //
 // usage:
 //   hexa tool/backup_file_lint.hexa [<root>]        — scan (warn mode, exit 0)
 //   hexa tool/backup_file_lint.hexa --sweep [<root>] — delete every match
 //   hexa tool/backup_file_lint.hexa --strict [<root>] — exit 1 on any match
 //
-// rule: raw#34 no-backup-files — backups live in git history, not working tree.
+// rule: attr-usage4 no-backup-files — backups live in git history, not working tree.
 // excludes: .git/, .claude/, .claude-*, node_modules/, target/, .shared-backup-*
 //
 // Output: JSON summary on stdout (schema: hexa.backup_file_lint.v1).
-// raw#9 hexa-only, raw#10 proof-carrying, raw#12 empirical (direct fs scan).
+// hexa-only, proof-carrying, silent-error empirical (direct fs scan).
 
 fn _default_root() -> string {
     return to_string(exec("pwd")).trim()
@@ -99,7 +99,7 @@ fn _esc(s: string) -> string {
 fn _render(hits: array, mode: string, root: string, removed: int) -> string {
     let mut s = "{\"schema\":\"hexa.backup_file_lint.v1\""
     s = s + ",\"tool\":\"tool/backup_file_lint.hexa\""
-    s = s + ",\"rule\":\"raw#34\""
+    s = s + ",\"rule\":\"attr-usage4\""
     s = s + ",\"rule_slug\":\"no-backup-files\""
     s = s + ",\"mode\":\"" + mode + "\""
     s = s + ",\"root\":\"" + _esc(root) + "\""

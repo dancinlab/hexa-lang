@@ -2,7 +2,7 @@
 //  test_attr_evolve.hexa — C4 structural admissibility seal tests
 //
 //  Verifies evolve_attr_seal (self/stdlib/evolve.hexa) against
-//  raw 68 idempotence-witness + raw 73 structural-admissibility
+//  follow-up idempotence-witness + follow-up structural-admissibility
 //  paradigm. Pure-fn input MUST produce deterministic attr set;
 //  re-applying the seal MUST be byte-eq (no search, no oscillation).
 //
@@ -77,7 +77,7 @@ fn attr_seal_idempotent(meta) {
 // ── tests ──────────────────────────────────────────────────
 
 println("═══════════════════════════════════════════════════════")
-println("  HEXA C4 attr_seal — raw 73 structural admissibility")
+println("  HEXA C4 attr_seal — follow-up structural admissibility")
 println("═══════════════════════════════════════════════════════")
 println("")
 
@@ -118,7 +118,7 @@ let m6 = [["pure", true], ["hot", true], ["has_loop", true], ["has_io", false]]
 let a6 = attr_seal(m6)
 check("T6.full-stack.len=7", len(a6) == 7)
 
-// T7: raw 68 idempotence-witness — same meta produces byte-eq result
+// T7: follow-up idempotence-witness — same meta produces byte-eq result
 check("T7.idempotent.pure-only", attr_seal_idempotent(m1))
 check("T7.idempotent.pure+hot", attr_seal_idempotent(m2))
 check("T7.idempotent.full-stack", attr_seal_idempotent(m6))

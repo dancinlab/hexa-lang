@@ -27,21 +27,21 @@
 //     - Reassemble final HXC v1 row by interleaving text values + decoded ints
 //       at their declared column indices
 //
-// Streaming-prefix invariant (raw 92 A5):
+// Streaming-prefix invariant (module-loader-fatal A5):
 //   Each `@<id>!a10 ...\n` row is independently decodable. The `# ints:` header
 //   precedes the `@` rows. Trailing partial row buffered until LF — same
 //   invariant as HXC v1 / A7.
 //
-// Idempotency (raw 65) + byte-eq (raw 68):
+// Idempotency (idempotency) + byte-eq (follow-up):
 //   - encode(decode(x)) == x  for any A10 stream
 //   - decode(encode(y)) == y  for any HXC v1 stream where int_cols match
 //   - canonical zigzag + LEB128 has unique encoding per int → byte-eq guaranteed
 //
-// Falsifier (raw 91 C3, preregistered):
+// Falsifier (C3, preregistered):
 //   F-A10-1: saving < 0.03 (HXC-A10 bytes >= 0.97 * HXC-v1 bytes) on a ≥10-row
 //            integer-heavy JSONL (≥3 int cols per row) → retire A10.
 //   F-A10-2: encode/decode round-trip not byte-eq on selftest fixture → reject.
-//   F-A10-3: decode latency > 100us/row on selftest → reject (raw 42 jetsam).
+//   F-A10-3: decode latency > 100us/row on selftest → reject (follow-up jetsam).
 
 use "self/stdlib/argv_skip"
 
@@ -730,7 +730,7 @@ fn _selftest() -> i64 {
     }
     println("  e2e a10 encode/decode roundtrip: ok (byte-eq)")
 
-    // Saving measurement (raw 91 C3 honest report — fixture is small;
+    // Saving measurement (C3 honest report — fixture is small;
     // F-A10-1 falsifier fires on real ≥10-row corpus, not the selftest fixture).
     let v1_b = len(v1_txt)
     let v2_b = len(v2_txt)
@@ -744,14 +744,14 @@ fn _selftest() -> i64 {
         println("  fixture saving: ok (ratio < 100%)")
     }
 
-    // Idempotency (raw 65): re-decoding decoded output is identity
+    // Idempotency (idempotency): re-decoding decoded output is identity
     let back2 = a10_decode(back)
     if _assert(back2 == back, "decode idempotency") != 0 { return 1 }
     let v2_again = a10_encode(back)
     if _assert(v2_again == v2_txt, "encode idempotency byte-eq") != 0 { return 1 }
-    println("  idempotency (raw 65): ok")
+    println("  idempotency (idempotency): ok")
 
-    // Streaming-prefix invariant (raw 92 A5)
+    // Streaming-prefix invariant (module-loader-fatal A5)
     let v2_lines = split(v2_txt, "\n")
     let mut acc = ""
     let mut li = 0

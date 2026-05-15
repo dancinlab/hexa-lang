@@ -5,12 +5,12 @@
 // need to port from .mjs (vitest bench / mitata) → .hexa with no carve-out
 // (raw `hexa-only`, GOAL-HEXA-NATIVE strict mode).
 //
-// raw 9 (pure-hexa):  external libs = 0. mono_ns() / sleep_s / exec only.
-// raw 91 (no_silent_errors): bench() prints register line + per-bench stats
+// hexa-only (pure):  external libs = 0. mono_ns() / sleep_s / exec only.
+// C3 (no_silent_errors): bench() prints register line + per-bench stats
 //   to stdout immediately; run_all() emits aggregated table — both honest.
-// raw 18 (self-host fixpoint): zero new builtins required; module is pure
+// self-host fixpoint (self-host fixpoint): zero new builtins required; module is pure
 //   .hexa — no codegen_c2.hexa / runtime.c surface delta. Fixpoint preserved.
-// raw 159 (hexa-lang-upstream-proposal-mandate): hive ports `use
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): hive ports `use
 //   "self/stdlib/bench"` and never re-implements bench timing.
 //
 // ── Why per-call timing instead of registry-then-run ────────────────────

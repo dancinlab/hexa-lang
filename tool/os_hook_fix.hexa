@@ -1,6 +1,6 @@
 // tool/os_hook_fix.hexa — #16 hexa interp deadlock detector + auto-release
 //
-// PURPOSE (raw#9 strict, hexa-only, deterministic)
+// PURPOSE (hexa-only-strict, hexa-only, deterministic)
 //   The canonical `hexa_interp` shim serializes all compiles through a single
 //   mkdir-lock at /tmp/hexa_interp.lock.d. A hung / crashed holder leaves the
 //   dir behind; callers then block up to LOCK_WAIT_SECS (default 300s). In

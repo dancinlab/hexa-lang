@@ -333,12 +333,12 @@ fn self_optimize_ex(eval_fn, param_bounds, test_inputs, pop_size, generations) {
 }
 
 // ═══════════════════════════════════════
-// C4: Structural admissibility seal (raw 73 paradigm)
+// C4: Structural admissibility seal (follow-up paradigm)
 // ═══════════════════════════════════════
 //
-// raw 73 design-strategy-structural-admissibility-paradigm:
+// follow-up design-strategy-structural-admissibility-paradigm:
 // derive @attr-set from semantic metadata via deterministic algebraic
-// rules — no search, no fitness loop. closure proven by raw 68 byte-eq
+// rules — no search, no fitness loop. closure proven by follow-up byte-eq
 // idempotence (same meta → same attrs across runs).
 //
 // fn_meta = array of [flag_name, bool_value] pairs:
@@ -357,7 +357,7 @@ fn evolve_attr_meta_get(meta, key) {
 }
 
 fn evolve_attr_seal(meta) {
-    // Algebraic rules (raw 73 paradigm — no search):
+    // Algebraic rules (follow-up paradigm — no search):
     //   pure                       -> @const, @memoize, @pure
     //   pure ∧ hot                 -> +@hot, +@inline
     //   pure ∧ has_loop ∧ ¬has_io  -> +@simd, +@vectorize
@@ -397,7 +397,7 @@ fn evolve_attr_seal_eq(a, b) {
 }
 
 fn evolve_attr_seal_idempotent(meta) {
-    // raw 68 idempotence-witness: seal(meta) byte-eq across re-runs.
+    // follow-up idempotence-witness: seal(meta) byte-eq across re-runs.
     let r1 = evolve_attr_seal(meta)
     let r2 = evolve_attr_seal(meta)
     return evolve_attr_seal_eq(r1, r2)

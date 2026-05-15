@@ -122,7 +122,7 @@ fn _sd_build_kex_ecdh_reply(k_s_blob: [int], q_s: [int], sig_blob: [int]) -> [in
     return p
 }
 
-// Build the ssh-ed25519 host key blob from raw 32B pub.
+// Build the ssh-ed25519 host key blob from attr-usage2B pub.
 fn _sd_make_host_key_blob(host_pk: [int]) -> [int] {
     let mut p: [int] = []
     p = ssh_put_string(p, "ssh-ed25519")

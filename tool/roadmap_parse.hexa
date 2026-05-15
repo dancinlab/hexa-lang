@@ -11,7 +11,7 @@
 //
 //   into JSON-serializable tuples. Works on hexa-lang/anima/airgenome
 //   .roadmap files (all three repos) without heuristics beyond the
-//   grammar itself. raw#9 hexa-only, raw#10 lossless (every parsed key
+//   grammar itself. hexa-only, honest-caveat lossless (every parsed key
 //   is round-trippable).
 //
 // CLI

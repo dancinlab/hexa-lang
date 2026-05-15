@@ -117,7 +117,7 @@ check("%2F slash", url_decode_pure("%2Fpath"), "/path")
 check("lowercase hex", url_decode_pure("a%2fb"), "a/b")
 // Unicode roundtrip NOTE: interp from_char_code treats its arg as a
 // Unicode codepoint and re-emits as UTF-8 (so from_char_code(0xC3)
-// yields "Ã" = 2 bytes "C3 83", not a raw 0xC3 byte). This means
+// yields "Ã" = 2 bytes "C3 83", not a forward-chainxC3 byte). This means
 // high-byte percent sequences cannot roundtrip into the original
 // raw bytes in pure hexa today. The encode side is fine (uses real
 // byte values via ord). The decode side needs either a raw-byte

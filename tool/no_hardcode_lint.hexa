@@ -1,4 +1,4 @@
-// tool/no_hardcode_lint.hexa — raw#14 enforcer (no hardcoding — values belong in SSOT)
+// tool/no_hardcode_lint.hexa — magic-number enforcer (no hardcoding — values belong in SSOT)
 //
 // usage:
 //   hexa tool/no_hardcode_lint.hexa             — scan + exit 1 on non-baseline hit (status=live, block default)
@@ -7,7 +7,7 @@
 //   hexa tool/no_hardcode_lint.hexa --warn      — force warn-only mode (exit 0 even on hit)
 //   hexa tool/no_hardcode_lint.hexa --block     — explicit block mode (alias for default since status=live)
 //
-// rule: raw#14 — forbids hardcoded paths (/Users/, /tmp/, /var/, /etc/),
+// rule: magic-number — forbids hardcoded paths (/Users/, /tmp/, /var/, /etc/),
 //   URLs (http://, https://), and hostnames (192.168., 10.0., 127.0.0.1, localhost)
 //   inside .hexa source string literals. Opt-out: `@const` marker on same line.
 //   Baseline: .hardcode-baseline (grandfather current drift).
@@ -124,7 +124,7 @@ while _ai < len(_raw_args) {
 
 let mut bake = false
 let mut list_only = false
-// raw#14 status=live (promoted 2026-04-19): block is the default.
+// magic-number status=live (promoted 2026-04-19): block is the default.
 // --warn forces warn-only mode (exit 0 on hit) for debugging/triage.
 let mut block_mode = true
 let mut warn_mode = false
@@ -158,7 +158,7 @@ for d in dirs {
     }
 }
 
-println("── raw#14 no_hardcode_lint ──")
+println("── magic-number no_hardcode_lint ──")
 println("dirs    : " + to_string(len(dirs)))
 println("patterns: " + to_string(len(pats)))
 println("baseline: " + to_string(len(baseline)) + " entries")
@@ -166,7 +166,7 @@ println("hits    : " + to_string(len(all_hits)))
 
 if bake {
     let mut parts = []
-    parts.push("# .hardcode-baseline — raw#14 grandfather list")
+    parts.push("# .hardcode-baseline — magic-number grandfather list")
     parts.push("# format: <path>:<line>:<pattern>")
     parts.push("# regenerate: hexa tool/no_hardcode_lint.hexa --bake")
     parts.push("")
@@ -204,7 +204,7 @@ if len(all_hits) > limit {
 }
 
 if block_mode {
-    println("🚫 FAIL — " + to_string(len(all_hits)) + " hardcoded violations (raw#14 live)")
+    println("🚫 FAIL — " + to_string(len(all_hits)) + " hardcoded violations (magic-number live)")
     println("  bake baseline: hexa tool/no_hardcode_lint.hexa --bake")
     println("  triage / warn-only: hexa tool/no_hardcode_lint.hexa --warn")
     exit(1)

@@ -354,10 +354,10 @@
       "raw": {
         "keywords": ["raw", "법률", "laws"],
         "ssot": ".raw",
-        "ssot_l1": ".own",
-        "parser": "self/raw_loader.hexa",
+        "ssot_l1": "",
+        "parser": "self/legacy_loader.hexa",
         "cli": "self/raw_cli.hexa",
-        "description": "raw 법률 SSOT — L0 /.raw (universal) + L1 /.own (project-local), hexa-directive 포맷",
+        "description": "legacy SSOT (retired)",
         "principle": "low level 강제 — 새 세션 인지 불필요 (pre-commit + fs_seal 이 자동 승계)",
         "subcommands": {
           "(none)": "6 법률 표 출력 (status + level 동적 감지)",

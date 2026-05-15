@@ -36,7 +36,7 @@ fn safe_write_file(path, content) {
 }
 
 // ── path helpers (host builtin-backed, O(n)) ───────────────
-// @pure tagging: raw#3 attr-usage + raw#11 ai-native-enforce. Bootstrap
+// @pure tagging: attr-usage attr-usage + ai-native ai-native-enforce. Bootstrap
 // helpers tagged where every callee is whitelisted in self/attrs/pure.hexa
 // (len, substring, push, join, split, primitive index). Grammar-level
 // guard: if a future edit adds exec/spawn/file_exists/env_var here, the
@@ -339,7 +339,7 @@ fn ml_rewrite_alias_refs(src, alias) {
 
 // ── resolution (3-way: caller-relative, stdlib, project-root) ──
 
-// Env hygiene helpers — 2026-04-26 Option B (raw#92 silent-no-op fix).
+// Env hygiene helpers — 2026-04-26 Option B (module-loader-fatal silent-no-op fix).
 //
 // Two independent env vars, two distinct roles:
 //   * HEXA_LANG          = project root containing self/  (canonical)
@@ -997,7 +997,7 @@ fn ml_iter_walk(start_file) {
                             stack.push(full)
                         }
                     } else {
-                        // raw#92 no_silent_errors: fail loud. Was a stdout WARN
+                        // module-loader-fatal no_silent_errors: fail loud. Was a stdout WARN
                         // → import silently dropped → downstream `Runtime error:
                         // undefined function`. Now: stderr diagnostic with env
                         // state + ghost-path detection, then exit(2).
@@ -1040,7 +1040,7 @@ fn ml_iter_walk(start_file) {
                             }
                         }
                         // Ghost-path hint: `self/core/...` was a 36-callsite typo
-                        // for `self/stdlib/...` (see hive raw#92 ghost-import fix).
+                        // for `self/stdlib/...` (see hive module-loader-fatal ghost-import fix).
                         if ml_starts_with(imp, "self/core/") {
                             wp.push("\n  hint: imports under self/core/ do not exist in hexa-lang stdlib;")
                             wp.push("\n        did you mean self/stdlib/")

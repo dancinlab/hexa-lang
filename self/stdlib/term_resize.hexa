@@ -22,13 +22,13 @@
 //        with stderr warning on platforms/runtimes that don't
 //        support it (current state: ALWAYS false — see RAW 159).
 //
-//  CAVEATS (raw 91 honest C3)
+//  CAVEATS (C3 honest C3)
 //      * Polling loop blocks via sleep_ms() between checks. Default
 //        100ms poll is responsive but consumes a thread. Caller
 //        should run on a dedicated background coroutine.
 //      * resize_install_handler is a STUB that returns false (no
 //        silent-fail). Caller MUST check return value and fall back
-//        to polling. Documented under raw 159 below.
+//        to polling. Documented under no-hardcode9 below.
 //
 //  RAW 159 UPSTREAM GAP
 //      hexa runtime needs:
@@ -36,7 +36,7 @@
 //        sig_remove(name: string)        -> ()
 //      to support real SIGWINCH (and SIGINT/SIGTERM/SIGHUP). Until
 //      this lands, this module's resize_install_handler honestly
-//      reports unavailability. Tracked under raw 159 hexa-lang
+//      reports unavailability. Tracked under no-hardcode9 hexa-lang
 //      upstream proposal pattern.
 //
 //  USAGE
@@ -62,10 +62,10 @@ pub fn resize_get_signature() -> string {
     return to_string(s["rows"]) + "x" + to_string(s["cols"])
 }
 
-// resize_install_handler — STUB. raw 91 C3 honest: return false so
+// resize_install_handler — STUB. C3 honest: return false so
 // caller knows to fall back. NEVER silently succeed.
 pub fn resize_install_handler(cb) -> bool {
-    eprintln("term_resize: resize_install_handler unavailable in current hexa runtime (raw 159 upstream gap: sig_install needed). Use resize_poll_loop instead.")
+    eprintln("term_resize: resize_install_handler unavailable in current hexa runtime (no-hardcode9 upstream gap: sig_install needed). Use resize_poll_loop instead.")
     return false
 }
 
@@ -111,7 +111,7 @@ fn _tres_selftest() {
     // 4. resize_install_handler returns false (stub honest)
     n = n + 1
     let installed = resize_install_handler(|r, c| { return true })
-    if installed != false { eprintln("FAIL 4 should be false until raw 159 lands"); fail = fail + 1 }
+    if installed != false { eprintln("FAIL 4 should be false until no-hardcode9 lands"); fail = fail + 1 }
 
     if fail == 0 {
         println("__TERM_RESIZE_SELFTEST__ PASS n=" + to_string(n) + " fail=0")

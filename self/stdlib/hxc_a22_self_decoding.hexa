@@ -1,13 +1,13 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="hxc-a22-self-decoding", desc="HXC algorithm A22: self-decoding artifact format (Phase 11 P3 tick 2 — full mini-VM + base94 decoder + pure-hexa SHA-256 + LIVE FIRE round-trip). Embeds decoder bytecode in artifact footer; consumers run a generic mini-VM (<100 LoC bootstrap) to decode. Closes raw 18 self-host fixpoint at the artifact level (raw 152 self-decoding-fixpoint-mandate VERIFIED).")
+// @tool(slug="hxc-a22-self-decoding", desc="HXC algorithm A22: self-decoding artifact format (Phase 11 P3 tick 2 — full mini-VM + base94 decoder + pure-hexa SHA-256 + LIVE FIRE round-trip). Embeds decoder bytecode in artifact footer; consumers run a generic mini-VM (<100 LoC bootstrap) to decode. Closes self-host fixpoint self-host fixpoint at the artifact level (no-hardcode2 self-decoding-fixpoint-mandate VERIFIED).")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a22_self_decoding.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a22_self_decoding.hexa wrap <body.in> <artifact.out>)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a22_self_decoding.hexa unwrap <artifact.in> <body.out>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args, 4=decode-mismatch)
 //
-// Algorithm spec (raw 9 hexa-only · raw 18 self-host fixpoint · raw 65+68 idempotent):
+// Algorithm spec (hexa-only · self-host fixpoint self-host fixpoint · idempotency+68 idempotent):
 //   PASS 1 (footer emit): given a chain of (algo_id, param_blob) tuples, build mini-VM
 //                         bytecode (PUSH_ALGO/PUSH_PARAM/DECODE/POP/EMIT/CHK/MARK/HALT),
 //                         base94-encode, emit "# decoder-spec v=A22-v1 size=N sha256=H\n
@@ -18,7 +18,7 @@
 //                         opcodes, dispatch DECODE to algorithm catalog (A1 identity / A9
 //                         BPE-passthrough / A12 col-prefix / A14 row-prefix passthroughs);
 //                         CHK validates sha256(body); MARK leaves a sentinel; EMIT yields
-//                         the final byte stream; HALT terminates. raw 91 honest C3: this
+//                         the final byte stream; HALT terminates. C3 honest C3: this
 //                         tick's catalog dispatch is identity passthrough — algorithms A1,
 //                         A12, A14 reverse-decode as no-op (the artifact body is already
 //                         in plain HXC v1, so the chain emits it verbatim). tick 3 will
@@ -27,17 +27,17 @@
 // Tick scope progression:
 //   tick 1 (commit 080023d9, 369 LoC): footer emitter + parser + VM stub + 6/6 selftest.
 //   tick 2 (THIS FILE):                base94 DECODER LIVE, full mini-VM 8-opcode dispatch
-//                                       LIVE, pure-hexa SHA-256 swap (raw 9 + raw 18; NO
+//                                       LIVE, pure-hexa SHA-256 swap (hexa-only + self-host fixpoint; NO
 //                                       external lib), generic <100 LoC bootstrap parser,
 //                                       LIVE FIRE wrap/unwrap round-trip on real .hxc body.
 //
-// Falsifiers (raw 71 contract; see docs/hxc_phase11_a22_design_20260428.md §6):
+// Falsifiers (falsifier contract; see docs/hxc_phase11_a22_design_20260428.md §6):
 //   F-A22-1: bytecode + footer overhead > 50% of compressed body on 1 KB fixture
 //            (informational measurement at multiple sizes; tick 2 measures 1KB + 8KB + 64KB)
 //   F-A22-2: external decoder dependency residue at read time → bootstrap is pure hexa,
-//            zero external lib (raw 9 + raw 18 mandate clear at tick 2)
+//            zero external lib (hexa-only + self-host fixpoint mandate clear at tick 2)
 //   F-A22-3: self-decode latency > 200ms / KB → not measured this tick (perf budget)
-//   F-A22-4: raw 18 fixpoint violated (bootstrap > 100 LoC OR non-hexa dep) → bootstrap
+//   F-A22-4: self-host fixpoint fixpoint violated (bootstrap > 100 LoC OR non-hexa dep) → bootstrap
 //            parser fits in 92 LoC pure hexa (counted at tick 2; see §3 design)
 //
 // Bootstrap parser shape (consumer side, <100 LoC):
@@ -128,10 +128,10 @@ fn _b94_encode(bytes: array) -> string {
     return _bytes_to_str(out)
 }
 
-// ───────────────────────── SHA-256 (pure-hexa, raw 9 + raw 18, no external deps) ─────────────
+// ───────────────────────── SHA-256 (pure-hexa, hexa-only + self-host fixpoint, no external deps) ─────────────
 
 // Standard SHA-256 (FIPS 180-4). Tick 2 swap: replaces tick-1 placeholder with a fully
-// pure-hexa implementation — zero external library dependency, raw 18 self-host fixpoint.
+// pure-hexa implementation — zero external library dependency, self-host fixpoint self-host fixpoint.
 // Operates on i64 words masked to 32 bits via `(x % U32_MOD)`.
 const A22_U32_MOD = 4294967296    // 2^32
 
@@ -465,10 +465,10 @@ fn _b94_decode(s: string) -> array {
 // ───────────────────────── PASS 2: mini-VM full dispatch (tick 2 LIVE) ─────────────────────────
 
 // Algorithm catalog dispatch — returns the decoded byte stream after applying the algorithm
-// by algo_id to (input_bytes, params). raw 91 honest C3: this tick implements identity
+// by algo_id to (input_bytes, params). C3 honest C3: this tick implements identity
 // passthrough for A1 / A9 / A12 / A14 — the artifact body is already plain HXC v1, and the
 // chain replay is structural (the artifact is "already decoded"). tick 3 will wire actual
-// reverse decoders (A12 column-prefix expand, A14 row-prefix expand). The raw 18 fixpoint
+// reverse decoders (A12 column-prefix expand, A14 row-prefix expand). The self-host fixpoint fixpoint
 // closure is at the *artifact* level: the bootstrap parser + this dispatcher are pure
 // hexa, so a consumer with only the hexa runtime can verify the artifact end-to-end.
 fn _vm_dispatch_decode(algo_id: int, input_bytes: array, params: array) -> array {
@@ -484,7 +484,7 @@ fn _vm_dispatch_decode(algo_id: int, input_bytes: array, params: array) -> array
     if algo_id == 0x01 || algo_id == 0x09 || algo_id == 0x0c || algo_id == 0x0e || algo_id == 0x14 {
         return input_bytes
     }
-    // raw 91 honest C3: unknown algo. Return verbatim with no marker — the caller MUST
+    // C3 honest C3: unknown algo. Return verbatim with no marker — the caller MUST
     // inspect the post-VM result (tick 3 will harden this with a CHK opcode validation).
     return input_bytes
 }
@@ -547,7 +547,7 @@ fn a22_vm_execute(bytecode: array, body_bytes: array) -> array {
             halted = true
             pc = pc + 1
         } else {
-            // Unknown opcode → terminate (raw 91 honest C3).
+            // Unknown opcode → terminate (C3 honest C3).
             return []
         }
     }
@@ -563,7 +563,7 @@ fn a22_wrap(body: string, chain: array) -> string {
 }
 
 // Top-level unwrap: given a wrapped artifact, extract footer + body, run mini-VM, return
-// decoded body. Returns "__A22_FAIL__" on any parse / VM failure (raw 91 honest C3).
+// decoded body. Returns "__A22_FAIL__" on any parse / VM failure (C3 honest C3).
 fn a22_unwrap(artifact: string) -> string {
     let parsed = a22_parse_footer(artifact)
     let header_line = parsed[0]
@@ -592,7 +592,7 @@ fn a22_unwrap(artifact: string) -> string {
     let actual_sha = _sha256_hex(bc)
     if actual_sha != claimed_sha { return "__A22_FAIL__" }
 
-    // raw 91 honest C3 (UTF-8 byte-canonicality):
+    // C3 honest C3 (UTF-8 byte-canonicality):
     // hexa's char_code(s,i) / chr(b) round-trip mishandles bytes >= 128 (treats them
     // as Unicode code points, double-encoding when re-stringified). For tick-2 LIVE FIRE
     // round-trip on real-world UTF-8 .hxc bodies we skip the byte-level VM execution and
@@ -766,14 +766,14 @@ fn _selftest() -> int {
     }
 
     // Fixture 8: full wrap/unwrap round-trip (LIVE FIRE) — small body + chain emitter ↔
-    // mini-VM. raw 152 self-decoding-fixpoint VERIFIED gate.
+    // mini-VM. no-hardcode2 self-decoding-fixpoint VERIFIED gate.
     let live_body = "# schema:s1 a b c\n@s1 1|2|3\n@s1 4|5|6\n@s1 7|8|9\n"
     let live_chain = [[0x01, []]]    // single-step A1 baseline (identity)
     let wrapped = a22_wrap(live_body, live_chain)
     let unwrapped = a22_unwrap(wrapped)
     if unwrapped == live_body {
         pass = pass + 1
-        println("  PASS: F1.8 LIVE FIRE wrap/unwrap byte-eq orig=" + to_string(len(live_body)) + " wrapped=" + to_string(len(wrapped)) + " (raw 152 self-decoding fixpoint VERIFIED)")
+        println("  PASS: F1.8 LIVE FIRE wrap/unwrap byte-eq orig=" + to_string(len(live_body)) + " wrapped=" + to_string(len(wrapped)) + " (no-hardcode2 self-decoding fixpoint VERIFIED)")
     } else {
         fail = fail + 1
         println("  FAIL: F1.8 LIVE FIRE round-trip mismatch")
@@ -814,7 +814,7 @@ fn _selftest() -> int {
     let unwrap_tamper = a22_unwrap(tampered)
     if unwrap_tamper == "__A22_FAIL__" {
         pass = pass + 1
-        println("  PASS: F1.10 tampered-footer detection sha256 guard fires (raw 91 honest C3)")
+        println("  PASS: F1.10 tampered-footer detection sha256 guard fires (C3 honest C3)")
     } else {
         fail = fail + 1
         println("  FAIL: F1.10 tamper guard MISSED — sha256 mismatch should reject but returned valid output")

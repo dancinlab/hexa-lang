@@ -1,12 +1,12 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native HXC sparse PPM-D v2 bounded-memory pipeline (A26 v2 first tick — A26 LIVE FIRE retraction option A)")
-// @tool(slug="hxc-a26-v2-bounded", desc="HXC algorithm A26 v2: bounded-memory sparse PPM-D order-3 with Howard 1993 escape e_d=0.25 and FLAT-ARRAY freq tables (no map-copy O(n²) blowup). Implements option A from the A26 LIVE FIRE retraction recommendation: A26_CTX_LIMIT_v2=4096 (16x smaller than v1 65536), A26_MAX_ORDER_v2=3 (orders 0..3 only, dropping 4 and 5), and FLAT-ARRAY [ctx_hash, byte_freq[256], distinct_count] records that bypass hexa map[ctx]=inner_map copy semantics. Sigil ^Y (post-A26 v1 ^X, pre-A19 ^Z to avoid concurrent A19 LIVE FIRE conflict). FIRST-TICK SCOPE: PASS 1 (spec) + PASS 2 (a26v2_build with deterministic FNV-1a hashing) + PASS 2.5 (a26v2_lookup + a26v2_estimate_bits) + PASS 3 (5 selftests + 3 memory probes). PASS 4 LIVE FIRE 6-repo measurement DEFERRED to subsequent tick per raw 91 honest C3. raw 137 cmix-ban MAINTAINED: deterministic integer FNV-1a + integer Howard-D escape e_d=0.25 (e_num=1, e_den=4 from F-A26-6 sweep), NOT cmix-class.")
+// @tool(slug="hxc-a26-v2-bounded", desc="HXC algorithm A26 v2: bounded-memory sparse PPM-D order-3 with Howard 1993 escape e_d=0.25 and FLAT-ARRAY freq tables (no map-copy O(n²) blowup). Implements option A from the A26 LIVE FIRE retraction recommendation: A26_CTX_LIMIT_v2=4096 (16x smaller than v1 65536), A26_MAX_ORDER_v2=3 (orders 0..3 only, dropping 4 and 5), and FLAT-ARRAY [ctx_hash, byte_freq[256], distinct_count] records that bypass hexa map[ctx]=inner_map copy semantics. Sigil ^Y (post-A26 v1 ^X, pre-A19 ^Z to avoid concurrent A19 LIVE FIRE conflict). FIRST-TICK SCOPE: PASS 1 (spec) + PASS 2 (a26v2_build with deterministic FNV-1a hashing) + PASS 2.5 (a26v2_lookup + a26v2_estimate_bits) + PASS 3 (5 selftests + 3 memory probes). PASS 4 LIVE FIRE 6-repo measurement DEFERRED to subsequent tick per C3 honest C3. ai-config-ban7 cmix-ban MAINTAINED: deterministic integer FNV-1a + integer Howard-D escape e_d=0.25 (e_num=1, e_den=4 from F-A26-6 sweep), NOT cmix-class.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a26_v2_bounded.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a26_v2_bounded.hexa build <in>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args)
 //
-// First-tick scope (raw 91 honest C3):
+// First-tick scope (C3 honest C3):
 //
 //   PASS 1 — bounded sparse context tree spec
 //     A26_MAX_ORDER_v2 = 3 (orders 0..3 inclusive; drops v1 orders 4 and 5).
@@ -20,9 +20,9 @@
 //     IN-PLACE mutation (row[b] = row[b] + 1) — NO map-copy O(n²) cost.
 //     Howard 1993 PPM-D: escape probability e_d = 0.25 → escape_count =
 //     max(1, distinct / 4). F-A26-6 minimum from sweep e_d in {0.20, 0.25,
-//     0.33, 0.50, 0.70, 0.75}. Integer-only deterministic (raw 137).
+//     0.33, 0.50, 0.70, 0.75}. Integer-only deterministic (ai-config-ban7).
 //     Build pass: single forward sweep over input bytes, O(n) time.
-//     Idempotent: build is pure function of input bytes (raw 65/68).
+//     Idempotent: build is pure function of input bytes (idempotency/68).
 //
 //   PASS 2 — a26v2_build(text) -> A26V2ContextTree
 //     Returns array of 4 (ctx_keys, ctx_freqs, ctx_distinct) triples for
@@ -43,11 +43,11 @@
 //     F2: round-trip byte-eq, JSON 234 B fixture          → identity
 //          passthrough on first-tick (no encoder yet); decoded == original
 //          via stored buffer (sanity invariant).
-//     F3: short-input passthrough (raw 65)                → enc == identity
+//     F3: short-input passthrough (idempotency)                → enc == identity
 //     F4: PPM-D Howard escape unit test                    → e_d ≈ 0.25
 //          integer (e_num=1, e_den=4 from F-A26-6 sweep minimum)
 //     F5: a26v2_estimate_bits ≥ 1.0 bit/byte sanity floor on 1KB English
-//          (raw 91 honest C3 — estimator must NOT fabricate sub-Shannon
+//          (C3 honest C3 — estimator must NOT fabricate sub-Shannon
 //          entropy on small training samples).
 //     F-A26-V2-MEM-1: memory ≤ 50MB on 8KB input — bounded-memory PASS gate
 //          (vs v1 1.2GB measured at same scale).
@@ -58,7 +58,7 @@
 //     (subsequent-tick wire promotion + 6-repo measurement gated by F-A26-V2
 //     memory PASS).
 //
-// Falsifier preregister (raw 71):
+// Falsifier preregister (falsifier):
 //     F-A26-V2-1: a26v2_estimate_bits NOT < A18 v2 actual on text-heavy →
 //                 retract budget reduction hypothesis (estimator advantage
 //                 at sub-4KB doesn't carry over to bounded-memory regime).
@@ -73,12 +73,12 @@
 //     F-A26-V2-6: e_d = 0.25 NOT minimal across {0.20, 0.25, 0.33} sweep →
 //                 retract Howard escape minimum.
 //
-// raw 137 cmix-ban compliance:
+// ai-config-ban7 cmix-ban compliance:
 //     A26 v2 = bounded sparse PPM-D order-3 with deterministic integer
 //     FNV-1a 12-bit slot index, integer-only flat-array frequency tables,
 //     integer-only Howard e_d=0.25 escape (= max(1, distinct/4)). NO fp
 //     ops. NO neural mixer. NO non-deterministic similarity. Build +
-//     lookup + estimator all deterministic (raw 65/68 idempotent: same
+//     lookup + estimator all deterministic (idempotency/68 idempotent: same
 //     input → same context tree).
 //
 // CONCURRENT A19 LIVE FIRE ORTHOGONALITY:
@@ -91,7 +91,7 @@
 const A26_V2_MAX_ORDER = 3
 const A26_V2_ALPHABET = 256
 const A26_V2_RAW_BITS_PER_BYTE = 8
-const A26_V2_MIN_BYTES = 32              // below this: identity passthrough (raw 65)
+const A26_V2_MIN_BYTES = 32              // below this: identity passthrough (idempotency)
 const A26_V2_CTX_LIMIT = 4096            // per-order context cap (16x smaller than v1)
 const A26_V2_HIT_RATE_GATE = 30          // F-A26-V2-3 first-tick gate (≥30% on 1KB English)
 const A26_V2_FNV_OFFSET = 2166136261     // FNV-1a 32-bit offset basis
@@ -119,7 +119,7 @@ fn _ctx_at_v2(s: string, p: int, k: int) -> string {
 //
 // Deterministic integer hash, mod 4096 → 12-bit slot index for the flat
 // hash table. Linear probing on collision (probe ≤ A26_V2_PROBE_LIMIT
-// slots before giving up). Same FNV-1a mixing kernel as A26 v1 (raw 18
+// slots before giving up). Same FNV-1a mixing kernel as A26 v1 (self-host fixpoint
 // self-host fixpoint compatibility).
 
 fn _fnv1a_ctx_v2(ctx: string) -> int {
@@ -141,7 +141,7 @@ fn _fnv1a_ctx_v2(ctx: string) -> int {
 
 // ───────────────── flat-array context-table primitives ─────────────────
 //
-// Storage layout per order (raw 91 honest C3: NO map-copy semantics):
+// Storage layout per order (C3 honest C3: NO map-copy semantics):
 //   ctx_keys[order]      = array[A26_V2_CTX_LIMIT] of ctx_string ("" = empty slot)
 //   ctx_freqs[order]     = array[A26_V2_CTX_LIMIT] of array[256] of byte counts
 //   ctx_distinct[order]  = array[A26_V2_CTX_LIMIT] of distinct-symbol count
@@ -316,7 +316,7 @@ fn a26v2_lookup(tree: array, buf: string, p: int) -> array {
     return [-1, A26_V2_PROB_SCALE / A26_V2_ALPHABET, 0]
 }
 
-// _ilog2_ceil_v2: integer ceiling-log2 (raw 137: integer-only).
+// _ilog2_ceil_v2: integer ceiling-log2 (ai-config-ban7: integer-only).
 fn _ilog2_ceil_v2(x: int) -> int {
     if x <= 1 { return 0 }
     let mut b = 0
@@ -461,13 +461,13 @@ fn _selftest_v2() -> int {
                 + to_string(len(dec2)) + ", expected 234) → F-A26-V2-2 TRIPPED (v2 first-tick retracted)")
     }
 
-    // ─── Fixture 3: short-input passthrough (raw 65 idempotent) ───
+    // ─── Fixture 3: short-input passthrough (idempotency idempotent) ───
     let tiny = "abc123"
     let enc3 = a26v2_encode(tiny)
     let enc3b = a26v2_encode(enc3)
     if enc3 == tiny && enc3b == tiny {
         pass = pass + 1
-        println("  PASS: fixture-3 short-input passthrough idempotent (raw 65 + 68)")
+        println("  PASS: fixture-3 short-input passthrough idempotent (idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-3 short-input idempotency broken → F-A26-V2-2 TRIPPED")

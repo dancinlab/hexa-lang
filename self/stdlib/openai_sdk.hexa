@@ -3,7 +3,7 @@
 // AI-NATIVE COMMENT BLOCK
 // ─────────────────────────────────────────────────────────────────
 // RATIONALE
-//   Second of 5 vendor SDK shims (raw 91 INDEP-3) unblocking the hive
+//   Second of 5 vendor SDK shims (C3 INDEP-3) unblocking the hive
 //   packages/ai/ port. Hive .ts side imports `openai` and calls
 //   `client.chat.completions.create(params, { stream: true })`. We
 //   provide pure-hexa request build + SSE parse + delta extractors,
@@ -26,7 +26,7 @@
 //   like XAI_API_KEY, GROQ_API_KEY when base_url is overridden). The
 //   shim is base-URL agnostic — caller chooses the endpoint.
 //
-// CAVEATS (raw 91 honest C3)
+// CAVEATS (C3 honest C3)
 //   C1. Same TLS-via-curl shellout as anthropic_sdk. Pure-hexa for
 //       request build + response parse.
 //   C2. OpenAI omits `event:` in SSE — only `data:` lines. The parser
@@ -42,7 +42,7 @@
 //   C5. Multi-modal image_url / input_audio blocks pass through as
 //       caller-built structures.
 //
-// raw 159 GAP
+// no-hardcode9 GAP
 //   Same as anthropic_sdk: GAP-A (HTTPS native) + GAP-B (streaming
 //   subprocess line iterator). See rfc_010_https_client.
 //

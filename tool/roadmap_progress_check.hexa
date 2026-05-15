@@ -1,6 +1,6 @@
 // tool/roadmap_progress_check.hexa — progress tracker for anima /.roadmap.
 //
-// Parses every roadmap entry (raw#2 self-format), scans exit_criteria /
+// Parses every roadmap entry (self-format), scans exit_criteria /
 // proof / evidence / note fields for verifiable tokens, and computes a
 // per-entry completion percentage. Emits AI-native JSON on stdout and to
 // state/roadmap_progress.json. Intended for launchd 300s cadence.
@@ -20,8 +20,8 @@
 //   tool/<name>.hexa      → file exists
 //   commit:<sha7+>        → `git cat-file -e <sha>` returns 0
 //
-// raw#9 hexa-only, raw#10 proof-carrying (every % derives from a file probe),
-// raw#12 empirical (no hardcoded verdicts), raw#33 English-only output.
+// hexa-only, proof-carrying (every % derives from a file probe),
+// silent-error empirical (no hardcoded verdicts), attr-usage3 English-only output.
 
 fn _rstrip(s: string) -> string {
     let mut end = len(s)

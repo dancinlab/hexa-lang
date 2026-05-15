@@ -2,11 +2,11 @@
 //
 // Bridges module_loader's import-resolution failures into LSP Diagnostic
 // squiggles. The loader (self/module_loader.hexa) already emits a fail-loud
-// FATAL marker on any unresolved `use`/`import` (raw#92 no_silent_errors,
+// FATAL marker on any unresolved `use`/`import` (no_silent_errors,
 // 2026-04-26). We invoke it as a sub-process, scan stderr for the marker,
 // and synthesize one diagnostic per offending line.
 //
-// Surface (companion to raw_diagnostics.collect_for_file):
+// Surface (companion diagnostic emitter):
 //   pub fn collect_imports_for_file(path: string) -> array
 //     Returns `[Diagnostic JSON, ...]` — empty array on success/no imports.
 //

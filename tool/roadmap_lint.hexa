@@ -1,11 +1,11 @@
-// tool/roadmap_lint.hexa — raw#15 enforcer (.roadmap SSOT)
+// tool/roadmap_lint.hexa — no-hardcode enforcer (.roadmap SSOT)
 //
 // usage:
 //   hexa tool/roadmap_lint.hexa          — validate /.roadmap + exit 1 on violation
 //   hexa tool/roadmap_lint.hexa --list   — dump entries
 //
-// rule: raw#15 — phase/track/milestone registry. required: track, phase, eta, why.
-//   status=done requires proof (raw#9 proof-carrying symmetry).
+// rule: no-hardcode — phase/track/milestone registry. required: track, phase, eta, why.
+//   status=done requires proof (proof-carrying symmetry).
 
 fn _rstrip(s: string) -> string {
     let mut end = len(s)
@@ -39,7 +39,7 @@ fn _parse_roadmap_header(line: string) -> array {
     return [id, status, name]
 }
 
-// header: `checkpoint <ID> "<name>"` — raw#15 checkpoint DSL
+// header: `checkpoint <ID> "<name>"` — no-hardcode checkpoint DSL
 //
 // Returns [id, name] on match, [] on non-match. ID is a short label
 // (`CP1`, `CP2`, `FINAL`, ...) — no status field. Name may carry the
@@ -71,7 +71,7 @@ fn _parse_checkpoint_header(line: string) -> array {
 //
 // Header dispatch by first whitespace-delimited token:
 //   `roadmap`    → rules entry (existing)
-//   `checkpoint` → checkpoint block (raw#15 DSL)
+//   `checkpoint` → checkpoint block (no-hardcode DSL)
 //   (anything else at column 0) → unrecognized header → drop current block
 fn _parse_roadmap_text(src: string) -> array {
     let lines = split(src, "\n")
@@ -247,7 +247,7 @@ fn _pwd() -> string {
     return p
 }
 
-// depends-on parsing helpers — raw#15 cross-validation
+// depends-on parsing helpers — no-hardcode cross-validation
 //
 // Accepted depends-on shapes (loose — same field holds mixed refs):
 //   "11"                         → numeric ID ref          → VERIFY existence + status
@@ -295,7 +295,7 @@ fn _find_rule(rules: array, id: string) -> array {
     return []
 }
 
-// proof path existence — raw#9 proof-carrying symmetry
+// proof path existence — proof-carrying symmetry
 //
 // proof field shapes (loose — accept real-world patterns in .roadmap):
 //   "tool/foo.hexa"                       → single path       → test -e required
@@ -345,7 +345,7 @@ fn _split_proof_tokens(val: string) -> array {
 // an inconsistent plan (cannot satisfy parent-done-before-child ordering).
 // We reuse _first_numeric_ref — only the first numeric token per depends-on is
 // currently used as an edge. TODO: extend to multi-parent (comma-split all
-// numeric tokens) once raw#15 grammar formalizes multi-dep syntax.
+// numeric tokens) once no-hardcode grammar formalizes multi-dep syntax.
 
 // Find index of id in slug array, -1 if absent.
 fn _idx_of(ids: array, id: string) -> int {
@@ -415,7 +415,7 @@ fn _cycle_walk(start_id: string, residual_ids: array, edges: array) -> array {
     return []
 }
 
-// ─── checkpoint DSL helpers (raw#15) ─────────────────────────────────
+// ─── checkpoint DSL helpers (no-hardcode) ─────────────────────────────────
 //
 // Per-entry CP references:
 //   reaches   → comma-separated CP IDs this entry contributes to when done
@@ -504,7 +504,7 @@ if list_mode {
 }
 
 if len(rules) == 0 && len(checkpoints) == 0 {
-    println("raw#15 roadmap_lint: .roadmap empty or missing — pass")
+    println("no-hardcode roadmap_lint: .roadmap empty or missing — pass")
     exit(0)
 }
 
@@ -544,7 +544,7 @@ for r in rules {
         }
     }
 
-    // proof-carrying gate — raw#9 symmetry
+    // proof-carrying gate — proof-carrying symmetry
     //
     // Trigger: either header status==done OR inner status==done (union).
     //   - present-day .roadmap uses header status exclusively, but the inner
@@ -557,7 +557,7 @@ for r in rules {
     //   - non-existent path   → FAIL "roadmap #<id> proof path missing: <path>"
     let is_done = (hdr_status == "done") || (phase_status == "done")
     if is_done {
-        // V2 DONE_PROOF_GATE — accept `proof` OR `verify` (raw#15 DSL tighten).
+        // V2 DONE_PROOF_GATE — accept `proof` OR `verify` (no-hardcode DSL tighten).
         // Existing entries use proof only; new entries may use verify <CPID>
         // instead. Error only when BOTH are absent.
         let proof_val  = _keys_first(keys, "proof").trim()
@@ -624,7 +624,7 @@ for r in rules {
         }
     }
 
-    // exit_criteria gate — raw#15 "proof vs criteria" split
+    // exit_criteria gate — no-hardcode "proof vs criteria" split
     //
     // Semantics:
     //   - proof          = where the evidence lives (path)
@@ -651,7 +651,7 @@ for r in rules {
         }
     }
 
-    // depends-on cross-validation (raw#15 — orphan detection + status gate)
+    // depends-on cross-validation (no-hardcode — orphan detection + status gate)
     //
     // Rules:
     //   a) if depends-on value starts with a numeric token, that token MUST
@@ -1020,7 +1020,7 @@ if len(checkpoints) >= 1 {
     }
 }
 
-println("── raw#15 roadmap_lint ──")
+println("── no-hardcode roadmap_lint ──")
 println("entries : " + to_string(len(rules)))
 if len(checkpoints) > 0 {
     println("checkpoints : " + to_string(len(checkpoints)))

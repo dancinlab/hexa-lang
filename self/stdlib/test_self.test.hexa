@@ -1,8 +1,8 @@
-// self/stdlib/test_self.test.hexa — framework eats own dogfood (raw 18).
+// self/stdlib/test_self.test.hexa — framework eats own dogfood (self-host fixpoint).
 //
 // Uses self/stdlib/test + self/stdlib/expect to verify the framework's
 // describe/it/expect/mock/snapshot exports work AS A USER WOULD CALL THEM.
-// This is the self-host fixpoint check (raw 18): if this file's output
+// This is the self-host fixpoint check (self-host fixpoint): if this file's output
 // summary is `__TEST_RUNNER_RESULT__ PASS`, the framework is consistent
 // under its own observation lens.
 //

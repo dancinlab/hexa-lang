@@ -1,4 +1,4 @@
-// tool/foreign_ext_sweep.hexa — raw#8 working-tree enforcer.
+// tool/foreign_ext_sweep.hexa — stage0-rename working-tree enforcer.
 //
 // Companion to tool/hexa_only_lint.hexa (which covers git-staged files only).
 // This watcher scans the working tree for NEW .py/.rs/.sh/.toml files and
@@ -26,7 +26,7 @@
 //     (macOS); see native.hexa for that roadmap. This sweep is phase-1
 //     OS-level enforcement that works without kernel capabilities.
 //
-// rule: raw#8 (HEXA-ONLY) — .rs/.toml/.py/.sh 신규 파일 금지.
+// rule: stage0-rename (HEXA-ONLY) — .rs/.toml/.py/.sh 신규 파일 금지.
 // SSOT: airgenome/rules/airgenome.json#AG10 + self/attrs/native.hexa.
 
 fn _default_root() -> string {
@@ -135,7 +135,7 @@ fn _esc(s: string) -> string {
 fn _render(hits: array, mode: string, root: string, removed: int) -> string {
     let mut s = "{\"schema\":\"hexa.foreign_ext_sweep.v1\""
     s = s + ",\"tool\":\"tool/foreign_ext_sweep.hexa\""
-    s = s + ",\"rule\":\"raw#8\""
+    s = s + ",\"rule\":\"stage0-rename\""
     s = s + ",\"rule_slug\":\"hexa-only\""
     s = s + ",\"mode\":\"" + mode + "\""
     s = s + ",\"root\":\"" + _esc(root) + "\""

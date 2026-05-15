@@ -1,12 +1,12 @@
 // tool/hx_meta_gap_proposer.hexa — Phase 6.2 meta coverage gap proposer (real-v1).
 //
 // SPEC: docs/hexa_lang_meta_evolution_proposal_20260422.md §6.2.
-// STATUS: v1 real — heuristic mining from git log + .raw-audit for
+// STATUS: v1 real — heuristic mining from git log + audit for
 //         signals suggesting a scanner is missing.
 //         Signals:
 //           - git log subject contains "workaround" / "hotfix" / "emergency"
 //             / "regression" / "sed workaround" → likely bypassed lint
-//           - .raw-audit events tagged "FORCED" / "emergency" → rule gap
+//           - audit events tagged "FORCED" / "emergency" → rule gap
 //           - recent "fix(" commits touching tool/*.hexa whose target
 //             lacks a matching scanner pattern (heuristic: filename)
 //         Correlates to gap_category and emits proposed_scanners list.
@@ -123,8 +123,8 @@ fn main() {
     let sed_fix_n    = _count_matches(subjects, "sed ")
     let revert_n     = _count_matches(subjects, "revert") + _count_matches(subjects, "Revert")
 
-    // 2. Scan .raw-audit for FORCED / emergency markers
-    let ra_path = _root() + "/.raw-audit"
+    // 2. Scan audit for FORCED / emergency markers
+    let ra_path = _root() + "/audit"
     let mut forced_n = 0
     let mut ra_emergency_n = 0
     if _exists(ra_path) {
@@ -154,12 +154,12 @@ fn main() {
     }
     if emergency_n + ra_emergency_n >= 1 {
         gaps.push("{\"category\":\"emergency_events\",\"signal_count\":" + to_string(emergency_n + ra_emergency_n)
-            + ",\"evidence\":\"git or .raw-audit contains 'emergency'\"}")
+            + ",\"evidence\":\"git or audit contains 'emergency'\"}")
         proposals.push("{\"name\":\"hx_emergency_postmortem\",\"rationale\":\"track unresolved emergency events\"}")
     }
     if forced_n >= 1 {
         gaps.push("{\"category\":\"forced_rule_bypass\",\"signal_count\":" + to_string(forced_n)
-            + ",\"evidence\":\".raw-audit contains FORCED markers — rule escapes\"}")
+            + ",\"evidence\":\"audit contains FORCED markers — rule escapes\"}")
         proposals.push("{\"name\":\"hx_forced_rule_audit\",\"rationale\":\"enumerate every FORCED event → require resolution ticket\"}")
     }
     if revert_n >= 2 {

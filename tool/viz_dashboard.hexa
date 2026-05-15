@@ -10,7 +10,7 @@
 //   aggregates entries per phase, renders ASCII progress bars, and
 //   walks the depends-on DAG to show a Day-by-Day critical path.
 //
-// raw#9 STRICT: hexa-only, deterministic, no Python, no LLM.
+// hexa-only STRICT: hexa-only, deterministic, no Python, no LLM.
 //
 // CLI
 //   hexa tool/viz_dashboard.hexa                   — full dashboard
@@ -314,7 +314,7 @@ fn _status_color_tag(st: string) -> string {
 fn render_dashboard(repos: array) -> string {
     let mut out = []
     out.push("╔═══════════════════════════════════════════════════════════════════╗\n")
-    out.push("║  ROADMAP LIVE DASHBOARD — Tier4 #27+#28+#29 (raw#9 strict)        ║\n")
+    out.push("║  ROADMAP LIVE DASHBOARD — Tier4 #27+#28+#29 (hexa-only-strict)        ║\n")
     out.push("╚═══════════════════════════════════════════════════════════════════╝\n")
 
     // Per-repo summary with progress bar

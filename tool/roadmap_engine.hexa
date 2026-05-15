@@ -1,5 +1,5 @@
 // tool/roadmap_engine.hexa — single CLI orchestrator for the hexa-native
-// roadmap engine (raw#9 hexa-only, deterministic, no LLM, no Python).
+// roadmap engine (hexa-only, deterministic, no LLM, no Python).
 //
 // BEHAVIOR (from the user directive)
 //   1. Parses 3 repo .roadmap (anima / airgenome / hexa-lang)
@@ -11,7 +11,7 @@
 //
 // SUB-TOOL COMPOSITION
 //   tool/roadmap_parse.hexa          — lossless parser
-//   tool/roadmap_validate.hexa       — raw#15 field validator
+//   tool/roadmap_validate.hexa       — no-hardcode field validator
 //   tool/roadmap_dag.hexa            — depends-on DAG + cycle check
 //   tool/roadmap_critical_path.hexa  — longest-path + span
 //   tool/roadmap_parallel.hexa       — depth → Day-by-Day groups
@@ -27,7 +27,7 @@
 //   tool/roadmap_t_star.hexa         — inf_π span(π) multi-path optimizer
 //   tool/verify_gate_dsl.hexa        — Tier3#19 gate DSL → structured JSON
 //   tool/verify_cert_linker.hexa     — Tier3#20/#25 cert ↔ gate auto-flip
-//   tool/verify_adversarial.hexa     — Tier3#21/#24 raw#12 cherry-pick immunity
+//   tool/verify_adversarial.hexa     — Tier3#21/#24 silent-error cherry-pick immunity
 //   tool/verify_meta2_chain.hexa     — Tier3#22/#23 chain integrity + audit append
 //   tool/verify_multi_path_phi.hexa  — Tier3#26 4-path Φ ≥3 + substrate invariance
 //
@@ -121,7 +121,7 @@ fn _cmd_status() -> int {
     let pr = _run_tool("roadmap_parse.hexa", "--selftest")
     if pr[1] != 0 { eprintln("parse FAIL") } else { println(to_string(pr[0])) }
 
-    _banner("2. Validate — raw#15 contract")
+    _banner("2. Validate — no-hardcode contract")
     let vr = _run_tool_capture("roadmap_validate.hexa", "--selftest")
     println(vr)
 
@@ -236,12 +236,12 @@ fn _cmd_verify_gates(repo: string) -> int {
     if r2[1] != 0 { eprintln("cert_linker FAIL") }
     println(to_string(r2[0]))
 
-    _banner("#21/#24 adversarial — raw#12 cherry-pick immunity")
+    _banner("#21/#24 adversarial — silent-error cherry-pick immunity")
     let r3 = _run_tool("verify_adversarial.hexa", "--selftest")
     if r3[1] != 0 { eprintln("adversarial FAIL") }
     println(to_string(r3[0]))
 
-    _banner("#22/#23 meta² chain integrity + raw-audit append")
+    _banner("#22/#23 meta² chain integrity + audit append")
     let r4 = _run_tool("verify_meta2_chain.hexa", "--selftest")
     if r4[1] != 0 { eprintln("meta2_chain FAIL") }
     println(to_string(r4[0]))

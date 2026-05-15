@@ -3,15 +3,15 @@
 // AI-NATIVE COMMENT BLOCK
 // ─────────────────────────────────────────────────────────────────
 // RATIONALE
-//   First of 5 vendor SDK shims (raw 91 INDEP-3) unblocking the hive
+//   First of 5 vendor SDK shims (C3 INDEP-3) unblocking the hive
 //   packages/ai/ port (112 .ts files). The hive .ts side imports
 //   `@anthropic-ai/sdk` and calls `client.messages.stream(params)`.
 //   For hexa-native parity we expose:
 //     - request-body builders (pure-hexa, deterministic)
 //     - SSE response parser (pure-hexa, deterministic)
 //     - send() fn that invokes system `curl` for the actual HTTPS
-//       call (raw 91 honest: hexa runtime has no native TLS yet —
-//       see raw 159 GAP below).
+//       call (C3 honest: hexa runtime has no native TLS yet —
+//       see no-hardcode9 GAP below).
 //
 // ENDPOINTS
 //   POST https://api.anthropic.com/v1/messages
@@ -33,7 +33,7 @@
 //   API-key bearer: env ANTHROPIC_API_KEY -> request header `x-api-key`.
 //   No SigV4 / OAuth / SDK middleware.
 //
-// CAVEATS (raw 91 honest C3)
+// CAVEATS (C3 honest C3)
 //   C1. Pure-hexa for request build + response parse. send() exec's
 //       /usr/bin/curl. Hard requirement: curl must be on PATH.
 //   C2. Streaming is NOT incremental: anthropic_send collects full
@@ -47,7 +47,7 @@
 //   C5. The fine-grained-tool-streaming / interleaved-thinking betas
 //       are passed via beta_features array — caller decides which.
 //
-// raw 159 GAP (hexa-lang upstream-proposal-mandate)
+// no-hardcode9 GAP (hexa-lang upstream-proposal-mandate)
 //   GAP-A: native HTTPS client (TLS 1.2+, HTTP/1.1+H2 fallback, SSE
 //          chunked-transfer iterator). Currently shell out to curl.
 //          Tracked as upstream proposal `rfc_010_https_client`.
@@ -70,7 +70,7 @@ use "self/stdlib/shell_escape"
 //
 // Map-key probe via the canonical JSON serialization. Avoids relying
 // on a `.has()` runtime that is not present on every hexa map type
-// (raw 91 L1 honest: `m.keys()` returns an array of strings; we walk
+// (C3 L1 honest: `m.keys()` returns an array of strings; we walk
 // it). False-positive is impossible — keys are exact strings.
 fn _has_key(d, k) -> bool {
     if type_of(d) == "void" { return false }

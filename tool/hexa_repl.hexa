@@ -20,7 +20,7 @@
 //     non-zero rc, the offending snippet is rolled back so the session
 //     remains executable.
 //
-// LIMITATIONS (raw 91 honest)
+// LIMITATIONS (C3 honest)
 //   * Evaluation is whole-buffer-replay: each line cost grows linearly
 //     with session size. Acceptable for interactive sessions but slow
 //     for long ones.

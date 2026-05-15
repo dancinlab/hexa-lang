@@ -118,12 +118,12 @@ fn sync_repo(repo_path: string, roadmap_rel: string) {
             let msg_file = "/tmp/rsync_gate_msg_" + sh("echo $$") + ".txt"
             let body = "chore(roadmap): auto-sync [" + now_iso() + "]\n\nR-ROADMAP-SYNC-L0 gate enforcement.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n"
             let _ = write_file(msg_file, body)
-            // raw 176 (2026-04-29): direct `git commit` retire candidate.
+            // convergence-add6 (2026-04-29): direct `git commit` retire candidate.
             // hexa-commit canonical CLI exists at hexa-lang/bin/hexa-commit but
             // current call site uses -F <msg-file> + -- <path> scope which the
             // bin does not yet expose; deferred to follow-up that extends the
             // bin with --message-file + --pathspec flags. For now, retain the
-            // direct invocation but tag with raw 176 deprecation marker so
+            // direct invocation but tag with convergence-add6 deprecation marker so
             // future audit can locate.
             // @raw176-deprecated-direct-invocation reason=bin-needs-msg-file-and-pathspec-flags
             let commit_out = sh("cd " + repo_path + " && HEXA_COMMIT_OK=1 git commit -F " + msg_file + " -- " + roadmap_rel + " 2>&1")

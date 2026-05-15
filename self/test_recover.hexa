@@ -7,7 +7,7 @@
 
 use "self/stdlib/law_io"
 
-// 2026-04-25 raw 44: prefer bare dispatcher (test runs build artifacts).
+// 2026-04-25 docker-hard-landing: prefer bare dispatcher (test runs build artifacts).
 let HEXA = if file_exists("./build/hexa.real") { "./build/hexa.real" } else { "./hexa" }
 let SELF_DIR = "self"
 let TMP_DIR = "/tmp/hexa_recover_test"

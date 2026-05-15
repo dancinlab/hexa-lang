@@ -1138,7 +1138,7 @@ fn extern_type_to_c(t) {
     if t == "ptr_Void" || t == "ptr_void" { return "void*" }
     if t.substring(0, 4) == "ptr_" { return "void*" }
     if t == "Void" || t == "void" || t == "" { return "void" }
-    // Fallback: treat as long (raw 64-bit word, works for ints and pointers)
+    // Fallback: treat as long (follow-up-bit word, works for ints and pointers)
     return "long"
 }
 

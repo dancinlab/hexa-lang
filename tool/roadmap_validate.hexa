@@ -2,7 +2,7 @@
 //
 // PURPOSE
 //   Validates required/standard fields on each roadmap entry. Enforces
-//   raw#15 field contract (track, phase, eta, why) + raw#10 proof-carrying
+//   no-hardcode field contract (track, phase, eta, why) + proof-carrying
 //   symmetry (done → proof must exist; exit_criteria highly recommended).
 //
 // RULES
@@ -32,7 +32,7 @@ fn _rstrip(s: string) -> string {
 }
 
 // pull in parser via exec hop (keep module boundary clean): re-declare the
-// minimal parser here. Duplication is accepted (raw#9 hexa-only, no hexa
+// minimal parser here. Duplication is accepted (hexa-only, no hexa
 // module system resolution from arbitrary CWD).
 fn _parse_hdr_roadmap(line: string) -> array {
     let sp1 = line.index_of(" ")

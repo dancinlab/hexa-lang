@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="hxc-a15-nested-subschema", desc="HXC algorithm A15: nested-array subschema dedup. Detects column values matching JSON array-of-objects pattern [{k1:v1,...},{k1:v1,...}] where inner objects share keys. Emits keys-once declaration + replaces each object with (v1|v2|...) tuple. Targets triad_audit/audit.jsonl violations[] residual after A4 identical-subtree dedup (similar-shape vs byte-identical orthogonal axes). Pure-hexa raw 9.")
+// @tool(slug="hxc-a15-nested-subschema", desc="HXC algorithm A15: nested-array subschema dedup. Detects column values matching JSON array-of-objects pattern [{k1:v1,...},{k1:v1,...}] where inner objects share keys. Emits keys-once declaration + replaces each object with (v1|v2|...) tuple. Targets triad_audit/audit.jsonl violations[] residual after A4 identical-subtree dedup (similar-shape vs byte-identical orthogonal axes). Pure-hexa hexa-only.")
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a15_nested_subschema.hexa --selftest)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a15_nested_subschema.hexa encode <hxc.in> <hxc.out>)
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a15_nested_subschema.hexa decode <hxc.in> <hxc.out>)
@@ -24,11 +24,11 @@
 //   PASS 3 (decode): parse `# subschema:` headers into per-schema map.
 //     For `^[...]` cells, split by `;`, re-expand tuples to objects.
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //   - encode(decode(x)) == x for any A15 stream
 //   - decode(encode(y)) == y for any HXC v1 stream
 //
-// Falsifiers (raw 71):
+// Falsifiers (falsifier):
 //   F-A15-1: saving < 0.05 byte-eq → reject (need amortization).
 //   F-A15-2: encode/decode round-trip not byte-eq → reject.
 //   F-A15-3: detect false-positive on non-array-of-objects → reject.
@@ -594,7 +594,7 @@ fn a15_decode(v2_text: string) -> string {
         // Bug 3 fix (latent): "# tree-subschema:" is 17 chars, not 18.
         //   Previous len>=18 + substring(0,18) compared against the 17-char
         //   literal -> always FALSE -> tree-subschema decoder dead code.
-        // Use .starts_with() to avoid magic numbers (raw 9 + Bug 3 verdict rec).
+        // Use .starts_with() to avoid magic numbers (hexa-only + Bug 3 verdict rec).
         if l.starts_with("# tree-subschema:") {
             let after = l.substring(len("# tree-subschema:"), len(l)).trim()
             let sp = after.find(" ")

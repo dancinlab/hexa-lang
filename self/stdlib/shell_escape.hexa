@@ -9,7 +9,7 @@
 //  EVIDENCE / MOTIVATION
 //    36+ tools across hive/anima/nexus reimplemented an identical
 //    `_shell_escape` local helper because no canonical stdlib fn
-//    existed. ω-cycle 2026-04-27 (raw 91 honest disclosure):
+//    existed. ω-cycle 2026-04-27 (C3 honest disclosure):
 //    duplication count = 36, all bytewise identical (verified
 //    `grep -A 10 "fn _shell_escape" | sort -u` yields ONE form).
 //

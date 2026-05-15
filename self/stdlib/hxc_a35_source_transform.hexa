@@ -1,13 +1,13 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native HXC source-transform pipeline (A35 v2 — Stage 1+2+3 activation, in-place modification of v1 module, sigil ^o unchanged)")
-// @tool(slug="hxc-a35-source-transform", desc="HXC algorithm A35 v2: source-level transformation BEFORE byte-stream compression. Per design doc /Users/ghost/core/anima/docs/hxc_a35_v2_stage_2_3_activation_2026-04-29.md (predecessor: hxc_a35_source_transform_design_2026-04-28.md). Schema-aware column reorder (Stage 1) + integer delta varint (Stage 2 ACTIVE) + dictionary tokenization (Stage 3 ACTIVE) for schemaful jsonl; identity passthrough for schemafree input (raw 142 D2 try-and-revert). Per-column try-revert: each column picks shortest of literal / DELTA / DICT. raw 156 placement-axis: pre-A1-raw (NEW axis distinct from A19/A29/A33 byte-stream stack). raw 91 honest C3 STRICT: scope is mechanism + 9-fixture selftest only; corpus-scale saving NOT measured. PASS 1+2+3 (design+code+selftest) IN-SCOPE; PASS 4 LIVE FIRE DEFERRED. Sigil ^o (lowercase, raw 92 sigil-line, distinct from ^A..^Z, ^c, ^v/^w, ^Z). Wire version v=src-xform-v2 — v1 readers MUST identity-revert (forward-incompat by design).")
+// @tool(slug="hxc-a35-source-transform", desc="HXC algorithm A35 v2: source-level transformation BEFORE byte-stream compression. Per design doc /Users/ghost/core/anima/docs/hxc_a35_v2_stage_2_3_activation_2026-04-29.md (predecessor: hxc_a35_source_transform_design_2026-04-28.md). Schema-aware column reorder (Stage 1) + integer delta varint (Stage 2 ACTIVE) + dictionary tokenization (Stage 3 ACTIVE) for schemaful jsonl; identity passthrough for schemafree input (magic-number2 D2 try-and-revert). Per-column try-revert: each column picks shortest of literal / DELTA / DICT. no-hardcode6 placement-axis: pre-A1-raw (NEW axis distinct from A19/A29/A33 byte-stream stack). C3 honest C3 STRICT: scope is mechanism + 9-fixture selftest only; corpus-scale saving NOT measured. PASS 1+2+3 (design+code+selftest) IN-SCOPE; PASS 4 LIVE FIRE DEFERRED. Sigil ^o (lowercase, module-loader-fatal sigil-line, distinct from ^A..^Z, ^c, ^v/^w, ^Z). Wire version v=src-xform-v2 — v1 readers MUST identity-revert (forward-incompat by design).")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a35_source_transform.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a35_source_transform.hexa encode <in> <out>)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a35_source_transform.hexa decode <in> <out>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args, 4=decode-mismatch)
 //
-// v2 scope (raw 91 honest C3 STRICT) — Stage 2 + Stage 3 activation:
+// v2 scope (C3 honest C3 STRICT) — Stage 2 + Stage 3 activation:
 //
 //   PASS 1 — design delta doc + falsifier preregister
 //     See doc /Users/ghost/core/anima/docs/hxc_a35_v2_stage_2_3_activation_2026-04-29.md.
@@ -36,7 +36,7 @@
 //     F2 schemaful 5-line field-order var  → Stage 1 build bails, identity revert
 //     F3 single-line jsonl                 → SCHEMAFREE, identity passthrough
 //     F4 random ASCII text                 → SCHEMAFREE, identity (F-A35-V2-4 guard)
-//     F5 round-trip byte-eq on F1..F4 (raw 65/68 idempotent)
+//     F5 round-trip byte-eq on F1..F4 (idempotency/68 idempotent)
 //     F6 10-line jsonl monotonic int col   → Stage 2 trigger, delta wire
 //     F7 10-line jsonl enum field          → Stage 3 trigger, dict wire
 //     F8 10-line jsonl with "1.5" string   → Stage 2 reject (locale safety hold)
@@ -44,32 +44,32 @@
 //
 //   PASS 4 — LIVE FIRE 6-repo + n6 measurement DEFERRED to subsequent tick.
 //
-// Falsifier preregister (raw 71, mirrored from v2 design doc §4):
-//   F-A35-V2-1: round-trip byte-eq fail on any 9/9 fixture     → reject A35 v2 (raw 65/68)
+// Falsifier preregister (falsifier, mirrored from v2 design doc §4):
+//   F-A35-V2-1: round-trip byte-eq fail on any 9/9 fixture     → reject A35 v2 (idempotency/68)
 //   F-A35-V2-2: v2 < v1 saving on schemaful F1 (must lift)     → reject Stage 2/3 activation
-//   F-A35-V2-3: encoder peak RSS > 100MB on 79KB               → reject A35 v2 (raw 42)
+//   F-A35-V2-3: encoder peak RSS > 100MB on 79KB               → reject A35 v2 (follow-up)
 //   F-A35-V2-4: schema detector false-positive on random text   → reject detector
-//   F-A35-V2-5: encode(encode(x)) ≠ encode(x) idempotency loss → reject A35 v2 (raw 65/68)
-//   F-A35-V2-6: raw 18 self-host AOT byte-identical fail        → honest C3 if sandbox blocker
+//   F-A35-V2-5: encode(encode(x)) ≠ encode(x) idempotency loss → reject A35 v2 (idempotency/68)
+//   F-A35-V2-6: self-host fixpoint self-host AOT byte-identical fail        → honest C3 if sandbox blocker
 //
-// raw 137 cmix-ban compliance:
+// ai-config-ban7 cmix-ban compliance:
 //     A35 = deterministic source-level rewrite. Pure integer arithmetic, no
 //     fp ops, no neural mixer, no non-deterministic similarity. encode + decode
-//     deterministic (raw 65/68 idempotent: same input → same encoded wire).
+//     deterministic (idempotency/68 idempotent: same input → same encoded wire).
 //
-// raw 156 placement axis:
+// no-hardcode6 placement axis:
 //     A35 = pre-A1-raw (NEW axis). Strictly distinct from:
 //       A8/A11/A20  — post-A1 byte-stream restructure (same byte stream, different layout)
 //       A19/A29/A33 — byte-stream compression (after the bytes are emitted)
 //     A35 emits a DIFFERENT byte stream for downstream chain to see.
 //
-// raw 142 D2 try-and-revert contract:
+// magic-number2 D2 try-and-revert contract:
 //     a35_encode(x) returns wire ONLY IF len(wire) < len(x). Otherwise returns
 //     x unchanged (identity passthrough — no header overhead, no harm to
 //     schemafree input). schema detector + try-revert together guarantee
 //     A35 never inflates input beyond a constant detection cost.
 //
-// NON-OVERLAP CONTRACT (raw 142 D2 sister-module distinction):
+// NON-OVERLAP CONTRACT (magic-number2 D2 sister-module distinction):
 //     A19 cross-file dict       — byte-stream dict, post-A1
 //     A20 schema-aware BPE      — byte-stream BPE on schema keys, post-A1
 //     A29 dynamic Huffman       — byte-stream entropy coder, post-A1
@@ -79,12 +79,12 @@
 //     Sigil ^o LOWERCASE distinct from all uppercase ^A..^Z and lowercase ^c/^v/^w.
 
 const A35_MIN_LINES = 2                  // schema_detect minimum lines
-const A35_TOKEN_DICT_MAX = 64            // Stage 3 dict cap (raw 91: keep small for first tick)
+const A35_TOKEN_DICT_MAX = 64            // Stage 3 dict cap (C3: keep small for first tick)
 const A35_TOKEN_DICT_RATIO_X100 = 10     // distinct ≤ 10% of rows triggers token
 const A35_DELTA_MONOTONIC_X100 = 70      // Stage 2: 70% small-delta entries trigger varint
-const A35_MIN_BYTES = 64                 // sub-MIN identity passthrough (raw 65 idempotent)
+const A35_MIN_BYTES = 64                 // sub-MIN identity passthrough (idempotency idempotent)
 
-// Wire sigil (raw 92 sigil-line compliant; lowercase ^o distinct from ^A..^Z and ^c/^v/^w/^Z).
+// Wire sigil (module-loader-fatal sigil-line compliant; lowercase ^o distinct from ^A..^Z and ^c/^v/^w/^Z).
 const A35_SIGIL = "^o"
 const A35_HEADER_PREFIX = "# a35:s1 v=src-xform-v2"
 
@@ -132,7 +132,7 @@ fn _ord_at(s: string, i: int) -> int {
 //   4. F-A35-6 false-positive guard: if any sampled line fails JSON-shape parse,
 //      hard-route to SCHEMAFREE.
 //
-// raw 91 honest C3: this is a HEURISTIC. PASS 4 LIVE FIRE will replace with a
+// C3 honest C3: this is a HEURISTIC. PASS 4 LIVE FIRE will replace with a
 // stricter parser if F-A35-6 trips on real corpus inputs. First-tick scope:
 // 5-fixture selftest validates synthetic shapes only.
 
@@ -466,7 +466,7 @@ fn _stage3_distinct(col: array) -> array {
         if v.index_of(A35_DICT_TABLE_SEP) >= 0 { return [] }
         if v.index_of(A35_S23_ROW_SEP) >= 0 { return [] }
         if v.index_of(A35_COL_SEP) >= 0 { return [] }
-        // Membership check (linear; first-tick scope, raw 91 honest).
+        // Membership check (linear; first-tick scope, C3 honest).
         let mut found: bool = false
         let mut k: i64 = 0
         while k < len(dict) {
@@ -542,7 +542,7 @@ fn _stage3_decode_col(body: string) -> array {
     return out
 }
 
-// Per-column emit: pick shortest of literal / DELTA / DICT (raw 142 D2 per-column).
+// Per-column emit: pick shortest of literal / DELTA / DICT (magic-number2 D2 per-column).
 // Returns the column body string AFTER `=` (caller prepends "C<idx>=").
 // May return literal even when Stage 2/3 are eligible if literal is shorter.
 fn _emit_col_body(col: array) -> string {
@@ -605,13 +605,13 @@ fn _stage1_wire(stage1: array) -> string {
 // ───────────────── PASS 2: encoder ─────────────────
 //
 // a35_encode(s) decision tree:
-//   1. If len(s) < A35_MIN_BYTES → identity passthrough (raw 65 idempotent floor).
+//   1. If len(s) < A35_MIN_BYTES → identity passthrough (idempotency idempotent floor).
 //   2. mode = schema_detect(s).
 //   3. If mode == SCHEMA_FREE → identity passthrough (no header, no harm).
 //   4. Else: Stage 1 build. If bail (key-order variance, parse failure) → identity.
 //   5. Stage 1 wire emit. If bail (separator in values) → identity.
 //   6. Stage 2 + 3 hooks (no-op first tick).
-//   7. Compute saving = len(s) − len(header + body). If saving ≤ 0 → identity (raw 142 D2 try-revert).
+//   7. Compute saving = len(s) − len(header + body). If saving ≤ 0 → identity (magic-number2 D2 try-revert).
 //   8. Else: emit `# a35:s1 v=src-xform-v1 n=<bytes> mode=schemaful cols=<C> rows=<R>\n^o<body>\n`.
 
 fn _a35_encode_schemaful(s: string) -> string {
@@ -633,8 +633,8 @@ fn _a35_encode_schemaful(s: string) -> string {
 
 fn _a35_encode_force(s: string) -> string {
     // Force schemaful path even if wire would be larger (used by selftest to
-    // exercise the full transform pipeline regardless of size). raw 91 honest:
-    // production a35_encode below applies raw 142 D2 try-revert; force path
+    // exercise the full transform pipeline regardless of size). C3 honest:
+    // production a35_encode below applies magic-number2 D2 try-revert; force path
     // bypasses for selftest mechanism validation.
     let mode = schema_detect(s)
     if mode != A35_SCHEMAFUL_JSONL { return s }
@@ -647,7 +647,7 @@ fn a35_encode(s: string) -> string {
     let mode = schema_detect(s)
     if mode == A35_SCHEMA_FREE { return s }
     let wire = _a35_encode_schemaful(s)
-    if len(wire) >= n { return s }   // raw 142 D2 try-revert
+    if len(wire) >= n { return s }   // magic-number2 D2 try-revert
     return wire
 }
 
@@ -872,14 +872,14 @@ fn _selftest() -> int {
                 + " → F-A35-6 TRIPPED — schema detector false positive on random text")
     }
 
-    // ─── Fixture 5: aggregate round-trip byte-eq on all 4 (raw 65/68) ───
+    // ─── Fixture 5: aggregate round-trip byte-eq on all 4 (idempotency/68) ───
     let r1: bool = (a35_decode(_a35_encode_force(f1)) == f1)
     let r2: bool = (a35_decode(a35_encode(f2)) == f2)
     let r3: bool = (a35_decode(a35_encode(f3)) == f3)
     let r4: bool = (a35_decode(a35_encode(f4)) == f4)
     if r1 && r2 && r3 && r4 {
         pass = pass + 1
-        println("  PASS: F5 aggregate round-trip byte-eq 4/4 (raw 65/68 idempotent)")
+        println("  PASS: F5 aggregate round-trip byte-eq 4/4 (idempotency/68 idempotent)")
     } else {
         fail = fail + 1
         println("  FAIL: F5 aggregate round-trip r1=" + to_string(r1)
@@ -981,13 +981,13 @@ fn _selftest() -> int {
                 + " → F-A35-V2-1 / locale safety TRIPPED")
     }
 
-    // ─── Fixture 9: aggregate round-trip on F6+F7+F8 (raw 65/68) ───
+    // ─── Fixture 9: aggregate round-trip on F6+F7+F8 (idempotency/68) ───
     let r6: bool = (a35_decode(_a35_encode_force(f6)) == f6)
     let r7: bool = (a35_decode(_a35_encode_force(f7)) == f7)
     let r8: bool = (a35_decode(_a35_encode_force(f8)) == f8)
     if r6 && r7 && r8 {
         pass = pass + 1
-        println("  PASS: F9 aggregate round-trip byte-eq 3/3 (F6/F7/F8 raw 65/68)")
+        println("  PASS: F9 aggregate round-trip byte-eq 3/3 (F6/F7/F8 idempotency/68)")
     } else {
         fail = fail + 1
         println("  FAIL: F9 aggregate round-trip r6=" + to_string(r6)
@@ -996,15 +996,15 @@ fn _selftest() -> int {
                 + " → F-A35-V2-1 TRIPPED")
     }
 
-    // ─── Bonus: encoder idempotency (raw 65/68) ───
+    // ─── Bonus: encoder idempotency (idempotency/68) ───
     let bonus_a = _a35_encode_force(f1)
     let bonus_b = _a35_encode_force(f1)
     if bonus_a == bonus_b {
         pass = pass + 1
-        println("  PASS: encoder idempotency (encode twice = byte-eq) raw 65/68 verified")
+        println("  PASS: encoder idempotency (encode twice = byte-eq) idempotency/68 verified")
     } else {
         fail = fail + 1
-        println("  FAIL: encoder NON-idempotent (encode twice differs) → raw 65/68 TRIPPED")
+        println("  FAIL: encoder NON-idempotent (encode twice differs) → idempotency/68 TRIPPED")
     }
 
     // ─── Bonus 2: F-A35-V2-5 encode×2 = encode×1 on schemaful F1 ───
@@ -1016,10 +1016,10 @@ fn _selftest() -> int {
     // schema_detect returns SCHEMA_FREE → identity.
     if enc1_twice == enc1_once {
         pass = pass + 1
-        println("  PASS: F-A35-V2-5 encode(encode(F1)) == encode(F1) (raw 65/68 idempotent)")
+        println("  PASS: F-A35-V2-5 encode(encode(F1)) == encode(F1) (idempotency/68 idempotent)")
     } else {
         fail = fail + 1
-        println("  FAIL: F-A35-V2-5 encode(encode(F1)) != encode(F1) → raw 65/68 TRIPPED")
+        println("  FAIL: F-A35-V2-5 encode(encode(F1)) != encode(F1) → idempotency/68 TRIPPED")
     }
 
     println("Results: " + to_string(pass) + " PASS / " + to_string(fail) + " FAIL")

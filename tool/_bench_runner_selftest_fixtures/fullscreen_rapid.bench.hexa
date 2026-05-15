@@ -8,7 +8,7 @@
 // Prior in-process ns-bench (commits fca43e81 + 1e878482 Mac arm64):
 //   p50 0.158ms → 109× over Ink.
 //
-// raw 91 C3: 100-iter inner loop is dominated by the 1920-cell initial paint.
+// C3: 100-iter inner loop is dominated by the 1920-cell initial paint.
 // The "rapid" semantic at v0 (ms-amortized) is partially obscured; the
 // in-process ns-bench remains the canonical signal for this metric.
 

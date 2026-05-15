@@ -5,12 +5,12 @@
 //   .toBe(x), .toEqual(x), .toContain(x), .toThrow(), .toBeDefined(),
 //   .toMatch(re).
 //
-// raw 9  (pure-hexa):     external libs = 0. Builtins only.
-// raw 18 (self-host fixpoint): zero new builtins.
-// raw 91 (no_silent_errors): every assert that fails calls
+// hexa-only (pure):     external libs = 0. Builtins only.
+// self-host fixpoint (self-host fixpoint): zero new builtins.
+// C3 (no_silent_errors): every assert that fails calls
 //   test_record_failure(msg) on test.hexa — the runner's verdict line is
 //   never silent. Bare expect() (outside it()) eprintln+exit(1).
-// raw 159 (hexa-lang-upstream-proposal-mandate): hive's *.test.hexa ports
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): hive's *.test.hexa ports
 //   `use "self/stdlib/expect"` and never re-implement matchers.
 //
 // ── Why two API surfaces (chained + flat) ────────────────────────────
@@ -38,7 +38,7 @@
 // Both record the failure via test.hexa's test_record_failure(msg) so
 // the runner picks them up uniformly.
 //
-// ── Known gaps (raw 91 honest) ───────────────────────────────────────
+// ── Known gaps (C3 honest) ───────────────────────────────────────
 //   G1. `.toThrow()` requires the runtime to support catchable errors;
 //       on this interp many failures eprintln+exit. We approximate via
 //       `assert_throws(body_fn)` which scans for a sentinel side-effect
@@ -76,7 +76,7 @@ fn _expect_format(v) {
 
 // Deep equality for hexa-native nested structures (arrays, primitive
 // values, strings). Falls back to `==` when both sides are scalars.
-// raw 91: documented limit — does NOT recurse into map/object fields
+// C3: documented limit — does NOT recurse into map/object fields
 // generically (would need keys() iteration which this interp exposes
 // inconsistently). Most hive archive uses are array/scalar deep-eq.
 // decreases a — structural

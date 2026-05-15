@@ -1,6 +1,6 @@
 // self/stdlib/law_io.hexa — Layer 1 of 3-layer law enforcement (#38 + #39)
 // Stdlib gate: every write routed through this module is checked against
-// the raw SSOT (/.raw L0 + /.own L1) + tool/ai_native_scan
+// the legacy SSOT + tool/ai_native_scan
 // before the byte hits the filesystem.
 // NOTE (raw-migration 2026-04-19): legacy shared/hexa-lang/raw.json 대체,
 //   파서는 self/raw_loader.hexa (hexa-directive 포맷).
@@ -55,7 +55,7 @@ fn _law_raw7_extension_ban(path: string) -> string {
         if len(path) > len(ext) {
             let tail = path.substring(len(path) - len(ext), len(path))
             if tail == ext {
-                return "raw#7 HEXA-ONLY: write to `" + ext + "` blocked (path=" + path + ")"
+                return "HEXA-ONLY: write to `" + ext + "` blocked (path=" + path + ")"
             }
         }
         i = i + 1
@@ -74,7 +74,7 @@ fn _law_raw6_temp_suffix(path: string) -> string {
         if len(path) > len(s) {
             let tail = path.substring(len(path) - len(s), len(path))
             if tail == s {
-                return "raw#6 filename temp-suffix: `" + s + "` blocked (path=" + path + ")"
+                return "filename temp-suffix: `" + s + "` blocked (path=" + path + ")"
             }
         }
         i = i + 1
@@ -141,7 +141,7 @@ pub fn safe_exec(cmd: string) -> int {
     let mut i = 0
     while i < len(bad) {
         if cmd.contains(bad[i]) {
-            eprintln("❌ [law_io] safe_exec refused: raw#7 forbidden extension in cmd=" + cmd)
+            eprintln("❌ [law_io] safe_exec refused: forbidden extension in cmd=" + cmd)
             exit(1)
         }
         i = i + 1

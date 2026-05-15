@@ -1,5 +1,5 @@
 #!hexa strict
-// tool/llm_verdict_watcher.hexa — L2 launchd watcher for raw 32 / own 4
+// tool/llm_verdict_watcher.hexa — L2 launchd watcher for attr-usage2 / own 4
 //
 // [retired 2026-04-25] producer (airgenome/hooks/post_tool.hexa) 폐기 — queue
 // $AIRGENOME_HOOK_ROOT/.hook-verdict-queue.jsonl no longer populated. Watcher

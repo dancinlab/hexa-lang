@@ -1,8 +1,8 @@
 // tool/verify_adversarial.hexa — Tier3#21 + #24:
-//   adversarial test runner (raw#12 cherry-pick immunity) + 3/3 flip.
+//   adversarial test runner (silent-error cherry-pick immunity) + 3/3 flip.
 //
 // PURPOSE
-//   raw#12 forbids cherry-picking evidence to fit a desired verdict.
+//   silent-error forbids cherry-picking evidence to fit a desired verdict.
 //   Property-test the verification pipeline by:
 //     1. Taking a cert (e.g., cell-hexad-closure.json) whose "evidence"
 //        array carries N fields.
@@ -252,7 +252,7 @@ fn _selftest() -> int {
     println("    canonical=" + ra[2].substring(0, 16) + "...")
     println("  mk8_stationary:   " + rb[1])
     println("    canonical=" + rb[2].substring(0, 16) + "...")
-    println("  verdict: 3/3 seed-shuffle → canonical invariant (raw#12 compliant)")
+    println("  verdict: 3/3 seed-shuffle → canonical invariant (silent-error compliant)")
     return 0
 }
 
@@ -261,8 +261,8 @@ fn _cmd_cert(path: string) -> int {
     println("cert=" + path)
     println("  " + r[1])
     println("  canonical_sha=" + r[2])
-    if r[0] { println("  IMMUNE (raw#12 PASS)"); return 0 }
-    eprintln("  CHERRY-PICK RISK (raw#12 FAIL)")
+    if r[0] { println("  IMMUNE (silent-error PASS)"); return 0 }
+    eprintln("  CHERRY-PICK RISK (silent-error FAIL)")
     return 1
 }
 

@@ -1,5 +1,5 @@
 #!hexa strict
-// tool/chain_runner.hexa — raw#0 forward-chain engine (OS-level enforced)
+// tool/chain_runner.hexa — forward-chain engine (OS-level enforced)
 //
 // PURPOSE
 //   Read the /.chain SSOT, execute requested step, and auto-cascade the
@@ -25,7 +25,7 @@
 //
 //   ./hexa tool/chain_runner.hexa reset <chain_id> --reason "<text>"
 //         unlock + remove every marker for the chain; requires reason;
-//         writes a chain-reset line to .raw-audit.
+//         writes a chain-reset line to audit.
 //
 // FLOW (run)
 //   1. load /.chain → find chain by id → parse steps (in decl order)
@@ -53,7 +53,7 @@
 //   3 — BLOCKED (strict prev-guard: required prior markers missing)
 
 use "self/stdlib/law_io"
-use "self/raw_loader"
+use "self/legacy_loader"
 use "tool/raw_audit"
 // ─── env helpers ─────────────────────────────────────────────────
 
@@ -246,7 +246,7 @@ fn _write_marker(chain_id: string, step_id: string, exit_code: int,
                "exit_code=" + to_string(exit_code) + "\n" +
                "cmd=" + cmd + "\n" +
                "ttl=" + ttl + "\n"
-    // law_io-gated write: goes through raw#7 probe. Markers live under
+    // law_io-gated write: goes through OS-level probe. Markers live under
     // .chain-state/ which is NOT one of the banned extensions, so this
     // is a safe write path.
     safe_write_file(path, body)

@@ -112,7 +112,7 @@ fn main() {
         if !_has_main(path) { continue }
         with_main = with_main + 1
         // Policy exemption: files carrying the macOS `uchg` immutability flag
-        // are raw#0-attested SSOT — modifying them requires the hx_unlock
+        // are SSOT-attested SSOT — modifying them requires the hx_unlock
         // ceremony. uchg files WITHOUT a selftest marker are counted as
         // "exempt" (impossible to cover without breaking attestations).
         // uchg files WITH a selftest marker (added via ceremony) count

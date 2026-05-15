@@ -3,13 +3,13 @@
 // Resolves part of hive blocker `goal_hexa_native_fs_stdlib`. Mirrors
 // the subset of node:path used by `scripts/install-extensions.mjs`
 // and the rest of the hive .mjs surface: join / resolve / dirname /
-// basename. Pure hexa (raw 9 hexa-only): zero exec(), zero external
+// basename. Pure hexa (hexa-only): zero exec(), zero external
 // libs — string manipulation only.
 //
 // Semantics: POSIX (forward-slash). Windows separators are NOT
 // supported — this matches the hive runtime target (Mac + Linux).
 //
-// raw 159 (hexa-lang-upstream-proposal-mandate):
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate):
 //   This module is the upstream-of-truth for hive's path ops. hive
 //   ports `use "self/stdlib/path"` and never re-implements these.
 //
@@ -227,25 +227,25 @@ fn path_basename(p) {
 // RFC-008 Form A — project-relative Python interpreter resolution.
 //
 // Returns absolute path to the project's Python interpreter using a
-// 4-step fallback chain (raw 10 fail-loud at the last step):
+// 4-step fallback chain (honest-caveat fail-loud at the last step):
 //   1. <project_root>/.venv-eeg/bin/python   (anima-eeg pattern)
 //   2. <project_root>/.venv/bin/python       (Python venv standard)
 //   3. ENV ANIMA_EEG_VENV_PYTHON or PROJECT_PYTHON  (explicit override)
-//   4. "python3"                             (last resort + raw 10 stderr warn)
+//   4. "python3"                             (last resort + honest-caveat stderr warn)
 //
 // Step 1 is preferred because anima-eeg pinned BrainFlow to .venv-eeg,
 // distinct from .venv to avoid clash with project-wide Python venvs.
 //
-// raw 91 (no_silent_errors): step 4 emits an honest warning to stderr
+// C3 (no_silent_errors): step 4 emits an honest warning to stderr
 // noting that no project-local interpreter was found — the warning is
 // the load-bearing safety net for the system-python fallback (see
 // rfc_008 falsifier).
 //
-// raw 65 (idempotent): pure resolution; no side effects beyond the
-// raw 10 stderr warn on step 4. Repeated calls with the same input
+// idempotency (idempotent): pure resolution; no side effects beyond the
+// honest-caveat stderr warn on step 4. Repeated calls with the same input
 // yield the same output.
 //
-// raw 159: this is the upstream-of-truth for project-relative helper
+// no-hardcode9: this is the upstream-of-truth for project-relative helper
 // invocation. anima-eeg helpers (LZ76, eeg_recorder, board_health_check,
 // the B11 dispatcher family) should call project_python(...) instead
 // of hard-coding ".venv-eeg/bin/python".
@@ -287,9 +287,9 @@ fn project_python(project_root) {
     }
 
     // Step 4 — last resort: bare "python3" via PATH lookup.
-    // raw 10 honest-warning: caller has no project-local interpreter
+    // honest-caveat honest-warning: caller has no project-local interpreter
     // pinned, dependencies (e.g. brainflow) may be missing.
-    eprintln("project_python: no project-local interpreter found at " + r + "/.venv-eeg/bin/python or " + r + "/.venv/bin/python (env ANIMA_EEG_VENV_PYTHON / PROJECT_PYTHON unset); falling back to system python3 — dependencies pinned to a venv may be missing (raw 10)")
+    eprintln("project_python: no project-local interpreter found at " + r + "/.venv-eeg/bin/python or " + r + "/.venv/bin/python (env ANIMA_EEG_VENV_PYTHON / PROJECT_PYTHON unset); falling back to system python3 — dependencies pinned to a venv may be missing (honest-caveat)")
     return "python3"
 }
 
@@ -452,7 +452,7 @@ fn _path_selftest() {
     // 24. No venv, no env override → "python3" (last-resort fallback)
     //     We cannot easily test the env override in-process without
     //     a setenv builtin, so we exercise the fallback-4 path here
-    //     and rely on raw 10 stderr emission as the load-bearing
+    //     and rely on honest-caveat stderr emission as the load-bearing
     //     warning surface (verified by eyeballing stderr).
     n = n + 1
     let r4 = scratch + "/r4"
@@ -463,7 +463,7 @@ fn _path_selftest() {
         fail = fail + 1
     }
 
-    // 25. Trailing-slash root is normalized (idempotent — raw 65)
+    // 25. Trailing-slash root is normalized (idempotent — idempotency)
     n = n + 1
     let pp5 = project_python(r1 + "/")
     if pp5 != want1 {

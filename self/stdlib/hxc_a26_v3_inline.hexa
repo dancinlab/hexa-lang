@@ -1,12 +1,12 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native HXC sparse PPM-D v3 inline-buffer pipeline (A26 v3 first tick — F-A26-V2-4 production gate resolution attempt)")
-// @tool(slug="hxc-a26-v3-inline", desc="HXC algorithm A26 v3: deeper bounded-memory sparse PPM-D order-2 with Howard 1993 escape e_d=0.25 and INLINE FREQ BUFFER (single flat array allocation, no per-row hexa array allocation). Implements the a4019561 retraction recommendation: A26_CTX_LIMIT_v3=1024 (4x smaller than v2 4096), A26_MAX_ORDER_v3=2 (orders 0..2 only, dropping 3), and INLINE FLAT ARRAY [ctx_count × 256 × i32 + ctx_count × i32] upfront — bypasses per-row hexa array allocation that was the residual O(n²)-equivalent allocator pressure in v2. Sigil ^\\ (post-A24 v2 ^[, A26 v2 ^Y — NEW sigil). FIRST-TICK SCOPE: PASS 1 (spec) + PASS 2 (a26v3_build with deterministic FNV-1a hashing on inline buffer) + PASS 2.5 (a26v3_lookup + a26v3_estimate_bits) + PASS 3 (5 selftests + 4 memory probes). PASS 4 LIVE FIRE 6-repo measurement DEFERRED to subsequent tick per raw 91 honest C3. raw 137 cmix-ban MAINTAINED: deterministic integer FNV-1a + integer Howard-D escape e_d=0.25 (e_num=1, e_den=4 from F-A26-6 sweep), NOT cmix-class.")
+// @tool(slug="hxc-a26-v3-inline", desc="HXC algorithm A26 v3: deeper bounded-memory sparse PPM-D order-2 with Howard 1993 escape e_d=0.25 and INLINE FREQ BUFFER (single flat array allocation, no per-row hexa array allocation). Implements the a4019561 retraction recommendation: A26_CTX_LIMIT_v3=1024 (4x smaller than v2 4096), A26_MAX_ORDER_v3=2 (orders 0..2 only, dropping 3), and INLINE FLAT ARRAY [ctx_count × 256 × i32 + ctx_count × i32] upfront — bypasses per-row hexa array allocation that was the residual O(n²)-equivalent allocator pressure in v2. Sigil ^\\ (post-A24 v2 ^[, A26 v2 ^Y — NEW sigil). FIRST-TICK SCOPE: PASS 1 (spec) + PASS 2 (a26v3_build with deterministic FNV-1a hashing on inline buffer) + PASS 2.5 (a26v3_lookup + a26v3_estimate_bits) + PASS 3 (5 selftests + 4 memory probes). PASS 4 LIVE FIRE 6-repo measurement DEFERRED to subsequent tick per C3 honest C3. ai-config-ban7 cmix-ban MAINTAINED: deterministic integer FNV-1a + integer Howard-D escape e_d=0.25 (e_num=1, e_den=4 from F-A26-6 sweep), NOT cmix-class.")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a26_v3_inline.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a26_v3_inline.hexa build <in>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args)
 //
-// First-tick scope (raw 91 honest C3):
+// First-tick scope (C3 honest C3):
 //
 //   PASS 1 — deeper bounded sparse context tree spec
 //     A26_MAX_ORDER_v3 = 2 (orders 0..2 inclusive; drops v2 order 3).
@@ -26,7 +26,7 @@
 //     Howard 1993 PPM-D: escape probability e_d = 0.25 → escape_count =
 //     max(1, distinct / 4). F-A26-6 minimum from sweep (carried from v2).
 //     Build pass: single forward sweep over input bytes, O(n) time.
-//     Idempotent: build is pure function of input bytes (raw 65/68).
+//     Idempotent: build is pure function of input bytes (idempotency/68).
 //
 //   PASS 2 — a26v3_build(text) -> A26V3ContextTree
 //     Returns array of 3 (ctx_keys, freq_inline, ctx_distinct) triples for
@@ -48,11 +48,11 @@
 //     F2: round-trip byte-eq, JSON 234 B fixture          → identity
 //          passthrough on first-tick (no encoder yet); decoded == original
 //          via stored buffer (sanity invariant).
-//     F3: short-input passthrough (raw 65)                → enc == identity
+//     F3: short-input passthrough (idempotency)                → enc == identity
 //     F4: PPM-D Howard escape unit test                    → e_d ≈ 0.25
 //          integer (e_num=1, e_den=4 from F-A26-6 sweep minimum)
 //     F5: a26v3_estimate_bits ≥ 1.0 bit/byte sanity floor on 1KB English
-//          (raw 91 honest C3 — estimator must NOT fabricate sub-Shannon
+//          (C3 honest C3 — estimator must NOT fabricate sub-Shannon
 //          entropy on small training samples).
 //     F-A26-V3-MEM-1: ≤ 10MB on 8KB input (vs v2 67MB measured).
 //     F-A26-V3-MEM-2: ≤ 50MB on 79KB n6 corpus (vs v2 489MB; production gate).
@@ -63,7 +63,7 @@
 //     (subsequent-tick wire promotion + 6-repo measurement gated by F-A26-V3
 //     memory PASS).
 //
-// Falsifier preregister (raw 71):
+// Falsifier preregister (falsifier):
 //     F-A26-V3-1: a26v3_estimate_bits NOT < A18 v2 actual on text-heavy →
 //                 retract budget reduction hypothesis (estimator advantage
 //                 doesn't carry over to deeper-bounded regime).
@@ -79,13 +79,13 @@
 //     F-A26-V3-6: e_d = 0.25 NOT minimal across {0.20, 0.25, 0.33} sweep →
 //                 retract Howard escape minimum.
 //
-// raw 137 cmix-ban compliance:
+// ai-config-ban7 cmix-ban compliance:
 //     A26 v3 = deeper-bounded sparse PPM-D order-2 with deterministic integer
 //     FNV-1a 10-bit slot index, integer-only INLINE flat-array frequency
 //     buffer (single allocation per order), integer-only Howard e_d=0.25
 //     escape (= max(1, distinct/4)). NO fp ops. NO neural mixer. NO
 //     non-deterministic similarity. Build + lookup + estimator all
-//     deterministic (raw 65/68 idempotent: same input → same context tree).
+//     deterministic (idempotency/68 idempotent: same input → same context tree).
 //
 // CONCURRENT AGENT ORTHOGONALITY:
 //     3 concurrent agents in flight (aad0ce99 corpus manifest + A24 v2 +
@@ -105,7 +105,7 @@
 const A26_V3_MAX_ORDER = 2
 const A26_V3_ALPHABET = 256
 const A26_V3_RAW_BITS_PER_BYTE = 8
-const A26_V3_MIN_BYTES = 32              // below this: identity passthrough (raw 65)
+const A26_V3_MIN_BYTES = 32              // below this: identity passthrough (idempotency)
 const A26_V3_CTX_LIMIT = 1024            // per-order context cap (4x smaller than v2)
 const A26_V3_HIT_RATE_GATE = 30          // F-A26-V3-3 first-tick gate (≥30% on 1KB English)
 const A26_V3_FNV_OFFSET = 2166136261     // FNV-1a 32-bit offset basis
@@ -134,7 +134,7 @@ fn _ctx_at_v3(s: string, p: int, k: int) -> string {
 //
 // Deterministic integer hash, mod 1024 → 10-bit slot index for the inline
 // freq buffer. Linear probing on collision (probe ≤ A26_V3_PROBE_LIMIT
-// slots before giving up). Same FNV-1a mixing kernel as A26 v1/v2 (raw 18
+// slots before giving up). Same FNV-1a mixing kernel as A26 v1/v2 (self-host fixpoint
 // self-host fixpoint compatibility).
 
 fn _fnv1a_ctx_v3(ctx: string) -> int {
@@ -156,7 +156,7 @@ fn _fnv1a_ctx_v3(ctx: string) -> int {
 
 // ───────────────── inline-buffer context-table primitives ─────────────────
 //
-// Storage layout per order (raw 91 honest C3: NO per-row hexa array alloc):
+// Storage layout per order (C3 honest C3: NO per-row hexa array alloc):
 //   ctx_keys[order]      = array[A26_V3_CTX_LIMIT] of ctx_string ("" = empty slot)
 //   freq_inline[order]   = array[A26_V3_CTX_LIMIT × 256] of i32 byte counts
 //                          (single preallocated flat buffer, indexed as
@@ -328,7 +328,7 @@ fn a26v3_lookup(tree: array, buf: string, p: int) -> array {
     return [-1, A26_V3_PROB_SCALE / A26_V3_ALPHABET, 0]
 }
 
-// _ilog2_ceil_v3: integer ceiling-log2 (raw 137: integer-only).
+// _ilog2_ceil_v3: integer ceiling-log2 (ai-config-ban7: integer-only).
 fn _ilog2_ceil_v3(x: int) -> int {
     if x <= 1 { return 0 }
     let mut b = 0
@@ -472,13 +472,13 @@ fn _selftest_v3() -> int {
                 + to_string(len(dec2)) + ", expected 234) → F-A26-V3-2 TRIPPED (v3 first-tick retracted)")
     }
 
-    // ─── Fixture 3: short-input passthrough (raw 65 idempotent) ───
+    // ─── Fixture 3: short-input passthrough (idempotency idempotent) ───
     let tiny = "abc123"
     let enc3 = a26v3_encode(tiny)
     let enc3b = a26v3_encode(enc3)
     if enc3 == tiny && enc3b == tiny {
         pass = pass + 1
-        println("  PASS: fixture-3 short-input passthrough idempotent (raw 65 + 68)")
+        println("  PASS: fixture-3 short-input passthrough idempotent (idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-3 short-input idempotency broken → F-A26-V3-2 TRIPPED")

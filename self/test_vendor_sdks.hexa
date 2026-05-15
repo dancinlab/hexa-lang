@@ -7,7 +7,7 @@
 // request builders + response/SSE parsers + extractors against fixed
 // fixture inputs. Network-touching paths (anthropic_send / openai_send /
 // google_send / mistral_send / bedrock_send_bearer) are NOT exercised
-// here (raw 91 honest C3: would require live credentials and is out
+// here (C3 honest C3: would require live credentials and is out
 // of scope for an offline gate).
 //
 // Run with:
@@ -17,10 +17,10 @@
 //   __VENDOR_SDKS_AGG__ PASS modules=5 total=N fail=0
 // Or FAIL line listing the failing module(s).
 //
-// raw 91 (no_silent_errors): on any module fail-count > 0, the
+// C3 (no_silent_errors): on any module fail-count > 0, the
 // aggregator emits __VENDOR_SDKS_AGG__ FAIL ... and exits 1 so CI
 // gates fail loud.
-// raw 159 (hexa-lang-upstream-proposal-mandate): this aggregator is
+// no-hardcode9 (hexa-lang-upstream-proposal-mandate): this aggregator is
 // the canonical post-port verification gate for hive packages/ai
 // vendor-shim consumers.
 

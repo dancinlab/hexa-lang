@@ -1,7 +1,7 @@
 #!hexa strict
 
 // @resolver-bypass(reason="darwin-native byte-canonical pipeline")
-// @tool(slug="hxc-a18-lz-ppm-order4", desc="HXC algorithm A18: LZ77 sliding-window prefilter + PPMd-style order-4 context modeling. Layered on top of A17 (order-3 ceiling ~87%) targeting Shannon H_4 = 0.813 bit/byte → 90% asymptotic entropy rate. Pure hexa raw 9 + raw 18 self-host (integer-only, table-driven, no external libs, no neural mixer per raw 137). COMPLETE — PASS 1 build + LZ77 hash-chain match emission + PASS 2 range encode + PASS 3 range decode + 22 selftest fixtures + LIVE FIRE on 4+ Phase-10 P0/P1 + text-heavy class CEILING corpora. v1 wire = adaptive order-0 over LZ token alphabet. v2 wire (raw 137 80% Pareto saving close) = adaptive order-1 byte-context (257 tables × 512 entries). v3 wire (raw 137 per-class CEILING ω-cycle) = hashed order-3 byte-context (4096 tables × 512). v3-order-2 wire (raw 137 text-heavy CEILING close ω-cycle, 2026-04-28) = hashed order-2 byte-context (256 tables × 512), sweet spot between v2 saturated and v3 order-3 warm-up fail. v4-window64 wire (raw 137 80% Pareto FINAL CLOSE ω-cycle, 2026-04-28) = LZ77 window 32KB→64KB enlarge + 32768 hash slots, order-1 byte-context entropy coder; algorithmically NEW dimension (NOT byte-context order axis) targeting text-heavy ≥16KB long-range repetition the order saturation cannot capture. v6-optimal wire (raw 137 80% Pareto FINAL CLOSE ω-cycle, 2026-04-28) = Storer-Szymanski lazy-match LZ77 tokenizer over the existing 32KB window — encode-side dynamic programming that defers each greedy match decision by one position to capture the case where a 1-byte literal + a longer match at i+1 beats an immediate 3-byte match at i; algorithmically NEW dimension (within-32KB sub-optimality, NOT window-size axis) targeting text-heavy class CEILING that long-range-window did not budge. Wire format unchanged (shared detokenizer); byte-format compatible with v1-v4. Wire constraint: 2-byte distance encoding (d_hi, d_lo) caps window at 65535, so 64KB is the largest enlarge that preserves byte-format compatibility; 128KB would require 3-byte distance. a18_encode = min(v1, v2, v3, v3-order-2, v4-window64, v6-optimal, identity) per raw 142 D2 try-and-revert. Decoder auto-detects via header substring + body sigil (^L v1, ^M v2, ^N v3 order-3, ^O v3-order-2, ^P v4-window64, ^Q v6-optimal).")
+// @tool(slug="hxc-a18-lz-ppm-order4", desc="HXC algorithm A18: LZ77 sliding-window prefilter + PPMd-style order-4 context modeling. Layered on top of A17 (order-3 ceiling ~87%) targeting Shannon H_4 = 0.813 bit/byte → 90% asymptotic entropy rate. Pure hexa hexa-only + self-host fixpoint self-host (integer-only, table-driven, no external libs, no neural mixer per ai-config-ban). COMPLETE — PASS 1 build + LZ77 hash-chain match emission + PASS 2 range encode + PASS 3 range decode + 22 selftest fixtures + LIVE FIRE on 4+ Phase-10 P0/P1 + text-heavy class CEILING corpora. v1 wire = adaptive order-0 over LZ token alphabet. v2 wire (ai-config-ban 80% Pareto saving close) = adaptive order-1 byte-context (257 tables × 512 entries). v3 wire (ai-config-ban per-class CEILING ω-cycle) = hashed order-3 byte-context (4096 tables × 512). v3-order-2 wire (ai-config-ban text-heavy CEILING close ω-cycle, 2026-04-28) = hashed order-2 byte-context (256 tables × 512), sweet spot between v2 saturated and v3 order-3 warm-up fail. v4-window64 wire (ai-config-ban 80% Pareto FINAL CLOSE ω-cycle, 2026-04-28) = LZ77 window 32KB→64KB enlarge + 32768 hash slots, order-1 byte-context entropy coder; algorithmically NEW dimension (NOT byte-context order axis) targeting text-heavy ≥16KB long-range repetition the order saturation cannot capture. v6-optimal wire (ai-config-ban 80% Pareto FINAL CLOSE ω-cycle, 2026-04-28) = Storer-Szymanski lazy-match LZ77 tokenizer over the existing 32KB window — encode-side dynamic programming that defers each greedy match decision by one position to capture the case where a 1-byte literal + a longer match at i+1 beats an immediate 3-byte match at i; algorithmically NEW dimension (within-32KB sub-optimality, NOT window-size axis) targeting text-heavy class CEILING that long-range-window did not budge. Wire format unchanged (shared detokenizer); byte-format compatible with v1-v4. Wire constraint: 2-byte distance encoding (d_hi, d_lo) caps window at 65535, so 64KB is the largest enlarge that preserves byte-format compatibility; 128KB would require 3-byte distance. a18_encode = min(v1, v2, v3, v3-order-2, v4-window64, v6-optimal, identity) per magic-number2 D2 try-and-revert. Decoder auto-detects via header substring + body sigil (^L v1, ^M v2, ^N v3 order-3, ^O v3-order-2, ^P v4-window64, ^Q v6-optimal).")
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a18_lz_ppm_order4.hexa --selftest)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a18_lz_ppm_order4.hexa build <in>)
 // @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a18_lz_ppm_order4.hexa encode <in> <out>)
@@ -25,17 +25,17 @@
 //     Escape-method-D unchanged from A17.
 //     [On-disk encoding: LZ tokens are arith-coded with adaptive order-0 over
 //      the (LIT|MATCH) tag-and-byte alphabet. PPM order-4 model is the
-//      in-sample bits estimator; raw 91 honest C3 — full PPM range coding
+//      in-sample bits estimator; C3 honest C3 — full PPM range coding
 //      defers to a follow-on tick to avoid >580 LoC budget breach.]
 //
 // Sigil: `^L<lz-ppm-stream>` — single combined line.
 // Stream layout: `# a18:s1 v=lz-ppm-v1 n=<input_bytes>\n^L<base64url-body>\n`
 //
-// Idempotency contract (raw 65 + 68):
+// Idempotency contract (idempotency + 68):
 //     - encode(decode(x)) == x for any A18 stream
 //     - decode(encode(y)) == y for any byte stream
 //
-// Falsifiers preregistered (raw 71):
+// Falsifiers preregistered (falsifier):
 //     F-A18-1: saving < 0.85 on text-heavy fixture → reject.
 //     F-A18-2: encode/decode round-trip not byte-eq → reject.
 //     F-A18-3: encode latency > 500ms per 1KB → reject.
@@ -56,7 +56,7 @@
 //     F-A18-V6-3: v6-optimal latency > 500ms/KB AOT (lazy match cost) → reject.
 //     F-A18-V6-4: v6-optimal peak memory > 200MB on 79KB input (DP table) → reject.
 //
-// raw 137 strengthening (2026-04-28, ω-cycle a18-aot-latency-test):
+// ai-config-ban strengthening (2026-04-28, ω-cycle a18-aot-latency-test):
 //     F-A18-3 ceiling is the AOT-COMPILED latency, not the interpreter
 //     latency. Interpreter measurement is NOT a valid ceiling for the
 //     falsifier — the ω-pipeline runs production builds AOT-compiled, and
@@ -66,7 +66,7 @@
 //     anima/state/format_witness/2026-04-28_a18_aot_latency_test.jsonl
 //     and F9 candidate (interpreter-vs-AOT latency dichotomy).
 //
-// raw 137 update (2026-04-28, ω-cycle codegen-bare-call-f10-fix):
+// ai-config-ban update (2026-04-28, ω-cycle codegen-bare-call-f10-fix):
 //     F10 (codegen_c2 bare-call map builtin gap) RETIRED. AOT swap now
 //     succeeds — codegen_c2.hexa now emits map_contains_key / map_keys /
 //     map_values / map_get / map_set / map_remove / map_delete / map_size /
@@ -78,7 +78,7 @@
 //         n6_atlas_79k:  21.9 ms/KB (was INTERP unmeasurable)
 //     All four AOT < 500 ms/KB ceiling → F-A18-3 AOT=PASS.
 //
-// raw 91 honest C3 (2026-04-28 ω-cycle):
+// C3 honest C3 (2026-04-28 ω-cycle):
 //     Two distinct latency axes — interpreter (per-AST dispatch dominated)
 //     and AOT (algorithmic complexity dominated). F-A18-3 was specified
 //     against the AOT axis (production deploy). Honest current verdict:
@@ -89,23 +89,23 @@
 //     equivalence). A18 production gating: F-A18-3 reopen complete; A18 is
 //     LATENCY-DEPLOYABLE; full DEPLOYABLE still gated on F-A18-1 saving fix.
 //
-// raw 137 80% Pareto strengthening (2026-04-28 ω-cycle a18-saving-omega):
+// ai-config-ban 80% Pareto strengthening (2026-04-28 ω-cycle a18-saving-omega):
 //     v2 wire ADDED — adaptive order-1 byte-context range coder over LZ
 //     token alphabet. 257 frequency tables (256 prev-byte contexts + 1
 //     reset/start context); each table size A18_TOKEN_ALPHABET=512. Decoder
 //     mirrors encoder context evolution (no header dictionary needed —
 //     adaptive). Wire layout: `# a18:s2 v=lz-ppm-v2 n=<bytes> t=<tokens>\n
 //     ^M<base64url-body>\n`. Sigil `^M` distinguishes v2 from v1 (`^L`).
-//     a18_encode picks min(v1, v2, identity) — try-and-revert raw 142 D2.
+//     a18_encode picks min(v1, v2, identity) — try-and-revert magic-number2 D2.
 //     Decoder auto-detects via header `v=lz-ppm-v1` vs `v=lz-ppm-v2` AND
 //     body sigil `^L` vs `^M`. F-A18-1 saving target still 85%; v2 is the
 //     algorithmic close attempt for the saving% axis (orthogonal to F10
 //     latency close which was semantic-equivalent AOT swap). F-A18-1
-//     verdict at this tick is reported HONESTLY per raw 91 C3 against the
+//     verdict at this tick is reported HONESTLY per C3 against the
 //     v2 wire — see witness ledger
 //     anima/state/format_witness/2026-04-28_a18_saving_omega_cycle.jsonl
 //
-// raw 137 80% Pareto per-class CEILING ω-cycle (2026-04-28 ω-cycle
+// ai-config-ban 80% Pareto per-class CEILING ω-cycle (2026-04-28 ω-cycle
 // a18-v3-order3-per-class-ceiling-lift): v3 wire ADDED — hashed order-3
 // byte-context adaptive range coder over LZ token alphabet. A18_V3_BUCKETS
 // =4096 frequency tables × 512 entries each; bucket id = Knuth-multiplicative
@@ -114,13 +114,13 @@
 // are implicit context blending (byte-eq-safe). Wire layout: `# a18:s3
 // v=lz-ppm-v3 n=<bytes> t=<tokens>\n^N<base64url-body>\n`. Sigil `^N`
 // distinguishes v3 from v1 (`^L`) and v2 (`^M`). a18_encode picks
-// min(v1, v2, v3, identity) — try-and-revert raw 142 D2. Decoder auto-
+// min(v1, v2, v3, identity) — try-and-revert magic-number2 D2. Decoder auto-
 // detects via header `v=lz-ppm-v3` and body sigil `^N`. Theoretical close
 // path: Shannon H_3 ≈ 1.3 bits/byte (~84% bit-level on n6 atlas). Memory:
 // 4096 × 512 × 4B ≈ 8 MB peak (F-A18-V3-2 budget < 200 MB). Falsifiers
 // F-A18-V3-1/2/3 preregistered above.
 //
-// raw 137 80% Pareto text-heavy CEILING ω-cycle (2026-04-28 ω-cycle
+// ai-config-ban 80% Pareto text-heavy CEILING ω-cycle (2026-04-28 ω-cycle
 // a18-v3-order2-text-heavy-close): v3-order-2 wire ADDED (DISTINCT from
 // v3 order-3 above). Motivation: a1523d94 verdict 78.05% measured, 1.95pp
 // residual to 80% target. Per-class breakdown — text-heavy class is the
@@ -134,13 +134,13 @@
 // t=<tokens>\n^O<base64url-body>\n`. Sigil `^O` distinguishes v3-order-2
 // from v1 (`^L`), v2 (`^M`), v3 order-3 (`^N`). Header `v=lz-ppm-v3-order-2`
 // distinct from `v=lz-ppm-v3` order-3. a18_encode picks min(v1, v2, v3,
-// v3-order-2, identity) — try-and-revert raw 142 D2. Decoder auto-detects
+// v3-order-2, identity) — try-and-revert magic-number2 D2. Decoder auto-detects
 // via header substring + body sigil. Memory: 256 × 512 × 4B ≈ 524 KB peak
 // (F-A18-V3-ORDER2-4 budget < 50 MB). Theoretical text-heavy close path:
 // 47% → 50-52% projected on n6/hexa-lang 79KB corpora; aggregate
 // 78.05% → 80-82% projected. Falsifiers F-A18-V3-ORDER2-1..4 below.
 //
-// raw 137 80% Pareto FINAL CLOSE ω-cycle (2026-04-28 ω-cycle
+// ai-config-ban 80% Pareto FINAL CLOSE ω-cycle (2026-04-28 ω-cycle
 // a18-v4-lz-window-enlarge): v4-window64 wire ADDED (algorithmically NEW
 // dimension — NOT byte-context order axis). Motivation: a105829b honest
 // C3 — order saturation alone cannot close text-heavy gap. Empirical:
@@ -155,16 +155,16 @@
 // Token format UNCHANGED — distance is still serialized as (d_hi, d_lo)
 // 2-byte big-endian; max distance 65535 = exactly 64KB. 128KB would
 // require a 3-byte distance encoding (wire-format break) — DEFERRED, not
-// in scope for this ω-cycle (raw 9 hexa-only LoC budget). Memory: hash_head
+// in scope for this ω-cycle (hexa-only LoC budget). Memory: hash_head
 // 32768 × 8B (i64 per slot) ≈ 256 KB peak hash table; window buffer is
 // shared with input string (no extra copy). a18_encode picks min(v1, v2,
-// v3, v3-order-2, v4-window64, identity) — try-and-revert raw 142 D2.
+// v3, v3-order-2, v4-window64, identity) — try-and-revert magic-number2 D2.
 // Decoder auto-detects via header substring + body sigil. Theoretical
 // text-heavy close path: 48% (v2 79KB) → 53-58% projected on n6/hexa-lang
 // 79KB corpora; aggregate 78.05% → 80-82% projected (gap 1.70pp residual
 // addressable). Falsifiers F-A18-V4-1..4 above.
 //
-// raw 137 80% Pareto FINAL CLOSE ω-cycle (2026-04-28 ω-cycle
+// ai-config-ban 80% Pareto FINAL CLOSE ω-cycle (2026-04-28 ω-cycle
 // a18-v6-lz-optimal-parsing-80pct-close): v6 wire ADDED — Storer-Szymanski
 // (1982) lazy-match LZ77 tokenizer over the EXISTING 32KB window. Greedy
 // match selection at position i is REVISED: if length L_{i+1} of the match
@@ -200,7 +200,7 @@ const A18_MAX_FREQ_TOTAL = 16777215   // 2^24 - 1, keeps range/total in 32-bit
 const A18_TOKEN_ALPHABET = 512
 const A18_LIT_MAX = 256           // tokens [0..255] are literal bytes
 
-// v3 wire (raw 137 80% Pareto per-class CEILING ω-cycle, 2026-04-28):
+// v3 wire (ai-config-ban 80% Pareto per-class CEILING ω-cycle, 2026-04-28):
 // hashed order-3 byte-context adaptive range coder. Bucket count 4096 keeps
 // memory at 4096 × 512 × 4B ≈ 8MB peak (F-A18-V3-2 budget < 200MB). Bucket
 // id is computed by hashing the last 3 emitted-token bytes mod buckets;
@@ -211,7 +211,7 @@ const A18_V3_BUCKETS = 4096
 const A18_V3_BUCKET_BITS = 12     // log2(4096); used in fast modulo path
 const A18_V3_HASH_MUL = 2654435761  // Knuth multiplicative (mod 2^32 implicit)
 
-// v3-order-2 wire (raw 137 80% Pareto text-heavy CEILING close, 2026-04-28):
+// v3-order-2 wire (ai-config-ban 80% Pareto text-heavy CEILING close, 2026-04-28):
 // 256 buckets keyed by hash of last 2 emitted tokens. Memory: 256 × 512 × 4B
 // ≈ 524 KB peak (F-A18-V3-ORDER2-4 budget < 50 MB). Sweet spot between v2
 // (single token context, saturated) and v3 order-3 (warm-up fail at
@@ -220,7 +220,7 @@ const A18_V3_HASH_MUL = 2654435761  // Knuth multiplicative (mod 2^32 implicit)
 const A18_V3_O2_BUCKETS = 256
 const A18_V3_O2_BUCKET_BITS = 8   // log2(256)
 
-// v4-window64 wire (raw 137 80% Pareto FINAL CLOSE, 2026-04-28):
+// v4-window64 wire (ai-config-ban 80% Pareto FINAL CLOSE, 2026-04-28):
 // LZ77 sliding window enlarged 32KB → 64KB. Wire token format reuses
 // v1/v2/v3 (d_hi, d_lo) 2-byte distance, which can address 0..65535 —
 // exactly fits 64KB. Hash table also 2× to 32768 slots to keep average
@@ -453,7 +453,7 @@ fn a18_lz_tokenize(buf: string) -> array {
     return tokens
 }
 
-// ───────────────── v4-window64 LZ77 hash-chain match finder (raw 137 80% Pareto FINAL CLOSE) ─────────────────
+// ───────────────── v4-window64 LZ77 hash-chain match finder (ai-config-ban 80% Pareto FINAL CLOSE) ─────────────────
 //
 // Identical to a18_lz_match_real / a18_lz_tokenize but parameterized for the
 // 64KB window and 32768-slot hash table. Algorithmic novelty = window-size
@@ -558,7 +558,7 @@ fn a18_lz_tokenize_w64(buf: string) -> array {
     return tokens
 }
 
-// ───────────────── v6-optimal LZ77 lazy-match tokenizer (raw 137 80% Pareto FINAL CLOSE) ─────────────────
+// ───────────────── v6-optimal LZ77 lazy-match tokenizer (ai-config-ban 80% Pareto FINAL CLOSE) ─────────────────
 //
 // Storer-Szymanski (1982) lazy-match LZ77. At each position i we obtain a
 // candidate greedy match (m_i.len, m_i.dist). Before committing, we look
@@ -877,7 +877,7 @@ fn _range_decode_tokens(payload: array, n_tokens: i64) -> array {
     return out
 }
 
-// ───────────────── order-1 context range coder (v2 wire, raw 137 80% Pareto) ─────────────────
+// ───────────────── order-1 context range coder (v2 wire, ai-config-ban 80% Pareto) ─────────────────
 //
 // Model: 257 separate adaptive frequency tables of size A18_TOKEN_ALPHABET=512.
 // Context selector evolves with each emitted token:
@@ -1074,7 +1074,7 @@ fn _range_decode_tokens_o1(payload: array, n_tokens: i64) -> array {
     return out
 }
 
-// ───────────────── order-3 hashed byte-context range coder (v3 wire, raw 137 80% Pareto per-class CEILING ω-cycle) ─────────────────
+// ───────────────── order-3 hashed byte-context range coder (v3 wire, ai-config-ban 80% Pareto per-class CEILING ω-cycle) ─────────────────
 //
 // Model: A18_V3_BUCKETS=4096 separate adaptive frequency tables of size
 // A18_TOKEN_ALPHABET=512. Bucket id is selected per token by hashing the
@@ -1104,9 +1104,9 @@ fn _range_decode_tokens_o1(payload: array, n_tokens: i64) -> array {
 //   - v3 (hashed order-3): 4096 tables × 512. Theoretical ceiling per
 //     Shannon H_3 ≈ 1.3 bits/byte (~84% bit-level on n6 atlas). Startup
 //     amortization much heavier than v2 — only viable on inputs >> 32 KB.
-//   - a18_encode = min(v1, v2, v3, identity) per try-and-revert raw 142 D2.
+//   - a18_encode = min(v1, v2, v3, identity) per try-and-revert magic-number2 D2.
 //
-// Falsifiers preregistered (raw 71):
+// Falsifiers preregistered (falsifier):
 //   F-A18-V3-1: v3 saving < v2 saving on text-heavy 79KB n6 atlas → reject.
 //   F-A18-V3-2: v3 peak memory > 200MB on 79KB input → reject.
 //   F-A18-V3-3: v3 encode/decode round-trip not byte-eq → reject.
@@ -1289,7 +1289,7 @@ fn _range_decode_tokens_o3(payload: array, n_tokens: i64) -> array {
     return out
 }
 
-// ───────────────── order-2 hashed byte-context range coder (v3-order-2 wire, raw 137 80% Pareto text-heavy CEILING ω-cycle) ─────────────────
+// ───────────────── order-2 hashed byte-context range coder (v3-order-2 wire, ai-config-ban 80% Pareto text-heavy CEILING ω-cycle) ─────────────────
 //
 // Model: A18_V3_O2_BUCKETS=256 separate adaptive frequency tables of size
 // A18_TOKEN_ALPHABET=512. Bucket id is selected per token by hashing the
@@ -1321,7 +1321,7 @@ fn _range_decode_tokens_o3(payload: array, n_tokens: i64) -> array {
 //                                          highly structured corpora.
 //   - a18_encode = min(v1, v2, v3, v3-order-2, identity).
 //
-// Falsifiers preregistered (raw 71):
+// Falsifiers preregistered (falsifier):
 //   F-A18-V3-ORDER2-1: v3-order-2 saving < v2 saving on text-heavy ≥16KB → reject.
 //   F-A18-V3-ORDER2-2: v3-order-2 encode/decode round-trip not byte-eq → reject.
 //   F-A18-V3-ORDER2-3: v3-order-2 AOT latency > 200ms/KB → reject.
@@ -1586,7 +1586,7 @@ fn _a18_encode_force(text: string) -> string {
 }
 
 // _a18_encode_force_v2: v2 wire — order-1 byte-context adaptive range coder
-// over the LZ-tokenized stream (raw 137 80% Pareto saving close attempt).
+// over the LZ-tokenized stream (ai-config-ban 80% Pareto saving close attempt).
 // Same LZ tokenizer; different entropy coder. Sigil ^M (vs v1 ^L).
 fn _a18_encode_force_v2(text: string) -> string {
     let n: i64 = len(text)
@@ -1601,7 +1601,7 @@ fn _a18_encode_force_v2(text: string) -> string {
 }
 
 // _a18_encode_force_v3: v3 wire — hashed order-3 byte-context adaptive range
-// coder over the LZ-tokenized stream (raw 137 80% Pareto per-class CEILING
+// coder over the LZ-tokenized stream (ai-config-ban 80% Pareto per-class CEILING
 // ω-cycle). Sigil ^N (vs v1 ^L, v2 ^M). Same LZ tokenizer; per-bucket cum
 // table with 4096 buckets keyed by hash of last 3 emitted tokens.
 fn _a18_encode_force_v3(text: string) -> string {
@@ -1617,7 +1617,7 @@ fn _a18_encode_force_v3(text: string) -> string {
 }
 
 // _a18_encode_force_v3_o2: v3-order-2 wire — hashed order-2 byte-context
-// adaptive range coder over the LZ-tokenized stream (raw 137 80% Pareto
+// adaptive range coder over the LZ-tokenized stream (ai-config-ban 80% Pareto
 // text-heavy CEILING close ω-cycle). Sigil ^O (vs v1 ^L, v2 ^M, v3 ^N).
 // Same LZ tokenizer; per-bucket cum table with 256 buckets keyed by hash
 // of last 2 emitted tokens. Sweet spot between v2 and v3 order-3 — wins
@@ -1635,7 +1635,7 @@ fn _a18_encode_force_v3_o2(text: string) -> string {
 }
 
 // _a18_encode_force_v4_w64: v4-window64 wire — LZ77 64KB-window tokenizer
-// + order-1 byte-context entropy coder (raw 137 80% Pareto FINAL CLOSE
+// + order-1 byte-context entropy coder (ai-config-ban 80% Pareto FINAL CLOSE
 // ω-cycle). Sigil ^P (vs v1 ^L, v2 ^M, v3 ^N, v3-o2 ^O).
 // Algorithmic novelty: window-size axis (NOT byte-context order axis).
 // Token format unchanged — distance still serialized as (d_hi, d_lo)
@@ -1656,7 +1656,7 @@ fn _a18_encode_force_v4_w64(text: string) -> string {
 
 // _a18_encode_force_v6_optimal: v6-optimal wire — Storer-Szymanski lazy
 // match LZ77 tokenizer over the existing 32KB window + order-1 byte-context
-// entropy coder (raw 137 80% Pareto FINAL CLOSE ω-cycle). Sigil ^Q (vs ^L
+// entropy coder (ai-config-ban 80% Pareto FINAL CLOSE ω-cycle). Sigil ^Q (vs ^L
 // v1, ^M v2, ^N v3, ^O v3-o2, ^P v4-w64). Algorithmic novelty = within-32KB
 // sub-optimality close (orthogonal to window-size axis). Token format is
 // unchanged — distance serialized as (d_hi, d_lo) 2-byte big-endian; the
@@ -1674,8 +1674,8 @@ fn _a18_encode_force_v6_optimal(text: string) -> string {
     return header + "\n" + body + "\n"
 }
 
-// a18_encode: try-and-revert raw 142 D2.
-//   - identity passthrough below A18_MIN_BYTES (raw 65 idempotent).
+// a18_encode: try-and-revert magic-number2 D2.
+//   - identity passthrough below A18_MIN_BYTES (idempotency idempotent).
 //   - if input is already a18-encoded, return as-is.
 //   - encode via v1, v2, v3, v3-order-2, v4-window64, v6-optimal;
 //     return shortest of all + identity.
@@ -1898,7 +1898,7 @@ fn _selftest() -> int {
     let enc4 = a18_encode(tiny)
     if enc4 == tiny {
         pass = pass + 1
-        println("  PASS: fixture-4 short-input passthrough (raw 65 idempotent)")
+        println("  PASS: fixture-4 short-input passthrough (idempotency idempotent)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-4 short-input wrongly fired")
@@ -1917,7 +1917,7 @@ fn _selftest() -> int {
         println("  FAIL: fixture-5 PPM saving only " + to_string(saving_pct) + "% (want >=85)")
     }
 
-    // ───── v2 wire fixtures (raw 137 80% Pareto saving close attempt) ─────
+    // ───── v2 wire fixtures (ai-config-ban 80% Pareto saving close attempt) ─────
 
     // Test 6: v2 wire JSON encode-decode byte-eq + saving% beats v1.
     let enc6_v1 = _a18_encode_force(json_like)
@@ -1947,7 +1947,7 @@ fn _selftest() -> int {
     let best_force: i64 = if l_v2 < l_v1 { l_v2 } else { l_v1 }
     if dec7 == json_like && len(enc7) <= best_force {
         pass = pass + 1
-        println("  PASS: fixture-7 a18_encode try-and-revert (raw 142 D2) — chose len="
+        println("  PASS: fixture-7 a18_encode try-and-revert (magic-number2 D2) — chose len="
                 + to_string(len(enc7)) + " (min of v1=" + to_string(l_v1)
                 + " v2=" + to_string(l_v2) + " identity=" + to_string(len(json_like)) + ")")
     } else {
@@ -1961,7 +1961,7 @@ fn _selftest() -> int {
     // bytes via _byte_at + ord (chr(>=128) would produce 2-byte UTF-8 in the
     // string-form path; the binary write_bytes path that production decode
     // uses is byte-canonical — see A17 _build_alphabet rationale).
-    let kor = "안녕 세계 — 곰파 연결 ω-cycle. 압축 알고리즘 A18 자기-호스트 hexa raw 9. "
+    let kor = "안녕 세계 — 곰파 연결 ω-cycle. 압축 알고리즘 A18 자기-호스트 hexa hexa-only. "
     let mut buf_kor = ""
     let mut k8 = 0
     while k8 < 12 { buf_kor = buf_kor + kor; k8 = k8 + 1 }
@@ -1988,19 +1988,19 @@ fn _selftest() -> int {
     }
 
     // Test 9: v2 wire short-input still respects MIN_BYTES passthrough +
-    // a18_encode is wire-version agnostic (raw 65 + 68 idempotent).
+    // a18_encode is wire-version agnostic (idempotency + 68 idempotent).
     let tiny2 = "abc123"
     let enc9 = a18_encode(tiny2)
     let enc9b = a18_encode(enc9)
     if enc9 == tiny2 && enc9b == tiny2 {
         pass = pass + 1
-        println("  PASS: fixture-9 v2 short-input passthrough idempotent (raw 65 + 68)")
+        println("  PASS: fixture-9 v2 short-input passthrough idempotent (idempotency + 68)")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-9 v2 short-input idempotency broken")
     }
 
-    // ───── v3 wire fixtures (raw 137 80% Pareto per-class CEILING ω-cycle) ─────
+    // ───── v3 wire fixtures (ai-config-ban 80% Pareto per-class CEILING ω-cycle) ─────
 
     // Test 10: v3 wire English-text encode-decode byte-eq + saving% report.
     // Input is the same 1000B repeated-phrase fixture used in fixture-1/2.
@@ -2033,7 +2033,7 @@ fn _selftest() -> int {
                 + to_string(nb10) + " got_len=" + to_string(len(dec10_bytes)))
     }
 
-    // Test 11: v3 wire Korean/multibyte byte-eq (raw 65 + 68 idempotent).
+    // Test 11: v3 wire Korean/multibyte byte-eq (idempotency + 68 idempotent).
     let enc11 = _a18_encode_force_v3(buf_kor)
     let dec11_bytes = _a18_decode_to_bytes(enc11)
     let mut ok11 = true
@@ -2058,7 +2058,7 @@ fn _selftest() -> int {
 
     // Test 12: a18_encode min-of-5 (v1, v2, v3, v3-order-2, identity) try-and-revert.
     // Verifies the dispatcher correctly picks the shortest representation
-    // and that decode reconstructs original (raw 142 D2).
+    // and that decode reconstructs original (magic-number2 D2).
     let enc12 = a18_encode(json_like)
     let dec12 = a18_decode(enc12)
     let l12_v1 = len(_a18_encode_force(json_like))
@@ -2072,7 +2072,7 @@ fn _selftest() -> int {
     if l12_v3o2 < bf12 { bf12 = l12_v3o2 }
     if dec12 == json_like && len(enc12) <= bf12 {
         pass = pass + 1
-        println("  PASS: fixture-12 a18_encode min-of-5 try-and-revert (raw 142 D2) — chose len="
+        println("  PASS: fixture-12 a18_encode min-of-5 try-and-revert (magic-number2 D2) — chose len="
                 + to_string(len(enc12)) + " (min of v1=" + to_string(l12_v1)
                 + " v2=" + to_string(l12_v2) + " v3=" + to_string(l12_v3)
                 + " v3-o2=" + to_string(l12_v3o2)
@@ -2083,7 +2083,7 @@ fn _selftest() -> int {
                 + " best_force=" + to_string(bf12) + " dec_match=" + to_string(dec12 == json_like) + ")")
     }
 
-    // ───── v3-order-2 wire fixtures (raw 137 80% Pareto text-heavy CEILING ω-cycle) ─────
+    // ───── v3-order-2 wire fixtures (ai-config-ban 80% Pareto text-heavy CEILING ω-cycle) ─────
 
     // Test 13: v3-order-2 wire English-text byte-eq + saving% report.
     // Same 1000B repeated-phrase fixture as fixtures 1/2/10. We don't gate
@@ -2113,7 +2113,7 @@ fn _selftest() -> int {
                 + to_string(nb13) + " got_len=" + to_string(len(dec13_bytes)))
     }
 
-    // Test 14: v3-order-2 wire Korean/multibyte byte-eq (raw 65 + 68 idempotent).
+    // Test 14: v3-order-2 wire Korean/multibyte byte-eq (idempotency + 68 idempotent).
     let enc14 = _a18_encode_force_v3_o2(buf_kor)
     let dec14_bytes = _a18_decode_to_bytes(enc14)
     let mut ok14 = true
@@ -2168,7 +2168,7 @@ fn _selftest() -> int {
                 + to_string(np15) + " got_len=" + to_string(len(dec15_bytes)))
     }
 
-    // Test 16: v3-order-2 idempotent passthrough (raw 65 + 68). Encode of
+    // Test 16: v3-order-2 idempotent passthrough (idempotency + 68). Encode of
     // <MIN_BYTES input must return identity, and re-encoding the result of
     // a18_encode (which may pick v3-order-2) must NOT re-wrap.
     let tiny3 = "abc"
@@ -2180,7 +2180,7 @@ fn _selftest() -> int {
     let enc16d = a18_encode(enc16c)
     if enc16a == tiny3 && enc16b == tiny3 && enc16d == enc16c {
         pass = pass + 1
-        println("  PASS: fixture-16 v3-order-2 idempotent (raw 65 + 68): tiny passthrough + re-encode no-op")
+        println("  PASS: fixture-16 v3-order-2 idempotent (idempotency + 68): tiny passthrough + re-encode no-op")
     } else {
         fail = fail + 1
         println("  FAIL: fixture-16 v3-order-2 idempotency broken (tiny="
@@ -2188,7 +2188,7 @@ fn _selftest() -> int {
                 + " reenc=" + to_string(enc16d == enc16c) + ")")
     }
 
-    // ───── v4-window64 wire fixtures (raw 137 80% Pareto FINAL CLOSE ω-cycle) ─────
+    // ───── v4-window64 wire fixtures (ai-config-ban 80% Pareto FINAL CLOSE ω-cycle) ─────
 
     // Test 17: v4-window64 English-text byte-eq + saving% report. Same 1000B
     // repeated-phrase fixture as fixtures 1/2/10/13. Gate on byte-eq round-trip
@@ -2252,7 +2252,7 @@ fn _selftest() -> int {
                 + to_string(nb18) + " got_len=" + to_string(len(dec18_bytes)))
     }
 
-    // Test 19: v4-window64 idempotent passthrough (raw 65 + 68). Encode of
+    // Test 19: v4-window64 idempotent passthrough (idempotency + 68). Encode of
     // <MIN_BYTES input must return identity, AND re-encoding the dispatcher
     // output (which now considers v4 in min-of-6) must NOT re-wrap.
     let tiny4 = "xy"
@@ -2273,7 +2273,7 @@ fn _selftest() -> int {
     if l19_v4 < bf19 { bf19 = l19_v4 }
     if enc19a == tiny4 && enc19b == tiny4 && enc19d == enc19c && len(enc19c) <= bf19 {
         pass = pass + 1
-        println("  PASS: fixture-19 v4-window64 idempotent + min-of-6 dispatcher (raw 65 + 68 + 142 D2): "
+        println("  PASS: fixture-19 v4-window64 idempotent + min-of-6 dispatcher (idempotency + 68 + 142 D2): "
                 + "chose len=" + to_string(len(enc19c)) + " (min of v1=" + to_string(l19_v1)
                 + " v2=" + to_string(l19_v2) + " v3=" + to_string(l19_v3) + " v3-o2=" + to_string(l19_v3o2)
                 + " v4=" + to_string(l19_v4) + " identity=" + to_string(len(lr_buf)) + ")")
@@ -2285,7 +2285,7 @@ fn _selftest() -> int {
                 + to_string(len(enc19c) <= bf19) + ")")
     }
 
-    // ───── v6-optimal wire fixtures (raw 137 80% Pareto FINAL CLOSE ω-cycle) ─────
+    // ───── v6-optimal wire fixtures (ai-config-ban 80% Pareto FINAL CLOSE ω-cycle) ─────
 
     // Test 20: v6-optimal English-text byte-eq + saving > v1.
     // Lazy match should not regress vs greedy on any text-heavy input;
@@ -2317,7 +2317,7 @@ fn _selftest() -> int {
                 + " v1=" + to_string(len(enc20_v1)) + " v6=" + to_string(len(enc20_v6)))
     }
 
-    // Test 21: v6-optimal Korean/multibyte byte-eq (raw 65 + 68 idempotent).
+    // Test 21: v6-optimal Korean/multibyte byte-eq (idempotency + 68 idempotent).
     let enc21 = _a18_encode_force_v6_optimal(buf_kor)
     let dec21_bytes = _a18_decode_to_bytes(enc21)
     let mut ok21 = true
@@ -2341,7 +2341,7 @@ fn _selftest() -> int {
     }
 
     // Test 22: v6-optimal idempotent passthrough + min-of-7 dispatcher
-    // (raw 65 + 68 + raw 142 D2). Tiny input must passthrough; non-tiny
+    // (idempotency + 68 + magic-number2 D2). Tiny input must passthrough; non-tiny
     // must select min(v1,v2,v3,v3-o2,v4,v6,identity).
     let tiny6 = "qz"
     let enc22a = a18_encode(tiny6)
@@ -2363,7 +2363,7 @@ fn _selftest() -> int {
     if l22_v6 < bf22 { bf22 = l22_v6 }
     if enc22a == tiny6 && enc22b == tiny6 && enc22d == enc22c && len(enc22c) <= bf22 {
         pass = pass + 1
-        println("  PASS: fixture-22 v6-optimal idempotent + min-of-7 dispatcher (raw 65 + 68 + 142 D2): "
+        println("  PASS: fixture-22 v6-optimal idempotent + min-of-7 dispatcher (idempotency + 68 + 142 D2): "
                 + "chose len=" + to_string(len(enc22c)) + " (min of v1=" + to_string(l22_v1)
                 + " v2=" + to_string(l22_v2) + " v3=" + to_string(l22_v3) + " v3-o2=" + to_string(l22_v3o2)
                 + " v4=" + to_string(l22_v4) + " v6=" + to_string(l22_v6) + " identity=" + to_string(len(buf)) + ")")

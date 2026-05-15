@@ -7,7 +7,7 @@
 //   the actual self-host path is flatten + hexa_v2-transpile + clang.
 //
 // 2026-04-20
-//   raw#18 promoted new → live. The authoritative verifier is now
+//   self-host fixpoint promoted new → live. The authoritative verifier is now
 //   tool/meta2_verify.hexa (Tier 1 = live v3==v4 via two-round
 //   deterministic re-link; Tier 2 = on-disk SSOT-sha fallback). This
 //   wrapper delegates to keep the raw enforce field (.raw:170) stable

@@ -43,7 +43,7 @@ Breaking risk: 0. All new symbol names; the runtime `json_stringify`
 builtin is untouched and remains the canonical compact encoder.
 stdlib/json_object.hexa (read side) is unchanged.
 
-Caveats (raw#91):
+Caveats (C3):
   · json_dump_pretty escaping is the runtime builtin's escape policy
     applied per-leaf — minimal `\\`, `\"`, `\n` only. Calibration cache
     payload is ASCII-numeric, so this is adequate. Arbitrary user input
@@ -57,7 +57,7 @@ Caveats (raw#91):
     chaining, NOT a copy. Callers mutating shared state should clone
     first via json_parse(json_stringify(orig)).
 
-raw#9 hexa-only-strict: pure hexa wrapper, zero exec(), zero new C
+hexa-only-strict: pure hexa wrapper, zero exec(), zero new C
   builtin. The underlying serializer is the existing runtime
   `json_stringify` already exercised by 37+ callsites (see runtime.c
   line 6669 inventory).

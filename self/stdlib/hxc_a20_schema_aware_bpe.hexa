@@ -7,7 +7,7 @@
 // @usage(hexa $HOME/core/hexa-lang/self/stdlib/hxc_a20_schema_aware_bpe.hexa decode <hxc.in> <hxc.out>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args, 4=decode-mismatch)
 //
-// Algorithm spec (raw 9 hexa-only · raw 18 self-host fixpoint · raw 65+68 idempotent):
+// Algorithm spec (hexa-only · self-host fixpoint self-host fixpoint · idempotency+68 idempotent):
 //   PASS 1 (schema-key extract): scan `# schema:sN key1 key2 ...` headers; for each
 //                                key emit byte-seq forms ("key", "\"key\":", "|\"key\":").
 //   PASS 2 (vocab build): pre-seed first K vocab slots with schema-key byte-seqs
@@ -22,10 +22,10 @@
 //   tick 2 (THIS FILE): PASS 3 + PASS 4 + 4 additional fixtures (Korean, mixed JSON,
 //                       ledger, escape) + a20_encode/a20_decode top-level + schema_tokens
 //                       overhead emit (`# tokenizer:sN/# tok:sN` lines reuse A9 wire shape).
-//   raw 65+68 idempotent: encode∘decode == id, decode∘encode == id (byte-eq).
-//   raw 18 self-host fixpoint: decoder is a strict subset of encoder; both pure hexa.
+//   idempotency+68 idempotent: encode∘decode == id, decode∘encode == id (byte-eq).
+//   self-host fixpoint self-host fixpoint: decoder is a strict subset of encoder; both pure hexa.
 //
-// Falsifiers (raw 71 contract):
+// Falsifiers (falsifier contract):
 //   F-A20-1: post-A9 marginal saving < 0.05 on mixed JSON+text → measurement at LIVE FIRE
 //   F-A20-2: encode/decode round-trip not byte-eq → 5/5 fixture clear (this tick)
 //   F-A20-3: schema-key false-positive rate > 5% (key not in any row body) → 0% (tick 1)
@@ -164,7 +164,7 @@ fn _derive_key_forms(keys: array, corpus_rows: array) -> array {
         }
         i = i + 1
     }
-    // Sort longest-first via insertion sort (small N, raw 9 pure-hexa).
+    // Sort longest-first via insertion sort (small N, hexa-only pure).
     let mut sorted = []
     let mut s = 0
     while s < len(uniq) {
@@ -528,7 +528,7 @@ fn _decode_symbols(syms: array, vocab: array) -> array {
                 }
                 k = k + 1
             }
-            if !found { out.push(63) }   // '?' — raw 91 honest C3 fallback
+            if !found { out.push(63) }   // '?' — C3 honest C3 fallback
         }
         i = i + 1
     }
@@ -905,7 +905,7 @@ fn _selftest() -> int {
     let saving_pct = if original_syms > 0 { ((original_syms - after_syms) * 100) / original_syms } else { 0 }
     println("  INFO: F1.5 pre-seed-only symbol reduction: " + to_string(original_syms) + " -> " + to_string(after_syms) + " (" + to_string(saving_pct) + "% sym-count reduction)")
 
-    // ───────────── Tick 2 fixtures: PASS 3 + PASS 4 round-trip (raw 65/68 idempotent) ─────────────
+    // ───────────── Tick 2 fixtures: PASS 3 + PASS 4 round-trip (idempotency/68 idempotent) ─────────────
 
     // F2: synthetic JSON+text mixed corpus — schema-key forms `"axes_acted":` etc.
     // should pre-seed and dominate vocab. Round-trip MUST be byte-eq (F-A20-2).

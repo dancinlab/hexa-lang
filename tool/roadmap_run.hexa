@@ -1,4 +1,4 @@
-// tool/roadmap_run.hexa — raw#15 verify-gate auto-runner
+// tool/roadmap_run.hexa — no-hardcode verify-gate auto-runner
 //
 // usage:
 //   hexa tool/roadmap_run.hexa              — run all active+verify gates

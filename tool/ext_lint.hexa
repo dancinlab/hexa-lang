@@ -1,6 +1,6 @@
-// tool/ext_lint.hexa — raw#13 enforcer (.ext external-resource SSOT)
+// tool/ext_lint.hexa — ai-config-ban enforcer (.ext external-resource SSOT)
 //
-// @tool(slug="ext_lint", desc="validate .ext entries (raw#13 — kind whitelist + required fields)")
+// @tool(slug="ext_lint", desc="validate .ext entries (ai-config-ban — kind whitelist + required fields)")
 // @usage(hexa /Users/ghost/core/hexa-lang/tool/ext_lint.hexa [--list])
 // @example(verify every external resource declared in /.ext has the required kind + why keys before commit)
 // @exit_codes(0=PASS, 1=violations found)
@@ -9,10 +9,10 @@
 //   hexa tool/ext_lint.hexa         — validate /.ext + exit 1 on violation
 //   hexa tool/ext_lint.hexa --list  — dump parsed entries for debug
 //
-// rule: raw#13 — external resources (SSH/API/service/binary/submodule/pod)
+// rule: ai-config-ban — external resources (SSH/API/service/binary/submodule/pod)
 //   must be declared in /.ext with `kind` + `why` (+ kind-specific keys).
 
-// ─── inlined raw_loader (seed-freeze: interp module loader unavailable) ───
+// ─── inlined legacy_loader (seed-freeze: interp module loader unavailable) ───
 fn _rstrip(s: string) -> string {
     let mut end = len(s)
     while end > 0 {
@@ -163,7 +163,7 @@ if list_mode {
 }
 
 if len(rules) == 0 {
-    println("raw#13 ext_lint: .ext empty or missing — pass")
+    println("ai-config-ban ext_lint: .ext empty or missing — pass")
     exit(0)
 }
 
@@ -217,7 +217,7 @@ for r in rules {
     }
 }
 
-println("── raw#13 ext_lint ──")
+println("── ai-config-ban ext_lint ──")
 println("entries : " + to_string(len(rules)))
 
 if len(errs) == 0 {

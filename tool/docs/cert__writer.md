@@ -1,12 +1,12 @@
 # `cert/writer`
 
-_canonical raw#10 proof-carrying JSON writer_
+_canonical proof-carrying JSON writer_
 
 **Source:** [`stdlib/cert/writer.hexa`](../../stdlib/cert/writer.hexa)  
 
 ## Overview
 
- stdlib/cert/writer.hexa — canonical raw#10 proof-carrying JSON writer
+ stdlib/cert/writer.hexa — canonical proof-carrying JSON writer
 
  Output schema (stdlib.cert.v1):
      "schema":            "<caller-supplied tag>",
@@ -36,7 +36,7 @@ pub fn write_result(path, schema, gate, selftest_pass, extra)
 **Parameters:** `path, schema, gate, selftest_pass, extra`  
 **Returns:** _inferred_  
 
-Write a canonical raw#10 JSON result. `extra` is a caller-supplied
+Write a canonical honest-caveat JSON result. `extra` is a caller-supplied
 string (usually "" or a pre-rendered JSON fragment) appended into the
 "extra" field verbatim.
 

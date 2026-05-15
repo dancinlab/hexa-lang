@@ -2,7 +2,7 @@
 //
 // PURPOSE
 //   Walk each entry and verify evidence claims:
-//     - proof paths all exist (raw#9 proof-carrying symmetry)
+//     - proof paths all exist (proof-carrying symmetry)
 //     - note commit SHA references resolve (git cat-file)
 //     - exit_criteria paths (if shaped as "<file>.hexa" or "<path>.json")
 //       exist too
