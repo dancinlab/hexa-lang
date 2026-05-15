@@ -79,17 +79,21 @@ fn main() {
     }
 
     // Grade marker: all 5 axes are graded 10 (lattice self-check via
-    // verify.hexa::verify_all() passes). verified flag stays FALSE because
-    // AGENTS.tape @D g3 deems the σ·φ = n·τ = 24 tautology insufficient as a
-    // verification anchor — these flip to verified:true only when each gains
-    // a §1.2 real-limits.* citation.
+    // verify.hexa::verify_all() passes). 2026-05-15 update: verified flag
+    // back to TRUE — upstream hexa-bio n6_lattice_check.hexa now carries a
+    // real_limit_anchor cell per row (RIBOZYME ↦ boltzmann_constant,
+    // VIROCAPSID ↦ bekenstein_bound, NANOBOT ↦ margolus_levitin, WEAVE ↦
+    // shannon_entropy, QUANTUM ↦ margolus_levitin) satisfying AGENTS.tape
+    // @D g3. raw body now contains `real_limit_anchor: real_limits.*`.
     let mut k = 0
     while k < len(axes) {
         let n = axes[k]
         let label = "axis[" + to_string(k) + "] grade.value == 10"
         _check(label, n.grade.value == 10, fails)
-        let vlabel = "axis[" + to_string(k) + "] grade.verified == false (g3 anchor missing)"
-        _check(vlabel, !n.grade.verified, fails)
+        let vlabel = "axis[" + to_string(k) + "] grade.verified == true (g3 anchor present)"
+        _check(vlabel, n.grade.verified, fails)
+        let alabel = "axis[" + to_string(k) + "] raw contains real_limit_anchor: real_limits."
+        _check(alabel, n.raw.contains("real_limit_anchor: real_limits."), fails)
         k = k + 1
     }
 
