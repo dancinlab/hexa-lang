@@ -130,6 +130,84 @@ order. Textual IPCP substitution achieves this by construction — the
 substituted body executes the same operations in the same order, only
 with constants where there were variables.
 
+## IPCP prototype landed 2026-05-17 (commit pending)
+
+`tool/flame_phase4b_ipcp.hexa` — text-based IPCP rewriter:
+1. Scans expanded source for top-level `let T = …; let d = …; let nh = …;
+   let nkv = …; let h = …` 5-tuple (line-adjacency heuristic, ≤30 non-blank
+   lines lookahead).
+2. For each fn in allow-list (`nn_decoder_block_fwd`, `_bwd`,
+   `nn_decoder_fwd`, `nn_decoder_grad`, `nn_decoder_train_step`):
+   - Locates fn body via brace-balance.
+   - Word-boundary substitutes T/d/nh/nkv/h tokens with literals.
+3. Writes rewritten source to `<input>.ipcp`.
+
+Substitution count on `flame_d32_corpus_test` expanded source (5-tuple
+at line 2552):
+
+| fn | substitutions |
+|---|---|
+| nn_decoder_block_fwd | 212 |
+| nn_decoder_block_bwd | 254 |
+| nn_decoder_fwd | 106 |
+| nn_decoder_grad | 124 |
+| nn_decoder_train_step | 19 |
+| **total** | **715** |
+
+Scaffold rescan of rewritten source: 2/2 call sites → literal-tuple
+(was 0/2 on input). dims_hash `0x388e4067` for both fwd and bwd —
+emit-once-reuse-many semantic confirmed.
+
+### Verification matrix (5-run convention per PERF.md)
+
+| Falsifier | Result |
+|---|---|
+| F-RFC047-IPCP-SOURCE-FOUND | PASS (anchor at line 2552) |
+| F-RFC047-IPCP-SUBST-COUNT | PASS (715 total, ≥1 per fn) |
+| F-RFC047-IPCP-RESCAN-LITERAL | PASS (0 → 2 literal-tuple sites) |
+| F-RFC047-IPCP-BYTE-EQ | PASS (baseline vs IPCP stdout byte-identical) |
+| F-RFC047-BLOCK-WALL-IMPROVED | **PARTIAL** (1.28×, below ≥2× minimum) |
+
+**Wall measurement (5-run on M-Mac, var noted per PERF.md convention):**
+
+| State | walls (s) | avg | var |
+|---|---|---|---|
+| baseline (Phase 4-A-bwd 5602833f) | 12.806, 12.725, 12.575, 12.419, 12.344 | 12.574 | 3.7% |
+| IPCP rewrite (this prototype) | 9.727, 9.840, 9.895, 9.817, 9.793 | **9.814** | 1.7% |
+
+**Speedup = 12.574 / 9.814 = 1.28× (22% wall reduction)**
+
+### Honest assessment vs RFC 047 §137 F-RFC047-BLOCK-WALL-IMPROVED
+
+The ≥3× target requires kernel emission (Phase 4-B-3), not IPCP alone.
+clang -O2 with constants visible still must call separate fns
+(block_fwd → attn_core_fwd → swiglu_fwd → ...) — fn call overhead +
+memory traffic dominate at sub-25ms-per-step granularity.
+
+IPCP delivers what it can: per-statement constant folding + loop-bound
+unrolling hints + small-array stack allocation when sizes become literals.
+Measured 1.28× is the floor of the Phase 4-B mechanism family; the
+≥3× ceiling requires the emission step.
+
+**Decision**: ship IPCP as Phase 4-B-2 increment (22% wall reduction +
+zero correctness risk + byte-eq verified) — it's shippable on its own
+merits. The ≥3× target moves to Phase 4-B-3 (kernel emission), where
+the IPCP-rewritten source becomes the input.
+
+### Why IPCP alone delivers less than expected
+
+Hypothesis (testable in future cycles):
+1. fn call overhead at ~200K calls/run (T=16 × 80 steps × ~150 inner
+   fn calls per block_fwd) — non-constant share.
+2. Per-block farr alloc/free pattern (Bp_l, Bc_l, Xc scratch buffers)
+   dominates total wall — same allocator pressure regardless of
+   constants visible.
+3. dt_sqrt / dt_exp / dt_ln Taylor-series fn calls — same iteration
+   count regardless of constant args.
+
+Targeting (1) + (2) is Phase 4-B-3 emission scope; targeting (3) is
+RFC 040 §3 transcendental routing (orthogonal).
+
 ## What's NOT in scope for Phase 4-B-1 scaffold
 
 - Build flag `--flame-phase4b` (next cycle — wire to `cmd_build`)

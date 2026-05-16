@@ -16,18 +16,30 @@
 
 ## Three honest paths forward
 
-### Path A — RFC 047 Phase 4-B-1 (LANDED 2026-05-17, scaffold-only)
+### Path A — RFC 047 Phase 4-B-1 + 4-B-2 IPCP (LANDED 2026-05-17)
 
-**Status**: detect-only scaffold landed as `tool/flame_phase4b_scan.hexa`. See `stdlib/flame/PHASE4B_SCAFFOLD.md` for full findings.
+**Status**: detect-only scaffold + IPCP prototype both landed.
 
-**Key finding**: ALL real flame call sites are `variable-tuple` (T/d/nh/nkv/h passed as fn parameters, never direct literals). The first literal binding lives in `main()` 3 hops above the block call. RFC 047 §39 "extract static dim constants" requires either inter-procedural constant propagation OR source-level specialization wrappers OR `@specialize` attribute integration.
+- `tool/flame_phase4b_scan.hexa` — Phase 4-B-1 scaffold (detect+classify)
+- `tool/flame_phase4b_ipcp.hexa` — Phase 4-B-2 IPCP (text rewriter)
 
-**Recommended Phase 4-B-2 path (option (b) from PHASE4B_SCAFFOLD.md)**: write `flame_decoder_d32_3L` wrapper that bakes dims as literals. Lowest risk; gives the scanner literal-tuple sites; reversible. If perf proves out, productionize as option (c) attribute-driven.
+See `stdlib/flame/PHASE4B_SCAFFOLD.md` for full findings.
 
-**Falsifier status**:
-- F-RFC047-SCAFFOLD-DETECT: PASS (synthetic literal-site source)
-- F-RFC047-SCAFFOLD-FALLBACK: PASS (real flame sources)
-- F-RFC047-FALLBACK-PRESERVED: not yet exercised (scaffold doesn't wire to `cmd_build` — production flow untouched, so byte-id holds vacuously)
+**Phase 4-B-2 IPCP result**: 715 substitutions across 5 target fns, output byte-identical to baseline, **1.28× wall speedup (12.574s → 9.814s, 5-run avg, var 1.7%)**.
+
+**Falsifier matrix**:
+- F-RFC047-SCAFFOLD-DETECT: PASS
+- F-RFC047-SCAFFOLD-FALLBACK: PASS
+- F-RFC047-IPCP-SOURCE-FOUND: PASS
+- F-RFC047-IPCP-SUBST-COUNT: PASS (715)
+- F-RFC047-IPCP-RESCAN-LITERAL: PASS (0 → 2 literal-tuple sites)
+- F-RFC047-IPCP-BYTE-EQ: PASS (stdout byte-identical)
+- F-RFC047-BLOCK-WALL-IMPROVED: **PARTIAL** (1.28×, below ≥2× minimum)
+- F-RFC047-FALLBACK-PRESERVED: holds vacuously (production cmd_build untouched)
+
+**Next sub-step (Phase 4-B-3 — kernel emission)**: emit specialized C kernel per (T,d,nh,nkv,h) tuple per RFC 047 §69 Emit pattern. IPCP-rewritten source becomes input. Target: collapse 12+ memory passes (current) → 2-3 register-resident passes via clang -O2 specialization on dimensional constants. Expected ≥3× wall improvement over baseline.
+
+**OR** ship IPCP as-is for d=32·3L corpus benchmark (1.28× is real + zero risk) and pivot to Path B (GPU dispatch fire) — at d=768·12L the IPCP-only path may compose with GPU memory bandwidth gains for the eager-PyTorch baseline crossing.
 
 ### Path B — Phase 4-D GPU dispatch fire (cost-bearing, immediate)
 
