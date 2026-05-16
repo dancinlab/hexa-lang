@@ -141,6 +141,10 @@ print(gn2_init_epoch)
 println("  (anima reference: 7.97116)")
 
 // 80-step grad-accumulate-then-step loop (matches anima d_corpus_fire main)
+// Phase 3-I (2026-05-17): every-step gn2 capture for RFC 045 trajectory
+// shape evidence (anima provides only init+final; flame captures full 80).
+let traj = t_zeros(81)  // slot 0 = init, slots 1..80 = post-step gn2
+t_set(traj, 0, gn2_init_epoch)
 let mut step = 1
 let mut gn2_last = gn2_init_epoch
 while step <= 80 {
@@ -180,6 +184,7 @@ while step <= 80 {
     // one AdamW step over accumulated grads
     opt_adamw_step(M, Mg_acc, Mm, Mv, m_size, lr, b1, b2, eps_a, wd, step)
     gn2_last = gn2_step_epoch
+    t_set(traj, step, gn2_step_epoch)
     if step == 1 {
         print("  step 1 (pre-update): epoch gn2 = "); println(gn2_step_epoch)
     }
@@ -197,6 +202,16 @@ while step <= 80 {
     }
     step = step + 1
 }
+// Phase 3-I trajectory dump for RFC 045 evidence (every 5 steps)
+println("")
+println("  Full 80-step gn2 trajectory (every 5 steps for compactness):")
+print("    step  0 (init): "); println(t_get(traj, 0))
+let mut tk = 5
+while tk <= 80 {
+    print("    step "); print(tk); print(": "); println(t_get(traj, tk))
+    tk = tk + 5
+}
+let _ = t_free(traj)
 
 // final epoch gn2 + acc
 let mut gn2_final_epoch = 0.0
