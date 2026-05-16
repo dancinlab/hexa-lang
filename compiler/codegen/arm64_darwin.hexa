@@ -958,6 +958,7 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "file_size"     { return "rt_file_size" }
     if name == "chars"         { return "hexa_str_chars" }
     if name == "eprintln"      { return "hexa_eprintln" }
+    if name == "exit"          { return "hexa_exit" }
     if name == "exec"          { return "hexa_exec" }
     if name == "file_exists"   { return "rt_file_exists" }
     if name == "index_of"      { return "hexa_array_index_of" }
