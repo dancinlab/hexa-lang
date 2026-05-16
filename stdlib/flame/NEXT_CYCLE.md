@@ -1,5 +1,16 @@
 # flame NEXT_CYCLE.md — implementation onboarding for next user-directed cycle
 
+> **⚠ SUPERSEDED 2026-05-17 by `STATUS.md` (third iteration commit `a7ac0746`)**
+>
+> This file captured the state as of the 49-commit session (commit
+> `5602833f`, Phase 4-A-bwd partial). A subsequent 30-commit autonomous
+> cycle delivered Phase 4-B-2 IPCP SHIPPED + Phase 4-B-3 VERIFICATION-
+> LAYER COMPLETE. Read `STATUS.md` for the current single-page state.
+> The content below is preserved for the per-falsifier matrix detail
+> + Path A/B (now superseded by STATUS.md three-path user-gate input).
+>
+> ── original entry below ────────────────────────────────────────────
+>
 > Post 49-commit session state (commit `5602833f`). All Phase 3 work
 > SHIPPABLE COMPLETE; Phase 4 design layer (RFC 046+047+048) shipped;
 > Phase 4-A-bwd partial implementation landed. This file is the
