@@ -172,6 +172,30 @@ b. **Frontend `CODEGEN-FAIL`** in some smokes — `HX3001` type-mismatch
 
 R3 ✅ closed for assertion-driven smokes.
 
+### R5 parity sample expanded (25 smokes, second sweep)
+
+23 / 25 byte-identical MATCH · 1 native-faster-than-interp · 1 DIFF.
+
+| outcome | count | files |
+|---------|-------|-------|
+| MATCH (byte-identical) | 23 | t_batch22/23 print/datetime, regress_dict_keys, regression, calc_cli, factorial/symmetric_s6/pascal_perfect/prime_pair/egyptian_fraction/divisor_field/mult_order/catalan/generator_finder/platonic_solids/static_index/n6_lattice/convergence/congruence/reachability/ftl_n6/physics_constant/nstate_calculator smokes |
+| native succeeds, interp times out | 1 | sigma_phi_tau_uniqueness_smoke (native rc=0; interp SIGKILL ≥25 s) |
+| DIFF | 1 | perfect_number_engine_smoke (8 assertion-cases out of 19) |
+
+The 1 DIFF — `binary_value(a, b, op)` ops 1/3 return 0 under
+`hexa build` (op 4/5 with nested-if return correctly). Reproduces ONLY
+when the function is reached through `import "compiler/atlas/symbolic/
+perfect_number_engine.hexa"`; the same function inlined into a single
+file produces correct output in both native and interp. This is a
+hexa_v2 transpile/import-path bug, orthogonal to the aprime_cc
+direct-asm codegen this PR series fixes. Logged as a separate
+follow-up.
+
+Headline: 96% of the sampled corpus is byte-identical native↔interp
+through the proven `hexa build` pipeline, with zero codegen-fail and
+zero link-fail. The empirical case for R4-native-default is now
+strong; the remaining DIFF lives in a known orthogonal path.
+
 ### R5 parity sample (`hexa-run-native` over 8 representative smokes)
 
 | smoke                            | native | interp | result |
