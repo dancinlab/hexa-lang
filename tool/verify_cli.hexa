@@ -1,7 +1,7 @@
 // tool/verify_cli.hexa — `hexa verify {<id>|--expr|--fence|rubric|list}`
 //
-// @version 0.1.0
-// @capabilities [fs_read]
+// @version 0.2.0
+// @capabilities [fs_read, fs_write]
 //
 // SINGLE verification entry-point. Uses the BINARY BUILT-IN ATLAS
 // (dist/atlas.hxc via hxc_loader — the fast byte-canonical path; we do
@@ -27,8 +27,59 @@
 
 use "compiler/atlas/hxc_loader"
 use "compiler/atlas/symbolic/congruence_chain_engine"
+use "self/stdlib/fs"
 
 let HXC_PATH: string = "dist/atlas.hxc"
+let ABSORB_LEDGER: string = "atlas/inbox/verified_equations.tape"
+
+// --absorb anywhere in argv → fold a 🔵 verdict into the g7 inbox.
+fn _has_absorb(rest) -> bool {
+    let mut i = 0
+    while i < len(rest) {
+        if to_string(rest[i]) == "--absorb" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// append a self-verified equation as a g7 atlas verdict entry (append-only
+// inbox ledger). Legit 🔵 under g_self_verify — these ARE hexa-native
+// verified (NOT sympy carry). Reviewer-merge → MAIN.tape (cycle_033/035
+// pattern). Works for equations NOT YET in the atlas — verify computes &
+// proves them; --absorb grows the binary built-in atlas with the result.
+fn _absorb(label: string, evidence: string, anchor: string) {
+    let mut body = read_file_safe(ABSORB_LEDGER)
+    if len(body) == 0 {
+        body = "#!/usr/bin/env tape\n"
+        body = body + "# atlas/inbox/verified_equations.tape — `hexa verify --absorb` ledger\n"
+        body = body + "# g7 inbox: hexa-native self-verified 🔵 equations (g_self_verify;\n"
+        body = body + "# NOT sympy carry). Reviewer-merge → MAIN.tape (cycle_033/035 pattern).\n"
+        body = body + "@V := \"tape\" :: spec [active]\n  version = \"1.2\"\n\n"
+    }
+    let ent = "@D verified_" + _slug(label) + " := \"" + label
+        + "\" :: verdict [d=2026-05-16 active]\n"
+        + "  status = \"🔵 SUPPORTED-FORMAL\"\n"
+        + "  evidence = \"" + evidence + "\"\n"
+        + "  stage = \"Stage 1 — hexa-native recompute (hexa verify)\"\n"
+        + "  anchor = \"" + anchor + "\"\n"
+        + "  cite = \"hexa verify self-verified (g_self_verify · TECS-L Tier1)\"\n"
+        + "  provenance = \"tool/verify_cli.hexa --absorb · binary built-in atlas + calculators\"\n\n"
+    write_file_safe(ABSORB_LEDGER, body + ent)
+    println("  absorb = → " + ABSORB_LEDGER + " (@D verified_" + _slug(label) + ", g7 inbox)")
+}
+
+fn _slug(s: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s[i]
+        if (c >= "a" && c <= "z") || (c >= "0" && c <= "9") { out = out + c }
+        else if c >= "A" && c <= "Z" { out = out + c }
+        else { out = out + "_" }
+        i = i + 1
+    }
+    return out
+}
 
 // only FIXED keywords are subs; a bare <id> is picked up by the n>=3
 // fallback (real args start at index 2) — mirrors tool/calc_cli.hexa.
@@ -82,23 +133,57 @@ fn cmd_rubric() {
     println("                           SF ≠ proven (g4 honest fence)")
     println("")
     println("usage:")
-    println("  hexa verify <id>                 verify atlas atom: lookup + calc recompute")
-    println("  hexa verify --expr <fn> <n> <v>  recompute fn(n)==v via hexa-native calc")
-    println("  hexa verify --fence <claim>      classify as ⚪ SPECULATION-FENCED (honest)")
-    println("  hexa verify rubric | list        this rubric")
+    println("  hexa verify <id> [--absorb]              atlas atom: lookup + calc recompute")
+    println("  hexa verify --expr <fn> <n> <v> [--absorb]   recompute fn(n)==v hexa-native")
+    println("  hexa verify --expr <fn> <a> <b> <v> [--absorb]   2-operand (sigma_k/jacobi/...)")
+    println("  hexa verify --fence <claim>              ⚪ SPECULATION-FENCED (honest)")
+    println("  hexa verify rubric | list                this rubric")
+    println("")
+    println("  --absorb : a 🔵 result is folded into atlas/inbox/verified_equations.tape")
+    println("             (g7 inbox · self-verified, g_self_verify · reviewer-merge → MAIN.tape).")
+    println("             Verifies & absorbs equations NOT YET in the atlas — verify computes")
+    println("             them; the binary built-in atlas grows with proven closed-forms.")
+    println("  calc fns : sigma|sigma_0|sigma_2|phi|mu|tau|is_perfect|aliquot|gamma0_index|")
+    println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight")
+    println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms  (extend _recompute on gap)")
 }
 
-// recompute a foundation/NT closed-form by function name (the hexa-native
-// 🔵 path — g_self_verify). Returns -999999 if no calc path (→ 🟡/🟠).
+let NOCALC: int = -999999
+
+// recompute a number-theoretic closed-form by function name — the
+// hexa-native 🔵 path (g_self_verify · TECS-L Tier1). Returns NOCALC if
+// the calculator system has no path (caller → 🟡/🟠, and --absorb prints a
+// "calc gap" line so the gap is recorded for a calculator-system upgrade).
+// Coverage spans the full congruence_chain_engine surface; extend here
+// when a real equation has no path ("계산기시스템 부족하면 개선").
 fn _recompute(fn_name: string, n: int) -> int {
-    if fn_name == "divisor_sum" || fn_name == "sigma" { return sigma_k(n, 1) }
+    if fn_name == "divisor_sum" || fn_name == "sigma" || fn_name == "sigma_1" { return sigma_k(n, 1) }
+    if fn_name == "sigma_0" { return sigma_k(n, 0) }
+    if fn_name == "sigma_2" { return sigma_k(n, 2) }
     if fn_name == "euler_totient" || fn_name == "euler_phi" || fn_name == "phi" { return euler_phi(n) }
     if fn_name == "mobius" || fn_name == "mu" { return mobius(n) }
-    if fn_name == "divisor_count" || fn_name == "tau" {
-        let ds = divisors(n)
-        return len(ds)
+    if fn_name == "divisor_count" || fn_name == "tau" { return len(divisors(n)) }
+    if fn_name == "is_perfect" {
+        // perfect ⟺ σ(n) = 2n  (Euclid–Euler; 6,28,496,…) → 1 / 0
+        if sigma_k(n, 1) == 2 * n { return 1 }
+        return 0
     }
-    return -999999
+    if fn_name == "aliquot" { return sigma_k(n, 1) - n }
+    if fn_name == "gamma0_index"   { return gamma0_index(n) }
+    if fn_name == "gamma0_cusps"   { return gamma0_cusps(n) }
+    if fn_name == "gamma0_genus"   { return gamma0_genus(n) }
+    if fn_name == "isotropy_lcm"   { return isotropy_lcm(n) }
+    if fn_name == "first_cusp_form_weight" { return first_cusp_form_weight(n) }
+    return NOCALC
+}
+
+// two-arg NT forms (k-th divisor power sum · Jacobi/Kronecker symbols).
+fn _recompute2(fn_name: string, a: int, b: int) -> int {
+    if fn_name == "sigma_k"   { return sigma_k(a, b) }
+    if fn_name == "jacobi"    { return jacobi_symbol(a, b) }
+    if fn_name == "kronecker" { return kronecker_symbol(a, b) }
+    if fn_name == "dim_cusp_forms" { return dim_cusp_forms(a, b) }
+    return NOCALC
 }
 
 // extract trailing "= <int>" claimed value from a raw header before "::".
@@ -164,11 +249,16 @@ fn cmd_verify_id(rest) {
         return
     }
     let got = _recompute(fnm, 6)
-    if got == claimed && claimed != -999999 {
+    if got == claimed && claimed != NOCALC {
         println("  calc   = " + fnm + "(6) = " + to_string(got) + "  == claimed " + to_string(claimed))
         println("  tier   = 🔵 SUPPORTED-FORMAL")
         println("  reason = hexa-native closed-form reproduced (g_self_verify · TECS-L Tier1)")
-    } else if claimed == -999999 {
+        if _has_absorb(rest) {
+            _absorb(target + " = " + to_string(claimed),
+                    "@" + nkind + " " + target + " · " + fnm + "(6)=" + to_string(got) + " == atlas-claimed " + to_string(claimed),
+                    "[compiler invariant — hexa-native NT closed-form, g_self_verify]")
+        }
+    } else if claimed == NOCALC {
         println("  calc   = " + fnm + "(6) = " + to_string(got) + "  vs claimed (unparsed)")
         println("  tier   = 🟠 INSUFFICIENT")
         println("  reason = claimed value unparsed from raw — cannot adjudicate")
@@ -181,24 +271,43 @@ fn cmd_verify_id(rest) {
 }
 
 fn cmd_expr(rest) {
-    // rest = ["--expr", <fn>, <n>, <v>]
+    // 1-operand:  --expr <fn> <n> <v>            (rest len 4)
+    // 2-operand:  --expr <fn> <a> <b> <v>        (rest len 5)
     if len(rest) < 4 {
-        println("error: usage: hexa verify --expr <fn> <n> <expected>")
+        println("error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]")
         exit(2)
     }
     let fnm = to_string(rest[1])
-    let n = to_int(to_string(rest[2]))
-    let v = to_int(to_string(rest[3]))
-    let got = _recompute(fnm, n)
-    println("verify --expr " + fnm + "(" + to_string(n) + ")")
-    if got == -999999 {
+    let mut got = NOCALC
+    let mut label = ""
+    let mut v = 0
+    let n5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb"
+    if n5 {
+        let a = to_int(to_string(rest[2]))
+        let b = to_int(to_string(rest[3]))
+        v = to_int(to_string(rest[4]))
+        got = _recompute2(fnm, a, b)
+        label = fnm + "(" + to_string(a) + "," + to_string(b) + ")=" + to_string(v)
+    } else {
+        let nn = to_int(to_string(rest[2]))
+        v = to_int(to_string(rest[3]))
+        got = _recompute(fnm, nn)
+        label = fnm + "(" + to_string(nn) + ")=" + to_string(v)
+    }
+    println("verify --expr " + label)
+    if got == NOCALC {
         println("  tier   = 🟠 INSUFFICIENT")
-        println("  reason = no hexa-native calc path for '" + fnm + "'")
+        println("  reason = calculator system has NO path for '" + fnm + "'")
+        println("  gap    = extend tool/verify_cli.hexa::_recompute (계산기시스템 개선 후보)")
         return
     }
     if got == v {
         println("  calc   = " + to_string(got) + "  == expected " + to_string(v))
         println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)")
+        if _has_absorb(rest) {
+            _absorb(label, fnm + " hexa-native recompute = " + to_string(got) + " == claimed " + to_string(v),
+                    "[compiler invariant — hexa-native NT closed-form, g_self_verify]")
+        }
     } else {
         println("  calc   = " + to_string(got) + "  != expected " + to_string(v))
         println("  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)")
