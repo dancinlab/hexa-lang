@@ -44,7 +44,8 @@
   flame_block_test.hexa -> "[LANDED 2026-05-17 Phase 3-B] selftest (F-RFC043-BLOCK-DET · F-RFC043-BLOCK-GRAD-EXACT)"
   decoder_lib.hexa -> "[Phase 3-C LANDED 2026-05-17] full ConsciousDecoderV2 composition (embedding · n_layer block stack · final RMSNorm · tied LM head · CE/gn2/predict helpers); GRAD-EXACT 10-probe 2/2 PASS @ max rel = 2.66e-08"
   flame_decoder_test.hexa -> "[LANDED 2026-05-17 Phase 3-C] selftest (F-RFC043-DECODER-DET · F-RFC043-DECODER-GRAD-EXACT — campaign F-D-PORT-5b 등가)"
-  train_lib.hexa -> "[Phase 3-D planned] compiled train_step + 80-step trajectory + dt_* transcendentals (F-RFC043-STEP-EQ-ORACLE ⟸ campaign d=32·3L oracle 7.97116→3.73374e-07; byte-eq 조건: dt_sqrt/dt_exp/dt_ln/d5_sin/cos implemented)"
+  train_lib.hexa -> "[Phase 3-D LANDED 2026-05-17] compiled train_step + 80-step trajectory + nn_decoder_init (seed-fixed LCG); F-RFC043-TRAIN-{DET,DESCENT,FIT} 3/3 PASS — gn2 collapse 3.5e18× (toy d=8·2L)"
+  flame_train_test.hexa -> "[LANDED 2026-05-17 Phase 3-D] 80-step trainer selftest entrypoint"
   note = "[LANDED] = built + falsifier PASS. lib-split mandatory (compiled: main/_selftest 동거 시 C 심볼 중복). 각 selftest 는 독립 entrypoint 파일."
 
 # ─── §3 Governance ───────────────────────────────────────────────────
@@ -375,6 +376,40 @@ Honest carve-out: anima oracle (gn2 7.97116 → 3.73374e-07) 와 bit-eq
 선결 (현재 flame 은 builtin sqrt/exp/log/sin/cos 사용). Phase 3-D
 의 selftest 는 (a) compiled monotonic descent + (b) oracle-tol agreement
 (RFC 040 fp-tol 내) 로 시작 가능; bit-eq 는 transcendental 치환 후.
+
+### 2026-05-17 — Phase 3-D LANDED (train_lib, 3/3 PASS)
+landed: `stdlib/flame/{train_lib.hexa, flame_train_test.hexa}`. 80-step
+compiled-native trainer on a single-sample (ids, target_t) memorization
+task. `nn_decoder_train_step` (one step: fwd → gn2 measure → zero Mg →
+bwd → AdamW), `nn_decoder_adamw_step` (whole-model AdamW), and
+`nn_decoder_init` (seed-fixed LCG weight init mirroring anima
+d5_init_block 의 seed-offset 패턴: +11 Wq · +23 Wk · +37 Wv · +53 Wo
+· +71 Wg · +89 Wu · +103 Wd).
+
+config: T=3, d=8, nh=2, nkv=1, h=12, V=8, n_layer=2, seed=42, target=4
+- F-RFC043-TRAIN-DET     PASS — 두 run byte-identical (gn2_init, final, pred)
+- F-RFC043-TRAIN-DESCENT PASS — **gn2[0] = 0.900926 → gn2[80] =
+  2.56e-19; collapse 3.5e18×** (threshold 100× 의 ~3.5e16× 초과).
+  단일-sample memorization. 캠페인 d=32·3L 의 ~2e7× collapse 보다
+  강한 collapse (toy config 의 fewer parameters + 같은 sample 반복).
+- F-RFC043-TRAIN-FIT     PASS — predict(ids) = target_t (4)
+- regression: 모든 prior PASS 유지 (RFC 034 5/5 · RFC 040 B2 9/9 ·
+  flame Phase 1 4/4 · Phase 2 17/17 · Phase 3-A/B/C 5건). structural
+  call_builtin = 0. stdlib/flame/ LoC 총 ~5.2k.
+
+**flame Phase 3 NN-STACK COMPLETE**:
+- Phase 3-A optim_lib       (1/1)
+- Phase 3-B decoder_block_lib (2/2, GRAD-EXACT 3.59e-10)
+- Phase 3-C decoder_lib      (2/2, full-model GRAD-EXACT 2.66e-08)
+- Phase 3-D train_lib        (3/3, 80-step DESCENT 3.5e18× collapse)
+누적 falsifier: Phase 1 4 + Phase 2 17 + Phase 3 8 = **29 PASS**.
+
+Phase 3-E (선택, 별도 cycle): dt_sqrt/dt_exp/dt_ln/d5_sin/cos hand-Taylor
+implementation → anima oracle gn2 7.97116 → 3.73374e-07 byte-eq
+재현 시도 (F-RFC043-STEP-EQ-ORACLE). 현재 stack 의 strict superset
+이라 transcendental 치환만 필요.
+Phase 4 (compiler fusion) · Phase 5 (whole-program fusion · d=768·12L
+fire) 가 본격 perf 작업; correctness foundation 완료.
 - optim_lib = RFC 034 의 adamw_step 위의 wrapper (이미 ag_adamw_step
   으로 검증됨; named wrapper 만 추가)
 - train_lib = compiled train_step (fwd + CE + bwd + AdamW 의 묶음)

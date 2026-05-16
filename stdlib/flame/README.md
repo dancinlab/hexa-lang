@@ -1,14 +1,18 @@
 # flame — hexa-native, compiler-only PyTorch-equivalent NN stdlib
 
-> **Status: Phase 1 LANDED + Phase 2 COMPLETE (7/7 layers, 2026-05-16)
-> — `tensor_lib` + `autograd_lib` + `nn_lib` (Linear · RMSNorm ·
-> Embedding · LM head · RoPE · SwiGLU · Attention-core, fwd+bwd) +
-> selftests 4/4 + 17/17 PASS on compiled-native, regression 0.**
-> Includes closed math invariants Rᵀ·R = I (RoPE, machine-ε) and
-> P[hh,i,j>i] = 0 (attention causal mask). See `PLAN.md` + `FLAME.tape`.
-> **Next gate: Phase 3 — `optim_lib` + `train_lib` (F-RFC043-STEP-EQ
-> connection-point closed check vs the campaign's d=32·3L ×8win
-> ×80-AdamW seed=42 bit-equal trajectory).**
+> **Status: Phase 1 + Phase 2 + Phase 3 NN-STACK COMPLETE (2026-05-17)
+> — `tensor_lib` + `autograd_lib` + `nn_lib` (7 layers) + `optim_lib`
+> + `decoder_block_lib` + `decoder_lib` + `train_lib`. 29 falsifiers
+> PASS on compiled-native (Phase 1: 4/4 · Phase 2: 17/17 · Phase 3:
+> 8/8). 80-step trainer single-sample memorization: gn2 0.900926 →
+> 2.56e-19 (3.5e18× collapse). Full-model GRAD-EXACT central-diff
+> max rel = 2.66e-08 (head→tied→finalnorm→block-stack→RoPE→GQA→embed
+> reverse verified closed-form). Compiler-only structural invariant
+> (call_builtin = 0) sustained throughout.**
+>
+> Optional Phase 3-E: dt_* hand-Taylor transcendentals → anima oracle
+> byte-eq retry (gn2 7.97116 → 3.73374e-07, d=32·3L config). Phase 4:
+> compiler fusion. Phase 5: whole-program fusion / d=768·12L fire.
 >
 > **Pair**: `flame` (this directory — hexa NN stdlib) ↔ `self/forge/`
 > (the GPU compute substrate: cuBLAS + .cu kernels). See AGENTS.tape §0

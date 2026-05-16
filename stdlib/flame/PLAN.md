@@ -265,3 +265,31 @@ oracle (gn2 7.97116 → 3.73374e-07) 의 bit-eq 은 dt_sqrt/dt_exp/dt_ln/
 d5_sin/cos hand-Taylor implementation 선결 (현 flame 은 builtin
 transcendental 사용). 3-D 선두는 (a) monotonic descent + (b) oracle-tol
 fp-agreement; bit-eq 는 transcendental 치환 후 별도 sub-phase.
+
+### 2026-05-17 — Phase 3-D LANDED (train_lib, 3/3 PASS)
+landed: `stdlib/flame/{train_lib.hexa, flame_train_test.hexa}`.
+`nn_decoder_train_step` + `nn_decoder_adamw_step` + `nn_decoder_init`
+(seed-fixed LCG weight init: tok_emb 0.05 scale, projections 0.2,
+RMSNorm gains = 1.0).
+
+config: T=3, d=8, nh=2, nkv=1, h=12, V=8, n_layer=2, seed=42, target=4
+- F-RFC043-TRAIN-DET     PASS  byte-id 두 seed=42 run
+- F-RFC043-TRAIN-DESCENT PASS  **gn2 0.900926 → 2.56e-19 (3.5e18×
+  collapse**, threshold 100× 의 ~3.5e16× 초과)
+- F-RFC043-TRAIN-FIT     PASS  predict(ids) = target_t (4)
+- regression: 모든 prior PASS. call_builtin = 0. LoC 총 ~5.2k.
+
+**flame Phase 3 NN-STACK COMPLETE**:
+- Phase 3-A optim_lib       1/1
+- Phase 3-B decoder_block_lib 2/2 (GRAD-EXACT 3.59e-10)
+- Phase 3-C decoder_lib      2/2 (FULL-MODEL GRAD-EXACT 2.66e-08)
+- Phase 3-D train_lib        3/3 (80-step DESCENT 3.5e18× collapse)
+Phase 3 누적 falsifier: 8 PASS. flame 전체 (Phase 1+2+3): **29 PASS**.
+
+다음 (선택):
+- Phase 3-E: dt_* hand-Taylor transcendentals → anima oracle byte-eq
+  재현 시도 (`F-RFC043-STEP-EQ-ORACLE`: gn2 7.97116 → 3.73374e-07
+  bit-eq, d=32·3L config 동일).
+- Phase 4: compiler fusion (perf, eager-PyTorch match).
+- Phase 5: whole-program fusion + d=768·12L compiler-only fire
+  (exceed eager-PyTorch ultimate, multi-cycle).
