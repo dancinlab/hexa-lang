@@ -36,6 +36,14 @@
 //   clang -O2 -c -I self tool/flame_phase4b3_block_fwd_primitive.c -o /tmp/block_prim.o
 // ════════════════════════════════════════════════════════════════════════
 
+// Forward decls for concat'd-into-hexa_v2-emit case. runtime.c provides
+// `static HexaVal farr_zeros;` / `static HexaVal farr_free;` (fn ptr vars,
+// not direct fns — call via `hexa_call1(farr_zeros, x)` macro).
+// `_db_proj_batch_farr` is hexa-source emitted: signature is all-HexaVal.
+#ifndef FLAME_BLOCK_PRIM_STANDALONE
+HexaVal _db_proj_batch_farr(HexaVal W, HexaVal W_off, HexaVal X, HexaVal X_off, HexaVal Y, HexaVal Y_off, HexaVal T, HexaVal d_out, HexaVal d_in);
+#endif
+
 // Standalone compile context: emulate single-TU access to runtime.c types
 // when not concat'd. When concat'd into hexa_v2-emitted .c (which
 // `#include "runtime.c"`), these forward decls are redundant but harmless
@@ -241,7 +249,7 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive(
     }
 
     // ─── 5. output projection: attn_out = Wo · ctx — matmul SKIP ──
-    HexaVal attn_out_v = farr_zeros(hexa_int(T * d));
+    HexaVal attn_out_v = hexa_call1(farr_zeros, hexa_int(T * d));
     int attn_out_id = (int)attn_out_v.i;
     _db_proj_batch_farr(
         hexa_int(Bp_id), hexa_int(WO),
@@ -256,7 +264,7 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive(
     for (int idx = 0; idx < T * d; idx++) {
         Bc[oHstate + idx] = X[idx] + attn_out[idx];
     }
-    farr_free(attn_out_v);
+    hexa_call1(farr_free, attn_out_v);
 
     // ─── 7. per-position RMSNorm(hstate, g2) → rin2, rm2xn, rm2inv ─
     for (int i2 = 0; i2 < T; i2++) {
@@ -298,7 +306,7 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive(
         }
     }
     // o = Wd · s
-    HexaVal sw_o_v = farr_zeros(hexa_int(T * d));
+    HexaVal sw_o_v = hexa_call1(farr_zeros, hexa_int(T * d));
     int sw_o_id = (int)sw_o_v.i;
     _db_proj_batch_farr(
         hexa_int(Bp_id), hexa_int(WD),
@@ -313,5 +321,5 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive(
     for (int idx2 = 0; idx2 < T * d; idx2++) {
         Bc[oXout + idx2] = Bc[oHstate + idx2] + sw_o[idx2];
     }
-    farr_free(sw_o_v);
+    hexa_call1(farr_free, sw_o_v);
 }
