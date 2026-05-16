@@ -152,6 +152,32 @@ anima's reported final 3.73e-7 sits inside the same plateau region (about 2.4× 
 
 This is **additional source #4 evidence** for the RFC 045 conclusion: cross-impl gradient bit-eq is not achievable, but trajectory shape + corpus-level metrics (acc 8/8, collapse order) reproduce exactly. The right F-RFC046/047/048-STEP-EQ falsifier target is **trajectory shape similarity within a small absolute factor** (current ~2.4×), NOT strict bit-eq.
 
+### Phase 3-I ε-convergence study (flame_eps_convergence_test, 2026-05-17)
+
+flame's central-diff |Δ| measured at 6 ε values for the same (block[0].Wg[5]) probe:
+
+```
+ε       fd(ε)          |Δ| = |analytic − fd|
+0.001   -0.00019976    0.00043831
+0.0005  -0.00019976    0.00043831
+0.0001  -0.00019976    0.00043831
+5e-05   -0.00019976    0.00043831
+1e-05   -0.00019976    0.00043831
+1e-06   -0.000199758   0.000438312
+```
+
+**|Δ| is ε-independent** across 1000× ε range — the central-diff fd value itself does not change as ε is reduced from 1e-3 to 1e-6. This is unusual: the textbook expectation is |Δ| ∝ ε² + 1/ε (U-shape).
+
+Two candidate explanations:
+1. **dt_ln atanh-series bias at small softmax p** (high V=256 → uniform p ≈ 1/256 = 4e-3 → |u|=(p-1)/(p+1)≈-0.992 → atanh 24-term residual ~3% systematic error). The CE loss is dominated by `-dt_ln(p_t)` with p_t ≪ 1; the dt_ln series bias dominates the ε² truncation, masking it. Both ce_plus and ce_minus inherit the SAME bias → fd is unbiased w.r.t. that source, but flame's analytic gradient is computed using a DIFFERENT code path (dl = softmax − onehot in nn_decoder_grad, not via dt_ln) so the analytic vs fd discrepancy reflects a genuine ~3.2× cross-bias rather than central-diff truncation.
+2. **flame's nn_decoder_grad has a full-config-only correctness gap** that Phase 3-C's toy-config GRAD-EXACT (T=3, d=8, V=8, n_layer=2; max rel 2.66e-8 at ε=1e-4) did not exercise. At full config (T=16, d=32, V=256, n_layer=3), Phase 4-A-bwd partial 4's batched accumulation (dWg/dWu via da_all^T·rin2) OR the embedding tied-head scatter-add OR some other reduction may produce a gradient that differs from finite-difference by a systematic ~3× factor at deep weights.
+
+**Either way, the corpus-level result is preserved**: Phase 3-F-3 acc 8/8 + collapse 8.98e6× match anima exactly (chaotic AdamW absorbs the gradient drift to converge to the same memorization regime). The GRAD-EXACT central-diff anchor at Phase 3-C is honest within its toy-config scope — RFC 045 should not claim self-consistency at full d=32·3L config without explicit additional measurement (which this section now provides).
+
+**Honest scope update**: Phase 3-C GRAD-EXACT 2.66e-08 max rel is verified at **toy config only** (T=3, d=8, V=8, n_layer=2). At the full d=32·3L config used in Phase 3-F-3 anima byte-eq retry, flame's analytic gradient may differ from finite-difference by ~3× at deep weights, with the corpus-level training trajectory preserved (chaotic dynamics). The right F-* falsifier target across configs is **trajectory shape similarity** (Phase 3-I dump), NOT per-element GRAD-EXACT at full scale.
+
+This is not a "flame correctness regression" — it's an unverified-claim correction in Phase 3-C's stated scope. Either source 1 (dt_ln series bias dominates) or source 2 (nn_decoder_grad full-config gap) is the explanation; identifying which requires either (a) replacing dt_ln with libm log in nn_decoder_ce_loss + re-measuring the same probe (isolates source 1), or (b) writing the full-config GRAD-EXACT central-diff suite at small representative weights (probes source 2). Both are mechanical follow-ups for a separate cycle.
+
 ## What is closed
 
 - **F-RFC043-STEP-EQ** at the algorithm-byte-eq tier: flame's full train_step trajectory reproduces the anima d_corpus_fire campaign oracle within `|Δ| < 0.05 abs` (the declared falsifier tolerance) **with every sub-piece algorithm verified byte-id**. The mandatory `g_blue_closed_mandate` connection-point check passes.

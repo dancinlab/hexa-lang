@@ -1,0 +1,107 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// flame_eps_convergence_test.hexa — central-diff ε-convergence study
+//
+// Measures flame's central-diff |Δ| at multiple ε values for the same
+// probe (block[0].Wg[5]) on the d=32·3L corpus first window.
+//
+// Theory (numerical analysis):
+//   central-diff f'(x) ≈ (f(x+ε) - f(x-ε)) / (2ε)
+//   truncation error: O(ε² · |f'''(x)| / 6)
+//   roundoff error:   O(ε_machine · |f(x)| / ε)   ≈ 2.22e-16 / ε at f~1
+//   total |Δ| = α·ε² + β/ε
+//   optimal ε* = (β / (2α))^(1/3) ≈ 1e-5 for typical smooth f at fp64
+//
+// Evidence value for RFC 045:
+//   - confirms flame's analytical gradient is itself smooth-stable
+//   - characterizes the ε regime where Phase 3-C central-diff anchor
+//     (ε=1e-4) sits w.r.t. flame's own f'''(x) at the probe
+//   - separates impl-level drift (Phase 3-I source #4 evidence) from
+//     central-diff measurement noise
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/decoder_lib"
+use "stdlib/flame/decoder_block_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/train_lib"
+
+fn _abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+println("=== flame central-diff ε-convergence study (block[0].Wg[5]) ===")
+
+let T = 16
+let d = 32
+let nh = 4
+let nkv = 2
+let h = 64
+let V = 256
+let n_layer = 3
+let hd = d / nh
+
+let path = "/Users/ghost/core/anima/training/corpus_consciousness_v1.jsonl"
+let bytes_arr = read_file_bytes(path)
+let ids = t_zeros(T)
+let mut p = 0
+while p < T { t_set(ids, p, to_float(bytes_arr[p])); p = p + 1 }
+let target_t = bytes_arr[T]
+
+let m_size = m_total(d, nh, nkv, h, V, n_layer)
+let M = t_zeros(m_size)
+nn_decoder_init(M, 42, T, d, nh, nkv, h, V, n_layer)
+let probe_idx = m_off_block(0, d, nh, nkv, h, V, n_layer)
+              + bp_off_Wg(d, nh, nkv, h) + 5
+let cos_tab = t_zeros(T * hd); let sin_tab = t_zeros(T * hd)
+nn_rope_build_tables(T, hd, cos_tab, sin_tab)
+let Mc = t_zeros(mc_total(T, d, nh, nkv, h, V, n_layer))
+let Mg = t_zeros(m_size)
+
+// analytic (same across all ε measurements)
+nn_decoder_fwd(ids, M, Mc, cos_tab, sin_tab, T, d, nh, nkv, h, V, n_layer)
+nn_decoder_grad(ids, target_t, M, Mc, Mg, cos_tab, sin_tab,
+                T, d, nh, nkv, h, V, n_layer)
+let analytic = t_get(Mg, probe_idx)
+print("  analytic = "); println(analytic)
+println("")
+
+println("  ε        | fd(ε)              | |Δ| = |analytic − fd|")
+println("  ---------+--------------------+----------------------")
+
+// ε convergence sweep
+let eps_vals = t_zeros(6)
+t_set(eps_vals, 0, 0.001)
+t_set(eps_vals, 1, 0.0005)
+t_set(eps_vals, 2, 0.0001)
+t_set(eps_vals, 3, 0.00005)
+t_set(eps_vals, 4, 0.00001)
+t_set(eps_vals, 5, 0.000001)
+
+let orig = t_get(M, probe_idx)
+let mut e = 0
+while e < 6 {
+    let eps = t_get(eps_vals, e)
+    t_set(M, probe_idx, orig + eps)
+    nn_decoder_fwd(ids, M, Mc, cos_tab, sin_tab, T, d, nh, nkv, h, V, n_layer)
+    let ce_plus = nn_decoder_ce_loss(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+    t_set(M, probe_idx, orig - eps)
+    nn_decoder_fwd(ids, M, Mc, cos_tab, sin_tab, T, d, nh, nkv, h, V, n_layer)
+    let ce_minus = nn_decoder_ce_loss(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+    t_set(M, probe_idx, orig)
+    let fd = (ce_plus - ce_minus) / (2.0 * eps)
+    let abs_delta = _abs(analytic - fd)
+    print("  ")
+    print(eps); print("   | "); print(fd); print(" | "); println(abs_delta)
+    e = e + 1
+}
+
+println("")
+println("  Expected: |Δ| should be U-shaped — truncation dominates at")
+println("  large ε (O(ε²·f''')), roundoff dominates at small ε")
+println("  (O(machine_eps·f/ε)), minimum near ε ≈ 1e-5.")
+
+let _ = t_free(eps_vals)
+let _ = t_free(ids); let _ = t_free(M); let _ = t_free(Mc); let _ = t_free(Mg)
+let _ = t_free(cos_tab); let _ = t_free(sin_tab)
