@@ -769,7 +769,25 @@ fn _bind_builtin_names() -> [string] {
         "term_sigint_pending", "term_sigwinch_pending", "term_winsize_cols", "term_winsize_rows", "term_write_str", "time_ms", "to_bool", "to_float",
         "to_int", "to_lower", "to_string", "to_upper", "trim", "true", "tty_isatty", "tty_ttyname",
         "type_of", "u_floor", "umount", "unshare", "utc_compact_now", "utc_iso_format", "utc_iso_now", "utc_iso_parse",
-        "write_bytes_append_v", "write_bytes_append", "write_bytes_v", "write_bytes", "write_file", "x25519_keypair", "x25519_scalarmult"
+        "write_bytes_append_v", "write_bytes_append", "write_bytes_v", "write_bytes", "write_file", "x25519_keypair", "x25519_scalarmult",
+        // Interp-recognised aliases / commonly-used names that the
+        // legacy bind list missed; without them the typecheck rejects
+        // imported library code that uses these as builtins. The
+        // codegen's `_builtin_runtime_sym` is the second gate (any
+        // name still unmapped there fails at link time, not at run),
+        // so this list can be generous.
+        "str", "int", "float", "bool", "char_code", "from_char_code", "from_cstring", "cstring",
+        "fma", "gelu", "hadamard", "input", "isnan", "isinf", "isfinite",
+        "is_empty", "is_error", "log2", "map_contains_key", "matvec", "mod", "one_hot",
+        "pad_left", "pad_right", "random", "tan", "tanh", "timestamp",
+        "delete_file", "str_trim_end", "str_trim_start",
+        "array_alloc", "array_count", "array_drop", "array_fill", "array_index_of",
+        "array_max", "array_min", "array_product", "array_reverse", "array_take",
+        "arange", "clamp", "clock", "deref", "exec_argv", "exec_capture",
+        "f32_bits", "f32_from_bits", "ham_free", "ham_pack", "hex", "bin",
+        "map_keys", "map_values", "map_entries", "phi_mi_pair", "phi_spatial",
+        "ptr_addr", "ptr_alloc", "ptr_free", "ptr_null", "ptr_offset", "ptr_read", "ptr_write",
+        "setenv", "silu", "struct_pack", "struct_unpack", "struct_free", "sum"
     ]
 }
 

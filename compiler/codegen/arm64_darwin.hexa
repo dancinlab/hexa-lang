@@ -1047,6 +1047,15 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "to_float"      { return "hexa_to_float" }
     if name == "to_bool"       { return "hexa_to_bool" }
     if name == "to_string"     { return "hexa_to_string" }
+    // Interp aliases (bind.hexa accepts them as known names; without
+    // a runtime symbol map the link fails on `_str`/`_int`/etc.).
+    // `str(x)` is interp's shorthand for `to_string(x)` (see
+    // self/hexa_full.hexa: call_builtin "str" -> val_str(val_to_string(args[0]))).
+    if name == "str"           { return "hexa_to_string" }
+    if name == "int"           { return "hexa_to_int" }
+    if name == "float"         { return "hexa_to_float" }
+    if name == "bool"          { return "hexa_to_bool" }
+    if name == "ln"            { return "hexa_log" }
     // map/dict accessors — runtime returns HexaVal of array (keys,
     // values, entries) or HexaVal scalar (count). All HexaVal-shape
     // so no ret-box needed. `dict_keys` is interp's anima-speak alias
