@@ -124,43 +124,65 @@ opt-in design:
    required to exercise the region path; the `f4b597a7` envelope fix
    keeps that fast enough.
 
-## Streaming loop integration (sketch)
+## Streaming loop integration (A4 decision recorded)
+
+The original sketch left the strtab/asm-fragment escape as an open
+question (a "heapify-to-outer primitive"). A4 resolves it with a
+**per-call toggle pattern** — no new primitive. The A3 region-returns
+flag is flipped ON only for the calls whose returns should stay inside
+the per-iteration scope, and OFF for the ones whose returns must
+survive across iterations:
 
 ```
 codegen_emit_streaming(hmodule, target):
     parts = []
-    push_outer_scope()                # outer frame: owns parts, st
+    # outer frame == codegen_emit_streaming's own __hexa_fn_arena scope
     for each item:
-        push_iter_scope()             # per-iteration region
-        enable_region_returns()       # flip the env flag
-        mfunc = _lower_fn(it)         # return region-promoted to iter frame
-        st = collect_strs(st, mfunc)  # st escape — heapify to outer (existing)
-        lfunc = arm64_lower(mfunc, st, modhash)
+        env("__HEXA_ARENA_PUSH__")              # iter F1 scope
+        env("__HEXA_ARENA_RETURN_REGION_ON__")  # returns → F1
+        mfunc = _lower_fn(it)                   # mfunc in F1
+        env("__HEXA_ARENA_RETURN_REGION_OFF__")
+        st = _arm_strtab_collect_fn(st, mfunc)  # return heapified to malloc
+        env("__HEXA_ARENA_RETURN_REGION_ON__")
+        lfunc = _arm64_lower_func(mfunc, st, modhash)  # lfunc in F1
+        env("__HEXA_ARENA_RETURN_REGION_OFF__")
         if lfunc.target == target:
-            frag = emit_func(target, lfunc)
-            parts.push(heapify_to_outer(frag))   # explicit escape
-        disable_region_returns()
-        pop_iter_scope()              # frees mfunc/lfunc/transient
-    rodata = strtab_to_rodata(st)
-    out = join(parts) + rodata-emission
-    pop_outer_scope()
-    return heapify(out)
+            frag = _emit_func(target, lfunc)    # return heapified to malloc
+            parts.push(frag)                    # parts is heap-owned
+        env("__HEXA_ARENA_POP__")               # frees mfunc/lfunc/transients
+    rodata = _strtab_to_rodata(st)
+    return parts.join("") + rodata-emission
 ```
 
-Two open mechanical questions for the next design iteration:
+- mfunc/lfunc are in F1 ⇒ POP reclaims them per iteration (the point).
+- st and frag are heapified to malloc on return ⇒ outlive POP trivially;
+  no "heapify to named outer frame" primitive needed.
+- The 6 env() toggles per iter are O(1) each; negligible CPU.
 
-- **`st` escape**: each `_arm_strtab_collect_fn(st, mfunc)` writes
-  string copies into `st`, which lives in the *outer* frame. With
-  region-returns enabled the call's return is also routed to the iter
-  frame — `st` would be promoted to iter frame, then iter-pop frees it.
-  Solution: write the strtab updates into the *outer* frame directly,
-  or heapify-to-outer the strtab on every iteration. The latter is
-  simpler but quadratic; the former requires a "store into named outer
-  frame" primitive.
-- **Region-return granularity**: should the flag be checked per
-  fn-return, or once per loop body? Per-return is finer but adds a
-  branch on every hexa function return for the whole program lifetime
-  (negligible CPU, large engineering surface).
+### Verified A4 design vs the original open questions
+
+- **`st` escape**: SOLVED by toggling region returns OFF only for the
+  `_arm_strtab_collect_fn` call. Its return path uses today's
+  heapify-to-malloc; the growing st remains a heap-owned ArmStrTab
+  across iterations. No O(N²) per-iter heapify; no new primitive.
+- **Region-return granularity**: SETTLED as per-fn-return with a
+  process-global flag (A3). The granularity is per-call via toggle, not
+  per-fn-return. The runtime branch (`if (region_enabled) …`) in
+  `__hexa_fn_arena_return` is one already-paid load + branch in the
+  global lifetime, off-path when the flag is OFF (= today's default).
+
+### Residual A4 caveat — substring/strbuf allocation
+
+`_collect_strs_from_stmt`'s P0a path calls
+`o.str_val.substring(0, len(o.str_val))` to force a fresh string copy.
+`hexa_str_substring` allocates via `hexa_strbuf_alloc`. Open question
+for A5/A6 verification: does that buffer live in the per-iter F1 (bump
+arena) or in the malloc heap independent of arena scopes? If it's
+arena-backed, the substring buffer is freed on F1 POP even when the
+ArmStrTab wrapper escaped to malloc — st.keys would dangle. A5's
+empirical check (run, observe whether rodata content survives) gates
+this. If it's the first case, the targeted fix is a `force_heap_dup`
+runtime primitive used in P0a — small follow-up, scoped to A4.5.
 
 ## Phased steps
 
@@ -169,7 +191,7 @@ Two open mechanical questions for the next design iteration:
 | A1 | this design doc + `hexa_val_copy_into_arena` primitive (dormant). | landed this turn. |
 | A2 | `hexa_val_arena_heapify_to_parent` wrapper (uses A1 + temp-buf). | dormant; clang-c'd. |
 | A3 | `__hexa_fn_arena_return_region` variant; thread-local opt-in flag; `env("__HEXA_ARENA_RETURN_REGION__")` hook. | dormant; the codegen path is unchanged. |
-| A4 | `st` escape decision (see open questions). Likely a "heapify into named outer frame" primitive added under A3. | design + small experiment. |
+| A4 | per-call region-toggle pattern (no new primitive needed). | landed: design decided, doc updated. Residual: substring/strbuf residency check at A5/A6. |
 | A5 | Wire `stream.hexa` to push/pop iter scopes around the loop body and toggle the env flag. | the actual integration. |
 | A6 | ubu rebuild + RSS measurement: legacy vs `--stream` with region returns. Byte-diff. | the verdict. |
 | A7 | Make `--stream` default once A6 verifies. | retire the gate (F5). |
