@@ -1753,3 +1753,36 @@
     g8 commit trailer       — pending parent agent commit (Co-Authored-By: Claude Opus 4.7 (1M context))
   EOF
   note = "Verify→🔵→g7 absorb loop closure — additive, no ~> supersedes edges; all existing verdicts (s1_perfect_number, s1_sigma_k*, s8_gamma0*, etc.) UNTOUCHED. The 11 verified_* entries are the hexa-native self-verified counterparts produced by the `hexa verify --absorb` loop, distinct from the s*/_tecsl literature-anchor carries (no id collision — verified_* prefix). HARD constraints respected: status 🔵 SUPPORTED-FORMAL kept verbatim (the verify→absorb loop's purpose); f_atlas_lattice_external — n=6 as checked NT fact not derivation; compiler/atlas/verify/*, compiler/atlas/symbolic/*, tool/calc_cli.hexa, self/main.hexa, embedded.gen.hexa, dist/atlas.hxc NOT touched (other agents own those). Inbox truncated to header + @V (rolling --absorb sink kept, entries cleared — cycle_033 cleared-inbox pattern)."
+
+# ─── Cycle 037 — appended via tool/atlas_cycle_append ──────────
+
+@A cycle_037 := "Phase 3 cycle 037 — 18 _tecsl carries 🔵 SUPPORTED-FORMAL (hexa-native verifier-backed, g_self_verify)" :: cycle [d=2026-05-16 active]
+  trigger = "user \"all go\" — TECS-L carries verifier-backed, g_self_verify 🔵 upgrade. Agent commit aecde6f8 landed 20 hexa-native verifiers in compiler/atlas/verify/{foundation,math,top,cosmo,bridges}.hexa + test/atlas_tecsl_verify_smoke.hexa (29/29 PASS). 18 of the cycle_035 _tecsl @D carries now have a backing hexa-native verifier ⇒ g_self_verify genuinely satisfied ⇒ legitimately upgradable to 🔵 SUPPORTED-FORMAL (NOT a fake/silent upgrade — new verifier evidence + ~> supersedes per f_atlas_silent_upgrade)."
+  scope <<~EOF
+    Reviewer-merge tier-upgrade step (mirrors cycle_033/035/036 pattern):
+    atlas/MAIN.tape — 18 _tecsl @D entries upgraded in place (latest-wins architecture edit, NOT append):
+      §1 N6-FOUNDATION (10): s1_prime_pair_two_unique_tecsl · s1_semiprime_perfect_unique_tecsl · s1_divisor_field_action_zero_tecsl · s1_tau_plus_2_eq_n_tecsl · s1_sigma_n_plus_phi_eq_n_tau_sq_tecsl · s1_pnew_eq2_phi_sigma_tecsl · s1_pnew_eq7_ore_harmonic_tecsl · s1_pnew_eq8_sigma3_tecsl · s1_pnew_eq9_sigmaphi_tau_tecsl · s1_pnew_eq10_sopfr_tecsl
+      §2 MATH (4): s2_zeta_minus_one_sigma6_tecsl · s2_oeis5_bell_tau_tecsl · s2_oeis1_tau_sigma_tecsl · s2_oeis6_pell_square_tecsl
+      §8 TOP (4): s8_mu_eq_sigma_squarefree_tecsl · s8_dim_sk_gamma0_riemann_roch_tecsl · s8_gamma0_invariant_engine_tecsl · s8_modular_forms_sigma6_constants_tecsl
+    Each upgrade: status 🟠 INSUFFICIENT / 🟡 SUPPORTED-BY-CITATION → 🔵 SUPPORTED-FORMAL; ADDED ~> supersedes line (prior tier recorded), verifier = compiler/atlas/verify/<domain>.hexa::verify_<id>, |> verified-by edge, honest_c3 appended with the cycle_037 verifier-PASS evidence line. Everything else (evidence/anchor/cite/provenance) kept verbatim.
+    NOT upgraded: the 2 honest-🟡-capped (s6_koide_divisor_functional_tecsl PDG-external · s10_log6_2_plus_log6_3_137_tecsl) and the 21 genuinely-skipped _tecsl carries (no backing verifier) — UNTOUCHED. 0 of the 18 skipped for ambiguity (verifier-fn ↔ entry-id 1:1, exact name match).
+  EOF
+  files <<~EOF
+    atlas/MAIN.tape (18 _tecsl @D verdict entries upgraded 🟠/🟡 → 🔵 in place; ~> supersedes + verifier= + |> edge + honest_c3 appended; all other entries / section dividers UNTOUCHED)
+    atlas/MAIN.log.tape (this cycle_037 entry — append-only via tool/atlas_cycle_append.hexa)
+  EOF
+  verifier_run_result <<~EOF
+    atlas-verify smoke: PASS — atlas_verify_smoke 118/118 verdicts hold, ledger live total=118 vs MAIN.tape declared=118 (CONSISTENT, no declared-count adjustment needed: the _tecsl verifiers live in separate verify_*_tecsl_all() aggregates, NOT in verify_*_all() which the ledger smoke counts, so the live==declared 118 is unaffected — same as cycle_035/036).
+    atlas-tecsl-verify smoke: PASS=29 FAIL=0 — the 20 verifiers (10 positive + discrimination half) hold; the 18 backed entries are now legitimately 🔵.
+  EOF
+  governance_check <<~EOF
+    f_atlas_silent_upgrade — ✅ NEVER silent: every one of the 18 tier changes carries a ~> supersedes line (prior tier explicitly recorded) + new verifier= field + |> verified-by edge + a new honest_c3 evidence line. Tier change REQUIRES new evidence — satisfied.
+    g_self_verify — ✅ genuinely satisfied: each of the 18 has a hexa-native verifier (compiler/atlas/verify/{foundation,math,top}.hexa) that PASSes (test/atlas_tecsl_verify_smoke.hexa 29/29). NOT a sympy/citation carry — this is a LEGIT 🔵, not a fake upgrade.
+    f_atlas_external_verdict — ✅ honored: only the 18 with a real hexa-native verifier reach 🔵; the 2 honest-🟡-capped (PDG-external Koide, approx/disclog log6) and the 21 verifier-less carries stay ≤ 🟡 / 🟠.
+    g3 real-limit-anchor — ✅ 18/18 anchor field kept verbatim (Kolmogorov / Shannon / compiler-invariant present).
+    f_atlas_lattice_external — ✅ 18/18 honest_c3 still confines σ/τ/φ coincidences to observation; no n=6 lattice as derivation introduced.
+    g_arch_vs_log_split — ✅ MAIN.tape is the EDITABLE architecture (latest-wins per id — in-place tier upgrade is correct per g_arch_vs_log_split); this @A history append-only via tool.
+    g7 incoming-pipeline — ✅ reviewer-merge by autonomous parent agent; no consumer direct-edit.
+    g8 commit trailer — pending parent agent commit (Co-Authored-By: Claude Opus 4.7 (1M context)).
+  EOF
+  note = "Tier-upgrade ONLY (NOT additive) — 18 cycle_035 _tecsl carries promoted in place now that aecde6f8's hexa-native verifiers back them. Distinct from cycle_036's additive verified_* absorb-loop merge. f_atlas_silent_upgrade HARD respected on all 18 (~> + verifier= + |> + honest_c3 evidence — never silent). compiler/atlas/verify/* (already committed in aecde6f8), compiler/atlas/symbolic/*, tool/calc_cli.hexa, self/main.hexa, embedded.gen.hexa, dist/atlas.hxc, atlas/inbox/* NOT touched (other tracks). No declared-count change: _tecsl verifiers are in separate verify_*_tecsl_all() aggregates, outside the verify_*_all() ledger total — atlas_verify_smoke stays 118/118 live==declared. 0 of the 18 skipped for ambiguous mapping (1:1 verifier-fn ↔ entry-id exact-name match)."
