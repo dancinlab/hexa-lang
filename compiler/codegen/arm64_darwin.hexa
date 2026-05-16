@@ -444,6 +444,26 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
     let rem = frame - (frame / 16) * 16
     if rem != 0 { frame = frame + (16 - rem) }
 
+    // Path A (A′): HexaVal is a 16-byte struct (x0:x1 AAPCS64 pair) —
+    // a single register cannot hold one. Force EVERY value memory-
+    // resident in a 16B slot (no register residency); the emitter
+    // ldp/stp's the pair around each use. This mirrors the proven
+    // codegen_c2 memory-resident value model and avoids a pair-aware
+    // register allocator. Slower but ABI-correct (optimise post-stage-3).
+    let mut fi = 0
+    while fi < len(map_ids) {
+        if map_slots[fi] < 0 {
+            map_slots[fi] = next_slot
+            next_slot = next_slot + 16
+        }
+        map_regs[fi] = ""
+        fi = fi + 1
+    }
+    let mut frame2 = next_slot
+    let rem2 = frame2 - (frame2 / 16) * 16
+    if rem2 != 0 { frame2 = frame2 + (16 - rem2) }
+    frame = frame2
+
     let map = RegMap {
         ids: map_ids,
         regs: map_regs,
@@ -740,6 +760,117 @@ fn _arm64_dst_reg(rm: RegMap, id: i64) -> string {
     return _arm_reg_lookup(rm, id)
 }
 
+// ── Path A (A′) 16-byte HexaVal value helpers ────────────────
+// HexaVal occupies a register PAIR (lo = slot+0 = tag+pad, hi =
+// slot+8 = union payload). Every value is memory-resident in a 16B
+// frame slot (force-spilled in _arm_assign_regs). _hv_load brings a
+// value into the (lo,hi) GP pair; _hv_store writes a (lo,hi) pair
+// back to a value's slot. TAG_INT=0 TAG_BOOL=2 TAG_STR=3 (runtime.h).
+fn _hv_mem(off: i64) -> LOperand {
+    return _arm64_op_label("[sp, #" + to_string(off) + "]")
+}
+
+fn _hv_load(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
+            lo: string, hi: string) -> [LInstr] {
+    let mut out = buf
+    if o.kind == "local" {
+        let off = _arm_spill_offset(rm, o.local_id)
+        out.push(_arm64_instr3("ldp", _arm64_op_reg(lo), _arm64_op_reg(hi),
+                         _hv_mem(off), "hv load L" + to_string(o.local_id)))
+        return out
+    }
+    if o.kind == "const_int" {
+        out.push(_arm64_instr2("movz", _arm64_op_reg(lo),
+                         _arm64_op_label("#0"), "hv const_int: TAG_INT"))
+        if o.int_val >= 0 && o.int_val <= 65535 {
+            out.push(_arm64_instr2("movz", _arm64_op_reg(hi),
+                             _arm64_op_label("#" + to_string(o.int_val)), "hv const_int val"))
+        } else if o.int_val > 65535 {
+            out = _arm64_emit_imm_to_reg(out, hi, o.int_val)
+        } else {
+            // negative: build |n|-1 then mvn (two's complement)
+            out = _arm64_emit_imm_to_reg(out, hi, (0 - o.int_val) - 1)
+            out.push(_arm64_instr2("mvn", _arm64_op_reg(hi), _arm64_op_reg(hi),
+                             "hv const_int: negate"))
+        }
+        return out
+    }
+    if o.kind == "const_str" {
+        let cl = _arm64_strtab_lookup(st, o.str_val)
+        let mut nm = cl
+        if len(nm) == 0 { nm = o.str_val }
+        out.push(_arm64_instr2("movz", _arm64_op_reg(lo),
+                         _arm64_op_label("#3"), "hv const_str: TAG_STR"))
+        out.push(_arm64_instr2("adrp", _arm64_op_reg(hi),
+                         _arm64_op_label(nm + "@PAGE"), "hv str ptr page"))
+        out.push(_arm64_instr3("add", _arm64_op_reg(hi), _arm64_op_reg(hi),
+                         _arm64_op_label(nm + "@PAGEOFF"), "hv str ptr off"))
+        return out
+    }
+    if o.kind == "global" {
+        let gl = "g" + to_string(o.global_id)
+        out.push(_arm64_instr2("adrp", _arm64_op_reg(lo),
+                         _arm64_op_label(gl + "@PAGE"), "hv global page"))
+        out.push(_arm64_instr3("add", _arm64_op_reg(lo), _arm64_op_reg(lo),
+                         _arm64_op_label(gl + "@PAGEOFF"), "hv global off"))
+        out.push(_arm64_instr3("ldp", _arm64_op_reg(lo), _arm64_op_reg(hi),
+                         _arm64_op_label("[" + lo + "]"), "hv load global " + gl))
+        return out
+    }
+    // unknown → void (TAG_VOID=4, payload 0)
+    out.push(_arm64_instr2("movz", _arm64_op_reg(lo), _arm64_op_label("#4"), "hv void"))
+    out.push(_arm64_instr2("movz", _arm64_op_reg(hi), _arm64_op_label("#0"), "hv void"))
+    return out
+}
+
+fn _hv_store(buf: [LInstr], rm: RegMap, id: i64, lo: string, hi: string) -> [LInstr] {
+    let mut out = buf
+    if id < 0 { return out }
+    let off = _arm_spill_offset(rm, id)
+    out.push(_arm64_instr3("stp", _arm64_op_reg(lo), _arm64_op_reg(hi),
+                     _hv_mem(off), "hv store L" + to_string(id)))
+    return out
+}
+
+// Load a const_str's raw char* (the .LCstr address) into `reg` — for
+// the map ABI (hexa_map_set/get take `const char* key`, not HexaVal).
+fn _hv_cstr(buf: [LInstr], o: Operand, st: ArmStrTab, reg: string) -> [LInstr] {
+    let mut out = buf
+    let cl = _arm64_strtab_lookup(st, o.str_val)
+    let mut nm = cl
+    if len(nm) == 0 { nm = o.str_val }
+    out.push(_arm64_instr2("adrp", _arm64_op_reg(reg),
+                     _arm64_op_label(nm + "@PAGE"), "cstr key page"))
+    out.push(_arm64_instr3("add", _arm64_op_reg(reg), _arm64_op_reg(reg),
+                     _arm64_op_label(nm + "@PAGEOFF"), "cstr key off"))
+    return out
+}
+
+fn _hv_ldslot(buf: [LInstr], rm: RegMap, id: i64, lo: string, hi: string) -> [LInstr] {
+    let mut out = buf
+    let off = _arm_spill_offset(rm, id)
+    out.push(_arm64_instr3("ldp", _arm64_op_reg(lo), _arm64_op_reg(hi),
+                     _hv_mem(off), "hv reload L" + to_string(id)))
+    return out
+}
+
+// binop/compare → runtime symbol (codegen_c2-authoritative). "" =
+// special-cased (!=, &&, ||, bitwise) by the BINOP emitter.
+fn _hv_binop_sym(op: string) -> string {
+    if op == "+"  || op == "add" { return "hexa_add" }
+    if op == "-"  || op == "sub" { return "hexa_sub" }
+    if op == "*"  || op == "mul" { return "hexa_mul" }
+    if op == "/"  || op == "div" || op == "sdiv" { return "hexa_div" }
+    if op == "%"  || op == "mod" || op == "rem"  { return "hexa_mod" }
+    if op == "==" || op == "eq"  || op == "cmp_eq" { return "hexa_eq" }
+    if op == "<"  || op == "lt"  || op == "cmp_lt" { return "hexa_cmp_lt" }
+    if op == ">"  || op == "gt"  || op == "cmp_gt" { return "hexa_cmp_gt" }
+    if op == "<=" || op == "le"  || op == "cmp_le" { return "hexa_cmp_le" }
+    if op == ">=" || op == "ge"  || op == "cmp_ge" { return "hexa_cmp_ge" }
+    if op == "concat" { return "hexa_str_concat" }
+    return ""
+}
+
 // Builtin call target → runtime ABI symbol. Only builtins whose
 // runtime.c signature is verified `HexaVal X(HexaVal…)` (i.e. matches
 // the new codegen's uniform-HexaVal register ABI, args x0-x7 / return
@@ -790,26 +921,18 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // rebuild-verification DEFERRED (Track-A clang wall) — logic
         // parity with shipped concat emit.
         if s.op == "array_lit" {
-            let dst = _arm64_op_reg(_arm64_dst_reg(rm, s.dst.id))
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_array_new"),
                              "array_lit: new array"))
-            buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"),
-                             "array_lit: capture new array"))
+            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
             let mut i = 0
             while i < len(s.args) {
-                buf = _arm64_op_rm(buf, s.args[i], st, rm, "x9")
-                let v = _arm64_op_resolve(s.args[i], st, rm, "x9")
-                buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), v,
-                                 "array_lit: elem " + to_string(i)))
-                buf.push(_arm64_instr2("mov", _arm64_op_reg("x0"), dst,
-                                 "array_lit: arr arg"))
+                buf = _hv_ldslot(buf, rm, s.dst.id, "x0", "x1")
+                buf = _hv_load(buf, s.args[i], st, rm, "x2", "x3")
                 buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_array_push"),
                                  "array_lit: push elem " + to_string(i)))
-                buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"),
-                                 "array_lit: recapture array"))
+                buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
                 i = i + 1
             }
-            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
             return buf
         }
         // struct_lit constructor (map-backed; mirror of x86_64 a351b1c9
@@ -819,30 +942,21 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // type_str ignored in map-backed v1. Runtime-call parity with
         // array_lit/concat; rebuild-verification deferred (Track-A wall).
         if s.op == "struct_lit" && len(s.args) >= 1 {
-            let dst = _arm64_op_reg(_arm64_dst_reg(rm, s.dst.id))
+            // map ABI: m=HexaVal(x0:x1), key=const char*(x2), val=
+            // HexaVal(x3:x4). args=[type_str, k0,v0,k1,v1,…].
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_new"),
                              "struct_lit: new map"))
-            buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"),
-                             "struct_lit: capture new map"))
+            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
             let mut i = 1
             while i + 1 < len(s.args) {
-                buf = _arm64_op_rm(buf, s.args[i], st, rm, "x9")
-                let key = _arm64_op_resolve(s.args[i], st, rm, "x9")
-                buf = _arm64_op_rm(buf, s.args[i + 1], st, rm, "x10")
-                let val = _arm64_op_resolve(s.args[i + 1], st, rm, "x10")
-                buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), key,
-                                 "struct_lit: field key"))
-                buf.push(_arm64_instr2("mov", _arm64_op_reg("x2"), val,
-                                 "struct_lit: field val"))
-                buf.push(_arm64_instr2("mov", _arm64_op_reg("x0"), dst,
-                                 "struct_lit: map arg"))
+                buf = _hv_ldslot(buf, rm, s.dst.id, "x0", "x1")
+                buf = _hv_cstr(buf, s.args[i], st, "x2")
+                buf = _hv_load(buf, s.args[i + 1], st, rm, "x3", "x4")
                 buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_set"),
                                  "struct_lit: set field"))
-                buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"),
-                                 "struct_lit: recapture map"))
+                buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
                 i = i + 2
             }
-            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
             return buf
         }
         // field access (map-backed; mirror of x86_64 0fe030dd in
@@ -851,101 +965,78 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // Parity with shipped array_lit/struct_lit; rebuild-verification
         // deferred (Track-A clang wall).
         if s.op == "field" && len(s.args) >= 2 {
-            let dst = _arm64_op_reg(_arm64_dst_reg(rm, s.dst.id))
-            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x9")
-            let base = _arm64_op_resolve(s.args[0], st, rm, "x9")
-            buf = _arm64_op_rm(buf, s.args[1], st, rm, "x10")
-            let key = _arm64_op_resolve(s.args[1], st, rm, "x10")
-            buf.push(_arm64_instr2("mov", _arm64_op_reg("x0"), base,
-                             "field: map base"))
-            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), key,
-                             "field: key"))
+            // map ABI: base=HexaVal(x0:x1), key=const char*(x2).
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+            buf = _hv_cstr(buf, s.args[1], st, "x2")
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_get"),
                              "field: hexa_map_get"))
-            buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"),
-                             "field: capture result"))
-            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
             return buf
         }
         if len(s.args) >= 1 {
-            let mut src_scratch = "x9"
-            if _arm_is_spilled(rm, s.dst.id) { src_scratch = "x10" }
-            buf = _arm64_op_rm(buf, s.args[0], st, rm, src_scratch)
-            let src = _arm64_op_resolve(s.args[0], st, rm, src_scratch)
-            let dst = _arm64_op_reg(_arm64_dst_reg(rm, s.dst.id))
-            buf.push(_arm64_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
-            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
         }
         return buf
     }
     if s.kind == _STMT_BINOP {
         if len(s.args) >= 2 {
-            let a_scratch = "x10"
-            let b_scratch = "x11"
-            buf = _arm64_op_rm(buf, s.args[0], st, rm, a_scratch)
-            buf = _arm64_op_rm(buf, s.args[1], st, rm, b_scratch)
-            let a = _arm64_op_resolve(s.args[0], st, rm, a_scratch)
-            let b = _arm64_op_resolve(s.args[1], st, rm, b_scratch)
-            let dst = _arm64_op_reg(_arm64_dst_reg(rm, s.dst.id))
-
-            if _is_concat(s.op) {
-                buf.push(_arm64_instr2("mov", _arm64_op_reg("x0"), a, "concat arg0"))
-                buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"), b, "concat arg1"))
-                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_str_concat"),
-                                 "call runtime: hexa_str_concat"))
-                buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"), "capture concat result"))
-                buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
+            let sym = _hv_binop_sym(s.op)
+            if len(sym) > 0 {
+                // a → x0:x1, b → x2:x3, bl _sym (HexaVal→HexaVal→HexaVal
+                // or →cmp HexaVal-bool), result x0:x1 → dst slot.
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+                buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
+                buf.push(_arm64_instr1("bl", _arm64_op_label(sym), "binop " + s.op))
+                buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
                 return buf
             }
-
-            let cond = _arm64_cmp_cond(s.op)
-            if len(cond) > 0 {
-                // ARM64 cmp form: `cmp Rn, Rm` OR `cmp Rn, #imm`. The first
-                // operand MUST be a register. If LHS lowered to an immediate
-                // (e.g. const_int operand), materialize it into x10 first.
-                let mut a_real = a
-                if s.args[0].kind == "const_int" {
-                    buf.push(_arm64_instr2("mov", _arm64_op_reg(a_scratch), a,
-                                     "materialize cmp lhs to reg"))
-                    a_real = _arm64_op_reg(a_scratch)
+            if s.op == "!=" || s.op == "ne" || s.op == "cmp_ne" {
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+                buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_eq"), "ne: eq"))
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_truthy"),
+                                 "ne: truthy(eq) → w0"))
+                buf.push(_arm64_instr3("eor", _arm64_op_reg("x0"),
+                                 _arm64_op_reg("x0"), _arm64_op_label("#1"), "ne: !truthy"))
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
+                                 "ne: box bool"))
+                buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+                return buf
+            }
+            if s.op == "&&" || s.op == "||" || s.op == "and" || s.op == "or" {
+                // codegen_c2: && = truthy(a)?b:a ; || = truthy(a)?a:b
+                let lb = "hvL" + modhash + "_" + fname + "_" + to_string(s.dst.id)
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_truthy"),
+                                 "logic: truthy(a) → w0"))
+                buf.push(_arm64_instr2("cbz", _arm64_op_reg("x0"),
+                                 _arm64_op_label(lb + "_f"), "logic: !truthy → false-arm"))
+                // truthy-arm: && → b, || → a
+                if s.op == "||" || s.op == "or" {
+                    buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+                } else {
+                    buf = _hv_load(buf, s.args[1], st, rm, "x0", "x1")
                 }
-                buf.push(_arm64_instr2("cmp", a_real, b, "binop " + s.op))
-                buf.push(_arm64_instr2("cset", dst, _arm64_op_label(cond),
-                                 "binop " + s.op + " → bool"))
-                buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
+                buf.push(_arm64_instr1("b", _arm64_op_label(lb + "_d"), "logic: → done"))
+                buf.push(_arm64_instr0("label", lb + "_f"))
+                // false-arm: && → a, || → b
+                if s.op == "||" || s.op == "or" {
+                    buf = _hv_load(buf, s.args[1], st, rm, "x0", "x1")
+                } else {
+                    buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+                }
+                buf.push(_arm64_instr0("label", lb + "_d"))
+                buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
                 return buf
             }
-
-            let mut mnemonic = "add"
-            if _is_arith_add(s.op) { mnemonic = "add" }
-            if _is_arith_sub(s.op) { mnemonic = "sub" }
-            if _is_arith_mul(s.op) { mnemonic = "mul" }
-            if _is_arith_div(s.op) { mnemonic = "sdiv" }
-            if s.op == "udiv"      { mnemonic = "udiv" }
-            if _is_bit_and(s.op)   { mnemonic = "and" }
-            if _is_bit_or(s.op)    { mnemonic = "orr" }
-            if _is_bit_xor(s.op)   { mnemonic = "eor" }
-            // ARM64 data-processing: Xn (first source) MUST be a register;
-            // mul/sdiv/udiv/and/orr/eor have NO immediate form at all.
-            // A small const_int operand resolves to an immediate, so
-            // `add xD,#0,#0`-class invalid instrs were emitted (the final
-            // 77 stage-1-.s assembler errors). Materialize any immediate
-            // source into its scratch first (mirrors the cmp-path idiom
-            // above); large const_int is already reg via _arm64_op_rm.
-            let mut a_real = a
-            if a.kind == "imm" {
-                buf.push(_arm64_instr2("mov", _arm64_op_reg(a_scratch), a,
-                                 "materialize arith lhs"))
-                a_real = _arm64_op_reg(a_scratch)
-            }
-            let mut b_real = b
-            if b.kind == "imm" {
-                buf.push(_arm64_instr2("mov", _arm64_op_reg(b_scratch), b,
-                                 "materialize arith rhs"))
-                b_real = _arm64_op_reg(b_scratch)
-            }
-            buf.push(_arm64_instr3(mnemonic, dst, a_real, b_real, "binop " + s.op))
-            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
+            // bitwise / unknown — rare in compiler self-source. Approximate
+            // via hexa_add (correctness follow-up if it surfaces at run).
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_add"),
+                             "binop " + s.op + " (approx)"))
+            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
         }
         return buf
     }
@@ -958,40 +1049,36 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // at the bottom of the frame (rm.call_overflow_bytes is non-zero
         // when this fn has any overflow call), and _arm_spill_offset shifts
         // SSA offsets above it. Here we just `str` into the reserved slots.
+        // AAPCS64: each 16B HexaVal arg occupies a register PAIR —
+        // arg0→x0:x1, arg1→x2:x3, arg2→x4:x5, arg3→x6:x7 (4 pair-args
+        // in the 8 GPRs); args ≥4 go to 16B stack slots [sp,#(i-4)*16].
+        // Return is x0:x1 → dst slot.
         let arg_n = len(s.args)
         let mut i = 0
         while i < arg_n {
-            let scratch = _arm64_arg_reg(i)
-            if i < 8 {
-                buf = _arm64_op_rm(buf, s.args[i], st, rm, scratch)
-                let src = _arm64_op_resolve(s.args[i], st, rm, scratch)
-                let dst_reg = _arm64_op_reg(scratch)
-                buf.push(_arm64_instr2("mov", dst_reg, src, "arg " + to_string(i)))
+            if i < 4 {
+                let lo = "x" + to_string(i * 2)
+                let hi = "x" + to_string(i * 2 + 1)
+                buf = _hv_load(buf, s.args[i], st, rm, lo, hi)
             } else {
-                buf = _arm64_op_rm(buf, s.args[i], st, rm, "x9")
-                let src = _arm64_op_resolve(s.args[i], st, rm, "x9")
-                buf.push(_arm64_instr2("mov", _arm64_op_reg("x9"), src,
-                    "C7: load arg " + to_string(i) + " to scratch x9"))
-                let off = (i - 8) * 8
-                buf.push(_arm64_instr2("str", _arm64_op_reg("x9"), _arm64_op_mem("sp", off),
-                    "C7: spill arg " + to_string(i) + " to [sp, #" + to_string(off) + "]"))
+                buf = _hv_load(buf, s.args[i], st, rm, "x9", "x10")
+                let off = (i - 4) * 16
+                buf.push(_arm64_instr3("stp", _arm64_op_reg("x9"),
+                                 _arm64_op_reg("x10"), _hv_mem(off),
+                                 "C7: stack arg " + to_string(i)))
             }
             i = i + 1
         }
         let target = _builtin_runtime_sym(s.op)
         buf.push(_arm64_instr1("bl", _arm64_op_label(target), "call " + target))
         if s.dst.id >= 0 {
-            let dst = _arm64_op_reg(_arm64_dst_reg(rm, s.dst.id))
-            buf.push(_arm64_instr2("mov", dst, _arm64_op_reg("x0"), "capture call result"))
-            buf = _arm64_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
         }
         return buf
     }
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
-            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x9")
-            let src = _arm64_op_resolve(s.args[0], st, rm, "x9")
-            buf.push(_arm64_instr2("mov", _arm64_op_reg("x0"), src, "set return value"))
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // AAPCS64 16B return = x0:x1
         }
         // C7 — epilogue frees spill_frame + call-overflow region (both
         // allocated in a single prologue sub; see _arm64_lower_func).
@@ -1013,20 +1100,16 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_BR_COND {
         if len(s.args) > 0 {
-            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x9")
-            let cond0 = _arm64_op_resolve(s.args[0], st, rm, "x9")
-            // cbz needs a register operand; a constant condition resolves
-            // to an immediate (`cbz #0,…` invalid — the final 5 stage-1-.s
-            // assembler errors). Materialize into x9 first.
-            let mut cond = cond0
-            if cond0.kind == "imm" {
-                buf.push(_arm64_instr2("mov", _arm64_op_reg("x9"), cond0,
-                                 "materialize br_cond to reg"))
-                cond = _arm64_op_reg("x9")
-            }
+            // cond HexaVal → x0:x1; hexa_truthy → int w0; zero-extend
+            // (callee leaves upper x0 unspecified) then cbz to else.
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_truthy"),
+                             "br_cond: truthy → w0"))
+            buf.push(_arm64_instr2("uxtw", _arm64_op_reg("x0"),
+                             _arm64_op_reg("w0"), "br_cond: zext w0"))
             let else_lab = _arm64_block_label(modhash, fname, s.target_block_else)
-            buf.push(_arm64_instr2("cbz", cond, _arm64_op_label(else_lab),
-                             "br_cond: zero -> else"))
+            buf.push(_arm64_instr2("cbz", _arm64_op_reg("x0"),
+                             _arm64_op_label(else_lab), "br_cond: !truthy -> else"))
         }
         let then_lab = _arm64_block_label(modhash, fname, s.target_block)
         buf.push(_arm64_instr1("b", _arm64_op_label(then_lab), "branch -> then"))
@@ -1113,21 +1196,31 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
                             "B spill + " + to_string(call_overflow_bytes) + "B call-overflow"))
     }
 
-    // Move incoming params x0..x7 into their assigned regs / spill slots.
+    // Path A (A′): each 16B HexaVal param arrives in a register PAIR
+    // (param0→x0:x1, param1→x2:x3, param2→x4:x5, param3→x6:x7); params
+    // ≥4 arrive in caller 16B stack slots above the saved fp/lr at
+    // [x29, #16 + (p-4)*16]. Store each into the param's 16B frame slot
+    // (all params are force-spilled). x29 set to old sp before the
+    // frame `sub`, so [x29,#16+…] reaches the caller's outgoing area.
     let mut p = 0
     while p < len(mf.params) {
-        if p < 8 {
-            let pid = mf.params[p].id
-            let src_name = "x" + to_string(p)
-            if _arm_is_spilled(rm, pid) {
-                instrs = _arm64_store_spill(instrs, rm, pid, src_name)
-            } else {
-                let dst_name = _arm_reg_lookup(rm, pid)
-                if dst_name != src_name {
-                    instrs.push(_arm64_instr2("mov", _arm64_op_reg(dst_name),
-                                        _arm64_op_reg(src_name), "ingress param"))
-                }
-            }
+        let pid = mf.params[p].id
+        let poff = _arm_spill_offset(rm, pid)
+        if p < 4 {
+            let lo = "x" + to_string(p * 2)
+            let hi = "x" + to_string(p * 2 + 1)
+            instrs.push(_arm64_instr3("stp", _arm64_op_reg(lo),
+                             _arm64_op_reg(hi), _hv_mem(poff),
+                             "ingress param " + to_string(p)))
+        } else {
+            let inoff = 16 + (p - 4) * 16
+            instrs.push(_arm64_instr3("ldp", _arm64_op_reg("x9"),
+                             _arm64_op_reg("x10"),
+                             _arm64_op_label("[x29, #" + to_string(inoff) + "]"),
+                             "ingress stack param " + to_string(p)))
+            instrs.push(_arm64_instr3("stp", _arm64_op_reg("x9"),
+                             _arm64_op_reg("x10"), _hv_mem(poff),
+                             "store stack param " + to_string(p)))
         }
         p = p + 1
     }
