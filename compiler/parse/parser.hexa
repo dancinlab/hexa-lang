@@ -1647,7 +1647,22 @@ fn _splice_imported_items(items: [Item], importer: string) {
         let it = items[i]
         p_splice_acc.push(it)
         if item_is_import(it.kind) {
-            let resolved = _resolve_import_path(importer, it.name)
+            // Two-tier resolution: prefer the source-dir-relative path
+            // (the historical behaviour); if that file does not exist,
+            // fall back to a project-root-relative path (the literal
+            // import string). This lets imports like
+            //   import "compiler/atlas/symbolic/X.hexa"
+            // resolve from any depth — the same string that works for
+            // the interpreter and `hexa build`. Without the fallback
+            // every test/*.hexa smoke that referenced a sibling library
+            // produced HX0010 at parse time even though the file was
+            // present at the repo root.
+            let primary = _resolve_import_path(importer, it.name)
+            let mut resolved = primary
+            if !file_exists(resolved) {
+                let alt = _import_normalize(it.name)
+                if file_exists(alt) { resolved = alt }
+            }
             if _visited_contains(resolved) {
                 // already loaded (cycle or diamond) — skip silently.
             } else {

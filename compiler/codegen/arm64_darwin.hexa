@@ -1047,6 +1047,15 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "to_float"      { return "hexa_to_float" }
     if name == "to_bool"       { return "hexa_to_bool" }
     if name == "to_string"     { return "hexa_to_string" }
+    // map/dict accessors — runtime returns HexaVal of array (keys,
+    // values, entries) or HexaVal scalar (count). All HexaVal-shape
+    // so no ret-box needed. `dict_keys` is interp's anima-speak alias
+    // for `map_keys` (see hexa_full.hexa § FIX-A); both map to the
+    // same runtime fn name family.
+    if name == "dict_keys"     { return "hexa_dict_keys" }
+    if name == "map_keys"      { return "hexa_map_keys" }
+    if name == "map_values"    { return "hexa_map_values" }
+    if name == "map_entries"   { return "hexa_map_entries" }
     // math / formatting — HexaVal-in / HexaVal-out, no ret-box needed.
     // Each verified to exist in self/runtime.c before mapping (the
     // unmapped-is-safer-than-mis-mapped policy in this file's header
