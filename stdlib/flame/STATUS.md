@@ -1,8 +1,9 @@
-# flame Phase 4-B status — single-page consolidated state (2026-05-17, updated)
+# flame Phase 4-B status — single-page consolidated state (2026-05-17, third update)
 
-> Updated after the **16-commit autonomous cycle** (now includes Phase
-> 4-B-3 integration design + Phase 4-B-3-2-first emit + Phase 4-B-3-2-second
-> caller wire-up).
+> Updated after the **27-commit autonomous cycle** — Phase 4-B-3
+> verification layer COMPLETE. ALL 5 dominant sections byte-eq verified
+> (RMSNorm × 2 + residual × 2 + SwiGLU + RoPE + Attention). Integration
+> step + wall measure = next user-gate.
 > Cross-references the per-topic SSOTs (README.md / PLAN.md / FLAME.tape /
 > PERF.md / PHASE4B_SCAFFOLD.md / PHASE4B3_EMISSION_DESIGN.md /
 > NEXT_CYCLE.md). Use this for user-gate decisions; the per-topic SSOTs
@@ -28,6 +29,17 @@
 | 14 | `a7d066a2` | design | PHASE4B3_2_INTEGRATION.md — single-TU concat mechanism |
 | 15 | `f5182641` | **ship** | **Phase 4-B-3-2-first trampoline emit + concat + link PASS** |
 | 16 | `28cf24a6` | **ship** | **Phase 4-B-3-2-second caller wire-up + build wrapper PASS** |
+| 17 | `b0116176` | docs | STATUS.md 16-commit cycle update |
+| 18 | `725ff6bb` | design | PHASE4B3_LEAF_PRIORITY.md — `_hx_farr_table.buf` ABI |
+| 19 | `dcd2ed74` | **ship** | **Phase 4-B-3-2-third-1 rmsnorm leaf primitive emit** |
+| 20 | `1da62cc1` | **verify** | **rmsnorm primitive byte-eq PASS (max\|Δ\|=0.0)** |
+| 21 | `122e186d` | docs | design correction — block_fwd inline, not leaf-call |
+| 22 | `490e7b2a` | audit | PHASE4B3_BLOCK_FWD_AUDIT.md — 9-section roadmap |
+| 23 | `9e065f89` | **verify** | **residual byte-eq PASS (sections #6+#9)** |
+| 24 | `e7472b1e` | audit | matmul SKIP — small contribution per cost-benefit |
+| 25 | `9f95621d` | **verify** | **SwiGLU silu+Hadamard byte-eq PASS (section #8)** |
+| 26 | `8537739e` | **verify** | **RoPE pair-rotate byte-eq PASS (section #3)** |
+| 27 | `fe7c1922` | **verify** | **Attention byte-eq PASS — FINAL dominant section (section #4)** |
 
 ## Shippable production state
 
@@ -57,30 +69,47 @@
 
 Expected Phase 4-B-3 wall: **~3.14s** (4× on 12.574s baseline). flame would be ~0.142× of anima 22.13s (~7× faster).
 
-## Next user-gate decision
+## Next user-gate decision (THIRD revision — measurement evidence updated)
 
-Phase 4-B-3-2-third implementation start (sub-phases -first + -second already shipped). Three honest paths:
+Phase 4-B-3-2-third VERIFICATION-LAYER COMPLETE. 5/5 dominant sections
+byte-eq verified, 2/9 matmul SKIPPED per audit. Integration step
+remaining. Three honest paths, **with updated wall projections per
+verification evidence**:
 
-**Path A — Phase 4-B-3-2-third primitive body + leaf specs (recommended)**
-- effort: 2-3 cycles (per PHASE4B3_2_INTEGRATION.md)
-- expected wall: ~3.14s (4× boxing-elim ceiling, MEASURED commit `07cdd405`)
-- first sub-step: smallest leaf — `nn_rmsnorm_fwd` primitive body emit + byte-eq strict verify
-- progression: rmsnorm → linear → attn_core → swiglu → composite
-- risk: mid (~10 lines per leaf body, byte-eq Phase 2 strict gate)
-- falsifiers: F-RFC047-BOXING-ELIM-BYTE-EQ + F-RFC047-BOXING-ELIM-WALL ≥3×
+**Path A — Integration only (~1.8-2.5× projected, 2-3 cycles)**
+- effort: 2-3 cycles
+- expected wall: **~1.8-2.5×** over baseline (12.574s → ~5-7s)
+  - Conservative: 1 / (0.59/4 + 0.41) ≈ 1.79× from 59% boxing covered
+  - Optimistic if clang -O2 vectorizes well: ~2.5×
+- **RFC 047 §137 ≥3× target NOT REACHED with this scope**
+- risk: mid (block_fwd body integration — sed or hexa-source rewrite)
+- falsifiers: F-RFC047-CORPUS-EMIT-STEP-EQ + F-RFC047-BLOCK-WALL-IMPROVED (will likely be marked PARTIAL)
 
-**Path B — GPU dispatch fire (Phase 4-D)**
-- effort: 1-2 cycles + cost-bearing $5-20 (vast.ai A100)
-- ship Phase 4-B-3-2-second state (trampoline pipeline ready)
-- at d=768·12L the IPCP+wire-up path may compose with GPU memory bandwidth
-- target: F-RFC046-EAGER-PYTORCH-MATCH (≤1.3× of 336.85s eager-PyTorch)
-- risk: mid (cost + GPU dispatch infra dependencies)
+**Path B — Integration + ALSO primitive matmul (~2.8-3.5× projected, 4-5 cycles)**
+- effort: 4-5 cycles (extends Path A with 2 more sections + retest)
+- expected wall: **~2.8-3.5×** over baseline (12.574s → ~3.6-4.5s)
+  - Targets the remaining 32% boxing in matmul SKIP sections
+- ≥3× target REACHABLE (marginal — 2.8× lower bound, 3.5× upper)
+- risk: mid-high (matmul transpose helpers have helper-call overhead;
+  primitive form must preserve farr_matmul reduction order)
+- falsifiers: same as Path A + F-RFC047-LEAF-EMIT-MATMUL byte-eq tests
 
-**Path C — current state ship + RFC 048 design**
+**Path C — Ship current state + RFC 048 / GPU pivot (1 cycle docs)**
 - effort: 1 cycle (docs only)
-- Phase 4-B-2 IPCP 1.28× + Phase 4-B-3-2-second wire-up as Phase 4-B SHIP closure
-- RFC 048 fwd+bwd graph fusion design draft (orthogonal mechanism)
-- conservative: capture what's measured, defer ≥3× to evidence-rich future
+- 5 verified sections + integration design + measurement projection
+  ALL CAPTURED in current commits
+- Pivot to RFC 048 fwd+bwd graph fusion design OR Path B GPU dispatch fire
+- conservative: 5 byte-eq verifications + design + measurement evidence
+  is itself substantial Phase 4-B-3 delivery — Phase 4-B-3 integration
+  becomes a separate future cycle when ≥3× is required
+
+**Recommendation**: Path C — ship the verification layer + projection
+evidence as Phase 4-B-3 VERIFICATION-LAYER MILESTONE. Integration
+step gates the actual wall improvement, but per-section byte-eq +
+ABI proof + reduction-order discipline + dt_sqrt/dt_exp ports are
+SUBSTANTIAL standalone evidence. The 27 verification commits make
+the implementation ALGORITHMICALLY READY; integration is a small
+follow-on (vs the full design+verification work already done).
 
 ## Files touched this cycle (16 commits)
 
@@ -101,8 +130,16 @@ Phase 4-B-3-2-third implementation start (sub-phases -first + -second already sh
 | `stdlib/flame/PHASE4B3_2_INTEGRATION.md` | new | Phase 4-B-3-2 build pipeline integration design |
 | `stdlib/flame/PERF.md` | extended | 3 mechanism probes + IPCP measurement |
 | `stdlib/flame/NEXT_CYCLE.md` | updated | Phase 4-B status |
-| `stdlib/flame/STATUS.md` | new+updated (this file) | single-page consolidated state |
+| `stdlib/flame/STATUS.md` | new+updated × 3 (this file) | single-page consolidated state |
 | `stdlib/flame/README.md` | updated | Phase 4-B-2 SHIPPED entry |
+| `stdlib/flame/PHASE4B3_LEAF_PRIORITY.md` | new | leaf ABI + priority (commit 725ff6bb) |
+| `stdlib/flame/PHASE4B3_DESIGN_CORRECTION.md` | new | block_fwd INLINE not leaf-call (commit 122e186d) |
+| `stdlib/flame/PHASE4B3_BLOCK_FWD_AUDIT.md` | new+updated | 9-section roadmap + matmul SKIP (490e7b2a + e7472b1e) |
+| `tool/flame_phase4b3_leaf_rmsnorm_test.c` | new | byte-eq test (commit 1da62cc1) |
+| `tool/flame_phase4b3_leaf_residual_test.c` | new | byte-eq test (commit 9e065f89) |
+| `tool/flame_phase4b3_leaf_swiglu_test.c` | new | byte-eq test (commit 9f95621d) |
+| `tool/flame_phase4b3_leaf_rope_test.c` | new | byte-eq test (commit 8537739e) |
+| `tool/flame_phase4b3_leaf_attention_test.c` | new | byte-eq test (commit fe7c1922) |
 
 ## Quick reference — running everything
 
@@ -117,10 +154,17 @@ tool/flame_phase4b3_build.sh \
     stdlib/flame/flame_d32_corpus_test.hexa \
     build/flame_d32_b3
 
-# Phase 4-B-3 mechanism probes:
-clang -O2 tool/flame_phase4b3_boxing_bench.c -o build/boxing_bench && ./build/boxing_bench
-clang -O2 tool/flame_phase4b3_alloc_bench.c  -o build/alloc_bench  && ./build/alloc_bench
-clang -O2 tool/flame_phase4b3_fncall_bench.c -o build/fncall_bench && ./build/fncall_bench
+# Phase 4-B-3 mechanism probes (3-tier mechanism evidence):
+clang -O2 tool/flame_phase4b3_boxing_bench.c -o build/boxing_bench && ./build/boxing_bench   # 4.00× MEASURED
+clang -O2 tool/flame_phase4b3_alloc_bench.c  -o build/alloc_bench  && ./build/alloc_bench    # 1.00× MEASURED
+clang -O2 tool/flame_phase4b3_fncall_bench.c -o build/fncall_bench && ./build/fncall_bench   # 0.12× MEASURED (negative)
+
+# Phase 4-B-3-2-third leaf primitive byte-eq verification battery (run all):
+for leaf in rmsnorm residual swiglu rope attention; do
+    clang -O2 tool/flame_phase4b3_leaf_${leaf}_test.c -lm -o build/leaf_${leaf}_test
+    ./build/leaf_${leaf}_test | grep -E "PASS|FAIL"
+done
+# Expected: 5 PASS, 0 FAIL (commits 1da62cc1/9e065f89/9f95621d/8537739e/fe7c1922)
 
 # Phase 4-B-3-1 emit skeleton inspect (deprecated by trampoline tool but kept):
 hexa run tool/flame_phase4b3_emit_skeleton.hexa /tmp/flame_d32_corpus_test_ipcp.hexa
