@@ -11718,18 +11718,66 @@ static HexaVal _jp_parse_string(const char* s, size_t n, size_t* pi) {
                 case 't':  out = '\t'; break;
                 case 'b':  out = '\b'; break;
                 case 'f':  out = '\f'; break;
-                case 'u':
-                    // Raw passthrough (no unicode expansion) — write literal
-                    // \uXXXX as the 6 bytes so round-trip is lossless.
+                case 'u': {
+                    // RFC 8259 §7: decode \uXXXX → the Unicode scalar, with
+                    // UTF-16 surrogate-pair recombination for astral code
+                    // points, then UTF-8 encode. (Was a raw 6-byte passthrough
+                    // — non-conformant; see inbox/patches/
+                    // json-parse-uXXXX-raw-passthrough.md. json_stringify emits
+                    // bytes >= 0x20 as-is so the standard decoded round-trip is
+                    // preserved.)
                     if (*pi + 5 < n) {
-                        if (len + 6 >= cap) { cap = (cap + 6) * 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return hexa_str(""); } buf = nb; }
-                        memcpy(buf + len, s + *pi, 6);
-                        len += 6;
-                        *pi += 6;
-                        continue;
+                        unsigned int cp = 0; int hexok = 1;
+                        for (int k = 0; k < 4; k++) {
+                            char h = s[*pi + 2 + k]; unsigned int v;
+                            if (h >= '0' && h <= '9')      v = (unsigned int)(h - '0');
+                            else if (h >= 'a' && h <= 'f') v = (unsigned int)(10 + h - 'a');
+                            else if (h >= 'A' && h <= 'F') v = (unsigned int)(10 + h - 'A');
+                            else { hexok = 0; break; }
+                            cp = (cp << 4) | v;
+                        }
+                        if (hexok) {
+                            size_t adv = 6;
+                            if (cp >= 0xD800 && cp <= 0xDBFF && *pi + 11 < n
+                                && s[*pi + 6] == '\\' && s[*pi + 7] == 'u') {
+                                unsigned int lo = 0; int ok2 = 1;
+                                for (int k = 0; k < 4; k++) {
+                                    char h = s[*pi + 8 + k]; unsigned int v;
+                                    if (h >= '0' && h <= '9')      v = (unsigned int)(h - '0');
+                                    else if (h >= 'a' && h <= 'f') v = (unsigned int)(10 + h - 'a');
+                                    else if (h >= 'A' && h <= 'F') v = (unsigned int)(10 + h - 'A');
+                                    else { ok2 = 0; break; }
+                                    lo = (lo << 4) | v;
+                                }
+                                if (ok2 && lo >= 0xDC00 && lo <= 0xDFFF) {
+                                    cp = 0x10000u + ((cp - 0xD800u) << 10) + (lo - 0xDC00u);
+                                    adv = 12;
+                                }
+                            }
+                            char u8[4]; int un;
+                            if (cp < 0x80u) { u8[0] = (char)cp; un = 1; }
+                            else if (cp < 0x800u) {
+                                u8[0] = (char)(0xC0u | (cp >> 6));
+                                u8[1] = (char)(0x80u | (cp & 0x3Fu)); un = 2;
+                            } else if (cp < 0x10000u) {
+                                u8[0] = (char)(0xE0u | (cp >> 12));
+                                u8[1] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+                                u8[2] = (char)(0x80u | (cp & 0x3Fu)); un = 3;
+                            } else {
+                                u8[0] = (char)(0xF0u | (cp >> 18));
+                                u8[1] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+                                u8[2] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+                                u8[3] = (char)(0x80u | (cp & 0x3Fu)); un = 4;
+                            }
+                            if (len + (size_t)un >= cap) { while (len + (size_t)un >= cap) cap *= 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return hexa_str(""); } buf = nb; }
+                            for (int k = 0; k < un; k++) buf[len++] = u8[k];
+                            *pi += adv;
+                            continue;
+                        }
                     }
                     out = 'u';
                     break;
+                }
                 default:   out = e; break;
             }
             if (len + 1 >= cap) { cap *= 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return hexa_str(""); } buf = nb; }

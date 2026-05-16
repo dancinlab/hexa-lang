@@ -567,3 +567,26 @@
   applied_at: 2026-05-15
   opened: 2026-05-15
   detail: patches/runtime-h-incomplete-after-phase-1-3-b.md
+
+- id: json-parse-uxxxx-raw-passthrough
+  source_commit: pending
+  source_files:
+    - self/runtime.c
+  compiler_impact: |
+    runtime.c only — compiled json_parse (`_jp_parse_string` case 'u')
+    was an explicit raw 6-byte passthrough; now decodes \uXXXX +
+    UTF-16 surrogate pairs to UTF-8 (RFC 8259 §7). No compiler/ change;
+    recompiled into every `hexa build` TU. Interpreter path unaffected
+    (separate parser in self/stdlib/json.hexa).
+  selftest_delta: |
+    none. Behavior fix: a parsed "é" now round-trips to UTF-8 `é`
+    (standard) rather than the literal 6 bytes (the prior non-standard
+    "lossless" form). json_stringify already emits >=0x20 bytes as-is,
+    so no re-escaping regression.
+  downstream_consumer: |
+    wilson plugins/provider-openai-compat — mlx_lm.server streams SSE
+    with ensure_ascii=True; CJK/emoji replies showed as literal \uXXXX.
+  status: applied
+  applied_at: 2026-05-16
+  opened: 2026-05-16
+  detail: patches/json-parse-uXXXX-raw-passthrough.md
