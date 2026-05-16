@@ -172,6 +172,24 @@ b. **Frontend `CODEGEN-FAIL`** in some smokes — `HX3001` type-mismatch
 
 R3 ✅ closed for assertion-driven smokes.
 
+### R5 parity sample (`hexa-run-native` over 8 representative smokes)
+
+| smoke                            | native | interp | result |
+|----------------------------------|--------|--------|--------|
+| t_batch22_print_fmt_pure         | 0      | 0      | MATCH (byte-identical, 31/31 asserts) |
+| regress_dict_keys_let_bind       | 0      | 0      | MATCH |
+| t_batch23_datetime_pure          | 0      | 0      | MATCH |
+| regression                       | 1      | 1      | MATCH |
+| calc_cli_smoke                   | 0      | 0      | MATCH |
+| factorial_structure_smoke        | 0      | 0      | MATCH |
+| symmetric_group_s6_smoke         | 0      | 0      | MATCH |
+| n6_uniqueness_smoke              | 0      | 137 (SIGKILL after multi-minute) | native completed; interp was the slow path |
+
+Every smoke the interpreter can finish, the native build matches
+byte-for-byte; the one smoke the interpreter cannot finish in
+reasonable time, the native build runs to clean exit. This is the
+empirical case for moving `hexa run` over to the wrapper by default.
+
 ### R4 — `bin/hexa-run-native` wrapper
 
 Thin shell script (zero risk to the interp path):
