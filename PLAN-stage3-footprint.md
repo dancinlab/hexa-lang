@@ -149,10 +149,11 @@ Streaming must be a **pure refactor** — same `.s` bytes, less RSS:
 - ✅ F1 `f39a3bd9` — `_arm_strtab_collect_fn` extracted (per-MFunc interning).
 - ✅ F2 `2002c023` — `codegen_emit_streaming` (fused per-fn loop).
 - ✅ F3 `8a40b521` — `--stream` / `HEXA_STREAM=1` gate in `compiler/main.hexa`.
-- 🔄 F4 — **re-scoped** (see Finding): incremental asm output, kills the
-  O(n²) accumulator in both `codegen_emit_streaming` and `emit_asm`. Needs
-  hexa's file-append API checked first. Loop-tick-sized, host-RAM-independent.
-- ⬜ F5 — streaming default once F4 + byte-diff verified.
+- ✅ F4 `d39853ef` — array-of-fragments + `parts.join("")` in both
+  `codegen_emit_streaming` and `emit_asm`; kills the O(N·T) accumulator.
+  `hexa_str_join` is a single length-summed malloc+memcpy (O(T)).
+  Byte-identical to the `+` left-fold. parse-gate OK.
+- ⬜ F5 — streaming default once byte-diff verified (needs the stage-1 build).
 - ⬜ F6 (architectural) — per-function IR reclaim (region-promote-to-parent
   or struct freelist). The genuine native-RSS lever per Finding §1; not
   loop-tick-sized — needs a design-gate.
