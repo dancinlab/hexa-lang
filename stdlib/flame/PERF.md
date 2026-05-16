@@ -133,6 +133,49 @@ factor for Phase 4-B-3 expected ceiling revised from 1.3-1.7× to
 - Now: **4.8× honest minimum → 6.0× optimistic** (geometric mid 5.4×)
 - Still well above RFC 047 §137 ≥3× ceiling — Phase 4-B-3 case holds.
 
+## Phase 4-B-3 fn-call-elim probe (2026-05-17) — MEASURED 0.12× (NEGATIVE)
+
+Synthetic micro-bench (`tool/flame_phase4b3_fncall_bench.c`) runs 7
+inner kernels (sum_sq + dot + sum_silu + 2 combine) via:
+- PATH A: `__attribute__((noinline))` helpers (forced fn dispatch)
+- PATH B: full inline of all kernel bodies (proposed Phase 4-B-3)
+
+Per-rep buffer mutation defeats clang CSE.
+
+| Run | call (s) | inline (s) | ratio |
+|---|---|---|---|
+| 1-5 5-run avg | 0.0992 | 0.8233 | **0.12×** (call FASTER) |
+
+Initial estimate was 1.2-1.5× — measurement is **NEGATIVE** (inline
+is 8× slower).
+
+Likely causes: clang -O2 vectorizes small isolated noinline helpers
+very well; inline path has 7 different reduction loops in one fn body
+→ register pressure + i-cache contention defeats clang.
+
+**Critical caveat — overlap with boxing-elim**: in real flame, fn-call
+cost = `(C call overhead) + (HexaVal arg marshaling)`. Marshaling is
+ALREADY counted in mechanism #1 boxing-elim (4× MEASURED). This bench
+measured pure C fn-call overhead in isolation and found it negative
+→ fn-call elim factor BEYOND what boxing-elim provides is ≤1.0×.
+
+Planning factor: **1.0×** (no additional gain).
+
+**Final 3/3 measurement-anchored Phase 4-B-3 mechanism table**:
+
+| mechanism | initial estimate | measured | source commit |
+|---|---|---|---|
+| boxing elim | 1.5-2.5× | **4.00×** STRONGER | `07cdd405` |
+| allocator elim | 1.3-1.7× | **1.00×** WEAKER | `98bed481` |
+| fn-call elim | 1.2-1.5× | **1.00× (overlap-capped)** WEAKER | this commit |
+
+**Compound = 4.0×** (single-mechanism: boxing-elim dominant).
+
+Phase 4-B-3 plan revised — design pivot to **boxing-only scope**:
+emit unboxed-fn-signature trampolines + leaf fn specializations,
+skip full inlining + stack-scratch effort. ~4× gain at ~1/3 the
+implementation cost. Effort: 3-4 cycles (down from 6-9).
+
 ## Phase 3-I source analysis findings (cross-impl source isolation, 2026-05-17)
 
 ### Per-window gn2 decomposition (flame_d32_corpus_test, 2026-05-17)

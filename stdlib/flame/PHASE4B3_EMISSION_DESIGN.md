@@ -184,27 +184,83 @@ with measurement (2026-05-17 boxing micro-bench, see PERF.md).
    factor could be slightly higher than 1.00× but unlikely to reach
    the original 1.3-1.7× estimate. **Use 1.0× as the planning factor.**
 
-3. **Fn-call elimination (× ~1.2-1.5, estimate)**: 7-12 inner fn
-   calls per block-fwd (rmsnorm/linear/attn_core/swiglu/...) inlined
-   into one contiguous fn body. Register-resident intermediates
-   instead of memory round-trips through farr_table.
+3. **Fn-call elimination — MEASURED 0.12× (NEGATIVE on synthetic bench)**
+   `tool/flame_phase4b3_fncall_bench.c` runs the same 7-kernel
+   workload (sum_sq + dot + sum_silu + 2 combine × 7 inner iters)
+   via two paths:
+   - PATH A: noinline helpers (`__attribute__((noinline))`) — mimics
+     fn-dispatch path of IPCP-rewritten flame
+   - PATH B: full inline of all kernel bodies — proposed Phase 4-B-3
+     specialized kernel form
 
-**Updated compound estimate** (2/3 mechanisms measured, fn-call estimated):
-- Optimistic:  4.0× × 1.0× × 1.5×  ≈ **6.0×**
-- Geometric (midpoint of remaining fn-call estimate): 4.0× × 1.0× × 1.35× ≈ **5.4×**
-- Honest minimum (if fn-call weaker): 4.0× × 1.0× × 1.2× ≈ **4.8×**
+   5-run avg: **call 0.0992s / inline 0.8233s = 0.12×** (call FASTER).
+   Variance both paths <1% — clean measurement.
 
-All three scenarios remain well above RFC 047 §137 ≥3× target.
-**Revised expected wall improvement: 4.8-6.0× over Phase 4-A-bwd
-baseline** (down from prior 6.24-10.2× estimate after allocator-elim
-measured weaker than expected).
+   This is the OPPOSITE of the original 1.2-1.5× estimate. Likely causes:
+   - clang -O2 optimizes small isolated noinline helpers very well
+     (each helper compiles to vectorized NEON, ~10 instructions)
+   - inline path has 7 different reduction loops in one fn body →
+     register pressure + instruction cache contention defeats clang
+   - synthetic helpers take primitive `double*` args (no HexaVal
+     marshaling), so per-call overhead is just the C function call
+     (~2-5 cycles, vectorizable through with link-time inlining)
 
-At 5.4× midpoint on the d=32·3L baseline of 12.574s, expected wall
-post-Phase-4-B-3 is **~2.33s** — flame would then be 0.105× of anima
-22.13s (~10× faster) and potentially approach the eager-PyTorch
-boundary at scale (336.85s on A100; M-Mac CPU vs A100 GPU dominates
-the cross-platform comparison, so direct compare requires Phase 4-D
-GPU dispatch).
+   **Critical insight — overlap with boxing-elim**: in real flame
+   (not this synthetic bench), fn-call cost decomposes as
+   `(C call overhead) + (HexaVal arg marshaling)`. The marshaling
+   is ALREADY counted in mechanism #1 (boxing-elim, 4× MEASURED).
+   The bench above measured pure C fn-call overhead in isolation
+   and found it negative — so fn-call elim factor BEYOND what
+   boxing-elim already provides is ≤1.0×, possibly <1.0× if inlining
+   creates register pressure as the bench suggests.
+
+   Planning factor: **1.0× (no additional gain from full inline
+   beyond what boxing-elim already captures)**.
+
+**Updated compound estimate** (3/3 mechanisms measured):
+- Boxing eliminated: × 4.00 MEASURED
+- Allocator eliminated: × 1.00 MEASURED
+- Fn-call eliminated: × 1.00 MEASURED (negative on bench; capped at 1.0× because boxing-elim already captures HexaVal arg marshaling)
+
+**Compound = 4.0×** (single-mechanism: boxing-elim is the dominant
+and only substantial contributor).
+
+This is well above RFC 047 §137 ≥3× ceiling but **significantly below**
+the original 6.24-10.2× and even the revised 4.8-6.0× estimates. The
+margin is now ~33% (4.0× / 3.0× = 1.33×) rather than 60-100%+.
+
+At 4.0× on baseline 12.574s, expected post-Phase-4-B-3 wall is
+**~3.14s** — flame would be 0.142× of anima 22.13s (~7× faster).
+The eager-PyTorch crossing remains a Phase 4-D GPU dispatch question.
+
+## Design pivot — boxing-only Phase 4-B-3 scope (2026-05-17)
+
+Given the measurement evidence that 2 of 3 mechanisms contribute
+≤1.0×, the original Phase 4-B-3 plan (full kernel inlining +
+stack-resident scratch + boxing elim) over-scopes for the realized
+gain. A **boxing-only Phase 4-B-3** captures the entirety of the
+measured 4× ceiling with substantially less implementation risk:
+
+**Reduced scope: emit unboxed-fn-signature trampolines**
+- Generate `flame_block_<hash>_fwd(int X_id, int Bp_id, ...)` that
+  unboxes ids at entry, runs the existing block body unchanged
+  (with leaf fn calls preserved), boxes nothing back at exit
+- The leaf fns (rmsnorm/linear/etc.) keep their HexaVal signatures —
+  arg passing across them still pays boxing, BUT only at fn boundaries,
+  not on every arithmetic op
+- Most of the 16M box/unbox ops per run happen INSIDE leaf fn bodies
+  (farr_get loops, arithmetic accumulators). Those move to unboxed
+  form when the leaf fns themselves are also emitted as
+  `flame_<leaf>_<hash>(double*)` specializations
+
+**Result**: ~4× wall improvement (matching the measured boxing-elim
+factor) at ~1/3 the implementation cost of the original Phase 4-B-3
+plan. Inlining and stack-scratch effort is not justified by
+measurement evidence.
+
+Updated effort estimate: **3-4 cycles** (down from 6-9) for the
+boxing-only Phase 4-B-3. Falsifier matrix unchanged — strict byte-eq
+gates still apply.
 
 **Reality caveat**: the 4× boxing factor is measured on an inner-loop
 best-case workload (pure Σx²). Real flame block_fwd mixes ops with
