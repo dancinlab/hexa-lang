@@ -80,6 +80,59 @@ boundary.
 | 7 | full block byte-eq + wall measure | 1 cycle | F-RFC047-BLOCK-EMIT-BYTE-EQ-FWD + WALL-IMPROVED ≥3× |
 | **total** | — | **5-7 cycles** | aligned with PHASE4B3_DESIGN_CORRECTION.md estimate |
 
+## Sections #2 + #5 audit finding (2026-05-17)
+
+`_db_proj_batch_farr` (decoder_block_lib.hexa:174-212) is the matmul
+helper used by sections #2 and #5. It performs:
+
+1. transpose X→xbt (T·d_in farr_get + T·d_in farr_set)
+2. copy W slice → W_buf (d_out·d_in farr_get + farr_set)
+3. farr_matmul (W_buf, xbt) → C (runtime primitive, NOT boxed inner ops)
+4. transpose C→Y (d_out·T farr_get + d_out·T farr_set)
+
+Per-call boxing overhead: 2·(T·d_in + d_out·d_in + d_out·T)
+
+Section #2 (Q/K/V proj × 3 calls):
+- WQ (d_out=32, d_in=32): 2·(16·32 + 32·32 + 32·16) = 4096
+- WK (d_out=16, d_in=32): 2·(16·32 + 16·32 + 16·16) = 2560
+- WV (d_out=16, d_in=32): same = 2560
+- Total: 9216 box/unbox per block_fwd
+
+Section #5 (Wo, d_out=32, d_in=32): 4096 per block_fwd
+
+Combined sections #2+#5: **13312 box/unbox per block_fwd**.
+
+Per training run (80 steps × 3 layers): ~3.2M box/unbox.
+
+**Compared to dominant inline-boxing-heavy sections**:
+- section 4 (attention): per-block ~nh·T·T softmax + T·d value combine
+  = 4·256 + 16·32 = 1536 ops × ~10 farr_get/set per op = ~15K per block,
+  ~3.6M per run
+- section 3 (RoPE): per-block T·nh·hd = 16·4·8 = 512 ops × ~5 farr ops
+  = ~2.5K per block, ~600K per run
+- section 8 (SwiGLU): per-block ~T·h·3 = 16·64·3 = 3072 ops × ~3 farr ops
+  = ~9K per block, ~2.2M per run
+- sections 1+7 (RMSNorm × 2): per-block T·d·3 × 2 = ~3K per block,
+  ~720K per run
+
+Sections #2+#5 are NOT the dominant contributor (~3.2M vs total ~10M+
+boxed farr ops per run). Primitive emit would yield ~1.05-1.10× wall
+improvement on these sections alone (vs 4× from full boxing-elim).
+
+**Recommendation**: SKIP sections #2 + #5 primitive emit for Phase
+4-B-3-2-third. Keep `_db_proj_batch_farr` call form unchanged in the
+primitive block_fwd body (call back to HexaVal helper). Contribution
+is too small to justify the C hand-translation cost.
+
+Revised priority for remaining sections:
+- ✅ DONE: RMSNorms (1, 7) + residuals (6, 9)
+- ⏩ SKIP: matmul helpers (2, 5) — small contribution, keep HexaVal
+- ⏳ NEXT: SwiGLU (8) — ~2.2M boxed ops/run, mid complexity
+- ⏳ THEN: RoPE (3) — ~600K boxed ops/run, complex order
+- ⏳ FINAL: Attention (4) — ~3.6M boxed ops/run, most careful
+
+Revised total effort: **4-6 cycles** (saved 0.5 cycle by skipping #2+#5).
+
 ## Implementation infrastructure check (already in place)
 
 - `tool/flame_phase4b3_emit_trampoline.hexa` (commit `dcd2ed74`):
