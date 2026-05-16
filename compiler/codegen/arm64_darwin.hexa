@@ -950,7 +950,25 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "trim"          { return "rt_str_trim" }
     if name == "type_of"       { return "hexa_type_of" }
     if name == "write_file"    { return "rt_write_file" }
+    if name == "sha256"        { return "hexa_sha256" }
+    if name == "sha256_file"   { return "hexa_sha256_file" }
+    if name == "println"       { return "hexa_println" }
+    if name == "len"           { return "hexa_len" }            // → int (box)
+    if name == "contains"      { return "hexa_str_contains" }   // → int (box bool)
+    if name == "starts_with"   { return "rt_str_starts_with" }  // → int (box bool)
+    if name == "is_alpha"          { return "hexa_is_alpha" }          // shim → HexaVal
+    if name == "is_alphanumeric"   { return "hexa_is_alphanumeric" }   // shim → HexaVal
     return name
+}
+
+// builtin runtime fn return-shape needing a post-call box into HexaVal:
+// "int" → sxtw w0 + hexa_int ; "bool" → uxtw w0 + hexa_bool ; "" → none
+// (already HexaVal). has_key is handled by its own STMT_CALL path.
+fn _builtin_ret_box(name: string) -> string {
+    if name == "len"         { return "int" }
+    if name == "contains"    { return "bool" }
+    if name == "starts_with" { return "bool" }
+    return ""
 }
 
 fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
@@ -1085,6 +1103,27 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         return buf
     }
     if s.kind == _STMT_CALL {
+        // has_key(m, key) special: runtime ABI is
+        // hexa_bool(hexa_map_contains_key(HexaVal m, const char* key))
+        // (codegen_c2:4302). key is a HexaVal var → hexa_to_cstring it.
+        if s.op == "has_key" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[1], st, rm, "x0", "x1")  // key HexaVal
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_to_cstring"),
+                             "has_key: key → cstring"))
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x9"),
+                             _arm64_op_reg("x0"), "has_key: save key cstr"))
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // map m → x0:x1
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x2"),
+                             _arm64_op_reg("x9"), "has_key: key arg (x2)"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_contains_key"),
+                             "has_key: map_contains_key → int"))
+            buf.push(_arm64_instr2("uxtw", _arm64_op_reg("x0"),
+                             _arm64_op_reg("w0"), "has_key: zext"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
+                             "has_key: box bool"))
+            if s.dst.id >= 0 { buf = _hv_store(buf, rm, s.dst.id, "x0", "x1") }
+            return buf
+        }
         // C7 — AAPCS64 arm64 stack spill for args 9+.
         // Args 9+ live at [sp, #0], [sp, #8], ..., with sp held 16-byte
         // aligned at every memory access. Unlike x86_64, SSA spill access
@@ -1116,6 +1155,21 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         }
         let target = _builtin_runtime_sym(s.op)
         buf.push(_arm64_instr1("bl", _arm64_op_label(target), "call " + target))
+        // Box int/bool-returning runtime builtins into a HexaVal (the
+        // callee returns a C int in w0; A′ expects x0:x1 HexaVal).
+        let box = _builtin_ret_box(s.op)
+        if box == "int" {
+            buf.push(_arm64_instr2("sxtw", _arm64_op_reg("x0"),
+                             _arm64_op_reg("w0"), "ret int: sign-ext"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_int"),
+                             "ret int: box → HexaVal"))
+        }
+        if box == "bool" {
+            buf.push(_arm64_instr2("uxtw", _arm64_op_reg("x0"),
+                             _arm64_op_reg("w0"), "ret bool: zero-ext"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
+                             "ret bool: box → HexaVal"))
+        }
         if s.dst.id >= 0 {
             buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
         }

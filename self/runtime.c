@@ -12744,3 +12744,17 @@ HexaVal exec_stream_open(HexaVal cmd) { return hexa_exec_stream_open_impl(cmd); 
 HexaVal exec_stream_write(HexaVal handle, HexaVal data) { return hexa_exec_stream_write_impl(handle, data); }
 HexaVal exec_stream_close_stdin(HexaVal handle) { return hexa_exec_stream_close_stdin_impl(handle); }
 
+/* Path A (A′) builtin shims — is_alpha/is_alphanumeric have no runtime
+ * symbol (legacy codegen_c2 inlines them as C exprs). The native
+ * compiler codegen backend calls them as functions, so provide additive
+ * linkable wrappers mirroring codegen_c2:3527/3535 exactly. Pure-
+ * additive: legacy C path inlines and never calls these → no collision. */
+HexaVal hexa_is_alpha(HexaVal a) {
+    return hexa_bool((HX_IS_STR(a) && HX_STR(a) && isalpha((unsigned char)HX_STR(a)[0]))
+                  || (HX_TAG(a) == TAG_CHAR && isalpha((unsigned char)HX_INT(a))));
+}
+HexaVal hexa_is_alphanumeric(HexaVal a) {
+    return hexa_bool((HX_IS_STR(a) && HX_STR(a) && isalnum((unsigned char)HX_STR(a)[0]))
+                  || (HX_TAG(a) == TAG_CHAR && isalnum((unsigned char)HX_INT(a))));
+}
+
