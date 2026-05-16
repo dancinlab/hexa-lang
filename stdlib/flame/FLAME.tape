@@ -115,6 +115,16 @@
   evidence = "21-commit chain Phase 3-A..3-J · gn2[0]=7.97113 vs anima 7.97116 |Δ|=3.12e-5 · final 8.87e-7 vs 3.73e-7 (2.4× drift; same shape) · acc 8/8 = anima 8/8 · init weight byte-id max|Δ|=0.0 · source #4 (dict vs packed-farr impl-level) CONFIRMED by direct anima same-toolchain execution"
   rename_note = "Originally drafted as RFC 044 (commit 829e5076), renamed to RFC 045 to yield 044 to the parallel-session forge regime work (RFC 040/041 lineage continuation has stronger numerical-position claim)."
 
+@X x_rfc048 := "RFC 048 — flame Phase 4-C: fwd+bwd graph fusion at compile time" :: rfc [d=2026-05-17 draft]
+  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md"
+  branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
+  scope = "Stage 3 from RFC 046 (HIGHEST IMPACT — bwd is 75% of per-step wall per PERF.md 5-run). IR pass detects nn_decoder_block_fwd/bwd pairs and emits single specialized fused C function per (T,d,nh,nkv,h) tuple with register-resident block cache."
+  builds_on = "RFC 047 (Phase 4-B IR pass is the prerequisite Stage 2 specialization); extends it with fwd/bwd pairing detection + rewrite"
+  asserts = "F-RFC048-FUSED-WALL-IMPROVED: ≥2× over Phase 4-B baseline (4.5s → 2.5s on M-Mac CPU d=32·3L 80-step); combined Phase 4 (B+C) = ≥5× over Phase 3-J; F-RFC048-EAGER-PYTORCH-MATCH = ≤1.3× of eager-PyTorch 336.85s on A100 d=768·12L"
+  mechanism = "block cache (Bc ~8K floats × 3 layers × 80 steps × 8 windows = ~30M cache transfers) becomes register-resident inside the fused kernel; clang -O2 register allocation across the entire fwd+bwd dataflow eliminates ~50-70% per-step DRAM traffic"
+  staged = "Phase 4-C-1 pairing detection (~1 cycle) → 4-C-2 single-layer fused emit (~2 cycles, ~2-3× over Phase 4-B) → 4-C-3 multi-layer decoder_lib rewrite (~2 cycles, full 5× combined) → 4-C-4 d=768·12L specialization + GPU dispatch (~1 fire cycle, ~\$5-20)"
+  preserves = "flame public API (g_flame_api_fixed); Phase 3 numerics byte-id (F-RFC048-STEP-EQ preserves flame ↔ anima 3.12e-5 delta exactly)"
+
 @X x_rfc047 := "RFC 047 — flame Phase 4-B: per-block IR pass for compile-time block fusion" :: rfc [d=2026-05-17 draft]
   path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_047_flame_phase4b_block_fusion_ir_pass.md"
   branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
