@@ -164,6 +164,42 @@ pub fn verify_s10_music_4_3_ratio() -> AtlasVerdict {
     return _vd_bridges("s10_music_4_3_ratio", _tier_bridges(ok && connections_ok), ok && connections_ok, detail)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// archive-TECS-L _tecsl carries — g_self_verify Phase-2 hexa-native verifiers
+// ══════════════════════════════════════════════════════════════════════
+
+// ──────────────────────────────────────────────────────────────────────
+// s10_log6_2_plus_log6_3_137_tecsl — ind₆(2)+ind₆(3)=137 (mod 137)
+// ──────────────────────────────────────────────────────────────────────
+// Discrete log base 6 mod 137: brute-search the exponent e∈[1,136] with
+// 6^e ≡ 2 (ind₆(2)) and ≡ 3 (ind₆(3)). Source: ind₆(2)=38, ind₆(3)=99,
+// 38+99=137 (the literal '=137' coincidence — semi-trivial since 6=2·3 ⇒
+// the sum ≡ ind₆(6)=1 (mod 136=φ(137))). 137 is the α-number observation,
+// NOT derived from σ/τ/φ (f_atlas_lattice_external). Exact integer modexp.
+// Tier stays 🟡-capped (semi-trivial) at reviewer-merge; the verifier
+// confirms the hexa-native discrete-log computation only.
+
+pub fn verify_s10_log6_2_plus_log6_3_137_tecsl() -> AtlasVerdict {
+    let p = 137
+    let mut ind2 = -1
+    let mut ind3 = -1
+    let mut acc = 1
+    let mut e = 1
+    while e <= p {
+        acc = (acc * 6) % p
+        if acc == 2 && ind2 < 0 { ind2 = e }
+        if acc == 3 && ind3 < 0 { ind3 = e }
+        e = e + 1
+    }
+    let sum = ind2 + ind3
+    // congruence leg: ind₆(2)+ind₆(3) ≡ ind₆(6)=1 (mod 136=φ(137))
+    let phi137 = 136
+    let cong_ok = (sum % phi137) == 1
+    let ok = ind2 == 38 && ind3 == 99 && sum == p && cong_ok
+    let detail = "discrete-log base 6 mod 137: ind₆(2)=" + to_string(ind2) + " · ind₆(3)=" + to_string(ind3) + " · sum=" + to_string(sum) + " (expected 137; ≡1 mod φ(137)=136 since 6=2·3 ⇒ semi-trivial, '=137' is α-number observation per f_atlas_lattice_external)"
+    return _vd_bridges("s10_log6_2_plus_log6_3_137_tecsl", _tier_bridges(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_bridges_all() -> [AtlasVerdict] {
@@ -173,5 +209,12 @@ pub fn verify_bridges_all() -> [AtlasVerdict] {
     out.push(verify_s10_constant_relations())
     out.push(verify_s10_euler_factor_bridge())
     out.push(verify_s10_music_4_3_ratio())
+    return out
+}
+
+// _tecsl Phase-2 aggregate (separate so reviewer-merge wires §10 independently).
+pub fn verify_bridges_tecsl_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s10_log6_2_plus_log6_3_137_tecsl())
     return out
 }

@@ -92,11 +92,50 @@ pub fn verify_s6_planck_units_count() -> AtlasVerdict {
     return _vd_cosmo("s6_planck_units_count", _tier_cosmo(ok), ok, detail)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// archive-TECS-L _tecsl carries — g_self_verify Phase-2 hexa-native verifiers
+// ══════════════════════════════════════════════════════════════════════
+
+// ──────────────────────────────────────────────────────────────────────
+// s6_koide_divisor_functional_tecsl — Koide K(6)=2/3, δ(6)=2/9
+// ──────────────────────────────────────────────────────────────────────
+// Divisor-Koide functional K(n)=n·τ(n)²/σ(n²)... actually K(n)=n·τ(n)²/σ(n)²:
+//   K(6)=6·4²/12²=96/144=2/3 (exact rational, integer cross-mult)
+//   δ(6)=K(6)−4/9 = 2/3−4/9 = 6/9−4/9 = 2/9
+// The closed-form value IS hexa-native verifiable (exact rational). The PDG
+// lepton-mass match stays OBSERVATION (g_external_calc_forbidden literature
+// exception) — this verifier confirms the lattice-internal K(6)=2/3 closed
+// form ONLY, NOT the physics; tier stays 🟡-capped at reviewer-merge.
+
+pub fn verify_s6_koide_divisor_functional_tecsl() -> AtlasVerdict {
+    let n = 6
+    let t = tau(n)                       // 4
+    let s = sigma(n)                     // 12
+    let k_num = n * t * t                // 6·16 = 96
+    let k_den = s * s                    // 144
+    // K(6) = 96/144 = 2/3  ⟺  k_num·3 == k_den·2
+    let k_ok = k_num * 3 == k_den * 2
+    // δ(6) = K − 4/9 = (9·k_num − 4·k_den) / (9·k_den) = 2/9
+    let d_num = 9 * k_num - 4 * k_den    // 9·96 − 4·144 = 864 − 576 = 288
+    let d_den = 9 * k_den                // 1296
+    let d_ok = d_num * 9 == d_den * 2    // 288/1296 = 2/9
+    let ok = k_ok && d_ok
+    let detail = "K(6)=n·τ(6)²/σ(6)² = " + to_string(k_num) + "/" + to_string(k_den) + " = 2/3 (" + to_string(k_ok) + ") · δ(6)=K−4/9 = " + to_string(d_num) + "/" + to_string(d_den) + " = 2/9 (" + to_string(d_ok) + ") [closed-form only; PDG lepton-mass match is observation, tier 🟡-capped per honest_c3]"
+    return _vd_cosmo("s6_koide_divisor_functional_tecsl", _tier_cosmo(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_cosmo_all() -> [AtlasVerdict] {
     let mut out: [AtlasVerdict] = []
     out.push(verify_s6_cmb_n_s_closed_form())
     out.push(verify_s6_planck_units_count())
+    return out
+}
+
+// _tecsl Phase-2 aggregate (separate so reviewer-merge wires §6 independently).
+pub fn verify_cosmo_tecsl_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s6_koide_divisor_functional_tecsl())
     return out
 }

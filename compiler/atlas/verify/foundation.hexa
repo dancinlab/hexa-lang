@@ -16,6 +16,7 @@
 
 import "stdlib/core/math.hexa"
 import "compiler/n6_lattice/verify.hexa"
+import "compiler/atlas/symbolic/divisor_field_theory.hexa"
 
 // ── AtlasVerdict struct (shared across compiler/atlas/verify/*) ────────
 
@@ -148,6 +149,234 @@ pub fn verify_s1_master_identity_geometric() -> AtlasVerdict {
     return _vd("s1_master_identity_geometric", _tier_for(ok), ok, detail)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// archive-TECS-L _tecsl carries — g_self_verify Phase-2 hexa-native verifiers
+// ══════════════════════════════════════════════════════════════════════
+// MAIN.tape cycle 035 merged 41 _tecsl @D verdicts; each honest_c3 records
+// "🔵-eligible after a hexa-native Phase-2 verifier (g_self_verify)". The
+// closed-form-bearing §1 entries below are exact-integer / finite-enumeration
+// checkable hexa-native (zero external sympy/python — g_self_verify HARD).
+// f_atlas_lattice_external HARD: n=6 is the OUTPUT of each NT constraint, not
+// fed in as a lattice premise — the verifier sweeps the constraint over a
+// range and reads off the solution set.
+//
+// Tier on PASS → 🔵 SUPPORTED-IDENTITY (reviewer-merge owns the MAIN.tape
+// 🟠/🟡 → 🔵 tier upgrade + ~> supersedes; this is the ENGINE only).
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_prime_pair_two_unique_tecsl — (p−1)(q−1)=2 ⇒ unique (p,q)=(2,3) ⇒ n=6
+// ──────────────────────────────────────────────────────────────────────
+// P-NEW Thm 1: the Diophantine (p−1)(q−1)=2 over primes has the unique
+// unordered solution {2,3} (unique factorisation of 2 = 1×2). Finite
+// enumeration over the prime grid; n = p·q = 6 the unique value.
+
+pub fn verify_s1_prime_pair_two_unique_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut p = 2
+    while p <= 60 {
+        if is_prime(p) {
+            let mut q = p
+            while q <= 60 {
+                if is_prime(q) {
+                    if (p - 1) * (q - 1) == 2 {
+                        sols.push(p * q)
+                    }
+                }
+                q = q + 1
+            }
+        }
+        p = p + 1
+    }
+    let ok = len(sols) == 1 && sols[0] == 6
+    let detail = "(p−1)(q−1)=2 over prime pairs p≤q in [2,60]: n=p·q hits " + _arr_to_string(sols) + " (expected [6] — unique unordered {2,3} by unique-factorisation of 2; P-NEW Thm 1)"
+    return _vd("s1_prime_pair_two_unique_tecsl", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_semiprime_perfect_unique_tecsl — 6 unique semiprime perfect: σ(pq)=2pq
+// ──────────────────────────────────────────────────────────────────────
+// P-NEW Thm 2: σ(pq)=2pq ⟺ (1+p)(1+q)=2pq ⟺ (p−1)(q−1)=2 ⟺ (p,q)=(2,3).
+// Sweep distinct-prime semiprimes; the only perfect one is 6.
+
+pub fn verify_s1_semiprime_perfect_unique_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut p = 2
+    while p <= 60 {
+        if is_prime(p) {
+            let mut q = p + 1
+            while q <= 60 {
+                if is_prime(q) {
+                    let pq = p * q
+                    if sigma(pq) == 2 * pq { sols.push(pq) }
+                }
+                q = q + 1
+            }
+        }
+        p = p + 1
+    }
+    let ok = len(sols) == 1 && sols[0] == 6
+    let detail = "σ(p·q)=2·p·q over distinct-prime semiprimes (p<q≤60): hits " + _arr_to_string(sols) + " (expected [6] — unique semiprime perfect; P-NEW Thm 2, Nielsen 2015 odd-perfect bound cite-only)"
+    return _vd("s1_semiprime_perfect_unique_tecsl", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_divisor_field_action_zero_tecsl — S(n)=0 ⟺ n=6 (unique zero)
+// ──────────────────────────────────────────────────────────────────────
+// S(n) = [σφ − nτ]² + [σ(n+φ) − nτ²]². Reuses symbolic/divisor_field_theory
+// (compute_action / action_zero_solutions). MAIN.tape evidence: S(6)=
+// [24−24]²+[96−96]²=0 and S(n)=0 ⟺ n=6 (singleton — n=1 has term2=σ(1+φ)−τ²
+// = 1·2−1 = 1 ≠ 0, so 1 is NOT a zero of the FULL action). The sum-of-squares
+// makes S(n)=0 a simultaneous double-constraint uniqueness statement.
+
+pub fn verify_s1_divisor_field_action_zero_tecsl() -> AtlasVerdict {
+    let sols = action_zero_solutions(300)
+    let a6 = compute_action(6)
+    let a1 = compute_action(1)
+    let ok = len(sols) == 1 && sols[0] == 6 && a6.action == 0 && a6.term1 == 0 && a6.term2 == 0 && a1.action != 0
+    let detail = "S(n)=[σφ−nτ]²+[σ(n+φ)−nτ²]²=0 in [1,300]: " + _arr_to_string(sols) + " (expected [6] — unique zero); S(6) t1=" + to_string(a6.term1) + " t2=" + to_string(a6.term2) + " action=" + to_string(a6.action) + " · S(1) action=" + to_string(a1.action) + " (≠0, double-constraint separates 1; symbolic/divisor_field_theory engine)"
+    return _vd("s1_divisor_field_action_zero_tecsl", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_tau_plus_2_eq_n_tecsl — τ(n)+2=n ⟺ n=6
+// ──────────────────────────────────────────────────────────────────────
+// Divisor-count bound τ(n) ≤ 2√n ⇒ τ(n)+2=n forces n ≤ 7; finite n∈[1,7]
+// scan (verifier sweeps a generous [1,200] to also confirm no large solution).
+
+pub fn verify_s1_tau_plus_2_eq_n_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= 200 {
+        if tau(n) + 2 == n { sols.push(n) }
+        n = n + 1
+    }
+    let ok = len(sols) == 1 && sols[0] == 6
+    let detail = "τ(n)+2=n in [1,200]: " + _arr_to_string(sols) + " (expected [6]; bound τ(n)≤2√n ⇒ n≤7, τ(6)=4, 4+2=6)"
+    return _vd("s1_tau_plus_2_eq_n_tecsl", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_sigma_n_plus_phi_eq_n_tau_sq_tecsl — σ(n)(n+φ(n))=n·τ(n)² ⟺ n=6 (n>1)
+// ──────────────────────────────────────────────────────────────────────
+// Second residual of the S(n)=0 system. σ(6)·(6+φ(6))=12·8=96 = 6·τ(6)²=6·16.
+
+pub fn verify_s1_sigma_n_plus_phi_eq_n_tau_sq_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut n = 2
+    while n <= 300 {
+        if sigma(n) * (n + euler_phi(n)) == n * tau(n) * tau(n) { sols.push(n) }
+        n = n + 1
+    }
+    let ok = len(sols) == 1 && sols[0] == 6
+    let detail = "σ(n)·(n+φ(n))=n·τ(n)² for n>1 in [2,300]: " + _arr_to_string(sols) + " (expected [6]; σ(6)·8=96=6·16)"
+    return _vd("s1_sigma_n_plus_phi_eq_n_tau_sq_tecsl", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_pnew_eq2_phi_sigma_tecsl — φ(σ(n))=τ(n) ⟶ {1,2,3,5,6}
+// ──────────────────────────────────────────────────────────────────────
+// P-NEW Appendix-A Eq#2 (= OEIS #2). Solution set computed by sweep.
+
+pub fn verify_s1_pnew_eq2_phi_sigma_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= 300 {
+        if euler_phi(sigma(n)) == tau(n) { sols.push(n) }
+        n = n + 1
+    }
+    let mut ok = len(sols) == 5
+    if ok {
+        if sols[0] != 1 { ok = false }
+        if sols[1] != 2 { ok = false }
+        if sols[2] != 3 { ok = false }
+        if sols[3] != 5 { ok = false }
+        if sols[4] != 6 { ok = false }
+    }
+    let detail = "φ(σ(n))=τ(n) in [1,300]: " + _arr_to_string(sols) + " (expected [1,2,3,5,6]; P-NEW Appendix-A Eq#2 / OEIS #2)"
+    return _vd("s1_pnew_eq2_phi_sigma_tecsl", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_pnew_eq7_ore_harmonic_tecsl — Ore harmonic H(n)=φ(n) ⟶ {1,6}
+// ──────────────────────────────────────────────────────────────────────
+// H(n)=n·τ(n)/σ(n). Integer form (no float): n·τ(n)=φ(n)·σ(n).
+
+pub fn verify_s1_pnew_eq7_ore_harmonic_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= 300 {
+        if n * tau(n) == euler_phi(n) * sigma(n) { sols.push(n) }
+        n = n + 1
+    }
+    let ok = len(sols) == 2 && sols[0] == 1 && sols[1] == 6
+    let detail = "Ore H(n)=n·τ(n)/σ(n)=φ(n) (integer form n·τ=φ·σ) in [1,300]: " + _arr_to_string(sols) + " (expected [1,6]; P-NEW Eq#7 / OEIS #3)"
+    return _vd("s1_pnew_eq7_ore_harmonic_tecsl", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_pnew_eq8_sigma3_tecsl — σ₃(n)=τ(n)(2ⁿ−1) ⟶ {1,6}
+// ──────────────────────────────────────────────────────────────────────
+// Reuses symbolic/divisor_field_theory σ via dft, σ₃ computed locally
+// (Σ d³). 2ⁿ−1 outgrows σ₃(n)/τ(n) for n>6 ⇒ finite; scan n∈[1,28]
+// (2²⁸ stays within int range).
+
+fn _sigma3(n: int) -> int {
+    let mut s = 0
+    let mut d = 1
+    while d <= n {
+        if n % d == 0 { s = s + d * d * d }
+        d = d + 1
+    }
+    return s
+}
+
+pub fn verify_s1_pnew_eq8_sigma3_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= 28 {
+        let lhs = _sigma3(n)
+        let rhs = tau(n) * (pow(2, n) - 1)
+        if lhs == rhs { sols.push(n) }
+        n = n + 1
+    }
+    let ok = len(sols) == 2 && sols[0] == 1 && sols[1] == 6
+    let detail = "σ₃(n)=τ(n)·(2ⁿ−1) in [1,28]: " + _arr_to_string(sols) + " (expected [1,6]; exp-vs-poly finiteness, P-NEW Eq#8 / OEIS #4)"
+    return _vd("s1_pnew_eq8_sigma3_tecsl", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_pnew_eq9_sigmaphi_tau_tecsl — σ(φ(n))·τ(n)=σ(n) ⟶ {1,6}
+// ──────────────────────────────────────────────────────────────────────
+
+pub fn verify_s1_pnew_eq9_sigmaphi_tau_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= 300 {
+        if sigma(euler_phi(n)) * tau(n) == sigma(n) { sols.push(n) }
+        n = n + 1
+    }
+    let ok = len(sols) == 2 && sols[0] == 1 && sols[1] == 6
+    let detail = "σ(φ(n))·τ(n)=σ(n) in [1,300]: " + _arr_to_string(sols) + " (expected [1,6]; P-NEW Eq#9 / OEIS #7)"
+    return _vd("s1_pnew_eq9_sigmaphi_tau_tecsl", _tier_for(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s1_pnew_eq10_sopfr_tecsl — σ(n)(sopfr(n)−1)=n·φ(n)·τ(n) ⟶ {6}
+// ──────────────────────────────────────────────────────────────────────
+// σ(6)·(sopfr(6)−1)=12·(5−1)=48 = 6·φ(6)·τ(6)=6·2·4=48. Singleton {6}.
+
+pub fn verify_s1_pnew_eq10_sopfr_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut n = 2
+    while n <= 300 {
+        if sigma(n) * (sopfr(n) - 1) == n * euler_phi(n) * tau(n) { sols.push(n) }
+        n = n + 1
+    }
+    let ok = len(sols) == 1 && sols[0] == 6
+    let detail = "σ(n)·(sopfr(n)−1)=n·φ(n)·τ(n) in [2,300]: " + _arr_to_string(sols) + " (expected [6]; σ(6)·4=48=6·2·4, P-NEW Eq#10 / OEIS #8)"
+    return _vd("s1_pnew_eq10_sopfr_tecsl", _tier_for(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_foundation_all() -> [AtlasVerdict] {
@@ -157,5 +386,22 @@ pub fn verify_foundation_all() -> [AtlasVerdict] {
     out.push(verify_s1_perfect_number())
     out.push(verify_s1_triangular_sigma_tau())
     out.push(verify_s1_master_identity_geometric())
+    return out
+}
+
+// _tecsl Phase-2 aggregate (separate from verify_foundation_all so the
+// reviewer-merge can wire these into the §1 ledger independently).
+pub fn verify_foundation_tecsl_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s1_prime_pair_two_unique_tecsl())
+    out.push(verify_s1_semiprime_perfect_unique_tecsl())
+    out.push(verify_s1_divisor_field_action_zero_tecsl())
+    out.push(verify_s1_tau_plus_2_eq_n_tecsl())
+    out.push(verify_s1_sigma_n_plus_phi_eq_n_tau_sq_tecsl())
+    out.push(verify_s1_pnew_eq2_phi_sigma_tecsl())
+    out.push(verify_s1_pnew_eq7_ore_harmonic_tecsl())
+    out.push(verify_s1_pnew_eq8_sigma3_tecsl())
+    out.push(verify_s1_pnew_eq9_sigmaphi_tau_tecsl())
+    out.push(verify_s1_pnew_eq10_sopfr_tecsl())
     return out
 }

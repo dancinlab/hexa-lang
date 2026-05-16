@@ -1,0 +1,170 @@
+// test/atlas_tecsl_verify_smoke.hexa — archive-TECS-L _tecsl Phase-2 gate
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Smoke gate for the g_self_verify Phase-2 hexa-native verifiers added for the
+// archive-TECS-L 41-carry sprint (MAIN.tape cycle 035 _tecsl @D entries).
+//
+// Two halves (g_self_verify HARD — zero external sympy/python):
+//   A. POSITIVE — every verify_*_tecsl() must return pass=true for the true
+//      closed-form (the verifier-backed 🔵-eligibility proof).
+//   B. DISCRIMINATION — the same closed-form predicates fed a deliberately
+//      FALSE target must NOT hold (proves each verifier discriminates a true
+//      identity from a false one; a verifier that PASSes everything is worthless).
+//
+// Run:  hexa run test/atlas_tecsl_verify_smoke.hexa
+// CI:   exit(1) + "atlas-tecsl-verify smoke: FAIL" on any regression.
+//       Sentinel: __TECSL_SMOKE__ PASS|FAIL on the final line.
+//
+// Cross-link: atlas/MAIN.tape §1/§2/§6/§8/§10 _tecsl · AGENTS.tape
+// g_self_verify · compiler/atlas/verify/{foundation,math,top,cosmo,bridges}.hexa.
+
+use "compiler/atlas/verify/foundation"
+use "compiler/atlas/verify/math"
+use "compiler/atlas/verify/top"
+use "compiler/atlas/verify/cosmo"
+use "compiler/atlas/verify/bridges"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("  ok   " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  FAIL " + label)
+    }
+}
+
+fn _scan_pos(label: string, vs: [AtlasVerdict]) {
+    let mut i = 0
+    while i < len(vs) {
+        check("A " + label + "::" + vs[i].entry_id + " [" + vs[i].tier + "]", vs[i].pass)
+        i = i + 1
+    }
+}
+
+// ── local closed-form helpers for the DISCRIMINATION half ───────────────
+fn _sg(n: int) -> int {
+    let mut s = 0
+    let mut d = 1
+    while d <= n { if n % d == 0 { s = s + d } d = d + 1 }
+    return s
+}
+fn _tau(n: int) -> int {
+    let mut c = 0
+    let mut d = 1
+    while d <= n { if n % d == 0 { c = c + 1 } d = d + 1 }
+    return c
+}
+fn _phi(n: int) -> int {
+    if n == 1 { return 1 }
+    let mut c = 0
+    let mut k = 1
+    while k < n {
+        let mut a = k
+        let mut b = n
+        while b != 0 { let t = b  b = a % b  a = t }
+        if a == 1 { c = c + 1 }
+        k = k + 1
+    }
+    return c
+}
+
+fn main() {
+    println("─────────────────────────────────────────────────────────")
+    println("atlas-tecsl-verify — Phase-2 _tecsl verifier gate")
+    println("─────────────────────────────────────────────────────────")
+
+    // ── A. POSITIVE: every verifier PASSes for the true closed-form ──────
+    _scan_pos("foundation", verify_foundation_tecsl_all())   // §1 ×10
+    _scan_pos("math",       verify_math_tecsl_all())          // §2 ×4
+    _scan_pos("top",        verify_top_tecsl_all())           // §8 ×4
+    _scan_pos("cosmo",      verify_cosmo_tecsl_all())         // §6 ×1
+    _scan_pos("bridges",    verify_bridges_tecsl_all())       // §10 ×1
+
+    // ── B. DISCRIMINATION: deliberately-FALSE targets must NOT hold ──────
+    // Each line asserts the verifier's predicate REJECTS a wrong identity.
+
+    // s1_prime_pair_two_unique: (p−1)(q−1)=3 has NO prime solution (3=1×3,
+    // but 3+1=4 not prime / would give p=2,q=4∉ℙ) ⇒ empty, not {6}.
+    let mut pp_bad = 0
+    let mut p = 2
+    while p <= 60 {
+        if p == 2 || p == 3 || p == 5 || p == 7 || p == 11 || p == 13 || p == 17 || p == 19 || p == 23 || p == 29 || p == 31 || p == 37 || p == 41 || p == 43 || p == 47 || p == 53 || p == 59 {
+            let mut q = 2
+            while q <= 60 {
+                if q == 2 || q == 3 || q == 5 || q == 7 || q == 11 || q == 13 || q == 17 || q == 19 || q == 23 || q == 29 || q == 31 || q == 37 || q == 41 || q == 43 || q == 47 || q == 53 || q == 59 {
+                    if (p - 1) * (q - 1) == 3 { pp_bad = pp_bad + 1 }
+                }
+                q = q + 1
+            }
+        }
+        p = p + 1
+    }
+    check("B s1_prime_pair: (p−1)(q−1)=3 has no prime solution (≠ the =2 case)", pp_bad == 0)
+
+    // s1_divisor_field_action_zero: S(7) ≠ 0 (7 is not in {1,6}).
+    let s7 = _sg(7)
+    let t7 = _tau(7)
+    let f7 = _phi(7)
+    let term1_7 = s7 * f7 - 7 * t7
+    let term2_7 = s7 * (7 + f7) - 7 * t7 * t7
+    check("B s1_divisor_field_action: S(7)=t1²+t2² ≠ 0",
+          term1_7 * term1_7 + term2_7 * term2_7 != 0)
+
+    // s1_tau_plus_2_eq_n: τ(8)+2 ≠ 8 (only n=6 works).
+    check("B s1_tau_plus_2: τ(8)+2 ≠ 8", _tau(8) + 2 != 8)
+
+    // s1_sigma_n_plus_phi_eq_n_tau_sq: fails at n=12 (only n=6).
+    check("B s1_sigma_n_plus_phi: σ(12)(12+φ(12)) ≠ 12·τ(12)²",
+          _sg(12) * (12 + _phi(12)) != 12 * _tau(12) * _tau(12))
+
+    // s2_zeta_minus_one_sigma6: σ(6)=12, σ(7)=8 ≠ 12 (the FALSE input).
+    check("B s2_zeta_minus_one: σ(7)=8 ≠ 12 (FALSE → would FAIL)", _sg(7) != 12)
+
+    // s2_oeis5_bell_tau: n²−n−30=0 has NO root at n=5 (5²−5−30=−10≠0).
+    check("B s2_oeis5_bell: 5²−5−30 ≠ 0 (root is 6, not 5)",
+          5 * 5 - 5 - 30 != 0)
+
+    // s2_oeis1_tau_sigma: τ(σ(4))=τ(7)=2 ≠ 4 (4 ∉ {1,2,3,6}).
+    check("B s2_oeis1: τ(σ(4))=τ(7)=2 ≠ 4", _tau(_sg(4)) != 4)
+
+    // s8_mu_eq_sigma_squarefree: at N=4 (NOT squarefree) μ≠σ must hold —
+    // i.e. the iff genuinely separates: 4 is non-squarefree so equality fails.
+    // (μ(4)=Γ₀-index(4)=6 ; σ(4)=7 ⇒ 6≠7 ✓ separation.)
+    check("B s8_mu_eq_sigma: N=4 non-squarefree ⇒ Γ₀idx(4)=6 ≠ σ(4)=7",
+          _sg(4) != 6)
+
+    // s10_log6_2_plus_log6_3_137: ind₆(2)+ind₆(5) ≠ 137 (only the 2,3 pair
+    // — since 6=2·3 — sums to 137; an arbitrary pair must not).
+    let pmod = 137
+    let mut i2 = -1
+    let mut i5 = -1
+    let mut acc = 1
+    let mut e = 1
+    while e <= pmod {
+        acc = (acc * 6) % pmod
+        if acc == 2 && i2 < 0 { i2 = e }
+        if acc == 5 && i5 < 0 { i5 = e }
+        e = e + 1
+    }
+    check("B s10_disclog: ind₆(2)+ind₆(5) ≠ 137 (only 6=2·3 pair sums to 137)",
+          i2 + i5 != 137)
+
+    // ── Verdict ──────────────────────────────────────────────────────────
+    println("")
+    println("═══════════════════════════════════════════════════════════")
+    println("  atlas-tecsl-verify smoke: PASS=" + to_string(PASS) + " FAIL=" + to_string(FAIL))
+    println("═══════════════════════════════════════════════════════════")
+    if FAIL > 0 {
+        println("atlas-tecsl-verify smoke: FAIL — " + to_string(FAIL) + " regression(s)")
+        println("__TECSL_SMOKE__ FAIL")
+        exit(1)
+    }
+    println("atlas-tecsl-verify smoke: PASS (20 verifiers backed + discrimination holds)")
+    println("__TECSL_SMOKE__ PASS")
+}

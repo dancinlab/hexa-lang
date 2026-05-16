@@ -11,6 +11,7 @@
 
 import "compiler/atlas/verify/foundation.hexa"
 import "stdlib/core/math.hexa"
+import "compiler/atlas/symbolic/congruence_chain_engine.hexa"
 
 fn _vd_top(entry_id: string, tier: string, pass: bool, detail: string) -> AtlasVerdict {
     return AtlasVerdict {
@@ -202,6 +203,125 @@ pub fn verify_s8_td_group_24() -> AtlasVerdict {
     return _vd_top("s8_td_group_24", _tier_top(ok), ok, detail)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// archive-TECS-L _tecsl carries — g_self_verify Phase-2 hexa-native verifiers
+// ══════════════════════════════════════════════════════════════════════
+// §8 TOP modular-curve carries. Reuses symbolic/congruence_chain_engine
+// (gamma0_index/cusps/elliptic2/elliptic3/genus, dim_cusp_forms,
+// first_cusp_form_weight) — exact integer arithmetic, zero external
+// (g_self_verify HARD). f_atlas_lattice_external HARD: these are general-N
+// modular-curve theorems; the n=6 instance (μ(6)=σ(6)=12) is observation,
+// the verdict is the general law.
+
+fn _tt_arr(arr: [int]) -> string {
+    let mut s = "["
+    let mut i = 0
+    while i < len(arr) {
+        if i > 0 { s = s + ", " }
+        s = s + to_string(arr[i])
+        i = i + 1
+    }
+    return s + "]"
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s8_mu_eq_sigma_squarefree_tecsl — μ(N)=σ(N) ⟺ N squarefree (T2-03)
+// ──────────────────────────────────────────────────────────────────────
+// Γ₀-index μ(N)=N·Π(1+1/p) equals σ(N) exactly iff every prime exponent=1
+// (both reduce to Π(pᵢ+1)). Sweep: equality ⟺ squarefree, zero mismatch.
+
+pub fn verify_s8_mu_eq_sigma_squarefree_tecsl() -> AtlasVerdict {
+    let mut mismatches = 0
+    let mut counterexample = 0
+    let mut n = 1
+    while n <= 200 {
+        let mut squarefree = true
+        let mut d = 2
+        while d * d <= n {
+            if n % (d * d) == 0 { squarefree = false }
+            d = d + 1
+        }
+        let eq = gamma0_index(n) == sigma(n)
+        if eq != squarefree {
+            mismatches = mismatches + 1
+            if counterexample == 0 { counterexample = n }
+        }
+        n = n + 1
+    }
+    let ok = mismatches == 0
+    let detail = "μ(N)=σ(N) ⟺ N squarefree over [1,200]: mismatches=" + to_string(mismatches) + " (expected 0; first counterexample=" + to_string(counterexample) + ", 0=none — T2-03, congruence_chain_engine)"
+    return _vd_top("s8_mu_eq_sigma_squarefree_tecsl", _tier_top(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s8_dim_sk_gamma0_riemann_roch_tecsl — dim S_k(Γ₀(N)) Riemann-Roch
+// ──────────────────────────────────────────────────────────────────────
+// Reference values (LMFDB / Stein modular-forms tables):
+//   dim S_2(Γ₀(11)) = genus(11) = 1   (the first elliptic curve)
+//   dim S_2(Γ₀(1))  = 0               (no weight-2 cusp form for SL(2,ℤ))
+//   dim S_12(Γ₀(1)) = 1               (Δ = η²⁴, the unique normalised cusp form)
+//   dim S_2(Γ₀(6))  = genus(6) = 0
+
+pub fn verify_s8_dim_sk_gamma0_riemann_roch_tecsl() -> AtlasVerdict {
+    let d2_11 = dim_cusp_forms(2, 11)
+    let g11 = gamma0_genus(11)
+    let d2_1 = dim_cusp_forms(2, 1)
+    let d12_1 = dim_cusp_forms(12, 1)
+    let d2_6 = dim_cusp_forms(2, 6)
+    let ok = d2_11 == 1 && g11 == 1 && d2_1 == 0 && d12_1 == 1 && d2_6 == 0
+    let detail = "dim S_k(Γ₀(N)): S₂(Γ₀(11))=" + to_string(d2_11) + "=genus(11)=" + to_string(g11) + " · S₂(Γ₀(1))=" + to_string(d2_1) + " · S₁₂(Γ₀(1))=" + to_string(d12_1) + " (Δ=η²⁴) · S₂(Γ₀(6))=" + to_string(d2_6) + " (Riemann-Roch valence formula; expected 1,1,0,1,0)"
+    return _vd_top("s8_dim_sk_gamma0_riemann_roch_tecsl", _tier_top(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s8_gamma0_invariant_engine_tecsl — Γ₀(N) invariant engine (general N)
+// ──────────────────────────────────────────────────────────────────────
+// Reference rows reproduced from congruence_chain_engine print_table:
+//   Γ₀(1):  μ=1,  cusps=1, e2=1, e3=1, genus=0
+//   Γ₀(6):  μ=12, cusps=4, e2=0, e3=0, genus=0
+//   Γ₀(11): genus=1
+//   Γ₀(13): μ=14, cusps=2, e2=2, e3=2, genus=0
+// Also checks genus = 1 + μ/12 − e2/4 − e3/3 − cusps/2 closure on N=6.
+
+pub fn verify_s8_gamma0_invariant_engine_tecsl() -> AtlasVerdict {
+    let m1 = gamma0_index(1)
+    let c1 = gamma0_cusps(1)
+    let row1_ok = m1 == 1 && c1 == 1 && gamma0_elliptic2(1) == 1 && gamma0_elliptic3(1) == 1 && gamma0_genus(1) == 0
+    let row6_ok = gamma0_index(6) == 12 && gamma0_cusps(6) == 4 && gamma0_elliptic2(6) == 0 && gamma0_elliptic3(6) == 0 && gamma0_genus(6) == 0
+    let row11_ok = gamma0_genus(11) == 1
+    let row13_ok = gamma0_index(13) == 14 && gamma0_cusps(13) == 2 && gamma0_elliptic2(13) == 2 && gamma0_elliptic3(13) == 2 && gamma0_genus(13) == 0
+    // genus closure on N=6: 12 + μ − 3·e2 − 4·e3 − 6·cusps divisible by 12.
+    let numer6 = 12 + gamma0_index(6) - 3 * gamma0_elliptic2(6) - 4 * gamma0_elliptic3(6) - 6 * gamma0_cusps(6)
+    let closure_ok = numer6 / 12 == gamma0_genus(6) && numer6 % 12 == 0
+    let ok = row1_ok && row6_ok && row11_ok && row13_ok && closure_ok
+    let detail = "Γ₀(N) engine rows — Γ₀(1)[μ=1,c=1,e2=1,e3=1,g=0]=" + to_string(row1_ok) + " · Γ₀(6)[μ=12,c=4,e2=0,e3=0,g=0]=" + to_string(row6_ok) + " · Γ₀(11)[g=1]=" + to_string(row11_ok) + " · Γ₀(13)[μ=14,c=2,e2=2,e3=2,g=0]=" + to_string(row13_ok) + " · genus-closure(6)=" + to_string(closure_ok)
+    return _vd_top("s8_gamma0_invariant_engine_tecsl", _tier_top(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s8_modular_forms_sigma6_constants_tecsl — T1-32: 12=σ(6) constant set
+// ──────────────────────────────────────────────────────────────────────
+// Modular-form structural constants where 12=σ(6) / 24=2σ(6)=J₂(6) recur:
+//   weight-k dim ⌊k/12⌋ (SL(2,ℤ)=Γ₀(1))
+//   Δ = η²⁴, exponent 24 = 2·σ(6)
+//   Γ₀(6) index = 12 = σ(6)
+//   Von Staudt-Clausen denominator-12 (B₂ has 6 in denom; the '12' here is
+//     the dim-formula modulus). All integer/closed-form checks.
+// f_atlas_lattice_external: 12 arises in modular theory for its own reasons
+// (lcm(4,6), η²⁴); the 12=σ(6)/24=J₂(6) links are OBSERVATION.
+
+pub fn verify_s8_modular_forms_sigma6_constants_tecsl() -> AtlasVerdict {
+    let s6 = sigma(6)                       // 12
+    let two_s6 = 2 * sigma(6)               // 24 = J₂(6) = η²⁴ exponent
+    let g0_6_index = gamma0_index(6)        // 12
+    let dim_floor_12 = 12 / 12              // ⌊12/12⌋ = 1
+    let dim_floor_24 = 24 / 12              // ⌊24/12⌋ = 2
+    let d12_1 = dim_cusp_forms(12, 1)       // dim S₁₂(Γ₀(1)) = 1 (Δ = η²⁴)
+    let ok = s6 == 12 && two_s6 == 24 && g0_6_index == 12 && dim_floor_12 == 1 && dim_floor_24 == 2 && d12_1 == 1
+    let detail = "σ(6)=" + to_string(s6) + " · 2·σ(6)=" + to_string(two_s6) + "=J₂(6)=η²⁴ exp · Γ₀(6) index=" + to_string(g0_6_index) + " · dim ⌊12/12⌋=" + to_string(dim_floor_12) + " ⌊24/12⌋=" + to_string(dim_floor_24) + " · dim S₁₂(Γ₀(1))=" + to_string(d12_1) + " (12=σ(6)/24=J₂(6) links are observation per f_atlas_lattice_external)"
+    return _vd_top("s8_modular_forms_sigma6_constants_tecsl", _tier_top(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_top_all() -> [AtlasVerdict] {
@@ -214,5 +334,15 @@ pub fn verify_top_all() -> [AtlasVerdict] {
     out.push(verify_s8_bravais_lattices_14())
     out.push(verify_s8_oh_group_48())
     out.push(verify_s8_td_group_24())
+    return out
+}
+
+// _tecsl Phase-2 aggregate (separate so reviewer-merge wires §8 independently).
+pub fn verify_top_tecsl_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s8_mu_eq_sigma_squarefree_tecsl())
+    out.push(verify_s8_dim_sk_gamma0_riemann_roch_tecsl())
+    out.push(verify_s8_gamma0_invariant_engine_tecsl())
+    out.push(verify_s8_modular_forms_sigma6_constants_tecsl())
     return out
 }

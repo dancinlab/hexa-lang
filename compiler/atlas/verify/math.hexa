@@ -402,6 +402,127 @@ pub fn verify_s2_complete_generation() -> AtlasVerdict {
     return _vd_math("s2_complete_generation", _tier_math(ok), ok, detail)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// archive-TECS-L _tecsl carries — g_self_verify Phase-2 hexa-native verifiers
+// ══════════════════════════════════════════════════════════════════════
+// §2 MATH closed-form carries that are exact-integer / algebraic checkable
+// hexa-native (zero external sympy/python — g_self_verify HARD). For the
+// ζ(−1)/σ(6) and Pell/Ljunggren entries the externally-cited analytic value
+// (ζ(−1)=−1/12, the Pell-finiteness) is literature; the verifier checks the
+// hexa-native NT FACT the absorbed claim hinges on (σ(6)=12 ⇒ −1/σ(6)=−1/12,
+// 12=σ(6)), per f_atlas_lattice_external (observation-not-derivation).
+
+fn _mtecsl_arr(arr: [int]) -> string {
+    let mut s = "["
+    let mut i = 0
+    while i < len(arr) {
+        if i > 0 { s = s + ", " }
+        s = s + to_string(arr[i])
+        i = i + 1
+    }
+    return s + "]"
+}
+
+// Bell number B(k) via the Bell triangle (exact integer recurrence).
+fn _bell(k: int) -> int {
+    if k <= 0 { return 1 }
+    let mut row: [int] = [1]
+    let mut i = 1
+    while i <= k {
+        let mut nrow: [int] = [row[len(row) - 1]]
+        let mut j = 0
+        while j < len(row) {
+            nrow.push(nrow[len(nrow) - 1] + row[j])
+            j = j + 1
+        }
+        row = nrow
+        i = i + 1
+    }
+    return row[0]
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s2_zeta_minus_one_sigma6_tecsl — ζ(−1)=−1/12=−1/σ(6)
+// ──────────────────────────────────────────────────────────────────────
+// ζ(−1)=−1/12 is established analysis (Euler 1735 / Riemann continuation —
+// cited literature, NOT recomputed). The hexa-native verifiable leg per
+// f_atlas_lattice_external is σ(6)=12 ⇒ the link −1/12 = −1/σ(6) holds as
+// an OBSERVATION. Verifier confirms σ(6)=12 (exact NT) and σ(6)≠12 ⇒ FAIL.
+
+pub fn verify_s2_zeta_minus_one_sigma6_tecsl() -> AtlasVerdict {
+    let s6 = sigma(6)
+    let ok = s6 == 12
+    let detail = "σ(6)=" + to_string(s6) + " (expected 12) ⇒ −1/σ(6)=−1/12 = ζ(−1) [Euler 1735 / Riemann continuation, cited literature; σ(6)=12 is the hexa-native NT leg, −1/σ(6) link is observation per f_atlas_lattice_external]"
+    return _vd_math("s2_zeta_minus_one_sigma6_tecsl", _tier_math(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s2_oeis5_bell_tau_tecsl — Bell(τ(n))=C(n,2) ⟶ {6} (n²−n−30=0)
+// ──────────────────────────────────────────────────────────────────────
+// At n=6: τ(6)=4, Bell(4)=15 = C(6,2)=15; algebraic closure n²−n−30=0 ⇒
+// n=6 (positive root). Sweep + quadratic-root cross-check.
+
+pub fn verify_s2_oeis5_bell_tau_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= 200 {
+        let lhs = _bell(tau(n))
+        let rhs = n * (n - 1) / 2
+        if lhs == rhs { sols.push(n) }
+        n = n + 1
+    }
+    // Quadratic n²−n−30=0 → positive root = 6.
+    let mut qroot = -1
+    let mut m = 1
+    while m <= 50 {
+        if m * m - m - 30 == 0 { qroot = m }
+        m = m + 1
+    }
+    let bell4 = _bell(4)
+    let c62 = 6 * 5 / 2
+    let ok = len(sols) == 1 && sols[0] == 6 && qroot == 6 && bell4 == 15 && c62 == 15
+    let detail = "Bell(τ(n))=C(n,2) in [1,200]: " + _mtecsl_arr(sols) + " (expected [6]); Bell(4)=" + to_string(bell4) + "=C(6,2)=" + to_string(c62) + "; n²−n−30=0 positive root=" + to_string(qroot)
+    return _vd_math("s2_oeis5_bell_tau_tecsl", _tier_math(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s2_oeis1_tau_sigma_tecsl — τ(σ(n))=n ⟶ {1,2,3,6}
+// ──────────────────────────────────────────────────────────────────────
+// Provably finite (τ(σ(n)) ≪ n); finite-set check yields {1,2,3,6}
+// (n=6: σ(6)=12, τ(12)=6).
+
+pub fn verify_s2_oeis1_tau_sigma_tecsl() -> AtlasVerdict {
+    let mut sols: [int] = []
+    let mut n = 1
+    while n <= 300 {
+        if tau(sigma(n)) == n { sols.push(n) }
+        n = n + 1
+    }
+    let mut ok = len(sols) == 4
+    if ok {
+        if sols[0] != 1 { ok = false }
+        if sols[1] != 2 { ok = false }
+        if sols[2] != 3 { ok = false }
+        if sols[3] != 6 { ok = false }
+    }
+    let detail = "τ(σ(n))=n in [1,300]: " + _mtecsl_arr(sols) + " (expected [1,2,3,6]; n=6: σ(6)=12, τ(12)=6 — OEIS #1)"
+    return _vd_math("s2_oeis1_tau_sigma_tecsl", _tier_math(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s2_oeis6_pell_square_tecsl — F(n)=n² ⟶ {1,12}, 12=σ(6)
+// ──────────────────────────────────────────────────────────────────────
+// Ljunggren 1964 Pell-type finiteness is cited literature (NOT re-derived).
+// The hexa-native verifiable leg per f_atlas_lattice_external: 12=σ(6) (the
+// non-trivial solution coincides with σ(6)); 12≠σ(6) ⇒ FAIL.
+
+pub fn verify_s2_oeis6_pell_square_tecsl() -> AtlasVerdict {
+    let s6 = sigma(6)
+    let ok = s6 == 12
+    let detail = "Pell-square solution-set {1,12} (Ljunggren 1964, cited literature); hexa-native leg σ(6)=" + to_string(s6) + " (expected 12) ⇒ 12=σ(6) [observation per f_atlas_lattice_external, not a derivation]"
+    return _vd_math("s2_oeis6_pell_square_tecsl", _tier_math(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_math_all() -> [AtlasVerdict] {
@@ -418,5 +539,15 @@ pub fn verify_math_all() -> [AtlasVerdict] {
     out.push(verify_s2_jaynes_equivalence_statement())
     out.push(verify_s2_primitive_root_137())
     out.push(verify_s2_complete_generation())
+    return out
+}
+
+// _tecsl Phase-2 aggregate (separate so reviewer-merge wires §2 independently).
+pub fn verify_math_tecsl_all() -> [AtlasVerdict] {
+    let mut out: [AtlasVerdict] = []
+    out.push(verify_s2_zeta_minus_one_sigma6_tecsl())
+    out.push(verify_s2_oeis5_bell_tau_tecsl())
+    out.push(verify_s2_oeis1_tau_sigma_tecsl())
+    out.push(verify_s2_oeis6_pell_square_tecsl())
     return out
 }
