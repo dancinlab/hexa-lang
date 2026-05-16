@@ -79,7 +79,11 @@ fn _const_str_op(s: string) -> Operand {
         local_id: -1,
         int_val: 0,
         float_val: 0.0,
-        str_val: s,
+        // F6 P0c — forced copy: caller passes the HIR node's `.text`
+        // handle (hmodule outlives the streaming loop). substring(0,len)
+        // allocates a fresh buffer so the MFunc owns this string and can
+        // be freed without dangling hmodule. PLAN-stage3-footprint-F6.md.
+        str_val: s.substring(0, len(s)),
         global_id: -1
     }
 }
@@ -1622,7 +1626,9 @@ fn _lower_fn(it: HItem) -> MFunc {
 
     let ret_local = _miss_local()
     return MFunc {
-        name: it.name,
+        // F6 P0c-2 — forced copy: it.name is the HItem's name handle
+        // (hmodule outlives the streaming loop). PLAN-stage3-footprint-F6.md.
+        name: it.name.substring(0, len(it.name)),
         params: params,
         return_local: ret_local,
         locals: ctx.locals,

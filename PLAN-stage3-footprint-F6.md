@@ -177,14 +177,33 @@ not allowed to change output), and the stage-1 self-compile peak RSS
 measured below the no-reclaim baseline. Both gate on the stage-1 build
 (shared with F5).
 
-## 결정 (to be recorded)
+## 결정
 
 ```
-결정 F6: <A | B | C | P0-then-C>  ·  <rationale>
-   recommended: P0-then-C
-   decided-by: <user>            decided-on: <YYYY-MM-DD>
+결정 F6: P0-then-C  ·  완성도 기준 — C is a bounded, fully-enumerated,
+   per-step byte-diff-verifiable sequence; the escape-edge audit
+   (P0a–P0e) closed the set, so C has no open unknowns. A is an
+   open-ended value-model rewrite touching every fn return in every
+   hexa program — no predictable completion point. C completes; A is
+   research. C does not preclude A later (C's free_tree is subsumed
+   by A's region pop).
+   decided-by: user (delegated "완성도 기준으로 선택해 진행")
+   decided-on: 2026-05-16
 ```
 
-Pending user confirmation. Until recorded, F6 is not implemented —
-F1–F4 (landed) stand on their own as the streaming structure + the
-O(n²) accumulator fix.
+### Implementation status
+
+- ✅ **P0a** — `_collect_strs_from_stmt` forced-copies into `st.keys`
+  (`compiler/codegen/arm64_darwin.hexa`).
+- ✅ **P0b** — `_arm64_strtab_lookup` returns a fresh copy of the label.
+- ✅ **P0c** — `_const_str_op` forced-copies the HIR `.text` handle
+  (`compiler/lower/hir_to_mir.hexa`).
+- ✅ **P0c-2** — `_lower_fn` forced-copies `it.name` into `MFunc.name`.
+- ✅ **P0d** — `_arm64_op_for_operand_st` strtab-miss fallback copies.
+- ⬜ **free_tree** — runtime hook `hexa_val_free_tree(v)` + two
+  `stream.hexa` call sites (`mfunc`, `lfunc`).
+- ⬜ **verify** — emitted `.s` byte-identical to pre-F6 + stage-1 RSS
+  below baseline. Gates on the stage-1 build (RunPod).
+
+P0a–P0d/c-2 are all forced `substring(0,len)` copies — byte-identical
+to pre-F6 output (a copy has identical content); parse-gate verified.

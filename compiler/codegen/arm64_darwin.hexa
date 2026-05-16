@@ -518,7 +518,14 @@ pub struct ArmStrTab {
 fn _arm64_strtab_lookup(st: ArmStrTab, s: string) -> string {
     let mut i = 0
     while i < len(st.keys) {
-        if st.keys[i] == s { return st.labels[i] }
+        if st.keys[i] == s {
+            // F6 P0b — forced copy: the LFunc operand built from this
+            // label must not share st.labels' handle, or freeing the
+            // LFunc would dangle st (st outlives every streaming
+            // iteration). PLAN-stage3-footprint-F6.md.
+            let lab = st.labels[i]
+            return lab.substring(0, len(lab))
+        }
         i = i + 1
     }
     return ""
@@ -535,9 +542,13 @@ fn _arm64_op_for_operand_st(o: Operand, st: ArmStrTab) -> LOperand {
         return _arm64_op_label("g" + to_string(o.global_id))
     }
     if o.kind == "const_str" {
+        // lbl is already a fresh copy (F6 P0b in _arm64_strtab_lookup).
         let lbl = _arm64_strtab_lookup(st, o.str_val)
         if len(lbl) > 0 { return _arm64_op_label(lbl) }
-        return _arm64_op_label(o.str_val)
+        // F6 P0d — strtab-miss fallback (should be unreachable, every
+        // const_str is interned first): copy so the LFunc does not share
+        // the MFunc operand's string. PLAN-stage3-footprint-F6.md.
+        return _arm64_op_label(o.str_val.substring(0, len(o.str_val)))
     }
     // fallback: treat as imm 0
     return _arm64_op_imm(0)
@@ -1395,7 +1406,11 @@ fn _collect_strs_from_stmt(st: ArmStrTab, s: Stmt) -> ArmStrTab {
                 let mut keys = out.keys
                 let mut labs = out.labels
                 let n = len(keys)
-                keys.push(o.str_val)
+                // F6 P0a — forced copy: o.str_val is the MFunc operand's
+                // string handle; st outlives every streaming iteration, so
+                // it must own its keys independently of any MFunc.
+                // PLAN-stage3-footprint-F6.md.
+                keys.push(o.str_val.substring(0, len(o.str_val)))
                 labs.push(".LCstr" + to_string(n))
                 out = ArmStrTab { keys: keys, labels: labs }
             }
