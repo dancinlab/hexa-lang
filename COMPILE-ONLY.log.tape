@@ -877,3 +877,23 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
   @> COMPILE-ONLY.tape
 
+@D d_stage3_abi_path := "Decision: stage-3 takes path A (codegen HexaVal-pair-aware), NOT B (runtime 8-byte HexaVal)" :: governance [d=2026-05-16 active]
+  <- loop_stage3_root_cause_hexaval_abi
+  decision = "A — make compiler/codegen/* HexaVal-pair (x0:x1 / 16B) ABI-aware end-to-end."
+  rationale <<~EOF
+    B is rejected as bootstrap-fatal, not merely risky. The working
+    stage-0/1 bootstrap is hexa_v2 → C → clang against self/runtime.c.
+    Legacy codegen_c2 emits C that constructs `(HexaVal){.tag=…,.i=…}`
+    and reads `v.tag` / `v.i` directly; runtime.c's ~7 kLOC internals
+    do the same; every HX_* macro assumes the 16-byte tagged struct.
+    Re-representing HexaVal as 8-byte NaN-box/tagged-ptr breaks ALL of
+    that simultaneously → destroys the very stage-1 binary the loop
+    builds (the bootstrap floor, [@x_hexa_native_only]). A is the only
+    bootstrap-safe option: localized to the in-progress new backend,
+    runtime + legacy + stage-0/1 untouched.
+  EOF
+  scope = "A is a single pervasive value-model rewrite of compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em}: regalloc + spill slots 8B→16B, args as AAPCS64 register PAIRS (x0:x1, x2:x3, … then 16B stack slots), returns captured x0:x1, pair-wise mov/ldr/str (stp/ldp), HexaVal locals 16B. NOT loop-tick-decomposable with verification: partial pair-awareness is exactly as broken as none (a value is mis-passed/truncated until the WHOLE model is consistent), so there is no byte-diff-verifiable intermediate — it is all-or-nothing, a focused dedicated effort, the genuine '한참 멀음'."
+  loop_terminus = "The autonomous /loop has reached its honest terminus for COMPILE-ONLY: every safely-decomposable, per-tick-verifiable unit (front-end/lowering 2774→0; symbol mangling 583→0; .s assembles 3578→0; 21 ABI-verified builtin renames, ld 36→10) is DONE and committed (287670af..0f0796ce). The sole remaining gate (path A) is non-decomposable and non-loop. Continuing to fire the same /loop prompt produces no verifiable progress and risks fabrication — it should be retired (CronDelete) in favour of a dedicated path-A effort with the user's go-ahead."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
+  @> COMPILE-ONLY.tape
+
