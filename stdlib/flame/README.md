@@ -34,6 +34,21 @@
 > - CE: `dt_ln` ≡ anima atanh 24-term (Phase 3-E)
 > - RoPE: `d5_sin` / `d5_cos` ≡ anima 14-term Taylor (Phase 3-G)
 > - AdamW: same `adamw_step` builtin (Phase 3-A)
+> - **per-window gn2 avg: 0.99640 ≡ anima 0.99640** byte-eq (Phase 3-I)
+> - **nn_decoder_grad 8-probe libm-fd at full d=32·3L: max rel 2.19e-09** (Phase 3-I)
+>
+> **Cross-impl drift quantified** (RFC 045 source #4, RFC 040 §2.2 TOL_MATMUL class):
+> - per-window: ~3.9e-6 (1 ulp × 256-element softmax floor)
+> - epoch sum: 3.12e-5 (8× window compound; 7.97113 vs 7.97116)
+> - gradient at deep weight: ~3× ratio + sign-flip (Phase 4-A-bwd batched amplification)
+> - trajectory shape: qualitatively identical (step 25-40 main collapse + plateau)
+> - corpus acc 8/8 = 8/8 (byte-eq); collapse 8.98e6× ≈ 2.13e7× (same order)
+>
+> **dt_ln bias quantified** (RFC 045 source #1, CE-loss-value only):
+> - p ≥ 0.1: machine ε precision
+> - V=256 uniform p≈4e-3: 13% absolute bias
+> - CE clamp floor p=1e-6: 63% bias (atanh series asymptotic limit)
+> - gn2 path UNAFFECTED (no log); gradient UNAFFECTED (dl = softmax−onehot)
 >
 > **GRAD-EXACT correctness anchors**:
 > - block-level: 9-probe central-diff, max rel **3.59e-10** (Phase 3-B)
