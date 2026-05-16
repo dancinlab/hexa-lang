@@ -1968,6 +1968,10 @@ pub fn lower_hir(module: HModule) -> MModule {
             // makes it through to codegen and the assembler errors
             // on `_absf already defined`. Bind only suppressed the
             // typed env entry; the items list still carried both.
+            // last-wins variant trialled (sweep #11) — no net gain
+            // on the atlas verifier DIFFs (those have a different
+            // root cause), and surfaced interp-timing variance —
+            // so reverted to first-wins for simplicity.
             let mut already = false
             let mut nj = 0
             while nj < len(fn_names) {
