@@ -770,13 +770,55 @@ fn _hv_mem(off: i64) -> LOperand {
     return _arm64_op_label("[sp, #" + to_string(off) + "]")
 }
 
+// ARM64 ldp/stp (64-bit pair) take a signed scaled imm7 offset: range
+// [-512, +504] in steps of 8. Frame slots beyond that need the address
+// materialized into a base register (x15 — outside the value-scratch
+// x9-x14 and arg x0-x7 sets). Emits into `base`; returns the [base]
+// mem operand for offsets out of range, else [sp,#off].
+fn _hv_at(buf: [LInstr], off: i64, base: string) -> [LInstr] {
+    let mut out = buf
+    if off >= 0 && off <= 504 { return out }
+    if off <= 4095 {
+        out.push(_arm64_instr3("add", _arm64_op_reg(base), _arm64_op_reg("sp"),
+                         _arm64_op_label("#" + to_string(off)), "hv frame base"))
+    } else {
+        out = _arm64_emit_imm_to_reg(out, base, off)
+        out.push(_arm64_instr3("add", _arm64_op_reg(base), _arm64_op_reg("sp"),
+                         _arm64_op_reg(base), "hv frame base (big)"))
+    }
+    return out
+}
+
+fn _hv_memb(off: i64, base: string) -> LOperand {
+    if off >= 0 && off <= 504 { return _arm64_op_label("[sp, #" + to_string(off) + "]") }
+    return _arm64_op_label("[" + base + "]")
+}
+
+// sp += / -= amount. ARM64 add/sub immediate is ≤4095 (opt. <<12);
+// 16B-slot frames exceed that → materialize the amount into `scr`
+// (movz/movk) and use the register form. `scr` (x15) is free at
+// prologue entry and at epilogue (return value lives in x0:x1).
+fn _hv_sp_adj(buf: [LInstr], mnem: string, amount: i64, scr: string) -> [LInstr] {
+    let mut out = buf
+    if amount <= 4095 {
+        out.push(_arm64_instr3(mnem, _arm64_op_reg("sp"), _arm64_op_reg("sp"),
+                         _arm64_op_label("#" + to_string(amount)), "sp adj"))
+        return out
+    }
+    out = _arm64_emit_imm_to_reg(out, scr, amount)
+    out.push(_arm64_instr3(mnem, _arm64_op_reg("sp"), _arm64_op_reg("sp"),
+                     _arm64_op_reg(scr), "sp adj (big frame)"))
+    return out
+}
+
 fn _hv_load(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
             lo: string, hi: string) -> [LInstr] {
     let mut out = buf
     if o.kind == "local" {
         let off = _arm_spill_offset(rm, o.local_id)
+        out = _hv_at(out, off, "x15")
         out.push(_arm64_instr3("ldp", _arm64_op_reg(lo), _arm64_op_reg(hi),
-                         _hv_mem(off), "hv load L" + to_string(o.local_id)))
+                         _hv_memb(off, "x15"), "hv load L" + to_string(o.local_id)))
         return out
     }
     if o.kind == "const_int" {
@@ -827,8 +869,9 @@ fn _hv_store(buf: [LInstr], rm: RegMap, id: i64, lo: string, hi: string) -> [LIn
     let mut out = buf
     if id < 0 { return out }
     let off = _arm_spill_offset(rm, id)
+    out = _hv_at(out, off, "x15")
     out.push(_arm64_instr3("stp", _arm64_op_reg(lo), _arm64_op_reg(hi),
-                     _hv_mem(off), "hv store L" + to_string(id)))
+                     _hv_memb(off, "x15"), "hv store L" + to_string(id)))
     return out
 }
 
@@ -849,15 +892,16 @@ fn _hv_cstr(buf: [LInstr], o: Operand, st: ArmStrTab, reg: string) -> [LInstr] {
 fn _hv_ldslot(buf: [LInstr], rm: RegMap, id: i64, lo: string, hi: string) -> [LInstr] {
     let mut out = buf
     let off = _arm_spill_offset(rm, id)
+    out = _hv_at(out, off, "x15")
     out.push(_arm64_instr3("ldp", _arm64_op_reg(lo), _arm64_op_reg(hi),
-                     _hv_mem(off), "hv reload L" + to_string(id)))
+                     _hv_memb(off, "x15"), "hv reload L" + to_string(id)))
     return out
 }
 
 // binop/compare → runtime symbol (codegen_c2-authoritative). "" =
 // special-cased (!=, &&, ||, bitwise) by the BINOP emitter.
 fn _hv_binop_sym(op: string) -> string {
-    if op == "+"  || op == "add" { return "hexa_add" }
+    if op == "+"  || op == "add" { return "hexa_add_slow" }  // hexa_add is a runtime.h MACRO; the linkable fn is hexa_add_slow
     if op == "-"  || op == "sub" { return "hexa_sub" }
     if op == "*"  || op == "mul" { return "hexa_mul" }
     if op == "/"  || op == "div" || op == "sdiv" { return "hexa_div" }
@@ -1034,7 +1078,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             // via hexa_add (correctness follow-up if it surfaces at run).
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
-            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_add"),
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_add_slow"),
                              "binop " + s.op + " (approx)"))
             buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
         }
@@ -1063,8 +1107,9 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             } else {
                 buf = _hv_load(buf, s.args[i], st, rm, "x9", "x10")
                 let off = (i - 4) * 16
+                buf = _hv_at(buf, off, "x15")
                 buf.push(_arm64_instr3("stp", _arm64_op_reg("x9"),
-                                 _arm64_op_reg("x10"), _hv_mem(off),
+                                 _arm64_op_reg("x10"), _hv_memb(off, "x15"),
                                  "C7: stack arg " + to_string(i)))
             }
             i = i + 1
@@ -1084,9 +1129,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // allocated in a single prologue sub; see _arm64_lower_func).
         let epilogue_total = spill_frame + rm.call_overflow_bytes
         if epilogue_total > 0 {
-            buf.push(_arm64_instr3("add", _arm64_op_reg("sp"), _arm64_op_reg("sp"),
-                             _arm64_op_label("#" + to_string(epilogue_total)),
-                             "epilogue: free spill+call-overflow frame"))
+            buf = _hv_sp_adj(buf, "add", epilogue_total, "x15")
         }
         buf.push(_arm64_instr3("ldp", _arm64_op_reg("x29"), _arm64_op_reg("x30"),
                          _arm64_op_label("[sp], #16"), "epilogue: restore fp/lr"))
@@ -1190,10 +1233,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     // Spill-frame allocation (after fp/lr save). Covers both the SSA
     // spill region (top) and the outgoing-call overflow region (bottom).
     if total_frame > 0 {
-        instrs.push(_arm64_instr3("sub", _arm64_op_reg("sp"), _arm64_op_reg("sp"),
-                            _arm64_op_label("#" + to_string(total_frame)),
-                            "prologue: alloc " + to_string(spill_frame) +
-                            "B spill + " + to_string(call_overflow_bytes) + "B call-overflow"))
+        instrs = _hv_sp_adj(instrs, "sub", total_frame, "x15")
     }
 
     // Path A (A′): each 16B HexaVal param arrives in a register PAIR
@@ -1209,8 +1249,9 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         if p < 4 {
             let lo = "x" + to_string(p * 2)
             let hi = "x" + to_string(p * 2 + 1)
+            instrs = _hv_at(instrs, poff, "x15")
             instrs.push(_arm64_instr3("stp", _arm64_op_reg(lo),
-                             _arm64_op_reg(hi), _hv_mem(poff),
+                             _arm64_op_reg(hi), _hv_memb(poff, "x15"),
                              "ingress param " + to_string(p)))
         } else {
             let inoff = 16 + (p - 4) * 16
@@ -1218,8 +1259,9 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
                              _arm64_op_reg("x10"),
                              _arm64_op_label("[x29, #" + to_string(inoff) + "]"),
                              "ingress stack param " + to_string(p)))
+            instrs = _hv_at(instrs, poff, "x15")
             instrs.push(_arm64_instr3("stp", _arm64_op_reg("x9"),
-                             _arm64_op_reg("x10"), _hv_mem(poff),
+                             _arm64_op_reg("x10"), _hv_memb(poff, "x15"),
                              "store stack param " + to_string(p)))
         }
         p = p + 1
@@ -1253,9 +1295,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         }
     }
     if total_frame > 0 {
-        instrs.push(_arm64_instr3("add", _arm64_op_reg("sp"), _arm64_op_reg("sp"),
-                            _arm64_op_label("#" + to_string(total_frame)),
-                            "epilogue: free spill+call-overflow frame"))
+        instrs = _hv_sp_adj(instrs, "add", total_frame, "x15")
     }
     instrs.push(_arm64_instr3("ldp", _arm64_op_reg("x29"), _arm64_op_reg("x30"),
                         _arm64_op_label("[sp], #16"), "epilogue: restore fp/lr"))
