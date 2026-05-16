@@ -36,8 +36,8 @@
   flame.hexa -> "[LANDED 2026-05-16 Phase 1 4/4] entrypoint (use stdlib/flame/*_lib + Phase 1 selftest)"
   tensor_lib.hexa -> "[LANDED 2026-05-16 Phase 1] Tensor — host farr (RFC 040 device-farr backend; device routing = Phase 4 honest carve-out)"
   autograd_lib.hexa -> "[LANDED 2026-05-16 Phase 1] reverse-mode tape thin wrapper over RFC 034 ad_*"
-  nn_lib.hexa -> "[Phase 2 4 layers LANDED 2026-05-16: Linear + RMSNorm + Embedding + LMHead fwd/bwd 8/8 PASS] · remaining: RoPE/SwiGLU/GQA-attn"
-  flame_nn_test.hexa -> "[LANDED 2026-05-16] selftest entrypoint for nn_lib (F-RFC043-LAYER-EQ-{LINEAR,RMSNORM,EMBED,LMHEAD}-{FWD,BWD,SCATTER})"
+  nn_lib.hexa -> "[Phase 2 6/7 layers LANDED 2026-05-16: Linear + RMSNorm + Embedding + LMHead + RoPE + SwiGLU fwd/bwd 14/14 PASS] · remaining: GQA-attention (next cycle)"
+  flame_nn_test.hexa -> "[LANDED 2026-05-16] selftest entrypoint for nn_lib (F-RFC043-LAYER-EQ-{LINEAR,RMSNORM,EMBED,LMHEAD,ROPE,SWIGLU}-{FWD,BWD,...}); ROPE includes ORTHO real-limit anchor (Rᵀ·R = I)"
   optim_lib.hexa -> "[planned] AdamW (RFC 040 B2)"
   train_lib.hexa -> "[planned] compiled train_step + CE loss"
   note = "[LANDED] = built + falsifier PASS. lib-split mandatory (compiled: main/_selftest 동거 시 C 심볼 중복). 각 selftest 는 독립 entrypoint 파일."
@@ -261,3 +261,30 @@ falsifiers (`build/flame_phase2`):
   Phase 2-A 4/4 모두 유지. structural call_builtin = 0.
 
 남은 Phase 2 layer: RoPE / SwiGLU / GQA-attn (큰 순서대로).
+
+### 2026-05-16 — Phase 2 +RoPE +SwiGLU (6/7 layers, 14/14 PASS, regression 0)
+nn_lib 확장:
+- `nn_rope_build_tables` / `nn_rope_apply_fwd` / `nn_rope_apply_bwd`
+  (RoFormer convention; cos/sin tables, q' = q⊙cos + rh(q)⊙sin;
+  bwd = orthogonal Rᵀ=R(−θ) closed)
+- `nn_swiglu_fwd` / `nn_swiglu_bwd` (c3_swiglu_* algebra:
+  a=Wg·r, b=Wu·r, s=silu(a)·b, o=Wd·s + closed bwd composition)
+- private helpers _nn_sigmoid / _nn_silu / _nn_silu_grad
+
+falsifiers (`build/flame_phase2`, 14/14 PASS):
+- F-RFC043-LAYER-EQ-ROPE-TABLES   PASS (byte-eq cos/sin per-position)
+- F-RFC043-LAYER-EQ-ROPE-FWD      PASS (byte-eq · q⊙cos + rh(q)⊙sin)
+- F-RFC043-LAYER-EQ-ROPE-BWD      PASS (byte-eq · 직교 vjp)
+- F-RFC043-LAYER-EQ-ROPE-ORTHO    PASS (max|fwd∘bwd(q')−q| = 1.11e-16
+  ≈ machine eps; **Rᵀ·R = I closed orthogonality identity** = g3
+  real-math/physics anchor)
+- F-RFC043-LAYER-EQ-SWIGLU-FWD    PASS (|Δ|<1e-12 RFC 040 fp-tol;
+  2 matvec + silu + Hadamard + matvec)
+- F-RFC043-LAYER-EQ-SWIGLU-BWD    PASS (byte-eq · c3_swiglu_bwd vjp,
+  isolated by feeding identical saved-fwd state to both bwd 호출)
+- regression: RFC 034 5/5 · RFC 040 B2 9/9 · flame Phase 1 4/4 +
+  Phase 2 (4 layer) 8/8 모두 동일 PASS. structural call_builtin = 0.
+
+남은 Phase 2 = GQA-attention 1개 (가장 큰 layer — multi-head + GQA
+n_rep grouping + causal mask + scaled-dot softmax; d5_attn_fwd
+~85 lines + d5_attn_bwd ~150 lines). next cycle 의 집중 작업.

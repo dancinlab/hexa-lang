@@ -136,6 +136,167 @@ fn ref_rmsnorm_fwd(x: int, g: int,
     }
 }
 
+// ─── SwiGLU reference (independent loops; c3_swiglu_fwd/bwd algebra) ──
+fn _ref_sigmoid(x: float) -> float { return 1.0 / (1.0 + exp(0.0 - x)) }
+fn _ref_silu(x: float) -> float { return x * _ref_sigmoid(x) }
+fn _ref_silu_grad(x: float) -> float {
+    let s = _ref_sigmoid(x)
+    return s + x * s * (1.0 - s)
+}
+
+fn ref_swiglu_fwd(r: int, Wg: int, Wu: int, Wd: int,
+                  a_out: int, b_out: int, s_out: int, o_out: int,
+                  d: int, h: int) {
+    // a, b via ikj-order matvec to match farr_matmul.
+    let mut k = 0
+    while k < h {
+        let mut acc_a = 0.0
+        let mut acc_b = 0.0
+        let mut j = 0
+        while j < d {
+            let rj = t_get(r, j)
+            acc_a = acc_a + t_get(Wg, k * d + j) * rj
+            acc_b = acc_b + t_get(Wu, k * d + j) * rj
+            j = j + 1
+        }
+        t_set(a_out, k, acc_a)
+        t_set(b_out, k, acc_b)
+        t_set(s_out, k, _ref_silu(acc_a) * acc_b)
+        k = k + 1
+    }
+    // o = Wd · s   (ikj)
+    let mut i = 0
+    while i < d {
+        let mut acc_o = 0.0
+        let mut kk = 0
+        while kk < h {
+            acc_o = acc_o + t_get(Wd, i * h + kk) * t_get(s_out, kk)
+            kk = kk + 1
+        }
+        t_set(o_out, i, acc_o)
+        i = i + 1
+    }
+}
+
+fn ref_swiglu_bwd(r: int, Wg: int, Wu: int, Wd: int,
+                  a: int, b: int, s: int, dout: int,
+                  dr_out: int, dWg_out: int, dWu_out: int, dWd_out: int,
+                  d: int, h: int) {
+    let mut di = 0
+    while di < d {
+        let do_i = t_get(dout, di)
+        let mut hi = 0
+        while hi < h {
+            t_set(dWd_out, di * h + hi, do_i * t_get(s, hi))
+            hi = hi + 1
+        }
+        di = di + 1
+    }
+    let ds = t_zeros(h)
+    let mut k = 0
+    while k < h {
+        let mut acc = 0.0
+        let mut i = 0
+        while i < d {
+            acc = acc + t_get(Wd, i * h + k) * t_get(dout, i)
+            i = i + 1
+        }
+        t_set(ds, k, acc)
+        k = k + 1
+    }
+    let da = t_zeros(h)
+    let db = t_zeros(h)
+    let mut k2 = 0
+    while k2 < h {
+        let ak = t_get(a, k2)
+        let dsk = t_get(ds, k2)
+        t_set(da, k2, dsk * t_get(b, k2) * _ref_silu_grad(ak))
+        t_set(db, k2, dsk * _ref_silu(ak))
+        k2 = k2 + 1
+    }
+    let mut hi3 = 0
+    while hi3 < h {
+        let da_h = t_get(da, hi3)
+        let db_h = t_get(db, hi3)
+        let mut di3 = 0
+        while di3 < d {
+            let rj = t_get(r, di3)
+            t_set(dWg_out, hi3 * d + di3, da_h * rj)
+            t_set(dWu_out, hi3 * d + di3, db_h * rj)
+            di3 = di3 + 1
+        }
+        hi3 = hi3 + 1
+    }
+    let mut di5 = 0
+    while di5 < d {
+        let mut acc2 = 0.0
+        let mut hi5 = 0
+        while hi5 < h {
+            acc2 = acc2
+                + t_get(Wg, hi5 * d + di5) * t_get(da, hi5)
+                + t_get(Wu, hi5 * d + di5) * t_get(db, hi5)
+            hi5 = hi5 + 1
+        }
+        t_set(dr_out, di5, acc2)
+        di5 = di5 + 1
+    }
+    let _ = t_free(ds); let _ = t_free(da); let _ = t_free(db)
+}
+
+// Reference RoPE tables — same builtin sin/cos path as wrapper.
+fn ref_rope_build_tables(T: int, hd: int, cos_out: int, sin_out: int) {
+    let half = hd / 2
+    let base = 10000.0
+    let lnb = ln(base)
+    let mut p = 0
+    while p < T {
+        let mut c = 0
+        while c < hd {
+            let fi = if c < half { c } else { c - half }
+            let ex = (to_float(2 * fi) / to_float(hd)) * lnb
+            let invf = 1.0 / exp(ex)
+            let ang = to_float(p) * invf
+            t_set(cos_out, p * hd + c, cos(ang))
+            t_set(sin_out, p * hd + c, sin(ang))
+            c = c + 1
+        }
+        p = p + 1
+    }
+}
+
+fn ref_rope_apply_fwd(q: int, cos_tab: int, sin_tab: int,
+                      q_out: int, p: int, hd: int) {
+    let half = hd / 2
+    let bse = p * hd
+    let mut c = 0
+    while c < hd {
+        let rh_c = if c < half {
+            0.0 - t_get(q, half + c)
+        } else {
+            t_get(q, c - half)
+        }
+        t_set(q_out, c, t_get(q, c) * t_get(cos_tab, bse + c)
+                       + rh_c * t_get(sin_tab, bse + c))
+        c = c + 1
+    }
+}
+
+fn ref_rope_apply_bwd(dqp: int, cos_tab: int, sin_tab: int,
+                      dq_out: int, p: int, hd: int) {
+    let half = hd / 2
+    let bse = p * hd
+    let mut c = 0
+    while c < hd {
+        let gs_for_rht = if c < half {
+            t_get(dqp, half + c) * t_get(sin_tab, bse + half + c)
+        } else {
+            0.0 - t_get(dqp, c - half) * t_get(sin_tab, bse + c - half)
+        }
+        t_set(dq_out, c, t_get(dqp, c) * t_get(cos_tab, bse + c) + gs_for_rht)
+        c = c + 1
+    }
+}
+
 // Reference embedding fwd — direct row copy from table.
 fn ref_embedding_fwd(ids: int, table: int, X_out: int, T: int, d: int) {
     let mut i = 0
@@ -343,6 +504,105 @@ fn check_rmsnorm() -> int {
     return out
 }
 
+// F-RFC043-LAYER-EQ-SWIGLU-{FWD,BWD}
+fn check_swiglu() -> int {
+    let d = 5
+    let h = 7
+
+    let r = t_zeros(d);       t_fill_lcg(r,  d,      11,  0.4)
+    let Wg = t_zeros(h * d);  t_fill_lcg(Wg, h * d,  22,  0.3)
+    let Wu = t_zeros(h * d);  t_fill_lcg(Wu, h * d,  33,  0.3)
+    let Wd_m = t_zeros(d * h);t_fill_lcg(Wd_m,d * h, 44,  0.3)
+
+    let a_f = t_zeros(h); let b_f = t_zeros(h); let s_f = t_zeros(h); let o_f = t_zeros(d)
+    let a_r = t_zeros(h); let b_r = t_zeros(h); let s_r = t_zeros(h); let o_r = t_zeros(d)
+    nn_swiglu_fwd(r, Wg, Wu, Wd_m, a_f, b_f, s_f, o_f, d, h)
+    ref_swiglu_fwd(r, Wg, Wu, Wd_m, a_r, b_r, s_r, o_r, d, h)
+    let fwd_o = max_dev_farr(o_f, o_r, d)
+    let fwd_a = max_dev_farr(a_f, a_r, h)
+    let fwd_b = max_dev_farr(b_f, b_r, h)
+    let fwd_s = max_dev_farr(s_f, s_r, h)
+
+    let dout = t_zeros(d); t_fill_lcg(dout, d, 55, 0.7)
+    let dr_f = t_zeros(d); let dWg_f = t_zeros(h*d); let dWu_f = t_zeros(h*d); let dWd_f = t_zeros(d*h)
+    let dr_r = t_zeros(d); let dWg_r = t_zeros(h*d); let dWu_r = t_zeros(h*d); let dWd_r = t_zeros(d*h)
+    // BWD isolation: feed identical (a, b, s) to BOTH bwd calls so the
+    // last-bit fwd-FMA gap doesn't propagate into bwd inputs. Use the
+    // ref fwd outputs as the common saved-fwd state for both.
+    nn_swiglu_bwd(r, Wg, Wu, Wd_m, a_r, b_r, s_r, dout, dr_f, dWg_f, dWu_f, dWd_f, d, h)
+    ref_swiglu_bwd(r, Wg, Wu, Wd_m, a_r, b_r, s_r, dout, dr_r, dWg_r, dWu_r, dWd_r, d, h)
+    let bwd_dr  = max_dev_farr(dr_f,  dr_r,  d)
+    let bwd_dWg = max_dev_farr(dWg_f, dWg_r, h * d)
+    let bwd_dWu = max_dev_farr(dWu_f, dWu_r, h * d)
+    let bwd_dWd = max_dev_farr(dWd_f, dWd_r, d * h)
+
+    let _ = t_free(r); let _ = t_free(Wg); let _ = t_free(Wu); let _ = t_free(Wd_m); let _ = t_free(dout)
+    let _ = t_free(a_f); let _ = t_free(b_f); let _ = t_free(s_f); let _ = t_free(o_f)
+    let _ = t_free(a_r); let _ = t_free(b_r); let _ = t_free(s_r); let _ = t_free(o_r)
+    let _ = t_free(dr_f); let _ = t_free(dWg_f); let _ = t_free(dWu_f); let _ = t_free(dWd_f)
+    let _ = t_free(dr_r); let _ = t_free(dWg_r); let _ = t_free(dWu_r); let _ = t_free(dWd_r)
+
+    let out = t_zeros(8)
+    t_set(out, 0, fwd_o); t_set(out, 1, fwd_a); t_set(out, 2, fwd_b); t_set(out, 3, fwd_s)
+    t_set(out, 4, bwd_dr); t_set(out, 5, bwd_dWg); t_set(out, 6, bwd_dWu); t_set(out, 7, bwd_dWd)
+    return out
+}
+
+// F-RFC043-LAYER-EQ-ROPE-{TABLES,FWD,BWD,ORTHO}
+fn check_rope() -> int {
+    let T = 4
+    let hd = 8
+
+    // tables
+    let cos_flame = t_zeros(T * hd); let sin_flame = t_zeros(T * hd)
+    nn_rope_build_tables(T, hd, cos_flame, sin_flame)
+    let cos_ref = t_zeros(T * hd); let sin_ref = t_zeros(T * hd)
+    ref_rope_build_tables(T, hd, cos_ref, sin_ref)
+    let tab_cos_dev = max_dev_farr(cos_flame, cos_ref, T * hd)
+    let tab_sin_dev = max_dev_farr(sin_flame, sin_ref, T * hd)
+
+    // forward on a seeded q at position 2
+    let q = t_zeros(hd)
+    t_fill_lcg(q, hd, 5151, 1.0)
+    let qp_flame = t_zeros(hd)
+    nn_rope_apply_fwd(q, cos_flame, sin_flame, qp_flame, 2, hd)
+    let qp_ref = t_zeros(hd)
+    ref_rope_apply_fwd(q, cos_ref, sin_ref, qp_ref, 2, hd)
+    let fwd_dev = max_dev_farr(qp_flame, qp_ref, hd)
+
+    // backward
+    let dqp = t_zeros(hd)
+    t_fill_lcg(dqp, hd, 6262, 1.0)
+    let dq_flame = t_zeros(hd)
+    nn_rope_apply_bwd(dqp, cos_flame, sin_flame, dq_flame, 2, hd)
+    let dq_ref = t_zeros(hd)
+    ref_rope_apply_bwd(dqp, cos_ref, sin_ref, dq_ref, 2, hd)
+    let bwd_dev = max_dev_farr(dq_flame, dq_ref, hd)
+
+    // orthogonality check (math/physics real-limit anchor): for ANY q,
+    // applying fwd then bwd at the same position with dqp = q' must
+    // return the original q (Rᵀ·R = I — the closed orthogonal identity
+    // that justifies the bwd having no tape). Here: feed q' as dqp.
+    let qpp = t_zeros(hd)
+    nn_rope_apply_bwd(qp_flame, cos_flame, sin_flame, qpp, 2, hd)
+    let ortho_dev = max_dev_farr(qpp, q, hd)
+
+    let _ = t_free(q); let _ = t_free(dqp)
+    let _ = t_free(cos_flame); let _ = t_free(sin_flame)
+    let _ = t_free(cos_ref); let _ = t_free(sin_ref)
+    let _ = t_free(qp_flame); let _ = t_free(qp_ref)
+    let _ = t_free(dq_flame); let _ = t_free(dq_ref)
+    let _ = t_free(qpp)
+
+    let out = t_zeros(5)
+    t_set(out, 0, tab_cos_dev)
+    t_set(out, 1, tab_sin_dev)
+    t_set(out, 2, fwd_dev)
+    t_set(out, 3, bwd_dev)
+    t_set(out, 4, ortho_dev)
+    return out
+}
+
 // F-RFC043-LAYER-EQ-EMBED-{FWD,SCATTER}
 fn check_embedding() -> int {
     let T = 5
@@ -429,10 +689,10 @@ fn check_lm_head() -> int {
 }
 
 // ─── entrypoint ────────────────────────────────────────────────────────
-println("=== flame Phase 2 selftest (nn_lib: Linear + RMSNorm + Embedding + LMHead, compiled-native) ===")
+println("=== flame Phase 2 selftest (nn_lib: Linear + RMSNorm + Embedding + LMHead + RoPE + SwiGLU, compiled-native) ===")
 
 let mut pass = 0
-let total = 8
+let total = 14
 
 // ── Linear ─────────────────────────────────────────────────────────────
 let lin = check_linear()
@@ -546,6 +806,81 @@ if lh_dtemb == 0.0 {
     println("FAIL  F-RFC043-LAYER-EQ-LMHEAD-BWD    dtemb deviation non-zero")
 }
 
+// ── RoPE ──────────────────────────────────────────────────────────────
+let rp = check_rope()
+let rp_tab_cos = t_get(rp, 0)
+let rp_tab_sin = t_get(rp, 1)
+let rp_fwd = t_get(rp, 2)
+let rp_bwd = t_get(rp, 3)
+let rp_ortho = t_get(rp, 4)
+if rp_tab_cos == 0.0 {
+    if rp_tab_sin == 0.0 {
+        println("PASS  F-RFC043-LAYER-EQ-ROPE-TABLES  max|{cos, sin}_flame − {cos, sin}_ref| = 0.0 (byte-eq · RoFormer cos/sin per-position tables)")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC043-LAYER-EQ-ROPE-TABLES  sin deviation non-zero")
+    }
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-ROPE-TABLES  cos deviation non-zero")
+}
+if rp_fwd == 0.0 {
+    println("PASS  F-RFC043-LAYER-EQ-ROPE-FWD     max|nn_rope_apply_fwd − closed-ref| = 0.0 (byte-eq · q⊙cos + rotate_half(q)⊙sin, RoFormer)")
+    pass = pass + 1
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-ROPE-FWD     fwd deviation non-zero")
+}
+if rp_bwd == 0.0 {
+    println("PASS  F-RFC043-LAYER-EQ-ROPE-BWD     max|nn_rope_apply_bwd − closed-ref| = 0.0 (byte-eq · dq'⊙cos + rotate_half_T(dq'⊙sin), Rᵀ=R(−θ) closed)")
+    pass = pass + 1
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-ROPE-BWD     bwd deviation non-zero")
+}
+// Orthogonality identity check — closed math/physics anchor (g3
+// real-limit): Rᵀ·R = I ⟹ fwd∘bwd(qp) = q, ∀ q. Pure analytic property.
+// Cross-impl FMA may introduce last-bit drift here (two compositions of
+// the rotation matrix), so we use a tight RFC 040 fp-tol.
+if rp_ortho < 0.0000000000001 {
+    print("PASS  F-RFC043-LAYER-EQ-ROPE-ORTHO   max|fwd∘bwd(q') − q| = ")
+    print(rp_ortho)
+    println(" < 1e-13 (closed orthogonality Rᵀ·R = I — math/physics real-limit anchor; g3)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-ROPE-ORTHO   orthogonality identity violated, max|Δ|=")
+    print(rp_ortho)
+    println("")
+}
+
+// ── SwiGLU ─────────────────────────────────────────────────────────────
+let sw = check_swiglu()
+let sw_o = t_get(sw, 0); let sw_a = t_get(sw, 1); let sw_b = t_get(sw, 2); let sw_s = t_get(sw, 3)
+let sw_dr = t_get(sw, 4); let sw_dWg = t_get(sw, 5); let sw_dWu = t_get(sw, 6); let sw_dWd = t_get(sw, 7)
+// fwd uses farr_matmul (FMA) — RFC 040 fp-tol.
+if sw_o < 0.000000000001 {
+    if sw_a < 0.000000000001 {
+        if sw_b < 0.000000000001 {
+            if sw_s < 0.000000000001 {
+                println("PASS  F-RFC043-LAYER-EQ-SWIGLU-FWD   max|{o, a, b, s}_flame − {ref}| < 1e-12 (RFC 040 fp-tol; 2 matvec + silu + Hadamard + matvec, c3_swiglu_fwd algebra)")
+                pass = pass + 1
+            } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-FWD s deviation") }
+        } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-FWD b deviation") }
+    } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-FWD a deviation") }
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-SWIGLU-FWD o deviation = "); print(sw_o); println("")
+}
+// bwd uses pure hexa scalar loops both sides → byte-eq.
+if sw_dr == 0.0 {
+    if sw_dWg == 0.0 {
+        if sw_dWu == 0.0 {
+            if sw_dWd == 0.0 {
+                println("PASS  F-RFC043-LAYER-EQ-SWIGLU-BWD   max|{dr, dWg, dWu, dWd}_flame − {ref}| = 0.0 (byte-eq · c3_swiglu_bwd closed vjp)")
+                pass = pass + 1
+            } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-BWD dWd deviation") }
+        } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-BWD dWu deviation") }
+    } else { println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-BWD dWg deviation") }
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-BWD dr deviation")
+}
+
 println("")
 print("=== flame Phase 2: ")
 print(pass)
@@ -554,7 +889,7 @@ print(total)
 println(" PASS ===")
 
 if pass == total {
-    println("PASS — flame nn_lib Linear + RMSNorm + Embedding + LMHead (fwd+bwd) ≡ closed analytic ref; connection-point closed (g_blue_closed_mandate). Remaining Phase 2 layers (RoPE / GQA-attn / SwiGLU) follow.")
+    println("PASS — flame nn_lib 6 layers (Linear · RMSNorm · Embedding · LMHead · RoPE · SwiGLU, fwd+bwd, +Rᵀ·R=I orthogonality identity) ≡ closed analytic ref; connection-point closed (g_blue_closed_mandate). Remaining Phase 2 layer: GQA-attention.")
 } else {
     println("FAIL — flame Phase 2 not landable")
 }

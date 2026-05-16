@@ -161,3 +161,25 @@ match falsifier 4건 추가. selftest `build/flame_phase2` 8/8 PASS:
   `call_builtin` = 0 (compiler-only 유지).
 남은 Phase 2 layer: RoPE (rotation tables + 정규 vjp) · SwiGLU
 (3 linear + silu + Hadamard, c3_swiglu_*) · GQA-attn (큰 layer).
+
+### 2026-05-16 — Phase 2 +RoPE +SwiGLU (6/7 layers, 14/14 PASS)
+extension: `nn_lib.hexa` 에 RoPE (build_tables + apply_fwd + apply_bwd)
++ SwiGLU (fwd + bwd, c3_swiglu_* 알고리즘). 모든 `nn_*` surface 는
+함수형 — 호출자가 fwd 결과 (a, b, s 등 saved-fwd state) 와 dy 를 넘기고
+closed analytic gradient 를 받음 (RFC 043 Phase 3 의 train_step 에서 묶임).
+
+selftest `build/flame_phase2` 14/14 PASS (자세한 항목 = FLAME.tape Log).
+Notable: F-RFC043-LAYER-EQ-ROPE-ORTHO 가 Rᵀ·R = I closed math 항등식을
+직접 검증 (max|Δ| = 1.11e-16 ≈ machine eps) — g3 real-math anchor 의 직접 instance.
+
+regression: RFC 034 5/5 · RFC 040 B2 9/9 · flame Phase 1 4/4 모두 동일 PASS.
+flame 코드 LoC 총 ~2.3k (impl + test + SSOT). structural call_builtin = 0
+(compiler-only 6 layer + tape + tensor 전구간 유지).
+
+남은 Phase 2 = **GQA-attention** (마지막, 가장 큰 layer):
+- d5_attn_fwd ~85 줄: Q/K/V projections + per-position head split + RoPE
+  + causal scaled-dot + softmax + value gather + output proj
+- d5_attn_bwd ~150 줄: 위 reverse + GQA n_rep grouping 누적 + multi-head
+  reverse 체인
+- 권장: 별도 cycle (자체적으로 falsifier 4-6 건 — fwd, bwd, causal mask
+  property, GQA 누적 invariance). Phase 2-A/B 의 layer pattern 그대로 적용.

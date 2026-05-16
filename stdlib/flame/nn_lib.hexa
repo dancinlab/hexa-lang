@@ -162,6 +162,216 @@ pub fn nn_rmsnorm_fwd(x: int, g: int,
     }
 }
 
+// ─── SwiGLU (gated SiLU MLP block) ─────────────────────────────────────
+// Reference: anima d_train3_lib.hexa c3_swiglu_fwd / c3_swiglu_bwd.
+//   r:[d], Wg:[h·d], Wu:[h·d], Wd:[d·h]  →  o:[d]
+//   forward: a = Wg·r ; b = Wu·r ; s[k] = silu(a[k])·b[k] ; o = Wd·s
+//   backward (closed): given dout[d] →
+//     dWd = dout ⊗ s  (d×h outer)
+//     ds  = Wdᵀ·dout  (h-len, reduction over d)
+//     da[k] = ds[k]·b[k]·silu'(a[k])
+//     db[k] = ds[k]·silu(a[k])
+//     dWg = da ⊗ r ; dWu = db ⊗ r ; dr = Wgᵀ·da + Wuᵀ·db
+
+fn _nn_sigmoid(x: float) -> float {
+    return 1.0 / (1.0 + exp(0.0 - x))
+}
+fn _nn_silu(x: float) -> float {
+    return x * _nn_sigmoid(x)
+}
+fn _nn_silu_grad(x: float) -> float {
+    let s = _nn_sigmoid(x)
+    return s + x * s * (1.0 - s)
+}
+
+// Forward — caller allocates a_out/b_out/s_out (h-len each), o_out (d-len).
+pub fn nn_swiglu_fwd(r: int, Wg: int, Wu: int, Wd: int,
+                     a_out: int, b_out: int, s_out: int, o_out: int,
+                     d: int, h: int) {
+    // a = Wg · r : [h·d] · [d·1] → [h·1]
+    let a_prod = farr_matmul(Wg, h, d, r, 1)
+    let b_prod = farr_matmul(Wu, h, d, r, 1)
+    let mut k = 0
+    while k < h {
+        let ak = farr_get(a_prod, k)
+        let bk = farr_get(b_prod, k)
+        let _ = farr_set(a_out, k, ak)
+        let _ = farr_set(b_out, k, bk)
+        let _ = farr_set(s_out, k, _nn_silu(ak) * bk)
+        k = k + 1
+    }
+    let _ = farr_free(a_prod)
+    let _ = farr_free(b_prod)
+    // o = Wd · s : [d·h] · [h·1] → [d·1]
+    let o_prod = farr_matmul(Wd, d, h, s_out, 1)
+    let mut j = 0
+    while j < d {
+        let _ = farr_set(o_out, j, farr_get(o_prod, j))
+        j = j + 1
+    }
+    let _ = farr_free(o_prod)
+}
+
+// Backward — caller allocates dr_out (d-len), dWg_out/dWu_out (h·d each),
+// dWd_out (d·h). Outputs are OVERWRITTEN (no accumulation; if the caller
+// wants accumulation the existing buffer copy happens outside).
+pub fn nn_swiglu_bwd(r: int, Wg: int, Wu: int, Wd: int,
+                     a: int, b: int, s: int, dout: int,
+                     dr_out: int, dWg_out: int, dWu_out: int, dWd_out: int,
+                     d: int, h: int) {
+    // dWd[i, k] = dout[i] · s[k]   (d×h outer)
+    let mut di = 0
+    while di < d {
+        let do_i = farr_get(dout, di)
+        let mut hi = 0
+        while hi < h {
+            let _ = farr_set(dWd_out, di * h + hi, do_i * farr_get(s, hi))
+            hi = hi + 1
+        }
+        di = di + 1
+    }
+    // ds[k] = Σ_i Wd[i·h + k] · dout[i]   (h-len, reduction over d)
+    let ds = farr_zeros(h)
+    let mut k = 0
+    while k < h {
+        let mut acc = 0.0
+        let mut i = 0
+        while i < d {
+            acc = acc + farr_get(Wd, i * h + k) * farr_get(dout, i)
+            i = i + 1
+        }
+        let _ = farr_set(ds, k, acc)
+        k = k + 1
+    }
+    // da[k] = ds[k]·b[k]·silu'(a[k]) ;  db[k] = ds[k]·silu(a[k])
+    let da = farr_zeros(h)
+    let db = farr_zeros(h)
+    let mut k2 = 0
+    while k2 < h {
+        let ak = farr_get(a, k2)
+        let dsk = farr_get(ds, k2)
+        let _ = farr_set(da, k2, dsk * farr_get(b, k2) * _nn_silu_grad(ak))
+        let _ = farr_set(db, k2, dsk * _nn_silu(ak))
+        k2 = k2 + 1
+    }
+    // dWg[h, d] = da ⊗ r   ;  dWu = db ⊗ r
+    let mut hi3 = 0
+    while hi3 < h {
+        let da_h = farr_get(da, hi3)
+        let db_h = farr_get(db, hi3)
+        let mut di3 = 0
+        while di3 < d {
+            let rj = farr_get(r, di3)
+            let _ = farr_set(dWg_out, hi3 * d + di3, da_h * rj)
+            let _ = farr_set(dWu_out, hi3 * d + di3, db_h * rj)
+            di3 = di3 + 1
+        }
+        hi3 = hi3 + 1
+    }
+    // dr[j] = Σ_k Wg[k·d + j]·da[k] + Wu[k·d + j]·db[k]
+    let mut di5 = 0
+    while di5 < d {
+        let mut acc2 = 0.0
+        let mut hi5 = 0
+        while hi5 < h {
+            acc2 = acc2
+                + farr_get(Wg, hi5 * d + di5) * farr_get(da, hi5)
+                + farr_get(Wu, hi5 * d + di5) * farr_get(db, hi5)
+            hi5 = hi5 + 1
+        }
+        let _ = farr_set(dr_out, di5, acc2)
+        di5 = di5 + 1
+    }
+    let _ = farr_free(ds)
+    let _ = farr_free(da)
+    let _ = farr_free(db)
+}
+
+// ─── RoPE (rotary position embedding) ──────────────────────────────────
+// Reference: anima d_train5_lib.hexa d5_rope_tables / d5_rope_apply /
+// d5_rope_bwd / d5_rotate_half / d5_rotate_half_t (RoFormer convention).
+//   cos/sin tables [T·hd]: cos[p·hd + c] = cos(p · invf[c mod half])
+//     invf[i] = base^(-2i/hd), base=10000, half=hd/2
+//   forward (one head): q'[c] = q[c]·cos[p·hd+c] + rh(q)[c]·sin[p·hd+c]
+//     rh : [x1, x2] (each half-len) → [-x2, x1]
+//   backward (orthogonal — closed): dq[c] = dq'[c]·cos[p·hd+c]
+//     + rh_T(dq'·sin_p)[c]   ; rh_T : [a1, a2] → [a2, -a1]   (Rᵀ = R(−θ))
+//
+// flame uses builtin sin/cos for tables (vs anima's d5_sin/cos 14-Taylor)
+// — selftest both sides use the SAME path, so byte-equality holds.
+// Comparison against anima d5_rope_tables would diverge in last ulps
+// (d5_sin Taylor vs libm sin); cross-impl gap is documented but not
+// flame's concern at this layer.
+
+// Build cos/sin RoPE tables (caller-allocated [T·hd] each).
+pub fn nn_rope_build_tables(T: int, hd: int,
+                            cos_out: int, sin_out: int) {
+    let half = hd / 2
+    let base = 10000.0
+    let lnb = ln(base)
+    // invf[i] = exp(-(2i/hd)·ln(base))   for i in [0, half)
+    // We compute inline (avoid allocating an extra farr).
+    let mut p = 0
+    while p < T {
+        let mut c = 0
+        while c < hd {
+            let fi = if c < half { c } else { c - half }
+            let ex = (to_float(2 * fi) / to_float(hd)) * lnb
+            let invf = 1.0 / exp(ex)
+            let ang = to_float(p) * invf
+            let _ = farr_set(cos_out, p * hd + c, cos(ang))
+            let _ = farr_set(sin_out, p * hd + c, sin(ang))
+            c = c + 1
+        }
+        p = p + 1
+    }
+}
+
+// RoPE forward (single head, single position):
+//   q_out[c] = q[c]·cos[p·hd+c] + rh(q)[c]·sin[p·hd+c]
+//   rh(q): first half = -q[half..hd], second half = q[0..half]
+pub fn nn_rope_apply_fwd(q: int, cos_tab: int, sin_tab: int,
+                         q_out: int, p: int, hd: int) {
+    let half = hd / 2
+    let bse = p * hd
+    let mut c = 0
+    while c < hd {
+        // rh(q)[c] = if c < half: -q[half+c] ; else: q[c-half]
+        let rh_c = if c < half {
+            0.0 - farr_get(q, half + c)
+        } else {
+            farr_get(q, c - half)
+        }
+        let q_out_c = farr_get(q, c) * farr_get(cos_tab, bse + c)
+                    + rh_c * farr_get(sin_tab, bse + c)
+        let _ = farr_set(q_out, c, q_out_c)
+        c = c + 1
+    }
+}
+
+// RoPE backward (closed orthogonal vjp):
+//   dq[c] = dq'[c]·cos[p·hd+c] + rh_T(dq'·sin_p)[c]
+//   rh_T(v): first half = v[half..hd], second half = -v[0..half]
+//   (i.e. Rᵀ = R(−θ); orthogonal rotation, no tape needed.)
+pub fn nn_rope_apply_bwd(dqp: int, cos_tab: int, sin_tab: int,
+                         dq_out: int, p: int, hd: int) {
+    let half = hd / 2
+    let bse = p * hd
+    let mut c = 0
+    while c < hd {
+        // gs[c] = dqp[c]·sin[bse+c]
+        // rh_T(gs)[c] = if c < half: gs[half+c] ; else: -gs[c-half]
+        let gs_for_rht = if c < half {
+            farr_get(dqp, half + c) * farr_get(sin_tab, bse + half + c)
+        } else {
+            0.0 - farr_get(dqp, c - half) * farr_get(sin_tab, bse + c - half)
+        }
+        let dq_c = farr_get(dqp, c) * farr_get(cos_tab, bse + c) + gs_for_rht
+        let _ = farr_set(dq_out, c, dq_c)
+        c = c + 1
+    }
+}
+
 // ─── Embedding (tied with LM head) ─────────────────────────────────────
 // table : [V·d] (one row per vocab id); ids : [T] (token indices,
 // stored as floats in farr).
