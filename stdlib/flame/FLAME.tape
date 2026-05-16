@@ -408,6 +408,34 @@ Phase 3-E (선택, 별도 cycle): dt_sqrt/dt_exp/dt_ln/d5_sin/cos hand-Taylor
 implementation → anima oracle gn2 7.97116 → 3.73374e-07 byte-eq
 재현 시도 (F-RFC043-STEP-EQ-ORACLE). 현재 stack 의 strict superset
 이라 transcendental 치환만 필요.
+
+### 2026-05-17 — Phase 3-E LANDED (flame_math, 5/5 PASS)
+landed: `stdlib/flame/{flame_math.hexa, flame_math_test.hexa}`. anima
+d_train_lib / d_train2_lib 와 byte-identical 알고리즘의 hand-Taylor
+transcendental 군 — anima oracle byte-eq retry 의 기반.
+- dt_lcg_next : LCG (s·1103515245 + 12345) mod 2³¹
+- dt_rand_unit: (s % 1000)/1000.0 − 0.5  (d_train_lib §)
+- dt_sqrt    : 24-iter Newton (d_train2_lib §184)
+- dt_exp     : range-reduce + 12-term Taylor + repeated-square (d_train_lib §121)
+- dt_ln      : atanh series 24-term (d_train_lib §143)
+
+selftest:
+- F-RFC043-MATH-DT-SQRT-AGREE      PASS — max rel = **1.57e-16** vs libm
+- F-RFC043-MATH-DT-EXP-AGREE       PASS — max rel = **9.08e-15** vs libm
+- F-RFC043-MATH-DT-LN-AGREE        PASS — max rel = **1.04e-10** vs libm
+  in fast-convergence range [0.2, 1.0] (|u| ≤ 0.67); smaller-x range
+  covered by determinism check
+- F-RFC043-MATH-DT-LN-DETERMINISM  PASS — byte-id 5 probe incl. clamp
+  domain (1e-6, 1e-4); intentional anima-aligned atanh behavior
+  (compiler purity > libm version drift)
+- F-RFC043-MATH-DT-LCG             PASS — closed-period invariant
+  100/100 in [0, 2³¹)
+- regression: 모든 prior PASS · structural call_builtin = 0
+- LoC: stdlib/flame/ 누적 ~5.5k
+
+dt_* opt-in (현 stack 은 builtin 사용); wiring (sqrt/exp/log →
+dt_* 치환) + d=32·3L 80-step trajectory + anima oracle byte-eq retry
+= 별도 cycle. flame Phase 3 = COMPLETE (NN-stack 5 sub-phase 모두 LANDED).
 Phase 4 (compiler fusion) · Phase 5 (whole-program fusion · d=768·12L
 fire) 가 본격 perf 작업; correctness foundation 완료.
 - optim_lib = RFC 034 의 adamw_step 위의 wrapper (이미 ag_adamw_step

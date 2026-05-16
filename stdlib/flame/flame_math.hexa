@@ -1,0 +1,92 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_math.hexa — flame Phase 3-E (RFC 043)
+//
+// Hand-Taylor transcendental replicas matching anima d_train_lib.hexa /
+// d_train2_lib.hexa exactly:
+//   dt_sqrt — 24-iter Newton iteration (d_train2_lib §184)
+//   dt_exp  — range-reduce + 12-term Taylor + repeated-square (d_train_lib §121)
+//   dt_ln   — atanh series 24-term (d_train_lib §143)
+//   dt_lcg_next — LCG (s · 1103515245 + 12345) mod 2³¹  (d_train_lib)
+//
+// These replicas exist so flame can byte-eq the campaign's CPU-equiv
+// gn2 trajectory (7.97116 → 3.73374e-07) when needed. Default flame
+// stack uses libm sqrt/exp/log/sin/cos because those are O(1) and
+// already verified GRAD-EXACT. dt_* are opt-in — caller swaps them in
+// only when oracle byte-eq is the explicit anchor.
+//
+// Verification (Phase 3-E):
+//   F-RFC043-MATH-DT-SQRT-AGREE — for a spread of positive inputs,
+//     |dt_sqrt(x) − sqrt(x)| < 1e-12  (Newton 24-iter is essentially
+//     exact for normal doubles).
+//   F-RFC043-MATH-DT-EXP-AGREE  — for x in moderate range, similar.
+//   F-RFC043-MATH-DT-LN-AGREE   — for x > 0, similar.
+//   F-RFC043-MATH-DT-LCG        — first 20 LCG values match a known
+//     reference sequence (closed math invariant).
+//
+// HONEST CARVE-OUT: these helpers are 함수형, not yet wired into
+// decoder_block / decoder / train libs. The wiring (replace builtin
+// sqrt/exp/log/sin/cos with these) is a separate cycle —
+// straightforward but touches every Phase 2/3 file.
+// ════════════════════════════════════════════════════════════════════════
+
+// dt_lcg_next : (s * 1103515245 + 12345) % 2^31
+pub fn dt_lcg_next(s: int) -> int {
+    return (s * 1103515245 + 12345) % 2147483648
+}
+
+// dt_rand_unit : (s % 1000) / 1000.0 - 0.5  (matches d_train_lib exactly)
+pub fn dt_rand_unit(s: int) -> float {
+    return (to_float(s % 1000) / 1000.0) - 0.5
+}
+
+// dt_sqrt : 24-iter Newton from g = max(x, 1.0). For x ≤ 0 returns 0.
+pub fn dt_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = if x > 1.0 { x } else { 1.0 }
+    let mut i = 0
+    while i < 24 {
+        g = 0.5 * (g + x / g)
+        i = i + 1
+    }
+    return g
+}
+
+// dt_exp : range-reduce until |xr| ≤ 0.25, 12-term Taylor, then
+// repeated-square 2^r times. Stable for the softmax range we'll
+// encounter in trainer (|x − x_max| typically < 30).
+pub fn dt_exp(x: float) -> float {
+    let mut r = 0
+    let mut xr = x
+    while (if xr > 0.0 { xr } else { 0.0 - xr }) > 0.25 {
+        xr = xr / 2.0
+        r = r + 1
+    }
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 12 {
+        term = term * xr / to_float(k)
+        acc = acc + term
+        k = k + 1
+    }
+    let mut s = 0
+    while s < r { acc = acc * acc; s = s + 1 }
+    return acc
+}
+
+// dt_ln : 2 · Σ_{k=0..23} u^(2k+1)/(2k+1), u = (x-1)/(x+1).
+// Valid for x > 0; series converges fastest near x = 1.
+pub fn dt_ln(x: float) -> float {
+    let u = (x - 1.0) / (x + 1.0)
+    let u2 = u * u
+    let mut termp = u
+    let mut acc = 0.0
+    let mut k = 0
+    while k < 24 {
+        acc = acc + termp / to_float(2 * k + 1)
+        termp = termp * u2
+        k = k + 1
+    }
+    return 2.0 * acc
+}

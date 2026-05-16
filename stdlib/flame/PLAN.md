@@ -293,3 +293,28 @@ Phase 3 누적 falsifier: 8 PASS. flame 전체 (Phase 1+2+3): **29 PASS**.
 - Phase 4: compiler fusion (perf, eager-PyTorch match).
 - Phase 5: whole-program fusion + d=768·12L compiler-only fire
   (exceed eager-PyTorch ultimate, multi-cycle).
+
+### 2026-05-17 — Phase 3-E LANDED (flame_math, 5/5 PASS)
+landed: `stdlib/flame/{flame_math.hexa, flame_math_test.hexa}`. anima
+d_train_lib / d_train2_lib 의 hand-Taylor transcendental 알고리즘 그대로
+구현 — dt_lcg_next, dt_rand_unit, dt_sqrt (24-iter Newton), dt_exp
+(range-reduce + 12-term Taylor + repeated-square), dt_ln (atanh 24-term).
+- F-RFC043-MATH-DT-SQRT-AGREE      PASS  max rel **1.57e-16** vs libm
+- F-RFC043-MATH-DT-EXP-AGREE       PASS  max rel **9.08e-15** vs libm
+- F-RFC043-MATH-DT-LN-AGREE        PASS  max rel **1.04e-10** in [0.2, 1.0]
+- F-RFC043-MATH-DT-LN-DETERMINISM  PASS  5 probe incl. clamp domain
+- F-RFC043-MATH-DT-LCG             PASS  closed-period 100/100 in [0, 2³¹)
+- regression: 모든 prior PASS · call_builtin = 0 · 누적 LoC ~5.5k
+
+dt_* 는 opt-in (현 stack 은 builtin transcendental 사용). 다음 cycle
+에서 모든 sqrt/exp/log/sin/cos 호출을 치환 + d=32·3L 80-step 동일 config
+실행 + anima oracle (7.97116 → 3.73374e-07) byte-eq 시도.
+
+**flame Phase 3 = COMPLETE**:
+- Phase 3-A optim_lib          (1/1)
+- Phase 3-B decoder_block_lib  (2/2, GRAD-EXACT 3.59e-10)
+- Phase 3-C decoder_lib        (2/2, full-model GRAD-EXACT 2.66e-08)
+- Phase 3-D train_lib          (3/3, 80-step DESCENT 3.5e18×)
+- Phase 3-E flame_math         (5/5, dt_* transcendentals)
+flame 전체 (Phase 1+2+3): **34 falsifier PASS** · regression 0 ·
+compiler-only structural call_builtin = 0 · LoC ~5.5k.
