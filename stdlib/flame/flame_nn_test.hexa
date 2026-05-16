@@ -136,6 +136,76 @@ fn ref_rmsnorm_fwd(x: int, g: int,
     }
 }
 
+// Reference embedding fwd — direct row copy from table.
+fn ref_embedding_fwd(ids: int, table: int, X_out: int, T: int, d: int) {
+    let mut i = 0
+    while i < T {
+        let tok = to_int(t_get(ids, i))
+        let mut c = 0
+        while c < d {
+            t_set(X_out, i * d + c, t_get(table, tok * d + c))
+            c = c + 1
+        }
+        i = i + 1
+    }
+}
+
+fn ref_embedding_bwd_scatter(dX: int, ids: int, dtable_inout: int,
+                             T: int, d: int) {
+    let mut i = 0
+    while i < T {
+        let tok = to_int(t_get(ids, i))
+        let mut c = 0
+        while c < d {
+            let cur = t_get(dtable_inout, tok * d + c)
+            t_set(dtable_inout, tok * d + c, cur + t_get(dX, i * d + c))
+            c = c + 1
+        }
+        i = i + 1
+    }
+}
+
+// Reference tied LM head fwd — closed matvec.
+fn ref_lm_head_fwd(temb: int, zT: int, logits_out: int, V: int, d: int) {
+    let mut k = 0
+    while k < V {
+        let mut acc = 0.0
+        let mut j = 0
+        while j < d {
+            acc = acc + t_get(temb, k * d + j) * t_get(zT, j)
+            j = j + 1
+        }
+        t_set(logits_out, k, acc)
+        k = k + 1
+    }
+}
+
+fn ref_lm_head_bwd(temb: int, zT: int, dl: int,
+                   dtemb_out: int, dzT_out: int, V: int, d: int) {
+    let mut k = 0
+    while k < V {
+        let dlk = t_get(dl, k)
+        let mut j = 0
+        while j < d {
+            let cur = t_get(dtemb_out, k * d + j)
+            t_set(dtemb_out, k * d + j, cur + dlk * t_get(zT, j))
+            j = j + 1
+        }
+        k = k + 1
+    }
+    let mut j2 = 0
+    while j2 < d {
+        let mut acc = 0.0
+        let mut k2 = 0
+        while k2 < V {
+            acc = acc + t_get(temb, k2 * d + j2) * t_get(dl, k2)
+            k2 = k2 + 1
+        }
+        t_set(dzT_out, j2, acc)
+        j2 = j2 + 1
+    }
+}
+
 fn ref_rmsnorm_bwd(x: int, g: int, xn: int, inv: float, dy: int,
                    dx_out: int, dg_out: int, d: int) {
     let mut dot = 0.0
@@ -273,11 +343,96 @@ fn check_rmsnorm() -> int {
     return out
 }
 
+// F-RFC043-LAYER-EQ-EMBED-{FWD,SCATTER}
+fn check_embedding() -> int {
+    let T = 5
+    let d = 4
+    let V = 7
+
+    let ids = t_zeros(T)
+    t_set(ids, 0, 2.0); t_set(ids, 1, 5.0); t_set(ids, 2, 0.0)
+    t_set(ids, 3, 6.0); t_set(ids, 4, 3.0)
+    let table = t_zeros(V * d)
+    t_fill_lcg(table, V * d, 4242, 0.3)
+
+    let X_flame = t_zeros(T * d)
+    nn_embedding_fwd(ids, table, X_flame, T, d)
+    let X_ref = t_zeros(T * d)
+    ref_embedding_fwd(ids, table, X_ref, T, d)
+    let fwd_dev = max_dev_farr(X_flame, X_ref, T * d)
+
+    // scatter check — both paths receive the SAME pre-existing dtable
+    // (to test accumulation behaviour, not just from-zero).
+    let dX = t_zeros(T * d)
+    t_fill_lcg(dX, T * d, 7777, 0.5)
+    let dtable_flame = t_zeros(V * d)
+    t_fill_lcg(dtable_flame, V * d, 99, 0.1)   // pre-fill
+    let dtable_ref = t_zeros(V * d)
+    t_fill_lcg(dtable_ref, V * d, 99, 0.1)     // same pre-fill
+
+    nn_embedding_bwd_scatter(dX, ids, dtable_flame, T, d)
+    ref_embedding_bwd_scatter(dX, ids, dtable_ref, T, d)
+    let scatter_dev = max_dev_farr(dtable_flame, dtable_ref, V * d)
+
+    let _ = t_free(ids); let _ = t_free(table); let _ = t_free(dX)
+    let _ = t_free(X_flame); let _ = t_free(X_ref)
+    let _ = t_free(dtable_flame); let _ = t_free(dtable_ref)
+
+    let out = t_zeros(2)
+    t_set(out, 0, fwd_dev)
+    t_set(out, 1, scatter_dev)
+    return out
+}
+
+// F-RFC043-LAYER-EQ-LMHEAD-{FWD,BWD}
+fn check_lm_head() -> int {
+    let V = 6
+    let d = 4
+
+    let temb = t_zeros(V * d)
+    t_fill_lcg(temb, V * d, 1024, 0.2)
+    let zT = t_zeros(d)
+    t_fill_lcg(zT, d, 2048, 1.0)
+
+    let logits_flame = t_zeros(V)
+    nn_lm_head_fwd(temb, zT, logits_flame, V, d)
+    let logits_ref = t_zeros(V)
+    ref_lm_head_fwd(temb, zT, logits_ref, V, d)
+    let fwd_dev = max_dev_farr(logits_flame, logits_ref, V)
+
+    // bwd — use same pre-existing dtemb (test ACCUMULATE behavior).
+    let dl = t_zeros(V)
+    t_fill_lcg(dl, V, 31, 0.7)
+    let dtemb_flame = t_zeros(V * d)
+    t_fill_lcg(dtemb_flame, V * d, 17, 0.1)
+    let dtemb_ref = t_zeros(V * d)
+    t_fill_lcg(dtemb_ref, V * d, 17, 0.1)
+    let dzT_flame = t_zeros(d)
+    let dzT_ref = t_zeros(d)
+
+    nn_lm_head_bwd(temb, zT, dl, dtemb_flame, dzT_flame, V, d)
+    ref_lm_head_bwd(temb, zT, dl, dtemb_ref, dzT_ref, V, d)
+
+    let bwd_dtemb_dev = max_dev_farr(dtemb_flame, dtemb_ref, V * d)
+    let bwd_dzT_dev = max_dev_farr(dzT_flame, dzT_ref, d)
+
+    let _ = t_free(temb); let _ = t_free(zT); let _ = t_free(dl)
+    let _ = t_free(logits_flame); let _ = t_free(logits_ref)
+    let _ = t_free(dtemb_flame); let _ = t_free(dtemb_ref)
+    let _ = t_free(dzT_flame); let _ = t_free(dzT_ref)
+
+    let out = t_zeros(3)
+    t_set(out, 0, fwd_dev)
+    t_set(out, 1, bwd_dtemb_dev)
+    t_set(out, 2, bwd_dzT_dev)
+    return out
+}
+
 // ─── entrypoint ────────────────────────────────────────────────────────
-println("=== flame Phase 2-A selftest (nn_lib: Linear + RMSNorm, compiled-native) ===")
+println("=== flame Phase 2 selftest (nn_lib: Linear + RMSNorm + Embedding + LMHead, compiled-native) ===")
 
 let mut pass = 0
-let total = 4
+let total = 8
 
 // ── Linear ─────────────────────────────────────────────────────────────
 let lin = check_linear()
@@ -350,15 +505,56 @@ if rn_dx == 0.0 {
     println("FAIL  F-RFC043-LAYER-EQ-RMSNORM-BWD  dx deviation non-zero")
 }
 
+// ── Embedding ──────────────────────────────────────────────────────────
+let em = check_embedding()
+let em_fwd = t_get(em, 0)
+let em_scat = t_get(em, 1)
+if em_fwd == 0.0 {
+    println("PASS  F-RFC043-LAYER-EQ-EMBED-FWD     max|nn_embedding_fwd − closed-ref| = 0.0 (byte-eq · pure row copy)")
+    pass = pass + 1
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-EMBED-FWD     fwd deviation non-zero")
+}
+if em_scat == 0.0 {
+    println("PASS  F-RFC043-LAYER-EQ-EMBED-SCATTER max|nn_embedding_bwd_scatter − closed-ref| = 0.0 (byte-eq · scatter-add accumulation, d5_grad §(b) pattern)")
+    pass = pass + 1
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-EMBED-SCATTER scatter deviation non-zero")
+}
+
+// ── Tied LM head ───────────────────────────────────────────────────────
+let lh = check_lm_head()
+let lh_fwd = t_get(lh, 0)
+let lh_dtemb = t_get(lh, 1)
+let lh_dzT = t_get(lh, 2)
+// FWD uses farr_matmul (FMA-fused) vs hexa-scalar ref → RFC 040 fp-tol.
+if lh_fwd < 0.000000000001 {
+    println("PASS  F-RFC043-LAYER-EQ-LMHEAD-FWD    max|nn_lm_head_fwd − closed-ref| < 1e-12 (RFC 040 §2.2 fp-tol; matvec via farr_matmul(V·d · d·1))")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-LMHEAD-FWD    max|Δ|="); print(lh_fwd); println(" (>1e-12)")
+}
+// BWD is pure hexa scalar loops both sides → byte-eq.
+if lh_dtemb == 0.0 {
+    if lh_dzT == 0.0 {
+        println("PASS  F-RFC043-LAYER-EQ-LMHEAD-BWD    max|{dtemb_accum, dzT}_flame − {ref}_ref| = 0.0 (byte-eq · dl⊗zT + tembᵀ·dl closed)")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC043-LAYER-EQ-LMHEAD-BWD    dzT deviation non-zero")
+    }
+} else {
+    println("FAIL  F-RFC043-LAYER-EQ-LMHEAD-BWD    dtemb deviation non-zero")
+}
+
 println("")
-print("=== flame Phase 2-A: ")
+print("=== flame Phase 2: ")
 print(pass)
 print("/")
 print(total)
 println(" PASS ===")
 
 if pass == total {
-    println("PASS — flame nn_lib Linear + RMSNorm (fwd+bwd) byte-equal to closed analytic ref; connection-point closed (g_blue_closed_mandate). Phase 2-B (RoPE / GQA-attn / SwiGLU / embed / tied-head) next.")
+    println("PASS — flame nn_lib Linear + RMSNorm + Embedding + LMHead (fwd+bwd) ≡ closed analytic ref; connection-point closed (g_blue_closed_mandate). Remaining Phase 2 layers (RoPE / GQA-attn / SwiGLU) follow.")
 } else {
-    println("FAIL — flame Phase 2-A not landable")
+    println("FAIL — flame Phase 2 not landable")
 }

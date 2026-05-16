@@ -162,6 +162,96 @@ pub fn nn_rmsnorm_fwd(x: int, g: int,
     }
 }
 
+// ─── Embedding (tied with LM head) ─────────────────────────────────────
+// table : [V·d] (one row per vocab id); ids : [T] (token indices,
+// stored as floats in farr).
+// Forward — for each position i, copy table[ids[i]·d : ids[i]·d + d]
+// into X_out[i·d : i·d + d]. Mirrors anima d5_forward §"tok_emb embed
+// lookup" (HEXAD/D/d_train5_lib.hexa).
+pub fn nn_embedding_fwd(ids: int, table: int, X_out: int, T: int, d: int) {
+    let mut i = 0
+    while i < T {
+        let tok = to_int(farr_get(ids, i))
+        let mut c = 0
+        while c < d {
+            let _ = farr_set(X_out, i * d + c, farr_get(table, tok * d + c))
+            c = c + 1
+        }
+        i = i + 1
+    }
+}
+
+// Backward — scatter-add dX[i·d + c] → dtable[ids[i]·d + c] (accumulate
+// in place). Mirrors d5_grad §"(b) embedding scatter-add". `dtable` is
+// caller-pre-zeroed (or already holds the tied-head outer-product term
+// from nn_lm_head_bwd).
+pub fn nn_embedding_bwd_scatter(dX: int, ids: int, dtable_inout: int,
+                                T: int, d: int) {
+    let mut i = 0
+    while i < T {
+        let tok = to_int(farr_get(ids, i))
+        let mut c = 0
+        while c < d {
+            let cur = farr_get(dtable_inout, tok * d + c)
+            let _ = farr_set(dtable_inout, tok * d + c, cur + farr_get(dX, i * d + c))
+            c = c + 1
+        }
+        i = i + 1
+    }
+}
+
+// ─── Tied LM head ──────────────────────────────────────────────────────
+// Forward — logits[k] = Σ_j temb[k·d + j] · zT[j]   (k = 0..V-1).
+// Matvec / GEMV: temb [V·d] · zT [d] → logits [V]. We reuse farr_matmul
+// with A=temb, M=V, K=d, B=zT (treated as [d·1]), N=1.  Identical to
+// d5_matvec_g / GPU-routed path on no-CUDA build.
+pub fn nn_lm_head_fwd(temb: int, zT: int, logits_out: int, V: int, d: int) {
+    let prod = farr_matmul(temb, V, d, zT, 1)
+    // copy prod (V-len) into logits_out (caller-allocated).
+    let mut k = 0
+    while k < V {
+        let _ = farr_set(logits_out, k, farr_get(prod, k))
+        k = k + 1
+    }
+    let _ = farr_free(prod)
+}
+
+// Backward — tied LM head:
+//   dtemb[k, j] = dl[k] · zT[j]            (outer product, V·d)
+//   dzT[j]      = Σ_k temb[k·d + j] · dl[k] (transpose-matvec, d-len)
+// Caller controls whether dtemb_out is zero-init or already accumulates
+// the embedding-scatter-add term (tied-weight; the d5_grad pattern).
+//   We ACCUMULATE dtemb_out += dl ⊗ zT (so caller can pre-set or
+//   subsequently add the scatter term).
+//   dzT_out is overwritten (it has no other contributor).
+pub fn nn_lm_head_bwd(temb: int, zT: int, dl: int,
+                      dtemb_out: int, dzT_out: int, V: int, d: int) {
+    // accumulate dtemb += dl ⊗ zT
+    let mut k = 0
+    while k < V {
+        let dlk = farr_get(dl, k)
+        let mut j = 0
+        while j < d {
+            let cur = farr_get(dtemb_out, k * d + j)
+            let _ = farr_set(dtemb_out, k * d + j, cur + dlk * farr_get(zT, j))
+            j = j + 1
+        }
+        k = k + 1
+    }
+    // dzT = tembᵀ · dl  ; loop order matches d5_matvec_t_g (rows=V, cols=d).
+    let mut j2 = 0
+    while j2 < d {
+        let mut acc = 0.0
+        let mut k2 = 0
+        while k2 < V {
+            acc = acc + farr_get(temb, k2 * d + j2) * farr_get(dl, k2)
+            k2 = k2 + 1
+        }
+        let _ = farr_set(dzT_out, j2, acc)
+        j2 = j2 + 1
+    }
+}
+
 // RMSNorm backward — closed vjp (c3_rmsnorm_bwd identity):
 //   dxn_i = dy_i · g_i
 //   dg_i  = dy_i · xn_i

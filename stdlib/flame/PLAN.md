@@ -143,5 +143,21 @@ selftest 결과 (compiled-native `build/flame_phase2a`):
 honest carve-out: layer-level autograd-tape integration (ad_* 가
 새 op record) = Phase 3 (train_step). 현재 layer 들은 functional
 bwd (c3_* / d5_block_bwd 패턴 — 호출자가 dy 를 넘기고 closed
-analytic gradient 를 받음). 다음 단계: Phase 2-B 의 5 layer
-(RoPE/GQA-attn/SwiGLU/embedding/tied-LM-head).
+analytic gradient 를 받음).
+
+### 2026-05-16 — Phase 2 +2 layers (Embedding + Tied LM Head, 8/8 PASS)
+extension: `nn_lib.hexa` 에 nn_embedding_fwd / nn_embedding_bwd_scatter
+/ nn_lm_head_fwd / nn_lm_head_bwd 추가. `flame_nn_test.hexa` 에
+match falsifier 4건 추가. selftest `build/flame_phase2` 8/8 PASS:
+- F-RFC043-LAYER-EQ-EMBED-FWD       PASS — row copy byte-eq (d5_forward
+  §"tok_emb embed lookup" 패턴)
+- F-RFC043-LAYER-EQ-EMBED-SCATTER   PASS — scatter-add 누적 byte-eq
+  (d5_grad §(b) tied-weight subtlety 패턴)
+- F-RFC043-LAYER-EQ-LMHEAD-FWD      PASS — |Δ|<1e-12 (RFC 040 fp-tol;
+  V·d matvec via farr_matmul(V·d · d·1))
+- F-RFC043-LAYER-EQ-LMHEAD-BWD      PASS — dl⊗zT + tembᵀ·dl byte-eq
+- regression: RFC 034 5/5 · RFC 040 B2 9/9 · flame Phase 1 4/4 +
+  Phase 2-A 4/4 모두 동일 PASS · 동일 numerics. nn_lib emitted C
+  `call_builtin` = 0 (compiler-only 유지).
+남은 Phase 2 layer: RoPE (rotation tables + 정규 vjp) · SwiGLU
+(3 linear + silu + Hadamard, c3_swiglu_*) · GQA-attn (큰 layer).

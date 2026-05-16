@@ -36,8 +36,8 @@
   flame.hexa -> "[LANDED 2026-05-16 Phase 1 4/4] entrypoint (use stdlib/flame/*_lib + Phase 1 selftest)"
   tensor_lib.hexa -> "[LANDED 2026-05-16 Phase 1] Tensor — host farr (RFC 040 device-farr backend; device routing = Phase 4 honest carve-out)"
   autograd_lib.hexa -> "[LANDED 2026-05-16 Phase 1] reverse-mode tape thin wrapper over RFC 034 ad_*"
-  nn_lib.hexa -> "[Phase 2-A LANDED 2026-05-16: Linear + RMSNorm fwd/bwd 4/4 PASS] · Phase 2-B planned: RoPE/GQA-attn/SwiGLU/embed/tied-head"
-  flame_nn_test.hexa -> "[LANDED 2026-05-16 Phase 2-A] selftest entrypoint for nn_lib (F-RFC043-LAYER-EQ-{LINEAR,RMSNORM}-{FWD,BWD})"
+  nn_lib.hexa -> "[Phase 2 4 layers LANDED 2026-05-16: Linear + RMSNorm + Embedding + LMHead fwd/bwd 8/8 PASS] · remaining: RoPE/SwiGLU/GQA-attn"
+  flame_nn_test.hexa -> "[LANDED 2026-05-16] selftest entrypoint for nn_lib (F-RFC043-LAYER-EQ-{LINEAR,RMSNORM,EMBED,LMHEAD}-{FWD,BWD,SCATTER})"
   optim_lib.hexa -> "[planned] AdamW (RFC 040 B2)"
   train_lib.hexa -> "[planned] compiled train_step + CE loss"
   note = "[LANDED] = built + falsifier PASS. lib-split mandatory (compiled: main/_selftest 동거 시 C 심볼 중복). 각 selftest 는 독립 entrypoint 파일."
@@ -242,5 +242,22 @@ selftest 결과 (`build/flame_phase2a`, Mac no-CUDA):
   `call_builtin` = 0 (compiler-only 유지).
 honest carve-out: layer-level autograd-tape integration (ad_* 가
 새 op 를 record 하도록) 은 Phase 3 (train_step) — 현재 layer 들은
-functional bwd (c3_* / d5_block_bwd 패턴). Phase 2-B: RoPE +
-GQA-attn + SwiGLU + embedding + tied-head 추가.
+functional bwd (c3_* / d5_block_bwd 패턴).
+
+### 2026-05-16 — Phase 2 +2 layers (Embedding + Tied LM Head, 8/8 PASS)
+nn_lib 확장: `nn_embedding_fwd` / `nn_embedding_bwd_scatter` /
+`nn_lm_head_fwd` / `nn_lm_head_bwd`. functional 형식 (caller-allocated
+out farrs). 정직 캐브-아웃: tied-weight 의 dtemb 경로 두 항 (head
+outer-product term + embedding scatter-add term) 은 호출자가 두
+함수 호출로 조합 (d5_grad 패턴; flame Phase 3 train_step 에서 묶임).
+
+falsifiers (`build/flame_phase2`):
+- F-RFC043-LAYER-EQ-EMBED-FWD       PASS — row copy byte-eq
+- F-RFC043-LAYER-EQ-EMBED-SCATTER   PASS — scatter-add 누적 byte-eq
+- F-RFC043-LAYER-EQ-LMHEAD-FWD      PASS — |Δ|<1e-12 (RFC 040 fp-tol;
+  V·d matvec via farr_matmul)
+- F-RFC043-LAYER-EQ-LMHEAD-BWD      PASS — dl⊗zT + tembᵀ·dl byte-eq
+- regression: RFC 034 5/5 · RFC 040 B2 9/9 · flame Phase 1 4/4 +
+  Phase 2-A 4/4 모두 유지. structural call_builtin = 0.
+
+남은 Phase 2 layer: RoPE / SwiGLU / GQA-attn (큰 순서대로).
