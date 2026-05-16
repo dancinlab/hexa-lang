@@ -22,8 +22,8 @@
 #include <regex.h>      // G3-REGEX 2026-05-06: POSIX ERE regcomp/regexec
 #include <sys/mman.h>   // RFC 025 (2026-05-12): mmap-backed safetensors load
 extern char **environ; // posix_spawnp inherits parent env explicitly
+#include <execinfo.h>  // backtrace()/backtrace_symbols_fd() — glibc + macOS; must stay outside __APPLE__ or Linux clang errors on implicit decls
 #if defined(__APPLE__)
-#include <execinfo.h>
 #include <mach/mach.h>
 #include <mach/task.h>
 #include <mach/task_info.h>
