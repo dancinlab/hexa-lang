@@ -1659,12 +1659,25 @@ fn _ascii_code(ch: string) -> i64 {
     return 63 // '?' for unknown (non-ASCII / control)
 }
 
+// Byte-true value of a single-byte string element (as produced by
+// `s.chars()` in the hexa runtime, where each entry is one source
+// byte regardless of UTF-8 codepoint boundaries). `_ascii_code` only
+// covers ASCII printable + a few escapes and returns 63 ('?') for
+// anything else, which mangled every non-ASCII rodata byte and made
+// `"├── " == "└── "` true (both became `???????? `). Use
+// `char_code_at` — the runtime builtin maps to hexa_str_char_code_at
+// which returns the underlying byte value 0..255 for high-bit bytes.
+fn _byte_code(ch: string) -> i64 {
+    if len(ch) == 0 { return 0 }
+    return char_code(ch)
+}
+
 fn _str_to_hex_bytes(s: string) -> string {
     let cs = s.chars()
     let mut out = ""
     let mut i = 0
     while i < len(cs) {
-        out = out + _byte_to_hex(_ascii_code(cs[i]))
+        out = out + _byte_to_hex(_byte_code(cs[i]))
         i = i + 1
     }
     out = out + "00" // NUL terminator
