@@ -798,3 +798,36 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
   @> COMPILE-ONLY.tape
 
+@A loop_mangling_done_builtin_lowering_scoped := "Sub-unit (1) injective mangling DONE+verified (583→0 self-undef); sub-unit (2) builtin-lowering scoped to a codegen_c2 port, NOT a rename table" :: milestone [d=2026-05-16 ok]
+  ~> loop_stage3_link_blocked_symbol_mangling
+  == loop_stage3_link_blocked_symbol_mangling
+  done <<~EOF
+    [@665517af] resolved sub-unit (1): one injective mangler in
+    _fmt_label (uncond darwin "_", no leading-"_" skip; carve-outs
+    . [ { #) applied at every def (_globl_directive/_func_label/
+    block-label pseudo) AND every ref. VERIFIED: total=0, asm rc=0,
+    0 dup-symbol (nm shows __is_digit_ch AND _is_digit_ch both
+    defined — injective), .o 1.18 MB, undefined 583 → 0
+    compiler-internal (every hexa self-ref resolves; LEAK-scan = 0).
+  EOF
+  remaining_undef = "36 = 5 hexa_* (hexa_array_new/push, hexa_map_{get,new,set} — runtime.c DEFINES these, link-satisfied) + 31 builtin intrinsics (len/push/to_string/chars/split/println/has_key/is_alpha/… emitted as `bl _<name>`)."
+  builtin_lowering_scope <<~EOF
+    NOT a rename table. The authoritative source self/codegen_c2.hexa
+    lowers builtins via a huge per-builtin EXPRESSION generator:
+    simple renames (to_string→hexa_to_string) BUT also arity-specific
+    arg marshalling, result wrapping (map_size→hexa_int(hexa_len(a0)),
+    has_key→hexa_bool(hexa_map_contains_key(a0,hexa_to_cstring(a1)))),
+    indirection helpers (cg_string_sym/cg_math_sym → config/platform
+    symbols), and inline char-range expansions (is_alpha/is_alpha-
+    numeric — no runtime symbol at all). A naive symbol-rename map
+    would LINK but mis-marshal/mis-wrap → a stage-2 binary that runs
+    WRONG: a fake stage-3 that fails byte-equal for the wrong reason,
+    masking the real port. Greps over runtime.c are unreliable here
+    (noisy alternation false-matched hexa_map_contains_key on every
+    line) — codegen_c2 is the only ground truth.
+  EOF
+  honest_state = "loop_stage2_self_compile_clean (0 diag) + loop_arm64_assembles_clean (.s→.o) + sub-unit-(1) mangling all hold; tree not regressed. stage-3 still NOT reached: blocked on (2) builtin→runtime call lowering [port codegen_c2's runtime-call layer faithfully — renames + arg/wrap semantics + 2-3 inline/shim cases; the largest single remaining piece, effectively the bulk of codegen_c2's call layer] then (3) _main C-ABI entry synthesis. This tick produced NO code change by design: the only honest deliverable was establishing that the apparent shortcut (31-entry rename map) is fabrication-risk, and pinning the authoritative port source + true scope. A wrong table is worse than no table (silent mis-run)."
+  next = "Dedicated builtin-lowering port (next tick, large coherent unit): enumerate the ~31 builtins the compiler self-source actually calls; for each, port codegen_c2's exact lowering (symbol + arg order + result wrap) into the new arm64 STMT_CALL path (target = s.op at arm64_darwin ~944); inline-expand is_alpha/is_alphanumeric or add minimal runtime shims; verify undefined → only the 5 runtime-provided hexa_* (link-satisfied) then attempt link. Then (3) _main. NO partial rename-map commit (link is all-or-nothing; a wrong entry silently mis-runs stage-2)."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
+  @> COMPILE-ONLY.tape
+
