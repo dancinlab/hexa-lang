@@ -69,6 +69,16 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
             if lfunc.target == target {
                 parts.push(_emit_func(target, lfunc))
             }
+            // F6 step 3 — reclaim this iteration's per-function IR. P0a–P0e
+            // (PLAN-stage3-footprint-F6.md) isolates mfunc/lfunc from
+            // hmodule/st (string leaves forced-copied at every cross-
+            // lifetime store; containers built fresh per pass), so the
+            // recursive free is sound. Without this the streaming
+            // structure alone leaks every MFunc/LFunc on the malloc heap —
+            // same RSS as the whole-module path (measured 2026-05-16:
+            // stream RSS approached legacy's 30 GB before kill).
+            free_tree(mfunc)
+            free_tree(lfunc)
         }
         i = i + 1
     }

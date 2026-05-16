@@ -19,6 +19,11 @@
 #      bind(int,const struct sockaddr*,socklen_t) from <sys/socket.h>.
 #      Rename the C identifier (`bind(` sites only — decl/defn/call;
 #      string literals "bind"/"bindings" are left intact) to hexa_ubind.
+#   4. free_tree lowering — F6 step 2 (PLAN-stage3-footprint-F6.md).
+#      Hexa source calls `free_tree(v)`; stale hexa_v2 emits the generic
+#      `hexa_call1(free_tree, X)` which has no resolvable callee.
+#      Lower to the runtime function `hexa_val_free_tree(X)` (added in
+#      self/runtime.c at F6 step 1 / commit 0efebc88).
 
 import re, sys
 
@@ -37,6 +42,9 @@ for l in src:
                r"((void)mkdir(HX_STR(\1),0755),hexa_void())", l)
     # (3) bind identifier → hexa_ubind (only `bind(` — decl/defn/call).
     l = re.sub(r"\bbind\s*\(", "hexa_ubind(", l)
+    # (4) free_tree builtin → hexa_val_free_tree (F6 step 2).
+    l = re.sub(r"hexa_call1\(free_tree,\s*([^)]+)\)",
+               r"hexa_val_free_tree(\1)", l)
     out.append(l)
     # (2) hoist after the runtime include (flat C #includes runtime.c).
     s = l.strip()
@@ -51,4 +59,4 @@ if not hoisted:
     sys.exit(1)
 
 open(p, "w").write("\n".join(out))
-print(f"post: hoisted {len(defs)} enum #defines + mkdir lowering + bind rename applied")
+print(f"post: hoisted {len(defs)} enum #defines + mkdir lowering + bind rename + free_tree lowering applied")
