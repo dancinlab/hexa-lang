@@ -3757,6 +3757,100 @@ HexaVal hexa_val_free_tree(HexaVal v) {
     return hexa_void();
 }
 
+// ─────────────────────────────────────────────────────────────
+// hexa_val_copy_into_arena — recursive copy: malloc tree → arena tree
+// ─────────────────────────────────────────────────────────────
+//
+// PLAN-stage3-footprint-F6-optA.md A1. Foundational primitive for the
+// region-promote-on-return path. Mirrors hexa_val_heapify *in reverse*:
+// where heapify copies arena→malloc, copy_into_arena copies malloc→
+// arena and stamps from_arena=1 on every new heap-resident struct it
+// makes. Allocations come from hexa_val_arena_calloc (bump arena);
+// caller is responsible for the surrounding scope discipline.
+//
+// Dormant infrastructure — wired by A2 (heapify_to_parent wrapper) and
+// A3 (the opt-in fn-return variant). Nothing calls this yet.
+//
+// Discipline:
+//   - VALSTRUCT: alloc fresh in arena (from_arena=1), recurse each field.
+//   - ARRAY: alloc HexaArr + items[] in arena (cap encoded as -real_cap
+//     per rt 32-M arena-array marker), recurse each item.
+//   - STR: copy bytes into a fresh arena buffer.
+//   - MAP / CLOSURE / FN: passthrough unchanged. The streaming-loop IR
+//     (MFunc / LFunc trees of VALSTRUCT + ARRAY + STR leaves) does not
+//     materialise these tags inside the per-iteration region; if a
+//     future caller needs them, add the mirror of hmap_heapify here.
+//   - Primitives: passthrough.
+//
+// OOM-safe: arena alloc returning NULL falls back to the source value
+// (caller still sees a consistent tree; the caller is responsible for
+// keeping the source alive in that case — see A2 for the temp-buffer
+// approach that makes this fall-back trivially correct).
+HexaVal hexa_val_copy_into_arena(HexaVal v) {
+    switch (HX_TAG(v)) {
+        case TAG_VALSTRUCT: {
+            HexaValStruct* src = HX_VS(v);
+            if (!HX_PTR_OK(src)) return v;
+            HexaValStruct* dst =
+                (HexaValStruct*)hexa_val_arena_calloc(sizeof(HexaValStruct));
+            if (!dst) return v;  // arena OOM — pass source through
+            dst->tag_i      = src->tag_i;
+            dst->int_val    = src->int_val;
+            dst->float_val  = src->float_val;
+            dst->bool_val   = src->bool_val;
+            dst->from_arena = 1;
+            dst->str_val       = hexa_val_copy_into_arena(src->str_val);
+            dst->char_val      = hexa_val_copy_into_arena(src->char_val);
+            dst->array_val     = hexa_val_copy_into_arena(src->array_val);
+            dst->fn_name       = hexa_val_copy_into_arena(src->fn_name);
+            dst->fn_params     = hexa_val_copy_into_arena(src->fn_params);
+            dst->fn_body       = hexa_val_copy_into_arena(src->fn_body);
+            dst->struct_name   = hexa_val_copy_into_arena(src->struct_name);
+            dst->struct_fields = hexa_val_copy_into_arena(src->struct_fields);
+            HX_SET_VS(v, dst);
+            return v;
+        }
+        case TAG_ARRAY: {
+            HexaArr* src = v.arr_ptr;
+            if (!HX_PTR_OK(src)) return v;
+            int len = src->len;
+            HexaArr* dst = (HexaArr*)hexa_val_arena_calloc(sizeof(HexaArr));
+            if (!dst) return v;  // arena OOM
+            HexaVal* items = NULL;
+            if (len > 0) {
+                items = (HexaVal*)hexa_val_arena_calloc((size_t)len * sizeof(HexaVal));
+                if (!items) return v;  // arena OOM
+                for (int i = 0; i < len; i++) {
+                    items[i] = hexa_val_copy_into_arena(src->items[i]);
+                }
+            }
+            dst->items = items;
+            dst->len = len;
+            // rt 32-M: cap<0 marks arena-backed items buffer. Use -len so
+            // future array_push paths recognise this as non-heap storage.
+            dst->cap = (len > 0) ? -len : 0;
+            v.arr_ptr = dst;
+            return v;
+        }
+        case TAG_STR: {
+            if (!HX_STR(v)) return v;
+            size_t slen = HX_STRLEN(v);
+            char* buf = (char*)hexa_arena_alloc(slen + 1);
+            if (!buf) return v;  // arena OOM
+            if (slen > 0) memcpy(buf, HX_STR(v), slen);
+            buf[slen] = '\0';
+            HX_SET_STR(v, buf);
+            return v;
+        }
+        default:
+            // MAP / CLOSURE / FN / primitives — passthrough. See header
+            // comment: streaming-loop IR does not produce these inside
+            // the per-iteration region; extend here if a future caller
+            // needs them.
+            return v;
+    }
+}
+
 // Public C entry — exposed for the env("__HEXA_ARENA_HEAPIFY_RETURN__") path.
 // Heapifies the global return_val (a hexa_full.hexa pub let mut, emitted as a
 // C global). Declared extern; the symbol is provided by the generated C from
