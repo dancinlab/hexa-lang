@@ -777,6 +777,7 @@ fn _bind_builtin_names() -> [string] {
         // name still unmapped there fails at link time, not at run),
         // so this list can be generous.
         "str", "int", "float", "bool", "char_code", "from_char_code", "from_cstring", "cstring",
+        "lgamma", "assert", "nil",
         "fma", "gelu", "hadamard", "input", "isnan", "isinf", "isfinite",
         "is_empty", "is_error", "log2", "map_contains_key", "matvec", "mod", "one_hot",
         "pad_left", "pad_right", "random", "tan", "tanh", "timestamp",

@@ -1040,6 +1040,8 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "append_file"   { return "rt_append_file" }
     if name == "args"          { return "hexa_args" }
     if name == "char_code_at"  { return "hexa_str_char_code_at" }
+    if name == "char_code"     { return "hexa_char_code" }
+    if name == "lgamma"        { return "hexa_math_lgamma" }
     if name == "env"           { return "hexa_env_var" }
     if name == "file_size"     { return "rt_file_size" }
     if name == "chars"         { return "hexa_str_chars" }
