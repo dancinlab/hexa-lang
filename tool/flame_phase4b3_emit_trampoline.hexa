@@ -262,8 +262,70 @@ while i < len(unique_keys) {
     i = i + 1
 }
 
+// ── append leaf primitive specializations (Phase 4-B-3-2-third-1+) ──
+//
+// Currently emits ONE leaf primitive: flame_rmsnorm_d<d>_fwd_primitive,
+// keyed off the literal-tuple's d dimension. More leaves come in
+// subsequent sub-phases (per PHASE4B3_LEAF_PRIORITY.md leaf order).
+//
+// The primitive is `static inline` + reads `_hx_farr_table[id].buf`
+// directly — no HexaVal, no farr_get/set fn dispatch. Visible to
+// any code in the same TU (single-TU inline pattern guarantees
+// _hx_farr_table is in scope from `#include "runtime.c"`).
+
+let mut emitted_d_set = []
+fn d_already_emitted(d_val) {
+    let mut i = 0
+    while i < len(emitted_d_set) {
+        if emitted_d_set[i] == d_val { return true }
+        i = i + 1
+    }
+    return false
+}
+
+let mut leaf_count = 0
+let mut k = 0
+while k < len(unique_dims) {
+    let parts = unique_dims[k].split(",")
+    let d_val = parts[1]
+    if !d_already_emitted(d_val) {
+        emitted_d_set.push(d_val)
+        let fn_name = "flame_rmsnorm_d" + d_val + "_fwd_primitive"
+        out = out + "// ── rmsnorm leaf primitive (Phase 4-B-3-2-third-1) ──\n"
+        out = out + "// algorithm: same as nn_rmsnorm_fwd (stdlib/flame/nn_lib.hexa:146)\n"
+        out = out + "// algorithm: same as ref_rmsnorm_fwd (stdlib/flame/flame_nn_test.hexa:117)\n"
+        out = out + "// Σx² + 1/sqrt + per-element scale; libm sqrt — byte-eq with hexa wrapper.\n"
+        out = out + "static inline void " + fn_name + "(\n"
+        out = out + "    int x_id, int g_id, int y_id, int xn_id, int inv_id\n"
+        out = out + ") {\n"
+        out = out + "    double* x   = _hx_farr_table[x_id].buf;\n"
+        out = out + "    double* g   = _hx_farr_table[g_id].buf;\n"
+        out = out + "    double* y   = _hx_farr_table[y_id].buf;\n"
+        out = out + "    double* xn  = _hx_farr_table[xn_id].buf;\n"
+        out = out + "    double* inv = _hx_farr_table[inv_id].buf;\n"
+        out = out + "    const double eps = 1e-6;\n"
+        out = out + "    double ms = 0.0;\n"
+        out = out + "    for (int i = 0; i < " + d_val + "; i++) {\n"
+        out = out + "        ms += x[i] * x[i];\n"
+        out = out + "    }\n"
+        out = out + "    ms /= (double)" + d_val + ";\n"
+        out = out + "    double iv = 1.0 / sqrt(ms + eps);\n"
+        out = out + "    inv[0] = iv;\n"
+        out = out + "    for (int j = 0; j < " + d_val + "; j++) {\n"
+        out = out + "        double xni = x[j] * iv;\n"
+        out = out + "        xn[j] = xni;\n"
+        out = out + "        y[j]  = g[j] * xni;\n"
+        out = out + "    }\n"
+        out = out + "}\n"
+        out = out + "\n"
+        leaf_count = leaf_count + 1
+        println("  emitted leaf: " + fn_name)
+    }
+    k = k + 1
+}
+
 write_file(out_path, out)
-println("PASS  F-RFC047-EMIT-TRAMPOLINE-SHIPS  " + to_string(len(unique_keys)) + " trampolines emitted → " + out_path)
+println("PASS  F-RFC047-EMIT-TRAMPOLINE-SHIPS  " + to_string(len(unique_keys)) + " trampolines + " + to_string(leaf_count) + " leaf primitives emitted → " + out_path)
 
 if len(decls_path) > 0 {
     // Emit forward declarations file (for insertion near top of single-TU concat)
@@ -288,6 +350,24 @@ if len(decls_path) > 0 {
             decls = decls + "static inline void " + fn_name + "(int X_id, int Bp_id, int Bc_id, int dXout_id, int dX_out_id, int Bg_id, int cos_id, int sin_id);\n"
         }
         j = j + 1
+    }
+    // leaf primitive decls (one per unique d value)
+    let mut emitted_d_set2 = []
+    let mut k2 = 0
+    while k2 < len(unique_dims) {
+        let parts2 = unique_dims[k2].split(",")
+        let d_val2 = parts2[1]
+        let mut seen = false
+        let mut e2 = 0
+        while e2 < len(emitted_d_set2) {
+            if emitted_d_set2[e2] == d_val2 { seen = true }
+            e2 = e2 + 1
+        }
+        if !seen {
+            emitted_d_set2.push(d_val2)
+            decls = decls + "static inline void flame_rmsnorm_d" + d_val2 + "_fwd_primitive(int x_id, int g_id, int y_id, int xn_id, int inv_id);\n"
+        }
+        k2 = k2 + 1
     }
     write_file(decls_path, decls)
     println("PASS  F-RFC047-EMIT-TRAMPOLINE-DECLS  " + to_string(len(unique_keys)) + " decls emitted → " + decls_path)
