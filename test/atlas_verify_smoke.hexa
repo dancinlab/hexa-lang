@@ -118,7 +118,7 @@ fn main() {
     // OWN count claims, not just per-verdict PASS). Update LEDGER_DECLARED_COUNT
     // here + atlas/MAIN.tape::phase_2_cumulative_count together every cycle
     // (single-source discipline; drift = CI fail).
-    let ledger_declared_count = 131
+    let ledger_declared_count = 139
     let count_consistent = total == ledger_declared_count
 
     let nf = len(fails)

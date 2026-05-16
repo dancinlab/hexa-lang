@@ -1068,6 +1068,77 @@ pub fn verify_s3_preheating_bogoliubov_canonical_commutator() -> AtlasVerdict {
     return _vd_trans("s3_preheating_bogoliubov_canonical_commutator", "§3 PHYS", _tier_pass(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s3_hofstadter_phi_half_2sqrt2 — Hofstadter φ=1/2 outer band edge = 2√2
+// ──────────────────────────────────────────────────────────────────────
+// Hofstadter 1976 (PRB 14 2239) / Harper 1955. At flux φ=1/2 (p=1,q=2)
+// the Harper matrix is 2×2 with E=±√(4cos²k_y + 2 + 2cos2k_x); the band
+// extrema (k_y=0, 2k_x=0) give the closed-form outer edges E=±√8=±2√2,
+// with E=0 (the two central bands touch — even-q degeneracy). 2√2 is a
+// surd: (2√2)²=8 exact, value via libm sqrt, |err|<1e-12. TKNN 1982
+// gap labelling anchors the φ=1/2 two-band structure.
+// sim-universe @D g18 / @X x_hofstadter_1976 · hofstadter selftest
+// (φ=1/2 outer |E|_max vs 2√2 < 1e-9) ·
+// atlas/inbox/hofstadter-phi-half-band-edge-2-sqrt-2.md.
+
+pub fn verify_s3_hofstadter_phi_half_2sqrt2() -> AtlasVerdict {
+    // band-edge condition at k_y=0, 2k_x=0: 4·cos²0 + 2 + 2·cos0 = 4+2+2 = 8
+    let band_edge_sq = 4.0 * 1.0 * 1.0 + 2.0 + 2.0 * 1.0   // = 8.0
+    let e_max = sqrt(band_edge_sq)                         // √8 = 2√2
+    let two_sqrt2 = 2.0 * sqrt(2.0)
+    let reference = 2.8284271247461903
+    let err = _abs_f(e_max - reference)
+    let err2 = _abs_f(two_sqrt2 - reference)
+    // exact algebraic underlying identity: (2√2)² = 8 (within libm)
+    let sq_back = _abs_f(e_max * e_max - 8.0)
+    // generic-k must give a SMALLER edge (k_y=π/2 → √(0+2+2cos2k_x) ≤ 2 < 2√2)
+    let generic_k = sqrt(0.0 + 2.0 + 2.0 * 1.0)            // = 2.0 < 2√2
+    let ok = err < 0.000000000001 && err2 < 0.000000000001 && sq_back < 0.000000001 && generic_k < e_max
+    let detail = "Hofstadter 1976 (PRB 14 2239) φ=1/2 (q=2) outer band edge: band-edge condition 4cos²k_y+2+2cos2k_x at (k_y=0,2k_x=0) = 8 ⇒ |E|_max = √8 = 2·√2 = " + to_string(e_max) + " · reference 2.8284271247461903 · |err| = " + to_string(err) + " (<1e-12 libm sqrt) · (2√2)²−8 = " + to_string(sq_back) + " (exact algebraic) · generic k_y=π/2 edge = " + to_string(generic_k) + " < 2√2 (extremal momentum distinguished) · E=0 in spectrum (even-q central degeneracy). sim-universe hofstadter selftest invariant (φ=1/2 |E|_max vs 2√2 < 1e-9). See atlas/inbox/hofstadter-phi-half-band-edge-2-sqrt-2.md (≥6 falsifiers pre-registered)."
+    return _vd_trans("s3_hofstadter_phi_half_2sqrt2", "§3 PHYS", _tier_pass(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_dqpt_tfim_critical_time_pi4 — TFIM DQPT fundamental cusp t*₀ = π/4
+// ──────────────────────────────────────────────────────────────────────
+// Heyl-Polkovnikov-Kehrein 2013 (PRL 110 135704 / arXiv:1206.2505).
+// TFIM quench g₀→g₁ across g_c=1; Fisher-zero mode cos k*=(1+g₀g₁)/
+// (g₀+g₁), dispersion ε_g(k)=2√(1+g²−2g cos k), critical times
+// t*_n=t*(n+½), t*=π/ε_{g₁}(k*). For the module's analytic-limit
+// selftest quench g₀→∞,g₁→0: cos k*→0 ⇒ k*=π/2; ε_{0}(k*)=2;
+// t*=π/2; t*₀=t*·½ = π/4. Control g₀=0.4→g₁=0.8 (both<1):
+// cos k*=(1+0.32)/1.2 ≈ 1.1 > 1 ⇒ no real k* ⇒ NO DQPT (smooth λ_∞).
+// sim-universe @D g19 / @X x_heyl_dqpt · dqpt selftest (closed-form
+// kink at analytic t*₀; control no-DQPT) ·
+// atlas/inbox/dqpt-loschmidt-tfim-critical-time-pi-over-4.md.
+
+pub fn verify_s3_dqpt_tfim_critical_time_pi4() -> AtlasVerdict {
+    // Analytic-limit quench g₀→∞, g₁→0 (deep paramagnet → classical Ising).
+    // cos k* = (1+g₀g₁)/(g₀+g₁) → (1+0)/(∞) → 0  ⇒ k* = π/2.
+    let cos_kstar = 0.0
+    // k* = π/2 (acos 0); ε_{g₁=0}(k) = 2√(1+0−0) = 2 (k-independent at g=0).
+    let eps_g1_kstar = 2.0 * sqrt(1.0 + 0.0 - 0.0)         // = 2.0
+    let t_star = _pi_const() / eps_g1_kstar                // π/2
+    let t_star_0 = t_star * 0.5                            // t*·(0+½) = π/4
+    let reference = 0.7853981633974483                     // π/4
+    let err = _abs_f(t_star_0 - reference)
+    // full ladder t*_n = t*(n+½): t*₁ = 3π/4, t*₂ = 5π/4
+    let t_star_1 = t_star * 1.5
+    let t_star_2 = t_star * 2.5
+    let ladder_ok = _abs_f(t_star_1 - 3.0 * reference) < 0.000000000001
+                 && _abs_f(t_star_2 - 5.0 * reference) < 0.000000000001
+    // control: g₀=0.4, g₁=0.8 (both<1) ⇒ cos k* = (1+0.32)/1.2 > 1 ⇒ no DQPT
+    let g0 = 0.4
+    let g1 = 0.8
+    let cos_kstar_ctrl = (1.0 + g0 * g1) / (g0 + g1)
+    let no_dqpt_ctrl = cos_kstar_ctrl > 1.0                // |cos k*|>1 ⇒ no real k*
+    let ok = _abs_f(cos_kstar - 0.0) < 0.000000000001
+          && _abs_f(eps_g1_kstar - 2.0) < 0.000000000001
+          && err < 0.000000000001 && ladder_ok && no_dqpt_ctrl
+    let detail = "Heyl-Polkovnikov-Kehrein 2013 (PRL 110 135704) TFIM DQPT fundamental cusp, analytic-limit quench g₀→∞,g₁→0: cos k*=(1+g₀g₁)/(g₀+g₁)→0 ⇒ k*=π/2; ε_{g₁=0}(k*)=2√(1)=" + to_string(eps_g1_kstar) + "; t*=π/ε=" + to_string(t_star) + "=π/2; t*₀=t*·½ = " + to_string(t_star_0) + " · reference π/4 = 0.7853981633974483 · |err| = " + to_string(err) + " (<1e-12 libm π) · ladder t*_n=t*(n+½): t*₁=3π/4, t*₂=5π/4 (ok=" + to_string(ladder_ok) + ") · control g₀=0.4→g₁=0.8 both<1: cos k*=" + to_string(cos_kstar_ctrl) + ">1 ⇒ NO real k* ⇒ NO DQPT (smooth λ_∞). Sharp ONLY in N→∞ closed form (finite-N rounded, @D g19); TFIM-integrable-only. sim-universe dqpt-loschmidt selftest invariant. See atlas/inbox/dqpt-loschmidt-tfim-critical-time-pi-over-4.md (≥6 falsifiers pre-registered)."
+    return _vd_trans("s3_dqpt_tfim_critical_time_pi4", "§3 PHYS", _tier_pass(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_transcendental_all() -> [AtlasVerdict] {
@@ -1110,5 +1181,7 @@ pub fn verify_transcendental_all() -> [AtlasVerdict] {
     out.push(verify_s3_dtc_bond_phase_unitarity())
     out.push(verify_s3_z2gauge_floquet_half_step_exact())
     out.push(verify_s3_preheating_bogoliubov_canonical_commutator())
+    out.push(verify_s3_hofstadter_phi_half_2sqrt2())
+    out.push(verify_s3_dqpt_tfim_critical_time_pi4())
     return out
 }

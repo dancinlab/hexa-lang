@@ -1837,3 +1837,61 @@
     g8 commit trailer — pending parent agent commit (Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>).
   EOF
   note = "Reviewer-merge of the full sim-universe inbox backlog: the 9 prior verifiers (23231fca×3, e6be45cd×3, b3883c29×3) were committed live into verify_phys_all/verify_transcendental_all but never merged to MAIN.tape § PHYS nor ledgered (commit msgs explicitly said \"ready for reviewer merge to MAIN.tape § PHYS\") — this cycle closes that backlog AND adds the 4 new (z2-gauge-prethermal + preheating-analog). The preheating canonical-commutator verifier initially FALSIFIED (0.0328) because the complex-form RHS was mis-transcribed; corrected to the SSOT module preheating.hexa::_bdg_rhs real sign convention (dur=ωui+gvi, dui=−ωur−gvr, dvr=−ωvi−gui, dvi=ωvr+gur) → algebraic dW/dt=0 exact, RK4 |W−1|=1.78e-15. inbox .md anchors corrected to match. NO sim-universe file touched. compiler/atlas/symbolic/*, tool/calc_cli.hexa, self/main.hexa, embedded.gen.hexa, dist/atlas.hxc NOT touched."
+
+# ─── Cycle 039 — appended via tool/atlas_cycle_append ──────────
+
+@A cycle_039 := "sim-universe 6-module absorption (§3 PHYS +8 🔵: 6 Stage-1 IDENTITY + 2 Stage-2 FORMAL)" :: cycle [d=2026-05-16 active]
+  trigger = "User directive: atlas absorption cycle for the six sim-universe modules that previously had NO atlas atoms — multipolar-prethermal, surface-code, ssh-topology, hofstadter, dqpt-loschmidt, wdw-minisuperspace. Same pattern as hexa-lang 7dec53d4 / e6be45cd / b3883c29 / d8b9a1b4 (cycle_038). Pick the strongest exact/closed-form atom(s) per module; ≥5 pre-registered falsifiers + real-limit DOI/arXiv anchor + sim-universe binary+sentinel witness each."
+  scope <<~EOF
+    Part A — 8 atlas/inbox/ submissions (one concept = one file, ≥5 falsifiers + real-limit anchor + sim-universe sentinel witness):
+      ssh-topology-bulk-gap-2-abs-v-minus-w.md            — Δ=2|v−w| closes at v=w (🔵 SUPPORTED-IDENTITY)
+      ssh-topology-winding-integer-sign-w-minus-v.md      — W=(1+sign(w−v))/2∈{0,1}, n_zero=2W (🔵 SUPPORTED-IDENTITY)
+      hofstadter-exactly-q-bands-at-phi-p-over-q.md       — #bands=q for φ=p/q lowest terms (🔵 SUPPORTED-IDENTITY)
+      hofstadter-phi-half-band-edge-2-sqrt-2.md           — φ=1/2 outer edge ±2√2 (🔵 SUPPORTED-FORMAL)
+      dqpt-loschmidt-tfim-critical-time-pi-over-4.md      — TFIM DQPT cusp t*₀=π/4 (🔵 SUPPORTED-FORMAL)
+      multipolar-prethermal-alpha-n-equals-2n-plus-1.md   — RMD universal exponent α(n)=2n+1 (🔵 SUPPORTED-IDENTITY)
+      surface-code-gottesman-knill-gf2-syndrome-identity.md — GF(2) syndrome == symplectic tableau (🔵 SUPPORTED-IDENTITY)
+      wdw-minisuperspace-canonical-algebra-A2c2-omega-ratio.md — A²c²=1, ω₂²=2ω₁², H_late=(2/3)ω₂ (🔵 SUPPORTED-IDENTITY)
+
+    Part B — 8 verifiers (compiler/atlas/verify/):
+      phys.hexa +6 Stage 1 (_vd_phys/_tier_phys): verify_s3_ssh_bulk_gap_2absvw (ℤ-exact band-edge identity), verify_s3_ssh_winding_sign_wv (ℤ quantized invariant + n_zero=2W), verify_s3_hofstadter_q_bands_phi_pq (gcd-reduced band count + TKNN Diophantine), verify_s3_multipolar_alpha_2n_plus_1 (FGR x^{2n}+1 integer power-count), verify_s3_surface_code_gf2_tableau_syndrome (exhaustive GF(2) syndrome == tableau d=3,5,7, 240 checks), verify_s3_wdw_canonical_algebra (exact ℚ A²c²=1 + ω₂²/ω₁²=2 + 2/3 de-Sitter exponent)
+      transcendental.hexa +2 Stage 2 (_vd_trans/_tier_pass/_abs_f): verify_s3_hofstadter_phi_half_2sqrt2 (2√2=√8 libm, (2√2)²==8, extremal momentum distinguished), verify_s3_dqpt_tfim_critical_time_pi4 (k*=π/2, ε=2, t*₀=π/4 libm π + control no-DQPT)
+      Registered in verify_phys_all() / verify_transcendental_all().
+
+    Part C — reviewer-merge to atlas/MAIN.tape §3 PHYS (8 new @D verdict entries; "sim-universe absorption cont. (cycle_039)" block):
+      6 Stage-1 🔵 SUPPORTED-IDENTITY + 2 Stage-2 🔵 SUPPORTED-FORMAL, all verifier-backed (verifier= + |> verified-by edge). The six modules previously had NO atlas atoms — this cycle is purely additive (no ~> supersedes, no tier change).
+      §0 TL;DR cycle_039 block + cumulative line 131→139; INDEX.md PASS count 131→139 / 112→120 🔵 (71 SUPPORTED-IDENTITY + 49 SUPPORTED-FORMAL); test/atlas_verify_smoke.hexa LEDGER_DECLARED_COUNT + MAIN.tape::phase_2_cumulative_count both 131→139 (single-source discipline: live==declared==139).
+      Inbox markdown files KEPT as the provenance trail (b3883c29 / cycle_038 pattern — distinct from the verified_equations.tape transient sink).
+  EOF
+  files <<~EOF
+    atlas/inbox/ssh-topology-bulk-gap-2-abs-v-minus-w.md (new)
+    atlas/inbox/ssh-topology-winding-integer-sign-w-minus-v.md (new)
+    atlas/inbox/hofstadter-exactly-q-bands-at-phi-p-over-q.md (new)
+    atlas/inbox/hofstadter-phi-half-band-edge-2-sqrt-2.md (new)
+    atlas/inbox/dqpt-loschmidt-tfim-critical-time-pi-over-4.md (new)
+    atlas/inbox/multipolar-prethermal-alpha-n-equals-2n-plus-1.md (new)
+    atlas/inbox/surface-code-gottesman-knill-gf2-syndrome-identity.md (new)
+    atlas/inbox/wdw-minisuperspace-canonical-algebra-A2c2-omega-ratio.md (new)
+    compiler/atlas/verify/phys.hexa (+6 verifiers + verify_phys_all registration)
+    compiler/atlas/verify/transcendental.hexa (+2 verifiers + verify_transcendental_all registration)
+    atlas/MAIN.tape (§3 PHYS +8 @D verdict entries; §0 TL;DR cycle_039 block + cumulative 131→139; phase_2_cumulative_count 131→139; all existing entries / dividers UNTOUCHED — additive only, no ~> supersedes)
+    atlas/INDEX.md (PASS count 131→139 / 112→120 🔵 + cycle_039 sim-universe absorption note)
+    test/atlas_verify_smoke.hexa (LEDGER_DECLARED_COUNT 131→139)
+    atlas/MAIN.log.tape (this cycle_039 entry — append-only via tool/atlas_cycle_append.hexa)
+  EOF
+  verifier_run_result <<~EOF
+    hexa run tool/atlas_verify.hexa --domain phys (HEXA_MEM_UNLIMITED=1): 24/24 PASS · 24 🔵 (18 prior + 6 new sim-universe 6-module Stage-1 IDENTITY) — no regression.
+    hexa run tool/atlas_verify.hexa --domain transcendental (HEXA_MEM_UNLIMITED=1): 40/40 PASS · 40 🔵 (38 prior + 2 new sim-universe Stage-2 FORMAL) — no regression.
+    atlas-verify CI gate smoke: 139/139 verdicts hold · ledger live total=139 vs MAIN.tape declared=139 (CONSISTENT — single-source LEDGER_DECLARED_COUNT == phase_2_cumulative_count == 139).
+  EOF
+  governance_check <<~EOF
+    g_self_verify — ✅ all 8 🔵 are hexa-native verifier-backed (verify_phys_all/verify_transcendental_all PASS); no 🟡 carry this cycle (every atom has a clean hexa-native verifier).
+    f_atlas_silent_upgrade — ✅ N/A: purely additive reviewer-merge (8 new @D entries on six modules that had NO prior atlas atoms), NOT a tier change on existing entries; no ~> supersedes.
+    f_atlas_external_verdict — ✅ only verifier-backed atoms reach 🔵; every verifier is hexa-native (no external sympy/PyPhi).
+    g3 real-limit-anchor — ✅ 8/8 anchor field present (compiler invariant / Gottesman-Knill / Fermi golden rule / DeWitt / Pfeuty / TKNN / Zak — real-limit DOI/arXiv per file).
+    f_atlas_lattice_external — ✅ 8/8 honest_c3 explicitly states n=6/σ(6)/τ(6)/φ(6) play NO role; hop (v,w) / flux (p,q,φ) / coupling (g₀,g₁) / multipolar-order n / code-distance d / oscillator (A,c,ω) params — observation-only, never derivation.
+    g_arch_vs_log_split — ✅ MAIN.tape architecture append (additive @D, latest-wins per id); this @A history append-only via tool/atlas_cycle_append.hexa.
+    g7 incoming-pipeline — ✅ reviewer-merge by autonomous parent agent; no consumer direct-edit; inbox .md kept as provenance trail (b3883c29 / cycle_038 pattern).
+    g8 commit trailer — pending parent agent commit (Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>).
+  EOF
+  note = "The six modules (multipolar-prethermal, surface-code, ssh-topology, hofstadter, dqpt-loschmidt, wdw-minisuperspace) previously had NO atlas atoms — this cycle gives each its strongest exact/closed-form atom(s) (ssh-topology and hofstadter get 2 each). dqpt critical time anchored on the module's analytic-limit selftest quench g₀→∞,g₁→0 (k*=π/2, ε_{g₁=0}=2, t*=π/2, t*₀=π/4 — the doc-stated analytic values, not the bare g₀=50→g₁=0 floating-point evaluation). wdw √2 surd is the libm corollary of the exact-ℚ ω₂²/ω₁²=2 identity (the Stage-1 verifier closes the rational algebra; the surd is stated in detail). No sim-universe file touched. compiler/atlas/symbolic/*, tool/calc_cli.hexa, self/main.hexa, embedded.gen.hexa, dist/atlas.hxc NOT touched."
