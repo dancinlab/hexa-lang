@@ -190,7 +190,8 @@ fn _build_module(target: string, f: LFunc) -> LModule {
         funcs: funcs,
         rodata: [],
         bss: [],
-        globals: []
+        globals: [],
+        floats: []
     }
 }
 

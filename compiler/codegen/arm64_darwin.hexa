@@ -512,7 +512,38 @@ fn _arm_spill_offset(rm: RegMap, id: i64) -> i64 {
 // field types across imports without it.
 pub struct ArmStrTab {
     keys: [string],
-    labels: [string]
+    labels: [string],
+    // Parallel float-literal pool (const_float Operand → `.LCfltN`).
+    // Stored in source-text form ("16.0") so the assembler's `.double`
+    // does the f64 conversion — sidesteps the stage0 lack of a
+    // double→bits bitcast primitive. NaN/Inf go through the same path
+    // since `to_string(f64)` round-trips them as "nan"/"inf" which
+    // both clang and gas accept.
+    fkeys: [f64],
+    flabels: [string]
+}
+
+fn _arm64_float_lookup(st: ArmStrTab, v: f64) -> string {
+    let mut i = 0
+    while i < len(st.fkeys) {
+        if st.fkeys[i] == v {
+            let lab = st.flabels[i]
+            return lab.substring(0, len(lab))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _arm64_float_intern(st: ArmStrTab, v: f64) -> ArmStrTab {
+    let existing = _arm64_float_lookup(st, v)
+    if len(existing) > 0 { return st }
+    let mut fk = st.fkeys
+    let mut fl = st.flabels
+    let label = ".LCflt" + to_string(len(fk))
+    fk.push(v)
+    fl.push(label)
+    return ArmStrTab { keys: st.keys, labels: st.labels, fkeys: fk, flabels: fl }
 }
 
 fn _arm64_strtab_lookup(st: ArmStrTab, s: string) -> string {
@@ -559,7 +590,7 @@ fn _arm64_op_for_operand_st(o: Operand, st: ArmStrTab) -> LOperand {
 // flow through unchanged (label = literal string), which only
 // matters for modules that never produce a const_str operand.
 fn _arm64_op_for_operand(o: Operand) -> LOperand {
-    let st = ArmStrTab { keys: [], labels: [] }
+    let st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [] }
     return _arm64_op_for_operand_st(o, st)
 }
 
@@ -877,6 +908,23 @@ fn _hv_load(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
                          _arm64_op_label(nm + "@PAGE"), "hv str ptr page"))
         out.push(_arm64_instr3("add", _arm64_op_reg(hi), _arm64_op_reg(hi),
                          _arm64_op_label(nm + "@PAGEOFF"), "hv str ptr off"))
+        return out
+    }
+    if o.kind == "const_float" {
+        // TAG_FLOAT = 1 (see self/runtime.h `enum { TAG_INT=0, TAG_FLOAT, … }`).
+        // Pool: `.LCfltN: .double <text>` emitted in rodata; here we
+        // load that 8-byte IEEE-754 value into `hi` and stash the tag
+        // in `lo`. Uses x14 as scratch so we don't clash with the
+        // x15 scratch used by spill/slot moves.
+        let lab = _arm64_float_lookup(st, o.float_val)
+        out.push(_arm64_instr2("movz", _arm64_op_reg(lo),
+                         _arm64_op_label("#1"), "hv const_float: TAG_FLOAT"))
+        out.push(_arm64_instr2("adrp", _arm64_op_reg("x14"),
+                         _arm64_op_label(lab + "@PAGE"), "hv float pool page"))
+        out.push(_arm64_instr3("add", _arm64_op_reg("x14"), _arm64_op_reg("x14"),
+                         _arm64_op_label(lab + "@PAGEOFF"), "hv float pool off"))
+        out.push(_arm64_instr2("ldr", _arm64_op_reg(hi),
+                         _arm64_op_label("[x14]"), "hv load f64 bits " + lab))
         return out
     }
     if o.kind == "global" {
@@ -1524,8 +1572,14 @@ fn _collect_strs_from_stmt(st: ArmStrTab, s: Stmt) -> ArmStrTab {
                 // PLAN-stage3-footprint-F6.md.
                 keys.push(o.str_val.substring(0, len(o.str_val)))
                 labs.push(".LCstr" + to_string(n))
-                out = ArmStrTab { keys: keys, labels: labs }
+                out = ArmStrTab {
+                    keys: keys, labels: labs,
+                    fkeys: out.fkeys, flabels: out.flabels
+                }
             }
+        }
+        if o.kind == "const_float" {
+            out = _arm64_float_intern(out, o.float_val)
         }
         i = i + 1
     }
@@ -1557,7 +1611,7 @@ fn _arm_strtab_collect_fn(st: ArmStrTab, f: MFunc) -> ArmStrTab {
 // Whole-module strtab — the non-streaming path. Now a thin fold over
 // _arm_strtab_collect_fn so both paths share one collector (no drift).
 fn _build_arm_strtab(module: MModule) -> ArmStrTab {
-    let mut st = ArmStrTab { keys: [], labels: [] }
+    let mut st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [] }
     let mut fi = 0
     while fi < len(module.funcs) {
         st = _arm_strtab_collect_fn(st, module.funcs[fi])
@@ -1764,12 +1818,25 @@ pub fn codegen_arm64_darwin(module: MModule) -> LModule {
         gnames.push("_g" + to_string(module.globals[gi].id))
         gi = gi + 1
     }
+    // Float-pool entries from the strtab → LFloat list. `.LC*` is a
+    // local label (no `_` prefix needed) per the existing strtab
+    // convention; the use-site references it as-is.
+    let mut flts: [LFloat] = []
+    let mut fp = 0
+    while fp < len(st.fkeys) {
+        flts.push(LFloat {
+            label: st.flabels[fp],
+            text: to_string(st.fkeys[fp])
+        })
+        fp = fp + 1
+    }
     return LModule {
         file: module.file,
         target: "arm64-apple-darwin",
         funcs: funcs,
         rodata: _strtab_to_rodata(st),
         bss: [],
-        globals: gnames
+        globals: gnames,
+        floats: flts
     }
 }

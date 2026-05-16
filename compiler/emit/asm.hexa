@@ -413,5 +413,22 @@ pub fn emit_asm(module: LModule) -> string {
         }
     }
 
+    // ---- float constant pool (rodata, `.double` directives) ----
+    // const_float Operand kind previously had no `_hv_load` branch and
+    // fell through to `hv void` (TAG_VOID/0), so e.g. `sqrt(16.0)`
+    // received TAG_VOID and returned 0. Each unique float literal is
+    // interned at strtab-collect time and gets a `.LCfltN: .double <text>`
+    // entry here; the use site loads TAG_FLOAT into lo and ldr's the
+    // 8-byte IEEE-754 value into hi from `<label>`.
+    if len(module.floats) > 0 {
+        parts.push(_rodata_section_directive(target) + "\n")
+        let mut fi2 = 0
+        while fi2 < len(module.floats) {
+            let f = module.floats[fi2]
+            parts.push("    .p2align 3\n" + f.label + ":\n    .double " + f.text + "\n")
+            fi2 = fi2 + 1
+        }
+    }
+
     return parts.join("")
 }

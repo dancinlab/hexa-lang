@@ -554,7 +554,13 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx, _const_int_op(v))
     }
     if k == "literal_float" {
-        return _value(ctx, _const_float_op(0.0))
+        // The literal's source text (e.g. "16.0") rides through HIR
+        // unparsed; convert to f64 here via the runtime to_float
+        // builtin. Prior implementation passed `0.0` unconditionally,
+        // so every float literal in any program lowered to 0.0 — math
+        // builtins like sqrt(16.0) appeared to "do nothing", but the
+        // value was being clobbered at MIR build time, not codegen.
+        return _value(ctx, _const_float_op(to_float(e.text)))
     }
     if k == "literal_string" {
         return _value(ctx, _const_str_op(e.text))

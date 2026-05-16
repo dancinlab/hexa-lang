@@ -1215,6 +1215,7 @@ pub fn codegen_x86_64_linux(module: MModule) -> LModule {
         funcs: funcs,
         rodata: _x86_strtab_to_rodata(st),
         bss: [],
-        globals: []
+        globals: [],
+        floats: []
     }
 }

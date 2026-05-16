@@ -750,6 +750,7 @@ pub fn codegen_thumbv7em_eabihf(module: MModule) -> LModule {
         funcs: funcs,
         rodata: _thumb_strtab_to_rodata(st),
         bss: [],
-        globals: []
+        globals: [],
+        floats: []
     }
 }

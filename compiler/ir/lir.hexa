@@ -48,6 +48,11 @@ pub struct LFunc {
 
 // ── Module ────────────────────────────────────────────────────
 
+pub struct LFloat {
+    label: string,   // `.LCfltN`
+    text: string     // decimal-float source text (e.g., "16.0")
+}
+
 pub struct LModule {
     file: string,
     target: string,
@@ -58,7 +63,11 @@ pub struct LModule {
     // per entry, symbol name `g<id>`. Zero-initialized in .data; the
     // declaration initializer runs at program start (synthetic-main
     // `g<id> = E` assign emitted by the parser).
-    globals: [string]
+    globals: [string],
+    // Float-literal constant pool. Each entry produces a `.double`
+    // directive in rodata under the given label; the codegen materializes
+    // the HexaVal at the use site as TAG_FLOAT + ldr-from-label.
+    floats: [LFloat]
 }
 
 pub struct LSection {
