@@ -96,18 +96,24 @@ fn _fmt_mem(target: string, op: LOperand) -> string {
 }
 
 fn _fmt_label(target: string, label: string) -> string {
-    // Labels in branch operands: don't prefix here — caller responsible
-    // for already-prefixed names. For raw symbol refs we add the platform
-    // prefix only if the label is a function-like bare identifier (i.e.
-    // doesn't start with '.' or '_' already).
+    // Single injective hexa→Mach-O mangling, applied identically at
+    // every definition (_globl_directive / _func_label / block-label
+    // pseudo) and every reference (bl/b/cbz/adrp targets). The darwin
+    // "_" is prepended UNCONDITIONALLY (no leading-"_" skip): hexa
+    // treats `foo` and `_foo` as distinct identifiers, so the prefix
+    // must be injective — `foo`→`_foo`, `_foo`→`__foo`. The old
+    // skip-if-leading-"_" collapsed `_foo` def(`__foo`) vs ref(`_foo`)
+    // → 583 undefined at stage-2 link. Carve-outs (verbatim): rodata
+    // /directive-like `.LCstr…@PAGE`, addressing `[sp],#16`, reg-list
+    // `{…}`, immediates `#…`. Runtime C names (hexa_*) carry no leading
+    // "_" → `_hexa_*`, matching clang's Mach-O symbol for runtime.c.
     let cs = label.chars()
     if len(cs) == 0 { return label }
     let first = cs[0]
-    if first == "." { return label }   // already directive-like
-    if first == "_" { return label }   // already prefixed
-    if first == "[" { return label }   // raw addressing-mode literal (e.g. `[sp], #16`)
-    if first == "{" { return label }   // ARM register list literal (e.g. `{r4-r11, lr}`)
-    if first == "#" { return label }   // ARM immediate literal (e.g. `#16`) — never a symbol
+    if first == "." { return label }   // directive-like / .LCstr@PAGE
+    if first == "[" { return label }   // raw addressing-mode literal
+    if first == "{" { return label }   // ARM register list literal
+    if first == "#" { return label }   // immediate literal (incl. `#h, lsl #N`)
     if _is_darwin(target) { return "_" + label }
     return label
 }
@@ -176,7 +182,11 @@ fn _fmt_instr(target: string, instr: LInstr) -> string {
         if len(name) == 0 && len(instr.args) > 0 {
             name = instr.args[0].label
         }
-        return name + ":"
+        // Route through the same mangler as every reference so a block
+        // label's definition and its b/cbz targets stay byte-identical
+        // (def==ref invariant — required now that _fmt_label always
+        // prefixes; previously def was raw and ref skipped leading "_").
+        return _fmt_label(target, name) + ":"
     }
     let mut line = "    " + instr.op
     if len(instr.args) > 0 {
@@ -230,11 +240,11 @@ fn _bss_section_directive(target: string) -> string {
 // unconditional so the .s still assembles (the milestone) and the
 // 583-undef precisely localises the same root cause.
 fn _globl_directive(target: string, sym: string) -> string {
-    return ".globl " + _label_prefix(target) + sym
+    return ".globl " + _fmt_label(target, sym)
 }
 
 fn _func_label(target: string, name: string) -> string {
-    return _label_prefix(target) + name + ":"
+    return _fmt_label(target, name) + ":"
 }
 
 // ── Section payload (rodata / bss) ──────────────────────────
