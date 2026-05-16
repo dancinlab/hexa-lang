@@ -956,6 +956,7 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "len"           { return "hexa_len" }            // → int (box)
     if name == "contains"      { return "hexa_str_contains" }   // → int (box bool)
     if name == "starts_with"   { return "rt_str_starts_with" }  // → int (box bool)
+    if name == "ends_with"     { return "rt_str_ends_with" }    // → int (box bool)
     if name == "is_alpha"          { return "hexa_is_alpha" }          // shim → HexaVal
     if name == "is_alphanumeric"   { return "hexa_is_alphanumeric" }   // shim → HexaVal
     return name
@@ -968,6 +969,7 @@ fn _builtin_ret_box(name: string) -> string {
     if name == "len"         { return "int" }
     if name == "contains"    { return "bool" }
     if name == "starts_with" { return "bool" }
+    if name == "ends_with"   { return "bool" }
     return ""
 }
 

@@ -1465,18 +1465,50 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
     p_diags = []
     let mut items = []
     let mut imports = []
+    let mut top_stmts = []
     while !at_eof() {
         let before = p_pos
-        let it = parse_item()
-        items.push(it)
-        if item_is_import(it.kind) {
-            imports.push(it.name)
+        // decl-leader → Item; anything else at module scope is a top-level
+        // executable statement (compiler/main.hexa is script-style). Collect
+        // those into a synthesised `fn main` so the native backend has a
+        // C-ABI entry — the hexa_v2 C path generated this implicitly; the
+        // new lower_hir/codegen handle ITEM_FN uniformly (→ _main).
+        if check_kind(TokenKind::KwFn) || check_kind(TokenKind::KwLet)
+           || check_kind(TokenKind::KwStruct) || check_kind(TokenKind::KwEnum)
+           || check_kind(TokenKind::KwImport) || check_kind(TokenKind::KwPub)
+           || check_kind(TokenKind::At) {
+            let it = parse_item()
+            items.push(it)
+            if item_is_import(it.kind) {
+                imports.push(it.name)
+            }
+        } else {
+            let s = parse_stmt()
+            top_stmts.push(s)
         }
-        // safety net: if parse_item failed to consume, advance one token to
-        // guarantee progress and avoid an infinite loop on malformed input.
+        // safety net: guarantee forward progress on malformed input.
         if p_pos == before {
             advance()
         }
+    }
+    if len(top_stmts) > 0 {
+        let mbody = Expr {
+            kind: ExprKind::Block,
+            span: top_stmts[0].span,
+            text: "",
+            children: top_stmts,
+            atlas_ref: empty_atlas()
+        }
+        items.push(Item {
+            kind: ItemKind::Fn,
+            name: "main",
+            span: top_stmts[0].span,
+            annotations: [],
+            params: [],
+            return_type: empty_type(),
+            body: mbody,
+            is_pub: true
+        })
     }
     p_tokens = save_tokens
     p_pos = save_pos
