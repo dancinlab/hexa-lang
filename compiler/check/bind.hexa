@@ -757,7 +757,7 @@ fn _bind_builtin_names() -> [string] {
         "log10", "matmul", "max", "min", "mkdir", "mono_ns", "mount", "namespace_clone_const",
         "nanos", "net_accept", "net_close", "net_connect", "net_listen", "net_read_bytes", "net_read_n", "net_read",
         "net_recv_fd", "net_select", "net_send_fd", "net_set_nonblock", "net_set_timeout", "net_write_bytes", "net_write", "now_monotonic_s",
-        "now_unix_ms", "panic", "pivot_root", "poly1305_onetimeauth", "pow", "print", "println", "proc_fork",
+        "now_unix_ms", "panic", "pivot_root", "poly1305_onetimeauth", "pop", "pow", "print", "println", "proc_fork",
         "proc_reap_zombies", "proc_setsid", "proc_wait_flag_const", "proc_wait", "pty_forkexec", "pty_get_winsize", "pty_open", "pty_set_winsize",
         "pty_tcgetattr", "pty_tcsetattr", "read_bytes_at", "read_file_bytes", "read_file", "read_line", "read_lines", "read_stdin",
         "real_args", "regex_findall", "regex_match_full", "regex_match", "regex_replace", "regex_search", "regex_split", "remove_file",

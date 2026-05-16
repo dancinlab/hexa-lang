@@ -187,6 +187,19 @@ dominant failure class:
 | #5    | float-literal source-text precision (`.double`) | 13 | 2 | 6 | 0 |
 | #6    | short-circuit && / \|\| via control flow | **14** | 1 | 6 | 0 |
 
+### Broadened to 40 alphabetical test/*.hexa smokes
+
+| sweep | trigger fix(es) | MATCH | DIFF | CG-FAIL | LINK | INTERP-TO |
+|-------|-----------------|-------|------|---------|------|-----------|
+| 40-#1 | (after curated #6 fixes)                            | 18 | 1  | 19 | 0 | 2 |
+| 40-#2 | use→import lex alias · .hexa auto-suffix · multi-main collapse · pop builtin | **22** | 5 | 9 | 2 | 2 |
+
+Note: 4 new DIFFs surfaced in the wider sample (atlas_cycle_append,
+atlas_doctrine, atlas_materials_limits, atlas_real_limits) — these
+are heavier atlas-library smokes that the use/import fixes unlocked.
+Each is a separate next-cycle investigation (some exit 139 native
+vs 0 interp, so different runtime classes).
+
 **14 / 21 byte-identical** through aprime_cc direct after #6 (66.6%).
 The remaining 6 CODEGEN-FAIL are HX2001/HX3001/HX3010/HX4001
 typecheck/lint strictness on imported library files (separate

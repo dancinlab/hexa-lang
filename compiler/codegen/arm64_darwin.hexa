@@ -1050,6 +1050,7 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "index_of"      { return "hexa_array_index_of" }
     if name == "join"          { return "hexa_str_join" }
     if name == "push"          { return "hexa_array_push" }
+    if name == "pop"           { return "hexa_array_pop" }
     if name == "read_file"     { return "rt_read_file" }
     if name == "replace"       { return "hexa_str_replace" }
     if name == "split"         { return "hexa_str_split" }
