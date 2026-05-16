@@ -1,0 +1,80 @@
+// compiler/codegen/stream.hexa — F2: streaming per-function codegen+emit
+//
+// Authoritative design: PLAN-stage3-footprint.md F2.
+//
+// The legacy back-half runs three sequential whole-module passes —
+// lower_hir (→ MModule), codegen (→ LModule), emit_asm (→ asm text) —
+// each retaining its full output array. On the 25,932-line self-compile
+// that is three whole-program carriers resident at once → 10-16 GB RSS.
+//
+// codegen_emit_streaming fuses the three already-per-function loops into
+// ONE: each function is lowered (HIR→MIR), codegen'd (MIR→LIR) and
+// emitted (LIR→text) before the next is touched, so only one function's
+// MFunc/LFunc is live at a time. Paired with the rt 32-L Val-arena scope
+// (wired by the caller — PLAN F4) each function's IR is reclaimed once
+// its asm text is appended; the f4b597a7 heapify-envelope fix keeps that
+// per-iteration heapify O(1).
+//
+// Byte-identical to the legacy path by construction:
+//   * the per-function loop visits items in the same order, so the
+//     ArmStrTab (insertion-ordered label assignment) is bit-identical;
+//   * a function only references its own string literals, so lowering
+//     func i against a strtab holding funcs[0..i] is equivalent to
+//     lowering it against the complete table;
+//   * header / .text / .rodata emission mirrors emit_asm exactly.
+//
+// Scope: arm64-apple-darwin only (the stage-3 verdict is arm64-first).
+// Other targets fall back to the legacy whole-module path — see
+// compiler/main.hexa's `--stream` gate.
+
+import "../ir/hir.hexa"
+import "../lower/hir_to_mir.hexa"
+import "./arm64_darwin.hexa"
+import "../emit/asm.hexa"
+
+// Streaming codegen+emit for arm64-apple-darwin. Consumes the HModule
+// directly and returns the final assembly text — no MModule or LModule
+// whole-program carrier is ever materialised.
+pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
+    let modhash = _arm64_modhash(hmodule.file)
+    let mut st = ArmStrTab { keys: [], labels: [] }
+
+    // ---- header (mirrors emit_asm; arm64-darwin needs no syntax dirs) ----
+    let mut out = ""
+    out = out + _comment_marker(target).trim() + " hexa-lang emit pass — target=" + target + "\n"
+    out = out + _comment_marker(target).trim() + " source: " + hmodule.file + "\n"
+    out = out + _text_section_directive(target) + "\n"
+
+    // ---- streaming .text: one function's HIR/MIR/LIR live at a time ----
+    let mut i = 0
+    while i < len(hmodule.items) {
+        let it = hmodule.items[i]
+        if it.kind == "ITEM_FN" {
+            // HIR→MIR for this one function.
+            let mfunc = _lower_fn(it)
+            // Intern this function's string literals before codegen — it
+            // resolves operands against `st` (PLAN F1: _arm_strtab_collect_fn).
+            st = _arm_strtab_collect_fn(st, mfunc)
+            // MIR→LIR for this one function.
+            let lfunc = _arm64_lower_func(mfunc, st, modhash)
+            // LIR→text. After this, mfunc/lfunc are unreferenced and the
+            // caller's arena scope pop reclaims them.
+            if lfunc.target == target {
+                out = out + _emit_func(target, lfunc)
+            }
+        }
+        i = i + 1
+    }
+
+    // ---- .rodata: emitted once from the fully-accumulated strtab ----
+    let rodata = _strtab_to_rodata(st)
+    if len(rodata) > 0 {
+        let header_ro = _rodata_section_directive(target)
+        let mut ri = 0
+        while ri < len(rodata) {
+            out = out + _emit_section(target, rodata[ri], header_ro)
+            ri = ri + 1
+        }
+    }
+    return out
+}
