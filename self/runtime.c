@@ -3851,6 +3851,41 @@ HexaVal hexa_val_copy_into_arena(HexaVal v) {
     }
 }
 
+// ─────────────────────────────────────────────────────────────
+// hexa_val_arena_heapify_to_parent — temp-buffered region promote
+// ─────────────────────────────────────────────────────────────
+//
+// PLAN-stage3-footprint-F6-optA.md A2. Promotes a Val that lives in the
+// CURRENT arena frame into the PARENT frame's arena. The naive
+// "scope_pop then copy" overlaps source and destination (the parent's
+// frontier grows into where the callee's data sits, overwriting source
+// mid-copy — see the optA doc "Bump-arena overlap problem"). The safe
+// sequence routes the copy via a malloc temp:
+//
+//   1. heapify(v)         arena → malloc deep-copy (no overlap).
+//   2. scope_pop()        rewind callee region; frontier at parent's mark.
+//   3. copy_into_arena()  malloc → parent arena.
+//   4. free_tree(temp)    release the malloc temp.
+//
+// Cost: 2× memory briefly (the malloc temp and the arena copy coexist
+// for one recursion). Benefit: provably overlap-free, and the malloc
+// temp goes through hexa_val_heapify whose recursion is the same the
+// runtime uses on every fn-return today — no new aliasing surface.
+//
+// Caller contract: the per-fn arena scope mark is currently the
+// callee's; this function pops that mark internally. Calling without a
+// matching push is a defensive no-op (forwards v unchanged).
+//
+// Dormant infrastructure — wired by A3 (the opt-in fn-return variant).
+HexaVal hexa_val_arena_heapify_to_parent(HexaVal v) {
+    if (__hexa_val_mark_top <= 0) return v;  // no callee scope — no-op
+    HexaVal temp = hexa_val_heapify(v);          // (1) malloc deep-copy
+    hexa_val_arena_scope_pop();                  // (2) rewind callee region
+    HexaVal arena_copy = hexa_val_copy_into_arena(temp); // (3) into parent
+    hexa_val_free_tree(temp);                    // (4) release temp
+    return arena_copy;
+}
+
 // Public C entry — exposed for the env("__HEXA_ARENA_HEAPIFY_RETURN__") path.
 // Heapifies the global return_val (a hexa_full.hexa pub let mut, emitted as a
 // C global). Declared extern; the symbol is provided by the generated C from
