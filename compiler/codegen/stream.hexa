@@ -39,11 +39,19 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
     let modhash = _arm64_modhash(hmodule.file)
     let mut st = ArmStrTab { keys: [], labels: [] }
 
+    // F4 — fragments accumulate in an array, joined once at the end.
+    // `out = out + frag` re-copies the whole accumulator every function,
+    // i.e. O(N·T) transient bytes on an N-function compile (the legacy
+    // emit_asm has the same shape — PLAN-stage3-footprint.md Finding §2).
+    // `parts.push` is O(1) amortised; `parts.join("")` is a single
+    // length-summed malloc + memcpy (hexa_str_join) — O(T) total, and
+    // byte-identical to the left-fold of `+`.
+    let mut parts: [string] = []
+
     // ---- header (mirrors emit_asm; arm64-darwin needs no syntax dirs) ----
-    let mut out = ""
-    out = out + _comment_marker(target).trim() + " hexa-lang emit pass — target=" + target + "\n"
-    out = out + _comment_marker(target).trim() + " source: " + hmodule.file + "\n"
-    out = out + _text_section_directive(target) + "\n"
+    parts.push(_comment_marker(target).trim() + " hexa-lang emit pass — target=" + target + "\n")
+    parts.push(_comment_marker(target).trim() + " source: " + hmodule.file + "\n")
+    parts.push(_text_section_directive(target) + "\n")
 
     // ---- streaming .text: one function's HIR/MIR/LIR live at a time ----
     let mut i = 0
@@ -57,10 +65,9 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
             st = _arm_strtab_collect_fn(st, mfunc)
             // MIR→LIR for this one function.
             let lfunc = _arm64_lower_func(mfunc, st, modhash)
-            // LIR→text. After this, mfunc/lfunc are unreferenced and the
-            // caller's arena scope pop reclaims them.
+            // LIR→text.
             if lfunc.target == target {
-                out = out + _emit_func(target, lfunc)
+                parts.push(_emit_func(target, lfunc))
             }
         }
         i = i + 1
@@ -72,9 +79,9 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
         let header_ro = _rodata_section_directive(target)
         let mut ri = 0
         while ri < len(rodata) {
-            out = out + _emit_section(target, rodata[ri], header_ro)
+            parts.push(_emit_section(target, rodata[ri], header_ro))
             ri = ri + 1
         }
     }
-    return out
+    return parts.join("")
 }

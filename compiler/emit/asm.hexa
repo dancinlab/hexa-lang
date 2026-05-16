@@ -329,11 +329,16 @@ fn _emit_func(target: string, f: LFunc) -> string {
 
 pub fn emit_asm(module: LModule) -> string {
     let target = module.target
-    let mut out = ""
+
+    // F4 (PLAN-stage3-footprint.md) — fragments accumulate in an array,
+    // joined once. `out = out + frag` re-copied the whole accumulator per
+    // function: O(N·T) transient bytes on an N-function compile. `parts`
+    // + `join("")` is O(T) and byte-identical to the left-fold of `+`.
+    let mut parts: [string] = []
 
     // ---- Header (deterministic, no timestamps) ----
-    out = out + _comment_marker(target).trim() + " hexa-lang emit pass — target=" + target + "\n"
-    out = out + _comment_marker(target).trim() + " source: " + module.file + "\n"
+    parts.push(_comment_marker(target).trim() + " hexa-lang emit pass — target=" + target + "\n")
+    parts.push(_comment_marker(target).trim() + " source: " + module.file + "\n")
 
     // Per-target file head directives.
     if _is_thumb(target) {
@@ -341,17 +346,17 @@ pub fn emit_asm(module: LModule) -> string {
         // directive switches the assembler into Thumb mode for the
         // remainder of the file; without it the default is ARM mode
         // and every Thumb-only mnemonic (cbz, it, ...) would error.
-        out = out + ".syntax unified\n"
-        out = out + ".cpu cortex-m4\n"
-        out = out + ".fpu vfpv4-sp-d16\n"
-        out = out + ".thumb\n"
+        parts.push(".syntax unified\n")
+        parts.push(".cpu cortex-m4\n")
+        parts.push(".fpu vfpv4-sp-d16\n")
+        parts.push(".thumb\n")
     } else if !_is_darwin(target) {
         // x86_64 GAS: select Intel syntax once at the top (RFC-018 §3 note).
-        out = out + ".intel_syntax noprefix\n"
+        parts.push(".intel_syntax noprefix\n")
     }
 
     // ---- .text ----
-    out = out + _text_section_directive(target) + "\n"
+    parts.push(_text_section_directive(target) + "\n")
 
     let mut fi = 0
     while fi < len(module.funcs) {
@@ -360,7 +365,7 @@ pub fn emit_asm(module: LModule) -> string {
         // is target-specific, but a mixed module would still be valid
         // under the struct shape).
         if f.target == target {
-            out = out + _emit_func(target, f)
+            parts.push(_emit_func(target, f))
         }
         fi = fi + 1
     }
@@ -370,7 +375,7 @@ pub fn emit_asm(module: LModule) -> string {
         let header_ro = _rodata_section_directive(target)
         let mut ri = 0
         while ri < len(module.rodata) {
-            out = out + _emit_section(target, module.rodata[ri], header_ro)
+            parts.push(_emit_section(target, module.rodata[ri], header_ro))
             ri = ri + 1
         }
     }
@@ -380,10 +385,10 @@ pub fn emit_asm(module: LModule) -> string {
         let header_bss = _bss_section_directive(target)
         let mut bi = 0
         while bi < len(module.bss) {
-            out = out + _emit_section(target, module.bss[bi], header_bss)
+            parts.push(_emit_section(target, module.bss[bi], header_bss))
             bi = bi + 1
         }
     }
 
-    return out
+    return parts.join("")
 }
