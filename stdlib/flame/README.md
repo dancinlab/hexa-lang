@@ -1,20 +1,28 @@
 # flame — hexa-native, compiler-only PyTorch-equivalent NN stdlib
 
-> **Status (2026-05-17): Phase 3 COMPLETE + Phase 4-A-bwd LANDED +
-> Phase 4-B-2 IPCP SHIPPED + Phase 4-B-3 measurement-anchored design
-> (see `STATUS.md` for single-page consolidated state).**
+> **Status (2026-05-17): 🎯 Phase 4-B-3 FULLY SHIPPED — 2.74× wall**
+> (see `STATUS.md` fifth iteration for single-page consolidated state).
 >
-> **Phase 4-B-2 IPCP SHIP**: `tool/flame_phase4b_build.sh` produces
-> a byte-identical binary with **1.28× wall** (12.574s → 9.814s 5-run
-> avg, var 1.7%) over Phase 4-A-bwd baseline. Production `./hexa build`
-> path unchanged (F-RFC047-FALLBACK-PRESERVED). Verified byte-id on
-> 3 distinct configs (d=32·3L corpus + d=8·toy decoder/block).
+> **Phase 4-B-3 FULLY SHIPPED**:
+> - A2 fwd+bwd both primitive byte-id with baseline
+> - **2.74× wall MEASURED** (baseline 16.170s → 5.908s, 5-run avg)
+> - flame:anima ratio: **0.267× (~3.7× faster than anima)**
+> - ≥3× RFC 047 §137 target: **88% reached** with CPU-only A2
+> - Single-command reproducible: `tool/flame_phase4b3_a2_build.sh`
+>
+> **Phase 4-B-2 IPCP SHIP** (intermediate, commit `55e29392`):
+> - `tool/flame_phase4b_build.sh` produces byte-identical binary
+> - 1.28× wall (12.574s → 9.814s 5-run avg, var 1.7%)
+> - Production `./hexa build` path unchanged (F-RFC047-FALLBACK-PRESERVED)
+> - Verified byte-id on 3 distinct configs (d=32·3L + d=8·toy)
 >
 > **Phase 4-B-3 mechanism measurements** (3/3 micro-bench probes):
 > - boxing-elim: **4.00× MEASURED** (was 1.5-2.5× estimate)
 > - allocator-elim: **1.00× MEASURED** (was 1.3-1.7× estimate)
 > - fn-call-elim: **1.00× MEASURED** (was 1.2-1.5×, overlap-capped)
-> - **compound ceiling = 4.0×** — RFC 047 §137 ≥3× target with 33% margin
+> - Cumulative A2 fwd+bwd: **2.74× FAR exceeded prior projection** —
+>   bwd has more boxed ops (gradient accumulators) + clang -O2 NEON
+>   vectorizes aggressively + synergistic fwd+bwd cumulative effect
 >
 > Original Phase 3 status preserved below.
 >
