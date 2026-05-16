@@ -11,6 +11,7 @@
   - eager-PyTorch baseline reference: anima `state/anima_pytorch_d768x12L_fire_2026_05_16/fire.log` — d=768·12L ConsciousDecoderV2 trained init CE 5.59 → final 0.000708 in 336.85s wall on a single A100 (Python substrate, not hexa-native — RFC 043 §"interim track")
   - flame compiled-native baseline (d=32·3L, M-Mac CPU): 18.29s wall after Phase 3-J farr_matmul routing (`build/flame_d32_corpus`) for the full 80-step AdamW × 8-window epoch
   - anima d_corpus_fire baseline (same hexa-lang toolchain, same M-Mac CPU, HEXA_MEM_UNLIMITED=1, full 80-step): **18.70s** wall — almost identical to flame (ratio 0.978×, flame ~2% faster). RFC 045 measurement update: the packed-farr vs dict/list distinction produces last-ulp numeric drift but NOT a wall-time advantage at the M-Mac CPU baseline. clang -O2 vectorizes both impls efficiently; Phase 4 fusion gains must come from kernel-level restructuring, not from the storage-rep difference
+  - Phase 4 PREFLIGHT measurement (flame_perf_breakdown_test, 8-iter average, d=32·3L single-window): **fwd 3 ms (14%) · bwd 20 ms (84%) · AdamW 0 ms (<1%)** per train step. **bwd dominates wall by 6× over fwd** — Stage 3 fwd+bwd graph fusion has the largest single fusion win available. Phase 4-A re-prioritized to include bwd-side projection routing in addition to fwd epilogue fusion
   - RFC 040 §"Performance thesis" — compiled-only AOT path's edge over eager Python = (a) no Python dispatch overhead, (b) compile-time kernel fusion, (c) static-shape specialization; these are flame's three structural levers
 
 ## Scope of this RFC — design draft, no implementation
@@ -115,9 +116,9 @@ The verification discipline of RFC 045 (every algorithm step byte-id) carries ov
 
 ## Phasing
 
-- **Phase 4-A — Stage 1 epilogue fusion**. ~10 fused-matmul variants in `self/runtime.c` (or `self/forge/`), restructure nn_lib call sites. Falsifiers: F-RFC046-FUSED-MATMUL-EPILOGUE-EQ + F-RFC046-STEP-EQ on Phase 3-F-3 baseline. **Effort: ~1 cycle.** Expected: ~2× wall improvement.
+- **Phase 4-A — Stage 1 epilogue fusion + bwd projection routing (RE-PRIORITIZED 2026-05-17)**. ~10 fused-matmul variants in `self/runtime.c` (or `self/forge/`), restructure nn_lib call sites. ALSO route the `nn_decoder_grad` bwd projection-accumulating loops through `_db_proj_batch_farr` (mirroring the Phase 3-J fwd-side wire-in). Falsifiers: F-RFC046-FUSED-MATMUL-EPILOGUE-EQ + F-RFC046-STEP-EQ on Phase 3-F-3 baseline. **Effort: ~1 cycle.** Expected: ~2× wall improvement (now larger than original estimate — Phase 4 preflight measurement shows bwd is 84% of per-step wall, so the bwd-side projection routing alone could deliver substantial gain).
 - **Phase 4-B — Stage 2 block fusion**. IR pass + per-block specialized C emission. Falsifiers: F-RFC046-FUSED-BLOCK-EQ + F-RFC046-DECODER-FULL-EQ. **Effort: ~2 cycles.** Expected: ~5× wall improvement.
-- **Phase 4-C — Stage 3 fwd+bwd graph fusion**. Bwd specialization mirroring Stage 2. Falsifiers: F-RFC046-FUSED-BWD-EQ + regression on all prior. **Effort: ~2-3 cycles.** Expected: ~10× wall improvement.
+- **Phase 4-C — Stage 3 fwd+bwd graph fusion (HIGHEST IMPACT)**. Bwd specialization mirroring Stage 2 — this is the dominant fusion target per the Phase 4 preflight measurement (bwd = 84% of per-step wall at d=32·3L on M-Mac CPU). Falsifiers: F-RFC046-FUSED-BWD-EQ + regression on all prior. **Effort: ~2-3 cycles.** Expected: ~10× wall improvement.
 - **Phase 4-D — GPU dispatch + eager-PyTorch comparison**. vast.ai/runpod A100/H100 fire (RFC 045 + RFC 040 §"Phase D" cost envelope: ~$2-30/GPU-hr × dispatch time). Falsifier: F-RFC046-EAGER-PYTORCH-MATCH on d=768·12L. **Effort: 1 fire cycle; cost ~$5-20** (per anima `HEXAD/PLAN.md` §9 honest envelope).
 
 ## Honest performance thesis (g3 / f1 / f2 — the crux)

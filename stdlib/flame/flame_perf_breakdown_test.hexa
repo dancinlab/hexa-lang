@@ -1,0 +1,158 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_perf_breakdown_test.hexa — flame Phase 4 preflight
+//
+// Per-step wall breakdown for the nn_decoder_train_step path at d=32·3L:
+//   fwd  (nn_decoder_fwd)        — projections + attn + SwiGLU + tied head
+//   bwd  (nn_decoder_grad)       — reverse composition + grad accumulate
+//   opt  (opt_adamw_step)        — AdamW update over packed M
+//
+// Methodology: 1 warm-up step (cache touch) + 8 measure steps × 1 corpus
+// window. time_ms() per phase, then average over the 8 measure steps.
+// Wall-time evidence for RFC 046 Phase 4 fusion priority decisions —
+// which sub-phase dominates determines which fusion stage wins most.
+//
+// Honest carve-out (g3): time_ms() has ~1ms granularity; per-step fwd at
+// d=32·3L is order ~100ms, so the granularity introduces ≤1% error per
+// reading and averaging over 8 reduces it further. Not a strict
+// micro-benchmark; sufficient for Phase 4 priority decisions.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/decoder_lib"
+use "stdlib/flame/decoder_block_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/train_lib"
+use "stdlib/flame/optim_lib"
+
+println("=== flame Phase 4 preflight (per-step wall breakdown @ d=32·3L) ===")
+
+let T = 16
+let d = 32
+let nh = 4
+let nkv = 2
+let h = 64
+let V = 256
+let n_layer = 3
+let hd = d / nh
+let target_t = 44   // first byte after T=16 prefix in corpus_consciousness_v1.jsonl
+
+// load corpus first window
+let path = "/Users/ghost/core/anima/training/corpus_consciousness_v1.jsonl"
+let bytes_arr = read_file_bytes(path)
+let ids = t_zeros(T)
+let mut p = 0
+while p < T {
+    t_set(ids, p, to_float(bytes_arr[p]))
+    p = p + 1
+}
+
+let m_size = m_total(d, nh, nkv, h, V, n_layer)
+let M = t_zeros(m_size)
+nn_decoder_init(M, 42, T, d, nh, nkv, h, V, n_layer)
+let Mm = t_zeros(m_size)
+let Mv = t_zeros(m_size)
+let Mg = t_zeros(m_size)
+let mc_size = mc_total(T, d, nh, nkv, h, V, n_layer)
+let Mc = t_zeros(mc_size)
+let cos_tab = t_zeros(T * hd); let sin_tab = t_zeros(T * hd)
+nn_rope_build_tables(T, hd, cos_tab, sin_tab)
+
+let lr = 0.03
+let b1 = 0.9
+let b2 = 0.999
+let eps_a = 0.00000001
+let wd = 0.01
+
+print("  config: T="); print(T); print(" d="); print(d)
+print(" nh="); print(nh); print(" nkv="); print(nkv); print(" h="); print(h)
+print(" V="); print(V); print(" n_layer="); print(n_layer)
+print(" ; m_total="); println(m_size)
+
+// warm-up step (cache touch, not measured)
+nn_decoder_fwd(ids, M, Mc, cos_tab, sin_tab, T, d, nh, nkv, h, V, n_layer)
+let mut zi = 0
+while zi < m_size { let _ = farr_set(Mg, zi, 0.0); zi = zi + 1 }
+nn_decoder_grad(ids, target_t, M, Mc, Mg, cos_tab, sin_tab,
+                T, d, nh, nkv, h, V, n_layer)
+opt_adamw_step(M, Mg, Mm, Mv, m_size, lr, b1, b2, eps_a, wd, 1)
+
+// 8 measure steps
+let mut fwd_acc = 0
+let mut bwd_acc = 0
+let mut opt_acc = 0
+let mut step = 1
+while step <= 8 {
+    // fwd
+    let t0 = time_ms()
+    nn_decoder_fwd(ids, M, Mc, cos_tab, sin_tab, T, d, nh, nkv, h, V, n_layer)
+    let t1 = time_ms()
+    // zero Mg
+    let mut z = 0
+    while z < m_size { let _ = farr_set(Mg, z, 0.0); z = z + 1 }
+    // bwd
+    let t2 = time_ms()
+    nn_decoder_grad(ids, target_t, M, Mc, Mg, cos_tab, sin_tab,
+                    T, d, nh, nkv, h, V, n_layer)
+    let t3 = time_ms()
+    // AdamW
+    opt_adamw_step(M, Mg, Mm, Mv, m_size, lr, b1, b2, eps_a, wd, step + 1)
+    let t4 = time_ms()
+
+    fwd_acc = fwd_acc + (t1 - t0)
+    bwd_acc = bwd_acc + (t3 - t2)
+    opt_acc = opt_acc + (t4 - t3)
+    step = step + 1
+}
+
+let fwd_ms_avg = fwd_acc / 8
+let bwd_ms_avg = bwd_acc / 8
+let opt_ms_avg = opt_acc / 8
+let total_ms = fwd_ms_avg + bwd_ms_avg + opt_ms_avg
+let fwd_pct = (100 * fwd_acc) / (fwd_acc + bwd_acc + opt_acc)
+let bwd_pct = (100 * bwd_acc) / (fwd_acc + bwd_acc + opt_acc)
+let opt_pct = (100 * opt_acc) / (fwd_acc + bwd_acc + opt_acc)
+
+println("")
+println("  Per-step wall (8-iter average, single-window):")
+print("    fwd       : "); print(fwd_ms_avg); print(" ms (");
+                          print(fwd_pct); println("%)")
+print("    bwd       : "); print(bwd_ms_avg); print(" ms (");
+                          print(bwd_pct); println("%)")
+print("    AdamW step: "); print(opt_ms_avg); print(" ms (");
+                          print(opt_pct); println("%)")
+print("    total/step: "); print(total_ms); println(" ms")
+println("")
+println("  Phase 4 fusion priority (descending wall share):")
+if fwd_pct >= bwd_pct {
+    if fwd_pct >= opt_pct {
+        println("    1) fwd (Stage 1/2 epilogue + block fusion)")
+        if bwd_pct >= opt_pct {
+            println("    2) bwd (Stage 3 fwd+bwd graph fusion)")
+            println("    3) AdamW (sub-1% — not a fusion target)")
+        } else {
+            println("    2) AdamW")
+            println("    3) bwd")
+        }
+    } else {
+        println("    1) AdamW")
+        println("    2) fwd")
+        println("    3) bwd")
+    }
+} else {
+    if bwd_pct >= opt_pct {
+        println("    1) bwd (Stage 3 fwd+bwd graph fusion)")
+        println("    2) fwd")
+        println("    3) AdamW")
+    } else {
+        println("    1) AdamW")
+        println("    2) bwd")
+        println("    3) fwd")
+    }
+}
+
+let _ = t_free(ids); let _ = t_free(M); let _ = t_free(Mm); let _ = t_free(Mv)
+let _ = t_free(Mg); let _ = t_free(Mc); let _ = t_free(cos_tab); let _ = t_free(sin_tab)
+
+println("")
+println("Phase 4 preflight evidence captured.")
