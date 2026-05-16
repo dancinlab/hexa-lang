@@ -631,6 +631,57 @@ correctness 의 결함이 아님.
 - Phase 4-D GPU dispatch fire (~$5-20, cost-bearing)
 - 또는 더 evidence collection (per-layer wall breakdown, etc.)
 
+### 2026-05-17 — SESSION FINAL CLOSURE (33 commits, Phase 4-A-bwd PARTIAL LANDED)
+자율 cycle 의 진정한 mechanical limit 도달. 본 session 추가 8 commits
+(Phase 4 preflight + Phase 4-A-bwd partial 1-4 + drin attempt-revert
++ measurement convention learning):
+
+**Phase 4-A-bwd 7 outer-product accumulators wired** (commits
+`bbaa4bbf` · `9ff5ae92` · `d272bca2` · `e8c78f4e`):
+  - dWq/dWk/dWv (partial 1) · dWd (partial 2) · dWo (partial 3) ·
+    dWg/dWu (partial 4) via single-pattern `_db_grad_accum_farr` helper
+  - 5-run flame_d32_corpus wall: **13.33s avg** (range 13.03-13.93,
+    variance ~7%)
+  - 3-run anima d_corpus_fire wall: 22.13s avg
+  - **flame is 60.2% of anima wall** (ratio 0.602×)
+  - vs Phase 3-J baseline (~17s estimated single-shot): real wall
+    reduction ~20-25%
+  - regression: all PASS unchanged (Phase 3-B GRAD-EXACT 3.59e-10,
+    Phase 3-C 5.14e-6, Phase 3-F-3 init gn2 = 7.97113 byte-id)
+
+**drin wire-in attempted + REVERTED** (commit `6fa735c7`):
+  - 3 farr_matmul + buffer copies + add-loop = anti-perf at this scale
+  - drin per-t inner-dot reduction ~32K ops, below `farr_matmul`-routing
+    granularity floor (kernel launch + buffer overhead dominates)
+  - lesson: single-pattern helper `_db_grad_accum_farr`'s reach is
+    bounded to OUTER-PRODUCT accumulators (Σ_ts dY[ts]⊗X[ts]), not
+    per-element inner-dot reductions
+
+**Measurement convention learning** (commits `e8c78f4e` claim
+retracted then double-retracted in `6fa735c7`, finally settled in
+5-run capture `285f77bf`):
+  - single-shot wall: NOT interpretable for sub-second-per-iter
+  - 3-run avg: too noisy (variance can dominate signal)
+  - **≥5-run avg = appropriate convention** for M-Mac CPU walls
+  - Future RFC 046 wall comparisons adopt 5-run convention
+
+**RFC 046 honest updates** (commits `02948744` · `285f77bf`):
+  - Phase 4-A LANDED PARTIAL section reflects 5-run reality
+  - Granularity floor (~32K ops) established as design constraint
+  - Stage 2/3 IR-level fusion is the path to RFC 046's mid-term
+    "match eager-PyTorch" target (~75% remaining wall savings)
+
+**자율 cycle 의 honest endpoint** (33 commits 본 session):
+  - flame Phase 3 = SHIPPABLE COMPLETE
+  - flame Phase 4-A-bwd = PARTIAL LANDED (single-pattern helper reach
+    completed)
+  - flame Phase 4 progression beyond this requires either Stage 2/3
+    IR pass implementation (substantial separate effort) or GPU
+    dispatch fire (cost-bearing $5-20, RFC 046 Phase 4-D)
+  - Cron `e5caaf53` 5-min auto-fire continues but cycle's mechanical
+    work has reached limit; user-directed next sub-cycle scoping
+    needed for substantive further progress
+
 ### 2026-05-17 — Phase 3-G LANDED (d5_sin/cos in flame_math + RoPE wire-in)
 landed: `stdlib/flame/flame_math.hexa` 에 d5_two_pi · d5_pi · d5_reduce
 · d5_sin · d5_cos 추가 (anima d_train5_lib §262-291 의 정확 14-term
