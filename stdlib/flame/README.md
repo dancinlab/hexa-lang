@@ -1,8 +1,25 @@
 # flame — hexa-native, compiler-only PyTorch-equivalent NN stdlib
 
-> **Status (2026-05-17): Phase 3 COMPLETE + RFC 046 Phase 4 design
-> shipped — 22 commits, 41+ falsifier PASS, regression 0, structural
-> call_builtin = 0, ~6.4k LoC.**
+> **Status (2026-05-17): Phase 3 COMPLETE + Phase 4-A-bwd LANDED +
+> Phase 4-B-2 IPCP SHIPPED + Phase 4-B-3 measurement-anchored design
+> (see `STATUS.md` for single-page consolidated state).**
+>
+> **Phase 4-B-2 IPCP SHIP**: `tool/flame_phase4b_build.sh` produces
+> a byte-identical binary with **1.28× wall** (12.574s → 9.814s 5-run
+> avg, var 1.7%) over Phase 4-A-bwd baseline. Production `./hexa build`
+> path unchanged (F-RFC047-FALLBACK-PRESERVED). Verified byte-id on
+> 3 distinct configs (d=32·3L corpus + d=8·toy decoder/block).
+>
+> **Phase 4-B-3 mechanism measurements** (3/3 micro-bench probes):
+> - boxing-elim: **4.00× MEASURED** (was 1.5-2.5× estimate)
+> - allocator-elim: **1.00× MEASURED** (was 1.3-1.7× estimate)
+> - fn-call-elim: **1.00× MEASURED** (was 1.2-1.5×, overlap-capped)
+> - **compound ceiling = 4.0×** — RFC 047 §137 ≥3× target with 33% margin
+>
+> Original Phase 3 status preserved below.
+>
+> **Status (Phase 3 SHIPPED): 22 commits, 41+ falsifier PASS,
+> regression 0, structural call_builtin = 0, ~6.4k LoC.**
 >
 > **Phase 3 correctness anchor — anima d_corpus_fire algorithm-byte-eq
 > retry SUCCESS** (RFC 045 closure):
