@@ -878,7 +878,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let cr = _lower_hexpr(ctx, e.children[0])
         let entry_id = cr.ctx.cur_block
 
-        let mut ctx2 = _new_block(cr.ctx)
+        // Pre-allocate an if-value join temp. `let x = if cond { A }
+        // else { B }` previously fell through to a const-0 default
+        // (the if branch always returned `_no_value`), so any `if`
+        // used as an expression silently bound x to 0. Both arms now
+        // copy their operand into this shared slot at end-of-branch
+        // and the join block returns it.
+        let mut ctx_pre = _fresh_local(cr.ctx, e.typ, "if_val")
+        let if_val = ctx_pre.locals[len(ctx_pre.locals) - 1]
+
+        let mut ctx2 = _new_block(ctx_pre)
         let then_id = ctx2.blocks[len(ctx2.blocks) - 1].id
         ctx2 = _new_block(ctx2)
         let else_id = ctx2.blocks[len(ctx2.blocks) - 1].id
@@ -905,16 +914,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         ctx2 = tr.ctx
         let then_returned = ctx2.has_returned
         let then_end_block = ctx2.cur_block
+        let then_has = tr.has_value
 
         // else-branch (or fall through to else_id)
         let mut else_returned = false
         let mut else_end_block = else_id
+        let mut er_op = _const_int_op(0)
+        let mut else_has = false
         if has_else {
             ctx2 = _set_cur_block(ctx2, else_id)
             let er = _lower_hexpr(ctx2, e.children[2])
             ctx2 = er.ctx
             else_returned = ctx2.has_returned
             else_end_block = ctx2.cur_block
+            er_op = er.operand
+            else_has = er.has_value
         }
 
         if has_else {
@@ -924,7 +938,23 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             }
             ctx2 = _new_block(ctx2)
             let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+            let both_yield = then_has && else_has && !then_returned && !else_returned
             if !then_returned {
+                // Copy the then-arm value into the shared if_val slot
+                // before branching to the join.
+                if both_yield {
+                    let mut ta: [Operand] = []
+                    ta.push(tr.operand)
+                    let cps = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: if_val,
+                        op: "if_val",
+                        args: ta,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx2 = _push_stmt_to(ctx2, then_end_block, cps)
+                }
                 let br_then = Stmt {
                     kind: STMT_BR,
                     dst: _miss_local(),
@@ -937,6 +967,19 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx2 = _add_edge(ctx2, then_end_block, join_id)
             }
             if !else_returned {
+                if both_yield {
+                    let mut ea: [Operand] = []
+                    ea.push(er_op)
+                    let cps = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: if_val,
+                        op: "if_val",
+                        args: ea,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx2 = _push_stmt_to(ctx2, else_end_block, cps)
+                }
                 let br_else = Stmt {
                     kind: STMT_BR,
                     dst: _miss_local(),
@@ -949,6 +992,9 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx2 = _add_edge(ctx2, else_end_block, join_id)
             }
             ctx2 = _set_cur_block(ctx2, join_id)
+            if both_yield {
+                return _value(ctx2, _local_op(if_val.id))
+            }
             return _no_value(ctx2)
         }
 
