@@ -114,6 +114,53 @@ fn _db_silu_grad(x: float) -> float {
     return s + x * s * (1.0 - s)
 }
 
+// Phase 3-J helper: project Y [T·d_out] = X [T·d_in] · W^T [d_in·d_out]
+// via the same transpose-matmul-transpose pattern as anima
+// d5_proj_batch_g — routing through the C farr_matmul kernel so clang
+// FMA fusion behaves consistently across flame and anima. Y[t][r] =
+// Σ_c W[r·d_in + c] · X[t·d_in + c]. inputs (W, X) read at given
+// offsets in their packed farrs; Y written at given offset. Allocates
+// 3 scratch farrs (xbt [d_in·T], W_buf [d_out·d_in], C [d_out·T]).
+fn _db_proj_batch_farr(W: int, W_off: int, X: int, X_off: int,
+                       Y: int, Y_off: int,
+                       T: int, d_out: int, d_in: int) {
+    // transpose X to xbt [d_in · T]   (xbt[c·T + t] = X[t·d_in + c])
+    let xbt = farr_zeros(d_in * T)
+    let mut t = 0
+    while t < T {
+        let mut c = 0
+        while c < d_in {
+            let _ = farr_set(xbt, c * T + t,
+                             farr_get(X, X_off + t * d_in + c))
+            c = c + 1
+        }
+        t = t + 1
+    }
+    // copy W slice into standalone farr W_buf [d_out · d_in]
+    let W_buf = farr_zeros(d_out * d_in)
+    let mut p = 0
+    while p < d_out * d_in {
+        let _ = farr_set(W_buf, p, farr_get(W, W_off + p))
+        p = p + 1
+    }
+    // C = W_buf · xbt   shape [d_out · T]
+    let C = farr_matmul(W_buf, d_out, d_in, xbt, T)
+    // transpose C → Y  (Y[t·d_out + r] = C[r·T + t])
+    let mut r = 0
+    while r < d_out {
+        let mut t2 = 0
+        while t2 < T {
+            let _ = farr_set(Y, Y_off + t2 * d_out + r,
+                             farr_get(C, r * T + t2))
+            t2 = t2 + 1
+        }
+        r = r + 1
+    }
+    let _ = farr_free(xbt)
+    let _ = farr_free(W_buf)
+    let _ = farr_free(C)
+}
+
 // ── one decoder block forward ──────────────────────────────────────────
 // Reads X (T·d) and Bp (packed params), cos/sin (T·hd each).
 // Writes Xout + all cache fields into Bc (caller-allocated and pre-zeroed).
@@ -175,43 +222,11 @@ pub fn nn_decoder_block_fwd(X: int, Bp: int, Bc: int,
         i = i + 1
     }
 
-    // 2. Q/K/V projections (Q[t][r] = Σ_c Wq[r·d+c] · rin[t·d+c])
-    let mut t = 0
-    while t < T {
-        let mut r = 0
-        while r < d {
-            let mut acc = 0.0
-            let mut c = 0
-            while c < d {
-                acc = acc + farr_get(Bp, WQ + r * d + c)
-                          * farr_get(Bc, oRin + t * d + c)
-                c = c + 1
-            }
-            let _ = farr_set(Bc, oQ + t * d + r, acc)
-            r = r + 1
-        }
-        t = t + 1
-    }
-    let mut t_k = 0
-    while t_k < T {
-        let mut r = 0
-        while r < kvd {
-            let mut acc_k = 0.0
-            let mut acc_v = 0.0
-            let mut c = 0
-            while c < d {
-                acc_k = acc_k + farr_get(Bp, WK + r * d + c)
-                              * farr_get(Bc, oRin + t_k * d + c)
-                acc_v = acc_v + farr_get(Bp, WV + r * d + c)
-                              * farr_get(Bc, oRin + t_k * d + c)
-                c = c + 1
-            }
-            let _ = farr_set(Bc, oK + t_k * kvd + r, acc_k)
-            let _ = farr_set(Bc, oV + t_k * kvd + r, acc_v)
-            r = r + 1
-        }
-        t_k = t_k + 1
-    }
+    // 2. Q/K/V projections via anima-byte-eq farr_matmul-routed helper.
+    //    Y[t][r] = Σ_c W[r·d_in + c] · X[t·d_in + c]  for X = rin.
+    _db_proj_batch_farr(Bp, WQ, Bc, oRin, Bc, oQ, T, d,   d)
+    _db_proj_batch_farr(Bp, WK, Bc, oRin, Bc, oK, T, kvd, d)
+    _db_proj_batch_farr(Bp, WV, Bc, oRin, Bc, oV, T, kvd, d)
 
     // 3. RoPE rotation on Q (per-head) and K (per-kv-head)
     let half = hd / 2
@@ -363,26 +378,10 @@ pub fn nn_decoder_block_fwd(X: int, Bp: int, Bc: int,
     }
     let _ = farr_free(srow_at)
 
-    // 5. output projection: attn_out[t][r] = Σ_c Wo[r·d+c] · ctx[t·d+c]
-    // ctx lives at oCtx; we compute attn_out into a temp scratch
-    // (not cached — only hstate = X + attn_out is needed for bwd).
+    // 5. output projection: attn_out[t][r] = Σ_c Wo[r·d+c] · ctx[t·d+c].
+    // farr_matmul-routed (anima d5_proj_batch_g pattern).
     let attn_out = farr_zeros(T * d)
-    let mut t_o = 0
-    while t_o < T {
-        let mut r = 0
-        while r < d {
-            let mut acc = 0.0
-            let mut c = 0
-            while c < d {
-                acc = acc + farr_get(Bp, WO + r * d + c)
-                          * farr_get(Bc, oCtx + t_o * d + c)
-                c = c + 1
-            }
-            let _ = farr_set(attn_out, t_o * d + r, acc)
-            r = r + 1
-        }
-        t_o = t_o + 1
-    }
+    _db_proj_batch_farr(Bp, WO, Bc, oCtx, attn_out, 0, T, d, d)
 
     // 6. residual: hstate = X + attn_out
     let mut idx = 0
@@ -417,45 +416,33 @@ pub fn nn_decoder_block_fwd(X: int, Bp: int, Bc: int,
         i2 = i2 + 1
     }
 
-    // 8. SwiGLU per-position: a = Wg·rin2 (h-len), b = Wu·rin2 (h-len),
-    // s[k] = silu(a[k])·b[k], o = Wd·s (d-len)
+    // 8. SwiGLU: a = Wg·rin2 (T·h), b = Wu·rin2 (T·h), s = silu(a)·b,
+    //    o = Wd·s (T·d). Projections farr_matmul-routed (anima eq).
+    _db_proj_batch_farr(Bp, WG, Bc, oRin2, Bc, oSwA, T, h, d)
+    _db_proj_batch_farr(Bp, WU, Bc, oRin2, Bc, oSwB, T, h, d)
+    // s[ts·h + k] = silu(a) * b, in place (sw_s stored separately)
     let mut ts = 0
     while ts < T {
-        // a = Wg · rin2[ts]
         let mut k = 0
         while k < h {
-            let mut acc_a = 0.0
-            let mut acc_b = 0.0
-            let mut c = 0
-            while c < d {
-                acc_a = acc_a + farr_get(Bp, WG + k * d + c)
-                              * farr_get(Bc, oRin2 + ts * d + c)
-                acc_b = acc_b + farr_get(Bp, WU + k * d + c)
-                              * farr_get(Bc, oRin2 + ts * d + c)
-                c = c + 1
-            }
-            let _ = farr_set(Bc, oSwA + ts * h + k, acc_a)
-            let _ = farr_set(Bc, oSwB + ts * h + k, acc_b)
-            let _ = farr_set(Bc, oSwS + ts * h + k, _db_silu(acc_a) * acc_b)
+            let av = farr_get(Bc, oSwA + ts * h + k)
+            let bv = farr_get(Bc, oSwB + ts * h + k)
+            let _ = farr_set(Bc, oSwS + ts * h + k, _db_silu(av) * bv)
             k = k + 1
-        }
-        // o = Wd · s[ts]   (d-len)
-        let mut r = 0
-        while r < d {
-            let mut acc_o = 0.0
-            let mut kk = 0
-            while kk < h {
-                acc_o = acc_o + farr_get(Bp, WD + r * h + kk)
-                              * farr_get(Bc, oSwS + ts * h + kk)
-                kk = kk + 1
-            }
-            // 9. residual: Xout = hstate + sw_o
-            let _ = farr_set(Bc, oXout + ts * d + r,
-                             farr_get(Bc, oHstate + ts * d + r) + acc_o)
-            r = r + 1
         }
         ts = ts + 1
     }
+    // o = Wd·s   shape [T·d];  output into a temp, then add to hstate
+    let sw_o = farr_zeros(T * d)
+    _db_proj_batch_farr(Bp, WD, Bc, oSwS, sw_o, 0, T, d, h)
+    // 9. residual: Xout = hstate + sw_o
+    let mut idx2 = 0
+    while idx2 < T * d {
+        let _ = farr_set(Bc, oXout + idx2,
+                         farr_get(Bc, oHstate + idx2) + farr_get(sw_o, idx2))
+        idx2 = idx2 + 1
+    }
+    let _ = farr_free(sw_o)
 }
 
 // ── one decoder block backward ─────────────────────────────────────────
