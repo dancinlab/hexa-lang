@@ -198,6 +198,34 @@ Theoretical random-softmax baseline: `||softmax−onehot||² ≈ (1 − 1/V)² +
 
 **Refined source #4 characterization**: the impl-level drift is per-window ~3.9e-6 (close to 256-element softmax's ~256-ulp accumulation floor). 8-window sum amplifies it to ~3.12e-5. Algorithm IS byte-eq at the per-window-sum-floor; only the integer-multiplier-of-windows compounds it. This is exactly the RFC 040 §2.2 TOL_MATMUL class result at the appropriate scale.
 
+### dt_ln bias quantification (commit `flame_dt_ln_bias_test`, 2026-05-17)
+
+Direct measurement of `dt_ln(p) − log(p)` at 11 probe p values:
+
+```
+p         dt_ln(p)    log(p)       |Δ|         rel
+1e-06    -5.14154    -13.8155     8.67        63%      ← CE clamp regime
+1e-05    -5.14068    -11.5129     6.37        55%
+1e-04    -5.13206    -9.21034     4.08        44%
+1e-03    -5.04789    -6.90776     1.86        27%
+4e-03    -4.79157    -5.52146     0.73        13%      ← V=256 uniform p
+1e-02    -4.37053    -4.60517     0.23        5.1%
+5e-02    -2.99429    -2.99573     0.0014      0.05%
+1e-01    -2.30258    -2.30259     6.17e-06    2.7e-06
+3e-01    -1.20397    -1.20397     4.22e-15    3.5e-15
+5e-01    -0.693147   -0.693147    2.22e-16    3.2e-16  ← machine eps
+9e-01    -0.105361   -0.105361    1.39e-17    1.3e-16
+```
+
+**dt_ln (atanh 24-term Taylor) is high-precision for p ≥ 0.1** (machine ε), **moderate bias 5% in [0.01, 0.1]**, **HIGH bias 13% at p ≈ 4e-3 (V=256 uniform softmax)**, **clipped to dt_ln(1e-6) ≈ -5.14 vs true log(1e-6) = -13.82 in CE clamp domain (63% bias!)**. The atanh series at |u| → 1 converges to a finite asymptotic limit (around −5.14), failing to capture true log's −∞ behavior.
+
+**Implication for CE-loss vs gn2 paths**:
+- **gn2 metric** (`||softmax − onehot||²`, Phase 3-F-3 init 7.97113): NO log — gn2 path is **unaffected by dt_ln bias**. The 3.12e-5 epoch-sum drift here is pure source #4 (cross-impl reduction-order at softmax + onehot subtraction).
+- **CE-loss metric** (`−dt_ln(p_t)`): biased by 13% at untrained init (p_t ≈ 1/V uniform), 63% at clamped p_t = 1e-6 — but reported value still self-consistent across runs of the same impl. Both flame and anima exhibit this SAME bias (algorithm identical).
+- **Trained regime**: p_t → 1 → dt_ln(p_t) → 0 → bias → 0. flame final CE 1.32e-6 ≈ anima final CE (also small) — both unaffected once training converges.
+
+This finalizes the source isolation: **the 3.12e-5 cross-impl epoch-sum gn2 drift is independent of dt_ln** (gn2 = sum-of-squares, no log). dt_ln bias contributes to CE-loss-value reporting but not to the gn2 trajectory or the gradient (since `dl = softmax − onehot` in nn_decoder_grad bypasses dt_ln).
+
 **Honest scope update**: Phase 3-C GRAD-EXACT 2.66e-08 max rel is verified at **toy config only** (T=3, d=8, V=8, n_layer=2). At the full d=32·3L config used in Phase 3-F-3 anima byte-eq retry, flame's analytic gradient may differ from finite-difference by ~3× at deep weights, with the corpus-level training trajectory preserved (chaotic dynamics). The right F-* falsifier target across configs is **trajectory shape similarity** (Phase 3-I dump), NOT per-element GRAD-EXACT at full scale.
 
 This is not a "flame correctness regression" — it's an unverified-claim correction in Phase 3-C's stated scope. Either source 1 (dt_ln series bias dominates) or source 2 (nn_decoder_grad full-config gap) is the explanation; identifying which requires either (a) replacing dt_ln with libm log in nn_decoder_ce_loss + re-measuring the same probe (isolates source 1), or (b) writing the full-config GRAD-EXACT central-diff suite at small representative weights (probes source 2). Both are mechanical follow-ups for a separate cycle.
