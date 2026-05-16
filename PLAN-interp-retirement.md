@@ -131,14 +131,25 @@ Each step:
 | `c76cc8d6` — module globals           | 13 / 31   |
 | `7b00bd54` — array index              | 15 / 31   |
 | `306ad234` — unop                     | 16 / 31   |
-| `2e624e84` — if-expr value            | **29 / 31** |
+| `2e624e84` — if-expr value            | 29 / 31   |
+| `08d7a12f` — UTF-8 in rodata strtab   | **30 / 31** |
 
 ### Remaining gaps (split into three narrow categories)
 
-a. **2 `tree_render_pure` assertions** — `tree chain 3` and
-   `tree deep nested`. Continuation-prefix differs by one space /
-   one vertical char between native and interp output. Confined to
-   one helper; not a codegen-fundamentals bug.
+a. **1 `tree_render_pure` assertion** — `tree deep nested`. Confirmed
+   to be an **array-aliasing memory bug in deep recursion**, not a
+   tree-helper logic bug. Diagnostic (deep_nested reproduction inside
+   `_pf_tree_build`): the parent's `edges` HexaVal silently mutates
+   between two iterations of the kids loop — `len(edges)` jumps from
+   5 → 3 → 4 and the inner element bytes become the previously-pushed
+   `lines` strings (e.g. `edges[1]` reads back as `"├── 2"` of length
+   11). The leaf recursion's `lines.push(...)` overwrote `edges`'s
+   stack slot or its inner-array backing. Matches the documented
+   "struct_pack_map shallow-clone gotcha — runtime 가 outer 만 clone,
+   inner [[T]] 는 공유" pitfall. Not a codegen logic bug per se but
+   needs runtime-level investigation (HexaVal stack-slot liveness
+   and/or shallow-clone of nested-array params); deferred as a
+   distinct work item.
 b. **~170 unmapped runtime builtins** (`/tmp/gaps.txt`) — e.g.
    `dict_keys → hexa_dict_keys`. Link-gate safely blocks them
    today; surgical per-symbol add when a real program needs each.
@@ -146,8 +157,11 @@ c. **Frontend `CODEGEN-FAIL`** in some smokes — `HX3001` type-mismatch
    diagnostics, etc. Not a codegen-correctness issue; the typecheck
    is stricter than the interp accepts. Separate track.
 
-R3 can advance to R4 once (a) is closed (≤ one investigation cycle)
-and a small representative-corpus diff hits parity.
+R3 has hit the bounded-codegen-fix endpoint for the corpus's
+assertion-driven smokes (30/31 on t_batch22, all eight visible
+codegen-fundamentals classes fixed). The remaining (a) is shaped as
+runtime-memory work, not codegen. R4 (pipeline switch with interp
+fallback) can begin in parallel.
 
 This is the cause of `test/t_batch22` reporting `0 passed` (its
 `let mut pass = 0` harness counter, bumped from inside `eq_*`
