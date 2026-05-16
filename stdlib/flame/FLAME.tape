@@ -804,3 +804,53 @@ Phase 4-B-3 FINAL ship status:
 Next user-gate: Path D (GPU dispatch fire, $5-20) recommended — only
 path to ≥3× target. Path B (matmul primitive) ~1.6× cap. Path C
 (ship A2 as Phase 4-B-3 milestone).
+
+### 2026-05-17 — 🎯 Phase 4-B-3 FULLY SHIPPED — A2 fwd+bwd 2.74× wall
+11-commit extension of the prior 34-commit cycle (commit 56060fc6) —
+delivers Phase 4-B-3 FULLY SHIPPED with A2 fwd+bwd primitive byte-eq
++ 2.74× wall MEASURED. FAR exceeds prior 1.14×/1.4×-ceiling projection.
+
+Cycle progression:
+(15) A2 build automation v1 (commit 7702ff24, fwd-only single command)
+(16) Verify_all extended A2 check (commit 13bf8b14) — 10/10 artifacts PASS
+(17) PHASE4B3_BWD_AUDIT.md (commit d0cec0bb) — bwd 9-section roadmap
+(18-22) 5 bwd leaf primitive byte-eq:
+     - residual bwd (commit d2b7e29d)
+     - RMSNorm vjp (commit 0fd8bcc3)
+     - SwiGLU silu_grad+Hadamard (commit 623a7c72)
+     - RoPE inverse rotation (commit 929c8591)
+     - Attention bwd FINAL (commit 0e9ef425)
+(23) 🎯 A2 bwd SHIPPED (commit 8012c15a) — 400 C lines hand-translation
+     primitive byte-id with baseline + 2.74× wall MEASURED
+(24) A2 build automation extended fwd+bwd (commit e9350973)
+(25) STATUS fifth iteration + FLAME.tape ## Log (this entry)
+
+🚀 WALL MEASUREMENT (5-run avg, M-Mac):
+  baseline:        17.94, 17.39, 14.73, 15.19, 15.61 → avg 16.170s
+  A2 fwd-only:     10.46, 10.62, 10.38, 13.09, 13.39 → avg 11.587s
+  A2 fwd+bwd FULL:  6.84,  5.75,  5.66,  5.51,  5.78 → avg  5.908s
+
+Speedups:
+  baseline → A2 fwd:        1.40×
+  baseline → A2 fwd+bwd:    **2.74×** (-63%)  🎯 ≥3× target 88%
+  flame:anima ratio:        0.731× (baseline) → **0.267× (~3.7× faster)**
+
+Why 2.74× FAR EXCEEDS prior 1.14×/1.4×-ceiling projection:
+- bwd has MORE boxed ops than fwd (gradient accumulators) — primitive
+  contribution larger than expected
+- clang -O2 + literal dims + primitive arithmetic vectorizes
+  aggressively (NEON arm64)
+- Cumulative A2 fwd+bwd > sum of parts (synergistic)
+
+Phase 4-B-3 FULLY SHIPPED state:
+- 10 leaf byte-eq PASS (5 fwd + 5 bwd)
+- 3 mechanism probes MEASURED (boxing 4× / alloc 1× / fncall 0.12×)
+- 2 SHIP milestones (Phase 4-B-2 IPCP + Phase 4-B-3 A2 fwd+bwd)
+- 4 build wrappers (IPCP / b3 wired / A2 fwd v1 / A2 fwd+bwd full)
+- Self-verifying battery (10/10 artifacts) + reproducible single-command builds
+- 11 design docs + 5 STATUS iterations + 3 FLAME.tape ## Log entries
+
+Next user-gate (with FINAL evidence):
+- Path B: matmul primitive → ~3.0-3.5× projected (PUSH PAST ≥3× CPU)
+- Path D: GPU dispatch ($5-20, ≥3× highly reachable + scales)
+- Path C: Ship FULLY SHIPPED milestone (already done, recommended)
