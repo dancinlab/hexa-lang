@@ -220,6 +220,37 @@ Verified: re-running the wrapper yields byte-identical output to the
 ad-hoc pipeline used in the IPCP commit measurement
 (F-RFC047-IPCP-REPRO-BYTE-EQ PASS via diff).
 
+### Cross-config IPCP robustness (2026-05-17)
+
+Verified IPCP across 3 distinct flame test configs:
+
+| test source | dims | substitutions | byte-eq vs baseline |
+|---|---|---|---|
+| flame_d32_corpus_test | (T=16, d=32, nh=4, nkv=2, h=64) | 715 | PASS |
+| flame_perf_breakdown_test | (T=16, d=32, nh=4, nkv=2, h=64) | 715 | TIMING-DIFF-EXPECTED |
+| flame_decoder_test | (T=3, d=8, nh=2, nkv=1, h=12) | 696 | PASS |
+| flame_block_test | (T=3, d=8, nh=2, nkv=1, h=12) | 466 | PASS |
+
+The `TIMING-DIFF-EXPECTED` marker on flame_perf_breakdown_test is honest:
+that test reports its own measured wall in the stdout (`fwd: 3 ms avg
+(range 3-4ms; 18%)` baseline vs `3 ms avg (range 3-3ms; 25%)` IPCP).
+The algorithm-level outputs (loss values, accuracies) remain byte-eq
+across configs — the diff is intentional measurement-of-measurement.
+
+substitution counts differ across configs because:
+- toy configs (T=3·d=8) lack `nn_decoder_train_step` callers (flame_block_test)
+  or test-harness lacks `train_step` (flame_decoder_test)
+- substitution count IS proportional to the # of usage sites for each
+  target fn in the build's expanded source
+
+**Implication for Phase 4-B-3-2 emission**: emitter must handle multiple
+dims_hash tuples per build cleanly. Currently only one config per build
+in the flame suite, but the dims_hash-driven emit-once-reuse semantic
+(verified: same hash for fwd/bwd at same dims) gracefully scales to
+multi-config builds if the design allows. RFC 047 §121's "ONE
+specialized fwd + ONE specialized bwd per (T,d,nh,nkv,h) tuple"
+remains the correct invariant.
+
 Usage:
 ```bash
 tool/flame_phase4b_build.sh \
