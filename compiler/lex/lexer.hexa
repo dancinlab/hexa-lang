@@ -76,6 +76,12 @@ fn keyword_kind(word: string) -> TokenKind {
     if word == "match" { return TokenKind::KwMatch }
     if word == "pub" { return TokenKind::KwPub }
     if word == "import" { return TokenKind::KwImport }
+    // `use "path"` is an interp-supported module-reference directive
+    // (see self/hexa_full.hexa § keyword_kind / atlas_*_smoke headers).
+    // For aprime_cc we alias it to `import` at lex time so the same
+    // resolve/splice flow applies — the test corpus uses both
+    // interchangeably.
+    if word == "use" { return TokenKind::KwImport }
     if word == "as" { return TokenKind::KwAs }
     if word == "true" { return TokenKind::KwTrue }
     if word == "false" { return TokenKind::KwFalse }

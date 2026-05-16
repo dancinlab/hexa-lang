@@ -1663,6 +1663,20 @@ fn _splice_imported_items(items: [Item], importer: string) {
                 let alt = _import_normalize(it.name)
                 if file_exists(alt) { resolved = alt }
             }
+            // `use "compiler/atlas/parser"` and similar omit the .hexa
+            // extension; the interp + hexa_v2 paths auto-append it.
+            // Mirror that here so the aprime_cc-direct compile of
+            // every atlas_*_smoke (10 files) doesn't HX0010 on the
+            // very first use-line.
+            if !file_exists(resolved) {
+                let primary_hexa = primary + ".hexa"
+                if file_exists(primary_hexa) {
+                    resolved = primary_hexa
+                } else {
+                    let alt_hexa = _import_normalize(it.name) + ".hexa"
+                    if file_exists(alt_hexa) { resolved = alt_hexa }
+                }
+            }
             if _visited_contains(resolved) {
                 // already loaded (cycle or diamond) — skip silently.
             } else {
@@ -1697,6 +1711,74 @@ pub fn parse(tokens: [Token], file: string) -> Module {
     p_visited_imports.push(entry_resolved)
     let top = _parse_module_one(tokens, file)
     _splice_imported_items(top.items, file)
+    // Multi-main collapse: every imported file with top-level
+    // executable statements (`pub let X = E` injects `X = E` into a
+    // synth-main) ends up with its own `fn main` after splicing, and
+    // we'd end up with several `_main` symbols at the assembler stage.
+    // Collapse: keep the LAST `main` (the entry module's), prepend
+    // every earlier main's body into it so init order is leaves-
+    // first (matches the existing import splice order).
+    let mut mains: [i64] = []
+    let mut mi = 0
+    while mi < len(p_splice_acc) {
+        let it = p_splice_acc[mi]
+        if item_is_fn(it.kind) && it.name == "main" {
+            mains.push(mi)
+        }
+        mi = mi + 1
+    }
+    if len(mains) > 1 {
+        let last = mains[len(mains) - 1]
+        let mut merged_children: [Expr] = []
+        let mut k = 0
+        while k < len(mains) {
+            let idx = mains[k]
+            let body = p_splice_acc[idx].body
+            if body.kind == ExprKind::Block {
+                let mut bi = 0
+                while bi < len(body.children) {
+                    merged_children.push(body.children[bi])
+                    bi = bi + 1
+                }
+            } else {
+                merged_children.push(body)
+            }
+            k = k + 1
+        }
+        let last_item = p_splice_acc[last]
+        let new_body = Expr {
+            kind: ExprKind::Block,
+            span: last_item.body.span,
+            text: "",
+            children: merged_children,
+            atlas_ref: empty_atlas()
+        }
+        p_splice_acc[last] = Item {
+            kind: last_item.kind,
+            name: last_item.name,
+            span: last_item.span,
+            annotations: last_item.annotations,
+            params: last_item.params,
+            return_type: last_item.return_type,
+            body: new_body,
+            is_pub: last_item.is_pub
+        }
+        // Drop the earlier mains from the list. Build a fresh items[]
+        // skipping them, then point p_splice_acc at it.
+        let mut filtered: [Item] = []
+        let mut j = 0
+        while j < len(p_splice_acc) {
+            let mut is_dup_main = false
+            let mut mk = 0
+            while mk < len(mains) - 1 {
+                if j == mains[mk] { is_dup_main = true }
+                mk = mk + 1
+            }
+            if !is_dup_main { filtered.push(p_splice_acc[j]) }
+            j = j + 1
+        }
+        p_splice_acc = filtered
+    }
     // `imports` reflects only the entry file's direct imports — used for
     // diagnostics/UI. The flat-splice pivot puts the actual cross-file items
     // in `p_splice_acc`.
