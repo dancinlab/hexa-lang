@@ -804,6 +804,35 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     if k == "assign" {
         if len(e.children) < 2 { return _no_value(ctx) }
         let lhs = e.children[0]
+        // ── index-set: `arr[i] = v` / `map[k] = v` ─────────────
+        // The prior path lowered an index lhs the same way as an
+        // ident lhs (fresh local + rebind), which silently dropped
+        // the store on the actual container — every `d["k"] = v`
+        // left the map empty (caught while sweeping
+        // test/regress_dict_keys_let_bind.hexa through aprime_cc).
+        // Route through hexa_index_set(container, key, val); the
+        // runtime dispatches arrays via hexa_array_set and unwraps
+        // VALSTRUCT, mirroring the existing index-get path
+        // (7b00bd54).
+        if lhs.kind == "index" && len(lhs.children) >= 2 {
+            let br = _lower_hexpr(ctx, lhs.children[0])
+            let kr = _lower_hexpr(br.ctx, lhs.children[1])
+            let rr2 = _lower_hexpr(kr.ctx, e.children[1])
+            let mut args: [Operand] = []
+            args.push(br.operand)
+            args.push(kr.operand)
+            args.push(rr2.operand)
+            let s = Stmt {
+                kind: STMT_ASSIGN,
+                dst: _miss_local(),
+                op: "index_set",
+                args: args,
+                target_block: -1,
+                target_block_else: -1
+            }
+            let ctx_s = _push_stmt(rr2.ctx, s)
+            return _no_value(ctx_s)
+        }
         let rr = _lower_hexpr(ctx, e.children[1])
         let mut ctx2 = rr.ctx
         let mut dst = _miss_local()

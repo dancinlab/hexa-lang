@@ -1190,6 +1190,19 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
             return buf
         }
+        // index_set: `arr[i] = v` / `map[k] = v`. The hir_to_mir
+        // assign branch lowers index-lhs assignments to STMT_ASSIGN
+        // op="index_set" with args = [container, key, value]; no dst
+        // local is consumed (the store is the side effect). Three
+        // HexaVal pair args fit in x0..x5 (AAPCS64); no overflow.
+        if s.op == "index_set" && len(s.args) >= 3 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // container
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // key
+            buf = _hv_load(buf, s.args[2], st, rm, "x4", "x5")  // value
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_index_set"),
+                             "index_set: hexa_index_set"))
+            return buf
+        }
         if len(s.args) >= 1 {
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
