@@ -213,3 +213,14 @@ Phase 3 의 falsifier:
   floor 등)
 
 flame 코드 LoC 총 ~2.8k (impl + test + SSOT).
+
+### 2026-05-17 — Phase 3-A LANDED (optim_lib, 1/1 PASS)
+landed: `stdlib/flame/{optim_lib.hexa, flame_optim_test.hexa}`. AdamW
+thin wrapper 가 같은 RFC 034 `adamw_step` builtin 을 호출 — namespace
+의미만 다름 (opt_* 는 caller-driven; ag_* 는 autograd-tape composed).
+- F-RFC043-OPTIM-EQ PASS — opt_adamw_step vs ag_adamw_step 10-step
+  trajectory byte-eq. transitively RFC 034 5/5 oracle bit-equal
+  trajectory 도 상속.
+- regression sweep 무변화.
+Phase 3-B 진입 — nn_decoder_block_fwd / nn_decoder_block_bwd
+(nn_* primitives 의 composition = d5_block_fwd/bwd 등가).

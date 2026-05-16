@@ -38,8 +38,10 @@
   autograd_lib.hexa -> "[LANDED 2026-05-16 Phase 1] reverse-mode tape thin wrapper over RFC 034 ad_*"
   nn_lib.hexa -> "[Phase 2 ALL 7 layers LANDED 2026-05-16: Linear + RMSNorm + Embedding + LMHead + RoPE + SwiGLU + Attention-core fwd/bwd, 17/17 PASS]"
   flame_nn_test.hexa -> "[LANDED 2026-05-16] selftest entrypoint for nn_lib (F-RFC043-LAYER-EQ-* 17 falsifiers); includes ROPE-ORTHO (Rᵀ·R = I machine-ε) + ATTN-CAUSAL (P[hh,i,j>i]=0 closed math invariants) — g3 real-limit anchors"
-  optim_lib.hexa -> "[planned] AdamW (RFC 040 B2)"
-  train_lib.hexa -> "[planned] compiled train_step + CE loss"
+  optim_lib.hexa -> "[Phase 3-A LANDED 2026-05-17: AdamW thin wrapper, F-RFC043-OPTIM-EQ 1/1 PASS, byte-eq to ag_adamw_step]"
+  flame_optim_test.hexa -> "[LANDED 2026-05-17 Phase 3-A] selftest entrypoint for optim_lib"
+  decoder_block_lib.hexa -> "[Phase 3-B planned] one decoder block (RMSNorm + GQA-attn + residual + RMSNorm + SwiGLU + residual) as nn_* composition"
+  train_lib.hexa -> "[Phase 3-C planned] compiled train_step + 80-step trajectory (F-RFC043-STEP-EQ ⟸ campaign d=32·3L oracle 7.97116→3.73374e-07)"
   note = "[LANDED] = built + falsifier PASS. lib-split mandatory (compiled: main/_selftest 동거 시 C 심볼 중복). 각 selftest 는 독립 entrypoint 파일."
 
 # ─── §3 Governance ───────────────────────────────────────────────────
@@ -315,6 +317,18 @@ flame Phase 2 = COMPLETE. ConsciousDecoderV2 의 7 building block 전체
 compiled-native. ~2.8k LoC stdlib/flame/ landed.
 
 Phase 3 gate (optim_lib + train_lib · F-RFC043-STEP-EQ) 충족:
+
+### 2026-05-17 — Phase 3-A LANDED (optim_lib, 1/1 PASS)
+landed: `stdlib/flame/{optim_lib.hexa, flame_optim_test.hexa}`. AdamW
+thin wrapper — RFC 034 `adamw_step` builtin 위 namespace 명시 (opt_*
+는 reverse-pass 가 끝난 후 caller-driven optimizer step; ag_* 는
+autograd-tape composed). 동일 numerics, 다른 호출 의도.
+- F-RFC043-OPTIM-EQ PASS — opt_adamw_step vs ag_adamw_step 10-step
+  trajectory byte-eq (max|{W, m, v}| = 0.0 — same builtin, transitively
+  RFC 034 5/5 oracle byte-eq trajectory 상속).
+- regression: 모든 prior PASS 유지.
+Phase 3-B = decoder_block composition (nn_* primitives 의 fwd/bwd
+composition; d5_block_fwd/bwd 등가, 한 layer).
 - optim_lib = RFC 034 의 adamw_step 위의 wrapper (이미 ag_adamw_step
   으로 검증됨; named wrapper 만 추가)
 - train_lib = compiled train_step (fwd + CE + bwd + AdamW 의 묶음)
