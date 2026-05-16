@@ -108,6 +108,12 @@
   branch = "rfc043-hexa-torch" ; sha = "4dcaf80f"
   consolidates = "042 SUBSUMED · 041 kernel-backend · 040 tensor-backend · 034 autograd-foundation"
 
+@X x_rfc044 := "RFC 044 — flame Phase 3 algorithmic byte-eq with anima oracle (CLOSURE)" :: rfc [d=2026-05-17 active]
+  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_044_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md"
+  branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
+  closes = "F-RFC043-STEP-EQ at algorithm-byte-eq tier · 40 falsifier PASS · regression 0 · structural call_builtin = 0"
+  evidence = "16-commit chain Phase 3-A..3-H · gn2[0]=7.97113 vs anima 7.97116 |Δ|=3.12e-5 · acc 8/8 = anima 8/8 · init weight byte-id max|Δ|=0.0"
+
 @X x_rfc_chain := "backing RFCs 040/041/042/034" :: rfc [d=2026-05-16 active]
   rfc_040 = "farr GPU/CUDA backend (device-farr + cuBLAS) — inbox/, branch rfc/farr-gpu-cuda-backend (design 95c208f6)"
   rfc_041 = "Phase B/B2 real CUDA kernels — branch rfc041-042-upstream-needs dae35fee (currently only farr_matmul_gpu has a real kernel; rest TODO[cuda] -1 stubs)"
