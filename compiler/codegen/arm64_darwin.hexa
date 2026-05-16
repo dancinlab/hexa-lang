@@ -999,6 +999,35 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "to_float"      { return "hexa_to_float" }
     if name == "to_bool"       { return "hexa_to_bool" }
     if name == "to_string"     { return "hexa_to_string" }
+    // math / formatting — HexaVal-in / HexaVal-out, no ret-box needed.
+    // Each verified to exist in self/runtime.c before mapping (the
+    // unmapped-is-safer-than-mis-mapped policy in this file's header
+    // comment still holds for ret-box/cstring shapes that aren't here).
+    if name == "abs"           { return "hexa_abs" }
+    if name == "argmax"        { return "hexa_argmax" }
+    if name == "bin"           { return "hexa_bin" }
+    if name == "ceil"          { return "hexa_ceil" }
+    if name == "clamp"         { return "hexa_clamp" }
+    if name == "cos"           { return "hexa_cos" }
+    if name == "exp"           { return "hexa_exp" }
+    if name == "floor"         { return "hexa_floor" }
+    if name == "format"        { return "hexa_format" }
+    if name == "hex"           { return "hexa_hex" }
+    if name == "log"           { return "hexa_log" }
+    if name == "log2"          { return "hexa_log2" }
+    if name == "log10"         { return "hexa_log10" }
+    if name == "pad_left"      { return "hexa_pad_left" }
+    if name == "pad_right"     { return "hexa_pad_right" }
+    if name == "pow"           { return "hexa_pow" }
+    if name == "random"        { return "hexa_random" }
+    if name == "round"         { return "hexa_round" }
+    if name == "sin"           { return "hexa_sin" }
+    if name == "sleep"         { return "hexa_sleep" }
+    if name == "sqrt"          { return "hexa_sqrt" }
+    if name == "tan"           { return "hexa_tan" }
+    if name == "tanh"          { return "hexa_tanh" }
+    if name == "timestamp"     { return "hexa_timestamp" }
+    if name == "utc_iso_now"   { return "hexa_utc_iso_now" }
     if name == "trim"          { return "rt_str_trim" }
     if name == "type_of"       { return "hexa_type_of" }
     if name == "write_file"    { return "rt_write_file" }
