@@ -37,8 +37,10 @@ SRC="$1"
 OUT="$2"
 STEM=$(basename "$SRC" .hexa)
 B3_C="build/artifacts/${STEM}_b3.c"
-PRIM_SRC="tool/flame_phase4b3_block_fwd_primitive.c"
-PRIM_STRIPPED="build/artifacts/${STEM}_prim_stripped.c"
+PRIM_FWD="tool/flame_phase4b3_block_fwd_primitive.c"
+PRIM_BWD="tool/flame_phase4b3_block_bwd_primitive.c"
+PRIM_FWD_STRIPPED="build/artifacts/${STEM}_prim_fwd_stripped.c"
+PRIM_BWD_STRIPPED="build/artifacts/${STEM}_prim_bwd_stripped.c"
 B3_REDIRECTED="build/artifacts/${STEM}_b3_a2_redirected.c"
 A2_C="build/artifacts/${STEM}_a2.c"
 
@@ -58,15 +60,20 @@ if [ ! -f "$B3_C" ]; then
     exit 1
 fi
 
-echo "[3.8] strip standalone-only block from primitive C"
-sed '/^#ifdef FLAME_BLOCK_PRIM_STANDALONE/,/^#endif/d' "$PRIM_SRC" > "$PRIM_STRIPPED"
+echo "[3.8] strip standalone-only blocks from primitive C files"
+sed '/^#ifdef FLAME_BLOCK_PRIM_STANDALONE/,/^#endif/d' "$PRIM_FWD" > "$PRIM_FWD_STRIPPED"
+sed '/^#ifdef FLAME_BLOCK_BWD_PRIM_STANDALONE/,/^#endif/d' "$PRIM_BWD" > "$PRIM_BWD_STRIPPED"
 
-echo "[3.9] sed-redirect caller: _fwd(...) → _fwd_primitive(...)"
-sed 's|flame_block_T16_d32_nh4_nkv2_h64_fwd((int)|flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive((int)|g' \
+echo "[3.9] sed-redirect callers: _fwd/bwd(...) → _fwd/bwd_primitive(...)"
+sed \
+    -e 's|flame_block_T16_d32_nh4_nkv2_h64_fwd((int)|flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive((int)|g' \
+    -e 's|flame_block_T16_d32_nh4_nkv2_h64_bwd((int)|flame_block_T16_d32_nh4_nkv2_h64_bwd_primitive((int)|g' \
     "$B3_C" > "$B3_REDIRECTED"
 
-echo "[3.10] insert primitive body after #include \"runtime.c\""
-sed '/^#include "runtime.c"/r '"$PRIM_STRIPPED" "$B3_REDIRECTED" > "$A2_C"
+echo "[3.10] insert primitives after #include \"runtime.c\" (fwd + bwd)"
+cat "$PRIM_FWD_STRIPPED" "$PRIM_BWD_STRIPPED" > "${A2_C}.tmp_prims"
+sed '/^#include "runtime.c"/r '"${A2_C}.tmp_prims" "$B3_REDIRECTED" > "$A2_C"
+rm -f "${A2_C}.tmp_prims"
 echo "  concat'd: $A2_C ($(wc -l < "$A2_C") lines)"
 
 echo "[4/4] clang -O2 → $OUT"
