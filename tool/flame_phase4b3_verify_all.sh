@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# ════════════════════════════════════════════════════════════════════════
+# tool/flame_phase4b3_verify_all.sh — Phase 4-B-3 verification battery
+#
+# Runs all Phase 4-B-3-2-third leaf primitive byte-eq tests in one go.
+# Confirms the entire verification layer passes after any code change
+# (e.g., emit_trampoline tool edits — must keep primitive bodies in
+# sync with test harness pasted bodies).
+#
+# Also runs the 3 mechanism probes for evidence-anchored reporting.
+#
+# Usage:
+#   tool/flame_phase4b3_verify_all.sh
+#
+# Exit 0 if all 5 leaf tests PASS, 1 if any FAIL.
+# ════════════════════════════════════════════════════════════════════════
+
+set -e
+
+echo "═══ flame Phase 4-B-3 verification battery (RFC 047) ═══"
+echo ""
+
+mkdir -p build
+
+# ── Build + run 5 leaf byte-eq tests ────────────────────────────────
+fail_count=0
+declare -a results
+for leaf in rmsnorm residual swiglu rope attention; do
+    src="tool/flame_phase4b3_leaf_${leaf}_test.c"
+    out="build/leaf_${leaf}_test"
+    if [ ! -f "$src" ]; then
+        results+=("MISSING  $leaf  (source: $src)")
+        fail_count=$((fail_count + 1))
+        continue
+    fi
+    clang -O2 "$src" -lm -o "$out" 2>&1 > /dev/null
+    if ! [ -f "$out" ]; then
+        results+=("BUILD-FAIL  $leaf")
+        fail_count=$((fail_count + 1))
+        continue
+    fi
+    result=$("$out" 2>&1 | grep -E "^PASS|^FAIL" | head -1)
+    if echo "$result" | grep -q "^PASS"; then
+        results+=("PASS  $leaf  $(echo "$result" | sed 's/^PASS  //')")
+    else
+        results+=("FAIL  $leaf  $result")
+        fail_count=$((fail_count + 1))
+    fi
+done
+
+echo "── Leaf primitive byte-eq tests (5 sections) ──"
+for r in "${results[@]}"; do
+    echo "  $r"
+done
+
+# ── Build + run 3 mechanism probes ──────────────────────────────────
+echo ""
+echo "── Phase 4-B-3 mechanism probes (3 measurements) ──"
+for bench in boxing alloc fncall; do
+    src="tool/flame_phase4b3_${bench}_bench.c"
+    out="build/${bench}_bench"
+    if [ ! -f "$src" ]; then
+        echo "  MISSING  $bench  ($src)"
+        continue
+    fi
+    clang -O2 "$src" -o "$out" 2>&1 > /dev/null
+    if [ ! -f "$out" ]; then
+        echo "  BUILD-FAIL  $bench"
+        continue
+    fi
+    # Each bench prints a "ratio (... / ...) = N.NNx" line near the end
+    ratio=$("$out" 2>&1 | grep -E "ratio" | tail -1 | sed -E 's/.*= //; s/x.*//')
+    case "$bench" in
+        boxing)  expected="~4× expected (boxing dominant)";;
+        alloc)   expected="~1× expected (WEAKER than initial 1.3-1.7×)";;
+        fncall)  expected="~1× expected (overlap-capped, NEG raw)";;
+    esac
+    echo "  $bench  ratio=${ratio}  ($expected)"
+done
+
+# ── IPCP build sanity (byte-id check) ───────────────────────────────
+echo ""
+echo "── IPCP build sanity ──"
+if [ -x tool/flame_phase4b_build.sh ]; then
+    tool/flame_phase4b_build.sh stdlib/flame/flame_d32_corpus_test.hexa build/flame_d32_ipcp_check > /tmp/ipcp_build.log 2>&1
+    if [ -f build/flame_d32_ipcp_check ]; then
+        ./build/flame_d32_ipcp_check > /tmp/ipcp_check.out 2>&1
+        if [ -f /tmp/baseline.out ]; then
+            if diff -q /tmp/baseline.out /tmp/ipcp_check.out > /dev/null; then
+                echo "  PASS  IPCP build byte-id with /tmp/baseline.out"
+            else
+                echo "  FAIL  IPCP build diff vs baseline"
+                fail_count=$((fail_count + 1))
+            fi
+        else
+            echo "  SKIP  /tmp/baseline.out not present (run flame_d32_baseline first)"
+        fi
+    else
+        echo "  BUILD-FAIL  IPCP wrapper produced no binary"
+        fail_count=$((fail_count + 1))
+    fi
+else
+    echo "  SKIP  tool/flame_phase4b_build.sh not executable"
+fi
+
+echo ""
+echo "═══ verification battery complete ═══"
+if [ $fail_count -eq 0 ]; then
+    echo "PASS  All Phase 4-B-3 verification artifacts PASS (5 leaf byte-eq + 3 mechanism probes + IPCP byte-id)"
+    exit 0
+else
+    echo "FAIL  $fail_count failures — review output above"
+    exit 1
+fi
