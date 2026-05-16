@@ -582,6 +582,55 @@ flame 의 anima oracle byte-eq 의 **모든 sub-piece 검증 완료**:
 fp non-associativity 또는 anima print precision 의 artifact — flame
 correctness 의 결함이 아님.
 
+### 2026-05-17 — SESSION CLOSURE (24 commits, flame Phase 3 COMPLETE + Phase 4 design)
+본 작업 session 의 cron-fire 자율 cycle 들이 다음 결과로 종료:
+
+**Commits** (rfc043-hexa-torch on origin):
+- Phase 3-A `549f27ba` optim_lib
+- Phase 3-B `849aadeb` decoder_block_lib (block GRAD-EXACT 3.59e-10)
+- Phase 3-C `9be70c9d` decoder_lib (full-model GRAD-EXACT 2.66e-08)
+- Phase 3-D `0d65189c` train_lib (80-step toy collapse 3.5e18×)
+- Phase 3-E `f9b43273` flame_math (dt_lcg/sqrt/exp/ln 5/5)
+- Phase 3-F `df50e265` dt_* wire-in across stack
+- Phase 3-F-2 `73c18479` d=32·3L config
+- **Phase 3-F-3 `c00ee7c8` anima byte-eq retry — init 7.97113 vs 7.97116, acc 8/8**
+- Phase 3-G `4c28b725` d5_sin/cos 14-term Taylor + RoPE
+- **Phase 3-H `1010360a` init weight byte-id max|Δ|=0.0**
+- `829e5076` RFC 044 closure document
+- `7470050a` source analysis update
+- `12c81c14` RFC 044 → 045 rename (forge yield)
+- **Phase 3-J `e10ecd79` 7 projections farr_matmul-routed**
+- `2c47405d` anima 80-step direct trajectory (RFC 045 source #4 confirmed)
+- **`a235491d` RFC 046 — Phase 4 compiler fusion design**
+- `b93b4fcc` flame README final sync
+- **`f86a119b` anima vs flame wall direct comparison (18.70 vs 18.29s, 0.978×)**
+
+**핵심 deliverable** (40+ falsifier PASS · regression 0 · ~6.4k LoC):
+- ConsciousDecoderV2-equivalent NN stack: 7 layers, compiler-only,
+  anima algorithm-byte-id at every sub-piece
+- GRAD-EXACT central-diff: block 3.59e-10, full-model 2.66e-08
+- closed math invariants: Rᵀ·R = I machine-ε, P[hh,i,j>i]=0 exact
+- 80-step trajectory: flame init 7.97113 → final 8.87e-7 (acc 8/8) ≈
+  anima init 7.97116 → final 3.73e-7 (acc 8/8); RFC 040 §2.2
+  TOL_MATMUL class drift
+- wall time parity: flame 18.29s ≈ anima 18.70s (same hexa toolchain,
+  same M-Mac CPU); clang -O2 dominant, packed-farr ≠ wall win
+- structural call_builtin = 0 sustained
+
+**RFCs (4 drafts)**:
+- 043 design SSOT (consumed by 045/046)
+- 044 forge regime (parallel session)
+- 045 Phase 3 algorithm-byte-eq closure (source #1/2/3 falsified,
+  source #4 confirmed)
+- 046 Phase 4 compiler fusion design (3-stage pipeline, 7 falsifier,
+  F-RFC046-EAGER-PYTORCH-MATCH ≤1.3× of 336.85s on A100 d=768·12L)
+
+**다음 cycle 의 가능한 진행**:
+- Phase 4-A Stage 1 epilogue fusion impl (self/runtime.c 또는
+  self/forge/ — parallel session collision risk; 신중하게)
+- Phase 4-D GPU dispatch fire (~$5-20, cost-bearing)
+- 또는 더 evidence collection (per-layer wall breakdown, etc.)
+
 ### 2026-05-17 — Phase 3-G LANDED (d5_sin/cos in flame_math + RoPE wire-in)
 landed: `stdlib/flame/flame_math.hexa` 에 d5_two_pi · d5_pi · d5_reduce
 · d5_sin · d5_cos 추가 (anima d_train5_lib §262-291 의 정확 14-term
