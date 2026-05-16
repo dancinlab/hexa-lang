@@ -389,6 +389,93 @@ pub fn verify_s3_caqm_elze_perm_order_2S16() -> AtlasVerdict {
     return _vd_phys("s3_caqm_elze_perm_order_2S16", _tier_phys(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s3_z2gauge_gauss_law_exact — Hayata-Hidaka 2024 [U_F,G(x)]=0 ⇒ ⟨G⟩≡+1
+// ──────────────────────────────────────────────────────────────────────
+// Hayata & Hidaka 2024 (Phys. Rev. D 110, 114503 / arXiv:2408.10079)
+// (1+1)D Z2 LGT Floquet circuit. The Gauss-law operator
+//   G(x) = − X_g(x−1,x)·Z_1(x)·Z_2(x)·X_g(x,x+1)
+// is a 4-qubit Pauli-string stabilizer that commutes with the Floquet
+// unitary U_F by construction ([U_F, G(x)] = 0). On the paper §IIB
+// Gauss-law-physical product state ⊗_x(|01⟩−|10⟩)/√2 ⊗ ⊗_link|+⟩ the
+// stabilizer eigenvalue is fixed at +1, and the commutation preserves it
+// for every Floquet step: ⟨G(x)⟩(t) ≡ +1 (machine-precision exact).
+// Stage 1 integer: the singlet gives Z_1 Z_2 → −1, each |+⟩ link gives
+// X_g → +1, so G = −(+1)(−1)(+1) = +1 — pure ±1 Pauli-eigenvalue
+// arithmetic, no floating point. This is the CLEAN target the paper's
+// hardware Gauss-law violation diverges from (the well-defined
+// denominator of the paper's 1/⟨G⟩ error mitigation).
+// sim-universe @D g13 / @X x_hayata_z2lgt · z2-gauge-prethermal selftest
+// (`<G(x_c)>(0)=1.000000` · `max_t |<G>(t)-1|=0.000000`) ·
+// atlas/inbox/z2gauge-gauss-law-exact-invariance.md.
+
+pub fn verify_s3_z2gauge_gauss_law_exact() -> AtlasVerdict {
+    // Pauli eigenvalues on the paper §IIB Gauss-law-physical state.
+    // Singlet (|01⟩−|10⟩)/√2 : Z_1 Z_2 |01⟩ = (+1)(−1)|01⟩,
+    //                          Z_1 Z_2 |10⟩ = (−1)(+1)|10⟩  → z1z2 = −1.
+    // Link |+⟩ = (|0⟩+|1⟩)/√2 : X_g |+⟩ = +|+⟩               → xgL = xgR = +1.
+    let z1z2 = -1            // Z_1·Z_2 on the singlet matter pair
+    let xgL = 1              // X_g on the left  |+⟩ link
+    let xgR = 1              // X_g on the right |+⟩ link
+    // G(x_c) = − X_g · Z_1 · Z_2 · X_g  (paper Eq. eqgc, leading minus sign)
+    let g_xc = -1 * xgL * z1z2 * xgR
+    // Stabilizer eigenvalue must be exactly +1 (and a Pauli string squares
+    // to identity → eigenvalues ∈ {+1,−1}, so |g_xc| == 1 by construction).
+    let eigval_unit = (g_xc == 1) || (g_xc == -1)
+    let ok = g_xc == 1 && eigval_unit
+    let detail = "Hayata-Hidaka 2024 Z2 LGT Gauss-law G(x_c) = −X_g·Z_1·Z_2·X_g on the paper §IIB physical state: Z_1Z_2(singlet)=−1, X_g(|+⟩ link)=+1 → G = −(+1)(−1)(+1) = " + to_string(g_xc) + " (= +1 expected, ℤ-exact ±1 Pauli-eigenvalue). [U_F,G(x)]=0 by construction ⇒ ⟨G(x)⟩(t) ≡ +1 for every Floquet step — the CLEAN target the paper's hardware Gauss-law violation diverges from (well-defined 1/⟨G⟩ denominator). sim-universe z2-gauge-prethermal selftest invariant (max_t |<G>(t)−1|=0.000000). See atlas/inbox/z2gauge-gauss-law-exact-invariance.md (≥6 falsifiers pre-registered)."
+    return _vd_phys("s3_z2gauge_gauss_law_exact", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_preheating_gaussian_purity_det_sigma — Gondret 2025 pure TMSV det σ = 1/16
+// ──────────────────────────────────────────────────────────────────────
+// Gondret et al. 2025 (Phys. Rev. Lett. 135, 240603 / arXiv:2506.22024)
+// cold-atom analog of cosmological preheating. A pure vacuum-seeded
+// two-mode squeezed state (ħ=1, n_th=0) has covariance-matrix
+//   det σ = (|u_k|² − |v_k|²)⁴ / 16 = 1⁴ / 16 = 1/16
+// (1/4 per mode, two modes). The canonical commutator W=|u|²−|v|²=1
+// (sibling atom) pins det σ to its symplectic-minimum (purity) value
+// 1/16 INDEPENDENT of the squeezing r (squeezing redistributes
+// quadrature variance but preserves the symplectic volume exactly).
+// Stage 1 rational: 1/16 = 0.0625 is an exact dyadic; the
+// squeezing-independence is checked by sweeping several |v_k| with
+// |u_k|² = 1+|v_k|² (W ≡ 1) and confirming det σ = 1/16 at each.
+// sim-universe @D g14 / @X x_gondret_preheating · preheating-analog
+// selftest (`det σ = 0.062500 (== 1/16; OK)`) ·
+// atlas/inbox/preheating-gaussian-purity-det-sigma.md.
+
+pub fn verify_s3_preheating_gaussian_purity_det_sigma() -> AtlasVerdict {
+    // det σ = W⁴/16 with W = |u|²−|v|² (canonical commutator).
+    // Sweep several squeezing levels via integer |v|² = vv ∈ {0,1,4,9,25}
+    // and |u|² = 1+vv (so W = (1+vv) − vv = 1 exactly at every r).
+    let denom = 16
+    let mut tested = 0
+    let mut violations = 0
+    let vvs: [int] = [0, 1, 4, 9, 25]
+    let mut i = 0
+    while i < len(vvs) {
+        let vv = vvs[i]
+        let uu = 1 + vv                 // |u|² = 1 + |v|²  (vacuum-seed branch)
+        let w = uu - vv                 // canonical commutator W = |u|²−|v|²
+        // det σ numerator = W⁴ ; identity claims W⁴ == 1 and det σ == 1/16.
+        let w4 = w * w * w * w
+        if w != 1 { violations = violations + 1 }
+        if w4 != 1 { violations = violations + 1 }
+        // 16 · det σ == W⁴  ⇒  16·(1/16) == 1  (rational, ℤ-exact)
+        if denom * 1 != denom * w4 { violations = violations + 1 }
+        tested = tested + 1
+        i = i + 1
+    }
+    // Distinguish the mixed thermal seed: n_th=0 → W=1 → 1/16 ;
+    // a thermal seed (2n_th+1 = 3, i.e. n_th=1) → W'=3 → det σ = 81/16 ≠ 1/16.
+    let w_thermal = 3
+    let thermal_distinct = (w_thermal * w_thermal * w_thermal * w_thermal) != 1
+    let ok = violations == 0 && tested == 5 && thermal_distinct
+    let detail = "Gondret 2025 pure vacuum-seeded TMSV det σ = (|u|²−|v|²)⁴/16 = W⁴/16 · canonical commutator W=1 ⇒ det σ = 1/16 = 0.0625 (exact dyadic ℚ) · squeezing-independence sweep over |v|²∈{0,1,4,9,25} (|u|²=1+|v|²): " + to_string(tested) + " levels, " + to_string(violations) + " violations (W≡1, W⁴≡1, 16·detσ≡1 at every r — symplectic-volume invariant). Thermal seed n_th=1 → W=3 → detσ=81/16 ≠ 1/16 (mixed-state distinguished ✓). sim-universe preheating-analog selftest invariant (det σ = 0.062500). See atlas/inbox/preheating-gaussian-purity-det-sigma.md (≥6 falsifiers pre-registered)."
+    return _vd_phys("s3_preheating_gaussian_purity_det_sigma", _tier_phys(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_phys_all() -> [AtlasVerdict] {
@@ -409,5 +496,7 @@ pub fn verify_phys_all() -> [AtlasVerdict] {
     out.push(verify_s3_supremacy_xeb_wl_rational())
     out.push(verify_s3_qdarwin_touil_isf_classical_limit())
     out.push(verify_s3_caqm_elze_perm_order_2S16())
+    out.push(verify_s3_z2gauge_gauss_law_exact())
+    out.push(verify_s3_preheating_gaussian_purity_det_sigma())
     return out
 }

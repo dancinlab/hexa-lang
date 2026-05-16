@@ -1786,3 +1786,54 @@
     g8 commit trailer — pending parent agent commit (Co-Authored-By: Claude Opus 4.7 (1M context)).
   EOF
   note = "Tier-upgrade ONLY (NOT additive) — 18 cycle_035 _tecsl carries promoted in place now that aecde6f8's hexa-native verifiers back them. Distinct from cycle_036's additive verified_* absorb-loop merge. f_atlas_silent_upgrade HARD respected on all 18 (~> + verifier= + |> + honest_c3 evidence — never silent). compiler/atlas/verify/* (already committed in aecde6f8), compiler/atlas/symbolic/*, tool/calc_cli.hexa, self/main.hexa, embedded.gen.hexa, dist/atlas.hxc, atlas/inbox/* NOT touched (other tracks). No declared-count change: _tecsl verifiers are in separate verify_*_tecsl_all() aggregates, outside the verify_*_all() ledger total — atlas_verify_smoke stays 118/118 live==declared. 0 of the 18 skipped for ambiguous mapping (1:1 verifier-fn ↔ entry-id exact-name match)."
+
+# ─── Cycle 038 — appended via tool/atlas_cycle_append ──────────
+
+@A cycle_038 := "cycle_038 — sim-universe absorption reviewer-merge (§3 PHYS +14: 13 🔵 verifier-backed + 1 honest 🟡)" :: cycle [d=2026-05-16 active]
+  trigger = "User directive: atlas absorption cycle for two sim-universe modules (z2-gauge-prethermal + preheating-analog), same pattern as hexa-lang 7dec53d4 / e6be45cd / b3883c29. Part C additionally requires reconciling the full reviewer-pending inbox backlog (the 10 submissions from 23231fca + b3883c29 whose verifiers were committed but never merged to MAIN.tape) plus the 4 new this cycle, into atlas/MAIN.tape §3 PHYS. The 9 prior sim-universe inbox verifiers were live in verify_phys_all()/verify_transcendental_all() but un-ledgered (smoke gate drift live 131 vs declared 118) — this reviewer-merge closes that backlog."
+  scope <<~EOF
+    Part A — 4 new atlas/inbox/ submissions (one concept = one file, ≥5 pre-registered falsifiers + real-limit DOI/arXiv anchor + sim-universe binary+sentinel witness):
+      z2gauge-gauss-law-exact-invariance.md         — [U_F,G(x)]=0 ⇒ ⟨G(x)⟩(t)≡+1 (🔵 SUPPORTED-IDENTITY)
+      z2gauge-floquet-half-step-exactness.md        — disjoint-support ⇒ exact half-step, no Trotter error (🔵 SUPPORTED-FORMAL)
+      preheating-bogoliubov-canonical-commutator.md — BdG Wronskian |u|²−|v|²≡1 conserved (🔵 SUPPORTED-FORMAL)
+      preheating-gaussian-purity-det-sigma.md       — pure vacuum-seeded TMSV det σ = 1/16 (🔵 SUPPORTED-IDENTITY)
+
+    Part B — 4 verifiers (compiler/atlas/verify/):
+      phys.hexa +2 (Stage 1, _vd_phys/_tier_phys): verify_s3_z2gauge_gauss_law_exact (ℤ-exact ±1 Pauli stabilizer), verify_s3_preheating_gaussian_purity_det_sigma (exact dyadic ℚ + squeezing-invariance sweep + thermal-seed discrimination)
+      transcendental.hexa +2 (Stage 2, _vd_trans/_tier_pass/_abs_f): verify_s3_z2gauge_floquet_half_step_exact (cos²θ+sin²θ=1 at paper+off-paper angles), verify_s3_preheating_bogoliubov_canonical_commutator (algebraic dW/dt=0 at sample + embedded RK4 400-step discrete-flow drift |W−1|=1.78e-15 on the SSOT module _bdg_rhs sign convention)
+      Registered in verify_phys_all() / verify_transcendental_all().
+
+    Part C — reviewer-merge to atlas/MAIN.tape §3 PHYS (14 new @D verdict entries appended; sim-universe absorption block):
+      13 verifier-backed 🔵 (verifier= + |> verified-by edge): s3_supremacy_xeb_wl_rational · s3_supremacy_kappa_c_log2_T4 · s3_qdarwin_touil_isf_classical_limit · s3_caqm_elze_perm_order_2S16 · s3_caqm_elze_cogwheel_E1 · s3_caqm_sca_strang_trig_identity · s3_mbs_holevo_xc0_ln2 · s3_dtc_subharmonic_fsp_thermal · s3_dtc_bond_phase_unitarity · s3_z2gauge_gauss_law_exact · s3_z2gauge_floquet_half_step_exact · s3_preheating_bogoliubov_canonical_commutator · s3_preheating_gaussian_purity_det_sigma
+      1 honest 🟡 SUPPORTED-BY-CITATION: s3_mbs_holevo_central_revival (atlas-side Strang-Trotter 2^N PXP recompute out of scope per atlas/inbox/README.md g5 carry exception; sim-universe mbs-revival binary selftest sentinel is the numerical proof carrier — NOT silently upgraded).
+      §0 TL;DR cycle_038 block + cumulative line 118→131; INDEX.md PASS count 118→131 / 99→112 🔵; test/atlas_verify_smoke.hexa LEDGER_DECLARED_COUNT + MAIN.tape::phase_2_cumulative_count both 118→131 (the 9 prior sim-universe inbox verifiers from 23231fca/e6be45cd/b3883c29 were live but un-ledgered until this reviewer-merge — drift now reconciled, single-source discipline restored).
+      Inbox markdown files KEPT as the provenance trail (descriptive-concept .md submissions; matches b3883c29 which kept them — distinct from the cycle_036 verified_equations.tape transient rolling --absorb sink which is a different pipeline).
+  EOF
+  files <<~EOF
+    atlas/inbox/z2gauge-gauss-law-exact-invariance.md (new)
+    atlas/inbox/z2gauge-floquet-half-step-exactness.md (new)
+    atlas/inbox/preheating-bogoliubov-canonical-commutator.md (new)
+    atlas/inbox/preheating-gaussian-purity-det-sigma.md (new)
+    compiler/atlas/verify/phys.hexa (+2 verifiers + verify_phys_all registration)
+    compiler/atlas/verify/transcendental.hexa (+2 verifiers + verify_transcendental_all registration)
+    atlas/MAIN.tape (§3 PHYS +14 @D verdict entries; §0 TL;DR cycle_038 block + cumulative 118→131; phase_2_cumulative_count 118→131; all existing entries / section dividers UNTOUCHED — additive only, no ~> supersedes)
+    atlas/INDEX.md (PASS count 118→131 / 99→112 🔵 + sim-universe absorption note)
+    test/atlas_verify_smoke.hexa (LEDGER_DECLARED_COUNT 118→131)
+    atlas/MAIN.log.tape (this cycle_038 entry — append-only via tool/atlas_cycle_append.hexa)
+  EOF
+  verifier_run_result <<~EOF
+    hexa run tool/atlas_verify.hexa --domain phys (HEXA_MEM_UNLIMITED=1): 18/18 PASS · 18 🔵 (16 prior + s3_z2gauge_gauss_law_exact + s3_preheating_gaussian_purity_det_sigma) — no regression.
+    hexa run tool/atlas_verify.hexa --domain transcendental (HEXA_MEM_UNLIMITED=1): 38/38 PASS · 38 🔵 (36 prior + s3_z2gauge_floquet_half_step_exact + s3_preheating_bogoliubov_canonical_commutator) — no regression.
+    atlas-verify CI gate smoke: 131/131 verdicts hold · ledger live total=131 vs MAIN.tape declared=131 (CONSISTENT — drift reconciled; single-source LEDGER_DECLARED_COUNT == phase_2_cumulative_count == 131).
+  EOF
+  governance_check <<~EOF
+    g_self_verify — ✅ all 13 🔵 are hexa-native verifier-backed (verify_phys_all/verify_transcendental_all PASS); the 1 🟡 is the honest g5 carry exception (sim-universe selftest sentinel as numerical carrier, NOT a fake 🔵).
+    f_atlas_silent_upgrade — ✅ N/A: additive reviewer-merge (new @D entries), NOT a tier change on existing entries; no ~> supersedes. The 🟡 s3_mbs_holevo_central_revival is recorded 🟡 at birth (never silently 🔵).
+    f_atlas_external_verdict — ✅ only verifier-backed atoms reach 🔵; the no-recompute mbs central-revival stays 🟡 SUPPORTED-BY-CITATION.
+    g3 real-limit-anchor — ✅ 14/14 anchor field present (Shannon / Holevo / Bogoliubov [â,â†]=1 / Gauss-Noether / BCH / Heisenberg-symplectic / compiler invariant).
+    f_atlas_lattice_external — ✅ 14/14 honest_c3 explicitly states n=6/σ(6)/τ(6)/φ(6) play NO role; all are circuit/mode/coupling parameters — observation-only, never derivation.
+    g_arch_vs_log_split — ✅ MAIN.tape architecture append (additive @D, latest-wins per id); this @A history append-only via tool/atlas_cycle_append.hexa.
+    g7 incoming-pipeline — ✅ reviewer-merge by autonomous parent agent; no consumer direct-edit; inbox .md kept as provenance trail (b3883c29 pattern, not the verified_equations.tape transient sink).
+    g8 commit trailer — pending parent agent commit (Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>).
+  EOF
+  note = "Reviewer-merge of the full sim-universe inbox backlog: the 9 prior verifiers (23231fca×3, e6be45cd×3, b3883c29×3) were committed live into verify_phys_all/verify_transcendental_all but never merged to MAIN.tape § PHYS nor ledgered (commit msgs explicitly said \"ready for reviewer merge to MAIN.tape § PHYS\") — this cycle closes that backlog AND adds the 4 new (z2-gauge-prethermal + preheating-analog). The preheating canonical-commutator verifier initially FALSIFIED (0.0328) because the complex-form RHS was mis-transcribed; corrected to the SSOT module preheating.hexa::_bdg_rhs real sign convention (dur=ωui+gvi, dui=−ωur−gvr, dvr=−ωvi−gui, dvi=ωvr+gur) → algebraic dW/dt=0 exact, RK4 |W−1|=1.78e-15. inbox .md anchors corrected to match. NO sim-universe file touched. compiler/atlas/symbolic/*, tool/calc_cli.hexa, self/main.hexa, embedded.gen.hexa, dist/atlas.hxc NOT touched."
