@@ -195,6 +195,29 @@ dominant failure class:
 | 40-#2 | use→import lex alias · .hexa auto-suffix · multi-main collapse · pop builtin | 22 | 5 | 9 | 2 | 2 |
 | 40-#3 | HX3001-compare / HX3001-if-arm / HX3001-arith / HX3003 unit-relax · HX3010 → Warning · fn-name first-wins dedup | **25** | 8 | 5 | 0 | 2 |
 
+### sweep-40 #3 residual 8 DIFFs (categorised — no single shared root cause)
+
+  3 SIGSEGV (rc=139) — struct-array-grow nested-struct field-access:
+    atlas_materials_limits / atlas_real_limits / static_index_lazy_poc.
+    Same threshold pattern documented in MEMORY.md
+    `struct_pack_map shallow-clone gotcha` — runtime-side work.
+
+  3 atlas-verifier semantic divergence:
+    atlas_doctrine_smoke   — external_entity_audit returns 0 vs 1 violations
+    atlas_tecsl_verify     — 1/29 verifier flips PASS↔FAIL
+    atlas_cycle_append     — args() empty in native vs supplied in interp
+    Likely interaction between fn-dedup's first-wins choice and atlas
+    modules that re-export the same helper with different bodies (the
+    spliced order is leaves-first, but earlier-imported versions win).
+    Refinement needed: dedup ONLY when bodies are equivalent, OR keep
+    the LAST-imported version (often the file the user explicitly
+    `use`d).
+
+  1 atlas_wave3 — sweep size accounting / output line mismatch (28 vs 23).
+
+  1 regress_dict_keys_let_bind — empty-map-literal `{}` (cross-cutting
+    parse issue, even interp's HEXA_CACHE=0 path errors on it).
+
 Note: 4 new DIFFs surfaced in the wider sample (atlas_cycle_append,
 atlas_doctrine, atlas_materials_limits, atlas_real_limits) — these
 are heavier atlas-library smokes that the use/import fixes unlocked.
