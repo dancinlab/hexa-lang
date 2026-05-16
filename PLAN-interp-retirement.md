@@ -49,7 +49,7 @@ arm64 codegen — one-line-ish fixes, not multi-week:
 | R0 | native compile→link→run works end-to-end (no crash) | ✅ proven 2026-05-16 (arm64/Mac) |
 | R1 | a verifiable program runs **correctly** (`exit(42)` ⇒ `$?`=42) | ✅ proven 2026-05-16 (`exit(6*7)` ⇒ `$?`=42, aprime_cc arm64) |
 | R2 | codegen-correctness audit driven by running real programs; fix the bounded bugs | ✅ two root-cause fixes landed (see below); builtin link-gaps deferred |
-| R3 | compile+run a representative corpus (the `test/*.hexa` smokes, a few tools) natively; diff vs interp output | 🔄 strong progress — five further root-cause fixes (globals, index, unop, if-expr, dup-`_main`); `test/t_batch22` 0 → 29/31; remaining gaps now split into 3 narrow categories |
+| R3 | compile+run a representative corpus (the `test/*.hexa` smokes, a few tools) natively; diff vs interp output | ✅ nine codegen-correctness classes fixed; `test/t_batch22` 0 → **31/31 byte-identical** to interp |
 | R4 | switch the build/dev pipeline `hexa run` → native compile+run, **interp kept as fallback** (env/flag toggle) | ⬜ |
 | R5 | once native coverage ≥ interp on the corpus, delete the interp | ⬜ |
 
@@ -132,36 +132,46 @@ Each step:
 | `7b00bd54` — array index              | 15 / 31   |
 | `306ad234` — unop                     | 16 / 31   |
 | `2e624e84` — if-expr value            | 29 / 31   |
-| `08d7a12f` — UTF-8 in rodata strtab   | **30 / 31** |
+| `08d7a12f` — UTF-8 in rodata strtab   | 30 / 31   |
+| `24259987` — overflow-arg boundary 4  | **31 / 31** (byte-identical to interp) |
 
-### Remaining gaps (split into three narrow categories)
+### R3 CLOSED — nine codegen-correctness classes fixed
 
-a. **1 `tree_render_pure` assertion** — `tree deep nested`. Confirmed
-   to be an **array-aliasing memory bug in deep recursion**, not a
-   tree-helper logic bug. Diagnostic (deep_nested reproduction inside
-   `_pf_tree_build`): the parent's `edges` HexaVal silently mutates
-   between two iterations of the kids loop — `len(edges)` jumps from
-   5 → 3 → 4 and the inner element bytes become the previously-pushed
-   `lines` strings (e.g. `edges[1]` reads back as `"├── 2"` of length
-   11). The leaf recursion's `lines.push(...)` overwrote `edges`'s
-   stack slot or its inner-array backing. Matches the documented
-   "struct_pack_map shallow-clone gotcha — runtime 가 outer 만 clone,
-   inner [[T]] 는 공유" pitfall. Not a codegen logic bug per se but
-   needs runtime-level investigation (HexaVal stack-slot liveness
-   and/or shallow-clone of nested-array params); deferred as a
-   distinct work item.
-b. **~170 unmapped runtime builtins** (`/tmp/gaps.txt`) — e.g.
+The previously-documented "edges aliasing in deep recursion" turned
+out NOT to be a runtime-memory issue. The real cause was a one-token
+boundary error in `_arm64_max_call_overflow`: it used `n > 8` (the
+C-int 8-GPR convention) when computing per-fn outgoing-call overflow
+bytes, but the HexaVal arg ABI passes a REGISTER PAIR per arg so
+only 4 HexaVal args fit in x0..x7. Any fn whose calls had ≥5 args
+saw `call_overflow_bytes = 0` and the call-site's
+`stp [sp, #(i-4)*16] ; C7: stack arg N` for i=4 silently clobbered
+the caller's own L0 / first param ingress slot. The "edges len 5 →
+3 → 4 + garbage bytes" was the corrupted L0 reading back as the
+recently-pushed `lines` strings.
+
+The complete R3 root-cause list (each verified, each pushed):
+
+  4c28f16f  loop-carried variable mutation
+  2bd67f0e  function parameter binding
+  c76cc8d6  module-level mutable globals
+  7b00bd54  array/map subscript hexa_index_get
+  306ad234  STMT_UNOP (-x / !x)
+  2e624e84  if-as-expression value
+  08d7a12f  UTF-8 rodata preservation
+  24259987  outgoing-arg overflow boundary
+  (synth-main merge inside c76cc8d6)
+
+### Remaining gaps (narrow, separate tracks)
+
+a. **~170 unmapped runtime builtins** (`/tmp/gaps.txt`) — e.g.
    `dict_keys → hexa_dict_keys`. Link-gate safely blocks them
    today; surgical per-symbol add when a real program needs each.
-c. **Frontend `CODEGEN-FAIL`** in some smokes — `HX3001` type-mismatch
+b. **Frontend `CODEGEN-FAIL`** in some smokes — `HX3001` type-mismatch
    diagnostics, etc. Not a codegen-correctness issue; the typecheck
    is stricter than the interp accepts. Separate track.
 
-R3 has hit the bounded-codegen-fix endpoint for the corpus's
-assertion-driven smokes (30/31 on t_batch22, all eight visible
-codegen-fundamentals classes fixed). The remaining (a) is shaped as
-runtime-memory work, not codegen. R4 (pipeline switch with interp
-fallback) can begin in parallel.
+R3 ✅ closed for assertion-driven smokes; R4 (pipeline switch to
+native compile+run with interp fallback) is the next step.
 
 This is the cause of `test/t_batch22` reporting `0 passed` (its
 `let mut pass = 0` harness counter, bumped from inside `eq_*`
