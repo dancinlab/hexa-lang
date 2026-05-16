@@ -1450,7 +1450,19 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
 
     if _types_is_compare_op(op) {
         if !_types_equal(lt, rt) {
-            _emit_hx3001(lt, rt, e.span, out)
+            // Permissive: when one side is `unit` (the placeholder for
+            // a fn return-type the inferencer couldn't pin — typically
+            // an unannotated `fn f(x) { if … { return X }; return Y }`
+            // whose RHS resolves before its return paths), allow the
+            // compare. The codegen runs the runtime hexa_eq/lt/le/…
+            // which handles HexaVal-tag dispatch regardless, so the
+            // HX3001 was strictly stricter than the runtime needs and
+            // blocked `is_leap(year) == 1` style guards across the
+            // corpus.
+            let ku = "unit"
+            if lt.kind != ku && rt.kind != ku {
+                _emit_hx3001(lt, rt, e.span, out)
+            }
         }
         return _types_t_bool()
     }
