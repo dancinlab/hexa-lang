@@ -1,4 +1,4 @@
-# RFC 044 — flame Phase 3 algorithmic byte-eq with anima d_corpus_fire oracle (CLOSED, 40 falsifier PASS)
+# RFC 045 — flame Phase 3 algorithmic byte-eq with anima d_corpus_fire oracle (CLOSED, 40 falsifier PASS)
 
 - **Status**: closed-evidence (2026-05-17) — landed across 16 commits on `rfc043-hexa-torch`
 - **Date**: 2026-05-17
