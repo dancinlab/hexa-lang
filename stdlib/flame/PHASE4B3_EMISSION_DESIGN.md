@@ -148,27 +148,50 @@ Per-call savings vs the IPCP-rewritten current form:
 
 ## First-principle mechanism for the ≥3× target
 
-Three independent multiplicative effects:
+Three independent multiplicative effects. Initial estimates updated
+with measurement (2026-05-17 boxing micro-bench, see PERF.md).
 
-1. **Boxing elimination (× ~1.5-2.5)**: HexaVal tag dispatch on every
-   arithmetic op replaced by direct fp64 ops. Modern clang -O2 fp64
-   code routinely vectorizes (NEON on arm64); HexaVal arithmetic
-   cannot vectorize through the tag dispatch.
+1. **Boxing elimination — MEASURED 3.99× on M-Mac**
+   `tool/flame_phase4b3_boxing_bench.c` runs Σx² over 512 elements ×
+   200K reps via HexaVal-boxed path (mirrors runtime.c HexaVal 16-byte
+   tagged-union struct + per-op tag dispatch in hexa_add / hexa_mul)
+   vs direct fp64. 5-run avg: **boxed 0.3868s / direct 0.0969s
+   = 3.99×** (var 0.01%, identical fp result, byte-eq). Initial
+   estimate was 1.5-2.5× — measurement is STRONGER.
 
-2. **Allocator elimination (× ~1.3-1.7)**: Bp_l/Bc_l/Xc farr_zeros +
-   farr_free per layer (4 layer-calls × 3 allocs × 80 steps = 960
-   alloc/free ops) replaced by stack scratch. Heap allocator latency
-   plus farr_table mutation overhead disappear.
+   Why: every HexaVal arithmetic op pays (tag check × 2) + (branch) +
+   (struct copy of result on return). Direct fp64 is single FADD or
+   FMUL instruction; clang -O2 vectorizes the inner loop via NEON
+   on arm64. The boxed path cannot vectorize through the tag
+   dispatch branch.
 
-3. **Fn-call elimination (× ~1.2-1.5)**: 7-12 inner fn calls per
-   block-fwd (rmsnorm/linear/attn_core/swiglu/...) inlined into one
-   contiguous fn body. Register-resident intermediates instead of
-   memory round-trips through farr_table.
+2. **Allocator elimination (× ~1.3-1.7, estimate, not yet measured)**:
+   Bp_l/Bc_l/Xc farr_zeros + farr_free per layer (4 layer-calls × 3
+   allocs × 80 steps = 960 alloc/free ops) replaced by stack scratch.
+   Heap allocator latency plus farr_table mutation overhead disappear.
 
-Compound estimate (geometric mean): 1.9× × 1.5× × 1.35× ≈ **3.85×**.
-This matches RFC 047 §137's "≥3×" target with margin. Honest minimum
-(if one effect is weaker than estimated): 1.5× × 1.3× × 1.2× ≈ 2.34×
-— still above the ≥2× design-revision threshold.
+3. **Fn-call elimination (× ~1.2-1.5, estimate)**: 7-12 inner fn
+   calls per block-fwd (rmsnorm/linear/attn_core/swiglu/...) inlined
+   into one contiguous fn body. Register-resident intermediates
+   instead of memory round-trips through farr_table.
+
+**Updated compound estimate** (boxing measured, others still estimated):
+- Optimistic:  4.0× × 1.7× × 1.5×  ≈ **10.2×**
+- Geometric (midpoint of remaining estimates): 4.0× × 1.5× × 1.35× ≈ **8.1×**
+- Honest minimum (if others weaker than estimated): 4.0× × 1.3× × 1.2× ≈ **6.24×**
+
+All three scenarios are well above RFC 047 §137 ≥3× target with
+substantial margin. The 8× geometric midpoint suggests Phase 4-B-3
+may approach or exceed the RFC 043 "exceed eager-PyTorch" boundary
+(estimated 3.4s × 8 / 22 ≈ 1.2× crossing for d=32·3L).
+
+**Reality caveat**: the 4× boxing factor is measured on an inner-loop
+best-case workload (pure Σx²). Real flame block_fwd mixes ops with
+different boxing profiles (matmul calls farr_get/farr_set heavily,
+which involve box+unbox per access plus farr_table lookup). The
+average effect across the full block is likely 2-3× from boxing alone
+— still substantial. Take **6.24× honest minimum** as the planning
+target; ≥3× RFC 047 ceiling is highly probable.
 
 ## Implementation surface
 

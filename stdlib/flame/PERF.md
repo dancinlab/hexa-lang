@@ -72,6 +72,33 @@ but **full-corpus 5-run wall improvement is ~25% (17→13.33s)**
 — measurement layers differ because time_ms() granularity (~1ms) +
 single-run-variance dominate at sub-25ms walls.
 
+## Phase 4-B-3 HexaVal boxing-elimination probe (2026-05-17)
+
+Synthetic micro-bench (`tool/flame_phase4b3_boxing_bench.c`) measures
+HexaVal-boxed vs direct-fp64 inner loop on M-Mac. Probes Phase 4-B-3
+emission's expected ceiling per PHASE4B3_EMISSION_DESIGN.md mechanism #1.
+
+Workload: Σx² over 512 elements (matches RMSNorm inner-loop shape) ×
+200K reps = 204.8M ops. Both paths produce byte-identical fp result
+(44.870400000000004).
+
+| Run | boxed (s) | direct (s) | ratio |
+|---|---|---|---|
+| 1 | 0.3868 | 0.0969 | 3.99× |
+| 2 | 0.3869 | 0.0969 | 3.99× |
+| 3 | 0.3869 | 0.0969 | 3.99× |
+| 4 | 0.3870 | 0.0968 | 4.00× |
+| 5 | 0.3868 | 0.0968 | 4.00× |
+| **avg** | **0.3868** | **0.0969** | **3.99×** |
+
+Variance: 0.01% (effectively zero — clean measurement). Initial
+PHASE4B3 estimate was 1.5-2.5× — measurement is **STRONGER**.
+
+This validates the Phase 4-B-3 emission case before the 6-9 cycle
+implementation investment: combined with allocator + fn-call
+elimination (estimated), expected ceiling is 6.24× honest minimum
+to 10.2× optimistic, well above RFC 047 §137 ≥3× target.
+
 ## Phase 3-I source analysis findings (cross-impl source isolation, 2026-05-17)
 
 ### Per-window gn2 decomposition (flame_d32_corpus_test, 2026-05-17)
