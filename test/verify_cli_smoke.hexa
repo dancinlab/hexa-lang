@@ -1,0 +1,60 @@
+// test/verify_cli_smoke.hexa — smoke for the `hexa verify` capability.
+//
+// @version 0.1.0
+// @capabilities [fs_read]
+//
+// tool/verify_cli.hexa = binary built-in atlas (dist/atlas.hxc via
+// hxc_loader fast-path) lookup + hexa-native calc recompute → tier. This
+// smoke gates the exact primitives `hexa verify <id>` → 🔵 depends on:
+//   (1) load_atlas_hxc reads the built-in atlas (>0 nodes)
+//   (2) a known atom (sigma) is findable by id
+//   (3) the 🔵 recompute path: divisor_sum/euler/mobius/divisor_count at n=6
+//       reproduces the atlas closed-form (g_self_verify → 🔵 SUPPORTED-FORMAL)
+//
+// Run:  hexa run test/verify_cli_smoke.hexa
+// Sentinel: __VERIFY_CLI_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/hxc_loader.hexa"
+import "compiler/atlas/symbolic/congruence_chain_engine.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// (1) binary built-in atlas readable via the fast hxc path
+let nodes = load_atlas_hxc("dist/atlas.hxc")
+check("load_atlas_hxc(dist/atlas.hxc) returns > 0 nodes", len(nodes) > 0)
+
+// (2) a known foundation atom is findable by id
+let mut found_sigma = false
+let mut i = 0
+while i < len(nodes) {
+    if nodes[i].id == "sigma" { found_sigma = true; i = len(nodes) }
+    else { i = i + 1 }
+}
+check("atlas atom id 'sigma' found in built-in atlas", found_sigma)
+
+// (3) 🔵 SUPPORTED-FORMAL recompute path (g_self_verify): the calc
+//     reproduces the n=6 foundation closed-forms verify_cli checks.
+check("sigma_k(6,1) == 12  (divisor_sum → @P sigma claimed 12)", sigma_k(6, 1) == 12)
+check("euler_phi(6) == 2   (euler_totient → @P phi claimed 2)", euler_phi(6) == 2)
+check("mobius(6) == 1      (mobius → @P mu claimed 1)", mobius(6) == 1)
+check("divisor_count(6) == 4 (divisor_count → @P tau claimed 4)", len(divisors(6)) == 4)
+
+println("═══════════════════════════════════════════════════════════")
+println("  verify_cli smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__VERIFY_CLI_SMOKE__ FAIL")
+} else {
+    println("__VERIFY_CLI_SMOKE__ PASS")
+}

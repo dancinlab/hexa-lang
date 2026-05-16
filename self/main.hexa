@@ -68,7 +68,9 @@ fn cmd_help() {
     println("  atlas promote --staging <f.n6>          Write to live (* register/pr = stub)")
     println("  atlas-verify [--domain D] [--tier N]     Verdict ledger — 86 entries Stage 1+2+3 hexa-native")
     println("  calc <engine> [args]                    TECS-L calculators (nstate/vortex/n6/perfect/congruence/gamma0)")
+    println("  verify <id> | --expr <fn> <n> <v>       Verify claim: atlas+calc → tier (🔵/🟡/🟠/⚪)")
     println("    e.g. hexa atlas lookup P n            → @P n = 6 :: foundation [11*]")
+    println("    e.g. hexa verify sigma                → 🔵 SUPPORTED-FORMAL (calc divisor_sum(6)=12)")
     println("    e.g. hexa atlas-verify --domain math  → §2 MATH verifiers PASS/FAIL + |err|")
     println("")
     println("ANNOTATION ANALYZERS (29, AST-based via self/lexer.tokenize)")
@@ -3220,6 +3222,26 @@ if len(av) < 3 {
         } else {
             cmd_url(av[3])
         }
+    } else if sub == "verify" {
+        // Single verification entry-point: binary built-in atlas (dist/atlas.hxc
+        // via hxc_loader fast-path) lookup + hexa-native calculators recompute
+        // → tier (🔵 SUPPORTED-FORMAL / 🟡 CITATION / 🟠 INSUFFICIENT-DEFERRED /
+        // ⚪ SPECULATION-FENCED). Cross-project rubric: atlas g_self_verify +
+        // TECS-L n6-replication Tier1/2/3 + anima HEXAD g_verdict_tier_blue +
+        // hexa-bio AXIS speculation-fence. NOT just a registry (cf. `hexa atlas`).
+        let __inst_v = install_dir_from_argv0()
+        let mut verify_script = "tool/verify_cli.hexa"
+        if len(__inst_v) > 0 {
+            let inst_path_v = __inst_v + "/tool/verify_cli.hexa"
+            if file_exists(inst_path_v) { verify_script = inst_path_v }
+        }
+        let mut verify_args = []
+        let mut vi = 3
+        while vi < len(av) {
+            verify_args.push(av[vi])
+            vi = vi + 1
+        }
+        cmd_run(verify_script, verify_args)
     } else if sub == "calc" {
         // TECS-L calculators absorbed hexa-native (compiler/atlas/symbolic/*).
         // Single CLI surface (NOT one file per calculator); algorithms shared
