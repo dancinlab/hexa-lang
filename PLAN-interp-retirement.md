@@ -200,24 +200,33 @@ are heavier atlas-library smokes that the use/import fixes unlocked.
 Each is a separate next-cycle investigation (some exit 139 native
 vs 0 interp, so different runtime classes).
 
-### atlas_* DIFF diagnostic (bisected)
+### atlas_* DIFF diagnostic (bisected, threshold pinned)
 
-Bisected the 4 atlas_* SIGSEGV cases to a scale-dependent
-struct-array element field-access:
+The 4 atlas_*_smoke SIGSEGVs reproduce on a synthetic
+`[Node{id,kind,edges:Edges{deps:[]}}, …]` array under aprime_cc:
 
-  • A minimal `[Node{…}, Node{…}]` (2 nodes, nested edges sub-struct)
-    iterates `arr[i].kind` correctly under aprime_cc.
-  • Scaled to **24 nodes** (mirroring `MATERIALS_LIMITS` size),
-    construction works AND iteration without field-access works
-    (rc=0, `len=24`). Only the `arr[i].kind` field access path
-    crashes (rc=139 SIGSEGV).
-  • `hexa_map_get` already routes VALSTRUCT through
-    `hexa_valstruct_get_by_key`, so the codegen's `field` shape is
-    correct in the small case; the scale-only failure indicates a
-    runtime memory issue (matches the documented
-    "struct_pack_map shallow-clone gotcha — outer만 clone, inner
-    [[T]] 는 공유" pitfall). Out of scope for this session — a
-    distinct runtime-side investigation.
+  • N=2..16 nested-struct elements → MATCH (full iterate + `.kind`).
+  • N≥17                            → rc=139 (SIGSEGV).
+
+Frame size at the boundary: N=16 → `sub sp, sp, #992`; N=17 →
+`sub sp, sp, #1024`. The crash threshold coincides with crossing
+the 1024-byte frame mark. `_hv_at`/`_hv_memb` already split on the
+arm64 stp/ldp 7-bit-scaled imm range (≤504 → `[sp,#imm]`, > 504
+→ `add x15, sp, #imm; [x15]`) and `_arm_spill_offset` shifts past
+`call_overflow_bytes`, so the addressing-encoding side looks
+clean. Suspicion: the call-overflow region (now sized via the
+`n > 4` HexaVal-pair boundary, 24259987) interacts at frame
+≥1024B with one of the per-element `array_push` / `map_set`
+register-pair spills in array_lit/struct_lit. Threshold is
+runtime-deterministic (no flake) — a next-cycle target.
+
+24-node simple struct (no nested sub-struct) iterates fine; only
+nested-struct nodes trigger the threshold, suggesting the
+struct_lit/array_lit interaction over a bigger spill frame.
+
+Out of scope for the current sweep cycle — distinct runtime/
+codegen-layout investigation; the 22/40 (55%) result already
+demonstrates the R3 path's correctness on simpler programs.
 
 **14 / 21 byte-identical** through aprime_cc direct after #6 (66.6%).
 The remaining 6 CODEGEN-FAIL are HX2001/HX3001/HX3010/HX4001
