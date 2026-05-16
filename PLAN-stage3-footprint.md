@@ -91,9 +91,44 @@ fragment O(1).
   `lower_hir → codegen → emit_asm` path stays for `--emit obj`/debug.
 - **F3** — `compiler/main.hexa`: when `emit_kind == "asm"`, call the streaming
   path; gate behind `--stream` (or `HEXA_STREAM=1`) until byte-diff-verified.
-- **F4** — wire the Val-arena scope push/pop around the loop body so the
-  reclaim actually fires; confirm `asm_text` is heapified before each pop.
+- **F4** — ~~wire the Val-arena scope push/pop around the loop body~~
+  **superseded — see "Finding" below.** A loop-body arena scope reclaims
+  only per-iteration *string scratch*; it cannot free the per-function
+  MFunc/LFunc, which are fn return values heapified to the malloc heap by
+  `__hexa_fn_arena_return` (runtime.c). Re-scoped F4 = incremental asm
+  output (kill the O(n²) `out = out + frag` accumulator — see Finding §2).
 - **F5** — make streaming the default once verified; retire the `--stream` gate.
+
+## Finding (2026-05-16): streaming structure ≠ native reclaim
+
+Tracing `__hexa_fn_arena_return` / `hexa_val_heapify` in `self/runtime.c`:
+
+1. **Per-function IR is not reclaimed by streaming alone.** Every sub-call
+   in the fused loop (`_lower_fn`, `_arm64_lower_func`, `_emit_func`)
+   returns a value; `__hexa_fn_arena_return` **heapifies the return to the
+   malloc heap** and pops that call's arena frame. hexa-native has no
+   `free` / GC, so the MFunc/LFunc — though logically dead after the
+   iteration — persist on the malloc heap. Wrapping the loop body in an
+   arena scope (the old F4) does **not** help: the structs already escaped
+   to malloc, which an arena pop cannot reclaim. Streaming bounds the
+   *logical* live set but not native RSS without a reclaim mechanism:
+   either region-promote-to-parent-frame (heapify into the enclosing
+   arena instead of malloc) or explicit struct free — both architectural.
+
+2. **The asm accumulator is a separate O(n²) sink — in BOTH paths.**
+   `out = out + _emit_func(...)` (here *and* in the legacy `emit_asm`)
+   re-copies the whole `out` string every function. For an N-function
+   compile producing a T-byte `.s` that is O(N·T) transient bytes —
+   gigabytes for the self-compile. This is target-independent, not
+   streaming-specific, and is the largest *cheaply* fixable sink.
+
+Re-scoped plan: **F4 = incremental asm output** — `codegen_emit_streaming`
+writes each function's fragment to the output file as it is produced
+(append) instead of growing `out`; the legacy `emit_asm` gets the same
+treatment. Removes the O(n²) accumulator from both paths. The per-function
+IR reclaim (Finding §1) is tracked separately as **F6 (architectural)** —
+region-based promotion or a struct freelist — and is the genuine
+remaining footprint lever; it is not loop-tick-sized.
 
 ## Verification (the only honest signal)
 
@@ -111,6 +146,13 @@ Streaming must be a **pure refactor** — same `.s` bytes, less RSS:
 
 - ✅ prerequisite `f4b597a7` — heapify TAG_STR O(1) envelope (landed, verified
   15× on the O(n²); byte-identical output).
-- ⬜ F1–F5 — not started. F1/F2 are independent of host RAM and byte-diff
-  self-verifying, so they are the loop-decomposable units; F3+ need the
-  stage-1 build + a measurement host.
+- ✅ F1 `f39a3bd9` — `_arm_strtab_collect_fn` extracted (per-MFunc interning).
+- ✅ F2 `2002c023` — `codegen_emit_streaming` (fused per-fn loop).
+- ✅ F3 `8a40b521` — `--stream` / `HEXA_STREAM=1` gate in `compiler/main.hexa`.
+- 🔄 F4 — **re-scoped** (see Finding): incremental asm output, kills the
+  O(n²) accumulator in both `codegen_emit_streaming` and `emit_asm`. Needs
+  hexa's file-append API checked first. Loop-tick-sized, host-RAM-independent.
+- ⬜ F5 — streaming default once F4 + byte-diff verified.
+- ⬜ F6 (architectural) — per-function IR reclaim (region-promote-to-parent
+  or struct freelist). The genuine native-RSS lever per Finding §1; not
+  loop-tick-sized — needs a design-gate.
