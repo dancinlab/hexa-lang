@@ -115,6 +115,15 @@
   evidence = "21-commit chain Phase 3-A..3-J · gn2[0]=7.97113 vs anima 7.97116 |Δ|=3.12e-5 · final 8.87e-7 vs 3.73e-7 (2.4× drift; same shape) · acc 8/8 = anima 8/8 · init weight byte-id max|Δ|=0.0 · source #4 (dict vs packed-farr impl-level) CONFIRMED by direct anima same-toolchain execution"
   rename_note = "Originally drafted as RFC 044 (commit 829e5076), renamed to RFC 045 to yield 044 to the parallel-session forge regime work (RFC 040/041 lineage continuation has stronger numerical-position claim)."
 
+@X x_rfc047 := "RFC 047 — flame Phase 4-B: per-block IR pass for compile-time block fusion" :: rfc [d=2026-05-17 draft]
+  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_047_flame_phase4b_block_fusion_ir_pass.md"
+  branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
+  scope = "Stage 2 from RFC 046 — per-block specialized C kernel emit via IR pass at `hexa build` time; static-shape specialization on (T, d, nh, nkv, h)"
+  preserves = "flame public API (g_flame_api_fixed); Phase 3 numerics byte-id (F-RFC047-STEP-EQ preserves flame ↔ anima 3.12e-5 delta exactly)"
+  asserts = "F-RFC047-BLOCK-WALL-IMPROVED: ≥3× wall reduction over Phase 3-J + 4-A-bwd baseline (13.33s → ≤4.5s on M-Mac CPU d=32·3L 80-step), minimum ≥2× for shippable"
+  staged = "Phase 4-B-1 pass scaffold + pattern match (~1 cycle) → 4-B-2 fwd emission (~1-2 cycles, ~2× wall) → 4-B-3 bwd emission (~1-2 cycles, ~5× wall combined) → 4-B-4 d=768·12L specialization + GPU prep (~1 cycle)"
+  granularity_floor_response = "Phase 4-B's within-block fusion is the right answer to the ~32K-ops granularity floor — small reductions (drin, attention_core_bwd P·dY) become inline code in the specialized C function rather than separate farr_matmul calls"
+
 @X x_rfc046 := "RFC 046 — flame Phase 4: compiler fusion for eager-PyTorch end-to-end throughput match" :: rfc [d=2026-05-17 draft]
   path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md"
   branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
