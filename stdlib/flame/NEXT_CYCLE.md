@@ -37,7 +37,13 @@ See `stdlib/flame/PHASE4B_SCAFFOLD.md` for full findings.
 - F-RFC047-BLOCK-WALL-IMPROVED: **PARTIAL** (1.28×, below ≥2× minimum)
 - F-RFC047-FALLBACK-PRESERVED: holds vacuously (production cmd_build untouched)
 
-**Next sub-step (Phase 4-B-3 — kernel emission)**: emit specialized C kernel per (T,d,nh,nkv,h) tuple per RFC 047 §69 Emit pattern. IPCP-rewritten source becomes input. Target: collapse 12+ memory passes (current) → 2-3 register-resident passes via clang -O2 specialization on dimensional constants. Expected ≥3× wall improvement over baseline.
+**Next sub-step (Phase 4-B-3 — kernel emission)**: emit specialized C kernel per (T,d,nh,nkv,h) tuple per RFC 047 §69 Emit pattern. IPCP-rewritten source becomes input. See `stdlib/flame/PHASE4B3_EMISSION_DESIGN.md` (commit pending) for full design draft:
+
+- Real bottleneck identified: **HexaVal boxing per op** (16M box/unbox per run), NOT just fn call overhead
+- Mechanism decomposition: boxing × allocator × fn-call = 1.9× × 1.5× × 1.35× ≈ 3.85×
+- Recommended path: P2 — emitter is hexa→C translator with primitive-typed signatures, IPCP source as input
+- Estimated effort: 6-9 cycles (4 sub-phases with per-phase falsifier)
+- Falsifier matrix: 5 new F-RFC047-* falsifiers detailed in design doc
 
 **OR** ship IPCP as-is for d=32·3L corpus benchmark (1.28× is real + zero risk) and pivot to Path B (GPU dispatch fire) — at d=768·12L the IPCP-only path may compose with GPU memory bandwidth gains for the eager-PyTorch baseline crossing.
 
