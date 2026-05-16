@@ -200,6 +200,25 @@ are heavier atlas-library smokes that the use/import fixes unlocked.
 Each is a separate next-cycle investigation (some exit 139 native
 vs 0 interp, so different runtime classes).
 
+### atlas_* DIFF diagnostic (bisected)
+
+Bisected the 4 atlas_* SIGSEGV cases to a scale-dependent
+struct-array element field-access:
+
+  • A minimal `[Node{…}, Node{…}]` (2 nodes, nested edges sub-struct)
+    iterates `arr[i].kind` correctly under aprime_cc.
+  • Scaled to **24 nodes** (mirroring `MATERIALS_LIMITS` size),
+    construction works AND iteration without field-access works
+    (rc=0, `len=24`). Only the `arr[i].kind` field access path
+    crashes (rc=139 SIGSEGV).
+  • `hexa_map_get` already routes VALSTRUCT through
+    `hexa_valstruct_get_by_key`, so the codegen's `field` shape is
+    correct in the small case; the scale-only failure indicates a
+    runtime memory issue (matches the documented
+    "struct_pack_map shallow-clone gotcha — outer만 clone, inner
+    [[T]] 는 공유" pitfall). Out of scope for this session — a
+    distinct runtime-side investigation.
+
 **14 / 21 byte-identical** through aprime_cc direct after #6 (66.6%).
 The remaining 6 CODEGEN-FAIL are HX2001/HX3001/HX3010/HX4001
 typecheck/lint strictness on imported library files (separate
