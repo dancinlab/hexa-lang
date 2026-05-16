@@ -44,15 +44,19 @@
 
 **Risk**: mid (cost-bearing; depends on GPU dispatch infrastructure stability).
 
-### Path C — attention_core_bwd evidence attempt (anti-perf likely, evidence value only)
+### Path C — attention_core_bwd evidence attempt (TESTED + REVERTED 2026-05-17)
 
 **Entry**: this README's findings — granularity floor ~32K ops at this scale.
 
-**Attempt**: route attention_core_bwd's dV accumulator (per-hh P^T·dctx_slice form) through farr_matmul. Expect anti-perf per the drin lesson (commit `6fa735c7`); revert if measured wall regression.
+**Attempt**: routed attention_core_bwd's dV accumulator (per-hh P^T·dctx_slice form) through farr_matmul.
 
-**Effort**: ~1-2 commits with measurement + likely revert.
+**Result**: REVERTED. Phase 3-B/3-C/3-F-3 absorbed the algorithm change (still PASS); Phase 3-F-3 corpus numerics byte-eq preserved (init 7.97113, final 8.87e-7, acc 8/8). BUT Phase 2 F-RFC043-LAYER-EQ-ATTN-BWD strict byte-eq VIOLATED (cross-impl reduction-order drift: wrapper produces 1.66e-16 ulp deviation from inline ref). Wall single-shot 11.46s vs 5-run baseline 13.33s — possible 14% improvement but single-shot is below noise floor.
 
-**Risk**: low (mechanical evidence attempt).
+**Lesson**: helper-wire-in approach (Path C class) preserves higher-level GRAD-EXACT verification but cannot preserve Phase 2 strict cross-impl byte-eq when reduction order changes. Phase 4-B IR-level fusion (RFC 047) must operate on the SHARED-ref path or use FMA-compatible reduction order to preserve Phase 2-tier guarantees.
+
+**Effort**: 2 commits (attempt + revert with evidence).
+
+**Risk**: low (mechanical, contained — revertible).
 
 ## Code state pointers
 

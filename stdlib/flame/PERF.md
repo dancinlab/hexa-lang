@@ -163,6 +163,40 @@ would likely fall well below the granularity floor → anti-perf.
 Future Phase 4 attention bwd fusion requires the IR-level approach
 (RFC 046 Stage 2/3), not the single-pattern helper.
 
+### Path C attempt — dV farr_matmul-routing (TESTED + REVERTED 2026-05-17)
+
+Routed `nn_attn_core_bwd`'s dV accumulator (per-hh P^T·dctx_hh form
+with T·hd ≈ 2K-output × T-reduce ≈ 16-32 inner) through `farr_matmul`,
+keeping dQ/dK inline (their per-i sdot dependence resists matmul form).
+
+Configurations swept on `flame_d32_corpus_test`:
+
+| Test | Path C result | Inline (revert) |
+|---|---|---|
+| flame_phase2 F-RFC043-LAYER-EQ-ATTN-BWD | **FAIL** dV dev 1.66e-16 | PASS dV dev 0.0 |
+| flame_phase3b 9-probe GRAD-EXACT | PASS max rel 3.59e-10 | PASS max rel 3.59e-10 |
+| flame_phase3c 10-probe GRAD-EXACT | PASS max rel 5.14e-6 | PASS max rel 5.14e-6 |
+| flame_d32_corpus init gn2 | 7.97113 (byte-eq with revert) | 7.97113 |
+| flame_d32_corpus final | 8.87e-7 acc 8/8 (byte-eq) | 8.87e-7 acc 8/8 |
+| flame_d32_corpus wall | 11.46s single-shot | 13.33s 5-run avg |
+
+**Wall**: Path C single-shot 11.46s vs revert 5-run avg 13.33s. The
+13.33s 5-run range was 13.03-13.93 (var ~7%); 11.46s falls 13% below
+the low end. Could be genuine improvement OR low-side outlier from
+single-shot measurement. PERF.md convention requires ≥5-run averaging
+for sub-second-per-iter walls — not measured, so no claim filed.
+
+**Decision**: REVERT. Phase 2 strict cross-impl byte-eq regression
+(dV last-ulp drift) is unacceptable even at 1.66e-16 magnitude; the
+verification tier guarantees compound across cycles, and any helper
+that breaks Phase 2 must be evaluated at the IR level (RFC 047)
+where reduction order can be preserved by construction.
+
+**Lesson for RFC 047**: Phase 4-B IR pass design must either (a) operate
+on the SHARED reference path so wrapper and ref share reduction order
+by construction, or (b) explicitly route both sides through the same
+optimized reducer (no parallel inline-vs-helper paths).
+
 ### Anima impl difference IS the source of the 3.12e-5 init-gn2 delta
 
 RFC 045 Phase 3-F-3 init gn2 = 7.97113 (flame) vs 7.97116 (anima)
