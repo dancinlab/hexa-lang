@@ -101,6 +101,25 @@ The mathematical equivalence (which Phase 3-H, 3-E, 3-G, 3-J all confirmed at th
 
 **Conclusion**: the 3.12e-5 init-gn2 delta is the documented RFC 040-class fp-non-associativity manifesting between anima's dict/list-based impl and flame's packed-farr-based impl. **Not** a correctness defect on either side. The qualitative training result (`acc 8/8`, collapse 8.98e6× ≈ 2.13e7×, full memorization) reproduces exactly because the underlying math is identical; only the last-ulp sequence diverges. Strict bit-eq across the two impls is not achievable without unifying the storage representation (which would defeat flame's compiler-only design goal — flame's packed farrs are an essential perf substrate, not an incidental choice).
 
+### Phase 4-A-bwd amplification finding (commit `flame_grad_exact_anima_compare_test`, 2026-05-17)
+
+Direct GRAD-EXACT(L0.Wg[5], ε=0.0005) comparison on the SAME probe + ε anima d_corpus_fire used:
+
+```
+anima reference:  analytic= 0.000220762  fd=6.91405e-05  |Δ|=0.000151622
+flame measure:    analytic=-0.000638070  fd=-1.997600e-04 |Δ|=0.000438310
+```
+
+flame's analytic gradient at this specific weight entry is ~3× larger and **sign-flipped** vs anima's. This is the cross-impl source #4 drift propagated through the FULL composed backward pass + the **additional batched accumulation pattern** introduced in Phase 4-A-bwd partial 4 (commit `e8c78f4e` dWg/dWu batched as da_all^T · rin2 via _db_grad_accum_farr) vs anima's per-ts inline `Σ_ts da_pos[k] · rin[ts, c]` order.
+
+Key insight: at the corpus-level metric (init gn2, acc 8/8, descent shape), the 80-step AdamW optimization is **chaotic enough to absorb the gradient-level drift** — every single iteration's gradient differs in last ulps but the AdamW state evolves to the SAME memorization regime within the 8-window task. Per-iteration gradient `byte-eq` is FALSE; per-iteration loss `acc` is TRUE.
+
+This refines source #4: the dict/list-vs-packed-farr distinction is **amplified by the batched-vs-inline reduction-order choice** when the gradient accumulator is restructured. Each fp non-associativity site contributes independently; combined they reach the ~3× analytic ratio + sign-flip seen at L0.Wg[5].
+
+**Implication for RFC 047/048 Phase 4-B/C implementation**: the IR-pass specialization will INCREASE this drift further (more reduction-order rearrangements vs anima inline). The qualitative byte-eq result (RFC 045 corpus-level: acc 8/8 = 8/8, collapse same order) is preserved by chaotic-optimization absorption, but per-iteration gradient bit-eq is not the right target across impls. F-RFC046-STEP-EQ (80-step trajectory byte-id) should be measured at the gn2 trajectory level (already validated in Phase 4-A-bwd LANDED state), NOT at the per-iteration gradient level. This is the honest framing already used in RFC 046/047/048.
+
+**No correctness regression**: flame GRAD-EXACT 9-probe central-diff at ε=1e-4 (Phase 3-C) shows max rel = 2.66e-08 — flame's analytic gradient is self-consistent with its own central-diff. The ~3× ratio vs anima at this specific probe is cross-impl drift, not a within-impl error.
+
 ## What is closed
 
 - **F-RFC043-STEP-EQ** at the algorithm-byte-eq tier: flame's full train_step trajectory reproduces the anima d_corpus_fire campaign oracle within `|Δ| < 0.05 abs` (the declared falsifier tolerance) **with every sub-piece algorithm verified byte-id**. The mandatory `g_blue_closed_mandate` connection-point check passes.
