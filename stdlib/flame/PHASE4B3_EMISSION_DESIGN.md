@@ -165,25 +165,46 @@ with measurement (2026-05-17 boxing micro-bench, see PERF.md).
    on arm64. The boxed path cannot vectorize through the tag
    dispatch branch.
 
-2. **Allocator elimination (× ~1.3-1.7, estimate, not yet measured)**:
-   Bp_l/Bc_l/Xc farr_zeros + farr_free per layer (4 layer-calls × 3
-   allocs × 80 steps = 960 alloc/free ops) replaced by stack scratch.
-   Heap allocator latency plus farr_table mutation overhead disappear.
+2. **Allocator elimination — MEASURED 1.00× on M-Mac (WEAK)**
+   `tool/flame_phase4b3_alloc_bench.c` simulates the per-layer pattern:
+   malloc(Bp_l) + malloc(Bc_l) + malloc(Xc) + memset(0) + strided
+   touch + free × 240 layer-calls × 50 reps. 5-run avg:
+   **heap 0.0185s / stack 0.0185s = 1.00×** (var 0.5%).
+
+   Why the estimate was wrong: macOS libsystem_malloc has a hot
+   thread-local cache for typical sizes (~75 KB Bp_l, ~70 KB Bc_l,
+   ~4 KB Xc are all common slab buckets). Page-fault cost on first
+   touch dominates, and stack arrays of 75 KB also fault pages on
+   first touch — same cost as heap alloc + touch.
+
+   **Caveat**: this bench uses raw malloc/free. The real flame
+   `farr_zeros` + `farr_free` go through `farr_table` indirection
+   which may include lock acquisition, slot lookup, free-list mutation,
+   etc. — overhead the bench does NOT capture. Real-world allocator
+   factor could be slightly higher than 1.00× but unlikely to reach
+   the original 1.3-1.7× estimate. **Use 1.0× as the planning factor.**
 
 3. **Fn-call elimination (× ~1.2-1.5, estimate)**: 7-12 inner fn
    calls per block-fwd (rmsnorm/linear/attn_core/swiglu/...) inlined
    into one contiguous fn body. Register-resident intermediates
    instead of memory round-trips through farr_table.
 
-**Updated compound estimate** (boxing measured, others still estimated):
-- Optimistic:  4.0× × 1.7× × 1.5×  ≈ **10.2×**
-- Geometric (midpoint of remaining estimates): 4.0× × 1.5× × 1.35× ≈ **8.1×**
-- Honest minimum (if others weaker than estimated): 4.0× × 1.3× × 1.2× ≈ **6.24×**
+**Updated compound estimate** (2/3 mechanisms measured, fn-call estimated):
+- Optimistic:  4.0× × 1.0× × 1.5×  ≈ **6.0×**
+- Geometric (midpoint of remaining fn-call estimate): 4.0× × 1.0× × 1.35× ≈ **5.4×**
+- Honest minimum (if fn-call weaker): 4.0× × 1.0× × 1.2× ≈ **4.8×**
 
-All three scenarios are well above RFC 047 §137 ≥3× target with
-substantial margin. The 8× geometric midpoint suggests Phase 4-B-3
-may approach or exceed the RFC 043 "exceed eager-PyTorch" boundary
-(estimated 3.4s × 8 / 22 ≈ 1.2× crossing for d=32·3L).
+All three scenarios remain well above RFC 047 §137 ≥3× target.
+**Revised expected wall improvement: 4.8-6.0× over Phase 4-A-bwd
+baseline** (down from prior 6.24-10.2× estimate after allocator-elim
+measured weaker than expected).
+
+At 5.4× midpoint on the d=32·3L baseline of 12.574s, expected wall
+post-Phase-4-B-3 is **~2.33s** — flame would then be 0.105× of anima
+22.13s (~10× faster) and potentially approach the eager-PyTorch
+boundary at scale (336.85s on A100; M-Mac CPU vs A100 GPU dominates
+the cross-platform comparison, so direct compare requires Phase 4-D
+GPU dispatch).
 
 **Reality caveat**: the 4× boxing factor is measured on an inner-loop
 best-case workload (pure Σx²). Real flame block_fwd mixes ops with

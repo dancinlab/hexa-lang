@@ -99,6 +99,40 @@ implementation investment: combined with allocator + fn-call
 elimination (estimated), expected ceiling is 6.24× honest minimum
 to 10.2× optimistic, well above RFC 047 §137 ≥3× target.
 
+## Phase 4-B-3 allocator-elim probe (2026-05-17) — MEASURED 1.00× (WEAK)
+
+Synthetic micro-bench (`tool/flame_phase4b3_alloc_bench.c`) measures
+malloc+memset+touch+free vs stack-resident scratch+memset+touch on
+the same buffer-size triplet (Bp_l=75KB, Bc_l=70KB, Xc=4KB × 240
+layer-calls × 50 reps).
+
+| Run | heap (s) | stack (s) | ratio |
+|---|---|---|---|
+| 1 | 0.0185 | 0.0185 | 1.00× |
+| 2 | 0.0185 | 0.0185 | 1.00× |
+| 3 | 0.0186 | 0.0185 | 1.00× |
+| 4 | 0.0185 | 0.0185 | 1.00× |
+| 5 | 0.0186 | 0.0185 | 1.00× |
+| **avg** | **0.0185** | **0.0185** | **1.00×** |
+
+Initial PHASE4B3 estimate was 1.3-1.7× — measurement is **WEAKER**.
+
+Mechanism analysis: macOS libsystem_malloc has a hot thread-local
+cache for 4 KB / 70 KB / 75 KB sizes. Page-fault cost on first touch
+dominates BOTH paths equally (stack 75 KB also faults pages).
+
+**Caveat**: real flame uses `farr_zeros` + `farr_free` through
+`farr_table` indirection (lock + slot lookup + free-list mutation).
+Bench's raw malloc/free undercounts that overhead — actual factor
+may be slightly above 1.00× but unlikely to reach 1.3×. Planning
+factor for Phase 4-B-3 expected ceiling revised from 1.3-1.7× to
+1.0× (PHASE4B3_EMISSION_DESIGN.md §"First-principle mechanism" §2).
+
+**Compound estimate impact**:
+- Was: 6.24× honest minimum → 10.2× optimistic
+- Now: **4.8× honest minimum → 6.0× optimistic** (geometric mid 5.4×)
+- Still well above RFC 047 §137 ≥3× ceiling — Phase 4-B-3 case holds.
+
 ## Phase 3-I source analysis findings (cross-impl source isolation, 2026-05-17)
 
 ### Per-window gn2 decomposition (flame_d32_corpus_test, 2026-05-17)
