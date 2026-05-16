@@ -1956,12 +1956,29 @@ pub fn lower_hir(module: HModule) -> MModule {
         k = k + 1
     }
     let mut funcs: [MFunc] = []
+    let mut fn_names: [string] = []
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
         if it.kind == "ITEM_FN" {
-            let f = _lower_fn(it, globals)
-            funcs.push(f)
+            // First-wins fn dedup (mirrors the bind pre-pass that
+            // resolves duplicate pub symbols across imported files
+            // with a first-wins skip). Without this skip the second
+            // copy of e.g. `pub fn absf` from two atlas modules
+            // makes it through to codegen and the assembler errors
+            // on `_absf already defined`. Bind only suppressed the
+            // typed env entry; the items list still carried both.
+            let mut already = false
+            let mut nj = 0
+            while nj < len(fn_names) {
+                if fn_names[nj] == it.name { already = true; break }
+                nj = nj + 1
+            }
+            if !already {
+                let f = _lower_fn(it, globals)
+                funcs.push(f)
+                fn_names.push(it.name.substring(0, len(it.name)))
+            }
         }
         i = i + 1
     }
