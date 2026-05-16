@@ -243,60 +243,56 @@ static void _hexa_init_path_augment(void) {
 // whether to actually syscall. Per-call overhead ≈ 1 increment + 1 mask + 1
 // branch; the syscall is amortized to ~once per tens of MB of allocation.
 //
-// Defaults & overrides:
-//   HEXA_MEM_UNLIMITED=1           → cap disabled
-//   HEXA_MEM_CAP_MB=<N>            → cap to N MB (must be >0)
-//   default                        → 4096 MB (2026-05-14: raised 2048 → 4096
-//                                    after measuring drill_test peak at
-//                                    2.00 GiB — exactly the 2048 MB ceiling.
-//                                    History: 2026-05-13 raised 768 → 2048
-//                                    after n6 Wave 1 enriched
-//                                    compiler/atlas/embedded.gen.hexa
-//                                    [3.27 MB → 4.92 MB rodata; ~7398
-//                                    AtlasNode literals + 5 per-kind arrays
-//                                    with default GradeInfo/EdgeInfo per
-//                                    node]. Measured RSS peaks under the
-//                                    768→2048 fix:
-//                                      static_index_test : 1.56 GiB  PASS
-//                                      overlay_test      : 1.94 GiB  PASS
-//                                      drill_test        : 2.00 GiB  FAIL
-//                                                          (cap exceeded:
-//                                                           rss=2048MB >
-//                                                           cap=2048MB)
-//                                    The drill engine adds ~400 MB of chain
-//                                    state on top of the embed parse peak;
-//                                    2048 MB was a no-headroom ceiling for
-//                                    it. Raising default → 4096 MB matches
-//                                    the module_loader child default (since
-//                                    2026-05-13, self/main.hexa:1110) and
-//                                    gives ~2× headroom on the heaviest
-//                                    observed smoke. Operator override via
-//                                    HEXA_MEM_CAP_MB / HEXA_MEM_UNLIMITED
-//                                    unchanged. Original 768 MB rationale
-//                                    (hive watcher runaway containment) is
-//                                    addressed by the 4 K-tick rss probe
-//                                    (`0xFFF` stride), which catches bursty
-//                                    allocators well inside 4 GB.
+// Defaults & overrides (2026-05-16 — opt-IN model):
+//   default               → NO cap. A legitimate heavy compile (the
+//                            compiler self-compile peaks ~30 GB) is more
+//                            common than a runaway, and a spurious
+//                            exit(77) kills real work — worse than
+//                            letting the OS arbitrate. The cap is OFF
+//                            unless explicitly asked for.
+//   HEXA_MEM_LIMIT=<N>     → opt in to a cap of N MB (must be >0). The
+//                            primary knob — e.g. HEXA_MEM_LIMIT=4096
+//                            asserts a 4 GB ceiling for a footprint test.
+//   HEXA_MEM_CAP_MB=<N>    → legacy alias of HEXA_MEM_LIMIT (still honored).
+//   HEXA_MEM_UNLIMITED=1   → legacy explicit-disable; now also the default,
+//                            kept so old wrappers/scripts stay valid no-ops.
+//
+// Pre-2026-05-16 this defaulted to a 4096 MB cap (raised over time
+// 768→2048→4096 as the embedded atlas grew). That default is removed —
+// callers wanting a ceiling now set HEXA_MEM_LIMIT explicitly.
 //
 // CLI flags (parsed by the hexa wrapper script, exported as env above):
-//   --mem-unlimited                → HEXA_MEM_UNLIMITED=1
-//   --mem-cap=<N>                  → HEXA_MEM_CAP_MB=<N>
+//   --mem-limit=<N> / --mem-cap=<N> → HEXA_MEM_LIMIT / HEXA_MEM_CAP_MB
+//   --mem-unlimited                 → HEXA_MEM_UNLIMITED=1 (now a no-op)
 
-static size_t _hx_mem_cap_bytes = 4096ull * 1024ull * 1024ull;  // 4096 MB default
-static int    _hx_mem_cap_disabled = 0;
+static size_t _hx_mem_cap_bytes = 4096ull * 1024ull * 1024ull;  // used only when a cap is opted in
+static int    _hx_mem_cap_disabled = 1;  // 2026-05-16: NO cap by default
 static volatile uint64_t _hx_mem_tick_ctr = 0;
 
 __attribute__((constructor))
 static void _hexa_init_mem_cap(void) {
-    const char* unl = getenv("HEXA_MEM_UNLIMITED");
-    if (unl && unl[0] == '1' && unl[1] == '\0') {
-        _hx_mem_cap_disabled = 1;
-        return;
+    // Opt-in cap. HEXA_MEM_LIMIT is the primary knob; HEXA_MEM_CAP_MB is
+    // a legacy alias. Either one, set to a positive MB value, enables the
+    // cap. HEXA_MEM_UNLIMITED=1 forces it back off (and is the default).
+    const char* lim = getenv("HEXA_MEM_LIMIT");
+    if (lim && lim[0] != '\0') {
+        long long mb = atoll(lim);
+        if (mb > 0) {
+            _hx_mem_cap_bytes = (size_t)mb * 1024ull * 1024ull;
+            _hx_mem_cap_disabled = 0;
+        }
     }
     const char* cap = getenv("HEXA_MEM_CAP_MB");
     if (cap && cap[0] != '\0') {
         long long mb = atoll(cap);
-        if (mb > 0) _hx_mem_cap_bytes = (size_t)mb * 1024ull * 1024ull;
+        if (mb > 0) {
+            _hx_mem_cap_bytes = (size_t)mb * 1024ull * 1024ull;
+            _hx_mem_cap_disabled = 0;
+        }
+    }
+    const char* unl = getenv("HEXA_MEM_UNLIMITED");
+    if (unl && unl[0] == '1' && unl[1] == '\0') {
+        _hx_mem_cap_disabled = 1;
     }
 }
 
@@ -524,8 +520,8 @@ __attribute__((noinline))
 static void _hx_mem_cap_fire(size_t rss) {
     fprintf(stderr,
         "[hexa-runtime] memory cap exceeded: rss=%zuMB > cap=%zuMB\n"
-        "[hexa-runtime] hint: re-run with --mem-unlimited "
-        "(or HEXA_MEM_UNLIMITED=1) to disable, or --mem-cap=<MB> to raise.\n",
+        "[hexa-runtime] hint: this cap is opt-in (HEXA_MEM_LIMIT/HEXA_MEM_CAP_MB) — "
+        "raise HEXA_MEM_LIMIT=<MB>, or unset it for no cap (the default).\n",
         (size_t)(rss / (1024ull*1024ull)),
         (size_t)(_hx_mem_cap_bytes / (1024ull*1024ull)));
     // Telemetry: ledger emit before exit. Best-effort; never blocks the abort.
