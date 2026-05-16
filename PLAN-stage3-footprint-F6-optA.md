@@ -192,9 +192,34 @@ runtime primitive used in P0a — small follow-up, scoped to A4.5.
 | A2 | `hexa_val_arena_heapify_to_parent` wrapper (uses A1 + temp-buf). | dormant; clang-c'd. |
 | A3 | `__hexa_fn_arena_return_region` variant; thread-local opt-in flag; `env("__HEXA_ARENA_RETURN_REGION__")` hook. | dormant; the codegen path is unchanged. |
 | A4 | per-call region-toggle pattern (no new primitive needed). | landed: design decided, doc updated. Residual: substring/strbuf residency check at A5/A6. |
-| A5 | Wire `stream.hexa` to push/pop iter scopes around the loop body and toggle the env flag. | the actual integration. |
-| A6 | ubu rebuild + RSS measurement: legacy vs `--stream` with region returns. Byte-diff. | the verdict. |
-| A7 | Make `--stream` default once A6 verifies. | retire the gate (F5). |
+| A5 | Wire `stream.hexa` … toggle the env flag. | ✅ landed `eab52730`; iterated A5.1 `6f171b11` (gate), A5.2 `40ccb718` (defer parts.push past POP), A5.3 `b3f5d4d8` + A5.3.1 `ff752c66` (double-gate on HEXA_STREAM_RECLAIM — arena defaults ON in new binaries, so an arena-only gate was live by default). |
+| A6 | ubu rebuild + RSS measurement. | 🔶 partial (2026-05-16). sanity small: legacy ↔ `--stream` **byte-IDENTICAL** ✓ (default path correct). full self-compile under `HEXA_VAL_ARENA=1 --stream` (no reclaim): RSS **plateaued ~12 GB** (vs legacy ARENA=0 30 GB — the *existing* per-fn arena scope already gives ~2.5× even without F6-A) BUT wall-time ≫14× legacy → killed at 45 min, no completed `.s` → no full byte-diff. The F6-A reclaim path (`HEXA_STREAM_RECLAIM=1`) SIGSEGVs at `_new_block` (hir_to_mir.hexa:192) — A1/A2 ↔ array-push (`cap<0` arena marker) correctness gap under arena=1. **Blocked: needs runtime debug, not a loop tick.** |
+| A7 | Make `--stream` default once A6 verifies. | ⛔ gated on A6 full byte-diff + the A6 SIGSEGV fix. Not safe to flip yet. |
+
+## A6 findings (2026-05-16, empirical)
+
+1. **Infra correct under default.** A1–A5 + the A5.3 double-gate make
+   `--stream` byte-identical to legacy on the small sanity. The
+   streaming structure is sound; the default path is safe on main.
+2. **F6-A reclaim is blocked.** `HEXA_STREAM_RECLAIM=1` → SIGSEGV in
+   `_new_block`. Root area: `hexa_val_copy_into_arena` (A1) emits
+   `cap<0` arena-marked arrays; the runtime array-push grow path under
+   arena=1 mishandles them when the per-iter POP interleaves with the
+   codegen-emitted `__hexa_fn_arena_enter/return`. This is the genuine
+   remaining work and is a careful runtime debug — not loop-tick-sized.
+3. **Side result — ARENA=1 already bounds RSS.** Even with F6-A reclaim
+   OFF, `HEXA_VAL_ARENA=1`'s existing per-fn scope reclaim plateaus the
+   self-compile at ~12 GB vs ARENA=0's 30 GB. But ARENA=1 wall-time is
+   ≫14× → impractical as-is. So the *real* footprint lever is making
+   ARENA=1 fast enough (the `f4b597a7` envelope fix was step 1; more
+   heapify-cost reduction needed) — possibly a higher-value path than
+   F6-A's per-iter reclaim.
+
+**Loop terminus.** A1–A5 are landed and safe (default byte-identical).
+Everything past here — the A6 SIGSEGV debug, ARENA=1 perf, or the
+x86_64 verdict ABI — is substantial non-tick engineering. Continuing a
+fixed-interval loop produces no further verifiable per-tick progress
+(COMPILE-ONLY.log.tape `loop_terminus` discipline).
 
 ## Verification
 
