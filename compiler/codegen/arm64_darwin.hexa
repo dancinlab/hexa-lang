@@ -996,6 +996,8 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "split"         { return "hexa_str_split" }
     if name == "substring"     { return "hexa_str_substring" }
     if name == "to_int"        { return "hexa_to_int" }
+    if name == "to_float"      { return "hexa_to_float" }
+    if name == "to_bool"       { return "hexa_to_bool" }
     if name == "to_string"     { return "hexa_to_string" }
     if name == "trim"          { return "rt_str_trim" }
     if name == "type_of"       { return "hexa_type_of" }
