@@ -246,3 +246,22 @@ Phase 3-C = decoder_lib (n_layer block stack + tied embedding +
 tied LM head + final RMSNorm) + train_lib (compiled train_step +
 80-step trajectory). F-RFC043-STEP-EQ — campaign oracle 7.97116 →
 3.73374e-07 bit-equal 재현 (g_blue_closed_mandate mandatory).
+
+### 2026-05-17 — Phase 3-C LANDED (decoder_lib, 2/2 PASS)
+landed: `stdlib/flame/{decoder_lib.hexa, flame_decoder_test.hexa}`.
+full model composition. packed M/Mc/Mg layout + nn_decoder_{fwd,grad,
+ce_loss,gn2,predict}.
+
+- F-RFC043-DECODER-DET        PASS — fwd logits byte-identical
+- F-RFC043-DECODER-GRAD-EXACT PASS — 10-probe central-diff max|Δ|/scale
+  = **2.66e-08** (threshold 1e-3 의 ~4e4× 미만). FULL composed reverse
+  (head→tied→finalnorm→block-stack→RoPE→GQA→embed) 한 falsifier 로
+  검증; 캠페인 F-D-PORT-5b 패턴 등가.
+- regression: 모든 prior 유지. call_builtin = 0. stdlib/flame/
+  LoC 누적 ~4.1k.
+
+Phase 3-D 진입: train_lib + 80-step trajectory. 정직 caveat: anima
+oracle (gn2 7.97116 → 3.73374e-07) 의 bit-eq 은 dt_sqrt/dt_exp/dt_ln/
+d5_sin/cos hand-Taylor implementation 선결 (현 flame 은 builtin
+transcendental 사용). 3-D 선두는 (a) monotonic descent + (b) oracle-tol
+fp-agreement; bit-eq 는 transcendental 치환 후 별도 sub-phase.

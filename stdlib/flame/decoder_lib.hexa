@@ -1,0 +1,459 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/decoder_lib.hexa — flame Phase 3-C (RFC 043)
+//
+// Full ConsciousDecoderV2 model composition: ids → logits + reverse.
+// 등가: anima d_train5_lib d5_forward / d5_grad.
+//
+// Model parameter pack `M` layout:
+//   tok_emb [V·d]                  offset = 0
+//   gF      [d]                    offset = V·d
+//   block[l]  [bp_total]           offset = V·d + d + l·bp_total,
+//                                  for l = 0..n_layer−1
+//   M_total = V·d + d + n_layer·bp_total(d, nh, nkv, h)
+//
+// Cache pack `Mc` layout (one fwd-pass cache):
+//   X       [T·d]                  embed lookup output (needed for L=0 bwd)
+//   logits  [V]
+//   zr      [d]                    last-pos vector before final RMSNorm
+//   zT_xn   [d]                    final RMSNorm xn intermediate
+//   zT_inv  [1]                    final RMSNorm inv
+//   block[l] [bc_total]            per-layer block cache
+//   Mc_total = T·d + V + 2·d + 1 + n_layer·bc_total(...)
+//
+// Gradient pack `Mg` — same layout as M.
+//
+// Falsifiers (Phase 3-C):
+//   F-RFC043-DECODER-GRAD-EXACT — central-diff vs analytic ∂L/∂θ at
+//     multi-probe across (tok_emb, gF, block[0..L-1]) — proves the
+//     FULL composed reverse (head→tied→finalnorm→block-stack→embed)
+//     is exact. (campaign F-D-PORT-5b 등가)
+//   F-RFC043-DECODER-DET — fwd determinism
+//
+// Note (g3): 본 decoder 는 final RMSNorm 을 **마지막 position 만** 적용
+// (d5_forward 와 동일). Last-token prediction 용 — d_corpus_fire 의 80
+// AdamW step 이 같은 형태로 학습. 다른 학습 형태 (전체 position CE)
+// 는 Phase 3-D 이후.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/decoder_block_lib"
+
+// ── M (params) offset helpers ──────────────────────────────────────────
+pub fn m_off_tok_emb(d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return 0
+}
+pub fn m_off_gF(d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return V * d
+}
+pub fn m_off_block(l: int, d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return V * d + d + l * bp_total(d, nh, nkv, h)
+}
+pub fn m_total(d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return V * d + d + n_layer * bp_total(d, nh, nkv, h)
+}
+
+// ── Mc (cache) offset helpers ──────────────────────────────────────────
+pub fn mc_off_X(T: int, d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return 0
+}
+pub fn mc_off_logits(T: int, d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return T * d
+}
+pub fn mc_off_zr(T: int, d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return T * d + V
+}
+pub fn mc_off_zT_xn(T: int, d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return T * d + V + d
+}
+pub fn mc_off_zT_inv(T: int, d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return T * d + V + 2 * d
+}
+pub fn mc_off_block(l: int, T: int, d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return T * d + V + 2 * d + 1 + l * bc_total(T, d, nh, nkv, h)
+}
+pub fn mc_total(T: int, d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
+    return T * d + V + 2 * d + 1 + n_layer * bc_total(T, d, nh, nkv, h)
+}
+
+// ── Full decoder forward ──────────────────────────────────────────────
+// inputs:  ids (T-len; ids[i] = token id 0..V-1), M (packed params),
+//          cos/sin (T·hd each).
+// outputs: Mc (packed cache, including X, per-layer Bc, zr/zT_xn/zT_inv,
+//          and logits).
+pub fn nn_decoder_fwd(ids: int, M: int, Mc: int, cos: int, sin: int,
+                      T: int, d: int, nh: int, nkv: int, h: int,
+                      V: int, n_layer: int) {
+    let oX = mc_off_X(T, d, nh, nkv, h, V, n_layer)
+    let oLogits = mc_off_logits(T, d, nh, nkv, h, V, n_layer)
+    let oZr = mc_off_zr(T, d, nh, nkv, h, V, n_layer)
+    let oZTxn = mc_off_zT_xn(T, d, nh, nkv, h, V, n_layer)
+    let oZTinv = mc_off_zT_inv(T, d, nh, nkv, h, V, n_layer)
+    let oTemb = m_off_tok_emb(d, nh, nkv, h, V, n_layer)
+    let oGF = m_off_gF(d, nh, nkv, h, V, n_layer)
+
+    // 1. Embedding lookup: X[i·d + c] = tok_emb[ids[i]·d + c]
+    let mut i = 0
+    while i < T {
+        let tok = to_int(farr_get(ids, i))
+        let mut c = 0
+        while c < d {
+            let _ = farr_set(Mc, oX + i * d + c,
+                             farr_get(M, oTemb + tok * d + c))
+            c = c + 1
+        }
+        i = i + 1
+    }
+
+    // 2. n_layer blocks. Each block reads Xc and writes Bc (with Bc.Xout
+    // = next layer's Xc). For l=0, Xc = X (oX in Mc). For l>0, Xc =
+    // prev block's Xout offset.
+    let mut l = 0
+    while l < n_layer {
+        let bp_off = m_off_block(l, d, nh, nkv, h, V, n_layer)
+        let bc_off = mc_off_block(l, T, d, nh, nkv, h, V, n_layer)
+        // For X input, we need a contiguous farr starting at offset.
+        // farr_matmul/inline ops in nn_decoder_block_fwd read from
+        // arbitrary base `X` — but `X` here is a farr_id with offset
+        // implicit at 0. To pass a sub-region we'd need a slice;
+        // workaround: copy the per-layer input into a small scratch
+        // farr. (No farr-slice op in flame yet.)
+        let Xc = farr_zeros(T * d)
+        let prev_off = if l == 0 {
+            oX
+        } else {
+            mc_off_block(l - 1, T, d, nh, nkv, h, V, n_layer)
+                + bc_off_Xout(T, d, nh, nkv, h)
+        }
+        let mut k = 0
+        while k < T * d {
+            let _ = farr_set(Xc, k, farr_get(Mc, prev_off + k))
+            k = k + 1
+        }
+        // Per-block param/cache scratch — alloc + copy in/out (similar
+        // workaround for missing per-region API).
+        let Bp_l = farr_zeros(bp_total(d, nh, nkv, h))
+        let mut p = 0
+        while p < bp_total(d, nh, nkv, h) {
+            let _ = farr_set(Bp_l, p, farr_get(M, bp_off + p))
+            p = p + 1
+        }
+        let Bc_l = farr_zeros(bc_total(T, d, nh, nkv, h))
+        nn_decoder_block_fwd(Xc, Bp_l, Bc_l, cos, sin, T, d, nh, nkv, h)
+        // copy Bc_l back into Mc at block l's slot.
+        let mut q = 0
+        while q < bc_total(T, d, nh, nkv, h) {
+            let _ = farr_set(Mc, bc_off + q, farr_get(Bc_l, q))
+            q = q + 1
+        }
+        let _ = farr_free(Xc)
+        let _ = farr_free(Bp_l)
+        let _ = farr_free(Bc_l)
+        l = l + 1
+    }
+
+    // 3. Read last-layer Xout last-position into zr ; final RMSNorm.
+    let last_bc_off = mc_off_block(n_layer - 1, T, d, nh, nkv, h, V, n_layer)
+    let last_Xout_off = last_bc_off + bc_off_Xout(T, d, nh, nkv, h)
+    let mut c_z = 0
+    while c_z < d {
+        let _ = farr_set(Mc, oZr + c_z,
+                         farr_get(Mc, last_Xout_off + (T - 1) * d + c_z))
+        c_z = c_z + 1
+    }
+    // final RMSNorm(zr, gF) → zT (stored in scratch) + zT_xn + zT_inv.
+    let eps = 0.000001
+    let mut ms = 0.0
+    let mut iz = 0
+    while iz < d {
+        let xv = farr_get(Mc, oZr + iz)
+        ms = ms + xv * xv
+        iz = iz + 1
+    }
+    ms = ms / to_float(d)
+    let inv = 1.0 / sqrt(ms + eps)
+    let _ = farr_set(Mc, oZTinv, inv)
+    let zT_scratch = farr_zeros(d)
+    let mut jz = 0
+    while jz < d {
+        let xni = farr_get(Mc, oZr + jz) * inv
+        let _ = farr_set(Mc, oZTxn + jz, xni)
+        let _ = farr_set(zT_scratch, jz, farr_get(M, oGF + jz) * xni)
+        jz = jz + 1
+    }
+
+    // 4. tied LM head: logits[k] = Σ_j tok_emb[k·d + j] · zT[j]
+    let mut k_l = 0
+    while k_l < V {
+        let mut acc = 0.0
+        let mut cl = 0
+        while cl < d {
+            acc = acc + farr_get(M, oTemb + k_l * d + cl)
+                      * farr_get(zT_scratch, cl)
+            cl = cl + 1
+        }
+        let _ = farr_set(Mc, oLogits + k_l, acc)
+        k_l = k_l + 1
+    }
+    let _ = farr_free(zT_scratch)
+}
+
+// ── Decoder backward: ids+target → ∂L/∂(tok_emb, gF, blocks) ──────────
+// L = CE(softmax(logits), target_t)  ⟹  dlogits[k] = softmax[k] − [k=t]
+// Caller pre-zeroes Mg (gradient pack). Accumulates into Mg.
+pub fn nn_decoder_grad(ids: int, target_t: int,
+                       M: int, Mc: int, Mg: int,
+                       cos: int, sin: int,
+                       T: int, d: int, nh: int, nkv: int, h: int,
+                       V: int, n_layer: int) {
+    let oX = mc_off_X(T, d, nh, nkv, h, V, n_layer)
+    let oLogits = mc_off_logits(T, d, nh, nkv, h, V, n_layer)
+    let oZr = mc_off_zr(T, d, nh, nkv, h, V, n_layer)
+    let oZTxn = mc_off_zT_xn(T, d, nh, nkv, h, V, n_layer)
+    let oZTinv = mc_off_zT_inv(T, d, nh, nkv, h, V, n_layer)
+    let oTemb = m_off_tok_emb(d, nh, nkv, h, V, n_layer)
+    let oGF = m_off_gF(d, nh, nkv, h, V, n_layer)
+
+    // dl[k] = softmax(logits)[k] − [k = target_t]
+    // softmax (stable): m = max, p = exp(z - m) / Σ
+    let mut mx = farr_get(Mc, oLogits)
+    let mut i = 1
+    while i < V {
+        if farr_get(Mc, oLogits + i) > mx { mx = farr_get(Mc, oLogits + i) }
+        i = i + 1
+    }
+    let dl = farr_zeros(V)
+    let mut tot = 0.0
+    let mut i2 = 0
+    while i2 < V {
+        let e = exp(farr_get(Mc, oLogits + i2) - mx)
+        let _ = farr_set(dl, i2, e)
+        tot = tot + e
+        i2 = i2 + 1
+    }
+    let mut k = 0
+    while k < V {
+        let p_k = farr_get(dl, k) / tot
+        let target = if k == target_t { 1.0 } else { 0.0 }
+        let _ = farr_set(dl, k, p_k - target)
+        k = k + 1
+    }
+
+    // tied head bwd: dtemb_head[k·d + j] = dl[k] · zT[j]
+    //                dzT[j]              = Σ_k tok_emb[k·d + j] · dl[k]
+    // We need zT (final RMSNorm output). Recompute from zr + gF + zT_inv.
+    let zT_recon = farr_zeros(d)
+    let inv = farr_get(Mc, oZTinv)
+    let mut jz = 0
+    while jz < d {
+        let xni = farr_get(Mc, oZr + jz) * inv
+        let _ = farr_set(zT_recon, jz, farr_get(M, oGF + jz) * xni)
+        jz = jz + 1
+    }
+    // accumulate dtemb_head into Mg.tok_emb
+    let mut k_h = 0
+    while k_h < V {
+        let dlk = farr_get(dl, k_h)
+        let mut j_h = 0
+        while j_h < d {
+            let cur = farr_get(Mg, oTemb + k_h * d + j_h)
+            let _ = farr_set(Mg, oTemb + k_h * d + j_h,
+                             cur + dlk * farr_get(zT_recon, j_h))
+            j_h = j_h + 1
+        }
+        k_h = k_h + 1
+    }
+    let dzT = farr_zeros(d)
+    let mut j2 = 0
+    while j2 < d {
+        let mut acc = 0.0
+        let mut k2 = 0
+        while k2 < V {
+            acc = acc + farr_get(M, oTemb + k2 * d + j2) * farr_get(dl, k2)
+            k2 = k2 + 1
+        }
+        let _ = farr_set(dzT, j2, acc)
+        j2 = j2 + 1
+    }
+    let _ = farr_free(zT_recon)
+    let _ = farr_free(dl)
+
+    // Final RMSNorm bwd: dzT → dzr (d-len) + accumulate dgF into Mg.gF
+    // dxn[i] = dzT[i] · gF[i] ; dgF[i] += dzT[i] · zT_xn[i]
+    // dot    = Σ dxn · zr ; dzr[i] = inv·dxn[i] − (inv³·zr[i]/d)·dot
+    let dzr = farr_zeros(d)
+    let mut dot = 0.0
+    let mut ir = 0
+    while ir < d {
+        let dxn_i = farr_get(dzT, ir) * farr_get(M, oGF + ir)
+        let cur_gF = farr_get(Mg, oGF + ir)
+        let _ = farr_set(Mg, oGF + ir,
+                         cur_gF + farr_get(dzT, ir) * farr_get(Mc, oZTxn + ir))
+        dot = dot + dxn_i * farr_get(Mc, oZr + ir)
+        let _ = farr_set(dzr, ir, dxn_i)  // scratch
+        ir = ir + 1
+    }
+    let inv3 = inv * inv * inv
+    let scl = (inv3 / to_float(d)) * dot
+    let mut ir2 = 0
+    while ir2 < d {
+        let dxn_j = farr_get(dzr, ir2)
+        let zj = farr_get(Mc, oZr + ir2)
+        let _ = farr_set(dzr, ir2, inv * dxn_j - scl * zj)
+        ir2 = ir2 + 1
+    }
+    let _ = farr_free(dzT)
+
+    // grad enters block stack only at last position: dXc init.
+    let dXc = farr_zeros(T * d)
+    let mut cz = 0
+    while cz < d {
+        let _ = farr_set(dXc, (T - 1) * d + cz, farr_get(dzr, cz))
+        cz = cz + 1
+    }
+    let _ = farr_free(dzr)
+
+    // reverse through blocks L-1 → 0
+    let mut l_b = n_layer - 1
+    while l_b >= 0 {
+        let bp_off = m_off_block(l_b, d, nh, nkv, h, V, n_layer)
+        let bg_off = m_off_block(l_b, d, nh, nkv, h, V, n_layer)
+        let bc_off = mc_off_block(l_b, T, d, nh, nkv, h, V, n_layer)
+        // Xin for this block: if l_b==0, X (oX); else prev block's Xout.
+        let prev_Xout_off = if l_b == 0 {
+            oX
+        } else {
+            mc_off_block(l_b - 1, T, d, nh, nkv, h, V, n_layer)
+                + bc_off_Xout(T, d, nh, nkv, h)
+        }
+        let Xin = farr_zeros(T * d)
+        let mut p_x = 0
+        while p_x < T * d {
+            let _ = farr_set(Xin, p_x, farr_get(Mc, prev_Xout_off + p_x))
+            p_x = p_x + 1
+        }
+        // Copy block param + cache into scratch farrs.
+        let Bp_l = farr_zeros(bp_total(d, nh, nkv, h))
+        let mut p_p = 0
+        while p_p < bp_total(d, nh, nkv, h) {
+            let _ = farr_set(Bp_l, p_p, farr_get(M, bp_off + p_p))
+            p_p = p_p + 1
+        }
+        let Bc_l = farr_zeros(bc_total(T, d, nh, nkv, h))
+        let mut p_c = 0
+        while p_c < bc_total(T, d, nh, nkv, h) {
+            let _ = farr_set(Bc_l, p_c, farr_get(Mc, bc_off + p_c))
+            p_c = p_c + 1
+        }
+        // dXout = current dXc
+        let Bg_l = farr_zeros(bp_total(d, nh, nkv, h))
+        let dX_l = farr_zeros(T * d)
+        nn_decoder_block_bwd(Xin, Bp_l, Bc_l, dXc, dX_l, Bg_l,
+                             cos, sin, T, d, nh, nkv, h)
+        // accumulate Bg_l into Mg.block[l_b]
+        let mut p_g = 0
+        while p_g < bp_total(d, nh, nkv, h) {
+            let cur = farr_get(Mg, bg_off + p_g)
+            let _ = farr_set(Mg, bg_off + p_g, cur + farr_get(Bg_l, p_g))
+            p_g = p_g + 1
+        }
+        // dXc ← dX_l (replace, not accumulate — feed into next-deeper block)
+        let mut p_d = 0
+        while p_d < T * d {
+            let _ = farr_set(dXc, p_d, farr_get(dX_l, p_d))
+            p_d = p_d + 1
+        }
+        let _ = farr_free(Xin)
+        let _ = farr_free(Bp_l)
+        let _ = farr_free(Bc_l)
+        let _ = farr_free(Bg_l)
+        let _ = farr_free(dX_l)
+        l_b = l_b - 1
+    }
+
+    // (b) embedding scatter-add tied-weight term:
+    //   dtemb[ids[i]·d + c] += dXc[i·d + c]  for i in 0..T
+    let mut i_s = 0
+    while i_s < T {
+        let tok = to_int(farr_get(ids, i_s))
+        let mut c_s = 0
+        while c_s < d {
+            let cur = farr_get(Mg, oTemb + tok * d + c_s)
+            let _ = farr_set(Mg, oTemb + tok * d + c_s,
+                             cur + farr_get(dXc, i_s * d + c_s))
+            c_s = c_s + 1
+        }
+        i_s = i_s + 1
+    }
+    let _ = farr_free(dXc)
+}
+
+// ── Loss helpers ──────────────────────────────────────────────────────
+// CE loss = -ln(softmax(logits)[target_t]); stable (subtract max).
+pub fn nn_decoder_ce_loss(Mc: int, target_t: int,
+                          T: int, d: int, nh: int, nkv: int, h: int,
+                          V: int, n_layer: int) -> float {
+    let oLogits = mc_off_logits(T, d, nh, nkv, h, V, n_layer)
+    let mut mx = farr_get(Mc, oLogits)
+    let mut i = 1
+    while i < V {
+        if farr_get(Mc, oLogits + i) > mx { mx = farr_get(Mc, oLogits + i) }
+        i = i + 1
+    }
+    let mut tot = 0.0
+    let mut i2 = 0
+    while i2 < V {
+        tot = tot + exp(farr_get(Mc, oLogits + i2) - mx)
+        i2 = i2 + 1
+    }
+    let p_t = exp(farr_get(Mc, oLogits + target_t) - mx) / tot
+    let pt_safe = if p_t < 0.000001 { 0.000001 } else { p_t }
+    return 0.0 - log(pt_safe)
+}
+
+// gn2 = ||softmax(logits) − onehot(t)||² (the campaign metric)
+pub fn nn_decoder_gn2(Mc: int, target_t: int,
+                      T: int, d: int, nh: int, nkv: int, h: int,
+                      V: int, n_layer: int) -> float {
+    let oLogits = mc_off_logits(T, d, nh, nkv, h, V, n_layer)
+    let mut mx = farr_get(Mc, oLogits)
+    let mut i = 1
+    while i < V {
+        if farr_get(Mc, oLogits + i) > mx { mx = farr_get(Mc, oLogits + i) }
+        i = i + 1
+    }
+    let mut tot = 0.0
+    let mut i2 = 0
+    while i2 < V {
+        tot = tot + exp(farr_get(Mc, oLogits + i2) - mx)
+        i2 = i2 + 1
+    }
+    let mut acc = 0.0
+    let mut k = 0
+    while k < V {
+        let p_k = exp(farr_get(Mc, oLogits + k) - mx) / tot
+        let target = if k == target_t { 1.0 } else { 0.0 }
+        let dv = p_k - target
+        acc = acc + dv * dv
+        k = k + 1
+    }
+    return acc
+}
+
+// argmax(logits) → predicted token id
+pub fn nn_decoder_predict(Mc: int,
+                          T: int, d: int, nh: int, nkv: int, h: int,
+                          V: int, n_layer: int) -> int {
+    let oLogits = mc_off_logits(T, d, nh, nkv, h, V, n_layer)
+    let mut best_v = farr_get(Mc, oLogits)
+    let mut best_i = 0
+    let mut k = 1
+    while k < V {
+        if farr_get(Mc, oLogits + k) > best_v {
+            best_v = farr_get(Mc, oLogits + k)
+            best_i = k
+        }
+        k = k + 1
+    }
+    return best_i
+}
