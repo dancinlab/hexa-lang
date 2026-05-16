@@ -16,19 +16,18 @@
 
 ## Three honest paths forward
 
-### Path A — RFC 047 Phase 4-B-1 implementation (largest single-commit-cycle win available)
+### Path A — RFC 047 Phase 4-B-1 (LANDED 2026-05-17, scaffold-only)
 
-**Entry**: `inbox/rfc_drafts_2026_05_12/rfc_047_flame_phase4b_block_fusion_ir_pass.md` §"Phase 4-B-1 — pass scaffold + pattern matching"
+**Status**: detect-only scaffold landed as `tool/flame_phase4b_scan.hexa`. See `stdlib/flame/PHASE4B_SCAFFOLD.md` for full findings.
 
-**First commit boundary**: pass scaffold + pattern matching (no emit yet, just detect + log)
-- File: new `self/flame_phase4b_pass.hexa` OR extend `self/codegen_c2.hexa` (decide based on hexa-lang compiler internals access)
-- Detect: `nn_decoder_block_fwd / bwd` call sites with all 5 dim args as static constants
-- Log: extracted (T, d, nh, nkv, h) tuples + hashed dims_hash
-- Build flag: `--flame-phase4b` (default OFF preserves Phase 3-J + 4-A-bwd byte-id)
+**Key finding**: ALL real flame call sites are `variable-tuple` (T/d/nh/nkv/h passed as fn parameters, never direct literals). The first literal binding lives in `main()` 3 hops above the block call. RFC 047 §39 "extract static dim constants" requires either inter-procedural constant propagation OR source-level specialization wrappers OR `@specialize` attribute integration.
 
-**First falsifier**: F-RFC047-FALLBACK-PRESERVED — `--flame-phase4b` OFF gives byte-identical output to current state (Phase 4-A-bwd partial); regression sweep on 44 falsifiers continues PASS.
+**Recommended Phase 4-B-2 path (option (b) from PHASE4B_SCAFFOLD.md)**: write `flame_decoder_d32_3L` wrapper that bakes dims as literals. Lowest risk; gives the scanner literal-tuple sites; reversible. If perf proves out, productionize as option (c) attribute-driven.
 
-**Effort**: ~1 cycle. Risk: mid (hexa-lang compiler internals access).
+**Falsifier status**:
+- F-RFC047-SCAFFOLD-DETECT: PASS (synthetic literal-site source)
+- F-RFC047-SCAFFOLD-FALLBACK: PASS (real flame sources)
+- F-RFC047-FALLBACK-PRESERVED: not yet exercised (scaffold doesn't wire to `cmd_build` — production flow untouched, so byte-id holds vacuously)
 
 ### Path B — Phase 4-D GPU dispatch fire (cost-bearing, immediate)
 
