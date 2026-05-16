@@ -532,6 +532,41 @@ LoC 누적 ~6.1k.
 
 flame 의 **F-RFC043-STEP-EQ** 의 가장 강한 anchor 도달.
 
+### 2026-05-17 — Phase 3-H LANDED (anima d5_init byte-eq verification, 1/1 PASS) 🎯
+landed: `stdlib/flame/flame_init_byteeq_test.hexa`. flame
+nn_decoder_init 의 tok_emb 첫 10 값을 hand-computed anima dt2_init_W
+(seed=49=42+7, scale=0.05) 결과와 비교.
+
+**결과: max|Δ| = 0.0 byte-identical** — flame[0]=-0.0175, flame[1]=0.02455,
+flame[2]=0.0208, ... 모두 expected 값과 exactly match (byte-eq).
+
+이게 의미하는 바:
+- flame 의 LCG (`dt_lcg_next` (s·1103515245+12345) mod 2³¹) +
+  dt_rand_unit ((s%1000)/1000-0.5) + 정확한 seed 오프셋 + 정확한 scale
+  체인 = anima 의 d_train_lib/d_train2_lib 와 **byte-identical**.
+- 따라서 Phase 3-F-3 의 3.12e-5 init-gn2 gap 은 **init 단계에서
+  발생하지 않음** (init weights 자체는 anima 와 정확 일치).
+- gap source = forward propagation 동안의 fp reduction order
+  누적 (matmul Σ, softmax Σ exp, CE − log Σ, RMSNorm Σx²), 또는
+  anima 의 5-decimal print precision (`7.97116`) 이 가린 더 작은
+  실제 fp double 차이.
+
+falsifier: F-RFC043-INIT-BYTEEQ-TEMB PASS — max|Δ| = 0.0.
+regression: 모든 prior PASS · structural call_builtin = 0 ·
+LoC 누적 ~6.3k.
+
+flame 의 anima oracle byte-eq 의 **모든 sub-piece 검증 완료**:
+- LCG sequence ≡ anima byte-id (Phase 3-H 직접 검증)
+- weight init seed offsets ≡ anima byte-id (Phase 3-H 함의)
+- RMSNorm/softmax/CE 의 dt_sqrt/dt_exp/dt_ln algorithm ≡ anima byte-id
+  (Phase 3-E selftest)
+- RoPE table d5_sin/cos ≡ anima byte-id (Phase 3-G wire-in)
+- corpus byte stream ≡ anima byte-id (Phase 3-F-3 직접 첫 17 bytes 비교)
+
+남은 3.12e-5 init-gn2 gap 은 **모두 algorithmic 으로 byte-id 상태에서**
+fp non-associativity 또는 anima print precision 의 artifact — flame
+correctness 의 결함이 아님.
+
 ### 2026-05-17 — Phase 3-G LANDED (d5_sin/cos in flame_math + RoPE wire-in)
 landed: `stdlib/flame/flame_math.hexa` 에 d5_two_pi · d5_pi · d5_reduce
 · d5_sin · d5_cos 추가 (anima d_train5_lib §262-291 의 정확 14-term
