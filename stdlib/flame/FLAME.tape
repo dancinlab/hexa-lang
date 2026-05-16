@@ -40,7 +40,8 @@
   flame_nn_test.hexa -> "[LANDED 2026-05-16] selftest entrypoint for nn_lib (F-RFC043-LAYER-EQ-* 17 falsifiers); includes ROPE-ORTHO (Rᵀ·R = I machine-ε) + ATTN-CAUSAL (P[hh,i,j>i]=0 closed math invariants) — g3 real-limit anchors"
   optim_lib.hexa -> "[Phase 3-A LANDED 2026-05-17: AdamW thin wrapper, F-RFC043-OPTIM-EQ 1/1 PASS, byte-eq to ag_adamw_step]"
   flame_optim_test.hexa -> "[LANDED 2026-05-17 Phase 3-A] selftest entrypoint for optim_lib"
-  decoder_block_lib.hexa -> "[Phase 3-B planned] one decoder block (RMSNorm + GQA-attn + residual + RMSNorm + SwiGLU + residual) as nn_* composition"
+  decoder_block_lib.hexa -> "[Phase 3-B LANDED 2026-05-17] one decoder block fwd+bwd (pre-norm; RMSNorm+attn+residual+RMSNorm+SwiGLU+residual); packed Bp/Bc layout helpers; GRAD-EXACT 9-probe central-diff 2/2 PASS @ max rel = 3.59e-10"
+  flame_block_test.hexa -> "[LANDED 2026-05-17 Phase 3-B] selftest (F-RFC043-BLOCK-DET · F-RFC043-BLOCK-GRAD-EXACT)"
   train_lib.hexa -> "[Phase 3-C planned] compiled train_step + 80-step trajectory (F-RFC043-STEP-EQ ⟸ campaign d=32·3L oracle 7.97116→3.73374e-07)"
   note = "[LANDED] = built + falsifier PASS. lib-split mandatory (compiled: main/_selftest 동거 시 C 심볼 중복). 각 selftest 는 독립 entrypoint 파일."
 
@@ -329,6 +330,24 @@ autograd-tape composed). 동일 numerics, 다른 호출 의도.
 - regression: 모든 prior PASS 유지.
 Phase 3-B = decoder_block composition (nn_* primitives 의 fwd/bwd
 composition; d5_block_fwd/bwd 등가, 한 layer).
+
+### 2026-05-17 — Phase 3-B LANDED (decoder_block_lib, 2/2 PASS)
+landed: `stdlib/flame/{decoder_block_lib.hexa, flame_block_test.hexa}`.
+한 decoder block (pre-norm: RMSNorm+attn+residual+RMSNorm+SwiGLU+residual)
+의 fwd + bwd 를 nn_* primitive 의 composition 으로 구현. packed
+Bp(params)/Bc(cache)/Bg(grad) layout — caller 가 한 farr 에 모든
+parameter / cache / gradient 를 보유 (offset helper API 공개).
+- F-RFC043-BLOCK-DET         PASS — 두 fwd Xout byte-identical
+- F-RFC043-BLOCK-GRAD-EXACT  PASS — 9-probe central-diff (g1·Wq·Wk·
+  Wv·Wo·g2·Wg·Wu·Wd 각 1) max|analytic − fd|/scale = **3.59e-10**
+  (1e-3 threshold 의 100만배 미만). 모든 sub-piece (RMSNorm·proj·
+  RoPE·attn-core·Wo·residual·SwiGLU) 의 vjp composition 이 한 발에
+  검증됨; 캠페인 d_corpus_fire GRAD-EXACT(L0.Wg[5]) 와 동일 패턴.
+- regression: RFC 034 5/5 · RFC 040 B2 9/9 · flame Phase 1 4/4 · Phase 2
+  17/17 · Phase 3-A 1/1 모두 유지. structural call_builtin = 0.
+Phase 3-C = decoder_lib (n_layer composition + embedding + tied LM
+head) + train_lib (compiled train_step + 80-step trajectory bit-eq vs
+campaign oracle 7.97116→3.73374e-07).
 - optim_lib = RFC 034 의 adamw_step 위의 wrapper (이미 ag_adamw_step
   으로 검증됨; named wrapper 만 추가)
 - train_lib = compiled train_step (fwd + CE + bwd + AdamW 의 묶음)

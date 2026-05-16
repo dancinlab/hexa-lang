@@ -224,3 +224,25 @@ thin wrapper 가 같은 RFC 034 `adamw_step` builtin 을 호출 — namespace
 - regression sweep 무변화.
 Phase 3-B 진입 — nn_decoder_block_fwd / nn_decoder_block_bwd
 (nn_* primitives 의 composition = d5_block_fwd/bwd 등가).
+
+### 2026-05-17 — Phase 3-B LANDED (decoder_block_lib, 2/2 PASS)
+landed: `stdlib/flame/{decoder_block_lib.hexa, flame_block_test.hexa}`.
+한 pre-norm decoder block (RMSNorm+attn+residual+RMSNorm+SwiGLU+residual)
+의 fwd + bwd composition. packed Bp/Bc/Bg layout helpers 공개 — caller
+가 한 farr 에 모든 parameter / cache / gradient 를 보유.
+
+- F-RFC043-BLOCK-DET PASS — 두 fwd Xout byte-identical.
+- F-RFC043-BLOCK-GRAD-EXACT PASS — 9-probe central-diff (g1·Wq·Wk·Wv·
+  Wo·g2·Wg·Wu·Wd 각 1) max|analytic − fd|/scale = **3.59e-10**
+  (threshold 1e-3 의 백만배 미만). 단일 falsifier 가 모든 sub-piece
+  (RMSNorm · Q/K/V proj · RoPE · attn-core · Wo · residual · RMSNorm2 ·
+  SwiGLU) 의 vjp composition 을 한 발에 검증. 캠페인 d_corpus_fire
+  GRAD-EXACT(L0.Wg[5]) 와 동일 검증 패턴.
+- regression: RFC 034 5/5 · RFC 040 B2 9/9 · flame Phase 1 4/4 ·
+  Phase 2 17/17 · Phase 3-A 1/1 모두 유지. call_builtin = 0.
+- 코드 LoC: stdlib/flame/ 총 ~3.5k.
+
+Phase 3-C = decoder_lib (n_layer block stack + tied embedding +
+tied LM head + final RMSNorm) + train_lib (compiled train_step +
+80-step trajectory). F-RFC043-STEP-EQ — campaign oracle 7.97116 →
+3.73374e-07 bit-equal 재현 (g_blue_closed_mandate mandatory).

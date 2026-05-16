@@ -1,0 +1,877 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/decoder_block_lib.hexa — flame Phase 3-B (RFC 043)
+//
+// One decoder block (pre-norm Transformer style, GQA), composed from
+// nn_lib primitives. Equivalent to anima d_train5_lib.hexa d5_block_fwd
+// / d5_block_bwd:
+//
+//   h     = X + attn(rmsnorm(X; g1))      // pre-norm attention + residual
+//   Xout  = h + swiglu(rmsnorm(h; g2))    // pre-norm SwiGLU + residual
+//
+// 본 lib 는 **block 수준 composition** 만 담당. attention/swiglu/rmsnorm
+// 의 leaf math 는 nn_lib 에서 이미 검증된 wrapper (17/17 Phase 2 PASS).
+//
+// Storage convention — caller-allocated **packed farr** :
+//   `Bp` (block parameters) layout (offset helpers below):
+//     g1[d] · Wq[d·d] · Wk[kvd·d] · Wv[kvd·d] · Wo[d·d]
+//     g2[d] · Wg[h·d] · Wu[h·d] · Wd[d·h]                  (kvd=nkv·hd)
+//   `Bc` (block fwd cache) layout:
+//     Xout[T·d] · hstate[T·d] · rin[T·d] · rin2[T·d]
+//     rm1xn[T·d] · rm2xn[T·d] · ctx[T·d]
+//     Q[T·d] · K[T·kvd] · V[T·kvd]
+//     P[nh·T·T] · sw_a[T·h] · sw_b[T·h] · sw_s[T·h]
+//     rm1inv[T] · rm2inv[T]
+//   `Bg` (block gradient) — same layout as Bp.
+//
+// Verification anchor (Phase 3-B falsifier — F-RFC043-BLOCK-GRAD-EXACT):
+//   central finite-difference (the deepest single correctness anchor;
+//   the campaign's d_corpus_fire GRAD-EXACT(L0.Wg[5]) used same).
+//   Given scalar loss L = ½·Σ Xout² and uniform upstream gradient
+//   dy = Xout (so ∂L/∂Xout = Xout), the analytic ∂L/∂θ from
+//   nn_decoder_block_bwd must match finite-difference of L(θ ± ε·e_i)
+//   within ~1e-3 relative tolerance.
+// ════════════════════════════════════════════════════════════════════════
+
+// ── dim helpers ────────────────────────────────────────────────────────
+fn _hd_of(d: int, nh: int) -> int { return d / nh }
+fn _kvd_of(d: int, nh: int, nkv: int) -> int { return nkv * (d / nh) }
+
+// ── Bp (params) offset helpers (public — caller indexes into Bp) ──────
+pub fn bp_off_g1(d: int, nh: int, nkv: int, h: int) -> int { return 0 }
+pub fn bp_off_Wq(d: int, nh: int, nkv: int, h: int) -> int { return d }
+pub fn bp_off_Wk(d: int, nh: int, nkv: int, h: int) -> int { return d + d*d }
+pub fn bp_off_Wv(d: int, nh: int, nkv: int, h: int) -> int {
+    return d + d*d + _kvd_of(d, nh, nkv)*d
+}
+pub fn bp_off_Wo(d: int, nh: int, nkv: int, h: int) -> int {
+    return d + d*d + 2*_kvd_of(d, nh, nkv)*d
+}
+pub fn bp_off_g2(d: int, nh: int, nkv: int, h: int) -> int {
+    return d + 2*d*d + 2*_kvd_of(d, nh, nkv)*d
+}
+pub fn bp_off_Wg(d: int, nh: int, nkv: int, h: int) -> int {
+    return 2*d + 2*d*d + 2*_kvd_of(d, nh, nkv)*d
+}
+pub fn bp_off_Wu(d: int, nh: int, nkv: int, h: int) -> int {
+    return 2*d + 2*d*d + 2*_kvd_of(d, nh, nkv)*d + h*d
+}
+pub fn bp_off_Wd(d: int, nh: int, nkv: int, h: int) -> int {
+    return 2*d + 2*d*d + 2*_kvd_of(d, nh, nkv)*d + 2*h*d
+}
+pub fn bp_total(d: int, nh: int, nkv: int, h: int) -> int {
+    return 2*d + 2*d*d + 2*_kvd_of(d, nh, nkv)*d + 3*h*d
+}
+
+// ── Bc (cache) offset helpers ──────────────────────────────────────────
+pub fn bc_off_Xout(T: int, d: int, nh: int, nkv: int, h: int) -> int { return 0 }
+pub fn bc_off_hstate(T: int, d: int, nh: int, nkv: int, h: int) -> int { return T*d }
+pub fn bc_off_rin(T: int, d: int, nh: int, nkv: int, h: int) -> int { return 2*T*d }
+pub fn bc_off_rin2(T: int, d: int, nh: int, nkv: int, h: int) -> int { return 3*T*d }
+pub fn bc_off_rm1xn(T: int, d: int, nh: int, nkv: int, h: int) -> int { return 4*T*d }
+pub fn bc_off_rm2xn(T: int, d: int, nh: int, nkv: int, h: int) -> int { return 5*T*d }
+pub fn bc_off_ctx(T: int, d: int, nh: int, nkv: int, h: int) -> int { return 6*T*d }
+pub fn bc_off_Q(T: int, d: int, nh: int, nkv: int, h: int) -> int { return 7*T*d }
+pub fn bc_off_K(T: int, d: int, nh: int, nkv: int, h: int) -> int { return 8*T*d }
+pub fn bc_off_V(T: int, d: int, nh: int, nkv: int, h: int) -> int {
+    return 8*T*d + T*_kvd_of(d, nh, nkv)
+}
+pub fn bc_off_P(T: int, d: int, nh: int, nkv: int, h: int) -> int {
+    return 8*T*d + 2*T*_kvd_of(d, nh, nkv)
+}
+pub fn bc_off_sw_a(T: int, d: int, nh: int, nkv: int, h: int) -> int {
+    return 8*T*d + 2*T*_kvd_of(d, nh, nkv) + nh*T*T
+}
+pub fn bc_off_sw_b(T: int, d: int, nh: int, nkv: int, h: int) -> int {
+    return 8*T*d + 2*T*_kvd_of(d, nh, nkv) + nh*T*T + T*h
+}
+pub fn bc_off_sw_s(T: int, d: int, nh: int, nkv: int, h: int) -> int {
+    return 8*T*d + 2*T*_kvd_of(d, nh, nkv) + nh*T*T + 2*T*h
+}
+pub fn bc_off_rm1inv(T: int, d: int, nh: int, nkv: int, h: int) -> int {
+    return 8*T*d + 2*T*_kvd_of(d, nh, nkv) + nh*T*T + 3*T*h
+}
+pub fn bc_off_rm2inv(T: int, d: int, nh: int, nkv: int, h: int) -> int {
+    return 8*T*d + 2*T*_kvd_of(d, nh, nkv) + nh*T*T + 3*T*h + T
+}
+pub fn bc_total(T: int, d: int, nh: int, nkv: int, h: int) -> int {
+    return 8*T*d + 2*T*_kvd_of(d, nh, nkv) + nh*T*T + 3*T*h + 2*T
+}
+
+// ── private inline helpers ─────────────────────────────────────────────
+fn _db_sigmoid(x: float) -> float { return 1.0 / (1.0 + exp(0.0 - x)) }
+fn _db_silu(x: float) -> float { return x * _db_sigmoid(x) }
+fn _db_silu_grad(x: float) -> float {
+    let s = _db_sigmoid(x)
+    return s + x * s * (1.0 - s)
+}
+
+// ── one decoder block forward ──────────────────────────────────────────
+// Reads X (T·d) and Bp (packed params), cos/sin (T·hd each).
+// Writes Xout + all cache fields into Bc (caller-allocated and pre-zeroed).
+pub fn nn_decoder_block_fwd(X: int, Bp: int, Bc: int,
+                            cos: int, sin: int,
+                            T: int, d: int, nh: int, nkv: int, h: int) {
+    let hd = d / nh
+    let kvd = nkv * hd
+
+    let G1 = bp_off_g1(d, nh, nkv, h)
+    let WQ = bp_off_Wq(d, nh, nkv, h)
+    let WK = bp_off_Wk(d, nh, nkv, h)
+    let WV = bp_off_Wv(d, nh, nkv, h)
+    let WO = bp_off_Wo(d, nh, nkv, h)
+    let G2 = bp_off_g2(d, nh, nkv, h)
+    let WG = bp_off_Wg(d, nh, nkv, h)
+    let WU = bp_off_Wu(d, nh, nkv, h)
+    let WD = bp_off_Wd(d, nh, nkv, h)
+
+    let oXout   = bc_off_Xout(T, d, nh, nkv, h)
+    let oHstate = bc_off_hstate(T, d, nh, nkv, h)
+    let oRin    = bc_off_rin(T, d, nh, nkv, h)
+    let oRin2   = bc_off_rin2(T, d, nh, nkv, h)
+    let oRm1xn  = bc_off_rm1xn(T, d, nh, nkv, h)
+    let oRm2xn  = bc_off_rm2xn(T, d, nh, nkv, h)
+    let oCtx    = bc_off_ctx(T, d, nh, nkv, h)
+    let oQ      = bc_off_Q(T, d, nh, nkv, h)
+    let oK      = bc_off_K(T, d, nh, nkv, h)
+    let oV      = bc_off_V(T, d, nh, nkv, h)
+    let oP      = bc_off_P(T, d, nh, nkv, h)
+    let oSwA    = bc_off_sw_a(T, d, nh, nkv, h)
+    let oSwB    = bc_off_sw_b(T, d, nh, nkv, h)
+    let oSwS    = bc_off_sw_s(T, d, nh, nkv, h)
+    let oR1inv  = bc_off_rm1inv(T, d, nh, nkv, h)
+    let oR2inv  = bc_off_rm2inv(T, d, nh, nkv, h)
+    let eps = 0.000001
+
+    // 1. per-position RMSNorm(X, g1) → rin, rm1xn, rm1inv
+    let mut i = 0
+    while i < T {
+        let mut ms = 0.0
+        let mut c = 0
+        while c < d {
+            let xi = farr_get(X, i * d + c)
+            ms = ms + xi * xi
+            c = c + 1
+        }
+        ms = ms / to_float(d)
+        let inv = 1.0 / sqrt(ms + eps)
+        let _ = farr_set(Bc, oR1inv + i, inv)
+        let mut c2 = 0
+        while c2 < d {
+            let xni = farr_get(X, i * d + c2) * inv
+            let _ = farr_set(Bc, oRm1xn + i * d + c2, xni)
+            let _ = farr_set(Bc, oRin + i * d + c2,
+                             farr_get(Bp, G1 + c2) * xni)
+            c2 = c2 + 1
+        }
+        i = i + 1
+    }
+
+    // 2. Q/K/V projections (Q[t][r] = Σ_c Wq[r·d+c] · rin[t·d+c])
+    let mut t = 0
+    while t < T {
+        let mut r = 0
+        while r < d {
+            let mut acc = 0.0
+            let mut c = 0
+            while c < d {
+                acc = acc + farr_get(Bp, WQ + r * d + c)
+                          * farr_get(Bc, oRin + t * d + c)
+                c = c + 1
+            }
+            let _ = farr_set(Bc, oQ + t * d + r, acc)
+            r = r + 1
+        }
+        t = t + 1
+    }
+    let mut t_k = 0
+    while t_k < T {
+        let mut r = 0
+        while r < kvd {
+            let mut acc_k = 0.0
+            let mut acc_v = 0.0
+            let mut c = 0
+            while c < d {
+                acc_k = acc_k + farr_get(Bp, WK + r * d + c)
+                              * farr_get(Bc, oRin + t_k * d + c)
+                acc_v = acc_v + farr_get(Bp, WV + r * d + c)
+                              * farr_get(Bc, oRin + t_k * d + c)
+                c = c + 1
+            }
+            let _ = farr_set(Bc, oK + t_k * kvd + r, acc_k)
+            let _ = farr_set(Bc, oV + t_k * kvd + r, acc_v)
+            r = r + 1
+        }
+        t_k = t_k + 1
+    }
+
+    // 3. RoPE rotation on Q (per-head) and K (per-kv-head)
+    let half = hd / 2
+    let mut t_r = 0
+    while t_r < T {
+        let bse = t_r * hd
+        // Q: nh heads at (t_r·nh + hh)·hd
+        let mut hh = 0
+        while hh < nh {
+            let row_off = oQ + (t_r * nh + hh) * hd
+            // out[c] = q[c]·cos + rh(q)[c]·sin  ;  rh: [-x2, x1]
+            let mut cc = 0
+            // We need a stable scratch: compute new values into a tmp
+            // tuple by reading first all the originals, then writing.
+            // Use cache offsets oR1inv+T as scratch... actually simpler:
+            // hand-write the rotation, two passes via local pair.
+            // Pass 1: save first-half originals (since they're read by
+            // second half via rh).
+            // Easier: do hd iters, using "if c<half" to compute rh from
+            // either Q[half+c] (still original — we haven't written to it
+            // yet) or Q[c-half] (already overwritten — BUG).
+            // To fix: write to a separate temp region in Bc. Use the
+            // ROW (hd) at end of cache — we have rm1inv at oR1inv (size T)
+            // which doesn't overlap. Just allocate inline scratch:
+            cc = 0  // placeholder; real loop below
+            hh = hh + 1
+        }
+        t_r = t_r + 1
+    }
+    // Restart RoPE with explicit per-head scratch farr (allocate once).
+    let q_scratch = farr_zeros(hd)
+    let mut t_r2 = 0
+    while t_r2 < T {
+        let bse = t_r2 * hd
+        let mut hh2 = 0
+        while hh2 < nh {
+            let row_off = oQ + (t_r2 * nh + hh2) * hd
+            let mut c = 0
+            while c < hd {
+                let rh_c = if c < half {
+                    0.0 - farr_get(Bc, row_off + half + c)
+                } else {
+                    farr_get(Bc, row_off + c - half)
+                }
+                let v = farr_get(Bc, row_off + c) * farr_get(cos, bse + c)
+                      + rh_c * farr_get(sin, bse + c)
+                let _ = farr_set(q_scratch, c, v)
+                c = c + 1
+            }
+            let mut c3 = 0
+            while c3 < hd {
+                let _ = farr_set(Bc, row_off + c3, farr_get(q_scratch, c3))
+                c3 = c3 + 1
+            }
+            hh2 = hh2 + 1
+        }
+        // K: nkv heads at (t_r2·nkv + hh)·hd, offset oK
+        let mut hk = 0
+        while hk < nkv {
+            let row_off_k = oK + (t_r2 * nkv + hk) * hd
+            let mut c = 0
+            while c < hd {
+                let rh_c = if c < half {
+                    0.0 - farr_get(Bc, row_off_k + half + c)
+                } else {
+                    farr_get(Bc, row_off_k + c - half)
+                }
+                let v = farr_get(Bc, row_off_k + c) * farr_get(cos, bse + c)
+                      + rh_c * farr_get(sin, bse + c)
+                let _ = farr_set(q_scratch, c, v)
+                c = c + 1
+            }
+            let mut c3 = 0
+            while c3 < hd {
+                let _ = farr_set(Bc, row_off_k + c3, farr_get(q_scratch, c3))
+                c3 = c3 + 1
+            }
+            hk = hk + 1
+        }
+        t_r2 = t_r2 + 1
+    }
+    let _ = farr_free(q_scratch)
+
+    // 4. attention core (causal GQA scaled-dot + softmax + value combine).
+    // Inline (parallel to nn_attn_core_fwd, but reading from Bc offsets).
+    let n_rep = nh / nkv
+    let scale = 1.0 / sqrt(to_float(hd))
+    let srow_at = farr_zeros(T)
+    // ctx_local accumulator at offset oXout (we'll later add residual).
+    // For now we use offset oXout to temporarily hold ctx (overwritten
+    // after the output projection + residual add).
+    // Per-head per-position:
+    let mut hh_a = 0
+    while hh_a < nh {
+        let kvh = hh_a / n_rep
+        let mut i_a = 0
+        while i_a < T {
+            let L = i_a + 1
+            let mut j = 0
+            while j < L {
+                let mut dot = 0.0
+                let mut c = 0
+                while c < hd {
+                    dot = dot + farr_get(Bc, oQ + (i_a * nh + hh_a) * hd + c)
+                              * farr_get(Bc, oK + (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                let _ = farr_set(srow_at, j, dot * scale)
+                j = j + 1
+            }
+            // softmax_row → P at (hh_a·T + i_a)·T + 0..L
+            let mut m_max = farr_get(srow_at, 0)
+            let mut jj = 1
+            while jj < L {
+                if farr_get(srow_at, jj) > m_max { m_max = farr_get(srow_at, jj) }
+                jj = jj + 1
+            }
+            let mut tot = 0.0
+            let mut jj2 = 0
+            while jj2 < L {
+                let e = exp(farr_get(srow_at, jj2) - m_max)
+                let _ = farr_set(Bc, oP + (hh_a * T + i_a) * T + jj2, e)
+                tot = tot + e
+                jj2 = jj2 + 1
+            }
+            let mut jj3 = 0
+            while jj3 < L {
+                let cur = farr_get(Bc, oP + (hh_a * T + i_a) * T + jj3)
+                let _ = farr_set(Bc, oP + (hh_a * T + i_a) * T + jj3, cur / tot)
+                jj3 = jj3 + 1
+            }
+            // ctx[i_a · d + hh_a·hd + c] = Σ_j P · V — write into dedicated
+            // oCtx slot (preserved for backward Wo grad).
+            let mut c_v = 0
+            while c_v < hd {
+                let mut acc = 0.0
+                let mut j_v = 0
+                while j_v < L {
+                    acc = acc + farr_get(Bc, oP + (hh_a * T + i_a) * T + j_v)
+                              * farr_get(Bc, oV + (j_v * nkv + kvh) * hd + c_v)
+                    j_v = j_v + 1
+                }
+                let _ = farr_set(Bc, oCtx + i_a * d + hh_a * hd + c_v, acc)
+                c_v = c_v + 1
+            }
+            i_a = i_a + 1
+        }
+        hh_a = hh_a + 1
+    }
+    let _ = farr_free(srow_at)
+
+    // 5. output projection: attn_out[t][r] = Σ_c Wo[r·d+c] · ctx[t·d+c]
+    // ctx lives at oCtx; we compute attn_out into a temp scratch
+    // (not cached — only hstate = X + attn_out is needed for bwd).
+    let attn_out = farr_zeros(T * d)
+    let mut t_o = 0
+    while t_o < T {
+        let mut r = 0
+        while r < d {
+            let mut acc = 0.0
+            let mut c = 0
+            while c < d {
+                acc = acc + farr_get(Bp, WO + r * d + c)
+                          * farr_get(Bc, oCtx + t_o * d + c)
+                c = c + 1
+            }
+            let _ = farr_set(attn_out, t_o * d + r, acc)
+            r = r + 1
+        }
+        t_o = t_o + 1
+    }
+
+    // 6. residual: hstate = X + attn_out
+    let mut idx = 0
+    while idx < T * d {
+        let _ = farr_set(Bc, oHstate + idx,
+                         farr_get(X, idx) + farr_get(attn_out, idx))
+        idx = idx + 1
+    }
+    let _ = farr_free(attn_out)
+
+    // 7. per-position RMSNorm(hstate, g2) → rin2, rm2xn, rm2inv
+    let mut i2 = 0
+    while i2 < T {
+        let mut ms = 0.0
+        let mut c = 0
+        while c < d {
+            let xi = farr_get(Bc, oHstate + i2 * d + c)
+            ms = ms + xi * xi
+            c = c + 1
+        }
+        ms = ms / to_float(d)
+        let inv = 1.0 / sqrt(ms + eps)
+        let _ = farr_set(Bc, oR2inv + i2, inv)
+        let mut c2 = 0
+        while c2 < d {
+            let xni = farr_get(Bc, oHstate + i2 * d + c2) * inv
+            let _ = farr_set(Bc, oRm2xn + i2 * d + c2, xni)
+            let _ = farr_set(Bc, oRin2 + i2 * d + c2,
+                             farr_get(Bp, G2 + c2) * xni)
+            c2 = c2 + 1
+        }
+        i2 = i2 + 1
+    }
+
+    // 8. SwiGLU per-position: a = Wg·rin2 (h-len), b = Wu·rin2 (h-len),
+    // s[k] = silu(a[k])·b[k], o = Wd·s (d-len)
+    let mut ts = 0
+    while ts < T {
+        // a = Wg · rin2[ts]
+        let mut k = 0
+        while k < h {
+            let mut acc_a = 0.0
+            let mut acc_b = 0.0
+            let mut c = 0
+            while c < d {
+                acc_a = acc_a + farr_get(Bp, WG + k * d + c)
+                              * farr_get(Bc, oRin2 + ts * d + c)
+                acc_b = acc_b + farr_get(Bp, WU + k * d + c)
+                              * farr_get(Bc, oRin2 + ts * d + c)
+                c = c + 1
+            }
+            let _ = farr_set(Bc, oSwA + ts * h + k, acc_a)
+            let _ = farr_set(Bc, oSwB + ts * h + k, acc_b)
+            let _ = farr_set(Bc, oSwS + ts * h + k, _db_silu(acc_a) * acc_b)
+            k = k + 1
+        }
+        // o = Wd · s[ts]   (d-len)
+        let mut r = 0
+        while r < d {
+            let mut acc_o = 0.0
+            let mut kk = 0
+            while kk < h {
+                acc_o = acc_o + farr_get(Bp, WD + r * h + kk)
+                              * farr_get(Bc, oSwS + ts * h + kk)
+                kk = kk + 1
+            }
+            // 9. residual: Xout = hstate + sw_o
+            let _ = farr_set(Bc, oXout + ts * d + r,
+                             farr_get(Bc, oHstate + ts * d + r) + acc_o)
+            r = r + 1
+        }
+        ts = ts + 1
+    }
+}
+
+// ── one decoder block backward ─────────────────────────────────────────
+// Inputs:
+//   X    [T·d]                       — block input (same as fwd)
+//   Bp   packed params               — same as fwd
+//   Bc   packed fwd cache            — fully populated by nn_decoder_block_fwd
+//   dXout[T·d]                       — upstream gradient on Xout
+//   cos/sin [T·hd]                   — same as fwd
+//   dims: T, d, nh, nkv, h
+// Outputs (all caller-allocated, pre-zeroed; this fn ACCUMULATES):
+//   Bg   packed gradients (same layout as Bp; +=, not =)
+//   dX   [T·d]                       — input gradient (+=)
+pub fn nn_decoder_block_bwd(X: int, Bp: int, Bc: int,
+                            dXout: int, dX_out: int, Bg: int,
+                            cos: int, sin: int,
+                            T: int, d: int, nh: int, nkv: int, h: int) {
+    let hd = d / nh
+    let kvd = nkv * hd
+    let n_rep = nh / nkv
+    let scale = 1.0 / sqrt(to_float(hd))
+
+    let G1 = bp_off_g1(d, nh, nkv, h)
+    let WQ = bp_off_Wq(d, nh, nkv, h)
+    let WK = bp_off_Wk(d, nh, nkv, h)
+    let WV = bp_off_Wv(d, nh, nkv, h)
+    let WO = bp_off_Wo(d, nh, nkv, h)
+    let G2 = bp_off_g2(d, nh, nkv, h)
+    let WG = bp_off_Wg(d, nh, nkv, h)
+    let WU = bp_off_Wu(d, nh, nkv, h)
+    let WD = bp_off_Wd(d, nh, nkv, h)
+
+    let oHstate = bc_off_hstate(T, d, nh, nkv, h)
+    let oRin    = bc_off_rin(T, d, nh, nkv, h)
+    let oRin2   = bc_off_rin2(T, d, nh, nkv, h)
+    let oRm1xn  = bc_off_rm1xn(T, d, nh, nkv, h)
+    let oRm2xn  = bc_off_rm2xn(T, d, nh, nkv, h)
+    let oCtx    = bc_off_ctx(T, d, nh, nkv, h)
+    let oQ      = bc_off_Q(T, d, nh, nkv, h)
+    let oK      = bc_off_K(T, d, nh, nkv, h)
+    let oV      = bc_off_V(T, d, nh, nkv, h)
+    let oP      = bc_off_P(T, d, nh, nkv, h)
+    let oSwA    = bc_off_sw_a(T, d, nh, nkv, h)
+    let oSwB    = bc_off_sw_b(T, d, nh, nkv, h)
+    let oSwS    = bc_off_sw_s(T, d, nh, nkv, h)
+    let oR1inv  = bc_off_rm1inv(T, d, nh, nkv, h)
+    let oR2inv  = bc_off_rm2inv(T, d, nh, nkv, h)
+
+    // 9 reversed (Xout = hstate + sw_o): dh = dXout (residual), dsw_o = dXout.
+    // dh accumulator (in a fresh T·d farr — will be added to dX_out at end).
+    let dh = farr_zeros(T * d)
+    let mut i_d = 0
+    while i_d < T * d {
+        let _ = farr_set(dh, i_d, farr_get(dXout, i_d))
+        i_d = i_d + 1
+    }
+
+    // 8 reversed (SwiGLU per position) — produces dr [d] per pos, accum dWg/dWu/dWd
+    let dr_pos = farr_zeros(d)
+    let ds_pos = farr_zeros(h)
+    let da_pos = farr_zeros(h)
+    let db_pos = farr_zeros(h)
+    let mut ts = 0
+    while ts < T {
+        // dWd[r·h + k] += dso[r] · s[k]
+        let mut r = 0
+        while r < d {
+            let dso_r = farr_get(dXout, ts * d + r)
+            let mut k = 0
+            while k < h {
+                let cur = farr_get(Bg, WD + r * h + k)
+                let _ = farr_set(Bg, WD + r * h + k,
+                                 cur + dso_r * farr_get(Bc, oSwS + ts * h + k))
+                k = k + 1
+            }
+            r = r + 1
+        }
+        // ds[k] = Σ_r Wd[r·h + k] · dso[r]
+        let mut k2 = 0
+        while k2 < h {
+            let mut acc = 0.0
+            let mut rr = 0
+            while rr < d {
+                acc = acc + farr_get(Bp, WD + rr * h + k2)
+                          * farr_get(dXout, ts * d + rr)
+                rr = rr + 1
+            }
+            let _ = farr_set(ds_pos, k2, acc)
+            k2 = k2 + 1
+        }
+        // da[k] = ds·b·silu'(a) ; db[k] = ds·silu(a)
+        let mut k3 = 0
+        while k3 < h {
+            let ak = farr_get(Bc, oSwA + ts * h + k3)
+            let bk = farr_get(Bc, oSwB + ts * h + k3)
+            let dsk = farr_get(ds_pos, k3)
+            let _ = farr_set(da_pos, k3, dsk * bk * _db_silu_grad(ak))
+            let _ = farr_set(db_pos, k3, dsk * _db_silu(ak))
+            k3 = k3 + 1
+        }
+        // dWg[k·d + c] += da[k] · rin2[ts, c] ; dWu similarly
+        let mut k4 = 0
+        while k4 < h {
+            let da_k = farr_get(da_pos, k4)
+            let db_k = farr_get(db_pos, k4)
+            let mut cc = 0
+            while cc < d {
+                let rc = farr_get(Bc, oRin2 + ts * d + cc)
+                let cur_g = farr_get(Bg, WG + k4 * d + cc)
+                let _ = farr_set(Bg, WG + k4 * d + cc, cur_g + da_k * rc)
+                let cur_u = farr_get(Bg, WU + k4 * d + cc)
+                let _ = farr_set(Bg, WU + k4 * d + cc, cur_u + db_k * rc)
+                cc = cc + 1
+            }
+            k4 = k4 + 1
+        }
+        // dr[c] = Σ_k (Wg[k·d+c] · da[k] + Wu[k·d+c] · db[k])
+        let mut cc2 = 0
+        while cc2 < d {
+            let mut acc2 = 0.0
+            let mut k5 = 0
+            while k5 < h {
+                acc2 = acc2 + farr_get(Bp, WG + k5 * d + cc2) * farr_get(da_pos, k5)
+                            + farr_get(Bp, WU + k5 * d + cc2) * farr_get(db_pos, k5)
+                k5 = k5 + 1
+            }
+            let _ = farr_set(dr_pos, cc2, acc2)
+            cc2 = cc2 + 1
+        }
+        // 7 reversed (RMSNorm(hstate, g2) ← rin2): dr → [dh += dx_from_rms, dg2 +=]
+        //   dxn[i] = dr·g2 ; dg2[i] += dr·rm2xn ; dot = Σ dxn·hstate
+        //   dh[i] += inv·dxn[i] − (inv³/d · hstate[i]) · dot
+        let inv2 = farr_get(Bc, oR2inv + ts)
+        let mut dot2 = 0.0
+        let mut i7 = 0
+        while i7 < d {
+            let dxn_i = farr_get(dr_pos, i7) * farr_get(Bp, G2 + i7)
+            let cur_dg2 = farr_get(Bg, G2 + i7)
+            let _ = farr_set(Bg, G2 + i7,
+                             cur_dg2 + farr_get(dr_pos, i7)
+                                     * farr_get(Bc, oRm2xn + ts * d + i7))
+            dot2 = dot2 + dxn_i * farr_get(Bc, oHstate + ts * d + i7)
+            // store dxn in dr_pos as scratch (overwritten in pass 2)
+            let _ = farr_set(dr_pos, i7, dxn_i)
+            i7 = i7 + 1
+        }
+        let inv3_2 = inv2 * inv2 * inv2
+        let scl2 = (inv3_2 / to_float(d)) * dot2
+        let mut i8 = 0
+        while i8 < d {
+            let dxn_j = farr_get(dr_pos, i8)
+            let xj = farr_get(Bc, oHstate + ts * d + i8)
+            let dh_contrib = inv2 * dxn_j - scl2 * xj
+            let cur_dh = farr_get(dh, ts * d + i8)
+            let _ = farr_set(dh, ts * d + i8, cur_dh + dh_contrib)
+            i8 = i8 + 1
+        }
+        ts = ts + 1
+    }
+    let _ = farr_free(dr_pos)
+    let _ = farr_free(ds_pos)
+    let _ = farr_free(da_pos)
+    let _ = farr_free(db_pos)
+
+    // 6 reversed (hstate = X + attn_out): dX_residual += dh ; dattn_out = dh
+    // 5 reversed (attn_out = ctx · Wo^T per pos):
+    //   dWo[r·d+c] += Σ_t dattn_out[t,r] · ctx[t,c]   ; dctx[t,c] = Σ_r Wo[r·d+c] · dattn_out[t,r]
+    let dctx = farr_zeros(T * d)
+    let mut t_w = 0
+    while t_w < T {
+        // dWo accum
+        let mut r = 0
+        while r < d {
+            let dao_r = farr_get(dh, t_w * d + r)
+            let mut c = 0
+            while c < d {
+                let cur = farr_get(Bg, WO + r * d + c)
+                let _ = farr_set(Bg, WO + r * d + c,
+                                 cur + dao_r * farr_get(Bc, oCtx + t_w * d + c))
+                c = c + 1
+            }
+            r = r + 1
+        }
+        // dctx[t,c] = Σ_r Wo[r·d+c] · dattn_out[t,r]
+        let mut c2 = 0
+        while c2 < d {
+            let mut acc = 0.0
+            let mut rr = 0
+            while rr < d {
+                acc = acc + farr_get(Bp, WO + rr * d + c2)
+                          * farr_get(dh, t_w * d + rr)
+                rr = rr + 1
+            }
+            let _ = farr_set(dctx, t_w * d + c2, acc)
+            c2 = c2 + 1
+        }
+        t_w = t_w + 1
+    }
+
+    // 4 reversed (attention core): given dctx → dQ, dK, dV  (rotated-space grads).
+    //   See nn_attn_core_bwd. Same algebra, reading from Bc offsets.
+    let dQ = farr_zeros(T * d)        // = T · nh · hd
+    let dK = farr_zeros(T * kvd)
+    let dV = farr_zeros(T * kvd)
+    let dP_row = farr_zeros(T)
+    let mut hh_b = 0
+    while hh_b < nh {
+        let kvh = hh_b / n_rep
+        let mut i_b = 0
+        while i_b < T {
+            let L = i_b + 1
+            // dP[j] = Σ_c dctx[i, hh, c] · V[j, kvh, c]
+            let mut j = 0
+            while j < L {
+                let mut acc = 0.0
+                let mut c = 0
+                while c < hd {
+                    acc = acc + farr_get(dctx, i_b * d + hh_b * hd + c)
+                              * farr_get(Bc, oV + (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                let _ = farr_set(dP_row, j, acc)
+                j = j + 1
+            }
+            let mut sdot = 0.0
+            let mut j2 = 0
+            while j2 < L {
+                sdot = sdot + farr_get(Bc, oP + (hh_b * T + i_b) * T + j2)
+                            * farr_get(dP_row, j2)
+                j2 = j2 + 1
+            }
+            // dV[j, kvh, c] += P[i,j] · dctx[i, hh, c]
+            let mut j3 = 0
+            while j3 < L {
+                let pij = farr_get(Bc, oP + (hh_b * T + i_b) * T + j3)
+                let mut c = 0
+                while c < hd {
+                    let idx_dv = (j3 * nkv + kvh) * hd + c
+                    let cur = farr_get(dV, idx_dv)
+                    let _ = farr_set(dV, idx_dv,
+                                     cur + pij * farr_get(dctx, i_b * d + hh_b * hd + c))
+                    c = c + 1
+                }
+                j3 = j3 + 1
+            }
+            // dS[i,j] = P · (dP - sdot) · scale ; dQ += dS·K ; dK += dS·Q
+            let mut j4 = 0
+            while j4 < L {
+                let dS = farr_get(Bc, oP + (hh_b * T + i_b) * T + j4)
+                       * (farr_get(dP_row, j4) - sdot) * scale
+                let mut c2 = 0
+                while c2 < hd {
+                    let idx_dq = (i_b * nh + hh_b) * hd + c2
+                    let idx_dk = (j4 * nkv + kvh) * hd + c2
+                    let cur_q = farr_get(dQ, idx_dq)
+                    let _ = farr_set(dQ, idx_dq,
+                                     cur_q + dS * farr_get(Bc, oK + (j4 * nkv + kvh) * hd + c2))
+                    let cur_k = farr_get(dK, idx_dk)
+                    let _ = farr_set(dK, idx_dk,
+                                     cur_k + dS * farr_get(Bc, oQ + (i_b * nh + hh_b) * hd + c2))
+                    c2 = c2 + 1
+                }
+                j4 = j4 + 1
+            }
+            i_b = i_b + 1
+        }
+        hh_b = hh_b + 1
+    }
+    let _ = farr_free(dP_row)
+    let _ = farr_free(dctx)
+
+    // 3 reversed (RoPE on Q, K): per head/position apply inverse rotation
+    // dq_pre[c] = dq'[c]·cos[bse+c] + rh_T(dq'·sin)[c]
+    let half = hd / 2
+    let tmp_rope = farr_zeros(hd)
+    let mut t_r3 = 0
+    while t_r3 < T {
+        let bse = t_r3 * hd
+        // dQ inverse-rotate per head
+        let mut hh3 = 0
+        while hh3 < nh {
+            let row_off = (t_r3 * nh + hh3) * hd
+            let mut c = 0
+            while c < hd {
+                let gs_for_rht = if c < half {
+                    farr_get(dQ, row_off + half + c) * farr_get(sin, bse + half + c)
+                } else {
+                    0.0 - farr_get(dQ, row_off + c - half) * farr_get(sin, bse + c - half)
+                }
+                let v = farr_get(dQ, row_off + c) * farr_get(cos, bse + c) + gs_for_rht
+                let _ = farr_set(tmp_rope, c, v)
+                c = c + 1
+            }
+            let mut c2 = 0
+            while c2 < hd {
+                let _ = farr_set(dQ, row_off + c2, farr_get(tmp_rope, c2))
+                c2 = c2 + 1
+            }
+            hh3 = hh3 + 1
+        }
+        // dK inverse-rotate per kv-head
+        let mut hk = 0
+        while hk < nkv {
+            let row_off = (t_r3 * nkv + hk) * hd
+            let mut c = 0
+            while c < hd {
+                let gs_for_rht = if c < half {
+                    farr_get(dK, row_off + half + c) * farr_get(sin, bse + half + c)
+                } else {
+                    0.0 - farr_get(dK, row_off + c - half) * farr_get(sin, bse + c - half)
+                }
+                let v = farr_get(dK, row_off + c) * farr_get(cos, bse + c) + gs_for_rht
+                let _ = farr_set(tmp_rope, c, v)
+                c = c + 1
+            }
+            let mut c2 = 0
+            while c2 < hd {
+                let _ = farr_set(dK, row_off + c2, farr_get(tmp_rope, c2))
+                c2 = c2 + 1
+            }
+            hk = hk + 1
+        }
+        t_r3 = t_r3 + 1
+    }
+    let _ = farr_free(tmp_rope)
+
+    // 2 reversed (Q/K/V projections): given dQ/dK/dV → dWq/dWk/dWv + drin accum
+    // dWq[r·d + c] += Σ_t dQ_full[t·d+r] · rin[t·d+c]    where dQ_full is dQ flat
+    //    (dQ here is stored [T·nh·hd] = [T·d] flat row-major matching Q layout)
+    // dWk/dWv same shape as Wk/Wv [kvd·d]
+    // drin[t·d+c] = Σ_r Wq[r·d+c]·dQ[t·d+r] + Σ_r Wk[r·d+c]·dK[t·kvd+r] + Σ_r Wv·dV
+    let drin = farr_zeros(T * d)
+    let mut t_p = 0
+    while t_p < T {
+        // dWq accum
+        let mut r = 0
+        while r < d {
+            let dq_tr = farr_get(dQ, t_p * d + r)
+            let mut c = 0
+            while c < d {
+                let cur = farr_get(Bg, WQ + r * d + c)
+                let _ = farr_set(Bg, WQ + r * d + c,
+                                 cur + dq_tr * farr_get(Bc, oRin + t_p * d + c))
+                c = c + 1
+            }
+            r = r + 1
+        }
+        // dWk + dWv accum
+        let mut rk = 0
+        while rk < kvd {
+            let dk_tr = farr_get(dK, t_p * kvd + rk)
+            let dv_tr = farr_get(dV, t_p * kvd + rk)
+            let mut c = 0
+            while c < d {
+                let cur_k = farr_get(Bg, WK + rk * d + c)
+                let _ = farr_set(Bg, WK + rk * d + c,
+                                 cur_k + dk_tr * farr_get(Bc, oRin + t_p * d + c))
+                let cur_v = farr_get(Bg, WV + rk * d + c)
+                let _ = farr_set(Bg, WV + rk * d + c,
+                                 cur_v + dv_tr * farr_get(Bc, oRin + t_p * d + c))
+                c = c + 1
+            }
+            rk = rk + 1
+        }
+        // drin[t, c] = Σ_r Wq[r,c]·dQ[t,r] + Σ_r Wk[r,c]·dK[t,r] + Σ_r Wv[r,c]·dV[t,r]
+        let mut cc = 0
+        while cc < d {
+            let mut acc = 0.0
+            let mut rr = 0
+            while rr < d {
+                acc = acc + farr_get(Bp, WQ + rr * d + cc) * farr_get(dQ, t_p * d + rr)
+                rr = rr + 1
+            }
+            let mut rk2 = 0
+            while rk2 < kvd {
+                acc = acc + farr_get(Bp, WK + rk2 * d + cc) * farr_get(dK, t_p * kvd + rk2)
+                          + farr_get(Bp, WV + rk2 * d + cc) * farr_get(dV, t_p * kvd + rk2)
+                rk2 = rk2 + 1
+            }
+            let _ = farr_set(drin, t_p * d + cc, acc)
+            cc = cc + 1
+        }
+        t_p = t_p + 1
+    }
+    let _ = farr_free(dQ)
+    let _ = farr_free(dK)
+    let _ = farr_free(dV)
+
+    // 1 reversed (RMSNorm(X, g1) → rin): drin → [dx, dg1]
+    //   dxn[i] = drin·g1 ; dg1[i] += drin·rm1xn ; dot = Σ dxn·X
+    //   dx[i] = inv·dxn[i] − (inv³·X[i]/d)·dot
+    // Then dX_out += dh + dx  (residual + path).
+    let dx_pos = farr_zeros(d)
+    let mut ti = 0
+    while ti < T {
+        let inv1 = farr_get(Bc, oR1inv + ti)
+        let mut dot1 = 0.0
+        let mut i_r = 0
+        while i_r < d {
+            let dxn_i = farr_get(drin, ti * d + i_r) * farr_get(Bp, G1 + i_r)
+            let cur_dg1 = farr_get(Bg, G1 + i_r)
+            let _ = farr_set(Bg, G1 + i_r,
+                             cur_dg1 + farr_get(drin, ti * d + i_r)
+                                     * farr_get(Bc, oRm1xn + ti * d + i_r))
+            dot1 = dot1 + dxn_i * farr_get(X, ti * d + i_r)
+            let _ = farr_set(dx_pos, i_r, dxn_i)
+            i_r = i_r + 1
+        }
+        let inv3_1 = inv1 * inv1 * inv1
+        let scl1 = (inv3_1 / to_float(d)) * dot1
+        let mut i_d2 = 0
+        while i_d2 < d {
+            let dxn_j = farr_get(dx_pos, i_d2)
+            let xj = farr_get(X, ti * d + i_d2)
+            let dx_contrib = inv1 * dxn_j - scl1 * xj
+            // dX_out += dh + dx_contrib   (path + residual already in dh)
+            let cur = farr_get(dX_out, ti * d + i_d2)
+            let _ = farr_set(dX_out, ti * d + i_d2,
+                             cur + farr_get(dh, ti * d + i_d2) + dx_contrib)
+            i_d2 = i_d2 + 1
+        }
+        ti = ti + 1
+    }
+    let _ = farr_free(dx_pos)
+    let _ = farr_free(drin)
+    let _ = farr_free(dh)
+}
