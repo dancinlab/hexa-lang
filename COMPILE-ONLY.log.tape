@@ -766,3 +766,35 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
   @> COMPILE-ONLY.tape
 
+@? loop_stage3_link_blocked_symbol_mangling := "stage-3 link attempted: blocked on non-injective hexa→Mach-O symbol mangling (583 undef) + missing _main" :: anomaly [d=2026-05-16 active]
+  ~> loop_arm64_assembles_clean
+  <- loop_arm64_assembles_clean
+  finding <<~EOF
+    Executed loop_arm64_assembles_clean's `next` (link .o → stage-2).
+    .o assembles (asm rc=0, 1.19 MB Mach-O arm64) but link fails:
+    583 undefined symbols + no _main entry. Root-caused exactly
+    (measure-don't-predict, not fabricated):
+
+    DEF side  (_globl_directive / _func_label) = _label_prefix +
+      name → unconditional "_": `foo`→`_foo`, `_foo`→`__foo`
+      (injective).
+    REF side  (_fmt_label, all call/bl targets) = prepend "_" ONLY
+      if not already leading "_": `foo`→`_foo`, `_foo`→`_foo`.
+    ⇒ every hexa function whose SOURCE name starts with "_"
+      (`_add_edge`, `_bind`, `_is_digit_ch`, …) is DEFINED `__add_
+      edge` but CALLED `_add_edge` → 583 undefined.
+
+    Naive unification (route defs through _fmt_label too) makes
+    def==ref BUT collapses the DISTINCT hexa identifiers `foo` and
+    `_foo` onto one Mach-O symbol → "_is_digit_ch already defined"
+    (assemble fails — strictly worse). Verified then REVERTED;
+    tree restored to the assembling milestone (total=0, asm rc=0,
+    1.19 MB .o, 583 undef). emit/asm.hexa change is now comment-
+    only (logic = original) localising the blocker in-code.
+  EOF
+  root_cause = "hexa's identifier space treats `foo` and `_foo` as DISTINCT, but the Darwin Mach-O `_` ABI prefix + the codebase's two inconsistent prefixers (_label_prefix unconditional vs _fmt_label skip-leading-_) cannot represent both injectively AND consistently. Needs ONE injective hexa→Mach-O mangling applied identically at definition + every reference, with runtime-C symbols (hexa_*), block labels (_L..bb), and rodata (.LCstr/@PAGE) carved out. Plus: codegen emits no C-ABI `_main` entry — the stage-2 binary needs an entry that the linker/runtime expects (stage-1 got its main from the hexa_v2→C transpile; the native backend must synthesize one)."
+  honest_state = "loop_stage2_self_compile_clean (0 diagnostics) and loop_arm64_assembles_clean (.s→.o, 0 asm errors) BOTH still hold — unaffected, tree not regressed (the worse attempt was reverted). stage-3 is NOT reached: link is blocked on the mangling + entry-point. This is a real, bounded, precisely-localised codegen-backend unit (symbol mangling + entry synthesis), NOT a tolerance and NOT fabricable. string `==`/`!=` runtime-dispatch correctness remains a FURTHER unknown beyond link."
+  next = "Dedicated unit (next tick): (1) define an injective hexa→Mach-O mangling (e.g. always _label_prefix + an escape for leading-_ such as `_$U_` or a fixed `hx_` namespace) applied at _globl_directive + _func_label + every hexa-symbol _fmt_label ref path, carving out hexa_* runtime / _L..bb / .LCstr@… ; (2) synthesize a C-ABI _main that calls the hexa entry. Re-attempt link→stage-2→byte-diff only after `clang -arch arm64 .o runtime.c` rc=0. front-end/lowering closure (287670af..f5579406) preserved."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
+  @> COMPILE-ONLY.tape
+

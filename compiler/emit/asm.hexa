@@ -217,6 +217,18 @@ fn _bss_section_directive(target: string) -> string {
     return ".bss"
 }
 
+// NOTE (stage-3 blocker, characterized — NOT yet fixed here): def-side
+// uses unconditional _label_prefix ("_" always) → injective (`foo`→
+// `_foo`, `_foo`→`__foo`) but call sites use _fmt_label (skips a
+// leading "_") → `_foo` ref = `_foo` ≠ def `__foo` ⇒ 583 undefined at
+// stage-2 link. Routing defs through _fmt_label instead makes def==ref
+// BUT collapses the distinct hexa identifiers `foo` and `_foo` to the
+// same Darwin symbol ⇒ "already defined" (assemble fails — strictly
+// worse). The real fix is a single injective hexa→Mach-O mangling
+// applied identically at def + every ref (runtime/block/rodata labels
+// excepted) — a dedicated codegen unit, not a tick-tail patch. Kept
+// unconditional so the .s still assembles (the milestone) and the
+// 583-undef precisely localises the same root cause.
 fn _globl_directive(target: string, sym: string) -> string {
     return ".globl " + _label_prefix(target) + sym
 }
