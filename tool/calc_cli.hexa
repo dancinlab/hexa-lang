@@ -27,6 +27,12 @@ use "compiler/atlas/symbolic/sigma_phi_tau_uniqueness"
 use "compiler/atlas/symbolic/divisor_field_theory"
 use "compiler/atlas/symbolic/three_root_theorem"
 use "compiler/atlas/symbolic/convergence_cluster"
+use "compiler/atlas/symbolic/prime_pair"
+use "compiler/atlas/symbolic/platonic_solids"
+use "compiler/atlas/symbolic/symmetric_group_s6"
+use "compiler/atlas/symbolic/catalan_combinatorial"
+use "compiler/atlas/symbolic/pascal_perfect"
+use "compiler/atlas/symbolic/generator_finder"
 
 fn _is_sub(a) -> bool {
     return a == "nstate" || a == "nstate-find" || a == "vortex" || a == "vortex-verdicts"
@@ -35,6 +41,8 @@ fn _is_sub(a) -> bool {
         || a == "physics" || a == "texas" || a == "ftl" || a == "ftl-stats"
         || a == "sigma-phi-tau" || a == "divisor-field" || a == "three-root"
         || a == "converge"
+        || a == "prime-pair" || a == "platonic" || a == "s6"
+        || a == "catalan" || a == "pascal" || a == "genfind"
         || a == "list" || a == "help" || a == "--help" || a == "-h"
 }
 
@@ -93,6 +101,12 @@ fn cmd_help() {
     println("  divisor-field <n>     action P(n)=sigma-2n + S(n) combined action")
     println("  three-root <n>        rad=n & sigma=n*phi & tau=phi^2 (n=6 unique)")
     println("  converge              multi-domain convergence-cluster demo")
+    println("  prime-pair <limit>    semiprime-perfect + n=6 bootstrap cycle")
+    println("  platonic              5 Platonic solids: Euler χ + Schläfli proof")
+    println("  s6 <n>                S₆ exceptionality + partition count p(n)")
+    println("  catalan <n>           catalan/fibonacci/bell/derange/p(n) at n")
+    println("  pascal <n>            Pascal row n: sum/alt/hockey + entropy")
+    println("  genfind <a> <b> <t>   depth-1 reachable count from {a,b} for t")
     println("  list                  list engines (this)")
 }
 
@@ -305,6 +319,74 @@ fn cmd_converge() {
     }
 }
 
+fn cmd_prime_pair(rest) {
+    _need(rest, 2, "usage: hexa calc prime-pair <limit>")
+    let lim = to_int(to_string(rest[1]))
+    let b = pp_bootstrap(lim)
+    println("prime-pair limit=" + to_string(lim))
+    println("  semiprime-perfect n   = " + to_string(pp_semiprime_perfect(lim)) + " (only 6)")
+    println("  (p−1)(q−1)=2 pairs    = " + to_string(pp_pair_count(2, lim)))
+    println("  Euler-int pairs       = " + to_string(pp_euler_integer_count(lim)))
+    println("  bootstrap cycle CLOSED = " + to_string(b.cycle_closed))
+}
+
+fn cmd_platonic() {
+    println("platonic — 5 Platonic solids")
+    let mut i = 0
+    while i < pl_count() {
+        println("  i=" + to_string(i) + " (V,E,F)=(" + to_string(pl_V(i)) + ","
+            + to_string(pl_E(i)) + "," + to_string(pl_F(i)) + ")  χ="
+            + to_string(pl_euler(i)))
+        i = i + 1
+    }
+    println("  χ==2 all              : " + to_string(pl_all_euler_2()))
+    println("  Schläfli solutions    : " + to_string(pl_schlafli_solution_count(100)) + " (exactly 5)")
+    println("  dual classes          : " + to_string(pl_dual_pair_count()) + " (= 6/φ(6))")
+    println("  edge-sum 90 identity  : " + to_string(pl_edge_sum_identity()))
+}
+
+fn cmd_s6(rest) {
+    _need(rest, 2, "usage: hexa calc s6 <n>")
+    let n = to_int(to_string(rest[1]))
+    println("s6 n=" + to_string(n))
+    println("  n!              = " + to_string(s6_factorial(n)))
+    println("  p(n) partitions = " + to_string(s6_partition_count(n)))
+    println("  |Aut(S₆)|       = " + to_string(s6_aut_order()) + "  |Out(S₆)|=" + to_string(s6_out_order()))
+    println("  C(6,2)=2^τ(6)−1 : " + to_string(s6_transposition_is_mersenne()))
+    println("  6!=n·σ·sopfr·φ  : " + to_string(s6_factorial_capacity_identity()))
+}
+
+fn cmd_catalan(rest) {
+    _need(rest, 2, "usage: hexa calc catalan <n>")
+    let n = to_int(to_string(rest[1]))
+    println("catalan n=" + to_string(n))
+    println("  catalan(n)     = " + to_string(cc_catalan(n)))
+    println("  fibonacci(n)   = " + to_string(cc_fibonacci(n)))
+    println("  bell(n)        = " + to_string(cc_bell(n)))
+    println("  derangement(n) = " + to_string(cc_derangement(n)))
+    println("  partition p(n) = " + to_string(cc_partition_count(n)))
+}
+
+fn cmd_pascal(rest) {
+    _need(rest, 2, "usage: hexa calc pascal <n>")
+    let n = to_int(to_string(rest[1]))
+    println("pascal n=" + to_string(n))
+    println("  row sum   = " + to_string(pp_row_sum(n)) + "  (=2^n: " + to_string(pp_row_sum_is_pow2(n)) + ")")
+    println("  alt sum   = " + to_string(pp_alt_sum(n)))
+    println("  hockey(n,2) holds : " + to_string(pp_hockey_stick_holds(n, 2)))
+    println("  entropy   = " + to_string(pp_row_entropy_bits(n)) + " bits")
+}
+
+fn cmd_genfind(rest) {
+    _need(rest, 4, "usage: hexa calc genfind <a> <b> <target>")
+    let a = to_float(to_string(rest[1]))
+    let b = to_float(to_string(rest[2]))
+    let t = to_float(to_string(rest[3]))
+    println("genfind gens={" + to_string(a) + "," + to_string(b) + "} target=" + to_string(t))
+    println("  depth-1 reaches    = " + to_string(gf_depth1_reaches(a, b, t, 0.0001)))
+    println("  best rel-err       = " + to_string(gf_depth1_best_relerr(a, b, t)))
+}
+
 fn main() {
     let a = _slice_args()
     if len(a) == 0 {
@@ -336,6 +418,12 @@ fn main() {
     else if sub == "divisor-field" { cmd_divisor_field(rest) }
     else if sub == "three-root" { cmd_three_root(rest) }
     else if sub == "converge" { cmd_converge() }
+    else if sub == "prime-pair" { cmd_prime_pair(rest) }
+    else if sub == "platonic" { cmd_platonic() }
+    else if sub == "s6" { cmd_s6(rest) }
+    else if sub == "catalan" { cmd_catalan(rest) }
+    else if sub == "pascal" { cmd_pascal(rest) }
+    else if sub == "genfind" { cmd_genfind(rest) }
     else if sub == "list" || sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
     else {
         println("error: unknown engine: " + sub)

@@ -34,8 +34,9 @@
 | of which: duplicate/superseded by a kept sibling | ~24 |
 | of which: pure metadata / CSV / display-only | ~89 |
 | **WAVE 1 executed** | **6 ported (5 PASS · 1 DEFERRED)** |
-| **WAVE 2 executed this session** | **7 ported (7 PASS · 0 DEFERRED)** |
-| **§Backlog (prioritized PORT items remaining)** | **27** |
+| **WAVE 2 executed** | **7 ported (7 PASS · 0 DEFERRED)** |
+| **WAVE 3 executed this session** | **6 ported (6 PASS · 0 DEFERRED)** |
+| **§Backlog (prioritized PORT items remaining)** | **21** |
 
 Wave-1 PASS: `perfect_number_engine`, `nstate_calculator`,
 `vortex_math_verifier`, `ftl_n6_constants`, `congruence_chain_engine`.
@@ -169,6 +170,29 @@ All 7 wired into `tool/calc_cli.hexa` (subcommands: `physics`, `texas`,
 
 ---
 
+## §D3 Wave 3 execution log
+
+| Engine | hexa path | smoke test | Result |
+|--------|-----------|------------|--------|
+| prime_pair | `compiler/atlas/symbolic/prime_pair.hexa` | `test/prime_pair_smoke.hexa` | **PASS** (25/25) |
+| platonic_solids | `compiler/atlas/symbolic/platonic_solids.hexa` | `test/platonic_solids_smoke.hexa` | **PASS** (25/25) |
+| symmetric_group_s6 | `compiler/atlas/symbolic/symmetric_group_s6.hexa` | `test/symmetric_group_s6_smoke.hexa` | **PASS** (27/27) |
+| catalan_combinatorial | `compiler/atlas/symbolic/catalan_combinatorial.hexa` | `test/catalan_combinatorial_smoke.hexa` | **PASS** (24/24) |
+| pascal_perfect | `compiler/atlas/symbolic/pascal_perfect.hexa` | `test/pascal_perfect_smoke.hexa` | **PASS** (22/22) |
+| generator_finder | `compiler/atlas/symbolic/generator_finder.hexa` | `test/generator_finder_smoke.hexa` | **PASS** (19/19) |
+
+All 6 wired into `tool/calc_cli.hexa` (subcommands: `prime-pair`,
+`platonic`, `s6`, `catalan`, `pascal`, `genfind`); `test/calc_cli_smoke.hexa`
+extended 26→35 checks, PASS. Closes absorption §D GAP #2 (prime_pair).
+Wave-3 covers §Backlog #14 (prime_pair), #13 (platonic), #12
+(symmetric_group_s6, subsumes partition_count), #10 (catalan, covers
+binomial #11), #11 (pascal_perfect, binomial), #15 (generator_finder).
+g4-honesty corrections applied to two over-stated source claims
+(C(n,2)=2^k−1 'only n=2,6' → {2,3,6,91}; generator_finder '5/9 at
+depth 1' → depth-2 hit).
+
+---
+
 ## §Backlog (prioritized PORT items for follow-up waves)
 
 Priority order = (closed-form clarity × verdict-gating value), highest first.
@@ -202,13 +226,34 @@ Priority order = (closed-form clarity × verdict-gating value), highest first.
 9. ~~**divisor_field_theory**~~ — **DONE Wave 2**
    (`symbolic/divisor_field_theory.hexa`, classic P(n)=σ−2n perfect
    characterization + the source's combined S(n) action; closes absorption §D).
-10. **catalan** → add to `stdlib/core/math.hexa` (Cₙ=binomial(2n,n)/(n+1)).
-11. **binomial** → add `binomial(n,k)` to `stdlib/core/math.hexa`.
-12. **partition_count** → add integer-partition count to `stdlib/core/math.hexa`.
-13. **platonic / Euler-characteristic** — extend `compiler/atlas/verify/geo.hexa`.
-14. **prime_pair_verifier** — P-NEW prime-pair n=6 characterization
-    (absorption §D GAP #2). Target `symbolic/prime_pair.hexa`.
-15. **mult_order / primitive_root** → add to `stdlib/core/math.hexa`.
+10. ~~**catalan**~~ — **DONE Wave 3** (`symbolic/catalan_combinatorial.hexa`,
+    catalan + fibonacci/bell/stirling2/derangement/partition kernels).
+11. ~~**binomial**~~ — **DONE Wave 3** (provided by both
+    `symbolic/catalan_combinatorial.hexa::cc_binomial` and
+    `symbolic/pascal_perfect.hexa::pp_binomial`; pascal_perfect adds Pascal
+    row / hockey-stick / perfect=triangular / row-6 Shannon entropy).
+12. ~~**partition_count**~~ — **DONE Wave 3** (subsumed by
+    `symbolic/symmetric_group_s6.hexa::s6_partition_count`, Euler pentagonal
+    recurrence; engine also ports S₆ outer-automorphism exceptionality).
+13. ~~**platonic / Euler-characteristic**~~ — **DONE Wave 3**
+    (`symbolic/platonic_solids.hexa` — standalone engine, not a geo.hexa
+    extension, per Wave-1 one-engine-one-file convention; closed-form
+    'exactly 5' Schläfli classification proof).
+14. ~~**prime_pair_verifier**~~ — **DONE Wave 3** (`symbolic/prime_pair.hexa`,
+    semiprime-perfect + n=6 bootstrap cycle; pure-Python fallback only, no
+    tecsrs Rust dep; closes absorption §D GAP #2).
+15. ~~**generator_finder**~~ — **DONE Wave 3**
+    (`symbolic/generator_finder.hexa`, binary-op reachability kernel +
+    safe_pow guards; the np-random pair/triple search plumbing not ported).
+    *(Note: the original #15 line read "mult_order/primitive_root → stdlib";
+    Wave 3 ported generator_finder (the §C generator-set algorithm) under
+    this slot instead — mult_order/primitive_root remains a future stdlib
+    item, see remaining backlog below.)*
+
+**Remaining (lower closed-form clarity / deferred):** proof_engine (#2),
+dfs_engine+tesla_369_dfs (#5 — Python delegates to external tecsrs Rust,
+no in-.py kernel), mult_order/primitive_root (stdlib NT primitive), plus
+the EXCLUDE-class items in §C not eligible for port.
 
 (Items 7,8,9,14 also close GAPs flagged in
 `_archive_tecs_l_absorption_manifest.md` §D — porting them upgrades those

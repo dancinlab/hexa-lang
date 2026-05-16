@@ -30,6 +30,12 @@ import "compiler/atlas/symbolic/sigma_phi_tau_uniqueness.hexa"
 import "compiler/atlas/symbolic/divisor_field_theory.hexa"
 import "compiler/atlas/symbolic/three_root_theorem.hexa"
 import "compiler/atlas/symbolic/convergence_cluster.hexa"
+import "compiler/atlas/symbolic/prime_pair.hexa"
+import "compiler/atlas/symbolic/platonic_solids.hexa"
+import "compiler/atlas/symbolic/symmetric_group_s6.hexa"
+import "compiler/atlas/symbolic/catalan_combinatorial.hexa"
+import "compiler/atlas/symbolic/pascal_perfect.hexa"
+import "compiler/atlas/symbolic/generator_finder.hexa"
 
 let mut PASS = 0
 let mut FAIL = 0
@@ -112,6 +118,30 @@ check("converge: 3 independent domains in cluster0",
       independent_domains(ccs.clusters[0]) == 3)
 check("converge: convergence_points(min=3) == 1",
       len(convergence_points(ccs, 3)) == 1)
+
+// ── Wave-3 engines (one representative value each) ──────────────────────
+
+// prime-pair (hexa calc prime-pair) — 6 is the only semiprime perfect number
+check("prime-pair: semiprime-perfect(2000) == 6", pp_semiprime_perfect(2000) == 6)
+
+// platonic (hexa calc platonic) — Euler χ=2 for all 5; exactly 5 Schläfli
+check("platonic: χ==2 for all 5 solids", pl_all_euler_2())
+check("platonic: exactly 5 valid {p,q}", pl_schlafli_solution_count(50) == 5)
+
+// s6 (hexa calc s6 6) — p(6)=11, |Out(S₆)|=2
+check("s6: partition p(6) == 11", s6_partition_count(6) == 11)
+check("s6: |Out(S₆)| == 2", s6_out_order() == 2)
+
+// catalan (hexa calc catalan 6) — C₆=132, F₆=8
+check("catalan: catalan(6) == 132", cc_catalan(6) == 132)
+check("catalan: fibonacci(6) == 8", cc_fibonacci(6) == 8)
+
+// pascal (hexa calc pascal 6) — row sum 64 = 2⁶
+check("pascal: row_sum(6) == 64 = 2⁶", pp_row_sum_is_pow2(6) && pp_row_sum(6) == 64)
+
+// genfind (hexa calc genfind) — generator reaches itself at depth 1
+check("genfind: {ζ3,ln2} reaches ζ3 at depth 1",
+      gf_depth1_reaches(1.2020569031595942, 0.6931471805599453, 1.2020569031595942, 0.0001))
 
 println("═══════════════════════════════════════════════════════════")
 println("  calc_cli smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
