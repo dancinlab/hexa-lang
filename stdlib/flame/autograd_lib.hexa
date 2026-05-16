@@ -37,10 +37,15 @@ pub fn ag_tape_end(tape: int) {
 // ── differentiable ops (Phase 1 scope = matmul + softmax-CE) ───────────
 // C = A·B (M×K · K×N), records vjp on open tape.
 //   forward = farr_matmul; backward stores dA = dC·Bᵀ, dB = Aᵀ·dC.
+// SIGNATURE (matches self/runtime.c hexa_ad_matmul / hexa_farr_matmul):
+//   args = (A_id, M = rows(A), K = cols(A) = rows(B), B_id, N = cols(B))
+//   returns C_id (M·N).
+//   Dimensions are interleaved between the two farr ids — NOT
+//   (A, B, M, K, N). 동일 ordering: RFC 034 tmp_rfc034_smoke.hexa.
 // Phase 2 generalization: Linear/RMSNorm/RoPE/SwiGLU 가 본 tape 위에
 // 자신의 closed vjp 를 push 한다 (RFC 043 §Surface 의 layer 표면).
-pub fn ag_matmul(a: int, b: int, M: int, K: int, N: int) -> int {
-    return ad_matmul(a, b, M, K, N)
+pub fn ag_matmul(a: int, M: int, K: int, b: int, N: int) -> int {
+    return ad_matmul(a, M, K, b, N)
 }
 
 // CE loss over B rows × C classes; targets is a B-len farr of class

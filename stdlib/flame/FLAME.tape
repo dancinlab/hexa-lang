@@ -33,13 +33,14 @@
   README.md -> "overview + foundation pointer"
   PLAN.md -> "staged roadmap; Phase 0 = 보존/통합 (물거품 방지)"
   FLAME.tape -> "this — SSOT + §X preservation index"
-  flame.hexa -> "[planned] entrypoint (import *_lib + selftest)"
-  tensor_lib.hexa -> "[planned] Tensor — device-farr (RFC 040)"
-  autograd_lib.hexa -> "[planned] reverse-mode tape (RFC 034 generalized)"
-  nn_lib.hexa -> "[planned] Linear/RMSNorm/RoPE/GQA-attn/SwiGLU/embed/tied-head"
+  flame.hexa -> "[LANDED 2026-05-16 Phase 1 4/4] entrypoint (use stdlib/flame/*_lib + Phase 1 selftest)"
+  tensor_lib.hexa -> "[LANDED 2026-05-16 Phase 1] Tensor — host farr (RFC 040 device-farr backend; device routing = Phase 4 honest carve-out)"
+  autograd_lib.hexa -> "[LANDED 2026-05-16 Phase 1] reverse-mode tape thin wrapper over RFC 034 ad_*"
+  nn_lib.hexa -> "[Phase 2-A LANDED 2026-05-16: Linear + RMSNorm fwd/bwd 4/4 PASS] · Phase 2-B planned: RoPE/GQA-attn/SwiGLU/embed/tied-head"
+  flame_nn_test.hexa -> "[LANDED 2026-05-16 Phase 2-A] selftest entrypoint for nn_lib (F-RFC043-LAYER-EQ-{LINEAR,RMSNORM}-{FWD,BWD})"
   optim_lib.hexa -> "[planned] AdamW (RFC 040 B2)"
   train_lib.hexa -> "[planned] compiled train_step + CE loss"
-  note = "[planned] = NOT created. lib-split mandatory (compiled: main/_selftest 동거 시 C 심볼 중복)."
+  note = "[LANDED] = built + falsifier PASS. lib-split mandatory (compiled: main/_selftest 동거 시 C 심볼 중복). 각 selftest 는 독립 entrypoint 파일."
 
 # ─── §3 Governance ───────────────────────────────────────────────────
 
@@ -77,8 +78,19 @@
   scope = "Phase 1 = tensor_lib.hexa (RFC 040 device-farr residence) + autograd_lib.hexa (RFC 034 tape generalized)"
   F_RFC043_BUILD = "`hexa build` 가 flame stdlib (lib-split) 의 native 바이너리를 0 clang redefinition 으로 산출; 어떤 stdlib op 에서도 hexa_interp dispatch 도달 불가 (compiler-only 를 구조적으로 검증, 가정 아님)"
   F_RFC043_AG_EQ = "일반화된 autograd tape 가 RFC 034 의 landed exact 결과를 RFC 034 자신의 reference 에 재현 (closed B-D-4 CE-softmax Jacobian max|grad−(softmax−onehot)| = 0.0); 전체 layer-set tape 는 central-difference GRAD-EXACT PASS ([@x_oracle_cpu_bitequal] GRAD-EXACT 가 reference). AOT 경로가 exact-grad correctness 를 깨면 FAIL"
-  rule = "두 falsifier 는 compiled-native 경로(`hexa build`, no interp/py)에서만 PASS 인정. F-RFC043-AG-EQ 는 connection-point closed check — 구조검증('tape 가 돌았다')로 대체 불가 (g_blue_closed_mandate). 가짜 target 금지 — reference 는 §X verified oracle."
+  F_RFC043_AG_TRAJ_ORACLE = "20-step (X[B·D]·W[D·C] → CE → backward → AdamW) 의 loss trajectory 가 RFC 034 oracle (loss[0]=1.64219, loss[19]=0.228332) 와 일치 — printed-precision floor 1e-4. matmul wrapper 의 arg ordering 까지 검증하는 oracle-비교 (구조-검증 self-determinism 만으로 우회 불가). g3 honesty 결과 추가."
+  rule = "세 falsifier 는 compiled-native 경로(`hexa build`, no interp/py)에서만 PASS 인정. F-RFC043-AG-EQ + F-RFC043-AG-TRAJ-ORACLE 는 connection-point closed check — 구조검증('tape 가 돌았다')로 대체 불가 (g_blue_closed_mandate). 가짜 target 금지 — reference 는 §X verified oracle."
   authority = "RFC 043 §Verification + anima g_blue_closed_mandate · g3 · f1/f2"
+  @> PLAN.md
+
+@D g_flame_phase2a_falsifiers := "Phase 2-A falsifier 사전등록 (Linear + RMSNorm)" :: governance [required d=2026-05-16 active]
+  scope = "Phase 2-A = nn_lib.hexa Linear + RMSNorm (fwd+bwd, closed-form analytic vjp). Phase 2-B (RoPE / GQA-attn / SwiGLU / embed / tied-head) = 별도 cycle."
+  F_RFC043_LAYER_EQ_LINEAR_FWD = "nn_linear_fwd 가 closed-form reference (ikj order, bias broadcast) 에 1e-12 absolute (RFC 040 §2.2 measured fp-tol; FMA-vs-hexa-scalar last-ulp gap honest carve-out). 가짜 byte-eq 주장 금지 — fp-non-assoc 은 documented limit."
+  F_RFC043_LAYER_EQ_LINEAR_BWD = "nn_linear_bwd {dW, dx, db} ≡ closed analytic vjp (dW=xᵀ·dy, dx=dy·Wᵀ, db=sum_rows(dy)) byte-equal (양쪽 hexa loop = 동일 fp 환경)."
+  F_RFC043_LAYER_EQ_RMSNORM_FWD = "nn_rmsnorm_fwd {y, xn, inv} ≡ c3_rmsnorm_fwd algebra byte-equal (g_i·x_i/sqrt(mean(x²)+ε))."
+  F_RFC043_LAYER_EQ_RMSNORM_BWD = "nn_rmsnorm_bwd {dx, dg} ≡ c3_rmsnorm_bwd closed vjp byte-equal (dxn=dy·g, dg=dy·xn, dot=Σ(dxn·x), dx=inv·dxn − scale·x)."
+  rule = "fwd cross-impl 비교는 fp-tol; pure-scalar bwd 는 byte-eq. 양쪽 모두 closed-form analytic anchor (g3 real-limit = closed Jacobian + bit-exact reference equivalence). 가짜 reference 금지 — c3_*/c3_rmsnorm_* 은 anima d_train3_lib.hexa 의 검증된 boxed reference (cross-repo)."
+  authority = "RFC 043 §Verification + RFC 040 §2.2 fp-tol + g_blue_closed_mandate"
   @> PLAN.md
 
 # ─── §X External citations — PRESERVATION INDEX (참조-보존) ──────────
@@ -180,17 +192,55 @@ falsifier 사전등록: g_flame_phase1_falsifiers (F-RFC043-BUILD,
 F-RFC043-AG-EQ). 구현은 rfc043-hexa-torch 에서 진행 (full substrate
 lineage 보유: RFC 040 device-farr + RFC 034 autograd tape).
 
-### 2026-05-16 — Phase 1 PASS (3/3 + regression 0, compiled-native)
-flame.hexa + tensor_lib.hexa + autograd_lib.hexa LANDED. selftest 결과
-(`build/flame_phase1`, Mac no-CUDA):
-- F-RFC043-BUILD       PASS (clang redef 0; `grep call_builtin
-  flame_phase1.c` = 0; `hexa_ad_*`/`hexa_farr_*` 9 direct C-calls =
+### 2026-05-16 — Phase 1 INITIAL (3/3 PASS, but matmul-arg bug masked)
+초기 빌드: F-RFC043-BUILD / F-RFC043-AG-EQ / F-RFC043-DETERMINISM
+PASS — 그러나 g3 honesty: Phase 2-A 진단 중 `ag_matmul` 의 wrapper
+arg ordering 이 underlying `ad_matmul`/`farr_matmul` (runtime: a, M, K,
+b, N) 과 어긋남을 발견. F-RFC043-AG-EQ (B-D-4 closed CE Jacobian) 은
+matmul 비사용 — 진짜 PASS. F-RFC043-DETERMINISM 은 self-consistent
+(같은 wrong-args 두 번) — 구조적 PASS, oracle 불일치는 미검출. 다음
+entry 에서 fix + actual oracle-trajectory check 추가.
+
+### 2026-05-16 — Phase 1 PASS (4/4 + regression 0, compiled-native)
+FIX: ag_matmul / t_matmul / nn_linear_fwd 의 farr_matmul args를 runtime
+ordering (a, M, K, b, N) 으로 정렬 + flame.hexa 의 호출자 `ag_matmul(X,
+W, B, D, C)` → `ag_matmul(X, B, D, W, C)`. F-RFC043-AG-TRAJ-ORACLE
+추가 — RFC 034 oracle (loss[0]≈1.64219, loss[19]≈0.228332) 와 직접 비교.
+
+selftest 결과 (`build/flame_phase1`, Mac no-CUDA):
+- F-RFC043-BUILD          PASS (clang redef 0; `grep call_builtin
+  flame_phase1.c` = 0; `hexa_ad_*`/`hexa_farr_*` direct C-calls =
   structural compiler-only 검증, 가정 아님)
-- F-RFC043-AG-EQ       PASS (max|ag_grad − (softmax − onehot)| = 0.0
-  < 1e-9 — anima B-D-4 closed Jacobian bit-equal · connection-point
-  closed (g_blue_closed_mandate met))
-- F-RFC043-DETERMINISM PASS (seed=42 trajectory 두 run byte-identical)
+- F-RFC043-AG-EQ          PASS (max|ag_grad − (softmax − onehot)|
+  = 0.0 < 1e-9 — anima B-D-4 closed Jacobian bit-equal ·
+  connection-point closed (g_blue_closed_mandate met))
+- F-RFC043-DETERMINISM    PASS (seed=42 trajectory 두 run byte-id)
+- F-RFC043-AG-TRAJ-ORACLE PASS (20-step loss trajectory: loss[0]≈
+  1.64219, loss[19]≈0.228332 within printed-precision floor 1e-4;
+  RFC 034 oracle 와 bit-equal numerics — connection-point 실측 검증)
 - F-RFC043-MODULE-REGRESSION-0 PASS (RFC 034 5/5 + RFC 040 B2 9/9
   re-build 후 동일 PASS, 동일 numerics)
-Phase 2 (nn layers) gate 충족. API 표면 RFC 043 에서 고정(`g_flame_api_fixed`)
-이므로 Phase 2 는 `t_*`/`ag_*` signature 불변 + layer wrappers 추가.
+Phase 2 gate 충족. API 표면 RFC 043 에서 고정(`g_flame_api_fixed`).
+
+### 2026-05-16 — Phase 2-A LANDED (Linear + RMSNorm, 4/4 PASS + regression 0)
+landed: `stdlib/flame/{nn_lib.hexa, flame_nn_test.hexa}`. Phase 2-A =
+가장 단순한 두 layer (closed-form analytic vjp). Phase 2-B (RoPE /
+GQA-attn / SwiGLU / embedding / tied-LM-head) = 별도 cycle.
+
+selftest 결과 (`build/flame_phase2a`, Mac no-CUDA):
+- F-RFC043-LAYER-EQ-LINEAR-FWD   PASS — max|Δ| < 1e-12 (RFC 040 §2.2
+  measured fp-tol; FMA-vs-hexa-scalar last-ulp gap honest carve-out;
+  ikj-order reduction matched between wrapper와 ref)
+- F-RFC043-LAYER-EQ-LINEAR-BWD   PASS — {dW, dx, db} byte-eq vs
+  closed vjp (dW=xᵀ·dy, dx=dy·Wᵀ, db=sum_rows(dy))
+- F-RFC043-LAYER-EQ-RMSNORM-FWD  PASS — {y, xn, inv} byte-eq vs
+  c3_rmsnorm_fwd algebra (anima d_train3_lib.hexa)
+- F-RFC043-LAYER-EQ-RMSNORM-BWD  PASS — {dx, dg} byte-eq vs
+  c3_rmsnorm_bwd closed vjp
+- regression: RFC 034 5/5 · RFC 040 B2 9/9 · flame Phase 1 4/4
+  모두 동일 PASS 동일 numerics. structural: nn_lib emitted C
+  `call_builtin` = 0 (compiler-only 유지).
+honest carve-out: layer-level autograd-tape integration (ad_* 가
+새 op 를 record 하도록) 은 Phase 3 (train_step) — 현재 layer 들은
+functional bwd (c3_* / d5_block_bwd 패턴). Phase 2-B: RoPE +
+GQA-attn + SwiGLU + embedding + tied-head 추가.

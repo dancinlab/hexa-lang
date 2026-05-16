@@ -1,9 +1,11 @@
 # flame — hexa-native, compiler-only PyTorch-equivalent NN stdlib
 
-> **Status: Phase 1 LANDED (2026-05-16) — `tensor_lib` + `autograd_lib`
-> + entrypoint selftest 3/3 PASS on compiled-native, regression 0.**
-> See `PLAN.md` `## 진행 로그` + `FLAME.tape` `## Log`. Phase 2 (nn
-> layers) is the next gate.
+> **Status: Phase 1 LANDED + Phase 2-A LANDED (2026-05-16) —
+> `tensor_lib` + `autograd_lib` + `nn_lib` (Linear + RMSNorm fwd/bwd)
+> + selftests 4/4 + 4/4 PASS on compiled-native, regression 0.**
+> See `PLAN.md` `## 진행 로그` + `FLAME.tape` `## Log`. Phase 2-B
+> (RoPE / GQA-attn / SwiGLU / embedding / tied LM head) is the next
+> gate.
 >
 > **Pair**: `flame` (this directory — hexa NN stdlib) ↔ `self/forge/`
 > (the GPU compute substrate: cuBLAS + .cu kernels). See AGENTS.tape §0

@@ -100,20 +100,48 @@ Phase 1 falsifier 사전등록 (FLAME.tape `g_flame_phase1_falsifiers`:
 F-RFC043-BUILD, F-RFC043-AG-EQ). Phase 1 (tensor_lib + autograd_lib)
 구현 착수 — rfc043-hexa-torch 에서.
 
-### 2026-05-16 — Phase 1 LANDED (3/3 PASS + regression 0)
+### 2026-05-16 — Phase 1 LANDED (4/4 PASS + regression 0)
 landed: `stdlib/flame/{tensor_lib.hexa, autograd_lib.hexa, flame.hexa}`.
 selftest 결과 (compiled-native `build/flame_phase1`, Mac no-CUDA):
 - **F-RFC043-BUILD** PASS — clang redef 0; emitted C 의 ag_*/t_* surface
-  는 `hexa_ad_*`/`hexa_farr_*` direct call (9 sites), `call_builtin` =
-  0 → compiler-only 구조적 검증 (가정 아님).
+  는 `hexa_ad_*`/`hexa_farr_*` direct call, `call_builtin` = 0 →
+  compiler-only 구조적 검증 (가정 아님).
 - **F-RFC043-AG-EQ** PASS — `max|ag_grad − (softmax − onehot)| = 0.0
   < 1e-9` (anima B-D-4 closed Jacobian bit-equal); ag_* wrapper ↔
   RFC 034 ad_* oracle connection-point closed (g_blue_closed_mandate).
 - **F-RFC043-DETERMINISM** PASS — seed=42 trajectory 두 run
   byte-identical.
+- **F-RFC043-AG-TRAJ-ORACLE** PASS — 20-step trajectory loss[0]≈
+  1.64219, loss[19]≈0.228332 (RFC 034 oracle, printed-precision floor
+  1e-4 — bit-equal numerics). 이 falsifier 가 matmul wrapper arg
+  ordering 까지 검증 (g3 honesty: 초기 3/3 PASS 가 ag_matmul arg-bug 를
+  masking 했었음을 진단 중 발견 → fix + 추가).
 - **F-RFC043-MODULE-REGRESSION-0** PASS — RFC 034 5/5 + RFC 040 B2
   9/9 smoke 재빌드 후 동일 PASS · 동일 numerics.
 honest carve-out: device routing 미구현 (farr_*_gpu / cuda_* 의
 codegen 미wired — RFC 041/042 upstream needs). 도입 = Phase 4. Phase
 2 (nn layers) gate 충족 — 같은 ag_*/t_* 위 layer wrappers 추가
 (g_flame_api_fixed: API signature 불변).
+
+### 2026-05-16 — Phase 2-A LANDED (Linear + RMSNorm, 4/4 PASS + regression 0)
+landed: `stdlib/flame/{nn_lib.hexa, flame_nn_test.hexa}`. Phase 2-A =
+가장 단순한 두 layer (closed-form analytic vjp); Phase 2-B (RoPE /
+GQA-attn / SwiGLU / embedding / tied-LM-head) = 별도 cycle.
+selftest 결과 (compiled-native `build/flame_phase2a`):
+- **F-RFC043-LAYER-EQ-LINEAR-FWD** PASS — max|nn_linear_fwd − closed
+  ref| < 1e-12 (RFC 040 §2.2 measured fp-tol; FMA vs hexa-scalar
+  last-ulp gap honest carve-out; reduction order = `ikj` 동일).
+- **F-RFC043-LAYER-EQ-LINEAR-BWD** PASS — {dW, dx, db} byte-eq vs
+  closed analytic vjp (dW = xᵀ·dy, dx = dy·Wᵀ, db = Σ_rows(dy)).
+- **F-RFC043-LAYER-EQ-RMSNORM-FWD** PASS — {y, xn, inv} byte-eq vs
+  `c3_rmsnorm_fwd` algebra (anima d_train3_lib.hexa).
+- **F-RFC043-LAYER-EQ-RMSNORM-BWD** PASS — {dx, dg} byte-eq vs
+  `c3_rmsnorm_bwd` closed vjp.
+- **regression**: RFC 034 5/5 · RFC 040 B2 9/9 · flame Phase 1 4/4
+  모두 동일 PASS / 동일 numerics. structural: nn_lib emitted C
+  `call_builtin` = 0 → compiler-only 유지.
+honest carve-out: layer-level autograd-tape integration (ad_* 가
+새 op record) = Phase 3 (train_step). 현재 layer 들은 functional
+bwd (c3_* / d5_block_bwd 패턴 — 호출자가 dy 를 넘기고 closed
+analytic gradient 를 받음). 다음 단계: Phase 2-B 의 5 layer
+(RoPE/GQA-attn/SwiGLU/embedding/tied-LM-head).

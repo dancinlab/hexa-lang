@@ -1,0 +1,195 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/nn_lib.hexa — flame Phase 2-A (RFC 043)
+//
+// nn layers — Linear + RMSNorm (Phase 2-A; the simplest two layers
+// with closed-form analytic vjp). Continuation in Phase 2-B: RoPE,
+// GQA-attention, SwiGLU, embedding, tied LM head.
+//
+// Layer style: functional (RFC 040 Phase E / c3_*-style). Each fwd
+// returns its outputs; each bwd takes upstream `dy` + saved fwd state
+// and returns the closed-form ∂loss/∂{x, params}. This mirrors anima
+// HEXAD/D/d_train3_lib.hexa (c3_matvec / c3_rmsnorm_fwd /
+// c3_rmsnorm_bwd) — flame inherits the SAME closed algebra and
+// preserves byte-equality (or RFC-040 measured fp-tol where a
+// reduction differs).
+//
+// Verified reference (cross-repo, anima d_train3_lib.hexa):
+//   c3_matvec(M, v, rows, cols) — linear fwd (single row)
+//   c3_matvec_t(M, u, rows, cols) — transpose-matvec (input/W vjp)
+//   c3_outer(u, v, R, C) — outer product (W-grad accumulator)
+//   c3_rmsnorm_fwd(x, g, d) — RMSNorm fwd, returns [y, xn, inv]
+//   c3_rmsnorm_bwd(x, g, xn, inv, dy, d) — RMSNorm bwd (closed vjp)
+//
+// Compiled-native — emit path:
+//   - host CPU farr_matmul (RFC 032; codegen_c2 explicit-wired) is the
+//     core 3-loop reduction; nn_linear_fwd/bwd compose it.
+//   - hand loops over farr_get / farr_set for bias add and RMSNorm
+//     scalar arithmetic — independent reference.
+//   - Phase B2 farr_*_gpu ops accessible via generic hexa_callN —
+//     C symbols defined in self/runtime.c (4-5 sites each, #ifdef
+//     HEXA_CUDA branches), so substrate routing is available without
+//     codegen edits. flame Phase 2-A uses host CPU (no _gpu) for the
+//     correctness oracle; device routing = Phase 4.
+//
+// API stays fixed per g_flame_api_fixed — Phase 2-B/C add layer
+// wrappers without changing existing signatures.
+// ════════════════════════════════════════════════════════════════════════
+
+// ── helpers (private) ──────────────────────────────────────────────────
+fn _nn_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _nn_sqrt(x: float) -> float {
+    // libm sqrt — exact double. c3_rmsnorm_fwd uses dt_sqrt (24-iter
+    // Newton); for Phase 2-A in-flame correctness we use the SAME path
+    // in BOTH wrapper and in-flame reference, so the closed-vjp identity
+    // F-RFC043-LAYER-EQ-RMSNORM-* checks |Δ|=0.0 byte-equal (no cross-
+    // implementation gap; the dt_sqrt comparison is Phase B2's job and
+    // already 9/9 PASS for the AdamW op on this branch).
+    return sqrt(x)
+}
+
+// ─── Linear layer ──────────────────────────────────────────────────────
+// y = x · W + b ; shapes: x [B·D], W [D·C], b [C] → y [B·C].
+// Forward (host CPU): farr_matmul + per-row bias broadcast.
+// farr_matmul signature = (A_id, M=rows(A), K=cols(A), B_id, N=cols(B))
+// so for y = x[B·D]·W[D·C] we call farr_matmul(x, B, D, W, C).
+pub fn nn_linear_fwd(x: int, W: int, b: int, B: int, D: int, C: int) -> int {
+    let y = farr_matmul(x, B, D, W, C)
+    // bias broadcast: y[i,j] += b[j], same reduction order as c3_matvec
+    // batched loop (no fp-non-assoc surprise — the bias is added in a
+    // single pass, identical to a c3_matvec + scalar add).
+    let mut i = 0
+    while i < B {
+        let mut j = 0
+        while j < C {
+            let cur = farr_get(y, i * C + j)
+            let bj = farr_get(b, j)
+            let _ = farr_set(y, i * C + j, cur + bj)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return y
+}
+
+// Linear backward — closed vjp:
+//   dW = xᵀ · dy        (shape [D·C], reduces over B)
+//   dx = dy · Wᵀ        (shape [B·D], reduces over C)
+//   db[j] = Σ_i dy[i,j] (shape [C])
+// Caller-allocated outputs (dW, dx, db) — writes in place.
+//   shapes: x [B·D], W [D·C], dy [B·C]; out dW [D·C], dx [B·D], db [C].
+pub fn nn_linear_bwd(x: int, W: int, dy: int,
+                     dW_out: int, dx_out: int, db_out: int,
+                     B: int, D: int, C: int) {
+    // dW = xᵀ · dy : same reduction order as c3_outer accumulated over B
+    // rows — for each (d, c) sum_b x[b,d] * dy[b,c].
+    let mut d = 0
+    while d < D {
+        let mut c = 0
+        while c < C {
+            let mut acc = 0.0
+            let mut bi = 0
+            while bi < B {
+                acc = acc + farr_get(x, bi * D + d) * farr_get(dy, bi * C + c)
+                bi = bi + 1
+            }
+            let _ = farr_set(dW_out, d * C + c, acc)
+            c = c + 1
+        }
+        d = d + 1
+    }
+    // dx = dy · Wᵀ : for each (b, d) sum_c dy[b,c] * W[d,c]
+    let mut bi2 = 0
+    while bi2 < B {
+        let mut d2 = 0
+        while d2 < D {
+            let mut acc2 = 0.0
+            let mut c2 = 0
+            while c2 < C {
+                acc2 = acc2 + farr_get(dy, bi2 * C + c2) * farr_get(W, d2 * C + c2)
+                c2 = c2 + 1
+            }
+            let _ = farr_set(dx_out, bi2 * D + d2, acc2)
+            d2 = d2 + 1
+        }
+        bi2 = bi2 + 1
+    }
+    // db[j] = Σ_i dy[i,j]
+    let mut j = 0
+    while j < C {
+        let mut acc3 = 0.0
+        let mut i3 = 0
+        while i3 < B {
+            acc3 = acc3 + farr_get(dy, i3 * C + j)
+            i3 = i3 + 1
+        }
+        let _ = farr_set(db_out, j, acc3)
+        j = j + 1
+    }
+}
+
+// ─── RMSNorm layer ─────────────────────────────────────────────────────
+// y_i = g_i · (x_i / sqrt(mean(x²) + eps)) ; shape: x [d], g [d] → y [d].
+// Returns [y_id, xn_id, inv_packed_id] where inv_packed_id is a 1-elt
+// farr holding `inv` (so bwd can read it back).
+//   c3_rmsnorm_fwd identity: returns [y, xn, inv]; flame stores xn in a
+//   d-len farr and inv in a 1-len farr.
+//   Caller allocates y_out (d-len), xn_out (d-len), inv_out (1-len).
+pub fn nn_rmsnorm_fwd(x: int, g: int,
+                      y_out: int, xn_out: int, inv_out: int,
+                      d: int) {
+    let eps = 0.000001
+    let mut ms = 0.0
+    let mut i = 0
+    while i < d {
+        let xi = farr_get(x, i)
+        ms = ms + xi * xi
+        i = i + 1
+    }
+    ms = ms / to_float(d)
+    let inv = 1.0 / _nn_sqrt(ms + eps)
+    let _ = farr_set(inv_out, 0, inv)
+    let mut j = 0
+    while j < d {
+        let xni = farr_get(x, j) * inv
+        let _ = farr_set(xn_out, j, xni)
+        let _ = farr_set(y_out, j, farr_get(g, j) * xni)
+        j = j + 1
+    }
+}
+
+// RMSNorm backward — closed vjp (c3_rmsnorm_bwd identity):
+//   dxn_i = dy_i · g_i
+//   dg_i  = dy_i · xn_i
+//   dot   = Σ_k dxn_k · x_k
+//   dx_i  = inv · dxn_i − (inv³ · x_i / d) · dot
+// Caller allocates dx_out, dg_out (d-len each).
+pub fn nn_rmsnorm_bwd(x: int, g: int, xn: int, inv: float, dy: int,
+                      dx_out: int, dg_out: int, d: int) {
+    // pass 1: dxn (held implicit in dx_out as scratch; we overwrite below)
+    // for clarity we compute dxn into a stack-free pattern by recomputing.
+    let mut dot = 0.0
+    let mut i = 0
+    while i < d {
+        let dxn_i = farr_get(dy, i) * farr_get(g, i)
+        let _ = farr_set(dg_out, i, farr_get(dy, i) * farr_get(xn, i))
+        dot = dot + dxn_i * farr_get(x, i)
+        // stash dxn_i into dx_out temporarily — we finish the formula in
+        // pass 2 (overwrites the stash with the final dx).
+        let _ = farr_set(dx_out, i, dxn_i)
+        i = i + 1
+    }
+    let inv3 = inv * inv * inv
+    let scale = (inv3 / to_float(d)) * dot
+    let mut j = 0
+    while j < d {
+        let dxn_j = farr_get(dx_out, j)
+        let xj = farr_get(x, j)
+        let _ = farr_set(dx_out, j, inv * dxn_j - scale * xj)
+        j = j + 1
+    }
+}

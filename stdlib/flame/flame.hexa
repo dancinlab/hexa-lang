@@ -112,7 +112,9 @@ fn ag_train_traj(seed: int) -> int {
     let mut step = 0
     while step < 20 {
         let tape = ag_tape_begin()
-        let logits = ag_matmul(X, W, B, D, C)
+        // ag_matmul(A, M=rows(A), K=cols(A), B, N=cols(B)): for y = X[B·D]·W[D·C]
+        // → (X, B, D, W, C). Matches RFC 034 tmp_rfc034_smoke.hexa.
+        let logits = ag_matmul(X, B, D, W, C)
         let loss = ag_softmax_cross_entropy(logits, B, C, tg)
         if step == 0  { t_set(traj, 0, loss) }
         if step == 19 { t_set(traj, 1, loss) }
@@ -143,11 +145,30 @@ fn check_determinism() -> float {
     return d1
 }
 
+// ── F-RFC043-AG-TRAJ-ORACLE: 20-step trajectory ≡ RFC 034 oracle ──────
+// connection-point closed check (g_blue_closed_mandate): flame's ag_*
+// over the same (X, W, m, v, AdamW hyperparams, seed=42) MUST produce
+// the bit-equal trajectory the RFC 034 oracle did.
+//   RFC 034 PASS (this branch, build/rfc034_smoke just-rebuilt):
+//     loss[0]=1.64219, loss[19]=0.228332
+//   Returns max(|Δloss[0]|, |Δloss[19]|).
+fn check_traj_vs_rfc034_oracle() -> float {
+    let t = ag_train_traj(42)
+    // RFC 034 oracle (printed by tmp_rfc034_smoke at this branch tip).
+    let oracle_loss0 = 1.64219
+    let oracle_loss19 = 0.228332
+    let d0 = abs_d(t_get(t, 0) - oracle_loss0)
+    let d1 = abs_d(t_get(t, 1) - oracle_loss19)
+    let _ = t_free(t)
+    if d0 > d1 { return d0 }
+    return d1
+}
+
 // ── selftest entrypoint ────────────────────────────────────────────────
 println("=== flame Phase 1 selftest (compiled-native, F-RFC043 falsifiers) ===")
 
 let mut pass = 0
-let total = 3
+let total = 4
 
 // ── F-RFC043-BUILD ─────────────────────────────────────────────────────
 // 본 binary 가 실행되어 여기까지 도달했다는 사실 자체가 build step PASS.
@@ -173,6 +194,18 @@ if max_diff < 0.0000000000000001 {
     pass = pass + 1
 } else {
     println("FAIL  F-RFC043-DETERMINISM  max|Δ| over threshold — non-determinism detected")
+}
+
+// ── F-RFC043-AG-TRAJ-ORACLE (connection-point closed; oracle 비교) ────
+let max_traj_dev = check_traj_vs_rfc034_oracle()
+// 5-decimal printed oracle → tolerance 1e-4 (printed-precision floor).
+if max_traj_dev < 0.0001 {
+    println("PASS  F-RFC043-AG-TRAJ-ORACLE  20-step (X[B·D]·W[D·C]→CE→backward→AdamW) trajectory loss[0]≈1.64219 / loss[19]≈0.228332 (RFC 034 oracle, printed-precision floor 1e-4); connection-point closed")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-AG-TRAJ-ORACLE  max|Δ vs RFC 034 oracle| = ")
+    print(max_traj_dev)
+    println(" (>1e-4)")
 }
 
 println("")

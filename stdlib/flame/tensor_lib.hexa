@@ -52,10 +52,13 @@ pub fn t_copy(t: int) -> int {
 
 // ── matmul (host) ───────────────────────────────────────────────────────
 // C = A (M×K) · B (K×N), returns new farr (M·N).
-// 직접 RFC 032 CPU farr_matmul 호출. autograd 가 필요하면 ag_matmul 을
-// 통해 grad-recording 경로로 가야 한다 (autograd_lib).
-pub fn t_matmul(a: int, b: int, M: int, K: int, N: int) -> int {
-    return farr_matmul(a, b, M, K, N)
+// SIGNATURE (matches self/runtime.c hexa_farr_matmul exactly):
+//   args = (A_id, M = rows(A), K = cols(A) = rows(B), B_id, N = cols(B))
+//   Dimensions are interleaved between the farr ids.
+// 직접 RFC 032 CPU farr_matmul 호출 (ikj order, FMA-fused under clang -O2).
+// autograd 가 필요하면 ag_matmul 을 통해 grad-recording 경로로 가야 한다.
+pub fn t_matmul(a: int, M: int, K: int, b: int, N: int) -> int {
+    return farr_matmul(a, M, K, b, N)
 }
 
 // ── deterministic fill (LCG, seed-fixed) ────────────────────────────────
