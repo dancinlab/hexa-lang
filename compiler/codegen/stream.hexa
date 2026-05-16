@@ -53,38 +53,40 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
     parts.push(_comment_marker(target).trim() + " source: " + hmodule.file + "\n")
     parts.push(_text_section_directive(target) + "\n")
 
+    // F6 option A — A5 wiring (PLAN-stage3-footprint-F6-optA.md).
+    // Per-iteration PUSH/POP reclaims mfunc/lfunc; per-call region
+    // toggles route st/frag escapes to malloc. Both must be GATED on
+    // hexa_val_arena_on() — the env-hook PUSH/POP rewinds the shared
+    // bump arena unconditionally, which under HEXA_VAL_ARENA=0 (today's
+    // default) would also rewind the str arena's in-flight concat
+    // results (= corrupt the asm fragment). The codegen-emitted
+    // __hexa_fn_arena_enter/return are themselves gated, so when the
+    // val arena is off the streaming reclaim path is a clean no-op.
+    let _arena_on = env("__HEXA_ARENA_ENABLED__") == "1"
+
     // ---- streaming .text: one function's HIR/MIR/LIR live at a time ----
     let mut i = 0
     while i < len(hmodule.items) {
         let it = hmodule.items[i]
         if it.kind == "ITEM_FN" {
-            // F6 option A — A5 wiring (PLAN-stage3-footprint-F6-optA.md).
-            // The per-iteration arena scope (PUSH/POP) reclaims the
-            // function's MFunc/LFunc when it pops. The per-call region-
-            // returns toggle (A3/A4) controls where each sub-call's
-            // return lands:
-            //   ON  → into the iter F1 frame (mfunc/lfunc — gets reclaimed)
-            //   OFF → heapified to malloc (st/frag — escapes the POP)
-            // Under HEXA_VAL_ARENA=0 (today's default) every toggle is a
-            // no-op and the legacy path runs byte-identical; under
-            // HEXA_VAL_ARENA=1 the streaming loop reclaims per-iter IR.
-            let _p = env("__HEXA_ARENA_PUSH__")
+            // Iter F1 scope — pushes only when val arena is on.
+            if _arena_on { let _p = env("__HEXA_ARENA_PUSH__") }
 
             // HIR→MIR for this one function. mfunc lands in iter F1.
-            let _r1 = env("__HEXA_ARENA_RETURN_REGION_ON__")
+            if _arena_on { let _r1 = env("__HEXA_ARENA_RETURN_REGION_ON__") }
             let mfunc = _lower_fn(it)
 
             // Intern this function's string literals into st — st must
             // survive the POP, so route its return to malloc.
-            let _r2 = env("__HEXA_ARENA_RETURN_REGION_OFF__")
+            if _arena_on { let _r2 = env("__HEXA_ARENA_RETURN_REGION_OFF__") }
             st = _arm_strtab_collect_fn(st, mfunc)
 
             // MIR→LIR for this one function. lfunc lands in iter F1.
-            let _r3 = env("__HEXA_ARENA_RETURN_REGION_ON__")
+            if _arena_on { let _r3 = env("__HEXA_ARENA_RETURN_REGION_ON__") }
             let lfunc = _arm64_lower_func(mfunc, st, modhash)
 
             // LIR→text. The asm fragment must survive POP — route to malloc.
-            let _r4 = env("__HEXA_ARENA_RETURN_REGION_OFF__")
+            if _arena_on { let _r4 = env("__HEXA_ARENA_RETURN_REGION_OFF__") }
             if lfunc.target == target {
                 parts.push(_emit_func(target, lfunc))
             }
@@ -92,7 +94,7 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
             // POP reclaims mfunc/lfunc and all of this iteration's
             // transient sub-call scratch. st and the just-pushed asm
             // fragment are heap-resident and unaffected.
-            let _q = env("__HEXA_ARENA_POP__")
+            if _arena_on { let _q = env("__HEXA_ARENA_POP__") }
         }
         i = i + 1
     }
