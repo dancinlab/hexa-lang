@@ -108,6 +108,59 @@ fn check_kind(k: TokenKind) -> bool {
     return same_kind(t.kind, k)
 }
 
+// G-AMBIG disambiguator. Mirrors self/parser.hexa::p_lookahead_generic_args.
+// Cursor is positioned at an `Lt` token; without consuming, scan forward
+// for a matching `Gt` whose successor is `LBrace` (struct-lit type args)
+// or `LParen` (turbofish-style). If found returns true → caller should
+// commit to the `Ident<…>{…}` / `Ident<…>(…)` shape; else `<` is a
+// comparison. Bounded at 64 tokens — generic lists are short.
+fn p_lookahead_generic_args() -> bool {
+    if !check_kind(TokenKind::Lt) { return false }
+    let mut i = 1
+    let mut depth = 1
+    let max_scan = 64
+    while i < max_scan {
+        let t = peek_at(i)
+        let k = t.kind
+        if same_kind(k, TokenKind::Eof) { return false }
+        if same_kind(k, TokenKind::Newline) { return false }
+        if same_kind(k, TokenKind::Semicolon) { return false }
+        if same_kind(k, TokenKind::LBrace) { return false }
+        if same_kind(k, TokenKind::RBrace) { return false }
+        if same_kind(k, TokenKind::Lt) { depth = depth + 1 }
+        else if same_kind(k, TokenKind::Gt) {
+            depth = depth - 1
+            if depth == 0 {
+                let nxt = peek_at(i + 1).kind
+                if same_kind(nxt, TokenKind::LBrace) { return true }
+                if same_kind(nxt, TokenKind::LParen) { return true }
+                return false
+            }
+        } else if same_kind(k, TokenKind::Ge)
+               || same_kind(k, TokenKind::Shr) {
+            // `>=` and `>>` can't close a generic-args list.
+            return false
+        } else if same_kind(k, TokenKind::Ident)
+               || same_kind(k, TokenKind::ColonColon)
+               || same_kind(k, TokenKind::Comma)
+               || same_kind(k, TokenKind::Colon)
+               || same_kind(k, TokenKind::LBracket)
+               || same_kind(k, TokenKind::RBracket)
+               || same_kind(k, TokenKind::LParen)
+               || same_kind(k, TokenKind::RParen)
+               || same_kind(k, TokenKind::Amp)
+               || same_kind(k, TokenKind::Star)
+               || same_kind(k, TokenKind::Pipe)
+               || same_kind(k, TokenKind::Number) {
+            // valid inside a type expression
+        } else {
+            return false
+        }
+        i = i + 1
+    }
+    return false
+}
+
 fn same_kind(a: TokenKind, b: TokenKind) -> bool {
     // stage0 cannot derive Eq for enums automatically, so we string-compare
     // through the deterministic match below. Cheap because both sides are
@@ -691,6 +744,37 @@ fn parse_primary() -> Expr {
         if check_kind(TokenKind::LBrace) && !p_suppress_struct_lit && is_struct_lit_lookahead() {
             return parse_struct_lit_after_name(t)
         }
+        // Foo<T1, T2> { … } / Foo<T>(…) — generic struct lit / turbofish-
+        // style call. Without disambiguation the expression parser
+        // would infinite-loop on `Box<Int> { val: 42 }` because the
+        // bare-Ident path would return, and the surrounding compare
+        // loop would consume `<`, RHS `Int`, then `>`, then `{…}` —
+        // leaving the parser state inconsistent. The lookahead commits
+        // ONLY when matching `>` is followed by `{` or `(`, so plain
+        // comparisons (`L < n_layers {`) still parse as compare.
+        if check_kind(TokenKind::Lt) && !p_suppress_struct_lit && p_lookahead_generic_args() {
+            // Skip the `<` … `>` type-args — values from them are
+            // currently ignored (downstream codegen treats `Box<Int>`
+            // and `Box<String>` identically at this MIR shape). When
+            // the bind/typecheck wants the type args, the parse_type
+            // path can be reused; for now consume and discard so the
+            // struct-lit body parses.
+            advance()  // consume `<`
+            let mut depth = 1
+            while depth > 0 && !at_eof() {
+                let tk = peek().kind
+                if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
+                else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+                advance()
+                if depth == 0 { break }
+            }
+            // Now either `{` (struct lit) or `(` (call) follows.
+            if check_kind(TokenKind::LBrace) {
+                return parse_struct_lit_after_name(t)
+            }
+            // For `(` (call-style) — fall through to the bare-Ident
+            // return; the postfix-call rule handles the `(`.
+        }
         return Expr {
             kind: ExprKind::Ident,
             span: t.span,
@@ -1192,6 +1276,25 @@ fn parse_struct_item(is_pub: bool, anns: [Annotation]) -> Item {
     let kw = peek()
     eat(TokenKind::KwStruct)
     let name_tok = expect(TokenKind::Ident)
+    // Optional generic type params: `struct Box<T> { … }`. The
+    // typecheck/codegen currently erase generics (Box<Int> and
+    // Box<Str> share the same MIR shape), so consume + discard the
+    // `<…>` token sequence so the cursor lands on `{`. Without
+    // this the while-loop below spins on `<` (`eat(LBrace)` no-ops
+    // on mismatch and `expect(Ident)` doesn't advance either) —
+    // observed as a ~6 min aprime_cc hang on every file containing
+    // a generic struct definition.
+    if check_kind(TokenKind::Lt) {
+        advance()
+        let mut depth = 1
+        while depth > 0 && !at_eof() {
+            let tk = peek().kind
+            if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
+            else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+            advance()
+            if depth == 0 { break }
+        }
+    }
     eat(TokenKind::LBrace)
     // Stage A1: capture fields as Param-like entries in `params`. Promotion to
     // a dedicated Field struct can wait until A2 when checker needs more
