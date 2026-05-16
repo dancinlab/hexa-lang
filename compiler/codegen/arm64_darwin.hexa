@@ -185,6 +185,17 @@ fn _arm_pool_init() -> [string] {
 }
 
 fn _arm_index_of(ids: [i64], id: i64) -> i64 {
+    // O(1) fast path: SSA ids are dense (next_local-allocated) and the
+    // id-arrays here (ids / iv.ids / rm.ids) are built in id order, so
+    // ids[id] == id is the common case. ids is dedup-built (each id
+    // appears once) so when ids[id]==id, `id` is THE unique index —
+    // sound. Falls back to the linear scan otherwise. Without this the
+    // per-operand lookups in _arm_reg_lookup/_arm_is_spilled/
+    // _arm_spill_offset + the live-range/regalloc loops are O(N²) on a
+    // huge function (the synthetic `fn main`) — minutes-long stage-1.
+    if id >= 0 && id < len(ids) {
+        if ids[id] == id { return id }
+    }
     let mut i = 0
     while i < len(ids) {
         if ids[i] == id { return i }
