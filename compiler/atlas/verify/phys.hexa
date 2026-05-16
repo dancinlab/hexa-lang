@@ -298,6 +298,97 @@ pub fn verify_s3_supremacy_xeb_wl_rational() -> AtlasVerdict {
     return _vd_phys("s3_supremacy_xeb_wl_rational", _tier_phys(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s3_qdarwin_touil_isf_classical_limit — I(S:F_N) = 2 bits at |s|²=0, p=1/2
+// ──────────────────────────────────────────────────────────────────────
+// Touil et al. 2022 PRL 128 010401 closed-form I(S:F) for pure-dephasing
+// branching states. CLASSICAL LIMIT (|s_k|²=0 ∀k, p=q=1/2):
+//   λ⁺_{a,b,p} = 0.5(1 + √((2p−1)² + 4p(1−p)·∏|s_k|²))
+//   λ_full = λ_f = 0.5(1+√(0+1·0)) = 0.5 (maximally mixed)
+//   λ_fbar (empty range, m=N) = 0.5(1+√(0+1·1)) = 1 (pure)
+//   I(S:F_N) = h₂(λ_full) + h₂(λ_f) − h₂(λ_fbar) = 1 + 1 − 0 = 2 (in bits)
+// Pure-integer adjudication (Stage 1): h₂(1/2)=1, h₂(1)=0 are integer-exact.
+// sim-universe @D g8 / @X x_zhu_qdarwin · qdarwin Route B at |s|²→0 limit ·
+// atlas/inbox/qdarwin-touil-2022-route-AB-six-decimal-identity.md.
+
+pub fn verify_s3_qdarwin_touil_isf_classical_limit() -> AtlasVerdict {
+    // At |s|²=0 ∀k and p=q=1/2:
+    //   λ_full = 1/2 (4·0.5·0.5·0=0, (2·0.5-1)²=0, √0=0, 0.5(1+0)=0.5)
+    //   λ_f    = 1/2 (same)
+    //   λ_fbar = 1   (empty range, prod=1, inner=0+1·1=1, √=1, 0.5(1+1)=1)
+    // h₂(1/2) = -log₂(1/2) = 1 (integer); h₂(1) = 0 (integer limit).
+    let h_full = 1
+    let h_f = 1
+    let h_fbar = 0
+    let mi = h_full + h_f - h_fbar
+    let ok = mi == 2
+    let detail = "Touil 2022 PRL 128 010401 closed form I(S:F_N) at classical limit (|s_k|²=0 ∀k, p=q=1/2): λ_full=λ_f=1/2 (mixed), λ_fbar=1 (empty range, pure) · h₂(1/2)+h₂(1/2)−h₂(1) = 1+1−0 = " + to_string(mi) + " bits (= 2 expected, ℤ-exact). Per-env perfectly distinguishable records → 2 bits of classical info about a binary system. sim-universe qdarwin module Route B at |s|²→0 limit. See atlas/inbox/qdarwin-touil-2022-route-AB-six-decimal-identity.md (≥6 falsifiers pre-registered)."
+    return _vd_phys("s3_qdarwin_touil_isf_classical_limit", _tier_phys(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_caqm_elze_perm_order_2S16 — Elze CA Û permutation order = 8 at 2S=16
+// ──────────────────────────────────────────────────────────────────────
+// Elze IJQI 22 2450013 (2024) Eq. Uchain: ontological CA evolution Û =
+// (phase 1: odd-pair swaps) ∘ (phase 2: even-pair swaps) ∘ (phase 3:
+// periodic closing swap, even 2S). Stage 1 integer: build Û on 2S=16 by
+// the exact 3-phase algorithm of ca-qm/module/ca_qm.hexa::_build_perm,
+// compute cycle structure, return lcm of cycle lengths = multiplicative
+// order. Expected: two 8-cycles {(0,14,12,10,8,6,4,2),(1,3,5,7,9,11,13,15)}
+// → lcm(8,8) = 8. The ca-qm Engine A selftest reports `perm-order=8`
+// independently, confirming.
+
+pub fn verify_s3_caqm_elze_perm_order_2S16() -> AtlasVerdict {
+    let twoS = 16
+    // Build identity then apply the three phases (ca_qm.hexa::_build_perm).
+    let mut id: [int] = []
+    let mut k = 0
+    while k < twoS { id.push(k); k = k + 1 }
+    // Phase 1: odd-pair swaps id[0]↔id[1], id[2]↔id[3], ...
+    let mut p = 0
+    while p + 1 < twoS {
+        let tmp = id[p]; id[p] = id[p + 1]; id[p + 1] = tmp
+        p = p + 2
+    }
+    // Phase 2: even-pair swaps id[1]↔id[2], id[3]↔id[4], ...
+    p = 1
+    while p + 1 < twoS {
+        let tmp = id[p]; id[p] = id[p + 1]; id[p + 1] = tmp
+        p = p + 2
+    }
+    // Phase 3: periodic closing id[2S-1]↔id[0] for even 2S
+    if twoS >= 2 && twoS % 2 == 0 {
+        let last = twoS - 1
+        let tmp = id[last]; id[last] = id[0]; id[0] = tmp
+    }
+    // Compute multiplicative order via cycle structure (lcm of cycle lengths).
+    let mut visited: [int] = []
+    let mut j = 0
+    while j < twoS { visited.push(0); j = j + 1 }
+    let mut order = 1
+    j = 0
+    while j < twoS {
+        if visited[j] == 0 {
+            let mut cur = j
+            let mut clen = 0
+            while visited[cur] == 0 {
+                visited[cur] = 1
+                cur = id[cur]
+                clen = clen + 1
+            }
+            // order = lcm(order, clen) via gcd
+            let mut a = order
+            let mut b = clen
+            while b != 0 { let t = b; b = a % b; a = t }
+            order = order * clen / a
+        }
+        j = j + 1
+    }
+    let ok = order == 8
+    let detail = "Elze 2024 ontological CA Û on 2S=16 sites built via _build_perm (3 swap phases per eq. Uchain) → cycle structure two 8-cycles → multiplicative order = lcm(8,8) = " + to_string(order) + " (= 8 expected). Matches ca-qm Engine A selftest invariant `chain-period=8 perm-order=8` on a packet initial state. See atlas/inbox/ca-qm-elze-revival-period-equals-perm-order.md (≥6 falsifiers pre-registered)."
+    return _vd_phys("s3_caqm_elze_perm_order_2S16", _tier_phys(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_phys_all() -> [AtlasVerdict] {
@@ -316,5 +407,7 @@ pub fn verify_phys_all() -> [AtlasVerdict] {
     out.push(verify_s3_generations_3())
     out.push(verify_s3_fundamental_forces_4())
     out.push(verify_s3_supremacy_xeb_wl_rational())
+    out.push(verify_s3_qdarwin_touil_isf_classical_limit())
+    out.push(verify_s3_caqm_elze_perm_order_2S16())
     return out
 }

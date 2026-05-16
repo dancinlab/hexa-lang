@@ -783,6 +783,29 @@ pub fn verify_s3_caqm_elze_cogwheel_E1() -> AtlasVerdict {
     return _vd_trans("s3_caqm_elze_cogwheel_E1", "§3 PHYS", _tier_pass(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s3_caqm_sca_strang_trig_identity — SCA 2×2 block unitarity ← cos²+sin²=1
+// ──────────────────────────────────────────────────────────────────────
+// van Berkel Quantum 9 1811 (2025) Schrödinger CA: each 2×2 block
+//   C = [[cos(θ/2), -i·sin(θ/2)], [-i·sin(θ/2), cos(θ/2)]]
+// is unitary iff cos²(θ/2)+sin²(θ/2)=1 (textbook trig identity). The
+// Strang split U = U_1·U_0 inherits unitarity (product of unitaries) →
+// wavefunction norm conserved exactly. Stage 2 via libm cos/sin at the
+// ca-qm selftest's specific θ=0.130900. Tolerance |c²+s²−1| < 1e-15.
+// sim-universe @D g9 / @X x_vberkel_sca · ca-qm Engine B `norm_drift=0`
+// selftest invariant · atlas/inbox/ca-qm-sca-strang-split-norm-conservation.md.
+
+pub fn verify_s3_caqm_sca_strang_trig_identity() -> AtlasVerdict {
+    let theta = 0.130900
+    let c = cos(theta / 2.0)
+    let s = sin(theta / 2.0)
+    let sum = c * c + s * s
+    let err = _abs_f(sum - 1.0)
+    let ok = err < 0.000000000000001
+    let detail = "van Berkel 2025 SCA 2×2 unitary block C=[[c,-is],[-is,c]] with c=cos(θ/2), s=sin(θ/2) at θ=0.130900 (ca-qm Engine B selftest θ): c²+s² = " + to_string(sum) + " · |c²+s²−1| = " + to_string(err) + " (Stage 2 libm cos/sin, tolerance 1e-15). C†C = (c²+s²)·I = I → SCA Strang split U=U_1·U_0 unitary → wavefunction norm conserved exactly (Engine B norm_drift=0 selftest invariant). See atlas/inbox/ca-qm-sca-strang-split-norm-conservation.md (≥6 falsifiers pre-registered)."
+    return _vd_trans("s3_caqm_sca_strang_trig_identity", "§3 PHYS", _tier_pass(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_transcendental_all() -> [AtlasVerdict] {
@@ -819,5 +842,6 @@ pub fn verify_transcendental_all() -> [AtlasVerdict] {
     out.push(verify_s6_schwarzschild_radius())
     out.push(verify_s3_supremacy_kappa_c_log2_T4())
     out.push(verify_s3_caqm_elze_cogwheel_E1())
+    out.push(verify_s3_caqm_sca_strang_trig_identity())
     return out
 }
