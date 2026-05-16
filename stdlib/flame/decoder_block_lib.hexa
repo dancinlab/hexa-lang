@@ -114,6 +114,56 @@ fn _db_silu_grad(x: float) -> float {
     return s + x * s * (1.0 - s)
 }
 
+// Phase 4-A-bwd helper: accumulate dW += dY^T · X where dY [T·d_out],
+// X [T·d_in], dW [d_out·d_in]. Uses the same farr_matmul kernel as
+// anima's d5_outer_g via reshape. Writes dW ACCUMULATING (+=) at the
+// given offset in the destination farr.
+//   dW[r][c] += Σ_t dY[t][r] · X[t][c]
+//             = Σ_t (dY^T)[r][t] · X[t][c]
+//             = (dY^T · X)[r][c]
+// Layout: dY in [T·d_out] row-major (matches Phase 3 nn_decoder_block_bwd
+// dQ/dK/dV); X in [T·d_in] row-major (matches Bc.oRin / Bc.oSwS layout).
+fn _db_grad_accum_farr(dY: int, dY_off: int, X: int, X_off: int,
+                       dW_dst: int, dW_off: int,
+                       T: int, d_out: int, d_in: int) {
+    // transpose dY → dY_T [d_out·T]
+    let dY_T = farr_zeros(d_out * T)
+    let mut t = 0
+    while t < T {
+        let mut r = 0
+        while r < d_out {
+            let _ = farr_set(dY_T, r * T + t,
+                             farr_get(dY, dY_off + t * d_out + r))
+            r = r + 1
+        }
+        t = t + 1
+    }
+    // copy X slice into standalone farr X_buf [T·d_in]
+    let X_buf = farr_zeros(T * d_in)
+    let mut p = 0
+    while p < T * d_in {
+        let _ = farr_set(X_buf, p, farr_get(X, X_off + p))
+        p = p + 1
+    }
+    // C = dY_T · X_buf   shape [d_out · d_in]
+    let C = farr_matmul(dY_T, d_out, T, X_buf, d_in)
+    // accumulate C into dW_dst at dW_off
+    let mut r2 = 0
+    while r2 < d_out {
+        let mut c2 = 0
+        while c2 < d_in {
+            let cur = farr_get(dW_dst, dW_off + r2 * d_in + c2)
+            let _ = farr_set(dW_dst, dW_off + r2 * d_in + c2,
+                             cur + farr_get(C, r2 * d_in + c2))
+            c2 = c2 + 1
+        }
+        r2 = r2 + 1
+    }
+    let _ = farr_free(dY_T)
+    let _ = farr_free(X_buf)
+    let _ = farr_free(C)
+}
+
 // Phase 3-J helper: project Y [T·d_out] = X [T·d_in] · W^T [d_in·d_out]
 // via the same transpose-matmul-transpose pattern as anima
 // d5_proj_batch_g — routing through the C farr_matmul kernel so clang
@@ -770,43 +820,15 @@ pub fn nn_decoder_block_bwd(X: int, Bp: int, Bc: int,
     let _ = farr_free(tmp_rope)
 
     // 2 reversed (Q/K/V projections): given dQ/dK/dV → dWq/dWk/dWv + drin accum
-    // dWq[r·d + c] += Σ_t dQ_full[t·d+r] · rin[t·d+c]    where dQ_full is dQ flat
-    //    (dQ here is stored [T·nh·hd] = [T·d] flat row-major matching Q layout)
-    // dWk/dWv same shape as Wk/Wv [kvd·d]
-    // drin[t·d+c] = Σ_r Wq[r·d+c]·dQ[t·d+r] + Σ_r Wk[r·d+c]·dK[t·kvd+r] + Σ_r Wv·dV
+    // Phase 4-A-bwd (2026-05-17): dW_? accumulators farr_matmul-routed
+    // via _db_grad_accum_farr (Σ_t outer-prod = dY^T · X reshape).
+    // drin reductions stay inline (different shape: per-t dot, not Σ_t).
+    _db_grad_accum_farr(dQ, 0, Bc, oRin, Bg, WQ, T, d,   d)
+    _db_grad_accum_farr(dK, 0, Bc, oRin, Bg, WK, T, kvd, d)
+    _db_grad_accum_farr(dV, 0, Bc, oRin, Bg, WV, T, kvd, d)
     let drin = farr_zeros(T * d)
     let mut t_p = 0
     while t_p < T {
-        // dWq accum
-        let mut r = 0
-        while r < d {
-            let dq_tr = farr_get(dQ, t_p * d + r)
-            let mut c = 0
-            while c < d {
-                let cur = farr_get(Bg, WQ + r * d + c)
-                let _ = farr_set(Bg, WQ + r * d + c,
-                                 cur + dq_tr * farr_get(Bc, oRin + t_p * d + c))
-                c = c + 1
-            }
-            r = r + 1
-        }
-        // dWk + dWv accum
-        let mut rk = 0
-        while rk < kvd {
-            let dk_tr = farr_get(dK, t_p * kvd + rk)
-            let dv_tr = farr_get(dV, t_p * kvd + rk)
-            let mut c = 0
-            while c < d {
-                let cur_k = farr_get(Bg, WK + rk * d + c)
-                let _ = farr_set(Bg, WK + rk * d + c,
-                                 cur_k + dk_tr * farr_get(Bc, oRin + t_p * d + c))
-                let cur_v = farr_get(Bg, WV + rk * d + c)
-                let _ = farr_set(Bg, WV + rk * d + c,
-                                 cur_v + dv_tr * farr_get(Bc, oRin + t_p * d + c))
-                c = c + 1
-            }
-            rk = rk + 1
-        }
         // drin[t, c] = Σ_r Wq[r,c]·dQ[t,r] + Σ_r Wk[r,c]·dK[t,r] + Σ_r Wv[r,c]·dV[t,r]
         let mut cc = 0
         while cc < d {
