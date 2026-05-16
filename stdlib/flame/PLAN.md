@@ -294,6 +294,26 @@ Phase 3 누적 falsifier: 8 PASS. flame 전체 (Phase 1+2+3): **29 PASS**.
 - Phase 5: whole-program fusion + d=768·12L compiler-only fire
   (exceed eager-PyTorch ultimate, multi-cycle).
 
+### Phase 4 next-step candidates (cost/benefit, 33-commit session post-state)
+
+flame Phase 3 SHIPPABLE COMPLETE + Phase 4-A-bwd PARTIAL LANDED 의
+경우, 다음 mechanical 진행 후보들의 정직한 비교:
+
+| Candidate | Effort | Risk | Expected gain | Notes |
+|---|---|---|---|---|
+| **attention_core_bwd P·dY** wire-in | 2-3 commits | high (sparse causal mask + GQA grouping; nested T×hd reductions) | likely anti-perf (~10-30K ops per sub-reduction, below 32K granularity floor — drin lesson) | low value |
+| **Stage 1 epilogue fusion** (C kernel) | 1-2 cycles | mid (self/forge collision with parallel session) | RFC 046 estimated ~2× wall | substantial work; 새 C kernel variants |
+| **Stage 2 block fusion** (IR pass) | 2 cycles | high (새 IR pass design + emit machinery) | RFC 046 estimated ~5× wall | dominant single Phase 4 win |
+| **Stage 3 fwd+bwd graph fusion** (IR pass) | 2-3 cycles | high (specialize autograd-tape replay per block-shape) | RFC 046 estimated ~10× wall | the eager-PyTorch parity target |
+| **Phase 4-D GPU dispatch fire** | 1 fire cycle | cost ~$5-20 (vast.ai/runpod) | F-RFC046-EAGER-PYTORCH-MATCH ≤1.3× of 336.85s on A100 d=768·12L | gates RFC 046 mid-term claim |
+| **Stage 2 RFC 047 design draft** | 1 cycle | low | document deliverable | natural follow-up to RFC 046 |
+| **performance log infrastructure** (PERF.md) | 1 commit | low | cumulative measurement durability | small mechanical |
+
+대부분의 단일-commit mechanical reach 가 closed. 다음 sub-cycle 의 substantial design + impl work 가 필요.
+
+자율 cycle 의 mechanical limit 도달 시 user-directed scoping 또는
+`CronDelete e5caaf53` 로 cron stop 권고.
+
 ### 2026-05-17 — Phase 3-E LANDED (flame_math, 5/5 PASS)
 landed: `stdlib/flame/{flame_math.hexa, flame_math_test.hexa}`. anima
 d_train_lib / d_train2_lib 의 hand-Taylor transcendental 알고리즘 그대로
