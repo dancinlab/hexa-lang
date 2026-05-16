@@ -629,10 +629,18 @@ fn _arm64_arg_reg(idx: i64) -> string {
 }
 
 // C7 — scan all _STMT_CALL stmts in `mf` and return the maximum number
-// of overflow args (args 9+) across all calls. The per-fn outgoing-call
+// of overflow args (args 5+) across all calls. The per-fn outgoing-call
 // overflow region is sized once from this maximum and reused at every
 // call site, so we don't sub/add sp mid-frame (which would invalidate
-// sp-relative SSA spill offsets).
+// sp-relative SSA spill offsets). NOTE: HexaVal arg ABI uses a register
+// PAIR per arg (16B), so only 4 HexaVal args fit in x0..x7 — args 5+
+// overflow to the caller's stack region (this matches the call-site
+// emit at "C7: stack arg N"). Previously this used the C-int `n > 8`
+// boundary and so missed every 5-args-or-more fn, sizing
+// call_overflow_bytes to 0 and causing the outgoing arg 5 store at
+// [sp, #0] to clobber the caller's own L0 / first param ingress slot
+// (silently corrupted nested-array params across recursion — the
+// "edges len 5 → 3 → 4" diagnostic from `_pf_tree_build`).
 fn _arm64_max_call_overflow(mf: MFunc) -> i64 {
     let mut max_overflow = 0
     let mut bi = 0
@@ -643,8 +651,8 @@ fn _arm64_max_call_overflow(mf: MFunc) -> i64 {
             let s = blk.stmts[si]
             if s.kind == _STMT_CALL {
                 let n = len(s.args)
-                if n > 8 {
-                    let overflow = n - 8
+                if n > 4 {
+                    let overflow = n - 4
                     if overflow > max_overflow { max_overflow = overflow }
                 }
             }
