@@ -63,14 +63,23 @@ fn _slice_args() -> array {
 }
 
 fn cmd_rubric() {
-    println("hexa verify — cross-project tier rubric (LATTICE_POLICY real-limits-first)")
+    println("hexa verify — cross-project tier rubric (TECS-L-aligned, LATTICE_POLICY real-limits-first)")
     println("")
-    println("  🔵 SUPPORTED-FORMAL     hexa-native calc reproduces closed-form exactly")
-    println("                          (g_self_verify · TECS-L Tier1 · anima HEXAD 🔵)")
-    println("  🟡 SUPPORTED-BY-CITATION atlas/literature registered, no hexa recompute")
-    println("  🟠 INSUFFICIENT         not in atlas + no calc path (g_tier_default)")
-    println("  🟠 DEFERRED             external hw/data/API dep (g_external_calc_forbidden)")
-    println("  ⚪ SPECULATION-FENCED   imagination/metaphor (hexa-bio AXIS) — verify N/A")
+    println("  🔵 SUPPORTED-FORMAL      hexa-native calc reproduces a CLOSED-FORM/symbolic")
+    println("                           identity exactly — TECS-L n6-rep Tier 1 (pure-math,")
+    println("                           deterministic) · g_self_verify · anima HEXAD g_verdict_tier_blue(a)")
+    println("  🟢 SUPPORTED-NUMERICAL   hexa-native NUMERICAL recompute matches (libm/Newton,")
+    println("                           non-symbolic) — TECS-L n6-rep Tier 2 (~10min suite)")
+    println("  🟡 SUPPORTED-BY-CITATION atlas/literature registered, NO hexa recompute")
+    println("                           (external sympy/citation carry — never auto-🔵)")
+    println("  🟠 INSUFFICIENT          not in atlas + no calc path (g_tier_default default)")
+    println("  🟠 DEFERRED              external hw/data/API dep — TECS-L Tier 3 (GPU) /")
+    println("                           g_external_calc_forbidden (closure-external)")
+    println("  🔴 FALSIFIED             calc DETERMINISTICALLY disagrees with the claim —")
+    println("                           a CLOSED negative (TECS-L result-agnostic: PASS or")
+    println("                           FAIL both verified-closed; ≠ INSUFFICIENT)")
+    println("  ⚪ SPECULATION-FENCED    imagination/metaphor (hexa-bio AXIS) — verify N/A,")
+    println("                           SF ≠ proven (g4 honest fence)")
     println("")
     println("usage:")
     println("  hexa verify <id>                 verify atlas atom: lookup + calc recompute")
@@ -158,11 +167,16 @@ fn cmd_verify_id(rest) {
     if got == claimed && claimed != -999999 {
         println("  calc   = " + fnm + "(6) = " + to_string(got) + "  == claimed " + to_string(claimed))
         println("  tier   = 🔵 SUPPORTED-FORMAL")
-        println("  reason = hexa-native calc reproduces the closed-form (g_self_verify)")
-    } else {
-        println("  calc   = " + fnm + "(6) = " + to_string(got) + "  vs claimed " + to_string(claimed))
+        println("  reason = hexa-native closed-form reproduced (g_self_verify · TECS-L Tier1)")
+    } else if claimed == -999999 {
+        println("  calc   = " + fnm + "(6) = " + to_string(got) + "  vs claimed (unparsed)")
         println("  tier   = 🟠 INSUFFICIENT")
-        println("  reason = recompute mismatch / claimed value unparsed — needs review")
+        println("  reason = claimed value unparsed from raw — cannot adjudicate")
+    } else {
+        println("  calc   = " + fnm + "(6) = " + to_string(got) + "  != claimed " + to_string(claimed))
+        println("  tier   = 🔴 FALSIFIED")
+        println("  reason = hexa-native calc DETERMINISTICALLY disagrees with the claim —")
+        println("           closed negative (TECS-L result-agnostic; ≠ INSUFFICIENT)")
     }
 }
 
@@ -184,10 +198,10 @@ fn cmd_expr(rest) {
     }
     if got == v {
         println("  calc   = " + to_string(got) + "  == expected " + to_string(v))
-        println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native, g_self_verify)")
+        println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)")
     } else {
         println("  calc   = " + to_string(got) + "  != expected " + to_string(v))
-        println("  tier   = 🟠 INSUFFICIENT  (recompute disagrees with claim)")
+        println("  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)")
     }
 }
 
