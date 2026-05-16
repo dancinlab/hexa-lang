@@ -86,6 +86,46 @@ preservation risk — 5 scattered hexa-lang branches holding the real
 cuBLAS impl + 11 farr ops — is addressed as **PLAN.md Phase 0
 (branch consolidation), explicitly the 물거품-방지 step**.
 
+## Build & run (compile-native, M-Mac CPU)
+
+### Quick smoke — full 80-step corpus benchmark vs anima oracle
+
+```bash
+HEXA_MAC_BUILD_OK=1 ./hexa build stdlib/flame/flame_d32_corpus_test.hexa -o build/flame_d32_corpus
+./build/flame_d32_corpus
+# expect: init gn2 ≈ 7.97113 vs anima 7.97116 (|Δ|=3.12e-5),
+#         final gn2 ≈ 8.87e-7, acc 8/8, wall ~13s (Phase 4-A-bwd state)
+```
+
+### anima reference comparison (same hexa toolchain, same host)
+
+```bash
+HEXA_MAC_BUILD_OK=1 ./hexa build ~/core/anima/HEXAD/D/d_corpus_fire.hexa -o build/_anima_dcf
+HEXA_MEM_UNLIMITED=1 ./build/_anima_dcf
+# expect: init gn2 = 7.97116, final gn2 = 3.73374e-07, acc 8/8, wall ~22s
+```
+
+### Per-step wall breakdown (PERF.md 5-run × 8-iter convention)
+
+```bash
+HEXA_MAC_BUILD_OK=1 ./hexa build stdlib/flame/flame_perf_breakdown_test.hexa -o build/flame_perf_breakdown
+./build/flame_perf_breakdown
+# expect: fwd 4ms / bwd 12ms / AdamW ~0ms / total 16ms (range 16-17)
+```
+
+### Full Phase 1-3 regression battery (41+ falsifiers)
+
+```bash
+for s in flame.hexa flame_nn_test.hexa flame_optim_test.hexa flame_block_test.hexa \
+         flame_decoder_test.hexa flame_train_test.hexa flame_math_test.hexa \
+         flame_init_byteeq_test.hexa flame_d32_test.hexa flame_d32_corpus_test.hexa; do
+    name=$(basename "$s" .hexa)
+    HEXA_MAC_BUILD_OK=1 ./hexa build "stdlib/flame/$s" -o "build/$name" 2>&1 | tail -1
+    "./build/$name" 2>&1 | grep -E '=== flame Phase|=== RFC' | tail -1
+done
+# expect: all PASS, structurally call_builtin = 0
+```
+
 ## Current layout (Phase 3 LANDED)
 
 ```
