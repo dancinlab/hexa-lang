@@ -313,3 +313,56 @@ Stage-3 verdict is independent of footprint reduction. The legacy path
 (measured 30 GB / 3 min on ubu, exit 0, `.s` 206,696 lines) is already
 verdict-ready on a 32 GB+ host. A-series work and verdict closure can
 proceed in parallel — the verdict does not block on F6.
+
+## ARENA=1 perf — profiled hotspot (2026-05-16, gprof; perf blocked by paranoid=4)
+
+Synthetic 181-fn input, `aprime_cc` self-style compile, `HEXA_VAL_ARENA=1`,
+gprof flat profile:
+
+```
+92.86%  1,881,840 calls   hexa_val_heapify        ← the entire cost
+ 1.43%                     hexa_map_get_ic_slow
+ 0.71%×N                   (everything else < 1%)
+```
+
+`hexa_val_heapify` is **92.86%** of ARENA=1 compile time — it *is* the
+~14× slowdown. Root pattern: the compiler threads `ctx` (a TAG_MAP,
+since structs lower to maps) through dozens of pure-functional helpers
+per function (`_bind`/`_new_block`/`_set_cur_block`/`_lower_*`); every
+helper's `__hexa_fn_arena_return` re-heapifies the whole ctx tree.
+`ctx` carries growing `locals`/`blocks` arrays → O(carried · returns)
+≈ O(N²) per function lowered.
+
+The waste is concrete: `hexa_val_heapify`'s **TAG_MAP `!from_arena`
+(heap table) branch has NO skip gate** — it unconditionally walks all
+`ht_cap` slots and recurses every value, even when the table and all
+values are already heap (carried unchanged from a prior heapify). The
+TAG_VALSTRUCT path has the ω-interp-2 `hexa_arena_frame_clean()` gate,
+but (a) ctx is a MAP not a VALSTRUCT, and (b) the gate is per-FRAME and
+the compiler does constant arena string-concat (`str_concat_arena`
+≈227K, `arena_alloc`≈3.4M) → the frame is *never* clean → the gate
+could not fire even if added.
+
+**Conclusion:** the only correct fix is **per-node arena-free
+tracking** (a "this subtree has no arena descendants" seal set when
+heapify completes a node, cleared on any mutation that could insert an
+arena child) so re-heapify of an unchanged all-heap subtree is O(1).
+That needs a seal bit on the hot `HexaArr`/`HexaMapTable`/
+`HexaValStruct` types + seal-clear discipline on every mutation path —
+an ABI-sensitive, regression-prone, multi-day runtime change. The
+`f4b597a7` envelope fix (O(1) str-pointer reject) was the one
+loop-tick-sized piece; the rest is deliberate engineering.
+
+### Net session conclusion (all three stage-3 paths characterized)
+
+| path | status | remaining work |
+|------|--------|----------------|
+| F6-A region reclaim | structurally blocked | hand-rolled arena-map subsystem (multi-week value-model) |
+| ARENA=1 heapify perf | hotspot pinpointed (92.86%) | per-node arena-free seal (multi-day, ABI-sensitive) |
+| x86_64 verdict ABI | diagnosed | codegen bare-name→runtime-symbol alignment (multi-day) |
+
+All three are deliberate non-loop-tick engineering. The session landed
+the loop-decomposable parts (envelope fix, F1–F4 streaming, HEXA_MEM_
+LIMIT, F6-A infra A1–A5 dormant+double-gated, 2 reclaim bug fixes) with
+the default path byte-identical throughout, plus decisive diagnoses
+that scope each remaining effort precisely. Loop terminus — genuine.
