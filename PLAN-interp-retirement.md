@@ -49,7 +49,7 @@ arm64 codegen — one-line-ish fixes, not multi-week:
 | R0 | native compile→link→run works end-to-end (no crash) | ✅ proven 2026-05-16 (arm64/Mac) |
 | R1 | a verifiable program runs **correctly** (`exit(42)` ⇒ `$?`=42) | ✅ proven 2026-05-16 (`exit(6*7)` ⇒ `$?`=42, aprime_cc arm64) |
 | R2 | codegen-correctness audit driven by running real programs; fix the bounded bugs | ✅ two root-cause fixes landed (see below); builtin link-gaps deferred |
-| R3 | compile+run a representative corpus (the `test/*.hexa` smokes, a few tools) natively; diff vs interp output | 🔄 in progress — next blocker = module-level mutable globals (see below) |
+| R3 | compile+run a representative corpus (the `test/*.hexa` smokes, a few tools) natively; diff vs interp output | 🔄 strong progress — five further root-cause fixes (globals, index, unop, if-expr, dup-`_main`); `test/t_batch22` 0 → 29/31; remaining gaps now split into 3 narrow categories |
 | R4 | switch the build/dev pipeline `hexa run` → native compile+run, **interp kept as fallback** (env/flag toggle) | ⬜ |
 | R5 | once native coverage ≥ interp on the corpus, delete the interp | ⬜ |
 
@@ -85,17 +85,69 @@ programs and fixed (each verified, R1 re-checked, pushed to `main`):
    `while i<n`, `push(param)` all correct; R1 intact;
    `test/t_batch22` SIGSEGV → clean exit.
 
-### Next R3 blocker (documented, NOT yet fixed — not a bounded one-liner)
+### R3 progress (five further root-cause codegen-correctness fixes)
 
-**Module-level mutable globals (`let mut g = 0` at module scope) are
-unimplemented in native codegen.** Evidence (asm of
-`let mut g=0; fn inc(){ g=g+1 } fn main(){ inc();inc();inc(); print(g) }`):
+Driven by the same loop — run a real corpus program, bisect the
+divergence, fix at the root, re-verify R1 + all earlier micros + the
+program that surfaced it.
 
-- the global initializer is mis-emitted as a **second `_main`**
-  (duplicate symbol → link failure);
-- inside `_inc`, `g` reads as `movz #0` (const-0) and the write lands
-  in a discarded local — globals have no storage/addressing;
-- `to_string(g)` in `main` likewise reads const-0.
+3. **`c76cc8d6` — module-level mutable globals.**
+   `let mut g = 0` at module scope had no storage; the parser pushed
+   the init `g = E` into a SYNTHESISED `fn main` that collided with
+   the user's own `fn main` (duplicate `_main` link error), and fn
+   bodies read `g` as const-0. Fix is one coherent slice across
+   parser → MIR → codegen → asm: synth-main MERGES into existing
+   user main; two-pass `lower_hir` makes every fn see all globals;
+   ident resolution falls back to `_global_op(gid)`; assignment to a
+   global uses a sentinel dst (arena_id=-999) routed to
+   `_hv_store_dst` which emits an `adrp/add g<id>; stp` global
+   store; `LModule.globals` adds writable 16-byte `.data` slots.
+4. **`7b00bd54` — array/map subscript.** `STMT_ASSIGN op="index"`
+   had no arm64 branch; the unconditional fall-through copied the
+   container into dst, so every `a[i]` returned the whole array.
+   Fix: routes through `hexa_index_get(container, key)`.
+5. **`306ad234` — STMT_UNOP.** Emitted `nop ; unhandled stmt kind
+   unop`; every `-x` / `!x` left dst uninitialized. Fix: `-x` lowers
+   as `0 - x` via `hexa_sub`; `!x` mirrors the `!=` pattern.
+6. **`2e624e84` — if-as-expression.** The `if` branch always
+   returned `_no_value`; `let x = if c { A } else { B }` bound x to
+   const-0. Fix: pre-allocate an `if_val` join local; both arms copy
+   their operand into it before jumping to the join; join returns
+   `_value(if_val)`. Single fix unlocked 13 t_batch22 cases at once
+   (most of align/table/box).
+
+Each step:
+- All prior micros (R1 exit-42, loop, fn-param, recursion, globals,
+  index, unop) re-verified — zero regressions.
+- The discovery program (`fn main` style) now matches interp.
+- Committed and pushed to `main`.
+
+### t_batch22 native vs interp progression
+
+| commit                                | passed/31 |
+|---------------------------------------|-----------|
+| pre-session (`fe35cdc4`)              | SIGSEGV   |
+| `2bd67f0e` — fn param binding         |  0 / 31   |
+| `c76cc8d6` — module globals           | 13 / 31   |
+| `7b00bd54` — array index              | 15 / 31   |
+| `306ad234` — unop                     | 16 / 31   |
+| `2e624e84` — if-expr value            | **29 / 31** |
+
+### Remaining gaps (split into three narrow categories)
+
+a. **2 `tree_render_pure` assertions** — `tree chain 3` and
+   `tree deep nested`. Continuation-prefix differs by one space /
+   one vertical char between native and interp output. Confined to
+   one helper; not a codegen-fundamentals bug.
+b. **~170 unmapped runtime builtins** (`/tmp/gaps.txt`) — e.g.
+   `dict_keys → hexa_dict_keys`. Link-gate safely blocks them
+   today; surgical per-symbol add when a real program needs each.
+c. **Frontend `CODEGEN-FAIL`** in some smokes — `HX3001` type-mismatch
+   diagnostics, etc. Not a codegen-correctness issue; the typecheck
+   is stricter than the interp accepts. Separate track.
+
+R3 can advance to R4 once (a) is closed (≤ one investigation cycle)
+and a small representative-corpus diff hits parity.
 
 This is the cause of `test/t_batch22` reporting `0 passed` (its
 `let mut pass = 0` harness counter, bumped from inside `eq_*`
