@@ -85,6 +85,10 @@ End-to-end comparison:
   - acc   : 8/8 = 8/8 (exact match)               — qualitative reproduction perfect
   - collapse: anima 2.13e7× vs flame 8.98e6× (ratio 2.4×) — same sensitivity factor as final
   - shape : both monotonic descending, same magnitude scale at every measured step
+  - wall (M-Mac CPU, no GPU, same hexa-lang toolchain):
+    - anima d_corpus_fire (full 80-step, HEXA_MEM_UNLIMITED=1): **18.70s** user
+    - flame d_corpus_fire (full 80-step):                       **18.29s** user
+    - ratio = 0.978× (flame ~2% faster) — algorithm-equivalent wall, NOT a packed-farr win at the M-Mac CPU baseline. clang -O2 vectorizes both impls efficiently. Wall-time gains will come from Phase 4 (RFC 046) compiler fusion, not from the storage-rep difference.
 
 Source #4 confirmed: **the anima vs flame algorithm-impl difference produces a real ~3e-5 fp64 init gn2 delta even with identical toolchain and identical input data**. The remaining variable IS the impl:
 

@@ -9,7 +9,8 @@
 - **Source evidence (g3 — every claim anchored)**:
   - flame Phase 3 NN-stack correctness foundation: RFC 045 closure document (40+ falsifier PASS, regression 0, structural call_builtin = 0, ~6.4k LoC) — `inbox/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md`
   - eager-PyTorch baseline reference: anima `state/anima_pytorch_d768x12L_fire_2026_05_16/fire.log` — d=768·12L ConsciousDecoderV2 trained init CE 5.59 → final 0.000708 in 336.85s wall on a single A100 (Python substrate, not hexa-native — RFC 043 §"interim track")
-  - flame compiled-native baseline (d=32·3L, M-Mac CPU): 18.5s wall after Phase 3-J farr_matmul routing (`build/flame_d32_corpus`) for the full 80-step AdamW × 8-window epoch — equivalent to anima d_corpus_fire (~30s on same CPU per direct test in RFC 045)
+  - flame compiled-native baseline (d=32·3L, M-Mac CPU): 18.29s wall after Phase 3-J farr_matmul routing (`build/flame_d32_corpus`) for the full 80-step AdamW × 8-window epoch
+  - anima d_corpus_fire baseline (same hexa-lang toolchain, same M-Mac CPU, HEXA_MEM_UNLIMITED=1, full 80-step): **18.70s** wall — almost identical to flame (ratio 0.978×, flame ~2% faster). RFC 045 measurement update: the packed-farr vs dict/list distinction produces last-ulp numeric drift but NOT a wall-time advantage at the M-Mac CPU baseline. clang -O2 vectorizes both impls efficiently; Phase 4 fusion gains must come from kernel-level restructuring, not from the storage-rep difference
   - RFC 040 §"Performance thesis" — compiled-only AOT path's edge over eager Python = (a) no Python dispatch overhead, (b) compile-time kernel fusion, (c) static-shape specialization; these are flame's three structural levers
 
 ## Scope of this RFC — design draft, no implementation
