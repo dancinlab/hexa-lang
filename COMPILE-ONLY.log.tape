@@ -831,3 +831,49 @@
   authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
   @> COMPILE-ONLY.tape
 
+@? loop_stage3_root_cause_hexaval_abi := "DEFINITIVE stage-3 root cause: codegen single-reg HexaVal model ≠ runtime 16-byte x0:x1 struct ABI — pervasive, explains '한참 멀음'" :: anomaly [d=2026-05-16 active]
+  ~> loop_mangling_done_builtin_lowering_scoped
+  <- loop_mangling_done_builtin_lowering_scoped
+  finding <<~EOF
+    Empirically PROVEN (compiled C probe against self/runtime.h +
+    runtime.c): sizeof(HexaVal)=16, sizeof(HexaTag)=4, _Alignof=8.
+    HexaVal = { HexaTag tag; union{ int64 i; double f; ptr; … } } —
+    a 16-byte, 8-aligned, NON-HFA struct. AAPCS64 therefore:
+      • RETURN  in the register PAIR x0:x1
+      • each HexaVal ARG in a register PAIR (arg0→x0:x1,
+        arg1→x2:x3, arg2→x4:x5, arg3→x6:x7, then 16B stack slots)
+
+    The new compiler/codegen/arm64_darwin.hexa models HexaVal as ONE
+    64-bit register: _arm64_arg_reg(idx) = x0,x1,x2,… (one reg per
+    arg) and call-return capture = `mov dst, x0` (x0 only). So in
+    EVERY generated call:
+      • the result's x1 half (the union PAYLOAD — the actual int/
+        ptr/double) is discarded; only x0 (tag + 4 pad) is kept;
+      • multi-arg calls are mis-marshalled (arg1 placed in x1, but
+        the callee reads arg0 from x0:x1 → arg0 corrupted, arg1
+        never delivered).
+    This is not the 4 int-builtins or the 10 link symbols — it is
+    a single-register-vs-16-byte-struct ABI mismatch that pervades
+    EVERY call, parameter, return and HexaVal local in the emitted
+    code.
+  EOF
+  reframes <<~EOF
+    This is THE reason the user's own chain annotates stage-3 as
+    "미도달, 한참 멀음". The prior decomposed wins are REAL but all
+    at the LINK layer: mangling 583→0 [665517af], builtin renames
+    ld 36→10 [ee85214d, 88bf86fc], .s assembles [7260c1af]. Beneath
+    link sits a RUNTIME-ABI layer: even at 0 unresolved + a
+    synthesised _main, the stage-2 binary would compute garbage
+    (payload lost, args misaligned) — it cannot run, let alone
+    byte-equal stage-1. Continuing to chip the remaining 10 link
+    symbols would yield a linkable-but-broken binary; presenting
+    that as 'stage-3 reached' is precisely the fabrication the
+    integrity line forbids. Link-symbol chipping is hereby NOT the
+    stage-3 path.
+  EOF
+  honest_state = "loop_stage2_self_compile_clean (0 diag) + loop_arm64_assembles_clean (.s→.o) + mangling + 21 verified builtin renames ALL still hold and are real link-layer progress; tree not regressed. But stage-3 (a correctly-running, byte-equal stage-2) is gated on the HexaVal ABI mismatch — a MAJOR architectural unit, not a loop-tick patch and the genuine '한참 멀음'. No fabrication: probe binary real (sizeof printed), conclusion measured not predicted, no code touched this tick (the honest deliverable is the definitive root cause that re-scopes the work and prevents a fake milestone)."
+  options = "Two architectural paths, each a dedicated effort far beyond a tick: (A) make compiler/codegen/* HexaVal-pair-aware end-to-end — x0:x1 returns, AAPCS64 register-pair + 16B-stack-slot arg passing, 16B locals/spills, pair-wise mov/ldr/str — pervasive backend rework across arm64_darwin + x86_64_linux + thumb; OR (B) change runtime.h HexaVal to an 8-byte NaN-boxed/tagged-pointer representation so a single-register model is ABI-correct — fundamental runtime change, blast radius = every HX_ macro + every hexa_* fn + downstream consumers, weighed against HEXA-NATIVE-ONLY/runtime-stability. Decision belongs to a scoped design pass (step-by-step-decision-gate), recorded — not auto-chosen in a loop tick."
+  next = "NOT a loop-tick. The stage-3 gate is the HexaVal ABI decision (A vs B) + its implementation. Loop ticks have exhausted the safely-decomposable link-layer surface; further link chipping is counter-productive (fabrication-risk). Surface this to the user as a design-gate decision; the 19-commit closure (287670af..88bf86fc) — front-end/lowering 2774→0, mangling, assemble, 21 renames — is preserved and is the real, honest extent reachable without the ABI rework."
+  authority = "[@x_spec_15_e2] [@x_bootstrap_doc] [@x_hexa_native_only] [@x_punch_v2]"
+  @> COMPILE-ONLY.tape
+
