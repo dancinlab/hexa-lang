@@ -3672,6 +3672,91 @@ HexaVal hexa_val_heapify(HexaVal v) {
     }
 }
 
+// ─────────────────────────────────────────────────────────────
+// hexa_val_free_tree — recursive free of a malloc'd HexaVal tree.
+// ─────────────────────────────────────────────────────────────
+//
+// PLAN-stage3-footprint-F6.md option C (P0-then-C). Used by the
+// streaming codegen loop to reclaim per-function MFunc/LFunc once their
+// asm text has been emitted. Caller asserts the value is unshared at
+// the drop point — for the streaming loop this holds via the P0a-P0e
+// escape-edge audit (string leaves forced-copied at every cross-
+// lifetime store; container arrays/structs built fresh per pass).
+//
+// Conservative discipline:
+//   - VALSTRUCT / ARRAY / MAP heap containers: recurse + free.
+//   - from_arena=1 (VALSTRUCT, MapTable) or cap<0 (Array): SKIPPED —
+//     arena-resident, lifetime owned by the scope pop, not free()-able.
+//   - TAG_STR: NOT freed. Static literals (`hexa_str("...")` in
+//     transpiled source) and runtime-allocated buffers are not
+//     statically distinguishable, and per-string overhead is small
+//     versus the IR struct shells we DO reclaim.
+//   - TAG_INT / FLOAT / BOOL / VOID / CHAR / FN / CLOSURE: no-op.
+//
+// Returns hexa_void() so it composes as an expression.
+HexaVal hexa_val_free_tree(HexaVal v) {
+    switch (HX_TAG(v)) {
+        case TAG_VALSTRUCT: {
+            HexaValStruct* vs = HX_VS(v);
+            if (!HX_PTR_OK(vs)) return hexa_void();
+            if (vs->from_arena) return hexa_void();
+            hexa_val_free_tree(vs->str_val);
+            hexa_val_free_tree(vs->char_val);
+            hexa_val_free_tree(vs->array_val);
+            hexa_val_free_tree(vs->fn_name);
+            hexa_val_free_tree(vs->fn_params);
+            hexa_val_free_tree(vs->fn_body);
+            hexa_val_free_tree(vs->struct_name);
+            hexa_val_free_tree(vs->struct_fields);
+            free(vs);
+            break;
+        }
+        case TAG_ARRAY: {
+            if (!HX_PTR_OK(v.arr_ptr)) return hexa_void();
+            int cap = HX_ARR_CAP(v);
+            if (cap < 0) return hexa_void();  // arena-backed
+            int len = HX_ARR_LEN(v);
+            HexaVal* items = HX_ARR_ITEMS(v);
+            if (items) {
+                for (int i = 0; i < len; i++) {
+                    hexa_val_free_tree(items[i]);
+                }
+                free(items);
+            }
+            free(v.arr_ptr);
+            break;
+        }
+        case TAG_MAP: {
+            HexaMap* mp = v.map_ptr;
+            if (!HX_PTR_OK(mp)) return hexa_void();
+            HexaMapTable* t = mp->tbl;
+            if (t && !t->from_arena) {
+                // Slot keys are strdup'd (heap) regardless of from_arena,
+                // per the HexaMapTable comment.
+                if (t->slots) {
+                    for (int i = 0; i < t->ht_cap; i++) {
+                        if (t->slots[i].key) free(t->slots[i].key);
+                    }
+                    free(t->slots);
+                }
+                if (t->order_vals) {
+                    for (int i = 0; i < t->len; i++) {
+                        hexa_val_free_tree(t->order_vals[i]);
+                    }
+                    free(t->order_vals);
+                }
+                if (t->vals)       free(t->vals);
+                if (t->order_keys) free(t->order_keys);
+                free(t);
+            }
+            free(mp);
+            break;
+        }
+        default: break;
+    }
+    return hexa_void();
+}
+
 // Public C entry — exposed for the env("__HEXA_ARENA_HEAPIFY_RETURN__") path.
 // Heapifies the global return_val (a hexa_full.hexa pub let mut, emitted as a
 // C global). Declared extern; the symbol is provided by the generated C from
