@@ -224,6 +224,24 @@ runtime-deterministic (no flake) — a next-cycle target.
 nested-struct nodes trigger the threshold, suggesting the
 struct_lit/array_lit interaction over a bigger spill frame.
 
+Further bisected (checkpoint-instrumented run): all 17 nodes
+construct cleanly and the iteration begins; the crash fires on
+`arr[14].kind` (the 15th element access), NOT on construction
+or earlier indexing. Pattern:
+
+  ...
+  iter i=13
+  got kind=C
+  iter i=14        ← printed
+  (SIGSEGV)        ← while reading arr[14].kind
+
+Strongly consistent with an `hexa_array_grow` copying behaviour:
+the underlying buffer doubles at push 16→32 (or similar), and
+already-constructed-and-pushed inner struct backings get
+shallow-copied — stale inner pointers in early elements survive
+construction but blow up on first deep read after a later grow.
+Matches MEMORY.md `struct_pack_map shallow-clone gotcha`.
+
 Out of scope for the current sweep cycle — distinct runtime/
 codegen-layout investigation; the 22/40 (55%) result already
 demonstrates the R3 path's correctness on simpler programs.
