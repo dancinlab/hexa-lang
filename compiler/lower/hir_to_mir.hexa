@@ -633,6 +633,106 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx2, _local_op(dst.id))
     }
 
+    // ── logical && / || — short-circuit via control flow ──
+    // BINOP unconditionally evaluates both children at MIR build
+    // time, so `b != 0 && a % b == 0` would still run `a % b` when
+    // b == 0 (triggering "modulo by zero"). The codegen's later
+    // truthy-cbz pattern only chooses which already-evaluated
+    // operand to load; it can't undo side effects. Lower the
+    // logical op as `if a { b } else { a }` (&&) / `if a { a } else
+    // { b }` (||) directly here so `b` is only evaluated when
+    // needed.
+    if k == "binop" && len(e.children) >= 2 {
+        if e.text == "&&" || e.text == "||" || e.text == "and" || e.text == "or" {
+            let lr = _lower_hexpr(ctx, e.children[0])
+            let entry_id = lr.ctx.cur_block
+            let mut ctx_pre = _fresh_local(lr.ctx, e.typ, "sc_val")
+            let sc_val = ctx_pre.locals[len(ctx_pre.locals) - 1]
+            ctx_pre = _new_block(ctx_pre)
+            let then_id = ctx_pre.blocks[len(ctx_pre.blocks) - 1].id
+            ctx_pre = _new_block(ctx_pre)
+            let else_id = ctx_pre.blocks[len(ctx_pre.blocks) - 1].id
+            let mut br_args: [Operand] = []
+            br_args.push(lr.operand)
+            let br = Stmt {
+                kind: STMT_BR_COND,
+                dst: _miss_local(),
+                op: "",
+                args: br_args,
+                target_block: then_id,
+                target_block_else: else_id
+            }
+            let mut ctx2 = _push_stmt_to(ctx_pre, entry_id, br)
+            ctx2 = _add_edge(ctx2, entry_id, then_id)
+            ctx2 = _add_edge(ctx2, entry_id, else_id)
+            let is_or = (e.text == "||" || e.text == "or")
+            // truthy-arm: && stores rhs (b); || stores lhs (a)
+            ctx2 = _set_cur_block(ctx2, then_id)
+            let mut then_op = lr.operand
+            if !is_or {
+                let br2 = _lower_hexpr(ctx2, e.children[1])
+                ctx2 = br2.ctx
+                then_op = br2.operand
+            }
+            let mut ta: [Operand] = []
+            ta.push(then_op)
+            let cp_then = Stmt {
+                kind: STMT_ASSIGN,
+                dst: sc_val,
+                op: "sc_val",
+                args: ta,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, cp_then)
+            let then_end = ctx2.cur_block
+            // falsy-arm: && stores lhs (a); || stores rhs (b)
+            ctx2 = _set_cur_block(ctx2, else_id)
+            let mut else_op = lr.operand
+            if is_or {
+                let br3 = _lower_hexpr(ctx2, e.children[1])
+                ctx2 = br3.ctx
+                else_op = br3.operand
+            }
+            let mut ea: [Operand] = []
+            ea.push(else_op)
+            let cp_else = Stmt {
+                kind: STMT_ASSIGN,
+                dst: sc_val,
+                op: "sc_val",
+                args: ea,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, cp_else)
+            let else_end = ctx2.cur_block
+            // join
+            ctx2 = _new_block(ctx2)
+            let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+            let br_t = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: join_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, then_end, br_t)
+            ctx2 = _add_edge(ctx2, then_end, join_id)
+            let br_e = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: join_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, else_end, br_e)
+            ctx2 = _add_edge(ctx2, else_end, join_id)
+            ctx2 = _set_cur_block(ctx2, join_id)
+            return _value(ctx2, _local_op(sc_val.id))
+        }
+    }
     // ── binop → STMT_BINOP ──────────────────────────────────
     if k == "binop" {
         if len(e.children) < 2 { return _no_value(ctx) }
