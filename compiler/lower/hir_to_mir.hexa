@@ -761,13 +761,44 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _no_value(ctx2)
     }
 
-    // ── assign (i = i + 1, ...): SSA-rename via fresh local ─
+    // ── assign (i = i + 1, ...) ────────────────────────────
+    //
+    // For an already-bound simple variable, mutate its EXISTING local
+    // in place (shared stack slot) rather than SSA-renaming to a fresh
+    // local. SSA-rename without loop-header phi nodes makes a `while`
+    // condition forever re-read the pre-loop value of the loop-carried
+    // variable (the header lowers the test once against the old binding
+    // while the body rebinds to a fresh local) → infinite loop. The
+    // arm64/x86_64 backends model each local id as one fixed stack slot
+    // with store/reload, so an in-place store is the correct
+    // loop-carried-update lowering and is strictly more correct for
+    // straight-line reassignment too. First-assignment / non-ident lhs
+    // keep the fresh-local + rebind path (safe fallback).
     if k == "assign" {
         if len(e.children) < 2 { return _no_value(ctx) }
         let lhs = e.children[0]
         let rr = _lower_hexpr(ctx, e.children[1])
-        let mut ctx2 = _fresh_local(rr.ctx, e.children[1].typ, lhs.text)
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let mut ctx2 = rr.ctx
+        let mut dst = _miss_local()
+        let mut did_reuse = false
+        if len(lhs.text) > 0 {
+            let existing = _mir_lookup(ctx2, lhs.text)
+            if existing >= 0 {
+                let mut li = 0
+                while li < len(ctx2.locals) {
+                    if ctx2.locals[li].id == existing {
+                        dst = ctx2.locals[li]
+                        did_reuse = true
+                        break
+                    }
+                    li = li + 1
+                }
+            }
+        }
+        if !did_reuse {
+            ctx2 = _fresh_local(ctx2, e.children[1].typ, lhs.text)
+            dst = ctx2.locals[len(ctx2.locals) - 1]
+        }
         let mut args: [Operand] = []
         args.push(rr.operand)
         let s = Stmt {
@@ -779,7 +810,9 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             target_block_else: -1
         }
         ctx2 = _push_stmt(ctx2, s)
-        if len(lhs.text) > 0 { ctx2 = _rebind(ctx2, lhs.text, dst.id) }
+        if !did_reuse && len(lhs.text) > 0 {
+            ctx2 = _rebind(ctx2, lhs.text, dst.id)
+        }
         return _no_value(ctx2)
     }
 
