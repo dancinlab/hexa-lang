@@ -1,0 +1,146 @@
+// compiler/atlas/symbolic/reachability.hexa — reachable-set verdict kernel
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of reachability_calculator.py from archive-TECS-L/
+// .shared/calc (commit 4ee05c39; TECS-L absorption Wave 4 — manifest §Backlog).
+//
+// VERDICT-GATING purpose: given an operand set (e.g. the divisor/σ/τ/φ atoms
+// of a perfect number) and the ops {+, −, ×, ÷}, how large a fraction of the
+// integers in [lo,hi] is reachable using ≤ max_ops binary operations?  If
+// 40% of integers are reachable then a single "numerical match" is NOT
+// surprising — this is the texas-sharpshooter prior. The engine quantifies
+// the prior so claimed coincidences can be discounted (g1 deterministic).
+//
+// Closed-form / finite-search kernels (INTEGER arithmetic only — the
+// extended ln/exp/π/e variant in the Python is NOT ported: transcendental
+// floats are not closed-form-exact, anti-bloat + g1):
+//   T1  rc_reachable_set       BFS layers of integer values reachable in
+//                              ≤ max_ops binary ops from the operand set
+//   T2  rc_reach_count         how many integers in [lo,hi] are reachable
+//   T3  rc_reach_fraction_ppm  reachable fraction in parts-per-million
+//                              (integer surrogate for a percentage)
+//   T4  rc_is_reachable        is one specific target reachable?
+//
+// Ops are kept exact: division only when it divides evenly (integer ÷),
+// so every reachable value is an exact integer — no float tolerance.
+// Zero external dependency (g5). Cross-link: manifest §C / §Backlog Wave 4.
+
+// ── integer set as a sorted dynamic array (membership via binary search) ──
+
+fn _rc_contains(xs: [int], v: int) -> bool {
+    let mut lo = 0
+    let mut hi = len(xs) - 1
+    while lo <= hi {
+        let mid = (lo + hi) / 2
+        let m = xs[mid]
+        if m == v { return true }
+        if m < v { lo = mid + 1 } else { hi = mid - 1 }
+    }
+    return false
+}
+
+fn _rc_insert(xs: [int], v: int) -> [int] {
+    // insert v keeping xs sorted ascending; no-op if present.
+    let n = len(xs)
+    let mut out: [int] = []
+    let mut placed = false
+    let mut i = 0
+    while i < n {
+        let x = xs[i]
+        if !placed && v <= x {
+            if v == x {
+                placed = true
+            } else {
+                out.push(v)
+                placed = true
+            }
+        }
+        out.push(x)
+        i = i + 1
+    }
+    if !placed { out.push(v) }
+    return out
+}
+
+// ── op application : exact integer results only ──────────────────────────
+// emits a+b, a−b, b−a, a·b, a/b (if exact), b/a (if exact); cap magnitude.
+fn _rc_combine(known: [int], a: int, b: int, cap: int) -> [int] {
+    let mut acc = known
+    let s = a + b
+    if s >= 0 - cap && s <= cap { acc = _rc_insert(acc, s) }
+    let d1 = a - b
+    if d1 >= 0 - cap && d1 <= cap { acc = _rc_insert(acc, d1) }
+    let d2 = b - a
+    if d2 >= 0 - cap && d2 <= cap { acc = _rc_insert(acc, d2) }
+    let p = a * b
+    if p >= 0 - cap && p <= cap { acc = _rc_insert(acc, p) }
+    if b != 0 && a % b == 0 {
+        let q = a / b
+        if q >= 0 - cap && q <= cap { acc = _rc_insert(acc, q) }
+    }
+    if a != 0 && b % a == 0 {
+        let q = b / a
+        if q >= 0 - cap && q <= cap { acc = _rc_insert(acc, q) }
+    }
+    return acc
+}
+
+// ── T1 : reachable integer set within ≤ max_ops binary operations ─────────
+pub fn rc_reachable_set(operands: [int], max_ops: int, cap: int) -> [int] {
+    // seed with the operands themselves (0 ops)
+    let mut known: [int] = []
+    let mut i = 0
+    while i < len(operands) {
+        known = _rc_insert(known, operands[i])
+        i = i + 1
+    }
+    let mut step = 0
+    while step < max_ops {
+        // combine every ordered pair from the current frontier
+        let frozen = known
+        let n = len(frozen)
+        let mut a = 0
+        while a < n {
+            let mut b = 0
+            while b < n {
+                known = _rc_combine(known, frozen[a], frozen[b], cap)
+                b = b + 1
+            }
+            a = a + 1
+        }
+        step = step + 1
+    }
+    return known
+}
+
+// ── T2 : count of integers in [lo,hi] that are reachable ─────────────────
+pub fn rc_reach_count(operands: [int], max_ops: int, lo: int, hi: int) -> int {
+    let cap = hi
+    let set = rc_reachable_set(operands, max_ops, cap)
+    let mut cnt = 0
+    let mut v = lo
+    while v <= hi {
+        if _rc_contains(set, v) { cnt = cnt + 1 }
+        v = v + 1
+    }
+    return cnt
+}
+
+// ── T3 : reachable fraction in parts-per-million (integer percentage) ────
+pub fn rc_reach_fraction_ppm(operands: [int], max_ops: int, lo: int, hi: int) -> int {
+    let total = hi - lo + 1
+    if total <= 0 { return 0 }
+    let cnt = rc_reach_count(operands, max_ops, lo, hi)
+    return (cnt * 1000000) / total
+}
+
+// ── T4 : is one specific target reachable? ───────────────────────────────
+pub fn rc_is_reachable(operands: [int], max_ops: int, target: int) -> bool {
+    let mut cap = target
+    if cap < 0 { cap = 0 - cap }
+    if cap < 100 { cap = 100 }
+    let set = rc_reachable_set(operands, max_ops, cap)
+    return _rc_contains(set, target)
+}
