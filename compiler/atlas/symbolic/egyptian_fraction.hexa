@@ -1,0 +1,192 @@
+// compiler/atlas/symbolic/egyptian_fraction.hexa — Egyptian-fraction engine
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of egyptian_fraction.py from archive-TECS-L/.shared/calc
+// (commit 4ee05c39; TECS-L absorption Wave 4 — manifest §Backlog).
+//
+// `verify/math.hexa::s2_egyptian_fraction` only carries the single
+// 1/2+1/3+1/6=1 identity. This standalone engine ports the GENERAL
+// solver kernels that file does not cover (manifest §C row marked it a
+// "dup of existing verifier" w.r.t. that one identity — the k_min formula
+// and divisor-subset solver below are NOT in verify/math.hexa, hence a
+// genuine net-new port, not a dup).
+//
+// Closed-form / finite-search kernels (all EXACT integer arithmetic over
+// the common denominator — no Fraction type needed, no float):
+//   T1  divisor-subset solver : subsets S of divisors(P)\{1} with
+//                               Σ_{d∈S} 1/d = 1  ⟺  Σ_{d∈S} P/d = P
+//   T2  k_min(P)              : smallest |S| over such subsets
+//   T3  k_min = 2p−1 formula  : for perfect P = 2^{p−1}(2^p−1), the
+//                               minimum unit-fraction count is 2p−1
+//                               (P=6→3, P=28→5, P=496→9 — verified here)
+//   T4  K-term unit-fraction  : count solutions of 1 = Σ_{i=1}^K 1/a_i
+//                               with 2 ≤ a_1 ≤ … ≤ a_K ≤ max_denom
+//
+// argparse / display / fraction-printing NOT ported (g1 deterministic-
+// dispatch + anti-bloat). Zero external dependency (g5).
+// Cross-link: manifest §C egyptian_fraction row · §Backlog Wave 4.
+
+// ── divisor primitives ──────────────────────────────────────────────────
+
+pub fn ef_divisors(n: int) -> [int] {
+    // all divisors of n ascending (√n enumeration)
+    let mut lo: [int] = []
+    let mut hi: [int] = []
+    if n <= 0 { return lo }
+    let mut i = 1
+    while i * i <= n {
+        if n % i == 0 {
+            lo.push(i)
+            let other = n / i
+            if other != i { hi.push(other) }
+        }
+        i = i + 1
+    }
+    let mut j = len(hi) - 1
+    while j >= 0 {
+        lo.push(hi[j])
+        j = j - 1
+    }
+    return lo
+}
+
+pub fn ef_sigma(n: int) -> int {
+    let ds = ef_divisors(n)
+    let mut s = 0
+    let mut i = 0
+    while i < len(ds) {
+        s = s + ds[i]
+        i = i + 1
+    }
+    return s
+}
+
+pub fn ef_is_perfect(n: int) -> bool {
+    if n < 2 { return false }
+    return ef_sigma(n) == 2 * n
+}
+
+// ── T1/T2 : divisor-subset reciprocal-sum solver ─────────────────────────
+// Over the common denominator P, the reciprocal-sum condition
+//   Σ_{d∈S} 1/d = 1   becomes   Σ_{d∈S} (P/d) = P.
+// We enumerate subsets of the non-unit divisors of P by their P/d
+// "weights" via a bounded recursive search; the SMALLEST solving subset
+// gives k_min(P).
+
+fn _ef_search(weights: [int], idx: int, remaining: int, picked: int,
+              best: int) -> int {
+    // returns the minimum subset size summing to `remaining`, or a large
+    // sentinel (best+1 won't update). `best` is the best size found so far.
+    if remaining == 0 { return picked }
+    if idx >= len(weights) { return 999999 }
+    if picked >= best { return 999999 }
+    // weights are descending; if the largest remaining weight can't help
+    let w = weights[idx]
+    let mut lo = 999999
+    if w <= remaining {
+        // take it
+        let take = _ef_search(weights, idx + 1, remaining - w, picked + 1, best)
+        if take < lo { lo = take }
+    }
+    // skip it
+    let skip = _ef_search(weights, idx + 1, remaining, picked, best)
+    if skip < lo { lo = skip }
+    return lo
+}
+
+// k_min(P): minimum count of distinct divisors d>1 of P with Σ 1/d = 1.
+// Returns 0 if no solution exists.
+pub fn ef_kmin(p: int) -> int {
+    if p <= 1 { return 0 }
+    let ds = ef_divisors(p)
+    // weights = P/d for d>1, descending (d ascending → P/d descending)
+    let mut w: [int] = []
+    let mut i = 0
+    while i < len(ds) {
+        let d = ds[i]
+        if d > 1 { w.push(p / d) }
+        i = i + 1
+    }
+    let r = _ef_search(w, 0, p, 0, 999999)
+    if r >= 999999 { return 0 }
+    return r
+}
+
+// does P admit ANY divisor-subset Egyptian representation of 1?
+pub fn ef_has_solution(p: int) -> bool {
+    return ef_kmin(p) > 0
+}
+
+// ── T3 : k_min = 2p−1 formula for perfect numbers ────────────────────────
+// Perfect P = 2^{p−1}(2^p−1); the predicted minimum unit-fraction count
+// is 2p−1.  e.g. P=6 (p=2) → 3 ; P=28 (p=3) → 5 ; P=496 (p=5) → 9.
+pub fn ef_kmin_predicted(p_exp: int) -> int {
+    return 2 * p_exp - 1
+}
+
+// verify the formula for one perfect number given (p_exp, P).
+pub fn ef_kmin_formula_holds(p_exp: int, perfect_n: int) -> bool {
+    if !ef_is_perfect(perfect_n) { return false }
+    return ef_kmin(perfect_n) == ef_kmin_predicted(p_exp)
+}
+
+// ── T4 : K-term unit-fraction equation  1 = Σ 1/a_i ──────────────────────
+// Count solutions of 1 = 1/a_1 + … + 1/a_K with 2 ≤ a_1 ≤ … ≤ a_K ≤ md.
+// Exact integer arithmetic: track remaining as numerator/denominator and
+// only accept when it lands exactly on 0.  Implemented over a fixed common
+// denominator D = lcm-free product is impractical; instead recurse on the
+// rational (num, den) with gcd-reduction.
+
+fn _ef_gcd(a: int, b: int) -> int {
+    let mut x = a
+    let mut y = b
+    if x < 0 { x = 0 - x }
+    if y < 0 { y = 0 - y }
+    while y != 0 {
+        let t = y
+        y = x % y
+        x = t
+    }
+    return x
+}
+
+fn _ef_unit_count(num: int, den: int, k_left: int, min_a: int, max_d: int) -> int {
+    // remaining fraction = num/den (reduced, num ≥ 0)
+    if k_left == 0 {
+        if num == 0 { return 1 }
+        return 0
+    }
+    if num == 0 { return 0 }
+    // pruning: k_left copies of 1/min_a must be ≥ remaining
+    //   k_left/min_a ≥ num/den  ⟺  k_left·den ≥ num·min_a
+    if k_left * den < num * min_a { return 0 }
+    // lo: smallest denom a with 1/a ≤ num/den ⟺ a ≥ den/num (ceil)
+    let mut lo = (den + num - 1) / num
+    if lo < min_a { lo = min_a }
+    // hi: 1/a ≥ remaining/k_left ⟺ a ≤ k_left·den/num
+    let mut hi = (k_left * den) / num
+    if hi > max_d { hi = max_d }
+    let mut total = 0
+    let mut a = lo
+    while a <= hi {
+        // remaining − 1/a = (num·a − den) / (den·a)
+        let nn = num * a - den
+        let dd = den * a
+        if nn >= 0 {
+            let g = _ef_gcd(nn, dd)
+            let rn = nn / g
+            let rd = dd / g
+            total = total + _ef_unit_count(rn, rd, k_left - 1, a, max_d)
+        }
+        a = a + 1
+    }
+    return total
+}
+
+// number of solutions of 1 = Σ_{i=1}^K 1/a_i, 2 ≤ a_1 ≤ … ≤ a_K ≤ max_denom.
+pub fn ef_unit_solutions(k: int, max_denom: int) -> int {
+    if k <= 0 { return 0 }
+    return _ef_unit_count(1, 1, k, 2, max_denom)
+}

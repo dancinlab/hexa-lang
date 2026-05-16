@@ -1,0 +1,70 @@
+// test/egyptian_fraction_smoke.hexa — smoke for symbolic/egyptian_fraction.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values from egyptian_fraction.py (archive-TECS-L/.shared/calc,
+// commit 4ee05c39):
+//   divisor-subset k_min: P=6→3 {2,3,6} · P=28→5 · P=496→9
+//   k_min = 2p−1 formula: P=6 (p=2)→3 · P=28 (p=3)→5 · P=496 (p=5)→9
+//   K-term unit-fraction count (max_denom=50): K=1→0 K=2→1 K=3→3 K=4→14
+//   the K=2 unique solution is 1 = 1/2 + 1/2  (a_1=a_2=2)
+//   1 = 1/2 + 1/3 + 1/6  is the canonical 3-term n=6 representation
+//
+// Run:  hexa run test/egyptian_fraction_smoke.hexa
+// Sentinel: __EGYPTIAN_FRACTION_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/egyptian_fraction.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── divisor primitives ──────────────────────────────────────────────────
+check("ef_divisors(6) = {1,2,3,6}", len(ef_divisors(6)) == 4)
+check("ef_sigma(6) == 12", ef_sigma(6) == 12)
+check("ef_sigma(28) == 56", ef_sigma(28) == 56)
+check("ef_is_perfect(6)", ef_is_perfect(6))
+check("ef_is_perfect(28)", ef_is_perfect(28))
+check("!ef_is_perfect(12)", !ef_is_perfect(12))
+
+// ── T1/T2 : divisor-subset k_min ─────────────────────────────────────────
+check("ef_kmin(6) == 3 ({2,3,6})", ef_kmin(6) == 3)
+check("ef_kmin(28) == 5", ef_kmin(28) == 5)
+check("ef_kmin(496) == 9", ef_kmin(496) == 9)
+check("ef_has_solution(6)", ef_has_solution(6))
+check("ef_has_solution(28)", ef_has_solution(28))
+
+// ── T3 : k_min = 2p−1 formula for perfect numbers ────────────────────────
+check("ef_kmin_predicted(2) == 3", ef_kmin_predicted(2) == 3)
+check("ef_kmin_predicted(3) == 5", ef_kmin_predicted(3) == 5)
+check("ef_kmin_predicted(5) == 9", ef_kmin_predicted(5) == 9)
+check("formula holds: P=6 (p=2)",   ef_kmin_formula_holds(2, 6))
+check("formula holds: P=28 (p=3)",  ef_kmin_formula_holds(3, 28))
+check("formula holds: P=496 (p=5)", ef_kmin_formula_holds(5, 496))
+
+// ── T4 : K-term unit-fraction equation 1 = Σ 1/a_i ───────────────────────
+check("ef_unit_solutions(1,50) == 0", ef_unit_solutions(1, 50) == 0)
+check("ef_unit_solutions(2,50) == 1 (only 1/2+1/2)", ef_unit_solutions(2, 50) == 1)
+check("ef_unit_solutions(3,50) == 3", ef_unit_solutions(3, 50) == 3)
+check("ef_unit_solutions(4,50) == 14", ef_unit_solutions(4, 50) == 14)
+check("ef_unit_solutions(3,200) == 3 (stable beyond 50)", ef_unit_solutions(3, 200) == 3)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  egyptian_fraction smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__EGYPTIAN_FRACTION_SMOKE__ FAIL")
+} else {
+    println("__EGYPTIAN_FRACTION_SMOKE__ PASS")
+}
