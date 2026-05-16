@@ -500,6 +500,30 @@
   honest_c3 = "f_atlas_lattice_external: solution-set membership observed only. Comp-only ⇒ 🟡 cap (g_self_verify). This entry is the bundling anchor for the residual Appendix-A equations (#23–46,48,49,51,53,54,55) per §E recommendation against 49 separate atoms; (*)-marked members are 🔵-eligible individually on Phase-2 re-derivation."
   provenance = "archive-TECS-L P-NEW Appendix-A Eq#20 + residual #23–55 via _archive_tecs_l_absorption_manifest.md §E #41, 2026-05-16 reviewer-merge"
 
+@D verified_is_perfect_6__1 := "is_perfect(6)=1" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "is_perfect hexa-native recompute = 1 == claimed 1"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
+
+@D verified_aliquot_6__6 := "aliquot(6)=6" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "aliquot hexa-native recompute = 6 == claimed 6"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
+
+@D verified_sigma_k_6_1__12 := "sigma_k(6,1)=12" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "sigma_k hexa-native recompute = 12 == claimed 12"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
+
 # ═══════════════════════════════════════════════════════════════════════
 # §2 MATH — divisor identities · Basel · Euler · transcendentals · NT
 # ═══════════════════════════════════════════════════════════════════════
@@ -832,6 +856,62 @@
   cite = "[@x_archive_tecs_l] docs/proofs T1-25 + Euler continued fraction for e"
   honest_c3 = "f_atlas_lattice_external: the e CF is established mathematics; the σ(6)/τ(6)-in-convergents reading is INTERPRETATION-ATTRIBUTED per source (observation, not derivation) ⇒ 🟡 cap per §E and g_self_verify (interpretation-attributed, no hexa verifier). No derivation of e from the lattice claimed."
   provenance = "archive-TECS-L docs/proofs T1-25 via _archive_tecs_l_absorption_manifest.md §E #24, 2026-05-16 reviewer-merge"
+
+@D verified_is_perfect_28__1 := "is_perfect(28)=1" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "is_perfect hexa-native recompute = 1 == claimed 1"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
+
+@D verified_is_perfect_496__1 := "is_perfect(496)=1" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "is_perfect hexa-native recompute = 1 == claimed 1"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
+
+@D verified_is_perfect_8128__1 := "is_perfect(8128)=1" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "is_perfect hexa-native recompute = 1 == claimed 1"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
+
+@D verified_sigma_k_28_1__56 := "sigma_k(28,1)=56" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "sigma_k hexa-native recompute = 56 == claimed 56"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
+
+@D verified_phi_12__4 := "phi(12)=4" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "phi hexa-native recompute = 4 == claimed 4"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
+
+@D verified_tau_28__6 := "tau(28)=6" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "tau hexa-native recompute = 6 == claimed 6"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
+
+@D verified_mobius_30___1 := "mobius(30)=-1" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "mobius hexa-native recompute = -1 == claimed -1"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
 
 # ═══════════════════════════════════════════════════════════════════════
 # §3 PHYS — CMB · conservation · Maxwell · Lorentz · particles · Kolmogorov
@@ -1383,6 +1463,14 @@
   cite = "[@x_archive_tecs_l] docs/proofs T1-32 + Von Staudt-Clausen theorem"
   honest_c3 = "f_atlas_lattice_external: 12 appears in modular-form theory for its own reasons (lcm(4,6), η²⁴ exponent 24); the 12=σ(6)/24=J₂(6) links are OBSERVATION, consistent with but not derived from the lattice (cf. s8_chi_to_monster). Broken out from s2_t_proofs_batch per §E. 🔵-eligible per sub-identity after Phase-2 verifier; 🟠 default (g_tier_default_insufficient)."
   provenance = "archive-TECS-L docs/proofs T1-32 via _archive_tecs_l_absorption_manifest.md §E #22, 2026-05-16 reviewer-merge"
+
+@D verified_gamma0_genus_11__1 := "gamma0_genus(11)=1" :: verdict [d=2026-05-16 active]
+  status = "🔵 SUPPORTED-FORMAL"
+  evidence = "gamma0_genus hexa-native recompute = 1 == claimed 1"
+  stage = "Stage 1 — hexa-native recompute (hexa verify)"
+  anchor = "[compiler invariant — hexa-native NT closed-form, g_self_verify]"
+  cite = "hexa verify self-verified (g_self_verify · TECS-L Tier1)"
+  provenance = "tool/verify_cli.hexa --absorb · binary built-in atlas + calculators"
 
 # ═══════════════════════════════════════════════════════════════════════
 # §9 ENG — GPU SM · network · compiler invariants

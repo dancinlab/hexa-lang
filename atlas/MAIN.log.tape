@@ -1721,3 +1721,35 @@
     g8 commit trailer:           pending parent agent commit
   EOF
   note = "Provenance upgrade / GAP-closure ONLY — additive, no ~> supersedes edges; all existing verdicts (s1_perfect_number, s1_phi_sigma_unique, s8_gamma0_n6_row, s8_chi_to_monster, s2_t_proofs_batch, etc.) are UNTOUCHED. The new _tecsl entries are the broken-out / never-absorbed counterparts the §E audit identified. HARD constraints respected: no 🔵 proposed; f_atlas_lattice_external enforced (no n=6 lattice as derivation in any evidence field); embedded.gen.hexa NOT edited; tool/calc_cli.hexa and compiler/atlas/symbolic/* NOT touched (other agents own those — referenced as Phase-2 verifier targets only); one concept per @D (P-NEW Appendix-A ~49-equation tail bundled into s1_pnew_eq20_tecsl per §E explicit anti-bloat directive). 🔵-eligibility recorded per-entry in honest_c3 for a future hexa-native Phase-2 verifier sprint (g_self_verify); no silent upgrade."
+
+# ─── Cycle 036 — appended via tool/atlas_cycle_append ──────────
+
+@A cycle_036 := "Phase 3 cycle 036 — verify→🔵→g7 absorb loop (11 hexa-native self-verified eqs)" :: cycle [d=2026-05-16 active]
+  trigger = "user 'all go' — verify→🔵→g7 absorb loop closure. atlas/inbox/verified_equations.tape holds 11 hexa-native self-verified 🔵 equations (`hexa verify --absorb` ledger; g_self_verify satisfied — calculators recompute the closed-form, NOT a sympy carry). Reviewer-merge step of g7 incoming-patches-pipeline, mirroring the proven cycle_033/cycle_035 inbox reviewer-merge pattern."
+  scope <<~EOF
+    Reviewer-merge: atlas/inbox/verified_equations.tape (11 @D 🔵 SUPPORTED-FORMAL verdicts) -> atlas/MAIN.tape § domain append (verbatim relocation; id/status/evidence/stage/anchor/cite/provenance kept as final ledger form) -> atlas/MAIN.log.tape cycle_036 (this entry).
+
+    Domain breakdown (11 @D, by §):
+    §1 N6-FOUNDATION (3): verified_is_perfect_6__1 (6 = 1st perfect) · verified_aliquot_6__6 (aliquot(6)=6) · verified_sigma_k_6_1__12 (σ(6)=12) — n=6 perfect-number foundation.
+    §2 MATH (7): verified_is_perfect_28__1 · verified_is_perfect_496__1 · verified_is_perfect_8128__1 · verified_sigma_k_28_1__56 · verified_phi_12__4 · verified_tau_28__6 · verified_mobius_30___1.
+    §8 TOP (1): verified_gamma0_genus_11__1 (Γ₀(11) modular-curve genus = 1).
+
+    Tier: 11 × 🔵 SUPPORTED-FORMAL (HARD: these are LEGIT 🔵 — hexa-native self-verified via `hexa verify --absorb`; the calculators recompute the closed-form so g_self_verify is satisfied — NOT a sympy-citation carry. Status kept verbatim, NOT downgraded to 🟡 — that is the whole point of the verify→absorb loop).
+  EOF
+  files <<~EOF
+    atlas/MAIN.tape (11 new @D 🔵 verdict entries: §1 +3, §2 +7, §8 +1; section dividers untouched; existing entries UNTOUCHED — additive only, no ~> supersedes)
+    atlas/MAIN.log.tape (this cycle_036 entry — append-only via tool/atlas_cycle_append.hexa)
+    atlas/inbox/verified_equations.tape (reset to header-only — transient --absorb sink; the 11 are now in MAIN.tape SSOT, cycle_033 cleared-inbox pattern)
+  EOF
+  verifier_run_result <<~EOF
+    atlas-verify smoke: PASS — ledger live==declared consistent, no regression. The 11 new 🔵 entries are verifier-less in the ledger sense (no `verifier =` / no `|>` edges → not in the smoke ledger count), so the declared==live count is unaffected; confirmed post-merge.
+  EOF
+  governance_check <<~EOF
+    g_self_verify           — ✅ all 11 are hexa-native self-verified (`hexa verify --absorb`, calculators recompute closed-form) — LEGIT 🔵, NOT sympy carry; status 🔵 SUPPORTED-FORMAL kept verbatim (NOT downgraded to 🟡)
+    g3 real-limit-anchor    — ✅ 11/11 anchor present ([compiler invariant — hexa-native NT closed-form, g_self_verify])
+    f_atlas_lattice_external — ✅ n=6 appears as the CHECKED NT fact (σ(6)=12 / aliquot(6)=6 / is_perfect(6)=1 recomputed), NOT as a derivation rule — already correct in ledger evidence, kept verbatim
+    g_arch_vs_log_split     — ✅ MAIN.tape architecture append; this @A history append-only via tool
+    g7 incoming-pipeline    — ✅ inbox reviewer-merge by autonomous parent agent; no consumer direct-edit; inbox reset to header-only post-merge
+    g8 commit trailer       — pending parent agent commit (Co-Authored-By: Claude Opus 4.7 (1M context))
+  EOF
+  note = "Verify→🔵→g7 absorb loop closure — additive, no ~> supersedes edges; all existing verdicts (s1_perfect_number, s1_sigma_k*, s8_gamma0*, etc.) UNTOUCHED. The 11 verified_* entries are the hexa-native self-verified counterparts produced by the `hexa verify --absorb` loop, distinct from the s*/_tecsl literature-anchor carries (no id collision — verified_* prefix). HARD constraints respected: status 🔵 SUPPORTED-FORMAL kept verbatim (the verify→absorb loop's purpose); f_atlas_lattice_external — n=6 as checked NT fact not derivation; compiler/atlas/verify/*, compiler/atlas/symbolic/*, tool/calc_cli.hexa, self/main.hexa, embedded.gen.hexa, dist/atlas.hxc NOT touched (other agents own those). Inbox truncated to header + @V (rolling --absorb sink kept, entries cleared — cycle_033 cleared-inbox pattern)."
