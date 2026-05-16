@@ -208,6 +208,49 @@ Hypothesis (testable in future cycles):
 Targeting (1) + (2) is Phase 4-B-3 emission scope; targeting (3) is
 RFC 040 §3 transcendental routing (orthogonal).
 
+## Reproducible build wrapper (2026-05-17)
+
+`tool/flame_phase4b_build.sh` — single-command reproducible IPCP build:
+1. module_loader flatten → `/tmp/<stem>_expanded.hexa`
+2. flame_phase4b_ipcp rewriter → `/tmp/<stem>_ipcp.hexa`
+3. hexa_v2 transpile → `build/artifacts/<stem>_ipcp.c`
+4. clang -O2 → output binary
+
+Verified: re-running the wrapper yields byte-identical output to the
+ad-hoc pipeline used in the IPCP commit measurement
+(F-RFC047-IPCP-REPRO-BYTE-EQ PASS via diff).
+
+Usage:
+```bash
+tool/flame_phase4b_build.sh \
+    stdlib/flame/flame_d32_corpus_test.hexa \
+    build/flame_d32_corpus_ipcp
+```
+
+## Inconclusive: clang -flto probe (2026-05-17, no claim filed)
+
+Tried adding `-flto` to the clang -O2 step on the IPCP-rewritten C.
+Result: 5-run avg 9.459s (range 8.95-10.52, var 16.5%) — apparent
+3.6% improvement over IPCP-only 9.814s, but **dominated by measurement
+variance**. macOS scheduler/thermal effects produce 1.5s wall drift
+across consecutive runs on this workload, swamping any sub-5%
+optimization gain.
+
+Re-run on second pass: 5-run avg 10.899s (range 10.30-11.42, var 4.9%).
+This is **higher** than the first pass — confirming the variance is
+NOT a stable measurement.
+
+Decision: do NOT ship -flto for Phase 4-B-2. The signal-to-noise
+ratio at this wall scale is insufficient for honest claim-filing.
+Re-evaluate at Phase 4-B-3 when kernel emission collapses fn-call
+overhead and exposes a larger expected gain.
+
+Also: `flame_d32_baseline_lto` link FAILED (`symbol(s) not found for
+arm64`) when -flto applied to the production hexa_v2-emitted C
+without prior IPCP — the runtime symbols' LTO marker visibility
+diverges between the two pipelines. Separate investigation if -flto
+returns to consideration.
+
 ## What's NOT in scope for Phase 4-B-1 scaffold
 
 - Build flag `--flame-phase4b` (next cycle — wire to `cmd_build`)
