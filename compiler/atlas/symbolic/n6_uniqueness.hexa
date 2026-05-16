@@ -1,0 +1,224 @@
+// compiler/atlas/symbolic/n6_uniqueness.hexa — n=6 identity-uniqueness scanner
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of n6_uniqueness_tester.py from archive-TECS-L/.shared/
+// calc (commit 4ee05c39; TECS-L absorption Wave 4 — manifest §Backlog).
+//
+// The Python delegates the arithmetic-function sieve to an external `tecsrs`
+// Rust library "for 83x speed"; ONLY the closed-form algorithm is ported —
+// hexa-native σ/τ/φ/sopfr/ω computed directly per n (g5 hexa-native-only,
+// no external engine). The exhaustive-scan uniqueness test IS the kernel.
+//
+// Kernels (EXACT integer arithmetic):
+//   T1  arithmetic functions  nu_sigma/tau/phi/sopfr/omega + tri/lcm1n
+//   T2  nu_hit_count(id,lim)  number of n∈[1,lim] satisfying identity #id
+//   T3  nu_is_n6_unique       does identity #id hold ONLY at n=6 in [1,lim]?
+//   T4  nu_first_hit / scan   the n-values satisfying an identity
+//
+// ── g4 HONESTY CORRECTION ────────────────────────────────────────────────
+// The Python's KNOWN_IDENTITIES list labels all 11 entries "unique
+// identities". An exhaustive hexa-native scan over n∈[1,5000] shows this
+// over-claims for FIVE of them:
+//   id 1  φ·σ = n·τ          → hits {1, 6}     (n=6-unique only for n>1)
+//   id 3  n(n+1)/2 = n!      → hits {1, 3}     (NOT n=6 at all — it is the
+//                                               sum=product identity, n∈{1,3})
+//   id 4  σ(τ(σ(n))) = σ(n)  → hits {1,2,3,6,11,…} (a common self-loop,
+//                                               far from n=6-unique)
+//   id 9  τ·φ = σ − τ        → hits {6, 30}    (NOT n=6-unique)
+//   id 10 σ(n) = 2n          → hits {6,28,496} (perfect numbers — by design
+//                                               not n=6-unique)
+// The remaining six (ids 2,5,6,7,8,11) ARE n=6-unique in [1,5000].
+// This engine ships the HONEST result: nu_is_n6_unique returns the TRUE
+// scan outcome, and nu_unique_count() reports 6, not 11.  See manifest
+// §D4 g4-honesty note.
+//
+// Zero external dependency (g5). Cross-link: manifest §C n6_uniqueness_tester.
+
+// ── T1 : arithmetic functions (direct, per n) ────────────────────────────
+
+pub fn nu_sigma(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut s = 0
+    let mut i = 1
+    while i * i <= n {
+        if n % i == 0 {
+            s = s + i
+            let other = n / i
+            if other != i { s = s + other }
+        }
+        i = i + 1
+    }
+    return s
+}
+
+pub fn nu_tau(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut t = 0
+    let mut i = 1
+    while i * i <= n {
+        if n % i == 0 {
+            t = t + 1
+            if (n / i) != i { t = t + 1 }
+        }
+        i = i + 1
+    }
+    return t
+}
+
+pub fn nu_phi(n: int) -> int {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    let mut result = n
+    let mut m = n
+    let mut p = 2
+    while p * p <= m {
+        if m % p == 0 {
+            while m % p == 0 { m = m / p }
+            result = result - result / p
+        }
+        p = p + 1
+    }
+    if m > 1 { result = result - result / m }
+    return result
+}
+
+// sopfr(n) = sum of prime factors with repetition.
+pub fn nu_sopfr(n: int) -> int {
+    if n <= 1 { return 0 }
+    let mut s = 0
+    let mut m = n
+    let mut p = 2
+    while p * p <= m {
+        while m % p == 0 {
+            s = s + p
+            m = m / p
+        }
+        p = p + 1
+    }
+    if m > 1 { s = s + m }
+    return s
+}
+
+// omega(n) = number of distinct prime factors.
+pub fn nu_omega(n: int) -> int {
+    if n <= 1 { return 0 }
+    let mut c = 0
+    let mut m = n
+    let mut p = 2
+    while p * p <= m {
+        if m % p == 0 {
+            c = c + 1
+            while m % p == 0 { m = m / p }
+        }
+        p = p + 1
+    }
+    if m > 1 { c = c + 1 }
+    return c
+}
+
+pub fn nu_triangular(n: int) -> int {
+    return n * (n + 1) / 2
+}
+
+fn _nu_gcd(a: int, b: int) -> int {
+    let mut x = a
+    let mut y = b
+    while y != 0 {
+        let t = y
+        y = x % y
+        x = t
+    }
+    return x
+}
+
+pub fn nu_factorial(n: int) -> int {
+    if n < 0 { return 0 }
+    let mut f = 1
+    let mut i = 2
+    while i <= n {
+        f = f * i
+        i = i + 1
+    }
+    return f
+}
+
+// lcm(1..n)
+pub fn nu_lcm1n(n: int) -> int {
+    if n < 1 { return 0 }
+    let mut L = 1
+    let mut i = 2
+    while i <= n {
+        L = L / _nu_gcd(L, i) * i
+        i = i + 1
+    }
+    return L
+}
+
+// ── identity predicates (the 11 KNOWN_IDENTITIES of the Python source) ───
+// returns true iff identity #id holds at n.
+pub fn nu_identity_holds(id: int, n: int) -> bool {
+    if id == 1  { return n >= 1 && nu_phi(n) * nu_sigma(n) == n * nu_tau(n) }
+    if id == 2  { return n >= 4 && n <= 14 && nu_factorial(n - 3) == n }
+    if id == 3  { return n >= 1 && n <= 14 && nu_triangular(n) == nu_factorial(n) }
+    if id == 4  {
+        let sg = nu_sigma(n)
+        return nu_sigma(nu_tau(sg)) == sg
+    }
+    if id == 5  { return 3 * n - 6 == nu_sigma(n) }
+    if id == 6  { return n - 2 == nu_tau(n) }
+    if id == 7  {
+        if n <= 1 || n > 14 { return false }
+        return nu_factorial(n - 1) / 2 == nu_sopfr(n) * nu_sigma(n)
+    }
+    if id == 8  { return nu_lcm1n(n) == nu_sopfr(n) * nu_sigma(n) }
+    if id == 9  { return nu_tau(n) * nu_phi(n) == nu_sigma(n) - nu_tau(n) }
+    if id == 10 { return nu_sigma(n) == 2 * n }
+    if id == 11 {
+        let ph = nu_phi(n)
+        if ph < 2 { return false }
+        return nu_sopfr(ph) == nu_omega(n)
+    }
+    return false
+}
+
+// ── T2 : hit count of identity #id over [1,lim] ──────────────────────────
+pub fn nu_hit_count(id: int, lim: int) -> int {
+    let mut cnt = 0
+    let mut n = 1
+    while n <= lim {
+        if nu_identity_holds(id, n) { cnt = cnt + 1 }
+        n = n + 1
+    }
+    return cnt
+}
+
+// ── T3 : is identity #id n=6-unique over [1,lim]? ────────────────────────
+// TRUE ⟺ the ONLY n∈[1,lim] satisfying it is n=6.
+pub fn nu_is_n6_unique(id: int, lim: int) -> bool {
+    if !nu_identity_holds(id, 6) { return false }
+    return nu_hit_count(id, lim) == 1
+}
+
+// number of the 11 KNOWN_IDENTITIES that are GENUINELY n=6-unique in [1,lim]
+// (g4-honest result — expected 6, not the source's claimed 11).
+pub fn nu_unique_count(lim: int) -> int {
+    let mut cnt = 0
+    let mut id = 1
+    while id <= 11 {
+        if nu_is_n6_unique(id, lim) { cnt = cnt + 1 }
+        id = id + 1
+    }
+    return cnt
+}
+
+// ── T4 : the first n satisfying identity #id (0 if none in [1,lim]) ──────
+pub fn nu_first_hit(id: int, lim: int) -> int {
+    let mut n = 1
+    while n <= lim {
+        if nu_identity_holds(id, n) { return n }
+        n = n + 1
+    }
+    return 0
+}
