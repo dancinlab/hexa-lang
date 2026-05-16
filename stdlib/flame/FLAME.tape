@@ -531,6 +531,22 @@ LoC 누적 ~6.1k.
 - regression 0 ; ~6.1k LoC ; 한 세션 14 commit
 
 flame 의 **F-RFC043-STEP-EQ** 의 가장 강한 anchor 도달.
+
+### 2026-05-17 — Phase 3-G LANDED (d5_sin/cos in flame_math + RoPE wire-in)
+landed: `stdlib/flame/flame_math.hexa` 에 d5_two_pi · d5_pi · d5_reduce
+· d5_sin · d5_cos 추가 (anima d_train5_lib §262-291 의 정확 14-term
+Taylor algorithm). nn_lib::nn_rope_build_tables 의 libm sin/cos →
+d5_sin/d5_cos 치환.
+
+empirical: corpus test 의 gn2 trajectory 가 **변동 없음** (init gn2
+= 7.97113 그대로). 이는 RoPE cos/sin 의 last-ulp drift 가 forward
+path 의 dominant drift source 가 아니라는 의미 — 남은 3.12e-5 delta
+의 source 는 다른 곳 (dt_exp/dt_ln 의 atanh-series last-ulps 또는
+anima 의 5-decimal print precision 이 가린 값). Algorithm completeness
+관점에서 의미있는 변경 (이제 nn_lib 의 RoPE = anima d5_rope_tables 와
+모든 layer 알고리즘 byte-id).
+
+regression 무변동 · structural call_builtin = 0 · 누적 LoC ~6.2k.
 Phase 4 (compiler fusion) · Phase 5 (whole-program fusion · d=768·12L
 fire) 가 본격 perf 작업; correctness foundation 완료.
 - optim_lib = RFC 034 의 adamw_step 위의 wrapper (이미 ag_adamw_step

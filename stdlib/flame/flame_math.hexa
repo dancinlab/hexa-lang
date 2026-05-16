@@ -90,3 +90,48 @@ pub fn dt_ln(x: float) -> float {
     }
     return 2.0 * acc
 }
+
+// d5_two_pi / d5_pi : exact constants (matches anima d_train5_lib).
+pub fn d5_two_pi() -> float { return 6.283185307179586 }
+pub fn d5_pi() -> float { return 3.141592653589793 }
+
+// d5_reduce : argument reduction mod 2π so |r| ≤ π (Taylor convergence
+// floor for sin/cos 14-term).
+pub fn d5_reduce(x: float) -> float {
+    let tp = d5_two_pi()
+    let mut r = x
+    while r > d5_pi()  { r = r - tp }
+    while r < 0.0 - d5_pi() { r = r + tp }
+    return r
+}
+
+// d5_sin / d5_cos : 14-term Taylor series after argument reduction.
+// Identical to anima d_train5_lib.hexa §271 / §284. Used by RoPE
+// tables — strict bit-eq path to anima d5_rope_tables output.
+pub fn d5_sin(x: float) -> float {
+    let r = d5_reduce(x)
+    let r2 = r * r
+    let mut term = r
+    let mut acc = r
+    let mut k = 1
+    while k < 14 {
+        term = 0.0 - term * r2 / to_float((2*k) * (2*k+1))
+        acc = acc + term
+        k = k + 1
+    }
+    return acc
+}
+
+pub fn d5_cos(x: float) -> float {
+    let r = d5_reduce(x)
+    let r2 = r * r
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 14 {
+        term = 0.0 - term * r2 / to_float((2*k-1) * (2*k))
+        acc = acc + term
+        k = k + 1
+    }
+    return acc
+}

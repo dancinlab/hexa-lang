@@ -36,6 +36,10 @@
 // wrappers without changing existing signatures.
 // ════════════════════════════════════════════════════════════════════════
 
+// Phase 3-G (2026-05-17): import flame_math for d5_sin / d5_cos
+// (strict bit-eq to anima d5_rope_tables 14-term Taylor path).
+use "stdlib/flame/flame_math"
+
 // ── helpers (private) ──────────────────────────────────────────────────
 fn _nn_abs(x: float) -> float {
     if x < 0.0 { return 0.0 - x }
@@ -502,8 +506,8 @@ pub fn nn_rope_build_tables(T: int, hd: int,
             let ex = (to_float(2 * fi) / to_float(hd)) * lnb
             let invf = 1.0 / exp(ex)
             let ang = to_float(p) * invf
-            let _ = farr_set(cos_out, p * hd + c, cos(ang))
-            let _ = farr_set(sin_out, p * hd + c, sin(ang))
+            let _ = farr_set(cos_out, p * hd + c, d5_cos(ang))
+            let _ = farr_set(sin_out, p * hd + c, d5_sin(ang))
             c = c + 1
         }
         p = p + 1
