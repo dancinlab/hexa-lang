@@ -86,15 +86,29 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
             let lfunc = _arm64_lower_func(mfunc, st, modhash)
 
             // LIR→text. The asm fragment must survive POP — route to malloc.
+            // A5.2 (2026-05-16): compute frag + check lfunc.target match
+            // INSIDE the iter scope (must read lfunc before POP) but
+            // DEFER parts.push to AFTER the POP — otherwise the
+            // items[] growth allocation lands in the iter arena and POP
+            // wipes it (A6 1차 측정의 빈-출력 버그).
             if _arena_on { let _r4 = env("__HEXA_ARENA_RETURN_REGION_OFF__") }
+            let mut frag = ""
+            let mut emit_it = false
             if lfunc.target == target {
-                parts.push(_emit_func(target, lfunc))
+                frag = _emit_func(target, lfunc)
+                emit_it = true
             }
 
-            // POP reclaims mfunc/lfunc and all of this iteration's
-            // transient sub-call scratch. st and the just-pushed asm
-            // fragment are heap-resident and unaffected.
+            // POP reclaims mfunc/lfunc and the iteration's transient
+            // scratch. frag (malloc-resident under RETURN_REGION_OFF)
+            // and emit_it (primitive) survive on the C local stack.
             if _arena_on { let _q = env("__HEXA_ARENA_POP__") }
+
+            // parts.push runs AFTER pop — items[] growth allocates in
+            // the outer (codegen_emit_streaming) frame, safely.
+            if emit_it {
+                parts.push(frag)
+            }
         }
         i = i + 1
     }
