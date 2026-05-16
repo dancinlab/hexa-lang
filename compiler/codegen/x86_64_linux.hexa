@@ -1214,6 +1214,7 @@ pub fn codegen_x86_64_linux(module: MModule) -> LModule {
         target: "x86_64-linux-gnu",
         funcs: funcs,
         rodata: _x86_strtab_to_rodata(st),
-        bss: []
+        bss: [],
+        globals: []
     }
 }

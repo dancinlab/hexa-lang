@@ -189,7 +189,8 @@ fn _build_module(target: string, f: LFunc) -> LModule {
         target: target,
         funcs: funcs,
         rodata: [],
-        bss: []
+        bss: [],
+        globals: []
     }
 }
 

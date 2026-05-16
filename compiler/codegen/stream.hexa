@@ -83,7 +83,7 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
 
             // HIR→MIR for this one function. mfunc lands in iter F1.
             if _stream_reclaim { let _r1 = env("__HEXA_ARENA_RETURN_REGION_ON__") }
-            let mfunc = _lower_fn(it)
+            let mfunc = _lower_fn(it, [])
 
             // Intern this function's string literals into st — st must
             // survive the POP, so route its return to malloc.

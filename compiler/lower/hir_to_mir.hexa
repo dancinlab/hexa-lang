@@ -452,6 +452,20 @@ fn _mir_lookup(ctx: LowerCtx, name: string) -> i64 {
     return -1
 }
 
+// Module-level global lookup by source name (lexical fallback when no
+// local/param binding matches). Returns the global id (== index into
+// ctx.globals matching MModule.globals[id]) or -1 if not a global.
+fn _mir_lookup_global(ctx: LowerCtx, name: string) -> i64 {
+    let mut i = 0
+    while i < len(ctx.globals) {
+        if ctx.globals[i].name_hint == name {
+            return ctx.globals[i].id
+        }
+        i = i + 1
+    }
+    return -1
+}
+
 // ── Result of expression lowering ───────────────────────────
 
 pub struct LowerExprResult {
@@ -557,14 +571,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // ── ident ───────────────────────────────────────────────
     if k == "ident" {
         let id = _mir_lookup(ctx, e.text)
-        if id < 0 {
-            // Stage1 punch list C5 — unbound ident in lower is fatal.
-            // Previously returned `_const_int_op(0)`, masking cross-file
-            // resolution failures introduced by the Gap 1 splice.
-            _emit_hx1101(e.text, e.span)
-            return _no_value(ctx)
+        if id >= 0 {
+            return _value(ctx, _local_op(id))
         }
-        return _value(ctx, _local_op(id))
+        // Fall back to module-level global before HX1101: a `let mut g`
+        // at module scope is visible in every fn body without an
+        // explicit local binding.
+        let gid = _mir_lookup_global(ctx, e.text)
+        if gid >= 0 {
+            return _value(ctx, _global_op(gid, e.text))
+        }
+        // Stage1 punch list C5 — unbound ident in lower is fatal.
+        // Previously returned `_const_int_op(0)`, masking cross-file
+        // resolution failures introduced by the Gap 1 splice.
+        _emit_hx1101(e.text, e.span)
+        return _no_value(ctx)
     }
 
     // ── atlas ref → STMT_ASSIGN with global Operand ─────────
@@ -781,6 +802,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut ctx2 = rr.ctx
         let mut dst = _miss_local()
         let mut did_reuse = false
+        let mut is_global = false
         if len(lhs.text) > 0 {
             let existing = _mir_lookup(ctx2, lhs.text)
             if existing >= 0 {
@@ -793,9 +815,25 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     }
                     li = li + 1
                 }
+            } else {
+                // No local binding; check for a module-level global.
+                // Emit STMT_ASSIGN with a sentinel global dst (arena_id
+                // -999, id = global_id) — the backend recognises this
+                // sentinel and emits a `.data` global store instead of
+                // a stack-slot store.
+                let gid = _mir_lookup_global(ctx2, lhs.text)
+                if gid >= 0 {
+                    dst = Local {
+                        id: gid,
+                        arena_id: -999,
+                        type_id: _type_id_of(e.children[1].typ),
+                        name_hint: lhs.text
+                    }
+                    is_global = true
+                }
             }
         }
-        if !did_reuse {
+        if !did_reuse && !is_global {
             ctx2 = _fresh_local(ctx2, e.children[1].typ, lhs.text)
             dst = ctx2.locals[len(ctx2.locals) - 1]
         }
@@ -810,7 +848,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             target_block_else: -1
         }
         ctx2 = _push_stmt(ctx2, s)
-        if !did_reuse && len(lhs.text) > 0 {
+        if !did_reuse && !is_global && len(lhs.text) > 0 {
             ctx2 = _rebind(ctx2, lhs.text, dst.id)
         }
         return _no_value(ctx2)
@@ -1607,8 +1645,24 @@ fn _parse_int(t: string) -> i64 {
 
 // ── Function lowering ───────────────────────────────────────
 
-fn _lower_fn(it: HItem) -> MFunc {
+fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     let mut ctx = _new_lower_ctx()
+    // Seed the lowering ctx with the module's globals so ident lookups
+    // inside this fn can fall back to a global Operand instead of the
+    // HX1101 unbound-ident fatal.
+    ctx = LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: ctx.locals,
+        blocks: ctx.blocks,
+        cur_block: ctx.cur_block,
+        bindings: ctx.bindings,
+        frame_starts: ctx.frame_starts,
+        globals: mglobals,
+        has_returned: ctx.has_returned
+    }
     ctx = _new_block(ctx)
     let entry_id = ctx.blocks[len(ctx.blocks) - 1].id
     ctx = _set_cur_block(ctx, entry_id)
@@ -1675,22 +1729,37 @@ fn _lower_fn(it: HItem) -> MFunc {
 
 pub fn lower_hir(module: HModule) -> MModule {
     _lr_diag = []
-    let mut funcs: [MFunc] = []
+    // Two-pass: collect all module-level globals first so every fn body
+    // can resolve any global by name regardless of textual order
+    // (parser may put `fn main` before or after a `let mut g = …`).
     let mut globals: [Local] = []
+    let mut k = 0
+    while k < len(module.items) {
+        let itk = module.items[k]
+        if itk.kind == "ITEM_LET" {
+            // Strip `mut:` prefix the parser uses on mutable lets so the
+            // name_hint matches identifier text inside fn bodies.
+            let mut nm = itk.name
+            if len(nm) >= 4 && nm.substring(0, 4) == "mut:" {
+                nm = nm.substring(4, len(nm))
+            }
+            let l = Local {
+                id: len(globals),
+                arena_id: 0,
+                type_id: _type_id_of(itk.sig_return),
+                name_hint: nm
+            }
+            globals.push(l)
+        }
+        k = k + 1
+    }
+    let mut funcs: [MFunc] = []
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
         if it.kind == "ITEM_FN" {
-            let f = _lower_fn(it)
+            let f = _lower_fn(it, globals)
             funcs.push(f)
-        } else if it.kind == "ITEM_LET" {
-            let l = Local {
-                id: len(globals),
-                arena_id: 0,
-                type_id: _type_id_of(it.sig_return),
-                name_hint: it.name
-            }
-            globals.push(l)
         }
         i = i + 1
     }

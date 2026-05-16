@@ -53,7 +53,12 @@ pub struct LModule {
     target: string,
     funcs: [LFunc],
     rodata: [LSection],  // atlas const, string literals, etc.
-    bss: [LSection]
+    bss: [LSection],
+    // Module-level mutable globals — one writable 16-byte HexaVal slot
+    // per entry, symbol name `g<id>`. Zero-initialized in .data; the
+    // declaration initializer runs at program start (synthetic-main
+    // `g<id> = E` assign emitted by the parser).
+    globals: [string]
 }
 
 pub struct LSection {

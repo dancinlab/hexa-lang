@@ -227,6 +227,18 @@ fn _bss_section_directive(target: string) -> string {
     return ".bss"
 }
 
+// Writable initialized data — used for module-level mutable globals.
+// __DATA,__bss is zerofill-only (no `.byte`/`.quad` allowed), so the
+// globals live in a real __DATA,__data section with explicit zero
+// quads; the runtime initializer (synthetic-main `g<id> = E`) writes
+// the real value before any reader runs.
+fn _data_section_directive(target: string) -> string {
+    if _is_darwin(target) {
+        return ".section __DATA,__data"
+    }
+    return ".section .data"
+}
+
 // NOTE (stage-3 blocker, characterized — NOT yet fixed here): def-side
 // uses unconditional _label_prefix ("_" always) → injective (`foo`→
 // `_foo`, `_foo`→`__foo`) but call sites use _fmt_label (skips a
@@ -387,6 +399,17 @@ pub fn emit_asm(module: LModule) -> string {
         while bi < len(module.bss) {
             parts.push(_emit_section(target, module.bss[bi], header_bss))
             bi = bi + 1
+        }
+    }
+
+    // ---- .data (module-level mutable globals) ----
+    if len(module.globals) > 0 {
+        parts.push(_data_section_directive(target) + "\n")
+        let mut gi = 0
+        while gi < len(module.globals) {
+            let nm = module.globals[gi]
+            parts.push("    .p2align 3\n" + nm + ":\n    .quad 0\n    .quad 0\n")
+            gi = gi + 1
         }
     }
 

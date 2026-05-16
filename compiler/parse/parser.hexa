@@ -1339,6 +1339,16 @@ fn item_is_let(k: ItemKind) -> bool {
     }
 }
 
+fn item_is_fn(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Fn -> true,
+        ItemKind::Import -> false,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false
+    }
+}
+
 // ── Multi-file loader helpers (Stage 1 Gap 1) ─────────────────
 // These run inside parse() to walk `import "path"` items, lex+parse the
 // referenced files, and splice their top-level items into the importing
@@ -1534,23 +1544,76 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
         }
     }
     if len(top_stmts) > 0 {
-        let mbody = Expr {
-            kind: ExprKind::Block,
-            span: top_stmts[0].span,
-            text: "",
-            children: top_stmts,
-            atlas_ref: empty_atlas()
+        // If the user already declared `fn main`, MERGE the collected
+        // top-level statements + global initializers into the FRONT of
+        // its body (init runs before user code). Without this we'd
+        // emit a second `_main` label and the link fails on duplicate
+        // symbols. If there is no user `fn main`, fall back to the
+        // synthesised one — script-style files keep working.
+        let mut merged = false
+        let mut mi = 0
+        while mi < len(items) {
+            let cand = items[mi]
+            if item_is_fn(cand.kind) && cand.name == "main" {
+                let mut new_children: [Expr] = []
+                let mut si = 0
+                while si < len(top_stmts) {
+                    new_children.push(top_stmts[si])
+                    si = si + 1
+                }
+                // Splice the user body's statements after the inits.
+                // Both blocks and bare exprs handled — a non-block body
+                // becomes the trailing child of the new block.
+                if cand.body.kind == ExprKind::Block {
+                    let mut bi = 0
+                    while bi < len(cand.body.children) {
+                        new_children.push(cand.body.children[bi])
+                        bi = bi + 1
+                    }
+                } else {
+                    new_children.push(cand.body)
+                }
+                let new_body = Expr {
+                    kind: ExprKind::Block,
+                    span: cand.body.span,
+                    text: "",
+                    children: new_children,
+                    atlas_ref: empty_atlas()
+                }
+                items[mi] = Item {
+                    kind: cand.kind,
+                    name: cand.name,
+                    span: cand.span,
+                    annotations: cand.annotations,
+                    params: cand.params,
+                    return_type: cand.return_type,
+                    body: new_body,
+                    is_pub: cand.is_pub
+                }
+                merged = true
+                break
+            }
+            mi = mi + 1
         }
-        items.push(Item {
-            kind: ItemKind::Fn,
-            name: "main",
-            span: top_stmts[0].span,
-            annotations: [],
-            params: [],
-            return_type: empty_type(),
-            body: mbody,
-            is_pub: true
-        })
+        if !merged {
+            let mbody = Expr {
+                kind: ExprKind::Block,
+                span: top_stmts[0].span,
+                text: "",
+                children: top_stmts,
+                atlas_ref: empty_atlas()
+            }
+            items.push(Item {
+                kind: ItemKind::Fn,
+                name: "main",
+                span: top_stmts[0].span,
+                annotations: [],
+                params: [],
+                return_type: empty_type(),
+                body: mbody,
+                is_pub: true
+            })
+        }
     }
     p_tokens = save_tokens
     p_pos = save_pos
