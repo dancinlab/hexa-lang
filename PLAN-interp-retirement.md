@@ -195,6 +195,27 @@ dominant failure class:
 | 40-#2 | use→import lex alias · .hexa auto-suffix · multi-main collapse · pop builtin | 22 | 5 | 9 | 2 | 2 |
 | 40-#3 | HX3001-compare / HX3001-if-arm / HX3001-arith / HX3003 unit-relax · HX3010 → Warning · fn-name first-wins dedup | **25** | 8 | 5 | 0 | 2 |
 
+### Broadened to 60 smokes (partial, 47/60 — hang on file 48)
+
+  match=24 (51%) · diff=12 · cg-fail=8 · interp-to=3.
+
+aprime_cc hung (>6 min) compiling test/t_parser_lt_generic_disambig.hexa
+(known-hard `<`-vs-generic disambiguation case for parsers). Likely
+an infinite loop in the recursive-descent path. Sweep killed at that
+point.
+
+New categories surfaced in [40, 60]:
+
+  • t_macro_depth_*, t_ffi_marshal_skeleton (rc=139 vs rc=1, native
+    crashes immediately while interp prints 6 lines and exits 1) —
+    likely a fixture-driven sanity test where native crashes
+    before reaching the assertion-print path.
+  • t_cmd_url_args_passthrough / t_exec_env_reproducible /
+    t_multiarch_cpu_smoke (CG-FAIL HX2001 / HX3001) — more
+    frontend strictness on imported helpers.
+  • t_parser_lt_generic_disambig — aprime_cc parser hang (new
+    distinct class).
+
 ### sweep-40 #3 residual 8 DIFFs (categorised — no single shared root cause)
 
   3 SIGSEGV (rc=139) — struct-array-grow nested-struct field-access:
