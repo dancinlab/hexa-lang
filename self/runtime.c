@@ -7925,8 +7925,17 @@ typedef struct {
     int      dirty_dev;  /* device buf stale vs host → needs H2D (RFC 040) */
 } HexaFarrEntry;
 
+/* RFC 040 Phase D: under -DHEXA_CUDA the farr table + count must be
+ * visible to the runtime_cuda.c TU (cuBLAS Dgemm reads host buf/len for
+ * H2D/D2H). Non-static export under HEXA_CUDA only — the no-CUDA build
+ * keeps them `static` (byte-identical, zero ABI surface change). */
+#ifdef HEXA_CUDA
+HexaFarrEntry*        _hx_farr_table     = NULL;
+int64_t               _hx_farr_count     = 0;
+#else
 static HexaFarrEntry* _hx_farr_table     = NULL;
 static int64_t        _hx_farr_count     = 0;
+#endif
 static int64_t        _hx_farr_capacity  = 0;
 static int64_t*       _hx_farr_freelist  = NULL;
 static int64_t        _hx_farr_freelist_n = 0;
@@ -10464,10 +10473,8 @@ extern int  _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
 // other > 0.
 HexaVal hexa_cuda_available(void) {
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase A impl: probe cuInit(0) + cuDeviceGetCount(...).
-     * Until the GPU TU lands, even the HEXA_CUDA build reports 0 so the
-     * scaffolding is honest about what's wired vs what's a stub. */
-    return hexa_int(0);
+    /* RFC 040 Phase A real impl (2026-05-16): probe via runtime_cuda.c TU. */
+    return hexa_int(_hx_cuda_runtime_available());
 #else
     return hexa_int(0);
 #endif
@@ -10477,8 +10484,7 @@ HexaVal hexa_cuda_available(void) {
 // CUDA toolkit). Returns 0 on the no-CUDA build always.
 HexaVal hexa_cuda_device_count(void) {
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase A impl: cuDeviceGetCount + return. */
-    return hexa_int(0);
+    return hexa_int(_hx_cuda_device_count_impl());
 #else
     return hexa_int(0);
 #endif
@@ -10496,9 +10502,7 @@ HexaVal hexa_farr_to_device(HexaVal h_v) {
     HexaFarrEntry* e = &_hx_farr_table[id];
     if (!e->buf && e->loc == FARR_HOST) return hexa_int(0);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase A impl: ensure e->d_buf allocated (cudaMalloc),
-     * cudaMemcpy H2D if dirty_dev, set loc=MIRRORED, dirty_dev=0. */
-    return hexa_int(-1);
+    return hexa_int(_hx_cuda_farr_to_device(id));
 #else
     /* No-CUDA path: farr already host-resident; nothing to transfer.
      * The dispatcher contract: caller continues to use the same
@@ -10515,9 +10519,7 @@ HexaVal hexa_farr_to_host(HexaVal h_v) {
     HexaFarrEntry* e = &_hx_farr_table[id];
     if (!e->buf && e->loc == FARR_HOST) return hexa_int(0);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase A impl: cudaMemcpy D2H if dirty_host, set loc=
-     * MIRRORED, dirty_host=0. */
-    return hexa_int(-1);
+    return hexa_int(_hx_cuda_farr_to_host(id));
 #else
     return hexa_int(1);
 #endif
@@ -10541,17 +10543,12 @@ HexaVal hexa_farr_device_free(HexaVal h_v) {
     if (id < 0 || id >= _hx_farr_count) return hexa_int(0);
     HexaFarrEntry* e = &_hx_farr_table[id];
 #ifdef HEXA_CUDA
-    if (e->d_buf) {
-        /* TODO[cuda] Phase A impl: cudaFree(e->d_buf); */
-        e->d_buf = NULL;
-    }
-    e->loc = FARR_HOST;
-    e->dirty_host = 0;
-    e->dirty_dev  = 0;
+    (void)e;
+    return hexa_int(_hx_cuda_farr_device_free(id));
 #else
     (void)e;
-#endif
     return hexa_int(1);
+#endif
 }
 
 // farr_matmul_gpu(A, Ar, Ac, B, Bc) -> int. ABI-identical to the RFC 032
@@ -10566,16 +10563,28 @@ HexaVal hexa_farr_device_free(HexaVal h_v) {
 HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
                              HexaVal b_v, HexaVal bc_v) {
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase A impl: ensure A,B resident on device (auto-
-     * upload if needed), allocate device-resident C farr, call
-     * cublasDgemm(handle, NoTrans, NoTrans, N, M, K, &alpha, B_d, N,
-     * A_d, K, &beta, C_d, N), mark loc=FARR_DEVICE + dirty_host=1.
-     *
-     * Hard-fails until the GPU TU lands so the equivalence harness is
-     * forced to compare against the CPU oracle — never a silent fake
-     * GPU result. */
-    (void)a_v; (void)ar_v; (void)ac_v; (void)b_v; (void)bc_v;
-    return hexa_int(-1);
+    /* RFC 040 Phase A real impl (2026-05-16): cuBLAS Dgemm path via
+     * runtime_cuda.c TU. Shape: A is M×K row-major, B is K×N row-major,
+     * C is M×N row-major.
+     *   M = ar (rows of A); K = ac (cols of A = rows of B); N = bc (cols of B).
+     * Allocate a fresh host C farr (len M·N); the runtime_cuda.c TU
+     * uploads A,B H2D (idempotent), runs Dgemm device-side, copies C
+     * D2H so the host caller sees the result.
+     * Returns C farr_id (≥0) on success, -1 on error. */
+    int64_t M = hexa_as_num(ar_v);
+    int64_t K = hexa_as_num(ac_v);
+    int64_t N = hexa_as_num(bc_v);
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t b_id = hexa_as_num(b_v);
+    if (M <= 0 || K <= 0 || N <= 0) return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count) return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal c_h = hexa_farr_zeros(hexa_int(M * N));
+    int64_t c_id = hexa_as_num(c_h);
+    if (c_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_matmul_gpu(a_id, M, K, b_id, N, c_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(c_id);
 #else
     /* No-CUDA build: dispatcher routes to the RFC 032 CPU op. This is
      * the equivalence harness's POSITIVE branch — proves the dispatcher

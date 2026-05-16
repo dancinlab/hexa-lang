@@ -834,6 +834,34 @@ fn os_clang_ldflags() {
     return base
 }
 
+// ── anima RFC 040 Phase D — HEXA_CUDA real-cuBLAS link gate ───
+// When env HEXA_CUDA=1 AND a runtime_cuda.c sits next to runtime.c,
+// the native build adds `-DHEXA_CUDA <runtime_cuda.c> -lcublas -lcudart`
+// so farr_matmul_gpu routes to the real cuBLAS Dgemm body (the
+// `#ifdef HEXA_CUDA` extern surface already lives in self/runtime.c).
+// No-op (empty string) unless HEXA_CUDA=1 — every existing build is
+// byte-identical. CUDA include/lib auto-probed under common paths.
+fn cuda_build_cflags(self_dir) {
+    if env("HEXA_CUDA") != "1" { return "" }
+    if !file_exists(self_dir + "/runtime_cuda.c") { return "" }
+    let mut inc = "/usr/local/cuda/include"
+    if !file_exists(inc + "/cublas_v2.h") {
+        if file_exists("/usr/include/cublas_v2.h") { inc = "/usr/include" }
+    }
+    return "-DHEXA_CUDA -I" + inc + " "
+}
+fn cuda_build_ldflags(self_dir) {
+    if env("HEXA_CUDA") != "1" { return "" }
+    if !file_exists(self_dir + "/runtime_cuda.c") { return "" }
+    let mut lib = "/usr/local/cuda/lib64"
+    if !file_exists(lib + "/libcudart.so") {
+        if file_exists("/usr/lib/x86_64-linux-gnu/libcudart.so") {
+            lib = "/usr/lib/x86_64-linux-gnu"
+        }
+    }
+    return " '" + self_dir + "/runtime_cuda.c' -L" + lib + " -lcublas -lcudart"
+}
+
 // ── B20 / roadmap 55 Phase 1 — strict-FP clang flags ─────────
 // codegen_c2 emits `/* HEXA_STRICT_FP_TU: 1 */` at the top of generated
 // C when the translation unit contains any @strict_fp fn. Detect the
@@ -1852,7 +1880,7 @@ fn cmd_build(src, out, c_only, target) {
     let __runtime_c = __self_dir + "/runtime.c"
     let mut compile = ""
     if len(target) == 0 {
-        compile = "clang -O2 " + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        compile = "clang -O2 " + os_clang_cflags() + cuda_build_cflags(__self_dir) + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + os_clang_ldflags() + cuda_build_ldflags(__self_dir) + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {

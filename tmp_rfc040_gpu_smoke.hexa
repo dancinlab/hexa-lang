@@ -1,0 +1,143 @@
+// tmp_rfc040_gpu_smoke.hexa — anima RFC 040 Phase D REAL-GPU falsifiers.
+//
+// Sibling of tmp_rfc040_smoke.hexa (the no-CUDA scaffolding test that
+// asserts cuda_available()==0). THIS file is the HEXA_CUDA build variant:
+// it asserts the REAL cuBLAS Dgemm path on a CUDA host.
+//
+//   1 F-RFC040-GPU-AVAIL        — cuda_available()==1, device_count>=1
+//   2 F-RFC040-GPU-TODEVICE     — farr_to_device() real H2D returns 1
+//   3 F-RFC040-GPU-EQUIV-SMALL  — cuBLAS Dgemm == CPU oracle, exact int
+//   4 F-RFC040-GPU-EQUIV-RAND   — cuBLAS == CPU on 64x96 @ 96x48 LCG
+//                                 random, max|Δ| < TOL_MATMUL (1e-9)
+//   5 F-RFC040-GPU-DETERMINISM  — 3x cuBLAS Dgemm byte-identical
+//
+// 5/5 PASS on a real GPU + nvidia-smi Util>0 during run ⇒ RFC 040
+// Phase A real-cuBLAS body LANDED (g3-honest: no fake metrics).
+
+fn abs_d(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn max_abs_diff(c1: int, c2: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = abs_d(farr_get(c1, i) - farr_get(c2, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+// Deterministic LCG (Numerical Recipes constants) → [-1, 1) doubles.
+fn lcg_fill(h: int, n: int, seed0: int) {
+    let mut state = seed0
+    let mut i = 0
+    while i < n {
+        state = (state * 1664525 + 1013904223) % 2147483647
+        let u = (to_float(state) / 2147483647.0) * 2.0 - 1.0
+        let _s = farr_set(h, i, u)
+        i = i + 1
+    }
+}
+
+fn main() {
+    let mut pass = 0
+    let total = 5
+    let TOL = 0.000000001   // 1e-9 — RFC 040 §"Honest caveats" TOL_MATMUL
+
+    // ── F-RFC040-GPU-AVAIL ──────────────────────────────────────────
+    let avail = cuda_available()
+    let count = cuda_device_count()
+    if avail == 1 && count >= 1 {
+        println("PASS  F-RFC040-GPU-AVAIL  cuda_available=1 device_count=" + to_string(count) + " (real CUDA host)")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC040-GPU-AVAIL  avail=" + to_string(avail) + " count=" + to_string(count) + " (expected 1 / >=1 on CUDA host)")
+    }
+
+    // ── F-RFC040-GPU-TODEVICE ───────────────────────────────────────
+    let W = farr_zeros(8)
+    let mut wi = 0
+    while wi < 8 { let _w = farr_set(W, wi, to_float(wi) + 0.5) wi = wi + 1 }
+    let to_dev = farr_to_device(W)
+    let to_hst = farr_to_host(W)
+    if to_dev == 1 && to_hst == 1 && abs_d(farr_get(W, 3) - 3.5) < TOL {
+        println("PASS  F-RFC040-GPU-TODEVICE  farr_to_device=1 farr_to_host=1 round-trip exact (real H2D/D2H)")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC040-GPU-TODEVICE  to_dev=" + to_string(to_dev) + " to_hst=" + to_string(to_hst) + " W[3]=" + to_string(farr_get(W, 3)))
+    }
+    let _fw = farr_free(W)
+
+    // ── F-RFC040-GPU-EQUIV-SMALL — exact integer-valued 2x3 @ 3x2 ───
+    //   A=[[1,2,3],[4,5,6]] B=[[1,0],[0,1],[1,1]] C=[[4,5],[10,11]]
+    let A = farr_zeros(6)
+    let _a0 = farr_set(A,0,1.0) let _a1 = farr_set(A,1,2.0) let _a2 = farr_set(A,2,3.0)
+    let _a3 = farr_set(A,3,4.0) let _a4 = farr_set(A,4,5.0) let _a5 = farr_set(A,5,6.0)
+    let B = farr_zeros(6)
+    let _b0 = farr_set(B,0,1.0) let _b1 = farr_set(B,1,0.0) let _b2 = farr_set(B,2,0.0)
+    let _b3 = farr_set(B,3,1.0) let _b4 = farr_set(B,4,1.0) let _b5 = farr_set(B,5,1.0)
+    let C_cpu = farr_matmul(A, 2, 3, B, 2)
+    let C_gpu = farr_matmul_gpu(A, 2, 3, B, 2)
+    if C_gpu < 0 {
+        println("FAIL  F-RFC040-GPU-EQUIV-SMALL  farr_matmul_gpu returned " + to_string(C_gpu) + " (cuBLAS path errored)")
+    } else {
+        let sd = max_abs_diff(C_cpu, C_gpu, 4)
+        let exact = abs_d(farr_get(C_gpu,0)-4.0) + abs_d(farr_get(C_gpu,1)-5.0) + abs_d(farr_get(C_gpu,2)-10.0) + abs_d(farr_get(C_gpu,3)-11.0)
+        if sd < TOL && exact < TOL {
+            println("PASS  F-RFC040-GPU-EQUIV-SMALL  cuBLAS Dgemm == CPU oracle == [[4,5],[10,11]] (max|Δ|=" + to_string(sd) + " < 1e-9)")
+            pass = pass + 1
+        } else {
+            println("FAIL  F-RFC040-GPU-EQUIV-SMALL  max|Δ|=" + to_string(sd) + " exact_err=" + to_string(exact))
+        }
+    }
+
+    // ── F-RFC040-GPU-EQUIV-RAND — 64x96 @ 96x48 LCG random ──────────
+    let M = 64
+    let K = 96
+    let N = 48
+    let RA = farr_zeros(M * K)
+    let RB = farr_zeros(K * N)
+    lcg_fill(RA, M * K, 12345)
+    lcg_fill(RB, K * N, 67890)
+    let RC_cpu = farr_matmul(RA, M, K, RB, N)
+    let RC_gpu = farr_matmul_gpu(RA, M, K, RB, N)
+    if RC_gpu < 0 {
+        println("FAIL  F-RFC040-GPU-EQUIV-RAND  farr_matmul_gpu returned " + to_string(RC_gpu))
+    } else {
+        let rd = max_abs_diff(RC_cpu, RC_gpu, M * N)
+        if rd < TOL {
+            println("PASS  F-RFC040-GPU-EQUIV-RAND  cuBLAS == CPU on 64x96@96x48 LCG-random (max|Δ|=" + to_string(rd) + " < TOL_MATMUL 1e-9)")
+            pass = pass + 1
+        } else {
+            println("FAIL  F-RFC040-GPU-EQUIV-RAND  max|Δ|=" + to_string(rd) + " >= TOL 1e-9 (cuBLAS reduction-order drift exceeds Dgemm fp64 bound)")
+        }
+    }
+
+    // ── F-RFC040-GPU-DETERMINISM — 3x cuBLAS byte-identical ─────────
+    let D1 = farr_matmul_gpu(RA, M, K, RB, N)
+    let D2 = farr_matmul_gpu(RA, M, K, RB, N)
+    let D3 = farr_matmul_gpu(RA, M, K, RB, N)
+    if D1 < 0 || D2 < 0 || D3 < 0 {
+        println("FAIL  F-RFC040-GPU-DETERMINISM  one of D1/D2/D3 < 0")
+    } else {
+        let g12 = max_abs_diff(D1, D2, M * N)
+        let g23 = max_abs_diff(D2, D3, M * N)
+        if g12 == 0.0 && g23 == 0.0 {
+            println("PASS  F-RFC040-GPU-DETERMINISM  3x cuBLAS Dgemm byte-identical (Δ_12=0.0 Δ_23=0.0)")
+            pass = pass + 1
+        } else {
+            println("FAIL  F-RFC040-GPU-DETERMINISM  Δ_12=" + to_string(g12) + " Δ_23=" + to_string(g23))
+        }
+    }
+
+    println("")
+    println("=== RFC040 GPU smoke: " + to_string(pass) + "/" + to_string(total) + " PASS ===")
+    if pass == total {
+        println("PASS — anima RFC 040 Phase D real-cuBLAS LANDED (HEXA_CUDA build, real GPU, cuBLAS==CPU within 1e-9)")
+    } else {
+        println("FAIL — RFC 040 Phase D real-GPU smoke incomplete")
+    }
+}
