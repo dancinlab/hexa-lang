@@ -3154,6 +3154,13 @@ static HexaValMark __hexa_val_marks[HEXA_VAL_MARK_STACK_CAP];
 int __hexa_val_mark_top = 0;            // count of pushed marks (extern-visible)
 int __hexa_val_force_heap = 0;          // when set, valstruct_new_v uses heap (codegen refs this)
 static int __hexa_val_arena_enabled = -1;  // -1 = lazy probe
+// F6 option A — A3 (PLAN-stage3-footprint-F6-optA.md). When non-zero,
+// __hexa_fn_arena_return routes its return through
+// hexa_val_arena_heapify_to_parent (region-promote into the caller's
+// arena frame) instead of hexa_val_heapify (escape to malloc). Default
+// 0 — behaviour byte-identical to pre-A3. Toggled at the streaming-loop
+// boundary via env("__HEXA_ARENA_RETURN_REGION_ON__" / "_OFF__").
+static int __hexa_val_region_returns_enabled = 0;
 
 static int hexa_val_arena_on(void) {
     if (__hexa_val_arena_enabled < 0) {
@@ -3928,6 +3935,13 @@ HexaVal __hexa_fn_arena_return(HexaVal ret) {
     if (tag == TAG_INT || tag == TAG_FLOAT || tag == TAG_BOOL || tag == TAG_VOID) {
         hexa_val_arena_scope_pop();
         return ret;
+    }
+    // F6 option A — A3: when region returns are enabled (default OFF;
+    // streaming loop toggles via env hook), promote into the caller's
+    // arena frame instead of escaping to malloc. hexa_val_arena_heapify_
+    // to_parent does the scope_pop itself, so we return immediately.
+    if (__hexa_val_region_returns_enabled) {
+        return hexa_val_arena_heapify_to_parent(ret);
     }
     ret = hexa_val_heapify(ret);
     hexa_val_arena_scope_pop();
@@ -10655,6 +10669,23 @@ HexaVal hexa_env_var(HexaVal name) {
         }
         if (strcmp(op, "ENABLED__") == 0) {
             return hexa_str(hexa_val_arena_on() ? "1" : "0");
+        }
+        // F6 option A — A3 (PLAN-stage3-footprint-F6-optA.md). Toggle
+        // region-promote on fn-return for the active frame. ON routes
+        // __hexa_fn_arena_return through hexa_val_arena_heapify_to_parent
+        // (callee region → parent arena). OFF restores the default
+        // heapify-to-malloc behaviour. Default OFF on process start.
+        if (strcmp(op, "RETURN_REGION_ON__") == 0) {
+            __hexa_val_region_returns_enabled = 1;
+            return hexa_str("1");
+        }
+        if (strcmp(op, "RETURN_REGION_OFF__") == 0) {
+            __hexa_val_region_returns_enabled = 0;
+            return hexa_str("0");
+        }
+        if (strcmp(op, "RETURN_REGION__") == 0) {
+            // Query current state.
+            return hexa_str(__hexa_val_region_returns_enabled ? "1" : "0");
         }
         if (strcmp(op, "STATS__") == 0) {
             char buf[64];
