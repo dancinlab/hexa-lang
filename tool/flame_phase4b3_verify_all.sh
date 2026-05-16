@@ -80,7 +80,7 @@ done
 
 # ── IPCP build sanity (byte-id check) ───────────────────────────────
 echo ""
-echo "── IPCP build sanity ──"
+echo "── IPCP build sanity (Phase 4-B-2) ──"
 if [ -x tool/flame_phase4b_build.sh ]; then
     tool/flame_phase4b_build.sh stdlib/flame/flame_d32_corpus_test.hexa build/flame_d32_ipcp_check > /tmp/ipcp_build.log 2>&1
     if [ -f build/flame_d32_ipcp_check ]; then
@@ -103,10 +103,35 @@ else
     echo "  SKIP  tool/flame_phase4b_build.sh not executable"
 fi
 
+# ── A2 primitive build sanity (byte-id check, Phase 4-B-3 SHIPPED) ──
+echo ""
+echo "── A2 primitive build sanity (Phase 4-B-3 A2 SHIPPED) ──"
+if [ -x tool/flame_phase4b3_a2_build.sh ]; then
+    tool/flame_phase4b3_a2_build.sh stdlib/flame/flame_d32_corpus_test.hexa build/flame_d32_a2_check > /tmp/a2_build.log 2>&1
+    if [ -f build/flame_d32_a2_check ]; then
+        ./build/flame_d32_a2_check > /tmp/a2_check.out 2>&1
+        if [ -f /tmp/baseline.out ]; then
+            if diff -q /tmp/baseline.out /tmp/a2_check.out > /dev/null; then
+                echo "  PASS  A2 primitive build byte-id with /tmp/baseline.out"
+            else
+                echo "  FAIL  A2 primitive build diff vs baseline"
+                fail_count=$((fail_count + 1))
+            fi
+        else
+            echo "  SKIP  /tmp/baseline.out not present"
+        fi
+    else
+        echo "  BUILD-FAIL  A2 wrapper produced no binary"
+        fail_count=$((fail_count + 1))
+    fi
+else
+    echo "  SKIP  tool/flame_phase4b3_a2_build.sh not executable"
+fi
+
 echo ""
 echo "═══ verification battery complete ═══"
 if [ $fail_count -eq 0 ]; then
-    echo "PASS  All Phase 4-B-3 verification artifacts PASS (5 leaf byte-eq + 3 mechanism probes + IPCP byte-id)"
+    echo "PASS  All Phase 4-B-3 verification artifacts PASS (5 leaf byte-eq + 3 mechanism probes + IPCP byte-id + A2 byte-id)"
     exit 0
 else
     echo "FAIL  $fail_count failures — review output above"
