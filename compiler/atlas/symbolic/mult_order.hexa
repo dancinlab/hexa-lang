@@ -1,0 +1,137 @@
+// compiler/atlas/symbolic/mult_order.hexa — multiplicative-order / primitive-root engine
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of the multiplicative-generator algorithm referenced by
+// generator_finder.py / n6_uniqueness_tester.py (archive-TECS-L/.shared/calc,
+// commit 4ee05c39; TECS-L absorption Wave 4 — manifest §Backlog #15 residual:
+// "mult_order/primitive_root remains a future NT primitive").
+//
+// Standard closed-form / finite number-theoretic kernels (EXACT integer
+// arithmetic — modular exponentiation by squaring, no float):
+//   T1  mo_order(a,n)        multiplicative order of a in (Z/nZ)*  =
+//                            smallest k≥1 with a^k ≡ 1 (mod n)
+//   T2  mo_is_primitive_root a is a primitive root mod n ⟺ order = φ(n)
+//   T3  mo_primitive_root(n) the least primitive root mod n, or 0 if (Z/nZ)*
+//                            is non-cyclic (no primitive root exists)
+//   T4  mo_count_primitive   number of primitive roots mod n = φ(φ(n))
+//                            when a primitive root exists, else 0
+//
+// n=6 anchor: (Z/6Z)* = {1,5}, φ(6)=2, the group is cyclic of order 2 with
+// primitive root 5 (5²=25≡1 mod 6). 6 is the largest n for which EVERY unit
+// is a primitive root (units {1,5}: 1 has order 1, 5 has order 2=φ(6)).
+//
+// Zero external dependency (g5). Cross-link: manifest §C generator_finder /
+// §Backlog #15 residual NT primitive.
+
+fn _mo_gcd(a: int, b: int) -> int {
+    let mut x = a
+    let mut y = b
+    if x < 0 { x = 0 - x }
+    if y < 0 { y = 0 - y }
+    while y != 0 {
+        let t = y
+        y = x % y
+        x = t
+    }
+    return x
+}
+
+// Euler totient φ(n) via prime-factor product.
+pub fn mo_phi(n: int) -> int {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    let mut result = n
+    let mut m = n
+    let mut p = 2
+    while p * p <= m {
+        if m % p == 0 {
+            while m % p == 0 { m = m / p }
+            result = result - result / p
+        }
+        p = p + 1
+    }
+    if m > 1 { result = result - result / m }
+    return result
+}
+
+// modular exponentiation: a^e mod n  (binary / square-and-multiply).
+pub fn mo_powmod(a: int, e: int, n: int) -> int {
+    if n <= 1 { return 0 }
+    let mut base = a % n
+    if base < 0 { base = base + n }
+    let mut exp = e
+    let mut result = 1
+    while exp > 0 {
+        if exp % 2 == 1 { result = (result * base) % n }
+        base = (base * base) % n
+        exp = exp / 2
+    }
+    return result
+}
+
+// ── T1 : multiplicative order ────────────────────────────────────────────
+// smallest k ≥ 1 with a^k ≡ 1 (mod n); 0 if a not a unit (gcd(a,n)≠1).
+pub fn mo_order(a: int, n: int) -> int {
+    if n <= 1 { return 0 }
+    let mut am = a % n
+    if am < 0 { am = am + n }
+    if _mo_gcd(am, n) != 1 { return 0 }
+    let phi = mo_phi(n)
+    // order divides φ(n); scan k = 1..φ(n) (correct even without divisor opt)
+    let mut k = 1
+    let mut cur = am
+    while k <= phi {
+        if cur == 1 { return k }
+        cur = (cur * am) % n
+        k = k + 1
+    }
+    return 0
+}
+
+// ── T2 : primitive-root predicate ────────────────────────────────────────
+// a is a primitive root mod n ⟺ ord_n(a) = φ(n).
+pub fn mo_is_primitive_root(a: int, n: int) -> bool {
+    if n <= 1 { return false }
+    let ord = mo_order(a, n)
+    if ord == 0 { return false }
+    return ord == mo_phi(n)
+}
+
+// ── T3 : least primitive root mod n (0 if none — non-cyclic group) ───────
+pub fn mo_primitive_root(n: int) -> int {
+    if n <= 1 { return 0 }
+    let mut a = 1
+    while a < n {
+        if _mo_gcd(a, n) == 1 {
+            if mo_is_primitive_root(a, n) { return a }
+        }
+        a = a + 1
+    }
+    return 0
+}
+
+// is (Z/nZ)* cyclic (does a primitive root exist)?
+pub fn mo_has_primitive_root(n: int) -> bool {
+    return mo_primitive_root(n) != 0
+}
+
+// ── T4 : count of primitive roots mod n ──────────────────────────────────
+// when (Z/nZ)* is cyclic, the count is φ(φ(n)); else 0.
+pub fn mo_count_primitive(n: int) -> int {
+    if !mo_has_primitive_root(n) { return 0 }
+    return mo_phi(mo_phi(n))
+}
+
+// direct enumeration count (sanity cross-check against T4 closed form).
+pub fn mo_count_primitive_scan(n: int) -> int {
+    if n <= 1 { return 0 }
+    let mut cnt = 0
+    let mut a = 1
+    while a < n {
+        if mo_is_primitive_root(a, n) { cnt = cnt + 1 }
+        a = a + 1
+    }
+    return cnt
+}
