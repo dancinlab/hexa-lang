@@ -70,10 +70,23 @@ if uname == "Linux" {
     ldflags = ""
 }
 
-println("[build_dispatch] uname=" + uname)
-println("[build_dispatch] " + clang + " " + cflags + " " + src + " -o " + out + " " + ldflags)
+// 2026-05-16: hexa_v2 model drift — older transpile emitted self-contained
+// `#include "runtime.c"` (single-TU, links alone); current hexa_v2 emits
+// decl-only `#include "runtime.h"` and expects runtime.c to be a separate
+// TU. Detect & adapt (robust to BOTH emission models — no dup symbols):
+//   src has `#include "...runtime.c"`  → single-TU, link src alone (old)
+//   src has only runtime.h             → append self/runtime.c TU (new)
+let _rtc_inc = exec("grep -c 'include[^\"]*\"[^\"]*runtime\\.c\"' " + src + " 2>/dev/null").trim()
+let mut rtc = ""
+if _rtc_inc == "0" {
+    rtc = " " + hexa_dir + "/self/runtime.c"
+}
 
-let compile_result = exec_with_status(clang + " " + cflags + " " + src + " -o " + out + " " + ldflags)
+println("[build_dispatch] uname=" + uname)
+println("[build_dispatch] runtime-model: " + (if _rtc_inc == "0" { "separate-TU (+self/runtime.c)" } else { "self-contained (#include runtime.c)" }))
+println("[build_dispatch] " + clang + " " + cflags + " " + src + rtc + " -o " + out + " " + ldflags)
+
+let compile_result = exec_with_status(clang + " " + cflags + " " + src + rtc + " -o " + out + " " + ldflags)
 if compile_result[1] != 0 {
     eprintln("error: compilation failed (exit " + str(compile_result[1]) + ")")
     exit(1)
