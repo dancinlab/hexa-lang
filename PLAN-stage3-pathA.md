@@ -69,3 +69,39 @@ checkpoints of one entangled unit whose sole correctness gate is S4's
 byte-diff. No commit in S1–S3 will be described as a verified milestone.
 Tree-safety invariant: every commit must still `clang -c` cleanly (the
 assemble milestone is never regressed) so S4 is always reachable.
+
+## S4 status (empirical, real pipeline)
+
+A′ value-model PROVEN: clang -c -arch arm64 the A′-emitted .s →
+rc=0, 0 errors, .o ~1.59MB (21457 asm errors driven to 0 across
+ldp/stp-offset, frame-imm, hexa_add_slow fixes). builtin box-
+lowering complete (sha256/println renames; len→int-box; contains/
+starts_with→bool-box; has_key→cstring+bool; is_alpha/is_alphanumeric
+runtime shims). **ld Undefined: 10 → 1 — the SOLE remaining link
+blocker is `_main`.**
+
+### Final S4 unit — `_main` entry synthesis (front-end + lowering + codegen)
+
+Root cause (precise): compiler/main.hexa is script-style (15 fns +
+large top-level driver stmts L640-777, no `fn main`). The new
+front-end drops it: `hir_to_mir.lower_hir` (hir_to_mir.hexa:1623)
+processes ONLY ITEM_FN (→MFunc) and ITEM_LET (→ a global Local
+slot — **the initializer RHS is dropped**); it never captures
+module top-level statements and never synthesises an entry. hexa_v2
+(C path) is the only thing that ever produced an entry (its
+generated `int main(){ hexa_set_args; __hexa_strlit_init;
+<global inits>; <top-level stmts> }`).
+
+Required (mirror hexa_v2 main):
+  1. parser/AST: ensure module top-level executable statements +
+     each ITEM_LET initializer expr are retained in the Module
+     (today lower_hir can't see them — confirm parser representation
+     first; may be an AST/Module gap, not just lowering).
+  2. lowering: synthesise a `main` HIR→MIR MFunc = [ global-init
+     assignments in source order ; top-level driver stmts ].
+  3. codegen (arm64_darwin): emit that MFunc with the C-ABI `_main`
+     label + an `hexa_set_args(argc,argv)` prologue (argc=w0/x0,
+     argv=x1 per AAPCS64 `int main(int,char**)`), NOT the mangled
+     hexa symbol.
+Then: link .o + runtime.c → stage-2 → run stage-2 self-compile →
+byte-diff vs stage-1 .s = the S4 verdict (stage-3 fixed point ⇒ E2).
