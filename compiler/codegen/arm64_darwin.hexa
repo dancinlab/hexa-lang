@@ -740,6 +740,41 @@ fn _arm64_dst_reg(rm: RegMap, id: i64) -> string {
     return _arm_reg_lookup(rm, id)
 }
 
+// Builtin call target → runtime ABI symbol. Only builtins whose
+// runtime.c signature is verified `HexaVal X(HexaVal…)` (i.e. matches
+// the new codegen's uniform-HexaVal register ABI, args x0-x7 / return
+// x0) are mapped here — for those a pure symbol rename is ABI-correct
+// (codegen_c2's hexa_int()/hexa_bool() wrappers are C-expression
+// boxing artifacts, irrelevant at the register ABI). Builtins whose
+// runtime fn returns int/void (len/contains/starts_with/has_key/
+// println), needs cstring-arg conversion (has_key), or has no runtime
+// symbol at all (is_alpha/is_alphanumeric — codegen_c2 inline-expands)
+// are intentionally NOT mapped: they pass through unchanged (stay
+// undefined → link still gated) rather than silently mis-run. That
+// residual is the precisely-scoped final builtin-lowering sub-unit.
+// Non-builtin (hexa user fn) names pass through → normal mangling.
+fn _builtin_runtime_sym(name: string) -> string {
+    if name == "args"          { return "hexa_args" }
+    if name == "char_code_at"  { return "hexa_str_char_code_at" }
+    if name == "chars"         { return "hexa_str_chars" }
+    if name == "eprintln"      { return "hexa_eprintln" }
+    if name == "exec"          { return "hexa_exec" }
+    if name == "file_exists"   { return "rt_file_exists" }
+    if name == "index_of"      { return "hexa_array_index_of" }
+    if name == "join"          { return "hexa_str_join" }
+    if name == "push"          { return "hexa_array_push" }
+    if name == "read_file"     { return "rt_read_file" }
+    if name == "replace"       { return "hexa_str_replace" }
+    if name == "split"         { return "hexa_str_split" }
+    if name == "substring"     { return "hexa_str_substring" }
+    if name == "to_int"        { return "hexa_to_int" }
+    if name == "to_string"     { return "hexa_to_string" }
+    if name == "trim"          { return "rt_str_trim" }
+    if name == "type_of"       { return "hexa_type_of" }
+    if name == "write_file"    { return "rt_write_file" }
+    return name
+}
+
 fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                     st: ArmStrTab, rm: RegMap, spill_frame: i64) -> [LInstr] {
     let mut buf = out
@@ -940,7 +975,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             }
             i = i + 1
         }
-        let target = s.op
+        let target = _builtin_runtime_sym(s.op)
         buf.push(_arm64_instr1("bl", _arm64_op_label(target), "call " + target))
         if s.dst.id >= 0 {
             let dst = _arm64_op_reg(_arm64_dst_reg(rm, s.dst.id))
