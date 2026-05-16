@@ -9535,10 +9535,18 @@ HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
     if (ae->len < M * K)                    return hexa_int(-1);
     if (be->len < K * N)                    return hexa_int(-1);
     // Allocate output farr (zero-filled by hexa_farr_zeros).
+    // NOTE: hexa_farr_zeros may realloc() _hx_farr_table when capacity grows,
+    // which MOVES every HexaFarrEntry — ae/be captured above become dangling.
+    // Re-fetch ALL entry pointers by id AFTER the allocation. (Fixes a
+    // use-after-realloc segfault in chained matvec, e.g. anima
+    // HEXAD/BRIDGE/bridge_forward.)
     HexaVal c_handle = hexa_farr_zeros(hexa_int(M * N));
     int64_t c_id = HX_INT(c_handle);
     if (c_id < 0 || c_id >= _hx_farr_count) return hexa_int(-1);
+    ae = &_hx_farr_table[a_id];
+    be = &_hx_farr_table[b_id];
     HexaFarrEntry* ce = &_hx_farr_table[c_id];
+    if (!ae->buf || !be->buf)               return hexa_int(-1);
     if (!ce->buf || ce->len < M * N)        return hexa_int(-1);
     const double* A = ae->buf;
     const double* B = be->buf;
@@ -9603,6 +9611,9 @@ HexaVal hexa_farr_copy(HexaVal src_v) {
     HexaVal dst_handle = hexa_farr_zeros(hexa_int(n));
     int64_t dst_id = HX_INT(dst_handle);
     if (dst_id < 0 || dst_id >= _hx_farr_count) return hexa_int(-1);
+    // hexa_farr_zeros may realloc() _hx_farr_table — `se` captured above is
+    // now dangling. Re-fetch BOTH entry pointers by id after the allocation.
+    se = &_hx_farr_table[src_id];
     HexaFarrEntry* de = &_hx_farr_table[dst_id];
     if (n > 0 && de->buf && se->buf) {
         memcpy(de->buf, se->buf, (size_t)n * sizeof(double));
