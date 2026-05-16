@@ -76,18 +76,30 @@ referenced. This is a prerequisite for every option below, call it **P0**:
 >     o.str_val)` (arm64_darwin.hexa:540) carries the MFunc string. Since
 >     `_arm_strtab_collect_fn` interns every `const_str` before codegen,
 >     the miss path should be unreachable — but harden it with a copy.
->   - **P0e** non-string sharing (arrays / nested structs MFunc↔LFunc↔
->     hmodule) — NOT YET AUDITED. The four edges above are string-only.
+>   - **P0c-2** `MFunc.name ← HItem.name` — CONFIRMED. `_lower_fn` returns
+>     `MFunc { name: it.name, ... }` (hir_to_mir.hexa:1573) — shares the
+>     HItem name handle. Fix: copy.
+>   - **P0e** non-string sharing — **AUDITED CLEAN.** `_lower_fn` builds
+>     `params`/`locals`/`blocks` as fresh arrays from a fresh `LowerCtx`;
+>     `_arm64_lower_func` builds `instrs` fresh. Neither takes an
+>     array/struct *container* by reference from a longer-lived value.
+>     All cross-lifetime sharing is **string-leaf only** — the edges
+>     above are the complete set.
+>
+> **Audit complete.** The escape edges are P0a, P0b, P0c, P0c-2, P0d —
+> all string leaves, all found, no arbitrary substructure sharing (P0e).
+> Option C is therefore **fully enumerable**: forced-copy these five and
+> the per-function IR is provably isolated, so `free_tree` is sound.
 >
 > **Residency subtlety.** `__hexa_fn_arena_return`'s heapify copies only
 > *arena*-resident strings (the `f4b597a7` envelope returns already-heap
-> pointers untouched). So whether an edge is live depends on each
-> string's arena-vs-heap residency at return time — *not* statically
-> decidable. This is exactly why P0 must be a **forced** copy
-> (`s.substring(0,len(s))` always allocates): a forced copy is
-> residency-independent, so each longer-lived structure owns its strings
-> regardless. It is also the reason A (uniform region promotion) is
-> cleaner than C (per-edge, must enumerate exhaustively incl. P0e).
+> pointers untouched). So whether a given edge is live at runtime depends
+> on each string's arena-vs-heap residency at return time — not
+> statically decidable. This is why each P0x fix must be a **forced**
+> copy (`s.substring(0,len(s))` always allocates): a forced copy is
+> residency-independent, so the longer-lived structure owns its strings
+> regardless. With the audit complete and the edge set closed, C is the
+> low-blast-radius path; A remains the principled end-state.
 >
 > P0 is needed for **B and C**, not A — A's region model promotes on
 > escape automatically. Each P0x lands independently; P0c/P0d must be
