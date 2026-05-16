@@ -1,9 +1,15 @@
 # flame — hexa-native, compiler-only PyTorch-equivalent NN stdlib
 
-> **Status: DESIGN + SCAFFOLD (2026-05-16). ZERO implementation.** This
-> directory is the durable HOME + consolidation index for the RFC 040→043
-> GPU campaign. Implementation is gated on RFC 043 review + Phase 0
-> (dependency land + branch consolidation). Nothing here builds yet.
+> **Status: Phase 1 LANDED (2026-05-16) — `tensor_lib` + `autograd_lib`
+> + entrypoint selftest 3/3 PASS on compiled-native, regression 0.**
+> See `PLAN.md` `## 진행 로그` + `FLAME.tape` `## Log`. Phase 2 (nn
+> layers) is the next gate.
+>
+> **Pair**: `flame` (this directory — hexa NN stdlib) ↔ `self/forge/`
+> (the GPU compute substrate: cuBLAS + .cu kernels). See AGENTS.tape §0
+> `nn_stack`. Analog: `flame:forge :: torch:ATen`. The
+> language-separation (hexa source vs C/CUDA runtime) is enforced by
+> directory.
 
 `flame` is to hexa-lang what `torch` is to Python: a cohesive
 **Tensor + autograd + nn + optim + GPU** stack — but **compiler-only**
@@ -84,3 +90,7 @@ See PLAN.md phases.
 - Full preservation index + verified oracles: **`FLAME.tape` §X**
 - Roadmap + Phase 0 consolidation: **`PLAN.md`**
 - anima dual-track + §9: `dancinlab/anima HEXAD/PLAN.md` §9
+- Substrate sibling (GPU): `self/forge/` — README + PLAN + FORGE.tape
+  (flame consumes forge's `farr_*_gpu` / `cuda_*` compiled builtins;
+  Phase 1 uses host CPU `farr_matmul` per honest carve-out — device
+  routing is Phase 4 after RFC 041/042 codegen wiring lands)

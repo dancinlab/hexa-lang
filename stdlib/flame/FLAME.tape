@@ -23,7 +23,7 @@
   kind = "hexa-native compiler-only PyTorch-equivalent NN training stdlib"
   brief = "Tensor + reverse-mode autograd + nn layers + AdamW + cuBLAS, hexa build-native, ZERO hexa_interp dispatch"
   analog = "flame:hexa :: torch:Python (torch = handheld flame; project 'fire' 어휘 정합)"
-  status = "DESIGN + SCAFFOLD 2026-05-16 — implementation NOT started, gated on RFC 043 review + PLAN Phase 0"
+  status = "Phase 0 CLEARED 2026-05-16 (preservation verified) → Phase 1 (tensor_lib + autograd_lib) IN PROGRESS"
   parent_rfc = "RFC 043 (inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md)"
   structure = "fat native stdlib + thin hexa orchestration ⟹ no heavy interpreted driver loop (RFC 042 ceiling closed structurally)"
 
@@ -63,12 +63,22 @@
 
 @D g_flame_preservation := "물거품 방지 — 캠페인 산출물 보존" :: governance [required d=2026-05-16 active]
   rule = "RFC 040→043 campaign 의 모든 산출물은 §X 에 정확한 branch·SHA·path·RFC# 로 참조-기록. 이동(move)은 flame 에 진짜 속하고 타처 load-bearing 아닌 것만; 그 외 전부 참조(reference) — 중복 금지(drift-avoidance g3)."
-  biggest_risk = "5 scattered hexa-lang branches (실 cuBLAS impl + 11 farr ops + interp fix) → PLAN Phase 0 branch consolidation 으로 해소 (orphan-branch loss 방지)"
+  biggest_risk = "RESOLVED 2026-05-16 (Phase 0 진단 — g3 실측). '5 scattered branches' = 부정확 프레이밍. 실측: 5개 캠페인 브랜치 tip + §X 9개 load-bearing SHA 전부가 rfc043-hexa-torch (a8bc5e08) 의 strict 선형 ancestor (divergent tail = 0); origin/rfc043-hexa-torch == 로컬 바이트동일 (push 완료, 5 브랜치 모두 origin 독립 push 이중망). orphan-loss 위험 실재 안 함."
+  residual = "잔여 = main-divergence (only). 로컬 main 1f1c3403 stale (origin/main 대비 0 ahead / 22 behind = 타 세션 interp-retirement R1/R2/R3 + F6-A in-flight). rfc043 는 origin/main 의 FF 아님 → 메인라인 통합은 merge 필요. 이는 후순위 분리작업이며 Phase 1 blocker 아님 (interp-retirement R3 안정화 후 화해)."
+  phase0_acceptance = "MET — 모든 campaign artifact §X 에서 해석가능 + 검증완료(origin==local); 미통합 load-bearing orphan 브랜치 없음. Phase 1 = rfc043-hexa-torch 에서 진행."
   cross_repo = "anima evidence/arch/oracle = anima 잔류, §X 참조만 (cross-repo, 복제 X)"
   @> PLAN.md
 
 @D g_flame_api_fixed := "API 고정, 구현 성숙으로 단계화" :: governance [required d=2026-05-16 active]
   rule = "API 표면 RFC 043 에서 1회 설계·고정. 'PyTorch-parity → exceed' = 같은 API 의 구현 성숙 (PyTorch eager→Inductor 패턴), 파일/API 분기 아님."
+  @> PLAN.md
+
+@D g_flame_phase1_falsifiers := "Phase 1 falsifier 사전등록 (구현 전 고정)" :: governance [required d=2026-05-16 active]
+  scope = "Phase 1 = tensor_lib.hexa (RFC 040 device-farr residence) + autograd_lib.hexa (RFC 034 tape generalized)"
+  F_RFC043_BUILD = "`hexa build` 가 flame stdlib (lib-split) 의 native 바이너리를 0 clang redefinition 으로 산출; 어떤 stdlib op 에서도 hexa_interp dispatch 도달 불가 (compiler-only 를 구조적으로 검증, 가정 아님)"
+  F_RFC043_AG_EQ = "일반화된 autograd tape 가 RFC 034 의 landed exact 결과를 RFC 034 자신의 reference 에 재현 (closed B-D-4 CE-softmax Jacobian max|grad−(softmax−onehot)| = 0.0); 전체 layer-set tape 는 central-difference GRAD-EXACT PASS ([@x_oracle_cpu_bitequal] GRAD-EXACT 가 reference). AOT 경로가 exact-grad correctness 를 깨면 FAIL"
+  rule = "두 falsifier 는 compiled-native 경로(`hexa build`, no interp/py)에서만 PASS 인정. F-RFC043-AG-EQ 는 connection-point closed check — 구조검증('tape 가 돌았다')로 대체 불가 (g_blue_closed_mandate). 가짜 target 금지 — reference 는 §X verified oracle."
+  authority = "RFC 043 §Verification + anima g_blue_closed_mandate · g3 · f1/f2"
   @> PLAN.md
 
 # ─── §X External citations — PRESERVATION INDEX (참조-보존) ──────────
@@ -155,3 +165,32 @@ flame/ 스캐폴드 (README + PLAN + FLAME.tape). RFC 043 filed `4dcaf80f`.
 §X = RFC 040→043 campaign 전 산출물 참조-보존 인덱스 (branch·SHA·path·
 RFC# + verified oracles). g_flame_preservation: 물거품 방지 = §X 참조 +
 PLAN Phase 0 branch 통합. 구현 0 — 사용자 검토·go 대기.
+
+### 2026-05-16 — Phase 0 CLEARED (preservation 실측 검증, g3)
+git 실측: rfc043-hexa-torch (a8bc5e08) 가 5개 캠페인 브랜치 tip + §X
+9개 load-bearing SHA 전부의 strict 선형 ancestor (divergent tail 0).
+origin/rfc043-hexa-torch == 로컬 바이트동일 (push 완료). → 'orphan-branch
+loss' 위험 실재 안 함; Phase 0 acceptance 이미 충족. '5 scattered
+branches merge/rebase' 프레이밍은 부정확 → 정정. 잔여 = main-divergence
+(타 세션 interp-retirement in-flight) = 후순위 분리작업, Phase 1 blocker
+아님. 사용자 결정: option A (현상유지 + SSOT 정정 + Phase 1 착수).
+
+### 2026-05-16 — Phase 1 START (tensor_lib + autograd_lib)
+falsifier 사전등록: g_flame_phase1_falsifiers (F-RFC043-BUILD,
+F-RFC043-AG-EQ). 구현은 rfc043-hexa-torch 에서 진행 (full substrate
+lineage 보유: RFC 040 device-farr + RFC 034 autograd tape).
+
+### 2026-05-16 — Phase 1 PASS (3/3 + regression 0, compiled-native)
+flame.hexa + tensor_lib.hexa + autograd_lib.hexa LANDED. selftest 결과
+(`build/flame_phase1`, Mac no-CUDA):
+- F-RFC043-BUILD       PASS (clang redef 0; `grep call_builtin
+  flame_phase1.c` = 0; `hexa_ad_*`/`hexa_farr_*` 9 direct C-calls =
+  structural compiler-only 검증, 가정 아님)
+- F-RFC043-AG-EQ       PASS (max|ag_grad − (softmax − onehot)| = 0.0
+  < 1e-9 — anima B-D-4 closed Jacobian bit-equal · connection-point
+  closed (g_blue_closed_mandate met))
+- F-RFC043-DETERMINISM PASS (seed=42 trajectory 두 run byte-identical)
+- F-RFC043-MODULE-REGRESSION-0 PASS (RFC 034 5/5 + RFC 040 B2 9/9
+  re-build 후 동일 PASS, 동일 numerics)
+Phase 2 (nn layers) gate 충족. API 표면 RFC 043 에서 고정(`g_flame_api_fixed`)
+이므로 Phase 2 는 `t_*`/`ag_*` signature 불변 + layer wrappers 추가.

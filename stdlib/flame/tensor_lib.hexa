@@ -1,0 +1,96 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/tensor_lib.hexa — flame Phase 1 (RFC 043)
+//
+// Tensor surface over RFC 040 device-farr (host-resident this phase).
+//   `flame` 의 Tensor = (farr_id, rank, dims) — a farr_id + shape metadata.
+//   shape 는 호출자가 알고 다님 (Phase 1 minimal — opaque shape store 는
+//   Phase 2 에서 layer-side 로 들어감); 본 lib 는 storage + ops 만 제공.
+//
+// 본 파일은 lib-only (no `main`, no top-level side effects) — `flame.hexa`
+// 가 entrypoint 에서 import 한다.
+//
+// Compiled-native 만 — `hexa build` 의 codegen_c2 가 wires:
+//   farr_zeros · farr_len · farr_free · farr_copy · farr_get · farr_set
+//   · farr_matmul (RFC 032 CPU)
+//
+// HONEST CARVE-OUT (g3 — no over-claim):
+//   t_to_device / t_to_host 는 Phase 4 (device routing) 의 책임이다.
+//   RFC 040 의 farr_to_device / farr_matmul_gpu 는 interp 에는 wired 지만
+//   codegen_c2 에는 미wired (RFC 041/042 upstream-needs). Phase 1 = host
+//   farr_matmul + correctness. device 경로는 Phase 4 에서 codegen wire 와
+//   함께 land. 이 lib 에 device API 를 자리만 잡아두지 않는다 — 가짜
+//   surface 금지 (g3). 도입 시 같은 파일에 추가.
+// ════════════════════════════════════════════════════════════════════════
+
+// ── construction ────────────────────────────────────────────────────────
+// 새 host-tensor: rows*cols 개 zero 로 채운 farr 반환.
+pub fn t_zeros(n: int) -> int {
+    return farr_zeros(n)
+}
+
+// ── element access ──────────────────────────────────────────────────────
+pub fn t_get(t: int, i: int) -> float {
+    return farr_get(t, i)
+}
+
+pub fn t_set(t: int, i: int, v: float) {
+    let _ = farr_set(t, i, v)
+}
+
+pub fn t_len(t: int) -> int {
+    return farr_len(t)
+}
+
+pub fn t_free(t: int) {
+    let _ = farr_free(t)
+}
+
+pub fn t_copy(t: int) -> int {
+    return farr_copy(t)
+}
+
+// ── matmul (host) ───────────────────────────────────────────────────────
+// C = A (M×K) · B (K×N), returns new farr (M·N).
+// 직접 RFC 032 CPU farr_matmul 호출. autograd 가 필요하면 ag_matmul 을
+// 통해 grad-recording 경로로 가야 한다 (autograd_lib).
+pub fn t_matmul(a: int, b: int, M: int, K: int, N: int) -> int {
+    return farr_matmul(a, b, M, K, N)
+}
+
+// ── deterministic fill (LCG, seed-fixed) ────────────────────────────────
+// 본 LCG 는 builtin gaussian RNG 와 독립 — F-RFC043-DETERMINISM 의 근거.
+// 일치: tmp_rfc034_smoke.hexa 의 동일 constants (재현가능 trajectory).
+fn _flame_lcg_next(state: int) -> int {
+    let s = state * 6364136223846793005 + 1442695040888963407
+    let m = s % 2147483647
+    if m < 0 { return 0 - m }
+    return m
+}
+
+fn _flame_lcg_unit(v: int) -> float {
+    let f = (to_float(v) / 2147483647.0)
+    return f * 2.0 - 1.0
+}
+
+// Fill t 의 0..n 을 deterministic uniform[-scale, scale) 로 채움.
+pub fn t_fill_lcg(t: int, n: int, seed: int, scale: float) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = _flame_lcg_next(st)
+        let _ = farr_set(t, i, _flame_lcg_unit(st) * scale)
+        i = i + 1
+    }
+}
+
+// sum(t[0..n]) — F-RFC043-AG-EQ + PARAM-MUTATED helper.
+pub fn t_sum(t: int, n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + farr_get(t, i)
+        i = i + 1
+    }
+    return s
+}

@@ -1,0 +1,73 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/autograd_lib.hexa — flame Phase 1 (RFC 043)
+//
+// Reverse-mode tape — RFC 034 의 ad_* builtin 위 thin wrapper.
+//
+//   `ag_*` API = RFC 043 §Surface 의 autograd 표면. 같은 tape 를 Phase 2
+//   에서 nn layer (Linear / RMSNorm / RoPE / GQA-attn / SwiGLU / embed /
+//   tied-head) 가 record 하도록 일반화한다 — Phase 1 은 RFC 034 의 검증된
+//   minimal scope (matmul → CE-softmax → backward → AdamW) 를 그대로
+//   재export 한다. API 가 RFC 043 §Surface 에서 1회 고정되었으므로
+//   layer wrappers 를 Phase 2 에서 추가하더라도 본 함수 signature 는
+//   불변 (g_flame_api_fixed).
+//
+// Verified oracle (g_flame_phase1_falsifiers / F-RFC043-AG-EQ):
+//   anima B-D-4 closed Jacobian — ∂CE/∂z_i = softmax(z)_i − [i = t]
+//   (sympy-verified). 본 wrapper 의 ag_* 는 같은 closed 결과를
+//   재현해야 한다: max|grad − (softmax − onehot)| = 0.0 < 1e-9.
+//
+// Compiled-native — codegen_c2 wires (self/codegen_c2.hexa, RFC 034):
+//   ad_tape_begin · ad_tape_end · ad_matmul (5-arg) ·
+//   ad_softmax_cross_entropy (4-arg) · ad_backward · ad_grad ·
+//   adamw_step (11-arg).
+// ════════════════════════════════════════════════════════════════════════
+
+// ── tape lifecycle ──────────────────────────────────────────────────────
+// open a new tape; subsequent differentiable ops record onto it until
+// ag_tape_end(tape) is called.
+pub fn ag_tape_begin() -> int {
+    return ad_tape_begin()
+}
+
+pub fn ag_tape_end(tape: int) {
+    ad_tape_end(tape)
+}
+
+// ── differentiable ops (Phase 1 scope = matmul + softmax-CE) ───────────
+// C = A·B (M×K · K×N), records vjp on open tape.
+//   forward = farr_matmul; backward stores dA = dC·Bᵀ, dB = Aᵀ·dC.
+// Phase 2 generalization: Linear/RMSNorm/RoPE/SwiGLU 가 본 tape 위에
+// 자신의 closed vjp 를 push 한다 (RFC 043 §Surface 의 layer 표면).
+pub fn ag_matmul(a: int, b: int, M: int, K: int, N: int) -> int {
+    return ad_matmul(a, b, M, K, N)
+}
+
+// CE loss over B rows × C classes; targets is a B-len farr of class
+// indices (as floats). Returns scalar loss. Records the closed B-D-4
+// Jacobian: ∂loss/∂logits = (softmax − onehot)/B 형식 (campaign-checked).
+pub fn ag_softmax_cross_entropy(logits: int, B: int, C: int, targets: int) -> float {
+    return ad_softmax_cross_entropy(logits, B, C, targets)
+}
+
+// ── reverse pass ───────────────────────────────────────────────────────
+// Seed dy/dy = 1 at the tape root (loss). Walks the recorded ops from
+// the latest to the first and accumulates ∂loss/∂param on the leaf
+// nodes' grad slots. ag_grad(node) reads them out post-pass.
+pub fn ag_backward(tape: int) {
+    ad_backward(tape)
+}
+
+pub fn ag_grad(node: int) -> int {
+    return ad_grad(node)
+}
+
+// ── optimizer (AdamW, in-place on params + moments) ─────────────────────
+// W ← W − lr · (m_hat / (sqrt(v_hat) + eps) + wd · W)
+//   m, v in-place; t = 1-based step number for bias correction.
+//   Numerically equal to dt2_adamw_step / RFC 034 adamw_step oracle.
+pub fn ag_adamw_step(W: int, gW: int, m: int, v: int, n: int,
+                    lr: float, b1: float, b2: float, eps: float,
+                    wd: float, t: int) {
+    adamw_step(W, gW, m, v, n, lr, b1, b2, eps, wd, t)
+}
