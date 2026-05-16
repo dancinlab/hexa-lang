@@ -1450,8 +1450,16 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
             return lt
         }
         // Mismatch (one or both non-numeric) — treat as type-mismatch with
-        // the LHS as the reference shape; emit once.
-        _emit_hx3001(lt, rt, e.span, out)
+        // the LHS as the reference shape; emit once. Permissive on unit:
+        // when an unannotated `fn f(x) { … return X }` resolves to `unit`,
+        // arith between two such calls (`abs(a*b) / gcd(a,b)`) hits this
+        // branch with (unit, unit); the runtime hexa_div dispatches on
+        // HexaVal tag regardless, so the HX3001 was tighter than runtime
+        // correctness needs.
+        let ku = "unit"
+        if lt.kind != ku && rt.kind != ku {
+            _emit_hx3001(lt, rt, e.span, out)
+        }
         return lt
     }
 
