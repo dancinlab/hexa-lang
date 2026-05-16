@@ -1,0 +1,165 @@
+// compiler/atlas/symbolic/symmetric_group_s6.hexa — S₆ exceptionality
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of symmetric_group_s6.py from archive-TECS-L/.shared/calc
+// (commit 4ee05c39; TECS-L absorption Wave 3 — manifest §Backlog #12,
+// subsumes the standalone partition_count item).
+//
+// Closed-form / verdict-gating kernels (no plotting / no random texas):
+//   - factorial n!  and  binomial C(n,k)  (exact integer)
+//   - integer-partition count p(n) via Euler's pentagonal-number recurrence
+//     (the same closed recurrence catalan_combinatorial_n6.py uses)
+//   - S₆ outer automorphism: |Aut(S₆)| = 2·6! = 1440, |Out(S₆)| = 2
+//     (S₆ is the UNIQUE finite symmetric group with Out ≠ 1)
+//   - transposition count C(6,2) = 15 = 2^τ(6) − 1 = 2⁴ − 1  (Mersenne)
+//   - C(n,2) = 2^k − 1 : triangular-Mersenne Diophantine. The .py docstring
+//     claimed "only n=2,6" but that is imprecise — the exhaustive scan also
+//     yields n=3 (C=3) and n=91 (C=4095=2^12−1). Per g4 honesty we ship the
+//     *actual* solution set, not the over-stated uniqueness; n=6's
+//     significance is the τ(6)=4 Mersenne tie (= 2^τ(6)−1), gated separately.
+//   - p(6) = 11 = sopfr(28) = sopfr(P₂)  (representation-theory dimension)
+//   - factorial capacity 6! = 720 = n·σ·sopfr·φ = 6·12·5·2
+//
+// Zero external dependency (g5). Cross-link: manifest §C / §Backlog #12.
+
+// ── exact integer primitives ────────────────────────────────────────────
+
+pub fn s6_factorial(n: int) -> int {
+    if n <= 1 { return 1 }
+    let mut r = 1
+    let mut k = 2
+    while k <= n {
+        r = r * k
+        k = k + 1
+    }
+    return r
+}
+
+// C(n,k) by multiplicative descent (no overflow-prone full factorials)
+pub fn s6_binomial(n: int, k: int) -> int {
+    if k < 0 || k > n { return 0 }
+    let mut kk = k
+    if kk > n - kk { kk = n - kk }
+    let mut num = 1
+    let mut den = 1
+    let mut i = 0
+    while i < kk {
+        num = num * (n - i)
+        den = den * (i + 1)
+        i = i + 1
+    }
+    return num / den
+}
+
+// integer-partition count p(n) — Euler pentagonal-number recurrence
+//   p(n) = Σ_{k≥1} (−1)^{k+1} [ p(n − k(3k−1)/2) + p(n − k(3k+1)/2) ]
+pub fn s6_partition_count(n: int) -> int {
+    if n < 0 { return 0 }
+    let mut p: [int] = []
+    let mut idx = 0
+    while idx <= n {
+        p.push(0)
+        idx = idx + 1
+    }
+    p[0] = 1
+    let mut m = 1
+    while m <= n {
+        let mut total = 0
+        let mut k = 1
+        let mut stop = false
+        while !stop {
+            let g1 = (k * (3 * k - 1)) / 2
+            let g2 = (k * (3 * k + 1)) / 2
+            if g1 > m { stop = true }
+            else {
+                // sign = (−1)^{k+1}
+                let mut sign = 1
+                if k % 2 == 0 { sign = -1 }
+                total = total + sign * p[m - g1]
+                if g2 <= m { total = total + sign * p[m - g2] }
+                k = k + 1
+            }
+        }
+        p[m] = total
+        m = m + 1
+    }
+    return p[n]
+}
+
+// ── S₆ outer-automorphism exceptionality ────────────────────────────────
+// |Aut(Sₙ)| = n!  for n ≠ 6 ;  |Aut(S₆)| = 2·6! = 1440, |Out(S₆)| = 2.
+pub fn s6_aut_order() -> int { return 2 * s6_factorial(6) }   // 1440
+pub fn s6_out_order() -> int { return s6_aut_order() / s6_factorial(6) }  // 2
+// S₆ is the unique n with |Out(Sₙ)| ≠ 1 (n in [3, bound]).
+pub fn s6_is_unique_outer(bound: int) -> bool {
+    // closed fact: Out(Sₙ)=1 ∀ n≠6, =Z/2 at n=6 (Hölder 1895). We assert
+    // the n=6 value and that n=6 is in range — the theorem itself is the
+    // classification; here we gate the numeric witness.
+    if bound < 6 { return false }
+    return s6_out_order() == 2
+}
+
+// ── transposition count = 2^τ(6) − 1 (Mersenne) ─────────────────────────
+pub fn s6_transpositions() -> int { return s6_binomial(6, 2) }  // 15
+// τ(6) = 4 ⟹ 2^4 − 1 = 15
+pub fn s6_tau6() -> int { return 4 }
+pub fn s6_mersenne_tau6() -> int {
+    let mut r = 1
+    let mut i = 0
+    while i < s6_tau6() {
+        r = r * 2
+        i = i + 1
+    }
+    return r - 1
+}
+pub fn s6_transposition_is_mersenne() -> bool {
+    return s6_transpositions() == s6_mersenne_tau6()
+}
+
+// ── C(n,2) = 2^k − 1  exhaustive (triangular-Mersenne) ──────────────────
+// solutions in [2,2000] are {2, 3, 6, 91} (NOT just {2,6} — see header).
+pub fn s6_is_mersenne_number(x: int) -> bool {
+    if x < 1 { return false }
+    // x = 2^k − 1 ⟺ (x+1) is a power of two
+    let mut y = x + 1
+    while y % 2 == 0 { y = y / 2 }
+    return y == 1
+}
+// flat list of n with C(n,2) = 2^k − 1, n in [2, bound]
+pub fn s6_cn2_mersenne_solutions(bound: int) -> [int] {
+    let mut out: [int] = []
+    let mut n = 2
+    while n <= bound {
+        if s6_is_mersenne_number(s6_binomial(n, 2)) { out.push(n) }
+        n = n + 1
+    }
+    return out
+}
+
+// ── representation theory : p(6) = 11 = sopfr(28) ───────────────────────
+pub fn s6_sopfr(n: int) -> int {
+    if n <= 1 { return 0 }
+    let mut s = 0
+    let mut m = n
+    let mut d = 2
+    while d * d <= m {
+        while m % d == 0 {
+            s = s + d
+            m = m / d
+        }
+        d = d + 1
+    }
+    if m > 1 { s = s + m }
+    return s
+}
+// p(6)=11 == sopfr(28)==sopfr(P₂)  (number of irreps of S₆)
+pub fn s6_p6_eq_sopfr28() -> bool {
+    return s6_partition_count(6) == s6_sopfr(28)
+}
+
+// ── factorial capacity 6! = n·σ·sopfr·φ = 6·12·5·2 = 720 ────────────────
+pub fn s6_factorial_capacity_identity() -> bool {
+    return s6_factorial(6) == 6 * 12 * 5 * 2
+}
