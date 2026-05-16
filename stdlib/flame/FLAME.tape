@@ -724,3 +724,44 @@ fire) 가 본격 perf 작업; correctness foundation 완료.
 - F-RFC043-STEP-EQ = 전체 step 이 캠페인 CPU-equiv 오라클의 d=32·3L
   ×8win ×80-AdamW seed=42 7.97116 → 3.73374e-07 trajectory 와 byte-eq
   (g_blue_closed_mandate 의 mandatory connection-point closed check).
+
+### 2026-05-17 — Phase 4-B AUTONOMOUS CYCLE (28 commits) — VERIFICATION-LAYER COMPLETE
+28-commit autonomous cycle delivering Phase 4-B-2 SHIP + Phase 4-B-3
+verification layer + design pivots. Evidence-anchored progression per
+AGENTS.tape g3 (verification-anchor-real-limit):
+
+(1) Path C dV revert — Phase 2 strict byte-eq evidence (commit 23705dc5)
+(2) Phase 4-B-1 detect-only scaffold (commit 038041f5)
+(3) Phase 4-B-2 IPCP SHIPPED — 1.28× wall, byte-id, 3 configs robust
+    (commits 55e29392 + 7d98c3cd + 97cb9617)
+(4) Phase 4-B-3 mechanism probes — 3/3 measured:
+    - boxing 4.00× MEASURED (commit 07cdd405, STRONGER than 1.5-2.5×)
+    - allocator 1.00× MEASURED (commit 98bed481, WEAKER than 1.3-1.7×)
+    - fn-call 0.12× MEASURED (commit f525a656, NEGATIVE; overlap-capped)
+    - Compound revised: 4.0× ceiling (was 6.24-10.2× estimate)
+(5) Phase 4-B-3 emission design + integration design
+    (commits 828717fb + a7d066a2)
+(6) Phase 4-B-3-1+2 trampoline + caller wire-up SHIPPED
+    (commits 0a95371b + f5182641 + 28cf24a6) — full build pipeline ready
+(7) Phase 4-B-3-2-third VERIFICATION LAYER — 5 dominant sections byte-eq:
+    - rmsnorm (sections 1+7): commit 1da62cc1
+    - residual (sections 6+9): commit 9e065f89
+    - SwiGLU (section 8): commit 9f95621d
+    - RoPE (section 3): commit 8537739e
+    - Attention (section 4): commit fe7c1922 (FINAL dominant)
+    Matmul (sections 2+5) SKIP per audit (commit e7472b1e)
+(8) Design correction (commit 122e186d): block_fwd is INLINE, not leaf-call —
+    leaf-by-leaf framing was incorrect, full-block primitive is correct path
+(9) STATUS.md three-iteration consolidate (e49bb691 → b0116176 → a7ac0746)
+
+Honest wall projection (measurement-anchored):
+- Phase 4-B-2 IPCP shipped:   1.28× MEASURED (12.574 → 9.814s, 5-run avg)
+- Phase 4-B-3 verification:   59% boxing coverage proven byte-eq
+- Integration projection:     ~1.8-2.5× over baseline (not yet shipped)
+- ≥3× target reachability:    marginal — would need primitive matmul too
+
+Next user-gate: A (integration only, ~1.8-2.5×), B (+matmul, ~2.8-3.5×),
+or C (ship current evidence, pivot to GPU/RFC 048).
+
+Files added: 7 tools + 5 design/audit docs + 1 STATUS consolidate + README
+update. ~2200 lines new code+docs across the cycle.
