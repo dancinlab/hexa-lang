@@ -765,3 +765,42 @@ or C (ship current evidence, pivot to GPU/RFC 048).
 
 Files added: 7 tools + 5 design/audit docs + 1 STATUS consolidate + README
 update. ~2200 lines new code+docs across the cycle.
+
+### 2026-05-17 — Phase 4-B-3-2-third A2 SHIPPED (cont. 34-commit cycle, 6 commits added)
+8-commit extension of the prior 28-commit cycle (commit c849fe9f) —
+delivers Phase 4-B-3-2-third path A2 (whole-block primitive emission)
+end-to-end:
+
+(10) Self-verifying battery (commit 501e598b) — 9/9 artifacts PASS
+     (5 leaf byte-eq + 3 mechanism probes + IPCP byte-id)
+(11) NEXT_CYCLE.md SUPERSEDED (commit e24d6bec) → STATUS.md current
+(12) extern fn POC FAIL — Path W1 infeasible (HexaVal mandate via
+     dlopen wrapper from hexa_v2 emit). Path W2 (C-source rewrite) =
+     only viable boxing-elim integration mechanism.
+(13) A2 DRAFT (commit a450b2c7) — full primitive block_fwd hand-
+     translation, ~270 C lines. Compile FAIL with 2 calling-convention
+     errors documented.
+(14) A2 SHIPPED (commit cfbba144) — 2 fixes applied (hexa_call1 macro
+     for farr_zeros/free, extern decl moved before first use).
+     F-RFC047-BLOCK-PRIMITIVE-COMPILES + BYTE-EQ PASS. Wall 1.14×
+     MEASURED (5-run avg, thermal-noisy 12-19% variance).
+
+Honest wall ceiling finding:
+- baseline 11.906s → A2 prim 10.435s = 1.14× wall improvement
+- BELOW prior 1.8-2.5× projection (boxing-elim 4× in isolation)
+- Matmul helper callbacks remain HexaVal (~7s of 12s wall) — leaf-
+  by-leaf bounded by ~1.4× ceiling
+- ≥3× target NOT REACHABLE with CPU boxing-elim approach
+- Requires architectural change: matmul primitive (B, ~1.4-1.6× cap)
+  OR GPU dispatch (D, memory bandwidth)
+
+Phase 4-B-3 FINAL ship status:
+- 5 leaf primitives byte-eq verified (1da62cc1/9e065f89/9f95621d/8537739e/fe7c1922)
+- Trampoline + caller wire-up (f5182641 + 28cf24a6)
+- A2 SHIPPED end-to-end (cfbba144) — primitive block_fwd byte-eq + 1.14× wall
+- Self-verifying gate operational (501e598b)
+- 8 design docs + 4 STATUS iterations + FLAME.tape ## Log entries
+
+Next user-gate: Path D (GPU dispatch fire, $5-20) recommended — only
+path to ≥3× target. Path B (matmul primitive) ~1.6× cap. Path C
+(ship A2 as Phase 4-B-3 milestone).

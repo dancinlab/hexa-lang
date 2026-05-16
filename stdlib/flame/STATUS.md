@@ -1,9 +1,10 @@
-# flame Phase 4-B status — single-page consolidated state (2026-05-17, third update)
+# flame Phase 4-B status — single-page consolidated state (2026-05-17, FOURTH update)
 
-> Updated after the **27-commit autonomous cycle** — Phase 4-B-3
-> verification layer COMPLETE. ALL 5 dominant sections byte-eq verified
-> (RMSNorm × 2 + residual × 2 + SwiGLU + RoPE + Attention). Integration
-> step + wall measure = next user-gate.
+> Updated after the **34-commit autonomous cycle** — Phase 4-B-3 A2
+> path SHIPPED end-to-end. Primitive block_fwd byte-id with baseline
+> (F-RFC047-BLOCK-PRIMITIVE-BYTE-EQ PASS) + wall 1.14× MEASURED.
+> Honest framing: leaf-by-leaf bounded by ~1.4× ceiling — ≥3× requires
+> matmul primitive (B) or GPU dispatch (D).
 > Cross-references the per-topic SSOTs (README.md / PLAN.md / FLAME.tape /
 > PERF.md / PHASE4B_SCAFFOLD.md / PHASE4B3_EMISSION_DESIGN.md /
 > NEXT_CYCLE.md). Use this for user-gate decisions; the per-topic SSOTs
@@ -40,6 +41,13 @@
 | 25 | `9f95621d` | **verify** | **SwiGLU silu+Hadamard byte-eq PASS (section #8)** |
 | 26 | `8537739e` | **verify** | **RoPE pair-rotate byte-eq PASS (section #3)** |
 | 27 | `fe7c1922` | **verify** | **Attention byte-eq PASS — FINAL dominant section (section #4)** |
+| 28 | `a7ac0746` | docs | STATUS.md third iteration consolidate |
+| 29 | `c849fe9f` | docs | FLAME.tape ## Log entry for 28-commit cycle |
+| 30 | `501e598b` | tool | self-verifying battery (9/9 artifacts PASS) |
+| 31 | `e24d6bec` | docs | NEXT_CYCLE.md SUPERSEDED marker → STATUS.md |
+| 32 | (extern POC commit) | finding | extern fn POC FAIL — Path W1 infeasible |
+| 33 | `a450b2c7` | **ship** | **A2 DRAFT primitive block_fwd 270-line hand-translation (2 errors documented)** |
+| 34 | `cfbba144` | **SHIP** | **A2 SHIPPED — primitive block_fwd byte-eq PASS + wall 1.14× MEASURED** |
 
 ## Shippable production state
 
@@ -69,47 +77,49 @@
 
 Expected Phase 4-B-3 wall: **~3.14s** (4× on 12.574s baseline). flame would be ~0.142× of anima 22.13s (~7× faster).
 
-## Next user-gate decision (THIRD revision — measurement evidence updated)
+## Next user-gate decision (FOURTH revision — A2 SHIPPED measurement updated)
 
-Phase 4-B-3-2-third VERIFICATION-LAYER COMPLETE. 5/5 dominant sections
-byte-eq verified, 2/9 matmul SKIPPED per audit. Integration step
-remaining. Three honest paths, **with updated wall projections per
-verification evidence**:
+Phase 4-B-3-2-third A2 SHIPPED. Primitive block_fwd byte-id with
+baseline + wall 1.14× MEASURED (BELOW prior 1.8-2.5× projection).
+Honest reason: matmul helper callbacks remain HexaVal (~7s of 12s
+wall) — leaf-by-leaf primitive bounded by ~1.4× ceiling.
 
-**Path A — Integration only (~1.8-2.5× projected, 2-3 cycles)**
-- effort: 2-3 cycles
-- expected wall: **~1.8-2.5×** over baseline (12.574s → ~5-7s)
-  - Conservative: 1 / (0.59/4 + 0.41) ≈ 1.79× from 59% boxing covered
-  - Optimistic if clang -O2 vectorizes well: ~2.5×
-- **RFC 047 §137 ≥3× target NOT REACHED with this scope**
-- risk: mid (block_fwd body integration — sed or hexa-source rewrite)
-- falsifiers: F-RFC047-CORPUS-EMIT-STEP-EQ + F-RFC047-BLOCK-WALL-IMPROVED (will likely be marked PARTIAL)
+**Path A — A2 SHIPPED** ✅ (this cycle's milestone)
+- F-RFC047-BLOCK-PRIMITIVE-BYTE-EQ: PASS
+- F-RFC047-BLOCK-PRIMITIVE-WALL: 1.14× (vs projected 1.8-2.5×)
+- Honest revised projection: ~1.4× ceiling for leaf-by-leaf
+- Wall improvement compound: baseline 11.906s → A2 prim 10.435s (-12%)
+- flame:anima ratio: 0.471× (~53% faster than anima)
 
-**Path B — Integration + ALSO primitive matmul (~2.8-3.5× projected, 4-5 cycles)**
-- effort: 4-5 cycles (extends Path A with 2 more sections + retest)
-- expected wall: **~2.8-3.5×** over baseline (12.574s → ~3.6-4.5s)
-  - Targets the remaining 32% boxing in matmul SKIP sections
-- ≥3× target REACHABLE (marginal — 2.8× lower bound, 3.5× upper)
-- risk: mid-high (matmul transpose helpers have helper-call overhead;
-  primitive form must preserve farr_matmul reduction order)
-- falsifiers: same as Path A + F-RFC047-LEAF-EMIT-MATMUL byte-eq tests
+**Path B — A2 + primitive matmul helpers (~1.4-1.6× projected, 4-5 cycles)**
+- effort: 4-5 cycles (primitive `_db_proj_batch_farr` × 5 call sites)
+- expected wall: **~1.4-1.6×** over baseline (down from prior 2.8-3.5× projection)
+  - Per-call matmul saves ~13K box/unbox; 5 calls × 240 blocks ≈ 3.2M total
+  - But primitive matmul still calls farr_matmul (runtime primitive) → core
+    matrix multiply doesn't change; only transpose+copy boxing eliminated
+- ≥3× target NOT REACHED even with B (architectural cap ~1.6×)
+- risk: mid-high (matmul transpose reduction order preservation,
+  Path C revert lesson)
+- falsifiers: F-RFC047-LEAF-EMIT-MATMUL byte-eq + retest end-to-end
 
-**Path C — Ship current state + RFC 048 / GPU pivot (1 cycle docs)**
+**Path D — Phase 4-D GPU dispatch fire (cost-bearing $5-20)**
+- effort: 1-2 cycles + cost-bearing
+- ship A2 SHIPPED state, pivot to GPU
+- at d=768·12L the IPCP+A2 path composes with GPU memory bandwidth
+- target: F-RFC046-EAGER-PYTORCH-MATCH (≤1.3× of 336.85s eager-PyTorch)
+- ≥3× target REACHABLE on GPU (memory bandwidth × parallelism)
+- risk: mid (cost + GPU dispatch infra)
+
+**Path C — Ship A2 as Phase 4-B-3 SHIPPED milestone**
 - effort: 1 cycle (docs only)
-- 5 verified sections + integration design + measurement projection
-  ALL CAPTURED in current commits
-- Pivot to RFC 048 fwd+bwd graph fusion design OR Path B GPU dispatch fire
-- conservative: 5 byte-eq verifications + design + measurement evidence
-  is itself substantial Phase 4-B-3 delivery — Phase 4-B-3 integration
-  becomes a separate future cycle when ≥3× is required
+- A2 byte-eq + measurable wall improvement IS substantial delivery
+- ≥3× ceiling honest recognition — leaf-by-leaf approach bounded
+- Defer ≥3× to GPU dispatch (Path D) OR architectural redesign
 
-**Recommendation**: Path C — ship the verification layer + projection
-evidence as Phase 4-B-3 VERIFICATION-LAYER MILESTONE. Integration
-step gates the actual wall improvement, but per-section byte-eq +
-ABI proof + reduction-order discipline + dt_sqrt/dt_exp ports are
-SUBSTANTIAL standalone evidence. The 27 verification commits make
-the implementation ALGORITHMICALLY READY; integration is a small
-follow-on (vs the full design+verification work already done).
+**Recommendation**: Path D — A2 SHIPPED achieves what leaf-by-leaf CPU
+optimization can give (~1.14-1.4× wall). ≥3× requires GPU memory
+bandwidth, NOT more CPU boxing-elim. Phase 4-D cost-bearing fire is
+the only path to RFC 046 §137 ≥3× target reachability.
 
 ## Files touched this cycle (16 commits)
 
