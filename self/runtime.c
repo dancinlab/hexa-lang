@@ -2986,6 +2986,19 @@ typedef struct {
 static HexaArena __hexa_arena = {NULL, NULL};
 static int __hexa_arena_enabled = -1;     // lazy env probe
 
+// perf: arena address envelope — O(1) pointer-range reject for heapify.
+// Every bump-arena block's data[] lies within [__hx_arena_lo,__hx_arena_hi);
+// a string pointer outside this range is provably heap-resident, so
+// hexa_val_heapify's TAG_STR path can return immediately instead of walking
+// the whole block chain per string. This collapses the O(n²) re-heapify of
+// already-heapified strings that 02af1622 worked around by default-disabling
+// the Val arena (HEXA_VAL_ARENA=0 → 10-16GB self-compile RSS). With the
+// envelope, the arena can stay ON → memory-bounded compiles.
+// Sentinel lo=MAX, hi=0 ⇒ empty range ⇒ every pointer rejected (correct: no
+// arena string exists yet). Monotonic: blocks are never unmapped.
+static uintptr_t __hx_arena_lo = (uintptr_t)-1;
+static uintptr_t __hx_arena_hi = 0;
+
 static int hexa_arena_on(void) {
     if (__hexa_arena_enabled < 0) {
         const char* e = getenv("HEXA_STR_ARENA");
@@ -3002,6 +3015,12 @@ static HexaArenaBlock* hexa_arena_new_block(size_t min_cap) {
     b->next = NULL;
     b->cap = cap;
     b->used = 0;
+    // Extend the arena address envelope (see __hx_arena_lo/hi above).
+    {
+        uintptr_t base = (uintptr_t)b->data;
+        if (base < __hx_arena_lo)        __hx_arena_lo = base;
+        if (base + cap > __hx_arena_hi)  __hx_arena_hi = base + cap;
+    }
     if (_hx_stats_on()) {
         _hx_stats_arena_blocks++;
         _hx_stats_arena_bytes += (int64_t)(sizeof(HexaArenaBlock) + cap);
@@ -3432,6 +3451,17 @@ HexaVal hexa_val_heapify(HexaVal v) {
             // arena block start and frontier), strdup it. Detection via
             // pointer-range check across active blocks.
             if (!HX_STR(v)) return v;
+            // perf: O(1) envelope reject — a pointer outside the union of
+            // all arena blocks is provably heap-resident, so skip the
+            // block-chain walk. Collapses the O(n²) re-heapify of
+            // already-heapified strings documented in 02af1622. A heap
+            // pointer that happens to fall in a gap between blocks still
+            // walks (and is correctly found in no block) — sound, just
+            // not accelerated for that rare case.
+            {
+                uintptr_t p = (uintptr_t)HX_STR(v);
+                if (p < __hx_arena_lo || p >= __hx_arena_hi) return v;
+            }
             for (HexaArenaBlock* b = __hexa_arena.head; b; b = b->next) {
                 char* base = b->data;
                 char* end = base + b->cap;
