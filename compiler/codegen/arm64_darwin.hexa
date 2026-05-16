@@ -754,8 +754,11 @@ fn _arm64_dst_reg(rm: RegMap, id: i64) -> string {
 // residual is the precisely-scoped final builtin-lowering sub-unit.
 // Non-builtin (hexa user fn) names pass through → normal mangling.
 fn _builtin_runtime_sym(name: string) -> string {
+    if name == "append_file"   { return "rt_append_file" }
     if name == "args"          { return "hexa_args" }
     if name == "char_code_at"  { return "hexa_str_char_code_at" }
+    if name == "env"           { return "hexa_env_var" }
+    if name == "file_size"     { return "rt_file_size" }
     if name == "chars"         { return "hexa_str_chars" }
     if name == "eprintln"      { return "hexa_eprintln" }
     if name == "exec"          { return "hexa_exec" }
