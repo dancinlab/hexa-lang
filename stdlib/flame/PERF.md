@@ -69,6 +69,78 @@ but **full-corpus 5-run wall improvement is ~25% (17→13.33s)**
 — measurement layers differ because time_ms() granularity (~1ms) +
 single-run-variance dominate at sub-25ms walls.
 
+## Phase 3-I source analysis findings (cross-impl source isolation, 2026-05-17)
+
+### Per-window gn2 decomposition (flame_d32_corpus_test, 2026-05-17)
+
+flame 8 windows init gn2 (vs anima 7.97116 / 8 = 0.99640 per-window):
+
+```
+window 0: 0.99611    window 4: 0.996877
+window 1: 0.996562   window 5: 0.996597
+window 2: 0.996447   window 6: 0.995675
+window 3: 0.996438   window 7: 0.996423
+flame per-window avg: 0.99640  (= anima per-window 0.99640 byte-eq)
+flame epoch sum: 7.97113      (vs anima 7.97116, |Δ| = 3.12e-5)
+theoretical baseline: 1 - 2/V + 1/V² ≈ 0.99607 for V=256
+```
+
+Per-window cross-impl drift: ~3.9e-6 ≈ 1 ulp × 256-element softmax floor.
+Epoch-sum drift: 8 × per-window-drift = 3.12e-5.
+
+### Full-config GRAD-EXACT libm-fd 8-probe (flame_full_grad_exact_libm_test, 2026-05-17)
+
+flame nn_decoder_grad verified correct at full d=32·3L config via libm-based central-diff (Phase 3-C scope extension):
+
+```
+probe                 analytic       rel
+tok_emb[50, 7]        0.00361187     1.77e-09
+gF[3]                 0.00410722     4.78e-10
+block[0].g1[5]        0.00793148     2.26e-10
+block[0].Wq[10]       0.00196679     9.62e-10
+block[0].Wo[25]      -0.00183616     2.19e-09
+block[0].Wg[5]       -0.00063807     1.85e-09
+block[1].Wu[17]      -0.00199490     1.70e-09
+block[2].Wd[11]       0.00191056     1.62e-10
+
+max |Δ| abs = 6.38e-12
+max rel     = 2.19e-09
+```
+
+Phase 3-C scope correction REVERSED: nn_decoder_grad correct at full d=32·3L too (verified at fp-double precision).
+
+### dt_ln(p) atanh bias quantification (flame_dt_ln_bias_test, 2026-05-17)
+
+dt_ln (anima d_train_lib atanh 24-term) vs libm log across CE-relevant p:
+
+```
+p          dt_ln(p)        log(p)       |Δ|         rel
+1e-06     -5.14154        -13.8155      8.67        63%   ← CE clamp
+1e-04     -5.13206         -9.21034     4.08        44%
+4e-03     -4.79157         -5.52146     0.73        13%   ← V=256 uniform
+1e-02     -4.37053         -4.60517     0.23        5.1%
+5e-02     -2.99429         -2.99573     1.44e-3     0.05%
+1e-01     -2.30258         -2.30259     6.17e-06    2.7e-06
+3e-01+    < 1e-15          < 1e-15      < 1e-15     ← machine ε
+```
+
+dt_ln high-precision for p ≥ 0.1; 13% bias at V=256 uniform softmax; 63% at CE clamp floor (1e-6). Path implications:
+  - gn2 (||softmax−onehot||²) — UNAFFECTED (no log)
+  - CE-loss (−dt_ln(p_t)) — biased at small p; self-consistent across runs
+  - gradient (dl = softmax−onehot) — UNAFFECTED (bypasses dt_ln)
+  - trained regime (p_t → 1) — bias → 0
+
+The 3.12e-5 epoch-sum drift uses the gn2 path → independent of dt_ln, pure source #4.
+
+### Source attribution table (RFC 045 final)
+
+| Source | Affects | Status |
+|---|---|---|
+| **#1 dt_ln atanh bias** | CE-loss-VALUE only (small p) | quantified above; flame ≡ anima algorithm; not a regression |
+| **#2 nn_decoder_grad full-config gap** | gradient | **FALSIFIED** (libm-fd 8-probe max rel 2.19e-09) |
+| **#3 clang FMA fusion context** | reduction order | **FALSIFIED** (Phase 3-J 7-projection routing 변동 0) |
+| **#4 cross-impl reduction-order** | gn2 (per-window ~3.9e-6, epoch 3.12e-5) + gradient (~3× ratio + sign-flip) | sustained; RFC 040 §2.2 TOL_MATMUL class |
+
 ## Findings (durable, cross-cycle)
 
 ### Granularity floor for `farr_matmul`-routing (~32K ops)
