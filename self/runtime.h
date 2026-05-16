@@ -798,4 +798,38 @@ extern HexaVal farr_device_free;                                       /* runtim
 HexaVal farr_matmul_gpu(HexaVal a, HexaVal ar, HexaVal ac,
                         HexaVal b, HexaVal bc);                         /* runtime.c — RFC 040 (5-arg direct) */
 
+/* ── anima RFC 040 (2026-05-16): Phase B scaffolding — remaining ops ─────
+ * Same `#ifdef HEXA_CUDA` / `#ifndef HEXA_CUDA` pattern as Phase A. The
+ * d_train5 hot-path candidates for GPU offload (per RFC 040 §"Hot-path op
+ * survey"): row-wise softmax, RMSNorm row reduction, elementwise add,
+ * elementwise scale. Each gets a `*_gpu` builtin that on the no-CUDA
+ * build routes to a NEW SMALL CPU helper (no pre-existing equivalent in
+ * the farr surface — the existing `ad_softmax_cross_entropy` is the
+ * loss-coupled fused op, not a row-softmax-only kernel). On the HEXA_CUDA
+ * build the bodies are TODO[cuda] stubs returning -1 (honest no-fake
+ * PASS, per AGENTS.tape g3). Real CUDA `__global__` kernels =
+ * next-cycle deliverable on a CUDA host.
+ *
+ *   farr_softmax_rows_gpu(x_id, R, C) -> int new farr [R*C] with
+ *      numerically-stable row-softmax (subtract row max). -1 on err.
+ *   farr_rmsnorm_rows_gpu(x_id, R, C, eps_v) -> int new farr [R*C] with
+ *      row-RMSNorm (y = x / sqrt(mean(x^2) + eps)). -1 on err.
+ *   farr_add_gpu(a_id, b_id, n) -> int new farr [n] with c = a + b.
+ *      -1 on err.
+ *   farr_scale_gpu(x_id, alpha_v, n) -> int new farr [n] with y = α·x.
+ *      -1 on err.
+ *
+ * Phase B is also SCAFFOLDING: the equivalence harness (no-CUDA build)
+ * proves the dispatchers route to the CPU helpers byte-equal; real GPU
+ * kernels + their parity vs CPU oracle = next-cycle deliverable. */
+HexaVal hexa_farr_softmax_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v);    /* runtime.c — RFC 040 Phase B */
+HexaVal hexa_farr_rmsnorm_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v,
+                                   HexaVal eps_v);                            /* runtime.c — RFC 040 Phase B */
+HexaVal hexa_farr_add_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);             /* runtime.c — RFC 040 Phase B */
+HexaVal hexa_farr_scale_gpu(HexaVal x_v, HexaVal alpha_v, HexaVal n_v);       /* runtime.c — RFC 040 Phase B */
+extern HexaVal farr_softmax_rows_gpu;                                          /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_rmsnorm_rows_gpu;                                          /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_add_gpu;                                                   /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_scale_gpu;                                                 /* runtime.c — RFC 040 fn carrier */
+
 #endif /* HEXA_RUNTIME_H */

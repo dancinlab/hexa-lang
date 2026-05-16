@@ -10607,6 +10607,241 @@ HexaVal farr_matmul_gpu(HexaVal a, HexaVal ar, HexaVal ac,
     return farr_matmul_gpu_impl(a, ar, ac, b, bc);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// anima RFC 040 Phase B (2026-05-16): remaining farr GPU/CUDA ops —
+// scaffolding only (Mac, no CUDA hardware needed).
+//
+// Same `#ifdef HEXA_CUDA` / `#ifndef HEXA_CUDA` dispatch pattern as
+// Phase A. Each `*_gpu` op on the no-CUDA build routes to a SMALL
+// new CPU helper (no pre-existing farr equivalent for these row/
+// elementwise ops in the runtime today). On the HEXA_CUDA build the
+// bodies are TODO[cuda] stubs returning -1 (honest no-fake-PASS, per
+// AGENTS.tape g3). Real GPU `__global__` kernels = next-cycle
+// deliverable on a CUDA host (vast.ai/runpod).
+//
+// Ops landed in Phase B (per RFC 040 §"Hot-path op survey" subset):
+//   farr_softmax_rows_gpu   row-wise numerically-stable softmax
+//   farr_rmsnorm_rows_gpu   row-wise RMSNorm (mean(x²) + eps)
+//   farr_add_gpu            elementwise C = A + B
+//   farr_scale_gpu          elementwise Y = α · X
+//
+// Falsifier surface (tmp_rfc040_phaseB_smoke.hexa):
+//   F-RFC040B-SOFTMAX-EQ    softmax_gpu == CPU helper (byte-equal)
+//   F-RFC040B-RMSNORM-EQ    rmsnorm_gpu == CPU helper (byte-equal)
+//   F-RFC040B-ADD-EQ        add_gpu == elementwise A+B (byte-equal)
+//   F-RFC040B-SCALE-EQ      scale_gpu == α·X (byte-equal)
+//   F-RFC040B-DETERMINISM   re-run byte-identical for each op
+//   F-RFC040B-CUDA-BLOCKER  honest carve-out (CUDA kernels = next cycle)
+// ═══════════════════════════════════════════════════════════════════
+
+#ifdef HEXA_CUDA
+/* Forward decls for the Phase B GPU compilation unit (TODO[cuda] —
+ * bodies live in the same .cu file as Phase A on the CUDA host build).
+ * NOT defined in the no-CUDA build. */
+extern int  _hx_cuda_farr_softmax_rows_gpu(int64_t x_id, int64_t R,
+                                           int64_t C, int64_t out_id);
+extern int  _hx_cuda_farr_rmsnorm_rows_gpu(int64_t x_id, int64_t R,
+                                           int64_t C, double eps,
+                                           int64_t out_id);
+extern int  _hx_cuda_farr_add_gpu(int64_t a_id, int64_t b_id,
+                                  int64_t n, int64_t out_id);
+extern int  _hx_cuda_farr_scale_gpu(int64_t x_id, double alpha,
+                                    int64_t n, int64_t out_id);
+#endif
+
+// ── CPU helpers (Phase B no-CUDA fallback path). ──────────────────
+// These are SMALL NEW helpers — there is no pre-existing single-op
+// farr_softmax / farr_rmsnorm / farr_add / farr_scale in the runtime
+// today (the ad_softmax_cross_entropy op fuses softmax+CE+grad; it is
+// loss-coupled and unsuited as a row-softmax-only kernel). Each helper
+// (a) allocates a fresh output farr via hexa_farr_zeros, (b) re-fetches
+// entry pointers post-alloc (per the RFC 032 use-after-realloc guard at
+// line 9580), (c) computes the math in-place in the output buffer.
+
+// _hx_farr_softmax_rows_cpu(x, R, C) -> new farr_id. Numerically-stable
+// row-softmax (subtract row max before exp). -1 on err.
+static int64_t _hx_farr_softmax_rows_cpu(int64_t x_id, int64_t R, int64_t C) {
+    if (x_id < 0 || x_id >= _hx_farr_count) return -1;
+    if (R <= 0 || C <= 0)                    return -1;
+    HexaFarrEntry* xe = &_hx_farr_table[x_id];
+    if (!xe->buf || xe->len < R * C)         return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    /* hexa_farr_zeros may realloc _hx_farr_table — re-fetch pointers. */
+    xe = &_hx_farr_table[x_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!xe->buf || !oe->buf || oe->len < R * C) return -1;
+    const double* X = xe->buf;
+    double*       Y = oe->buf;
+    for (int64_t r = 0; r < R; r++) {
+        const double* xr = X + r * C;
+        double*       yr = Y + r * C;
+        double zmax = xr[0];
+        for (int64_t j = 1; j < C; j++) if (xr[j] > zmax) zmax = xr[j];
+        double s = 0.0;
+        for (int64_t j = 0; j < C; j++) {
+            double e = exp(xr[j] - zmax);
+            yr[j] = e;
+            s += e;
+        }
+        double inv = (s > 0.0) ? (1.0 / s) : 0.0;
+        for (int64_t j = 0; j < C; j++) yr[j] *= inv;
+    }
+    return out_id;
+}
+
+// _hx_farr_rmsnorm_rows_cpu(x, R, C, eps) -> new farr_id.
+// RMSNorm row-wise: y[r,j] = x[r,j] / sqrt(mean_j(x[r,j]^2) + eps).
+// -1 on err. Matches d_train3_lib c3_rmsnorm_fwd math (without the
+// per-channel gain — that lives outside this kernel, so this is the
+// inv-rms-only primitive — consistent with PLAN.md §9 "RMSNorm
+// reduction primitive").
+static int64_t _hx_farr_rmsnorm_rows_cpu(int64_t x_id, int64_t R, int64_t C,
+                                         double eps) {
+    if (x_id < 0 || x_id >= _hx_farr_count) return -1;
+    if (R <= 0 || C <= 0)                    return -1;
+    if (!(eps >= 0.0))                       return -1;   /* rejects NaN + negative */
+    HexaFarrEntry* xe = &_hx_farr_table[x_id];
+    if (!xe->buf || xe->len < R * C)         return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    xe = &_hx_farr_table[x_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!xe->buf || !oe->buf || oe->len < R * C) return -1;
+    const double* X = xe->buf;
+    double*       Y = oe->buf;
+    double inv_C = 1.0 / (double)C;
+    for (int64_t r = 0; r < R; r++) {
+        const double* xr = X + r * C;
+        double*       yr = Y + r * C;
+        double ms = 0.0;
+        for (int64_t j = 0; j < C; j++) ms += xr[j] * xr[j];
+        ms *= inv_C;
+        double inv = 1.0 / sqrt(ms + eps);
+        for (int64_t j = 0; j < C; j++) yr[j] = xr[j] * inv;
+    }
+    return out_id;
+}
+
+// _hx_farr_add_cpu(a, b, n) -> new farr_id. C = A + B, length n. -1 err.
+static int64_t _hx_farr_add_cpu(int64_t a_id, int64_t b_id, int64_t n) {
+    if (a_id < 0 || a_id >= _hx_farr_count) return -1;
+    if (b_id < 0 || b_id >= _hx_farr_count) return -1;
+    if (n <= 0)                              return -1;
+    HexaFarrEntry* ae = &_hx_farr_table[a_id];
+    HexaFarrEntry* be = &_hx_farr_table[b_id];
+    if (!ae->buf || !be->buf)                return -1;
+    if (ae->len < n || be->len < n)          return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    ae = &_hx_farr_table[a_id];
+    be = &_hx_farr_table[b_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!ae->buf || !be->buf || !oe->buf || oe->len < n) return -1;
+    const double* A = ae->buf;
+    const double* B = be->buf;
+    double*       O = oe->buf;
+    for (int64_t i = 0; i < n; i++) O[i] = A[i] + B[i];
+    return out_id;
+}
+
+// _hx_farr_scale_cpu(x, alpha, n) -> new farr_id. Y = α·X, length n. -1 err.
+static int64_t _hx_farr_scale_cpu(int64_t x_id, double alpha, int64_t n) {
+    if (x_id < 0 || x_id >= _hx_farr_count) return -1;
+    if (n <= 0)                              return -1;
+    HexaFarrEntry* xe = &_hx_farr_table[x_id];
+    if (!xe->buf || xe->len < n)             return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    xe = &_hx_farr_table[x_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!xe->buf || !oe->buf || oe->len < n) return -1;
+    const double* X = xe->buf;
+    double*       Y = oe->buf;
+    for (int64_t i = 0; i < n; i++) Y[i] = alpha * X[i];
+    return out_id;
+}
+
+// farr_softmax_rows_gpu(x, R, C) -> int new farr_id (row-softmax).
+// On no-CUDA: routes to _hx_farr_softmax_rows_cpu (the CPU oracle).
+// On HEXA_CUDA: TODO[cuda] stub returns -1 (honest no-fake PASS).
+HexaVal hexa_farr_softmax_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v) {
+    int64_t x_id = hexa_as_num(x_v);
+    int64_t R    = hexa_as_num(r_v);
+    int64_t C    = hexa_as_num(c_v);
+#ifdef HEXA_CUDA
+    /* TODO[cuda] Phase B impl: block-per-row softmax with warp-shuffle
+     * reduction (__shfl_down_sync) for the row max + exp sum, then
+     * grid-stride normalize. Hard-fail until the GPU TU lands so the
+     * equivalence harness compares against the CPU oracle. */
+    (void)x_id; (void)R; (void)C;
+    return hexa_int(-1);
+#else
+    return hexa_int(_hx_farr_softmax_rows_cpu(x_id, R, C));
+#endif
+}
+
+// farr_rmsnorm_rows_gpu(x, R, C, eps) -> int new farr_id (row-RMSNorm).
+// On no-CUDA: routes to _hx_farr_rmsnorm_rows_cpu.
+HexaVal hexa_farr_rmsnorm_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v,
+                                   HexaVal eps_v) {
+    int64_t x_id = hexa_as_num(x_v);
+    int64_t R    = hexa_as_num(r_v);
+    int64_t C    = hexa_as_num(c_v);
+    double  eps  = __hx_to_double(eps_v);
+#ifdef HEXA_CUDA
+    /* TODO[cuda] Phase B impl: block-per-row reduction sum-of-squares
+     * (warp-shuffle), rsqrt, broadcast multiply. */
+    (void)x_id; (void)R; (void)C; (void)eps;
+    return hexa_int(-1);
+#else
+    return hexa_int(_hx_farr_rmsnorm_rows_cpu(x_id, R, C, eps));
+#endif
+}
+
+// farr_add_gpu(a, b, n) -> int new farr_id (elementwise sum).
+// On no-CUDA: routes to _hx_farr_add_cpu.
+HexaVal hexa_farr_add_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v) {
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t b_id = hexa_as_num(b_v);
+    int64_t n    = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    /* TODO[cuda] Phase B impl: 1-D grid-stride __global__ kernel. */
+    (void)a_id; (void)b_id; (void)n;
+    return hexa_int(-1);
+#else
+    return hexa_int(_hx_farr_add_cpu(a_id, b_id, n));
+#endif
+}
+
+// farr_scale_gpu(x, alpha, n) -> int new farr_id (Y = α·X).
+// On no-CUDA: routes to _hx_farr_scale_cpu.
+HexaVal hexa_farr_scale_gpu(HexaVal x_v, HexaVal alpha_v, HexaVal n_v) {
+    int64_t x_id = hexa_as_num(x_v);
+    double  alpha = __hx_to_double(alpha_v);
+    int64_t n    = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    /* TODO[cuda] Phase B impl: 1-D grid-stride __global__ kernel. */
+    (void)x_id; (void)alpha; (void)n;
+    return hexa_int(-1);
+#else
+    return hexa_int(_hx_farr_scale_cpu(x_id, alpha, n));
+#endif
+}
+
+// ── Phase B carriers (3-arg / 4-arg → hexa_callN dispatch). ───────
+// All 4 ops fit within the hexa_callN ceiling (≤4-arg), so each gets a
+// HexaVal carrier registered via hexa_fn_new at init time (see the
+// init block below for the registration calls).
+HexaVal farr_softmax_rows_gpu;
+HexaVal farr_rmsnorm_rows_gpu;
+HexaVal farr_add_gpu;
+HexaVal farr_scale_gpu;
+
 // ── A1 (2026-05-10): per-phase arena reset side channel ─────────
 // Stage 0 host (hexa_real / hexa_interp.real) holds every str-arena
 // allocation for the whole process lifetime — there is no per-phase
@@ -12142,6 +12377,14 @@ static void _hexa_init_fn_shims(void) {
     farr_to_host                    = hexa_fn_new((void*)hexa_farr_to_host,                    1);
     farr_pin                        = hexa_fn_new((void*)hexa_farr_pin,                        1);
     farr_device_free                = hexa_fn_new((void*)hexa_farr_device_free,                1);
+    // anima RFC 040 Phase B (2026-05-16): row-softmax / row-RMSNorm /
+    // elementwise add+scale GPU dispatcher carriers. All ≤4-arg so they
+    // route through hexa_callN; on no-CUDA they call the small CPU
+    // helpers in the Phase B block above (byte-equal oracle).
+    farr_softmax_rows_gpu           = hexa_fn_new((void*)hexa_farr_softmax_rows_gpu,           3);
+    farr_rmsnorm_rows_gpu           = hexa_fn_new((void*)hexa_farr_rmsnorm_rows_gpu,           4);
+    farr_add_gpu                    = hexa_fn_new((void*)hexa_farr_add_gpu,                    3);
+    farr_scale_gpu                  = hexa_fn_new((void*)hexa_farr_scale_gpu,                  3);
     // RFC 035 (2026-05-13): 3/4-arg NM-step builtins routed through hexa_callN.
     farr_simplex_centroid           = hexa_fn_new((void*)hexa_farr_simplex_centroid,           4);
     farr_simplex_get                = hexa_fn_new((void*)hexa_farr_simplex_get,                4);

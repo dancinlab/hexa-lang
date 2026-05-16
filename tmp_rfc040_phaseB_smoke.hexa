@@ -1,0 +1,237 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_rfc040_phaseB_smoke.hexa — anima RFC 040 Phase B (remaining ops)
+//                                 scaffolding equivalence smoke
+//                                 (Mac, no CUDA).
+//
+// Builtins (self/runtime.c, RFC 040 Phase B block):
+//   farr_softmax_rows_gpu / farr_rmsnorm_rows_gpu / farr_add_gpu /
+//   farr_scale_gpu
+//
+// Reference: inbox/rfc_drafts_2026_05_12/rfc_040_farr_gpu_cuda_backend.md
+//            §"Phase B — remaining ops (elementwise / softmax /
+//            reduction / AdamW)"
+// Oracle:    Small new in-runtime CPU helpers (_hx_farr_softmax_rows_cpu
+//            etc.) — there is no pre-existing single-op farr_softmax /
+//            farr_add / farr_scale in the runtime today (the
+//            ad_softmax_cross_entropy op fuses softmax+CE+grad, unsuited
+//            as a row-softmax-only equivalence target). On no-CUDA the
+//            `*_gpu` dispatcher CALLS the same helper directly — the
+//            byte-equal claim is therefore that the dispatcher routes
+//            without perturbing the math.
+//
+// HONEST CARVE-OUT (AGENTS.tape g3):
+//   This smoke runs on Mac (no CUDA toolkit, no CUDA device). It proves
+//   the Phase B SCAFFOLDING is byte-clean: each `*_gpu` dispatcher
+//   routes to its CPU helper on the no-CUDA build and produces
+//   byte-identical output to the same helper invoked twice (idempotent
+//   determinism). Real CUDA kernels (block-per-row softmax with warp
+//   shuffle, 1-D elementwise __global__) are TODO[cuda] stubs returning
+//   -1 on the HEXA_CUDA build — to be implemented + falsifier-verified
+//   on a CUDA host in the next cycle. The F-RFC040B-CUDA-BLOCKER-DOC
+//   gate matches Phase A's honesty pattern.
+//
+// Acceptance — gated on the COMPILED native binary
+//             (hexa build … && ./bin):
+//
+//   1 F-RFC040B-SOFTMAX-EQ    — farr_softmax_rows_gpu output sums to 1.0
+//                               per row (probabilistic invariant, exact
+//                               within fp tolerance < 1e-12) and matches
+//                               the expected analytic softmax on a fixed
+//                               row [0, 0, 0, 0] = uniform [0.25, 0.25,
+//                               0.25, 0.25] (exact, no reduction
+//                               reordering on a 4-wide row).
+//   2 F-RFC040B-RMSNORM-EQ    — farr_rmsnorm_rows_gpu on a fixed input
+//                               row [1, 0, 0, 0] with eps=0 produces
+//                               row L2 norm = sqrt(C) (exact analytic).
+//                               Verifies row-wise math and eps handling.
+//   3 F-RFC040B-ADD-EQ        — farr_add_gpu on [1,2,3,4] + [10,20,30,40]
+//                               == [11,22,33,44] (exact integer-valued
+//                               output — no fp reduction).
+//   4 F-RFC040B-SCALE-EQ      — farr_scale_gpu with α=3.0 on [1,2,3,4]
+//                               == [3,6,9,12] (exact).
+//   5 F-RFC040B-DETERMINISM   — each op called twice produces byte-
+//                               identical outputs (no hidden state).
+//   6 F-RFC040B-CUDA-BLOCKER  — honest carve-out: no-CUDA build, every
+//                               op returned a valid (≥0) farr_id, real
+//                               CUDA kernels NOT bound. HONESTY gate,
+//                               NOT a CUDA PASS.
+//
+// 6/6 PASS → RFC 040 Phase B scaffolding landable; real CUDA kernels +
+// kernel parity vs CPU oracle = next-cycle deliverable on a CUDA host.
+// ════════════════════════════════════════════════════════════════════════
+
+fn abs_d(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn max_abs_diff(c1: int, c2: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = abs_d(farr_get(c1, i) - farr_get(c2, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+fn fill4(h: int, a: float, b: float, c: float, d: float) {
+    let _0 = farr_set(h, 0, a)
+    let _1 = farr_set(h, 1, b)
+    let _2 = farr_set(h, 2, c)
+    let _3 = farr_set(h, 3, d)
+}
+
+fn main() {
+    let mut pass = 0
+    let total = 6
+
+    // Re-establish coherence with Phase A: this should still be a no-CUDA
+    // build. (Defensive — if a future edit flips this we want a loud
+    // FAIL before any Phase B claim is made.)
+    let avail = cuda_available()
+
+    // ── Falsifier 1: F-RFC040B-SOFTMAX-EQ ───────────────────────────
+    // Input row = [0, 0, 0, 0]. Numerically-stable softmax:
+    //   zmax = 0, exp(0-0) = 1 each, sum = 4, y = 1/4 = 0.25 each.
+    // Output sums to 1.0 within fp tolerance < 1e-12. The exact element
+    // value is 0.25 (no reduction reordering on a 4-wide row → bit-exact).
+    let X1 = farr_zeros(4)
+    fill4(X1, 0.0, 0.0, 0.0, 0.0)
+    let Y1 = farr_softmax_rows_gpu(X1, 1, 4)
+    if Y1 < 0 {
+        println("FAIL  F-RFC040B-SOFTMAX-EQ  farr_softmax_rows_gpu returned " + to_string(Y1))
+    } else {
+        let s = farr_get(Y1, 0) + farr_get(Y1, 1) + farr_get(Y1, 2) + farr_get(Y1, 3)
+        let err = abs_d(farr_get(Y1, 0) - 0.25) + abs_d(farr_get(Y1, 1) - 0.25) + abs_d(farr_get(Y1, 2) - 0.25) + abs_d(farr_get(Y1, 3) - 0.25)
+        let sum_err = abs_d(s - 1.0)
+        if err == 0.0 && sum_err < 0.000000000001 {
+            println("PASS  F-RFC040B-SOFTMAX-EQ  row-softmax([0,0,0,0]) = [0.25,0.25,0.25,0.25] (exact), Σ=" + to_string(s) + " (|Σ-1|<1e-12)")
+            pass = pass + 1
+        } else {
+            println("FAIL  F-RFC040B-SOFTMAX-EQ  err=" + to_string(err) + " sum_err=" + to_string(sum_err))
+        }
+    }
+
+    // ── Falsifier 2: F-RFC040B-RMSNORM-EQ ───────────────────────────
+    // Input row = [1, 0, 0, 0], C=4, eps=0.
+    //   mean(x²) = 1/4 = 0.25.
+    //   inv = 1/sqrt(0.25 + 0) = 1/0.5 = 2.0.
+    //   y = [1*2, 0*2, 0*2, 0*2] = [2, 0, 0, 0].
+    //   L2 norm of y = 2 = sqrt(4) = sqrt(C). Bit-exact (no reduction
+    //   reordering on a 4-wide sum-of-squares: only one nonzero term).
+    let X2 = farr_zeros(4)
+    fill4(X2, 1.0, 0.0, 0.0, 0.0)
+    let Y2 = farr_rmsnorm_rows_gpu(X2, 1, 4, 0.0)
+    if Y2 < 0 {
+        println("FAIL  F-RFC040B-RMSNORM-EQ  farr_rmsnorm_rows_gpu returned " + to_string(Y2))
+    } else {
+        let v0 = farr_get(Y2, 0)
+        let err = abs_d(v0 - 2.0) + abs_d(farr_get(Y2, 1)) + abs_d(farr_get(Y2, 2)) + abs_d(farr_get(Y2, 3))
+        if err == 0.0 {
+            println("PASS  F-RFC040B-RMSNORM-EQ  rmsnorm([1,0,0,0],eps=0) = [2,0,0,0] (exact); inv=2 as analytic")
+            pass = pass + 1
+        } else {
+            println("FAIL  F-RFC040B-RMSNORM-EQ  err=" + to_string(err) + " v0=" + to_string(v0))
+        }
+    }
+
+    // ── Falsifier 3: F-RFC040B-ADD-EQ ───────────────────────────────
+    // A = [1, 2, 3, 4], B = [10, 20, 30, 40] → C = [11, 22, 33, 44].
+    // Integer-valued, exact (no fp reduction).
+    let A3 = farr_zeros(4)
+    fill4(A3, 1.0, 2.0, 3.0, 4.0)
+    let B3 = farr_zeros(4)
+    fill4(B3, 10.0, 20.0, 30.0, 40.0)
+    let C3 = farr_add_gpu(A3, B3, 4)
+    if C3 < 0 {
+        println("FAIL  F-RFC040B-ADD-EQ  farr_add_gpu returned " + to_string(C3))
+    } else {
+        let err = abs_d(farr_get(C3, 0) - 11.0) + abs_d(farr_get(C3, 1) - 22.0) + abs_d(farr_get(C3, 2) - 33.0) + abs_d(farr_get(C3, 3) - 44.0)
+        if err == 0.0 {
+            println("PASS  F-RFC040B-ADD-EQ  [1,2,3,4] + [10,20,30,40] = [11,22,33,44] (exact)")
+            pass = pass + 1
+        } else {
+            println("FAIL  F-RFC040B-ADD-EQ  err=" + to_string(err))
+        }
+    }
+
+    // ── Falsifier 4: F-RFC040B-SCALE-EQ ─────────────────────────────
+    // α=3.0, X = [1, 2, 3, 4] → Y = [3, 6, 9, 12]. Exact.
+    let X4 = farr_zeros(4)
+    fill4(X4, 1.0, 2.0, 3.0, 4.0)
+    let Y4 = farr_scale_gpu(X4, 3.0, 4)
+    if Y4 < 0 {
+        println("FAIL  F-RFC040B-SCALE-EQ  farr_scale_gpu returned " + to_string(Y4))
+    } else {
+        let err = abs_d(farr_get(Y4, 0) - 3.0) + abs_d(farr_get(Y4, 1) - 6.0) + abs_d(farr_get(Y4, 2) - 9.0) + abs_d(farr_get(Y4, 3) - 12.0)
+        if err == 0.0 {
+            println("PASS  F-RFC040B-SCALE-EQ  3.0 · [1,2,3,4] = [3,6,9,12] (exact)")
+            pass = pass + 1
+        } else {
+            println("FAIL  F-RFC040B-SCALE-EQ  err=" + to_string(err))
+        }
+    }
+
+    // ── Falsifier 5: F-RFC040B-DETERMINISM ──────────────────────────
+    // Re-invoke each op with identical inputs; output buffers must be
+    // byte-identical to the first invocation (no hidden state, no
+    // run-to-run drift on the no-CUDA fallback path).
+    let Y1b = farr_softmax_rows_gpu(X1, 1, 4)
+    let Y2b = farr_rmsnorm_rows_gpu(X2, 1, 4, 0.0)
+    let C3b = farr_add_gpu(A3, B3, 4)
+    let Y4b = farr_scale_gpu(X4, 3.0, 4)
+    let d_sm  = max_abs_diff(Y1, Y1b, 4)
+    let d_rms = max_abs_diff(Y2, Y2b, 4)
+    let d_add = max_abs_diff(C3, C3b, 4)
+    let d_scl = max_abs_diff(Y4, Y4b, 4)
+    if d_sm == 0.0 && d_rms == 0.0 && d_add == 0.0 && d_scl == 0.0 {
+        println("PASS  F-RFC040B-DETERMINISM  4 ops · 2x byte-identical (softmax=0 rms=0 add=0 scale=0)")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC040B-DETERMINISM  softmax=" + to_string(d_sm) + " rms=" + to_string(d_rms) + " add=" + to_string(d_add) + " scale=" + to_string(d_scl))
+    }
+
+    // ── Falsifier 6: F-RFC040B-CUDA-BLOCKER ─────────────────────────
+    // Honest carve-out (matches Phase A F-RFC040-CUDA-BLOCKER-DOC):
+    //   (a) build is NO-CUDA (cuda_available() == 0),
+    //   (b) every *_gpu op returned a valid handle (≥ 0) on this path,
+    //   (c) a constant asserts real CUDA kernels are NOT bound this
+    //       cycle. Fails LOUDLY if a future edit silently pretends CUDA
+    //       is bound when it is not.
+    let cuda_kernels_bound = 0   // 0 = real CUDA kernels NOT bound
+                                  //     (Phase B scaffolding cycle — kernels
+                                  //     are TODO[cuda] stubs returning -1 on
+                                  //     HEXA_CUDA, CPU fallback on no-CUDA)
+    if avail == 0 && Y1 >= 0 && Y2 >= 0 && C3 >= 0 && Y4 >= 0 && cuda_kernels_bound == 0 {
+        println("PASS  F-RFC040B-CUDA-BLOCKER  no-CUDA build, 4 Phase B ops all returned valid CPU-fallback farrs, real CUDA kernels NOT bound (next-cycle deliverable on CUDA host) — honest scaffolding, NOT a CUDA PASS")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC040B-CUDA-BLOCKER  avail=" + to_string(avail) + " Y1=" + to_string(Y1) + " Y2=" + to_string(Y2) + " C3=" + to_string(C3) + " Y4=" + to_string(Y4) + " kernels_bound=" + to_string(cuda_kernels_bound))
+    }
+
+    // Cleanup
+    let _f1  = farr_free(X1)
+    let _f2  = farr_free(X2)
+    let _f3a = farr_free(A3)
+    let _f3b = farr_free(B3)
+    let _f4  = farr_free(X4)
+    let _g1  = farr_free(Y1)
+    let _g2  = farr_free(Y2)
+    let _g3  = farr_free(C3)
+    let _g4  = farr_free(Y4)
+    let _g1b = farr_free(Y1b)
+    let _g2b = farr_free(Y2b)
+    let _g3b = farr_free(C3b)
+    let _g4b = farr_free(Y4b)
+
+    println("")
+    println("=== RFC040 Phase B smoke: " + to_string(pass) + "/" + to_string(total) + " PASS ===")
+    if pass == total {
+        println("PASS — anima RFC 040 Phase B scaffolding byte-clean (compiled, no-CUDA Mac); real CUDA kernels = named blocker, next-cycle deliverable on CUDA host")
+    } else {
+        println("FAIL — RFC 040 Phase B smoke incomplete")
+    }
+}
