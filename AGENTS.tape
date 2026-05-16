@@ -46,6 +46,21 @@
 @V := "tape" :: spec [active]
   version = "1.2"
 
+# ─── §0 PROJECT-WIDE NN STACK (2026-05-16) — 인지 우선 ────────────────
+# hexa-lang 의 NN 학습 스택은 두 컴포넌트로 구성. 어느 작업이 어느 쪽에
+# 속하는지 즉시 식별 가능하도록 최상단 고정.
+
+@N nn_stack := "flame + forge — hexa-lang NN training stack (한 쌍)" :: note [d=2026-05-16 active]
+  flame = "★ stdlib/flame/ — hexa-native compiler-only PyTorch-equiv NN stdlib (Tensor + autograd + nn + optim + train_step). 언어=hexa 소스. SSOT: stdlib/flame/{README.md, PLAN.md, FLAME.tape}. 설계: RFC 043."
+  forge = "★ self/forge/ — GPU compute substrate (device-farr + cuBLAS Dgemm + .cu kernels). 언어=C/CUDA runtime. SSOT: self/forge/{README.md, PLAN.md, FORGE.tape}. 코드 실거주: self/runtime.c GPU 부분 + self/cuda/ (label-only, 이동 0). 설계: RFC 040 + 041."
+  relation = "flame:forge :: torch:ATen. flame 이 forge 를 compiled builtin (hexa_farr_*_gpu, hexa_cuda_*) 으로 호출. flame=hexa / forge=C/CUDA 레이어 분리는 디렉토리로 강제 (g_forge_substrate_role · g_flame_compiler_only)."
+  status = "DESIGN+SCAFFOLD 2026-05-16. flame Phase 1 in-flight (tensor_lib + autograd_lib). forge = NAMING (substrate 코드 이미 4× 검증 land, cuBLAS 51.24 TFLOPS FP64 76% H100 peak); 잔여 = RFC 041 TODO[cuda] -1 stubs → real .cu (Phase 2)."
+  rfc_chain = "RFC 034 (autograd ✅ landed) · 040 (device-farr + cuBLAS) · 041 (.cu kernels) · 042 (SUBSUMED by 043) · 043 (flame design SSOT)"
+  preservation = "캠페인 산출물 전수 보존: stdlib/flame/FLAME.tape §X (primary index, branch·SHA·path·RFC#) + self/forge/FORGE.tape §X (substrate-specific 보완). 복제 X — 참조만 (g3 drift-avoidance)."
+  cross_repo = "consumed by dancinlab/anima HEXAD (verified ConsciousDecoderV2 arch + .py interim track; cross-repo evidence anima 잔류, hexa-lang 은 참조만)"
+  not_what = "둘 다 별도 repo 아님 (hexa-first · toolchain ABI lockstep). hexa-src→PTX GPU codegen 백엔드는 forge 스코프 밖 (미래 별도 RFC)."
+  @> README.md
+
 # ─── §1 Identity ─────────────────────────────────────────────────────
 
 @I id001 := "hexa-lang" :: identity-claim [d=2026-05-14 active]
@@ -76,6 +91,8 @@
   LIMIT_BREAKTHROUGH.md -> "project-specific limits + breakthrough audit"
   TAPE-AUDIT.md -> "tape v1.x adoption ledger for this repo"
   inbox/patches/ -> "external-contributed patch markdowns (one concept per file)"
+  stdlib/flame/ -> "★ NN training stdlib (hexa source, compiler-only PyTorch-equiv) — README · PLAN · FLAME.tape. RFC 043. see §0 nn_stack."
+  self/forge/ -> "★ GPU compute substrate SSOT label (cuBLAS + .cu kernels live in self/runtime.c + self/cuda/) — README · PLAN · FORGE.tape. RFC 040+041. see §0 nn_stack."
 
 # ─── §3 Governance rules ─────────────────────────────────────────────
 
