@@ -48,10 +48,34 @@ escape-disciplined** — a value stored into a structure that outlives the
 current iteration must be *copied* out of the per-iteration region, not
 referenced. This is a prerequisite for every option below, call it **P0**:
 
-> **P0** — make `_arm_strtab_collect_fn` (and any other cross-iteration
-> store) deep-copy the interned string (`hexa_str_own` / explicit dup)
-> so `st` owns its keys independently of any MFunc. Small, local,
-> byte-identical, parse-gate + build verifiable. Must land first.
+> **P0 — escape-edge discipline.** Before any per-iteration value can be
+> freed, every reference *from* a longer-lived structure *into*
+> per-function IR must become an owned copy. A copy is cheap and exact:
+> `s.substring(0, len(s))` — `hexa_str_substring` allocates a fresh
+> buffer (`hexa_strbuf_alloc` + `memcpy`), and `len()` on a string is the
+> byte length (`HX_STRLEN`), so the copy is byte-exact incl. UTF-8.
+>
+> Audited edges (each an independent, byte-identical, parse-gate +
+> byte-diff verifiable fix):
+>
+>   - **P0a** `st.keys ← MFunc operand strings` — CONFIRMED.
+>     `_collect_strs_from_stmt` does `keys.push(o.str_val)`, sharing the
+>     MFunc's string handle. Fix: push a copy.
+>   - **P0b** `LFunc ← st.labels` — CONFIRMED. `_arm64_strtab_lookup`
+>     returns `st.labels[i]` by reference; the LFunc operand stores that
+>     handle (callers at arm64_darwin.hexa:538/719/852/893). Freeing an
+>     LFunc would dangle `st.labels`. Fix: store a copy of the label in
+>     the LFunc operand.
+>   - **P0c** `MFunc ← HItem/hmodule strings` — NEEDS AUDIT. `_lower_fn`
+>     may carry HIR string handles into MIR operands; `hmodule` outlives
+>     the loop.
+>   - **P0d** `LFunc ← MFunc strings` — NEEDS AUDIT. `_arm64_lower_func`
+>     may carry MFunc operand strings straight into LIR.
+>
+> P0 is needed for **B and C**, not A — A's region model promotes on
+> escape automatically. Each P0x lands independently; P0c/P0d must be
+> audited before C is declared safe (this is the bulk of C's real cost —
+> see Options).
 
 ## Options
 
@@ -93,13 +117,17 @@ Add a runtime hook `hexa_val_free_tree(v)` (exposed as
 `mfunc` and `lfunc` once each is consumed.
 
 - *Mechanism*: recursive free of a malloc'd HexaValStruct tree. Caller
-  asserts the value is unshared.
-- *Cost*: low — one runtime function + two call sites in `stream.hexa`.
-  Blast radius is exactly the streaming loop.
-- *Risk*: medium — **unsafe without P0** (would free `st`'s strings).
-  With P0 landed, the loop's `mfunc`/`lfunc` are provably unshared at
-  the drop point and the free is sound. Verifiable: byte-diff of the
-  emitted `.s` (drop must not change output) + RSS probe.
+  asserts the value is unshared at the drop point.
+- *Cost*: low *in blast radius* (one runtime function + two call sites
+  in `stream.hexa`) but the **real cost is P0** — the free is sound only
+  once every escape edge (P0a–P0d) is disciplined. P0a/P0b are confirmed
+  and small; P0c/P0d still need the audit. So C = `free_tree` +
+  4 small escape-copy fixes + 2 audits, each independently verifiable.
+- *Risk*: medium. Each P0x is byte-identical and byte-diff checkable;
+  the residual risk is an *unaudited* escape edge — a missed sharing
+  path → use-after-free. The audit (P0c/P0d) is the gating work, not the
+  `free_tree` call. Verifiable end-to-end: emitted `.s` byte-diff (drop
+  must not change output) + stage-1 RSS probe.
 
 ## Recommendation
 
