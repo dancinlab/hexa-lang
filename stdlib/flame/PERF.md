@@ -53,14 +53,15 @@ the per-loop level.
 Config: 1 warm-up step + 8 measure steps × 1 corpus window. time_ms()
 per fwd / bwd / AdamW phase. d=32·3L config.
 
-| State | Commit | fwd (ms) | bwd (ms) | AdamW (ms) | total/step (ms) |
-|---|---|---|---|---|---|
-| Phase 3-J baseline | (post `df50e265`) | 3 (14%) | 20 (84%) | 0 (<1%) | 23 |
-| + dWq/dWk/dWv | `bbaa4bbf` | 4 (17%) | 19 (82%) | 0 (<1%) | 23 |
-| + dWd | `9ff5ae92` | 4 (19%) | 17 (80%) | 0 (<1%) | 21 |
-| + dWo | `d272bca2` | 4 | 17 | 0 | 21 |
-| + dWg/dWu | `e8c78f4e` | 3 | 12 (76%) | 0 | 15 |
-| + drin (REVERTED) | `6fa735c7` | 3 | 14 | 0 | 19 |
+| State | Commit | fwd (ms) | bwd (ms) | AdamW (ms) | total/step (ms) | n-run convention |
+|---|---|---|---|---|---|---|
+| Phase 3-J baseline | (post `df50e265`) | 3 (14%) | 20 (84%) | 0 (<1%) | 23 | 1×8-iter single |
+| + dWq/dWk/dWv | `bbaa4bbf` | 4 (17%) | 19 (82%) | 0 (<1%) | 23 | 1×8-iter single |
+| + dWd | `9ff5ae92` | 4 (19%) | 17 (80%) | 0 (<1%) | 21 | 1×8-iter single |
+| + dWo | `d272bca2` | 4 | 17 | 0 | 21 | 1×8-iter single |
+| + dWg/dWu | `e8c78f4e` | 3 | 12 (76%) | 0 | 15 | 1×8-iter single |
+| + drin (REVERTED) | `6fa735c7` | 3 | 14 | 0 | 19 | 1×8-iter single |
+| Phase 4-A-bwd final | (post `a4f2970e`) | **4 (25%)** | **12 (75%)** | **~0** | **16 (range 16-17)** | **5×8-iter avg (low variance, this is the reliable reading)** |
 
 **Cumulative bwd reduction (post-drin-revert)**: 20→12 ms (40%).
 **Cumulative total/step reduction**: 23→15 ms (35%) per-step,
