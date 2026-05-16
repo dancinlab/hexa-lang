@@ -1,0 +1,91 @@
+# flame NEXT_CYCLE.md — implementation onboarding for next user-directed cycle
+
+> Post 49-commit session state (commit `5602833f`). All Phase 3 work
+> SHIPPABLE COMPLETE; Phase 4 design layer (RFC 046+047+048) shipped;
+> Phase 4-A-bwd partial implementation landed. This file is the
+> single-page onboarding for the next user-directed cycle's
+> implementation work.
+
+## What's done
+
+- **flame Phase 3** = SHIPPABLE COMPLETE (44 falsifier PASS, regression 0)
+- **flame Phase 4-A-bwd** = PARTIAL LANDED (7 outer-product accumulators wired; wall 13.33s 5-run avg, 60% of anima)
+- **flame Phase 4 design** = full layer (RFC 046+047+048)
+- **Cross-impl analysis** = complete (source #1 dt_ln bias + source #4 reduction-order both quantified; #2, #3 falsified)
+- **Documentation** = README + PLAN + FLAME.tape + PERF.md + 6 RFCs all sync'd
+
+## Three honest paths forward
+
+### Path A — RFC 047 Phase 4-B-1 implementation (largest single-commit-cycle win available)
+
+**Entry**: `inbox/rfc_drafts_2026_05_12/rfc_047_flame_phase4b_block_fusion_ir_pass.md` §"Phase 4-B-1 — pass scaffold + pattern matching"
+
+**First commit boundary**: pass scaffold + pattern matching (no emit yet, just detect + log)
+- File: new `self/flame_phase4b_pass.hexa` OR extend `self/codegen_c2.hexa` (decide based on hexa-lang compiler internals access)
+- Detect: `nn_decoder_block_fwd / bwd` call sites with all 5 dim args as static constants
+- Log: extracted (T, d, nh, nkv, h) tuples + hashed dims_hash
+- Build flag: `--flame-phase4b` (default OFF preserves Phase 3-J + 4-A-bwd byte-id)
+
+**First falsifier**: F-RFC047-FALLBACK-PRESERVED — `--flame-phase4b` OFF gives byte-identical output to current state (Phase 4-A-bwd partial); regression sweep on 44 falsifiers continues PASS.
+
+**Effort**: ~1 cycle. Risk: mid (hexa-lang compiler internals access).
+
+### Path B — Phase 4-D GPU dispatch fire (cost-bearing, immediate)
+
+**Entry**: `inbox/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md` §"Phase 4-D"
+
+**Goal**: build flame_d32_corpus_test (or d=768·12L scaled config) for Linux/CUDA host, dispatch to vast.ai or runpod A100, measure wall vs eager-PyTorch baseline (336.85s).
+
+**First action**: dispatch script (cross-link with `anima g_fire_autonomous + g_fire_dispatch_robust` patterns)
+
+**First falsifier**: F-RFC046-EAGER-PYTORCH-MATCH — flame d=768·12L wall ≤ 1.3× of eager-PyTorch 336.85s on A100.
+
+**Cost**: ~$5-20 (vast.ai A100 ~$1/hr × 4-8 hours, including build + smoke + dispatch retries per `g_fire_dispatch_robust`).
+
+**Risk**: mid (cost-bearing; depends on GPU dispatch infrastructure stability).
+
+### Path C — attention_core_bwd evidence attempt (anti-perf likely, evidence value only)
+
+**Entry**: this README's findings — granularity floor ~32K ops at this scale.
+
+**Attempt**: route attention_core_bwd's dV accumulator (per-hh P^T·dctx_slice form) through farr_matmul. Expect anti-perf per the drin lesson (commit `6fa735c7`); revert if measured wall regression.
+
+**Effort**: ~1-2 commits with measurement + likely revert.
+
+**Risk**: low (mechanical evidence attempt).
+
+## Code state pointers
+
+- decoder_block_lib.hexa::`_db_grad_accum_farr` — single-pattern helper for OUTER-PRODUCT bwd accumulators (reach 7/7 wired)
+- decoder_block_lib.hexa::`_db_proj_batch_farr` — fwd projection helper (Phase 3-J 7/7 wired)
+- decoder_lib.hexa::`nn_decoder_grad` — verified correct at full d=32·3L (libm-fd 8-probe max rel 2.19e-09)
+- decoder_lib.hexa::`nn_decoder_ce_loss_libm` — isolation helper (Phase 3-I; production uses dt_ln-based `nn_decoder_ce_loss`)
+
+## Measurement convention (PERF.md)
+
+- ≥5-run averaging for sub-second-per-iter walls
+- `flame_perf_breakdown_test` — 5×8-iter per-step breakdown harness
+- `flame_d32_corpus_test` — full 80-step corpus benchmark; current 5-run avg 13.33s
+
+## Regression battery (run before each commit)
+
+```bash
+for s in flame.hexa flame_nn_test.hexa flame_optim_test.hexa flame_block_test.hexa \
+         flame_decoder_test.hexa flame_train_test.hexa flame_math_test.hexa \
+         flame_init_byteeq_test.hexa flame_d32_test.hexa flame_d32_corpus_test.hexa; do
+    name=$(basename "$s" .hexa)
+    HEXA_MAC_BUILD_OK=1 ./hexa build "stdlib/flame/$s" -o "build/$name" 2>&1 | tail -1
+    "./build/$name" 2>&1 | grep -E '=== flame Phase|=== RFC' | tail -1
+done
+```
+
+## Cross-references
+
+- README.md — high-level status + Build & run examples
+- PLAN.md — staged roadmap + RFC index + next-step candidates table
+- FLAME.tape — SSOT + §X campaign preservation
+- PERF.md — measurement ledger + Phase 3-I source analysis findings
+- RFC 045 — Phase 3 closure + cross-impl source analysis
+- RFC 046 — Phase 4 fusion design framework
+- RFC 047 — Phase 4-B IR pass design
+- RFC 048 — Phase 4-C fwd+bwd graph fusion design
