@@ -183,18 +183,20 @@ dominant failure class:
 | #1    | (baseline)      | 1     | 0    | 19      | 1    |
 | #2    | parser.hexa import fallback · dict_keys map | 1 | 1 | 19 | 0 |
 | #3    | bind.hexa builtin-name list expanded (~40 entries) | 1 | 1 | 6  | 13 |
-| #4    | codegen str/int/float/bool/ln runtime aliases | **12** | 3 | 6 | 0 |
+| #4    | codegen str/int/float/bool/ln runtime aliases | 12 | 3 | 6 | 0 |
+| #5    | float-literal source-text precision (`.double`) | 13 | 2 | 6 | 0 |
+| #6    | short-circuit && / \|\| via control flow | **14** | 1 | 6 | 0 |
 
-**12 / 21 byte-identical** through aprime_cc direct after #4. The
-remaining 6 CODEGEN-FAIL are HX3001 typecheck strictness on imported
-library files (separate frontend track); the 3 DIFF are:
-  • regress_dict_keys_let_bind — empty-map-literal `{}` not yet
-    constructed (container reads as TAG_INT(0) at index_set time).
-  • reachability_smoke — `modulo by zero` runtime error on 4th
-    assertion; native produces a 0 divisor where interp doesn't.
-  • nstate_calculator_smoke — `[FAIL]` on three approx-equality
-    asserts that print byte-identical numbers; suggests an
-    approx/float-equality codegen wrinkle, not a math bug.
+**14 / 21 byte-identical** through aprime_cc direct after #6 (66.6%).
+The remaining 6 CODEGEN-FAIL are HX2001/HX3001/HX3010/HX4001
+typecheck/lint strictness on imported library files (separate
+frontend track); the single residual DIFF is:
+
+• regress_dict_keys_let_bind — `let mut d = {}` produces TAG_INT(0)
+  rather than an empty map. Cross-cutting parse/lower issue — even
+  the interp's HEXA_CACHE=0 path errors on this same syntax (see
+  test header "REPRO 2"); only the AOT-cache path handles it. Out
+  of scope for the codegen R3 work.
 
 ### R5 parity sample further expanded (40 smokes, third sweep)
 
