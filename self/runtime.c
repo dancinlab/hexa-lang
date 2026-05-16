@@ -7902,9 +7902,27 @@ HexaVal hexa_bytes_to_str_raw(HexaVal arr) {
 //  (callers should pass non-negative indices into 0..len).
 // ═══════════════════════════════════════════════════════════
 
+/* anima RFC 040 (2026-05-16): farr GPU/CUDA backend Phase A scaffolding.
+ *   FarrLoc residence descriptor + dirty flags + (optional) device pointer.
+ *   The default build (no `-DHEXA_CUDA`) leaves loc=FARR_HOST,d_buf=NULL,
+ *   dirty_host=dirty_dev=0 for every farr handle — byte-identical to the
+ *   pre-RFC-040 CPU path. With `-DHEXA_CUDA` the same fields gain a real
+ *   device-pointer slot (cuBLAS Dgemm + cudaMalloc are TODO[cuda] stubs
+ *   in this scaffolding cycle — Phase A bodies land on the CUDA box). */
+typedef enum {
+    FARR_HOST     = 0,  /* host memory only (default — RFC 025 behaviour) */
+    FARR_DEVICE   = 1,  /* device memory only (host buf may be NULL) */
+    FARR_MIRRORED = 2   /* both host and device buffers valid + in-sync */
+} FarrLoc;
+
 typedef struct {
-    double* buf;
-    int64_t len;
+    double*  buf;        /* host pointer — RFC 025 (NULL if device-only) */
+    int64_t  len;        /* element count (shared by host and device buf) */
+    void*    d_buf;      /* CUDA device pointer — NULL if host-only (RFC 040) */
+    int      loc;        /* FarrLoc — current residence (RFC 040) */
+    int      pinned;     /* 1 if farr_pin'd (do not auto-evict) (RFC 040) */
+    int      dirty_host; /* host buf stale vs device → needs D2H (RFC 040) */
+    int      dirty_dev;  /* device buf stale vs host → needs H2D (RFC 040) */
 } HexaFarrEntry;
 
 static HexaFarrEntry* _hx_farr_table     = NULL;
@@ -7951,6 +7969,13 @@ HexaVal hexa_farr_zeros(HexaVal n_v) {
     }
     _hx_farr_table[id].buf = buf;
     _hx_farr_table[id].len = n;
+    /* RFC 040 Phase A: initialize residence descriptor to HOST default —
+     * byte-identical to pre-040 behaviour for every existing farr. */
+    _hx_farr_table[id].d_buf      = NULL;
+    _hx_farr_table[id].loc        = FARR_HOST;
+    _hx_farr_table[id].pinned     = 0;
+    _hx_farr_table[id].dirty_host = 0;
+    _hx_farr_table[id].dirty_dev  = 0;
     return hexa_int(id);
 }
 
@@ -7989,6 +8014,23 @@ HexaVal hexa_farr_free(HexaVal h_v) {
     if (id < 0 || id >= _hx_farr_count) return hexa_void();
     HexaFarrEntry* e = &_hx_farr_table[id];
     if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
+    /* RFC 040 Phase A: also free device buffer if present, reset residence.
+     * In the no-CUDA build d_buf is always NULL; under -DHEXA_CUDA the real
+     * `cudaFree` lives in the GPU compilation unit (TODO[cuda] — Phase A
+     * impl cycle). Resetting the descriptor here keeps freelist slots
+     * hygienic when reused by a later `hexa_farr_zeros`. */
+#ifdef HEXA_CUDA
+    if (e->d_buf) {
+        /* TODO[cuda] Phase A impl: cudaFree(e->d_buf); */
+        e->d_buf = NULL;
+    }
+#else
+    e->d_buf = NULL;
+#endif
+    e->loc        = FARR_HOST;
+    e->pinned     = 0;
+    e->dirty_host = 0;
+    e->dirty_dev  = 0;
     // Push id onto freelist for reuse.
     if (_hx_farr_freelist_n >= _hx_farr_freelist_cap) {
         int64_t new_cap = _hx_farr_freelist_cap < 16 ? 16 : _hx_farr_freelist_cap * 2;
@@ -10366,6 +10408,205 @@ HexaVal hexa_phi_spatial(HexaVal st_v, HexaVal nc_v, HexaVal dim_v,
     return hexa_float(sp / denom);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// anima RFC 040 (2026-05-16): farr GPU/CUDA backend — Phase A scaffolding.
+//
+// Scaffolding only. The HexaFarrEntry residence descriptor (FarrLoc /
+// d_buf / dirty_host / dirty_dev) lives in the table struct (top of
+// the farr section); the device-management + GPU compute builtins are
+// declared in runtime.h. THIS BLOCK provides their *bodies*.
+//
+// The default build has NO `-DHEXA_CUDA` defined. Every body below
+// then takes the CPU-fallback branch:
+//   • cuda_available() → 0
+//   • cuda_device_count() → 0
+//   • farr_to_device / farr_to_host / farr_pin → no-op success
+//   • farr_device_free → no-op success
+//   • farr_matmul_gpu → routes to RFC 032 hexa_farr_matmul (the CPU
+//     oracle). This makes the GPU dispatcher safe-to-call on Mac —
+//     callers get the bit-exact CPU result with the same -1-on-error
+//     contract, the equivalence harness PASSES, and nothing changes
+//     for the byte-identical no-CUDA build.
+//
+// With `-DHEXA_CUDA` defined (a future CUDA-box build cycle), the same
+// bodies route to the real cuBLAS Dgemm + cudaMalloc/cudaMemcpy path.
+// In this scaffolding cycle those branches return -1 ("TODO[cuda] not
+// implemented") rather than a fake PASS — honesty over over-claim, per
+// AGENTS.tape g3 and the RFC 040 §"Honest caveats" framing. The actual
+// kernel impls + cuBLAS link line are the next-cycle deliverable on a
+// CUDA host (vast.ai/runpod or a borrowed GPU).
+//
+// Phase A falsifier surface (tmp_rfc040_smoke.hexa):
+//   F-RFC040-AVAIL              cuda_available()==0 on Mac (graceful)
+//   F-RFC040-STRUCT-NOREGRESS   existing CPU farr_matmul unchanged
+//   F-RFC040-DISPATCH-FALLBACK  farr_matmul_gpu == farr_matmul (CPU)
+//   F-RFC040-DETERMINISM        re-eval byte-identical
+//   F-RFC040-CUDA-BLOCKER-DOC   honest carve-out (CUDA kernels = next cycle)
+// ═══════════════════════════════════════════════════════════════════
+
+#ifdef HEXA_CUDA
+/* Forward decls for the GPU compilation unit (TODO[cuda] — bodies live
+ * in a separate .cu file linked in by the CUDA build). NOT defined in
+ * the no-CUDA build, so the `#ifndef HEXA_CUDA` fallbacks below are
+ * the entire compiled surface today. */
+extern int  _hx_cuda_runtime_available(void);
+extern int  _hx_cuda_device_count_impl(void);
+extern int  _hx_cuda_farr_to_device(int64_t farr_id);
+extern int  _hx_cuda_farr_to_host(int64_t farr_id);
+extern int  _hx_cuda_farr_device_free(int64_t farr_id);
+extern int  _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
+                                     int64_t b_id, int64_t N,
+                                     int64_t c_id);
+#endif
+
+// cuda_available() -> int. 1 if a CUDA device + toolkit are detected at
+// runtime, else 0. Coherent with cuda_device_count(): one implies the
+// other > 0.
+HexaVal hexa_cuda_available(void) {
+#ifdef HEXA_CUDA
+    /* TODO[cuda] Phase A impl: probe cuInit(0) + cuDeviceGetCount(...).
+     * Until the GPU TU lands, even the HEXA_CUDA build reports 0 so the
+     * scaffolding is honest about what's wired vs what's a stub. */
+    return hexa_int(0);
+#else
+    return hexa_int(0);
+#endif
+}
+
+// cuda_device_count() -> int. Number of visible GPUs (0 if none / no
+// CUDA toolkit). Returns 0 on the no-CUDA build always.
+HexaVal hexa_cuda_device_count(void) {
+#ifdef HEXA_CUDA
+    /* TODO[cuda] Phase A impl: cuDeviceGetCount + return. */
+    return hexa_int(0);
+#else
+    return hexa_int(0);
+#endif
+}
+
+// farr_to_device(id) -> int. Ensure d_buf is resident + current.
+// CPU-fallback path: every farr is loc=FARR_HOST already; the call is a
+// no-op success (return 1). This keeps caller code valid on Mac — a
+// d_train5 hot-loop `let _ = farr_to_device(W)` becomes inert when no
+// GPU is available, instead of failing the call.
+// Returns: 1 ok / 0 invalid handle / -1 GPU op failed.
+HexaVal hexa_farr_to_device(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(0);
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    if (!e->buf && e->loc == FARR_HOST) return hexa_int(0);
+#ifdef HEXA_CUDA
+    /* TODO[cuda] Phase A impl: ensure e->d_buf allocated (cudaMalloc),
+     * cudaMemcpy H2D if dirty_dev, set loc=MIRRORED, dirty_dev=0. */
+    return hexa_int(-1);
+#else
+    /* No-CUDA path: farr already host-resident; nothing to transfer.
+     * The dispatcher contract: caller continues to use the same
+     * handle, math runs on CPU. */
+    return hexa_int(1);
+#endif
+}
+
+// farr_to_host(id) -> int. Ensure host buf is current (D2H if device-
+// resident and dirty). CPU-fallback path: no-op success.
+HexaVal hexa_farr_to_host(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(0);
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    if (!e->buf && e->loc == FARR_HOST) return hexa_int(0);
+#ifdef HEXA_CUDA
+    /* TODO[cuda] Phase A impl: cudaMemcpy D2H if dirty_host, set loc=
+     * MIRRORED, dirty_host=0. */
+    return hexa_int(-1);
+#else
+    return hexa_int(1);
+#endif
+}
+
+// farr_pin(id) -> int. Mark farr resident-on-device, do not auto-evict
+// (weights stay across all steps). CPU-fallback: records pinned flag
+// only (no actual residence change, since no device exists).
+HexaVal hexa_farr_pin(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(0);
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    e->pinned = 1;
+    return hexa_int(1);
+}
+
+// farr_device_free(id) -> int. Free d_buf, keep host buf. CPU-fallback:
+// no-op success (d_buf is always NULL on no-CUDA).
+HexaVal hexa_farr_device_free(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(0);
+    HexaFarrEntry* e = &_hx_farr_table[id];
+#ifdef HEXA_CUDA
+    if (e->d_buf) {
+        /* TODO[cuda] Phase A impl: cudaFree(e->d_buf); */
+        e->d_buf = NULL;
+    }
+    e->loc = FARR_HOST;
+    e->dirty_host = 0;
+    e->dirty_dev  = 0;
+#else
+    (void)e;
+#endif
+    return hexa_int(1);
+}
+
+// farr_matmul_gpu(A, Ar, Ac, B, Bc) -> int. ABI-identical to the RFC 032
+// CPU farr_matmul: same shape contract (A is M×K, B is K×N, output is
+// M×N), same -1-on-error return, same packed-double representation.
+// On the no-CUDA build: routes directly to hexa_farr_matmul — the CPU
+// oracle is the only correct numeric answer, and the dispatcher remains
+// safely callable. On the HEXA_CUDA build: enforces device-residency
+// and runs cuBLAS Dgemm; for this scaffolding cycle the body is the
+// TODO[cuda] stub (returns -1), so a HEXA_CUDA scaffolding build still
+// FAILS LOUDLY on the GPU path — no fake CUDA results.
+HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                             HexaVal b_v, HexaVal bc_v) {
+#ifdef HEXA_CUDA
+    /* TODO[cuda] Phase A impl: ensure A,B resident on device (auto-
+     * upload if needed), allocate device-resident C farr, call
+     * cublasDgemm(handle, NoTrans, NoTrans, N, M, K, &alpha, B_d, N,
+     * A_d, K, &beta, C_d, N), mark loc=FARR_DEVICE + dirty_host=1.
+     *
+     * Hard-fails until the GPU TU lands so the equivalence harness is
+     * forced to compare against the CPU oracle — never a silent fake
+     * GPU result. */
+    (void)a_v; (void)ar_v; (void)ac_v; (void)b_v; (void)bc_v;
+    return hexa_int(-1);
+#else
+    /* No-CUDA build: dispatcher routes to the RFC 032 CPU op. This is
+     * the equivalence harness's POSITIVE branch — proves the dispatcher
+     * wires correctly and the math contract is preserved. */
+    return hexa_farr_matmul(a_v, ar_v, ac_v, b_v, bc_v);
+#endif
+}
+
+// ── Callable shims (≤4-arg `hexa_callN(<carrier>,…)` + 5-arg bare) ─────
+// hexa_v2 codegen's generic fallback lowers `cuda_available()` etc. to
+// `hexa_call0(cuda_available)` (and 1-arg → `hexa_call1(name, ...)`),
+// which needs a visible HexaVal carrier with that exact identifier.
+// `farr_matmul_gpu` (5-arg, past the hexa_callN ceiling) gets a bare-
+// function direct C call, which the static-inline wrapper below
+// satisfies. Same dispatch contract as RFC 032 farr_matmul + RFC 034
+// ad_matmul + RFC 035 adamw_step_mixed.
+HexaVal cuda_available;
+HexaVal cuda_device_count;
+HexaVal farr_to_device;
+HexaVal farr_to_host;
+HexaVal farr_pin;
+HexaVal farr_device_free;
+static inline HexaVal farr_matmul_gpu_impl(HexaVal a, HexaVal ar, HexaVal ac,
+                                           HexaVal b, HexaVal bc) {
+    return hexa_farr_matmul_gpu(a, ar, ac, b, bc);
+}
+HexaVal farr_matmul_gpu(HexaVal a, HexaVal ar, HexaVal ac,
+                        HexaVal b, HexaVal bc) {
+    return farr_matmul_gpu_impl(a, ar, ac, b, bc);
+}
+
 // ── A1 (2026-05-10): per-phase arena reset side channel ─────────
 // Stage 0 host (hexa_real / hexa_interp.real) holds every str-arena
 // allocation for the whole process lifetime — there is no per-phase
@@ -11891,6 +12132,16 @@ static void _hexa_init_fn_shims(void) {
     // anima RFC 036-draft (2026-05-16): phi_rs MI/Φ byte-equal carriers.
     phi_mi_pair                     = hexa_fn_new((void*)hexa_phi_mi_pair,                     4);
     phi_spatial                     = hexa_fn_new((void*)hexa_phi_spatial,                     4);
+    // anima RFC 040 (2026-05-16): farr GPU/CUDA Phase A scaffolding —
+    // 0/1-arg device-management carriers. The 5-arg farr_matmul_gpu uses
+    // a static-inline wrapper (direct C call past the hexa_callN ceiling,
+    // same pattern as RFC 032 farr_matmul + RFC 034 ad_matmul).
+    cuda_available                  = hexa_fn_new((void*)hexa_cuda_available,                  0);
+    cuda_device_count               = hexa_fn_new((void*)hexa_cuda_device_count,               0);
+    farr_to_device                  = hexa_fn_new((void*)hexa_farr_to_device,                  1);
+    farr_to_host                    = hexa_fn_new((void*)hexa_farr_to_host,                    1);
+    farr_pin                        = hexa_fn_new((void*)hexa_farr_pin,                        1);
+    farr_device_free                = hexa_fn_new((void*)hexa_farr_device_free,                1);
     // RFC 035 (2026-05-13): 3/4-arg NM-step builtins routed through hexa_callN.
     farr_simplex_centroid           = hexa_fn_new((void*)hexa_farr_simplex_centroid,           4);
     farr_simplex_get                = hexa_fn_new((void*)hexa_farr_simplex_get,                4);

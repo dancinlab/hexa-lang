@@ -752,4 +752,50 @@ HexaVal hexa_phi_spatial(HexaVal st_v, HexaVal nc_v, HexaVal dim_v,
 extern HexaVal phi_mi_pair;                                            /* runtime.c — RFC 036 fn carrier */
 extern HexaVal phi_spatial;                                            /* runtime.c — RFC 036 fn carrier */
 
+/* ── anima RFC 040 (2026-05-16): farr GPU/CUDA backend — Phase A scaffolding ─
+ * Device-farr residence descriptor + dispatcher + CPU-fallback for the
+ * GPU-routed compute path. The default build (no `-DHEXA_CUDA`) MUST be
+ * byte-identical to today: every existing farr is loc=FARR_HOST with
+ * d_buf=NULL, and `farr_matmul_gpu` falls back to the RFC 032 CPU
+ * `farr_matmul`. With `-DHEXA_CUDA` the dispatcher signatures match but
+ * the bodies remain TODO[cuda] stubs (the real cuBLAS/kernel impls are
+ * a future CUDA-box cycle — Phase A scaffolding only). See
+ * inbox/rfc_drafts_2026_05_12/rfc_040_farr_gpu_cuda_backend.md §"Phase A".
+ *
+ *   cuda_available()         -> 1 iff CUDA toolkit+device present at
+ *                                runtime; else 0. No-CUDA build = 0.
+ *   cuda_device_count()      -> # visible GPUs (0 = none).
+ *   farr_to_device(id)       -> 1 ok / 0 err / -1 no-cuda. No-op + 1 on
+ *                                CPU-fallback (caller code stays valid).
+ *   farr_to_host(id)         -> mirror of farr_to_device (D2H side).
+ *   farr_pin(id)             -> mark resident-on-device, do not evict.
+ *   farr_device_free(id)     -> free d_buf, keep host buf.
+ *   farr_matmul_gpu(A,Ar,Ac,B,Bc) -> int farr (ABI-identical to RFC 032
+ *                                farr_matmul; same shape, same -1 errs;
+ *                                no-CUDA → routes to CPU farr_matmul).
+ *
+ * Honest carve-out (AGENTS.tape g3): this scaffolding lands NO CUDA
+ * kernels. The GPU paths are TODO[cuda] stubs verified on Mac via the
+ * CPU-fallback equivalence — the actual cuBLAS Dgemm + kernels are the
+ * next-cycle deliverable on a CUDA host. */
+HexaVal hexa_cuda_available(void);                                     /* runtime.c — RFC 040 */
+HexaVal hexa_cuda_device_count(void);                                  /* runtime.c — RFC 040 */
+HexaVal hexa_farr_to_device(HexaVal h_v);                              /* runtime.c — RFC 040 */
+HexaVal hexa_farr_to_host(HexaVal h_v);                                /* runtime.c — RFC 040 */
+HexaVal hexa_farr_pin(HexaVal h_v);                                    /* runtime.c — RFC 040 */
+HexaVal hexa_farr_device_free(HexaVal h_v);                            /* runtime.c — RFC 040 */
+HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                             HexaVal b_v, HexaVal bc_v);                /* runtime.c — RFC 040 */
+/* Generic-fallback carriers (≤4-arg: `hexa_callN(<carrier>, …)`) and
+ * direct-call wrappers (5-arg `farr_matmul_gpu(…)` bare). Both linked
+ * external so the committed codegen's fallback path resolves cleanly. */
+extern HexaVal cuda_available;                                         /* runtime.c — RFC 040 fn carrier */
+extern HexaVal cuda_device_count;                                      /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_to_device;                                         /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_to_host;                                           /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_pin;                                               /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_device_free;                                       /* runtime.c — RFC 040 fn carrier */
+HexaVal farr_matmul_gpu(HexaVal a, HexaVal ar, HexaVal ac,
+                        HexaVal b, HexaVal bc);                         /* runtime.c — RFC 040 (5-arg direct) */
+
 #endif /* HEXA_RUNTIME_H */
