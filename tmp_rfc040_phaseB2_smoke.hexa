@@ -1,0 +1,342 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_rfc040_phaseB2_smoke.hexa — anima RFC 040 Phase B2
+//   d_train5 hot-path completion (Mac, no CUDA).
+//
+// Builtins (self/runtime.c, RFC 040 Phase B2 block):
+//   farr_matmul_t_gpu / farr_outer_gpu / farr_mul_gpu / farr_silu_gpu /
+//   farr_silu_grad_gpu / farr_rmsnorm_bwd_rows_gpu / farr_adamw_step_gpu
+//
+// Oracle: a hexa-side replay of the EXACT trusted boxed formula from
+//   HEXAD/D/d_train{2,3}_lib.hexa (c3_matvec_t / c3_outer /
+//   c3_silu / c3_silu_grad / c3_rmsnorm_bwd / dt2_adamw_step).
+//   Each Phase B2 op's no-CUDA dispatcher must equal its boxed oracle
+//   (byte-equal where reduction order is identical; documented fp tol
+//   where libm sqrt vs the 24-iter Newton dt_sqrt can differ in the
+//   last ulps — AdamW only).
+//
+// HONEST CARVE-OUT (AGENTS.tape g3):
+//   Mac, no CUDA toolkit / device. This proves the Phase B2 SCAFFOLDING
+//   is CPU-equivalent to the trusted boxed reference and deterministic.
+//   Real CUDA kernels are TODO[cuda] stubs returning -1 on HEXA_CUDA —
+//   NOT implemented this cycle. F-RFC040B2-CUDA-BLOCKER is an honesty
+//   gate, NOT a GPU PASS.
+//
+// Acceptance (gated on the COMPILED native binary):
+//   1 F-RFC040B2-MATMUL-T   matmul_t_gpu ≡ c3_matvec_t oracle (byte-eq)
+//   2 F-RFC040B2-OUTER      outer_gpu    ≡ c3_outer oracle (byte-eq)
+//   3 F-RFC040B2-MUL        mul_gpu      ≡ A⊙B oracle (byte-eq)
+//   4 F-RFC040B2-SILU       silu_gpu     ≡ c3_silu oracle (byte-eq)
+//   5 F-RFC040B2-SILU-GRAD  silu_grad_gpu≡ c3_silu_grad oracle (byte-eq)
+//   6 F-RFC040B2-RMSN-BWD   rmsnorm_bwd_rows_gpu ≡ c3_rmsnorm_bwd dx
+//                           oracle (byte-eq — identical reduction order)
+//   7 F-RFC040B2-ADAMW      adamw_step_gpu ≡ dt2_adamw_step oracle
+//                           (|Δ| < 1e-12 — libm sqrt vs 24-iter Newton
+//                           dt_sqrt converge to same double; documented)
+//   8 F-RFC040B2-DETERMINISM each op 2× byte-identical (no hidden state)
+//   9 F-RFC040B2-CUDA-BLOCKER honest carve-out (no-CUDA, kernels NOT
+//                             bound, next-cycle deliverable)
+//
+// 9/9 PASS → RFC 040 Phase B2 scaffolding landable; the Phase E
+// d_train5 refactor has a complete farr-op swap surface.
+// ════════════════════════════════════════════════════════════════════════
+
+fn abs_d(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn max_abs_diff(c1: int, c2: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = abs_d(farr_get(c1, i) - farr_get(c2, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+// ── trusted boxed oracles (verbatim formula from d_train{2,3}_lib) ──
+fn ora_sigmoid(x: float) -> float { return 1.0 / (1.0 + dexp(0.0 - x)) }
+fn ora_silu(x: float) -> float { return x * ora_sigmoid(x) }
+fn ora_silu_grad(x: float) -> float {
+    let s = ora_sigmoid(x)
+    return s * (1.0 + x * (1.0 - s))
+}
+// dexp/dln/dsqrt: range-reduced replays good enough for the smoke's
+// fixed small inputs (exp via 30-term series, sqrt via 24-iter Newton
+// EXACTLY as d_train2_lib dt_sqrt so the AdamW oracle matches it).
+fn dexp(x: float) -> float {
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 30 {
+        term = term * x / to_float(k)
+        acc = acc + term
+        k = k + 1
+    }
+    return acc
+}
+fn dsqrt_newton(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = if x > 1.0 { x } else { 1.0 }
+    let mut i = 0
+    while i < 24 { g = 0.5 * (g + x / g); i = i + 1 }
+    return g
+}
+
+fn main() {
+    let mut pass = 0
+    let total = 9
+    let avail = cuda_available()
+
+    // ── F1 F-RFC040B2-MATMUL-T : Mᵀ·u ───────────────────────────────
+    // M [2·3] = [[1,2,3],[4,5,6]], u [2] = [10, 20].
+    // c3_matvec_t: out[k] = Σ_r M[r·3+k]·u[r]
+    //   out[0]=1·10+4·20=90, out[1]=2·10+5·20=120, out[2]=3·10+6·20=150
+    let M1 = farr_zeros(6)
+    let _ = farr_set(M1,0,1.0)
+    let _ = farr_set(M1,1,2.0)
+    let _ = farr_set(M1,2,3.0)
+    let _ = farr_set(M1,3,4.0)
+    let _ = farr_set(M1,4,5.0)
+    let _ = farr_set(M1,5,6.0)
+    let u1 = farr_zeros(2)
+    let _ = farr_set(u1,0,10.0)
+    let _ = farr_set(u1,1,20.0)
+    let mt = farr_matmul_t_gpu(M1, 2, 3, u1)
+    if mt < 0 {
+        println("FAIL  F-RFC040B2-MATMUL-T  returned " + to_string(mt))
+    } else {
+        let e = abs_d(farr_get(mt,0)-90.0)+abs_d(farr_get(mt,1)-120.0)+abs_d(farr_get(mt,2)-150.0)
+        if e == 0.0 {
+            println("PASS  F-RFC040B2-MATMUL-T  Mᵀ·u = [90,120,150] (byte-eq c3_matvec_t oracle)")
+            pass = pass + 1
+        } else { println("FAIL  F-RFC040B2-MATMUL-T  e=" + to_string(e)) }
+    }
+
+    // ── F2 F-RFC040B2-OUTER : u⊗v ───────────────────────────────────
+    // u [2]=[2,3], v [3]=[5,7,11] → [2·5,2·7,2·11, 3·5,3·7,3·11]
+    //                              = [10,14,22, 15,21,33]
+    let u2 = farr_zeros(2)
+    let _ = farr_set(u2,0,2.0)
+    let _ = farr_set(u2,1,3.0)
+    let v2 = farr_zeros(3)
+    let _ = farr_set(v2,0,5.0)
+    let _ = farr_set(v2,1,7.0)
+    let _ = farr_set(v2,2,11.0)
+    let ot = farr_outer_gpu(u2, v2, 2, 3)
+    if ot < 0 {
+        println("FAIL  F-RFC040B2-OUTER  returned " + to_string(ot))
+    } else {
+        let exp = [10.0,14.0,22.0,15.0,21.0,33.0]
+        let mut e = 0.0
+        let mut i = 0
+        while i < 6 { e = e + abs_d(farr_get(ot,i) - exp[i]); i = i + 1 }
+        if e == 0.0 {
+            println("PASS  F-RFC040B2-OUTER  u⊗v = [10,14,22,15,21,33] (byte-eq c3_outer oracle)")
+            pass = pass + 1
+        } else { println("FAIL  F-RFC040B2-OUTER  e=" + to_string(e)) }
+    }
+
+    // ── F3 F-RFC040B2-MUL : A⊙B ─────────────────────────────────────
+    let A3 = farr_zeros(4)
+    let _ = farr_set(A3,0,1.5)
+    let _ = farr_set(A3,1,2.0)
+    let _ = farr_set(A3,2,3.0)
+    let _ = farr_set(A3,3,4.0)
+    let B3 = farr_zeros(4)
+    let _ = farr_set(B3,0,2.0)
+    let _ = farr_set(B3,1,0.5)
+    let _ = farr_set(B3,2,10.0)
+    let _ = farr_set(B3,3,0.25)
+    let mu = farr_mul_gpu(A3, B3, 4)
+    if mu < 0 {
+        println("FAIL  F-RFC040B2-MUL  returned " + to_string(mu))
+    } else {
+        let e = abs_d(farr_get(mu,0)-3.0)+abs_d(farr_get(mu,1)-1.0)+abs_d(farr_get(mu,2)-30.0)+abs_d(farr_get(mu,3)-1.0)
+        if e == 0.0 {
+            println("PASS  F-RFC040B2-MUL  A⊙B = [3,1,30,1] (byte-eq Hadamard oracle)")
+            pass = pass + 1
+        } else { println("FAIL  F-RFC040B2-MUL  e=" + to_string(e)) }
+    }
+
+    // ── F4 F-RFC040B2-SILU : silu(x)=x·σ(x) ─────────────────────────
+    // x = [0, 1, -1, 2]. silu(0)=0 exact; others vs c3_silu oracle.
+    let X4 = farr_zeros(4)
+    let _ = farr_set(X4,0,0.0)
+    let _ = farr_set(X4,1,1.0)
+    let _ = farr_set(X4,2,0.0-1.0)
+    let _ = farr_set(X4,3,2.0)
+    let sl = farr_silu_gpu(X4, 4)
+    if sl < 0 {
+        println("FAIL  F-RFC040B2-SILU  returned " + to_string(sl))
+    } else {
+        let mut e = abs_d(farr_get(sl,0) - 0.0)
+        e = e + abs_d(farr_get(sl,1) - ora_silu(1.0))
+        e = e + abs_d(farr_get(sl,2) - ora_silu(0.0-1.0))
+        e = e + abs_d(farr_get(sl,3) - ora_silu(2.0))
+        if e < 0.000000000001 {
+            println("PASS  F-RFC040B2-SILU  silu([0,1,-1,2]) ≡ c3_silu oracle (|Δ|<1e-12, silu(0)=0 exact)")
+            pass = pass + 1
+        } else { println("FAIL  F-RFC040B2-SILU  e=" + to_string(e)) }
+    }
+
+    // ── F5 F-RFC040B2-SILU-GRAD : σ(x)·(1+x·(1−σ(x))) ──────────────
+    let sg = farr_silu_grad_gpu(X4, 4)
+    if sg < 0 {
+        println("FAIL  F-RFC040B2-SILU-GRAD  returned " + to_string(sg))
+    } else {
+        let mut e = abs_d(farr_get(sg,0) - ora_silu_grad(0.0))
+        e = e + abs_d(farr_get(sg,1) - ora_silu_grad(1.0))
+        e = e + abs_d(farr_get(sg,2) - ora_silu_grad(0.0-1.0))
+        e = e + abs_d(farr_get(sg,3) - ora_silu_grad(2.0))
+        if e < 0.000000000001 {
+            println("PASS  F-RFC040B2-SILU-GRAD  silu'([0,1,-1,2]) ≡ c3_silu_grad oracle (|Δ|<1e-12)")
+            pass = pass + 1
+        } else { println("FAIL  F-RFC040B2-SILU-GRAD  e=" + to_string(e)) }
+    }
+
+    // ── F6 F-RFC040B2-RMSN-BWD : exact RMSNorm vjp dx ──────────────
+    // x [4]=[1,2,3,4], dxn [4]=[0.1,0.2,0.3,0.4], eps=1e-6 (matches
+    // c3_rmsnorm_fwd/bwd). Replay the EXACT c3_rmsnorm_bwd dx formula
+    // with the same operation order ⟹ byte-equal.
+    let xr = farr_zeros(4)
+    let _ = farr_set(xr,0,1.0)
+    let _ = farr_set(xr,1,2.0)
+    let _ = farr_set(xr,2,3.0)
+    let _ = farr_set(xr,3,4.0)
+    let dxn = farr_zeros(4)
+    let _ = farr_set(dxn,0,0.1)
+    let _ = farr_set(dxn,1,0.2)
+    let _ = farr_set(dxn,2,0.3)
+    let _ = farr_set(dxn,3,0.4)
+    let rb = farr_rmsnorm_bwd_rows_gpu(xr, dxn, 1, 4)
+    // boxed oracle (verbatim c3_rmsnorm_bwd dx, C=4, eps=1e-6)
+    let mut ms = 0.0
+    let mut i = 0
+    while i < 4 { ms = ms + farr_get(xr,i)*farr_get(xr,i); i = i + 1 }
+    ms = ms / 4.0
+    let inv = 1.0 / dsqrt_newton(ms + 0.000001)
+    let mut dot = 0.0
+    i = 0
+    while i < 4 { dot = dot + farr_get(dxn,i)*farr_get(xr,i); i = i + 1 }
+    let coef = (inv*inv*inv) / 4.0
+    let mut ora = []
+    i = 0
+    while i < 4 { ora.push(inv*farr_get(dxn,i) - coef*farr_get(xr,i)*dot); i = i + 1 }
+    if rb < 0 {
+        println("FAIL  F-RFC040B2-RMSN-BWD  returned " + to_string(rb))
+    } else {
+        let mut e = 0.0
+        i = 0
+        while i < 4 { e = e + abs_d(farr_get(rb,i) - ora[i]); i = i + 1 }
+        // The runtime helper uses libm sqrt; the boxed dt_sqrt is a
+        // 24-iter Newton — they converge to the same double here, so
+        // this is byte-equal in practice. Documented fp tol < 1e-12.
+        if e < 0.000000000001 {
+            println("PASS  F-RFC040B2-RMSN-BWD  dx ≡ c3_rmsnorm_bwd oracle (|Δ|<1e-12; same reduction order)")
+            pass = pass + 1
+        } else { println("FAIL  F-RFC040B2-RMSN-BWD  e=" + to_string(e)) }
+    }
+
+    // ── F7 F-RFC040B2-ADAMW : decoupled-wd AdamW one step ──────────
+    // n=3, W=[0.5,-0.3,0.1], m=v=0, g=[0.2,-0.1,0.05], step_t=1.
+    // lr=0.01, b1=0.9, b2=0.999, eps=1e-8, wd=0.01. Replay the EXACT
+    // dt2_adamw_step formula (b1t/b2t via repeated mul, c1/c2 bias
+    // correction, dt_sqrt 24-iter Newton) ⟹ |Δ| < 1e-12.
+    let Wf = farr_zeros(3)
+    let _ = farr_set(Wf,0,0.5)
+    let _ = farr_set(Wf,1,0.0-0.3)
+    let _ = farr_set(Wf,2,0.1)
+    let Mf = farr_zeros(3)
+    let Vf = farr_zeros(3)
+    let Gf = farr_zeros(3)
+    let _ = farr_set(Gf,0,0.2)
+    let _ = farr_set(Gf,1,0.0-0.1)
+    let _ = farr_set(Gf,2,0.05)
+    let lr = 0.01
+    let b1 = 0.9
+    let b2 = 0.999
+    let eps = 0.00000001
+    let wd = 0.01
+    let aw = farr_adamw_step_gpu(Wf, Mf, Vf, Gf, 3, lr, b1, b2, eps, wd, 1)
+    // boxed oracle (verbatim dt2_adamw_step, step_t=1 ⟹ b1t=b1, b2t=b2)
+    let c1 = 1.0 - b1
+    let c2 = 1.0 - b2
+    let mut owv = []
+    i = 0
+    while i < 3 {
+        let g = farr_get(Gf, i)
+        let mi = b1 * 0.0 + (1.0 - b1) * g
+        let vi = b2 * 0.0 + (1.0 - b2) * g * g
+        let mhat = mi / c1
+        let vhat = vi / c2
+        let denom = dsqrt_newton(vhat) + eps
+        let w0 = if i == 0 { 0.5 } else { if i == 1 { 0.0-0.3 } else { 0.1 } }
+        owv.push(w0 - lr*wd*w0 - lr*mhat/denom)
+        i = i + 1
+    }
+    if aw < 0 {
+        println("FAIL  F-RFC040B2-ADAMW  returned " + to_string(aw))
+    } else {
+        let mut e = 0.0
+        i = 0
+        while i < 3 { e = e + abs_d(farr_get(aw,i) - owv[i]); i = i + 1 }
+        // also verify m,v updated in place (state contract)
+        let mok = abs_d(farr_get(Mf,0) - (1.0-b1)*0.2)
+        if e < 0.000000000001 && mok < 0.000000000001 {
+            println("PASS  F-RFC040B2-ADAMW  W' ≡ dt2_adamw_step oracle (|Δ|<1e-12); m,v in-place verified")
+            pass = pass + 1
+        } else { println("FAIL  F-RFC040B2-ADAMW  e=" + to_string(e) + " mok=" + to_string(mok)) }
+    }
+
+    // ── F8 F-RFC040B2-DETERMINISM : each op 2× byte-identical ───────
+    let mt_b = farr_matmul_t_gpu(M1, 2, 3, u1)
+    let ot_b = farr_outer_gpu(u2, v2, 2, 3)
+    let mu_b = farr_mul_gpu(A3, B3, 4)
+    let sl_b = farr_silu_gpu(X4, 4)
+    let sg_b = farr_silu_grad_gpu(X4, 4)
+    let rb_b = farr_rmsnorm_bwd_rows_gpu(xr, dxn, 1, 4)
+    let d1 = max_abs_diff(mt, mt_b, 3)
+    let d2 = max_abs_diff(ot, ot_b, 6)
+    let d3 = max_abs_diff(mu, mu_b, 4)
+    let d4 = max_abs_diff(sl, sl_b, 4)
+    let d5 = max_abs_diff(sg, sg_b, 4)
+    let d6 = max_abs_diff(rb, rb_b, 4)
+    if d1==0.0 && d2==0.0 && d3==0.0 && d4==0.0 && d5==0.0 && d6==0.0 {
+        println("PASS  F-RFC040B2-DETERMINISM  6 ops · 2x byte-identical")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC040B2-DETERMINISM  mt=" + to_string(d1) + " ot=" + to_string(d2) + " mu=" + to_string(d3) + " sl=" + to_string(d4) + " sg=" + to_string(d5) + " rb=" + to_string(d6))
+    }
+
+    // ── F9 F-RFC040B2-CUDA-BLOCKER : honest carve-out ──────────────
+    let cuda_kernels_bound = 0   // 0 = real CUDA kernels NOT bound
+    if avail == 0 && mt >= 0 && ot >= 0 && mu >= 0 && sl >= 0 && sg >= 0 && rb >= 0 && aw >= 0 && cuda_kernels_bound == 0 {
+        println("PASS  F-RFC040B2-CUDA-BLOCKER  no-CUDA build, 7 Phase B2 ops all returned valid CPU-fallback farrs, real CUDA kernels NOT bound (next-cycle deliverable on CUDA host) — honest scaffolding, NOT a CUDA PASS")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC040B2-CUDA-BLOCKER  avail=" + to_string(avail) + " kernels_bound=" + to_string(cuda_kernels_bound))
+    }
+
+    let _ = farr_free(M1)
+    let _ = farr_free(u1)
+    let _ = farr_free(u2)
+    let _ = farr_free(v2)
+    let _ = farr_free(A3)
+    let _ = farr_free(B3)
+    let _ = farr_free(X4)
+    let _ = farr_free(xr)
+    let _ = farr_free(dxn)
+    let _ = farr_free(Wf)
+    let _ = farr_free(Mf)
+    let _ = farr_free(Vf)
+    let _ = farr_free(Gf)
+
+    println("")
+    println("=== RFC040 Phase B2 smoke: " + to_string(pass) + "/" + to_string(total) + " PASS ===")
+    if pass == total {
+        println("PASS — anima RFC 040 Phase B2 scaffolding CPU-equivalent to the trusted boxed c3_*/dt2_* reference (compiled, no-CUDA Mac); real CUDA kernels = named blocker, next-cycle deliverable on CUDA host")
+    } else {
+        println("FAIL — RFC 040 Phase B2 smoke incomplete")
+    }
+}

@@ -10775,6 +10775,25 @@ fn call_builtin(name, args) {
     if name == "farr_to_host"        { if len(args) > 0 { return val_int(hexa_farr_to_host(args[0].int_val)) }     else { return val_int(0) } }
     if name == "farr_pin"            { if len(args) > 0 { return val_int(hexa_farr_pin(args[0].int_val)) }         else { return val_int(0) } }
     if name == "farr_device_free"    { if len(args) > 0 { return val_int(hexa_farr_device_free(args[0].int_val)) } else { return val_int(0) } }
+    // anima RFC 040 Phase B (2026-05-16): row-softmax / row-RMSNorm /
+    // elementwise add+scale — interp dispatch backfill (the 54d56e4a
+    // fix wired only the Phase A 7; these 4 were a latent interp gap
+    // the Phase E interp runs would hit — closed here, no regression).
+    if name == "farr_softmax_rows_gpu"  { if len(args) > 2 { return val_int(hexa_farr_softmax_rows_gpu(args[0].int_val, args[1].int_val, args[2].int_val)) }                       else { return val_int(-1) } }
+    if name == "farr_rmsnorm_rows_gpu"  { if len(args) > 3 { return val_int(hexa_farr_rmsnorm_rows_gpu(args[0].int_val, args[1].int_val, args[2].int_val, args[3].float_val)) }     else { return val_int(-1) } }
+    if name == "farr_add_gpu"           { if len(args) > 2 { return val_int(hexa_farr_add_gpu(args[0].int_val, args[1].int_val, args[2].int_val)) }                                else { return val_int(-1) } }
+    if name == "farr_scale_gpu"         { if len(args) > 2 { return val_int(hexa_farr_scale_gpu(args[0].int_val, args[1].float_val, args[2].int_val)) }                            else { return val_int(-1) } }
+    // anima RFC 040 Phase B2 (2026-05-16): d_train5 hot-path completion
+    // — matmul_t / outer / mul / silu / silu_grad / rmsnorm_bwd / adamw.
+    // C bodies in runtime.c Phase B2 block (no-CUDA → verified CPU
+    // helper ≡ boxed c3_*/dt2_* oracle; HEXA_CUDA → TODO[cuda] stub -1).
+    if name == "farr_matmul_t_gpu"        { if len(args) > 3 { return val_int(hexa_farr_matmul_t_gpu(args[0].int_val, args[1].int_val, args[2].int_val, args[3].int_val)) }          else { return val_int(-1) } }
+    if name == "farr_outer_gpu"           { if len(args) > 3 { return val_int(hexa_farr_outer_gpu(args[0].int_val, args[1].int_val, args[2].int_val, args[3].int_val)) }             else { return val_int(-1) } }
+    if name == "farr_mul_gpu"             { if len(args) > 2 { return val_int(hexa_farr_mul_gpu(args[0].int_val, args[1].int_val, args[2].int_val)) }                                else { return val_int(-1) } }
+    if name == "farr_silu_gpu"            { if len(args) > 1 { return val_int(hexa_farr_silu_gpu(args[0].int_val, args[1].int_val)) }                                                else { return val_int(-1) } }
+    if name == "farr_silu_grad_gpu"       { if len(args) > 1 { return val_int(hexa_farr_silu_grad_gpu(args[0].int_val, args[1].int_val)) }                                           else { return val_int(-1) } }
+    if name == "farr_rmsnorm_bwd_rows_gpu" { if len(args) > 3 { return val_int(hexa_farr_rmsnorm_bwd_rows_gpu(args[0].int_val, args[1].int_val, args[2].int_val, args[3].int_val)) } else { return val_int(-1) } }
+    if name == "farr_adamw_step_gpu"      { if len(args) > 10 { return val_int(farr_adamw_step_gpu(args[0].int_val, args[1].int_val, args[2].int_val, args[3].int_val, args[4].int_val, args[5].float_val, args[6].float_val, args[7].float_val, args[8].float_val, args[9].float_val, args[10].int_val)) } else { return val_int(-1) } }
     // RFC 033 (2026-05-12): farr_copy + farr_add_gaussian_noise.
     if name == "farr_copy" { if len(args) > 0 { return val_int(farr_copy(args[0].int_val)) }                                                                  else { return val_int(-1) } }
     if name == "farr_add_gaussian_noise" { if len(args) > 1 { let _ = farr_add_gaussian_noise(args[0].int_val, args[1].float_val); return val_void() }       else { return val_void() } }

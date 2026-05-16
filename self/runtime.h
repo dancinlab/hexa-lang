@@ -832,4 +832,44 @@ extern HexaVal farr_rmsnorm_rows_gpu;                                          /
 extern HexaVal farr_add_gpu;                                                   /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_scale_gpu;                                                 /* runtime.c — RFC 040 fn carrier */
 
+/* anima RFC 040 Phase B2 (2026-05-16): d_train5 hot-path completion.
+ * The remaining DOMINANT-FLOP farr ops the Phase E refactor of
+ * HEXAD/D/d_train5_lib.hexa needs so every boxed c3_/dt2_ op has a
+ * matching farr-gpu swap target. Scaffolding only (Mac, no CUDA):
+ * no-CUDA = verified CPU helper == trusted boxed reference; HEXA_CUDA =
+ * TODO[cuda] stub returning -1 (honest, no-fake-PASS, AGENTS.tape g3).
+ *
+ *   farr_matmul_t_gpu(M,R,C,u)        -> int new farr [C]    (M^T . u)
+ *   farr_outer_gpu(u,v,R,C)           -> int new farr [R.C]  (u outer v)
+ *   farr_mul_gpu(a,b,n)               -> int new farr [n]    (Hadamard)
+ *   farr_silu_gpu(x,n)                -> int new farr [n]    (x.sigmoid)
+ *   farr_silu_grad_gpu(x,n)           -> int new farr [n]    (silu grad)
+ *   farr_rmsnorm_bwd_rows_gpu(x,dxn,R,C) -> int new farr [R.C] (vjp dx)
+ *   farr_adamw_step_gpu(W,m,v,g,n,lr,b1,b2,eps,wd,step_t)
+ *                                     -> int new farr [n] (updated W;
+ *                                        m,v updated in place)
+ */
+HexaVal hexa_farr_matmul_t_gpu(HexaVal m_v, HexaVal r_v, HexaVal c_v,
+                               HexaVal u_v);                                   /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_outer_gpu(HexaVal u_v, HexaVal v_v, HexaVal r_v,
+                            HexaVal c_v);                                      /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_mul_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);             /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_silu_gpu(HexaVal x_v, HexaVal n_v);                         /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_silu_grad_gpu(HexaVal x_v, HexaVal n_v);                    /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_rmsnorm_bwd_rows_gpu(HexaVal x_v, HexaVal dxn_v,
+                                       HexaVal r_v, HexaVal c_v);             /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_adamw_step_gpu(HexaVal w_v, HexaVal m_v, HexaVal v_v,
+                                 HexaVal g_v, HexaVal n_v, HexaVal lr_v,
+                                 HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                 HexaVal wd_v, HexaVal step_v);               /* runtime.c — RFC 040 Phase B2 */
+extern HexaVal farr_matmul_t_gpu;                                              /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_outer_gpu;                                                 /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_mul_gpu;                                                   /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_silu_gpu;                                                  /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_silu_grad_gpu;                                             /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_rmsnorm_bwd_rows_gpu;                                      /* runtime.c — RFC 040 fn carrier */
+HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
+                            HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                            HexaVal eps, HexaVal wd, HexaVal step_t);          /* runtime.c — RFC 040 Phase B2 (11-arg direct) */
+
 #endif /* HEXA_RUNTIME_H */
