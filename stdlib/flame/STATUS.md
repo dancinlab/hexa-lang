@@ -1,12 +1,14 @@
-# flame Phase 4-B status — single-page consolidated state (2026-05-17)
+# flame Phase 4-B status — single-page consolidated state (2026-05-17, updated)
 
-> One-page snapshot to reduce review burden after the 11-commit cycle.
+> Updated after the **16-commit autonomous cycle** (now includes Phase
+> 4-B-3 integration design + Phase 4-B-3-2-first emit + Phase 4-B-3-2-second
+> caller wire-up).
 > Cross-references the per-topic SSOTs (README.md / PLAN.md / FLAME.tape /
 > PERF.md / PHASE4B_SCAFFOLD.md / PHASE4B3_EMISSION_DESIGN.md /
 > NEXT_CYCLE.md). Use this for user-gate decisions; the per-topic SSOTs
 > for implementation detail.
 
-## What landed (11 commits, autonomous cycle 2026-05-17)
+## What landed (16 commits, autonomous cycle 2026-05-17)
 
 | # | commit | type | summary |
 |---|---|---|---|
@@ -21,11 +23,17 @@
 | 9 | `97cb9617` | verify | cross-config IPCP robustness (3 configs PASS byte-eq) |
 | 10 | `98bed481` | **measure** | **allocator-elim probe — 1.00× MEASURED (WEAKER)** |
 | 11 | `f525a656` | **measure** | **fn-call elim probe — 0.12× MEASURED + design pivot** |
+| 12 | `e49bb691` | docs | STATUS.md single-page consolidate (first version) |
+| 13 | `45b6cf22` | docs | README.md Phase 4-B-2 SHIPPED entry |
+| 14 | `a7d066a2` | design | PHASE4B3_2_INTEGRATION.md — single-TU concat mechanism |
+| 15 | `f5182641` | **ship** | **Phase 4-B-3-2-first trampoline emit + concat + link PASS** |
+| 16 | `28cf24a6` | **ship** | **Phase 4-B-3-2-second caller wire-up + build wrapper PASS** |
 
 ## Shippable production state
 
 - **Production `./hexa build`**: UNCHANGED (F-RFC047-FALLBACK-PRESERVED holds vacuously — no hook). Baseline behavior preserved.
-- **Phase 4-B-2 IPCP build wrapper**: `tool/flame_phase4b_build.sh <src> <out>` — single command from .hexa source to 1.28× wall binary, byte-identical to baseline. Verified on 3 distinct flame configs (d=32·3L corpus + d=32·3L perf + d=8·toy decoder + d=8·toy block).
+- **Phase 4-B-2 IPCP build wrapper**: `tool/flame_phase4b_build.sh <src> <out>` — single command from .hexa source to 1.28× wall binary, byte-identical to baseline. Verified on 3 distinct flame configs.
+- **Phase 4-B-3-2-second wired build wrapper**: `tool/flame_phase4b3_build.sh <src> <out>` — extends IPCP pipeline with trampoline emit + caller wire-up. Currently fallback path (trampoline forwards to HexaVal fn → byte-id with baseline, ~IPCP wall). Phase 4-B-3-2-third will replace trampoline body with primitive-typed direct dereferences (boxing-elim 4× ceiling target).
 
 ## Measurement-anchored evidence (5-run avg per PERF.md convention)
 
@@ -51,30 +59,30 @@ Expected Phase 4-B-3 wall: **~3.14s** (4× on 12.574s baseline). flame would be 
 
 ## Next user-gate decision
 
-Phase 4-B-3-2 implementation start. Three honest paths:
+Phase 4-B-3-2-third implementation start (sub-phases -first + -second already shipped). Three honest paths:
 
-**Path A — Phase 4-B-3-2 boxing-only emit (recommended)**
-- effort: 3-4 cycles (revised down from 6-9 per evidence pivot)
-- expected wall: ~3.14s (4× ceiling)
-- first sub-step: trampoline emit (unbox at entry, call existing HexaVal block_fwd, byte-eq automatic)
-- next: leaf fn specializations (rmsnorm/linear/attn_core/swiglu) — captures the 16M box/unbox ops
-- risk: mid (C runtime ABI integration, but no math change)
-- falsifiers: F-RFC047-BLOCK-EMIT-BYTE-EQ-FWD/BWD + F-RFC047-CORPUS-EMIT-STEP-EQ
+**Path A — Phase 4-B-3-2-third primitive body + leaf specs (recommended)**
+- effort: 2-3 cycles (per PHASE4B3_2_INTEGRATION.md)
+- expected wall: ~3.14s (4× boxing-elim ceiling, MEASURED commit `07cdd405`)
+- first sub-step: smallest leaf — `nn_rmsnorm_fwd` primitive body emit + byte-eq strict verify
+- progression: rmsnorm → linear → attn_core → swiglu → composite
+- risk: mid (~10 lines per leaf body, byte-eq Phase 2 strict gate)
+- falsifiers: F-RFC047-BOXING-ELIM-BYTE-EQ + F-RFC047-BOXING-ELIM-WALL ≥3×
 
 **Path B — GPU dispatch fire (Phase 4-D)**
 - effort: 1-2 cycles + cost-bearing $5-20 (vast.ai A100)
-- ship Phase 4-B-2 IPCP (1.28× already real) and pivot to GPU
-- at d=768·12L the IPCP path may compose with GPU memory bandwidth
+- ship Phase 4-B-3-2-second state (trampoline pipeline ready)
+- at d=768·12L the IPCP+wire-up path may compose with GPU memory bandwidth
 - target: F-RFC046-EAGER-PYTORCH-MATCH (≤1.3× of 336.85s eager-PyTorch)
 - risk: mid (cost + GPU dispatch infra dependencies)
 
 **Path C — current state ship + RFC 048 design**
 - effort: 1 cycle (docs only)
-- Phase 4-B-2 IPCP 1.28× as final Phase 4-B-2 SHIP closure
+- Phase 4-B-2 IPCP 1.28× + Phase 4-B-3-2-second wire-up as Phase 4-B SHIP closure
 - RFC 048 fwd+bwd graph fusion design draft (orthogonal mechanism)
 - conservative: capture what's measured, defer ≥3× to evidence-rich future
 
-## Files touched this cycle
+## Files touched this cycle (16 commits)
 
 | file | type | purpose |
 |---|---|---|
@@ -82,30 +90,39 @@ Phase 4-B-3-2 implementation start. Three honest paths:
 | `tool/flame_phase4b_scan.hexa` | new | Phase 4-B-1 scaffold scanner |
 | `tool/flame_phase4b_ipcp.hexa` | new | Phase 4-B-2 IPCP rewriter |
 | `tool/flame_phase4b_build.sh` | new | reproducible IPCP build wrapper |
-| `tool/flame_phase4b3_emit_skeleton.hexa` | new | Phase 4-B-3-1 scaffold |
+| `tool/flame_phase4b3_emit_skeleton.hexa` | new | Phase 4-B-3-1 scaffold (sibling) |
+| `tool/flame_phase4b3_emit_trampoline.hexa` | new | Phase 4-B-3-2-first emit (with --decls extension) |
+| `tool/flame_phase4b3_build.sh` | new | Phase 4-B-3-2-second end-to-end wrapper |
 | `tool/flame_phase4b3_boxing_bench.c` | new | mechanism #1 probe |
 | `tool/flame_phase4b3_alloc_bench.c` | new | mechanism #2 probe |
 | `tool/flame_phase4b3_fncall_bench.c` | new | mechanism #3 probe |
 | `stdlib/flame/PHASE4B_SCAFFOLD.md` | extended | IPCP findings + cross-config audit |
 | `stdlib/flame/PHASE4B3_EMISSION_DESIGN.md` | new+updated | emission design + mechanism updates + pivot |
+| `stdlib/flame/PHASE4B3_2_INTEGRATION.md` | new | Phase 4-B-3-2 build pipeline integration design |
 | `stdlib/flame/PERF.md` | extended | 3 mechanism probes + IPCP measurement |
 | `stdlib/flame/NEXT_CYCLE.md` | updated | Phase 4-B status |
-| `stdlib/flame/STATUS.md` | new (this file) | single-page consolidated state |
+| `stdlib/flame/STATUS.md` | new+updated (this file) | single-page consolidated state |
+| `stdlib/flame/README.md` | updated | Phase 4-B-2 SHIPPED entry |
 
 ## Quick reference — running everything
 
 ```bash
-# Phase 4-B-2 IPCP build of flame_d32_corpus_test:
+# Phase 4-B-2 IPCP build (1.18-1.28× wall, byte-id):
 tool/flame_phase4b_build.sh \
     stdlib/flame/flame_d32_corpus_test.hexa \
     build/flame_d32_ipcp
+
+# Phase 4-B-3-2-second trampoline-wired build (current ≈IPCP wall, byte-id):
+tool/flame_phase4b3_build.sh \
+    stdlib/flame/flame_d32_corpus_test.hexa \
+    build/flame_d32_b3
 
 # Phase 4-B-3 mechanism probes:
 clang -O2 tool/flame_phase4b3_boxing_bench.c -o build/boxing_bench && ./build/boxing_bench
 clang -O2 tool/flame_phase4b3_alloc_bench.c  -o build/alloc_bench  && ./build/alloc_bench
 clang -O2 tool/flame_phase4b3_fncall_bench.c -o build/fncall_bench && ./build/fncall_bench
 
-# Phase 4-B-3-1 emit skeleton inspect:
+# Phase 4-B-3-1 emit skeleton inspect (deprecated by trampoline tool but kept):
 hexa run tool/flame_phase4b3_emit_skeleton.hexa /tmp/flame_d32_corpus_test_ipcp.hexa
 ```
 
