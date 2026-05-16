@@ -652,23 +652,13 @@ pub fn nn_decoder_block_bwd(X: int, Bp: int, Bc: int,
 
     // 6 reversed (hstate = X + attn_out): dX_residual += dh ; dattn_out = dh
     // 5 reversed (attn_out = ctx · Wo^T per pos):
-    //   dWo[r·d+c] += Σ_t dattn_out[t,r] · ctx[t,c]   ; dctx[t,c] = Σ_r Wo[r·d+c] · dattn_out[t,r]
+    //   dWo[r·d+c] += Σ_t dattn_out[t,r] · ctx[t,c]   (dh^T · ctx outer-product)
+    //   dctx[t,c] = Σ_r Wo[r·d+c] · dattn_out[t,r]    (per-t inner dot)
+    // Phase 4-A-bwd partial 3 (2026-05-17): dWo accumulator via helper.
+    _db_grad_accum_farr(dh, 0, Bc, oCtx, Bg, WO, T, d, d)
     let dctx = farr_zeros(T * d)
     let mut t_w = 0
     while t_w < T {
-        // dWo accum
-        let mut r = 0
-        while r < d {
-            let dao_r = farr_get(dh, t_w * d + r)
-            let mut c = 0
-            while c < d {
-                let cur = farr_get(Bg, WO + r * d + c)
-                let _ = farr_set(Bg, WO + r * d + c,
-                                 cur + dao_r * farr_get(Bc, oCtx + t_w * d + c))
-                c = c + 1
-            }
-            r = r + 1
-        }
         // dctx[t,c] = Σ_r Wo[r·d+c] · dattn_out[t,r]
         let mut c2 = 0
         while c2 < d {
