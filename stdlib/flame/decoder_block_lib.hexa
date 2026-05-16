@@ -551,15 +551,18 @@ pub fn nn_decoder_block_bwd(X: int, Bp: int, Bc: int,
     }
 
     // 8 reversed (SwiGLU per position) — produces dr [d] per pos, accum dWg/dWu/dWd
-    // Phase 4-A-bwd partial 2: dWd accumulator (Σ_ts dout[ts]⊗s[ts])
-    // farr_matmul-routed via _db_grad_accum_farr (dY=dXout [T·d],
-    // X=sw_s [T·h], dW=Bg.WD [d·h]). dWg/dWu (per-ts ds-dependent)
-    // stay per-ts inline (ts-local da/db not yet batched).
+    // Phase 4-A-bwd partial 2: dWd accumulator farr_matmul-routed
+    //   (Σ_ts dout[ts]⊗s[ts] = dXout^T · sw_s).
+    // Phase 4-A-bwd partial 4 (2026-05-17): dWg/dWu also batched —
+    //   collect da/db per-ts into da_all/db_all [T·h] then accum via
+    //   _db_grad_accum_farr (Σ_ts da[ts]⊗rin2[ts] = da_all^T · rin2).
     _db_grad_accum_farr(dXout, 0, Bc, oSwS, Bg, WD, T, d, h)
     let dr_pos = farr_zeros(d)
     let ds_pos = farr_zeros(h)
     let da_pos = farr_zeros(h)
     let db_pos = farr_zeros(h)
+    let da_all = farr_zeros(T * h)
+    let db_all = farr_zeros(T * h)
     let mut ts = 0
     while ts < T {
         // dWd already accumulated via _db_grad_accum_farr above.
@@ -576,32 +579,23 @@ pub fn nn_decoder_block_bwd(X: int, Bp: int, Bc: int,
             let _ = farr_set(ds_pos, k2, acc)
             k2 = k2 + 1
         }
-        // da[k] = ds·b·silu'(a) ; db[k] = ds·silu(a)
+        // da[k] = ds·b·silu'(a) ; db[k] = ds·silu(a). Also batch into
+        // da_all/db_all so dWg/dWu can be batched-accumulated after the
+        // ts loop (Phase 4-A-bwd partial 4).
         let mut k3 = 0
         while k3 < h {
             let ak = farr_get(Bc, oSwA + ts * h + k3)
             let bk = farr_get(Bc, oSwB + ts * h + k3)
             let dsk = farr_get(ds_pos, k3)
-            let _ = farr_set(da_pos, k3, dsk * bk * _db_silu_grad(ak))
-            let _ = farr_set(db_pos, k3, dsk * _db_silu(ak))
+            let da_v = dsk * bk * _db_silu_grad(ak)
+            let db_v = dsk * _db_silu(ak)
+            let _ = farr_set(da_pos, k3, da_v)
+            let _ = farr_set(db_pos, k3, db_v)
+            let _ = farr_set(da_all, ts * h + k3, da_v)
+            let _ = farr_set(db_all, ts * h + k3, db_v)
             k3 = k3 + 1
         }
-        // dWg[k·d + c] += da[k] · rin2[ts, c] ; dWu similarly
-        let mut k4 = 0
-        while k4 < h {
-            let da_k = farr_get(da_pos, k4)
-            let db_k = farr_get(db_pos, k4)
-            let mut cc = 0
-            while cc < d {
-                let rc = farr_get(Bc, oRin2 + ts * d + cc)
-                let cur_g = farr_get(Bg, WG + k4 * d + cc)
-                let _ = farr_set(Bg, WG + k4 * d + cc, cur_g + da_k * rc)
-                let cur_u = farr_get(Bg, WU + k4 * d + cc)
-                let _ = farr_set(Bg, WU + k4 * d + cc, cur_u + db_k * rc)
-                cc = cc + 1
-            }
-            k4 = k4 + 1
-        }
+        // dWg/dWu accumulation moved to batched call after ts loop.
         // dr[c] = Σ_k (Wg[k·d+c] · da[k] + Wu[k·d+c] · db[k])
         let mut cc2 = 0
         while cc2 < d {
@@ -645,10 +639,16 @@ pub fn nn_decoder_block_bwd(X: int, Bp: int, Bc: int,
         }
         ts = ts + 1
     }
+    // batched dWg/dWu accumulation across all ts (Phase 4-A-bwd partial 4).
+    //   dWg[k·d+c] += Σ_ts da_all[ts·h+k] · rin2[ts·d+c]  = da_all^T · rin2
+    _db_grad_accum_farr(da_all, 0, Bc, oRin2, Bg, WG, T, h, d)
+    _db_grad_accum_farr(db_all, 0, Bc, oRin2, Bg, WU, T, h, d)
     let _ = farr_free(dr_pos)
     let _ = farr_free(ds_pos)
     let _ = farr_free(da_pos)
     let _ = farr_free(db_pos)
+    let _ = farr_free(da_all)
+    let _ = farr_free(db_all)
 
     // 6 reversed (hstate = X + attn_out): dX_residual += dh ; dattn_out = dh
     // 5 reversed (attn_out = ctx · Wo^T per pos):
