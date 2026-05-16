@@ -1079,6 +1079,21 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
             return buf
         }
+        // array/map subscript: base[idx]. hir_to_mir lowers `a[i]` to
+        // STMT_ASSIGN op="index" args=[base, idx]; without a dedicated
+        // branch the fall-through below would just copy `base` into
+        // dst (every index expr returned the whole container). Route
+        // through hexa_index_get(container, key): the runtime
+        // dispatches arrays via hexa_array_get and unwraps VALSTRUCT
+        // before the array path.
+        if s.op == "index" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // base → x0:x1
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // idx → x2:x3
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_index_get"),
+                             "index: hexa_index_get"))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
         if len(s.args) >= 1 {
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
