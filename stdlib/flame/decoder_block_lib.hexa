@@ -31,7 +31,15 @@
 //   dy = Xout (so ∂L/∂Xout = Xout), the analytic ∂L/∂θ from
 //   nn_decoder_block_bwd must match finite-difference of L(θ ± ε·e_i)
 //   within ~1e-3 relative tolerance.
+//
+// Phase 3-F (2026-05-17): transcendentals (sqrt / exp) routed through
+//   flame_math::dt_sqrt / dt_exp — anima d_train_lib / d_train2_lib
+//   identical algorithms — preparation for anima oracle byte-eq retry
+//   (gn2 7.97116 → 3.73374e-07 d=32·3L). dt_* are deterministic + the
+//   exact same algorithms anima used → flame_math byte-eq.
 // ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/flame_math"
 
 // ── dim helpers ────────────────────────────────────────────────────────
 fn _hd_of(d: int, nh: int) -> int { return d / nh }
@@ -98,8 +106,8 @@ pub fn bc_total(T: int, d: int, nh: int, nkv: int, h: int) -> int {
     return 8*T*d + 2*T*_kvd_of(d, nh, nkv) + nh*T*T + 3*T*h + 2*T
 }
 
-// ── private inline helpers ─────────────────────────────────────────────
-fn _db_sigmoid(x: float) -> float { return 1.0 / (1.0 + exp(0.0 - x)) }
+// ── private inline helpers (dt_* anima-aligned transcendentals) ───────
+fn _db_sigmoid(x: float) -> float { return 1.0 / (1.0 + dt_exp(0.0 - x)) }
 fn _db_silu(x: float) -> float { return x * _db_sigmoid(x) }
 fn _db_silu_grad(x: float) -> float {
     let s = _db_sigmoid(x)
@@ -154,7 +162,7 @@ pub fn nn_decoder_block_fwd(X: int, Bp: int, Bc: int,
             c = c + 1
         }
         ms = ms / to_float(d)
-        let inv = 1.0 / sqrt(ms + eps)
+        let inv = 1.0 / dt_sqrt(ms + eps)
         let _ = farr_set(Bc, oR1inv + i, inv)
         let mut c2 = 0
         while c2 < d {
@@ -290,7 +298,7 @@ pub fn nn_decoder_block_fwd(X: int, Bp: int, Bc: int,
     // 4. attention core (causal GQA scaled-dot + softmax + value combine).
     // Inline (parallel to nn_attn_core_fwd, but reading from Bc offsets).
     let n_rep = nh / nkv
-    let scale = 1.0 / sqrt(to_float(hd))
+    let scale = 1.0 / dt_sqrt(to_float(hd))
     let srow_at = farr_zeros(T)
     // ctx_local accumulator at offset oXout (we'll later add residual).
     // For now we use offset oXout to temporarily hold ctx (overwritten
@@ -324,7 +332,7 @@ pub fn nn_decoder_block_fwd(X: int, Bp: int, Bc: int,
             let mut tot = 0.0
             let mut jj2 = 0
             while jj2 < L {
-                let e = exp(farr_get(srow_at, jj2) - m_max)
+                let e = dt_exp(farr_get(srow_at, jj2) - m_max)
                 let _ = farr_set(Bc, oP + (hh_a * T + i_a) * T + jj2, e)
                 tot = tot + e
                 jj2 = jj2 + 1
@@ -396,7 +404,7 @@ pub fn nn_decoder_block_fwd(X: int, Bp: int, Bc: int,
             c = c + 1
         }
         ms = ms / to_float(d)
-        let inv = 1.0 / sqrt(ms + eps)
+        let inv = 1.0 / dt_sqrt(ms + eps)
         let _ = farr_set(Bc, oR2inv + i2, inv)
         let mut c2 = 0
         while c2 < d {
@@ -468,7 +476,7 @@ pub fn nn_decoder_block_bwd(X: int, Bp: int, Bc: int,
     let hd = d / nh
     let kvd = nkv * hd
     let n_rep = nh / nkv
-    let scale = 1.0 / sqrt(to_float(hd))
+    let scale = 1.0 / dt_sqrt(to_float(hd))
 
     let G1 = bp_off_g1(d, nh, nkv, h)
     let WQ = bp_off_Wq(d, nh, nkv, h)

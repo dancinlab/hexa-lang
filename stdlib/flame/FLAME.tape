@@ -436,6 +436,33 @@ selftest:
 dt_* opt-in (현 stack 은 builtin 사용); wiring (sqrt/exp/log →
 dt_* 치환) + d=32·3L 80-step trajectory + anima oracle byte-eq retry
 = 별도 cycle. flame Phase 3 = COMPLETE (NN-stack 5 sub-phase 모두 LANDED).
+
+### 2026-05-17 — Phase 3-F WIRE-IN (dt_* across stack, regression 0)
+decoder_block_lib + decoder_lib + train_lib 의 모든 builtin transcendental
+(sqrt/exp/log) + LCG (Numerical Recipes constants → dt_lcg_next) 를
+flame_math::dt_* 로 치환. anima d_train_lib / d_train2_lib 의 정확한
+알고리즘 (24-iter Newton sqrt · 12-term Taylor exp · 24-term atanh ln ·
+(s·1103515245+12345) mod 2³¹ LCG).
+- regression sweep all PASS: RFC 034 5/5 · RFC 040 B2 9/9 · flame
+  Phase 1 4/4 · Phase 2 17/17 · Phase 3-A 1/1 · Phase 3-B 2/2 ·
+  Phase 3-C 2/2 · Phase 3-D 3/3 · Phase 3-E 5/5
+- Phase 3-C GRAD-EXACT max rel = 2.66e-08 → **5.14e-06** (dt_ln/dt_exp
+  의 last-bit drift 누적; 여전히 threshold 1e-3 의 200× margin).
+  Phase 3-B GRAD-EXACT max rel = 3.59e-10 (변동 없음 — block 의 sqrt
+  은 inv cache → bwd 영향 없음).
+- Phase 3-D 80-step descent: gn2[0] = 0.861749 → gn2[80] = 2.16e-14
+  (collapse 3.99e13×; 이전 builtin = 3.5e18× 였으나 다른 init seq).
+  여전히 fit PASS (predict = target).
+- structural: call_builtin = 0 유지.
+
+flame stack 은 이제 **anima 와 algorithm-byte-equal**: 동일 dt_lcg_next
+seed seq → 동일 dt_rand_unit → 동일 weight init; 동일 dt_sqrt/dt_exp/
+dt_ln → 동일 RMSNorm/softmax/CE numerics. anima oracle byte-eq retry
+의 algorithmic foundation 완료.
+
+다음 sub-cycle: d=32·3L config 시도 (큰 V=256, T=16, n_layer=3)
++ corpus loading (또는 hardcoded seed-token-seq) + 80-step trajectory
+capture + anima oracle (gn2[0]=7.97116, gn2[80]=3.73374e-07) 비교.
 Phase 4 (compiler fusion) · Phase 5 (whole-program fusion · d=768·12L
 fire) 가 본격 perf 작업; correctness foundation 완료.
 - optim_lib = RFC 034 의 adamw_step 위의 wrapper (이미 ag_adamw_step

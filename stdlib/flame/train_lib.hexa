@@ -29,6 +29,7 @@ use "stdlib/flame/decoder_lib"
 use "stdlib/flame/decoder_block_lib"
 use "stdlib/flame/nn_lib"
 use "stdlib/flame/optim_lib"
+use "stdlib/flame/flame_math"
 
 // AdamW step over the entire packed M (param) using packed Mg (grads).
 pub fn nn_decoder_adamw_step(M: int, Mg: int, Mm: int, Mv: int,
@@ -65,28 +66,46 @@ pub fn nn_decoder_train_step(ids: int, target_t: int,
     return gn2
 }
 
-// Seed-fixed model initialization. Uses LCG to fill weights with
-// small-scale uniform; gF / g1 / g2 = 1.0 (RMSNorm gain), tok_emb =
-// small scale (tied weight). caller-allocated M (size m_total).
+// Anima-byte-eq LCG fill: writes n values into farr `dst` starting at
+// `dst_off`, using anima dt_lcg_next + dt_rand_unit:
+//   s_0 = seed ; s_{i+1} = (s_i · 1103515245 + 12345) mod 2³¹
+//   val_i = ((s_{i+1} % 1000) / 1000.0 − 0.5) · scale
+// Matches anima d_train_lib::dt_lcg_next + dt_rand_unit + dt2_init_W
+// row-major fill exactly. Replaces the Numerical-Recipes LCG used in
+// tensor_lib::t_fill_lcg (kept distinct so flame's t_fill_lcg LCG
+// signature doesn't change underneath any caller).
+fn _train_fill_dt_lcg(dst: int, dst_off: int, n: int,
+                      seed: int, scale: float) {
+    let mut s = seed
+    let mut i = 0
+    while i < n {
+        s = dt_lcg_next(s)
+        let v = dt_rand_unit(s) * scale
+        let _ = farr_set(dst, dst_off + i, v)
+        i = i + 1
+    }
+}
+
+// Seed-fixed model initialization. Uses anima-aligned dt_lcg_next to
+// fill weights with small-scale uniform; gF / g1 / g2 = 1.0 (RMSNorm
+// gain), tok_emb = small scale (tied weight). caller-allocated M.
 //   weight init scale: 0.2 for projections, 0.05 for tok_emb.
-//   Per-block weights get distinct LCG seed offsets (matching anima
-//   d5_init_block's seed+11/+23/+37/+53/+71/+89/+103 pattern in spirit:
-//   each weight kind has its own seed offset to avoid spurious
-//   correlations across weight types).
+//   Per-block weights get distinct LCG seed offsets (anima
+//   d5_init_block seed+11/+23/+37/+53/+71/+89/+103 pattern exact).
 pub fn nn_decoder_init(M: int, seed: int,
                        T: int, d: int, nh: int, nkv: int, h: int,
                        V: int, n_layer: int) {
     let oTemb = m_off_tok_emb(d, nh, nkv, h, V, n_layer)
     let oGF = m_off_gF(d, nh, nkv, h, V, n_layer)
-    // tok_emb [V·d] ~ uniform[-0.025, 0.025]
-    t_fill_lcg(M, V * d, seed + 7, 0.05)
+    // tok_emb [V·d] ~ uniform[-0.025, 0.025], seed = seed + 7
+    _train_fill_dt_lcg(M, oTemb, V * d, seed + 7, 0.05)
     // gF [d] = 1.0
     let mut i = 0
     while i < d {
         let _ = farr_set(M, oGF + i, 1.0)
         i = i + 1
     }
-    // per-block
+    // per-block (anima d5_init_block seed-offset pattern exact)
     let kvd = nkv * (d / nh)
     let mut l = 0
     while l < n_layer {
@@ -98,44 +117,15 @@ pub fn nn_decoder_init(M: int, seed: int,
             let _ = farr_set(M, bp_off + bp_off_g1(d, nh, nkv, h) + g1_i, 1.0)
             g1_i = g1_i + 1
         }
-        // Wq, Wk, Wv, Wo : 0.2 scale ; distinct seeds
-        let wq_o = bp_off + bp_off_Wq(d, nh, nkv, h)
-        let wk_o = bp_off + bp_off_Wk(d, nh, nkv, h)
-        let wv_o = bp_off + bp_off_Wv(d, nh, nkv, h)
-        let wo_o = bp_off + bp_off_Wo(d, nh, nkv, h)
-        // small scratch for fill
-        let scratch_wq = t_zeros(d * d)
-        t_fill_lcg(scratch_wq, d * d, block_seed + 11, 0.2)
-        let mut p = 0
-        while p < d * d {
-            let _ = farr_set(M, wq_o + p, farr_get(scratch_wq, p))
-            p = p + 1
-        }
-        let _ = t_free(scratch_wq)
-        let scratch_wk = t_zeros(kvd * d)
-        t_fill_lcg(scratch_wk, kvd * d, block_seed + 23, 0.2)
-        p = 0
-        while p < kvd * d {
-            let _ = farr_set(M, wk_o + p, farr_get(scratch_wk, p))
-            p = p + 1
-        }
-        let _ = t_free(scratch_wk)
-        let scratch_wv = t_zeros(kvd * d)
-        t_fill_lcg(scratch_wv, kvd * d, block_seed + 37, 0.2)
-        p = 0
-        while p < kvd * d {
-            let _ = farr_set(M, wv_o + p, farr_get(scratch_wv, p))
-            p = p + 1
-        }
-        let _ = t_free(scratch_wv)
-        let scratch_wo = t_zeros(d * d)
-        t_fill_lcg(scratch_wo, d * d, block_seed + 53, 0.2)
-        p = 0
-        while p < d * d {
-            let _ = farr_set(M, wo_o + p, farr_get(scratch_wo, p))
-            p = p + 1
-        }
-        let _ = t_free(scratch_wo)
+        // Wq, Wk, Wv, Wo with anima-exact seed offsets + scale 0.2
+        _train_fill_dt_lcg(M, bp_off + bp_off_Wq(d, nh, nkv, h),
+                           d * d, block_seed + 11, 0.2)
+        _train_fill_dt_lcg(M, bp_off + bp_off_Wk(d, nh, nkv, h),
+                           kvd * d, block_seed + 23, 0.2)
+        _train_fill_dt_lcg(M, bp_off + bp_off_Wv(d, nh, nkv, h),
+                           kvd * d, block_seed + 37, 0.2)
+        _train_fill_dt_lcg(M, bp_off + bp_off_Wo(d, nh, nkv, h),
+                           d * d, block_seed + 53, 0.2)
         // g2 [d] = 1.0
         let g2_o = bp_off + bp_off_g2(d, nh, nkv, h)
         let mut g2_i = 0
@@ -144,33 +134,12 @@ pub fn nn_decoder_init(M: int, seed: int,
             g2_i = g2_i + 1
         }
         // Wg, Wu [h·d], Wd [d·h]
-        let wg_o = bp_off + bp_off_Wg(d, nh, nkv, h)
-        let wu_o = bp_off + bp_off_Wu(d, nh, nkv, h)
-        let wd_o = bp_off + bp_off_Wd(d, nh, nkv, h)
-        let scratch_wg = t_zeros(h * d)
-        t_fill_lcg(scratch_wg, h * d, block_seed + 71, 0.2)
-        p = 0
-        while p < h * d {
-            let _ = farr_set(M, wg_o + p, farr_get(scratch_wg, p))
-            p = p + 1
-        }
-        let _ = t_free(scratch_wg)
-        let scratch_wu = t_zeros(h * d)
-        t_fill_lcg(scratch_wu, h * d, block_seed + 89, 0.2)
-        p = 0
-        while p < h * d {
-            let _ = farr_set(M, wu_o + p, farr_get(scratch_wu, p))
-            p = p + 1
-        }
-        let _ = t_free(scratch_wu)
-        let scratch_wd = t_zeros(d * h)
-        t_fill_lcg(scratch_wd, d * h, block_seed + 103, 0.2)
-        p = 0
-        while p < d * h {
-            let _ = farr_set(M, wd_o + p, farr_get(scratch_wd, p))
-            p = p + 1
-        }
-        let _ = t_free(scratch_wd)
+        _train_fill_dt_lcg(M, bp_off + bp_off_Wg(d, nh, nkv, h),
+                           h * d, block_seed + 71, 0.2)
+        _train_fill_dt_lcg(M, bp_off + bp_off_Wu(d, nh, nkv, h),
+                           h * d, block_seed + 89, 0.2)
+        _train_fill_dt_lcg(M, bp_off + bp_off_Wd(d, nh, nkv, h),
+                           d * h, block_seed + 103, 0.2)
         l = l + 1
     }
 }

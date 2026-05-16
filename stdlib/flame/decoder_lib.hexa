@@ -38,6 +38,7 @@
 
 use "stdlib/flame/tensor_lib"
 use "stdlib/flame/decoder_block_lib"
+use "stdlib/flame/flame_math"
 
 // ── M (params) offset helpers ──────────────────────────────────────────
 pub fn m_off_tok_emb(d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
@@ -171,7 +172,7 @@ pub fn nn_decoder_fwd(ids: int, M: int, Mc: int, cos: int, sin: int,
         iz = iz + 1
     }
     ms = ms / to_float(d)
-    let inv = 1.0 / sqrt(ms + eps)
+    let inv = 1.0 / dt_sqrt(ms + eps)
     let _ = farr_set(Mc, oZTinv, inv)
     let zT_scratch = farr_zeros(d)
     let mut jz = 0
@@ -226,7 +227,7 @@ pub fn nn_decoder_grad(ids: int, target_t: int,
     let mut tot = 0.0
     let mut i2 = 0
     while i2 < V {
-        let e = exp(farr_get(Mc, oLogits + i2) - mx)
+        let e = dt_exp(farr_get(Mc, oLogits + i2) - mx)
         let _ = farr_set(dl, i2, e)
         tot = tot + e
         i2 = i2 + 1
@@ -403,12 +404,12 @@ pub fn nn_decoder_ce_loss(Mc: int, target_t: int,
     let mut tot = 0.0
     let mut i2 = 0
     while i2 < V {
-        tot = tot + exp(farr_get(Mc, oLogits + i2) - mx)
+        tot = tot + dt_exp(farr_get(Mc, oLogits + i2) - mx)
         i2 = i2 + 1
     }
-    let p_t = exp(farr_get(Mc, oLogits + target_t) - mx) / tot
+    let p_t = dt_exp(farr_get(Mc, oLogits + target_t) - mx) / tot
     let pt_safe = if p_t < 0.000001 { 0.000001 } else { p_t }
-    return 0.0 - log(pt_safe)
+    return 0.0 - dt_ln(pt_safe)
 }
 
 // gn2 = ||softmax(logits) − onehot(t)||² (the campaign metric)
@@ -425,13 +426,13 @@ pub fn nn_decoder_gn2(Mc: int, target_t: int,
     let mut tot = 0.0
     let mut i2 = 0
     while i2 < V {
-        tot = tot + exp(farr_get(Mc, oLogits + i2) - mx)
+        tot = tot + dt_exp(farr_get(Mc, oLogits + i2) - mx)
         i2 = i2 + 1
     }
     let mut acc = 0.0
     let mut k = 0
     while k < V {
-        let p_k = exp(farr_get(Mc, oLogits + k) - mx) / tot
+        let p_k = dt_exp(farr_get(Mc, oLogits + k) - mx) / tot
         let target = if k == target_t { 1.0 } else { 0.0 }
         let dv = p_k - target
         acc = acc + dv * dv
