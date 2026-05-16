@@ -64,10 +64,27 @@ Note: source #3 (clang FMA fusion context difference) is now the leading candida
 
 Phase 3-J implemented exactly as proposed: introduced `_db_proj_batch_farr` helper (transpose-matmul-transpose pattern identical to anima `d5_proj_batch_g`) and routed all 7 of flame's `nn_decoder_block_fwd` projections (Q/K/V/Wo + Wg/Wu/Wd) through it. Phase 3-B/C/D regression: all PASS unchanged (GRAD-EXACT max rel 3.59e-10 / 5.14e-06 identical). flame_d32_corpus_test wall time 30.5s → 18.5s (clang -O2 vectorization of `farr_matmul` faster than inline loops) but **init gn2 = 7.97113 unchanged**. Source #3 falsified.
 
-Then: built and ran anima `HEXAD/D/d_corpus_fire.hexa` directly with the same hexa-lang `./hexa build` toolchain (same flame compiler binary, same clang -O2, same host, same corpus, same seed=42). Output:
+Then: built and ran anima `HEXAD/D/d_corpus_fire.hexa` directly with the same hexa-lang `./hexa build` toolchain (same flame compiler binary, same clang -O2, same host, same corpus, same seed=42). Initial output (4GB mem cap):
 
   anima d_corpus_fire (./hexa build, same host) :  init gn2 = 7.97116  acc=0/8
   flame d_corpus_fire (./hexa build, same host) :  init gn2 = 7.97113  acc=0/8 (after 80 step: acc=8/8)
+
+Then re-run anima with `HEXA_MEM_UNLIMITED=1` to complete the 80-step loop:
+
+  anima d_corpus_fire (./hexa build, HEXA_MEM_UNLIMITED=1) full trajectory:
+    init  : gn2 = 7.97116      acc = 0/8
+    final : gn2 = 3.73374e-07  acc = 8/8  (after 80 AdamW steps)
+
+  flame d_corpus_fire (./hexa build, same toolchain, same host) full trajectory:
+    init  : gn2 = 7.97113      acc = 0/8
+    final : gn2 = 8.87256e-07  acc = 8/8
+
+End-to-end comparison:
+  - init  : |Δ| = 3.12e-5 abs (~4e-6 rel)         — dict-vs-farr last-ulp drift
+  - final : |Δ| = 5.14e-7 abs (anima 3.73e-7 vs flame 8.87e-7, ratio 2.4×) — same drift propagated through 80 non-convex AdamW steps
+  - acc   : 8/8 = 8/8 (exact match)               — qualitative reproduction perfect
+  - collapse: anima 2.13e7× vs flame 8.98e6× (ratio 2.4×) — same sensitivity factor as final
+  - shape : both monotonic descending, same magnitude scale at every measured step
 
 Source #4 confirmed: **the anima vs flame algorithm-impl difference produces a real ~3e-5 fp64 init gn2 delta even with identical toolchain and identical input data**. The remaining variable IS the impl:
 
