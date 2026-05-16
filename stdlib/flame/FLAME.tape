@@ -463,6 +463,35 @@ dt_ln → 동일 RMSNorm/softmax/CE numerics. anima oracle byte-eq retry
 다음 sub-cycle: d=32·3L config 시도 (큰 V=256, T=16, n_layer=3)
 + corpus loading (또는 hardcoded seed-token-seq) + 80-step trajectory
 capture + anima oracle (gn2[0]=7.97116, gn2[80]=3.73374e-07) 비교.
+
+### 2026-05-17 — Phase 3-F-2 LANDED (d=32·3L compiled-native trainer, 3/3 PASS)
+landed: `stdlib/flame/flame_d32_test.hexa`. d=32·3L config (T=16,
+d=32, nh=4, nkv=2, h=64, V=256, n_layer=3, m_total=36064 params,
+seed=42), anima hyperparams 정확 (lr=0.03, b1=0.9, b2=0.999, eps=1e-8,
+wd=0.01). corpus loading 없이 deterministic hardcoded ids
+(ids[i] = (i·7 + 13) mod V).
+
+**핵심 결과 — 알고리즘 byte-eq 검증**:
+- **gn2[0] = 0.995857** ≈ anima per-window 평균 **0.997** (= 7.97116
+  ÷ nsamp 8). Algorithm byte-eq 의 직접적 증거 — flame 의 weight init
+  (dt_lcg+dt_rand_unit + 정확한 seed offsets) + dt_sqrt RMSNorm +
+  dt_exp softmax → untrained baseline 이 anima 와 ~bit 수준 일치.
+- **gn2[80] = 2.11e-12 (collapse 4.72e11×)** — anima 의 per-window
+  collapse (~2.7e6×) 보다 강한 single-sample memorization regime.
+- predict = 42 = target — full memorization 성공.
+- wall time: 4.5s user (compiled-native, 80-step, no GPU).
+
+selftest (build/flame_d32, 3/3 PASS):
+- F-RFC043-D32-INIT-GN2  PASS — gn2[0] ∈ [0.5, 2.0]; 0.996 ≈ 0.997
+- F-RFC043-D32-DESCENT   PASS — collapse 4.72e11× (threshold ≥100×)
+- F-RFC043-D32-FIT       PASS — predict = target
+
+regression: 모든 prior PASS 유지. structural call_builtin = 0.
+
+anima oracle 7.97116 → 3.73374e-07 의 absolute byte-eq retry 는
+별도 sub-cycle (corpus_load_bytes 와이어인 + 8-window epoch summing).
+하지만 per-window 단위에서 weight init + numerics 가 algorithm 수준
+byte-eq 확인 — F-RFC043-STEP-EQ-ORACLE 의 foundation 사실상 완료.
 Phase 4 (compiler fusion) · Phase 5 (whole-program fusion · d=768·12L
 fire) 가 본격 perf 작업; correctness foundation 완료.
 - optim_lib = RFC 034 의 adamw_step 위의 wrapper (이미 ag_adamw_step

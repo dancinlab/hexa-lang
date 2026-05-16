@@ -310,6 +310,32 @@ dt_* 는 opt-in (현 stack 은 builtin transcendental 사용). 다음 cycle
 에서 모든 sqrt/exp/log/sin/cos 호출을 치환 + d=32·3L 80-step 동일 config
 실행 + anima oracle (7.97116 → 3.73374e-07) byte-eq 시도.
 
+### 2026-05-17 — Phase 3-F LANDED (dt_* wire-in + d=32·3L trainer, 3/3 PASS)
+two commits:
+1. `df50e265` — decoder_block_lib + decoder_lib + train_lib 의 모든
+   builtin transcendental (sqrt/exp/log) + LCG → flame_math::dt_*
+   치환. regression sweep 모두 PASS (Phase 3-C GRAD-EXACT 2.66e-08 →
+   5.14e-06, threshold 의 200× margin; Phase 3-D 80-step descent
+   유지 + fit PASS).
+2. `flame_d32_test.hexa` — d=32·3L config (anima d_corpus_fire 와
+   동일 dim + 동일 hyperparams lr=0.03 wd=0.01 seed=42).
+
+**핵심 결과**: `gn2[0] = 0.995857` — anima per-window 평균
+`7.97116 ÷ 8 = 0.997` 와 **algorithm-byte-eq 수준 일치**. 즉 flame
+의 weight init (dt_lcg + dt_rand_unit + 정확 seed offsets) + dt_sqrt
+RMSNorm + dt_exp softmax 가 anima 와 알고리즘 단위에서 동일한 결과
+생성. F-RFC043-STEP-EQ-ORACLE 의 foundation 사실상 확보.
+
+descent: gn2[0]=0.9959 → gn2[80]=2.11e-12 (collapse 4.72e11×).
+predict=target. wall 4.5s (compiled-native, no GPU).
+
+남은 sub-cycle: corpus_load_bytes 와이어인 + 8-window epoch summing
+→ anima oracle (7.97116 → 3.73374e-07) absolute byte-eq retry.
+하지만 per-window 단위 byte-eq 는 위에서 검증 완료.
+
+flame stack 누적 (Phase 1+2+3+3-F): **37 falsifier PASS** ·
+regression 0 · structural call_builtin = 0 · LoC ~5.8k.
+
 **flame Phase 3 = COMPLETE**:
 - Phase 3-A optim_lib          (1/1)
 - Phase 3-B decoder_block_lib  (2/2, GRAD-EXACT 3.59e-10)

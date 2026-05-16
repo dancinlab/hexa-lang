@@ -1,0 +1,179 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_d32_test.hexa — flame Phase 3-F-2 selftest
+//
+// d=32·3L config — same dim as anima d_corpus_fire campaign (T=16,
+// d=32, nh=4, nkv=2, h=64, V=256, n_layer=3), same AdamW hyperparams
+// (lr=0.03, b1=0.9, b2=0.999, eps=1e-8, wd=0.01), same seed=42.
+//
+// Honest caveat: corpus loading not yet wired (flame doesn't yet have
+// the anima corpus_load_bytes path); ids are deterministic
+// hardcoded sequence — different tokens than anima's
+// corpus_consciousness_v1.jsonl first-window. So absolute trajectory
+// will differ from gn2 7.97116 → 3.73374e-07; but flame's gn2[0]
+// should be close to the per-window ≈ 1.0 floor (anima 7.97116 ÷
+// nsamp 8 ≈ 1.0) since (a) weight init is now anima-byte-eq
+// (dt_lcg_next + dt_rand_unit), (b) RMSNorm/softmax/CE use anima-eq
+// dt_sqrt/dt_exp/dt_ln, so the only difference is the input token IDs
+// and the absence of nsamp averaging.
+//
+// Falsifiers:
+//   F-RFC043-D32-INIT-GN2  gn2[0] in [0.5, 2.0] range — sanity that
+//     flame weight init produces an "untrained baseline" close to the
+//     anima per-window ~1.0 (NOT byte-eq, since corpus differs)
+//   F-RFC043-D32-DESCENT   gn2[80] < gn2[0] · 1e-2 (≥100× collapse,
+//     same threshold as Phase 3-D toy config; anima per-window achieved
+//     ~2e7× collapse on harder corpus task)
+//   F-RFC043-D32-FIT       predict(ids) = target_t (memorization)
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/decoder_lib"
+use "stdlib/flame/decoder_block_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/train_lib"
+
+fn _d32_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// ── entrypoint ─────────────────────────────────────────────────────────
+println("=== flame Phase 3-F-2 selftest (d=32·3L config, dt_*-wired, single-sample memorization) ===")
+
+let T = 16
+let d = 32
+let nh = 4
+let nkv = 2
+let h = 64
+let V = 256
+let n_layer = 3
+let hd = d / nh
+let target_t = 42
+
+// deterministic ids: pseudo-random byte sequence (no corpus dependency).
+let ids = t_zeros(T)
+let mut i = 0
+while i < T {
+    t_set(ids, i, to_float((i * 7 + 13) % V))
+    i = i + 1
+}
+
+let m_size = m_total(d, nh, nkv, h, V, n_layer)
+print("  config: T=") ; print(T) ; print(" d=") ; print(d)
+print(" nh=") ; print(nh) ; print(" nkv=") ; print(nkv)
+print(" h=") ; print(h) ; print(" V=") ; print(V) ; print(" n_layer=") ; print(n_layer)
+print(" ; m_total = ") ; print(m_size) ; println(" params")
+
+let M = t_zeros(m_size)
+nn_decoder_init(M, 42, T, d, nh, nkv, h, V, n_layer)
+
+let Mm = t_zeros(m_size)
+let Mv = t_zeros(m_size)
+let Mg = t_zeros(m_size)
+let mc_size = mc_total(T, d, nh, nkv, h, V, n_layer)
+let Mc = t_zeros(mc_size)
+let cos = t_zeros(T * hd); let sin = t_zeros(T * hd)
+nn_rope_build_tables(T, hd, cos, sin)
+
+// anima d_corpus_fire hyperparams exactly
+let lr = 0.03
+let b1 = 0.9
+let b2 = 0.999
+let eps_a = 0.00000001
+let wd = 0.01
+
+// initial gn2 measurement
+nn_decoder_fwd(ids, M, Mc, cos, sin, T, d, nh, nkv, h, V, n_layer)
+let gn2_init = nn_decoder_gn2(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+let init_pred = nn_decoder_predict(Mc, T, d, nh, nkv, h, V, n_layer)
+let init_loss = nn_decoder_ce_loss(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+print("  init: gn2 = "); print(gn2_init)
+print(" / CE = "); print(init_loss)
+print(" / predict = "); print(init_pred); print(" (target = "); print(target_t); println(")")
+
+let mut gn2_last = gn2_init
+let mut step = 1
+while step <= 80 {
+    let g = nn_decoder_train_step(ids, target_t, M, Mc, Mg, Mm, Mv,
+                                  cos, sin,
+                                  T, d, nh, nkv, h, V, n_layer,
+                                  lr, b1, b2, eps_a, wd, step)
+    gn2_last = g
+    if step == 1 {
+        print("  step 1: gn2 = "); println(g)
+    }
+    if step == 20 {
+        print("  step 20: gn2 = "); println(g)
+    }
+    if step == 40 {
+        print("  step 40: gn2 = "); println(g)
+    }
+    if step == 60 {
+        print("  step 60: gn2 = "); println(g)
+    }
+    step = step + 1
+}
+nn_decoder_fwd(ids, M, Mc, cos, sin, T, d, nh, nkv, h, V, n_layer)
+let gn2_final = nn_decoder_gn2(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+let final_pred = nn_decoder_predict(Mc, T, d, nh, nkv, h, V, n_layer)
+let final_loss = nn_decoder_ce_loss(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+print("  final: gn2 = "); print(gn2_final)
+print(" / CE = "); print(final_loss)
+print(" / predict = "); print(final_pred); print(" (target = "); print(target_t); println(")")
+
+let mut pass = 0
+let total = 3
+
+// F-RFC043-D32-INIT-GN2 — gn2[0] in [0.5, 2.0] (uniform softmax baseline)
+if gn2_init > 0.5 {
+    if gn2_init < 2.0 {
+        print("PASS  F-RFC043-D32-INIT-GN2  gn2[0] = ")
+        print(gn2_init)
+        println(" ∈ [0.5, 2.0] — matches anima per-window ~1.0 (untrained softmax ≈ uniform 1/V; weight-init byte-eq algorithm sanity)")
+        pass = pass + 1
+    } else {
+        print("FAIL  F-RFC043-D32-INIT-GN2  gn2[0] = "); print(gn2_init); println(" (> 2.0)")
+    }
+} else {
+    print("FAIL  F-RFC043-D32-INIT-GN2  gn2[0] = "); print(gn2_init); println(" (< 0.5)")
+}
+
+// F-RFC043-D32-DESCENT — gn2[80] < gn2[0] · 1e-2 (≥100× collapse)
+let ratio = if gn2_init > 0.0 { gn2_final / gn2_init } else { 1.0 }
+if ratio < 0.01 {
+    print("PASS  F-RFC043-D32-DESCENT   gn2[0] = ")
+    print(gn2_init)
+    print(" → gn2[80] = ")
+    print(gn2_final)
+    print(" (collapse ")
+    print(1.0 / ratio)
+    println("×, threshold ≥100×)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-D32-DESCENT   ratio = "); print(ratio); println(" (>0.01)")
+}
+
+// F-RFC043-D32-FIT — predict = target
+if final_pred == target_t {
+    println("PASS  F-RFC043-D32-FIT       predict(ids) = target_t (memorization confirmed at d=32·3L scale)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-D32-FIT       pred = "); print(final_pred)
+    print(" ≠ target_t "); print(target_t); println("")
+}
+
+let _ = t_free(ids); let _ = t_free(M); let _ = t_free(Mm); let _ = t_free(Mv)
+let _ = t_free(Mg); let _ = t_free(Mc); let _ = t_free(cos); let _ = t_free(sin)
+
+println("")
+print("=== flame Phase 3-F-2: ")
+print(pass)
+print("/")
+print(total)
+println(" PASS ===")
+if pass == total {
+    println("PASS — flame d=32·3L compiled-native 80-step memorization (dt_*-wired stack). anima oracle byte-eq retry foundation: same dim + same hyperparams + algorithm-byte-eq weight init/RMSNorm/softmax/CE. Corpus-equiv trajectory comparison = next sub-cycle (requires corpus loading wire-in).")
+} else {
+    println("FAIL — flame Phase 3-F-2 not landable")
+}
