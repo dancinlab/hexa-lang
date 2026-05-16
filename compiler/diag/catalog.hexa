@@ -238,6 +238,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3010",
+        title: "duplicate pub symbol across files",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "duplicate `pub` definition of `{name}`: also defined in `{first_file}` (importer `{second_file}`)",
+        explain: "Two distinct files both declare `pub <name>` and end up spliced into the same compilation unit. Rename one, or remove the duplicate. The pre-pass keeps the first definition encountered and skips the rest.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX3005",
         title: "match arms have different types",
         severity: Severity::Error,

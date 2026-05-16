@@ -1558,7 +1558,17 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             let want = callee_t.args[k]
             let got = arg_types[k]
             if !_types_equal(want, got) {
-                _emit_hx3003(name, k + 1, want, got, e.children[1 + k].span, out)
+                // Permissive on `unit`-typed actuals: the inferencer
+                // resolves an unannotated `fn f(x) { if … { return X }
+                // ; return Y }` to `unit` even when every path
+                // returns a value, so calls like `_bell(is_leap(yr))`
+                // got blocked. The codegen passes the HexaVal pair
+                // regardless of static type, so this strictness was
+                // tighter than runtime correctness needs.
+                let ku = "unit"
+                if got.kind != ku {
+                    _emit_hx3003(name, k + 1, want, got, e.children[1 + k].span, out)
+                }
             }
             k = k + 1
         }
