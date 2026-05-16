@@ -224,6 +224,15 @@ HexaVal hexa_array_slice_fast(HexaVal arr, HexaVal start, HexaVal end); /* runti
 HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end);          /* runtime.c:6954 */
 HexaVal hexa_tensor_slice(HexaVal a, HexaVal lo, HexaVal hi);           /* runtime.c:11456 */
 
+/* ── numeric: abs (codegen-emitted, impl in runtime.c) ─────────────
+ * 2026-05-16: SAME decl-gap class as the slice-family / safetensors_mmap_*
+ * decls above. `hexa_abs` has a runtime.c forward-decl (runtime.c:779) and
+ * impl (runtime.c:5212) but was never declared in runtime.h. The
+ * AOT-generated user.c TU only #include "runtime.h", so any build calling
+ * abs() (anima HEXAD/CHAT/chat_lib.hexa via mitosis_hook_lib.hexa) hit
+ * clang implicit-int. Decl-only, additive; byte-matches runtime.c:779. */
+HexaVal hexa_abs(HexaVal v);                                            /* runtime.c:5212 */
+
 /* container indexing */
 HexaVal hexa_index_get(HexaVal container, HexaVal key); /* runtime.c:2643 */
 HexaVal hexa_array_pop(HexaVal arr);                    /* runtime.c:3878 */
