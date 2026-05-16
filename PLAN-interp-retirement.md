@@ -195,14 +195,20 @@ dominant failure class:
 | 40-#2 | use→import lex alias · .hexa auto-suffix · multi-main collapse · pop builtin | 22 | 5 | 9 | 2 | 2 |
 | 40-#3 | HX3001-compare / HX3001-if-arm / HX3001-arith / HX3003 unit-relax · HX3010 → Warning · fn-name first-wins dedup | **25** | 8 | 5 | 0 | 2 |
 
-### Broadened to 60 smokes (partial, 47/60 — hang on file 48)
+### Broadened to 60 smokes (complete after parser-hang fix 12b355ce)
 
-  match=24 (51%) · diff=12 · cg-fail=8 · interp-to=3.
+  match=27 (45%) · diff=15 · cg-fail=14 · link-fail=1 · interp-to=3
+  (total=60)
 
-aprime_cc hung (>6 min) compiling test/t_parser_lt_generic_disambig.hexa
-(known-hard `<`-vs-generic disambiguation case for parsers). Likely
-an infinite loop in the recursive-descent path. Sweep killed at that
-point.
+  t_parser_lt_generic_disambig itself MATCHes after the
+  parse_struct_item + parse_primary generic-args lookahead fix.
+  perfect_number_engine_smoke MATCHes after the cascade of
+  unit-relax fixes too (was CG-FAIL HX3001 in sweep #1).
+
+The earlier 47/60 partial was killed by the parser hang; with
+12b355ce in place every file in the 60-window now terminates
+(per-file 30 s codegen timeout added to the sweep script for
+defence-in-depth).
 
 New categories surfaced in [40, 60]:
 
