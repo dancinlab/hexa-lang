@@ -66,11 +66,28 @@ referenced. This is a prerequisite for every option below, call it **P0**:
 >     handle (callers at arm64_darwin.hexa:538/719/852/893). Freeing an
 >     LFunc would dangle `st.labels`. Fix: store a copy of the label in
 >     the LFunc operand.
->   - **P0c** `MFunc ← HItem/hmodule strings` — NEEDS AUDIT. `_lower_fn`
->     may carry HIR string handles into MIR operands; `hmodule` outlives
->     the loop.
->   - **P0d** `LFunc ← MFunc strings` — NEEDS AUDIT. `_arm64_lower_func`
->     may carry MFunc operand strings straight into LIR.
+>   - **P0c** `MFunc ← HItem/hmodule strings` — CONFIRMED. `_lower_fn`
+>     reaches `_const_str_op(e.text)` (hir_to_mir.hexa:542,76) — the MIR
+>     `const_str` operand's `str_val` *is* the HIR node's `.text` handle.
+>     `hmodule` outlives the loop. Fix: copy at `_const_str_op`.
+>   - **P0d** `LFunc ← MFunc strings` — NARROW. `_arm64_op_for_operand_st`
+>     routes `const_str` through `_arm64_strtab_lookup` → an `st` label
+>     (that is P0b); only the strtab-miss *fallback* `_arm64_op_label(
+>     o.str_val)` (arm64_darwin.hexa:540) carries the MFunc string. Since
+>     `_arm_strtab_collect_fn` interns every `const_str` before codegen,
+>     the miss path should be unreachable — but harden it with a copy.
+>   - **P0e** non-string sharing (arrays / nested structs MFunc↔LFunc↔
+>     hmodule) — NOT YET AUDITED. The four edges above are string-only.
+>
+> **Residency subtlety.** `__hexa_fn_arena_return`'s heapify copies only
+> *arena*-resident strings (the `f4b597a7` envelope returns already-heap
+> pointers untouched). So whether an edge is live depends on each
+> string's arena-vs-heap residency at return time — *not* statically
+> decidable. This is exactly why P0 must be a **forced** copy
+> (`s.substring(0,len(s))` always allocates): a forced copy is
+> residency-independent, so each longer-lived structure owns its strings
+> regardless. It is also the reason A (uniform region promotion) is
+> cleaner than C (per-edge, must enumerate exhaustively incl. P0e).
 >
 > P0 is needed for **B and C**, not A — A's region model promotes on
 > escape automatically. Each P0x lands independently; P0c/P0d must be
