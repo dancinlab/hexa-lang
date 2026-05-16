@@ -1,0 +1,223 @@
+// tool/verify_cli.hexa — `hexa verify {<id>|--expr|--fence|rubric|list}`
+//
+// @version 0.1.0
+// @capabilities [fs_read]
+//
+// SINGLE verification entry-point. Uses the BINARY BUILT-IN ATLAS
+// (dist/atlas.hxc via hxc_loader — the fast byte-canonical path; we do
+// NOT `use embedded.gen`, whose multi-MB struct-literal module-load hangs
+// the interp) + the hexa-native CALCULATORS (compiler/atlas/symbolic/*)
+// to actually VERIFY a claimed closed-form and assign a tier — not just
+// register it (cf. `hexa atlas` = read/stage SSOT, NOT a verifier).
+//
+// Cross-project tier rubric (dancinlab-wide, LATTICE_POLICY real-limits
+// -first; carries: atlas/CLAUDE.md g_self_verify·g_tier_default_insufficient
+// ·g_external_calc_forbidden · anima HEXAD g_verdict_tier_blue(a) · TECS-L
+// n6-replication Tier1/2/3 · hexa-bio AXIS speculation-fence):
+//   🔵 SUPPORTED-FORMAL    hexa-native calc reproduces the closed-form
+//                          exactly (g_self_verify; TECS-L Tier1; HEXAD 🔵)
+//   🟡 SUPPORTED-BY-CITATION atlas/literature has it, no hexa-native recompute
+//   🟠 INSUFFICIENT         not in atlas + no calc path (g_tier_default)
+//   🟠 DEFERRED             external hw/data/API dep (g_external_calc_forbidden)
+//   ⚪ SPECULATION-FENCED   imagination/metaphor (hexa-bio AXIS class) —
+//                          verification N/A, honest fence (g4; SF ≠ proven)
+//
+// Wired from self/main.hexa (`verify` → this). Runnable now:
+//   hexa run tool/verify_cli.hexa <id>
+
+use "compiler/atlas/hxc_loader"
+use "compiler/atlas/symbolic/congruence_chain_engine"
+
+let HXC_PATH: string = "dist/atlas.hxc"
+
+// only FIXED keywords are subs; a bare <id> is picked up by the n>=3
+// fallback (real args start at index 2) — mirrors tool/calc_cli.hexa.
+// (do NOT treat arbitrary non-dash tokens as subs: that wrongly matches
+//  the expanded-script path at argv[1] under `hexa run`.)
+fn _is_sub(a) -> bool {
+    return a == "rubric" || a == "list" || a == "help" || a == "--help" || a == "-h"
+        || a == "--expr" || a == "--fence"
+}
+
+fn _slice_args() -> array {
+    let av = args()
+    let n = len(av)
+    let mut i = 1
+    while i < n {
+        let a = to_string(av[i])
+        if _is_sub(a) {
+            let mut out = []
+            let mut j = i
+            while j < n { out.push(av[j]); j = j + 1 }
+            return out
+        }
+        i = i + 1
+    }
+    if n >= 3 {
+        let mut out = []
+        let mut j = 2
+        while j < n { out.push(av[j]); j = j + 1 }
+        return out
+    }
+    return []
+}
+
+fn cmd_rubric() {
+    println("hexa verify — cross-project tier rubric (LATTICE_POLICY real-limits-first)")
+    println("")
+    println("  🔵 SUPPORTED-FORMAL     hexa-native calc reproduces closed-form exactly")
+    println("                          (g_self_verify · TECS-L Tier1 · anima HEXAD 🔵)")
+    println("  🟡 SUPPORTED-BY-CITATION atlas/literature registered, no hexa recompute")
+    println("  🟠 INSUFFICIENT         not in atlas + no calc path (g_tier_default)")
+    println("  🟠 DEFERRED             external hw/data/API dep (g_external_calc_forbidden)")
+    println("  ⚪ SPECULATION-FENCED   imagination/metaphor (hexa-bio AXIS) — verify N/A")
+    println("")
+    println("usage:")
+    println("  hexa verify <id>                 verify atlas atom: lookup + calc recompute")
+    println("  hexa verify --expr <fn> <n> <v>  recompute fn(n)==v via hexa-native calc")
+    println("  hexa verify --fence <claim>      classify as ⚪ SPECULATION-FENCED (honest)")
+    println("  hexa verify rubric | list        this rubric")
+}
+
+// recompute a foundation/NT closed-form by function name (the hexa-native
+// 🔵 path — g_self_verify). Returns -999999 if no calc path (→ 🟡/🟠).
+fn _recompute(fn_name: string, n: int) -> int {
+    if fn_name == "divisor_sum" || fn_name == "sigma" { return sigma_k(n, 1) }
+    if fn_name == "euler_totient" || fn_name == "euler_phi" || fn_name == "phi" { return euler_phi(n) }
+    if fn_name == "mobius" || fn_name == "mu" { return mobius(n) }
+    if fn_name == "divisor_count" || fn_name == "tau" {
+        let ds = divisors(n)
+        return len(ds)
+    }
+    return -999999
+}
+
+// extract trailing "= <int>" claimed value from a raw header before "::".
+fn _claimed_value(raw: string) -> int {
+    let mut head = raw
+    let ci = head.index_of("::")
+    if ci >= 0 { head = head.slice(0, ci) }
+    // last '=' segment
+    let mut last = ""
+    let parts = head.split("=")
+    if len(parts) >= 2 {
+        last = parts[len(parts) - 1]
+    }
+    let t = last.trim()
+    return to_int(t)
+}
+
+fn cmd_verify_id(rest) {
+    if len(rest) < 1 {
+        println("error: usage: hexa verify <id>")
+        exit(2)
+    }
+    let target = to_string(rest[0])
+    let nodes = load_atlas_hxc(HXC_PATH)
+    if len(nodes) == 0 {
+        println("verify " + target)
+        println("  tier   = 🟠 INSUFFICIENT")
+        println("  reason = binary built-in atlas (dist/atlas.hxc) empty/absent")
+        return
+    }
+    let mut found = false
+    let mut nraw = ""
+    let mut nkind = ""
+    let mut i = 0
+    while i < len(nodes) {
+        let nd = nodes[i]
+        if nd.id == target {
+            found = true
+            nraw = nd.raw
+            nkind = nd.kind
+            i = len(nodes)
+        } else {
+            i = i + 1
+        }
+    }
+    println("verify " + target + "   (binary built-in atlas: " + to_string(len(nodes)) + " nodes)")
+    if !found {
+        println("  tier   = 🟠 INSUFFICIENT")
+        println("  reason = id not in atlas; no closed-form to recompute")
+        return
+    }
+    println("  atlas  = @" + nkind + " " + target + " (registered)")
+    // try hexa-native recompute: find a known fn(6) form in raw
+    let claimed = _claimed_value(nraw)
+    let mut fnm = ""
+    if nraw.contains("divisor_sum") { fnm = "divisor_sum" }
+    else if nraw.contains("euler_totient") { fnm = "euler_totient" }
+    else if nraw.contains("divisor_count") { fnm = "divisor_count" }
+    else if nraw.contains("mobius") { fnm = "mobius" }
+    if len(fnm) == 0 {
+        println("  tier   = 🟡 SUPPORTED-BY-CITATION")
+        println("  reason = atlas-registered; no hexa-native calc path for this form")
+        return
+    }
+    let got = _recompute(fnm, 6)
+    if got == claimed && claimed != -999999 {
+        println("  calc   = " + fnm + "(6) = " + to_string(got) + "  == claimed " + to_string(claimed))
+        println("  tier   = 🔵 SUPPORTED-FORMAL")
+        println("  reason = hexa-native calc reproduces the closed-form (g_self_verify)")
+    } else {
+        println("  calc   = " + fnm + "(6) = " + to_string(got) + "  vs claimed " + to_string(claimed))
+        println("  tier   = 🟠 INSUFFICIENT")
+        println("  reason = recompute mismatch / claimed value unparsed — needs review")
+    }
+}
+
+fn cmd_expr(rest) {
+    // rest = ["--expr", <fn>, <n>, <v>]
+    if len(rest) < 4 {
+        println("error: usage: hexa verify --expr <fn> <n> <expected>")
+        exit(2)
+    }
+    let fnm = to_string(rest[1])
+    let n = to_int(to_string(rest[2]))
+    let v = to_int(to_string(rest[3]))
+    let got = _recompute(fnm, n)
+    println("verify --expr " + fnm + "(" + to_string(n) + ")")
+    if got == -999999 {
+        println("  tier   = 🟠 INSUFFICIENT")
+        println("  reason = no hexa-native calc path for '" + fnm + "'")
+        return
+    }
+    if got == v {
+        println("  calc   = " + to_string(got) + "  == expected " + to_string(v))
+        println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native, g_self_verify)")
+    } else {
+        println("  calc   = " + to_string(got) + "  != expected " + to_string(v))
+        println("  tier   = 🟠 INSUFFICIENT  (recompute disagrees with claim)")
+    }
+}
+
+fn cmd_fence(rest) {
+    let mut claim = ""
+    let mut i = 1
+    while i < len(rest) {
+        if i > 1 { claim = claim + " " }
+        claim = claim + to_string(rest[i])
+        i = i + 1
+    }
+    println("verify --fence")
+    println("  claim  = " + claim)
+    println("  tier   = ⚪ SPECULATION-FENCED")
+    println("  reason = imagination/metaphor class (hexa-bio AXIS) — verification")
+    println("           N/A by design; NOT a proven atlas atom (g4 honest fence,")
+    println("           SF ≠ verified — atlas certification intrinsically N/A)")
+}
+
+fn main() {
+    let a = _slice_args()
+    if len(a) == 0 { cmd_rubric(); return }
+    let sub = to_string(a[0])
+    if sub == "rubric" || sub == "list" || sub == "help" || sub == "--help" || sub == "-h" {
+        cmd_rubric()
+    } else if sub == "--expr" {
+        cmd_expr(a)
+    } else if sub == "--fence" {
+        cmd_fence(a)
+    } else {
+        cmd_verify_id(a)
+    }
+}
