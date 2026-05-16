@@ -3849,11 +3849,32 @@ HexaVal hexa_val_copy_into_arena(HexaVal v) {
             HX_SET_STR(v, buf);
             return v;
         }
+        case TAG_MAP: {
+            // A6 ROOT-CAUSE FIX (2026-05-16): in this value model a hexa
+            // `struct` is lowered to a TAG_MAP (field access =
+            // hexa_map_get). A1's earlier MAP passthrough made the
+            // arena copy SHARE the source map with the A2 malloc temp;
+            // the temp-buffer free_tree(temp) then freed it, and
+            // _new_block's hexa_map_get on the dangling LowerCtx map
+            // SIGSEGV'd. Deep-copy into a fresh map so the result is
+            // fully owned and independent of the temp.
+            HexaMap* mp = v.map_ptr;
+            if (!HX_PTR_OK(mp) || !mp->tbl) return v;
+            HexaMapTable* t = mp->tbl;
+            HexaVal nm = hexa_map_new();
+            for (int i = 0; i < t->len; i++) {
+                const char* k = t->order_keys ? t->order_keys[i] : (const char*)0;
+                if (!k) continue;
+                HexaVal vc = hexa_val_copy_into_arena(t->order_vals[i]);
+                nm = hexa_map_set(nm, k, vc);
+            }
+            return nm;
+        }
         default:
-            // MAP / CLOSURE / FN / primitives — passthrough. See header
-            // comment: streaming-loop IR does not produce these inside
-            // the per-iteration region; extend here if a future caller
-            // needs them.
+            // CLOSURE / FN / primitives — passthrough. The streaming-loop
+            // IR (LowerCtx/MFunc/LFunc trees) does not materialise
+            // closures inside the per-iteration region; extend here if a
+            // future caller needs them (same share-then-free hazard).
             return v;
     }
 }
