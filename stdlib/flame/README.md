@@ -1,22 +1,54 @@
 # flame — hexa-native, compiler-only PyTorch-equivalent NN stdlib
 
-> **Status: Phase 1/2/3 + 3-E/F/F-2/F-3 LANDED (2026-05-17) — 40
-> falsifier PASS on compiled-native. anima d_corpus_fire byte-eq
-> retry SUCCESS: flame init gn2 = 7.97113 vs anima 7.97116 (|Δ|
-> 3.12e-5, ~4e-6 rel) · acc 8/8 = anima 8/8 · final gn2 8.87e-7 (same
-> order as anima 3.73e-7) · collapse 8.98e6× ≈ anima 2.13e7× · 30.5s
-> wall, M-Mac CPU. Algorithm-byte-eq foundation confirmed at every
-> stage: same byte stream (read_file_bytes ≡ od -An -v -tu1), same
-> windowing, same weight init (dt_lcg + dt_rand_unit), same RMSNorm /
-> softmax / CE numerics (dt_sqrt + dt_exp + dt_ln). Only delta source
-> = RoPE cos/sin (libm vs anima d5_sin/cos 14-term Taylor) last-ulp
-> propagation. Stack: `tensor_lib` + `autograd_lib` + `nn_lib` (7
-> layers) + `optim_lib` + `decoder_block_lib` + `decoder_lib` +
-> `train_lib` + `flame_math`. Structural call_builtin = 0 sustained.**
+> **Status (2026-05-17): Phase 3 COMPLETE + RFC 046 Phase 4 design
+> shipped — 22 commits, 41+ falsifier PASS, regression 0, structural
+> call_builtin = 0, ~6.4k LoC.**
 >
-> Optional Phase 3-G: d5_sin/cos 14-term Taylor → strict bit-eq.
-> Phase 4 = compiler fusion. Phase 5 = whole-program fusion +
-> d=768·12L GPU fire.
+> **Phase 3 correctness anchor — anima d_corpus_fire algorithm-byte-eq
+> retry SUCCESS** (RFC 045 closure):
+> - same hexa-lang toolchain, same Mac host, same corpus, same seed=42
+> - **flame** init gn2 = `7.97113` → final `8.87256e-07`, acc 8/8, wall 18.5s
+> - **anima** init gn2 = `7.97116` → final `3.73374e-07`, acc 8/8, wall ~30s
+> - |Δ_init| = 3.12e-5 abs (~4e-6 rel) · |Δ_final| = 5.14e-7 (2.4× drift,
+>   same shape, same order of magnitude)
+> - acc 8/8 = 8/8 exact match — qualitative reproduction perfect
+> - source #4 CONFIRMED: anima dict/list-based vs flame packed-farr-based
+>   impl → different SSA assignments + different last-ulp non-associative
+>   fp sum sequences (RFC 040 §2.2 TOL_MATMUL class). Strict bit-eq across
+>   the two impls is not achievable without unifying storage rep, which
+>   would defeat flame's compiler-only perf substrate goal.
+>
+> **Stack**: `tensor_lib` + `autograd_lib` + `nn_lib` (7 layers:
+> Linear · RMSNorm · Embedding · LMHead · RoPE · SwiGLU · Attention-core)
+> + `optim_lib` + `decoder_block_lib` + `decoder_lib` + `train_lib` +
+> `flame_math` (dt_* hand-Taylor + d5_sin/cos). All decoder_block_lib
+> projections farr_matmul-routed (Phase 3-J, same FMA fusion context as
+> anima).
+>
+> **Sub-piece byte-id verified with anima** (Phase 3-A..3-J):
+> - corpus byte stream: `read_file_bytes` ≡ `od -An -v -tu1` (Phase 3-F-3)
+> - LCG sequence: `dt_lcg_next` ≡ anima d_train_lib (Phase 3-E + 3-H)
+> - weight init values: tok_emb[0..10] max|Δ|=0.0 (Phase 3-H direct)
+> - RMSNorm: `dt_sqrt` ≡ anima 24-iter Newton (Phase 3-E)
+> - softmax: `dt_exp` ≡ anima Taylor + repeated-square (Phase 3-E)
+> - CE: `dt_ln` ≡ anima atanh 24-term (Phase 3-E)
+> - RoPE: `d5_sin` / `d5_cos` ≡ anima 14-term Taylor (Phase 3-G)
+> - AdamW: same `adamw_step` builtin (Phase 3-A)
+>
+> **GRAD-EXACT correctness anchors**:
+> - block-level: 9-probe central-diff, max rel **3.59e-10** (Phase 3-B)
+> - full-model: 10-probe central-diff, max rel **2.66e-08** (Phase 3-C;
+>   covers head→tied→finalnorm→block-stack→RoPE→GQA→embed reverse)
+> - closed math invariants: `Rᵀ · R = I` RoPE orthogonality (machine ε)
+>   + `P[hh,i,j>i]=0` attention causal-mask (exact)
+>
+> **Next gates** (RFC 046, design-shipped):
+> - Phase 4-A: epilogue fusion (~2× wall)
+> - Phase 4-B: block fusion / IR pass (~5× wall)
+> - Phase 4-C: fwd+bwd graph fusion (~10× wall)
+> - Phase 4-D: GPU dispatch + eager-PyTorch comparison —
+>   F-RFC046-EAGER-PYTORCH-MATCH falsifier: flame d=768·12L wall
+>   ≤1.3× eager-PyTorch 336.85s on A100 (the measurable mid-term goal).
 >
 > **Pair**: `flame` (this directory — hexa NN stdlib) ↔ `self/forge/`
 > (the GPU compute substrate: cuBLAS + .cu kernels). See AGENTS.tape §0
@@ -54,25 +86,27 @@ preservation risk — 5 scattered hexa-lang branches holding the real
 cuBLAS impl + 11 farr ops — is addressed as **PLAN.md Phase 0
 (branch consolidation), explicitly the 물거품-방지 step**.
 
-## Planned layout (compiled-first lib-split — NOT one file)
-
-A torch-scale lib cannot be one file; hexa-lang's compiled pattern
-(`<x>_lib.hexa` pure-fns + `<x>.hexa` entrypoint) requires the split.
-One cohesive import surface (`import flame`), internally:
+## Current layout (Phase 3 LANDED)
 
 ```
 stdlib/flame/
-  README.md          ← (this) overview + foundation
-  PLAN.md            ← staged roadmap (Phase 0 preserve/consolidate → 1..5)
-  FLAME.tape         ← tape v1.2 SSOT: identity · governance · §X reference index
-  flame.hexa         ← [planned] entrypoint (import *_lib + selftest)
-  tensor_lib.hexa    ← [planned] Tensor (device-farr, RFC 040)
-  autograd_lib.hexa  ← [planned] reverse-mode tape (RFC 034 generalized)
-  nn_lib.hexa        ← [planned] Linear/RMSNorm/RoPE/GQA-attn/SwiGLU/embed/tied-head
-  optim_lib.hexa     ← [planned] AdamW
-  train_lib.hexa     ← [planned] compiled train_step + CE loss
+  README.md                   overview + status (this file)
+  PLAN.md                     staged roadmap
+  FLAME.tape                  tape v1.2 SSOT: identity · governance · §X
+  flame.hexa                  ✅ Phase 1 entrypoint + selftest
+  tensor_lib.hexa             ✅ Phase 1 — Tensor over RFC 040 farr
+  autograd_lib.hexa           ✅ Phase 1 — RFC 034 ad_* wrapper
+  nn_lib.hexa                 ✅ Phase 2 — 7 layers (fwd/bwd, closed vjp)
+  optim_lib.hexa              ✅ Phase 3-A — AdamW thin wrapper
+  decoder_block_lib.hexa      ✅ Phase 3-B/J — block fwd/bwd, farr_matmul-routed
+  decoder_lib.hexa            ✅ Phase 3-C — full ConsciousDecoderV2 fwd/grad
+  train_lib.hexa              ✅ Phase 3-D — train_step + 80-step driver + init
+  flame_math.hexa             ✅ Phase 3-E/G — dt_lcg/sqrt/exp/ln + d5_sin/cos
+  flame_<phase>_test.hexa     selftests (Phase 1/2/3-{A,B,C,D,E,F-3,H,J})
 ```
-`[planned]` = NOT created (design-only; impl after RFC 043 + Phase 0).
+
+flame public API is fixed per `g_flame_api_fixed` — Phase 4 changes
+only the C emission pattern under the hood, not the user-facing surface.
 
 ## API stays fixed; implementation matures (the staging answer)
 
@@ -99,11 +133,13 @@ See PLAN.md phases.
 ## Cross-references (SSOT)
 
 - Design SSOT: `inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`
+- Phase 3 closure: `inbox/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md`
+- Phase 4 design: `inbox/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md`
 - Backing RFCs: 040 (tensor/cuBLAS) · 041 (kernels) · 042 (subsumed) · 034 (autograd)
 - Full preservation index + verified oracles: **`FLAME.tape` §X**
 - Roadmap + Phase 0 consolidation: **`PLAN.md`**
 - anima dual-track + §9: `dancinlab/anima HEXAD/PLAN.md` §9
 - Substrate sibling (GPU): `self/forge/` — README + PLAN + FORGE.tape
   (flame consumes forge's `farr_*_gpu` / `cuda_*` compiled builtins;
-  Phase 1 uses host CPU `farr_matmul` per honest carve-out — device
-  routing is Phase 4 after RFC 041/042 codegen wiring lands)
+  Phase 3 uses host CPU `farr_matmul` per honest carve-out — device
+  routing is Phase 4-D after RFC 044/046 codegen wiring lands)
