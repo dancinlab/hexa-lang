@@ -270,6 +270,34 @@ pub fn verify_s3_fundamental_forces_4() -> AtlasVerdict {
     return _vd_phys("s3_fundamental_forces_4", _tier_phys(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s3_supremacy_xeb_wl_rational — Morvan 2024 weak-link XEB at rational point
+// ──────────────────────────────────────────────────────────────────────
+// MAIN.tape candidate: §3 PHYS. Morvan et al. 2024 (Nature 634, 328) random-
+// circuit-sampling weak-link XEB closed form (paper Eq. eq:xeb-wl-model):
+//   XEB_wl(d, T, λ, F) = 2·λ^(d/T)·F^(d/2) + F^d
+// At the sim-universe selftest point (d=12, T=4, λ=1/4, F=1):
+//   XEB_wl = 2·(1/4)^3·1 + 1 = 2/64 + 1 = 1/32 + 1 = 33/32 (pure ℚ)
+// Integer-form claim: 32·(2 + 4^(d/T)) == 33·4^(d/T)  i.e.  32·66 == 33·64 == 2112.
+// sim-universe @D g10 / @X x_morvan_rcs · supremacy-frontier selftest invariant
+// (the fvd γ=1.589566 analogue) · atlas/inbox/supremacy-xeb-weak-link-rational-closed.md.
+
+pub fn verify_s3_supremacy_xeb_wl_rational() -> AtlasVerdict {
+    // Parameters: d=12, T=4, λ=1/lam_den=1/4, F=1
+    let lam_den = 4
+    let d_over_T = 3            // d/T = 12/4 = 3
+    let mut lam_pow = 1          // lam_den^(d/T)
+    let mut k = 0
+    while k < d_over_T { lam_pow = lam_pow * lam_den; k = k + 1 }
+    // At F=1: F^(d/2)=F^d=1, so XEB_wl = (2 + lam_pow) / lam_pow.
+    // Claim XEB_wl = 33/32 → 32·(2 + lam_pow) == 33·lam_pow.
+    let lhs = 32 * (2 + lam_pow)
+    let rhs = 33 * lam_pow
+    let ok = lam_pow == 64 && lhs == rhs && lhs == 2112
+    let detail = "Morvan 2024 weak-link XEB at (d=12,T=4,λ=1/4,F=1) · 4^(d/T)=4^3=" + to_string(lam_pow) + " · 32·(2+4^3)=" + to_string(lhs) + " == 33·4^3=" + to_string(rhs) + " (=2112; pure ℚ identity for XEB_wl=33/32). sim-universe supremacy-frontier selftest invariant — the fvd γ=1.589566 analogue. See atlas/inbox/supremacy-xeb-weak-link-rational-closed.md (≥6 falsifiers pre-registered)."
+    return _vd_phys("s3_supremacy_xeb_wl_rational", _tier_phys(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_phys_all() -> [AtlasVerdict] {
@@ -287,5 +315,6 @@ pub fn verify_phys_all() -> [AtlasVerdict] {
     out.push(verify_s3_gluons_8())
     out.push(verify_s3_generations_3())
     out.push(verify_s3_fundamental_forces_4())
+    out.push(verify_s3_supremacy_xeb_wl_rational())
     return out
 }

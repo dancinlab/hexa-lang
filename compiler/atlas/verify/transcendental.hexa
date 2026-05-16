@@ -742,6 +742,47 @@ pub fn verify_s2_lambert_w_newton() -> AtlasVerdict {
     return _vd_trans("s2_lambert_w_newton", "§2 MATH", _tier_pass(ok), ok, detail)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// s3_supremacy_kappa_c_log2_T4 — Morvan 2024 weak-link critical noise
+// ──────────────────────────────────────────────────────────────────────
+// Morvan et al. 2024 Nature 634 328 — random-circuit-sampling weak-link
+// transition critical noise: κ_c(T) = (4/T)·log 2. At T=4: κ_c = log 2.
+// Stage 2 via libm log. Tolerance |κ_c − ln 2| < 1e-12.
+// sim-universe @D g10 / @X x_morvan_rcs · supremacy-frontier selftest ·
+// atlas/inbox/supremacy-kappa-c-critical-noise.md.
+
+pub fn verify_s3_supremacy_kappa_c_log2_T4() -> AtlasVerdict {
+    let T = 4.0
+    let kappa_c = (4.0 / T) * log(2.0)
+    let reference = 0.6931471805599453
+    let err = _abs_f(kappa_c - reference)
+    let ok = err < 0.000000000001
+    let detail = "Morvan 2024 weak-link κ_c(T=4) = (4/T)·log 2 = log 2 = " + to_string(kappa_c) + " · reference ln 2 = 0.6931471805599453 · |err| = " + to_string(err) + " (Stage 2 libm log, tolerance 1e-12). sim-universe supremacy-frontier selftest invariant. See atlas/inbox/supremacy-kappa-c-critical-noise.md (≥5 falsifiers pre-registered)."
+    return _vd_trans("s3_supremacy_kappa_c_log2_T4", "§3 PHYS", _tier_pass(ok), ok, detail)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// s3_caqm_elze_cogwheel_E1 — Elze 2024 induced-Hamiltonian cogwheel ladder
+// ──────────────────────────────────────────────────────────────────────
+// Elze IJQI 22 2450013 (2024) Eq. HamiltonianFin: E_k = 2π·k/(2S·T).
+// At k=1, 2S=16, T=1: E_1 = 2π/16 = π/8 ≈ 0.39269908169872414.
+// 't Hooft Nucl. Phys. B 342 471 (1990) cogwheel idea — finite-period
+// classical orbit → evenly-spaced quantum spectrum. Stage 2 closed form.
+// sim-universe @D g9 / @X x_elze_caqm · ca-qm Engine A spectrum mode ·
+// atlas/inbox/ca-qm-elze-Ek-cogwheel-ladder-closed-form.md.
+
+pub fn verify_s3_caqm_elze_cogwheel_E1() -> AtlasVerdict {
+    let k = 1.0
+    let twoS = 16.0
+    let T = 1.0
+    let E1 = 2.0 * _pi_const() * k / (twoS * T)
+    let reference = 0.39269908169872414     // π/8
+    let err = _abs_f(E1 - reference)
+    let ok = err < 0.000000000000001
+    let detail = "Elze 2024 cogwheel E_k=2π·k/(2S·T) at (k=1, 2S=16, T=1) = π/8 = " + to_string(E1) + " · reference = 0.39269908169872414 · |err| = " + to_string(err) + " (Stage 2 closed-form via π const, tolerance 1e-15). 't Hooft 1990 cogwheel idea. sim-universe ca-qm Engine A selftest invariant. See atlas/inbox/ca-qm-elze-Ek-cogwheel-ladder-closed-form.md (≥6 falsifiers pre-registered)."
+    return _vd_trans("s3_caqm_elze_cogwheel_E1", "§3 PHYS", _tier_pass(ok), ok, detail)
+}
+
 // ── Aggregate ───────────────────────────────────────────────────────────
 
 pub fn verify_transcendental_all() -> [AtlasVerdict] {
@@ -776,5 +817,7 @@ pub fn verify_transcendental_all() -> [AtlasVerdict] {
     out.push(verify_s6_heisenberg_uncertainty())
     out.push(verify_s6_hawking_entropy())
     out.push(verify_s6_schwarzschild_radius())
+    out.push(verify_s3_supremacy_kappa_c_log2_T4())
+    out.push(verify_s3_caqm_elze_cogwheel_E1())
     return out
 }
