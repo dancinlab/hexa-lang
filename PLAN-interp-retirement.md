@@ -192,7 +192,8 @@ dominant failure class:
 | sweep | trigger fix(es) | MATCH | DIFF | CG-FAIL | LINK | INTERP-TO |
 |-------|-----------------|-------|------|---------|------|-----------|
 | 40-#1 | (after curated #6 fixes)                            | 18 | 1  | 19 | 0 | 2 |
-| 40-#2 | use→import lex alias · .hexa auto-suffix · multi-main collapse · pop builtin | **22** | 5 | 9 | 2 | 2 |
+| 40-#2 | use→import lex alias · .hexa auto-suffix · multi-main collapse · pop builtin | 22 | 5 | 9 | 2 | 2 |
+| 40-#3 | HX3001-compare / HX3001-if-arm / HX3001-arith / HX3003 unit-relax · HX3010 → Warning · fn-name first-wins dedup | **25** | 8 | 5 | 0 | 2 |
 
 Note: 4 new DIFFs surfaced in the wider sample (atlas_cycle_append,
 atlas_doctrine, atlas_materials_limits, atlas_real_limits) — these
