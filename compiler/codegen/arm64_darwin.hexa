@@ -434,7 +434,7 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
             } else {
                 map_regs[cur] = ""
                 map_slots[cur] = next_slot
-                next_slot = next_slot + 8
+                next_slot = next_slot + 16  // Path A S1: HexaVal is 16B (tag+union); spill slots are HexaVal-sized. Single-reg str/ldr into the low 8B is harmless until S2 pair-stores the high half.
             }
         }
         s = s + 1
