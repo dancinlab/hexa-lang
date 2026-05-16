@@ -50,7 +50,7 @@ arm64 codegen — one-line-ish fixes, not multi-week:
 | R1 | a verifiable program runs **correctly** (`exit(42)` ⇒ `$?`=42) | ✅ proven 2026-05-16 (`exit(6*7)` ⇒ `$?`=42, aprime_cc arm64) |
 | R2 | codegen-correctness audit driven by running real programs; fix the bounded bugs | ✅ two root-cause fixes landed (see below); builtin link-gaps deferred |
 | R3 | compile+run a representative corpus (the `test/*.hexa` smokes, a few tools) natively; diff vs interp output | ✅ nine codegen-correctness classes fixed; `test/t_batch22` 0 → **31/31 byte-identical** to interp |
-| R4 | switch the build/dev pipeline `hexa run` → native compile+run, **interp kept as fallback** (env/flag toggle) | ⬜ |
+| R4 | switch the build/dev pipeline `hexa run` → native compile+run, **interp kept as fallback** (env/flag toggle) | ✅ `bin/hexa-run-native` wrapper landed (native first, interp fallback on build failure; `HEXA_NATIVE=0` forces interp; `HEXA_NATIVE_VERBOSE=1` logs the chosen path) |
 | R5 | once native coverage ≥ interp on the corpus, delete the interp | ⬜ |
 
 Each phase is incremental and default-safe (the interp fallback stays
@@ -170,8 +170,24 @@ b. **Frontend `CODEGEN-FAIL`** in some smokes — `HX3001` type-mismatch
    diagnostics, etc. Not a codegen-correctness issue; the typecheck
    is stricter than the interp accepts. Separate track.
 
-R3 ✅ closed for assertion-driven smokes; R4 (pipeline switch to
-native compile+run with interp fallback) is the next step.
+R3 ✅ closed for assertion-driven smokes.
+
+### R4 — `bin/hexa-run-native` wrapper
+
+Thin shell script (zero risk to the interp path):
+
+  hexa-run-native <file.hexa> [args...]   # native first, interp on fail
+  HEXA_NATIVE=0      ...                  # force interp
+  HEXA_NATIVE_VERBOSE=1 ...               # log chosen path + reason
+
+Native compile goes through the proven `hexa build` pipeline
+(hexa_v2 → C → clang), so it inherits its coverage; the wrapper
+adds the toggle + automatic fallback. `hexa run` itself stays
+interp-only (the existing contract); once corpus coverage of the
+native path matches interp's (R5), `hexa run` can be reaimed at
+this wrapper. The aprime_cc direct-asm codegen (this PR's R3
+work) is parallel — it will become the default native back-end
+once it stabilises across the full corpus.
 
 This is the cause of `test/t_batch22` reporting `0 passed` (its
 `let mut pass = 0` harness counter, bumped from inside `eq_*`

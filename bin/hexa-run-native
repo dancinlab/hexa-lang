@@ -1,0 +1,76 @@
+#!/bin/bash
+# bin/hexa-run-native — interp-retirement R4 pipeline switch.
+#
+# Tries native compile+run (`hexa build` → exec), falls back to the
+# interpreter (`hexa run`) on any failure. The interpreter is still
+# the SSOT for behaviour; this wrapper exists so dev workflows can
+# opt into the native path while it accrues coverage, with the
+# safety net that any divergence or codegen gap routes cleanly back.
+#
+# Usage:
+#   hexa-run-native <file.hexa> [args...]
+#   HEXA_NATIVE=0 hexa-run-native <file.hexa>     # force interp
+#   HEXA_NATIVE_VERBOSE=1 hexa-run-native ...     # log which path ran
+#
+# Exit code: same as the inner native binary OR the interp.
+#
+# Design note: this is a wrapper, not a dispatcher rewrite — `hexa run`
+# stays interp-only (the existing contract) so anyone relying on
+# exact-interp semantics is unaffected. Once the native path's corpus
+# coverage matches interp's (R5), `hexa run` can be reaimed at this
+# wrapper.
+
+set -uo pipefail
+
+usage() {
+    cat <<EOF >&2
+usage: hexa-run-native <file.hexa> [args...]
+env:
+  HEXA_NATIVE=0           force interp (skip native attempt)
+  HEXA_NATIVE_VERBOSE=1   log which path executed + reason
+EOF
+    exit 2
+}
+
+[ $# -ge 1 ] || usage
+SRC="$1"; shift
+[ -f "$SRC" ] || { echo "hexa-run-native: file not found: $SRC" >&2; exit 2; }
+
+verbose() { [ "${HEXA_NATIVE_VERBOSE:-0}" = "1" ] && echo "[hexa-run-native] $*" >&2; }
+
+run_interp() {
+    verbose "path=interp reason=$1"
+    exec hexa run "$SRC" "$@"
+}
+
+# Opt-out short-circuit.
+if [ "${HEXA_NATIVE:-1}" = "0" ]; then
+    run_interp "HEXA_NATIVE=0"
+fi
+
+# Compile via the existing native pipeline. `hexa build` resolves the
+# whole hexa_v2 → C → clang flow (the proven canonical native path)
+# and prints to stderr; capture both streams so the fallback path can
+# explain itself when invoked.
+BIN_DIR="${TMPDIR:-/tmp}/hexa-run-native.$$"
+mkdir -p "$BIN_DIR"
+BIN="$BIN_DIR/$(basename "$SRC" .hexa).bin"
+trap 'rm -rf "$BIN_DIR"' EXIT
+
+# `hexa build` refuses output under /tmp on Darwin (kernel-panic
+# guard); HEXA_MAC_BUILD_OK=1 is the documented bypass for non-heavy
+# dev paths. Honour the user's env if already set.
+: "${HEXA_MAC_BUILD_OK:=1}"; export HEXA_MAC_BUILD_OK
+
+BUILD_LOG="$BIN_DIR/build.log"
+if ! hexa build "$SRC" -o "$BIN" > "$BUILD_LOG" 2>&1; then
+    verbose "path=interp reason=build-failed; see $BUILD_LOG"
+    run_interp "build-failed"
+fi
+if [ ! -x "$BIN" ]; then
+    verbose "path=interp reason=no-binary"
+    run_interp "no-binary"
+fi
+
+verbose "path=native bin=$BIN"
+exec "$BIN" "$@"
