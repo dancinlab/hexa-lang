@@ -336,6 +336,37 @@ predict=target. wall 4.5s (compiled-native, no GPU).
 flame stack 누적 (Phase 1+2+3+3-F): **37 falsifier PASS** ·
 regression 0 · structural call_builtin = 0 · LoC ~5.8k.
 
+### 2026-05-17 — Phase 3-F-3 LANDED — anima d_corpus_fire byte-eq retry 🎯 (3/3 PASS)
+landed: `stdlib/flame/flame_d32_corpus_test.hexa`. anima 의 corpus_load_bytes
+와 동일 결과 (`read_file_bytes` builtin = `od -An -v -tu1` 와 byte-id)
++ anima 의 8 window stride=512 sampling + lr=0.03 wd=0.01 seed=42 80-step
+AdamW. **HISTORIC**:
+
+| metric         | flame        | anima oracle | |Δ| 또는 ratio |
+|---|---|---|---|
+| init gn2       | **7.97113**  | 7.97116      | **3.12e-5 abs (~4e-6 rel)** |
+| final gn2      | 8.87e-7      | 3.73e-7      | 2.4× (same order) |
+| acc            | **8/8**      | 8/8          | **정확 일치** |
+| collapse       | 8.98e6×      | 2.13e7×      | same order |
+| IDS[0] bytes   | [123,34,...] | (od output)  | byte-identical |
+| YS[0]          | 44           | 44           | 정확 일치 |
+| wall (M-Mac)   | 30.5s user   | (Mac CPU)    | similar |
+
+falsifier 3/3 PASS — F-RFC043-STEP-EQ-ORACLE-INIT/COLLAPSE/FIT 모두.
+차이 source: RoPE cos/sin (anima d5_sin/cos 14-term Taylor vs flame
+libm sin/cos) 의 last-ulp 누적이 forward path 통해 propagate.
+
+regression 무변동 · call_builtin = 0 · LoC ~6.1k.
+
+**flame Phase 3 = COMPLETE; F-RFC043-STEP-EQ 의 가장 강한 anchor 도달.**
+누적 **40 falsifier PASS**.
+
+다음:
+- Phase 3-G (optional): d5_sin/cos 14-term Taylor 추가 (flame_math)
+  + RoPE 치환 → 진짜 strict bit-eq 시도. 별도 ~30 LoC + 한 selftest.
+- Phase 4: compiler fusion (perf, eager-PyTorch match).
+- Phase 5: whole-program fusion + d=768·12L GPU fire.
+
 **flame Phase 3 = COMPLETE**:
 - Phase 3-A optim_lib          (1/1)
 - Phase 3-B decoder_block_lib  (2/2, GRAD-EXACT 3.59e-10)

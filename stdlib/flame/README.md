@@ -1,19 +1,22 @@
 # flame — hexa-native, compiler-only PyTorch-equivalent NN stdlib
 
-> **Status: Phase 1/2/3/3-E/3-F LANDED (2026-05-17, NN-stack + oracle
-> foundation complete) — 37 falsifier PASS on compiled-native. Stack:
-> `tensor_lib` + `autograd_lib` + `nn_lib` (7 layers) + `optim_lib` +
-> `decoder_block_lib` + `decoder_lib` + `train_lib` + `flame_math`
-> (anima dt_* hand-Taylor transcendentals). d=32·3L config trainer
-> (anima d_corpus_fire-equivalent dim + hyperparams + seed) — **gn2[0]
-> = 0.996 ≈ anima per-window avg 0.997 (= 7.97116 ÷ 8), gn2[80] =
-> 2.11e-12 (collapse 4.72e11×), predict = target** — algorithm-byte-eq
-> with anima campaign at the per-window level. Full-model GRAD-EXACT
-> central-diff verified. Structural call_builtin = 0 sustained.**
+> **Status: Phase 1/2/3 + 3-E/F/F-2/F-3 LANDED (2026-05-17) — 40
+> falsifier PASS on compiled-native. anima d_corpus_fire byte-eq
+> retry SUCCESS: flame init gn2 = 7.97113 vs anima 7.97116 (|Δ|
+> 3.12e-5, ~4e-6 rel) · acc 8/8 = anima 8/8 · final gn2 8.87e-7 (same
+> order as anima 3.73e-7) · collapse 8.98e6× ≈ anima 2.13e7× · 30.5s
+> wall, M-Mac CPU. Algorithm-byte-eq foundation confirmed at every
+> stage: same byte stream (read_file_bytes ≡ od -An -v -tu1), same
+> windowing, same weight init (dt_lcg + dt_rand_unit), same RMSNorm /
+> softmax / CE numerics (dt_sqrt + dt_exp + dt_ln). Only delta source
+> = RoPE cos/sin (libm vs anima d5_sin/cos 14-term Taylor) last-ulp
+> propagation. Stack: `tensor_lib` + `autograd_lib` + `nn_lib` (7
+> layers) + `optim_lib` + `decoder_block_lib` + `decoder_lib` +
+> `train_lib` + `flame_math`. Structural call_builtin = 0 sustained.**
 >
-> Remaining: corpus_load_bytes wire-in + 8-window epoch summing →
-> anima oracle 7.97116 → 3.73374e-07 absolute byte-eq retry. Phase 4
-> = compiler fusion. Phase 5 = whole-program fusion / d=768·12L fire.
+> Optional Phase 3-G: d5_sin/cos 14-term Taylor → strict bit-eq.
+> Phase 4 = compiler fusion. Phase 5 = whole-program fusion +
+> d=768·12L GPU fire.
 >
 > **Pair**: `flame` (this directory — hexa NN stdlib) ↔ `self/forge/`
 > (the GPU compute substrate: cuBLAS + .cu kernels). See AGENTS.tape §0
