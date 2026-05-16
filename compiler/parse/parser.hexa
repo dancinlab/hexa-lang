@@ -1329,6 +1329,16 @@ fn item_is_import(k: ItemKind) -> bool {
     }
 }
 
+fn item_is_let(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Let -> true,
+        ItemKind::Import -> false,
+        ItemKind::Fn -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false
+    }
+}
+
 // ── Multi-file loader helpers (Stage 1 Gap 1) ─────────────────
 // These run inside parse() to walk `import "path"` items, lex+parse the
 // referenced files, and splice their top-level items into the importing
@@ -1481,6 +1491,38 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
             items.push(it)
             if item_is_import(it.kind) {
                 imports.push(it.name)
+            }
+            // Top-level `let X = E` is BOTH a global decl (kept as
+            // ITEM_LET → lower_hir global slot) AND its initializer must
+            // run at program start. Emit `X = E` into the synthetic main
+            // at this source position so globals init in declaration
+            // order before later driver stmts (mirrors hexa_v2's
+            // generated main: inits-then-stmts in source order).
+            if item_is_let(it.kind) {
+                let mut nm = it.name
+                if len(nm) >= 4 && nm.substring(0, 4) == "mut:" {
+                    nm = nm.substring(4, len(nm))
+                }
+                let has_init = !(it.body.text == "" && len(it.body.children) == 0)
+                if has_init && len(nm) > 0 {
+                    let lhs = Expr {
+                        kind: ExprKind::Ident,
+                        span: it.span,
+                        text: nm,
+                        children: [],
+                        atlas_ref: empty_atlas()
+                    }
+                    let mut akids = []
+                    akids.push(lhs)
+                    akids.push(it.body)
+                    top_stmts.push(Expr {
+                        kind: ExprKind::Assign,
+                        span: it.span,
+                        text: "=",
+                        children: akids,
+                        atlas_ref: empty_atlas()
+                    })
+                }
             }
         } else {
             let s = parse_stmt()
