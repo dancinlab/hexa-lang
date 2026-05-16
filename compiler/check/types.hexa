@@ -1270,7 +1270,14 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // Genuine kind≠kind non-literal mismatches still report —
             // no type-soundness weakening (g3).
             if !_types_assignable(then_t, else_t, e.children[2]) {
-                _emit_hx3001(then_t, else_t, e.span, out)
+                // Permissive on unit: an if-expression whose arm
+                // typecheck resolves an unannotated-return call to
+                // `unit` should not error. Genuine non-unit
+                // mismatches (`if c { 1 } else { "x" }`) still fire.
+                let ku = "unit"
+                if then_t.kind != ku && else_t.kind != ku {
+                    _emit_hx3001(then_t, else_t, e.span, out)
+                }
             }
         }
         return then_t
