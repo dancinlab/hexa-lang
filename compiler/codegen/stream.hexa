@@ -37,7 +37,7 @@ import "../emit/asm.hexa"
 // whole-program carrier is ever materialised.
 pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
     let modhash = _arm64_modhash(hmodule.file)
-    let mut st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [] }
+    let mut st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [], ftexts: [] }
 
     // F4 — fragments accumulate in an array, joined once at the end.
     // `out = out + frag` re-copies the whole accumulator every function,

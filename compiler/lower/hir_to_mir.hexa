@@ -73,6 +73,24 @@ fn _const_float_op(v: f64) -> Operand {
     }
 }
 
+// Like _const_float_op but ALSO carries the literal's original source
+// text (e.g. "0.15415067982725836"). The codegen's float-pool emits a
+// `.double` directive — if we go through `to_string(float_val)` the
+// stage0 default print truncates to ~6 digits, so a 17-digit literal
+// loses precision (~3e-7 drift) and an `approx(width(6),
+// 0.15415067982725836, 1e-9)` test fails. Threading the original text
+// through preserves the assembler's parse fidelity.
+fn _const_float_op_with_text(v: f64, text: string) -> Operand {
+    return Operand {
+        kind: "const_float",
+        local_id: -1,
+        int_val: 0,
+        float_val: v,
+        str_val: text,
+        global_id: -1
+    }
+}
+
 fn _const_str_op(s: string) -> Operand {
     return Operand {
         kind: "const_str",
@@ -560,7 +578,10 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // so every float literal in any program lowered to 0.0 — math
         // builtins like sqrt(16.0) appeared to "do nothing", but the
         // value was being clobbered at MIR build time, not codegen.
-        return _value(ctx, _const_float_op(to_float(e.text)))
+        // Pass the original e.text alongside the parsed f64 so the
+        // codegen float-pool can preserve full literal precision in
+        // the emitted `.double` directive.
+        return _value(ctx, _const_float_op_with_text(to_float(e.text), e.text))
     }
     if k == "literal_string" {
         return _value(ctx, _const_str_op(e.text))

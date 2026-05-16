@@ -514,13 +514,17 @@ pub struct ArmStrTab {
     keys: [string],
     labels: [string],
     // Parallel float-literal pool (const_float Operand → `.LCfltN`).
-    // Stored in source-text form ("16.0") so the assembler's `.double`
-    // does the f64 conversion — sidesteps the stage0 lack of a
-    // double→bits bitcast primitive. NaN/Inf go through the same path
-    // since `to_string(f64)` round-trips them as "nan"/"inf" which
-    // both clang and gas accept.
+    // `fkeys` is the parsed f64 (used for de-dup); `flabels` is the
+    // emitted `.LCfltN` symbol; `ftexts` is the literal's source
+    // text ("0.15415067982725836"). Emit goes through the assembler's
+    // `.double <text>` so we sidestep the stage0 lack of a double→
+    // bits bitcast AND preserve full literal precision (stage0
+    // `to_string(f64)` truncates to ~6 digits — losing ~3e-7 against
+    // 17-digit reference literals — so we can't round-trip the
+    // parsed f64 back through `to_string`).
     fkeys: [f64],
-    flabels: [string]
+    flabels: [string],
+    ftexts: [string]
 }
 
 fn _arm64_float_lookup(st: ArmStrTab, v: f64) -> string {
@@ -535,16 +539,23 @@ fn _arm64_float_lookup(st: ArmStrTab, v: f64) -> string {
     return ""
 }
 
-fn _arm64_float_intern(st: ArmStrTab, v: f64) -> ArmStrTab {
+fn _arm64_float_intern(st: ArmStrTab, v: f64, text: string) -> ArmStrTab {
     let existing = _arm64_float_lookup(st, v)
     if len(existing) > 0 { return st }
     let mut fk = st.fkeys
     let mut fl = st.flabels
+    let mut ft = st.ftexts
     let label = ".LCflt" + to_string(len(fk))
     fk.push(v)
     fl.push(label)
-    return ArmStrTab { keys: st.keys, labels: st.labels, fkeys: fk, flabels: fl }
+    // Empty text falls back to `to_string(v)` at LModule build time.
+    ft.push(text.substring(0, len(text)))
+    return ArmStrTab {
+        keys: st.keys, labels: st.labels,
+        fkeys: fk, flabels: fl, ftexts: ft
+    }
 }
+
 
 fn _arm64_strtab_lookup(st: ArmStrTab, s: string) -> string {
     let mut i = 0
@@ -590,7 +601,7 @@ fn _arm64_op_for_operand_st(o: Operand, st: ArmStrTab) -> LOperand {
 // flow through unchanged (label = literal string), which only
 // matters for modules that never produce a const_str operand.
 fn _arm64_op_for_operand(o: Operand) -> LOperand {
-    let st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [] }
+    let st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [], ftexts: [] }
     return _arm64_op_for_operand_st(o, st)
 }
 
@@ -1605,12 +1616,13 @@ fn _collect_strs_from_stmt(st: ArmStrTab, s: Stmt) -> ArmStrTab {
                 labs.push(".LCstr" + to_string(n))
                 out = ArmStrTab {
                     keys: keys, labels: labs,
-                    fkeys: out.fkeys, flabels: out.flabels
+                    fkeys: out.fkeys, flabels: out.flabels,
+                    ftexts: out.ftexts
                 }
             }
         }
         if o.kind == "const_float" {
-            out = _arm64_float_intern(out, o.float_val)
+            out = _arm64_float_intern(out, o.float_val, o.str_val)
         }
         i = i + 1
     }
@@ -1642,7 +1654,7 @@ fn _arm_strtab_collect_fn(st: ArmStrTab, f: MFunc) -> ArmStrTab {
 // Whole-module strtab — the non-streaming path. Now a thin fold over
 // _arm_strtab_collect_fn so both paths share one collector (no drift).
 fn _build_arm_strtab(module: MModule) -> ArmStrTab {
-    let mut st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [] }
+    let mut st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [], ftexts: [] }
     let mut fi = 0
     while fi < len(module.funcs) {
         st = _arm_strtab_collect_fn(st, module.funcs[fi])
@@ -1851,13 +1863,18 @@ pub fn codegen_arm64_darwin(module: MModule) -> LModule {
     }
     // Float-pool entries from the strtab → LFloat list. `.LC*` is a
     // local label (no `_` prefix needed) per the existing strtab
-    // convention; the use-site references it as-is.
+    // convention; the use-site references it as-is. Prefer the
+    // captured source text (full literal precision) over a
+    // `to_string(f64)` round-trip which truncates to ~6 digits in
+    // stage0 — see the comment on ArmStrTab.ftexts above.
     let mut flts: [LFloat] = []
     let mut fp = 0
     while fp < len(st.fkeys) {
+        let mut ftext = st.ftexts[fp]
+        if len(ftext) == 0 { ftext = to_string(st.fkeys[fp]) }
         flts.push(LFloat {
             label: st.flabels[fp],
-            text: to_string(st.fkeys[fp])
+            text: ftext
         })
         fp = fp + 1
     }
