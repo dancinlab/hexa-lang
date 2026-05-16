@@ -172,6 +172,30 @@ b. **Frontend `CODEGEN-FAIL`** in some smokes — `HX3001` type-mismatch
 
 R3 ✅ closed for assertion-driven smokes.
 
+### R5 parity sample further expanded (40 smokes, third sweep)
+
+  36 / 40  byte-identical MATCH         (90%)
+   1 / 40  DIFF (perfect_number_engine — known orthogonal
+             hexa_v2 import-path bug)
+   3 / 40  native completed, interp timed out (n6_uniqueness,
+             sigma_phi_tau_uniqueness, …)
+   0     codegen-fail · link-fail · native-timeout
+
+The "native is also faster than interp" count went from 1 → 3
+across the sweep. 90% byte-identical parity at this sample size
+is well past the empirical threshold for R4-native-default.
+
+Next bounded codegen gap (surfaced while smoke-testing the math
+builtin batch, NOT a blocker for the sweep above):
+**float literals lower to `hv void`** in `_hv_load`'s const-operand
+dispatch (no `const_float` branch). So `sqrt(16.0)` runs but
+receives TAG_VOID/0 and returns 0. Fix needs either a float-pool
+in rodata + adrp/ldp (clean) or a runtime `hexa_f64_bits` helper
+the codegen can call at compile time to materialize the IEEE-754
+bits in x1 directly. Programs that pass float VARIABLES (not
+literals) to the math builtins already work today through the
+mappings added in `d880c5d2`.
+
 ### R5 parity sample expanded (25 smokes, second sweep)
 
 23 / 25 byte-identical MATCH · 1 native-faster-than-interp · 1 DIFF.
