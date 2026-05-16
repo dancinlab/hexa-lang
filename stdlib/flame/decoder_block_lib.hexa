@@ -804,8 +804,14 @@ pub fn nn_decoder_block_bwd(X: int, Bp: int, Bc: int,
 
     // 2 reversed (Q/K/V projections): given dQ/dK/dV → dWq/dWk/dWv + drin accum
     // Phase 4-A-bwd (2026-05-17): dW_? accumulators farr_matmul-routed
-    // via _db_grad_accum_farr (Σ_t outer-prod = dY^T · X reshape).
-    // drin reductions stay inline (different shape: per-t dot, not Σ_t).
+    // via _db_grad_accum_farr (Σ_t outer-prod = dY^T · W^T reshape).
+    // Honest carve-out: drin (per-t inner-dot reduction over d+2·kvd=64
+    // for T·d=512 elements) was tested as 3 separate farr_matmul calls
+    // in an earlier draft of this commit; that produced a measurable
+    // wall REGRESSION (bwd 12→14ms, full corpus 12.30→14.16s) because
+    // 3 buffer copies + 3 farr allocs + 3 frees + element-wise add
+    // exceeded the inline single-accumulator cost at this scale.
+    // Reverted to the inline form below.
     _db_grad_accum_farr(dQ, 0, Bc, oRin, Bg, WQ, T, d,   d)
     _db_grad_accum_farr(dK, 0, Bc, oRin, Bg, WK, T, kvd, d)
     _db_grad_accum_farr(dV, 0, Bc, oRin, Bg, WV, T, kvd, d)
