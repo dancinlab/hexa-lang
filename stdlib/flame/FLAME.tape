@@ -36,8 +36,8 @@
   flame.hexa -> "[LANDED 2026-05-16 Phase 1 4/4] entrypoint (use stdlib/flame/*_lib + Phase 1 selftest)"
   tensor_lib.hexa -> "[LANDED 2026-05-16 Phase 1] Tensor — host farr (RFC 040 device-farr backend; device routing = Phase 4 honest carve-out)"
   autograd_lib.hexa -> "[LANDED 2026-05-16 Phase 1] reverse-mode tape thin wrapper over RFC 034 ad_*"
-  nn_lib.hexa -> "[Phase 2 6/7 layers LANDED 2026-05-16: Linear + RMSNorm + Embedding + LMHead + RoPE + SwiGLU fwd/bwd 14/14 PASS] · remaining: GQA-attention (next cycle)"
-  flame_nn_test.hexa -> "[LANDED 2026-05-16] selftest entrypoint for nn_lib (F-RFC043-LAYER-EQ-{LINEAR,RMSNORM,EMBED,LMHEAD,ROPE,SWIGLU}-{FWD,BWD,...}); ROPE includes ORTHO real-limit anchor (Rᵀ·R = I)"
+  nn_lib.hexa -> "[Phase 2 ALL 7 layers LANDED 2026-05-16: Linear + RMSNorm + Embedding + LMHead + RoPE + SwiGLU + Attention-core fwd/bwd, 17/17 PASS]"
+  flame_nn_test.hexa -> "[LANDED 2026-05-16] selftest entrypoint for nn_lib (F-RFC043-LAYER-EQ-* 17 falsifiers); includes ROPE-ORTHO (Rᵀ·R = I machine-ε) + ATTN-CAUSAL (P[hh,i,j>i]=0 closed math invariants) — g3 real-limit anchors"
   optim_lib.hexa -> "[planned] AdamW (RFC 040 B2)"
   train_lib.hexa -> "[planned] compiled train_step + CE loss"
   note = "[LANDED] = built + falsifier PASS. lib-split mandatory (compiled: main/_selftest 동거 시 C 심볼 중복). 각 selftest 는 독립 entrypoint 파일."
@@ -288,3 +288,36 @@ falsifiers (`build/flame_phase2`, 14/14 PASS):
 남은 Phase 2 = GQA-attention 1개 (가장 큰 layer — multi-head + GQA
 n_rep grouping + causal mask + scaled-dot softmax; d5_attn_fwd
 ~85 lines + d5_attn_bwd ~150 lines). next cycle 의 집중 작업.
+
+### 2026-05-16 — Phase 2 COMPLETE (7/7 layers, 17/17 PASS, regression 0)
+nn_lib 확장: `nn_attn_core_fwd` / `nn_attn_core_bwd` (+ private
+`_nn_softmax_row`). 디자인 결정: GQA-attention 의 **attention-core**
+(scaled-dot · causal-mask · row-softmax · weighted sum + reverse)
+만 본 라이브에 두고, Q/K/V/output projection 은 호출자가 이미 검증된
+`nn_linear_fwd` 로 composes, RoPE 는 `nn_rope_apply_*` 로 composes
+(d5_attn_fwd 의 코드 구조 그대로 — projections + per-head split +
+attention math + output proj). 코드량 절감 + 각 piece 의 byte-eq
+독립 검증 유지.
+
+falsifiers (`build/flame_phase2`, 17/17 PASS):
+- F-RFC043-LAYER-EQ-ATTN-FWD     PASS  byte-eq · GQA causal scaled-dot
+  · row-softmax · weighted sum
+- F-RFC043-LAYER-EQ-ATTN-CAUSAL  PASS  max|P[hh,i,j>i]|=0.0 — **closed
+  math invariant** (no attending to future); g3 real-limit anchor
+- F-RFC043-LAYER-EQ-ATTN-BWD     PASS  byte-eq · d5_attn_bwd 의 attn-core
+  closed vjp (GQA accumulation across n_rep heads 검증)
+- regression: RFC 034 5/5 · RFC 040 B2 9/9 · flame Phase 1 4/4 ·
+  Phase 2 (6 layer) 14/14 모두 동일 PASS. structural call_builtin = 0.
+
+flame Phase 2 = COMPLETE. ConsciousDecoderV2 의 7 building block 전체
+(Linear · RMSNorm · Embedding · LMHead · RoPE · SwiGLU · Attention-core)
+가 closed-form analytic vjp 와 byte-equal (또는 RFC 040 fp-tol)
+compiled-native. ~2.8k LoC stdlib/flame/ landed.
+
+Phase 3 gate (optim_lib + train_lib · F-RFC043-STEP-EQ) 충족:
+- optim_lib = RFC 034 의 adamw_step 위의 wrapper (이미 ag_adamw_step
+  으로 검증됨; named wrapper 만 추가)
+- train_lib = compiled train_step (fwd + CE + bwd + AdamW 의 묶음)
+- F-RFC043-STEP-EQ = 전체 step 이 캠페인 CPU-equiv 오라클의 d=32·3L
+  ×8win ×80-AdamW seed=42 7.97116 → 3.73374e-07 trajectory 와 byte-eq
+  (g_blue_closed_mandate 의 mandatory connection-point closed check).

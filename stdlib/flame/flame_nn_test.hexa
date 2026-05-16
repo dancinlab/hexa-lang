@@ -136,6 +136,140 @@ fn ref_rmsnorm_fwd(x: int, g: int,
     }
 }
 
+// ─── Attention core reference (independent loops; d5_attn_fwd/bwd algebra) ──
+fn _ref_softmax_row(s: int, p_out: int, base: int, L: int) {
+    let mut m = t_get(s, 0)
+    let mut i = 1
+    while i < L {
+        if t_get(s, i) > m { m = t_get(s, i) }
+        i = i + 1
+    }
+    let mut tot = 0.0
+    let mut i2 = 0
+    while i2 < L {
+        let e = exp(t_get(s, i2) - m)
+        t_set(p_out, base + i2, e)
+        tot = tot + e
+        i2 = i2 + 1
+    }
+    let mut i3 = 0
+    while i3 < L {
+        let cur = t_get(p_out, base + i3)
+        t_set(p_out, base + i3, cur / tot)
+        i3 = i3 + 1
+    }
+}
+
+fn ref_attn_core_fwd(Q: int, K: int, V: int,
+                     P_out: int, ctx_out: int,
+                     T: int, nh: int, nkv: int, hd: int) {
+    let n_rep = nh / nkv
+    let d = nh * hd
+    let scale = 1.0 / sqrt(to_float(hd))
+    let srow = t_zeros(T)
+    let mut hh = 0
+    while hh < nh {
+        let kvh = hh / n_rep
+        let mut i = 0
+        while i < T {
+            let L = i + 1
+            let mut j = 0
+            while j < L {
+                let mut dot = 0.0
+                let mut c = 0
+                while c < hd {
+                    dot = dot + t_get(Q, (i * nh + hh) * hd + c)
+                              * t_get(K, (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                t_set(srow, j, dot * scale)
+                j = j + 1
+            }
+            _ref_softmax_row(srow, P_out, (hh * T + i) * T, L)
+            let mut c2 = 0
+            while c2 < hd {
+                let mut acc = 0.0
+                let mut jj = 0
+                while jj < L {
+                    acc = acc + t_get(P_out, (hh * T + i) * T + jj)
+                              * t_get(V, (jj * nkv + kvh) * hd + c2)
+                    jj = jj + 1
+                }
+                t_set(ctx_out, i * d + hh * hd + c2, acc)
+                c2 = c2 + 1
+            }
+            i = i + 1
+        }
+        hh = hh + 1
+    }
+    let _ = t_free(srow)
+}
+
+fn ref_attn_core_bwd(Q: int, K: int, V: int, P: int, dctx: int,
+                     dQ_out: int, dK_out: int, dV_out: int,
+                     T: int, nh: int, nkv: int, hd: int) {
+    let n_rep = nh / nkv
+    let d = nh * hd
+    let scale = 1.0 / sqrt(to_float(hd))
+    let dP_row = t_zeros(T)
+    let mut hh = 0
+    while hh < nh {
+        let kvh = hh / n_rep
+        let mut i = 0
+        while i < T {
+            let L = i + 1
+            let mut j = 0
+            while j < L {
+                let mut acc = 0.0
+                let mut c = 0
+                while c < hd {
+                    acc = acc + t_get(dctx, i * d + hh * hd + c)
+                              * t_get(V, (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                t_set(dP_row, j, acc)
+                j = j + 1
+            }
+            let mut sdot = 0.0
+            let mut j2 = 0
+            while j2 < L {
+                sdot = sdot + t_get(P, (hh * T + i) * T + j2) * t_get(dP_row, j2)
+                j2 = j2 + 1
+            }
+            let mut j3 = 0
+            while j3 < L {
+                let pij = t_get(P, (hh * T + i) * T + j3)
+                let mut c = 0
+                while c < hd {
+                    let dv_idx = (j3 * nkv + kvh) * hd + c
+                    let cur = t_get(dV_out, dv_idx)
+                    t_set(dV_out, dv_idx, cur + pij * t_get(dctx, i * d + hh * hd + c))
+                    c = c + 1
+                }
+                j3 = j3 + 1
+            }
+            let mut j4 = 0
+            while j4 < L {
+                let dS = t_get(P, (hh * T + i) * T + j4) * (t_get(dP_row, j4) - sdot) * scale
+                let mut c2 = 0
+                while c2 < hd {
+                    let dq_idx = (i * nh + hh) * hd + c2
+                    let dk_idx = (j4 * nkv + kvh) * hd + c2
+                    let cur_q = t_get(dQ_out, dq_idx)
+                    t_set(dQ_out, dq_idx, cur_q + dS * t_get(K, (j4 * nkv + kvh) * hd + c2))
+                    let cur_k = t_get(dK_out, dk_idx)
+                    t_set(dK_out, dk_idx, cur_k + dS * t_get(Q, (i * nh + hh) * hd + c2))
+                    c2 = c2 + 1
+                }
+                j4 = j4 + 1
+            }
+            i = i + 1
+        }
+        hh = hh + 1
+    }
+    let _ = t_free(dP_row)
+}
+
 // ─── SwiGLU reference (independent loops; c3_swiglu_fwd/bwd algebra) ──
 fn _ref_sigmoid(x: float) -> float { return 1.0 / (1.0 + exp(0.0 - x)) }
 fn _ref_silu(x: float) -> float { return x * _ref_sigmoid(x) }
@@ -504,6 +638,74 @@ fn check_rmsnorm() -> int {
     return out
 }
 
+// F-RFC043-LAYER-EQ-ATTN-{FWD,BWD,CAUSAL}
+// small but exercises GQA grouping (nh != nkv): nh=4, nkv=2 → n_rep=2.
+fn check_attn() -> int {
+    let T = 4
+    let nh = 4
+    let nkv = 2
+    let hd = 3
+    let d = nh * hd
+
+    let Q = t_zeros(T * nh * hd);  t_fill_lcg(Q,  T*nh*hd,   71, 0.5)
+    let K = t_zeros(T * nkv * hd); t_fill_lcg(K,  T*nkv*hd,  72, 0.5)
+    let V = t_zeros(T * nkv * hd); t_fill_lcg(V,  T*nkv*hd,  73, 0.5)
+
+    let P_f = t_zeros(nh * T * T); let ctx_f = t_zeros(T * d)
+    let P_r = t_zeros(nh * T * T); let ctx_r = t_zeros(T * d)
+    nn_attn_core_fwd(Q, K, V, P_f, ctx_f, T, nh, nkv, hd)
+    ref_attn_core_fwd(Q, K, V, P_r, ctx_r, T, nh, nkv, hd)
+    let fwd_P_dev = max_dev_farr(P_f, P_r, nh * T * T)
+    let fwd_ctx_dev = max_dev_farr(ctx_f, ctx_r, T * d)
+
+    // CAUSAL property check — P[hh, i, j] must be 0.0 for j > i.
+    // (i.e. tokens cannot attend to future positions.) Closed math
+    // invariant — real-limit anchor (g3). Inspect the wrapper output.
+    let mut causal_violated = 0.0
+    let mut hh_c = 0
+    while hh_c < nh {
+        let mut i_c = 0
+        while i_c < T {
+            let mut j_c = i_c + 1
+            while j_c < T {
+                let v = t_get(P_f, (hh_c * T + i_c) * T + j_c)
+                let av = if v < 0.0 { 0.0 - v } else { v }
+                if av > causal_violated { causal_violated = av }
+                j_c = j_c + 1
+            }
+            i_c = i_c + 1
+        }
+        hh_c = hh_c + 1
+    }
+
+    // backward — same dctx for both wrapper and ref. dQ/dK/dV are
+    // accumulated INTO (pre-zeroed by t_zeros) — feed identical
+    // saved-fwd P (use the ref's P_r for both bwd calls, matching the
+    // SwiGLU-bwd isolation pattern).
+    let dctx = t_zeros(T * d); t_fill_lcg(dctx, T * d, 999, 0.7)
+    let dQ_f = t_zeros(T * nh * hd); let dK_f = t_zeros(T * nkv * hd); let dV_f = t_zeros(T * nkv * hd)
+    let dQ_r = t_zeros(T * nh * hd); let dK_r = t_zeros(T * nkv * hd); let dV_r = t_zeros(T * nkv * hd)
+    nn_attn_core_bwd(Q, K, V, P_r, dctx, dQ_f, dK_f, dV_f, T, nh, nkv, hd)
+    ref_attn_core_bwd(Q, K, V, P_r, dctx, dQ_r, dK_r, dV_r, T, nh, nkv, hd)
+    let bwd_dQ = max_dev_farr(dQ_f, dQ_r, T * nh * hd)
+    let bwd_dK = max_dev_farr(dK_f, dK_r, T * nkv * hd)
+    let bwd_dV = max_dev_farr(dV_f, dV_r, T * nkv * hd)
+
+    let _ = t_free(Q); let _ = t_free(K); let _ = t_free(V); let _ = t_free(dctx)
+    let _ = t_free(P_f); let _ = t_free(ctx_f); let _ = t_free(P_r); let _ = t_free(ctx_r)
+    let _ = t_free(dQ_f); let _ = t_free(dK_f); let _ = t_free(dV_f)
+    let _ = t_free(dQ_r); let _ = t_free(dK_r); let _ = t_free(dV_r)
+
+    let out = t_zeros(6)
+    t_set(out, 0, fwd_P_dev)
+    t_set(out, 1, fwd_ctx_dev)
+    t_set(out, 2, causal_violated)
+    t_set(out, 3, bwd_dQ)
+    t_set(out, 4, bwd_dK)
+    t_set(out, 5, bwd_dV)
+    return out
+}
+
 // F-RFC043-LAYER-EQ-SWIGLU-{FWD,BWD}
 fn check_swiglu() -> int {
     let d = 5
@@ -689,10 +891,10 @@ fn check_lm_head() -> int {
 }
 
 // ─── entrypoint ────────────────────────────────────────────────────────
-println("=== flame Phase 2 selftest (nn_lib: Linear + RMSNorm + Embedding + LMHead + RoPE + SwiGLU, compiled-native) ===")
+println("=== flame Phase 2 selftest (nn_lib: Linear + RMSNorm + Embedding + LMHead + RoPE + SwiGLU + Attention-core, compiled-native) ===")
 
 let mut pass = 0
-let total = 14
+let total = 17
 
 // ── Linear ─────────────────────────────────────────────────────────────
 let lin = check_linear()
@@ -881,6 +1083,37 @@ if sw_dr == 0.0 {
     println("FAIL  F-RFC043-LAYER-EQ-SWIGLU-BWD dr deviation")
 }
 
+// ── Attention core ─────────────────────────────────────────────────────
+let at = check_attn()
+let at_fwd_P = t_get(at, 0); let at_fwd_ctx = t_get(at, 1); let at_causal = t_get(at, 2)
+let at_dQ = t_get(at, 3); let at_dK = t_get(at, 4); let at_dV = t_get(at, 5)
+if at_fwd_P == 0.0 {
+    if at_fwd_ctx == 0.0 {
+        println("PASS  F-RFC043-LAYER-EQ-ATTN-FWD     max|{P, ctx}_flame − {ref}| = 0.0 (byte-eq · GQA causal scaled-dot · row-softmax · weighted sum)")
+        pass = pass + 1
+    } else { print("FAIL  F-RFC043-LAYER-EQ-ATTN-FWD ctx deviation = "); print(at_fwd_ctx); println("") }
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-ATTN-FWD P deviation = "); print(at_fwd_P); println("")
+}
+// CAUSAL invariant — closed math anchor (g3 real-limit): P[hh,i,j]=0
+// for ∀ j > i (no attending to future). Wrapper-only inspection.
+if at_causal == 0.0 {
+    println("PASS  F-RFC043-LAYER-EQ-ATTN-CAUSAL  max|P[hh,i,j>i]| = 0.0 (closed math invariant · no leak across causal mask)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-ATTN-CAUSAL  P leaked beyond j=i, max="); print(at_causal); println("")
+}
+if at_dQ == 0.0 {
+    if at_dK == 0.0 {
+        if at_dV == 0.0 {
+            println("PASS  F-RFC043-LAYER-EQ-ATTN-BWD     max|{dQ, dK, dV}_flame − {ref}| = 0.0 (byte-eq · d5_attn_bwd attention-core closed vjp + GQA accumulation across n_rep heads)")
+            pass = pass + 1
+        } else { print("FAIL  F-RFC043-LAYER-EQ-ATTN-BWD dV dev="); print(at_dV); println("") }
+    } else { print("FAIL  F-RFC043-LAYER-EQ-ATTN-BWD dK dev="); print(at_dK); println("") }
+} else {
+    print("FAIL  F-RFC043-LAYER-EQ-ATTN-BWD dQ dev="); print(at_dQ); println("")
+}
+
 println("")
 print("=== flame Phase 2: ")
 print(pass)
@@ -889,7 +1122,7 @@ print(total)
 println(" PASS ===")
 
 if pass == total {
-    println("PASS — flame nn_lib 6 layers (Linear · RMSNorm · Embedding · LMHead · RoPE · SwiGLU, fwd+bwd, +Rᵀ·R=I orthogonality identity) ≡ closed analytic ref; connection-point closed (g_blue_closed_mandate). Remaining Phase 2 layer: GQA-attention.")
+    println("PASS — flame nn_lib 7-layer Phase 2 set (Linear · RMSNorm · Embedding · LMHead · RoPE · SwiGLU · Attention-core, fwd+bwd, with Rᵀ·R=I orthogonality + causal-mask closed invariants) ≡ closed analytic ref; connection-point closed (g_blue_closed_mandate). Phase 3 (optim_lib + train_lib · F-RFC043-STEP-EQ) is the next gate.")
 } else {
     println("FAIL — flame Phase 2 not landable")
 }

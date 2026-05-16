@@ -183,3 +183,33 @@ flame 코드 LoC 총 ~2.3k (impl + test + SSOT). structural call_builtin = 0
   reverse 체인
 - 권장: 별도 cycle (자체적으로 falsifier 4-6 건 — fwd, bwd, causal mask
   property, GQA 누적 invariance). Phase 2-A/B 의 layer pattern 그대로 적용.
+
+### 2026-05-16 — Phase 2 COMPLETE (7/7 layers, 17/17 PASS)
+extension: `nn_lib.hexa` 에 `nn_attn_core_fwd` + `nn_attn_core_bwd`
+(+ private `_nn_softmax_row`) 추가. 디자인 결정: 본 라이브는 GQA의
+**attention-core 수학**(scaled-dot · causal · row-softmax · weighted sum
++ reverse)만 담당. Q/K/V/output projection 은 caller 가 검증된
+`nn_linear_fwd` 로 composes; RoPE 는 `nn_rope_apply_*` 로 composes
+(d5_attn_fwd 의 자연 분해). 결과: 코드량 절감(~70 LoC fwd + ~80 LoC
+bwd) + 각 building block 의 byte-eq 독립 검증 유지.
+
+selftest `build/flame_phase2` 17/17 PASS:
+- ATTN 새 falsifier 3건 (FWD · CAUSAL · BWD) 모두 byte-eq / 0.0.
+- 캐주얼 마스크 invariant 가 **closed math 항등식** 직접 검증 (P[hh,i,j>i]=0
+  for ∀ j > i; "no attending to future" 의 명시적 anchor — g3
+  real-math/physics limit).
+- regression: RFC 034 5/5 · RFC 040 B2 9/9 · flame Phase 1 4/4 ·
+  Phase 2 (6-layer 14건) 모두 동일 PASS · 동일 numerics. structural
+  call_builtin = 0 (compiler-only 7 layer + tape + tensor 전구간 유지).
+
+**flame Phase 2 GATE 충족 ⟹ Phase 3 (optim_lib + train_lib) 진행 가능.**
+Phase 3 의 falsifier:
+- F-RFC043-STEP-EQ — full `train_step` (fwd + CE + bwd + AdamW) 가
+  campaign CPU-equiv oracle (d=32·3L ×8win ×80-AdamW seed=42:
+  gn2 7.97116 → 3.73374e-07, acc 0/8 → 8/8) 와 **bit-equal** 재현.
+  mandatory connection-point closed check (g_blue_closed_mandate).
+- F-RFC043-MODULE-REGRESSION-0 sustained
+- 추가 F-RFC043-DETERMINISM / -INVARIANT-PRESERVED (Shannon entropy
+  floor 등)
+
+flame 코드 LoC 총 ~2.8k (impl + test + SSOT).

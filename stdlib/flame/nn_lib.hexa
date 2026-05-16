@@ -162,6 +162,189 @@ pub fn nn_rmsnorm_fwd(x: int, g: int,
     }
 }
 
+// ─── Attention core (GQA, causal, multi-head; new math only) ──────────
+// Reference: anima d_train5_lib.hexa d5_attn_fwd / d5_attn_bwd
+// (attention-core sections only — the Q/K/V/output projections are
+// composed externally by the caller using nn_linear_fwd + RoPE, the
+// same pattern d5_attn_fwd uses internally).
+//
+// flame's attention-core takes the ALREADY-PROJECTED + ALREADY-ROPED
+// Q/K (and V untouched), shapes:
+//   Q : [T · nh · hd]   query, RoPE-rotated, per-head
+//   K : [T · nkv · hd]  key,   RoPE-rotated, per-kv-head (GQA grouped)
+//   V : [T · nkv · hd]  value, no RoPE, per-kv-head
+// and produces:
+//   P   : [nh · T · T]   per-head per-query softmax weights (causal: j≤i)
+//   ctx : [T · d]        context output, d = nh·hd; head hh at offset
+//                        ctx[i*d + hh*hd + c]
+// scale = 1/sqrt(hd) baked into scores.  GQA grouping: kvh = hh / n_rep
+// where n_rep = nh / nkv.
+
+fn _nn_softmax_row(s: int, p_out: int, base: int, L: int) {
+    // s : input scores farr (L-len); p_out : output farr; base : offset
+    // in p_out to write to. Numerically-stable: subtract max.
+    // Uses farr_get/farr_set with explicit indexing (no separate temp farr).
+    let mut m = farr_get(s, 0)
+    let mut i = 1
+    while i < L {
+        if farr_get(s, i) > m { m = farr_get(s, i) }
+        i = i + 1
+    }
+    let mut tot = 0.0
+    let mut i2 = 0
+    while i2 < L {
+        let e = exp(farr_get(s, i2) - m)
+        // stash e into p_out[base + i2] (we'll renormalize in pass 2).
+        let _ = farr_set(p_out, base + i2, e)
+        tot = tot + e
+        i2 = i2 + 1
+    }
+    let mut i3 = 0
+    while i3 < L {
+        let cur = farr_get(p_out, base + i3)
+        let _ = farr_set(p_out, base + i3, cur / tot)
+        i3 = i3 + 1
+    }
+}
+
+// Forward attention core. Caller pre-allocates P_out (nh·T·T) and
+// ctx_out (T·d) with zeros (we WRITE the causal-mask region; positions
+// beyond L=i+1 remain zero by caller's pre-fill).
+pub fn nn_attn_core_fwd(Q: int, K: int, V: int,
+                        P_out: int, ctx_out: int,
+                        T: int, nh: int, nkv: int, hd: int) {
+    let n_rep = nh / nkv
+    let d = nh * hd
+    let scale = 1.0 / sqrt(to_float(hd))
+    // scores scratch — L can be up to T; allocate once at max.
+    let srow = farr_zeros(T)
+    let mut hh = 0
+    while hh < nh {
+        let kvh = hh / n_rep
+        let mut i = 0
+        while i < T {
+            let L = i + 1
+            // scores[j] = Σ_c Q[(i*nh + hh)*hd + c] · K[(j*nkv + kvh)*hd + c] · scale
+            let mut j = 0
+            while j < L {
+                let mut dot = 0.0
+                let mut c = 0
+                while c < hd {
+                    dot = dot + farr_get(Q, (i * nh + hh) * hd + c)
+                              * farr_get(K, (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                let _ = farr_set(srow, j, dot * scale)
+                j = j + 1
+            }
+            // softmax_row over srow[0..L] → P[(hh*T + i)*T + 0..L]
+            _nn_softmax_row(srow, P_out, (hh * T + i) * T, L)
+            // ctx[i*d + hh*hd + c] = Σ_j P[(hh*T+i)*T+j] · V[(j*nkv+kvh)*hd + c]
+            let mut c2 = 0
+            while c2 < hd {
+                let mut acc = 0.0
+                let mut jj = 0
+                while jj < L {
+                    acc = acc + farr_get(P_out, (hh * T + i) * T + jj)
+                              * farr_get(V, (jj * nkv + kvh) * hd + c2)
+                    jj = jj + 1
+                }
+                let _ = farr_set(ctx_out, i * d + hh * hd + c2, acc)
+                c2 = c2 + 1
+            }
+            i = i + 1
+        }
+        hh = hh + 1
+    }
+    let _ = farr_free(srow)
+}
+
+// Backward attention core. Closed analytic vjp (d5_attn_bwd §"attention
+// core"):
+//   given dctx [T·d] → dQ, dK, dV (rotated-space grads, caller-zeroed)
+//   dP[i,j] = Σ_c dctx[i, hh, c] · V[j, kvh, c]
+//   sdot[i] = Σ_j P[i,j] · dP[i,j]            (softmax Jacobian helper)
+//   dV[j, kvh, c] += Σ_i P[i,j] · dctx[i, hh, c]     (accumulate over heads)
+//   dS[i,j] = P[i,j] · (dP[i,j] − sdot[i]) · scale
+//   dQ[i, hh, c] += Σ_j dS[i,j] · K[j, kvh, c]
+//   dK[j, kvh, c] += Σ_i dS[i,j] · Q[i, hh, c]      (accumulate over heads)
+// dQ_out / dK_out / dV_out are ACCUMULATED INTO (caller pre-zeros).
+pub fn nn_attn_core_bwd(Q: int, K: int, V: int, P: int, dctx: int,
+                        dQ_out: int, dK_out: int, dV_out: int,
+                        T: int, nh: int, nkv: int, hd: int) {
+    let n_rep = nh / nkv
+    let d = nh * hd
+    let scale = 1.0 / sqrt(to_float(hd))
+    let dP_row = farr_zeros(T)
+    let mut hh = 0
+    while hh < nh {
+        let kvh = hh / n_rep
+        let mut i = 0
+        while i < T {
+            let L = i + 1
+            // dP[j] = Σ_c dctx[i*d + hh*hd + c] · V[(j*nkv + kvh)*hd + c]
+            let mut j = 0
+            while j < L {
+                let mut acc = 0.0
+                let mut c = 0
+                while c < hd {
+                    acc = acc + farr_get(dctx, i * d + hh * hd + c)
+                              * farr_get(V, (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                let _ = farr_set(dP_row, j, acc)
+                j = j + 1
+            }
+            // sdot = Σ_j P[i,j] · dP[j]
+            let mut sdot = 0.0
+            let mut j2 = 0
+            while j2 < L {
+                sdot = sdot + farr_get(P, (hh * T + i) * T + j2)
+                            * farr_get(dP_row, j2)
+                j2 = j2 + 1
+            }
+            // dV[j, kvh, c] += P[i,j] · dctx[i, hh, c]
+            let mut j3 = 0
+            while j3 < L {
+                let pij = farr_get(P, (hh * T + i) * T + j3)
+                let mut c = 0
+                while c < hd {
+                    let dv_idx = (j3 * nkv + kvh) * hd + c
+                    let cur = farr_get(dV_out, dv_idx)
+                    let _ = farr_set(dV_out, dv_idx,
+                                     cur + pij * farr_get(dctx, i * d + hh * hd + c))
+                    c = c + 1
+                }
+                j3 = j3 + 1
+            }
+            // dS[i,j] = P[i,j] · (dP[j] − sdot) · scale
+            // dQ[i,hh,c] += Σ_j dS · K[j,kvh,c]
+            // dK[j,kvh,c] += dS · Q[i,hh,c]
+            let mut j4 = 0
+            while j4 < L {
+                let dS = farr_get(P, (hh * T + i) * T + j4)
+                       * (farr_get(dP_row, j4) - sdot) * scale
+                let mut c2 = 0
+                while c2 < hd {
+                    let dq_idx = (i * nh + hh) * hd + c2
+                    let dk_idx = (j4 * nkv + kvh) * hd + c2
+                    let cur_q = farr_get(dQ_out, dq_idx)
+                    let _ = farr_set(dQ_out, dq_idx,
+                                     cur_q + dS * farr_get(K, (j4 * nkv + kvh) * hd + c2))
+                    let cur_k = farr_get(dK_out, dk_idx)
+                    let _ = farr_set(dK_out, dk_idx,
+                                     cur_k + dS * farr_get(Q, (i * nh + hh) * hd + c2))
+                    c2 = c2 + 1
+                }
+                j4 = j4 + 1
+            }
+            i = i + 1
+        }
+        hh = hh + 1
+    }
+    let _ = farr_free(dP_row)
+}
+
 // ─── SwiGLU (gated SiLU MLP block) ─────────────────────────────────────
 // Reference: anima d_train3_lib.hexa c3_swiglu_fwd / c3_swiglu_bwd.
 //   r:[d], Wg:[h·d], Wu:[h·d], Wd:[d·h]  →  o:[d]
