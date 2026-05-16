@@ -215,10 +215,67 @@ runtime primitive used in P0a — small follow-up, scoped to A4.5.
    heapify-cost reduction needed) — possibly a higher-value path than
    F6-A's per-iter reclaim.
 
-**Loop terminus.** A1–A5 are landed and safe (default byte-identical).
-Everything past here — the A6 SIGSEGV debug, ARENA=1 perf, or the
-x86_64 verdict ABI — is substantial non-tick engineering. Continuing a
-fixed-interval loop produces no further verifiable per-tick progress
+## A6.1 — the fundamental F6-A blocker (2026-05-16, gdb-confirmed)
+
+Two bugs found by gdb on the `HEXA_STREAM_RECLAIM=1` path, then a
+structural blocker:
+
+1. **MAP-share use-after-free** — FIXED `0292fe4d`. In this value
+   model a hexa `struct` lowers to a **TAG_MAP** (`struct.field` =
+   `hexa_map_get`). A1 `copy_into_arena` passed TAG_MAP through, so the
+   A2 temp-buffered promote shared the map with the malloc temp and
+   `free_tree(temp)` freed it → `_new_block`'s `hexa_map_get` on the
+   freed LowerCtx SIGSEGV'd. Fixed by deep-copying TAG_MAP via
+   `hexa_map_new()`+`hexa_map_set()`.
+
+2. **heapify ≠ full-owned clone → double-free** — A2 step 1 uses
+   `hexa_val_heapify(v)` which only promotes *arena* nodes to malloc;
+   already-heap / static-string nodes stay **shared with the original**
+   (e.g. hmodule strings heapify didn't copy). `free_tree(temp)` then
+   frees that shared heap memory → `munmap_chunk(): invalid pointer`
+   SIGABRT (`free_tree:3733 ← heapify_to_parent:3913 ← _set_cur_block`).
+   Same runtime-aliasing class that sank option C; the temp-buffer does
+   not escape it. A true *force-malloc full deep clone* (no sharing)
+   would be needed for step 1.
+
+3. **STRUCTURAL BLOCKER — region-promote cannot reclaim map-structs.**
+   `hexa_map_set` on a fresh map creates its table via
+   `hmap_alloc(cap)` = `hmap_alloc_ex(cap, from_arena=0)` (runtime.c
+   :2270) — **always malloc**, never arena. Since structs ARE maps in
+   this value model, the dominant IR (LowerCtx/MFunc/LFunc) is
+   map-backed. So even a correct `copy_into_arena` built on
+   `hexa_map_new`/`hexa_map_set` produces **malloc** tables, NOT
+   arena-resident ones. The per-iteration arena POP therefore cannot
+   reclaim the IR — F6-A's entire footprint mechanism is moot for
+   map-represented structs. Making it work needs arena-resident map
+   construction: `hmap_alloc_ex(cap, from_arena=1)` plus a hand-rolled
+   re-implementation of `hexa_map_set`'s FNV hashing, load-factor
+   growth, and slot/order-array discipline against an arena table —
+   the multi-week value-model rewrite the F6-A doc warned about.
+
+### Verdict on F6-A
+
+**F6-A (region-promote) is the wrong lever for this value model.**
+The structs-are-maps + map-tables-force-malloc invariant means the
+per-iter region POP has nothing to reclaim without a from-scratch
+arena-map subsystem. A1/A2/A3/A5 stay landed as dormant, double-gated
+(`HEXA_STREAM_RECLAIM=1`), correctness-fixed where reached — but the
+footprint payoff is structurally absent here.
+
+**The productive lever is ARENA=1 perf** (A6 finding §3): the
+*existing* per-fn arena scope already bounds the self-compile RSS
+30 GB → ~12 GB (2.5×) — it just costs ≫14× wall-time because
+`hexa_val_heapify` deep-copies returned trees on every fn return.
+`f4b597a7` (O(1) str-envelope) was step 1 of cutting that; the next
+heapify-cost reductions (VALSTRUCT shallow-copy fast-paths, the
+ω-interp frame-clean gate, map heapify) are bounded, measurable, and
+do not need a value-model rewrite. **Recommended pivot: ARENA=1
+heapify-cost optimization, not further F6-A.**
+
+**Loop terminus.** A1–A5 landed and safe (default byte-identical).
+F6-A footprint is structurally blocked (above). Remaining paths —
+ARENA=1 heapify perf, or the x86_64 verdict ABI — are substantial
+deliberate engineering, not loop-tick work
 (COMPILE-ONLY.log.tape `loop_terminus` discipline).
 
 ## Verification
