@@ -412,6 +412,32 @@ pub fn nn_decoder_ce_loss(Mc: int, target_t: int,
     return 0.0 - dt_ln(pt_safe)
 }
 
+// Phase 3-I (2026-05-17) source-isolation helper: same as ce_loss but
+// uses libm log/exp instead of dt_ln/dt_exp. Compare against nn_decoder_
+// ce_loss to isolate whether the ε-convergence flat-|Δ| finding (RFC 045
+// Phase 3-I section) traces to dt_ln atanh-series bias or to a different
+// source in nn_decoder_grad. NOT for production use; isolation only.
+pub fn nn_decoder_ce_loss_libm(Mc: int, target_t: int,
+                               T: int, d: int, nh: int, nkv: int, h: int,
+                               V: int, n_layer: int) -> float {
+    let oLogits = mc_off_logits(T, d, nh, nkv, h, V, n_layer)
+    let mut mx = farr_get(Mc, oLogits)
+    let mut i = 1
+    while i < V {
+        if farr_get(Mc, oLogits + i) > mx { mx = farr_get(Mc, oLogits + i) }
+        i = i + 1
+    }
+    let mut tot = 0.0
+    let mut i2 = 0
+    while i2 < V {
+        tot = tot + exp(farr_get(Mc, oLogits + i2) - mx)
+        i2 = i2 + 1
+    }
+    let p_t = exp(farr_get(Mc, oLogits + target_t) - mx) / tot
+    let pt_safe = if p_t < 0.000001 { 0.000001 } else { p_t }
+    return 0.0 - log(pt_safe)
+}
+
 // gn2 = ||softmax(logits) − onehot(t)||² (the campaign metric)
 pub fn nn_decoder_gn2(Mc: int, target_t: int,
                       T: int, d: int, nh: int, nkv: int, h: int,

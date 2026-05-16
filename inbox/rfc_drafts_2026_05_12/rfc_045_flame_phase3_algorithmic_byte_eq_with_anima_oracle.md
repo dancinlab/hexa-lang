@@ -178,6 +178,32 @@ Two candidate explanations:
 
 This is not a "flame correctness regression" — it's an unverified-claim correction in Phase 3-C's stated scope. Either source 1 (dt_ln series bias dominates) or source 2 (nn_decoder_grad full-config gap) is the explanation; identifying which requires either (a) replacing dt_ln with libm log in nn_decoder_ce_loss + re-measuring the same probe (isolates source 1), or (b) writing the full-config GRAD-EXACT central-diff suite at small representative weights (probes source 2). Both are mechanical follow-ups for a separate cycle.
 
+### Phase 3-I source isolation (commit `flame_eps_convergence_test` with libm helper, 2026-05-17): **SOURCE 1 CONFIRMED**
+
+Added `nn_decoder_ce_loss_libm` (dt_ln/dt_exp → libm log/exp; isolation-only helper). Re-ran the ε-convergence sweep with BOTH dt_ln-based fd_dt AND libm-based fd_libm:
+
+```
+ε       fd_dt          |Δ_dt|         fd_libm         |Δ_libm|
+1e-3   -0.00019976    0.00043831    -0.00063807    1.16e-11
+1e-4   -0.00019976    0.00043831    -0.00063807    1.85e-12   ← U-shape minimum
+1e-5   -0.00019976    0.00043831    -0.00063807    1.96e-11
+1e-6   -0.000199758   0.000438312   -0.00063807    3.75e-10   ← roundoff dominates
+```
+
+**libm-based fd matches flame's analytic gradient at 1.85e-12 absolute (≈3e-9 relative of |analytic|=6.38e-4)**. The textbook U-shape ε² + 1/ε behavior is fully recovered when dt_ln is removed from the loss path. flame's `nn_decoder_grad` analytical gradient IS self-consistent at the full d=32·3L config.
+
+**Source 1 CONFIRMED**: dt_ln's atanh-series 24-term bias at small softmax probabilities (V=256 → uniform p≈4e-3 → |u|=0.992 → series residual ~3% absolute) is the source of the dt_ln-based fd_dt's flat |Δ|. This is purely a CE-loss-value bias, not a gradient correctness issue.
+
+**Source 2 FALSIFIED**: `nn_decoder_grad` produces the correct gradient at full config — the libm-based fd test verifies it to fp-double precision.
+
+**Phase 3-C scope correction REVERSED**: flame's analytic gradient IS self-consistent at full d=32·3L config (verified via libm-based central-diff at 1.85e-12 absolute precision). The flat |Δ_dt| was a CE-loss-value measurement bias from dt_ln's atanh-series, not a gradient gap.
+
+**Implications**:
+- flame's `nn_decoder_grad` at d=32·3L is **correct** at fp-double precision. Phase 3-C's toy-config GRAD-EXACT result extends to full config.
+- anima's `d5_grad` uses the same dt_ln in its `d5_ce` — anima's reported GRAD-EXACT(L0.Wg[5]) `|Δ|=0.000151622` likely reflects the SAME dt_ln bias (anima's fd similarly off by ~3× from its own analytic at full config). anima's analytic 0.000220762 vs flame's analytic -0.000638 (3× ratio + sign-flip) **is genuine cross-impl gradient drift** — not a measurement artifact. The cross-impl gradient drift remains source #4's amplification finding (commit `c69b9f1b`).
+- `nn_decoder_ce_loss` retains the dt_ln-based implementation for anima byte-eq retry purposes; the libm helper is isolation-only. Production training is unaffected (dl = softmax−onehot path doesn't use dt_ln).
+- The corpus-level Phase 3-F-3 result (init gn2 7.97113 vs anima 7.97116, |Δ|=3.12e-5; acc 8/8 = 8/8) is preserved exactly. Both stacks have the SAME dt_ln bias in CE-loss value reporting; the 3.12e-5 init gn2 delta is the gn2 path (||softmax-onehot||² uses dt_exp only, no dt_ln) — distinct from CE-loss reporting.
+
 ## What is closed
 
 - **F-RFC043-STEP-EQ** at the algorithm-byte-eq tier: flame's full train_step trajectory reproduces the anima d_corpus_fire campaign oracle within `|Δ| < 0.05 abs` (the declared falsifier tolerance) **with every sub-piece algorithm verified byte-id**. The mandatory `g_blue_closed_mandate` connection-point check passes.
