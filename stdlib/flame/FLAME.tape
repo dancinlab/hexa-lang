@@ -112,8 +112,16 @@
   path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md"
   branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
   closes = "F-RFC043-STEP-EQ at algorithm-byte-eq tier · 40 falsifier PASS · regression 0 · structural call_builtin = 0"
-  evidence = "16-commit chain Phase 3-A..3-H · gn2[0]=7.97113 vs anima 7.97116 |Δ|=3.12e-5 · acc 8/8 = anima 8/8 · init weight byte-id max|Δ|=0.0"
+  evidence = "21-commit chain Phase 3-A..3-J · gn2[0]=7.97113 vs anima 7.97116 |Δ|=3.12e-5 · final 8.87e-7 vs 3.73e-7 (2.4× drift; same shape) · acc 8/8 = anima 8/8 · init weight byte-id max|Δ|=0.0 · source #4 (dict vs packed-farr impl-level) CONFIRMED by direct anima same-toolchain execution"
   rename_note = "Originally drafted as RFC 044 (commit 829e5076), renamed to RFC 045 to yield 044 to the parallel-session forge regime work (RFC 040/041 lineage continuation has stronger numerical-position claim)."
+
+@X x_rfc046 := "RFC 046 — flame Phase 4: compiler fusion for eager-PyTorch end-to-end throughput match" :: rfc [d=2026-05-17 draft]
+  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md"
+  branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
+  asserts = "f-RFC046-EAGER-PYTORCH-MATCH: flame d=768·12L wall ≤1.3× eager-PyTorch 336.85s on A100 after Stage 3 fwd+bwd graph fusion"
+  staged = "Stage 1 (epilogue fusion, ~2×, 1 cycle) → Stage 2 (block fusion, ~5×, 2 cycles) → Stage 3 (fwd+bwd graph fusion, ~10×, 2-3 cycles) → Stage 4 (GPU dispatch + eager-PyTorch comparison, ~$5-20)"
+  preserves = "Phase 3 numerics byte-id (F-RFC046-STEP-EQ regression preserves 3.12e-5 flame ↔ anima delta exactly); flame public API (g_flame_api_fixed)"
+  honesty = "asserts ≤1.3× threshold based on Phase 3 baseline 18.5s d=32·3L scaling math; if Phase 4-D measures >1.3× ratio, falsifier FAILS and design iterates (no fudge)"
 
 @X x_rfc_chain := "backing RFCs 040/041/042/034" :: rfc [d=2026-05-16 active]
   rfc_040 = "farr GPU/CUDA backend (device-farr + cuBLAS) — inbox/, branch rfc/farr-gpu-cuda-backend (design 95c208f6)"
