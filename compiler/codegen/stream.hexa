@@ -79,19 +79,19 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
         let it = hmodule.items[i]
         if it.kind == "ITEM_FN" {
             // Iter F1 scope — pushes only when val arena is on.
-            if _arena_on { let _p = env("__HEXA_ARENA_PUSH__") }
+            if _stream_reclaim { let _p = env("__HEXA_ARENA_PUSH__") }
 
             // HIR→MIR for this one function. mfunc lands in iter F1.
-            if _arena_on { let _r1 = env("__HEXA_ARENA_RETURN_REGION_ON__") }
+            if _stream_reclaim { let _r1 = env("__HEXA_ARENA_RETURN_REGION_ON__") }
             let mfunc = _lower_fn(it)
 
             // Intern this function's string literals into st — st must
             // survive the POP, so route its return to malloc.
-            if _arena_on { let _r2 = env("__HEXA_ARENA_RETURN_REGION_OFF__") }
+            if _stream_reclaim { let _r2 = env("__HEXA_ARENA_RETURN_REGION_OFF__") }
             st = _arm_strtab_collect_fn(st, mfunc)
 
             // MIR→LIR for this one function. lfunc lands in iter F1.
-            if _arena_on { let _r3 = env("__HEXA_ARENA_RETURN_REGION_ON__") }
+            if _stream_reclaim { let _r3 = env("__HEXA_ARENA_RETURN_REGION_ON__") }
             let lfunc = _arm64_lower_func(mfunc, st, modhash)
 
             // LIR→text. The asm fragment must survive POP — route to malloc.
@@ -100,7 +100,7 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
             // DEFER parts.push to AFTER the POP — otherwise the
             // items[] growth allocation lands in the iter arena and POP
             // wipes it (A6 1차 측정의 빈-출력 버그).
-            if _arena_on { let _r4 = env("__HEXA_ARENA_RETURN_REGION_OFF__") }
+            if _stream_reclaim { let _r4 = env("__HEXA_ARENA_RETURN_REGION_OFF__") }
             let mut frag = ""
             let mut emit_it = false
             if lfunc.target == target {
@@ -111,7 +111,7 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
             // POP reclaims mfunc/lfunc and the iteration's transient
             // scratch. frag (malloc-resident under RETURN_REGION_OFF)
             // and emit_it (primitive) survive on the C local stack.
-            if _arena_on { let _q = env("__HEXA_ARENA_POP__") }
+            if _stream_reclaim { let _q = env("__HEXA_ARENA_POP__") }
 
             // parts.push runs AFTER pop — items[] growth allocates in
             // the outer (codegen_emit_streaming) frame, safely.
