@@ -551,25 +551,18 @@ pub fn nn_decoder_block_bwd(X: int, Bp: int, Bc: int,
     }
 
     // 8 reversed (SwiGLU per position) — produces dr [d] per pos, accum dWg/dWu/dWd
+    // Phase 4-A-bwd partial 2: dWd accumulator (Σ_ts dout[ts]⊗s[ts])
+    // farr_matmul-routed via _db_grad_accum_farr (dY=dXout [T·d],
+    // X=sw_s [T·h], dW=Bg.WD [d·h]). dWg/dWu (per-ts ds-dependent)
+    // stay per-ts inline (ts-local da/db not yet batched).
+    _db_grad_accum_farr(dXout, 0, Bc, oSwS, Bg, WD, T, d, h)
     let dr_pos = farr_zeros(d)
     let ds_pos = farr_zeros(h)
     let da_pos = farr_zeros(h)
     let db_pos = farr_zeros(h)
     let mut ts = 0
     while ts < T {
-        // dWd[r·h + k] += dso[r] · s[k]
-        let mut r = 0
-        while r < d {
-            let dso_r = farr_get(dXout, ts * d + r)
-            let mut k = 0
-            while k < h {
-                let cur = farr_get(Bg, WD + r * h + k)
-                let _ = farr_set(Bg, WD + r * h + k,
-                                 cur + dso_r * farr_get(Bc, oSwS + ts * h + k))
-                k = k + 1
-            }
-            r = r + 1
-        }
+        // dWd already accumulated via _db_grad_accum_farr above.
         // ds[k] = Σ_r Wd[r·h + k] · dso[r]
         let mut k2 = 0
         while k2 < h {
