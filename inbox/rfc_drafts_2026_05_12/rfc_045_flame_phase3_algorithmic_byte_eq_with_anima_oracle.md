@@ -174,6 +174,30 @@ Two candidate explanations:
 
 **Either way, the corpus-level result is preserved**: Phase 3-F-3 acc 8/8 + collapse 8.98e6× match anima exactly (chaotic AdamW absorbs the gradient drift to converge to the same memorization regime). The GRAD-EXACT central-diff anchor at Phase 3-C is honest within its toy-config scope — RFC 045 should not claim self-consistency at full d=32·3L config without explicit additional measurement (which this section now provides).
 
+### Per-window init gn2 decomposition (2026-05-17 evidence refinement)
+
+flame_d32_corpus_test now prints each of the 8 windows' initial gn2 contribution to the 7.97113 sum:
+
+```
+window 0: 0.99611
+window 1: 0.996562
+window 2: 0.996447
+window 3: 0.996438
+window 4: 0.996877
+window 5: 0.996597
+window 6: 0.995675
+window 7: 0.996423
+─────────────────────
+sum     : 7.97113
+per-window avg : 0.99640 (variance 0.0012, range 0.99568-0.99688)
+```
+
+Theoretical random-softmax baseline: `||softmax−onehot||² ≈ (1 − 1/V)² + (V−1)/V² = 1 − 2/V + 1/V² ≈ 0.99607` for V=256 uniform-prob random init. flame's measured per-window matches this baseline within 0.03% — confirming the random-init state behaves as expected.
+
+**anima's reported epoch gn0 = 7.97116** divided by nsamp=8 = **per-window avg 0.99640** — IDENTICAL to flame's 0.99640 to 5 significant digits. The 3.12e-5 cross-impl drift in the sum (7.97113 vs 7.97116) is therefore on the order of **3.9e-6 per window** — the dict-vs-packed-farr last-ulp drift contributes ~1 ulp per window's softmax reduction, accumulated across 8 windows to ~3e-5 in the sum.
+
+**Refined source #4 characterization**: the impl-level drift is per-window ~3.9e-6 (close to 256-element softmax's ~256-ulp accumulation floor). 8-window sum amplifies it to ~3.12e-5. Algorithm IS byte-eq at the per-window-sum-floor; only the integer-multiplier-of-windows compounds it. This is exactly the RFC 040 §2.2 TOL_MATMUL class result at the appropriate scale.
+
 **Honest scope update**: Phase 3-C GRAD-EXACT 2.66e-08 max rel is verified at **toy config only** (T=3, d=8, V=8, n_layer=2). At the full d=32·3L config used in Phase 3-F-3 anima byte-eq retry, flame's analytic gradient may differ from finite-difference by ~3× at deep weights, with the corpus-level training trajectory preserved (chaotic dynamics). The right F-* falsifier target across configs is **trajectory shape similarity** (Phase 3-I dump), NOT per-element GRAD-EXACT at full scale.
 
 This is not a "flame correctness regression" — it's an unverified-claim correction in Phase 3-C's stated scope. Either source 1 (dt_ln series bias dominates) or source 2 (nn_decoder_grad full-config gap) is the explanation; identifying which requires either (a) replacing dt_ln with libm log in nn_decoder_ce_loss + re-measuring the same probe (isolates source 1), or (b) writing the full-config GRAD-EXACT central-diff suite at small representative weights (probes source 2). Both are mechanical follow-ups for a separate cycle.

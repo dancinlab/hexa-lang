@@ -124,8 +124,11 @@ fn _window_ids(IDS: int, s: int, T: int, ids_out: int) {
 }
 
 // initial gn2 epoch (Σ_s gn2_per_window) — same metric as anima d5_epoch_gn2
+// Phase 3-I per-window decomposition for RFC 045 evidence (anima reports
+// only the sum; flame captures each window's gn2 contribution).
 let ids_scratch = t_zeros(T)
 let mut gn2_init_epoch = 0.0
+let per_window_init = t_zeros(nsamp)
 let mut s_init = 0
 while s_init < nsamp {
     _window_ids(IDS, s_init, T, ids_scratch)
@@ -133,12 +136,21 @@ while s_init < nsamp {
     nn_decoder_fwd(ids_scratch, M, Mc, cos_tab, sin_tab,
                    T, d, nh, nkv, h, V, n_layer)
     let g = nn_decoder_gn2(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+    t_set(per_window_init, s_init, g)
     gn2_init_epoch = gn2_init_epoch + g
     s_init = s_init + 1
 }
 print("  init epoch: gn2 = ")
 print(gn2_init_epoch)
 println("  (anima reference: 7.97116)")
+print("    per-window init gn2: ")
+let mut pw = 0
+while pw < nsamp {
+    print(t_get(per_window_init, pw)); print(" ")
+    pw = pw + 1
+}
+println("")
+let _ = t_free(per_window_init)
 
 // 80-step grad-accumulate-then-step loop (matches anima d_corpus_fire main)
 // Phase 3-I (2026-05-17): every-step gn2 capture for RFC 045 trajectory
