@@ -1405,21 +1405,35 @@ fn _collect_strs_from_stmt(st: ArmStrTab, s: Stmt) -> ArmStrTab {
     return out
 }
 
+// F1 (streaming footprint) — per-MFunc string-literal interning. The
+// streaming codegen path (compiler/codegen/stream.hexa, PLAN-stage3-
+// footprint.md F2) calls this once per function as it is lowered, so
+// the ArmStrTab grows incrementally and the whole MModule never has to
+// be materialised. Label assignment is insertion-ordered, so the table
+// is byte-deterministic regardless of call cadence — incremental and
+// whole-module interning produce bit-identical rodata.
+fn _arm_strtab_collect_fn(st: ArmStrTab, f: MFunc) -> ArmStrTab {
+    let mut acc = st
+    let mut bi = 0
+    while bi < len(f.blocks) {
+        let blk = f.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            acc = _collect_strs_from_stmt(acc, blk.stmts[si])
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return acc
+}
+
+// Whole-module strtab — the non-streaming path. Now a thin fold over
+// _arm_strtab_collect_fn so both paths share one collector (no drift).
 fn _build_arm_strtab(module: MModule) -> ArmStrTab {
     let mut st = ArmStrTab { keys: [], labels: [] }
     let mut fi = 0
     while fi < len(module.funcs) {
-        let f = module.funcs[fi]
-        let mut bi = 0
-        while bi < len(f.blocks) {
-            let blk = f.blocks[bi]
-            let mut si = 0
-            while si < len(blk.stmts) {
-                st = _collect_strs_from_stmt(st, blk.stmts[si])
-                si = si + 1
-            }
-            bi = bi + 1
-        }
+        st = _arm_strtab_collect_fn(st, module.funcs[fi])
         fi = fi + 1
     }
     return st
