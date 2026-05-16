@@ -55,14 +55,23 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
 
     // F6 option A — A5 wiring (PLAN-stage3-footprint-F6-optA.md).
     // Per-iteration PUSH/POP reclaims mfunc/lfunc; per-call region
-    // toggles route st/frag escapes to malloc. Both must be GATED on
-    // hexa_val_arena_on() — the env-hook PUSH/POP rewinds the shared
-    // bump arena unconditionally, which under HEXA_VAL_ARENA=0 (today's
-    // default) would also rewind the str arena's in-flight concat
-    // results (= corrupt the asm fragment). The codegen-emitted
-    // __hexa_fn_arena_enter/return are themselves gated, so when the
-    // val arena is off the streaming reclaim path is a clean no-op.
-    let _arena_on = env("__HEXA_ARENA_ENABLED__") == "1"
+    // toggles route st/frag escapes to malloc.
+    //
+    // A5.3 double gate (2026-05-16):
+    //   - HEXA_STREAM_RECLAIM=1 — explicit opt-in (default OFF).
+    //     The runtime defaults the val arena to ON (S7-B), so an
+    //     arena-only gate would activate the reclaim path on every
+    //     default invocation. The A6 sanity SIGSEGV at _new_block
+    //     under default showed that A1/A2 still have correctness gaps
+    //     under arena=1 that need debugging; until that's resolved,
+    //     force OFF by default so `--stream` stays byte-identical to
+    //     legacy.
+    //   - env("__HEXA_ARENA_ENABLED__") == "1" — val arena must be on
+    //     for the toggles to do anything anyway.
+    // Both required ⇒ default `--stream` is a clean byte-identical
+    // no-op; explicit opt-in (HEXA_STREAM_RECLAIM=1) exercises the
+    // reclaim path for measurement / further debug.
+    let _stream_reclaim = (env("HEXA_STREAM_RECLAIM") == "1") && (env("__HEXA_ARENA_ENABLED__") == "1")
 
     // ---- streaming .text: one function's HIR/MIR/LIR live at a time ----
     let mut i = 0
