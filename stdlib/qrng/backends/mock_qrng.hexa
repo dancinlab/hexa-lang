@@ -1,0 +1,31 @@
+#!hexa strict
+// stdlib/qrng/backends/mock_qrng.hexa — deterministic LCG fixture (T0)
+//
+// @version 1.0.0
+// @capabilities [randomness, deterministic, pure_local]
+// @stability stable
+// @since 2026-05-16
+//
+// Deterministic LCG byte stream for CI / determinism tests; same seed →
+// same bytes byte-identical across runs. No network, no host call.
+//
+// Source: ~/core/qrng/mock_qrng/module/mock_qrng.hexa @ v1.0.0 (RFC 044).
+
+use "stdlib/qrng/source"
+
+fn qrng_source_meta_mock_qrng() -> QrngSourceMeta {
+    return qrng_meta_make("mock_qrng", 0, 1000000000, 0, 0, 0, 1, 1, "IMPLEMENTED", "deterministic_LCG")
+}
+
+fn qrng_source_collect_mock_qrng(n_bytes: int, seed: int) -> QrngBytes {
+    if n_bytes < 1 { return qrng_bytes_fail("mock_qrng: n_bytes must be >= 1") }
+    let mut s = if seed > 0 { seed } else { 12345 }
+    let mut bytes_ = []
+    let mut i = 0
+    while i < n_bytes {
+        s = (1664525 * s + 1013904223) % 4294967296
+        bytes_ = bytes_.push(s % 256)
+        i = i + 1
+    }
+    return qrng_bytes_ok(bytes_, "", "mock_qrng: deterministic LCG ok")
+}

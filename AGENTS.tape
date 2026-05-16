@@ -76,6 +76,25 @@
   LIMIT_BREAKTHROUGH.md -> "project-specific limits + breakthrough audit"
   TAPE-AUDIT.md -> "tape v1.x adoption ledger for this repo"
   inbox/patches/ -> "external-contributed patch markdowns (one concept per file)"
+  stdlib/qrng/ -> "★ Quantum RNG — 9 backends T0..T3 + NIST SP 800-22 audit. RFC 044 absorption of ~/core/qrng (헌법 v2 룰 4 reference impl). see §0 qrng_stack."
+
+# ─── §0 PROJECT-WIDE QRNG STACK (2026-05-16) ─────────────────────────
+# stdlib/qrng/ 는 헌법 v2 룰 4 (외부 자원 try-CLI-or-fallback) 의 모범 사례.
+# RFC 044 가 dancinlab/qrng v1.0.0 (4,383 LoC) 을 흡수했고, 묘비는
+# ~/core/archive_qrng/ 에 freeze (헌법 v2 룰 3).
+
+@N qrng_stack := "stdlib/qrng — 9-backend QRNG provider + NIST audit" :: note [d=2026-05-16 active]
+  provider = "stdlib/qrng/backends/{mock_qrng, anu, curby, nist_beacon, hardware_qrng} (5 IMPLEMENTED T0/T1/T3) + cloud/{ibm_quantum, ionq, rigetti, braket} (4 T2 STUB_CREDENTIALED)"
+  algorithm = "stdlib/qrng/audit.hexa — NIST SP 800-22 tier-1+ (5 tests · monobit · freq-block · runs · longest-run · DFT spectral · α=0.01)"
+  routing = "stdlib/qrng/registry.hexa + router.hexa — env-driven fallback chain (QRNG_SOURCE · QRNG_FALLBACK_CHAIN · QRNG_LIVE · QRNG_HW_LIVE)"
+  entry = "qrng_audited_bytes(n, level, vendor) — entropy + audit 단일 호출; struct AuditedQrngBytes"
+  legacy_api = "qrng_anu_uint8 / _live / _chunked / _parse_response / _live_enabled — stdlib/qrng_anu.hexa 흡수 (anima 호환)"
+  cli_status = "DEFERRED to RFC 044-B (subprocess→library architectural mismatch); ~/core/qrng/cli/qrng.hexa 묘비에 freeze"
+  archive = "~/core/archive_qrng/ — frozen 묘비 (헌법 v2 룰 3)"
+  governance = "see @D g_qrng_audit_required, g_qrng_honest_vendor, g_qrng_provider_only · @F f_qrng_silent_mock_downgrade"
+  doi = "10.5281/zenodo.20102966 (dancinlab/qrng v1.0.0)"
+  rfc = "RFC 044 (landed 2026-05-16) · RFC 045 qmirror + RFC 046 sim-universe 후속"
+  @> README.md
 
 # ─── §3 Governance rules ─────────────────────────────────────────────
 
@@ -140,6 +159,25 @@
   authority = "[@x_hxc_spec]"
   @> AGENTS.md
 
+@D g_qrng_audit_required := "qrng audit on T1/T3 paths" :: governance [required d=2026-05-16 active]
+  rule = "Any code path in stdlib/qrng/ returning live quantum entropy (tier >= T1) MUST be exercisable through qrng_audited_bytes() with NIST SP 800-22 tier-1+ audit."
+  apply = "Skipping audit on T1/T3 backends is a release blocker."
+  authority = "NIST SP 800-22 Rev. 1a · https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-22r1a.pdf"
+  source = "qrng AGENTS.tape g1 (migrated 2026-05-16 RFC 044)"
+  @> AGENTS.md
+
+@D g_qrng_honest_vendor := "qrng vendor classification honesty" :: governance [required d=2026-05-16 active]
+  rule = "QrngSourceMeta.is_quantum follows vendor self-classification; honest-caveat ships in module docstring + meta.message."
+  examples = "nist_beacon.is_quantum=0 (mixed entropy HSM + RNGs); hardware_qrng.is_quantum=1 (IDQ/ESP32 vendor assertion, independent NIST validation NOT performed)."
+  source = "qrng AGENTS.tape g2 (migrated 2026-05-16 RFC 044)"
+  @> AGENTS.md
+
+@D g_qrng_provider_only := "qrng = provider-side only" :: governance [required deny:write d=2026-05-16 active]
+  rule = "stdlib/qrng/ returns raw bytes + provenance only. No HMAC-DRBG / NIST SP 800-90A construction belongs here."
+  why = "Amplification is consumer concern (qmirror amplifier · hexa-bio). Provider/consumer boundary deliberate; zero code overlap, struct-shape compat by convention."
+  source = "qrng AGENTS.tape g3 (migrated 2026-05-16 RFC 044)"
+  @> AGENTS.md
+
 # ─── §4 Forbidden patterns ───────────────────────────────────────────
 
 @F f1 := "lattice-fit-on-external-language" :: governance [required deny:write]
@@ -154,6 +192,11 @@
 @F f3 := "consumer-direct-edit" :: governance [required deny:write]
   pattern = "wilson / echoes / anima / hexa-* consumer repo editing hexa-lang directly without going through inbox/patches/"
   why = "upstream-downstream invariant; one-way flow per [@x_handoff]"
+
+@F f_qrng_silent_mock_downgrade := "qrng silent mock downgrade" :: governance [required deny:write d=2026-05-16 active]
+  pattern = "Router falls back to mock_qrng (T0) without preserving tier/vendor/message in audit_level_delivered or RouterResult.attempts/reasons."
+  remedy = "router MUST set audit_level_delivered to 'tier1-none' or 'none' and record attempts list; caller SHOULD check tier != 'T0' before security use."
+  source = "qrng AGENTS.tape f_weak_entropy (migrated 2026-05-16 RFC 044)"
 
 # ─── §5 External citations ───────────────────────────────────────────
 
@@ -192,6 +235,13 @@
   url = "https://github.com/dancinlab/hxc/blob/main/spec/hxc.md"
   scope = "byte-canonical wire / storage format for AI-native pipelines · KV-cache prefix stable · 31 deterministic algorithms (A1-A35) · ASCII-stable line-oriented · absorbs JSON/JSONL surfaces"
   in-repo-example = "compiler/atlas/hxc_loader.hexa + tool/atlas_build_hxc.hexa + dist/atlas.hxc (Atlas Layer 4 sidecar)"
+
+@X x_archive_qrng := "qrng 묘비 archive" :: archive [d=2026-05-16 active]
+  url = "file://~/core/archive_qrng/"
+  scope = "Frozen historical SSOT of dancinlab/qrng v1.0.0 — AGENTS.tape · CHANGELOG · README · CITATION.cff · LICENSE · RELEASE_NOTES · TAPE-AUDIT · hexa.toml · install.hexa · docs/ · examples/ · cli/. 재해석 없음 (헌법 v2 룰 3)."
+  github = "dancinlab/qrng (private 후 2026-05-16)"
+  doi = "10.5281/zenodo.20102966"
+  successor = "stdlib/qrng/ (RFC 044)"
 
 # ─── §6 Notes ────────────────────────────────────────────────────────
 

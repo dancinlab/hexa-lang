@@ -1,0 +1,61 @@
+#!hexa strict
+// stdlib/qrng/source.hexa — canonical QRNG contract (struct shapes + helpers)
+//
+// @version 1.0.0
+// @capabilities [randomness, struct_shapes]
+// @stability stable
+// @since 2026-05-16
+// @maintainer hexa-lang stdlib
+//
+// CONTRACT every backend in stdlib/qrng/backends/ satisfies:
+//   fn qrng_source_meta_<name>() -> QrngSourceMeta
+//   fn qrng_source_collect_<name>(n_bytes: int, seed: int) -> QrngBytes
+//
+// Provider-side abstract interface. Amplification (HMAC-DRBG, NIST SP 800-90A)
+// belongs to consumer packages (qmirror amplifier, hexa-bio). See @D
+// g_qrng_provider_only in AGENTS.tape.
+//
+// Source: ~/core/qrng/source/module/source.hexa @ v1.0.0 (RFC 044 absorption).
+
+struct QrngBytes {
+    ok:           int,
+    n_bytes:      int,
+    bytes_:       [int],   // 0..255 each
+    sha256_hex:   str,
+    nist_pass:    int,     // 0/1; 0 = not run (informational)
+    message:      str
+}
+
+struct QrngSourceMeta {
+    name:           str,
+    tier:           int,    // 0=mock, 1=public-free, 2=cloud-quantum, 3=commercial-hw, 4=research
+    throughput_bps: int,
+    cost_usd:       int,
+    lead_days:      int,
+    is_quantum:     int,
+    is_local:       int,
+    is_free:        int,
+    status:         str,
+    vendor:         str
+}
+
+fn qrng_meta_make(
+    name: str, tier: int, throughput_bps: int, cost_usd: int,
+    lead_days: int, is_quantum: int, is_local: int, is_free: int,
+    status: str, vendor: str
+) -> QrngSourceMeta {
+    return QrngSourceMeta {
+        name: name, tier: tier, throughput_bps: throughput_bps,
+        cost_usd: cost_usd, lead_days: lead_days,
+        is_quantum: is_quantum, is_local: is_local, is_free: is_free,
+        status: status, vendor: vendor
+    }
+}
+
+fn qrng_bytes_fail(reason: str) -> QrngBytes {
+    return QrngBytes { ok: 0, n_bytes: 0, bytes_: [], sha256_hex: "", nist_pass: 0, message: reason }
+}
+
+fn qrng_bytes_ok(bytes_: [int], sha256_hex: str, msg: str) -> QrngBytes {
+    return QrngBytes { ok: 1, n_bytes: len(bytes_), bytes_: bytes_, sha256_hex: sha256_hex, nist_pass: 0, message: msg }
+}

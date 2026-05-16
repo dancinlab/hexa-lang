@@ -86,7 +86,7 @@ spec consistency mandate 의 file structure consistency = grammar-level **자동
 ### §3.1 현 상태 (v1)
 
 ```hexa
-use "stdlib/qrng_anu"           // string path
+use "stdlib/qrng/backends/anu"  // string path  (RFC 044: was stdlib/qrng_anu)
 use "anima/core/rng/source"     // string path, runtime resolver
 ```
 

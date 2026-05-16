@@ -1,24 +1,22 @@
 // ═══════════════════════════════════════════════════════════════════════════
-//  stdlib/test/test_qrng_anu.hexa
+//  stdlib/test/test_qrng_anu.hexa — ANU QRNG REST wrapper selftest
 //
-//  Selftest for stdlib/qrng_anu — ANU QRNG REST wrapper.
+//  RFC 044: import path updated from stdlib/qrng_anu → stdlib/qrng/backends/anu.
+//  Tests cover BOTH the legacy stdlib API (qrng_anu_*) AND the new v1.0.0
+//  registry API (qrng_source_meta_anu / qrng_source_collect_anu).
 //
-//  Run:
-//      /Users/<user>/core/hexa-lang/hexa run stdlib/test/test_qrng_anu.hexa
-//
-//  Network: 기본은 NO network — fixture path 사용. ANIMA_QRNG_LIVE=1 일 때
-//           ANU API 한 번 친다 (length=8). FAQ 권고 sleep ms 는 단일
-//           probe 라 생략.
+//  Network: default NO network (fixture path). ANIMA_QRNG_LIVE=1 → live probe.
+//  Sentinel: __QRNG_ANU__ PASS
 // ═══════════════════════════════════════════════════════════════════════════
 
-use "stdlib/qrng_anu"
+use "stdlib/qrng/source"
+use "stdlib/qrng/backends/anu"
 
 let mut pass_count = 0
 let mut fail_count = 0
 
 fn chk_eq_int(tag, got, want) {
     if got == want {
-        println("  PASS " + tag + " == " + to_string(want))
         pass_count = pass_count + 1
     } else {
         println("  FAIL " + tag + " got=" + to_string(got) + " want=" + to_string(want))
@@ -28,7 +26,6 @@ fn chk_eq_int(tag, got, want) {
 
 fn chk_eq_bool(tag, got, want) {
     if got == want {
-        println("  PASS " + tag)
         pass_count = pass_count + 1
     } else {
         let g = if got { "true" } else { "false" }
@@ -38,52 +35,49 @@ fn chk_eq_bool(tag, got, want) {
     }
 }
 
-fn chk_in_range(tag, val, lo, hi) {
-    if val >= lo && val <= hi {
-        println("  PASS " + tag + " " + to_string(val) + " in [" + to_string(lo) + "," + to_string(hi) + "]")
-        pass_count = pass_count + 1
-    } else {
-        println("  FAIL " + tag + " " + to_string(val) + " out of [" + to_string(lo) + "," + to_string(hi) + "]")
-        fail_count = fail_count + 1
-    }
+fn chk(tag, cond) {
+    if cond { pass_count = pass_count + 1 } else { println("  FAIL " + tag); fail_count = fail_count + 1 }
 }
 
 fn main() -> void {
-    println("── stdlib/qrng_anu selftest ──")
+    println("── stdlib/qrng/backends/anu selftest ──")
 
-    // Edge: length=0 → empty.
+    // ─── new v1.0.0 registry API ───
+    let m = qrng_source_meta_anu()
+    chk("meta.name", m.name == "anu")
+    chk("meta.tier", m.tier == 1)
+    chk("meta.is_quantum", m.is_quantum == 1)
+    chk("meta.vendor", m.vendor == "qrng.anu.edu.au")
+    chk("meta.status_impl", m.status == "IMPLEMENTED")
+    // n_bytes < 1 → fail
+    let r0 = qrng_source_collect_anu(0, 1)
+    chk("collect_0_fail", r0.ok == 0)
+
+    // ─── legacy stdlib API (anima compat) ───
     let z = qrng_anu_uint8(0)
     chk_eq_int("length_0", len(z), 0)
 
-    // Edge: length=-3 → empty.
     let neg = qrng_anu_uint8(-3)
     chk_eq_int("length_neg", len(neg), 0)
 
-    // Edge: length=1025 (over max-per-req) → empty.
     let over = qrng_anu_uint8(1025)
     chk_eq_int("length_1025_rejected", len(over), 0)
 
-    // Positive: length=16 fixture path → length 16, byte 0..15.
     let bytes = qrng_anu_uint8(16)
     chk_eq_int("length_16_actual", len(bytes), 16)
     chk_eq_int("byte_0", bytes[0], 0)
     chk_eq_int("byte_15", bytes[15], 15)
 
-    // Positive: chunked total < QRNG_ANU_MAX_PER_REQ (single-chunk path).
     let mid = qrng_anu_chunked(64, 0)
     chk_eq_int("chunked_64_len", len(mid), 64)
     chk_eq_int("chunked_byte_0", mid[0], 0)
     chk_eq_int("chunked_byte_63", mid[63], 63)
 
-    // Positive: chunked > 1024 (forces 2 chunks). Use modest 1100 to keep
-    // the array push loop within hexa interpreter's array growth budget.
     let big = qrng_anu_chunked(1100, 0)
     chk_eq_int("chunked_1100_len", len(big), 1100)
     chk_eq_int("chunked_1100_byte_0", big[0], 0)
-    // After first 1024-byte chunk fixture wraps; second chunk again starts 0.
     chk_eq_int("chunked_1100_byte_1024", big[1024], 0)
 
-    // Range check on fixture bytes — every byte 0..255.
     let mut i = 0
     let mut all_in_range = true
     while i < len(bytes) {
@@ -93,7 +87,6 @@ fn main() -> void {
     }
     chk_eq_bool("fixture_bytes_in_uint8_range", all_in_range, true)
 
-    // Parse helper: well-formed mock JSON.
     let mock_json = "{\"data\":[10,20,30,40],\"length\":4,\"success\":true}"
     let parsed = qrng_anu_parse_response(mock_json)
     chk_eq_bool("parsed_success", parsed["success"], true)
@@ -102,26 +95,20 @@ fn main() -> void {
     chk_eq_int("parsed_data_len", len(pdata), 4)
     chk_eq_int("parsed_data_2", pdata[2], 30)
 
-    // Parse helper: success=false → empty data.
     let bad_json = "{\"data\":[],\"length\":0,\"success\":false}"
     let bad_parsed = qrng_anu_parse_response(bad_json)
     chk_eq_bool("bad_parsed_not_success", bad_parsed["success"], false)
 
-    // Parse helper: empty body → empty (early-return, no json_parse).
     let mal = qrng_anu_parse_response("")
     chk_eq_bool("empty_body_not_success", mal["success"], false)
-    // Parse helper: well-formed JSON but missing success → not success.
     let no_success = qrng_anu_parse_response("{\"data\":[1,2,3],\"length\":3}")
     chk_eq_bool("missing_success_field", no_success["success"], false)
 
-    // Live probe — ANIMA_QRNG_LIVE=1 일 때만. env 가시성을 main top
-    // 에서 미리 캡처해 nested-call interp race 회피.
     let live_env = env("ANIMA_QRNG_LIVE")
     if live_env == "1" {
         println("  -- live probe enabled (ANIMA_QRNG_LIVE=1) --")
         let live = qrng_anu_uint8_live(8)
         chk_eq_int("live_length_8", len(live), 8)
-        // Quantum bytes — 0..255 range only assertion, not value (entropy).
         let mut k = 0
         let mut live_ok = true
         while k < len(live) {
@@ -134,12 +121,13 @@ fn main() -> void {
     }
 
     let total = pass_count + fail_count
-    println("")
     println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
     if fail_count == 0 {
-        println("PASS: qrng_anu stdlib selftest " + to_string(pass_count) + "/" + to_string(total))
+        println("PASS: qrng_anu " + to_string(pass_count) + "/" + to_string(total))
+        println("__QRNG_ANU__ PASS")
         return
     }
-    println("FAIL: qrng_anu stdlib selftest " + to_string(pass_count) + "/" + to_string(total))
+    println("FAIL: qrng_anu " + to_string(pass_count) + "/" + to_string(total))
+    println("__QRNG_ANU__ FAIL")
     exit(1)
 }

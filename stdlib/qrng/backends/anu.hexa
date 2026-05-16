@@ -1,0 +1,223 @@
+#!hexa strict
+// stdlib/qrng/backends/anu.hexa — ANU public quantum REST (T1, IMPLEMENTED)
+//
+// @version 1.1.0
+// @capabilities [network, randomness, shell]
+// @stability stable
+// @since 2026-05-16  (consolidated)
+//
+// Two API surfaces exposed:
+//
+//   v1.0.0 registry API (RFC 044 absorption of dancinlab/qrng v1.0.0):
+//     qrng_source_meta_anu()                  -> QrngSourceMeta
+//     qrng_source_collect_anu(n_bytes, seed)  -> QrngBytes
+//       Gating: NEXUS_QRNG_LIVE=1 enables live; NEXUS_QRNG_MOCK=1 /
+//       ANIMA_QRNG_MOCK=1 force mock. Uses exec("curl ...") + string-split.
+//
+//   legacy stdlib API (consumed by anima; preserved from old
+//   stdlib/qrng_anu.hexa @ v0.1.0):
+//     qrng_anu_uint8(length)                  -> [int]    (1..1024)
+//     qrng_anu_uint8_live(length)             -> [int]    (env-bypass)
+//     qrng_anu_chunked(total, sleep_ms)       -> [int]
+//     qrng_anu_parse_response(text)           -> map
+//     qrng_anu_live_enabled()                 -> bool
+//       Gating: ANIMA_QRNG_LIVE=1. Uses http_get + json_parse_object.
+//
+// Endpoint: https://qrng.anu.edu.au/API/jsonI.php?length=N&type=uint8
+// Response shape: {"data":[ints 0-255],"length":N,"success":true}
+// Rate limit: ANU FAQ ~1 req/min. Caller paces.
+
+use "stdlib/qrng/source"
+use "stdlib/net/http_client"
+use "stdlib/json_object"
+
+// ─── v1.0.0 registry API ─────────────────────────────────────────────
+
+fn qrng_source_meta_anu() -> QrngSourceMeta {
+    return qrng_meta_make("anu", 1, 1000, 0, 0, 1, 0, 1, "IMPLEMENTED", "qrng.anu.edu.au")
+}
+
+fn _anu_parse(body: str) -> [int] {
+    if body.contains("\"success\":true") == false { return [] }
+    if body.contains("\"data\":[") == false { return [] }
+    let after = body.split("\"data\":[")
+    if len(after) < 2 { return [] }
+    let arr_parts = after[1].split("]")
+    if len(arr_parts) < 1 { return [] }
+    let toks = arr_parts[0].split(",")
+    let mut out = []
+    let mut i = 0
+    while i < len(toks) {
+        let t = toks[i].trim()
+        if len(t) > 0 {
+            let v = to_int(t)
+            if v >= 0 { if v <= 255 { out = out.push(v) } }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn _anu_mock_fixture(n_bytes: int, seed: int) -> QrngBytes {
+    let mut s = if seed > 0 { seed } else { 12345 }
+    let mut bytes_ = []
+    let mut i = 0
+    while i < n_bytes {
+        s = (1664525 * s + 1013904223) % 4294967296
+        bytes_ = bytes_.push(s % 256)
+        i = i + 1
+    }
+    return qrng_bytes_ok(bytes_, "", "anu: mock fixture (NEXUS_QRNG_MOCK=1)")
+}
+
+fn qrng_source_collect_anu(n_bytes: int, seed: int) -> QrngBytes {
+    if n_bytes < 1 { return qrng_bytes_fail("anu: n_bytes must be >= 1") }
+    let mock_a = exec("printenv ANIMA_QRNG_MOCK 2>/dev/null || true").trim()
+    let mock_n = exec("printenv NEXUS_QRNG_MOCK 2>/dev/null || true").trim()
+    if mock_a == "1" { return _anu_mock_fixture(n_bytes, seed) }
+    if mock_n == "1" { return _anu_mock_fixture(n_bytes, seed) }
+    let live = exec("printenv NEXUS_QRNG_LIVE 2>/dev/null || true").trim()
+    if live != "1" {
+        return qrng_bytes_fail("anu: live path gated — set NEXUS_QRNG_LIVE=1 (or NEXUS_QRNG_MOCK=1 for CI)")
+    }
+    if n_bytes > 1024 {
+        return qrng_bytes_fail("anu: chunk > 1024 bytes requires pacing wrapper (use route_collect for chained chunks)")
+    }
+    let url = "https://qrng.anu.edu.au/API/jsonI.php?length=" + str(n_bytes) + "&type=uint8"
+    let cmd = "curl -sS --max-time 10 '" + url + "' 2>&1"
+    let body = exec(cmd).trim()
+    if len(body) < 1 { return qrng_bytes_fail("anu: empty response") }
+    let bytes_ = _anu_parse(body)
+    if len(bytes_) != n_bytes {
+        return qrng_bytes_fail("anu: parse mismatch want=" + str(n_bytes) + " got=" + str(len(bytes_)))
+    }
+    return qrng_bytes_ok(bytes_, "", "anu: live (vacuum-fluctuation)")
+}
+
+// ─── legacy stdlib/qrng_anu API (anima compat) ───────────────────────
+
+let QRNG_ANU_DEFAULT_BASE = "https://qrng.anu.edu.au/API/jsonI.php"
+let QRNG_ANU_MAX_PER_REQ = 1024
+let QRNG_ANU_DEFAULT_TIMEOUT_SEC = 30
+
+fn _qrng_base() -> string {
+    let env_base = env("ANU_QRNG_BASE")
+    if len(env_base) > 0 { return env_base }
+    return QRNG_ANU_DEFAULT_BASE
+}
+
+// qrng_anu_live_enabled — ANIMA_QRNG_LIVE=1 일 때 true.
+pub fn qrng_anu_live_enabled() -> bool {
+    let v = env("ANIMA_QRNG_LIVE")
+    return v == "1"
+}
+
+// qrng_anu_parse_response — JSON 응답 텍스트 → {success, data, length} map.
+pub fn qrng_anu_parse_response(text: string) {
+    let result = #{}
+    result["success"] = false
+    result["data"] = []
+    result["length"] = 0
+
+    if len(text) == 0 { return result }
+    let obj = json_parse_object(text)
+    let success = json_object_get_bool(obj, "success", false)
+    if !success {
+        return result
+    }
+    let length = json_object_get_int(obj, "length", 0)
+    let data = json_object_get_array(obj, "data")
+    result["success"] = true
+    result["length"] = length
+    result["data"] = data
+    return result
+}
+
+// qrng_anu_uint8 — single ANU API call, 1..1024 byte (uint8) array.
+// Live mode (ANIMA_QRNG_LIVE=1) off → deterministic byte-cycle fixture.
+pub fn qrng_anu_uint8(length: int) {
+    if length <= 0 { return [] }
+    if length > QRNG_ANU_MAX_PER_REQ { return [] }
+
+    if !qrng_anu_live_enabled() {
+        return _qrng_anu_fixture(length)
+    }
+
+    return _qrng_anu_uint8_live_unchecked(length)
+}
+
+// qrng_anu_uint8_live — env-bypass explicit live path.
+pub fn qrng_anu_uint8_live(length: int) {
+    if length <= 0 { return [] }
+    if length > QRNG_ANU_MAX_PER_REQ { return [] }
+    return _qrng_anu_uint8_live_unchecked(length)
+}
+
+fn _qrng_anu_uint8_live_unchecked(length: int) {
+    let url = _qrng_base() + "?length=" + to_string(length) + "&type=uint8"
+    let body = http_get(url, QRNG_ANU_DEFAULT_TIMEOUT_SEC)
+    if len(body) == 0 { return [] }
+
+    let parsed = qrng_anu_parse_response(body)
+    if !parsed["success"] { return [] }
+    return parsed["data"]
+}
+
+// _qrng_anu_fixture — deterministic byte-cycle (length mod 256). Entropy ZERO.
+fn _qrng_anu_fixture(length: int) {
+    let mut out = []
+    let mut i = 0
+    while i < length {
+        out.push(i % 256)
+        i = i + 1
+    }
+    return out
+}
+
+// _sleep_ms — best-effort millisecond sleep via shell.
+fn _sleep_ms(ms: int) {
+    if ms <= 0 { return }
+    let sec_str = if ms >= 1000 {
+        to_string(ms / 1000)
+    } else {
+        "0." + _zero_pad3(ms)
+    }
+    let _r = exec("sleep " + sec_str + " 2>/dev/null")
+}
+
+fn _zero_pad3(n: int) -> string {
+    if n >= 100 { return to_string(n) }
+    if n >= 10  { return "0" + to_string(n) }
+    return "00" + to_string(n)
+}
+
+// qrng_anu_chunked — auto-chunk + pacing.
+pub fn qrng_anu_chunked(total_bytes: int, sleep_ms_between: int) {
+    let mut out = []
+    if total_bytes <= 0 { return out }
+
+    let mut remaining = total_bytes
+    let mut first = true
+    while remaining > 0 {
+        if !first && sleep_ms_between > 0 {
+            _sleep_ms(sleep_ms_between)
+        }
+        let chunk_size = if remaining > QRNG_ANU_MAX_PER_REQ {
+            QRNG_ANU_MAX_PER_REQ
+        } else {
+            remaining
+        }
+        let chunk = qrng_anu_uint8(chunk_size)
+        if len(chunk) == 0 {
+            return out
+        }
+        let mut i = 0
+        while i < len(chunk) {
+            out.push(chunk[i])
+            i = i + 1
+        }
+        remaining = remaining - chunk_size
+        first = false
+    }
+    return out
+}

@@ -1,0 +1,73 @@
+// stdlib/test/test_qrng_audit.hexa — NIST SP 800-22 tier-1+ audit selftest
+//
+// Note: this test exercises the DFT spectral test at n=1024 bits which is
+// O(n²) in pure-hexa. Wall time ~3-4 min on Apple silicon.
+//
+// Sentinel: __QRNG_AUDIT__ PASS
+
+use "stdlib/qrng/audit"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag, cond) {
+    if cond { pass_count = pass_count + 1 } else { println("  FAIL " + tag); fail_count = fail_count + 1 }
+}
+
+fn main() -> void {
+    println("── stdlib/qrng/audit selftest ──")
+
+    // 1) pathological all-zeros must FAIL audit (distinction proof)
+    println("  [test] zeros-fixture audit (must FAIL) ...")
+    let mut zb = []
+    let mut zi = 0
+    while zi < 64 { zb = zb.push(0)  zi = zi + 1 }
+    let zt = audit_run_tier1plus(zb)
+    chk("zeros.tests_5", len(zt) == 5)
+    // Check monobit specifically (zeros → s_obs = sqrt(n), p → 0)
+    chk("zeros.monobit_fail", zt[0].passed == 0)
+
+    // 2) small mock pull — DFT skipped, audit runs subset
+    println("  [test] small audit (n=64 mock) ...")
+    let r_small = qrng_audited_bytes(64, "tier1+", "mock_qrng")
+    chk("small.ok", r_small.ok == 1)
+    chk("small.n_bytes", r_small.n_bytes == 64)
+    chk("small.tests_5", len(r_small.tests_run) == 5)
+    chk("small.delivered_partial_or_none",
+        r_small.audit_level_delivered == "tier1-partial" ||
+        r_small.audit_level_delivered == "tier1-none")
+
+    // 3) no-audit path — empty tests
+    let r_none = qrng_audited_bytes(16, "none", "mock_qrng")
+    chk("none.ok", r_none.ok == 1)
+    chk("none.tests_empty", len(r_none.tests_run) == 0)
+    chk("none.audit_pass_0", r_none.audit_pass == 0)
+
+    // 4) n_bytes < 1 → fail
+    let r_bad = qrng_audited_bytes(0, "tier1+", "mock_qrng")
+    chk("bad.ok_0", r_bad.ok == 0)
+
+    // 5) mid-size mock pull (n=128 bytes = 1024 bits) — DFT fires (slow)
+    println("  [test] mid audit (n=128 mock) — DFT @ 1024 bits, ~3-4 min ...")
+    let r_mid = qrng_audited_bytes(128, "tier1+", "mock_qrng")
+    chk("mid.ok", r_mid.ok == 1)
+    chk("mid.tests_5", len(r_mid.tests_run) == 5)
+    let mut ran_count = 0
+    let mut k = 0
+    while k < len(r_mid.tests_run) {
+        if r_mid.tests_run[k].skipped == 0 { ran_count = ran_count + 1 }
+        k = k + 1
+    }
+    chk("mid.ran_3_plus", ran_count >= 3)
+
+    let total = pass_count + fail_count
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: qrng_audit " + to_string(pass_count) + "/" + to_string(total))
+        println("__QRNG_AUDIT__ PASS")
+        return
+    }
+    println("FAIL: qrng_audit " + to_string(pass_count) + "/" + to_string(total))
+    println("__QRNG_AUDIT__ FAIL")
+    exit(1)
+}

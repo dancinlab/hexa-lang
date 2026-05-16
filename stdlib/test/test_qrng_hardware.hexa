@@ -1,0 +1,41 @@
+// stdlib/test/test_qrng_hardware.hexa — hardware_qrng (T3 IDQ/ESP32) selftest
+//
+// Sentinel: __QRNG_HARDWARE_QRNG__ PASS
+
+use "stdlib/qrng/source"
+use "stdlib/qrng/backends/hardware_qrng"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag, cond) {
+    if cond { pass_count = pass_count + 1 } else { println("  FAIL " + tag); fail_count = fail_count + 1 }
+}
+
+fn main() -> void {
+    println("── stdlib/qrng/backends/hardware_qrng selftest ──")
+
+    let m = qrng_source_meta_hardware_qrng()
+    chk("meta.name", m.name == "hardware_qrng")
+    chk("meta.tier_T3", m.tier == 3)
+    chk("meta.is_quantum_vendor", m.is_quantum == 1)
+    chk("meta.is_local", m.is_local == 1)
+    chk("meta.status", m.status == "IMPLEMENTED")
+
+    let r0 = qrng_source_collect_hardware_qrng(0, 1)
+    chk("collect_0_fail", r0.ok == 0)
+    // Live path gated → no NEXUS_QRNG_HW_LIVE=1 → fail
+    let r_gated = qrng_source_collect_hardware_qrng(4, 1)
+    chk("collect_gated_fail", r_gated.ok == 0)
+
+    let total = pass_count + fail_count
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: qrng_hardware " + to_string(pass_count) + "/" + to_string(total))
+        println("__QRNG_HARDWARE_QRNG__ PASS")
+        return
+    }
+    println("FAIL: qrng_hardware " + to_string(pass_count) + "/" + to_string(total))
+    println("__QRNG_HARDWARE_QRNG__ FAIL")
+    exit(1)
+}

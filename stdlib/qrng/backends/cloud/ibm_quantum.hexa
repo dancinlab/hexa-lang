@@ -1,0 +1,93 @@
+#!hexa strict
+// stdlib/qrng/backends/cloud/ibm_quantum.hexa — IBM Quantum cloud QRNG (T2.a STUB_CREDENTIALED)
+//
+// @version 1.0.0
+// @capabilities [network, randomness, shell, credentials]
+// @stability stub
+// @since 2026-05-16
+//
+// IBM Quantum (Heron / Eagle / Falcon class superconducting devices) extraction
+// via qiskit-ibm-runtime. Requires IBM_QUANTUM_TOKEN (preferred) or IBMQ_TOKEN
+// (legacy). Live extraction deferred to consumer-side adapter.
+//
+//   (1) is_quantum=1 (vendor-asserted superconducting transmon, vacuum-fluctuation
+//       grade assurance). NOT independently witnessed.
+//   (2) Live path requires (a) IBM Quantum cloud account, (b) qiskit-ibm-runtime
+//       SDK in consumer env, (c) IBM_QUANTUM_TOKEN env, (d) network egress to
+//       api.quantum-computing.ibm.com.
+//   (3) Free-tier (Open Plan) wall budget ~10 min/month at v1.0.0 freeze.
+//   (4) Mock fixture byte-identical to mock_qrng.
+//
+// FALSIFIERS (frozen):
+//   F_IBMQ_01: meta shape — name=ibm_quantum, tier=2, is_quantum=1, vendor non-empty
+//   F_IBMQ_02: secret-chain — IBM_QUANTUM_TOKEN preferred, IBMQ_TOKEN legacy fallback
+//   F_IBMQ_03: live path without token + without mock env → ok=0 + reason cites secret name
+//   F_IBMQ_04: mock fixture deterministic (byte-identical to mock_qrng)
+//
+// Source: ~/core/qrng/ibm_quantum/module/ibm_quantum.hexa @ v1.0.0 (RFC 044).
+
+use "stdlib/qrng/source"
+
+let IBMQ_NAME    = "ibm_quantum"
+let IBMQ_TIER    = 2
+let IBMQ_BPS     = 1000               // ~1 KB/s effective on Open Plan within budget
+let IBMQ_VENDOR  = "ibm_quantum_heron_eagle_falcon"
+let IBMQ_SECRET_PRIMARY = "IBM_QUANTUM_TOKEN"
+let IBMQ_SECRET_LEGACY  = "IBMQ_TOKEN"
+
+fn qrng_source_meta_ibm_quantum() -> QrngSourceMeta {
+    return qrng_meta_make(
+        IBMQ_NAME, IBMQ_TIER, IBMQ_BPS,
+        0,    // cost_usd: 0 on Open Plan within monthly quota
+        0,    // lead_days: cloud immediate
+        1,    // is_quantum: superconducting transmon, vendor-asserted
+        0,    // is_local: cloud
+        1,    // is_free: Open Plan free within quota
+        "STUB_CREDENTIALED",
+        IBMQ_VENDOR
+    )
+}
+
+fn _ibmq_env(name: str) -> str {
+    return exec("printenv " + name + " 2>/dev/null || true").trim()
+}
+
+fn _ibmq_resolve_secret_name() -> str {
+    let primary = _ibmq_env(IBMQ_SECRET_PRIMARY)
+    if len(primary) > 0 { return IBMQ_SECRET_PRIMARY }
+    let legacy = _ibmq_env(IBMQ_SECRET_LEGACY)
+    if len(legacy) > 0 { return IBMQ_SECRET_LEGACY }
+    return ""
+}
+
+fn _ibmq_mock_fixture(n_bytes: int, seed: int) -> QrngBytes {
+    let mut s = if seed > 0 { seed } else { 12345 }
+    let mut bytes_ = []
+    let mut i = 0
+    while i < n_bytes {
+        s = (1664525 * s + 1013904223) % 4294967296
+        bytes_ = bytes_.push(s % 256)
+        i = i + 1
+    }
+    return qrng_bytes_ok(bytes_, "", "ibm_quantum: mock fixture (NEXUS_QRNG_MOCK=1; byte-identical to mock_qrng)")
+}
+
+fn qrng_source_collect_ibm_quantum(n_bytes: int, seed: int) -> QrngBytes {
+    if n_bytes < 1 { return qrng_bytes_fail("ibm_quantum: n_bytes must be >= 1") }
+    let mock_n = _ibmq_env("NEXUS_QRNG_MOCK")
+    let mock_a = _ibmq_env("ANIMA_QRNG_MOCK")
+    let mock_q = _ibmq_env("QRNG_MOCK")
+    if mock_n == "1" { return _ibmq_mock_fixture(n_bytes, seed) }
+    if mock_a == "1" { return _ibmq_mock_fixture(n_bytes, seed) }
+    if mock_q == "1" { return _ibmq_mock_fixture(n_bytes, seed) }
+    let live = _ibmq_env("NEXUS_QRNG_LIVE")
+    let live_q = _ibmq_env("QRNG_LIVE")
+    if live != "1" { if live_q != "1" {
+        return qrng_bytes_fail("ibm_quantum: live path gated — set NEXUS_QRNG_LIVE=1 (or NEXUS_QRNG_MOCK=1 for CI)")
+    } }
+    let secret = _ibmq_resolve_secret_name()
+    if len(secret) == 0 {
+        return qrng_bytes_fail("ibm_quantum: credentials missing — set " + IBMQ_SECRET_PRIMARY + " (preferred) or " + IBMQ_SECRET_LEGACY + " (legacy). Open Plan free at https://quantum.ibm.com")
+    }
+    return qrng_bytes_fail("ibm_quantum: credentials resolved (" + secret + ") but in-process bridge not implemented; use consumer adapter (qiskit-ibm-runtime)")
+}

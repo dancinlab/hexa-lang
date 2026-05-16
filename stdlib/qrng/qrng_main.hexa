@@ -1,0 +1,130 @@
+#!hexa strict
+// stdlib/qrng/qrng_main.hexa — qrng entry-point + selftest aggregator
+//
+// @version 1.0.0
+// @capabilities [randomness, selftest, dispatch]
+// @stability stable
+// @since 2026-05-16
+//
+// Aggregator that prints byte-identical evidence for qrng backend abstraction
+// (9-backend metadata + router chain + mock determinism + tier coverage).
+//
+// Source: ~/core/qrng/qrng_main/module/qrng_main.hexa @ v1.0.0 (RFC 044).
+
+use "stdlib/qrng/source"
+
+fn _meta_for(name: str) -> QrngSourceMeta {
+    if name == "curby" { return qrng_meta_make("curby", 1, 8, 0, 0, 1, 0, 1, "IMPLEMENTED", "nist+cu_boulder") }
+    if name == "anu" { return qrng_meta_make("anu", 1, 1000, 0, 0, 1, 0, 1, "IMPLEMENTED", "qrng.anu.edu.au") }
+    if name == "nist_beacon" { return qrng_meta_make("nist_beacon", 1, 8, 0, 0, 0, 0, 1, "IMPLEMENTED", "nist") }
+    if name == "ibm_quantum" { return qrng_meta_make("ibm_quantum", 2, 1000, 0, 0, 1, 0, 1, "STUB_CREDENTIALED", "ibm_quantum_heron_eagle_falcon") }
+    if name == "ionq" { return qrng_meta_make("ionq", 2, 100, 1, 0, 1, 0, 0, "STUB_CREDENTIALED", "ionq_forte_1_trapped_ion_171ybplus") }
+    if name == "rigetti" { return qrng_meta_make("rigetti", 2, 100, 1, 0, 1, 0, 0, "STUB_CREDENTIALED", "rigetti_cepheus_aspen_superconducting_transmon") }
+    if name == "braket" { return qrng_meta_make("braket", 2, 100, 1, 0, 1, 0, 0, "STUB_CREDENTIALED", "aws_braket_aggregator_ionq_rigetti_iqm_quera_oqc") }
+    if name == "hardware_qrng" { return qrng_meta_make("hardware_qrng", 3, 240000000, 5000, 42, 1, 1, 0, "IMPLEMENTED", "ID_Quantique_Quantis_PCIe_or_ESP32_serial") }
+    if name == "mock_qrng" { return qrng_meta_make("mock_qrng", 0, 1000000000, 0, 0, 0, 1, 1, "IMPLEMENTED", "deterministic_LCG") }
+    return qrng_meta_make(name, -1, 0, 0, 0, 0, 0, 0, "UNKNOWN", "")
+}
+
+fn _mock_det(n_bytes: int, seed: int) -> [int] {
+    let mut s = if seed > 0 { seed } else { 12345 }
+    let mut bytes_ = []
+    let mut i = 0
+    while i < n_bytes {
+        s = (1664525 * s + 1013904223) % 4294967296
+        bytes_ = bytes_.push(s % 256)
+        i = i + 1
+    }
+    return bytes_
+}
+
+fn qrng_main_aggregate() -> int {
+    let mut all_ok = 1
+    let names = ["curby", "anu", "nist_beacon", "ibm_quantum", "ionq", "rigetti", "braket", "hardware_qrng", "mock_qrng"]
+    let mut iface_ok = 0
+    let mut i = 0
+    while i < len(names) {
+        let m = _meta_for(names[i])
+        if m.name == names[i] { if m.tier >= 0 { if len(m.status) > 0 { iface_ok = iface_ok + 1 } } }
+        i = i + 1
+    }
+    println("[qrng_main] interface contracts:    " + str(iface_ok) + "/" + str(len(names)) + " OK")
+    if iface_ok != len(names) { all_ok = 0 }
+
+    let chain = ["curby", "anu", "nist_beacon", "ibm_quantum", "ionq", "rigetti", "braket", "hardware_qrng", "mock_qrng"]
+    let mut chain_str = "["
+    let mut j = 0
+    while j < len(chain) {
+        chain_str = chain_str + chain[j]
+        if j < len(chain) - 1 { chain_str = chain_str + " -> " }
+        j = j + 1
+    }
+    chain_str = chain_str + "]"
+    println("[qrng_main] router fallback chain:  " + str(len(chain)) + " backends " + chain_str)
+
+    let r1 = _mock_det(12, 42)
+    let r2 = _mock_det(12, 42)
+    let mut det_ok = 1
+    let mut k = 0
+    while k < 12 { if r1[k] != r2[k] { det_ok = 0 } k = k + 1 }
+    let r3 = _mock_det(12, 99)
+    let mut diff = 0
+    let mut kk = 0
+    while kk < 12 { if r1[kk] != r3[kk] { diff = diff + 1 } kk = kk + 1 }
+    if diff < 6 { det_ok = 0 }
+    if det_ok == 1 {
+        println("[qrng_main] determinism (mock):     PASS")
+    } else {
+        println("[qrng_main] determinism (mock):     FAIL")
+        all_ok = 0
+    }
+
+    let impl_names = ["curby", "anu", "nist_beacon", "hardware_qrng", "mock_qrng"]
+    let mut impl_ok = 0
+    let mut s = 0
+    while s < len(impl_names) {
+        let m = _meta_for(impl_names[s])
+        if m.status == "IMPLEMENTED" { impl_ok = impl_ok + 1 }
+        s = s + 1
+    }
+    println("[qrng_main] impl sentinel (T0/T1/T3): " + str(impl_ok) + "/" + str(len(impl_names)) + " OK")
+    if impl_ok != len(impl_names) { all_ok = 0 }
+
+    let t2_names = ["ibm_quantum", "ionq", "rigetti", "braket"]
+    let mut t2_ok = 0
+    let mut t2i = 0
+    while t2i < len(t2_names) {
+        let m = _meta_for(t2_names[t2i])
+        if m.status == "STUB_CREDENTIALED" { if m.tier == 2 { if m.is_quantum == 1 { t2_ok = t2_ok + 1 } } }
+        t2i = t2i + 1
+    }
+    println("[qrng_main] T2 stub sentinel:        " + str(t2_ok) + "/" + str(len(t2_names)) + " OK (cloud-quantum vendors)")
+    if t2_ok != len(t2_names) { all_ok = 0 }
+
+    let mut tier_seen = [0, 0, 0, 0]
+    let mut t = 0
+    while t < len(names) {
+        let m = _meta_for(names[t])
+        let ti = m.tier
+        if ti >= 0 { if ti < 4 {
+            let mut new_seen = []
+            let mut q = 0
+            while q < 4 {
+                if q == ti { new_seen = new_seen.push(1) } else { new_seen = new_seen.push(tier_seen[q]) }
+                q = q + 1
+            }
+            tier_seen = new_seen
+        } }
+        t = t + 1
+    }
+    let mut tier_count = 0
+    let mut tk = 0
+    while tk < 4 {
+        tier_count = tier_count + tier_seen[tk]
+        tk = tk + 1
+    }
+    println("[qrng_main] tier coverage:          " + str(tier_count) + "/4 tiers (T0..T3)")
+    if tier_count < 4 { all_ok = 0 }
+
+    return all_ok
+}

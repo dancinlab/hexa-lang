@@ -1,0 +1,46 @@
+// stdlib/test/test_qrng_router.hexa — qrng router fallback chain selftest
+//
+// Sentinel: __QRNG_ROUTER__ PASS
+
+use "stdlib/qrng/source"
+use "stdlib/qrng/router"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag, cond) {
+    if cond { pass_count = pass_count + 1 } else { println("  FAIL " + tag); fail_count = fail_count + 1 }
+}
+
+fn main() -> void {
+    println("── stdlib/qrng/router selftest ──")
+
+    let dc = qrng_default_chain()
+    chk("default_chain_9", len(dc) == 9)
+    chk("chain[0]_curby", dc[0] == "curby")
+    chk("chain[1]_anu", dc[1] == "anu")
+    chk("chain[2]_nist", dc[2] == "nist_beacon")
+    chk("chain[3]_ibm", dc[3] == "ibm_quantum")
+    chk("chain[4]_ionq", dc[4] == "ionq")
+    chk("chain[5]_rigetti", dc[5] == "rigetti")
+    chk("chain[6]_braket", dc[6] == "braket")
+    chk("chain[7]_hw", dc[7] == "hardware_qrng")
+    chk("chain[8]_mock", dc[8] == "mock_qrng")
+
+    // route_collect: T1+T2+T3 all fail-closed, mock_qrng (T0) catches at end
+    let route = qrng_route_collect(8, 42)
+    chk("route.result_ok", route.result.ok == 1)
+    chk("route.final_mock", route.final_backend == "mock_qrng")
+    chk("route.attempts_9", len(route.attempts) == 9)
+
+    let total = pass_count + fail_count
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: qrng_router " + to_string(pass_count) + "/" + to_string(total))
+        println("__QRNG_ROUTER__ PASS")
+        return
+    }
+    println("FAIL: qrng_router " + to_string(pass_count) + "/" + to_string(total))
+    println("__QRNG_ROUTER__ FAIL")
+    exit(1)
+}

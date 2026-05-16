@@ -1,0 +1,37 @@
+#!hexa strict
+// stdlib/qrng/qrng.hexa — qrng stdlib runnable entrypoint
+//
+// @version 1.0.0
+// @capabilities [randomness, selftest, dispatch]
+// @stability stable
+// @since 2026-05-16
+//
+// Runnable entrypoint for `hexa run stdlib/qrng/qrng.hexa` and
+// `hexa build stdlib/qrng/qrng.hexa -o /tmp/qrng_entry`. Aggregates the
+// qrng abstraction selftest (9-backend metadata + router chain + mock
+// determinism + tier coverage) and prints sentinel.
+//
+// To consume qrng programmatically from another stdlib file, prefer the
+// finer-grained imports:
+//   use "stdlib/qrng/source"            // QrngBytes, QrngSourceMeta + helpers
+//   use "stdlib/qrng/backends/anu"      // qrng_source_collect_anu, qrng_anu_*
+//   use "stdlib/qrng/backends/mock_qrng" // qrng_source_collect_mock_qrng
+//   use "stdlib/qrng/registry"          // qrng_registry_collect dispatch
+//   use "stdlib/qrng/router"            // qrng_route_collect fallback chain
+//   use "stdlib/qrng/audit"             // qrng_audited_bytes single-stage
+//
+// Source: RFC 044 — absorbs ~/core/qrng/qrng_main/module/qrng_main.hexa.
+
+use "stdlib/qrng/qrng_main"
+
+fn main() {
+    println("[qrng] stdlib/qrng — 9-backend QRNG abstraction (RFC 044)")
+    let ok = qrng_main_aggregate()
+    if ok == 1 {
+        println("[qrng] aggregate:              ALL PASS")
+        println("__QRNG_MAIN__ PASS")
+    } else {
+        println("[qrng] aggregate:              SOME FAIL")
+        println("__QRNG_MAIN__ FAIL")
+    }
+}
