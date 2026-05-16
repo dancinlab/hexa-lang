@@ -37,6 +37,7 @@ import "./optimize/inline.hexa"
 import "./codegen/arm64_darwin.hexa"
 import "./codegen/x86_64_linux.hexa"
 import "./codegen/thumbv7em_eabihf.hexa"
+import "./codegen/stream.hexa"
 import "./check/target_gate.hexa"
 import "./emit/asm.hexa"
 import "./diag/catalog.hexa"
@@ -125,6 +126,7 @@ fn print_help() {
     println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
     println("  --linker=KIND          hexa | system     (default: system; hexa_ld not yet landed)")
     println("  --opt=LEVEL            0 | 1 | 2 | 3     (default: 0, or $HEXA_OPT_LEVEL)")
+    println("  --stream               fused per-function codegen (lower RSS; arm64, no --opt)")
     println("  --keep-temp            do not remove the per-build intermediate dir (default: off)")
     println("  -v, --verbose          print build-temp dir and intermediate paths to stderr")
     println("  --strict-citations     treat S8 citation diagnostics as fatal (default: off)")
@@ -301,6 +303,13 @@ let mut linker_kind = "system"
 let mut source_path = ""
 let mut keep_temp = false
 let mut verbose = false
+
+// --stream: F3 streaming codegen (PLAN-stage3-footprint.md). Fuses the
+// per-function lower_hir / codegen / emit passes so only one function's
+// IR is resident — cuts the self-compile RSS. arm64-apple-darwin only.
+let mut stream_mode = false
+let _stream_env = env("HEXA_STREAM")
+if _stream_env == "1" { stream_mode = true }
 // Stage1 punch list Gap 13: `--strict-citations` defaults OFF. While compiler/
 // source is not yet fully cite-bound (every implementation function would
 // need an @implements/@discover annotation otherwise), we run citation_check
@@ -363,6 +372,9 @@ while ai < len(user_argv) {
         ai = ai + 1
     } else if len(a) > 5 && a.substring(0, 6) == "--opt=" {
         opt_level = to_int(a.substring(6, len(a)))
+        ai = ai + 1
+    } else if a == "--stream" {
+        stream_mode = true
         ai = ai + 1
     } else if a == "--keep-temp" {
         keep_temp = true
@@ -575,29 +587,10 @@ if len(lr_diags) > 0 {
 // itself heap-resident.
 phase_reset("post_lower_ast_to_hir")
 
-let mut mmodule = lower_hir(hmodule)
-
-// #14 — drain Lower-cluster diagnostics (HX1101/HX1102/HX1103) so they
-// surface in CLI alongside parser/check/units diags. hir_to_mir.hexa
-// accumulates into a module-scope buffer (`_lr_diag`); we drain once
-// after lower_hir returns. hir_to_mir_diags() returns the same array
-// reference each call, so a second invocation would double-push —
-// keep this as the single drain site for the buffer.
-let _lr_d = hir_to_mir_diags()
-let mut _lk = 0
-while _lk < len(_lr_d) { diags.push(_lr_d[_lk]); _lk = _lk + 1 }
-
-// Phase boundary 4: HIR→MIR done. `hmodule` still bound but unread by
-// later phases; arena scratch built during hir_to_mir (block label
-// concat, MIR debug strings) reclaimable.
-phase_reset("post_lower_hir_to_mir")
-
-// MIR optimizer (RFC-018 §9 v1) — gated by --opt=LEVEL / $HEXA_OPT_LEVEL.
-//   0 none  /  1 const_fold  /  2 const_fold + dce  /  3 inline + 2-pass
-//
-// Pre-opt module shape fingerprint: total stmt count across all funcs.
-// If --opt > 0 changes the shape and -v is set, emit an INFO log line —
-// observability only, no semantic effect (RFC-018 §9 verifiability note).
+// MIR module shape fingerprint — total stmt count across all funcs.
+// Hoisted to a standalone item (was inline in the lower→emit stmt run)
+// so the F3 streaming gate below can wrap that stmt run without
+// enclosing a fn declaration.
 fn _mmod_stmt_count(m: MModule) -> i64 {
     let mut total: i64 = 0
     let mut fi = 0
@@ -613,56 +606,90 @@ fn _mmod_stmt_count(m: MModule) -> i64 {
     return total
 }
 
-let pre_opt_stmts = _mmod_stmt_count(mmodule)
-
-if opt_level > 0 { mmodule = const_fold(mmodule) }
-if opt_level > 1 { mmodule = dce(mmodule) }
-if opt_level > 2 {
-    mmodule = inline_small(mmodule)
-    mmodule = const_fold(mmodule)
-    mmodule = dce(mmodule)
-}
-
-if opt_level > 0 && verbose {
-    let post_opt_stmts = _mmod_stmt_count(mmodule)
-    if post_opt_stmts != pre_opt_stmts {
-        eprintln("hexa-compiler: --opt=" + to_string(opt_level)
-            + " changed module shape (stmts " + to_string(pre_opt_stmts)
-            + " -> " + to_string(post_opt_stmts)
-            + "); expected if optimization is effective")
+// ── F3 streaming gate (PLAN-stage3-footprint.md) ─────────────
+// --stream (or HEXA_STREAM=1), arm64-apple-darwin only: fuse the
+// per-function lower_hir / codegen / emit passes so only one function's
+// MFunc/LFunc is resident at a time — no MModule/LModule whole-program
+// carrier (the 10-16GB self-compile driver). Other targets + the
+// non-stream path keep the legacy whole-module pipeline, including the
+// MIR optimizer (which the streaming path does not yet run).
+let mut asm_text = ""
+if stream_mode && target == "arm64-apple-darwin" {
+    if opt_level > 0 {
+        eprintln("hexa-compiler: --stream uses the fused per-function path; "
+            + "--opt is not applied (omit --stream for the MIR optimizer)")
     }
-}
-
-// Stage1 punch list C15: replace the placeholder `let mut lmodule = LModule
-// { ... }` (immediately overwritten by every codegen branch) with a single
-// if-expression binding. The unused `lmodule_target` slot is dropped along
-// with the placeholder alloc.
-let lmodule = if target == "arm64-apple-darwin" {
-    codegen_arm64_darwin(mmodule)
-} else if target == "x86_64-linux-gnu" {
-    codegen_x86_64_linux(mmodule)
-} else if target == "thumbv7em-none-eabihf" {
-    // F3 — bare-metal Cortex-M4F target (hexa-rtsc, hexa-chip,
-    // hexa-cern firmware boards). Soft-float fallback variant
-    // (`-eabi`) is a tier_2 follow-up; v1 ships hf only.
-    codegen_thumbv7em_eabihf(mmodule)
+    asm_text = codegen_emit_streaming(hmodule, target)
+    phase_reset("post_emit_asm")
 } else {
-    eprintln("hexa-compiler: unsupported --target=" + target)
-    eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf")
-    exit(2)
+    let mut mmodule = lower_hir(hmodule)
+
+    // #14 — drain Lower-cluster diagnostics (HX1101/HX1102/HX1103) so they
+    // surface in CLI alongside parser/check/units diags. hir_to_mir.hexa
+    // accumulates into a module-scope buffer (`_lr_diag`); we drain once
+    // after lower_hir returns. hir_to_mir_diags() returns the same array
+    // reference each call, so a second invocation would double-push —
+    // keep this as the single drain site for the buffer.
+    let _lr_d = hir_to_mir_diags()
+    let mut _lk = 0
+    while _lk < len(_lr_d) { diags.push(_lr_d[_lk]); _lk = _lk + 1 }
+
+    // Phase boundary 4: HIR→MIR done. `hmodule` still bound but unread by
+    // later phases; arena scratch built during hir_to_mir (block label
+    // concat, MIR debug strings) reclaimable.
+    phase_reset("post_lower_hir_to_mir")
+
+    // MIR optimizer (RFC-018 §9 v1) — gated by --opt=LEVEL / $HEXA_OPT_LEVEL.
+    //   0 none  /  1 const_fold  /  2 const_fold + dce  /  3 inline + 2-pass
+    let pre_opt_stmts = _mmod_stmt_count(mmodule)
+
+    if opt_level > 0 { mmodule = const_fold(mmodule) }
+    if opt_level > 1 { mmodule = dce(mmodule) }
+    if opt_level > 2 {
+        mmodule = inline_small(mmodule)
+        mmodule = const_fold(mmodule)
+        mmodule = dce(mmodule)
+    }
+
+    if opt_level > 0 && verbose {
+        let post_opt_stmts = _mmod_stmt_count(mmodule)
+        if post_opt_stmts != pre_opt_stmts {
+            eprintln("hexa-compiler: --opt=" + to_string(opt_level)
+                + " changed module shape (stmts " + to_string(pre_opt_stmts)
+                + " -> " + to_string(post_opt_stmts)
+                + "); expected if optimization is effective")
+        }
+    }
+
+    // Stage1 punch list C15: single if-expression binding for the
+    // per-target codegen branch.
+    let lmodule = if target == "arm64-apple-darwin" {
+        codegen_arm64_darwin(mmodule)
+    } else if target == "x86_64-linux-gnu" {
+        codegen_x86_64_linux(mmodule)
+    } else if target == "thumbv7em-none-eabihf" {
+        // F3 — bare-metal Cortex-M4F target (hexa-rtsc, hexa-chip,
+        // hexa-cern firmware boards). Soft-float fallback variant
+        // (`-eabi`) is a tier_2 follow-up; v1 ships hf only.
+        codegen_thumbv7em_eabihf(mmodule)
+    } else {
+        eprintln("hexa-compiler: unsupported --target=" + target)
+        eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf")
+        exit(2)
+    }
+
+    // Phase boundary 5: codegen done. MModule no longer read; its block
+    // label strings + opcode mnemonics from the per-fn lower can be
+    // released before emit_asm allocates the rendered assembly text.
+    phase_reset("post_codegen")
+
+    asm_text = emit_asm(lmodule)
+
+    // Phase boundary 6: emit done. asm_text is the final bytestring that
+    // gets written to disk; reset is safe (nothing downstream of write
+    // reads from the arena). Logs the final phase RSS for budget probes.
+    phase_reset("post_emit_asm")
 }
-
-// Phase boundary 5: codegen done. MModule no longer read; its block
-// label strings + opcode mnemonics from the per-fn lower can be
-// released before emit_asm allocates the rendered assembly text.
-phase_reset("post_codegen")
-
-let asm_text = emit_asm(lmodule)
-
-// Phase boundary 6: emit done. asm_text is the final bytestring that
-// gets written to disk; reset is safe (nothing downstream of write
-// reads from the arena). Logs the final phase RSS for budget probes.
-phase_reset("post_emit_asm")
 
 // ── Emit ASM ─────────────────────────────────────────────────
 
