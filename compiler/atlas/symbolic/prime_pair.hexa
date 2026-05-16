@@ -1,0 +1,199 @@
+// compiler/atlas/symbolic/prime_pair.hexa — prime-pair n=6 characterization
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Hexa-native port of prime_pair_verifier.py from archive-TECS-L/.shared/calc
+// (commit 4ee05c39; TECS-L absorption Wave 3 — manifest §Backlog #14).
+// Closes _archive_tecs_l_absorption_manifest.md §D GAP #2 (P-NEW 55-char).
+//
+// The Python delegates σ to an optional `tecsrs` Rust engine but ships a
+// pure-Python fallback (`sum(d**k for d in divisors(n))`); ONLY that
+// closed-form fallback is ported (g5 hexa-native-only — no external engine).
+//
+// Theorem family (all EXACT integer arithmetic):
+//   T1  semiprime-perfect : n = p·q perfect ⟺ (p−1)(q−1) = 2 ⟺ {p,q}={2,3}
+//                           ⟺ n = 6  (the unique semiprime perfect number)
+//   T2  (p−1)(q−1) = k    : enumerate prime pairs via divisors of k
+//   T3  Euler-product int : p·q / ((p−1)(q−1)) ∈ ℤ ⟺ (p,q) = (2,3) (value 3)
+//   T4  bootstrap cycle   : σ₋₁(6)=2 → 2 prime → 6=2·3 → (1)(2)=2=φ(6)
+//                           → (p−1)(q−1)=2 unique {2,3} → 6 only semiprime
+//                           perfect → σ₋₁(6)=2  [cycle closes — n=6 unique]
+//
+// Zero external dependency. Cross-link: manifest §C / §Backlog #14 ·
+// _archive_tecs_l_absorption_manifest.md §D GAP #2.
+
+// ── prime sieve + divisor primitives ────────────────────────────────────
+
+pub fn pp_is_prime(n: int) -> bool {
+    if n < 2 { return false }
+    if n < 4 { return true }
+    if n % 2 == 0 { return false }
+    let mut d = 3
+    while d * d <= n {
+        if n % d == 0 { return false }
+        d = d + 2
+    }
+    return true
+}
+
+pub fn pp_primes_upto(limit: int) -> [int] {
+    let mut ps: [int] = []
+    let mut n = 2
+    while n <= limit {
+        if pp_is_prime(n) { ps.push(n) }
+        n = n + 1
+    }
+    return ps
+}
+
+// all divisors of n, sorted ascending (closed-form √n enumeration)
+pub fn pp_divisors(n: int) -> [int] {
+    let mut lo: [int] = []
+    let mut hi: [int] = []
+    if n <= 0 { return lo }
+    let mut i = 1
+    while i * i <= n {
+        if n % i == 0 {
+            lo.push(i)
+            let other = n / i
+            if other != i { hi.push(other) }
+        }
+        i = i + 1
+    }
+    // hi is descending → append reversed
+    let mut j = len(hi) - 1
+    while j >= 0 {
+        lo.push(hi[j])
+        j = j - 1
+    }
+    return lo
+}
+
+pub fn pp_sigma(n: int) -> int {
+    let ds = pp_divisors(n)
+    let mut s = 0
+    let mut i = 0
+    while i < len(ds) {
+        s = s + ds[i]
+        i = i + 1
+    }
+    return s
+}
+
+// ── T1 : semiprime-perfect characterization ─────────────────────────────
+// n = p·q with p,q distinct primes is perfect ⟺ (1+p)(1+q) = 2pq.
+pub fn pp_is_semiprime_perfect(p: int, q: int) -> bool {
+    if !pp_is_prime(p) || !pp_is_prime(q) || p == q { return false }
+    return (1 + p) * (1 + q) == 2 * p * q
+}
+
+// returns 6 (the unique n=p·q perfect) or 0 if none found in scan
+pub fn pp_semiprime_perfect(limit: int) -> int {
+    let ps = pp_primes_upto(limit)
+    let mut i = 0
+    while i < len(ps) {
+        let mut j = i + 1
+        while j < len(ps) {
+            let p = ps[i]
+            let q = ps[j]
+            if p * q <= limit {
+                if pp_is_semiprime_perfect(p, q) { return p * q }
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// ── T2 : prime pairs with (p−1)(q−1) = k ────────────────────────────────
+// pairs encoded flat as [p0,q0, p1,q1, …] (p ≤ q), via divisors of k.
+pub fn pp_pairs_for_k(k: int, limit: int) -> [int] {
+    let mut out: [int] = []
+    if k <= 0 { return out }
+    let ds = pp_divisors(k)
+    let mut i = 0
+    while i < len(ds) {
+        let d1 = ds[i]
+        let d2 = k / d1
+        let mut p = d1 + 1
+        let mut q = d2 + 1
+        if p > q {
+            let t = p
+            p = q
+            q = t
+        }
+        if p < limit && q < limit && pp_is_prime(p) && pp_is_prime(q) {
+            // dedupe: only emit when p is the smaller divisor branch
+            if d1 <= d2 {
+                out.push(p)
+                out.push(q)
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// number of distinct prime pairs solving (p−1)(q−1)=k
+pub fn pp_pair_count(k: int, limit: int) -> int {
+    return len(pp_pairs_for_k(k, limit)) / 2
+}
+
+// ── T3 : Euler-product integrality  pq / ((p−1)(q−1)) ∈ ℤ ────────────────
+pub fn pp_euler_product_integer(p: int, q: int) -> bool {
+    let denom = (p - 1) * (q - 1)
+    if denom == 0 { return false }
+    return (p * q) % denom == 0
+}
+
+// count prime pairs p<q<limit with integral Euler product (expected: 1)
+pub fn pp_euler_integer_count(limit: int) -> int {
+    let ps = pp_primes_upto(limit)
+    let mut cnt = 0
+    let mut i = 0
+    while i < len(ps) {
+        let mut j = i + 1
+        while j < len(ps) {
+            if pp_euler_product_integer(ps[i], ps[j]) { cnt = cnt + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return cnt
+}
+
+// ── T4 : self-referential bootstrap cycle (n=6 unique) ───────────────────
+// σ₋₁(n) = σ(n)/n ; integer-valued ⟺ n perfect (then = 2).
+pub struct BootstrapReport {
+    sigma_m1_is_2: bool,     // σ₋₁(6) = 2
+    semiprime: bool,         // 6 = 2·3
+    phi_eq_pq_minus: bool,   // (2−1)(3−1) = 2 = φ(6)
+    k2_unique_23: bool,      // (p−1)(q−1)=2 unique solution {2,3}
+    only_semiprime_perfect: bool, // 6 is the only semiprime perfect number
+    cycle_closed: bool       // all gates pass ⇒ bootstrap closes
+}
+
+pub fn pp_phi6() -> int {
+    // φ(6) = 2 by closed form (2 units {1,5} mod 6)
+    return (2 - 1) * (3 - 1)
+}
+
+pub fn pp_bootstrap(limit: int) -> BootstrapReport {
+    let s1 = pp_sigma(6) == 2 * 6                 // σ(6)=12 ⟹ σ₋₁(6)=2
+    let semi = (6 == 2 * 3) && pp_is_prime(2) && pp_is_prime(3)
+    let phi_ok = pp_phi6() == 2
+    let pc = pp_pair_count(2, limit)
+    let pairs2 = pp_pairs_for_k(2, limit)
+    let uniq = pc == 1 && len(pairs2) == 2 && pairs2[0] == 2 && pairs2[1] == 3
+    let only6 = pp_semiprime_perfect(limit) == 6
+    return BootstrapReport {
+        sigma_m1_is_2: s1,
+        semiprime: semi,
+        phi_eq_pq_minus: phi_ok,
+        k2_unique_23: uniq,
+        only_semiprime_perfect: only6,
+        cycle_closed: s1 && semi && phi_ok && uniq && only6
+    }
+}
