@@ -1,0 +1,86 @@
+// test/factorial_structure_smoke.hexa — smoke for symbolic/factorial_structure.hexa
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Reference values from factorial_structure_prover.py (archive-TECS-L/
+// .shared/calc, commit 4ee05c39):
+//   3! = 6 is the ONLY factorial perfect number (1! ≤ k! ≤ 25!)
+//   1!=1 σ=1≠2 · 2!=2 σ=3≠4 · 3!=6 σ=12=2·6 PERFECT · 4!=24 σ=60≠48
+//   Legendre v_3(5!) = 1 (odd) → 5! fails Euler odd-perfect form p^a·m²
+//   v_3(6!) = 2 · v_3(9!) = 4 · v_3(12!) = 5
+//   distinct odd primes ≤ 5 = {3,5} (2) → 5! cannot be even-perfect
+//   Virasoro factor 12 = 2·3! = 2·6
+//
+// Run:  hexa run test/factorial_structure_smoke.hexa
+// Sentinel: __FACTORIAL_STRUCTURE_SMOKE__ PASS|FAIL on the final line.
+
+import "compiler/atlas/symbolic/factorial_structure.hexa"
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── primitives ──────────────────────────────────────────────────────────
+check("ts_factorial(3) == 6",  ts_factorial(3) == 6)
+check("ts_factorial(4) == 24", ts_factorial(4) == 24)
+check("ts_factorial(6) == 720", ts_factorial(6) == 720)
+check("ts_sigma(6) == 12",  ts_sigma(6) == 12)
+check("ts_sigma(24) == 60", ts_sigma(24) == 60)
+check("ts_is_perfect(6)",  ts_is_perfect(6))
+check("!ts_is_perfect(24)", !ts_is_perfect(24))
+
+// ── T1 : factorial-perfect uniqueness ────────────────────────────────────
+check("3! = 6 is perfect",         ts_factorial_is_perfect(3))
+check("1! = 1 NOT perfect",        !ts_factorial_is_perfect(1))
+check("2! = 2 NOT perfect",        !ts_factorial_is_perfect(2))
+check("4! = 24 NOT perfect",       !ts_factorial_is_perfect(4))
+check("5! = 120 NOT perfect",      !ts_factorial_is_perfect(5))
+check("unique factorial-perfect k == 3", ts_unique_factorial_perfect(12) == 3)
+check("factorial-perfect count (1..12) == 1", ts_factorial_perfect_count(12) == 1)
+
+// ── T2 : Legendre v_p(k!) ────────────────────────────────────────────────
+check("v_3(5!) == 1",  ts_legendre(5, 3) == 1)
+check("v_3(6!) == 2",  ts_legendre(6, 3) == 2)
+check("v_3(9!) == 4",  ts_legendre(9, 3) == 4)
+check("v_3(12!) == 5", ts_legendre(12, 3) == 5)
+check("v_2(8!) == 7",  ts_legendre(8, 2) == 7)
+check("v_3(5!) is odd → fails Euler odd-perfect form", ts_v3_is_odd(5))
+
+// ── T3 : even-perfect odd-prime count ────────────────────────────────────
+check("distinct odd primes ≤ 4 == 1", ts_distinct_odd_primes(4) == 1)
+check("distinct odd primes ≤ 5 == 2", ts_distinct_odd_primes(5) == 2)
+check("4! CAN-be even-perfect shape (1 odd prime)", ts_can_be_even_perfect(4))
+check("5! CANNOT be even-perfect (2 odd primes)", !ts_can_be_even_perfect(5))
+
+// ── T4 : Virasoro factor 12 = 2·3! ───────────────────────────────────────
+check("Virasoro factor == 12", ts_virasoro_factor() == 12)
+check("Virasoro factor == 2·3!", ts_virasoro_is_2x3fact())
+
+// ── combined report ──────────────────────────────────────────────────────
+let r = ts_report(12)
+check("report unique_k == 3",        r.unique_k == 3)
+check("report perfect_count == 1",   r.perfect_count == 1)
+check("report 3! perfect",           r.fact3_is_perfect)
+check("report 4! NOT perfect",       r.fact4_not_perfect)
+check("report 5! has 2 odd primes",  r.fact5_two_odd_primes)
+check("report PROVEN (3!=6 unique)", r.proven)
+
+println("")
+println("═══════════════════════════════════════════════════════════")
+println("  factorial_structure smoke: PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+println("═══════════════════════════════════════════════════════════")
+if FAIL > 0 {
+    println("__FACTORIAL_STRUCTURE_SMOKE__ FAIL")
+} else {
+    println("__FACTORIAL_STRUCTURE_SMOKE__ PASS")
+}
