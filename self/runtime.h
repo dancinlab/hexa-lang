@@ -207,6 +207,32 @@ void    hexa_arena_reset(void);                       /* runtime.c:3076 */
 /* array lifecycle */
 HexaVal hexa_array_free(HexaVal arr);                 /* runtime.c:7182 */
 
+/* ── slice family (codegen-emitted, impl in runtime.c) ─────────────
+ * codegen_c2.hexa lowers array `.slice`/`.slice_fast` (lines 2909-2913,
+ * 4738-4742, 4937), `str.slice` (cg_string_sym "str_slice", line 327),
+ * and `tensor_slice` (lines 3542-3543, 4352) to direct `hexa_*` calls.
+ * The C impls exist (runtime.c:6964/1931/6954/11456) and were
+ * forward-declared ONLY in runtime.c (lines 820/822/838/860) — never
+ * in runtime.h. The AOT-generated user.c TU only `#include "runtime.h"`,
+ * so clang implicit-int'd them → `assigning to 'HexaVal' from
+ * incompatible type 'int'` on any build transitively using them
+ * (anima HEXAD/CHAT/chat_lib.hexa:2455 `ids.slice(0, nids-1)` blocker).
+ * Decl-only, additive; signatures byte-match the runtime.c forward-decls.
+ * Same root-cause class + fix shape as the safetensors_mmap_* decls. */
+HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end);      /* runtime.c:6964 */
+HexaVal hexa_array_slice_fast(HexaVal arr, HexaVal start, HexaVal end); /* runtime.c:1931 */
+HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end);          /* runtime.c:6954 */
+HexaVal hexa_tensor_slice(HexaVal a, HexaVal lo, HexaVal hi);           /* runtime.c:11456 */
+
+/* ── numeric: abs (codegen-emitted, impl in runtime.c) ─────────────
+ * 2026-05-16: SAME decl-gap class as the slice-family / safetensors_mmap_*
+ * decls above. `hexa_abs` has a runtime.c forward-decl (runtime.c:779) and
+ * impl (runtime.c:5212) but was never declared in runtime.h. The
+ * AOT-generated user.c TU only #include "runtime.h", so any build calling
+ * abs() (anima HEXAD/CHAT/chat_lib.hexa via mitosis_hook_lib.hexa) hit
+ * clang implicit-int. Decl-only, additive; byte-matches runtime.c:779. */
+HexaVal hexa_abs(HexaVal v);                                            /* runtime.c:5212 */
+
 /* container indexing */
 HexaVal hexa_index_get(HexaVal container, HexaVal key); /* runtime.c:2643 */
 HexaVal hexa_array_pop(HexaVal arr);                    /* runtime.c:3878 */
@@ -622,5 +648,108 @@ static inline HexaVal __hexa_exec_stream_wrap_hv(HexaVal cmd, HexaVal cb) {
 #define hexa_exec_stream(cmd, cb) _Generic((cb), \
     HexaVal: __hexa_exec_stream_wrap_hv, \
     default: __hexa_exec_stream_wrap_fp)((cmd), (cb))
+
+/* ── packed-double farr ABI (RFC 030/032/033) ──────────────────────
+ * The codegen lowers farr_zeros/get/set/len/free + farr_matmul/copy to
+ * direct `hexa_farr_*` calls; the runtime.h split (PHASE 1.2/1.3) must
+ * declare them so the user.c TU does not implicit-int them (which would
+ * otherwise mis-init `HexaVal h = hexa_farr_zeros(n)` from int). SSOT:
+ * self/runtime.c. */
+HexaVal hexa_farr_zeros(HexaVal n_v);                                  /* runtime.c */
+HexaVal hexa_farr_get(HexaVal h_v, HexaVal i_v);                       /* runtime.c */
+HexaVal hexa_farr_set(HexaVal h_v, HexaVal i_v, HexaVal x_v);          /* runtime.c */
+HexaVal hexa_farr_len(HexaVal h_v);                                    /* runtime.c */
+HexaVal hexa_farr_free(HexaVal h_v);                                   /* runtime.c */
+HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                         HexaVal b_v, HexaVal bc_v);                    /* runtime.c — RFC 032 */
+HexaVal hexa_farr_copy(HexaVal src_v);                                 /* runtime.c — RFC 033 */
+HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v); /* runtime.c — RFC 033 */
+
+/* ── safetensors mmap-backed zero-copy load (RFC 025) ──────────────
+ * codegen_c2.hexa lowers safetensors_mmap_* builtins to direct
+ * `hexa_safetensors_mmap_*` calls (1-arg: open/header/data_offset/
+ * size/close; 3-arg: read_f32_farr/read_bf16_to_f32_farr/read_bytes).
+ * Same runtime.h-split contract as the farr ABI above: the generated
+ * user.c TU only #include "runtime.h", so without these prototypes
+ * clang implicit-ints them and mis-inits `HexaVal h = ..._open(p)`
+ * from int (anima HEXAD/CHAT/chat_lib.hexa R2 Phase-5 wire blocker).
+ * Bodies (SSOT) + interp fn_shim carriers: self/runtime.c. */
+HexaVal hexa_safetensors_mmap_open(HexaVal path_v);                    /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_header(HexaVal h_v);                     /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_data_offset(HexaVal h_v);               /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_size(HexaVal h_v);                       /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_read_f32_farr(HexaVal h_v, HexaVal off_v,
+                                            HexaVal n_v);              /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_read_bf16_to_f32_farr(HexaVal h_v,
+                                                    HexaVal off_v,
+                                                    HexaVal n_v);      /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_read_bytes(HexaVal h_v, HexaVal off_v,
+                                         HexaVal n_v);                 /* runtime.c — RFC 025 */
+HexaVal hexa_safetensors_mmap_close(HexaVal h_v);                      /* runtime.c — RFC 025 */
+
+/* ── anima RFC 034 (2026-05-16): farr reverse-mode autograd ─────────
+ * CE-softmax (closed B-D-4 Jacobian) + AdamW pure-hexa training step.
+ * anima HEXAD/PLAN.md Phase 5 unblock. Definitions: self/runtime.c.
+ *
+ * Native impls (hexa_ad_* / hexa_adamw_step) — used by the interp
+ * dispatch + a future `hexa cc --regen`'d typed codegen path. */
+HexaVal hexa_ad_tape_begin(void);                                      /* runtime.c — RFC 034 */
+HexaVal hexa_ad_tape_end(HexaVal tid_v);                               /* runtime.c — RFC 034 */
+HexaVal hexa_ad_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                       HexaVal b_v, HexaVal bc_v);                      /* runtime.c — RFC 034 */
+HexaVal hexa_ad_softmax_cross_entropy(HexaVal logits_v, HexaVal nr_v,
+                                      HexaVal nc_v, HexaVal tgt_v);     /* runtime.c — RFC 034 */
+HexaVal hexa_ad_backward(HexaVal tid_v);                               /* runtime.c — RFC 034 */
+HexaVal hexa_ad_grad(HexaVal param_v);                                 /* runtime.c — RFC 034 */
+HexaVal hexa_adamw_step(HexaVal p_v, HexaVal g_v, HexaVal m_v, HexaVal v_v,
+                        HexaVal n_v, HexaVal lr_v, HexaVal b1_v, HexaVal b2_v,
+                        HexaVal eps_v, HexaVal wd_v, HexaVal t_v);      /* runtime.c — RFC 034 */
+/* Generic-fallback symbols the CURRENT committed hexa_v2 codegen emits
+ * (no codegen branch needed): ≤4-arg → hexa_callN(<carrier>, …) needs
+ * a visible HexaVal carrier; ≥5-arg → bare ad_matmul(…)/adamw_step(…)
+ * direct call needs a visible function. External linkage in runtime.c.
+ * This is what makes the *compiled* smoke link with the unmodified
+ * committed transpiler (no hexa_cc.c rebaseline). */
+extern HexaVal ad_tape_begin;                                          /* runtime.c — RFC 034 fn carrier */
+extern HexaVal ad_tape_end;                                            /* runtime.c — RFC 034 fn carrier */
+extern HexaVal ad_softmax_cross_entropy;                               /* runtime.c — RFC 034 fn carrier */
+extern HexaVal ad_backward;                                            /* runtime.c — RFC 034 fn carrier */
+extern HexaVal ad_grad;                                                /* runtime.c — RFC 034 fn carrier */
+HexaVal ad_matmul(HexaVal a, HexaVal ar, HexaVal ac,
+                  HexaVal b, HexaVal bc);                               /* runtime.c — RFC 034 (5-arg direct) */
+HexaVal adamw_step(HexaVal p, HexaVal g, HexaVal m, HexaVal v,
+                   HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                   HexaVal eps, HexaVal wd, HexaVal t);                 /* runtime.c — RFC 034 (11-arg direct) */
+
+/* ── anima RFC 035 (2026-05-16): bf16/fp16 mixed-precision training ──
+ * Depends on RFC 034. bf16 storage round-trip + loss-scaled, skip-on-
+ * nonfinite mixed-precision AdamW (f64 master weight, low-prec grad).
+ * anima HEXAD/PLAN.md Phase 5 lower-memory D-training. Defs: runtime.c.
+ * (Distinct from the 2026-05-13 internal NM-step "RFC 035" — that one
+ *  is farr_simplex_*; this draft RFC's namespace is bf16/adamw_mixed.) */
+HexaVal hexa_farr_to_bf16(HexaVal src_v, HexaVal dst_v, HexaVal n_v);   /* runtime.c — RFC 035 */
+HexaVal hexa_farr_from_bf16(HexaVal src_v, HexaVal dst_v, HexaVal n_v); /* runtime.c — RFC 035 */
+HexaVal hexa_adamw_step_mixed(HexaVal p_v, HexaVal g_v, HexaVal m_v,
+                              HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                              HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                              HexaVal wd_v, HexaVal t_v, HexaVal ls_v);  /* runtime.c — RFC 035 */
+extern HexaVal farr_to_bf16;                                           /* runtime.c — RFC 035 fn carrier */
+extern HexaVal farr_from_bf16;                                         /* runtime.c — RFC 035 fn carrier */
+HexaVal adamw_step_mixed(HexaVal p, HexaVal g, HexaVal m, HexaVal v,
+                         HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                         HexaVal eps, HexaVal wd, HexaVal t,
+                         HexaVal ls);                                   /* runtime.c — RFC 035 (12-arg direct) */
+
+/* ── anima RFC 036 (2026-05-16): phi_rs MI/Φ byte-equal primitive ────
+ * Native C replica of phi_rs::mi_from_paired_vectors + spatial-Φ
+ * pipeline (deterministic numeric core). The ACTUAL phi_rs Rust FFI
+ * link is a NAMED BLOCKER (phi_rs is PyO3-cdylib, no extern "C" ABI) —
+ * see rfc_036 §"FFI shim (named blocker)". Defs: runtime.c. */
+HexaVal hexa_phi_mi_pair(HexaVal a_v, HexaVal b_v, HexaVal n_v,
+                         HexaVal nb_v);                                 /* runtime.c — RFC 036 */
+HexaVal hexa_phi_spatial(HexaVal st_v, HexaVal nc_v, HexaVal dim_v,
+                         HexaVal nb_v);                                 /* runtime.c — RFC 036 */
+extern HexaVal phi_mi_pair;                                            /* runtime.c — RFC 036 fn carrier */
+extern HexaVal phi_spatial;                                            /* runtime.c — RFC 036 fn carrier */
 
 #endif /* HEXA_RUNTIME_H */

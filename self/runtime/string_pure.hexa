@@ -669,7 +669,12 @@ pub fn from_char_code_pure(code) {
 // was pure divergence risk with zero live consumers — removed so
 // runtime/format_pure.hexa is the single SSOT.
 //
-// See incoming/patches/format-n-pure-dup-and-ge-le-in-format-pure.md.
+// The strbuf-migrated linear format_n_pure (stage2-verify's quadratic→
+// strbuf rewrite) survives as runtime/format_pure.hexa's format_n_pure,
+// which is strbuf-based AND adds {:.N} precision handling. So this dedup
+// preserves both main's debt fix and stage2's strbuf-migration outcome.
+//
+// See inbox/patches/format-n-pure-dup-and-ge-le-in-format-pure.md.
 
 // ── str_capitalize_pure ──────────────────────────────────────────
 // Capitalizes the first character of the string (a..z -> A..Z).

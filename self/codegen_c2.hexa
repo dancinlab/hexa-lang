@@ -2117,6 +2117,57 @@ fn _gen2_collect_main_body_lets(ast) {
     return names
 }
 
+// 2026-05-16: generalized nested mutable index-assignment lowering.
+// For `root[k0][k1]...[kN] = v` the correct functional rebind assigns back to
+// the ROOT lvalue (the base variable being mutated), recursing the
+// hexa_index_set(...) chain — NOT to an intermediate hexa_index_get(...)
+// which is a C rvalue (function-call result), not an lvalue.
+//   root = hexa_index_set(root, k0,
+//            hexa_index_set(hexa_index_get(root,k0), k1,
+//              ... hexa_index_set(get(...get(root,k0)...,k(N-1)), kN, v) ...))
+// Generalizes the prior 1-level (root[i]=v) and 2-level (root[i][j]=v) cases
+// (they are the depth-1 / depth-2 instances of this recursion — byte-identical
+// output preserved). lhs = the Index AST node (AssignStmt.left); val_c = the
+// already-lowered RHS C-string. Returns the full `root = …;` statement string.
+fn _gen2_nested_index_assign_stmt(lhs, val_c, pad) {
+    // Walk the Index spine outermost→innermost collecting index keys.
+    // lhs.right = last key (kN); lhs.left = root[k0]...[k(N-1)].
+    let mut keys_rev = []
+    let mut cur = lhs
+    while type_of(cur) != "string" && cur.kind == "Index" {
+        keys_rev.push(gen2_expr(cur.right))
+        cur = cur.left
+    }
+    // `cur` is now the root lvalue node (Ident / Field / etc — anything but a
+    // bare Index spine). Lower it once; this is the C lvalue we assign to.
+    let root_c = gen2_expr(cur)
+    // Reverse keys to top-down order k0..kN.
+    let mut keys = []
+    let mut ri = len(keys_rev) - 1
+    while ri >= 0 {
+        keys.push(keys_rev[ri])
+        ri = ri - 1
+    }
+    let n = len(keys)
+    // Build accessor prefixes: acc[0]=root_c, acc[j]=hexa_index_get(acc[j-1], k[j-1]).
+    let mut acc = []
+    acc.push(root_c)
+    let mut ai = 1
+    while ai < n {
+        acc.push("hexa_index_get(" + acc[ai - 1] + ", " + keys[ai - 1] + ")")
+        ai = ai + 1
+    }
+    // Build the nested hexa_index_set from innermost (level n-1) outward.
+    // innermost replacement value = val_c.
+    let mut expr = val_c
+    let mut li = n - 1
+    while li >= 0 {
+        expr = "hexa_index_set(" + acc[li] + ", " + keys[li] + ", " + expr + ")"
+        li = li - 1
+    }
+    return pad + root_c + " = " + expr + ";\n"
+}
+
 // decreases node — structural
 fn gen2_stmt(node, depth) {
     let pad = gen2_indent(depth)
@@ -2161,20 +2212,13 @@ fn gen2_stmt(node, depth) {
     }
 
     if k == "AssignStmt" {
-        // Index assignment: arr[i] = val or map["key"] = val → polymorphic
+        // Index assignment: arr[i] = val or map["key"] = val → polymorphic.
+        // Recurse the full LHS Index spine and rebind the ROOT lvalue (fixes
+        // the prior nested-case bug that targeted an intermediate
+        // hexa_index_get(...) rvalue — invalid C). Generalizes 1/2/N levels.
         if type_of(node.left) != "string" && node.left.kind == "Index" {
-            let idx = gen2_expr(node.left.right)
             let val = gen2_expr(node.right)
-            // Nested index: arr[i][j] = val → arr = hexa_index_set(arr, i, hexa_index_set(hexa_index_get(arr, i), j, val))
-            if type_of(node.left.left) != "string" && node.left.left.kind == "Index" {
-                let outer_container = gen2_expr(node.left.left.left)
-                let outer_idx = gen2_expr(node.left.left.right)
-                let inner_get = "hexa_index_get(" + outer_container + ", " + outer_idx + ")"
-                let inner_set = "hexa_index_set(" + inner_get + ", " + idx + ", " + val + ")"
-                return pad + outer_container + " = hexa_index_set(" + outer_container + ", " + outer_idx + ", " + inner_set + ");\n"
-            }
-            let container = gen2_expr(node.left.left)
-            return pad + container + " = hexa_index_set(" + container + ", " + idx + ", " + val + ");\n"
+            return _gen2_nested_index_assign_stmt(node.left, val, pad)
         }
         // Field assignment: obj.field = val
         if type_of(node.left) != "string" && node.left.kind == "Field" {
@@ -4133,6 +4177,8 @@ fn gen2_expr(node) {
                 if name == "mono_ns"          { return "hexa_mono_ns()" }
                 if name == "utc_iso_now"      { return "hexa_utc_iso_now()" }
                 if name == "utc_compact_now"  { return "hexa_utc_compact_now()" }
+                // anima RFC 034 (2026-05-16): farr autograd — 0-arg tape open.
+                if name == "ad_tape_begin"    { return "hexa_ad_tape_begin()" }
             }
             if len(node.args) == 1 {
                 let a0 = arg_strs[0]
@@ -4187,6 +4233,10 @@ fn gen2_expr(node) {
                 // RFC 033 (2026-05-12): farr_copy — explicit deep copy
                 // (memcpy under the hood, no per-elem boxing).
                 if name == "farr_copy"      { return "hexa_farr_copy(" + a0 + ")" }
+                // anima RFC 034 (2026-05-16): farr autograd — 1-arg forms.
+                if name == "ad_tape_end"    { return "hexa_ad_tape_end(" + a0 + ")" }
+                if name == "ad_backward"    { return "hexa_ad_backward(" + a0 + ")" }
+                if name == "ad_grad"        { return "hexa_ad_grad(" + a0 + ")" }
                 // RFC 025 (2026-05-12): safetensors mmap-backed zero-copy
                 // load. 1-arg forms (open/close/header/data_offset/size).
                 if name == "safetensors_mmap_open"        { return "hexa_safetensors_mmap_open(" + a0 + ")" }
@@ -4356,6 +4406,11 @@ fn gen2_expr(node) {
                 if name == "regex_replace" { return "hexa_regex_replace(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // feat/primitive-float-array — packed-double array element set.
                 if name == "farr_set"      { return "hexa_farr_set(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
+                // anima RFC 035 (2026-05-16): bf16 storage round-trip
+                // (src, dst, n). SSOT for hexa cc --regen; the committed
+                // transpiler reaches these via the hexa_call3 fallback.
+                if name == "farr_to_bf16"   { return "hexa_farr_to_bf16(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
+                if name == "farr_from_bf16" { return "hexa_farr_from_bf16(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // RFC 036: farr_int_array — 3-arg routes.
                 if name == "farr_int_set"  { return "hexa_farr_int_set(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // RFC 025 (2026-05-12): safetensors mmap-backed zero-copy
@@ -4395,6 +4450,9 @@ fn gen2_expr(node) {
                 if name == "matmul"         { return "hexa_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // RFC 032 (2026-05-12): farr_matmul — packed-double matmul.
                 if name == "farr_matmul"    { return "hexa_farr_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                // anima RFC 034 (2026-05-16): farr autograd — ad_matmul
+                // (5-arg; forward = farr_matmul + records backward).
+                if name == "ad_matmul"      { return "hexa_ad_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // stdlib/os/pty — 5-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_set_winsize" {
                     return "hexa_pty_set_winsize(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
@@ -4419,6 +4477,19 @@ fn gen2_expr(node) {
                 }
                 if name == "chacha20_poly1305_decrypt" {
                     return "hexa_chacha20_poly1305_decrypt(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                // anima RFC 034 (2026-05-16): farr autograd — fused softmax
+                // cross-entropy (returns scalar loss; records B-D-4 grad).
+                if name == "ad_softmax_cross_entropy" {
+                    return "hexa_ad_softmax_cross_entropy(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                // anima RFC 036 (2026-05-16): phi_rs MI/Φ byte-equal.
+                // phi_mi_pair(a,b,n,n_bins) / phi_spatial(states,nc,dim,n_bins).
+                if name == "phi_mi_pair" {
+                    return "hexa_phi_mi_pair(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                if name == "phi_spatial" {
+                    return "hexa_phi_spatial(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
                 }
             }
             if len(node.args) == 6 {
@@ -4447,6 +4518,33 @@ fn gen2_expr(node) {
                         + arg_strs[4] + ", " + arg_strs[5] + ", "
                         + arg_strs[6] + ", " + arg_strs[7] + ", "
                         + arg_strs[8] + ")"
+                }
+            }
+            if len(node.args) == 11 {
+                // anima RFC 034 (2026-05-16): farr autograd — fused AdamW
+                // step (param, grad, m, v, n, lr, b1, b2, eps, wd, t).
+                if name == "adamw_step" {
+                    return "hexa_adamw_step("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ", "
+                        + arg_strs[10] + ")"
+                }
+            }
+            if len(node.args) == 12 {
+                // anima RFC 035 (2026-05-16): loss-scaled mixed-precision
+                // AdamW (param, grad, m, v, n, lr, b1, b2, eps, wd, t,
+                // loss_scale). Returns 1 if applied, 0 if AMP-overflow skip.
+                if name == "adamw_step_mixed" {
+                    return "hexa_adamw_step_mixed("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ", "
+                        + arg_strs[10] + ", " + arg_strs[11] + ")"
                 }
             }
             let nargs = len(node.args)
