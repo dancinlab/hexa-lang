@@ -1055,3 +1055,39 @@ per-field: oXout=0 oHstate=0 oP=0 oSwS=0 · oQ=1.776e-15 · oRin=1.704e-01
 eps=hexa_float(1e-6) 는 정합상 유지 (oRin fix 아님 명시, over-claim 0).
 instrument 가 또 1건 — d768 fire 가 15회 못한 정밀 localize 를
 $0.20/4s 에 (block oracle 누적 2 catch: RMSNorm-region cache 오염).
+
+### 2026-05-18 — ⭐ oRin clobber 근본원인 규명 + $0-검증 fix (15-fire 근본)
+
+oRin-clobber 진단 sub-agent (commit `62fafe93` → cherry-pick
+`c777777b`). **근본원인 = offset 버그 아닌 device-residence clobber**:
+`flame_block_generic_fwd_primitive_gpu` entry 의 RFC 056 §6.3
+`pin_device(Bc)` 가 host Bc all-zero 시점 device snapshot
+(loc=MIRRORED dirty_host=0) → step-1 RMSNorm 이 raw host pointer 로
+정확한 oRin write (dirty_host 미설정) → step-2 scatter 의 `_h2d(Bc)`
+가 §6.1 H2D-skip (loc∈{DEVICE,MIRRORED}&&!dirty_host) TRUE → 업로드
+SKIP (device oRin 여전히 0) → scatter wrapper 강제 full `_d2h(Bc)` 가
+stale all-zero 를 host 에 덮어씀 → Bc[oRin]=0. oQ byte-eq 인 이유:
+matmul 이 clobber 前 정확한 host oRin 읽음. bwd 가 clobbered oRin
+읽음 → **15-fire d768 -nan/gn2-drift 의 진짜 근본원인** (RFC 056
+§6.3 Bc-pin × §6.1 H2D-skip × raw-host-write 의 파국적 상호작용).
+
+**fix (minimal)**: `pin/unpin_device(Bc)` 2줄 삭제 (Bp pin 유지 —
+read-only weights, pin 전제 성립). Bc 가 host-authoritative 유지 →
+첫 scatter `_h2d(Bc)` 가 authoritative host 진짜 업로드. 본 primitive
+자신의 PART 1 "Bc host-authoritative" 계약 복원 (§6.3 Bc-pin 이
+회귀시켰던 것).
+
+**$0 검증 (신규 instrument `tool/flame_phase4d9_orin_clobber_oracle.
+{c,sh}` — runtime_cuda.c 의 _h2d/_d2h/pin/H2D-skip 충실 모델,
+primitive 2개 unmodified splice)**: PRE-fix `max|Δ|=1.704301e-01`
+= **d768 GPU oracle 의 oRin=1.704e-1 와 bit-identical 재현**
+(모델 충실성 강력 입증), POST-fix oRin STABLE (FP floor 5.55e-17).
+`_cpu` md5 `ed65d091...` 불변 · matmul_primitives/runtime_cuda/
+runtime.c untouched. fix 가 `_gpu` 2줄 삭제 = d=32(_cpu) 도달불가 →
+hard gate safe by construction (+sub-agent verify_all byte-id-to-base
+입증). 전 $0 게이트 green (block-fwd·orin-clobber·d7·d9 PASS).
+
+g3: $0 모델은 충실하나 모델 — 실-substrate 확정은 campaign hard
+rule. 다음 = GPU block-oracle 결정 검증 (oRin 1.704e-1 → 0.0 PASS
+기대 = 15-fire 근본원인 fix + fwd chain link 실-substrate 동시 확정).
+over-claim 0: GPU 확정 전까지 tier 미선언.
