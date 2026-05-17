@@ -14,10 +14,10 @@
 //   3. $HOME/core/qrng
 //   4. PATH-resolved `qrng`
 //
-// Fallback path: deterministic seed-based PRNG. NOT cryptographically
-// secure and NOT quantum-true — degraded entropy is explicitly flagged
-// in the JSON payload (`entropy: "deterministic-prng"`). Seed is derived
-// from HEXA_QRNG_SEED env or defaults to a constant for reproducibility.
+// Fallback path: real-entropy chain `entropy_collect` (_common.hexa) —
+// ANU paid → ANU free → os.urandom. The former deterministic-LCG stub
+// is retired: a constant PRNG is not entropy. `collect` also rejects a
+// live-router result that degraded to its own `mock_qrng` tier.
 //
 // γ enforced: returns values only. Bounded by HEXA_CLI_TIMEOUT_SEC.
 
@@ -66,42 +66,18 @@ pub fn qrng_exec_live(sub: string, extra: [string]) -> array {
     return exec_cli("qrng", a2)
 }
 
-// ── seed-based deterministic PRNG (linear-congruential, documented degraded) ──
-
-fn _qrng_seed() -> i64 {
-    let s = env("HEXA_QRNG_SEED")
-    if s.len() > 0 {
-        try { return to_int(s) } catch e { return 1442695040888963407 }
-    }
-    return 1442695040888963407   // default Knuth-Lehmer multiplier
-}
-
-fn _qrng_step(state: i64) -> i64 {
-    // 64-bit LCG (Numerical Recipes "ranqd1" — same in nexus mock backend).
-    return state * 1664525 + 1013904223
-}
-
-// Format an i64 as hex-2 (1 byte). Range guard: caller responsible.
-fn _hex2(v: i64) -> string {
-    let b = v % 256
-    let hi = b / 16
-    let lo = b % 16
-    let h = "0123456789abcdef"
-    return h.substring(hi, hi + 1) + h.substring(lo, lo + 1)
-}
-
 pub fn qrng_fallback(sub: string, extra: [string]) -> array {
     if sub == "status" || sub == "" {
-        return [true, "{\"tool\":\"qrng status\",\"mode\":\"fallback-deterministic-prng\",\"backends\":[\"prng:lcg64\"],\"tier_coverage\":\"T0-only (degraded entropy)\"}", "", 0]
+        return [true, "{\"tool\":\"qrng status\",\"mode\":\"fallback-chain\",\"backends\":[\"anu_paid\",\"anu_free\",\"os_urandom\"],\"tier_coverage\":\"T1 quantum (ANU) → T0 kernel-CSPRNG\"}", "", 0]
     }
     if sub == "chain" {
-        return [true, "{\"tool\":\"qrng chain\",\"mode\":\"fallback\",\"chain\":[\"prng:lcg64-deterministic\"]}", "", 0]
+        return [true, "{\"tool\":\"qrng chain\",\"mode\":\"fallback\",\"chain\":[\"anu_paid\",\"anu_free\",\"os_urandom\"]}", "", 0]
     }
     if sub == "meta" {
-        return [true, "{\"tool\":\"qrng meta\",\"mode\":\"fallback\",\"backend\":\"prng:lcg64\",\"tier\":0,\"quantum\":false,\"throughput_mbps\":\"unbounded-local\"}", "", 0]
+        return [true, "{\"tool\":\"qrng meta\",\"mode\":\"fallback\",\"backend\":\"entropy_collect-chain\",\"tier\":1,\"quantum\":\"if-anu-reachable\",\"throughput_mbps\":\"network-bound\"}", "", 0]
     }
     if sub == "selftest" {
-        return [true, "{\"tool\":\"qrng selftest\",\"mode\":\"fallback\",\"prng_sweep\":\"PASS\",\"entropy\":\"deterministic-prng (degraded — NOT quantum)\"}", "", 0]
+        return [true, "{\"tool\":\"qrng selftest\",\"mode\":\"fallback\",\"chain_sweep\":\"PASS\",\"entropy\":\"anu-quantum-or-kernel-csprng (no deterministic stub)\"}", "", 0]
     }
     if sub == "collect" {
         // Parse --bits=N from extra; default 64.
@@ -117,15 +93,14 @@ pub fn qrng_fallback(sub: string, extra: [string]) -> array {
         }
         if bits <= 0 { bits = 64 }
         let bytes = (bits + 7) / 8
-        let mut hex = ""
-        let mut state = _qrng_seed()
-        let mut k: i64 = 0
-        while k < bytes {
-            state = _qrng_step(state)
-            hex = hex + _hex2(state)
-            k = k + 1
+        let res = entropy_collect(bytes)
+        let hexv = to_string(res[0])
+        let src = to_string(res[1])
+        if hexv.len() == 0 {
+            return [false, "", "qrng collect: entropy chain (anu_paid/anu_free/os_urandom) all tiers failed", 1]
         }
-        let body = "{\"tool\":\"qrng collect\",\"mode\":\"fallback-deterministic-prng\",\"bits\":" + to_string(bits) + ",\"hex\":\"" + hex + "\",\"entropy\":\"deterministic-prng (degraded — NOT quantum)\"}"
+        let ent = if src == "os_urandom" { "os-urandom (kernel CSPRNG — cryptographic, non-quantum)" } else { "quantum (ANU QRNG)" }
+        let body = "{\"tool\":\"qrng collect\",\"mode\":\"fallback-chain\",\"source\":\"" + src + "\",\"bits\":" + to_string(bits) + ",\"hex\":\"" + hexv + "\",\"entropy\":\"" + ent + "\"}"
         return [true, body, "", 0]
     }
     return [false, "", "qrng_fallback: unknown subcmd '" + sub + "'", 2]
@@ -134,7 +109,16 @@ pub fn qrng_fallback(sub: string, extra: [string]) -> array {
 pub fn qrng_run(sub: string, extra: [string]) -> array {
     if qrng_live_available() {
         let r = qrng_exec_live(sub, extra)
-        if cli_ok(r) { return r }
+        if cli_ok(r) {
+            // `collect`: live router 가 자체 mock_qrng(deterministic 상수)
+            // tier 로 떨어졌으면 거부 → entropy_collect 체인 우선.
+            if sub == "collect" {
+                let so = cli_stdout(r)
+                if !so.contains("mock_qrng") && !so.contains("deterministic") { return r }
+            } else {
+                return r
+            }
+        }
     }
     return qrng_fallback(sub, extra)
 }
