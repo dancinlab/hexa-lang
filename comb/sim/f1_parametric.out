@@ -1,0 +1,15 @@
+# comb F1 parametric sweep — non-contention NoC, x100 integer
+# all per-packet totals (3x for int avg). win flags: 1 = degree-6 beats degree-4
+# sweep dimensions: t_router_d6 (1.0..2.0 d-cost), e_diag (1.0..1.75 RC penalty)
+#
+N=1024 t_r4=100 t_r6=100 e_diag=100 lat_m=12800 lat_h=6800 e_m=12800 e_h=8500 lat_d6_wins=1 e_d6_wins=1
+N=1024 t_r4=100 t_r6=150 e_diag=100 lat_m=12800 lat_h=8500 e_m=12800 e_h=8500 lat_d6_wins=1 e_d6_wins=1
+N=1024 t_r4=100 t_r6=200 e_diag=100 lat_m=12800 lat_h=10200 e_m=12800 e_h=8500 lat_d6_wins=1 e_d6_wins=1
+N=1024 t_r4=100 t_r6=150 e_diag=130 lat_m=12800 lat_h=8500 e_m=12800 e_h=9010 lat_d6_wins=1 e_d6_wins=1
+N=1024 t_r4=100 t_r6=150 e_diag=175 lat_m=12800 lat_h=8500 e_m=12800 e_h=9758 lat_d6_wins=1 e_d6_wins=1
+N=1024 t_r4=100 t_r6=200 e_diag=175 lat_m=12800 lat_h=10200 e_m=12800 e_h=9758 lat_d6_wins=1 e_d6_wins=1
+N=256 t_r4=100 t_r6=150 e_diag=130 lat_m=6400 lat_h=4000 e_m=6400 e_h=4240 lat_d6_wins=1 e_d6_wins=1
+N=10000 t_r4=100 t_r6=150 e_diag=130 lat_m=40000 lat_h=28500 e_m=40000 e_h=30210 lat_d6_wins=1 e_d6_wins=1
+#
+# read: rows where lat_d6_wins=1 AND e_d6_wins=1 → degree-6 net wins F1
+# rows where both =0 → degree-6 loses F1 in this regime (falsified)

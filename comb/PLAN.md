@@ -48,14 +48,23 @@
   ≈ 0.845√N. 승리 부등식 §3 (좌변 그래프 상수 고정, 우변 process·placement
   의존). caveat 5건 동반.
 - 2026-05-18 — **T1-B-oracle 완료** (`comb/sim/`): T1-B 를 분할 —
-  *T1-B-oracle* (graph-level, comb-내부, sim-free in wire-model sense)
-  + *T1-B-full* (modern-node wire model, hexa-arch[chip] sim 의존).
-  T1-B-oracle 산출: `T1A_verify.txt` (awk 수치 sanity 8 N points) +
-  `noc_distance.hexa` (hexa-native 소스, `hexa parse` PASS, `hexa build`
-  성공, 컴파일 바이너리 실행 → `noc_distance.out` 캡처). 측정 vs 이론:
-  N=10000 에서 D_hex/D_mesh = 114/198 = 0.5758 ≈ 1/√3 = 0.5774 (정수
-  floor 진동, 큰 N 수렴 확인). decoupling 재정의: comb 가 안 하는 것 =
-  외부 EDA 흡수 (hexa-arch 책임); comb 가 하는 것 = 자체 graph-level
-  oracle harness. 다음 = T1-B-full 은 hexa-arch[chip] BookSim2 흡수 후
-  (`~/core/hexa-arch` design.md/D5 — 7-verb spine + research-first;
-  외부 진행中) — comb 단독 대기.
+  *T1-B-oracle* (graph-level, comb-내부) + *T1-B-full* (wire model +
+  congestion, hexa-arch[chip] 의존). 산출: `T1A_verify.txt` (수치 sanity)
+  + `noc_distance.hexa` (hexa parse PASS · build OK · 컴파일 바이너리
+  실행 → `noc_distance.out`). N=10000: D_hex/D_mesh = 114/198 = 0.5758 ≈
+  1/√3 = 0.5774. decoupling 재정의: comb 가 안 하는 것 = 외부 EDA *흡수*
+  (hexa-arch); comb 가 하는 것 = 자체 graph-level harness.
+- 2026-05-18 — **T2-partial (F1 비경쟁 verdict)** ⭐️ WIN: 비경쟁
+  (non-contention) NoC 모델 (Dally & Towles 2004 §3.7 baseline)
+  hexa-native 파라메트릭 sweep — `comb/sim/f1_parametric.hexa` (parse
+  PASS · build OK · 실행) → `f1_parametric.out`. sweep 차원: t_router_d6
+  ∈ {100,150,200}, e_diag ∈ {100,130,175} × N ∈ {256,1024,10000}.
+  **결과: 8/8 sweep 행 모두 degree-6 net win** (lat·energy 둘 다).
+  근거: D_hex/D_mesh ≈ 0.53 (1/√3 영역) 의 hop 절감이 per-hop 페널티
+  (router 1.5x + diag RC 1.75x 최악)를 압도. cross-over: t_router_d6
+  ~276 (2.76x baseline) 부터 latency 패배 — 현실 d-linear 1.5x 영역
+  훨씬 안. **F1 비경쟁 영역 = degree-6 우세** (RFC 057 §5 F1 falsifier
+  비경쟁 한정 통과). caveat: congestion·real-workload·peak distribution
+  은 T1-B-full 후 측정 필요 — non-contention 은 lower bound 일 뿐.
+  다음 = (a) RTL 스텁(comb-side hexa→Verilog emitter) 으로 T2 RTL 측면
+  착수 (b) T1-B-full = hexa-arch[chip] BookSim2 흡수 후.
