@@ -38,6 +38,14 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 
+/* C linkage for the public surface so that C harnesses (or runtime.c on
+ * the host build) can call these symbols without C++ name mangling.
+ * `-x cu` always parses as C++; without `extern "C"`, the harness
+ * `extern "C" { int _hx_cuda_*(...); }` will fail to resolve. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Tiny device-side mirror table. Keyed by farr_id (same int handle the
  * runtime.c HexaFarrEntry table uses). Sparse: grows on demand. */
 typedef struct {
@@ -973,8 +981,11 @@ static int _ensure_dev_buf(int64_t id, int64_t len) {
 }
 
 /* D2H copy `len` doubles from device slot `id` to its host buf, then
- * mark MIRRORED/clean. Returns 0 ok / -1 err. */
-static int _d2h_out(int64_t id, int64_t len) {
+ * mark MIRRORED/clean. Returns 0 ok / -1 err.
+ * (Agent #25 Phase B elementwise variant with bounds checks; the Phase B
+ *  reduction code uses the simpler `_d2h_out` at line 403. Renamed here
+ *  to avoid redefinition.) */
+static int _d2h_out_elem(int64_t id, int64_t len) {
     if (id < 0 || id >= _hx_farr_count) return -1;
     if (id >= g_slot_cap)               return -1;
     HexaFarrEntry* e = &_hx_farr_table[id];
@@ -1215,7 +1226,6 @@ int _hx_cuda_farr_silu_gpu(int64_t x_id, int64_t n, int64_t out_id) {
 }
 
 int _hx_cuda_farr_silu_grad_gpu(int64_t x_id, int64_t n, int64_t out_id) {
-int _hx_cuda_farr_silu_grad_gpu(int64_t x_id, int64_t n, int64_t out_id) {
     if (x_id < 0 || out_id < 0) {
         fprintf(stderr, "[cuda] silu_grad: bad ids %lld %lld\n",
                 (long long)x_id, (long long)out_id);
@@ -1249,3 +1259,8 @@ int _hx_cuda_farr_silu_grad_gpu(int64_t x_id, int64_t n, int64_t out_id) {
     return 0;
 }
 
+#endif /* HEXA_CUDA — Agent #25 Phase B elementwise block (opened at line 944) */
+
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
