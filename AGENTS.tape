@@ -46,6 +46,10 @@
 @V := "tape" :: spec [active]
   version = "1.2"
 
+@X wilson_pool := "wilson pool — resource utilization" :: guide [active]
+  tldr = "Heavy / deterministic work (build · drill · probe · compile · test-sweep · GPU fire) → do NOT serialize on localhost; route to the host pool: `wilson pool list` then `wilson pool on <host> <cmd>`, or a ToolUse `\"host\"` field. Empty roster = degrade-to-local, fine."
+  detail = "~/core/atlas/POOL.tape"
+
 # ─── §0 PROJECT-WIDE NN STACK (2026-05-16) — 인지 우선 ────────────────
 # hexa-lang 의 NN 학습 스택은 두 컴포넌트로 구성. 어느 작업이 어느 쪽에
 # 속하는지 즉시 식별 가능하도록 최상단 고정.
