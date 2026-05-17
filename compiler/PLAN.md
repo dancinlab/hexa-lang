@@ -42,6 +42,21 @@
 
 (append-only)
 
+### 2026-05-17 — interp 가 oracle 로서 buggy 임을 실증 — aprime==hexa-build, interp outlier
+suspect-interp DIFF 2건 (`n6_uniqueness_smoke`, `sigma_phi_tau_uniqueness_smoke`) 을 3-way 비교 (aprime / interp / hexa-build).
+
+**결과** (둘 다 동일 패턴):
+- `n6_uniqueness`: aprime 36 lines == **hexa-build 36 lines** (byte-identical) · interp **16 lines** (truncated)
+- `sigma_phi_tau`: aprime 29 == **hexa-build 29** · interp 20 (truncated)
+- → **aprime_cc == hexa-build** (양 compiled path 일치), **interp 이 outlier** — 두 compiled path 모두에서 벗어남. interp 가 출력을 조기 절단하는 interp-side 버그.
+
+**함의**:
+1. aprime-vs-interp 메트릭이 aprime 실제 정확도를 **과소평가** — 13 DIFF 중 ≥2 는 aprime 버그가 아니라 interp 버그. 신뢰 oracle(hexa-build) 기준 aprime ≈ 41/60 (68%).
+2. **인터프리터 폐기 논거 실증**: interp 는 느릴 뿐 아니라 **틀린다** — 두 compiled path 와 불일치. g_interp_deprecated 의 "compiled 가 SSOT" 를 데이터로 확인.
+3. baseline 을 aprime-vs-interp → **aprime-vs-hexa-build (양 compiled)** 로 전환 권장 (이미 PLAN 권고; 이제 실증 근거 확보). 다음 full sweep 부터 적용.
+
+→ 잔여 DIFF 재분류: n6_uniqueness·sigma_phi_tau = **interp-bug (aprime 정답)**, gate ① 유효 커버리지에서 제외.
+
 ### 2026-05-17 — 60-smoke 재측정 (char-literal fix 반영) — 39/60 (65%)
 char-literal TAG_STR fix (`e0d9ba94`) + 세션 누적 fix 반영 aprime_cc 60-smoke vs interp.
 
