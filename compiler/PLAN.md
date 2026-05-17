@@ -608,3 +608,38 @@ frontend(bind/parser/lower) 다수 read-site 로 분산.**
 `__hexa_fn_arena_return` rewind 가로질러 parameter map 보존 → recurring class 전체 폐쇄.
 fallback = `module.items` snapshot + struct_lit lowering 의 localized forced-copy.
 #27 agent 가 root-fix 안전성(gate ① full sweep + self-host byte-identical) 우선 평가.
+
+---
+
+### 진행 로그 — #27 call-overflow stride FIXED (`d81e2195`) + #28 (Field-callee) 노출 (cycle h18)
+
+**#27 ROOT-CAUSED & LANDED on main `d81e2195`** (root-runtime 가설 evidence 로 기각):
+- `compiler/codegen/arm64_darwin.hexa::_arm64_lower_func` 가 per-function outgoing-call
+  stack-overflow 영역을 `((max_overflow * 8 + 15)/16)*16` 으로 sizing. `max_overflow` 는
+  overflow ARG 개수(n-4)이고 C7 call-site emit 은 각 overflow arg 를 `[sp,#(i-4)*16]`
+  (16-byte HexaVal-pair stride) 에 씀. `*8` 은 필요 바이트의 **정확히 절반** → `_arm_spill_
+  offset` 가 SSA/param slot 을 overflow span 의 절반만 shift → saved ingress param 이
+  outgoing stack-arg slot 과 aliasing. `_collect_item_types` 가 `module` 을 `[sp,#16]` 에
+  저장 → 이후 6-arg call 이 "stack arg 5"((5-4)*16=16)를 같은 `[sp,#16]` 에 덮어씀 →
+  caller 의 첫 param HexaVal tag MAP→STR → `map key items/children/span/text not found`
+  + 1032-wide spurious HX2001 (ap2 가 full compiler 컴파일 시). ap1(hexa_v2 C path)는
+  frame 정확 계산 → asm codegen self-host 까지 가려짐.
+- **runtime arena 가설 evidence 로 기각**: `module` map 은 heap-resident(`tbl_in_arena=0`,
+  never reclaimed); 손상은 transient 16-byte `module` param **SLOT** 의 frame aliasing.
+  `self/runtime.c` 무수정 (global-runtime regression risk 0).
+- Fix: `max_overflow * 8` → `* 16` (one-token logic change).
+- 검증 배터리: build_aprime smoke PASS (clean origin/main); gate-1 sweep **33/44
+  byte-identical** to baseline (zero flip — 5 MISMATCH + 6 APFAIL 분포 동일);
+  ap1 vs ap1f asm **43/44 byte-identical** (1 diff = corrected larger frame 544→576 +
+  shifted offset 뿐, instruction 무변경); 6-arg micro-repro oracle 85 / ap1-buggy 90 /
+  ap1f 85; ap2f 가 **`map key not found` 완전 제거** (#27 정의 증상 소멸).
+
+**#28 EXPOSED (likely 마지막 self-host fixpoint 블로커 — arena class 아님):**
+ap2f 가 full flattened compiler 컴파일 시 여전히 1032 HX2001, distinct root.
+`compiler/check/types.hexa:1546 _types_check_call` — self-hosted ap2f 가 **method-call
+(`Field` ExprKind) resolution miscompile**. 7-line repro (`fn main(){ let mut a=[];
+a.push(1); a.push(2)... }`): oracle 2 / ap1f 2 ✓ / ap2f → `.push` 에 2× spurious
+`HX2001 <callee>`. #27 와 독립 입증 (ap1f 정상; repro 에 >4-arg call·Module walk 無;
+stride fix 는 global 인데 residual 잔존). arena class 아님(map heap-resident). 다음
+cycle: `_types_check_call`/`_infer_expr` 의 `Field`-callee self-compile miscompile 을
+codegen_c2 oracle 대비 isolate (task #28).
