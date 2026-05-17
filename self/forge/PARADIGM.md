@@ -19,9 +19,23 @@
 | **A** Stage 1 — AOT whole-train-step | ✅ 2026-05-17 H100 SXM $0.40 | **PASS** (universal 1.2× 초과, 실측 2.24-6.07×) | A' regime-aware | [`state/.../A_ANALYSIS.md`](../../state/forge_phaseR_a_2026_05_17/A_ANALYSIS.md) |
 | **A** Stage 2 — large compute AOT | ✅ 2026-05-17 A100 SXM $0.30 | **PASS** (F-FORGE-A-STAGE2-LARGE: 1.10× 사전 등록 → **실측 1.86-4.06×**) | A' batch-size aware (small B 4-6× / large B 1.86×) | [`state/.../A_STAGE2_ANALYSIS.md`](../../state/forge_phaseR_a_stage2_2026_05_17/A_STAGE2_ANALYSIS.md) |
 | **C** Stage 2 Phase 1 — fused fwd+bwd | ✅ 2026-05-17 A100 SXM $0.30 | **PASS** (FUSED-CEILING + DET-PRESERVE 모두 PASS — traffic 0.6667 anchor, max\|Δ\| < 1e-16) | wall-time win 미증명 (single-block naive vs Tensor Core) — Phase 2 follow-up | [`state/.../C_STAGE2_ANALYSIS.md`](../../state/forge_phaseR_c_stage2_2026_05_17/C_STAGE2_ANALYSIS.md) |
-| **B** Stage 2 — DSM cluster fused FFN | 🟡 2026-05-17 fire BLOCKED | — | Hopper supply 시장 fully booked ≤$50/hr 0 offers. Kernel code (b_dsm_ffn_stage2.cu) + dispatch land — H100/H200 가용 시 fire | code: `self/cuda/experiments/b_dsm_ffn_stage2.cu` |
+| **B** Stage 2 Phase 1 (DSM smoke) | ✅ 2026-05-17 H200 SXM $0.12 | API smoke PASS | cluster.sync + map_shared_rank 검증 | [`state/.../B_STAGE2_PHASE1_ANALYSIS.md`](../../state/forge_phaseR_b_stage2_2026_05_17/B_STAGE2_PHASE1_ANALYSIS.md) |
+| **B** Stage 2 Phase 2 (real DSM-fused FFN) | ✅ 2026-05-17 H200 SXM $0.10 (Y→dY fix) | **biteq PASS, wall 200-300× SLOWER FAIL** | FP64 hand-kernel ceiling (cuBLAS TC 추월 불가능) — RFC 049 precision pivot | [`state/.../B_DSM_V2_ANALYSIS.md`](../../state/forge_phaseR_b_dsm_v2_2026_05_17/B_DSM_V2_ANALYSIS.md) |
+| **C** Stage 2 Phase 3 (production tiling 4 iter) | ✅ 2026-05-17 A100 SXM $0.32 | **traffic+det PASS, wall 1.80× SLOWER (best v3c WMMA)** | hand-WMMA 41-43% TC peak vs cuBLAS 77-87% — CUTLASS effort weeks 단위 | [`state/.../C_V3_ANALYSIS.md`](../../state/forge_phaseR_c_v3_2026_05_17/C_V3_ANALYSIS.md) |
+| **A** Stage 2 Phase 2 (Llama transformer) | ✅ 2026-05-17 A100 SXM4 $0.09 | small 1.81× / medium 1.05× FAIL marginal / **large 1.18×** vs PyT eager | F-FORGE-A-STAGE2-TRANSFORMER PASS large anchor | [`state/.../A_TRANSFORMER_ANALYSIS.md`](../../state/forge_phaseR_a_transformer_2026_05_17/A_TRANSFORMER_ANALYSIS.md) |
+| **A** vs torch.compile baseline | ✅ 2026-05-17 A100 SXM4 $0.09 | MLP **AOT 4-13× WIN** universal · transformer small.red **0.71× LOSS** · medium 0.95× LOSS · large 1.14× WIN | dispatch elimination NOT unique (CUDA graphs equivalent); Inductor wins transformer medium | [`state/.../A_TORCHCOMPILE_ANALYSIS.md`](../../state/forge_phaseR_a_torchcompile_2026_05_17/A_TORCHCOMPILE_ANALYSIS.md) |
+| **RFC 050** flame↔forge integration | ✅ 2026-05-17 DESIGN $0 | 7 falsifier 사전등록, 353 lines | flame Phase 4-C lowering ↔ forge tier dispatch API | [`rfc_050_flame_forge_integration.md`](../../inbox/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md) |
+| **RFC 049 Phase R'** BF16 substrate (THE wall path validation) | ✅ 2026-05-17 A100 PCIE $0.10 | **4/4 falsifiers PASS** — BF16-TC-PERF **9.67×** FP64 cuBLAS (LARGE), LAYERCAST det+mem+diverge 모두 PASS | **RFC 049 precision pivot 실측 검증** — B/C Phase 2/3 FP64 wall FAIL 의 진정 wall path | [`state/.../R049_BF16_ANALYSIS.md`](../../state/forge_phaseR_r049_bf16_2026_05_17/R049_BF16_ANALYSIS.md) |
 
-Total cost: **$1.95** (D 0.40 + B Stage 1 0.25 + C Stage 1 0.30 + A Stage 1 0.40 + A Stage 2 0.30 + C Stage 2 0.30).
+Total cost: **$2.91** (Stage 1 $1.35 + Stage 2 $1.16 + sub-agent expansion $0.40 — 14 fires + 9 sub-agents).
+
+**Phase R+ 종결 META-FINDING**: 
+
+> **forge wall path = RFC 049 BF16 precision pivot (실측 검증).**
+> - FP64 hand-kernels (B Phase 2: 200-300× SLOWER, C Phase 3 best: 1.80× SLOWER) wall FAIL universally — FP64 substrate 자체의 ceiling
+> - BF16 substrate (RFC 049 Stage 1): **9.67× FP64 cuBLAS at Llama-7B FFN** + within-run det 보존 + 0.25× mem + LayerCast 1.51% diverge ≤ 5% target
+> - dispatch elimination (Paradigm A) = NOT unique vs torch.compile.reduce-overhead (CUDA graphs equivalent at small transformer)
+> - 진정한 forge distinctive = (a) BF16 TC substrate quality (Inductor vs cuBLAS-direct, MLP 4-13× win) + (b) custom kernels per regime (case-by-case win) + (c) within-run det FREE (D' anchor)
 
 ## 2. Paradigm D — deterministic substrate
 
