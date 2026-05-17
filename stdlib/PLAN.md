@@ -95,6 +95,26 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   하위 트랙: **T3a** `_python_bridge/module` 55 · **T3b** `selftest`
   30 게이트 · **T3c** `_absorption_bridge` 19. run_all.sh union 선(先)
   재배선 → 게이트별 점진·바이트-패리티(T2 패턴 재사용).
+
+  ⚠️ **정제 발견 (2026-05-18, 착수 직후 — g3 측정된 거리)**:
+  "stdlib-only"(third-party 사이언스 pkg 無) ≠ "hexa 즉시 이관 가능".
+  hexa-bio 게이트는 hexa-matter(텍스트/grep 기반)와 달리 **JSON·공유-
+  라이브러리 의존이 지배적**: `json.load/dumps`(registry.jsonl·schema·
+  witness), 공유 `json_schema_validator.validate`(draft-07 subset),
+  `hashlib.sha256`(witness 해시), subprocess 시뮬레이터 오케스트레이션.
+  hexa 에 native `json` 부재 → **hexa-lang `stdlib/json`(parse +
+  sort_keys canonical dump)이 T3-json 게이트의 선결조건**(T4 stdlib
+  빌드와 교집합). 따라서 T3 재-삼분:
+  - **T3-text** (지금 이관 가능; exec/grep/stat 기반): `r1_symlink_
+    audit` ✅ — 이런 부류만 무손선 즉시 이관.
+  - **T3-json** (선결: `stdlib/json` + 공유-lib 포팅): C5 conformance·
+    json_schema_validator·regression_audit(sha256+subprocess)·witness
+    계열 — `stdlib/json` 착수 후 진행.
+  - **T3-sim** (`_python_bridge/module` 55 생물물리 시뮬): 대부분 순수
+    수치이나 일부 JSON I/O — text 부분 우선, JSON I/O 는 T3-json 의존.
+  결론: T3 의 진짜 즉시-이관 부분집합은 raw "104" 보다 작다. 정직한
+  경로 = `stdlib/json` 을 먼저 세우고(이는 T4 자산이기도) T3-json 해금.
+  진행: `cc994c9`(hexa-bio) union+r1 바이트-패리티 — **T3 1/104 검증**.
 - **T4** 🔒 Stage 2 — `atoms`/`crystal`/`mol`/`mlff`/`quantum` 실구현
   (각 `mod.hexa` planned API 채움) → science-stack 의존 모듈/어댑터 해금
 - **T5** 🔒 Stage 2 잔여 — `nd`/`grad` 정밀화, `_absorption_bridge` 16,
@@ -134,3 +154,16 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   + 15 Stage-2(_qiskit_bridge 전량). 스코어보드 35/35, verify층 부재.
   매니페스트 §3 T3 에 기록. 다음: run_all.sh union 선재배선 → T3a/b/c
   게이트별 바이트-패리티 이관.
+- 2026-05-18 `cc994c9` (hexa-bio) — T3 착수: `selftest/run_all.sh`
+  hexa-first union 재배선(hexa-matter T2 패턴) + `r1_symlink_audit`
+  .sh→.hexa **바이트-패리티**(stdout `checked=4 fail=0 warn=0` +
+  exit 0/1/2 동일). `_hexa_bridge/{module,selftest}/` 신설. 무관한
+  `case_studies/.../LANDSCAPE.md`(타인 변경) 미혼입.
+- 2026-05-18 — **T3 정제 (g3 측정된 거리)**: 착수 직후 hexa-bio T3
+  코퍼스가 JSON·공유-lib·sha256·subprocess 지배적임을 발견(§3 T3
+  ⚠️ 블록). "stdlib-only 104" ≠ "즉시 이관 104". `regression_audit`
+  (sha256-canonical-JSON + 4-subprocess) **연기**(union 으로 .py 유지
+  → 무회귀). T3 재-삼분: T3-text(즉시·r1✅) / T3-json(선결
+  `stdlib/json`) / T3-sim. 정직한 다음 수: hexa-lang **`stdlib/json`
+  (parse + sort_keys canonical dump)** 신설 — T3-json 해금 + T4 자산.
+  **측정된 거리: T3 1/104 검증 · 즉시-이관 부분집합은 104 미만.**
