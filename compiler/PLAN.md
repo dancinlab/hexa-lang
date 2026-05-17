@@ -24,7 +24,7 @@
 
 **interp-retirement R3-R6 substantially LANDED** (PLAN-interp-retirement.md 가 1차 SSOT, 본 파일이 신규 cycle log SSOT).
 
-- aprime_cc-direct path: 60-broad sweep **34/60 (57%)** byte-identical (재측정 2026-05-17, atlas SIGSEGV + CGFAIL fix 반영)
+- aprime_cc-direct path: 60-broad sweep **39/60 (65%)** byte-identical (재측정 2026-05-17, char-literal fix 반영; 세션 trajectory 45→50→57→65%)
 - hexa-build path (tier-2, hexa_v2 → C → clang): **38/60 (63%)** baseline → 활성화 후 ~53-54/60 예상 (재측정 펜딩)
 - 3-tier wrapper: `bin/hexa-run-native` 가 tier 1 aprime_cc / tier 2 hexa build / tier 3 interp (HEXA_APRIME_CC opt-in)
 - 부트스트랩 hexa_v2 binary: **1,487,744 B** (H17 + fn-dedup + empty-{} + Field-rooted nested-index lvalue 활성화 완료)
@@ -41,6 +41,16 @@
 ## 진행 로그
 
 (append-only)
+
+### 2026-05-17 — 60-smoke 재측정 (char-literal fix 반영) — 39/60 (65%)
+char-literal TAG_STR fix (`e0d9ba94`) + 세션 누적 fix 반영 aprime_cc 60-smoke vs interp.
+
+**결과**: N=60 · **MATCH=39 (65%)** · DIFF=13 · CGFAIL=7 · LINKFAIL=1. 직전 34/60 → **+5** (char fix 가 char-비교 쓰는 테스트 다수 unblock). 세션 trajectory: 27/60(45%) → 30 → 34 → **39/60(65%)**.
+
+**잔여 DIFF 13**: atlas verifier ×5 (cycle_append·doctrine·hxc_roundtrip·tecsl_verify·wave3, aprc=1 semantic) · t_macro_depth ×3 (struct-param 변이 시맨틱, RFC-sized) · suspect-interp ×2 (n6_uniqueness·sigma_phi_tau — interp 측 오류 의심) · misc ×3 (t_range_precedence·t_select_dispatch_parse·t34_net_listen).
+**CGFAIL 7**: atlas_verify·regression·t_multiarch_cpu·t_parser_select_attr·t35/36/37_hxqwen — frontend feature 갭 (extern fn·@select·type-inference 등).
+
+**R7 게이트 ①**: 65% — char fix 로 +8%p. 잔여는 atlas verifier semantic + frontend feature (RFC-sized) + struct-param 시맨틱. multi-cycle 이나 추세 양호.
 
 ### 2026-05-17 — char-literal TAG_STR fix (`e0d9ba94`) + self-host 잔여버그 정밀 진단
 **char-literal fix (LANDED `e0d9ba94`)**: `compiler/lower/hir_to_mir.hexa` 가 `literal_char` → `_const_int_op(0)` — 모든 char 리터럴('.','a','\n'…)이 정수 0. `cs[i] != '.'` (cs = `s.chars()` = single-char TAG_STR) 가 TAG_STR vs int 0 비교 → 항상 unequal. `_ends_with_hexa()` 가 늘 false → 2nd-gen self-host 의 `_normalize_argv` 가 `_drv.hexa` 마커 인식 실패. 수정: `literal_char` → `_const_str_op(e.text)` (hexa_v2 codegen_c2:3247 "char literals must be TAG_STR" 미러). 검증: smoke PASS · char-비교 프로그램 interp 와 byte-identical · 2nd-gen `_normalize_argv` 정상 (`_drv.hexa ew=T`, out.len=4 == 1st-gen).
