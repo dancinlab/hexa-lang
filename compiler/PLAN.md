@@ -643,3 +643,55 @@ a.push(1); a.push(2)... }`): oracle 2 / ap1f 2 ✓ / ap2f → `.push` 에 2× sp
 stride fix 는 global 인데 residual 잔존). arena class 아님(map heap-resident). 다음
 cycle: `_types_check_call`/`_infer_expr` 의 `Field`-callee self-compile miscompile 을
 codegen_c2 oracle 대비 isolate (task #28).
+
+---
+
+### 진행 로그 — #28 enum value `==` self-host miscompile FIXED + #29 (codegen non-determinism) 노출 (cycle h19)
+
+**#28 ROOT-CAUSED & LANDED** (`self/runtime.c` `hexa_eq` TAG_MAP):
+- 가설 (`_types_check_call` 의 `Field`-callee 경로 self-compile miscompile) 은
+  표면 증상. 실제 ROOT 는 **enum value `==` 비교**. native(aprime_cc) lowering 은
+  enum variant 를 map `{__tag: hash, __pN: payload}` 으로 표현
+  (`compiler/lower/hir_to_mir.hexa` enum_path → struct_lit). `hexa_eq` 의 TAG_MAP
+  case 는 map 을 **table-pointer identity** 로 비교 → 같은 variant 의 두 별개 map 이
+  항상 not-equal → enum `==` 가 사실상 항상 false.
+- #28 증상 연결: aprime_cc-compiled `_types_check_call`
+  (`compiler/check/types.hexa:1546`) 가 `callee.kind == ExprKind::Field` 테스트.
+  native 빌드에서 이건 enum-map `==` → 항상 false → method-call (`.push`) callee 가
+  builtin-method dispatch 로 인식 안 됨 → ap2 가 full flattened compiler 컴파일 시
+  1032× spurious `HX2001 undefined name <callee>`. hexa_v2 C 경로(codegen_c2)는
+  enum 을 plain `hexa_int(index)` 로 lowering → enum `==` 가 int compare → 항상 정상.
+  divergence 는 **native-only**.
+- Fix: `hexa_eq` TAG_MAP — 두 map 이 모두 `__tag` 키를 보유하면(struct 는 `__type__`
+  사용, disjoint → 명확히 enum value) 구조적 비교: `__tag` int 비교 후 각 `__pN`
+  payload 재귀 비교. plain map / struct / dict 는 pointer-identity 유지(무변경).
+  match-arm 의 기존 `__tag` discriminant 테스트와 대칭.
+- 검증 배터리: build_aprime smoke `exit(42)` PASS; 7-line `.push` repro — ap2f
+  prints `2`, zero HX2001 (이전 2× spurious); enum-`==` micro-repro (eq2/enumeq)
+  oracle parity 회복; ap1 vs ap1f asm **non-enum program byte-identical**
+  (runtime-only fix, codegen 무변경); gate-1 sweep **33/44 MATCH** (5 mismatch +
+  6 apfail + 1 orafail — baseline 분포 동일, **zero regression**).
+- **SELF-HOST FIXPOINT 의 enum-`==` 축 REACHED**: ap1f → flat → ap2f 가 full
+  flattened compiler 를 ZERO HX2001 + ZERO map-key error 로 컴파일;
+  `ap1f.s == ap2f.s` **byte-identical** (MD5 2a673ca2…) — native codegen self-host
+  stable. #28 정의 증상(1032 HX2001) 완전 소멸.
+
+**#29 EXPOSED (잔여 self-host 블로커 — #28 과 distinct):**
+ap2f (native-asm-compiled compiler) 는 **non-deterministic** — 동일 입력
+(`fx_flat.hexa`) 재실행 시 다른 asm 산출 (run1 MD5 2a673ca2… ↔ run2 e5f8d158…).
+ap1f (hexa_v2 C 경로 빌드) 는 3-run **완전 deterministic**. 즉 비결정성은 컴파일러가
+**native-asm-compiled** 일 때만(ap2 tier) 발생, C-compiled(ap1 tier) 시 없음.
+- 증상: `const_int` operand lowering 의 `movz/movk` immediate 값이 run 마다 변동
+  (enum `__tag` `_path_hash` 자리 — run1 32-bit 값, run2 high-bit 세팅된 64-bit
+  garbage + `mvn` negate). `compiler/codegen/arm64_darwin.hexa::_arm64_op_rm` 의
+  `o.int_val` 읽기가 stale memory 반환.
+- 분류: #26/#27 의 **fn-arena / struct-array field-read aliasing** recurring class
+  로 추정 — `Operand` struct 의 `int_val` 필드가 arena-allocated 후 rewind 가로질러
+  garbage. #28(runtime `hexa_eq`) 와 무관 — #28 fix 는 runtime-only, codegen 무변경.
+- #28 fix 가 #29 를 유발하지 않음 입증: pre-fix ap2 는 HX2001 abort 로 codegen 도달
+  못 함(determinism 측정 불가); #28 fix 는 `hexa_eq` TAG_MAP case 만 touch — garbage
+  const-int read 와 인과 無. 비결정성 site(`const_int` operand lowering) 는 fix 가
+  건드리지 않는 codegen 경로.
+- 다음 cycle: `Operand.int_val` arena-lifetime — `_const_int_op` 가 만든 Operand 가
+  `[Operand]` args 배열에 담겨 codegen 까지 살아남는지. fn-arena return rewind 가
+  Operand struct payload 보존하는지 (#27 의 `module.items` snapshot 패턴 후보).
