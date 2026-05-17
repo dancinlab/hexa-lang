@@ -996,3 +996,35 @@ conversion 의 byte-eq 목표에 oRin 포함. 양 RMSNorm(step1 G1 / step7
 G2) 동일 helper 경유 → 단일 fix 가 둘 다 커버. caveat: eps fix 후
 forge libm sqrt vs _cpu flame_g7_dt_sqrt 잔차 ~1e-15 ≪ TOL_BLOCK
 1e-8 (24-iter Newton ≈ exact) — 허용.
+
+### 2026-05-18 — Phase 4-D-9 §3 fwd chain conversion + eps fix 통합
+
+**fwd dev_view chain conversion sub-agent** (commit `0aa1d2d5` →
+cherry-pick `ffe28594`): `flame_block_generic_fwd_primitive_gpu`
+attention(step4) 의 host per-row causal-prefix softmax loop 을
+GPU-검증된 gap#1 causal-softmax kernel 로 교체 (extern "C" 계약 +
+file-local wrapper, host fallback). kernel [T·T] 출력이 j≥i+1 을
+0-fill → Bc[oP] bwd-cache + P·V cuBLAS 입력 둘 다 byte-id → 중복
+host masked-P rebuild loop + T·T farr alloc 제거. `_cpu` md5
+`ed65d091...` 양측 동일 (byte-identical 입증, d=32 hard gate 안전).
+잔여 residency: 대부분 op 여전히 Bc bwd-cache D2H (SSOT §3 가 명시한
+fwd-only 잔여 — wall 은 bwd chain 과 함께만 이동). g3: byte-eq-correct
+device-chained fwd, 측정된 wall win 아님.
+
+**eps=0 RMSNorm fix (parent, block oracle 1st catch 의 처방)**:
+`flame_phase4d7_block_fwd_primitive.c:518` `hexa_int(0)` →
+`hexa_float(eps)` (eps=1e-6 로컬, L506). shim 이
+`__hx_to_double(eps_v)` 추출 → int 0 은 1e-6 못 운반. **잠복
+instrument 결함 동시 노출+수정**: block oracle harness 가 `TAG_INT=1`
+(비표준; runtime.c 는 TAG_INT=0/TAG_FLOAT=1) · `hexa_int`-only →
+float HexaVal 표현 불가. 각 컨텍스트 `hexa_float ↔ 자기 shim`
+자기일관성만 필요(tag값 공유 불필요) → harness 에 self-consistent
+`hexa_float`(TAG_FLOAT=2≠TAG_INT) shim **additive** 추가. 기존
+rmsnorm shim `(tag==TAG_INT)?.i:.f` 가 이미 올바르게 처리.
+
+**$0 게이트 (parent 재검증, verbatim)**: block-fwd no-CUDA
+`max|Δ|=0.000e+00 PASS F-PHASE4D9-BLOCK-FWD-ORACLE` (hexa_float
+컴파일 + _cpu byte-eq) · --cuda `SYNTACTIC-PASS` · d7 `PASS` · d9
+csoftmax `PASS` (회귀 0). 다음 = GPU block-oracle 결정 검증 (변환 +
+eps fix 합본; oRin 1.704e-01 FAIL → PASS 여부 = fwd chain link +
+15-fire RMSNorm 근본원인 fix 동시 판정).

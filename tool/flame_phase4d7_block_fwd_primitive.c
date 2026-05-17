@@ -514,8 +514,17 @@ static void flame_g7_rmsnorm_resident(
     }
     hexa_farr_to_device(slab_v);
     // gain-free normalized rows x̂  (forge rmsnorm_rows kernel)
+    // BYTE-EQ FIX (block oracle 1st real catch, 2026-05-18): the 4th arg
+    // is eps. It was hexa_int(0) → the forge kernel computed
+    // x̂ = x/√(mean(x²)+0), but the _cpu reference AND this fn's own r_inv
+    // recompute (below) use flame_g7_dt_sqrt(ms + eps) with eps=1e-6. The
+    // block-fwd GPU oracle localised the divergence to oRin (max|Δ|=1.704e-1
+    // — eps=0 blows up on rows with mean(x²)≈0, a strong root-cause
+    // candidate for the 15-fire d768 -nan/gn2-drift). Pass the real eps as
+    // a TAG_FLOAT HexaVal (the shim does __hx_to_double(eps_v); an int 0
+    // can never carry 1e-6) so x̂ matches the reference and r_inv.
     HexaVal xn_v = hexa_farr_rmsnorm_rows_gpu(
-        hexa_int(slab_id), hexa_int(T), hexa_int(d), hexa_int(0));
+        hexa_int(slab_id), hexa_int(T), hexa_int(d), hexa_float(eps));
     int xn_id = (int)xn_v.i;
     if (xn_id < 0) {  // forge dispatch failed — fall back to CPU normalize
         double* slab = _hx_farr_table[slab_id].buf;

@@ -118,8 +118,19 @@
 // int loc,pinned,dirty_host,dirty_dev).
 typedef struct { int tag; union { int64_t i; double f; void* p; }; } HexaVal;
 #define TAG_INT 1
+#define TAG_FLOAT 2   /* any value ≠ TAG_INT — the rmsnorm shim branches
+                         (eps_v.tag==TAG_INT)?.i:.f, so a non-INT tag is
+                         read as the .f double. Self-consistent WITHIN this
+                         harness (its hexa_float ↔ its shim); it need NOT
+                         match runtime.c's tag enum — the real trainer build
+                         resolves hexa_float to runtime.c's own, paired with
+                         runtime.c's __hx_to_double. The block-fwd GPU
+                         oracle's 1st real catch (RMSNorm eps=0) requires a
+                         float HexaVal the spliced primitive can pass; the
+                         hexa_int-only harness had no faithful float path. */
 #define HX_INT(v) ((v).i)
 static inline HexaVal hexa_int(int64_t n) { HexaVal v; v.tag = TAG_INT; v.i = n; return v; }
+static inline HexaVal hexa_float(double f) { HexaVal v; v.tag = TAG_FLOAT; v.f = f; return v; }
 
 typedef struct {
     double*  buf;
