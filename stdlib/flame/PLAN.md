@@ -756,3 +756,54 @@ host transpose = fire #12 동일 구조).
 확보. 다음 본체 = element-loop (~106 raw Bc access: RMSNorm/RoPE/
 attention/SwiGLU) GPU kernel 화 — 단 이번엔 oracle 보호 하에. fire
 #9~#15 d768 step 완주 0 = residency all-or-nothing, 본체 미착수.
+
+### 2026-05-18 — substrate API 판정 + cheap oracle GPU dispatch wired
+
+**근본 원인 정밀화 (fwd primitive 전수 read)**: `flame_phase4d7_
+block_fwd_primitive.c::flame_block_generic_fwd_primitive_gpu` 의 모든
+GPU sub-op 패턴 = `Bc[host] → scratch[host] → H2D → device compute →
+D2H → scratch[host] → Bc[host]`. RMSNorm·RoPE·attention·SwiGLU·
+residual 매 op 이 Bc 를 host 왕복. "persistent device residency" 는
+이름뿐 (per-op scratch). matmul primitive (`flame_proj_batch_generic_
+primitive`) 도 동일 (host transpose-scatter). = wall bound 의 정체.
+
+**substrate byte-safe 레버 판정 (`self/cuda/runtime_cuda.c` 전수)**:
+- `_ensure_dev_alloc_out` (L560-564): non-owning **view 는 kernel
+  output 불가** — 명시적 reject. → forge row/elementwise op
+  (rmsnorm_rows/softmax_rows/silu/mul/add) 가 Bc dev_view 에 직접
+  write 불가. matmul 도 C 의 own device buffer 를 realloc (L433) →
+  C 가 view 면 base 손상. **Bc 를 "ops 가 write 하는 device
+  accumulator" 로 만드는 설계는 substrate 상 불가** (substrate 변경
+  금지).
+- 유일한 byte-safe device-residency 레버 = `FORGE_OUT_DEVICE_KEEP`
+  disposition + **`dev_view` 브리지**. `_d2h_out` 가 DEVICE_KEEP 에서
+  `dirty_host=1` 설정 → 다음 op 의 §6.1 H2D-skip (`!dirty_host` 요구,
+  L190) 무력화 → raw by-id 체인은 STALE host 재업로드 (오답). 그러나
+  `_h2d` 의 view 경로 (L173 `if (s->view_base>=0 && s->d_buf)`) 는
+  dirty_host 무시하고 **무조건 H2D-skip** → op A 출력을 DEVICE_KEEP
+  로 device 잔류 → op A 출력의 `dev_view` 를 op B 입력으로 → op B 가
+  op A device bytes 직독 (정답). SwiGLU silu→mul 체인이 이미 이 패턴.
+
+**∴ 100% closure 본체의 정확한 형태** = Bc-accumulator 가 아니라
+**op-output dev_view 체인 dataflow rewrite**: fwd 전체를
+rmsnorm→(γ)→proj→rope→attn→proj→add→rmsnorm→proj→silu→mul→proj→add
+를 device 잔류 farr-id 체인으로, dev_view 브리지, DEVICE_KEEP 하에서.
+host materialize 는 (a) backward 가 읽는 Bc cache field 이고 (b)
+backward 도 device-chain 이 아닐 때만. backward 가 거의 모든 cache
+field (rm1xn/rm1inv/Q/K/V/P/ctx/sw_a/sw_b/sw_s/hstate/rm2xn/r2inv)
+를 읽으므로 — **fwd-only 전환은 cache field D2H 가 남아 wall 미동
+(prompt 의 all-or-nothing 을 substrate 수준에서 재확인)**. 본체 =
+device-chain fwd + device-chain bwd (cache field 를 fwd 에서 device
+잔류 → bwd 가 dev_view 소비). + attention causal-masked softmax
+byte-eq-verified kernel 부재 (기존 gap). = 캠페인 잔여 전체, multi-
+session·worktree-isolated sub-agent 작업. g3: 단일 세션 closure
+불가 — over-claim 금지.
+
+**cheap oracle GPU dispatch wired** (`tool/dispatch_phase4d7_oracle_
+cuda.sh`, commit pushed): oracle `--cuda` 의 GPU numeric run 이 캠페인
+유일 미실행 단계였음 (no-CUDA PASS + syntactic PASS 만). d768 fire
+watchdog 포크 (A100-only·SAVE_POD·scp retry·trap) 하되 단일-TU oracle
+4 파일만 업로드 (runtime.c·native·corpus 불필요). d768 fire 의
+gn2(통합 수치, regression localize 불가, #13/#14 가 2 fire 낭비) 대신
+**localized max|Δ| verdict** 반환 = 후속 모든 GPU-path 변경의 cheap
+gate. dispatch in-flight (instance 36957048, A100_PCIE).
