@@ -654,3 +654,23 @@ actual F-RFC046 wall measurement.
 분석: `state/flame_phase4d7_gpu_fire_2026_05_17/PHASE4D7_FIRE10_ANALYSIS.md`
 (fire #5→#10 + Phase 4-D-9 통합, 측정 수치 무손실 — 원본 FIRE{8,9,10}
 분석은 공유 메인 동시세션 reset 으로 소실, 본 격리본이 복원 SSOT).
+
+**fire #11 (Phase 4-D-9 `b1f32d21`, 격리 워크트리, H100-SXM)**:
+`wall=600` step 1 미완, GPU resident 727→**885 MiB** monotone
+(SwiGLU dev-view 2개 제거 = byte-safe partial gain 측정됨). **결정적
+교차검증**: A100 대비 ~6× 빠른 H100 에서도 wall 불변 → bottleneck 은
+GPU compute 아닌 **host-authoritative Bc constraint** (Phase 4-D-9
+정밀 진단을 독립 측정으로 확정). RFC 056-{RESIDENT-MEM,STEP,WALL}
+FAIL · BYTEEQ-PRESERVE 12-kernel oracle 여전히 dispatch 미포함(pending).
+비용: H100 $5.61/hr ≈ $1.22 (A100 6×) — dispatch A100 선호 필터
+follow-up 필요. campaign ~$9.8/11 fires.
+분석: `state/flame_phase4d7_gpu_fire_2026_05_17/PHASE4D7_FIRE11_ANALYSIS.md`.
+
+**다음 = RFC 057 (Bc device-authoritative matmul primitive
+restructure)** — fire #11 H100 교차검증이 measurement-anchor
+(design-first 아님). 공유 cuBLAS matmul primitive
+(`flame_phase4d6_matmul_primitives.c`, d=32 path 겸용)이 Bc 를
+host-side 로 씀 → device-authoritative 로 restructure 해야 RMSNorm/
+RoPE/attention slab 이 resident Bc 를 dev-view 소비 가능. 불변식:
+Phase 4-D-5-3 11/11 byte-eq oracle + F-RFC056-D32-BYTEEQ 절대 보존
+(matmul primitive 가 d=32 path 겸용 = 핵심 제약).
