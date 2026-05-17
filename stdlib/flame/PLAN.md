@@ -934,3 +934,32 @@ numeric 은 GPU 필요 → parent (cheap fire).
 (d7 dispatch fork — d9 는 splice 불필요 → 3 파일만:
 oracle.{c,sh}+runtime_cuda.c). RFC 058 교훈(unverified kernel 활성이
 2 paid fire 낭비) → building block 도 wiring 前 GPU 검증.
+
+### 2026-05-18 — ⭐ gap#1 causal-softmax kernel GPU byte-eq PASS
+
+**GPU oracle (instance 36958755, A100_PCIE, oracle_rc=0, wall 4s)**:
+✅ **PASS** `config R=48 T=48 · build -DHEXA_CUDA (real forge kernel) ·
+max|Δ| = 2.776e-17 (TOL 1e-12) · PASS F-PHASE4D9-CAUSAL-SOFTMAX`.
+causal-zero 구조 정확 (Y[0,1..]=0.0 L=1, Y[r1]=0.4963/0.5037 L=2),
+dt_exp byte-identical 확인. 2.776e-17 = 사실상 bit-exact.
+
+**∴ 본체 2개 novel substrate gap 모두 GPU byte-eq 검증 완료**:
+| block | GPU max\|Δ\| | 역할 |
+|---|---|---|
+| link #1 transpose-scatter (gap#2) | 3.553e-15 | matmul→device-Bc-slice |
+| gap #1 causal-softmax kernel | 2.776e-17 | attention causal softmax host-loop 제거 |
+Tier: WIN (PHASE4D9 §4 #1·#2 둘 다 GPU 확정).
+
+### 2026-05-18 — 다음 필수 instrument: block-level fwd oracle
+
+**실험 주도 인식**: d7 oracle 은 `flame_proj_batch_generic_primitive`
+**하나만** 검증 (RFC 058 = projection scope). 본체 dev_view chain 은
+`flame_block_generic_fwd_primitive` **블록 전체**(RMSNorm/RoPE/
+attention/SwiGLU/residual) 를 변경 → block-level cheap byte-eq oracle
+부재 시 fwd-chain 변경은 d768 fire(=non-localizing·낭비 trap)로만
+검증 가능. link #1 이 d7 projection oracle 보호 하에 안전했던 것과
+동형 — fwd-chain 도 **block-level oracle 가 선결 instrument**.
+다음 = block-level fwd oracle (d7 패턴 재사용, GPU-gated mid-size
+config vs CPU reference) sub-agent → 그 후 fwd dev_view chain
+conversion. (design-first 회피: instrument 먼저, 그 보호 하 변경 —
+캠페인 검증된 방법론.)
