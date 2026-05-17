@@ -1364,6 +1364,46 @@ __global__ void _hx_cuda_kern_rope_bwd(const double* __restrict__ DX,
     }
 }
 
+/* ── Transpose-scatter kernel (RFC 058 §5.1, 13th forge kernel) ──────
+ *
+ * Pure index permutation: src (rows×cols, row-major) → dst transposed
+ * (cols×rows, row-major) at byte-offset dst_off:
+ *
+ *   dst[dst_off + c*rows + r] = src[r*cols + c]
+ *
+ * ZERO floating-point operations — a `double` is copied bit-for-bit
+ * from one slot to another, no add / mul / fma / rounding. The output
+ * is a reindexing of the input bits, so byte-equality vs the CPU host
+ * transpose loop `Y[Y_off + t*d_out + r] = C[r*T + t]` is mathematically
+ * trivial (no accumulation order, no fp ULP — F-RFC058-KERNEL-BYTEEQ
+ * |Δ|=0 by construction; the d768 GPU fire confirms it empirically).
+ *
+ * The flat thread index e ∈ [0, rows*cols) decomposes as r = e/cols,
+ * c = e%cols — the SAME (r,c) the CPU loop visits (CPU iterates r outer,
+ * c inner over the *transposed* read C[r*T+t]; here src has rows=d_out,
+ * cols=T so r∈[0,d_out), c∈[0,T) and dst[dst_off+c*rows+r] is exactly
+ * Y[Y_off + t*d_out + r] with t=c). No cross-element dependency, so a
+ * thread-per-element grid-stride kernel is order-independent and exact.
+ *
+ * dst is NOT a fresh buffer — it is Bc, populated slab-by-slab across
+ * projections. Only the [dst_off, dst_off+rows*cols) range is written;
+ * the host wrapper H2D-uploads dst's current contents first so untouched
+ * regions are preserved. The 12 verified kernels above are UNTOUCHED —
+ * this is purely additive (RFC 058 §1, g_forge_verify_oracle 12→13). */
+__global__ void _hx_cuda_kern_transpose_scatter(const double* __restrict__ src,
+                                                double* __restrict__ dst,
+                                                int64_t rows, int64_t cols,
+                                                int64_t dst_off) {
+    int64_t total  = rows * cols;
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < total; i += stride) {
+        int64_t r = i / cols;
+        int64_t c = i % cols;
+        dst[dst_off + c * rows + r] = src[r * cols + c];
+    }
+}
+
 /* ── Host wrappers (extern surface — match runtime.c forward-decls) ──
  * Each: validate → H2D inputs → ensure output device buf sized → launch
  * → cudaGetLastError → D2H output → mark MIRRORED/clean. Returns 0 ok /
@@ -1635,6 +1675,91 @@ int _hx_cuda_farr_rope_bwd_gpu(int64_t t_id, int64_t cos_id, int64_t sin_id,
                                int64_t out_id) {
     return _hx_cuda_rope_common(t_id, cos_id, sin_id, T, nheads, hd,
                                 out_id, 1);
+}
+
+/* ── Transpose-scatter host wrapper (RFC 058 §5.2) ──────────────────
+ *
+ * Fills a slab of dst with the transpose of src on-device:
+ *   dst[dst_off + c*rows + r] = src[r*cols + c]   (rows×cols → cols×rows)
+ *
+ * src is the cuBLAS projection output C — left FARR_DEVICE/dirty_dev by
+ * RFC 057 §6.1, so _h2d(src_id) SKIPs the redundant H2D (H2D-skip
+ * predicate, line ~190). dst is Bc — populated slab-by-slab. The kernel
+ * writes ONLY the [dst_off, dst_off+rows*cols) range, so dst's current
+ * device contents must be correct outside that range; _h2d(dst_id)
+ * uploads dst's host bytes first (and SKIPs once dst is already
+ * device-authoritative — exactly the residency win RFC 058 unlocks).
+ *
+ * On return dst is marked loc=FARR_DEVICE, dirty_dev=1 (RFC 056 §6.1
+ * state machine): Bc is now device-authoritative, so downstream slabs
+ * can hexa_farr_dev_view it byte-safely (RFC 057 §6.2 unblocked). The
+ * host buffer is left stale (dirty_host=1) — a later host reader does
+ * the lazy D2H via _h2d's mirror path / hexa_farr_to_host.
+ *
+ * NOTE the d=32 path NEVER reaches this wrapper — the consumer keeps the
+ * host transpose loop below the dim-gate (RFC 058 §5.4) so d=32 stays
+ * byte-identical. This is purely the d768 GPU-resident path. */
+int _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id, int64_t dst_id,
+                                        int64_t rows, int64_t cols,
+                                        int64_t dst_off) {
+    if (src_id < 0 || dst_id < 0) {
+        fprintf(stderr, "[cuda] transpose_scatter: bad ids %lld %lld\n",
+                (long long)src_id, (long long)dst_id);
+        return -1;
+    }
+    if (rows <= 0 || cols <= 0 || dst_off < 0) {
+        fprintf(stderr, "[cuda] transpose_scatter: bad shape "
+                "rows=%lld cols=%lld dst_off=%lld\n",
+                (long long)rows, (long long)cols, (long long)dst_off);
+        return -1;
+    }
+    if (src_id >= _hx_farr_count || dst_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] transpose_scatter: id out of range\n");
+        return -1;
+    }
+    int64_t total = rows * cols;
+    if (_hx_farr_table[src_id].len < total) {
+        fprintf(stderr, "[cuda] transpose_scatter: src host len %lld "
+                "< rows*cols %lld\n",
+                (long long)_hx_farr_table[src_id].len, (long long)total);
+        return -1;
+    }
+    if (_hx_farr_table[dst_id].len < dst_off + total) {
+        fprintf(stderr, "[cuda] transpose_scatter: dst host len %lld "
+                "< dst_off+rows*cols %lld\n",
+                (long long)_hx_farr_table[dst_id].len,
+                (long long)(dst_off + total));
+        return -1;
+    }
+    /* src device-resident → _h2d SKIPs (RFC 057 §6.1). dst current host
+     * bytes uploaded so the kernel preserves regions outside the slab;
+     * SKIPs once dst is already device-authoritative. */
+    if (_h2d(src_id) != 0) return -1;
+    if (_h2d(dst_id) != 0) return -1;
+    const double* SRC = g_slots[src_id].d_buf;
+    double*       DST = g_slots[dst_id].d_buf;
+    if (!SRC || !DST) {
+        fprintf(stderr, "[cuda] transpose_scatter: null device buf\n");
+        return -1;
+    }
+    int grid = _hx_cuda_elem_grid(total);
+    _hx_cuda_kern_transpose_scatter<<<grid, _HX_CUDA_ELEM_BLOCK>>>(
+        SRC, DST, rows, cols, dst_off);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] transpose_scatter launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    /* RFC 056 §6.1 — dst (Bc) is now device-authoritative. No D2H: the
+     * device copy is the freshest, host buf stale. The next GPU op's
+     * _h2d SKIPs; a host reader triggers a lazy D2H. */
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    de->d_buf      = (void*)g_slots[dst_id].d_buf;
+    de->loc        = FARR_DEVICE;
+    de->dirty_host = 1;
+    de->dirty_dev  = 1;
+    return 0;
 }
 
 #endif /* HEXA_CUDA — Agent #25 Phase B elementwise block (opened at line 944) */

@@ -11356,6 +11356,10 @@ extern int  _hx_cuda_farr_rope_bwd_gpu(int64_t t_id, int64_t cos_id,
                                         int64_t sin_id, int64_t T,
                                         int64_t nheads, int64_t hd,
                                         int64_t out_id);
+extern int  _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id,
+                                                int64_t dst_id,
+                                                int64_t rows, int64_t cols,
+                                                int64_t dst_off);
 #endif
 
 // ── CPU helpers (Phase B2 no-CUDA fallback). Each: (a) validate ids,
@@ -11922,6 +11926,38 @@ HexaVal hexa_farr_rope_bwd_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v,
 #else
     return hexa_int(_hx_farr_rope_cpu(t_id, cos_id, sin_id, T, nheads,
                                       hd, 1));
+#endif
+}
+
+// farr_transpose_scatter_gpu(src, dst, rows, cols, dst_off) -> int rc.
+// RFC 058 §5.2 — device transpose-scatter: fill the [dst_off,
+// dst_off+rows*cols) slab of dst with the transpose of src
+// (dst[dst_off+c*rows+r] = src[r*cols+c]). Unlike the other _gpu
+// entry points this does NOT allocate a new farr — dst is a caller-
+// owned buffer (the Bc accumulator) populated slab-by-slab. Returns
+// 0 ok / -1 err. On HEXA_CUDA the forge kernel runs and dst is left
+// device-authoritative (RFC 056 §6.1); on the no-CUDA build it
+// returns -1 (the flame consumer dim-gates this call inside
+// #ifdef HEXA_CUDA, so the no-CUDA path is never reached — the d=32
+// host transpose loop stays, RFC 058 §5.4).
+HexaVal hexa_farr_transpose_scatter_gpu(HexaVal src_v, HexaVal dst_v,
+                                        HexaVal rows_v, HexaVal cols_v,
+                                        HexaVal dst_off_v) {
+    int64_t src_id  = hexa_as_num(src_v);
+    int64_t dst_id  = hexa_as_num(dst_v);
+    int64_t rows    = hexa_as_num(rows_v);
+    int64_t cols    = hexa_as_num(cols_v);
+    int64_t dst_off = hexa_as_num(dst_off_v);
+#ifdef HEXA_CUDA
+    if (rows <= 0 || cols <= 0 || dst_off < 0) return hexa_int(-1);
+    if (src_id < 0 || src_id >= _hx_farr_count) return hexa_int(-1);
+    if (dst_id < 0 || dst_id >= _hx_farr_count) return hexa_int(-1);
+    int rc = _hx_cuda_farr_transpose_scatter_gpu(src_id, dst_id,
+                                                 rows, cols, dst_off);
+    return hexa_int(rc);
+#else
+    (void)src_id; (void)dst_id; (void)rows; (void)cols; (void)dst_off;
+    return hexa_int(-1);
 #endif
 }
 

@@ -691,3 +691,21 @@ forge kernel 도입 정당. device 에서 transpose-scatter → Bc fully
 device-authoritative → RFC 057 §6.2 잠금 해제. 정직 caveat: RFC 058
 후에도 attention causal-masked softmax 는 verified kernel 부재로 CPU
 잔존 가능 (RFC 057 §8.2) — 양파 한 겹 더 가능성, RFC 058 fire 가 판정.
+
+**RFC 058 §5 구현 LANDED (FULL, branch `rfc058-impl`)**: 13번째 forge
+kernel `_hx_cuda_kern_transpose_scatter` (self/cuda/runtime_cuda.c
+~L1367, `dst[dst_off+c*rows+r]=src[r*cols+c]`, 부동소수점 연산 0) +
+host wrapper `_hx_cuda_farr_transpose_scatter_gpu` (RFC 056 §6.1 상태
+머신: dst→`loc=DEVICE,dirty_dev=1`) + runtime.c dispatcher
+`hexa_farr_transpose_scatter_gpu` + consumer 교체
+(`flame_proj_batch_generic_primitive` 의 host transpose loop 을
+`mm_c_id>=0` dim-gate 안에서 kernel 호출로). 기존 12 kernel math 불변
+(additive only). **F-RFC058-D32-BYTEEQ ✅ PASS**: verify_all 26+ 섹션
+전부 `max|Δ|=0.0`, d6/d7 d32 빌드 byte-id, git stash revert+diff 3중
+입증 (pristine==changed==baseline). d768 빌드 `F-RFC047-A2-COMPILE
+PASS` exit 0, `-DHEXA_CUDA` 호스트-스코프 syntactic check RC=0.
+`<<<>>>` launch 는 nvcc 필요 → fire #13 F-RFC058-KERNEL-BYTEEQ 게이트.
+RFC 057 §6.2 (Bc-slab dev-view consume) 는 본 패치로 substrate-수준
+잠금 해제 (Bc 가 projection 후 device-authoritative) — 다운스트림
+RMSNorm/RoPE/attention 의 실제 dev-view 소비 wiring 은 fire #13 측정
+후 follow-on. 다음 = d768 GPU fire #13.
