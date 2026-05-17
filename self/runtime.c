@@ -6841,6 +6841,12 @@ HexaVal hexa_char_code(HexaVal s, HexaVal idx) {
 HexaVal hexa_from_char_code(HexaVal n);
 static HexaVal chr;
 
+// chr-byte (RFC chr-byte-vs-codepoint-asymmetry, 2026-05-17):
+// byte-level length-1 string (raw N & 0xFF) — mirrors ord(substring(s,i,1))
+// byte read semantics. The `chr` builtin lowers to this; `from_char_code`
+// retains its codepoint→UTF-8 path for JSON \uXXXX decoding and similar.
+HexaVal hexa_chr_byte(HexaVal n);
+
 // RFC 030 (2026-05-12): bytes_to_str_raw([int]) — see implementation
 // below near hexa_from_char_code. Declared here so it's reachable as
 // a bare C identifier from `hexa_call1(bytes_to_str_raw, arr)` emitted
@@ -8060,6 +8066,31 @@ HexaVal hexa_from_char_code(HexaVal n) {
     }
     char* out = strdup(buf);
     return hexa_str_own(out);
+}
+
+// chr-byte (RFC chr-byte-vs-codepoint-asymmetry, 2026-05-17) —
+// byte-level `chr(N)`: length-1 string with the single raw byte `N & 0xFF`.
+//
+// Why: `ord(substring(s, i, 1))` returns the byte at position i (byte-level
+// read), so the inverse `chr(N)` must also be byte-level. The earlier
+// `chr` lowering went through `hexa_from_char_code` which encodes N as a
+// Unicode codepoint via UTF-8 — `chr(240)` produced `\xC3\xB0` (2 bytes,
+// U+00F0) instead of the raw byte `\xF0`. That asymmetry silently broke
+// any code synthesizing binary bytes via `chr(N)` (URL decoding, PNG
+// header construction, emoji prefix search, etc.).
+//
+// `hexa_from_char_code` keeps its codepoint→UTF-8 behaviour for the JSON
+// \uXXXX decoder and other true-codepoint callers; user-facing `chr`
+// now lowers here instead.
+//
+// NUL-safe: hexa_strbuf_alloc prepends a length header so the length-1
+// string with byte 0x00 is well-formed under HX_STRLEN.
+HexaVal hexa_chr_byte(HexaVal n) {
+    int64_t code = HX_IS_INT(n) ? HX_INT(n) : (int64_t)_hexa_f(n);
+    char* buf = hexa_strbuf_alloc((size_t)1);
+    if (!buf) return hexa_str("");
+    buf[0] = (char)(code & 0xFF);
+    return (HexaVal){.tag=TAG_STR, .s=buf};
 }
 
 // RFC 030 — `bytes_to_str_raw([int]) -> string`

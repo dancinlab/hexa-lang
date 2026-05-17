@@ -594,28 +594,55 @@
 - id: chr-byte-vs-codepoint-asymmetry
   source_commit: pending
   source_files:
-    - self/eval.hexa
     - self/runtime.c
+    - self/runtime.h
+    - self/codegen_c2.hexa
+    - self/hexa_full.hexa
+    - self/test_chr_byte.hexa
   compiler_impact: |
-    interp's `chr(N)` UTF-8-encodes N as a codepoint (chr(240) ->
-    bytes C3 B0 = U+00F0); compiled mode treats N as a raw byte
-    (chr(240) -> byte F0). `ord(substr(s,i,1))` is byte-level in
-    BOTH modes — so reads are consistent, writes diverge. Fix:
-    interp `chr(N)` should emit a length-1 string with raw byte
-    N & 0xFF, mirroring compiled semantics. No compiler/ change
-    if the fix is in self/eval.hexa only.
+    Patch premise correction (2026-05-17 measurement): BOTH interp AND
+    compiled mode were UTF-8-encoding chr(N) as a codepoint (chr(240) ->
+    `C3 B0`, 2 bytes for U+00F0) — `ord(substring(s,i,1))` is byte-level
+    in both modes, so reads are consistent but writes diverge from reads.
+    Fix is BYTE-LEVEL on both sides per g_inbox_dual_track:
+      - runtime.c: new `hexa_chr_byte(N)` — length-1 raw byte string
+        (`N & 0xFF`), NUL-safe via hexa_strbuf_alloc.
+      - codegen_c2.hexa: `chr` lowers to `hexa_chr_byte` (was
+        `hexa_from_char_code`).
+      - hexa_full.hexa: interp `chr` handler builds byte-level result
+        via `bytes_to_str_raw([N & 0xFF])` (bootstrap-safe — uses an
+        already-recognised intrinsic).
+      - `hexa_from_char_code` retains codepoint→UTF-8 path for JSON
+        \uXXXX decoder and other true-codepoint callers.
+      - Collateral: runtime.h added missing forward-decls for
+        `hexa_array_truncate` (pre-existing runtime.h auto-gen gap) +
+        new `hexa_chr_byte`.
   selftest_delta: |
-    +1 (self/test/test_chr_byte_level.hexa or equivalent — a
-    chr(N) -> ord(substr(s,0,1)) == N round-trip for N in
-    [0, 255] in both interp and compiled).
+    +1: self/test_chr_byte.hexa — 12 assertions covering 0..255 chr-ord
+    round-trip, length-1 invariant 0..255, 🚀 emoji 4-byte synthesis,
+    high-bit + ASCII boundary cases. Compiled: 12/12 PASS.
   downstream_consumer: |
-    wilson plugins/guard-readme-format (workaround landed —
-    byte-level emoji scan via ord() only; chr() avoided in detection
-    path). Also flags potential silent bugs at plugins/tool-web URL
-    decoder (chr(b) of %XX hex pairs).
-  status: pending_external
+    wilson plugins/guard-readme-format (chr()-based emoji prefix scan
+    can revert to `chr(240) + chr(159)`-style synthesis once interp
+    binary is rebuilt — see partial closure note below);
+    wilson plugins/tool-web URL decoder (`%XX` -> chr(b)) — previously
+    silently misencoded under interp.
+  status: partial
+  applied_compiled_at: 2026-05-17
   opened: 2026-05-17
   detail: patches/chr-byte-vs-codepoint-asymmetry.md
+  note: |
+    Status `partial` rather than `applied` because the SSOT change
+    landed on both sides (codegen_c2.hexa + hexa_full.hexa) and the
+    compiled binary is rebuilt and verified, but `build/hexa_interp.real`
+    rebuild is blocked by an unrelated runtime.h auto-gen gap — many
+    host functions used by hexa_full.hexa (hexa_hex, hexa_bin,
+    hexa_str_bytes, rt_write_bytes, hexa_valstruct_new_v,
+    hexa_str_parse_float, hexa_ceil, hexa_floor, bit_or identifier)
+    lack forward decls and clang fails with implicit-int errors.
+    interp-retire R3-R6 (memory: 2026-05-17, 45% direct-build) is
+    closing this gap on a separate track; once the runtime.h sweep
+    lands, rebuild hexa_interp.real and flip status -> applied.
 
 # ─── batch triage 2026-05-17 ──────────────────────────────────────────
 # 37 entries triaged from inbox/patches/ markdowns that had not yet been

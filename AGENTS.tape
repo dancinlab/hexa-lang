@@ -157,6 +157,15 @@
   authority = "[@x_hxc_spec]"
   @> AGENTS.md
 
+@D g_inbox_dual_track := "inbox-patches process both interp + compiled until interp retires" :: governance [required d=2026-05-17 active]
+  rule = "When applying an inbox/patches/ patch that changes a language-level semantic (builtins · operators · runtime intrinsics · type coercions), the fix MUST land on BOTH the interpreter path (self/hexa_full.hexa eval/dispatch) AND the compiled path (self/codegen_c2.hexa lowering + self/runtime.c implementation). Single-side fixes are forbidden until interp retirement (R3-R6) completes."
+  why = "interp ↔ compiled divergence silently breaks downstream consumers — same .hexa source produces different bytes under `hexa run` vs `hexa build`. Concrete case: chr-byte-vs-codepoint-asymmetry (2026-05-17) where patch author assumed compiled chr() was byte-level but BOTH paths produced 8-byte codepoint-UTF8; required dual-side fix (runtime.c add hexa_chr_byte + codegen_c2.hexa rewire + hexa_full.hexa interp handler). cost-routing violation if `wilson test` (compiled) passes while interp tape_driver diverges."
+  applies-to = "any inbox patch where compiler_impact mentions interp/eval OR codegen/runtime OR a user-facing builtin. Documentation-only and stdlib-only patches are exempt."
+  sunset = "drops to [recommended] once interp retirement finishes (memory: interp-retire R3-R6 state 2026-05-17, aprime_cc-direct 27/60 = 45%; full closure planned)."
+  verification = "build /tmp/diag.hexa with HEXA_MAC_BUILD_OK=1 + `hexa run /tmp/diag.hexa` → byte-identical stdout for the touched semantic."
+  authority = "feedback memory: interp-retire R3-R6 state; inbox triage 2026-05-17 (commit 8389f040)"
+  @> AGENTS.md
+
 # ─── §4 Forbidden patterns ───────────────────────────────────────────
 
 @F f1 := "lattice-fit-on-external-language" :: governance [required deny:write]

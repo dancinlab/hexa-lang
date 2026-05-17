@@ -363,6 +363,8 @@ HexaVal hexa_umount(HexaVal tgt_v, HexaVal flags_v);     /* native/mount.c:44 */
  * the decls to avoid implicit-int → HexaVal init errors. */
 HexaVal hexa_str_char_code_at(HexaVal s, HexaVal idx); /* runtime.c:3891 */
 HexaVal rt_file_size(HexaVal path);                    /* runtime.c:5110 */
+HexaVal hexa_array_truncate(HexaVal arr, HexaVal new_len_v); /* runtime.c:2037 */
+HexaVal hexa_chr_byte(HexaVal n);                      /* runtime.c — chr byte-level (RFC chr-byte-vs-codepoint-asymmetry) */
 
 /* native/namespace.c */
 HexaVal hexa_unshare(HexaVal flags_v);     /* native/namespace.c:37 */
