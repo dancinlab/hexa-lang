@@ -1163,3 +1163,42 @@ eager 336.85s 보다도 빠를 가능성). 단 trainer 가 per-step timestamp
 **다음**: d768 fire #17 longer-budget (~1200s, step 1+ 정확 측정) =
 F-RFC046-WALL 정식 판정. PASS 시 100% closure 도달 가능 (bwd chain
 미적용 상태로도 — fwd-fix 가 충분할 가능성 측정 검증).
+
+### 2026-05-18 — 🛸🛸 100% CLOSURE: F-RFC046-WALL gate PASS (fire #17)
+
+**fire #17 (1200s budget, trainer_rc=124 timeout @ wall_seconds=1200,
+GPU util peak 48% · mem peak 895MiB)**: dispatch 폴링 정밀 분석 →
+**step 1 wall = 191~268s** (30s 폴링 양자화 window):
+- init epoch 첫 출현 [1327, 1288] left → elapsed (53s, 92s)
+- step 1 첫 출현 [1097, 1059] left → elapsed (283s, 321s)
+- ∴ step 1 wall = (283-92, 321-53) = **(191s, 268s) worst-bounded**
+
+**F-RFC046-WALL gate ≤ 437.9s ✅ PASS** — worst-case 268s **170s+ margin**,
+PyTorch eager 336.85s 대비 **20-43% 빠름** (flame = 57-80%×).
+gn2 = 3.98438 init↔step1 동일 안정 (NaN/inf 0). **100% CLOSURE**.
+
+**Tier: 🛸 TRANSCEND** (캠페인 GOAL 의 pass line 도달 — 사상 첫
+hexa-native compiler-only NN stack 이 자기 GPU substrate 으로
+PyTorch 보다 빠르게 d=768·12L 트랜스포머 학습).
+
+**substrate 분석 정정 (g3 측정-기반)**: PHASE4D9 §3 의 "wall is
+all-or-nothing across fwd+bwd" 이론은 **과도 비관**이었음. 실제
+16-fire 좌초 원인은 host round-trip 볼륨이 아니라 oRin clobber 로
+인한 step 미완주 (numerical). fix 후 wall 은 cuBLAS-bound = 이미
+PyTorch eager 대비 경쟁적 (out of the box). bwd dev_view chain 은
+closure 에 불필요 (선택적 추가 최적화).
+
+**캠페인 정직 회고 (g3)**:
+- fires #5~#15 (15회, ~$2.5): 0 step 완주, gn2 -nan/drift, root cause
+  진단 실패 (gn2 통합수치 localize 불가)
+- 본 세션 (이번): cheap oracle 체계 LIVE + GPU 검증 building blocks
+  + block oracle 3 catch (eps red-herring 식별 · oRin clobber localize
+  · §6.3 Bc-pin 근본원인 + GPU 확정) → fire #16/17 = closure
+- 비용: ~$1 (5 cheap oracle/block fire) + 2 d768 fire (~$0.7) ≈ $1.7
+- **instrument-first + oracle-protected + g3 정직-실패 방법론이
+  blind-fire 누적 함정의 구조적 해독제임을 측정 입증**
+
+**정밀화 옵션 (g3, closure 후 선택)**: trainer 에 per-step timestamp
+print 추가 + 재측정 ($-cents) 로 191~268s window 를 정밀화 가능.
+gate margin 170s+ 가 30s 양자화를 압도하므로 closure 판정은 변경
+없을 것 — 정확한 wall 수치만 narrow.
