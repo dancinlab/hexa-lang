@@ -178,6 +178,25 @@ H100 SXM 80GB · cuBLAS 12.4.5 · vast.ai instance 36884532 (destroyed) · cost 
 - **D' reframe (data-anchored)**: forge 의 FP64 substrate 는 cuBLAS DEFAULT 위에서 within-run determinism FREE. PEDANTIC = opt-in (+15-33% cost, no benefit for FP64). LayerCast-style cross-precision (BF16/FP16) determinism 은 별도 paradigm (RFC 047+).
 산출 trail: `state/forge_phaseR_d_2026_05_17/{result.json, D_ANALYSIS.md, fire.log, nvidia_smi_*.csv}`.
 
+### 2026-05-17 — Stage 2 B Phase 1 SMOKE PASS + Stage 2 C Phase 2 multi-block PASS (traffic+det) wall FAIL
+**B Stage 2 Phase 1** (H200 SXM 143GB cc=9.0 · $0.12, Hopper supply 변동 후 가용 시점에 fire):
+- SMOKE 1 cluster API ✅ PASS: block0 sees [own=7, other=107], block1 sees [own=107, other=7], cluster_size=2
+- SMOKE 2 cuBLAS FFN baseline (M=128 D=4096 FD=11008): **0.4461 ms** — Phase 2 perf anchor
+- Build error 첫 fire 후 fix (cudaLaunchAttribute init memset) → re-fire success
+- F-FORGE-B-STAGE2-API-SMOKE PASS ✅
+- Phase 2 plan: real DSM-fused FFN kernel (cluster.map_shared_rank cross-block SMEM reuse, 1-2 weeks effort)
+산출: `state/forge_phaseR_b_stage2_2026_05_17/{result.json, fire.log, B_STAGE2_PHASE1_ANALYSIS.md}`.
+
+**C Stage 2 Phase 2** (A100 PCIe 80GB cc=8.0 · $0.02 — vast.ai 가장 cheap A100 picked):
+3 shapes (128/256/512), multi-block + chunked K + atomic_add for dW/dX vs cuBLAS chain.
+- ✅ traffic: bytes_ratio = 0.6667 모든 shape (Phase 1 anchor multi-block 에 보존)
+- ✅ det: max|Δ| < 1e-15 모든 shape (TOL_OP 1e-6 의 9 orders headroom) — atomic_add 가 실용적으로 deterministic
+- ❌ **wall FAIL**: fused 5.99-32.3× slower than cuBLAS (per-thread loop + atomic overhead vs cuBLAS Dgemm)
+- 결론: theoretical anchor + numerical equivalence multi-block scaling 확인. Wall win = Phase 3 (production CUDA tiling 또는 RFC 047 mixed-precision Tensor Core 활용)
+산출: `state/forge_phaseR_c_stage2_v2_2026_05_17/{result.json, C_STAGE2_V2_ANALYSIS.md}`.
+
+Phase R 누적 cost: **$2.09** (8 fires + 1 blocked-then-completed).
+
 ### 2026-05-17 — Stage 2 C Phase 1 fire COMPLETED (FUSED-CEILING + DET-PRESERVE PASS) + Stage 2 B fire BLOCKED
 **C Stage 2 Phase 1** (A100 SXM4 cc=8.0 cuBLAS 12.4.5 · $0.30):
 3 shapes (16/32/64), single-block SMEM-resident fused kernel vs cuBLAS chain.

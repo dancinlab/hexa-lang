@@ -172,6 +172,13 @@ H100 SXM cuBLAS 12.4.5 · 6 shape FP64 Dgemm sweep · vast.ai $0.40. 결과:
 - **D' (data-anchored reframe)**: forge FP64 substrate = within-run det FREE; PEDANTIC opt-in only (+15-33% cost, no FP64 benefit). LayerCast-style BF16/FP16 det = 별도 paradigm RFC 047+. PARADIGM.md SSOT 후속.
 산출: state/forge_phaseR_d_2026_05_17/{result.json, D_ANALYSIS.md}.
 
+### 2026-05-17 — Stage 2 B Phase 1 API SMOKE PASS + Stage 2 C Phase 2 multi-block (traffic+det PASS, wall FAIL)
+**B Phase 1** (H200 cc=9.0 · $0.12): cluster API smoke PASS (block0/block1 cross-SMEM read via map_shared_rank, cluster_size=2). cuBLAS FFN baseline 0.4461 ms (M=128 D=4096 FD=11008) — Phase 2 perf anchor. Build err fix (cudaLaunchAttribute init memset) → re-fire success.
+F-FORGE-B-STAGE2-API-SMOKE ✅ PASS. Phase 2 = real DSM-fused kernel (1-2 weeks).
+**C Phase 2** (A100 PCIe cc=8.0 · $0.02): multi-block + chunked K + atomic_add fused vs cuBLAS chain, 3 shapes 128/256/512. bytes_ratio = 0.6667 모든 shape (Phase 1 anchor 보존). max|Δ| < 1e-15 (atomic 가 numerically safe at our operand range). Wall 5.99-32.3× **slower** (naive per-thread vs cuBLAS Dgemm). Phase 3 = production tiling 또는 mixed-precision TC.
+산출: state/forge_phaseR_{b_stage2,c_stage2_v2}_2026_05_17/{result.json, *_ANALYSIS.md}.
+Phase R 누적: **$2.09** (8 fires).
+
 ### 2026-05-17 — Stage 2 C Phase 1 PASS + Stage 2 B fire BLOCKED (Hopper supply)
 **C Stage 2 Phase 1** (A100 SXM cc=8.0 cuBLAS 12.4.5 · $0.30): single-block SMEM-resident fused kernel vs cuBLAS chain, 3 shape (16/32/64).
 - F-FORGE-C-STAGE2-FUSED-CEILING ✅ PASS — bytes_ratio = 0.6667 every shape (≤ 0.75 threshold)

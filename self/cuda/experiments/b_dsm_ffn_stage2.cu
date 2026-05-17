@@ -135,11 +135,13 @@ int main(int argc, char** argv) {
     CK(cudaMemset(d_cluster_size, 0, sizeof(int)));
 
     /* Launch with cluster config */
-    cudaLaunchConfig_t config = {0};
+    cudaLaunchConfig_t config;
+    memset(&config, 0, sizeof(config));
     config.gridDim = dim3(2, 1, 1);     /* 2 blocks (matches cluster size) */
     config.blockDim = dim3(32, 1, 1);
     config.dynamicSmemBytes = 256;       /* enough for smoke */
-    cudaLaunchAttribute attrs[1] = {0};
+    cudaLaunchAttribute attrs[1];
+    memset(attrs, 0, sizeof(attrs));
     attrs[0].id = cudaLaunchAttributeClusterDimension;
     attrs[0].val.clusterDim.x = 2;
     attrs[0].val.clusterDim.y = 1;
