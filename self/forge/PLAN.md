@@ -178,6 +178,38 @@ H100 SXM 80GB · cuBLAS 12.4.5 · vast.ai instance 36884532 (destroyed) · cost 
 - **D' reframe (data-anchored)**: forge 의 FP64 substrate 는 cuBLAS DEFAULT 위에서 within-run determinism FREE. PEDANTIC = opt-in (+15-33% cost, no benefit for FP64). LayerCast-style cross-precision (BF16/FP16) determinism 은 별도 paradigm (RFC 047+).
 산출 trail: `state/forge_phaseR_d_2026_05_17/{result.json, D_ANALYSIS.md, fire.log, nvidia_smi_*.csv}`.
 
+### 2026-05-17 — Phase R+ 진정 cycle 종결 (9 sub-agents · 14 fires · $2.91 · RFC 049 wall path VALIDATED)
+**최종 cycle 추가 작업** (이전 2026-05-17 4 sub-agent entry 이후, 3 추가 sub-agent + cleanup):
+
+**Agent #19 RFC 050 (DESIGN, $0)**: flame ↔ forge integration API. 353 lines, 7 falsifier 사전등록 (DISPATCH-API-MATCH, REGIME-CORRECT, PRECISION-D-PRESERVE, FORGE-BACKWARD-FUSE, PERF-INHERITANCE, FALLBACK-CHAIN, VERSION-API). RFC 044 패턴 따라 12-section. Merged `e5fc6497`.
+
+**Agent #18 A vs torch.compile baseline ($0.09)**: PyTorch.eager 대신 진정 SOTA (torch.compile.default + reduce-overhead = CUDA graphs) 비교.
+- **MLP universal AOT 4-13× WIN** (FP64 Inductor codegen 약함)
+- **transformer small + reduce-overhead → compile 1.41× FASTER** (CUDA graphs = dispatch elimination 동등 path) — **F-FORGE-A-TORCHCOMPILE FAIL at small transformer**
+- transformer medium → compile 1.05× faster (Inductor RMSNorm/softmax/SiLU fused Triton wins)
+- transformer large → AOT 1.14× WIN marginal
+- 정직 nuance: A paradigm dispatch elimination 가 UNIQUE 아님 — torch.compile.reduce-overhead 가 동등 mechanism. 진정한 forge 차별점 = FP64 substrate quality + custom kernel selective. Cherry-picked `5dd78eec`.
+
+**Agent #17 RFC 049 Phase R' Stage 1 BF16 ($0.10) — THE WALL PATH VALIDATED**:
+- **F-FORGE-RFC049-BF16-TC-PERF: 9.67× FP64 cuBLAS at Llama-7B FFN** (LARGE M=128 D=4096 FD=11008), pre-reg ≥ 5× PASS with 1.93× headroom
+- F-FORGE-RFC049-LAYERCAST-DET: within-run bit-equal 3/3 PASS
+- F-FORGE-RFC049-LAYERCAST-MEM: 0.250× exact PASS (target ≤ 0.3×)
+- F-FORGE-RFC049-LAYERCAST-DIVERGE: max 1.51% vs FP32 PASS (paper anchor ≤ 3.4%, target ≤ 5%)
+- 정직 caveats: small/medium shapes launch-overhead-dominated (5× threshold not hit); cuBLAS 12.4 GemmEx FP32+BF16 NOT_SUPPORTED → fallback path; Hopper sm_90 + BF16 + DSM combined = future RFC 052. Cherry-picked `f01cbdb5`.
+
+**Cleanup (2026-05-17 final)**: 7 forge sub-agent worktrees + 6 branches removed (cleaned: agent-{a28c7491930dc6fb1, a654a3ece3f47bb46, a681a0112d3db04f9, a703d1fd340716af2, a878ec8720149706b, addbef8b2c5c1bf6d, adeb90ed0d8431ed8}). flame session 4 worktrees 보존.
+
+**Phase R+ 진정 META-FINDING (post all sub-agents)**:
+1. **forge wall path = RFC 049 BF16 precision pivot** (실측 검증 9.67× FP64 cuBLAS at Llama-7B)
+2. FP64 substrate ceiling experimentally bound (B Phase 2 200-300× SLOWER, C Phase 3 1.80× SLOWER best)
+3. **dispatch elimination NOT unique to AOT** — torch.compile.reduce-overhead (CUDA graphs) = equivalent at small transformer
+4. True forge distinctive: (a) BF16 TC substrate (Inductor 못 따라옴, MLP 4-13× win anchor), (b) custom kernels per regime (case-by-case), (c) within-run det FREE (D' anchor)
+5. flame ↔ forge integration RFC 050 design land (Phase 4-C lowering ↔ forge tier dispatch API)
+
+Phase R+ 총 비용: **$2.91** · 총 fire: 14 (Stage 1 D/B/C/A + Stage 2 A/B/C Phase 1/Phase 2 + RFC 049 BF16 + A torch.compile) · 총 sub-agent: 9 (4 first cycle + 3 second cycle + 2 prior single-agent ops).
+
+flame ↔ forge concurrent safety verified: 양 세션 commits interleave 정상, 직접 file overlap 없음, AGENTS.tape 다른 section 편집 공존. 모든 forge 작업 in rfc043-hexa-torch branch, push 미수행 (user gate).
+
 ### 2026-05-17 — 4 sub-agent parallel cycle: RFC 049 + A Transformer + C Phase 3 + B Phase 2 (FP64 wall ceiling 노출)
 **4 sub-agents (worktree-isolated, parallel background)** launched per user "all sub agent multiple background go":
 

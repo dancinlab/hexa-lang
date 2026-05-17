@@ -172,6 +172,15 @@ H100 SXM cuBLAS 12.4.5 · 6 shape FP64 Dgemm sweep · vast.ai $0.40. 결과:
 - **D' (data-anchored reframe)**: forge FP64 substrate = within-run det FREE; PEDANTIC opt-in only (+15-33% cost, no FP64 benefit). LayerCast-style BF16/FP16 det = 별도 paradigm RFC 047+. PARADIGM.md SSOT 후속.
 산출: state/forge_phaseR_d_2026_05_17/{result.json, D_ANALYSIS.md}.
 
+### 2026-05-17 — Phase R+ 진정 cycle 종결 (9 sub-agents · 14 fires · $2.91 · RFC 049 wall path VALIDATED)
+Last sub-agent batch + cleanup:
+- Agent #19 RFC 050 (design $0): flame↔forge integration API. 353 lines, 7 falsifier. Merged e5fc6497.
+- Agent #18 A vs torch.compile ($0.09): MLP AOT 4-13× WIN universal, transformer mixed (compile.red 1.41× FASTER at small via CUDA graphs). dispatch elimination NOT unique. Cherry-pick 5dd78eec.
+- Agent #17 RFC 049 Phase R' Stage 1 BF16 ($0.10): **4/4 PASS, 9.67× FP64 cuBLAS at Llama-7B FFN**, LayerCast det+mem+diverge 모두 PASS. **THE wall path validated**. Cherry-pick f01cbdb5.
+- Cleanup: 7 forge sub-agent worktrees + 6 branches removed. flame 4 worktrees 보존.
+
+META: forge wall path = RFC 049 BF16 substrate (실측 검증). FP64 hand-kernel ceiling experimentally bound. dispatch elimination CUDA graphs 동등 path. flame↔forge concurrent safety verified, push 미수행 (user gate).
+
 ### 2026-05-17 — Stage 2 B Phase 1 API SMOKE PASS + Stage 2 C Phase 2 multi-block (traffic+det PASS, wall FAIL)
 **B Phase 1** (H200 cc=9.0 · $0.12): cluster API smoke PASS (block0/block1 cross-SMEM read via map_shared_rank, cluster_size=2). cuBLAS FFN baseline 0.4461 ms (M=128 D=4096 FD=11008) — Phase 2 perf anchor. Build err fix (cudaLaunchAttribute init memset) → re-fire success.
 F-FORGE-B-STAGE2-API-SMOKE ✅ PASS. Phase 2 = real DSM-fused kernel (1-2 weeks).
