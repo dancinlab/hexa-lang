@@ -608,3 +608,62 @@ frontend(bind/parser/lower) 다수 read-site 로 분산.**
 `__hexa_fn_arena_return` rewind 가로질러 parameter map 보존 → recurring class 전체 폐쇄.
 fallback = `module.items` snapshot + struct_lit lowering 의 localized forced-copy.
 #27 agent 가 root-fix 안전성(gate ① full sweep + self-host byte-identical) 우선 평가.
+
+---
+
+### 진행 로그 — #27 ROOT-CAUSED & FIXED (codegen frame-sizer stride, NOT arena runtime) + #28 노출 (cycle h18)
+
+**#27 의 가설(arena-lifetime runtime 동근)은 증거로 기각됨.** lldb 대신 runtime
+backtrace 계측(`hexa_map_get` map-miss 시 module 값 dump)으로 정밀 핀:
+- `compiler/main.hexa` 의 top-level `let module = parse(...)` 는 **heap-resident**
+  (`tbl_in_arena=0`, arena 영역 밖). `resolve(module)`·`bind(module)` 전부 정상
+  통과(module = TAG_MAP, 안정). `type_check(module)` → `_collect_item_types(module,out)`
+  진입 직후 `module` 16-byte HexaVal 자체가 TAG_MAP→TAG_STR + stale pointer 로
+  **개별 호출 프레임 한정** 손상(직후 다른 호출에선 module 다시 정상 = module-global
+  슬롯 무손상). 즉 arena-table reclaim 아님 — 파라미터 슬롯 덮어쓰기.
+- 진짜 동근: `compiler/codegen/arm64_darwin.hexa::_arm64_lower_func` 의
+  `call_overflow_bytes = ((max_overflow * 8 + 15)/16)*16`. `max_overflow` 는
+  overflow **인자 개수**(n-4), C7 call-site emit 은 인자 i 를 `[sp,#(i-4)*16]`
+  (16-byte HexaVal pair stride)에 기록. 예약 영역은 `max_overflow*16` 바이트여야
+  하는데 `*8` 로 절반만 예약 → SSA/파라미터 spill 영역이 overflow span 절반밖에
+  안 밀림 → 저장된 ingress param(예: `_collect_item_types` 의 `module` @[sp,#16])이
+  outgoing "stack arg 5" 슬롯(`(5-4)*16=16`)과 **에일리어싱**. 6-인자 호출의 6번째
+  인자가 호출자 자신의 1번째 파라미터를 덮어씀 → tag MAP→STR →
+  `map key 'items'/'children'/'span'/'text' not found` + downstream HX2001.
+  ap1(hexa_v2 C path)은 프레임을 정확히 계산해 self-host 까지 가려져 있던 것.
+  #25/#26 와 동일 "값이 호출 경계를 넘어 손상" class, **다른 site (프레임 sizer,
+  arena 런타임 아님)**.
+- Fix: `compiler/codegen/arm64_darwin.hexa:1641` `* 8` → `* 16` (1-token 로직 +
+  설명 주석). runtime.c **무수정** (런타임 글로벌 회귀 risk 0).
+
+**검증 battery (전부 GREEN, 회귀 0):**
+- build_aprime smoke `exit(6*7)==42` PASS (ap1f).
+- gate ① 44-file sweep: ap1(base) **33/44** vs ap1f(fix) **33/44** — per-file
+  결과 **byte-identical** (MATCH/MISMATCH/APFAIL/ORAFAIL 분포 동일, flip 0).
+  잔존 5 MISMATCH + 6 APFAIL 은 기존 atlas-verifier + frontend-CGFAIL 클러스터
+  (#27 와 무관, 미접촉).
+- ap1 vs ap1f asm byte-identical: smoke 코퍼스 44개 중 **43 identical / 1 diff**
+  (`atlas_cycle_append_smoke` — >4-인자 호출 보유 fn 의 프레임만 544→576 +
+  슬롯 오프셋 +32 시프트; 명령어 추가/삭제/변경 0; gate ① 양쪽 모두 MATCH).
+- 6-인자 micro-repro (`many(a..f)`): oracle 85 · **ap1(buggy) 90 ✗ · ap1f 85 ✓**
+  — 버그·픽스 직접 입증.
+- self-host: ap1f → 22,202-line flat → 230,403-line asm (HX2001=0, mapmiss=0,
+  HX4001×11 무해) → ap2f. ap2f smoke `.globl _main` PASS. ap2f 가 full flat
+  컴파일 시 **`map key 'items'/'children'/'span'/'text' not found` = 0** (#27 의
+  정의적 증상 제거; 이전 1+ 발생 → 0).
+
+**self-host fixpoint: 아직 미도달 — #28 노출 (별개 버그, 동 family 다른 mechanism).**
+ap2f 가 full flat 컴파일 시 여전히 1032× `HX2001 undefined name <callee>`. #27 의
+map-miss cascade 가 아님(map-miss=0 인데 HX2001 잔존 → 독립 root). 최소 재현:
+7-line `fn main(){ let mut a=[]; a.push(1); a.push(2); ... }` — oracle 2 · ap1f 2 ✓ ·
+**ap2f 2× HX2001 `<callee>` (.push 메서드 호출)** ✗. 즉 self-hosted ap2f 가
+**method-call(`Field` ExprKind) 해소를 miscompile** → `compiler/check/types.hexa:1546
+_types_check_call` 의 `callee = e.children[0]` 가 Ident/Field 로 인식 안 됨
+(`name` 이 `"<callee>"` 잔류). #27 stride 와 무관 입증: ap1f 정상, 최소 repro 에
+>4-인자 호출·Module walk 전무, stride fix 글로벌 적용됨에도 잔존. **#28 = 동
+broad family(self-hosted codegen 의 frontend 값 처리) 의 별개 mechanism: 메서드
+호출/`Field` kind 처리**. arena class 아님(map heap-resident, reclaim 무관).
+다음 cycle: `_types_check_call`/`_infer_expr` 의 `Field` callee self-compile
+miscompile minimal isolate → codegen_c2 oracle diff.
+
+Co-Authored-By: Claude Opus 4.7 (1M context)

@@ -1615,10 +1615,30 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     // bytes (16-aligned). Reused by every call site in this fn so we
     // don't sub/add sp mid-frame. SSA spill offsets are shifted above
     // this region via rm.call_overflow_bytes (see _arm_spill_offset).
+    //
+    // #27 self-host fixpoint — STRIDE FIX. `max_overflow` is a count of
+    // overflow ARGS (n - 4, see _arm64_max_call_overflow). Each overflow
+    // arg is a 16-byte HexaVal occupying a full register PAIR, and the
+    // C7 call-site emit writes arg i at `[sp, #(i-4)*16]` (16-byte
+    // stride, see "C7: stack arg" below). The reserved region must
+    // therefore be `max_overflow * 16` bytes. The previous `* 8` sized
+    // it for an 8-byte scalar stride — exactly HALF — so the SSA/param
+    // spill region was shifted up by only half the overflow span. A
+    // saved ingress param (e.g. `module` at [sp,#16] in
+    // _collect_item_types) then aliased the outgoing "stack arg 5" slot
+    // (`(5-4)*16 = 16`): the call's 6th arg overwrote the caller's own
+    // first parameter HexaVal (tag flipped MAP→STR), surfacing as
+    // `map key 'items'/'children'/... not found` + a 1032-wide spurious
+    // HX2001 cascade when the self-hosted compiler (ap2) compiled the
+    // full compiler. ap1 (hexa_v2 C path) computes frames correctly so
+    // the bug was masked until the asm codegen self-hosted. Same value-
+    // across-call-boundary class as #25/#26, distinct site (frame sizer,
+    // not arena runtime). 16-aligned already (max_overflow*16 is a
+    // multiple of 16); the round kept for defensive clarity.
     let max_overflow = _arm64_max_call_overflow(mf)
     let mut call_overflow_bytes = 0
     if max_overflow > 0 {
-        call_overflow_bytes = ((max_overflow * 8 + 15) / 16) * 16
+        call_overflow_bytes = ((max_overflow * 16 + 15) / 16) * 16
     }
     let rm = RegMap {
         ids: alloc.map.ids,
