@@ -68,6 +68,11 @@ fn cmd_help() {
     println("  qrng selftest | chain | meta --backend=NAME")
     println("                                          provider sweep · resolved chain · backend meta")
     println("    e.g. hexa qrng collect --bytes=32 --source=mock_qrng --seed=42")
+    println("  sim-universe [status|selftest|anu|multiverse|qpu|qrng|bostrom|godel|")
+    println("                fvd|stark|qdarwin|ca-qm|supremacy|mbs|dtc|z2gauge|")
+    println("                preheating|multipolar|surface-code|ssh|hofstadter|dqpt|wdw]")
+    println("                                          virtual-universe runtime (26 modules, RFC 046)")
+    println("    e.g. hexa sim-universe status         module inventory + tier table")
     println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
@@ -3305,6 +3310,24 @@ if len(av) < 3 {
             qi = qi + 1
         }
         cmd_run(qrng_script, qrng_args)
+    } else if sub == "sim-universe" {
+        // RFC 046 — stdlib/sim_universe dispatch.
+        // stdlib/sim_universe/sim_universe.hexa parses argv subcommand
+        // (status/selftest/anu/multiverse/qpu/qrng/bostrom/godel/fvd/stark/...)
+        // RFC 046-A landed substrate code; RFC 046-B landed 15 experiments.
+        let __inst_s = install_dir_from_argv0()
+        let mut su_script = "stdlib/sim_universe/sim_universe.hexa"
+        if len(__inst_s) > 0 {
+            let inst_path = __inst_s + "/stdlib/sim_universe/sim_universe.hexa"
+            if file_exists(inst_path) { su_script = inst_path }
+        }
+        let mut su_args = []
+        let mut si = 3
+        while si < len(av) {
+            su_args.push(av[si])
+            si = si + 1
+        }
+        cmd_run(su_script, su_args)
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //

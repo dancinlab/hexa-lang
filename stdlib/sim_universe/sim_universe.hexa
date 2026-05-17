@@ -1,0 +1,206 @@
+#!hexa strict
+// stdlib/sim_universe/sim_universe.hexa — sim-universe stdlib CLI dispatcher
+//
+// @version 1.1.0
+// @capabilities [simulation, randomness, dispatch, cli]
+// @stability scaffold
+// @since 2026-05-16
+//
+// Runnable entrypoint dispatched by `hexa sim-universe <subcmd>` (see
+// self/main.hexa `else if sub == "sim-universe"` branch).
+//
+// Status: RFC 046 Phase A — CLI dispatcher + README + governance + archive
+// 묘비 land. Actual code migration (~32k LoC across 26 modules) staged as
+// RFC 046-A (substrate) + RFC 046-B (16 experiments). Most subcommands
+// currently report "deferred to RFC 046-A/B code migration"; status / help
+// / version work today.
+//
+// Subcommands:
+//   hexa sim-universe                         status (default)
+//   hexa sim-universe status                  module inventory + tier table + caveats
+//   hexa sim-universe selftest                Tier-A smoke pass (Phase A+)
+//   hexa sim-universe anu                     anu_time τ-clock mini_world (Phase A)
+//   hexa sim-universe multiverse              multiverse interferometer (Phase A)
+//   hexa sim-universe qpu                     qpu_bridge VQE-H2 (Phase A)
+//   hexa sim-universe qrng                    ouroboros QRNG perturbation (Phase A; consumes stdlib/qrng/)
+//   hexa sim-universe bostrom                 Bostrom test (Phase A)
+//   hexa sim-universe godel                   Gödel-Q mutator (Phase A)
+//   hexa sim-universe fvd|stark|qdarwin|ca-qm|supremacy|mbs|dtc|z2gauge|preheating|
+//                     multipolar|surface-code|ssh|hofstadter|dqpt|wdw  (Phase B)
+//   hexa sim-universe --help, -h              this help
+//   hexa sim-universe --version, -v           version
+//
+// Source: RFC 046 — absorbs ~/core/sim-universe/cli/sim-universe.hexa v1.1.0.
+
+let VERSION = "1.1.0"
+let PHASE = "scaffold (RFC 046 Phase A; code migration → RFC 046-A/B)"
+
+fn _find_flag(a: [str], flag: str, default_val: str) -> str {
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        if a[i] == flag {
+            if i + 1 < n { return a[i + 1] }
+        }
+        let prefix = flag + "="
+        if a[i].starts_with(prefix) {
+            return a[i].substring(len(prefix), len(a[i]))
+        }
+        i = i + 1
+    }
+    return default_val
+}
+
+fn cmd_help() {
+    println("hexa sim-universe " + VERSION + " — virtual-universe runtime (26 modules)")
+    println("status: " + PHASE)
+    println("")
+    println("USAGE")
+    println("  hexa sim-universe                         status (default)")
+    println("  hexa sim-universe status                  module inventory + tier table")
+    println("  hexa sim-universe selftest                Tier-A smoke pass (post-RFC 046-A)")
+    println("  hexa sim-universe --help, -h              this help")
+    println("  hexa sim-universe --version, -v           version")
+    println("")
+    println("SUBSTRATE (Phase A — RFC 046-A migration)")
+    println("  anu                                       anu_time τ-clock mini_world (5.9k LoC)")
+    println("  multiverse                                interferometer + KS-test + MI (4.2k LoC)")
+    println("  qpu                                       qpu_bridge VQE-H2 + ANU noise")
+    println("  qrng                                      ouroboros QRNG (consumes stdlib/qrng/)")
+    println("  bostrom                                   Bostrom test (anu_collector)")
+    println("  godel                                     Gödel-Q mutator + bootstrap")
+    println("")
+    println("EXPERIMENTS (Phase B — RFC 046-B migration, 16 modules ~18k LoC)")
+    println("  fvd                                       quantum false-vacuum decay  [Chao 2026]")
+    println("  stark                                     Hilbert-space fragmentation [Wang 2024]")
+    println("  qdarwin                                   quantum-Darwinism gate sim  [Zhu 2025]")
+    println("  ca-qm                                     two-engine CA models of QM  [Elze/van Berkel]")
+    println("  supremacy                                 2ⁿ RCS XEB instrument       [Morvan 2024]")
+    println("  mbs                                       PXP-Rydberg scar revival    [Xiang 2024]")
+    println("  dtc                                       Fock-space prethermal DTC   [Bao 2025]")
+    println("  z2gauge                                   (1+1)D Z₂ LGT Floquet       [Hayata-Hidaka 2024]")
+    println("  preheating                                cold-atom BdG preheating    [Gondret 2025]")
+    println("  multipolar                                RMD prethermalization α=2n+1 [Liu 2025]")
+    println("  surface-code                              Gottesman-Knill stabilizer QEC [Acharya 2024]")
+    println("  ssh                                       SSH topological-edge primer [SSH 1979]")
+    println("  hofstadter                                Harper-Hofstadter butterfly [Hofstadter 1976]")
+    println("  dqpt                                      TFIM Loschmidt DQPT         [Heyl 2013]")
+    println("  wdw                                       Wheeler-DeWitt minisuperspace [Basilakos 2025]")
+    println("")
+    println("ARCHIVE")
+    println("  ~/core/archive_sim-universe/              frozen 묘비 (RFC 046 헌법 v2 룰 3)")
+    println("  DOI: 10.5281/zenodo.20102970")
+    println("")
+    println("HONEST SCOPE  Toy lattice-model substrate with QRNG-anchored entropy.")
+    println("  NOT lattice QCD · NOT Einstein-equation evolution · NOT N-body cosmology")
+    println("  NOT Standard-Model physics. See stdlib/sim_universe/README.md §Caveats.")
+}
+
+fn cmd_version() {
+    println("hexa sim-universe " + VERSION)
+    println("stdlib/sim_universe — RFC 046 absorption of dancinlab/sim-universe v1.1.0")
+    println("license: Apache-2.0  |  DOI: 10.5281/zenodo.20102970")
+    println("status: " + PHASE)
+}
+
+fn cmd_status() {
+    println("hexa sim-universe " + VERSION + " status")
+    println("status: " + PHASE)
+    println("")
+    println("MODULE INVENTORY (26 modules · ~32k LoC)")
+    println("")
+    println("  Tier-A (runnable simulators)")
+    println("    anu_time            5,881 LoC  τ-clock + mini_world + Lorentz + topology")
+    println("    multiverse          4,181 LoC  interferometer + KS-test + higher-order MI")
+    println("    qpu_bridge            441 LoC  VQE-H2 demo + ANU noise-model adapter")
+    println("")
+    println("  Tier-A2 (analytical + RNG infrastructure)")
+    println("    atlas_anu_corr        ---      ATLAS xcorr engine + null baseline")
+    println("    anu_stream            ---      stream_daemon + chacha20 + client_example")
+    println("    ouroboros_qrng        862 LoC  baseline + shadow + perturbation (uses stdlib/qrng/)")
+    println("    godel_q               758 LoC  Gödel-Q mutator + bootstrap (verify-gate)")
+    println("    bostrom_test          235 LoC  anu_collector pre-registered tests")
+    println("    sim_agent             492 LoC  registry + router (lib entry)")
+    println("    sr_harness            800 LoC  sim-adjacent harness")
+    println("")
+    println("  Tier-A2 experiments (16 modules · ~14k LoC total)")
+    println("    fvd                 1,338 LoC  exact 2ᴺ false-vacuum decay (Chao 2026)")
+    println("    stark-fragmentation 1,212 LoC  Hilbert-space fragmentation (Wang 2024)")
+    println("    quantum-darwinism   1,282 LoC  quantum-Darwinism gate sim (Zhu 2025)")
+    println("    ca-qm               1,142 LoC  two-engine CA of QM (Elze/van Berkel)")
+    println("    supremacy-frontier  1,272 LoC  2ⁿ RCS XEB (Morvan 2024)")
+    println("    mbs-revival           869 LoC  PXP-Rydberg scar (Xiang 2024)")
+    println("    fock-prethermal-dtc   771 LoC  Fock-space DTC (Bao 2025)")
+    println("    z2-gauge-prethermal   804 LoC  (1+1)D Z₂ LGT Floquet (Hayata-Hidaka 2024)")
+    println("    preheating-analog     615 LoC  cold-atom BdG preheating (Gondret 2025)")
+    println("    multipolar-prethermal 1,176 LoC RMD prethermal α=2n+1 (Liu 2025)")
+    println("    surface-code          835 LoC  Gottesman-Knill stabilizer QEC (Acharya 2024)")
+    println("    ssh-topology          693 LoC  SSH topological edge (SSH 1979)")
+    println("    hofstadter            823 LoC  Harper-Hofstadter butterfly (1976)")
+    println("    dqpt-loschmidt        684 LoC  TFIM Loschmidt DQPT (Heyl 2013)")
+    println("    wdw-minisuperspace    889 LoC  Wheeler-DeWitt minisuperspace (Basilakos 2025)")
+    println("")
+    println("HONEST SCOPE")
+    println("  Toy lattice-model substrate · Bostrom-flavored simulation framing.")
+    println("  NOT lattice QCD · NOT Einstein-equation · NOT N-body cosmology · NOT SM physics.")
+    println("  Each experiment declares per-module 'honest scope' (NOT decoherent · NOT lab device · NOT L→∞).")
+    println("  Full caveats: stdlib/sim_universe/README.md + archive_sim-universe/README.md")
+    println("")
+    println("CODE STATUS")
+    println("  RFC 046 Phase A: README + CLI scaffold + AGENTS.tape + archive_sim-universe/ freeze ✅")
+    println("  RFC 046-A:       substrate code migration (anu_time/multiverse/qpu_bridge/+) — pending")
+    println("  RFC 046-B:       16 experiments code migration + tests — pending")
+    println("  Archive:         ~/core/archive_sim-universe/ (frozen, read-only)")
+}
+
+fn cmd_deferred(name: str) {
+    println("hexa sim-universe " + name + " — DEFERRED to RFC 046-A/B code migration")
+    println("")
+    println("Status: " + PHASE)
+    println("")
+    println("This subcommand requires the actual .hexa module code which has not yet")
+    println("been migrated from the archive. To run the original (frozen) version:")
+    println("")
+    println("  hexa run ~/core/archive_sim-universe/cli/sim-universe.hexa " + name)
+    println("")
+    println("Or wait for RFC 046-A (substrate) / RFC 046-B (experiments) follow-up commits.")
+    exit(2)
+}
+
+fn main() {
+    let argv = args()
+    let n = len(argv)
+    let mut subcmd_idx = -1
+    let mut i = 0
+    while i < n {
+        if argv[i].ends_with(".hexa") { subcmd_idx = i + 1; break }
+        i = i + 1
+    }
+    if subcmd_idx < 0 { subcmd_idx = 2 }
+
+    if subcmd_idx >= n {
+        cmd_status()
+        return
+    }
+
+    let sub = argv[subcmd_idx]
+
+    if sub == "--help" || sub == "-h" || sub == "help" {
+        cmd_help()
+    } else if sub == "--version" || sub == "-v" || sub == "version" {
+        cmd_version()
+    } else if sub == "status" {
+        cmd_status()
+    } else if sub == "selftest" || sub == "anu" || sub == "multiverse" || sub == "qpu" ||
+              sub == "qrng" || sub == "bostrom" || sub == "godel" || sub == "fvd" ||
+              sub == "stark" || sub == "qdarwin" || sub == "ca-qm" || sub == "supremacy" ||
+              sub == "mbs" || sub == "dtc" || sub == "z2gauge" || sub == "preheating" ||
+              sub == "multipolar" || sub == "surface-code" || sub == "ssh" ||
+              sub == "hofstadter" || sub == "dqpt" || sub == "wdw" {
+        cmd_deferred(sub)
+    } else {
+        println("hexa sim-universe: unknown subcommand '" + sub + "'")
+        println("run 'hexa sim-universe --help' for usage")
+        exit(2)
+    }
+}

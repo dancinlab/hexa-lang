@@ -77,6 +77,7 @@
   TAPE-AUDIT.md -> "tape v1.x adoption ledger for this repo"
   inbox/patches/ -> "external-contributed patch markdowns (one concept per file)"
   stdlib/qrng/ -> "★ Quantum RNG — 9 backends T0..T3 + NIST SP 800-22 audit. RFC 044 absorption of ~/core/qrng (헌법 v2 룰 4 reference impl). see §0 qrng_stack."
+  stdlib/sim_universe/ -> "★ Sim-Universe — virtual-universe runtime (26 modules · ~32k LoC · τ-clock + multiverse + qpu_bridge + 16 experiments). RFC 046 absorption of ~/core/sim-universe. see §0 sim_universe_stack."
 
 # ─── §0 PROJECT-WIDE QRNG STACK (2026-05-16) ─────────────────────────
 # stdlib/qrng/ 는 헌법 v2 룰 4 (외부 자원 try-CLI-or-fallback) 의 모범 사례.
@@ -94,6 +95,23 @@
   governance = "see @D g_qrng_audit_required, g_qrng_honest_vendor, g_qrng_provider_only · @F f_qrng_silent_mock_downgrade"
   doi = "10.5281/zenodo.20102966 (dancinlab/qrng v1.0.0)"
   rfc = "RFC 044 (landed 2026-05-16) · RFC 045 qmirror + RFC 046 sim-universe 후속"
+  @> README.md
+
+# ─── §0 PROJECT-WIDE SIM-UNIVERSE STACK (2026-05-16) ──────────────────
+# stdlib/sim_universe/ — toy lattice-model substrate at cosmological scale.
+# 헌법 v2 룰 2 (algorithm absorption) + 룰 3 (frozen archive).
+
+@N sim_universe_stack := "stdlib/sim_universe — 26-module virtual-universe runtime" :: note [d=2026-05-16 active]
+  substrate = "stdlib/sim_universe/{anu_time (τ-clock + Lorentz + mini_world, 5.9k LoC), multiverse (interferometer + KS + MI, 4.2k LoC), qpu_bridge (VQE-H2 + ANU noise, 441 LoC), sim_agent (registry+router, 492 LoC), ouroboros_qrng (consumes stdlib/qrng/, 862 LoC), godel_q (AST mutator + verify-gate, 758 LoC), bostrom_test (235 LoC), sr_harness (800 LoC), atlas_anu_corr (1.0k LoC), anu_stream (903 LoC)} — 10 modules, ~15.6k LoC (RFC 046-A LANDED)"
+  experiments = "stdlib/sim_universe/experiments/{fvd (Chao 2026, 1.3k LoC), stark-fragmentation (Wang 2024, 1.2k LoC), quantum-darwinism (Zhu 2025), ca-qm (Elze/van Berkel), supremacy-frontier (Morvan 2024), mbs-revival (Xiang 2024), fock-prethermal-dtc (Bao 2025), z2-gauge-prethermal (Hayata-Hidaka 2024), preheating-analog (Gondret 2025), multipolar-prethermal (Liu 2025), surface-code (Acharya 2024), ssh-topology (SSH 1979), hofstadter (Hofstadter 1976), dqpt-loschmidt (Heyl 2013), wdw-minisuperspace (Basilakos 2025)} — 15 modules, ~14.4k LoC (RFC 046-B LANDED)"
+  cli = "hexa sim-universe <subcmd> — dispatcher = stdlib/sim_universe/sim_universe.hexa (status · selftest · anu · multiverse · qpu · qrng · bostrom · godel · sr · 15 experiment subcmds · --help · --version). self/main.hexa 에 'else if sub == \"sim-universe\"' 분기."
+  honest_scope = "Toy lattice-model substrate · Bostrom-flavored framing. NOT lattice QCD · NOT Einstein-equation · NOT N-body cosmology · NOT SM physics. Each experiment ships per-module 'honest scope' caveat (NOT decoherent · NOT lab device · NOT L→∞ limit)."
+  qrng_dependency = "stdlib/sim_universe/ouroboros_qrng/ consumes stdlib/qrng/ (RFC 044 absorbed) — 4-tier ANU fallback (paid → keyed → legacy → urandom)."
+  archive = "~/core/archive_sim-universe/ — frozen 묘비 (헌법 v2 룰 3)"
+  governance = "see @D g_sim_universe_honest_scope, g_sim_universe_qrng_consumer · @F f_sim_universe_lattice_qcd_claim"
+  doi = "10.5281/zenodo.20102970 (dancinlab/sim-universe v1.1.0)"
+  rfc = "RFC 046 Phase A + 046-A + 046-B LANDED 2026-05-16"
+  status = "FULL absorption — substrate + 15 experiments + CLI dispatcher + README + governance + archive ✅"
   @> README.md
 
 # ─── §3 Governance rules ─────────────────────────────────────────────
@@ -178,6 +196,18 @@
   source = "qrng AGENTS.tape g3 (migrated 2026-05-16 RFC 044)"
   @> AGENTS.md
 
+@D g_sim_universe_honest_scope := "sim-universe honest scope" :: governance [required d=2026-05-16 active]
+  rule = "Each stdlib/sim_universe/experiments/<name>/ module MUST declare its 'honest scope' in module docstring + README — what it IS (exact ED, closed-form, etc.) and what it is NOT (decoherent, lab device, L→∞ limit, lattice QCD, full SM)."
+  examples = "fvd: EXACT 2ᴺ unitary N≤24, NOT lab; supremacy: calibrates XEB ruler at n≲24, NOT a sim-vs-reality claim; surface-code: Gottesman-Knill polynomial tableau, NOT 2ᴺ state vector."
+  source = "sim-universe AGENTS.tape g1/g7 (migrated 2026-05-16 RFC 046)"
+  @> AGENTS.md
+
+@D g_sim_universe_qrng_consumer := "sim-universe → stdlib/qrng dependency" :: governance [required d=2026-05-16 active]
+  rule = "stdlib/sim_universe/ouroboros_qrng/ consumes stdlib/qrng/ (RFC 044) — no own provider implementation. 4-tier ANU fallback (paid → keyed → legacy → urandom) is qrng's responsibility."
+  why = "Provider/consumer boundary preserved across the absorption series. ouroboros_qrng is an entropy-consumer (perturbation pipeline), not a provider."
+  source = "RFC 044 + RFC 046 cross-link 2026-05-16"
+  @> AGENTS.md
+
 # ─── §4 Forbidden patterns ───────────────────────────────────────────
 
 @F f1 := "lattice-fit-on-external-language" :: governance [required deny:write]
@@ -197,6 +227,11 @@
   pattern = "Router falls back to mock_qrng (T0) without preserving tier/vendor/message in audit_level_delivered or RouterResult.attempts/reasons."
   remedy = "router MUST set audit_level_delivered to 'tier1-none' or 'none' and record attempts list; caller SHOULD check tier != 'T0' before security use."
   source = "qrng AGENTS.tape f_weak_entropy (migrated 2026-05-16 RFC 044)"
+
+@F f_sim_universe_lattice_qcd_claim := "sim-universe overreach claim" :: governance [required deny:write d=2026-05-16 active]
+  pattern = "Claiming stdlib/sim_universe/ is lattice QCD · Einstein-equation N-body cosmology · Standard-Model physics · or a measurement of 'whether reality is simulable'."
+  remedy = "Frame as 'toy lattice-model substrate with QRNG-anchored entropy · Bostrom-flavored simulation framing'. Per-module honest-scope box explicit (e.g. 'NOT decoherent · NOT lab device · NOT L→∞')."
+  source = "sim-universe README §Caveats raw10 C3 (migrated 2026-05-16 RFC 046)"
 
 # ─── §5 External citations ───────────────────────────────────────────
 
@@ -242,6 +277,13 @@
   github = "dancinlab/qrng (private 후 2026-05-16)"
   doi = "10.5281/zenodo.20102966"
   successor = "stdlib/qrng/ (RFC 044)"
+
+@X x_archive_sim_universe := "sim-universe 묘비 archive" :: archive [d=2026-05-16 active]
+  url = "file://~/core/archive_sim-universe/"
+  scope = "Frozen historical SSOT of dancinlab/sim-universe v1.1.0 — AGENTS.tape · CHANGELOG · README · CITATION · LICENSE · DESIGN_IDEAS · FALSE_VACUUM · STARK_FRAGMENTATION · hexa.toml · install.hexa · cli/ · docs/ · MODULE/ · examples/ · 26 module dirs verbatim. 재해석 없음 (헌법 v2 룰 3)."
+  github = "dancinlab/sim-universe (private 후 2026-05-16)"
+  doi = "10.5281/zenodo.20102970"
+  successor = "stdlib/sim_universe/ (RFC 046 LANDED 2026-05-16)"
 
 # ─── §6 Notes ────────────────────────────────────────────────────────
 
