@@ -113,20 +113,40 @@ RFC 034 autograd (✅) · 040 device-farr (✅)        ← 언어 표현력 (dow
 
 ## 현재 정직한 위치 (g3 — over-claim 금지)
 
-**목표 미도달.** self-host fixpoint 미달 — codegen-correctness 버그 3개 중 2개 종결, 1개 잔존.
+**self-host 축 CLOSED · 인터프리터 실삭제는 gate ① 잔여로 미실행.** bit-stable self-host
+fixpoint 도달 — aprime_cc 가 인터프리터·hexa_v2 없이 자기 자신을 bit-for-bit 재현. 단
+"모든 .hexa 네이티브"는 gate ① 잔여(11/44)로 미완 → 인터프리터 소스 삭제 아직 불가.
+
+self-host codegen-correctness 버그 #23~#29 (7개) 누적 종결:
 
 | # | self-host 버그 | 상태 | main |
 |---|----------------|------|------|
 | #23 | `index_set` 반환값 drop → stale array header | ✅ FIXED | `cceb0351` |
 | #24 | `_patch_loop_sentinels` sibling-loop continue mis-bind | ✅ FIXED | `9223fe4a` |
-| #25 | ap2 per-function emit loop 이 함수 body 0개 생성 | ⏳ 격리·진행 중 | — |
+| #25 | match-as-expression arm 결과값 drop | ✅ FIXED | `1734f890` |
+| #26 | `_arm64_lower_func` MFunc field × fn-arena 경계 | ✅ FIXED | `77b78b31` |
+| #27 | call-overflow region stride 8→16 (frame aliasing) | ✅ FIXED | `d81e2195` |
+| #28 | enum value `==` TAG_MAP pointer-identity | ✅ FIXED | `fa210c54` |
+| #29 | bitwise `& \| ^ << >>` 가 add 로 miscompile | ✅ FIXED | `93ee4ecf` |
 
-- **gate ①**: 33/44 MATCH (aprime_cc tier-1 ≡ hexa-build tier-2 oracle). frontend-CGFAIL 6 + env-resource 2 제외 시 effective ≈ 33/36 (92%).
-- **잔여 실-aprime gap**: 3 atlas-verifier MISMATCH 한 클러스터로 수렴 (`doctrine`·`tecsl_verify`·`wave3` — verifier scan predicate 의 wrong truth-value, codegen bool-coercion 후보).
-- **ap2 도달선**: real 6.4 MB atlas 15952 nodes 로드 크래시 0 + frontend/atlas-load/lex/parse/bind 통과 (이전엔 atlas-load 즉사) → 마지막 블로커 = #25 (emit loop).
-- **인터프리터 삭제**: 미실행 — gate ①~④ 전부 close + #25 종결 후. 현재는 `폐기예정` 거버넌스 표시만 (`@D g_interp_deprecated`).
+- **★ BIT-STABLE SELF-HOST FIXPOINT REACHED**: `ap1f → flat → ap2f → flat → ap3f`,
+  `ap1f.s == ap2f.s == ap3f.s` byte-identical (231,125-line asm, md5 `18df90eb…`),
+  각 generation 이 38-file/22,227-line flattened compiler 를 HX2001 0 / map-key 0 으로
+  컴파일. 독립 검증 (clean origin/main).
+- **gate ①**: 33/44 MATCH (aprime_cc tier-1 ≡ hexa-build tier-2 oracle). frontend-CGFAIL
+  6 + env-resource 2 제외 시 effective ≈ 33/36 (92%).
+- **잔여 gap (인터프리터 삭제 차단)**: ① 3 atlas-verifier MISMATCH (`doctrine`·
+  `tecsl_verify`·`wave3` — verifier scan predicate wrong-value codegen) · ② 6 frontend-
+  CGFAIL (`extern fn`·`@select` annotation-arg·try/catch·type-infer — codegen 진입 전
+  abort). 이 둘이 닫혀야 "모든 .hexa 네이티브" 성립.
+- **R7 deletion gate**: ②(CLI compiled) ③(atlas SIGSEGV) ④(module_loader interp-free)
+  ✅ · ①(coverage ≥ interp) 🔄 미완. 인터프리터 소스 삭제는 gate ① close 후 — 현재는
+  `폐기예정` 거버넌스 표시 + 사용 금지 directive (`@D g_interp_deprecated`).
 
-> 이 GOAL 은 north-star — 달성 주장 아님, 측정된 거리 명시. self-host fixpoint·gate 측정값의 SSOT 는 `compiler/PLAN.md` 진행 로그. 인터프리터는 이미 사용 금지(메모리 directive: `hexa run` 금지, 검증은 compiled path) 이나 *소스 삭제*는 별개 — 정직히 미실행으로 기록.
+> 이 GOAL 은 north-star — self-host 축은 측정으로 CLOSED (fixpoint byte-identical),
+> "인터프리터 폐기" 전체는 gate ① 잔여로 미완 — 정직히 분리 기록. 측정값 SSOT 는
+> `compiler/PLAN.md` 진행 로그. 인터프리터는 이미 사용 금지(`hexa run` 금지, 검증은
+> compiled path)이나 *소스 삭제*는 gate ① 후 — 미실행으로 기록.
 
 ---
 
