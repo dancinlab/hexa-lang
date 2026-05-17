@@ -1,0 +1,18 @@
+# comb T1-A numeric verification (elementary arithmetic; no symbolic tool)
+# Generated 2026-05-18. Verifies T1A_analytical.md asymptotic claims at concrete N.
+# Each row: N, diameter mesh, diameter hex, ratio hex/mesh, avgD mesh, avgD hex.
+# Asymptotic prediction: ratio -> 1/sqrt(3) = 0.577350
+#
+N       D_mesh       D_hex        ratio        avgD_mesh    avgD_hex    
+64      14.000       9.238        0.6598       5.333        3.079       
+100     18.000       11.547       0.6415       6.667        3.849       
+256     30.000       18.475       0.6158       10.667       6.158       
+400     38.000       23.094       0.6077       13.333       7.698       
+900     58.000       34.641       0.5973       20.000       11.547      
+1024    62.000       36.950       0.5960       21.333       12.317      
+2500    98.000       57.735       0.5891       33.333       19.245      
+10000   198.000      115.470      0.5832       66.667       38.490      
+
+# asymptotic D_hex/D_mesh -> 1/sqrt(3) = 0.577350 (theoretical, see T1A_analytical.md §2)
+# hop reduction (D_mesh - D_hex)/sqrt(N) asymptotic = 0.845299
+# trend: ratio decreases monotonically toward 1/sqrt(3) (transient at small R)

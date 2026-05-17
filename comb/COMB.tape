@@ -51,4 +51,6 @@
   plan = "comb/PLAN.md — 진행 로그 SSOT"
   t1_spec = "comb/T1_experiment.md — F1/F2 pre-registered 측정 명세 (consumer-side)"
   t1a_done = "comb/T1A_analytical.md — T1-A 완료 (sim 불요). 표준 NoC 문헌 인용·정리, 산술 elementary, caveat 5건. 핵심: diameter hex/mesh = 1/√3, avg dist 1/√3, hop 절감 ≈ 0.845√N, degree·links 1.5×, hop 부등식 §3."
-  next_gate = "T1-B sim 측정 (degree-6 vs degree-4, modern node wire model, F1/F2 verdict) — blocked-on-hexa-arch[chip] NoC sim 흡수 (별도 repo ~/core/hexa-arch 진행中)"
+  t1b_oracle_done = "comb/sim/ — T1-B-oracle 완료. T1A_verify.txt(awk 수치 8 N points 0.66→0.583) + noc_distance.hexa(hexa parse PASS · hexa build OK · 컴파일 바이너리 실행 → noc_distance.out). 측정 ↔ 이론 일치: N=10000 → 114/198=0.5758 ≈ 1/√3=0.5774 (정수 floor 진동, 큰 N 수렴)."
+  decouple_refine = "comb 가 안 하는 것 = 외부 EDA 흡수 (BookSim2/Yosys/OpenROAD/SKY130 — hexa-arch[chip]). comb 가 하는 것 = 그래프 레벨 oracle harness (comb/sim/, hexa-native compiled). T1-B = oracle(comb) + full(hexa-arch[chip])."
+  next_gate = "T1-B-full (modern-node wire model, F1/F2 verdict) — blocked-on hexa-arch[chip] BookSim2 흡수 (별도 repo ~/core/hexa-arch design.md/D5 진행中, comb 단독 대기)"

@@ -46,8 +46,16 @@
   인용 정리. 핵심 상수: N hex region = 3R²+3R+1 · diameter hex/mesh = 1/√3 ≈
   0.577 · avg dist hex/mesh = 1/√3 · #links 1.5× · degree 1.5× · hop 절감
   ≈ 0.845√N. 승리 부등식 §3 (좌변 그래프 상수 고정, 우변 process·placement
-  의존). F1/F2 operationalize 완성. caveat 5건 동반 (least-perimeter≠
-  least-latency · honeycomb≠hexagonal mesh 명명 등). 산술 모두 elementary,
-  sympy/Wolfram 인용 0. 출처: Leighton 1992 · Dally & Towles 2004 · Hales
-  2001 · Conway/Sloane 1999 · Stojmenović 1997 · Stillmaker/Baas 2012.
-  다음 = T1-B (hexa-arch[chip] NoC sim 흡수 후, 별도 repo 진행).
+  의존). caveat 5건 동반.
+- 2026-05-18 — **T1-B-oracle 완료** (`comb/sim/`): T1-B 를 분할 —
+  *T1-B-oracle* (graph-level, comb-내부, sim-free in wire-model sense)
+  + *T1-B-full* (modern-node wire model, hexa-arch[chip] sim 의존).
+  T1-B-oracle 산출: `T1A_verify.txt` (awk 수치 sanity 8 N points) +
+  `noc_distance.hexa` (hexa-native 소스, `hexa parse` PASS, `hexa build`
+  성공, 컴파일 바이너리 실행 → `noc_distance.out` 캡처). 측정 vs 이론:
+  N=10000 에서 D_hex/D_mesh = 114/198 = 0.5758 ≈ 1/√3 = 0.5774 (정수
+  floor 진동, 큰 N 수렴 확인). decoupling 재정의: comb 가 안 하는 것 =
+  외부 EDA 흡수 (hexa-arch 책임); comb 가 하는 것 = 자체 graph-level
+  oracle harness. 다음 = T1-B-full 은 hexa-arch[chip] BookSim2 흡수 후
+  (`~/core/hexa-arch` design.md/D5 — 7-verb spine + research-first;
+  외부 진행中) — comb 단독 대기.
