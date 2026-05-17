@@ -1311,6 +1311,27 @@
   opened: 2026-05-17
   detail: inbox/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md
 
+- id: rfc-052-forge-hopper-bf16-dsm-combined
+  source_commit: 9fd59ca8
+  source_files:
+    - inbox/rfc_drafts_2026_05_12/rfc_052_forge_hopper_bf16_dsm_combined.md
+  compiler_impact: |
+    Design-only RFC. Combined Hopper BF16 WMMA + DSM cluster kernel
+    (per RFC 049 "Next iteration plan" RFC 052 slot). Target 10-30×
+    FP64 cuBLAS at Llama-7B LARGE on Hopper (FP49 BF16 9.67× ×
+    Hopper TC headroom × DSM HBM savings). 7 falsifier pre-registered
+    (COMBINED-PERF, BITEQ-VS-RFC049, LAYERCAST-DET, DSM-INTERMEDIATE-FIT,
+    HOPPER-ONLY, FALLBACK, COMPILE-EQ). Literature anchors:
+    FlashAttention-3 (arxiv 2407.08608), FlashFuser (arxiv 2512.12949),
+    LayerCast (arxiv 2506.09501). sm_90+ only; sm_80 falls back to
+    RFC 049 BF16 path.
+  downstream_consumer: |
+    forge Phase 3 DSM tier completion + flame Phase 4-D-5+ Hopper
+    optimization. Coexists with RFC 049 (NOT supersede).
+  status: spec
+  opened: 2026-05-17
+  detail: inbox/rfc_drafts_2026_05_12/rfc_052_forge_hopper_bf16_dsm_combined.md
+
 - id: rfc-051-uarr-unboxed-array-native
   source_commit: pending
   source_files:
