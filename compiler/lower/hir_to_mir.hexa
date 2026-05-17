@@ -62,6 +62,25 @@ fn _const_int_op(v: i64) -> Operand {
     }
 }
 
+// Bool literal operand -- TAG_BOOL (=2), payload 0/1. literal_bool
+// previously lowered to _const_int_op (TAG_INT), so `true`/`false`
+// constants carried the wrong tag. hexa_eq returns false on a
+// tag mismatch, so a TAG_INT `true` never compared equal to the
+// TAG_BOOL result of `==` / `!=` / a comparison -- silently
+// flipping any `bool_a == bool_lit` predicate. Mirrors the
+// literal_char fix below (char literals -> TAG_STR for hexa_eq)
+// and codegen_c2.hexa:3233 (`true` -> hexa_bool(1)).
+fn _const_bool_op(v: i64) -> Operand {
+    return Operand {
+        kind: "const_bool",
+        local_id: -1,
+        int_val: v,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
 fn _const_float_op(v: f64) -> Operand {
     return Operand {
         kind: "const_float",
@@ -618,7 +637,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     if k == "literal_bool" {
         let mut v: i64 = 0
         if e.text == "true" { v = 1 }
-        return _value(ctx, _const_int_op(v))
+        return _value(ctx, _const_bool_op(v))
     }
     if k == "literal_char" {
         // Char literals are TAG_STR (a single-char string), NOT TAG_INT/

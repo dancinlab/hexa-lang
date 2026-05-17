@@ -638,6 +638,9 @@ fn _arm64_op_for_operand_st(o: Operand, st: ArmStrTab) -> LOperand {
     if o.kind == "const_int" {
         return _arm64_op_imm(o.int_val)
     }
+    if o.kind == "const_bool" {
+        return _arm64_op_imm(o.int_val)
+    }
     if o.kind == "global" {
         return _arm64_op_label("g" + to_string(o.global_id))
     }
@@ -869,6 +872,10 @@ fn _arm64_op_resolve(o: Operand, st: ArmStrTab, rm: RegMap,
         if o.int_val > 4095 { return _arm64_op_reg(scratch) }
         return _arm64_op_imm(o.int_val)
     }
+    if o.kind == "const_bool" {
+        // payload 0/1 — always immediate-representable.
+        return _arm64_op_imm(o.int_val)
+    }
     // global / const_str: address already materialized into `scratch`
     // by _arm64_op_rm (adrp+add). Return the register, not the label —
     // emitting the bare label is invalid ARM64.
@@ -974,6 +981,18 @@ fn _hv_load(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
                          _arm64_op_label("#4"), "hv const_void: TAG_VOID"))
         out.push(_arm64_instr2("movz", _arm64_op_reg(hi),
                          _arm64_op_label("#0"), "hv const_void payload"))
+        return out
+    }
+    if o.kind == "const_bool" {
+        // `true`/`false` literal — TAG_BOOL=2, payload 0/1. literal_bool
+        // used to lower to const_int (TAG_INT), so a literal bool never
+        // compared equal under hexa_eq to the TAG_BOOL produced by
+        // `==` / `!=` / a comparison (hexa_eq returns false on tag
+        // mismatch). Mirrors codegen_c2.hexa `true` -> hexa_bool(1).
+        out.push(_arm64_instr2("movz", _arm64_op_reg(lo),
+                         _arm64_op_label("#2"), "hv const_bool: TAG_BOOL"))
+        out.push(_arm64_instr2("movz", _arm64_op_reg(hi),
+                         _arm64_op_label("#" + to_string(o.int_val)), "hv const_bool payload"))
         return out
     }
     if o.kind == "const_str" {
