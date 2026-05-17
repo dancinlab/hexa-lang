@@ -11423,11 +11423,14 @@ fn call_builtin(name, args) {
     }
     if name == "chr" {
         if len(args) == 0 { return val_str("") }
-        // HX-chr-fix: actual int→char (UTF-8 via from_char_code), not decimal
-        // string. Earlier impl mistakenly used to_string() which emitted the
-        // int's decimal digits ("72" instead of "H"). Mirrors the correct
-        // impl at line 11402 (VM dispatch path).
-        return val_str(from_char_code(args[0].int_val))
+        // chr-byte-fix 2026-05-17 (RFC chr-byte-vs-codepoint-asymmetry):
+        // byte-level — length-1 string with raw byte N & 0xFF. Mirrors
+        // `ord(substring(s,i,1))` byte read and the compiled lowering
+        // `chr → hexa_chr_byte` in codegen_c2.hexa. Built via existing
+        // bytes_to_str_raw([b]) intrinsic (avoids a host-fn cross-call
+        // before chr_byte is recognised by the bootstrap transpiler).
+        let b = args[0].int_val & 0xff
+        return val_str(bytes_to_str_raw([b]))
     }
     if name == "arange" {
         // arange(n) | arange(start, end) | arange(start, end, step)

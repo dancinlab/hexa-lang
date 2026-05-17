@@ -288,6 +288,18 @@ if src_c_dir != hexa_dir + "/self" {
     exec("cp -f " + hexa_dir + "/self/runtime.c " + src_c_dir + "/runtime.c")
 }
 
+// 1.6) PHASE 1.2 reversal for interp build (2026-05-17, wilson P0#2):
+// hexa_v2 transpile emits `#include "runtime.h"` (PHASE 1.2 split for
+// AOT compile-speed). The interp transpile inlines ~33 K LoC of
+// hexa_full.hexa code and references many static-inline / TAG_FN-carrier
+// symbols (farr_pauli_exp_inplace, hx_pipe_spawn, bit_or, ...) that
+// runtime.h can't expose cleanly. Restore the old `#include "runtime.c"`
+// pattern for this single TU so the runtime body is inlined into src_c
+// and every helper is visible. AOT user.c path is unaffected (uses
+// runtime.h + precompiled runtime.o on a separate build path).
+exec("sed -i.bak 's|#include \"runtime.h\"|#include \"runtime.c\"|' " + src_c)
+exec("rm -f " + src_c + ".bak")
+
 // 2) Compile
 let uname = exec("uname 2>/dev/null | tr -d ' \\n\\t'").trim()
 let mut cflags = ""
