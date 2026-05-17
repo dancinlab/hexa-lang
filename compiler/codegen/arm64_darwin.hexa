@@ -1643,8 +1643,30 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         instrs.push(_arm64_instr0("label", _arm64_block_label(modhash, mf.name, blk.id)))
         let mut si = 0
         while si < len(blk.stmts) {
-            instrs = _emit_arm64_stmt(instrs, modhash, mf.name,
-                                      blk.stmts[si], st, rm, spill_frame)
+            // #18 codegen-perf — per-statement delta accumulation. The
+            // prior `instrs = _emit_arm64_stmt(instrs,…)` re-returned the
+            // whole growing `instrs` array every statement; the runtime's
+            // fn-arena return path (__hexa_fn_arena_return → hexa_val_
+            // heapify) deep-walks every element of a returned TAG_ARRAY,
+            // so threading the accumulator cost Σ O(len instrs) = O(N²)
+            // on a large single function. Pass a FRESH `[]` so each call
+            // returns only that statement's instructions (~5 elems →
+            // O(1) heapify), then append the delta into `instrs`. `instrs`
+            // itself is heapified just once, when _arm64_lower_func
+            // returns its LFunc — O(total). Byte-identical: same instrs in
+            // the same order, only the accumulation cadence changed.
+            let delta = _emit_arm64_stmt([], modhash, mf.name,
+                                         blk.stmts[si], st, rm, spill_frame)
+            let mut _di = 0
+            while _di < len(delta) {
+                instrs.push(delta[_di])
+                _di = _di + 1
+            }
+            if env("HEXA_CG_TIMING") == "2" {
+                if (si / 100) * 100 == si && si > 0 {
+                    eprintln("[CG_TIMING2] stmt#" + to_string(si) + " cum=" + to_string(time_ms() - _t_emit0) + " ms instrs=" + to_string(len(instrs)))
+                }
+            }
             si = si + 1
         }
         bi = bi + 1
