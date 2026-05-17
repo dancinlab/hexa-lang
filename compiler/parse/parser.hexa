@@ -178,6 +178,7 @@ fn tag_of(k: TokenKind) -> string {
         TokenKind::RParen -> "RParen",
         TokenKind::LBrace -> "LBrace",
         TokenKind::RBrace -> "RBrace",
+        TokenKind::HashLBrace -> "HashLBrace",
         TokenKind::LBracket -> "LBracket",
         TokenKind::RBracket -> "RBracket",
         TokenKind::Comma -> "Comma",
@@ -838,6 +839,60 @@ fn parse_primary() -> Expr {
             span: lb.span,
             text: "",
             children: elems,
+            atlas_ref: empty_atlas()
+        }
+    }
+    // Hash-map literal `#{ "k": v, "k2": v2 }` / `#{}`.
+    //
+    // The lexer emits `#{` as a single HashLBrace token, so this production
+    // is unambiguous — no struct-lit-suppression interaction. Each entry is
+    // encoded as an `Ident` child (text = the string-literal key content,
+    // children = [value_expr]) — byte-identical to the shape produced by
+    // `parse_struct_lit_after_name`. We reuse `ExprKind::StructLit` as the
+    // result kind so ast_to_hir / hir_to_mir / all three codegen backends
+    // (which already lower struct_lit to a map-backed hexa_map_new +
+    // hexa_map_set sequence) work with zero changes. `#{}` -> empty StructLit
+    // -> hexa_map_new() only, matching the bare-`{}` empty-map form.
+    //
+    // Scope: string-literal keys only (the documented `#{...}` form, and the
+    // only form the test corpus uses). A non-string key token is consumed as
+    // a best-effort `parse_expr()` whose text is taken verbatim — but a
+    // computed (non-literal) key cannot ride the const-char* map_set ABI, so
+    // such keys are effectively deferred (none appear in the corpus).
+    if check_kind(TokenKind::HashLBrace) {
+        let hb = peek()
+        advance()  // consume #{
+        let mut entries = []
+        while !check_kind(TokenKind::RBrace) && !at_eof() {
+            let key_tok = peek()
+            let mut key_text = ""
+            if check_kind(TokenKind::String) {
+                key_text = key_tok.text
+                advance()
+            } else {
+                // best-effort: non-string key — take its lexeme text
+                let ke = parse_expr()
+                key_text = ke.text
+            }
+            eat(TokenKind::Colon)
+            let val_expr = parse_expr()
+            let mut entry_kids = []
+            entry_kids.push(val_expr)
+            entries.push(Expr {
+                kind: ExprKind::Ident,
+                span: key_tok.span,
+                text: key_text,
+                children: entry_kids,
+                atlas_ref: empty_atlas()
+            })
+            if check_kind(TokenKind::Comma) { advance() }
+        }
+        eat(TokenKind::RBrace)
+        return Expr {
+            kind: ExprKind::StructLit,
+            span: hb.span,
+            text: "",
+            children: entries,
             atlas_ref: empty_atlas()
         }
     }
