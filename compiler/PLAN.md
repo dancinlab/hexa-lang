@@ -757,3 +757,39 @@ x86_64 backend 무수정 (incomplete backend, self-host path·gate-1 무관).
 builtin, RFC-scoped 신기능). codegen-correctness 측면에서 **구현된 언어 범위는 tier-1 ≡
 tier-2 사실상 완전** (모든 비-env·비-미구현 프로그램 MATCH). 인터프리터 실삭제(R7)는
 CGFAIL 6 신기능 구현 후.
+
+---
+
+### 진행 로그 — gate ① 메모리-builtin + @link/extern + *T 파서 LANDED (`990d546c`·`ce76944e`) (cycle h19)
+
+**cluster A (memory builtins) `990d546c`**: 14 저수준 메모리/포인터 builtin
+(`alloc_raw`·`free_raw`·`write_f32`·`deref_f32`·`ptr_read_f64`·`ptr_write_f32`·
+`write_i32/i64`·`deref_i32`·`ptr_read_f32/i32`·`ord`·`ptr_from_int`) 를 tier-1
+frontend(`bind.hexa _bind_builtin_names`) + native codegen(`arm64_darwin.hexa
+_builtin_runtime_sym` 11 direct map + STMT_CALL `ord`/`ptr_from_int` branch) 에 등록.
+runtime/interp 무변경 (함수 이미 runtime.c + native/tensor_kernels.c 존재; tier-1 가
+tier-2 codegen_c2 따라잡기). additive `if name ==` branch — compiler source 무발화라
+fixpoint 구조적 보존.
+
+**cluster B' (@link extern fn + *T) `ce76944e`**: `extern` 이 tier-1 lexer keyword
+아님 → Ident 토큰화 → `parse_item` 미처리 → unknown-leader fallthrough 가 decl-loop
+desync, 후속 top-level decl 전부 silently swallow → t35/t37(`let mut ok`)·
+t36(`HXQWEN14B_*` via `self/ml/qwen14b.hexa`) cascading undefined-name. 2차 gap:
+`parse_type` 에 `Star` arm 부재 → `*Void` param 재-desync. Fix: `parse_extern_fn_item`
+(body optional, tier-2 `hexa_full.hexa::parse_extern_fn` mirror) + `parse_type` Star
+arm (tier-2 `parse_type_annotation:2406` mirror). parser.hexa only, bind/types/codegen
+무변경.
+
+**검증 (각 clean origin/main)**: build_aprime smoke PASS; gate-1 **36/44 zero
+regression** (분류 byte-identical); ap1 vs ap1f non-affected byte-identical;
+**self-host fixpoint 보존** (A: md5 `10863f5b…` · B': fresh-flatten 22,445-line incl
++99, ap1f.s==ap2f.s md5 `b6bfe0a4…`).
+
+**gate ① 정직한 천장 재평가**: 36/44. 잔여 8 중 — t35 = **ORAFAIL-class FFI** (tier-2
+oracle `dlsym` SIGSEGV `ora_rc=139`, codegen gap 아님; tier-1 FFI symbol resolution 은
+별도 RFC scope) · `repo_taxonomy_audit`(rc137 OOM)·`t34_net_listen`(rc138 socket) =
+env-resource (codegen 무관). **codegen-correctness 분모 실질 ≈ 40** (t35-orafail +
+2-env 제외). 진짜 잔여 codegen/typecheck/feature gap = #33 int×float HX3001
+(t_multiarch_cpu) ↔ t37 8× HX3001 numeric-literal type-infer (동근 가능성) ·
+t36 serve_alm.hexa import HX2001/HX3002 · try/catch(t38_nanbox) · int-div
+strict-lint(atlas_verify). 다음: #33 (t_multiarch_cpu+t37 동시 해소 가능성 최고가치).
