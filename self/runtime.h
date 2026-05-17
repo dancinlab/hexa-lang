@@ -363,6 +363,15 @@ HexaVal hexa_umount(HexaVal tgt_v, HexaVal flags_v);     /* native/mount.c:44 */
  * the decls to avoid implicit-int → HexaVal init errors. */
 HexaVal hexa_str_char_code_at(HexaVal s, HexaVal idx); /* runtime.c:3891 */
 HexaVal rt_file_size(HexaVal path);                    /* runtime.c:5110 */
+/* Five more forward-decls 2026-05-17 sweep exposed (interp-retire R5):
+ * tier-2 hexa-build path errored with "call to undeclared function" on
+ * runtime symbols defined-but-not-declared. Each is in runtime.c, only
+ * the header was missing the prototype. */
+HexaVal hexa_setenv(HexaVal name, HexaVal value);                                  /* runtime.c:10777 */
+HexaVal hexa_cstring(HexaVal s);                                                   /* runtime.c:6342 */
+HexaVal hexa_ptr_write(HexaVal ptr, HexaVal offset, HexaVal val);                  /* runtime.c:6556 */
+HexaVal hexa_range_array(HexaVal start, HexaVal end, HexaVal step, int inclusive); /* runtime.c:7388 */
+int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start);             /* runtime.c:4112 */
 
 /* native/namespace.c */
 HexaVal hexa_unshare(HexaVal flags_v);     /* native/namespace.c:37 */
