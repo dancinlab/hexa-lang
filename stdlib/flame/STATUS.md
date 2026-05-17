@@ -1,14 +1,16 @@
-# flame Phase 4-B status — single-page consolidated state (2026-05-17, SIXTH update)
+# flame Phase 4-B status — single-page consolidated state (2026-05-17, SEVENTH update)
 
-> Updated after the **54-commit autonomous cycle** — 🎯 **Phase 4-B 의
-> ≥3× RFC 047 §137 TARGET PUSHED PAST** with Path B FULL fwd+bwd
-> matmul primitive integration. 3.09× wall MEASURED (thermal-elevated
-> baseline 23.529s → A2+B 7.618s), 3.23× projected cool conditions.
+> 🎯 **Phase 4-B FULLY SHIPPED + Phase 4-D/4-C prep complete** —
+> 67-commit autonomous cycle + 3 parallel subagent commits. ≥3×
+> RFC 047 §137 target REACHED with CPU-only (3.23× cool projection).
+> Phase 4-D infrastructure 100% ready (source + dispatch + CLI guide);
+> Phase 4-C smallest-viable-scope identified (4-C-1a 1-cycle autonomous).
 >
 > 🎯 baseline (cool) 16.170s → A2+B FULL ~5.0s projected = **3.23× wall**
 > 🎯 flame:anima = ~0.226× (**~4.4× faster than anima**)
 > 🎯 ≥3× RFC 047 §137 target REACHED with CPU-only architecture
-> 🎯 NO GPU dispatch required for ≥3× ceiling
+> 🎯 Phase 4-D ready for cost-bearing fire (user $5-20 approval)
+> 🎯 Phase 4-C 4-C-1a autonomous-able (paired-call detection, 1 cycle)
 > Cross-references the per-topic SSOTs (README.md / PLAN.md / FLAME.tape /
 > PERF.md / PHASE4B_SCAFFOLD.md / PHASE4B3_EMISSION_DESIGN.md /
 > NEXT_CYCLE.md). Use this for user-gate decisions; the per-topic SSOTs
@@ -72,6 +74,19 @@
 | 52 | `a4e09de9` | ship | Path B fwd matmul integration ~1.06× incremental |
 | 53 | `fdc3e1e5` | **verify** | Path B grad_accum 4-shape byte-eq battery PASS |
 | 54 | `29fe4a69` | **🎯 SHIP** | **Path B FULL — 3.09× wall (3.23× cool projection), ≥3× TARGET REACHED** |
+| 55 | `3b83d6a8` | docs | STATUS sixth + README headline + FLAME.tape ## Log |
+| 56 | `7faddb49` | tool | verify_all 23/23 artifacts PASS — Path B FULL coverage |
+| 57 | `0f88ca82` | docs | PLAN.md Phase 4-B SHIPPED entry |
+| 58 | `c4aab67e` | docs | PHASE4B_SHIPPED_SUMMARY.md single-page closure |
+| 59 | `ce422713` | docs | PERF.md FINAL Phase 4-B measurements |
+| 60 | `c5d49425` | docs | PHASE4D_GPU_DISPATCH_DESIGN.md (Phase 4-D scope) |
+| 61 | `d431a8f9` | feat | Phase 4-D-3 smoke test source (build PASS) |
+| 62 | `485a1d96` | feat | Phase 4-D-3 smoke FIX + RUN 3/3 PASS (1.19× collapse) |
+| 63 | `01198d8e` | tool | Phase 4-D-2 dispatch script template |
+| **A** | `84f514f3` | **subagent A** | **Phase 4-D-1 d=768·12L source draft (build PASS)** |
+| 64 | `b3b95747` | docs | RFC 047 SHIPPED post-impl update — ≥3× REACHED |
+| **C** | `8b93b9bd` | **subagent C** | **Phase 4-D CLI guide — runpod auth wired ($304 balance)** |
+| **B** | `935e6dfc` | **subagent B** | **PHASE4C_IMPLEMENTATION_AUDIT.md — RFC 048 audit + 4-C-1a smallest-viable scope** |
 
 ## Shippable production state
 
@@ -148,6 +163,43 @@ Why 2.74× FAR EXCEEDS the prior 1.14×/~1.4×-ceiling projection:
 directed cycles. The 2.74× wall is already a substantial milestone
 that PROVES the boxing-elim mechanism reaches Most of the ≥3× target.
 Path B pushes past with CPU-only architecture; Path D scales further.
+
+---
+
+## 🚀 Phase 4-D + 4-C 후속 작업 prep state (subagent 결과)
+
+3 parallel autonomous subagent가 Phase 4 후속 작업 prep 완료:
+
+**Subagent A** (commit `84f514f3`) — **Phase 4-D-1 source draft**:
+- `stdlib/flame/flame_d768_12L_corpus_test.hexa` (271 lines)
+- T=1024, d=768, nh=12, nkv=4, h=3072, n_layer=12 (V=256 byte-honest fallback)
+- Build PASS local; CPU run intentionally deferred (~10GB resident)
+- nn_decoder_adamw_step signature corrected per smoke test bug-fix
+
+**Subagent C** (commit `8b93b9bd`) — **Phase 4-D CLI infrastructure verified**:
+- `stdlib/flame/PHASE4D_DISPATCH_CLI_GUIDE.md` (347 lines)
+- runpod: **AUTH WIRED**, $304 balance, A100 SXM available
+- vast.ai: vastai CLI installed (1 working version), API key not yet set
+- **Recommended provider**: runpod (auth + balance + prior SSH key)
+- Copy-paste fire sequence ready for user-directed Phase 4-D-4
+
+**Subagent B** (commit `935e6dfc`) — **Phase 4-C audit + smallest-viable scope**:
+- `stdlib/flame/PHASE4C_IMPLEMENTATION_AUDIT.md` (384 lines)
+- Autonomous-able decision: **PARTIAL** (4-C-1+2 autonomous OK, 4-C-3+4 user-gate)
+- Smallest viable first-cycle: **4-C-1a paired-call detection** (~50-100 LoC,
+  1 cycle, log-only, zero stdlib edits, F-RFC048-PAIR-DETECT artifact)
+- Phase 4-C wall projection: ≥2× over Phase 4-B → ~6.5× over baseline
+- bwd is 75% of per-step wall — direct target
+
+**Phase 4-D-4 fire infrastructure 100% prep complete**:
+- ✅ Design (commit `c5d49425`)
+- ✅ Source (subagent A `84f514f3`)
+- ✅ Dispatch script (commit `01198d8e`)
+- ✅ CLI guide + auth verified (subagent C `8b93b9bd`)
+- ⏳ User explicit Phase 4-D-4 fire approval needed (budget + provider)
+
+**Phase 4-C 4-C-1a autonomous-able next step** ready (autonomous run-able
+without user gate — purely additive scaffold per subagent B audit).
 
 ## Files touched this cycle (16 commits)
 
