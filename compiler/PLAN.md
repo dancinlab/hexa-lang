@@ -457,3 +457,27 @@ on a clean origin/main base, independent of subagent worktree):
   `AtlasNode{GradeInfo,EdgeInfo}`, `_parse_json_str_arr`, real data). **Separate real-data-
   dependent codegen-correctness bug** — likely struct-return ABI or `_split_pipes` /
   `_parse_json_str_arr` frame interaction. Tracked as task #24.
+
+---
+
+### 진행 로그 — gate ① 재측정 (index_set fix on clean main `cceb0351`, cycle h18)
+
+`/tmp/ap_merge` (aprime_cc tier-1, clean origin/main + cceb0351 index_set store-back)
+vs `hexa build` tier-2 oracle (HEXA_MAC_BUILD_OK=1), 44-file `test/*_smoke.hexa` corpus.
+MATCH = byte-identical stdout AND same rc.
+
+**결과: 32/44 MATCH (73%).** breakdown:
+- MISMATCH 6: `atlas_doctrine`(ap1/or0) · `atlas_tecsl_verify`(ap1/or0) · `atlas_wave3`(ap1/or0)
+  · `atlas_hxc_roundtrip`(ap1/or1) — prior-identified **shared atlas-verifier codegen root
+  cause** (struct-array iteration in verifier nodes); likely同根 with task #24's real-data
+  `_build_node` struct path. `t34_net_listen`(ap138/or0 — env-dep socket) ·
+  `verify_cli`(ap1/or0).
+- APFAIL 6: `atlas_verify` · `t_multiarch_cpu` · `t35_hxqwen14b_abi` · `t36_serve_alm`
+  · `t37_hxqwen14b_day2` · `t38_nanbox` — frontend-feature **CGFAIL cluster** (extern fn /
+  @select annotation-arg / try-catch / type-inference) — codegen 진입 전 abort, RFC-sized.
+- ORAFAIL 1 (oracle 자체 build 실패 — 집계 제외).
+
+**정직한 해석**: frontend-CGFAIL 6 + env-net 1 + orafail 1 제외 시 effective
+32/36 ≈ **89%** tier-1≡tier-2. R7 gate ① ("aprime-direct coverage ≥ interp")는 interp
+이 알려진 buggy-oracle 이므로 tier-2(hexa-build) 동치를 기준으로 재정의 — 잔여 gap =
+(a) 4 atlas-verifier codegen 동근(task #24 와 합류 가능) + (b) 6 frontend CGFAIL(별도 RFC).
