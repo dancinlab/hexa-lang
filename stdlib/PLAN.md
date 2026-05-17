@@ -41,26 +41,39 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
 | hexa-bio .py 6192 (qiskit 289 · pyscf 47 · numpy · rdkit) | 거대 | ✗ | ⏳ stdlib-only 부분만 Stage-1 가능 |
 | Stage 2 (pymatgen·qiskit·torch hexa-native 재구현) | 메가 — 수개월+ | ✗✗ | 🔬 별도 장기 트랙 |
 
-진척률: 8554 중 **6 완전 이관** + **26 무손실 대기** + 나머지 Stage 2 차단.
+진척률: 8554 중 **6 완전 이관(T1)** + **26 무손실 이관·패리티 검증
+완료(T2)** + 나머지(T3 hexa-bio · T4/T5 science-stack Stage 2) 차단.
 
 ## 2. 확립된 무손실 이관 패턴 (이후 전 트랙 적용)
 
 1. Python `dict` → parallel hexa arrays (`[str]` keys + `[float]`/`[str]`)
 2. `argparse --selftest` → `main()` inline case 검증 + `__HEXA_MATTER_*__` sentinel
 3. `raise ValueError` → sentinel 반환값 + caller 검사
-4. Python `re` → hexa string `split`/`contains` (prefix/quote 는 정확;
-   digit-shape regex 는 Stage-1 substring 근사 → Stage-2 `stdlib/regex` 정밀화)
-5. file I/O → `exec()` (hexa-native shell builtin, python shell-out 아님)
-6. **aggregator union 순회**: `.hexa` 있으면 `hexa run`, 없으면 `.py`
-   fallback — 모듈별 점진 이관에 `.py`/`.hexa` 공존 안전
-   (`pyproject_smoke.sh` 적용 완료, `run_all.sh` 적용 예정)
+4. Python `re` → **무손실 3택**(T2 에서 확립, Stage-1 근사 안 씀):
+   (a) 순수 prefix/substring 은 hexa `split`/`contains` 직접;
+   (b) digit-shape·char-class·word-boundary 정규식은 `grep -E` 의
+   ERE 가 Python `re` 의 문자그대로 등가(`\d`→`[0-9]` `\s`→`[[:space:]]`
+   `(?:..)`→`(..)` `\b` 유지) — hexa 는 오케스트레이션만;
+   (c) Python `\s` 가 window join 의 `\n` 을 가로지르는 케이스
+   (hardwall·vendor)는 precompute-miss 만 ±window join 후 정밀 재-grep
+   → 코퍼스 바이트-패리티. `F-tag`/`CAND_RE` 등은 정확 char-class 스캐너
+   hand-roll. **g3: 검증력 후퇴(substring 근사) 금지를 전수 준수.**
+5. file I/O·정규식 위임 → `exec()` (hexa-native shell builtin; grep/sed/
+   awk/coreutils = stdlib-equivalent shell, python shell-out 아님)
+6. **aggregator union 순회**: `.hexa` 있으면 `hexa run`, 없으면 `.py`/`.sh`
+   fallback — 모듈별 점진 이관에 공존 안전(all-or-nothing 아님)
+   (`pyproject_smoke.sh` + `run_all.sh` 적용 완료)
 
 ## 3. 단계별 로드맵
 
 - **T1** ✅ hexa-matter stdlib-only 6모듈 (`_hexa_bridge/module/*.hexa`)
-- **T2** ⏳ selftest 26 게이트 → `_hexa_bridge/selftest/*.hexa` +
-  `run_all.sh` union 재배선 (T1 의 aggregator 패턴 재사용; all-or-nothing
-  이므로 26 일괄)
+- **T2** ✅ selftest **26/26** 게이트 → `_hexa_bridge/selftest/*.hexa`,
+  `run_all.sh` union 재배선 완료(hexa-first, `.py`/`.sh` fallback —
+  all-or-nothing 아님, 모듈별 점진·안전). 전 게이트 `.py` 출력
+  **바이트-패리티 검증** 후 채택(무손실): grep -E ERE ≡ Python `re`,
+  char-class 스캐너 hand-roll, cross-line `\s` 케이스(hardwall·vendor)는
+  ±window join 정밀 재확인으로 803/798/5·30/30/0 정확 일치.
+  `.py` 원본은 fallback·재패리티용으로 **유지**(제거는 별도 결정).
 - **T3** ⏳ hexa-bio stdlib-only 모듈 (전수조사 후 식별)
 - **T4** 🔒 Stage 2 — `atoms`/`crystal`/`mol`/`mlff`/`quantum` 실구현
   (각 `mod.hexa` planned API 채움) → science-stack 의존 모듈/어댑터 해금
@@ -80,3 +93,14 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
 - 2026-05-18 `29f37ff` (hexa-matter) — T1 완료: 6 `.py` 제거,
   pyproject_smoke union 순회, selftest 38/38 유지.
 - 2026-05-18 — 본 PLAN.md 기록 (이관 마스터 플랜 SSOT).
+- 2026-05-18 `ae45c4b` (hexa-matter) — T2 20/26: nist_anchor · r1_symlink
+  (sh→hexa) · lattice_fit · n6_axis · regression · cross_doc ·
+  registry_consistency. lattice_fit 은 grep-pipeline(token|vendor\b|neg)
+  으로 .py 더블-룩어헤드 정규식 바이트-패리티.
+- 2026-05-18 `bf577fa` (hexa-matter) — T2 **26/26 완료**: c_handoff ·
+  novel_verb_xref · cross_link_integrity · hardwall_provenance ·
+  falsifier_wellformed · vendor_citation_completeness. 전 게이트 .py
+  출력 바이트-패리티(803/798/5 · 214/17/0 · 30/30/0 …). selftest
+  38/38, run_all.sh union 26/26 `[hexa]` 실행. `.py` 는 fallback·
+  재패리티 레퍼런스로 유지(제거는 별도 결정). Stage-1 substring
+  근사 미사용 — g3 검증력 후퇴 0건.
