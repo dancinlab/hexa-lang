@@ -8178,13 +8178,13 @@ HexaVal hexa_bytes_to_str_raw(HexaVal arr) {
 //  (callers should pass non-negative indices into 0..len).
 // ═══════════════════════════════════════════════════════════
 
-/* anima RFC 040 (2026-05-16): farr GPU/CUDA backend Phase A scaffolding.
+/* anima RFC 040 (2026-05-16): farr GPU/CUDA backend Phase A.
  *   FarrLoc residence descriptor + dirty flags + (optional) device pointer.
  *   The default build (no `-DHEXA_CUDA`) leaves loc=FARR_HOST,d_buf=NULL,
  *   dirty_host=dirty_dev=0 for every farr handle — byte-identical to the
  *   pre-RFC-040 CPU path. With `-DHEXA_CUDA` the same fields gain a real
- *   device-pointer slot (cuBLAS Dgemm + cudaMalloc are TODO[cuda] stubs
- *   in this scaffolding cycle — Phase A bodies land on the CUDA box). */
+ *   device-pointer slot, wired (Phase 4-D-5-1, 2026-05-17) to the cuBLAS
+ *   Dgemm + cudaMalloc/cudaMemcpy bodies in self/cuda/runtime_cuda.c. */
 typedef enum {
     FARR_HOST     = 0,  /* host memory only (default — RFC 025 behaviour) */
     FARR_DEVICE   = 1,  /* device memory only (host buf may be NULL) */
@@ -8299,14 +8299,23 @@ HexaVal hexa_farr_free(HexaVal h_v) {
     if (id < 0 || id >= _hx_farr_count) return hexa_void();
     HexaFarrEntry* e = &_hx_farr_table[id];
     if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
-    /* RFC 040 Phase A: also free device buffer if present, reset residence.
-     * In the no-CUDA build d_buf is always NULL; under -DHEXA_CUDA the real
-     * `cudaFree` lives in the GPU compilation unit (TODO[cuda] — Phase A
-     * impl cycle). Resetting the descriptor here keeps freelist slots
+    /* RFC 040 Phase A (2026-05-17 Phase 4-D-5-1 wired): also free device
+     * buffer if present, reset residence. In the no-CUDA build d_buf is
+     * always NULL. Under -DHEXA_CUDA we delegate to
+     * `_hx_cuda_farr_device_free` in self/cuda/runtime_cuda.c — it calls
+     * `cudaFree` on the mirror-table device pointer + zeros the slot, and
+     * also resets the HexaFarrEntry fields (d_buf/loc/dirty_*).
+     * Resetting the descriptor on the no-CUDA path keeps freelist slots
      * hygienic when reused by a later `hexa_farr_zeros`. */
 #ifdef HEXA_CUDA
+    /* Forward decl — body in self/cuda/runtime_cuda.c (linked under
+     * -DHEXA_CUDA only). Matches the Phase A decl at line ~10741. */
+    extern int _hx_cuda_farr_device_free(int64_t farr_id);
     if (e->d_buf) {
-        /* TODO[cuda] Phase A impl: cudaFree(e->d_buf); */
+        /* RFC 040 Phase A WIRED (Phase 4-D-5-1): real cudaFree via cuBLAS
+         * runtime mirror table. Returns 1 ok / -1 err. Ignore rc — best
+         * effort, slot already invalidated below. */
+        (void)_hx_cuda_farr_device_free(id);
         e->d_buf = NULL;
     }
 #else
@@ -10713,13 +10722,23 @@ HexaVal hexa_phi_spatial(HexaVal st_v, HexaVal nc_v, HexaVal dim_v,
 //     contract, the equivalence harness PASSES, and nothing changes
 //     for the byte-identical no-CUDA build.
 //
-// With `-DHEXA_CUDA` defined (a future CUDA-box build cycle), the same
-// bodies route to the real cuBLAS Dgemm + cudaMalloc/cudaMemcpy path.
-// In this scaffolding cycle those branches return -1 ("TODO[cuda] not
-// implemented") rather than a fake PASS — honesty over over-claim, per
-// AGENTS.tape g3 and the RFC 040 §"Honest caveats" framing. The actual
-// kernel impls + cuBLAS link line are the next-cycle deliverable on a
-// CUDA host (vast.ai/runpod or a borrowed GPU).
+// With `-DHEXA_CUDA` defined, the same bodies route to the real cuBLAS
+// Dgemm + cudaMalloc/cudaMemcpy path in self/cuda/runtime_cuda.c
+// (LANDED 2026-05-17, Phase 4-D-5-1 wiring scaffold). Phase A surface
+// wired:
+//   • hexa_cuda_available     → _hx_cuda_runtime_available
+//   • hexa_cuda_device_count  → _hx_cuda_device_count_impl
+//   • hexa_farr_to_device     → _hx_cuda_farr_to_device   (H2D)
+//   • hexa_farr_to_host       → _hx_cuda_farr_to_host     (D2H)
+//   • hexa_farr_device_free   → _hx_cuda_farr_device_free (cudaFree)
+//   • hexa_farr_matmul_gpu    → _hx_cuda_farr_matmul_gpu  (cuBLAS Dgemm)
+//   • hexa_farr_free (line 8307) → _hx_cuda_farr_device_free (cudaFree-on-free)
+// Phase B / B2 GPU bodies (softmax_rows, rmsnorm_rows, add, scale,
+// matmul_t, outer, mul, silu, silu_grad, rmsnorm_bwd_rows, adamw_step)
+// remain TODO[cuda] stubs returning -1 — honest no-fake-PASS per
+// AGENTS.tape g3 / RFC 040 §"Honest caveats". Their CUDA bodies
+// (`__global__` kernels + warp-shuffle reductions) are the next-cycle
+// deliverable; see stdlib/flame/PHASE4D5_1_WIRING_NOTES.md.
 //
 // Phase A falsifier surface (tmp_rfc040_smoke.hexa):
 //   F-RFC040-AVAIL              cuda_available()==0 on Mac (graceful)
@@ -10833,9 +10852,9 @@ HexaVal hexa_farr_device_free(HexaVal h_v) {
 // On the no-CUDA build: routes directly to hexa_farr_matmul — the CPU
 // oracle is the only correct numeric answer, and the dispatcher remains
 // safely callable. On the HEXA_CUDA build: enforces device-residency
-// and runs cuBLAS Dgemm; for this scaffolding cycle the body is the
-// TODO[cuda] stub (returns -1), so a HEXA_CUDA scaffolding build still
-// FAILS LOUDLY on the GPU path — no fake CUDA results.
+// and runs cuBLAS Dgemm via _hx_cuda_farr_matmul_gpu in
+// self/cuda/runtime_cuda.c (LANDED — Phase 4-D-5-1 wire-up; fp64 strict
+// Dgemm, no Tensor Core flip; row-major mapped via C^T = B^T · A^T).
 HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
                              HexaVal b_v, HexaVal bc_v) {
 #ifdef HEXA_CUDA
