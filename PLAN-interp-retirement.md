@@ -435,12 +435,36 @@ shadow gate. Returning false from the known-* lookup falls back to
 runtime `hexa_add` / `hexa_sub` / `hexa_mul` dispatch on the HexaVal
 tag — correct for any parameter regardless of declared type.
 
-**Pending bootstrap rebuild**: the fix is in `self/codegen_c2.hexa`
-SSOT but not yet in the `self/native/hexa_v2` Mach-O binary. The
-`hexa cc --regen` flow produced `self/native/hexa_cc.c.new` against
-the old worktree path; a clean rebuild via the canonical bootstrap
-sequence (probably ubu-side given Mac kernel-panic env on heavy
-clang) is the follow-up task.
+**Bootstrap rebuild ACTIVATED 2026-05-17** (commits `40c64a9e`
+and `1de82e78`): regenerated `self/native/hexa_v2` (1,487,616 B,
++42 KB over the pre-cycle baseline) via `hexa cc --regen` with
+`HEXA_LANG=/tmp/wt-h17` so the regen operated on this branch's
+sources rather than the user's working tree. The activation
+sequence was:
+  1. `clang -O2 -c self/runtime.c -o self/runtime.o` (build runtime.o).
+  2. `HEXA_LANG=/tmp/wt-h17 hexa cc --regen` (transpile lexer /
+     parser / type_checker / codegen_c2 via the OLD hexa_v2,
+     awk-merge into `self/native/hexa_cc.c.new`).
+  3. `clang -O2 -I self -Wno-trigraphs hexa_cc.c.new runtime.o -o
+     self/native/hexa_v2` (note: NO `-x c`; the `.c.new` suffix
+     trips clang's language detection — copy to `.c` first).
+
+End-to-end validation against the rebuilt binary:
+  - `perfect_number_engine_smoke`: 11/19 → **19/19 PASS** (H17 fix
+    activates `hexa_add` / `hexa_sub` / `hexa_mul` dispatch for
+    imported `binary_value(a:float, b:float, op:int)`).
+  - `regress_dict_keys_let_bind` (fn-main form): all 4 PASS (empty-{}).
+  - `atlas_tecsl_verify_smoke`: __TECSL_SMOKE__ PASS (fn-dedup
+    eliminates the second `euler_phi` definition).
+  - `atlas_cycle_append_smoke`: rc=0 (fn-dedup eliminates the
+    second `u_main` definition).
+
+Note: hexa_v2 codegen_c2 has TWO emit loops (gen2_module's main path
+at line ~900 and a "mirror" loop at line ~6883 for the
+script-body / pure-eval context). Initial dedup patch landed only
+on the primary loop (4e2869c6); the atlas verifier smokes use the
+mirror loop, so 1de82e78 was needed to close the second site.
+Both loops now use first-wins.
 
 **C-sweep (60-smoke hexa-build pass).** With `HEXA_MAC_BUILD_OK=1`
 bypass: **38/60 PASS (63%), 20 FAIL_BUILD, 2 FAIL_RUN**. The 20
