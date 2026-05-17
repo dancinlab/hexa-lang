@@ -42,6 +42,18 @@
 
 (append-only)
 
+### 2026-05-17 — self-host fixpoint 1차 시도 — codegen 완주 + argv 와이어링, 잔여 arg-handling 버그 (`0a78e0ed`)
+codegen-perf-v2 (`82baa09e`) 로 full `compiler/main.hexa` codegen 이 완주(64s)하게 되어 self-host fixpoint 를 처음 실제 시도.
+
+**진척**:
+1. **flatten** (38 files / 22,053 lines) → aprime_cc(1st-gen) → `selfhost.s` **222,988 lines / 8.9 MB, 64s** (HX4001 warning 만, error 0).
+2. **link** `selfhost.s` + runtime.o + stub(.o) → 2nd-gen aprime_cc **1,809,128 B**. 미해결 심볼 2개 (`_list_dir`·`_sha256_hex`) = build_aprime.sh 가 C-path sed 처리하던 것 → asm-path stub `.c` (sha256_hex→hexa_sha256, list_dir→hexa_array_new) 로 해소.
+3. **argv 블로커 발견+수정** (`0a78e0ed`): 2nd-gen "missing SOURCE.hexa" — aprime_cc 가 `_main` 에 argc/argv→hexa_set_args 와이어링 미emit. `_arm64_lower_func` prologue 직후 `mf.name=="main"` 시 `bl _hexa_set_args` 삽입. 검증: smoke PASS·`args()` populated·무회귀.
+
+**잔여 블로커 (다음 cycle)**: argv 수정 후 2nd-gen 이 argv 를 읽으나 `_normalize_argv` 처리 중 `array[0]: container is not an array (tag=45989888)` — HexaVal tag corruption. aprime_cc 가 컴파일러 자체 arg-handling 코드를 miscompile. self-host fixpoint 마지막 관문 — frontend 100% · codegen 완주 · link OK · argv OK 도달, arg-handling 정확성 1건 남음.
+
+**의의**: #18 self-host correctness 축이 거의 닫힘 — frontend 전체 + codegen 완주 + 2nd-gen 링크 성공. 남은 건 단일 codegen-correctness 버그 (arg-handling tag corruption) + lower_hir O(N²) (codegen-perf-v2 out-of-scope).
+
 ### 2026-05-17 — R7 게이트 ② 정정: `hexa.real` 은 이미 compiled CLI dispatcher
 배포 topology 정밀 조사 결과 — `~/.hx/bin/hexa` → repo `hexa` (bash shim) → `hexa.real`. `hexa.real` 은 `tool/build_dispatch.hexa` 가 `build/stage1/main.c` (= `self/main.hexa` 를 hexa_v2 transpile 한 것) 를 clang 컴파일한 **compiled 바이너리** (480 KB, strings 에 `0.1.0-dispatch` · `self/main.hexa::dispatch_absorbed` 확인).
 
