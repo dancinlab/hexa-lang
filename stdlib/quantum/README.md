@@ -20,7 +20,7 @@ Rolex and a Casio both tell time accurately — qmirror is the Casio. $0/run vs
 IBM Cloud's $1.60/job.
 
 **Origin:** RFC 045 absorbed [`dancinlab/qmirror`](https://github.com/dancinlab/qmirror)
-v2.0 (62,402 LoC, 38 module directories — private 2026-05-16) into hexa-lang's
+v2.6.0 (62,402 LoC, 38 module directories — private 2026-05-16) into hexa-lang's
 stdlib. The original SSOT is frozen at `~/core/archive_qmirror/` (헌법 v2 룰 3).
 
 > [!NOTE]
@@ -137,7 +137,7 @@ stdlib/quantum/
 └── surface_code_d3/module/
 
 ~/core/archive_qmirror/                     # frozen 묘비 (RFC 045, read-only)
-└── (full v2.0 metadata + cli + 38 module dirs preserved verbatim)
+└── (full v2.6.0 metadata + cli + 38 module dirs preserved verbatim)
 ```
 
 ## RFC chain

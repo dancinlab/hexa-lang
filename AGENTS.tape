@@ -129,7 +129,7 @@
   qrng_boundary = "stdlib/quantum/qrng/ is the CONSUMER-side HMAC-DRBG amplifier; stdlib/qrng/ (RFC 044) is the PROVIDER registry. Zero code overlap, struct-shape compat by convention."
   archive = "~/core/archive_qmirror/ — frozen 묘비 (헌법 v2 룰 3)"
   governance = "see @D g_qmirror_envelope, g_qmirror_consumer_qrng · @F f_qmirror_real_qpu_claim"
-  doi = "10.5281/zenodo.20102964 (dancinlab/qmirror v2.0)"
+  doi = "10.5281/zenodo.20102964 (dancinlab/qmirror v2.6.0)"
   rfc = "RFC 045 LANDED 2026-05-16 — 114 .hexa, all parse-clean. dancinlab quantum-stack absorption series (044 qrng + 045 qmirror + 046 sim-universe) COMPLETE."
   @> README.md
 
@@ -331,7 +331,7 @@
 
 @X x_archive_qmirror := "qmirror 묘비 archive" :: archive [d=2026-05-16 active]
   url = "file://~/core/archive_qmirror/"
-  scope = "Frozen historical SSOT of dancinlab/qmirror v2.0 — AGENTS.tape · CHANGELOG · README · CITATION · LICENSE · LICENSING · BENCH.tape · IDENTITY.tape · AER_HEXA_ABSORPTION_PLAN · CHEMISTRY_VQE_PYSCF_BACKEND_PLAN · hexa.toml · install.hexa · cli/ · docs/ · MODULE/ · examples/ · 38 module dirs verbatim. 재해석 없음 (헌법 v2 룰 3)."
+  scope = "Frozen historical SSOT of dancinlab/qmirror v2.6.0 — AGENTS.tape · CHANGELOG · README · CITATION · LICENSE · LICENSING · BENCH.tape · IDENTITY.tape · PLAN.md · AER_HEXA_ABSORPTION_PLAN · CHEMISTRY_VQE_PYSCF_BACKEND_PLAN · hexa.toml · install.hexa · cli/ · docs/ · MODULE/ · examples/ · tests/ · tools/ · 38 module dirs verbatim. 재해석 없음 (헌법 v2 룰 3)."
   github = "dancinlab/qmirror (private 후 2026-05-16)"
   doi = "10.5281/zenodo.20102964"
   successor = "stdlib/quantum/ (RFC 045 LANDED 2026-05-16)"
