@@ -197,3 +197,36 @@ Wilson agent (downstream consumer) flagged 3 items needing closure for plugin se
 **Cross-track impact**: 부트스트랩 활성화는 모든 후속 `hexa build` 결과의 안정성 향상 — flame/forge 작업도 동일 binary 사용.
 
 **잔여 (다음 cycle)**: #5 atlas SIGSEGV (≥17 nested-struct UB) · #9 aprime_cc tier-1 nil → const_void · #13 DWARF `.loc` · #18 aprime_cc self-host · 1 codegen lvalue (`calc_cli_smoke` "expression is not assignable").
+
+### 2026-05-17 — interp-retirement R5: aprime_cc CGFAIL 클러스터 triage + 3 bounded fix
+
+60-smoke aprime_cc-direct sweep 의 **14 CGFAIL** (codegen 진입 전 abort) 을 진단·클러스터링. 14 → **8 root-cause 클러스터** 로 수렴:
+
+| 클러스터 | 원인 | 영향 test | 처리 |
+|---------|------|-----------|------|
+| A | `recv.<m>(…)` 메서드 selector 가 `types.hexa::_is_builtin_method` allow-list (31개) 에 없음 → HX2001 callee-miss | `repo_taxonomy_audit_smoke` (`ln.find`) | **FIXED** — allow-list 를 legacy `gen2_method_builtin` 전수 (90개) 로 확장 |
+| B | `#{…}` map-literal 문법 미지원 — compiler/lexer 에 `#` 토큰 자체 없음 | `t_cert_bucket_split` · `t_cert_roundtrip` · `t36_serve_alm_smoke` · `t_select_dispatch_parse` | 미해결 (frontend feature — lexer `HashLBrace` 토큰 + parser + HIR/MIR/codegen. legacy `self/hexa_full.hexa` 에는 존재) |
+| C | `extern fn` / `@link` FFI 선언 미지원 — compiler 에 `extern` 키워드 없음 | `t35_hxqwen14b_abi_smoke` · `t37_hxqwen14b_day2_smoke` | 미해결 (frontend feature — lexer `KwExtern` + `parse_extern_fn`. legacy 에 존재) |
+| D | `str` 타입 어노테이션이 `string` 으로 alias 안 됨 → `named:str` ≠ `string` HX3003 | `t_statusline_4panel` | **FIXED** — `_types_lower_type_ref` 에 `n == "str"` 1줄 추가 |
+| E | free-call builtin `now` / `env_var` 가 `bind.hexa::_bind_builtin_names` 에 없음 → HX2001 | `t_cmd_url_args_passthrough` · `t_exec_env_reproducible` · `t_multiarch_cpu_smoke` (부분) | **FIXED** — bind 등록 + codegen runtime-sym 매핑 (`now`→`hexa_timestamp`, `env_var`→`hexa_env_var`). `t_multiarch_cpu_smoke` 는 `alloc_raw` (interp-routed, runtime-sym 없음) 잔존 |
+| F | `try`/`catch` 예외 구문 미지원 | `regression` | 미해결 (frontend feature) |
+| G | `@select("fam", n<=16 -> insertion, …)` 어노테이션 인자 내 `->` 파싱 실패 | `t_parser_select_attr` | 미해결 (frontend — annotation 인자 special-form 파싱) |
+| H | 타입추론 strictness — HX3004 return-type-mismatch (`unit` 추론) · HX3001 i64/f64 | `atlas_verify_smoke` (19→1 err) · `regression` | 미해결 (별도 추론 작업) |
+
+**FIX 3건** (compiler-side only — semantic 변경 아님, allow-list/매핑 추가이므로 g_inbox_dual_track 면제):
+- `compiler/check/types.hexa` — `_is_builtin_method` 31→90 (legacy 전수); `_types_lower_type_ref` `str` alias
+- `compiler/check/bind.hexa` — `_bind_builtin_names` 에 `env_var` `now` 추가
+- `compiler/codegen/arm64_darwin.hexa` — `_builtin_runtime_sym` 에 `env_var`/`now`/`find` 매핑 (runtime.h 에 `hexa_env_var`/`hexa_timestamp`/`hexa_find_poly` fwd-decl 이미 존재)
+
+**검증** (aprime_cc 재빌드 + smoke exit(42) PASS):
+- CGFAIL 14 → **10** : `repo_taxonomy_audit_smoke` · `t_cmd_url_args_passthrough` · `t_exec_env_reproducible` · `t_statusline_4panel` 4건 ASM-OK
+- 4건 모두 `clang -c` 어셈블 OK; `repo_taxonomy_audit_smoke` 는 link→run→**exit 0 PASS** (end-to-end)
+- 회귀 sample 5건 (`atlas_n6_axes`/`calc_cli`/`factorial_structure`/`catalan_combinatorial`/`divisor_field_theory`) ASM-OK 0 fail
+- `atlas_verify_smoke` 19 diag → 1 (HX3004 잔존, 클러스터 H)
+
+**미해결 클러스터 (B/C/F/G/H)** 는 bounded fix 범위 밖 — 각각 lexer 토큰 + parser + HIR/MIR/codegen 신규 경로가 필요한 frontend feature. legacy `self/hexa_full.hexa` 에는 전부 구현돼 있으므로 interp-retirement 완주 전 별도 RFC/cycle 로 포팅 필요.
+
+**unmapped runtime builtin triage** (bind allow-list 265 − codegen-mapped 73 − method 93 = **193 unmapped free-call**):
+- **REAL — runtime fn 존재, `_builtin_runtime_sym` 매핑만 추가하면 됨 (114)**: `array_*` (10) · `tensor_*` (5) · `term_*` (24) · `regex_*` (6) · `ptr_*` (7) · `json_*` (4) · `struct_pack/unpack/free` · `silu`/`gelu`/`softmax`/`matmul`/`matvec`/`rms_norm`/`one_hot`/`hadamard`/`swiglu_vec` · `sleep_ms/ns/s` · `utc_*` · `write_bytes*` 등. 본 cycle 은 CGFAIL 3건만 매핑 (`now`/`env_var`/`find`); 나머지는 per-name ret-box/cstring ABI 검증 필요 (codegen 헤더 'unmapped-is-safer-than-mis-mapped' 정책) → 별도 mechanical cycle.
+- **별도 TU/특수처리 (76)**: `getenv`/`getpid`/`mkdir`/`list_dir` (build_aprime.sh sed 로 처리) · `net_*`/`pty_*`/`proc_*` (native/*.c 별도 TU) · 암호 `ed25519_*`/`x25519_*`/`chacha20_*`/`sha256_hex`/`sha512` (libsodium 옵션 TU) · `arange`/`assert`/`panic`/`nil` (codegen 특수경로). 이름 그대로 link 불가 — 매핑 또는 TU 링크 필요.
+- **키워드-리터럴 (3)**: `true`/`false`/`nil` — scope 이름으로 무해 (파서가 `KwTrue`/`KwFalse` 토큰 발행, Ident 안 됨).

@@ -810,7 +810,7 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
         if n == "f32" { return _types_t_f32() }
         if n == "f64" || n == "Float" || n == "float" || n == "Real" { return _types_t_f64() }
         if n == "bool" || n == "Bool" { return _types_t_bool() }
-        if n == "string" || n == "String" { return _types_t_string() }
+        if n == "string" || n == "String" || n == "str" { return _types_t_string() }
         if n == "char" || n == "Char" { return _types_t_char() }
         if n == "unit" || n == "Unit" || n == "()" || n == "void" || n == "Void" { return _types_t_unit() }
         // u8/u16/u32/u64 — deferred: stage0 backend has no unsigned
@@ -1494,6 +1494,12 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
 // selector as an unresolved free name (that was the stage-2 self-compile
 // `.push(...)`-class HX2001 flood, ~870 of 1307).
 fn _is_builtin_method(name: string) -> bool {
+    // R5 CGFAIL triage — full method-builtin set mirrored from the proven
+    // legacy receiver dispatch self/codegen_c2.hexa::gen2_method_builtin
+    // (90 names). The prior list had only 31; the missing ~59 (notably
+    // `find`/`count`/`map`/`filter`/`fold`/`lines`/`slice`/… ) surfaced
+    // as HX2001 callee-misses when used in `recv.<m>(…)` form — the
+    // repo_taxonomy_audit `ln.find("]")` CGFAIL class.
     return match name {
         "push" -> true, "append" -> true, "len" -> true, "chars" -> true,
         "contains" -> true, "join" -> true, "to_upper" -> true, "to_lower" -> true,
@@ -1505,6 +1511,25 @@ fn _is_builtin_method(name: string) -> bool {
         "has_key" -> true, "has" -> true, "remove" -> true, "get" -> true,
         "set" -> true, "pop" -> true, "shift" -> true, "reverse" -> true,
         "sort" -> true, "sort_by" -> true,
+        "all" -> true, "any" -> true, "byte_at" -> true, "bytes" -> true,
+        "center" -> true, "char_at" -> true, "chunk" -> true, "count" -> true,
+        "drop" -> true, "entries" -> true, "enumerate" -> true, "fill" -> true,
+        "filter" -> true, "filter_keys" -> true, "find" -> true,
+        "flat_map" -> true, "flatten" -> true, "fold" -> true,
+        "for_each" -> true, "frequencies" -> true, "from_array" -> true,
+        "group_by" -> true, "interleave" -> true, "invert" -> true,
+        "is_empty" -> true, "lines" -> true, "map" -> true,
+        "map_values" -> true, "max" -> true, "mean" -> true, "merge" -> true,
+        "min" -> true, "pad_end" -> true, "pad_left" -> true,
+        "pad_right" -> true, "pad_start" -> true, "parse_float" -> true,
+        "parse_int" -> true, "partition" -> true, "product" -> true,
+        "push_nostat" -> true, "rotate" -> true, "sample" -> true,
+        "scan" -> true, "slice" -> true, "slice_fast" -> true,
+        "substr" -> true, "sum" -> true, "swap" -> true, "take" -> true,
+        "to_array" -> true, "to_bool" -> true, "to_float" -> true,
+        "to_int" -> true, "to_string" -> true, "trim_end" -> true,
+        "trim_start" -> true, "truncate" -> true, "unique" -> true,
+        "window" -> true, "zip" -> true,
         _ -> false,
     }
 }

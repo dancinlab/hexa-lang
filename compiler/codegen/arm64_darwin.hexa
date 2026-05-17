@@ -1052,6 +1052,14 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "char_code"     { return "hexa_char_code" }
     if name == "lgamma"        { return "hexa_math_lgamma" }
     if name == "env"           { return "hexa_env_var" }
+    if name == "env_var"       { return "hexa_env_var" }
+    // `now()` — interp alias for `timestamp()` (UNIX-millis). R5 triage.
+    if name == "now"           { return "hexa_timestamp" }
+    // `.find(needle)` method — generic substring/element search.
+    // hir_to_mir lowers `recv.find(x)` to STMT_CALL op="find"
+    // args=[recv,x]; runtime hexa_find_poly (runtime.c:7007) dispatches
+    // on the receiver shape. R5 CGFAIL triage (repo_taxonomy_audit).
+    if name == "find"          { return "hexa_find_poly" }
     if name == "file_size"     { return "rt_file_size" }
     if name == "chars"         { return "hexa_str_chars" }
     if name == "eprintln"      { return "hexa_eprintln" }
