@@ -73,6 +73,13 @@ fn cmd_help() {
     println("                preheating|multipolar|surface-code|ssh|hofstadter|dqpt|wdw]")
     println("                                          virtual-universe runtime (26 modules, RFC 046)")
     println("    e.g. hexa sim-universe status         module inventory + tier table")
+    println("  mc-integrate                            Monte Carlo integrator full self-test (RFC 047)")
+    println("  mc-integrate estimate --constant <name> [-N N] [--rng <RNG>]")
+    println("                                          MC estimate: catalan|zeta3|euler_gamma|pi5_times_n6")
+    println("  mc-integrate compare --compare <name> [--rng-a <RNG>] [--rng-b <RNG>]")
+    println("                                          Welch-t RNG indistinguishability gate")
+    println("  mc-integrate [status|chain|probe-anu]   ANU-tier probe · 3-stage wire-up · live tier probe")
+    println("    e.g. hexa mc-integrate estimate --constant zeta3 -N 1000000 --rng external")
     println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
@@ -3358,6 +3365,24 @@ if len(av) < 3 {
             si = si + 1
         }
         cmd_run(su_script, su_args)
+    } else if sub == "mc-integrate" {
+        // RFC 047 — stdlib/mc_integrate dispatch.
+        // stdlib/mc_integrate/mc_integrate.hexa parses argv subcommand
+        // (estimate/compare/self-test/status/chain/probe-anu/--help/--version)
+        // and subprocess-invokes the sibling engine.hexa computational module.
+        let __inst_m = install_dir_from_argv0()
+        let mut mci_script = "stdlib/mc_integrate/mc_integrate.hexa"
+        if len(__inst_m) > 0 {
+            let inst_path = __inst_m + "/stdlib/mc_integrate/mc_integrate.hexa"
+            if file_exists(inst_path) { mci_script = inst_path }
+        }
+        let mut mci_args = []
+        let mut mi = 3
+        while mi < len(av) {
+            mci_args.push(av[mi])
+            mi = mi + 1
+        }
+        cmd_run(mci_script, mci_args)
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //

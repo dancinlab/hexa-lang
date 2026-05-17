@@ -1,0 +1,411 @@
+#!hexa strict
+// stdlib/mc_integrate/mc_integrate.hexa — mc-integrate stdlib CLI dispatcher
+//
+// @version 1.0.0
+// @capabilities [montecarlo, numerical-integration, randomness, dispatch, cli, subprocess]
+// @stability stable
+// @since 2026-05-18
+//
+// Runnable entrypoint dispatched by `hexa mc-integrate <subcmd>` (see
+// self/main.hexa `else if sub == "mc-integrate"` branch).
+//
+// Subcommands:
+//   hexa mc-integrate                       full self-test sweep (default if no subcmd)
+//   hexa mc-integrate estimate --constant <name> [-N N] [--rng <RNG>]
+//                                           Monte Carlo estimate of a named constant
+//   hexa mc-integrate compare --compare <name> [-N N] [--trials k]
+//                            [--rng-a <RNG>] [--rng-b <RNG>]
+//                                           Welch-t indistinguishability between two RNG legs
+//   hexa mc-integrate self-test             full falsifier sweep (F2-F5 + G1-G6 + H1-H3)
+//   hexa mc-integrate status                module + ANU 3-tier resolution probe (offline)
+//   hexa mc-integrate chain                 3-stage wire-up resolution (produce→verify→consume)
+//   hexa mc-integrate probe-anu             live ANU tier probe (counts against quota)
+//   hexa mc-integrate --help, -h            this help
+//   hexa mc-integrate --version, -v         version
+//
+// Named constants: catalan · zeta3 · euler_gamma · pi5_times_n6
+// RNG selectors:   external · wire · anu · anu_paid · anu_free · anu_legacy · urandom
+//   external/wire = stdlib/qrng collect → engine inline 3-tier ANU → urandom
+//
+// The computational engine (estimate_constant / compare_rng / _self_test) lives
+// in the sibling stdlib/mc_integrate/engine.hexa, a standalone program. This
+// dispatcher invokes it as a subprocess (sim-universe pattern) so the engine's
+// standalone semantics + sentinel output are preserved verbatim.
+//
+// Source: RFC 047 — absorbs ~/core/mc-integrate/{cli/mc-integrate.hexa,
+//         mc_integrate/module/mc_integrate.hexa} v1.0.0.
+
+let VERSION = "1.0.0"
+
+fn _shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _has_flag(a: [str], flag: str) -> int {
+    let mut i = 0
+    while i < len(a) {
+        if a[i] == flag { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _find_flag(a: [str], flag: str, default_val: str) -> str {
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        if a[i] == flag {
+            if i + 1 < n { return a[i + 1] }
+        }
+        let prefix = flag + "="
+        if a[i].starts_with(prefix) {
+            return a[i].substring(len(prefix), len(a[i]))
+        }
+        i = i + 1
+    }
+    return default_val
+}
+
+fn _hexa_bin() -> str {
+    let env_bin = env("HEXA_BIN")
+    if env_bin.len() > 0 { return env_bin }
+    let path_bin = exec("command -v hexa 2>/dev/null || true").trim()
+    if path_bin.len() > 0 { return path_bin }
+    return "hexa"
+}
+
+// _engine_path — resolve the sibling engine.hexa from this script's own argv.
+// argv shape: [interp_path, this_script.hexa, sub?, ...]. Take this script's
+// directory and append /engine.hexa. Falls back to the repo-relative path.
+fn _engine_path() -> str {
+    let argv = args()
+    let mut i = 0
+    while i < len(argv) {
+        if argv[i].ends_with("mc_integrate.hexa") {
+            let p = argv[i]
+            let cut = p.rfind("/")
+            if cut > 0 {
+                return p.substring(0, cut) + "/engine.hexa"
+            }
+        }
+        i = i + 1
+    }
+    return "stdlib/mc_integrate/engine.hexa"
+}
+
+// _run_engine — invoke the engine program as a subprocess via `hexa run`,
+// optionally with MC_INTEGRATE_SEED_HEX / MC_INTEGRATE_SEED_PROVENANCE set.
+fn _run_engine(engine_args: [str], seed_hex: str, seed_prov: str) -> str {
+    let bin = _hexa_bin()
+    let engine = _engine_path()
+    let mut env_pre = ""
+    if seed_hex.len() > 0 {
+        env_pre = "MC_INTEGRATE_SEED_HEX=" + _shq(seed_hex) +
+                  " MC_INTEGRATE_SEED_PROVENANCE=" + _shq(seed_prov) + " "
+    }
+    let mut cmd = env_pre + _shq(bin) + " run " + _shq(engine)
+    let mut i = 0
+    while i < len(engine_args) {
+        cmd = cmd + " " + _shq(engine_args[i])
+        i = i + 1
+    }
+    return exec(cmd + " 2>&1")
+}
+
+// _qrng_collect — pull entropy from stdlib/qrng via `hexa qrng collect`.
+// Returns 32-hex-char string on success, "" otherwise. qrng collect emits a
+// `QRNG_HEX:<hex>` line; we extract that.
+fn _qrng_collect(n_bytes: int) -> str {
+    let bin = _hexa_bin()
+    let cmd = _shq(bin) + " qrng collect --bytes=" + str(n_bytes) + " 2>/dev/null"
+    let raw = exec(cmd)
+    let lines = raw.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i].trim()
+        if line.starts_with("QRNG_HEX:") {
+            return line.substring(9, len(line))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ─── subcommand: estimate ───
+
+fn cmd_estimate(sub_args: [str]) {
+    let rng = _find_flag(sub_args, "--rng", "urandom")
+
+    // External wire-up: --rng external | --rng wire → prefetch from stdlib/qrng.
+    if rng == "external" || rng == "wire" {
+        let hex = _qrng_collect(16)
+        let mut eng: [str] = []
+        let mut i = 0
+        while i < len(sub_args) {
+            if sub_args[i] == "--rng" {
+                eng.push("--rng")
+                eng.push("anu")
+                i = i + 2
+            } else if sub_args[i].starts_with("--rng=") {
+                eng.push("--rng=anu")
+                i = i + 1
+            } else {
+                eng.push(sub_args[i])
+                i = i + 1
+            }
+        }
+        if hex.len() == 32 {
+            println("[mc-integrate] external entropy via stdlib/qrng collect (16 bytes)")
+            let raw = _run_engine(eng, hex, "stdlib_qrng")
+            print(raw)
+            return
+        }
+        eprintln("[mc-integrate] stdlib/qrng yielded no usable bytes — falling back to engine inline 3-tier ANU")
+        let raw = _run_engine(eng, "", "")
+        print(raw)
+        return
+    }
+
+    let raw = _run_engine(sub_args, "", "")
+    print(raw)
+}
+
+// ─── subcommand: compare ───
+
+fn cmd_compare(sub_args: [str]) {
+    let raw = _run_engine(sub_args, "", "")
+    print(raw)
+}
+
+// ─── subcommand: self-test ───
+
+fn cmd_self_test() {
+    println("hexa mc-integrate " + VERSION + " self-test — falsifier sweep")
+    println("")
+    let raw = _run_engine(["--self-test"], "", "")
+    print(raw)
+    if raw.contains("__MC_INTEGRATE__ PASS") {
+        println("")
+        println("  verdict: PASS")
+        println("  __MC_INTEGRATE_STANDALONE__ PASS version=" + VERSION)
+    } else {
+        println("")
+        println("  verdict: FAIL — see per-gate output above")
+        println("  __MC_INTEGRATE_STANDALONE__ FAIL version=" + VERSION)
+        exit(1)
+    }
+}
+
+// ─── ANU secret probe (name → status only; values never printed) ───
+
+fn _probe_secret(name: str) -> str {
+    let script = "v=$(secret get \"$1\" 2>/dev/null); [ -n \"$v\" ] && { echo \"RESOLVED secret-cli\"; exit; }; " +
+                 "v=$(op read \"op://Private/$1/credential\" 2>/dev/null); [ -n \"$v\" ] && { echo \"RESOLVED 1password\"; exit; }; " +
+                 "v=$(security find-generic-password -a \"$USER\" -s \"$1\" -w 2>/dev/null); [ -n \"$v\" ] && { echo \"RESOLVED keychain\"; exit; }; " +
+                 "v=$(aws secretsmanager get-secret-value --secret-id \"$1\" --query SecretString --output text 2>/dev/null); [ -n \"$v\" ] && { echo \"RESOLVED aws-sm\"; exit; }; " +
+                 "v=$(printenv \"$1\" 2>/dev/null); [ -n \"$v\" ] && { echo \"RESOLVED env\"; exit; }; " +
+                 "echo \"(unset)\""
+    return exec("bash -c '" + script + "' _ '" + name + "'").trim()
+}
+
+fn _probe_curl() -> str {
+    let path = exec("command -v curl 2>/dev/null || true").trim()
+    if path.len() > 0 { return "OK (" + path + ")" }
+    return "MISSING (live ANU paths require curl)"
+}
+
+fn _probe_urandom() -> str {
+    let n = exec("head -c 16 /dev/urandom 2>/dev/null | wc -c | tr -d ' '").trim()
+    if n == "16" { return "OK" }
+    return "MISSING (/dev/urandom)"
+}
+
+// ─── subcommand: status ───
+
+fn cmd_status() {
+    println("hexa mc-integrate " + VERSION + " status")
+    println("")
+    println("  engine            : " + _engine_path())
+    println("  hexa interpreter  : " + _hexa_bin())
+    println("")
+    println("  RNG bootstrap surface:")
+    println("    curl              : " + _probe_curl())
+    println("    /dev/urandom      : " + _probe_urandom())
+    println("")
+    println("  Upstream entropy (--rng external / wire):")
+    println("    stdlib/qrng       : hexa qrng collect  (RFC 044, 9-backend router)")
+    println("    qmirror probe     : hexa qmirror       (compiler/hw_probes/qmirror.hexa)")
+    println("")
+    println("  ANU 3-tier resolution (secret name → status; values never printed):")
+    println("    T1.c paid    : ANU_KEY_PAID    " + _probe_secret("ANU_KEY_PAID"))
+    println("    T1.b free    : ANU_KEY_FREE    " + _probe_secret("ANU_KEY_FREE"))
+    println("    T1.a legacy  : (keyless qrng.anu.edu.au, ~1 req/min)")
+    println("    fallback     : /dev/urandom → fixed seed (always available on POSIX)")
+    println("")
+    println("  --rng selectors  : external | wire | anu | anu_paid | anu_free | anu_legacy | urandom")
+    println("  Public API       : estimate_constant(name, n_samples, rng) -> map")
+    println("                     compare_rng(name, n_samples, n_trials, rng_a, rng_b) -> map")
+    println("  Named constants  : catalan, zeta3, euler_gamma, pi5_times_n6")
+    println("  Gates            : PASS<1e-3, NEAR<5e-3, FAIL otherwise")
+}
+
+// ─── subcommand: chain ───
+
+fn cmd_chain() {
+    println("=== hexa mc-integrate chain (production → verification → consumption) ===")
+    println("")
+    println("  Stage 1 (production):   hexa qrng collect  /  hexa qmirror")
+    println("    stdlib/qrng router    9-backend fallback chain (RFC 044)")
+    println("    qmirror hw_probe      δ try-live-or-fallback entropy probe")
+    println("")
+    println("  Stage 2 (verification, this module): mc-integrate compare")
+    println("    Welch-t indistinguishability gate over upstream-vs-classical bits")
+    println("    Run: hexa mc-integrate compare --compare <name> --rng-a anu --rng-b urandom")
+    println("")
+    println("  Stage 3 (consumption): downstream MC integrals")
+    println("    estimate_constant(name, n, rng) seeds the LCG from stage-1 bits")
+    println("")
+    println("  --rng external resolution:")
+    println("    → hexa qrng collect --bytes=16  (stage 1)")
+    println("    → engine inline 3-tier ANU      (stage 1 fallback)")
+    println("    → /dev/urandom → fixed seed     (always-available final fallback)")
+}
+
+// ─── subcommand: probe-anu ───
+
+fn cmd_probe_anu() {
+    println("=== hexa mc-integrate probe-anu (live; counts against ANU quota) ===")
+    println("  Invokes the engine with --rng anu_paid|anu_free|anu_legacy on a")
+    println("  tiny N=200 catalan estimate; rng_used label tells you which tier fired.")
+    println("  Run 'hexa mc-integrate status' first for a no-network probe.")
+    println("")
+    let tiers: [str] = ["anu_paid", "anu_free", "anu_legacy"]
+    let mut i = 0
+    while i < len(tiers) {
+        let t = tiers[i]
+        println("  --- tier: " + t + " ---")
+        let raw = _run_engine(["--constant", "catalan", "-N", "200", "--rng", t], "", "")
+        let lines = raw.split("\n")
+        let mut k = 0
+        while k < len(lines) {
+            let line = lines[k]
+            if line.contains("__MC_INTEGRATE__") {
+                println("    " + line.trim())
+            } else if line.contains("rng_used") {
+                println("    " + line.trim())
+            } else if line.contains("abs_err") {
+                println("    " + line.trim())
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+}
+
+// ─── subcommand: version / help ───
+
+fn cmd_version() {
+    println("hexa mc-integrate " + VERSION)
+    println("stdlib/mc_integrate — RFC 047 absorption of dancinlab/mc-integrate v1.0.0")
+    println("license: Apache-2.0")
+}
+
+fn cmd_help() {
+    println("hexa mc-integrate " + VERSION + " — Monte Carlo numerical integrator (RNG verification surface)")
+    println("")
+    println("USAGE")
+    println("  hexa mc-integrate                         full self-test sweep (default)")
+    println("  hexa mc-integrate estimate --constant <name> [-N N] [--rng <RNG>]")
+    println("                                            Monte Carlo estimate of a named constant")
+    println("  hexa mc-integrate compare --compare <name> [-N N] [--trials k]")
+    println("                            [--rng-a <RNG>] [--rng-b <RNG>]")
+    println("                                            Welch-t indistinguishability between two RNG legs")
+    println("  hexa mc-integrate self-test               full falsifier sweep (F2-F5 + G1-G6 + H1-H3)")
+    println("  hexa mc-integrate status                  module + ANU 3-tier resolution probe (offline)")
+    println("  hexa mc-integrate chain                   3-stage wire-up resolution")
+    println("  hexa mc-integrate probe-anu               live ANU tier probe (counts against quota)")
+    println("  hexa mc-integrate --help, -h              this help")
+    println("  hexa mc-integrate --version, -v           version")
+    println("")
+    println("NAMED CONSTANTS  (--constant / --compare)")
+    println("  catalan                                   Catalan's constant G ≈ 0.9159655941")
+    println("  zeta3                                     Apéry's constant ζ(3) ≈ 1.2020569032")
+    println("  euler_gamma                               Euler–Mascheroni γ ≈ 0.5772156649")
+    println("  pi5_times_n6                              π⁵×6 (BT-209 m_p/m_e identity)")
+    println("")
+    println("RNG SELECTORS  (--rng / --rng-a / --rng-b)")
+    println("  external                                  stdlib/qrng collect → inline 3-tier ANU → urandom")
+    println("  wire                                      alias for `external`")
+    println("  anu                                       inline 3-tier: ANU paid → free → legacy → urandom → fixed")
+    println("  anu_paid                                  ANU_KEY_PAID only,   then urandom → fixed")
+    println("  anu_free                                  ANU_KEY_FREE only,   then urandom → fixed")
+    println("  anu_legacy                                keyless legacy only, then urandom → fixed")
+    println("  urandom                                   /dev/urandom only,   then fixed")
+    println("")
+    println("  Secrets resolved through: secret CLI → 1Password (op) → macOS Keychain")
+    println("                            → AWS Secrets Manager → printenv  (in this order)")
+    println("")
+    println("EXAMPLES")
+    println("  hexa mc-integrate estimate --constant catalan -N 100000 --rng urandom")
+    println("  hexa mc-integrate estimate --constant zeta3   -N 1000000 --rng external")
+    println("  hexa mc-integrate compare  --compare catalan -N 50000 --trials 6 --rng-a anu --rng-b urandom")
+    println("  hexa mc-integrate self-test")
+    println("  hexa mc-integrate status                  no-network probe (key resolution only)")
+    println("  hexa mc-integrate probe-anu               live tier probe (uses quota)")
+    println("")
+    println("GATES   PASS abs_err<1e-3 · NEAR abs_err<5e-3 · FAIL otherwise")
+    println("        compare uses df-aware critical-t lookup (α=0.05 two-tailed)")
+    println("        + Wilson–Hilferty t→z p-value approximation (~1e-3 abs error, df≥4)")
+    println("")
+    println("RFC 047 absorption · archive: ~/core/archive_mc-integrate/")
+}
+
+fn main() {
+    let argv = args()
+    let n = len(argv)
+
+    // Find first positional after the script path.
+    let mut subcmd_idx = -1
+    let mut i = 0
+    while i < n {
+        if argv[i].ends_with(".hexa") { subcmd_idx = i + 1; break }
+        i = i + 1
+    }
+    if subcmd_idx < 0 { subcmd_idx = 2 }
+
+    // No subcommand → full self-test sweep (default).
+    if subcmd_idx >= n {
+        cmd_self_test()
+        return
+    }
+
+    let sub = argv[subcmd_idx]
+    let mut sub_args: [str] = []
+    let mut j = subcmd_idx + 1
+    while j < n {
+        sub_args.push(argv[j])
+        j = j + 1
+    }
+
+    if sub == "--help" || sub == "-h" || sub == "help" {
+        cmd_help()
+    } else if sub == "--version" || sub == "-v" || sub == "version" {
+        cmd_version()
+    } else if sub == "estimate" {
+        cmd_estimate(sub_args)
+    } else if sub == "compare" {
+        cmd_compare(sub_args)
+    } else if sub == "self-test" || sub == "selftest" {
+        cmd_self_test()
+    } else if sub == "status" {
+        cmd_status()
+    } else if sub == "chain" {
+        cmd_chain()
+    } else if sub == "probe-anu" || sub == "probe_anu" {
+        cmd_probe_anu()
+    } else {
+        println("hexa mc-integrate: unknown subcommand '" + sub + "'")
+        println("run 'hexa mc-integrate --help' for usage")
+        exit(2)
+    }
+}
