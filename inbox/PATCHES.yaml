@@ -1328,6 +1328,29 @@
   opened: 2026-05-17
   detail: inbox/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md
 
+- id: rfc-053-forge-fp8-substrate
+  source_commit: 68ab48a4
+  source_files:
+    - inbox/rfc_drafts_2026_05_12/rfc_053_forge_fp8_substrate.md
+  compiler_impact: |
+    Design-only RFC. FP8-LM precision substrate (Tier 4 follow-up of RFC
+    049 §"Next iteration plan"). Storage FP8 (E4M3 activations / E5M2
+    gradients per FP8-LM paper), compute FP8 TC via cuBLASLt GemmEx,
+    per-tensor scaling (delayed history N=16), FP32 accumulator, FP64
+    master weights. Target 20-30× FP64 cuBLAS at Llama-7B LARGE on Hopper
+    (FP8 TC 1979 TFLOPS vs FP64 60 TFLOPS = 33× theoretical). 8 falsifier
+    pre-registered (FP8-TC-PERF, CONVERGENCE-LM, SCALE-DET, FP8-BITEQ-WITHIN-RUN,
+    FP8-MEM, HOPPER-MIN, FALLBACK, NO-INF-NAN, COMPILE-EQ).
+    Literature: FP8-LM (arxiv 2310.18313), Micikevicius FP8 Formats (2209.05433),
+    Scaling FP8 to Trillion-Token LLMs (ICLR 2025), NVIDIA H100/B200 datasheets,
+    cuBLAS 12.9/13.2 docs, Transformer Engine.
+  downstream_consumer: |
+    forge Phase 5+ FP8 substrate (future cycle). Coexists with RFC 049 BF16
+    (NOT supersede) — FP8 → BF16 → FP64 → CPU 5-level fallback chain.
+  status: spec
+  opened: 2026-05-17
+  detail: inbox/rfc_drafts_2026_05_12/rfc_053_forge_fp8_substrate.md
+
 - id: rfc-052-forge-hopper-bf16-dsm-combined
   source_commit: 9fd59ca8
   source_files:
