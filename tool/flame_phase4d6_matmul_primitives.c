@@ -308,27 +308,62 @@ static inline void flame_proj_batch_generic_primitive(
     // _hx_farr_table.
     C = _hx_farr_table[C_id].buf;
     Y = _hx_farr_table[Y_id].buf;
-    // ── RFC 058 ROLLBACK (rfc058-rollback, post-fire-#13/#14) ────────────
-    // The RFC 058 transpose-scatter kernel ACTIVATION is rolled back here.
-    // fires #9–#12 (host transpose loop) → d768 init-epoch gn2 = 3.99026
-    // (verified-good). fire #13 (RFC 058 transpose-scatter kernel) →
-    // gn2 = 3.98438 (WRONG). fire #14 (RFC 058 + a _d2h byte-eq fix) →
-    // gn2 = -nan (WORSE). The d768 GPU-resident path has NO byte-eq oracle
-    // (only d=32 has verify_all), so the regression was caught only at the
-    // 13th paid GPU fire.
+    // ── RFC 058 REVIVAL (oracle-gated, Phase 4-D-9 gap #2) ───────────────
+    // HISTORY: fires #9–#12 (host transpose loop) → d768 init-epoch
+    // gn2 = 3.99026 (verified-good). fire #13 (RFC 058 transpose-scatter
+    // kernel, FIRST activation) → gn2 = 3.98438 (WRONG). fire #14
+    // (RFC 058 + a _d2h byte-eq fix) → gn2 = -nan (WORSE). At that time
+    // the d768 GPU-resident path had NO byte-eq oracle (only d=32 has
+    // verify_all), so the regression was caught only at the 13th PAID GPU
+    // fire — and could not be localised (kernel bug vs wiring artifact?).
     //
-    // Minimal safe rollback: the host transpose loop below — the original
-    // pre-RFC-058 code, byte-eq-correct-by-construction — ALWAYS runs. The
-    // hexa_farr_transpose_scatter_gpu kernel/wrapper/dispatcher stay in the
-    // tree as DEAD CODE (unreachable here → harmless); they may be revived
-    // once the d768 GPU-path byte-eq oracle exists (see flame_phase4d7_
-    // gpu_path_oracle.sh / PHASE4D7_GPU_PATH_ORACLE.md). RFC 057 §6.1
-    // (cuBLAS output left device-resident — flame_rfc057_mark_device_
-    // authoritative + the `if (mm_c_id >= 0) farr_free` below) is UNTOUCHED:
-    // fire #12 had §6.1 and was correct (gn2 3.99026); only the transpose-
-    // scatter is the regression. did_dev_scatter is forced to stay 0 so the
-    // host loop is the sole Y-scatter path on every config (d=32 and d768).
+    // STATUS: the d768 GPU-path byte-eq oracle now EXISTS — tool/
+    // flame_phase4d7_gpu_path_oracle.{c,sh} / PHASE4D7_GPU_PATH_ORACLE.md.
+    // It byte-compares this exact primitive (spliced, not forked) on a
+    // d=96 GPU-gated config vs a verified CPU reference, max|Δ| ≤ 3e-11,
+    // sub-second / $-cents — replacing the 600 s d768 fire as the
+    // per-change check. PHASE4D7 doc §"Reviving the transpose-scatter
+    // kernel" + PHASE4D9 §4 gap #2 both name re-enabling the
+    // `if (mm_c_id >= 0)` scatter block as the exact change the oracle was
+    // built to verify. So the kernel is revived here, OUT of dead-code,
+    // GATED behind that oracle (no d768 fire until oracle --cuda is green).
+    //
+    // The hexa_farr_transpose_scatter_gpu kernel/wrapper/dispatcher are the
+    // verified RFC 058 13th kernel (runtime_cuda.c, additive over the 12;
+    // FORBIDDEN to modify — only called here). RFC 057 §6.1 (cuBLAS output
+    // left device-resident — flame_rfc057_mark_device_authoritative + the
+    // `if (mm_c_id >= 0) farr_free` below) is UNTOUCHED.
+    //
+    // HONEST scope (g3): the wrapper _hx_cuda_farr_transpose_scatter_gpu
+    // still _d2h(dst_id)s the FULL Bc (runtime_cuda.c:1781) — downstream
+    // A2-block slabs read Bc via a RAW host pointer, so the host buffer
+    // must stay fresh. This revival therefore makes Bc filled ON-DEVICE by
+    // the kernel but does NOT drop the host round-trip; that drop lands
+    // only with the full bwd dev_view conversion (PHASE4D9 §3). This is a
+    // byte-eq building block, NOT a wall-mover by itself.
+    //
+    // d=32 / CPU path: d²=1024 < FLAME_MATMUL_GPU_THRESHOLD (8192) →
+    // dispatch takes the CPU inline loop → mm_c_id stays -1 → the
+    // `if (mm_c_id >= 0)` gate is FALSE → host transpose loop runs verbatim
+    // → byte-IDENTICAL to pre-RFC-058 (F-RFC056-D32-BYTEEQ, by
+    // construction; the revival branch is unreachable on d=32).
     int did_dev_scatter = 0;
+#ifdef HEXA_CUDA
+    if (mm_c_id >= 0) {
+        // src = C (d_out×T, device-resident cuBLAS output), dst = Y (Bc),
+        // slab at Y_off. rows=d_out, cols=T → the kernel writes
+        // dst[Y_off + t·d_out + r] = src[r·T + t] — the IDENTICAL index
+        // map as the host loop below (pure index permutation, 0 fp ops).
+        HexaVal ts_rc = hexa_farr_transpose_scatter_gpu(
+            hexa_int(mm_c_id), hexa_int(Y_id),
+            hexa_int(d_out), hexa_int(T), hexa_int(Y_off));
+        if (HX_INT(ts_rc) == 0) {
+            did_dev_scatter = 1;
+        }
+        // rc != 0 → fall through to the host loop below (no fake PASS;
+        // C's host bytes are byte-identical so the host scatter is safe).
+    }
+#endif
     if (!did_dev_scatter) {
         for (int r = 0; r < d_out; r++)
             for (int t2 = 0; t2 < T; t2++)
