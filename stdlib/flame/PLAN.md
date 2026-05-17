@@ -874,9 +874,29 @@ empirical byte-identical.
 wall-mover 아님**. D2H drop 은 full bwd dev_view 전환과 함께만.
 over-claim 0.
 
-**pending = GPU oracle 결정 검증** (instance 36957918, in-flight):
-fire #13 = gn2 3.98438 (RFC 058 첫 활성, WRONG). oracle --cuda 가
-revived path 의 localized max|Δ| 로 판정 — fire #13 이 real kernel bug
-였나 wiring artifact 였나 (oracle 가 만들어진 이유 그 자체). PASS →
-device-scatter 메커니즘 byte-safe 확정 (본체 핵심 building block) ·
-FAIL → oracle 가 #13/#14 가 2 fire 낭비한 진단을 1 fire 로 localize.
+**GPU oracle 결정 검증 (instance 36957918, A100_PCIE, oracle_rc=0,
+wall 4s)**: ✅ **PASS** — revived path `max|Δ| = 3.553e-15`
+(TOL_OP 3e-11), 롤백 base 와 **동일** (transpose-scatter 추가 오차 0).
+fire #13 (gn2 3.98438) 미스터리 해소: transpose-scatter index map
+버그 아님 (host loop 과 bit-identical permutation 증명). #13 은 롤백
+前 코드 상태 (#14 가 -nan 으로 만든 `_d2h` 버그), 현 post-rollback
+minimal form 은 byte-clean. **link #1 = matmul→device-Bc-slice
+scatter 메커니즘 GPU byte-eq 검증 완료** (본체 핵심 building block
+확정). oracle 가 #13/#14 가 2 paid fire 낭비+localize 실패한 진단을
+1 cheap fire 로 해소 — 설계 목적 그대로. Tier: WIN.
+
+**방정식 등록 평가 (사용자 질의, g3)**: transpose-scatter 등가성 =
+순수 index 치환 항등식 (0 fp ops, 자명) = **정합성 보조정리이지 신규
+방정식 아님**. 거버넌스 g3 §insufficient ("lattice-tautology checks
+alone" 배제) + g6 가 tautology-class 의 atlas 등록을 명시 금지. 이미
+올바른 형태(falsifier `F-RFC058-GPU-PATH-ORACLE`, GPU max|Δ|=
+3.553e-15)로 캡처됨. cuBLAS vs CPU 3e-11 bound = classical Wilkinson
+합산오차 적용(발견 아님). device-residency all-or-nothing = systems
+불변식(formula-class 아님). **신규 atlas 방정식 발견 0 — 빈 등록은
+거버넌스 위반이라 미수행** (over-claim 0, g3).
+
+**다음 link (closure 본체, 병행)**: gap #1 = attention causal-masked
+softmax forge kernel (없으면 attention softmax host-bound 잔류 =
+잔여 wall bound). link #1 verdict 와 독립·non-overlapping
+(runtime_cuda.c additive 14th kernel + 신규 leaf byte-eq test).
+worktree-isolated sub-agent, experiment-driven (leaf test = 측정).
