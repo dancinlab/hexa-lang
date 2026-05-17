@@ -27,19 +27,31 @@
 - aprime_cc-direct path: 60-broad sweep **27/60 (45%)** byte-identical
 - hexa-build path (tier-2, hexa_v2 → C → clang): **38/60 (63%)** baseline → 활성화 후 ~53-54/60 예상 (재측정 펜딩)
 - 3-tier wrapper: `bin/hexa-run-native` 가 tier 1 aprime_cc / tier 2 hexa build / tier 3 interp (HEXA_APRIME_CC opt-in)
-- 부트스트랩 hexa_v2 binary: **1,487,616 B** (H17 + fn-dedup + empty-{} 활성화 완료)
+- 부트스트랩 hexa_v2 binary: **1,487,744 B** (H17 + fn-dedup + empty-{} + Field-rooted nested-index lvalue 활성화 완료)
 
 **다음 진행 candidates**:
 - #5 atlas SIGSEGV (≥17 nested-struct UB · runtime shallow-clone aliasing)
 - #9 aprime_cc tier-1 `nil` → const_void codegen
 - #13 aprime_cc DWARF `.loc` emission
 - #18 aprime_cc self-host (hexa_v2 의존 끊기)
-- 1 codegen lvalue 버그 (calc_cli_smoke `expression is not assignable`)
 - ~170 unmapped runtime builtins (per-symbol triage)
 
 ## 진행 로그
 
 (append-only)
+
+### 2026-05-17 — Field-rooted nested-index lvalue fix (`obj.field[i] = v`)
+**Bug**: `_gen2_nested_index_assign_stmt` (self/codegen_c2.hexa:2187) 에서 Index spine root 가 Field 노드일 때 `root_c = expr` 를 그대로 emit → `hexa_map_get_ic(obj, "field", &ic) = hexa_index_set(...)` → C "expression is not assignable" (함수 반환값에 assign 불가).
+
+**Repro**: `cs.clusters[i] = Cluster { ... }` (`compiler/atlas/symbolic/convergence_cluster.hexa:78`). FAIL_BUILD 으로 `convergence_cluster_smoke` + `calc_cli_smoke` 차단.
+
+**Fix** (commit `4de4cd2f`): root 가 Field 노드일 때 plain Field-AssignStmt 분기 (line ~2279) 의 `obj = hexa_map_set(obj, "field", new_value)` 패턴 mirror. 4-line conditional branch.
+
+**Validation** (재빌드 hexa_v2 1,487,744 B):
+- `convergence_cluster_smoke`: PASS=15 / FAIL=0  `__CVC_SMOKE__ PASS` ✅
+- `calc_cli_smoke`: PASS=35 / FAIL=0  `__CALC_CLI_SMOKE__ PASS` ✅
+
+**60-sweep 진척**: 잔여 FAIL_BUILD/RUN 에서 2 추가 close (lvalue cluster 종결). 다음 재측정 시 ~55/60 예상.
 
 ### 2026-05-17 — interp-retirement cycle: hexa_v2 부트스트랩 활성화 + 13 commits (compiler/PLAN.md consolidation start)
 사용자 directive 2026-05-17:
