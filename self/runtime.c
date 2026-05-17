@@ -5122,7 +5122,37 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
             }
             return hexa_bool(1);
         }
-        case TAG_MAP: return hexa_bool(HX_MAP_TBL(a) == HX_MAP_TBL(b));
+        case TAG_MAP: {
+            if (HX_MAP_TBL(a) == HX_MAP_TBL(b)) return hexa_bool(1);
+            // #28 — enum value equality. The native (aprime_cc) lowering
+            // represents an enum variant as a map { "__tag": hash, "__pN": … }
+            // (compiler/lower/hir_to_mir.hexa enum_path → struct_lit). Two
+            // separately constructed enum maps for the same variant must
+            // compare equal, mirroring the match-arm `__tag` discriminant
+            // test. Plain maps / structs ("__type__"-keyed, or no marker)
+            // keep pointer-identity semantics — unchanged. Scoped strictly
+            // to "__tag"-bearing maps so struct / dict `==` is untouched.
+            if (hexa_map_contains_key(a, "__tag") && hexa_map_contains_key(b, "__tag")) {
+                HexaVal ta = hexa_map_get(a, "__tag");
+                HexaVal tb = hexa_map_get(b, "__tag");
+                if (!hexa_truthy(hexa_eq(ta, tb))) return hexa_bool(0);
+                // Same variant ⇒ same payload arity. Compare each "__pN"
+                // payload structurally until the first absent slot.
+                for (int __pi = 0; ; __pi++) {
+                    char __pk[24];
+                    snprintf(__pk, sizeof(__pk), "__p%d", __pi);
+                    int ha = hexa_map_contains_key(a, __pk);
+                    int hb = hexa_map_contains_key(b, __pk);
+                    if (!ha && !hb) break;
+                    if (ha != hb) return hexa_bool(0);
+                    if (!hexa_truthy(hexa_eq(hexa_map_get(a, __pk),
+                                             hexa_map_get(b, __pk))))
+                        return hexa_bool(0);
+                }
+                return hexa_bool(1);
+            }
+            return hexa_bool(0);
+        }
         // TAG_FN: compare underlying C function pointer (descriptor indirection
         // may differ for two separately-constructed wrappers of the same fn).
         case TAG_FN:
