@@ -571,3 +571,40 @@ mf.def_line }` struct 생성에 국한 — self-compiled ap2 가 `f.name`→"voi
 `f.def_line`→map-miss; block label(fn param 통한 `mf.name`)은 정상 → MFunc.name 자체는
 OK. #25(match)와 다른 root (emit/asm.hexa·codegen/arm64_darwin.hexa 에 match-expr 0개).
 struct field-access / struct_lit-value self-host miscompile. 별도 cycle (task #26).
+
+---
+
+### 진행 로그 — #26 MFunc fn-arena field-read FIXED (`77b78b31`) + #27 (frontend 동 arena class) 노출 (cycle h18)
+
+**#26 ROOT-CAUSED & LANDED on main `77b78b31`**:
+- `compiler/codegen/arm64_darwin.hexa::_arm64_lower_func` 가 `mf.name`/`mf.def_line`/
+  `mf.blocks` 를 per-stmt `_emit_arm64_stmt` 호출 사이로 반복 read. 각 `_emit_arm64_stmt`
+  는 TAG_ARRAY 를 `__hexa_fn_arena_return` 경유 반환 → fn-arena rewind → arena-resident
+  `mf` map 의 string storage 무효화 → 이후 `mf.name`→TAG_VOID, `mf.blocks`/`mf.def_line`
+  →map-miss. self-compiled ap2 가 정확히 이 증상(`.globl void`/`void:` + map key not
+  found + truncated body; 첫 block label 만 정상). ap1(heap, single-read)은 무증상이라
+  self-host 까지 가려짐. #25 regression 아님(match-expr 無), #23/#24/#25 와 다른 site.
+- Fix: 함수 진입부에서 MFunc identity field 를 F6 forced-copy idiom 으로 1회 snapshot
+  (`fn_name = mf.name.substring(0,len(mf.name))` · `fn_def_line` · `mf_blocks`),
+  downstream 6 read 전부 arena-independent handle 경유.
+- 검증: build_aprime ap1b smoke PASS; ap1b→ap2b, ap2b smoke 가 `.globl _main`/`_main:`/
+  `.loc 1 1 0` emit (이전 `.globl void`), ap1 정상출력과 **byte-identical** (diff clean),
+  ap2b-compiled binary `exit(42)` PASS; warn name(4)/blocks/def_line/items → items(1);
+  ap1 vs ap1b smoke/r4/repro byte-identical (self-host arena path 만 변경).
+
+**#27 EXPOSED (마지막 알려진 self-host fixpoint 블로커, #26 와 동일 arena-lifetime class):**
+ap2b 가 full flattened compiler 컴파일 시 1032× `HX2001 undefined name <callee>` +
+선행 `map key 'items'/'children'/'span'/'text' not found`. `compiler/check/bind.hexa::
+bind()` 가 `module.items` 를 body-walk 전반(L818/838, 다수 fn-call=arena return)에서
+read + `compiler/lower/hir_to_mir.hexa::_lower_hexpr` struct_lit/field path(cross-struct
+field initializer `LF{name:mf.name,def_line:mf.def_line}` 가 stmt drop + string table
+truncate, `.LCstr1` empty). `_is_builtin_method` receiver 손상 → `.substring`/`.push`
+오-HX2001. **#26 는 codegen 단일 함수 local snapshot 으로 종결, #27 은 동 class 가
+frontend(bind/parser/lower) 다수 read-site 로 분산.** 
+
+**다음 cycle 방향 (중요):** #23/#24(arena heapify relocation)/#26/#27 전부
+**fn-arena-return lifetime 동근**. whack-a-mole F6 snapshot 누적 대신 **ROOT runtime fix**
+후보 — `self/runtime.c` 의 `hexa_val_heapify` TAG_MAP non-arena path 에서
+`__hexa_fn_arena_return` rewind 가로질러 parameter map 보존 → recurring class 전체 폐쇄.
+fallback = `module.items` snapshot + struct_lit lowering 의 localized forced-copy.
+#27 agent 가 root-fix 안전성(gate ① full sweep + self-host byte-identical) 우선 평가.
