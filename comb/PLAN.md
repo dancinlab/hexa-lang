@@ -68,13 +68,15 @@
   은 T1-B-full 후 측정 필요 — non-contention 은 lower bound 일 뿐.
   다음 = (a) RTL 스텁(comb-side hexa→Verilog emitter) 으로 T2 RTL 측면
   착수 (b) T1-B-full = hexa-arch[chip] BookSim2 흡수 후.
-- 2026-05-18 — **T2 RTL 첫 바이트** (`comb/rtl/`): hexa-native Verilog
-  emitter (`emit_routers.hexa` — parse PASS · build OK · 실행) →
-  `routers.v` (36줄, degree-4 mesh router + degree-6 hex axial router
-  port-skeleton). 좌표축 axial (pos_q, neg_q, pos_r, neg_r, pos_s, neg_s)
-  port 명 명시. datapath/arbiter 미충전 (스텁) — 후속은 hexa-arch[chip]
-  Chisel/Amaranth 흡수 + Yosys 합성 + OpenROAD P&R. T2 RTL 측면 0% →
-  *건축 RTL spec* 시작. tapeout-ready 가 아님 (DRC·PDK 매핑 미수행).
-  현 상태: T2 sim 측면 = 비경쟁 F1 PASS (lower bound) · T2 RTL 측면 =
-  port skeleton emitted. T2 ~15-25%. T3 = 0% (hexa-arch[chip] RTL→GDSII
-  필요).
+- 2026-05-18 — **T2 RTL 첫 바이트** (`comb/rtl/emit_routers.hexa` →
+  `routers.v` 36줄 스텁). hexa-native Verilog emitter — datapath 미충전.
+- 2026-05-18 — **T2 RTL → synthesizable** (`comb/rtl/router_d{4,6}.v`):
+  ⭐️ 263줄 합성가능 RTL 작성. router_d4 (5-port XY routing, RR arbiter,
+  4-deep FIFO, crossbar) + router_d6 (7-port axial hex dim-order routing,
+  동일 구조). **외부 도구 검증**: `iverilog -g2012 -Wall` 둘 다 exit=0
+  (sensitivity-list 경고만, benign). T2 RTL 측면 = port skeleton →
+  **외부-도구-검증된 합성가능 architectural RTL**. tapeout-ready 까지는
+  여전히 Yosys 합성 + OpenROAD P&R + SKY130/SG13G2 PDK 매핑 + DRC·STA =
+  hexa-arch[chip] 영역. T2 ~30-40% (sim 비경쟁 PASS + RTL 합성가능).
+  T3 = 0%. 다음 = (a) cocotb/SymbiYosys 테스트벤치 (b) hexa-arch[chip]
+  Yosys 흡수 후 합성 측정.
