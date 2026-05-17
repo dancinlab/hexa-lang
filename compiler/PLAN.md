@@ -517,3 +517,52 @@ hxc_roundtrip 분리됨) + env-resource 2(`repo_taxonomy_audit` rc137 OOM ·
 가 frontend 실행 + asm header emit 까지 가나 per-function emit loop 이 **함수 body 0개**
 생성 (smoke → 4-line header only vs ap1 정상 28-line `_main`). 타임아웃/atlas 의존 아님.
 #24 가 atlas-load 에서 ap2 를 먼저 죽여 가려져 있던 것. 별도 cycle.
+
+---
+
+### 진행 로그 — #25 match-as-expression value-drop FIXED (`255a4fcd`) + #26 노출 (cycle a55)
+
+분기: `worktree-agent-a55d54921927ee1a8` (origin/main `50d9db70` 기점). 커밋:
+`255a4fcd fix(lower): #25 match-as-expression drops arm result values`.
+
+**bisect (ap1→ap2 self-host, 계측-then-revert):** ap2 의 빈-body 를 단계별
+eprintln 으로 추적 — `src len=28 → lex tokens=13 → parse items=0`. parser 의
+`_parse_module_one` 진입 시 `at_eof()=true` (ntok=13, pos=0) 인데 ap1 oracle 은
+`at_eof=false`. `at_eof → check_kind(Eof) → same_kind(peek.kind, Eof) →
+tag_of(a)==tag_of(b)`. 계측 결과 **ap2 의 `tag_of()` 가 모든 입력에 "0" 반환**
+(ap1: "KwFn"/"Eof" 정상). → `same_kind` 항상 true → `at_eof` 항상 true → top-level
+parse loop 진입 0회 → 0 items → 0 funcs → 빈 asm.
+
+**root cause:** `compiler/lower/hir_to_mir.hexa` match-lowering (k=="match", ~L1310).
+**값 위치** match (`return match k {…}` / `let x = match …`) 가 arm body 를
+lower 는 하나 `br_b.operand` 를 버리고 match 전체가 `_no_value(ctx)` (=
+`_const_int_op(0)`, has_value=false) 반환. 따라서 `tag_of`/`_item_kind_tag`
+(payload-free enum → string literal arm) 같은 모든 값-위치 match 가 항상 0.
+hexa_v2 C-path 는 C `switch`+값으로 정상 → interp/C 가려져 있던 self-host 전용 발현.
+최소재현 `match k { E::A->"AAA",… }` 를 ap1 으로 직접 asm-compile 해도 stdout `0` /
+exit 1 (oracle hexa_v2-C: `BBB` / exit 7) — **self-host 아닌 직접 codegen 버그**.
+
+**fix (2-hunk surgical, +30/-1):** arm loop 전에 `match_result` local 1개 할당;
+`!has_returned && br_b.has_value` arm 은 join 분기 전 `STMT_ASSIGN op="bind"
+args=[br_b.operand]` 로 결과를 복사 (op="bind" = 모든 backend 의 평범한 dst=arg0
+copy fall-through); join 에서 `_value(ctx, _local_op(match_result.id))` 반환.
+statement-위치 arm (`has_returned`/`has_value=false`) 은 result 미기록 = 기존
+no-value 의미 유지.
+
+**검증:** ① build_aprime smoke `exit(6*7)==42` PASS. ② ap1(fixed) 가
+min-repro `match-enum→string` 를 `BBB`/exit 7 로 컴파일 = hexa_v2-C oracle 동치
+(이전 `0`/exit 1). ③ `let x = match` 값-위치 = oracle byte-동치 (`green`/exit 3).
+④ match 미사용 프로그램 (smoke·two-fn) pre/post asm **byte-identical** (비회귀).
+⑤ statement-위치 match: 출력 정상 (exit 20) 이나 `match_result` slot 무조건 할당으로
+frame offset +16B shift — 기능 무해, deterministic. ⑥ **self-host: ap1(fixed) →
+22,158-line flat → 230,382-line asm → ap2f. ap2f 가 smoke 에 대해 실제 `_main`
+body emit (이전 4-line header only) — #25 해소 확인.**
+
+**self-host fixpoint: 미도달 (#25 해소, #26 노출).** ap2f smoke asm 이 25 line
+까지 가나 `.globl _main`/`_main:` 대신 `.globl void`/`void:` + 런타임 경고
+`map key 'def_line' not found`. `LFunc { name: mf.name, … def_line: mf.def_line }`
+struct_lit 에서 self-compiled ap2 가 `f.name`→"void", `f.def_line` map-miss
+(block label 은 `mf.name` 파라미터 경유로 "helper" 정상 → MFunc.name 자체는 OK).
+**#26 = struct field-access / struct_lit value miscompile (self-host 전용; match-expr
+아님 — emit/asm.hexa·codegen/arm64_darwin.hexa 에 match-expr 0개). #25 와 별개 root,
+별도 cycle.** #25 (per-function emit loop 함수 body 0개) 는 본 cycle 에서 종결.
