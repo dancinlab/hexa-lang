@@ -62,7 +62,7 @@ atlas SIGSEGV fix (`589e7c6e`) + CGFAIL triage (`702fb30a`) 반영 aprime_cc (2,
 
 **잔여 DIFF 15 클러스터**:
 - atlas verifier semantic × 5 (atlas_cycle_append · atlas_doctrine · atlas_hxc_roundtrip · atlas_tecsl_verify · atlas_wave3)
-- t_macro_depth aprime codegen bug × 3 (abort 미발화)
+- t_macro_depth × 3 — **struct 파라미터 변이 시맨틱 divergence** (단순 codegen 버그 아님): `check_bound(ctx, ...)` 내부의 `ctx.depth = ...` / `ctx.error = ...` Field-assign 이 caller 의 `ctx` 에 반영 안 됨. aprime = value-copy (Field-assign 이 `ctx = hexa_map_set(ctx, ...)` 로 로컬 rebind), interp = reference. → 구조체 인자의 reference 시맨틱 문제 — value-model 레벨, RFC-sized.
 - suspect-interp × 2 (n6_uniqueness · sigma_phi_tau — interp 조기종료 의심)
 - 신규 triage × 3 (divisor_field_theory · physics_constant_engine · reachability)
 - misc × 2 (t_range_precedence · t34_net_listen)
