@@ -589,3 +589,68 @@ Phase 4-D-5 layer status (honest):
 (d=32·3L stays CPU byte-eq; d=768·12L → cuBLAS). Then re-fire #5 for the
 actual F-RFC046 wall measurement.
 분석: `state/flame_phase4d_5_4_2026_05_17/PHASE4D_5_4_ANALYSIS.md`.
+
+---
+
+### 진행 로그 — fire #5→#10 + RFC 056 + Phase 4-D-9 (2026-05-17/18)
+
+> 본 로그는 격리 브랜치 `rfc043-flame-camp` (`~/core/hexa-lang-flame-wt`)
+> 에서 관리. 공유 메인(rfc043-hexa-torch)은 ~8 세션 공유 + 동시세션
+> git reset/clean 으로 uncommitted SSOT 반복 소실 → flame 캠페인
+> 코드·측정·문서는 격리 브랜치 commit 으로 보존 (사용자 승인 2026-05-18).
+
+**fire 진척 (단조, g3 정직 — 매 fire 구체 blocker 1개 제거)**:
+- #5 (Phase 4-D-6): GPU ENGAGED 435MiB, 0 step/600s — 비-matmul CPU
+  loop + per-call H2D/D2H 식별.
+- #7 (Phase 4-D-7): step 1 진입, `[cuda] d2h state mismatch` →
+  CPU fallback. Agent #44 (`2b9c868b`) inert+buggy block-boundary
+  to_device/to_host 제거 → d2h 해소.
+- #8: d2h FIXED 확인, GPU 25%/581MiB, step 1 미완 (per-op round-trip
+  지배). nohup-detached fire 법 확립.
+- #9 (Phase 4-D-8 `aa6d70ba` redundant pre-op H2D elision, byte-eq-
+  exact): `wall=601` GPU 18%/459MiB — halving H2D 가 step-1 못 옮김
+  → **wall 은 duplicate-H2D-bound 아닌 구조적 round-trip + CPU-glue
+  bound** 임을 측정 확정 (decisive).
+
+**RFC 056 (device-sub-view residence API) — 측정 anchored 작성+구현**:
+- spec: `inbox/rfc_drafts_2026_05_12/rfc_056_forge_device_subview_residence_api.md`
+  (7 falsifier, F-RFC056-BYTEEQ-PRESERVE 가 12-kernel oracle max|Δ|=0.0
+  강제). fire #9 가 측정으로 justify (design-first 아님 — 사용자 directive).
+- **Phase 1 LANDED** (`1f077af1`): §6.1 state machine + §6.2
+  `hexa_farr_dev_view` + §6.3 `pin_device`/`unpin_device` (A2 배선) +
+  §6.4 `out_disposition` (default `FORGE_OUT_HOST_NOW` backward-safe).
+  F-RFC056-D32-BYTEEQ ✅ max|Δ|=0.0 (revert+diff 입증).
+- **fire #10**: `BUILD_CUDA_RC=0` — RFC 056 substrate real A100
+  `nvcc -DHEXA_CUDA` clean compile+link (GPU build 회귀 없음). GPU
+  resident 459→**727 MiB** monotone (pin_device 작동). `wall=600`
+  step 1 미완, 727MiB≪3.6GB → RESIDENT-MEM/STEP/WALL FAIL. **RFC 056
+  §8.2 pre-registered caveat 그대로** (A2 가 resident buffer 를
+  operate-on 안 함 — Phase 4-D-9 gated work).
+
+**Phase 4-D-9 (A2 resident-dataflow rewire) — PARTIAL** (`b1f32d21`,
+격리 브랜치 rfc043-flame-camp):
+- F-RFC056-D32-BYTEEQ PASS (revert+rebuild+diff byte-identical) ·
+  d768 rebuild PASS (no-CUDA + -DHEXA_CUDA syntactic RC=0).
+- landed: SwiGLU fwd/bwd 중간 chain (silu→mul) 을 `dev_view` 로 —
+  D2H+re-H2D round-trip 2개 byte-safe 제거 (view path 는 H2D 무조건
+  skip, host 개입 0).
+- **정밀 격리된 다음 blocker**: ① raw by-id `FORGE_OUT_DEVICE_KEEP`
+  chaining 은 byte-safe 아님 (`_d2h_out` 가 `dirty_host=1` 설정
+  `runtime_cuda.c:608` → 다음 op H2D-skip 무력화 → stale 재업로드);
+  `dev_view` path 만 escape. ② pinned **Bc** dev-view 차단 — 공유
+  cuBLAS matmul primitive (`flame_phase4d6_matmul_primitives.c`,
+  d=32 path 겸용) 가 Bc 를 host-side 로 씀 → pinned Bc view = stale
+  device snapshot. 해소 = substrate 변경(금지·verified oracle) 또는
+  matmul-primitive 를 Bc device-authoritative 로 restructure (더 큰
+  RFC scope).
+
+**다음 (measurement-anchored, 2 step)**:
+1. **fire #11** — Phase 4-D-9 (`b1f32d21`) SwiGLU round-trip 2개
+   제거 효과 측정 + F-RFC056-BYTEEQ-PRESERVE 12-kernel oracle companion.
+2. fire #11 결과로 **RFC 057 (가칭) Bc device-authoritative matmul
+   primitive restructure** measurement-anchored 작성 (verified oracle
+   불변식 보존). true persistent residency 의 마지막 정밀 격리 architecture.
+
+분석: `state/flame_phase4d7_gpu_fire_2026_05_17/PHASE4D7_FIRE10_ANALYSIS.md`
+(fire #5→#10 + Phase 4-D-9 통합, 측정 수치 무손실 — 원본 FIRE{8,9,10}
+분석은 공유 메인 동시세션 reset 으로 소실, 본 격리본이 복원 SSOT).
