@@ -1,9 +1,27 @@
-# flame Phase 4-B status — single-page consolidated state (2026-05-17, EIGHTH update)
+# flame Phase 4-B status — single-page consolidated state (2026-05-17, NINTH update)
 
-> 🎯 **Phase 4-B FULLY SHIPPED + Phase 4-C-1a complete + Phase 4-D-4 fire honest FAIL** —
-> 73+ main commits + 7 subagent commits + 4 parallel-session merges. ≥3× RFC 047 §137
-> target REACHED with CPU-only (3.23× cool projection + 3.37× contended directional).
+> 🎯 **Phase 4-B FULLY SHIPPED + Phase 4-C-1a/2a/2b/2c LANDED + Phase 4-D-5 Layer 2
+> matmul + IPCP transpiler-binary fix** — `rfc043-hexa-torch` @ `73c0706b`.
+> `tool/flame_phase4b3_verify_all.sh` → **26/26 PASS** (HEXA_MAC_BUILD_OK=1, $0 Mac).
+> ≥3× RFC 047 §137 target REACHED with CPU-only (3.23× cool projection).
 > Phase 4-D-4 fire honest FAIL — CPU binary on GPU box ($0.40 cost, < $20 cap).
+>
+> **Phase 4-D consolidation audit**: see `PHASE4D_CONSOLIDATION_AUDIT.md` —
+> branch state + 26/26 verdict + regression audit (NO REGRESSION from the
+> cherry-picked sub-agent commits).
+>
+> Consolidation commits landed on `rfc043-hexa-torch`:
+> - `6e3cb5a9` Phase 4-D-5-2 — A2 matmul primitives cuBLAS-route, dim-aware
+>   dispatch (Layer 2 — `flame_proj_matmul_dispatch`, threshold 8192; GPU branch
+>   `#ifdef HEXA_CUDA` so Mac no-CUDA build keeps byte-eq by construction)
+> - `eeb65fc7`/`7f34ccbf`/`7a09a4c8` Phase 4-D-5-4 — runtime.c `_hx_farr_*_gpu`
+>   wiring (11 ops) + dispatch script + d768 trainer regen with Layer 2 matmul
+> - `73c0706b` IPCP transpiler-binary fix — all 3 flame build wrappers
+>   (`flame_phase4b_build.sh`, `flame_phase4b3_build.sh`,
+>   `flame_phase4b3_extern_build.sh`) now select the EXACT canonical
+>   `self/native/hexa_v2` (no `hexa_v2*` glob → no stale `hexa_v2_baseline`)
+>   + single-TU `#include "runtime.c"` restore. Build-script-only; see
+>   `IPCP_BASELINE_FIX_NOTES.md`.
 >
 > 🎯 baseline (cool) 16.170s → A2+B FULL ~5.0s projected = **3.23× wall**
 > 🎯 flame:anima = ~0.226× (**~4.4× faster than anima**)
@@ -247,15 +265,19 @@ gap (GPU acceleration absent in binary) rather than fabricating progress.
 |---|---|
 | Phase 4-B-2 IPCP | ✅ SHIPPED 1.28× wall |
 | Phase 4-B-3 A2 fwd+bwd + Path B | ✅ SHIPPED 3.23× wall cool (≥3× target REACHED) |
-| Phase 4-C-1a paired-call detection | ✅ SHIPPED (verify_all 24/24) |
-| Phase 4-C-2a fused primitive scaffold | ✅ SHIPPED (compile-eq PASS, fwd-bwd-eq trivially PASS) |
-| Phase 4-C-2b caller wire-up | ⏳ next (sed-rewrite paired → fused call) |
-| Phase 4-C-2c Bc-elimination | ⏳ next (extract intermediates to C locals, ~24 KB DRAM RT eliminated) |
-| Phase 4-C-2+ wall improvement | ⏳ gated on 2b+2c (F-RFC048-FUSED-WALL-IMPROVED ≥1.3×) |
+| Phase 4-C-1a paired-call detection | ✅ SHIPPED (F-RFC048-PAIR-DETECT PASS) |
+| Phase 4-C-2a fused primitive scaffold | ✅ SHIPPED (F-RFC048-FUSED-COMPILE-EQ PASS) |
+| Phase 4-C-2b caller wire-up | ✅ LANDED (F-RFC048-FUSED-FWD-BWD-EQ byte-id, rewrites=0) |
+| Phase 4-C-2c Bc-elimination / fused fwd+bwd | ✅ LANDED (F-RFC048-FUSED-FWD-BWD-EQ max\|Δ\|=0.0) |
+| Phase 4-D-5-2 Layer 2 matmul cuBLAS-route | ✅ LANDED (dim-aware dispatch, GPU `#ifdef HEXA_CUDA`) |
+| Phase 4-D-5-4 runtime.c GPU wiring + d768 regen | ✅ LANDED (11 `_hx_farr_*_gpu` ops, Mac build PASS) |
+| IPCP transpiler-binary fix | ✅ LANDED (`73c0706b` — 3 wrappers → canonical `hexa_v2`) |
+| verify_all consolidated battery | ✅ **26/26 PASS** (`rfc043-hexa-torch` @ `73c0706b`) |
+| Phase 4-C-2+ wall improvement | ⏳ gated (F-RFC048-FUSED-WALL-IMPROVED ≥1.3×; single-block scope ≈1.0×) |
 | Phase 4-C-3+4 user-gate items | ⏳ user-gate (architectural decisions) |
 | Phase 4-D-4 GPU fire | 🔍 FAIL (binary bottleneck identified) |
-| RFC 040 cuBLAS Dgemm wire | ⏳ next progression for GPU advantage |
-| Phase 5 exceed eager-PyTorch | ⏳ ultimate goal (needs RFC 040 wired) |
+| Phase 4-D-5-4 d768 fire | 🔍 wall FAIL honest (Layer 2 gap — `753c4325`) |
+| Phase 5 exceed eager-PyTorch | ⏳ ultimate goal (needs full GPU matmul route fired) |
 
 ## Files touched this cycle (16 commits)
 
