@@ -470,3 +470,73 @@ flame: stdlib/flame/* + tool/flame_*), AGENTS.tape 다른 section 공존,
 PATCHES.yaml 갱신 (commit `2a90c225`): RFC 044/049/050/051 모두 spec
 entries 추가. RFC 051 = anima 측 design (uarr unboxed-array native,
 pure-hexa hexa-cpu LM-scale 2.8× allocator inflation 천장 해결).
+
+### 2026-05-17 — Phase 4-C-2b caller wire-up + Phase 4-C-2c Bc-elim (4/7 iter) LANDED (sub-agents)
+**Phase 4-C-2b (Agent #22, commit `952571d9`)**: `tool/flame_phase4c2b_build.sh`
+perl-based safe rewriter for paired nn_decoder_block_{fwd,bwd} → fused call.
+F-RFC048-FUSED-COMPILE-EQ ✅ PASS · F-RFC048-FUSED-FWD-BWD-EQ ✅ PASS (rewrites=0,
+fwd@nn_decoder_fwd ↔ bwd@nn_decoder_grad ~175 lines apart in A2.c, adjacency
+requires Phase 4-C-3 decoder_lib restructure). Wall 1.044× (FAIL ≥1.3× threshold,
+expected at 0 rewrites scaffold). Rewriter MECHANISM proven on synthetic inputs.
+
+**Phase 4-C-2c (Agent #23, 7-commit range V0→close)**: iterative Bc-elim with
+strict byte-eq per iteration:
+- V0 inline fwd+bwd body + byte-eq harness
+- iter 1: oRm1inv (16 dbl) extracted — byte-eq PASS, wall 0.94-1.03×
+- iter 2: oRm2inv (16 dbl)
+- iter 3: oRm1xn (T·d = 512 dbl)
+- iter 4: oRm2xn (T·d = 512 dbl)
+- 1056/3104 dbl (~34% target) extracted to C local arrays
+- iter 5-7 (oRin/oRin2/oSwS) blocked on matmul/grad_accum API change (user-gate)
+- F-RFC048-FUSED-FWD-BWD-EQ PASS strict max|Δ|=0 every iteration
+- F-RFC048-FUSED-WALL-IMPROVED 0.95-0.99× (audit §6 R2 register-pressure prediction match)
+- verify_all 26/26 PASS extended (F-RFC048-FUSED-COMPILE-EQ + FWD-BWD-EQ added)
+
+### 2026-05-17 — Phase 4-D-5-2 11/11 Phase B+B2 CUDA kernel bodies LANDED (2 sub-agents)
+**Agent #25 (commit `96c78072`, 5 elementwise ops, +374 LOC + 277 LOC harness)**:
+- add, scale, mul (bit-exact F-RFC041-{ADD,SCALE,MUL}-EXACT)
+- silu, silu_grad (F-RFC041-SILU-EQ/-SILU-GRAD-EQ, TOL_ELEM ≈ 4e-15 f64 exp ULP)
+- 1-D grid-stride, no atomics, deterministic
+
+**Agent #26 (commit `e94fc04e`, 6 reduction+B2 ops, +577 LOC + 431 LOC harness)**:
+- softmax_rows (warp-shuffle 3-pass, TOL_ELEM ≈ 1e-12)
+- rmsnorm_rows (sum-of-squares + rsqrt)
+- rmsnorm_bwd_rows (two row reductions, exact dx vjp)
+- adamw_step (fused 1-D in-place)
+- matmul_t (cuBLAS Dgemm reshape, TOL_MATMUL ≈ 2e-9)
+- outer (cuBLAS Dgemm reshape K=1, BIT-EXACT)
+- No atomicAdd → F-RFC041-DETERMINISM holds
+
+self/runtime.c wiring (Phase 4-D-5-1) + self/cuda/runtime_cuda.c kernels (Phase 4-D-5-2) = **forge RFC 040/041 substrate complete on host source**.
+
+### 2026-05-17 — Phase 4-D-5-3 CUDA host fire (Agent #28, commit `fd16eb1c`) — **11/11 PASS on A100**
+**Real GPU verification** on vast.ai A100 PCIE (sm_80), ~$0.20 (3 fires, ~9 min):
+- Fire #1 ($0.05): elem 5/5 PASS, red BUILD FAIL (missing #endif fix)
+- Fire #2 ($0.07): red BUILD OK, 0/13 launch FAIL (array-vs-pointer ABI bug)
+- Fire #3 ($0.07): red 6/6 PASS after pointer fix
+
+**11/11 falsifiers PASS, 28/28 harness sub-checks PASS** (16 byte-eq + 11 determinism + 1 sub-shape):
+
+| Op | max\|Δ\| | tol | margin |
+|----|---------|-----|--------|
+| add/scale/mul/outer/adamw_W | 0 bit-exact | 0/1e-12 | ∞ |
+| silu/silu_grad | 4.4e-16 / 2.2e-16 | 4e-15 | ~9-18× |
+| softmax_rows | 2.8e-17 → 1.8e-18 | 1e-12 | ~10⁵× |
+| rmsnorm_rows | 4.4e-16 → 1.3e-15 | 1e-12 | ~750-2300× |
+| rmsnorm_bwd_rows | 6.2e-16 → 2.0e-15 | 1e-12 | ~500-1600× |
+| adamw m,v | 3.5e-18 / 8.7e-19 | 1e-12 | ~10⁶× |
+| matmul_t (cuBLAS) | 2.1e-15 → 3.1e-11 | 2e-9 | ~65-10⁶× |
+
+Scaffold fixes in commit fd16eb1c: dup function head removed, dup _d2h_out renamed,
+#ifdef HEXA_CUDA properly closed, extern "C" for -x cu linkage, harness array→pointer ABI fix.
+
+**forge GPU substrate byte-eq verified end-to-end at the kernel layer on real CUDA.**
+Unblocks RFC 041 Phase 2 substrate absorption: `_hx_cuda_*` symbols ready for
+`_hx_farr_*_gpu` wiring in self/runtime.c (Phase 4-D-5-4 next).
+
+### 2026-05-17 — RFC 052 forge Hopper BF16+DSM combined design (Agent #27, commit `43e15f6e`)
+695 lines, 12-section RFC 044/049 pattern. 7 falsifier 사전등록.
+Target: 10-30× FP64 cuBLAS chain at Llama-7B LARGE on Hopper.
+Literature: FlashAttention-3 (arxiv 2407.08608), FlashFuser (arxiv 2512.12949),
+LayerCast (arxiv 2506.09501). sm_90+ only; sm_80 fallback to RFC 049 BF16.
+PATCHES.yaml entry `980a5a87`.
