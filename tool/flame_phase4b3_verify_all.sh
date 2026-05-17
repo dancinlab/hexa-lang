@@ -103,18 +103,19 @@ else
     echo "  SKIP  tool/flame_phase4b_build.sh not executable"
 fi
 
-# ── A2 primitive build sanity (byte-id check, Phase 4-B-3 SHIPPED) ──
+# ── A2 fwd+bwd FULL primitive build sanity (Phase 4-B-3 FULLY SHIPPED) ──
 echo ""
-echo "── A2 primitive build sanity (Phase 4-B-3 A2 SHIPPED) ──"
+echo "── A2 fwd+bwd FULL primitive build sanity (Phase 4-B-3 FULLY SHIPPED) ──"
 if [ -x tool/flame_phase4b3_a2_build.sh ]; then
     tool/flame_phase4b3_a2_build.sh stdlib/flame/flame_d32_corpus_test.hexa build/flame_d32_a2_check > /tmp/a2_build.log 2>&1
     if [ -f build/flame_d32_a2_check ]; then
         ./build/flame_d32_a2_check > /tmp/a2_check.out 2>&1
         if [ -f /tmp/baseline.out ]; then
             if diff -q /tmp/baseline.out /tmp/a2_check.out > /dev/null; then
-                echo "  PASS  A2 primitive build byte-id with /tmp/baseline.out"
+                echo "  PASS  A2 fwd+bwd FULL primitive build byte-id with /tmp/baseline.out"
+                echo "        (Phase 4-B-3 FULLY SHIPPED — 2.74× wall MEASURED, commit 8012c15a)"
             else
-                echo "  FAIL  A2 primitive build diff vs baseline"
+                echo "  FAIL  A2 fwd+bwd build diff vs baseline"
                 fail_count=$((fail_count + 1))
             fi
         else
@@ -128,10 +129,35 @@ else
     echo "  SKIP  tool/flame_phase4b3_a2_build.sh not executable"
 fi
 
+# ── Bonus: 5 bwd leaf tests (now exist) ─────────────────────────────
+echo ""
+echo "── Phase 4-B-3-3 bwd leaf byte-eq tests (5 sections) ──"
+for leaf in residual_bwd rmsnorm_bwd swiglu_bwd rope_bwd attention_bwd; do
+    src="tool/flame_phase4b3_leaf_${leaf}_test.c"
+    out="build/leaf_${leaf}_test"
+    if [ ! -f "$src" ]; then
+        echo "  MISSING  $leaf ($src)"
+        continue
+    fi
+    clang -O2 "$src" -lm -o "$out" 2>&1 > /dev/null
+    if [ ! -f "$out" ]; then
+        echo "  BUILD-FAIL  $leaf"
+        fail_count=$((fail_count + 1))
+        continue
+    fi
+    result=$("$out" 2>&1 | grep -E "^PASS|^FAIL" | head -1)
+    if echo "$result" | grep -q "^PASS"; then
+        echo "  PASS  $leaf  $(echo "$result" | sed 's/^PASS  //')"
+    else
+        echo "  FAIL  $leaf  $result"
+        fail_count=$((fail_count + 1))
+    fi
+done
+
 echo ""
 echo "═══ verification battery complete ═══"
 if [ $fail_count -eq 0 ]; then
-    echo "PASS  All Phase 4-B-3 verification artifacts PASS (5 leaf byte-eq + 3 mechanism probes + IPCP byte-id + A2 byte-id)"
+    echo "PASS  All Phase 4-B verification artifacts PASS (5 fwd + 5 bwd byte-eq + 3 mechanism probes + IPCP + A2 fwd+bwd byte-id = 15 artifacts)"
     exit 0
 else
     echo "FAIL  $fail_count failures — review output above"
