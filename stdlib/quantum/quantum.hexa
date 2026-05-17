@@ -12,8 +12,8 @@
 // qmirror — laptop-grade drop-in replacement for IBM Cloud / Braket QPU rental
 // for the ≤30-qubit low-noise envelope. Pure-hexa Aer-compatible state-vector
 // kernel + 27 quantum algorithm modules. RFC 045 absorbed dancinlab/qmirror
-// v2.6.0 (62,402 LoC, 38 module dirs); original SSOT frozen to
-// ~/core/archive_qmirror/ (헌법 v2 룰 3).
+// v2.6.0 (62,402 LoC, 38 module dirs); original SSOT frozen as the
+// dancinlab/qmirror GitHub private repo (헌법 v2 룰 3).
 //
 // Modules are standalone programs (each has main + sentinel). chemistry_vqe
 // + bench use relative imports (./ and ../../<feature>/module/) — the
@@ -109,7 +109,7 @@ fn cmd_help() {
     println("  mabk         MABK-Ardehali inequality       [Mermin 1990 + Werner-Wolf 2001]")
     println("  mirror-bench mirror-fidelity benchmark      [Proctor 2022 / arXiv:2008.11294]")
     println("")
-    println("ARCHIVE  ~/core/archive_qmirror/  (frozen 묘비 · DOI 10.5281/zenodo.20102964)")
+    println("ARCHIVE  github.com/dancinlab/qmirror (private)  (frozen 묘비 · DOI 10.5281/zenodo.20102964)")
     println("")
     println("Note: laptop-grade statistical-equivalence substrate for the ≤30-qubit")
     println("low-noise envelope — a Casio to IBM Cloud's Rolex. Both tell time.")
@@ -143,7 +143,7 @@ fn cmd_status() {
     println("")
     println("  ABSORPTION: RFC 045 LANDED 2026-05-16 — 114 .hexa, all parse-clean.")
     println("  Modules invoked via `hexa qmirror <subcmd>` (subprocess dispatch).")
-    println("  Archive: ~/core/archive_qmirror/ (frozen, read-only)")
+    println("  Archive: github.com/dancinlab/qmirror (private, frozen 묘비)")
     println("")
     println("  Provider/consumer boundary: qmirror.qrng is the consumer-side HMAC-DRBG")
     println("  amplifier; stdlib/qrng/ (RFC 044) is the provider registry. Zero overlap.")
