@@ -42,6 +42,14 @@
 
 (append-only)
 
+### 2026-05-17 — char-literal TAG_STR fix (`e0d9ba94`) + self-host 잔여버그 정밀 진단
+**char-literal fix (LANDED `e0d9ba94`)**: `compiler/lower/hir_to_mir.hexa` 가 `literal_char` → `_const_int_op(0)` — 모든 char 리터럴('.','a','\n'…)이 정수 0. `cs[i] != '.'` (cs = `s.chars()` = single-char TAG_STR) 가 TAG_STR vs int 0 비교 → 항상 unequal. `_ends_with_hexa()` 가 늘 false → 2nd-gen self-host 의 `_normalize_argv` 가 `_drv.hexa` 마커 인식 실패. 수정: `literal_char` → `_const_str_op(e.text)` (hexa_v2 codegen_c2:3247 "char literals must be TAG_STR" 미러). 검증: smoke PASS · char-비교 프로그램 interp 와 byte-identical · 2nd-gen `_normalize_argv` 정상 (`_drv.hexa ew=T`, out.len=4 == 1st-gen).
+
+**self-host 잔여버그 (다음 cycle, #23)** — 정밀 진단 완료:
+- char fix 후 `_normalize_argv` 는 정상 작동(out.len=4 검증). 그러나 그 **return 직후** main 에서 crash: `array[0]: container is not an array (tag=<비결정 garbage>)` — 실행마다 tag 다름 (45989888 / 0 / 1876935776) = **초기화 안 된 메모리 read**.
+- lldb bt: `_L357d_main_bb2 → hexa_array_get`. main 의 flag-parse 경로(top-level `let user_argv = _normalize_argv()` → 전역 g67 → `while ai<len(user_argv){ let a = user_argv[ai] }`). main 의 `bl __normalize_argv` 직후 asm 은 x0:x1 → L164 → g67 저장이 정상적으로 보임. → array-returning fn 의 return-value handoff 또는 spill-slot 별 uninitialized read 의심 (atlas 16-byte spill-slot 버그의 sibling 가능성). 비결정 garbage 특성상 codegen-correctness (ABI/spill) class.
+- frontend 100% · codegen 완주(64s) · link OK · argv-wiring OK · `_normalize_argv` OK 까지 도달. 이 단일 ABI/spill 버그가 self-host fixpoint 의 마지막 관문. 별도 focused 디버깅 cycle 필요 (asm-level ABI trace).
+
 ### 2026-05-17 — self-host fixpoint 1차 시도 — codegen 완주 + argv 와이어링, 잔여 arg-handling 버그 (`0a78e0ed`)
 codegen-perf-v2 (`82baa09e`) 로 full `compiler/main.hexa` codegen 이 완주(64s)하게 되어 self-host fixpoint 를 처음 실제 시도.
 
