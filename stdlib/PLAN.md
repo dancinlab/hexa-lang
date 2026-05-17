@@ -183,3 +183,38 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   `stdlib/json`) / T3-sim. 정직한 다음 수: hexa-lang **`stdlib/json`
   (parse + sort_keys canonical dump)** 신설 — T3-json 해금 + T4 자산.
   **측정된 거리: T3 1/104 검증 · 즉시-이관 부분집합은 104 미만.**
+- 2026-05-18 — **선결조건 정밀화 (자산 점검)**: hexa 런타임에 이미
+  `json_parse`/`json_stringify` 빌트인 존재(probe 검증). 이전 PLAN
+  "파서 부재" 표기는 stdlib **파일** 한정 — 런타임은 동작. 따라서
+  T3-json 의 read-side(파서)는 **이미 가용**, 추가 작업 0. 남은
+  진짜 필요분은 `json_dumps_canonical`(Python `json.dumps(sort_keys=
+  True)` 바이트-정확)뿐 → 이 자산만 신설하면 됨.
+- 2026-05-18 `5b5b9809` (hexa-lang `rfc043-hexa-torch`) — **stdlib/
+  alloc/json.hexa::json_dumps_canonical 착륙**. 재귀 키 정렬 +
+  ensure_ascii UTF-8 escape(`\uXXXX` BMP / surrogate pair astral) +
+  Python 기본 separators `, `/`: ` + 표준 short-escape. 검증:
+  **16/16 synthetic 바이트-패리티**(😀 surrogate, 비-ASCII 키, 깊은
+  중첩, 제어문자 포함) + 실 hexa-bio `registry.jsonl` essential
+  필드부분 **3/4 바이트-패리티 + sha256[:16] 일치**(weave·nanobot·
+  ribozyme; row-select tie-break `>=` 수정 포함). 추가 builtin 발견:
+  `dict_keys`·`type_of`·`len`·`ord` 가용; `dict_has` 부재 → 자체
+  `has_key` 헬퍼.
+- 2026-05-18 — **🔬 정밀 잔여 갭(상류)**: virocapsid_calibration_v1
+  의 한 중첩 17-자리 부동소수 (`9.637917041778564`)에서만 차이 —
+  hexa **런타임** `json_stringify(float)` 가 ~6 유효숫자로 절단
+  (`"9.63792"`). Python 의 shortest-round-trip repr 과 불일치. 이건
+  **인코더 버그가 아니라 hexa-lang 런타임 float→string 정밀도 제약**
+  (runtime.c 레벨 PR-only 작업; 본 트랙 범위 외). 영향: 캐노니컬-
+  해시 게이트 중 17-자리 float 가 essential 필드에 직접 들어가는
+  경우만 해당. 구조-검증/저정밀 게이트 다수는 미영향. 우회: (a)
+  대상 게이트의 float 필드를 6-sig 로 사전-반올림(데이터 손실 위험·
+  비추천), (b) 하드코딩된 임계만 비교(평소 패턴), (c) **상류 fix**:
+  hexa-lang runtime `_json_emit_number` 에 shortest-round-trip 보강
+  (별도 atlas PR — 본 PLAN 범위 외). 본 트랙은 (b) 가능 게이트 우선
+  진행, (c) 상류 작업은 별 issue 로 추적.
+- 2026-05-18 — **즉시 가능 다음 수**: `selftest/json_schema_validator.py`
+  (201L stdlib draft-07 subset) 를 `_hexa_bridge/selftest/` 가 아닌
+  공유 lib 으로 hexa 이관(읽기 = 런타임 `json_parse`) → 그러면
+  `virocapsid_c5_conformance`(109L) 가 quick port 가능 — 비-float
+  구조 검증 게이트. **측정된 거리: T3 1/104 검증 + 캐노니컬 dumps
+  + 16/16 synth + 3/4 real 패리티 자산 완비.**
