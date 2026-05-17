@@ -757,3 +757,51 @@ x86_64 backend 무수정 (incomplete backend, self-host path·gate-1 무관).
 builtin, RFC-scoped 신기능). codegen-correctness 측면에서 **구현된 언어 범위는 tier-1 ≡
 tier-2 사실상 완전** (모든 비-env·비-미구현 프로그램 MATCH). 인터프리터 실삭제(R7)는
 CGFAIL 6 신기능 구현 후.
+
+### 진행 로그 — gate ① `@link` extern fn + `*T` pointer-type cluster (cycle h20, `e629e33d`+`e7f5b6df`)
+
+tier-1 파서가 `@link("...")` 선행 `extern fn` 선언을 못 받던 root 종결 + 즉시 후속
+blocker(`*T` 포인터 타입) 동반 종결. 두 개의 surgical `compiler/parse/parser.hexa` 픽스
+(다른 파일 무수정 — bind/types/codegen 무변경, 기존 empty-fn / unknown-named 경로 재사용):
+
+- **`@link` extern fn 디싱크 (root, `e629e33d`)**: `extern` 은 tier-1 lexer 키워드가
+  아님(`keyword_kind` 무항목) → `Ident("extern")`. 기존 `parse_item` 에 `extern` arm
+  부재 → unknown-leader fallthrough 가 `extern` ident 1개만 소비, 다음 `parse_item` 이
+  `fn f() -> int` 을 일반 fn 으로 파싱 → `parse_block_expr` 가 `{` 부재로 HX0011/HX0012
+  발화 + 최상위 decl 루프 디싱크 → **이후 모든 top-level decl 침묵 삼킴** (t35/t37 의
+  `let mut ok` / qwen14b 상수 → 연쇄 HX2001 의 정확한 근원). Fix: 권위 tier-2 문법
+  (`self/hexa_full.hexa::parse_extern_fn`) 미러 — `parse_extern_fn_item` +
+  `_peek_is_extern_kw` 신설, `KwFn` arm 보다 먼저 dispatch, **body OPTIONAL**(부재 시
+  empty Block 합성 → 기존 empty-fn lower/codegen 경로 무변경 적용). `ItemKind::Fn`
+  유지 → exhaustive `ItemKind` match 전부 ripple 0. top-level decl-leader gate 도
+  bare `extern fn`(선행 @link 無) 인식하도록 확장.
+- **`*T` 포인터 타입 (즉시 후속, `e7f5b6df`)**: `@link`-extern 디싱크 종결 직후 노출된
+  별개 pre-existing gap — tier-1 `parse_type` 에 `Star` arm 부재 → 파라미터 `p: *Void`
+  가 `*` 토큰 미소비(placeholder type, no advance) → 다시 decl-loop 디싱크,
+  `* Void ) -> int` 가 stray ident 로 오파싱(허위 HX2001 `->`/`)`/`*`). 평범한
+  `fn f(p: *Void)`(extern/@link 無)에서도 동일 재현 — @link-extern fix 가 도입한 게
+  아님. Fix: 권위 tier-2 (`parse_type_annotation:2406`) 미러 — `Star` 소비 후 `*`
+  접두 `named` TypeRef 폴드. 포인터 = 본 코드베이스에서 opaque 정수폭 핸들
+  (`alloc_raw`/`ptr_write`/`cstring` builtin) → 기존 `named:*T` unknown-name
+  lowering fallback 이 균일 처리.
+
+**효과**: t35 가 **HX 에러 0 + asm 497L 완전 codegen** (이전: 파서 전면붕괴, asm 0).
+t35 잔여는 link-only (`cstring`/`from_cstring` 런타임 + `libhxqwen14b` FFI 라이브러리 —
+tier-2 oracle 도 못 돌리는 FFI-runtime 테스트: dlsym SIGSEGV `ora_rc=139`, ORAFAIL
+부류, codegen-correctness 와 무관). t37 = 8 `HX3001`(typecheck expected-f64-got-i64)로
+전진. t36 = `self/serve/serve_alm.hexa` 의 `HX2001`/`HX3002` 로 전진 — 모두 별개 후속
+이슈. minimal repro(3-line) 및 `@link`-extern+trailing-decl(non-ptr) repro 는 완전
+PASS, tier-1 rc == tier-2 oracle rc.
+
+**검증 배터리 (clean origin/main `990d546c` 기반, aprime_cc compiled path,
+HEXA_MAC_BUILD_OK=1)**: build_aprime smoke `exit(6*7)==42` PASS (양 픽스); 3-line
+minimal repro `FOO` resolves 0 HX0011/HX0012/HX2001; gate-1 **36/44**(≥36, 사전
+baseline 과 분류 byte-identical, **zero regression** — 사전 MATCH 집합 == 사후); ap1 vs
+ap1-fixed 40/40 non-extern 테스트 프로그램 asm byte-identical; **self-host fixpoint
+보존** — fresh-flatten 38-file/22,446-line closure(my +99L 포함), ap1f→emit→ap2f
+→emit, `ap1f.s == ap2f.s` byte-identical (233,455-line, md5 `a78ff84d…`).
+
+**gate ① 현황 (갱신)**: 36/44 유지. `extern fn` CGFAIL 클러스터의 파서 root 종결 —
+잔여 frontend-CGFAIL 은 `@select` annotation-arg `->` · try/catch · type-infer ·
+low-level memory builtin · (t37) f64/i64 numeric-literal type-infer · (t36)
+serve_alm 모듈 내부. t35 는 FFI-runtime(ORAFAIL 부류, tier-2 도 미실행).
