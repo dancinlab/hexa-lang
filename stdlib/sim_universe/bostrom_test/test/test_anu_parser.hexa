@@ -1,0 +1,52 @@
+// unit test for _extract_anu_hex parser logic
+
+fn _extract_anu_hex(json: string) -> string {
+    if json.index_of("\"success\":true") < 0 { return "" }
+    let needle = "\"data\":["
+    let i = json.index_of(needle)
+    if i < 0 { return "" }
+    let start = i + needle.len()
+    let rest = json.substring(start, json.len())
+    let end = rest.index_of("]")
+    if end < 0 { return "" }
+    let arr = rest.substring(0, end)
+    let mut hex = arr.replace("\"", "")
+    hex = hex.replace(",", "")
+    hex = hex.replace(" ", "")
+    return hex.trim()
+}
+
+fn main() -> void {
+    // case 1: real ANU response shape (8 entries x 16 hex chars = 128)
+    let r1 = "{\"type\":\"string\",\"length\":8,\"size\":16,\"data\":[\"a1caf7552e892594\",\"f175f11d6ed98fe6\",\"1b98825f9732089f\",\"5e7ec5f5373c09dd\",\"1234567890abcdef\",\"fedcba9876543210\",\"deadbeefcafebabe\",\"0011223344556677\"],\"success\":true}"
+    let h1 = _extract_anu_hex(r1)
+    println("case1 len=" + to_string(h1.len()) + " (expect 128)")
+    println("case1 hex=" + h1)
+
+    // case 2: rate-limit error (not JSON)
+    let r2 = "The QRNG API is limited to 1 requests per minute. For more requests, please visit..."
+    let h2 = _extract_anu_hex(r2)
+    println("case2 len=" + to_string(h2.len()) + " (expect 0)")
+
+    // case 3: success=false
+    let r3 = "{\"data\":[\"abc\"],\"success\":false}"
+    let h3 = _extract_anu_hex(r3)
+    println("case3 len=" + to_string(h3.len()) + " (expect 0)")
+
+    // case 4: empty data
+    let r4 = "{\"data\":[],\"success\":true}"
+    let h4 = _extract_anu_hex(r4)
+    println("case4 len=" + to_string(h4.len()) + " (expect 0)")
+
+    // case 5: 4 entries x 16 = 64 (half)
+    let r5 = "{\"data\":[\"aaaa1111bbbb2222\",\"cccc3333dddd4444\",\"eeee5555ffff6666\",\"0000777788889999\"],\"success\":true}"
+    let h5 = _extract_anu_hex(r5)
+    println("case5 len=" + to_string(h5.len()) + " (expect 64)")
+
+    if h1.len() == 128 && h2.len() == 0 && h3.len() == 0 && h4.len() == 0 && h5.len() == 64 {
+        println("PARSER_OK")
+        exit(0)
+    }
+    println("PARSER_FAIL")
+    exit(1)
+}

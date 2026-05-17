@@ -1,0 +1,340 @@
+#!hexa strict
+// sim_bridge/qpu_bridge/vqe_h2_demo.hexa — H2 (R=0.74Å, STO-3G, parity-mapped 2-qubit) VQE demo, hexa native.
+//
+// @tool(slug="vqe_h2_demo", desc="H2 ground-state VQE: 4x4 Hamiltonian + RY-CNOT-RY hardware-efficient ansatz + grid+coordinate-descent optimizer; replaces missing vqe_h2_demo.py (Qiskit dependency removed)")
+// @usage(hexa run sim_bridge/qpu_bridge/vqe_h2_demo.hexa [--grid N] [--refine M] [--json] [--diag-only])
+// @exit_codes(0=PASS within tolerance, 1=usage error, 2=energy outside tolerance)
+// @sentinel(__VQE_H2_HEXA__ PASS|FAIL energy=<E> fci=-1.9154 hf=-1.8369 err_pct=<pct>)
+// @origin(sim_bridge/qpu_bridge/README.md — Kandala et al. 2017 H2 STO-3G parity-mapped 2-qubit Hamiltonian)
+// @abstraction(replaces vqe_h2_demo.py with pure-hexa impl; no qiskit/numpy/scipy)
+// @paradigm(structural — direct 4x4 diag for ground truth + grid+CD optimizer for VQE convergence demo)
+// @idempotence(deterministic float output, fixed 6-digit decimal emission for byte-eq seal)
+//
+// Hamiltonian (Kandala 2017, R=0.74 Å):
+//   H = c0*I + c1*Z0 + c2*Z1 + c3*Z0Z1 + c4*X0X1 + c5*Y0Y1
+//   c0=-1.05237, c1=+0.39793, c2=-0.39793, c3=-0.01128, c4=+0.18093, c5=+0.18093
+// 4x4 representation in basis |00>,|01>,|10>,|11> (qubit 0 = least significant):
+//   diag  : [d0, d1, d2, d3] = c0 + c1*z0_sign + c2*z1_sign + c3*z0z1_sign
+//   off-d : (c4+c5) couples |01> <-> |10> only (X0X1+Y0Y1 cancels |00><->|11> path)
+// Ground truth: 1+2+1 block decomposition gives E0 = -1.9154 Ha (FCI exact).
+
+// ─── coefficients ───
+
+fn c0() -> f64 { return 0.0 - 1.05237 }
+fn c1() -> f64 { return 0.39793 }
+fn c2() -> f64 { return 0.0 - 0.39793 }
+fn c3() -> f64 { return 0.0 - 0.01128 }
+fn c4() -> f64 { return 0.18093 }
+fn c5() -> f64 { return 0.18093 }
+
+// ─── exact ground state via block decomposition ───
+
+fn _abs_f(x: f64) -> f64 { if x < 0.0 { return 0.0 - x } return x }
+
+fn fci_ground_state() -> f64 {
+    // diagonal entries
+    let d00 = c0() + c1() + c2() + c3()
+    let d01 = c0() - c1() + c2() - c3()
+    let d10 = c0() + c1() - c2() - c3()
+    let d11 = c0() - c1() - c2() + c3()
+    let off = c4() + c5()
+    // 2x2 block on {|01>, |10>}: eigenvalues = mean +/- sqrt((half_diff)^2 + off^2)
+    let mean = (d01 + d10) / 2.0
+    let half_diff = (d01 - d10) / 2.0
+    let disc = sqrt(half_diff * half_diff + off * off)
+    let e_block_low = mean - disc
+    let e_block_high = mean + disc
+    // four eigenvalues: d00, e_block_low, e_block_high, d11
+    let mut best = d00
+    if e_block_low < best { best = e_block_low }
+    if e_block_high < best { best = e_block_high }
+    if d11 < best { best = d11 }
+    return best
+}
+
+fn hf_energy() -> f64 {
+    // Hartree-Fock = lowest diagonal entry (no entanglement)
+    let d00 = c0() + c1() + c2() + c3()
+    let d01 = c0() - c1() + c2() - c3()
+    let d10 = c0() + c1() - c2() - c3()
+    let d11 = c0() - c1() - c2() + c3()
+    let mut best = d00
+    if d01 < best { best = d01 }
+    if d10 < best { best = d10 }
+    if d11 < best { best = d11 }
+    return best
+}
+
+// ─── ansatz: |psi> = (RY(t3) tensor RY(t4)) . CNOT01 . (RY(t1) tensor RY(t2)) |00> ───
+//
+// state vector represented as [a00, a01, a10, a11] (real, RY+CNOT preserves real amplitudes).
+// applies in-place on a 4-vector.
+
+fn _ry_q0(state: array, theta: f64) -> array {
+    // RY on qubit 0 (least-significant) = I_q1 tensor RY(theta)
+    // mixes (a00, a01) and (a10, a11) pairwise within each q1 sector
+    let c = cos(theta / 2.0)
+    let s = sin(theta / 2.0)
+    let a00 = state[0]
+    let a01 = state[1]
+    let a10 = state[2]
+    let a11 = state[3]
+    return [
+        c * a00 - s * a01,
+        s * a00 + c * a01,
+        c * a10 - s * a11,
+        s * a10 + c * a11
+    ]
+}
+
+fn _ry_q1(state: array, theta: f64) -> array {
+    // RY on qubit 1 (most-significant) = RY(theta) tensor I_q0
+    // mixes (a00, a10) and (a01, a11) pairwise across q1 sectors
+    let c = cos(theta / 2.0)
+    let s = sin(theta / 2.0)
+    let a00 = state[0]
+    let a01 = state[1]
+    let a10 = state[2]
+    let a11 = state[3]
+    return [
+        c * a00 - s * a10,
+        c * a01 - s * a11,
+        s * a00 + c * a10,
+        s * a01 + c * a11
+    ]
+}
+
+fn _cnot01(state: array) -> array {
+    // CNOT with control=qubit 0, target=qubit 1
+    // basis |q1 q0>: q0=1 -> flip q1
+    // |00>(idx 0) -> |00>; |01>(idx 1, q0=1) -> |11>(idx 3); |10>(idx 2) -> |10>; |11>(idx 3, q0=1) -> |01>(idx 1)
+    return [state[0], state[3], state[2], state[1]]
+}
+
+fn ansatz(t1: f64, t2: f64, t3: f64, t4: f64) -> array {
+    // start from |00> = [1, 0, 0, 0]
+    let mut s = [1.0, 0.0, 0.0, 0.0]
+    s = _ry_q0(s, t1)
+    s = _ry_q1(s, t2)
+    s = _cnot01(s)
+    s = _ry_q0(s, t3)
+    s = _ry_q1(s, t4)
+    return s
+}
+
+// ─── energy eval: <psi|H|psi> via H matrix-vector product ───
+//
+// H is 4x4 real symmetric: diag(d00, d01, d10, d11) + off*(|01><10| + |10><01|)
+// where off = c4 + c5
+
+fn energy(state: array) -> f64 {
+    let d00 = c0() + c1() + c2() + c3()
+    let d01 = c0() - c1() + c2() - c3()
+    let d10 = c0() + c1() - c2() - c3()
+    let d11 = c0() - c1() - c2() + c3()
+    let off = c4() + c5()
+    let a00 = state[0]
+    let a01 = state[1]
+    let a10 = state[2]
+    let a11 = state[3]
+    // Hpsi = [d00*a00, d01*a01 + off*a10, d10*a10 + off*a01, d11*a11]
+    let h0 = d00 * a00
+    let h1 = d01 * a01 + off * a10
+    let h2 = d10 * a10 + off * a01
+    let h3 = d11 * a11
+    return a00 * h0 + a01 * h1 + a10 * h2 + a11 * h3
+}
+
+// ─── optimizer: grid search + coordinate descent refinement ───
+
+fn _pi() -> f64 { return 3.14159265358979323846 }
+
+fn grid_search(n_grid: i64) -> array {
+    // grid over [-pi, pi]^4 with n_grid points per dim
+    let mut best_e: f64 = 1.0e9
+    let mut best_t = [0.0, 0.0, 0.0, 0.0]
+    let step = 2.0 * _pi() / to_float(n_grid - 1)
+    let mut i1: i64 = 0
+    while i1 < n_grid {
+        let t1 = 0.0 - _pi() + to_float(i1) * step
+        let mut i2: i64 = 0
+        while i2 < n_grid {
+            let t2 = 0.0 - _pi() + to_float(i2) * step
+            let mut i3: i64 = 0
+            while i3 < n_grid {
+                let t3 = 0.0 - _pi() + to_float(i3) * step
+                let mut i4: i64 = 0
+                while i4 < n_grid {
+                    let t4 = 0.0 - _pi() + to_float(i4) * step
+                    let e = energy(ansatz(t1, t2, t3, t4))
+                    if e < best_e {
+                        best_e = e
+                        best_t = [t1, t2, t3, t4]
+                    }
+                    i4 = i4 + 1
+                }
+                i3 = i3 + 1
+            }
+            i2 = i2 + 1
+        }
+        i1 = i1 + 1
+    }
+    return [best_e, best_t[0], best_t[1], best_t[2], best_t[3]]
+}
+
+fn coordinate_descent(t_init: array, n_iter: i64) -> array {
+    // refine via per-coordinate 1D minimization (golden-section-like with fixed bracket)
+    let mut best_e = energy(ansatz(t_init[0], t_init[1], t_init[2], t_init[3]))
+    let mut t = [t_init[0], t_init[1], t_init[2], t_init[3]]
+    let mut step: f64 = 0.3
+    let n_sub: i64 = 21
+    let mut iter: i64 = 0
+    while iter < n_iter {
+        let mut k: i64 = 0
+        while k < 4 {
+            let tk = t[k]
+            let half = step
+            let dx = 2.0 * half / to_float(n_sub - 1)
+            let mut j: i64 = 0
+            while j < n_sub {
+                let candidate = tk - half + to_float(j) * dx
+                let mut tt = [t[0], t[1], t[2], t[3]]
+                tt[k] = candidate
+                let e = energy(ansatz(tt[0], tt[1], tt[2], tt[3]))
+                if e < best_e {
+                    best_e = e
+                    t = tt
+                }
+                j = j + 1
+            }
+            k = k + 1
+        }
+        step = step * 0.5
+        iter = iter + 1
+    }
+    return [best_e, t[0], t[1], t[2], t[3]]
+}
+
+// ─── output helpers ───
+
+fn _round6(x: f64) -> string {
+    // emit float with 6 decimal digits for byte-eq idempotence (avoid trailing-precision noise)
+    let scaled = x * 1000000.0
+    let rounded = if scaled >= 0.0 { to_int(scaled + 0.5) } else { to_int(scaled - 0.5) }
+    let int_part = rounded / 1000000
+    let frac_part = rounded - int_part * 1000000
+    let abs_frac = if frac_part < 0 { 0 - frac_part } else { frac_part }
+    let mut frac_str = to_string(abs_frac)
+    while len(frac_str) < 6 { frac_str = "0" + frac_str }
+    let sign = if x < 0.0 && int_part == 0 { "-" } else { "" }
+    return sign + to_string(int_part) + "." + frac_str
+}
+
+// ─── main ───
+
+fn main() -> void {
+    let raw_args = args()
+    let mut cli = []
+    let mut ai = 2
+    while ai < len(raw_args) {
+        cli.push(raw_args[ai])
+        ai = ai + 1
+    }
+
+    let mut n_grid: i64 = 11
+    let mut n_refine: i64 = 6
+    let mut json_mode = false
+    let mut diag_only = false
+    let mut i = 0
+    while i < len(cli) {
+        let a = cli[i]
+        if a == "--grid" {
+            if i + 1 < len(cli) { i = i + 1; n_grid = to_int(cli[i]) }
+        }
+        else if a == "--refine" {
+            if i + 1 < len(cli) { i = i + 1; n_refine = to_int(cli[i]) }
+        }
+        else if a == "--json" { json_mode = true }
+        else if a == "--diag-only" { diag_only = true }
+        else if a == "--help" || a == "-h" {
+            println("usage: hexa run sim_bridge/qpu_bridge/vqe_h2_demo.hexa [--grid N=11] [--refine M=6] [--json] [--diag-only]")
+            println("origin: sim_bridge/qpu_bridge/README.md (Kandala 2017 H2 STO-3G parity-mapped 2-qubit)")
+            exit(0)
+        }
+        else {
+            eprintln("vqe_h2_demo: unknown arg `" + a + "`")
+            exit(1)
+        }
+        i = i + 1
+    }
+
+    let fci = fci_ground_state()
+    let hf = hf_energy()
+
+    if diag_only {
+        if json_mode {
+            println("{")
+            println("  \"tool\": \"vqe_h2_demo\",")
+            println("  \"mode\": \"diag-only\",")
+            println("  \"fci_ground_state_ha\": " + _round6(fci) + ",")
+            println("  \"hf_energy_ha\": " + _round6(hf) + ",")
+            println("  \"correlation_energy_ha\": " + _round6(fci - hf))
+            println("}")
+        } else {
+            println("FCI ground state (exact 4x4 diag): " + _round6(fci) + " Ha")
+            println("HF energy (lowest diagonal):       " + _round6(hf) + " Ha")
+            println("correlation energy (FCI - HF):     " + _round6(fci - hf) + " Ha")
+        }
+        println("__VQE_H2_HEXA__ PASS energy=" + _round6(fci) + " fci=" + _round6(fci) + " hf=" + _round6(hf) + " err_pct=0.000000 mode=diag-only")
+        exit(0)
+    }
+
+    // VQE: grid search + coordinate descent refinement
+    let g_result = grid_search(n_grid)
+    let g_best_e = g_result[0]
+    let cd_result = coordinate_descent([g_result[1], g_result[2], g_result[3], g_result[4]], n_refine)
+    let vqe_e = cd_result[0]
+
+    let err_abs = _abs_f(vqe_e - fci)
+    let err_pct = 100.0 * err_abs / _abs_f(fci)
+
+    // chemical accuracy = 0.0016 Ha; we accept 0.01 Ha for grid+CD demo
+    let tol: f64 = 0.01
+    let pass = err_abs < tol
+
+    if json_mode {
+        println("{")
+        println("  \"tool\": \"vqe_h2_demo\",")
+        println("  \"mode\": \"vqe\",")
+        println("  \"ansatz\": \"RY(t1)*RY(t2) . CNOT01 . RY(t3)*RY(t4) |00>\",")
+        println("  \"optimizer\": \"grid(" + to_string(n_grid) + "^4) + coord_descent(" + to_string(n_refine) + ")\",")
+        println("  \"vqe_energy_ha\": " + _round6(vqe_e) + ",")
+        println("  \"fci_ground_state_ha\": " + _round6(fci) + ",")
+        println("  \"hf_energy_ha\": " + _round6(hf) + ",")
+        println("  \"err_abs_ha\": " + _round6(err_abs) + ",")
+        println("  \"err_pct\": " + _round6(err_pct) + ",")
+        println("  \"theta_optimal\": [" + _round6(cd_result[1]) + ", " + _round6(cd_result[2]) + ", " + _round6(cd_result[3]) + ", " + _round6(cd_result[4]) + "],")
+        println("  \"tolerance_ha\": " + _round6(tol) + ",")
+        println("  \"pass\": " + (if pass { "true" } else { "false" }))
+        println("}")
+    } else {
+        println("VQE H2 demo (hexa native, no Qiskit)")
+        println("  Hamiltonian: STO-3G / R=0.74 Ang / parity-mapped 2-qubit (Kandala 2017)")
+        println("  ansatz     : RY(t1) tensor RY(t2) . CNOT01 . RY(t3) tensor RY(t4) |00>")
+        println("  optimizer  : grid(" + to_string(n_grid) + "^4 = " + to_string(n_grid * n_grid * n_grid * n_grid) + " evals) + coord_descent(" + to_string(n_refine) + " sweeps)")
+        println("---")
+        println("  VQE energy : " + _round6(vqe_e) + " Ha")
+        println("  FCI exact  : " + _round6(fci) + " Ha")
+        println("  HF energy  : " + _round6(hf) + " Ha")
+        println("  err (abs)  : " + _round6(err_abs) + " Ha")
+        println("  err (pct)  : " + _round6(err_pct) + " %")
+        println("  tolerance  : " + _round6(tol) + " Ha (" + (if pass { "WITHIN" } else { "OUTSIDE" }) + ")")
+    }
+
+    if !pass {
+        println("__VQE_H2_HEXA__ FAIL energy=" + _round6(vqe_e) + " fci=" + _round6(fci) + " hf=" + _round6(hf) + " err_pct=" + _round6(err_pct))
+        exit(2)
+    }
+    println("__VQE_H2_HEXA__ PASS energy=" + _round6(vqe_e) + " fci=" + _round6(fci) + " hf=" + _round6(hf) + " err_pct=" + _round6(err_pct))
+    exit(0)
+}

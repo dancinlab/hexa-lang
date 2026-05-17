@@ -1,0 +1,511 @@
+// field_action.hexa — Stage 3 evolution module
+//
+// Adds field-theoretic action S = ∫L dx dt with Hamilton equations of motion
+// on top of σ²=64 lattice. Two field theories supported:
+//   (a) φ⁴ scalar field — V(φ) = m²φ²/2 + λφ⁴/4
+//   (b) Yang-Mills toy — F_μν F^μν approximated via plaquette product
+//
+// Departures from lorentz_metric.hexa Stage-2:
+//   ✓ field-theoretic Lagrangian L = T - V
+//   ✓ Hamilton equations: dφ/dt = π, dπ/dt = ∇²φ - V'(φ)
+//   ✓ action S = Σ_t L (discrete-time integral)
+//   ✓ symplectic-leapfrog integrator (energy approximate-conserving)
+//   ✓ φ⁴ + Yang-Mills toy modes
+//   ✗ continuum limit a→0 (Stage 5 scale-up)
+//   ✗ empirical lattice-QCD match (Stage 4)
+//
+// raw 91 C3 honest disclosure: Yang-Mills mode is TOY plaquette product,
+// not genuine non-abelian SU(N) gauge theory. φ⁴ is genuine scalar field with
+// proper Hamilton equations + leapfrog. Energy conservation is discrete (not exact)
+// but improved over Stage-2 Klein-Gordon Euler step.
+//
+// Usage:
+//   hexa field_action.hexa --selftest
+//   hexa field_action.hexa <ticks> <topology> <mode>     # mode = phi4 | ym
+//   hexa field_action.hexa <ticks> <topology> phi4 <m2> <lambda>
+
+const FSIGMA: i64 = 64
+const FSCALE: i64 = 1000          // fixed-point scaling for field amplitudes
+const FDT: i64 = 100              // dt scaled (small step, FDT/FSCALE = 0.1)
+const FSCALE_INV: i64 = 1         // for division shorthand
+
+// Mode constants
+const FMODE_PHI4: i64 = 0
+const FMODE_YM: i64 = 1
+
+// Topology subset (consistent with quantum/lorentz modules)
+const FT_FLAT: i64 = 0
+const FT_T3: i64 = 2
+const FT_S3: i64 = 4
+const FT_BLACKHOLE: i64 = 6
+const FT_WORMHOLE: i64 = 7
+const FT_MINKOWSKI: i64 = 17
+
+fn _ftopo_id(name: string) -> i64 {
+    if name == "flat" { return FT_FLAT }
+    if name == "t3" { return FT_T3 }
+    if name == "s3" { return FT_S3 }
+    if name == "blackhole" { return FT_BLACKHOLE }
+    if name == "wormhole" { return FT_WORMHOLE }
+    if name == "minkowski" { return FT_MINKOWSKI }
+    return 0 - 1
+}
+
+fn _fmode_id(name: string) -> i64 {
+    if name == "phi4" { return FMODE_PHI4 }
+    if name == "ym" { return FMODE_YM }
+    return 0 - 1
+}
+
+fn _fneighbor_t3(i: i64, axis: i64) -> i64 {
+    let x = i % 4
+    let y = (i / 4) % 4
+    let z = i / 16
+    if axis == 0 {
+        let xm = (x + 3) % 4
+        return z * 16 + y * 4 + xm
+    }
+    if axis == 1 {
+        let ym = (y + 3) % 4
+        return z * 16 + ym * 4 + x
+    }
+    let zm = (z + 3) % 4
+    return zm * 16 + y * 4 + x
+}
+
+fn _fneighbor_t3_fwd(i: i64, axis: i64) -> i64 {
+    let x = i % 4
+    let y = (i / 4) % 4
+    let z = i / 16
+    if axis == 0 {
+        let xp = (x + 1) % 4
+        return z * 16 + y * 4 + xp
+    }
+    if axis == 1 {
+        let yp = (y + 1) % 4
+        return z * 16 + yp * 4 + x
+    }
+    let zp = (z + 1) % 4
+    return zp * 16 + y * 4 + x
+}
+
+fn _fneighbor_flat(i: i64, axis: i64) -> i64 {
+    if axis == 0 { return (i + FSIGMA - 1) % FSIGMA }
+    return (i + 1) % FSIGMA
+}
+
+fn _fneighbor_s3(i: i64, axis: i64) -> i64 {
+    let i_q = i % 32
+    let x = i_q % 4
+    let y = (i_q / 4) % 4
+    let z = i_q / 16
+    if axis == 0 {
+        let xm = (x + 3) % 4
+        return z * 16 + y * 4 + xm
+    }
+    if axis == 1 {
+        let ym = (y + 3) % 4
+        return z * 16 + ym * 4 + x
+    }
+    if axis == 2 {
+        let zm = (z + 3) % 4
+        return zm * 16 + y * 4 + x
+    }
+    return i_q + 32
+}
+
+fn _fneighbor_blackhole(i: i64, axis: i64) -> i64 {
+    let i_BH: i64 = 21
+    if i == i_BH { return i_BH }
+    let x = i % 4
+    let y = (i / 4) % 4
+    let z = i / 16
+    let mut dx = x - 1
+    if dx < 0 { dx = 0 - dx }
+    let mut dy = y - 1
+    if dy < 0 { dy = 0 - dy }
+    let mut dz = z - 1
+    if dz < 0 { dz = 0 - dz }
+    let d = dx + dy + dz
+    if d <= 1 {
+        let mut nx = x
+        let mut ny = y
+        let mut nz = z
+        if axis == 0 {
+            if x > 1 { nx = x - 1 } else if x < 1 { nx = x + 1 }
+        } else if axis == 1 {
+            if y > 1 { ny = y - 1 } else if y < 1 { ny = y + 1 }
+        } else {
+            if z > 1 { nz = z - 1 } else if z < 1 { nz = z + 1 }
+        }
+        return nz * 16 + ny * 4 + nx
+    }
+    return _fneighbor_t3(i, axis)
+}
+
+fn _fneighbor_wormhole(i: i64, axis: i64) -> i64 {
+    if axis >= 3 {
+        if i < 32 {
+            let off = i % 8
+            return 32 + ((i + off) % 32)
+        }
+        let i2 = i - 32
+        let off = i2 % 8
+        return (i2 + off) % 32
+    }
+    let base = if i < 32 { 0 } else { 32 }
+    let r = i - base
+    let x = r % 4
+    let y = (r / 4) % 4
+    let z = r / 16
+    if axis == 0 {
+        let xm = (x + 3) % 4
+        return base + z * 16 + y * 4 + xm
+    }
+    if axis == 1 {
+        let ym = (y + 3) % 4
+        return base + z * 16 + ym * 4 + x
+    }
+    let zm = (z + 1) % 2
+    return base + zm * 16 + y * 4 + x
+}
+
+fn _fneighbor_minkowski(i: i64, axis: i64) -> i64 {
+    let base = _fneighbor_t3(i, axis)
+    if axis == 0 {
+        if i >= 60 { return i }
+        return (base + 11) % FSIGMA
+    }
+    return (base + axis * 3) % FSIGMA
+}
+
+fn _ftopo_neighbor(i: i64, axis: i64, topo: i64) -> i64 {
+    if topo == FT_FLAT { return _fneighbor_flat(i, axis) }
+    if topo == FT_T3 { return _fneighbor_t3(i, axis) }
+    if topo == FT_S3 { return _fneighbor_s3(i, axis) }
+    if topo == FT_BLACKHOLE { return _fneighbor_blackhole(i, axis) }
+    if topo == FT_WORMHOLE { return _fneighbor_wormhole(i, axis) }
+    if topo == FT_MINKOWSKI { return _fneighbor_minkowski(i, axis) }
+    return _fneighbor_flat(i, axis)
+}
+
+// ── field state: φ (position) + π (momentum conjugate) ────
+let mut __ff_phi: [i64] = []
+let mut __ff_pi: [i64] = []
+let mut __ff_tick: i64 = 0
+let mut __ff_action_accum: i64 = 0   // Σ L dt accumulator
+
+fn ff_init(seed: i64) {
+    let mut phi: [i64] = []
+    let mut pi: [i64] = []
+    let mut i = 0
+    while i < FSIGMA {
+        // φ initial: Gaussian-ish amplitude at center
+        let mut d = i - 32
+        if d < 0 { d = 0 - d }
+        let v = (FSCALE / (1 + d * d / 2)) + (seed * 11 + i * 5) % 50
+        phi = phi + [v]
+        // π initial: zero (start at rest)
+        pi = pi + [(seed * 7 + i * 3) % 30]
+        i = i + 1
+    }
+    __ff_phi = phi
+    __ff_pi = pi
+    __ff_tick = 0
+    __ff_action_accum = 0
+}
+
+// Discrete Laplacian on topology: ∇²φ[i] = (Σ_neighbors φ_j) - 6 φ_i (3 axes × 2 dirs)
+fn _ff_laplacian(phi: [i64], i: i64, topo: i64) -> i64 {
+    let mut sum_n: i64 = 0
+    let mut a = 0
+    while a < 3 {
+        let j_back = _ftopo_neighbor(i, a, topo)
+        sum_n = sum_n + phi[j_back]
+        // forward direction (T^3 fwd; for non-T^3 topologies fall back)
+        let j_fwd = if topo == FT_T3 || topo == FT_MINKOWSKI { _fneighbor_t3_fwd(i, a) } else { _ftopo_neighbor(i, a, topo) }
+        sum_n = sum_n + phi[j_fwd]
+        a = a + 1
+    }
+    return sum_n - 6 * phi[i]
+}
+
+// V'(φ) for φ⁴: m²φ + λφ³
+//   m² scaled (m2_int = m²·FSCALE), λ scaled similarly
+fn _ff_dV_phi4(phi_val: i64, m2: i64, lambda: i64) -> i64 {
+    // m²·φ + λ·φ³ (all in fixed-point; reduce by FSCALE to keep i64 sane)
+    let phi3 = (phi_val * phi_val) / FSCALE * phi_val / FSCALE
+    return m2 * phi_val / FSCALE + lambda * phi3 / FSCALE
+}
+
+// Yang-Mills toy: plaquette F_μν approximation
+//   For each cell, plaquette = φ_i + φ_(i+x) + φ_(i+x+y) + φ_(i+y) (closed loop sum)
+//   F² ≈ (plaquette - 4·φ_i)²
+fn _ff_dV_ym(phi: [i64], i: i64, topo: i64) -> i64 {
+    let j_x = _fneighbor_t3_fwd(i, 0)
+    let j_y = _fneighbor_t3_fwd(i, 1)
+    let j_xy = _fneighbor_t3_fwd(j_x, 1)
+    let plaquette = phi[i] + phi[j_x] + phi[j_xy] + phi[j_y]
+    let f_strength = plaquette - 4 * phi[i]
+    // dV/dφ ∝ F_μν × ∂F_μν/∂φ_i (chain rule, simplified)
+    return f_strength / 4
+}
+
+// Symplectic leapfrog step:
+//   π[t+dt/2] = π[t] + (dt/2) · F[t]
+//   φ[t+dt]   = φ[t] + dt · π[t+dt/2]
+//   π[t+dt]   = π[t+dt/2] + (dt/2) · F[t+dt]
+// where F = ∇²φ - V'(φ) (Hamilton eq)
+fn ff_step(topo: i64, mode: i64, m2: i64, lambda: i64) {
+    // F at current step
+    let mut force: [i64] = []
+    let mut i = 0
+    while i < FSIGMA {
+        let lap = _ff_laplacian(__ff_phi, i, topo)
+        let mut dV: i64 = 0
+        if mode == FMODE_PHI4 {
+            dV = _ff_dV_phi4(__ff_phi[i], m2, lambda)
+        } else {
+            dV = _ff_dV_ym(__ff_phi, i, topo)
+        }
+        force = force + [lap - dV]
+        i = i + 1
+    }
+
+    // π half-step
+    let mut pi_half: [i64] = []
+    i = 0
+    while i < FSIGMA {
+        pi_half = pi_half + [__ff_pi[i] + (FDT * force[i]) / (2 * FSCALE)]
+        i = i + 1
+    }
+
+    // φ full-step
+    let mut phi_new: [i64] = []
+    i = 0
+    while i < FSIGMA {
+        phi_new = phi_new + [__ff_phi[i] + (FDT * pi_half[i]) / FSCALE]
+        i = i + 1
+    }
+
+    // F at new step
+    let mut force_new: [i64] = []
+    i = 0
+    while i < FSIGMA {
+        let lap = _ff_laplacian(phi_new, i, topo)
+        let mut dV: i64 = 0
+        if mode == FMODE_PHI4 {
+            dV = _ff_dV_phi4(phi_new[i], m2, lambda)
+        } else {
+            dV = _ff_dV_ym(phi_new, i, topo)
+        }
+        force_new = force_new + [lap - dV]
+        i = i + 1
+    }
+
+    // π full-step
+    let mut pi_new: [i64] = []
+    i = 0
+    while i < FSIGMA {
+        pi_new = pi_new + [pi_half[i] + (FDT * force_new[i]) / (2 * FSCALE)]
+        i = i + 1
+    }
+
+    // Lagrangian L = T - V at new step
+    let mut L: i64 = 0
+    i = 0
+    while i < FSIGMA {
+        let T = (pi_new[i] * pi_new[i]) / (2 * FSCALE)
+        let mut V: i64 = 0
+        if mode == FMODE_PHI4 {
+            // V = m²φ²/2 + λφ⁴/4
+            let phi2 = (phi_new[i] * phi_new[i]) / FSCALE
+            let phi4 = (phi2 * phi2) / FSCALE
+            V = m2 * phi2 / (2 * FSCALE) + lambda * phi4 / (4 * FSCALE)
+        } else {
+            // YM toy: V ∝ F²/4
+            let plaq = phi_new[i] + phi_new[_fneighbor_t3_fwd(i, 0)] + phi_new[_fneighbor_t3_fwd(_fneighbor_t3_fwd(i, 0), 1)] + phi_new[_fneighbor_t3_fwd(i, 1)]
+            let F = plaq - 4 * phi_new[i]
+            V = (F * F) / (4 * FSCALE)
+        }
+        L = L + T - V
+        i = i + 1
+    }
+    __ff_action_accum = __ff_action_accum + (L * FDT) / FSCALE
+
+    __ff_phi = phi_new
+    __ff_pi = pi_new
+    __ff_tick = __ff_tick + 1
+}
+
+// Total Hamiltonian H = T + V
+fn ff_total_energy(mode: i64, m2: i64, lambda: i64, topo: i64) -> i64 {
+    let mut H: i64 = 0
+    let mut i = 0
+    while i < FSIGMA {
+        let T = (__ff_pi[i] * __ff_pi[i]) / (2 * FSCALE)
+        let mut V: i64 = 0
+        if mode == FMODE_PHI4 {
+            let phi2 = (__ff_phi[i] * __ff_phi[i]) / FSCALE
+            let phi4 = (phi2 * phi2) / FSCALE
+            V = m2 * phi2 / (2 * FSCALE) + lambda * phi4 / (4 * FSCALE)
+        } else {
+            let plaq = __ff_phi[i] + __ff_phi[_fneighbor_t3_fwd(i, 0)] + __ff_phi[_fneighbor_t3_fwd(_fneighbor_t3_fwd(i, 0), 1)] + __ff_phi[_fneighbor_t3_fwd(i, 1)]
+            let F = plaq - 4 * __ff_phi[i]
+            V = (F * F) / (4 * FSCALE)
+        }
+        H = H + T + V
+        i = i + 1
+    }
+    return H
+}
+
+fn ff_state_hash() -> i64 {
+    let mut h: i64 = 0
+    let mut i = 0
+    while i < FSIGMA {
+        h = (h * 33 + __ff_phi[i]) % 9999999967
+        h = (h * 33 + __ff_pi[i]) % 9999999967
+        i = i + 1
+    }
+    return h
+}
+
+// ── selftest ────────────────────────────────────────────────
+fn _fselftest_run(topo_name: string, mode_name: string, ticks: i64, m2: i64, lambda: i64) -> [i64] {
+    let topo = _ftopo_id(topo_name)
+    let mode = _fmode_id(mode_name)
+    if topo < 0 { return [0 - 1, 0 - 1, 0 - 1, 0 - 1] }
+    if mode < 0 { return [0 - 1, 0 - 1, 0 - 1, 0 - 1] }
+    ff_init(6)
+    let H0 = ff_total_energy(mode, m2, lambda, topo)
+    let mut t = 0
+    while t < ticks {
+        ff_step(topo, mode, m2, lambda)
+        t = t + 1
+    }
+    let HT = ff_total_energy(mode, m2, lambda, topo)
+    let h = ff_state_hash()
+    return [HT - H0, h, __ff_action_accum, HT]
+}
+
+fn run_field_action_selftest() {
+    println("[field_action] --selftest (Stage 3: Lagrangian + Hamilton + symplectic-leapfrog)")
+    let topos = ["flat", "t3", "s3", "blackhole", "wormhole", "minkowski"]
+    let m2: i64 = 100        // m² · FSCALE (mass² = 0.1)
+    let lambda: i64 = 50     // λ · FSCALE = 0.05
+
+    println("  --- φ⁴ scalar field (m²=0.1, λ=0.05) ---")
+    let mut hashes_phi4: [i64] = []
+    let mut i = 0
+    while i < topos.len() {
+        let r = _fselftest_run(topos[i], "phi4", 16, m2, lambda)
+        hashes_phi4 = hashes_phi4 + [r[1]]
+        println("  topo=" + topos[i] + " phi4  H_drift=" + to_string(r[0]) + "  hash=" + to_string(r[1]) + "  S_action=" + to_string(r[2]) + "  H_final=" + to_string(r[3]))
+        i = i + 1
+    }
+    println("  --- Yang-Mills toy (plaquette) ---")
+    let mut hashes_ym: [i64] = []
+    i = 0
+    while i < topos.len() {
+        let r = _fselftest_run(topos[i], "ym", 16, 0, 0)
+        hashes_ym = hashes_ym + [r[1]]
+        println("  topo=" + topos[i] + " ym    H_drift=" + to_string(r[0]) + "  hash=" + to_string(r[1]) + "  S_action=" + to_string(r[2]) + "  H_final=" + to_string(r[3]))
+        i = i + 1
+    }
+    // verify both mode-sets distinct (across 6 topologies × 2 modes)
+    let mut all_hashes: [i64] = []
+    let mut k = 0
+    while k < hashes_phi4.len() {
+        all_hashes = all_hashes + [hashes_phi4[k]]
+        k = k + 1
+    }
+    k = 0
+    while k < hashes_ym.len() {
+        all_hashes = all_hashes + [hashes_ym[k]]
+        k = k + 1
+    }
+    let mut a = 0
+    let mut all_distinct = true
+    while a < all_hashes.len() {
+        let mut b = a + 1
+        while b < all_hashes.len() {
+            if all_hashes[a] == all_hashes[b] {
+                all_distinct = false
+                println("  COLLISION at index " + to_string(a) + " == " + to_string(b))
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    // idempotent
+    let r1 = _fselftest_run("flat", "phi4", 16, m2, lambda)
+    let r2 = _fselftest_run("flat", "phi4", 16, m2, lambda)
+    let idem = r1[1] == r2[1]
+    if !idem { println("  RAW-65-VIOLATION flat phi4 re-run differs") }
+    // mode discrimination — phi4 vs ym on same topo should differ
+    let r_phi4 = _fselftest_run("t3", "phi4", 16, m2, lambda)
+    let r_ym = _fselftest_run("t3", "ym", 16, 0, 0)
+    let mode_distinct = r_phi4[1] != r_ym[1]
+
+    let pass = all_distinct && idem && mode_distinct
+    if pass {
+        println("__FIELD_ACTION_SELFTEST__ PASS topologies=6 modes=2 idempotent=true distinct=12 mode-discriminative=true")
+    } else {
+        println("__FIELD_ACTION_SELFTEST__ FAIL distinct=" + to_string(all_distinct) + " idem=" + to_string(idem) + " mode_distinct=" + to_string(mode_distinct))
+    }
+}
+
+// ── main ────────────────────────────────────────────────────
+let _fargs = args()
+
+let mut f_is_selftest = false
+let mut f_arg_i = 0
+while f_arg_i < _fargs.len() {
+    if _fargs[f_arg_i] == "--selftest" { f_is_selftest = true }
+    f_arg_i = f_arg_i + 1
+}
+
+if f_is_selftest {
+    run_field_action_selftest()
+} else {
+    let mut f_max_ticks: i64 = 50
+    let mut f_topo_name: string = "t3"
+    let mut f_mode_name: string = "phi4"
+    let mut f_m2: i64 = 100
+    let mut f_lambda: i64 = 50
+    if _fargs.len() >= 3 {
+        try { f_max_ticks = to_int(_fargs[2]) } catch e { f_max_ticks = 50 }
+    }
+    if _fargs.len() >= 4 { f_topo_name = _fargs[3] }
+    if _fargs.len() >= 5 { f_mode_name = _fargs[4] }
+    if _fargs.len() >= 6 {
+        try { f_m2 = to_int(_fargs[5]) } catch e { f_m2 = 100 }
+    }
+    if _fargs.len() >= 7 {
+        try { f_lambda = to_int(_fargs[6]) } catch e { f_lambda = 50 }
+    }
+    let f_topo = _ftopo_id(f_topo_name)
+    let f_mode = _fmode_id(f_mode_name)
+    if f_topo < 0 || f_mode < 0 {
+        println("[field_action] ERROR unknown topology=" + f_topo_name + " or mode=" + f_mode_name)
+        println("  valid topology: flat | t3 | s3 | blackhole | wormhole | minkowski")
+        println("  valid mode: phi4 | ym")
+        println("  fix: 1) hexa field_action.hexa 50 t3 phi4 100 50  2) hexa field_action.hexa --selftest")
+    } else {
+        println("[field_action] start ticks=" + to_string(f_max_ticks) + " topology=" + f_topo_name + " mode=" + f_mode_name + " m2=" + to_string(f_m2) + " lambda=" + to_string(f_lambda))
+        ff_init(6)
+        let H0 = ff_total_energy(f_mode, f_m2, f_lambda, f_topo)
+        let mut t = 0
+        while t < f_max_ticks {
+            ff_step(f_topo, f_mode, f_m2, f_lambda)
+            t = t + 1
+        }
+        let HT = ff_total_energy(f_mode, f_m2, f_lambda, f_topo)
+        let h = ff_state_hash()
+        let mut drift = HT - H0
+        if drift < 0 { drift = 0 - drift }
+        println("[field_action] done ticks=" + to_string(t) + " topology=" + f_topo_name + " mode=" + f_mode_name + " H_initial=" + to_string(H0) + " H_final=" + to_string(HT) + " drift=" + to_string(drift) + " S_action=" + to_string(__ff_action_accum) + " hash=" + to_string(h))
+        println("  raw 91 C3 honest: symplectic leapfrog discrete energy approximate-conserving; YM mode is plaquette-toy not non-abelian SU(N); empirical lattice-QCD anchor pending Stage 4")
+    }
+}

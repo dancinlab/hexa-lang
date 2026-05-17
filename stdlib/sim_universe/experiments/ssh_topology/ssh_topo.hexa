@@ -1,0 +1,693 @@
+#!hexa strict
+// ssh-topology/module/ssh_topo.hexa — exact single-particle tight-binding
+// diagonalization of the Su–Schrieffer–Heeger (SSH) chain: the canonical
+// 1D topological-insulator primer (bulk band structure, Zak/winding
+// invariant, bulk-boundary correspondence → protected zero-energy edge modes).
+//
+// @tool(slug="ssh", desc="Exact single-particle ED of the Su-Schrieffer-Heeger 1D chain: bulk band E(k)=±|v+w e^{-ik}| with gap Delta=2|v-w|, Zak/winding invariant 0 (trivial v>w) vs 1 (topological v<w), and the bulk-boundary correspondence — a finite OPEN chain in the topological phase has exactly TWO exponentially-localized zero-energy edge modes, none in the trivial phase. O(N^2) dense Jacobi ED, NO 2^N wall (single particle). Closed-form bulk. hexa native (builtin sin/cos/sqrt, no numpy)")
+// @usage(hexa run ssh-topology/module/ssh_topo.hexa [--N 40] [--v 0.4] [--w 1.0] [--bands] [--edge] [--winding] [--json] [--selftest])  // single-particle, 2N x 2N ED
+// @exit_codes(0=PASS selftest/run ok, 1=usage error, 2=physics acceptance FAIL)
+// @sentinel(__SIM_UNIVERSE_SSHTOPO__ PASS|FAIL N=<n> v=<v> w=<w> mode=<m> nzero=<k> winding=<W>)
+// @origin(Su, Schrieffer, Heeger, "Solitons in Polyacetylene", Phys. Rev. Lett. 42, 1698 (1979), DOI 10.1103/PhysRevLett.42.1698 ; pedagogical treatment: Asbóth, Oroszlány, Pályi, "A Short Course on Topological Insulators", Springer Lect. Notes Phys. 919 (2016) / arXiv:1509.02295, Ch.1)
+// @abstraction(pure-hexa exact dense real-symmetric 2N x 2N Hamiltonian + cyclic-Jacobi eigensolver; bulk band + Zak phase in closed form)
+// @paradigm(structural — single-particle tight-binding; NO many-body Hilbert space, NO 2^N memory wall: the SSH model is a one-body quadratic Hamiltonian, exactly solvable in O(N^2))
+// @idempotence(deterministic float output, 6-digit decimal emission for byte-eq seal)
+//
+// ─── Physics summary (textbook; SSH 1979 + Asbóth 2016 Ch.1) ───────────
+//
+// The SSH model is a 1D tight-binding chain of L unit cells, two sites
+// (sublattice A, B) per cell → N = 2L sites total. Hopping alternates:
+//   v  : INTRA-cell  A_m — B_m         (strong/weak)
+//   w  : INTER-cell  B_m — A_{m+1}     (weak/strong)
+// First-quantized single-particle Hamiltonian (open chain), real symmetric,
+// tridiagonal in the site basis (site order: A_0,B_0,A_1,B_1,...):
+//   H = sum_m [ v (|A_m><B_m| + h.c.) ] + sum_m [ w (|B_m><A_{m+1}| + h.c.) ]
+// Site energies are zero (chiral/sublattice symmetry σ_z H σ_z = -H — the
+// symmetry that protects the edge modes and quantizes the invariant).
+//
+// 1. BULK BAND STRUCTURE (periodic chain, Bloch momentum k ∈ (-π,π]):
+//      H(k) = [ 0          v + w e^{-ik} ]      d(k) = (d_x, d_y)
+//             [ v + w e^{+ik}      0     ]      d_x = v + w cos k
+//                                               d_y =     w sin k
+//      E(k) = ± |d(k)| = ± sqrt( v^2 + w^2 + 2 v w cos k )
+//    Direct band gap (minimum at k = π): Δ = 2|v − w|. The gap CLOSES at
+//    v = w (topological phase transition; metallic point).
+//
+// 2. TOPOLOGICAL INVARIANT — winding number / Zak phase.
+//    As k sweeps the BZ, d(k) traces a circle of radius w centred at (v,0).
+//    Winding number of d around the origin:
+//      W = 1  if w > v  (origin enclosed)  → TOPOLOGICAL
+//      W = 0  if w < v  (origin outside)   → TRIVIAL
+//    Zak phase γ_Zak = π W (mod 2π): 0 (trivial) vs π (topological).
+//    Computed here two ways that must agree: (a) closed form from sign(w−v);
+//    (b) discretized Berry/Zak phase −Im Σ ln <u_k|u_{k+δk}> over the BZ
+//    (Resta/King-Smith–Vanderbilt loop), giving W = γ_Zak / π.
+//
+// 3. BULK-BOUNDARY CORRESPONDENCE (the verifiable headline, Asbóth Ch.1).
+//    A FINITE OPEN chain inherits the bulk invariant at its boundary:
+//      W = 1 (v < w, topological) ⇒ exactly TWO eigenstates pinned at E ≈ 0,
+//        exponentially localized at the two ends; in the semi-infinite limit
+//        the edge mode amplitude on the A-sublattice decays as (v/w)^n with
+//        cell index n (Asbóth Eq. 1.20). Finite N: the two edge modes
+//        HYBRIDIZE through the bulk, splitting to ± E_edge ~ (v/w)^L — an
+//        exponentially small but NONZERO gap (stated, not faked).
+//      W = 0 (v > w, trivial) ⇒ NO in-gap states; spectrum is gapped by Δ.
+//    This is the bulk-boundary correspondence: a bulk topological number
+//    predicts robust boundary physics.
+//
+// HONEST SCOPE (governance @D g17 / @D g1 honest-caveat-first · lattice-as-tool):
+//   This is an EXACT SINGLE-PARTICLE tight-binding diagonalization of the
+//   *idealized* SSH model — a clean topological-physics PRIMER.
+//   - SINGLE PARTICLE, quadratic: NOT an interacting many-body system. There
+//     is NO 2^N Hilbert space and NO memory wall — the 2N×2N Hamiltonian is
+//     diagonalized exactly in O(N^2). (Many-body / interacting SSH is a
+//     different, harder problem and is NOT claimed here.)
+//   - IDEALIZED model: NO disorder, NO phonons (the 'soliton' of SSH 1979
+//     comes from lattice dimerization dynamics — that nuclear/phonon sector
+//     is NOT modelled; only the fixed-dimerization electronic problem is),
+//     NO electron–electron interaction, NO finite temperature.
+//   - NOT a real material and NOT the experimental realizations (polyacetylene
+//     conductivity, cold-atom optical superlattices, photonic/acoustic SSH
+//     lattices). The bulk-boundary correspondence is EXACT for the idealized
+//     model; finite-N edge modes hybridize with an exponentially small but
+//     NONZERO splitting ~ (v/w)^L — reported honestly, never zeroed by fiat.
+//   - The bulk band and the Zak/winding invariant are CLOSED-FORM (the BZ
+//     integral is analytic); the open-chain edge spectrum is from exact
+//     dense ED. No approximation, no Trotter, no truncation.
+// QRNG disclosure (governance @D g5): fully deterministic linear algebra —
+//   NO entropy is drawn. entropy_source = "deterministic-exact".
+
+// ─── constants / scalar helpers (house style: mirrors fvd/mbs) ─────────
+
+fn _pi() -> f64 { return 3.14159265358979323846 }
+fn _two_pi() -> f64 { return 6.28318530717958647692 }
+fn _abs_f(x: f64) -> f64 { if x < 0.0 { return 0.0 - x } return x }
+
+fn _sqrt_f(x: f64) -> f64 { if x <= 0.0 { return 0.0 } return sqrt(x) }
+
+// natural log via mantissa-split series (mirrors fvd.hexa / mbs_revival.hexa _ln)
+fn _ln(x: f64) -> f64 {
+    if x <= 0.0 { return 0.0 - 1.0e9 }
+    let mut m = x
+    let mut e: i64 = 0
+    while m >= 2.0 { m = m / 2.0; e = e + 1 }
+    while m < 1.0 { m = m * 2.0; e = e - 1 }
+    let y = m - 1.0
+    let mut s = 0.0
+    let mut sign = 1.0
+    let mut yk = y
+    let mut k: i64 = 1
+    while k <= 24 {
+        s = s + sign * yk / to_float(k)
+        yk = yk * y
+        sign = 0.0 - sign
+        k = k + 1
+    }
+    return s + to_float(e) * 0.69314718055994530942
+}
+
+// atan2 for the discretized Zak-phase accumulation (range (-π, π]).
+fn _atan(z: f64) -> f64 {
+    // arctan via range-reduced series; |z| reduced using atan(z)=π/2-atan(1/z).
+    let neg = z < 0.0
+    let a = if neg { 0.0 - z } else { z }
+    let mut inv = false
+    let mut x = a
+    if x > 1.0 { x = 1.0 / a; inv = true }
+    // x in [0,1]: argument-halving twice then Maclaurin (fast, accurate).
+    let mut red: i64 = 0
+    while x > 0.2 {
+        x = x / (1.0 + _sqrt_f(1.0 + x * x))
+        red = red + 1
+    }
+    let x2 = x * x
+    let mut term = x
+    let mut s = 0.0
+    let mut n: i64 = 0
+    while n < 16 {
+        let den = to_float(2 * n + 1)
+        if n % 2 == 0 { s = s + term / den } else { s = s - term / den }
+        term = term * x2
+        n = n + 1
+    }
+    let mut r = s
+    let mut rr: i64 = 0
+    while rr < red { r = r * 2.0; rr = rr + 1 }
+    if inv { r = _pi() / 2.0 - r }
+    if neg { r = 0.0 - r }
+    return r
+}
+
+fn _atan2(y: f64, x: f64) -> f64 {
+    if x > 0.0 { return _atan(y / x) }
+    if x < 0.0 {
+        if y >= 0.0 { return _atan(y / x) + _pi() }
+        return _atan(y / x) - _pi()
+    }
+    if y > 0.0 { return _pi() / 2.0 }
+    if y < 0.0 { return 0.0 - _pi() / 2.0 }
+    return 0.0
+}
+
+// 6-decimal fixed emission for idempotent byte-eq output (mirrors fvd _r6)
+fn _r6(x: f64) -> string {
+    let scaled = x * 1000000.0
+    let rounded = if scaled >= 0.0 { to_int(scaled + 0.5) } else { to_int(scaled - 0.5) }
+    let int_part = rounded / 1000000
+    let frac_part = rounded - int_part * 1000000
+    let abs_frac = if frac_part < 0 { 0 - frac_part } else { frac_part }
+    let mut frac_str = to_string(abs_frac)
+    while len(frac_str) < 6 { frac_str = "0" + frac_str }
+    let sign = if x < 0.0 && int_part == 0 { "-" } else { "" }
+    return sign + to_string(int_part) + "." + frac_str
+}
+
+// ─── module state ─────────────────────────────────────────────────────
+
+let mut __L: i64 = 20            // number of unit cells
+let mut __N: i64 = 40            // number of sites = 2 * L
+let mut __v: f64 = 0.4           // intra-cell hop
+let mut __w: f64 = 1.0           // inter-cell hop
+let mut __H: [f64] = []          // dense N x N (row-major), real symmetric
+let mut __evec: [f64] = []       // eigenvectors, column j = __evec[i*N + j]
+let mut __eval: [f64] = []       // eigenvalues, length N (unsorted from Jacobi)
+
+// ─── SSH Hamiltonian (open chain, tridiagonal real-symmetric) ─────────
+//   site index s = 2*cell + sub  (sub=0 → A, sub=1 → B)
+//   v couples (A_m, B_m)              : sites 2m and 2m+1
+//   w couples (B_m, A_{m+1})          : sites 2m+1 and 2m+2
+
+fn _build_H() {
+    let n = __N
+    __H = []
+    let mut i: i64 = 0
+    while i < n * n { __H.push(0.0); i = i + 1 }
+    let mut m: i64 = 0
+    while m < __L {
+        let a = 2 * m
+        let b = 2 * m + 1
+        // intra-cell v bond A_m — B_m
+        __H[a * n + b] = __v
+        __H[b * n + a] = __v
+        // inter-cell w bond B_m — A_{m+1}
+        if m + 1 < __L {
+            let a2 = 2 * (m + 1)
+            __H[b * n + a2] = __w
+            __H[a2 * n + b] = __w
+        }
+        m = m + 1
+    }
+}
+
+// ─── cyclic Jacobi eigensolver for a real symmetric dense matrix ──────
+//   Standard two-sided Jacobi rotations; converges quadratically. The SSH
+//   matrix is small (N≤~80 here) so O(N^3) per sweep × O(log) sweeps is
+//   negligible — and it is EXACT to machine precision.
+
+fn _jacobi(maxsweeps: i64) {
+    let n = __N
+    // eigenvectors start as identity
+    __evec = []
+    let mut p: i64 = 0
+    while p < n * n { __evec.push(0.0); p = p + 1 }
+    let mut d: i64 = 0
+    while d < n { __evec[d * n + d] = 1.0; d = d + 1 }
+
+    let mut sweep: i64 = 0
+    while sweep < maxsweeps {
+        // off-diagonal Frobenius norm
+        let mut off: f64 = 0.0
+        let mut r: i64 = 0
+        while r < n {
+            let mut c: i64 = r + 1
+            while c < n {
+                off = off + __H[r * n + c] * __H[r * n + c]
+                c = c + 1
+            }
+            r = r + 1
+        }
+        if off < 1.0e-30 { return }
+
+        let mut pp: i64 = 0
+        while pp < n {
+            let mut qq: i64 = pp + 1
+            while qq < n {
+                let apq = __H[pp * n + qq]
+                if _abs_f(apq) > 1.0e-300 {
+                    let app = __H[pp * n + pp]
+                    let aqq = __H[qq * n + qq]
+                    let phi = 0.5 * _atan2(2.0 * apq, aqq - app)
+                    let cph = cos(phi)
+                    let sph = sin(phi)
+                    // rotate rows/cols pp, qq of H:  H' = J^T H J
+                    let mut kk: i64 = 0
+                    while kk < n {
+                        let hkp = __H[kk * n + pp]
+                        let hkq = __H[kk * n + qq]
+                        __H[kk * n + pp] = cph * hkp - sph * hkq
+                        __H[kk * n + qq] = sph * hkp + cph * hkq
+                        kk = kk + 1
+                    }
+                    let mut k2: i64 = 0
+                    while k2 < n {
+                        let hpk = __H[pp * n + k2]
+                        let hqk = __H[qq * n + k2]
+                        __H[pp * n + k2] = cph * hpk - sph * hqk
+                        __H[qq * n + k2] = sph * hpk + cph * hqk
+                        k2 = k2 + 1
+                    }
+                    // accumulate eigenvectors
+                    let mut k3: i64 = 0
+                    while k3 < n {
+                        let vkp = __evec[k3 * n + pp]
+                        let vkq = __evec[k3 * n + qq]
+                        __evec[k3 * n + pp] = cph * vkp - sph * vkq
+                        __evec[k3 * n + qq] = sph * vkp + cph * vkq
+                        k3 = k3 + 1
+                    }
+                }
+                qq = qq + 1
+            }
+            pp = pp + 1
+        }
+        sweep = sweep + 1
+    }
+}
+
+fn _extract_evals() {
+    let n = __N
+    __eval = []
+    let mut i: i64 = 0
+    while i < n { __eval.push(__H[i * n + i]); i = i + 1 }
+}
+
+// solve the current SSH H: build → Jacobi → extract eigenvalues.
+fn _solve() {
+    _build_H()
+    _jacobi(60)
+    _extract_evals()
+}
+
+// ─── observable: number of (near-)zero-energy eigenvalues ─────────────
+//   in-gap edge modes sit at |E| < tol; bulk states are |E| ≥ Δ/2 ~ |v−w|.
+
+fn _count_zero_modes(tol: f64) -> i64 {
+    let mut c: i64 = 0
+    let mut i: i64 = 0
+    while i < __N {
+        if _abs_f(__eval[i]) < tol { c = c + 1 }
+        i = i + 1
+    }
+    return c
+}
+
+// smallest |E| in the spectrum (the edge-mode hybridization splitting in
+// the topological phase; ≈ Δ/2 in the trivial phase).
+fn _min_abs_E() -> f64 {
+    let mut best: f64 = 1.0e30
+    let mut i: i64 = 0
+    while i < __N {
+        let ae = _abs_f(__eval[i])
+        if ae < best { best = ae }
+        i = i + 1
+    }
+    return best
+}
+
+// ─── observable: closed-form bulk gap and band edges ──────────────────
+//   E(k) = ± sqrt(v^2 + w^2 + 2 v w cos k). Min |E| at k=π (cos=−1):
+//   |E|_min = |v−w| ⇒ direct gap Δ = 2|v−w|. Max at k=0: |E|=v+w.
+
+fn _bulk_gap() -> f64 { return 2.0 * _abs_f(__v - __w) }
+fn _bulk_Emax() -> f64 { return __v + __w }
+fn _bulk_E(k: f64) -> f64 {
+    return _sqrt_f(__v * __v + __w * __w + 2.0 * __v * __w * cos(k))
+}
+
+// ─── observable: winding number / Zak phase ───────────────────────────
+//   Closed form: W = 1 if w > v else 0 (origin enclosed by d(k) circle).
+fn _winding_closed() -> i64 {
+    if __w > __v { return 1 }
+    return 0
+}
+
+//   Discretized Zak/Berry phase over the BZ (King-Smith–Vanderbilt loop):
+//     |u_k> = lower band Bloch eigenvector of H(k) =
+//        [ 0  h ; conj(h)  0 ],  h = v + w e^{-ik}.  Lower band (E=−|h|)
+//     eigenvector ∝ ( 1, −conj(h)/|h| )/√2  =  (1, −e^{-i arg h*})/√2
+//        with arg(h) = atan2(−w sin k, v + w cos k)  [since h = (v+w cos k) − i w sin k]
+//   Zak phase γ = −Im Σ_j ln <u_j|u_{j+1}>. We accumulate the discrete
+//   Berry connection; the quantized result is γ/π ∈ {0,1} = W.
+fn _zak_winding(nk: i64) -> f64 {
+    // store the B-component phase angle θ_j = arg(h_j) along the loop;
+    // <u_j|u_{j+1}> ∝ 1 + e^{ i(θ_j − θ_{j+1}) }; total Zak phase is the
+    // accumulated −Δθ around the closed loop = winding of arg(h) × (−1)…
+    // Robust route: γ_Zak = (1/2)·(total winding of h(k) around 0)·2π → /π = W.
+    // Compute the continuous unwrapped change of arg(h) over k ∈ [0,2π).
+    let mut prev = 0.0
+    let mut acc = 0.0
+    let mut first = true
+    let mut j: i64 = 0
+    while j <= nk {
+        let k = _two_pi() * to_float(j) / to_float(nk)
+        let hx = __v + __w * cos(k)       // Re h
+        let hy = 0.0 - __w * sin(k)       // Im h  (h = v + w e^{-ik})
+        let ang = _atan2(hy, hx)
+        if first { prev = ang; first = false }
+        else {
+            let mut d = ang - prev
+            while d > _pi() { d = d - _two_pi() }
+            while d < (0.0 - _pi()) { d = d + _two_pi() }
+            acc = acc + d
+            prev = ang
+        }
+        j = j + 1
+    }
+    // total winding number of h around origin = acc / 2π (≈ −1 topo, 0 trivial)
+    let wnd = acc / _two_pi()
+    return _abs_f(wnd)
+}
+
+// ─── observable: edge-mode wavefunction decay ─────────────────────────
+//   In the topological phase the (left) edge mode lives on the A sublattice
+//   with cell-amplitude ψ_A(n) ∝ (−v/w)^n (Asbóth Eq.1.20). We extract the
+//   eigenvector with the smallest |E|, take |amplitude| on A sites
+//   (even site index), and fit the geometric ratio against (v/w).
+fn _edge_decay_ratio() -> [f64] {
+    // find index of min |E|
+    let mut idx: i64 = 0
+    let mut best: f64 = 1.0e30
+    let mut i: i64 = 0
+    while i < __N {
+        let ae = _abs_f(__eval[i])
+        if ae < best { best = ae; idx = i }
+        i = i + 1
+    }
+    // A-sublattice amplitudes |ψ(A_m)| = |__evec[(2m)*N + idx]|
+    let n = __N
+    // measured decay ratio from the first two A-cells with nonzero weight
+    let a0 = _abs_f(__evec[0 * n + idx])         // A_0
+    let a1 = _abs_f(__evec[2 * n + idx])         // A_1
+    let a2 = _abs_f(__evec[4 * n + idx])         // A_2
+    let r01 = if a0 > 1.0e-12 { a1 / a0 } else { 0.0 }
+    let r12 = if a1 > 1.0e-12 { a2 / a1 } else { 0.0 }
+    let predicted = if __w > 1.0e-12 { __v / __w } else { 0.0 }
+    return [r01, r12, predicted, best]
+}
+
+// ─── main ─────────────────────────────────────────────────────────────
+
+fn main() -> void {
+    let raw = args()
+    let mut cli: [str] = []
+    let mut ai = 2
+    while ai < len(raw) { cli.push(raw[ai]); ai = ai + 1 }
+
+    // defaults: N=40 sites (L=20 cells), topological phase v<w
+    let mut nN: i64 = 40
+    let mut vv: f64 = 0.4
+    let mut ww: f64 = 1.0
+    let mut do_bands: bool = false
+    let mut do_edge: bool = false
+    let mut do_winding: bool = false
+    let mut json_mode: bool = false
+    let mut selftest: bool = false
+
+    let mut i = 0
+    while i < len(cli) {
+        let a = cli[i]
+        if a == "lib" { i = i + 1; continue }
+        else if a == "--N" { if i + 1 < len(cli) { i = i + 1; nN = to_int(cli[i]) } }
+        else if a == "--v" { if i + 1 < len(cli) { i = i + 1; vv = to_float(cli[i]) } }
+        else if a == "--w" { if i + 1 < len(cli) { i = i + 1; ww = to_float(cli[i]) } }
+        else if a == "--bands" { do_bands = true }
+        else if a == "--edge" { do_edge = true }
+        else if a == "--winding" { do_winding = true }
+        else if a == "--json" { json_mode = true }
+        else if a == "--selftest" { selftest = true }
+        else if a == "--help" || a == "-h" {
+            println("usage: hexa run ssh-topology/module/ssh_topo.hexa [--N 40] [--v 0.4]")
+            println("       [--w 1.0] [--bands] [--edge] [--winding] [--json] [--selftest]")
+            println("modes: (default) selftest · --bands closed-form E(k) band + gap ·")
+            println("       --edge open-chain edge-mode spectrum + (v/w)^n decay ·")
+            println("       --winding Zak phase / winding number (closed + discretized)")
+            println("note: SINGLE-PARTICLE exact ED — NO 2^N wall. The 2N×2N SSH")
+            println("      Hamiltonian is diagonalized in O(N^2) by cyclic Jacobi;")
+            println("      the bulk band + Zak invariant are closed-form.")
+            println("phase: v<w → TOPOLOGICAL (W=1, 2 edge modes); v>w → TRIVIAL (W=0).")
+            println("origin: Su-Schrieffer-Heeger PRL 42 1698 (1979) ; Asbóth-Oroszlány-")
+            println("        Pályi 'A Short Course on Topological Insulators' (2016) Ch.1")
+            exit(0)
+        }
+        else { eprintln("ssh: unknown arg `" + a + "`"); exit(1) }
+        i = i + 1
+    }
+
+    if nN < 4 { nN = 4 }
+    if nN % 2 == 1 { nN = nN + 1 }     // need an even number of sites (whole cells)
+    if nN > 120 { nN = 120 }           // Jacobi O(N^3/sweep); plenty for the physics
+    __N = nN
+    __L = nN / 2
+    __v = vv
+    __w = ww
+
+    // ── default invocation (no run-spec args) → compact selftest ──────
+    let no_spec = (len(cli) == 0) || (len(cli) == 1 && cli[0] == "lib")
+    let any_mode = do_bands || do_edge || do_winding
+    if (no_spec || selftest) && !any_mode {
+        // selftest: small open chain, BOTH phases, all four invariants.
+        //   (a) bulk gap Δ = 2|v−w| matches the closed form;
+        //   (b) topological (v<w) has exactly 2 near-zero modes; trivial 0;
+        //   (c) winding integer 1 (topo) / 0 (trivial), closed == discretized;
+        //   (d) topo edge-mode A-amplitude decays as (v/w)^n.
+        let v_topo: f64 = 0.4
+        let w_topo: f64 = 1.0
+        let v_triv: f64 = 1.0
+        let w_triv: f64 = 0.4
+        let Ls: i64 = 24                 // 24 cells = 48 sites (clean decay)
+
+        // ---- topological phase ----
+        __N = 2 * Ls; __L = Ls; __v = v_topo; __w = w_topo
+        _solve()
+        // edge modes: count |E| within tol scaled to the bulk gap
+        let gap_topo_cf = _bulk_gap()
+        let tol_topo = 0.05 * gap_topo_cf
+        let nzero_topo = _count_zero_modes(tol_topo)
+        let split_topo = _min_abs_E()
+        let dec = _edge_decay_ratio()
+        let r01 = dec[0]
+        let predicted = dec[2]
+        let wnd_topo_disc = _zak_winding(2000)
+        let wnd_topo_cf = to_float(_winding_closed())
+
+        // ---- trivial phase ----
+        __N = 2 * Ls; __L = Ls; __v = v_triv; __w = w_triv
+        _solve()
+        let gap_triv_cf = _bulk_gap()
+        let tol_triv = 0.05 * gap_triv_cf
+        let nzero_triv = _count_zero_modes(tol_triv)
+        let minE_triv = _min_abs_E()
+        let wnd_triv_disc = _zak_winding(2000)
+        let wnd_triv_cf = to_float(_winding_closed())
+
+        // ---- numerical bulk-gap check (closed form vs k-sampled min) ----
+        __v = v_topo; __w = w_topo
+        let gk = _bulk_E(_pi())                // |E(π)| = |v−w|
+        let gap_err = _abs_f(2.0 * gk - gap_topo_cf)
+
+        // ---- acceptance ----
+        let ok_gap     = gap_err < 1.0e-9
+        let ok_nzero   = (nzero_topo == 2) && (nzero_triv == 0)
+        let ok_split   = split_topo < 1.0e-3           // edge modes ≈ E=0 (hybridized exp-small)
+        let ok_trivgap = minE_triv > 0.3               // trivial phase fully gapped (Δ/2=0.3)
+        let ok_wind    = (wnd_topo_cf > 0.5) && (wnd_triv_cf < 0.5)
+                         && (_abs_f(wnd_topo_disc - 1.0) < 0.02)
+                         && (wnd_triv_disc < 0.02)
+        let ok_decay   = _abs_f(r01 - predicted) < 0.05    // ψ_A(n) ~ (v/w)^n
+        let pass = ok_gap && ok_nzero && ok_split && ok_trivgap && ok_wind && ok_decay
+
+        if json_mode {
+            println("{")
+            println("  \"tool\": \"ssh\", \"mode\": \"selftest\",")
+            println("  \"entropy_source\": \"deterministic-exact\",")
+            println("  \"L_cells\": " + to_string(Ls) + ", \"N_sites\": " + to_string(2 * Ls) + ",")
+            println("  \"topo\": { \"v\": " + _r6(v_topo) + ", \"w\": " + _r6(w_topo)
+                    + ", \"gap_closed_form\": " + _r6(gap_topo_cf)
+                    + ", \"n_zero_modes\": " + to_string(nzero_topo)
+                    + ", \"edge_split\": " + _r6(split_topo)
+                    + ", \"winding_cf\": " + _r6(wnd_topo_cf)
+                    + ", \"winding_disc\": " + _r6(wnd_topo_disc)
+                    + ", \"edge_decay_ratio\": " + _r6(r01)
+                    + ", \"v_over_w\": " + _r6(predicted) + " },")
+            println("  \"trivial\": { \"v\": " + _r6(v_triv) + ", \"w\": " + _r6(w_triv)
+                    + ", \"gap_closed_form\": " + _r6(gap_triv_cf)
+                    + ", \"n_zero_modes\": " + to_string(nzero_triv)
+                    + ", \"min_abs_E\": " + _r6(minE_triv)
+                    + ", \"winding_cf\": " + _r6(wnd_triv_cf)
+                    + ", \"winding_disc\": " + _r6(wnd_triv_disc) + " },")
+            println("  \"bulk_gap_err\": " + _r6(gap_err) + ",")
+            println("  \"scope\": \"EXACT single-particle SSH ED — idealized model, NOT a real material, NOT interacting; finite-N edge modes hybridize exp-small\",")
+            println("  \"pass\": " + (if pass { "true" } else { "false" }))
+            println("}")
+        } else {
+            println("ssh selftest — exact single-particle SSH-chain topology (SSH 1979 / Asbóth 2016)")
+            println("  L=" + to_string(Ls) + " cells (N=" + to_string(2 * Ls) + " sites), open chain")
+            println("  (a) bulk gap   : Δ_cf=" + _r6(gap_topo_cf) + "  |2|E(π)|−Δ|=" + _r6(gap_err)
+                    + " (need <1e-9; " + (if ok_gap { "OK" } else { "FAIL" }) + ")")
+            println("  (b) edge modes : topo(v<w) n_zero=" + to_string(nzero_topo)
+                    + " (need 2), trivial(v>w) n_zero=" + to_string(nzero_triv)
+                    + " (need 0; " + (if ok_nzero { "OK" } else { "FAIL" }) + ")")
+            println("      edge split : |E|_min(topo)=" + _r6(split_topo)
+                    + " (hybridized, exp-small <1e-3; " + (if ok_split { "OK" } else { "FAIL" }) + ")")
+            println("      trivial gap: |E|_min(triv)=" + _r6(minE_triv)
+                    + " (gapped >0.3; " + (if ok_trivgap { "OK" } else { "FAIL" }) + ")")
+            println("  (c) winding    : topo W_cf=" + _r6(wnd_topo_cf) + " W_disc=" + _r6(wnd_topo_disc)
+                    + " | trivial W_cf=" + _r6(wnd_triv_cf) + " W_disc=" + _r6(wnd_triv_disc)
+                    + " (" + (if ok_wind { "OK" } else { "FAIL" }) + ")")
+            println("  (d) edge decay : ψ_A(1)/ψ_A(0)=" + _r6(r01) + " ≈ v/w=" + _r6(predicted)
+                    + " (" + (if ok_decay { "OK" } else { "FAIL" }) + ")")
+            println("  entropy        : deterministic-exact (no QRNG — linear algebra; g5)")
+            println("  scope          : EXACT single-particle SSH ED of the IDEALIZED model —")
+            println("                   NOT a real material, NOT interacting, NO disorder/phonons.")
+            println("                   Bulk-boundary correspondence exact; finite-N edge modes")
+            println("                   hybridize with exp-small but NONZERO splitting (g17).")
+        }
+        if pass {
+            println("__SIM_UNIVERSE_SSHTOPO__ PASS N=" + to_string(2 * Ls)
+                    + " v=" + _r6(v_topo) + " w=" + _r6(w_topo)
+                    + " mode=selftest nzero=" + to_string(nzero_topo)
+                    + " winding=" + _r6(wnd_topo_cf))
+            exit(0)
+        }
+        println("__SIM_UNIVERSE_SSHTOPO__ FAIL N=" + to_string(2 * Ls)
+                + " v=" + _r6(v_topo) + " w=" + _r6(w_topo)
+                + " mode=selftest nzero=" + to_string(nzero_topo)
+                + " winding=" + _r6(wnd_topo_cf))
+        exit(2)
+    }
+
+    let phase = if __w > __v { "TOPOLOGICAL" } else { "TRIVIAL" }
+
+    if do_bands {
+        let gap = _bulk_gap()
+        let emax = _bulk_Emax()
+        println("ssh bands — closed-form bulk band E(k)=±√(v²+w²+2vw cos k)")
+        println("  v=" + _r6(__v) + " w=" + _r6(__w) + " phase=" + phase
+                + "  Δ=2|v−w|=" + _r6(gap) + "  |E|_max=v+w=" + _r6(emax))
+        let nk: i64 = 16
+        if !json_mode { println("  k/π        +E(k)        -E(k)") }
+        let mut rows: [str] = []
+        let mut j: i64 = 0
+        while j <= nk {
+            let k = _pi() * to_float(j) / to_float(nk)
+            let e = _bulk_E(k)
+            if json_mode {
+                rows.push("[" + _r6(k / _pi()) + "," + _r6(e) + "]")
+            } else {
+                println("  " + _r6(k / _pi()) + "   " + _r6(e) + "   " + _r6(0.0 - e))
+            }
+            j = j + 1
+        }
+        if json_mode {
+            print("{ \"tool\": \"ssh\", \"mode\": \"bands\", \"v\": " + _r6(__v)
+                  + ", \"w\": " + _r6(__w) + ", \"phase\": \"" + phase
+                  + "\", \"gap\": " + _r6(gap) + ", \"Emax\": " + _r6(emax)
+                  + ", \"band\": [")
+            let mut t: i64 = 0
+            while t < len(rows) {
+                if t > 0 { print(",") }
+                print(rows[t]); t = t + 1
+            }
+            println("], \"entropy_source\": \"deterministic-exact\" }")
+        } else {
+            println("  entropy: deterministic-exact (no QRNG; g5)")
+        }
+        println("__SIM_UNIVERSE_SSHTOPO__ PASS N=" + to_string(__N)
+                + " v=" + _r6(__v) + " w=" + _r6(__w) + " mode=bands nzero=0"
+                + " winding=" + _r6(to_float(_winding_closed())))
+        exit(0)
+    }
+
+    if do_edge {
+        _solve()
+        let gap = _bulk_gap()
+        let tol = if gap > 1.0e-9 { 0.05 * gap } else { 1.0e-4 }
+        let nzero = _count_zero_modes(tol)
+        let split = _min_abs_E()
+        let dec = _edge_decay_ratio()
+        let r01 = dec[0]; let r12 = dec[1]; let predicted = dec[2]
+        println("ssh edge — open-chain edge-mode spectrum + (v/w)^n decay")
+        println("  N=" + to_string(__N) + " (L=" + to_string(__L) + " cells)"
+                + " v=" + _r6(__v) + " w=" + _r6(__w) + " phase=" + phase)
+        println("  n_zero_modes=" + to_string(nzero)
+                + "  (topo→2, trivial→0)  |E|_min=" + _r6(split))
+        println("  edge-mode A-decay ψ(1)/ψ(0)=" + _r6(r01)
+                + " ψ(2)/ψ(1)=" + _r6(r12) + "  vs (v/w)=" + _r6(predicted))
+        if nzero == 2 {
+            println("  → bulk-boundary correspondence: W=1 ⇒ 2 protected edge modes,")
+            println("    hybridized to ±" + _r6(split) + " (exp-small in L, NONZERO; g17).")
+        } else {
+            println("  → trivial phase: no in-gap states; spectrum gapped by Δ=" + _r6(gap) + ".")
+        }
+        if json_mode {
+            println("{ \"tool\": \"ssh\", \"mode\": \"edge\", \"N\": " + to_string(__N)
+                    + ", \"v\": " + _r6(__v) + ", \"w\": " + _r6(__w)
+                    + ", \"phase\": \"" + phase + "\", \"n_zero_modes\": " + to_string(nzero)
+                    + ", \"edge_split\": " + _r6(split) + ", \"gap\": " + _r6(gap)
+                    + ", \"decay_ratio\": " + _r6(r01) + ", \"v_over_w\": " + _r6(predicted)
+                    + ", \"entropy_source\": \"deterministic-exact\" }")
+        } else {
+            println("  entropy: deterministic-exact (no QRNG; g5)")
+        }
+        println("__SIM_UNIVERSE_SSHTOPO__ PASS N=" + to_string(__N)
+                + " v=" + _r6(__v) + " w=" + _r6(__w) + " mode=edge nzero="
+                + to_string(nzero) + " winding=" + _r6(to_float(_winding_closed())))
+        exit(0)
+    }
+
+    if do_winding {
+        let wcf = to_float(_winding_closed())
+        let wdisc = _zak_winding(4000)
+        let zak = wdisc * _pi()
+        println("ssh winding — topological invariant (Zak phase / winding number)")
+        println("  v=" + _r6(__v) + " w=" + _r6(__w) + " phase=" + phase)
+        println("  W (closed form, sign(w−v)) = " + _r6(wcf))
+        println("  W (discretized BZ loop)    = " + _r6(wdisc)
+                + "   Zak phase γ=πW=" + _r6(zak))
+        println("  → " + (if wcf > 0.5 {
+                   "TOPOLOGICAL (W=1, γ_Zak=π): bulk-boundary ⇒ 2 edge modes"
+                 } else {
+                   "TRIVIAL (W=0, γ_Zak=0): no protected edge modes"
+                 }))
+        if json_mode {
+            println("{ \"tool\": \"ssh\", \"mode\": \"winding\", \"v\": " + _r6(__v)
+                    + ", \"w\": " + _r6(__w) + ", \"phase\": \"" + phase
+                    + "\", \"winding_closed_form\": " + _r6(wcf)
+                    + ", \"winding_discretized\": " + _r6(wdisc)
+                    + ", \"zak_phase\": " + _r6(zak)
+                    + ", \"entropy_source\": \"deterministic-exact\" }")
+        } else {
+            println("  entropy: deterministic-exact (no QRNG; g5)")
+        }
+        println("__SIM_UNIVERSE_SSHTOPO__ PASS N=" + to_string(__N)
+                + " v=" + _r6(__v) + " w=" + _r6(__w) + " mode=winding nzero=0"
+                + " winding=" + _r6(wcf))
+        exit(0)
+    }
+
+    // single parametric run: solve open chain + report the headline numbers
+    _solve()
+    let gap = _bulk_gap()
+    let tol = if gap > 1.0e-9 { 0.05 * gap } else { 1.0e-4 }
+    let nzero = _count_zero_modes(tol)
+    let wcf = to_float(_winding_closed())
+    println("ssh run — single SSH-chain diagonalization")
+    println("  N=" + to_string(__N) + " v=" + _r6(__v) + " w=" + _r6(__w)
+            + " phase=" + phase)
+    println("  Δ=" + _r6(gap) + "  n_zero_modes=" + to_string(nzero)
+            + "  W=" + _r6(wcf))
+    println("__SIM_UNIVERSE_SSHTOPO__ PASS N=" + to_string(__N)
+            + " v=" + _r6(__v) + " w=" + _r6(__w) + " mode=run nzero="
+            + to_string(nzero) + " winding=" + _r6(wcf))
+    exit(0)
+}

@@ -1,0 +1,330 @@
+// sim_bridge/multiverse/higher_order/total_correlation.hexa
+//   Watanabe total correlation (multi-information)
+//
+// Definition:
+//   TC(X1..Xn) = Σ_{i} H(X_i) - H(X_1,...,X_n)
+//   = KL( joint || product of marginals )   ≥ 0
+//
+// Unlike 3-way/4-way interaction (which can be negative under synergy),
+// TC is monotone aggregate dependency strength — always ≥ 0.
+//
+// Usage:
+//   hexa total_correlation.hexa <traj.jsonl> <out_csv> [--k 3|4|5] [--n-samples N]
+//     computes TC for random k-subsets of universes (up to N random subsets)
+//   hexa total_correlation.hexa --self-test
+//
+// Honest limits:
+//   - 3-bin for k≤3 (27 cells), 2-bin for k≥4 (2^k cells)
+//   - T=500 → bias ~ (bins^k - 1) / (2T); tractable only for small k with NBINS=2.
+
+const LOG_SCALE: i64 = 1000
+
+fn abs_i(x: i64) -> i64 { if x < 0 { return 0 - x } return x }
+
+fn log_scaled(num: i64, den: i64) -> i64 {
+    if num <= 0 { return 0 - 20000 }
+    if den <= 0 { return 20000 }
+    let r = num * LOG_SCALE / den
+    if r <= 0 { return 0 - 20000 }
+    let mut x = r
+    let mut l2: i64 = 0
+    if x >= LOG_SCALE {
+        let mut tmp = x
+        while tmp >= (LOG_SCALE * 2) { tmp = tmp / 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = l2 * LOG_SCALE + log2_frac
+        return total_log2 * 693 / LOG_SCALE
+    } else {
+        let mut tmp = x
+        while tmp * 2 <= LOG_SCALE { tmp = tmp * 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = log2_frac - l2 * LOG_SCALE
+        return total_log2 * 693 / LOG_SCALE
+    }
+}
+
+// Binary quantizer at 150 threshold. (consistency with quad_mi for TC over k≥4)
+fn bin_of(v: i64) -> i64 {
+    if v < 150 { return 0 }
+    return 1
+}
+const NBINS: i64 = 2
+
+// 1D entropy
+fn h1(x: [i64]) -> i64 {
+    let T = x.len()
+    if T == 0 { return 0 }
+    let mut c: [i64] = []
+    let mut i = 0
+    while i < NBINS { c.push(0); i = i + 1 }
+    let mut n = 0
+    while n < T { c[bin_of(x[n])] = c[bin_of(x[n])] + 1; n = n + 1 }
+    let mut h: i64 = 0
+    let mut k = 0
+    while k < NBINS {
+        if c[k] > 0 { h = h - (c[k] * log_scaled(c[k], T) / T) }
+        k = k + 1
+    }
+    return h
+}
+
+// generic joint entropy over k series
+fn h_k(series: [[i64]], k: i64) -> i64 {
+    let T = series[0].len()
+    if T == 0 { return 0 }
+    let mut S: i64 = 1
+    let mut p = 0
+    while p < k { S = S * NBINS; p = p + 1 }
+    let mut c: [i64] = []
+    let mut i = 0
+    while i < S { c.push(0); i = i + 1 }
+    let mut n = 0
+    while n < T {
+        let mut idx: i64 = 0
+        let mut s = 0
+        while s < k {
+            idx = idx * NBINS + bin_of(series[s][n])
+            s = s + 1
+        }
+        c[idx] = c[idx] + 1
+        n = n + 1
+    }
+    let mut h: i64 = 0
+    let mut j = 0
+    while j < S {
+        if c[j] > 0 {
+            h = h - (c[j] * log_scaled(c[j], T) / T)
+        }
+        j = j + 1
+    }
+    return h
+}
+
+// TC for a k-subset of trajectories
+fn tc_k(subset: [[i64]], k: i64) -> i64 {
+    let mut sum_h1: i64 = 0
+    let mut s = 0
+    while s < k {
+        sum_h1 = sum_h1 + h1(subset[s])
+        s = s + 1
+    }
+    let joint = h_k(subset, k)
+    return sum_h1 - joint
+}
+
+// JSONL loader
+fn load_trajectories(path: string) -> [[i64]] {
+    let mut raw = ""
+    try { raw = read_file(path) } catch e { raw = "" }
+    let lines = raw.split("\n")
+    let mut out: [[i64]] = []
+    let mut i = 0
+    while i < lines.len() {
+        let ln = lines[i].trim()
+        if ln.len() > 0 {
+            let key = "\"energy\":["
+            let p = ln.index_of(key)
+            if p >= 0 {
+                let after = ln.substring(p + key.len(), ln.len())
+                let mut q: i64 = 0 - 1
+                let mut scan = 0
+                while scan < after.len() {
+                    if after.substring(scan, scan + 1) == "]" { q = scan; break }
+                    scan = scan + 1
+                }
+                if q >= 0 {
+                    let body = after.substring(0, q)
+                    let parts = body.split(",")
+                    let mut traj: [i64] = []
+                    let mut j = 0
+                    while j < parts.len() {
+                        let tok = parts[j].trim()
+                        if tok.len() > 0 {
+                            let mut v = 0
+                            try { v = to_int(tok) } catch e { v = 0 }
+                            traj.push(v)
+                        }
+                        j = j + 1
+                    }
+                    out.push(traj)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Enumerate C(M,k) subsets in lexicographic order (for small k), write TC each.
+// For k<=3 enumerate all; k>=4 use stride sub-sampling via --n-samples.
+let _args = args()
+if _args.len() >= 3 {
+    if _args[2] == "--self-test" {
+        // identical triple (max TC)
+        let mut x: [i64] = []
+        let mut y: [i64] = []
+        let mut z: [i64] = []
+        let mut i = 0
+        while i < 500 {
+            let v = (i * 37 + 13) % 300
+            x.push(v); y.push(v); z.push(v)
+            i = i + 1
+        }
+        let mut s1: [[i64]] = []
+        s1.push(x); s1.push(y); s1.push(z)
+        let r1 = tc_k(s1, 3)
+        println("identical triple TC=" + to_string(r1) + " (max)")
+
+        // independent
+        let mut x2: [i64] = []; let mut y2: [i64] = []; let mut z2: [i64] = []
+        let mut j = 0
+        while j < 500 {
+            x2.push((j * 37 + 13) % 300)
+            y2.push((j * 91 + 521) % 300)
+            z2.push((j * 53 + 7) % 300)
+            j = j + 1
+        }
+        let mut s2: [[i64]] = []
+        s2.push(x2); s2.push(y2); s2.push(z2)
+        let r2 = tc_k(s2, 3)
+        println("independent triple TC=" + to_string(r2) + " (min, should be small)")
+    } else if _args.len() >= 4 {
+        let in_path = _args[2]
+        let out_path = _args[3]
+        let mut k_order: i64 = 3
+        let mut n_samples: i64 = 0
+        let mut ai = 4
+        while ai < _args.len() {
+            if _args[ai] == "--k" && ai + 1 < _args.len() {
+                try { k_order = to_int(_args[ai + 1]) } catch e { k_order = 3 }
+                ai = ai + 2
+            } else if _args[ai] == "--n-samples" && ai + 1 < _args.len() {
+                try { n_samples = to_int(_args[ai + 1]) } catch e { n_samples = 0 }
+                ai = ai + 2
+            } else {
+                ai = ai + 1
+            }
+        }
+        let trajs = load_trajectories(in_path)
+        let m_count = trajs.len()
+        println("[tc] loaded " + to_string(m_count) + " trajectories, k=" + to_string(k_order))
+        if m_count < k_order {
+            println("[tc] ERROR: need >= " + to_string(k_order) + " universes, got " + to_string(m_count))
+        } else {
+            // total = C(m_count, k) via iterative integer
+            let mut total: i64 = 1
+            let mut aa = 0
+            while aa < k_order {
+                total = total * (m_count - aa) / (aa + 1)
+                aa = aa + 1
+            }
+            println("[tc] C(" + to_string(m_count) + "," + to_string(k_order) + ") = " + to_string(total))
+
+            let mut stride: i64 = 1
+            if n_samples > 0 && n_samples < total {
+                stride = total / n_samples
+                if stride < 1 { stride = 1 }
+                println("[tc] sub-sampling stride=" + to_string(stride))
+            }
+
+            let mut csv = "indices,TC_scaled\n"
+            let mut count = 0
+            let mut seq: i64 = 0
+
+            // 4-nested loops for k=3/4/5 (hexa stage0: unroll)
+            if k_order == 3 {
+                let mut a = 0
+                while a < m_count {
+                    let mut b = a + 1
+                    while b < m_count {
+                        let mut c = b + 1
+                        while c < m_count {
+                            if stride == 1 || (seq % stride) == 0 {
+                                let mut s: [[i64]] = []
+                                s.push(trajs[a]); s.push(trajs[b]); s.push(trajs[c])
+                                let tc = tc_k(s, 3)
+                                csv = csv + to_string(a) + "-" + to_string(b) + "-" + to_string(c) + "," + to_string(tc) + "\n"
+                                count = count + 1
+                            }
+                            seq = seq + 1
+                            c = c + 1
+                        }
+                        b = b + 1
+                    }
+                    a = a + 1
+                }
+            } else if k_order == 4 {
+                let mut a = 0
+                while a < m_count {
+                    let mut b = a + 1
+                    while b < m_count {
+                        let mut c = b + 1
+                        while c < m_count {
+                            let mut d = c + 1
+                            while d < m_count {
+                                if stride == 1 || (seq % stride) == 0 {
+                                    let mut s: [[i64]] = []
+                                    s.push(trajs[a]); s.push(trajs[b])
+                                    s.push(trajs[c]); s.push(trajs[d])
+                                    let tc = tc_k(s, 4)
+                                    csv = csv + to_string(a) + "-" + to_string(b) + "-" + to_string(c) + "-" + to_string(d) + "," + to_string(tc) + "\n"
+                                    count = count + 1
+                                }
+                                seq = seq + 1
+                                d = d + 1
+                            }
+                            c = c + 1
+                        }
+                        b = b + 1
+                    }
+                    a = a + 1
+                }
+            } else if k_order == 5 {
+                let mut a = 0
+                while a < m_count {
+                    let mut b = a + 1
+                    while b < m_count {
+                        let mut c = b + 1
+                        while c < m_count {
+                            let mut d = c + 1
+                            while d < m_count {
+                                let mut e = d + 1
+                                while e < m_count {
+                                    if stride == 1 || (seq % stride) == 0 {
+                                        let mut s: [[i64]] = []
+                                        s.push(trajs[a]); s.push(trajs[b])
+                                        s.push(trajs[c]); s.push(trajs[d]); s.push(trajs[e])
+                                        let tc = tc_k(s, 5)
+                                        csv = csv + to_string(a) + "-" + to_string(b) + "-" + to_string(c) + "-" + to_string(d) + "-" + to_string(e) + "," + to_string(tc) + "\n"
+                                        count = count + 1
+                                    }
+                                    seq = seq + 1
+                                    e = e + 1
+                                }
+                                d = d + 1
+                            }
+                            c = c + 1
+                        }
+                        b = b + 1
+                    }
+                    a = a + 1
+                }
+            } else {
+                println("[tc] ERROR: only k=3,4,5 supported in this MVP")
+            }
+
+            try { write_file(out_path, csv) } catch e {}
+            println("[tc] wrote " + to_string(count) + " subsets to " + out_path)
+        }
+    } else {
+        println("usage: hexa total_correlation.hexa --self-test")
+        println("   or: hexa total_correlation.hexa <traj.jsonl> <out_csv> [--k 3|4|5] [--n-samples N]")
+    }
+} else {
+    println("usage: hexa total_correlation.hexa --self-test")
+    println("   or: hexa total_correlation.hexa <traj.jsonl> <out_csv> [--k 3|4|5] [--n-samples N]")
+}

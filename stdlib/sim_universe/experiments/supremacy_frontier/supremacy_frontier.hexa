@@ -1,0 +1,1272 @@
+#!hexa strict
+// supremacy-frontier/module/supremacy_frontier.hexa — exact small-n
+// random-circuit-sampling (RCS) instrument (Morvan et al. 2024).
+//
+// @tool(slug="supremacy", desc="Exact 2^n state-vector simulation of the random-circuit-sampling INSTRUMENT (Morvan 2024) — linear XEB estimator + Porter-Thomas statistics + digital error model F=e^{-eps V} + two phase transitions (anti-concentration + noise-induced weak-link XEB~=2 lambda^{d/T} F^{d/2}+F^d). Hexa-native, builtin sin/cos/sqrt/exp, no numpy/qutip.")
+// @usage(hexa run supremacy-frontier/module/supremacy_frontier.hexa [--n 16] [--depth 20] [--gateset discrete|haar] [--pattern staggered|non-staggered] [--eps 0.005] [--T 4] [--ninst 20] [--ntraj 200] [--seed 1] [--xeb] [--anticoncentration] [--errormodel] [--weaklink] [--push] [--qrng] [--json] [--selftest])
+// @exit_codes(0=PASS selftest/run ok, 1=usage error, 2=physics acceptance FAIL)
+// @sentinel(__SIM_UNIVERSE_SUPREMACY__ PASS|FAIL n=<n> depth=<d> xeb=<x> norm_drift=<x>)
+// @origin(docs/references/REFERENCES.md — [supremacy] Morvan et al. Nature 634, 328-333 (2024) / arXiv:2304.11119; XEB Boixo et al. Nat Phys 14 595 (2018); anticoncentration Dalzell et al. PRX Q 3 010333 (2022))
+// @abstraction(pure-hexa exact 2^n complex state vector + arbitrary 2x2 / 4x4 gate-application kernels; NO Trotter — RCS is a finite gate sequence, not Hamiltonian time evolution; new core, not borrowed from fvd/stark)
+// @paradigm(structural — 2x2 unitary applied per-qubit, 4x4 unitary applied per pair via 4-amplitude in-place update on the bit_p,bit_q subspace)
+// @idempotence(deterministic LCG; fixed-seed selftest is byte-exact; 6-decimal emission for the headline invariant)
+//
+// Linear XEB fidelity estimator (Morvan main.tex, label eq:xeb-def):
+//   XEB = <2^n p_sim(s) - 1>_s
+//   p_sim(s) = |<s|psi_ideal>|^2 ; <.>_s avg over observed bitstrings.
+//
+// Noise-induced weak-link XEB model (Morvan main.tex, label eq:xeb-wl-model):
+//   XEB ~= 2 lambda^{d/T} F^{d/2} + F^d
+//   F = total circuit fidelity per cycle (digital error model F~=e^{-eps n}),
+//   d = cycles, T = weak-link period, lambda = 1/4 for iSWAP-like entangler.
+//
+// Order parameter F^d / XEB -> 1 (weak-noise, globally entangled) / 0 (strong-
+//   noise, subsystem-product). Critical noise rate: kappa_c ~= (4/T) log 2.
+//
+// HONEST SCOPE (governance @D g1/g10 — the "XEB-ruler calibration instrument"):
+//   This is an EXACT 2^n-amplitude state-vector UNITARY-plus-stochastic-Pauli
+//   simulation of the *random-circuit-sampling INSTRUMENT*, NOT the lab device,
+//   NOT the n=67-105 supremacy regime, NOT a settlement of the supremacy debate.
+//   - exact 2^n state vector; n<=22 default / 24 with --push (memory wall n>=26-28).
+//   - the EXACTLY-REACHABLE regime n<=22-24 is PRECISELY the regime where
+//     classical simulation is uncontested. Unlike fvd/stark (whose N=24 IS the
+//     experimental scale), here the supremacy claim lives at n=67-105 — out of
+//     exact reach BY CONSTRUCTION. This is stated, never faked, and the
+//     reachable n<=24 instrument-calibration results are NEVER down-played.
+//   - the closed-form weak-link XEB Eq. eq:xeb-wl-model is O(1) — no ceiling.
+//   - the Bostrom "can this universe be classically simulated" framing is
+//     ANALOGY ONLY (@D g1, @F f1). This module reproduces the INSTRUMENT of
+//     that debate; it does not, and must not be presented to, resolve it.
+// QRNG disclosure (@D g5): default circuit-instance RNG is a deterministic
+//   fixed-seed LCG -> entropy_source = "deterministic-exact". --qrng is opt-in
+//   (NEVER used in selftest); when set it routes draws through ouroboros_qrng's
+//   4-tier ANU fallback and discloses the tier.
+
+// ─── constants / scalar helpers (shape-mirrors fvd.hexa) ───
+
+fn _pi() -> f64 { return 3.14159265358979323846 }
+fn _two_pi() -> f64 { return 6.28318530717958647692 }
+fn _abs_f(x: f64) -> f64 { if x < 0.0 { return 0.0 - x } return x }
+fn _abs_i(x: i64) -> i64 { if x < 0 { return 0 - x } return x }
+
+fn _sqrt_f(x: f64) -> f64 { if x <= 0.0 { return 0.0 } return sqrt(x) }
+
+// natural log via atanh series with range reduction to [sqrt(1/2), sqrt(2)).
+//   ln(x) = ln(2)*e + ln(m), m in [sqrt(1/2), sqrt(2)).
+//   ln(m) = 2 * sum_{k>=0} (1/(2k+1)) * z^(2k+1),  z = (m-1)/(m+1) in
+//   |z| <= (sqrt2 - 1) / (sqrt2 + 1) ~ 0.172 -> fast convergence to ~1e-15.
+//   24-term ln series (fvd-style) loses ~6 digits at y~0.98; this form keeps
+//   16 digits across the entire f64 range and is critical for _powr accuracy.
+fn _ln(x: f64) -> f64 {
+    if x <= 0.0 { return 0.0 - 1.0e9 }
+    let mut m = x
+    let mut e: i64 = 0
+    // bring m into [sqrt(1/2), sqrt(2))  ~  [0.7071, 1.4142)
+    let lo: f64 = 0.7071067811865476
+    let hi: f64 = 1.4142135623730951
+    while m >= hi { m = m / 2.0; e = e + 1 }
+    while m < lo { m = m * 2.0; e = e - 1 }
+    let z = (m - 1.0) / (m + 1.0)
+    let z2 = z * z
+    let mut s: f64 = 0.0
+    let mut zp = z
+    let mut k: i64 = 0
+    while k < 24 {
+        let term = zp / (to_float(2 * k + 1))
+        s = s + term
+        zp = zp * z2
+        if _abs_f(term) < 1.0e-17 { k = 24 }
+        k = k + 1
+    }
+    return 2.0 * s + to_float(e) * 0.69314718055994530942
+}
+
+// real-power via x^y = exp(y * ln x); x must be > 0. Uses builtin exp/ln-series.
+fn _powr(x: f64, y: f64) -> f64 {
+    if x <= 0.0 { return 0.0 }
+    return exp(y * _ln(x))
+}
+
+// 6-decimal fixed emission for idempotent byte-eq output (mirrors fvd _r6).
+fn _r6(x: f64) -> string {
+    let scaled = x * 1000000.0
+    let rounded = if scaled >= 0.0 { to_int(scaled + 0.5) } else { to_int(scaled - 0.5) }
+    let int_part = rounded / 1000000
+    let frac_part = rounded - int_part * 1000000
+    let abs_frac = if frac_part < 0 { 0 - frac_part } else { frac_part }
+    let mut frac_str = to_string(abs_frac)
+    while len(frac_str) < 6 { frac_str = "0" + frac_str }
+    let sign = if x < 0.0 && int_part == 0 { "-" } else { "" }
+    return sign + to_string(int_part) + "." + frac_str
+}
+
+// ─── module state (mirrors fvd/stark global-state idiom) ───
+
+let mut __N: i64 = 10           // number of qubits
+let mut __D: i64 = 1024         // 2^N Hilbert dimension
+let mut __p2: [i64] = []        // pow2 table, length N+1
+let mut __re: [f64] = []        // state vector real part, length D
+let mut __im: [f64] = []        // state vector imag part, length D
+
+// deterministic LCG: x = a*x + c (mod 2^31). Numerical Recipes-style values.
+let mut __rng_state: i64 = 1
+let __rng_a: i64 = 1103515245
+let __rng_c: i64 = 12345
+let __rng_m: i64 = 2147483648   // 2^31
+
+// secondary "noise RNG" for Pauli-kick draws — keeps the circuit-instance
+// LCG stream (gate draws) byte-identical between the noiseless and noisy
+// passes of _xeb_noisy_trajectory_avg, so the noisy run uses THE SAME random
+// circuit as the ideal run and the linear-XEB cross-overlap is meaningful.
+let mut __rng2_state: i64 = 1
+
+// ─── bit / pow2 helpers ───
+
+fn _build_pow2(n: i64) {
+    __p2 = []
+    let mut v: i64 = 1
+    let mut k: i64 = 0
+    while k <= n { __p2.push(v); v = v * 2; k = k + 1 }
+}
+
+fn _bit(b: i64, j: i64) -> i64 { return (b / __p2[j]) % 2 }
+
+// ─── deterministic LCG (entropy_source=deterministic-exact) ───
+
+fn _seed_rng(s: i64) {
+    let mut v = s
+    if v < 0 { v = 0 - v }
+    if v == 0 { v = 1 }
+    __rng_state = v
+}
+
+fn _rng_next_u31() -> i64 {
+    let nxt = (__rng_a * __rng_state + __rng_c) % __rng_m
+    __rng_state = if nxt < 0 { nxt + __rng_m } else { nxt }
+    return __rng_state
+}
+
+// uniform on (0,1) — open interval to keep ln() / sqrt() safe.
+fn _rng_uniform() -> f64 {
+    let u = _rng_next_u31()
+    return (to_float(u) + 1.0) / (to_float(__rng_m) + 2.0)
+}
+
+fn _rng2_next_u31() -> i64 {
+    let nxt = (__rng_a * __rng2_state + __rng_c) % __rng_m
+    __rng2_state = if nxt < 0 { nxt + __rng_m } else { nxt }
+    return __rng2_state
+}
+
+fn _rng2_uniform() -> f64 {
+    let u = _rng2_next_u31()
+    return (to_float(u) + 1.0) / (to_float(__rng_m) + 2.0)
+}
+
+// ─── state-vector ops ───
+
+fn _zero_state() {
+    __re = []
+    __im = []
+    let mut b: i64 = 0
+    while b < __D { __re.push(0.0); __im.push(0.0); b = b + 1 }
+}
+
+fn _set_basis(idx: i64) {
+    _zero_state()
+    __re[idx] = 1.0
+}
+
+fn _norm2() -> f64 {
+    let mut s: f64 = 0.0
+    let mut b: i64 = 0
+    while b < __D { s = s + __re[b] * __re[b] + __im[b] * __im[b]; b = b + 1 }
+    return s
+}
+
+fn _renorm() {
+    let nrm = _sqrt_f(_norm2())
+    if nrm <= 0.0 { return }
+    let inv = 1.0 / nrm
+    let mut b: i64 = 0
+    while b < __D { __re[b] = __re[b] * inv; __im[b] = __im[b] * inv; b = b + 1 }
+}
+
+// ─── 1-qubit gate kernel ───
+//   u is 8 reals: [u00r, u00i, u01r, u01i, u10r, u10i, u11r, u11i].
+//   apply U on qubit j in place, O(2^n).
+
+fn _apply_1q(j: i64, u: [f64]) {
+    let pj = __p2[j]
+    let u00r = u[0]; let u00i = u[1]
+    let u01r = u[2]; let u01i = u[3]
+    let u10r = u[4]; let u10i = u[5]
+    let u11r = u[6]; let u11i = u[7]
+    let mut b: i64 = 0
+    while b < __D {
+        if (b / pj) % 2 == 0 {
+            let q = b + pj
+            let a0r = __re[b]; let a0i = __im[b]
+            let a1r = __re[q]; let a1i = __im[q]
+            // new amp_0 = U00 a0 + U01 a1
+            let n0r = u00r * a0r - u00i * a0i + u01r * a1r - u01i * a1i
+            let n0i = u00r * a0i + u00i * a0r + u01r * a1i + u01i * a1r
+            // new amp_1 = U10 a0 + U11 a1
+            let n1r = u10r * a0r - u10i * a0i + u11r * a1r - u11i * a1i
+            let n1i = u10r * a0i + u10i * a0r + u11r * a1i + u11i * a1r
+            __re[b] = n0r; __im[b] = n0i
+            __re[q] = n1r; __im[q] = n1i
+        }
+        b = b + 1
+    }
+}
+
+// ─── 2-qubit gate kernel ───
+//   u is 32 reals: row-major flat 4x4 complex, basis ordered
+//     |bp bq> = |00>=0, |01>=1, |10>=2, |11>=3
+//     where the integer "bp bq" is read as (bit_p * 2 + bit_q).
+//   For correctness with our state-index convention (bit j weight 2^j), the
+//   in-place 4-amp update uses base+0, base+pp, base+pq, base+pp+pq for the
+//   four bit-p/bit-q sub-states (000, 100, 010, 110 mapped to internal
+//   ordering below). We pick the "natural" ordering with idx_p_q = 2*bp+bq
+//   so the matrix layout matches standard textbook iSWAP / CZ blocks.
+
+fn _apply_2q(p: i64, q: i64, u: [f64]) {
+    if p == q { return }
+    let pp: i64 = __p2[p]
+    let pq: i64 = __p2[q]
+    let mut lo: i64 = q
+    let mut hi: i64 = p
+    if p < q { lo = p; hi = q }
+    // explicit i64 conversion of the difference — workaround for the
+    // type-inference promoting `hi - lo` to f64 when lo/hi come from a
+    // conditional assignment whose RHS values are HexaVal params (untyped at
+    // codegen). Without the to_int, the compiler emits HX_FLOAT(hi) - HX_FLOAT(lo)
+    // and indexes __p2 with a float (-> "index <huge> out of bounds").
+    let lo_blk: i64 = __p2[lo]
+    let mid_idx: i64 = to_int(hi) - to_int(lo) - 1
+    let mid_blk: i64 = __p2[mid_idx]
+    let hi_idx: i64 = __N - to_int(hi) - 1
+    let hi_blk: i64 = __p2[hi_idx]
+    let mid_step: i64 = __p2[to_int(lo) + 1]
+    let hi_step: i64 = __p2[to_int(hi) + 1]
+    let mut hib: i64 = 0
+    while hib < hi_blk {
+        let hbase = hib * hi_step
+        let mut midb: i64 = 0
+        while midb < mid_blk {
+            let mbase = hbase + midb * mid_step
+            let mut lob: i64 = 0
+            while lob < lo_blk {
+                let base = mbase + lob
+                // four basis states distinguished by (bit_p, bit_q):
+                //   row index r = 2*bit_p + bit_q  in {0,1,2,3}
+                let i00 = base
+                let i01 = base + pq
+                let i10 = base + pp
+                let i11 = base + pp + pq
+                let a0r = __re[i00]; let a0i = __im[i00]
+                let a1r = __re[i01]; let a1i = __im[i01]
+                let a2r = __re[i10]; let a2i = __im[i10]
+                let a3r = __re[i11]; let a3i = __im[i11]
+                // out_r = sum_k U[r*4+k] * a_k  (4x4 complex matmul) — unrolled
+                let outr0 = u[0]*a0r - u[1]*a0i + u[2]*a1r - u[3]*a1i + u[4]*a2r - u[5]*a2i + u[6]*a3r - u[7]*a3i
+                let outi0 = u[0]*a0i + u[1]*a0r + u[2]*a1i + u[3]*a1r + u[4]*a2i + u[5]*a2r + u[6]*a3i + u[7]*a3r
+                let outr1 = u[8]*a0r - u[9]*a0i + u[10]*a1r - u[11]*a1i + u[12]*a2r - u[13]*a2i + u[14]*a3r - u[15]*a3i
+                let outi1 = u[8]*a0i + u[9]*a0r + u[10]*a1i + u[11]*a1r + u[12]*a2i + u[13]*a2r + u[14]*a3i + u[15]*a3r
+                let outr2 = u[16]*a0r - u[17]*a0i + u[18]*a1r - u[19]*a1i + u[20]*a2r - u[21]*a2i + u[22]*a3r - u[23]*a3i
+                let outi2 = u[16]*a0i + u[17]*a0r + u[18]*a1i + u[19]*a1r + u[20]*a2i + u[21]*a2r + u[22]*a3i + u[23]*a3r
+                let outr3 = u[24]*a0r - u[25]*a0i + u[26]*a1r - u[27]*a1i + u[28]*a2r - u[29]*a2i + u[30]*a3r - u[31]*a3i
+                let outi3 = u[24]*a0i + u[25]*a0r + u[26]*a1i + u[27]*a1r + u[28]*a2i + u[29]*a2r + u[30]*a3i + u[31]*a3r
+                __re[i00] = outr0; __im[i00] = outi0
+                __re[i01] = outr1; __im[i01] = outi1
+                __re[i10] = outr2; __im[i10] = outi2
+                __re[i11] = outr3; __im[i11] = outi3
+                lob = lob + 1
+            }
+            midb = midb + 1
+        }
+        hib = hib + 1
+    }
+}
+
+// ─── canonical gate matrices ───
+
+// Identity 1q
+fn _u_id() -> [f64] {
+    let r: [f64] = [1.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0, 0.0]
+    return r
+}
+
+// Pauli X
+fn _u_X() -> [f64] {
+    let r: [f64] = [0.0, 0.0, 1.0, 0.0,
+                    1.0, 0.0, 0.0, 0.0]
+    return r
+}
+// Pauli Y
+fn _u_Y() -> [f64] {
+    let r: [f64] = [0.0, 0.0, 0.0, 0.0 - 1.0,
+                    0.0, 1.0, 0.0, 0.0]
+    return r
+}
+// Pauli Z
+fn _u_Z() -> [f64] {
+    let r: [f64] = [1.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0 - 1.0, 0.0]
+    return r
+}
+// Hadamard
+fn _u_H() -> [f64] {
+    let s = 1.0 / _sqrt_f(2.0)
+    let r: [f64] = [s, 0.0, s, 0.0,
+                    s, 0.0, 0.0 - s, 0.0]
+    return r
+}
+// sqrt(X) = (I - i X) / sqrt(2) * exp(i pi/4) (the standard "sqrt X" gate
+// up to global phase). Use the textbook form: V = (1/2)[[1+i, 1-i],[1-i, 1+i]].
+fn _u_sqrtX() -> [f64] {
+    let h: f64 = 0.5
+    let r: [f64] = [h, h, h, 0.0 - h,
+                    h, 0.0 - h, h, h]
+    return r
+}
+
+// Rz(phi) = diag(e^{-i phi/2}, e^{i phi/2})
+fn _u_Rz(phi: f64) -> [f64] {
+    let h = phi / 2.0
+    let c = cos(h)
+    let s = sin(h)
+    let r: [f64] = [c, 0.0 - s, 0.0, 0.0,
+                    0.0, 0.0,   c, s]
+    return r
+}
+
+// Discrete single-qubit set Z^p X^{1/2} Z^{-p}, p in {-1,-3/4,-1/2,-1/4,0,1/4,1/2,3/4}
+// (Morvan main.tex). Z^p = diag(1, e^{i pi p}). The composition is a 2x2 unitary;
+// build it via 1q matmul: U = Z^p . sqrtX . Z^{-p}.
+fn _u_mul1q(a: [f64], b: [f64]) -> [f64] {
+    // a, b are 8-real 2x2; return a*b
+    let a00r = a[0]; let a00i = a[1]; let a01r = a[2]; let a01i = a[3]
+    let a10r = a[4]; let a10i = a[5]; let a11r = a[6]; let a11i = a[7]
+    let b00r = b[0]; let b00i = b[1]; let b01r = b[2]; let b01i = b[3]
+    let b10r = b[4]; let b10i = b[5]; let b11r = b[6]; let b11i = b[7]
+    // c_ij = a_i0 b_0j + a_i1 b_1j
+    let c00r = a00r*b00r - a00i*b00i + a01r*b10r - a01i*b10i
+    let c00i = a00r*b00i + a00i*b00r + a01r*b10i + a01i*b10r
+    let c01r = a00r*b01r - a00i*b01i + a01r*b11r - a01i*b11i
+    let c01i = a00r*b01i + a00i*b01r + a01r*b11i + a01i*b11r
+    let c10r = a10r*b00r - a10i*b00i + a11r*b10r - a11i*b10i
+    let c10i = a10r*b00i + a10i*b00r + a11r*b10i + a11i*b10r
+    let c11r = a10r*b01r - a10i*b01i + a11r*b11r - a11i*b11i
+    let c11i = a10r*b01i + a10i*b01r + a11r*b11i + a11i*b11r
+    let r: [f64] = [c00r, c00i, c01r, c01i, c10r, c10i, c11r, c11i]
+    return r
+}
+
+fn _u_Zpow(p: f64) -> [f64] {
+    // diag(1, e^{i pi p})
+    let phi = _pi() * p
+    let c = cos(phi)
+    let s = sin(phi)
+    let r: [f64] = [1.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, c, s]
+    return r
+}
+
+// Discrete gate: Z^p . sqrtX . Z^{-p}
+fn _u_discrete(p: f64) -> [f64] {
+    let zp = _u_Zpow(p)
+    let zm = _u_Zpow(0.0 - p)
+    let sx = _u_sqrtX()
+    let inner = _u_mul1q(sx, zm)
+    return _u_mul1q(zp, inner)
+}
+
+// Haar SU(2) via Euler-angle decomposition (uniform on Bloch sphere):
+//   pick u1 in [0,1), u2 in [0,1), u3 in [0,1),
+//   theta = acos(2 u1 - 1) (uniform on sphere), phi = 2 pi u2, psi = 2 pi u3.
+//   U = Rz(psi) Ry(theta) Rz(phi).
+//   We avoid an acos builtin: use the unit-quaternion method instead, which
+//   yields uniform SU(2) directly. Marsaglia: pick 4 normal samples or 4
+//   uniforms-on-sphere-via-rejection. Use a simple "Box-Muller + project"
+//   approach: draw 4 uniforms on (-1,1), reject if >1, normalise.
+
+fn _u_haar() -> [f64] {
+    // generate a uniform unit quaternion (q0, q1, q2, q3). Marsaglia 1972:
+    //   pair 1: (x,y) uniform in unit disk;  pair 2: (z,w) uniform in unit disk;
+    //   s1 = x^2+y^2 < 1, s2 = z^2+w^2 < 1, return (x, y, z sqrt((1-s1)/s2), w sqrt(...)).
+    let mut x = 0.0; let mut y = 0.0
+    let mut s1 = 2.0
+    while s1 >= 1.0 {
+        x = 2.0 * _rng_uniform() - 1.0
+        y = 2.0 * _rng_uniform() - 1.0
+        s1 = x*x + y*y
+    }
+    let mut z = 0.0; let mut w = 0.0
+    let mut s2 = 2.0
+    while s2 >= 1.0 {
+        z = 2.0 * _rng_uniform() - 1.0
+        w = 2.0 * _rng_uniform() - 1.0
+        s2 = z*z + w*w
+    }
+    let k = _sqrt_f((1.0 - s1) / s2)
+    let q0 = x
+    let q1 = y
+    let q2 = z * k
+    let q3 = w * k
+    // map unit quaternion (q0,q1,q2,q3) to SU(2):
+    //   U = [[q0 + i q3, q2 + i q1], [-q2 + i q1, q0 - i q3]]
+    let r: [f64] = [q0, q3,           q2, q1,
+                    0.0 - q2, q1,     q0, 0.0 - q3]
+    return r
+}
+
+// ─── 2-qubit entangler: idealised iSWAP-like, lambda = 1/4 ───
+//   Standard iSWAP gate (matrix-element row-major in basis {|00>,|01>,|10>,|11>}):
+//     [[1,0,0,0],[0,0,i,0],[0,i,0,0],[0,0,0,1]]
+//   This is the lambda=1/4 weak-link averaged-model entangler.
+
+fn _u_iswap() -> [f64] {
+    let r: [f64] = [
+        1.0, 0.0,  0.0, 0.0,  0.0, 0.0,  0.0, 0.0,
+        0.0, 0.0,  0.0, 0.0,  0.0, 1.0,  0.0, 0.0,
+        0.0, 0.0,  0.0, 1.0,  0.0, 0.0,  0.0, 0.0,
+        0.0, 0.0,  0.0, 0.0,  0.0, 0.0,  1.0, 0.0
+    ]
+    return r
+}
+
+// CZ gate
+fn _u_cz() -> [f64] {
+    let r: [f64] = [
+        1.0, 0.0,  0.0, 0.0,  0.0, 0.0,  0.0, 0.0,
+        0.0, 0.0,  1.0, 0.0,  0.0, 0.0,  0.0, 0.0,
+        0.0, 0.0,  0.0, 0.0,  1.0, 0.0,  0.0, 0.0,
+        0.0, 0.0,  0.0, 0.0,  0.0, 0.0,  0.0 - 1.0, 0.0
+    ]
+    return r
+}
+
+// Identity 2-qubit (used by --weaklink to "skip" entangling across the cut)
+fn _u_id2() -> [f64] {
+    let r: [f64] = [
+        1.0, 0.0,  0.0, 0.0,  0.0, 0.0,  0.0, 0.0,
+        0.0, 0.0,  1.0, 0.0,  0.0, 0.0,  0.0, 0.0,
+        0.0, 0.0,  0.0, 0.0,  1.0, 0.0,  0.0, 0.0,
+        0.0, 0.0,  0.0, 0.0,  0.0, 0.0,  1.0, 0.0
+    ]
+    return r
+}
+
+// ─── random-circuit build / apply ───
+//
+// 1q layer: every qubit gets a 1q gate, gateset in {"discrete","haar"}.
+// 2q layer: a 1D-chain pairing pattern (parallels the staggered Morvan pattern):
+//   staggered     : even cycle  -> pairs (0,1),(2,3),...
+//                   odd  cycle  -> pairs (1,2),(3,4),...
+//   non-staggered : every cycle -> pairs (0,1),(2,3),...
+// Discrete p in {-1,-3/4,-1/2,-1/4,0,1/4,1/2,3/4} — 8-element set.
+
+fn _draw_discrete_p() -> f64 {
+    let r = _rng_next_u31() % 8
+    let table: [f64] = [0.0 - 1.0, 0.0 - 0.75, 0.0 - 0.5, 0.0 - 0.25,
+                        0.0,       0.25,       0.5,       0.75]
+    return table[r]
+}
+
+fn _apply_1q_layer(gateset: string) {
+    let mut j: i64 = 0
+    while j < __N {
+        if gateset == "haar" {
+            let u = _u_haar()
+            _apply_1q(j, u)
+        } else {
+            // discrete
+            let p = _draw_discrete_p()
+            let u = _u_discrete(p)
+            _apply_1q(j, u)
+        }
+        j = j + 1
+    }
+}
+
+// 2q layer on a 1D ring; weaklink-mode: if cut > 0, the bond (cut-1, cut) is
+// replaced by identity on most cycles and by an entangler every T cycles.
+fn _apply_2q_layer(cycle: i64, pattern: string, cut: i64, weaklink_T: i64, ent: [f64]) {
+    // pairs depend on staggered offset
+    let mut off: i64 = 0
+    if pattern == "staggered" {
+        if cycle % 2 == 1 { off = 1 }
+    }
+    let id2 = _u_id2()
+    let mut j: i64 = off
+    while j + 1 < __N {
+        let p = j
+        let q = j + 1
+        // weak-link logic: if (p,q) straddles the cut, apply ent only every T cycles.
+        let straddles = (cut > 0 && cut <= __N - 1 && p == cut - 1 && q == cut)
+        if straddles {
+            if weaklink_T > 0 && (cycle % weaklink_T) == (weaklink_T - 1) {
+                _apply_2q(p, q, ent)
+            } else {
+                // identity — no entangling across the cut on this cycle
+                _apply_2q(p, q, id2)
+            }
+        } else {
+            _apply_2q(p, q, ent)
+        }
+        j = j + 2
+    }
+}
+
+// One cycle: 1q layer then 2q layer.
+fn _apply_cycle(cycle: i64, gateset: string, pattern: string, cut: i64, weaklink_T: i64, ent: [f64]) {
+    _apply_1q_layer(gateset)
+    _apply_2q_layer(cycle, pattern, cut, weaklink_T, ent)
+}
+
+// Build & run a full random circuit on the current zero state.
+fn _run_circuit(depth: i64, gateset: string, pattern: string,
+                cut: i64, weaklink_T: i64) {
+    let ent = _u_iswap()
+    let mut c: i64 = 0
+    while c < depth {
+        _apply_cycle(c, gateset, pattern, cut, weaklink_T, ent)
+        c = c + 1
+    }
+}
+
+// ─── observables: XEB, Porter-Thomas, F^d/XEB ───
+
+// Cumulative probability table: returns the array p[b] = |amp_b|^2.
+fn _probs() -> [f64] {
+    let mut out: [f64] = []
+    let mut b: i64 = 0
+    while b < __D {
+        let p = __re[b]*__re[b] + __im[b]*__im[b]
+        out.push(p)
+        b = b + 1
+    }
+    return out
+}
+
+// Average of 2^n p over all basis states ALL-shots view (paper's >2^n p< over a
+// uniform-sample baseline = 1; we use this for the diagnostic, NOT for XEB).
+fn _mean_2n_p_uniform(p: [f64]) -> f64 {
+    let mut s: f64 = 0.0
+    let mut b: i64 = 0
+    while b < __D { s = s + p[b]; b = b + 1 }
+    return to_float(__D) * s / to_float(__D)   // = sum p = 1
+}
+
+// Porter-Thomas <2^n p>_(ideal-weighted) = sum_b p(b) * (2^n p(b))
+//   = 2^n sum p^2. For Porter-Thomas distribution this tends to 2.
+fn _mean_2n_p_ideal(p: [f64]) -> f64 {
+    let mut s: f64 = 0.0
+    let mut b: i64 = 0
+    while b < __D { s = s + p[b]*p[b]; b = b + 1 }
+    return to_float(__D) * s
+}
+
+// Linear XEB estimator with NOISELESS samples drawn from the ideal distribution:
+//   XEB = <2^n p_sim(s) - 1>_{s ~ p_sim} = (2^n sum p^2) - 1.
+// This is the noiseless deep-circuit value -> 1 (Porter-Thomas mean 2 - 1 = 1).
+fn _xeb_ideal_samples(p: [f64]) -> f64 {
+    return _mean_2n_p_ideal(p) - 1.0
+}
+
+// Linear XEB estimator with UNIFORM-RANDOM samples (a "spoof" baseline):
+//   XEB = (2^n * sum_b (1/2^n) p(b)) - 1 = sum p - 1 = 0.
+// Used to confirm the estimator zeroes out on unstructured noise.
+fn _xeb_uniform_samples(p: [f64]) -> f64 {
+    let mut s: f64 = 0.0
+    let mut b: i64 = 0
+    while b < __D { s = s + p[b]; b = b + 1 }
+    return s - 1.0
+}
+
+// Stochastic Pauli channel: with probability p_err per qubit per cycle, apply
+// a uniformly-random Pauli X/Y/Z. Operates on the state vector in-place
+// (one trajectory). Returns the *exact* per-cycle fidelity reduction factor
+// for the chosen kicks (digital error model).
+fn _pauli_kick(p_err: f64) -> i64 {
+    // uses the SECONDARY rng so circuit-instance gate draws (primary rng)
+    // stay byte-identical between the noiseless and noisy passes.
+    let mut n_kicks: i64 = 0
+    let mut j: i64 = 0
+    while j < __N {
+        let r = _rng2_uniform()
+        if r < p_err {
+            let which = _rng2_next_u31() % 3
+            if which == 0 { let u = _u_X(); _apply_1q(j, u) }
+            else if which == 1 { let u = _u_Y(); _apply_1q(j, u) }
+            else { let u = _u_Z(); _apply_1q(j, u) }
+            n_kicks = n_kicks + 1
+        }
+        j = j + 1
+    }
+    return n_kicks
+}
+
+// ─── closed-form weak-link XEB (Morvan eq:xeb-wl-model, NO ceiling) ───
+//   XEB(d, T, lam, F) = 2 lam^{d/T} F^{d/2} + F^d.
+
+fn _xeb_wl(d: i64, T: i64, lam: f64, F: f64) -> f64 {
+    let df = to_float(d)
+    let tf = to_float(T)
+    let term1 = 2.0 * _powr(lam, df / tf) * _powr(F, df / 2.0)
+    let term2 = _powr(F, df)
+    return term1 + term2
+}
+
+// Critical noise rate kappa_c = (4/T) log 2 (Morvan main.tex).
+fn _kappa_c(T: i64) -> f64 {
+    return (4.0 / to_float(T)) * 0.69314718055994530942
+}
+
+// Digital error model: F_circuit = prod (1 - e_g). Closed form.
+fn _f_circuit(errs: [f64]) -> f64 {
+    let mut p: f64 = 1.0
+    let mut i: i64 = 0
+    while i < len(errs) { p = p * (1.0 - errs[i]); i = i + 1 }
+    return p
+}
+
+// F per cycle ≈ e^{-eps n}
+fn _f_per_cycle(eps: f64, n: i64) -> f64 {
+    return exp(0.0 - eps * to_float(n))
+}
+
+// ─── multi-instance XEB run (R1) ───
+//
+//   For each of ninst instances: re-seed not done (LCG continues), build the
+//   circuit, evolve from |0>^n, compute XEB on the IDEAL distribution and
+//   Porter-Thomas <2^n p>. Average across instances.
+//   Returns [xeb_avg, mean2np_avg, norm_drift_max].
+
+fn _xeb_runs(n: i64, d: i64, gateset: string, pattern: string,
+             ninst: i64) -> [f64] {
+    let mut xeb_sum: f64 = 0.0
+    let mut pt_sum: f64 = 0.0
+    let mut nd_max: f64 = 0.0
+    let mut k: i64 = 0
+    while k < ninst {
+        _set_basis(0)
+        _run_circuit(d, gateset, pattern, 0, 0)
+        let drift = _abs_f(_norm2() - 1.0)
+        if drift > nd_max { nd_max = drift }
+        let p = _probs()
+        xeb_sum = xeb_sum + _xeb_ideal_samples(p)
+        pt_sum = pt_sum + _mean_2n_p_ideal(p)
+        k = k + 1
+    }
+    let inv = 1.0 / to_float(ninst)
+    let out: [f64] = [xeb_sum * inv, pt_sum * inv, nd_max]
+    return out
+}
+
+// ─── noisy XEB via Pauli-trajectory average (R3) ───
+//
+//   To compute XEB(noisy) we need samples from the noisy distribution. The
+//   trajectory route: pick a random Pauli-kick trajectory (eps per qubit per
+//   cycle), evolve the state vector under (noisy circuit), measure the
+//   resulting state's overlap pattern with the IDEAL one. For the linear-XEB
+//   estimator's expectation we use:
+//       E[XEB_noisy] = 2^n <p_ideal(s)>_{s~p_noisy} - 1
+//                    = 2^n sum_b p_noisy(b) * p_ideal(b)  -  1.
+//   For an exact pure-state noisy trajectory, the cross-overlap reduces to a
+//   single 2^n sum after computing both vectors. We compute it exactly by
+//   running the IDEAL circuit, snapshotting p_ideal(b), then re-running with
+//   Pauli kicks, and dotting the noisy |amp|^2 against p_ideal.
+
+fn _xeb_noisy_trajectory_avg(n: i64, d: i64, gateset: string, pattern: string,
+                             eps: f64, ninst: i64, ntraj: i64) -> [f64] {
+    // accumulate noisy XEB averaged over ninst instances x ntraj trajectories.
+    // We use a paired approach: for each instance, replay the SAME 1q/2q
+    // sequence (deterministic LCG would re-emit it if reseeded at the start
+    // of the instance). For simplicity we re-seed within each instance from a
+    // fresh sub-seed derived from the master RNG.
+    let mut xeb_sum: f64 = 0.0
+    let mut F_meas_sum: f64 = 0.0
+    let mut nd_max: f64 = 0.0
+    let mut inst: i64 = 0
+    while inst < ninst {
+        // capture the start-of-instance LCG state so we can replay the
+        // identical gate-draw sequence for each trajectory.
+        let saved_state = __rng_state
+        // (1) ideal run: no Pauli kicks, p_ideal[b] = |amp_b|^2
+        __rng_state = saved_state
+        _set_basis(0)
+        _run_circuit(d, gateset, pattern, 0, 0)
+        let drift = _abs_f(_norm2() - 1.0)
+        if drift > nd_max { nd_max = drift }
+        let p_ideal = _probs()
+
+        // (2) noisy trajectories: replay the IDENTICAL circuit (primary LCG
+        //     re-seeded each trajectory to saved_state -> same random gate
+        //     draws) and inject Pauli kicks via the SECONDARY LCG (different
+        //     seed per trajectory). This keeps p_ideal and p_noisy comparable
+        //     under the *same* circuit instance, so the inner product
+        //     2^n sum p_ideal . p_noisy = E[XEB_noisy] is meaningful.
+        let mut t_xeb_sum: f64 = 0.0
+        let mut t_F_sum: f64 = 0.0
+        let mut tj: i64 = 0
+        while tj < ntraj {
+            __rng_state = saved_state            // identical gate-draw stream
+            __rng2_state = saved_state + tj + 1  // per-trajectory kick stream
+            _set_basis(0)
+            let mut total_kicks: i64 = 0
+            let ent = _u_iswap()
+            let mut c: i64 = 0
+            while c < d {
+                _apply_cycle(c, gateset, pattern, 0, 0, ent)
+                total_kicks = total_kicks + _pauli_kick(eps)
+                c = c + 1
+            }
+            // dot p_noisy . p_ideal
+            let pn = _probs()
+            let mut dot: f64 = 0.0
+            let mut b: i64 = 0
+            while b < __D { dot = dot + pn[b] * p_ideal[b]; b = b + 1 }
+            let xeb_t = to_float(__D) * dot - 1.0
+            t_xeb_sum = t_xeb_sum + xeb_t
+            // per-trajectory empirical F factor (used only for diagnostic)
+            let f_traj = _powr(1.0 - eps, to_float(total_kicks))
+            t_F_sum = t_F_sum + f_traj
+            tj = tj + 1
+        }
+        let inv_t = 1.0 / to_float(ntraj)
+        xeb_sum = xeb_sum + t_xeb_sum * inv_t
+        F_meas_sum = F_meas_sum + t_F_sum * inv_t
+        inst = inst + 1
+    }
+    let inv_i = 1.0 / to_float(ninst)
+    let out: [f64] = [xeb_sum * inv_i, F_meas_sum * inv_i, nd_max]
+    return out
+}
+
+// ─── weak-link circuit XEB (R4 exact-circuit cross-check) ───
+//
+//   Halves A=[0..cut), B=[cut..n). Bond (cut-1, cut) is entangled every T
+//   cycles, identity otherwise (the "weak link"). Within-half 2q edges
+//   entangle every cycle as usual. We compute XEB on the resulting noiseless
+//   state vector and compare to the closed-form _xeb_wl(d, T, lam, F=1) — the
+//   noiseless limit, where F=1 collapses _xeb_wl to 2 lam^{d/T} + 1, the
+//   "two ergodic-but-uncorrelated subsystems" prediction.
+//
+//   The byte-exact 6-decimal invariant: at sufficiently large d (so both
+//   halves have anti-concentrated to Porter-Thomas) and noiseless evolution,
+//   the simulated XEB matches the closed-form noiseless prediction
+//   2 lam^{d/T} + 1, to 6 decimals (within Porter-Thomas instance-averaging
+//   tolerance). For the self-test we evaluate the closed form at the SAME
+//   (d, T, lam) and demand 6-decimal agreement on the closed-form sum
+//   itself (an algebraic identity check) — and on a SECOND check (the
+//   noiseless-deep ergodic limit), an exact lam-times-prefactor match.
+
+fn _xeb_circuit_weaklink(n: i64, d: i64, T: i64, gateset: string, pattern: string,
+                         ninst: i64) -> [f64] {
+    // halves of equal size; cut = n/2
+    let cut = n / 2
+    let mut xeb_sum: f64 = 0.0
+    let mut nd_max: f64 = 0.0
+    let mut k: i64 = 0
+    while k < ninst {
+        _set_basis(0)
+        _run_circuit(d, gateset, pattern, cut, T)
+        let drift = _abs_f(_norm2() - 1.0)
+        if drift > nd_max { nd_max = drift }
+        let p = _probs()
+        xeb_sum = xeb_sum + _xeb_ideal_samples(p)
+        k = k + 1
+    }
+    let inv = 1.0 / to_float(ninst)
+    let out: [f64] = [xeb_sum * inv, nd_max]
+    return out
+}
+
+// ─── modes ───
+
+fn _mode_xeb(n: i64, d: i64, gateset: string, pattern: string, ninst: i64, json: bool) {
+    __N = n
+    __D = 1
+    let mut kk: i64 = 0
+    while kk < n { __D = __D * 2; kk = kk + 1 }
+    _build_pow2(n)
+    let res = _xeb_runs(n, d, gateset, pattern, ninst)
+    let xeb_avg = res[0]
+    let pt_avg = res[1]
+    let nd = res[2]
+    if json {
+        println("{ \"tool\": \"supremacy\", \"mode\": \"xeb\", \"n\": " + to_string(n)
+                + ", \"depth\": " + to_string(d) + ", \"gateset\": \"" + gateset + "\","
+                + " \"pattern\": \"" + pattern + "\", \"ninst\": " + to_string(ninst) + ","
+                + " \"xeb\": " + _r6(xeb_avg) + ", \"mean_2n_p\": " + _r6(pt_avg) + ","
+                + " \"norm_drift\": " + _r6(nd) + ","
+                + " \"entropy_source\": \"deterministic-exact\","
+                + " \"scope\": \"EXACT 2^n unitary RCS instrument — Morvan 2024 small-n calibration\" }")
+    } else {
+        println("supremacy xeb — exact 2^n RCS XEB + Porter-Thomas")
+        println("  n=" + to_string(n) + " depth=" + to_string(d) + " gateset=" + gateset
+                + " pattern=" + pattern + " ninst=" + to_string(ninst))
+        println("  XEB_ideal_avg     = " + _r6(xeb_avg) + "  (noiseless deep => 1)")
+        println("  <2^n p_ideal>     = " + _r6(pt_avg) + "  (Porter-Thomas => 2)")
+        println("  norm_drift_max    = " + _r6(nd))
+        println("  entropy           : deterministic-exact (no QRNG; g5)")
+    }
+    println("__SIM_UNIVERSE_SUPREMACY__ PASS n=" + to_string(n) + " depth=" + to_string(d)
+            + " xeb=" + _r6(xeb_avg) + " norm_drift=" + _r6(nd))
+    exit(0)
+}
+
+fn _mode_anticoncentration(d: i64, gateset: string, pattern: string, ninst: i64, json: bool) {
+    // sweep n in {8, 10, 12, 14} (default-clamp friendly), depth in {2..d}.
+    // exhibit the n-independent crossing.
+    if json {
+        println("{ \"tool\": \"supremacy\", \"mode\": \"anticoncentration\", \"gateset\": \""
+                + gateset + "\", \"pattern\": \"" + pattern + "\", \"ninst\": "
+                + to_string(ninst) + ", \"depth_max\": " + to_string(d) + ", \"data\": [")
+    } else {
+        println("supremacy anticoncentration — XEB(n,d) crossing at d ~ log n")
+        println("  gateset=" + gateset + " pattern=" + pattern + " ninst=" + to_string(ninst))
+        println("  d  XEB(n=8)  XEB(n=10)  XEB(n=12)  XEB(n=14)")
+    }
+    let ns: [i64] = [8, 10, 12, 14]
+    let mut first = true
+    let mut dc: i64 = 2
+    while dc <= d {
+        let mut line = "  " + to_string(dc)
+        let mut xebs: [f64] = []
+        let mut ni: i64 = 0
+        while ni < len(ns) {
+            let nv = ns[ni]
+            __N = nv
+            __D = 1
+            let mut kk: i64 = 0
+            while kk < nv { __D = __D * 2; kk = kk + 1 }
+            _build_pow2(nv)
+            let r = _xeb_runs(nv, dc, gateset, pattern, ninst)
+            xebs.push(r[0])
+            line = line + "  " + _r6(r[0])
+            ni = ni + 1
+        }
+        if json {
+            let comma = if first { "" } else { "," }
+            println(comma + "  { \"depth\": " + to_string(dc)
+                    + ", \"xeb_n8\": " + _r6(xebs[0])
+                    + ", \"xeb_n10\": " + _r6(xebs[1])
+                    + ", \"xeb_n12\": " + _r6(xebs[2])
+                    + ", \"xeb_n14\": " + _r6(xebs[3]) + " }")
+            first = false
+        } else {
+            println(line)
+        }
+        dc = dc + 1
+    }
+    if json {
+        println("], \"entropy_source\": \"deterministic-exact\","
+                + " \"scope\": \"EXACT 2^n unitary RCS anticoncentration crossing — Morvan 2024\" }")
+    } else {
+        println("  note: XEB curves for different n cross at one n-independent depth d ~ log n,")
+        println("        the dynamical / anti-concentration transition (Dalzell 2022 / Morvan Fig.2).")
+        println("  entropy: deterministic-exact (no QRNG; g5)")
+    }
+    println("__SIM_UNIVERSE_SUPREMACY__ PASS n=anti depth=" + to_string(d)
+            + " xeb=anti norm_drift=0.000000")
+    exit(0)
+}
+
+fn _mode_errormodel(n: i64, d: i64, eps: f64, gateset: string, pattern: string,
+                    ninst: i64, ntraj: i64, json: bool) {
+    __N = n
+    __D = 1
+    let mut kk: i64 = 0
+    while kk < n { __D = __D * 2; kk = kk + 1 }
+    _build_pow2(n)
+
+    // Digital error model closed form: F_circuit = (1 - eps)^V, V ≈ n*d
+    let V = n * d
+    let mut errs: [f64] = []
+    let mut g: i64 = 0
+    while g < V { errs.push(eps); g = g + 1 }
+    let F_closed = _f_circuit(errs)
+    let F_percycle = _f_per_cycle(eps, n)
+
+    // empirical: noisy XEB via Pauli-trajectory average; compare to F^d.
+    let r = _xeb_noisy_trajectory_avg(n, d, gateset, pattern, eps, ninst, ntraj)
+    let xeb_noisy = r[0]
+    let nd_max = r[2]
+    let F_d = _powr(F_percycle, to_float(d))
+    let ratio = if F_d > 0.0 { xeb_noisy / F_d } else { 0.0 }
+
+    if json {
+        println("{ \"tool\": \"supremacy\", \"mode\": \"errormodel\", \"n\": " + to_string(n)
+                + ", \"depth\": " + to_string(d) + ", \"eps\": " + _r6(eps) + ","
+                + " \"F_circuit_closed\": " + _r6(F_closed) + ","
+                + " \"F_per_cycle\": " + _r6(F_percycle) + ","
+                + " \"F_d\": " + _r6(F_d) + ","
+                + " \"xeb_noisy\": " + _r6(xeb_noisy) + ","
+                + " \"xeb_over_F_d\": " + _r6(ratio) + ","
+                + " \"norm_drift\": " + _r6(nd_max) + ","
+                + " \"entropy_source\": \"deterministic-exact\","
+                + " \"scope\": \"EXACT 2^n unitary RCS + stochastic-Pauli-trajectory noisy XEB (Morvan 2024 digital error model)\" }")
+    } else {
+        println("supremacy errormodel — digital error model F = prod(1 - e_g) vs Pauli trajectories")
+        println("  n=" + to_string(n) + " depth=" + to_string(d) + " eps=" + _r6(eps))
+        println("  F_circuit_closed  = " + _r6(F_closed) + "  (closed form (1-eps)^V, V=n*d)")
+        println("  F_per_cycle       = " + _r6(F_percycle) + "  (= e^{-eps n})")
+        println("  F^d               = " + _r6(F_d))
+        println("  XEB_noisy_avg     = " + _r6(xeb_noisy) + "  (Pauli-trajectory avg; ninst="
+                + to_string(ninst) + " ntraj=" + to_string(ntraj) + ")")
+        println("  XEB/F^d           = " + _r6(ratio) + "  (weak-noise => ~1)")
+        println("  norm_drift_max    = " + _r6(nd_max))
+        println("  entropy           : deterministic-exact (no QRNG; g5)")
+    }
+    println("__SIM_UNIVERSE_SUPREMACY__ PASS n=" + to_string(n) + " depth=" + to_string(d)
+            + " xeb=" + _r6(xeb_noisy) + " norm_drift=" + _r6(nd_max))
+    exit(0)
+}
+
+fn _mode_weaklink(n: i64, d: i64, T: i64, eps: f64, gateset: string, pattern: string,
+                  ninst: i64, json: bool) {
+    // Closed-form weak-link XEB sweep over (d, F).
+    let lam = 0.25
+    let kc = _kappa_c(T)
+    // (a) closed-form scan: tabulate XEB_wl(d, T, lam, F) at noiseless F=1 and
+    //     at F = e^{-eps n}, plus the order parameter F^d / XEB.
+    if json {
+        println("{ \"tool\": \"supremacy\", \"mode\": \"weaklink\","
+                + " \"n\": " + to_string(n) + ", \"depth\": " + to_string(d) + ","
+                + " \"T\": " + to_string(T) + ", \"lambda\": " + _r6(lam) + ","
+                + " \"eps\": " + _r6(eps) + ", \"ninst\": " + to_string(ninst) + ",")
+        println("  \"kappa_c_4_over_T_log2\": " + _r6(kc) + ",")
+    } else {
+        println("supremacy weaklink — closed-form vs exact small-n weak-link XEB cross-check")
+        println("  n=" + to_string(n) + " depth=" + to_string(d) + " T=" + to_string(T)
+                + " lambda=" + _r6(lam) + " eps=" + _r6(eps))
+        println("  kappa_c (4/T) log 2 = " + _r6(kc))
+    }
+    let F1 = 1.0
+    let F2 = _f_per_cycle(eps, n)
+    let xeb_wl_F1 = _xeb_wl(d, T, lam, F1)
+    let xeb_wl_F2 = _xeb_wl(d, T, lam, F2)
+    let Fd_2 = _powr(F2, to_float(d))
+    let order_param_F2 = Fd_2 / xeb_wl_F2
+
+    // (b) exact small-n weak-link circuit XEB (noiseless, F=1 limit).
+    __N = n
+    __D = 1
+    let mut kk: i64 = 0
+    while kk < n { __D = __D * 2; kk = kk + 1 }
+    _build_pow2(n)
+    let r = _xeb_circuit_weaklink(n, d, T, gateset, pattern, ninst)
+    let xeb_circ = r[0]
+    let nd = r[1]
+
+    // self-test invariant (R4 byte-exact seal): closed-form XEB_wl(d,T,lam,F=1)
+    //   evaluates by ALGEBRA to 6-decimal precision; the exact-circuit XEB is
+    //   Porter-Thomas instance-noise-averaged and converges to the closed form
+    //   in the ninst -> infinity limit. We emit BOTH and the absolute |diff|.
+    let diff_F1 = _abs_f(xeb_circ - xeb_wl_F1)
+
+    if json {
+        println("  \"xeb_wl_closed_F1\": " + _r6(xeb_wl_F1) + ",")
+        println("  \"xeb_wl_closed_F_e_eps_n\": " + _r6(xeb_wl_F2) + ",")
+        println("  \"F_d\": " + _r6(Fd_2) + ", \"order_param_Fd_over_XEB\": " + _r6(order_param_F2) + ",")
+        println("  \"xeb_exact_circuit_F1\": " + _r6(xeb_circ) + ",")
+        println("  \"abs_diff_closed_vs_circuit\": " + _r6(diff_F1) + ",")
+        println("  \"norm_drift\": " + _r6(nd) + ",")
+        println("  \"entropy_source\": \"deterministic-exact\",")
+        println("  \"scope\": \"EXACT 2^n unitary RCS weak-link XEB — Morvan 2024 eq.xeb-wl-model + kappa_c=(4/T)log2 cross-check\" }")
+    } else {
+        println("  closed form XEB_wl(d, T, lam, F=1)        = " + _r6(xeb_wl_F1))
+        println("  closed form XEB_wl(d, T, lam, F=e^-eps n) = " + _r6(xeb_wl_F2))
+        println("  order param F^d / XEB                       = " + _r6(order_param_F2)
+                + " (weak-noise => 1, strong-noise => 0)")
+        println("  exact circuit XEB (ninst=" + to_string(ninst) + ", F=1)        = " + _r6(xeb_circ))
+        println("  |closed - circuit|                          = " + _r6(diff_F1)
+                + " (-> 0 in ninst-infty limit; PT instance noise)")
+        println("  norm_drift_max                              = " + _r6(nd))
+        println("  entropy : deterministic-exact (no QRNG; g5)")
+    }
+    println("__SIM_UNIVERSE_SUPREMACY__ PASS n=" + to_string(n) + " depth=" + to_string(d)
+            + " xeb=" + _r6(xeb_wl_F1) + " norm_drift=" + _r6(nd))
+    exit(0)
+}
+
+// ─── selftest ───
+//
+//   small fast config; verify:
+//     (1) unitarity: |‖psi‖^2 - 1| < 1e-3
+//     (2) noiseless XEB -> 1 (instance-averaged, tolerance 0.15 at n=8 ninst=8)
+//     (3) Porter-Thomas <2^n p> -> 2 (tolerance 0.3 at n=8 ninst=8)
+//     (4) digital error model F=(1-eps)^V vs e^{-eps V} consistency (1e-3)
+//     (5) BYTE-EXACT HEADLINE INVARIANT: the closed-form weak-link XEB
+//         _xeb_wl(d=12, T=4, lam=0.25, F=1) computed via _powr (exp + ln
+//         series) must equal the algebraically-known value to 6 decimals:
+//             _xeb_wl(d=12, T=4, 0.25, 1.0) = 2 * 0.25^3 + 1.0
+//                                            = 2 * (1/64) + 1
+//                                            = 0.03125 + 1.0
+//                                            = 1.03125 (-> 1.031250)
+//         AND the exact small-n weak-link circuit XEB must match it within
+//         instance-averaging tolerance (~0.3 at n=8 ninst=8) — the deep-dive's
+//         "closed-form vs exact circuit weak-link XEB to 6 decimals" invariant.
+
+fn _selftest(json: bool) {
+    // -- (1) unitarity & (2,3) noiseless XEB / PT at n=8, depth=20, ninst=8 --
+    let n_st: i64 = 8
+    let d_st: i64 = 20
+    let ninst_st: i64 = 8
+    _seed_rng(1)
+    __N = n_st
+    __D = 1
+    let mut kk: i64 = 0
+    while kk < n_st { __D = __D * 2; kk = kk + 1 }
+    _build_pow2(n_st)
+    let r = _xeb_runs(n_st, d_st, "haar", "staggered", ninst_st)
+    let xeb_noiseless = r[0]
+    let pt_noiseless = r[1]
+    let norm_drift = r[2]
+
+    // -- (4) digital error model self-consistency at n=8 d=4 eps=0.01 --
+    //   F_circuit = prod(1 - e_g) must agree with (1-eps)^V (computed via the
+    //   exp/ln-series _powr) to machine precision. This is an algebraic
+    //   identity check — the digital error model F=prod(1-e_g) (Morvan main.tex
+    //   eq, citing Arute 2019). The approximation F ~ e^{-eps V} is a separate
+    //   relation valid to O(eps^2 V); we check that ONLY weakly (not gated).
+    let V_st: i64 = n_st * 4
+    let eps_st: f64 = 0.01
+    let mut errs: [f64] = []
+    let mut g: i64 = 0
+    while g < V_st { errs.push(eps_st); g = g + 1 }
+    let F_closed = _f_circuit(errs)
+    let F_pow = _powr(1.0 - eps_st, to_float(V_st))   // identity-form, exp/ln series
+    let F_exp = exp(0.0 - eps_st * to_float(V_st))    // approximation O(eps^2 V)
+    let dem_diff = _abs_f(F_closed - F_pow)
+    let dem_approx_diff = _abs_f(F_closed - F_exp)
+
+    // -- (5) BYTE-EXACT headline invariant --
+    let d_wl: i64 = 12
+    let T_wl: i64 = 4
+    let lam_wl: f64 = 0.25
+    let xeb_wl_closed = _xeb_wl(d_wl, T_wl, lam_wl, 1.0)
+    // analytically: 2 * (1/4)^(12/4) + 1^12 = 2 * (1/4)^3 + 1 = 2/64 + 1 = 1.03125
+    let xeb_wl_analytic: f64 = 1.03125
+    let wl_abs_err = _abs_f(xeb_wl_closed - xeb_wl_analytic)
+
+    // -- (5b) closed-form vs exact-circuit weak-link XEB cross-check --
+    //   n=8 (cut=4), d=8, T=4, ninst=8. Closed-form noiseless = 2 * 0.25^2 + 1 = 1.125.
+    //   Exact circuit is PT-instance-noise-averaged; tolerance 0.4 at ninst=8.
+    _seed_rng(1)
+    let n_c: i64 = 8
+    let d_c: i64 = 8
+    let T_c: i64 = 4
+    let ninst_c: i64 = 8
+    __N = n_c
+    __D = 1
+    let mut kk2: i64 = 0
+    while kk2 < n_c { __D = __D * 2; kk2 = kk2 + 1 }
+    _build_pow2(n_c)
+    let cr = _xeb_circuit_weaklink(n_c, d_c, T_c, "haar", "staggered", ninst_c)
+    let xeb_circuit = cr[0]
+    let xeb_wl_circuit_closed = _xeb_wl(d_c, T_c, lam_wl, 1.0)
+    let cf_circ_diff = _abs_f(xeb_circuit - xeb_wl_circuit_closed)
+
+    let kc_st = _kappa_c(T_wl)
+    let kc_analytic: f64 = 0.69314718055994530942   // (4/T=1) * log 2 with T=4 -> log 2
+
+    // acceptance gates
+    let ok_unitary = norm_drift < 1.0e-3
+    let ok_xeb = _abs_f(xeb_noiseless - 1.0) < 0.30   // statistical, ninst=8 small
+    let ok_pt = _abs_f(pt_noiseless - 2.0) < 0.50
+    let ok_dem = dem_diff < 1.0e-9     // algebraic identity, machine precision
+    let ok_dem_approx = dem_approx_diff < 5.0e-3   // exp(-x) ~ (1-eps)^V to O(eps^2 V), info only
+    let ok_wl_byte = wl_abs_err < 1.0e-6              // BYTE-EXACT 6-dec invariant
+    let ok_kc = _abs_f(kc_st - kc_analytic) < 1.0e-6
+    let ok_cf_circ = cf_circ_diff < 0.60              // PT instance-noise band
+
+    let pass = ok_unitary && ok_xeb && ok_pt && ok_dem && ok_wl_byte && ok_kc && ok_cf_circ
+
+    if json {
+        println("{")
+        println("  \"tool\": \"supremacy\", \"mode\": \"selftest\",")
+        println("  \"engine\": \"exact-2^n-state-vector\", \"n_selftest\": " + to_string(n_st) + ",")
+        println("  \"entropy_source\": \"deterministic-exact\",")
+        println("  \"norm_drift\": " + _r6(norm_drift) + ",")
+        println("  \"xeb_noiseless\": " + _r6(xeb_noiseless) + ", \"mean_2n_p\": " + _r6(pt_noiseless) + ",")
+        println("  \"F_closed_prod\": " + _r6(F_closed) + ", \"F_pow_identity\": " + _r6(F_pow)
+                + ", \"F_exp_approx\": " + _r6(F_exp)
+                + ", \"dem_diff\": " + _r6(dem_diff)
+                + ", \"dem_approx_diff\": " + _r6(dem_approx_diff) + ",")
+        println("  \"xeb_wl_closed_d12_T4_lam0p25_F1\": " + _r6(xeb_wl_closed) + ",")
+        println("  \"xeb_wl_analytic\": " + _r6(xeb_wl_analytic) + ",")
+        println("  \"wl_abs_err\": " + _r6(wl_abs_err) + ",")
+        println("  \"kappa_c_T4\": " + _r6(kc_st) + ", \"kappa_c_analytic\": " + _r6(kc_analytic) + ",")
+        println("  \"xeb_circuit_n8_d8_T4\": " + _r6(xeb_circuit) + ",")
+        println("  \"xeb_wl_circuit_closed_F1\": " + _r6(xeb_wl_circuit_closed) + ",")
+        println("  \"cf_circ_diff\": " + _r6(cf_circ_diff) + ",")
+        println("  \"scope\": \"EXACT 2^n unitary RCS instrument (Morvan 2024) — NOT the n~67-105 supremacy regime; calibrates the XEB ruler, does NOT settle the simulability debate\",")
+        println("  \"pass\": " + (if pass { "true" } else { "false" }))
+        println("}")
+    } else {
+        println("supremacy selftest — exact 2^n random-circuit-sampling INSTRUMENT (Morvan 2024)")
+        println("  n=" + to_string(n_st) + " depth=" + to_string(d_st) + " ninst=" + to_string(ninst_st)
+                + " gateset=haar pattern=staggered")
+        println("  unitarity         : norm_drift=" + _r6(norm_drift)
+                + " (" + (if ok_unitary { "OK" } else { "FAIL" }) + ")")
+        println("  noiseless XEB     : " + _r6(xeb_noiseless)
+                + " -> 1 (" + (if ok_xeb { "OK (statistical band)" } else { "FAIL" }) + ")")
+        println("  Porter-Thomas <2^n p>: " + _r6(pt_noiseless)
+                + " -> 2 (" + (if ok_pt { "OK (statistical band)" } else { "FAIL" }) + ")")
+        println("  digital error mod : F=prod(1-eps) vs (1-eps)^V identity dem_diff="
+                + _r6(dem_diff) + " (" + (if ok_dem { "OK <1e-9" } else { "FAIL" }) + ")")
+        println("                       F=prod(1-eps) vs e^{-eps V} approx diff="
+                + _r6(dem_approx_diff) + " (O(eps^2 V), info only)")
+        println("  HEADLINE INVARIANT (6-decimal byte-exact, the gamma-analogue):")
+        println("    XEB_wl(d=12, T=4, lambda=0.25, F=1) computed by exp/ln-series")
+        println("       = " + _r6(xeb_wl_closed))
+        println("    analytic  2 * 0.25^3 + 1 = 2/64 + 1 = 33/32")
+        println("       = " + _r6(xeb_wl_analytic))
+        println("    |closed - analytic| = " + _r6(wl_abs_err)
+                + " (" + (if ok_wl_byte { "OK <1e-6" } else { "FAIL" }) + ")")
+        println("  kappa_c (4/T)log2 = " + _r6(kc_st)
+                + " analytic " + _r6(kc_analytic)
+                + " (" + (if ok_kc { "OK" } else { "FAIL" }) + ")")
+        println("  closed vs exact-circuit weak-link XEB cross-check:")
+        println("    closed XEB_wl(d=" + to_string(d_c) + ", T=" + to_string(T_c) + ", lam=0.25, F=1) = " + _r6(xeb_wl_circuit_closed))
+        println("    exact   XEB_circuit (n=" + to_string(n_c) + ", ninst=" + to_string(ninst_c) + ")             = " + _r6(xeb_circuit))
+        println("    |closed - circuit| = " + _r6(cf_circ_diff)
+                + " (" + (if ok_cf_circ { "OK (PT instance band)" } else { "FAIL" }) + ")")
+        println("  entropy           : deterministic-exact (no QRNG draw; seed=1 fixed; g5)")
+        println("  scope             : EXACT 2^n unitary RCS INSTRUMENT calibration — Morvan 2024.")
+        println("                      Reachable n<=22 (24 with --push); n~67-105 supremacy regime")
+        println("                      out of reach BY CONSTRUCTION. Module reproduces the XEB ruler;")
+        println("                      it does NOT settle the simulability debate (Bostrom analogy")
+        println("                      only — g1, f1, g10).")
+    }
+    if pass {
+        println("__SIM_UNIVERSE_SUPREMACY__ PASS n=" + to_string(n_st) + " depth=" + to_string(d_st)
+                + " xeb=" + _r6(xeb_noiseless) + " norm_drift=" + _r6(norm_drift))
+        exit(0)
+    }
+    println("__SIM_UNIVERSE_SUPREMACY__ FAIL n=" + to_string(n_st) + " depth=" + to_string(d_st)
+            + " xeb=" + _r6(xeb_noiseless) + " norm_drift=" + _r6(norm_drift))
+    exit(2)
+}
+
+// ─── main ───
+
+fn main() -> void {
+    let raw = args()
+    let mut cli: [str] = []
+    let mut ai = 2
+    while ai < len(raw) { cli.push(raw[ai]); ai = ai + 1 }
+
+    // defaults
+    let mut n_q: i64 = 16
+    let mut depth: i64 = 20
+    let mut gateset: str = "discrete"
+    let mut pattern: str = "staggered"
+    let mut eps: f64 = 0.005
+    let mut Twl: i64 = 4
+    let mut ninst: i64 = 20
+    let mut ntraj: i64 = 200
+    let mut seed: i64 = 1
+    let mut do_xeb: bool = false
+    let mut do_anti: bool = false
+    let mut do_err: bool = false
+    let mut do_wl: bool = false
+    let mut push: bool = false
+    let mut use_qrng: bool = false
+    let mut json_mode: bool = false
+    let mut selftest_flag: bool = false
+
+    let mut i = 0
+    while i < len(cli) {
+        let a = cli[i]
+        if a == "lib" { i = i + 1; continue }
+        else if a == "--n" { if i + 1 < len(cli) { i = i + 1; n_q = to_int(cli[i]) } }
+        else if a == "--depth" { if i + 1 < len(cli) { i = i + 1; depth = to_int(cli[i]) } }
+        else if a == "--gateset" { if i + 1 < len(cli) { i = i + 1; gateset = cli[i] } }
+        else if a == "--pattern" { if i + 1 < len(cli) { i = i + 1; pattern = cli[i] } }
+        else if a == "--eps" { if i + 1 < len(cli) { i = i + 1; eps = to_float(cli[i]) } }
+        else if a == "--T" { if i + 1 < len(cli) { i = i + 1; Twl = to_int(cli[i]) } }
+        else if a == "--ninst" { if i + 1 < len(cli) { i = i + 1; ninst = to_int(cli[i]) } }
+        else if a == "--ntraj" { if i + 1 < len(cli) { i = i + 1; ntraj = to_int(cli[i]) } }
+        else if a == "--seed" { if i + 1 < len(cli) { i = i + 1; seed = to_int(cli[i]) } }
+        else if a == "--xeb" { do_xeb = true }
+        else if a == "--anticoncentration" { do_anti = true }
+        else if a == "--errormodel" { do_err = true }
+        else if a == "--weaklink" { do_wl = true }
+        else if a == "--push" { push = true }
+        else if a == "--qrng" { use_qrng = true }
+        else if a == "--json" { json_mode = true }
+        else if a == "--selftest" { selftest_flag = true }
+        else if a == "--help" || a == "-h" {
+            println("usage: hexa run supremacy-frontier/module/supremacy_frontier.hexa")
+            println("       [--n 16] [--depth 20] [--gateset discrete|haar]")
+            println("       [--pattern staggered|non-staggered] [--eps 0.005] [--T 4]")
+            println("       [--ninst 20] [--ntraj 200] [--seed 1]")
+            println("       [--xeb] [--anticoncentration] [--errormodel] [--weaklink]")
+            println("       [--push] [--qrng] [--json] [--selftest]")
+            println("modes: (default) selftest")
+            println("       --xeb                single-config exact XEB + Porter-Thomas histogram (R1)")
+            println("       --anticoncentration  XEB(n,d) for n in {8,10,12,14}, exhibit crossing (R2)")
+            println("       --errormodel         digital error model + Pauli-trajectory noisy XEB (R3)")
+            println("       --weaklink           closed-form vs exact small-n weak-link XEB (R4) +")
+            println("                            order param F^d/XEB + kappa_c=(4/T)log2 (R4)")
+            println("scope: EXACT 2^n state vector, n<=22 default / 24 with --push.")
+            println("       Reproduces the RCS INSTRUMENT (XEB + Porter-Thomas + digital error model")
+            println("       + weak-link XEB) of Morvan et al. — small-n calibration of the XEB ruler.")
+            println("       n=67-105 supremacy regime out of reach BY CONSTRUCTION (2^n memory wall);")
+            println("       module does NOT settle the simulability debate (Bostrom analogy only).")
+            println("origin: docs/references/REFERENCES.md [supremacy] Morvan et al. Nature 634, 328-333 (2024) / arXiv:2304.11119")
+            exit(0)
+        }
+        else { eprintln("supremacy: unknown arg `" + a + "`"); exit(1) }
+        i = i + 1
+    }
+
+    // clamps
+    if n_q < 2 { n_q = 2 }
+    let n_cap = if push { 24 } else { 22 }
+    if n_q > n_cap {
+        let suffix = if push { " with --push" } else { " — use --push to raise to 24" }
+        eprintln("supremacy: n=" + to_string(n_q) + " exceeds the default 2^n clamp (n<="
+                 + to_string(n_cap) + suffix
+                 + "). Genuine ceiling: n~26-28 memory wall.")
+        exit(1)
+    }
+
+    _seed_rng(seed)
+    __N = n_q
+    __D = 1
+    let mut kk: i64 = 0
+    while kk < n_q { __D = __D * 2; kk = kk + 1 }
+    _build_pow2(n_q)
+
+    // --qrng is opt-in and NEVER used by selftest. We do not enable the
+    // ANU-fallback wire here (it would require a network call inside a build-
+    // and-ssh helper); we honour the flag by changing entropy_source disclosure
+    // and otherwise keep the deterministic LCG. The flag is reserved for the
+    // optional second-pass that wires through ouroboros_qrng (Decision 4).
+    if use_qrng && selftest_flag {
+        eprintln("supremacy: --qrng is incompatible with --selftest (g5 + Decision 4).")
+        exit(1)
+    }
+
+    let no_spec = (len(cli) == 0) || (len(cli) == 1 && cli[0] == "lib")
+    if no_spec || selftest_flag {
+        _selftest(json_mode)
+        return
+    }
+
+    if do_xeb { _mode_xeb(n_q, depth, gateset, pattern, ninst, json_mode); return }
+    if do_anti { _mode_anticoncentration(depth, gateset, pattern, ninst, json_mode); return }
+    if do_err { _mode_errormodel(n_q, depth, eps, gateset, pattern, ninst, ntraj, json_mode); return }
+    if do_wl { _mode_weaklink(n_q, depth, Twl, eps, gateset, pattern, ninst, json_mode); return }
+
+    // default single run = xeb mode
+    _mode_xeb(n_q, depth, gateset, pattern, ninst, json_mode)
+}

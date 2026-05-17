@@ -1,0 +1,227 @@
+// sim_bridge/multiverse/phase1/fisher_combine.hexa
+//   Fisher's method for combining N independent p-values.
+//   X² = -2 Σ ln(p_i) ~ χ²(2N) under H0.
+//   p_combined = 1 - CDF_χ²(X², 2N)
+//
+// Input: JSONL file with one line per trial KS result, expected field "p_scaled".
+// Output: JSON with fisher_X2, fisher_df, fisher_p_scaled, min/max/mean input p.
+//
+// Usage:
+//   hexa fisher_combine.hexa <ks_results.jsonl> <out_json>
+
+const LOG_SCALE: i64 = 1000
+
+fn abs_i(x: i64) -> i64 { if x < 0 { return 0 - x } return x }
+
+// natural log (scaled * 1000) — accepts x ∈ (0, large]
+// returns ln(x_scaled / 1000) * 1000
+fn ln_scaled(x_scaled: i64) -> i64 {
+    if x_scaled <= 0 { return 0 - 30000 }   // -30 sentinel
+    // Range-reduce: x = 2^l2 * (1+f), where (1+f) ∈ [1, 2). Then ln(x) = l2*ln(2) + ln(1+f).
+    // We operate on r = x_scaled / 1000 conceptually via shifting the integer.
+    let mut r = x_scaled
+    let mut l2: i64 = 0
+    if r >= LOG_SCALE {
+        while r >= (LOG_SCALE * 2) { r = r / 2; l2 = l2 + 1 }
+    } else {
+        while r * 2 <= LOG_SCALE { r = r * 2; l2 = l2 - 1 }
+    }
+    // Now r ∈ [LOG_SCALE/2, 2*LOG_SCALE). Normalize to (1+f) with f ∈ [-0.5, 1).
+    // ln(1+f) Taylor up to 5 terms: f - f²/2 + f³/3 - f⁴/4 + f⁵/5
+    let f = r - LOG_SCALE   // scaled *1000, f ∈ [-500, 1000)
+    let f2 = f * f / LOG_SCALE
+    let f3 = f2 * f / LOG_SCALE
+    let f4 = f3 * f / LOG_SCALE
+    let f5 = f4 * f / LOG_SCALE
+    let ln_one_plus_f = f - f2 / 2 + f3 / 3 - f4 / 4 + f5 / 5   // scaled *1000
+    // ln(2) * 1000 ≈ 693
+    let ln_total = l2 * 693 + ln_one_plus_f
+    return ln_total
+}
+
+// χ² survival function P(X² > x | df) via series expansion.
+// For large df, use gamma incomplete function. Simple: Wilson-Hilferty approx.
+//   Z = ((X/df)^(1/3) - (1 - 2/(9df))) / sqrt(2/(9df))
+//   p = 1 - Φ(Z)
+// Φ(Z) via Abramowitz-Stegun polynomial approx (accurate to 1e-7).
+//
+// All scaled * 1000 where sensible. Output: p_scaled ∈ [0, 1000].
+
+fn isqrt(n: i64) -> i64 {
+    if n <= 0 { return 0 }
+    if n < 4 { return 1 }
+    let mut x = n
+    let mut y = (x + 1) / 2
+    while y < x { x = y; y = (x + n / x) / 2 }
+    return x
+}
+
+// cube root via Newton's method, input scaled * 1000, output scaled * 1000
+fn icbrt_scaled(v_scaled: i64) -> i64 {
+    if v_scaled <= 0 { return 0 }
+    // solve y^3 = v_scaled * 1000^2  (so that (y/1000)^3 = v_scaled/1000)
+    let target = v_scaled * LOG_SCALE * LOG_SCALE
+    // initial guess: isqrt(v_scaled * 1000) as rough
+    let mut y = isqrt(v_scaled) * 10
+    if y < 1 { y = 1 }
+    // Newton: y_new = (2y + target/y²) / 3
+    let mut i = 0
+    while i < 50 {
+        if y <= 0 { y = 1 }
+        let y2 = y * y
+        if y2 <= 0 { break }
+        let y_new = (2 * y + target / y2) / 3
+        if abs_i(y_new - y) < 1 { y = y_new; break }
+        y = y_new
+        i = i + 1
+    }
+    return y
+}
+
+// Standard normal CDF Φ(z), input z_scaled (*1000), output p_scaled (*1000)
+// Abramowitz-Stegun 26.2.17: Φ(z) = 1 - φ(z) * (b1*k + b2*k² + b3*k³ + b4*k⁴ + b5*k⁵), k=1/(1+0.2316419z)
+// for z >= 0. For z < 0, Φ(z) = 1 - Φ(-z).
+fn phi_cdf(z_scaled: i64) -> i64 {
+    let mut z = z_scaled
+    let mut neg = false
+    if z < 0 { z = 0 - z; neg = true }
+    // φ(z) = (1/√(2π)) * exp(-z²/2), scaled*1000.  1/√(2π) ≈ 398.942/1000
+    let z_sq = z * z / LOG_SCALE   // z² * 1000
+    let half_z_sq = z_sq / 2
+    // exp(-half_z_sq / 1000) scaled *1000
+    // reuse exp_neg similar to ks_test.hexa
+    let mut e: i64 = 1000
+    if half_z_sq < 20000 {
+        let k_int = half_z_sq / 1000
+        let r = half_z_sq - k_int * 1000
+        let mut eneg_k: i64 = 1000
+        let mut ik = 0
+        while ik < k_int { eneg_k = eneg_k * 368 / 1000; if eneg_k <= 0 { eneg_k = 0; break } ik = ik + 1 }
+        let r2 = r * r / 1000
+        let r3 = r2 * r / 1000
+        let r4 = r3 * r / 1000
+        let mut eneg_r = 1000 - r + (r2 / 2) - (r3 / 6) + (r4 / 24)
+        if eneg_r < 0 { eneg_r = 0 }
+        if eneg_r > 1000 { eneg_r = 1000 }
+        e = eneg_k * eneg_r / 1000
+    } else { e = 0 }
+    let phi_z = 399 * e / 1000   // φ(z) scaled*1000, 1/√(2π) ≈ 0.3989
+    // k = 1 / (1 + 0.2316419 * z)
+    let denom = LOG_SCALE + (232 * z / 1000)   // 0.2316 ≈ 232/1000, denom scaled*1000
+    let k_val = LOG_SCALE * LOG_SCALE / denom   // k scaled*1000
+    let k2 = k_val * k_val / LOG_SCALE
+    let k3 = k2 * k_val / LOG_SCALE
+    let k4 = k3 * k_val / LOG_SCALE
+    let k5 = k4 * k_val / LOG_SCALE
+    // b1=0.319381530, b2=-0.356563782, b3=1.781477937, b4=-1.821255978, b5=1.330274429
+    // scaled*1000: b1=319, b2=-357, b3=1781, b4=-1821, b5=1330
+    let bracket = 319 * k_val / LOG_SCALE - 357 * k2 / LOG_SCALE + 1781 * k3 / LOG_SCALE - 1821 * k4 / LOG_SCALE + 1330 * k5 / LOG_SCALE
+    // 1 - Φ(z) = φ(z) * bracket
+    let tail = phi_z * bracket / LOG_SCALE
+    let cdf_pos = LOG_SCALE - tail
+    if neg { return LOG_SCALE - cdf_pos }
+    return cdf_pos
+}
+
+fn chi2_sf(x_scaled: i64, df: i64) -> i64 {
+    // Wilson-Hilferty: Z = ((x/df)^{1/3} - (1 - 2/(9df))) / sqrt(2/(9df))
+    // x_scaled = X² * 1000, df is raw integer. All intermediate scaled*1000.
+    if x_scaled <= 0 { return 1000 }
+    if df <= 0 { return 500 }
+    // x/df scaled*1000: x_scaled / df (since x_scaled IS X² * 1000 already)
+    let x_over_df = x_scaled / df
+    let cbrt_val = icbrt_scaled(x_over_df)       // (x/df)^(1/3) scaled*1000
+    // 2/(9df) scaled*1000
+    let two_over_9df = 2 * LOG_SCALE / (9 * df)
+    // 1 - 2/(9df) scaled*1000
+    let mean = LOG_SCALE - two_over_9df
+    // sqrt(2/(9df)) scaled*1000 = sqrt(two_over_9df * 1000)  (isqrt expects integer under root)
+    let sqrt_var = isqrt(two_over_9df * LOG_SCALE)
+    // Z = (cbrt_val - mean) / sqrt_var  scaled*1000
+    let mut z_scaled: i64 = 0
+    if sqrt_var > 0 {
+        z_scaled = (cbrt_val - mean) * LOG_SCALE / sqrt_var
+    }
+    // p = 1 - Φ(Z)
+    let cdf = phi_cdf(z_scaled)
+    let sf = LOG_SCALE - cdf
+    if sf < 0 { return 0 }
+    if sf > 1000 { return 1000 }
+    return sf
+}
+
+// Parse a naive JSON for p_scaled field (pattern match only).
+fn extract_p_scaled(line: string) -> i64 {
+    let key = "\"p_scaled\":"
+    let idx = line.index_of(key)
+    if idx < 0 { return 0 - 1 }
+    let rest = line.substring(idx + key.len(), line.len())
+    // read until comma or brace
+    let mut end = 0
+    while end < rest.len() {
+        let c = rest.substring(end, end + 1)
+        if c == "," || c == "}" || c == " " { break }
+        end = end + 1
+    }
+    let num_str = rest.substring(0, end).trim()
+    let mut v = 0
+    try { v = to_int(num_str) } catch e { v = 0 - 1 }
+    return v
+}
+
+// --- main ---
+let _args = args()
+if _args.len() < 4 {
+    println("usage: hexa fisher_combine.hexa <ks_results.jsonl> <out_json>")
+} else {
+    let ks_path = _args[2]
+    let out_path = _args[3]
+
+    let mut raw = ""
+    try { raw = read_file(ks_path) } catch e { raw = "" }
+    let lines = raw.split("\n")
+    let mut p_vals: [i64] = []
+    let mut i = 0
+    while i < lines.len() {
+        let line = lines[i].trim()
+        if line.len() > 0 {
+            let p = extract_p_scaled(line)
+            if p >= 0 { p_vals.push(p) }
+        }
+        i = i + 1
+    }
+    let N = p_vals.len()
+    println("[fisher] loaded " + to_string(N) + " p-values from " + ks_path)
+
+    if N == 0 {
+        let js = "{\"error\":\"no p-values found\",\"N\":0}\n"
+        try { write_file(out_path, js) } catch e {}
+    } else {
+        // X² = -2 Σ ln(p_i)  (use p_scaled/1000 as the input p)
+        // If any p_i == 0, guard with min_p = 1/1000 = 0.001 (avoid -inf)
+        let mut x2_scaled: i64 = 0
+        let mut min_p = 1001
+        let mut max_p: i64 = 0
+        let mut sum_p: i64 = 0
+        let mut k = 0
+        while k < N {
+            let p = p_vals[k]
+            let p_safe = if p < 1 { 1 } else { p }
+            let ln_p = ln_scaled(p_safe)   // ln(p_safe/1000) * 1000 = ln(p) * 1000 (p already fraction)
+            // actually p_vals[k] = p * 1000, and ln_scaled(p*1000)/1000 = ln(p), so this is correct
+            x2_scaled = x2_scaled - 2 * ln_p
+            if p < min_p { min_p = p }
+            if p > max_p { max_p = p }
+            sum_p = sum_p + p
+            k = k + 1
+        }
+        let mean_p = sum_p / N
+        let df = 2 * N
+        let fisher_p_scaled = chi2_sf(x2_scaled, df)
+
+        let js = "{\"N\":" + to_string(N) + ",\"fisher_X2_scaled\":" + to_string(x2_scaled) + ",\"fisher_df\":" + to_string(df) + ",\"fisher_p_scaled\":" + to_string(fisher_p_scaled) + ",\"min_p_scaled\":" + to_string(min_p) + ",\"max_p_scaled\":" + to_string(max_p) + ",\"mean_p_scaled\":" + to_string(mean_p) + ",\"scale\":1000,\"note\":\"Fisher method: X2 = -2*sum(ln(p)), p ~ chi2(2N). All scaled *1000.\"}\n"
+        try { write_file(out_path, js) } catch e {}
+        println("[fisher] N=" + to_string(N) + " X2=" + to_string(x2_scaled) + " df=" + to_string(df) + " p=" + to_string(fisher_p_scaled))
+        println("[fisher] wrote " + out_path)
+    }
+}

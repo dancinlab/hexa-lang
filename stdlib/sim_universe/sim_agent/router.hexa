@@ -1,0 +1,134 @@
+#!hexa strict
+// nexus/core/sim/router.hexa — config-driven sim backend selection + fallback
+//
+// @tool(slug="sim_router", desc="config + env priority router for sim backends. Reads NEXUS_SIM_SOURCE / NEXUS_SIM_FALLBACK_CHAIN.")
+// @usage(hexa run nexus/core/sim/router.hexa --selftest)
+// @sentinel(__SIM_ROUTER__ <PASS|FAIL>)
+// @resolver-bypass(reason="dry-run only in selftest.")
+//
+// Default chain: sim_agent → sim_substrate → sim_close_loop
+
+struct SimState {
+    op:           str,
+    grid_path:    str,
+    tick:         int,
+    seed:         int,
+    dry_run:      int
+}
+
+struct SimResult {
+    ok:           int,
+    sentinel:     str,
+    op:           str,
+    ticks_done:   int,
+    grid_hash:    str,
+    message:      str
+}
+
+fn sim_result_fail(reason: str) -> SimResult {
+    return SimResult { ok: 0, sentinel: "", op: "", ticks_done: 0, grid_hash: "", message: reason }
+}
+
+fn sim_result_ok(sentinel: str, op: str, ticks: int, grid_hash: str, msg: str) -> SimResult {
+    return SimResult { ok: 1, sentinel: sentinel, op: op, ticks_done: ticks, grid_hash: grid_hash, message: msg }
+}
+
+fn _route_dispatch(name: str, state: SimState) -> SimResult {
+    if name == "sim_agent" {
+        if state.dry_run == 1 { return sim_result_ok("__SIM_AGENT__ DRY", "step", state.tick, "", "sim_agent: ok") }
+        return sim_result_fail("sim_agent: live deferred to wrapper module")
+    }
+    if name == "sim_close_loop" {
+        return sim_result_fail("sim_close_loop: STUB — closed-loop spec pending")
+    }
+    if name == "sim_substrate" {
+        if state.dry_run == 1 { return sim_result_ok("__SIM_SUBSTRATE__ DRY", "ingest", 0, "", "sim_substrate: ok") }
+        return sim_result_fail("sim_substrate: live deferred to wrapper module")
+    }
+    return sim_result_fail("unknown backend: " + name)
+}
+
+fn sim_default_chain() -> [str] {
+    let mut a = []
+    a = a.push("sim_agent")
+    a = a.push("sim_substrate")
+    a = a.push("sim_close_loop")
+    return a
+}
+
+fn sim_resolve_chain() -> [str] {
+    let single = exec("printenv NEXUS_SIM_SOURCE 2>/dev/null || true").trim()
+    if len(single) > 0 {
+        let mut a = []
+        a = a.push(single)
+        return a
+    }
+    let chain = exec("printenv NEXUS_SIM_FALLBACK_CHAIN 2>/dev/null || true").trim()
+    if len(chain) > 0 {
+        let parts = chain.split(",")
+        let mut a = []
+        let mut i = 0
+        while i < len(parts) {
+            let p = parts[i].trim()
+            if len(p) > 0 { a = a.push(p) }
+            i = i + 1
+        }
+        if len(a) > 0 { return a }
+    }
+    return sim_default_chain()
+}
+
+struct SimRouteResult {
+    final_backend: str,
+    attempts:      [str],
+    reasons:       [str],
+    result:        SimResult
+}
+
+fn sim_route_dispatch(state: SimState) -> SimRouteResult {
+    let chain = sim_resolve_chain()
+    let mut attempts = []
+    let mut reasons = []
+    let mut i = 0
+    while i < len(chain) {
+        let name = chain[i]
+        attempts = attempts.push(name)
+        let r = _route_dispatch(name, state)
+        if r.ok == 1 {
+            reasons = reasons.push("ok")
+            return SimRouteResult { final_backend: name, attempts: attempts, reasons: reasons, result: r }
+        }
+        reasons = reasons.push(r.message)
+        i = i + 1
+    }
+    return SimRouteResult { final_backend: "", attempts: attempts, reasons: reasons, result: sim_result_fail("router: all backends failed") }
+}
+
+fn _selftest() -> int {
+    let dc = sim_default_chain()
+    if len(dc) != 3 { return 0 }
+    if dc[0] != "sim_agent" { return 0 }
+    let s = SimState { op: "step", grid_path: "", tick: 1, seed: 42, dry_run: 1 }
+    let r1 = _route_dispatch("sim_agent", s)
+    if r1.ok != 1 { return 0 }
+    let r2 = _route_dispatch("not_a_backend", s)
+    if r2.ok != 0 { return 0 }
+    let route = sim_route_dispatch(s)
+    if route.result.ok != 1 { return 0 }
+    return 1
+}
+
+fn main() {
+    println("[sim/router] config-driven backend selection + fallback chain")
+    if _selftest() == 1 {
+        println("[sim/router] SELFTEST PASS")
+        println("__SIM_ROUTER__ PASS")
+    } else {
+        println("[sim/router] SELFTEST FAIL")
+        println("__SIM_ROUTER__ FAIL")
+    }
+    let s = SimState { op: "step", grid_path: "", tick: 1, seed: 42, dry_run: 1 }
+    let route = sim_route_dispatch(s)
+    println("[sim/router] route_dispatch demo")
+    println("[sim/router]   attempts=" + str(len(route.attempts)) + " final_backend=" + route.final_backend)
+}
