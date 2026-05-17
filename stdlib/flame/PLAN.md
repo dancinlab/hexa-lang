@@ -666,11 +666,28 @@ FAIL · BYTEEQ-PRESERVE 12-kernel oracle 여전히 dispatch 미포함(pending).
 follow-up 필요. campaign ~$9.8/11 fires.
 분석: `state/flame_phase4d7_gpu_fire_2026_05_17/PHASE4D7_FIRE11_ANALYSIS.md`.
 
-**다음 = RFC 057 (Bc device-authoritative matmul primitive
-restructure)** — fire #11 H100 교차검증이 measurement-anchor
-(design-first 아님). 공유 cuBLAS matmul primitive
-(`flame_phase4d6_matmul_primitives.c`, d=32 path 겸용)이 Bc 를
-host-side 로 씀 → device-authoritative 로 restructure 해야 RMSNorm/
-RoPE/attention slab 이 resident Bc 를 dev-view 소비 가능. 불변식:
-Phase 4-D-5-3 11/11 byte-eq oracle + F-RFC056-D32-BYTEEQ 절대 보존
-(matmul primitive 가 d=32 path 겸용 = 핵심 제약).
+**RFC 057 (Bc device-authoritative matmul primitive)** — fire #11
+H100 교차검증 anchor. spec `inbox/rfc_drafts_2026_05_12/rfc_057_*.md`.
+
+**RFC 057 §6.1 구현 LANDED (PARTIAL)** (`f15b6325`, cherry-pick of
+`bf9dc222`): cuBLAS matmul 출력 farr 를 `loc=DEVICE` 유지 (eager
+cudaFree 제거). F-RFC057-D32-BYTEEQ ✅ PASS (26/26 max|Δ|=0.0,
+revert+diff 3중 입증). §6.2 (Bc-slab dev-view consume) 는 차단 —
+`flame_proj_batch_generic_primitive` 가 projection 출력을
+`C[r·T+t]→Bc[t·d_out+r]` **host-side transpose-scatter** → Bc 가 매
+projection 후 host-authoritative.
+
+**fire #12 (RFC 057 §6.1, A100)**: `wall=600` step 1 미완, resident
+729 MiB. **§6.1 단독은 wall 1초도 못 옮김** — RFC 057 agent 진단을
+측정 확정. fire #9~#12 4연속 600s 미완 → residency 부분 증가(API·
+pin·§6.1)로는 불충분, host round-trip 완전 차단 필요. A100 dispatch
+필터(`bfaa711c`) 작동: #12 $0.17 (#11 H100 $1.22 대비 ~7×↓).
+분석: `state/flame_phase4d7_gpu_fire_2026_05_17/PHASE4D7_FIRE12_ANALYSIS.md`.
+
+**다음 = RFC 058 (forge transpose-scatter kernel)** — fire #12 가
+measurement-anchor. transpose-scatter (`C[r·T+t]→Bc[t·d_out+r]`)는
+순수 index permutation (부동소수점 연산 0) → byte-eq 자명 → verified
+forge kernel 도입 정당. device 에서 transpose-scatter → Bc fully
+device-authoritative → RFC 057 §6.2 잠금 해제. 정직 caveat: RFC 058
+후에도 attention causal-masked softmax 는 verified kernel 부재로 CPU
+잔존 가능 (RFC 057 §8.2) — 양파 한 겹 더 가능성, RFC 058 fire 가 판정.
