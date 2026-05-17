@@ -42,6 +42,15 @@
 
 (append-only)
 
+### 2026-05-17 — R7 게이트 ② 정정: `hexa.real` 은 이미 compiled CLI dispatcher
+배포 topology 정밀 조사 결과 — `~/.hx/bin/hexa` → repo `hexa` (bash shim) → `hexa.real`. `hexa.real` 은 `tool/build_dispatch.hexa` 가 `build/stage1/main.c` (= `self/main.hexa` 를 hexa_v2 transpile 한 것) 를 clang 컴파일한 **compiled 바이너리** (480 KB, strings 에 `0.1.0-dispatch` · `self/main.hexa::dispatch_absorbed` 확인).
+
+→ **게이트 ② (`hexa` CLI 드라이버 compiled) 는 이미 실질 충족** — `hexa build`/`parse`/`cc`/dispatch 는 compiled `hexa.real` 에서 동작 (interp 아님). `hexa run X.hexa` (스크립트 실행) 만 dispatcher 가 `hexa_interp.real` 로 위임.
+
+cli-driver sub-agent 의 실제 기여 = (a) `tool/build_hexa_cli.sh` canonical recipe, (b) `resolve_module_loader_compiled()` 와이어링 (게이트 ④ — flatten child 를 interp-free 로), (c) runtime.h fwd-decl 3개. 게이트 ②는 신규 달성이 아니라 기존 충족 상태 확인.
+
+**잔여 R7**: ① coverage (57%) · ④ deploy (compiled module_loader 배포 + hexa.real 재빌드 — `tool/build_dispatch.hexa` 루틴) · `hexa run` 스크립트 실행 경로의 interp 의존 (= 인터프리터 본체, 최종 삭제 트랙).
+
 ### 2026-05-17 — 60-smoke 재측정 (atlas SIGSEGV + CGFAIL fix 반영) — 34/60 (57%)
 atlas SIGSEGV fix (`589e7c6e`) + CGFAIL triage (`702fb30a`) 반영 aprime_cc (2,050,712 B) 60-smoke vs interp 재측정.
 
