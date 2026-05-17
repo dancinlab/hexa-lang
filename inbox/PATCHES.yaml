@@ -616,3 +616,595 @@
   status: pending_external
   opened: 2026-05-17
   detail: patches/chr-byte-vs-codepoint-asymmetry.md
+
+# ─── batch triage 2026-05-17 ──────────────────────────────────────────
+# 37 entries triaged from inbox/patches/ markdowns that had not yet been
+# tracked in this manifest. Per-entry status verified against on-disk
+# source files + git log. 28 applied · 5 pending_external · 4 spec.
+
+# ── wilson harness-cli upstream pass (2026-05-13) ────────────────────
+
+- id: wilson-build-broken-pool-openai-compat
+  source_commit: baa41c6a
+  source_files:
+    - self/codegen_c2.hexa
+  compiler_impact: |
+    float() builtin now intercepted as hexa_to_float(); pool plugin
+    forward-refs resolved as collateral.
+  downstream_consumer: |
+    wilson (provider-openai-compat + pool plugins build).
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/wilson-build-broken-pool-openai-compat.md
+
+- id: wilson-bytes-to-str-raw-allow-nul
+  source_commit: 89c8db54
+  source_files:
+    - self/runtime.c
+  compiler_impact: |
+    bytes_to_str_raw(arr) now allows embedded NUL; HX_STRLEN-aware
+    callers (image_read multimodal) work. Phase 1 guard dropped.
+  downstream_consumer: |
+    wilson tool-image (multimodal binary I/O).
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/wilson-bytes-to-str-raw-allow-nul.md
+
+- id: wilson-channel-symbol-collision
+  source_commit: ac7dc83e
+  source_files:
+    - self/native/thread.c
+  compiler_impact: |
+    pthread channel globals renamed channel_* -> thread_channel_* to
+    avoid collision with stdlib/channel.hexa FD-pipe API.
+  downstream_consumer: |
+    wilson parallel pool refactoring (stdlib/jsonl_pool + plugins/swarm).
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/wilson-channel-symbol-collision.md
+
+- id: wilson-fn-arena-escapes-on-push
+  source_commit: 7ced8229
+  source_files:
+    - self/runtime.c
+  compiler_impact: |
+    hexa_array_push promotes struct literals escaping fn-arena via
+    heapify; prevents use-after-free on cross-fn push.
+  downstream_consumer: |
+    wilson multi-turn tool-call iterator.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/wilson-fn-arena-escapes-on-push.md
+
+- id: wilson-lexer-tokenize-pub
+  source_commit: 7ced8229
+  source_files:
+    - self/lexer.hexa
+  compiler_impact: |
+    tokenize() promoted to pub; markdown syntax highlighter can now
+    import self/lexer.
+  downstream_consumer: |
+    wilson harness-cli markdown code-fence highlighter.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/wilson-lexer-tokenize-pub.md
+
+- id: wilson-mcp-needs-bidi-stdio
+  source_commit: f8216ef8
+  source_files:
+    - self/runtime.c
+    - self/codegen_c2.hexa
+  compiler_impact: |
+    Three new exec_stream primitives (open/write/close_stdin) enable
+    bidirectional subprocess JSON-RPC; unblocks MCP client.
+  downstream_consumer: |
+    wilson mcp plugin full client.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/wilson-mcp-needs-bidi-stdio.md
+
+- id: wilson-needs-time-now-ms-builtin
+  source_commit: f8216ef8
+  source_files:
+    - self/codegen_c2.hexa
+  compiler_impact: |
+    time_now_ms / now_ms / timestamp_ms map to hexa_time_ms();
+    ms-precision animation/throttling enabled.
+  downstream_consumer: |
+    wilson harness-cli spinner 200ms-cell tick.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/wilson-needs-time-now-ms-builtin.md
+
+- id: wilson-shift-enter-newline
+  source_commit: b22a0ccb
+  source_files:
+    - self/tui/input.hexa
+  compiler_impact: |
+    ESC+CR (alt+enter) decoded to ["key", -1, 0, 1, 0, ""]; enables
+    multi-line input on claude-code terminal-setup.
+  downstream_consumer: |
+    wilson harness-cli multi-line chat input.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/wilson-shift-enter-newline.md
+
+- id: wilson-shift-tab-csi-Z-decode
+  source_commit: 7ced8229
+  source_files:
+    - self/tui/input.hexa
+  compiler_impact: |
+    CSI Z (\e[Z) decoded as Tab with shift=1; enables Shift+Tab for
+    backward cycle in perm-mode UI.
+  downstream_consumer: |
+    wilson harness-cli permission-mode cycle.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/wilson-shift-tab-csi-Z-decode.md
+
+# ── TUI / term / text fixes (2026-05-12 ~ 05-16) ──────────────────────
+
+- id: self-stdlib-term-unicode-u8-decode-char-code-bug
+  source_commit: 07991501
+  source_files:
+    - self/stdlib/term_unicode.hexa
+  compiler_impact: |
+    Fixed wide-glyph width tracking — switched to 2-arg
+    char_code(s, idx) from char_code(s.substring()). No codegen change.
+  downstream_consumer: |
+    self/tui/render wide-glyph rendering (CJK/emoji).
+  status: applied
+  applied_at: 2026-05-12
+  opened: 2026-05-12
+  detail: patches/self-stdlib-term-unicode-u8-decode-char-code-bug.md
+
+- id: self-tui-render-wide-char-continuation-cell
+  source_commit: 67b99c13
+  source_files:
+    - self/tui/render.hexa
+    - self/tui/widget/text.hexa
+  compiler_impact: |
+    Diff loop skips continuation cells; text_draw no longer paints
+    continuation with caller attrs. Wide-glyph rendering correct.
+  downstream_consumer: |
+    Any hexa TUI with CJK/emoji; wilson harness-cli Korean input.
+  status: applied
+  applied_at: 2026-05-12
+  opened: 2026-05-12
+  detail: patches/self-tui-render-wide-char-continuation-cell.md
+
+- id: text-visual-width-ansi-aware
+  source_commit: 01a4d1db
+  source_files:
+    - self/tui/widget/text.hexa
+  compiler_impact: |
+    text_visual_width() now skips ANSI escape sequences via
+    _skip_escape() helper. No codegen change.
+  downstream_consumer: |
+    wilson harness-cli soft-wrap + CURSOR_MARKER handling;
+    any caller doing escape-aware width math.
+  status: applied
+  applied_at: 2026-05-16
+  opened: 2026-05-16
+  detail: patches/text-visual-width-ansi-aware.md
+
+- id: tui-input-paste-buf-quadratic
+  source_commit: 67771578
+  source_files:
+    - self/tui/input.hexa
+  compiler_impact: |
+    Paste buffering switched to byte array + bytes_to_str_raw final
+    conversion — O(n) instead of O(n²). No codegen change.
+  downstream_consumer: |
+    Any TUI receiving multi-KB pastes; wilson large-paste freezing.
+  status: applied
+  applied_at: 2026-05-12
+  opened: 2026-05-12
+  detail: patches/tui-input-paste-buf-quadratic.md
+
+- id: tui-input-paste-double-encodes-bytes
+  source_commit: 67771578
+  source_files:
+    - self/tui/input.hexa
+  compiler_impact: |
+    Paste payload encoding fixed to raw bytes via bytes_to_str_raw;
+    eliminates chr() re-encoding (CJK/emoji round-trip).
+  downstream_consumer: |
+    Any TUI receiving non-ASCII paste; wilson paste handling.
+  status: applied
+  applied_at: 2026-05-12
+  opened: 2026-05-12
+  detail: patches/tui-input-paste-double-encodes-bytes.md
+
+# ── stdlib · net · thread · pool primitives (2026-05-13 ~ 05-14) ─────
+
+- id: thread-channel-primitive
+  source_commit: 401ed87d
+  source_files:
+    - self/native/thread.c
+    - self/runtime.c
+    - self/runtime.h
+  compiler_impact: |
+    pthread spawn/join + mpmc channel ring buffer with mutex/condvar;
+    codegen direct-emit + _is_builtin_name registration; -lpthread
+    link added. Rename follow-up channel_* -> thread_channel_*
+    (commit 0b6ab67ac, see builtin-vs-stdlib-symbol-collision).
+  downstream_consumer: |
+    anima daemon Phase 2/3 (frame loop + async inference worker);
+    wilson harness-rpc background.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/thread-channel-primitive.md
+
+- id: net-nonblock-multiplex
+  source_commit: 0ec2d330
+  source_files:
+    - self/native/net.c
+    - self/std_net.hexa
+  compiler_impact: |
+    C builtins hexa_net_set_nonblock(fd) + hexa_net_select(fds, timeout_ms)
+    direct-emit; POSIX select(2) wrap returning ready-fd array.
+  downstream_consumer: |
+    anima daemon Phase 2 (multi-client broadcast); wilson harness-rpc;
+    hexa-native socket servers.
+  status: applied
+  applied_at: 2026-05-14
+  opened: 2026-05-13
+  detail: patches/net-nonblock-multiplex.md
+
+- id: net-unix-domain-socket
+  source_commit: 6623176c
+  source_files:
+    - self/native/net.c
+    - self/std_net.hexa
+  compiler_impact: |
+    parse_addr dispatches unix: prefix to AF_UNIX; unlink-before-bind
+    for filesystem sockets; abstract namespace (@) on Linux only.
+    No codegen change.
+  downstream_consumer: |
+    anima daemon --unix /tmp/anima.sock local-only mode;
+    wilson provider-anima plugin; hexa-native local IPC.
+  status: applied
+  applied_at: 2026-05-14
+  opened: 2026-05-13
+  detail: patches/net-unix-domain-socket.md
+
+- id: stdlib-os-mount-linux
+  source_commit: f696bd1c
+  source_files:
+    - self/native/mount.c
+    - self/stdlib/os/mount.hexa
+  compiler_impact: |
+    C builtins hexa_mount / hexa_umount direct-emit; macOS stub
+    returns -ENOSYS. MS_* + MNT_* constants resolved at module load.
+  downstream_consumer: |
+    wilson pool plugin (cpu-pattern namespace isolation);
+    hexa-native container runtimes.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/stdlib-os-mount-linux.md
+
+- id: stdlib-os-namespace-linux
+  source_commit: f696bd1c
+  source_files:
+    - self/native/namespace.c
+    - self/stdlib/os/namespace.hexa
+  compiler_impact: |
+    C builtins hexa_unshare / hexa_setns / hexa_pivot_root direct-emit;
+    CLONE_NEW* constants; macOS stubs -ENOSYS.
+  downstream_consumer: |
+    wilson pool plugin (cpu-pattern child namespace setup);
+    container/sandbox isolation.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/stdlib-os-namespace-linux.md
+
+- id: stdlib-os-pty
+  source_commit: 952eddbc
+  source_files:
+    - self/native/pty.c
+    - self/stdlib/os/pty.hexa
+    - self/stdlib/os/termios.hexa
+  compiler_impact: |
+    C builtins hexa_openpty / hexa_forkpty / hexa_tcgetattr /
+    hexa_tcsetattr direct-emit; _is_builtin_name registration;
+    hexa_v2 rebuilt.
+  downstream_consumer: |
+    wilson pool plugin (cpu server PTY for job control);
+    harness-cli raw-mode toggle; hexa REPL/TUI apps.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/stdlib-os-pty.md
+
+- id: stdlib-9p-codec
+  source_commit: 12695a7f
+  source_files:
+    - self/stdlib/p9/codec.hexa
+    - self/stdlib/p9/client.hexa
+    - self/stdlib/p9/server.hexa
+  compiler_impact: |
+    Pure-hexa wire codec composing with net_read/net_write. Full
+    Tversion/Tattach/Twalk/Topen/Tread/Twrite/Tclunk/Rerror +
+    Qid + framing helpers. No codegen change.
+  downstream_consumer: |
+    wilson pool plugin (cpu-pattern server/client);
+    hexa-native 9P file serving.
+  status: applied
+  applied_at: 2026-05-14
+  opened: 2026-05-13
+  detail: patches/stdlib-9p-codec.md
+
+- id: stdlib-sort
+  source_commit: 161c288a
+  source_files:
+    - self/stdlib/sort.hexa
+  compiler_impact: |
+    Pure-hexa bottom-up merge sort; sort_by / sort_desc_by /
+    sort_asc / sort_desc. Stable (equal-key keeps input order),
+    O(n log n).
+  downstream_consumer: |
+    wilson event_bus subscriber priority; tool registration /
+    endpoint fallback ranking.
+  status: applied
+  applied_at: 2026-05-14
+  opened: 2026-05-13
+  detail: patches/stdlib-sort.md
+
+- id: stdlib-ssh-client
+  source_commit: 2d978169
+  source_files:
+    - self/stdlib/ssh/wire.hexa
+    - self/stdlib/ssh/kex.hexa
+    - self/stdlib/ssh/ssh.hexa
+    - self/stdlib/ssh/keyfile.hexa
+    - self/stdlib/ssh/sshd.hexa
+    - self/stdlib/ssh/agent.hexa
+  compiler_impact: |
+    Cryptographic primitives (ed25519 + rsa-sha2 + aes-gcm +
+    chacha20-poly1305 + hmac) in stdlib; symmetric client/server
+    surface. Server + agent forwarding follow-up b62fb495.
+  downstream_consumer: |
+    wilson pool plugin (cpu-pattern SSH transport);
+    hexa-native remote-exec / agent forwarding.
+  status: applied
+  applied_at: 2026-05-14
+  opened: 2026-05-13
+  detail: patches/stdlib-ssh-client.md
+
+# ── compiler · codegen · runtime fixes ───────────────────────────────
+
+- id: builtin-vs-stdlib-symbol-collision
+  source_commit: pending
+  source_files:
+    - self/native/thread.c
+    - self/hexa_full.hexa
+  compiler_impact: |
+    pthread channel API renamed thread_channel_* (was channel_*) to
+    avoid collision with stdlib/channel.hexa FD-pipe API.
+    Companion to thread-channel-primitive.
+  downstream_consumer: |
+    wilson stdlib/jsonl_pool + plugins/swarm.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/builtin-vs-stdlib-symbol-collision.md
+
+- id: codegen-struct-fwddecl-vs-fn-arena
+  source_commit: pending
+  source_files:
+    - self/main.hexa
+  compiler_impact: |
+    module_loader memory cap raised 768 MB -> 4096 MB via
+    HEXA_MEM_CAP_MB env to prevent OOM on large flattened bundles
+    (mesh_up/down pool config implementation).
+  downstream_consumer: |
+    wilson mesh_up/down pool config implementation.
+  status: applied
+  applied_at: 2026-05-13
+  opened: 2026-05-13
+  detail: patches/codegen-struct-fwddecl-vs-fn-arena.md
+
+- id: format-n-pure-dup-and-ge-le-in-format-pure
+  source_commit: 9f621602
+  source_files:
+    - self/runtime/format_pure.hexa
+    - self/stdlib/strbuf.hexa
+  compiler_impact: |
+    Deduplicated format_n_pure; replaced >= / <= with offset form
+    (g1 governance); added self-contained strbuf dependency.
+  downstream_consumer: |
+    stdlib users (string formatting with precision spec).
+  status: applied
+  applied_at: 2026-05-16
+  opened: 2026-05-16
+  detail: patches/format-n-pure-dup-and-ge-le-in-format-pure.md
+
+- id: import-alias-runtime-resolve
+  source_commit: c85636a4
+  source_files:
+    - compiler/lex/lexer.hexa
+    - compiler/parse/parser.hexa
+  compiler_impact: |
+    `import "..." as <alias>` resolves at runtime; module fns
+    registered with alias-prefixed mangling; .hexa auto-append on
+    import paths. Multi-main collapse part of same commit.
+  downstream_consumer: |
+    anima VOICE Phase 1/2 modular split.
+  status: applied
+  applied_at: 2026-05-17
+  opened: 2026-05-15
+  detail: patches/import-alias-runtime-resolve.md
+
+- id: string-concat-in-unbounded-loop-quadratic-rss
+  source_commit: 233628cc
+  source_files:
+    - self/stdlib/strbuf.hexa
+    - self/runtime/format_pure.hexa
+    - self/runtime/string_pure.hexa
+  compiler_impact: |
+    New stdlib strbuf primitive (strbuf_new/push/finish) for O(n)
+    string accumulation; migrated 3 quadratic sites (format_pure,
+    tui/input, tool-core bash output). Runtime cap opt-in (a8ab0560).
+  downstream_consumer: |
+    wilson tool-core bash streaming; LLM streaming response buffering.
+  status: applied
+  applied_at: 2026-05-16
+  opened: 2026-05-16
+  detail: patches/string-concat-in-unbounded-loop-quadratic-rss.md
+
+# ── pending_external (5) ──────────────────────────────────────────────
+
+- id: csi-u-modifier-keys-decoder-gap
+  source_commit: pending
+  source_files:
+    - self/tui/input.hexa
+  compiler_impact: |
+    CSI u decoder currently handles Enter (cp==13) only; cp 1-26
+    (Ctrl+letter) and cp 9/27/127 (Tab/Esc/BS) error out. Full
+    expansion required.
+  downstream_consumer: |
+    wilson harness-cli (Ctrl+C / Alt+letter / Tab+modifiers under
+    claude-code terminal-setup).
+  status: pending_external
+  opened: 2026-05-13
+  detail: patches/csi-u-modifier-keys-decoder-gap.md
+
+- id: self-tui-render-wide-to-narrow-ghost
+  source_commit: pending
+  source_files:
+    - self/tui/render.hexa
+  compiler_impact: |
+    Forward direction (narrow->wide) fixed by 67b99c13, but backward
+    (wide->narrow) leaves ghost cells. Needs f_w width computation +
+    ghost-cell clearing in render_flush diff loop.
+  downstream_consumer: |
+    wilson harness-cli with alternating Korean/ASCII input;
+    any TUI with wide-to-narrow transitions.
+  status: pending_external
+  opened: 2026-05-13
+  detail: patches/self-tui-render-wide-to-narrow-ghost.md
+
+- id: tui-input-needs-decset-2004-bracketed-paste
+  source_commit: pending
+  source_files:
+    - self/tui/input.hexa
+  compiler_impact: |
+    input_init() does not emit DECSET 2004 (`ESC[?2004h`);
+    input_close() does not emit DECRST. Bracketed-paste decoder
+    exists but never activates without protocol negotiation.
+  downstream_consumer: |
+    Every hexa TUI using input; wilson harness-cli paste handling.
+  status: pending_external
+  opened: 2026-05-13
+  detail: patches/tui-input-needs-decset-2004-bracketed-paste.md
+
+- id: hexa-cli-atlas-register-update-or-pr
+  source_commit: pending
+  source_files:
+    - tool/atlas_cli.hexa
+    - self/main.hexa
+  compiler_impact: |
+    New CLI verbs (atlas register, atlas promote, atlas pr) for
+    downstream law/constant registration; currently STUB
+    (`println("hexa atlas register: NOT YET WIRED.")`).
+  downstream_consumer: |
+    wilson governance plugin / atlas citation workflow.
+  status: pending_external
+  opened: 2026-05-13
+  detail: patches/hexa-cli-atlas-register-update-or-pr.md
+
+- id: toplevel-mut-array-push-mismutation-from-fn
+  source_commit: pending
+  source_files:
+    - self/test_array_push_from_fn.hexa
+  compiler_impact: |
+    Potential codegen/runtime bug — top-level `let mut <array>`
+    .push() from inside a fn may mismutation. Awaits reliable
+    reproducer + regression test; workaround in self/tui/input.hexa
+    (rebuild-and-reassign pattern) confirmed sufficient meanwhile.
+  downstream_consumer: |
+    wilson harness-cli queue mutation.
+  status: pending_external
+  opened: 2026-05-14
+  detail: patches/toplevel-mut-array-push-mismutation-from-fn.md
+
+# ── spec / policy / UX proposals (4) ─────────────────────────────────
+
+- id: stdlib-for-cpu-port
+  source_commit: pending
+  source_files:
+    - inbox/patches/stdlib-os-mount-linux.md
+    - inbox/patches/stdlib-os-namespace-linux.md
+    - inbox/patches/stdlib-os-pty.md
+    - inbox/patches/stdlib-9p-codec.md
+    - inbox/patches/stdlib-ssh-client.md
+  compiler_impact: |
+    Meta-note (no code); coordinates 5 companion atomic patches
+    P0 #1-5 for u-root/cpu hexa-native port. All five companions
+    have landed (see entries above).
+  downstream_consumer: |
+    wilson pool plugin stages A->C roadmap for hexa-native
+    cpu(1)-pattern execution.
+  status: spec
+  opened: 2026-05-13
+  detail: patches/stdlib-for-cpu-port.md
+  note: |
+    Spec-only coordination entry. Status remains `spec` because the
+    metanote itself ships no code; the five referenced patches each
+    track their own applied state.
+
+- id: hexa-cli-help-stale-after-absorption
+  source_commit: pending
+  source_files:
+    - self/main.hexa
+  compiler_impact: |
+    Documentation / UX only — `hexa --help` text should advertise
+    absorbed intrinsics (pwd->cwd, ls->list_dir, mkdir_p, etc.)
+    post-SPEC §16/§18.
+  downstream_consumer: |
+    wilson governance ROI-first principle.
+  status: spec
+  opened: 2026-05-12
+  detail: patches/hexa-cli-help-stale-after-absorption.md
+
+- id: hexa-oneliner-install-should-link-source-repo
+  source_commit: pending
+  source_files:
+    - (out-of-repo installer script)
+  compiler_impact: |
+    Installation / toolchain setup only — proposal is for the
+    one-liner installer to clone hexa-lang source and symlink
+    self/tool into ~/.hx/bin (out-of-repo, no source change here).
+  downstream_consumer: |
+    wilson update-or-PR workflow (downstream gap-discovery).
+  status: spec
+  opened: 2026-05-12
+  detail: patches/hexa-oneliner-install-should-link-source-repo.md
+
+- id: hexa-run-interp-hangs-on-mac
+  source_commit: pending
+  source_files:
+    - (env-var escape hatch + hexa doctor tool — not yet wired)
+  compiler_impact: |
+    Interpreter offload fragility / resource-TCP robustness. Asks
+    for documentation of RESOURCE_LOCAL_HEXA=1 escape hatch + a
+    `hexa doctor` self-check tool. Transient hang already worked
+    around; no code patch shipped.
+  downstream_consumer: |
+    wilson runtime testing; atmosphere selftest suite.
+  status: spec
+  opened: 2026-05-13
+  detail: patches/hexa-run-interp-hangs-on-mac.md
