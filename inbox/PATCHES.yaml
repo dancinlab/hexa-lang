@@ -623,10 +623,13 @@
     high-bit + ASCII boundary cases. Compiled: 12/12 PASS.
   downstream_consumer: |
     wilson plugins/guard-readme-format (chr()-based emoji prefix scan
-    can revert to `chr(240) + chr(159)`-style synthesis once interp
-    binary is rebuilt — see partial closure note below);
+    REVERTED to `chr(240) + chr(159)` split synthesis 2026-05-17 on
+    feat/git-guard 42a2fc6 — wilson runs compiled in production
+    (`wilson test` 23/23 PASS); dev-time `hexa run plugins/<id>/
+    test_*.hexa` selftest fails under the stale interp binary until
+    R3-R6 closes, accepted trade-off given interp retirement);
     wilson plugins/tool-web URL decoder (`%XX` -> chr(b)) — previously
-    silently misencoded under interp.
+    silently misencoded under interp; now correct in compiled.
   status: partial
   applied_compiled_at: 2026-05-17
   opened: 2026-05-17
