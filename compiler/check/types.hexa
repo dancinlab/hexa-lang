@@ -1673,9 +1673,27 @@ fn _types_signature_type(it: Item) -> Type {
     let mut ret: [Type] = []
     let r = _types_lower_type_ref(it.return_type)
     if len(r.kind) > 0 {
+        // Explicit annotation (incl. explicit `-> unit`/`-> void`) →
+        // keep concrete; callers strict-check against it.
         ret.push(r)
     } else {
-        ret.push(_types_t_unit())
+        // No `-> T` annotation. Mirroring the per-fn body checker
+        // (_types_check ~L1908: `let r=…; if len(r.kind)==0` → SKIP the
+        // HX3004 tail-check), an absent annotation means "infer, not a
+        // mismatch" — NOT a concrete `unit`. Defaulting it to unit here
+        // made every CALLER of an unannotated value-returning fn (the
+        // whole stdlib/core/math.hexa family: abs/min/max/clamp/gcd/lcm/
+        // pow/factorial/… — none of which annotate `-> int`) infer the
+        // call result as `unit`, so `fn _lcm2(a:int,b:int)->int { return
+        // lcm(a,b) }` false-fired HX3004 (i64 vs unit). tier-2
+        // (codegen_c2) carries the runtime HexaVal regardless of static
+        // type, so this strictness was tighter than runtime needs.
+        // Push the unknown/empty sentinel: _types_equal tolerates an
+        // empty-kind side (same contract the existing permissive arg /
+        // return paths already rely on), so concretely-annotated
+        // mismatches (`-> bool` vs `-> i64`) still strict-check — no g3
+        // type-soundness weakening, just absent-annotation = infer.
+        ret.push(_types_empty_type())
     }
     return Type {
         kind: "fn",
