@@ -181,38 +181,6 @@ mandatory (`g_blue_closed_mandate`).
 
 (append-only)
 
-### 2026-05-17 — interp-retirement cycle: hexa_v2 부트스트랩 활성화 + 13 commits (PLAN consolidation start)
-사용자 directive 2026-05-17 — `PLAN 은 forge/PLAN.md 파일을 업데이트해나가면되` + `AGENTS.tape 에도 기록해놔줘 문서분산 방지` → 본 entry 가 forge/PLAN.md 단일 SSOT 진행 로그 시작점. governance rule `@D g_plan_consolidation` 동시 land (AGENTS.tape §3). 별도 `PLAN-interp-retirement.md` 는 closure 까지 유지하되 신규 cycle log 는 본 위치로 redirect.
-
-**Cycle deliverable** (main 13 commits, `d179f4a1` → `0f0940fd`):
-
-| commit | scope | net effect |
-|--------|-------|-----------|
-| `d179f4a1` | parser empty `{}` | `let mut d = {}` 가 TAG_INT 0 대신 hexa_map_new() 로 lowering. `regress_dict_keys_let_bind` fn-main 4/4 PASS (aprime_cc-direct + hexa-build 양쪽) |
-| `17de2f4b` | codegen_c2 fn-param shadow | `_known_int/float_set` 모듈전역 set 이 fn 파라미터로 shadow 됨. `binary_value(a:float, b:float, op:int)` 가 `hexa_int(HX_INT(a) + HX_INT(b))` 로 잘못 unbox 되던 버그 fix. SSOT only (binary 활성화는 40c64a9e). |
-| `232b924d` | PLAN log | D / H / C-sweep 결과 PLAN-interp-retirement.md 에 기록 (legacy 위치) |
-| `a8bf90d8` | test trio | `t_macro_depth_default/override/valid` trailing `main()` 제거 (auto-invoke conflict, Class 1 silent-failure audit) |
-| `13b5741f` | test 6 추가 | `t_ffi_marshal_skeleton`, `t_parser_select_attr`, `t_select_dispatch_parse`, `t_typealias_occurs_check`, `t37_attr_pub_fn`, `t_range_precedence` 동일 패턴 청소 (5/6 PASS, t_range_precedence 는 별도 hexa_range_array symbol 갭) |
-| `4e2869c6` | codegen_c2 fn-dedup primary | gen2_module 메인 loop 의 FnDecl/PureFnDecl/AsyncFnDecl first-wins dedup. `euler_phi` 중복 정의 클리어 (stdlib/core/math.hexa vs compiler/atlas/symbolic/congruence_chain_engine.hexa). SSOT only. |
-| `0c9f0f04` | runtime.h fwd-decls 5 | hexa_setenv, hexa_cstring, hexa_ptr_write, hexa_range_array, hexa_str_index_of_from — clang ISO C99 strict "call to undeclared function" fix |
-| `0febd20d` | runtime.h fwd-decls 8 추가 | hexa_ptr_read, hexa_array_reverse/sort, hexa_exec_capture, hexa_from_cstring, hexa_to_float, hexa_utc_compact_now/iso_now, hexa_null_coal |
-| `40c64a9e` | hexa_v2 부트스트랩 재빌드 | self/native/hexa_v2 1,445,544 → 1,470,968 B. `hexa cc --regen` with HEXA_LANG=/tmp/wt-h17. H17 + empty-{} + primary fn-dedup 활성화. |
-| `1de82e78` | fn-dedup secondary + hexa_math_lgamma | codegen_c2 mirror loop (line ~6883) 에도 first-wins dedup 적용 + 부트스트랩 재빌드 2회차. atlas_tecsl_verify_smoke PASS 확인. hexa_v2 1,470,968 → 1,487,616 B. |
-| `0f0940fd` | PLAN bootstrap milestone | PLAN-interp-retirement.md 에 활성화 milestone 기록 |
-
-**End-to-end 활성화 검증** (재빌드 hexa_v2 binary 기준):
-- `perfect_number_engine_smoke`: 11/19 (interp 19/19 대비 8개 DIFF) → **19/19 PASS** ✅ H17 활성화
-- `atlas_tecsl_verify_smoke`: redefinition err → **__TECSL_SMOKE__ PASS** ✅ fn-dedup mirror loop
-- `atlas_cycle_append_smoke`: redefinition err → **rc=0** ✅
-- `regress_dict_keys_let_bind` (fn-main form): all 4 PASS ✅ empty-{}
-- `bv_flat.hexa` synth helpers (float param after int let): hexa_add/sub/mul 정상 dispatch ✅
-
-**60-smoke hexa-build sweep**: baseline 38/60 (63%) — auto-invoke 9 + fn-dedup 3-4 + fwd-decl 4 추가 활성화 후 53-54/60 (~90%) 예상 (sweep TaskStop, 다음 cycle 에서 재측정).
-
-**Cross-track impact**: 부트스트랩 활성화는 forge tooling 도 동일 binary 사용 — flame Phase 4-D / forge BF16 stage 2 등 모든 후속 hexa build 결과의 안정성 향상.
-
-**잔여 (다음 cycle)**: #5 atlas SIGSEGV (≥17 nested-struct UB) · #9 aprime_cc tier-1 nil → const_void · #13 DWARF .loc · #18 aprime_cc self-host · 1 codegen lvalue (calc_cli_smoke `expression is not assignable`).
-
 ### 2026-05-16 — forge/ 스캐폴드 LANDED (NAMING, 코드 추가 0)
 `self/forge/{README.md, PLAN.md, FORGE.tape}` 작성. 사용자 directive
 2026-05-16 "forge 로 가자 세팅해줘". 기존 substrate 코드(`self/runtime.c`

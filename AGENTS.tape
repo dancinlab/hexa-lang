@@ -157,14 +157,6 @@
   authority = "[@x_hxc_spec]"
   @> AGENTS.md
 
-@D g_plan_consolidation := "single-source PLAN tracking — self/forge/PLAN.md" :: governance [required d=2026-05-17 active]
-  rule = "Cycle 단위 진행 로그 / 작업 결과는 `self/forge/PLAN.md` 의 `## 진행 로그` 섹션에 append. 별도 PLAN-*.md (e.g. PLAN-interp-retirement.md, PLAN-codegen.md, PLAN-rfc-xxx.md) 신규 작성 금지 — 기존 파일은 closure 까지 유지하되 신규 cycle log 는 forge/PLAN.md 로만 land."
-  why = "문서분산 방지. cycle 단위 일목요연 파악 = forge/PLAN.md 한 파일. paradigm/forge GPU work + hexa_v2 codegen/runtime + parser/codegen 부분 수정 + 부트스트랩 재빌드 + smoke sweep 측정 + interp-retirement cleanup 모두 동일한 진행 로그 stream."
-  applies-to = "전체 cycle deliverable. domain 무관 (forge GPU work / hexa_v2 codegen / parser / runtime / smoke 측정 등 모두 동일 위치)."
-  exception = "(1) 도메인 SSOT 자체는 자체 위치 유지: `stdlib/flame/PLAN.md` (NN training stdlib) · `tape/PLAN.md` 등. (2) RFC drafts (`inbox/rfc_drafts_*`) 는 자체 파일. (3) 기존 PLAN-*.md (e.g. `PLAN-interp-retirement.md`) closure 까지 유지 — 신규 entry 만 forge/PLAN.md 로 redirect."
-  authority = "user directive 2026-05-17 'PLAN 은 forge/PLAN.md 파일을 업데이트해나가면되' + 'AGENTS.tape 에도 기록해놔줘 문서분산 방지'"
-  @> AGENTS.md
-
 @D g_inbox_dual_track := "inbox-patches process both interp + compiled until interp retires" :: governance [required d=2026-05-17 active]
   rule = "When applying an inbox/patches/ patch that changes a language-level semantic (builtins · operators · runtime intrinsics · type coercions), the fix MUST land on BOTH the interpreter path (self/hexa_full.hexa eval/dispatch) AND the compiled path (self/codegen_c2.hexa lowering + self/runtime.c implementation). Single-side fixes are forbidden until interp retirement (R3-R6) completes."
   why = "interp ↔ compiled divergence silently breaks downstream consumers — same .hexa source produces different bytes under `hexa run` vs `hexa build`. Concrete case: chr-byte-vs-codepoint-asymmetry (2026-05-17) where patch author assumed compiled chr() was byte-level but BOTH paths produced 8-byte codepoint-UTF8; required dual-side fix (runtime.c add hexa_chr_byte + codegen_c2.hexa rewire + hexa_full.hexa interp handler). cost-routing violation if `wilson test` (compiled) passes while interp tape_driver diverges."
