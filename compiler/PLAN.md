@@ -42,6 +42,25 @@
 
 (append-only)
 
+### 2026-05-17 — 13 DIFF 정밀 3-way 재분류 (aprime / interp / hexa-build) — 실제 aprime 갭 정밀화
+13 DIFF 중 atlas verifier 5 + suspect-interp 2 = 7건을 aprime/interp/hexa-build 3-way diff.
+
+**판정**:
+| test | ap | ip | hb | 판정 |
+|------|----|----|----|------|
+| n6_uniqueness | 36 | 16 | 36 | **INTERP-BUG** (aprime==hb, aprime 정답) |
+| sigma_phi_tau | 29 | 20 | 29 | **INTERP-BUG** (aprime==hb) |
+| atlas_cycle_append | 2 | 22 | 2 | **INTERP-BUG** (aprime==hb) |
+| atlas_doctrine | 17 | 15 | 15 | APRIME-BUG (interp==hb) |
+| atlas_tecsl_verify | 38 | 38 | 38 | APRIME-BUG (interp==hb, content 차) |
+| atlas_wave3 | 28 | 23 | 23 | APRIME-BUG (interp==hb) |
+| atlas_hxc_roundtrip | 2 | 1 | 27 | aprime-bug (3자 모두 상이; hb=full-correct 27) |
+
+**결산**:
+- **확정 INTERP-BUG 3건** (n6_uniqueness · sigma_phi_tau · atlas_cycle_append) — aprime 정답, interp 가 틀림. → aprime 유효 커버리지 = 39 MATCH + 3 = **~42/60 (70%)** (신뢰 oracle hexa-build 기준).
+- **실제 APRIME 버그 정밀 식별**: atlas_doctrine·atlas_tecsl_verify·atlas_wave3 (interp==hexa-build, aprime 만 divergence — 셋 다 출력 line 수/내용 차, atlas verifier 경로 공통 root cause 가능성) + atlas_hxc_roundtrip (전체 미흡). 이 4건이 gate ① 의 진짜 타겟.
+- 다음 cycle gate-① 작업은 **atlas verifier codegen divergence (3건, 공통 root 추정)** 우선 — interp-noise 와 분리된 정확한 표적 확보.
+
 ### 2026-05-17 — interp 가 oracle 로서 buggy 임을 실증 — aprime==hexa-build, interp outlier
 suspect-interp DIFF 2건 (`n6_uniqueness_smoke`, `sigma_phi_tau_uniqueness_smoke`) 을 3-way 비교 (aprime / interp / hexa-build).
 
