@@ -37,6 +37,7 @@ SRC="$1"
 OUT="$2"
 STEM=$(basename "$SRC" .hexa)
 B3_C="build/artifacts/${STEM}_b3.c"
+PRIM_MATMUL="tool/flame_phase4b3_matmul_primitives.c"
 PRIM_FWD="tool/flame_phase4b3_block_fwd_primitive.c"
 PRIM_BWD="tool/flame_phase4b3_block_bwd_primitive.c"
 PRIM_FWD_STRIPPED="build/artifacts/${STEM}_prim_fwd_stripped.c"
@@ -70,8 +71,9 @@ sed \
     -e 's|flame_block_T16_d32_nh4_nkv2_h64_bwd((int)|flame_block_T16_d32_nh4_nkv2_h64_bwd_primitive((int)|g' \
     "$B3_C" > "$B3_REDIRECTED"
 
-echo "[3.10] insert primitives after #include \"runtime.c\" (fwd + bwd)"
-cat "$PRIM_FWD_STRIPPED" "$PRIM_BWD_STRIPPED" > "${A2_C}.tmp_prims"
+echo "[3.10] insert primitives after #include \"runtime.c\" (matmul + fwd + bwd)"
+# Order: matmul primitives FIRST (fwd/bwd reference them)
+cat "$PRIM_MATMUL" "$PRIM_FWD_STRIPPED" "$PRIM_BWD_STRIPPED" > "${A2_C}.tmp_prims"
 sed '/^#include "runtime.c"/r '"${A2_C}.tmp_prims" "$B3_REDIRECTED" > "$A2_C"
 rm -f "${A2_C}.tmp_prims"
 echo "  concat'd: $A2_C ($(wc -l < "$A2_C") lines)"

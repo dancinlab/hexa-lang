@@ -144,29 +144,10 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive(
         }
     }
 
-    // ─── 2. Q/K/V projections — call HexaVal helper (matmul SKIP) ─
-    _db_proj_batch_farr(
-        hexa_int(Bp_id), hexa_int(WQ),
-        hexa_int(Bc_id), hexa_int(oRin),
-        hexa_int(Bc_id), hexa_int(oQ),
-        hexa_int(T), hexa_int(d), hexa_int(d)
-    );
-    _db_proj_batch_farr(
-        hexa_int(Bp_id), hexa_int(WK),
-        hexa_int(Bc_id), hexa_int(oRin),
-        hexa_int(Bc_id), hexa_int(oK),
-        hexa_int(T), hexa_int(nkv * hd), hexa_int(d)
-    );
-    _db_proj_batch_farr(
-        hexa_int(Bp_id), hexa_int(WV),
-        hexa_int(Bc_id), hexa_int(oRin),
-        hexa_int(Bc_id), hexa_int(oV),
-        hexa_int(T), hexa_int(nkv * hd), hexa_int(d)
-    );
-    // Bc[oQ/oK/oV] populated by matmul calls (these touch _hx_farr_table
-    // indirectly via the HexaVal helper; the Bc pointer above remains
-    // valid since farr_table grow is mutex-protected — but we re-fetch
-    // here defensively in case farr_table grew during matmul calls).
+    // ─── 2. Q/K/V projections — Path B primitives (matmul boxing eliminated) ─
+    flame_proj_batch_T16_d32x32_primitive(Bp_id, WQ, Bc_id, oRin, Bc_id, oQ);
+    flame_proj_batch_T16_d16x32_primitive(Bp_id, WK, Bc_id, oRin, Bc_id, oK);
+    flame_proj_batch_T16_d16x32_primitive(Bp_id, WV, Bc_id, oRin, Bc_id, oV);
     Bc = _hx_farr_table[Bc_id].buf;
 
     // ─── 3. RoPE rotation on Q (nh heads) + K (nkv heads) ────────
@@ -251,13 +232,8 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive(
     // ─── 5. output projection: attn_out = Wo · ctx — matmul SKIP ──
     HexaVal attn_out_v = hexa_call1(farr_zeros, hexa_int(T * d));
     int attn_out_id = (int)attn_out_v.i;
-    _db_proj_batch_farr(
-        hexa_int(Bp_id), hexa_int(WO),
-        hexa_int(Bc_id), hexa_int(oCtx),
-        attn_out_v, hexa_int(0),
-        hexa_int(T), hexa_int(d), hexa_int(d)
-    );
-    Bc = _hx_farr_table[Bc_id].buf;  // re-fetch defensively
+    flame_proj_batch_T16_d32x32_primitive(Bp_id, WO, Bc_id, oCtx, attn_out_id, 0);
+    Bc = _hx_farr_table[Bc_id].buf;
     double* attn_out = _hx_farr_table[attn_out_id].buf;
 
     // ─── 6. residual: hstate = X + attn_out ──────────────────────
@@ -283,19 +259,9 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive(
         }
     }
 
-    // ─── 8. SwiGLU: a, b matmul + silu+Hadamard + o matmul ────────
-    _db_proj_batch_farr(
-        hexa_int(Bp_id), hexa_int(WG),
-        hexa_int(Bc_id), hexa_int(oRin2),
-        hexa_int(Bc_id), hexa_int(oSwA),
-        hexa_int(T), hexa_int(h), hexa_int(d)
-    );
-    _db_proj_batch_farr(
-        hexa_int(Bp_id), hexa_int(WU),
-        hexa_int(Bc_id), hexa_int(oRin2),
-        hexa_int(Bc_id), hexa_int(oSwB),
-        hexa_int(T), hexa_int(h), hexa_int(d)
-    );
+    // ─── 8. SwiGLU: a, b matmul + silu+Hadamard + o matmul (Path B) ─
+    flame_proj_batch_T16_d64x32_primitive(Bp_id, WG, Bc_id, oRin2, Bc_id, oSwA);
+    flame_proj_batch_T16_d64x32_primitive(Bp_id, WU, Bc_id, oRin2, Bc_id, oSwB);
     Bc = _hx_farr_table[Bc_id].buf;
     // silu + Hadamard (primitive inline)
     for (int ts = 0; ts < T; ts++) {
@@ -305,15 +271,10 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive(
             Bc[oSwS + ts * h + k] = flame_db_silu(av) * bv;
         }
     }
-    // o = Wd · s
+    // o = Wd · s (Path B primitive)
     HexaVal sw_o_v = hexa_call1(farr_zeros, hexa_int(T * d));
     int sw_o_id = (int)sw_o_v.i;
-    _db_proj_batch_farr(
-        hexa_int(Bp_id), hexa_int(WD),
-        hexa_int(Bc_id), hexa_int(oSwS),
-        sw_o_v, hexa_int(0),
-        hexa_int(T), hexa_int(d), hexa_int(h)
-    );
+    flame_proj_batch_T16_d32x64_primitive(Bp_id, WD, Bc_id, oSwS, sw_o_id, 0);
     Bc = _hx_farr_table[Bc_id].buf;
     double* sw_o = _hx_farr_table[sw_o_id].buf;
 
