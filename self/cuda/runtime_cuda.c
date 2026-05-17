@@ -1073,6 +1073,81 @@ __global__ void _hx_cuda_kern_silu_grad(const double* __restrict__ X,
     }
 }
 
+/* ── RoPE kernels (RFC 041 Phase B completion, 2026-05-17) ──────────
+ *
+ * Rotary position embedding. The flame decoder block (RFC 043,
+ * stdlib/flame/decoder_block_lib.hexa §3 fwd / §3rev bwd; CPU reference
+ * tool/flame_phase4d6_block_{fwd,bwd}_primitive.c) consumes PRECOMPUTED
+ * cos/sin tables — the kernel does NOT recompute angles.
+ *
+ * Layout — tensor T_buf is row-major [T · nheads · hd]; the row for
+ * position t, head hh starts at (t·nheads + hh)·hd. cos/sin are
+ * row-major [T · hd], indexed bse + c with bse = t·hd. `half = hd/2`.
+ *
+ * Forward (mirrors fwd_primitive.c lines 162-167):
+ *   rh_c   = (c < half) ? -x[row+half+c] : x[row+c-half]
+ *   out[c] = x[row+c]·cos[bse+c] + rh_c·sin[bse+c]
+ *
+ * Backward — inverse rotation (mirrors bwd_primitive.c lines 322-327):
+ *   gs   = (c < half) ?  dx[row+half+c]·sin[bse+half+c]
+ *                     : -dx[row+c-half]·sin[bse+c-half]
+ *   out[c] = dx[row+c]·cos[bse+c] + gs
+ *
+ * Each output element is a pure function of TWO input-row elements
+ * (index c and c±half) plus cos/sin — NO cross-element reduction. A
+ * thread-per-element kernel reading from a SEPARATE input buffer is
+ * therefore BIT-EXACT vs the CPU scratch-buffer loop: same two
+ * fp64 products + one add, no reordering (F-RFC041-ROPE-EXACT,
+ * F-RFC041-ROPE-BWD-EXACT demand |Δ| = 0).
+ *
+ * 1-D grid-stride over the flat index e ∈ [0, T·nheads·hd). For each e
+ * we recover t = e/(nheads·hd), c = e mod hd, and the row base.
+ */
+
+__global__ void _hx_cuda_kern_rope_fwd(const double* __restrict__ X,
+                                       const double* __restrict__ COS,
+                                       const double* __restrict__ SIN,
+                                       double* __restrict__ Y,
+                                       int64_t T, int64_t nheads,
+                                       int64_t hd) {
+    int64_t total  = T * nheads * hd;
+    int64_t half   = hd / 2;
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < total; i += stride) {
+        int64_t c   = i % hd;
+        int64_t row = i - c;             /* (t·nheads+hh)·hd */
+        int64_t t   = i / (nheads * hd);
+        int64_t bse = t * hd;
+        double rh_c = (c < half)
+            ? (0.0 - X[row + half + c])
+            : X[row + c - half];
+        Y[i] = X[row + c] * COS[bse + c] + rh_c * SIN[bse + c];
+    }
+}
+
+__global__ void _hx_cuda_kern_rope_bwd(const double* __restrict__ DX,
+                                       const double* __restrict__ COS,
+                                       const double* __restrict__ SIN,
+                                       double* __restrict__ Y,
+                                       int64_t T, int64_t nheads,
+                                       int64_t hd) {
+    int64_t total  = T * nheads * hd;
+    int64_t half   = hd / 2;
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < total; i += stride) {
+        int64_t c   = i % hd;
+        int64_t row = i - c;
+        int64_t t   = i / (nheads * hd);
+        int64_t bse = t * hd;
+        double gs = (c < half)
+            ? (DX[row + half + c] * SIN[bse + half + c])
+            : (0.0 - DX[row + c - half] * SIN[bse + c - half]);
+        Y[i] = DX[row + c] * COS[bse + c] + gs;
+    }
+}
+
 /* ── Host wrappers (extern surface — match runtime.c forward-decls) ──
  * Each: validate → H2D inputs → ensure output device buf sized → launch
  * → cudaGetLastError → D2H output → mark MIRRORED/clean. Returns 0 ok /
@@ -1257,6 +1332,93 @@ int _hx_cuda_farr_silu_grad_gpu(int64_t x_id, int64_t n, int64_t out_id) {
     }
     if (_d2h_out(out_id, n) != 0) return -1;
     return 0;
+}
+
+/* ── RoPE host wrappers (RFC 041 Phase B completion) ────────────────
+ * Signature: (t_id, cos_id, sin_id, T, nheads, hd, out_id). Caller
+ * (self/runtime.c) has pre-allocated out_id via hexa_farr_zeros with
+ * len = T·nheads·hd. Validate → H2D the 3 inputs → ensure output
+ * device buffer → launch the per-element kernel → D2H → MIRRORED.
+ * `out` is a fresh buffer (separate from the input) so the rotation
+ * reads originals — the byte-exact contract holds. */
+
+static int _hx_cuda_rope_common(int64_t t_id, int64_t cos_id,
+                                int64_t sin_id, int64_t T,
+                                int64_t nheads, int64_t hd,
+                                int64_t out_id, int is_bwd) {
+    const char* tag = is_bwd ? "rope_bwd" : "rope";
+    if (T <= 0 || nheads <= 0 || hd <= 0) {
+        fprintf(stderr, "[cuda] %s: bad shape T=%lld nheads=%lld hd=%lld\n",
+                tag, (long long)T, (long long)nheads, (long long)hd);
+        return -1;
+    }
+    if ((hd & 1) != 0) {
+        fprintf(stderr, "[cuda] %s: hd=%lld must be even\n",
+                tag, (long long)hd);
+        return -1;
+    }
+    if (t_id < 0 || cos_id < 0 || sin_id < 0 || out_id < 0) {
+        fprintf(stderr, "[cuda] %s: bad ids %lld %lld %lld %lld\n",
+                tag, (long long)t_id, (long long)cos_id,
+                (long long)sin_id, (long long)out_id);
+        return -1;
+    }
+    if (t_id >= _hx_farr_count || cos_id >= _hx_farr_count ||
+        sin_id >= _hx_farr_count || out_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] %s: id out of range\n", tag);
+        return -1;
+    }
+    int64_t total = T * nheads * hd;
+    if (_hx_farr_table[t_id].len < total ||
+        _hx_farr_table[out_id].len < total) {
+        fprintf(stderr, "[cuda] %s: tensor host len < T*nheads*hd %lld\n",
+                tag, (long long)total);
+        return -1;
+    }
+    if (_hx_farr_table[cos_id].len < T * hd ||
+        _hx_farr_table[sin_id].len < T * hd) {
+        fprintf(stderr, "[cuda] %s: cos/sin host len < T*hd %lld\n",
+                tag, (long long)(T * hd));
+        return -1;
+    }
+    if (_h2d(t_id) != 0)   return -1;
+    if (_h2d(cos_id) != 0) return -1;
+    if (_h2d(sin_id) != 0) return -1;
+    if (_ensure_dev_buf(out_id, total) != 0) return -1;
+    const double* X   = g_slots[t_id].d_buf;
+    const double* COS = g_slots[cos_id].d_buf;
+    const double* SIN = g_slots[sin_id].d_buf;
+    double*       Y   = g_slots[out_id].d_buf;
+    int grid = _hx_cuda_elem_grid(total);
+    if (is_bwd) {
+        _hx_cuda_kern_rope_bwd<<<grid, _HX_CUDA_ELEM_BLOCK>>>(
+            X, COS, SIN, Y, T, nheads, hd);
+    } else {
+        _hx_cuda_kern_rope_fwd<<<grid, _HX_CUDA_ELEM_BLOCK>>>(
+            X, COS, SIN, Y, T, nheads, hd);
+    }
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] %s launch failed: %s\n",
+                tag, cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(out_id, total) != 0) return -1;
+    return 0;
+}
+
+int _hx_cuda_farr_rope_gpu(int64_t t_id, int64_t cos_id, int64_t sin_id,
+                           int64_t T, int64_t nheads, int64_t hd,
+                           int64_t out_id) {
+    return _hx_cuda_rope_common(t_id, cos_id, sin_id, T, nheads, hd,
+                                out_id, 0);
+}
+
+int _hx_cuda_farr_rope_bwd_gpu(int64_t t_id, int64_t cos_id, int64_t sin_id,
+                               int64_t T, int64_t nheads, int64_t hd,
+                               int64_t out_id) {
+    return _hx_cuda_rope_common(t_id, cos_id, sin_id, T, nheads, hd,
+                                out_id, 1);
 }
 
 #endif /* HEXA_CUDA — Agent #25 Phase B elementwise block (opened at line 944) */

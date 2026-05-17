@@ -954,6 +954,10 @@ extern HexaVal farr_scale_gpu;                                                 /
  *   farr_adamw_step_gpu(W,m,v,g,n,lr,b1,b2,eps,wd,step_t)
  *                                     -> int new farr [n] (updated W;
  *                                        m,v updated in place)
+ *   farr_rope_gpu(t,cos,sin,T,nheads,hd)     -> int new farr [T.nheads.hd]
+ *                                        (rotary pos-emb forward)
+ *   farr_rope_bwd_gpu(t,cos,sin,T,nheads,hd) -> int new farr [T.nheads.hd]
+ *                                        (rotary pos-emb backward)
  */
 HexaVal hexa_farr_matmul_t_gpu(HexaVal m_v, HexaVal r_v, HexaVal c_v,
                                HexaVal u_v);                                   /* runtime.c — RFC 040 Phase B2 */
@@ -977,5 +981,13 @@ extern HexaVal farr_rmsnorm_bwd_rows_gpu;                                      /
 HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
                             HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
                             HexaVal eps, HexaVal wd, HexaVal step_t);          /* runtime.c — RFC 040 Phase B2 (11-arg direct) */
+HexaVal hexa_farr_rope_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v,
+                           HexaVal T_v, HexaVal nh_v, HexaVal hd_v);          /* runtime.c — RFC 041 Phase B RoPE */
+HexaVal hexa_farr_rope_bwd_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v,
+                               HexaVal T_v, HexaVal nh_v, HexaVal hd_v);      /* runtime.c — RFC 041 Phase B RoPE */
+HexaVal farr_rope_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                      HexaVal T, HexaVal nh, HexaVal hd);                      /* runtime.c — RFC 041 Phase B RoPE (6-arg direct) */
+HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                          HexaVal T, HexaVal nh, HexaVal hd);                  /* runtime.c — RFC 041 Phase B RoPE (6-arg direct) */
 
 #endif /* HEXA_RUNTIME_H */

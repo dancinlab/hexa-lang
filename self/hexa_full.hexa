@@ -10794,6 +10794,10 @@ fn call_builtin(name, args) {
     if name == "farr_silu_grad_gpu"       { if len(args) > 1 { return val_int(hexa_farr_silu_grad_gpu(args[0].int_val, args[1].int_val)) }                                           else { return val_int(-1) } }
     if name == "farr_rmsnorm_bwd_rows_gpu" { if len(args) > 3 { return val_int(farr_rmsnorm_bwd_rows_gpu(args[0].int_val, args[1].int_val, args[2].int_val, args[3].int_val)) } else { return val_int(-1) } }
     if name == "farr_adamw_step_gpu"      { if len(args) > 10 { return val_int(farr_adamw_step_gpu(args[0].int_val, args[1].int_val, args[2].int_val, args[3].int_val, args[4].int_val, args[5].float_val, args[6].float_val, args[7].float_val, args[8].float_val, args[9].float_val, args[10].int_val)) } else { return val_int(-1) } }
+    // RFC 041 Phase B (2026-05-17): farr_rope_gpu / farr_rope_bwd_gpu —
+    // rotary position embedding fwd + bwd (6-arg bare direct entry).
+    if name == "farr_rope_gpu"            { if len(args) > 5 { return val_int(farr_rope_gpu(args[0].int_val, args[1].int_val, args[2].int_val, args[3].int_val, args[4].int_val, args[5].int_val)) }     else { return val_int(-1) } }
+    if name == "farr_rope_bwd_gpu"        { if len(args) > 5 { return val_int(farr_rope_bwd_gpu(args[0].int_val, args[1].int_val, args[2].int_val, args[3].int_val, args[4].int_val, args[5].int_val)) } else { return val_int(-1) } }
     // RFC 033 (2026-05-12): farr_copy + farr_add_gaussian_noise.
     if name == "farr_copy" { if len(args) > 0 { return val_int(farr_copy(args[0].int_val)) }                                                                  else { return val_int(-1) } }
     if name == "farr_add_gaussian_noise" { if len(args) > 1 { let _ = farr_add_gaussian_noise(args[0].int_val, args[1].float_val); return val_void() }       else { return val_void() } }
