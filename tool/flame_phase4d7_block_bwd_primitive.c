@@ -482,12 +482,23 @@ static void flame_block_generic_bwd_primitive_gpu(
     const int oR1inv = 8*T*d + 2*T*kvd + nh*T*T + 3*T*h;
     const int oR2inv = 8*T*d + 2*T*kvd + nh*T*T + 3*T*h + T;
 
-    // ── PART 1: persistent device residency ──
-    hexa_farr_to_device(hexa_int(X_id));
-    hexa_farr_to_device(hexa_int(Bp_id));
-    hexa_farr_to_device(hexa_int(Bc_id));
-    hexa_farr_to_device(hexa_int(Bg_id));
-    hexa_farr_to_device(hexa_int(dXout_id));
+    // ── PART 1: residence-state contract (FIRE7 d2h-state-mismatch fix) ──
+    // Same diagnosis + fix as the fwd primitive (see flame_phase4d7_block_
+    // fwd_primitive.c header comment): X/Bp/Bc/Bg/dXout/dX_out are read/
+    // written HOST-SIDE here — every forge `*_gpu` kernel and every cuBLAS
+    // matmul/grad_accum sub-op builds its OWN fresh scratch farr, does its
+    // OWN _h2d/_d2h_out on that scratch, and the result is copied host-side
+    // into Bg.buf / dX_out.buf. The block-level to_device(entry) /
+    // to_host(exit) calls were never used by the sub-op dataflow and were
+    // actively harmful on -DHEXA_CUDA: dX_out_id is NEVER uploaded (only
+    // dXout_id was), so the exit hexa_farr_to_host(dX_out_id) hits
+    // `!s->d_buf` → `[cuda] d2h: state mismatch id=…` every block (FIRE7
+    // ids 11/12/16 = the long-lived dX_out / Bg / Bc handles). Bg's entry
+    // device snapshot likewise goes stale across freelist-reused steps, so
+    // its exit D2H would clobber the correct host gradient. Correct
+    // contract: host stays authoritative for these accumulators — no
+    // block-boundary device residency assertion. (No-CUDA: inert no-ops;
+    // d=32·3L takes _cpu — byte-eq intact.)
 
     HexaVal dh_v = hexa_farr_zeros(hexa_int((int64_t)T * d));
     int dh_id = (int)dh_v.i;
@@ -929,9 +940,15 @@ static void flame_block_generic_bwd_primitive_gpu(
     hexa_farr_free(drin_v);
     hexa_farr_free(dh_v);
 
-    // ── PART 1 close: dX_out + Bg back to host ──
-    hexa_farr_to_host(hexa_int(dX_out_id));
-    hexa_farr_to_host(hexa_int(Bg_id));
+    // ── PART 1 close (FIRE7 fix): NO block-level to_host(dX_out/Bg) ──
+    // dX_out and Bg are accumulated entirely host-side (every forge/cuBLAS
+    // sub-op _d2h'd its own scratch output; the primitive copied it into
+    // dX_out.buf / Bg.buf, and the final RMSNorm-1 vjp writes dX_out.buf
+    // directly). dX_out_id was never to_device'd, so a block-level
+    // hexa_farr_to_host(dX_out_id) hits the `!s->d_buf` d2h state check and
+    // prints `[cuda] d2h: state mismatch` (FIRE7); to_host(Bg) would D2H a
+    // stale entry-time snapshot over the correct host gradient. Host stays
+    // authoritative — no block-boundary D2H for host-accumulated farrs.
 }
 
 // ── Dimension-gated dispatch entry point (concat / non-standalone) ──────
