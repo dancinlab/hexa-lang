@@ -36,5 +36,10 @@
   -실현 *설계*를 별도 standalone repo `~/core/hexa-arch` 의 chip 도메인을
   *사용*해 산출 (comb=소비자, EDA 흡수는 hexa-arch; fab/FPGA 비목표;
   hexa-arch 생성 commit c812ac6). root `GOAL.md` ③
-  comb north-star + RESUME 복붙블록 추가. comb/ + GOAL.md 커밋. 다음 게이트:
-  T1 = F1/F2 해소용 hex axial NoC 사이클 시뮬 (modern node) — user gate 대기.
+  comb north-star + RESUME 복붙블록 추가. comb/ + GOAL.md 커밋 55b9af4f.
+- 2026-05-18 — comb 진행: `T1_experiment.md` 작성 (F1/F2 pre-registered
+  측정 명세 — 두 위상 정밀정의 · modern-node wire model 변수 · Leighton
+  symbolic 앵커 · pass/fail · hexa-arch[chip] 인터페이스). T1 분할:
+  **T1-A** 해석적 앵커(comb-side, sim 불요, 다음 액션) / **T1-B** sim 측정
+  (blocked-on hexa-arch[chip] NoC sim 흡수). 다음 = T1-A 표 정밀화
+  (Leighton degree-d 상수 derive + `hexa verify` 검증).

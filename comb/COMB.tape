@@ -49,4 +49,5 @@
   axis_c = "comb/axis_c_model.md — motivation (DESIGN)"
   rfc = "comb/RFC.md — 합본 DRAFT, RFC 057 (확정, 충돌0 above rfc_056), 5 falsifier (F1–F5)"
   plan = "comb/PLAN.md — 진행 로그 SSOT"
-  next_gate = "T1 = F1/F2 해소용 hex axial NoC 사이클 시뮬 (degree-6 vs degree-4, modern node, Leighton B3 하한 대비) — user gate 대기"
+  t1_spec = "comb/T1_experiment.md — F1/F2 pre-registered 측정 명세 (consumer-side)"
+  next_gate = "T1-A 해석적 앵커 (Leighton degree-d 상수 derive + hexa verify; comb-side, sim 불요) → T1-B sim 측정은 hexa-arch[chip] NoC sim 흡수 후 (blocked-on-hexa-arch)"
