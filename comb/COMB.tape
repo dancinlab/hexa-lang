@@ -52,6 +52,7 @@
   t1_spec = "comb/T1_experiment.md — F1/F2 pre-registered 측정 명세 (consumer-side)"
   t1a_done = "comb/T1A_analytical.md — T1-A 완료 (sim 불요). 표준 NoC 문헌 인용·정리, 산술 elementary, caveat 5건. 핵심: diameter hex/mesh = 1/√3, avg dist 1/√3, hop 절감 ≈ 0.845√N, degree·links 1.5×, hop 부등식 §3."
   t1b_oracle_done = "comb/sim/noc_distance.hexa — T1-B-oracle. hexa parse PASS · build OK · 컴파일 바이너리 실행. N=10000 D_hex/D_mesh=114/198=0.5758 ≈ 1/√3."
-  t2_partial_f1_done = "comb/sim/f1_parametric.hexa — T2-partial F1 verdict (비경쟁 NoC, Dally & Towles 2004 §3.7). 8/8 sweep 행에서 degree-6 net win (lat·energy). cross-over t_router_d6 ≈ 276 (2.76x baseline) — 현실 d-linear 1.5x 안전영역. RFC 057 F1 비경쟁 한정 PASS. ⭐️ commit pending."
+  t2_partial_f1_done = "comb/sim/f1_parametric.hexa — T2-partial F1 (비경쟁 NoC, Dally & Towles §3.7). 8/8 sweep degree-6 net win. cross-over t_router_d6 ≈ 276. ⭐️ commit 1c18ed40."
+  t2_rtl_first_byte = "comb/rtl/emit_routers.hexa → routers.v (36 lines, mesh d4 + hex d6 port skeleton, axial 좌표축 명시). hexa-native Verilog emitter. NOT tapeout-ready (datapath/synth/DRC = hexa-arch[chip])."
   decouple_refine = "comb 가 안 하는 것 = 외부 EDA *흡수* (BookSim2/Yosys/OpenROAD/SKY130 — hexa-arch). comb 가 하는 것 = 자체 graph/non-contention 모델 측정."
   next_gate = "(a) RTL 스텁 (hexa→Verilog emitter, comb-side, T2 RTL 측면) (b) T1-B-full = hexa-arch[chip] BookSim2 흡수 (congestion·real-workload 측정)"

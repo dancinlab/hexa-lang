@@ -68,3 +68,13 @@
   은 T1-B-full 후 측정 필요 — non-contention 은 lower bound 일 뿐.
   다음 = (a) RTL 스텁(comb-side hexa→Verilog emitter) 으로 T2 RTL 측면
   착수 (b) T1-B-full = hexa-arch[chip] BookSim2 흡수 후.
+- 2026-05-18 — **T2 RTL 첫 바이트** (`comb/rtl/`): hexa-native Verilog
+  emitter (`emit_routers.hexa` — parse PASS · build OK · 실행) →
+  `routers.v` (36줄, degree-4 mesh router + degree-6 hex axial router
+  port-skeleton). 좌표축 axial (pos_q, neg_q, pos_r, neg_r, pos_s, neg_s)
+  port 명 명시. datapath/arbiter 미충전 (스텁) — 후속은 hexa-arch[chip]
+  Chisel/Amaranth 흡수 + Yosys 합성 + OpenROAD P&R. T2 RTL 측면 0% →
+  *건축 RTL spec* 시작. tapeout-ready 가 아님 (DRC·PDK 매핑 미수행).
+  현 상태: T2 sim 측면 = 비경쟁 F1 PASS (lower bound) · T2 RTL 측면 =
+  port skeleton emitted. T2 ~15-25%. T3 = 0% (hexa-arch[chip] RTL→GDSII
+  필요).
