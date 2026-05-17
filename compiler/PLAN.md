@@ -643,3 +643,41 @@ a.push(1); a.push(2)... }`): oracle 2 / ap1f 2 ✓ / ap2f → `.push` 에 2× sp
 stride fix 는 global 인데 residual 잔존). arena class 아님(map heap-resident). 다음
 cycle: `_types_check_call`/`_infer_expr` 의 `Field`-callee self-compile miscompile 을
 codegen_c2 oracle 대비 isolate (task #28).
+
+---
+
+### 진행 로그 — #28 enum-== self-host miscompile FIXED (`fa210c54`) + ap2f full-compiler 컴파일 도달 + #29 노출 (cycle h19)
+
+**#28 ROOT-CAUSED & LANDED on main `fa210c54`** (`Field`-callee 가설은 표면증상, 진짜 root
+는 enum value `==`):
+- native(aprime_cc) lowering 은 enum variant 를 map `{__tag: hash, __pN: payload}` 으로
+  표현 (`hir_to_mir.hexa` enum_path → struct_lit). `hexa_eq` 의 `TAG_MAP` case 가
+  table-pointer identity 로 비교 → 같은 variant 의 별도-생성 enum map 2개가 항상 not-equal
+  → enum `==` 사실상 항상 false. `_types_check_call`(`types.hexa:1546`)의
+  `callee.kind == ExprKind::Field` 가 native build 에선 항상-false enum-map `==` →
+  `.push` method-call callee 가 builtin-method dispatch 로 인식 안 됨 → ap2 가 full
+  compiler 컴파일 시 1032× spurious HX2001. hexa_v2 C-path 는 enum 을 `hexa_int(index)`
+  로 lowering → int 비교라 정상 → ap1 정상, self-compiled ap2 만 flood (native-only 발산).
+- Fix: `self/runtime.c` `hexa_eq` TAG_MAP case — **양쪽 map 이 `__tag` key 보유 시**
+  (struct 는 `__type__` → disjoint → `__tag` map = enum value 확정) 구조적 비교
+  (`__tag` int → 각 `__pN` payload 재귀). plain map/struct/dict 는 pointer-identity 유지
+  (non-`__tag` different-table 은 기존대로 false). interp 무변경 (interp 는 `__tag` map
+  미생성).
+- 검증: build_aprime smoke PASS (clean origin/main); gate-1 **33/44 분포 동일**(zero
+  regression); ap1 vs ap1f asm non-enum byte-identical (runtime-only fix); 7-line `.push`
+  repro ap2 출력 `2` + HX2001 0.
+
+**★ 마일스톤 — ap2f 가 full flattened compiler 를 진단오류 0 으로 컴파일:**
+ap1f → flat → ap2f 가 22k-line flattened compiler 를 **HX2001 0 + map-key error 0** 으로
+컴파일, 1-run 기준 `ap1f.s == ap2f.s` byte-identical (MD5 `2a673ca2…`). self-host
+fixpoint 의 enum-`==` 축 도달 — #23~#28 6 버그 누적 종결로 ap2 가 frontend·atlas-load·
+lex·parse·bind·codegen 전 구간 통과.
+
+**#29 EXPOSED (잔여 self-host 블로커 — bit-stable fixpoint 차단):**
+native-asm-compiled compiler(ap2 tier)가 **non-deterministic** — 동일 `fx_flat.hexa` 에
+ap2f 재실행 시 asm 상이 (enum `__tag` hash 의 `movz/movk` immediate 변동; run2 가
+high-bit garbage 64-bit + `mvn` 산출). ap1f(hexa_v2 C-path build)는 3-run 결정적.
+Symbol: `compiler/codegen/arm64_darwin.hexa::_arm64_op_rm` 의 `const_int` operand
+`o.int_val` read. #26/#27 와 동류의 fn-arena / struct-array field-read aliasing class —
+`Operand.int_val` 가 arena rewind 가로질러 stale memory read. full bit-stable self-host
+(ap2f ≡ ap3f byte-identical) 은 #29 종결까지 미달. 별도 cycle (task #29).
