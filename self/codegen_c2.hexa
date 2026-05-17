@@ -1300,9 +1300,18 @@ fn gen2_fn_decl(node) {
     // bt 72: per-function shadow handling via hoisting. Seed declared-names
     // with params so `let x` where x is a param emits as assignment.
     _gen2_declared_names = []
+    // H17 fix: also seed _gen2_current_fn_params with the unmangled names
+    // so _is_known_int_name / _is_known_float_name can detect when a
+    // module-global int/float name is shadowed by a fn param. Without
+    // this, a prior fn's `let a = 0` makes ALL subsequent fns' `a` params
+    // (even `a: float`) get unboxed via HX_INT() → garbage values for
+    // ops 0/1/2/3 of binary_value (and any similar shape). Repro:
+    // perfect_number_engine_smoke a/b float params after Fibonacci helper.
+    _gen2_current_fn_params = []
     let mut _pi = 0
     while _pi < len(node.params) {
         _gen2_declared_names.push(_hexa_mangle_ident(node.params[_pi].name))
+        _gen2_current_fn_params.push(node.params[_pi].name)
         _pi = _pi + 1
     }
     // Collect all LetStmt names (with duplicates).
@@ -3044,6 +3053,24 @@ fn _gen2_fnref_method_arity(name) {
 // the script-body walk; over-broad inside lambdas (uses the enclosing fn's
 // lets) which is the safe direction (more idents left un-thunked).
 let mut _gen2_current_fn_lets = []
+
+// Params of the current fn being codegen'd. Used to suppress
+// `_known_int_set` / `_known_float_set` false-positives when a
+// previous fn's local `let X = 0` registers "X" as known-int and
+// the current fn happens to take a param `X: float`. The set is
+// module-global by design (no fn-boundary clearing), so without
+// this guard the float param gets unboxed via `HX_INT()` → garbage.
+// Set in gen2_fn_decl alongside _gen2_current_fn_lets.
+let mut _gen2_current_fn_params = []
+
+fn _gen2_name_in_cur_params(name) {
+    let mut i = 0
+    while i < len(_gen2_current_fn_params) {
+        if _gen2_current_fn_params[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
 
 fn _gen2_name_in_cur_lets(name) {
     let mut i = 0
@@ -6069,6 +6096,9 @@ fn _known_float_add(name) {
 
 fn _is_known_float_name(name) {
     if len(_known_float_set) != 64 { return false }
+    // H17 fix: see _is_known_int_name — param annotation is authoritative
+    // over any prior fn's module-global known-float registration.
+    if _gen2_name_in_cur_params(name) { return false }
     let b = _known_hash(name)
     let bucket = _known_float_set[b]
     let mut i = 0
@@ -6086,6 +6116,10 @@ fn _known_int_add(name) {
 
 fn _is_known_int_name(name) {
     if len(_known_int_set) != 64 { return false }
+    // H17 fix: fn params shadow any module-global known-int registration.
+    // The current fn's param type is authoritative; a prior fn's `let X = 0`
+    // must not be applied to this fn's `X: float` param.
+    if _gen2_name_in_cur_params(name) { return false }
     let b = _known_hash(name)
     let bucket = _known_int_set[b]
     let mut i = 0
