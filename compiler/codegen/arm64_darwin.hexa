@@ -1124,7 +1124,12 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "exit"          { return "hexa_exit" }
     if name == "exec"          { return "hexa_exec" }
     if name == "file_exists"   { return "rt_file_exists" }
-    if name == "index_of"      { return "hexa_array_index_of" }
+    // NOTE: index_of is handled by a dedicated arg-count-aware
+    // STMT_CALL branch (string method -> hexa_str_index_of /
+    // hexa_str_index_of_from, int-boxed). The old
+    // hexa_array_index_of map returned -1 for every string
+    // receiver -- a wrong-value miscompile that silently
+    // flipped atlas-verifier predicates.
     if name == "join"          { return "hexa_str_join" }
     if name == "push"          { return "hexa_array_push" }
     if name == "pop"           { return "hexa_array_pop" }
@@ -1445,6 +1450,31 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              _arm64_op_reg("w0"), "has_key: zext"))
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
                              "has_key: box bool"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // index_of(recv, sub[, start]) special: `.index_of` is a STRING
+        // method (byte offset of first occurrence, or -1). The old
+        // _builtin_runtime_sym map routed it to hexa_array_index_of,
+        // which returns -1 for every string receiver -- a wrong-VALUE
+        // miscompile that silently flipped atlas-verifier predicates
+        // (audit scans doing `raw.index_of(token) >= 0`). Mirrors
+        // codegen_c2.hexa gen2_method_builtin: 2-arg form ->
+        // hexa_str_index_of_from, 1-arg form -> hexa_str_index_of;
+        // both return a C int64_t that must be boxed into a HexaVal.
+        if s.op == "index_of" && len(s.args) >= 2 {
+            let iof_sym = if len(s.args) >= 3 { "hexa_str_index_of_from" } else { "hexa_str_index_of" }
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
+            if len(s.args) >= 3 {
+                buf = _hv_load(buf, s.args[2], st, rm, "x4", "x5")
+            }
+            buf.push(_arm64_instr1("bl", _arm64_op_label(iof_sym),
+                             "index_of: str index_of"))
+            buf.push(_arm64_instr2("sxtw", _arm64_op_reg("x0"),
+                             _arm64_op_reg("w0"), "index_of: sign-ext"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_int"),
+                             "index_of: box to HexaVal"))
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
