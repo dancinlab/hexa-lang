@@ -29,6 +29,7 @@ pub enum TokenKind {
     RParen,
     LBrace,
     RBrace,
+    HashLBrace,    // #{ — hash-map literal opener (#{ "k": v, ... })
     LBracket,
     RBracket,
     Char,          // 'c' / '\n' / etc. — A1.5
