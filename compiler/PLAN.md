@@ -31,14 +31,26 @@
 
 **다음 진행 candidates**:
 - #5 atlas SIGSEGV (≥17 nested-struct UB · runtime shallow-clone aliasing)
-- #13 aprime_cc DWARF `.loc` emission
 - #18 aprime_cc self-host (hexa_v2 의존 끊기)
 - ~170 unmapped runtime builtins (per-symbol triage)
 - 60-smoke 재측정 (activated binary lift 확인 — auto-invoke + fn-dedup + lvalue + nil 누계)
+- 통계적-statement-level DWARF `.loc` (Stmt/LInstr line threading — #13 follow-up)
 
 ## 진행 로그
 
 (append-only)
+
+### 2026-05-17 — #13 DWARF `.loc` — aprime_cc 소스 매핑 directive emit (`76c12a45`)
+aprime_cc-direct codegen 이 DWARF `.file` + function-level `.loc` directive emit — lldb/gdb 가 machine code → .hexa source line 매핑 가능.
+
+**구현** (function-granular line threading, 14 files):
+- `compiler/ir/mir.hexa` MFunc + `compiler/ir/lir.hexa` LFunc 에 `def_line: i64` 필드 추가.
+- `_lower_fn` 이 `HItem.span.line` 에서 MFunc.def_line 설정. 3 opt pass (inline/dce/const_fold) + 3 codegen backend (arm64/x86/thumb) 가 def_line pass-through.
+- `compiler/emit/asm.hexa` — header 에 `.file 1 "<source>"`, `_emit_func` 가 fn label 뒤 `.loc 1 <def_line> 0` emit. `compiler/codegen/stream.hexa` streaming path 도 동일 `.file`.
+
+**Validation** (재빌드 aprime_cc 2,050,376 B): `fn maybe()` line 1 / `fn main()` line 4 → asm `.loc 1 1 0` / `.loc 1 4 0`. `clang -g -c` → `dwarfdump --debug-line`: 유효 DWARF32 v5 line table (0x0→line 1, 0x18→line 4, end_sequence). asm 정상 assemble+run.
+
+**Scope**: function-level (fn 당 1 `.loc`, 정의 line). statement-level `.loc` 는 Stmt/LInstr line 필드 threading 필요 — finer source-stepping 시 별도 follow-up.
 
 ### 2026-05-17 — #9 nil tier-1 codegen — aprime_cc `nil` → TAG_VOID (`14267c08`)
 aprime_cc-direct (tier-1) 에서 `return nil` 이 TAG_INT 0 으로 emit 되던 문제 종결. `type_of(maybe())` 가 "int" 반환 (정상 "void").
