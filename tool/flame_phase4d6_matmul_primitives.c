@@ -308,21 +308,27 @@ static inline void flame_proj_batch_generic_primitive(
     // _hx_farr_table.
     C = _hx_farr_table[C_id].buf;
     Y = _hx_farr_table[Y_id].buf;
+    // ── RFC 058 ROLLBACK (rfc058-rollback, post-fire-#13/#14) ────────────
+    // The RFC 058 transpose-scatter kernel ACTIVATION is rolled back here.
+    // fires #9–#12 (host transpose loop) → d768 init-epoch gn2 = 3.99026
+    // (verified-good). fire #13 (RFC 058 transpose-scatter kernel) →
+    // gn2 = 3.98438 (WRONG). fire #14 (RFC 058 + a _d2h byte-eq fix) →
+    // gn2 = -nan (WORSE). The d768 GPU-resident path has NO byte-eq oracle
+    // (only d=32 has verify_all), so the regression was caught only at the
+    // 13th paid GPU fire.
+    //
+    // Minimal safe rollback: the host transpose loop below — the original
+    // pre-RFC-058 code, byte-eq-correct-by-construction — ALWAYS runs. The
+    // hexa_farr_transpose_scatter_gpu kernel/wrapper/dispatcher stay in the
+    // tree as DEAD CODE (unreachable here → harmless); they may be revived
+    // once the d768 GPU-path byte-eq oracle exists (see flame_phase4d7_
+    // gpu_path_oracle.sh / PHASE4D7_GPU_PATH_ORACLE.md). RFC 057 §6.1
+    // (cuBLAS output left device-resident — flame_rfc057_mark_device_
+    // authoritative + the `if (mm_c_id >= 0) farr_free` below) is UNTOUCHED:
+    // fire #12 had §6.1 and was correct (gn2 3.99026); only the transpose-
+    // scatter is the regression. did_dev_scatter is forced to stay 0 so the
+    // host loop is the sole Y-scatter path on every config (d=32 and d768).
     int did_dev_scatter = 0;
-#ifdef HEXA_CUDA
-    if (mm_c_id >= 0) {
-        // src = C (d_out×T, device-resident), dst = Y (Bc), slab at
-        // Y_off. rows=d_out, cols=T → dst[Y_off+t·d_out+r]=C[r·T+t].
-        HexaVal ts_rc = hexa_farr_transpose_scatter_gpu(
-            hexa_int(mm_c_id), hexa_int(Y_id),
-            hexa_int(d_out), hexa_int(T), hexa_int(Y_off));
-        if (HX_INT(ts_rc) == 0) {
-            did_dev_scatter = 1;
-        }
-        // rc != 0 → fall through to the host loop below (no fake PASS;
-        // C's host bytes are byte-identical so the host scatter is safe).
-    }
-#endif
     if (!did_dev_scatter) {
         for (int r = 0; r < d_out; r++)
             for (int t2 = 0; t2 < T; t2++)
