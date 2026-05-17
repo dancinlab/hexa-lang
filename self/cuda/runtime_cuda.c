@@ -298,3 +298,580 @@ int _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
     ce->dirty_dev  = 0;
     return 0;
 }
+
+/* ════════════════════════════════════════════════════════════════════
+ * RFC 041 Phase 4-D-5-2 — Phase B reduction + Phase B2 real CUDA kernels
+ * ────────────────────────────────────────────────────────────────────
+ * 6 ops landed this cycle (reduction + matmul-variants split; the
+ * elementwise split — mul/add/scale/silu/silu_grad — is the parallel
+ * Agent's deliverable):
+ *
+ *   reduction (block-per-row, warp-shuffle, no atomics):
+ *     - _hx_cuda_farr_softmax_rows_gpu     (Phase B)
+ *     - _hx_cuda_farr_rmsnorm_rows_gpu     (Phase B)
+ *     - _hx_cuda_farr_rmsnorm_bwd_rows_gpu (Phase B2; two row reductions)
+ *
+ *   matmul-variants (cuBLAS Dgemm reshape per RFC 041 §1):
+ *     - _hx_cuda_farr_matmul_t_gpu  (Mᵀ·u   = cublasDgemm u[1×R]·M[R×C]→[1×C])
+ *     - _hx_cuda_farr_outer_gpu     (u⊗v    = cublasDgemm u[R×1]·v[1×C]→[R×C])
+ *
+ *   1-D fused in-place update (no cross-element reduction):
+ *     - _hx_cuda_farr_adamw_step_gpu (decoupled-wd AdamW, mirrors dt2_adamw_step)
+ *
+ * Wiring contract (matches existing Phase A `_hx_cuda_farr_matmul_gpu`):
+ *   - Caller (self/runtime.c) has already allocated `out_id` via
+ *     hexa_farr_zeros with the correct length.
+ *   - We H2D-upload inputs (idempotent), cudaMalloc the output device
+ *     buffer (if not resident), launch the kernel / cuBLAS, then D2H
+ *     the result back to the caller's host buffer.
+ *   - Returns 0 ok / -1 err. Every error path prints `[cuda] <op>: ...`
+ *     to stderr; no silent fallback, no fake PASS.
+ *
+ * Determinism (F-RFC041-DETERMINISM):
+ *   - Reductions use FIXED block size + warp-shuffle/shared-mem tree
+ *     (no `atomicAdd`). Run-to-run byte-identical at fixed shape.
+ *   - cuBLAS Dgemm: same handle, no Tensor-Op math mode flip → bit-eq
+ *     across invocations on the same shape (per Phase D evidence).
+ *
+ * Tolerance choices (CALIBRATED — not asserted by hope):
+ *   - matmul_t   : TOL_MATMUL ≈ 2e-9 relative (carries RFC 040 §2.2 H100
+ *                  cuBLAS Dgemm measurement; same kernel, same caveat)
+ *   - outer      : |Δ| = 0 BIT-EXACT (single product term per cell,
+ *                  zero reduction → no fp non-associativity; RFC 041
+ *                  F-RFC041-OUTER-EXACT demands exactness)
+ *   - softmax_rows / rmsnorm_rows / rmsnorm_bwd_rows : TOL_ELEM ≈ 1e-12
+ *                  (one row-length reduction, C ≤ ~4096; warp-shuffle
+ *                  tree reorders pairwise sums relative to CPU sequential
+ *                  loop — the fp non-associativity bound for sum of N
+ *                  doubles is ~N·ε ≈ 4096·2.22e-16 ≈ 1e-12. Conservative.)
+ *   - adamw_step : TOL_ELEM ≈ 1e-12 (no cross-element reduction; only the
+ *                  per-element sqrt/division ULP — essentially bit-eq
+ *                  modulo the libm sqrt platform ulp delta. The CPU side
+ *                  also uses libm sqrt; bit-eq expected on modern x86/A64
+ *                  but a 1e-15 cushion guards against IEEE-754 corner
+ *                  cases on the GPU sqrt.)
+ *
+ * Build:
+ *   - Real kernels are compiled by `nvcc -x cu -c runtime_cuda.c` only
+ *     (the gcc-on-no-GPU path in PHASE_D_H100_EVIDENCE remains valid
+ *     for Phase A — it never enters the `__CUDACC__`-guarded bodies and
+ *     would link-fail at runtime if the new symbols are called without
+ *     nvcc; that link-fail is the correct, honest behaviour).
+ *   - On Mac dev (clang -DHEXA_CUDA -I /usr/local/cuda/include) the
+ *     `__CUDACC__` macro is undefined, so the wrappers below compile as
+ *     `return -1` stubs — syntactic check passes, no fake PASS.
+ * ════════════════════════════════════════════════════════════════════ */
+
+/* ── Output-allocation helper (no H2D upload — output starts fresh). ── */
+static int _ensure_dev_alloc_out(int64_t out_id, int64_t need_len) {
+    if (out_id < 0 || out_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] out: bad id %lld\n", (long long)out_id);
+        return -1;
+    }
+    if (_ensure_slot_cap(out_id) != 0) return -1;
+    HexaFarrEntry* e = &_hx_farr_table[out_id];
+    _CudaFarrSlot* s = &g_slots[out_id];
+    if (!e->buf || e->len < need_len) {
+        fprintf(stderr, "[cuda] out: host len %lld < need %lld\n",
+                (long long)e->len, (long long)need_len);
+        return -1;
+    }
+    if (!s->d_buf || s->len != e->len) {
+        if (s->d_buf) cudaFree(s->d_buf);
+        cudaError_t er = cudaMalloc((void**)&s->d_buf,
+                                    (size_t)e->len * sizeof(double));
+        if (er != cudaSuccess) {
+            fprintf(stderr, "[cuda] cudaMalloc out(%lld) failed: %s\n",
+                    (long long)e->len, cudaGetErrorString(er));
+            s->d_buf = NULL; s->len = 0;
+            return -1;
+        }
+        s->len = e->len;
+    }
+    return 0;
+}
+
+/* ── D2H of an output buffer with explicit length (post-kernel copy). ── */
+static int _d2h_out(int64_t out_id, int64_t copy_len) {
+    HexaFarrEntry* e = &_hx_farr_table[out_id];
+    _CudaFarrSlot* s = &g_slots[out_id];
+    cudaError_t er = cudaMemcpy(e->buf, s->d_buf,
+                                (size_t)copy_len * sizeof(double),
+                                cudaMemcpyDeviceToHost);
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] D2H out failed: %s\n", cudaGetErrorString(er));
+        return -1;
+    }
+    e->d_buf      = (void*)s->d_buf;
+    e->loc        = FARR_MIRRORED;
+    e->dirty_host = 0;
+    e->dirty_dev  = 0;
+    return 0;
+}
+
+#ifdef __CUDACC__
+
+/* ── Warp + block sum-reduction primitives (deterministic tree). ── */
+/* Block size for row-reduction kernels. 256 threads = 8 warps, fits
+ * even long rows (C up to ~4096 with grid-stride within the block). */
+#define HX_RR_BLOCK 256
+
+__device__ __forceinline__ double _hx_warp_sum(double v) {
+    /* unsigned mask = 0xFFFFFFFF — all 32 threads of the warp. */
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        v += __shfl_down_sync(0xFFFFFFFFu, v, offset);
+    }
+    return v;
+}
+
+__device__ __forceinline__ double _hx_warp_max(double v) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        double o = __shfl_down_sync(0xFFFFFFFFu, v, offset);
+        if (o > v) v = o;
+    }
+    return v;
+}
+
+/* Block-wide sum: warp-reduce → shared-mem (one slot per warp) → first
+ * warp re-reduces. HX_RR_BLOCK=256 → 8 warps → 8 shared slots. Returns
+ * the total on thread 0; other threads see garbage. */
+__device__ __forceinline__ double _hx_block_sum(double v, double* smem) {
+    int lane = threadIdx.x & 31;
+    int wid  = threadIdx.x >> 5;
+    v = _hx_warp_sum(v);
+    if (lane == 0) smem[wid] = v;
+    __syncthreads();
+    /* First warp reads up-to-(HX_RR_BLOCK/32) warp sums + reduces. */
+    int n_warps = (blockDim.x + 31) >> 5;
+    if (wid == 0) {
+        double w = (lane < n_warps) ? smem[lane] : 0.0;
+        w = _hx_warp_sum(w);
+        if (lane == 0) smem[0] = w;
+    }
+    __syncthreads();
+    return smem[0];
+}
+
+__device__ __forceinline__ double _hx_block_max(double v, double* smem) {
+    int lane = threadIdx.x & 31;
+    int wid  = threadIdx.x >> 5;
+    v = _hx_warp_max(v);
+    if (lane == 0) smem[wid] = v;
+    __syncthreads();
+    int n_warps = (blockDim.x + 31) >> 5;
+    if (wid == 0) {
+        /* -inf-equivalent for unused slots; rows always have ≥1 valid val. */
+        double w = (lane < n_warps) ? smem[lane] : -1.0e308;
+        w = _hx_warp_max(w);
+        if (lane == 0) smem[0] = w;
+    }
+    __syncthreads();
+    return smem[0];
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ * Kernel 1 — softmax_rows: numerically-stable row-wise softmax.
+ *   Y[r,j] = exp(X[r,j] - max_j X[r,j]) / Σ_j exp(...)
+ * Layout: one block per row (gridDim.x = R), HX_RR_BLOCK threads per
+ * block. Each thread strides across the row.
+ * Two reductions per row (max, then sum). Fixed tree → deterministic.
+ * ──────────────────────────────────────────────────────────────────── */
+__global__ void _hx_k_softmax_rows(const double* __restrict__ X,
+                                   double* __restrict__ Y,
+                                   int64_t R, int64_t C) {
+    int64_t r = blockIdx.x;
+    if (r >= R) return;
+    const double* xr = X + r * C;
+    double*       yr = Y + r * C;
+
+    __shared__ double smem[HX_RR_BLOCK / 32];
+
+    /* Pass 1: row max. */
+    double vmax = -1.0e308;
+    for (int64_t j = threadIdx.x; j < C; j += blockDim.x) {
+        double v = xr[j];
+        if (v > vmax) vmax = v;
+    }
+    double zmax = _hx_block_max(vmax, smem);
+
+    /* Pass 2: write exp(x - max) into Y, accumulate sum. */
+    double vsum = 0.0;
+    for (int64_t j = threadIdx.x; j < C; j += blockDim.x) {
+        double e = exp(xr[j] - zmax);
+        yr[j] = e;
+        vsum += e;
+    }
+    double s = _hx_block_sum(vsum, smem);
+    double inv = (s > 0.0) ? (1.0 / s) : 0.0;
+
+    /* Pass 3: normalize. */
+    for (int64_t j = threadIdx.x; j < C; j += blockDim.x) {
+        yr[j] *= inv;
+    }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ * Kernel 2 — rmsnorm_rows: Y[r,j] = X[r,j] / sqrt(mean_j(X²) + eps)
+ *   One block per row; one reduction (sum of squares).
+ * ──────────────────────────────────────────────────────────────────── */
+__global__ void _hx_k_rmsnorm_rows(const double* __restrict__ X,
+                                   double* __restrict__ Y,
+                                   int64_t R, int64_t C, double eps) {
+    int64_t r = blockIdx.x;
+    if (r >= R) return;
+    const double* xr = X + r * C;
+    double*       yr = Y + r * C;
+
+    __shared__ double smem[HX_RR_BLOCK / 32];
+
+    double v = 0.0;
+    for (int64_t j = threadIdx.x; j < C; j += blockDim.x) {
+        double x = xr[j];
+        v += x * x;
+    }
+    double ss = _hx_block_sum(v, smem);
+    double ms = ss / (double)C;
+    double inv = 1.0 / sqrt(ms + eps);
+
+    for (int64_t j = threadIdx.x; j < C; j += blockDim.x) {
+        yr[j] = xr[j] * inv;
+    }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ * Kernel 3 — rmsnorm_bwd_rows: exact dx-branch of RMSNorm vjp.
+ *   inv  = (mean_j(x²)+ε)^(−1/2)
+ *   dot  = Σ_k dxn_k · x_k
+ *   dx_i = inv·dxn_i − (inv³·x_i / C)·dot
+ *   ε = 1e-6 (mirrors CPU c3_rmsnorm_bwd contract).
+ * Two reductions per row (ms = Σx², dot = Σdxn·x).
+ * ──────────────────────────────────────────────────────────────────── */
+__global__ void _hx_k_rmsnorm_bwd_rows(const double* __restrict__ X,
+                                       const double* __restrict__ DXN,
+                                       double* __restrict__ O,
+                                       int64_t R, int64_t C) {
+    int64_t r = blockIdx.x;
+    if (r >= R) return;
+    const double* xr  = X   + r * C;
+    const double* dxr = DXN + r * C;
+    double*       orr = O   + r * C;
+
+    __shared__ double smem[HX_RR_BLOCK / 32];
+
+    /* Reduction 1: sum of squares. */
+    double ssq = 0.0;
+    for (int64_t j = threadIdx.x; j < C; j += blockDim.x) {
+        double x = xr[j];
+        ssq += x * x;
+    }
+    double ms_total = _hx_block_sum(ssq, smem);
+    double ms       = ms_total / (double)C;
+    double inv      = 1.0 / sqrt(ms + 1e-6);
+
+    /* Reduction 2: dot(dxn, x). */
+    double dotp = 0.0;
+    for (int64_t k = threadIdx.x; k < C; k += blockDim.x) {
+        dotp += dxr[k] * xr[k];
+    }
+    double dot  = _hx_block_sum(dotp, smem);
+    double coef = (inv * inv * inv) / (double)C;
+
+    /* Write dx. */
+    for (int64_t i = threadIdx.x; i < C; i += blockDim.x) {
+        orr[i] = inv * dxr[i] - coef * xr[i] * dot;
+    }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ * Kernel 4 — adamw_step: decoupled-wd AdamW in-place.
+ *   m_i  ← β1·m_i + (1-β1)·g_i
+ *   v_i  ← β2·v_i + (1-β2)·g_i²
+ *   mhat = m_i / (1-β1^t)
+ *   vhat = v_i / (1-β2^t)
+ *   W_i  ← W_i - lr·wd·W_i - lr·mhat/(sqrt(vhat)+eps)   (out → O[i])
+ *   m, v updated in-place on their device buffers.
+ * 1-D grid-stride; no cross-element reduction → bit-eq per element
+ * (modulo sqrt ULP).
+ * ──────────────────────────────────────────────────────────────────── */
+__global__ void _hx_k_adamw_step(double* __restrict__ W,
+                                 double* __restrict__ Mm,
+                                 double* __restrict__ Vv,
+                                 const double* __restrict__ G,
+                                 double* __restrict__ O,
+                                 int64_t n,
+                                 double lr, double b1, double b2,
+                                 double eps, double wd,
+                                 double c1, double c2) {
+    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;
+    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         i < n;
+         i += stride) {
+        double g    = G[i];
+        double mi   = b1 * Mm[i] + (1.0 - b1) * g;
+        double vi   = b2 * Vv[i] + (1.0 - b2) * g * g;
+        double mhat = mi / c1;
+        double vhat = vi / c2;
+        double denom = sqrt(vhat) + eps;
+        double wi   = W[i] - lr * wd * W[i] - lr * mhat / denom;
+        Mm[i] = mi;     /* in-place optimizer state */
+        Vv[i] = vi;
+        O[i]  = wi;
+    }
+}
+
+#endif /* __CUDACC__ — kernel bodies (compiled by nvcc only) */
+
+/* ════════════════════════════════════════════════════════════════════
+ * Host wrappers — match the extern decls in self/runtime.c §10941-10954
+ * (Phase B) and §11181-11200 (Phase B2). Signature: caller owns the
+ * pre-allocated out_id farr; we return 0 ok / -1 err.
+ * ════════════════════════════════════════════════════════════════════ */
+
+int _hx_cuda_farr_softmax_rows_gpu(int64_t x_id, int64_t R, int64_t C,
+                                   int64_t out_id) {
+#ifdef __CUDACC__
+    if (R <= 0 || C <= 0) {
+        fprintf(stderr, "[cuda] softmax_rows: bad shape R=%lld C=%lld\n",
+                (long long)R, (long long)C);
+        return -1;
+    }
+    if (_h2d(x_id) != 0) return -1;
+    if (_ensure_dev_alloc_out(out_id, R * C) != 0) return -1;
+    const double* X = g_slots[x_id].d_buf;
+    double*       Y = g_slots[out_id].d_buf;
+    dim3 grid((unsigned)R), block(HX_RR_BLOCK);
+    _hx_k_softmax_rows<<<grid, block>>>(X, Y, R, C);
+    cudaError_t er = cudaDeviceSynchronize();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] softmax_rows launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    return _d2h_out(out_id, R * C);
+#else
+    (void)x_id; (void)R; (void)C; (void)out_id;
+    fprintf(stderr, "[cuda] softmax_rows: built without __CUDACC__ "
+                    "(use nvcc -x cu)\n");
+    return -1;
+#endif
+}
+
+int _hx_cuda_farr_rmsnorm_rows_gpu(int64_t x_id, int64_t R, int64_t C,
+                                   double eps, int64_t out_id) {
+#ifdef __CUDACC__
+    if (R <= 0 || C <= 0) {
+        fprintf(stderr, "[cuda] rmsnorm_rows: bad shape R=%lld C=%lld\n",
+                (long long)R, (long long)C);
+        return -1;
+    }
+    if (!(eps >= 0.0)) {
+        fprintf(stderr, "[cuda] rmsnorm_rows: bad eps %g\n", eps);
+        return -1;
+    }
+    if (_h2d(x_id) != 0) return -1;
+    if (_ensure_dev_alloc_out(out_id, R * C) != 0) return -1;
+    const double* X = g_slots[x_id].d_buf;
+    double*       Y = g_slots[out_id].d_buf;
+    dim3 grid((unsigned)R), block(HX_RR_BLOCK);
+    _hx_k_rmsnorm_rows<<<grid, block>>>(X, Y, R, C, eps);
+    cudaError_t er = cudaDeviceSynchronize();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] rmsnorm_rows launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    return _d2h_out(out_id, R * C);
+#else
+    (void)x_id; (void)R; (void)C; (void)eps; (void)out_id;
+    fprintf(stderr, "[cuda] rmsnorm_rows: built without __CUDACC__\n");
+    return -1;
+#endif
+}
+
+int _hx_cuda_farr_rmsnorm_bwd_rows_gpu(int64_t x_id, int64_t dxn_id,
+                                       int64_t R, int64_t C,
+                                       int64_t out_id) {
+#ifdef __CUDACC__
+    if (R <= 0 || C <= 0) {
+        fprintf(stderr, "[cuda] rmsnorm_bwd: bad shape R=%lld C=%lld\n",
+                (long long)R, (long long)C);
+        return -1;
+    }
+    if (_h2d(x_id) != 0) return -1;
+    if (_h2d(dxn_id) != 0) return -1;
+    if (_ensure_dev_alloc_out(out_id, R * C) != 0) return -1;
+    const double* X   = g_slots[x_id].d_buf;
+    const double* DXN = g_slots[dxn_id].d_buf;
+    double*       O   = g_slots[out_id].d_buf;
+    dim3 grid((unsigned)R), block(HX_RR_BLOCK);
+    _hx_k_rmsnorm_bwd_rows<<<grid, block>>>(X, DXN, O, R, C);
+    cudaError_t er = cudaDeviceSynchronize();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] rmsnorm_bwd launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    return _d2h_out(out_id, R * C);
+#else
+    (void)x_id; (void)dxn_id; (void)R; (void)C; (void)out_id;
+    fprintf(stderr, "[cuda] rmsnorm_bwd: built without __CUDACC__\n");
+    return -1;
+#endif
+}
+
+int _hx_cuda_farr_adamw_step_gpu(int64_t w_id, int64_t m_id,
+                                  int64_t v_id, int64_t g_id,
+                                  int64_t n, double lr, double b1,
+                                  double b2, double eps, double wd,
+                                  int64_t step_t, int64_t out_id) {
+#ifdef __CUDACC__
+    if (n <= 0 || step_t < 1) {
+        fprintf(stderr, "[cuda] adamw_step: bad n=%lld step_t=%lld\n",
+                (long long)n, (long long)step_t);
+        return -1;
+    }
+    /* H2D for ALL four operands. W/m/v get updated (in-place on device);
+     * we then D2H W back to the CALLER's out buf and ALSO D2H m,v back
+     * to their host bufs so the optimizer-state contract holds
+     * (CPU oracle updates m,v in place on the host buffers). */
+    if (_h2d(w_id) != 0) return -1;
+    if (_h2d(m_id) != 0) return -1;
+    if (_h2d(v_id) != 0) return -1;
+    if (_h2d(g_id) != 0) return -1;
+    if (_ensure_dev_alloc_out(out_id, n) != 0) return -1;
+
+    /* Compute c1 = 1 - β1^t, c2 = 1 - β2^t on host (deterministic,
+     * matches CPU oracle's per-step repeated mul: see runtime.c
+     * §11419-11422). */
+    double b1t = 1.0, b2t = 1.0;
+    for (int64_t e = 0; e < step_t; e++) { b1t *= b1; b2t *= b2; }
+    double c1 = 1.0 - b1t;
+    double c2 = 1.0 - b2t;
+
+    double* W  = g_slots[w_id].d_buf;
+    double* Mm = g_slots[m_id].d_buf;
+    double* Vv = g_slots[v_id].d_buf;
+    const double* G = g_slots[g_id].d_buf;
+    double* O  = g_slots[out_id].d_buf;
+
+    /* 1-D grid-stride: ~256 threads/block, blocks = min(1024, ceil(n/256)).
+     * Cap at 1024 blocks to keep stride pattern compact + deterministic. */
+    int block_sz = 256;
+    int64_t want_blocks = (n + block_sz - 1) / block_sz;
+    int grid_sz = (want_blocks > 1024) ? 1024 : (int)want_blocks;
+    if (grid_sz < 1) grid_sz = 1;
+
+    _hx_k_adamw_step<<<grid_sz, block_sz>>>(W, Mm, Vv, G, O, n,
+                                            lr, b1, b2, eps, wd, c1, c2);
+    cudaError_t er = cudaDeviceSynchronize();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] adamw_step launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    /* Write back W (out_id) AND in-place-updated m, v (their own ids). */
+    if (_d2h_out(out_id, n) != 0) return -1;
+    if (_d2h(m_id) != 0)          return -1;
+    if (_d2h(v_id) != 0)          return -1;
+    return 0;
+#else
+    (void)w_id; (void)m_id; (void)v_id; (void)g_id;
+    (void)n; (void)lr; (void)b1; (void)b2; (void)eps; (void)wd;
+    (void)step_t; (void)out_id;
+    fprintf(stderr, "[cuda] adamw_step: built without __CUDACC__\n");
+    return -1;
+#endif
+}
+
+/* ════════════════════════════════════════════════════════════════════
+ * matmul_t and outer — cuBLAS Dgemm reshape (RFC 041 §1, proven exact
+ * on real hardware for the outer case; same Dgemm path as Phase A
+ * for matmul_t — TOL_MATMUL ≈ 2e-9 inherited).
+ *
+ * Row-major→column-major trick recap (same as _hx_cuda_farr_matmul_gpu):
+ *   to compute row-major C[M,N] = A[M,K]·B[K,N] via column-major Dgemm,
+ *   call cublasDgemm(N,N, m=N, n=M, k=K, alpha, B_dev, ldb=N,
+ *                    A_dev, lda=K, beta, C_dev, ldc=N).
+ * ════════════════════════════════════════════════════════════════════ */
+
+/* matmul_t: Mᵀ·u = [C].  M row-major [R,C], u [R], out [C].
+ *
+ * View as the matmul of u-as-row-vector with M:  out[1,C] = u[1,R] · M[R,C].
+ * Plug into the row-major→col trick with M_outer=1, K=R, N=C:
+ *   cublasDgemm(N, N, m=C, n=1, k=R, alpha, M_dev, ldb=C, U_dev, lda=R,
+ *               beta, O_dev, ldc=C).
+ * Reduction order: cuBLAS-tiled (NOT the CPU c3_matvec_t r-outer/k-inner
+ * order) → reduction-tolerance applies. TOL_MATMUL ≈ 2e-9 (RFC 040 §2.2).
+ */
+int _hx_cuda_farr_matmul_t_gpu(int64_t m_id, int64_t R, int64_t C,
+                               int64_t u_id, int64_t out_id) {
+    if (_ensure_cublas() != 0) return -1;
+    if (R <= 0 || C <= 0) {
+        fprintf(stderr, "[cuda] matmul_t: bad shape R=%lld C=%lld\n",
+                (long long)R, (long long)C);
+        return -1;
+    }
+    if (_h2d(m_id) != 0) return -1;
+    if (_h2d(u_id) != 0) return -1;
+    if (_ensure_dev_alloc_out(out_id, C) != 0) return -1;
+
+    double* M_dev = g_slots[m_id].d_buf;
+    double* U_dev = g_slots[u_id].d_buf;
+    double* O_dev = g_slots[out_id].d_buf;
+    const double alpha = 1.0, beta = 0.0;
+    /* row-major: out[1·C] = u[1·R] · M[R·C]
+     * → cuBLAS Dgemm(N,N, m=C, n=1, k=R, alpha, M_dev, ldb=C, U_dev, lda=R,
+     *                beta, O_dev, ldc=C) */
+    cublasStatus_t st = cublasDgemm(g_cublas,
+                                    CUBLAS_OP_N, CUBLAS_OP_N,
+                                    (int)C, 1, (int)R,
+                                    &alpha,
+                                    M_dev, (int)C,
+                                    U_dev, (int)R,
+                                    &beta,
+                                    O_dev, (int)C);
+    if (st != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr, "[cuda] cublasDgemm(matmul_t) failed: %d\n", (int)st);
+        return -1;
+    }
+    return _d2h_out(out_id, C);
+}
+
+/* outer: u⊗v = [R·C].  u [R], v [C], out row-major [R,C].
+ *
+ * out[R,C] = u[R,1] · v[1,C]. Plug into the trick with M_outer=R, K=1, N=C:
+ *   cublasDgemm(N, N, m=C, n=R, k=1, alpha, V_dev, ldb=C, U_dev, lda=1,
+ *               beta, O_dev, ldc=C).
+ * K=1 → SINGLE product term per output cell → ZERO reduction →
+ * BIT-EXACT vs CPU c3_outer (F-RFC041-OUTER-EXACT demands |Δ| = 0).
+ */
+int _hx_cuda_farr_outer_gpu(int64_t u_id, int64_t v_id,
+                            int64_t R, int64_t C, int64_t out_id) {
+    if (_ensure_cublas() != 0) return -1;
+    if (R <= 0 || C <= 0) {
+        fprintf(stderr, "[cuda] outer: bad shape R=%lld C=%lld\n",
+                (long long)R, (long long)C);
+        return -1;
+    }
+    if (_h2d(u_id) != 0) return -1;
+    if (_h2d(v_id) != 0) return -1;
+    if (_ensure_dev_alloc_out(out_id, R * C) != 0) return -1;
+
+    double* U_dev = g_slots[u_id].d_buf;
+    double* V_dev = g_slots[v_id].d_buf;
+    double* O_dev = g_slots[out_id].d_buf;
+    const double alpha = 1.0, beta = 0.0;
+    cublasStatus_t st = cublasDgemm(g_cublas,
+                                    CUBLAS_OP_N, CUBLAS_OP_N,
+                                    (int)C, (int)R, 1,
+                                    &alpha,
+                                    V_dev, (int)C,
+                                    U_dev, 1,
+                                    &beta,
+                                    O_dev, (int)C);
+    if (st != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr, "[cuda] cublasDgemm(outer) failed: %d\n", (int)st);
+        return -1;
+    }
+    return _d2h_out(out_id, R * C);
+}
