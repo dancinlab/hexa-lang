@@ -72,7 +72,7 @@ VAST_SSH_KEY="/Users/ghost/.vast/ssh/vast-key"
 VASTAI="/Users/ghost/Library/Python/3.14/bin/vastai"
 
 # Wall time gate (F-RFC046)
-WALL_BUDGET_SEC=600   # 10 min hard cap (1.4× of F-RFC046 437.9s gate)
+WALL_BUDGET_SEC=${WALL_BUDGET_SEC:-600}   # env-overridable: default 10 min hard cap (1.4× of F-RFC046 437.9s gate)
 
 # Pre-flight
 [ -x "$VASTAI" ]         || { echo "ERROR: vastai CLI not found at $VASTAI"; exit 1; }
