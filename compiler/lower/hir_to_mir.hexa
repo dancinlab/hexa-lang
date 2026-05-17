@@ -1311,6 +1311,18 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let scrut_op = sr.operand
         let mut ctx2 = sr.ctx
 
+        // #25 — match as an EXPRESSION (e.g. `return match k {...}` /
+        // `let s = match …`) must carry each arm's result value out to
+        // the join. Pre-#25 the arm body was lowered but its operand was
+        // discarded and the whole match returned `_no_value` (const_int
+        // 0) — so `tag_of`'s `match k { TokenKind::X -> "X", … }` always
+        // produced "0", which made `same_kind`/`at_eof` always true and a
+        // self-compiled ap2 parsed 0 items. Allocate one result local;
+        // each taken arm copies its value into it (op="bind" → plain
+        // dst=arg0 copy in every backend); the join returns it.
+        ctx2 = _fresh_local(ctx2, e.typ, "match_result")
+        let match_res = ctx2.locals[len(ctx2.locals) - 1]
+
         ctx2 = _new_block(ctx2)
         let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
 
@@ -1605,6 +1617,23 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             ctx2 = br_b.ctx
             if !ctx2.has_returned {
                 let arm_end = ctx2.cur_block
+                // #25 — carry the arm's value to the match join. Only
+                // when the body actually produced one (a `return …` arm
+                // sets has_returned and never reaches here; a bare
+                // statement-style arm has has_value=false → leave the
+                // result local untouched, matching the legacy no-value
+                // behaviour for statement-position match).
+                if br_b.has_value {
+                    let res_copy = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: match_res,
+                        op: "bind",
+                        args: [br_b.operand],
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx2 = _push_stmt_to(ctx2, arm_end, res_copy)
+                }
                 let to_join = Stmt {
                     kind: STMT_BR,
                     dst: _miss_local(),
@@ -1622,7 +1651,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
 
         ctx2 = _set_cur_block(ctx2, join_id)
-        return _no_value(ctx2)
+        return _value(ctx2, _local_op(match_res.id))
     }
 
     // ── struct_lit → STMT_ASSIGN op="struct_lit" with field operands ─
