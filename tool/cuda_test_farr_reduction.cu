@@ -56,10 +56,17 @@ typedef struct {
 
 /* Tiny mock farr table. Sized at startup; never realloc'd during a test
  * (sidesteps the RFC 032 use-after-realloc guard, which is enforced in
- * the real runtime.c — irrelevant for this unit-test harness). */
+ * the real runtime.c — irrelevant for this unit-test harness).
+ *
+ * NB: runtime_cuda.c declares `extern HexaFarrEntry* _hx_farr_table;`
+ * (pointer, not array) — must match here, or the runtime sees garbage
+ * (`e->len` reads a huge random int64 → cudaMalloc OOM cascade). The
+ * original `HexaFarrEntry _hx_farr_table[MOCK_FARR_CAP]` array form
+ * produced this exact failure mode on the first refire. */
 #define MOCK_FARR_CAP 1024
-HexaFarrEntry _hx_farr_table[MOCK_FARR_CAP];
-int64_t       _hx_farr_count = 0;
+static HexaFarrEntry _hx_farr_storage[MOCK_FARR_CAP];
+HexaFarrEntry*       _hx_farr_table = _hx_farr_storage;
+int64_t              _hx_farr_count = 0;
 
 /* Externs from self/cuda/runtime_cuda.c. */
 extern "C" {
