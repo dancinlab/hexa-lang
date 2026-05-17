@@ -159,6 +159,153 @@ fn _json_pad(indent: int, level: int) -> string {
 //      `#{}`, `json_parse("{}")` — over its lifetime).
 //
 // Return value is the SAME map/array reference (mutated in place).
+// ── json_dumps_canonical — Python json.dumps(x, sort_keys=True) byte-exact ──
+//
+// T3/T4 asset: hexa-bio witness gates hash
+//   hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()
+// so an in-repo encoder must be BYTE-IDENTICAL to CPython's default
+// (ensure_ascii=True, separators=(", ", ": "), recursive key sort).
+// Input `v` is a json_parse'd value (native map/array/scalar). Pure
+// hexa, zero exec(); scalars delegate to the runtime json_stringify
+// (verified to match Python repr for int/float/bool/null); strings use
+// the ensure_ascii escaper below (json_stringify keeps raw UTF-8, which
+// CPython does NOT). Residual: extreme float reprs are re-checked
+// empirically against Python on the actual corpus (g3 — no silent
+// approximation).
+
+let _HEX = "0123456789abcdef"
+
+fn _hex4(n: int) -> string {
+    let a = (n / 4096) % 16
+    let b = (n / 256) % 16
+    let c = (n / 16) % 16
+    let d = n % 16
+    return _HEX.substr(a, 1) + _HEX.substr(b, 1) + _HEX.substr(c, 1) + _HEX.substr(d, 1)
+}
+
+// byte-wise (== Unicode code-point) less-than, == CPython str sort key.
+fn _str_lt(a: string, b: string) -> bool {
+    let mut i = 0
+    while i < len(a) && i < len(b) {
+        let ca = ord(a.substr(i, 1))
+        let cb = ord(b.substr(i, 1))
+        if ca != cb { return ca < cb }
+        i = i + 1
+    }
+    return len(a) < len(b)
+}
+
+fn _sorted_keys(v) -> array {
+    let ks = dict_keys(v)
+    let mut a: array = []
+    let mut i = 0
+    while i < len(ks) { a.push(ks[i]); i = i + 1 }
+    // insertion sort (key counts are small per object)
+    let mut j = 1
+    while j < len(a) {
+        let key = a[j]
+        let mut k = j - 1
+        while k >= 0 && _str_lt(key, a[k]) {
+            a[k + 1] = a[k]
+            k = k - 1
+        }
+        a[k + 1] = key
+        j = j + 1
+    }
+    return a
+}
+
+// CPython json string encoder: ensure_ascii=True, short escapes for
+// \" \\ \b \f \n \r \t, other C0 → \u00xx, every byte ≥0x80 UTF-8
+// decoded to a code point → \uXXXX (BMP) or surrogate pair (astral).
+fn _json_str(s: string) -> string {
+    let mut out = "\""
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let b0 = ord(s.substr(i, 1))
+        if b0 == 34 { out = out + "\\\""; i = i + 1 }
+        else if b0 == 92 { out = out + "\\\\"; i = i + 1 }
+        else if b0 == 8 { out = out + "\\b"; i = i + 1 }
+        else if b0 == 12 { out = out + "\\f"; i = i + 1 }
+        else if b0 == 10 { out = out + "\\n"; i = i + 1 }
+        else if b0 == 13 { out = out + "\\r"; i = i + 1 }
+        else if b0 == 9 { out = out + "\\t"; i = i + 1 }
+        else if b0 < 32 { out = out + "\\u" + _hex4(b0); i = i + 1 }
+        else if b0 < 128 { out = out + s.substr(i, 1); i = i + 1 }
+        else {
+            // multi-byte UTF-8 → code point (arithmetic, no bit ops)
+            let mut cp = 0
+            let mut adv = 1
+            if b0 >= 240 {
+                let b1 = ord(s.substr(i + 1, 1))
+                let b2 = ord(s.substr(i + 2, 1))
+                let b3 = ord(s.substr(i + 3, 1))
+                cp = (b0 - 240) * 262144 + (b1 - 128) * 4096 + (b2 - 128) * 64 + (b3 - 128)
+                adv = 4
+            } else if b0 >= 224 {
+                let b1 = ord(s.substr(i + 1, 1))
+                let b2 = ord(s.substr(i + 2, 1))
+                cp = (b0 - 224) * 4096 + (b1 - 128) * 64 + (b2 - 128)
+                adv = 3
+            } else {
+                let b1 = ord(s.substr(i + 1, 1))
+                cp = (b0 - 192) * 64 + (b1 - 128)
+                adv = 2
+            }
+            if cp > 65535 {
+                let u = cp - 65536
+                let hi = 55296 + (u / 1024)
+                let lo = 56320 + (u % 1024)
+                out = out + "\\u" + _hex4(hi) + "\\u" + _hex4(lo)
+            } else {
+                out = out + "\\u" + _hex4(cp)
+            }
+            i = i + adv
+        }
+    }
+    return out + "\""
+}
+
+fn _canon(v) -> string {
+    let t = type_of(v)
+    if t == "void" { return "null" }
+    if t == "bool" { return json_stringify(v) }
+    if t == "int" { return json_stringify(v) }
+    if t == "float" { return json_stringify(v) }
+    if t == "string" { return _json_str(v) }
+    if t == "array" {
+        if len(v) == 0 { return "[]" }
+        let mut out = "["
+        let mut i = 0
+        while i < len(v) {
+            if i > 0 { out = out + ", " }
+            out = out + _canon(v[i])
+            i = i + 1
+        }
+        return out + "]"
+    }
+    if t == "map" {
+        let ks = _sorted_keys(v)
+        if len(ks) == 0 { return "{}" }
+        let mut out = "{"
+        let mut i = 0
+        while i < len(ks) {
+            if i > 0 { out = out + ", " }
+            out = out + _json_str(ks[i]) + ": " + _canon(v[ks[i]])
+            i = i + 1
+        }
+        return out + "}"
+    }
+    return json_stringify(v)
+}
+
+// json_dumps_canonical(v) — byte-identical to CPython
+// json.dumps(v, sort_keys=True) (default ensure_ascii / separators).
+pub fn json_dumps_canonical(v) -> string {
+    return _canon(v)
+}
+
 pub fn json_object_set(obj, key: string, value) {
     obj[key] = value
     return obj
