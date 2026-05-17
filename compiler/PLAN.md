@@ -825,3 +825,36 @@ atlas_verify APFAIL/MISMATCH → MATCH = gate-1 38/44.
 **현황**: 진짜 tier-1 결함 잔여 = atlas_verify 118/139(#34) + t38_nanbox try/catch.
 non-tier-1 5개(t35/t36/t37 ORAFAIL-class + repo_taxonomy/t34 env) 제외 effective 천장
 39 achievable.
+
+---
+
+### 진행 로그 — #34 재진단: tier-1 무결, 진짜 결함은 tier-2 trailing-if-expr void-return (cycle h19)
+
+`gate-1: atlas_verify silent-drop` 에이전트(`afcfea54`, diagnostic-only commit `5ac7018e`)
+가 #34 의 전제를 **증거로 기각**:
+
+**"21 silent drop" = oracle-source-contamination artifact**:
+- `hexa build`(tier-2 oracle) 가 `use` 경로를 `$HEXA_LANG` 으로 해결, 기본값이
+  shared main repo `/Users/ghost/core/hexa-lang`. 그 repo 는 `rfc043-hexa-torch` 브랜치
+  에 sim-universe 흡수 커밋(`c530048c`·`d8b9a1b4`·…)으로 verifier `out.push()` 21개
+  추가 (phys +11, transcendental +10).
+- worktree 는 `origin/main` (그 21개 미보유). 결과: tier-1 = 118(worktree 정답),
+  tier-2 = 139(오염된 shared-repo source). `HEXA_LANG=$WD` 강제 시 양쪽 118 = drift 0.
+- **tier-1 silent drop 부재**. #34 RESOLVED (premise disproven).
+
+**실제 잔여 발산은 tier-2 codegen 버그**: 동일 source 에서 tier-1 118/118 PASS vs
+tier-2 108/118 FAIL on 10 명명 verifier. tier-2 의 컴파일된 C 출력
+`build/artifacts/av_t2_wt.c:2142` 가 `lcm()` 을 `if/else { branch_expr; } …
+return __hexa_fn_arena_return(hexa_void())` 로 lower — **trailing if/else 의 value-
+bearing branch 결과가 폐기, fn 이 void 반환**. 같은 패턴이 `abs/max/min/clamp`. tier-1
+은 정상 (8/8 PASS) → **tier-1 수학적 정답, tier-2 가 broken**. self/hexa_full.hexa
+lowering 의 trailing-if-expr → implicit-return 변환 누락 (task #35).
+
+**g3 의미 시사**: gate-1 metric "tier-1 ≡ tier-2 oracle" 은 tier-2 도 broken 가능
+(여기서 입증). atlas_verify MISMATCH 는 tier-1 결함 아님 — tier-2 fix(#35)로 닫힘.
+recommendation: (B) `hexa` CLI 가 `$HEXA_LANG` 미설정 시 cwd git toplevel 로 기본화 →
+oracle contamination 재발 방지 (별도 follow-up).
+
+**현황 재정정**: 진짜 tier-1 잔여 gap = **try/catch(t38_nanbox) 1개뿐**. atlas_verify
+는 tier-2 fix(#35) 로 매칭. t35/t36/t37 + 2 env 제외 시 tier-1 effective 천장
+(t38 닫으면) = **38/39 + atlas_verify(tier-2 후) 39/39** = 구현 언어 범위 tier-1 ≡ 정답.
