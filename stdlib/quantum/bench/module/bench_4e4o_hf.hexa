@@ -1,0 +1,28 @@
+#!hexa strict
+// qmirror/bench/module/bench_4e4o_hf.hexa
+//
+// chem-vqe-bench suite — 4e/4o vendored VQE replay for HF.
+// Geometry: F 0 0 0; H 0 0 0.9168 (Re=0.9168 Å, gas-phase, NIST CCCBDB).
+// Basis: STO-3G; Active space: (4e, 4o) → ParityMapper((2,2)) + 2-qubit reduction = 6 qubits.
+//
+// STATUS (2026-05-13): EXTRACTION_PENDING. The Hamiltonian + UCCSD-converged ψ*
+// must be generated offline via `bench/extract/extract_4e4o_hamiltonian.sh
+// --molecule hf`.
+//
+// CCSD(T) literature reference (sanity-check, NOT the comparator):
+//   E ≈ -100.35893 Ha (CCSD(T)/cc-pVQZ; Feller & Peterson, J. Chem. Phys. 110, 8384 (1999))
+//   source: NIST CCCBDB
+//
+// @tool(slug="qmirror_bench_4e4o_hf", desc="chem-vqe-bench 4e/4o VQE replay for HF (EXTRACTION_PENDING stub).")
+// @usage(hexa run qmirror/bench/module/bench_4e4o_hf.hexa --selftest)
+// @sentinel(__QMIRROR_BENCH_CHEM_VQE_HF_4E4O__ <PASS|FAIL|EXTRACTION_PENDING>)
+
+fn main() {
+    println("[qmirror/bench] 4e/4o replay — HF  (EXTRACTION_PENDING)")
+    println("  geometry: F 0 0 0; H 0 0 0.9168")
+    println("  basis: sto-3g  AS: (4e,4o)  n_qubits: 6")
+    println("  CCSD(T) literature E ≈ -100.35893 Ha (CCSD(T)/cc-pVQZ, Feller & Peterson 1999)")
+    println("  to generate vendored Hamiltonian + ψ* (offline / dev-machine):")
+    println("    bench/extract/extract_4e4o_hamiltonian.sh --molecule hf")
+    println("__QMIRROR_BENCH_CHEM_VQE_HF_4E4O__ EXTRACTION_PENDING")
+}

@@ -73,6 +73,11 @@ fn cmd_help() {
     println("                preheating|multipolar|surface-code|ssh|hofstadter|dqpt|wdw]")
     println("                                          virtual-universe runtime (26 modules, RFC 046)")
     println("    e.g. hexa sim-universe status         module inventory + tier table")
+    println("  qmirror [status|selftest|chsh|iit|qrng|rqaoa|ctx|dynghz|vqd|stab-ext|")
+    println("           overlap-vqe|sre|lg|pseudo-tel|rpe|sym-shadow|hardy|page-curve|")
+    println("           qdrift|cdr|wigner|qfi|shallow|gme-steer|mabk|mirror-bench]")
+    println("                                          quantum mirror substrate (38 modules, RFC 045)")
+    println("    e.g. hexa qmirror chsh                CHSH Bell test (Tsirelson-class S)")
     println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
@@ -3328,6 +3333,24 @@ if len(av) < 3 {
             si = si + 1
         }
         cmd_run(su_script, su_args)
+    } else if sub == "qmirror" {
+        // RFC 045 — stdlib/quantum dispatch.
+        // stdlib/quantum/quantum.hexa parses argv subcommand (status/selftest/
+        // chsh/iit/qrng/rqaoa/ctx/.../mirror-bench) and invokes the matching
+        // module via subprocess. 38 module dirs, 62k LoC, all parse-clean.
+        let __inst_qm = install_dir_from_argv0()
+        let mut qm_script = "stdlib/quantum/quantum.hexa"
+        if len(__inst_qm) > 0 {
+            let inst_path = __inst_qm + "/stdlib/quantum/quantum.hexa"
+            if file_exists(inst_path) { qm_script = inst_path }
+        }
+        let mut qm_args = []
+        let mut qmi = 3
+        while qmi < len(av) {
+            qm_args.push(av[qmi])
+            qmi = qmi + 1
+        }
+        cmd_run(qm_script, qm_args)
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //

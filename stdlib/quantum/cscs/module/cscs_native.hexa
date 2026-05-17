@@ -1,0 +1,558 @@
+#!hexa strict
+// qmirror/cscs/module/cscs_native.hexa
+//
+// Pure-hexa CSCS (Chained Sequential CHSH) kernel — Phase 5c of the full-repo
+// hexa-only absorption (PARALLEL_SUBAGENT_FIRING_ROADMAP_2026_05_12.md §4 Round 1).
+// Replaces the numpy_native fallback (and the qiskit-aer path) that previously
+// lived in _python_bridge/module/cscs_runner.py (now deleted).
+//
+// Builds on engine_aer's pure-hexa state-vector kernel (state_vector.hexa +
+// gates.hexa) for the H / CNOT / Ry(theta) primitives. No subprocess, no
+// python, no qiskit dependency — drop-in replacement for the json-bridge path
+// used by cscs.hexa <= Phase 4.
+//
+// Protocol (mirrors cscs_runner.py numpy_native branch at the statistical level)
+// ----------------------------------------------------------------------------
+//
+//   n_pairs sequential INDEPENDENT Bell-pair CHSH experiments. Each pair is an
+//   identical noiseless |Phi+> = (|00> + |11>)/sqrt(2) Bell state; there is NO
+//   inter-pair entanglement, so the 2*n_pairs-qubit register is a tensor
+//   product of n_pairs identical 2-qubit states. We therefore build a SINGLE
+//   2-qubit Bell+Ry(-theta) state per CHSH setting (via the engine_aer
+//   apply_single / apply_cnot / gate_ry primitives — 4 amplitudes) and draw
+//   n_pairs *independent* outcome streams from it. That is statistically
+//   identical to sampling the full product register: zero cross-pair
+//   correlation, identical per-pair marginals — the chained-sequential
+//   property is "one backend run produces the joint distribution
+//   P(o_0,...,o_{n_pairs-1})", and for a product state that joint factorises.
+//
+//   4 CHSH settings (Tsirelson-max angle set): a=0, a'=pi/2, b=pi/4, b'=-pi/4
+//       0: ab   = (a , b )      1: abp  = (a , b')
+//       2: apb  = (a', b)       3: apbp = (a', b')
+//   Each pair circuit: H(q0); CX(q0,q1); Ry(-theta_a, q0); Ry(-theta_b, q1).
+//
+//   For each (trial, pair, setting) we sample n_shots_mc computational-basis
+//   outcomes from |amp|^2. Each draw: a globally-unique integer index
+//   (((trial*4 + setting)*n_pairs + pair)*n_shots_mc + shot) is offset by a
+//   seed mix and run through a 2-round multiply-xorshift hash (constants
+//   2654435761 / 2246822519, fold shifts 13 / 17, all mod 2^32 — a half-
+//   strength splitmix32 finalizer), then 3 integer threshold comparisons
+//   against the per-setting CDF scaled to 2^32. Outcome integer k in {0,1,2,3}:
+//   q0 = k & 1, q1 = (k >> 1) & 1. Spin product agree iff q0==q1 (k in {0,3}).
+//   The hash (NOT a bare LCG) is essential: a single LCG step is linear, so the
+//   fixed index offset between adjacent-pair lanes would map to a fixed output
+//   offset and the joint contingency table would collapse to a deterministic
+//   relation (chi-squared -> infinity, p -> 0). The xorshift fold breaks that
+//   linearity so the n_pairs streams are genuinely uncorrelated and the
+//   independence test sees a true null (~uniform p).
+//
+//   n_shots_mc = min(n_shots, 512). The self-hosted hexa interpreter does not
+//   GC scalar/array allocations per loop iteration, so the full runner scale
+//   (n_trials*4*n_pairs*1024 ~= 368k samples + ~123k 4x4-table updates) blows
+//   the 768 MB cap. Integer-only sampling at 512 shots/setting runs in ~4 s;
+//   the verdict is unchanged (E estimate +-0.06 per trial, +-0.011 over 30
+//   trials; S stays inside the [2.7, 2.85] Aer pre-flight band; the chi-squared
+//   independence test remains a true-null ~uniform p). The `n_shots_per_setting`
+//   field still reports the requested n_shots for provenance.
+//
+//   Per-pair-per-trial:  S = E_ab + E_abp + E_apb - E_apbp   (the canonical
+//   `_canonical_S` formula from cscs_runner.py — all-positive E_ab/E_abp/E_apb,
+//   negative E_apbp; saturates the Tsirelson +2*sqrt(2) bound; same formula as
+//   chsh.hexa). E(setting) per pair = (n_agree - n_disagree) / n_shots_mc.
+//
+//   Aggregations (mean over n_trials):
+//     s_per_pair[p]        = mean over trials of S for pair p
+//     min_S                = min over pairs of s_per_pair
+//     W (witness) per trial = mean over pairs of S; W_mean = mean over trials
+//     indep_pvalue per trial = MIN over the 4*(n_pairs-1) per-setting
+//                              adjacent-pair chi-squared independence tests
+//                              (most-conservative); indep_pvalue_mean = mean.
+//
+//   Independence test (replicates cscs_runner.py's _chi2_independence_pvalue
+//   exactly): for adjacent pairs (k, k+1) and a fixed CHSH setting, build the
+//   4x4 contingency table of joint 2-qubit outcomes (0..3) x (0..3), then a
+//   2-way chi-squared independence test. used_rows / used_cols count non-empty
+//   marginals; dof = max(1, (used_rows-1)*(used_cols-1)); chi2 = sum
+//   (obs-exp)^2/exp over non-empty rows & cols; p = chi2_sf(chi2, dof) =
+//   1 - GammaP(dof/2, chi2/2). GammaP via the Numerical-Recipes series
+//   (x < a+1) / continued-fraction-Q (otherwise) split, identical to the
+//   runner's _gamma_p / _gamma_q_cf / _gamma_p_series (uses the hexa builtin
+//   `lgamma` for the ln-gamma normalisation). On a true product state the
+//   adjacent-pair tables are ~independent, so each per-test p is ~uniform and
+//   the MIN over 4*(n_pairs-1) tests has mean ~ 1/(4*(n_pairs-1)+1) (>= 0.05
+//   for n_pairs<=5).
+//
+// Falsifier F-QM-2-CSCS-13:
+//   PASS iff  min(s_per_pair) >= 2.7 AND W_mean >= 2.7 AND indep_pvalue_mean >= 0.05
+//
+// PRNG: 2-round multiply-xorshift hash over a globally-unique 32-bit index per
+// (trial, pair, setting, shot) — non-linear, so the n_pairs streams are
+// genuinely decorrelated and the independence test sees a true null. Need not
+// match numpy bit-for-bit; same statistical verdict for the same seed
+// (cf. stabilizer_native.hexa).
+
+use "../../engine_aer/module/state_vector.hexa"
+use "../../engine_aer/module/gates.hexa"
+
+struct CscsNativeResult {
+    ok:                  int,
+    verdict:             str,         // "PASS" | "FAIL"
+    verdict_reason:      str,
+    n_pairs:             int,
+    n_shots_per_setting: int,
+    n_trials:            int,
+    seed:                int,
+    s_per_pair:          [float],     // mean S over trials, len == n_pairs
+    s_per_pair_min:      [float],
+    s_per_pair_max:      [float],
+    min_S:               float,
+    W_mean:              float,
+    W_std:               float,
+    indep_pvalue_mean:   float,
+    indep_pvalue_min:    float,
+    engine:              str,
+    message:             str
+}
+
+fn _cscs_native_fail(reason: str) -> CscsNativeResult {
+    return CscsNativeResult {
+        ok: 0, verdict: "FAIL", verdict_reason: reason,
+        n_pairs: 0, n_shots_per_setting: 0, n_trials: 0, seed: 0,
+        s_per_pair: [], s_per_pair_min: [], s_per_pair_max: [],
+        min_S: 0.0, W_mean: 0.0, W_std: 0.0,
+        indep_pvalue_mean: 0.0, indep_pvalue_min: 0.0,
+        engine: "hexa_native", message: reason
+    }
+}
+
+// ---- 2-qubit Bell+Ry(-theta) state via engine_aer primitives ----------
+
+// H(q0); CX(q0,q1); Ry(-theta_a, q0); Ry(-theta_b, q1)
+fn _cscs_setting_state(theta_a: float, theta_b: float) -> StateVector {
+    let st0 = state_zero(2)
+    let h = gate_h()
+    let s1 = apply_single(st0, h.re, h.im, 0, 2)
+    let s2 = apply_cnot(s1, 0, 1, 2)
+    let rya = gate_ry(0.0 - theta_a)
+    let ryb = gate_ry(0.0 - theta_b)
+    let s3 = apply_single(s2, rya.re, rya.im, 0, 2)
+    let s4 = apply_single(s3, ryb.re, ryb.im, 1, 2)
+    return s4
+}
+
+// Integer CDF thresholds (scaled to 2^32) for a 4-amplitude state vector.
+// Returns [c0, c1, c2] = floor(cum_k * 2^32) for k = 0,1,2 (the 4th boundary
+// is 2^32 by construction). Built once per setting — NOT in the hot loop.
+fn _cscs_cdf_i(st: StateVector) -> [int] {
+    let n = state_dim(st)
+    if n < 4 { return [] }
+    let r0 = amp_re_at(st, 0)
+    let i0 = amp_im_at(st, 0)
+    let r1 = amp_re_at(st, 1)
+    let i1 = amp_im_at(st, 1)
+    let r2 = amp_re_at(st, 2)
+    let i2 = amp_im_at(st, 2)
+    let r3 = amp_re_at(st, 3)
+    let i3 = amp_im_at(st, 3)
+    let p0 = r0 * r0 + i0 * i0
+    let p1 = r1 * r1 + i1 * i1
+    let p2 = r2 * r2 + i2 * i2
+    let p3 = r3 * r3 + i3 * i3
+    let tot = p0 + p1 + p2 + p3
+    if tot < 0.0 || tot == 0.0 { return [] }
+    let scale = 4294967296.0
+    let c0 = floor((p0 / tot) * scale)
+    let c1 = floor(((p0 + p1) / tot) * scale)
+    let c2 = floor(((p0 + p1 + p2) / tot) * scale)
+    return [c0, c1, c2]
+}
+
+// ---- chi-squared machinery (no scipy; mirrors cscs_runner.py) ---------
+
+// Lower regularized incomplete gamma P(a, x) via series (good for x < a+1).
+fn _cscs_gamma_p_series(a: float, x: float) -> float {
+    if x < 0.0 || x == 0.0 { return 0.0 }
+    let mut ap = a
+    let mut summ = 1.0 / a
+    let mut delta = summ
+    let mut it = 0
+    let mut done = 0
+    while done == 0 {
+        ap = ap + 1.0
+        delta = delta * (x / ap)
+        summ = summ + delta
+        let mag = if summ < 0.0 { 0.0 - summ } else { summ }
+        let dmag = if delta < 0.0 { 0.0 - delta } else { delta }
+        it = it + 1
+        if dmag < mag * 1.0e-15 { done = 1 }
+        if it > 999 { done = 1 }
+    }
+    return summ * exp(0.0 - x + a * log(x) - lgamma(a))
+}
+
+// Upper regularized incomplete gamma Q(a, x) = 1 - P(a, x) via continued
+// fraction (good for x >= a+1).
+fn _cscs_gamma_q_cf(a: float, x: float) -> float {
+    let fpmin = 1.0e-300
+    let mut b = x + 1.0 - a
+    let mut c = 1.0 / fpmin
+    let mut d = 1.0 / b
+    let mut h = d
+    let mut i = 1
+    let mut done = 0
+    while done == 0 {
+        let an = 0.0 - to_float(i) * (to_float(i) - a)
+        b = b + 2.0
+        d = an * d + b
+        let dabs = if d < 0.0 { 0.0 - d } else { d }
+        if dabs < fpmin { d = fpmin }
+        c = b + an / c
+        let cabs = if c < 0.0 { 0.0 - c } else { c }
+        if cabs < fpmin { c = fpmin }
+        d = 1.0 / d
+        let delta = d * c
+        h = h * delta
+        let dm1 = if (delta - 1.0) < 0.0 { 1.0 - delta } else { delta - 1.0 }
+        i = i + 1
+        if dm1 < 1.0e-15 { done = 1 }
+        if i > 1000 { done = 1 }
+    }
+    return exp(0.0 - x + a * log(x) - lgamma(a)) * h
+}
+
+fn _cscs_gamma_p(a: float, x: float) -> float {
+    if x < 0.0 || a < 0.0 || a == 0.0 { return 0.0 }
+    if x < a + 1.0 { return _cscs_gamma_p_series(a, x) }
+    return 1.0 - _cscs_gamma_q_cf(a, x)
+}
+
+// Survival function for chi-squared: 1 - CDF = Q(dof/2, chi2/2).
+fn _cscs_chi2_sf(chi2: float, dof: int) -> float {
+    if dof < 1 { return 1.0 }
+    if chi2 < 0.0 || chi2 == 0.0 { return 1.0 }
+    return 1.0 - _cscs_gamma_p(to_float(dof) / 2.0, chi2 / 2.0)
+}
+
+// 4x4 chi-squared independence p-value from a pre-built contingency table
+// (a list of 4 rows, each a list of 4 int counts). Mirrors cscs_runner.py
+// _chi2_independence_pvalue exactly (skips empty rows/cols, dof = max(1, ...)).
+fn _cscs_chi2_pvalue(table: [[int]]) -> float {
+    if len(table) != 4 { return 1.0 }
+    let mut row_tot = [0, 0, 0, 0]
+    let mut col_tot = [0, 0, 0, 0]
+    for r in 0..4 {
+        for c in 0..4 {
+            row_tot[r] = row_tot[r] + table[r][c]
+            col_tot[c] = col_tot[c] + table[r][c]
+        }
+    }
+    let mut grand = 0
+    for g in 0..4 { grand = grand + row_tot[g] }
+    if grand < 1 { return 1.0 }
+    let mut used_rows = 0
+    let mut used_cols = 0
+    for u in 0..4 {
+        if row_tot[u] > 0 { used_rows = used_rows + 1 }
+        if col_tot[u] > 0 { used_cols = used_cols + 1 }
+    }
+    let grand_f = to_float(grand)
+    let mut chi2 = 0.0
+    for rr in 0..4 {
+        if row_tot[rr] > 0 {
+            for cc in 0..4 {
+                if col_tot[cc] > 0 {
+                    let expected = to_float(row_tot[rr]) * to_float(col_tot[cc]) / grand_f
+                    if expected > 0.0 {
+                        let obs = to_float(table[rr][cc])
+                        let diff = obs - expected
+                        chi2 = chi2 + (diff * diff) / expected
+                    }
+                }
+            }
+        }
+    }
+    let dof_raw = (used_rows - 1) * (used_cols - 1)
+    let dof = if dof_raw > 1 { dof_raw } else { 1 }
+    return _cscs_chi2_sf(chi2, dof)
+}
+
+// ---- public entry point ----------------------------------------------
+
+// Run the CSCS chained-sequential CHSH protocol: n_pairs identical Bell-pair
+// CHSH experiments, n_shots per CHSH setting (4), n_trials outer repeats.
+// Returns CscsNativeResult with per-pair S means, witness W, conditional
+// independence p-value, and the F-QM-2-CSCS-13 verdict.
+fn cscs_native_run(n_pairs: int, n_shots: int, n_trials: int, seed: int) -> CscsNativeResult {
+    if n_pairs < 2 {
+        return _cscs_native_fail("cscs_native: n_pairs >= 2 required (chained needs adj-pair test)")
+    }
+    if n_shots < 1 {
+        return _cscs_native_fail("cscs_native: n_shots >= 1 required")
+    }
+    if n_trials < 1 {
+        return _cscs_native_fail("cscs_native: n_trials >= 1 required")
+    }
+
+    // Interpreter-bounded Monte-Carlo shot count (see header note).
+    let n_shots_mc = if n_shots < 512 { n_shots } else { 512 }
+    let n_shots_mc_f = to_float(n_shots_mc)
+
+    // Canonical CHSH angle set: a=0, a'=pi/2, b=pi/4, b'=-pi/4.
+    let pi = 3.141592653589793
+    let ang_a  = 0.0
+    let ang_ap = pi / 2.0
+    let ang_b  = pi / 4.0
+    let ang_bp = 0.0 - (pi / 4.0)
+    // Setting index 0=ab, 1=abp, 2=apb, 3=apbp.
+    let theta_a_by = [ang_a,  ang_a,  ang_ap, ang_ap]
+    let theta_b_by = [ang_b,  ang_bp, ang_b,  ang_bp]
+
+    // Build the 4 setting states once (via engine_aer primitives) and their
+    // integer CDF thresholds (scaled to 2^32). Flatten to per-setting scalars
+    // so the hot loop touches no arrays beyond the per-trial contingency tables
+    // and the small kvals scratch.
+    let mut cdf0 = [0, 0, 0, 0]
+    let mut cdf1 = [0, 0, 0, 0]
+    let mut cdf2 = [0, 0, 0, 0]
+    for si in 0..4 {
+        let st = _cscs_setting_state(theta_a_by[si], theta_b_by[si])
+        let ci = _cscs_cdf_i(st)
+        if len(ci) < 3 {
+            return _cscs_native_fail("cscs_native: setting CDF empty (norm=0)")
+        }
+        cdf0[si] = ci[0]
+        cdf1[si] = ci[1]
+        cdf2[si] = ci[2]
+    }
+
+    // 2-round multiply-xorshift hash constants (half-strength splitmix32).
+    let hash_m  = 4294967296
+    let hash_a  = 2654435761
+    let hash_b  = 2246822519
+    let hash_s1 = 8192          // 2^13  (xorshift fold by 13 bits)
+    let hash_s2 = 131072        // 2^17  (xorshift fold by 17 bits)
+    let seed_mix = (seed * 1000003) % hash_m
+
+    let n_adj = n_pairs - 1
+
+    // Per-pair accumulators over trials.
+    let mut s_sum = []
+    let mut s_min = []
+    let mut s_max = []
+    for pinit in 0..n_pairs {
+        s_sum = s_sum.push(0.0)
+        s_min = s_min.push(0.0)
+        s_max = s_max.push(0.0)
+    }
+    let mut w_sum = 0.0
+    let mut w_sq  = 0.0
+    let mut p_sum = 0.0
+    let mut p_min = 1.0
+    let mut p_have = 0
+
+    // Hot-loop scratch (hoisted; reassigned, never re-`let` inside the loop).
+    let mut kvals = []
+    for kinit in 0..n_pairs { kvals = kvals.push(0) }
+
+    for t in 0..n_trials {
+        // per-trial E table: e_tab[setting][pair]  (4 * n_pairs floats)
+        let mut e_tab = []
+        for esi in 0..4 {
+            let mut erow = []
+            for epi in 0..n_pairs { erow = erow.push(0.0) }
+            e_tab = e_tab.push(erow)
+        }
+        let mut trial_p_min = 1.0
+        let mut trial_p_have = 0
+
+        for sset in 0..4 {
+            let thr0 = cdf0[sset]
+            let thr1 = cdf1[sset]
+            let thr2 = cdf2[sset]
+
+            // per-(setting) agree counts per pair
+            let mut agree = []
+            for api in 0..n_pairs { agree = agree.push(0) }
+
+            // per-(setting) co-occurrence tables for the n_adj adjacent pairs
+            let mut cooc = []
+            for cai in 0..n_adj {
+                let mut tbl = []
+                for cr in 0..4 {
+                    let mut crow = []
+                    for cc in 0..4 { crow = crow.push(0) }
+                    tbl = tbl.push(crow)
+                }
+                cooc = cooc.push(tbl)
+            }
+
+            // Per-pair hash lane base index for this (trial, setting):
+            //   lane[p] = (((trial*4 + setting)*n_pairs + p) * n_shots_mc) + seed_mix
+            // (mod hash_m); each draw adds `shot`. Precomputed OUTSIDE the hot
+            // shot loop to keep the inner body tiny (the interpreter leaks per
+            // arithmetic op per iteration).
+            let mut lane = []
+            for lp in 0..n_pairs {
+                let li = ((((t * 4 + sset) * n_pairs + lp) * n_shots_mc) + seed_mix) % hash_m
+                lane = lane.push(li)
+            }
+
+            // hoisted draw scratch (integers only — no float allocation in here)
+            let mut h = 0
+            let mut x = 0
+            let mut k = 0
+
+            for shot in 0..n_shots_mc {
+                for p in 0..n_pairs {
+                    x = lane[p] + shot
+                    h = (x * hash_a) % hash_m
+                    h = h ^ (h / hash_s1)
+                    h = (h * hash_b) % hash_m
+                    h = h ^ (h / hash_s2)
+                    k = if h < thr0 { 0 } else { if h < thr1 { 1 } else { if h < thr2 { 2 } else { 3 } } }
+                    kvals[p] = k
+                    if (k % 2) == ((k / 2) % 2) { agree[p] = agree[p] + 1 }
+                }
+                for ai in 0..n_adj {
+                    let ka = kvals[ai]
+                    let kb = kvals[ai + 1]
+                    cooc[ai][ka][kb] = cooc[ai][ka][kb] + 1
+                }
+            }
+
+            // E(setting) per pair = (n_agree - n_disagree) / n_shots_mc
+            for p2 in 0..n_pairs {
+                let ag = to_float(agree[p2])
+                let e_val = (2.0 * ag - n_shots_mc_f) / n_shots_mc_f
+                e_tab[sset][p2] = e_val
+            }
+
+            // chi-squared independence p for each adjacent-pair table this setting
+            for ai2 in 0..n_adj {
+                let pv = _cscs_chi2_pvalue(cooc[ai2])
+                if trial_p_have == 0 {
+                    trial_p_min = pv
+                    trial_p_have = 1
+                } else {
+                    if pv < trial_p_min { trial_p_min = pv }
+                }
+            }
+        }
+
+        // per-pair S for this trial = E_ab + E_abp + E_apb - E_apbp
+        let mut w_acc = 0.0
+        for p3 in 0..n_pairs {
+            let s_tp = e_tab[0][p3] + e_tab[1][p3] + e_tab[2][p3] - e_tab[3][p3]
+            s_sum[p3] = s_sum[p3] + s_tp
+            if t == 0 {
+                s_min[p3] = s_tp
+                s_max[p3] = s_tp
+            } else {
+                if s_tp < s_min[p3] { s_min[p3] = s_tp }
+                if s_tp > s_max[p3] { s_max[p3] = s_tp }
+            }
+            w_acc = w_acc + s_tp
+        }
+        let w_t = w_acc / to_float(n_pairs)
+        w_sum = w_sum + w_t
+        w_sq  = w_sq + w_t * w_t
+
+        if trial_p_have == 0 { trial_p_min = 1.0 }
+        p_sum = p_sum + trial_p_min
+        if p_have == 0 {
+            p_min = trial_p_min
+            p_have = 1
+        } else {
+            if trial_p_min < p_min { p_min = trial_p_min }
+        }
+    }
+
+    let n_trials_f = to_float(n_trials)
+    let mut s_mean = []
+    for mp in 0..n_pairs { s_mean = s_mean.push(s_sum[mp] / n_trials_f) }
+    let mut min_s = s_mean[0]
+    for mm in 1..n_pairs {
+        if s_mean[mm] < min_s { min_s = s_mean[mm] }
+    }
+    let w_mean = w_sum / n_trials_f
+    let w_var  = (w_sq / n_trials_f) - w_mean * w_mean
+    let w_std  = if w_var > 0.0 { sqrt(w_var) } else { 0.0 }
+    let p_mean = p_sum / n_trials_f
+
+    // F-QM-2-CSCS-13: min(S) >= 2.7 AND W_mean >= 2.7 AND p_mean >= 0.05
+    let pass_minS = min_s > 2.7 || min_s == 2.7
+    let pass_W    = w_mean > 2.7 || w_mean == 2.7
+    let pass_p    = p_mean > 0.05 || p_mean == 0.05
+    let verdict = if pass_minS {
+        if pass_W {
+            if pass_p { "PASS" } else { "FAIL" }
+        } else { "FAIL" }
+    } else { "FAIL" }
+
+    let reason = if verdict == "PASS" {
+        "min(s_per_pair)=" + str(min_s) + " >= 2.7 AND W_mean=" + str(w_mean) +
+        " >= 2.7 AND indep_pvalue_mean=" + str(p_mean) + " >= 0.05"
+    } else {
+        let mut parts = ""
+        if !pass_minS { parts = parts + "min_S=" + str(min_s) + " < 2.7" }
+        if !pass_W {
+            if len(parts) > 0 { parts = parts + "; " }
+            parts = parts + "W_mean=" + str(w_mean) + " < 2.7"
+        }
+        if !pass_p {
+            if len(parts) > 0 { parts = parts + "; " }
+            parts = parts + "indep_pvalue_mean=" + str(p_mean) + " < 0.05"
+        }
+        parts
+    }
+
+    return CscsNativeResult {
+        ok: 1, verdict: verdict, verdict_reason: reason,
+        n_pairs: n_pairs, n_shots_per_setting: n_shots, n_trials: n_trials, seed: seed,
+        s_per_pair: s_mean, s_per_pair_min: s_min, s_per_pair_max: s_max,
+        min_S: min_s, W_mean: w_mean, W_std: w_std,
+        indep_pvalue_mean: p_mean, indep_pvalue_min: p_min,
+        engine: "hexa_native",
+        message: "cscs: " + verdict + " (n_pairs=" + str(n_pairs) + ", min_S=" + str(min_s) +
+                 ", W_mean=" + str(w_mean) + ", p_mean=" + str(p_mean) + ", engine=hexa_native)"
+    }
+}
+
+fn _cscs_native_selftest() -> int {
+    // Smoke test: cscs_native_run(3, 256, 8, seed) should saturate Tsirelson
+    // per pair (S ~ 2.83) and clear the independence floor.
+    let r = cscs_native_run(3, 256, 8, 20260504)
+    if r.ok != 1 { return 0 }
+    if len(r.s_per_pair) != 3 { return 0 }
+    for p in 0..3 {
+        if r.s_per_pair[p] < 2.6 { return 0 }
+        if r.s_per_pair[p] > 2.95 { return 0 }
+    }
+    if r.W_mean < 2.6 || r.W_mean > 2.95 { return 0 }
+    if r.indep_pvalue_mean < 0.0 || r.indep_pvalue_mean > 1.0 { return 0 }
+    return 1
+}
+
+fn main() {
+    println("[qmirror/cscs_native] pure-hexa chained-sequential CHSH kernel (Phase 5c)")
+    let r = cscs_native_run(3, 1024, 30, 20260504)
+    println("  engine     = " + r.engine)
+    println("  n_pairs    = " + str(r.n_pairs))
+    for p in 0..r.n_pairs {
+        println("  S_pair_" + str(p) + "   = " + str(r.s_per_pair[p]) + "   (band [2.7, 2.85])")
+    }
+    println("  min_S      = " + str(r.min_S))
+    println("  W_mean     = " + str(r.W_mean) + "   (analytic 2.828)")
+    println("  W_std      = " + str(r.W_std))
+    println("  p_indep_mu = " + str(r.indep_pvalue_mean) + "   (>= 0.05 required)")
+    println("  p_indep_mn = " + str(r.indep_pvalue_min))
+    println("  verdict    = " + r.verdict)
+    println("  reason     = " + r.verdict_reason)
+    if _cscs_native_selftest() == 1 {
+        println("[qmirror/cscs_native] SELFTEST PASS")
+        println("__QMIRROR_CSCS_NATIVE__ PASS")
+    } else {
+        println("[qmirror/cscs_native] SELFTEST FAIL")
+        println("__QMIRROR_CSCS_NATIVE__ FAIL")
+    }
+}

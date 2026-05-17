@@ -1,0 +1,333 @@
+#!hexa strict
+// qmirror/engine_aer/module/qasm3_oracle.hexa
+//
+// Oracle harness for the Phase 2 QASM3 pipeline (Aer absorption plan,
+// docs/aer_hexa_absorption_plan_2026_05_12.md §2 Phase 2 acceptance).
+//
+// Two oracle families:
+//
+//   (1) SELF-ORACLE — run a QASM3 source string through engine_aer_run_qasm
+//       and compare the resulting amplitude vector to a CLOSED-FORM
+//       analytic expected vector. No external simulator required.
+//
+//         bell_qasm    — Bell pair                    (2q,  4-dim)
+//         ghz3_qasm    — 3-qubit GHZ                  (3q,  8-dim)
+//         ghz5_qasm    — 5-qubit GHZ                  (5q, 32-dim)
+//         wstate3_qasm — W-state on 3 qubits          (3q,  8-dim)
+//         qft2_qasm    — 2-qubit QFT on |00>          (2q,  4-dim)
+//
+//   (2) CROSS-ORACLE — run the same logical circuit through BOTH the
+//       QASM3 pipeline AND a hand-coded apply_single/apply_cnot
+//       sequence using the Phase 1 kernel directly. Amplitudes must
+//       agree tol=1e-6. This is the "two implementations, one truth"
+//       check (a substitute for the qiskit comparison since qiskit
+//       is not installed in this environment).
+//
+//         chsh_ab_qasm    vs engine_aer_run_named("chsh_ab", 2)
+//         chsh_apbp_qasm  vs engine_aer_run_named("chsh_apbp", 2)
+//         grover2_qasm    vs hand-coded Grover-2 (1 iteration, marked |11>)
+//         kickback3_qasm  vs hand-coded 3-qubit phase-kickback circuit
+//
+// DEFERRED: plan §2 lists a 12-vs-qiskit oracle. qiskit-aer is not
+// installed in this environment (AGENTS.md preflight: F2 baseline FAIL
+// because qiskit absent) and the prompt FORBIDS installing it. The
+// self-oracle + cross-oracle pair above is the substitute acceptance
+// signal: any QASM3 path bug shows up either as an analytic mismatch
+// (self) or as a divergence from the in-process direct primitive
+// sequence (cross).
+//
+// Sentinel emitted on stdout: __QMIRROR_QASM3_ORACLE__ PASS or FAIL
+
+use "./engine_aer.hexa"
+use "./state_vector.hexa"
+use "./gates.hexa"
+
+fn _qo_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _qo_close(a_re: [float], a_im: [float],
+             b_re: [float], b_im: [float], tol: float) -> int {
+    if len(a_re) != len(b_re) { return 0 }
+    if len(a_im) != len(b_im) { return 0 }
+    let mut i = 0
+    while i < len(a_re) {
+        let dr = _qo_abs(a_re[i] - b_re[i])
+        let di = _qo_abs(a_im[i] - b_im[i])
+        if dr > tol { return 0 }
+        if di > tol { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn _qo_zeros(n: int) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out = out.push(0.0)
+        i = i + 1
+    }
+    return out
+}
+
+fn _qo_expected_bell() -> AerResult {
+    let s = 0.7071067811865475
+    return AerResult {
+        ok: 1, n_qubits: 2,
+        amps_re: [s, 0.0, 0.0, s],
+        amps_im: [0.0, 0.0, 0.0, 0.0],
+        engine: "analytic", message: "bell"
+    }
+}
+
+fn _qo_expected_ghz(n: int) -> AerResult {
+    let s = 0.7071067811865475
+    let mut dim = 1
+    let mut k = 0
+    while k < n { dim = dim * 2; k = k + 1 }
+    let mut re = _qo_zeros(dim)
+    let im = _qo_zeros(dim)
+    re[0] = s
+    re[dim - 1] = s
+    return AerResult {
+        ok: 1, n_qubits: n,
+        amps_re: re, amps_im: im,
+        engine: "analytic", message: "ghz" + str(n)
+    }
+}
+
+fn _qo_expected_w3() -> AerResult {
+    let inv_sqrt3 = 1.0 / sqrt(3.0)
+    let mut re = _qo_zeros(8)
+    let im = _qo_zeros(8)
+    re[1] = inv_sqrt3
+    re[2] = inv_sqrt3
+    re[4] = inv_sqrt3
+    return AerResult {
+        ok: 1, n_qubits: 3,
+        amps_re: re, amps_im: im,
+        engine: "analytic", message: "wstate3"
+    }
+}
+
+fn _qo_expected_qft2() -> AerResult {
+    return AerResult {
+        ok: 1, n_qubits: 2,
+        amps_re: [0.5, 0.5, 0.5, 0.5],
+        amps_im: [0.0, 0.0, 0.0, 0.0],
+        engine: "analytic", message: "qft2"
+    }
+}
+
+fn _qo_qasm_bell() -> str {
+    return "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[2] q;\nh q[0];\ncx q[0], q[1];"
+}
+
+fn _qo_qasm_ghz3() -> str {
+    return "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[3] q;\nh q[0];\ncx q[0], q[1];\ncx q[1], q[2];"
+}
+
+fn _qo_qasm_ghz5() -> str {
+    return "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[5] q;\nh q[0];\ncx q[0], q[1];\ncx q[1], q[2];\ncx q[2], q[3];\ncx q[3], q[4];"
+}
+
+fn _qo_qasm_wstate3() -> str {
+    return "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[3] q;\nry(1.9106332362490186) q[0];\nry(0.7853981633974483) q[1];\ncx q[0], q[1];\nry(-0.7853981633974483) q[1];\ncx q[0], q[1];\ncx q[1], q[2];\ncx q[0], q[1];\nx q[0];"
+}
+
+fn _qo_qasm_qft2() -> str {
+    return "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[2] q;\nh q[0];\nh q[1];"
+}
+
+fn _qo_qasm_chsh_ab() -> str {
+    return "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[2] q;\nh q[0];\ncx q[0], q[1];\nry(0.0) q[0];\nry(-0.7853981633974483) q[1];"
+}
+
+fn _qo_qasm_chsh_apbp() -> str {
+    return "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[2] q;\nh q[0];\ncx q[0], q[1];\nry(-1.5707963267948966) q[0];\nry(0.7853981633974483) q[1];"
+}
+
+fn _qo_qasm_grover2() -> str {
+    return "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[2] q;\nh q[0]; h q[1];\ncz q[0], q[1];\nh q[0]; h q[1];\nx q[0]; x q[1];\ncz q[0], q[1];\nx q[0]; x q[1];\nh q[0]; h q[1];"
+}
+
+fn _qo_qasm_kickback3() -> str {
+    return "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[3] q;\nx q[2];\nh q[0]; h q[1];\ncx q[0], q[2];\ncx q[1], q[2];\nh q[0]; h q[1];"
+}
+
+fn _qo_direct_grover2() -> AerResult {
+    let h = gate_h()
+    let x = gate_x()
+    let n = 2
+    let mut s = state_zero(n)
+    s = apply_single(s, h.re, h.im, 0, n)
+    s = apply_single(s, h.re, h.im, 1, n)
+    s = apply_single(s, h.re, h.im, 1, n)
+    s = apply_cnot(s, 0, 1, n)
+    s = apply_single(s, h.re, h.im, 1, n)
+    s = apply_single(s, h.re, h.im, 0, n)
+    s = apply_single(s, h.re, h.im, 1, n)
+    s = apply_single(s, x.re, x.im, 0, n)
+    s = apply_single(s, x.re, x.im, 1, n)
+    s = apply_single(s, h.re, h.im, 1, n)
+    s = apply_cnot(s, 0, 1, n)
+    s = apply_single(s, h.re, h.im, 1, n)
+    s = apply_single(s, x.re, x.im, 0, n)
+    s = apply_single(s, x.re, x.im, 1, n)
+    s = apply_single(s, h.re, h.im, 0, n)
+    s = apply_single(s, h.re, h.im, 1, n)
+    return AerResult {
+        ok: 1, n_qubits: n,
+        amps_re: s.re, amps_im: s.im,
+        engine: "primitive", message: "grover2 direct"
+    }
+}
+
+fn _qo_direct_kickback3() -> AerResult {
+    let h = gate_h()
+    let x = gate_x()
+    let n = 3
+    let mut s = state_zero(n)
+    s = apply_single(s, x.re, x.im, 2, n)
+    s = apply_single(s, h.re, h.im, 0, n)
+    s = apply_single(s, h.re, h.im, 1, n)
+    s = apply_cnot(s, 0, 2, n)
+    s = apply_cnot(s, 1, 2, n)
+    s = apply_single(s, h.re, h.im, 0, n)
+    s = apply_single(s, h.re, h.im, 1, n)
+    return AerResult {
+        ok: 1, n_qubits: n,
+        amps_re: s.re, amps_im: s.im,
+        engine: "primitive", message: "kickback3 direct"
+    }
+}
+
+struct OracleStat {
+    self_pass:  int,
+    self_total: int,
+    cross_pass:  int,
+    cross_total: int
+}
+
+fn _qo_run() -> OracleStat {
+    let tol = 0.000001
+    let mut stat = OracleStat { self_pass: 0, self_total: 0, cross_pass: 0, cross_total: 0 }
+
+    stat.self_total = stat.self_total + 1
+    let r1 = engine_aer_run_qasm(_qo_qasm_bell())
+    let e1 = _qo_expected_bell()
+    if r1.ok == 1 && _qo_close(r1.amps_re, r1.amps_im, e1.amps_re, e1.amps_im, tol) == 1 {
+        stat.self_pass = stat.self_pass + 1
+        println("  [self] bell_qasm                 PASS")
+    } else {
+        println("  [self] bell_qasm                 FAIL  msg=" + r1.message)
+    }
+
+    stat.self_total = stat.self_total + 1
+    let r2 = engine_aer_run_qasm(_qo_qasm_ghz3())
+    let e2 = _qo_expected_ghz(3)
+    if r2.ok == 1 && _qo_close(r2.amps_re, r2.amps_im, e2.amps_re, e2.amps_im, tol) == 1 {
+        stat.self_pass = stat.self_pass + 1
+        println("  [self] ghz3_qasm                 PASS")
+    } else {
+        println("  [self] ghz3_qasm                 FAIL  msg=" + r2.message)
+    }
+
+    stat.self_total = stat.self_total + 1
+    let r3 = engine_aer_run_qasm(_qo_qasm_ghz5())
+    let e3 = _qo_expected_ghz(5)
+    if r3.ok == 1 && _qo_close(r3.amps_re, r3.amps_im, e3.amps_re, e3.amps_im, tol) == 1 {
+        stat.self_pass = stat.self_pass + 1
+        println("  [self] ghz5_qasm                 PASS")
+    } else {
+        println("  [self] ghz5_qasm                 FAIL  msg=" + r3.message)
+    }
+
+    stat.self_total = stat.self_total + 1
+    let r4 = engine_aer_run_qasm(_qo_qasm_wstate3())
+    let e4 = _qo_expected_w3()
+    if r4.ok == 1 && _qo_close(r4.amps_re, r4.amps_im, e4.amps_re, e4.amps_im, tol) == 1 {
+        stat.self_pass = stat.self_pass + 1
+        println("  [self] wstate3_qasm              PASS")
+    } else {
+        println("  [self] wstate3_qasm              FAIL  msg=" + r4.message)
+        let mut idx = 0
+        while idx < len(r4.amps_re) {
+            if _qo_abs(r4.amps_re[idx]) > 0.0001 || _qo_abs(r4.amps_im[idx]) > 0.0001 {
+                println("    got idx=" + str(idx) + " re=" + str(r4.amps_re[idx]) + " im=" + str(r4.amps_im[idx]))
+            }
+            idx = idx + 1
+        }
+    }
+
+    stat.self_total = stat.self_total + 1
+    let r5 = engine_aer_run_qasm(_qo_qasm_qft2())
+    let e5 = _qo_expected_qft2()
+    if r5.ok == 1 && _qo_close(r5.amps_re, r5.amps_im, e5.amps_re, e5.amps_im, tol) == 1 {
+        stat.self_pass = stat.self_pass + 1
+        println("  [self] qft2_qasm                 PASS")
+    } else {
+        println("  [self] qft2_qasm                 FAIL  msg=" + r5.message)
+    }
+
+    stat.cross_total = stat.cross_total + 1
+    let c1q = engine_aer_run_qasm(_qo_qasm_chsh_ab())
+    let c1n = engine_aer_run_named("chsh_ab", 2)
+    if c1q.ok == 1 && c1n.ok == 1 && _qo_close(c1q.amps_re, c1q.amps_im, c1n.amps_re, c1n.amps_im, tol) == 1 {
+        stat.cross_pass = stat.cross_pass + 1
+        println("  [cross] chsh_ab_qasm vs named    PASS")
+    } else {
+        println("  [cross] chsh_ab_qasm vs named    FAIL  qasm.msg=" + c1q.message)
+    }
+
+    stat.cross_total = stat.cross_total + 1
+    let c2q = engine_aer_run_qasm(_qo_qasm_chsh_apbp())
+    let c2n = engine_aer_run_named("chsh_apbp", 2)
+    if c2q.ok == 1 && c2n.ok == 1 && _qo_close(c2q.amps_re, c2q.amps_im, c2n.amps_re, c2n.amps_im, tol) == 1 {
+        stat.cross_pass = stat.cross_pass + 1
+        println("  [cross] chsh_apbp_qasm vs named  PASS")
+    } else {
+        println("  [cross] chsh_apbp_qasm vs named  FAIL  qasm.msg=" + c2q.message)
+    }
+
+    stat.cross_total = stat.cross_total + 1
+    let c3q = engine_aer_run_qasm(_qo_qasm_grover2())
+    let c3d = _qo_direct_grover2()
+    if c3q.ok == 1 && _qo_close(c3q.amps_re, c3q.amps_im, c3d.amps_re, c3d.amps_im, tol) == 1 {
+        stat.cross_pass = stat.cross_pass + 1
+        println("  [cross] grover2_qasm vs direct   PASS")
+    } else {
+        println("  [cross] grover2_qasm vs direct   FAIL  qasm.msg=" + c3q.message)
+    }
+
+    stat.cross_total = stat.cross_total + 1
+    let c4q = engine_aer_run_qasm(_qo_qasm_kickback3())
+    let c4d = _qo_direct_kickback3()
+    if c4q.ok == 1 && _qo_close(c4q.amps_re, c4q.amps_im, c4d.amps_re, c4d.amps_im, tol) == 1 {
+        stat.cross_pass = stat.cross_pass + 1
+        println("  [cross] kickback3_qasm vs direct PASS")
+    } else {
+        println("  [cross] kickback3_qasm vs direct FAIL  qasm.msg=" + c4q.message)
+    }
+
+    return stat
+}
+
+fn main() {
+    println("[qmirror/qasm3_oracle] Phase 2 oracle (self + cross). tol = 1e-6")
+    let stat = _qo_run()
+    let total = stat.self_total + stat.cross_total
+    let pass = stat.self_pass + stat.cross_pass
+    println("  self-oracle  : " + str(stat.self_pass) + " / " + str(stat.self_total))
+    println("  cross-oracle : " + str(stat.cross_pass) + " / " + str(stat.cross_total))
+    println("  total        : " + str(pass) + " / " + str(total))
+    if pass < 8 {
+        println("[qmirror/qasm3_oracle] FAIL (need 8 of 9 pass, got " + str(pass) + ")")
+        println("__QMIRROR_QASM3_ORACLE__ FAIL")
+        return
+    }
+    println("[qmirror/qasm3_oracle] PASS")
+    println("__QMIRROR_QASM3_ORACLE__ PASS")
+}

@@ -1,0 +1,368 @@
+#!hexa strict
+//
+// _rfc039_acceptance.hexa — RFC 039 `farr_parameter_shift_grad` acceptance.
+//
+// Drives the C kernel against a hexa-side finite-difference reference on
+// the H2 STO-3G 4-qubit UCCSD ansatz (1 nontrivial double-excitation
+// parameter padded to 4 params via 3 zero-coef stand-ins, same descriptor
+// shape as `_rfc038_smoke.hexa`). Hamiltonian is a small 4-qubit
+// 6-term operator with non-trivial expectation under the UCCSD-rotated
+// HF state (Z0, Z1, Z0Z1, Z2Z3, X0X1Y2Y3, Y0Y1X2X3) — enough non-
+// commuting structure that ∂E/∂θ_k is non-zero in all 4 directions.
+//
+// Procedure (RFC 039 §3 / §7.1):
+//   1. Build ham_h via `ham_pack`, ansatz_h via `ansatz_pack`.
+//   2. At 5 random θ points (LCG seed=42, theta in [-π, π]^4):
+//      a. g_PS via `farr_parameter_shift_grad` (kernel under test).
+//      b. g_FD via a hexa-side energy(theta) call + (E(+h)-E(-h))/(2h),
+//         where energy(theta) replays the ansatz with
+//         `farr_pauli_exp_inplace` and contracts the Hamiltonian with
+//         `farr_pauli_expectation` (the same primitives the C kernel
+//         calls internally). h = 1e-5.
+//      c. Assert |g_PS - g_FD|_∞ ≤ 1e-8 (per RFC 039 §7.1).
+//
+// Sentinel: __QMIRROR_RFC039_ACCEPTANCE__ PASS max_diff=<X>
+//          (or FAIL <reason>).
+// Marker:  state/markers/_rfc039_acceptance_<ts>.marker on PASS,
+//          state/markers/_rfc039_acceptance_<ts>_FAILED.marker on FAIL.
+//
+// Dependencies (already landed at hexa-lang b8acb90f):
+//   - RFC 030 farr_zeros/get/set/free
+//   - RFC 034 farr_pauli_exp_inplace / farr_pauli_expectation
+//   - RFC 039 ham_pack / ansatz_pack / farr_parameter_shift_grad
+//
+// Known blocker (2026-05-13, sibling agent A4):
+//   `ansatz_pack` (and possibly `ham_pack`) may return -1 due to an
+//   input-length / array-unwrap bug in the deployed `hexa.real` binary.
+//   On that path, the test exits cleanly with a FAIL marker that names
+//   the specific failure (pack returned -1), rather than fabricating
+//   numbers from a kernel that cannot be reached.
+
+// ─── H2 STO-3G 4-qubit UCCSD ansatz descriptors ──────────────────────
+//
+// Identical to `_rfc038_smoke.hexa` (4 params, 1 active double-excitation
+// at param 0 with 8 Pauli rotations; params 1..3 are zero-coef stand-ins).
+// JW(H2 STO-3G, 4 spin-orbitals) HF = |0011> → basis index 3.
+
+fn _r39_h2_param_idx() -> [int] {
+    return [0, 0, 0, 0, 0, 0, 0, 0,
+            1, 2, 3]
+}
+
+fn _r39_h2_coefs() -> [float] {
+    return [0.125,
+            0.0 - 0.125,
+            0.125,
+            0.0 - 0.125,
+            0.0 - 0.125,
+            0.125,
+            0.0 - 0.125,
+            0.125,
+            0.0, 0.0, 0.0]
+}
+
+fn _r39_h2_flip() -> [int] {
+    return [15, 15, 15, 15, 15, 15, 15, 15,
+            0, 0, 0]
+}
+
+fn _r39_h2_z() -> [int] {
+    return [1, 2, 4, 8, 7, 11, 13, 14,
+            0, 0, 0]
+}
+
+fn _r39_h2_y() -> [int] {
+    return [1, 2, 4, 8, 7, 11, 13, 14,
+            0, 0, 0]
+}
+
+fn _r39_h2_cy() -> [int] {
+    return [1, 1, 1, 1, 3, 3, 3, 3,
+            0, 0, 0]
+}
+
+fn _r39_h2_n_flat() -> int { return 11 }
+fn _r39_h2_n_qubits() -> int { return 4 }
+fn _r39_h2_n_params() -> int { return 4 }
+fn _r39_h2_hf_idx() -> int { return 3 }
+fn _r39_h2_dim() -> int { return 16 }
+
+// ─── Hamiltonian (synthetic but non-trivially θ-dependent) ───────────
+//
+// Hand-picked so that ∂E/∂θ_0 ≠ 0 at random θ_0 (the active param):
+//   Z0       : flip=0, z=1, y=0, cy=0, coef=0.4
+//   Z1       : flip=0, z=2, y=0, cy=0, coef=0.3
+//   Z0Z1     : flip=0, z=3, y=0, cy=0, coef=0.1
+//   Z2Z3     : flip=0, z=12, y=0, cy=0, coef=0.15
+//   X0X1Y2Y3 : flip=15, z=12, y=12, cy=2, coef=0.2
+//   Y0Y1X2X3 : flip=15, z=3,  y=3,  cy=2, coef=0.2
+// shift = 0.0
+// The double excitation T_0123 mixes |0011> and |1100>; the
+// X0X1Y2Y3/Y0Y1X2X3 (excitation-like) terms have non-zero matrix
+// elements between those basis states, so ∂E/∂θ_0 is non-zero across
+// the entire θ range.
+//
+// Params 1..3 are zero-coef rotations → ∂E/∂θ_k = 0 for k≥1. This is
+// fine — parameter shift must still return exactly 0 there, and the
+// FD reference will agree to within ≈ h² ≈ 1e-10.
+
+fn _r39_ham_flip()  -> [int]   { return [0, 0, 0, 0, 15, 15] }
+fn _r39_ham_z()     -> [int]   { return [1, 2, 3, 12, 12, 3] }
+fn _r39_ham_y()     -> [int]   { return [0, 0, 0, 0, 12, 3] }
+fn _r39_ham_cy()    -> [int]   { return [0, 0, 0, 0, 2, 2] }
+fn _r39_ham_coefs() -> [float] { return [0.4, 0.3, 0.1, 0.15, 0.2, 0.2] }
+fn _r39_ham_shift() -> float   { return 0.0 }
+fn _r39_ham_n_terms() -> int   { return 6 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+
+fn _r39_set_hf(re_h: int, im_h: int, dim: int, hf_idx: int) -> int {
+    let mut z = 0
+    while z < dim {
+        let _ = farr_set(re_h, z, 0.0)
+        let _ = farr_set(im_h, z, 0.0)
+        z = z + 1
+    }
+    let _ = farr_set(re_h, hf_idx, 1.0)
+    return 0
+}
+
+// Hexa-side ansatz replay (matches the C kernel's `_rfc039_energy`
+// helper exactly: reset → HF → flat-Pauli loop with the |alpha|>1e-13
+// gate → return state).
+fn _r39_apply_ansatz(re_h: int, im_h: int, theta_h: int,
+                     param_idx: [int], coefs: [float],
+                     flip_arr: [int], z_arr: [int], y_arr: [int], cy_arr: [int],
+                     n_flat: int, n_q: int, dim: int, hf_idx: int) -> int {
+    let _ = _r39_set_hf(re_h, im_h, dim, hf_idx)
+    let mut i = 0
+    while i < n_flat {
+        let k = param_idx[i]
+        let alpha = farr_get(theta_h, k) * coefs[i]
+        let abs_a = if alpha < 0.0 { 0.0 - alpha } else { alpha }
+        if abs_a > 0.0000000000001 {
+            let _ = farr_pauli_exp_inplace(re_h, im_h, alpha,
+                flip_arr[i], z_arr[i], y_arr[i], cy_arr[i], n_q)
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// energy(theta) = sum_j coef_j * <psi(theta)|P_j|psi(theta)> + shift.
+fn _r39_energy(re_h: int, im_h: int, theta_h: int,
+               param_idx: [int], coefs: [float],
+               flip_arr: [int], z_arr: [int], y_arr: [int], cy_arr: [int],
+               n_flat: int, n_q: int, dim: int, hf_idx: int,
+               h_flip: [int], h_z: [int], h_y: [int], h_cy: [int],
+               h_coefs: [float], h_shift: float, h_n: int) -> float {
+    let _ = _r39_apply_ansatz(re_h, im_h, theta_h,
+                               param_idx, coefs, flip_arr, z_arr, y_arr, cy_arr,
+                               n_flat, n_q, dim, hf_idx)
+    let mut e_op = 0.0
+    let mut k = 0
+    while k < h_n {
+        let exp_k = farr_pauli_expectation(re_h, im_h,
+                        h_flip[k], h_z[k], h_y[k], h_cy[k], n_q)
+        e_op = e_op + h_coefs[k] * exp_k
+        k = k + 1
+    }
+    return e_op + h_shift
+}
+
+// g_FD[k] = (E(theta + h*e_k) - E(theta - h*e_k)) / (2*h)
+fn _r39_fd_grad(re_h: int, im_h: int, theta_h: int, g_h: int,
+                n_p: int, h_step: float,
+                param_idx: [int], coefs: [float],
+                flip_arr: [int], z_arr: [int], y_arr: [int], cy_arr: [int],
+                n_flat: int, n_q: int, dim: int, hf_idx: int,
+                h_flip: [int], h_z: [int], h_y: [int], h_cy: [int],
+                h_coefs: [float], h_shift: float, h_n: int) -> int {
+    let inv2h = 1.0 / (2.0 * h_step)
+    let mut k = 0
+    while k < n_p {
+        let tk = farr_get(theta_h, k)
+        let _ = farr_set(theta_h, k, tk + h_step)
+        let e_plus = _r39_energy(re_h, im_h, theta_h,
+                                  param_idx, coefs, flip_arr, z_arr, y_arr, cy_arr,
+                                  n_flat, n_q, dim, hf_idx,
+                                  h_flip, h_z, h_y, h_cy, h_coefs, h_shift, h_n)
+        let _ = farr_set(theta_h, k, tk - h_step)
+        let e_minus = _r39_energy(re_h, im_h, theta_h,
+                                   param_idx, coefs, flip_arr, z_arr, y_arr, cy_arr,
+                                   n_flat, n_q, dim, hf_idx,
+                                   h_flip, h_z, h_y, h_cy, h_coefs, h_shift, h_n)
+        let _ = farr_set(theta_h, k, tk)
+        let _ = farr_set(g_h, k, (e_plus - e_minus) * inv2h)
+        k = k + 1
+    }
+    return 0
+}
+
+// Deterministic LCG (Numerical Recipes constants), maps to [-pi, pi].
+fn _r39_lcg_next(state: int) -> int {
+    return (state * 1664525 + 1013904223) % 2147483648
+}
+
+fn _r39_lcg_to_pi(state: int) -> float {
+    let f = to_float(state) / 2147483648.0
+    return 6.283185307179586 * f - 3.141592653589793
+}
+
+fn _r39_max_abs_diff(a_h: int, b_h: int, n: int) -> float {
+    let mut m = 0.0
+    let mut k = 0
+    while k < n {
+        let d = farr_get(a_h, k) - farr_get(b_h, k)
+        let ad = if d < 0.0 { 0.0 - d } else { d }
+        if ad > m { m = ad }
+        k = k + 1
+    }
+    return m
+}
+
+fn _r39_dump_vec(label: str, v_h: int, n: int) -> int {
+    let mut k = 0
+    let mut s = label + " ["
+    while k < n {
+        if k > 0 { s = s + ", " }
+        s = s + str(farr_get(v_h, k))
+        k = k + 1
+    }
+    s = s + "]"
+    println(s)
+    return 0
+}
+
+fn _r39_emit_marker(passed: int, body: str) -> int {
+    let ts = exec("date +%s").trim()
+    let qm_root = env("QMIRROR_ROOT")
+    let root = if qm_root.len() > 0 { qm_root } else { exec("pwd").trim() }
+    let marker_dir = root + "/state/markers"
+    let _mk = exec("mkdir -p " + marker_dir + " 2>/dev/null")
+    let suffix = if passed == 1 { ".marker" } else { "_FAILED.marker" }
+    let path = marker_dir + "/_rfc039_acceptance_" + ts + suffix
+    let _w = exec("echo '" + body + "' > '" + path + "'")
+    println("  marker: " + path)
+    return 0
+}
+
+fn main() -> void {
+    println("__QMIRROR_RFC039_ACCEPTANCE__ start")
+
+    // ─── descriptors ───────────────────────────────────────────────
+    let pi_arr     = _r39_h2_param_idx()
+    let coefs      = _r39_h2_coefs()
+    let flip_arr   = _r39_h2_flip()
+    let z_arr      = _r39_h2_z()
+    let y_arr      = _r39_h2_y()
+    let cy_arr     = _r39_h2_cy()
+    let n_flat     = _r39_h2_n_flat()
+    let n_q        = _r39_h2_n_qubits()
+    let n_p        = _r39_h2_n_params()
+    let hf_idx     = _r39_h2_hf_idx()
+    let dim        = _r39_h2_dim()
+
+    let h_flip     = _r39_ham_flip()
+    let h_z        = _r39_ham_z()
+    let h_y        = _r39_ham_y()
+    let h_cy       = _r39_ham_cy()
+    let h_coefs    = _r39_ham_coefs()
+    let h_shift    = _r39_ham_shift()
+    let h_n        = _r39_ham_n_terms()
+    println("  H2 4-qubit UCCSD pack: n_flat=" + str(n_flat) + " n_p=" + str(n_p)
+            + " hf_idx=" + str(hf_idx) + " ham_n=" + str(h_n))
+
+    // ─── pack ──────────────────────────────────────────────────────
+    let ham_h = ham_pack(h_flip, h_z, h_y, h_cy, h_coefs, h_shift, n_q)
+    let ansatz_h = ansatz_pack(pi_arr, coefs, flip_arr, z_arr, y_arr, cy_arr, hf_idx, n_q)
+    println("  ham_pack handle    = " + str(ham_h))
+    println("  ansatz_pack handle = " + str(ansatz_h))
+
+    if ham_h < 0 || ansatz_h < 0 {
+        let reason = "pack returned -1 (ham_h=" + str(ham_h) + " ansatz_h=" + str(ansatz_h)
+                     + "); deployed hexa.real binary missing the _hx_unwrap_arr fix for"
+                     + " ham_pack/ansatz_pack — runtime.c source has it but binary is stale."
+        println("  [BLOCKED] " + reason)
+        let body = "[qmirror/chemistry_vqe/_rfc039_acceptance] FAIL reason=" + reason
+        let _ = _r39_emit_marker(0, body)
+        println("__QMIRROR_RFC039_ACCEPTANCE__ FAIL " + reason)
+        return
+    }
+
+    // ─── state + theta scratch ──────────────────────────────────────
+    let re_h    = farr_zeros(dim)
+    let im_h    = farr_zeros(dim)
+    let theta_h = farr_zeros(n_p)
+    let g_ps_h  = farr_zeros(n_p)
+    let g_fd_h  = farr_zeros(n_p)
+
+    // ─── LCG seed=42 → 5 draws in [-π, π]^4 ─────────────────────────
+    let mut state = 42
+    let mut draw = 0
+    let mut worst = 0.0
+    let mut total_fail = 0
+    let n_draws = 5
+    while draw < n_draws {
+        // seed theta
+        let mut j = 0
+        while j < n_p {
+            state = _r39_lcg_next(state)
+            let _ = farr_set(theta_h, j, _r39_lcg_to_pi(state))
+            j = j + 1
+        }
+        // g_PS via the C kernel
+        let rc = farr_parameter_shift_grad(re_h, im_h, theta_h, g_ps_h,
+                                            n_p, ham_h, ansatz_h, n_q)
+        if rc != 0 {
+            println("  [FAIL] draw " + str(draw) + ": farr_parameter_shift_grad rc=" + str(rc))
+            total_fail = total_fail + 1
+            draw = draw + 1
+            continue
+        }
+        // g_FD reference
+        let _ = _r39_fd_grad(re_h, im_h, theta_h, g_fd_h,
+                              n_p, 0.00001,
+                              pi_arr, coefs, flip_arr, z_arr, y_arr, cy_arr,
+                              n_flat, n_q, dim, hf_idx,
+                              h_flip, h_z, h_y, h_cy, h_coefs, h_shift, h_n)
+        let diff = _r39_max_abs_diff(g_ps_h, g_fd_h, n_p)
+        println("  draw " + str(draw) + " max|g_PS - g_FD|_inf = " + str(diff))
+        let _ = _r39_dump_vec("    g_PS", g_ps_h, n_p)
+        let _ = _r39_dump_vec("    g_FD", g_fd_h, n_p)
+        if diff > worst { worst = diff }
+        // acceptance per RFC 039 §7.1
+        if diff > 0.00000001 {     // 1e-8
+            println("  [FAIL] draw " + str(draw) + " exceeds 1e-8 bound")
+            total_fail = total_fail + 1
+        }
+        draw = draw + 1
+    }
+
+    println("  worst |g_PS - g_FD|_inf over " + str(n_draws) + " draws = " + str(worst))
+
+    let _ = farr_free(re_h)
+    let _ = farr_free(im_h)
+    let _ = farr_free(theta_h)
+    let _ = farr_free(g_ps_h)
+    let _ = farr_free(g_fd_h)
+    let _ = ham_free(ham_h)
+    let _ = ansatz_free(ansatz_h)
+
+    if total_fail == 0 && worst <= 0.00000001 {
+        let body = "[qmirror/chemistry_vqe/_rfc039_acceptance] PASS"
+                 + " max_diff=" + str(worst)
+                 + " n_draws=" + str(n_draws)
+                 + " tol=1e-8"
+        let _ = _r39_emit_marker(1, body)
+        println("__QMIRROR_RFC039_ACCEPTANCE__ PASS max_diff=" + str(worst))
+        return
+    }
+    let body = "[qmirror/chemistry_vqe/_rfc039_acceptance] FAIL"
+             + " worst=" + str(worst)
+             + " n_fail=" + str(total_fail)
+             + " n_draws=" + str(n_draws)
+    let _ = _r39_emit_marker(0, body)
+    println("__QMIRROR_RFC039_ACCEPTANCE__ FAIL worst=" + str(worst)
+            + " n_fail=" + str(total_fail) + "/" + str(n_draws))
+}
