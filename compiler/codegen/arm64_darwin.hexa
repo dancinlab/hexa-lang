@@ -1588,6 +1588,22 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     ))
     instrs.push(_arm64_instr2("mov", _arm64_op_reg("x29"), _arm64_op_reg("sp"), "prologue: set fp"))
 
+    // Entry argv wiring. `_main` is the C-ABI process entry (Darwin
+    // `_start` → `main(argc, argv, envp)`): x0=argc, x1=argv on entry.
+    // The hexa `fn main()` takes no params, so x0/x1 are otherwise
+    // unused — but `args()` / `hexa_args()` need them stashed. hexa_v2's
+    // C path emits `int main(argc,argv){ hexa_set_args(argc,argv); … }`;
+    // the direct-asm path must do the same or every aprime_cc-built
+    // program sees an empty argv (self-host blocker — the 2nd-gen
+    // compiler reported "missing SOURCE.hexa" for every invocation).
+    // Insert `bl _hexa_set_args` here, before the frame `sub` and any
+    // body code clobbers x0/x1. stp/mov above do not touch x0/x1; bl's
+    // x30 clobber is safe (lr already saved, dead until epilogue).
+    if mf.name == "main" {
+        instrs.push(_arm64_instr1("bl", _arm64_op_label("hexa_set_args"),
+                         "entry: wire argc/argv -> hexa_set_args"))
+    }
+
     // Spill-frame allocation (after fp/lr save). Covers both the SSA
     // spill region (top) and the outgoing-call overflow region (bottom).
     if total_frame > 0 {
