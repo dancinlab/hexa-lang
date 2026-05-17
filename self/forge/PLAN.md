@@ -178,6 +178,36 @@ H100 SXM 80GB · cuBLAS 12.4.5 · vast.ai instance 36884532 (destroyed) · cost 
 - **D' reframe (data-anchored)**: forge 의 FP64 substrate 는 cuBLAS DEFAULT 위에서 within-run determinism FREE. PEDANTIC = opt-in (+15-33% cost, no benefit for FP64). LayerCast-style cross-precision (BF16/FP16) determinism 은 별도 paradigm (RFC 047+).
 산출 trail: `state/forge_phaseR_d_2026_05_17/{result.json, D_ANALYSIS.md, fire.log, nvidia_smi_*.csv}`.
 
+### 2026-05-17 — 4 sub-agent parallel cycle: RFC 049 + A Transformer + C Phase 3 + B Phase 2 (FP64 wall ceiling 노출)
+**4 sub-agents (worktree-isolated, parallel background)** launched per user "all sub agent multiple background go":
+
+**Agent #16 RFC 049 (DESIGN, $0)** — mixed-precision substrate. RFC 047 number collision → 049. 7 falsifier 사전등록 (BF16 TC perf 5×, LayerCast det 보존, BF16 mem ≤0.3× FP64, etc). literature anchors (LayerCast arxiv 2506.09501, BFLOAT16 1905.12322, cuBLAS 12.9 BF16x9, H100 datasheet). Merged commit `2f9a11c2`.
+
+**Agent #15 A Phase 2 Transformer (FP64 Llama-style block, $0.09)**:
+- F-FORGE-A-STAGE2-TRANSFORMER: PASS ✅
+- small (D=512 L=64): 1.81× PyT eager
+- **large (Llama-7B block D=4096 L=512): 1.18× PyT eager** (대형 dispatch elimination 검증)
+- medium (D=2048 L=128): 1.05× FAIL marginal (sweet spot for PyTorch cuDNN)
+- 1032 lines CUDA + 190 lines PyTorch baseline. Merged commit `4bd645f3`.
+
+**Agent #14 C Phase 3 production tiling ($0.32, 4 iterations)**:
+- F-FORGE-C-STAGE2-FUSED-CEILING + DET-PRESERVE ✅ PASS (bit-equal 0.000e+00 모든 15 datapoints)
+- F-FORGE-C-STAGE2-WALL-LARGE ❌ FAIL: best 1.80× SLOWER (v3c WMMA bigtile at 4096³)
+- Iteration progression: v2 naive 25-32× → v3 register tiling 4.1× → v3b WMMA 1.92× → v3c bigtile 1.80×
+- Root cause (honest): hand-WMMA achieves 41-43% FP64 TC peak, cuBLAS 77-87% peak. CUTLASS-grade pipelining + autotune weeks 단위 effort. Merged commit `6d5e4ba7`.
+
+**Agent #13 B Phase 2 DSM-fused FFN (Hopper-only, $0.10)**:
+- Initial agent build error (Y/dY identifier) → my manual fix + re-fire
+- F-FORGE-B-STAGE2-BITEQ ✅ PASS (max|Δ| 4.6e-16 모든 shape)
+- F-FORGE-B-STAGE2-{LARGE/MEDIUM/SMALL} ❌ wall **200-300× SLOWER** (FP64 hand-kernel ceiling 같은 root cause as C Phase 3)
+- DSM mechanism 자체 검증 (cross-block SMEM intermediate works numerically), 단 hand-kernel 가 cuBLAS TC 추월 불가능.
+
+**Meta-finding (4 sub-agent cycle 종합)**: **FP64 hand-written kernels = wall FAIL across the board** (B Phase 2 200-300×, C Phase 3 1.80× SLOWER). Theoretical advantages (DSM traffic reduction, fused autograd ceiling 0.667×) all maintained numerically. **forge wall path = precision pivot RFC 049 (BF16/FP16 Tensor Core)**.
+
+A paradigm 만 universal PASS (dispatch elimination = hardware-independent overhead reduction, Mech 1 confirmed via Llama-7B block 1.18×).
+
+Phase R 누적 cost: **$2.51** (10 fires + 4 sub-agents).
+
 ### 2026-05-17 — Stage 2 B Phase 1 SMOKE PASS + Stage 2 C Phase 2 multi-block PASS (traffic+det) wall FAIL
 **B Stage 2 Phase 1** (H200 SXM 143GB cc=9.0 · $0.12, Hopper supply 변동 후 가용 시점에 fire):
 - SMOKE 1 cluster API ✅ PASS: block0 sees [own=7, other=107], block1 sees [own=107, other=7], cluster_size=2
