@@ -514,6 +514,17 @@ static void flame_block_generic_bwd_primitive_gpu(
     // block-boundary device residency assertion. (No-CUDA: inert no-ops;
     // d=32·3L takes _cpu — byte-eq intact.)
 
+    // ── RFC 056 §6.3 residence anchor (symmetric with the fwd
+    //    primitive). Pin Bp (weights) + Bc (cache) device-resident once
+    //    at bwd block entry so forge `_gpu` ops on their slices/views
+    //    hit the §6.1 H2D-skip instead of the structural per-op
+    //    round-trip. Byte-eq-SAFE: pin = H2D + non-evict flag only;
+    //    host buffers stay authoritative for the unchanged host-side
+    //    grad-accumulation dataflow → output bytes bit-identical to
+    //    pre-RFC-056 (F-RFC056-BYTEEQ-PRESERVE). No-CUDA Mac: inert.
+    (void)hexa_farr_pin_device(hexa_int(Bp_id));
+    (void)hexa_farr_pin_device(hexa_int(Bc_id));
+
     HexaVal dh_v = hexa_farr_zeros(hexa_int((int64_t)T * d));
     int dh_id = (int)dh_v.i;
     {
@@ -953,6 +964,14 @@ static void flame_block_generic_bwd_primitive_gpu(
     }
     hexa_farr_free(drin_v);
     hexa_farr_free(dh_v);
+
+    // ── RFC 056 §6.3 — release the residence anchor at bwd block exit
+    //    (symmetric with fwd). unpin clears non-evict; materializes back
+    //    only if D2H-defer left dirty_dev=1 (it does not under the
+    //    unchanged host-side dataflow → pure flag-clear, host Bg/Bc
+    //    authoritative, byte-eq preserved). No-CUDA Mac: inert.
+    (void)hexa_farr_unpin_device(hexa_int(Bc_id));
+    (void)hexa_farr_unpin_device(hexa_int(Bp_id));
 
     // ── PART 1 close (FIRE7 fix): NO block-level to_host(dX_out/Bg) ──
     // dX_out and Bg are accumulated entirely host-side (every forge/cuBLAS

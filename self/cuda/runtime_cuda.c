@@ -51,6 +51,12 @@ extern "C" {
 typedef struct {
     double*  d_buf;       /* cudaMalloc'd device pointer, or NULL */
     int64_t  len;         /* element count (must match host len when valid) */
+    /* RFC 056 §6.2: -1 = this slot owns its d_buf (cudaMalloc'd here, may
+     * be cudaFree'd). >=0 = this slot is a NON-OWNING device sub-view of
+     * base farr `view_base` (d_buf = g_slots[view_base].d_buf + offset);
+     * device_free / free must NOT cudaFree it (would corrupt the base).
+     * A view is invalidated when its base is freed/migrated (guarded). */
+    int64_t  view_base;
 } _CudaFarrSlot;
 
 static _CudaFarrSlot* g_slots     = NULL;
@@ -64,10 +70,11 @@ static int _ensure_slot_cap(int64_t id) {
     _CudaFarrSlot* ns = (_CudaFarrSlot*)realloc(g_slots,
                             (size_t)new_cap * sizeof(_CudaFarrSlot));
     if (!ns) { fprintf(stderr, "[cuda] OOM slot table\n"); return -1; }
-    /* zero-init the new tail. */
+    /* zero-init the new tail. view_base = -1 (owns / not a view). */
     for (int64_t i = g_slot_cap; i < new_cap; i++) {
-        ns[i].d_buf = NULL;
-        ns[i].len   = 0;
+        ns[i].d_buf     = NULL;
+        ns[i].len       = 0;
+        ns[i].view_base = -1;
     }
     g_slots = ns;
     g_slot_cap = new_cap;
@@ -89,6 +96,50 @@ extern HexaFarrEntry* _hx_farr_table;
 extern int64_t        _hx_farr_count;
 
 enum { FARR_HOST = 0, FARR_DEVICE = 1, FARR_MIRRORED = 2 };
+
+/* ════════════════════════════════════════════════════════════════════
+ * RFC 056 — device residence contract + sub-view API (Phase 1).
+ *
+ * §6.4 output-disposition register. The forge `_gpu` wrappers do not
+ * change ABI (the Phase 4-D-5-3 byte-eq oracle harnesses declare them
+ * `extern "C"` and re-running that oracle unchanged is falsifier
+ * F-RFC056-BYTEEQ-PRESERVE — a signature break would fail the gate by
+ * construction). Instead RFC 056 §6.4's "per-call out_disposition arg"
+ * is realised as a process-wide register set by the caller IMMEDIATELY
+ * before the `_gpu` call (functionally per-call; single-threaded forge
+ * dispatch). Default = FORGE_OUT_HOST_NOW → any caller not updated gets
+ * byte-identical current behaviour (the backward-safety invariant; spec
+ * §6.4 / §8.3).
+ *
+ *   FORGE_OUT_HOST_NOW   = 0  D2H the output now (== pre-RFC-056)
+ *   FORGE_OUT_DEVICE_KEEP = 1 defer D2H, output stays loc=FARR_DEVICE,
+ *                             dirty_dev=1 (consumed by next GPU op)
+ *
+ * H2D-skip (§6.1): _h2d on an input that is loc∈{DEVICE,MIRRORED} with
+ * !dirty_host and a live device slot of matching len SKIPs the
+ * cudaMemcpy HostToDevice — the device bytes were written by the
+ * authoritative path and host has not mutated them since, so the copy
+ * is provably a no-op. Zero output bytes change (the byte-eq invariant
+ * of §6.1 "Byte-eq invariant").
+ *
+ * NB: every threshold/behaviour here traces to RFC 056 §6.1-6.4 + the
+ * fire #5-#9 measured campaign; no lattice numerology (f1/f2).
+ * ════════════════════════════════════════════════════════════════════ */
+enum { FORGE_OUT_HOST_NOW = 0, FORGE_OUT_DEVICE_KEEP = 1 };
+
+/* Process-wide output-disposition register. Default HOST_NOW =
+ * byte-identical to the verified pre-RFC-056 substrate. */
+static int g_forge_out_disposition = FORGE_OUT_HOST_NOW;
+
+/* Called by the host runtime.c shim immediately before a `_gpu` op to
+ * express §6.4's consumed-by-next-GPU-op hint. Returns the previous
+ * value (so callers can save/restore). */
+int _hx_cuda_set_out_disposition(int d) {
+    int prev = g_forge_out_disposition;
+    g_forge_out_disposition = (d == FORGE_OUT_DEVICE_KEEP)
+                              ? FORGE_OUT_DEVICE_KEEP : FORGE_OUT_HOST_NOW;
+    return prev;
+}
 
 /* cuBLAS handle — lazy init. */
 static cublasHandle_t g_cublas = NULL;
@@ -115,9 +166,32 @@ static int _h2d(int64_t id) {
     if (_ensure_slot_cap(id) != 0) return -1;
     HexaFarrEntry* e = &_hx_farr_table[id];
     _CudaFarrSlot* s = &g_slots[id];
+    /* RFC 056 §6.2: a non-owning device sub-view is, by definition,
+     * already device-resident (it aliases the base's live buffer).
+     * Never upload, never realloc — that would corrupt the base.
+     * Just mirror the device pointer back for visibility. */
+    if (s->view_base >= 0 && s->d_buf) {
+        e->d_buf = (void*)s->d_buf;
+        e->dirty_dev = 0;
+        return 0;
+    }
     if (!e->buf || e->len <= 0) {
         fprintf(stderr, "[cuda] h2d: empty host farr id=%lld\n", (long long)id);
         return -1;
+    }
+    /* RFC 056 §6.1 H2D-skip. If the farr is device-resident
+     * (loc∈{DEVICE,MIRRORED}) AND host is not dirty AND the device slot
+     * is live with a matching length, the device bytes ALREADY equal
+     * what the cudaMemcpy H2D would write (they were produced by the
+     * authoritative path; host unchanged since). Skipping the copy is
+     * therefore provably byte-eq — falsifier F-RFC056-BYTEEQ-PRESERVE
+     * requires max|Δ|=0.0 with this path active. We still mirror the
+     * device pointer back to the entry for visibility. */
+    if ((e->loc == FARR_DEVICE || e->loc == FARR_MIRRORED) &&
+        !e->dirty_host && s->d_buf && s->len == e->len) {
+        e->d_buf = (void*)s->d_buf;
+        e->dirty_dev = 0;
+        return 0; /* SKIP cudaMemcpy HostToDevice */
     }
     if (!s->d_buf || s->len != e->len) {
         if (s->d_buf) cudaFree(s->d_buf);
@@ -198,7 +272,33 @@ int _hx_cuda_farr_to_host(int64_t farr_id) {
 int _hx_cuda_farr_device_free(int64_t farr_id) {
     if (farr_id < 0 || farr_id >= g_slot_cap) return 1; /* nothing to free */
     _CudaFarrSlot* s = &g_slots[farr_id];
-    if (s->d_buf) {
+    if (s->view_base >= 0) {
+        /* RFC 056 §6.2: this slot is a NON-OWNING device sub-view —
+         * d_buf aliases the base's buffer. Never cudaFree it (that
+         * would corrupt the base). Just drop the view. */
+        s->d_buf     = NULL;
+        s->len       = 0;
+        s->view_base = -1;
+    } else if (s->d_buf) {
+        /* RFC 056 §6.2: freeing a base invalidates every view that
+         * aliased it (use-after-free guard — F-RFC056-VIEW-SAFETY).
+         * Scan the slot table and drop dependent views BEFORE the
+         * cudaFree so a later op on a view sees d_buf=NULL, not a
+         * dangling device pointer. */
+        for (int64_t v = 0; v < g_slot_cap; v++) {
+            if (g_slots[v].view_base == farr_id) {
+                g_slots[v].d_buf     = NULL;
+                g_slots[v].len       = 0;
+                g_slots[v].view_base = -1;
+                if (v < _hx_farr_count) {
+                    HexaFarrEntry* ve = &_hx_farr_table[v];
+                    ve->d_buf = NULL;
+                    ve->loc = FARR_HOST;
+                    ve->dirty_host = 0;
+                    ve->dirty_dev = 0;
+                }
+            }
+        }
         cudaFree(s->d_buf);
         s->d_buf = NULL;
         s->len = 0;
@@ -210,6 +310,80 @@ int _hx_cuda_farr_device_free(int64_t farr_id) {
         e->dirty_host = 0;
         e->dirty_dev = 0;
     }
+    return 1;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+ * RFC 056 §6.2 — device sub-view API.  hexa_farr_dev_view(base, off,
+ * len) binds an already-host-allocated farr handle `view_id` so that
+ * its CUDA slot aliases base.d_buf + off*sizeof(double) for `len`
+ * doubles. NON-OWNING: device_free/free on the view drops the alias
+ * without cudaFree. The base must be device-resident (caller pins it
+ * first, §6.3). Out-of-range (off,len) → -1, no UB. Returns 0 ok.
+ * ════════════════════════════════════════════════════════════════════ */
+int _hx_cuda_farr_dev_view(int64_t base_id, int64_t offset, int64_t len,
+                           int64_t view_id) {
+    if (base_id < 0 || base_id >= _hx_farr_count ||
+        view_id < 0 || view_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] dev_view: bad ids base=%lld view=%lld\n",
+                (long long)base_id, (long long)view_id);
+        return -1;
+    }
+    if (offset < 0 || len <= 0) {
+        fprintf(stderr, "[cuda] dev_view: bad offset=%lld len=%lld\n",
+                (long long)offset, (long long)len);
+        return -1;
+    }
+    if (_ensure_slot_cap(base_id) != 0) return -1;
+    if (_ensure_slot_cap(view_id) != 0) return -1;
+    _CudaFarrSlot* bs = &g_slots[base_id];
+    if (!bs->d_buf || bs->len <= 0) {
+        fprintf(stderr, "[cuda] dev_view: base %lld not device-resident\n",
+                (long long)base_id);
+        return -1;
+    }
+    if (offset + len > bs->len) {
+        fprintf(stderr, "[cuda] dev_view: range [%lld,%lld) exceeds "
+                "base len %lld\n", (long long)offset,
+                (long long)(offset + len), (long long)bs->len);
+        return -1; /* out-of-range — no UB, F-RFC056-VIEW-SAFETY */
+    }
+    _CudaFarrSlot* vs = &g_slots[view_id];
+    /* If the view slot previously OWNED a device buffer, free it (we
+     * are repurposing the handle as a non-owning view). */
+    if (vs->view_base < 0 && vs->d_buf) {
+        cudaFree(vs->d_buf);
+    }
+    vs->d_buf     = bs->d_buf + offset;     /* double* arithmetic */
+    vs->len       = len;
+    vs->view_base = base_id;
+    /* Mirror into the host entry so forge `_gpu` ops + H2D-skip see the
+     * view as device-resident (it shares the base's residence). */
+    HexaFarrEntry* ve = &_hx_farr_table[view_id];
+    ve->d_buf      = (void*)vs->d_buf;
+    ve->loc        = FARR_DEVICE;
+    ve->dirty_host = 1;   /* host buf of the view handle is not the data */
+    ve->dirty_dev  = 0;   /* device bytes are the authoritative base data */
+    return 0;
+}
+
+/* RFC 056 §6.3 — residence anchor. pin: force the farr device-resident
+ * (H2D once) and mark it non-evictable (HexaFarrEntry.pinned, RFC 040).
+ * unpin: clear the pin; if the device copy is dirty, D2H it back. */
+int _hx_cuda_farr_pin_device(int64_t farr_id) {
+    if (farr_id < 0 || farr_id >= _hx_farr_count) return -1;
+    if (_h2d(farr_id) != 0) return -1;          /* ensure resident */
+    HexaFarrEntry* e = &_hx_farr_table[farr_id];
+    e->pinned = 1;
+    if (e->loc == FARR_HOST) e->loc = FARR_MIRRORED;
+    return 1;
+}
+
+int _hx_cuda_farr_unpin_device(int64_t farr_id) {
+    if (farr_id < 0 || farr_id >= _hx_farr_count) return -1;
+    HexaFarrEntry* e = &_hx_farr_table[farr_id];
+    e->pinned = 0;
+    if (e->dirty_dev) { (void)_d2h(farr_id); }  /* materialize if stale */
     return 1;
 }
 
@@ -379,6 +553,15 @@ static int _ensure_dev_alloc_out(int64_t out_id, int64_t need_len) {
     if (_ensure_slot_cap(out_id) != 0) return -1;
     HexaFarrEntry* e = &_hx_farr_table[out_id];
     _CudaFarrSlot* s = &g_slots[out_id];
+    /* RFC 056 §6.2: a non-owning view must never be used as a kernel
+     * OUTPUT through this allocator (it would realloc/own the alias and
+     * corrupt the base). Views are read-only slices in the A2 design;
+     * reject defensively rather than risk the verified base buffer. */
+    if (s->view_base >= 0) {
+        fprintf(stderr, "[cuda] out: id %lld is a non-owning device view "
+                "(cannot be a kernel output)\n", (long long)out_id);
+        return -1;
+    }
     if (!e->buf || e->len < need_len) {
         fprintf(stderr, "[cuda] out: host len %lld < need %lld\n",
                 (long long)e->len, (long long)need_len);
@@ -399,10 +582,34 @@ static int _ensure_dev_alloc_out(int64_t out_id, int64_t need_len) {
     return 0;
 }
 
-/* ── D2H of an output buffer with explicit length (post-kernel copy). ── */
+/* ── D2H of an output buffer with explicit length (post-kernel copy). ──
+ *
+ * RFC 056 §6.1/§6.4 D2H-defer. When the caller set the disposition
+ * register to FORGE_OUT_DEVICE_KEEP (output is consumed by the next GPU
+ * op, no host reader in between), the cudaMemcpy DeviceToHost is
+ * DEFERRED: the output stays loc=FARR_DEVICE, dirty_dev=1 with a live
+ * device slot. The very next forge op's _h2d sees DEVICE && !dirty_host
+ * and SKIPs the redundant H2D — the value never round-trips. A later
+ * host reader (or an explicit hexa_farr_to_host) does the lazy D2H.
+ *
+ * The DEFAULT (FORGE_OUT_HOST_NOW) is byte-identical to the verified
+ * pre-RFC-056 substrate: same cudaMemcpy, same loc=FARR_MIRRORED,
+ * dirty flags cleared. F-RFC056-BYTEEQ-PRESERVE re-runs the 12-kernel
+ * oracle harnesses (which never set the register → always HOST_NOW)
+ * and requires max|Δ|=0.0. */
 static int _d2h_out(int64_t out_id, int64_t copy_len) {
     HexaFarrEntry* e = &_hx_farr_table[out_id];
     _CudaFarrSlot* s = &g_slots[out_id];
+    if (g_forge_out_disposition == FORGE_OUT_DEVICE_KEEP) {
+        /* Defer D2H — device authoritative, host stale. No bytes
+         * copied; the next op reads s->d_buf directly via H2D-skip. */
+        e->d_buf      = (void*)s->d_buf;
+        e->loc        = FARR_DEVICE;
+        e->dirty_host = 1;   /* host buf no longer current */
+        e->dirty_dev  = 1;   /* device holds the freshest value */
+        (void)copy_len;
+        return 0;
+    }
     cudaError_t er = cudaMemcpy(e->buf, s->d_buf,
                                 (size_t)copy_len * sizeof(double),
                                 cudaMemcpyDeviceToHost);
@@ -991,6 +1198,15 @@ static int _d2h_out_elem(int64_t id, int64_t len) {
     HexaFarrEntry* e = &_hx_farr_table[id];
     _CudaFarrSlot* s = &g_slots[id];
     if (!e->buf || !s->d_buf || e->len < len || s->len < len) return -1;
+    /* RFC 056 §6.1/§6.4 D2H-defer — same contract as _d2h_out. Default
+     * FORGE_OUT_HOST_NOW = byte-identical to the verified substrate. */
+    if (g_forge_out_disposition == FORGE_OUT_DEVICE_KEEP) {
+        e->d_buf      = (void*)s->d_buf;
+        e->loc        = FARR_DEVICE;
+        e->dirty_host = 1;
+        e->dirty_dev  = 1;
+        return 0;
+    }
     cudaError_t er = cudaMemcpy(e->buf, s->d_buf,
                                 (size_t)len * sizeof(double),
                                 cudaMemcpyDeviceToHost);

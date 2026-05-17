@@ -355,6 +355,13 @@ HexaVal hexa_farr_mul_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);
 HexaVal hexa_farr_add_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);
 HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v, HexaVal b_v, HexaVal bc_v);
 HexaVal hexa_farr_rope_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v, HexaVal T_v, HexaVal nh_v, HexaVal hd_v);
+// RFC 056 Phase 1 — device residence contract + sub-view API (host C
+// shims in runtime.c; no-CUDA Mac = inert no-ops, d=32·3L _cpu path
+// untouched → F-RFC056-D32-BYTEEQ holds by construction).
+HexaVal hexa_farr_pin_device(HexaVal h_v);
+HexaVal hexa_farr_unpin_device(HexaVal h_v);
+HexaVal hexa_farr_dev_view(HexaVal base_v, HexaVal off_v, HexaVal len_v);
+HexaVal hexa_farr_set_out_disposition(HexaVal d_v);
 
 // ── Phase 4-D-8: redundant pre-op H2D elision (byte-eq-exact) ────────────
 // Every scratch farr below is built host-side and then immediately passed
@@ -542,6 +549,20 @@ static void flame_block_generic_fwd_primitive_gpu(
     // owns its own scratch residency, and Bc/X/… stay authoritative on the
     // host. (No-CUDA Mac build: these calls were inert no-ops anyway, and
     // d=32·3L takes the _cpu path which never had them — byte-eq intact.)
+
+    // ── RFC 056 §6.3 residence anchor — pin model weights (Bp) + the
+    //    block cache (Bc) device-resident ONCE at block entry. With Bp/Bc
+    //    pinned, every forge `_gpu` op that takes a slice/view of them
+    //    hits the §6.1 H2D-skip (loc∈{DEVICE,MIRRORED} && !dirty_host →
+    //    no re-upload) instead of the structural per-op round-trip fire
+    //    #9 measured. This is byte-eq-SAFE: pin only does the H2D + sets
+    //    the non-evict flag; the host buffers remain authoritative for
+    //    the (unchanged) host-side copy-back dataflow, so output bytes
+    //    are bit-identical to pre-RFC-056 (F-RFC056-BYTEEQ-PRESERVE).
+    //    No-CUDA Mac: hexa_farr_pin_device just records pinned=1 (no
+    //    device) — inert, d=32·3L _cpu path never reaches this fn.
+    (void)hexa_farr_pin_device(hexa_int(Bp_id));
+    (void)hexa_farr_pin_device(hexa_int(Bc_id));
 
     // ─── 1. RMSNorm(X, g1) → rin / rm1xn / r1inv  (forge kernel) ──
     flame_g7_rmsnorm_resident(X_id, 0, Bp_id, G1,
@@ -888,6 +909,17 @@ static void flame_block_generic_fwd_primitive_gpu(
         hexa_farr_free(hslab_v);
     }
     hexa_farr_free(sw_o_v);
+
+    // ── RFC 056 §6.3 — release the residence anchor at block exit.
+    //    unpin clears the non-evict flag; if D2H-defer left Bp/Bc with
+    //    dirty_dev=1 it materializes them back to host (lazy D2H), which
+    //    is exactly the host-authoritative exit contract documented
+    //    below. With the current (unchanged) host-side copy-back
+    //    dataflow Bc.dirty_dev stays 0, so unpin is a pure flag-clear
+    //    and the host Bc remains the authoritative result — byte-eq
+    //    preserved (F-RFC056-BYTEEQ-PRESERVE). No-CUDA Mac: inert.
+    (void)hexa_farr_unpin_device(hexa_int(Bc_id));
+    (void)hexa_farr_unpin_device(hexa_int(Bp_id));
 
     // ── PART 1 close (FIRE7 fix): NO block-level to_host(Bc) ──
     // Bc was accumulated entirely host-side (every forge/cuBLAS sub-op

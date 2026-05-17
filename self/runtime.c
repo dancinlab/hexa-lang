@@ -10777,7 +10777,18 @@ extern int  _hx_cuda_farr_device_free(int64_t farr_id);
 extern int  _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
                                      int64_t b_id, int64_t N,
                                      int64_t c_id);
+/* RFC 056 Phase 1 — residence contract + sub-view API. */
+extern int  _hx_cuda_set_out_disposition(int d);
+extern int  _hx_cuda_farr_dev_view(int64_t base_id, int64_t offset,
+                                    int64_t len, int64_t view_id);
+extern int  _hx_cuda_farr_pin_device(int64_t farr_id);
+extern int  _hx_cuda_farr_unpin_device(int64_t farr_id);
 #endif
+
+/* RFC 056 §6.4 disposition constants — exposed to flame's A2 primitive
+ * (host C, no flame public API change — g_flame_api_fixed). */
+#define HEXA_FORGE_OUT_HOST_NOW    0
+#define HEXA_FORGE_OUT_DEVICE_KEEP 1
 
 // cuda_available() -> int. 1 if a CUDA device + toolkit are detected at
 // runtime, else 0. Coherent with cuda_device_count(): one implies the
@@ -10845,6 +10856,93 @@ HexaVal hexa_farr_pin(HexaVal h_v) {
     HexaFarrEntry* e = &_hx_farr_table[id];
     e->pinned = 1;
     return hexa_int(1);
+}
+
+// ── RFC 056 Phase 1 — device residence contract + sub-view API ──────
+//
+// All four are no-op-safe on the no-CUDA Mac build (return success / a
+// CPU-equivalent handle) so flame's A2 primitive stays callable without
+// a GPU — exactly the RFC 040 dispatcher contract + §8.3 backward-safe.
+
+// farr_set_out_disposition(d) -> int (previous disposition).
+//   d = 1 (FORGE_OUT_DEVICE_KEEP): the *next* forge `_gpu` op defers its
+//       D2H — output stays device-resident for the following GPU op.
+//   d = 0 (FORGE_OUT_HOST_NOW, DEFAULT): D2H now (== pre-RFC-056).
+// No-CUDA: inert (returns 0); every op is CPU so disposition is moot.
+HexaVal hexa_farr_set_out_disposition(HexaVal d_v) {
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_set_out_disposition((int)hexa_as_num(d_v)));
+#else
+    (void)d_v;
+    return hexa_int(0);
+#endif
+}
+
+// farr_dev_view(base, offset, len) -> int view_farr_id (-1 on error).
+// RFC 056 §6.2 non-owning device sub-view: view.d_buf = base.d_buf +
+// offset*8, shares base residence. The caller must device-pin `base`
+// first. A fresh host handle is allocated to carry the view id (its
+// host buf is unused — device bytes are the base's). Out-of-range →
+// the view handle is freed and -1 returned (no UB; F-RFC056-VIEW-SAFETY).
+// No-CUDA fallback: returns a real CPU farr that is a *copy* of the
+// slice (byte-eq with the resident path's logical contents — the only
+// correct answer without a device), so flame code stays valid on Mac.
+HexaVal hexa_farr_dev_view(HexaVal base_v, HexaVal off_v, HexaVal len_v) {
+    int64_t base_id = hexa_as_num(base_v);
+    int64_t offset  = hexa_as_num(off_v);
+    int64_t len     = hexa_as_num(len_v);
+    if (base_id < 0 || base_id >= _hx_farr_count) return hexa_int(-1);
+    if (offset < 0 || len <= 0) return hexa_int(-1);
+    HexaFarrEntry* be = &_hx_farr_table[base_id];
+    if (offset + len > be->len) return hexa_int(-1);
+    HexaVal vh = hexa_farr_zeros(hexa_int(len));
+    int64_t view_id = hexa_as_num(vh);
+    if (view_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    if (_hx_cuda_farr_dev_view(base_id, offset, len, view_id) != 0) {
+        (void)hexa_farr_free(hexa_int(view_id));
+        return hexa_int(-1);
+    }
+    return hexa_int(view_id);
+#else
+    /* No-CUDA: materialise the slice as a real CPU farr (copy). This is
+     * byte-eq with what the resident device view logically holds — the
+     * only correct CPU answer; keeps flame valid on Mac. RE-FETCH be
+     * after hexa_farr_zeros (table may have realloc'd). */
+    be = &_hx_farr_table[base_id];
+    HexaFarrEntry* ve = &_hx_farr_table[view_id];
+    if (be->buf && ve->buf) {
+        for (int64_t i = 0; i < len; i++) ve->buf[i] = be->buf[offset + i];
+    }
+    return hexa_int(view_id);
+#endif
+}
+
+// farr_pin_device(id) -> int (1 ok / -1 err). RFC 056 §6.3: force the
+// farr device-resident (H2D once) + mark non-evictable. No-CUDA: just
+// records the pinned flag (== hexa_farr_pin; no device exists).
+HexaVal hexa_farr_pin_device(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_pin_device(id));
+#else
+    _hx_farr_table[id].pinned = 1;
+    return hexa_int(1);
+#endif
+}
+
+// farr_unpin_device(id) -> int. RFC 056 §6.3: clear the pin; D2H if the
+// device copy is dirty. No-CUDA: clears the flag (no device).
+HexaVal hexa_farr_unpin_device(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_unpin_device(id));
+#else
+    _hx_farr_table[id].pinned = 0;
+    return hexa_int(1);
+#endif
 }
 
 // farr_device_free(id) -> int. Free d_buf, keep host buf. CPU-fallback:
@@ -10918,6 +11016,11 @@ HexaVal farr_to_device;
 HexaVal farr_to_host;
 HexaVal farr_pin;
 HexaVal farr_device_free;
+/* RFC 056 Phase 1 carriers (≤4-arg → hexa_callN dispatch). */
+HexaVal farr_set_out_disposition;
+HexaVal farr_dev_view;
+HexaVal farr_pin_device;
+HexaVal farr_unpin_device;
 static inline HexaVal farr_matmul_gpu_impl(HexaVal a, HexaVal ar, HexaVal ac,
                                            HexaVal b, HexaVal bc) {
     return hexa_farr_matmul_gpu(a, ar, ac, b, bc);
@@ -13432,6 +13535,11 @@ static void _hexa_init_fn_shims(void) {
     farr_to_host                    = hexa_fn_new((void*)hexa_farr_to_host,                    1);
     farr_pin                        = hexa_fn_new((void*)hexa_farr_pin,                        1);
     farr_device_free                = hexa_fn_new((void*)hexa_farr_device_free,                1);
+    /* RFC 056 Phase 1 — residence contract + sub-view API. */
+    farr_set_out_disposition        = hexa_fn_new((void*)hexa_farr_set_out_disposition,        1);
+    farr_dev_view                   = hexa_fn_new((void*)hexa_farr_dev_view,                   3);
+    farr_pin_device                 = hexa_fn_new((void*)hexa_farr_pin_device,                 1);
+    farr_unpin_device               = hexa_fn_new((void*)hexa_farr_unpin_device,               1);
     // anima RFC 040 Phase B (2026-05-16): row-softmax / row-RMSNorm /
     // elementwise add+scale GPU dispatcher carriers. All ≤4-arg so they
     // route through hexa_callN; on no-CUDA they call the small CPU
