@@ -74,7 +74,27 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   char-class 스캐너 hand-roll, cross-line `\s` 케이스(hardwall·vendor)는
   ±window join 정밀 재확인으로 803/798/5·30/30/0 정확 일치.
   `.py` 원본은 fallback·재패리티용으로 **유지**(제거는 별도 결정).
-- **T3** ⏳ hexa-bio stdlib-only 모듈 (전수조사 후 식별)
+- **T3** ⏳ hexa-bio stdlib-only 이관 — **전수조사 완료 2026-05-18**:
+  119 `.py` 중 **104 stdlib-only(지금 이관)** + 15 Stage-2(`_qiskit_
+  bridge/module/` 전량, T4/T5). 분류:
+  - `_python_bridge/module/*.py` **55/55** stdlib-only (생물물리
+    시뮬레이터; json/math/re/argparse 만)
+  - `_absorption_bridge/` 어댑터 9 + `selftest/` 래퍼 10 = **19**
+    stdlib-only (offline `--selftest` 경로; science import 는 live-path
+    guarded)
+  - `selftest/*.py` **30/30** stdlib-only (`atlas_atom_proofs.py` 는
+    sympy guarded→proof-5 SKIP 유지)
+  - `selftest/*.sh` 16 bash 래퍼(.py 아님; aggregator)
+  스코어보드: `selftest/run_all.sh` **35/35 PASS**(거버넌스 선언,
+  AGENTS.tape) — 동적 `$passes/$fails` STRICT-with-SKIP. **verify/ 층
+  없음**(hexa-matter 와 달리 구조-폐쇄 tier 부재 — 이관 시 신설 검토;
+  `selftest/module/selftest.hexa` stub 기존). `_hexa_bridge/` 미존재.
+  리스크: docstring/배너 non-ASCII(`—─✓✗αβ⇌`)는 로직/sentinel 밖 —
+  배너 transliterate(byte-index 안전); guarded-import SKIP-not-FAIL
+  계약·subprocess-out SKIP 보존; 대형 파일(800+L)은 양(量)이슈.
+  하위 트랙: **T3a** `_python_bridge/module` 55 · **T3b** `selftest`
+  30 게이트 · **T3c** `_absorption_bridge` 19. run_all.sh union 선(先)
+  재배선 → 게이트별 점진·바이트-패리티(T2 패턴 재사용).
 - **T4** 🔒 Stage 2 — `atoms`/`crystal`/`mol`/`mlff`/`quantum` 실구현
   (각 `mod.hexa` planned API 채움) → science-stack 의존 모듈/어댑터 해금
 - **T5** 🔒 Stage 2 잔여 — `nd`/`grad` 정밀화, `_absorption_bridge` 16,
@@ -104,3 +124,13 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   38/38, run_all.sh union 26/26 `[hexa]` 실행. `.py` 는 fallback·
   재패리티 레퍼런스로 유지(제거는 별도 결정). Stage-1 substring
   근사 미사용 — g3 검증력 후퇴 0건.
+- 2026-05-18 `af1141a` (hexa-matter) — verify/closure_consistency README
+  badge regex 복구(20a919d 가 남긴 verify 3/4 회귀 → **4/4**).
+- 2026-05-18 `f0ecc06` (hexa-matter) — Phase HX 문서 반영
+  (INIT.md·AGENTS.tape·AGENTS.md·LESSONS.md). hexa-matter T1/T2
+  전부 커밋·작업트리 clean(raw#10 정리는 d1a560d 히스토리).
+- 2026-05-18 — **T3 전수조사 완료** (hexa-bio): 119 .py 중 104
+  stdlib-only(_python_bridge 55 · _absorption_bridge 19 · selftest 30)
+  + 15 Stage-2(_qiskit_bridge 전량). 스코어보드 35/35, verify층 부재.
+  매니페스트 §3 T3 에 기록. 다음: run_all.sh union 선재배선 → T3a/b/c
+  게이트별 바이트-패리티 이관.
