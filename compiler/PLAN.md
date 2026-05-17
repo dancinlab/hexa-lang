@@ -40,6 +40,19 @@
 
 (append-only)
 
+### 2026-05-17 — RFC 040 GPU builtin interp dispatch fix — merged-rfc043 interp 빌드 차단 해소 (`c8a5fe44`)
+직전 배포 entry 의 ⚠️ caveat (merged-rfc043 interp 빌드 차단) 종결.
+
+**Root cause**: hexa_full.hexa interp dispatch block 이 10개 RFC 040 GPU builtin 을 `hexa_` prefix 로 호출 (`hexa_cuda_available()` 등). hexa_v2 가 prefixed name 을 direct-callable 로 인식 못 해 `hexa_callN(hexa_cuda_available, ...)` indirect-call emit — 하지만 `hexa_cuda_available` 은 plain C function, TAG_FN carrier 는 un-prefixed `cuda_available` (runtime.c:10915). clang `passing 'HexaVal (void)' to incompatible type 'HexaVal'` 실패.
+
+**Fix** (commit `c8a5fe44`, rfc043-hexa-torch): hexa_full.hexa 의 10 GPU builtin 호출에서 `hexa_` prefix strip → transpile 이 carrier (`hexa_call0(cuda_available)`) 로 route. 10 carrier 전부 runtime.c 에 존재 확인.
+
+**Validation**: merged-rfc043 트리에서 interp 정상 빌드 (`build/hexa_interp.real` 3,208,304 B). chr(240) → 0xF0, `cuda_available()` → 0 (no-CUDA fallback), basic program 정상.
+
+**배포 갱신**: `~/.hx/packages/hexa/build/hexa_interp.real` 를 rfc043-merged interp (3,208,304 B) 로 재배포 — 직전 origin/main build (3,170,304 B, GPU dispatch 미포함) 대체. 이제 배포 interp = chr + atlas + RFC 040 GPU dispatch 전부 포함. `hexa run` 검증: `ord(chr(240))`=240, `cuda_available()`=0.
+
+→ 직전 entry 의 "merged-rfc043 interp 빌드 차단 (forge-domain)" caveat **RESOLVED**.
+
 ### 2026-05-17 — 배포: main→rfc043 머지 + interp 바이너리 refresh (wilson P0#2 deployment)
 Wilson 다운스트림 배포 요청 2건 처리.
 
