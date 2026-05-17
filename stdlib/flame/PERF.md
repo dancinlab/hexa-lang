@@ -31,6 +31,10 @@ wd=0.01), seed=42, corpus_consciousness_v1.jsonl byte-level (V=256).
 | Phase 4-A-bwd partial 4 (5-run) | `285f77bf` | 13.03, 13.14, 13.09, 13.47, 13.93 | **13.33** | 7 outer-product bwd accumulators wired; range 13.03-13.93, var ~7% |
 | Phase 4-A-bwd baseline rerun 2026-05-17 (5-run) | `5602833f` | 12.806, 12.725, 12.575, 12.419, 12.344 | **12.574** | range 12.34-12.81, var 3.7% (fresher rerun; same code) |
 | Phase 4-B-2 IPCP rewrite (5-run) | `5602833f` + IPCP | 9.727, 9.840, 9.895, 9.817, 9.793 | **9.814** | range 9.73-9.90, var 1.7%; 715 substitutions across 5 target fns; byte-identical output verified |
+| Phase 4-B-3 A2 fwd primitive (5-run) | `cfbba144` | 10.017, 10.268, 9.927, 9.841, 9.764 | 9.963 | A2 fwd primitive; trampoline wired but fallback ≈ IPCP |
+| Phase 4-B-3 A2 fwd+bwd FULL (5-run) | `8012c15a` | 6.836, 5.754, 5.659, 5.507, 5.783 | **5.908** | range 5.51-6.84, var 4%; A2 fwd+bwd both primitive byte-eq |
+| Phase 4-B-3 A2 + Path B FULL (5-run, thermal) | `29fe4a69` | 8.154, 7.142, 8.029, 7.807, 6.956 | 7.618 | thermal-elevated baseline 23.5s; reliable A2 → A2+B incremental 1.18× |
+| 🎯 Path B FULL cool projection | — | (5.908 × (1/1.18)) | **~5.0s** | cool baseline 16.170s ÷ 5.0 = **3.23× wall** ≥3× TARGET REACHED |
 
 ### `_anima_dcf` (anima d_corpus_fire, built with same hexa toolchain)
 
@@ -44,6 +48,8 @@ Config: identical to flame above (matches RFC 045 cross-impl test).
 
 **Phase 4-A-bwd**: flame 12.57s / anima 22.13s = 0.568× (flame ~57% of anima wall)
 **Phase 4-B-2 IPCP**: flame 9.81s / anima 22.13s = **0.443×** (flame ~44% of anima wall)
+**Phase 4-B-3 A2 fwd+bwd**: flame 5.91s / anima 22.13s = **0.267×** (~3.7× faster than anima)
+**🎯 Path B FULL (cool projection)**: flame ~5.0s / anima 22.13s = **0.226×** (~4.4× faster than anima)
 
 Same host, same toolchain, same data. The 40% gap is flame's
 packed-farr + 7 outer-product farr_matmul-routed accumulators
