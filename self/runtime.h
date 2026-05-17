@@ -363,8 +363,112 @@ HexaVal hexa_umount(HexaVal tgt_v, HexaVal flags_v);     /* native/mount.c:44 */
  * the decls to avoid implicit-int → HexaVal init errors. */
 HexaVal hexa_str_char_code_at(HexaVal s, HexaVal idx); /* runtime.c:3891 */
 HexaVal rt_file_size(HexaVal path);                    /* runtime.c:5110 */
-HexaVal hexa_array_truncate(HexaVal arr, HexaVal new_len_v); /* runtime.c:2037 */
-HexaVal hexa_chr_byte(HexaVal n);                      /* runtime.c — chr byte-level (RFC chr-byte-vs-codepoint-asymmetry) */
+/* chr byte-level (RFC chr-byte-vs-codepoint-asymmetry) — rfc043 53190b26.
+ * Retained from rfc043; main's chr fix only touched the interp handler. */
+HexaVal hexa_chr_byte(HexaVal n);                      /* runtime.c — chr byte-level */
+/* Five more forward-decls 2026-05-17 sweep exposed (interp-retire R5):
+ * tier-2 hexa-build path errored with "call to undeclared function" on
+ * runtime symbols defined-but-not-declared. Each is in runtime.c, only
+ * the header was missing the prototype. */
+HexaVal hexa_setenv(HexaVal name, HexaVal value);                                  /* runtime.c:10777 */
+HexaVal hexa_cstring(HexaVal s);                                                   /* runtime.c:6342 */
+HexaVal hexa_ptr_write(HexaVal ptr, HexaVal offset, HexaVal val);                  /* runtime.c:6556 */
+HexaVal hexa_ptr_read(HexaVal ptr, HexaVal offset);                                /* runtime.c:6575 */
+HexaVal hexa_range_array(HexaVal start, HexaVal end, HexaVal step, int inclusive); /* runtime.c:7388 */
+int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start);             /* runtime.c:4112 */
+HexaVal hexa_array_reverse(HexaVal arr);                                           /* runtime.c:4197 */
+HexaVal hexa_array_sort(HexaVal arr);                                              /* runtime.c:4240 */
+HexaVal hexa_exec_capture(HexaVal cmd);                                            /* runtime.c:10789 */
+HexaVal hexa_from_cstring(HexaVal ptr);                                            /* runtime.c:6347 */
+HexaVal hexa_to_float(HexaVal v);                                                  /* runtime.c:5507 */
+HexaVal hexa_utc_compact_now(void);                                                /* runtime.c:11391 */
+HexaVal hexa_utc_iso_now(void);                                                    /* runtime.c:11116 */
+HexaVal hexa_null_coal(HexaVal a, HexaVal b);                                      /* runtime.c:1339 */
+HexaVal hexa_math_lgamma(HexaVal x);                                               /* runtime.c:7963 */
+/* Forward-decls exposed by interp regen (hexa_full → C → clang) — same
+ * "defined-but-not-declared" class as the AOT path additions above. */
+HexaVal hexa_array_truncate(HexaVal arr, HexaVal new_len_v);                       /* runtime.c:2037 */
+HexaVal hexa_bin(HexaVal n);                                                       /* runtime.c:10905 */
+HexaVal hexa_hex(HexaVal n);                                                       /* runtime.c:10916 */
+HexaVal hexa_str_bytes(HexaVal s);                                                 /* runtime.c:817 (proto), def 4029 */
+HexaVal hexa_valstruct_new_v(HexaVal, HexaVal, HexaVal, HexaVal, HexaVal,
+                             HexaVal, HexaVal, HexaVal, HexaVal, HexaVal,
+                             HexaVal, HexaVal);                                    /* runtime.c:884 (proto), def 2774 — 12-arg */
+HexaVal rt_write_bytes(HexaVal path, HexaVal arr);                                 /* runtime.c:788 (proto), def 5196 */
+HexaVal hexa_ceil(HexaVal v);                                                      /* runtime.c:5483 */
+HexaVal hexa_floor(HexaVal v);                                                     /* runtime.c:5464 */
+HexaVal hexa_math_isfinite(HexaVal x);                                             /* runtime.c:849 (proto) */
+HexaVal hexa_math_isinf(HexaVal x);                                                /* runtime.c:848 (proto) */
+HexaVal hexa_math_isnan(HexaVal x);                                                /* runtime.c:847 (proto) */
+HexaVal hexa_str_parse_float(HexaVal s);                                           /* runtime.c:815 (proto) */
+
+/* De-staticized 2026-05-17 (wilson P0#2 interp rebuild) — file-scope
+ * `static [inline]` wrappers in runtime.c that the interp-transpiled
+ * user.c calls cross-TU. Without these forward-decls clang errors
+ * "call to undeclared function" / "use of undeclared identifier". */
+HexaVal farr_vec_reflect(HexaVal ot, HexaVal a, HexaVal b, HexaVal s, HexaVal n);  /* runtime.c:7099 */
+HexaVal farr_vec_blend(HexaVal ot, HexaVal a, HexaVal b, HexaVal s, HexaVal n);    /* runtime.c:7103 */
+HexaVal farr_vertex_copy(HexaVal dh, HexaVal dv, HexaVal sh, HexaVal sv, HexaVal n); /* runtime.c:7107 */
+HexaVal farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v, HexaVal alpha_v,
+                               HexaVal flip_v, HexaVal zmask_v, HexaVal ymask_v,
+                               HexaVal cy_v, HexaVal nq_v);                        /* runtime.c:7149 */
+HexaVal farr_pauli_expectation(HexaVal re_v, HexaVal im_v, HexaVal flip_v,
+                               HexaVal zmask_v, HexaVal ymask_v, HexaVal cy_v,
+                               HexaVal nq_v);                                      /* runtime.c:7156 */
+extern HexaVal farr_simplex_centroid;                                              /* runtime.c:7120 (fn-pointer carrier) */
+extern HexaVal farr_simplex_get;                                                   /* runtime.c:7124 */
+extern HexaVal farr_simplex_shrink;                                                /* runtime.c:7125 */
+extern HexaVal farr_simplex_sort;                                                  /* runtime.c:7126 */
+extern HexaVal bit_or;                                                             /* runtime.c:7173 (fn-pointer carrier) */
+HexaVal farr_simplex_set(HexaVal sx, HexaVal v, HexaVal j, HexaVal n, HexaVal x);  /* runtime.c:7113 */
+HexaVal hexa_farr_int_zeros(HexaVal n_v);                                          /* runtime.c:6878 (proto), def 8300 */
+HexaVal hexa_farr_int_get(HexaVal h_v, HexaVal i_v);                               /* runtime.c:6879 (proto), def 8334 */
+HexaVal hexa_farr_int_set(HexaVal h_v, HexaVal i_v, HexaVal x_v);                  /* runtime.c:6880 (proto), def 8343 */
+HexaVal hexa_farr_int_len(HexaVal h_v);                                            /* runtime.c:6881 (proto), def 8354 */
+HexaVal hexa_farr_int_fill_from_array(HexaVal h_v, HexaVal arr_v);                 /* runtime.c:6882 (proto), def 8365 */
+HexaVal hexa_farr_int_copy(HexaVal src_v);                                         /* runtime.c:6883 (proto), def 8399 */
+HexaVal hexa_farr_int_free(HexaVal h_v);                                           /* runtime.c:6885 (proto), def 8424 */
+HexaVal hexa_farr_int_sum(HexaVal h_v);                                            /* runtime.c:6884 (proto), def 8417 */
+HexaVal hexa_farr_pauli_expectation_batch(HexaVal re_v, HexaVal im_v,
+                                          HexaVal flips_v, HexaVal zmasks_v,
+                                          HexaVal ymasks_v, HexaVal counts_v,
+                                          HexaVal coefs_v, HexaVal n_p_v,
+                                          HexaVal nq_v);                           /* runtime.c:7090 (proto), def 8848 */
+extern HexaVal ham_free;                                                           /* runtime.c:7127 (fn-pointer carrier) */
+extern HexaVal ansatz_free;                                                        /* runtime.c:7128 */
+HexaVal farr_uccsd_apply(HexaVal re_v, HexaVal im_v, HexaVal theta_v,
+                         HexaVal ansatz_v, HexaVal nq_v);                          /* runtime.c:7136 */
+HexaVal ham_pack(HexaVal flip_v, HexaVal z_v, HexaVal y_v, HexaVal cy_v,
+                 HexaVal coef_v, HexaVal shift_v, HexaVal nq_v);                   /* runtime.c:7140 */
+HexaVal ansatz_pack(HexaVal param_idx_v, HexaVal coef_v, HexaVal flip_v,
+                    HexaVal z_v, HexaVal y_v, HexaVal cy_v,
+                    HexaVal hf_v, HexaVal nq_v);                                   /* runtime.c:7145 */
+HexaVal farr_parameter_shift_grad(HexaVal re_v, HexaVal im_v,
+                                  HexaVal theta_v, HexaVal grad_v,
+                                  HexaVal n_p_v, HexaVal ham_v,
+                                  HexaVal ans_v, HexaVal nq_v);                    /* runtime.c:7150 */
+
+/* hx_* alias TAG_FN carriers — defined in native/persistent_pipe.c and
+ * native/exec_argv_sha256.c, initialized at startup via _hexa_init_*_fn_shims.
+ * Interp uses bare `hx_pipe_spawn` etc. (not `hexa_pipe_spawn`) as
+ * fn-pointer references across the runtime.o TU boundary. */
+extern HexaVal hx_setenv;                                                          /* runtime.c:12099 */
+extern HexaVal hx_exec_capture;                                                    /* runtime.c:12100 */
+extern HexaVal hx_pipe_spawn;                                                      /* native/persistent_pipe.c:415 */
+extern HexaVal hx_pipe_send_line;                                                  /* native/persistent_pipe.c:416 */
+extern HexaVal hx_pipe_recv_line;                                                  /* native/persistent_pipe.c:417 */
+extern HexaVal hx_pipe_close;                                                      /* native/persistent_pipe.c:418 */
+extern HexaVal hx_pipe_alive;                                                      /* native/persistent_pipe.c:419 */
+extern HexaVal hx_exec_argv;                                                       /* native/exec_argv_sha256.c:331 */
+extern HexaVal hx_exec_argv_with_status;                                           /* native/exec_argv_sha256.c:332 */
+extern HexaVal hx_sha256;                                                          /* native/exec_argv_sha256.c (init shim) */
+HexaVal hexa_farr_apply_single_farr(HexaVal re_v, HexaVal im_v,
+                                    HexaVal gre_h, HexaVal gim_h,
+                                    HexaVal target_v, HexaVal nq_v);               /* runtime.c:6924 (proto), def 8512 */
+HexaVal hexa_farr_apply_cnot(HexaVal src_re_v, HexaVal src_im_v,
+                             HexaVal dst_re_v, HexaVal dst_im_v,
+                             HexaVal control_v, HexaVal target_v,
+                             HexaVal nq_v);                                        /* runtime.c:6927 (proto), def 8545 */
 
 /* native/namespace.c */
 HexaVal hexa_unshare(HexaVal flags_v);     /* native/namespace.c:37 */

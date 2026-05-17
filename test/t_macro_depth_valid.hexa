@@ -83,5 +83,5 @@ fn main() {
         println("RESULT: FAIL")
     }
 }
-
-main()
+// auto-invoke: hexa-strict calls fn main() automatically; no explicit
+// `main()` here (was a Class 1 silent-failure audit hit).

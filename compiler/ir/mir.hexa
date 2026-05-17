@@ -71,7 +71,10 @@ pub struct MFunc {
     locals: [Local],
     blocks: [Block],
     entry_block: i64,
-    arena_root: i64      // function's owning arena id
+    arena_root: i64,     // function's owning arena id
+    def_line: i64        // source line of the fn definition (HItem.span.line);
+                         // drives the DWARF `.loc` directive in codegen.
+                         // 0 = unknown (synthesised fn / test fixture).
 }
 
 // ── Module ────────────────────────────────────────────────────

@@ -894,10 +894,32 @@ fn codegen_c2(ast) {
         _mhi = _mhi + 1
     }
 
+    // fn-name dedup (first-wins). module_loader can splice two files
+    // that both define the same fn name (e.g. stdlib/core/math.hexa's
+    // `fn euler_phi(n)` vs compiler/atlas/symbolic/congruence_chain_engine
+    // .hexa's `pub fn euler_phi(n: int) -> int` — same name, different
+    // signatures). Without this dedup the C output has two `HexaVal
+    // euler_phi(...)` definitions and clang errors with "redefinition of
+    // 'euler_phi'". First-wins matches the existing thunk policy
+    // (line 3118) and promote_to_atlas (compiler/discover/promote.hexa:382).
+    let mut _fn_emit_seen = []
     let mut i = 0
     while i < len(ast) {
         let k = ast[i].kind
         if k == "FnDecl" {
+            // dedup: skip duplicate FnDecl with the same name (first-wins).
+            let _fn_name = ast[i].name
+            let mut _fes_i = 0
+            let mut _fes_dup = false
+            while _fes_i < len(_fn_emit_seen) {
+                if _fn_emit_seen[_fes_i] == _fn_name { _fes_dup = true }
+                _fes_i = _fes_i + 1
+            }
+            if _fes_dup {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen.push(_fn_name)
             if ast[i].name == "main" { has_user_main = true }
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
@@ -926,7 +948,19 @@ fn codegen_c2(ast) {
             fwd_parts.push(ib.forward)
             fn_parts.push(ib.fn_code)
         } else if k == "PureFnDecl" {
-            // Treat pure fn same as regular fn
+            // Treat pure fn same as regular fn (with same first-wins dedup).
+            let _pfn_name = ast[i].name
+            let mut _pfes_i = 0
+            let mut _pfes_dup = false
+            while _pfes_i < len(_fn_emit_seen) {
+                if _fn_emit_seen[_pfes_i] == _pfn_name { _pfes_dup = true }
+                _pfes_i = _pfes_i + 1
+            }
+            if _pfes_dup {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen.push(_pfn_name)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "AsyncFnDecl" {
@@ -935,6 +969,18 @@ fn codegen_c2(ast) {
             // keyword is annotation-only at codegen time. await-site
             // unwrap is handled by gen2_expr Await branch + runtime
             // hexa_await_unwrap (RFC-022 §4.2).
+            let _afn_name = ast[i].name
+            let mut _afes_i = 0
+            let mut _afes_dup = false
+            while _afes_i < len(_fn_emit_seen) {
+                if _fn_emit_seen[_afes_i] == _afn_name { _afes_dup = true }
+                _afes_i = _afes_i + 1
+            }
+            if _afes_dup {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen.push(_afn_name)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ComptimeConst" || k == "ConstStmt" {
@@ -1300,9 +1346,18 @@ fn gen2_fn_decl(node) {
     // bt 72: per-function shadow handling via hoisting. Seed declared-names
     // with params so `let x` where x is a param emits as assignment.
     _gen2_declared_names = []
+    // H17 fix: also seed _gen2_current_fn_params with the unmangled names
+    // so _is_known_int_name / _is_known_float_name can detect when a
+    // module-global int/float name is shadowed by a fn param. Without
+    // this, a prior fn's `let a = 0` makes ALL subsequent fns' `a` params
+    // (even `a: float`) get unboxed via HX_INT() → garbage values for
+    // ops 0/1/2/3 of binary_value (and any similar shape). Repro:
+    // perfect_number_engine_smoke a/b float params after Fibonacci helper.
+    _gen2_current_fn_params = []
     let mut _pi = 0
     while _pi < len(node.params) {
         _gen2_declared_names.push(_hexa_mangle_ident(node.params[_pi].name))
+        _gen2_current_fn_params.push(node.params[_pi].name)
         _pi = _pi + 1
     }
     // Collect all LetStmt names (with duplicates).
@@ -2164,6 +2219,18 @@ fn _gen2_nested_index_assign_stmt(lhs, val_c, pad) {
     while li >= 0 {
         expr = "hexa_index_set(" + acc[li] + ", " + keys[li] + ", " + expr + ")"
         li = li - 1
+    }
+    // Field-rooted index assign — `obj.field[i] = v` lowered above gave
+    // `hexa_map_get_ic(obj, "field", &ic) = hexa_index_set(...)` which is a
+    // C function-call return on the LHS → "expression is not assignable".
+    // Rewrite as `obj = hexa_map_set(obj, "field", new_field_value)`. This
+    // mirrors the same wrap the plain Field-AssignStmt branch (line ~2279)
+    // already emits. Repro: `cs.clusters[i] = Cluster {...}` in
+    // compiler/atlas/symbolic/convergence_cluster.hexa (broke calc_cli_smoke
+    // and convergence_cluster_smoke).
+    if type_of(cur) != "string" && cur.kind == "Field" {
+        let obj_c = gen2_expr(cur.left)
+        return pad + obj_c + " = hexa_map_set(" + obj_c + ", \"" + cur.name + "\", " + expr + ");\n"
     }
     return pad + root_c + " = " + expr + ";\n"
 }
@@ -3044,6 +3111,24 @@ fn _gen2_fnref_method_arity(name) {
 // the script-body walk; over-broad inside lambdas (uses the enclosing fn's
 // lets) which is the safe direction (more idents left un-thunked).
 let mut _gen2_current_fn_lets = []
+
+// Params of the current fn being codegen'd. Used to suppress
+// `_known_int_set` / `_known_float_set` false-positives when a
+// previous fn's local `let X = 0` registers "X" as known-int and
+// the current fn happens to take a param `X: float`. The set is
+// module-global by design (no fn-boundary clearing), so without
+// this guard the float param gets unboxed via `HX_INT()` → garbage.
+// Set in gen2_fn_decl alongside _gen2_current_fn_lets.
+let mut _gen2_current_fn_params = []
+
+fn _gen2_name_in_cur_params(name) {
+    let mut i = 0
+    while i < len(_gen2_current_fn_params) {
+        if _gen2_current_fn_params[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
 
 fn _gen2_name_in_cur_lets(name) {
     let mut i = 0
@@ -6075,6 +6160,9 @@ fn _known_float_add(name) {
 
 fn _is_known_float_name(name) {
     if len(_known_float_set) != 64 { return false }
+    // H17 fix: see _is_known_int_name — param annotation is authoritative
+    // over any prior fn's module-global known-float registration.
+    if _gen2_name_in_cur_params(name) { return false }
     let b = _known_hash(name)
     let bucket = _known_float_set[b]
     let mut i = 0
@@ -6092,6 +6180,10 @@ fn _known_int_add(name) {
 
 fn _is_known_int_name(name) {
     if len(_known_int_set) != 64 { return false }
+    // H17 fix: fn params shadow any module-global known-int registration.
+    // The current fn's param type is authoritative; a prior fn's `let X = 0`
+    // must not be applied to this fn's `X: float` param.
+    if _gen2_name_in_cur_params(name) { return false }
     let b = _known_hash(name)
     let bucket = _known_int_set[b]
     let mut i = 0
@@ -6806,10 +6898,27 @@ fn codegen_c2_full(ast) {
         _mhi_full = _mhi_full + 1
     }
 
+    // fn-name dedup (first-wins) — mirror of gen2_module's loop.
+    // See line ~900 for the primary site. Without this, the second
+    // emitter (script-body / pure-eval path) still emits duplicate
+    // FnDecls and clang rejects the link.
+    let mut _fn_emit_seen2 = []
     let mut i = 0
     while i < len(ast) {
         let k = ast[i].kind
         if k == "FnDecl" {
+            let _fn_name2 = ast[i].name
+            let mut _fes_i2 = 0
+            let mut _fes_dup2 = false
+            while _fes_i2 < len(_fn_emit_seen2) {
+                if _fn_emit_seen2[_fes_i2] == _fn_name2 { _fes_dup2 = true }
+                _fes_i2 = _fes_i2 + 1
+            }
+            if _fes_dup2 {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen2.push(_fn_name2)
             if ast[i].name == "main" { has_user_main = true }
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
@@ -6835,12 +6944,36 @@ fn codegen_c2_full(ast) {
             fwd_parts.push(ib.forward)
             fn_parts.push(ib.fn_code)
         } else if k == "PureFnDecl" {
-            // Treat pure fn same as regular fn
+            // Treat pure fn same as regular fn (with the same first-wins dedup).
+            let _pfn_name2 = ast[i].name
+            let mut _pfes_i2 = 0
+            let mut _pfes_dup2 = false
+            while _pfes_i2 < len(_fn_emit_seen2) {
+                if _fn_emit_seen2[_pfes_i2] == _pfn_name2 { _pfes_dup2 = true }
+                _pfes_i2 = _pfes_i2 + 1
+            }
+            if _pfes_dup2 {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen2.push(_pfn_name2)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "AsyncFnDecl" {
             // RFC-022 §3.1 / §4.1 D3 — `async fn` runs synchronously in
             // stage 1 (mirror of the codegen_c2 program loop above).
+            let _afn_name2 = ast[i].name
+            let mut _afes_i2 = 0
+            let mut _afes_dup2 = false
+            while _afes_i2 < len(_fn_emit_seen2) {
+                if _fn_emit_seen2[_afes_i2] == _afn_name2 { _afes_dup2 = true }
+                _afes_i2 = _afes_i2 + 1
+            }
+            if _afes_dup2 {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen2.push(_afn_name2)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ComptimeConst" || k == "ConstStmt" {

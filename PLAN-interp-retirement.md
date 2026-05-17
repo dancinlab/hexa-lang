@@ -51,7 +51,9 @@ arm64 codegen — one-line-ish fixes, not multi-week:
 | R2 | codegen-correctness audit driven by running real programs; fix the bounded bugs | ✅ two root-cause fixes landed (see below); builtin link-gaps deferred |
 | R3 | compile+run a representative corpus (the `test/*.hexa` smokes, a few tools) natively; diff vs interp output | ✅ nine codegen-correctness classes fixed; `test/t_batch22` 0 → **31/31 byte-identical** to interp |
 | R4 | switch the build/dev pipeline `hexa run` → native compile+run, **interp kept as fallback** (env/flag toggle) | ✅ `bin/hexa-run-native` wrapper landed (native first, interp fallback on build failure; `HEXA_NATIVE=0` forces interp; `HEXA_NATIVE_VERBOSE=1` logs the chosen path) |
-| R5 | once native coverage ≥ interp on the corpus, delete the interp | ⬜ |
+| R5 | broader corpus coverage measurement; close DIFFs cluster-by-cluster | 🔄 measured: aprime_cc-direct 27/60 (45%); hexa-build 38/60 (63%) full-corpus build+run sweep (20 FAIL_BUILD, 2 FAIL_RUN), down from 36/40 (90%) on the narrower set as the broader corpus exposes the long tail. Residual clusters narrowed (atlas runtime, frontend strict, parser features, hexa_v2 known-int param shadow [fixed `17de2f4b` pending bootstrap rebuild], empty-{} parser [fixed `d179f4a1`]). |
+| R6 | three-tier wrapper exposing the R3 aprime_cc-direct codegen as opt-in | ✅ `bin/hexa-run-native` extended (tier 1 aprime_cc / tier 2 hexa build / tier 3 interp) via `HEXA_APRIME_CC=<path>` opt-in (`06044c7f`) |
+| R7 | once aprime_cc-direct coverage ≥ interp on the corpus, delete the interp | ⬜ — gated on R5 cluster closure (atlas runtime aliasing being the largest blocker, see "Remaining" sections) |
 
 Each phase is incremental and default-safe (the interp fallback stays
 until R5; codegen fixes are additive symbol/ABI corrections that don't
@@ -399,6 +401,80 @@ per module-level `let`, global load/store lowering replacing the
 const-0 fallback, a once-run module-init sequence, and removal of the
 bogus duplicate-`_main` emission for global initializers. Scoped as the
 next R3 work item.
+
+### 2026-05-17 cycle — D / H / C-sweep findings
+
+**D (empty `{}` parser support, `d179f4a1`).** `let mut d = {}` was
+parsing as an empty block-expr (which evaluates to TAG_INT 0), so the
+follow-up `d["k"] = v` errored with "container is not an array
+(tag=0)". Root cause: `parse_primary` LBrace→`parse_block_expr()`
+branch fires before any empty-{} detection. Fixed by inserting an
+LBrace + peek_at(1).RBrace check that emits an empty StructLit
+(children=[]) ahead of the catch-all LBrace; codegen's struct_lit
+handler already maps zero-arg StructLit to `hexa_map_new()`.
+Validation: `regress_dict_keys_let_bind` (fn-main form) passes all
+four expected outputs (d_len=2 / dict_inline=2 / dict_bound=2 /
+bound_copy=2) on the aprime_cc-direct path.
+
+**H (hexa_v2 `_known_int_set` fn-param shadow, `17de2f4b`).**
+`perfect_number_engine_smoke` reported PASS=11/19 via hexa-build vs
+PASS=19/19 via interp. Bisected to imported `binary_value(a:float,
+b:float, op:int)` transpiling `a + b` as
+`hexa_int(HX_INT(a) + HX_INT(b))` — i.e., unboxing both floats as
+ints → garbage int64. Root cause: `_known_int_set` is module-global
+by design, registered for every `let X = <int>` (e.g. a Fibonacci
+helper's `let a = 0; let b = 1`). `_is_known_int_name` was a pure
+name lookup, so the subsequent fn's `a: float` param hit the
+STRUCTURAL-2 fast-path that emits HX_INT unboxing.
+
+Fixed by adding `_gen2_current_fn_params` (mirror of
+`_gen2_current_fn_lets`), seeding it in `gen2_fn_decl` with the
+unmangled param names, and consulting it in both
+`_is_known_int_name` and `_is_known_float_name` as an authoritative
+shadow gate. Returning false from the known-* lookup falls back to
+runtime `hexa_add` / `hexa_sub` / `hexa_mul` dispatch on the HexaVal
+tag — correct for any parameter regardless of declared type.
+
+**Bootstrap rebuild ACTIVATED 2026-05-17** (commits `40c64a9e`
+and `1de82e78`): regenerated `self/native/hexa_v2` (1,487,616 B,
++42 KB over the pre-cycle baseline) via `hexa cc --regen` with
+`HEXA_LANG=/tmp/wt-h17` so the regen operated on this branch's
+sources rather than the user's working tree. The activation
+sequence was:
+  1. `clang -O2 -c self/runtime.c -o self/runtime.o` (build runtime.o).
+  2. `HEXA_LANG=/tmp/wt-h17 hexa cc --regen` (transpile lexer /
+     parser / type_checker / codegen_c2 via the OLD hexa_v2,
+     awk-merge into `self/native/hexa_cc.c.new`).
+  3. `clang -O2 -I self -Wno-trigraphs hexa_cc.c.new runtime.o -o
+     self/native/hexa_v2` (note: NO `-x c`; the `.c.new` suffix
+     trips clang's language detection — copy to `.c` first).
+
+End-to-end validation against the rebuilt binary:
+  - `perfect_number_engine_smoke`: 11/19 → **19/19 PASS** (H17 fix
+    activates `hexa_add` / `hexa_sub` / `hexa_mul` dispatch for
+    imported `binary_value(a:float, b:float, op:int)`).
+  - `regress_dict_keys_let_bind` (fn-main form): all 4 PASS (empty-{}).
+  - `atlas_tecsl_verify_smoke`: __TECSL_SMOKE__ PASS (fn-dedup
+    eliminates the second `euler_phi` definition).
+  - `atlas_cycle_append_smoke`: rc=0 (fn-dedup eliminates the
+    second `u_main` definition).
+
+Note: hexa_v2 codegen_c2 has TWO emit loops (gen2_module's main path
+at line ~900 and a "mirror" loop at line ~6883 for the
+script-body / pure-eval context). Initial dedup patch landed only
+on the primary loop (4e2869c6); the atlas verifier smokes use the
+mirror loop, so 1de82e78 was needed to close the second site.
+Both loops now use first-wins.
+
+**C-sweep (60-smoke hexa-build pass).** With `HEXA_MAC_BUILD_OK=1`
+bypass: **38/60 PASS (63%), 20 FAIL_BUILD, 2 FAIL_RUN**. The 20
+FAIL_BUILD includes a handful of macro-depth tests, parser-attr
+tests (HX3001 frontend strictness on imported helpers), and several
+hxqwen14b / serve_alm / attr_pub_fn smokes that exercise build-time
+features the tier-2 path doesn't yet support. The 2 FAIL_RUN are
+`atlas_hxc_roundtrip_smoke` and `t_cmd_url_args_passthrough`. The
+sweep summary file lives at `/tmp/sweep60/_summary.txt` for the
+next cycle's cluster-by-cluster closure work.
 
 ## Build recipe (native arm64 compiler, Mac — reproducible)
 

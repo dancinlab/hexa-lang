@@ -51,6 +51,11 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
     // ---- header (mirrors emit_asm; arm64-darwin needs no syntax dirs) ----
     parts.push(_comment_marker(target).trim() + " hexa-lang emit pass — target=" + target + "\n")
     parts.push(_comment_marker(target).trim() + " source: " + hmodule.file + "\n")
+    // #13 DWARF — `.file 1 "<source>"` (mirrors emit_asm); pairs with the
+    // per-fn `.loc` directive _emit_func emits. Thumb skipped.
+    if !_is_thumb(target) {
+        parts.push(".file 1 \"" + hmodule.file + "\"\n")
+    }
     parts.push(_text_section_directive(target) + "\n")
 
     // F6 option A — A5 wiring (PLAN-stage3-footprint-F6-optA.md).

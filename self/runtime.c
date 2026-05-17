@@ -7099,67 +7099,80 @@ HexaVal hexa_farr_pauli_expectation_batch(HexaVal re_v, HexaVal im_v,
                                           HexaVal n_terms_v, HexaVal out_h_v,
                                           HexaVal nq_v);
 // 5-arg builtins → static inline wrappers (past hexa_callN ceiling).
-static inline HexaVal farr_vec_reflect(HexaVal ot, HexaVal a, HexaVal b,
-                                       HexaVal s, HexaVal n) {
+/* De-staticized 2026-05-17 (wilson P0#2 interp rebuild): interp's
+ * transpiled C calls these by bare name across the runtime.o TU
+ * boundary, so file-scope `static inline` was linker-invisible.
+ * runtime.h now forward-declares the same signatures. */
+HexaVal farr_vec_reflect(HexaVal ot, HexaVal a, HexaVal b,
+                         HexaVal s, HexaVal n) {
     return hexa_farr_vec_reflect(ot, a, b, s, n);
 }
-static inline HexaVal farr_vec_blend(HexaVal ot, HexaVal a, HexaVal b,
-                                     HexaVal s, HexaVal n) {
+HexaVal farr_vec_blend(HexaVal ot, HexaVal a, HexaVal b,
+                       HexaVal s, HexaVal n) {
     return hexa_farr_vec_blend(ot, a, b, s, n);
 }
-static inline HexaVal farr_vertex_copy(HexaVal dh, HexaVal dv,
-                                       HexaVal sh, HexaVal sv, HexaVal n) {
+HexaVal farr_vertex_copy(HexaVal dh, HexaVal dv,
+                         HexaVal sh, HexaVal sv, HexaVal n) {
     return hexa_farr_vertex_copy(dh, dv, sh, sv, n);
 }
-static inline HexaVal farr_simplex_set(HexaVal sx, HexaVal v, HexaVal j,
-                                        HexaVal n, HexaVal x) {
+/* De-staticized 2026-05-17 (wilson P0#2). */
+HexaVal farr_simplex_set(HexaVal sx, HexaVal v, HexaVal j,
+                         HexaVal n, HexaVal x) {
     return hexa_farr_simplex_set(sx, v, j, n, x);
 }
-// 3-arg / 4-arg builtins → static HexaVal carriers (routed through hexa_callN).
-static HexaVal farr_simplex_centroid;
-static HexaVal farr_simplex_get;
-static HexaVal farr_simplex_shrink;
-static HexaVal farr_simplex_sort;
+// 3-arg / 4-arg builtins → HexaVal carriers (routed through hexa_callN).
+// farr_simplex_centroid de-staticized 2026-05-17 (wilson P0#2): interp's
+// transpile uses bare `hexa_call4(farr_simplex_centroid, ...)` across TU.
+HexaVal farr_simplex_centroid;
+/* Companion carriers de-staticized 2026-05-17 (wilson P0#2): same
+ * cross-TU fn-pointer access pattern. */
+HexaVal farr_simplex_get;
+HexaVal farr_simplex_shrink;
+HexaVal farr_simplex_sort;
 // RFC 039 — static carriers for 1-arg builtins (codegen emits hexa_call1).
-static HexaVal ham_free;
-static HexaVal ansatz_free;
+/* De-staticized 2026-05-17 (wilson P0#2). */
+HexaVal ham_free;
+HexaVal ansatz_free;
 // RFC 037 — static carrier (codegen emits hexa_call9 fallback if no special route).
 static HexaVal farr_pauli_expectation_batch;
 // RFC 038/039 — static inline wrappers for 5/7/8-arg builtins (codegen emits
 // direct C call past the 4-arg hexa_callN ceiling). Same pattern as
 // farr_pauli_exp_inplace / farr_vec_reflect / etc.
-static inline HexaVal farr_uccsd_apply(HexaVal re_v, HexaVal im_v, HexaVal theta_v,
-                                       HexaVal ansatz_v, HexaVal nq_v) {
+/* De-staticized 2026-05-17 (wilson P0#2). */
+HexaVal farr_uccsd_apply(HexaVal re_v, HexaVal im_v, HexaVal theta_v,
+                         HexaVal ansatz_v, HexaVal nq_v) {
     return hexa_farr_uccsd_apply(re_v, im_v, theta_v, ansatz_v, nq_v);
 }
-static inline HexaVal ham_pack(HexaVal flip_v, HexaVal z_v, HexaVal y_v,
-                               HexaVal cy_v, HexaVal coef_v, HexaVal shift_v,
-                               HexaVal nq_v) {
+HexaVal ham_pack(HexaVal flip_v, HexaVal z_v, HexaVal y_v,
+                 HexaVal cy_v, HexaVal coef_v, HexaVal shift_v,
+                 HexaVal nq_v) {
     return hexa_ham_pack(flip_v, z_v, y_v, cy_v, coef_v, shift_v, nq_v);
 }
-static inline HexaVal ansatz_pack(HexaVal param_idx_v, HexaVal coef_v, HexaVal flip_v,
-                                  HexaVal z_v, HexaVal y_v, HexaVal cy_v,
-                                  HexaVal hf_v, HexaVal nq_v) {
+HexaVal ansatz_pack(HexaVal param_idx_v, HexaVal coef_v, HexaVal flip_v,
+                    HexaVal z_v, HexaVal y_v, HexaVal cy_v,
+                    HexaVal hf_v, HexaVal nq_v) {
     return hexa_ansatz_pack(param_idx_v, coef_v, flip_v, z_v, y_v, cy_v, hf_v, nq_v);
 }
-static inline HexaVal farr_parameter_shift_grad(HexaVal re_v, HexaVal im_v,
-                                                HexaVal theta_v, HexaVal grad_v,
-                                                HexaVal n_p_v, HexaVal ham_v,
-                                                HexaVal ans_v, HexaVal nq_v) {
+HexaVal farr_parameter_shift_grad(HexaVal re_v, HexaVal im_v,
+                                  HexaVal theta_v, HexaVal grad_v,
+                                  HexaVal n_p_v, HexaVal ham_v,
+                                  HexaVal ans_v, HexaVal nq_v) {
     return hexa_farr_parameter_shift_grad(re_v, im_v, theta_v, grad_v,
                                           n_p_v, ham_v, ans_v, nq_v);
 }
-static inline HexaVal farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
-                                             HexaVal alpha_v,
-                                             HexaVal flip_v, HexaVal zmask_v,
-                                             HexaVal ymask_v, HexaVal cy_v,
-                                             HexaVal nq_v) {
+/* De-staticized 2026-05-17 (wilson P0#2). Same rationale as the
+ * farr_vec_* wrappers above. */
+HexaVal farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
+                               HexaVal alpha_v,
+                               HexaVal flip_v, HexaVal zmask_v,
+                               HexaVal ymask_v, HexaVal cy_v,
+                               HexaVal nq_v) {
     return hexa_farr_pauli_exp_inplace(re_v, im_v, alpha_v, flip_v, zmask_v, ymask_v, cy_v, nq_v);
 }
-static inline HexaVal farr_pauli_expectation(HexaVal re_v, HexaVal im_v,
-                                              HexaVal flip_v, HexaVal zmask_v,
-                                              HexaVal ymask_v, HexaVal cy_v,
-                                              HexaVal nq_v) {
+HexaVal farr_pauli_expectation(HexaVal re_v, HexaVal im_v,
+                               HexaVal flip_v, HexaVal zmask_v,
+                               HexaVal ymask_v, HexaVal cy_v,
+                               HexaVal nq_v) {
     return hexa_farr_pauli_expectation(re_v, im_v, flip_v, zmask_v, ymask_v, cy_v, nq_v);
 }
 
@@ -7170,7 +7183,10 @@ HexaVal _hx_bit_or(HexaVal a, HexaVal b) {
     int64_t y = HX_IS_INT(b) ? HX_INT(b) : (int64_t)HX_FLOAT(b);
     return hexa_int(x | y);
 }
-static HexaVal bit_or;
+/* De-staticized 2026-05-17 (wilson P0#2): interp transpile takes
+ * `&bit_or` for `hexa_call2(bit_or, x, y)` across the runtime.o TU
+ * boundary. File-scope `static` was invisible to user.c TU. */
+HexaVal bit_or;
 
 // ── Added: method-dispatch helpers (bt 34) ────────────────────
 HexaVal hexa_str_parse_int(HexaVal s) {

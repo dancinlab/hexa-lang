@@ -26,5 +26,3 @@ fn main() {
     println("hot_pub=" + greet())
     println("multi_attr_pub=" + to_string(combined()))
 }
-
-main()

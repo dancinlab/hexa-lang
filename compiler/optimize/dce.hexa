@@ -130,7 +130,8 @@ fn _dce_func(f: MFunc) -> MFunc {
         locals: f.locals,
         blocks: blocks,
         entry_block: f.entry_block,
-        arena_root: f.arena_root
+        arena_root: f.arena_root,
+        def_line: f.def_line
     }
 }
 

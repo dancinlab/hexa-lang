@@ -156,7 +156,8 @@ fn _build_func_arm64() -> LFunc {
         target: TARGET_DARWIN_ARM64,
         instrs: instrs,
         frame_size: 0,
-        callee_saved: []
+        callee_saved: [],
+        def_line: 0
     }
 }
 
@@ -175,7 +176,8 @@ fn _build_func_x86() -> LFunc {
         target: TARGET_LINUX_X86_64,
         instrs: instrs,
         frame_size: 0,
-        callee_saved: []
+        callee_saved: [],
+        def_line: 0
     }
 }
 

@@ -51,5 +51,3 @@ fn main() {
         println("RESULT: FAIL")
     }
 }
-
-main()

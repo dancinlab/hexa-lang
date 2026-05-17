@@ -88,5 +88,8 @@ fn main() {
         println("RESULT: FAIL")
     }
 }
-
-main()
+// auto-invoke convention: hexa-strict auto-calls fn main(); the
+// previous explicit `main()` here conflicted with the auto-invoke
+// audit (Class 1, see doc/audit/silent_failure_enforcement_audit.md)
+// and broke `hexa build` while still working under interp's
+// double-call tolerance.

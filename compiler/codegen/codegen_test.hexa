@@ -115,7 +115,8 @@ fn _build_case_id() -> MModule {
         locals: locals,
         blocks: blocks,
         entry_block: 0,
-        arena_root: 1
+        arena_root: 1,
+        def_line: 0
     }
     let mut fns = []
     fns.push(mf)
@@ -152,7 +153,8 @@ fn _build_case_add() -> MModule {
         locals: locals,
         blocks: blocks,
         entry_block: 0,
-        arena_root: 1
+        arena_root: 1,
+        def_line: 0
     }
     let mut fns = []
     fns.push(mf)

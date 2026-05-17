@@ -43,7 +43,9 @@ pub struct LFunc {
     target: string,      // "arm64-apple-darwin" | "x86_64-linux-gnu"
     instrs: [LInstr],
     frame_size: i64,
-    callee_saved: [PReg]
+    callee_saved: [PReg],
+    def_line: i64        // source line of the fn definition (from MFunc.def_line);
+                         // drives the DWARF `.loc` directive. 0 = unknown.
 }
 
 // ── Module ────────────────────────────────────────────────────
