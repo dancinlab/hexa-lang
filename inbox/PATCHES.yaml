@@ -592,7 +592,7 @@
   detail: patches/json-parse-uXXXX-raw-passthrough.md
 
 - id: chr-byte-vs-codepoint-asymmetry
-  source_commit: pending
+  source_commit: 53190b26
   source_files:
     - self/runtime.c
     - self/runtime.h
@@ -646,6 +646,23 @@
     interp-retire R3-R6 (memory: 2026-05-17, 45% direct-build) is
     closing this gap on a separate track; once the runtime.h sweep
     lands, rebuild hexa_interp.real and flip status -> applied.
+
+    UPDATE 2026-05-17 (main, commits 0c9f0f04 + 0febd20d + c9b5c12c):
+    runtime.h sweep landed 21 new forward-decls covering ALL the
+    listed hexa_* host symbols in this entry (hexa_hex, hexa_bin,
+    hexa_str_bytes, rt_write_bytes, hexa_valstruct_new_v 12-arg,
+    hexa_str_parse_float, hexa_ceil, hexa_floor, hexa_math_isnan/
+    isinf/isfinite, hexa_array_truncate, hexa_array_reverse/sort,
+    hexa_exec_capture, hexa_from_cstring, hexa_to_float,
+    hexa_utc_compact_now / iso_now, hexa_null_coal, hexa_math_lgamma,
+    hexa_setenv, hexa_cstring, hexa_ptr_write/read, hexa_range_array,
+    hexa_str_index_of_from). After pulling main, the interp regen
+    advances PAST the listed prototype gap; remaining blocker is the
+    `bit_or` identifier + farr_* static-inline visibility (separate
+    runtime.c de-static cycle — bit_or is referenced as a fn pointer
+    via hexa_call2 but only `bit_or_pure` is exported; farr_* are
+    `static inline` so linker invisible across the runtime.o TU
+    boundary). Flip status -> applied once those two cluster close.
 
 # ─── batch triage 2026-05-17 ──────────────────────────────────────────
 # 37 entries triaged from inbox/patches/ markdowns that had not yet been
