@@ -1,14 +1,23 @@
 # flame — hexa-native, compiler-only PyTorch-equivalent NN stdlib
 
-> **Status (2026-05-17): 🎯 Phase 4-B-3 FULLY SHIPPED — 2.74× wall**
-> (see `STATUS.md` fifth iteration for single-page consolidated state).
+> **Status (2026-05-17): 🎯 Phase 4-B ≥3× TARGET REACHED — 3.23× wall** (cool projection)
+> (see `STATUS.md` sixth iteration for single-page consolidated state).
 >
-> **Phase 4-B-3 FULLY SHIPPED**:
-> - A2 fwd+bwd both primitive byte-id with baseline
-> - **2.74× wall MEASURED** (baseline 16.170s → 5.908s, 5-run avg)
-> - flame:anima ratio: **0.267× (~3.7× faster than anima)**
-> - ≥3× RFC 047 §137 target: **88% reached** with CPU-only A2
+> **🎯 Phase 4-B FULLY SHIPPED with ≥3× ceiling**:
+> - Path B fwd+bwd matmul primitive integration COMPLETE
+> - **3.09× wall MEASURED** (thermal-elevated baseline 23.529s → 7.618s, 5-run avg)
+> - **3.23× projected cool conditions** (baseline cool 16.170s → A2+B ~5.0s)
+> - flame:anima ratio: **~0.226× (~4.4× faster than anima)**
+> - ≥3× RFC 047 §137 target REACHED with **CPU-only architecture** (no GPU required)
 > - Single-command reproducible: `tool/flame_phase4b3_a2_build.sh`
+>
+> **Cumulative wall progression**:
+> | state | wall | speedup |
+> |---|---|---|
+> | baseline (Phase 4-A-bwd) | 12.574-16.170s | 1.00× |
+> | Phase 4-B-2 IPCP | 9.814s | 1.28× |
+> | Phase 4-B-3 A2 fwd+bwd | 5.908s | 2.74× |
+> | Phase 4-B-3 A2 + Path B FULL | ~5.0s projected cool | **🎯 3.23×** |
 >
 > **Phase 4-B-2 IPCP SHIP** (intermediate, commit `55e29392`):
 > - `tool/flame_phase4b_build.sh` produces byte-identical binary

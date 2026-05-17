@@ -854,3 +854,57 @@ Next user-gate (with FINAL evidence):
 - Path B: matmul primitive → ~3.0-3.5× projected (PUSH PAST ≥3× CPU)
 - Path D: GPU dispatch ($5-20, ≥3× highly reachable + scales)
 - Path C: Ship FULLY SHIPPED milestone (already done, recommended)
+
+### 2026-05-17 — 🎯 Phase 4-B ≥3× RFC 047 §137 TARGET REACHED — Path B FULL
+9-commit extension of the prior 45-commit cycle (commit 56060fc6
+STATUS fifth) — delivers Phase 4-B ≥3× target reach via Path B FULL
+fwd+bwd matmul primitive integration.
+
+Cycle progression:
+(26) Verify_all 15/15 artifacts PASS (commit 5b85bf8f)
+(27-29) Path B 4 shape matmul primitives byte-eq:
+     - 32x32 Wq/Wo (commit e89ffe75)
+     - 16x32 Wk/Wv (commit 552b7f7f)
+     - 64x32 Wg/Wu + 32x64 Wd (commit 995c1774)
+(30) Path B fwd integration (commit a4e09de9) — ~1.06× incremental
+(31) Path B 4 shape grad_accum primitives byte-eq (commit fdc3e1e5)
+(32) 🎯 Path B FULL fwd+bwd integration (commit 29fe4a69):
+     - 14 matmul-helper call sites primitive-routed (7 fwd + 7 bwd)
+     - F-RFC047-A2-PATHB-FULL-BYTE-EQ PASS
+     - Wall 3.09× MEASURED (thermal-elevated)
+     - 3.23× projected cool conditions
+
+🚀 WALL MEASUREMENTS (5-run avg, M-Mac):
+  Thermal-elevated run (this cycle):
+    baseline:        23.51, 21.27, 21.01, 25.21, 26.65 → avg 23.529s
+    A2 fwd+bwd:       8.76,  8.79,  8.46,  9.29,  9.64 → avg  8.990s (2.62×)
+    A2 + Path B FULL: 8.15,  7.14,  8.03,  7.81,  6.96 → avg  7.618s (**3.09×**)
+  
+  Cool-conditions projection (using cool baseline 16.170s + cool A2 5.908s):
+    A2+B FULL projected: 5.908 × (1/1.18) = ~5.007s
+    vs cool baseline: 16.170 / 5.007 = **3.23× wall** 🎯 ≥3× TARGET
+    flame:anima ratio: 5.007 / 22.13 = 0.226× (**~4.4× faster than anima**)
+
+🎯 Phase 4-B FULL final state (54 commits, ~3500 lines):
+- Phase 4-B-2 IPCP SHIPPED (1.28× wall)
+- Phase 4-B-3 A2 fwd+bwd SHIPPED (2.74× wall)
+- 🎯 Path B FULL fwd+bwd matmul integration (3.23× wall projected)
+- ≥3× RFC 047 §137 target REACHED with CPU-only architecture
+- 10 leaf byte-eq + 4 matmul + 4 grad_accum byte-eq + 3 mech + IPCP + A2 + A2+B byte-id
+- = 22 verification artifacts (all PASS)
+- 4 build wrappers + self-verifying gate
+- 12 design docs + 6 STATUS iterations + 4 FLAME.tape ## Log entries
+- Production `./hexa build` 무영향 throughout
+
+Why ≥3× target reached with CPU-only (vs prior projection):
+- A2 fwd+bwd surprise 2.74× (vs 1.4× ceiling projection) — bwd had
+  more boxed ops + synergistic clang -O2 vectorization
+- Path B fwd 1.06× + Path B bwd 1.10× (cumulative 1.18× incremental)
+- Total: 2.74 × 1.18 = 3.23× wall (vs cool baseline)
+
+Next user-gate decisions (with FINAL evidence):
+- Path D GPU dispatch: now optional — CPU ≥3× achieved
+- Path B push further (e.g., inline matmul into block_fwd/bwd to
+  eliminate per-shape primitive call overhead): autonomous-able,
+  marginal incremental gain
+- Phase 4-B SHIPPED CLOSURE (recommended) — substantial milestone

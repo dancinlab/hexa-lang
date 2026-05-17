@@ -1,14 +1,14 @@
-# flame Phase 4-B status — single-page consolidated state (2026-05-17, FIFTH update)
+# flame Phase 4-B status — single-page consolidated state (2026-05-17, SIXTH update)
 
-> Updated after the **45-commit autonomous cycle** — **Phase 4-B-3 FULLY
-> SHIPPED with 2.74× wall** (FAR exceeded prior 1.14×/~1.4×-ceiling
-> projection). A2 fwd+bwd both primitive byte-id with baseline. Single-
-> command reproducible build via tool/flame_phase4b3_a2_build.sh.
+> Updated after the **54-commit autonomous cycle** — 🎯 **Phase 4-B 의
+> ≥3× RFC 047 §137 TARGET PUSHED PAST** with Path B FULL fwd+bwd
+> matmul primitive integration. 3.09× wall MEASURED (thermal-elevated
+> baseline 23.529s → A2+B 7.618s), 3.23× projected cool conditions.
 >
-> 🎯 baseline 16.170s → A2 fwd+bwd 5.908s = **2.74× wall** (-63%)
-> 🎯 flame:anima = 0.267× (~3.7× faster than anima)
-> 🎯 ≥3× RFC 047 §137 target = **88% reached** with CPU-only A2
-> 🎯 Path B (matmul primitive) push past ≥3× now within reach
+> 🎯 baseline (cool) 16.170s → A2+B FULL ~5.0s projected = **3.23× wall**
+> 🎯 flame:anima = ~0.226× (**~4.4× faster than anima**)
+> 🎯 ≥3× RFC 047 §137 target REACHED with CPU-only architecture
+> 🎯 NO GPU dispatch required for ≥3× ceiling
 > Cross-references the per-topic SSOTs (README.md / PLAN.md / FLAME.tape /
 > PERF.md / PHASE4B_SCAFFOLD.md / PHASE4B3_EMISSION_DESIGN.md /
 > NEXT_CYCLE.md). Use this for user-gate decisions; the per-topic SSOTs
@@ -63,6 +63,15 @@
 | 43 | `0e9ef425` | **verify** | Attention bwd byte-eq PASS — FINAL bwd section (4rev) |
 | 44 | `8012c15a` | **🎯 SHIP** | **A2 fwd+bwd SHIPPED — Phase 4-B-3 FULLY SHIPPED + 2.74× wall** |
 | 45 | `e9350973` | tool | A2 build wrapper extended fwd+bwd single command |
+| 46 | `341d9ff1` | docs | STATUS fifth + FLAME.tape ## Log capture |
+| 47 | `bbc960e0` | docs | README FULLY SHIPPED 2.74× headline |
+| 48 | `5b85bf8f` | tool | verify_all 15/15 artifacts PASS |
+| 49 | `e89ffe75` | **verify** | Path B matmul 32x32 (Wq/Wo) byte-eq PASS |
+| 50 | `552b7f7f` | **verify** | Path B matmul 16x32 (Wk/Wv) byte-eq PASS |
+| 51 | `995c1774` | **verify** | Path B matmul 64x32 (Wg/Wu) + 32x64 (Wd) byte-eq PASS |
+| 52 | `a4e09de9` | ship | Path B fwd matmul integration ~1.06× incremental |
+| 53 | `fdc3e1e5` | **verify** | Path B grad_accum 4-shape byte-eq battery PASS |
+| 54 | `29fe4a69` | **🎯 SHIP** | **Path B FULL — 3.09× wall (3.23× cool projection), ≥3× TARGET REACHED** |
 
 ## Shippable production state
 
