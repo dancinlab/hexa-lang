@@ -440,6 +440,20 @@ HexaVal hexa_farr_mul_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);
 HexaVal hexa_farr_rmsnorm_bwd_rows_gpu(HexaVal x_v, HexaVal dxn_v, HexaVal r_v, HexaVal c_v);
 HexaVal hexa_farr_rope_bwd_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v, HexaVal T_v, HexaVal nh_v, HexaVal hd_v);
 
+// ── Phase 4-D-8: redundant pre-op H2D elision (byte-eq-exact) ────────────
+// Identical rationale to flame_phase4d7_block_fwd_primitive.c: every
+// scratch farr is host-built then handed to a forge `*_gpu` op whose
+// runtime_cuda.c body ALWAYS re-uploads it via the internal `_h2d`
+// (unconditional cudaMemcpy H2D, no residence-skip). The explicit
+// `hexa_farr_to_device(scratch)` preceding each call is a fully redundant
+// duplicate H2D of the same size-unchanged buffer. Eliding it is byte-eq-
+// EXACT (the forge op's own `_h2d` does the authoritative upload from the
+// unmutated host buffer → bit-identical device bytes) and removes one
+// PCIe H2D per non-cuBLAS bwd op. NOT true persistent residency (host
+// still authoritative, one round-trip per op remains). hexa_farr_to_host
+// is deliberately NOT macro'd — only the redundant *to_device* is elided.
+#define hexa_farr_to_device(h) ((void)0)
+
 // ── GPU-resident A2 backward (d≥threshold) ──────────────────────────────
 // Structurally identical to the CPU bwd; the inner element-wise loops for
 // SwiGLU activation grads route to forge silu/silu_grad/mul kernels. The
@@ -970,6 +984,9 @@ static inline void flame_block_generic_bwd_primitive(
             dX_out_id, Bg_id, cos_id, sin_id, T, d, nh, nkv, h);
     }
 }
+// Phase 4-D-8: scope the redundant-H2D-elision macro to THIS primitive
+// only (defensive — keeps the concat'd TU clean if anything follows).
+#undef hexa_farr_to_device
 #endif  // !FLAME_BLOCK_BWD_PRIM_STANDALONE
 
 #ifdef FLAME_BLOCK_BWD_PRIM_STANDALONE
