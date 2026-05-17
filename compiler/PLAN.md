@@ -825,3 +825,110 @@ atlas_verify APFAIL/MISMATCH → MATCH = gate-1 38/44.
 **현황**: 진짜 tier-1 결함 잔여 = atlas_verify 118/139(#34) + t38_nanbox try/catch.
 non-tier-1 5개(t35/t36/t37 ORAFAIL-class + repo_taxonomy/t34 env) 제외 effective 천장
 39 achievable.
+
+### 진행 로그 — #34 재진단: 'tier-1 21 silently drop' 은 oracle-source 오염 — 실제 결함은 tier-2 trailing-if-expr void-return (cycle h20 진단-only)
+
+**전제 검증** — task #34 는 "tier-1 가 atlas_verify 의 verifier 등록을 21개 silently
+drop" 으로 기술. 본 cycle 정밀 재현 시 전제가 **잘못된 측정에 기반** 함을 확인.
+
+**측정 1 (재현)**: clean origin/main (`d0b60ac3`) 본 worktree 에서
+- tier-1 (`/tmp/apx _drv.hexa --emit=asm ... atlas_verify_smoke.hexa` + clang + run):
+  `rc=0`, `118/118 verdicts hold`, `live total=118 vs MAIN.tape declared=118`,
+  `PASS`.
+- tier-2 (`HEXA_MAC_BUILD_OK=1 /Users/ghost/.hx/bin/hexa build ...`, **HEXA_LANG 미설정**):
+  `rc=1`, `129/139 verdicts hold`, `live total=139 vs MAIN.tape declared=118`,
+  `FAIL — 10 verdict regression(s)`.
+- 차이: 21 verdict node (전제 일치).
+
+**측정 2 (oracle 소스 추적)**: tier-2 의 module_loader 플랫튼 임시 (`/tmp/.hexa-runtime/hexa_build_expanded.*.tmp.hexa`)
+의 `// [module_loader] begin:` 코멘트 — 모든 경로가 `/Users/ghost/core/hexa-lang/...`
+(shared main repo). 본 worktree 의 `compiler/atlas/verify/phys.hexa` 는 13 push (291 LoC),
+shared main repo 의 동일 파일은 24 push (854 LoC) — shared main repo 의 체크아웃 브랜치
+가 `rfc043-hexa-torch` 이며 그 브랜치 가 `c530048c` (sim-universe 6-module 흡수, +8 verifier)
++ `d8b9a1b4` (z2-gauge-prethermal + preheating-analog, +4) + 추가 commit 으로 phys +11,
+transcendental +10 = 정확히 **21 추가 verifier 보유**. 우리 worktree 는 origin/main
+`d0b60ac3` 시점이라 이 21개를 보유하지 않음. `git diff --stat d0b60ac3..origin/rfc041-042-upstream-needs
+-- compiler/atlas/verify/` 결과: `phys.hexa +563`, `transcendental.hexa +407` (이게 21 추가
+verifier 의 source).
+
+**측정 3 (HEXA_LANG=worktree 로 oracle 격리)**: `HEXA_LANG=$WD HEXA_MAC_BUILD_OK=1 hexa build
+test/atlas_verify_smoke.hexa` → tier-2 출력: `rc=0`(코드상 exit(1)→shell rc 손실 패턴),
+`108/118 verdicts hold`, `live total=118 vs MAIN.tape declared=118`, `FAIL — 10 verdict
+regression(s)`. **count drift 0**. tier-1 / tier-2 합의: 118개 verdict 등록 — 모두 일치.
+**❶ "21 silent drop" 은 가짜 — oracle 이 shared main repo (다른 브랜치) 소스를 읽었기 때문**.
+
+**측정 4 (실제 결함 분리)**: 그러나 같은 source 에서 tier-1 = `118/118 PASS`,
+tier-2 = `108/118 FAIL (10 falsified)`. 즉 tier-1↔tier-2 가 **10 verdict 의 PASS/FAIL
+flag 에서 발산**. 정확히 task #34 가 명명한 10 종 (`math::s2_lcm_divisors_n6` 등).
+정밀 probe (`test/lcm_probe.hexa` ad-hoc, 본 commit 에서 삭제):
+```
+=== tier-1 lcm ===
+step d=1 before=1 after=1 / d=2 before=1 after=2 / d=3 before=2 after=6 / d=6 before=6 after=6
+final=6 expected=6 ok=YES
+=== tier-2 lcm ===
+step d=1 before=1 after=void / d=2 before=void after=void / ...
+final=void expected=6 ok=NO
+```
+**❷ tier-2 의 `lcm()` 이 `void` 반환** — 수학적으로 명백히 잘못된 결과. tier-1 = 정답.
+
+**측정 5 (root cause pin)**: tier-2 가 생성한 C (`build/artifacts/av_t2_wt.c:2142`):
+```c
+HexaVal lcm(HexaVal a, HexaVal b) {
+    __hexa_fn_arena_enter();
+    if (hexa_truthy(...)) {
+        hexa_int(0);          // <- 식-as-stmt 로 값 폐기
+    } else {
+        hexa_div(hexa_abs(hexa_mul(a, b)), gcd(a, b));   // <- 동일
+    }
+    return __hexa_fn_arena_return(hexa_void());   // <- void!
+}
+```
+패턴은 `lcm` 외 `abs`/`max`/`min`/`clamp` (모두 stdlib/core/math.hexa) 에 동일 발현 —
+**body 의 마지막 expression 이 `if/else` (branches = bare 값-expression) 일 때 hexa_v2
+가 trailing-implicit-return 로 lowering 하지 않고 expression-statement 로 출력** + 함수
+끝에 `return __hexa_fn_arena_return(hexa_void())` 강제 추가.
+- 안 깨지는 fn: `gcd` (`x` 단일 identifier 종결), `u_pow`/`factorial` (`result` 단일).
+- 깨지는 fn: `abs`/`max`/`min`/`clamp`/`lcm` (`if/else` 종결).
+**hexa_v2 source 소재**: `self/hexa_full.hexa` 의 fn body trailing-expression lowering 경로
+(`codegen_c2.hexa` 또는 동등 — 정확 fn 위치 분리 미수행, 본 cycle 진단-only).
+
+**❸ 종합 결론**:
+1. task #34 의 전제 "tier-1 가 verifier 21개 silently drop" 은 **사실이 아님**. tier-1 은
+   본 worktree (origin/main `d0b60ac3`) 의 source 에 대해 **정확히 컴파일** — 등록되어야 할
+   118 verdict 모두 등록 + 모두 PASS.
+2. 21 verdict 의 "drop" 외관 은 **oracle 측 (`hexa` CLI) 의 module_loader 경로 해석이
+   shared main repo (`/Users/ghost/core/hexa-lang/`, 현재 `rfc043-hexa-torch` 체크아웃,
+   +21 verifier) 의 source 를 읽음** 때문. cwd / source-path 와 무관, `HEXA_LANG` 환경변수
+   만 영향. `HEXA_LANG=$WD` 설정 시 21 verdict drift 0 으로 종료.
+3. 실제 코드결함은 **tier-2 (hexa_v2 → C 트랜스파일러) 의 trailing-if-expression void
+   return** — 같은 source 에서 tier-1 `s2_lcm_divisors_n6` 등 10 verdict 가 PASS 인데
+   tier-2 가 FAIL 로 보고. tier-1 이 수학적 정답.
+
+**왜 prior cycle (`eea2dce6` author) 가 "21 silent drop" 으로 기록했나**: 동일 oracle-source
+오염 — math annotation 검증 시 tier-2 를 HEXA_LANG 없이 실행 → shared main repo 의 sim-universe
+흡수 commit (`c530048c` 등) 이 보유한 21 verifier 가 oracle 출력에 포함 → "tier-1 silently
+drops 21" 로 잘못 해석. 본 cycle 정밀 probe 가 가짜임 확인.
+
+**fix 권고 (out-of-scope for tier-1)**:
+- (A) tier-2 (hexa_v2) lowering 수정 — `self/hexa_full.hexa` body trailing-if/else
+  의 분기 expression 을 implicit-return statement 로 wrap. 부트스트랩 재빌드 필요.
+- (B) `hexa` CLI 가 `HEXA_LANG` default 를 cwd 의 git toplevel 로 해석 (현재는 빌드시
+  컴파일된 경로 = shared main repo). 단기 회피.
+- 본 cycle: **tier-1 코드 0 줄 수정**. 진단만 기록. 잘못된 전제에 surgical fix 를 land
+  하는 g3 위반 회피 (`자율 모드 = 완료까지 정지 금지` ≠ '잘못 전제도 진행').
+
+**검증 (이 cycle 의 verification battery)**:
+- build_aprime smoke: `exit(6*7)==42` PASS (변경 0이므로 baseline 유지).
+- tier-1 atlas_verify: `118/118 PASS rc=0` (변경 0).
+- tier-2 atlas_verify (HEXA_LANG=$WD): `108/118 FAIL rc=0(masked)` (10 verdict tier-2
+  bug exposure).
+- tier-2 atlas_verify (HEXA_LANG 미설정 = oracle-contaminated): `129/139 FAIL rc=1`
+  (shared main repo 의 source 읽음 — 본 worktree 의 결함 아님 확인).
+- gate-1 sweep (`HEXA_LANG=$WD`, 본 worktree 기준): atlas_verify_smoke MISMATCH (ap_rc=0,
+  or_rc=1) — tier-2 의 void-lcm 결함으로 인한 정상 발산. 전체 sweep 결과 별도 commit
+  으로 기록 (32/44 partial / repo_taxonomy_audit_smoke 가 ap-bin hang → kill, 진행 재개).
+- self-host fixpoint: 변경 0 이므로 보존 (검증 미수행).
+
+**현황 갱신**: gate ① 천장 재평가 — atlas_verify 의 MISMATCH 는 tier-1 결함 아닌
+tier-2 void-lcm 결함. tier-1 입장 진보 위해서는 (A) tier-2 fix 필요, 그 후 gate-1
+재측정. 본 cycle 코드 변경 = `compiler/PLAN.md` 진단 entry 만.
