@@ -420,3 +420,53 @@ regression 무변동 · call_builtin = 0 · LoC ~6.1k.
 - Phase 3-E flame_math         (5/5, dt_* transcendentals)
 flame 전체 (Phase 1+2+3): **34 falsifier PASS** · regression 0 ·
 compiler-only structural call_builtin = 0 · LoC ~5.5k.
+
+### 2026-05-17 — Phase 4-C-2a SCAFFOLD LANDED (commit `a3033da8`)
+`tool/flame_phase4c_block_fused_primitive.c` (122 lines, trivial wrapper)
++ `tool/flame_phase4c2_build.sh` (build wrapper).
+- F-RFC048-FUSED-COMPILE-EQ ✅ PASS (clang -O2 standalone .o 336B)
+- F-RFC048-FUSED-FWD-BWD-EQ ✅ PASS trivially (caller unchanged)
+- F-RFC048-FALLBACK-PRESERVED ✅ PASS (verify_all 24/24 preserved)
+- F-RFC048-FUSED-WALL-IMPROVED ⏳ N/A scaffold (gates on 2b wire-up)
+
+Bc data flow audit documented: 7 PURE LOCALS (oRm1inv/oRm2inv/oRm1xn/
+oRm2xn/oRin/oRin2/oSwS = 3104 doubles = 24 KB) eligible for Phase 4-C-2c
+extraction. Matmul-bound intermediates (oQ/K/V/P/Ctx/SwA/SwB/Xout/
+Hstate) require API change (next-RFC).
+
+### 2026-05-17 — Phase 4-D-5-1 runtime.c cuBLAS wiring scaffold (commit `0190bde8`, sub-agent)
+Sub-agent (worktree-isolated, $0 Mac builds) audit + scaffold:
+- **6/7 Phase A `_hx_cuda_*` symbols already wired** in earlier commits
+  (`hexa_cuda_available`, `hexa_cuda_device_count`, `hexa_farr_to_device`,
+  `hexa_farr_to_host`, `hexa_farr_device_free`, `hexa_farr_matmul_gpu`)
+- **1 site WIRED this cycle**: `self/runtime.c:8307-8320` → `_hx_cuda_farr_device_free(id)`
+  (closes Phase A cudaFree leak)
+- **Phase B/B2 (11 ops) NOT wired** — bodies don't exist in
+  `self/cuda/runtime_cuda.c` yet (honest no-fake-PASS preserved):
+  softmax_rows, rmsnorm_rows, add, scale, matmul_t, outer, mul, silu,
+  silu_grad, rmsnorm_bwd_rows, adamw_step
+- F-RFC040-MAC-BUILD-PRESERVED ✅ PASS (clang -O2 + -DHEXA_CUDA both clean)
+- New doc: `stdlib/flame/PHASE4D5_1_WIRING_NOTES.md`
+- RFC 050 fallback chain preserved: no-CUDA host CPU + HEXA_CUDA real cuBLAS + Phase B/B2 honest -1.
+
+다음:
+- Phase 4-C-2b caller wire-up (sub-agent in-flight, sed-rewrite paired→fused)
+- Phase 4-C-2c Bc-elimination (sub-agent in-flight, iterative intermediate extraction)
+- Phase 4-D-5-2 Phase B/B2 kernel bodies in self/cuda/runtime_cuda.c (forge integration follow-up)
+- Phase 4-D-5-3 CUDA host link verify + Phase 4-D-5-4 A100 fire (gates on B/B2 + cuBLAS wire)
+
+### 2026-05-17 — forge integration RFCs land (cross-session cycle)
+forge Phase R 종결 (commit `f01cbdb5` BF16 9.67× wall path) + RFCs filed
+in inbox (forge session, same rfc043-hexa-torch branch — concurrent safe):
+- RFC 044 forge regime-tiered substrate (Phase R measurement-anchored)
+- RFC 049 forge mixed-precision substrate (BF16 9.67× FP64 cuBLAS at Llama-7B FFN, 4/4 PASS)
+- RFC 050 flame↔forge integration API (7 falsifier pre-registered)
+
+flame ↔ forge concurrent safety verified: 양 세션 file scope disjoint
+(forge: self/forge/* + self/cuda/experiments/* + inbox/.../rfc_044/049/050;
+flame: stdlib/flame/* + tool/flame_*), AGENTS.tape 다른 section 공존,
+모두 rfc043-hexa-torch branch, origin sync 됨.
+
+PATCHES.yaml 갱신 (commit `2a90c225`): RFC 044/049/050/051 모두 spec
+entries 추가. RFC 051 = anima 측 design (uarr unboxed-array native,
+pure-hexa hexa-cpu LM-scale 2.8× allocator inflation 천장 해결).
