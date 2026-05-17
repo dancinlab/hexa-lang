@@ -395,7 +395,6 @@ pub fn emit_asm(module: LModule) -> string {
     // ---- .text ----
     parts.push(_text_section_directive(target) + "\n")
 
-    let _t_ef0 = time_ms()
     let mut fi = 0
     while fi < len(module.funcs) {
         let f = module.funcs[fi]
@@ -406,9 +405,6 @@ pub fn emit_asm(module: LModule) -> string {
             parts.push(_emit_func(target, f))
         }
         fi = fi + 1
-    }
-    if env("HEXA_CG_TIMING") == "1" {
-        eprintln("[CG_TIMING] emit_asm func-loop " + to_string(time_ms() - _t_ef0) + " ms")
     }
 
     // ---- .rodata ----

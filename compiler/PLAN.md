@@ -319,3 +319,47 @@ Wilson agent (downstream consumer) flagged 3 items needing closure for plugin se
 - **REAL — runtime fn 존재, `_builtin_runtime_sym` 매핑만 추가하면 됨 (114)**: `array_*` (10) · `tensor_*` (5) · `term_*` (24) · `regex_*` (6) · `ptr_*` (7) · `json_*` (4) · `struct_pack/unpack/free` · `silu`/`gelu`/`softmax`/`matmul`/`matvec`/`rms_norm`/`one_hot`/`hadamard`/`swiglu_vec` · `sleep_ms/ns/s` · `utc_*` · `write_bytes*` 등. 본 cycle 은 CGFAIL 3건만 매핑 (`now`/`env_var`/`find`); 나머지는 per-name ret-box/cstring ABI 검증 필요 (codegen 헤더 'unmapped-is-safer-than-mis-mapped' 정책) → 별도 mechanical cycle.
 - **별도 TU/특수처리 (76)**: `getenv`/`getpid`/`mkdir`/`list_dir` (build_aprime.sh sed 로 처리) · `net_*`/`pty_*`/`proc_*` (native/*.c 별도 TU) · 암호 `ed25519_*`/`x25519_*`/`chacha20_*`/`sha256_hex`/`sha512` (libsodium 옵션 TU) · `arange`/`assert`/`panic`/`nil` (codegen 특수경로). 이름 그대로 link 불가 — 매핑 또는 TU 링크 필요.
 - **키워드-리터럴 (3)**: `true`/`false`/`nil` — scope 이름으로 무해 (파서가 `KwTrue`/`KwFalse` 토큰 발행, Ident 안 됨).
+
+### 2026-05-17 — codegen super-linear class 제거 (#18 S1) — stmt-loop O(N²)→O(N)
+
+**측정 anchored root-cause (env-gated `HEXA_CG_TIMING` sub-phase 계측, 산출 후 제거)**:
+합성 micro-probe `fn big()` N개 sequential `let` 에서 codegen 단계 sub-phase 계측 결과 —
+지배 비용은 `_arm64_lower_func` 의 per-statement emit 루프(`stmt-loop`):
+
+| N | stmt-loop (전) | lower_fn(MIR) | full asm wall |
+|---|---|---|---|
+| 300  | 570 ms    | 188 ms   | 0.65 s |
+| 600  | 3,291 ms  | 1,563 ms | 3.55 s |
+| 1205 | 14,361 ms | 2,245 ms | 16.3 s |
+
+`stmt-loop` 가 명백히 O(N²) (600→1205 = 2× → 4.4×). **진짜 원인**: 루프가
+`instrs = _emit_arm64_stmt(instrs,…)` 으로 누적기 전체를 매 statement 반환·재대입.
+`_emit_arm64_stmt` 의 반환값은 `TAG_ARRAY` → 런타임 fn-arena 반환 경로
+(`__hexa_fn_arena_return → hexa_val_heapify`)가 반환 배열의 **모든 원소를 deep-walk**.
+크기 k 누적기를 N번 반환 → Σ O(k) = **O(N²)**. (PLAN S1 후보 (a) 가 정확히 적중.)
+
+**FIX (`compiler/codegen/arm64_darwin.hexa` — correctness-preserving, 단일 call-site)**:
+`_emit_arm64_stmt` 에 매번 fresh `[]` 전달 → 호출당 그 statement 의 instruction
+(~5개)만 반환 → heapify O(1). 반환된 delta 를 `instrs` 에 원소별 append.
+`instrs` 자체는 `_arm64_lower_func` 가 `LFunc` 를 반환할 때 **1회만** heapify → O(total).
+byte-identical: 동일 instruction·동일 순서, 누적 cadence 만 변경.
+
+**검증**:
+- 빌드 smoke `exit(6*7)==42` PASS.
+- micro-probe N=100/600/1205 + 다중 구문 real test(fib·while·array·string·if) 모두
+  fix 전/후 **byte-identical asm** (zero regression).
+- 전체 22,090-line flatten 컴파일러 codegen **완주** — 223,630-line `.s` 산출
+  (직전: 9분 cap 초과 미산출). 2회 run byte-identical (deterministic).
+
+| N | stmt-loop (후) | full asm wall (후) |
+|---|---|---|
+| 600  | 25 ms  | 0.88 s |
+| 1205 | 51 ms  | 3.13 s  (← 16.3 s) |
+| 4800 | 162 ms | (lower_fn 지배) |
+
+**잔여**: `lower_fn`(HIR→MIR `lower_hir`) 가 동일 root-cause 계열로 여전히 O(N²)
+(`_lower_hexpr` 재귀가 `LowerExprResult{ctx: LowerCtx}` 반환 → `LowerCtx.blocks`
+deep-heapify). 전체 컴파일러 최대 함수 ≈1200-stmt 에서 ~6 s 라 완주에는 영향 없으나
+극단 N(4800≈185 s)에서 지배. 제거하려면 `LowerCtx` 의 `blocks`/`locals`/`bindings`
+누적 배열을 `_lr_diag` 처럼 module-level `pub let mut` 로 빼는 lowering-pass 리팩터
+(20+ helper 영향) 필요 — 별도 cycle. **codegen super-linear class 자체는 본 cycle 로 제거**.
