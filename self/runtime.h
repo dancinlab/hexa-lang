@@ -382,6 +382,22 @@ HexaVal hexa_utc_compact_now(void);                                             
 HexaVal hexa_utc_iso_now(void);                                                    /* runtime.c:11116 */
 HexaVal hexa_null_coal(HexaVal a, HexaVal b);                                      /* runtime.c:1339 */
 HexaVal hexa_math_lgamma(HexaVal x);                                               /* runtime.c:7963 */
+/* Forward-decls exposed by interp regen (hexa_full → C → clang) — same
+ * "defined-but-not-declared" class as the AOT path additions above. */
+HexaVal hexa_array_truncate(HexaVal arr, HexaVal new_len_v);                       /* runtime.c:2037 */
+HexaVal hexa_bin(HexaVal n);                                                       /* runtime.c:10905 */
+HexaVal hexa_hex(HexaVal n);                                                       /* runtime.c:10916 */
+HexaVal hexa_str_bytes(HexaVal s);                                                 /* runtime.c:817 (proto), def 4029 */
+HexaVal hexa_valstruct_new_v(HexaVal, HexaVal, HexaVal, HexaVal, HexaVal,
+                             HexaVal, HexaVal, HexaVal, HexaVal, HexaVal,
+                             HexaVal, HexaVal);                                    /* runtime.c:884 (proto), def 2774 — 12-arg */
+HexaVal rt_write_bytes(HexaVal path, HexaVal arr);                                 /* runtime.c:788 (proto), def 5196 */
+HexaVal hexa_ceil(HexaVal v);                                                      /* runtime.c:5483 */
+HexaVal hexa_floor(HexaVal v);                                                     /* runtime.c:5464 */
+HexaVal hexa_math_isfinite(HexaVal x);                                             /* runtime.c:849 (proto) */
+HexaVal hexa_math_isinf(HexaVal x);                                                /* runtime.c:848 (proto) */
+HexaVal hexa_math_isnan(HexaVal x);                                                /* runtime.c:847 (proto) */
+HexaVal hexa_str_parse_float(HexaVal s);                                           /* runtime.c:815 (proto) */
 
 /* native/namespace.c */
 HexaVal hexa_unshare(HexaVal flags_v);     /* native/namespace.c:37 */
