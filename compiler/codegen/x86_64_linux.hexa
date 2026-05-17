@@ -976,7 +976,8 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string) -> LFunc {
                 target: "x86_64-linux-gnu",
                 instrs: instrs,
                 frame_size: spill_frame,
-                callee_saved: []
+                callee_saved: [],
+                def_line: mf.def_line
             }
         }
     }
@@ -993,7 +994,8 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string) -> LFunc {
         target: "x86_64-linux-gnu",
         instrs: instrs,
         frame_size: spill_frame,
-        callee_saved: []
+        callee_saved: [],
+        def_line: mf.def_line
     }
 }
 

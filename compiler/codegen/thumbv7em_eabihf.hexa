@@ -512,7 +512,8 @@ fn _thumb_lower_func(mf: MFunc, st: ThumbStrTab, modhash: string) -> LFunc {
                 target: "thumbv7em-none-eabihf",
                 instrs: instrs,
                 frame_size: 0,
-                callee_saved: []
+                callee_saved: [],
+                def_line: mf.def_line
             }
         }
     }
@@ -524,7 +525,8 @@ fn _thumb_lower_func(mf: MFunc, st: ThumbStrTab, modhash: string) -> LFunc {
         target: "thumbv7em-none-eabihf",
         instrs: instrs,
         frame_size: 0,
-        callee_saved: []
+        callee_saved: [],
+        def_line: mf.def_line
     }
 }
 

@@ -1582,7 +1582,8 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
                 target: "arm64-apple-darwin",
                 instrs: instrs,
                 frame_size: 16 + total_frame,
-                callee_saved: []
+                callee_saved: [],
+                def_line: mf.def_line
             }
         }
     }
@@ -1598,7 +1599,8 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         target: "arm64-apple-darwin",
         instrs: instrs,
         frame_size: 16 + total_frame,
-        callee_saved: []
+        callee_saved: [],
+        def_line: mf.def_line
     }
 }
 

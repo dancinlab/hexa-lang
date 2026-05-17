@@ -1949,7 +1949,10 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         locals: ctx.locals,
         blocks: ctx.blocks,
         entry_block: entry_id,
-        arena_root: ctx.arena_root
+        arena_root: ctx.arena_root,
+        // #13 DWARF .loc — carry the fn-definition source line through to
+        // codegen so it can emit a `.loc 1 <line> 0` directive.
+        def_line: it.span.line
     }
 }
 

@@ -329,6 +329,15 @@ fn _emit_func(target: string, f: LFunc) -> string {
         out = out + "    .p2align 4\n"
     }
     out = out + _func_label(target, f.name) + "\n"
+    // #13 DWARF — function-level `.loc` directive. Pairs with the
+    // `.file 1 "<source>"` header directive. Emitted right after the
+    // function label so a debugger maps the symbol to its definition
+    // line. `.loc` is a GNU-as / Apple-as DWARF directive; both targets
+    // (darwin arm64 + linux x86_64) accept it. def_line == 0 means the
+    // source line is unknown (synthesised fn / test fixture) — skip.
+    if f.def_line > 0 {
+        out = out + "    .loc 1 " + to_string(f.def_line) + " 0\n"
+    }
     let mut i = 0
     while i < len(f.instrs) {
         out = out + _fmt_instr(target, f.instrs[i]) + "\n"
@@ -365,6 +374,13 @@ pub fn emit_asm(module: LModule) -> string {
     } else if !_is_darwin(target) {
         // x86_64 GAS: select Intel syntax once at the top (RFC-018 §3 note).
         parts.push(".intel_syntax noprefix\n")
+    }
+
+    // #13 DWARF — `.file 1 "<source>"` so the assembler's debug_line
+    // table names the source; pairs with the per-fn `.loc` in
+    // _emit_func. Thumb/bare-metal target skipped (no host debugger).
+    if !_is_thumb(target) {
+        parts.push(".file 1 \"" + module.file + "\"\n")
     }
 
     // ---- .text ----

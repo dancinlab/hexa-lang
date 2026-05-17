@@ -391,7 +391,8 @@ fn _inl_func(module: MModule, f: MFunc) -> MFunc {
         locals: st.locals,
         blocks: blocks,
         entry_block: f.entry_block,
-        arena_root: f.arena_root
+        arena_root: f.arena_root,
+        def_line: f.def_line
     }
 }
 
