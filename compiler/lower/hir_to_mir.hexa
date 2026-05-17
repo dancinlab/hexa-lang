@@ -365,13 +365,25 @@ fn _set_returned(ctx: LowerCtx, v: bool) -> LowerCtx {
 // each break/continue binds to its tightest loop. Mirrors the
 // _push_stmt_to block-rebuild idiom; also wires the CFG edge so
 // regalloc / liveness sees the jump (parity with the back-edge path).
-fn _patch_loop_sentinels(ctx: LowerCtx, after_id: i64, header_id: i64) -> LowerCtx {
+//
+// scope_min: only patch sentinels in blocks with id >= scope_min. Block
+// ids are strictly monotonic (_new_block), so every block belonging to
+// THIS loop's header/body/after structure has id >= header_id, while a
+// sentinel that belongs to an ENCLOSING loop — emitted by a `continue`
+// that textually precedes this (sibling) inner loop within the same
+// outer body — lives in a pre-existing block with id < header_id. Without
+// this guard the inner loop's patch wrongly captures the outer loop's
+// continue, jumping it into the inner header and skipping any code
+// between the `continue` and the inner loop (e.g. `let mut dense = []`),
+// leaving that local uninitialized → non-deterministic tag-garbage crash.
+fn _patch_loop_sentinels(ctx: LowerCtx, after_id: i64, header_id: i64, scope_min: i64) -> LowerCtx {
     let mut blocks = ctx.blocks
     let mut ef: [i64] = []
     let mut et: [i64] = []
     let mut i = 0
     while i < len(blocks) {
         let b = blocks[i]
+        if b.id < scope_min { i = i + 1; continue }
         let mut stmts = b.stmts
         let mut changed = false
         let mut j = 0
@@ -1259,7 +1271,13 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         ctx2 = br_b.ctx
         // Resolve any break/continue sentinels emitted while lowering
         // this loop body to this loop's after/header (innermost-first).
-        ctx2 = _patch_loop_sentinels(ctx2, after_id, header_id)
+        // scope_min = header_id: only this loop's own structure/body
+        // blocks (id >= header_id) are eligible — a `continue` that
+        // belongs to an enclosing loop but textually precedes this
+        // (sibling) inner loop lives in an earlier block (id < header_id)
+        // and must NOT be captured here (it is patched by the outer
+        // loop's own _patch_loop_sentinels later).
+        ctx2 = _patch_loop_sentinels(ctx2, after_id, header_id, header_id)
         if !ctx2.has_returned {
             let body_end = ctx2.cur_block
             let back = Stmt {
