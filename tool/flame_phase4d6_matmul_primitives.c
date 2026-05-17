@@ -56,14 +56,95 @@ static inline void flame_proj_inline_matmul_g(
 }
 
 #ifdef HEXA_CUDA
+// ════════════════════════════════════════════════════════════════════════
+// RFC 057 §6.1 — Bc device-authoritative matmul primitive
+// ════════════════════════════════════════════════════════════════════════
+// fire #11 (H100 cross-check, RFC 057 §3) isolated the d768·12L wall as the
+// host-authoritative Bc constraint, NOT GPU compute (6× faster TC, identical
+// wall). RFC 057 §6.1: the cuBLAS Dgemm output farr must be left
+// loc=FARR_DEVICE, dirty_dev=1 (RFC 056 §6.1 state machine) so downstream
+// ops can hexa_farr_dev_view it byte-safely (RFC 057 §6.2) instead of
+// host-rebuilding every slab.
+//
+// ── What this primitive can do byte-safely at $0 substrate cost ──────────
+// _hx_cuda_farr_matmul_gpu (self/cuda/runtime_cuda.c) is the VERIFIED forge
+// oracle — FORBIDDEN to modify (RFC 057 §1/§9). It hardcodes its output
+// farr to loc=FARR_MIRRORED, dirty_host=0 after its own D2H, and keeps the
+// device buffer C_dev LIVE in the entry (ce->d_buf = C_dev, runtime_cuda.c
+// :477). It ignores the g_forge_out_disposition register.
+//
+// The matmul-primitive discipline (this file IS mine, RFC 057 §6 scope):
+// after hexa_farr_matmul_gpu returns, the output farr is MIRRORED with a
+// LIVE device slot — which already satisfies BOTH the §6.1 H2D-skip
+// predicate (_h2d: loc∈{DEVICE,MIRRORED} && !dirty_host) AND the dev_view
+// base requirement (dev_view only needs g_slots[base].d_buf live, NOT
+// loc==DEVICE — runtime_cuda.c:340). So the matmul output is ALREADY a
+// byte-safe dev_view base the moment it returns. The ONLY thing that
+// destroys that property is the eager hexa_farr_free(c_h) (line ~109 of
+// the pre-RFC-057 body) — on -DHEXA_CUDA it cudaFree's C_dev.
+//
+// RFC 057 §6.1 change (residence disposition ONLY, same Dgemm): the GPU
+// path no longer eagerly destroys the cuBLAS output device buffer. The
+// host C is filled byte-IDENTICALLY (same D2H from hexa_farr_matmul_gpu),
+// so the transpose-scatter into Y/Bc is bit-identical → d=32·3L and d768
+// numerics unchanged (F-RFC057-D32-BYTEEQ + BYTEEQ-PRESERVE by
+// construction). The output farr-id flows OUT to the caller, which owns
+// the residence/free decision (flame_proj_batch_generic_primitive frees
+// it after the host scatter → no leak).
+//
+// ── HONEST scope (g3 — RFC 057 §8.2) ─────────────────────────────────────
+// Full §6.1+§6.2 (Bc NEVER host-mutated, every slab a Bc dev_view) is
+// blocked: flame_proj_batch_generic_primitive's projection output is
+// transpose-scattered C[r·T+t]→Y[t·d_out+r] into Bc HOST-SIDE, and no
+// byte-eq-verified forge transpose-scatter kernel exists (inventing one is
+// forbidden — RFC 057 §8.2). So Bc stays host-authoritative after each
+// projection and downstream Bc-slice dev_views would alias stale device
+// bytes. This primitive lands the byte-safe §6.1 substrate-discipline
+// piece (output device-resident, not destroyed); the remaining blocker is
+// the missing transpose-scatter kernel — diagnosed precisely, not faked.
+// ════════════════════════════════════════════════════════════════════════
+
+// RFC 056 §6.1 residence-state enum mirror (self/cuda/runtime_cuda.c:98).
+// The matmul primitive sets the output entry's residence flags directly
+// (plain HexaFarrEntry struct fields — NOT a substrate function call, so
+// no verified-oracle code is modified). HexaFarrEntry layout is declared
+// by runtime.c (concat'd ahead) / the STANDALONE typedef in the block
+// primitive files: { double* buf; long len; void* d_buf;
+//                     int loc, pinned, dirty_host, dirty_dev; }.
+#ifndef FLAME_FARR_DEVICE
+#define FLAME_FARR_DEVICE 1   /* == FARR_DEVICE  (runtime_cuda.c:98) */
+#endif
+
+// RFC 057 §6.1 — leave a cuBLAS-output farr device-authoritative.
+// The forge matmul left it loc=MIRRORED, dirty_host=0 with a live device
+// slot; promoting to loc=FARR_DEVICE, dirty_dev=1 records that the device
+// copy is the authoritative one (RFC 056 §6.1 FARR_DEVICE row). This is a
+// pure flag write on the runtime.c HexaFarrEntry — zero bytes copied, the
+// host buf is the identical D2H result the forge op already wrote, so a
+// subsequent host reader still sees the correct value (MIRRORED→DEVICE
+// only changes the residence DISPOSITION, not the data). Byte-eq-exact.
+static inline void flame_rfc057_mark_device_authoritative(int64_t c_id) {
+    if (c_id < 0 || c_id >= _hx_farr_count) return;
+    _hx_farr_table[c_id].loc       = FLAME_FARR_DEVICE;
+    _hx_farr_table[c_id].dirty_dev = 1;
+}
+
 // ── Layer 2 GPU-routed matmul: C(M×N) = A(M×K) · B(K×N) via cuBLAS Dgemm ──
 // Identical to the Phase 4-D-5-2 flame_proj_gpu_matmul (commit 6e3cb5a9),
 // renamed _g to avoid a duplicate-symbol clash if both primitive files are
 // ever concat'd in the same TU. Falls back to the CPU inline loop on any
 // allocation / dispatch error so the primitive never fakes a PASS.
-static inline void flame_proj_gpu_matmul_g(
-    const double* A, int M, int K, const double* B, int N, double* C
+//
+// RFC 057 §6.1: the cuBLAS output farr-id is returned via *out_c_id (≥0
+// when the GPU path produced a device-resident result; -1 when the CPU
+// fallback ran, in which case there is no device buffer). The host C is
+// always filled. Callers that pass out_c_id != NULL own the returned
+// farr's lifetime; callers passing NULL get the legacy free-here behavior.
+static inline void flame_proj_gpu_matmul_g_ex(
+    const double* A, int M, int K, const double* B, int N, double* C,
+    int64_t* out_c_id
 ) {
+    if (out_c_id) *out_c_id = -1;
     HexaVal a_h = hexa_farr_zeros(hexa_int((int64_t)M * K));
     int64_t a_id = HX_INT(a_h);
     if (a_id < 0 || a_id >= _hx_farr_count) {
@@ -105,24 +186,64 @@ static inline void flame_proj_gpu_matmul_g(
         flame_proj_inline_matmul_g(A, M, K, B, N, C);
         return;
     }
+    // Host C is filled byte-IDENTICALLY whether or not the output farr is
+    // kept device-resident — the D2H inside hexa_farr_matmul_gpu already
+    // ran. So the transpose-scatter the caller does next is bit-identical
+    // (F-RFC057-D32-BYTEEQ + BYTEEQ-PRESERVE by construction).
     for (int p = 0; p < M * N; p++) C[p] = c_buf[p];
-    hexa_farr_free(c_h);
     hexa_farr_free(b_h);
     hexa_farr_free(a_h);
+    if (out_c_id) {
+        // RFC 057 §6.1: hand the cuBLAS output farr OUT, device-resident.
+        // The forge matmul left c_h loc=MIRRORED with a live device slot;
+        // promote it to FARR_DEVICE/dirty_dev=1 so a downstream
+        // hexa_farr_dev_view(c_id,…) is byte-safe (RFC 056 §6.1/§6.2).
+        // The CALLER owns c_h's lifetime now (frees it after the host
+        // transpose-scatter) — no leak, no double-free.
+        flame_rfc057_mark_device_authoritative(c_id);
+        *out_c_id = c_id;
+    } else {
+        // Legacy callers (out_c_id == NULL): free here as before — the
+        // pre-RFC-057 disposition (host-authoritative, device buffer
+        // destroyed). Kept for any caller not yet RFC-057-restructured.
+        hexa_farr_free(c_h);
+    }
+}
+
+// Legacy 6-arg wrapper — host-authoritative output, device buffer freed
+// (pre-RFC-057 disposition). Retained so callers not restructured for the
+// §6.1 farr-id-out contract keep byte-identical behavior.
+static inline void flame_proj_gpu_matmul_g(
+    const double* A, int M, int K, const double* B, int N, double* C
+) {
+    flame_proj_gpu_matmul_g_ex(A, M, K, B, N, C, (int64_t*)0);
 }
 #endif  // HEXA_CUDA
 
 // Dim-aware dispatch — small shape → CPU (byte-identical), large → cuBLAS.
-static inline void flame_proj_matmul_dispatch_g(
-    const double* A, int M, int K, const double* B, int N, double* C
+// RFC 057 §6.1: _ex variant threads the cuBLAS output farr-id out via
+// out_c_id when the GPU path runs; the CPU/threshold-gated path leaves it
+// -1 (no device buffer). d=32·3L (M·K = d²=1024 < FLAME_MATMUL_GPU_
+// THRESHOLD 8192) ALWAYS takes the CPU inline path → out_c_id stays -1,
+// behaviour byte-identical to pre-RFC-057 (F-RFC057-D32-BYTEEQ).
+static inline void flame_proj_matmul_dispatch_g_ex(
+    const double* A, int M, int K, const double* B, int N, double* C,
+    int64_t* out_c_id
 ) {
+    if (out_c_id) *out_c_id = -1;
 #ifdef HEXA_CUDA
     if ((long)M * (long)K > FLAME_MATMUL_GPU_THRESHOLD) {
-        flame_proj_gpu_matmul_g(A, M, K, B, N, C);
+        flame_proj_gpu_matmul_g_ex(A, M, K, B, N, C, out_c_id);
         return;
     }
 #endif
     flame_proj_inline_matmul_g(A, M, K, B, N, C);
+}
+
+static inline void flame_proj_matmul_dispatch_g(
+    const double* A, int M, int K, const double* B, int N, double* C
+) {
+    flame_proj_matmul_dispatch_g_ex(A, M, K, B, N, C, (int64_t*)0);
 }
 
 // ── Generic forward projection primitive ─────────────────────────────────
@@ -154,11 +275,32 @@ static inline void flame_proj_batch_generic_primitive(
         for (int c = 0; c < d_in; c++)
             xbt[c*T+t] = X[X_off + t*d_in + c];
     for (int p = 0; p < d_out*d_in; p++) Wbuf[p] = W[W_off + p];
-    flame_proj_matmul_dispatch_g(Wbuf, d_out, d_in, xbt, T, C);
+    // RFC 057 §6.1 — _ex variant returns the cuBLAS output farr-id when the
+    // GPU path runs (mm_c_id ≥ 0, device-resident loc=FARR_DEVICE); the
+    // CPU/threshold-gated path leaves it -1. d=32·3L (d²=1024 <
+    // FLAME_MATMUL_GPU_THRESHOLD 8192) always takes the CPU path → mm_c_id
+    // stays -1, host C filled identically (F-RFC057-D32-BYTEEQ).
+    int64_t mm_c_id = -1;
+    flame_proj_matmul_dispatch_g_ex(Wbuf, d_out, d_in, xbt, T, C, &mm_c_id);
+    // Y-scatter transpose C[r·T+t]→Y[t·d_out+r] — HOST-side. No byte-eq
+    // forge transpose-scatter kernel exists (RFC 057 §8.2 — not invented),
+    // so Y/Bc stays host-authoritative after a projection; this is the
+    // precisely-isolated remaining blocker to full §6.1/§6.2. C-pointer
+    // re-fetched: hexa_farr_matmul_gpu may have realloc'd _hx_farr_table.
+    C = _hx_farr_table[C_id].buf;
+    Y = _hx_farr_table[Y_id].buf;
     for (int r = 0; r < d_out; r++)
         for (int t2 = 0; t2 < T; t2++)
             Y[Y_off + t2*d_out + r] = C[r*T+t2];
 
+    // RFC 057 §6.1 — the matmul-primitive owns the device-resident cuBLAS
+    // output's lifetime: free it AFTER the host scatter consumed C's host
+    // bytes. The transpose-scatter has already read the byte-identical
+    // host C, so freeing the device-resident handle here changes no bytes
+    // — it just releases the cuBLAS output device buffer the §6.1
+    // disposition kept live (no leak, no double-free; mm_c_id is a
+    // distinct handle from C_v). On the no-CUDA/CPU path mm_c_id = -1.
+    if (mm_c_id >= 0) hexa_call1(farr_free, hexa_int(mm_c_id));
     hexa_call1(farr_free, C_v);
     hexa_call1(farr_free, Wbuf_v);
     hexa_call1(farr_free, xbt_v);
@@ -190,11 +332,23 @@ static inline void flame_grad_accum_generic_primitive(
         for (int r = 0; r < d_out; r++)
             dY_T[r*T+t] = dY[dY_off + t*d_out + r];
     for (int p = 0; p < T*d_in; p++) X_buf[p] = X[X_off + p];
-    flame_proj_matmul_dispatch_g(dY_T, d_out, T, X_buf, d_in, C);
+    // RFC 057 §6.1 — same device-authoritative output discipline as the
+    // fwd projection primitive. mm_c_id ≥ 0 only on the GPU path; the
+    // grad_accum dispatch shape is d_out·T (d=32·3L: 32·1024 etc. — most
+    // grad_accum shapes cross FLAME_MATMUL_GPU_THRESHOLD on d768 only).
+    int64_t mm_c_id = -1;
+    flame_proj_matmul_dispatch_g_ex(dY_T, d_out, T, X_buf, d_in, C, &mm_c_id);
+    // dW accumulate reads C HOST-side (re-fetch after possible realloc).
+    C  = _hx_farr_table[C_id].buf;
+    dW = _hx_farr_table[dW_id].buf;
     for (int r = 0; r < d_out; r++)
         for (int c = 0; c < d_in; c++)
             dW[dW_off + r*d_in + c] += C[r*d_in + c];
 
+    // RFC 057 §6.1 — release the device-resident cuBLAS output after the
+    // host accumulate consumed it (byte-eq; no leak; mm_c_id distinct
+    // from C_v). CPU path → mm_c_id = -1, nothing to free.
+    if (mm_c_id >= 0) hexa_call1(farr_free, hexa_int(mm_c_id));
     hexa_call1(farr_free, C_v);
     hexa_call1(farr_free, Xbuf_v);
     hexa_call1(farr_free, dYT_v);
