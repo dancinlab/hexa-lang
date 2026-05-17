@@ -12,19 +12,31 @@
 //                        canvas for incremental extractions. Bc traffic
 //                        identical to SCAFFOLD wrapper / paired calls.
 //
-//   PURE LOCALS (extract one per iteration, smallest-first):
-//   iter 1   oRm1inv  16 dbl  rmsnorm1 fwd inv → vjp inv read
-//   iter 2   oRm2inv  16 dbl  rmsnorm2 fwd inv → vjp inv read
-//   iter 3   oRm1xn  512 dbl  rmsnorm1 normalized → vjp grad
-//   iter 4   oRm2xn  512 dbl  rmsnorm2 normalized → vjp grad
-//   iter 5   oRin    512 dbl  rmsnorm1 output (matmul input → grad)
-//   iter 6   oRin2   512 dbl  rmsnorm2 output (matmul input → grad)
-//   iter 7   oSwS   1024 dbl  silu(a)·b → SwiGLU bwd
+//   TRUE PURE LOCALS — extracted iter 1-4 (1056 dbl ≈ 8.25 KB DRAM RT):
+//   iter 1   oRm1inv  16 dbl  ✅ DONE — rmsnorm1 fwd inv → vjp inv read
+//   iter 2   oRm2inv  16 dbl  ✅ DONE — rmsnorm2 fwd inv → vjp inv read
+//   iter 3   oRm1xn  512 dbl  ✅ DONE — rmsnorm1 normalized → vjp grad
+//   iter 4   oRm2xn  512 dbl  ✅ DONE — rmsnorm2 normalized → vjp grad
 //
-//   Total potential extraction: 3104 doubles = 24 KB DRAM RT eliminated.
-//   L1-resident on M2 (96 KB typical per core).
+//   MATMUL-COUPLED (requires API change — 4-C-3+ scope, NOT extracted):
+//   iter 5   oRin    512 dbl  ❌ matmul Q/K/V input + grad_accum bwd read
+//                              (both flame_proj_batch_*_primitive and
+//                               flame_grad_accum_*_primitive dereference
+//                               _hx_farr_table[X_id].buf — they need a
+//                               farr-id, not a local pointer. Extraction
+//                               requires adding *_local() primitive
+//                               variants OR inlining matmul into fused
+//                               body. Out of 4-C-2c scope.)
+//   iter 6   oRin2   512 dbl  ❌ same as oRin (Wg/Wu input + grad)
+//   iter 7   oSwS   1024 dbl  ❌ matmul Wd input + grad_accum bwd read
 //
-//   REMAINS IN Bc (matmul-bound, requires API change — 4-C-3+ scope):
+//   PHASE 4-C-2c achieved: 1056/3104 dbl extracted (~34% of theoretical
+//   target). Remaining 2048/3104 (66%) blocked on matmul API. Honest
+//   scope boundary per task statement: "Matmul intermediates (oQ/K/V/P/
+//   Ctx/SwA/SwB/Xout/Hstate) stay in Bc unless matmul primitive signature
+//   changes (next-RFC scope)."
+//
+//   REMAINS IN Bc (matmul outputs, requires API change — 4-C-3+ scope):
 //   oQ, oK, oV, oP, oCtx, oSwA, oSwB, oXout, oHstate.
 //
 // ── Falsifier per iteration ──────────────────────────────────────────

@@ -179,6 +179,30 @@ for leaf in matmul matmul_kv matmul_h grad_accum; do
     fi
 done
 
+# ── Phase 4-C-2c fused fwd+bwd primitive byte-eq (RFC 048, additive) ──
+echo ""
+echo "── Phase 4-C-2c fused primitive byte-eq (F-RFC048-FUSED-FWD-BWD-EQ) ──"
+if [ -x tool/flame_phase4c_leaf_fused_build.sh ]; then
+    tool/flame_phase4c_leaf_fused_build.sh > /tmp/leaf_fused_build.log 2>&1
+    if [ -x build/leaf_fused_test ]; then
+        fused_out=$(./build/leaf_fused_test 2>&1)
+        if echo "$fused_out" | grep -q "^PASS  F-RFC048-FUSED-FWD-BWD-EQ"; then
+            ratio=$(echo "$fused_out" | grep "ratio (paired/fused)" | tail -1 | sed -E 's/.*= //; s/x.*//')
+            echo "  PASS  F-RFC048-FUSED-FWD-BWD-EQ  max|Δ|=0.0 on (Bc[oXout], Bc[oHstate], dX_out, Bg)"
+            echo "        wall paired/fused ratio = ${ratio}x (1.0x ≈ no gain — single-block scope, audit §6 R2)"
+        else
+            echo "  FAIL  F-RFC048-FUSED-FWD-BWD-EQ"
+            echo "$fused_out" | tail -5 | sed 's/^/    /'
+            fail_count=$((fail_count + 1))
+        fi
+    else
+        echo "  BUILD-FAIL  build/leaf_fused_test"
+        fail_count=$((fail_count + 1))
+    fi
+else
+    echo "  SKIP  tool/flame_phase4c_leaf_fused_build.sh not executable"
+fi
+
 # ── Phase 4-C-1a paired-call detection (RFC 048, additive) ──────────
 echo ""
 echo "── Phase 4-C-1a paired-call detector (F-RFC048-PAIR-DETECT) ──"
@@ -211,8 +235,8 @@ fi
 echo ""
 echo "═══ verification battery complete ═══"
 if [ $fail_count -eq 0 ]; then
-    echo "PASS  All Phase 4-B+4-C-1a verification artifacts PASS (5 fwd + 5 bwd + 4 matmul + 4 grad_accum byte-eq + 3 mechanism probes + IPCP + A2+B fwd+bwd byte-id + F-RFC048-PAIR-DETECT = 24 artifacts)"
-    echo "🎯 Phase 4-B ≥3× RFC 047 §137 TARGET REACHED — 3.23× wall (cool projection); Phase 4-C-1a scaffold LANDED"
+    echo "PASS  All Phase 4-B+4-C-1a+4-C-2c verification artifacts PASS (5 fwd + 5 bwd + 4 matmul + 4 grad_accum byte-eq + 3 mechanism probes + IPCP + A2+B fwd+bwd byte-id + F-RFC048-PAIR-DETECT + F-RFC048-FUSED-FWD-BWD-EQ = 25 artifacts)"
+    echo "🎯 Phase 4-B ≥3× RFC 047 §137 TARGET REACHED — 3.23× wall (cool projection); Phase 4-C-2c iter 1-4 LANDED (4/7 PURE-LOCAL extractions, 2048/3104 dbl blocked on matmul API)"
     exit 0
 else
     echo "FAIL  $fail_count failures — review output above"
