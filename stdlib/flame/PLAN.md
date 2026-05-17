@@ -963,3 +963,36 @@ attention/SwiGLU/residual) 를 변경 → block-level cheap byte-eq oracle
 config vs CPU reference) sub-agent → 그 후 fwd dev_view chain
 conversion. (design-first 회피: instrument 먼저, 그 보호 하 변경 —
 캠페인 검증된 방법론.)
+
+### 2026-05-18 — ⭐ block oracle 첫 실전 성과: pre-conversion _gpu RMSNorm eps 버그 localize
+
+**block-fwd GPU oracle (instance 36959608, A100_PCIE, oracle_rc=1,
+wall 5s)**: **FAIL** `config T=16 d=384 nh=6 nkv=2 h=512 · per-field
+max|Δ|: oXout=0.0 oHstate=0.0 oRin=1.704e-01 · FAIL
+F-PHASE4D9-BLOCK-FWD-ORACLE`. instrument 가 cherry-pick 으로 통합된
+**현재 (pre-conversion) `flame_block_generic_fwd_primitive_gpu`** 를
+검증 → RMSNorm 출력 oRin 에서 byte-eq 위반 localize.
+
+**근본 원인 (g3 코드 검증 확정)**: `flame_phase4d7_block_fwd_
+primitive.c:456-457` — `flame_g7_rmsnorm_resident` 가 forge
+`hexa_farr_rmsnorm_rows_gpu` 4th arg(eps) 에 `hexa_int(0)` 전달 →
+GPU x̂ = x/√(mean(x²)+**0**). 그러나 같은 함수 L445 `const double
+eps=1e-6`, CPU fallback L467 + r_inv 재계산 L487 모두
+`flame_g7_dt_sqrt(ms + eps)` eps=**1e-6**. ∴ ① GPU vs CPU reference
+발산 (row mean(x²) 작을 때 1/√ms vs 1/√(ms+1e-6) 폭증, max|Δ|=0.17)
+② GPU 내부 비정합 (r_inv eps=1e-6 / x̂ eps=0). RMSNorm 이 전
+downstream 을 먹이고 eps=0 은 RMS≈0 행 폭주/NaN → **fire #13/#14 의
+-nan·gn2-drift + 15 fire d768 step-0 의 강력한 근본원인 후보**.
+
+**의의**: block oracle 가 설계 목적 그대로 — d768 gn2 통합수치(15
+fire 동안 localize 실패)가 못 잡던 pre-conversion _gpu byte-eq
+버그를 **특정 필드 + 근본원인까지 $0.20/5s 에 localize**. Tier: WIN
+(instrument 첫 실전 catch + 장기 미스터리 근본원인 규명).
+
+**조치**: in-flight fwd dev_view chain conversion sub-agent
+(`flame_g7_rmsnorm_resident` 가 그 변환 대상 helper)에 진단 relay
+(SendMessage) — eps 를 실제 1e-6 float 로 전달(hexa_int(0) ❌),
+conversion 의 byte-eq 목표에 oRin 포함. 양 RMSNorm(step1 G1 / step7
+G2) 동일 helper 경유 → 단일 fix 가 둘 다 커버. caveat: eps fix 후
+forge libm sqrt vs _cpu flame_g7_dt_sqrt 잔차 ~1e-15 ≪ TOL_BLOCK
+1e-8 (24-iter Newton ≈ exact) — 허용.
