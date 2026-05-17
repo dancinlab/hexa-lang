@@ -1390,8 +1390,34 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
                 return buf
             }
-            // bitwise / unknown — rare in compiler self-source. Approximate
-            // via hexa_add (correctness follow-up if it surfaces at run).
+            // Bitwise int ops & | ^ << >> — codegen_c2-authoritative:
+            //   hexa_int(HX_INT(l) <op> HX_INT(r))   (codegen_c2.hexa:3412)
+            // HexaVal pair = (lo=tag, hi=payload); for TAG_INT the int
+            // value lives in hi. Operate directly on the payload regs:
+            // a->x0:x1, b->x2:x3 => result payload = x1 <op> x3, tag=0.
+            // #29 fix: the prior catch-all routed & | ^ through
+            // hexa_add_slow ("approx"), so `h & MASK` ran as `h + MASK`
+            // — _path_hash produced unmasked djb2 values, making the
+            // self-built (ap2) compiler emit garbage enum __tag immediates.
+            if _is_bit_and(s.op) || _is_bit_or(s.op) || _is_bit_xor(s.op)
+               || s.op == "<<" || s.op == ">>" || s.op == "shl" || s.op == "shr" {
+                let mut bw = "and"
+                if _is_bit_or(s.op)  { bw = "orr" }
+                if _is_bit_xor(s.op) { bw = "eor" }
+                if s.op == "<<" || s.op == "shl" { bw = "lsl" }
+                if s.op == ">>" || s.op == "shr" { bw = "asr" }
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+                buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
+                buf.push(_arm64_instr3(bw, _arm64_op_reg("x1"),
+                                 _arm64_op_reg("x1"), _arm64_op_reg("x3"),
+                                 "bitwise " + s.op + ": payload"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "bitwise: TAG_INT"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                return buf
+            }
+            // unknown binop — rare; approximate via hexa_add (follow-up
+            // if it surfaces at run).
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_add_slow"),
