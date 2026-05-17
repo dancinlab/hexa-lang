@@ -27,7 +27,10 @@
 
 import re, sys
 
-p = "/tmp/flat4.c"
+# Path is the legacy `/tmp/flat4.c` contract, but accept an explicit
+# argv[1] so concurrent builds (tool/build_aprime.sh) can pass a
+# private per-build path instead of colliding on the shared /tmp file.
+p = sys.argv[1] if len(sys.argv) > 1 else "/tmp/flat4.c"
 src = open(p).read().split("\n")
 
 # (2) collect every enum-constant macro for define-before-use hoisting.
