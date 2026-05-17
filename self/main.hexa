@@ -1563,6 +1563,34 @@ fn resolve_interp() {
     return ""
 }
 
+// interp-retirement R7 gate #4: prefer a COMPILED module_loader binary so the
+// `hexa build` flatten step runs interp-free. Probes (in order) $HEXA_MODULE_LOADER
+// env override, <install>/build/hexa_module_loader, ./build/hexa_module_loader,
+// $HEXA_LANG/build/hexa_module_loader. Returns "" when no compiled binary exists
+// (caller then falls back to resolve_module_loader() + interp). Built via
+// tool/build_hexa_cli.sh.
+fn resolve_module_loader_compiled() {
+    let env_ml = exec("printf '%s' \"$HEXA_MODULE_LOADER\"")
+    if len(env_ml) > 0 {
+        let env_chk = exec("test -x '" + env_ml + "' && printf yes || printf no")
+        if env_chk == "yes" { return env_ml }
+    }
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 {
+        let inst_ml = inst + "/build/hexa_module_loader"
+        let inst_chk = exec("test -x '" + inst_ml + "' && printf yes || printf no")
+        if inst_chk == "yes" { return inst_ml }
+    }
+    let cwd_chk = exec("test -x './build/hexa_module_loader' && printf yes || printf no")
+    if cwd_chk == "yes" { return "./build/hexa_module_loader" }
+    let home_ml = exec("printf '%s' \"$HEXA_LANG/build/hexa_module_loader\"")
+    if len(home_ml) > 0 {
+        let home_chk = exec("test -x '" + home_ml + "' && printf yes || printf no")
+        if home_chk == "yes" { return home_ml }
+    }
+    return ""
+}
+
 fn resolve_module_loader() {
     let inst = install_dir_from_argv0()
     if len(inst) > 0 {
@@ -1763,13 +1791,20 @@ fn cmd_build(src, out, c_only, target) {
     let __has_use_dir = __src_probe.contains("\nuse \"") || __src_probe.starts_with("use \"")
     let __has_imp_dir = __src_probe.contains("\nimport \"") || __src_probe.starts_with("import \"")
     if __has_use_dir || __has_imp_dir {
-        let __interp = resolve_interp()
-        let __ml = resolve_module_loader()
-        if len(__interp) > 0 && len(__ml) > 0 {
+        // R7 gate #4: prefer the COMPILED module_loader binary (interp-free
+        // flatten). Fall back to interp + module_loader.hexa source only when
+        // no compiled binary is installed.
+        let __ml_compiled = resolve_module_loader_compiled()
+        let __interp = if len(__ml_compiled) > 0 { "" } else { resolve_interp() }
+        let __ml = if len(__ml_compiled) > 0 { __ml_compiled } else { resolve_module_loader() }
+        let __ml_ok = len(__ml_compiled) > 0 || (len(__interp) > 0 && len(__ml) > 0)
+        if __ml_ok {
             let __expanded = runtime_tmpname("hexa_build_expanded") + ".hexa"
             // orpheus O-002 / F-013: pass install dir to module_loader (see
             // module_loader_env_prefix) so stdlib/* resolves env-free.
-            let __preproc = module_loader_env_prefix() + "'" + __interp + "' '" + __ml + "' '" + src + "' '" + __expanded + "' 2>&1"
+            // compiled path: `<ml_bin> <src> <out>`; interp path: `<interp> <ml.hexa> <src> <out>`.
+            let __ml_invoke = if len(__ml_compiled) > 0 { "'" + __ml_compiled + "'" } else { "'" + __interp + "' '" + __ml + "'" }
+            let __preproc = module_loader_env_prefix() + __ml_invoke + " '" + src + "' '" + __expanded + "' 2>&1"
             println("  [flat] module_loader → " + __expanded)
             let __pair = exec_with_status(__preproc)
             let __pout = __pair[0]

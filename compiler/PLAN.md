@@ -42,6 +42,18 @@
 
 (append-only)
 
+### 2026-05-17 — R7 gate #2 + #4: compiled `hexa` CLI driver LANDED (`24cf3e01`, subagent-cli-driver-selfhost)
+인터프리터 폐기 R7 게이트 ② (`hexa` CLI 드라이버 = `self/main.hexa` 가 interp 없이 compiled 바이너리 동작) + ④ (`self/module_loader.hexa` flatten interp-free) 종결.
+
+- **gate ④ closure 분석**: `self/main.hexa` 는 `import`/`use` 0개 — 완전 self-contained. compiled closure = `main.hexa` + `runtime.c` 뿐. `module_loader.hexa` 는 closure 에 없음 — 드라이버가 런타임에 별도 자식 프로세스로 호출 (`cmd_build` flatten 단계). → module_loader 자체 compiled 바이너리 필요 (gate ④ 는 별도 산출물로 처리).
+- **산출물**: `build/hexa_cli_driver` (compiled self/main.hexa, 542 KB) · `build/hexa_module_loader` (compiled self/module_loader.hexa, 380 KB). 둘 다 `hexa_v2 → C → clang` (runtime.c 2nd-TU 단일링크).
+- **드라이버 wiring**: `resolve_module_loader_compiled()` 신규 — `cmd_build` flatten 단계가 compiled module_loader 우선 탐지, 있으면 interp-free 직접 호출, 없으면 interp+소스 fallback (default 안전).
+- **검증**: compiled 드라이버 `build`/`parse`/`--version`/`--help` 가 interp-driver 와 byte-identical. `use`-bearing 파일 build 시 compiled module_loader 가 interp-free flatten.
+- **canonical recipe**: `tool/build_hexa_cli.sh` (5-stage, build_interp.hexa 구조 미러).
+- **runtime.h** +3 additive forward-decl (`hexa_array_truncate`, `rt_str_trim_start`, `rt_str_trim_end`).
+- **남은 R7**: `run` 서브커맨드는 여전히 별도 interp 바이너리 위임 (= 인터프리터 본체, 별도 retire 트랙). 드라이버 자체는 interp-free 달성.
+- **배포 후속**: `cp build/hexa_cli_driver ~/.hx/bin/hexa.real` + `build/hexa_module_loader` 자동 발견 시 `~/.hx/bin/hexa` 가 build/parse/cc/dispatch 에서 interp-free.
+
 ### 2026-05-17 — 60-smoke aprime_cc-direct 재측정 (cycle-end) — 30/60 MATCH
 cycle-activated aprime_cc (`tool/build_aprime.sh`, 2,050,384 B) 로 60-smoke vs interp 재측정.
 
