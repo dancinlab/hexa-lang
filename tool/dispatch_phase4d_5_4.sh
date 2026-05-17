@@ -5,9 +5,12 @@
 # Step 1 (commit eeb65fc7) wired 11 _gpu dispatchers in self/runtime.c
 # to verified Phase 4-D-5-3 CUDA kernel bodies (11/11 byte-eq PASS).
 # This script:
-#   1. ships the pre-built Phase 4-D-4 trainer .c artifact
-#      (state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2.c,
-#      163KB, identical to what Phase 4-D-4 fired CPU-only)
+#   1. ships the Phase 4-D-5-4 step2b Layer-2 trainer .c artifact
+#      (state/flame_phase4d_5_4_2026_05_17/flame_d768_12L_corpus_test_a2_layer2.c)
+#      — Path B surgical patch: stale Phase 4-D-4 trainer's matmul primitive
+#      block swapped for tool/flame_phase4b3_matmul_primitives.c Layer 2
+#      (dim-aware flame_proj_matmul_dispatch + flame_proj_gpu_matmul cuBLAS
+#      route under #ifdef HEXA_CUDA). See LAYER2_TRAINER_REGEN_NOTES.md.
 #   2. ships self/runtime.c + self/cuda/runtime_cuda.c
 #   3. builds with -DHEXA_CUDA + -lcublas -lcudart on A100/H100/H200 pod
 #   4. runs the trainer with nvidia-smi monitor; captures wall + GPU util
@@ -45,11 +48,16 @@
 set -uo pipefail
 
 PHASE_ID="flame_phase4d_5_4_2026_05_17"
-REPO_ROOT="/Users/ghost/core/hexa-lang/.claude/worktrees/agent-af7b622570209a02f"
+# REPO_ROOT resolves to the repo root from this script's location (tool/),
+# so the script is worktree-portable (previously hard-coded to a stale worktree).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCAL_DIR="${REPO_ROOT}/state/${PHASE_ID}"
 
-# Pre-built artifacts from Phase 4-D-4 (reproducible — same .c file)
-TRAINER_C="${REPO_ROOT}/state/flame_phase4d_20260517_102511/flame_d768_12L_corpus_test_a2.c"
+# Phase 4-D-5-4 step2b Layer-2 trainer .c (Path B surgical patch — matmul
+# primitive block swapped for Layer 2 GPU-dispatch primitives). The trainer
+# now contains flame_proj_matmul_dispatch; on -DHEXA_CUDA builds large
+# matmul shapes (M·K > 8192) route to cuBLAS Dgemm via hexa_farr_matmul_gpu.
+TRAINER_C="${REPO_ROOT}/state/flame_phase4d_5_4_2026_05_17/flame_d768_12L_corpus_test_a2_layer2.c"
 RUNTIME_C="${REPO_ROOT}/self/runtime.c"
 RUNTIME_CUDA_C="${REPO_ROOT}/self/cuda/runtime_cuda.c"
 # Trainer hardcodes /Users/ghost/core/anima/training/corpus_consciousness_v1.jsonl —
