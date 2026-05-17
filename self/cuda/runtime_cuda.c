@@ -298,3 +298,377 @@ int _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
     ce->dirty_dev  = 0;
     return 0;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * RFC 041 Phase B — elementwise CUDA kernels (5 ops)
+ *
+ *   _hx_cuda_farr_add_gpu        C[i] = A[i] + B[i]
+ *   _hx_cuda_farr_scale_gpu      Y[i] = α · X[i]
+ *   _hx_cuda_farr_mul_gpu        C[i] = A[i] · B[i]   (Hadamard)
+ *   _hx_cuda_farr_silu_gpu       Y[i] = X[i] · σ(X[i])
+ *   _hx_cuda_farr_silu_grad_gpu  Y[i] = σ(X[i]) · (1 + X[i] · (1 − σ(X[i])))
+ *
+ * Math contract — bit-identical to the CPU oracles
+ * (`self/runtime.c` `_hx_farr_{add,scale,mul,silu,silu_grad}_cpu`):
+ *   - add / scale / mul: no cross-thread reduction → falsifier demands
+ *     `|Δ| = 0` exact vs the CPU loop (F-RFC041-ADD-EXACT,
+ *     -SCALE-EXACT, -MUL-EXACT).
+ *   - silu / silu_grad: per-element transcendental (`exp` in fp64);
+ *     tolerance is the f64 `exp` ULP — `TOL_ELEM` per RFC 041
+ *     §"Falsifier battery" (F-RFC041-SILU-EQ, -SILU-GRAD-EQ).
+ *
+ * ABI — each host wrapper matches the existing `extern int _hx_cuda_*`
+ * forward-decl in `self/runtime.c` (lines 10950-10953, 11188-11192).
+ * Output farr_id is caller-allocated (host-side `hexa_farr_zeros`); this
+ * TU H2D's inputs, ensures the device output slot is sized, launches the
+ * kernel on the default stream, D2H's the result back, and marks the
+ * output entry MIRRORED/clean — mirrors the Phase A `_hx_cuda_farr_matmul_gpu`
+ * residence protocol.
+ *
+ * Determinism — 1-D grid-stride elementwise; no atomics, no cross-thread
+ * reduction; the output for thread `i` is a pure function of input[i]
+ * (and α for scale). Hence run-to-run byte-identical
+ * (F-RFC041-DETERMINISM extends trivially here).
+ *
+ * Honest caveats:
+ *   - `exp()` device-side resolves to the CUDA math device library
+ *     fp64 `exp` (matches host libm fp64 `exp` to within 1 ULP per the
+ *     CUDA math API contract; the silu falsifier framing accounts for
+ *     this — `TOL_ELEM`, not bit-exact).
+ *   - No tensor-core / mixed-precision path here; this is the strict
+ *     fp64 elementwise reference. A bf16 / fp16 variant is RFC 044+/049.
+ *   - Host wrappers compile only under `#ifdef HEXA_CUDA` (Mac no-CUDA
+ *     build is unchanged — the wrapper symbols are simply absent;
+ *     `self/runtime.c`'s `hexa_farr_*_gpu` dispatcher already returns
+ *     -1 from the CUDA branch when the symbol isn't wired by the
+ *     caller path, preserving the F-RFC041-NO-CUDA-FALLBACK contract).
+ *
+ * Kernel launch geometry — block=256, grid=min((n+255)/256, 65535).
+ * Grid-stride loop covers any n (no upper bound from grid cap).
+ *
+ * The `__global__` kernels and `cudaLaunchKernel`-style `<<<...>>>`
+ * launch syntax require the TU to be compiled with nvcc (CUDA C++) or
+ * with clang's `-x cuda --cuda-path=...` mode. The build-system rename
+ * `runtime_cuda.c` → `runtime_cuda.cu` (or nvcc `-x cu`) is the
+ * concern of Phase 4-D-5-3 (CUDA-host link verify). This TU stays
+ * `*.c` for the no-CUDA path — every existing build remains
+ * byte-identical when HEXA_CUDA is undefined (the entire Phase B
+ * elementwise block below is inside `#ifdef HEXA_CUDA`).
+ * ══════════════════════════════════════════════════════════════════ */
+
+#ifdef HEXA_CUDA
+
+/* Default 1-D launch geometry. 256 threads/block balances occupancy on
+ * SM 7.0+ (V100/A100/H100) without wasting SM resources on the simple
+ * elementwise body; grid is capped at 65535 blocks (well under any
+ * device's gridDim.x max — 2^31-1 on SM 3.0+, but 65535 fits the
+ * grid-stride loop naturally and avoids over-subscription for small n).
+ */
+#define _HX_CUDA_ELEM_BLOCK 256
+#define _HX_CUDA_ELEM_MAX_GRID 65535
+
+static int _hx_cuda_elem_grid(int64_t n) {
+    int64_t blocks = (n + (_HX_CUDA_ELEM_BLOCK - 1)) / _HX_CUDA_ELEM_BLOCK;
+    if (blocks < 1) blocks = 1;
+    if (blocks > _HX_CUDA_ELEM_MAX_GRID) blocks = _HX_CUDA_ELEM_MAX_GRID;
+    return (int)blocks;
+}
+
+/* Ensure the device-side slot for `id` has an allocated buffer of `len`
+ * doubles. Re-allocs if size changed. Returns 0 ok / -1 err. */
+static int _ensure_dev_buf(int64_t id, int64_t len) {
+    if (id < 0 || len <= 0) return -1;
+    if (_ensure_slot_cap(id) != 0) return -1;
+    _CudaFarrSlot* s = &g_slots[id];
+    if (!s->d_buf || s->len != len) {
+        if (s->d_buf) cudaFree(s->d_buf);
+        cudaError_t er = cudaMalloc((void**)&s->d_buf,
+                                    (size_t)len * sizeof(double));
+        if (er != cudaSuccess) {
+            fprintf(stderr, "[cuda] cudaMalloc(%lld doubles) failed: %s\n",
+                    (long long)len, cudaGetErrorString(er));
+            s->d_buf = NULL; s->len = 0;
+            return -1;
+        }
+        s->len = len;
+    }
+    return 0;
+}
+
+/* D2H copy `len` doubles from device slot `id` to its host buf, then
+ * mark MIRRORED/clean. Returns 0 ok / -1 err. */
+static int _d2h_out(int64_t id, int64_t len) {
+    if (id < 0 || id >= _hx_farr_count) return -1;
+    if (id >= g_slot_cap)               return -1;
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    _CudaFarrSlot* s = &g_slots[id];
+    if (!e->buf || !s->d_buf || e->len < len || s->len < len) return -1;
+    cudaError_t er = cudaMemcpy(e->buf, s->d_buf,
+                                (size_t)len * sizeof(double),
+                                cudaMemcpyDeviceToHost);
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] cudaMemcpy elem D2H failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    e->d_buf      = (void*)s->d_buf;
+    e->loc        = FARR_MIRRORED;
+    e->dirty_host = 0;
+    e->dirty_dev  = 0;
+    return 0;
+}
+
+/* ── __global__ kernels (1-D grid-stride, fp64) ────────────────────── */
+
+__global__ void _hx_cuda_kern_add(const double* __restrict__ A,
+                                  const double* __restrict__ B,
+                                  double* __restrict__ C,
+                                  int64_t n) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < n; i += stride) {
+        C[i] = A[i] + B[i];
+    }
+}
+
+__global__ void _hx_cuda_kern_scale(const double* __restrict__ X,
+                                    double alpha,
+                                    double* __restrict__ Y,
+                                    int64_t n) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < n; i += stride) {
+        Y[i] = alpha * X[i];
+    }
+}
+
+__global__ void _hx_cuda_kern_mul(const double* __restrict__ A,
+                                  const double* __restrict__ B,
+                                  double* __restrict__ C,
+                                  int64_t n) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < n; i += stride) {
+        C[i] = A[i] * B[i];
+    }
+}
+
+/* σ(x) = 1 / (1 + exp(-x)), fp64 device math. Matches the CPU
+ * `_hx_sigmoid_d` (host libm `exp`) to within the CUDA fp64 `exp` ULP. */
+__device__ __forceinline__ double _hx_cuda_sigmoid_d(double x) {
+    return 1.0 / (1.0 + exp(-x));
+}
+
+__global__ void _hx_cuda_kern_silu(const double* __restrict__ X,
+                                   double* __restrict__ Y,
+                                   int64_t n) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < n; i += stride) {
+        double xi = X[i];
+        Y[i] = xi * _hx_cuda_sigmoid_d(xi);
+    }
+}
+
+/* silu'(x) = σ(x) · (1 + x · (1 − σ(x))). Mirrors CPU `_hx_farr_silu_grad_cpu`
+ * (`self/runtime.c` §11314-11332) — same algebraic form, same single
+ * `exp` call per element. */
+__global__ void _hx_cuda_kern_silu_grad(const double* __restrict__ X,
+                                        double* __restrict__ Y,
+                                        int64_t n) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < n; i += stride) {
+        double xi = X[i];
+        double s  = _hx_cuda_sigmoid_d(xi);
+        Y[i] = s * (1.0 + xi * (1.0 - s));
+    }
+}
+
+/* ── Host wrappers (extern surface — match runtime.c forward-decls) ──
+ * Each: validate → H2D inputs → ensure output device buf sized → launch
+ * → cudaGetLastError → D2H output → mark MIRRORED/clean. Returns 0 ok /
+ * -1 err with a one-line stderr message (no silent fallback). */
+
+int _hx_cuda_farr_add_gpu(int64_t a_id, int64_t b_id,
+                          int64_t n, int64_t out_id) {
+    if (a_id < 0 || b_id < 0 || out_id < 0) {
+        fprintf(stderr, "[cuda] add: bad ids %lld %lld %lld\n",
+                (long long)a_id, (long long)b_id, (long long)out_id);
+        return -1;
+    }
+    if (n <= 0) {
+        fprintf(stderr, "[cuda] add: bad n=%lld\n", (long long)n);
+        return -1;
+    }
+    if (a_id >= _hx_farr_count || b_id >= _hx_farr_count ||
+        out_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] add: id out of range\n");
+        return -1;
+    }
+    if (_hx_farr_table[a_id].len < n || _hx_farr_table[b_id].len < n ||
+        _hx_farr_table[out_id].len < n) {
+        fprintf(stderr, "[cuda] add: host len < n\n");
+        return -1;
+    }
+    if (_h2d(a_id) != 0) return -1;
+    if (_h2d(b_id) != 0) return -1;
+    if (_ensure_dev_buf(out_id, n) != 0) return -1;
+    double* A = g_slots[a_id].d_buf;
+    double* B = g_slots[b_id].d_buf;
+    double* C = g_slots[out_id].d_buf;
+    int grid = _hx_cuda_elem_grid(n);
+    _hx_cuda_kern_add<<<grid, _HX_CUDA_ELEM_BLOCK>>>(A, B, C, n);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] add launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(out_id, n) != 0) return -1;
+    return 0;
+}
+
+int _hx_cuda_farr_scale_gpu(int64_t x_id, double alpha,
+                            int64_t n, int64_t out_id) {
+    if (x_id < 0 || out_id < 0) {
+        fprintf(stderr, "[cuda] scale: bad ids %lld %lld\n",
+                (long long)x_id, (long long)out_id);
+        return -1;
+    }
+    if (n <= 0) {
+        fprintf(stderr, "[cuda] scale: bad n=%lld\n", (long long)n);
+        return -1;
+    }
+    if (x_id >= _hx_farr_count || out_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] scale: id out of range\n");
+        return -1;
+    }
+    if (_hx_farr_table[x_id].len < n || _hx_farr_table[out_id].len < n) {
+        fprintf(stderr, "[cuda] scale: host len < n\n");
+        return -1;
+    }
+    if (_h2d(x_id) != 0) return -1;
+    if (_ensure_dev_buf(out_id, n) != 0) return -1;
+    double* X = g_slots[x_id].d_buf;
+    double* Y = g_slots[out_id].d_buf;
+    int grid = _hx_cuda_elem_grid(n);
+    _hx_cuda_kern_scale<<<grid, _HX_CUDA_ELEM_BLOCK>>>(X, alpha, Y, n);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] scale launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(out_id, n) != 0) return -1;
+    return 0;
+}
+
+int _hx_cuda_farr_mul_gpu(int64_t a_id, int64_t b_id,
+                          int64_t n, int64_t out_id) {
+    if (a_id < 0 || b_id < 0 || out_id < 0) {
+        fprintf(stderr, "[cuda] mul: bad ids %lld %lld %lld\n",
+                (long long)a_id, (long long)b_id, (long long)out_id);
+        return -1;
+    }
+    if (n <= 0) {
+        fprintf(stderr, "[cuda] mul: bad n=%lld\n", (long long)n);
+        return -1;
+    }
+    if (a_id >= _hx_farr_count || b_id >= _hx_farr_count ||
+        out_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] mul: id out of range\n");
+        return -1;
+    }
+    if (_hx_farr_table[a_id].len < n || _hx_farr_table[b_id].len < n ||
+        _hx_farr_table[out_id].len < n) {
+        fprintf(stderr, "[cuda] mul: host len < n\n");
+        return -1;
+    }
+    if (_h2d(a_id) != 0) return -1;
+    if (_h2d(b_id) != 0) return -1;
+    if (_ensure_dev_buf(out_id, n) != 0) return -1;
+    double* A = g_slots[a_id].d_buf;
+    double* B = g_slots[b_id].d_buf;
+    double* C = g_slots[out_id].d_buf;
+    int grid = _hx_cuda_elem_grid(n);
+    _hx_cuda_kern_mul<<<grid, _HX_CUDA_ELEM_BLOCK>>>(A, B, C, n);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] mul launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(out_id, n) != 0) return -1;
+    return 0;
+}
+
+int _hx_cuda_farr_silu_gpu(int64_t x_id, int64_t n, int64_t out_id) {
+    if (x_id < 0 || out_id < 0) {
+        fprintf(stderr, "[cuda] silu: bad ids %lld %lld\n",
+                (long long)x_id, (long long)out_id);
+        return -1;
+    }
+    if (n <= 0) {
+        fprintf(stderr, "[cuda] silu: bad n=%lld\n", (long long)n);
+        return -1;
+    }
+    if (x_id >= _hx_farr_count || out_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] silu: id out of range\n");
+        return -1;
+    }
+    if (_hx_farr_table[x_id].len < n || _hx_farr_table[out_id].len < n) {
+        fprintf(stderr, "[cuda] silu: host len < n\n");
+        return -1;
+    }
+    if (_h2d(x_id) != 0) return -1;
+    if (_ensure_dev_buf(out_id, n) != 0) return -1;
+    double* X = g_slots[x_id].d_buf;
+    double* Y = g_slots[out_id].d_buf;
+    int grid = _hx_cuda_elem_grid(n);
+    _hx_cuda_kern_silu<<<grid, _HX_CUDA_ELEM_BLOCK>>>(X, Y, n);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] silu launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(out_id, n) != 0) return -1;
+    return 0;
+}
+
+int _hx_cuda_farr_silu_grad_gpu(int64_t x_id, int64_t n, int64_t out_id) {
+    if (x_id < 0 || out_id < 0) {
+        fprintf(stderr, "[cuda] silu_grad: bad ids %lld %lld\n",
+                (long long)x_id, (long long)out_id);
+        return -1;
+    }
+    if (n <= 0) {
+        fprintf(stderr, "[cuda] silu_grad: bad n=%lld\n", (long long)n);
+        return -1;
+    }
+    if (x_id >= _hx_farr_count || out_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] silu_grad: id out of range\n");
+        return -1;
+    }
+    if (_hx_farr_table[x_id].len < n || _hx_farr_table[out_id].len < n) {
+        fprintf(stderr, "[cuda] silu_grad: host len < n\n");
+        return -1;
+    }
+    if (_h2d(x_id) != 0) return -1;
+    if (_ensure_dev_buf(out_id, n) != 0) return -1;
+    double* X = g_slots[x_id].d_buf;
+    double* Y = g_slots[out_id].d_buf;
+    int grid = _hx_cuda_elem_grid(n);
+    _hx_cuda_kern_silu_grad<<<grid, _HX_CUDA_ELEM_BLOCK>>>(X, Y, n);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] silu_grad launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(out_id, n) != 0) return -1;
+    return 0;
+}
+
+#endif /* HEXA_CUDA */
