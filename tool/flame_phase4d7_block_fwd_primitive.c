@@ -490,12 +490,38 @@ static void flame_block_generic_fwd_primitive_gpu(
     const int oR1inv = 8*T*d + 2*T*kvd + nh*T*T + 3*T*h;
     const int oR2inv = 8*T*d + 2*T*kvd + nh*T*T + 3*T*h + T;
 
-    // ── PART 1: persistent device residency — one H2D per block farr ──
-    hexa_farr_to_device(hexa_int(X_id));
-    hexa_farr_to_device(hexa_int(Bp_id));
-    hexa_farr_to_device(hexa_int(Bc_id));
-    hexa_farr_to_device(hexa_int(cos_id));
-    hexa_farr_to_device(hexa_int(sin_id));
+    // ── PART 1: residence-state contract (FIRE7 d2h-state-mismatch fix) ──
+    // The original design called hexa_farr_to_device on the long-lived
+    // block farrs (X/Bp/Bc/cos/sin) at entry and hexa_farr_to_host(Bc) at
+    // exit, asserting a "persistent device residency" model. But the actual
+    // dataflow never used it: every GPU sub-op below (the forge `*_gpu`
+    // kernels and the cuBLAS matmul/proj primitives) is SELF-CONTAINED — it
+    // builds a FRESH scratch farr, does its OWN _h2d on that scratch input,
+    // computes, and _d2h_out's into the scratch's host buffer; the primitive
+    // then copies the result HOST-SIDE into Bc.buf. So Bc/X/... are only
+    // ever read/written through their HOST buffers here.
+    //
+    // The block-level to_device/to_host calls were therefore not just inert
+    // for the compute — they were ACTIVELY HARMFUL on -DHEXA_CUDA:
+    //   • the scratch farrs cycle through hexa_farr_zeros/_free, and (under
+    //     -DHEXA_CUDA) hexa_farr_free → _hx_cuda_farr_device_free zeros that
+    //     id's g_slots entry; hexa_farr_zeros then RE-USES freed ids from the
+    //     freelist. Across training steps Bc/dX_out/Bg ids are themselves
+    //     freed+reallocated, so the entry-time _h2d device snapshot for Bc
+    //     goes stale while the primitive keeps mutating Bc.buf host-side.
+    //   • the exit hexa_farr_to_host(Bc) then either (a) copies that STALE
+    //     entry-time device buffer back OVER the freshly-computed host Bc
+    //     (silent corruption), or (b) hits `!s->d_buf || s->len != e->len`
+    //     and prints `[cuda] d2h: state mismatch id=…` (FIRE7 ids 11/12/16
+    //     = the long-lived Bc / dX_out / Bg handles whose g_slots slot was
+    //     never (re)synced to match their freelist-reused host entry).
+    // The forge substrate (runtime.c / runtime_cuda.c) is verified-correct;
+    // the bug is purely this primitive's residence call discipline. The
+    // correct contract for host-accumulated farrs is: DO NOT assert a
+    // device-resident copy of them at the block boundary — each sub-op
+    // owns its own scratch residency, and Bc/X/… stay authoritative on the
+    // host. (No-CUDA Mac build: these calls were inert no-ops anyway, and
+    // d=32·3L takes the _cpu path which never had them — byte-eq intact.)
 
     // ─── 1. RMSNorm(X, g1) → rin / rm1xn / r1inv  (forge kernel) ──
     flame_g7_rmsnorm_resident(X_id, 0, Bp_id, G1,
@@ -843,8 +869,15 @@ static void flame_block_generic_fwd_primitive_gpu(
     }
     hexa_farr_free(sw_o_v);
 
-    // ── PART 1 close: bring the resident Bc result back to host ONCE ──
-    hexa_farr_to_host(hexa_int(Bc_id));
+    // ── PART 1 close (FIRE7 fix): NO block-level to_host(Bc) ──
+    // Bc was accumulated entirely host-side (every forge/cuBLAS sub-op
+    // _d2h'd its own scratch output and the primitive copied it into
+    // Bc.buf). Bc's authoritative copy IS the host buffer. Calling
+    // hexa_farr_to_host(Bc) here would D2H the STALE entry-time device
+    // snapshot back over the correct host result (or fail the d2h state
+    // check → the `[cuda] d2h: state mismatch` of FIRE7). The forge
+    // substrate is verified; the residence contract for host-accumulated
+    // farrs is "host stays authoritative — no block-boundary D2H".
 }
 
 // ── Dimension-gated dispatch entry point (concat / non-standalone) ──────
