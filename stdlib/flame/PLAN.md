@@ -1117,3 +1117,26 @@ closure 아님**. closure = d768·12L 1-step wall ≤437.9s 측정.
 (oracle-검증 fwd anchor 보유, blind 아님). 다음 = d768 fire #16
 (첫 step 완주 가능성 + wall baseline 측정 = 근본원인 fix end-to-end
 확인) → bwd chain.
+
+### 2026-05-18 — bwd primitive 동형 pin-clobber 가설 (d768 #16 측정 대기)
+
+d768 fire #16 (instance 36962808, fix 된 primitive splice) in-flight =
+fwd-fix end-to-end 검증 (첫 step 완주 + wall baseline). 병행 non-
+overlapping 분석으로 **bwd 동형 버그 코드 입증**: `flame_phase4d7_
+block_bwd_primitive.c:534` = `hexa_farr_pin_device(hexa_int(Bc_id))`
+— fwd oRin clobber 와 **정확히 같은 §6.3 Bc-pin**. bwd 구조 = Bp
+pin(L533 read-only OK) + Bc pin(L534 ✗) + Bg raw-host grad accumulate
++ scatter `_d2h` → bwd gradient 캐시(Bg/dX_out)가 동일 stale-snapshot
+clobber 위험. ∴ fwd-fix 단독으론 d768 가 bwd 동형 버그로 여전히
+gn2-drift 가능.
+
+**판정 = d768 #16 측정**: ① 첫 step 완주+sane gn2 → fwd-fix
+end-to-end 충분 (bwd 영향 미미/OK) · ② gn2-drift/-nan 잔존 → bwd
+Bc-pin clobber(L534) 확정 = 다음 타깃. (experiment+measure: d768
+결과 전 bwd oracle 미착수 — design-first 회피.)
+
+다음 (방법론 = instrument-first): d768 #16 결과로 → block-level
+**bwd** GPU-path byte-eq oracle (fwd oracle 동형, _cpu vs _gpu @d=384,
+Bg/dX_out 비교) → bwd pin-clobber fix + bwd dev_view chain 그 보호 하.
+fwd+bwd 둘 다 device-chain+clobber-free 시 비로소 wall all-or-nothing
+이동 → F-RFC046-WALL ≤437.9s 측정 (= 100% closure).
