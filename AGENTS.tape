@@ -54,9 +54,9 @@
   flame = "★ stdlib/flame/ — hexa-native compiler-only PyTorch-equiv NN stdlib (Tensor + autograd + nn + optim + train_step). 언어=hexa 소스. SSOT: stdlib/flame/{README.md, PLAN.md, FLAME.tape}. 설계: RFC 043."
   forge = "★ self/forge/ — GPU compute substrate (device-farr + cuBLAS Dgemm + .cu kernels). 언어=C/CUDA runtime. SSOT: self/forge/{README.md, PLAN.md, FORGE.tape}. 코드 실거주: self/runtime.c GPU 부분 + self/cuda/ (label-only, 이동 0). 설계: RFC 040 + 041."
   relation = "flame:forge :: torch:ATen. flame 이 forge 를 compiled builtin (hexa_farr_*_gpu, hexa_cuda_*) 으로 호출. flame=hexa / forge=C/CUDA 레이어 분리는 디렉토리로 강제 (g_forge_substrate_role · g_flame_compiler_only)."
-  status = "DESIGN+SCAFFOLD 2026-05-16. flame Phase 1 in-flight (tensor_lib + autograd_lib). forge = NAMING (substrate 코드 이미 4× 검증 land, cuBLAS 51.24 TFLOPS FP64 76% H100 peak); 잔여 = RFC 041 TODO[cuda] -1 stubs → real .cu (Phase 2)."
-  rfc_chain = "RFC 034 (autograd ✅ landed) · 040 (device-farr + cuBLAS) · 041 (.cu kernels) · 042 (SUBSUMED by 043) · 043 (flame design SSOT)"
-  preservation = "캠페인 산출물 전수 보존: stdlib/flame/FLAME.tape §X (primary index, branch·SHA·path·RFC#) + self/forge/FORGE.tape §X (substrate-specific 보완). 복제 X — 참조만 (g3 drift-avoidance)."
+  status = "DESIGN+SCAFFOLD+PARADIGM 2026-05-17. flame Phase 1 LANDED (tensor_lib + autograd_lib 3/3 PASS compiled-native). forge Phase R 4 cost-bearing GPU fire (D/B/C/A, H100/H200 SXM vast.ai, $1.35 total) measurement-anchored: PARADIGM.md PUBLISH (dual-mechanism × regime-tiered: A dispatch-elimination 6× small/2.24× mid + B/C memory-fusion ceilings + D' within-run det FREE) + RFC 044 draft (14 falsifier · 5 Stage 1 PASS + 9 Stage 2 pre-reg). Stage 2 = A→B→C 순 user gate."
+  rfc_chain = "RFC 034 (autograd ✅ landed) · 040 (device-farr + cuBLAS ✅ landed) · 041 (.cu kernels → Phase 2.B substrate 흡수) · 042 (SUBSUMED by 043) · 043 (flame design SSOT) · 044 (forge regime-tiered substrate, Phase R anchored)"
+  preservation = "캠페인 산출물 전수 보존: stdlib/flame/FLAME.tape §X (primary index, branch·SHA·path·RFC#) + self/forge/FORGE.tape §X (substrate-specific 보완 + x_paradigm_ssot + x_phaseR_fires). 복제 X — 참조만 (g3 drift-avoidance). Phase R 산출 = state/forge_phaseR_{d,b,c,a}_2026_05_17/."
   cross_repo = "consumed by dancinlab/anima HEXAD (verified ConsciousDecoderV2 arch + .py interim track; cross-repo evidence anima 잔류, hexa-lang 은 참조만)"
   not_what = "둘 다 별도 repo 아님 (hexa-first · toolchain ABI lockstep). hexa-src→PTX GPU codegen 백엔드는 forge 스코프 밖 (미래 별도 RFC)."
   @> README.md

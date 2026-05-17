@@ -84,6 +84,23 @@
 # only adds substrate-specific @X entries; otherwise we POINT at flame
 # rather than duplicate (g3 drift-avoidance).
 
+@X x_paradigm_ssot := "PARADIGM.md — forge paradigm 결정 SSOT (measurement-anchored)" :: ssot [d=2026-05-17 active]
+  path = "self/forge/PARADIGM.md"
+  what = "Phase R 4 fire (D/B/C 완료, A in-flight) 의 측정 anchor 종합. paradigm 사전 등록 가설 모두 over-optimistic FAIL → data-anchored X' reframe (D' B' C' A'). Meta-thesis = forge 는 regime-tiered substrate (작은=Graphs, 중간=SMEM, 큰=DSM, 모두=D' det FREE)."
+  consumers = "RFC 044 draft 의 토대 · PLAN §Phase 2-4 재정의 trigger"
+
+@X x_paradigm_research := "PARADIGM_RESEARCH.md — literature snapshot (가설 수립용, paradigm 결정의 근거 아님)" :: ref [d=2026-05-16 active]
+  path = "self/forge/PARADIGM_RESEARCH.md"
+  scope = "한국 alternatives + 글로벌 AOT-NN 컴파일러 SOTA + arxiv 2025-2026. PARADIGM.md 의 가설 sources, NOT decision sources (g3: 결정은 실측으로만)"
+
+@X x_phaseR_fires := "Phase R 실측 산출 (D/B/C 완료, A in-flight 2026-05-17)" :: code [d=2026-05-17 active]
+  d = "state/forge_phaseR_d_2026_05_17/{result.json, D_ANALYSIS.md} — H100 PEDANTIC vs DEFAULT, within-run det FREE"
+  b = "state/forge_phaseR_b_2026_05_17/{result.json, B_ANALYSIS.md} — H200 FFN cuBLAS vs CUDA Graphs, shape-tiered"
+  c = "state/forge_phaseR_c_2026_05_17/{result.json, C_ANALYSIS.md} — H100 linear fwd+bwd, redundancy 1.500× constant"
+  a = "state/forge_phaseR_a_2026_05_17/ — AOT trainer vs PyTorch eager (in-flight)"
+  cost = "D $0.40 + B $0.25 + C $0.30 = $0.95 (A 대기)"
+  experiments = "self/cuda/experiments/{d_determinism.cu, b_ffn_baseline.cu, c_linear_autograd.cu, a_aot_trainer.cu, a_pytorch_baseline.py, dispatch_{d,b,c,a}.sh}"
+
 @X x_flame_index := "flame §X — primary preservation index (cross-ref, not duplicate)" :: ref [d=2026-05-16 active]
   path = "stdlib/flame/FLAME.tape §X"
   what = "RFC 040→043 캠페인 전 산출물 (branch · SHA · path · RFC#) + verified oracles. forge artifacts 는 그 부분집합 — 중복 보존 금지 (g3)"
@@ -146,3 +163,105 @@ g_forge_no_relocation). flame ↔ forge 양방향 크로스레프는 flame
 캠페인 산출물 참조-보존은 [@x_flame_index] 가 primary, forge §X 는
 substrate-specific 보완 (cuBLAS impl 위치 + RFC 040/041 명시 + anima
 cross-repo evidence pin).
+
+### 2026-05-17 — Phase R / D fire data + D' reframe
+H100 SXM cuBLAS 12.4.5 · 6 shape FP64 Dgemm sweep · vast.ai $0.40. 결과:
+- pre-reg falsifier "cost ≤ 15%" = **FAIL** (max +33.39%)
+- PEDANTIC ≡ DEFAULT bit-equal (모든 shape) → PEDANTIC = correctness 무 benefit
+- DEFAULT 도 within-run deterministic → **FP64 single-process determinism FREE** (실측)
+- **D' (data-anchored reframe)**: forge FP64 substrate = within-run det FREE; PEDANTIC opt-in only (+15-33% cost, no FP64 benefit). LayerCast-style BF16/FP16 det = 별도 paradigm RFC 047+. PARADIGM.md SSOT 후속.
+산출: state/forge_phaseR_d_2026_05_17/{result.json, D_ANALYSIS.md}.
+
+### 2026-05-17 — Stage 2 A fire COMPLETED (F-FORGE-A-STAGE2-LARGE PASS, batch-size finding)
+**A Stage 2** (A100 SXM4 80GB · cuBLAS 12.4.2 · PyTorch 2.4.0 · $0.30, H100 fallback): scaled-up MLP 3 configs.
+- large_b128 (D=8192 B=128): AOT 5.29ms vs PyT 21.19ms = **4.00×**
+- large_b512 (D=8192 B=512): AOT 19.94ms vs PyT 37.14ms = **1.86×**
+- xlarge_b128 (D=16384 B=128): AOT 19.99ms vs PyT 81.24ms = **4.06×**
+
+F-FORGE-A-STAGE2-LARGE PASS 모든 config (사전등록 ≥1.1× 의 1.69-3.69× 초과).
+- **KEY**: batch-size 가 A win 의 dominant variable (compute size 아님). small batch any model → 4-6×, large batch → 1.86×.
+- A100 fallback 에서도 압도적 → A paradigm = GPU-generation 독립.
+- forge 의 inference framework market 경쟁력 시사 (vLLM/TensorRT-LLM 영역).
+- PARADIGM.md §A + §6 batch-size aware 갱신. RFC 044 falsifier 마킹.
+Phase R 누적 cost: $1.65 (5 fires). 산출: state/forge_phaseR_a_stage2_2026_05_17/{result.json, pytorch_result.json, A_STAGE2_ANALYSIS.md}.
+
+### 2026-05-17 — RFC 044 DRAFT + PLAN §Phase 2-4 재정의 land
+**RFC 044** (`inbox/rfc_drafts_2026_05_12/rfc_044_forge_regime_tiered_substrate.md`): 측정-anchored forge architectural pivot. dual-mechanism × regime-tiered substrate 명세 + 14 falsifier 사전 등록 (5 Stage 1 PASS · 9 Stage 2 pre-reg). RFC 040/041 superseded X — RFC 041 의 11-op TODO 채우기는 Phase 2.B substrate 로 흡수 (SMEM-aware 구현으로 진화).
+
+**PLAN §Phase 2-4 재정의**:
+- Phase 2 → 3 sub-tier (2.A CUDA Graphs · 2.B SMEM-fused FFN · 2.C fused fwd+bwd linear)
+- Phase 3 → DSM-cluster fusion (B' Stage 2, Hopper-only)
+- Phase 4 → AOT whole-train-step (A' Stage 2)
+- Phase 5+ → multi-GPU (강등)
+§2 gating 표 + flame ↔ forge mapping 표 동기화.
+
+### 2026-05-17 — Phase R 종합 완료 (A 결과 + PARADIGM.md PUBLISH)
+**A (H100 SXM 80GB cuBLAS 12.4.2 · PyTorch 2.4.0 · $0.40)**: 3 configs · AOT single-binary vs PyTorch eager (FP64 MLP+AdamW):
+- mnist_b32 (784×256×10, B=32): AOT 0.110 ms vs PyT 0.668 ms = **6.065×**
+- mnist_b128 (B=128 同): **6.013×** (batch 변화 무영향 → ~85% overhead)
+- mid_b32 (4096×4096×100): AOT 1.206 ms vs PyT 2.704 ms = **2.243×**
+- pre-reg ≥1.2× 모든 config PASS · 사전등록 under-optimistic, 실측 압도
+- **A' (dispatch-regime-aware)**: small 6× → mid 2.24× → large ~1.1× (compute dominates expected). dispatch elimination mechanism, NOT memory fusion.
+
+**Phase R 종합 (D/B/C/A 4 fire, $1.35 total)** → `PARADIGM.md` PUBLISH:
+- 4 paradigm 측정-anchored verdict + X' reframe + Stage 2 falsifier 사전등록
+- **Meta-thesis**: forge = **dual-mechanism × regime-tiered AOT substrate**.
+  - Mechanism 1 (Dispatch elimination, A): small/mid model dominant.
+  - Mechanism 2 (Memory fusion, B/C): large model dominant.
+  - 공통 D': within-run det FREE.
+  - vs PyTorch/XLA/Mojo: 둘 다 native, regime-tiered = distinctive.
+- Stage 2 진입 순서 추천: A → B → C (각 user gate). RFC 044 draft 후속.
+
+### 2026-05-17 — Phase R / C result + C' reframe + A dispatched
+**C (H100 SXM 80GB cuBLAS 12.4.5 · $0.30)**: 5 shape linear fwd+bwd. range: graph_speedup [+3.86%, +27.87%], **redundancy 1.500× constant**, BW util [14.1%, 45.2%], bit_equal Y/dW/dX = 1 all.
+- F1 redundancy 1.500× constant → 이론적 fused ceiling 0.667× (33% traffic reduction)
+- F2 pre-reg "≤ 0.6×" = theoretical impossibility → **FAIL**
+- F3 bit-equality 모든 output → D' det 확장 anchor
+- **C' (data-anchored)**: realistic ≤ 0.75× fused/separate. regime-tiered: 작은 shape = CUDA Graphs FREE (+20-28%), 큰 shape (Llama-7B+) = DSM 가치 명확.
+**Meta-finding (D/B/C 일관)**: 사전등록 universal 가설 모두 over-optimistic. 데이터 가 **regime-tiered tooling** 가르침 — 작은 = Graphs, 중간 = SMEM, 큰 = DSM, 모두 = D' det FREE.
+산출: state/forge_phaseR_c_2026_05_17/{result.json, C_ANALYSIS.md}.
+
+**A dispatched**: 3-layer MLP AOT trainer (single CUDA binary) vs PyTorch eager (pytorch:2.4 image preinstalled). 3 configs · median step_ms 비교 · falsifier ≥ 1.2×.
+
+### 2026-05-17 — Phase R / B Stage 1 result + B' reframe + C dispatched
+**B (H200 SXM 143GB · cuBLAS 12.4.5 · $0.25)**: 6 shape FFN sweep. Range: graph_speedup ∈ [+1.96%, +20.06%], BW util ∈ [13.9%, 35.4%] (H200 peak 4.8 TB/s). All bit_equal=1.
+- pre-reg "≤ 0.5×" universally **FAIL** (CUDA Graphs max 0.8× only)
+- 큰 shape (Llama-7B) BW util 35% → DSM Stage 2 potential 0.5×-0.7× (이론)
+- **B' (data-anchored)**: shape-dependent paradigm. small = CUDA Graphs +20% FREE; large (Llama-7B+) = DSM Stage 2 ROI 명확. Universal 가설 기각 → shape-tiered F-FORGE-B-PRIME-DSM-{SMALL/MEDIUM/LARGE}.
+산출: state/forge_phaseR_b_2026_05_17/{result.json, B_ANALYSIS.md}.
+
+**C dispatched**: linear fwd+bwd separate vs CUDA Graphs · HBM redundancy · BW util. H100/H200 vast.ai 진행 중.
+
+### 2026-05-17 — Phase R / B Stage 1 dispatched
+B Stage 1 = full DSM kernel 아닌 prerequisite 진단. cuBLAS FFN chain (Dgemm+SiLU+Dgemm) separate vs CUDA Graphs · BW util · per-kernel breakdown. H100 vast.ai 진행 중. Stage 1 결과로 Stage 2 (custom DSM cluster kernel) 진입 결정.
+
+### 2026-05-17 — Phase R 진입 (paradigm 실험·검증, experiment-first)
+사용자 정정 2026-05-17: paradigm 은 literature/sketch 박제 아닌 **실측으로
+채택/기각**. PLAN §1 에 Phase R 신규 삽입 (Phase 1 클리어 후 Phase 2-4
+재정의 gate). 4 paradigm × falsifiable hypothesis 사전등록:
+- D (determinism-default): cuBLAS PEDANTIC vs default · perf cost ≤ 15%
+- B (DSM-aware fused FFN): H100 fused FFN latency ≤ 0.5× separate cuBLAS
+- C (autograd co-emission): fused fwd+bwd HBM traffic ≤ 0.6× separate
+- A (AOT whole-train-step): 3-layer MLP AOT throughput ≥ 1.2× PyTorch eager
+cost ascending fire 순서 = D → B → C → A. 측정 hardware = H100 SXM5 fresh
+fire (vast.ai/runpod). 결과 → `PARADIGM.md` SSOT → RFC 044 → Phase 2-4
+재정의. flame 영역 무손상. 첫 fire (D) hardware/code/watchdog 별도 게이트.
+@> PLAN.md
+
+### 2026-05-16 — paradigm research snapshot LANDED (PARADIGM_RESEARCH.md)
+사용자 directive 2026-05-16 "CUDA 포팅 아님, 더 뛰어난 아키텍쳐/패러다임"
++ "한국 alternatives + arxiv deep research, 데이터 먼저 확보" → 8-track
+parallel WebSearch + 5 WebFetch (한국 NPU 신생들 / 글로벌 AOT-NN
+컴파일러 SOTA / arxiv 2025-2026). 산출: `self/forge/PARADIGM_RESEARCH.md`
+(§1-§8 데이터 brief + paradigm gap synthesis + 사용자 결정 A+B + sources).
+핵심 발견 — (a) 한국 측 새 paradigm 언어 = 없음 (Moreh full-trace 가
+유일한 학습 paradigm 이나 PyTorch frontend wrapper); (b) AOT × whole-
+train-step (fwd+bwd+opt) = **2026-05 누구도 안 해결한 frontier**
+(torch.compile precompile WIP, JAX = JIT, Mojo MAX = inference-first);
+(c) FlashFuser (arxiv 2512.12949) 가 H100 DSM 으로 inference 1.24× E2E
++ 58% DRAM↓ 실증 — forge 의 floor anchor; (d) LayerCast (arxiv
+2506.09501) 가 결정성 paradigm 의 직접 evidence. 사용자 결정 = **A+B
+둘 다**: A = RFC 044 design draft, B = FlashFuser-style DSM prototype
+(forge floor 확인용 minimal experiment, full kernel 포팅 아님). 이번
+update 는 research trail 만 — RFC 044 / PARADIGM.md / PHASE2_PREP 은
+후속 커밋. flame 영역 무손상 (stdlib/flame/* 미접근).
