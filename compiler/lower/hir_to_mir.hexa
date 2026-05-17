@@ -609,7 +609,17 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx, _const_int_op(v))
     }
     if k == "literal_char" {
-        return _value(ctx, _const_int_op(0))
+        // Char literals are TAG_STR (a single-char string), NOT TAG_INT/
+        // TAG_CHAR. The runtime represents chars as single-char strings
+        // (`s.chars()` / hexa_str_chars yields TAG_STR elements), so a
+        // char literal must also be TAG_STR for `cs[i] != '.'` to compare
+        // equal — mirrors the hexa_v2 reference codegen (self/codegen_c2
+        // .hexa:3247 "char literals must also be TAG_STR for hexa_eq").
+        // e.text is the already-escape-decoded single-char body (parser
+        // ExprKind::LiteralChar). Previously _const_int_op(0) made EVERY
+        // char literal == 0, so e.g. _ends_with_hexa()'s `cs[n-5] != '.'`
+        // was always true → self-host argv parsing broke.
+        return _value(ctx, _const_str_op(e.text))
     }
 
     // ── ident ───────────────────────────────────────────────
