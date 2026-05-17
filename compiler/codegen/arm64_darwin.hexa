@@ -290,18 +290,58 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
         if iv.starts[k] >= 0 { order.push(k) }
         k = k + 1
     }
-    let mut a = 1
-    while a < len(order) {
-        let key = order[a]
-        let key_start = iv.starts[key]
-        let mut b = a - 1
-        while b >= 0 && iv.starts[order[b]] > key_start {
-            order[b + 1] = order[b]
-            b = b - 1
-        }
-        order[b + 1] = key
-        a = a + 1
+    // Self-host perf — sort `order` ascending by `iv.starts`. The prior
+    // insertion sort was O(order²); on a large function (e.g. the 1209-
+    // line _lower_hexpr in the compiler's own lower pass) order grows to
+    // thousands of intervals, so O(N²) here is the dominant cost of a
+    // multi-minute stage-1 self-compile. `iv.starts` values are `pos`
+    // indices — dense, non-negative, bounded by the instruction count —
+    // so a counting sort is O(N + maxStart) and STABLE (preserves the
+    // first-seen order of equal-start intervals, identical to the strict-
+    // `>` insertion sort it replaces). [@cite alg/sort/counting-sort]
+    let mut max_start = 0
+    let mut ms = 0
+    while ms < len(order) {
+        let sv = iv.starts[order[ms]]
+        if sv > max_start { max_start = sv }
+        ms = ms + 1
     }
+    let mut cnt: [i64] = []
+    let mut ci = 0
+    while ci <= max_start {
+        cnt.push(0)
+        ci = ci + 1
+    }
+    let mut cp = 0
+    while cp < len(order) {
+        let sv2 = iv.starts[order[cp]]
+        cnt[sv2] = cnt[sv2] + 1
+        cp = cp + 1
+    }
+    // prefix sum → bucket start offsets
+    let mut acc = 0
+    let mut cp2 = 0
+    while cp2 <= max_start {
+        let c = cnt[cp2]
+        cnt[cp2] = acc
+        acc = acc + c
+        cp2 = cp2 + 1
+    }
+    let mut sorted: [i64] = []
+    let mut sp = 0
+    while sp < len(order) {
+        sorted.push(0)
+        sp = sp + 1
+    }
+    let mut cp3 = 0
+    while cp3 < len(order) {
+        let elem = order[cp3]
+        let sv3 = iv.starts[elem]
+        sorted[cnt[sv3]] = elem
+        cnt[sv3] = cnt[sv3] + 1
+        cp3 = cp3 + 1
+    }
+    order = sorted
 
     let mut map_ids: [i64] = []
     let mut map_regs: [string] = []
@@ -330,6 +370,25 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
     let mut active_idx: [i64] = []
     let mut next_slot: i64 = 0
 
+    // Self-host perf — precompute `is_param[k]` (k = interval index)
+    // once. The expire/spill loops below test "is this interval a
+    // param" per active interval per `order` step; the inline
+    // `while pp < len(mf.params)` scan made that O(order·active·P).
+    // One O(N + params) pre-pass collapses it to an O(1) array read.
+    // [@cite alg/regalloc/linear-scan]
+    let mut is_param: [i64] = []
+    let mut ip = 0
+    while ip < n {
+        is_param.push(0)
+        ip = ip + 1
+    }
+    let mut ipp = 0
+    while ipp < len(mf.params) {
+        let pidx = _arm_index_of(iv.ids, mf.params[ipp].id)
+        if pidx >= 0 { is_param[pidx] = 1 }
+        ipp = ipp + 1
+    }
+
     let mut s = 0
     while s < len(order) {
         let cur = order[s]
@@ -341,13 +400,7 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
             let ai = active_idx[e]
             if iv.ends[ai] < cur_start {
                 let was = map_regs[ai]
-                let mut is_param = false
-                let mut pp = 0
-                while pp < len(mf.params) {
-                    if mf.params[pp].id == iv.ids[ai] { is_param = true }
-                    pp = pp + 1
-                }
-                if !is_param && len(was) > 0 && map_slots[ai] < 0 {
+                if is_param[ai] == 0 && len(was) > 0 && map_slots[ai] < 0 {
                     pool.push(was)
                 }
             } else {
@@ -405,13 +458,7 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
             let mut victim_pos = len(active_idx) - 1
             while victim_pos >= 0 {
                 let v = active_idx[victim_pos]
-                let mut is_param = false
-                let mut pp = 0
-                while pp < len(mf.params) {
-                    if mf.params[pp].id == iv.ids[v] { is_param = true }
-                    pp = pp + 1
-                }
-                if !is_param { break }
+                if is_param[v] == 0 { break }
                 victim_pos = victim_pos - 1
             }
 
