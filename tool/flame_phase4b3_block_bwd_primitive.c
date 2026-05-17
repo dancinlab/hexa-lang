@@ -113,12 +113,8 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_bwd_primitive(
     double* dh = _hx_farr_table[dh_id].buf;
     for (int i = 0; i < T * d; i++) dh[i] = dXout[i];
 
-    // ─── 8rev: SwiGLU bwd ─────────────────────────────────────────
-    // dWd batched via HexaVal helper (matmul SKIP)
-    _db_grad_accum_farr(
-        hexa_int(dXout_id), hexa_int(0), hexa_int(Bc_id), hexa_int(oSwS),
-        hexa_int(Bg_id), hexa_int(WD), hexa_int(T), hexa_int(d), hexa_int(h)
-    );
+    // ─── 8rev: SwiGLU bwd (Path B primitive: dWd 32x64) ───────────
+    flame_grad_accum_T16_d32x64_primitive(dXout_id, 0, Bc_id, oSwS, Bg_id, WD);
     Bc = _hx_farr_table[Bc_id].buf;
     Bg = _hx_farr_table[Bg_id].buf;
     dXout = _hx_farr_table[dXout_id].buf;
@@ -189,15 +185,9 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_bwd_primitive(
             dh[ts * d + i8] = dh[ts * d + i8] + dh_contrib;
         }
     }
-    // Batched dWg/dWu accumulators (Phase 4-A-bwd partial 4)
-    _db_grad_accum_farr(
-        hexa_int(da_all_id), hexa_int(0), hexa_int(Bc_id), hexa_int(oRin2),
-        hexa_int(Bg_id), hexa_int(WG), hexa_int(T), hexa_int(h), hexa_int(d)
-    );
-    _db_grad_accum_farr(
-        hexa_int(db_all_id), hexa_int(0), hexa_int(Bc_id), hexa_int(oRin2),
-        hexa_int(Bg_id), hexa_int(WU), hexa_int(T), hexa_int(h), hexa_int(d)
-    );
+    // Batched dWg/dWu accumulators (Path B primitive: 64x32)
+    flame_grad_accum_T16_d64x32_primitive(da_all_id, 0, Bc_id, oRin2, Bg_id, WG);
+    flame_grad_accum_T16_d64x32_primitive(db_all_id, 0, Bc_id, oRin2, Bg_id, WU);
     hexa_call1(farr_free, dr_pos_v);
     hexa_call1(farr_free, da_all_v);
     hexa_call1(farr_free, db_all_v);
@@ -206,11 +196,8 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_bwd_primitive(
     dh = _hx_farr_table[dh_id].buf;
 
     // ─── 6rev: dX_residual += dh  (deferred to 1rev write) ────
-    // ─── 5rev: Wo proj bwd (matmul SKIP) + dctx inline ────────
-    _db_grad_accum_farr(
-        hexa_int(dh_id), hexa_int(0), hexa_int(Bc_id), hexa_int(oCtx),
-        hexa_int(Bg_id), hexa_int(WO), hexa_int(T), hexa_int(d), hexa_int(d)
-    );
+    // ─── 5rev: Wo proj bwd (Path B: dWo 32x32) + dctx inline ──
+    flame_grad_accum_T16_d32x32_primitive(dh_id, 0, Bc_id, oCtx, Bg_id, WO);
     Bc = _hx_farr_table[Bc_id].buf;
     Bp = _hx_farr_table[Bp_id].buf;
     dh = _hx_farr_table[dh_id].buf;
@@ -308,19 +295,10 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_bwd_primitive(
         }
     }
 
-    // ─── 2rev: Q/K/V proj bwd (matmul SKIP) + drin inline ─────
-    _db_grad_accum_farr(
-        hexa_int(dQ_id), hexa_int(0), hexa_int(Bc_id), hexa_int(oRin),
-        hexa_int(Bg_id), hexa_int(WQ), hexa_int(T), hexa_int(d), hexa_int(d)
-    );
-    _db_grad_accum_farr(
-        hexa_int(dK_id), hexa_int(0), hexa_int(Bc_id), hexa_int(oRin),
-        hexa_int(Bg_id), hexa_int(WK), hexa_int(T), hexa_int(kvd), hexa_int(d)
-    );
-    _db_grad_accum_farr(
-        hexa_int(dV_id), hexa_int(0), hexa_int(Bc_id), hexa_int(oRin),
-        hexa_int(Bg_id), hexa_int(WV), hexa_int(T), hexa_int(kvd), hexa_int(d)
-    );
+    // ─── 2rev: Q/K/V proj bwd (Path B primitives) + drin inline ─
+    flame_grad_accum_T16_d32x32_primitive(dQ_id, 0, Bc_id, oRin, Bg_id, WQ);
+    flame_grad_accum_T16_d16x32_primitive(dK_id, 0, Bc_id, oRin, Bg_id, WK);
+    flame_grad_accum_T16_d16x32_primitive(dV_id, 0, Bc_id, oRin, Bg_id, WV);
     Bp = _hx_farr_table[Bp_id].buf;
     Bg = _hx_farr_table[Bg_id].buf;
     Bc = _hx_farr_table[Bc_id].buf;
