@@ -31,5 +31,3 @@ fn main() {
     }
     println("for_sum=" + to_string(sum))
 }
-
-main()

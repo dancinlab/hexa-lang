@@ -225,5 +225,3 @@ fn main() {
         println("FAIL — " + to_string(ok) + "/4 cases passed")
     }
 }
-
-main()
