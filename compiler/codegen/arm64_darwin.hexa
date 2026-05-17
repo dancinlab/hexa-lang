@@ -1227,6 +1227,8 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "deref_i32"     { return "hexa_ptr_read_i32" }
     if name == "ptr_write_f32" { return "hexa_ptr_write_f32" }
     if name == "ptr_write_i32" { return "hexa_ptr_write_i32" }
+    if name == "ptr_write"     { return "hexa_ptr_write" }      // untyped 64-bit — mirror tier-2 codegen_c2
+    if name == "ptr_read"      { return "hexa_ptr_read" }       // untyped 64-bit — mirror tier-2 codegen_c2
     if name == "ptr_read_f32"  { return "hexa_ptr_read_f32" }
     if name == "ptr_read_f64"  { return "hexa_ptr_read_f64" }
     if name == "ptr_read_i32"  { return "hexa_ptr_read_i32" }
