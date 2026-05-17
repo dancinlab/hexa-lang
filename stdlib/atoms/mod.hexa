@@ -1,0 +1,37 @@
+// HEXA Standard Library — atoms (science stack)
+//
+// hexa-native absorption of ASE — the Atomic Simulation Environment
+// (DTU, LGPL-2.1). Atomic-structure container + I/O + neighbor lists +
+// a calculator interface used by hexa-matter (and hexa-bio for molecular
+// geometry).
+//
+// Status: SCAFFOLD — stage-1 port pending. No hexa impl yet; this file
+// only fixes the package surface so callers can be migrated incrementally.
+//
+// ── Migration plan ──────────────────────────────────────────────────
+//   Stage 1 (current implementation port): re-target hexa-matter
+//     `_python_bridge/module/ase_atoms_construct.py` +
+//     `ase_relaxation_check.py` onto this package.
+//   Stage 2 (dependency hexa-native port): the ASE primitives those
+//     adapters touch — Atoms, cell, PBC, neighborlist, EMT — get
+//     hexa-native kernels here (no python_ffi shell-out).
+//
+// ── Planned public API ──────────────────────────────────────────────
+//   pub struct Atoms        — symbols : [str], positions : tensor,
+//                             cell : tensor (3x3), pbc : [bool]
+//   pub fn atoms_new(symbols, positions, cell, pbc) -> Atoms
+//   pub fn atoms_from_cif(path) -> Atoms          (Stage 2)
+//   pub fn atoms_neighborlist(a, cutoff) -> ...   (Stage 2)
+//   pub fn atoms_emt_relax(a) -> Atoms            (Stage 2)
+//
+// ── Dependencies (hexa stdlib) ──────────────────────────────────────
+//   tensor/   — positions / cell buffers
+//   linalg/   — cell inversion, fractional<->cartesian
+//   crystal/  — sibling science package (lattice <-> Atoms bridge)
+//
+// Absorbs: ase    Used by: hexa-matter    Sibling: crystal, mlff
+// Cross-link: .roadmap.stdlib (science-stack subdomains)
+
+pub fn atoms_status() -> str {
+    return "SCAFFOLD — stage-1 port pending (absorbs: ase)"
+}

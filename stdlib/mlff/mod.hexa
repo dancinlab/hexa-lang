@@ -1,0 +1,42 @@
+// HEXA Standard Library — mlff (science stack)
+//
+// hexa-native absorption of the machine-learned force-field family:
+// CHGNet (BSD), MACE (MIT), M3GNet / MatGL (BSD), ALIGNN (NIST), SchNet
+// (MIT). A unified universal-FF interface — relax a structure, predict
+// energy / forces / magnetic moments — for hexa-matter's NOVEL candidate
+// deepening pipeline.
+//
+// Status: SCAFFOLD — stage-1 port pending. No hexa impl yet; this file
+// only fixes the package surface so callers can be migrated incrementally.
+//
+// ── Migration plan ──────────────────────────────────────────────────
+//   Stage 1 (current implementation port): re-target hexa-matter
+//     `_python_bridge/universal_ff_runner.py` and the per-model adapters
+//     `_absorption_bridge/universal_ff/{chgnet,mace,m3gnet,alignn,
+//     schnet}_call.py` onto this package's `mlff_relax` / `mlff_predict`
+//     interface.
+//   Stage 2 (dependency hexa-native port): the NNP inference graphs run
+//     on stdlib `grad` (autograd + nn) — pre-trained weights loaded via
+//     `safetensors`; message-passing GNN kernels get hexa-native impls.
+//
+// ── Planned public API ──────────────────────────────────────────────
+//   pub struct MlffResult   — e_per_atom : float, forces : tensor,
+//                             magmoms : [float], relaxed : Structure
+//   pub fn mlff_load(model) -> ...        ("chgnet" | "mace" | ...)
+//   pub fn mlff_predict(model, structure) -> MlffResult
+//   pub fn mlff_relax(model, structure)   -> MlffResult
+//
+// ── Dependencies (hexa stdlib) ──────────────────────────────────────
+//   grad/        — autograd + nn (message-passing inference)
+//   tensor/      — energy / force / magmom buffers
+//   safetensors  — pre-trained NNP weight loading
+//   crystal/  atoms/  — input structures
+//
+// Absorbs: chgnet, mace, m3gnet/matgl, alignn, schnetpack
+// Used by: hexa-matter   Sibling: crystal, atoms, grad
+// Honesty: NNP outputs are PREDICTIONS (SIM-NNP), never measurements.
+// Cross-link: .roadmap.stdlib (science-stack subdomains)
+
+pub fn mlff_status() -> str {
+    return "SCAFFOLD — stage-1 port pending (absorbs: chgnet/mace/m3gnet/alignn/schnet)"
+}

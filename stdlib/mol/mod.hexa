@@ -1,0 +1,39 @@
+// HEXA Standard Library — mol (science stack)
+//
+// hexa-native absorption of RDKit (BSD-3). Molecular graph, SMILES
+// parse/canon, and descriptor calculation (MolWt, LogP, TPSA, HBA/HBD).
+// Used by hexa-matter (organic material specs) and hexa-bio (ligand /
+// drug-candidate chemistry).
+//
+// Status: SCAFFOLD — stage-1 port pending. No hexa impl yet; this file
+// only fixes the package surface so callers can be migrated incrementally.
+//
+// ── Migration plan ──────────────────────────────────────────────────
+//   Stage 1 (current implementation port): re-target hexa-matter
+//     `_python_bridge/module/rdkit_smiles_audit.py` +
+//     `rdkit_descriptor_calc.py`, and the hexa-bio ligand SMILES
+//     adapters (`ligand_smiles_to_h`, etc.) onto this package.
+//   Stage 2 (dependency hexa-native port): RDKit primitives — SMILES
+//     tokenizer + parser, molecular graph, ring perception, the
+//     Crippen/TPSA descriptor kernels — get hexa-native impls here.
+//
+// ── Planned public API ──────────────────────────────────────────────
+//   pub struct Mol          — atoms : [str], bonds : [(int,int,int)],
+//                             charge : int
+//   pub fn mol_from_smiles(smiles) -> Mol
+//   pub fn mol_canon_smiles(m) -> str                   (Stage 2)
+//   pub fn mol_weight(m) -> float                       (Stage 2)
+//   pub fn mol_logp(m) -> float                         (Stage 2)
+//   pub fn mol_tpsa(m) -> float                         (Stage 2)
+//   pub fn mol_hba(m) -> int  / mol_hbd(m) -> int        (Stage 2)
+//
+// ── Dependencies (hexa stdlib) ──────────────────────────────────────
+//   tokenize/  — SMILES lexing
+//   collections — molecular graph adjacency
+//
+// Absorbs: rdkit   Used by: hexa-matter, hexa-bio   Sibling: crystal
+// Cross-link: .roadmap.stdlib (science-stack subdomains)
+
+pub fn mol_status() -> str {
+    return "SCAFFOLD — stage-1 port pending (absorbs: rdkit)"
+}

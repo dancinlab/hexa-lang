@@ -1,0 +1,40 @@
+// HEXA Standard Library — crystal (science stack)
+//
+// hexa-native absorption of pymatgen (LBNL, MIT) + the Materials Project
+// REST client (mp_api). Crystal-structure container, space-group ops,
+// phase-diagram primitives, and a stdlib-`net` MP query path.
+//
+// Status: SCAFFOLD — stage-1 port pending. No hexa impl yet; this file
+// only fixes the package surface so callers can be migrated incrementally.
+//
+// ── Migration plan ──────────────────────────────────────────────────
+//   Stage 1 (current implementation port): re-target hexa-matter
+//     `_python_bridge/module/pymatgen_structure_io.py`,
+//     `pymatgen_phasediagram_smoke.py`, and the Materials Project
+//     adapter `_absorption_bridge/materials_project/mp_api_smoke.py`
+//     (its stdlib-urllib REST path → `net`, its schema → this package).
+//   Stage 2 (dependency hexa-native port): pymatgen primitives —
+//     Structure, Lattice, SpacegroupAnalyzer, PhaseDiagram, the
+//     CIF reader — get hexa-native kernels here.
+//
+// ── Planned public API ──────────────────────────────────────────────
+//   pub struct Lattice      — matrix : tensor (3x3), a/b/c, alpha/beta/gamma
+//   pub struct Structure    — lattice : Lattice, species : [str],
+//                             frac_coords : tensor
+//   pub fn structure_from_spacegroup(sg, lattice, species, coords) -> Structure
+//   pub fn structure_from_cif(path) -> Structure        (Stage 2)
+//   pub fn mp_summary_query(api_key, formula) -> ...     (Stage 1, via net)
+//   pub fn energy_above_hull(structure, refs) -> float   (Stage 2)
+//
+// ── Dependencies (hexa stdlib) ──────────────────────────────────────
+//   tensor/  linalg/   — lattice matrices, fractional<->cartesian
+//   net/                — Materials Project REST (X-API-KEY header)
+//   atoms/              — sibling: Structure <-> Atoms bridge
+//
+// Absorbs: pymatgen, mp_api   Used by: hexa-matter   Sibling: atoms, mlff
+// Honesty: MP data is DFT-COMPUTED (CC-BY 4.0), never a measurement.
+// Cross-link: .roadmap.stdlib (science-stack subdomains)
+
+pub fn crystal_status() -> str {
+    return "SCAFFOLD — stage-1 port pending (absorbs: pymatgen, mp_api)"
+}
