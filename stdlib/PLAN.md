@@ -115,6 +115,22 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   결론: T3 의 진짜 즉시-이관 부분집합은 raw "104" 보다 작다. 정직한
   경로 = `stdlib/json` 을 먼저 세우고(이는 T4 자산이기도) T3-json 해금.
   진행: `cc994c9`(hexa-bio) union+r1 바이트-패리티 — **T3 1/104 검증**.
+
+  📍 **선결조건 정밀 지정 (다음 루프 시작점 — 재조사 불필요)**:
+  hexa-lang 에 JSON **write-side 만** 존재 — `stdlib/alloc/json.hexa`
+  (170L): `json_stringify_value` · `json_dump_pretty` ·
+  `json_object_set` · `json_array_push`. **파서 부재**(`parse/loads/
+  decode` 없음), sort_keys canonical dump 부재. `json.hexa` 는 alloc
+  로의 shim, `jsonl_pool.hexa` 는 IPC 풀(파서 아님). ⇒ 다음 구체
+  작업 = `stdlib/alloc/json.hexa` 에 **(1) `json_parse(s)->value`
+  재귀하강 파서**(obj/arr/str/num/true/false/null·escape·UTF-8) +
+  **(2) `json_dumps_canonical(v)`** = Python `json.dumps(x,
+  sort_keys=True)` **바이트-정확**(separators `, `/`: `,
+  ensure_ascii 기본, 키 재귀 정렬, int/float 표기 일치) 추가. 검증:
+  hexa-bio `registry.jsonl`/schema/fixture 라운드트립 + sha256(via
+  `shasum -a 256`)이 Python 과 일치. 이게 서면 T3-json 다수 +
+  `regression_audit` 해시줄 + T4 자산 동시 해금. (rfc043-hexa-torch
+  브랜치, hexa atlas PR-only 규약 유의 — 직접 fold-to-live 금지.)
 - **T4** 🔒 Stage 2 — `atoms`/`crystal`/`mol`/`mlff`/`quantum` 실구현
   (각 `mod.hexa` planned API 채움) → science-stack 의존 모듈/어댑터 해금
 - **T5** 🔒 Stage 2 잔여 — `nd`/`grad` 정밀화, `_absorption_bridge` 16,
