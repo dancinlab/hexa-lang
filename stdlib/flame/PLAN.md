@@ -540,3 +540,42 @@ Target: 10-30× FP64 cuBLAS chain at Llama-7B LARGE on Hopper.
 Literature: FlashAttention-3 (arxiv 2407.08608), FlashFuser (arxiv 2512.12949),
 LayerCast (arxiv 2506.09501). sm_90+ only; sm_80 fallback to RFC 049 BF16.
 PATCHES.yaml entry `980a5a87`.
+
+### 2026-05-17 — Phase 4-D-5-4 step 2 A100 fire campaign — build VERIFIED, wall FAIL honest
+4 fires (~$5.7 total). Honest g3 — fire revealed the actual gap, not fabricated progress.
+
+**Build-tier integration VERIFIED** (commit `ae7b118e`): forge GPU substrate
+(`-DHEXA_CUDA` runtime_cuda.c — 11 Phase B/B2 kernels + Phase A cuBLAS) +
+flame d768·12L trainer + cuBLAS/cudart linkage = clean nvcc+clang build +
+link into single 587K trainer binary on real A100. RFC 050 build-tier
+integration falsifier class PASS.
+
+**Fire campaign bugs found + fixed** (cheap manual fires):
+- dispatch inline-`#`-comment continuation bug (line 235/241)
+- 18 #include deps upload 누락 (runtime_hi_gen.c + 17 native/*.c)
+- reliability>0.97 vast.ai offer filter 추가 (fire 3 pod host died R 96→69)
+
+**F-RFC046-EAGER-PYTORCH-MATCH = FAIL (honest)**: 4th fire on stable
+A100-SXM4 — trainer ran (`init epoch gn2 3.99029`, model 104M + cache 346M
+doubles allocated), but **600s timeout, 0 training steps, GPU 0%/0MiB
+entire run**.
+
+**Root cause (same as Phase 4-D-4)**: trainer A2 primitive source calls
+CPU matmul DIRECTLY — never dispatches to `_hx_farr_*_gpu`. Phase 4-D-5-1
+(runtime.c dispatcher wiring) + 5-2 (11 kernel bodies) + 5-3 (11/11 byte-eq)
+made the GPU path **available + linkable + verified** — but **Layer 2
+(route trainer matmul TO GPU dispatch) was NOT done**. Only Layer 1
+(substrate) complete.
+
+Phase 4-D-5 layer status (honest):
+- Layer 1 — RFC 040 GPU substrate (runtime_cuda.c 11 kernels) ✅ DONE + verified
+- Layer 1b — runtime.c `_hx_farr_*_gpu` dispatcher wiring ✅ DONE
+- **Layer 2 — A2 primitive matmul → GPU dispatch route** ❌ THE GAP
+- Layer 3 — dim-aware dispatch (small=CPU, large=GPU) ❌ gated on Layer 2
+
+**다음 (Phase 4-D-5-2 Layer 2, autonomous-able 1-2 cycle)**: route the
+8 A2 matmul primitives (`tool/flame_phase4b3_matmul_primitives.c`) to
+`hexa_farr_matmul_gpu` under `#ifdef HEXA_CUDA` with dim threshold
+(d=32·3L stays CPU byte-eq; d=768·12L → cuBLAS). Then re-fire #5 for the
+actual F-RFC046 wall measurement.
+분석: `state/flame_phase4d_5_4_2026_05_17/PHASE4D_5_4_ANALYSIS.md`.
