@@ -65,6 +65,15 @@ mirror, hexa CPU-equiv anchored).
   memory-traffic minimization, static-shape specialization.
 - F-RFC043-WALL-IMPROVED (qualitative — no fabricated multiple).
 
+**🎯 Phase 4-B SHIPPED 2026-05-17** (56-commit autonomous cycle):
+- Phase 4-B-2 IPCP SHIPPED (1.28× wall, byte-id)
+- Phase 4-B-3 A2 fwd+bwd primitive SHIPPED (2.74× wall, byte-id)
+- Path B FULL fwd+bwd matmul primitive integration (3.23× cool projection)
+- ≥3× RFC 047 §137 target REACHED with CPU-only architecture
+- flame:anima = 0.226× (~4.4× faster than anima)
+- 23-artifact self-verifying gate (tool/flame_phase4b3_verify_all.sh)
+- See STATUS.md sixth iteration for full details
+
 ### Phase 5 — whole-program fusion (exceed eager-PyTorch — ULTIMATE)
 - north-star per RFC 043 perf thesis. Floor = cuBLAS roofline (match);
   win = above GEMM. f1/f2: NO lattice perf claim. Multi-cycle.
