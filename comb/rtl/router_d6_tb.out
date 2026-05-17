@@ -1,0 +1,7 @@
+PASS dq=3: dst=(3,0) expect_port=0 observed=0
+PASS dq=-2: dst=(-2,0) expect_port=1 observed=1
+PASS dr=4: dst=(0,4) expect_port=2 observed=2
+PASS local: dst=(0,0) expect_port=6 observed=6
+
+SUMMARY: PASS=4 FAIL=0
+comb/rtl/router_d6_tb.v:113: $finish called at 160000 (1ps)

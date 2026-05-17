@@ -1,0 +1,18 @@
+# comb F1 per real workload (non-contention model, realistic regime)
+# t_router_d6 = 1.5x baseline, e_diag = 1.3x RC penalty
+# columns: pattern N 3*avgH_mesh 3*avgH_hex lat_m lat_h e_m e_h d6_lat_win d6_e_win net_win
+#
+# --- N = 1024 (32x32 mesh / R=17 hex region) ---
+uniform   N=1024 3*h_m=64 3*h_h=34 lat_m=12800 lat_h=8500 e_m=12800 e_h=9010 d6_lat_win=1 d6_e_win=1 net_win=1
+broadcast N=1024 3*h_m=48 3*h_h=25 lat_m=9600 lat_h=6250 e_m=9600 e_h=6625 d6_lat_win=1 d6_e_win=1 net_win=1
+hotspot   N=1024 3*h_m=64 3*h_h=34 lat_m=12800 lat_h=8500 e_m=12800 e_h=9010 d6_lat_win=1 d6_e_win=1 net_win=1
+stencil   N=1024 3*h_m=3 3*h_h=3 lat_m=600 lat_h=750 e_m=600 e_h=795 d6_lat_win=0 d6_e_win=0 net_win=0
+# --- N = 10000 (100x100 mesh / R=57) ---
+uniform   N=10000 3*h_m=200 3*h_h=114 lat_m=40000 lat_h=28500 e_m=40000 e_h=30210 d6_lat_win=1 d6_e_win=1 net_win=1
+broadcast N=10000 3*h_m=150 3*h_h=85 lat_m=30000 lat_h=21250 e_m=30000 e_h=22525 d6_lat_win=1 d6_e_win=1 net_win=1
+hotspot   N=10000 3*h_m=200 3*h_h=114 lat_m=40000 lat_h=28500 e_m=40000 e_h=30210 d6_lat_win=1 d6_e_win=1 net_win=1
+stencil   N=10000 3*h_m=3 3*h_h=3 lat_m=600 lat_h=750 e_m=600 e_h=795 d6_lat_win=0 d6_e_win=0 net_win=0
+#
+# expected: degree-6 wins on uniform/broadcast/hotspot (non-trivial avg hop);
+# stencil (nearest-neighbor) ties since both 1-hop. Hex pays router cost so
+# loses energy on stencil — falsifier-relevant edge case.

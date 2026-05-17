@@ -80,3 +80,19 @@
   hexa-arch[chip] 영역. T2 ~30-40% (sim 비경쟁 PASS + RTL 합성가능).
   T3 = 0%. 다음 = (a) cocotb/SymbiYosys 테스트벤치 (b) hexa-arch[chip]
   Yosys 흡수 후 합성 측정.
+- 2026-05-18 — **T2 cycle-accurate functional verify + real workload**:
+  ⭐️ `comb/rtl/router_d6_tb.v` + iverilog 실행: 4 destination cases
+  (dq=+3 → PQ, dq=-2 → NQ, dr=+4 → PR, local → LL) **4/4 PASS**. 합성
+  가능 router_d6.v 가 실제 패킷 트래픽을 cycle-accurate 시뮬에서 올바르게
+  라우팅 — RFC 057 T2 sim 측면 *cycle-accurate functional verification*
+  최초 도달.
+  ⭐️ `comb/sim/workload_f1.hexa` → `workload_f1.out`: 4 real workload
+  패턴(uniform/broadcast/hotspot/stencil) × 2 N(1024,10000) F1 verdict.
+  **결과: uniform/broadcast/hotspot 에서 degree-6 net win, stencil 에서
+  degree-6 LOSE** (1-hop nearest-neighbor 은 router-port 비용만 페널티).
+  honest workload-dependent verdict — over-claim 아님. RFC 057 F1
+  falsifier 는 workload class 별 결판되며, dense·broadcast traffic 에선
+  hex 우세 / nearest-neighbor 에선 mesh 우세.
+  T2 sim 측면 ~60% (non-contention + real workload + router cycle-accurate
+  verify). T2 RTL 측면 ~50% (synth + functional sim). T2 ~50-60%. T3 = 0%
+  (hexa-arch[chip] RTL→GDSII 의존).
