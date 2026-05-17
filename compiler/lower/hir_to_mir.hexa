@@ -91,6 +91,23 @@ fn _const_float_op_with_text(v: f64, text: string) -> Operand {
     }
 }
 
+// Void literal operand — emitted when a bare `nil` Ident reaches the
+// lowering stage. Codegen (arm64_darwin.hexa) recognises this kind and
+// emits the TAG_VOID/payload-0 pair. Bind list at compiler/check/bind.hexa
+// already accepts `nil` as a known name; this provides the value-level
+// translation. Mirrors the hexa_v2 codegen_c2 path
+// (self/codegen_c2.hexa:3262 `if node.name == "nil" → hexa_void()`).
+fn _const_void_op() -> Operand {
+    return Operand {
+        kind: "const_void",
+        local_id: -1,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
 fn _const_str_op(s: string) -> Operand {
     return Operand {
         kind: "const_str",
@@ -597,6 +614,15 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── ident ───────────────────────────────────────────────
     if k == "ident" {
+        // `nil` literal — emit TAG_VOID directly. Bind list at
+        // compiler/check/bind.hexa:780 accepts `nil` as a known name, but
+        // _mir_lookup/_mir_lookup_global don't define a value for it so
+        // it would fall through to _emit_hx1101 + _no_value (TAG_INT 0,
+        // producing `type_of(nil) == "int"` instead of "void"). Mirror
+        // the hexa_v2 codegen_c2 fast-path (self/codegen_c2.hexa:3262).
+        if e.text == "nil" {
+            return _value(ctx, _const_void_op())
+        }
         let id = _mir_lookup(ctx, e.text)
         if id >= 0 {
             return _value(ctx, _local_op(id))

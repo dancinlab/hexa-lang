@@ -909,6 +909,15 @@ fn _hv_load(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
         }
         return out
     }
+    if o.kind == "const_void" {
+        // `nil` literal — TAG_VOID=4, payload 0. Pairs with the
+        // _const_void_op() constructor in compiler/lower/hir_to_mir.hexa.
+        out.push(_arm64_instr2("movz", _arm64_op_reg(lo),
+                         _arm64_op_label("#4"), "hv const_void: TAG_VOID"))
+        out.push(_arm64_instr2("movz", _arm64_op_reg(hi),
+                         _arm64_op_label("#0"), "hv const_void payload"))
+        return out
+    }
     if o.kind == "const_str" {
         let cl = _arm64_strtab_lookup(st, o.str_val)
         let mut nm = cl
