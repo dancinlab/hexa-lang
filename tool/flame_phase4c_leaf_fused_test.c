@@ -292,33 +292,51 @@ static void run_test(int do_wall_bench) {
     // ── Wall micro-bench (N iter × paired vs fused) ───────────────
     // Each call re-runs fwd+bwd on the SAME farrs (their state mutates
     // but we don't read it — only timing the compute).
+    //
+    // Warm-up pass eliminates cold-cache + first-call ICache miss bias.
+    // Interleaved runs (paired1 fused1 paired2 fused2 ... → 3 reps)
+    // average out frequency scaling drift.
     printf("\n");
     printf("=== Wall micro-bench (paired vs fused, primitive-level) ===\n");
     int iters = 200;
 
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-    for (int it = 0; it < iters; it++) {
+    // Warm-up
+    for (int it = 0; it < 20; it++) {
         flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive(X_a, Bp_a, Bc_a, cos_a, sin_a);
         flame_block_T16_d32_nh4_nkv2_h64_bwd_primitive(X_a, Bp_a, Bc_a, dXout_a, dX_a, Bg_a, cos_a, sin_a);
-    }
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    double paired_s = (t1.tv_sec - t0.tv_sec) + 1e-9 * (t1.tv_nsec - t0.tv_nsec);
-
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-    for (int it = 0; it < iters; it++) {
         flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
             X_b, Bp_b, Bc_b, dXout_b, dX_b, Bg_b, cos_b, sin_b
         );
     }
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    double fused_s = (t1.tv_sec - t0.tv_sec) + 1e-9 * (t1.tv_nsec - t0.tv_nsec);
 
-    double ratio = paired_s / fused_s;
-    printf("  paired wall (%d iter) = %.4fs  (%.2f µs/iter)\n",
-           iters, paired_s, paired_s * 1e6 / iters);
-    printf("  fused  wall (%d iter) = %.4fs  (%.2f µs/iter)\n",
-           iters, fused_s, fused_s * 1e6 / iters);
+    double paired_best = 1e9, fused_best = 1e9;
+    struct timespec t0, t1;
+    for (int rep = 0; rep < 3; rep++) {
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int it = 0; it < iters; it++) {
+            flame_block_T16_d32_nh4_nkv2_h64_fwd_primitive(X_a, Bp_a, Bc_a, cos_a, sin_a);
+            flame_block_T16_d32_nh4_nkv2_h64_bwd_primitive(X_a, Bp_a, Bc_a, dXout_a, dX_a, Bg_a, cos_a, sin_a);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double s = (t1.tv_sec - t0.tv_sec) + 1e-9 * (t1.tv_nsec - t0.tv_nsec);
+        if (s < paired_best) paired_best = s;
+
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int it = 0; it < iters; it++) {
+            flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
+                X_b, Bp_b, Bc_b, dXout_b, dX_b, Bg_b, cos_b, sin_b
+            );
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        s = (t1.tv_sec - t0.tv_sec) + 1e-9 * (t1.tv_nsec - t0.tv_nsec);
+        if (s < fused_best) fused_best = s;
+    }
+
+    double ratio = paired_best / fused_best;
+    printf("  paired wall best (%d iter × 3 reps) = %.4fs  (%.2f µs/iter)\n",
+           iters, paired_best, paired_best * 1e6 / iters);
+    printf("  fused  wall best (%d iter × 3 reps) = %.4fs  (%.2f µs/iter)\n",
+           iters, fused_best, fused_best * 1e6 / iters);
     printf("  ratio (paired/fused) = %.3fx\n", ratio);
     printf("\n");
 
@@ -327,6 +345,6 @@ static void run_test(int do_wall_bench) {
     } else if (ratio >= 1.05) {
         printf("INFO  F-RFC048-FUSED-WALL-IMPROVED  %.3fx (mild improvement, <1.30x threshold)\n", ratio);
     } else {
-        printf("INFO  F-RFC048-FUSED-WALL-IMPROVED  %.3fx (no/negative improvement at this iter)\n", ratio);
+        printf("INFO  F-RFC048-FUSED-WALL-IMPROVED  %.3fx (no/negative improvement at single-block scope)\n", ratio);
     }
 }
