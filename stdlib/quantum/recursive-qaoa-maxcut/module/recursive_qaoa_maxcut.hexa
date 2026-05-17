@@ -1,0 +1,691 @@
+#!hexa strict
+// qmirror/recursive-qaoa-maxcut/module/recursive_qaoa_maxcut.hexa
+//
+// @tool(slug="qmirror_recursive_qaoa_maxcut", desc="Modified Recursive QAOA-1 (RQAOA-1) for EXACT MaxCut on bipartite graphs, reproduced on the pure-hexa engine_aer state-vector kernel. Builds the QAOA-1 state |psi_1> = e^{-i beta H_B} e^{-i gamma H_C} |+>^n with H_C = (1/2) sum_(i,j) w_ij (1 - Z_i Z_j), H_B = sum X_i; reads Z_iZ_j edge correlations off the exact 2^n state vector; recursively eliminates the max-|correlation| edge under the restricted parameter regime until a brute-forceable core remains. Reproduces Bae et al. arXiv:2408.13207 Theorem 8: modified RQAOA-1 always finds the exact MaxCut on positive-weighted bipartite graphs.")
+// @usage(hexa run qmirror/recursive-qaoa-maxcut/module/recursive_qaoa_maxcut.hexa --selftest)
+// @sentinel(__QMIRROR_RECURSIVE_QAOA_MAXCUT__ <PASS|FAIL>)
+// @resolver-bypass(reason="Selftest exercises the pure-hexa engine_aer kernel only (no qiskit, no python bridge).")
+//
+// Paper:  Eunok Bae, Hyukjoon Kwon, et al., "Modified Recursive QAOA for
+//         Exact Max-Cut Solutions on Bipartite Graphs", arXiv:2408.13207
+//         (2024).
+//   - QAOA-1 ansatz:  |psi_1(b,g)> = e^{-i b H_B} e^{-i g H_C} |+>^n
+//       H_C = (1/2) sum_{(i,j) in E} w_ij (1 - Z_i Z_j)
+//       H_B = sum_i X_i
+//   - Edge correlation:  M_uv = <psi_1| Z_u Z_v |psi_1>
+//   - RQAOA recursion (Alg. 2 / Alg. 7): pick (k,l) = argmax_{(i,j) in E}
+//     |M_ij|; impose Z_l = sgn(M_kl) Z_k; eliminate variable l; recurse
+//     until n_c vertices remain; brute-force the core; reconstruct.
+//   - Restricted parameter regime (Alg. 7):  0 < |g| <= pi/(2 w*) and
+//     0 < b < pi/4, with w* = max_{(i,j) in E} |w_ij|.
+//   - Theorem 8: Alg. 7 exactly solves MAX-CUT on parity-signed-weight
+//     graphs; hence it always finds the exact MaxCut on positive-weighted
+//     bipartite graphs (approximation ratio alpha = 1).
+//
+// HONEST SCOPE (@D g3 / @F f1):  This is an EXACT classical <=24-vertex
+// state-vector reproduction of the IDEAL RQAOA-1 protocol on the pure-hexa
+// engine_aer kernel. It is NOT a real QPU (no device noise / latency /
+// readout error) and NOT the large-n / asymptotic regime. The paper's
+// exactness on bipartite graphs is an ANALYTIC theorem; the simulation
+// exhibits it on concrete small instances, it does not prove it. No n=6
+// lattice-fit on any external entity.
+//
+// Spec ref: MODULE/recursive-qaoa-maxcut.md (deep-dive + design + Applied diff)
+// Plan ref: MODULE/README.md  Cluster 1, rank-1 shortlist entry.
+//
+// Falsifier-first (@D g6): _selftest() runs the FAIL branch logic first.
+//   FAIL if  RQAOA-1 returned cut value  !=  brute-force MaxCut optimum
+//   on the fixed seeded bipartite instance, OR if the amplitude-resummed
+//   <C> from the engine_aer state vector  !=  the direct bitstring-
+//   amplitude resum within 1e-9.
+
+use "../../engine_aer/module/state_vector.hexa"
+use "../../engine_aer/module/gates.hexa"
+
+let _PI = 3.141592653589793
+
+// ─── small numeric helpers ──────────────────────────────────────────
+
+fn _absf(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _absi(x: int) -> int {
+    if x < 0 { return 0 - x }
+    return x
+}
+
+// bit q of integer k (q0 = LSB), via /,% only (chsh house style).
+fn _bit(k: int, q: int) -> int {
+    let mut v = k
+    let mut i = 0
+    while i < q {
+        v = v / 2
+        i = i + 1
+    }
+    return v % 2
+}
+
+fn _pow2(n: int) -> int {
+    let mut d = 1
+    let mut i = 0
+    while i < n {
+        d = d * 2
+        i = i + 1
+    }
+    return d
+}
+
+// ─── graph representation ───────────────────────────────────────────
+//
+// A graph on `n` vertices is an edge list: parallel arrays
+//   eu[k], ev[k]  endpoints (eu < ev),  ew[k]  weight (>0).
+// Bipartite seed instances are generated so that the two-colouring is
+// known a-priori (used only by the brute-force ground-truth, never by
+// RQAOA itself).
+
+// `ep[k]` is the edge PARITY (Bae et al. "parity-signed weight", the
+// object of Theorem 8):
+//   ep = 0  ->  cut credits w_uv when x_u != x_v   (ordinary MaxCut edge)
+//   ep = 1  ->  cut credits w_uv when x_u == x_v   (sign-flipped edge,
+//               produced when an x_v != x_u contraction folds a v-edge
+//               onto its representative u).
+// The seed instances are ordinary bipartite graphs (all ep = 0); parity
+// only appears mid-recursion. This is exactly the parity-signed-graph
+// closure under which Theorem 8 / Lemma 9 stays exact.
+struct Graph {
+    n:  int,
+    eu: [int],
+    ev: [int],
+    ew: [float],
+    ep: [int]
+}
+
+// Fixed seeded bipartite instance: complete-ish bipartite-flavoured
+// graph on parts A = {0..pa-1}, B = {pa..pa+pb-1}. A deterministic LCG
+// drops some cross edges so the instance is non-trivial but provably
+// bipartite (NO intra-part edges are ever emitted).
+fn _seed_bipartite(pa: int, pb: int, seed: int) -> Graph {
+    let n = pa + pb
+    let mut eu = []
+    let mut ev = []
+    let mut ew = []
+    let mut ep = []
+    let mut s = if seed > 0 { seed } else { 12345 }
+    let mut i = 0
+    while i < pa {
+        let mut j = 0
+        while j < pb {
+            s = (1664525 * s + 1013904223) % 4294967296
+            // keep ~75% of cross edges; weights in {1,2,3}
+            if s % 4 != 0 {
+                let w = to_float((s / 7) % 3 + 1)
+                eu = eu.push(i)
+                ev = ev.push(pa + j)
+                ew = ew.push(w)
+                ep = ep.push(0)         // seed graph is ordinary bipartite
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return Graph { n: n, eu: eu, ev: ev, ew: ew, ep: ep }
+}
+
+// ─── brute-force ground-truth MaxCut (base case + falsifier oracle) ──
+//
+// Enumerates all 2^n assignments. cut(x) = sum_{(u,v)} w_uv * [x_u != x_v].
+// Returns the optimal cut weight. n is kept small (<= ~18) by the
+// recursion's base case and the seed sizes.
+fn _cut_value(g: Graph, x: [int]) -> float {
+    let mut c = 0.0
+    let mut k = 0
+    while k < len(g.eu) {
+        let u = g.eu[k]
+        let v = g.ev[k]
+        let diff = if x[u] != x[v] { 1 } else { 0 }
+        // ep=0: credit when diff==1.  ep=1: credit when diff==0.
+        let want = if g.ep[k] == 0 { 1 } else { 0 }
+        if diff == want {
+            c = c + g.ew[k]
+        }
+        k = k + 1
+    }
+    return c
+}
+
+fn _brute_maxcut(g: Graph) -> float {
+    let dim = _pow2(g.n)
+    let mut best = -1.0
+    let mut m = 0
+    while m < dim {
+        let mut x = []
+        let mut q = 0
+        while q < g.n {
+            x = x.push(_bit(m, q))
+            q = q + 1
+        }
+        let c = _cut_value(g, x)
+        if c > best { best = c }
+        m = m + 1
+    }
+    return best
+}
+
+// ─── QAOA-1 state on the engine_aer kernel ──────────────────────────
+//
+//   |psi_1(b,g)> = e^{-i b H_B} e^{-i g H_C} |+>^n
+//
+//   |+>^n              : H on every qubit.
+//   e^{-i g H_C}       : H_C = (1/2) sum w_uv (1 - Z_uZ_v).  The identity
+//                        term is a global phase (drops out of <Z_uZ_v>),
+//                        so per edge apply e^{+i (g w_uv/2) Z_uZ_v} =
+//                        CX(u,v) . RZ_v(-g w_uv) . CX(u,v).
+//                        (RZ(theta) = diag(e^{-i th/2}, e^{i th/2}); the
+//                        CX-conjugated RZ on the target realises the ZZ
+//                        rotation by angle theta = -g w_uv.)
+//   e^{-i b H_B}       : H_B = sum X_i  ->  RX(2b) on every qubit.
+//
+// Returns the StateVector (caller owns it; free when done).
+fn _qaoa1_state(g: Graph, beta: float, gamma: float) -> StateVector {
+    let n = g.n
+    let mut st = state_zero(n)
+    let h = gate_h()
+
+    // |+>^n
+    let mut q = 0
+    while q < n {
+        st = apply_single(st, h.re, h.im, q, n)
+        q = q + 1
+    }
+
+    // cost layer: per edge ZZ-rotation.
+    //   ep=0 term  w(1 - Z_uZ_v)/2  ->  phase e^{+i (g w/2) Z_uZ_v},
+    //              realised by ZZ-rotation angle theta = -g w.
+    //   ep=1 term  w(1 + Z_uZ_v)/2  ->  opposite sign  theta = +g w.
+    let mut k = 0
+    while k < len(g.eu) {
+        let u = g.eu[k]
+        let v = g.ev[k]
+        let mut theta = 0.0 - (gamma * g.ew[k])
+        if g.ep[k] == 1 { theta = gamma * g.ew[k] }
+        st = apply_cnot(st, u, v, n)
+        let rz = gate_rz(theta)
+        st = apply_single(st, rz.re, rz.im, v, n)
+        st = apply_cnot(st, u, v, n)
+        k = k + 1
+    }
+
+    // mixer layer: RX(2*beta) on every qubit
+    let rx = gate_rx(2.0 * beta)
+    let mut q2 = 0
+    while q2 < n {
+        st = apply_single(st, rx.re, rx.im, q2, n)
+        q2 = q2 + 1
+    }
+    return st
+}
+
+// <Z_u Z_v> read off the EXACT state vector by amplitude resummation:
+//   <Z_uZ_v> = sum_k |amp_k|^2 * (-1)^{bit_u(k) XOR bit_v(k)}.
+fn _corr_ZZ(st: StateVector, u: int, v: int) -> float {
+    let dim = state_dim(st)
+    let mut acc = 0.0
+    let mut k = 0
+    while k < dim {
+        let re = amp_re_at(st, k)
+        let im = amp_im_at(st, k)
+        let p = re * re + im * im
+        let bu = _bit(k, u)
+        let bv = _bit(k, v)
+        if bu == bv {
+            acc = acc + p
+        } else {
+            acc = acc - p
+        }
+        k = k + 1
+    }
+    return acc
+}
+
+// <H_C> from the EXACT state vector (amplitude-resummed cost expectation):
+//   ep=0:  (1/2) w (1 - <Z_uZ_v>)   ep=1:  (1/2) w (1 + <Z_uZ_v>).
+fn _cost_from_state(g: Graph, st: StateVector) -> float {
+    let mut c = 0.0
+    let mut k = 0
+    while k < len(g.eu) {
+        let m = _corr_ZZ(st, g.eu[k], g.ev[k])
+        if g.ep[k] == 0 {
+            c = c + 0.5 * g.ew[k] * (1.0 - m)
+        } else {
+            c = c + 0.5 * g.ew[k] * (1.0 + m)
+        }
+        k = k + 1
+    }
+    return c
+}
+
+// Independent cross-check used by the falsifier: <H_C> obtained by a
+// DIRECT per-bitstring resum (probability of each computational basis
+// string times that string's classical cut value). Mathematically
+// identical to _cost_from_state but computed by a disjoint code path,
+// so a kernel/index bug shows up as a mismatch > 1e-9.
+fn _cost_direct_resum(g: Graph, st: StateVector) -> float {
+    let dim = state_dim(st)
+    let mut c = 0.0
+    let mut m = 0
+    while m < dim {
+        let re = amp_re_at(st, m)
+        let im = amp_im_at(st, m)
+        let p = re * re + im * im
+        if p > 0.0 {
+            let mut x = []
+            let mut q = 0
+            while q < g.n {
+                x = x.push(_bit(m, q))
+                q = q + 1
+            }
+            c = c + p * _cut_value(g, x)
+        }
+        m = m + 1
+    }
+    return c
+}
+
+// ─── modified RQAOA-1 recursion ─────────────────────────────────────
+//
+// Restricted parameter regime (Alg. 7):  0 < |gamma| <= pi/(2 w*),
+//   0 < beta < pi/4,  w* = max edge weight.  We take the regime-interior
+//   point  gamma = pi/(2 w* * G_DIV),  beta = pi/8.  Lemma 10 guarantees
+//   that in this regime sgn(M_uv) matches the optimal-partition relation
+//   for every surviving edge, so the greedy elimination is exact on
+//   bipartite graphs.
+let _G_DIV = 4.0
+let _BETA  = _PI / 8.0
+
+fn _max_weight(g: Graph) -> float {
+    let mut w = 0.0
+    let mut k = 0
+    while k < len(g.ew) {
+        if g.ew[k] > w { w = g.ew[k] }
+        k = k + 1
+    }
+    if w <= 0.0 { return 1.0 }
+    return w
+}
+
+// One RQAOA elimination step. Picks (k,l) = argmax |M_ij| over the
+// current edges, returns the chosen endpoints and sgn(M_kl) so the
+// caller can impose  x_l = (s==+1 ? x_k : 1-x_k)  during reconstruction
+// and contract the graph.
+struct ElimChoice {
+    ok:   int,
+    u:    int,        // kept endpoint (lower id after relabel)
+    v:    int,        // eliminated endpoint
+    s:    int,        // +1 : x_v == x_u  ;  -1 : x_v != x_u
+    mabs: float
+}
+
+fn _pick_edge(g: Graph, st: StateVector) -> ElimChoice {
+    if len(g.eu) < 1 {
+        return ElimChoice { ok: 0, u: 0, v: 0, s: 1, mabs: 0.0 }
+    }
+    let mut bi = 0
+    let mut bm = -1.0
+    let mut bcorr = 0.0
+    let mut k = 0
+    while k < len(g.eu) {
+        let m = _corr_ZZ(st, g.eu[k], g.ev[k])
+        let am = _absf(m)
+        if am > bm {
+            bm = am
+            bi = k
+            bcorr = m
+        }
+        k = k + 1
+    }
+    // <Z_uZ_v> > 0  =>  same value maximises cut-elsewhere structure in
+    // the restricted regime: identify x_v = x_u (s=+1). <Z_uZ_v> < 0 =>
+    // x_v != x_u (s=-1). (sgn(M_kl) constraint of Alg. 7 step 4.)
+    let s = if bcorr >= 0.0 { 1 } else { 0 - 1 }   // @allow-relop-banned
+    return ElimChoice {
+        ok: 1, u: g.eu[bi], v: g.ev[bi], s: s, mabs: bm
+    }
+}
+
+// Contract vertex `v` into `u` under the constraint encoded by `s`
+// (s=+1: x_v = x_u ;  s=-1: x_v = 1 - x_u). This is the parity-signed
+// variable substitution of Lemma 9: every edge `(v,w)` with parity p is
+// rewired to `(u,w)`; when s=-1 the substitution x_v -> (1-x_u) flips
+// that edge's credit condition, so its parity becomes (1-p). Self-loops
+// (u,u) collapse: an x_u-vs-x_u edge of parity p contributes a constant
+// (w if p=1, else 0) — exact, and since the constant is identical for
+// every assignment it does not affect the argmax, so it is dropped (the
+// brute oracle on the *original* graph is the source of truth for the
+// reported cut). Parallel edges between the same pair AND same parity
+// are merged additively; differing parity stays as separate edges.
+fn _contract(g: Graph, u: int, v: int, s: int) -> Graph {
+    let mut eu2 = []
+    let mut ev2 = []
+    let mut ew2 = []
+    let mut ep2 = []
+    let mut k = 0
+    while k < len(g.eu) {
+        let mut a = g.eu[k]
+        let mut b = g.ev[k]
+        let mut p = g.ep[k]
+        // edge touches v iff one endpoint == v: substitution flips parity
+        // when s=-1 (x_v = 1 - x_u).
+        let touches_v = if a == v || b == v { 1 } else { 0 }
+        if touches_v == 1 && s == (0 - 1) {     // @allow-relop-banned
+            p = if p == 0 { 1 } else { 0 }
+        }
+        // redirect v -> u
+        if a == v { a = u }
+        if b == v { b = u }
+        // shift ids above v down by one
+        if a > v { a = a - 1 }
+        if b > v { b = b - 1 }
+        if a != b {
+            let lo = if a < b { a } else { b }
+            let hi = if a < b { b } else { a }
+            // merge into an existing parallel edge of identical parity
+            let mut merged = 0
+            let mut j = 0
+            while j < len(eu2) {
+                if merged == 0 && eu2[j] == lo && ev2[j] == hi && ep2[j] == p {
+                    ew2[j] = ew2[j] + g.ew[k]
+                    merged = 1
+                }
+                j = j + 1
+            }
+            if merged == 0 {
+                eu2 = eu2.push(lo)
+                ev2 = ev2.push(hi)
+                ew2 = ew2.push(g.ew[k])
+                ep2 = ep2.push(p)
+            }
+        }
+        k = k + 1
+    }
+    return Graph { n: g.n - 1, eu: eu2, ev: ev2, ew: ew2, ep: ep2 }
+}
+
+struct RqaoaResult {
+    ok:        int,
+    cut:       float,       // cut weight RQAOA's assignment achieves
+    brute:     float,       // brute-force MaxCut optimum (oracle)
+    exact:     int,         // 1 iff cut == brute (the Theorem-8 claim)
+    n:         int,
+    n_edges:   int,
+    steps:     int,         // # of RQAOA elimination steps taken
+    cost_amp:  float,       // <H_C> via _cost_from_state (state resum)
+    cost_dir:  float,       // <H_C> via _cost_direct_resum (disjoint path)
+    resum_gap: float,       // |cost_amp - cost_dir|  (falsifier metric)
+    message:   str
+}
+
+fn _rqaoa_fail(reason: str) -> RqaoaResult {
+    return RqaoaResult {
+        ok: 0, cut: 0.0, brute: 0.0, exact: 0, n: 0, n_edges: 0,
+        steps: 0, cost_amp: 0.0, cost_dir: 0.0, resum_gap: 0.0,
+        message: reason
+    }
+}
+
+// Solve MaxCut on `g0` by modified RQAOA-1.  Recursion carries an
+// explicit reconstruction stack: each step records (rep, elim, sign,
+// rep_was_above_elim...) so once the brute-forced core is two-coloured
+// we replay the constraints to recover a full assignment on the
+// original vertex set, then evaluate its cut against the brute oracle.
+fn rqaoa_maxcut(g0: Graph, n_core: int) -> RqaoaResult {
+    if g0.n < 1 { return _rqaoa_fail("rqaoa: empty graph") }
+
+    let w_star = _max_weight(g0)
+    let gamma = _PI / (2.0 * w_star * _G_DIV)   // restricted-regime interior
+    let beta  = _BETA
+
+    // Diagnostics computed once on the full-instance QAOA-1 state (for
+    // the amplitude-resum falsifier).
+    let st0 = _qaoa1_state(g0, beta, gamma)
+    let cost_amp = _cost_from_state(g0, st0)
+    let cost_dir = _cost_direct_resum(g0, st0)
+    let _ = state_free(st0)
+    let resum_gap = _absf(cost_amp - cost_dir)
+
+    // Reconstruction stack (parallel arrays). At each step the CURRENT
+    // graph's vertex `vv` is removed and tied to `uu` with sign `ss`.
+    // We store the ORIGINAL-id form for replay.
+    let mut st_u   = []        // representative original id
+    let mut st_v   = []        // eliminated original id
+    let mut st_s   = []        // +1 same, -1 opposite
+
+    // orig[i] = original vertex id currently sitting at slot i.
+    let mut orig = []
+    let mut i0 = 0
+    while i0 < g0.n {
+        orig = orig.push(i0)
+        i0 = i0 + 1
+    }
+
+    let mut g = g0
+    let mut steps = 0
+    while g.n > n_core && len(g.eu) > 0 {
+        let st = _qaoa1_state(g, beta, gamma)
+        let ch = _pick_edge(g, st)
+        let _ = state_free(st)
+        if ch.ok != 1 {
+            return _rqaoa_fail("rqaoa: edge pick failed at step " + str(steps))
+        }
+        let ou = orig[ch.u]
+        let ov = orig[ch.v]
+        st_u = st_u.push(ou)
+        st_v = st_v.push(ov)
+        st_s = st_s.push(ch.s)
+
+        g = _contract(g, ch.u, ch.v, ch.s)
+        // mirror the id relabel on `orig`
+        let mut orig2 = []
+        let mut t = 0
+        while t < len(orig) {
+            if t != ch.v {
+                orig2 = orig2.push(orig[t])
+            }
+            t = t + 1
+        }
+        orig = orig2
+        steps = steps + 1
+    }
+
+    // Base case: brute-force the residual core, recording the optimal
+    // colouring of the surviving original ids.
+    let core_dim = _pow2(g.n)
+    let mut best = -1.0
+    let mut best_m = 0
+    let mut m = 0
+    while m < core_dim {
+        let mut x = []
+        let mut q = 0
+        while q < g.n {
+            x = x.push(_bit(m, q))
+            q = q + 1
+        }
+        let c = _cut_value(g, x)
+        if c > best {
+            best = c
+            best_m = m
+        }
+        m = m + 1
+    }
+
+    // Full assignment over ORIGINAL ids.
+    let mut assign = []
+    let mut a0 = 0
+    while a0 < g0.n {
+        assign = assign.push(-1)
+        a0 = a0 + 1
+    }
+    // seed from the core colouring
+    let mut cq = 0
+    while cq < g.n {
+        assign[orig[cq]] = _bit(best_m, cq)
+        cq = cq + 1
+    }
+    // replay constraints in REVERSE elimination order
+    let mut si = len(st_u) - 1
+    while si >= 0 {                       // @allow-relop-banned
+        let ou = st_u[si]
+        let ov = st_v[si]
+        let ss = st_s[si]
+        let base = assign[ou]
+        if base < 0 {
+            // representative not yet coloured (isolated chain) -> 0
+            assign[ou] = 0
+        }
+        let b2 = assign[ou]
+        if ss == 1 {
+            assign[ov] = b2
+        } else {
+            assign[ov] = if b2 == 0 { 1 } else { 0 }
+        }
+        si = si - 1
+    }
+    // any still-uncoloured (isolated) vertex -> 0 (does not affect cut)
+    let mut fz = 0
+    while fz < g0.n {
+        if assign[fz] < 0 { assign[fz] = 0 }
+        fz = fz + 1
+    }
+
+    let cut = _cut_value(g0, assign)
+    let brute = _brute_maxcut(g0)
+    let exact = if _absf(cut - brute) < 0.0000001 { 1 } else { 0 }
+
+    return RqaoaResult {
+        ok: 1, cut: cut, brute: brute, exact: exact,
+        n: g0.n, n_edges: len(g0.eu), steps: steps,
+        cost_amp: cost_amp, cost_dir: cost_dir, resum_gap: resum_gap,
+        message: "rqaoa-1: cut=" + str(cut) + " brute=" + str(brute)
+            + " exact=" + str(exact)
+    }
+}
+
+// ─── selftest (falsifier-first, @D g6) ──────────────────────────────
+//
+// FAIL conditions (these are evaluated and the FAILED marker is emitted
+// BEFORE the pass branch):
+//   (F-a) RQAOA-1 cut value  !=  brute-force MaxCut optimum, on the
+//         fixed seeded bipartite instance  ->  Theorem-8 violated.
+//   (F-b) amplitude-resummed <C>  !=  direct bitstring-amplitude resum
+//         within 1e-9  ->  engine_aer index / kernel bug.
+// over THREE distinct seeded bipartite instances (sizes 3+3, 4+4, 5+4).
+
+fn _emit_marker(passed: int, body: str) -> int {
+    let ts = exec("date +%s").trim()
+    let qm_root = env("QMIRROR_ROOT")
+    let root = if qm_root.len() > 0 { qm_root } else { exec("pwd").trim() }
+    let marker_dir = root + "/state/markers"
+    let _mk = exec("mkdir -p " + marker_dir + " 2>/dev/null")
+    let suffix = if passed == 1 { ".marker" } else { "_FAILED.marker" }
+    let path = marker_dir + "/recursive_qaoa_maxcut_" + ts + suffix
+    let _w = exec("echo '" + body + "' > '" + path + "'")
+    println("  marker: " + path)
+    return 0
+}
+
+struct Case {
+    pa:   int,
+    pb:   int,
+    seed: int
+}
+
+fn _run_cases() -> [RqaoaResult] {
+    let cases = [
+        Case { pa: 3, pb: 3, seed: 20240813 },
+        Case { pa: 4, pb: 4, seed: 13207 },
+        Case { pa: 5, pb: 4, seed: 8675309 }
+    ]
+    let mut out = []
+    let mut i = 0
+    while i < len(cases) {
+        let c = cases[i]
+        let g = _seed_bipartite(c.pa, c.pb, c.seed)
+        // recurse down to a 3-vertex brute-forceable core
+        let r = rqaoa_maxcut(g, 3)
+        out = out.push(r)
+        i = i + 1
+    }
+    return out
+}
+
+// Returns 1 iff ALL falsifier conditions pass on ALL cases.
+fn _evaluate(results: [RqaoaResult]) -> int {
+    let mut ok = 1
+    let mut i = 0
+    while i < len(results) {
+        let r = results[i]
+        if r.ok != 1 { ok = 0 }
+        // (F-a) exactness — Theorem 8
+        if r.exact != 1 { ok = 0 }
+        // (F-b) amplitude resum vs direct resum within 1e-9
+        if r.resum_gap > 0.000000001 { ok = 0 }
+        i = i + 1
+    }
+    return ok
+}
+
+fn _selftest() -> int {
+    let results = _run_cases()
+    // Falsifier-first: compute the FAIL verdict, then act on it.
+    let passed = _evaluate(results)
+    let mut body = "recursive_qaoa_maxcut selftest;"
+    let mut i = 0
+    while i < len(results) {
+        let r = results[i]
+        body = body + " case" + str(i) + "[n=" + str(r.n)
+            + ",E=" + str(r.n_edges) + ",cut=" + str(r.cut)
+            + ",brute=" + str(r.brute) + ",exact=" + str(r.exact)
+            + ",resum_gap=" + str(r.resum_gap) + "];"
+        i = i + 1
+    }
+    if passed != 1 {
+        let _ = _emit_marker(0, "FAIL " + body)
+        return 0
+    }
+    let _ = _emit_marker(1, "PASS " + body)
+    return 1
+}
+
+fn main() {
+    println("[qmirror/recursive-qaoa-maxcut] modified RQAOA-1 exact MaxCut")
+    println("  paper  = Bae et al., arXiv:2408.13207 (Theorem 8)")
+    println("  regime = 0<|g|<=pi/(2 w*), 0<b<pi/4  (interior: g=pi/(2 w* * "
+        + str(_G_DIV) + "), b=pi/8)")
+    println("  kernel = pure-hexa engine_aer state vector (exact 2^n)")
+    let results = _run_cases()
+    let mut i = 0
+    while i < len(results) {
+        let r = results[i]
+        println("  case " + str(i) + ": n=" + str(r.n)
+            + " E=" + str(r.n_edges)
+            + " steps=" + str(r.steps)
+            + " RQAOA-cut=" + str(r.cut)
+            + " brute-MaxCut=" + str(r.brute)
+            + " exact=" + str(r.exact))
+        println("          <C>_state=" + str(r.cost_amp)
+            + " <C>_direct=" + str(r.cost_dir)
+            + " resum_gap=" + str(r.resum_gap))
+        i = i + 1
+    }
+    if _selftest() == 1 {
+        println("[qmirror/recursive-qaoa-maxcut] SELFTEST PASS "
+            + "(RQAOA-1 cut == brute MaxCut on all bipartite cases; "
+            + "amplitude resum == direct resum < 1e-9)")
+        println("__QMIRROR_RECURSIVE_QAOA_MAXCUT__ PASS")
+    } else {
+        println("[qmirror/recursive-qaoa-maxcut] SELFTEST FAIL "
+            + "(falsifier triggered: see *_FAILED.marker)")
+        println("__QMIRROR_RECURSIVE_QAOA_MAXCUT__ FAIL")
+    }
+}

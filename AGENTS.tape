@@ -78,6 +78,7 @@
   inbox/patches/ -> "external-contributed patch markdowns (one concept per file)"
   stdlib/qrng/ -> "★ Quantum RNG — 9 backends T0..T3 + NIST SP 800-22 audit. RFC 044 absorption of ~/core/qrng (헌법 v2 룰 4 reference impl). see §0 qrng_stack."
   stdlib/sim_universe/ -> "★ Sim-Universe — virtual-universe runtime (26 modules · ~32k LoC · τ-clock + multiverse + qpu_bridge + 16 experiments). RFC 046 absorption of ~/core/sim-universe. see §0 sim_universe_stack."
+  stdlib/quantum/ -> "★ Quantum Mirror — ≤30-qubit laptop-grade substrate (38 module dirs · 62k LoC · Aer-compat state-vector kernel + 27 algorithms + chemistry_vqe). RFC 045 absorption of ~/core/qmirror. see §0 qmirror_stack."
 
 # ─── §0 PROJECT-WIDE QRNG STACK (2026-05-16) ─────────────────────────
 # stdlib/qrng/ 는 헌법 v2 룰 4 (외부 자원 try-CLI-or-fallback) 의 모범 사례.
@@ -112,6 +113,24 @@
   doi = "10.5281/zenodo.20102970 (dancinlab/sim-universe v1.1.0)"
   rfc = "RFC 046 Phase A + 046-A + 046-B LANDED 2026-05-16"
   status = "FULL absorption — substrate + 15 experiments + CLI dispatcher + README + governance + archive ✅"
+  @> README.md
+
+# ─── §0 PROJECT-WIDE QUANTUM-MIRROR STACK (2026-05-16) ────────────────
+# stdlib/quantum/ — ≤30-qubit laptop-grade QPU-equivalent substrate.
+# 헌법 v2 룰 2 (algorithm absorption) + 룰 3 (frozen archive).
+
+@N qmirror_stack := "stdlib/quantum — 38-module quantum mirror substrate" :: note [d=2026-05-16 active]
+  core = "stdlib/quantum/{engine_aer (Aer-compat state-vector kernel + QASM3 lex/parse/oracle + gates, 2.2k LoC), circuit, sampler, stabilizer, entropy, qrng (consumer-side HMAC-DRBG amplifier), selftest, chsh (CHSH Bell test), iit_mip + phi (IIT 4.0 phi-star), tomography, process_tomography, cscs}"
+  algorithms = "27 @D-governed modules each vs a published reference — rqaoa (arXiv:2408.13207) · ctx (2505.21243) · dynghz (2308.13065) · vqd (2502.17932) · stab-ext (2406.16673) · overlap-vqe (2301.10196) · sre (2106.12587) · lg (2411.02301) · pseudo-tel (Mermin 1990) · rpe (1502.02677) · sym-shadow (2310.03071) · hardy (Hardy 1993) · page-curve (Page 1993) · qdrift (Campbell 2019) · cdr (Czarnik 2021) · wigner (Veitch 2014) · qfi (2411.10117) · shallow (2209.12924) · gme-steer (2402.18522) · mabk (Mermin 1990 + Werner-Wolf 2001) · mirror-bench (Proctor 2022)"
+  applications = "stdlib/quantum/{chemistry_vqe (29.6k LoC · 59 files · per-molecule CMT hamiltonians 4e4o/4e5o/4e6o + kuPCCGSD + L-BFGS-B), bench (per-molecule 4e4o benchmarks), surface_code_d3}"
+  cli = "hexa qmirror <subcmd> — dispatcher = stdlib/quantum/quantum.hexa (status · selftest · chsh · iit · qrng · 27 algorithm subcmds · --help · --version). self/main.hexa 에 'else if sub == \"qmirror\"' 분기. 모듈 = standalone program; subprocess dispatch."
+  structure_note = "chemistry_vqe + bench use relative imports (./ and ../../<feature>/module/). The <feature>/module/ directory structure is preserved verbatim under stdlib/quantum/ so all relative imports resolve unchanged — NO flatten, NO rewrite."
+  envelope = "Statistical-equivalence substrate for the ≤30-qubit low-noise envelope only. Casio-vs-Rolex analogy. NOT a universal QPU replacement."
+  qrng_boundary = "stdlib/quantum/qrng/ is the CONSUMER-side HMAC-DRBG amplifier; stdlib/qrng/ (RFC 044) is the PROVIDER registry. Zero code overlap, struct-shape compat by convention."
+  archive = "~/core/archive_qmirror/ — frozen 묘비 (헌법 v2 룰 3)"
+  governance = "see @D g_qmirror_envelope, g_qmirror_consumer_qrng · @F f_qmirror_real_qpu_claim"
+  doi = "10.5281/zenodo.20102964 (dancinlab/qmirror v2.0)"
+  rfc = "RFC 045 LANDED 2026-05-16 — 114 .hexa, all parse-clean. dancinlab quantum-stack absorption series (044 qrng + 045 qmirror + 046 sim-universe) COMPLETE."
   @> README.md
 
 # ─── §3 Governance rules ─────────────────────────────────────────────
@@ -208,6 +227,18 @@
   source = "RFC 044 + RFC 046 cross-link 2026-05-16"
   @> AGENTS.md
 
+@D g_qmirror_envelope := "qmirror ≤30-qubit envelope" :: governance [required d=2026-05-16 active]
+  rule = "stdlib/quantum/ is a statistical-equivalence substrate for the ≤30-qubit low-noise envelope ONLY — NOT a universal QPU replacement."
+  apply = "Honest analogy: Casio vs Rolex — both tell time, qmirror is the Casio. Claims of QPU-equivalence MUST be scoped to ≤30-qubit low-noise."
+  source = "qmirror AGENTS.tape (migrated 2026-05-16 RFC 045)"
+  @> AGENTS.md
+
+@D g_qmirror_consumer_qrng := "qmirror.qrng = consumer-side amplifier" :: governance [required d=2026-05-16 active]
+  rule = "stdlib/quantum/qrng/ is the CONSUMER-side HMAC-DRBG amplifier; stdlib/qrng/ (RFC 044) is the PROVIDER registry. Zero code overlap; struct-shape compat by convention."
+  why = "Dual-home boundary preserved across the absorption series — qmirror amplifies, qrng provides."
+  source = "RFC 044 + RFC 045 cross-link 2026-05-16"
+  @> AGENTS.md
+
 @D g_plan_consolidation := "single-source compile PLAN tracking — compiler/PLAN.md" :: governance [required d=2026-05-17 active]
   rule = "Compile 관련 (compiler/ · self/ · 부트스트랩 · test sweep · interp-retirement · aprime_cc · hexa-build 등) cycle 진행 로그 는 `compiler/PLAN.md` 의 `## 진행 로그` 섹션에 append. 신규 `PLAN-*.md` 파일 작성 금지 — 기존 `PLAN-interp-retirement.md` · `PLAN-stage3-*.md` 는 closure 까지 유지, 신규 entry 만 `compiler/PLAN.md` 로 redirect."
   why = "문서분산 방지. cycle 단위 일목요연 파악 = `compiler/PLAN.md` 한 파일. parser/codegen/lower/runtime 부분 수정 + 부트스트랩 재빌드 + smoke sweep 측정 + interp-retirement cleanup 모두 동일한 진행 로그 stream."
@@ -240,6 +271,11 @@
   pattern = "Claiming stdlib/sim_universe/ is lattice QCD · Einstein-equation N-body cosmology · Standard-Model physics · or a measurement of 'whether reality is simulable'."
   remedy = "Frame as 'toy lattice-model substrate with QRNG-anchored entropy · Bostrom-flavored simulation framing'. Per-module honest-scope box explicit (e.g. 'NOT decoherent · NOT lab device · NOT L→∞')."
   source = "sim-universe README §Caveats raw10 C3 (migrated 2026-05-16 RFC 046)"
+
+@F f_qmirror_real_qpu_claim := "qmirror real-QPU overreach" :: governance [required deny:write d=2026-05-16 active]
+  pattern = "Claiming stdlib/quantum/ IS a real QPU, or equivalent beyond the ≤30-qubit low-noise envelope."
+  remedy = "Scope all equivalence claims to the ≤30-qubit low-noise envelope. State statistical-equivalence, not physical identity. Casio-vs-Rolex framing."
+  source = "qmirror AGENTS.tape (migrated 2026-05-16 RFC 045)"
 
 # ─── §5 External citations ───────────────────────────────────────────
 
@@ -292,6 +328,13 @@
   github = "dancinlab/sim-universe (private 후 2026-05-16)"
   doi = "10.5281/zenodo.20102970"
   successor = "stdlib/sim_universe/ (RFC 046 LANDED 2026-05-16)"
+
+@X x_archive_qmirror := "qmirror 묘비 archive" :: archive [d=2026-05-16 active]
+  url = "file://~/core/archive_qmirror/"
+  scope = "Frozen historical SSOT of dancinlab/qmirror v2.0 — AGENTS.tape · CHANGELOG · README · CITATION · LICENSE · LICENSING · BENCH.tape · IDENTITY.tape · AER_HEXA_ABSORPTION_PLAN · CHEMISTRY_VQE_PYSCF_BACKEND_PLAN · hexa.toml · install.hexa · cli/ · docs/ · MODULE/ · examples/ · 38 module dirs verbatim. 재해석 없음 (헌법 v2 룰 3)."
+  github = "dancinlab/qmirror (private 후 2026-05-16)"
+  doi = "10.5281/zenodo.20102964"
+  successor = "stdlib/quantum/ (RFC 045 LANDED 2026-05-16)"
 
 # ─── §6 Notes ────────────────────────────────────────────────────────
 

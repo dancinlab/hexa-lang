@@ -1,0 +1,83 @@
+#!hexa strict
+//
+// _adapt_vqe_cmt_mfn2_4e6o.hexa — ADAPT-VQE on CMT mfn2 4e/6o (10-qubit).
+//
+// @sentinel(__QMIRROR_CHEM_ADAPT_VQE_CMT_MFN2_4E6O__ <PASS|FAIL>)
+
+use "./_adapt_vqe_driver_4e6o.hexa"
+use "./chemistry_vqe_cmt_uccsd_cmt_mfn2_4e6o.hexa"
+
+fn main() {
+    println("[qmirror/chemistry_vqe] ADAPT-VQE — CMT mfn2/4e6o (10-qubit)")
+    println("  pool:       UCCSD 92 ops (vendored from chemistry_vqe_cmt_uccsd_cmt_mfn2_4e6o)")
+    println("")
+
+    let cache = cv_uccsd_cmt_mfn2_4e6o_cache()
+    let casci = uccsd_cmt_mfn2_4e6o_casci_ref()
+    println("  CASCI(4,6) ref: " + str(casci) + " Ha")
+    println("")
+
+    let t_start = exec("date +%s").trim()
+    let t_start_i = to_int(t_start)
+
+    let result = adapt_vqe_4e6o(cache, 12, 0.001, 0.000000001)
+
+    let t_end = exec("date +%s").trim()
+    let wall = to_float(to_int(t_end) - t_start_i)
+
+    let energy = to_float(result["energy"])
+    let n_ops = to_int(result["n_ops_selected"])
+    let selected_ops = result["selected_ops"]
+    let grad_at_pick = result["grad_at_pick"]
+
+    let delta_uha = (energy - casci) * 1000000.0
+    let abs_delta = if delta_uha < 0.0 { 0.0 - delta_uha } else { delta_uha }
+
+    println("")
+    println("  ADAPT-VQE done:")
+    println("    n_ops_selected = " + str(n_ops) + " (UCCSD baseline = 92)")
+    println("    selected_ops   = " + str(selected_ops))
+    println("    grad_at_pick   = " + str(grad_at_pick))
+    println("    E_VQE          = " + str(energy) + " Ha")
+    println("    E_CASCI(4,6)   = " + str(casci) + " Ha")
+    println("    |delta|        = " + str(abs_delta) + " uHa")
+    println("    wall           = " + str(wall) + "s")
+    println("")
+
+    let chem_acc = abs_delta < 1600.0
+    let fewer = n_ops < 92
+    let pass = chem_acc && fewer
+
+    let ts = exec("date +%s").trim()
+    let qm_root = env("QMIRROR_ROOT")
+    let root = if qm_root.len() > 0 { qm_root } else { exec("pwd").trim() }
+    let marker_dir = root + "/state/markers"
+    let _md = exec("mkdir -p " + marker_dir + " 2>/dev/null")
+    let marker_name = if pass {
+        "_adapt_vqe_cmt_mfn2_4e6o_" + ts + ".marker"
+    } else {
+        "_adapt_vqe_cmt_mfn2_4e6o_" + ts + "_FAILED.marker"
+    }
+    let marker_path = marker_dir + "/" + marker_name
+    let body = "[qmirror/chemistry_vqe/_adapt_vqe_cmt_mfn2_4e6o]" +
+               " n_ops=" + str(n_ops) +
+               " delta_uHa=" + str(abs_delta) +
+               " wall=" + str(wall) + "s" +
+               " E_VQE=" + str(energy) +
+               " E_CASCI=" + str(casci) +
+               " chem_acc=" + str(chem_acc) +
+               " fewer_than_uccsd=" + str(fewer)
+    let _w = exec("echo '" + body + "' > '" + marker_path + "'")
+    println("  marker: " + marker_path)
+    println("")
+
+    if pass {
+        println("__QMIRROR_CHEM_ADAPT_VQE_CMT_MFN2_4E6O__ PASS n_ops=" + str(n_ops) +
+                " delta_uHa=" + str(abs_delta) +
+                " wall=" + str(wall) + "s")
+        return
+    }
+    println("__QMIRROR_CHEM_ADAPT_VQE_CMT_MFN2_4E6O__ FAIL n_ops=" + str(n_ops) +
+            " delta_uHa=" + str(abs_delta) +
+            " wall=" + str(wall) + "s")
+}

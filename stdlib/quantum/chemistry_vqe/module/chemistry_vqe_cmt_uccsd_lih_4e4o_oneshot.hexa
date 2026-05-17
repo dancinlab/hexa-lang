@@ -1,0 +1,65 @@
+#!hexa strict
+// qmirror/chemistry_vqe/module/chemistry_vqe_cmt_uccsd_lih_4e4o_oneshot.hexa
+//
+// F-Q-6-E Ramp B EXTERNALIZED — single-shot energy evaluator for the LiH
+// UCCSD 4e/4o ansatz. Reads theta from /tmp/uccsd_theta.txt (26 space-
+// separated floats), runs ONE energy evaluation in pure hexa, writes
+// E(theta) to /tmp/uccsd_energy.txt, exits.
+//
+// Purpose: each invocation is a FRESH HEXA PROCESS — no per-call boxed-float
+// accumulation that the in-process NM loop hit (~180 MB/call → 768 MB cap
+// after ~4 calls). An external optimizer (Python stdlib NM in
+// selftest/cmt_uccsd_lih_4e4o_external_nm_driver.py) drives this script
+// once per energy eval; per-eval startup ~8.5s wall, NM converges within
+// the budget (numpy harness: maxiter=10 → ~5 mHa, maxiter=200 → 1.06 mHa,
+// maxiter=8000 → 0.004 µHa).
+//
+// @tool(slug="qmirror_chemistry_vqe_uccsd_lih_4e4o_oneshot", desc="Single energy eval E(theta) for LiH UCCSD-at-4e/4o ansatz. Reads /tmp/uccsd_theta.txt, writes /tmp/uccsd_energy.txt. For externalized NM driving.")
+// @usage(echo "0 0 ... 0" > /tmp/uccsd_theta.txt; hexa run qmirror/chemistry_vqe/module/chemistry_vqe_cmt_uccsd_lih_4e4o_oneshot.hexa --selftest; cat /tmp/uccsd_energy.txt)
+// @sentinel(__QMIRROR_CHEM_CMT_UCCSD_LIH_4E4O_ONESHOT__ <ENERGY_HA>)
+
+use "./chemistry_vqe_cmt_uccsd_lih_4e4o.hexa"
+
+// Parse 26 space-separated floats from a string. Hexa stdlib doesn't have a
+// generic float-parser, so we use `split` + a per-token to_float (via the
+// hexa runtime's string→float coercion).
+
+fn parse_theta_line(line: str) -> [float] {
+    let tokens = line.split(" ")
+    let mut out = []
+    let mut i = 0
+    let n = len(tokens)
+    while i < n {
+        let t = tokens[i].trim()
+        if len(t) > 0 {
+            out = out.push(to_float(t))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    // Read theta. If file missing, default to zero (HF energy).
+    let raw = exec("cat /tmp/uccsd_theta.txt 2>/dev/null || echo ZERO").trim()
+    let mut theta = []
+    if raw == "ZERO" {
+        let mut i = 0
+        while i < 26 {
+            theta = theta.push(0.0)
+            i = i + 1
+        }
+    } else {
+        theta = parse_theta_line(raw)
+    }
+    if len(theta) != 26 {
+        println("ERROR: expected 26 theta values, got " + str(len(theta)))
+        let _ = exec("echo 'NAN' > /tmp/uccsd_energy.txt")
+        return
+    }
+    let cache = cv_uccsd_lih_cache()
+    let e = cv_uccsd_lih_energy_cached(theta, cache)
+    // Write the energy to file (and to stdout for the sentinel).
+    let _ = exec("echo " + str(e) + " > /tmp/uccsd_energy.txt")
+    println("__QMIRROR_CHEM_CMT_UCCSD_LIH_4E4O_ONESHOT__ " + str(e))
+}

@@ -1,0 +1,562 @@
+#!hexa strict
+// qmirror/chemistry_vqe/module/_kupccgsd_lih_4e4o.hexa
+//
+// k-UpCCGSD-at-4e/4o runner for LiH at R=1.5474Å (CASCI(4,4) anchor).
+//
+// Builds the k-UpCCGSD generator at k=1,2,3 using the partitioned UCCSD
+// excitation pool (10 generalized-singles + pair-doubles params per block)
+// and runs an in-process L-BFGS-B with FD-grad on each, comparing against
+// the UCCSD 26-param baseline (CASCI within 1.6 mHa).
+//
+// @tool(slug="qmirror_kupccgsd_lih_4e4o", desc="Pure-hexa k-UpCCGSD VQE for LiH 4e/4o. Optimizes the k=1/2/3 ansatzs via L-BFGS-B with finite-difference gradients, reusing the cv_uccsd_lih_energy_h hot loop on a partitioned generator cache. Compares param-count vs UCCSD 26 for matching chemical accuracy (1.6 mHa).")
+// @usage(hexa run qmirror/chemistry_vqe/module/_kupccgsd_lih_4e4o.hexa)
+// @sentinel(__QMIRROR_KUPCCGSD_LIH_4E4O__ <PASS|FAIL>)
+//
+// Per-block param count for LiH 4e/4o k-UpCCGSD:
+//   8 generalized singles (4 α + 4 β, occ→virt in this 4e/4o sector)
+//   2 pair doubles        (αα and ββ same-spin paired occ-occ→virt-virt)
+//   = 10 params per k-block
+//
+// k=1 → 10 params,  k=2 → 20 params,  k=3 → 30 params  (vs UCCSD 26).
+//
+// Optimizer: L-BFGS-B core inlined (the shared _lbfgsb_driver.hexa
+// dispatches via integer problem_id; we don't extend its hard-coded cost
+// table — we ship our own minimize that calls cv_uccsd_lih_energy_h on a
+// kupccgsd cache). Same Nocedal-Wright Alg 7.4 two-loop recursion, same
+// strong-Wolfe backtracking line search; m=8 history; FD step 1e-5.
+//
+// Time budget per k: bounded by max_iter * (2*n + ~2) energy evals. Each
+// energy eval is O(n_flat * dim + ham_n * dim) ≈ O((n_flat+175)*64). For
+// k=3 (n=30), max_iter=15 → ~30 * 62 ≈ 1860 evals; each eval ~10ms ⇒ ~20s.
+
+use "./_kupccgsd_generator.hexa"
+
+// ─── inlined L-BFGS-B helpers (parametric over kupccgsd cache) ───────────
+
+fn kup_lbfgs_dot(a_h: int, b_h: int, n: int) -> float {
+    let mut acc = 0.0
+    let mut i = 0
+    while i < n {
+        acc = acc + farr_get(a_h, i) * farr_get(b_h, i)
+        i = i + 1
+    }
+    return acc
+}
+
+fn kup_lbfgs_inf_norm(v_h: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let v = farr_get(v_h, i)
+        let av = if v < 0.0 { 0.0 - v } else { v }
+        if av > m { m = av }
+        i = i + 1
+    }
+    return m
+}
+
+fn kup_lbfgs_copy(dst_h: int, src_h: int, n: int) -> int {
+    let mut i = 0
+    while i < n {
+        let _ = farr_set(dst_h, i, farr_get(src_h, i))
+        i = i + 1
+    }
+    return 0
+}
+
+// dst = a + scale * b
+fn kup_lbfgs_axpy(dst_h: int, a_h: int, scale: float, b_h: int, n: int) -> int {
+    let mut i = 0
+    while i < n {
+        let v = farr_get(a_h, i) + scale * farr_get(b_h, i)
+        let _ = farr_set(dst_h, i, v)
+        i = i + 1
+    }
+    return 0
+}
+
+// In-place clip: x = clip(x, lo, hi). Uniform bounds (±pi) — no per-coord
+// array needed.
+fn kup_lbfgs_clip(x_h: int, lo: float, hi: float, n: int) -> int {
+    let mut i = 0
+    while i < n {
+        let v = farr_get(x_h, i)
+        let clipped = if v < lo { lo } else { if v > hi { hi } else { v } }
+        let _ = farr_set(x_h, i, clipped)
+        i = i + 1
+    }
+    return 0
+}
+
+// FD gradient via cv_uccsd_lih_energy_h (consumes any cache with the right
+// shape — kupccgsd cache qualifies). Reuses state scratch handles.
+fn kup_fd_grad(x_h: int, grad_h: int, n: int, h: float,
+                state_re_h: int, state_im_h: int, cache: map) -> int {
+    let inv_2h = 1.0 / (2.0 * h)
+    let mut k = 0
+    while k < n {
+        let xk = farr_get(x_h, k)
+        let _ = farr_set(x_h, k, xk + h)
+        let f_plus  = cv_uccsd_lih_energy_h(x_h, state_re_h, state_im_h, cache)
+        let _ = farr_set(x_h, k, xk - h)
+        let f_minus = cv_uccsd_lih_energy_h(x_h, state_re_h, state_im_h, cache)
+        let _ = farr_set(x_h, k, xk)
+        let _ = farr_set(grad_h, k, (f_plus - f_minus) * inv_2h)
+        k = k + 1
+    }
+    return 0
+}
+
+fn kup_hist_dot(hist_h: int, slot: int, n: int, vec_h: int) -> float {
+    let mut acc = 0.0
+    let mut j = 0
+    while j < n {
+        acc = acc + farr_get(hist_h, slot * n + j) * farr_get(vec_h, j)
+        j = j + 1
+    }
+    return acc
+}
+
+// Nocedal-Wright Alg 7.4 two-loop recursion. d = H_k · (-g).
+fn kup_two_loop(s_hist_h: int, y_hist_h: int, rho_arr: [float],
+                 m_used: int, n: int, g_h: int, gamma: float,
+                 d_h: int, alpha_h: int, q_h: int) -> int {
+    // q = -g
+    let mut i = 0
+    while i < n {
+        let _ = farr_set(q_h, i, 0.0 - farr_get(g_h, i))
+        i = i + 1
+    }
+    // backward sweep: newest-first
+    let mut k = m_used - 1
+    while k >= 0 {
+        let sq = kup_hist_dot(s_hist_h, k, n, q_h)
+        let a  = rho_arr[k] * sq
+        let _ = farr_set(alpha_h, k, a)
+        let mut j = 0
+        while j < n {
+            let qj = farr_get(q_h, j)
+            let yj = farr_get(y_hist_h, k * n + j)
+            let _ = farr_set(q_h, j, qj - a * yj)
+            j = j + 1
+        }
+        k = k - 1
+    }
+    // r = gamma * q (initial Hessian-vector with H_0 = gamma * I)
+    let mut jj = 0
+    while jj < n {
+        let _ = farr_set(q_h, jj, gamma * farr_get(q_h, jj))
+        jj = jj + 1
+    }
+    // forward sweep: oldest-first
+    let mut kk = 0
+    while kk < m_used {
+        let yr = kup_hist_dot(y_hist_h, kk, n, q_h)
+        let b = rho_arr[kk] * yr
+        let a_kk = farr_get(alpha_h, kk)
+        let mut j2 = 0
+        while j2 < n {
+            let qj = farr_get(q_h, j2)
+            let sj = farr_get(s_hist_h, kk * n + j2)
+            let _ = farr_set(q_h, j2, qj + (a_kk - b) * sj)
+            j2 = j2 + 1
+        }
+        kk = kk + 1
+    }
+    let _ = kup_lbfgs_copy(d_h, q_h, n)
+    return 0
+}
+
+// Strong-Wolfe-ish backtracking line search (c1=1e-4, c2=0.9, t_init=1.0).
+fn kup_line_search(n: int, x_h: int, d_h: int, g_h: int,
+                   f_curr: float, gd_curr: float,
+                   lo: float, hi: float,
+                   x_trial_h: int, grad_h: int,
+                   fd_h: float, max_trials: int,
+                   state_re_h: int, state_im_h: int, cache: map) -> map {
+    let c1 = 0.0001
+    let c2 = 0.9
+    let mut t = 1.0
+    let mut trials = 0
+    let mut best_f = 1e308
+    let mut best_t = 0.0
+    let mut accepted = 0
+    let mut n_feval_ls = 0
+    let mut n_geval_ls = 0
+    let abs_gd = if gd_curr < 0.0 { 0.0 - gd_curr } else { gd_curr }
+    while trials < max_trials && accepted == 0 {
+        let _ = kup_lbfgs_axpy(x_trial_h, x_h, t, d_h, n)
+        let _ = kup_lbfgs_clip(x_trial_h, lo, hi, n)
+        let f_t = cv_uccsd_lih_energy_h(x_trial_h, state_re_h, state_im_h, cache)
+        n_feval_ls = n_feval_ls + 1
+        if f_t < best_f { best_f = f_t; best_t = t }
+        let armijo_rhs = f_curr + c1 * t * gd_curr
+        if f_t <= armijo_rhs {
+            let _ = kup_fd_grad(x_trial_h, grad_h, n, fd_h, state_re_h, state_im_h, cache)
+            n_geval_ls = n_geval_ls + 1
+            let gd_new = kup_lbfgs_dot(grad_h, d_h, n)
+            let abs_gd_new = if gd_new < 0.0 { 0.0 - gd_new } else { gd_new }
+            if abs_gd_new <= c2 * abs_gd {
+                accepted = 1
+            } else {
+                t = t * 0.5
+                trials = trials + 1
+            }
+        } else {
+            t = t * 0.5
+            trials = trials + 1
+        }
+    }
+    let chosen_f = if accepted == 1 {
+        cv_uccsd_lih_energy_h(x_trial_h, state_re_h, state_im_h, cache)
+    } else {
+        let _ = kup_lbfgs_axpy(x_trial_h, x_h, best_t, d_h, n)
+        let _ = kup_lbfgs_clip(x_trial_h, lo, hi, n)
+        let f_bt = cv_uccsd_lih_energy_h(x_trial_h, state_re_h, state_im_h, cache)
+        let _ = kup_fd_grad(x_trial_h, grad_h, n, fd_h, state_re_h, state_im_h, cache)
+        n_feval_ls = n_feval_ls + 2
+        n_geval_ls = n_geval_ls + 1
+        f_bt
+    }
+    let _ = kup_lbfgs_copy(x_h, x_trial_h, n)
+    let out = json_parse("{}")
+    out["f"] = chosen_f
+    out["accepted"] = accepted
+    out["n_feval_ls"] = n_feval_ls
+    out["n_geval_ls"] = n_geval_ls
+    return out
+}
+
+// k-UpCCGSD L-BFGS-B minimize (FD grad).
+//   n             — number of θ params
+//   x0_h          — farr handle (length n) of initial θ (caller-owned)
+//   m             — L-BFGS history depth
+//   max_iter      — outer iteration budget
+//   g_tol, f_tol  — convergence tolerances
+//   cache         — generator cache (kupccgsd) consumed by cv_uccsd_lih_energy_h
+fn kup_lbfgsb_minimize(n: int, x0_h: int, lo: float, hi: float,
+                       m: int, max_iter: int, g_tol: float, f_tol: float,
+                       cache: map) -> map {
+    let x_h        = farr_zeros(n)
+    let x_trial_h  = farr_zeros(n)
+    let g_h        = farr_zeros(n)
+    let g_prev_h   = farr_zeros(n)
+    let d_h        = farr_zeros(n)
+    let q_h        = farr_zeros(n)
+    let alpha_h    = farr_zeros(m)
+    let s_hist_h   = farr_zeros(m * n)
+    let y_hist_h   = farr_zeros(m * n)
+    let state_re_h = farr_zeros(64)
+    let state_im_h = farr_zeros(64)
+
+    let _ = kup_lbfgs_copy(x_h, x0_h, n)
+    let _ = kup_lbfgs_clip(x_h, lo, hi, n)
+
+    let mut n_feval = 0
+    let mut n_geval = 0
+    let mut f_curr = cv_uccsd_lih_energy_h(x_h, state_re_h, state_im_h, cache)
+    n_feval = n_feval + 1
+    let _ = kup_fd_grad(x_h, g_h, n, 0.00001, state_re_h, state_im_h, cache)
+    n_geval = n_geval + 1
+
+    let mut rho_arr = []
+    let mut h_init = 0
+    while h_init < m { rho_arr = rho_arr.push(0.0); h_init = h_init + 1 }
+    let mut m_used = 0
+    let mut gamma = 1.0
+    let mut converged = 0
+    let mut status = "running"
+
+    let mut it = 0
+    let mut done = 0
+    while done == 0 {
+        if it >= max_iter { status = "max_iter"; done = 1 }
+        if done == 0 {
+            let g_inf = kup_lbfgs_inf_norm(g_h, n)
+            if g_inf < g_tol { converged = 1; status = "g_tol"; done = 1 }
+        }
+        if done == 0 {
+            if m_used == 0 {
+                let mut j = 0
+                while j < n {
+                    let _ = farr_set(d_h, j, 0.0 - farr_get(g_h, j))
+                    j = j + 1
+                }
+            } else {
+                let _ = kup_two_loop(s_hist_h, y_hist_h, rho_arr,
+                                      m_used, n, g_h, gamma,
+                                      d_h, alpha_h, q_h)
+            }
+            let gd = kup_lbfgs_dot(g_h, d_h, n)
+            if gd >= 0.0 {
+                let mut j2 = 0
+                while j2 < n {
+                    let _ = farr_set(d_h, j2, 0.0 - farr_get(g_h, j2))
+                    j2 = j2 + 1
+                }
+                m_used = 0
+            }
+            let gd2 = kup_lbfgs_dot(g_h, d_h, n)
+            let _ = kup_lbfgs_copy(g_prev_h, g_h, n)
+
+            let mut x_before = []
+            let mut p = 0
+            while p < n { x_before = x_before.push(farr_get(x_h, p)); p = p + 1 }
+
+            let ls = kup_line_search(n, x_h, d_h, g_h,
+                                      f_curr, gd2, lo, hi,
+                                      x_trial_h, g_h,
+                                      0.00001, 20,
+                                      state_re_h, state_im_h, cache)
+            let f_new = to_float(ls["f"])
+            n_feval = n_feval + to_int(ls["n_feval_ls"])
+            n_geval = n_geval + to_int(ls["n_geval_ls"])
+
+            let df = f_curr - f_new
+            let abs_df = if df < 0.0 { 0.0 - df } else { df }
+            let denom = if f_curr < 0.0 { 0.0 - f_curr } else { f_curr }
+            let scale = if denom > 1.0 { denom } else { 1.0 }
+            if abs_df < f_tol * scale {
+                converged = 1; status = "f_tol"; done = 1
+            }
+            if done == 0 {
+                let mut sy = 0.0
+                let mut s_scratch = []
+                let mut y_scratch = []
+                let mut k2 = 0
+                while k2 < n {
+                    let s_k = farr_get(x_h, k2) - x_before[k2]
+                    let y_k = farr_get(g_h, k2) - farr_get(g_prev_h, k2)
+                    sy = sy + s_k * y_k
+                    s_scratch = s_scratch.push(s_k)
+                    y_scratch = y_scratch.push(y_k)
+                    k2 = k2 + 1
+                }
+                if sy > 0.000000000001 {
+                    let mut yy = 0.0
+                    let mut kk2 = 0
+                    while kk2 < n {
+                        yy = yy + y_scratch[kk2] * y_scratch[kk2]
+                        kk2 = kk2 + 1
+                    }
+                    if yy > 0.0 { gamma = sy / yy }
+                    if m_used == m {
+                        let mut sh = 1
+                        while sh < m {
+                            let mut col = 0
+                            while col < n {
+                                let v_s = farr_get(s_hist_h, sh * n + col)
+                                let v_y = farr_get(y_hist_h, sh * n + col)
+                                let _ = farr_set(s_hist_h, (sh - 1) * n + col, v_s)
+                                let _ = farr_set(y_hist_h, (sh - 1) * n + col, v_y)
+                                col = col + 1
+                            }
+                            rho_arr[sh - 1] = rho_arr[sh]
+                            sh = sh + 1
+                        }
+                        m_used = m - 1
+                    }
+                    let mut wj = 0
+                    while wj < n {
+                        let _ = farr_set(s_hist_h, m_used * n + wj, s_scratch[wj])
+                        let _ = farr_set(y_hist_h, m_used * n + wj, y_scratch[wj])
+                        wj = wj + 1
+                    }
+                    rho_arr[m_used] = 1.0 / sy
+                    m_used = m_used + 1
+                }
+                f_curr = f_new
+                it = it + 1
+            }
+        }
+    }
+
+    let mut x_out = []
+    let mut rp = 0
+    while rp < n {
+        x_out = x_out.push(farr_get(x_h, rp))
+        rp = rp + 1
+    }
+    let final_g_inf = kup_lbfgs_inf_norm(g_h, n)
+
+    let _ = farr_free(x_h)
+    let _ = farr_free(x_trial_h)
+    let _ = farr_free(g_h)
+    let _ = farr_free(g_prev_h)
+    let _ = farr_free(d_h)
+    let _ = farr_free(q_h)
+    let _ = farr_free(alpha_h)
+    let _ = farr_free(s_hist_h)
+    let _ = farr_free(y_hist_h)
+    let _ = farr_free(state_re_h)
+    let _ = farr_free(state_im_h)
+
+    let out = json_parse("{}")
+    out["x"] = x_out
+    out["f"] = f_curr
+    out["n_iter"] = it
+    out["n_feval"] = n_feval
+    out["n_geval"] = n_geval
+    out["converged"] = converged
+    out["status"] = status
+    out["grad_inf"] = final_g_inf
+    return out
+}
+
+// ─── per-k driver ────────────────────────────────────────────────────────
+
+fn kup_run_for_k(k: int, max_iter: int, casci: float) -> map {
+    let cache = build_kupccgsd_lih_4e4o_cache(4, 4, k)
+    let n = to_int(cache["n_params"])
+    // Initial θ = 0 for block 0; block b>0 gets a small symmetry-breaking
+    // perturbation (~1e-3 cyclic) so the FD gradient doesn't see identical
+    // partial derivatives for replicated blocks at the HF reference.
+    let x0_h = farr_zeros(n)
+    let params_per_block = to_int(cache["params_per_block"])
+    let mut b = 1
+    while b < k {
+        let mut j = 0
+        while j < params_per_block {
+            let r = j - 4 * (j / 4)
+            let v = if r == 0 { 0.001 } else { if r == 1 { 0.0 - 0.0007 } else { if r == 2 { 0.0005 } else { 0.0 - 0.0003 } } }
+            let seed = v * to_float(b)
+            let _ = farr_set(x0_h, b * params_per_block + j, seed)
+            j = j + 1
+        }
+        b = b + 1
+    }
+    let pi_b = 3.141592653589793
+    let t_start = exec("date +%s").trim()
+    let t_start_i = to_int(t_start)
+    let result = kup_lbfgsb_minimize(n, x0_h, 0.0 - pi_b, pi_b,
+                                      8, max_iter, 0.0000001, 0.0000000001, cache)
+    let t_end = exec("date +%s").trim()
+    let wall = to_float(to_int(t_end) - t_start_i)
+    let _ = farr_free(x0_h)
+    let energy = to_float(result["f"])
+    let delta_uha = (energy - casci) * 1000000.0
+    let abs_delta = if delta_uha < 0.0 { 0.0 - delta_uha } else { delta_uha }
+    let out = json_parse("{}")
+    out["k"] = k
+    out["n_params"] = n
+    out["energy"] = energy
+    out["delta_uHa"] = abs_delta
+    out["wall"] = wall
+    out["n_iter"] = to_int(result["n_iter"])
+    out["n_feval"] = to_int(result["n_feval"])
+    out["converged"] = to_int(result["converged"])
+    out["status"] = result["status"]
+    return out
+}
+
+fn main() {
+    println("[qmirror/chemistry_vqe] k-UpCCGSD-at-4e/4o L-BFGS-B (FD-grad) — LiH @ R=1.5474Å")
+    println("  molecule:  LiH @ R=1.5474Å (CASCI(4,4) anchor)")
+    println("  ansatz:    k-UpCCGSD (8 gen-singles + 2 pair-doubles per block, ParityMapper((2,2)))")
+    println("  optimizer: L-BFGS-B (m=8, FD-grad h=1e-5, max_iter per k below)")
+    println("  baseline:  UCCSD 26 params (cv_uccsd_lih_nelder_mead → ~1.06 mHa @ maxiter=200)")
+    println("")
+
+    // CASCI reference from the UCCSD cache.
+    let uccsd_cache = cv_uccsd_lih_cache()
+    let casci = uccsd_lih_casci_ref()
+    println("  CASCI(4,4) reference: " + str(casci) + " Ha")
+    println("")
+
+    // HF sanity check via the kupccgsd cache (θ=0 must reproduce <HF|H|HF>).
+    let cache_k1 = build_kupccgsd_lih_4e4o_cache(4, 4, 1)
+    let zero_h = farr_zeros(10)
+    let st_re = farr_zeros(64)
+    let st_im = farr_zeros(64)
+    let e_hf = cv_uccsd_lih_energy_h(zero_h, st_re, st_im, cache_k1)
+    let _ = farr_free(zero_h)
+    let _ = farr_free(st_re)
+    let _ = farr_free(st_im)
+    let expected_hf = 0.0 - 7.8631138828
+    let dhf_uHa = (e_hf - expected_hf) * 1000000.0
+    let abs_dhf = if dhf_uHa < 0.0 { 0.0 - dhf_uHa } else { dhf_uHa }
+    println("  E(θ=0) sanity:    hexa=" + str(e_hf) + " Ha   |Δ vs HF| = " + str(abs_dhf) + " uHa")
+    if abs_dhf > 1.0 {
+        println("  ✗ HF reference mismatch — generator cache mis-built; aborting.")
+        println("__QMIRROR_KUPCCGSD_LIH_4E4O__ FAIL hf_mismatch=" + str(abs_dhf) + "uHa")
+        return
+    }
+    println("  ✓ HF reference matched at θ=0.")
+    println("")
+
+    // Per-k optimization. Budget: k=1=80 iters, k=2=40 iters, k=3=25 iters.
+    println("  ─── k = 1  (n_params = 10) ───")
+    let r1 = kup_run_for_k(1, 80, casci)
+    let n1 = to_int(r1["n_params"])
+    let e1 = to_float(r1["energy"])
+    let d1 = to_float(r1["delta_uHa"])
+    let w1 = to_float(r1["wall"])
+    println("    n_params=" + str(n1) + "  E=" + str(e1) + " Ha  |Δ|=" + str(d1) + " uHa  iters=" + str(r1["n_iter"]) + "  status=" + str(r1["status"]) + "  wall=" + str(w1) + "s")
+    println("")
+
+    println("  ─── k = 2  (n_params = 20) ───")
+    let r2 = kup_run_for_k(2, 40, casci)
+    let n2 = to_int(r2["n_params"])
+    let e2 = to_float(r2["energy"])
+    let d2 = to_float(r2["delta_uHa"])
+    let w2 = to_float(r2["wall"])
+    println("    n_params=" + str(n2) + "  E=" + str(e2) + " Ha  |Δ|=" + str(d2) + " uHa  iters=" + str(r2["n_iter"]) + "  status=" + str(r2["status"]) + "  wall=" + str(w2) + "s")
+    println("")
+
+    println("  ─── k = 3  (n_params = 30) ───")
+    let r3 = kup_run_for_k(3, 25, casci)
+    let n3 = to_int(r3["n_params"])
+    let e3 = to_float(r3["energy"])
+    let d3 = to_float(r3["delta_uHa"])
+    let w3 = to_float(r3["wall"])
+    println("    n_params=" + str(n3) + "  E=" + str(e3) + " Ha  |Δ|=" + str(d3) + " uHa  iters=" + str(r3["n_iter"]) + "  status=" + str(r3["status"]) + "  wall=" + str(w3) + "s")
+    println("")
+
+    // Pick best k: smallest |Δ|.
+    let mut best_k = 1
+    let mut best_delta = d1
+    if d2 < best_delta { best_k = 2; best_delta = d2 }
+    if d3 < best_delta { best_k = 3; best_delta = d3 }
+    let total_wall = w1 + w2 + w3
+
+    let chem_acc_uHa = 1600.0
+    let verdict = if best_delta < chem_acc_uHa { "PASS" } else { "FAIL" }
+    println("  ─── summary ───")
+    println("    UCCSD baseline:  26 params (1.06 mHa @ maxiter=200, ref: cv_uccsd_lih_nelder_mead)")
+    println("    k=1 (10p): |Δ|=" + str(d1) + " uHa")
+    println("    k=2 (20p): |Δ|=" + str(d2) + " uHa")
+    println("    k=3 (30p): |Δ|=" + str(d3) + " uHa")
+    println("    best:      k=" + str(best_k) + "  |Δ|=" + str(best_delta) + " uHa   (chem-acc bound = " + str(chem_acc_uHa) + " uHa)")
+    println("    total wall: " + str(total_wall) + "s")
+    println("")
+
+    // Sentinel + marker.
+    let sentinel = "__QMIRROR_KUPCCGSD_LIH_4E4O__ " + verdict +
+                   " k1=" + str(d1) +
+                   " k2=" + str(d2) +
+                   " k3=" + str(d3) +
+                   " best_k=" + str(best_k) +
+                   " best_delta_uHa=" + str(best_delta) +
+                   " wall=" + str(total_wall) + "s"
+    println(sentinel)
+
+    if verdict == "PASS" {
+        let ts = exec("date +%s").trim()
+        let qm_root = env("QMIRROR_ROOT")
+        let root = if qm_root.len() > 0 { qm_root } else {
+            exec("pwd").trim()
+        }
+        let marker_dir = root + "/state/markers"
+        let _md = exec("mkdir -p " + marker_dir + " 2>/dev/null")
+        let marker_path = marker_dir + "/kupccgsd_lih_4e4o_pass_" + ts + ".marker"
+        let body = "[qmirror/chemistry_vqe/kupccgsd_lih_4e4o] PASS  " +
+                   "k1=" + str(d1) + "uHa(" + str(n1) + "p)  " +
+                   "k2=" + str(d2) + "uHa(" + str(n2) + "p)  " +
+                   "k3=" + str(d3) + "uHa(" + str(n3) + "p)  " +
+                   "best=k" + str(best_k) + "@" + str(best_delta) + "uHa  " +
+                   "vs UCCSD 26p baseline  " +
+                   "wall=" + str(total_wall) + "s"
+        let _w = exec("echo '" + body + "' > '" + marker_path + "'")
+        println("marker: " + marker_path)
+    }
+}

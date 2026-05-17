@@ -1,0 +1,904 @@
+#!hexa strict
+// qmirror/hardy-multipartite/module/hardy_multipartite.hexa
+//
+// N-party Hardy paradox / Hardy nonlocality — EXACT 2^N-amplitude
+// UNITARY+projective reproduction of the multipartite Hardy
+// no-inequality nonlocality witness for N in {2, 3, 4, 5} on the
+// pure-hexa engine_aer state-vector kernel.
+//
+// @tool(slug="qmirror_hardy_multipartite", desc="N-party Hardy paradox (Hardy 1993 PRL 71 1665 generalised to N parties, Adhikary-Mandal arXiv:2505.10170 / 2026). Prepares the symmetric N-qubit Hardy state |psi_N^H> via the closed-form A^1-basis expansion (Eq.4, k=0..N-1 cot^k(alpha/2) symmetric tower) followed by RY(alpha) on every qubit, with alpha = 2 arccos(sqrt(t_r)) and t_r the positive root of x^(N+1)-2x+1=0 other than 1 (Newton). Enumerates all 2^N joint computational-basis outcomes per (k_1..k_N) measurement-input string (k_i in {0,1} -> measure A_i^0 = sigma_z OR A_i^1 by applying RY(-alpha) before sigma_z) and accumulates the joint Born probabilities. Verifies the four Hardy conditions exactly: (H1) P(+1..+1|A^0..A^0) > 0 = p_N^max = t_r^N(1-t_r)^N/(1-t_r^N); (H2) P(+1+1|A_i^1, A_{(i+1)}^0) = 0 for i=1..N (cyclic); (H3) P(+1..+1|mixed A^k inputs with k != all-0 and != all-1) = 0 (Eq.3); (H4) P(-1..-1|A^1..A^1) = 0. Brute-forces the classical LHV bound by enumerating all 2^(2N) deterministic strategies (X_i,Y_i in {+-1}) and confirming no strategy satisfies all (H2)-(H4) zeros while having P(H1) > 0 -- the Hardy contradiction. Pure-hexa exact engine; engine_aer external signature untouched (@D g7). Falsifier-first marker (@D g6).")
+// @usage(hexa run qmirror/hardy-multipartite/module/hardy_multipartite.hexa --selftest)
+// @sentinel(__QMIRROR_HARDY_MULTIPARTITE__ <PASS|FAIL>)
+// @resolver-bypass(reason="Pure-hexa exact 2^N (N<=5) state-vector + enumerative projective measurement; no qiskit, no python bridge, no subprocess for the physics.")
+//
+// ── Paper deep-dive (the citation chain) ───────────────────────────────
+//
+//   [1] Lucien Hardy, "Nonlocality for two particles without inequalities
+//       for almost all entangled states", Phys. Rev. Lett. 71, 1665 (1993).
+//       --> the original (N=2) Hardy paradox. For any non-maximally
+//           entangled pure 2-qubit state there exist two pairs of local
+//           dichotomic observables (X_i, Y_i for parties i=1,2) and a
+//           set of joint-probability conditions
+//                P(+1,+1|X_1,X_2) > 0          (the Hardy probability)
+//                P(+1,+1|Y_1,X_2) = 0
+//                P(+1,+1|X_1,Y_2) = 0
+//                P(-1,-1|Y_1,Y_2) = 0
+//           such that no local hidden-variable theory can satisfy the
+//           three zero conditions while keeping P(+1,+1|X_1,X_2) > 0
+//           (Hardy's logical contradiction). The maximum Hardy
+//           probability over states and observables is the closed-form
+//           value
+//                p_2^max = (5 sqrt(5) - 11) / 2  ~ 0.0901699437...
+//           commonly called the "Hardy fraction"; achieved at the
+//           Hardy state |psi_2^H> with t_r = (sqrt(5)-1)/2 = 1/phi
+//           (the golden-ratio reciprocal -- the positive root of
+//           x^3 - 2x + 1 = 0 other than 1).
+//
+//   [2] Ranendu Adhikary, Mriganka Mandal, "Multipartite Hardy paradox
+//       unlocks device-independent key sharing", arXiv:2505.10170v2
+//       (26 April 2026; submitted to Phys. Lett. A).
+//       --> §II (eqs. (1)-(3)) gives the N-party generalisation used
+//           here: each party A_i picks one of two dichotomic
+//           observables A_i^0, A_i^1 in {+1,-1}, and the Hardy
+//           conditions read
+//                p_N = P(+1,+1,...,+1 | A_1^0, A_2^0, ..., A_N^0)  > 0   (Eq.1)
+//                P(+1,+1 | A_i^1, A_{i+1}^0) = 0       for i=1..N         (Eq.2, cyclic)
+//                P(-1,-1,...,-1 | A_1^1, A_2^1, ..., A_N^1) = 0           (Eq.2)
+//                P(+1,..,+1 | A_1^{k_1}, ..., A_N^{k_N}) = 0
+//                    for any {k_i} != {0..0} or {1..1}                    (Eq.3)
+//           §III (eqs. (4)-(5)) gives the maximising Hardy state in
+//           closed form: with A_i^0 = sigma_z and the symmetric local
+//           parameter alpha = 2 arccos(sqrt(t_r)) (so phi_i = 0),
+//                |psi_N^H> = (1/sqrt(l_N)) [ |A^1_+ ... A^1_+>
+//                          + cot(alpha/2)   * |Perm(A^1_-, A^1_+, ..., A^1_+)>
+//                          + cot^2(alpha/2) * |Perm(A^1_-, A^1_-, A^1_+, ..., A^1_+)>
+//                          + ...
+//                          + cot^{N-1}(alpha/2) * |Perm(A^1_-, ..., A^1_-, A^1_+)>  ]    (Eq.4)
+//           with l_N = sum_{k=0}^{N-1} C(N,k) * cot^{2k}(alpha/2)
+//           and
+//                p_N^max = t_r^N * (1 - t_r)^N / (1 - t_r^N)              (Eq.5)
+//           where t_r is the positive root of x^{N+1} - 2x + 1 = 0
+//           other than 1 (always in (0,1) for N >= 2). The all-minus
+//           term |A^1_- ... A^1_->_N is ABSENT (k stops at N-1) --
+//           that absence directly enforces (H4).
+//
+//   [3] J. L. Cereceda, "Hardy's nonlocality for generalized n-particle
+//       GHZ states", Phys. Lett. A 327, 433 (2004); arXiv:quant-ph/0410133.
+//       Choudhary, Bhar, Bhattacharyya, "Cabello's nonlocality for
+//       generalized three-qubit GHZ states", Quantum Inf. Comput. 14, 567
+//       (2014). -- the foundational N-party Hardy literature; the
+//       structure used here (per-party (X_i, Y_i) dichotomic +
+//       cyclic-(H2) zero conditions + (H4) all-minus zero + (H1)
+//       all-plus positive) is the canonical form.
+//
+// ── N=2 Hardy probability (the closed-form anchor) ─────────────────────
+//
+//   t_r = (sqrt(5) - 1) / 2 = 0.6180339887498949...   (1/phi)
+//   p_2^max = t_r^2 * (1-t_r)^2 / (1 - t_r^2)
+//          = ((3 - sqrt(5))/2) * ((3 - sqrt(5))/2) / ((sqrt(5)-1)/2)
+//          = (5 sqrt(5) - 11) / 2
+//          ~ 0.0901699437494742
+//
+// Sanity:  (1 - t_r) = (3 - sqrt(5))/2 = t_r^2, and
+//          (1 - t_r^2) = t_r           (golden-ratio identity).
+// So p_2^max = t_r^2 * t_r^4 / t_r = t_r^5 = ((sqrt(5)-1)/2)^5 -- and
+// ((sqrt(5)-1)/2)^5 = (5 sqrt(5) - 11)/2 by direct expansion.
+//
+// ── Honest scope (@D g3 / @F f1) ───────────────────────────────────────
+//
+//   - EXACT 2^N-amplitude UNITARY + projective sim on N in {2,3,4,5}.
+//     No QRNG, no sampling, no shot noise -- the verdict is the
+//     analytic Born-rule joint probability of every basis combination
+//     and every outcome string, with the LHV bound enumerated
+//     deterministically over all 2^(2N) strategies.
+//   - NOT a real-QPU Hardy nonlocality test. No detector-loophole
+//     closure, no signaling-loophole closure, no spacelike-separation
+//     timing argument. The DETECTOR / NO-SIGNALLING / FAIR-SAMPLING
+//     assumptions are STANDARD pseudo-/nonlocality framework
+//     assumptions (Hardy 1993; Adhikary-Mandal 2026), NOT a hidden
+//     lattice-fit on any external entity (@F f1).
+//   - NOT the asymptotic / large-N regime: at N>=6 the 2^N envelope
+//     of @D g1 stays well-budgeted (2^8 = 256 << 2^30) but the
+//     Hardy-fraction itself decays super-exponentially in N (see
+//     Adhikary-Mandal Fig.1 / Eq.5: p_N^max ~ a^N for some a < 1, and
+//     numerically p_2 ~ 9%, p_3 ~ 1.8%, p_5 ~ 1e-3, p_10 ~ 1e-7). At
+//     N>=6 the ideal Hardy-probability falls below the 1e-9 floor
+//     used by F1/F2 -- so the natural CEILING for this module is
+//     N<=8, well inside @D g1.
+//   - NOT a duplicate of qmirror/chsh (CHSH: bipartite Bell-inequality
+//     with classical bound 2 vs Tsirelson 2*sqrt(2)), NOT of
+//     qmirror/ghz_mermin (GHZ-3 multipartite Mermin contradiction,
+//     bound 2 vs 4), NOT of qmirror/contextuality-peres-mermin (state-
+//     INDEPENDENT contextuality on the Peres-Mermin square), NOT of
+//     qmirror/pseudo-telepathy-doily (Mermin-Peres MAGIC-SQUARE
+//     nonlocal game; quantum win = 1 vs classical 8/9). THIS module is
+//     a different witness class: the PROBABILISTIC, NO-INEQUALITY
+//     Hardy paradox -- a positive joint probability that ANY local
+//     hidden-variable theory must zero out by the conjunction of the
+//     (H2)-(H4) zero constraints. The multipartite Hardy paradox
+//     generalises Hardy 1993 to arbitrary N via the closed-form
+//     symmetric Hardy state of Adhikary-Mandal §III.
+//   - Governance: AGENTS.tape @D g1 (<=30q exact SV; here N<=5, n<=5),
+//     @D g5 (pure hexa, no .py / qiskit), @D g6 (falsifier-first;
+//     FAILED-marker write path BEFORE pass path), @D g7 (engine_aer /
+//     qrng / chsh / iit_mip external sigs untouched).
+
+use "../../engine_aer/module/state_vector.hexa"
+use "../../engine_aer/module/gates.hexa"
+
+// ── Public verdict struct ──────────────────────────────────────────────
+
+struct HardyVerdict {
+    ok:                  int,
+    verdict:             str,         // "PASS" | "FAIL"
+    n_max:               int,         // largest N actually run (5 by default)
+    // F1 anchor: N=2 closed form (5 sqrt(5) - 11) / 2
+    p2_quantum:          float,       // numerical p_2^max from the constructed Hardy state
+    p2_closed_form:      float,       // (5 sqrt(5) - 11) / 2 reference
+    p2_abs_dev:          float,       // |p2_quantum - p2_closed_form|
+    f1_thresh:           float,       // 1e-9
+    f1_trip:             int,         // 0 / 1
+    // F2: any (H2)/(H3)/(H4) LHV-zero violated in QM (max over all N runs)
+    max_h2_prob:         float,       // worst-case P(H2) over all N, i, cyclic positions
+    max_h3_prob:         float,       // worst-case P(H3) over all N, all non-(allzero,allone) k-strings
+    max_h4_prob:         float,       // worst-case P(H4) = P(-..-|A^1..A^1) over all N
+    f2_thresh:           float,       // 1e-12
+    f2_trip:             int,
+    // F3: classical-LHV brute-force contradiction (sanity)
+    classical_lhv_strats_total: int,  // 2^(2*N_check), tested at N=2 (16) and N=3 (64)
+    classical_violation_count: int,   // # deterministic strategies that satisfy (H2..H4) AND P(H1)>0
+                                      //   should be 0  -- non-zero would falsify Hardy
+    f3_trip:             int,
+    // F4: maximal optimized P(H1) at N=3, 4, 5 strictly positive
+    p3_max:              float,       // analytic + numerical
+    p3_closed:           float,
+    p4_max:              float,
+    p4_closed:           float,
+    p5_max:              float,
+    p5_closed:           float,
+    f4_thresh:           float,       // 1e-12  (strictly > 0)
+    f4_trip:             int,
+    // F5: norm drift on the constructed states across all N
+    max_norm_drift:      float,       // max over N of |<psi|psi> - 1|
+    f5_thresh:           float,       // 1e-9
+    f5_trip:             int,
+    engine:              str,
+    message:             str
+}
+
+fn _hm_fail(reason: str) -> HardyVerdict {
+    return HardyVerdict {
+        ok: 0, verdict: "FAIL", n_max: 0,
+        p2_quantum: 0.0, p2_closed_form: 0.0, p2_abs_dev: 0.0,
+        f1_thresh: 0.000000001, f1_trip: 1,
+        max_h2_prob: 0.0, max_h3_prob: 0.0, max_h4_prob: 0.0,
+        f2_thresh: 0.000000000001, f2_trip: 1,
+        classical_lhv_strats_total: 0, classical_violation_count: 0,
+        f3_trip: 0,
+        p3_max: 0.0, p3_closed: 0.0,
+        p4_max: 0.0, p4_closed: 0.0,
+        p5_max: 0.0, p5_closed: 0.0,
+        f4_thresh: 0.000000000001, f4_trip: 1,
+        max_norm_drift: 0.0,
+        f5_thresh: 0.000000001, f5_trip: 1,
+        engine: "none", message: reason
+    }
+}
+
+// ── Numeric helpers ─────────────────────────────────────────────────────
+
+fn _hm_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _hm_pow2(k: int) -> int {
+    let mut v = 1
+    let mut j = 0
+    while j < k {
+        v = v * 2
+        j = j + 1
+    }
+    return v
+}
+
+// integer power of a float: x^n for n >= 0. Naive repeated multiply
+// (n <= ~64 in any path we exercise).
+fn _hm_powi(x: float, n: int) -> float {
+    let mut acc = 1.0
+    let mut k = 0
+    while k < n {
+        acc = acc * x
+        k = k + 1
+    }
+    return acc
+}
+
+// Hamming popcount of a non-negative int (treating it as a bit-string of
+// at most 30 bits -- well above the N<=5 range used here).
+fn _hm_popcount(x: int) -> int {
+    let mut v = x
+    let mut c = 0
+    while v > 0 {
+        c = c + (v % 2)
+        v = v / 2
+    }
+    return c
+}
+
+// Binomial coefficient C(n, k) -- exact integer, for the symmetric-shell
+// normalisation l_N = sum_{k=0}^{N-1} C(N,k) cot^{2k}(alpha/2).
+fn _hm_binom(n: int, k: int) -> int {
+    if k < 0 { return 0 }
+    if k > n { return 0 }
+    let mut a = k
+    if n - k < a { a = n - k }
+    let mut num = 1
+    let mut den = 1
+    let mut i = 0
+    while i < a {
+        num = num * (n - i)
+        den = den * (i + 1)
+        i = i + 1
+    }
+    return num / den
+}
+
+// Newton-Raphson root of x^{N+1} - 2x + 1 = 0 in (0, 1), starting from
+// x_0 = 0.5 (or for N=2 from 0.6 to avoid the spurious approach to 1).
+// The root we want is t_r in (0, 1), distinct from the trivial root
+// x = 1. For N >= 2 the cubic, quartic, ... has exactly one root in
+// (0, 1) (squeezed between 0 and 1 by sign analysis), so a few Newton
+// steps suffice.
+fn _hm_solve_tr(big_n: int) -> float {
+    // f(x)  = x^{N+1} - 2x + 1
+    // f'(x) = (N+1) x^N - 2
+    let m = big_n + 1
+    let mut x = 0.5
+    // For N=2, the root is (sqrt(5)-1)/2 ~ 0.618; for N>=3 the root
+    // drifts down (~0.544 at N=3, ~0.519 at N=4, ~0.510 at N=5). Start
+    // from 0.5 for all -- Newton converges quadratically from there.
+    let mut it = 0
+    while it < 100 {
+        let fx = _hm_powi(x, m) - 2.0 * x + 1.0
+        let fp = to_float(m) * _hm_powi(x, big_n) - 2.0
+        if _hm_abs(fx) < 0.00000000000001 { return x }  // 1e-14
+        if _hm_abs(fp) < 0.00000000000001 { return x }
+        let dx = fx / fp
+        x = x - dx
+        // safeguard: stay in (0, 1)
+        if x < 0.001 { x = 0.001 }
+        if x > 0.999 { x = 0.999 }
+        if _hm_abs(dx) < 0.00000000000001 { return x }
+        it = it + 1
+    }
+    return x
+}
+
+// Closed-form maximal Hardy probability per Eq.5 of Adhikary-Mandal:
+//    p_N^max = t_r^N * (1 - t_r)^N / (1 - t_r^N)
+fn _hm_pmax_closed(big_n: int) -> float {
+    let tr = _hm_solve_tr(big_n)
+    let trN = _hm_powi(tr, big_n)
+    let omt = 1.0 - tr
+    let omtN = _hm_powi(omt, big_n)
+    return trN * omtN / (1.0 - trN)
+}
+
+// ── State-vector helpers (in-module, engine_aer sig untouched per @D g7) ──
+
+fn _hm_norm2(s: StateVector) -> float {
+    let dim = state_dim(s)
+    let mut n2 = 0.0
+    let mut i = 0
+    while i < dim {
+        let re = amp_re_at(s, i)
+        let im = amp_im_at(s, i)
+        n2 = n2 + re * re + im * im
+        i = i + 1
+    }
+    return n2
+}
+
+// Apply RY(theta) on qubit q of an n-qubit state vector.
+fn _hm_apply_ry(s: StateVector, q: int, n: int, theta: float) -> StateVector {
+    let g = gate_ry(theta)
+    return apply_single(s, g.re, g.im, q, n)
+}
+
+// ── Hardy state preparation in sigma_z basis (Adhikary-Mandal Eq.4) ────
+//
+// Algorithm (works for any N >= 2):
+//   1. Solve t_r (Newton).
+//   2. alpha = 2 arccos(sqrt(t_r))  -->  alpha/2 has cos = sqrt(t_r),
+//      sin = sqrt(1-t_r);  cot(alpha/2) = sqrt(t_r / (1 - t_r)).
+//   3. Build the state in the FICTITIOUS A^1 computational basis: for
+//      each index i in 0..2^N-1, let k = popcount(i) (k = number of
+//      "minus" bits, where the convention is bit=1 -> |A^1_->).
+//          amp_{A^1}(i) = (k < N) ? cot^k(alpha/2) / sqrt(l_N) : 0
+//      l_N = sum_{k=0}^{N-1} C(N,k) cot^{2k}(alpha/2).
+//   4. Convert to sigma_z basis by applying RY(alpha) on each qubit
+//      (the unitary V = RY(alpha) maps |0> -> cos(alpha/2)|0> +
+//      sin(alpha/2)|1> = |A^1_+>, |1> -> -sin(alpha/2)|0> +
+//      cos(alpha/2)|1> = |A^1_->).
+//
+// The constructed state automatically satisfies:
+//   (H1) P(+..+|A^0..A^0) = p_N^max  (Eq.5)         -- numerical match to closed form
+//   (H2) P(+1+1|A_i^1, A_{i+1}^0) = 0  for all i    -- by the symmetric coefficient ratio
+//   (H3) P(+..+|mixed inputs) = 0  for any k_i mix that is neither all-0 nor all-1   (Eq.3)
+//   (H4) P(-..-|A^1..A^1) = 0                       -- by the absence of the |A^1_-..A^1_-> term
+
+fn _hm_prepare_hardy_state(big_n: int) -> StateVector {
+    let dim = _hm_pow2(big_n)
+    let tr = _hm_solve_tr(big_n)
+    // cot(alpha/2) = sqrt(t_r / (1 - t_r))
+    let c = sqrt(tr / (1.0 - tr))
+
+    // normalisation l_N = sum_{k=0}^{N-1} C(N,k) * c^{2k}
+    let mut l_n = 0.0
+    let mut k = 0
+    while k < big_n {
+        let bk = to_float(_hm_binom(big_n, k))
+        let c2k = _hm_powi(c * c, k)
+        l_n = l_n + bk * c2k
+        k = k + 1
+    }
+    let inv_sqrt_lN = 1.0 / sqrt(l_n)
+
+    // Step 3: build in A^1 basis (sigma_z slot stores fictitious bits).
+    let st = state_zero(big_n)
+    let mut i = 0
+    while i < dim {
+        let kk = _hm_popcount(i)
+        if kk < big_n {
+            let amp = _hm_powi(c, kk) * inv_sqrt_lN
+            let _r = state_set_re(st, i, amp)
+            let _ii = state_set_im(st, i, 0.0)
+        } else {
+            let _r = state_set_re(st, i, 0.0)
+            let _ii = state_set_im(st, i, 0.0)
+        }
+        i = i + 1
+    }
+
+    // Step 4: rotate every qubit by RY(alpha) -- A^1 basis -> sigma_z.
+    // alpha = 2 * arccos(sqrt(t_r))  via atan2 (acos is not in our stdlib):
+    //   sqrt(t_r) > 0, sqrt(1-t_r) > 0  -->  alpha/2 in (0, pi/2)
+    //   atan2(sin, cos) = atan2(sqrt(1-t_r), sqrt(t_r)) = alpha/2.
+    let alpha = 2.0 * atan2(sqrt(1.0 - tr), sqrt(tr))
+    let mut s = st
+    let mut q = 0
+    while q < big_n {
+        s = _hm_apply_ry(s, q, big_n, alpha)
+        q = q + 1
+    }
+    return s
+}
+
+// ── Joint-measurement enumeration (any (k_1..k_N) in {0,1}^N input string) ──
+//
+// Given the prepared |psi> in sigma_z basis and an input string
+// k = (k_1..k_N), apply RY(-alpha) on each qubit i with k_i = 1
+// (rotating the A^1 eigenbasis back to sigma_z), then read off the
+// joint Born probabilities directly from the squared amplitudes -- one
+// per 2^N computational outcome bit-string b.
+//
+// Convention (matches paper Eq.1): outcome bit b_i = 0 means +1
+// eigenvalue, b_i = 1 means -1 eigenvalue. So the index i in
+// |amp_i|^2 gives the joint outcome (b_0, b_1, ..., b_{N-1}) =
+// bits of i (q0 = LSB, per qiskit endian).
+//
+// Returns the 2^N-element float array of joint probabilities, length
+// dim = 2^N. The state vector parameter `psi_z` is NOT mutated -- a
+// fresh clone is made and freed at the end.
+fn _hm_joint_probs_for_input(psi_z: StateVector, input_k: [int], big_n: int) -> [float] {
+    let dim = _hm_pow2(big_n)
+    let tr = _hm_solve_tr(big_n)
+    let alpha = 2.0 * atan2(sqrt(1.0 - tr), sqrt(tr))
+    let neg_alpha = 0.0 - alpha
+
+    let mut s = state_clone(psi_z)
+    let mut q = 0
+    while q < big_n {
+        if input_k[q] == 1 {
+            s = _hm_apply_ry(s, q, big_n, neg_alpha)
+        }
+        q = q + 1
+    }
+
+    let mut out = []
+    let mut i = 0
+    while i < dim {
+        let re = amp_re_at(s, i)
+        let im = amp_im_at(s, i)
+        out = out.push(re * re + im * im)
+        i = i + 1
+    }
+    let _f = state_free(s)
+    return out
+}
+
+// Probability of a SPECIFIC joint outcome `outcome_bits` (length-N array,
+// values in {0,1}; 0 = +1 eigenvalue, 1 = -1 eigenvalue) given the
+// measurement-input string `input_k` (length-N, values in {0,1}; 0 = A^0,
+// 1 = A^1). Just an index into the joint-probabilities array, with q0
+// at the LSB.
+fn _hm_joint_prob(psi_z: StateVector, input_k: [int], outcome_bits: [int],
+                  big_n: int) -> float {
+    let probs = _hm_joint_probs_for_input(psi_z, input_k, big_n)
+    let mut idx = 0
+    let mut q = 0
+    while q < big_n {
+        if outcome_bits[q] == 1 { idx = idx + _hm_pow2(q) }
+        q = q + 1
+    }
+    return probs[idx]
+}
+
+// Convenience: all-zero outcome (i.e. all +1).
+fn _hm_prob_all_plus(psi_z: StateVector, input_k: [int], big_n: int) -> float {
+    let probs = _hm_joint_probs_for_input(psi_z, input_k, big_n)
+    return probs[0]
+}
+
+// Convenience: all-one outcome (i.e. all -1) -- index = 2^N - 1.
+fn _hm_prob_all_minus(psi_z: StateVector, input_k: [int], big_n: int) -> float {
+    let dim = _hm_pow2(big_n)
+    let probs = _hm_joint_probs_for_input(psi_z, input_k, big_n)
+    return probs[dim - 1]
+}
+
+// Probability of the TWO-PARTY (+1, +1) marginal on parties (i, j) under
+// the input setting (k_i, k_j) on those parties, with the remaining
+// parties marginalised away. Sum over all outcome strings whose bits
+// at positions i and j are both 0.
+fn _hm_prob_pair_pp(psi_z: StateVector, input_k: [int],
+                    i: int, j: int, big_n: int) -> float {
+    let probs = _hm_joint_probs_for_input(psi_z, input_k, big_n)
+    let dim = _hm_pow2(big_n)
+    let mut acc = 0.0
+    let mut idx = 0
+    while idx < dim {
+        let bi = (idx / _hm_pow2(i)) % 2
+        let bj = (idx / _hm_pow2(j)) % 2
+        if bi == 0 && bj == 0 { acc = acc + probs[idx] }
+        idx = idx + 1
+    }
+    return acc
+}
+
+// ── Construct a fresh all-zero / all-one integer array ─────────────────
+
+fn _hm_zeros(n: int) -> [int] {
+    let mut a = []
+    let mut i = 0
+    while i < n {
+        a = a.push(0)
+        i = i + 1
+    }
+    return a
+}
+
+fn _hm_ones(n: int) -> [int] {
+    let mut a = []
+    let mut i = 0
+    while i < n {
+        a = a.push(1)
+        i = i + 1
+    }
+    return a
+}
+
+// Decode `mask` (lowest N bits) into a length-N int array (lsb at index 0).
+fn _hm_bits(mask: int, n: int) -> [int] {
+    let mut a = []
+    let mut i = 0
+    while i < n {
+        a = a.push((mask / _hm_pow2(i)) % 2)
+        i = i + 1
+    }
+    return a
+}
+
+// ── Verify (H2): cyclic P(+1+1 | A_i^1, A_{(i+1)}^0) = 0 for i = 0..N-1 ──
+//
+// Returns the worst-case probability over the N cyclic positions.
+// In the QM construction these should all be 0 to numerical precision.
+fn _hm_check_h2(psi_z: StateVector, big_n: int) -> float {
+    let mut worst = 0.0
+    let mut i = 0
+    while i < big_n {
+        let j = (i + 1) % big_n
+        // Input on the FULL N-party register: party i set to A^1 (=1),
+        // party j set to A^0 (=0), every OTHER party set to A^0 too
+        // (the (H2) constraint conditions only on parties i, j -- it's
+        // the TWO-party marginal joint outcome (+1,+1) on (i, j)).
+        // Choosing the other parties' inputs as A^0 makes the marginal
+        // computation unambiguous on a fresh joint enumeration; the
+        // (+1,+1)_{ij} marginal probability is the SAME regardless of
+        // the other parties' input choice ONLY when the outcome on
+        // those parties is summed-out (it is; that's the marginal),
+        // BUT only because the joint distribution on (i,j) is itself
+        // conditional on inputs (k_i, k_j) and INDEPENDENT of other
+        // inputs in any no-signalling theory. QM no-signalling holds,
+        // so the pair-marginal is well-defined; we pick A^0 elsewhere
+        // for concreteness. Re-confirmed numerically by the F2
+        // invariant.
+        let input_k = _hm_zeros(big_n)
+        input_k[i] = 1   // party i in A^1 basis
+        // input_k[j] already 0 (A^0)
+        let p = _hm_prob_pair_pp(psi_z, input_k, i, j, big_n)
+        if p > worst { worst = p }
+        i = i + 1
+    }
+    return worst
+}
+
+// ── Verify (H3): P(+1..+1 | A_1^{k_1}..A_N^{k_N}) = 0 for any k != all-0, all-1 ──
+//
+// Adhikary-Mandal Eq.3. Returns the worst-case probability over the
+// 2^N - 2 non-trivial input strings.
+fn _hm_check_h3(psi_z: StateVector, big_n: int) -> float {
+    let dim_k = _hm_pow2(big_n)
+    let all_zero = 0
+    let all_one = dim_k - 1
+    let mut worst = 0.0
+    let mut k_mask = 0
+    while k_mask < dim_k {
+        if k_mask != all_zero && k_mask != all_one {
+            let input_k = _hm_bits(k_mask, big_n)
+            let p = _hm_prob_all_plus(psi_z, input_k, big_n)
+            if p > worst { worst = p }
+        }
+        k_mask = k_mask + 1
+    }
+    return worst
+}
+
+// ── Verify (H4): P(-1..-1 | A^1..A^1) = 0 ─────────────────────────────
+fn _hm_check_h4(psi_z: StateVector, big_n: int) -> float {
+    let input_k = _hm_ones(big_n)
+    return _hm_prob_all_minus(psi_z, input_k, big_n)
+}
+
+// ── Brute-force classical LHV check (F3 sanity) ────────────────────────
+//
+// Hardy's no-LHV claim: ANY deterministic local hidden-variable
+// strategy that assigns outputs v_i(k_i) in {+1, -1} to each party's
+// input k_i must, under the (H2) cyclic + (H4) all-minus zero
+// constraints, force P(H1) = 0. We enumerate all 2^(2N) classical
+// strategies (each of the N parties picks v_i(0), v_i(1) independently
+// in {+1, -1}), check which satisfy all the (H2..H4) ZERO constraints
+// EXACTLY (deterministically), and count how many ALSO have the (H1)
+// all-plus outcome under the A^0 ⊗ ... ⊗ A^0 input. The count should
+// be EXACTLY ZERO -- that's Hardy's contradiction. (If it ever was
+// non-zero, the entire Hardy paradox would be classically realisable.)
+//
+// Encoding: a strategy is a length-(2N) bit-string with bit (2i+0) =
+// v_i(0) and bit (2i+1) = v_i(1), where bit 0 = +1 and bit 1 = -1.
+// Tested explicitly at N <= 3 (4096 strategies); the structural
+// argument is the same at every N.
+fn _hm_classical_lhv_violations(big_n: int) -> [int] {
+    let total = _hm_pow2(2 * big_n)
+    let mut violations = 0
+    let mut strat = 0
+    while strat < total {
+        // unpack v_i(0), v_i(1) in {0,1}
+        let v = _hm_bits(strat, 2 * big_n)
+        // Check (H2): for every i, if v_i(1) == 0 AND v_{(i+1) mod N}(0) == 0
+        //              then this strategy assigns (+1,+1) to (A_i^1, A_{i+1}^0)
+        //              -- but the QM/Hardy constraint demands this probability
+        //              is ZERO, so the strategy violates (H2) iff such an
+        //              event has non-zero LHV weight. For a deterministic
+        //              strategy with a single output, "non-zero LHV weight"
+        //              means the strategy DOES produce (+1, +1) on (i, j).
+        // We re-interpret: an LHV strategy "satisfies the Hardy zeros"
+        // iff for EVERY i:  NOT (v_i(1) == 0 AND v_{(i+1)}(0) == 0),
+        // AND v_i(1) is NOT all 1 (since (H4) demands all-minus
+        // never occurs under A^1..A^1).
+        let mut h2_ok = 1
+        let mut i = 0
+        while i < big_n {
+            let j = (i + 1) % big_n
+            let vi1 = v[2 * i + 1]      // v_i(1)
+            let vj0 = v[2 * j + 0]      // v_j(0)
+            if vi1 == 0 && vj0 == 0 { h2_ok = 0 }
+            i = i + 1
+        }
+        // (H3) for any non-trivial mixed input string: P(+1..+1) = 0.
+        // For deterministic LHV, this means: for every mixed (k_1..k_N) NOT
+        // all 0 and NOT all 1, the strategy must NOT output all-plus.
+        let mut h3_ok = 1
+        if h2_ok == 1 {
+            let dim_k = _hm_pow2(big_n)
+            let mut km = 0
+            while km < dim_k {
+                if km != 0 && km != dim_k - 1 {
+                    // strategy's joint output under input km
+                    let kbits = _hm_bits(km, big_n)
+                    let mut allplus = 1
+                    let mut ii = 0
+                    while ii < big_n {
+                        let vi = v[2 * ii + kbits[ii]]
+                        if vi != 0 { allplus = 0 }
+                        ii = ii + 1
+                    }
+                    if allplus == 1 { h3_ok = 0 }
+                }
+                km = km + 1
+            }
+        }
+        // (H4): the all-A^1 input must NOT yield all-minus.
+        let mut h4_ok = 1
+        if h2_ok == 1 && h3_ok == 1 {
+            let mut all_minus = 1
+            let mut ii = 0
+            while ii < big_n {
+                if v[2 * ii + 1] != 1 { all_minus = 0 }
+                ii = ii + 1
+            }
+            if all_minus == 1 { h4_ok = 0 }
+        }
+        // (H1): is the all-A^0 output all-plus?
+        let mut h1 = 1
+        let mut ii = 0
+        while ii < big_n {
+            if v[2 * ii + 0] != 0 { h1 = 0 }
+            ii = ii + 1
+        }
+        // A strategy that satisfies all zero-conditions AND has H1 > 0
+        // is a Hardy-contradiction violator -- count it.
+        if h2_ok == 1 && h3_ok == 1 && h4_ok == 1 && h1 == 1 {
+            violations = violations + 1
+        }
+        strat = strat + 1
+    }
+    return [total, violations]
+}
+
+// ── Run the full Hardy battery for a given N ───────────────────────────
+//
+// Returns a 6-tuple in float array:
+//   [0] p_N quantum (from constructed state)
+//   [1] p_N closed-form (Eq.5)
+//   [2] worst H2 probability
+//   [3] worst H3 probability
+//   [4] H4 probability
+//   [5] |<psi|psi> - 1| drift
+fn _hm_run_one_n(big_n: int) -> [float] {
+    let psi = _hm_prepare_hardy_state(big_n)
+
+    let n2 = _hm_norm2(psi)
+    let drift = _hm_abs(n2 - 1.0)
+
+    // (H1): all-A^0 input, all-plus outcome
+    let k0 = _hm_zeros(big_n)
+    let p_q = _hm_prob_all_plus(psi, k0, big_n)
+    let p_c = _hm_pmax_closed(big_n)
+
+    let h2 = _hm_check_h2(psi, big_n)
+    let h3 = _hm_check_h3(psi, big_n)
+    let h4 = _hm_check_h4(psi, big_n)
+
+    let _f = state_free(psi)
+    return [p_q, p_c, h2, h3, h4, drift]
+}
+
+// ── Top-level runner ───────────────────────────────────────────────────
+
+fn hardy_multipartite_run() -> HardyVerdict {
+    // F1 anchor: N=2 closed form (5 sqrt(5) - 11) / 2
+    let p2_closed_form = (5.0 * sqrt(5.0) - 11.0) / 2.0
+
+    // N=2 verification (the precision-critical anchor; F1 threshold 1e-9)
+    let r2 = _hm_run_one_n(2)
+    let p2_q = r2[0]
+    let p2_c = r2[1]
+    let p2_dev = _hm_abs(p2_q - p2_closed_form)
+    let h2_2 = r2[2]
+    let h3_2 = r2[3]
+    let h4_2 = r2[4]
+    let drift_2 = r2[5]
+
+    // N=3..5: each run is full Hardy battery
+    let r3 = _hm_run_one_n(3)
+    let r4 = _hm_run_one_n(4)
+    let r5 = _hm_run_one_n(5)
+
+    let p3_q = r3[0]
+    let p3_c = r3[1]
+    let p4_q = r4[0]
+    let p4_c = r4[1]
+    let p5_q = r5[0]
+    let p5_c = r5[1]
+
+    // F2: max H2/H3/H4 probability over all N runs
+    let mut max_h2 = h2_2
+    if r3[2] > max_h2 { max_h2 = r3[2] }
+    if r4[2] > max_h2 { max_h2 = r4[2] }
+    if r5[2] > max_h2 { max_h2 = r5[2] }
+
+    let mut max_h3 = h3_2
+    if r3[3] > max_h3 { max_h3 = r3[3] }
+    if r4[3] > max_h3 { max_h3 = r4[3] }
+    if r5[3] > max_h3 { max_h3 = r5[3] }
+
+    let mut max_h4 = h4_2
+    if r3[4] > max_h4 { max_h4 = r3[4] }
+    if r4[4] > max_h4 { max_h4 = r4[4] }
+    if r5[4] > max_h4 { max_h4 = r5[4] }
+
+    // F5: max norm drift
+    let mut max_drift = drift_2
+    if r3[5] > max_drift { max_drift = r3[5] }
+    if r4[5] > max_drift { max_drift = r4[5] }
+    if r5[5] > max_drift { max_drift = r5[5] }
+
+    // F3: classical LHV brute-force at N=2 and N=3 (4 + 64 strategies);
+    // tabulate violations -- should be 0 for both. Report the N=3 totals
+    // for the headline (smaller-but-non-trivial; N=2 is 16 strategies).
+    let lhv2 = _hm_classical_lhv_violations(2)
+    let lhv3 = _hm_classical_lhv_violations(3)
+    let total_strats = lhv2[0] + lhv3[0]
+    let total_viol = lhv2[1] + lhv3[1]
+
+    // Thresholds
+    let f1_thresh = 0.000000001            // 1e-9
+    let f2_thresh = 0.000000000001         // 1e-12
+    let f4_thresh = 0.000000000001         // 1e-12  (strictly > 0)
+    let f5_thresh = 0.000000001            // 1e-9
+
+    let f1_trip = if p2_dev > f1_thresh { 1 } else { 0 }
+    let f2_trip_a = if max_h2 > f2_thresh { 1 } else { 0 }
+    let f2_trip_b = if max_h3 > f2_thresh { 1 } else { 0 }
+    let f2_trip_c = if max_h4 > f2_thresh { 1 } else { 0 }
+    let mut f2_trip = 0
+    if f2_trip_a + f2_trip_b + f2_trip_c > 0 { f2_trip = 1 }
+    let f3_trip = if total_viol > 0 { 1 } else { 0 }
+    // F4: N>=3 maximal Hardy probability strictly positive
+    let f4_trip_3 = if p3_q < f4_thresh { 1 } else { 0 }
+    let f4_trip_4 = if p4_q < f4_thresh { 1 } else { 0 }
+    let f4_trip_5 = if p5_q < f4_thresh { 1 } else { 0 }
+    let mut f4_trip = 0
+    if f4_trip_3 + f4_trip_4 + f4_trip_5 > 0 { f4_trip = 1 }
+    let f5_trip = if max_drift > f5_thresh { 1 } else { 0 }
+
+    let trips = f1_trip + f2_trip + f3_trip + f4_trip + f5_trip
+    let pass = trips == 0
+
+    let msg = "N=2 p_q=" + str(p2_q) + " p_closed=" + str(p2_closed_form) +
+              " |dev|=" + str(p2_dev) +
+              " ; N=3 p_q=" + str(p3_q) +
+              " ; N=4 p_q=" + str(p4_q) +
+              " ; N=5 p_q=" + str(p5_q) +
+              " ; max_H2=" + str(max_h2) +
+              " ; max_H3=" + str(max_h3) +
+              " ; max_H4=" + str(max_h4) +
+              " ; LHV_viol=" + str(total_viol) + "/" + str(total_strats) +
+              " ; max_drift=" + str(max_drift) +
+              " ; trips=" + str(trips)
+
+    return HardyVerdict {
+        ok: 1,
+        verdict: if pass { "PASS" } else { "FAIL" },
+        n_max: 5,
+        p2_quantum: p2_q, p2_closed_form: p2_closed_form, p2_abs_dev: p2_dev,
+        f1_thresh: f1_thresh, f1_trip: f1_trip,
+        max_h2_prob: max_h2, max_h3_prob: max_h3, max_h4_prob: max_h4,
+        f2_thresh: f2_thresh, f2_trip: f2_trip,
+        classical_lhv_strats_total: total_strats,
+        classical_violation_count: total_viol, f3_trip: f3_trip,
+        p3_max: p3_q, p3_closed: p3_c,
+        p4_max: p4_q, p4_closed: p4_c,
+        p5_max: p5_q, p5_closed: p5_c,
+        f4_thresh: f4_thresh, f4_trip: f4_trip,
+        max_norm_drift: max_drift,
+        f5_thresh: f5_thresh, f5_trip: f5_trip,
+        engine: "hexa_native",
+        message: msg
+    }
+}
+
+// ── Falsifier-first marker emission (@D g6) ────────────────────────────
+//
+// FAILED-suffix is the control-flow default (the failure suffix is
+// installed BEFORE the pass suffix), then -- and only then -- the pass
+// path overrides the suffix iff every F1..F5 invariant holds. Matches
+// the vqd-excited-cs / pseudo-telepathy-doily pattern.
+
+fn _hm_emit_marker(passed: int, body: str) -> int {
+    let ts = exec("date +%s").trim()
+    let qm_root = env("QMIRROR_ROOT")
+    let root = if qm_root.len() > 0 { qm_root } else { exec("pwd").trim() }
+    let marker_dir = root + "/state/markers"
+    let _mk = exec("mkdir -p " + marker_dir + " 2>/dev/null")
+    // falsifier-first: FAILED-suffix BY DEFAULT.
+    let mut suffix = "_FAILED.marker"
+    if passed == 1 { suffix = ".marker" }
+    let path = marker_dir + "/hardy_multipartite_" + ts + suffix
+    let _w = exec("echo '" + body + "' > '" + path + "'")
+    println("  marker: " + path)
+    return 0
+}
+
+// ── Public selftest ────────────────────────────────────────────────────
+
+fn selftest() -> HardyVerdict {
+    return hardy_multipartite_run()
+}
+
+fn main() {
+    println("[qmirror/hardy-multipartite] N-party Hardy paradox / Hardy nonlocality")
+    println("  papers: Hardy 1993 PRL 71 1665 (N=2 paradox; closed-form anchor (5sqrt5-11)/2)")
+    println("          Adhikary-Mandal arXiv:2505.10170v2 (2026, Phys. Lett. A;")
+    println("          multipartite generalisation: state Eq.4, p_N^max Eq.5)")
+    println("          Cereceda PLA 327 433 (2004); Choudhary-Bhar-Bhattacharyya 2014")
+    println("  caveat: EXACT 2^N-amplitude (N in {2,3,4,5}) UNITARY+projective sim;")
+    println("          NO QRNG / NO sampling / NO real-QPU device noise;")
+    println("          NO detector-loophole / NO signaling-loophole closure")
+    println("          (standard Hardy framework assumptions, NOT a lattice-fit).")
+    println("          Distinct witness class from CHSH / ghz_mermin /")
+    println("          contextuality-peres-mermin / pseudo-telepathy-doily:")
+    println("          probabilistic NO-INEQUALITY paradox; LHV forbids P(H1)>0")
+    println("          via the conjunction of (H2)-(H4) zero constraints.")
+    println("")
+
+    let v = hardy_multipartite_run()
+    if v.ok != 1 {
+        let _ = _hm_emit_marker(0, "FAIL " + v.message)
+        println("  ERROR: " + v.message)
+        println("[qmirror/hardy-multipartite] SELFTEST FAIL (run error)")
+        println("__QMIRROR_HARDY_MULTIPARTITE__ FAIL")
+        return
+    }
+
+    println("  N=2 closed-form p_2^max = (5sqrt5-11)/2 = " + str(v.p2_closed_form))
+    println("  N=2 quantum    p_2^max  = " + str(v.p2_quantum))
+    println("  N=2 |dev|              = " + str(v.p2_abs_dev) + "   (F1 thresh 1e-9)")
+    println("")
+    println("  Maximal Hardy probability p_N^max (quantum vs Eq.5 closed-form):")
+    println("    N=3 : quantum=" + str(v.p3_max) + "   closed=" + str(v.p3_closed))
+    println("    N=4 : quantum=" + str(v.p4_max) + "   closed=" + str(v.p4_closed))
+    println("    N=5 : quantum=" + str(v.p5_max) + "   closed=" + str(v.p5_closed))
+    println("")
+    println("  Worst-case LHV-forbidden conjunction probability (QM, all N):")
+    println("    max P(H2) = " + str(v.max_h2_prob) + "   (LHV-zero; ideal 0; F2 thresh 1e-12)")
+    println("    max P(H3) = " + str(v.max_h3_prob) + "   (LHV-zero; ideal 0; F2 thresh 1e-12)")
+    println("    max P(H4) = " + str(v.max_h4_prob) + "   (LHV-zero; ideal 0; F2 thresh 1e-12)")
+    println("")
+    println("  Classical LHV brute force (N=2 + N=3 combined):")
+    println("    strategies enumerated = " + str(v.classical_lhv_strats_total))
+    println("    Hardy-contradicting   = " + str(v.classical_violation_count) +
+            "   (must be 0 -- otherwise the paradox would collapse)")
+    println("")
+    println("  Norm drift (max over N): " + str(v.max_norm_drift) +
+            "   (F5 thresh 1e-9)")
+    println("")
+    println("  Falsifier verdicts:")
+    println("    F1 (|N=2 dev| < 1e-9)             : " +
+            (if v.f1_trip == 0 { "PASS" } else { "FAIL" }))
+    println("    F2 (max H2,H3,H4 < 1e-12 in QM)   : " +
+            (if v.f2_trip == 0 { "PASS" } else { "FAIL" }))
+    println("    F3 (LHV violation count == 0)     : " +
+            (if v.f3_trip == 0 { "PASS" } else { "FAIL" }))
+    println("    F4 (N>=3 p_N quantum > 1e-12)     : " +
+            (if v.f4_trip == 0 { "PASS" } else { "FAIL" }))
+    println("    F5 (norm drift < 1e-9)            : " +
+            (if v.f5_trip == 0 { "PASS" } else { "FAIL" }))
+    println("  verdict = " + v.verdict)
+    println("")
+
+    let pass = v.verdict == "PASS"
+    let _ = _hm_emit_marker(if pass { 1 } else { 0 },
+                             (if pass { "PASS " } else { "FAIL " }) + v.message)
+    if pass {
+        println("[qmirror/hardy-multipartite] SELFTEST PASS")
+        println("  (N=2 closed-form anchor matched to 1e-9; H2..H4 LHV-zeros hold to 1e-12;")
+        println("   N=3..5 Hardy probability strictly positive; LHV brute-force confirms")
+        println("   Hardy's contradiction: 0 classical strategies satisfy all (H2..H4) AND P(H1)>0)")
+        println("__QMIRROR_HARDY_MULTIPARTITE__ PASS")
+    } else {
+        println("[qmirror/hardy-multipartite] SELFTEST FAIL (falsifier triggered)")
+        println("__QMIRROR_HARDY_MULTIPARTITE__ FAIL")
+    }
+}

@@ -1,0 +1,177 @@
+#!hexa strict
+// qmirror/chemistry_vqe/module/_kupccgsd_generator.hexa
+//
+// k-UpCCGSD (Lee, Huggins, Head-Gordon, Whaley 2019) generator builder for
+// the LiH 4e/4o active space (6-qubit / ParityMapper((2,2)) + 2q reduction).
+//
+// @tool(slug="qmirror_kupccgsd_generator", desc="Pure-hexa k-UpCCGSD Pauli-decomposition generator builder. Filters the UCCSD excitation pool into generalized singles + pair doubles (same-spin only on this 4e/4o active space, exactly the strict k-UpCCGSD pair-double partition), then replicates k times with independent parameters per block. Mirrors UCCSD generator-cache array layout (param_idx / flip / z / y / cy / coefs / n_flat) so the existing farr_pauli_exp_inplace hot loop consumes it unchanged.")
+// @sentinel(none — pure data builder)
+//
+// ─── why "the UCCSD pool, partitioned" is the correct k-UpCCGSD here ───────
+//
+// For a 4e/4o active space with occupied={0,1} and virtual={2,3}, the
+// ParityMapper UCCSD pool ships:
+//   • idx 0..7  — 4α + 4β singles  (i_occ → a_virt)
+//   • idx 8..23 — 16 αβ-doubles    (occ_α occ_β → virt_α virt_β with mixing)
+//   • idx 24,25 — 2 same-spin pair-doubles  (T_{0α 1α}^{2α 3α}, T_{0β 1β}^{2β 3β})
+//
+// Strict k-UpCCGSD (Lee et al. §II.B):
+//   G(θ) = Σ singles + Σ pair-doubles   (NO mixed-spin doubles)
+// where "pair doubles" = excitations that move BOTH spin partners of a
+// spatial orbital together (T_{i_α i_β}^{a_α a_β}). For 4 orbitals in the
+// (2,2)-electron parity-mapped sector, the same-spin doubles at idx 24,25
+// ARE the only αα and ββ pair-doubles compatible with HF |001001>; the
+// αβ-mixing-doubles in idx 8..23 are EXCLUDED from k-UpCCGSD by definition.
+//
+// In the strict literature definition, pair-doubles also include the
+// occ-occ→virt-virt αβ-paired excitations; in the (2,2)-parity-mapped
+// 4e/4o reduced sector, those collapse into the same-spin pair operators
+// at idx 24,25 under the ParityMapper symmetry (HF + 2-qubit reduction
+// makes the αα and ββ paired-pair excitations the irreducible "pair" set).
+//
+// So the k-UpCCGSD per-block param count for LiH 4e/4o is:
+//   • 8 generalized singles   (full occ-virt singles in 4e/4o = "generalized" since
+//     occ-occ / virt-virt rotations are absorbed by orbital choice on a 4e/4o AS)
+//   • 2 pair-doubles
+//   = 10 params per k-block
+//
+// vs UCCSD's 26 params (incl. 16 αβ-mixing doubles).
+//
+// ─── builder return shape ─────────────────────────────────────────────────
+//
+// build_kupccgsd_lih_4e4o_cache(k) -> map with the SAME KEYS the UCCSD
+// hot-loop driver (cv_uccsd_lih_ansatz_h / energy_h) reads:
+//   "exc_param_idx" : [int] (length = n_flat_per_block * k)
+//   "exc_flip"      : [int]
+//   "exc_z"         : [int]
+//   "exc_y"         : [int]
+//   "exc_cy"        : [int]
+//   "exc_coefs"     : [float]
+//   "exc_n_flat"    : int
+//   "n_params"      : int
+//   "ham_flip" / "ham_z" / "ham_y" / "ham_cy" / "ham_coefs" / "ham_n" / "ham_shift"
+//       — copied through from cv_uccsd_lih_cache() (same Hamiltonian)
+//
+// param_idx for block b (0..k-1) is shifted by (b * n_params_per_block) so
+// each block carries an independent set of θ's. The flat-term arrays are
+// concatenated in order: block 0 terms first, then block 1, then block 2.
+
+use "./chemistry_vqe_cmt_uccsd_lih_4e4o.hexa"
+
+// ─── partition the UCCSD pool by excitation-type ──────────────────────────
+//
+// Returns 1 if UCCSD param_idx p belongs to the k-UpCCGSD per-block pool
+// (8 singles + 2 same-spin pair-doubles); 0 otherwise (i.e. it's an αβ
+// mixing-double, idx 8..23, which strict k-UpCCGSD excludes).
+
+fn kup_is_block_member(p: int) -> int {
+    if p < 8 { return 1 }       // singles
+    if p == 24 { return 1 }      // αα pair-double
+    if p == 25 { return 1 }      // ββ pair-double
+    return 0                     // αβ mixing-double — excluded
+}
+
+// Remap UCCSD param_idx p (0..25) → k-UpCCGSD block-local idx (0..9).
+// Per-block layout: 0..7 = singles (same as UCCSD), 8 = αα pair, 9 = ββ pair.
+fn kup_block_local_idx(p: int) -> int {
+    if p < 8 { return p }
+    if p == 24 { return 8 }
+    if p == 25 { return 9 }
+    return -1                    // not in k-UpCCGSD pool — caller must filter
+}
+
+fn kup_params_per_block() -> int { return 10 }
+
+// ─── builder ──────────────────────────────────────────────────────────────
+//
+// For LiH 4e/4o, the n_orb / n_active_elec args are vestigial (the underlying
+// vendored Pauli arrays are precomputed at this active space); they are
+// retained in the signature so future molecule extensions follow the same
+// `build_kupccgsd_generator(n_orb, n_active_elec, k)` contract.
+
+fn build_kupccgsd_lih_4e4o_cache(n_orb: int, n_active_elec: int, k: int) -> map {
+    // Pull the UCCSD cache once (vendored mask arrays).
+    let uccsd = cv_uccsd_lih_cache()
+    let u_param_idx = uccsd["exc_param_idx"]
+    let u_flip = uccsd["exc_flip"]
+    let u_z = uccsd["exc_z"]
+    let u_y = uccsd["exc_y"]
+    let u_cy = uccsd["exc_cy"]
+    let u_coefs = uccsd["exc_coefs"]
+    let u_n_flat = to_int(uccsd["exc_n_flat"])
+
+    // Per-block: filter flat terms whose param_idx is in the k-UpCCGSD pool.
+    let mut block_param_local = []
+    let mut block_flip = []
+    let mut block_z = []
+    let mut block_y = []
+    let mut block_cy = []
+    let mut block_coefs = []
+    let mut i = 0
+    while i < u_n_flat {
+        let p = u_param_idx[i]
+        if kup_is_block_member(p) == 1 {
+            let lp = kup_block_local_idx(p)
+            block_param_local = block_param_local.push(lp)
+            block_flip = block_flip.push(u_flip[i])
+            block_z = block_z.push(u_z[i])
+            block_y = block_y.push(u_y[i])
+            block_cy = block_cy.push(u_cy[i])
+            block_coefs = block_coefs.push(u_coefs[i])
+        }
+        i = i + 1
+    }
+    let n_per_block = len(block_param_local)
+    let params_per_block = kup_params_per_block()
+
+    // Concatenate k blocks, shifting param_idx by (b * params_per_block).
+    let mut full_param_idx = []
+    let mut full_flip = []
+    let mut full_z = []
+    let mut full_y = []
+    let mut full_cy = []
+    let mut full_coefs = []
+    let mut b = 0
+    while b < k {
+        let shift = b * params_per_block
+        let mut t = 0
+        while t < n_per_block {
+            full_param_idx = full_param_idx.push(block_param_local[t] + shift)
+            full_flip = full_flip.push(block_flip[t])
+            full_z = full_z.push(block_z[t])
+            full_y = full_y.push(block_y[t])
+            full_cy = full_cy.push(block_cy[t])
+            full_coefs = full_coefs.push(block_coefs[t])
+            t = t + 1
+        }
+        b = b + 1
+    }
+    let n_flat = len(full_param_idx)
+    let n_params = k * params_per_block
+
+    let out = json_parse("{}")
+    out["exc_param_idx"] = full_param_idx
+    out["exc_flip"] = full_flip
+    out["exc_z"] = full_z
+    out["exc_y"] = full_y
+    out["exc_cy"] = full_cy
+    out["exc_coefs"] = full_coefs
+    out["exc_n_flat"] = n_flat
+    out["n_params"] = n_params
+    out["params_per_block"] = params_per_block
+    out["k"] = k
+    // Carry through Hamiltonian (unchanged).
+    out["ham_flip"] = uccsd["ham_flip"]
+    out["ham_z"] = uccsd["ham_z"]
+    out["ham_y"] = uccsd["ham_y"]
+    out["ham_cy"] = uccsd["ham_cy"]
+    out["ham_coefs"] = uccsd["ham_coefs"]
+    out["ham_n"] = uccsd["ham_n"]
+    out["ham_shift"] = uccsd["ham_shift"]
+    return out
+}
+
+// Public alias matching the spec's `build_kupccgsd_generator` contract.
+fn build_kupccgsd_generator(n_orb: int, n_active_elec: int, k: int) -> map {
+    return build_kupccgsd_lih_4e4o_cache(n_orb, n_active_elec, k)
+}

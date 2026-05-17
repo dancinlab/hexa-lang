@@ -1,0 +1,121 @@
+#!hexa strict
+// qmirror/bench/module/bench_4e4o_beh2.hexa
+//
+// chem-vqe-bench suite — 4e/4o vendored VQE replay for BeH2.
+// H-Be-H at Be 0 0 0; H 0 0 1.3264; H 0 0 -1.3264; basis=sto-3g; AS=(4,4); 6 qubits.
+//
+// Vendored data (offline-extracted 2026-05-13 via pyscf+qiskit-nature):
+//   - Hamiltonian: 55 Pauli terms on 6 qubits (ParityMapper((2,2)) + 2q reduction)
+//   - constant_shift, CASCI(4,4) reference
+//   - UCCSD-converged statevector psi-star (64 complex amps, SLSQP from zeros)
+//
+// CCSD(T) literature reference (sanity-check, NOT the direct comparator):
+//   E = -15.83074 Ha (CCSD(T)/cc-pVTZ, linear D∞h, Re=1.3264 Å)
+//   source: NIST CCCBDB experimental Re; CCSD(T) electronic energy from Karton & Martin, J. Chem. Phys. 136, 124114 (2012) (W4 reference set).
+//
+// @tool(slug="qmirror_bench_4e4o_beh2", desc="chem-vqe-bench 4e/4o vendored VQE replay for BeH2.")
+// @usage(hexa run qmirror/bench/module/bench_4e4o_beh2.hexa --selftest)
+// @sentinel(__QMIRROR_BENCH_CHEM_VQE_BEH2_4E4O__ <PASS|FAIL>)
+
+use "../../chemistry_vqe/module/chemistry_vqe_cmt_hamiltonians_4e4o_lib.hexa"
+
+fn beh2_pauli_labels() -> [str] {
+    return [
+        "IIIIII", "IIIIIZ", "IIIIZZ", "IIIZZI", "IIIZII", "IIZIII",
+        "IZZIII", "ZZIIII", "ZIIIII", "IIIIZI", "IIIZZZ", "IIIZIZ",
+        "IIZIIZ", "IZZIIZ", "ZZIIIZ", "ZIIIIZ", "IZXIZX", "IIXIZX",
+        "IZXIIX", "IIXIIX", "ZXXZXX", "IYYZXX", "ZXXIYY", "IYYIYY",
+        "XXXXXX", "YXYXXX", "XXXYXY", "YXYYXY", "IIZIZZ", "IZZIZZ",
+        "ZZIIZZ", "ZIIIZZ", "ZXZZXZ", "IXIZXZ", "ZXZIXI", "IXIIXI",
+        "XXZXXZ", "YYIXXZ", "XXZYYI", "YYIYYI", "IIZZZI", "IZZZZI",
+        "ZZIZZI", "ZIIZZI", "XZIXZI", "XIIXZI", "XZIXII", "XIIXII",
+        "IIZZII", "IZZZII", "ZZIZII", "ZIIZII", "IZIIII", "ZZZIII",
+        "ZIZIII"
+    ]
+}
+
+fn beh2_pauli_coeffs() -> [float] {
+    return [
+        0.0 - 2.8479273485211443, 0.1491747697033609, 0.135490041738043, 0.0 - 0.06575978578750763,
+        0.0 - 0.06575978578750746, 0.14917476970336085, 0.1354900417380431, 0.0 - 0.06575978578750764,
+        0.0 - 0.06575978578750752, 0.15623483466188856, 0.1655730727085317, 0.16557307270853167,
+        0.09974664394743137, 0.10308493907987568, 0.09237988714598358, 0.0923798871459836,
+        0.04112783027377635, 0.0 - 0.04112783027377635, 0.0 - 0.04112783027377635, 0.04112783027377635,
+        0.012370366358319083, 0.012370366358319083, 0.012370366358319083, 0.012370366358319083,
+        0.012370366358319083, 0.012370366358319083, 0.012370366358319083, 0.012370366358319083,
+        0.10308493907987568, 0.10887432332670877, 0.08923871318678582, 0.08923871318678583,
+        0.003675161265918654, 0.0 - 0.003675161265918654, 0.0 - 0.003675161265918654, 0.003675161265918654,
+        0.0036751612659186566, 0.0036751612659186566, 0.0036751612659186566, 0.0036751612659186566,
+        0.09237988714598358, 0.08923871318678582, 0.11246476027166756, 0.10034007066108201,
+        0.0060623448052927655, 0.0 - 0.0060623448052927655, 0.0 - 0.0060623448052927655, 0.0060623448052927655,
+        0.0923798871459836, 0.08923871318678583, 0.10034007066108201, 0.11246476027166762,
+        0.15623483466188856, 0.1655730727085317, 0.16557307270853167
+    ]
+}
+
+fn beh2_constant_shift() -> float { return 0.0 - 11.64411971271578 }
+fn beh2_casci_ref() -> float { return 0.0 - 15.566211789879848 }
+
+fn beh2_psi_re() -> [float] {
+    return [
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0 - 2.0377532500172123e-25, 0.9966529895613179, 0.0 - 1.144112818735838e-07, 2.0429771713861386e-08,
+        1.3581561516231402e-07, 0.0 - 2.6880191316961927e-32, 1.3591273957126002e-07, 0.0 - 9.200902787824248e-08,
+        0.0 - 5.278782310739279e-28, 1.1403582288812449e-07, 0.0 - 0.05740492278748126, 1.0405017850635089e-07,
+        0.0 - 5.290832536519749e-09, 2.1668996077000823e-25, 9.328119944783e-09, 0.0 - 9.271768863400574e-09,
+        0.0 - 1.3967105592780215e-32, 4.8700931948682e-08, 0.0 - 1.0451545143245417e-07, 0.0 - 0.006759769454455434,
+        0.0 - 9.217931637268865e-10, 0.0 - 1.7319432227804523e-26, 0.0 - 8.255041273578365e-08, 1.2615791206656155e-07,
+        0.0 - 2.623630138668367e-32, 1.283201864772235e-07, 2.6561878704851554e-09, 0.0 - 3.867350295813463e-10,
+        0.00077857099603762, 2.0877636832234654e-25, 0.0 - 2.805074172676068e-09, 7.731729015799693e-10,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0 - 5.000244781583409e-28, 5.7017910636214116e-08, 0.0 - 2.119583404411816e-09, 0.0 - 1.5332375937490023e-07,
+        0.0 - 1.1767269120737354e-09, 1.8270788803561997e-25, 0.0 - 0.057406706009805804, 3.361589157049987e-08,
+        0.0 - 8.420725679719778e-33, 4.6191937256449744e-08, 0.0 - 3.9170993355611114e-09, 1.043532196182161e-07,
+        0.0 - 7.75700584427394e-10, 0.0 - 3.844310133645585e-27, 1.789097708193723e-08, 0.0 - 0.006757417206633119
+    ]
+}
+
+fn beh2_psi_im() -> [float] {
+    return [
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0
+    ]
+}
+
+
+fn main() {
+    println("[qmirror/bench] 4e/4o replay - BeH2")
+    let v = chemistry_vqe_native_run_named_4e4o(
+        "beh2", "Be 0 0 0; H 0 0 1.3264; H 0 0 -1.3264",
+        beh2_pauli_labels(), beh2_pauli_coeffs(),
+        beh2_constant_shift(), beh2_casci_ref(),
+        beh2_psi_re(), beh2_psi_im())
+    let tag = if v.verdict == "PASS" { "  PASS" } else { "  FAIL" }
+    println(tag + " " + v.molecule + "  " + v.verdict +
+            "  n_qubits=" + str(v.n_qubits) + "  n_pauli=" + str(v.n_pauli_terms))
+    println("      E_replay=" + str(v.energy_Ha) + " Ha   E_CASCI(4,4)=" + str(v.ref_energy_Ha) + " Ha")
+    let abs_d = if v.delta_uHa < 0.0 { 0.0 - v.delta_uHa } else { v.delta_uHa }
+    println("      |delta|=" + str(abs_d) + " uHa   wall=" + str(v.wall_seconds) + "s")
+    println("      " + v.message)
+    if v.verdict == "PASS" {
+        println("__QMIRROR_BENCH_CHEM_VQE_BEH2_4E4O__ PASS")
+        return
+    }
+    println("__QMIRROR_BENCH_CHEM_VQE_BEH2_4E4O__ FAIL")
+}
