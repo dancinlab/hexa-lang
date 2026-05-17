@@ -42,6 +42,37 @@
 
 (append-only)
 
+### 2026-05-17 — #18 aprime_cc self-host — feasibility 측정 + codegen 3 perf fix (branch `subagent-aprime-selfhost`)
+
+aprime_cc 가 `compiler/main.hexa` 자체를 컴파일하는 self-host 1차 시도. **결론: self-host 의 1차 블로커는 codegen-correctness 가 아니라 codegen 의 super-linear 성능** — 정확성은 대부분 통과한다.
+
+**측정 (`tool/build_aprime.sh` 로 빌드한 aprime_cc, 2,050,280 B)**:
+
+- **full flatten** (`compiler/main.hexa` import+use closure = 38 files / 21,832 lines): typecheck 전체 통과 (HX 진단 = HX4001 integer-div warning 11건뿐, **error 0건**), 그러나 codegen+emit 단계에서 9분 cap 도달 → `.s` 미산출. 즉 frontend(lex/parse/check/lower) 는 21K-line 컴파일러 소스를 끝까지 처리하나 codegen 이 끝나지 않음.
+- **부분 closure 자체-컴파일 (self-contained, byte-checked)**:
+  - parser closure (`compiler/parse/parser.hexa` + 의존 5 files / 2,946 lines) → `--emit=asm` **성공**, 1,071,947 B asm, 1,147 심볼 / 8,133 instr, stub/TODO 0. clang assemble OK, link 시 미해결 심볼 = `_lex` 1개뿐 (closure 누락 — 본 self-host 차단 아님).
+  - codegen closure (`compiler/codegen/arm64_darwin.hexa` + 의존 3 files / 2,076 lines) → **성공**, 892,158 B asm.
+  - → 컴파일러 프론트엔드의 가장 어려운 부분(파서·코드젠 모듈)이 aprime_cc 로 깨끗이 self-compile 된다.
+- **블로커 분류 (full self-host)**: (1) **codegen 성능 — 지배적 블로커** · (2) HX4001 warning 11 (무해) · (3) HX2001 `_lex` 류 — flatten 누락이지 실제 갭 아님. **codegen-correctness 갭 / unmapped builtin 은 부분 closure 측정 범위에서 0건** (full 측정은 codegen 미완료로 미확정).
+
+**codegen 성능 root-cause (측정 anchored)**: 합성 단일 함수 micro-probe (`fn big()` N개 sequential `let`):
+N=100/200/300 → 산출 OK (~150-180s @N=300), N=400 → 산출 OK (~263s), N=1205 → 220s+ timeout. **함수당 statement 수에 super-linear** — 절대 상수도 큼(~0.5s/stmt). 컴파일러 자체의 `_lower_hexpr` (1,209 lines · `compiler/lower/hir_to_mir.hexa`) 한 함수가 이 곡선의 우측 끝 → full self-host 가 codegen 에서 멈추는 직접 원인.
+
+**이번 cycle fix (3건, `compiler/codegen/arm64_darwin.hexa` + `compiler/emit/asm.hexa` — correctness-preserving)**:
+1. `_arm64_assign_regs` 의 live-interval 정렬: insertion-sort O(N²) → **counting-sort O(N+maxStart)** (stable, `iv.starts` 가 dense pos-index 이므로 안전). 큰 함수에서 N=interval 수가 수천 → O(N²) 가 지배 비용이었음.
+2. 동 함수 expire/spill 루프의 inline `while pp < len(mf.params)` param-scan (O(order·active·P)) → **`is_param[k]` 1회 pre-pass** 후 O(1) 배열 read.
+3. `emit/asm.hexa::_emit_func` 의 per-instruction `out = out + …` left-fold O(I²) → **array `iparts` + `join("")` O(I)** (module-scope `emit_asm` 의 기존 F4 idiom 미러).
+
+**검증**: 빌드 smoke `exit(6*7)==42` PASS. probe_cg(892,158 B)·probe_parse(1,071,947 B)·bf_200(231,355 B) 모두 fix 전/후 **byte-identical** (zero regression). bf_200 산출 바이너리 실행 → exit 165 = `big()%256` 정답 (end-to-end codegen correctness 확인). 다만 N=1205 micro-probe 는 fix 후에도 220s+ 미완 — fix 가 곡선을 낮췄으나 super-linear 자체는 미제거.
+
+**남은 staged roadmap (#18 완주)**:
+- **S1 — codegen 성능 (잔여 블로커)**: 측정상 codegen 단계가 여전히 super-linear. 후속 후보: (a) `_arm64_lower_func` 의 per-statement `instrs = _emit_arm64_stmt(instrs,…)` 경로 — runtime array pass-by-value(I1) 스냅샷 비용 프로파일 필요, (b) live-range/active-loop 의 잔여 배열 재구성(`keep`/`na` per-step rebuild) 비용 측정, (c) `_arm64_modhash`/`_arm_index_of` fast-path miss 빈도 측정. **codegen 단계 내부 phase 계측 추가**가 S1 선행 작업.
+- **S2 — full closure codegen 완주**: S1 후 21K-line full flatten 이 시간 내 `.s` 산출하는지 재측정. 산출되면 처음으로 codegen-correctness 갭 / unmapped builtin 의 full-scope 측정 가능.
+- **S3 — assemble+link self-host**: full `.s` → clang assemble → runtime.c link → `aprime_cc` 2세대 바이너리. 1세대(hexa_v2 경유) vs 2세대(self) byte-diff = self-host fixpoint 검증.
+- **S4 — hexa_v2 의존 제거**: `tool/build_aprime.sh` stage 2 를 hexa_v2 대신 aprime_cc 로 교체.
+
+정직한 평가: self-host 는 본 측정으로 **multi-cycle 확정**. 그러나 frontend(21K-line 전체 typecheck 통과) + 부분 closure self-compile(파서·코드젠 모듈 byte-clean) 은 self-host 가 codegen 성능 한 축만 남았음을 보인다 — correctness 축은 거의 닫혀 있다. #18 의 본질은 컴파일러 엔지니어링(linear-scan regalloc + emit 의 상수/복잡도)이지 언어 갭이 아니다.
+
 ### 2026-05-17 — 60-smoke aprime_cc-direct 재측정 (cycle-end) — 30/60 MATCH
 cycle-activated aprime_cc (`tool/build_aprime.sh`, 2,050,384 B) 로 60-smoke vs interp 재측정.
 
