@@ -807,3 +807,37 @@ watchdog 포크 (A100-only·SAVE_POD·scp retry·trap) 하되 단일-TU oracle
 gn2(통합 수치, regression localize 불가, #13/#14 가 2 fire 낭비) 대신
 **localized max|Δ| verdict** 반환 = 후속 모든 GPU-path 변경의 cheap
 gate. dispatch in-flight (instance 36957048, A100_PCIE).
+
+### 2026-05-18 — 🎉 oracle --cuda GPU numeric PASS (gate LIVE)
+
+**fire 1차 (instance 36957048)**: dispatch 인프라 정상 작동했으나
+oracle harness link error 포착 — `_hx_cuda_farr_matmul_gpu` undefined
+reference. 근본: `.sh` 가 `nvcc -x cu` (항상 C++) 빌드 →
+runtime_cuda.c 는 forge op 을 `#ifdef __cplusplus extern "C" {}`
+(unmangled C symbol) export, 그러나 harness L166 이 `extern "C"` 없이
+선언 → C++ TU 가 mangled call site 방출 → link 실패. no-CUDA +
+clang-syntactic $0 체크는 C++ link step 부재로 구조적으로 못 잡던
+latent 버그 (GPU 첫 실행으로 flush). fix: harness 선언을
+runtime_cuda.c guard 와 동일하게 `extern "C"` wrap (순수 tool-file
+linkage, substrate·numeric 무관). $0 게이트 둘 다 PASS 유지 검증.
+
+**fire 2차 (instance 36957253, A100_PCIE $0.87/hr, oracle_rc=0,
+compute wall 3s)**: ✅ **PASS**
+```
+config : T=16 d_out=96 d_in=96   build: -DHEXA_CUDA (cuBLAS Dgemm ACTIVE)
+reference Y[0..3] = 1.032786451593424 2.587387395552625 0.608754053781100 ...
+candidate Y[0..3] = 1.032786451593424 2.587387395552626 0.608754053781099 ...
+max|Δ| = 3.553e-15   (TOL_OP = 3e-11)
+PASS  F-RFC058-GPU-PATH-ORACLE
+```
+3.553e-15 = 사실상 bit-exact (마지막 1-2 ulp, cuBLAS reorder). **두
+확정**: ① cheap d768 GPU-path byte-eq oracle 가 실제 GPU 에서 작동
+검증 (15 fire 동안 없던 instrument LIVE — 후속 GPU-path 변경 ~$0.20
+검증, blind $0.17/600s d768 fire 대체) ② 현 롤백 base 의 d768
+GPU-path byte-clean 확인 (전환 trusted 출발점). g3: dispatch 인프라가
+GPU 첫 실행에서 실제 latent 버그 1개 flush + fix 검증 — 정직한
+de-risk. Tier: BREAKTHROUGH (새 접근 GPU 독립 검증).
+
+**다음**: 본체 = Phase 4-D-9 device-chain fwd+bwd 전환
+(`stdlib/flame/PHASE4D9_DEVICE_CHAIN_DESIGN.md` SSOT). worktree-
+isolated sub-agent, oracle + d=32 verify_all hard gate.
