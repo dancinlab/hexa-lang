@@ -1634,7 +1634,20 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
                 if len(nm) >= 4 && nm.substring(0, 4) == "mut:" {
                     nm = nm.substring(4, len(nm))
                 }
-                let has_init = !(it.body.text == "" && len(it.body.children) == 0)
+                // An initializer is PRESENT unless `it.body` is the
+                // `empty_expr()` sentinel (kind=Ident, text="", no
+                // children -- emitted by parse_let_item when no `=`
+                // appeared). Testing only text+children miscompiled
+                // globals initialized to an empty literal: `let c:
+                // array = []` (ArrayLit []), `let m = {}` (empty
+                // map/struct), `let s = ""` (empty StrLit) all have
+                // empty text and zero children yet ARE real
+                // initializers. Dropping them left the global
+                // zero-filled -> arr_ptr==NULL -> SIGSEGV on the first
+                // `.push` (atlas struct-array bug, interp-retire #5).
+                let has_init = !(it.body.kind == ExprKind::Ident
+                                 && it.body.text == ""
+                                 && len(it.body.children) == 0)
                 if has_init && len(nm) > 0 {
                     let lhs = Expr {
                         kind: ExprKind::Ident,

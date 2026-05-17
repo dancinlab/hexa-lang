@@ -98,6 +98,24 @@ interp-retirement cycle 21 commits (d179f4a1 → 1ce840ec) 를 active flame/forg
 
 **다운스트림 후속**: wilson 측에서 배포 완료 신호 수신 후 PATCHES.yaml chr 엔트리 `partial`→`applied` flip + chr-prefix split 코멘트 정리.
 
+### 2026-05-17 — interp-retire #5: atlas struct-array SIGSEGV — 2 codegen bugs (parser + arm64 spill)
+
+test/{atlas_materials_limits,atlas_real_limits,static_index_lazy_poc}_smoke.hexa 3 files crashed rc=139 (SIGSEGV) under aprime_cc-direct while interp returned rc=0. ASAN: null-page READ at 0x6 (hexa_array_push / hexa_map_get). Two independent codegen bugs (runtime.c was NOT at fault).
+
+**Bug 1 - empty-literal global initializer dropped (compiler/parse/parser.hexa)**
+- _parse_module_one splices a top-level `let X = E` initializer into the synthetic main; the has_init test was `!(it.body.text == "" && len(it.body.children) == 0)`.
+- `[]` (ArrayLit), `{}` (empty map), `""` (empty StrLit) all have text=="" + children==[], so a real initializer was wrongly judged has_init=false and dropped.
+- Result: a global like `let _CACHE: array = []` stayed zero-filled in .data -> arr_ptr==NULL -> SIGSEGV on the first `.push`. static_index_lazy_poc_smoke's _POC_CACHE is exactly this case.
+- Fix: the empty_expr() sentinel is uniquely kind==Ident && text=="" && children==[]. has_init now tests `!(it.body.kind == ExprKind::Ident && text=="" && children==[])` so empty ArrayLit/map/StrLit pass (different kind).
+
+**Bug 2 - arm64 victim-spill slot size 8B (compiler/codegen/arm64_darwin.hexa)**
+- The linear-scan regalloc victim-spill branch (_arm64_build_regmap, ~line 424) did `next_slot = next_slot + 8`, but HexaVal is 16B (tag+union, stp/ldp pair) and the other two slot-allocation sites use +16.
+- Every value spilled via the victim path overlapped the high 8B of its predecessor slot; with enough spills the slot offsets wrapped and aliased low-frame slots.
+- Result: a 24-element [Node] (nested struct + array field) literal stored element 7+ into colliding slots -> NODES[7..22] returned garbage (TAG_MAP with a junk map_ptr) -> hexa_map_get SIGSEGV. Only index 0-6/23 worked = the reported "N=17 threshold".
+- Fix: victim-spill `next_slot += 8` -> `+= 16` (matching the other sites).
+
+**Validation**: all 3 reproducers rc=0 + byte-identical output to interp (`materials_limits smoke: PASS` etc.). Minimal repro `let NODES:[Node]=[24x nested-struct]` -> `NODES[14].kind` also passes. aprime_cc rebuilt 2,050,440 B, smoke exit(42) PASS.
+
 ### 2026-05-17 — #13 DWARF `.loc` — aprime_cc 소스 매핑 directive emit (`76c12a45`)
 aprime_cc-direct codegen 이 DWARF `.file` + function-level `.loc` directive emit — lldb/gdb 가 machine code → .hexa source line 매핑 가능.
 
