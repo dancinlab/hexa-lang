@@ -858,3 +858,65 @@ oracle contamination 재발 방지 (별도 follow-up).
 **현황 재정정**: 진짜 tier-1 잔여 gap = **try/catch(t38_nanbox) 1개뿐**. atlas_verify
 는 tier-2 fix(#35) 로 매칭. t35/t36/t37 + 2 env 제외 시 tier-1 effective 천장
 (t38 닫으면) = **38/39 + atlas_verify(tier-2 후) 39/39** = 구현 언어 범위 tier-1 ≡ 정답.
+
+---
+
+### 2026-05-18 — #35 LANDED: tier-2 trailing-if-expr void-return FIX
+Branch: `worktree-agent-aab907155d82e5de1` · Commit: 798b6954 (codegen fix)
+
+**Root cause** (self/codegen_c2.hexa:1513-1521 pre-fix):
+gen2_fn_decl's tail-return loop explicitly _skip-ed IfExpr / MatchExpr
+("let them run normally") and routed those tail expressions through
+gen2_stmt, which emits each branch's tail expression as a bare
+`<expr>;` statement (value discarded). The function then returned
+`hexa_void()`. Tier-1 (aprime_cc) lowers tail-if-expr correctly and
+was unaffected; tier-2 (hexa_v2 → C) was the lone broken path.
+
+**Fix** (self/codegen_c2.hexa):
+- NEW `_gen2_emit_tail_returnify_body(body_stmts, depth)` — recursive
+  helper: emits non-tail stmts via gen2_stmt; rewrites the tail
+  ExprStmt's value-producing expression as `return <expr>;` (arena /
+  defer-routing honored), recurses into inner IfExpr so `else if`
+  chains and nested if-in-if also tail-return.
+- NEW `_gen2_emit_tail_return_expr(expr, pad)` — shared emitter for
+  arena-wrap / defer-route / @no_arena return shapes.
+- gen2_fn_decl tail-return loop: when inner_kind == "IfExpr", route
+  through helper + set did_emit_return=true. MatchExpr unchanged
+  (math.hexa doesn't use match; follow-on patch).
+
+**Verification battery**:
+- `tool/build_aprime.sh` smoke: exit(6*7)==42 PASS (both rounds)
+- Minimal repro `fn foo() -> int { if true {7} else {9} }`: tier-2
+  pre-fix prints `foo=void`; post-fix prints `foo=7`.
+- Math fns tier-2: abs/max/min/clamp/lcm all return correct ints
+  (pre-fix returned `void` for clamp/lcm; abs/max/min coincidentally
+  worked due to HexaVal struct ABI aliasing).
+- Byte-identical regression: non-tail-if fns (add/double/while_loop/
+  explicit_return/early_return_then_lit) → pre-fix vs post-fix C
+  output identical (diff = 0 lines).
+- atlas_verify_smoke tier-2 (worktree, fair source): pre-fix 109/118
+  → post-fix 112/118 (+3 verdicts: modular::s8_t201_step5_weight_12,
+  s8_t201_step6_lcm_uniqueness now PASS — both call `lcm()`).
+- gate-1 sweep: 37/44 MATCH unchanged. atlas_verify_smoke remains
+  MISMATCH (tier-1=PASS/rc=0 vs tier-2=FAIL/rc=1) because 6 OTHER
+  verifiers in transcendental + modular::step2 + falsifier still
+  diverge between tiers — separate codegen bugs (likely
+  float-arithmetic / struct-aliasing); out of scope for this fix.
+- hexa_v2 transpile of compiler/main.hexa closure (38 files, 22461 lines)
+  deterministic: identical .c emission across two runs. aprime_cc
+  rebuild + smoke PASS via the new hexa_v2 — self-host fixpoint
+  preserved at the C-codegen layer (Mach-O byte diffs are LC_UUID +
+  codesign-signature noise, not codegen drift).
+
+**Remaining gate-1 atlas_verify MISMATCH** (out of #35 scope):
+6 verdict regressions in tier-2 — transcendental::s2_gamma_reflection_n6,
+s10_four_island_bridge_approximate, s2_gauss_multiplication_n6 +
+falsifier::s2_gauss_multiplication_n6.falsifier + modular::s8_t201_step2_isotropy_23,
+s8_chi_to_monster_full. These are SEPARATE bugs (lcm-fix unblocked
+step5/step6/falsifier:step6 + step5; the failing ones don't depend on
+the trailing-if-expr path). Follow-on diagnostic needed.
+
+Files: self/codegen_c2.hexa, self/native/hexa_cc.c (regenerated),
+self/native/hexa_v2 (rebuilt), hexa.real + build/hexa_cli_driver +
+build/hexa_module_loader (rebuilt from worktree sources for verification).
+
