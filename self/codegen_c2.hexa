@@ -2220,6 +2220,18 @@ fn _gen2_nested_index_assign_stmt(lhs, val_c, pad) {
         expr = "hexa_index_set(" + acc[li] + ", " + keys[li] + ", " + expr + ")"
         li = li - 1
     }
+    // Field-rooted index assign — `obj.field[i] = v` lowered above gave
+    // `hexa_map_get_ic(obj, "field", &ic) = hexa_index_set(...)` which is a
+    // C function-call return on the LHS → "expression is not assignable".
+    // Rewrite as `obj = hexa_map_set(obj, "field", new_field_value)`. This
+    // mirrors the same wrap the plain Field-AssignStmt branch (line ~2279)
+    // already emits. Repro: `cs.clusters[i] = Cluster {...}` in
+    // compiler/atlas/symbolic/convergence_cluster.hexa (broke calc_cli_smoke
+    // and convergence_cluster_smoke).
+    if type_of(cur) != "string" && cur.kind == "Field" {
+        let obj_c = gen2_expr(cur.left)
+        return pad + obj_c + " = hexa_map_set(" + obj_c + ", \"" + cur.name + "\", " + expr + ");\n"
+    }
     return pad + root_c + " = " + expr + ";\n"
 }
 
