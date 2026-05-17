@@ -1140,3 +1140,26 @@ Bc-pin clobber(L534) 확정 = 다음 타깃. (experiment+measure: d768
 Bg/dX_out 비교) → bwd pin-clobber fix + bwd dev_view chain 그 보호 하.
 fwd+bwd 둘 다 device-chain+clobber-free 시 비로소 wall all-or-nothing
 이동 → F-RFC046-WALL ≤437.9s 측정 (= 100% closure).
+
+### 2026-05-18 — 🛸 d768 fire #16: 16-fire 만에 첫 step-1 완주 (TRANSCEND)
+
+**verdict (oracle_rc=124 timeout @ wall_seconds=601, 600s cap)**:
+```
+init epoch gn2: 3.98438                  (4×fwd 안정, NaN/inf 0)
+step 1 (pre-update) gn2: 3.98438         (4×(fwd+grad)+AdamW 완주!)
+```
+**캠페인 central capability (d768 GPU training step) 사상 첫 안착** —
+fwd-fix (oRin clobber 제거) end-to-end 효과 확정. fires #5~#15 = 0
+step-완주 → fire #16 = step 1 완주. gn2 안정.
+
+**추정 wall (g3 정직 — poll ±38s 불확실)**: cache 83s · init 46s ·
+step 1 ≈ **267s** → F-RFC046-WALL 437.9s gate 아래 추정 (PyTorch
+eager 336.85s 보다도 빠를 가능성). 단 trainer 가 per-step timestamp
+미출력 → 정확 측정 위한 longer-budget 재측정 필요.
+
+**Tier: TRANSCEND** (사상 첫 d768 역량 안착). closure 정식 선언은
+정확 wall 측정 후 (over-claim 0).
+
+**다음**: d768 fire #17 longer-budget (~1200s, step 1+ 정확 측정) =
+F-RFC046-WALL 정식 판정. PASS 시 100% closure 도달 가능 (bwd chain
+미적용 상태로도 — fwd-fix 가 충분할 가능성 측정 검증).
