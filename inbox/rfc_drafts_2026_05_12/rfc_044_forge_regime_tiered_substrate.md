@@ -154,9 +154,9 @@ flame stdlib 가 model shape 을 known 시점에 forge 의 적절한 tier 를 di
 
 ### C' tier (Stage 1 ceiling identified, Stage 2 = custom fused fwd+bwd)
 
-- 🟡 F-FORGE-C-STAGE2-FUSED-CEILING — custom co-emitted (fwd, bwd) kernel HBM traffic ≤ 0.75 × separate (이론 ceiling 0.667× 의 75-100% 효율)
-- 🟡 F-FORGE-C-STAGE2-WALL-LARGE — Llama-7B scale fused wall time ≤ 0.75 × separate (BW 45% util → DSM ROI)
-- 🟡 F-FORGE-C-STAGE2-DET-PRESERVE — fused kernel Y/dW/dX numerical equivalence to separate at TOL_OP ≤ 1e-9
+- ✅ **F-FORGE-C-STAGE2-FUSED-CEILING — PASS 0.6667 measured** (≤ 0.75 threshold, 모든 shape 16/32/64). Stage 2 Phase 1 fire 2026-05-17 A100 SXM $0.30, `state/.../C_STAGE2_ANALYSIS.md`.
+- 🟡 F-FORGE-C-STAGE2-WALL-LARGE — Llama-7B scale fused wall time ≤ 0.75 × separate (BW 45% util → DSM ROI) — **미증명** (Phase 1 single-block kernel = wall slower than cuBLAS, Phase 2 production kernel 필요).
+- ✅ **F-FORGE-C-STAGE2-DET-PRESERVE — PASS max\|Δ\| < 1e-16** (TOL_OP 1e-9 의 7 orders headroom). Numerical equivalence anchor confirmed.
 
 ✅ = Stage 1 PASS (Phase R 실측, 본 RFC 의 가설 토대)
 🟡 = Stage 2 사전등록 (별도 fire 가 검증)

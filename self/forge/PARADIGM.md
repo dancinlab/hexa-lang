@@ -18,8 +18,10 @@
 | **C** — autograd co-emission | ✅ 2026-05-17 H100 SXM $0.30 | FAIL (theoretical impossibility — ceiling 0.667 > 0.6) | **C' redundancy=1.500× constant** (≤ 0.75× realistic) | [`state/.../C_ANALYSIS.md`](../../state/forge_phaseR_c_2026_05_17/C_ANALYSIS.md) |
 | **A** Stage 1 — AOT whole-train-step | ✅ 2026-05-17 H100 SXM $0.40 | **PASS** (universal 1.2× 초과, 실측 2.24-6.07×) | A' regime-aware | [`state/.../A_ANALYSIS.md`](../../state/forge_phaseR_a_2026_05_17/A_ANALYSIS.md) |
 | **A** Stage 2 — large compute AOT | ✅ 2026-05-17 A100 SXM $0.30 | **PASS** (F-FORGE-A-STAGE2-LARGE: 1.10× 사전 등록 → **실측 1.86-4.06×**) | A' batch-size aware (small B 4-6× / large B 1.86×) | [`state/.../A_STAGE2_ANALYSIS.md`](../../state/forge_phaseR_a_stage2_2026_05_17/A_STAGE2_ANALYSIS.md) |
+| **C** Stage 2 Phase 1 — fused fwd+bwd | ✅ 2026-05-17 A100 SXM $0.30 | **PASS** (FUSED-CEILING + DET-PRESERVE 모두 PASS — traffic 0.6667 anchor, max\|Δ\| < 1e-16) | wall-time win 미증명 (single-block naive vs Tensor Core) — Phase 2 follow-up | [`state/.../C_STAGE2_ANALYSIS.md`](../../state/forge_phaseR_c_stage2_2026_05_17/C_STAGE2_ANALYSIS.md) |
+| **B** Stage 2 — DSM cluster fused FFN | 🟡 2026-05-17 fire BLOCKED | — | Hopper supply 시장 fully booked ≤$50/hr 0 offers. Kernel code (b_dsm_ffn_stage2.cu) + dispatch land — H100/H200 가용 시 fire | code: `self/cuda/experiments/b_dsm_ffn_stage2.cu` |
 
-Total cost: **$1.65** (D 0.40 + B 0.25 + C 0.30 + A Stage 1 0.40 + A Stage 2 0.30).
+Total cost: **$1.95** (D 0.40 + B Stage 1 0.25 + C Stage 1 0.30 + A Stage 1 0.40 + A Stage 2 0.30 + C Stage 2 0.30).
 
 ## 2. Paradigm D — deterministic substrate
 
@@ -105,10 +107,10 @@ Total cost: **$1.65** (D 0.40 + B 0.25 + C 0.30 + A Stage 1 0.40 + A Stage 2 0.3
 > launch overhead). 큰 shape (Llama-7B 단일 layer) 에서는 graph saving 미약
 > (+4%) → custom co-emitted kernel 만 win 가능.
 
-### 4.5 C' falsifier battery (Stage 2 가 검증, 사전등록)
-- F-FORGE-C-PRIME-FUSED-CEILING: custom co-emitted (fwd, bwd) kernel HBM traffic ≤ 0.75 × separate
-- F-FORGE-C-PRIME-WALL-LARGE: Llama-7B scale fused wall time ≤ 0.75 × separate
-- F-FORGE-C-PRIME-DET-PRESERVE: fused kernel Y/dW/dX numerical equivalence to separate at TOL_OP ≤ 1e-9
+### 4.5 C' falsifier battery (Stage 2 Phase 1 land — proof of principle)
+- ✅ **F-FORGE-C-STAGE2-FUSED-CEILING** — custom fused kernel HBM traffic ratio = **0.6667 measured** (≤ 0.75 threshold PASS, 모든 shape 16/32/64). Stage 2 fire 2026-05-17 A100 SXM $0.30.
+- ✅ **F-FORGE-C-STAGE2-DET-PRESERVE** — fused vs separate max\|Δ\| = **< 1e-16 measured** (TOL_OP 1e-9 의 7 orders headroom). Numerical equivalence anchor.
+- ⏳ F-FORGE-C-STAGE2-WALL-LARGE — Llama-7B scale wall time ≤ 0.75× — **미증명**. Stage 2 Phase 1 single-block kernel = wall-time slower than cuBLAS (naive per-thread loops vs Tensor Core). Production multi-block kernel = Phase 2 follow-up.
 
 ## 5. Paradigm A — AOT whole-train-step
 

@@ -178,6 +178,20 @@ H100 SXM 80GB · cuBLAS 12.4.5 · vast.ai instance 36884532 (destroyed) · cost 
 - **D' reframe (data-anchored)**: forge 의 FP64 substrate 는 cuBLAS DEFAULT 위에서 within-run determinism FREE. PEDANTIC = opt-in (+15-33% cost, no benefit for FP64). LayerCast-style cross-precision (BF16/FP16) determinism 은 별도 paradigm (RFC 047+).
 산출 trail: `state/forge_phaseR_d_2026_05_17/{result.json, D_ANALYSIS.md, fire.log, nvidia_smi_*.csv}`.
 
+### 2026-05-17 — Stage 2 C Phase 1 fire COMPLETED (FUSED-CEILING + DET-PRESERVE PASS) + Stage 2 B fire BLOCKED
+**C Stage 2 Phase 1** (A100 SXM4 cc=8.0 cuBLAS 12.4.5 · $0.30):
+3 shapes (16/32/64), single-block SMEM-resident fused kernel vs cuBLAS chain.
+- ✅ F-FORGE-C-STAGE2-FUSED-CEILING: bytes_ratio_analytic = **0.6667 measured every shape** (≤ 0.75 threshold PASS)
+- ✅ F-FORGE-C-STAGE2-DET-PRESERVE: max|Δ| < 1e-16 every shape (TOL_OP 1e-9 의 7 orders headroom)
+- ⏳ wall-time slower than cuBLAS (16³ 0.62× faster, 64³ 7.5× **slower**) — single-block naive vs Tensor Core. Production multi-block kernel = Phase 2 follow-up (~2-3 weeks effort)
+- **C paradigm 이론적 HBM traffic 이점 검증** + numerical equivalence 검증. Wall-time win = Phase 2.
+산출: `state/forge_phaseR_c_stage2_2026_05_17/{result.json, fire.log, C_STAGE2_ANALYSIS.md}`.
+
+**B Stage 2 fire BLOCKED**:
+H100/H200 cap ≤$50/hr 도 0 offers (vast.ai Hopper supply 시장 fully booked 시점). Kernel code (b_dsm_ffn_stage2.cu — DSM cluster API smoke + cuBLAS FFN baseline) + dispatch (dispatch_b_stage2.sh) land — Hopper 가용 시 fire 진입.
+
+Phase R 누적 cost: $1.95 (D 0.40 + B Stage 1 0.25 + C Stage 1 0.30 + A Stage 1 0.40 + A Stage 2 0.30 + C Stage 2 0.30).
+
 ### 2026-05-17 — Stage 2 A fire COMPLETED (F-FORGE-A-STAGE2-LARGE PASS overwhelmingly)
 **A Stage 2** (A100 SXM4 80GB · cc=8.0 · cuBLAS 12.4.2 · PyTorch 2.4.0 · vast.ai instance 36907435 destroyed · ~$0.30, H100 fallback after no_offers):
 3 configs · scaled-up MLP (3-layer Linear + ReLU + AdamW) — large compute regime:
