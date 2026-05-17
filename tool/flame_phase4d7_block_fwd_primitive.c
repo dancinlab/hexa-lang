@@ -664,19 +664,40 @@ static void flame_block_generic_fwd_primitive_gpu(
     // host. (No-CUDA Mac build: these calls were inert no-ops anyway, and
     // d=32·3L takes the _cpu path which never had them — byte-eq intact.)
 
-    // ── RFC 056 §6.3 residence anchor — pin model weights (Bp) + the
-    //    block cache (Bc) device-resident ONCE at block entry. With Bp/Bc
-    //    pinned, every forge `_gpu` op that takes a slice/view of them
-    //    hits the §6.1 H2D-skip (loc∈{DEVICE,MIRRORED} && !dirty_host →
+    // ── RFC 056 §6.3 residence anchor — pin model weights (Bp) ONLY.
+    //    With Bp pinned, every forge `_gpu` op that takes a slice/view of
+    //    it hits the §6.1 H2D-skip (loc∈{DEVICE,MIRRORED} && !dirty_host →
     //    no re-upload) instead of the structural per-op round-trip fire
-    //    #9 measured. This is byte-eq-SAFE: pin only does the H2D + sets
-    //    the non-evict flag; the host buffers remain authoritative for
-    //    the (unchanged) host-side copy-back dataflow, so output bytes
-    //    are bit-identical to pre-RFC-056 (F-RFC056-BYTEEQ-PRESERVE).
+    //    #9 measured. This is byte-eq-SAFE for Bp: Bp is the model
+    //    weights, READ-ONLY for the whole block — its host bytes never
+    //    change mid-block, so a stale-device skip can never desync it.
     //    No-CUDA Mac: hexa_farr_pin_device just records pinned=1 (no
     //    device) — inert, d=32·3L _cpu path never reaches this fn.
+    //
+    // ── Bc IS NOT PINNED (oRin-clobber root-cause fix, 2026-05-18) ──
+    //    Bc is HOST-ACCUMULATED: every step writes Bc.buf via a RAW host
+    //    pointer (RMSNorm-1 → oRin/oRm1xn/oR1inv, residual, RMSNorm-2,
+    //    …), NOT through a farr API, so `dirty_host` is NEVER set.
+    //    Pinning Bc marked it loc=FARR_MIRRORED, dirty_host=0 with a
+    //    device snapshot taken at block entry (all-zero / prior-step
+    //    stale). The transpose-scatter's `_h2d(Bc)` then took the §6.1
+    //    H2D-SKIP (loc∈{DEVICE,MIRRORED} && !dirty_host) — it did NOT
+    //    upload step-1's host-written oRin — and the scatter wrapper's
+    //    MANDATORY full-buffer `_d2h(Bc)` (runtime_cuda.c:1906, required
+    //    because A2 consumers raw-host-read Bc) then copied the STALE
+    //    device buffer back OVER the correct host oRin. oRin is written
+    //    once (step-1) and only READ afterwards (step-2 Q proj — which is
+    //    why oQ stays byte-eq: the matmul read the still-correct host
+    //    oRin BEFORE its own scatter clobbered it), so it is never
+    //    rewritten → it stays wrong to block end (block-fwd GPU oracle
+    //    oRin=1.704e-1; $0 residence-FSM oracle reproduces it bit-exactly
+    //    at the FIRST scatter, dst_off=oQ). NOT pinning Bc leaves it
+    //    loc=FARR_HOST until the first scatter, so that scatter's
+    //    `_h2d(Bc)` does a REAL upload of the authoritative host Bc
+    //    (oRin included) — the contract this primitive's PART 1 header
+    //    already established ("Bc/X/… stay authoritative on the host").
+    //    The §6.3 Bc-pin regressed that contract; this restores it.
     (void)hexa_farr_pin_device(hexa_int(Bp_id));
-    (void)hexa_farr_pin_device(hexa_int(Bc_id));
 
     // ─── 1. RMSNorm(X, g1) → rin / rm1xn / r1inv  (forge kernel) ──
     flame_g7_rmsnorm_resident(X_id, 0, Bp_id, G1,
@@ -1091,15 +1112,16 @@ static void flame_block_generic_fwd_primitive_gpu(
     }
     hexa_farr_free(sw_o_v);
 
-    // ── RFC 056 §6.3 — release the residence anchor at block exit.
-    //    unpin clears the non-evict flag; if D2H-defer left Bp/Bc with
-    //    dirty_dev=1 it materializes them back to host (lazy D2H), which
-    //    is exactly the host-authoritative exit contract documented
-    //    below. With the current (unchanged) host-side copy-back
-    //    dataflow Bc.dirty_dev stays 0, so unpin is a pure flag-clear
-    //    and the host Bc remains the authoritative result — byte-eq
-    //    preserved (F-RFC056-BYTEEQ-PRESERVE). No-CUDA Mac: inert.
-    (void)hexa_farr_unpin_device(hexa_int(Bc_id));
+    // ── RFC 056 §6.3 — release the Bp residence anchor at block exit.
+    //    unpin clears the non-evict flag; Bp is read-only so dirty_dev
+    //    stays 0 → pure flag-clear, host Bp unchanged. (Bc is paired:
+    //    it is no longer pinned at entry — see the oRin-clobber root-
+    //    cause note above — so it MUST NOT be unpinned here. An unpin on
+    //    a never-pinned, possibly dirty_dev Bc could trigger a spurious
+    //    full `_d2h(Bc)` that re-introduces the very stale-device
+    //    clobber this fix removes; keeping the pin/unpin strictly
+    //    Bp-only preserves the host-authoritative Bc exit contract.)
+    //    No-CUDA Mac: inert.
     (void)hexa_farr_unpin_device(hexa_int(Bp_id));
 
     // ── PART 1 close (FIRE7 fix): NO block-level to_host(Bc) ──
