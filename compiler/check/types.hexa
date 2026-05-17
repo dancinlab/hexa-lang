@@ -1438,15 +1438,28 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
         if op == "+" && (lt.kind == "string" || rt.kind == "string") {
             return _types_t_string()
         }
-        // Both sides must be numeric AND of the same kind.
+        // Both sides numeric. Mixed int/float is a LEGAL implicit widening
+        // — tier-2 (self/runtime.c hexa_add/sub/mul) dispatches the mixed
+        // case to `hexa_float(__hx_to_double(a) OP __hx_to_double(b))`,
+        // i.e. int operand is widened to f64 and the result is f64. Match
+        // that policy EXACTLY here: int OP int → int, float OP float →
+        // float, mixed int/float → float (no HX3001). Only genuine
+        // non-coercible numeric mismatches still raise HX3001.
         if _types_is_numeric(lt) && _types_is_numeric(rt) {
-            if !_types_equal(lt, rt) {
+            let mixed_int_float =
+                (_is_integer_kind(lt) && _is_float_kind(rt)) ||
+                (_is_float_kind(lt) && _is_integer_kind(rt))
+            if !_types_equal(lt, rt) && !mixed_int_float {
                 _emit_hx3001(lt, rt, e.span, out)
             }
             // S4: integer / integer narrows the ℝ domain → HX4001 (Warning).
             if op == "/" && _is_integer_kind(lt) && _is_integer_kind(rt) {
                 _emit_hx4001(e.span, out)
             }
+            // Mixed int/float yields f64 (int operand widened, per tier-2's
+            // __hx_to_double path) so the inferred type propagates correctly
+            // into the enclosing let/return/arg context.
+            if mixed_int_float { return _types_t_f64() }
             return lt
         }
         // Mismatch (one or both non-numeric) — treat as type-mismatch with
