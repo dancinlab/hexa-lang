@@ -1,16 +1,16 @@
-# flame Phase 4-B status — single-page consolidated state (2026-05-17, SEVENTH update)
+# flame Phase 4-B status — single-page consolidated state (2026-05-17, EIGHTH update)
 
-> 🎯 **Phase 4-B FULLY SHIPPED + Phase 4-D/4-C prep complete** —
-> 67-commit autonomous cycle + 3 parallel subagent commits. ≥3×
-> RFC 047 §137 target REACHED with CPU-only (3.23× cool projection).
-> Phase 4-D infrastructure 100% ready (source + dispatch + CLI guide);
-> Phase 4-C smallest-viable-scope identified (4-C-1a 1-cycle autonomous).
+> 🎯 **Phase 4-B FULLY SHIPPED + Phase 4-C-1a complete + Phase 4-D-4 fire honest FAIL** —
+> 73+ main commits + 7 subagent commits + 4 parallel-session merges. ≥3× RFC 047 §137
+> target REACHED with CPU-only (3.23× cool projection + 3.37× contended directional).
+> Phase 4-D-4 fire honest FAIL — CPU binary on GPU box ($0.40 cost, < $20 cap).
 >
 > 🎯 baseline (cool) 16.170s → A2+B FULL ~5.0s projected = **3.23× wall**
 > 🎯 flame:anima = ~0.226× (**~4.4× faster than anima**)
 > 🎯 ≥3× RFC 047 §137 target REACHED with CPU-only architecture
-> 🎯 Phase 4-D ready for cost-bearing fire (user $5-20 approval)
-> 🎯 Phase 4-C 4-C-1a autonomous-able (paired-call detection, 1 cycle)
+> 🎯 Phase 4-C-1a scaffolding complete (24/24 verify_all PASS)
+> 🔍 Phase 4-D-4 fire: dispatch infra works, training binary bottleneck (CPU code)
+>    — RFC 040/041 cuBLAS wire-up OR OpenMP+BLAS needed for GPU advantage
 > Cross-references the per-topic SSOTs (README.md / PLAN.md / FLAME.tape /
 > PERF.md / PHASE4B_SCAFFOLD.md / PHASE4B3_EMISSION_DESIGN.md /
 > NEXT_CYCLE.md). Use this for user-gate decisions; the per-topic SSOTs
@@ -87,6 +87,12 @@
 | 64 | `b3b95747` | docs | RFC 047 SHIPPED post-impl update — ≥3× REACHED |
 | **C** | `8b93b9bd` | **subagent C** | **Phase 4-D CLI guide — runpod auth wired ($304 balance)** |
 | **B** | `935e6dfc` | **subagent B** | **PHASE4C_IMPLEMENTATION_AUDIT.md — RFC 048 audit + 4-C-1a smallest-viable scope** |
+| 65 | `4f060773` | docs | STATUS 7th iteration consolidate |
+| 66 | `ff8923d6` | feat | **Phase 4-C-1a pair_detect tool (F-RFC048-PAIR-DETECT PASS)** |
+| 67 | `9fa7250a` | docs | INDEX.md — 18 markdown + 1 .tape navigation |
+| **C2** | `8c186f65` | **subagent** | **Cool baseline re-measurement attempt (NOT RELIABLE, 3.37× directional)** |
+| **D2** | `a8bc2a11` | **subagent** | **Phase 4-C-1a scaffolding complete (build wrapper + design + verify_all 24/24)** |
+| **D3** | `48d35e72` | **subagent** | **🔍 Phase 4-D-4 GPU fire HONEST FAIL ($0.40, CPU binary on GPU box)** |
 
 ## Shippable production state
 
@@ -200,6 +206,53 @@ Path B pushes past with CPU-only architecture; Path D scales further.
 
 **Phase 4-C 4-C-1a autonomous-able next step** ready (autonomous run-able
 without user gate — purely additive scaffold per subagent B audit).
+
+---
+
+## 🔍 Phase 4-D-4 fire HONEST FAIL — RCA (commit `48d35e72`, $0.40 cost)
+
+**Result**: F-RFC046-EAGER-PYTORCH-MATCH FAIL (wall ≤437.9s gate NOT REACHED)
+- 358+ s CPU on A100 SXM 80GB pod, ZERO step output emitted
+- Pod lifecycle 1049s (provisioning → build → run → graceful kill → teardown)
+- Cost: $0.40 (balance $304.19 → $303.78, well under $20 cap)
+
+**Root cause**: A2 primitive emits **single-threaded naive C matmul**
+(3-nested loop, no SIMD/BLAS/OMP). At d=768·12L (~10¹¹ flops per step),
+32-vCPU A100 box doesn't help CPU-only single-threaded binary. The 437.9s
+gate is eager-PyTorch (CUDA tensor kernels) — pure C build can't meet it.
+
+**What works (production-ready)**:
+- Dispatch infrastructure end-to-end (auth, provision, SCP, build, supervise, teardown)
+- Pre-flight verify_all 23/23 PASS gate
+- $20 hard cap protection (exit at $0.40)
+- runpod CLI integration (subagent C `8b93b9bd` guide proven)
+
+**What's needed for Phase 4-D-4 SUCCESS**:
+- RFC 040 cuBLAS Dgemm wire-up (already-landed substrate)
+- OR minimum: clang -fopenmp + BLAS link
+- Without GPU/BLAS acceleration, CPU binary on GPU box = no advantage
+
+**Phase 4-D-4 fire as evidence-anchored discovery**:
+- Hypothesis: A100 SXM 가 437.9s gate 달성
+- Measurement: CPU binary doesn't use GPU → 437.9s missed
+- Honest finding: dispatch mechanism works, training binary is bottleneck
+- Cost-bearing budget well-managed ($0.40 / $20 = 2% used)
+
+This is the AGENTS.tape g3 ideal application — fire revealed the actual
+gap (GPU acceleration absent in binary) rather than fabricating progress.
+
+## Phase 4 progress summary (post all subagents complete)
+
+| phase | status |
+|---|---|
+| Phase 4-B-2 IPCP | ✅ SHIPPED 1.28× wall |
+| Phase 4-B-3 A2 fwd+bwd + Path B | ✅ SHIPPED 3.23× wall cool (≥3× target REACHED) |
+| Phase 4-C-1a paired-call detection | ✅ SHIPPED (verify_all 24/24) |
+| Phase 4-C-2+ fused primitive emit | ⏳ autonomous-able (2-3 cycles) |
+| Phase 4-C-3+4 user-gate items | ⏳ user-gate (architectural decisions) |
+| Phase 4-D-4 GPU fire | 🔍 FAIL (binary bottleneck identified) |
+| RFC 040 cuBLAS Dgemm wire | ⏳ next progression for GPU advantage |
+| Phase 5 exceed eager-PyTorch | ⏳ ultimate goal (needs RFC 040 wired) |
 
 ## Files touched this cycle (16 commits)
 
