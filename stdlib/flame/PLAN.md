@@ -1,5 +1,15 @@
 # flame/PLAN.md — staged roadmap (DESIGN — no execution until approved)
 
+> ## 🎯 GOAL (2026-05-17, 사용자 확정)
+> **hexa 로 쓴 컴파일러-only NN 학습 스택 (flame) 이 자체 GPU substrate
+> (forge) 를 통해 d=768·12L 트랜스포머를 PyTorch 보다 빠르게 학습시킨다 —
+> 진짜 측정으로 증명하면서.**
+>
+> 4 축 (모든 작업이 이 축에 trace): (1) PyTorch 없이 — compiler-only,
+> hexa-native · (2) hexa 만으로 — forge 도 hexa-native 화 (RFC 055
+> hexa→PTX) · (3) GPU 에서 — forge cuBLAS substrate + Phase 4-D dispatch ·
+> (4) 검증된 채로 — 모든 단계 byte-eq falsifier (가짜 진전 0, g3).
+>
 > Design SSOT = `inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`.
 > This file = the flame-local operational roadmap (mirrors HEXAD/PLAN.md
 > discipline: editable architecture head + append-only `## 진행 로그`).
