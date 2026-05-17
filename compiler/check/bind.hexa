@@ -795,7 +795,20 @@ fn _bind_builtin_names() -> [string] {
         // call_builtin: "timestamp"||"now"||"time_now"). Both surfaced as
         // HX2001 in t_cmd_url_args_passthrough / t_exec_env_reproducible /
         // t_multiarch_cpu_smoke. Codegen _builtin_runtime_sym maps them.
-        "env_var", "now"
+        "env_var", "now",
+        // Low-level memory / pointer builtins — tier-2 (codegen_c2.hexa
+        // §G5/B3) already lowered these to hexa_ptr_* runtime symbols;
+        // tier-1 (compiler/) was missing the bind registration so a
+        // call surfaced as HX2001 before codegen. Used by
+        // self/ml/cpu_forward_tiny.hexa + self/ml/qwen14b.hexa (the
+        // hxqwen/serve smoke tests). Registration only — no interp /
+        // runtime semantic change. Each name has a matching
+        // _builtin_runtime_sym entry; without that the link (not the
+        // bind) would fail.
+        "alloc_raw", "free_raw", "ptr_from_int",
+        "write_f32", "write_i32", "write_i64", "deref_f32", "deref_i32",
+        "ptr_write_f32", "ptr_write_i32", "ptr_read_f32", "ptr_read_f64", "ptr_read_i32",
+        "ord"
     ]
 }
 

@@ -1212,6 +1212,24 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "write_file"    { return "rt_write_file" }
     if name == "sha256"        { return "hexa_sha256" }
     if name == "sha256_file"   { return "hexa_sha256_file" }
+    // Low-level memory / pointer builtins — name -> runtime symbol.
+    // Authoritative mapping mirrored from self/codegen_c2.hexa §G5/B3.
+    // All take/return HexaVal pairs so the generic STMT_CALL emit path
+    // (arg pairs into x0:x1/x2:x3/x4:x5, bl, x0:x1 → dst) lowers them
+    // verbatim — no special branch, no ret-box. `free_raw` is the
+    // 1-arg alias of hexa_ptr_free (size arg ignored by the runtime).
+    if name == "alloc_raw"     { return "hexa_ptr_alloc" }
+    if name == "free_raw"      { return "hexa_ptr_free" }
+    if name == "write_f32"     { return "hexa_ptr_write_f32" }
+    if name == "write_i32"     { return "hexa_ptr_write_i32" }
+    if name == "write_i64"     { return "hexa_ptr_write" }
+    if name == "deref_f32"     { return "hexa_ptr_read_f32" }
+    if name == "deref_i32"     { return "hexa_ptr_read_i32" }
+    if name == "ptr_write_f32" { return "hexa_ptr_write_f32" }
+    if name == "ptr_write_i32" { return "hexa_ptr_write_i32" }
+    if name == "ptr_read_f32"  { return "hexa_ptr_read_f32" }
+    if name == "ptr_read_f64"  { return "hexa_ptr_read_f64" }
+    if name == "ptr_read_i32"  { return "hexa_ptr_read_i32" }
     if name == "println"       { return "hexa_println" }
     if name == "len"           { return "hexa_len" }            // → int (box)
     if name == "contains"      { return "hexa_str_contains" }   // → int (box bool)
@@ -1494,6 +1512,29 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              _arm64_op_reg("w0"), "index_of: sign-ext"))
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_int"),
                              "index_of: box to HexaVal"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // ord(s) — first-codepoint code. codegen_c2.hexa:4301 lowers it
+        // to hexa_char_code(s, hexa_int(0)); the constant index-0 arg is
+        // synthesised here as a TAG_INT 0 pair in x2:x3 (the runtime
+        // returns a HexaVal int directly -- no ret-box). 1-arg builtin.
+        if s.op == "ord" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // string recv
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x2"),
+                             _arm64_op_label("#0"), "ord: TAG_INT for index arg"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x3"),
+                             _arm64_op_label("#0"), "ord: index 0 payload"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_char_code"),
+                             "ord: hexa_char_code(s, 0)"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // ptr_from_int(x) — identity. codegen_c2.hexa:4126 returns the
+        // arg verbatim (the int already encodes the address under
+        // TAG_INT). No call: load arg -> x0:x1, store to dst.
+        if s.op == "ptr_from_int" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
