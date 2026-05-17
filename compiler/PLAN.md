@@ -481,3 +481,39 @@ MATCH = byte-identical stdout AND same rc.
 32/36 ≈ **89%** tier-1≡tier-2. R7 gate ① ("aprime-direct coverage ≥ interp")는 interp
 이 알려진 buggy-oracle 이므로 tier-2(hexa-build) 동치를 기준으로 재정의 — 잔여 gap =
 (a) 4 atlas-verifier codegen 동근(task #24 와 합류 가능) + (b) 6 frontend CGFAIL(별도 RFC).
+
+---
+
+### 진행 로그 — #24 loop-sentinel fix LANDED (`9223fe4a`) + gate ① 33/44 + #25 노출 (cycle h18)
+
+**#24 ROOT-CAUSED & LANDED on main `9223fe4a`** (struct-return ABI 가설 기각 — 실제 원인은
+HIR→MIR loop-sentinel scoping 버그):
+- `compiler/lower/hir_to_mir.hexa::_patch_loop_sentinels` 가 *모든* MIR block 을 스캔해
+  `continue`(-7002)/`break`(-7001) sentinel 을 현재 lowering 중인 loop 에 바인딩. inner loop
+  *내부* nested continue 엔 맞지만, 같은 outer body 에서 inner loop 의 *텍스트적 선행 형제*
+  인 continue 엔 틀림. `hxc_loader.hexa::load_atlas_hxc` 의 malformed-row continue(outer
+  `while lineno<n` 소속)가 형제 `while k<16` 의 patch 에 포착→inner header 로 rebound→
+  `let mut dense = []` 건너뜀→`dense`(caller frame `sp+1680`) 미초기화→비결정적
+  tag-garbage 크래시. hexa_v2 C-path 는 진짜 C `continue` emit 으로 무영향, aprime_cc
+  arm64 lowering 만 miscompile.
+- Fix: `scope_min` param 추가, `b.id < scope_min` block skip. block id 단조증가
+  (`_new_block`)이므로 loop 자기 구조/body block 은 id≥header_id, 외곽 loop sentinel 은
+  더 이른 block(id<header_id). 유일 call site 가 `header_id` 전달. 2-hunk surgical.
+- 검증: build_aprime smoke `exit(6*7)==42` PASS (clean origin/main); aprime_cc-compiled
+  `hxc_loader` 가 real 6.4 MB `dist/atlas.hxc` 에서 **15952 nodes 로드, 크래시 0**
+  (이전 deterministic tag-garbage); single-loop/nested-continue/nested-loop byte-identical
+  regression asm. self-host: fixed ap1 → 22,128-line flat → 223,696-line asm (68s, exit 0,
+  22 harmless HX4001, 0 error); ap2 가 real 16k-row atlas 15952 nodes 로드 크래시 0
+  → #24 진정한 self-host 레벨에서 종결. `_normalize_argv` arg-handling tag 손상도 동근,
+  함께 소멸.
+
+**gate ① 재측정 (`/tmp/ap24` = clean main + 9223fe4a):** 32→**33/44 MATCH**.
+`atlas_hxc_roundtrip` MISMATCH→MATCH (loop-sentinel/atlas-load fix 직접 효과). 잔여:
+3 atlas-verifier MISMATCH(`doctrine`·`tecsl_verify`·`wave3` — 별도 shared codegen 동근,
+hxc_roundtrip 분리됨) + env-resource 2(`repo_taxonomy_audit` rc137 OOM ·
+`t34_net_listen` rc138 socket) + 6 frontend-CGFAIL. effective ≈ 33/36 (92%).
+
+**#25 EXPOSED (다음 self-host fixpoint 블로커):** self-hosted ap2(asm-compiled compiler)
+가 frontend 실행 + asm header emit 까지 가나 per-function emit loop 이 **함수 body 0개**
+생성 (smoke → 4-line header only vs ap1 정상 28-line `_main`). 타임아웃/atlas 의존 아님.
+#24 가 atlas-load 에서 ap2 를 먼저 죽여 가려져 있던 것. 별도 cycle.
