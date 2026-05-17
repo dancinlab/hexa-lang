@@ -248,7 +248,10 @@ gap (GPU acceleration absent in binary) rather than fabricating progress.
 | Phase 4-B-2 IPCP | ✅ SHIPPED 1.28× wall |
 | Phase 4-B-3 A2 fwd+bwd + Path B | ✅ SHIPPED 3.23× wall cool (≥3× target REACHED) |
 | Phase 4-C-1a paired-call detection | ✅ SHIPPED (verify_all 24/24) |
-| Phase 4-C-2+ fused primitive emit | ⏳ autonomous-able (2-3 cycles) |
+| Phase 4-C-2a fused primitive scaffold | ✅ SHIPPED (compile-eq PASS, fwd-bwd-eq trivially PASS) |
+| Phase 4-C-2b caller wire-up | ⏳ next (sed-rewrite paired → fused call) |
+| Phase 4-C-2c Bc-elimination | ⏳ next (extract intermediates to C locals, ~24 KB DRAM RT eliminated) |
+| Phase 4-C-2+ wall improvement | ⏳ gated on 2b+2c (F-RFC048-FUSED-WALL-IMPROVED ≥1.3×) |
 | Phase 4-C-3+4 user-gate items | ⏳ user-gate (architectural decisions) |
 | Phase 4-D-4 GPU fire | 🔍 FAIL (binary bottleneck identified) |
 | RFC 040 cuBLAS Dgemm wire | ⏳ next progression for GPU advantage |
