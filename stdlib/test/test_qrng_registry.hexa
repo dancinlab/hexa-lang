@@ -1,0 +1,75 @@
+// stdlib/test/test_qrng_registry.hexa — 9-backend dispatch registry selftest
+//
+// Sentinel: __QRNG_REGISTRY__ PASS
+
+use "stdlib/qrng/source"
+use "stdlib/qrng/registry"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag, cond) {
+    if cond { pass_count = pass_count + 1 } else { println("  FAIL " + tag); fail_count = fail_count + 1 }
+}
+
+fn main() -> void {
+    println("── stdlib/qrng/registry selftest ──")
+
+    let names = qrng_registry_names()
+    chk("9 backends", len(names) == 9)
+
+    let mut i = 0
+    let mut meta_ok = true
+    while i < len(names) {
+        let m = qrng_registry_meta(names[i])
+        if m.name != names[i] { meta_ok = false }
+        if m.tier < 0 { meta_ok = false }
+        i = i + 1
+    }
+    chk("all metas resolve", meta_ok)
+
+    let m_x = qrng_registry_meta("nonexistent")
+    chk("unknown_returns_neg1", m_x.tier == -1)
+
+    // mock determinism via registry dispatch
+    let r1 = qrng_registry_collect("mock_qrng", 8, 42)
+    let r2 = qrng_registry_collect("mock_qrng", 8, 42)
+    chk("mock.r1_ok", r1.ok == 1)
+    chk("mock.r2_ok", r2.ok == 1)
+    let mut k = 0
+    let mut det = true
+    while k < 8 {
+        if r1.bytes_[k] != r2.bytes_[k] { det = false }
+        k = k + 1
+    }
+    chk("mock determinism", det)
+
+    // non-mock backends fail-closed at registry layer
+    let r_curby = qrng_registry_collect("curby", 4, 1)
+    chk("curby_fail_closed", r_curby.ok == 0)
+    let r_anu = qrng_registry_collect("anu", 4, 1)
+    chk("anu_fail_closed", r_anu.ok == 0)
+    let r_nist = qrng_registry_collect("nist_beacon", 4, 1)
+    chk("nist_fail_closed", r_nist.ok == 0)
+    let r_ibm = qrng_registry_collect("ibm_quantum", 4, 1)
+    chk("ibm_fail_closed", r_ibm.ok == 0)
+    let r_hw = qrng_registry_collect("hardware_qrng", 4, 1)
+    chk("hw_fail_closed", r_hw.ok == 0)
+
+    // honest C3 sentinels
+    let m_nb = qrng_registry_meta("nist_beacon")
+    chk("nist_beacon.is_quantum_0_honest", m_nb.is_quantum == 0)
+    let m_cu = qrng_registry_meta("curby")
+    chk("curby.is_quantum_1", m_cu.is_quantum == 1)
+
+    let total = pass_count + fail_count
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: qrng_registry " + to_string(pass_count) + "/" + to_string(total))
+        println("__QRNG_REGISTRY__ PASS")
+        return
+    }
+    println("FAIL: qrng_registry " + to_string(pass_count) + "/" + to_string(total))
+    println("__QRNG_REGISTRY__ FAIL")
+    exit(1)
+}

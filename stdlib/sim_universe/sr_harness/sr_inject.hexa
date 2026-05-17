@@ -1,0 +1,209 @@
+// sr_inject.hexa — Stochastic Resonance noise-floor injector (pure hexa)
+//
+// Evidence: shared/sim_bridge/ouroboros_qrng/variance_sweep/summary.md
+//   σ=0.1 peaks conv_rate at 0.25 vs baseline 0.10 (2.4×) in n=20 ouroboros trials
+//   (pooled p≈0.022, not yet confirmed — keep gated).
+//
+// API (pure functions + env-gated wrappers):
+//
+//   add_sr_noise(value: float, sigma: float, seed: int) -> float
+//       Additive Gaussian noise via Box-Muller.  Deterministic in (sigma, seed).
+//       σ <= 1e-5  → value returned verbatim (no-op fast path).
+//
+//   add_sr_noise_gated(value: float, sigma: float, seed: int) -> float
+//       Same, but respects NEXUS_SR env flag — returns value verbatim
+//       when is_sr_enabled() is false.
+//
+//   wrap_metric(metric_fn, sigma: float = 0.1) -> fn
+//       Higher-order wrapper.  hexa lambda support is limited in stage0 —
+//       the reference implementation here is `wrap_metric_scalar` which
+//       accepts a seeded closure struct; see `WrappedMetric` below.
+//       Callers construct `make_wrapped_metric(fn, sigma, seed_base)` and
+//       then invoke `call_wrapped(w, raw_value, seed_offset)` in-line.
+//
+//   is_sr_enabled() -> bool
+//       Reads environment variable NEXUS_SR.  "1" / "true" / "yes" → true.
+//       Any other value (including unset, "0", empty) → false.
+//
+// No external deps. No atlas/L0 writes. All math is inline (Box-Muller z).
+
+// ─── math primitives (copied from sweep_runner.hexa for independence) ───
+
+fn sr_abs_f(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
+
+fn sr_clamp_f(x: float, lo: float, hi: float) -> float {
+    if x < lo { lo } else { if x > hi { hi } else { x } }
+}
+
+fn sr_sqrt_f(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut guess = x / 2.0
+    let mut i = 0
+    while i < 20 {
+        guess = (guess + x / guess) / 2.0
+        i = i + 1
+    }
+    guess
+}
+
+// base LCG (matches sweep_runner.pseudo_rand — keeps seed compatibility)
+fn sr_prng_a(seed: int) -> float {
+    let x = ((seed * 1103515245 + 12345) % 2147483647)
+    let pos = if x < 0 { 0 - x } else { x }
+    to_float(pos % 10000) / 10000.0
+}
+
+// independent LCG (different constants — statistically decoupled)
+fn sr_prng_b(seed: int) -> float {
+    let x = ((seed * 1664525 + 1013904223) % 2147483647)
+    let pos = if x < 0 { 0 - x } else { x }
+    to_float(pos % 10000) / 10000.0
+}
+
+// natural-log truncated Mercator series (sufficient for Z draw)
+fn sr_ln_approx(x: float) -> float {
+    if x <= 0.0001 { return 0.0 - 9.0 }
+    let y = 1.0 - x
+    let mut acc = 0.0
+    let mut k = 1
+    let mut yk = y
+    while k <= 12 {
+        acc = acc + yk / to_float(k)
+        yk = yk * y
+        k = k + 1
+    }
+    0.0 - acc
+}
+
+// Box-Muller z = sqrt(-2 ln u1) cos(2π u2), cos via 6-term Taylor
+fn sr_box_muller_z(u1: float, u2: float) -> float {
+    let u1c = if u1 < 0.0001 { 0.0001 } else { if u1 > 0.9999 { 0.9999 } else { u1 } }
+    let two_pi_u2 = 6.2831853 * u2
+    let mut theta = two_pi_u2
+    while theta > 3.1415927 { theta = theta - 6.2831853 }
+    while theta < 0.0 - 3.1415927 { theta = theta + 6.2831853 }
+    let t2 = theta * theta
+    let cos_approx = 1.0 - t2 / 2.0 + (t2 * t2) / 24.0 - (t2 * t2 * t2) / 720.0
+    let r = sr_sqrt_f(0.0 - 2.0 * sr_ln_approx(u1c))
+    r * cos_approx
+}
+
+// ─── env gate ───
+
+fn is_sr_enabled() -> bool {
+    let mut raw = ""
+    try { raw = to_string(exec("printenv NEXUS_SR")).trim() } catch e {}
+    if raw == "1" { return true }
+    if raw == "true" { return true }
+    if raw == "TRUE" { return true }
+    if raw == "yes" { return true }
+    if raw == "on" { return true }
+    return false
+}
+
+// ─── core injector ───
+
+// additive Box-Muller gaussian noise, deterministic in (sigma, seed)
+fn add_sr_noise(value: float, sigma: float, seed: int) -> float {
+    if sigma <= 0.00001 { return value }
+    let u1 = sr_prng_b(seed * 7 + 11)
+    let u2 = sr_prng_b(seed * 13 + 29)
+    let z = sr_box_muller_z(u1, u2)
+    value + sigma * z
+}
+
+// env-gated variant — respects NEXUS_SR=1
+fn add_sr_noise_gated(value: float, sigma: float, seed: int) -> float {
+    if !is_sr_enabled() { return value }
+    add_sr_noise(value, sigma, seed)
+}
+
+// clamped variant for probability-like metrics ∈ [lo, hi]
+fn add_sr_noise_clamped(value: float, sigma: float, seed: int, lo: float, hi: float) -> float {
+    let raw = add_sr_noise(value, sigma, seed)
+    sr_clamp_f(raw, lo, hi)
+}
+
+// ─── wrap_metric (struct-based; hexa stage0 lacks first-class fn values) ───
+//
+// Usage:
+//   let w = make_wrapped_metric("conv_score", 0.1, 42)
+//   let noisy = call_wrapped_scalar(w, raw_score, gen_idx)
+//
+// The struct holds the sigma + base_seed; callers pass the raw value and an
+// integer offset (e.g., generation index) to derive a unique per-sample seed.
+
+struct WrappedMetric {
+    name: string,
+    sigma: float,
+    base_seed: int,
+    gated: bool
+}
+
+fn make_wrapped_metric(name: string, sigma: float, base_seed: int) -> WrappedMetric {
+    WrappedMetric { name: name, sigma: sigma, base_seed: base_seed, gated: true }
+}
+
+fn make_wrapped_metric_ungated(name: string, sigma: float, base_seed: int) -> WrappedMetric {
+    WrappedMetric { name: name, sigma: sigma, base_seed: base_seed, gated: false }
+}
+
+fn call_wrapped_scalar(w: WrappedMetric, raw: float, seed_offset: int) -> float {
+    let seed = w.base_seed + seed_offset
+    if w.gated && !is_sr_enabled() { return raw }
+    add_sr_noise(raw, w.sigma, seed)
+}
+
+fn call_wrapped_clamped(w: WrappedMetric, raw: float, seed_offset: int, lo: float, hi: float) -> float {
+    let seed = w.base_seed + seed_offset
+    if w.gated && !is_sr_enabled() { return raw }
+    add_sr_noise_clamped(raw, w.sigma, seed, lo, hi)
+}
+
+// ─── CLI self-test ───
+
+let _a = args()
+let mode_arg = if _a.len() >= 3 { _a[2] } else { "help" }
+
+if mode_arg == "help" {
+    println("sr_inject.hexa — Stochastic Resonance noise floor")
+    println("  self-test          print 10 samples at sigma=0.1")
+    println("  stats <sigma> [n]  mean/sd over n draws (default 10000)")
+    println("  enabled            print is_sr_enabled() -> true|false")
+}
+
+if mode_arg == "self-test" {
+    println("SR_SELFTEST sigma=0.1 seed_base=0")
+    let mut i = 0
+    while i < 10 {
+        let raw = 1.0
+        let noisy = add_sr_noise(raw, 0.1, i * 101)
+        println("  i=" + to_string(i) + " raw=1.0 noisy=" + to_string(noisy))
+        i = i + 1
+    }
+}
+
+if mode_arg == "stats" {
+    let mut sigma = 0.1
+    let mut n = 10000
+    if _a.len() >= 4 { try { sigma = to_float(_a[3]) } catch e {} }
+    if _a.len() >= 5 { try { n = to_int(_a[4]) } catch e {} }
+    let mut sum = 0.0
+    let mut sum2 = 0.0
+    let mut i = 0
+    while i < n {
+        let v = add_sr_noise(0.0, sigma, i * 77)
+        sum = sum + v
+        sum2 = sum2 + v * v
+        i = i + 1
+    }
+    let mean = sum / to_float(n)
+    let var = sum2 / to_float(n) - mean * mean
+    let sd = sr_sqrt_f(sr_abs_f(var))
+    println("SR_STATS sigma=" + to_string(sigma) + " n=" + to_string(n) + " mean=" + to_string(mean) + " sd=" + to_string(sd))
+}
+
+if mode_arg == "enabled" {
+    let en = is_sr_enabled()
+    if en { println("true") } else { println("false") }
+}

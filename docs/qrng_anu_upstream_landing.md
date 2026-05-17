@@ -3,7 +3,7 @@
 land date: 2026-05-02
 modules:
 - `stdlib/net/http_client.hexa` (120 LOC) — curl-based HTTP GET primitive
-- `stdlib/qrng_anu.hexa` (187 LOC) — ANU Quantum RNG REST wrapper
+- `stdlib/qrng/backends/anu.hexa` — ANU Quantum RNG REST wrapper (RFC 044 absorbed; was `stdlib/qrng_anu.hexa` 191 LOC)
 
 motivation: anima 4-Tier QRNG 표 T1 row (ANU free REST API, length≤1024/req,
 no auth) 를 sister-repo 가 stub 없이 그대로 import 할 수 있는 stdlib 단위
@@ -13,7 +13,7 @@ land. 호출자 측에서 sleep-rate-limit + chunking + JSON parse 재발명을
 ## §1 — 사용법 (anima 또는 다른 sister-repo)
 
 ```hexa
-use "stdlib/qrng_anu"
+use "stdlib/qrng/backends/anu"
 
 fn collect_quantum_seed() {
     // 기본은 fixture (deterministic 0..255 cycle, entropy ZERO).
@@ -33,7 +33,7 @@ fn collect_quantum_seed() {
 ```
 
 import path 는 hexa-lang stdlib 정규 경로:
-- `use "stdlib/qrng_anu"` (qrng wrapper)
+- `use "stdlib/qrng/backends/anu"` (qrng wrapper)
 - `use "stdlib/net/http_client"` (http get 직접)
 - `use "stdlib/json_object"` (이미 land — 응답 parse 헬퍼)
 
@@ -156,7 +156,7 @@ use 하는 구조 권장.
 
 ```hexa
 // anima/tool/anima_qrng_collect.hexa 같은 신규 wrapper:
-use "stdlib/qrng_anu"
+use "stdlib/qrng/backends/anu"
 
 fn collect_quantum_seed_for_eeg(n_bytes: int) {
     return qrng_anu_chunked(n_bytes, 60000)  // 1 req/min 권장 sleep.

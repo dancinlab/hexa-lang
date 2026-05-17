@@ -1,0 +1,16 @@
+// null_baseline.hexa — urandom 스트림 N bytes → hex 파일
+// 인자: <out_path> <bytes>
+let a = args()
+if a.len() < 4 {
+    println("USAGE: null_baseline.hexa <out_path> <bytes>")
+} else {
+    let out = a[2]
+    let mut n: i64 = 512
+    try { n = to_int(a[3]) } catch e1 { n = 512 }
+    let cmd = "head -c " + to_string(n) + " /dev/urandom | od -An -vtx1 | tr -d ' \\n'"
+    let mut hex = ""
+    try { hex = to_string(exec(cmd)).trim() } catch e2 { hex = "" }
+    if hex.len() >= n * 2 { hex = hex.substring(0, n * 2) }
+    try { write_file(out, hex) } catch e3 { println("# WRITE ERROR") }
+    println("# urandom bytes=" + to_string(hex.len() / 2) + " out=" + out)
+}

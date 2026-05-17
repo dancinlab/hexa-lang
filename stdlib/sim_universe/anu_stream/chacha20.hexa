@@ -1,0 +1,232 @@
+// chacha20.hexa — pure hexa ChaCha20 block function (RFC 7539)
+//
+// Pitfalls worked around:
+// - hexa has no `<<` / `>>` operators  -> use * 2^n and / 2^n via precomputed tables
+// - hexa `|` parses as lambda start in many contexts -> use XOR (`^`) for
+//   rotl halves (bits are disjoint so OR == XOR) and use `&` for mask
+// - hexa 0x hex literals have a parser bug with `&`/`|` adjacency -> use
+//   decimal constants everywhere and keep `& M32` in parentheses
+// - integers are i64, so we mask every 32-bit result with `& M32`
+//
+// API (called by stream_daemon.hexa and client_example.hexa):
+//     chacha_block(key8:[int], counter:int, nonce3:[int]) -> [int]      // 16 u32 words
+//     chacha_block_bytes(key8, counter, nonce3) -> [int]                // 64 u8 bytes
+//     key_bytes_to_words(key32:[int]) -> [int]                          // 32 u8 -> 8 u32 (le)
+//     words_to_bytes(words:[int]) -> [int]                              // N u32 -> 4N u8 (le)
+//
+// Self-test: `hexa chacha20.hexa test` runs the RFC 7539 §2.3.2 test vector.
+
+let M32 = 4294967295  // 2^32 - 1
+
+// ChaCha20 constants "expand 32-byte k" (little-endian u32 interpretation)
+let C0 = 1634760805
+let C1 = 857760878
+let C2 = 2036477234
+let C3 = 1797285236
+
+// Precomputed power-of-two tables (index n -> 2^n), n in [0..32]
+fn pow2_table() -> [int] {
+    let mut t = [1]
+    let mut i = 0
+    while i < 32 {
+        t = t.push(t[t.len() - 1] * 2)
+        i = i + 1
+    }
+    t
+}
+
+// rotl32: ((v << n) | (v >> (32-n))) & M32
+// - high = (v * 2^n) mask32   (left-shifted bits)
+// - low  = v / 2^(32-n)       (right-shifted bits, non-overlapping with high)
+// - high ^ low == high | low because bits are disjoint
+fn rotl32(v: int, n: int, P: [int]) -> int {
+    let vv = v & M32
+    let hi = (vv * P[n]) & M32
+    let lo = vv / P[32 - n]
+    (hi ^ lo) & M32
+}
+
+// Quarter round on state[a],[b],[c],[d] (RFC 7539 §2.2)
+fn qr(s: [int], a: int, b: int, c: int, d: int, P: [int]) -> [int] {
+    let mut w = s
+    w[a] = (w[a] + w[b]) & M32
+    w[d] = rotl32(w[d] ^ w[a], 16, P)
+    w[c] = (w[c] + w[d]) & M32
+    w[b] = rotl32(w[b] ^ w[c], 12, P)
+    w[a] = (w[a] + w[b]) & M32
+    w[d] = rotl32(w[d] ^ w[a], 8, P)
+    w[c] = (w[c] + w[d]) & M32
+    w[b] = rotl32(w[b] ^ w[c], 7, P)
+    w
+}
+
+// ChaCha20 block: state = const(4) | key(8) | counter(1) | nonce(3) = 16 u32
+// Returns 16 u32 words (little-endian interpretation of keystream).
+fn chacha_block(key8: [int], counter: int, nonce3: [int]) -> [int] {
+    let P = pow2_table()
+    let mut state = [C0, C1, C2, C3,
+                     key8[0], key8[1], key8[2], key8[3],
+                     key8[4], key8[5], key8[6], key8[7],
+                     counter & M32,
+                     nonce3[0] & M32, nonce3[1] & M32, nonce3[2] & M32]
+    let mut w = [state[0], state[1], state[2], state[3],
+                 state[4], state[5], state[6], state[7],
+                 state[8], state[9], state[10], state[11],
+                 state[12], state[13], state[14], state[15]]
+    let mut r = 0
+    while r < 10 {
+        // column rounds
+        w = qr(w, 0, 4, 8, 12, P)
+        w = qr(w, 1, 5, 9, 13, P)
+        w = qr(w, 2, 6, 10, 14, P)
+        w = qr(w, 3, 7, 11, 15, P)
+        // diagonal rounds
+        w = qr(w, 0, 5, 10, 15, P)
+        w = qr(w, 1, 6, 11, 12, P)
+        w = qr(w, 2, 7, 8, 13, P)
+        w = qr(w, 3, 4, 9, 14, P)
+        r = r + 1
+    }
+    let mut out = []
+    let mut i = 0
+    while i < 16 {
+        out = out.push((w[i] + state[i]) & M32)
+        i = i + 1
+    }
+    out
+}
+
+// Convert 8 u32 words to 32 little-endian bytes. Inverse: key_bytes_to_words.
+fn words_to_bytes(words: [int]) -> [int] {
+    let mut out = []
+    let mut i = 0
+    while i < words.len() {
+        let w = words[i] & M32
+        let b0 = w % 256
+        let b1 = (w / 256) % 256
+        let b2 = (w / 65536) % 256
+        let b3 = (w / 16777216) % 256
+        out = out.push(b0)
+        out = out.push(b1)
+        out = out.push(b2)
+        out = out.push(b3)
+        i = i + 1
+    }
+    out
+}
+
+// 32 u8 key (little-endian) -> 8 u32 key words.
+fn key_bytes_to_words(key32: [int]) -> [int] {
+    let mut out = []
+    let mut i = 0
+    while i < 8 {
+        let b0 = key32[i * 4 + 0]
+        let b1 = key32[i * 4 + 1]
+        let b2 = key32[i * 4 + 2]
+        let b3 = key32[i * 4 + 3]
+        let w = b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+        out = out.push(w & M32)
+        i = i + 1
+    }
+    out
+}
+
+// Generate 64 keystream bytes.
+fn chacha_block_bytes(key8: [int], counter: int, nonce3: [int]) -> [int] {
+    words_to_bytes(chacha_block(key8, counter, nonce3))
+}
+
+// Parse a 64-hex-char key into 32 u8.
+fn hex_to_bytes(h: string) -> [int] {
+    let chars = h.chars()
+    let mut out = []
+    let mut i = 0
+    while i < chars.len() {
+        let hi = hex_nibble(chars[i])
+        let lo = hex_nibble(chars[i + 1])
+        out = out.push(hi * 16 + lo)
+        i = i + 2
+    }
+    out
+}
+fn hex_nibble(c: char) -> int {
+    let s = to_string(c)
+    if s == "0" { return 0 }
+    if s == "1" { return 1 }
+    if s == "2" { return 2 }
+    if s == "3" { return 3 }
+    if s == "4" { return 4 }
+    if s == "5" { return 5 }
+    if s == "6" { return 6 }
+    if s == "7" { return 7 }
+    if s == "8" { return 8 }
+    if s == "9" { return 9 }
+    if s == "a" { return 10 }
+    if s == "b" { return 11 }
+    if s == "c" { return 12 }
+    if s == "d" { return 13 }
+    if s == "e" { return 14 }
+    if s == "f" { return 15 }
+    if s == "A" { return 10 }
+    if s == "B" { return 11 }
+    if s == "C" { return 12 }
+    if s == "D" { return 13 }
+    if s == "E" { return 14 }
+    if s == "F" { return 15 }
+    0
+}
+
+fn byte_to_hex(b: int) -> string {
+    let HEX = "0123456789abcdef".chars()
+    let hi = (b / 16) % 16
+    let lo = b % 16
+    to_string(HEX[hi]) + to_string(HEX[lo])
+}
+
+fn bytes_to_hex(bs: [int]) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < bs.len() {
+        s = s + byte_to_hex(bs[i])
+        i = i + 1
+    }
+    s
+}
+
+// --- CLI entry: self-test against RFC 7539 §2.3.2 vector ---
+let _a = args()
+let mode = if _a.len() >= 3 { _a[2] } else { "help" }
+
+if mode == "test" {
+    // RFC 7539 §2.3.2 test: key = 00..1f, counter=1, nonce=00 00 00 09 00 00 00 4a 00 00 00 00
+    let mut key32 = []
+    let mut i = 0
+    while i < 32 { key32 = key32.push(i); i = i + 1 }
+    let key8 = key_bytes_to_words(key32)
+    // nonce bytes: 00 00 00 09 | 00 00 00 4a | 00 00 00 00 -> three u32 LE
+    let n0 = 0 + 0 * 256 + 0 * 65536 + 9 * 16777216
+    let n1 = 0 + 0 * 256 + 0 * 65536 + 74 * 16777216
+    let n2 = 0
+    let nonce = [n0, n1, n2]
+    let bytes = chacha_block_bytes(key8, 1, nonce)
+    // Expected first 16 bytes (RFC 7539 §2.3.2):
+    //   10 f1 e7 e4 d1 3b 59 15 50 0f dd 1f a3 20 71 c4
+    let expect = "10f1e7e4d13b5915500fdd1fa32071c4"
+    let got = bytes_to_hex(bytes).substring(0, 32)
+    if got == expect {
+        println("PASS rfc7539_block expect=" + expect)
+        println("PASS got=   " + got)
+    } else {
+        println("FAIL rfc7539_block")
+        println("  expect=" + expect)
+        println("  got=   " + got)
+        exit(1)
+    }
+    // Full-block hex dump, first 32 bytes
+    println("block0_64B_hex=" + bytes_to_hex(bytes))
+}
+
+if mode == "help" {
+    println("chacha20.hexa — pure hexa ChaCha20")
+    println("  test  : RFC 7539 §2.3.2 known-answer test")
+}

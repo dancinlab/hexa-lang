@@ -1,0 +1,52 @@
+// stdlib/test/test_qrng_source.hexa — canonical QRNG contract shape tests
+//
+// Sentinel: __QRNG_SOURCE__ PASS
+
+use "stdlib/qrng/source"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag, cond) {
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag)
+        fail_count = fail_count + 1
+    }
+}
+
+fn main() -> void {
+    println("── stdlib/qrng/source selftest ──")
+
+    let m = qrng_meta_make("anu", 1, 1000, 0, 0, 1, 0, 1, "IMPLEMENTED", "qrng.anu.edu.au")
+    chk("meta.name", m.name == "anu")
+    chk("meta.tier", m.tier == 1)
+    chk("meta.is_quantum", m.is_quantum == 1)
+    chk("meta.is_local", m.is_local == 0)
+    chk("meta.status", m.status == "IMPLEMENTED")
+    chk("meta.vendor", m.vendor == "qrng.anu.edu.au")
+
+    let f = qrng_bytes_fail("test reason")
+    chk("fail.ok", f.ok == 0)
+    chk("fail.n_bytes", f.n_bytes == 0)
+    chk("fail.bytes_len", len(f.bytes_) == 0)
+    chk("fail.message", f.message == "test reason")
+
+    let s = qrng_bytes_ok([1, 2, 3], "abc", "ok")
+    chk("ok.ok", s.ok == 1)
+    chk("ok.n_bytes", s.n_bytes == 3)
+    chk("ok.bytes_0", s.bytes_[0] == 1)
+    chk("ok.sha", s.sha256_hex == "abc")
+
+    let total = pass_count + fail_count
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: qrng_source " + to_string(pass_count) + "/" + to_string(total))
+        println("__QRNG_SOURCE__ PASS")
+        return
+    }
+    println("FAIL: qrng_source " + to_string(pass_count) + "/" + to_string(total))
+    println("__QRNG_SOURCE__ FAIL")
+    exit(1)
+}

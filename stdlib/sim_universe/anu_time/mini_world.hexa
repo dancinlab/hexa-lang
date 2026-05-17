@@ -1,0 +1,154 @@
+// mini_world.hexa — 최소 1-byte step world model (★19 ANU-Time)
+//
+// 상태:   x[0..σ²-1]  (σ=8, σ²=64)   각 x[i] ∈ [0, SCALE)
+// 입력:   byte ∈ [0, 255]
+// step:   x[i] = (x[i] + byte * hash(i) + drift) mod SCALE
+//         + τ=4 diffusion sweeps
+//
+// 주의: hexa stage1 는 global `list[i] = v` 미동작 → 매 phase 새 list 생성 후 교체.
+//
+// n=6 hint: σ²=64 (Dreamer-style 축소), τ=4 transition layers.
+
+const SIGMA_SQ: i64 = 64
+const SCALE: i64 = 65536
+const TAU_MIX: i64 = 4
+
+// ─── 전역 상태 (whole-list 교체만) ───
+let mut __mw_x: [i64] = []
+let mut __mw_tick: i64 = 0
+
+// ─── 초기화 ───
+fn mw_init(seed: i64) {
+    let mut xs: [i64] = []
+    let mut i = 0
+    while i < SIGMA_SQ {
+        let v = (seed * 1103 + i * 37 + 17) % SCALE
+        let mut vv = v
+        if vv < 0 { vv = 0 - vv }
+        xs = xs + [vv]
+        i = i + 1
+    }
+    __mw_x = xs
+    __mw_tick = 0
+}
+
+fn _mw_coord_hash(i: i64) -> i64 {
+    let h = (i * 131 + 73) % 251
+    return h + 5
+}
+
+// ─── step: 1-byte advance ───
+fn mw_step(byte: i64) {
+    if byte < 0 { return }
+    let mut b = byte
+    if b > 255 { b = b % 256 }
+
+    // Phase 1: additive injection (rebuild list)
+    let mut xs1: [i64] = []
+    let mut i = 0
+    while i < SIGMA_SQ {
+        let h = _mw_coord_hash(i)
+        let mut v = __mw_x[i]
+        v = v + b * h + (__mw_tick % 31)
+        if v < 0 { v = 0 - v }
+        v = v % SCALE
+        xs1 = xs1 + [v]
+        i = i + 1
+    }
+
+    // Phase 2: τ=4 diffusion sweeps
+    let mut cur = xs1
+    let mut layer = 0
+    while layer < TAU_MIX {
+        let mut xs2: [i64] = []
+        let mut j = 0
+        while j < SIGMA_SQ {
+            let k_prev = (j + SIGMA_SQ - 1) % SIGMA_SQ
+            let left = cur[k_prev]
+            let right = cur[j]
+            // ring-mix: new[j] depends on left neighbor + self
+            let mix = (left * 7 + right + layer * 13) % SCALE
+            xs2 = xs2 + [mix]
+            j = j + 1
+        }
+        cur = xs2
+        layer = layer + 1
+    }
+
+    __mw_x = cur
+    __mw_tick = __mw_tick + 1
+}
+
+// ─── 관측 ───
+fn mw_state_hash() -> i64 {
+    let mut h: i64 = 0
+    let mut i = 0
+    while i < SIGMA_SQ {
+        let v = __mw_x[i]
+        h = (h * 33 + v) % 9999999967
+        i = i + 1
+    }
+    return h
+}
+
+fn mw_state_norm() -> i64 {
+    let mut s: i64 = 0
+    let mut i = 0
+    while i < SIGMA_SQ {
+        let v = __mw_x[i]
+        if v < 0 { s = s + (0 - v) } else { s = s + v }
+        i = i + 1
+    }
+    return s
+}
+
+fn mw_state_diff(prev: [i64]) -> i64 {
+    let mut d: i64 = 0
+    let mut i = 0
+    let mut n = SIGMA_SQ
+    if prev.len() < n { n = prev.len() }
+    while i < n {
+        let a = __mw_x[i]
+        let b = prev[i]
+        let g = a - b
+        if g < 0 { d = d + (0 - g) } else { d = d + g }
+        i = i + 1
+    }
+    return d
+}
+
+fn mw_snapshot() -> [i64] {
+    let mut out: [i64] = []
+    let mut i = 0
+    while i < SIGMA_SQ {
+        out = out + [__mw_x[i]]
+        i = i + 1
+    }
+    return out
+}
+
+fn mw_tick_count() -> i64 { return __mw_tick }
+
+// ─── 단독 self-test ───
+let _args = args()
+let mut standalone = true
+if _args.len() >= 3 {
+    if _args[2] == "lib" { standalone = false }
+}
+
+if standalone {
+    mw_init(42)
+    println("# mini_world self-test: 5 steps from seed=42")
+    println("init_norm=" + to_string(mw_state_norm()) + " hash=" + to_string(mw_state_hash()))
+    let test_bytes = [7, 128, 255, 0, 42]
+    let mut prev = mw_snapshot()
+    let mut i = 0
+    while i < test_bytes.len() {
+        let b = test_bytes[i]
+        mw_step(b)
+        let diff = mw_state_diff(prev)
+        println("tick=" + to_string(mw_tick_count()) + " byte=" + to_string(b) + " norm=" + to_string(mw_state_norm()) + " hash=" + to_string(mw_state_hash()) + " diff_L1=" + to_string(diff))
+        prev = mw_snapshot()
+        i = i + 1
+    }
+}

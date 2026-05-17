@@ -1,0 +1,508 @@
+// sim_bridge/multiverse/phase1/scale_up.hexa
+//   Phase 1 wrapper — single-trial scaled-up interferometer run.
+//
+// Identical physics to phase0 interferometer.hexa, but:
+//   - M=50 universes, T=2000 steps, dim=144 (n=6 σ²(6)=144)
+//   - writes per-trial mi_values into a single flat file for Fisher combine
+//   - minimal in-memory footprint: no big mi_matrix, just pairs list
+//   - also computes KSG-lite (dim-free estimator) alongside plug-in
+//
+// Usage:
+//   hexa scale_up.hexa <tag> <seed_file> <M> <T> <dim> <trial_idx> <out_dir>
+//     writes:
+//       <out_dir>/trial_<trial_idx>_<tag>_plugin.txt   — pairwise plug-in MI (x1000)
+//       <out_dir>/trial_<trial_idx>_<tag>_ksg.txt      — pairwise KSG MI (x1000)
+//       <out_dir>/trial_<trial_idx>_<tag>_stats.json   — per-trial stats
+//
+// Memory: M=50 x T=2000 = 100000 energy samples per trial ≈ 800KB. dim=144 latent + seed/eps bytes <1MB.
+// OK on Mac.
+
+// ---- constants ----
+const WORLD_SCALE: i64 = 1000
+const W_BIAS: i64 = 43
+const NBINS: i64 = 4
+const LOG_SCALE: i64 = 1000
+const KSG_K: i64 = 4   // k-nearest neighbors for KSG estimator
+
+fn abs_i(x: i64) -> i64 { if x < 0 { return 0 - x } return x }
+
+fn bound(x: i64) -> i64 {
+    let ax = abs_i(x)
+    let denom = WORLD_SCALE + ax
+    return x * WORLD_SCALE / denom
+}
+
+fn w_mul(state: [i64], dim: i64, i: i64) -> i64 {
+    let jm = (i - 1 + dim) % dim
+    let jc = i % dim
+    let jp = (i + 1) % dim
+    let w1 = state[jm] * 67 / 100
+    let w2 = 0 - (state[jc] * 31 / 100)
+    let w3 = state[jp] * 19 / 100
+    return w1 + w2 + w3 + W_BIAS
+}
+
+fn new_universe(dim: i64, seed_bytes: [i64]) -> [i64] {
+    let mut st: [i64] = []
+    let mut i = 0
+    while i < dim {
+        let b = seed_bytes[i % seed_bytes.len()]
+        let v = (b - 128) * WORLD_SCALE / 128
+        st.push(v)
+        i = i + 1
+    }
+    return st
+}
+
+// Trajectory with double-buffer swap semantics (no copying between steps).
+// Uses two buffers A and B; even steps read from A write to B, odd steps opposite.
+fn trajectory(dim: i64, steps: i64, seed_bytes: [i64], eps_bytes: [i64]) -> [i64] {
+    let mut buf_a = new_universe(dim, seed_bytes)
+    let mut buf_b: [i64] = []
+    let mut n = 0
+    while n < dim { buf_b.push(0); n = n + 1 }
+    let mut out: [i64] = []
+    let mut ii = 0
+    while ii < steps { out.push(0); ii = ii + 1 }
+    let eps_len = eps_bytes.len()
+    let mut t = 0
+    while t < steps {
+        let eb = eps_bytes[t % eps_len]
+        let eps = (eb - 128) * WORLD_SCALE / 640
+        if t % 2 == 0 {
+            // read from A, write to B
+            let mut i = 0
+            while i < dim {
+                let jm = (i - 1 + dim) % dim
+                let jp = (i + 1) % dim
+                let w1 = buf_a[jm] * 67 / 100
+                let w2 = 0 - (buf_a[i] * 31 / 100)
+                let w3 = buf_a[jp] * 19 / 100
+                let pre = w1 + w2 + w3 + W_BIAS + eps
+                let ax = if pre < 0 { 0 - pre } else { pre }
+                let denom = WORLD_SCALE + ax
+                buf_b[i] = pre * WORLD_SCALE / denom
+                i = i + 1
+            }
+            let mut s: i64 = 0
+            let mut k = 0
+            while k < dim {
+                let v = buf_b[k]
+                s = s + (if v < 0 { 0 - v } else { v })
+                k = k + 1
+            }
+            out[t] = s / dim
+        } else {
+            // read from B, write to A
+            let mut i = 0
+            while i < dim {
+                let jm = (i - 1 + dim) % dim
+                let jp = (i + 1) % dim
+                let w1 = buf_b[jm] * 67 / 100
+                let w2 = 0 - (buf_b[i] * 31 / 100)
+                let w3 = buf_b[jp] * 19 / 100
+                let pre = w1 + w2 + w3 + W_BIAS + eps
+                let ax = if pre < 0 { 0 - pre } else { pre }
+                let denom = WORLD_SCALE + ax
+                buf_a[i] = pre * WORLD_SCALE / denom
+                i = i + 1
+            }
+            let mut s: i64 = 0
+            let mut k = 0
+            while k < dim {
+                let v = buf_a[k]
+                s = s + (if v < 0 { 0 - v } else { v })
+                k = k + 1
+            }
+            out[t] = s / dim
+        }
+        t = t + 1
+    }
+    return out
+}
+
+// ---- plug-in MI (4-bin) ----
+fn log_scaled(num: i64, den: i64) -> i64 {
+    if num <= 0 { return 0 - 20000 }
+    if den <= 0 { return 20000 }
+    let r = num * LOG_SCALE / den
+    if r <= 0 { return 0 - 20000 }
+    let mut x = r
+    let mut l2: i64 = 0
+    if x >= LOG_SCALE {
+        let mut tmp = x
+        while tmp >= (LOG_SCALE * 2) { tmp = tmp / 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = l2 * LOG_SCALE + log2_frac
+        return total_log2 * 693 / LOG_SCALE
+    } else {
+        let mut tmp = x
+        while tmp * 2 <= LOG_SCALE { tmp = tmp * 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = log2_frac - l2 * LOG_SCALE
+        return total_log2 * 693 / LOG_SCALE
+    }
+}
+
+fn bin_of(v: i64) -> i64 {
+    if v < 0 { return 0 }
+    if v < 75 { return 0 }
+    if v < 150 { return 1 }
+    if v < 225 { return 2 }
+    return 3
+}
+
+fn mi_plugin(x: [i64], y: [i64]) -> i64 {
+    let T = x.len()
+    if T == 0 { return 0 }
+    let mut joint: [i64] = []
+    let mut i = 0
+    while i < NBINS * NBINS { joint.push(0); i = i + 1 }
+    let mut px: [i64] = []
+    let mut j = 0
+    while j < NBINS { px.push(0); j = j + 1 }
+    let mut py: [i64] = []
+    let mut k = 0
+    while k < NBINS { py.push(0); k = k + 1 }
+    let mut n = 0
+    while n < T {
+        let bx = bin_of(x[n])
+        let by = bin_of(y[n])
+        joint[bx * NBINS + by] = joint[bx * NBINS + by] + 1
+        px[bx] = px[bx] + 1
+        py[by] = py[by] + 1
+        n = n + 1
+    }
+    let mut mi: i64 = 0
+    let mut bx = 0
+    while bx < NBINS {
+        let pxb = px[bx]
+        if pxb > 0 {
+            let mut by = 0
+            while by < NBINS {
+                let pyb = py[by]
+                let pxy = joint[bx * NBINS + by]
+                if pxy > 0 && pyb > 0 {
+                    let log_term = log_scaled(pxy * T, pxb * pyb)
+                    mi = mi + (pxy * log_term / T)
+                }
+                by = by + 1
+            }
+        }
+        bx = bx + 1
+    }
+    return mi
+}
+
+// ---- KSG-lite: rank-based MI (bias ~ 1/T not 1/(2T), fewer binning artifacts) ----
+// Uses adaptive 8-bin percentile binning (twice as many bins as plug-in but rank-adaptive).
+// Rank: sort series, assign rank-bin by percentile. MI = plug-in on ranks with 8 bins.
+// This is NOT full KSG but a simpler rank-based alternative suitable for hexa stage0.
+// Percentile-threshold binning using built-in sort: O(T log T) once + O(T * nbins) per assign.
+fn rank_bins(series: [i64], nbins: i64) -> [i64] {
+    let n = series.len()
+    // Sort a copy to find percentile thresholds.
+    let sorted_copy = series.sort()
+    // thresholds[k] = sorted_copy[k * n / nbins] for k = 1..nbins-1
+    let mut thresholds: [i64] = []
+    let mut k = 1
+    while k < nbins {
+        let idx = k * n / nbins
+        let safe_idx = if idx >= n { n - 1 } else { idx }
+        thresholds.push(sorted_copy[safe_idx])
+        k = k + 1
+    }
+    // Assign bin per value
+    let mut bin_assign: [i64] = []
+    let mut s = 0
+    while s < n {
+        let v = series[s]
+        // Linear scan on thresholds (nbins=8 → 7 comparisons)
+        let mut bin: i64 = 0
+        let mut tt = 0
+        while tt < thresholds.len() {
+            if v < thresholds[tt] { break }
+            bin = tt + 1
+            tt = tt + 1
+        }
+        if bin >= nbins { bin = nbins - 1 }
+        bin_assign.push(bin)
+        s = s + 1
+    }
+    return bin_assign
+}
+
+// Optimized MI ksg-lite: takes pre-computed rank-bin sequences (nb=8).
+fn mi_ksg_lite_bins(bx_seq: [i64], by_seq: [i64]) -> i64 {
+    let nb: i64 = 8
+    let T = bx_seq.len()
+    if T == 0 { return 0 }
+    // joint + marginal counts with 8-bin rank binning
+    let mut joint: [i64] = []
+    let mut i = 0
+    while i < nb * nb { joint.push(0); i = i + 1 }
+    let mut px: [i64] = []
+    let mut j = 0
+    while j < nb { px.push(0); j = j + 1 }
+    let mut py: [i64] = []
+    let mut kk = 0
+    while kk < nb { py.push(0); kk = kk + 1 }
+    let mut n = 0
+    while n < T {
+        let bxv = bx_seq[n]
+        let byv = by_seq[n]
+        joint[bxv * nb + byv] = joint[bxv * nb + byv] + 1
+        px[bxv] = px[bxv] + 1
+        py[byv] = py[byv] + 1
+        n = n + 1
+    }
+    // Miller-Madow corrected MI: MI_plugin - (B_xy - B_x - B_y + 1) / (2T)
+    // where B_* = number of non-zero bins actually observed.
+    let mut mi: i64 = 0
+    let mut bxx = 0
+    while bxx < nb {
+        let pxb = px[bxx]
+        if pxb > 0 {
+            let mut byy = 0
+            while byy < nb {
+                let pyb = py[byy]
+                let pxy = joint[bxx * nb + byy]
+                if pxy > 0 && pyb > 0 {
+                    let log_term = log_scaled(pxy * T, pxb * pyb)
+                    mi = mi + (pxy * log_term / T)
+                }
+                byy = byy + 1
+            }
+        }
+        bxx = bxx + 1
+    }
+    // Count non-zero bins for Miller-Madow
+    let mut bxy_nz: i64 = 0
+    let mut ii = 0
+    while ii < nb * nb {
+        if joint[ii] > 0 { bxy_nz = bxy_nz + 1 }
+        ii = ii + 1
+    }
+    let mut bx_nz: i64 = 0
+    let mut jj = 0
+    while jj < nb {
+        if px[jj] > 0 { bx_nz = bx_nz + 1 }
+        jj = jj + 1
+    }
+    let mut by_nz: i64 = 0
+    let mut kkk = 0
+    while kkk < nb {
+        if py[kkk] > 0 { by_nz = by_nz + 1 }
+        kkk = kkk + 1
+    }
+    let mm_correction = (bxy_nz - bx_nz - by_nz + 1) * LOG_SCALE / (2 * T)
+    return mi - mm_correction
+}
+
+// ---- seed file parser (same as phase0) ----
+fn hex_char(c: string) -> i64 {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    if c == "a" { return 10 }
+    if c == "b" { return 11 }
+    if c == "c" { return 12 }
+    if c == "d" { return 13 }
+    if c == "e" { return 14 }
+    if c == "f" { return 15 }
+    if c == "A" { return 10 }
+    if c == "B" { return 11 }
+    if c == "C" { return 12 }
+    if c == "D" { return 13 }
+    if c == "E" { return 14 }
+    if c == "F" { return 15 }
+    return 0
+}
+
+fn parse_seed_file(path: string) -> [i64] {
+    let mut raw = ""
+    try { raw = read_file(path) } catch e { raw = "" }
+    raw = raw.trim()
+    let mut bytes: [i64] = []
+    if raw.len() == 0 { return bytes }
+    if raw.split(" ").len() > 1 {
+        let parts = raw.split(" ")
+        let mut i = 0
+        while i < parts.len() {
+            let p = parts[i].trim()
+            if p.len() > 0 {
+                let mut v = 0
+                try { v = to_int(p) } catch e { v = 0 }
+                if v < 0 { v = 0 }
+                if v > 255 { v = 255 }
+                bytes.push(v)
+            }
+            i = i + 1
+        }
+    } else {
+        let mut i = 0
+        while i + 1 < raw.len() {
+            let hi = raw.substring(i, i + 1)
+            let lo = raw.substring(i + 1, i + 2)
+            let v = hex_char(hi) * 16 + hex_char(lo)
+            bytes.push(v)
+            i = i + 2
+        }
+    }
+    return bytes
+}
+
+// ---- main ----
+let _args = args()
+if _args.len() < 9 {
+    println("usage: hexa scale_up.hexa <tag> <seed_file> <M> <T> <dim> <trial_idx> <out_dir>")
+    println("  got: " + to_string(_args.len() - 2))
+} else {
+    let tag = _args[2]
+    let seed_file = _args[3]
+    let mut M = 50
+    try { M = to_int(_args[4]) } catch e { M = 50 }
+    let mut T = 2000
+    try { T = to_int(_args[5]) } catch e { T = 2000 }
+    let mut dim = 144
+    try { dim = to_int(_args[6]) } catch e { dim = 144 }
+    let mut trial_idx = 0
+    try { trial_idx = to_int(_args[7]) } catch e { trial_idx = 0 }
+    let out_dir = _args[8]
+
+    let t_start = timestamp()
+    println("[scale_up] trial=" + to_string(trial_idx) + " tag=" + tag + " M=" + to_string(M) + " T=" + to_string(T) + " dim=" + to_string(dim))
+
+    let all_bytes = parse_seed_file(seed_file)
+    println("[scale_up] loaded " + to_string(all_bytes.len()) + " bytes")
+    if all_bytes.len() < dim + 8 {
+        println("[scale_up] ERROR: need >= " + to_string(dim + 8) + " bytes, got " + to_string(all_bytes.len()))
+    } else {
+        let stride = dim + T
+        // Build trajectories (incremental, one universe at a time)
+        let mut trajs: [[i64]] = []
+        let mut u = 0
+        while u < M {
+            let base = u * stride
+            let mut seed_u: [i64] = []
+            let mut s = 0
+            while s < dim {
+                seed_u.push(all_bytes[(base + s) % all_bytes.len()])
+                s = s + 1
+            }
+            let mut eps_u: [i64] = []
+            let mut e2 = 0
+            while e2 < T {
+                eps_u.push(all_bytes[(base + dim + e2) % all_bytes.len()])
+                e2 = e2 + 1
+            }
+            let traj = trajectory(dim, T, seed_u, eps_u)
+            trajs.push(traj)
+            if u % 10 == 0 { println("  universe " + to_string(u) + "/" + to_string(M)) }
+            u = u + 1
+        }
+        let t_traj = timestamp()
+        println("[scale_up] trajectories done in " + to_string(t_traj - t_start) + "s")
+
+        // Pre-compute 8-bin rank sequences once per universe (caches the O(T²) sort).
+        let mut rank_seqs: [[i64]] = []
+        let mut ur = 0
+        while ur < M {
+            let rb = rank_bins(trajs[ur], 8)
+            rank_seqs.push(rb)
+            ur = ur + 1
+        }
+        let t_rank = timestamp()
+        println("[scale_up] rank bins done in " + to_string(t_rank - t_traj) + "s")
+
+        // Pairwise MI (both estimators)
+        let mut mi_pairs_plugin: [i64] = []
+        let mut mi_pairs_ksg: [i64] = []
+        let mut a = 0
+        while a < M {
+            let mut b = a + 1
+            while b < M {
+                let mi_p = mi_plugin(trajs[a], trajs[b])
+                let mi_k = mi_ksg_lite_bins(rank_seqs[a], rank_seqs[b])
+                mi_pairs_plugin.push(mi_p)
+                mi_pairs_ksg.push(mi_k)
+                b = b + 1
+            }
+            if a % 10 == 0 { println("  MI row " + to_string(a) + "/" + to_string(M)) }
+            a = a + 1
+        }
+        let t_mi = timestamp()
+        println("[scale_up] MI done in " + to_string(t_mi - t_traj) + "s, pairs=" + to_string(mi_pairs_plugin.len()))
+
+        // Write plug-in pairs (use arr.join to avoid O(n²) string concat)
+        let mut plug_strs: [string] = []
+        let mut p1 = 0
+        while p1 < mi_pairs_plugin.len() {
+            plug_strs.push(to_string(mi_pairs_plugin[p1]))
+            p1 = p1 + 1
+        }
+        let plugin_text = plug_strs.join("\n") + "\n"
+        let plugin_path = out_dir + "/trial_" + to_string(trial_idx) + "_" + tag + "_plugin.txt"
+        try { write_file(plugin_path, plugin_text) } catch e {}
+
+        // Write KSG pairs
+        let mut ksg_strs: [string] = []
+        let mut p2 = 0
+        while p2 < mi_pairs_ksg.len() {
+            ksg_strs.push(to_string(mi_pairs_ksg[p2]))
+            p2 = p2 + 1
+        }
+        let ksg_text = ksg_strs.join("\n") + "\n"
+        let ksg_path = out_dir + "/trial_" + to_string(trial_idx) + "_" + tag + "_ksg.txt"
+        try { write_file(ksg_path, ksg_text) } catch e {}
+
+        // Per-trial stats
+        let mut sum_p: i64 = 0
+        let mut sum_k: i64 = 0
+        let mut i2 = 0
+        while i2 < mi_pairs_plugin.len() {
+            sum_p = sum_p + mi_pairs_plugin[i2]
+            sum_k = sum_k + mi_pairs_ksg[i2]
+            i2 = i2 + 1
+        }
+        let mean_p = sum_p / mi_pairs_plugin.len()
+        let mean_k = sum_k / mi_pairs_ksg.len()
+        // std
+        let mut sq_p: i64 = 0
+        let mut sq_k: i64 = 0
+        let mut i3 = 0
+        while i3 < mi_pairs_plugin.len() {
+            let dp = mi_pairs_plugin[i3] - mean_p
+            let dk = mi_pairs_ksg[i3] - mean_k
+            sq_p = sq_p + dp * dp
+            sq_k = sq_k + dk * dk
+            i3 = i3 + 1
+        }
+        let var_p = sq_p / mi_pairs_plugin.len()
+        let var_k = sq_k / mi_pairs_ksg.len()
+        // isqrt
+        let mut sv = var_p; let mut sy = (sv + 1) / 2
+        while sy < sv { sv = sy; sy = (sv + var_p / sv) / 2 }
+        let std_p = sv
+        let mut tv = var_k; let mut ty = (tv + 1) / 2
+        while ty < tv { tv = ty; ty = (tv + var_k / tv) / 2 }
+        let std_k = tv
+
+        let js = "{\"trial\":" + to_string(trial_idx) + ",\"tag\":\"" + tag + "\",\"M\":" + to_string(M) + ",\"T\":" + to_string(T) + ",\"dim\":" + to_string(dim) + ",\"pairs\":" + to_string(mi_pairs_plugin.len()) + ",\"plugin_mean_scaled\":" + to_string(mean_p) + ",\"plugin_std_scaled\":" + to_string(std_p) + ",\"ksg_mean_scaled\":" + to_string(mean_k) + ",\"ksg_std_scaled\":" + to_string(std_k) + ",\"elapsed_s\":" + to_string(timestamp() - t_start) + "}\n"
+        let js_path = out_dir + "/trial_" + to_string(trial_idx) + "_" + tag + "_stats.json"
+        try { write_file(js_path, js) } catch e {}
+
+        println("[scale_up] trial " + to_string(trial_idx) + " " + tag + " done. plugin mean=" + to_string(mean_p) + " ksg mean=" + to_string(mean_k) + " elapsed=" + to_string(timestamp() - t_start) + "s")
+    }
+}

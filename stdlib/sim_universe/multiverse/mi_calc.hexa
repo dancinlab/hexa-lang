@@ -1,0 +1,196 @@
+// sim_bridge/multiverse/mi_calc.hexa -- pairwise mutual information (MI) + NPMI
+//
+// Method: plug-in histogram estimator (naive but consistent for T→∞).
+//   - 두 시계열 X, Y (정수 에너지 ∈ [0, WORLD_SCALE=1000])
+//   - 4-bin 균등 histogram: bins = [0..250), [250..500), [500..750), [750..1000]
+//   - 결합빈도 p(x,y), 주변 p(x), p(y) 추정
+//   - MI = Σ p(x,y) log(p(x,y) / (p(x) p(y)))  (natural log)
+//   - NPMI 정규화: MI / -log(p(x,y))  — 스칼라로 페어간 비교 용이
+//   - 여기선 MI 자체(nats) 와 normalized = MI / log(NBINS) (∈ [0,1]) 모두 출력
+//
+// Caveats (honest):
+//   - T=200 에서 4-bin plug-in MI 는 finite-sample bias (~O((B-1)/2T) nats) 존재.
+//     → null 분포 비교 (PRNG) 가 이 bias 를 동일 흡수하므로 KS 비교는 유효.
+//   - log 는 정수 scale 1000 fixed-point 구현 (natural log).
+//
+// API:
+//   fn mi_npmi(x: [i64], y: [i64]) -> (i64, i64)   // (mi_scaled, npmi_scaled)
+//     scaled = * 1000 (fixed point, natural log)
+
+const NBINS: i64 = 4
+const BIN_MAX: i64 = 1000   // energy ∈ [0, 1000]
+const LOG_SCALE: i64 = 1000
+
+// natural log approx via fixed-point: log(x/SCALE) * SCALE.
+// 입력 x ∈ [1, N*10000] (빈도*SCALE), SCALE=1000.
+// 구현: log2(v) * ln(2) = log(v), ln(2) ≈ 693.
+//   log2(v) 정수 근사: 상위비트 + 보정.
+fn log_scaled(num: i64, den: i64) -> i64 {
+    // 반환: LOG_SCALE * ln(num/den)
+    // num, den > 0 가정. num 또는 den 이 0 이면 호출측에서 걸러야 함.
+    if num <= 0 { return 0 - 20000 }   // -20 (large negative sentinel)
+    if den <= 0 { return 20000 }
+    // ratio = num/den * SCALE
+    let r = num * LOG_SCALE / den
+    if r <= 0 { return 0 - 20000 }
+    // ln(r / SCALE) 계산: v = r, SCALE=1000
+    // log2(v/SCALE) 정수: v/SCALE ∈ 가능히 0..10^6 범위
+    // 연속 제곱근 반복으로: ln(v) = 2 * ln(sqrt(v))
+    // 대신 bit-count 기반 근사:
+    //   if v == SCALE → 0
+    //   else v > SCALE: log2 = floor(log2(v/SCALE)) via repeated /2 + fractional 보정
+    let mut x = r
+    let mut l2: i64 = 0
+    // 정수 log2 (상위 비트)
+    if x >= LOG_SCALE {
+        let mut tmp = x
+        while tmp >= (LOG_SCALE * 2) {
+            tmp = tmp / 2
+            l2 = l2 + 1
+        }
+        // tmp ∈ [SCALE, 2*SCALE), 정규화 후 fractional
+        // frac = (tmp - SCALE) / SCALE * SCALE ∈ [0, SCALE)
+        let frac = tmp - LOG_SCALE
+        // log2(1+f) ≈ f * 1442 / 1000  (f ∈ [0,1], 계수 ≈ 1/ln(2) * something — 여기선 간단히 frac 사용)
+        // 실제: log2(1+f) 정확값 ≈ f - f²/2 ... → 2nd order
+        let f = frac   // ∈ [0, SCALE)
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))   // log2(1+f) ≈ f/ln(2) .. 여기선 단순 근사
+        // 변환: log(natural) = log2 * ln(2), ln(2)*SCALE ≈ 693
+        let total_log2 = l2 * LOG_SCALE + log2_frac
+        return total_log2 * 693 / LOG_SCALE
+    } else {
+        // r < SCALE → ln 음수
+        let mut tmp = x
+        while tmp * 2 <= LOG_SCALE {
+            tmp = tmp * 2
+            l2 = l2 + 1
+        }
+        // tmp ∈ [SCALE/2, SCALE)
+        let frac = tmp - LOG_SCALE   // 음수 (∈ [-SCALE/2, 0))
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = log2_frac - l2 * LOG_SCALE
+        return total_log2 * 693 / LOG_SCALE
+    }
+}
+
+fn bin_of(v: i64) -> i64 {
+    // 0..1000 → 0..3
+    if v < 0 { return 0 }
+    let b = v * NBINS / (BIN_MAX + 1)
+    if b >= NBINS { return NBINS - 1 }
+    return b
+}
+
+// 2D 조인트 카운트 누적, 반환 [p_xy_flat(16), p_x(4), p_y(4), T]
+// 모든 확률은 * LOG_SCALE fixed-point.
+fn compute_dists(x: [i64], y: [i64]) -> [i64] {
+    let t = x.len()
+    // joint[b_x * NBINS + b_y]
+    let mut joint: [i64] = []
+    let mut i = 0
+    while i < NBINS * NBINS { joint.push(0); i = i + 1 }
+    let mut px: [i64] = []
+    let mut j = 0
+    while j < NBINS { px.push(0); j = j + 1 }
+    let mut py: [i64] = []
+    let mut k = 0
+    while k < NBINS { py.push(0); k = k + 1 }
+    let mut n = 0
+    while n < t {
+        let bx = bin_of(x[n])
+        let by = bin_of(y[n])
+        joint[bx * NBINS + by] = joint[bx * NBINS + by] + 1
+        px[bx] = px[bx] + 1
+        py[by] = py[by] + 1
+        n = n + 1
+    }
+    // flat 반환: [joint(16), px(4), py(4), T]
+    let mut out: [i64] = []
+    let mut a = 0
+    while a < NBINS * NBINS { out.push(joint[a]); a = a + 1 }
+    let mut b = 0
+    while b < NBINS { out.push(px[b]); b = b + 1 }
+    let mut c = 0
+    while c < NBINS { out.push(py[c]); c = c + 1 }
+    out.push(t)
+    return out
+}
+
+// MI 계산: 반환 [mi_scaled, npmi_scaled], scaled = * LOG_SCALE, natural log.
+fn mi_npmi(x: [i64], y: [i64]) -> [i64] {
+    let d = compute_dists(x, y)
+    // unpack
+    let T = d[NBINS * NBINS + 2 * NBINS]
+    if T <= 0 {
+        let mut r: [i64] = []
+        r.push(0)
+        r.push(0)
+        return r
+    }
+    let mut mi: i64 = 0          // LOG_SCALE * MI (nats)
+    let mut h_joint: i64 = 0     // LOG_SCALE * H(X,Y) nats
+    let mut bx = 0
+    while bx < NBINS {
+        let pxb = d[NBINS * NBINS + bx]
+        if pxb > 0 {
+            let mut by = 0
+            while by < NBINS {
+                let pyb = d[NBINS * NBINS + NBINS + by]
+                let pxy = d[bx * NBINS + by]
+                if pxy > 0 && pyb > 0 {
+                    // p(x,y) = pxy/T, p(x)p(y) = pxb*pyb/T²
+                    // log(p(x,y)/(p(x)p(y))) = log( (pxy/T) * T² / (pxb*pyb) ) = log( pxy * T / (pxb*pyb) )
+                    let log_term = log_scaled(pxy * T, pxb * pyb)
+                    // 기여: p(x,y) * log_term = (pxy/T) * log_term
+                    mi = mi + (pxy * log_term / T)
+                    // H(X,Y) = -Σ p(x,y) log p(x,y); log p(x,y) = log(pxy/T)
+                    let log_pxy = log_scaled(pxy, T)
+                    h_joint = h_joint - (pxy * log_pxy / T)
+                }
+                by = by + 1
+            }
+        }
+        bx = bx + 1
+    }
+    // NPMI normalization: mi / H(X,Y) (∈ [0,1] under independence assumption)
+    // hexa-lang 에선 [0,1] fixed-point: npmi_scaled = mi / h_joint * SCALE
+    let mut npmi: i64 = 0
+    if h_joint > 0 {
+        npmi = mi * LOG_SCALE / h_joint
+    }
+    let mut r: [i64] = []
+    r.push(mi)
+    r.push(npmi)
+    return r
+}
+
+// ============================ CLI self-test ============================
+let _args = args()
+if _args.len() >= 3 {
+    if _args[2] == "--self-test" {
+        // 완전상관 테스트 (x=y) → MI 높아야 함
+        let mut x: [i64] = []
+        let mut y: [i64] = []
+        let mut i = 0
+        while i < 200 {
+            let v = ((i * 37 + 13) % 1000)
+            x.push(v)
+            y.push(v)
+            i = i + 1
+        }
+        let r1 = mi_npmi(x, y)
+        println("correlated: mi=" + to_string(r1[0]) + " npmi=" + to_string(r1[1]) + " (scaled*1000, nats)")
+        // 무상관 테스트 (독립 스트림)
+        let mut x2: [i64] = []
+        let mut y2: [i64] = []
+        let mut j = 0
+        while j < 200 {
+            x2.push((j * 37 + 13) % 1000)
+            y2.push((j * 91 + 521) % 1000)
+            j = j + 1
+        }
+        let r2 = mi_npmi(x2, y2)
+        println("uncorrelated: mi=" + to_string(r2[0]) + " npmi=" + to_string(r2[1]))
+    }
+}

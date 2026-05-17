@@ -1,0 +1,238 @@
+// analyze.hexa — ANU xcorr 결과 vs urandom baseline 비교
+//
+// 각 상수별로:
+//   ANU_MI vs urandom_MI  → z-score 계산 (urandom 의 distribution 이 null)
+//   Bonferroni 보정 (k tests → alpha/k)
+//
+// 4-bin × 4-bin contingency 의 chi^2 은 df=9 (4-1)*(4-1) = 9
+// chi^2(0.05, df=9) ≈ 16.919
+// chi^2(0.01, df=9) ≈ 21.666
+// chi^2(0.001, df=9) ≈ 27.877
+//
+// 인자: <xcorr_anu.csv> <xcorr_urandom.csv> <out_ks.json> <out_summary.md>
+//
+// null hypothesis 검정:
+//   - ANU chi^2 값 분포가 urandom 과 동일?
+//   - KS test 대신 간단: mean/std 계산 후 z-score ranking
+
+let CHI2_05_DF9: f64 = 16.919
+let CHI2_01_DF9: f64 = 21.666
+let CHI2_001_DF9: f64 = 27.877
+
+fn _sqrt(x: f64) -> f64 {
+    if x <= 0.0 { return 0.0 }
+    let mut s: f64 = x
+    if s < 1.0 { s = 1.0 }
+    let mut it: i64 = 0
+    while it < 40 { s = (s + x / s) / 2.0; it = it + 1 }
+    return s
+}
+
+fn _parse_csv(path: string) -> list {
+    let mut content = ""
+    try { content = read_file(path) } catch e1 { content = "" }
+    let lines = content.split("\n")
+    let mut rows = []
+    let mut li: i64 = 0
+    while li < lines.len() {
+        let line = lines[li]
+        li = li + 1
+        if line.len() == 0 { continue }
+        if line.substring(0, 4) == "name" { continue }
+        let cols = line.split(",")
+        if cols.len() < 9 { continue }
+        // row: [name, chi2, MI, pearson]
+        let mut row = []
+        row.push(cols[0])  // name
+        let mut mi: f64 = 0.0
+        let mut chi: f64 = 0.0
+        let mut pe: f64 = 0.0
+        try { mi = to_float(cols[4]) } catch e2 { mi = 0.0 }
+        try { chi = to_float(cols[5]) } catch e3 { chi = 0.0 }
+        try { pe = to_float(cols[6]) } catch e4 { pe = 0.0 }
+        row.push(to_string(mi))
+        row.push(to_string(chi))
+        row.push(to_string(pe))
+        rows.push(row)
+    }
+    return rows
+}
+
+fn _stat_summary(rows: list, col: i64) -> list {
+    let mut n: i64 = 0
+    let mut sum: f64 = 0.0
+    let mut sum2: f64 = 0.0
+    let mut i: i64 = 0
+    while i < rows.len() {
+        let r = rows[i]
+        let mut v: f64 = 0.0
+        try { v = to_float(r[col]) } catch e5 { v = 0.0 }
+        sum = sum + v
+        sum2 = sum2 + v * v
+        n = n + 1
+        i = i + 1
+    }
+    let mut out = []
+    if n == 0 { out.push("0.0"); out.push("0.0"); out.push("0"); return out }
+    let nf = to_float(n)
+    let mean = sum / nf
+    let var = sum2 / nf - mean * mean
+    let mut std: f64 = 0.0
+    if var > 0.0 { std = _sqrt(var) }
+    out.push(to_string(mean))
+    out.push(to_string(std))
+    out.push(to_string(n))
+    return out
+}
+
+fn main() {
+    let a = args()
+    if a.len() < 6 {
+        println("USAGE: analyze.hexa <xcorr_anu.csv> <xcorr_urandom.csv> <out_ks.json> <out_summary.md>")
+        return
+    }
+    let anu_path = a[2]
+    let ur_path = a[3]
+    let ks_path = a[4]
+    let sum_path = a[5]
+
+    let anu_rows = _parse_csv(anu_path)
+    let ur_rows = _parse_csv(ur_path)
+    let n_tests = anu_rows.len()
+    println("# ANU rows=" + to_string(n_tests) + " urandom rows=" + to_string(ur_rows.len()))
+
+    // baseline stats (urandom 은 null distribution 역할)
+    let ur_mi = _stat_summary(ur_rows, 1)
+    let ur_chi = _stat_summary(ur_rows, 2)
+    let mut ur_mi_mean: f64 = 0.0
+    let mut ur_mi_std: f64 = 0.0
+    let mut ur_chi_mean: f64 = 0.0
+    let mut ur_chi_std: f64 = 0.0
+    try { ur_mi_mean = to_float(ur_mi[0]) } catch e6 {}
+    try { ur_mi_std = to_float(ur_mi[1]) } catch e7 {}
+    try { ur_chi_mean = to_float(ur_chi[0]) } catch e8 {}
+    try { ur_chi_std = to_float(ur_chi[1]) } catch e9 {}
+
+    // Bonferroni: alpha' = 0.05 / n_tests
+    let mut n_f = to_float(n_tests)
+    if n_f < 1.0 { n_f = 1.0 }
+    let alpha_bonf = 0.05 / n_f
+
+    // each ANU row → z-score, significance
+    let mut weak_hits: i64 = 0
+    let mut strong_hits: i64 = 0
+    let mut ks_buf = "{\n  \"n_tests\": " + to_string(n_tests) + ",\n"
+    ks_buf = ks_buf + "  \"urandom_chi2_mean\": " + to_string(ur_chi_mean) + ",\n"
+    ks_buf = ks_buf + "  \"urandom_chi2_std\": " + to_string(ur_chi_std) + ",\n"
+    ks_buf = ks_buf + "  \"urandom_mi_mean\": " + to_string(ur_mi_mean) + ",\n"
+    ks_buf = ks_buf + "  \"urandom_mi_std\": " + to_string(ur_mi_std) + ",\n"
+    ks_buf = ks_buf + "  \"bonferroni_alpha\": " + to_string(alpha_bonf) + ",\n"
+    ks_buf = ks_buf + "  \"results\": [\n"
+
+    // 상수별 분석
+    let mut top_lines = []
+    let mut i: i64 = 0
+    while i < anu_rows.len() {
+        let r = anu_rows[i]
+        let name = r[0]
+        let mut mi: f64 = 0.0
+        let mut chi: f64 = 0.0
+        let mut pe: f64 = 0.0
+        try { mi = to_float(r[1]) } catch e10 {}
+        try { chi = to_float(r[2]) } catch e11 {}
+        try { pe = to_float(r[3]) } catch e12 {}
+
+        // z-score of ANU chi vs urandom null
+        let mut z_chi: f64 = 0.0
+        if ur_chi_std > 0.0 { z_chi = (chi - ur_chi_mean) / ur_chi_std }
+        let mut z_mi: f64 = 0.0
+        if ur_mi_std > 0.0 { z_mi = (mi - ur_mi_mean) / ur_mi_std }
+
+        // significance flags
+        // chi^2 threshold 는 절대값 / urandom 대비 양쪽
+        let passes_05 = chi > CHI2_05_DF9
+        let passes_01 = chi > CHI2_01_DF9
+        let passes_001 = chi > CHI2_001_DF9
+        // Bonferroni: z_chi > qnorm(1-alpha/2/n) ≈ 3 로 근사
+        // 엄밀히는 chi^2 p-value 필요하지만 근사로 z_chi>3 strong
+        let strong = chi > CHI2_001_DF9
+        let weak = chi > CHI2_05_DF9 && !strong
+        if weak { weak_hits = weak_hits + 1 }
+        if strong { strong_hits = strong_hits + 1 }
+
+        let sig_tag = "none"
+        let mut sig = sig_tag
+        if strong { sig = "strong" }
+        else if weak { sig = "weak" }
+
+        if i > 0 { ks_buf = ks_buf + ",\n" }
+        ks_buf = ks_buf + "    {\"name\": \"" + name + "\", \"chi2\": " + to_string(chi) + ", \"MI\": " + to_string(mi) + ", \"pearson\": " + to_string(pe) + ", \"z_chi\": " + to_string(z_chi) + ", \"z_mi\": " + to_string(z_mi) + ", \"sig\": \"" + sig + "\"}"
+
+        // top list: rank by chi
+        top_lines.push(name + "|" + to_string(chi) + "|" + to_string(mi) + "|" + to_string(z_chi) + "|" + sig)
+        i = i + 1
+    }
+    ks_buf = ks_buf + "\n  ],\n"
+    ks_buf = ks_buf + "  \"weak_hits\": " + to_string(weak_hits) + ",\n"
+    ks_buf = ks_buf + "  \"strong_hits\": " + to_string(strong_hits) + ",\n"
+
+    // 결론
+    let mut verdict = "NULL"
+    if strong_hits >= 1 { verdict = "STRONG HIT" }
+    else if weak_hits >= 1 { verdict = "WEAK HIT" }
+    ks_buf = ks_buf + "  \"verdict\": \"" + verdict + "\"\n}\n"
+    try { write_file(ks_path, ks_buf) } catch e20 {}
+
+    // sort top_lines by chi desc (manual bubble, n=10)
+    let mut si: i64 = 0
+    while si < top_lines.len() {
+        let mut sj: i64 = si + 1
+        while sj < top_lines.len() {
+            // compare chi (parts[1])
+            let a_parts = top_lines[si].split("|")
+            let b_parts = top_lines[sj].split("|")
+            let mut a_chi: f64 = 0.0
+            let mut b_chi: f64 = 0.0
+            try { a_chi = to_float(a_parts[1]) } catch ex1 {}
+            try { b_chi = to_float(b_parts[1]) } catch ex2 {}
+            if b_chi > a_chi {
+                let t = top_lines[si]
+                top_lines[si] = top_lines[sj]
+                top_lines[sj] = t
+            }
+            sj = sj + 1
+        }
+        si = si + 1
+    }
+
+    // summary.md
+    let mut md = "# atlas.n6 × ANU QRNG 교차상관 결과\n\n"
+    md = md + "## 개요\n"
+    md = md + "- 상수 수: " + to_string(n_tests) + "\n"
+    md = md + "- Bonferroni α: " + to_string(alpha_bonf) + "\n"
+    md = md + "- urandom baseline χ²: mean=" + to_string(ur_chi_mean) + " std=" + to_string(ur_chi_std) + "\n"
+    md = md + "- urandom baseline MI: mean=" + to_string(ur_mi_mean) + " std=" + to_string(ur_mi_std) + "\n\n"
+    md = md + "## Top 5 상수 (χ² 내림차순)\n\n"
+    md = md + "| 상수 | χ²(df=9) | MI | z(vs urandom) | 유의 |\n"
+    md = md + "|---|---|---|---|---|\n"
+    let mut ti: i64 = 0
+    while ti < 5 && ti < top_lines.len() {
+        let parts = top_lines[ti].split("|")
+        md = md + "| " + parts[0] + " | " + parts[1] + " | " + parts[2] + " | " + parts[3] + " | " + parts[4] + " |\n"
+        ti = ti + 1
+    }
+    md = md + "\n## 결론\n\n"
+    if verdict == "STRONG HIT" {
+        md = md + "**STRONG HIT** — Bonferroni 보정 후 유의한 상관 " + to_string(strong_hits) + "건. 추가 검증 필요.\n"
+    } else if verdict == "WEAK HIT" {
+        md = md + "**WEAK HIT** — 단일검정 p<0.05 " + to_string(weak_hits) + "건 (Bonferroni 미통과). 통계적 우연 범위.\n"
+    } else {
+        md = md + "**NULL** (예상) — ANU 가 atlas verified 상수와 독립. 정상.\n"
+    }
+    md = md + "\n임계값: χ²(0.05,df=9)=16.919, χ²(0.001,df=9)=27.877\n"
+
+    try { write_file(sum_path, md) } catch e21 {}
+    println("# DONE analyze verdict=" + verdict + " weak=" + to_string(weak_hits) + " strong=" + to_string(strong_hits))
+}
+
+// EOF

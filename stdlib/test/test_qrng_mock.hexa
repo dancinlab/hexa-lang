@@ -1,0 +1,63 @@
+// stdlib/test/test_qrng_mock.hexa — mock_qrng deterministic LCG test
+//
+// Sentinel: __QRNG_MOCK_QRNG__ PASS
+
+use "stdlib/qrng/source"
+use "stdlib/qrng/backends/mock_qrng"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag, cond) {
+    if cond { pass_count = pass_count + 1 } else { println("  FAIL " + tag); fail_count = fail_count + 1 }
+}
+
+fn main() -> void {
+    println("── stdlib/qrng/backends/mock_qrng selftest ──")
+
+    let m = qrng_source_meta_mock_qrng()
+    chk("meta.name", m.name == "mock_qrng")
+    chk("meta.tier_T0", m.tier == 0)
+    chk("meta.is_quantum_0", m.is_quantum == 0)
+    chk("meta.is_local", m.is_local == 1)
+    chk("meta.is_free", m.is_free == 1)
+    chk("meta.status_impl", m.status == "IMPLEMENTED")
+
+    // determinism: same seed → same bytes
+    let r1 = qrng_source_collect_mock_qrng(8, 42)
+    let r2 = qrng_source_collect_mock_qrng(8, 42)
+    chk("r1.ok", r1.ok == 1)
+    chk("r1.n_bytes", r1.n_bytes == 8)
+    let mut k = 0
+    let mut det_ok = true
+    while k < 8 {
+        if r1.bytes_[k] != r2.bytes_[k] { det_ok = false }
+        k = k + 1
+    }
+    chk("determinism_same_seed", det_ok)
+
+    // different seed → different bytes (entropy proxy)
+    let r3 = qrng_source_collect_mock_qrng(8, 99)
+    let mut diff = 0
+    let mut j = 0
+    while j < 8 {
+        if r1.bytes_[j] != r3.bytes_[j] { diff = diff + 1 }
+        j = j + 1
+    }
+    chk("seed_42_vs_99_differs", diff >= 1)
+
+    // n_bytes < 1 → fail
+    let r0 = qrng_source_collect_mock_qrng(0, 1)
+    chk("n_bytes_0_fail", r0.ok == 0)
+
+    let total = pass_count + fail_count
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: qrng_mock " + to_string(pass_count) + "/" + to_string(total))
+        println("__QRNG_MOCK_QRNG__ PASS")
+        return
+    }
+    println("FAIL: qrng_mock " + to_string(pass_count) + "/" + to_string(total))
+    println("__QRNG_MOCK_QRNG__ FAIL")
+    exit(1)
+}

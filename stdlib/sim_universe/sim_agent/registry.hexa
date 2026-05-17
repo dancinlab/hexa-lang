@@ -1,0 +1,133 @@
+#!hexa strict
+// nexus/core/sim/registry.hexa — sim backend registry
+//
+// @tool(slug="sim_registry", desc="switch dispatch over canonical sim backend names.")
+// @usage(hexa run nexus/core/sim/registry.hexa --selftest)
+// @sentinel(__SIM_REGISTRY__ <PASS|FAIL>)
+// @resolver-bypass(reason="dry-run only in selftest.")
+//
+// REGISTERED BACKENDS (3):
+//   sim_agent          — hexa_sim_verify_grid.hexa wrapper            (WRAPPED,    T1)
+//   sim_close_loop     — EEG↔sim closed-loop (mock-default)           (IMPLEMENTED, T2)
+//   sim_substrate      — hexa_sim_atlas_ingest substrate scan         (WRAPPED,    T3)
+
+struct SimState {
+    op:           str,
+    grid_path:    str,
+    tick:         int,
+    seed:         int,
+    dry_run:      int
+}
+
+struct SimSourceMeta {
+    name:           str,
+    tier:           int,
+    cost_usd:       int,
+    lead_days:      int,
+    is_local:       int,
+    is_canonical:   int,
+    status:         str,
+    vendor:         str
+}
+
+struct SimResult {
+    ok:           int,
+    sentinel:     str,
+    op:           str,
+    ticks_done:   int,
+    grid_hash:    str,
+    message:      str
+}
+
+fn sim_meta_make(
+    name: str, tier: int, cost_usd: int, lead_days: int,
+    is_local: int, is_canonical: int, status: str, vendor: str
+) -> SimSourceMeta {
+    return SimSourceMeta {
+        name: name, tier: tier, cost_usd: cost_usd, lead_days: lead_days,
+        is_local: is_local, is_canonical: is_canonical, status: status, vendor: vendor
+    }
+}
+
+fn sim_result_fail(reason: str) -> SimResult {
+    return SimResult { ok: 0, sentinel: "", op: "", ticks_done: 0, grid_hash: "", message: reason }
+}
+
+fn sim_result_ok(sentinel: str, op: str, ticks: int, grid_hash: str, msg: str) -> SimResult {
+    return SimResult { ok: 1, sentinel: sentinel, op: op, ticks_done: ticks, grid_hash: grid_hash, message: msg }
+}
+
+fn sim_registry_names() -> [str] {
+    let mut a = []
+    a = a.push("sim_agent")
+    a = a.push("sim_close_loop")
+    a = a.push("sim_substrate")
+    return a
+}
+
+fn sim_registry_meta(name: str) -> SimSourceMeta {
+    if name == "sim_agent" { return sim_meta_make("sim_agent", 1, 0, 0, 1, 1, "WRAPPED", "nexus/tool/hexa_sim_verify_grid.hexa_422LOC") }
+    if name == "sim_close_loop" { return sim_meta_make("sim_close_loop", 2, 0, 0, 1, 1, "IMPLEMENTED", "EEG_sim_closed_loop_mock_or_live") }
+    if name == "sim_substrate" { return sim_meta_make("sim_substrate", 3, 0, 0, 1, 1, "WRAPPED", "nexus/tool/hexa_sim_atlas_ingest.hexa_785LOC") }
+    return sim_meta_make(name, -1, 0, 0, 0, 0, "UNKNOWN", "")
+}
+
+fn sim_registry_dispatch(name: str, state: SimState) -> SimResult {
+    if name == "sim_agent" {
+        if state.dry_run == 1 {
+            return sim_result_ok("__SIM_AGENT__ DRY tick=" + str(state.tick), "step", state.tick, "", "sim_agent: dry-run")
+        }
+        return sim_result_fail("sim_agent: live exec deferred to wrapper module")
+    }
+    if name == "sim_close_loop" {
+        if state.dry_run == 1 {
+            // Module is IMPLEMENTED with mock-default; mirror dry-run mock here.
+            return sim_result_ok("__SIM_CLOSE_LOOP__ DRY tick=" + str(state.tick), "close_loop_mock", state.tick, "", "sim_close_loop: dry-run mock")
+        }
+        return sim_result_fail("sim_close_loop: live path gated — set NEXUS_SIM_CL_LIVE=1 (or NEXUS_SIM_CL_MOCK=1 for CI); mock-mode via per-module file")
+    }
+    if name == "sim_substrate" {
+        if state.dry_run == 1 {
+            return sim_result_ok("__SIM_SUBSTRATE__ DRY", "ingest", 0, "", "sim_substrate: dry-run")
+        }
+        return sim_result_fail("sim_substrate: live exec deferred to wrapper module")
+    }
+    return sim_result_fail("unknown backend: " + name)
+}
+
+fn _selftest() -> int {
+    let names = sim_registry_names()
+    if len(names) != 3 { return 0 }
+    let mut i = 0
+    while i < len(names) {
+        let m = sim_registry_meta(names[i])
+        if m.name != names[i] { return 0 }
+        if m.tier < 0 { return 0 }
+        i = i + 1
+    }
+    let m_x = sim_registry_meta("nonexistent")
+    if m_x.tier != -1 { return 0 }
+    let s = SimState { op: "step", grid_path: "", tick: 1, seed: 42, dry_run: 1 }
+    let r1 = sim_registry_dispatch("sim_agent", s)
+    if r1.ok != 1 { return 0 }
+    let r2 = sim_registry_dispatch("sim_close_loop", s)
+    if r2.ok != 1 { return 0 }
+    // Live path (dry_run=0) without env still must FAIL
+    let s_live = SimState { op: "step", grid_path: "", tick: 1, seed: 42, dry_run: 0 }
+    let r2_live = sim_registry_dispatch("sim_close_loop", s_live)
+    if r2_live.ok != 0 { return 0 }
+    let r3 = sim_registry_dispatch("sim_substrate", s)
+    if r3.ok != 1 { return 0 }
+    return 1
+}
+
+fn main() {
+    println("[sim/registry] 3-backend dispatch table")
+    if _selftest() == 1 {
+        println("[sim/registry] SELFTEST PASS")
+        println("__SIM_REGISTRY__ PASS")
+    } else {
+        println("[sim/registry] SELFTEST FAIL")
+        println("__SIM_REGISTRY__ FAIL")
+    }
+}

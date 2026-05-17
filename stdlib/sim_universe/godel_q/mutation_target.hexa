@@ -1,0 +1,30 @@
+// mutation_target.hexa — dummy target for Gödel-Quantum bootstrap MVP.
+// ALL mutations apply to THIS file (sandboxed copy). Do not add logic here
+// that is read by any other module. Intentionally trivial: simple arithmetic
+// + print so output hash shifts when mutations land.
+//
+// Mutation ops whitelist sees only lines 14-26 (the `compute` body).
+
+fn compute(x: i64, y: i64) -> i64 {
+    let a = x + 10
+    let b = y * 3
+    let c = a - b
+    let d = c + 7
+    let e = d * 2
+    return e
+}
+
+fn score(n: i64) -> i64 {
+    let mut s = 0
+    let mut i = 0
+    while i < n {
+        s = s + compute(i, i + 1)
+        i = i + 1
+    }
+    return s
+}
+
+let r1 = compute(5, 4)
+let r2 = compute(10, 2)
+let r3 = score(8)
+println("r1=" + to_string(r1) + " r2=" + to_string(r2) + " r3=" + to_string(r3))

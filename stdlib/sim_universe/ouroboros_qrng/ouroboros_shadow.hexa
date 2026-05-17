@@ -1,0 +1,468 @@
+// ouroboros_shadow.hexa — faithful replica of shared/blowup/ouroboros/ouroboros_meta.hexa
+// dynamics, with pluggable RNG source. L0 meta file untouched.
+//
+// IDENTICAL to ouroboros_meta.hexa:
+//   - 6-strategy pool (shift/invert/combine/transfer/symmetry/bifurcation)
+//   - tournament seeds (4), rounds (3), pool size 6
+//   - apply_strategy_to_value, measure_exact_yield, breed, evaluate
+//   - convergence: plateau window 3, epsilon 0.005
+//   - default 6 generations
+//
+// DIFFERENCE: meta_mutate_strategy takes (r1,r2,r3,r4,r5) explicitly
+//   instead of calling pseudo_rand(seed+k).
+//   Controller passes these 5 floats per mutation — either deterministic
+//   (pseudo_rand) or QRNG-derived (bytes → [0,1)).
+//
+// Usage:
+//   hexa ouroboros_shadow.hexa det <trial_id> <generations>
+//   hexa ouroboros_shadow.hexa qrng <trial_id> <generations> <hex_pool_path>
+//
+// Output (stdout, one JSON-ish line per gen, no NDJSON parser needed):
+//   MODE=<det|qrng> TRIAL=<id> GEN=<g> BEST=<int> AVG=<float> DIV=<float>
+//     COMP=<float> CONVERGED=<bool>
+//   FINAL TRIAL=<id> MODE=<x> GENS=<g> CONV=<bool> BEST_YIELD=<n> BEST_COMP=<f>
+//     CYCLE_CONV=<k|-1> RHO=<rho>
+//
+// SAFETY: no writes, no mutations, self-contained. atlas.n6 read-only.
+
+// ─── constants (copied verbatim from ouroboros_meta.hexa) ───
+comptime const default_generations = 6
+comptime const pool_size = 6
+comptime const tournament_seeds = 4
+comptime const tournament_rounds = 3
+comptime const meta_plateau_window = 3
+comptime const meta_plateau_epsilon = 0.005
+comptime const breeding_crossover_point = 3
+comptime const max_param_shift = 5
+comptime const max_param_threshold = 2.0
+
+comptime const N6 = 6
+comptime const N6_SIGMA = 12
+comptime const N6_PHI = 2
+comptime const N6_TAU = 4
+comptime const N6_J2 = 24
+comptime const N6_SOPFR = 5
+comptime const N6_MASTER = 24
+
+comptime const n6_constants = [6.0, 12.0, 2.0, 4.0, 24.0, 5.0, 10.0, 8.0, 1.333333333, 0.287682072]
+comptime const exact_targets = [6.0, 12.0, 2.0, 4.0, 24.0, 5.0, 10.0, 8.0, 1.333333333]
+
+comptime const OP_ADD = 0
+comptime const OP_MUL = 1
+comptime const OP_DIV = 2
+comptime const COMBINE_GEO = 0
+comptime const COMBINE_ARITH = 1
+
+// ─── math utils ───
+// NOTE: 'pure' prefix triggers hexa_stage0 "index 2 out of bounds (len 2)"
+// on comptime-folded expressions with (seed * K + C) % P. Dropped — semantics
+// identical since these functions have no side-effects anyway.
+fn abs_f(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
+fn clamp_f(x: float, lo: float, hi: float) -> float { if x < lo { lo } else { if x > hi { hi } else { x } } }
+
+fn sqrt_f(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut guess = x / 2.0
+    let mut i = 0
+    while i < 20 { guess = (guess + x / guess) / 2.0; i = i + 1 }
+    guess
+}
+
+// identical to ouroboros_meta.hexa (minus 'pure')
+fn pseudo_rand(seed: int) -> float {
+    let x = ((seed * 1103515245 + 12345) % 2147483647)
+    let pos = if x < 0 { 0 - x } else { x }
+    to_float(pos % 10000) / 10000.0
+}
+
+// ─── op helpers (verbatim) ───
+fn op_apply(op: int, a: float, b: float) -> float {
+    if op == 0 { a + b }
+    else if op == 1 { a * b }
+    else if op == 2 { if abs_f(b) > 0.0001 { a / b } else { a } }
+    else { a + b }
+}
+fn combine_apply(mode: int, a: float, b: float) -> float {
+    if mode == 0 { sqrt_f(abs_f(a * b)) }
+    else if mode == 1 { (a + b) / 2.0 }
+    else { (a + b) / 2.0 }
+}
+
+// ─── strategy ───
+struct Strategy {
+    name: string,
+    shift_count: int,
+    threshold: float,
+    operator: int,
+    constant_idx: int,
+    combine_mode: int,
+    generation: int
+}
+
+fn make_strategy(nm: string, sc: int, thr: float, op: int, ci: int, cm: int) -> Strategy {
+    Strategy { name: nm, shift_count: sc, threshold: thr, operator: op, constant_idx: ci, combine_mode: cm, generation: 0 }
+}
+
+fn make_initial_pool() {
+    [
+        make_strategy("shift",       1, 0.5, OP_ADD, 0, COMBINE_ARITH),
+        make_strategy("invert",      0, 0.3, OP_DIV, 1, COMBINE_GEO),
+        make_strategy("combine",     2, 0.6, OP_MUL, 2, COMBINE_ARITH),
+        make_strategy("transfer",    3, 0.4, OP_ADD, 3, COMBINE_GEO),
+        make_strategy("symmetry",    1, 0.7, OP_MUL, 4, COMBINE_ARITH),
+        make_strategy("bifurcation", 4, 0.2, OP_DIV, 5, COMBINE_GEO)
+    ]
+}
+
+// ─── strategy application + yield (verbatim) ───
+fn apply_strategy_to_value(s: Strategy, seed_val: float) -> float {
+    let c_idx = s.constant_idx % n6_constants.len()
+    let n6c = n6_constants[c_idx]
+    let mut shifted = seed_val
+    let mut si = 0
+    while si < s.shift_count {
+        shifted = op_apply(s.operator, shifted, n6c)
+        si = si + 1
+    }
+    if abs_f(shifted) < s.threshold {
+        shifted = shifted + n6c
+    }
+    combine_apply(s.combine_mode, shifted, seed_val)
+}
+
+fn measure_exact_yield(s: Strategy, seeds) -> int {
+    let mut matches = 0
+    for seed in seeds {
+        let result = apply_strategy_to_value(s, seed)
+        for target in exact_targets {
+            if abs_f(result - target) < 0.01 {
+                matches = matches + 1
+            }
+        }
+    }
+    matches
+}
+
+fn make_tournament_seeds(round: int) {
+    let mut seeds = []
+    let mut i = 0
+    while i < tournament_seeds {
+        let base = n6_constants[i % n6_constants.len()]
+        let perturb = to_float((round * 7 + i * 13) % 100) / 100.0
+        seeds = seeds + [base + perturb]
+        i = i + 1
+    }
+    seeds
+}
+
+// ─── meta-mutation: takes 5 floats from whatever RNG ───
+// Same dynamics as ouroboros_meta.meta_mutate_strategy but RNG is pluggable.
+fn meta_mutate_with_rands(s: Strategy, r1: float, r2: float, r3: float, r4: float, r5: float, gen: int) -> Strategy {
+    let new_shift = if r1 < 0.33 {
+        if s.shift_count > 0 { s.shift_count - 1 } else { 0 }
+    } else {
+        if r1 > 0.66 {
+            if s.shift_count < max_param_shift { s.shift_count + 1 } else { max_param_shift }
+        } else {
+            s.shift_count
+        }
+    }
+
+    let thr_delta = (r2 - 0.5) * 0.2
+    let new_threshold = clamp_f(s.threshold + thr_delta, 0.01, max_param_threshold)
+
+    let new_op = if r3 < 0.3 {
+        to_int(r3 * 10.0) % 3
+    } else {
+        s.operator
+    }
+
+    let new_cidx = if r4 < 0.2 {
+        to_int(r4 * 50.0) % n6_constants.len()
+    } else {
+        s.constant_idx
+    }
+
+    let new_combine = if r5 < 0.15 {
+        if s.combine_mode == COMBINE_GEO { COMBINE_ARITH } else { COMBINE_GEO }
+    } else {
+        s.combine_mode
+    }
+
+    Strategy {
+        name: s.name + "'",
+        shift_count: new_shift,
+        threshold: new_threshold,
+        operator: new_op,
+        constant_idx: new_cidx,
+        combine_mode: new_combine,
+        generation: gen
+    }
+}
+
+// ─── tournament (verbatim) ───
+struct TournamentEntry {
+    strategy: Strategy,
+    total_yield: int
+}
+
+fn run_tournament(pool, gen: int) {
+    let mut entries = []
+    for s in pool {
+        let mut total = 0
+        let mut round = 0
+        while round < tournament_rounds {
+            let seeds = make_tournament_seeds(gen * 100 + round)
+            total = total + measure_exact_yield(s, seeds)
+            round = round + 1
+        }
+        entries = entries + [TournamentEntry { strategy: s, total_yield: total }]
+    }
+    let mut sorted = entries
+    let mut i = 0
+    while i < sorted.len() {
+        let mut j = 0
+        while j < sorted.len() - 1 - i {
+            if sorted[j].total_yield < sorted[j + 1].total_yield {
+                let tmp = sorted[j]
+                sorted[j] = sorted[j + 1]
+                sorted[j + 1] = tmp
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    sorted
+}
+
+fn breed_strategies(parent_a: Strategy, parent_b: Strategy, gen: int) -> Strategy {
+    Strategy {
+        name: "bred(" + parent_a.name + "+" + parent_b.name + ")",
+        shift_count: parent_a.shift_count,
+        threshold: parent_a.threshold,
+        operator: parent_a.operator,
+        constant_idx: parent_b.constant_idx,
+        combine_mode: parent_b.combine_mode,
+        generation: gen
+    }
+}
+
+// ─── score / convergence (verbatim) ───
+struct MetaScore {
+    generation: int,
+    best_yield: int,
+    avg_yield: float,
+    diversity: float,
+    composite: float
+}
+
+fn evaluate_generation(ranked, gen: int) -> MetaScore {
+    if ranked.len() == 0 {
+        return MetaScore { generation: gen, best_yield: 0, avg_yield: 0.0, diversity: 0.0, composite: 0.0 }
+    }
+    let best = ranked[0].total_yield
+    let mut sum = 0
+    for entry in ranked { sum = sum + entry.total_yield }
+    let avg = to_float(sum) / to_float(ranked.len())
+    let mut diff_sum = 0.0
+    let mut di = 0
+    while di + 1 < ranked.len() {
+        diff_sum = diff_sum + abs_f(to_float(ranked[di].total_yield - ranked[di + 1].total_yield))
+        di = di + 1
+    }
+    let diversity = if ranked.len() > 1 { diff_sum / to_float(ranked.len() - 1) } else { 0.0 }
+    let composite = to_float(best) * 0.5 + avg * 0.3 + diversity * 0.2
+    MetaScore { generation: gen, best_yield: best, avg_yield: avg, diversity: diversity, composite: composite }
+}
+
+fn check_meta_convergence(score_history) -> bool {
+    if score_history.len() < meta_plateau_window + 1 { return false }
+    let start = score_history.len() - meta_plateau_window
+    let baseline = score_history[start - 1].composite
+    let mut all_flat = true
+    let mut ci = start
+    while ci < score_history.len() {
+        let delta = abs_f(score_history[ci].composite - baseline)
+        if delta > meta_plateau_epsilon { all_flat = false }
+        ci = ci + 1
+    }
+    all_flat
+}
+
+// ─── hex → byte list (from xcorr_engine.hexa pattern) ───
+fn hex_to_bytes(hex: string) -> list {
+    let mut out = []
+    let mut i = 0
+    let L = hex.len()
+    while i + 2 <= L {
+        let h2 = hex.substring(i, i + 2)
+        let mut v = 0
+        let mut j = 0
+        while j < 2 {
+            let ch = h2.substring(j, j + 1)
+            let mut d = 0
+            if "0123456789".contains(ch) {
+                try { d = to_int(ch) } catch e2 { d = 0 }
+            } else if ch == "a" || ch == "A" { d = 10 }
+            else if ch == "b" || ch == "B" { d = 11 }
+            else if ch == "c" || ch == "C" { d = 12 }
+            else if ch == "d" || ch == "D" { d = 13 }
+            else if ch == "e" || ch == "E" { d = 14 }
+            else if ch == "f" || ch == "F" { d = 15 }
+            v = v * 16 + d
+            j = j + 1
+        }
+        out = out + [v]
+        i = i + 2
+    }
+    return out
+}
+
+// byte → [0,1) float
+fn byte_to_u(b: int) -> float {
+    to_float(b) / 256.0
+}
+
+// ─── controller ───
+// Returns { cycle_conv, best_yield, best_composite } via stdout lines.
+// Uses a global mutable state (safely replaced per run).
+
+let mut RNG_MODE = "det"
+let mut QRNG_BYTES = []   // list of ints 0..255
+let mut QRNG_IDX = 0
+let mut TRIAL = 0
+
+fn next_5_rands(seed_base: int) -> list {
+    if RNG_MODE == "det" {
+        // deterministic — identical to ouroboros_meta.hexa formula, offset by trial
+        // so each trial explores a different deterministic trajectory
+        let b = seed_base + TRIAL * 9973
+        return [pseudo_rand(b), pseudo_rand(b + 1), pseudo_rand(b + 2), pseudo_rand(b + 3), pseudo_rand(b + 4)]
+    }
+    // qrng: draw 5 bytes from pool, cycle if exhausted
+    let mut out = []
+    let mut k = 0
+    while k < 5 {
+        if QRNG_IDX >= QRNG_BYTES.len() { QRNG_IDX = 0 }
+        let b = QRNG_BYTES[QRNG_IDX]
+        QRNG_IDX = QRNG_IDX + 1
+        out = out + [byte_to_u(b)]
+        k = k + 1
+    }
+    return out
+}
+
+fn run_one_trial(max_gen: int) {
+    let mut pool = make_initial_pool()
+    let mut score_history = []
+    let mut best_comp = 0.0
+    let mut best_yield_ever = 0
+    let mut cycle_conv = -1
+
+    let mut gen = 0
+    while gen < max_gen {
+        // meta-mutation on lower half
+        let half = pool.len() / 2
+        let mut mutated_pool = []
+        let mut mi = 0
+        while mi < pool.len() {
+            if mi >= half {
+                let seed_base = gen * 1000 + mi * 7
+                let rs = next_5_rands(seed_base)
+                let new_s = meta_mutate_with_rands(pool[mi], rs[0], rs[1], rs[2], rs[3], rs[4], gen + 1)
+                mutated_pool = mutated_pool + [new_s]
+            } else {
+                mutated_pool = mutated_pool + [pool[mi]]
+            }
+            mi = mi + 1
+        }
+
+        let ranked = run_tournament(mutated_pool, gen + 1)
+
+        if ranked.len() >= 2 {
+            let offspring = breed_strategies(ranked[0].strategy, ranked[1].strategy, gen + 1)
+            let mut new_pool = []
+            let keep = if ranked.len() > pool_size - 1 { pool_size - 1 } else { ranked.len() }
+            let mut ki = 0
+            while ki < keep { new_pool = new_pool + [ranked[ki].strategy]; ki = ki + 1 }
+            new_pool = new_pool + [offspring]
+            pool = new_pool
+        }
+
+        let score = evaluate_generation(ranked, gen + 1)
+        score_history = score_history + [score]
+        if score.best_yield > best_yield_ever { best_yield_ever = score.best_yield }
+        if score.composite > best_comp { best_comp = score.composite }
+
+        // emit per-gen trace
+        println("MODE=" + RNG_MODE + " TRIAL=" + to_string(TRIAL) + " GEN=" + to_string(gen + 1) + " BEST=" + to_string(score.best_yield) + " AVG=" + to_string(score.avg_yield) + " DIV=" + to_string(score.diversity) + " COMP=" + to_string(score.composite))
+
+        if cycle_conv < 0 && check_meta_convergence(score_history) {
+            cycle_conv = gen + 1
+            // continue running to see later gens too — but convergence is now recorded
+        }
+        gen = gen + 1
+    }
+
+    // rho = fraction of n6-constants touched by best final strategy
+    let final_pool = pool
+    let mut rho_hits = 0
+    for s in final_pool {
+        let idx = s.constant_idx % n6_constants.len()
+        if idx >= 0 && idx < n6_constants.len() { rho_hits = rho_hits + 1 }
+    }
+    let rho = to_float(rho_hits) / to_float(final_pool.len())
+
+    let cc_str = if cycle_conv < 0 { "-1" } else { to_string(cycle_conv) }
+    let conv_b = if cycle_conv >= 0 { "true" } else { "false" }
+    println("FINAL TRIAL=" + to_string(TRIAL) + " MODE=" + RNG_MODE + " GENS=" + to_string(max_gen) + " CONV=" + conv_b + " BEST_YIELD=" + to_string(best_yield_ever) + " BEST_COMP=" + to_string(best_comp) + " CYCLE_CONV=" + cc_str + " RHO=" + to_string(rho))
+    println("")  // explicit blank line to guarantee newline separator between consecutive trials
+}
+
+// ─── CLI ───
+let _a = args()
+// convention: [0]=hexa [1]=script [2..]=user
+let mode_arg = if _a.len() >= 3 { _a[2] } else { "help" }
+
+if mode_arg == "det" {
+    RNG_MODE = "det"
+    let mut trial = 0
+    let mut gens = default_generations
+    if _a.len() >= 4 { try { trial = to_int(_a[3]) } catch e {} }
+    if _a.len() >= 5 { try { gens = to_int(_a[4]) } catch e {} }
+    TRIAL = trial
+    run_one_trial(gens)
+}
+
+if mode_arg == "qrng" {
+    RNG_MODE = "qrng"
+    let mut trial = 0
+    let mut gens = default_generations
+    let mut hex_path = ""
+    if _a.len() >= 4 { try { trial = to_int(_a[3]) } catch e {} }
+    if _a.len() >= 5 { try { gens = to_int(_a[4]) } catch e {} }
+    if _a.len() >= 6 { hex_path = _a[5] }
+    TRIAL = trial
+    if hex_path.len() == 0 {
+        println("ERROR: qrng mode requires hex path")
+    } else {
+        let mut raw = ""
+        try { raw = read_file(hex_path).trim() } catch e2 { raw = "" }
+        if raw.len() < 10 {
+            println("ERROR: hex file empty or missing: " + hex_path)
+        } else {
+            // mix trial index into pool offset so each trial sees different slice
+            QRNG_BYTES = hex_to_bytes(raw)
+            QRNG_IDX = (trial * 31) % QRNG_BYTES.len()
+            println("# QRNG pool bytes=" + to_string(QRNG_BYTES.len()) + " start_idx=" + to_string(QRNG_IDX))
+            run_one_trial(gens)
+        }
+    }
+}
+
+if mode_arg == "help" {
+    println("ouroboros_shadow.hexa — RNG-pluggable replica of ouroboros_meta.hexa")
+    println("usage:")
+    println("  ouroboros_shadow.hexa det <trial_id> [gens=6]")
+    println("  ouroboros_shadow.hexa qrng <trial_id> [gens=6] <hex_path>")
+}

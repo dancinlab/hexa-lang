@@ -1,0 +1,288 @@
+// sim_bridge/multiverse/higher_order/triple_mi.hexa
+//   3-way mutual information (McGill interaction information / co-information)
+//
+// Definition (McGill 1954):
+//   I(X;Y;Z) = H(X) + H(Y) + H(Z) - H(X,Y) - H(X,Z) - H(Y,Z) + H(X,Y,Z)
+//   (inclusion-exclusion on Shannon entropies, natural log / nats)
+//
+// Sign semantics:
+//   I(X;Y;Z) > 0  → redundancy (X,Y,Z share common info)
+//   I(X;Y;Z) < 0  → synergy    (triple jointly encodes more than pairs suggest)
+//   I(X;Y;Z) = 0  → additive (no triple-way interaction)
+//
+// Usage:
+//   hexa triple_mi.hexa <trajectories.jsonl> <out_csv>
+//     triples of universes (i,j,k), i<j<k<M, computing I(X_i;X_j;X_k)
+//     output CSV: i,j,k,I_scaled (×1000, nats)
+//
+//   hexa triple_mi.hexa --self-test
+//
+// Honest limits:
+//   - plug-in histogram (NBINS=3 for triples to contain state space 27 cells)
+//   - T=500 → ~27/2T = 2.7% bias per entropy term, but terms mostly cancel
+//   - null-baseline comparison (ANU vs PRNG) absorbs same bias
+//   - tied bin values common → conservative p-value
+
+const NBINS: i64 = 3       // reduce to 3 to control state space 27 (vs 64 for 4-bin)
+const LOG_SCALE: i64 = 1000
+
+fn abs_i(x: i64) -> i64 { if x < 0 { return 0 - x } return x }
+
+// fixed-point ln: returns LOG_SCALE * ln(num/den), natural log
+fn log_scaled(num: i64, den: i64) -> i64 {
+    if num <= 0 { return 0 - 20000 }
+    if den <= 0 { return 20000 }
+    let r = num * LOG_SCALE / den
+    if r <= 0 { return 0 - 20000 }
+    let mut x = r
+    let mut l2: i64 = 0
+    if x >= LOG_SCALE {
+        let mut tmp = x
+        while tmp >= (LOG_SCALE * 2) { tmp = tmp / 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = l2 * LOG_SCALE + log2_frac
+        return total_log2 * 693 / LOG_SCALE
+    } else {
+        let mut tmp = x
+        while tmp * 2 <= LOG_SCALE { tmp = tmp * 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = log2_frac - l2 * LOG_SCALE
+        return total_log2 * 693 / LOG_SCALE
+    }
+}
+
+// 3-bin quantization of energy ∈ [0, 1000].
+// 실측 분포 0-300 집중, Phase 0 와 달리 3등분 → [0,100), [100,200), [200,∞).
+fn bin_of(v: i64) -> i64 {
+    if v < 0 { return 0 }
+    if v < 100 { return 0 }
+    if v < 200 { return 1 }
+    return 2
+}
+
+// 1D entropy H(X) scaled×1000
+fn h1(x: [i64]) -> i64 {
+    let T = x.len()
+    if T == 0 { return 0 }
+    let mut c: [i64] = []
+    let mut i = 0
+    while i < NBINS { c.push(0); i = i + 1 }
+    let mut n = 0
+    while n < T {
+        let b = bin_of(x[n])
+        c[b] = c[b] + 1
+        n = n + 1
+    }
+    let mut h: i64 = 0
+    let mut k = 0
+    while k < NBINS {
+        if c[k] > 0 {
+            // -p log p = -(c/T) log(c/T) = -(c/T) * log_scaled(c,T) / LOG_SCALE
+            h = h - (c[k] * log_scaled(c[k], T) / T)
+        }
+        k = k + 1
+    }
+    return h
+}
+
+// 2D joint entropy H(X,Y) scaled×1000
+fn h2(x: [i64], y: [i64]) -> i64 {
+    let T = x.len()
+    if T == 0 { return 0 }
+    let mut c: [i64] = []
+    let mut i = 0
+    while i < NBINS * NBINS { c.push(0); i = i + 1 }
+    let mut n = 0
+    while n < T {
+        let bx = bin_of(x[n])
+        let by = bin_of(y[n])
+        c[bx * NBINS + by] = c[bx * NBINS + by] + 1
+        n = n + 1
+    }
+    let mut h: i64 = 0
+    let mut k = 0
+    while k < NBINS * NBINS {
+        if c[k] > 0 {
+            h = h - (c[k] * log_scaled(c[k], T) / T)
+        }
+        k = k + 1
+    }
+    return h
+}
+
+// 3D joint entropy H(X,Y,Z) scaled×1000
+fn h3(x: [i64], y: [i64], z: [i64]) -> i64 {
+    let T = x.len()
+    if T == 0 { return 0 }
+    let S = NBINS * NBINS * NBINS
+    let mut c: [i64] = []
+    let mut i = 0
+    while i < S { c.push(0); i = i + 1 }
+    let mut n = 0
+    while n < T {
+        let bx = bin_of(x[n])
+        let by = bin_of(y[n])
+        let bz = bin_of(z[n])
+        c[bx * NBINS * NBINS + by * NBINS + bz] = c[bx * NBINS * NBINS + by * NBINS + bz] + 1
+        n = n + 1
+    }
+    let mut h: i64 = 0
+    let mut k = 0
+    while k < S {
+        if c[k] > 0 {
+            h = h - (c[k] * log_scaled(c[k], T) / T)
+        }
+        k = k + 1
+    }
+    return h
+}
+
+// I(X;Y;Z) = H(X)+H(Y)+H(Z) - H(XY) - H(XZ) - H(YZ) + H(XYZ)
+fn triple_mi(x: [i64], y: [i64], z: [i64]) -> i64 {
+    let hx = h1(x)
+    let hy = h1(y)
+    let hz = h1(z)
+    let hxy = h2(x, y)
+    let hxz = h2(x, z)
+    let hyz = h2(y, z)
+    let hxyz = h3(x, y, z)
+    return hx + hy + hz - hxy - hxz - hyz + hxyz
+}
+
+// --- JSONL trajectory loader ---
+// format per line: {"u":<id>,"tag":"...","energy":[v0,v1,...]}
+// returns list of trajectories (each is [i64])
+fn load_trajectories(path: string) -> [[i64]] {
+    let mut raw = ""
+    try { raw = read_file(path) } catch e { raw = "" }
+    let lines = raw.split("\n")
+    let mut out: [[i64]] = []
+    let mut i = 0
+    while i < lines.len() {
+        let ln = lines[i].trim()
+        if ln.len() > 0 {
+            // find "energy":[ ... ]
+            let key = "\"energy\":["
+            let p = ln.index_of(key)
+            if p >= 0 {
+                let after = ln.substring(p + key.len(), ln.len())
+                // until first ']' — scan char-by-char (no string.find in hexa stage0)
+                let mut q: i64 = 0 - 1
+                let mut scan = 0
+                while scan < after.len() {
+                    if after.substring(scan, scan + 1) == "]" { q = scan; break }
+                    scan = scan + 1
+                }
+                if q >= 0 {
+                    let body = after.substring(0, q)
+                    let parts = body.split(",")
+                    let mut traj: [i64] = []
+                    let mut j = 0
+                    while j < parts.len() {
+                        let tok = parts[j].trim()
+                        if tok.len() > 0 {
+                            let mut v = 0
+                            try { v = to_int(tok) } catch e { v = 0 }
+                            traj.push(v)
+                        }
+                        j = j + 1
+                    }
+                    out.push(traj)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// --- CLI ---
+let _args = args()
+if _args.len() >= 3 {
+    if _args[2] == "--self-test" {
+        // correlated triple (identical series → large positive I)
+        let mut x: [i64] = []
+        let mut y: [i64] = []
+        let mut z: [i64] = []
+        let mut i = 0
+        while i < 500 {
+            let v = (i * 37 + 13) % 300
+            x.push(v)
+            y.push(v)
+            z.push(v)
+            i = i + 1
+        }
+        let r1 = triple_mi(x, y, z)
+        println("correlated (identical): I(X;Y;Z)=" + to_string(r1) + " (scaled×1000, nats)")
+
+        // independent triple (small |I|)
+        let mut x2: [i64] = []
+        let mut y2: [i64] = []
+        let mut z2: [i64] = []
+        let mut j = 0
+        while j < 500 {
+            x2.push((j * 37 + 13) % 300)
+            y2.push((j * 91 + 521) % 300)
+            z2.push((j * 53 + 7) % 300)
+            j = j + 1
+        }
+        let r2 = triple_mi(x2, y2, z2)
+        println("independent: I(X;Y;Z)=" + to_string(r2))
+
+        // XOR-like synergy: z = (x + y) mod 300
+        let mut x3: [i64] = []
+        let mut y3: [i64] = []
+        let mut z3: [i64] = []
+        let mut k = 0
+        while k < 500 {
+            let a = (k * 37 + 13) % 300
+            let b = (k * 91 + 521) % 300
+            x3.push(a)
+            y3.push(b)
+            z3.push((a + b) % 300)
+            k = k + 1
+        }
+        let r3 = triple_mi(x3, y3, z3)
+        println("synergy-like (z=x+y): I(X;Y;Z)=" + to_string(r3))
+    } else if _args.len() >= 4 {
+        // batch mode: <traj.jsonl> <out_csv>
+        let in_path = _args[2]
+        let out_path = _args[3]
+        let trajs = load_trajectories(in_path)
+        println("[triple_mi] loaded " + to_string(trajs.len()) + " trajectories from " + in_path)
+        let m_count = trajs.len()
+        if m_count < 3 {
+            println("[triple_mi] ERROR: need >= 3 universes, got " + to_string(m_count))
+        } else {
+            let mut csv = "i,j,k,I_scaled\n"
+            let mut count = 0
+            let mut a = 0
+            while a < m_count {
+                let mut b = a + 1
+                while b < m_count {
+                    let mut c = b + 1
+                    while c < m_count {
+                        let iv = triple_mi(trajs[a], trajs[b], trajs[c])
+                        csv = csv + to_string(a) + "," + to_string(b) + "," + to_string(c) + "," + to_string(iv) + "\n"
+                        count = count + 1
+                        c = c + 1
+                    }
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            try { write_file(out_path, csv) } catch e {}
+            println("[triple_mi] wrote " + to_string(count) + " triples to " + out_path)
+        }
+    } else {
+        println("usage: hexa triple_mi.hexa --self-test")
+        println("   or: hexa triple_mi.hexa <traj.jsonl> <out_csv>")
+    }
+} else {
+    println("usage: hexa triple_mi.hexa --self-test")
+    println("   or: hexa triple_mi.hexa <traj.jsonl> <out_csv>")
+}

@@ -1,0 +1,299 @@
+// comparison.hexa — parse det.log + qrng.log, produce summary.md + stats.json
+//
+// Input log lines (from ouroboros_shadow.hexa):
+//   FINAL TRIAL=<i> MODE=<det|qrng> GENS=<g> CONV=<bool> BEST_YIELD=<int> BEST_COMP=<float> CYCLE_CONV=<int|-1> RHO=<float>
+//
+// Output: KS statistic on BEST_COMP distribution + fixed-point reach rate.
+//
+// Usage: comparison.hexa <det_log> <qrng_log> <qrng_label> <summary_md> <stats_json>
+
+fn abs_f(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
+fn max_f(a: float, b: float) -> float { if a > b { a } else { b } }
+fn sqrt_f(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    let mut i = 0
+    while i < 20 { g = (g + x / g) / 2.0; i = i + 1 }
+    g
+}
+
+// parse log line to extract KV map
+struct Trial {
+    mode: string,
+    converged: bool,
+    best_yield: int,
+    best_comp: float,
+    cycle_conv: int,
+    rho: float,
+    ok: bool
+}
+
+fn empty_trial() -> Trial {
+    Trial { mode: "", converged: false, best_yield: 0, best_comp: 0.0, cycle_conv: -1, rho: 0.0, ok: false }
+}
+
+// extract value of "KEY=" from tokens; returns "" if absent
+fn tok_val(tokens: list, key: string) -> string {
+    for t in tokens {
+        // t is "KEY=VALUE"; split("=") gives [KEY, VALUE] (or [KEY, VAL, ... ] if VAL contains '=')
+        let parts = t.split("=")
+        if parts.len() >= 2 {
+            if parts[0] == key {
+                // rejoin in case val contained '=' (unlikely here, but safe)
+                let mut v = parts[1]
+                let mut i = 2
+                while i < parts.len() {
+                    v = v + "=" + parts[i]
+                    i = i + 1
+                }
+                return v
+            }
+        }
+    }
+    return ""
+}
+
+fn parse_final_line(line: string) -> Trial {
+    let mut tr = empty_trial()
+    let ln = line.trim()
+    if ln.len() < 10 { return tr }
+    if !ln.contains("FINAL") { return tr }
+    let tokens = ln.split(" ")
+    let mode = tok_val(tokens, "MODE")
+    let conv_s = tok_val(tokens, "CONV")
+    let byield_s = tok_val(tokens, "BEST_YIELD")
+    let bcomp_s = tok_val(tokens, "BEST_COMP")
+    let cconv_s = tok_val(tokens, "CYCLE_CONV")
+    let rho_s = tok_val(tokens, "RHO")
+
+    tr.mode = mode
+    tr.converged = (conv_s == "true")
+    try { tr.best_yield = to_int(byield_s) } catch e1 { tr.best_yield = 0 }
+    try { tr.best_comp = to_float(bcomp_s) } catch e2 { tr.best_comp = 0.0 }
+    try { tr.cycle_conv = to_int(cconv_s) } catch e3 { tr.cycle_conv = -1 }
+    try { tr.rho = to_float(rho_s) } catch e4 { tr.rho = 0.0 }
+    tr.ok = true
+    return tr
+}
+
+fn load_trials(path: string) -> list {
+    let mut out = []
+    let mut content = ""
+    try { content = read_file(path) } catch e5 { content = "" }
+    if content.len() == 0 { return out }
+    let lines = content.split("\n")
+    for ln in lines {
+        if ln.contains("FINAL") {
+            let tr = parse_final_line(ln)
+            if tr.ok { out = out + [tr] }
+        }
+    }
+    return out
+}
+
+// ─── stats helpers ───
+fn mean_f(xs: list) -> float {
+    if xs.len() == 0 { return 0.0 }
+    let mut s = 0.0
+    for x in xs { s = s + x }
+    return s / to_float(xs.len())
+}
+
+fn std_f(xs: list) -> float {
+    if xs.len() < 2 { return 0.0 }
+    let m = mean_f(xs)
+    let mut sq = 0.0
+    for x in xs { sq = sq + (x - m) * (x - m) }
+    return sqrt_f(sq / to_float(xs.len() - 1))
+}
+
+fn sort_asc(xs: list) -> list {
+    let mut a = []
+    for x in xs { a = a + [x] }
+    let n = a.len()
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n - 1 - i {
+            if a[j] > a[j + 1] {
+                let t = a[j]
+                a[j] = a[j + 1]
+                a[j + 1] = t
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return a
+}
+
+// Kolmogorov-Smirnov two-sample statistic
+// Returns {D, p_approx}
+fn ks_two_sample(xs: list, ys: list) -> list {
+    let a = sort_asc(xs)
+    let b = sort_asc(ys)
+    let n1 = a.len()
+    let n2 = b.len()
+    if n1 == 0 || n2 == 0 { return [0.0, 1.0] }
+
+    let mut i = 0
+    let mut j = 0
+    let mut d = 0.0
+
+    while i < n1 && j < n2 {
+        let x = a[i]
+        let y = b[j]
+        if x <= y {
+            i = i + 1
+        }
+        if y <= x {
+            j = j + 1
+        }
+        let f1 = to_float(i) / to_float(n1)
+        let f2 = to_float(j) / to_float(n2)
+        let diff = abs_f(f1 - f2)
+        if diff > d { d = diff }
+    }
+
+    // approximate p-value: p = 2 * exp(-2 * D^2 * (n1 n2)/(n1+n2))
+    // (Kolmogorov asymptotic, valid for n >= ~8)
+    let ne = to_float(n1 * n2) / to_float(n1 + n2)
+    let z2 = 2.0 * d * d * ne
+    // exp via Taylor for small z; fallback: clamp
+    // since hexa has no exp(), use series: exp(-x) ≈ 1/(1+x+x²/2+x³/6+...)
+    let mut denom = 1.0
+    let mut term = 1.0
+    let mut k = 1
+    while k < 15 {
+        term = term * z2 / to_float(k)
+        denom = denom + term
+        k = k + 1
+    }
+    let p = 2.0 / denom
+    let p_c = if p > 1.0 { 1.0 } else { if p < 0.0 { 0.0 } else { p } }
+    return [d, p_c]
+}
+
+// ─── main ───
+let _a = args()
+if _a.len() < 7 {
+    println("usage: comparison.hexa <det_log> <qrng_log> <qrng_label> <summary_md> <stats_json>")
+    exit(1)
+}
+let det_log = _a[2]
+let qrng_log = _a[3]
+let qrng_label = _a[4]
+let summary_path = _a[5]
+let stats_path = _a[6]
+
+let dets = load_trials(det_log)
+let qrngs = load_trials(qrng_log)
+
+// extract vectors
+let mut det_comp = []
+let mut det_cyc = []
+let mut det_conv = 0
+let mut det_yield = []
+let mut det_rho = []
+for tr in dets {
+    det_comp = det_comp + [tr.best_comp]
+    det_yield = det_yield + [to_float(tr.best_yield)]
+    det_rho = det_rho + [tr.rho]
+    if tr.converged { det_conv = det_conv + 1 }
+    if tr.cycle_conv > 0 { det_cyc = det_cyc + [to_float(tr.cycle_conv)] }
+}
+
+let mut qrng_comp = []
+let mut qrng_cyc = []
+let mut qrng_conv = 0
+let mut qrng_yield = []
+let mut qrng_rho = []
+for tr in qrngs {
+    qrng_comp = qrng_comp + [tr.best_comp]
+    qrng_yield = qrng_yield + [to_float(tr.best_yield)]
+    qrng_rho = qrng_rho + [tr.rho]
+    if tr.converged { qrng_conv = qrng_conv + 1 }
+    if tr.cycle_conv > 0 { qrng_cyc = qrng_cyc + [to_float(tr.cycle_conv)] }
+}
+
+let ks_comp = ks_two_sample(det_comp, qrng_comp)
+let ks_cyc = ks_two_sample(det_cyc, qrng_cyc)
+let ks_yield = ks_two_sample(det_yield, qrng_yield)
+
+// robustness verdict:
+// ouroboros is ROBUST if:
+//   - qrng convergence rate >= 80% of det convergence rate
+//   - KS p(BEST_COMP) >= 0.05 (cannot reject same distribution)
+//   - mean(qrng_comp) within 1 std(det_comp) of mean(det_comp)
+let det_conv_rate = if dets.len() > 0 { to_float(det_conv) / to_float(dets.len()) } else { 0.0 }
+let qrng_conv_rate = if qrngs.len() > 0 { to_float(qrng_conv) / to_float(qrngs.len()) } else { 0.0 }
+
+let det_mean = mean_f(det_comp)
+let qrng_mean = mean_f(qrng_comp)
+let det_sd = std_f(det_comp)
+let qrng_sd = std_f(qrng_comp)
+
+let cond_conv_ok = qrng_conv_rate >= 0.8 * det_conv_rate
+let cond_p_ok = ks_comp[1] >= 0.05
+let mean_gap = abs_f(det_mean - qrng_mean)
+let cond_mean_ok = mean_gap <= max_f(det_sd, 0.05)
+
+let robust = cond_conv_ok && cond_p_ok && cond_mean_ok
+
+let verdict = if robust { "ouroboros ROBUST — QRNG attractor 생존" } else { "QRNG perturbation 효과 — 카오스 성분 존재" }
+
+// ─── summary.md ───
+let mut md = ""
+md = md + "# Ouroboros × QRNG 강건성 실험\n\n"
+md = md + "**RNG source**: " + qrng_label + "\n"
+md = md + "**Trials**: det=" + to_string(dets.len()) + " qrng=" + to_string(qrngs.len()) + "\n\n"
+
+md = md + "## 표\n\n"
+md = md + "| 측정 | det | qrng (" + qrng_label + ") |\n"
+md = md + "|---|---|---|\n"
+md = md + "| 고정점 도달률 | " + to_string(det_conv) + "/" + to_string(dets.len()) + " (" + to_string(det_conv_rate) + ") | " + to_string(qrng_conv) + "/" + to_string(qrngs.len()) + " (" + to_string(qrng_conv_rate) + ") |\n"
+md = md + "| 평균 도달 cycle | " + to_string(mean_f(det_cyc)) + " | " + to_string(mean_f(qrng_cyc)) + " |\n"
+md = md + "| mean(BEST_COMP) | " + to_string(det_mean) + " | " + to_string(qrng_mean) + " |\n"
+md = md + "| std(BEST_COMP) | " + to_string(det_sd) + " | " + to_string(qrng_sd) + " |\n"
+md = md + "| mean(BEST_YIELD) | " + to_string(mean_f(det_yield)) + " | " + to_string(mean_f(qrng_yield)) + " |\n"
+md = md + "| mean(RHO) | " + to_string(mean_f(det_rho)) + " | " + to_string(mean_f(qrng_rho)) + " |\n\n"
+
+md = md + "## KS 2-sample\n\n"
+md = md + "- BEST_COMP: D=" + to_string(ks_comp[0]) + "  p≈" + to_string(ks_comp[1]) + "\n"
+md = md + "- CYCLE_CONV: D=" + to_string(ks_cyc[0]) + "  p≈" + to_string(ks_cyc[1]) + "\n"
+md = md + "- BEST_YIELD: D=" + to_string(ks_yield[0]) + "  p≈" + to_string(ks_yield[1]) + "\n\n"
+
+md = md + "## 판정\n\n"
+md = md + "- conv_rate_ok: " + to_string(cond_conv_ok) + "\n"
+md = md + "- p(BEST_COMP) >= 0.05: " + to_string(cond_p_ok) + "\n"
+md = md + "- mean_gap <= max(det_std, 0.05): " + to_string(cond_mean_ok) + "\n\n"
+md = md + "**결론**: " + verdict + "\n"
+
+try { write_file(summary_path, md) } catch e6 { println("ERROR writing " + summary_path) }
+
+// ─── stats.json ───
+let mut js = "{\n"
+js = js + "  \"qrng_label\": \"" + qrng_label + "\",\n"
+js = js + "  \"n_det\": " + to_string(dets.len()) + ",\n"
+js = js + "  \"n_qrng\": " + to_string(qrngs.len()) + ",\n"
+js = js + "  \"det_conv_rate\": " + to_string(det_conv_rate) + ",\n"
+js = js + "  \"qrng_conv_rate\": " + to_string(qrng_conv_rate) + ",\n"
+js = js + "  \"det_mean_comp\": " + to_string(det_mean) + ",\n"
+js = js + "  \"qrng_mean_comp\": " + to_string(qrng_mean) + ",\n"
+js = js + "  \"det_std_comp\": " + to_string(det_sd) + ",\n"
+js = js + "  \"qrng_std_comp\": " + to_string(qrng_sd) + ",\n"
+js = js + "  \"ks_comp_D\": " + to_string(ks_comp[0]) + ",\n"
+js = js + "  \"ks_comp_p\": " + to_string(ks_comp[1]) + ",\n"
+js = js + "  \"ks_cycle_D\": " + to_string(ks_cyc[0]) + ",\n"
+js = js + "  \"ks_cycle_p\": " + to_string(ks_cyc[1]) + ",\n"
+js = js + "  \"ks_yield_D\": " + to_string(ks_yield[0]) + ",\n"
+js = js + "  \"ks_yield_p\": " + to_string(ks_yield[1]) + ",\n"
+js = js + "  \"verdict\": \"" + (if robust { "ROBUST" } else { "CHAOTIC" }) + "\"\n"
+js = js + "}\n"
+
+try { write_file(stats_path, js) } catch e7 { println("ERROR writing " + stats_path) }
+
+println("[compare] det n=" + to_string(dets.len()) + " conv=" + to_string(det_conv) + " mean_comp=" + to_string(det_mean))
+println("[compare] qrng n=" + to_string(qrngs.len()) + " conv=" + to_string(qrng_conv) + " mean_comp=" + to_string(qrng_mean))
+println("[compare] KS(comp) D=" + to_string(ks_comp[0]) + " p=" + to_string(ks_comp[1]))
+println("[compare] verdict: " + (if robust { "ROBUST" } else { "CHAOTIC" }))

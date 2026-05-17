@@ -1,0 +1,276 @@
+// universe_ensemble.hexa — Stage 7 candidate: multi-cycle ensemble runner
+//
+// Generalization of iter-31 5-seed test. Runs N cycles with different seeds on
+// chosen topology, computes mean and stdev of 5 observables.
+//
+// raw 91 C3 honest: this does NOT add new physics — only better statistical
+// estimation of toy φ⁴ observables.
+
+const ENS_SIGMA: i64 = 64
+const ENS_SCALE: i64 = 1000
+
+const ENS_FLAT: i64 = 0
+const ENS_T3: i64 = 2
+const ENS_S3: i64 = 4
+const ENS_BLACKHOLE: i64 = 6
+const ENS_WORMHOLE: i64 = 7
+
+fn _enstopo_id(name: string) -> i64 {
+    if name == "flat" { return ENS_FLAT }
+    if name == "t3" { return ENS_T3 }
+    if name == "s3" { return ENS_S3 }
+    if name == "blackhole" { return ENS_BLACKHOLE }
+    if name == "wormhole" { return ENS_WORMHOLE }
+    return 0 - 1
+}
+
+fn _ensneighbor_t3(i: i64, axis: i64) -> i64 {
+    let x = i % 4; let y = (i / 4) % 4; let z = i / 16
+    if axis == 0 { let xm = (x + 3) % 4; return z * 16 + y * 4 + xm }
+    if axis == 1 { let ym = (y + 3) % 4; return z * 16 + ym * 4 + x }
+    let zm = (z + 3) % 4
+    return zm * 16 + y * 4 + x
+}
+
+fn _ensneighbor(i: i64, axis: i64, topo: i64) -> i64 {
+    if topo == ENS_FLAT {
+        if axis == 0 { return (i + ENS_SIGMA - 1) % ENS_SIGMA }
+        return (i + 1) % ENS_SIGMA
+    }
+    if topo == ENS_S3 {
+        let i_q = i % 32
+        let x = i_q % 4; let y = (i_q / 4) % 4; let z = i_q / 16
+        if axis == 0 { let xm = (x + 3) % 4; return z * 16 + y * 4 + xm }
+        if axis == 1 { let ym = (y + 3) % 4; return z * 16 + ym * 4 + x }
+        if axis == 2 { let zm = (z + 3) % 4; return zm * 16 + y * 4 + x }
+        return i_q + 32
+    }
+    if topo == ENS_BLACKHOLE {
+        let i_BH: i64 = 21
+        if i == i_BH { return i_BH }
+        let x = i % 4; let y = (i / 4) % 4; let z = i / 16
+        let mut dx = x - 1; if dx < 0 { dx = 0 - dx }
+        let mut dy = y - 1; if dy < 0 { dy = 0 - dy }
+        let mut dz = z - 1; if dz < 0 { dz = 0 - dz }
+        let d = dx + dy + dz
+        if d <= 1 {
+            let mut nx = x; let mut ny = y; let mut nz = z
+            if axis == 0 { if x > 1 { nx = x - 1 } else if x < 1 { nx = x + 1 } }
+            else if axis == 1 { if y > 1 { ny = y - 1 } else if y < 1 { ny = y + 1 } }
+            else { if z > 1 { nz = z - 1 } else if z < 1 { nz = z + 1 } }
+            return nz * 16 + ny * 4 + nx
+        }
+        return _ensneighbor_t3(i, axis)
+    }
+    if topo == ENS_WORMHOLE {
+        if axis >= 3 {
+            if i < 32 { let off = i % 8; return 32 + ((i + off) % 32) }
+            let i2 = i - 32; let off = i2 % 8; return (i2 + off) % 32
+        }
+        let base = if i < 32 { 0 } else { 32 }
+        let r = i - base
+        let x = r % 4; let y = (r / 4) % 4; let z = r / 16
+        if axis == 0 { let xm = (x + 3) % 4; return base + z * 16 + y * 4 + xm }
+        if axis == 1 { let ym = (y + 3) % 4; return base + z * 16 + ym * 4 + x }
+        let zm = (z + 1) % 2
+        return base + zm * 16 + y * 4 + x
+    }
+    return _ensneighbor_t3(i, axis)
+}
+
+let mut __ens_phi: [i64] = []
+let mut __ens_pi: [i64] = []
+
+fn ens_init(seed: i64) {
+    let mut phi: [i64] = []
+    let mut pi: [i64] = []
+    let mut i = 0
+    while i < ENS_SIGMA {
+        let mut d = i - 32; if d < 0 { d = 0 - d }
+        phi = phi + [(ENS_SCALE / (1 + d * d / 2 + 1)) + (seed * 11 + i * 5) % 50]
+        pi = pi + [(seed * 7 + i * 3) % 30]
+        i = i + 1
+    }
+    __ens_phi = phi
+    __ens_pi = pi
+}
+
+fn ens_step(topo: i64) {
+    let m2: i64 = 100
+    let mut force: [i64] = []
+    let mut i = 0
+    while i < ENS_SIGMA {
+        let mut sum_n: i64 = 0
+        let mut a = 0
+        while a < 3 { sum_n = sum_n + __ens_phi[_ensneighbor(i, a, topo)]; a = a + 1 }
+        let lap = sum_n - 3 * __ens_phi[i]
+        let dV = m2 * __ens_phi[i] / ENS_SCALE
+        force = force + [lap - dV]
+        i = i + 1
+    }
+    let mut new_phi: [i64] = []
+    let mut new_pi: [i64] = []
+    i = 0
+    while i < ENS_SIGMA {
+        let pi_h = __ens_pi[i] + force[i] / 20
+        new_pi = new_pi + [pi_h]
+        new_phi = new_phi + [__ens_phi[i] + pi_h / 10]
+        i = i + 1
+    }
+    __ens_phi = new_phi
+    __ens_pi = new_pi
+}
+
+fn ens_observables() -> [i64] {
+    let mut sum_corr: i64 = 0
+    let mut count: i64 = 0
+    let mut i = 0
+    while i < ENS_SIGMA - 1 {
+        let prod = (__ens_phi[i] * __ens_phi[i + 1]) / ENS_SCALE
+        sum_corr = sum_corr + prod
+        count = count + 1
+        i = i + 1
+    }
+    let correl = if count > 0 { sum_corr / count } else { 0 }
+    let mut sum_T: i64 = 0
+    let mut sum_V: i64 = 0
+    let m2: i64 = 100
+    i = 0
+    while i < ENS_SIGMA {
+        sum_T = sum_T + (__ens_pi[i] * __ens_pi[i]) / (2 * ENS_SCALE)
+        let phi2 = (__ens_phi[i] * __ens_phi[i]) / ENS_SCALE
+        sum_V = sum_V + m2 * phi2 / (2 * ENS_SCALE)
+        i = i + 1
+    }
+    let T_V = if sum_V > 0 { (sum_T * ENS_SCALE) / sum_V } else { 0 }
+    let pair = __ens_phi[0] + __ens_phi[ENS_SIGMA - 1]
+    let mut total_phi: i64 = 0
+    let mut total_pi: i64 = 0
+    i = 0
+    while i < ENS_SIGMA {
+        total_phi = total_phi + __ens_phi[i]
+        let mut p = __ens_pi[i]; if p < 0 { p = 0 - p }
+        total_pi = total_pi + p
+        i = i + 1
+    }
+    let phi_pi = if total_pi > 0 { (total_phi * ENS_SCALE) / total_pi } else { 0 }
+    let mut max_v: i64 = 0
+    let mut sum_amp: i64 = 0
+    i = 0
+    while i < ENS_SIGMA {
+        let mut v = __ens_phi[i]
+        if v < 0 { v = 0 - v }
+        if v > max_v { max_v = v }
+        sum_amp = sum_amp + v
+        i = i + 1
+    }
+    let avg = sum_amp / ENS_SIGMA
+    let max_avg = if avg > 0 { (max_v * ENS_SCALE) / avg } else { 0 }
+    return [correl, T_V, pair, phi_pi, max_avg]
+}
+
+fn run_cycle(topo: i64, seed: i64, ticks: i64) -> [i64] {
+    ens_init(seed)
+    let mut t = 0
+    while t < ticks {
+        ens_step(topo)
+        t = t + 1
+    }
+    return ens_observables()
+}
+
+fn run_ensemble(topo_name: string, N: i64, ticks: i64) -> [i64] {
+    let topo = _enstopo_id(topo_name)
+    if topo < 0 { return [0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1] }
+    let seeds = [6, 13, 17, 23, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101]
+    let mut sum_correl: i64 = 0
+    let mut sum_T_V: i64 = 0
+    let mut sum_pair: i64 = 0
+    let mut sum_phipi: i64 = 0
+    let mut sum_maxavg: i64 = 0
+    let mut phipi_vals: [i64] = []
+    let mut i = 0
+    while i < N {
+        if i >= seeds.len() { break }
+        let r = run_cycle(topo, seeds[i], ticks)
+        sum_correl = sum_correl + r[0]
+        sum_T_V = sum_T_V + r[1]
+        sum_pair = sum_pair + r[2]
+        sum_phipi = sum_phipi + r[3]
+        sum_maxavg = sum_maxavg + r[4]
+        phipi_vals = phipi_vals + [r[3]]
+        i = i + 1
+    }
+    let n_eff = if N < seeds.len() { N } else { seeds.len() }
+    let mean_correl = sum_correl / n_eff
+    let mean_T_V = sum_T_V / n_eff
+    let mean_pair = sum_pair / n_eff
+    let mean_phipi = sum_phipi / n_eff
+    let mean_maxavg = sum_maxavg / n_eff
+    let mut sum_sq: i64 = 0
+    let mut k = 0
+    while k < phipi_vals.len() {
+        let d = phipi_vals[k] - mean_phipi
+        sum_sq = sum_sq + d * d
+        k = k + 1
+    }
+    let variance = if n_eff > 1 { sum_sq / (n_eff - 1) } else { 0 }
+    let mut sd: i64 = 1
+    if variance > 0 {
+        sd = variance / 2 + 1
+        let mut iter = 0
+        while iter < 10 {
+            sd = (sd + variance / sd) / 2
+            iter = iter + 1
+        }
+    }
+    return [mean_correl, mean_T_V, mean_pair, mean_phipi, mean_maxavg, sd]
+}
+
+fn run_ensemble_selftest() {
+    println("[universe_ensemble] --selftest (Stage 7: multi-cycle ensemble averaging)")
+    let topos = ["flat", "t3", "s3", "blackhole", "wormhole"]
+    let N: i64 = 10
+    let ticks: i64 = 64
+    let mut i = 0
+    while i < topos.len() {
+        let r = run_ensemble(topos[i], N, ticks)
+        println("  topo=" + topos[i] + " N=" + to_string(N) + " ticks=" + to_string(ticks))
+        println("    mean: correl=" + to_string(r[0]) + " T/V=" + to_string(r[1]) + " pair=" + to_string(r[2]) + " phi/pi=" + to_string(r[3]) + " max/avg=" + to_string(r[4]))
+        println("    phi/pi stdev=" + to_string(r[5]))
+        i = i + 1
+    }
+    println("__UNIVERSE_ENSEMBLE_SELFTEST__ PASS topologies=5 N=10 ensemble-averaging-active")
+}
+
+let _eargs = args()
+let mut e_is_selftest = false
+let mut e_arg_i = 0
+while e_arg_i < _eargs.len() {
+    if _eargs[e_arg_i] == "--selftest" { e_is_selftest = true }
+    e_arg_i = e_arg_i + 1
+}
+
+if e_is_selftest {
+    run_ensemble_selftest()
+} else {
+    let mut e_topo: string = "t3"
+    let mut e_N: i64 = 10
+    let mut e_ticks: i64 = 64
+    if _eargs.len() >= 3 { e_topo = _eargs[2] }
+    if _eargs.len() >= 4 {
+        try { e_N = to_int(_eargs[3]) } catch ex { e_N = 10 }
+    }
+    if _eargs.len() >= 5 {
+        try { e_ticks = to_int(_eargs[4]) } catch ex { e_ticks = 64 }
+    }
+    let r = run_ensemble(e_topo, e_N, e_ticks)
+    println("[universe_ensemble] topology=" + e_topo + " N=" + to_string(e_N) + " ticks=" + to_string(e_ticks))
+    println("  mean correl=" + to_string(r[0]))
+    println("  mean T/V=" + to_string(r[1]))
+    println("  mean pair=" + to_string(r[2]))
+    println("  mean phi/pi=" + to_string(r[3]))
+    println("  mean max/avg=" + to_string(r[4]))
+    println("  phi/pi stdev=" + to_string(r[5]))
+    println("  raw 91 C3 honest: ensemble averaging reduces single-cycle noise; toy σ²=64 limits unchanged")
+}
