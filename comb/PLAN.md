@@ -109,5 +109,19 @@
   T2 overall ~60-70%. T3 = 0%.
   다음 strict tapeout step = SKY130 std cell library 매핑 (`yosys -p
   "abc -liberty sky130_fd_sc_hd__tt_025C_1v80.lib"`) → 실 area in mm² +
-  OpenSTA timing → OpenROAD P&R → DRC. PDK lib + OpenROAD 는 별도 설치
-  필요 (hexa-arch[chip] 영역).
+  OpenSTA timing → OpenROAD P&R → DRC.
+- 2026-05-18 — **🎉 BREAKTHROUGH: SKY130 ASIC PDK 매핑 완료**:
+  efabless mirror `skywater-pdk-libs-sky130_fd_sc_hd` git clone →
+  `sky130_fd_sc_hd__tt_025C_1v80.lib` (12.8 MB) 확보. yosys+dfflibmap+abc
+  로 진짜 ASIC 매핑. 실측 chip area:
+    router_d4 = **61,762.99 μm²** (0.062 mm², 79% sequential)
+    router_d6 = **93,608.53 μm²** (0.094 mm², 73% sequential)
+    **ratio = 1.516×** (FPGA 1.37-1.41× 와 generic 1.80× 사이; 1.5×
+    가정과 ±1% 일치)
+  F1 재검증 (실측 t_r6=152): lat hex 33% win, e hex 29% win, cross-over
+  t_r6=276 → 1.8× margin. **SKY130 ASIC 실측 면적 비용에서도 F1 PASS**.
+  비-stencil workload 전수, stencil 은 여전히 mesh 우세 — workload-
+  dependent verdict 4번째 PDK flow 에서도 robust. T2 RTL 측면이 strict
+  ASIC PDK-mapped 단계 도달. T2 RTL ~85% → ~95% (PDK-mapped area 실측
+  완료, OpenSTA timing + OpenROAD P&R + DRC 만 남음 — 별도 도구 설치).
+  T2 overall ~80-85%. T3 = 0% (P&R + GDSII 미수행).

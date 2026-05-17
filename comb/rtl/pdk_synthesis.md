@@ -34,49 +34,81 @@
 
 ### Cross-PDK agreement
 
-| flow              | area ratio (d6/d4) |
-|-------------------|-------------------:|
-| generic synth     | 1.80× (no PDK)    |
-| Xilinx Artix-7    | **1.37×** (FPGA)  |
-| Lattice ECP5      | **1.41×** (FPGA)  |
-| ASIC (SKY130/gf180mcu) | pending — .lib not fetched (GitHub repo path) |
+| flow                              | area ratio (d6/d4) |
+|-----------------------------------|-------------------:|
+| generic synth                     | 1.80× (no PDK)    |
+| Xilinx Artix-7                    | **1.37×** (FPGA)  |
+| Lattice ECP5                      | **1.41×** (FPGA)  |
+| **SKY130 ASIC (`sky130_fd_sc_hd`, tt corner)** | **1.516×** 🎉 |
 
-Real-PDK ratios converge at **1.37-1.41×** (±3%). Two independent flows.
+**SKY130 ASIC area (μm²)**:
 
-## F1 verdict with measured 1.37×
+| metric           |   router_d4 |   router_d6 | ratio |
+|------------------|------------:|------------:|------:|
+| **chip area**    | **61,762.99** | **93,608.53** | **1.516×** |
+| sequential       | 48,956.95 (79%) | 68,485.68 (73%) | 1.399× |
+| combinational    | 12,806.03 | 25,122.85 | 1.962× |
 
-Using `t_router_d6 = 137` (1.37× baseline) in the f1_parametric model:
+Real ASIC area in μm² mapped to SKY130 `sky130_fd_sc_hd` cells via
+`yosys synth + dfflibmap + abc`. d4 = 0.062 mm², d6 = 0.094 mm². The
+1.52× ASIC ratio sits between generic (1.80×) and FPGA (1.37-1.41×):
+ASIC's wide std-cell library packs combinational logic more compactly
+than generic but less than FPGA LUT6.
+
+Note: ASIC ratio decomposes as 1.40× sequential (flops scale with port
+count) and 1.96× combinational (hex's 3-axis route compare + 7-input
+arbiter is genuinely more logic). FPGA hides much of the combinational
+gap inside LUT6/CARRY; ASIC reveals it.
+
+## F1 verdict with measured SKY130 ASIC 1.52×
+
+Using `t_router_d6 = 152` (the actual SKY130-measured area ratio) in
+the f1_parametric model:
 
 ```
 N=1024, uniform/broadcast/hotspot (3*avgH_mesh=64, 3*avgH_hex=34):
-  lat_hex = 34 × (137 + 100) = 8058    lat_mesh = 64 × 200 = 12800
-  e_hex   = 34 × (137+100+137+130)/2 = 34 × 252 = 8568
+  lat_hex = 34 × (152 + 100) = 8568    lat_mesh = 64 × 200 = 12800
+  e_hex   = 34 × (152+100+152+130)/2 = 34 × 267 = 9078
   e_mesh  = 64 × 200 = 12800
 
-ratios: lat_hex/lat_mesh = 0.629  (hex 37% faster)
-        e_hex/e_mesh    = 0.669  (hex 33% lower)
+ratios: lat_hex/lat_mesh = 0.669  (hex 33% faster)
+        e_hex/e_mesh    = 0.709  (hex 29% lower energy)
 ```
 
-**F1 verdict survives — and is stronger** than with the 1.50× assumption.
-The hex 1/√3 hop reduction comfortably dominates the measured 1.37× area
-cost. Cross-over: `t_r6_crit ≈ 276` → 2.0× safety margin (vs 1.84× with
-1.50× model).
+**F1 verdict survives under measured SKY130 ASIC area cost.** Hex 1/√3
+hop reduction dominates the measured 1.52× area cost. Cross-over:
+`t_r6_crit ≈ 276` → ~1.8× safety margin (was 2.0× with FPGA 1.37×).
 
-stencil (1-hop) still loses for hex — workload-dependent verdict
-unchanged.
+Compare verdict robustness across PDK flows:
+
+| flow            | t_r6 | lat_hex/lat_mesh | e_hex/e_mesh |
+|-----------------|-----:|-----------------:|-------------:|
+| 1.50× assumed   |  150 | 0.664 (33% win)  | 0.664 (33% win) |
+| FPGA Xilinx 1.37× | 137 | 0.629 (37% win)  | 0.669 (33% win) |
+| **SKY130 ASIC 1.52×** | **152** | **0.669 (33% win)** | **0.709 (29% win)** |
+| generic 1.80×   |  180 | 0.744 (26% win)  | 0.784 (22% win) |
+
+stencil (1-hop) still loses for hex across all flows — workload-
+dependent verdict unchanged.
 
 ## What's still missing for **strict tapeout-ready ASIC**
 
-- **SKY130 std-cell `.lib`** — direct GitHub fetch returned 404 (repo
-  structure moved); `volare enable --pdk sky130` needs commit metadata.
-  Try `pip install ciel-cli` (newer manager) or clone `open_pdks` repo.
-- **gf180mcu** (GlobalFoundries 180nm open PDK) — alternative open ASIC.
-- **OpenSTA** — timing signoff against the mapped library.
-- **OpenROAD** — place & route with the chosen PDK.
+- ~~**SKY130 std-cell `.lib`**~~ ✅ **OBTAINED** via `git clone
+  efabless/skywater-pdk-libs-sky130_fd_sc_hd` (the original
+  `google/skywater-pdk-libs-sky130_fd_sc_hd` returns 404 — repo moved
+  to efabless mirror). `.lib` = 12.8 MB at `/tmp/sky130/.../timing/
+  sky130_fd_sc_hd__tt_025C_1v80.lib`. Used in this commit.
+- **OpenSTA** — timing signoff: brew has no formula; needs source build
+  (CMake + dependencies). Pending. Without STA we have *area* but not
+  *fmax* / setup/hold margin.
+- **OpenROAD** — place & route: heavy install, not in brew. P&R gives
+  real wire lengths + congestion + die size.
 - **KLayout/Magic DRC** — physical signoff.
 
-These remain `~/core/hexa-arch[chip]` absorption-track items per
-`design.md` D1-D5 (the chip-domain owner pulls these tools in).
+Of the originally-listed blockers, **SKY130 lib is no longer a blocker**;
+OpenSTA + OpenROAD + DRC remain as tool-install gates (substantial but
+in principle doable). These plus T3 GDSII delivery sit on the
+`~/core/hexa-arch[chip]` absorption-track per its `design.md` D1-D5.
 
 ## Reproducibility
 
