@@ -1690,11 +1690,29 @@ int _hx_cuda_farr_rope_bwd_gpu(int64_t t_id, int64_t cos_id, int64_t sin_id,
  * uploads dst's host bytes first (and SKIPs once dst is already
  * device-authoritative — exactly the residency win RFC 058 unlocks).
  *
- * On return dst is marked loc=FARR_DEVICE, dirty_dev=1 (RFC 056 §6.1
- * state machine): Bc is now device-authoritative, so downstream slabs
- * can hexa_farr_dev_view it byte-safely (RFC 057 §6.2 unblocked). The
- * host buffer is left stale (dirty_host=1) — a later host reader does
- * the lazy D2H via _h2d's mirror path / hexa_farr_to_host.
+ * On return dst (Bc) is MIRRORED — the kernel result is copied D2H back
+ * to the host buffer so host Bc == device Bc byte-identically.
+ *
+ * RFC 058 byte-eq fix (fire #13 regression): the original wrapper marked
+ * dst loc=FARR_DEVICE/dirty_host=1 and SKIPPED the D2H ("device freshest,
+ * a host reader triggers a lazy D2H"). But the downstream A2-block ops
+ * (RMSNorm/RoPE/attention/SwiGLU slabs in flame_phase4d7_block_*_
+ * primitive.c) read Bc via the RAW host pointer `_hx_farr_table[Bc].buf`
+ * — NOT through a farr API — so the lazy-D2H trigger never fires. They
+ * read STALE host Bc bytes → wrong numerics (d768 init gn2 3.98438 vs
+ * the correct 3.99026 of fires #8–#12).
+ *
+ * Device residency is all-or-nothing: marking Bc device-authoritative
+ * while consumers still host-read it breaks byte-eq. Until every Bc
+ * reader is converted to hexa_farr_dev_view (RFC 057 §6.2 consume wiring,
+ * flame Phase 4-D-9 — element-loop kernels for RMSNorm/RoPE/attention/
+ * SwiGLU not yet landed), the wrapper MUST D2H so the host buffer is
+ * correct. The full-buffer _d2h is valid here: _h2d(dst_id) above
+ * uploaded dst's whole host buffer, the kernel wrote only the slab, so
+ * the device buffer holds the entire correct Bc; _d2h copies it all
+ * back, sets dirty_host=0, loc=FARR_MIRRORED. The device copy stays live
+ * (MIRRORED) so a later GPU op's _h2d still SKIPs — no wall regression
+ * beyond the D2H round-trip itself.
  *
  * NOTE the d=32 path NEVER reaches this wrapper — the consumer keeps the
  * host transpose loop below the dim-gate (RFC 058 §5.4) so d=32 stays
@@ -1751,14 +1769,16 @@ int _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id, int64_t dst_id,
                 cudaGetErrorString(er));
         return -1;
     }
-    /* RFC 056 §6.1 — dst (Bc) is now device-authoritative. No D2H: the
-     * device copy is the freshest, host buf stale. The next GPU op's
-     * _h2d SKIPs; a host reader triggers a lazy D2H. */
-    HexaFarrEntry* de = &_hx_farr_table[dst_id];
-    de->d_buf      = (void*)g_slots[dst_id].d_buf;
-    de->loc        = FARR_DEVICE;
-    de->dirty_host = 1;
-    de->dirty_dev  = 1;
+    /* RFC 058 byte-eq fix — D2H the kernel result back to the host buffer.
+     * Downstream A2-block consumers (RMSNorm/RoPE/attention/SwiGLU slabs)
+     * read Bc via the RAW host pointer, NOT a farr API, so the lazy-D2H
+     * trigger never fires; the host buffer MUST therefore be made fresh
+     * here. _d2h copies the whole device buffer back (it holds the entire
+     * correct Bc — see header), sets dirty_host=0, loc=FARR_MIRRORED. The
+     * device pointer stays live so a later GPU op's _h2d still SKIPs. The
+     * resident-residency win (dropping this D2H) lands once all Bc readers
+     * are converted to hexa_farr_dev_view — flame Phase 4-D-9. */
+    if (_d2h(dst_id) != 0) return -1;
     return 0;
 }
 
