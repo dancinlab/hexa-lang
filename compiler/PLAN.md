@@ -34,6 +34,7 @@
 - #13 aprime_cc DWARF `.loc` emission
 - #18 aprime_cc self-host (hexa_v2 의존 끊기)
 - ~170 unmapped runtime builtins (per-symbol triage)
+- 60-smoke 재측정 (activated binary lift 확인 — auto-invoke + fn-dedup + lvalue + nil 누계)
 
 ## 진행 로그
 
