@@ -11,7 +11,7 @@
 
 ## 1. 동기
 
-`~/core/qmirror/` v2.0 — 62,402 LoC across 38 module directories — 는 dancinlab quantum-stack 흡수 시리즈의 마지막 후보. qmirror 최종 업그레이드 (clifford-data-regression · hardy-multipartite · mabk-ardehali · page-curve-scrambler · pseudo-telepathy-doily · qdrift-hamiltonian-sim · qfi-spin-motion · rpe-gate-calib · shallow-shadows · steering-gme-minimal · symmetry-adjusted-shadows · wigner-negativity-discrete · mirror-fidelity-bench 등 신규 알고리즘 모듈 추가) 완료 후 재페치하여 흡수.
+`~/core/qmirror/` v2.6.0 — 62,402 LoC across 38 module directories — 는 dancinlab quantum-stack 흡수 시리즈의 마지막 후보. qmirror 최종 업그레이드 (clifford-data-regression · hardy-multipartite · mabk-ardehali · page-curve-scrambler · pseudo-telepathy-doily · qdrift-hamiltonian-sim · qfi-spin-motion · rpe-gate-calib · shallow-shadows · steering-gme-minimal · symmetry-adjusted-shadows · wigner-negativity-discrete · mirror-fidelity-bench 등 신규 알고리즘 모듈 추가) 완료 후 재페치하여 흡수.
 
 qmirror = ≤30-qubit laptop-grade QPU-equivalent substrate. IBM Cloud / Braket QPU 렌탈의 drop-in 대체 (저잡음 ≤30-qubit 영역 한정 — Casio vs Rolex).
 

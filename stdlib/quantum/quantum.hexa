@@ -1,7 +1,7 @@
 #!hexa strict
 // stdlib/quantum/quantum.hexa — qmirror stdlib CLI dispatcher
 //
-// @version 2.0.0
+// @version 2.6.0
 // @capabilities [quantum, simulation, dispatch, cli, subprocess]
 // @stability stable
 // @since 2026-05-16
@@ -12,7 +12,7 @@
 // qmirror — laptop-grade drop-in replacement for IBM Cloud / Braket QPU rental
 // for the ≤30-qubit low-noise envelope. Pure-hexa Aer-compatible state-vector
 // kernel + 27 quantum algorithm modules. RFC 045 absorbed dancinlab/qmirror
-// v2.0 (62,402 LoC, 38 module dirs); original SSOT frozen to
+// v2.6.0 (62,402 LoC, 38 module dirs); original SSOT frozen to
 // ~/core/archive_qmirror/ (헌법 v2 룰 3).
 //
 // Modules are standalone programs (each has main + sentinel). chemistry_vqe
@@ -20,9 +20,9 @@
 // <feature>/module/ structure is preserved verbatim under stdlib/quantum/
 // so all relative imports resolve unchanged.
 //
-// Source: RFC 045 — absorbs ~/core/qmirror/cli/qmirror.hexa v2.0.
+// Source: RFC 045 — absorbs ~/core/qmirror/cli/qmirror.hexa v2.6.0.
 
-let VERSION = "2.0.0"
+let VERSION = "2.6.0"
 
 fn _shq(s: str) -> str {
     return "'" + s.replace("'", "'\\''") + "'"
@@ -71,7 +71,7 @@ fn _module_path(sub: str) -> str {
 
 fn cmd_help() {
     println("hexa qmirror " + VERSION + " — Quantum Mirror substrate (≤30-qubit laptop-grade)")
-    println("RFC 045 absorption of dancinlab/qmirror v2.0 (62,402 LoC, 38 module dirs)")
+    println("RFC 045 absorption of dancinlab/qmirror v2.6.0 (62,402 LoC, 38 module dirs)")
     println("")
     println("USAGE")
     println("  hexa qmirror                              status (default)")
@@ -117,7 +117,7 @@ fn cmd_help() {
 
 fn cmd_version() {
     println("hexa qmirror " + VERSION)
-    println("stdlib/quantum — RFC 045 absorption of dancinlab/qmirror v2.0")
+    println("stdlib/quantum — RFC 045 absorption of dancinlab/qmirror v2.6.0")
     println("license: Apache-2.0  |  DOI: 10.5281/zenodo.20102964")
 }
 
