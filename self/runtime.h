@@ -370,8 +370,17 @@ HexaVal rt_file_size(HexaVal path);                    /* runtime.c:5110 */
 HexaVal hexa_setenv(HexaVal name, HexaVal value);                                  /* runtime.c:10777 */
 HexaVal hexa_cstring(HexaVal s);                                                   /* runtime.c:6342 */
 HexaVal hexa_ptr_write(HexaVal ptr, HexaVal offset, HexaVal val);                  /* runtime.c:6556 */
+HexaVal hexa_ptr_read(HexaVal ptr, HexaVal offset);                                /* runtime.c:6575 */
 HexaVal hexa_range_array(HexaVal start, HexaVal end, HexaVal step, int inclusive); /* runtime.c:7388 */
 int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start);             /* runtime.c:4112 */
+HexaVal hexa_array_reverse(HexaVal arr);                                           /* runtime.c:4197 */
+HexaVal hexa_array_sort(HexaVal arr);                                              /* runtime.c:4240 */
+HexaVal hexa_exec_capture(HexaVal cmd);                                            /* runtime.c:10789 */
+HexaVal hexa_from_cstring(HexaVal ptr);                                            /* runtime.c:6347 */
+HexaVal hexa_to_float(HexaVal v);                                                  /* runtime.c:5507 */
+HexaVal hexa_utc_compact_now(void);                                                /* runtime.c:11391 */
+HexaVal hexa_utc_iso_now(void);                                                    /* runtime.c:11116 */
+HexaVal hexa_null_coal(HexaVal a, HexaVal b);                                      /* runtime.c:1339 */
 
 /* native/namespace.c */
 HexaVal hexa_unshare(HexaVal flags_v);     /* native/namespace.c:37 */
