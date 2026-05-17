@@ -187,6 +187,8 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args);     /* runtime.c:5231 */
 HexaVal hexa_char_code(HexaVal s, HexaVal idx);       /* runtime.c:6519 */
 HexaVal rt_str_to_upper(HexaVal s);                   /* runtime.c:5390 */
 HexaVal rt_str_trim(HexaVal s);                       /* runtime.c:5347 */
+HexaVal rt_str_trim_start(HexaVal s);                 /* runtime.c:6969 */
+HexaVal rt_str_trim_end(HexaVal s);                   /* runtime.c:6976 */
 int     rt_str_starts_with(HexaVal s, HexaVal prefix); /* runtime.c:3766 */
 
 /* file I/O */
@@ -236,6 +238,7 @@ HexaVal hexa_abs(HexaVal v);                                            /* runti
 /* container indexing */
 HexaVal hexa_index_get(HexaVal container, HexaVal key); /* runtime.c:2643 */
 HexaVal hexa_array_pop(HexaVal arr);                    /* runtime.c:3878 */
+HexaVal hexa_array_truncate(HexaVal arr, HexaVal new_len_v); /* runtime.c:2041 */
 
 /* map predicates */
 int     hexa_map_contains_key(HexaVal m, const char* key); /* runtime.c:2452 */

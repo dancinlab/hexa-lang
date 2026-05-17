@@ -329,6 +329,38 @@ consciousness.hexa ─┼─ target esp32  → no_std Rust → flash      ✅ co
 
 `tool/atlas_build_hxc.hexa` 한 번 생성 → `dist/atlas.hxc` 런타임 로드. feasibility 결과 도착 시 17.Y-N 항목으로 채움.
 
+## 진행 로그 — interp-retirement R7 (CLI driver self-host)
+
+### 2026-05-17 — gate #2 + gate #4: compiled `hexa` CLI driver LANDED
+
+R7 gate #2 (`hexa` CLI 드라이버 = `self/main.hexa` 가 인터프리터 없이 컴파일된
+바이너리로 동작) + gate #4 (`self/module_loader.hexa` import-flattener 의 interp-free
+실행) 완료.
+
+- **gate #4 closure 분석**: `self/main.hexa` 에는 `import`/`use` 디렉티브가 **0개**
+  — 완전 self-contained. 컴파일 closure = `main.hexa` + `runtime.c` 뿐.
+  `module_loader.hexa` 는 closure 에 **없음** — 드라이버가 런타임에 **별도 자식
+  프로세스**로 호출 (`cmd_build` flatten 단계). 따라서 module_loader 는 자체
+  컴파일 바이너리 필요.
+- **산출물**: `build/hexa_cli_driver` (compiled `self/main.hexa`),
+  `build/hexa_module_loader` (compiled `self/module_loader.hexa`). 둘 다
+  `hexa_v2 → C → clang` (runtime.c 2nd-TU 단일링크 모델, `tool/build_interp.hexa`
+  와 동일).
+- **드라이버 wiring**: `resolve_module_loader_compiled()` 신규 추가 — `cmd_build`
+  의 flatten 단계가 컴파일된 module_loader 바이너리를 우선 탐지, 있으면
+  interp 없이 직접 호출. 없을 때만 interp + `module_loader.hexa` 소스 fallback.
+- **검증**: 컴파일 드라이버의 `build`/`parse`/`--version`/`--help` 가 interp-driver
+  와 byte-identical. `use`-bearing 파일 build 시 컴파일 module_loader 가
+  interp-free 로 flatten → 정상 바이너리 산출. build 회귀 2건은 대상 파일
+  자체의 기존 codegen 이슈 (interp-driver 도 동일 실패).
+- **canonical recipe**: `tool/build_hexa_cli.sh` (5-stage, `tool/build_interp.hexa`
+  구조 미러).
+- **runtime.h 추가 (additive forward-decls only)**: `hexa_array_truncate`,
+  `rt_str_trim_start`, `rt_str_trim_end` — runtime.c 에 정의 존재했으나
+  헤더 미선언이던 항목. module_loader 컴파일 시 표면화.
+- 남은 R7: `run` 서브커맨드는 여전히 별도 인터프리터 바이너리로 위임
+  (= 인터프리터 본체, 별도 retire 트랙). 드라이버 자체는 interp-free 달성.
+
 ## HEXA만의 불가침 영역
 
 1. **n=6 수학적 완전성**: 모든 설계 상수가 하나의 정리에서 유도 (σ·φ=n·τ ⟺ n=6)
