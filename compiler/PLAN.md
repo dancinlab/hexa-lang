@@ -457,3 +457,70 @@ on a clean origin/main base, independent of subagent worktree):
   `AtlasNode{GradeInfo,EdgeInfo}`, `_parse_json_str_arr`, real data). **Separate real-data-
   dependent codegen-correctness bug** — likely struct-return ABI or `_split_pipes` /
   `_parse_json_str_arr` frame interaction. Tracked as task #24.
+
+### 진행 로그 — #24 ROOT-CAUSED + FIXED — continue mis-bound to sibling inner loop (cycle h19)
+
+**Outcome**: bug #24 (the last self-host atlas-load garbage-tag crash) root-caused and
+fixed. NOT a struct-return ABI bug — it is a **HIR→MIR loop-sentinel scoping bug** in
+`compiler/lower/hir_to_mir.hexa::_patch_loop_sentinels`.
+
+**Root cause**: `_patch_loop_sentinels` scanned *every* block for `-7002` (continue) /
+`-7001` (break) sentinels and bound them to the loop currently being lowered. The
+"innermost-first" reasoning held for a `continue` *nested inside* an inner loop, but
+**not** for a `continue` that is a textual *predecessor sibling* of an inner loop within
+the same outer body. In `compiler/atlas/hxc_loader.hexa::load_atlas_hxc`:
+
+```
+while lineno < n {
+  ...
+  if len(cells) != len(active_cols) { println(...); continue }  # OUTER continue (block X)
+  let mut dense = []                                            # bb37
+  while k < 16 { dense.push(...) }                              # inner loop → its
+  ...                                                           #   _patch_loop_sentinels
+  out.push(_build_node(dense))                                  #   captures block X's -7002
+}
+```
+
+The inner `while k<16`'s `_patch_loop_sentinels` (runs during outer body lowering) found
+the OUTER `continue` sentinel still unresolved in earlier block X and rebound it to the
+**inner** header (bb38), skipping `let mut dense = []` (bb37). `dense` (frame slot
+`sp+1680`) was then read uninitialized → non-deterministic
+`container is not an array (tag=<garbage>)` the instant a self-hosted binary loaded the
+real `dist/atlas.hxc`. hexa_v2's C path was unaffected (real C `continue`); only
+aprime_cc's arm64 lowering miscompiled it. lldb pinned `_build_node_bb0+16`; asm trace
+of `_load_atlas_hxc` showed the malformed-row `println` branch ending with
+`b __L92b6_load_atlas_hxc_bb38` (inner loop) instead of the outer header.
+
+**Fix** (`compiler/lower/hir_to_mir.hexa`, surgical, correctness-preserving):
+block ids are strictly monotonic (`_new_block`), so every block belonging to a loop's
+header/body/after has `id >= header_id`, while an enclosing loop's continue sentinel
+lives in a pre-existing block with `id < header_id`. Added `scope_min` param to
+`_patch_loop_sentinels`; blocks with `id < scope_min` are skipped; the sole call site
+(`while` lowering) passes `header_id`. Outer-loop sentinels are left for the outer loop's
+own `_patch_loop_sentinels`.
+
+**Verification**:
+- `tool/build_aprime.sh` smoke `exit(6*7)==42` **PASS** (fixed aprime_cc).
+- Repro: aprime_cc-compiled `hxc_loader` closure (arm64 path) now loads **15952 nodes**
+  from real `dist/atlas.hxc` (was: deterministic `tag=-120811520` crash) — matches the
+  hexa_v2 C oracle exactly (`row0 kind=P`, `rowL grade=10`).
+- Regression: byte-IDENTICAL asm vs pre-fix aprime_cc on programs with single loops,
+  correctly-nested `continue`, and nested loops; semantic run a.hexa=42 / b.hexa=19. Zero
+  regression — only the bug's sentinel binding changes.
+- **Self-host**: fixed ap1 compiles the full 38-file / 22,128-line flattened
+  `compiler/main.hexa` → 223,696-line arm64 asm (68s, exit 0, only 22 HX4001 warnings,
+  0 errors). ap2 (assembled + linked with runtime.c + sha256/list_dir stubs) **loads the
+  real 16k-row `dist/atlas.hxc` with 15952 nodes and ZERO garbage-tag crash** — the #24
+  blocker is eliminated at the true self-host level. The prior `_normalize_argv`
+  arg-handling tag corruption was a *symptom* of the same #24 bug and is also gone (ap2
+  `--version` / arg parsing work).
+
+**Self-host fixpoint NOT yet reached — a 3rd, distinct bug now exposed (task #25)**:
+ap2 (self-hosted, asm-compiled compiler) runs frontend + emits the asm header but its
+per-function emit loop produces **zero function bodies** (smoke → 4-line header only;
+ap1 → correct 28-line `_main`; same for a 2-func program: ap2 0 funcs vs ap1 2 funcs).
+Not a timeout (inputs are tiny) and not atlas-dependent (reproduces with no
+`dist/atlas.hxc` in cwd). This is a separate self-host codegen-emptiness bug that was
+previously masked — ap2 used to crash at atlas-load (#24) before ever reaching codegen.
+Out of scope for #24; tracked as #25 for the next focused cycle (compare ap2 vs ap1
+self-compile asm at the emit-pass function-iteration boundary).
