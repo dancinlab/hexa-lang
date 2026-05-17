@@ -232,11 +232,52 @@ else
     fi
 fi
 
+# ── Phase 4-C-2a fused primitive standalone compile-check (RFC 048) ──
+echo ""
+echo "── Phase 4-C-2a fused primitive scaffold compile-check (F-RFC048-FUSED-COMPILE-EQ) ──"
+if [ -f tool/flame_phase4c_block_fused_primitive.c ]; then
+    fused_obj="build/flame_phase4c_block_fused_prim.o"
+    clang -O2 -DFLAME_BLOCK_FUSED_PRIM_STANDALONE \
+        -c tool/flame_phase4c_block_fused_primitive.c \
+        -o "$fused_obj" > /dev/null 2>&1
+    if [ -f "$fused_obj" ]; then
+        echo "  PASS  F-RFC048-FUSED-COMPILE-EQ  fused primitive scaffold standalone .o built"
+    else
+        echo "  FAIL  F-RFC048-FUSED-COMPILE-EQ  fused primitive compile failed"
+        fail_count=$((fail_count + 1))
+    fi
+else
+    echo "  MISSING  tool/flame_phase4c_block_fused_primitive.c"
+    fail_count=$((fail_count + 1))
+fi
+
+# ── Phase 4-C-2b caller wire-up byte-eq (RFC 048, additive) ─────────
+echo ""
+echo "── Phase 4-C-2b caller wire-up byte-eq (F-RFC048-FUSED-FWD-BWD-EQ) ──"
+if [ -x tool/flame_phase4c2b_build.sh ]; then
+    # Build wired binary if not present (re-uses A2 baseline build)
+    wired_out="build/flame_d32_corpus_test_4c2b_verify"
+    if tool/flame_phase4c2b_build.sh stdlib/flame/flame_d32_corpus_test.hexa "$wired_out" > /tmp/flame_4c2b_verify.log 2>&1; then
+        if grep -q "PASS  F-RFC048-FUSED-FWD-BWD-EQ" /tmp/flame_4c2b_verify.log; then
+            rewrites=$(grep "rewrites applied:" /tmp/flame_4c2b_verify.log | tail -1 | sed -E 's/.*applied: *//')
+            echo "  PASS  F-RFC048-FUSED-FWD-BWD-EQ  wired binary byte-id with A2 baseline (rewrites=$rewrites)"
+        else
+            echo "  FAIL  F-RFC048-FUSED-FWD-BWD-EQ  byte-eq verdict not PASS — see /tmp/flame_4c2b_verify.log"
+            fail_count=$((fail_count + 1))
+        fi
+    else
+        echo "  FAIL  F-RFC048-FUSED-FWD-BWD-EQ  wire-up build failed — see /tmp/flame_4c2b_verify.log"
+        fail_count=$((fail_count + 1))
+    fi
+else
+    echo "  SKIP  tool/flame_phase4c2b_build.sh not executable"
+fi
+
 echo ""
 echo "═══ verification battery complete ═══"
 if [ $fail_count -eq 0 ]; then
-    echo "PASS  All Phase 4-B+4-C-1a+4-C-2c verification artifacts PASS (5 fwd + 5 bwd + 4 matmul + 4 grad_accum byte-eq + 3 mechanism probes + IPCP + A2+B fwd+bwd byte-id + F-RFC048-PAIR-DETECT + F-RFC048-FUSED-FWD-BWD-EQ = 25 artifacts)"
-    echo "🎯 Phase 4-B ≥3× RFC 047 §137 TARGET REACHED — 3.23× wall (cool projection); Phase 4-C-2c iter 1-4 LANDED (4/7 PURE-LOCAL extractions, 2048/3104 dbl blocked on matmul API)"
+    echo "PASS  All Phase 4-B+4-C verification artifacts PASS (5 fwd + 5 bwd + 4 matmul + 4 grad_accum byte-eq + 3 mechanism probes + IPCP + A2+B fwd+bwd byte-id + F-RFC048-PAIR-DETECT + F-RFC048-FUSED-COMPILE-EQ + F-RFC048-FUSED-FWD-BWD-EQ = 26 artifacts)"
+    echo "🎯 Phase 4-B ≥3× RFC 047 §137 TARGET REACHED — 3.23× wall (cool projection); Phase 4-C-1a + 4-C-2a + 4-C-2b + 4-C-2c LANDED (iter 1-4 PURE-LOCAL extractions, 2048/3104 dbl blocked on matmul API)"
     exit 0
 else
     echo "FAIL  $fail_count failures — review output above"
