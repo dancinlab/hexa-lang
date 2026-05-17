@@ -900,3 +900,37 @@ softmax forge kernel (없으면 attention softmax host-bound 잔류 =
 잔여 wall bound). link #1 verdict 와 독립·non-overlapping
 (runtime_cuda.c additive 14th kernel + 신규 leaf byte-eq test).
 worktree-isolated sub-agent, experiment-driven (leaf test = 측정).
+
+### 2026-05-18 — Phase 4-D-9 gap#1: causal-softmax kernel (14th, additive)
+
+worktree-isolated sub-agent (commit `d3eb83af` → cherry-pick
+`fe035806`). **strictly additive** `self/cuda/runtime_cuda.c` +125/−0
+(`git diff --numstat = 125 0`, 2 insertion hunks, 12 verified +
+RFC 058 13th + 모든 기존 wrapper byte-identical):
+- `__device__ _hx_dt_exp_dev` — `flame_g7_dt_exp` verbatim port
+  (**byte-eq 함정 회피**: 기존 softmax_rows 는 libm exp, flame
+  attention 은 dt_exp 다항근사 — device dt_exp 가 char-for-char 동일
+  → numerical contract = row-reduction reorder 만, exp-algo gap 0)
+- `__global__ _hx_cuda_kern_causal_softmax_rows` — 1 block/row, causal
+  prefix L=i+1, deterministic block tree, j≥L 정확히 0.0, **divide-
+  normalize** (CPU ref `/= tot` mirror, reciprocal ULP gap 제거)
+- `_hx_cuda_farr_causal_softmax_rows_gpu` wrapper (기존 softmax_rows
+  wrapper mirror, `extern "C"` 구조 내)
+- leaf oracle `tool/flame_phase4d9_causal_softmax_oracle.{c,sh}` +
+  doc (splice 불필요 — wrapper 직접 호출)
+
+**self-check ($0, parent 재검증 verbatim)**: d9 oracle no-CUDA →
+`max|Δ|=0.000e+00 PASS F-PHASE4D9-CAUSAL-SOFTMAX` · d7 기존 oracle
+회귀 없음 → `max|Δ|=0.000e+00 PASS` · `--cuda` SYNTACTIC-PASS ·
+runtime_cuda.c base-vs-modified diagnostic-set 동일 (0 new, 기존
+nvcc-헤더 부재 진단만).
+
+**g3 정직 scope**: 검증된 building block + leaf oracle 만. **미배선**
+(wiring 은 후속 dev_view-chain link; 배선 without 전환 = design-first
+금지). **단독 wall-mover 아님** (closure all-or-nothing). `--cuda`
+numeric 은 GPU 필요 → parent (cheap fire).
+
+**GPU 검증 dispatch**: `tool/dispatch_phase4d9_causal_softmax_cuda.sh`
+(d7 dispatch fork — d9 는 splice 불필요 → 3 파일만:
+oracle.{c,sh}+runtime_cuda.c). RFC 058 교훈(unverified kernel 활성이
+2 paid fire 낭비) → building block 도 wiring 前 GPU 검증.
