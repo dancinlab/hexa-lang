@@ -356,6 +356,26 @@ HexaVal hexa_farr_add_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);
 HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v, HexaVal b_v, HexaVal bc_v);
 HexaVal hexa_farr_rope_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v, HexaVal T_v, HexaVal nh_v, HexaVal hd_v);
 
+// ── Phase 4-D-8: redundant pre-op H2D elision (byte-eq-exact) ────────────
+// Every scratch farr below is built host-side and then immediately passed
+// to a forge `*_gpu` op. The forge substrate (self/cuda/runtime_cuda.c)
+// uploads each op input UNCONDITIONALLY via the internal `_h2d` helper
+// (runtime_cuda.c:110 — always cudaMemcpy H2D; it has NO residence-skip,
+// it only CLEARS dirty_dev/loc AFTER the copy, never gates ON them). So
+// the explicit `hexa_farr_to_device(scratch)` that precedes each `*_gpu`
+// call is a SECOND, fully redundant cudaMemcpy of the identical (size-
+// unchanged → no realloc) buffer. Eliding it is byte-eq-EXACT: the forge
+// op's own `_h2d` performs the authoritative upload from the same,
+// host-unmutated buffer, so the resulting device bytes are bit-identical;
+// the only removed effect is the duplicate PCIe transfer (~halves the H2D
+// traffic for every non-cuBLAS op: RMSNorm/RoPE/silu/mul/add/softmax).
+// This is NOT "true persistent residency" — the host stays authoritative
+// and every op still round-trips ONCE (see PHASE4D8 analysis §"scope").
+// It is the byte-eq-safe primitive-discipline win available at $0 Mac.
+// No-CUDA Mac build: hexa_farr_to_device is already a no-op (returns 1) so
+// this macro changes nothing there — d=32·3L is the _cpu path regardless.
+#define hexa_farr_to_device(h) ((void)0)
+
 // ── GPU-resident row-RMSNorm with per-channel gain ──────────────────────
 // Computes, for each of T rows of width d:  out[i·d+c] = γ[c] · x̂[i·d+c]
 // where x̂ = x / sqrt(mean(x²)+eps). The gain-free normalize is the forge
@@ -901,6 +921,11 @@ static inline void flame_block_generic_fwd_primitive(
                                               T, d, nh, nkv, h);
     }
 }
+// Phase 4-D-8: scope the redundant-H2D-elision macro to THIS primitive
+// only — the a2 build concats fwd then bwd into one TU, and bwd re-emits
+// `HexaVal hexa_farr_to_device(HexaVal);` forward-decls that must NOT be
+// macro-expanded. #undef here keeps the elision strictly fwd-local.
+#undef hexa_farr_to_device
 #endif  // !FLAME_BLOCK_PRIM_STANDALONE
 
 #ifdef FLAME_BLOCK_PRIM_STANDALONE

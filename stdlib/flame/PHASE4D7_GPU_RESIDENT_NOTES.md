@@ -180,3 +180,82 @@ fire #6 measures whether the GPU-resident A2 block clears the wall. The
 only remaining hot-path CPU op is the per-row causal attention softmax
 (a `T`-row reduction, not `d`-dominated); RoPE is now GPU-routed via the
 forge `rope`/`rope_bwd` kernels.
+
+## 9. Phase 4-D-8 — TRUE persistent residency: honest scope verdict
+
+> Investigated for fire #9. Conclusion: **true persistent device
+> residency is NOT achievable as a primitive-discipline change** — it
+> requires a runtime.c / runtime_cuda.c residence-API redesign (a
+> deeper, multi-cycle effort). A byte-eq-exact partial win WAS landed.
+
+### Runtime.c residence-API finding (the decisive fact)
+
+`self/cuda/runtime_cuda.c:_h2d` (line ~110) and every forge `*_gpu`
+kernel host-wrapper (`mul_gpu`, `add_gpu`, `rmsnorm_rows_gpu`, …, and
+`matmul_gpu`) upload their inputs **unconditionally**:
+
+- `_h2d(id)` always issues `cudaMemcpy(...HostToDevice)` (line ~134).
+  It only **clears** `dirty_dev`/`loc=MIRRORED` *after* the copy
+  (lines 144-145) — it **never reads** `loc`/`dirty_dev` to *skip* the
+  H2D. There is **no residence-aware H2D-skip** in the substrate.
+- every kernel wrapper does `_h2d(in_a); _h2d(in_b); _ensure_dev_buf
+  (out); kernel<<<>>>; _d2h_out(out);` — `_d2h_out` (line ~403)
+  **always** `cudaMemcpy(...DeviceToHost)`; there is **no D2H-defer**.
+
+So Option A's premise ("runtime.c already supports residence-aware
+H2D-skip; the primitive just calls to_device once") is **false** — the
+substrate has no such check.
+
+### Why the deeper API is required (not a primitive call-discipline fix)
+
+The A2 primitive's dataflow is **host-authoritative by construction at
+three layers**: (a) each primitive `hexa_farr_zeros`-allocates *fresh
+scratch* and copies a *slice* of host `Bc`/`Bp` into it, (b) the
+forge op allocates a *fresh output* farr, (c) `_h2d`/`_d2h_out` always
+round-trip. Bc is sliced in/out **host-side between every op**, so even
+a hypothetical "skip H2D if loc==DEVICE" would read **stale** device
+bytes (the host buffer was mutated by the inter-op slice copy). True
+residency needs the primitives to operate on **device-resident
+sub-views** (offset+len into one resident Bc device buffer) — and
+**no device-side slice/offset/view API exists** anywhere in
+runtime.c or runtime_cuda.c (verified by grep: zero `farr_slice` /
+`farr_view` / device-offset surface). Adding one — plus making every
+forge kernel accept a (base_id, offset, len) device triple and defer
+D2H until a host read — is the genuine multi-cycle architecture
+between fire #8 and the GOAL. It also **must not** disturb the
+Phase 4-D-5-3 11/11 byte-eq oracle (`runtime_cuda.c` is verified
+substrate), so it is a careful, reviewable RFC-scope change, not a
+patch. **This is the honest deeper truth (matches FIRE8 §6).**
+
+### What WAS landed (byte-eq-exact, $0 Mac, primitive-discipline)
+
+Elided the ~30 **redundant explicit pre-op** `hexa_farr_to_device
+(scratch)` calls in `flame_phase4d7_block_{fwd,bwd}_primitive.c` via a
+primitive-local `#define hexa_farr_to_device(h) ((void)0)` (scoped
+with `#undef` at each primitive's region end so the a2-build concat
+TU's bwd forward-decls are not macro-expanded). Each elided call was a
+**second, fully redundant `cudaMemcpy H2D`** of a size-unchanged buffer
+that the forge op's own internal `_h2d` re-uploads anyway. Removing it
+is **byte-eq-EXACT** (the forge op's `_h2d` performs the authoritative
+upload from the same host-unmutated buffer → bit-identical device
+bytes; the only removed effect is the duplicate PCIe transfer) and
+**~halves the H2D traffic for every non-cuBLAS op** (RMSNorm / RoPE /
+silu / mul / add / softmax scratch). This does **not** make the trainer
+GPU-resident — host stays authoritative, one round-trip per op remains
+— but it is the real, measurable, invariant-safe reduction available
+without touching the verified substrate. Verified: verify_all 26
+byte-eq artifacts all `max|Δ|=0.0` (unchanged — verify_all's leaf
+pipeline never compiles these files); d=768·12L no-CUDA build
+F-RFC047-A2-COMPILE PASS; d=768·12L `-DHEXA_CUDA` syntactic `.o`
+compiles clean.
+
+### Next — fire #9 (nohup-detached, pre-approved)
+
+Re-fire the d=768·12L `--cuda` trainer on A100/H100 for the F-RFC046
+wall measurement with the halved-H2D primitives. Honest expectation:
+this removes the *duplicate* per-op H2D but **not** the structural
+per-op round-trip — step time should improve but is unlikely to clear
+the PyTorch wall by itself. The true-residency RFC (device sub-view API
++ D2H-defer + oracle-preserving substrate change) remains the genuine
+remaining architecture; fire #9 measures how much the redundant-copy
+elision alone buys, isolating the residual structural cost.
