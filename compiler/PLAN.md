@@ -42,6 +42,70 @@
 
 (append-only)
 
+### 2026-05-18 — gate-1 low-level memory-builtins cluster — tier-1 native catch-up (`gate1-memory-builtins`)
+
+gate ① CGFAIL 6건 중 **low-level memory builtins** cluster 종결. 영향
+테스트: `t_multiarch_cpu_smoke` · `t35_hxqwen14b_abi_smoke` ·
+`t36_serve_alm_smoke` · `t37_hxqwen14b_day2_smoke`.
+
+**근본 원인**: `self/ml/cpu_forward_tiny.hexa` · `self/ml/qwen14b.hexa` ·
+`self/serve/http_server.hexa` 가 쓰는 메모리/포인터 빌트인이 tier-2
+(`self/codegen_c2.hexa` §G5/B3 — `hexa_ptr_*` 런타임 심볼로 lowering,
+`self/runtime.c` + `native/tensor_kernels.c` 가 구현) 에서는 동작하나
+tier-1 native compiler (`compiler/`) 에는 등록·lowering 둘 다 없어
+aprime_cc 가 codegen 전 `HX2001 undefined name` 으로 abort. 신규 설계
+아님 — registration + lowering 갭. interp / runtime 시맨틱 변경 0
+(`@D g_inbox_dual_track` — 양쪽 이미 정상, tier-1 만 따라잡음).
+
+**수정 (2 파일)**:
+- `compiler/check/bind.hexa` `_bind_builtin_names()`: 14개 빌트인을
+  allowlist 에 추가 — `alloc_raw free_raw ptr_from_int write_f32
+  write_i32 write_i64 deref_f32 deref_i32 ptr_write_f32 ptr_write_i32
+  ptr_read_f32 ptr_read_f64 ptr_read_i32 ord`.
+- `compiler/codegen/arm64_darwin.hexa`:
+  - `_builtin_runtime_sym()`: 11개 직결 빌트인 → `hexa_ptr_*` 심볼
+    매핑 (제네릭 STMT_CALL emit 경로가 verbatim lowering — 인자쌍
+    x0:x1/x2:x3/x4:x5, bl, x0:x1→dst; special-branch·ret-box 불필요).
+  - STMT_CALL: `ord(s)` → `hexa_char_code(s, TAG_INT 0)` special
+    branch (codegen_c2.hexa:4301 동치); `ptr_from_int(x)` → identity.
+- `realloc_raw` · 무인자 `alloc` 는 codegen_c2 · runtime 어디에도
+  없어 (task 의 추측성 sibling) 등록 제외 — 등록만 하면 link 실패.
+
+**검증 (compiled path only, HEXA_MAC_BUILD_OK=1)**:
+- aprime_cc 재빌드 2,072,336 B, smoke `exit(6*7)==42` PASS.
+- 4 테스트: 메모리-빌트인 `HX2001` 전부 소멸 (재현 시 `alloc_raw`
+  `write_f32` `deref_f32` `ord` 등 → 0건).
+- gate-1 44-file sweep (tier-1 aprime vs `hexa build` oracle):
+  **36/44 MATCH** — baseline 36/44 대비 회귀 0. 4 테스트는 여전히
+  APFAIL 이지만 사유가 빌트인이 **아님** (아래 잔여 블로커 참조) —
+  flip 0/4, 그러나 빌트인 클러스터는 종결.
+- ap1(baseline 2480fd20) vs ap1-fixed: 메모리-빌트인 미사용 프로그램
+  5/5 asm byte-identical (`prime_pair` · `reachability` ·
+  `atlas_n6_axes` · `atlas_real_limits` · `vortex_math_verifier`).
+- self-host fixpoint: 38-file compiler closure flat → ap1_base vs apm
+  emit asm **9,303,877 B byte-identical** → apm 은 fixpoint 등가,
+  fixpoint 보존.
+
+**잔여 비-빌트인 블로커 (다음 cycle)**:
+- `t_multiarch_cpu_smoke`: 유일 잔여 = `HX3001 type mismatch` at
+  `cpu_forward_tiny.hexa:55:25` — `(k - 50000) * 0.000004` 의 int×float
+  혼합 산술을 tier-1 typechecker 가 거부. HX3001 해결 시 MATCH 예상
+  (oracle rc=0 정상).
+- `t35` · `t37`: tier-1 parser 가 `extern fn` 위의 `@link("...")`
+  attribute 를 미지원 → `HX0011`/`HX0012 expected closing brace ...
+  found KwFn` desync, 후속 top-level 선언 (`let mut ok` 등) 삼킴 →
+  `undefined name ok` 연쇄. 최소 재현 `@link("x")\nextern fn xf()->int
+  \nlet FOO=42` 도 동일 재현. oracle rc=0 정상.
+- `t36_serve_alm_smoke`: `self/ml/qwen14b.hexa` 의 `HXQWEN14B_*` 상수
+  (`let HXQWEN14B_OFF_*` — line 65~81 top-level) 가 `@link` extern 뒤에
+  배치돼 동일 parser desync 로 삼켜져 `HX2001 undefined` 연쇄. 추가로
+  tier-2 oracle (`hexa build`) 자체도 t36 에서 clang compile 실패 —
+  oracle 가 깨져 있어 tier-1 완벽해도 MATCH 불가. **3 테스트 (t35·
+  t37·t36) 공통 단일 근본원인 = tier-1 parser `@link` extern-attribute
+  미지원**; 1건 수정으로 셋 다 풀림.
+
+커밋: `1f01b5ea` (branch `gate1-memory-builtins`).
+
 ### 2026-05-17 — 13 DIFF 정밀 3-way 재분류 (aprime / interp / hexa-build) — 실제 aprime 갭 정밀화
 13 DIFF 중 atlas verifier 5 + suspect-interp 2 = 7건을 aprime/interp/hexa-build 3-way diff.
 
