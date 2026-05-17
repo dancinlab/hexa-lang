@@ -24,7 +24,7 @@
 
 **interp-retirement R3-R6 substantially LANDED** (PLAN-interp-retirement.md 가 1차 SSOT, 본 파일이 신규 cycle log SSOT).
 
-- aprime_cc-direct path: 60-broad sweep **30/60 (50%)** byte-identical (재측정 2026-05-17 cycle-end)
+- aprime_cc-direct path: 60-broad sweep **34/60 (57%)** byte-identical (재측정 2026-05-17, atlas SIGSEGV + CGFAIL fix 반영)
 - hexa-build path (tier-2, hexa_v2 → C → clang): **38/60 (63%)** baseline → 활성화 후 ~53-54/60 예상 (재측정 펜딩)
 - 3-tier wrapper: `bin/hexa-run-native` 가 tier 1 aprime_cc / tier 2 hexa build / tier 3 interp (HEXA_APRIME_CC opt-in)
 - 부트스트랩 hexa_v2 binary: **1,487,744 B** (H17 + fn-dedup + empty-{} + Field-rooted nested-index lvalue 활성화 완료)
@@ -41,6 +41,26 @@
 ## 진행 로그
 
 (append-only)
+
+### 2026-05-17 — 60-smoke 재측정 (atlas SIGSEGV + CGFAIL fix 반영) — 34/60 (57%)
+atlas SIGSEGV fix (`589e7c6e`) + CGFAIL triage (`702fb30a`) 반영 aprime_cc (2,050,712 B) 60-smoke vs interp 재측정.
+
+**결과**: N=60 · **MATCH=34 (57%)** · DIFF=15 · CGFAIL=10 · LINKFAIL=1. 직전 30/60 (50%) → **+4**.
+
+- atlas SIGSEGV 3건 (atlas_materials_limits · atlas_real_limits · static_index_lazy_poc) DIFF→**MATCH** — Bug 2 (arm64 16-byte spill slot) 가 광범위 적용.
+- CGFAIL 14→10 (CGFAIL agent fix).
+- 신규 노출 DIFF: divisor_field_theory · physics_constant_engine · reachability (이전 CGFAIL → 이제 compile+run 되나 DIFF — 진척).
+
+**잔여 DIFF 15 클러스터**:
+- atlas verifier semantic × 5 (atlas_cycle_append · atlas_doctrine · atlas_hxc_roundtrip · atlas_tecsl_verify · atlas_wave3)
+- t_macro_depth aprime codegen bug × 3 (abort 미발화)
+- suspect-interp × 2 (n6_uniqueness · sigma_phi_tau — interp 조기종료 의심)
+- 신규 triage × 3 (divisor_field_theory · physics_constant_engine · reachability)
+- misc × 2 (t_range_precedence · t34_net_listen)
+
+**CGFAIL 10**: 5 frontend feature 갭 (`#{}` map · `extern fn` · `try/catch` · `@select` annotation · type-inference) — RFC-sized.
+
+**R7 게이트 ① (coverage ≥ interp)**: 현재 57% — 목표 ~100%. 잔여 = frontend feature 5 + atlas verifier 5 + 기타. multi-cycle.
 
 ### 2026-05-17 — R7 gate #2 + #4: compiled `hexa` CLI driver LANDED (`24cf3e01`, subagent-cli-driver-selfhost)
 인터프리터 폐기 R7 게이트 ② (`hexa` CLI 드라이버 = `self/main.hexa` 가 interp 없이 compiled 바이너리 동작) + ④ (`self/module_loader.hexa` flatten interp-free) 종결.
