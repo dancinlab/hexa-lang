@@ -381,6 +381,7 @@ HexaVal hexa_to_float(HexaVal v);                                               
 HexaVal hexa_utc_compact_now(void);                                                /* runtime.c:11391 */
 HexaVal hexa_utc_iso_now(void);                                                    /* runtime.c:11116 */
 HexaVal hexa_null_coal(HexaVal a, HexaVal b);                                      /* runtime.c:1339 */
+HexaVal hexa_math_lgamma(HexaVal x);                                               /* runtime.c:7963 */
 
 /* native/namespace.c */
 HexaVal hexa_unshare(HexaVal flags_v);     /* native/namespace.c:37 */

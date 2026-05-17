@@ -6880,10 +6880,27 @@ fn codegen_c2_full(ast) {
         _mhi_full = _mhi_full + 1
     }
 
+    // fn-name dedup (first-wins) — mirror of gen2_module's loop.
+    // See line ~900 for the primary site. Without this, the second
+    // emitter (script-body / pure-eval path) still emits duplicate
+    // FnDecls and clang rejects the link.
+    let mut _fn_emit_seen2 = []
     let mut i = 0
     while i < len(ast) {
         let k = ast[i].kind
         if k == "FnDecl" {
+            let _fn_name2 = ast[i].name
+            let mut _fes_i2 = 0
+            let mut _fes_dup2 = false
+            while _fes_i2 < len(_fn_emit_seen2) {
+                if _fn_emit_seen2[_fes_i2] == _fn_name2 { _fes_dup2 = true }
+                _fes_i2 = _fes_i2 + 1
+            }
+            if _fes_dup2 {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen2.push(_fn_name2)
             if ast[i].name == "main" { has_user_main = true }
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
@@ -6909,12 +6926,36 @@ fn codegen_c2_full(ast) {
             fwd_parts.push(ib.forward)
             fn_parts.push(ib.fn_code)
         } else if k == "PureFnDecl" {
-            // Treat pure fn same as regular fn
+            // Treat pure fn same as regular fn (with the same first-wins dedup).
+            let _pfn_name2 = ast[i].name
+            let mut _pfes_i2 = 0
+            let mut _pfes_dup2 = false
+            while _pfes_i2 < len(_fn_emit_seen2) {
+                if _fn_emit_seen2[_pfes_i2] == _pfn_name2 { _pfes_dup2 = true }
+                _pfes_i2 = _pfes_i2 + 1
+            }
+            if _pfes_dup2 {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen2.push(_pfn_name2)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "AsyncFnDecl" {
             // RFC-022 §3.1 / §4.1 D3 — `async fn` runs synchronously in
             // stage 1 (mirror of the codegen_c2 program loop above).
+            let _afn_name2 = ast[i].name
+            let mut _afes_i2 = 0
+            let mut _afes_dup2 = false
+            while _afes_i2 < len(_fn_emit_seen2) {
+                if _fn_emit_seen2[_afes_i2] == _afn_name2 { _afes_dup2 = true }
+                _afes_i2 = _afes_i2 + 1
+            }
+            if _afes_dup2 {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen2.push(_afn_name2)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ComptimeConst" || k == "ConstStmt" {
