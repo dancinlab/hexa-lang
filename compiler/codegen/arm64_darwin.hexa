@@ -421,7 +421,18 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
                 map_slots[cur] = -1
                 map_regs[v] = ""
                 map_slots[v] = next_slot
-                next_slot = next_slot + 8
+                // HexaVal is a 16-byte (tag+union) pair stored via
+                // stp/ldp — a spill slot MUST be 16B. The victim-spill
+                // path advanced next_slot by only 8, so every slot
+                // allocated after a victim-spill overlapped the high
+                // 8 bytes of its predecessor. With enough spills the
+                // offsets wrapped and aliased low-frame slots: a 24-
+                // element [Node] array literal stored element 7+ into
+                // slots that collided with early temps, so NODES[7..]
+                // read garbage (TAG_MAP with junk map_ptr) → SIGSEGV
+                // in hexa_map_get. Matches the +16 used at the other
+                // two slot-allocation sites (lines ~448, ~468).
+                next_slot = next_slot + 16
                 let mut na: [i64] = []
                 let mut t = 0
                 while t < len(active_idx) {
