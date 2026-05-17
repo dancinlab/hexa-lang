@@ -709,3 +709,21 @@ RFC 057 §6.2 (Bc-slab dev-view consume) 는 본 패치로 substrate-수준
 잠금 해제 (Bc 가 projection 후 device-authoritative) — 다운스트림
 RMSNorm/RoPE/attention 의 실제 dev-view 소비 wiring 은 fire #13 측정
 후 follow-on. 다음 = d768 GPU fire #13.
+
+### fire #13 (RFC 058, A100) — wall 미동 + gn2 의문 2 플래그
+
+`wall=601` step 1 미완, resident 435 MiB (#12 729 보다↓). RFC 058
+agent 예고대로 consume wiring 부재 → wall 효과 0. **fire #9~#13
+5연속 wall 미동** — device residency all-or-nothing (host round-trip
+하나라도 남으면 bound), "한 조각씩 fire" 가 마지막 조각 전까지 wall=0
+임을 측정 입증.
+
+**⚠ 플래그: d768 init gn2 흔들림** — fire #8~#12 = 3.99026, fire #13
+= **3.98438** (corpus·config 동일, 유일 차이 RFC 058). RFC 058
+transpose-scatter 의 d768 GPU-path index 버그 / fallback 가능성 vs
+무관 — **미확정** (d768 GPU-path byte-eq 미검증, F-RFC058-KERNEL-BYTEEQ
+oracle dispatch 미포함). byte-eq 는 캠페인 근간 → **선결 규명 대상**.
+
+g3: gn2 의문 미해결인 채 RFC 059 (consume wiring) 쌓으면 가짜 진행
+위험. 다음 단계 = 사용자 선택 대기 (gn2 선결 규명 권고).
+분석: `state/flame_phase4d7_gpu_fire_2026_05_17/PHASE4D7_FIRE13_ANALYSIS.md`.
