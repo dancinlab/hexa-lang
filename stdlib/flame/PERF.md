@@ -35,6 +35,7 @@ wd=0.01), seed=42, corpus_consciousness_v1.jsonl byte-level (V=256).
 | Phase 4-B-3 A2 fwd+bwd FULL (5-run) | `8012c15a` | 6.836, 5.754, 5.659, 5.507, 5.783 | **5.908** | range 5.51-6.84, var 4%; A2 fwd+bwd both primitive byte-eq |
 | Phase 4-B-3 A2 + Path B FULL (5-run, thermal) | `29fe4a69` | 8.154, 7.142, 8.029, 7.807, 6.956 | 7.618 | thermal-elevated baseline 23.5s; reliable A2 → A2+B incremental 1.18× |
 | 🎯 Path B FULL cool projection | — | (5.908 × (1/1.18)) | **~5.0s** | cool baseline 16.170s ÷ 5.0 = **3.23× wall** ≥3× TARGET REACHED |
+| Cool re-measurement attempt 2026-05-17 (5-run, CONTENDED) | HEAD `9fa7250a` | baseline 51.37, 64.84, 60.28, 63.34, 57.95 / A2+B 17.12, 16.34, 18.99, 18.39, 17.44 | b=59.556 / a=17.656 | **NOT RELIABLE** (var 22.6% baseline / 15.0% A2 ≫ 5% gate). System load avg 80+ from parallel flame sessions (d768_12L + 2× hexa_interp + e.b). Ratio **3.37× consistent with prior 3.23× cool projection** — directional confirmation only. Log: `state/flame_phase4b_cool_measurement_20260517_102721.log`. |
 
 ### `_anima_dcf` (anima d_corpus_fire, built with same hexa toolchain)
 
