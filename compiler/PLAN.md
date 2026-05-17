@@ -571,3 +571,42 @@ mf.def_line }` struct 생성에 국한 — self-compiled ap2 가 `f.name`→"voi
 `f.def_line`→map-miss; block label(fn param 통한 `mf.name`)은 정상 → MFunc.name 자체는
 OK. #25(match)와 다른 root (emit/asm.hexa·codegen/arm64_darwin.hexa 에 match-expr 0개).
 struct field-access / struct_lit-value self-host miscompile. 별도 cycle (task #26).
+
+### 2026-05-17 — #26 FIXED — `_arm64_lower_func` MFunc 필드 read 가 fn-arena 경계 넘어 무효화 (72c349f8)
+
+self-host fixpoint blocker #26 종결. 자가컴파일 ap2 가 trivial smoke 에서
+`.globl void` + `map key 'name'/'blocks'/'def_line' not found` (정상=`.globl _main`).
+
+**Root cause**: `compiler/codegen/arm64_darwin.hexa::_arm64_lower_func` 가 `mf.name` /
+`mf.def_line` / `mf.blocks` 를 per-statement `_emit_arm64_stmt` 호출 전후로 반복 read.
+각 `_emit_arm64_stmt` 는 TAG_ARRAY 를 `__hexa_fn_arena_return` 경유 반환 → fn-arena
+rewind. arena-resident `mf` 맵의 문자열 스토리지가 무효화되어 *이후* `mf.name` read 가
+TAG_VOID, `mf.blocks`/`mf.def_line` 가 map-miss. 첫 block label (stmt-emit 이전 read)
+은 정상이나 `.globl`/branch-target label 은 void. ap1 (heap, single-read) 는 무증상.
+
+**Fix** (surgical, F6 forced-copy idiom 재사용 — 본 파일 _arm64_strtab_lookup P0b /
+_collect_strs P0a / hir_to_mir _lower_fn P0c-2 와 동일 패턴): fn 진입부에서
+`fn_name = mf.name.substring(0,len)` · `fn_def_line = mf.def_line` · `mf_blocks =
+mf.blocks` 스냅샷 후 arena-return 유발 루프 이전에 고정, downstream 전 read 를 arena-
+독립 핸들로 라우팅. 5개 read site (`mf.name` ×3, `mf.def_line` ×2, `mf.blocks` ×1) 치환.
+
+**Verification**: `tool/build_aprime.sh` ap1b smoke PASS (2068088 B). ap1b→ap2b
+재빌드 후 ap2b smoke = `.globl _main` + `.loc 1 1 0` 복원, ap1 정답과 **byte-identical**,
+ap2b-compiled smoke 바이너리 exit(42) PASS. 회귀 0: ap1(origin) vs ap1b(fix) 가
+smoke/r4/repro 전부 byte-identical (변경은 self-host arena 경로에서만 발현).
+
+**Self-host fixpoint: NOT yet reached.** ap2b 가 full flattened compiler 컴파일 시
+1032× HX2001 `<callee>` + `map key 'items' not found` (선두). #26 과 동일 arena-
+lifetime class 의 **별도 버그 #27**: `compiler/check/bind.hexa::bind()` 가
+`module.items` 를 818/838 행에서 body-walk (다수 fn 호출 = arena-return) 경계 넘어
+반복 read → 첫 rewind 후 `module.items` map-miss. 추가로 `compiler/lower/
+hir_to_mir.hexa` 의 struct_lit/field 경로 (`LF { name: mf.name, def_line: mf.def_line }`
+형 cross-struct-field initializer) 도 ap2b 실행 시 stmt drop + string-table 절단
+(`.LCstr1` 빈 문자열). #26 = `_arm64_lower_func` 국소, #27 = checker/parser/lower
+광범위 동일 class — 동일 forced-copy 패턴이나 다수 site, 혹은 runtime arena 근본 수정
+(`hexa_val_heapify` TAG_MAP non-arena 경로 + fn-arena rewind 시 파라미터 맵 보존)이 정수.
+다음 cycle 권장: #27 = bind.hexa `module.items` 스냅샷 + hir_to_mir struct_lit 경로
+arena-안전화 (file:symbol = compiler/check/bind.hexa::bind / compiler/lower/
+hir_to_mir.hexa::_lower_hexpr struct_lit, 증상 = self-host 시 `map key 'items'/'children'
+/'span'/'text' not found` + 1032 HX2001, why distinct = #26 은 codegen 단일 fn 국소
+스냅샷으로 종결됐으나 #27 은 frontend 다수 site / 동일 arena 근본).
