@@ -157,8 +157,9 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
     // oR2inv (offset 8720): EXTRACTED → rm2inv_loc[16] (iter 2)
 
     // ── Extracted intermediates (Bc-elimination locals) ──────────────
-    double rm1inv_loc[16];  // iter 1: replaces Bc[oR1inv + i] for i=0..T-1
-    double rm2inv_loc[16];  // iter 2: replaces Bc[oR2inv + i] for i=0..T-1
+    double rm1inv_loc[16];      // iter 1: replaces Bc[oR1inv + i] for i=0..T-1
+    double rm2inv_loc[16];      // iter 2: replaces Bc[oR2inv + i] for i=0..T-1
+    double rm1xn_loc[16 * 32];  // iter 3: replaces Bc[oRm1xn + ...] (T·d)
 
     // ═══════════════════════ FWD PHASE ═══════════════════════════════
     // (Mirrors tool/flame_phase4b3_block_fwd_primitive.c sections 1..9.)
@@ -175,7 +176,7 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
         rm1inv_loc[i] = inv;  // [extracted iter 1] was: Bc[oR1inv + i] = inv;
         for (int c2 = 0; c2 < d; c2++) {
             double xni = X[i * d + c2] * inv;
-            Bc[oRm1xn + i * d + c2] = xni;
+            rm1xn_loc[i * d + c2] = xni;  // [extracted iter 3] was: Bc[oRm1xn + i*d + c2]
             Bc[oRin + i * d + c2] = Bp[G1 + c2] * xni;
         }
     }
@@ -559,7 +560,7 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
         for (int i_r = 0; i_r < d; i_r++) {
             double dxn_i = drin[ti * d + i_r] * Bp[G1 + i_r];
             Bg[G1 + i_r] = Bg[G1 + i_r]
-                         + drin[ti * d + i_r] * Bc[oRm1xn + ti * d + i_r];
+                         + drin[ti * d + i_r] * rm1xn_loc[ti * d + i_r];  // [extracted iter 3] was: Bc[oRm1xn + ti*d + i_r]
             dot1 = dot1 + dxn_i * X[ti * d + i_r];
             dx_pos[i_r] = dxn_i;
         }
