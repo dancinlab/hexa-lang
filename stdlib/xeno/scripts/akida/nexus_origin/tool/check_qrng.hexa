@@ -1,0 +1,112 @@
+#!hexa strict
+// tool/check_qrng.hexa — nexus check qrng (ANU/CURBy 5-backend QRNG router) 분야 백엔드
+//
+// @tool(slug="check_qrng", desc="qrng domain — wraps standalone qrng CLI (dancinlab/qrng v1.0.0) chain+status surrogates")
+// @usage(HEXA_ARGV='' hexa run tool/check_qrng.hexa)
+// @exit_codes(0=PASS, 1=usage, 2=verify FAIL)
+// @sentinel(__NEXUS_CHECK_QRNG__ <PASS|FAIL> chain=<R> status=<R> selftest=<R>)
+// @origin(qrng standalone external sibling wrapper — cli/qrng.hexa router pass-through)
+//
+// 동작 모델:
+//   nexus qrng router (cli/qrng.hexa) 는 standalone /Users/ghost/core/qrng 로
+//   thin shellout. 본 wrapper 는 nexus-cli qrng 가 아닌 standalone 직접 호출
+//   (resolver/원격 라우팅 우회) 로 결정론적 selftest surrogate 검증:
+//     1) chain    — resolved router fallback chain (network-free, deterministic)
+//                   PASS sentinel = "resolved:" + "->"
+//     2) status   — registry table (5 backends, T0..T3) + EXTRACTED 검증
+//                   PASS sentinel = "verdict: EXTRACTED" + "5 backends"
+//     3) selftest — full provider sweep (advisory; T1 backends 는 network 의존)
+//                   PASS sentinel = "__QRNG_SELFTEST__ PASS"; 그 외 SKIP-advisory
+//
+// rationale: chain+status 는 standalone 가 정상 추출되었고 5-backend registry
+//   가 invariant 함을 결정론적으로 검증. selftest 는 외부 provider rate-limit
+//   /network 의존이라 nexus check 정상 흐름에서는 advisory(SKIP-like) 처리.
+//
+// standalone 4-tier resolution (cli/qrng.hexa 정책 미러):
+//   1. $QRNG_ROOT env
+//   2. /Users/ghost/core/qrng    ← Mac dev convention
+//   3. $HOME/core/qrng
+//   (PATH-resolved binary tier 는 wrapper 입장에서 직접 .hexa 경로 필요 → 생략)
+
+fn _argv() -> array {
+    let raw = to_string(exec("printf '%s' \"${HEXA_ARGV:-}\""))
+    let parts = split(raw, " ")
+    let mut out = []
+    let mut k = 0
+    while k < len(parts) { if len(parts[k]) > 0 { out.push(parts[k]) }; k = k + 1 }
+    return out
+}
+
+fn _has(a: array, f: string) -> bool {
+    let mut i = 0
+    while i < len(a) { if a[i] == f { return true }; i = i + 1 }
+    return false
+}
+
+let ARGS = _argv()
+let QUIET = _has(ARGS, "--quiet")
+
+// ─── standalone qrng CLI 4-tier resolution ───────────────────────────
+fn _resolve_qrng_cli() -> string {
+    let env_root = to_string(exec("printf '%s' \"${QRNG_ROOT:-}\"")).trim()
+    if len(env_root) > 0 {
+        let p = env_root + "/cli/qrng.hexa"
+        if file_exists(p) { return p }
+    }
+    let mac_p = "/Users/ghost/core/qrng/cli/qrng.hexa"
+    if file_exists(mac_p) { return mac_p }
+    let home = to_string(exec("printf '%s' \"${HOME:-}\"")).trim()
+    if len(home) > 0 {
+        let hp = home + "/core/qrng/cli/qrng.hexa"
+        if file_exists(hp) { return hp }
+    }
+    return ""
+}
+
+let QRNG_CLI = _resolve_qrng_cli()
+
+// ─── subcommand wrapper ──────────────────────────────────────────────
+// pass_tokens 는 모두 stdout 에 존재해야 PASS (AND-조건); 비어있으면 SKIP.
+fn _wrap_qrng(sub: string, pass_tokens: array, quiet: bool) -> string {
+    if len(QRNG_CLI) == 0 { return "SKIP" }
+    let cmd = "HEXA_LOCAL=1 hexa run " + QRNG_CLI + " " + sub + " 2>&1"
+    let out = to_string(exec(cmd))
+    if !quiet { println(out.trim()) }
+    let mut i = 0
+    while i < len(pass_tokens) {
+        if out.index_of(pass_tokens[i]) < 0 { return "FAIL" }
+        i = i + 1
+    }
+    return "PASS"
+}
+
+// ─── chain — deterministic, network-free ─────────────────────────────
+let r_chain = _wrap_qrng("chain", ["resolved:", "->"], QUIET)
+
+// ─── status — 5-backend registry + EXTRACTED verdict ─────────────────
+let r_status = _wrap_qrng("status", ["verdict: EXTRACTED", "5 backends"], QUIET)
+
+// ─── selftest — advisory (network-dependent T1 backends) ─────────────
+//   PASS 시 PASS, 그 외 SKIP-advisory (FAIL 로 overall 끌어내리지 않음).
+fn _wrap_qrng_selftest(quiet: bool) -> string {
+    if len(QRNG_CLI) == 0 { return "SKIP" }
+    let cmd = "HEXA_LOCAL=1 hexa run " + QRNG_CLI + " selftest 2>&1"
+    let out = to_string(exec(cmd))
+    if !quiet { println(out.trim()) }
+    if out.index_of("__QRNG_SELFTEST__ PASS") >= 0 { return "PASS" }
+    return "SKIP"  // network 의존 advisory
+}
+
+let r_selftest = _wrap_qrng_selftest(QUIET)
+
+// ─── overall verdict ─────────────────────────────────────────────────
+//   chain + status 는 hard requirement (둘 다 PASS 또는 SKIP 가능; FAIL 만 차단).
+//   selftest 는 advisory: SKIP/PASS 모두 허용, FAIL 만 overall FAIL.
+let mut overall = "PASS"
+if r_chain == "FAIL" || r_status == "FAIL" || r_selftest == "FAIL" { overall = "FAIL" }
+
+// 모두 SKIP 인 경우 (standalone 미설치) → SKIP-overall 의도 표현 위해 PASS 유지
+//  (router 정책: backend 부재 = SKIP, 검증 실패 아님; check_brain 패턴 미러)
+
+println("__NEXUS_CHECK_QRNG__ " + overall + " chain=" + r_chain + " status=" + r_status + " selftest=" + r_selftest)
+if overall == "FAIL" { exit(2) }

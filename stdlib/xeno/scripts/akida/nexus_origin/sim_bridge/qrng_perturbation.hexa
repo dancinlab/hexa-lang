@@ -1,0 +1,94 @@
+// qrng_perturbation.hexa — ouroboros-meta with ANU QRNG noise injection
+//
+// Thin façade over ouroboros_shadow.hexa "qrng" mode. The shadow engine
+// IS the ouroboros_meta.hexa algorithm (verbatim constants, tournament,
+// breeding, convergence check) with a SINGLE swap: pseudo_rand(seed) is
+// replaced by the next byte from an ANU QRNG pool, mapped to [0,1).
+//
+// Nothing else changes — same 6 strategies, same tournament seeds, same
+// n6_constants, same plateau detection. If the self-reference is robust,
+// ANU noise should not destroy the attractor.
+//
+// Usage:
+//   hexa qrng_perturbation.hexa <n_trials> <gens> <hex_stream_path>
+//
+// The hex_stream_path is produced upstream by anu_long_stream.hexa or
+// any equivalent collector (256B+ recommended; runner reuses slices via
+// trial-indexed offset so each trial sees a unique window).
+
+let _a = args()
+if _a.len() < 5 {
+    println("usage: qrng_perturbation.hexa <n_trials> <gens> <hex_path>")
+    exit(1)
+}
+let mut n_trials = 0
+try { n_trials = to_int(_a[2]) } catch e1 { n_trials = 30 }
+let mut gens = 0
+try { gens = to_int(_a[3]) } catch e2 { gens = 15 }
+let hex_path = _a[4]
+
+let mut nexus_root = ""
+try { nexus_root = env_var("NEXUS") } catch e3 { nexus_root = "" }
+if nexus_root.len() == 0 {
+    let home = env_var("HOME")
+    nexus_root = home + "/Dev/nexus"
+}
+let shadow = nexus_root + "/sim_bridge/ouroboros_qrng/ouroboros_shadow.hexa"
+let hexa_bin = nexus_root + "/bin/hexa"
+
+// 2026-05-07 — sovereign-cli federation per
+// hive/spec/sovereign_cli_federation.spec.yaml. NEXUS_AKIDA_ROUTE=1 시
+// ANU stream 대신 scripts/akida 가 생성한 spike-fused stream 우선 사용.
+// probe 실패 / synth path 부재 시 원래 ANU hex_path 그대로 (terminal_safe).
+let mut effective_hex_path = hex_path
+let mut akida_route_used = "disabled"
+if env_var("NEXUS_AKIDA_ROUTE") == "1" {
+    let dispatcher = nexus_root + "/scripts/akida/dispatch.hexa"
+    let mut try_route = false
+    try { if file_exists(dispatcher) { try_route = true } } catch ef0 {}  // @allow-silent-catch
+    if try_route {
+        let probe_cmd = hexa_bin + " " + dispatcher + " probe --json 2>/dev/null; echo __RC=$?"
+        let mut probe_out = ""
+        try { probe_out = to_string(exec(probe_cmd)) } catch ep0 {}  // @allow-silent-catch  // @allow-bare-exec
+        let pi = probe_out.index_of("\"provenance\":\"")
+        let mut prov = "unknown"
+        if pi > -1 {
+            let after = probe_out.substring(pi + 14, probe_out.len())
+            let close = after.index_of("\"")
+            if close > -1 { prov = after.substring(0, close) }
+        }
+        let rc_at = probe_out.index_of("__RC=")
+        let mut probe_rc = 1
+        if rc_at > -1 {
+            try { probe_rc = to_int(probe_out.substring(rc_at + 5, probe_out.len()).trim()) } catch ep1 {}  // @allow-silent-catch
+        }
+        if probe_rc == 0 {
+            let synth_path = nexus_root + "/state/akida_synth/spike_trace.bin"
+            let mut synth_ok = false
+            try { if file_exists(synth_path) { synth_ok = true } } catch es {}  // @allow-silent-catch
+            if synth_ok {
+                effective_hex_path = synth_path
+                akida_route_used = "akida-spike-fusion:" + prov
+                eprintln("[qrng_perturbation] akida-spike-fusion fired (provenance=" + prov + ", path=" + synth_path + ")")
+            } else {
+                akida_route_used = "fallback-default:" + prov + ":synth_path_missing"
+                eprintln("[qrng_perturbation] external akida live but synth path missing — falling back to ANU stream")
+            }
+        } else {
+            akida_route_used = "fallback-default:" + prov
+            eprintln("[qrng_perturbation] external akida unavailable — falling back to ANU stream (provenance=" + prov + ")")
+        }
+    }
+}
+
+println("# qrng_perturbation: n_trials=" + to_string(n_trials) + " gens=" + to_string(gens) + " hex=" + effective_hex_path)
+println("# AKIDA_ROUTE_USED=" + akida_route_used)  // spec I3 — propagate provenance
+
+let mut t = 0
+while t < n_trials {
+    let cmd = "HEXA_LOCAL=1 " + hexa_bin + " " + shadow + " qrng " + to_string(t) + " " + to_string(gens) + " " + effective_hex_path
+    let mut out = ""
+    try { out = to_string(exec(cmd)) } catch e4 { out = "# qrng trial " + to_string(t) + " ERR" }  // @allow-bare-exec
+    println(out)
+    t = t + 1
+}

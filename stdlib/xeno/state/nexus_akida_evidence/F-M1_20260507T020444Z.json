@@ -1,0 +1,14 @@
+{
+  "falsifier_id": "F-M1",
+  "measured_ts": "2026-05-07T02:04:44Z",
+  "measured_value": {
+    "n_programs": 1000,
+    "disagreement_count": 334,
+    "disagreement_rate": 0.334,
+    "promotion_eligible": false
+  },
+  "verdict": "PLAUSIBLE-PASS",
+  "raw_log_path": "/Users/ghost/core/nexus/state/akida_evidence/F-M1_20260507T020444Z.json",
+  "hardware_present": false,
+  "command": "scripts/akida/godel_disagreement.py --simulate --n-programs 1000"
+}

@@ -80,6 +80,10 @@ fn cmd_help() {
     println("                                          Welch-t RNG indistinguishability gate")
     println("  mc-integrate [status|chain|probe-anu]   ANU-tier probe · 3-stage wire-up · live tier probe")
     println("    e.g. hexa mc-integrate estimate --constant zeta3 -N 1000000 --rng external")
+    println("  xeno [status|connect|invoke|fallback|list|roadmap|falsifier|cycle]")
+    println("                                          non-GPU exotic compute substrate SSOT (RFC 048)")
+    println("                                          AKIDA·Loihi3·Northpole·FinalSpark·CorticalLabs·IonQ·QRNG")
+    println("    e.g. hexa xeno roadmap akida          substrate roadmap · hexa xeno list")
     println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
@@ -3383,6 +3387,25 @@ if len(av) < 3 {
             mi = mi + 1
         }
         cmd_run(mci_script, mci_args)
+    } else if sub == "xeno" {
+        // RFC 048 — stdlib/xeno dispatch.
+        // stdlib/xeno/xeno.hexa parses argv topic (status/connect/invoke/
+        // fallback/list/roadmap/falsifier/cycle/--help/--version) — hexa-native
+        // CLI absorbing the original bash bin/xeno. Roadmaps + Python falsifier/
+        // cycle machinery absorbed under stdlib/xeno/.
+        let __inst_x = install_dir_from_argv0()
+        let mut xeno_script = "stdlib/xeno/xeno.hexa"
+        if len(__inst_x) > 0 {
+            let inst_path = __inst_x + "/stdlib/xeno/xeno.hexa"
+            if file_exists(inst_path) { xeno_script = inst_path }
+        }
+        let mut xeno_args = []
+        let mut xi = 3
+        while xi < len(av) {
+            xeno_args.push(av[xi])
+            xi = xi + 1
+        }
+        cmd_run(xeno_script, xeno_args)
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //

@@ -1,0 +1,369 @@
+// ═══════════════════════════════════════════════════════════
+// scripts/akida/dispatch.hexa — "use akida || fallback CPU" router
+//
+// 배경:
+//   nexus 의 어느 진입점이든 akida 가속을 시도하고 실패 시 CPU baseline 으로
+//   투명하게 폴백한다. 단일 SSOT — calc/*_verify, cli/blowup, sim_bridge 등
+//   모든 consumer 는 본 dispatch 만 호출.
+//
+// 설계:
+//   1. probe — _akida_runtime.try_akida() 를 1초 안에 판정 (akida package
+//      미설치 + AKD1000 device 모두 negative 시 false). FORCE_FALLBACK=1
+//      env 로 무조건 fallback (테스트 모드).
+//   2. route — workload 별 (energy / phi / spike / generic) 매핑된 akida
+//      harness OR CPU command 를 실행.
+//   3. emit — NDJSON meta (NEXUS_AKIDA_DISPATCH) 1줄 to stderr 로 어느
+//      경로를 탔는지 기록 — F-C honesty barrier 가 raw_log_path/measured_ts
+//      검사 시 dispatch 경로와 evidence 가 일관되는지 확인 가능.
+//
+// CLI (per hive/spec/sovereign_cli_federation.spec.yaml v1):
+//   hexa run scripts/akida/dispatch.hexa probe        → human-readable
+//   hexa run scripts/akida/dispatch.hexa probe --json → {"available":bool,"reason":str,"provenance":str,"pass":bool}
+//   hexa run scripts/akida/dispatch.hexa route <workload> [args...] [--json]
+//   hexa run scripts/akida/dispatch.hexa chain        → offline federation resolution display
+//   hexa run scripts/akida/dispatch.hexa status       → resolvability + scope (no values)
+//
+// PROVENANCE LABELS (audit trail per spec §audit_trail):
+//   akida_hw                    real AKD1000 + package
+//   akida_pkg_only              package present, device absent
+//   cpu_emulator_cnn2snn_stub   embedded CPU fallback (default tier)
+//   fallback_disabled           env FORCE_FALLBACK=1 active
+//
+// 환경 변수:
+//   AKIDA_FORCE_EMULATOR=1   _akida_runtime resolve_substrate 가 cpu_emulator 강제
+//   FORCE_FALLBACK=1         dispatch 자체가 probe 건너뛰고 무조건 cpu_cmd
+//   AKIDA_PROBE_TIMEOUT=2    probe wall-time cap (sec, default 2)
+//
+// 규칙: hexa >=/<= 금지. stdlib only.
+// 편집 금지: scripts/akida/_akida_runtime.py (substrate resolver SSOT).
+// ═══════════════════════════════════════════════════════════
+
+fn _ns_now() -> i64 {
+    let mut r: i64 = 0
+    let raw = to_string(exec("date +%s%N 2>/dev/null")).trim()  // @allow-bare-exec
+    if raw.len() > 0 && raw.contains("N") == false {
+        try { r = to_int(raw) } catch e {}  // @allow-silent-catch
+    }
+    if r < 1 {
+        let s2 = to_string(exec("python3 -c 'import time;print(time.time_ns())' 2>/dev/null")).trim()  // @allow-bare-exec
+        try { r = to_int(s2) } catch e2 {}  // @allow-silent-catch
+    }
+    if r < 1 {
+        let s3 = to_string(exec("date +%s")).trim()  // @allow-bare-exec
+        try { let sec = to_int(s3); r = sec * 1000000000 } catch e3 {}  // @allow-silent-catch
+    }
+    return r
+}
+
+fn _shq(s: string) -> string { return s.replace("'", "'\\''") }
+
+fn _meta(stage: string, route: string, workload: string, rc: i64, dur_us: i64) {
+    let mut m: [string] = []
+    m.push("NEXUS_AKIDA_DISPATCH {\"stage\":\"")
+    m.push(stage)
+    m.push("\",\"route\":\"")
+    m.push(route)
+    m.push("\",\"workload\":\"")
+    m.push(workload)
+    m.push("\",\"rc\":")
+    m.push(to_string(rc))
+    m.push(",\"duration_us\":")
+    m.push(to_string(dur_us))
+    m.push("}")
+    eprintln(m.join(""))
+}
+
+// ─── probe: akida live? ───
+// Returns triple [status, reason, provenance_label] per spec §audit_trail.
+//   status      : "available" | "unavailable"
+//   reason      : human-readable diagnostic
+//   provenance  : "akida_hw" | "akida_pkg_only" | "cpu_emulator_cnn2snn_stub" | "fallback_disabled"
+fn probe_akida() -> [string] {
+    if env("FORCE_FALLBACK") == "1" {
+        return ["unavailable", "FORCE_FALLBACK=1", "fallback_disabled"]
+    }
+    let timeout_s = if env("AKIDA_PROBE_TIMEOUT") != "" { env("AKIDA_PROBE_TIMEOUT") } else { "2" }
+    let probe_py = "import sys, os; sys.path.insert(0, 'scripts/akida'); " +
+                   "from _akida_runtime import try_akida; " +
+                   "ak, dev = try_akida(); " +
+                   "print('pkg=' + ('yes' if ak else 'no') + ' dev=' + ('yes' if dev else 'no')); " +
+                   "sys.exit(0 if (ak and dev) else (4 if ak else 5))"
+    let cmd = "timeout " + timeout_s + "s python3 -c '" + _shq(probe_py) + "' 2>&1; echo \"__RC=$?\""
+    let out = to_string(exec(cmd))                                // @allow-bare-exec
+    let rc_at = out.index_of("__RC=")
+    let mut rc: i64 = 1
+    let mut payload = out
+    if rc_at > -1 {
+        let tail = out.substring(rc_at + 5, len(out)).trim()
+        try { rc = to_int(tail) } catch e {}                       // @allow-silent-catch
+        payload = out.substring(0, rc_at).trim()
+    }
+    if rc == 0 { return ["available", payload, "akida_hw"] }
+    if rc == 4 { return ["unavailable", payload, "akida_pkg_only"] }
+    return ["unavailable", payload, "cpu_emulator_cnn2snn_stub"]
+}
+
+// ─── workload → (akida_cmd, cpu_fallback_cmd) ───
+fn workload_route(workload: string, extras_str: string) -> [string] {
+    if workload == "energy" {
+        let aki = "python3 scripts/akida/energy_meter.py --falsifier F-L1" + extras_str
+        let cpu = "python3 scripts/akida/energy_meter.py --falsifier F-L1 --simulator" + extras_str
+        return [aki, cpu]
+    }
+    if workload == "energy-sparse" {
+        let aki = "python3 scripts/akida/energy_meter.py --falsifier 'F-L1+'" + extras_str
+        let cpu = "python3 scripts/akida/energy_meter.py --falsifier 'F-L1+' --simulator" + extras_str
+        return [aki, cpu]
+    }
+    if workload == "spike" {
+        let aki = "python3 scripts/akida/qrng_entropy.py" + extras_str
+        let cpu = "python3 scripts/akida/qrng_entropy.py --spike-trace state/akida_synth/spike_trace.txt" + extras_str
+        return [aki, cpu]
+    }
+    if workload == "lyapunov" {
+        let aki = "python3 scripts/akida/lyapunov_sweep.py" + extras_str
+        let cpu = "python3 scripts/akida/lyapunov_sweep.py --simulate" + extras_str
+        return [aki, cpu]
+    }
+    if workload == "godel" {
+        let aki = "python3 scripts/akida/godel_disagreement.py" + extras_str
+        let cpu = "python3 scripts/akida/godel_disagreement.py --simulate" + extras_str
+        return [aki, cpu]
+    }
+    if workload == "phase7" {
+        let aki = "python3 scripts/akida/blowup_phase7.py" + extras_str
+        let cpu = "echo '{\"falsifier_id\":\"F-A\",\"verdict\":\"FALLBACK-CPU-NOOP\",\"hardware_present\":false,\"note\":\"blowup phase-7 baseline runs unchanged on CPU; akida ratio undefined\"}'"
+        return [aki, cpu]
+    }
+    if workload == "check-loop" {
+        let aki = "python3 scripts/akida/check_loops.py" + extras_str
+        let cpu = "echo '{\"falsifier_id\":\"F-B\",\"verdict\":\"FALLBACK-CPU-NOOP\",\"hardware_present\":false,\"note\":\"calc/*_verify baseline runs unchanged on CPU; akida ratio undefined\"}'"
+        return [aki, cpu]
+    }
+    return ["", ""]
+}
+
+fn _join_extras(extras: [string]) -> string {
+    if len(extras) < 1 { return "" }
+    let mut buf: [string] = []
+    let mut i = 0
+    while i < len(extras) {
+        buf.push(" '" + _shq(extras[i]) + "'")
+        i = i + 1
+    }
+    return buf.join("")
+}
+
+fn _has_json_flag(extras: [string]) -> bool {
+    let mut i = 0
+    while i < len(extras) {
+        if extras[i] == "--json" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _strip_json_flag(extras: [string]) -> [string] {
+    let mut out: [string] = []
+    let mut i = 0
+    while i < len(extras) {
+        if extras[i] != "--json" { out.push(extras[i]) }
+        i = i + 1
+    }
+    return out
+}
+
+fn route(workload: string, extras: [string]) -> i32 {
+    let want_json = _has_json_flag(extras)
+    let clean = _strip_json_flag(extras)
+    let extras_str = _join_extras(clean)
+    let pair = workload_route(workload, extras_str)
+    let aki = pair[0]
+    let cpu = pair[1]
+    if aki == "" {
+        eprintln("dispatch.hexa: unknown workload " + workload)
+        return 2
+    }
+
+    let p = probe_akida()
+    let avail = p[0] == "available"
+    let provenance = p[2]
+    let chosen = if avail { aki } else { cpu }
+    let route_label = if avail { "akida" } else { "fallback-cpu" }
+
+    // Spec I4 — single-line stderr fall-through notice, audible.
+    if !avail {
+        eprintln("[nexus-akida] external akida unavailable — falling back to " + provenance + " (workload=" + workload + ")")
+    }
+
+    let t0 = _ns_now()
+    let wrapped = chosen + "; echo \"__RC=$?\""
+    let out = to_string(exec(wrapped))                              // @allow-bare-exec
+    let t1 = _ns_now()
+    let rc_at = out.index_of("__RC=")
+    let mut rc: i64 = 1
+    let mut payload = out
+    if rc_at > -1 {
+        let tail = out.substring(rc_at + 5, len(out)).trim()
+        try { rc = to_int(tail) } catch e {}                         // @allow-silent-catch
+        payload = out.substring(0, rc_at)
+    }
+
+    if want_json {
+        // Federation envelope — wraps the harness JSON with audit-trail fields
+        // per spec §audit_trail. Per I3, downstream consumers read provenance
+        // from this envelope and embed it in their own results.
+        let mut env_buf: [string] = []
+        env_buf.push("{\"schema\":\"nexus.akida.dispatch.v1\"")
+        env_buf.push(",\"workload\":\"" + workload + "\"")
+        env_buf.push(",\"route\":\"" + route_label + "\"")
+        env_buf.push(",\"provenance\":\"" + provenance + "\"")
+        env_buf.push(",\"available\":" + (if avail { "true" } else { "false" }))
+        env_buf.push(",\"pass\":" + (if rc == 0 { "true" } else { "false" }))
+        env_buf.push(",\"rc\":" + to_string(rc))
+        env_buf.push(",\"duration_us\":" + to_string((t1 - t0) / 1000))
+        env_buf.push(",\"harness_payload\":")
+        // Embed the harness output verbatim — it's already JSON for most workloads;
+        // for non-JSON harnesses (phase7/check-loop noop) wrap as string.
+        let trimmed = payload.trim()
+        if trimmed.len() > 0 && trimmed.substring(0, 1) == "{" {
+            env_buf.push(trimmed)
+        } else {
+            env_buf.push("\"" + trimmed.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\"")
+        }
+        env_buf.push("}")
+        println(env_buf.join(""))
+    } else {
+        print(payload)
+    }
+    _meta("done", route_label, workload, rc, (t1 - t0) / 1000)
+    return rc as i32
+}
+
+// ─── chain: offline federation resolution display per spec §cli_surface ───
+fn chain_display(want_json: bool) -> i32 {
+    let nodes: [string] = [
+        "external_peer:akida_hw|akida.devices() returns AKD1000",
+        "external_peer:akida_pkg_only|akida package import OK, no device",
+        "embedded_self:cpu_emulator_cnn2snn_stub|scripts/akida/cnn2snn_emulator.py",
+        "terminal_safe:default_consumer|consumer's original code path (always available)"
+    ]
+    let p = probe_akida()
+    let avail_label = p[2]
+    if want_json {
+        let mut buf: [string] = []
+        buf.push("{\"schema\":\"nexus.akida.chain.v1\"")
+        buf.push(",\"would_fire_first_match\":\"" + avail_label + "\"")
+        buf.push(",\"chain\":[")
+        let mut i = 0
+        while i < len(nodes) {
+            let parts = nodes[i].split("|")
+            let kn = parts[0].split(":")
+            buf.push("{\"kind\":\"" + kn[0] + "\",\"name\":\"" + kn[1] + "\",\"detail\":\"" + parts[1] + "\"}")
+            if i + 1 < len(nodes) { buf.push(",") }
+            i = i + 1
+        }
+        buf.push("]}")
+        println(buf.join(""))
+    } else {
+        println("nexus-akida federation chain (would-fire-first-match: " + avail_label + ")")
+        let mut i = 0
+        while i < len(nodes) {
+            let parts = nodes[i].split("|")
+            let kn = parts[0].split(":")
+            let arrow = if kn[1] == avail_label { " ← FIRES" } else { "" }
+            println("  " + to_string(i + 1) + ". " + kn[0] + " :: " + kn[1] + arrow)
+            println("       " + parts[1])
+            i = i + 1
+        }
+    }
+    return 0
+}
+
+// ─── status: secret-name-only resolvability per spec §cli_surface ───
+fn status_display(want_json: bool) -> i32 {
+    let p = probe_akida()
+    let bin_check = to_string(exec("command -v hexa 2>/dev/null; echo __RC=$?"))  // @allow-bare-exec
+    let bin_ok = bin_check.contains("hexa")
+    let runtime_path = "scripts/akida/_akida_runtime.py"
+    let emu_path = "scripts/akida/cnn2snn_emulator.py"
+    let runtime_ok = file_exists(runtime_path)
+    let emu_ok = file_exists(emu_path)
+    if want_json {
+        let mut buf: [string] = []
+        buf.push("{\"schema\":\"nexus.akida.status.v1\"")
+        buf.push(",\"version\":\"1\"")
+        buf.push(",\"scope\":[\"nexus\",\"anima\"]")
+        buf.push(",\"resolvability\":{")
+        buf.push("\"hexa_bin\":" + (if bin_ok { "true" } else { "false" }))
+        buf.push(",\"akida_runtime\":" + (if runtime_ok { "true" } else { "false" }))
+        buf.push(",\"cnn2snn_emulator\":" + (if emu_ok { "true" } else { "false" }))
+        buf.push(",\"akida_package\":" + (if p[2] == "akida_hw" || p[2] == "akida_pkg_only" { "true" } else { "false" }))
+        buf.push(",\"akida_device\":" + (if p[2] == "akida_hw" { "true" } else { "false" }))
+        buf.push("}")
+        buf.push(",\"would_fire\":\"" + p[2] + "\"")
+        buf.push("}")
+        println(buf.join(""))
+    } else {
+        println("nexus-akida status:")
+        println("  hexa_bin           : " + (if bin_ok { "RESOLVED" } else { "MISSING" }))
+        println("  akida_runtime      : " + (if runtime_ok { "RESOLVED" } else { "MISSING" }))
+        println("  cnn2snn_emulator   : " + (if emu_ok { "RESOLVED" } else { "MISSING" }))
+        println("  akida_package      : " + (if p[2] == "akida_hw" || p[2] == "akida_pkg_only" { "RESOLVED" } else { "MISSING" }))
+        println("  akida_device       : " + (if p[2] == "akida_hw" { "RESOLVED" } else { "MISSING" }))
+        println("  would_fire         : " + p[2])
+    }
+    return 0
+}
+
+fn main_dispatch(a: [string]) -> i32 {
+    let mut cmd = "help"
+    if len(a) > 2 { cmd = a[2] }
+    let rest: [string] = if len(a) > 3 { a.slice(3, len(a)) } else { [] }
+    let want_json = _has_json_flag(rest)
+
+    if cmd == "probe" {
+        let p = probe_akida()
+        if want_json {
+            let mut buf: [string] = []
+            buf.push("{\"schema\":\"nexus.akida.probe.v1\"")
+            buf.push(",\"available\":" + (if p[0] == "available" { "true" } else { "false" }))
+            buf.push(",\"reason\":\"" + p[1].replace("\"", "\\\"").replace("\n", " ") + "\"")
+            buf.push(",\"provenance\":\"" + p[2] + "\"")
+            buf.push(",\"pass\":" + (if p[0] == "available" { "true" } else { "false" }))
+            buf.push("}")
+            println(buf.join(""))
+        } else {
+            println("akida=" + p[0])
+            println("reason=" + p[1])
+            println("provenance=" + p[2])
+        }
+        if p[0] == "available" { return 0 }
+        return 1
+    }
+    if cmd == "route" {
+        if len(a) < 4 {
+            println("usage: hexa run scripts/akida/dispatch.hexa route <workload> [extras] [--json]")
+            return 1
+        }
+        let workload = a[3]
+        let extras: [string] = if len(a) > 4 { a.slice(4, len(a)) } else { [] }
+        return route(workload, extras)
+    }
+    if cmd == "chain" { return chain_display(want_json) }
+    if cmd == "status" { return status_display(want_json) }
+
+    println("usage:")
+    println("  hexa run scripts/akida/dispatch.hexa probe   [--json]")
+    println("  hexa run scripts/akida/dispatch.hexa route <workload> [extras] [--json]")
+    println("  hexa run scripts/akida/dispatch.hexa chain   [--json]")
+    println("  hexa run scripts/akida/dispatch.hexa status  [--json]")
+    println("workloads: energy | energy-sparse | spike | lyapunov | godel | phase7 | check-loop")
+    println("env: FORCE_FALLBACK=1 | AKIDA_FORCE_EMULATOR=1 | AKIDA_PROBE_TIMEOUT=<sec>")
+    println("spec: hive/spec/sovereign_cli_federation.spec.yaml v1")
+    return 1
+}
+
+let _argv = args()
+let _rc = main_dispatch(_argv)
+exit(_rc)  // @allow-silent-exit

@@ -1,0 +1,22 @@
+{
+  "falsifier_id": "F-L7",
+  "measured_ts": "2026-05-07T01:32:05Z",
+  "measured_value": {
+    "shannon_bitwise": 0.9999935510714235,
+    "sub_tests": {
+      "monobit": true,
+      "runs": true,
+      "block_freq_M128": true,
+      "block_freq_M256": true
+    },
+    "sub_test_pass_count": 4,
+    "sub_test_pass_threshold": 3,
+    "spike_fusion_run": true,
+    "bits": 200000,
+    "source": "urandom"
+  },
+  "verdict": "PASS",
+  "raw_log_path": "/Users/ghost/core/nexus/state/akida_evidence/F-L7_20260507T013205Z.json",
+  "hardware_present": true,
+  "command": "scripts/akida/qrng_entropy.py --bits 200000 --spike-trace state/akida_synth/spike_trace.txt"
+}

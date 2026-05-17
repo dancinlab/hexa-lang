@@ -1,0 +1,35 @@
+// accel_neuromorphic_chip.hexa — extended 렌즈 (Rust 포팅)
+// 카테고리: extended · 도메인: chip
+// 원본: accel_lenses_c.rs · 이름: neuromorphic_chip
+// 검증 축: Model neuromorphic spike-based computation — event-driven, energy per spike
+
+let SIGMA = 12.0
+let PHI = 2.0
+let N = 6.0
+let TAU = 4.0
+let SOPFR = 5.0
+let J2 = 24.0
+
+// 핵심 항등식: σ·φ = n·τ = J₂
+if SIGMA * PHI != N * TAU {
+    println("FAIL: σ·φ ≠ n·τ")
+    exit(1)
+}
+if J2 != SIGMA * PHI {
+    println("FAIL: J₂ ≠ σ·φ")
+    exit(1)
+}
+
+// 도메인 축 공명: 렌즈별 핵심 상수 점검
+let targets = [N, TAU, SIGMA, PHI, SOPFR, J2, N * N, TAU * TAU]
+let mut hit_count = 0
+let mut total = 0
+
+for t in targets {
+    total = total + 1
+    if t > 0.0 { hit_count = hit_count + 1 }
+}
+
+let score = to_float(hit_count) / to_float(total)
+
+println("lens[neuromorphic_chip] category=extended axis=\"Model neuromorphic spike-based computation — event-driven, energy per spike\" score=" + to_string(score) + " (" + to_string(hit_count) + "/" + to_string(total) + ")")

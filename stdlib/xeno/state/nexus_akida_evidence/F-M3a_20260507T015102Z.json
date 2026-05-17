@@ -1,0 +1,49 @@
+{
+  "falsifier_id": "F-M3a",
+  "measured_ts": "2026-05-07T01:51:02Z",
+  "measured_value": {
+    "host_registered": true,
+    "label_present": true,
+    "label_searched": "low-power-inference",
+    "host_searched": "host.rpi5-akida",
+    "dispatch_log_file": "dispatch_state.json",
+    "routing_evidence": {
+      "ts": "2026-05-01T12:37:37Z",
+      "source": "modules/dispatch.hexa",
+      "selection": {
+        "compute": "none",
+        "gpu": "none",
+        "heavy": "none",
+        "mac_only": "none"
+      },
+      "scores": {
+        "ubu": {
+          "compute": 0,
+          "gpu": 0,
+          "heavy": 0
+        },
+        "ubu2": {
+          "compute": 0,
+          "gpu": 0,
+          "heavy": 0
+        },
+        "htz": {
+          "compute": 0,
+          "gpu": 0,
+          "heavy": 0
+        },
+        "mac": {
+          "compute": 0,
+          "gpu": 0,
+          "heavy": 0
+        }
+      },
+      "ag6_gate": "open"
+    },
+    "routed_correctly": false
+  },
+  "verdict": "PARTIAL-NOT-ROUTED",
+  "raw_log_path": "/Users/ghost/core/nexus/state/akida_evidence/F-M3a_20260507T015102Z.json",
+  "hardware_present": true,
+  "command": "scripts/akida/dispatch_check.py"
+}

@@ -1,0 +1,11 @@
+{
+  "kind": "synthetic_spike_trace",
+  "n_events": 100000,
+  "rate_hz": 200.0,
+  "seed": 20260507,
+  "generator": "spike_trace_gen.py Poisson process",
+  "honesty_note": "synthetic \u2014 NOT promotion-eligible substrate evidence",
+  "ts": "2026-05-07T02:17:16Z",
+  "out_text": "/Users/ghost/core/nexus/state/akida_synth/spike_trace.txt",
+  "out_bin": "/Users/ghost/core/nexus/state/akida_synth/spike_trace.bin"
+}

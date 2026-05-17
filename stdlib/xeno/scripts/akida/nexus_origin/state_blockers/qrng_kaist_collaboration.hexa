@@ -1,0 +1,15 @@
+slug qrng-kaist-collaboration
+status blocked
+priority 100
+target external-research-collab
+why KAIST quantum-optics lab 1 Gbit/sec experimental QRNG — research collaboration path
+fire-host local
+fire-cmd echo "blocked on academic procedure: PI 식별 + proposal + agreement + onboarding + access + wrapper + ethics"
+interval 1209600
+attempts-log state/blockers/qrng_kaist_collaboration.attempts.jsonl
+omega-stop fixpoint-convergence
+prereq-list KAIST-PI-identification / collaboration-proposal / agreement-execution / technical-onboarding / access-setup / hexa-wrapper / IRB-ethics
+resolution-metric β-source-mix-includes-kaist-optical
+resolution-op eq
+resolution-value true
+resolution-fallback collaboration agreement signed + KAIST protocol test passes + ≥1 cycle 의 β source = kaist-optical
