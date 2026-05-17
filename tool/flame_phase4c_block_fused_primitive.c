@@ -160,6 +160,7 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
     double rm1inv_loc[16];      // iter 1: replaces Bc[oR1inv + i] for i=0..T-1
     double rm2inv_loc[16];      // iter 2: replaces Bc[oR2inv + i] for i=0..T-1
     double rm1xn_loc[16 * 32];  // iter 3: replaces Bc[oRm1xn + ...] (T·d)
+    double rm2xn_loc[16 * 32];  // iter 4: replaces Bc[oRm2xn + ...] (T·d)
 
     // ═══════════════════════ FWD PHASE ═══════════════════════════════
     // (Mirrors tool/flame_phase4b3_block_fwd_primitive.c sections 1..9.)
@@ -286,7 +287,7 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
         rm2inv_loc[i2] = inv;  // [extracted iter 2] was: Bc[oR2inv + i2] = inv;
         for (int c2 = 0; c2 < d; c2++) {
             double xni = Bc[oHstate + i2 * d + c2] * inv;
-            Bc[oRm2xn + i2 * d + c2] = xni;
+            rm2xn_loc[i2 * d + c2] = xni;  // [extracted iter 4] was: Bc[oRm2xn + i2*d + c2]
             Bc[oRin2 + i2 * d + c2] = Bp[G2 + c2] * xni;
         }
     }
@@ -392,7 +393,7 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
         for (int i7 = 0; i7 < d; i7++) {
             double dxn_i = dr_pos[i7] * Bp[G2 + i7];
             Bg[G2 + i7] = Bg[G2 + i7]
-                        + dr_pos[i7] * Bc[oRm2xn + ts * d + i7];
+                        + dr_pos[i7] * rm2xn_loc[ts * d + i7];  // [extracted iter 4] was: Bc[oRm2xn + ts*d + i7]
             dot2 = dot2 + dxn_i * Bc[oHstate + ts * d + i7];
             dr_pos[i7] = dxn_i;
         }
