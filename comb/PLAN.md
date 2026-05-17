@@ -93,6 +93,21 @@
   honest workload-dependent verdict — over-claim 아님. RFC 057 F1
   falsifier 는 workload class 별 결판되며, dense·broadcast traffic 에선
   hex 우세 / nearest-neighbor 에선 mesh 우세.
-  T2 sim 측면 ~60% (non-contention + real workload + router cycle-accurate
-  verify). T2 RTL 측면 ~50% (synth + functional sim). T2 ~50-60%. T3 = 0%
-  (hexa-arch[chip] RTL→GDSII 의존).
+  T2 sim 측면 ~60%. T2 RTL 측면 ~50%.
+- 2026-05-18 — **🎉 BREAKTHROUGH: yosys 실합성 완료**: brew 로 yosys 0.65
+  + sv2v 0.0.13 시스템 설치 (`/opt/homebrew/bin/{yosys,sv2v}`, 가역).
+  sv2v 가 SV array port → V2k flat 변환, yosys 가 generic synth. 측정
+  결과 (`comb/rtl/{router_d4,router_d6}.synth.out` + `synth_comparison.md`):
+  cell 수 router_d4 = **12,105**, router_d6 = **21,790**, **ratio 1.80×**
+  (assumption 1.5× 대비 worse — but F1 검증). DFF 1.39× · MUX 1.65× ·
+  XOR 4.07× (hex 의 3축 route compare 가 조합 폭증 견인).
+  **F1 재계산 (실측 t_r6=180 적용)**: lat hex/mesh = 9520/12800 = 0.744
+  (25% win) · energy hex/mesh = 10030/12800 = 0.784 (22% win). **F1
+  verdict robust** — 측정된 synth 비용에서도 비-stencil workload 모두
+  hex 우세 유지. cross-over t_r6 = 276 → 50% margin.
+  T2 RTL 측면 ~50% → ~70% (RTL synthesis 완료, PDK 매핑·STA·P&R 미수행).
+  T2 overall ~60-70%. T3 = 0%.
+  다음 strict tapeout step = SKY130 std cell library 매핑 (`yosys -p
+  "abc -liberty sky130_fd_sc_hd__tt_025C_1v80.lib"`) → 실 area in mm² +
+  OpenSTA timing → OpenROAD P&R → DRC. PDK lib + OpenROAD 는 별도 설치
+  필요 (hexa-arch[chip] 영역).
