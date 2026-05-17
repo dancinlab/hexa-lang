@@ -1309,6 +1309,46 @@
   opened: 2026-05-17
   detail: inbox/rfc_drafts_2026_05_12/rfc_044_forge_regime_tiered_substrate.md
 
+- id: rfc-054-flame-dimgeneric-a2-emitter
+  source_commit: c629435a
+  source_files:
+    - inbox/rfc_drafts_2026_05_12/rfc_054_flame_dimgeneric_a2_emitter.md
+  compiler_impact: |
+    Design-only RFC. flame dimension-generic A2 primitive emitter —
+    A2 build pipeline hardcodes T16_d32_nh4_nkv2_h64; blocks d768·12L
+    GPU fire. Option A (runtime-param primitives) recommended over
+    Option B (templated emitter). 7 falsifier pre-registered
+    (D32-BYTEEQ strict, D768-BUILDS, NO-REORDER, D768-GPU-DISPATCH,
+    D768-WALL ≤437.9s, CACHE-FARR-FIT, VERIFY-ALL-PRESERVED).
+  downstream_consumer: |
+    flame Phase 4-D-6 dim-generic A2 implementation → d768 GPU fire.
+  status: spec
+  opened: 2026-05-17
+  detail: inbox/rfc_drafts_2026_05_12/rfc_054_flame_dimgeneric_a2_emitter.md
+
+- id: rfc-055-hexa-nvptx-codegen-backend
+  source_commit: 82146132
+  source_files:
+    - inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md
+  compiler_impact: |
+    Design-only RFC. hexa-src → NVPTX codegen backend
+    (compiler/codegen/nvptx_*.hexa, sibling to arm64_darwin /
+    x86_64_linux). The hexa-native-only policy's GPU frontier —
+    enables future self/forge/native/ hexa-native kernel tier.
+    @gpu_kernel/@gpu_device attributes mark kernel fns; PTX text
+    emitted directly (no LLVM NVPTX — guards f2); ptxas external
+    assembler (same g5 logic as C-fallback clang). cudart launch
+    binding reused for the launch syscall only. 7 falsifier
+    pre-registered. Honest: hexa-native GEMM likely not beat cuBLAS
+    (forge Phase R hand-WMMA 43% TC peak) — value is hexa-native-only
+    completeness + fusability.
+  downstream_consumer: |
+    self/forge/native/ hexa-native kernel tier (future). compiler/
+    codegen new GPU target. self/cuda/ stays reference oracle + fallback.
+  status: spec
+  opened: 2026-05-17
+  detail: inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md
+
 - id: rfc-049-forge-mixed-precision-substrate
   source_commit: b900dc36
   source_files:
