@@ -366,6 +366,29 @@ fn atlas_kind_str(k: TokenKind) -> string {
 
 fn parse_type() -> TypeRef {
     let t = peek()
+    // `*T` pointer type (FFI / low-level). The authoritative tier-2
+    // grammar (self/hexa_full.hexa::parse_type_annotation) accepts a
+    // leading `*` and folds it into the type name string ("*Void").
+    // Tier-1 previously had no `Star` arm here, so a parameter like
+    // `p: *Void` left the `*` token unconsumed (placeholder type, no
+    // advance) → the decl loop desynced and the `* Void ) -> int`
+    // tokens were mis-parsed as stray idents (spurious HX2001 on
+    // `->`/`)`/`*`). This is the immediate downstream blocker for
+    // t35/t37 once the @link-extern desync is closed. Mirror tier-2:
+    // consume `*`, fold into a `named` TypeRef whose name carries the
+    // `*` prefix; pointers are opaque integer-width handles in this
+    // codebase (alloc_raw / ptr_write / cstring builtins), so the
+    // generic `named:*T` lowering (ast_to_hir _hir_lower_type_ref
+    // unknown-name fallback) treats it uniformly.
+    if check_kind(TokenKind::Star) {
+        advance()
+        let pointee = parse_type()
+        let mut pname = "*"
+        if len(pointee.name) > 0 {
+            pname = "*" + pointee.name
+        }
+        return TypeRef { kind: "named", name: pname, args: [], span: t.span }
+    }
     if check_kind(TokenKind::LBracket) {
         advance()
         let inner = parse_type()
@@ -1452,6 +1475,72 @@ fn parse_import_item(is_pub: bool, anns: [Annotation]) -> Item {
     }
 }
 
+// `[@link("lib")] extern fn name(params) -> ret` — FFI declaration form.
+// `extern` is NOT a tier-1 lexer keyword (keyword_kind has no entry), so it
+// arrives as TokenKind::Ident with text == "extern". The authoritative tier-2
+// grammar (self/hexa_full.hexa::parse_extern_fn) accepts an OPTIONAL body:
+// a bare declaration `extern fn f() -> int` has no `{ … }`. The tier-1
+// parser previously had no `extern` arm in parse_item, so the "unknown
+// leader" fallthrough consumed only the `extern` ident and the next
+// parse_item parsed `fn f() -> int` as a normal fn whose parse_block_expr
+// then hit HX0011/HX0012 (missing `{`) and desynced the decl loop,
+// silently swallowing the following top-level decls (root of the
+// t35/t37 `@link`-extern cascade). We mirror tier-2: optional body,
+// synthesize an empty Block when absent so the existing empty-fn
+// lower/codegen path applies unchanged. Kept as ItemKind::Fn → zero
+// enum-variant ripple through the exhaustive ItemKind matches.
+fn _peek_is_extern_kw() -> bool {
+    if !check_kind(TokenKind::Ident) { return false }
+    return peek().text == "extern"
+}
+
+fn parse_extern_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
+    let kw = peek()
+    advance() // consume `extern` (Ident)
+    eat(TokenKind::KwFn)
+    let name_tok = expect(TokenKind::Ident)
+    eat(TokenKind::LParen)
+    let mut params = []
+    if !check_kind(TokenKind::RParen) {
+        params.push(parse_param())
+        while check_kind(TokenKind::Comma) {
+            advance()
+            if check_kind(TokenKind::RParen) { break }
+            params.push(parse_param())
+        }
+    }
+    eat(TokenKind::RParen)
+    let mut ret_ty = empty_type()
+    if check_kind(TokenKind::Arrow) {
+        advance()
+        ret_ty = parse_type()
+    }
+    // Body is OPTIONAL — a bare `extern fn f() -> int` declaration has
+    // none. When absent, synthesize an empty Block (the same shape an
+    // empty `fn f() {}` produces) so the function lowers as a valid
+    // body-less fn instead of desyncing the decl loop on a missing `{`.
+    let mut body = Expr {
+        kind: ExprKind::Block,
+        span: kw.span,
+        text: "",
+        children: [],
+        atlas_ref: empty_atlas()
+    }
+    if check_kind(TokenKind::LBrace) {
+        body = parse_block_expr()
+    }
+    return Item {
+        kind: ItemKind::Fn,
+        name: name_tok.text,
+        span: kw.span,
+        annotations: anns,
+        params: params,
+        return_type: ret_ty,
+        body: body,
+        is_pub: is_pub
+    }
+}
+
 fn parse_item() -> Item {
     // accumulate annotations first
     let mut anns = []
@@ -1462,6 +1551,12 @@ fn parse_item() -> Item {
     if check_kind(TokenKind::KwPub) {
         advance()
         is_pub = true
+    }
+    // `extern fn` (with optional preceding `@link("lib")` annotations) —
+    // checked before the KwFn arm because `extern` is an Ident, not a
+    // keyword token. Mirrors tier-2 self/hexa_full.hexa dispatch order.
+    if _peek_is_extern_kw() && same_kind(peek_at(1).kind, TokenKind::KwFn) {
+        return parse_extern_fn_item(is_pub, anns)
     }
     if check_kind(TokenKind::KwFn) {
         return parse_fn_item(is_pub, anns)
@@ -1672,7 +1767,8 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
         if check_kind(TokenKind::KwFn) || check_kind(TokenKind::KwLet)
            || check_kind(TokenKind::KwStruct) || check_kind(TokenKind::KwEnum)
            || check_kind(TokenKind::KwImport) || check_kind(TokenKind::KwPub)
-           || check_kind(TokenKind::At) {
+           || check_kind(TokenKind::At)
+           || (_peek_is_extern_kw() && same_kind(peek_at(1).kind, TokenKind::KwFn)) {
             let it = parse_item()
             items.push(it)
             if item_is_import(it.kind) {
