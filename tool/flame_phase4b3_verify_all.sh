@@ -179,11 +179,40 @@ for leaf in matmul matmul_kv matmul_h grad_accum; do
     fi
 done
 
+# ── Phase 4-C-1a paired-call detection (RFC 048, additive) ──────────
+echo ""
+echo "── Phase 4-C-1a paired-call detector (F-RFC048-PAIR-DETECT) ──"
+EXP_SRC="/tmp/flame_d32_corpus_test_expanded.hexa"
+if [ ! -f "$EXP_SRC" ]; then
+    # Build first via existing pipeline (re-uses earlier IPCP build artifacts)
+    if [ -x tool/flame_phase4b_build.sh ]; then
+        tool/flame_phase4b_build.sh stdlib/flame/flame_d32_corpus_test.hexa \
+            build/flame_d32_pair_detect_seed > /tmp/pair_detect_seed.log 2>&1 || true
+    fi
+fi
+if [ ! -f "$EXP_SRC" ]; then
+    echo "  FAIL  expanded source $EXP_SRC missing (build seed failed)"
+    fail_count=$((fail_count + 1))
+elif [ ! -x tool/flame_phase4c_pair_detect.hexa ] && [ ! -f tool/flame_phase4c_pair_detect.hexa ]; then
+    echo "  MISSING  tool/flame_phase4c_pair_detect.hexa"
+    fail_count=$((fail_count + 1))
+else
+    ./hexa run tool/flame_phase4c_pair_detect.hexa "$EXP_SRC" > /tmp/phase4c_pair_detect.out 2>&1
+    if grep -q "^PASS  F-RFC048-PAIR-DETECT" /tmp/phase4c_pair_detect.out; then
+        pair_line=$(grep "matched pairs" /tmp/phase4c_pair_detect.out | tail -1 | sed 's/^[[:space:]]*//')
+        echo "  PASS  F-RFC048-PAIR-DETECT  ($pair_line)"
+    else
+        echo "  FAIL  F-RFC048-PAIR-DETECT  detector did not emit PASS line"
+        tail -5 /tmp/phase4c_pair_detect.out | sed 's/^/    /'
+        fail_count=$((fail_count + 1))
+    fi
+fi
+
 echo ""
 echo "═══ verification battery complete ═══"
 if [ $fail_count -eq 0 ]; then
-    echo "PASS  All Phase 4-B verification artifacts PASS (5 fwd + 5 bwd + 4 matmul + 4 grad_accum byte-eq + 3 mechanism probes + IPCP + A2+B fwd+bwd byte-id = 23 artifacts)"
-    echo "🎯 Phase 4-B ≥3× RFC 047 §137 TARGET REACHED — 3.23× wall (cool projection)"
+    echo "PASS  All Phase 4-B+4-C-1a verification artifacts PASS (5 fwd + 5 bwd + 4 matmul + 4 grad_accum byte-eq + 3 mechanism probes + IPCP + A2+B fwd+bwd byte-id + F-RFC048-PAIR-DETECT = 24 artifacts)"
+    echo "🎯 Phase 4-B ≥3× RFC 047 §137 TARGET REACHED — 3.23× wall (cool projection); Phase 4-C-1a scaffold LANDED"
     exit 0
 else
     echo "FAIL  $fail_count failures — review output above"
