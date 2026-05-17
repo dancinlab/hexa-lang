@@ -793,3 +793,35 @@ env-resource (codegen 무관). **codegen-correctness 분모 실질 ≈ 40** (t35
 (t_multiarch_cpu) ↔ t37 8× HX3001 numeric-literal type-infer (동근 가능성) ·
 t36 serve_alm.hexa import HX2001/HX3002 · try/catch(t38_nanbox) · int-div
 strict-lint(atlas_verify). 다음: #33 (t_multiarch_cpu+t37 동시 해소 가능성 최고가치).
+
+---
+
+### 진행 로그 — math fn return annotations LANDED (`eea2dce6`) + 새 atlas_verify 118/139 분기 노출 (cycle h19)
+
+**math annotations landed `eea2dce6`** — stdlib/core/math.hexa 의 14개 fn
+(`abs`/`max`/`min`/`clamp`/`gcd`/`lcm`/`pow`/`factorial`/`sigma`/`euler_phi`/`tau`/
+`sopfr`/`fib` 전부 int 반환; `is_prime` bool) 에 명시적 `-> T` 반환 annotation 추가.
+tier-1 의 `_types_signature_type` 가 annotation 부재를 concrete `unit` 으로 default →
+caller 가 `lcm(a,b)` 결과를 unit 으로 추론 → atlas_verify 의 `_lcm2(-> int)` 에서
+HX3004 false-fire (sole abort). monotone (implicit→concrete), tier-2 무영향.
+
+**대안 기각**: 에이전트 `8d7e577f` 가 tier-1 의 absent-annotation default 자체를
+`empty/unknown` 으로 바꾸는 broader fix 제안. **검증 시 silent 의미 발산 발견**:
+post-fix atlas_verify 가 tier-1 rc=0 ("118/118 PASS") vs tier-2 rc=1 ("139 live nodes
+vs 118 declared, FAIL — 10 verdict regressions") — tier-1 이 21 verifier 등록을 silently
+drop. 의도 무관 g3 type-soundness weakening → **rejected**. source-side narrow fix(b)
+선택.
+
+**검증 (clean main `5d65c362`)**: build_aprime smoke PASS; atlas_verify HX3004 소멸,
+compiles+links+runs rc=0; gate-1 sweep **37/44** (atlas_verify APFAIL→MISMATCH, gate-1
+수 불변이나 MATCH 향한 진보); self-host fixpoint 보존 ap1f.s==ap2f.s md5 `ee9d7077`.
+
+**★ 새 codegen 버그 노출 (task #34)**: tier-1 가 atlas_verify 의 verifier 등록을 21개
+silently drop (118 vs 139 verdict). math fix 의 부작용 아님 (b·a 양쪽에서 동일 발현 →
+선재 버그). 어떤 `pub let […AtlasNode]` array 가 tier-1 컴파일된 binary 에서 완전 등록
+안 되는지 isolate 필요. struct-array top-level init 의 edge case 후보. 종결 시
+atlas_verify APFAIL/MISMATCH → MATCH = gate-1 38/44.
+
+**현황**: 진짜 tier-1 결함 잔여 = atlas_verify 118/139(#34) + t38_nanbox try/catch.
+non-tier-1 5개(t35/t36/t37 ORAFAIL-class + repo_taxonomy/t34 env) 제외 effective 천장
+39 achievable.
