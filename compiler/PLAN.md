@@ -24,7 +24,7 @@
 
 **interp-retirement R3-R6 substantially LANDED** (PLAN-interp-retirement.md 가 1차 SSOT, 본 파일이 신규 cycle log SSOT).
 
-- aprime_cc-direct path: 60-broad sweep **27/60 (45%)** byte-identical
+- aprime_cc-direct path: 60-broad sweep **30/60 (50%)** byte-identical (재측정 2026-05-17 cycle-end)
 - hexa-build path (tier-2, hexa_v2 → C → clang): **38/60 (63%)** baseline → 활성화 후 ~53-54/60 예상 (재측정 펜딩)
 - 3-tier wrapper: `bin/hexa-run-native` 가 tier 1 aprime_cc / tier 2 hexa build / tier 3 interp (HEXA_APRIME_CC opt-in)
 - 부트스트랩 hexa_v2 binary: **1,487,744 B** (H17 + fn-dedup + empty-{} + Field-rooted nested-index lvalue 활성화 완료)
@@ -33,12 +33,32 @@
 - #5 atlas SIGSEGV (≥17 nested-struct UB · runtime shallow-clone aliasing)
 - #18 aprime_cc self-host (hexa_v2 의존 끊기) — tool/build_aprime.sh 가 부트스트랩 발판
 - ~170 unmapped runtime builtins (per-symbol triage)
-- 60-smoke 재측정 (activated binary lift 확인 — auto-invoke + fn-dedup + lvalue + nil 누계)
-- 통계적-statement-level DWARF `.loc` (Stmt/LInstr line threading — #13 follow-up)
+- statement-level DWARF `.loc` (Stmt/LInstr line threading — #13 follow-up)
+- t_macro_depth aprime_cc codegen bug (abort 미발화 — aprc=0 DIFF)
+- 14 CGFAIL frontend 갭 per-case triage
+- aprime_cc-direct vs hexa-build 비교 baseline 전환 (interp 폐기 대응)
 
 ## 진행 로그
 
 (append-only)
+
+### 2026-05-17 — 60-smoke aprime_cc-direct 재측정 (cycle-end) — 30/60 MATCH
+cycle-activated aprime_cc (`tool/build_aprime.sh`, 2,050,384 B) 로 60-smoke vs interp 재측정.
+
+**결과**: N=60 · **MATCH=30 (50%)** · DIFF=16 · CGFAIL=14 · LINKFAIL=0. 직전 baseline 27/60 (45%) → +3.
+
+정직한 평가: 이번 cycle 의 fix 대부분 (fn-dedup · fn-param shadow · runtime.h sweep) 은 tier-2 hexa-build 경로 대상이라 tier-1 aprime_cc-direct 의 byte-identical 수에 직접 기여 작음. aprime_cc-direct 에 직접 닿은 fix = nil→TAG_VOID · empty-{} parser · DWARF(.loc 는 출력 bytes 무영향).
+
+**잔여 DIFF 16 분류**:
+- **SIGSEGV (aprc=139) × 3**: atlas_materials_limits · atlas_real_limits · static_index_lazy_poc — #5 cluster (≥17 nested-struct UB).
+- **atlas verifier (aprc=1) × 5**: atlas_cycle_append · atlas_doctrine · atlas_hxc_roundtrip · atlas_tecsl_verify · atlas_wave3 — verifier 의미 흐름 divergence.
+- **aprime codegen bug (aprc=0, 출력만 틀림) × 3**: t_macro_depth_default/override/valid — `[FAIL]` emit (interp `[PASS]`). macro-depth abort 미발화 — aprime_cc codegen correctness 버그.
+- **interp 측 의심 × 2**: n6_uniqueness · sigma_phi_tau_uniqueness — aprime 출력이 interp 보다 LONGER (interp 가 조기 종료 의심 — interp 폐기 대상이라 aprime 이 오히려 정답일 수 있음).
+- **기타 × 3**: regress_dict_keys_let_bind (module-level let mixed) · t_range_precedence (hexa_range_array) · t34_net_listen (aprc=138).
+
+**CGFAIL 14**: frontend codegen 갭 — atlas_verify · regression · t_cert_* · t35/36/37_hxqwen 등. 각각 별도 triage.
+
+**메타**: aprime_cc-vs-interp 비교는 interp 폐기 진행으로 baseline 신뢰도 하락 (n6_uniqueness 처럼 interp 가 틀린 케이스 존재). 다음 cycle 부터 aprime_cc-direct vs hexa-build (둘 다 compiled) 비교로 전환 권장.
 
 ### 2026-05-17 — #11 tool/build_aprime.sh — aprime_cc 빌드 레시피 canonical 화 (`afb839d7`)
 aprime_cc 빌드 레시피가 out-of-tree `/tmp/arm64_feasible.sh` 에만 존재했던 것을 repo tool 로 canonical 화.
