@@ -51,7 +51,9 @@ arm64 codegen — one-line-ish fixes, not multi-week:
 | R2 | codegen-correctness audit driven by running real programs; fix the bounded bugs | ✅ two root-cause fixes landed (see below); builtin link-gaps deferred |
 | R3 | compile+run a representative corpus (the `test/*.hexa` smokes, a few tools) natively; diff vs interp output | ✅ nine codegen-correctness classes fixed; `test/t_batch22` 0 → **31/31 byte-identical** to interp |
 | R4 | switch the build/dev pipeline `hexa run` → native compile+run, **interp kept as fallback** (env/flag toggle) | ✅ `bin/hexa-run-native` wrapper landed (native first, interp fallback on build failure; `HEXA_NATIVE=0` forces interp; `HEXA_NATIVE_VERBOSE=1` logs the chosen path) |
-| R5 | once native coverage ≥ interp on the corpus, delete the interp | ⬜ |
+| R5 | broader corpus coverage measurement; close DIFFs cluster-by-cluster | 🔄 measured: aprime_cc-direct 27/60 (45%), hexa-build 36/40 (90%). Residual clusters narrowed (atlas runtime, frontend strict, parser features). |
+| R6 | three-tier wrapper exposing the R3 aprime_cc-direct codegen as opt-in | ✅ `bin/hexa-run-native` extended (tier 1 aprime_cc / tier 2 hexa build / tier 3 interp) via `HEXA_APRIME_CC=<path>` opt-in (`06044c7f`) |
+| R7 | once aprime_cc-direct coverage ≥ interp on the corpus, delete the interp | ⬜ — gated on R5 cluster closure (atlas runtime aliasing being the largest blocker, see "Remaining" sections) |
 
 Each phase is incremental and default-safe (the interp fallback stays
 until R5; codegen fixes are additive symbol/ABI corrections that don't
