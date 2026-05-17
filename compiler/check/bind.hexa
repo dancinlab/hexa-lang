@@ -788,7 +788,14 @@ fn _bind_builtin_names() -> [string] {
         "f32_bits", "f32_from_bits", "ham_free", "ham_pack", "hex", "bin",
         "map_keys", "map_values", "map_entries", "phi_mi_pair", "phi_spatial",
         "ptr_addr", "ptr_alloc", "ptr_free", "ptr_null", "ptr_offset", "ptr_read", "ptr_write",
-        "setenv", "silu", "struct_pack", "struct_unpack", "struct_free", "sum"
+        "setenv", "silu", "struct_pack", "struct_unpack", "struct_free", "sum",
+        // R5 CGFAIL triage — free-call builtins missing from the legacy
+        // mirror. `env_var(name)` → hexa_env_var (runtime.c:10686);
+        // `now()` is interp's alias for `timestamp()` (hexa_full.hexa
+        // call_builtin: "timestamp"||"now"||"time_now"). Both surfaced as
+        // HX2001 in t_cmd_url_args_passthrough / t_exec_env_reproducible /
+        // t_multiarch_cpu_smoke. Codegen _builtin_runtime_sym maps them.
+        "env_var", "now"
     ]
 }
 
