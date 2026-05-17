@@ -681,3 +681,54 @@ Symbol: `compiler/codegen/arm64_darwin.hexa::_arm64_op_rm` 의 `const_int` opera
 `o.int_val` read. #26/#27 와 동류의 fn-arena / struct-array field-read aliasing class —
 `Operand.int_val` 가 arena rewind 가로질러 stale memory read. full bit-stable self-host
 (ap2f ≡ ap3f byte-identical) 은 #29 종결까지 미달. 별도 cycle (task #29).
+
+---
+
+## 진행 로그 — #29 FIXED · BIT-STABLE SELF-HOST FIXPOINT REACHED (2026-05-18)
+
+**#29 root cause — bitwise operators miscompiled as addition (NOT an arena-aliasing bug):**
+The earlier #29 hypothesis (Operand.int_val arena-rewind stale read in _arm64_op_rm)
+was wrong. Real cause: `compiler/codegen/arm64_darwin.hexa` BINOP emitter routed the
+bitwise operators `& | ^ << >>` through a catch-all that called `hexa_add_slow`
+("(approx)"). So `h & MASK` in `compiler/lower/hir_to_mir.hexa::_path_hash` (the
+djb2 enum-tag hash, masked `& 2147483647`) executed as `h + MASK`.
+
+Mechanism of the observed symptom: ap1 (hexa_v2 C-path build) computes correct
+`_path_hash` values because hexa_v2's own codegen handles `&` correctly. But ap1,
+when *it* compiles code containing `&`, miscompiles it. So ap2 (built by ap1) has a
+broken `_path_hash` → ap2 produces UNMASKED 64-bit djb2 hashes for enum `__tag`
+constants → `_arm64_emit_imm_to_reg` emits 4-halfword movz/movk + `mvn` garbage
+(value > 2^31 or negative). It read as "non-determinism" because the prior agent
+diffed a STALE pre-#28 `/tmp/fx_flat.hexa` flatten against a fresh one.
+
+Minimal repro (self-compiled): `phash("Aaaa")` ap1→79592128993541 vs oracle
+2090068425; `12345678901234 & 2147483647` ap1→12347826384881 (= a+MASK) vs
+oracle 1942892530. `% /` correct — only `&|^<<>>` affected.
+
+**Fix (commit 071f117a, `compiler/codegen/arm64_darwin.hexa` BINOP emitter, +28-2):**
+Added a bitwise special-case before the catch-all. HexaVal pair = (lo=tag,
+hi=payload); for TAG_INT the value lives in hi. Emit a register-form arm64 op on
+the payload pair (a→x0:x1, b→x2:x3): `& →and`, `| →orr`, `^ →eor`, `<< →lsl`,
+`>> →asr` on x1,x1,x3; result tag = `movz x0,#0` (TAG_INT). Authoritative reference:
+`self/codegen_c2.hexa:3412` (`hexa_int(HX_INT(l) <op> HX_INT(r))`).
+
+**Verification battery (FULL — fixpoint gate):**
+- build_aprime smoke `exit(6*7)==42` PASS (ap1f).
+- ap1f self-compiles `6 & 7` → exit 6 (was 13 = 6+7 with broken codegen).
+- Repro: ap1f-compiled output now byte-equal to `hexa build` oracle.
+- gate-1 (ap1f vs hexa-build oracle, 44 smoke): **33/44 MATCH** (6 apfail, 5
+  mismatch, 1 orafail) — IDENTICAL to the 33/44 baseline, ZERO regression.
+- Regression: ap1 (pre-fix) vs ap1f (post-fix) asm — all 38 compiling smoke
+  tests BYTE-IDENTICAL (fix touches only the bitwise path; no smoke test uses
+  `&|^`).
+- Determinism: ap1f / ap2f each compile fresh `fx_flat` (38-file closure, 22228
+  lines) 3× → all 3 byte-identical.
+- **BIT-STABLE SELF-HOST FIXPOINT: ap1f.s == ap2f.s == ap3f.s** byte-identical
+  across all 3 generations (sha `d3a47d1ddf5b58f0`), each compiling the full
+  flattened compiler with ZERO diagnostics. ap2f ≡ ap3f confirms the fixpoint.
+
+**★ MILESTONE — BIT-STABLE SELF-HOST FIXPOINT REACHED.** #23–#29 (7 self-host bugs)
+cumulatively closed. aprime_cc reproduces itself bit-for-bit; the self-host axis of
+the interpreter-retirement goal is closed. Note: fresh `fx_flat.hexa` must be
+re-flattened from the current source after any compiler edit — a stale flatten was
+the source of the false "#29 non-determinism" reading.
