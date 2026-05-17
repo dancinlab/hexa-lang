@@ -727,3 +727,32 @@ oracle dispatch 미포함). byte-eq 는 캠페인 근간 → **선결 규명 대
 g3: gn2 의문 미해결인 채 RFC 059 (consume wiring) 쌓으면 가짜 진행
 위험. 다음 단계 = 사용자 선택 대기 (gn2 선결 규명 권고).
 분석: `state/flame_phase4d7_gpu_fire_2026_05_17/PHASE4D7_FIRE13_ANALYSIS.md`.
+
+### gn2 규명 → RFC 058 d768 롤백 + GPU-path oracle (2026-05-18)
+
+**gn2 의문 $0 코드 점검으로 규명**: fire #14 추가 측정 = `gn2 -nan`
+(byte-eq fix `_d2h` 복원이 d768 GPU-path 에서 NaN 으로 악화). 진단 —
+RFC 058 transpose-scatter 가 d768 GPU-path byte-eq 를 깸 (#13 3.98438
+→ #14 -nan). 근본 원인 = **d768 GPU-resident path 에 byte-eq oracle
+부재** → RFC 057 §6.1·058 의 GPU-path 변경이 무검증으로 들어가 회귀를
+14번째 fire 에야 발견.
+
+**롤백 + oracle (`c2101e6d`, 사용자 "안전하게 검토후 진행" 승인)**:
+- Task A — RFC 058 transpose-scatter d768 호출 제거 → host transpose
+  loop 항상 → fire #12 검증 상태 by-construction 복귀. RFC 057 §6.1
+  유지. transpose-scatter kernel/wrapper 는 dead code 보존.
+- Task B — d768 GPU-path byte-eq oracle 구축 (`tool/flame_phase4d7_
+  gpu_path_oracle.{c,sh}`): config d=96·T16 (M·K=9216 > 8192 dim-gate
+  → d768 과 동일 GPU-path) 에서 GPU-resident vs CPU reference byte
+  비교. 600s d768 fire 대신 sub-second/$-cents 검증 게이트.
+- D32-BYTEEQ PASS · d768 rebuild PASS.
+
+**fire #15 (롤백 검증, A100)**: `init epoch gn2: 3.99026` ✅ —
+fire #14 -nan / #13 3.98438 에서 fire #12 검증값 복구. byte-eq 정합성
+회복, 캠페인 검증된 안정 base 복귀. wall=601 step 1 미완 (예상 —
+host transpose = fire #12 동일 구조).
+
+**현 상태**: 검증 안정 base (fire #12 등가) + d768 GPU-path oracle
+확보. 다음 본체 = element-loop (~106 raw Bc access: RMSNorm/RoPE/
+attention/SwiGLU) GPU kernel 화 — 단 이번엔 oracle 보호 하에. fire
+#9~#15 d768 step 완주 0 = residency all-or-nothing, 본체 미착수.
