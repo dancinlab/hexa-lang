@@ -841,3 +841,42 @@ de-risk. Tier: BREAKTHROUGH (새 접근 GPU 독립 검증).
 **다음**: 본체 = Phase 4-D-9 device-chain fwd+bwd 전환
 (`stdlib/flame/PHASE4D9_DEVICE_CHAIN_DESIGN.md` SSOT). worktree-
 isolated sub-agent, oracle + d=32 verify_all hard gate.
+
+### 2026-05-18 — Phase 4-D-9 link #1: RFC 058 transpose-scatter 부활 (oracle-gated)
+
+worktree-isolated sub-agent (commit `689aa707` → cherry-pick
+`a45f02d6` on rfc043-flame-camp). 본체 첫 device-chain link: gap #2
+(matmul 출력 → device Bc slice). `tool/flame_phase4d6_matmul_
+primitives.c` 만 변경 (+54/−19): `#ifdef HEXA_CUDA` `if (mm_c_id>=0)`
+device transpose-scatter 분기 재활성 (verified RFC 058 13th kernel
+`hexa_farr_transpose_scatter_gpu` 호출, rc≠0 시 host loop fallthrough).
+host transpose loop·d=32 path 불변. rollback 주석 → honest oracle-
+gated 갱신.
+
+**self-check (sub-agent, $0, verbatim)**:
+- `tool/flame_phase4d7_gpu_path_oracle.sh` → PASS max|Δ|=0.0 (parent
+  재검증도 PASS — non-GPU path intact)
+- `--cuda` (Mac) → SYNTACTIC-PASS (revived GPU branch compiles)
+- `tool/flame_phase4b3_verify_all.sh` → clean-base vs revival
+  **byte-identical** 전 섹션 max|Δ|=0.0. ⚠ script 가 "Phase 4-C-1a
+  paired-call detector" 에서 exit 1 — **clean base `8520f5e0` 에
+  PRE-EXISTING** (stash-out 재실행 동일 BASE_EXIT=1·동일 truncation
+  으로 입증, revival 무관). 별도 follow-up 대상.
+- d768 build → `F-RFC047-A2-COMPILE PASS` exit 0
+
+**d=32 byte-eq hard gate**: HELD — d²=1024 < 8192 threshold →
+mm_c_id=-1 → revival 분기 unreachable by construction + verify_all
+empirical byte-identical.
+
+**g3 정직 scope**: wrapper `_hx_cuda_farr_transpose_scatter_gpu` 가
+여전히 full-Bc `_d2h` (runtime_cuda.c:1781, verified·수정금지) →
+**이 revival 단독은 host round-trip 미제거 = byte-eq building block,
+wall-mover 아님**. D2H drop 은 full bwd dev_view 전환과 함께만.
+over-claim 0.
+
+**pending = GPU oracle 결정 검증** (instance 36957918, in-flight):
+fire #13 = gn2 3.98438 (RFC 058 첫 활성, WRONG). oracle --cuda 가
+revived path 의 localized max|Δ| 로 판정 — fire #13 이 real kernel bug
+였나 wiring artifact 였나 (oracle 가 만들어진 이유 그 자체). PASS →
+device-scatter 메커니즘 byte-safe 확정 (본체 핵심 building block) ·
+FAIL → oracle 가 #13/#14 가 2 fire 낭비한 진단을 1 fire 로 localize.
