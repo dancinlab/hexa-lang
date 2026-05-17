@@ -1,0 +1,78 @@
+// mutation_picker.hexa — ANU 4-byte hex → (target, line, op, magnitude)
+// Usage: hexa mutation_picker.hexa <4-byte-hex>  → prints TSV "line\top\tmag"
+// target is fixed to mutation_target.hexa for MVP. 4 bytes mapped as:
+//   b0 = file (single target → % 1 → 0)
+//   b1 = line offset within mutable range
+//   b2 = op   (0..2 → tweak_const/swap_op/rename_var)
+//   b3 = magnitude (+1/-1/+10/-10 or swap variant)
+
+fn hex_byte(s: string, i: i64) -> i64 {
+    let sub = s.substring(i * 2, i * 2 + 2)
+    let mut v = 0
+    let mut j = 0
+    let chars = sub.chars()
+    while j < chars.len() {
+        let c = chars[j]
+        let cs = to_string(c)
+        let mut d = 0
+        if cs == "0" { d = 0 }
+        if cs == "1" { d = 1 }
+        if cs == "2" { d = 2 }
+        if cs == "3" { d = 3 }
+        if cs == "4" { d = 4 }
+        if cs == "5" { d = 5 }
+        if cs == "6" { d = 6 }
+        if cs == "7" { d = 7 }
+        if cs == "8" { d = 8 }
+        if cs == "9" { d = 9 }
+        if cs == "a" { d = 10 }
+        if cs == "b" { d = 11 }
+        if cs == "c" { d = 12 }
+        if cs == "d" { d = 13 }
+        if cs == "e" { d = 14 }
+        if cs == "f" { d = 15 }
+        v = v * 16 + d
+        j = j + 1
+    }
+    return v
+}
+
+// Mutable line window for mutation_target.hexa: lines 9..14 inclusive (1-indexed)
+// (compute body `let a = ...` through `let e = ...`). Also swap-op targets here.
+let MUT_LINE_MIN = 9
+let MUT_LINE_MAX = 14
+
+let _args = args()
+if _args.len() < 3 {
+    println("ERROR: need 4-byte hex (8 chars)")
+    exit(1)
+}
+let hex = _args[2].trim()
+if hex.len() < 8 {
+    println("ERROR: hex too short: " + hex)
+    exit(1)
+}
+
+let b0 = hex_byte(hex, 0)
+let b1 = hex_byte(hex, 1)
+let b2 = hex_byte(hex, 2)
+let b3 = hex_byte(hex, 3)
+
+let span = MUT_LINE_MAX - MUT_LINE_MIN + 1
+let line_offset = b1 - ((b1 / span) * span)
+let line = MUT_LINE_MIN + line_offset
+
+let op_idx = b2 - ((b2 / 3) * 3)
+let mut op = "tweak_const"
+if op_idx == 0 { op = "tweak_const" }
+if op_idx == 1 { op = "swap_op" }
+if op_idx == 2 { op = "rename_var" }
+
+let mag_idx = b3 - ((b3 / 4) * 4)
+let mut mag = "+1"
+if mag_idx == 0 { mag = "+1" }
+if mag_idx == 1 { mag = "-1" }
+if mag_idx == 2 { mag = "+10" }
+if mag_idx == 3 { mag = "-10" }
+
+println(to_string(line) + "\t" + op + "\t" + mag)

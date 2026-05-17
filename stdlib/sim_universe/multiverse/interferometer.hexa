@@ -1,0 +1,391 @@
+// sim_bridge/multiverse/interferometer.hexa
+//   NEXUS-6 ★18 Quantum Multiverse Interferometer — MVP
+//
+// Pipeline:
+//   1. Read seed bytes from file (ANU hex cache or urandom dump), split per universe.
+//   2. Evolve M universes × T steps via mini_world (each gets own seed + eps stream).
+//   3. Compute pairwise MI over C(M,2) universe pairs → list of MI values.
+//   4. Write outputs:
+//        trajectories.jsonl (per-universe energy series)
+//        mi_matrix.csv      (M×M, symmetric, diag=self-MI)
+//        mi_values.txt      (flat list of C(M,2) MI values, for KS)
+//
+// Usage:
+//   hexa interferometer.hexa <source_tag> <seed_file> <M> <T> <dim> <out_dir>
+//     source_tag: "anu" or "prng"
+//     seed_file:  text file with hex string (long, ≥ M*(T+dim)*2 chars) OR space-separated decs
+//     M: universes, T: steps, dim: latent dim
+//     out_dir: runs/<ts>/<tag>/
+
+fn parse_hex_file(path: string) -> [i64] {
+    let mut raw = ""
+    try { raw = read_file(path) } catch e { raw = "" }
+    raw = raw.trim()
+    // detect hex vs decimals. hex: no spaces, all 0-9a-f.
+    let mut bytes: [i64] = []
+    if raw.len() == 0 { return bytes }
+    if raw.split(" ").len() > 1 {
+        // decimal space-separated
+        let parts = raw.split(" ")
+        let mut i = 0
+        while i < parts.len() {
+            let p = parts[i].trim()
+            if p.len() > 0 {
+                let mut v = 0
+                try { v = to_int(p) } catch e { v = 0 }
+                if v < 0 { v = 0 }
+                if v > 255 { v = 255 }
+                bytes.push(v)
+            }
+            i = i + 1
+        }
+    } else {
+        // hex: two chars per byte
+        let mut i = 0
+        while i + 1 < raw.len() {
+            let hi = raw.substring(i, i + 1)
+            let lo = raw.substring(i + 1, i + 2)
+            let v = hex_char(hi) * 16 + hex_char(lo)
+            bytes.push(v)
+            i = i + 2
+        }
+    }
+    return bytes
+}
+
+fn hex_char(c: string) -> i64 {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    if c == "a" { return 10 }
+    if c == "b" { return 11 }
+    if c == "c" { return 12 }
+    if c == "d" { return 13 }
+    if c == "e" { return 14 }
+    if c == "f" { return 15 }
+    if c == "A" { return 10 }
+    if c == "B" { return 11 }
+    if c == "C" { return 12 }
+    if c == "D" { return 13 }
+    if c == "E" { return 14 }
+    if c == "F" { return 15 }
+    return 0
+}
+
+// --- inline copies of mini_world/mi_calc core funcs (hexa stage0 no-module) ---
+const WORLD_SCALE: i64 = 1000
+const W_BIAS: i64 = 43
+const NBINS: i64 = 4
+const BIN_MAX: i64 = 1000
+const LOG_SCALE: i64 = 1000
+
+fn abs_i(x: i64) -> i64 { if x < 0 { return 0 - x } return x }
+
+fn bound(x: i64) -> i64 {
+    let ax = abs_i(x)
+    let denom = WORLD_SCALE + ax
+    return x * WORLD_SCALE / denom
+}
+
+fn w_mul(state: [i64], dim: i64, i: i64) -> i64 {
+    let jm = (i - 1 + dim) % dim
+    let jc = i % dim
+    let jp = (i + 1) % dim
+    let w1 = state[jm] * 67 / 100
+    let w2 = 0 - (state[jc] * 31 / 100)
+    let w3 = state[jp] * 19 / 100
+    return w1 + w2 + w3 + W_BIAS
+}
+
+fn new_universe(dim: i64, seed_bytes: [i64]) -> [i64] {
+    let mut st: [i64] = []
+    let mut i = 0
+    while i < dim {
+        let b = seed_bytes[i % seed_bytes.len()]
+        let v = (b - 128) * WORLD_SCALE / 128
+        st.push(v)
+        i = i + 1
+    }
+    return st
+}
+
+fn step_once(state: [i64], dim: i64, eps_byte: i64) -> [i64] {
+    let mut ns: [i64] = []
+    let eps = (eps_byte - 128) * WORLD_SCALE / 640
+    let mut i = 0
+    while i < dim {
+        let pre = w_mul(state, dim, i) + eps
+        ns.push(bound(pre))
+        i = i + 1
+    }
+    return ns
+}
+
+fn energy(state: [i64], dim: i64) -> i64 {
+    let mut s: i64 = 0
+    let mut i = 0
+    while i < dim { s = s + abs_i(state[i]); i = i + 1 }
+    return s / dim
+}
+
+fn trajectory(dim: i64, steps: i64, seed_bytes: [i64], eps_bytes: [i64]) -> [i64] {
+    let mut state = new_universe(dim, seed_bytes)
+    let mut out: [i64] = []
+    let mut t = 0
+    while t < steps {
+        let eb = eps_bytes[t % eps_bytes.len()]
+        state = step_once(state, dim, eb)
+        out.push(energy(state, dim))
+        t = t + 1
+    }
+    return out
+}
+
+// --- MI ---
+fn log_scaled(num: i64, den: i64) -> i64 {
+    if num <= 0 { return 0 - 20000 }
+    if den <= 0 { return 20000 }
+    let r = num * LOG_SCALE / den
+    if r <= 0 { return 0 - 20000 }
+    let mut x = r
+    let mut l2: i64 = 0
+    if x >= LOG_SCALE {
+        let mut tmp = x
+        while tmp >= (LOG_SCALE * 2) { tmp = tmp / 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = l2 * LOG_SCALE + log2_frac
+        return total_log2 * 693 / LOG_SCALE
+    } else {
+        let mut tmp = x
+        while tmp * 2 <= LOG_SCALE { tmp = tmp * 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = log2_frac - l2 * LOG_SCALE
+        return total_log2 * 693 / LOG_SCALE
+    }
+}
+
+// Quantile binning: given sorted series, assign bin by rank quartile.
+// 이 MVP 에선 union quantile (두 시계열 합쳐) 기반 대신 간편화: 각 시계열 따로 quartile.
+// 혹은 고정 경계 [0, 100, 200, 400, 1000] n=6 혼합 (에너지 실측 분포 기반)
+// 실측: 0-300 집중 → 경계 [0, 75, 150, 225, inf] 로 더 촘촘.
+fn bin_of(v: i64) -> i64 {
+    if v < 0 { return 0 }
+    if v < 75 { return 0 }
+    if v < 150 { return 1 }
+    if v < 225 { return 2 }
+    return 3
+}
+
+fn mi_scaled(x: [i64], y: [i64]) -> i64 {
+    let T = x.len()
+    if T == 0 { return 0 }
+    let mut joint: [i64] = []
+    let mut i = 0
+    while i < NBINS * NBINS { joint.push(0); i = i + 1 }
+    let mut px: [i64] = []
+    let mut j = 0
+    while j < NBINS { px.push(0); j = j + 1 }
+    let mut py: [i64] = []
+    let mut k = 0
+    while k < NBINS { py.push(0); k = k + 1 }
+    let mut n = 0
+    while n < T {
+        let bx = bin_of(x[n])
+        let by = bin_of(y[n])
+        joint[bx * NBINS + by] = joint[bx * NBINS + by] + 1
+        px[bx] = px[bx] + 1
+        py[by] = py[by] + 1
+        n = n + 1
+    }
+    let mut mi: i64 = 0
+    let mut bx = 0
+    while bx < NBINS {
+        let pxb = px[bx]
+        if pxb > 0 {
+            let mut by = 0
+            while by < NBINS {
+                let pyb = py[by]
+                let pxy = joint[bx * NBINS + by]
+                if pxy > 0 && pyb > 0 {
+                    let log_term = log_scaled(pxy * T, pxb * pyb)
+                    mi = mi + (pxy * log_term / T)
+                }
+                by = by + 1
+            }
+        }
+        bx = bx + 1
+    }
+    return mi
+}
+
+// --- CLI main ---
+let _args = args()
+if _args.len() < 8 {
+    println("usage: hexa interferometer.hexa <tag> <seed_file> <M> <T> <dim> <out_dir>")
+    println("  got args: " + to_string(_args.len()))
+} else {
+    let tag = _args[2]
+    let seed_file = _args[3]
+    let mut M = 10
+    try { M = to_int(_args[4]) } catch e { M = 10 }
+    let mut T = 200
+    try { T = to_int(_args[5]) } catch e { T = 200 }
+    let mut dim = 64
+    try { dim = to_int(_args[6]) } catch e { dim = 64 }
+    let out_dir = _args[7]
+
+    println("[interferometer] tag=" + tag + " M=" + to_string(M) + " T=" + to_string(T) + " dim=" + to_string(dim))
+
+    let all_bytes = parse_hex_file(seed_file)
+    println("[interferometer] loaded " + to_string(all_bytes.len()) + " bytes from " + seed_file)
+    if all_bytes.len() < dim + 8 {
+        println("[interferometer] ERROR: need >= " + to_string(dim + 8) + " bytes, got " + to_string(all_bytes.len()))
+    } else {
+        // mkdir out_dir
+        try { exec("mkdir -p '" + out_dir + "'") } catch e {}
+
+        // Partition bytes: each universe u gets
+        //   seed = all_bytes[u*stride .. u*stride + dim]  (dim bytes for init)
+        //   eps  = all_bytes[u*stride + dim .. u*stride + dim + T]  (T bytes)
+        // stride = dim + T. If insufficient bytes, wrap with modulo (honest: reuse).
+        let stride = dim + T
+        let need = M * stride
+        if all_bytes.len() < need {
+            println("[interferometer] WARN: bytes=" + to_string(all_bytes.len()) + " < need=" + to_string(need) + " — wrapping with modulo (reduced entropy)")
+        }
+
+        // Build trajectories
+        let mut trajs: [[i64]] = []
+        let mut u = 0
+        while u < M {
+            let base = u * stride
+            let mut seed_u: [i64] = []
+            let mut s = 0
+            while s < dim {
+                seed_u.push(all_bytes[(base + s) % all_bytes.len()])
+                s = s + 1
+            }
+            let mut eps_u: [i64] = []
+            let mut e2 = 0
+            while e2 < T {
+                eps_u.push(all_bytes[(base + dim + e2) % all_bytes.len()])
+                e2 = e2 + 1
+            }
+            let traj = trajectory(dim, T, seed_u, eps_u)
+            trajs.push(traj)
+            println("  universe " + to_string(u) + " done (traj len=" + to_string(traj.len()) + ")")
+            u = u + 1
+        }
+
+        // Write trajectories.jsonl
+        let mut trj_text = ""
+        let mut uu = 0
+        while uu < M {
+            let tj = trajs[uu]
+            let mut line = "{\"u\":" + to_string(uu) + ",\"tag\":\"" + tag + "\",\"energy\":["
+            let mut tt = 0
+            while tt < tj.len() {
+                if tt > 0 { line = line + "," }
+                line = line + to_string(tj[tt])
+                tt = tt + 1
+            }
+            line = line + "]}\n"
+            trj_text = trj_text + line
+            uu = uu + 1
+        }
+        try { write_file(out_dir + "/trajectories.jsonl", trj_text) } catch e {}
+
+        // Pairwise MI
+        let mut mi_mat: [i64] = []
+        let mut ii = 0
+        while ii < M * M { mi_mat.push(0); ii = ii + 1 }
+        let mut mi_pairs: [i64] = []
+        let mut a = 0
+        while a < M {
+            let mut b = 0
+            while b < M {
+                if a == b {
+                    mi_mat[a * M + b] = 0  // self: 정확하려면 H(X) 계산, 생략
+                } else if a < b {
+                    let mi_v = mi_scaled(trajs[a], trajs[b])
+                    mi_mat[a * M + b] = mi_v
+                    mi_mat[b * M + a] = mi_v
+                    mi_pairs.push(mi_v)
+                }
+                b = b + 1
+            }
+            a = a + 1
+        }
+
+        // Write mi_matrix.csv
+        let mut csv = ""
+        let mut ra = 0
+        while ra < M {
+            let mut rb = 0
+            while rb < M {
+                if rb > 0 { csv = csv + "," }
+                csv = csv + to_string(mi_mat[ra * M + rb])
+                rb = rb + 1
+            }
+            csv = csv + "\n"
+            ra = ra + 1
+        }
+        try { write_file(out_dir + "/mi_matrix.csv", csv) } catch e {}
+
+        // Write mi_values.txt (one per line)
+        let mut mvt = ""
+        let mut mp = 0
+        while mp < mi_pairs.len() {
+            mvt = mvt + to_string(mi_pairs[mp]) + "\n"
+            mp = mp + 1
+        }
+        try { write_file(out_dir + "/mi_values.txt", mvt) } catch e {}
+
+        // Summary stats
+        let mut sum_mi: i64 = 0
+        let mut mx: i64 = 0
+        let mut mn: i64 = 9999999
+        let mut k2 = 0
+        while k2 < mi_pairs.len() {
+            sum_mi = sum_mi + mi_pairs[k2]
+            if mi_pairs[k2] > mx { mx = mi_pairs[k2] }
+            if mi_pairs[k2] < mn { mn = mi_pairs[k2] }
+            k2 = k2 + 1
+        }
+        let mean_mi = sum_mi / mi_pairs.len()
+        // std (sample)
+        let mut sq_sum: i64 = 0
+        let mut k3 = 0
+        while k3 < mi_pairs.len() {
+            let d = mi_pairs[k3] - mean_mi
+            sq_sum = sq_sum + d * d
+            k3 = k3 + 1
+        }
+        let var_mi = sq_sum / mi_pairs.len()
+        // sqrt
+        let mut sv = var_mi
+        let mut sy = (sv + 1) / 2
+        while sy < sv {
+            sv = sy
+            sy = (sv + var_mi / sv) / 2
+        }
+        let std_mi = sv
+
+        let stat_json = "{\"tag\":\"" + tag + "\",\"M\":" + to_string(M) + ",\"T\":" + to_string(T) + ",\"dim\":" + to_string(dim) + ",\"pairs\":" + to_string(mi_pairs.len()) + ",\"mi_mean_scaled\":" + to_string(mean_mi) + ",\"mi_std_scaled\":" + to_string(std_mi) + ",\"mi_min_scaled\":" + to_string(mn) + ",\"mi_max_scaled\":" + to_string(mx) + "}\n"
+        try { write_file(out_dir + "/stats.json", stat_json) } catch e {}
+
+        println("[interferometer] done. pairs=" + to_string(mi_pairs.len()) + " mi_mean=" + to_string(mean_mi) + " mi_std=" + to_string(std_mi))
+        println("[interferometer] out: " + out_dir)
+    }
+}

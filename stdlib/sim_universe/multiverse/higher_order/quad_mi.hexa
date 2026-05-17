@@ -1,0 +1,290 @@
+// sim_bridge/multiverse/higher_order/quad_mi.hexa
+//   4-way interaction information (co-information)
+//
+// Definition (Bell 2003 / McGill generalization):
+//   I(X;Y;Z;W) = -Σ_{S⊆{X,Y,Z,W}, S≠∅} (-1)^|S| H(S)
+//   Explicit (co-information sign convention — positive when redundancy dominates):
+//     I(X;Y;Z;W) =  H(X)+H(Y)+H(Z)+H(W)
+//                - H(XY)-H(XZ)-H(XW)-H(YZ)-H(YW)-H(ZW)
+//                + H(XYZ)+H(XYW)+H(XZW)+H(YZW)
+//                - H(XYZW)
+//
+// Usage:
+//   hexa quad_mi.hexa <traj.jsonl> <out_csv> [--sub-sample N]
+//   hexa quad_mi.hexa --self-test
+//
+// Honest limits:
+//   - NBINS=2 (binary) to cap state space 2^4=16 cells (vs 81 for 3-bin)
+//   - T=500 on 16 cells → ~16/2T = 1.6% bias per joint entropy
+//   - C(M,4) grows fast: M=20 → 4845, M=10 → 210
+//   - optional sub-sampling for very large M
+
+const NBINS: i64 = 2         // binary quantization for quad case (reduce state space)
+const LOG_SCALE: i64 = 1000
+
+fn abs_i(x: i64) -> i64 { if x < 0 { return 0 - x } return x }
+
+fn log_scaled(num: i64, den: i64) -> i64 {
+    if num <= 0 { return 0 - 20000 }
+    if den <= 0 { return 20000 }
+    let r = num * LOG_SCALE / den
+    if r <= 0 { return 0 - 20000 }
+    let mut x = r
+    let mut l2: i64 = 0
+    if x >= LOG_SCALE {
+        let mut tmp = x
+        while tmp >= (LOG_SCALE * 2) { tmp = tmp / 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = l2 * LOG_SCALE + log2_frac
+        return total_log2 * 693 / LOG_SCALE
+    } else {
+        let mut tmp = x
+        while tmp * 2 <= LOG_SCALE { tmp = tmp * 2; l2 = l2 + 1 }
+        let frac = tmp - LOG_SCALE
+        let f = frac
+        let log2_frac = f - (f * f / (2 * LOG_SCALE))
+        let total_log2 = log2_frac - l2 * LOG_SCALE
+        return total_log2 * 693 / LOG_SCALE
+    }
+}
+
+// Binary split at median threshold 150 (observed mini_world energy distribution midpoint).
+fn bin_of(v: i64) -> i64 {
+    if v < 150 { return 0 }
+    return 1
+}
+
+// generic joint entropy over k series, state index = Σ bin_i * NBINS^(k-1-i)
+// k is caller-determined via how many series passed.
+fn h_k(series: [[i64]], k: i64) -> i64 {
+    let T = series[0].len()
+    if T == 0 { return 0 }
+    let mut S: i64 = 1
+    let mut p = 0
+    while p < k { S = S * NBINS; p = p + 1 }
+    let mut c: [i64] = []
+    let mut i = 0
+    while i < S { c.push(0); i = i + 1 }
+    let mut n = 0
+    while n < T {
+        let mut idx: i64 = 0
+        let mut s = 0
+        while s < k {
+            idx = idx * NBINS + bin_of(series[s][n])
+            s = s + 1
+        }
+        c[idx] = c[idx] + 1
+        n = n + 1
+    }
+    let mut h: i64 = 0
+    let mut j = 0
+    while j < S {
+        if c[j] > 0 {
+            h = h - (c[j] * log_scaled(c[j], T) / T)
+        }
+        j = j + 1
+    }
+    return h
+}
+
+// Helper: pack single / pair / triple / quad into a series list and call h_k
+fn h1v(x: [i64]) -> i64 {
+    let mut s: [[i64]] = []
+    s.push(x)
+    return h_k(s, 1)
+}
+fn h2v(x: [i64], y: [i64]) -> i64 {
+    let mut s: [[i64]] = []
+    s.push(x); s.push(y)
+    return h_k(s, 2)
+}
+fn h3v(x: [i64], y: [i64], z: [i64]) -> i64 {
+    let mut s: [[i64]] = []
+    s.push(x); s.push(y); s.push(z)
+    return h_k(s, 3)
+}
+fn h4v(x: [i64], y: [i64], z: [i64], w: [i64]) -> i64 {
+    let mut s: [[i64]] = []
+    s.push(x); s.push(y); s.push(z); s.push(w)
+    return h_k(s, 4)
+}
+
+fn quad_mi(x: [i64], y: [i64], z: [i64], w: [i64]) -> i64 {
+    // singles
+    let h_x = h1v(x)
+    let h_y = h1v(y)
+    let h_z = h1v(z)
+    let h_w = h1v(w)
+    // pairs
+    let h_xy = h2v(x, y)
+    let h_xz = h2v(x, z)
+    let h_xw = h2v(x, w)
+    let h_yz = h2v(y, z)
+    let h_yw = h2v(y, w)
+    let h_zw = h2v(z, w)
+    // triples
+    let h_xyz = h3v(x, y, z)
+    let h_xyw = h3v(x, y, w)
+    let h_xzw = h3v(x, z, w)
+    let h_yzw = h3v(y, z, w)
+    // quad
+    let h_xyzw = h4v(x, y, z, w)
+
+    return h_x + h_y + h_z + h_w
+         - h_xy - h_xz - h_xw - h_yz - h_yw - h_zw
+         + h_xyz + h_xyw + h_xzw + h_yzw
+         - h_xyzw
+}
+
+// JSONL trajectory loader (same as triple_mi)
+fn load_trajectories(path: string) -> [[i64]] {
+    let mut raw = ""
+    try { raw = read_file(path) } catch e { raw = "" }
+    let lines = raw.split("\n")
+    let mut out: [[i64]] = []
+    let mut i = 0
+    while i < lines.len() {
+        let ln = lines[i].trim()
+        if ln.len() > 0 {
+            let key = "\"energy\":["
+            let p = ln.index_of(key)
+            if p >= 0 {
+                let after = ln.substring(p + key.len(), ln.len())
+                let mut q: i64 = 0 - 1
+                let mut scan = 0
+                while scan < after.len() {
+                    if after.substring(scan, scan + 1) == "]" { q = scan; break }
+                    scan = scan + 1
+                }
+                if q >= 0 {
+                    let body = after.substring(0, q)
+                    let parts = body.split(",")
+                    let mut traj: [i64] = []
+                    let mut j = 0
+                    while j < parts.len() {
+                        let tok = parts[j].trim()
+                        if tok.len() > 0 {
+                            let mut v = 0
+                            try { v = to_int(tok) } catch e { v = 0 }
+                            traj.push(v)
+                        }
+                        j = j + 1
+                    }
+                    out.push(traj)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// --- CLI ---
+let _args = args()
+if _args.len() >= 3 {
+    if _args[2] == "--self-test" {
+        // identical quad (redundancy)
+        let mut x: [i64] = []
+        let mut y: [i64] = []
+        let mut z: [i64] = []
+        let mut w: [i64] = []
+        let mut i = 0
+        while i < 500 {
+            let v = (i * 37 + 13) % 300
+            x.push(v); y.push(v); z.push(v); w.push(v)
+            i = i + 1
+        }
+        let r1 = quad_mi(x, y, z, w)
+        println("identical quad: I=" + to_string(r1))
+
+        // independent
+        let mut x2: [i64] = []; let mut y2: [i64] = []
+        let mut z2: [i64] = []; let mut w2: [i64] = []
+        let mut j = 0
+        while j < 500 {
+            x2.push((j * 37 + 13) % 300)
+            y2.push((j * 91 + 521) % 300)
+            z2.push((j * 53 + 7) % 300)
+            w2.push((j * 73 + 19) % 300)
+            j = j + 1
+        }
+        let r2 = quad_mi(x2, y2, z2, w2)
+        println("independent quad: I=" + to_string(r2))
+
+        // synergy: w = (x+y+z) mod 300
+        let mut x3: [i64] = []; let mut y3: [i64] = []
+        let mut z3: [i64] = []; let mut w3: [i64] = []
+        let mut k = 0
+        while k < 500 {
+            let a = (k * 37 + 13) % 300
+            let b = (k * 91 + 521) % 300
+            let c = (k * 53 + 7) % 300
+            x3.push(a); y3.push(b); z3.push(c)
+            w3.push((a + b + c) % 300)
+            k = k + 1
+        }
+        let r3 = quad_mi(x3, y3, z3, w3)
+        println("synergy quad (w=x+y+z): I=" + to_string(r3))
+    } else if _args.len() >= 4 {
+        let in_path = _args[2]
+        let out_path = _args[3]
+        // optional sub-sample N
+        let mut sub_n = 0
+        if _args.len() >= 6 {
+            if _args[4] == "--sub-sample" {
+                try { sub_n = to_int(_args[5]) } catch e { sub_n = 0 }
+            }
+        }
+        let trajs = load_trajectories(in_path)
+        println("[quad_mi] loaded " + to_string(trajs.len()) + " trajectories")
+        let m_count = trajs.len()
+        if m_count < 4 {
+            println("[quad_mi] ERROR: need >= 4 universes, got " + to_string(m_count))
+        } else {
+            let total = m_count * (m_count - 1) * (m_count - 2) * (m_count - 3) / 24
+            println("[quad_mi] C(" + to_string(m_count) + ",4) = " + to_string(total))
+            let mut csv = "i,j,k,l,I_scaled\n"
+            let mut count = 0
+            // iteration stride: if sub_n>0 && sub_n<total, sample every ~total/sub_n quads.
+            let mut stride: i64 = 1
+            if sub_n > 0 && sub_n < total {
+                stride = total / sub_n
+                if stride < 1 { stride = 1 }
+                println("[quad_mi] sub-sampling: stride=" + to_string(stride) + " → ~" + to_string(total / stride) + " quads")
+            }
+            let mut seq: i64 = 0
+            let mut a = 0
+            while a < m_count {
+                let mut b = a + 1
+                while b < m_count {
+                    let mut c = b + 1
+                    while c < m_count {
+                        let mut d = c + 1
+                        while d < m_count {
+                            if stride == 1 || (seq % stride) == 0 {
+                                let iv = quad_mi(trajs[a], trajs[b], trajs[c], trajs[d])
+                                csv = csv + to_string(a) + "," + to_string(b) + "," + to_string(c) + "," + to_string(d) + "," + to_string(iv) + "\n"
+                                count = count + 1
+                            }
+                            seq = seq + 1
+                            d = d + 1
+                        }
+                        c = c + 1
+                    }
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            try { write_file(out_path, csv) } catch e {}
+            println("[quad_mi] wrote " + to_string(count) + " quads to " + out_path)
+        }
+    } else {
+        println("usage: hexa quad_mi.hexa --self-test")
+        println("   or: hexa quad_mi.hexa <traj.jsonl> <out_csv> [--sub-sample N]")
+    }
+} else {
+    println("usage: hexa quad_mi.hexa --self-test")
+    println("   or: hexa quad_mi.hexa <traj.jsonl> <out_csv> [--sub-sample N]")
+}

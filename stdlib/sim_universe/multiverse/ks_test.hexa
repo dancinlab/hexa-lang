@@ -1,0 +1,196 @@
+// sim_bridge/multiverse/ks_test.hexa -- Kolmogorov-Smirnov 2-sample test
+//
+// Goal: 두 샘플 A (ANU-seeded MI values) vs B (PRNG-seeded MI values) 가
+//   같은 분포에서 왔는지 귀무가설 H0 을 KS 통계량 D = sup |F_A(x) - F_B(x)| 로 테스트.
+//
+// p-value 근사: KS 극한분포,
+//   p ≈ 2 * Σ_{k=1..∞} (-1)^{k-1} exp(-2 k² λ²),  λ = D * sqrt(n*m/(n+m))
+//   실무: k=1..10 수렴. 작은 λ 에선 p→1, 큰 λ 에선 p→0.
+//
+// Honest limits:
+//   - n=m=45 (M=10 우주 pairs C(10,2)=45) 에선 asymptotic p 정확도 대략적.
+//   - tied value 무시 (정수 bin MI 로 ties 생김, KS 보수적으로 p 과대추정)
+//   - sqrt 는 Newton-Raphson 정수 구현.
+//
+// API:
+//   fn ks_2samp(a: [i64], b: [i64]) -> [i64]
+//     반환: [d_scaled (*1000), lambda_scaled (*1000), p_scaled (*1000)]
+
+fn abs_i(x: i64) -> i64 {
+    if x < 0 { return 0 - x }
+    return x
+}
+
+// Integer sqrt via Newton
+fn isqrt(n: i64) -> i64 {
+    if n <= 0 { return 0 }
+    if n < 4 { return 1 }
+    let mut x = n
+    let mut y = (x + 1) / 2
+    while y < x {
+        x = y
+        y = (x + n / x) / 2
+    }
+    return x
+}
+
+// sort int array ascending (insertion sort, T=45 small)
+fn sort_asc(a: [i64]) -> [i64] {
+    let mut arr = a
+    let mut i = 1
+    while i < arr.len() {
+        let v = arr[i]
+        let mut j = i - 1
+        while j >= 0 && arr[j] > v {
+            arr[j + 1] = arr[j]
+            j = j - 1
+        }
+        arr[j + 1] = v
+        i = i + 1
+    }
+    return arr
+}
+
+// exp approx (fixed-point): exp(-x), x > 0, scaled by 1000.
+// Taylor: exp(-x) = 1 - x + x²/2 - x³/6 + ..., 최대 x ≈ 20 실용
+// x_scaled: input * 1000. 반환: exp(-x) * 1000.
+fn exp_neg_scaled(x_scaled: i64) -> i64 {
+    if x_scaled <= 0 { return 1000 }
+    if x_scaled >= 20000 { return 0 }   // exp(-20) ≈ 2e-9
+    // 분할: x = k + r, k = integer part, r = frac
+    let k = x_scaled / 1000
+    let r = x_scaled - k * 1000   // r ∈ [0,1000)
+    // exp(-k): k 번 1/e (≈368/1000) 곱
+    let mut eneg_k: i64 = 1000
+    let mut ik = 0
+    while ik < k {
+        eneg_k = eneg_k * 368 / 1000
+        if eneg_k <= 0 { return 0 }
+        ik = ik + 1
+    }
+    // exp(-r) Taylor: 1 - r + r²/2 - r³/6
+    let r2 = r * r / 1000
+    let r3 = r2 * r / 1000
+    let r4 = r3 * r / 1000
+    let mut eneg_r = 1000 - r + (r2 / 2) - (r3 / 6) + (r4 / 24)
+    if eneg_r < 0 { eneg_r = 0 }
+    if eneg_r > 1000 { eneg_r = 1000 }
+    return eneg_k * eneg_r / 1000
+}
+
+// KS 2-sample D statistic (scaled *1000 since inputs ∈ [-20000, 20000] roughly).
+// a, b 정렬 후 merge-scan 으로 CDF 차이.
+fn ks_d(a: [i64], b: [i64]) -> i64 {
+    let sa = sort_asc(a)
+    let sb = sort_asc(b)
+    let n = sa.len()
+    let m = sb.len()
+    if n == 0 || m == 0 { return 0 }
+    let mut i = 0
+    let mut j = 0
+    let mut max_d_scaled: i64 = 0
+    while i < n && j < m {
+        let va = sa[i]
+        let vb = sb[j]
+        let mut advance_a = false
+        let mut advance_b = false
+        if va < vb {
+            advance_a = true
+        } else if vb < va {
+            advance_b = true
+        } else {
+            advance_a = true
+            advance_b = true
+        }
+        if advance_a { i = i + 1 }
+        if advance_b { j = j + 1 }
+        // CDF: F_A(x) = i/n, F_B(x) = j/m
+        // diff_scaled = |i*m - j*n| * 1000 / (n*m)
+        let diff = abs_i(i * m - j * n)
+        let d_scaled = diff * 1000 / (n * m)
+        if d_scaled > max_d_scaled { max_d_scaled = d_scaled }
+    }
+    // 남은 tail
+    while i < n {
+        i = i + 1
+        let diff = abs_i(i * m - j * n)
+        let d_scaled = diff * 1000 / (n * m)
+        if d_scaled > max_d_scaled { max_d_scaled = d_scaled }
+    }
+    while j < m {
+        j = j + 1
+        let diff = abs_i(i * m - j * n)
+        let d_scaled = diff * 1000 / (n * m)
+        if d_scaled > max_d_scaled { max_d_scaled = d_scaled }
+    }
+    return max_d_scaled
+}
+
+fn ks_2samp(a: [i64], b: [i64]) -> [i64] {
+    let n = a.len()
+    let m = b.len()
+    let d_s = ks_d(a, b)
+    // lambda = D * sqrt(n*m/(n+m))
+    // d_s 는 *1000 scale, sqrt_term 은 *1000 scale → 곱하면 *1e6, /1e6 하여 *1000 결과 얻음.
+    // BUT D ∈ [0,1] 이라 d_s ≤ 1000; sqrt_term 은 sqrt(nm/(n+m)) * 1000, 보통 <= 100000.
+    // lambda_s (= λ * 1000): d_s * sqrt_term / (1000 * 1000) → but D*sqrt ≈ 0.5*5 = 2.5, lambda_s=2500
+    // nm_over = n*m/(n+m), 소규모 정수 (~22 for n=m=45)
+    // sqrt(nm_over) * 1000 정밀: isqrt(nm_over * 1e6)
+    let nm_over_scaled = n * m * 1000 * 1000 / (n + m)
+    let sqrt_term = isqrt(nm_over_scaled)   // sqrt(nm/(n+m)) * 1000
+    // λ = D * sqrt(nm/(n+m)); λ*1000 = d_s * sqrt_term / 1000
+    //   d_s=88, sqrt_term=4743 → 88*4743 = 417384, /1000 = 417 → λ=0.417 OK
+    let lambda_s = d_s * sqrt_term / 1000   // * 1000 scale
+    // lambda_s 는 *1000 scale (λ 자체값)
+    // p ≈ 2 * Σ_{k=1..10} (-1)^{k-1} exp(-2 k² λ²)
+    // 2 k² λ² = 2k² (lambda_s/1000)²  → scaled: (2k² * lambda_s² / 1000) scaled
+    let mut p_s: i64 = 0
+    let mut k: i64 = 1
+    let mut sign: i64 = 1
+    while k <= 10 {
+        // exponent = 2 * k² * λ²  (natural units)
+        let lambda_sq = lambda_s * lambda_s / 1000   // *1000 scale
+        let exponent = 2 * k * k * lambda_sq          // *1000 scale
+        let term = exp_neg_scaled(exponent)           // *1000
+        p_s = p_s + sign * term
+        sign = 0 - sign
+        k = k + 1
+    }
+    p_s = 2 * p_s
+    if p_s < 0 { p_s = 0 }
+    if p_s > 1000 { p_s = 1000 }
+    let mut out: [i64] = []
+    out.push(d_s)
+    out.push(lambda_s)
+    out.push(p_s)
+    return out
+}
+
+// ============================ self-test ============================
+let _args = args()
+if _args.len() >= 3 {
+    if _args[2] == "--self-test" {
+        // 같은분포: 둘 다 같은 시드 패턴
+        let mut a: [i64] = []
+        let mut b: [i64] = []
+        let mut i = 0
+        while i < 45 {
+            a.push((i * 37 + 13) % 1000)
+            b.push((i * 41 + 17) % 1000)
+            i = i + 1
+        }
+        let r1 = ks_2samp(a, b)
+        println("similar: d=" + to_string(r1[0]) + " lambda=" + to_string(r1[1]) + " p=" + to_string(r1[2]))
+        // 극단 차이: a 작음, b 큼
+        let mut a2: [i64] = []
+        let mut b2: [i64] = []
+        let mut j = 0
+        while j < 45 {
+            a2.push(j * 2)       // 0..88
+            b2.push(500 + j * 5) // 500..720
+            j = j + 1
+        }
+        let r2 = ks_2samp(a2, b2)
+        println("different: d=" + to_string(r2[0]) + " lambda=" + to_string(r2[1]) + " p=" + to_string(r2[2]))
+    }
+}

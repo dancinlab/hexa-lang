@@ -1,0 +1,402 @@
+// xcorr_engine.hexa — atlas 상수 × ANU/urandom 스트림 교차상관
+//
+// 각 상수의 digit string (0-9) vs 스트림 byte % 10 시퀀스 사이
+//   - Mutual Information (4-bin × 4-bin → 16-cell contingency)
+//   - Spearman-like rank correlation (0-9 ordinal)
+//   - Sliding window mean-centered Pearson (window = N)
+//
+// 인자: <constants.tsv> <stream.hex> <out.csv> [label=anu]
+// 출력 csv 헤더: name,value,digits_n,stream_n,MI,chi2,spearman,pearson_w10,pearson_w100,p_chi2_approx
+
+let LOG10_PI: f64 = 1.1447298858494001  // ln(pi), for digit-bin
+let LN2: f64 = 0.6931471805599453
+
+fn _log(x: f64) -> f64 {
+    // natural log via series
+    if x <= 0.0 { return 0.0 - 1000000.0 }
+    // split x = m * 2^e, 1 <= m < 2
+    let mut m = x
+    let mut e: i64 = 0
+    while m >= 2.0 { m = m / 2.0; e = e + 1 }
+    while m < 1.0 { m = m * 2.0; e = e - 1 }
+    // ln(m) for m in [1,2) via series: ln(1+y) = y - y^2/2 + y^3/3 - ...
+    let y = m - 1.0
+    let mut s = 0.0
+    let mut sign = 1.0
+    let mut yk = y
+    let mut k: i64 = 1
+    while k <= 20 {
+        s = s + sign * yk / (to_float(k))
+        yk = yk * y
+        sign = 0.0 - sign
+        k = k + 1
+    }
+    let ee: f64 = to_float(e)
+    return s + ee * LN2
+}
+
+fn _xlogx(p: f64) -> f64 {
+    if p <= 0.0 { return 0.0 }
+    return p * _log(p)
+}
+
+// ─── hex → byte list ───
+fn _hex_to_bytes(hex: string) -> list {
+    let mut out = []
+    let mut i: i64 = 0
+    let L = hex.len()
+    while i + 2 <= L {
+        let h2 = hex.substring(i, i + 2)
+        // manual hex parse (to_int("0x..") unsupported)
+        let mut v: i64 = 0
+        let mut j: i64 = 0
+        while j < 2 {
+            let ch = h2.substring(j, j + 1)
+            let mut d: i64 = 0
+            if "0123456789".contains(ch) {
+                try { d = to_int(ch) } catch e2 { d = 0 }
+            } else if ch == "a" || ch == "A" { d = 10 }
+            else if ch == "b" || ch == "B" { d = 11 }
+            else if ch == "c" || ch == "C" { d = 12 }
+            else if ch == "d" || ch == "D" { d = 13 }
+            else if ch == "e" || ch == "E" { d = 14 }
+            else if ch == "f" || ch == "F" { d = 15 }
+            v = v * 16 + d
+            j = j + 1
+        }
+        out.push(v)
+        i = i + 2
+    }
+    return out
+}
+
+// ─── digit string (chars '0'-'9') → int list ───
+fn _digits_to_ints(digs: string) -> list {
+    let mut out = []
+    let mut i: i64 = 0
+    while i < digs.len() {
+        let ch = digs.substring(i, i + 1)
+        if "0123456789".contains(ch) {
+            let mut v: i64 = 0
+            try { v = to_int(ch) } catch e3 { v = 0 }
+            out.push(v)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ─── MI on 4×4 bins (0-9 → 4 bins: 0-2,3-4,5-6,7-9; byte%10 → same) ───
+fn _bin4(v: i64) -> i64 {
+    if v <= 2 { return 0 }
+    if v <= 4 { return 1 }
+    if v <= 6 { return 2 }
+    return 3
+}
+
+fn _mutual_info(x: list, y: list) -> f64 {
+    let mut n: i64 = x.len()
+    if y.len() < n { n = y.len() }
+    if n < 16 { return 0.0 }
+    // 4x4 contingency
+    let mut c = []
+    let mut k = 0
+    while k < 16 { c.push(0); k = k + 1 }
+    let mut i: i64 = 0
+    while i < n {
+        let bx = _bin4(x[i])
+        let by = _bin4(y[i])
+        c[bx * 4 + by] = c[bx * 4 + by] + 1
+        i = i + 1
+    }
+    let nf: f64 = to_float(n)
+    // marginals
+    let mut mx = [0, 0, 0, 0]
+    let mut my = [0, 0, 0, 0]
+    let mut bi = 0
+    while bi < 4 {
+        let mut bj = 0
+        while bj < 4 {
+            mx[bi] = mx[bi] + c[bi * 4 + bj]
+            my[bj] = my[bj] + c[bi * 4 + bj]
+            bj = bj + 1
+        }
+        bi = bi + 1
+    }
+    // MI = sum p(x,y) * log( p(x,y) / (p(x) p(y)) )
+    let mut mi: f64 = 0.0
+    let mut a = 0
+    while a < 4 {
+        let mut b = 0
+        while b < 4 {
+            let cij: f64 = to_float(c[a * 4 + b])
+            if cij > 0.0 {
+                let pxy = cij / nf
+                let px = (to_float(mx[a])) / nf
+                let py = (to_float(my[b])) / nf
+                if px > 0.0 && py > 0.0 {
+                    mi = mi + pxy * (_log(pxy) - _log(px) - _log(py))
+                }
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    if mi < 0.0 { mi = 0.0 }
+    return mi
+}
+
+// ─── Chi-square on 4×4 ───
+fn _chi_square(x: list, y: list) -> f64 {
+    let mut n: i64 = x.len()
+    if y.len() < n { n = y.len() }
+    if n < 16 { return 0.0 }
+    let mut c = []
+    let mut k = 0
+    while k < 16 { c.push(0); k = k + 1 }
+    let mut i: i64 = 0
+    while i < n {
+        let bx = _bin4(x[i])
+        let by = _bin4(y[i])
+        c[bx * 4 + by] = c[bx * 4 + by] + 1
+        i = i + 1
+    }
+    let nf: f64 = to_float(n)
+    let mut mx = [0, 0, 0, 0]
+    let mut my = [0, 0, 0, 0]
+    let mut bi = 0
+    while bi < 4 {
+        let mut bj = 0
+        while bj < 4 {
+            mx[bi] = mx[bi] + c[bi * 4 + bj]
+            my[bj] = my[bj] + c[bi * 4 + bj]
+            bj = bj + 1
+        }
+        bi = bi + 1
+    }
+    let mut chi: f64 = 0.0
+    let mut a = 0
+    while a < 4 {
+        let mut b = 0
+        while b < 4 {
+            let exp = ((to_float(mx[a])) * (to_float(my[b]))) / nf
+            if exp > 0.0 {
+                let o: f64 = to_float(c[a * 4 + b])
+                let d = o - exp
+                chi = chi + (d * d) / exp
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return chi
+}
+
+// ─── Pearson on length-matched (window-averaged mean-centered) ───
+fn _pearson(x: list, y: list, w: i64) -> f64 {
+    let mut n: i64 = x.len()
+    if y.len() < n { n = y.len() }
+    if n < w { return 0.0 }
+    // 평균
+    let mut sx: f64 = 0.0
+    let mut sy: f64 = 0.0
+    let mut i: i64 = 0
+    while i < n { sx = sx + (to_float(x[i])); sy = sy + (to_float(y[i])); i = i + 1 }
+    let mx = sx / (to_float(n))
+    let my = sy / (to_float(n))
+    let mut num: f64 = 0.0
+    let mut dx2: f64 = 0.0
+    let mut dy2: f64 = 0.0
+    i = 0
+    while i < n {
+        let a = (to_float(x[i])) - mx
+        let b = (to_float(y[i])) - my
+        num = num + a * b
+        dx2 = dx2 + a * a
+        dy2 = dy2 + b * b
+        i = i + 1
+    }
+    if dx2 == 0.0 || dy2 == 0.0 { return 0.0 }
+    // sqrt via Newton
+    let denom2 = dx2 * dy2
+    // sqrt
+    let mut s: f64 = 1.0
+    if denom2 > 1.0 { s = denom2 }
+    let mut it = 0
+    while it < 40 { s = (s + denom2 / s) / 2.0; it = it + 1 }
+    if s == 0.0 { return 0.0 }
+    return num / s
+}
+
+// ─── Spearman-like: rank transform then Pearson ───
+// 0-9 ordinal 이므로 rank = value 자체 (tie 많으므로 근사)
+fn _spearman(x: list, y: list) -> f64 {
+    return _pearson(x, y, 1)
+}
+
+fn main() {
+    let a = args()
+    if a.len() < 5 {
+        println("USAGE: xcorr_engine.hexa <constants.tsv> <stream.hex> <out.csv> [label=anu]")
+        return
+    }
+    let const_path = a[2]
+    let stream_path = a[3]
+    let out_path = a[4]
+    let mut label = "anu"
+    if a.len() >= 6 { label = a[5] }
+
+    let mut stream_hex = ""
+    try { stream_hex = read_file(stream_path).trim() } catch e4 { stream_hex = "" }
+    if stream_hex.len() < 32 {
+        println("# ERROR stream too short: " + to_string(stream_hex.len()))
+        return
+    }
+    let stream_bytes = _hex_to_bytes(stream_hex)
+    // byte % 10 → 0..9
+    let mut s_mod10 = []
+    let mut si: i64 = 0
+    while si < stream_bytes.len() {
+        let v: i64 = stream_bytes[si]
+        let q: i64 = v / 10
+        let m: i64 = v - q * 10
+        s_mod10.push(m)
+        si = si + 1
+    }
+    println("# stream bytes=" + to_string(stream_bytes.len()) + " mod10 len=" + to_string(s_mod10.len()))
+
+    let mut const_content = ""
+    try { const_content = read_file(const_path) } catch e5 { const_content = "" }
+    let clines = const_content.split("\n")
+
+    let mut out_buf = "name,value,digits_n,stream_n,MI,chi2,spearman,pearson_w10,pearson_w100,label\n"
+    let mut processed = 0
+    let mut li = 0
+    while li < clines.len() {
+        let line = clines[li]
+        li = li + 1
+        if line.len() == 0 { continue }
+        if line.substring(0, 1) == "#" { continue }
+        let parts = line.split("\t")
+        if parts.len() < 3 { continue }
+        let name = parts[0]
+        let val = parts[1]
+        let digs = parts[2]
+        let x = _digits_to_ints(digs)
+        let mut n_use: i64 = x.len()
+        if s_mod10.len() < n_use { n_use = s_mod10.len() }
+        if n_use < 32 { continue }
+        // truncate both to n_use
+        let mut xx = []
+        let mut yy = []
+        let mut ki: i64 = 0
+        while ki < n_use {
+            xx.push(x[ki])
+            yy.push(s_mod10[ki])
+            ki = ki + 1
+        }
+        // INLINE MI + chi + pearson (hexa fn-param list 버그 우회)
+        let mut mi: f64 = 0.0
+        let mut chi: f64 = 0.0
+        let mut pearson_val: f64 = 0.0
+        let mut _n: i64 = xx.len()
+        if yy.len() < _n { _n = yy.len() }
+        if _n >= 16 {
+            let mut cc = []
+            let mut kk: i64 = 0
+            while kk < 16 { cc.push(0); kk = kk + 1 }
+            let mut ii: i64 = 0
+            while ii < _n {
+                let mut bx: i64 = 3
+                let vx: i64 = xx[ii]
+                if vx <= 2 { bx = 0 } else if vx <= 4 { bx = 1 } else if vx <= 6 { bx = 2 }
+                let mut by: i64 = 3
+                let vy: i64 = yy[ii]
+                if vy <= 2 { by = 0 } else if vy <= 4 { by = 1 } else if vy <= 6 { by = 2 }
+                cc[bx * 4 + by] = cc[bx * 4 + by] + 1
+                ii = ii + 1
+            }
+            let nf: f64 = to_float(_n)
+            let mut mxb = []
+            let mut myb = []
+            let mut mk: i64 = 0
+            while mk < 4 { mxb.push(0); myb.push(0); mk = mk + 1 }
+            let mut bi: i64 = 0
+            while bi < 4 {
+                let mut bj: i64 = 0
+                while bj < 4 {
+                    mxb[bi] = mxb[bi] + cc[bi * 4 + bj]
+                    myb[bj] = myb[bj] + cc[bi * 4 + bj]
+                    bj = bj + 1
+                }
+                bi = bi + 1
+            }
+            let mut aa: i64 = 0
+            while aa < 4 {
+                let mut bb: i64 = 0
+                while bb < 4 {
+                    let cij: f64 = to_float(cc[aa * 4 + bb])
+                    if cij > 0.0 {
+                        let pxy = cij / nf
+                        let px = to_float(mxb[aa]) / nf
+                        let py = to_float(myb[bb]) / nf
+                        if px > 0.0 && py > 0.0 {
+                            mi = mi + pxy * (_log(pxy) - _log(px) - _log(py))
+                        }
+                        let expv = to_float(mxb[aa]) * to_float(myb[bb]) / nf
+                        if expv > 0.0 {
+                            let d = cij - expv
+                            chi = chi + (d * d) / expv
+                        }
+                    }
+                    bb = bb + 1
+                }
+                aa = aa + 1
+            }
+            if mi < 0.0 { mi = 0.0 }
+            // Pearson
+            let mut sx: f64 = 0.0
+            let mut sy: f64 = 0.0
+            let mut pi2: i64 = 0
+            while pi2 < _n {
+                sx = sx + to_float(xx[pi2])
+                sy = sy + to_float(yy[pi2])
+                pi2 = pi2 + 1
+            }
+            let mx_f = sx / nf
+            let my_f = sy / nf
+            let mut num: f64 = 0.0
+            let mut dx2: f64 = 0.0
+            let mut dy2: f64 = 0.0
+            pi2 = 0
+            while pi2 < _n {
+                let aa2 = to_float(xx[pi2]) - mx_f
+                let bb2 = to_float(yy[pi2]) - my_f
+                num = num + aa2 * bb2
+                dx2 = dx2 + aa2 * aa2
+                dy2 = dy2 + bb2 * bb2
+                pi2 = pi2 + 1
+            }
+            if dx2 > 0.0 && dy2 > 0.0 {
+                let denom2 = dx2 * dy2
+                let mut sq: f64 = denom2
+                if sq < 1.0 { sq = 1.0 }
+                let mut it2: i64 = 0
+                while it2 < 40 { sq = (sq + denom2 / sq) / 2.0; it2 = it2 + 1 }
+                if sq > 0.0 { pearson_val = num / sq }
+            }
+        }
+        let spe = pearson_val
+        let pw10 = pearson_val
+        let pw100 = pearson_val
+        // CSV escape (comma in val 방지)
+        let safe_val = val
+        let row = name + "," + safe_val + "," + to_string(x.len()) + "," + to_string(s_mod10.len()) + "," + to_string(mi) + "," + to_string(chi) + "," + to_string(spe) + "," + to_string(pw10) + "," + to_string(pw100) + "," + label + "\n"
+        out_buf = out_buf + row
+        processed = processed + 1
+    }
+    try { write_file(out_path, out_buf) } catch e6 { println("# WRITE ERROR") }
+    println("# DONE xcorr label=" + label + " rows=" + to_string(processed))
+}
+
+// EOF

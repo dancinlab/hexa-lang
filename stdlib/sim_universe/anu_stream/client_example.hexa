@@ -1,0 +1,354 @@
+// client_example.hexa — Monte Carlo π estimate via ANU-seeded stream
+//
+// Architecture (as required by spec):
+//   1. Ask stream_daemon.hexa for one 64-byte ChaCha20 keystream block. That
+//      block's first 16 bytes seed two independent fast PRNGs (one per axis).
+//   2. Run N 2D uniform samples; count hits inside the unit quarter-disk.
+//   3. Report π̂ = 4*inside/N with 3σ CI.  Pass if |π̂ − π| < 0.01.
+//
+// PRNG kernel: xorshift64* (Vigna 2014) — 64-bit state, period 2^64-1,
+// one multiply + one xor + two shifts per step. Chosen over SplitMix64 because
+// hexa stage1's interpreter makes the SplitMix64 multiply ~10x too slow at
+// 10⁶ samples.  Both draw their seed from the same ChaCha20 stream, so the
+// "quantum-seeded" chain (ANU → ChaCha20 → PRNG) is preserved.
+//
+// xorshift64* state representation:
+//   state = hi32 * 2^32 + lo32 (two i64 cells to avoid u64 overflow in i64)
+//
+// Steps (Vigna 2014):
+//   s ^= s >> 12
+//   s ^= s << 25
+//   s ^= s >> 27
+//   output = (s * 0x2545F4914F6CDD1D) >> 1     (upper 63 bits recommended)
+//
+// CLI:
+//   hexa client_example.hexa pi [N=1000000]
+//   hexa client_example.hexa ingest <hex_file>
+
+let _a = args()
+let mode = if _a.len() >= 3 { _a[2] } else { "pi" }
+let N = if _a.len() >= 4 { to_int(_a[3]) } else { 1000000 }
+
+let M32 = 4294967295
+
+fn hex_nibble(c: char) -> int {
+    let s = to_string(c)
+    if s == "0" { return 0 }
+    if s == "1" { return 1 }
+    if s == "2" { return 2 }
+    if s == "3" { return 3 }
+    if s == "4" { return 4 }
+    if s == "5" { return 5 }
+    if s == "6" { return 6 }
+    if s == "7" { return 7 }
+    if s == "8" { return 8 }
+    if s == "9" { return 9 }
+    if s == "a" { return 10 }
+    if s == "b" { return 11 }
+    if s == "c" { return 12 }
+    if s == "d" { return 13 }
+    if s == "e" { return 14 }
+    if s == "f" { return 15 }
+    if s == "A" { return 10 }
+    if s == "B" { return 11 }
+    if s == "C" { return 12 }
+    if s == "D" { return 13 }
+    if s == "E" { return 14 }
+    if s == "F" { return 15 }
+    0
+}
+fn hex_to_bytes(h: string) -> [int] {
+    let chars = h.chars()
+    let mut out = []
+    let mut i = 0
+    let max = chars.len() - 1
+    while i < max {
+        let hi = hex_nibble(chars[i])
+        let lo = hex_nibble(chars[i + 1])
+        out = out.push(hi * 16 + lo)
+        i = i + 2
+    }
+    out
+}
+fn fetch_keystream_hex(nbytes: int) -> string {
+    let home = env_var("HOME")
+    let cmd = "HEXA_LOCAL=1 " + home + "/Dev/nexus/bin/hexa "
+            + home + "/Dev/nexus/sim_bridge/anu_stream/stream_daemon.hexa hexout "
+            + to_string(nbytes) + " 2>/dev/null"
+    let mut out = ""
+    try { out = to_string(exec(cmd)).trim() } catch e { out = "" }
+    out
+}
+
+// ------------------------------------------------------------
+// sqrt (Newton)
+// ------------------------------------------------------------
+fn sqrt_f(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x / 2.0
+    let mut i = 0
+    while i < 30 { g = (g + x / g) / 2.0; i = i + 1 }
+    g
+}
+
+// ------------------------------------------------------------
+// u32 helpers
+// ------------------------------------------------------------
+// shift left k (0..32), returns new (hi, lo) pair
+// input: state as two u32 halves (hi, lo).
+// (hi<<32 | lo) << k, mod 2^64
+// k=0: (hi,lo); k in (0,32): new_hi=(hi<<k|lo>>(32-k))&M32, new_lo=(lo<<k)&M32; k=32: new_hi=lo, new_lo=0; k in (32,64): new_hi=(lo<<(k-32))&M32, new_lo=0
+fn shl64_pair_hi(hi: int, lo: int, k: int) -> int {
+    if k == 0 { return hi }
+    if k == 32 { return lo & M32 }
+    if k < 32 {
+        let mut p = 1; let mut i = 0
+        while i < k { p = p * 2; i = i + 1 }
+        let mut q = 1; let mut j = 0
+        while j < (32 - k) { q = q * 2; j = j + 1 }
+        let hi_shifted = (hi * p) & M32
+        let lo_top = lo / q
+        (hi_shifted ^ lo_top) & M32
+    } else {
+        let kk = k - 32
+        let mut p = 1; let mut i = 0
+        while i < kk { p = p * 2; i = i + 1 }
+        (lo * p) & M32
+    }
+}
+fn shl64_pair_lo(lo: int, k: int) -> int {
+    if k == 0 { return lo }
+    if k >= 32 { return 0 }
+    let mut p = 1; let mut i = 0
+    while i < k { p = p * 2; i = i + 1 }
+    (lo * p) & M32
+}
+fn shr64_pair_hi(hi: int, k: int) -> int {
+    if k == 0 { return hi }
+    if k >= 32 { return 0 }
+    let mut p = 1; let mut i = 0
+    while i < k { p = p * 2; i = i + 1 }
+    hi / p
+}
+fn shr64_pair_lo(hi: int, lo: int, k: int) -> int {
+    if k == 0 { return lo }
+    if k == 32 { return hi & M32 }
+    if k < 32 {
+        let mut p = 1; let mut i = 0
+        while i < k { p = p * 2; i = i + 1 }
+        let mut q = 1; let mut j = 0
+        while j < (32 - k) { q = q * 2; j = j + 1 }
+        let lo_shifted = lo / p
+        let hi_bottom = hi & (p - 1)
+        let hi_bottom_up = (hi_bottom * q) & M32
+        (lo_shifted ^ hi_bottom_up) & M32
+    } else {
+        let kk = k - 32
+        let mut p = 1; let mut i = 0
+        while i < kk { p = p * 2; i = i + 1 }
+        hi / p
+    }
+}
+
+// u32 * u32 -> u32 (low 32 bits of product)
+fn u32mul_lo(a: int, b: int) -> int {
+    let a_h = a / 65536
+    let a_l = a % 65536
+    let b_h = b / 65536
+    let b_l = b % 65536
+    let p_ll = a_l * b_l
+    let mid = a_l * b_h + a_h * b_l
+    let mid_lo = mid % 65536
+    (p_ll + mid_lo * 65536) & M32
+}
+// u32 * u32 -> (hi32, lo32) both u32; wraps to u64 product
+fn u32mul_full_hi(a: int, b: int) -> int {
+    let a_h = a / 65536
+    let a_l = a % 65536
+    let b_h = b / 65536
+    let b_l = b % 65536
+    let p_ll = a_l * b_l
+    let p_lh = a_l * b_h
+    let p_hl = a_h * b_l
+    let p_hh = a_h * b_h
+    let mid = p_lh + p_hl
+    let mid_hi = mid / 65536
+    let mid_lo = mid % 65536
+    let lo_sum = p_ll + mid_lo * 65536
+    let carry = lo_sum / (M32 + 1)
+    (p_hh + mid_hi + carry) & M32
+}
+fn u32mul_full_lo(a: int, b: int) -> int {
+    let a_h = a / 65536
+    let a_l = a % 65536
+    let b_h = b / 65536
+    let b_l = b % 65536
+    let p_ll = a_l * b_l
+    let mid = a_l * b_h + a_h * b_l
+    let mid_lo = mid % 65536
+    (p_ll + mid_lo * 65536) & M32
+}
+
+// 64-bit multiply (pair x pair) -> pair, mod 2^64
+fn mul64_hi(a_hi: int, a_lo: int, b_hi: int, b_lo: int) -> int {
+    let ll_hi = u32mul_full_hi(a_lo, b_lo)
+    let lh_lo = u32mul_lo(a_lo, b_hi)
+    let hl_lo = u32mul_lo(a_hi, b_lo)
+    (ll_hi + lh_lo + hl_lo) & M32
+}
+fn mul64_lo(a_lo: int, b_lo: int) -> int {
+    u32mul_full_lo(a_lo, b_lo)
+}
+
+// ------------------------------------------------------------
+// xorshift64* step — operates on state (hi, lo); returns new (hi, lo).
+// Vigna 2014 constants:
+//   s ^= s >> 12
+//   s ^= s << 25
+//   s ^= s >> 27
+//   result = s * 0x2545F4914F6CDD1D
+// ------------------------------------------------------------
+// Multiplier 0x2545F4914F6CDD1D = [0x2545F491, 0x4F6CDD1D] = [625058449, 1332534557]
+
+// Returns new_hi, new_lo, out_hi, out_lo as 4 values via array [new_hi, new_lo, out_hi, out_lo]
+fn xs64s_step(shi: int, slo: int) -> [int] {
+    // s ^= s >> 12
+    let t1_hi = shr64_pair_hi(shi, 12)
+    let t1_lo = shr64_pair_lo(shi, slo, 12)
+    let a_hi = shi ^ t1_hi
+    let a_lo = slo ^ t1_lo
+    // s ^= s << 25
+    let t2_hi = shl64_pair_hi(a_hi, a_lo, 25)
+    let t2_lo = shl64_pair_lo(a_lo, 25)
+    let b_hi = a_hi ^ t2_hi
+    let b_lo = a_lo ^ t2_lo
+    // s ^= s >> 27
+    let t3_hi = shr64_pair_hi(b_hi, 27)
+    let t3_lo = shr64_pair_lo(b_hi, b_lo, 27)
+    let new_hi = b_hi ^ t3_hi
+    let new_lo = b_lo ^ t3_lo
+    // out = new * 0x2545F4914F6CDD1D
+    let out_hi = mul64_hi(new_hi, new_lo, 625058449, 1332534557)
+    let out_lo = mul64_lo(new_lo, 1332534557)
+    [new_hi, new_lo, out_hi, out_lo]
+}
+
+fn u64_to_unit_float(hi: int, lo: int) -> float {
+    // Take top 53 bits
+    let lo_top21 = lo / 2048
+    let combined = hi * 2097152 + lo_top21
+    to_float(combined) / 9007199254740992.0
+}
+
+// ------------------------------------------------------------
+// Monte Carlo
+// ------------------------------------------------------------
+if mode == "pi" {
+    println("INFO: requesting 64 bytes of ANU-seeded ChaCha20 keystream...")
+    let hex = fetch_keystream_hex(64)
+    if hex.len() < 128 {
+        println("ERROR: insufficient keystream hex; got " + to_string(hex.len()) + " chars")
+        exit(1)
+    }
+    let seed_bytes = hex_to_bytes(hex)
+    let sx_hi = (seed_bytes[0] + seed_bytes[1] * 256 + seed_bytes[2] * 65536 + seed_bytes[3] * 16777216) & M32
+    let sx_lo = (seed_bytes[4] + seed_bytes[5] * 256 + seed_bytes[6] * 65536 + seed_bytes[7] * 16777216) & M32
+    let sy_hi = (seed_bytes[8] + seed_bytes[9] * 256 + seed_bytes[10] * 65536 + seed_bytes[11] * 16777216) & M32
+    let sy_lo = (seed_bytes[12] + seed_bytes[13] * 256 + seed_bytes[14] * 65536 + seed_bytes[15] * 16777216) & M32
+    // xorshift64* requires nonzero seed. On astronomically unlikely all-zero key, add 1.
+    let mut sxh = sx_hi
+    let mut sxl = sx_lo
+    if sxh == 0 { if sxl == 0 { sxl = 1 } }
+    let mut syh = sy_hi
+    let mut syl = sy_lo
+    if syh == 0 { if syl == 0 { syl = 1 } }
+    println("INFO: xs64* seeds x=(" + to_string(sxh) + "," + to_string(sxl) + ") y=(" + to_string(syh) + "," + to_string(syl) + ")")
+    println("INFO: starting N=" + to_string(N) + " samples")
+
+    let mut inside = 0
+    let mut i = 0
+    let t0 = clock()
+    // Inlined xorshift64* hot loop. Two independent streams (x,y). Avoids
+    // per-step array allocation which in interpreted hexa dominates runtime.
+    while i < N {
+        // --- xs64* step on (sxh, sxl) ---
+        // s ^= s >> 12
+        let x_t1h = shr64_pair_hi(sxh, 12)
+        let x_t1l = shr64_pair_lo(sxh, sxl, 12)
+        let x_ah = sxh ^ x_t1h
+        let x_al = sxl ^ x_t1l
+        // s ^= s << 25
+        let x_t2h = shl64_pair_hi(x_ah, x_al, 25)
+        let x_t2l = shl64_pair_lo(x_al, 25)
+        let x_bh = x_ah ^ x_t2h
+        let x_bl = x_al ^ x_t2l
+        // s ^= s >> 27
+        let x_t3h = shr64_pair_hi(x_bh, 27)
+        let x_t3l = shr64_pair_lo(x_bh, x_bl, 27)
+        sxh = x_bh ^ x_t3h
+        sxl = x_bl ^ x_t3l
+        // output = s * 0x2545F4914F6CDD1D (high bits)
+        let x_outh = mul64_hi(sxh, sxl, 625058449, 1332534557)
+        let x_outl = mul64_lo(sxl, 1332534557)
+        let x_top21 = x_outl / 2048
+        let x_comb = x_outh * 2097152 + x_top21
+        let x = to_float(x_comb) / 9007199254740992.0
+
+        // --- xs64* step on (syh, syl) ---
+        let y_t1h = shr64_pair_hi(syh, 12)
+        let y_t1l = shr64_pair_lo(syh, syl, 12)
+        let y_ah = syh ^ y_t1h
+        let y_al = syl ^ y_t1l
+        let y_t2h = shl64_pair_hi(y_ah, y_al, 25)
+        let y_t2l = shl64_pair_lo(y_al, 25)
+        let y_bh = y_ah ^ y_t2h
+        let y_bl = y_al ^ y_t2l
+        let y_t3h = shr64_pair_hi(y_bh, 27)
+        let y_t3l = shr64_pair_lo(y_bh, y_bl, 27)
+        syh = y_bh ^ y_t3h
+        syl = y_bl ^ y_t3l
+        let y_outh = mul64_hi(syh, syl, 625058449, 1332534557)
+        let y_outl = mul64_lo(syl, 1332534557)
+        let y_top21 = y_outl / 2048
+        let y_comb = y_outh * 2097152 + y_top21
+        let y = to_float(y_comb) / 9007199254740992.0
+
+        let xx = 2.0 * x - 1.0
+        let yy = 2.0 * y - 1.0
+        if xx * xx + yy * yy <= 1.0 { inside = inside + 1 }
+        i = i + 1
+    }
+    let t1 = clock()
+    let pi_est = 4.0 * to_float(inside) / to_float(N)
+    let pi = 3.141592653589793
+    let err = if pi_est > pi { pi_est - pi } else { pi - pi_est }
+    let sigma = 1.6423 / sqrt_f(to_float(N))
+    let three_sigma = 3.0 * sigma
+    let elapsed = t1 - t0
+    println("RESULT N=" + to_string(N) + " inside=" + to_string(inside))
+    println("  pi_est=" + to_string(pi_est))
+    println("  pi_ref=" + to_string(pi))
+    println("  |err|=" + to_string(err))
+    println("  1sigma=" + to_string(sigma) + " 3sigma=" + to_string(three_sigma))
+    let within = if err <= three_sigma { "YES" } else { "NO" }
+    let below_001 = if err < 0.01 { "YES" } else { "NO" }
+    println("  within_3sigma=" + within)
+    println("  |err|<0.01=" + below_001)
+    let sps = if elapsed > 0.001 { to_float(N) / elapsed } else { 0.0 }
+    println("  elapsed=" + to_string(elapsed) + "s  samples_per_sec=" + to_string(sps))
+    exit(0)
+}
+
+if mode == "ingest" {
+    let path = if _a.len() >= 4 { _a[3] } else { "" }
+    let raw = read_file(path).trim()
+    println("INFO: loaded " + to_string(raw.len()) + " hex chars from " + path)
+    let bs = hex_to_bytes(raw.substring(0, 128))
+    let mut s = ""
+    let mut i = 0
+    while i < bs.len() { s = s + to_string(bs[i]) + " "; i = i + 1 }
+    println("first_64_bytes=" + s)
+    exit(0)
+}
+
+println("help: pi <N>  |  ingest <path>")

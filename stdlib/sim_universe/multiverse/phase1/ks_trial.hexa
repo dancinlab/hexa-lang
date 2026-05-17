@@ -1,0 +1,172 @@
+// sim_bridge/multiverse/phase1/ks_trial.hexa
+//   Per-trial KS 2-sample test, writing a single JSON line.
+//   Used by runner.sh to compute per-trial p, then Fisher combines across trials.
+//
+// Usage:
+//   hexa ks_trial.hexa <anu_plugin_txt> <prng_plugin_txt> <trial_idx> <estimator> <out_jsonl>
+//     appends a line to out_jsonl.
+
+fn abs_i(x: i64) -> i64 { if x < 0 { return 0 - x } return x }
+
+fn isqrt(n: i64) -> i64 {
+    if n <= 0 { return 0 }
+    if n < 4 { return 1 }
+    let mut x = n
+    let mut y = (x + 1) / 2
+    while y < x { x = y; y = (x + n / x) / 2 }
+    return x
+}
+
+fn sort_asc(a: [i64]) -> [i64] {
+    let mut arr = a
+    let mut i = 1
+    while i < arr.len() {
+        let v = arr[i]
+        let mut j = i - 1
+        while j >= 0 && arr[j] > v { arr[j + 1] = arr[j]; j = j - 1 }
+        arr[j + 1] = v
+        i = i + 1
+    }
+    return arr
+}
+
+fn exp_neg_scaled(x_scaled: i64) -> i64 {
+    if x_scaled <= 0 { return 1000 }
+    if x_scaled >= 20000 { return 0 }
+    let k = x_scaled / 1000
+    let r = x_scaled - k * 1000
+    let mut eneg_k: i64 = 1000
+    let mut ik = 0
+    while ik < k { eneg_k = eneg_k * 368 / 1000; if eneg_k <= 0 { return 0 } ik = ik + 1 }
+    let r2 = r * r / 1000
+    let r3 = r2 * r / 1000
+    let r4 = r3 * r / 1000
+    let mut eneg_r = 1000 - r + (r2 / 2) - (r3 / 6) + (r4 / 24)
+    if eneg_r < 0 { eneg_r = 0 }
+    if eneg_r > 1000 { eneg_r = 1000 }
+    return eneg_k * eneg_r / 1000
+}
+
+fn ks_d(a: [i64], b: [i64]) -> i64 {
+    let sa = sort_asc(a)
+    let sb = sort_asc(b)
+    let n = sa.len()
+    let m = sb.len()
+    if n == 0 || m == 0 { return 0 }
+    let mut i = 0
+    let mut j = 0
+    let mut max_d: i64 = 0
+    while i < n && j < m {
+        let va = sa[i]
+        let vb = sb[j]
+        if va < vb { i = i + 1 } else if vb < va { j = j + 1 } else { i = i + 1; j = j + 1 }
+        let diff = abs_i(i * m - j * n)
+        let d_s = diff * 1000 / (n * m)
+        if d_s > max_d { max_d = d_s }
+    }
+    while i < n {
+        i = i + 1
+        let diff = abs_i(i * m - j * n)
+        let d_s = diff * 1000 / (n * m)
+        if d_s > max_d { max_d = d_s }
+    }
+    while j < m {
+        j = j + 1
+        let diff = abs_i(i * m - j * n)
+        let d_s = diff * 1000 / (n * m)
+        if d_s > max_d { max_d = d_s }
+    }
+    return max_d
+}
+
+fn ks_pval(d_s: i64, n: i64, m: i64) -> [i64] {
+    let nm_over = n * m * 1000 * 1000 / (n + m)
+    let sqrt_term = isqrt(nm_over)
+    let lambda_s = d_s * sqrt_term / 1000
+    let mut p_s: i64 = 0
+    let mut k: i64 = 1
+    let mut sign: i64 = 1
+    while k <= 10 {
+        let lambda_sq = lambda_s * lambda_s / 1000
+        let exponent = 2 * k * k * lambda_sq
+        let term = exp_neg_scaled(exponent)
+        p_s = p_s + sign * term
+        sign = 0 - sign
+        k = k + 1
+    }
+    p_s = 2 * p_s
+    if p_s < 0 { p_s = 0 }
+    if p_s > 1000 { p_s = 1000 }
+    let mut out: [i64] = []
+    out.push(d_s); out.push(lambda_s); out.push(p_s)
+    return out
+}
+
+fn load_ints(path: string) -> [i64] {
+    let mut raw = ""
+    try { raw = read_file(path) } catch e { raw = "" }
+    let lines = raw.split("\n")
+    let mut v: [i64] = []
+    let mut i = 0
+    while i < lines.len() {
+        let t = lines[i].trim()
+        if t.len() > 0 {
+            let mut x = 0
+            try { x = to_int(t) } catch e { x = 0 }
+            v.push(x)
+        }
+        i = i + 1
+    }
+    return v
+}
+
+fn mean_std(arr: [i64]) -> [i64] {
+    let n = arr.len()
+    let mut s: i64 = 0
+    let mut i = 0
+    while i < n { s = s + arr[i]; i = i + 1 }
+    let m = if n > 0 { s / n } else { 0 }
+    let mut sq: i64 = 0
+    let mut j = 0
+    while j < n {
+        let d = arr[j] - m
+        sq = sq + d * d
+        j = j + 1
+    }
+    let var = if n > 0 { sq / n } else { 0 }
+    let mut sv = var; let mut sy = (sv + 1) / 2
+    while sy < sv { sv = sy; sy = (sv + var / sv) / 2 }
+    let std = sv
+    let mut out: [i64] = []
+    out.push(m); out.push(std)
+    return out
+}
+
+// --- main ---
+let _args = args()
+if _args.len() < 7 {
+    println("usage: hexa ks_trial.hexa <anu_mi_txt> <prng_mi_txt> <trial_idx> <estimator> <out_jsonl>")
+} else {
+    let anu_path = _args[2]
+    let prng_path = _args[3]
+    let mut trial_idx = 0
+    try { trial_idx = to_int(_args[4]) } catch e { trial_idx = 0 }
+    let estimator = _args[5]
+    let out_path = _args[6]
+
+    let a = load_ints(anu_path)
+    let b = load_ints(prng_path)
+    if a.len() < 5 || b.len() < 5 {
+        println("[ks_trial] skip trial " + to_string(trial_idx) + " (too few samples)")
+    } else {
+        let stats_a = mean_std(a)
+        let stats_b = mean_std(b)
+        let d_s = ks_d(a, b)
+        let pv = ks_pval(d_s, a.len(), b.len())
+        let line = "{\"trial\":" + to_string(trial_idx) + ",\"estimator\":\"" + estimator + "\",\"anu_n\":" + to_string(a.len()) + ",\"prng_n\":" + to_string(b.len()) + ",\"anu_mean_scaled\":" + to_string(stats_a[0]) + ",\"anu_std_scaled\":" + to_string(stats_a[1]) + ",\"prng_mean_scaled\":" + to_string(stats_b[0]) + ",\"prng_std_scaled\":" + to_string(stats_b[1]) + ",\"D_scaled\":" + to_string(pv[0]) + ",\"lambda_scaled\":" + to_string(pv[1]) + ",\"p_scaled\":" + to_string(pv[2]) + "}\n"
+        try { append_file(out_path, line) } catch e {
+            try { write_file(out_path, line) } catch e2 {}
+        }
+        println("[ks_trial] trial " + to_string(trial_idx) + " " + estimator + " D=" + to_string(pv[0]) + " p=" + to_string(pv[2]))
+    }
+}

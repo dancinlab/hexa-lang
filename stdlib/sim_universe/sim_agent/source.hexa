@@ -1,0 +1,103 @@
+#!hexa strict
+// nexus/core/sim/source.hexa — virtual universe sim agent abstract interface
+//
+// @tool(slug="sim_source", desc="canonical contract every sim backend must satisfy. Domain: virtual universe sim agent runtime + EEG↔sim closed-loop spec.")
+// @usage(hexa run nexus/core/sim/source.hexa --selftest)
+// @sentinel(__SIM_SOURCE__ <PASS|FAIL>)
+// @resolver-bypass(reason="stage0 self-contained — pure constructors + selftest.")
+//
+// Domain: virtual universe sim agent (.roadmap.sim).
+// Backends: sim_agent, sim_close_loop, sim_substrate (wrap hexa_sim_*.hexa tools).
+//
+// CONTRACT:
+//   fn sim_source_meta_<name>() -> SimSourceMeta
+//   fn sim_source_step_<name>(state: SimState) -> SimResult
+//
+// PRESERVED FILES:
+//   nexus/tool/hexa_sim_atlas_ingest.hexa    (785 LOC)
+//   nexus/tool/hexa_sim_ci.hexa              (192 LOC)
+//   nexus/tool/hexa_sim_falsifier.hexa       (338 LOC)
+//   nexus/tool/hexa_sim_verify_grid.hexa     (422 LOC)
+//   nexus/tool/hexa_sim_index_gen.sh         (shell index gen)
+//   nexus/tool/simbad_bridge.hexa            (sim bridge)
+//
+//   (1) Modules wrap; deep impl per-backend separate cycle.
+//   (2) `op` dispatch verbs: "step" | "verify" | "falsify" | "ingest".
+//   (3) sim_close_loop EEG↔sim wiring is design-only until closed-loop spec lands.
+
+struct SimState {
+    op:           str,    // "step" | "verify" | "falsify" | "ingest"
+    grid_path:    str,    // path to verify_grid input
+    tick:         int,    // simulation tick
+    seed:         int,    // deterministic seed
+    dry_run:      int     // 1 → no exec
+}
+
+struct SimSourceMeta {
+    name:           str,
+    tier:           int,    // 0=stub-no-spawn, 1=local-tool, 2=closed-loop, 3=substrate
+    cost_usd:       int,
+    lead_days:      int,
+    is_local:       int,
+    is_canonical:   int,
+    status:         str,
+    vendor:         str
+}
+
+struct SimResult {
+    ok:           int,
+    sentinel:     str,
+    op:           str,
+    ticks_done:   int,
+    grid_hash:    str,    // hash of verify_grid output (or "")
+    message:      str
+}
+
+fn sim_meta_make(
+    name: str, tier: int, cost_usd: int, lead_days: int,
+    is_local: int, is_canonical: int, status: str, vendor: str
+) -> SimSourceMeta {
+    return SimSourceMeta {
+        name: name, tier: tier, cost_usd: cost_usd, lead_days: lead_days,
+        is_local: is_local, is_canonical: is_canonical, status: status, vendor: vendor
+    }
+}
+
+fn sim_state_make(op: str, tick: int, seed: int) -> SimState {
+    return SimState {
+        op: op, grid_path: "", tick: tick, seed: seed, dry_run: 0
+    }
+}
+
+fn sim_result_fail(reason: str) -> SimResult {
+    return SimResult { ok: 0, sentinel: "", op: "", ticks_done: 0, grid_hash: "", message: reason }
+}
+
+fn sim_result_ok(sentinel: str, op: str, ticks: int, grid_hash: str, msg: str) -> SimResult {
+    return SimResult { ok: 1, sentinel: sentinel, op: op, ticks_done: ticks, grid_hash: grid_hash, message: msg }
+}
+
+fn _selftest() -> int {
+    let m = sim_meta_make("sim_agent", 1, 0, 0, 1, 1, "WRAPPED", "hexa_sim_verify_grid")
+    if m.name != "sim_agent" { return 0 }
+    if m.tier != 1 { return 0 }
+    let s = sim_state_make("step", 1, 42)
+    if s.op != "step" { return 0 }
+    if s.tick != 1 { return 0 }
+    let f = sim_result_fail("test")
+    if f.ok != 0 { return 0 }
+    let r = sim_result_ok("__SIM__ PASS", "step", 1, "abc", "ok")
+    if r.ok != 1 { return 0 }
+    return 1
+}
+
+fn main() {
+    println("[sim/source] interface contract self-test")
+    if _selftest() == 1 {
+        println("[sim/source] SELFTEST PASS")
+        println("__SIM_SOURCE__ PASS")
+    } else {
+        println("[sim/source] SELFTEST FAIL")
+        println("__SIM_SOURCE__ FAIL")
+    }
+}

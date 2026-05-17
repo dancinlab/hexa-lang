@@ -1,0 +1,272 @@
+// mutator.hexa — apply mutation to a sandboxed copy of mutation_target.hexa.
+// SAFETY: operates on (src_path, dst_path). Caller guarantees paths live
+// under sim_bridge/godel_q/. Whitelist ops only; unknown op → "applied=0".
+//
+// Usage: hexa mutator.hexa <src> <dst> <line> <op> <mag>
+//   prints TSV "applied=N\told=...\tnew=..."
+
+fn is_digit(c: string) -> bool {
+    if c == "0" { return true }
+    if c == "1" { return true }
+    if c == "2" { return true }
+    if c == "3" { return true }
+    if c == "4" { return true }
+    if c == "5" { return true }
+    if c == "6" { return true }
+    if c == "7" { return true }
+    if c == "8" { return true }
+    if c == "9" { return true }
+    return false
+}
+
+fn is_alpha(c: string) -> bool {
+    let lo = c.to_lower()
+    if lo == "a" { return true }
+    if lo == "b" { return true }
+    if lo == "c" { return true }
+    if lo == "d" { return true }
+    if lo == "e" { return true }
+    if lo == "f" { return true }
+    if lo == "g" { return true }
+    if lo == "h" { return true }
+    if lo == "i" { return true }
+    if lo == "j" { return true }
+    if lo == "k" { return true }
+    if lo == "l" { return true }
+    if lo == "m" { return true }
+    if lo == "n" { return true }
+    if lo == "o" { return true }
+    if lo == "p" { return true }
+    if lo == "q" { return true }
+    if lo == "r" { return true }
+    if lo == "s" { return true }
+    if lo == "t" { return true }
+    if lo == "u" { return true }
+    if lo == "v" { return true }
+    if lo == "w" { return true }
+    if lo == "x" { return true }
+    if lo == "y" { return true }
+    if lo == "z" { return true }
+    if c == "_" { return true }
+    return false
+}
+
+fn find_int_lit(s: string) -> i64 {
+    let chars = s.chars()
+    let mut i = 0
+    while i < chars.len() {
+        if is_digit(to_string(chars[i])) {
+            if i == 0 {
+                return i
+            }
+            let prev = to_string(chars[i - 1])
+            if !is_alpha(prev) && !is_digit(prev) {
+                return i
+            }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn int_end_from(s: string, start: i64) -> i64 {
+    let chars = s.chars()
+    let mut end = start
+    while end < chars.len() {
+        if !is_digit(to_string(chars[end])) { break }
+        end = end + 1
+    }
+    return end
+}
+
+fn mag_delta(mag: string) -> i64 {
+    if mag == "+1" { return 1 }
+    if mag == "-1" { return -1 }
+    if mag == "+10" { return 10 }
+    if mag == "-10" { return -10 }
+    return 0
+}
+
+// Returns ["1"|"0", new_line]
+fn apply_tweak_const(line: string, mag: string) -> array {
+    let start = find_int_lit(line)
+    if start < 0 { return ["0", line] }
+    let end = int_end_from(line, start)
+    let sub = line.substring(start, end)
+    let mut v = 0
+    try { v = to_int(sub) } catch e { v = 0 }
+    let nv = v + mag_delta(mag)
+    if nv < 0 { return ["0", line] }
+    let before = line.substring(0, start)
+    let after = line.substring(end, line.len())
+    return ["1", before + to_string(nv) + after]
+}
+
+fn apply_swap_op(line: string, mag: string) -> array {
+    let chars = line.chars()
+    let mut target = "+"
+    let mut repl = "-"
+    if mag == "+1" { target = "+" ; repl = "-" }
+    if mag == "-1" { target = "-" ; repl = "+" }
+    if mag == "+10" { target = "*" ; repl = "/" }
+    if mag == "-10" { target = "/" ; repl = "*" }
+    let mut i = 0
+    while i < chars.len() {
+        let c = to_string(chars[i])
+        if c == target {
+            let mut prev = " "
+            let mut next = " "
+            if i > 0 { prev = to_string(chars[i - 1]) }
+            if i + 1 < chars.len() { next = to_string(chars[i + 1]) }
+            if prev == " " && next == " " {
+                let before = line.substring(0, i)
+                let after = line.substring(i + 1, line.len())
+                return ["1", before + repl + after]
+            }
+        }
+        i = i + 1
+    }
+    return ["0", line]
+}
+
+fn apply_rename_var(line: string) -> array {
+    let trimmed = line.trim()
+    if !trimmed.starts_with("let ") { return ["0", line, ""] }
+    let lead_len = line.len() - trimmed.len()
+    let lead = line.substring(0, lead_len)
+    let body = trimmed
+    let mut rest = ""
+    let mut prefix = "let "
+    if body.starts_with("let mut ") {
+        rest = body.substring(8, body.len())
+        prefix = "let mut "
+    } else {
+        rest = body.substring(4, body.len())
+    }
+    let chars = rest.chars()
+    let mut end = 0
+    while end < chars.len() {
+        let c = to_string(chars[end])
+        if !is_alpha(c) && !is_digit(c) { break }
+        end = end + 1
+    }
+    if end == 0 { return ["0", line, ""] }
+    let ident = rest.substring(0, end)
+    let tail = rest.substring(end, rest.len())
+    let new_line = lead + prefix + ident + "_m" + tail
+    return ["1", new_line, ident]
+}
+
+// word-boundary rename inside a line (only between non-alnum neighbours)
+fn rename_in_line(l: string, old: string, nu: string) -> string {
+    let tokens = l.split(old)
+    if tokens.len() <= 1 { return l }
+    let mut rebuilt = ""
+    let mut k = 0
+    while k < tokens.len() {
+        if k == 0 {
+            rebuilt = tokens[0]
+        } else {
+            let left = tokens[k - 1]
+            let right = tokens[k]
+            let mut ll = " "
+            let mut rr = " "
+            if left.len() > 0 {
+                let lc = left.chars()
+                ll = to_string(lc[lc.len() - 1])
+            }
+            if right.len() > 0 {
+                let rc = right.chars()
+                rr = to_string(rc[0])
+            }
+            let left_is_ident = is_alpha(ll) || is_digit(ll)
+            let right_is_ident = is_alpha(rr) || is_digit(rr)
+            if !left_is_ident && !right_is_ident {
+                rebuilt = rebuilt + nu + tokens[k]
+            } else {
+                rebuilt = rebuilt + old + tokens[k]
+            }
+        }
+        k = k + 1
+    }
+    return rebuilt
+}
+
+// ===== main =====
+let _args = args()
+if _args.len() < 7 {
+    println("ERROR: need src dst line op mag")
+    exit(1)
+}
+let src = _args[2]
+let dst = _args[3]
+let mut line_no = 0
+try { line_no = to_int(_args[4]) } catch e { line_no = 0 }
+let op = _args[5]
+let mag = _args[6]
+
+let mut content = ""
+try { content = read_file(src) } catch e { content = "" }
+if content.len() == 0 {
+    println("ERROR: read failed " + src)
+    exit(1)
+}
+
+let raw_lines = content.split("\n")
+let mut lines = []
+let mut li = 0
+while li < raw_lines.len() {
+    lines = lines.push(raw_lines[li])
+    li = li + 1
+}
+if line_no < 1 || line_no > lines.len() {
+    println("applied=0\told=\tnew=")
+    exit(0)
+}
+
+let idx = line_no - 1
+let original = lines[idx]
+
+let mut applied = "0"
+let mut new_line = original
+let mut renamed_ident = ""
+
+if op == "tweak_const" {
+    let r = apply_tweak_const(original, mag)
+    applied = to_string(r[0])
+    new_line = to_string(r[1])
+}
+if op == "swap_op" {
+    let r = apply_swap_op(original, mag)
+    applied = to_string(r[0])
+    new_line = to_string(r[1])
+}
+if op == "rename_var" {
+    let r = apply_rename_var(original)
+    applied = to_string(r[0])
+    new_line = to_string(r[1])
+    renamed_ident = to_string(r[2])
+}
+
+lines[idx] = new_line
+
+if op == "rename_var" && applied == "1" && renamed_ident.len() > 0 {
+    let new_ident = renamed_ident + "_m"
+    let mut i = idx + 1
+    while i < lines.len() {
+        lines[i] = rename_in_line(to_string(lines[i]), renamed_ident, new_ident)
+        i = i + 1
+    }
+}
+
+// rebuild
+let mut out = ""
+let mut m = 0
+while m < lines.len() {
+    if m > 0 { out = out + "\n" }
+    out = out + to_string(lines[m])
+    m = m + 1
+}
+try { write_file(dst, out) } catch e { println("ERROR: write failed"); exit(1) }
+
+println("applied=" + applied + "\told=" + original + "\tnew=" + new_line)

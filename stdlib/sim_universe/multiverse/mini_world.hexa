@@ -1,0 +1,119 @@
+// sim_bridge/multiverse/mini_world.hexa -- 최소 sim universe (latent world model)
+//
+// Design:
+//   - 상태 벡터 차원 LATENT_DIM (기본 64, n=6 컨벤션 σ²=144의 경제판)
+//   - dynamics: x_{t+1}[i] = bounded( W*x_t + eps ), W 고정 행렬
+//   - 바운딩: 정수 scale=1000 기반 tanh 근사 (x / (1 + |x|/SCALE))
+//   - eps: 시드 바이트(0..255) 스트림 소비, 가우시안 근사 불필요
+//   - 논문적 honesty: W 는 deterministic (n=6 기반 hash) → 모든 우주 동일 W 공유
+//     → 우주 쌍 MI는 "같은 물리법 + 다른 초기시드" 가 만드는 수렴/상관 측정
+//
+// API:
+//   fn new_universe(dim: i64, seed_bytes: [i64]) -> [i64]   // 초기 상태 (첫 dim 바이트로 시딩)
+//   fn step(state: [i64], dim: i64, eps_byte: i64) -> [i64] // 1 step
+//   fn trajectory(dim: i64, steps: i64, seed_bytes: [i64], eps_bytes: [i64]) -> [i64]
+//     → 반환: 길이 steps 의 스칼라 요약 (평균 에너지) — MI 계산용
+//     (전체 상태 벡터 저장은 메모리 과다; 각 스텝 스칼라 요약만 보관)
+
+const WORLD_SCALE: i64 = 1000   // fixed-point
+const W_BIAS: i64 = 43           // n=6 컨벤션 (sopfr(6)*sopfr(49) 비슷 영역)
+
+fn abs_i(x: i64) -> i64 {
+    if x < 0 { return 0 - x }
+    return x
+}
+
+// Bounded nonlinearity: y = x / (1 + |x|/SCALE), 대략 tanh.
+fn bound(x: i64) -> i64 {
+    let ax = abs_i(x)
+    let denom = WORLD_SCALE + ax
+    // denom=SCALE+|x|, output = x*SCALE/denom ∈ [-SCALE,+SCALE)
+    return x * WORLD_SCALE / denom
+}
+
+// W[i,j] = hash 기반 결정성: n=6 상수에서 유도.
+// 각 i 에 대해 인접 3개(j=i-1,i,i+1) wrap-around 만 사용 → sparse banded W.
+// 이는 "locality" 를 주어 단순 wash-out 회피.
+fn w_mul(state: [i64], dim: i64, i: i64) -> i64 {
+    let jm = (i - 1 + dim) % dim
+    let jc = i % dim
+    let jp = (i + 1) % dim
+    // 가중치: (67, -31, 19) / 100 (근접 + 반대 + 약 양) — n=6 수 기반
+    let w1 = state[jm] * 67 / 100
+    let w2 = 0 - (state[jc] * 31 / 100)
+    let w3 = state[jp] * 19 / 100
+    return w1 + w2 + w3 + W_BIAS
+}
+
+fn new_universe(dim: i64, seed_bytes: [i64]) -> [i64] {
+    // 시드 바이트(0..255) → [-SCALE,+SCALE) 매핑
+    let mut st: [i64] = []
+    let mut i = 0
+    while i < dim {
+        let b = seed_bytes[i % seed_bytes.len()]
+        // byte 0..255 → -1000..+1000 (center 128)
+        let v = (b - 128) * WORLD_SCALE / 128
+        st.push(v)
+        i = i + 1
+    }
+    return st
+}
+
+fn step_once(state: [i64], dim: i64, eps_byte: i64) -> [i64] {
+    let mut ns: [i64] = []
+    // eps: 0..255 → -200..+200 (스케일 낮춰 드리프트 제어)
+    let eps = (eps_byte - 128) * WORLD_SCALE / 640
+    let mut i = 0
+    while i < dim {
+        let pre = w_mul(state, dim, i) + eps
+        let nxt = bound(pre)
+        ns.push(nxt)
+        i = i + 1
+    }
+    return ns
+}
+
+// 한 궤적 실행, 각 스텝 스칼라 요약(에너지) 반환.
+// 에너지 = (1/dim) * Σ |x_i|  (∈ [0, WORLD_SCALE])
+fn energy(state: [i64], dim: i64) -> i64 {
+    let mut s: i64 = 0
+    let mut i = 0
+    while i < dim {
+        s = s + abs_i(state[i])
+        i = i + 1
+    }
+    return s / dim
+}
+
+fn trajectory(dim: i64, steps: i64, seed_bytes: [i64], eps_bytes: [i64]) -> [i64] {
+    let mut state = new_universe(dim, seed_bytes)
+    let mut out: [i64] = []
+    let mut t = 0
+    while t < steps {
+        let eb = eps_bytes[t % eps_bytes.len()]
+        state = step_once(state, dim, eb)
+        out.push(energy(state, dim))
+        t = t + 1
+    }
+    return out
+}
+
+// ============================ CLI self-test ============================
+let _args = args()
+if _args.len() >= 3 {
+    if _args[2] == "--self-test" {
+        let mut seed: [i64] = []
+        let mut j = 0
+        while j < 32 { seed.push((j * 17 + 3) % 256); j = j + 1 }
+        let mut eps: [i64] = []
+        let mut k = 0
+        while k < 64 { eps.push((k * 31 + 7) % 256); k = k + 1 }
+        let traj = trajectory(16, 20, seed, eps)
+        println("self-test trajectory (dim=16, steps=20):")
+        let mut i = 0
+        while i < traj.len() {
+            println("  t=" + to_string(i) + " energy=" + to_string(traj[i]))
+            i = i + 1
+        }
+    }
+}
