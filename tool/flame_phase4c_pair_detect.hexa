@@ -1,0 +1,217 @@
+// ════════════════════════════════════════════════════════════════════════
+// tool/flame_phase4c_pair_detect.hexa — Phase 4-C-1a paired-call detector
+//
+// Scans hexa source (or expanded source post-module_loader) for paired
+// `nn_decoder_block_fwd(...)` + `nn_decoder_block_bwd(...)` call sites
+// that share matching (T, d, nh, nkv, h) static dim tuple. Log-only —
+// no source transform.
+//
+// RFC 048 Phase 4-C 의 first scaffold step. Validates IR pattern
+// matcher before authorizing larger 4-C-2 fused-primitive emit work.
+//
+// Detection criteria (per PHASE4C_IMPLEMENTATION_AUDIT.md §8):
+//   1. fwd call site: `nn_decoder_block_fwd(...)` with last-5 args =
+//      (T,d,nh,nkv,h) — same as 4-B-1 scaffold detection
+//   2. bwd call site: `nn_decoder_block_bwd(...)` with last-5 args =
+//      same (T,d,nh,nkv,h) static dim tuple
+//   3. Both call sites in same source unit (suggests paired fwd→bwd
+//      flow through nn_decoder_fwd + nn_decoder_grad in decoder_lib)
+//
+// For nn_decoder_fwd + nn_decoder_grad pattern (decoder_lib.hexa),
+// each block_fwd/bwd call appears ONCE in source (inside while loop)
+// but executes n_layer times dynamically.
+//
+// Usage:
+//   hexa run tool/flame_phase4c_pair_detect.hexa <source.hexa>
+//
+// Falsifier:
+//   F-RFC048-PAIR-DETECT  — ≥1 detected pair on flame_d32_corpus_test
+//                           expanded source
+// ════════════════════════════════════════════════════════════════════════
+
+let argv = args()
+if len(argv) < 3 {
+    println("usage: hexa run tool/flame_phase4c_pair_detect.hexa <source.hexa>")
+    exit(1)
+}
+
+let src_path = argv[2]
+let src = read_file(src_path)
+if len(src) == 0 {
+    println("error: cannot read " + src_path)
+    exit(1)
+}
+
+println("=== flame Phase 4-C-1a pair-detect (RFC 048) — " + src_path + " ===")
+
+// Reuse Phase 4-B-1 scaffold's idx_of_from + balanced parse helpers
+fn idx_of_from(haystack, needle, start) {
+    let n = len(haystack)
+    let m = len(needle)
+    if m == 0 { return start }
+    if start < 0 { return -1 }
+    let limit = n - m
+    let mut i = start
+    while i <= limit {
+        if haystack.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn gather_call_balanced(text, start_idx) {
+    let n = len(text)
+    let mut depth = 1
+    let mut i = start_idx
+    let mut out = ""
+    while i < n {
+        let ch = text.substring(i, i + 1)
+        if ch == "(" { depth = depth + 1 }
+        if ch == ")" {
+            depth = depth - 1
+            if depth == 0 { return out }
+        }
+        out = out + ch
+        i = i + 1
+    }
+    return ""
+}
+
+fn split_args_balanced(arg_text) {
+    let mut out = []
+    let mut buf = ""
+    let mut depth = 0
+    let mut i = 0
+    let n = len(arg_text)
+    while i < n {
+        let ch = arg_text.substring(i, i + 1)
+        if ch == "(" { depth = depth + 1; buf = buf + ch }
+        else if ch == "[" { depth = depth + 1; buf = buf + ch }
+        else if ch == "{" { depth = depth + 1; buf = buf + ch }
+        else if ch == ")" { depth = depth - 1; buf = buf + ch }
+        else if ch == "]" { depth = depth - 1; buf = buf + ch }
+        else if ch == "}" { depth = depth - 1; buf = buf + ch }
+        else if ch == "," {
+            if depth == 0 { out.push(buf.trim()); buf = "" }
+            else { buf = buf + ch }
+        } else { buf = buf + ch }
+        i = i + 1
+    }
+    if len(buf.trim()) > 0 { out.push(buf.trim()) }
+    return out
+}
+
+fn is_id_char(c) {
+    let oc = ord(c)
+    if oc >= 48 && oc <= 57 { return true }
+    if oc >= 65 && oc <= 90 { return true }
+    if oc >= 97 && oc <= 122 { return true }
+    if oc == 95 { return true }
+    return false
+}
+
+fn line_of_offset(text, off) {
+    let mut ln = 1
+    let mut i = 0
+    while i < off {
+        if text.substring(i, i + 1) == "\n" { ln = ln + 1 }
+        i = i + 1
+    }
+    return ln
+}
+
+// fwd/bwd dim tuples (text of T,d,nh,nkv,h)
+let mut fwd_dims = []
+let mut fwd_lines = []
+let mut bwd_dims = []
+let mut bwd_lines = []
+
+fn scan_calls(needle, kind, expected_arity) {
+    let mut start = 0
+    let n = len(src)
+    while start < n {
+        let pos = idx_of_from(src, needle, start)
+        if pos < 0 { return }
+        // skip fn decls + comments
+        let mut ls = pos
+        while ls > 0 {
+            if src.substring(ls - 1, ls) == "\n" { break }
+            ls = ls - 1
+        }
+        let prefix = src.substring(ls, pos)
+        if prefix.contains("//") { start = pos + len(needle); continue }
+        if prefix.contains("fn ") { start = pos + len(needle); continue }
+        if pos > 0 {
+            let bc = src.substring(pos - 1, pos)
+            if is_id_char(bc) { start = pos + len(needle); continue }
+        }
+        let open_idx = pos + len(needle)
+        let inner = gather_call_balanced(src, open_idx)
+        if len(inner) == 0 { start = open_idx; continue }
+        let args_list = split_args_balanced(inner)
+        let na = len(args_list)
+        if na != expected_arity { start = open_idx + len(inner); continue }
+        let T = args_list[na - 5]
+        let d = args_list[na - 4]
+        let nh = args_list[na - 3]
+        let nkv = args_list[na - 2]
+        let h = args_list[na - 1]
+        let dims_key = T + "," + d + "," + nh + "," + nkv + "," + h
+        let line_n = line_of_offset(src, pos)
+        if kind == "fwd" {
+            fwd_dims.push(dims_key)
+            fwd_lines.push(line_n)
+        } else {
+            bwd_dims.push(dims_key)
+            bwd_lines.push(line_n)
+        }
+        start = open_idx + len(inner)
+    }
+}
+
+scan_calls("nn_decoder_block_fwd(", "fwd", 10)
+scan_calls("nn_decoder_block_bwd(", "bwd", 13)
+
+println("")
+println("─── detected call sites ───")
+let mut fi = 0
+while fi < len(fwd_dims) {
+    print("  fwd  line "); print(fwd_lines[fi]); print("  dims=("); print(fwd_dims[fi]); println(")")
+    fi = fi + 1
+}
+let mut bi = 0
+while bi < len(bwd_dims) {
+    print("  bwd  line "); print(bwd_lines[bi]); print("  dims=("); print(bwd_dims[bi]); println(")")
+    bi = bi + 1
+}
+
+println("")
+println("─── paired-call analysis ───")
+let mut pair_count = 0
+let mut fj = 0
+while fj < len(fwd_dims) {
+    let fdims = fwd_dims[fj]
+    let mut bj = 0
+    while bj < len(bwd_dims) {
+        if bwd_dims[bj] == fdims {
+            print("  PAIR  fwd line "); print(fwd_lines[fj])
+            print(" ↔ bwd line "); print(bwd_lines[bj])
+            print("  dims=("); print(fdims); println(")")
+            pair_count = pair_count + 1
+        }
+        bj = bj + 1
+    }
+    fj = fj + 1
+}
+
+println("")
+print("  total fwd call sites: "); println(len(fwd_dims))
+print("  total bwd call sites: "); println(len(bwd_dims))
+print("  matched pairs (same dim tuple): "); println(pair_count)
+
+if pair_count >= 1 {
+    println("PASS  F-RFC048-PAIR-DETECT  ≥1 paired fwd+bwd call site detected (fusable)")
+} else {
+    println("INFO  F-RFC048-PAIR-DETECT  no paired call sites detected (no fusion opportunity in this source)")
+}
+println("=== end of Phase 4-C-1a pair-detect (RFC 048) ===")
