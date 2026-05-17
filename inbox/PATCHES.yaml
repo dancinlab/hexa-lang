@@ -592,13 +592,14 @@
   detail: patches/json-parse-uXXXX-raw-passthrough.md
 
 - id: chr-byte-vs-codepoint-asymmetry
-  source_commit: 53190b26
+  source_commit: 53190b26 + 0c9f0f04 + 0febd20d + c9b5c12c + ead812d9
   source_files:
     - self/runtime.c
     - self/runtime.h
     - self/codegen_c2.hexa
     - self/hexa_full.hexa
     - self/test_chr_byte.hexa
+    - tool/build_interp.hexa
   compiler_impact: |
     Patch premise correction (2026-05-17 measurement): BOTH interp AND
     compiled mode were UTF-8-encoding chr(N) as a codepoint (chr(240) ->
@@ -622,16 +623,17 @@
     round-trip, length-1 invariant 0..255, 🚀 emoji 4-byte synthesis,
     high-bit + ASCII boundary cases. Compiled: 12/12 PASS.
   downstream_consumer: |
-    wilson plugins/guard-readme-format (chr()-based emoji prefix scan
-    REVERTED to `chr(240) + chr(159)` split synthesis 2026-05-17 on
-    feat/git-guard 42a2fc6 — wilson runs compiled in production
-    (`wilson test` 23/23 PASS); dev-time `hexa run plugins/<id>/
-    test_*.hexa` selftest fails under the stale interp binary until
-    R3-R6 closes, accepted trade-off given interp retirement);
+    wilson plugins/guard-readme-format — chr()-based emoji prefix scan
+    uses `chr(240) + chr(159)` split synthesis (feat/git-guard 42a2fc6).
+    Works in compiled (always) AND interp (since ead812d9 close,
+    verified 2026-05-17). `wilson test` 23/23 PASS; `hexa run
+    plugins/guard-readme-format/test_*.hexa` selftest PASS under the
+    refreshed interp.
     wilson plugins/tool-web URL decoder (`%XX` -> chr(b)) — previously
-    silently misencoded under interp; now correct in compiled.
-  status: partial
+    silently misencoded under interp; correct in both modes now.
+  status: applied
   applied_compiled_at: 2026-05-17
+  applied_at: 2026-05-17
   opened: 2026-05-17
   detail: patches/chr-byte-vs-codepoint-asymmetry.md
   note: |
@@ -663,6 +665,18 @@
     via hexa_call2 but only `bit_or_pure` is exported; farr_* are
     `static inline` so linker invisible across the runtime.o TU
     boundary). Flip status -> applied once those two cluster close.
+
+    CLOSED 2026-05-17 (main, commit ead812d9 "fix(interp rebuild):
+    wilson P0#2 cluster close"): the bit_or + farr_* static-inline
+    cluster resolved — runtime.c de-staticised 14 helpers, runtime.h
+    declared them extern, and tool/build_interp.hexa now sed-rewrites
+    the interp TU's `#include "runtime.h"` -> `#include "runtime.c"`
+    (PHASE 1.2 reversal for the single interp TU only; AOT user.c path
+    unaffected). build/hexa_interp.real rebuilds cleanly (3,170,304 B)
+    and `chr(240)` emits the 1-byte 0xF0. Verified downstream from
+    wilson 2026-05-17: deployed `~/.hx` interp `chr(240)+chr(159)` ->
+    len 2; `hexa run plugins/guard-readme-format/test_*.hexa` selftest
+    PASS under interp. status -> applied.
 
 # ─── batch triage 2026-05-17 ──────────────────────────────────────────
 # 37 entries triaged from inbox/patches/ markdowns that had not yet been
