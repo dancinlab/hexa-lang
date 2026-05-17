@@ -83,7 +83,7 @@
 # ─── §0 PROJECT-WIDE QRNG STACK (2026-05-16) ─────────────────────────
 # stdlib/qrng/ 는 헌법 v2 룰 4 (외부 자원 try-CLI-or-fallback) 의 모범 사례.
 # RFC 044 가 dancinlab/qrng v1.0.0 (4,383 LoC) 을 흡수했고, 묘비는
-# ~/core/archive_qrng/ 에 freeze (헌법 v2 룰 3).
+# dancinlab/qrng GitHub private repo 에 freeze (헌법 v2 룰 3).
 
 @N qrng_stack := "stdlib/qrng — 9-backend QRNG provider + NIST audit" :: note [d=2026-05-16 active]
   provider = "stdlib/qrng/backends/{mock_qrng, anu, curby, nist_beacon, hardware_qrng} (5 IMPLEMENTED T0/T1/T3) + cloud/{ibm_quantum, ionq, rigetti, braket} (4 T2 STUB_CREDENTIALED)"
@@ -92,7 +92,7 @@
   entry = "qrng_audited_bytes(n, level, vendor) — entropy + audit 단일 호출; struct AuditedQrngBytes"
   legacy_api = "qrng_anu_uint8 / _live / _chunked / _parse_response / _live_enabled — stdlib/qrng_anu.hexa 흡수 (anima 호환)"
   cli = "hexa qrng <subcmd> — dispatcher = stdlib/qrng/qrng.hexa (status · collect · selftest · chain · meta · --help · --version). self/main.hexa 에 'else if sub == \"qrng\"' 분기 + cmd_help STDLIB CLI 섹션. 별도 tool/hexa_qrng/ 없음 — stdlib 단일 SSOT. 원본 580-LoC subprocess CLI 는 archive_qrng/cli/ 묘비."
-  archive = "~/core/archive_qrng/ — frozen 묘비 (헌법 v2 룰 3)"
+  archive = "github.com/dancinlab/qrng (private) — frozen 묘비 (헌법 v2 룰 3). 로컬 archive 폐기 2026-05-17 · see @X x_archive_qrng"
   governance = "see @D g_qrng_audit_required, g_qrng_honest_vendor, g_qrng_provider_only · @F f_qrng_silent_mock_downgrade"
   doi = "10.5281/zenodo.20102966 (dancinlab/qrng v1.0.0)"
   rfc = "RFC 044 (landed 2026-05-16) · RFC 045 qmirror + RFC 046 sim-universe 후속"
@@ -108,7 +108,7 @@
   cli = "hexa sim-universe <subcmd> — dispatcher = stdlib/sim_universe/sim_universe.hexa (status · selftest · anu · multiverse · qpu · qrng · bostrom · godel · sr · 15 experiment subcmds · --help · --version). self/main.hexa 에 'else if sub == \"sim-universe\"' 분기."
   honest_scope = "Toy lattice-model substrate · Bostrom-flavored framing. NOT lattice QCD · NOT Einstein-equation · NOT N-body cosmology · NOT SM physics. Each experiment ships per-module 'honest scope' caveat (NOT decoherent · NOT lab device · NOT L→∞ limit)."
   qrng_dependency = "stdlib/sim_universe/ouroboros_qrng/ consumes stdlib/qrng/ (RFC 044 absorbed) — 4-tier ANU fallback (paid → keyed → legacy → urandom)."
-  archive = "~/core/archive_sim-universe/ — frozen 묘비 (헌법 v2 룰 3)"
+  archive = "github.com/dancinlab/sim-universe (private) — frozen 묘비 (헌법 v2 룰 3). 로컬 archive 폐기 2026-05-17 · see @X x_archive_sim_universe"
   governance = "see @D g_sim_universe_honest_scope, g_sim_universe_qrng_consumer · @F f_sim_universe_lattice_qcd_claim"
   doi = "10.5281/zenodo.20102970 (dancinlab/sim-universe v1.1.0)"
   rfc = "RFC 046 Phase A + 046-A + 046-B LANDED 2026-05-16"
@@ -127,7 +127,7 @@
   structure_note = "chemistry_vqe + bench use relative imports (./ and ../../<feature>/module/). The <feature>/module/ directory structure is preserved verbatim under stdlib/quantum/ so all relative imports resolve unchanged — NO flatten, NO rewrite."
   envelope = "Statistical-equivalence substrate for the ≤30-qubit low-noise envelope only. Casio-vs-Rolex analogy. NOT a universal QPU replacement."
   qrng_boundary = "stdlib/quantum/qrng/ is the CONSUMER-side HMAC-DRBG amplifier; stdlib/qrng/ (RFC 044) is the PROVIDER registry. Zero code overlap, struct-shape compat by convention."
-  archive = "~/core/archive_qmirror/ — frozen 묘비 (헌법 v2 룰 3)"
+  archive = "github.com/dancinlab/qmirror (private) — frozen 묘비 (헌법 v2 룰 3). 로컬 archive 폐기 2026-05-17 · see @X x_archive_qmirror"
   governance = "see @D g_qmirror_envelope, g_qmirror_consumer_qrng · @F f_qmirror_real_qpu_claim"
   doi = "10.5281/zenodo.20102964 (dancinlab/qmirror v2.6.0)"
   rfc = "RFC 045 LANDED 2026-05-16 — 114 .hexa, all parse-clean. dancinlab quantum-stack absorption series (044 qrng + 045 qmirror + 046 sim-universe) COMPLETE."
@@ -315,24 +315,27 @@
   scope = "byte-canonical wire / storage format for AI-native pipelines · KV-cache prefix stable · 31 deterministic algorithms (A1-A35) · ASCII-stable line-oriented · absorbs JSON/JSONL surfaces"
   in-repo-example = "compiler/atlas/hxc_loader.hexa + tool/atlas_build_hxc.hexa + dist/atlas.hxc (Atlas Layer 4 sidecar)"
 
-@X x_archive_qrng := "qrng 묘비 archive" :: archive [d=2026-05-16 active]
-  url = "file://~/core/archive_qrng/"
-  scope = "Frozen historical SSOT of dancinlab/qrng v1.0.0 — AGENTS.tape · CHANGELOG · README · CITATION.cff · LICENSE · RELEASE_NOTES · TAPE-AUDIT · hexa.toml · install.hexa · docs/ · examples/ · cli/. 재해석 없음 (헌법 v2 룰 3)."
-  github = "dancinlab/qrng (private 후 2026-05-16)"
+@X x_archive_qrng := "qrng 묘비 archive" :: archive [d=2026-05-17 active]
+  url = "https://github.com/dancinlab/qrng"
+  scope = "Frozen historical SSOT of dancinlab/qrng v1.0.0 — AGENTS.tape · CHANGELOG · README · CITATION.cff · LICENSE · RELEASE_NOTES · TAPE-AUDIT · hexa.toml · install.hexa · docs/ · examples/ · cli/ · 14 module dirs · tests/. 재해석 없음 (헌법 v2 룰 3)."
+  github = "dancinlab/qrng (private 2026-05-16)"
+  preservation = "GitHub private repo 가 SSOT. 로컬 ~/core/archive_qrng/ 는 2026-05-17 폐기 (working-tree state 는 stdlib/qrng/ 에 흡수 보존; 원본 history 는 GitHub private)."
   doi = "10.5281/zenodo.20102966"
   successor = "stdlib/qrng/ (RFC 044)"
 
-@X x_archive_sim_universe := "sim-universe 묘비 archive" :: archive [d=2026-05-16 active]
-  url = "file://~/core/archive_sim-universe/"
-  scope = "Frozen historical SSOT of dancinlab/sim-universe v1.1.0 — AGENTS.tape · CHANGELOG · README · CITATION · LICENSE · DESIGN_IDEAS · FALSE_VACUUM · STARK_FRAGMENTATION · hexa.toml · install.hexa · cli/ · docs/ · MODULE/ · examples/ · 26 module dirs verbatim. 재해석 없음 (헌법 v2 룰 3)."
-  github = "dancinlab/sim-universe (private 후 2026-05-16)"
+@X x_archive_sim_universe := "sim-universe 묘비 archive" :: archive [d=2026-05-17 active]
+  url = "https://github.com/dancinlab/sim-universe"
+  scope = "Frozen historical SSOT of dancinlab/sim-universe v1.1.0 — AGENTS.tape · CHANGELOG · README · CITATION · LICENSE · DESIGN_IDEAS · FALSE_VACUUM · STARK_FRAGMENTATION · hexa.toml · install.hexa · cli/ · docs/ · MODULE/ · examples/ · tests/ · tool/ · 26 module dirs verbatim. 재해석 없음 (헌법 v2 룰 3)."
+  github = "dancinlab/sim-universe (private 2026-05-16)"
+  preservation = "GitHub private repo 가 SSOT. 로컬 ~/core/archive_sim-universe/ 는 2026-05-17 폐기 (working-tree state 는 stdlib/sim_universe/ 에 흡수 보존; 원본 history 는 GitHub private)."
   doi = "10.5281/zenodo.20102970"
   successor = "stdlib/sim_universe/ (RFC 046 LANDED 2026-05-16)"
 
-@X x_archive_qmirror := "qmirror 묘비 archive" :: archive [d=2026-05-16 active]
-  url = "file://~/core/archive_qmirror/"
+@X x_archive_qmirror := "qmirror 묘비 archive" :: archive [d=2026-05-17 active]
+  url = "https://github.com/dancinlab/qmirror"
   scope = "Frozen historical SSOT of dancinlab/qmirror v2.6.0 — AGENTS.tape · CHANGELOG · README · CITATION · LICENSE · LICENSING · BENCH.tape · IDENTITY.tape · PLAN.md · AER_HEXA_ABSORPTION_PLAN · CHEMISTRY_VQE_PYSCF_BACKEND_PLAN · hexa.toml · install.hexa · cli/ · docs/ · MODULE/ · examples/ · tests/ · tools/ · 38 module dirs verbatim. 재해석 없음 (헌법 v2 룰 3)."
-  github = "dancinlab/qmirror (private 후 2026-05-16)"
+  github = "dancinlab/qmirror (private 2026-05-16)"
+  preservation = "GitHub private repo 가 SSOT. 로컬 ~/core/archive_qmirror/ 는 2026-05-17 폐기 (working-tree state 는 stdlib/quantum/ 에 흡수 보존; 원본 history 는 GitHub private)."
   doi = "10.5281/zenodo.20102964"
   successor = "stdlib/quantum/ (RFC 045 LANDED 2026-05-16)"
 

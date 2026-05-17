@@ -23,8 +23,10 @@ supremacy-frontier · mbs-revival · fock-prethermal-dtc · z2-gauge-prethermal
 hofstadter · dqpt-loschmidt · wdw-minisuperspace).
 
 **Origin:** RFC 046 absorbs [`dancinlab/sim-universe`](https://github.com/dancinlab/sim-universe)
-v1.1.0 (private 2026-05-16) into hexa-lang's stdlib. The original SSOT is frozen
-at `~/core/archive_sim-universe/` (헌법 v2 룰 3).
+v1.1.0 into hexa-lang's stdlib. The original SSOT is frozen as the
+`dancinlab/sim-universe` GitHub **private** repo (헌법 v2 룰 3). The local
+`~/core/archive_sim-universe/` was retired 2026-05-17 — GitHub private repo is
+the preservation SSOT; working-tree state is absorbed here in `stdlib/sim_universe/`.
 
 > [!IMPORTANT]
 > **Status: scaffold (Phase A)** — RFC 046 lands the README + CLI dispatcher
@@ -63,7 +65,7 @@ The name reflects the **Bostrom-flavored simulation framing** — toy lattice
 universes evolved against a QRNG-anchored entropy budget. **This is NOT**
 lattice QCD, NOT Einstein-equation evolution, NOT N-body cosmology, NOT
 Standard-Model physics. Full honesty disclosure preserved at
-`archive_sim-universe/README.md` §Caveats.
+`dancinlab/sim-universe` (GitHub private) `README.md` §Caveats.
 
 ---
 
@@ -173,7 +175,7 @@ use "stdlib/sim_universe/experiments/fvd"
 | `@D g_sim_universe_honest_scope` | Each experiment module declares its "honest scope" (e.g. "EXACT 2ᴺ unitary; NOT decoherent; NOT lab device; NOT L→∞ thermodynamic limit"). Per-module caveat preserved in archive `MODULE/<name>.md`. |
 | `@D g_sim_universe_qrng_consumer` | `stdlib/sim_universe/ouroboros_qrng/` consumes `stdlib/qrng/` (RFC 044) — no own provider implementation. |
 | `@F f_sim_universe_lattice_qcd_claim` | Forbidden — claiming this is lattice QCD / Einstein-equation evolution / N-body cosmology / Standard-Model physics. The package is explicitly "toy lattice-model substrate, Bostrom-flavored framing". |
-| `@X x_archive_sim_universe` | `~/core/archive_sim-universe/` frozen 묘비 (Zenodo DOI 10.5281/zenodo.20102970) |
+| `@X x_archive_sim_universe` | `dancinlab/sim-universe` GitHub private 묘비 (Zenodo DOI 10.5281/zenodo.20102970) |
 
 Full entries in `AGENTS.tape` §0 (`@N sim_universe_stack`) + §3-5.
 
@@ -226,7 +228,7 @@ Full entries in `AGENTS.tape` §0 (`@N sim_universe_stack`) + §3-5.
 
 ## Caveats (preserved from upstream)
 
-Per-module "honest scope" boxes — see `archive_sim-universe/README.md` for full text:
+Per-module "honest scope" boxes — see `dancinlab/sim-universe` (GitHub private) `README.md` for full text:
 
 1. **`fvd` honest scope** — EXACT 2ᴺ unitary (N≤24) or 4ᴺ GKSL Lindblad mode (--lindblad). NOT decoherent (default mode), NOT lab device.
 2. **`stark-fragmentation` honest scope** — EXACT 2ᴺ unitary at experimental N=24; only Q and E are exact symmetries; P is paper's emergent constraint. NOT L→∞.
@@ -290,8 +292,8 @@ stdlib/sim_universe/
     ├── dqpt_loschmidt/  dqpt_loschmidt.hexa
     └── wdw_minisuperspace/  wdw_minisuperspace.hexa
 
-~/core/archive_sim-universe/                # frozen 묘비 (RFC 046, read-only)
-└── (full v1.1.0 metadata + cli + 26 modules preserved verbatim)
+github.com/dancinlab/sim-universe (private) # frozen 묘비 (RFC 046)
+└── (full v1.1.0 repo verbatim — local ~/core/archive_sim-universe/ retired 2026-05-17)
 ```
 
 ---

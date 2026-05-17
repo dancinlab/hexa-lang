@@ -21,7 +21,10 @@ IBM Cloud's $1.60/job.
 
 **Origin:** RFC 045 absorbed [`dancinlab/qmirror`](https://github.com/dancinlab/qmirror)
 v2.6.0 (62,402 LoC, 38 module directories — private 2026-05-16) into hexa-lang's
-stdlib. The original SSOT is frozen at `~/core/archive_qmirror/` (헌법 v2 룰 3).
+stdlib. The original SSOT is frozen as the `dancinlab/qmirror` GitHub **private**
+repo (헌법 v2 룰 3). The local `~/core/archive_qmirror/` was retired 2026-05-17 —
+GitHub private repo is the preservation SSOT; working-tree state is absorbed
+here in `stdlib/quantum/`.
 
 > [!NOTE]
 > Third of the dancinlab quantum-stack absorption series:
@@ -116,7 +119,7 @@ as standalone module dirs.
 | `@D g_qmirror_envelope` | qmirror is a ≤30-qubit low-noise statistical-equivalence substrate — NOT a universal QPU replacement. Honest analogy: Casio vs Rolex. |
 | `@D g_qmirror_consumer_qrng` | `stdlib/quantum/qrng/` is the consumer-side HMAC-DRBG amplifier; `stdlib/qrng/` (RFC 044) is the provider. Zero code overlap. |
 | `@F f_qmirror_real_qpu_claim` | Forbidden — claiming qmirror IS a real QPU or equivalent beyond the ≤30-qubit low-noise envelope. |
-| `@X x_archive_qmirror` | `~/core/archive_qmirror/` frozen 묘비 (Zenodo DOI 10.5281/zenodo.20102964) |
+| `@X x_archive_qmirror` | `dancinlab/qmirror` GitHub private 묘비 (Zenodo DOI 10.5281/zenodo.20102964) |
 
 Full entries in `AGENTS.tape` §0 (`@N qmirror_stack`) + §3-5.
 
@@ -136,8 +139,8 @@ stdlib/quantum/
 ├── bench/module/                          # per-molecule benchmarks
 └── surface_code_d3/module/
 
-~/core/archive_qmirror/                     # frozen 묘비 (RFC 045, read-only)
-└── (full v2.6.0 metadata + cli + 38 module dirs preserved verbatim)
+github.com/dancinlab/qmirror (private)      # frozen 묘비 (RFC 045)
+└── (full v2.6.0 repo verbatim — local ~/core/archive_qmirror/ retired 2026-05-17)
 ```
 
 ## RFC chain
