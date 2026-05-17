@@ -726,6 +726,94 @@ __global__ void _hx_k_softmax_rows(const double* __restrict__ X,
 }
 
 /* ────────────────────────────────────────────────────────────────────
+ * Kernel 1b (flame Phase 4-D-9, ADDITIVE — RFC 058 12→13→14 precedent)
+ * ────────────────────────────────────────────────────────────────────
+ * causal_softmax_rows: per-row causal-prefix softmax for the attention
+ * block (tool/flame_phase4d7_block_fwd_primitive.c L767-789). For row i,
+ * with the causal prefix length L = i+1:
+ *
+ *     m_max  = max_{j∈[0,L)}  X[i*T+j]
+ *     e_j    = _hx_dt_exp_dev(X[i*T+j] - m_max)              j∈[0,L)
+ *     tot    = Σ_{j∈[0,L)} e_j
+ *     Y[i*T+j] = e_j / tot                                   j∈[0,L)
+ *     Y[i*T+j] = 0.0                                         j∈[L,T)
+ *
+ * BYTE-EQ CONTRACT — the CPU reference uses `flame_g7_dt_exp`, a
+ * deterministic 12-term-Taylor / range-halving polynomial, NOT libm
+ * `exp()`. _hx_dt_exp_dev below is that algorithm ported VERBATIM
+ * (same constants, same loop bounds 1..11 / 0..r-1, same order) so the
+ * only numerical gap vs the CPU reference is the row-reduction reorder
+ * (deterministic tree, ~1e-12 band), never an exp-algorithm error.
+ *
+ * The existing _hx_k_softmax_rows (Kernel 1 above) softmaxes the FULL
+ * row with libm exp() and is UNTOUCHED — this is a separate, additive
+ * kernel for the causal-masked attention path.
+ * ──────────────────────────────────────────────────────────────────── */
+
+/* __device__ port of flame_g7_dt_exp (tool/flame_phase4d7_block_fwd_
+ * primitive.c:78-85). Byte-for-byte the same algorithm: range-reduce by
+ * halving while |xr| > 0.25 (counting r halvings), 12-term Taylor
+ * (k = 1..11, term *= xr/k, acc += term), then square the result r
+ * times. Same operations, same order ⇒ bit-identical to the CPU
+ * reference modulo NONE (pure fp64 ops, identical sequence). */
+__device__ __forceinline__ double _hx_dt_exp_dev(double x) {
+    int r = 0; double xr = x;
+    while ((xr > 0.0 ? xr : -xr) > 0.25) { xr = xr / 2.0; r = r + 1; }
+    double term = 1.0, acc = 1.0;
+    for (int k = 1; k < 12; k++) { term = term * xr / (double)k; acc = acc + term; }
+    for (int s = 0; s < r; s++) acc = acc * acc;
+    return acc;
+}
+
+__global__ void _hx_cuda_kern_causal_softmax_rows(const double* __restrict__ X,
+                                                  double* __restrict__ Y,
+                                                  int64_t R, int64_t T) {
+    int64_t i = blockIdx.x;                 /* one block per row i */
+    if (i >= R) return;
+    const double* xr = X + i * T;
+    double*       yr = Y + i * T;
+    int64_t L = i + 1;                      /* causal prefix length */
+
+    __shared__ double smem[HX_RR_BLOCK / 32];
+
+    /* Pass 1: max over the causal prefix [0, L). Threads outside the
+     * prefix contribute the -inf-equivalent identity (matches the CPU
+     * reference which seeds m_max = sc[i*T+0] and scans j∈[1,L)). */
+    double vmax = -1.0e308;
+    for (int64_t j = threadIdx.x; j < L; j += blockDim.x) {
+        double v = xr[j];
+        if (v > vmax) vmax = v;
+    }
+    double zmax = _hx_block_max(vmax, smem);
+
+    /* Pass 2: e_j = dt_exp(x - max) into Y[0,L); accumulate the prefix
+     * sum. j∈[L,T) is written exactly 0.0 (the CPU code only writes /
+     * normalizes [0,L) and leaves the rest of the Bc slab as its prior
+     * zeros — here Y is the dedicated output so we zero it explicitly). */
+    double vsum = 0.0;
+    for (int64_t j = threadIdx.x; j < T; j += blockDim.x) {
+        if (j < L) {
+            double e = _hx_dt_exp_dev(xr[j] - zmax);
+            yr[j] = e;
+            vsum += e;
+        } else {
+            yr[j] = 0.0;
+        }
+    }
+    double tot = _hx_block_sum(vsum, smem);
+
+    /* Pass 3: normalize the causal prefix. The CPU reference divides
+     * (`Bc[oP+...] /= tot`) — use the SAME divide here (NOT a
+     * multiply-by-reciprocal) so the only residual numerical gap vs the
+     * CPU reference is the deterministic-tree reorder of m_max and tot.
+     * The CPU `tot` is always > 0 (≥ exp(0)=1 from the j=i diagonal),
+     * so no /0 guard is needed to mirror it; guard defensively anyway. */
+    for (int64_t j = threadIdx.x; j < L; j += blockDim.x) {
+        if (tot != 0.0) yr[j] = yr[j] / tot;
+    }
+}
+
+/* ────────────────────────────────────────────────────────────────────
  * Kernel 2 — rmsnorm_rows: Y[r,j] = X[r,j] / sqrt(mean_j(X²) + eps)
  *   One block per row; one reduction (sum of squares).
  * ──────────────────────────────────────────────────────────────────── */
@@ -866,6 +954,43 @@ int _hx_cuda_farr_softmax_rows_gpu(int64_t x_id, int64_t R, int64_t C,
 #else
     (void)x_id; (void)R; (void)C; (void)out_id;
     fprintf(stderr, "[cuda] softmax_rows: built without __CUDACC__ "
+                    "(use nvcc -x cu)\n");
+    return -1;
+#endif
+}
+
+/* ── causal_softmax_rows host wrapper (flame Phase 4-D-9, the 14th
+ * kernel — ADDITIVE; the 12 verified kernels + RFC 058 13th + all
+ * existing wrappers are UNTOUCHED). Mirrors _hx_cuda_farr_softmax_rows_
+ * gpu EXACTLY: validate → _h2d(x) → _ensure_dev_alloc_out(R*T) → launch
+ * → cudaDeviceSynchronize/cudaGetLastError → _d2h_out(R*T) → mark. The
+ * X buffer is R×T causal scores; Y[i*T+j] = softmax over [0,i+1) (the
+ * causal prefix), 0.0 for j ≥ i+1. Per-row reduction is the same
+ * deterministic _hx_block_max/_hx_block_sum tree as Kernel 1. */
+int _hx_cuda_farr_causal_softmax_rows_gpu(int64_t x_id, int64_t R,
+                                          int64_t T, int64_t out_id) {
+#ifdef __CUDACC__
+    if (R <= 0 || T <= 0) {
+        fprintf(stderr, "[cuda] causal_softmax_rows: bad shape "
+                "R=%lld T=%lld\n", (long long)R, (long long)T);
+        return -1;
+    }
+    if (_h2d(x_id) != 0) return -1;
+    if (_ensure_dev_alloc_out(out_id, R * T) != 0) return -1;
+    const double* X = g_slots[x_id].d_buf;
+    double*       Y = g_slots[out_id].d_buf;
+    dim3 grid((unsigned)R), block(HX_RR_BLOCK);
+    _hx_cuda_kern_causal_softmax_rows<<<grid, block>>>(X, Y, R, T);
+    cudaError_t er = cudaDeviceSynchronize();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] causal_softmax_rows launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    return _d2h_out(out_id, R * T);
+#else
+    (void)x_id; (void)R; (void)T; (void)out_id;
+    fprintf(stderr, "[cuda] causal_softmax_rows: built without __CUDACC__ "
                     "(use nvcc -x cu)\n");
     return -1;
 #endif
