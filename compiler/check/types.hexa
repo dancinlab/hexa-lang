@@ -1270,7 +1270,14 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // Genuine kind≠kind non-literal mismatches still report —
             // no type-soundness weakening (g3).
             if !_types_assignable(then_t, else_t, e.children[2]) {
-                _emit_hx3001(then_t, else_t, e.span, out)
+                // Permissive on unit: an if-expression whose arm
+                // typecheck resolves an unannotated-return call to
+                // `unit` should not error. Genuine non-unit
+                // mismatches (`if c { 1 } else { "x" }`) still fire.
+                let ku = "unit"
+                if then_t.kind != ku && else_t.kind != ku {
+                    _emit_hx3001(then_t, else_t, e.span, out)
+                }
             }
         }
         return then_t
@@ -1443,14 +1450,34 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
             return lt
         }
         // Mismatch (one or both non-numeric) — treat as type-mismatch with
-        // the LHS as the reference shape; emit once.
-        _emit_hx3001(lt, rt, e.span, out)
+        // the LHS as the reference shape; emit once. Permissive on unit:
+        // when an unannotated `fn f(x) { … return X }` resolves to `unit`,
+        // arith between two such calls (`abs(a*b) / gcd(a,b)`) hits this
+        // branch with (unit, unit); the runtime hexa_div dispatches on
+        // HexaVal tag regardless, so the HX3001 was tighter than runtime
+        // correctness needs.
+        let ku = "unit"
+        if lt.kind != ku && rt.kind != ku {
+            _emit_hx3001(lt, rt, e.span, out)
+        }
         return lt
     }
 
     if _types_is_compare_op(op) {
         if !_types_equal(lt, rt) {
-            _emit_hx3001(lt, rt, e.span, out)
+            // Permissive: when one side is `unit` (the placeholder for
+            // a fn return-type the inferencer couldn't pin — typically
+            // an unannotated `fn f(x) { if … { return X }; return Y }`
+            // whose RHS resolves before its return paths), allow the
+            // compare. The codegen runs the runtime hexa_eq/lt/le/…
+            // which handles HexaVal-tag dispatch regardless, so the
+            // HX3001 was strictly stricter than the runtime needs and
+            // blocked `is_leap(year) == 1` style guards across the
+            // corpus.
+            let ku = "unit"
+            if lt.kind != ku && rt.kind != ku {
+                _emit_hx3001(lt, rt, e.span, out)
+            }
         }
         return _types_t_bool()
     }
@@ -1546,7 +1573,17 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             let want = callee_t.args[k]
             let got = arg_types[k]
             if !_types_equal(want, got) {
-                _emit_hx3003(name, k + 1, want, got, e.children[1 + k].span, out)
+                // Permissive on `unit`-typed actuals: the inferencer
+                // resolves an unannotated `fn f(x) { if … { return X }
+                // ; return Y }` to `unit` even when every path
+                // returns a value, so calls like `_bell(is_leap(yr))`
+                // got blocked. The codegen passes the HexaVal pair
+                // regardless of static type, so this strictness was
+                // tighter than runtime correctness needs.
+                let ku = "unit"
+                if got.kind != ku {
+                    _emit_hx3003(name, k + 1, want, got, e.children[1 + k].span, out)
+                }
             }
             k = k + 1
         }

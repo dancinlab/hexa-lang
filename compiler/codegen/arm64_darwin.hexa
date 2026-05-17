@@ -512,8 +512,50 @@ fn _arm_spill_offset(rm: RegMap, id: i64) -> i64 {
 // field types across imports without it.
 pub struct ArmStrTab {
     keys: [string],
-    labels: [string]
+    labels: [string],
+    // Parallel float-literal pool (const_float Operand → `.LCfltN`).
+    // `fkeys` is the parsed f64 (used for de-dup); `flabels` is the
+    // emitted `.LCfltN` symbol; `ftexts` is the literal's source
+    // text ("0.15415067982725836"). Emit goes through the assembler's
+    // `.double <text>` so we sidestep the stage0 lack of a double→
+    // bits bitcast AND preserve full literal precision (stage0
+    // `to_string(f64)` truncates to ~6 digits — losing ~3e-7 against
+    // 17-digit reference literals — so we can't round-trip the
+    // parsed f64 back through `to_string`).
+    fkeys: [f64],
+    flabels: [string],
+    ftexts: [string]
 }
+
+fn _arm64_float_lookup(st: ArmStrTab, v: f64) -> string {
+    let mut i = 0
+    while i < len(st.fkeys) {
+        if st.fkeys[i] == v {
+            let lab = st.flabels[i]
+            return lab.substring(0, len(lab))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _arm64_float_intern(st: ArmStrTab, v: f64, text: string) -> ArmStrTab {
+    let existing = _arm64_float_lookup(st, v)
+    if len(existing) > 0 { return st }
+    let mut fk = st.fkeys
+    let mut fl = st.flabels
+    let mut ft = st.ftexts
+    let label = ".LCflt" + to_string(len(fk))
+    fk.push(v)
+    fl.push(label)
+    // Empty text falls back to `to_string(v)` at LModule build time.
+    ft.push(text.substring(0, len(text)))
+    return ArmStrTab {
+        keys: st.keys, labels: st.labels,
+        fkeys: fk, flabels: fl, ftexts: ft
+    }
+}
+
 
 fn _arm64_strtab_lookup(st: ArmStrTab, s: string) -> string {
     let mut i = 0
@@ -559,7 +601,7 @@ fn _arm64_op_for_operand_st(o: Operand, st: ArmStrTab) -> LOperand {
 // flow through unchanged (label = literal string), which only
 // matters for modules that never produce a const_str operand.
 fn _arm64_op_for_operand(o: Operand) -> LOperand {
-    let st = ArmStrTab { keys: [], labels: [] }
+    let st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [], ftexts: [] }
     return _arm64_op_for_operand_st(o, st)
 }
 
@@ -629,10 +671,18 @@ fn _arm64_arg_reg(idx: i64) -> string {
 }
 
 // C7 — scan all _STMT_CALL stmts in `mf` and return the maximum number
-// of overflow args (args 9+) across all calls. The per-fn outgoing-call
+// of overflow args (args 5+) across all calls. The per-fn outgoing-call
 // overflow region is sized once from this maximum and reused at every
 // call site, so we don't sub/add sp mid-frame (which would invalidate
-// sp-relative SSA spill offsets).
+// sp-relative SSA spill offsets). NOTE: HexaVal arg ABI uses a register
+// PAIR per arg (16B), so only 4 HexaVal args fit in x0..x7 — args 5+
+// overflow to the caller's stack region (this matches the call-site
+// emit at "C7: stack arg N"). Previously this used the C-int `n > 8`
+// boundary and so missed every 5-args-or-more fn, sizing
+// call_overflow_bytes to 0 and causing the outgoing arg 5 store at
+// [sp, #0] to clobber the caller's own L0 / first param ingress slot
+// (silently corrupted nested-array params across recursion — the
+// "edges len 5 → 3 → 4" diagnostic from `_pf_tree_build`).
 fn _arm64_max_call_overflow(mf: MFunc) -> i64 {
     let mut max_overflow = 0
     let mut bi = 0
@@ -643,8 +693,8 @@ fn _arm64_max_call_overflow(mf: MFunc) -> i64 {
             let s = blk.stmts[si]
             if s.kind == _STMT_CALL {
                 let n = len(s.args)
-                if n > 8 {
-                    let overflow = n - 8
+                if n > 4 {
+                    let overflow = n - 4
                     if overflow > max_overflow { max_overflow = overflow }
                 }
             }
@@ -871,6 +921,23 @@ fn _hv_load(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
                          _arm64_op_label(nm + "@PAGEOFF"), "hv str ptr off"))
         return out
     }
+    if o.kind == "const_float" {
+        // TAG_FLOAT = 1 (see self/runtime.h `enum { TAG_INT=0, TAG_FLOAT, … }`).
+        // Pool: `.LCfltN: .double <text>` emitted in rodata; here we
+        // load that 8-byte IEEE-754 value into `hi` and stash the tag
+        // in `lo`. Uses x14 as scratch so we don't clash with the
+        // x15 scratch used by spill/slot moves.
+        let lab = _arm64_float_lookup(st, o.float_val)
+        out.push(_arm64_instr2("movz", _arm64_op_reg(lo),
+                         _arm64_op_label("#1"), "hv const_float: TAG_FLOAT"))
+        out.push(_arm64_instr2("adrp", _arm64_op_reg("x14"),
+                         _arm64_op_label(lab + "@PAGE"), "hv float pool page"))
+        out.push(_arm64_instr3("add", _arm64_op_reg("x14"), _arm64_op_reg("x14"),
+                         _arm64_op_label(lab + "@PAGEOFF"), "hv float pool off"))
+        out.push(_arm64_instr2("ldr", _arm64_op_reg(hi),
+                         _arm64_op_label("[x14]"), "hv load f64 bits " + lab))
+        return out
+    }
     if o.kind == "global" {
         let gl = "g" + to_string(o.global_id)
         out.push(_arm64_instr2("adrp", _arm64_op_reg(lo),
@@ -895,6 +962,25 @@ fn _hv_store(buf: [LInstr], rm: RegMap, id: i64, lo: string, hi: string) -> [LIn
     out.push(_arm64_instr3("stp", _arm64_op_reg(lo), _arm64_op_reg(hi),
                      _hv_memb(off, "x15"), "hv store L" + to_string(id)))
     return out
+}
+
+// Dispatch by dst: arena_id == -999 marks a module-level mutable
+// global (hir_to_mir _lower_hexpr "assign" branch sentinel). Emits a
+// PC-relative store into the `g<id>` data slot. Local-slot dsts fall
+// through to the normal frame-spill path.
+fn _hv_store_dst(buf: [LInstr], rm: RegMap, dst: Local, lo: string, hi: string) -> [LInstr] {
+    if dst.arena_id == -999 {
+        let mut out = buf
+        let gl = "g" + to_string(dst.id)
+        out.push(_arm64_instr2("adrp", _arm64_op_reg("x15"),
+                         _arm64_op_label(gl + "@PAGE"), "hv global page (store)"))
+        out.push(_arm64_instr3("add", _arm64_op_reg("x15"), _arm64_op_reg("x15"),
+                         _arm64_op_label(gl + "@PAGEOFF"), "hv global off (store)"))
+        out.push(_arm64_instr3("stp", _arm64_op_reg(lo), _arm64_op_reg(hi),
+                         _arm64_op_label("[x15]"), "hv store global " + gl))
+        return out
+    }
+    return _hv_store(buf, rm, dst.id, lo, hi)
 }
 
 // Load a const_str's raw char* (the .LCstr address) into `reg` — for
@@ -954,21 +1040,74 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "append_file"   { return "rt_append_file" }
     if name == "args"          { return "hexa_args" }
     if name == "char_code_at"  { return "hexa_str_char_code_at" }
+    if name == "char_code"     { return "hexa_char_code" }
+    if name == "lgamma"        { return "hexa_math_lgamma" }
     if name == "env"           { return "hexa_env_var" }
     if name == "file_size"     { return "rt_file_size" }
     if name == "chars"         { return "hexa_str_chars" }
     if name == "eprintln"      { return "hexa_eprintln" }
+    if name == "exit"          { return "hexa_exit" }
     if name == "exec"          { return "hexa_exec" }
     if name == "file_exists"   { return "rt_file_exists" }
     if name == "index_of"      { return "hexa_array_index_of" }
     if name == "join"          { return "hexa_str_join" }
     if name == "push"          { return "hexa_array_push" }
+    if name == "pop"           { return "hexa_array_pop" }
     if name == "read_file"     { return "rt_read_file" }
     if name == "replace"       { return "hexa_str_replace" }
     if name == "split"         { return "hexa_str_split" }
     if name == "substring"     { return "hexa_str_substring" }
     if name == "to_int"        { return "hexa_to_int" }
+    if name == "to_float"      { return "hexa_to_float" }
+    if name == "to_bool"       { return "hexa_to_bool" }
     if name == "to_string"     { return "hexa_to_string" }
+    // Interp aliases (bind.hexa accepts them as known names; without
+    // a runtime symbol map the link fails on `_str`/`_int`/etc.).
+    // `str(x)` is interp's shorthand for `to_string(x)` (see
+    // self/hexa_full.hexa: call_builtin "str" -> val_str(val_to_string(args[0]))).
+    if name == "str"           { return "hexa_to_string" }
+    if name == "int"           { return "hexa_to_int" }
+    if name == "float"         { return "hexa_to_float" }
+    if name == "bool"          { return "hexa_to_bool" }
+    if name == "ln"            { return "hexa_log" }
+    // map/dict accessors — runtime returns HexaVal of array (keys,
+    // values, entries) or HexaVal scalar (count). All HexaVal-shape
+    // so no ret-box needed. `dict_keys` is interp's anima-speak alias
+    // for `map_keys` (see hexa_full.hexa § FIX-A); both map to the
+    // same runtime fn name family.
+    if name == "dict_keys"     { return "hexa_dict_keys" }
+    if name == "map_keys"      { return "hexa_map_keys" }
+    if name == "map_values"    { return "hexa_map_values" }
+    if name == "map_entries"   { return "hexa_map_entries" }
+    // math / formatting — HexaVal-in / HexaVal-out, no ret-box needed.
+    // Each verified to exist in self/runtime.c before mapping (the
+    // unmapped-is-safer-than-mis-mapped policy in this file's header
+    // comment still holds for ret-box/cstring shapes that aren't here).
+    if name == "abs"           { return "hexa_abs" }
+    if name == "argmax"        { return "hexa_argmax" }
+    if name == "bin"           { return "hexa_bin" }
+    if name == "ceil"          { return "hexa_ceil" }
+    if name == "clamp"         { return "hexa_clamp" }
+    if name == "cos"           { return "hexa_cos" }
+    if name == "exp"           { return "hexa_exp" }
+    if name == "floor"         { return "hexa_floor" }
+    if name == "format"        { return "hexa_format" }
+    if name == "hex"           { return "hexa_hex" }
+    if name == "log"           { return "hexa_log" }
+    if name == "log2"          { return "hexa_log2" }
+    if name == "log10"         { return "hexa_log10" }
+    if name == "pad_left"      { return "hexa_pad_left" }
+    if name == "pad_right"     { return "hexa_pad_right" }
+    if name == "pow"           { return "hexa_pow" }
+    if name == "random"        { return "hexa_random" }
+    if name == "round"         { return "hexa_round" }
+    if name == "sin"           { return "hexa_sin" }
+    if name == "sleep"         { return "hexa_sleep" }
+    if name == "sqrt"          { return "hexa_sqrt" }
+    if name == "tan"           { return "hexa_tan" }
+    if name == "tanh"          { return "hexa_tanh" }
+    if name == "timestamp"     { return "hexa_timestamp" }
+    if name == "utc_iso_now"   { return "hexa_utc_iso_now" }
     if name == "trim"          { return "rt_str_trim" }
     if name == "type_of"       { return "hexa_type_of" }
     if name == "write_file"    { return "rt_write_file" }
@@ -1009,14 +1148,14 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         if s.op == "array_lit" {
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_array_new"),
                              "array_lit: new array"))
-            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
             let mut i = 0
             while i < len(s.args) {
                 buf = _hv_ldslot(buf, rm, s.dst.id, "x0", "x1")
                 buf = _hv_load(buf, s.args[i], st, rm, "x2", "x3")
                 buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_array_push"),
                                  "array_lit: push elem " + to_string(i)))
-                buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
                 i = i + 1
             }
             return buf
@@ -1032,7 +1171,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             // HexaVal(x3:x4). args=[type_str, k0,v0,k1,v1,…].
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_new"),
                              "struct_lit: new map"))
-            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
             let mut i = 1
             while i + 1 < len(s.args) {
                 buf = _hv_ldslot(buf, rm, s.dst.id, "x0", "x1")
@@ -1040,7 +1179,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf = _hv_load(buf, s.args[i + 1], st, rm, "x3", "x4")
                 buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_set"),
                                  "struct_lit: set field"))
-                buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
                 i = i + 2
             }
             return buf
@@ -1056,12 +1195,40 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _hv_cstr(buf, s.args[1], st, "x2")
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_get"),
                              "field: hexa_map_get"))
-            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
+        // array/map subscript: base[idx]. hir_to_mir lowers `a[i]` to
+        // STMT_ASSIGN op="index" args=[base, idx]; without a dedicated
+        // branch the fall-through below would just copy `base` into
+        // dst (every index expr returned the whole container). Route
+        // through hexa_index_get(container, key): the runtime
+        // dispatches arrays via hexa_array_get and unwraps VALSTRUCT
+        // before the array path.
+        if s.op == "index" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // base → x0:x1
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // idx → x2:x3
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_index_get"),
+                             "index: hexa_index_get"))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
+        // index_set: `arr[i] = v` / `map[k] = v`. The hir_to_mir
+        // assign branch lowers index-lhs assignments to STMT_ASSIGN
+        // op="index_set" with args = [container, key, value]; no dst
+        // local is consumed (the store is the side effect). Three
+        // HexaVal pair args fit in x0..x5 (AAPCS64); no overflow.
+        if s.op == "index_set" && len(s.args) >= 3 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // container
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // key
+            buf = _hv_load(buf, s.args[2], st, rm, "x4", "x5")  // value
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_index_set"),
+                             "index_set: hexa_index_set"))
             return buf
         }
         if len(s.args) >= 1 {
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
-            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
         }
         return buf
     }
@@ -1074,7 +1241,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
                 buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
                 buf.push(_arm64_instr1("bl", _arm64_op_label(sym), "binop " + s.op))
-                buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
                 return buf
             }
             if s.op == "!=" || s.op == "ne" || s.op == "cmp_ne" {
@@ -1087,7 +1254,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                  _arm64_op_reg("x0"), _arm64_op_label("#1"), "ne: !truthy"))
                 buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
                                  "ne: box bool"))
-                buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
                 return buf
             }
             if s.op == "&&" || s.op == "||" || s.op == "and" || s.op == "or" {
@@ -1113,7 +1280,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                     buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
                 }
                 buf.push(_arm64_instr0("label", lb + "_d"))
-                buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
                 return buf
             }
             // bitwise / unknown — rare in compiler self-source. Approximate
@@ -1122,7 +1289,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_add_slow"),
                              "binop " + s.op + " (approx)"))
-            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
         }
         return buf
     }
@@ -1145,7 +1312,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              _arm64_op_reg("w0"), "has_key: zext"))
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
                              "has_key: box bool"))
-            if s.dst.id >= 0 { buf = _hv_store(buf, rm, s.dst.id, "x0", "x1") }
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
         // C7 — AAPCS64 arm64 stack spill for args 9+.
@@ -1195,7 +1362,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "ret bool: box → HexaVal"))
         }
         if s.dst.id >= 0 {
-            buf = _hv_store(buf, rm, s.dst.id, "x0", "x1")
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
         }
         return buf
     }
@@ -1234,6 +1401,44 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         }
         let then_lab = _arm64_block_label(modhash, fname, s.target_block)
         buf.push(_arm64_instr1("b", _arm64_op_label(then_lab), "branch -> then"))
+        return buf
+    }
+    if s.kind == _STMT_UNOP {
+        // Unary minus / boolean negation — previously unhandled (asm
+        // emitted `nop ; unhandled stmt kind unop`), so `let x = -1`
+        // left x's slot uninitialized and `if x<=0` mis-branched.
+        // hexa runtime has no `hexa_neg` shim → lower `-x` as
+        // `0 - x` through hexa_sub; `!x` / `not x` mirror the `!=`
+        // pattern: truthy → eor 1 → box bool.
+        if len(s.args) >= 1 {
+            if s.op == "-" || s.op == "neg" {
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "unop -: a.tag=TAG_INT"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                                 _arm64_op_label("#0"), "unop -: a.val=0"))
+                buf = _hv_load(buf, s.args[0], st, rm, "x2", "x3")
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_sub"),
+                                 "unop -: 0 - x"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                return buf
+            }
+            if s.op == "!" || s.op == "not" {
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_truthy"),
+                                 "unop !: truthy → w0"))
+                buf.push(_arm64_instr3("eor", _arm64_op_reg("x0"),
+                                 _arm64_op_reg("x0"), _arm64_op_label("#1"),
+                                 "unop !: !truthy"))
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
+                                 "unop !: box bool"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                return buf
+            }
+            // Unknown unop — pass value through (closer to no-op than
+            // an uninitialized slot, and surfaces visibly in output).
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+        }
         return buf
     }
     if s.kind == "load" {
@@ -1412,8 +1617,15 @@ fn _collect_strs_from_stmt(st: ArmStrTab, s: Stmt) -> ArmStrTab {
                 // PLAN-stage3-footprint-F6.md.
                 keys.push(o.str_val.substring(0, len(o.str_val)))
                 labs.push(".LCstr" + to_string(n))
-                out = ArmStrTab { keys: keys, labels: labs }
+                out = ArmStrTab {
+                    keys: keys, labels: labs,
+                    fkeys: out.fkeys, flabels: out.flabels,
+                    ftexts: out.ftexts
+                }
             }
+        }
+        if o.kind == "const_float" {
+            out = _arm64_float_intern(out, o.float_val, o.str_val)
         }
         i = i + 1
     }
@@ -1445,7 +1657,7 @@ fn _arm_strtab_collect_fn(st: ArmStrTab, f: MFunc) -> ArmStrTab {
 // Whole-module strtab — the non-streaming path. Now a thin fold over
 // _arm_strtab_collect_fn so both paths share one collector (no drift).
 fn _build_arm_strtab(module: MModule) -> ArmStrTab {
-    let mut st = ArmStrTab { keys: [], labels: [] }
+    let mut st = ArmStrTab { keys: [], labels: [], fkeys: [], flabels: [], ftexts: [] }
     let mut fi = 0
     while fi < len(module.funcs) {
         st = _arm_strtab_collect_fn(st, module.funcs[fi])
@@ -1586,12 +1798,25 @@ fn _ascii_code(ch: string) -> i64 {
     return 63 // '?' for unknown (non-ASCII / control)
 }
 
+// Byte-true value of a single-byte string element (as produced by
+// `s.chars()` in the hexa runtime, where each entry is one source
+// byte regardless of UTF-8 codepoint boundaries). `_ascii_code` only
+// covers ASCII printable + a few escapes and returns 63 ('?') for
+// anything else, which mangled every non-ASCII rodata byte and made
+// `"├── " == "└── "` true (both became `???????? `). Use
+// `char_code_at` — the runtime builtin maps to hexa_str_char_code_at
+// which returns the underlying byte value 0..255 for high-bit bytes.
+fn _byte_code(ch: string) -> i64 {
+    if len(ch) == 0 { return 0 }
+    return char_code(ch)
+}
+
 fn _str_to_hex_bytes(s: string) -> string {
     let cs = s.chars()
     let mut out = ""
     let mut i = 0
     while i < len(cs) {
-        out = out + _byte_to_hex(_ascii_code(cs[i]))
+        out = out + _byte_to_hex(_byte_code(cs[i]))
         i = i + 1
     }
     out = out + "00" // NUL terminator
@@ -1625,11 +1850,44 @@ pub fn codegen_arm64_darwin(module: MModule) -> LModule {
         funcs.push(_arm64_lower_func(module.funcs[i], st, _arm64_modhash(module.file)))
         i = i + 1
     }
+    // Emit a writable 16-byte slot per module-level mutable global
+    // (symbol `g<id>`). Runtime init via the parser's synthetic-main
+    // `g<id> = E` assign — see hir_to_mir global resolution.
+    // Mach-O user symbols carry a leading `_` prefix; the codegen's
+    // `g<id>` references resolve to `_g<id>` (matching `_hexa_…`
+    // builtins). Emit the data label with the same prefix so the link
+    // resolves to one symbol — without this the linker reports
+    // `_g0 undefined` even though `g0:` exists in `__DATA,__data`.
+    let mut gnames: [string] = []
+    let mut gi = 0
+    while gi < len(module.globals) {
+        gnames.push("_g" + to_string(module.globals[gi].id))
+        gi = gi + 1
+    }
+    // Float-pool entries from the strtab → LFloat list. `.LC*` is a
+    // local label (no `_` prefix needed) per the existing strtab
+    // convention; the use-site references it as-is. Prefer the
+    // captured source text (full literal precision) over a
+    // `to_string(f64)` round-trip which truncates to ~6 digits in
+    // stage0 — see the comment on ArmStrTab.ftexts above.
+    let mut flts: [LFloat] = []
+    let mut fp = 0
+    while fp < len(st.fkeys) {
+        let mut ftext = st.ftexts[fp]
+        if len(ftext) == 0 { ftext = to_string(st.fkeys[fp]) }
+        flts.push(LFloat {
+            label: st.flabels[fp],
+            text: ftext
+        })
+        fp = fp + 1
+    }
     return LModule {
         file: module.file,
         target: "arm64-apple-darwin",
         funcs: funcs,
         rodata: _strtab_to_rodata(st),
-        bss: []
+        bss: [],
+        globals: gnames,
+        floats: flts
     }
 }

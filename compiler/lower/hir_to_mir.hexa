@@ -73,6 +73,24 @@ fn _const_float_op(v: f64) -> Operand {
     }
 }
 
+// Like _const_float_op but ALSO carries the literal's original source
+// text (e.g. "0.15415067982725836"). The codegen's float-pool emits a
+// `.double` directive — if we go through `to_string(float_val)` the
+// stage0 default print truncates to ~6 digits, so a 17-digit literal
+// loses precision (~3e-7 drift) and an `approx(width(6),
+// 0.15415067982725836, 1e-9)` test fails. Threading the original text
+// through preserves the assembler's parse fidelity.
+fn _const_float_op_with_text(v: f64, text: string) -> Operand {
+    return Operand {
+        kind: "const_float",
+        local_id: -1,
+        int_val: 0,
+        float_val: v,
+        str_val: text,
+        global_id: -1
+    }
+}
+
 fn _const_str_op(s: string) -> Operand {
     return Operand {
         kind: "const_str",
@@ -452,6 +470,20 @@ fn _mir_lookup(ctx: LowerCtx, name: string) -> i64 {
     return -1
 }
 
+// Module-level global lookup by source name (lexical fallback when no
+// local/param binding matches). Returns the global id (== index into
+// ctx.globals matching MModule.globals[id]) or -1 if not a global.
+fn _mir_lookup_global(ctx: LowerCtx, name: string) -> i64 {
+    let mut i = 0
+    while i < len(ctx.globals) {
+        if ctx.globals[i].name_hint == name {
+            return ctx.globals[i].id
+        }
+        i = i + 1
+    }
+    return -1
+}
+
 // ── Result of expression lowering ───────────────────────────
 
 pub struct LowerExprResult {
@@ -540,7 +572,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx, _const_int_op(v))
     }
     if k == "literal_float" {
-        return _value(ctx, _const_float_op(0.0))
+        // The literal's source text (e.g. "16.0") rides through HIR
+        // unparsed; convert to f64 here via the runtime to_float
+        // builtin. Prior implementation passed `0.0` unconditionally,
+        // so every float literal in any program lowered to 0.0 — math
+        // builtins like sqrt(16.0) appeared to "do nothing", but the
+        // value was being clobbered at MIR build time, not codegen.
+        // Pass the original e.text alongside the parsed f64 so the
+        // codegen float-pool can preserve full literal precision in
+        // the emitted `.double` directive.
+        return _value(ctx, _const_float_op_with_text(to_float(e.text), e.text))
     }
     if k == "literal_string" {
         return _value(ctx, _const_str_op(e.text))
@@ -557,14 +598,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // ── ident ───────────────────────────────────────────────
     if k == "ident" {
         let id = _mir_lookup(ctx, e.text)
-        if id < 0 {
-            // Stage1 punch list C5 — unbound ident in lower is fatal.
-            // Previously returned `_const_int_op(0)`, masking cross-file
-            // resolution failures introduced by the Gap 1 splice.
-            _emit_hx1101(e.text, e.span)
-            return _no_value(ctx)
+        if id >= 0 {
+            return _value(ctx, _local_op(id))
         }
-        return _value(ctx, _local_op(id))
+        // Fall back to module-level global before HX1101: a `let mut g`
+        // at module scope is visible in every fn body without an
+        // explicit local binding.
+        let gid = _mir_lookup_global(ctx, e.text)
+        if gid >= 0 {
+            return _value(ctx, _global_op(gid, e.text))
+        }
+        // Stage1 punch list C5 — unbound ident in lower is fatal.
+        // Previously returned `_const_int_op(0)`, masking cross-file
+        // resolution failures introduced by the Gap 1 splice.
+        _emit_hx1101(e.text, e.span)
+        return _no_value(ctx)
     }
 
     // ── atlas ref → STMT_ASSIGN with global Operand ─────────
@@ -585,6 +633,106 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _value(ctx2, _local_op(dst.id))
     }
 
+    // ── logical && / || — short-circuit via control flow ──
+    // BINOP unconditionally evaluates both children at MIR build
+    // time, so `b != 0 && a % b == 0` would still run `a % b` when
+    // b == 0 (triggering "modulo by zero"). The codegen's later
+    // truthy-cbz pattern only chooses which already-evaluated
+    // operand to load; it can't undo side effects. Lower the
+    // logical op as `if a { b } else { a }` (&&) / `if a { a } else
+    // { b }` (||) directly here so `b` is only evaluated when
+    // needed.
+    if k == "binop" && len(e.children) >= 2 {
+        if e.text == "&&" || e.text == "||" || e.text == "and" || e.text == "or" {
+            let lr = _lower_hexpr(ctx, e.children[0])
+            let entry_id = lr.ctx.cur_block
+            let mut ctx_pre = _fresh_local(lr.ctx, e.typ, "sc_val")
+            let sc_val = ctx_pre.locals[len(ctx_pre.locals) - 1]
+            ctx_pre = _new_block(ctx_pre)
+            let then_id = ctx_pre.blocks[len(ctx_pre.blocks) - 1].id
+            ctx_pre = _new_block(ctx_pre)
+            let else_id = ctx_pre.blocks[len(ctx_pre.blocks) - 1].id
+            let mut br_args: [Operand] = []
+            br_args.push(lr.operand)
+            let br = Stmt {
+                kind: STMT_BR_COND,
+                dst: _miss_local(),
+                op: "",
+                args: br_args,
+                target_block: then_id,
+                target_block_else: else_id
+            }
+            let mut ctx2 = _push_stmt_to(ctx_pre, entry_id, br)
+            ctx2 = _add_edge(ctx2, entry_id, then_id)
+            ctx2 = _add_edge(ctx2, entry_id, else_id)
+            let is_or = (e.text == "||" || e.text == "or")
+            // truthy-arm: && stores rhs (b); || stores lhs (a)
+            ctx2 = _set_cur_block(ctx2, then_id)
+            let mut then_op = lr.operand
+            if !is_or {
+                let br2 = _lower_hexpr(ctx2, e.children[1])
+                ctx2 = br2.ctx
+                then_op = br2.operand
+            }
+            let mut ta: [Operand] = []
+            ta.push(then_op)
+            let cp_then = Stmt {
+                kind: STMT_ASSIGN,
+                dst: sc_val,
+                op: "sc_val",
+                args: ta,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, cp_then)
+            let then_end = ctx2.cur_block
+            // falsy-arm: && stores lhs (a); || stores rhs (b)
+            ctx2 = _set_cur_block(ctx2, else_id)
+            let mut else_op = lr.operand
+            if is_or {
+                let br3 = _lower_hexpr(ctx2, e.children[1])
+                ctx2 = br3.ctx
+                else_op = br3.operand
+            }
+            let mut ea: [Operand] = []
+            ea.push(else_op)
+            let cp_else = Stmt {
+                kind: STMT_ASSIGN,
+                dst: sc_val,
+                op: "sc_val",
+                args: ea,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, cp_else)
+            let else_end = ctx2.cur_block
+            // join
+            ctx2 = _new_block(ctx2)
+            let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+            let br_t = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: join_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, then_end, br_t)
+            ctx2 = _add_edge(ctx2, then_end, join_id)
+            let br_e = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: join_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, else_end, br_e)
+            ctx2 = _add_edge(ctx2, else_end, join_id)
+            ctx2 = _set_cur_block(ctx2, join_id)
+            return _value(ctx2, _local_op(sc_val.id))
+        }
+    }
     // ── binop → STMT_BINOP ──────────────────────────────────
     if k == "binop" {
         if len(e.children) < 2 { return _no_value(ctx) }
@@ -761,13 +909,90 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _no_value(ctx2)
     }
 
-    // ── assign (i = i + 1, ...): SSA-rename via fresh local ─
+    // ── assign (i = i + 1, ...) ────────────────────────────
+    //
+    // For an already-bound simple variable, mutate its EXISTING local
+    // in place (shared stack slot) rather than SSA-renaming to a fresh
+    // local. SSA-rename without loop-header phi nodes makes a `while`
+    // condition forever re-read the pre-loop value of the loop-carried
+    // variable (the header lowers the test once against the old binding
+    // while the body rebinds to a fresh local) → infinite loop. The
+    // arm64/x86_64 backends model each local id as one fixed stack slot
+    // with store/reload, so an in-place store is the correct
+    // loop-carried-update lowering and is strictly more correct for
+    // straight-line reassignment too. First-assignment / non-ident lhs
+    // keep the fresh-local + rebind path (safe fallback).
     if k == "assign" {
         if len(e.children) < 2 { return _no_value(ctx) }
         let lhs = e.children[0]
+        // ── index-set: `arr[i] = v` / `map[k] = v` ─────────────
+        // The prior path lowered an index lhs the same way as an
+        // ident lhs (fresh local + rebind), which silently dropped
+        // the store on the actual container — every `d["k"] = v`
+        // left the map empty (caught while sweeping
+        // test/regress_dict_keys_let_bind.hexa through aprime_cc).
+        // Route through hexa_index_set(container, key, val); the
+        // runtime dispatches arrays via hexa_array_set and unwraps
+        // VALSTRUCT, mirroring the existing index-get path
+        // (7b00bd54).
+        if lhs.kind == "index" && len(lhs.children) >= 2 {
+            let br = _lower_hexpr(ctx, lhs.children[0])
+            let kr = _lower_hexpr(br.ctx, lhs.children[1])
+            let rr2 = _lower_hexpr(kr.ctx, e.children[1])
+            let mut args: [Operand] = []
+            args.push(br.operand)
+            args.push(kr.operand)
+            args.push(rr2.operand)
+            let s = Stmt {
+                kind: STMT_ASSIGN,
+                dst: _miss_local(),
+                op: "index_set",
+                args: args,
+                target_block: -1,
+                target_block_else: -1
+            }
+            let ctx_s = _push_stmt(rr2.ctx, s)
+            return _no_value(ctx_s)
+        }
         let rr = _lower_hexpr(ctx, e.children[1])
-        let mut ctx2 = _fresh_local(rr.ctx, e.children[1].typ, lhs.text)
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let mut ctx2 = rr.ctx
+        let mut dst = _miss_local()
+        let mut did_reuse = false
+        let mut is_global = false
+        if len(lhs.text) > 0 {
+            let existing = _mir_lookup(ctx2, lhs.text)
+            if existing >= 0 {
+                let mut li = 0
+                while li < len(ctx2.locals) {
+                    if ctx2.locals[li].id == existing {
+                        dst = ctx2.locals[li]
+                        did_reuse = true
+                        break
+                    }
+                    li = li + 1
+                }
+            } else {
+                // No local binding; check for a module-level global.
+                // Emit STMT_ASSIGN with a sentinel global dst (arena_id
+                // -999, id = global_id) — the backend recognises this
+                // sentinel and emits a `.data` global store instead of
+                // a stack-slot store.
+                let gid = _mir_lookup_global(ctx2, lhs.text)
+                if gid >= 0 {
+                    dst = Local {
+                        id: gid,
+                        arena_id: -999,
+                        type_id: _type_id_of(e.children[1].typ),
+                        name_hint: lhs.text
+                    }
+                    is_global = true
+                }
+            }
+        }
+        if !did_reuse && !is_global {
+            ctx2 = _fresh_local(ctx2, e.children[1].typ, lhs.text)
+            dst = ctx2.locals[len(ctx2.locals) - 1]
+        }
         let mut args: [Operand] = []
         args.push(rr.operand)
         let s = Stmt {
@@ -779,7 +1004,9 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             target_block_else: -1
         }
         ctx2 = _push_stmt(ctx2, s)
-        if len(lhs.text) > 0 { ctx2 = _rebind(ctx2, lhs.text, dst.id) }
+        if !did_reuse && !is_global && len(lhs.text) > 0 {
+            ctx2 = _rebind(ctx2, lhs.text, dst.id)
+        }
         return _no_value(ctx2)
     }
 
@@ -807,7 +1034,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let cr = _lower_hexpr(ctx, e.children[0])
         let entry_id = cr.ctx.cur_block
 
-        let mut ctx2 = _new_block(cr.ctx)
+        // Pre-allocate an if-value join temp. `let x = if cond { A }
+        // else { B }` previously fell through to a const-0 default
+        // (the if branch always returned `_no_value`), so any `if`
+        // used as an expression silently bound x to 0. Both arms now
+        // copy their operand into this shared slot at end-of-branch
+        // and the join block returns it.
+        let mut ctx_pre = _fresh_local(cr.ctx, e.typ, "if_val")
+        let if_val = ctx_pre.locals[len(ctx_pre.locals) - 1]
+
+        let mut ctx2 = _new_block(ctx_pre)
         let then_id = ctx2.blocks[len(ctx2.blocks) - 1].id
         ctx2 = _new_block(ctx2)
         let else_id = ctx2.blocks[len(ctx2.blocks) - 1].id
@@ -834,16 +1070,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         ctx2 = tr.ctx
         let then_returned = ctx2.has_returned
         let then_end_block = ctx2.cur_block
+        let then_has = tr.has_value
 
         // else-branch (or fall through to else_id)
         let mut else_returned = false
         let mut else_end_block = else_id
+        let mut er_op = _const_int_op(0)
+        let mut else_has = false
         if has_else {
             ctx2 = _set_cur_block(ctx2, else_id)
             let er = _lower_hexpr(ctx2, e.children[2])
             ctx2 = er.ctx
             else_returned = ctx2.has_returned
             else_end_block = ctx2.cur_block
+            er_op = er.operand
+            else_has = er.has_value
         }
 
         if has_else {
@@ -853,7 +1094,23 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             }
             ctx2 = _new_block(ctx2)
             let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+            let both_yield = then_has && else_has && !then_returned && !else_returned
             if !then_returned {
+                // Copy the then-arm value into the shared if_val slot
+                // before branching to the join.
+                if both_yield {
+                    let mut ta: [Operand] = []
+                    ta.push(tr.operand)
+                    let cps = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: if_val,
+                        op: "if_val",
+                        args: ta,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx2 = _push_stmt_to(ctx2, then_end_block, cps)
+                }
                 let br_then = Stmt {
                     kind: STMT_BR,
                     dst: _miss_local(),
@@ -866,6 +1123,19 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx2 = _add_edge(ctx2, then_end_block, join_id)
             }
             if !else_returned {
+                if both_yield {
+                    let mut ea: [Operand] = []
+                    ea.push(er_op)
+                    let cps = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: if_val,
+                        op: "if_val",
+                        args: ea,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx2 = _push_stmt_to(ctx2, else_end_block, cps)
+                }
                 let br_else = Stmt {
                     kind: STMT_BR,
                     dst: _miss_local(),
@@ -878,6 +1148,9 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx2 = _add_edge(ctx2, else_end_block, join_id)
             }
             ctx2 = _set_cur_block(ctx2, join_id)
+            if both_yield {
+                return _value(ctx2, _local_op(if_val.id))
+            }
             return _no_value(ctx2)
         }
 
@@ -1574,8 +1847,24 @@ fn _parse_int(t: string) -> i64 {
 
 // ── Function lowering ───────────────────────────────────────
 
-fn _lower_fn(it: HItem) -> MFunc {
+fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     let mut ctx = _new_lower_ctx()
+    // Seed the lowering ctx with the module's globals so ident lookups
+    // inside this fn can fall back to a global Operand instead of the
+    // HX1101 unbound-ident fatal.
+    ctx = LowerCtx {
+        next_local: ctx.next_local,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        locals: ctx.locals,
+        blocks: ctx.blocks,
+        cur_block: ctx.cur_block,
+        bindings: ctx.bindings,
+        frame_starts: ctx.frame_starts,
+        globals: mglobals,
+        has_returned: ctx.has_returned
+    }
     ctx = _new_block(ctx)
     let entry_id = ctx.blocks[len(ctx.blocks) - 1].id
     ctx = _set_cur_block(ctx, entry_id)
@@ -1642,22 +1931,58 @@ fn _lower_fn(it: HItem) -> MFunc {
 
 pub fn lower_hir(module: HModule) -> MModule {
     _lr_diag = []
-    let mut funcs: [MFunc] = []
+    // Two-pass: collect all module-level globals first so every fn body
+    // can resolve any global by name regardless of textual order
+    // (parser may put `fn main` before or after a `let mut g = …`).
     let mut globals: [Local] = []
+    let mut k = 0
+    while k < len(module.items) {
+        let itk = module.items[k]
+        if itk.kind == "ITEM_LET" {
+            // Strip `mut:` prefix the parser uses on mutable lets so the
+            // name_hint matches identifier text inside fn bodies.
+            let mut nm = itk.name
+            if len(nm) >= 4 && nm.substring(0, 4) == "mut:" {
+                nm = nm.substring(4, len(nm))
+            }
+            let l = Local {
+                id: len(globals),
+                arena_id: 0,
+                type_id: _type_id_of(itk.sig_return),
+                name_hint: nm
+            }
+            globals.push(l)
+        }
+        k = k + 1
+    }
+    let mut funcs: [MFunc] = []
+    let mut fn_names: [string] = []
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
         if it.kind == "ITEM_FN" {
-            let f = _lower_fn(it)
-            funcs.push(f)
-        } else if it.kind == "ITEM_LET" {
-            let l = Local {
-                id: len(globals),
-                arena_id: 0,
-                type_id: _type_id_of(it.sig_return),
-                name_hint: it.name
+            // First-wins fn dedup (mirrors the bind pre-pass that
+            // resolves duplicate pub symbols across imported files
+            // with a first-wins skip). Without this skip the second
+            // copy of e.g. `pub fn absf` from two atlas modules
+            // makes it through to codegen and the assembler errors
+            // on `_absf already defined`. Bind only suppressed the
+            // typed env entry; the items list still carried both.
+            // last-wins variant trialled (sweep #11) — no net gain
+            // on the atlas verifier DIFFs (those have a different
+            // root cause), and surfaced interp-timing variance —
+            // so reverted to first-wins for simplicity.
+            let mut already = false
+            let mut nj = 0
+            while nj < len(fn_names) {
+                if fn_names[nj] == it.name { already = true; break }
+                nj = nj + 1
             }
-            globals.push(l)
+            if !already {
+                let f = _lower_fn(it, globals)
+                funcs.push(f)
+                fn_names.push(it.name.substring(0, len(it.name)))
+            }
         }
         i = i + 1
     }

@@ -108,6 +108,59 @@ fn check_kind(k: TokenKind) -> bool {
     return same_kind(t.kind, k)
 }
 
+// G-AMBIG disambiguator. Mirrors self/parser.hexa::p_lookahead_generic_args.
+// Cursor is positioned at an `Lt` token; without consuming, scan forward
+// for a matching `Gt` whose successor is `LBrace` (struct-lit type args)
+// or `LParen` (turbofish-style). If found returns true → caller should
+// commit to the `Ident<…>{…}` / `Ident<…>(…)` shape; else `<` is a
+// comparison. Bounded at 64 tokens — generic lists are short.
+fn p_lookahead_generic_args() -> bool {
+    if !check_kind(TokenKind::Lt) { return false }
+    let mut i = 1
+    let mut depth = 1
+    let max_scan = 64
+    while i < max_scan {
+        let t = peek_at(i)
+        let k = t.kind
+        if same_kind(k, TokenKind::Eof) { return false }
+        if same_kind(k, TokenKind::Newline) { return false }
+        if same_kind(k, TokenKind::Semicolon) { return false }
+        if same_kind(k, TokenKind::LBrace) { return false }
+        if same_kind(k, TokenKind::RBrace) { return false }
+        if same_kind(k, TokenKind::Lt) { depth = depth + 1 }
+        else if same_kind(k, TokenKind::Gt) {
+            depth = depth - 1
+            if depth == 0 {
+                let nxt = peek_at(i + 1).kind
+                if same_kind(nxt, TokenKind::LBrace) { return true }
+                if same_kind(nxt, TokenKind::LParen) { return true }
+                return false
+            }
+        } else if same_kind(k, TokenKind::Ge)
+               || same_kind(k, TokenKind::Shr) {
+            // `>=` and `>>` can't close a generic-args list.
+            return false
+        } else if same_kind(k, TokenKind::Ident)
+               || same_kind(k, TokenKind::ColonColon)
+               || same_kind(k, TokenKind::Comma)
+               || same_kind(k, TokenKind::Colon)
+               || same_kind(k, TokenKind::LBracket)
+               || same_kind(k, TokenKind::RBracket)
+               || same_kind(k, TokenKind::LParen)
+               || same_kind(k, TokenKind::RParen)
+               || same_kind(k, TokenKind::Amp)
+               || same_kind(k, TokenKind::Star)
+               || same_kind(k, TokenKind::Pipe)
+               || same_kind(k, TokenKind::Number) {
+            // valid inside a type expression
+        } else {
+            return false
+        }
+        i = i + 1
+    }
+    return false
+}
+
 fn same_kind(a: TokenKind, b: TokenKind) -> bool {
     // stage0 cannot derive Eq for enums automatically, so we string-compare
     // through the deterministic match below. Cheap because both sides are
@@ -691,6 +744,37 @@ fn parse_primary() -> Expr {
         if check_kind(TokenKind::LBrace) && !p_suppress_struct_lit && is_struct_lit_lookahead() {
             return parse_struct_lit_after_name(t)
         }
+        // Foo<T1, T2> { … } / Foo<T>(…) — generic struct lit / turbofish-
+        // style call. Without disambiguation the expression parser
+        // would infinite-loop on `Box<Int> { val: 42 }` because the
+        // bare-Ident path would return, and the surrounding compare
+        // loop would consume `<`, RHS `Int`, then `>`, then `{…}` —
+        // leaving the parser state inconsistent. The lookahead commits
+        // ONLY when matching `>` is followed by `{` or `(`, so plain
+        // comparisons (`L < n_layers {`) still parse as compare.
+        if check_kind(TokenKind::Lt) && !p_suppress_struct_lit && p_lookahead_generic_args() {
+            // Skip the `<` … `>` type-args — values from them are
+            // currently ignored (downstream codegen treats `Box<Int>`
+            // and `Box<String>` identically at this MIR shape). When
+            // the bind/typecheck wants the type args, the parse_type
+            // path can be reused; for now consume and discard so the
+            // struct-lit body parses.
+            advance()  // consume `<`
+            let mut depth = 1
+            while depth > 0 && !at_eof() {
+                let tk = peek().kind
+                if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
+                else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+                advance()
+                if depth == 0 { break }
+            }
+            // Now either `{` (struct lit) or `(` (call) follows.
+            if check_kind(TokenKind::LBrace) {
+                return parse_struct_lit_after_name(t)
+            }
+            // For `(` (call-style) — fall through to the bare-Ident
+            // return; the postfix-call rule handles the `(`.
+        }
         return Expr {
             kind: ExprKind::Ident,
             span: t.span,
@@ -1192,6 +1276,25 @@ fn parse_struct_item(is_pub: bool, anns: [Annotation]) -> Item {
     let kw = peek()
     eat(TokenKind::KwStruct)
     let name_tok = expect(TokenKind::Ident)
+    // Optional generic type params: `struct Box<T> { … }`. The
+    // typecheck/codegen currently erase generics (Box<Int> and
+    // Box<Str> share the same MIR shape), so consume + discard the
+    // `<…>` token sequence so the cursor lands on `{`. Without
+    // this the while-loop below spins on `<` (`eat(LBrace)` no-ops
+    // on mismatch and `expect(Ident)` doesn't advance either) —
+    // observed as a ~6 min aprime_cc hang on every file containing
+    // a generic struct definition.
+    if check_kind(TokenKind::Lt) {
+        advance()
+        let mut depth = 1
+        while depth > 0 && !at_eof() {
+            let tk = peek().kind
+            if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
+            else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+            advance()
+            if depth == 0 { break }
+        }
+    }
     eat(TokenKind::LBrace)
     // Stage A1: capture fields as Param-like entries in `params`. Promotion to
     // a dedicated Field struct can wait until A2 when checker needs more
@@ -1334,6 +1437,16 @@ fn item_is_let(k: ItemKind) -> bool {
         ItemKind::Let -> true,
         ItemKind::Import -> false,
         ItemKind::Fn -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Enum -> false
+    }
+}
+
+fn item_is_fn(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Fn -> true,
+        ItemKind::Import -> false,
+        ItemKind::Let -> false,
         ItemKind::Struct -> false,
         ItemKind::Enum -> false
     }
@@ -1534,23 +1647,76 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
         }
     }
     if len(top_stmts) > 0 {
-        let mbody = Expr {
-            kind: ExprKind::Block,
-            span: top_stmts[0].span,
-            text: "",
-            children: top_stmts,
-            atlas_ref: empty_atlas()
+        // If the user already declared `fn main`, MERGE the collected
+        // top-level statements + global initializers into the FRONT of
+        // its body (init runs before user code). Without this we'd
+        // emit a second `_main` label and the link fails on duplicate
+        // symbols. If there is no user `fn main`, fall back to the
+        // synthesised one — script-style files keep working.
+        let mut merged = false
+        let mut mi = 0
+        while mi < len(items) {
+            let cand = items[mi]
+            if item_is_fn(cand.kind) && cand.name == "main" {
+                let mut new_children: [Expr] = []
+                let mut si = 0
+                while si < len(top_stmts) {
+                    new_children.push(top_stmts[si])
+                    si = si + 1
+                }
+                // Splice the user body's statements after the inits.
+                // Both blocks and bare exprs handled — a non-block body
+                // becomes the trailing child of the new block.
+                if cand.body.kind == ExprKind::Block {
+                    let mut bi = 0
+                    while bi < len(cand.body.children) {
+                        new_children.push(cand.body.children[bi])
+                        bi = bi + 1
+                    }
+                } else {
+                    new_children.push(cand.body)
+                }
+                let new_body = Expr {
+                    kind: ExprKind::Block,
+                    span: cand.body.span,
+                    text: "",
+                    children: new_children,
+                    atlas_ref: empty_atlas()
+                }
+                items[mi] = Item {
+                    kind: cand.kind,
+                    name: cand.name,
+                    span: cand.span,
+                    annotations: cand.annotations,
+                    params: cand.params,
+                    return_type: cand.return_type,
+                    body: new_body,
+                    is_pub: cand.is_pub
+                }
+                merged = true
+                break
+            }
+            mi = mi + 1
         }
-        items.push(Item {
-            kind: ItemKind::Fn,
-            name: "main",
-            span: top_stmts[0].span,
-            annotations: [],
-            params: [],
-            return_type: empty_type(),
-            body: mbody,
-            is_pub: true
-        })
+        if !merged {
+            let mbody = Expr {
+                kind: ExprKind::Block,
+                span: top_stmts[0].span,
+                text: "",
+                children: top_stmts,
+                atlas_ref: empty_atlas()
+            }
+            items.push(Item {
+                kind: ItemKind::Fn,
+                name: "main",
+                span: top_stmts[0].span,
+                annotations: [],
+                params: [],
+                return_type: empty_type(),
+                body: mbody,
+                is_pub: true
+            })
+        }
     }
     p_tokens = save_tokens
     p_pos = save_pos
@@ -1584,7 +1750,36 @@ fn _splice_imported_items(items: [Item], importer: string) {
         let it = items[i]
         p_splice_acc.push(it)
         if item_is_import(it.kind) {
-            let resolved = _resolve_import_path(importer, it.name)
+            // Two-tier resolution: prefer the source-dir-relative path
+            // (the historical behaviour); if that file does not exist,
+            // fall back to a project-root-relative path (the literal
+            // import string). This lets imports like
+            //   import "compiler/atlas/symbolic/X.hexa"
+            // resolve from any depth — the same string that works for
+            // the interpreter and `hexa build`. Without the fallback
+            // every test/*.hexa smoke that referenced a sibling library
+            // produced HX0010 at parse time even though the file was
+            // present at the repo root.
+            let primary = _resolve_import_path(importer, it.name)
+            let mut resolved = primary
+            if !file_exists(resolved) {
+                let alt = _import_normalize(it.name)
+                if file_exists(alt) { resolved = alt }
+            }
+            // `use "compiler/atlas/parser"` and similar omit the .hexa
+            // extension; the interp + hexa_v2 paths auto-append it.
+            // Mirror that here so the aprime_cc-direct compile of
+            // every atlas_*_smoke (10 files) doesn't HX0010 on the
+            // very first use-line.
+            if !file_exists(resolved) {
+                let primary_hexa = primary + ".hexa"
+                if file_exists(primary_hexa) {
+                    resolved = primary_hexa
+                } else {
+                    let alt_hexa = _import_normalize(it.name) + ".hexa"
+                    if file_exists(alt_hexa) { resolved = alt_hexa }
+                }
+            }
             if _visited_contains(resolved) {
                 // already loaded (cycle or diamond) — skip silently.
             } else {
@@ -1619,6 +1814,74 @@ pub fn parse(tokens: [Token], file: string) -> Module {
     p_visited_imports.push(entry_resolved)
     let top = _parse_module_one(tokens, file)
     _splice_imported_items(top.items, file)
+    // Multi-main collapse: every imported file with top-level
+    // executable statements (`pub let X = E` injects `X = E` into a
+    // synth-main) ends up with its own `fn main` after splicing, and
+    // we'd end up with several `_main` symbols at the assembler stage.
+    // Collapse: keep the LAST `main` (the entry module's), prepend
+    // every earlier main's body into it so init order is leaves-
+    // first (matches the existing import splice order).
+    let mut mains: [i64] = []
+    let mut mi = 0
+    while mi < len(p_splice_acc) {
+        let it = p_splice_acc[mi]
+        if item_is_fn(it.kind) && it.name == "main" {
+            mains.push(mi)
+        }
+        mi = mi + 1
+    }
+    if len(mains) > 1 {
+        let last = mains[len(mains) - 1]
+        let mut merged_children: [Expr] = []
+        let mut k = 0
+        while k < len(mains) {
+            let idx = mains[k]
+            let body = p_splice_acc[idx].body
+            if body.kind == ExprKind::Block {
+                let mut bi = 0
+                while bi < len(body.children) {
+                    merged_children.push(body.children[bi])
+                    bi = bi + 1
+                }
+            } else {
+                merged_children.push(body)
+            }
+            k = k + 1
+        }
+        let last_item = p_splice_acc[last]
+        let new_body = Expr {
+            kind: ExprKind::Block,
+            span: last_item.body.span,
+            text: "",
+            children: merged_children,
+            atlas_ref: empty_atlas()
+        }
+        p_splice_acc[last] = Item {
+            kind: last_item.kind,
+            name: last_item.name,
+            span: last_item.span,
+            annotations: last_item.annotations,
+            params: last_item.params,
+            return_type: last_item.return_type,
+            body: new_body,
+            is_pub: last_item.is_pub
+        }
+        // Drop the earlier mains from the list. Build a fresh items[]
+        // skipping them, then point p_splice_acc at it.
+        let mut filtered: [Item] = []
+        let mut j = 0
+        while j < len(p_splice_acc) {
+            let mut is_dup_main = false
+            let mut mk = 0
+            while mk < len(mains) - 1 {
+                if j == mains[mk] { is_dup_main = true }
+                mk = mk + 1
+            }
+            if !is_dup_main { filtered.push(p_splice_acc[j]) }
+            j = j + 1
+        }
+        p_splice_acc = filtered
+    }
     // `imports` reflects only the entry file's direct imports — used for
     // diagnostics/UI. The flat-splice pivot puts the actual cross-file items
     // in `p_splice_acc`.

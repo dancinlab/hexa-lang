@@ -1917,6 +1917,12 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
         // Build a function-local scope: module env + params.
         let mut fn_sc = _push_frame(module_scope)
         let mut sig_params: [Type] = []
+        // Synthesize a `param_names` annotation from the real parameter
+        // identifiers. hir_to_mir::_lower_fn binds param locals to their
+        // names ONLY via this annotation; without it body identifiers
+        // resolve to nothing and fall through to const-0 (every fn
+        // param read as 0 — broke all parameterized fns/recursion).
+        let mut pn_args: [Expr] = []
         let mut p = 0
         while p < len(it.params) {
             let par = it.params[p]
@@ -1925,8 +1931,26 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
             if len(par.name) > 0 {
                 fn_sc = _define_in_scope(fn_sc, par.name, pt)
             }
+            pn_args.push(Expr {
+                kind: ExprKind::Ident,
+                span: par.span,
+                text: par.name,
+                children: [],
+                atlas_ref: AtlasRef { kind: "", id: "", span: par.span }
+            })
             p = p + 1
         }
+        let mut fn_anns: [Annotation] = []
+        let mut ai = 0
+        while ai < len(it.annotations) {
+            fn_anns.push(it.annotations[ai])
+            ai = ai + 1
+        }
+        fn_anns.push(Annotation {
+            name: "param_names",
+            args: pn_args,
+            span: it.span
+        })
         let sig_ret = _hir_lower_type_ref(it.return_type)
         let r = _lower_expr(it.body, atlas, fn_sc)
         return HItem {
@@ -1934,7 +1958,7 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
             def: def,
             name: it.name,
             span: it.span,
-            annotations: it.annotations,
+            annotations: fn_anns,
             sig_params: sig_params,
             sig_return: sig_ret,
             body: r.expr,

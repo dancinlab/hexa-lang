@@ -243,60 +243,56 @@ static void _hexa_init_path_augment(void) {
 // whether to actually syscall. Per-call overhead ≈ 1 increment + 1 mask + 1
 // branch; the syscall is amortized to ~once per tens of MB of allocation.
 //
-// Defaults & overrides:
-//   HEXA_MEM_UNLIMITED=1           → cap disabled
-//   HEXA_MEM_CAP_MB=<N>            → cap to N MB (must be >0)
-//   default                        → 4096 MB (2026-05-14: raised 2048 → 4096
-//                                    after measuring drill_test peak at
-//                                    2.00 GiB — exactly the 2048 MB ceiling.
-//                                    History: 2026-05-13 raised 768 → 2048
-//                                    after n6 Wave 1 enriched
-//                                    compiler/atlas/embedded.gen.hexa
-//                                    [3.27 MB → 4.92 MB rodata; ~7398
-//                                    AtlasNode literals + 5 per-kind arrays
-//                                    with default GradeInfo/EdgeInfo per
-//                                    node]. Measured RSS peaks under the
-//                                    768→2048 fix:
-//                                      static_index_test : 1.56 GiB  PASS
-//                                      overlay_test      : 1.94 GiB  PASS
-//                                      drill_test        : 2.00 GiB  FAIL
-//                                                          (cap exceeded:
-//                                                           rss=2048MB >
-//                                                           cap=2048MB)
-//                                    The drill engine adds ~400 MB of chain
-//                                    state on top of the embed parse peak;
-//                                    2048 MB was a no-headroom ceiling for
-//                                    it. Raising default → 4096 MB matches
-//                                    the module_loader child default (since
-//                                    2026-05-13, self/main.hexa:1110) and
-//                                    gives ~2× headroom on the heaviest
-//                                    observed smoke. Operator override via
-//                                    HEXA_MEM_CAP_MB / HEXA_MEM_UNLIMITED
-//                                    unchanged. Original 768 MB rationale
-//                                    (hive watcher runaway containment) is
-//                                    addressed by the 4 K-tick rss probe
-//                                    (`0xFFF` stride), which catches bursty
-//                                    allocators well inside 4 GB.
+// Defaults & overrides (2026-05-16 — opt-IN model):
+//   default               → NO cap. A legitimate heavy compile (the
+//                            compiler self-compile peaks ~30 GB) is more
+//                            common than a runaway, and a spurious
+//                            exit(77) kills real work — worse than
+//                            letting the OS arbitrate. The cap is OFF
+//                            unless explicitly asked for.
+//   HEXA_MEM_LIMIT=<N>     → opt in to a cap of N MB (must be >0). The
+//                            primary knob — e.g. HEXA_MEM_LIMIT=4096
+//                            asserts a 4 GB ceiling for a footprint test.
+//   HEXA_MEM_CAP_MB=<N>    → legacy alias of HEXA_MEM_LIMIT (still honored).
+//   HEXA_MEM_UNLIMITED=1   → legacy explicit-disable; now also the default,
+//                            kept so old wrappers/scripts stay valid no-ops.
+//
+// Pre-2026-05-16 this defaulted to a 4096 MB cap (raised over time
+// 768→2048→4096 as the embedded atlas grew). That default is removed —
+// callers wanting a ceiling now set HEXA_MEM_LIMIT explicitly.
 //
 // CLI flags (parsed by the hexa wrapper script, exported as env above):
-//   --mem-unlimited                → HEXA_MEM_UNLIMITED=1
-//   --mem-cap=<N>                  → HEXA_MEM_CAP_MB=<N>
+//   --mem-limit=<N> / --mem-cap=<N> → HEXA_MEM_LIMIT / HEXA_MEM_CAP_MB
+//   --mem-unlimited                 → HEXA_MEM_UNLIMITED=1 (now a no-op)
 
-static size_t _hx_mem_cap_bytes = 4096ull * 1024ull * 1024ull;  // 4096 MB default
-static int    _hx_mem_cap_disabled = 0;
+static size_t _hx_mem_cap_bytes = 4096ull * 1024ull * 1024ull;  // used only when a cap is opted in
+static int    _hx_mem_cap_disabled = 1;  // 2026-05-16: NO cap by default
 static volatile uint64_t _hx_mem_tick_ctr = 0;
 
 __attribute__((constructor))
 static void _hexa_init_mem_cap(void) {
-    const char* unl = getenv("HEXA_MEM_UNLIMITED");
-    if (unl && unl[0] == '1' && unl[1] == '\0') {
-        _hx_mem_cap_disabled = 1;
-        return;
+    // Opt-in cap. HEXA_MEM_LIMIT is the primary knob; HEXA_MEM_CAP_MB is
+    // a legacy alias. Either one, set to a positive MB value, enables the
+    // cap. HEXA_MEM_UNLIMITED=1 forces it back off (and is the default).
+    const char* lim = getenv("HEXA_MEM_LIMIT");
+    if (lim && lim[0] != '\0') {
+        long long mb = atoll(lim);
+        if (mb > 0) {
+            _hx_mem_cap_bytes = (size_t)mb * 1024ull * 1024ull;
+            _hx_mem_cap_disabled = 0;
+        }
     }
     const char* cap = getenv("HEXA_MEM_CAP_MB");
     if (cap && cap[0] != '\0') {
         long long mb = atoll(cap);
-        if (mb > 0) _hx_mem_cap_bytes = (size_t)mb * 1024ull * 1024ull;
+        if (mb > 0) {
+            _hx_mem_cap_bytes = (size_t)mb * 1024ull * 1024ull;
+            _hx_mem_cap_disabled = 0;
+        }
+    }
+    const char* unl = getenv("HEXA_MEM_UNLIMITED");
+    if (unl && unl[0] == '1' && unl[1] == '\0') {
+        _hx_mem_cap_disabled = 1;
     }
 }
 
@@ -524,8 +520,8 @@ __attribute__((noinline))
 static void _hx_mem_cap_fire(size_t rss) {
     fprintf(stderr,
         "[hexa-runtime] memory cap exceeded: rss=%zuMB > cap=%zuMB\n"
-        "[hexa-runtime] hint: re-run with --mem-unlimited "
-        "(or HEXA_MEM_UNLIMITED=1) to disable, or --mem-cap=<MB> to raise.\n",
+        "[hexa-runtime] hint: this cap is opt-in (HEXA_MEM_LIMIT/HEXA_MEM_CAP_MB) — "
+        "raise HEXA_MEM_LIMIT=<MB>, or unset it for no cap (the default).\n",
         (size_t)(rss / (1024ull*1024ull)),
         (size_t)(_hx_mem_cap_bytes / (1024ull*1024ull)));
     // Telemetry: ledger emit before exit. Best-effort; never blocks the abort.
@@ -3158,6 +3154,13 @@ static HexaValMark __hexa_val_marks[HEXA_VAL_MARK_STACK_CAP];
 int __hexa_val_mark_top = 0;            // count of pushed marks (extern-visible)
 int __hexa_val_force_heap = 0;          // when set, valstruct_new_v uses heap (codegen refs this)
 static int __hexa_val_arena_enabled = -1;  // -1 = lazy probe
+// F6 option A — A3 (PLAN-stage3-footprint-F6-optA.md). When non-zero,
+// __hexa_fn_arena_return routes its return through
+// hexa_val_arena_heapify_to_parent (region-promote into the caller's
+// arena frame) instead of hexa_val_heapify (escape to malloc). Default
+// 0 — behaviour byte-identical to pre-A3. Toggled at the streaming-loop
+// boundary via env("__HEXA_ARENA_RETURN_REGION_ON__" / "_OFF__").
+static int __hexa_val_region_returns_enabled = 0;
 
 static int hexa_val_arena_on(void) {
     if (__hexa_val_arena_enabled < 0) {
@@ -3676,6 +3679,241 @@ HexaVal hexa_val_heapify(HexaVal v) {
     }
 }
 
+// ─────────────────────────────────────────────────────────────
+// hexa_val_free_tree — recursive free of a malloc'd HexaVal tree.
+// ─────────────────────────────────────────────────────────────
+//
+// PLAN-stage3-footprint-F6.md option C (P0-then-C). Used by the
+// streaming codegen loop to reclaim per-function MFunc/LFunc once their
+// asm text has been emitted. Caller asserts the value is unshared at
+// the drop point — for the streaming loop this holds via the P0a-P0e
+// escape-edge audit (string leaves forced-copied at every cross-
+// lifetime store; container arrays/structs built fresh per pass).
+//
+// Conservative discipline:
+//   - VALSTRUCT / ARRAY / MAP heap containers: recurse + free.
+//   - from_arena=1 (VALSTRUCT, MapTable) or cap<0 (Array): SKIPPED —
+//     arena-resident, lifetime owned by the scope pop, not free()-able.
+//   - TAG_STR: NOT freed. Static literals (`hexa_str("...")` in
+//     transpiled source) and runtime-allocated buffers are not
+//     statically distinguishable, and per-string overhead is small
+//     versus the IR struct shells we DO reclaim.
+//   - TAG_INT / FLOAT / BOOL / VOID / CHAR / FN / CLOSURE: no-op.
+//
+// Returns hexa_void() so it composes as an expression.
+HexaVal hexa_val_free_tree(HexaVal v) {
+    switch (HX_TAG(v)) {
+        case TAG_VALSTRUCT: {
+            HexaValStruct* vs = HX_VS(v);
+            if (!HX_PTR_OK(vs)) return hexa_void();
+            if (vs->from_arena) return hexa_void();
+            hexa_val_free_tree(vs->str_val);
+            hexa_val_free_tree(vs->char_val);
+            hexa_val_free_tree(vs->array_val);
+            hexa_val_free_tree(vs->fn_name);
+            hexa_val_free_tree(vs->fn_params);
+            hexa_val_free_tree(vs->fn_body);
+            hexa_val_free_tree(vs->struct_name);
+            hexa_val_free_tree(vs->struct_fields);
+            free(vs);
+            break;
+        }
+        case TAG_ARRAY: {
+            if (!HX_PTR_OK(v.arr_ptr)) return hexa_void();
+            int cap = HX_ARR_CAP(v);
+            if (cap < 0) return hexa_void();  // arena-backed
+            int len = HX_ARR_LEN(v);
+            HexaVal* items = HX_ARR_ITEMS(v);
+            if (items) {
+                for (int i = 0; i < len; i++) {
+                    hexa_val_free_tree(items[i]);
+                }
+                free(items);
+            }
+            free(v.arr_ptr);
+            break;
+        }
+        case TAG_MAP: {
+            HexaMap* mp = v.map_ptr;
+            if (!HX_PTR_OK(mp)) return hexa_void();
+            HexaMapTable* t = mp->tbl;
+            if (t && !t->from_arena) {
+                // Slot keys are strdup'd (heap) regardless of from_arena,
+                // per the HexaMapTable comment.
+                if (t->slots) {
+                    for (int i = 0; i < t->ht_cap; i++) {
+                        if (t->slots[i].key) free(t->slots[i].key);
+                    }
+                    free(t->slots);
+                }
+                if (t->order_vals) {
+                    for (int i = 0; i < t->len; i++) {
+                        hexa_val_free_tree(t->order_vals[i]);
+                    }
+                    free(t->order_vals);
+                }
+                if (t->vals)       free(t->vals);
+                if (t->order_keys) free(t->order_keys);
+                free(t);
+            }
+            free(mp);
+            break;
+        }
+        default: break;
+    }
+    return hexa_void();
+}
+
+// ─────────────────────────────────────────────────────────────
+// hexa_val_copy_into_arena — recursive copy: malloc tree → arena tree
+// ─────────────────────────────────────────────────────────────
+//
+// PLAN-stage3-footprint-F6-optA.md A1. Foundational primitive for the
+// region-promote-on-return path. Mirrors hexa_val_heapify *in reverse*:
+// where heapify copies arena→malloc, copy_into_arena copies malloc→
+// arena and stamps from_arena=1 on every new heap-resident struct it
+// makes. Allocations come from hexa_val_arena_calloc (bump arena);
+// caller is responsible for the surrounding scope discipline.
+//
+// Dormant infrastructure — wired by A2 (heapify_to_parent wrapper) and
+// A3 (the opt-in fn-return variant). Nothing calls this yet.
+//
+// Discipline:
+//   - VALSTRUCT: alloc fresh in arena (from_arena=1), recurse each field.
+//   - ARRAY: alloc HexaArr + items[] in arena (cap encoded as -real_cap
+//     per rt 32-M arena-array marker), recurse each item.
+//   - STR: copy bytes into a fresh arena buffer.
+//   - MAP / CLOSURE / FN: passthrough unchanged. The streaming-loop IR
+//     (MFunc / LFunc trees of VALSTRUCT + ARRAY + STR leaves) does not
+//     materialise these tags inside the per-iteration region; if a
+//     future caller needs them, add the mirror of hmap_heapify here.
+//   - Primitives: passthrough.
+//
+// OOM-safe: arena alloc returning NULL falls back to the source value
+// (caller still sees a consistent tree; the caller is responsible for
+// keeping the source alive in that case — see A2 for the temp-buffer
+// approach that makes this fall-back trivially correct).
+HexaVal hexa_val_copy_into_arena(HexaVal v) {
+    switch (HX_TAG(v)) {
+        case TAG_VALSTRUCT: {
+            HexaValStruct* src = HX_VS(v);
+            if (!HX_PTR_OK(src)) return v;
+            HexaValStruct* dst =
+                (HexaValStruct*)hexa_val_arena_calloc(sizeof(HexaValStruct));
+            if (!dst) return v;  // arena OOM — pass source through
+            dst->tag_i      = src->tag_i;
+            dst->int_val    = src->int_val;
+            dst->float_val  = src->float_val;
+            dst->bool_val   = src->bool_val;
+            dst->from_arena = 1;
+            dst->str_val       = hexa_val_copy_into_arena(src->str_val);
+            dst->char_val      = hexa_val_copy_into_arena(src->char_val);
+            dst->array_val     = hexa_val_copy_into_arena(src->array_val);
+            dst->fn_name       = hexa_val_copy_into_arena(src->fn_name);
+            dst->fn_params     = hexa_val_copy_into_arena(src->fn_params);
+            dst->fn_body       = hexa_val_copy_into_arena(src->fn_body);
+            dst->struct_name   = hexa_val_copy_into_arena(src->struct_name);
+            dst->struct_fields = hexa_val_copy_into_arena(src->struct_fields);
+            HX_SET_VS(v, dst);
+            return v;
+        }
+        case TAG_ARRAY: {
+            HexaArr* src = v.arr_ptr;
+            if (!HX_PTR_OK(src)) return v;
+            int len = src->len;
+            HexaArr* dst = (HexaArr*)hexa_val_arena_calloc(sizeof(HexaArr));
+            if (!dst) return v;  // arena OOM
+            HexaVal* items = NULL;
+            if (len > 0) {
+                items = (HexaVal*)hexa_val_arena_calloc((size_t)len * sizeof(HexaVal));
+                if (!items) return v;  // arena OOM
+                for (int i = 0; i < len; i++) {
+                    items[i] = hexa_val_copy_into_arena(src->items[i]);
+                }
+            }
+            dst->items = items;
+            dst->len = len;
+            // rt 32-M: cap<0 marks arena-backed items buffer. Use -len so
+            // future array_push paths recognise this as non-heap storage.
+            dst->cap = (len > 0) ? -len : 0;
+            v.arr_ptr = dst;
+            return v;
+        }
+        case TAG_STR: {
+            if (!HX_STR(v)) return v;
+            size_t slen = HX_STRLEN(v);
+            char* buf = (char*)hexa_arena_alloc(slen + 1);
+            if (!buf) return v;  // arena OOM
+            if (slen > 0) memcpy(buf, HX_STR(v), slen);
+            buf[slen] = '\0';
+            HX_SET_STR(v, buf);
+            return v;
+        }
+        case TAG_MAP: {
+            // A6 ROOT-CAUSE FIX (2026-05-16): in this value model a hexa
+            // `struct` is lowered to a TAG_MAP (field access =
+            // hexa_map_get). A1's earlier MAP passthrough made the
+            // arena copy SHARE the source map with the A2 malloc temp;
+            // the temp-buffer free_tree(temp) then freed it, and
+            // _new_block's hexa_map_get on the dangling LowerCtx map
+            // SIGSEGV'd. Deep-copy into a fresh map so the result is
+            // fully owned and independent of the temp.
+            HexaMap* mp = v.map_ptr;
+            if (!HX_PTR_OK(mp) || !mp->tbl) return v;
+            HexaMapTable* t = mp->tbl;
+            HexaVal nm = hexa_map_new();
+            for (int i = 0; i < t->len; i++) {
+                const char* k = t->order_keys ? t->order_keys[i] : (const char*)0;
+                if (!k) continue;
+                HexaVal vc = hexa_val_copy_into_arena(t->order_vals[i]);
+                nm = hexa_map_set(nm, k, vc);
+            }
+            return nm;
+        }
+        default:
+            // CLOSURE / FN / primitives — passthrough. The streaming-loop
+            // IR (LowerCtx/MFunc/LFunc trees) does not materialise
+            // closures inside the per-iteration region; extend here if a
+            // future caller needs them (same share-then-free hazard).
+            return v;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// hexa_val_arena_heapify_to_parent — temp-buffered region promote
+// ─────────────────────────────────────────────────────────────
+//
+// PLAN-stage3-footprint-F6-optA.md A2. Promotes a Val that lives in the
+// CURRENT arena frame into the PARENT frame's arena. The naive
+// "scope_pop then copy" overlaps source and destination (the parent's
+// frontier grows into where the callee's data sits, overwriting source
+// mid-copy — see the optA doc "Bump-arena overlap problem"). The safe
+// sequence routes the copy via a malloc temp:
+//
+//   1. heapify(v)         arena → malloc deep-copy (no overlap).
+//   2. scope_pop()        rewind callee region; frontier at parent's mark.
+//   3. copy_into_arena()  malloc → parent arena.
+//   4. free_tree(temp)    release the malloc temp.
+//
+// Cost: 2× memory briefly (the malloc temp and the arena copy coexist
+// for one recursion). Benefit: provably overlap-free, and the malloc
+// temp goes through hexa_val_heapify whose recursion is the same the
+// runtime uses on every fn-return today — no new aliasing surface.
+//
+// Caller contract: the per-fn arena scope mark is currently the
+// callee's; this function pops that mark internally. Calling without a
+// matching push is a defensive no-op (forwards v unchanged).
+//
+// Dormant infrastructure — wired by A3 (the opt-in fn-return variant).
+HexaVal hexa_val_arena_heapify_to_parent(HexaVal v) {
+    if (__hexa_val_mark_top <= 0) return v;  // no callee scope — no-op
+    HexaVal temp = hexa_val_heapify(v);          // (1) malloc deep-copy
+    hexa_val_arena_scope_pop();                  // (2) rewind callee region
+    HexaVal arena_copy = hexa_val_copy_into_arena(temp); // (3) into parent
+    hexa_val_free_tree(temp);                    // (4) release temp
+    return arena_copy;
+}
+
 // Public C entry — exposed for the env("__HEXA_ARENA_HEAPIFY_RETURN__") path.
 // Heapifies the global return_val (a hexa_full.hexa pub let mut, emitted as a
 // C global). Declared extern; the symbol is provided by the generated C from
@@ -3718,6 +3956,13 @@ HexaVal __hexa_fn_arena_return(HexaVal ret) {
     if (tag == TAG_INT || tag == TAG_FLOAT || tag == TAG_BOOL || tag == TAG_VOID) {
         hexa_val_arena_scope_pop();
         return ret;
+    }
+    // F6 option A — A3: when region returns are enabled (default OFF;
+    // streaming loop toggles via env hook), promote into the caller's
+    // arena frame instead of escaping to malloc. hexa_val_arena_heapify_
+    // to_parent does the scope_pop itself, so we return immediately.
+    if (__hexa_val_region_returns_enabled) {
+        return hexa_val_arena_heapify_to_parent(ret);
     }
     ret = hexa_val_heapify(ret);
     hexa_val_arena_scope_pop();
@@ -11359,6 +11604,23 @@ HexaVal hexa_env_var(HexaVal name) {
         }
         if (strcmp(op, "ENABLED__") == 0) {
             return hexa_str(hexa_val_arena_on() ? "1" : "0");
+        }
+        // F6 option A — A3 (PLAN-stage3-footprint-F6-optA.md). Toggle
+        // region-promote on fn-return for the active frame. ON routes
+        // __hexa_fn_arena_return through hexa_val_arena_heapify_to_parent
+        // (callee region → parent arena). OFF restores the default
+        // heapify-to-malloc behaviour. Default OFF on process start.
+        if (strcmp(op, "RETURN_REGION_ON__") == 0) {
+            __hexa_val_region_returns_enabled = 1;
+            return hexa_str("1");
+        }
+        if (strcmp(op, "RETURN_REGION_OFF__") == 0) {
+            __hexa_val_region_returns_enabled = 0;
+            return hexa_str("0");
+        }
+        if (strcmp(op, "RETURN_REGION__") == 0) {
+            // Query current state.
+            return hexa_str(__hexa_val_region_returns_enabled ? "1" : "0");
         }
         if (strcmp(op, "STATS__") == 0) {
             char buf[64];

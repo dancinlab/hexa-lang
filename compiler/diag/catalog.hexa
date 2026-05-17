@@ -238,6 +238,23 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3010",
+        title: "duplicate pub symbol across files",
+        // Warning, not Error: the bind/typecheck pre-pass already
+        // resolves the collision with a first-wins skip (so the
+        // second-file copy is silently dropped from the typed env);
+        // hard-erroring on top of that blocks codegen even when the
+        // duplicates are byte-identical helpers re-exported from
+        // multiple atlas modules. Downstream callers see exactly one
+        // definition either way — this stays a warning surface so the
+        // user notices the dup without losing the build.
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "duplicate `pub` definition of `{name}`: also defined in `{first_file}` (importer `{second_file}`)",
+        explain: "Two distinct files both declare `pub <name>` and end up spliced into the same compilation unit. The pre-pass keeps the first definition encountered and skips the rest, so this is informational unless the two definitions actually disagree — in which case behaviour follows the first definition.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX3005",
         title: "match arms have different types",
         severity: Severity::Error,
