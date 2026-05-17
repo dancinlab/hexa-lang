@@ -40,6 +40,14 @@
 - 2026-05-18 — comb 진행: `T1_experiment.md` 작성 (F1/F2 pre-registered
   측정 명세 — 두 위상 정밀정의 · modern-node wire model 변수 · Leighton
   symbolic 앵커 · pass/fail · hexa-arch[chip] 인터페이스). T1 분할:
-  **T1-A** 해석적 앵커(comb-side, sim 불요, 다음 액션) / **T1-B** sim 측정
-  (blocked-on hexa-arch[chip] NoC sim 흡수). 다음 = T1-A 표 정밀화
-  (Leighton degree-d 상수 derive + `hexa verify` 검증).
+  **T1-A** 해석적 앵커(comb-side, sim 불요) / **T1-B** sim 측정(blocked-on
+  hexa-arch[chip] NoC sim 흡수).
+- 2026-05-18 — **T1-A 완료** (`comb/T1A_analytical.md`): 표준 NoC 문헌
+  인용 정리. 핵심 상수: N hex region = 3R²+3R+1 · diameter hex/mesh = 1/√3 ≈
+  0.577 · avg dist hex/mesh = 1/√3 · #links 1.5× · degree 1.5× · hop 절감
+  ≈ 0.845√N. 승리 부등식 §3 (좌변 그래프 상수 고정, 우변 process·placement
+  의존). F1/F2 operationalize 완성. caveat 5건 동반 (least-perimeter≠
+  least-latency · honeycomb≠hexagonal mesh 명명 등). 산술 모두 elementary,
+  sympy/Wolfram 인용 0. 출처: Leighton 1992 · Dally & Towles 2004 · Hales
+  2001 · Conway/Sloane 1999 · Stojmenović 1997 · Stillmaker/Baas 2012.
+  다음 = T1-B (hexa-arch[chip] NoC sim 흡수 후, 별도 repo 진행).

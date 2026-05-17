@@ -35,7 +35,10 @@ port-area(degree) · `L(topology,placement)` link length · RC delay ∝ `L²`.
 **모든 수치는 hexa-arch[chip] sim + 실 PDK(SKY130/SG13G2) 실측 입력.**
 본 문서는 변수만 선언 (측정 안 된 수 기록 금지).
 
-## 해석적 앵커 (Leighton 1992, symbolic — 지금 산출 가능, T1-A)
+## 해석적 앵커 (T1-A — 완료; 정확본은 `T1A_analytical.md`)
+
+> 본 표는 요약. 정확 상수 derive + 산술 확인 + 출처 + caveat 체크리스트는
+> `comb/T1A_analytical.md` (T1-A 완료, sim 불요, 표준 NoC 문헌 인용).
 
 | metric | degree-4 mesh | degree-6 hex | 비고 |
 |---|---|---|---|

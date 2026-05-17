@@ -50,4 +50,5 @@
   rfc = "comb/RFC.md — 합본 DRAFT, RFC 057 (확정, 충돌0 above rfc_056), 5 falsifier (F1–F5)"
   plan = "comb/PLAN.md — 진행 로그 SSOT"
   t1_spec = "comb/T1_experiment.md — F1/F2 pre-registered 측정 명세 (consumer-side)"
-  next_gate = "T1-A 해석적 앵커 (Leighton degree-d 상수 derive + hexa verify; comb-side, sim 불요) → T1-B sim 측정은 hexa-arch[chip] NoC sim 흡수 후 (blocked-on-hexa-arch)"
+  t1a_done = "comb/T1A_analytical.md — T1-A 완료 (sim 불요). 표준 NoC 문헌 인용·정리, 산술 elementary, caveat 5건. 핵심: diameter hex/mesh = 1/√3, avg dist 1/√3, hop 절감 ≈ 0.845√N, degree·links 1.5×, hop 부등식 §3."
+  next_gate = "T1-B sim 측정 (degree-6 vs degree-4, modern node wire model, F1/F2 verdict) — blocked-on-hexa-arch[chip] NoC sim 흡수 (별도 repo ~/core/hexa-arch 진행中)"
