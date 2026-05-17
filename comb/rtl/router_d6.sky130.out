@@ -1,0 +1,60 @@
+3.25. Printing statistics.
+
+=== router_d6 ===
+
+        +----------Local Count, excluding submodules.
+        | 
+     5354 wires
+    10148 wire bits
+      120 public wires
+     4408 public wire bits
+       10 ports
+      938 port bits
+     7549 cells
+      115   $_ANDNOT_
+     1327   $_AND_
+     2243   $_DFFE_PP_
+     1398   $_MUX_
+     1629   $_NAND_
+       76   $_NOR_
+       21   $_NOT_
+       94   $_ORNOT_
+      209   $_OR_
+       15   $_SDFFCE_PN0P_
+       27   $_SDFFE_PP0P_
+        7   $_SDFF_PP0_
+      257   $_XNOR_
+      131   $_XOR_
+
+3.26. Executing CHECK pass (checking for obvious problems).
+Checking module router_d6...
+Found and reported 0 problems.
+
+4. Executing ABC pass (technology mapping using ABC).
+
+4.1. Extracting gate netlist of module `\router_d6' to `<abc-temp-dir>/input.blif'..
+sh: line 1: 12611 Abort trap: 6           "/opt/homebrew/bin/yosys-abc" -c "read_lib -w \"/tmp/sky130_lib/sky130_fd_sc_hd__tt.lib\" ; write_scl \"/var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/yosys-liberty-scl-cache/yosys_merged_b4fbc99e.scl.tmp\"" 2>&1
+Warning: ABC: merged SCL conversion failed, falling back to liberty format
+ABC: conversion output:
+Assertion failed: (v < p->nItems), function Scl_LibertyItem, file sclLiberty.c, line 93.
+
+======== ABC command line "read_lib -w "/tmp/sky130_lib/sky130_fd_sc_hd__tt.lib" ; write_scl "/var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/yosys-liberty-scl-cache/yosys_merged_b4fbc99e.scl.tmp""
+
+File "/tmp/sky130_lib/sky130_fd_sc_hd__tt.lib". Line      9. Failed to parse entry "<!DOCTYPE".
+
+Parsing failed.  Parsing time =     0.00 sec
+
+Warning: ABC: Merged scl conversion failed, using liberty format
+sh: line 1: 12638 Abort trap: 6           "/opt/homebrew/bin/yosys-abc" -s -f /var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/yosys-abc-k4R5rI/abc.script 2>&1
+Replacing 1 occurrences of constant undef bits with constant zero bits
+
+4.1.1. Executed ABC.
+Extracted 5257 gates and 7122 wires to a netlist network with 1864 inputs and 161 outputs.
+Running ABC script: <abc-temp-dir>/abc.script
+ABC: ======== ABC command line "source <abc-temp-dir>/abc.script"
+ABC: + read_blif <abc-temp-dir>/input.blif 
+ABC: + read_lib -w /tmp/sky130_lib/sky130_fd_sc_hd__tt.lib 
+ABC: Assertion failed: (v < p->nItems), function Scl_LibertyItem, file sclLiberty.c, line 93.
+ABC: File "/tmp/sky130_lib/sky130_fd_sc_hd__tt.lib". Line      9. Failed to parse entry "<!DOCTYPE".
+ABC: Parsing failed.  Parsing time =     0.00 sec
+ERROR: ABC: execution of script "/var/folders/2g/blzd56lx2rvfvt61c1pc9g7r0000gn/T/yosys-abc-k4R5rI/abc.script" failed: return code 134 (errno=0).
