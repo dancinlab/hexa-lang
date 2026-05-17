@@ -208,6 +208,14 @@
   source = "RFC 044 + RFC 046 cross-link 2026-05-16"
   @> AGENTS.md
 
+@D g_plan_consolidation := "single-source compile PLAN tracking — compiler/PLAN.md" :: governance [required d=2026-05-17 active]
+  rule = "Compile 관련 (compiler/ · self/ · 부트스트랩 · test sweep · interp-retirement · aprime_cc · hexa-build 등) cycle 진행 로그 는 `compiler/PLAN.md` 의 `## 진행 로그` 섹션에 append. 신규 `PLAN-*.md` 파일 작성 금지 — 기존 `PLAN-interp-retirement.md` · `PLAN-stage3-*.md` 는 closure 까지 유지, 신규 entry 만 `compiler/PLAN.md` 로 redirect."
+  why = "문서분산 방지. cycle 단위 일목요연 파악 = `compiler/PLAN.md` 한 파일. parser/codegen/lower/runtime 부분 수정 + 부트스트랩 재빌드 + smoke sweep 측정 + interp-retirement cleanup 모두 동일한 진행 로그 stream."
+  applies-to = "전체 compile pipeline deliverable. `compiler/`, `self/`, test/ smoke 측정, 부트스트랩 (`self/native/hexa_v2`), 3-tier wrapper (`bin/hexa-run-native`), aprime_cc-direct path."
+  exception = "별도 도메인 SSOT 자체는 자체 위치 유지: `stdlib/flame/PLAN.md` (NN training stdlib) · `self/forge/PLAN.md` (GPU compute substrate) · `tape/PLAN.md` 등. RFC drafts (`inbox/rfc_drafts_*`) 는 자체 파일."
+  authority = "user directive 2026-05-17 'PLAN 은 compile 관련 폴더/PLAN.md 파일을 업데이트해나가면되' + 'AGENTS.tape 에도 기록해놔줘 문서분산 방지'. 사전 forge/PLAN.md 위치 시도 (commit d6ef09ab) 는 본 cycle 이 forge 아닌 compile 작업임을 정정한 04fd46b2 에서 revert."
+  @> AGENTS.md
+
 # ─── §4 Forbidden patterns ───────────────────────────────────────────
 
 @F f1 := "lattice-fit-on-external-language" :: governance [required deny:write]
