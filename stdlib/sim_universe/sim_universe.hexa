@@ -24,7 +24,7 @@
 // Source: RFC 046 — absorbs ~/core/sim-universe/cli/sim-universe.hexa v1.1.0.
 
 let VERSION = "1.1.0"
-let SUBSTRATE_PHASE = "RFC 046-A (substrate code LANDED 2026-05-16)"
+let SUBSTRATE_PHASE = "RFC 046-A + 046-B FULL (substrate + 15 experiments LANDED 2026-05-16)"
 
 fn _shq(s: str) -> str {
     return "'" + s.replace("'", "'\\''") + "'"
@@ -79,9 +79,22 @@ fn cmd_help() {
     println("  godel                                     Gödel-Q mutator + bootstrap")
     println("  sr                                        sr_harness demo (ouroboros SR)")
     println("")
-    println("EXPERIMENTS (RFC 046-B — PENDING, 16 modules ~14k LoC)")
-    println("  fvd / stark / qdarwin / ca-qm / supremacy / mbs / dtc / z2gauge /")
-    println("  preheating / multipolar / surface-code / ssh / hofstadter / dqpt / wdw")
+    println("EXPERIMENTS (RFC 046-B — LANDED, 15 modules ~14.4k LoC)")
+    println("  fvd                                       quantum false-vacuum decay  [Chao 2026]")
+    println("  stark                                     Hilbert-space fragmentation [Wang 2024]")
+    println("  qdarwin                                   quantum-Darwinism gate sim  [Zhu 2025]")
+    println("  ca-qm                                     two-engine CA models of QM  [Elze/van Berkel]")
+    println("  supremacy                                 2ⁿ RCS XEB instrument       [Morvan 2024]")
+    println("  mbs                                       PXP-Rydberg scar revival    [Xiang 2024]")
+    println("  dtc                                       Fock-space prethermal DTC   [Bao 2025]")
+    println("  z2gauge                                   (1+1)D Z₂ LGT Floquet       [Hayata-Hidaka 2024]")
+    println("  preheating                                cold-atom BdG preheating    [Gondret 2025]")
+    println("  multipolar                                RMD prethermal α=2n+1       [Liu 2025]")
+    println("  surface-code                              Gottesman-Knill stabilizer QEC [Acharya 2024]")
+    println("  ssh                                       SSH topological edge        [SSH 1979]")
+    println("  hofstadter                                Harper-Hofstadter butterfly [Hofstadter 1976]")
+    println("  dqpt                                      TFIM Loschmidt DQPT         [Heyl 2013]")
+    println("  wdw                                       Wheeler-DeWitt minisuperspace [Basilakos 2025]")
     println("")
     println("ARCHIVE")
     println("  ~/core/archive_sim-universe/              frozen 묘비 (RFC 046 헌법 v2 룰 3)")
@@ -119,11 +132,22 @@ fn cmd_status() {
     println("    sim_agent             492 LoC  registry + router (lib entry)")
     println("    sr_harness            800 LoC  sim-adjacent harness")
     println("")
-    println("  Tier-A2 experiments (16 modules · ~14k LoC) — PENDING RFC 046-B")
-    println("    fvd · stark-fragmentation · quantum-darwinism · ca-qm · supremacy-frontier")
-    println("    mbs-revival · fock-prethermal-dtc · z2-gauge-prethermal · preheating-analog")
-    println("    multipolar-prethermal · surface-code · ssh-topology · hofstadter")
-    println("    dqpt-loschmidt · wdw-minisuperspace")
+    println("  Tier-A2 experiments (15 modules · ~14.4k LoC) — LANDED RFC 046-B")
+    println("    fvd                 1,338 LoC  exact 2ᴺ false-vacuum decay (Chao 2026)")
+    println("    stark-fragmentation 1,212 LoC  Hilbert-space fragmentation (Wang 2024)")
+    println("    quantum-darwinism   1,282 LoC  quantum-Darwinism gate sim (Zhu 2025)")
+    println("    ca-qm               1,142 LoC  two-engine CA of QM (Elze/van Berkel)")
+    println("    supremacy-frontier  1,272 LoC  2ⁿ RCS XEB (Morvan 2024)")
+    println("    mbs-revival           869 LoC  PXP-Rydberg scar (Xiang 2024)")
+    println("    fock-prethermal-dtc   771 LoC  Fock-space DTC (Bao 2025)")
+    println("    z2-gauge-prethermal   804 LoC  (1+1)D Z₂ LGT (Hayata-Hidaka 2024)")
+    println("    preheating-analog     615 LoC  cold-atom BdG preheating (Gondret 2025)")
+    println("    multipolar-prethermal 1,176 LoC RMD α=2n+1 (Liu 2025)")
+    println("    surface-code          835 LoC  Gottesman-Knill stabilizer QEC (Acharya 2024)")
+    println("    ssh-topology          693 LoC  SSH topological edge (SSH 1979)")
+    println("    hofstadter            823 LoC  Harper-Hofstadter butterfly (1976)")
+    println("    dqpt-loschmidt        684 LoC  TFIM Loschmidt DQPT (Heyl 2013)")
+    println("    wdw-minisuperspace    889 LoC  Wheeler-DeWitt minisuperspace (Basilakos 2025)")
     println("")
     println("HONEST SCOPE  Toy lattice-model substrate · Bostrom-flavored framing.")
     println("  NOT lattice QCD · NOT Einstein-equation · NOT N-body cosmology · NOT SM.")
@@ -211,14 +235,34 @@ fn cmd_selftest(args: [str]) {
     }
 }
 
-fn cmd_experiment_deferred(name: str) {
-    println("hexa sim-universe " + name + " — DEFERRED to RFC 046-B experiments migration")
-    println("")
-    println("Run the frozen archive version:")
-    println("  hexa run ~/core/archive_sim-universe/" + name + "/module/*.hexa")
-    println("")
-    println("Or wait for RFC 046-B (16 experiments + per-experiment tests) follow-up.")
-    exit(2)
+fn _experiment_path(name: str) -> str {
+    if name == "fvd" { return "stdlib/sim_universe/experiments/fvd/fvd.hexa" }
+    if name == "stark" { return "stdlib/sim_universe/experiments/stark_fragmentation/stark_frag.hexa" }
+    if name == "qdarwin" { return "stdlib/sim_universe/experiments/quantum_darwinism/qdarwin.hexa" }
+    if name == "ca-qm" { return "stdlib/sim_universe/experiments/ca_qm/ca_qm.hexa" }
+    if name == "supremacy" { return "stdlib/sim_universe/experiments/supremacy_frontier/supremacy_frontier.hexa" }
+    if name == "mbs" { return "stdlib/sim_universe/experiments/mbs_revival/mbs_revival.hexa" }
+    if name == "dtc" { return "stdlib/sim_universe/experiments/fock_prethermal_dtc/dtc.hexa" }
+    if name == "z2gauge" { return "stdlib/sim_universe/experiments/z2_gauge_prethermal/z2gauge.hexa" }
+    if name == "preheating" { return "stdlib/sim_universe/experiments/preheating_analog/preheating.hexa" }
+    if name == "multipolar" { return "stdlib/sim_universe/experiments/multipolar_prethermal/multipolar.hexa" }
+    if name == "surface-code" { return "stdlib/sim_universe/experiments/surface_code/surface_code.hexa" }
+    if name == "ssh" { return "stdlib/sim_universe/experiments/ssh_topology/ssh_topo.hexa" }
+    if name == "hofstadter" { return "stdlib/sim_universe/experiments/hofstadter/hofstadter.hexa" }
+    if name == "dqpt" { return "stdlib/sim_universe/experiments/dqpt_loschmidt/dqpt.hexa" }
+    if name == "wdw" { return "stdlib/sim_universe/experiments/wdw_minisuperspace/wdw.hexa" }
+    return ""
+}
+
+fn cmd_experiment(name: str, args: [str]) {
+    let path = _experiment_path(name)
+    if len(path) == 0 {
+        println("hexa sim-universe " + name + ": unknown experiment")
+        exit(2)
+    }
+    println("[sim-universe/" + name + "] running " + path)
+    let raw = _run_module(path, args)
+    println(raw)
 }
 
 fn main() {
@@ -271,7 +315,7 @@ fn main() {
               sub == "supremacy" || sub == "mbs" || sub == "dtc" || sub == "z2gauge" ||
               sub == "preheating" || sub == "multipolar" || sub == "surface-code" ||
               sub == "ssh" || sub == "hofstadter" || sub == "dqpt" || sub == "wdw" {
-        cmd_experiment_deferred(sub)
+        cmd_experiment(sub, sub_args)
     } else {
         println("hexa sim-universe: unknown subcommand '" + sub + "'")
         println("run 'hexa sim-universe --help' for usage")
