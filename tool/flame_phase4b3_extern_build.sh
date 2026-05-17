@@ -34,7 +34,15 @@ BUILT="build/artifacts/${STEM}_built.c"
 mkdir -p build/artifacts
 
 INTERP=$(find /Users/ghost/.hx/packages/hexa/build -name "hexa_interp.real" 2>/dev/null | head -1)
-V2=$(find self/native -name "hexa_v2*" 2>/dev/null | head -1)
+# Select the EXACT canonical transpiler — never a `hexa_v2*` glob.
+# `find -name "hexa_v2*" | head -1` returns directory order and can pick
+# self/native/hexa_v2_baseline (an Apr-15 stale binary that strips
+# multi-line fn signatures → dropped params → undeclared identifiers).
+if [ -x self/native/hexa_v2 ]; then
+    V2="self/native/hexa_v2"
+else
+    V2=$(find self/native -name "hexa_v2" 2>/dev/null | head -1)
+fi
 
 if [ -z "$INTERP" ] || [ -z "$V2" ]; then
     echo "FATAL: cannot locate interp or hexa_v2"
@@ -50,6 +58,13 @@ echo "[1/4] module_loader flatten → $EXP"
 
 echo "[2/4] hexa_v2 transpile → $CFILE"
 "$V2" "$EXP" "$CFILE" 2>&1 | tail -1
+# Restore single-TU `#include "runtime.c"` — the canonical hexa_v2 emits
+# `#include "runtime.h"` (separate-TU) but step 3 sed-inserts the
+# primitive after the `#include "runtime.c"` anchor, and clang never
+# links runtime.c separately.
+if grep -q '^#include "runtime.h"' "$CFILE"; then
+    sed -i '' 's|^#include "runtime.h"|#include "runtime.c"|' "$CFILE"
+fi
 
 echo "[3/4] write primitive .c body → $PRIM"
 cat > "$PRIM" <<'PRIMEOF'
