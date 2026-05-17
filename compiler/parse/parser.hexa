@@ -841,6 +841,24 @@ fn parse_primary() -> Expr {
             atlas_ref: empty_atlas()
         }
     }
+    // Empty struct/map literal `{}` — must be checked BEFORE the generic
+    // LBrace→parse_block_expr branch below, otherwise `let mut d = {}`
+    // parses as an empty block (which evaluates to TAG_INT 0) instead of
+    // an empty map. Non-empty `{ … }` keeps falling through to block-expr;
+    // `Name { … }` is already handled at the Ident-prefix path above.
+    if check_kind(TokenKind::LBrace) && !p_suppress_struct_lit
+       && same_kind(peek_at(1).kind, TokenKind::RBrace) {
+        let lb = peek()
+        advance()  // {
+        advance()  // }
+        return Expr {
+            kind: ExprKind::StructLit,
+            span: lb.span,
+            text: "",
+            children: [],
+            atlas_ref: empty_atlas()
+        }
+    }
     if check_kind(TokenKind::LBrace) {
         return parse_block_expr()
     }
