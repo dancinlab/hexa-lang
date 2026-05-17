@@ -793,3 +793,39 @@ env-resource (codegen 무관). **codegen-correctness 분모 실질 ≈ 40** (t35
 (t_multiarch_cpu) ↔ t37 8× HX3001 numeric-literal type-infer (동근 가능성) ·
 t36 serve_alm.hexa import HX2001/HX3002 · try/catch(t38_nanbox) · int-div
 strict-lint(atlas_verify). 다음: #33 (t_multiarch_cpu+t37 동시 해소 가능성 최고가치).
+
+### 진행 로그 — #33 tier-1 int↔float numeric coercion FIXED (cycle h20)
+
+**근본원인**: `compiler/check/types.hexa` `_types_check_binop` (산술 분기, ~L1441)
+가 두 피연산자 모두 numeric 이어도 `!_types_equal(lt,rt)` 면 무조건 HX3001 을
+emit + 결과타입을 `lt` 로 반환 → mixed int/float 산술 거부 + 잘못된 타입 전파.
+공유 동근: `test/t_multiarch_cpu_smoke`(`self/ml/cpu_forward_tiny.hexa:55`
+`(k-50000)*0.000004` i64×f64 → HX3001 expected i64 got f64) + `t37_hxqwen14b_day2`
+(`0.01*(i+1)` 외 8× HX3001 expected f64 got i64, 역방향). tier-2 는 거부 안 함.
+
+**tier-2 정확 정책 (매칭 기준)**: `self/runtime.c::hexa_add/hexa_sub/hexa_mul` —
+`int OP int → int`, `float OP float → float`, **mixed int/float → float (int
+피연산자를 `__hx_to_double` 로 widening)**. tier-2 codegen_c2 에는 mixed-numeric
+정적 HX3001 emit 자체가 없음 (런타임 HexaVal 태그 동적 디스패치 + int→double 승격).
+
+**수정 (surgical, int↔float 한정)**:
+- `compiler/check/types.hexa` `_types_check_binop` 산술 분기 — `mixed_int_float`
+  (`_is_integer_kind` ⊕ `_is_float_kind`) 일 때 HX3001 억제 + 결과타입 `_types_t_f64()`
+  반환 (tier-2 `__hx_to_double` 경로 정확 매칭). 동일-kind / 비-numeric mismatch
+  체크는 무변경 (blanket 완화 아님).
+- `compiler/codegen/arm64_darwin.hexa` `builtin_c_name` — 무타입 `ptr_read`/
+  `ptr_write` 매핑 추가 (`hexa_ptr_read`/`hexa_ptr_write`, tier-2 codegen_c2
+  3998/4007 mirror). t37 잔여 link blocker (`_ptr_read` undefined) 해소.
+
+**검증 (clean origin/main 291597be 기준)**: build_aprime smoke `exit(42)==42`
+PASS · 양방향 minimal repro (r1 int×float: tier-1 PRE HX3001 → POST `2e-05\n2e-05`
+== tier-2 oracle byte-identical; r2 i64-where-f64: binop HX3001 해소, arg-coercion
+HX3003 별개로 잔존하나 본 task 범위 밖) · **gate-1 36/44 → 37/44** (`t_multiarch_cpu`
+APFAIL→MATCH flip; pre-MATCH set ⊆ post-MATCH set = **zero regression**, 분류
+byte-identical) · `t37` HX3001 8건 전부 해소 + 컴파일/링크/실행 성공(rc=0) 하나
+**tier-2 oracle 자체가 FFI dlsym SIGSEGV(rc=139)** → MISMATCH(ap_rc=0 or_rc=139),
+ORAFAIL-class env 이슈로 codegen 무관 (앞 항목 t35 동일 분류) · ap1 vs ap1f
+**39/44 byte-identical** (5 ASMDIFF = mixed-int/float 사용 파일 t_multiarch/t35/t36/
+t37/t38, fix 의도된 차이; 비-numeric 39파일 전부 동일) · **self-host fixpoint 보존**
+fresh-flatten 38-file/22,461-line, ap1f.s==ap2f.s byte-identical 233,619-line
+md5 `bb4b8045…` (pre-fix apt 와도 동일 md5 — fixed source 자기일관).
