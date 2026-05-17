@@ -1238,3 +1238,94 @@
   status: spec
   opened: 2026-05-13
   detail: patches/hexa-run-interp-hangs-on-mac.md
+
+- id: forge-status-tui-renderer
+  source_commit: pending
+  source_files:
+    - /Users/ghost/core/forge/tool/forge_status_view.py
+  compiler_impact: |
+    No compiler change. forge-local Python renderer (~200 lines)
+    for thick-box TUI status output (┏━┓┃┣┫┗━┛). Used by
+    forge.hexa cmd_status. Migration to hexa-native blocked by:
+    - ANSI ESC[36m / ESC[1;32m / ESC[0m string formatting (hexa-lang lacks chr-aware format helpers for ANSI)
+    - Visible-length calc (ESC-aware regex strip)
+    - Multi-file rotation-aware IO (sys.stdin + pathlib aggregation)
+    - p50/p95 nearest-rank percentile computation
+    - dict aggregation + sorted printing
+    All doable in hexa-lang in principle, but cost-benefit poor
+    for one renderer. Awaits stdlib additions (format_n_pure ANSI
+    support + sort helpers + percentile lib).
+  downstream_consumer: |
+    forge.hexa cmd_status (F-586 operator UX overhaul).
+  status: forge-local
+  opened: 2026-05-17
+  detail: (see forge/tool/forge_status_view.py + forge/HANDOFF.md F-586)
+
+- id: rfc-044-forge-regime-tiered-substrate
+  source_commit: 39be4487
+  source_files:
+    - inbox/rfc_drafts_2026_05_12/rfc_044_forge_regime_tiered_substrate.md
+    - self/forge/PARADIGM.md
+    - self/forge/PARADIGM_RESEARCH.md
+  compiler_impact: |
+    Design-only RFC. Measurement-anchored forge architectural pivot
+    (Phase R 14 fires + 9 sub-agents, $2.91 total). Describes
+    dual-mechanism × regime-tiered AOT substrate. 14 falsifier
+    pre-registered (5 Stage 1 PASS + 9 Stage 2 pre-reg).
+  downstream_consumer: |
+    flame Phase 4-C/4-D dispatch via RFC 050 integration API.
+  status: spec
+  opened: 2026-05-17
+  detail: inbox/rfc_drafts_2026_05_12/rfc_044_forge_regime_tiered_substrate.md
+
+- id: rfc-049-forge-mixed-precision-substrate
+  source_commit: b900dc36
+  source_files:
+    - inbox/rfc_drafts_2026_05_12/rfc_049_forge_mixed_precision_substrate.md
+  compiler_impact: |
+    Design-only RFC. BF16/FP16 substrate with Tensor Core utilization
+    + LayerCast determinism preservation. 7 falsifier pre-registered.
+    Phase R' Stage 1 fire (commit f01cbdb5) VALIDATED:
+    9.67× FP64 cuBLAS at Llama-7B FFN, LayerCast det/mem/diverge
+    all PASS. Forge wall path established.
+  downstream_consumer: |
+    flame Phase 4-D BF16 dispatch (gated on RFC 050 integration).
+  status: spec
+  opened: 2026-05-17
+  detail: inbox/rfc_drafts_2026_05_12/rfc_049_forge_mixed_precision_substrate.md
+
+- id: rfc-050-flame-forge-integration
+  source_commit: 041ec792
+  source_files:
+    - inbox/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md
+  compiler_impact: |
+    Design-only RFC. flame ↔ forge tier dispatch API (regime
+    classification + precision policy + det mode + backward graph
+    integration). 7 falsifier pre-registered (DISPATCH-API-MATCH,
+    REGIME-CORRECT, PRECISION-D-PRESERVE, FORGE-BACKWARD-FUSE,
+    PERF-INHERITANCE, FALLBACK-CHAIN, VERSION-API).
+  downstream_consumer: |
+    flame Phase 4-C-3 nn_decoder_grad restructure + Phase 4-D-5
+    cuBLAS wire-up + forge Stage 2 BF16 kernel land.
+  status: spec
+  opened: 2026-05-17
+  detail: inbox/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md
+
+- id: rfc-051-uarr-unboxed-array-native
+  source_commit: pending
+  source_files:
+    - inbox/rfc_drafts_2026_05_12/rfc_051_unboxed_array_native.md
+  compiler_impact: |
+    Design-only RFC from anima session. uarr (unboxed packed-scalar
+    transient array) primitive — addresses pure-hexa hexa-cpu LM-scale
+    training의 boxed-array allocator overhead 2.8× inflation ceiling
+    (d=96·3L observed 76 GiB vs predicted 27 GiB; d=128·4L Mac 138 GiB
+    over 24 GiB OOM). Source: anima
+    docs/hexad_pure_hexa_d96x3_substrate_fix_2026_05_17.md.
+    Implementation = future cycle (runtime struct + interp dispatch
+    + codegen mapping). Direction orthogonal to forge RFC 040-049/050.
+  downstream_consumer: |
+    anima pure-hexa hexa-cpu LM-scale training (d≥96 ladder).
+  status: spec
+  opened: 2026-05-17
+  detail: inbox/rfc_drafts_2026_05_12/rfc_051_unboxed_array_native.md
