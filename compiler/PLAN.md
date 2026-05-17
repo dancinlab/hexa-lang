@@ -31,7 +31,7 @@
 
 **다음 진행 candidates**:
 - #5 atlas SIGSEGV (≥17 nested-struct UB · runtime shallow-clone aliasing)
-- #18 aprime_cc self-host (hexa_v2 의존 끊기)
+- #18 aprime_cc self-host (hexa_v2 의존 끊기) — tool/build_aprime.sh 가 부트스트랩 발판
 - ~170 unmapped runtime builtins (per-symbol triage)
 - 60-smoke 재측정 (activated binary lift 확인 — auto-invoke + fn-dedup + lvalue + nil 누계)
 - 통계적-statement-level DWARF `.loc` (Stmt/LInstr line threading — #13 follow-up)
@@ -39,6 +39,17 @@
 ## 진행 로그
 
 (append-only)
+
+### 2026-05-17 — #11 tool/build_aprime.sh — aprime_cc 빌드 레시피 canonical 화 (`afb839d7`)
+aprime_cc 빌드 레시피가 out-of-tree `/tmp/arm64_feasible.sh` 에만 존재했던 것을 repo tool 로 canonical 화.
+
+**`tool/build_aprime.sh`** — 5-stage pipeline: (1) compiler/main.hexa import+use closure flatten (embedded.gen stub) → (2) hexa_v2 transpile → (3) s4_flatc_post.py + builtin sed + runtime.h→runtime.c inline → (4) clang -O1 -arch arm64 → aprime_cc → (5) smoke (`fn main(){exit(6*7)}` → $?==42). Flags `-o`/`-r`/`-v`. Exit 0/1/2 = built+smoke / build-fail / smoke-fail.
+
+`/tmp` 스크립트 대비 개선: 파라메트릭 (하드코딩 경로 제거) · in-repo `self/native/hexa_v2` 사용 · per-build mktemp dir (trap-clean) · honest exit code.
+
+**`tool/s4_flatc_post.py`** — optional `argv[1]` input-path 추가 (default `/tmp/flat4.c` 유지). build_aprime.sh 가 per-build private path 전달 → concurrent build 시 공유 `/tmp/flat4.c` collision 제거 (이 collision 이 parallel 호출 시 간헐적 "clang linker failed" 원인이었음).
+
+**Validation**: `bash tool/build_aprime.sh -o /tmp/aprime_final` → 5 stage 전부, aprime_cc 2,050,384 B, smoke exit(42)==42 PASS.
 
 ### 2026-05-17 — RFC 040 GPU builtin interp dispatch fix — merged-rfc043 interp 빌드 차단 해소 (`c8a5fe44`)
 직전 배포 entry 의 ⚠️ caveat (merged-rfc043 interp 빌드 차단) 종결.
