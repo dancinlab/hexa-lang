@@ -1028,3 +1028,30 @@ rmsnorm shim `(tag==TAG_INT)?.i:.f` 가 이미 올바르게 처리.
 csoftmax `PASS` (회귀 0). 다음 = GPU block-oracle 결정 검증 (변환 +
 eps fix 합본; oRin 1.704e-01 FAIL → PASS 여부 = fwd chain link +
 15-fire RMSNorm 근본원인 fix 동시 판정).
+
+### 2026-05-18 — GPU verify v2: eps 이론 반증 + 진짜 oRin clobber localize
+
+**GPU block-oracle v2 (instance 36960941, oracle_rc=1, wall 4s)**:
+**FAIL `oRin=1.704e-01` — eps fix 前과 bit-identical**. g3: 측정이
+eps=0 이론을 **반증**. eps=0↔1e-6 는 실재 불일치(✓ _cpu 정합상
+hexa_float(1e-6) 유지)지만 oRin FAIL 의 원인 **아님** (red herring).
+
+**진짜 버그 localize (oracle full diagnostic)**:
+```
+ref Xout = 0 0 0 0  (config 가 zero-degenerate forward — 정상)
+per-field: oXout=0 oHstate=0 oP=0 oSwS=0 · oQ=1.776e-15 · oRin=1.704e-01
+```
+- `oQ = Wq·Bc[oRin]` = 1.776e-15 (byte-eq) → **step-2 Q projection 이
+  Bc[oRin] 읽는 시점엔 Bc[oRin] 정확**.
+- block 끝 oRin=0.17 → **step-2 이후 어떤 GPU step 이 Bc[oRin] 슬롯
+  clobber**. = compute 오류 아닌 **cache-field overwrite**.
+- bwd 가 Bc[oRin] 읽음 → 잘못된 rin → gn2 drift. **eps 보다 정확한
+  15-fire d768 gn2-drift 근본원인 후보** (forward 출력 oXout 은 정확
+  하나 bwd-cache 가 오염 = 학습 step 마다 누적되는 정확한 signature).
+
+**조치**: oRin-clobber 집중 진단 sub-agent — converted
+`flame_block_generic_fwd_primitive_gpu` 의 step-2 이후 Bc[oRin]
+영역 write 추적·수정, block oracle (no-CUDA $0 + parent GPU) gate.
+eps=hexa_float(1e-6) 는 정합상 유지 (oRin fix 아님 명시, over-claim 0).
+instrument 가 또 1건 — d768 fire 가 15회 못한 정밀 localize 를
+$0.20/4s 에 (block oracle 누적 2 catch: RMSNorm-region cache 오염).
