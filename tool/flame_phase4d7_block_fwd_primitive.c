@@ -363,6 +363,67 @@ HexaVal hexa_farr_unpin_device(HexaVal h_v);
 HexaVal hexa_farr_dev_view(HexaVal base_v, HexaVal off_v, HexaVal len_v);
 HexaVal hexa_farr_set_out_disposition(HexaVal d_v);
 
+// ── flame Phase 4-D-9 §3/§4-gap#1 — causal-masked softmax forge kernel ──
+// The attention block's per-row causal-prefix softmax (step 4) was a HOST
+// loop (flame_g7_dt_exp over [0,L), L=i+1). PHASE4D9_DEVICE_CHAIN_DESIGN.md
+// §4 names it as the missing byte-eq-verified forge kernel; RFC 058's 14th
+// ADDITIVE kernel _hx_cuda_kern_causal_softmax_rows (runtime_cuda.c:768,
+// FORBIDDEN to modify — only called here) is that kernel: it ports
+// flame_g7_dt_exp VERBATIM (_hx_dt_exp_dev, same constants/loop-bounds/
+// order) and reduces m_max/tot with the SAME deterministic block tree as
+// the 12 verified Phase-B kernels, so the only residual gap vs the CPU
+// reference is the ~1e-12 reduction reorder — measured by the standalone
+// instrument tool/flame_phase4d9_causal_softmax_oracle (PASS max|Δ|=0.0
+// strict / 2.776e-17 GPU). Output Y[i*T+j] = softmax over the causal
+// prefix [0,i+1) and EXACTLY 0.0 for j ≥ i+1 — which is byte-identically
+// the masked P-matrix the P·V cuBLAS Dgemm consumes (the host code rebuilt
+// that mask in a second loop; the kernel output IS it). There is NO
+// hexa_farr_causal_softmax_rows_gpu shim in runtime.c / the oracle harness
+// (both FORBIDDEN to touch), so — exactly as the matmul primitive calls
+// the RFC 058 transpose-scatter kernel — we declare the _hx_cuda_* extern
+// directly under the extern "C" linkage contract (mirrors runtime_cuda.c
+// :45/:1913 — a missing guard MANGLES the symbol under the --cuda
+// nvcc/C++ front-end; that exact link error already cost one fire) and
+// supply a thin file-local wrapper. d ≤ FLAME_GPU_RESIDENT_THRESHOLD takes
+// the _cpu path (this whole region is dim-gated + #ifndef
+// FLAME_BLOCK_PRIM_STANDALONE) so d=32·3L is byte-eq by construction;
+// no-CUDA Mac → the wrapper returns -1 and the verbatim host softmax
+// fallback runs (identical numerics to the pre-conversion body).
+#ifdef HEXA_CUDA
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern int _hx_cuda_farr_causal_softmax_rows_gpu(int64_t x_id, int64_t R,
+                                                 int64_t T, int64_t out_id);
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
+#endif  // HEXA_CUDA
+
+// causal_softmax_rows: caller-allocates the [R·T] output farr (hexa_farr_
+// zeros), the forge kernel fills row i with softmax over [0,i+1) and 0.0
+// for j ≥ i+1. Returns the output farr-id, or -1 (no-CUDA / dispatch
+// fail) → caller runs the verbatim host softmax fallback. Mirrors the
+// runtime.c hexa_farr_transpose_scatter_gpu wrapper shape (validate →
+// HEXA_CUDA dispatch → -1 on the no-CUDA build).
+static int flame_g7_causal_softmax_rows_gpu(int x_id, int R, int Tt) {
+#ifdef HEXA_CUDA
+    if (R <= 0 || Tt <= 0) return -1;
+    HexaVal o_v = hexa_farr_zeros(hexa_int((int64_t)R * Tt));
+    int o_id = (int)o_v.i;
+    if (o_id < 0) return -1;
+    if (_hx_cuda_farr_causal_softmax_rows_gpu(
+            (int64_t)x_id, (int64_t)R, (int64_t)Tt, (int64_t)o_id) != 0) {
+        hexa_farr_free(o_v);
+        return -1;
+    }
+    return o_id;
+#else
+    (void)x_id; (void)R; (void)Tt;
+    return -1;  // no-CUDA: caller takes the verbatim host softmax fallback
+#endif
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // flame Phase 4-D-9 — A2 resident-dataflow rewire (RFC 056 §6.5 consumer)
 // ════════════════════════════════════════════════════════════════════════
@@ -764,46 +825,83 @@ static void flame_block_generic_fwd_primitive_gpu(
                         sc[i*T+j] = dot * scale;
                     }
             }
-            // softmax over the causal row prefix. The forge softmax_rows
-            // kernel softmaxes the FULL row; the causal upper-triangle is
-            // masked here by computing per-row over [0,L). We do the
-            // per-row softmax on the L-prefix directly (cheap T reduction;
-            // the d-dominated work was the score matmul above).
+            // ── PHASE4D9 §3/§4-gap#1: causal-masked softmax — forge kernel
+            //    replaces the host per-row L-prefix loop ───────────────────
+            // The forge causal_softmax_rows kernel computes EXACTLY the CPU
+            // reference's per-row softmax over the causal prefix [0,L=i+1)
+            // (verbatim flame_g7_dt_exp via _hx_dt_exp_dev, deterministic
+            // block-tree m_max/tot, the same `/= tot` divide) AND zero-fills
+            // j ≥ i+1 — so its [T·T] output is byte-identically BOTH the
+            // Bc[oP] cache slab the bwd pass reads AND the masked P-matrix
+            // the P·V cuBLAS Dgemm consumes (the host code rebuilt that mask
+            // in a SECOND loop into a separate `pmat` farr; the kernel
+            // output IS pmat — that redundant host slab + its T·T alloc are
+            // eliminated). sc is host-fresh (just mask+scaled above) so the
+            // kernel's _h2d(sc) is the authoritative upload; its output is
+            // D2H'd (default HOST_NOW) because Bc[oP] is a bwd-cache field
+            // read host-side AND the P·V matmul reads it host-side — the
+            // honest residual round-trip (PHASE4D9 §3: the wall fully moves
+            // only when the bwd half also dev_view-consumes Bc[oP]; this
+            // fwd-only conversion still D2Hs the bwd-cache fields).
+            HexaVal vh_v = hexa_farr_zeros(hexa_int((int64_t)T * hd));
+            int vh_id = (int)vh_v.i;
             {
-                double* sc = _hx_farr_table[sc_id].buf;
                 double* Bc = _hx_farr_table[Bc_id].buf;
-                for (int i = 0; i < T; i++) {
-                    int L = i + 1;
-                    double m_max = sc[i*T+0];
-                    for (int j = 1; j < L; j++)
-                        if (sc[i*T+j] > m_max) m_max = sc[i*T+j];
-                    double tot = 0.0;
-                    for (int j = 0; j < L; j++) {
-                        double e = flame_g7_dt_exp(sc[i*T+j] - m_max);
-                        Bc[oP + (hh_a*T + i)*T + j] = e;
-                        tot += e;
+                double* vh = _hx_farr_table[vh_id].buf;
+                for (int t = 0; t < T; t++)
+                    for (int c = 0; c < hd; c++)
+                        vh[t*hd+c] = Bc[oV + (t*nkv+kvh)*hd + c];
+            }
+            int csm_id = flame_g7_causal_softmax_rows_gpu(sc_id, T, T);
+            int pmat_id;
+            HexaVal pmat_v; pmat_v.tag = 1; pmat_v.i = -1;
+            if (csm_id >= 0) {
+                // Kernel output P[T·T] IS the masked P-matrix (j≥i+1 → 0.0,
+                // identical to the host pmat rebuild) AND the Bc[oP] cache.
+                // Copy into Bc[oP] for the bwd pass (host reader); reuse the
+                // SAME farr directly as the P·V matmul input (no rebuild).
+                double* P  = _hx_farr_table[csm_id].buf;
+                double* Bc = _hx_farr_table[Bc_id].buf;
+                for (int i = 0; i < T; i++)
+                    for (int j = 0; j < T; j++)
+                        Bc[oP + (hh_a*T+i)*T + j] = P[i*T+j];
+                pmat_id = csm_id;
+            } else {
+                // CPU fallback — VERBATIM the pre-conversion host softmax
+                // loop + masked-P rebuild (byte-identical; the no-CUDA Mac
+                // build + any dispatch failure take this path unchanged).
+                {
+                    double* sc = _hx_farr_table[sc_id].buf;
+                    double* Bc = _hx_farr_table[Bc_id].buf;
+                    for (int i = 0; i < T; i++) {
+                        int L = i + 1;
+                        double m_max = sc[i*T+0];
+                        for (int j = 1; j < L; j++)
+                            if (sc[i*T+j] > m_max) m_max = sc[i*T+j];
+                        double tot = 0.0;
+                        for (int j = 0; j < L; j++) {
+                            double e = flame_g7_dt_exp(sc[i*T+j] - m_max);
+                            Bc[oP + (hh_a*T + i)*T + j] = e;
+                            tot += e;
+                        }
+                        for (int j = 0; j < L; j++)
+                            Bc[oP + (hh_a*T + i)*T + j] /= tot;
                     }
-                    for (int j = 0; j < L; j++)
-                        Bc[oP + (hh_a*T + i)*T + j] /= tot;
+                }
+                pmat_v = hexa_farr_zeros(hexa_int((int64_t)T * T));
+                pmat_id = (int)pmat_v.i;
+                {
+                    double* Bc   = _hx_farr_table[Bc_id].buf;
+                    double* pmat = _hx_farr_table[pmat_id].buf;
+                    for (int i = 0; i < T; i++)
+                        for (int j = 0; j < T; j++)
+                            pmat[i*T+j] = (j <= i)
+                                ? Bc[oP + (hh_a*T+i)*T + j] : 0.0;
                 }
             }
             // P·V — value combine. P is [T·T] lower-tri, V-block [T·hd];
             // ctx[T·hd] = P · V_block. cuBLAS Dgemm (masked P has 0s above
             // the diagonal so the full T×T · T×hd product is exact).
-            HexaVal pmat_v = hexa_farr_zeros(hexa_int((int64_t)T * T));
-            HexaVal vh_v   = hexa_farr_zeros(hexa_int((int64_t)T * hd));
-            int pmat_id = (int)pmat_v.i, vh_id = (int)vh_v.i;
-            {
-                double* Bc   = _hx_farr_table[Bc_id].buf;
-                double* pmat = _hx_farr_table[pmat_id].buf;
-                double* vh   = _hx_farr_table[vh_id].buf;
-                for (int i = 0; i < T; i++)
-                    for (int j = 0; j < T; j++)
-                        pmat[i*T+j] = (j <= i) ? Bc[oP + (hh_a*T+i)*T + j] : 0.0;
-                for (int t = 0; t < T; t++)
-                    for (int c = 0; c < hd; c++)
-                        vh[t*hd+c] = Bc[oV + (t*nkv+kvh)*hd + c];
-            }
             hexa_farr_to_device(pmat_v);
             hexa_farr_to_device(vh_v);
             HexaVal ctx_v = hexa_farr_matmul_gpu(
@@ -831,7 +929,13 @@ static void flame_block_generic_fwd_primitive_gpu(
                 }
             }
             hexa_farr_free(vh_v);
-            hexa_farr_free(pmat_v);
+            // Free the P-matrix farr by its ACTUAL id: on the kernel path
+            // pmat_id == csm_id (the causal_softmax output, reused directly
+            // as the P·V matmul input — no separate pmat alloc); on the CPU
+            // fallback pmat_id is the freshly-zeros'd pmat_v farr. Either
+            // way pmat_id is the single live handle to free exactly once
+            // (pmat_v's -1 sentinel on the kernel path must NOT be freed).
+            hexa_farr_free(hexa_int(pmat_id));
             hexa_farr_free(kt_v);
             hexa_farr_free(kh_v);
             hexa_farr_free(qh_v);
