@@ -1587,6 +1587,24 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
 fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     let mut instrs = []
 
+    // #26 self-host fixpoint — forced-copy the MFunc identity fields up
+    // front, before the block-emit loop. `mf.name` / `mf.def_line` are
+    // read repeatedly (block-def label, every per-stmt `_emit_arm64_stmt`
+    // call, the final LFunc literal). Each `_emit_arm64_stmt` returns a
+    // TAG_ARRAY routed through `__hexa_fn_arena_return` → the fn-arena
+    // rewinds; an arena-resident `mf` map's string storage is then
+    // invalidated, so a *later* `mf.name` read returns TAG_VOID and
+    // `mf.blocks` / `mf.def_line` become map-misses. Self-compiled ap2
+    // showed exactly this: first block label correct (`__L…_main_bb0`)
+    // but `.globl void` + "map key 'name'/'blocks'/'def_line' not found".
+    // Snapshotting once (string via the F6 forced-copy substring idiom,
+    // see _arm64_strtab_lookup P0b / _collect_strs P0a / _lower_fn P0c-2)
+    // gives every downstream read an arena-independent handle. ap1 (heap,
+    // single-read paths) is byte-identical; only the repeated cross-
+    // arena-boundary reads in this fn change source.
+    let fn_name = mf.name.substring(0, len(mf.name))
+    let fn_def_line = mf.def_line
+
     // C6 — run linear-scan regalloc up front so the prologue can size
     // the spill frame and the body can resolve operands through the
     // assigned RegMap.
@@ -1631,7 +1649,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     // Insert `bl _hexa_set_args` here, before the frame `sub` and any
     // body code clobbers x0/x1. stp/mov above do not touch x0/x1; bl's
     // x30 clobber is safe (lr already saved, dead until epilogue).
-    if mf.name == "main" {
+    if fn_name == "main" {
         instrs.push(_arm64_instr1("bl", _arm64_op_label("hexa_set_args"),
                          "entry: wire argc/argv -> hexa_set_args"))
     }
@@ -1673,10 +1691,16 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         p = p + 1
     }
 
+    // #26 — snapshot the block list once. `mf.blocks` is otherwise
+    // re-read every loop trip across the `_emit_arm64_stmt` arena-return
+    // boundary (same hazard as fn_name/fn_def_line above): an arena-
+    // resident `mf` map invalidated by the rewind makes `mf.blocks` a
+    // map-miss (len 0) after the first statement, truncating the body.
+    let mf_blocks = mf.blocks
     let mut bi = 0
-    while bi < len(mf.blocks) {
-        let blk = mf.blocks[bi]
-        instrs.push(_arm64_instr0("label", _arm64_block_label(modhash, mf.name, blk.id)))
+    while bi < len(mf_blocks) {
+        let blk = mf_blocks[bi]
+        instrs.push(_arm64_instr0("label", _arm64_block_label(modhash, fn_name, blk.id)))
         let mut si = 0
         while si < len(blk.stmts) {
             // #18 codegen-perf — per-statement delta accumulation. The
@@ -1691,7 +1715,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
             // itself is heapified just once, when _arm64_lower_func
             // returns its LFunc — O(total). Byte-identical: same instrs in
             // the same order, only the accumulation cadence changed.
-            let delta = _emit_arm64_stmt([], modhash, mf.name,
+            let delta = _emit_arm64_stmt([], modhash, fn_name,
                                          blk.stmts[si], st, rm, spill_frame)
             let mut _di = 0
             while _di < len(delta) {
@@ -1709,12 +1733,12 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         let last = instrs[len(instrs) - 1]
         if last.op == "ret" {
             return LFunc {
-                name: mf.name,
+                name: fn_name,
                 target: "arm64-apple-darwin",
                 instrs: instrs,
                 frame_size: 16 + total_frame,
                 callee_saved: [],
-                def_line: mf.def_line
+                def_line: fn_def_line
             }
         }
     }
@@ -1726,12 +1750,12 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     instrs.push(_arm64_instr0("ret", "return"))
 
     return LFunc {
-        name: mf.name,
+        name: fn_name,
         target: "arm64-apple-darwin",
         instrs: instrs,
         frame_size: 16 + total_frame,
         callee_saved: [],
-        def_line: mf.def_line
+        def_line: fn_def_line
     }
 }
 
