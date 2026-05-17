@@ -124,7 +124,7 @@ fn cmd_help() {
     println("")
     println("  drill variants  (12, each composes drill with a different orchestration pattern):")
     println("    omega       Apex preset (drill+chain+batch auto-dispatch — nexus's \"main entry\")")
-    println("    kick        alias → drill                    (ω-cycle ≡ drill apex)")
+    println("    kick        alias → omega                    (ω-cycle ≡ omega apex)")
     println("    surge       omega + cross-seed variants")
     println("    dream       iterations × drill              (dream-mode seed evolution)")
     println("    swarm       population × generations         (evolutionary)")
@@ -1064,7 +1064,7 @@ fn _absorbed_script(verb) {
     if verb == "qmirror"          { return "compiler/hw_probes/qmirror.hexa" }
     if verb == "akida"            { return "compiler/hw_probes/akida.hexa" }
     if verb == "qrng"             { return "compiler/hw_probes/qrng.hexa" }
-    if verb == "kick"             { return "compiler/drill/drill.hexa" }   // alias: kick → drill (ω-cycle ≡ drill apex)
+    if verb == "kick"             { return "compiler/omega/omega.hexa" }   // alias: kick → omega (ω-cycle ≡ omega apex)
     if verb == "codata"           { return "compiler/bridges/codata.hexa" }
     if verb == "oeis"             { return "compiler/bridges/oeis.hexa" }
     if verb == "arxiv"            { return "compiler/bridges/arxiv.hexa" }
