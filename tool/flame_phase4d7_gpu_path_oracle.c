@@ -163,11 +163,26 @@ static HexaVal farr_free_fn(HexaVal a)  { return hexa_farr_free(a);  }
 // oracle exercises the identical kernel dispatch the d768 trainer does.
 // runtime_cuda.c is linked by the .sh; its kernels are FORBIDDEN to
 // modify and are NOT modified — only called.
+//
+// C-LINKAGE (the fire: oracle --cuda link error 2026-05-18). The .sh
+// builds via `nvcc -x cu` which ALWAYS parses as C++. runtime_cuda.c
+// exports every _hx_cuda_* op inside `#ifdef __cplusplus extern "C" {`
+// (runtime_cuda.c:45-46 / :1787-1788) → unmangled C symbols. Without
+// the matching `extern "C"` here the harness's C++ TU emits MANGLED
+// call sites (`_Z24_hx_cuda_farr_matmul_gpu...`) → undefined-reference
+// at link. The no-CUDA + clang-syntactic checks never caught it (no
+// C++ link step). Mirror the runtime_cuda.c guard exactly.
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern int _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
                                     int64_t b_id, int64_t N, int64_t c_id);
 extern int _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id, int64_t dst_id,
                                                int64_t rows, int64_t cols,
                                                int64_t dst_off);
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
 
 // runtime.c:10972 hexa_farr_matmul_gpu — allocate fresh C farr, Dgemm.
 static HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
