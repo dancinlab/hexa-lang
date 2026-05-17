@@ -4,12 +4,32 @@
 > that flame phases consume. Same governance discipline: editable head +
 > append-only `## 진행 로그`. **Nothing runs without explicit user go.**
 
-## 0. 현재 상태 (2026-05-16)
+## 0. 현재 상태 (2026-05-17, Phase R+ 진정 cycle 종결)
 
-forge = NAMING + SCAFFOLD. Code largely **already landed** across the
-RFC 040 campaign — see `FORGE.tape` §X + flame's `FLAME.tape` §X for
-exact branch · SHA · path · RFC# coordinates. This roadmap just stages
-**what remains** under the forge label.
+forge = **PARADIGM-ANCHORED + EXPERIMENTALLY VALIDATED**. Phase R+ campaign
+(14 cost-bearing fires + 9 sub-agents, $2.91 total) 측정-anchored 종결:
+
+**최종 verdict (모든 paradigm × stage)**:
+- **D' (within-run det)** ✅ FREE — every shape bit-equal (FP64 single-process)
+- **A (dispatch elimination)** ✅ MLP universal 4-13× vs torch.compile; transformer mixed (small.red compile 1.41× WINS, medium compile 1.05× WINS, large AOT 1.18× WIN)
+- **B (DSM fusion)** mechanism ✅ (Phase 1 SMOKE + Phase 2 bit-eq), wall ❌ FP64 hand-kernel ceiling (200-300× SLOWER) → RFC 049 path
+- **C (autograd co-emission)** traffic ✅ 0.667 anchor, det ✅ <1e-16, wall ❌ 1.80× SLOWER best (4 iter v3/v3b/v3c) → RFC 049 path
+- **RFC 049 (BF16 precision pivot)** ✅ **THE WALL PATH validated** — 9.67× FP64 cuBLAS at Llama-7B FFN, 4/4 falsifier PASS (BF16-TC-PERF + LayerCast det/mem/diverge)
+- **RFC 050 (flame↔forge integration)** ✅ DESIGN land — 7 falsifier 사전등록
+
+**META-FINDING**: forge wall path = RFC 049 BF16 precision pivot (실측 검증). FP64 substrate ceiling experimentally bound. dispatch elimination NOT unique (CUDA graphs equivalent). True forge distinctive = BF16 TC substrate quality + custom kernel selective + within-run det FREE.
+
+**SSOT**: [`PARADIGM.md`](PARADIGM.md) §1 status table · [`FORGE.tape`](FORGE.tape) ##X cross-link · 14 commits in rfc043-hexa-torch (origin sync 됨, push verified 2026-05-17).
+
+## 0.1 다음 progression 영역 (post Phase R+, multi-week multi-team)
+
+| Phase | Scope | Effort | Gate |
+|---|---|---|---|
+| **RFC 049 Phase R' Stage 2** | Production BF16 kernels (DSM + WMMA combined, sm_90 Hopper). Llama-7B full FFN BF16 fused single-kernel + numerical validation at scale | 2-4 weeks | user (cost-bearing fire campaign) |
+| **RFC 050 implementation** | flame Phase 4-C ↔ forge tier dispatch API. 양 세션 협력 required. 7 falsifier 사전등록 검증 | 2-3 weeks | flame session 협력 |
+| **C Phase 4 CUTLASS-grade** | FP64 production tiling (close hand-WMMA 43% → cuBLAS 87% gap). 별도 effort, RFC 049 보다 ROI 작음 | 3-6 weeks | low priority post-RFC 049 |
+| **A Phase 3 torch.compile-equivalent** | torch.compile reduce-overhead = CUDA graphs 동등 path. AOT가 진정 win 하려면 custom kernel quality 가 dispatch elim 보다 dominant 해야 | Open scope | RFC 049 land 후 재평가 |
+| **flame Phase 4-D GPU dispatch land** | flame 측 책임, forge 의 RFC 050 dispatch API 통해 BF16 kernel 호출 | flame session 진행 중 | flame 세션 직접 |
 
 ## 1. 단계 (staged — substrate parity → exceed)
 
