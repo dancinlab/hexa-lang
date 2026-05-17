@@ -11072,18 +11072,25 @@ static int64_t _hx_farr_scale_cpu(int64_t x_id, double alpha, int64_t n) {
 
 // farr_softmax_rows_gpu(x, R, C) -> int new farr_id (row-softmax).
 // On no-CUDA: routes to _hx_farr_softmax_rows_cpu (the CPU oracle).
-// On HEXA_CUDA: TODO[cuda] stub returns -1 (honest no-fake PASS).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_softmax_rows_gpu in self/cuda/runtime_cuda.c (LANDED —
+// block-per-row warp-shuffle row-max + exp-sum reduction, byte-eq
+// verified Phase 4-D-5-3 11/11 PASS on A100). Pre-allocates output via
+// hexa_farr_zeros (Phase A matmul precedent) so the substrate's
+// _ensure_dev_alloc_out can find the host entry + grow its g_slots.
 HexaVal hexa_farr_softmax_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v) {
     int64_t x_id = hexa_as_num(x_v);
     int64_t R    = hexa_as_num(r_v);
     int64_t C    = hexa_as_num(c_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B impl: block-per-row softmax with warp-shuffle
-     * reduction (__shfl_down_sync) for the row max + exp sum, then
-     * grid-stride normalize. Hard-fail until the GPU TU lands so the
-     * equivalence harness compares against the CPU oracle. */
-    (void)x_id; (void)R; (void)C;
-    return hexa_int(-1);
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_softmax_rows_gpu(x_id, R, C, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_softmax_rows_cpu(x_id, R, C));
 #endif
@@ -11091,6 +11098,10 @@ HexaVal hexa_farr_softmax_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v) {
 
 // farr_rmsnorm_rows_gpu(x, R, C, eps) -> int new farr_id (row-RMSNorm).
 // On no-CUDA: routes to _hx_farr_rmsnorm_rows_cpu.
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_rmsnorm_rows_gpu — block-per-row warp-shuffle Σx²,
+// rsqrt + broadcast multiply (gain-free; per-channel γ multiplied by
+// the caller via farr_mul_gpu). Byte-eq verified Phase 4-D-5-3.
 HexaVal hexa_farr_rmsnorm_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v,
                                    HexaVal eps_v) {
     int64_t x_id = hexa_as_num(x_v);
@@ -11098,10 +11109,15 @@ HexaVal hexa_farr_rmsnorm_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v,
     int64_t C    = hexa_as_num(c_v);
     double  eps  = __hx_to_double(eps_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B impl: block-per-row reduction sum-of-squares
-     * (warp-shuffle), rsqrt, broadcast multiply. */
-    (void)x_id; (void)R; (void)C; (void)eps;
-    return hexa_int(-1);
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (!(eps >= 0.0))    return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_rmsnorm_rows_gpu(x_id, R, C, eps, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_rmsnorm_rows_cpu(x_id, R, C, eps));
 #endif
@@ -11109,14 +11125,22 @@ HexaVal hexa_farr_rmsnorm_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v,
 
 // farr_add_gpu(a, b, n) -> int new farr_id (elementwise sum).
 // On no-CUDA: routes to _hx_farr_add_cpu.
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_add_gpu — 1-D grid-stride kernel, byte-eq Phase 4-D-5-3.
 HexaVal hexa_farr_add_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v) {
     int64_t a_id = hexa_as_num(a_v);
     int64_t b_id = hexa_as_num(b_v);
     int64_t n    = hexa_as_num(n_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B impl: 1-D grid-stride __global__ kernel. */
-    (void)a_id; (void)b_id; (void)n;
-    return hexa_int(-1);
+    if (n <= 0) return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count) return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_add_gpu(a_id, b_id, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_add_cpu(a_id, b_id, n));
 #endif
@@ -11124,14 +11148,21 @@ HexaVal hexa_farr_add_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v) {
 
 // farr_scale_gpu(x, alpha, n) -> int new farr_id (Y = α·X).
 // On no-CUDA: routes to _hx_farr_scale_cpu.
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_scale_gpu — 1-D grid-stride kernel, byte-eq Phase 4-D-5-3.
 HexaVal hexa_farr_scale_gpu(HexaVal x_v, HexaVal alpha_v, HexaVal n_v) {
     int64_t x_id = hexa_as_num(x_v);
     double  alpha = __hx_to_double(alpha_v);
     int64_t n    = hexa_as_num(n_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B impl: 1-D grid-stride __global__ kernel. */
-    (void)x_id; (void)alpha; (void)n;
-    return hexa_int(-1);
+    if (n <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_scale_gpu(x_id, alpha, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_scale_cpu(x_id, alpha, n));
 #endif
@@ -11197,7 +11228,7 @@ extern int  _hx_cuda_farr_adamw_step_gpu(int64_t w_id, int64_t m_id,
                                           int64_t v_id, int64_t g_id,
                                           int64_t n, double lr, double b1,
                                           double b2, double eps, double wd,
-                                          int64_t step_t);
+                                          int64_t step_t, int64_t out_id);
 #endif
 
 // ── CPU helpers (Phase B2 no-CUDA fallback). Each: (a) validate ids,
@@ -11438,6 +11469,9 @@ static int64_t _hx_farr_adamw_step_cpu(int64_t w_id, int64_t m_id,
 // ── Phase B2 dispatchers ────────────────────────────────────────────
 
 // farr_matmul_t_gpu(M, R, C, u) -> int new farr_id [C] (Mᵀ·u).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_matmul_t_gpu (cuBLAS Dgemv CUBLAS_OP_T or tiled
+// transpose-GEMM, byte-eq Phase 4-D-5-3).
 HexaVal hexa_farr_matmul_t_gpu(HexaVal m_v, HexaVal r_v, HexaVal c_v,
                                HexaVal u_v) {
     int64_t m_id = hexa_as_num(m_v);
@@ -11445,16 +11479,24 @@ HexaVal hexa_farr_matmul_t_gpu(HexaVal m_v, HexaVal r_v, HexaVal c_v,
     int64_t C    = hexa_as_num(c_v);
     int64_t u_id = hexa_as_num(u_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B2: cuBLAS Dgemv with CUBLAS_OP_T (or a tiled
-     * transpose-GEMM). Hard-fail until the GPU TU lands. */
-    (void)m_id; (void)R; (void)C; (void)u_id;
-    return hexa_int(-1);
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (m_id < 0 || m_id >= _hx_farr_count) return hexa_int(-1);
+    if (u_id < 0 || u_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(C));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_matmul_t_gpu(m_id, R, C, u_id, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_matmul_t_cpu(m_id, R, C, u_id));
 #endif
 }
 
 // farr_outer_gpu(u, v, R, C) -> int new farr_id [R·C] (u⊗v).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_outer_gpu (cublasDger rank-1 or 2-D grid, byte-eq
+// Phase 4-D-5-3).
 HexaVal hexa_farr_outer_gpu(HexaVal u_v, HexaVal v_v, HexaVal r_v,
                             HexaVal c_v) {
     int64_t u_id = hexa_as_num(u_v);
@@ -11462,55 +11504,87 @@ HexaVal hexa_farr_outer_gpu(HexaVal u_v, HexaVal v_v, HexaVal r_v,
     int64_t R    = hexa_as_num(r_v);
     int64_t C    = hexa_as_num(c_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B2: rank-1 update (cublasDger) or 2-D grid. */
-    (void)u_id; (void)v_id; (void)R; (void)C;
-    return hexa_int(-1);
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (u_id < 0 || u_id >= _hx_farr_count) return hexa_int(-1);
+    if (v_id < 0 || v_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_outer_gpu(u_id, v_id, R, C, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_outer_cpu(u_id, v_id, R, C));
 #endif
 }
 
 // farr_mul_gpu(a, b, n) -> int new farr_id (elementwise A⊙B).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_mul_gpu (1-D grid-stride, byte-eq Phase 4-D-5-3).
 HexaVal hexa_farr_mul_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v) {
     int64_t a_id = hexa_as_num(a_v);
     int64_t b_id = hexa_as_num(b_v);
     int64_t n    = hexa_as_num(n_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B2: 1-D grid-stride __global__ kernel. */
-    (void)a_id; (void)b_id; (void)n;
-    return hexa_int(-1);
+    if (n <= 0) return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count) return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_mul_gpu(a_id, b_id, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_mul_cpu(a_id, b_id, n));
 #endif
 }
 
 // farr_silu_gpu(x, n) -> int new farr_id (y = silu(x)).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_silu_gpu (1-D grid-stride, σ via __expf, byte-eq
+// Phase 4-D-5-3).
 HexaVal hexa_farr_silu_gpu(HexaVal x_v, HexaVal n_v) {
     int64_t x_id = hexa_as_num(x_v);
     int64_t n    = hexa_as_num(n_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B2: 1-D grid-stride; __expf-based σ. */
-    (void)x_id; (void)n;
-    return hexa_int(-1);
+    if (n <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_silu_gpu(x_id, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_silu_cpu(x_id, n));
 #endif
 }
 
 // farr_silu_grad_gpu(x, n) -> int new farr_id (silu'(x)).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_silu_grad_gpu (1-D grid-stride, byte-eq Phase 4-D-5-3).
 HexaVal hexa_farr_silu_grad_gpu(HexaVal x_v, HexaVal n_v) {
     int64_t x_id = hexa_as_num(x_v);
     int64_t n    = hexa_as_num(n_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B2: 1-D grid-stride. */
-    (void)x_id; (void)n;
-    return hexa_int(-1);
+    if (n <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_silu_grad_gpu(x_id, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_silu_grad_cpu(x_id, n));
 #endif
 }
 
 // farr_rmsnorm_bwd_rows_gpu(x, dxn, R, C) -> int new farr_id [R·C].
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_rmsnorm_bwd_rows_gpu (block-per-row two warp-shuffle
+// reductions Σx² + Σdxn·x, then broadcast vjp, byte-eq Phase 4-D-5-3).
 HexaVal hexa_farr_rmsnorm_bwd_rows_gpu(HexaVal x_v, HexaVal dxn_v,
                                        HexaVal r_v, HexaVal c_v) {
     int64_t x_id   = hexa_as_num(x_v);
@@ -11518,10 +11592,15 @@ HexaVal hexa_farr_rmsnorm_bwd_rows_gpu(HexaVal x_v, HexaVal dxn_v,
     int64_t R      = hexa_as_num(r_v);
     int64_t C      = hexa_as_num(c_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B2: block-per-row, two warp-shuffle reductions
-     * (Σx² and Σdxn·x), then broadcast vjp. */
-    (void)x_id; (void)dxn_id; (void)R; (void)C;
-    return hexa_int(-1);
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    if (dxn_id < 0 || dxn_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_rmsnorm_bwd_rows_gpu(x_id, dxn_id, R, C, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_rmsnorm_bwd_rows_cpu(x_id, dxn_id, R, C));
 #endif
@@ -11547,11 +11626,25 @@ HexaVal hexa_farr_adamw_step_gpu(HexaVal w_v, HexaVal m_v, HexaVal v_v,
     double  wd   = __hx_to_double(wd_v);
     int64_t step_t = hexa_as_num(step_v);
 #ifdef HEXA_CUDA
-    /* TODO[cuda] Phase B2: fused 1-D grid-stride AdamW kernel
-     * (m,v in device memory; W updated D2D). */
-    (void)w_id; (void)m_id; (void)v_id; (void)g_id; (void)n;
-    (void)lr; (void)b1; (void)b2; (void)eps; (void)wd; (void)step_t;
-    return hexa_int(-1);
+    /* Phase 4-D-5-4 step 1 wire (2026-05-17): fused 1-D grid-stride
+     * AdamW kernel; substrate H2Ds W/m/v/g, runs the kernel D2D, then
+     * D2Hs updated W to out_id AND D2Hs m,v back to their host buffers
+     * to preserve the optimizer-state contract (CPU oracle mutates m,v
+     * in place — see self/cuda/runtime_cuda.c line 730+). Byte-eq
+     * verified Phase 4-D-5-3 11/11 PASS. */
+    if (n <= 0 || step_t < 1) return hexa_int(-1);
+    if (w_id < 0 || w_id >= _hx_farr_count) return hexa_int(-1);
+    if (m_id < 0 || m_id >= _hx_farr_count) return hexa_int(-1);
+    if (v_id < 0 || v_id >= _hx_farr_count) return hexa_int(-1);
+    if (g_id < 0 || g_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_adamw_step_gpu(w_id, m_id, v_id, g_id, n,
+                                          lr, b1, b2, eps, wd, step_t,
+                                          out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
 #else
     return hexa_int(_hx_farr_adamw_step_cpu(w_id, m_id, v_id, g_id, n,
                                             lr, b1, b2, eps, wd, step_t));
