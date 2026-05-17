@@ -60,6 +60,15 @@ fn cmd_help() {
     println("  tape <file.tape>                        Read/validate .tape v1.2 (native C-compiled)")
     println("  hxc <file.hxc>                          Decode HXC v2 wire sidecar (native, schema-agnostic)")
     println("")
+    println("STDLIB CLI  (subcommand → stdlib dispatcher)")
+    println("  qrng                                    Quantum RNG default aggregate selftest (RFC 044)")
+    println("  qrng status                             9-backend table + tier coverage T0..T3")
+    println("  qrng collect [--bytes=N] [--source=NAME] [--seed=S]")
+    println("                                          pull bytes via router fallback chain")
+    println("  qrng selftest | chain | meta --backend=NAME")
+    println("                                          provider sweep · resolved chain · backend meta")
+    println("    e.g. hexa qrng collect --bytes=32 --source=mock_qrng --seed=42")
+    println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
     println("  atlas lookup <P|C|L|E> <id>             Read single node")
@@ -3278,6 +3287,24 @@ if len(av) < 3 {
             ai = ai + 1
         }
         cmd_run(atlas_script, atlas_args)
+    } else if sub == "qrng" {
+        // RFC 044 — stdlib/qrng dispatch.
+        // stdlib/qrng/qrng.hexa parses argv subcommand (status/collect/selftest/
+        // chain/meta/--help/--version) and dispatches to library functions.
+        // No separate CLI binary — single-file dispatcher in stdlib.
+        let __inst_q = install_dir_from_argv0()
+        let mut qrng_script = "stdlib/qrng/qrng.hexa"
+        if len(__inst_q) > 0 {
+            let inst_path = __inst_q + "/stdlib/qrng/qrng.hexa"
+            if file_exists(inst_path) { qrng_script = inst_path }
+        }
+        let mut qrng_args = []
+        let mut qi = 3
+        while qi < len(av) {
+            qrng_args.push(av[qi])
+            qi = qi + 1
+        }
+        cmd_run(qrng_script, qrng_args)
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //

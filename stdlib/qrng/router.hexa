@@ -1,0 +1,112 @@
+#!hexa strict
+// stdlib/qrng/router.hexa — config-driven qrng backend selection + fallback
+//
+// @version 1.0.0
+// @capabilities [randomness, dispatch, fallback]
+// @stability stable
+// @since 2026-05-16
+//
+// Config + env priority router. Reads NEXUS_QRNG_SOURCE (single override) and
+// NEXUS_QRNG_FALLBACK_CHAIN (comma-separated chain) before falling back to the
+// default 9-backend chain.
+//
+// Default chain: curby → anu → nist_beacon → ibm_quantum → ionq → rigetti
+//                → braket → hardware_qrng → mock_qrng
+//   (T1 quantum-attested first [Bell-test, vacuum-fluctuation, sovereign mixed],
+//    T2.a-T2.d cloud-quantum vendors fail-fast without credentials,
+//    T3 commercial-class fallback, T0 deterministic safety net)
+//
+// Like registry, router is FAIL-CLOSED for non-mock backends — live extraction
+// is delegated to per-backend modules in stdlib/qrng/backends/. Router preserves
+// tier/vendor/message in RouterResult.attempts/reasons per @F f_qrng_silent_mock_downgrade.
+//
+// Source: ~/core/qrng/router/module/router.hexa @ v1.0.0 (RFC 044).
+
+use "stdlib/qrng/source"
+
+fn _router_mock_collect(n_bytes: int, seed: int) -> QrngBytes {
+    let mut s = if seed > 0 { seed } else { 12345 }
+    let mut bytes_ = []
+    let mut i = 0
+    while i < n_bytes {
+        s = (1664525 * s + 1013904223) % 4294967296
+        bytes_ = bytes_.push(s % 256)
+        i = i + 1
+    }
+    return qrng_bytes_ok(bytes_, "", "mock_qrng: ok")
+}
+
+fn _route_collect(name: str, n_bytes: int, seed: int) -> QrngBytes {
+    if name == "mock_qrng" { return _router_mock_collect(n_bytes, seed) }
+    if name == "curby" { return qrng_bytes_fail("curby: live deferred to wrapper module (stdlib/qrng/backends/curby.hexa)") }
+    if name == "anu" { return qrng_bytes_fail("anu: live deferred to wrapper module (stdlib/qrng/backends/anu.hexa)") }
+    if name == "nist_beacon" { return qrng_bytes_fail("nist_beacon: live deferred to wrapper module (stdlib/qrng/backends/nist_beacon.hexa)") }
+    if name == "ibm_quantum" { return qrng_bytes_fail("ibm_quantum: T2.a STUB — live deferred to stdlib/qrng/backends/cloud/ibm_quantum.hexa; secret IBM_QUANTUM_TOKEN required") }
+    if name == "ionq" { return qrng_bytes_fail("ionq: T2.b STUB — live deferred to stdlib/qrng/backends/cloud/ionq.hexa; secret IONQ_API_KEY required") }
+    if name == "rigetti" { return qrng_bytes_fail("rigetti: T2.c STUB — live deferred to stdlib/qrng/backends/cloud/rigetti.hexa; secret QCS_API_KEY required") }
+    if name == "braket" { return qrng_bytes_fail("braket: T2.d STUB — live deferred to stdlib/qrng/backends/cloud/braket.hexa; secret AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY required") }
+    if name == "hardware_qrng" { return qrng_bytes_fail("hardware_qrng: live deferred to wrapper module (stdlib/qrng/backends/hardware_qrng.hexa); set NEXUS_QRNG_HW_LIVE=1") }
+    return qrng_bytes_fail("unknown backend: " + name)
+}
+
+fn qrng_default_chain() -> [str] {
+    let mut a = []
+    a = a.push("curby")
+    a = a.push("anu")
+    a = a.push("nist_beacon")
+    a = a.push("ibm_quantum")
+    a = a.push("ionq")
+    a = a.push("rigetti")
+    a = a.push("braket")
+    a = a.push("hardware_qrng")
+    a = a.push("mock_qrng")
+    return a
+}
+
+fn qrng_resolve_chain() -> [str] {
+    let single = exec("printenv NEXUS_QRNG_SOURCE 2>/dev/null || true").trim()
+    if len(single) > 0 {
+        let mut a = []
+        a = a.push(single)
+        return a
+    }
+    let chain = exec("printenv NEXUS_QRNG_FALLBACK_CHAIN 2>/dev/null || true").trim()
+    if len(chain) > 0 {
+        let parts = chain.split(",")
+        let mut a = []
+        let mut i = 0
+        while i < len(parts) {
+            let p = parts[i].trim()
+            if len(p) > 0 { a = a.push(p) }
+            i = i + 1
+        }
+        if len(a) > 0 { return a }
+    }
+    return qrng_default_chain()
+}
+
+struct QrngRouteResult {
+    final_backend: str,
+    attempts:      [str],
+    reasons:       [str],
+    result:        QrngBytes
+}
+
+fn qrng_route_collect(n_bytes: int, seed: int) -> QrngRouteResult {
+    let chain = qrng_resolve_chain()
+    let mut attempts = []
+    let mut reasons = []
+    let mut i = 0
+    while i < len(chain) {
+        let name = chain[i]
+        attempts = attempts.push(name)
+        let r = _route_collect(name, n_bytes, seed)
+        if r.ok == 1 {
+            reasons = reasons.push("ok")
+            return QrngRouteResult { final_backend: name, attempts: attempts, reasons: reasons, result: r }
+        }
+        reasons = reasons.push(r.message)
+        i = i + 1
+    }
+    return QrngRouteResult { final_backend: "", attempts: attempts, reasons: reasons, result: qrng_bytes_fail("router: all backends failed") }
+}
