@@ -681,3 +681,45 @@ Symbol: `compiler/codegen/arm64_darwin.hexa::_arm64_op_rm` 의 `const_int` opera
 `o.int_val` read. #26/#27 와 동류의 fn-arena / struct-array field-read aliasing class —
 `Operand.int_val` 가 arena rewind 가로질러 stale memory read. full bit-stable self-host
 (ap2f ≡ ap3f byte-identical) 은 #29 종결까지 미달. 별도 cycle (task #29).
+
+---
+
+### ★★★ 진행 로그 — #29 bitwise-as-add FIXED (`93ee4ecf`) · BIT-STABLE SELF-HOST FIXPOINT REACHED (cycle h19)
+
+**#29 ROOT-CAUSED & LANDED on main `93ee4ecf`** ("non-determinism"은 오진 — 진짜는
+bitwise op 전부 add 로 miscompile):
+- `compiler/codegen/arm64_darwin.hexa` 의 arm64 BINOP emitter 가 bitwise `& | ^ << >>`
+  를 catch-all 의 `hexa_add_slow`("approx") 로 라우팅 → **`h & MASK` 가 `h + MASK` 로
+  컴파일**. `hir_to_mir.hexa::_path_hash` (djb2 enum-tag hash, `& 2147483647` 마스킹)이
+  unmasked 64-bit hash 산출 → self-built ap2 가 enum `__tag` const 에 4-halfword
+  movz/movk + mvn garbage immediate emit. ap1(hexa_v2 C-path)은 `&` 정상이나 ap1 의
+  *자기 출력* 이 `&` 를 miscompile → 모든 aprime_cc-built generation 의 `_path_hash`
+  손상. 앞서 보고된 "non-determinism" 은 stale `/tmp/fx_flat.hexa` 를 fresh flatten 과
+  diff 한 artifact.
+- Fix: catch-all 전에 bitwise special-case — HexaVal payload pair 에 register-form
+  arm64 op (`&`→and · `|`→orr · `^`→eor · `<<`→lsl · `>>`→asr on x1,x1,x3), result
+  tag `movz x0,#0`(TAG_INT). authoritative ref `self/codegen_c2.hexa:3412`. +28/-2.
+
+**★★★ BIT-STABLE SELF-HOST FIXPOINT REACHED — 독립 검증 (clean origin/main):**
+`ap1f → flat → ap2f → flat → ap3f`, 각 generation 이 38-file/22,227-line flattened
+compiler 를 컴파일. `ap1f.s == ap2f.s == ap3f.s` **byte-identical** — 231,125-line asm,
+md5 `18df90ebb92b7cdb4a541472b882c9af`, HX2001 0 / map-key error 0. **aprime_cc 가
+자기 자신을 bit-for-bit 재현.** #23~#29 self-host 버그 7개 누적 종결.
+
+**검증 배터리**: build_aprime smoke `exit(6*7)==42` PASS (clean main); gate-1 33/44
+zero regression; ap1 vs ap1f asm 38 compiling smoke byte-identical (bitwise op 미사용);
+3-generation byte-identical (위).
+
+**상태 — goal ② self-host 축 CLOSED**: native compiler 가 인터프리터·hexa_v2 없이
+자기 자신을 재현. task #18 (aprime_cc self-host) COMPLETED.
+
+**R7 deletion gate 재평가 (인터프리터 실삭제 전제):**
+- gate ② CLI 드라이버 compiled — ✅ (#20)
+- gate ③ atlas SIGSEGV — ✅ (#5 struct-array · #24 real-data)
+- gate ④ module_loader interp-free — ✅ (#20)
+- gate ① aprime-direct coverage ≥ interp — **🔄 미완**: gate-1 33/44 (effective ~92%).
+  잔여 = 3 atlas-verifier MISMATCH(`doctrine`·`tecsl_verify`·`wave3` — predicate
+  wrong-value codegen) + 6 frontend-CGFAIL(`extern fn`·`@select` annotation-arg·
+  try/catch·type-infer — codegen 진입 전 abort). 이 둘이 닫혀야 "모든 .hexa 네이티브"
+  성립 → 인터프리터 실삭제(R7) 가능. self-host 는 끝났으나 gate ① 잔여로 interp 삭제
+  아직 불가 — 정직히 미완 기록.
