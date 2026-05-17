@@ -74,7 +74,7 @@ registry/router 는:
   registry/module/registry.hexa (196)     → stdlib/qrng/registry.hexa
   router/module/router.hexa (171)         → stdlib/qrng/router.hexa
   qrng_main/module/qrng_main.hexa (167)   → stdlib/qrng/qrng_main.hexa
-  cli/qrng.hexa (580)                     → DEFERRED to RFC 044-B (see §11)
+  cli/qrng.hexa (580)                     → INTEGRATED into hexa main CLI (see §11); 원본 freeze in archive
   tests/test_*.hexa (12 files, ~251)      → stdlib/test/test_qrng_*.hexa (×9 consolidated)
   curby/module/fixtures/*.json            → stdlib/qrng/fixtures/curby_*.json
   nist_beacon/module/fixtures/*.json      → stdlib/qrng/fixtures/nist_beacon_*.json
@@ -251,7 +251,7 @@ Sister repo `~/core/anima/` 는 함수명 직접 호출 (`qrng_anu_uint8_live`) 
 ## 8. Falsifier (검증 비협상)
 
 1. **F-RFC044-LIB**: `hexa build stdlib/qrng/qrng.hexa -o /tmp/qrng_entry` 종료코드 0, 바이너리 생성.
-2. **F-RFC044-CLI** ⊘ DEFERRED to RFC 044-B (CLI subprocess architecture doesn't translate to library; see §11).
+2. **F-RFC044-CLI**: `hexa qrng <subcmd>` 가 self/main.hexa dispatch 를 거쳐 stdlib/qrng/qrng.hexa 의 subcommand handler 로 도달. Direct test (interp): `hexa run stdlib/qrng/qrng.hexa status` 가 9-backend 표 출력. `hexa run stdlib/qrng/qrng.hexa collect --bytes=8 --source=mock_qrng --seed=42` 가 `QRNG_HEX:81ec5bfe45e0bf12` + `QRNG_SOURCE:mock_qrng` + `QRNG_NB:8` 출력. (Native test = `hexa qrng *` after self/main.hexa rebuild — out of scope, falls to next compiler bump cycle.)
 3. **F-RFC044-SENT**: `hexa run stdlib/test/test_qrng_*.hexa` × 9 모두 sentinel `__QRNG_*__ PASS` 출력. `test_qrng_anu.hexa` 가 합쳐진 20+ cases 에서 20+/20+ PASS (회귀 없음).
 4. **F-RFC044-AUDIT**: `qrng_audited_bytes(1024, "tier1+", "mock_qrng")` 가 `audit_pass=1` + `tests_run.len()=5` + `audit_level_delivered="tier1+"` 반환. (live ANU 는 `QRNG_LIVE=1` opt-in, CI 비차단.)
 5. **F-RFC044-DET**: `qrng_source_collect_mock_qrng(8, 42)` 두 번 호출 시 `bytes_` 바이트 동일 (deterministic LCG).
@@ -276,17 +276,28 @@ Sister repo `~/core/anima/` 는 함수명 직접 호출 (`qrng_anu_uint8_live`) 
 - RFC 046 — `sim-universe` 흡수 (32k LoC, 26+ modules) — `stdlib/sim_universe/` + `stdlib/sim_universe/experiments/`
 - atlas SSOT 복원: nexus 2df92aed 에서 retired 된 atlas.n6 가 복원되면 본 RFC 의 NIST SP 800-22 5 tests 를 별도 atlas-add RFC 로 `@P` 등록 가능.
 
-## 11. 본 RFC 에서 deferred — CLI (RFC 044-B)
+## 11. CLI 통합 (별도 `tool/hexa_qrng/` 폐기)
 
-`~/core/qrng/cli/qrng.hexa` (580 LoC) 는 `_run_module` subprocess + sentinel-parse 아키텍처로 설계됨. stdlib 의 library 아키텍처와 충돌 (back end 모듈은 main() 없음). 본 RFC 는 CLI 를 흡수하지 않고 `~/core/archive_qrng/cli/qrng.hexa` 묘비에 freeze.
+원본 `~/core/qrng/cli/qrng.hexa` (580 LoC) 는 `_run_module` subprocess + sentinel-parse 아키텍처. 그 대신 본 RFC 는 **hexa main CLI 에 직접 통합**:
 
-후속 **RFC 044-B** 에서 thin CLI (~150 LoC) 작성:
-- `use "stdlib/qrng/registry"` / `router` / `audit` 등 library 직접 호출
-- 5 subcommands 유지 (status · collect · selftest · chain · meta)
-- subprocess + sentinel parse 제거
-- `tool/hexa_qrng/qrng.hexa` 신규
+- `stdlib/qrng/qrng.hexa` 가 dispatcher 역할 — `args()` 파싱해서 subcommand 분기 (status · collect · selftest · chain · meta · --help · --version).
+- `self/main.hexa` 에 `else if sub == "qrng"` 분기 추가 — `cmd_run(stdlib/qrng/qrng.hexa, args[3..])` 위임.
+- 별도 `tool/hexa_qrng/` 디렉토리 없음 — stdlib 단일 SSOT.
+- cmd_help 의 "STDLIB CLI" 섹션에 `hexa qrng *` 노출.
 
-F-RFC044-CLI falsifier 는 044-B 로 이전. 044 본체에서는 library + audit + tests 만 검증.
+호출 패턴:
+```sh
+hexa qrng                                # default = aggregate selftest
+hexa qrng status                         # 9-backend table
+hexa qrng collect --bytes=32 --source=mock_qrng --seed=42
+hexa qrng selftest                       # __QRNG_SELFTEST__ PASS sentinel
+hexa qrng chain                          # resolved router chain
+hexa qrng meta --backend=curby           # backend metadata
+hexa qrng --help, -h                     # subcommand help
+hexa qrng --version, -v                  # 1.0.0
+```
+
+원본 580-LoC subprocess CLI 는 `~/core/archive_qrng/cli/qrng.hexa` 묘비에 freeze. F-RFC044-CLI falsifier 는 본 RFC 내에서 verify (parse + 직접 hexa run stdlib/qrng/qrng.hexa <subcmd> 로 4 subcommand exercise).
 
 ---
 
