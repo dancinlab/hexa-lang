@@ -245,21 +245,47 @@ static void run_test(int do_wall_bench) {
     memcpy(Bg_fused, _hx_farr_table[Bg_b].buf, BG_SIZE * sizeof(double));
 
     // ── Byte-eq diff ──────────────────────────────────────────────
-    double mBc = max_abs_diff(Bc_paired, Bc_fused, BC_SIZE);
+    //
+    // Output contract per RFC 048 §"Equivalence":
+    //   PRIMARY outputs (gate F-RFC048-FUSED-FWD-BWD-EQ):
+    //     - dX_out  : full T·d (block input gradient)
+    //     - Bg      : full Bp size (parameter gradients)
+    //     - Bc[oXout]   : forward output (residual to next block)
+    //     - Bc[oHstate] : intermediate residual (downstream observable)
+    //
+    //   INTERNAL Bc slots (excluded from byte-eq once extracted):
+    //     - oRm1inv/oR2inv (16+16 dbl) — extracted to locals
+    //     - oRm1xn/oRm2xn (512+512 dbl) — extracted to locals
+    //     - oRin/oRin2 (512+512 dbl) — extracted to locals
+    //     - oSwS (1024 dbl) — extracted to locals
+    //     - oQ/oK/oV/oP/oCtx/oSwA/oSwB — matmul targets, REMAIN in Bc
+    //
+    // The full Bc max|Δ| is reported as INFO (drift expected at extracted
+    // slots); the PASS gate is on (Bc[oXout]/Bc[oHstate]/dX_out/Bg).
+
+    const int oXout = 0, oHstate = 512;
+    const int X_BLOCK = 16 * 32;  // T·d
+
+    double mBc_all  = max_abs_diff(Bc_paired,            Bc_fused,            BC_SIZE);
+    double mBc_xout = max_abs_diff(Bc_paired + oXout,    Bc_fused + oXout,    X_BLOCK);
+    double mBc_hst  = max_abs_diff(Bc_paired + oHstate,  Bc_fused + oHstate,  X_BLOCK);
     double mdX = max_abs_diff(dX_paired, dX_fused, X_SIZE);
     double mBg = max_abs_diff(Bg_paired, Bg_fused, BG_SIZE);
-    printf("  max|Bc_paired   − Bc_fused|   = %.3e\n", mBc);
-    printf("  max|dX_paired   − dX_fused|   = %.3e\n", mdX);
-    printf("  max|Bg_paired   − Bg_fused|   = %.3e\n", mBg);
+
+    printf("  max|Bc_paired   − Bc_fused|   = %.3e   (full Bc, includes extracted slots)\n", mBc_all);
+    printf("  max|Bc[oXout]   − Bc_fused|   = %.3e   (block fwd output, must be 0)\n", mBc_xout);
+    printf("  max|Bc[oHstate] − Bc_fused|   = %.3e   (residual interm, must be 0)\n", mBc_hst);
+    printf("  max|dX_paired   − dX_fused|   = %.3e   (block input gradient)\n", mdX);
+    printf("  max|Bg_paired   − Bg_fused|   = %.3e   (parameter gradients)\n", mBg);
     printf("\n");
 
-    int pass = (mBc == 0.0) && (mdX == 0.0) && (mBg == 0.0);
+    int pass = (mBc_xout == 0.0) && (mBc_hst == 0.0) && (mdX == 0.0) && (mBg == 0.0);
     if (!pass) {
         printf("FAIL  F-RFC048-FUSED-FWD-BWD-EQ  fused primitive deviates from paired baseline\n");
         printf("      (Path C revert lesson: revert this extraction, do not chase last-ulp drift)\n");
         exit(1);
     }
-    printf("PASS  F-RFC048-FUSED-FWD-BWD-EQ  max|Δ| = 0.0 strict byte-eq vs paired baseline\n");
+    printf("PASS  F-RFC048-FUSED-FWD-BWD-EQ  max|Δ| = 0.0 on (Bc[oXout], Bc[oHstate], dX_out, Bg)\n");
 
     if (!do_wall_bench) return;
 

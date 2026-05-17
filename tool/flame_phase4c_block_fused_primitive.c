@@ -153,12 +153,17 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
     const int oRm1xn=2048, oRm2xn=2560, oCtx=3072;
     const int oQ=3584, oK=4096, oV=4352, oP=4608;
     const int oSwA=5632, oSwB=6656, oSwS=7680;
-    const int oR1inv=8704, oR2inv=8720;
+    const int oR2inv=8720;
+    // oR1inv: EXTRACTED to local rm1inv_loc[16] (iter 1, commit pending)
+    //   fwd section 1 writes; bwd section 1rev reads. No other reader.
+
+    // ── Extracted intermediates (Bc-elimination locals) ──────────────
+    double rm1inv_loc[16];  // iter 1: replaces Bc[oR1inv + i] for i=0..T-1
 
     // ═══════════════════════ FWD PHASE ═══════════════════════════════
     // (Mirrors tool/flame_phase4b3_block_fwd_primitive.c sections 1..9.)
 
-    // ─── 1. RMSNorm(X, g1) → rin, rm1xn, rm1inv ──────────────────
+    // ─── 1. RMSNorm(X, g1) → rin, rm1xn, rm1inv_loc ──────────────
     for (int i = 0; i < T; i++) {
         double ms = 0.0;
         for (int c = 0; c < d; c++) {
@@ -167,7 +172,7 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
         }
         ms = ms / (double)d;
         double inv = 1.0 / flame_fused_dt_sqrt(ms + eps);
-        Bc[oR1inv + i] = inv;
+        rm1inv_loc[i] = inv;  // [extracted iter 1] was: Bc[oR1inv + i] = inv;
         for (int c2 = 0; c2 < d; c2++) {
             double xni = X[i * d + c2] * inv;
             Bc[oRm1xn + i * d + c2] = xni;
@@ -549,7 +554,7 @@ static inline void flame_block_T16_d32_nh4_nkv2_h64_fused_primitive(
     X = _hx_farr_table[X_id].buf;
     dX_out = _hx_farr_table[dX_out_id].buf;
     for (int ti = 0; ti < T; ti++) {
-        double inv1 = Bc[oR1inv + ti];
+        double inv1 = rm1inv_loc[ti];  // [extracted iter 1] was: Bc[oR1inv + ti];
         double dot1 = 0.0;
         for (int i_r = 0; i_r < d; i_r++) {
             double dxn_i = drin[ti * d + i_r] * Bp[G1 + i_r];
