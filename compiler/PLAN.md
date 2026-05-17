@@ -858,3 +858,53 @@ oracle contamination 재발 방지 (별도 follow-up).
 **현황 재정정**: 진짜 tier-1 잔여 gap = **try/catch(t38_nanbox) 1개뿐**. atlas_verify
 는 tier-2 fix(#35) 로 매칭. t35/t36/t37 + 2 env 제외 시 tier-1 effective 천장
 (t38 닫으면) = **38/39 + atlas_verify(tier-2 후) 39/39** = 구현 언어 범위 tier-1 ≡ 정답.
+
+---
+
+### 진행 로그 — #35 tier-2 trailing-if-expr void-return FIXED (`0092f069`) (cycle h19)
+
+**#35 root cause precise**: `self/codegen_c2.hexa::gen2_fn_decl` tail-return loop 가 fn body
+trailing expr = `IfExpr` 일 때 `_skip=true` ("let them run via gen2_stmt") → 각 branch
+값이 bare `<expr>;` statement 로 emit·폐기 → fn 이 `hexa_void()` 반환. tier-1 정상,
+tier-2 만 broken. stdlib/core/math.hexa 의 `abs/max/min/clamp/lcm` 영향 (`abs/max/min`
+은 HexaVal struct ABI aliasing 으로 우연히 "동작" — UB).
+
+**Fix**: `_gen2_emit_tail_return_expr`(arena/defer/no_arena 경로 존중 return-emitter) +
+`_gen2_emit_tail_returnify_body`(재귀 helper: tail ExprStmt → `return <expr>;`,
+inner IfExpr 재귀 처리 → else-if chain + nested if-in-if tail-return). gen2_fn_decl
+tail-return loop 이 IfExpr tail 을 helper 로 라우팅. MatchExpr 무변경(math.hexa 미사용,
+follow-on). regenerated `self/native/hexa_cc.c` + rebuilt `self/native/hexa_v2` 동봉.
+
+**검증 (clean main `0579aac6`)**: build_aprime smoke PASS; minimal repro
+`fn foo()->int{if true{7}else{9}}` pre void → post 7 (tier-1 무변경); tier-2 math fns
+정답; atlas_verify tier-2 109→**112/118** verdicts (+3 lcm-dependent verifier 회복:
+`modular::s8_t201_step5_weight_12`/`step6_lcm_uniqueness`/`falsifier:step6`); gate-1
+37/44 무변동(atlas_verify 는 6 OTHER 무관 발산으로 MISMATCH 유지 — 별도 tier-2
+codegen 버그, OOS); byte-identical non-tail-if fns; self-host fixpoint 보존 md5 `0e7f0387`.
+
+**atlas_verify 잔여 6 발산(별도 tier-2 codegen 버그)**: transcendental `s2_gamma_
+reflection_n6`/`s10_four_island_bridge_approximate`/`s2_gauss_multiplication_n6` +
+`falsifier:gauss` + modular `s8_t201_step2_isotropy_23`/`s8_chi_to_monster_full`.
+float-arithmetic 또는 struct-aliasing 후보. 각각 독립 cycle. tier-1 8/8 PASS 라
+**tier-1 결함 0** — 인터프리터 폐기 전제와 무관.
+
+---
+
+## ★★★ goal ② 사실상 종료선 (cycle h19 closing)
+
+**self-host axis** — bit-stable fixpoint REACHED (`93ee4ecf`, #23~#29 누적 종결).
+aprime_cc 가 인터프리터·hexa_v2 없이 자기 자신을 bit-for-bit 재현.
+
+**gate ① 정직 분석 (현 37/44 metric)**:
+- ✅ R7 gate ②③④ closed
+- 🔄 gate ① — 잔여 7 non-MATCH 분류:
+  - `t38_nanbox` APFAIL = **try/catch (마지막 진짜 tier-1 codegen-correctness gap)**
+  - `atlas_verify` MISMATCH = tier-2 codegen 잔여 6 발산 (tier-1 정답 8/8 PASS; **tier-1 결함 0**)
+  - `t35`·`t37` (ORAFAIL-class FFI: tier-2 oracle 자체 SIGSEGV/clang 실패)
+  - `t36` (tier-2 oracle clang 빌드 실패)
+  - `repo_taxonomy_audit` (rc=137 OOM env), `t34_net_listen` (rc=138 socket env)
+
+**effective tier-1 codegen 천장**: 7 non-MATCH 중 **5 는 tier-1 결함 아님** (tier-2 / ORAFAIL
+/ env). 진짜 tier-1 잔여 = **try/catch 1개**. 그 종결 시 구현 언어 범위 tier-1 ≡ 정답
+= 인터프리터 실삭제(R7) 가능. 단 atlas_verify 가 gate-1 metric MATCH 되려면 tier-2
+잔여 codegen 버그(별도 cycle)도 필요.
