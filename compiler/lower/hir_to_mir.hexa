@@ -1986,7 +1986,6 @@ pub fn lower_hir(module: HModule) -> MModule {
     }
     let mut funcs: [MFunc] = []
     let mut fn_names: [string] = []
-    let _t_lh0 = time_ms()
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
@@ -2009,22 +2008,12 @@ pub fn lower_hir(module: HModule) -> MModule {
                 nj = nj + 1
             }
             if !already {
-                let _t_lf = time_ms()
                 let f = _lower_fn(it, globals)
-                if env("HEXA_CG_TIMING") == "1" {
-                    let _dt = time_ms() - _t_lf
-                    if _dt > 30 {
-                        eprintln("[CG_TIMING] lower_fn " + it.name + " " + to_string(_dt) + " ms")
-                    }
-                }
                 funcs.push(f)
                 fn_names.push(it.name.substring(0, len(it.name)))
             }
         }
         i = i + 1
-    }
-    if env("HEXA_CG_TIMING") == "1" {
-        eprintln("[CG_TIMING] lower_hir total " + to_string(time_ms() - _t_lh0) + " ms")
     }
     return MModule {
         file: module.file,

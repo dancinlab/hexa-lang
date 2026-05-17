@@ -48,15 +48,6 @@ let _STMT_RETURN   = "return"
 let _STMT_BR       = "br"
 let _STMT_BR_COND  = "br_cond"
 
-// ── Codegen timing instrumentation (env-gated: HEXA_CG_TIMING) ─
-// Coarse sub-phase timers used to localize the codegen super-linear
-// cost class. Strictly env-gated — zero always-on overhead.
-fn _cg_log(label: string, ms: int) {
-    if env("HEXA_CG_TIMING") == "1" {
-        eprintln("[CG_TIMING] " + label + " " + to_string(ms) + " ms")
-    }
-}
-
 // ── PReg / LOperand helpers ──────────────────────────────────
 
 fn _arm64_preg_gpr(name: string) -> PReg {
@@ -1567,9 +1558,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     // C6 — run linear-scan regalloc up front so the prologue can size
     // the spill frame and the body can resolve operands through the
     // assigned RegMap.
-    let _t_ra0 = time_ms()
     let alloc = _arm64_assign_regs(mf)
-    _cg_log("regalloc fn=" + mf.name, time_ms() - _t_ra0)
     let spill_frame = alloc.frame_size
 
     // C7 — pre-allocate the maximum outgoing-call overflow region in
@@ -1636,7 +1625,6 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         p = p + 1
     }
 
-    let _t_emit0 = time_ms()
     let mut bi = 0
     while bi < len(mf.blocks) {
         let blk = mf.blocks[bi]
@@ -1662,16 +1650,10 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
                 instrs.push(delta[_di])
                 _di = _di + 1
             }
-            if env("HEXA_CG_TIMING") == "2" {
-                if (si / 100) * 100 == si && si > 0 {
-                    eprintln("[CG_TIMING2] stmt#" + to_string(si) + " cum=" + to_string(time_ms() - _t_emit0) + " ms instrs=" + to_string(len(instrs)))
-                }
-            }
             si = si + 1
         }
         bi = bi + 1
     }
-    _cg_log("stmt-loop fn=" + mf.name, time_ms() - _t_emit0)
 
     // Safety epilogue (in case last block lacks _STMT_RETURN)
     let last_is_ret = false
@@ -1952,10 +1934,7 @@ fn _strtab_to_rodata(st: ArmStrTab) -> [LSection] {
 // ── Module entry point ───────────────────────────────────────
 
 pub fn codegen_arm64_darwin(module: MModule) -> LModule {
-    let _t_st0 = time_ms()
     let st = _build_arm_strtab(module)
-    _cg_log("build_strtab", time_ms() - _t_st0)
-    let _t_lf0 = time_ms()
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
@@ -1965,7 +1944,6 @@ pub fn codegen_arm64_darwin(module: MModule) -> LModule {
         funcs.push(_arm64_lower_func(module.funcs[i], st, _arm64_modhash(module.file)))
         i = i + 1
     }
-    _cg_log("codegen all-funcs", time_ms() - _t_lf0)
     // Emit a writable 16-byte slot per module-level mutable global
     // (symbol `g<id>`). Runtime init via the parser's synthetic-main
     // `g<id> = E` assign — see hir_to_mir global resolution.
