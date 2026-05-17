@@ -1091,3 +1091,29 @@ g3: $0 모델은 충실하나 모델 — 실-substrate 확정은 campaign hard
 rule. 다음 = GPU block-oracle 결정 검증 (oRin 1.704e-1 → 0.0 PASS
 기대 = 15-fire 근본원인 fix + fwd chain link 실-substrate 동시 확정).
 over-claim 0: GPU 확정 전까지 tier 미선언.
+
+### 2026-05-18 — 🎉 oRin clobber fix 실-substrate GPU 확정 (16-fire 근본원인 해소)
+
+**GPU block-oracle v3 (oRin fix, instance A100_PCIE, oracle_rc=0,
+wall 4s)**: ✅ **PASS** `oRin: 1.704e-01 → 1.110e-16` (essentially
+bit-exact) · per-field 전부 ≤1.78e-15 · `max|Δ|=1.776e-15` (TOL_BLOCK
+1e-8) · `PASS F-PHASE4D9-BLOCK-FWD-ORACLE`. **Bc-pin 제거 fix 실
+GPU substrate 확정** — whole-block fwd GPU path byte-eq verified @d=384.
+
+**의의 (Tier: BREAKTHROUGH — g3 실-substrate 확정으로 선언 가능)**:
+① 캠페인을 16 fire 좌초시킨 d768 -nan/gn2-drift **진짜 근본원인 해소**
+(RFC 056 §6.3 Bc-pin × §6.1 H2D-skip × raw-host-write). ② fwd
+device-chain conversion (gap#1 causal-softmax kernel 배선) whole-block
+GPU byte-eq 확정. ③ $0 instrument 가 GPU `1.704301e-1` bit-identical
+사전예측→fix후 STABLE→GPU확인 = **$0-모델→GPU-확정 방법론 독립검증**
+(15 fire blind-trap 의 구조적 해독제 입증). block oracle 누적 3 catch
+(eps red-herring 식별 · oRin clobber localize · 근본원인) — d768 fire
+16회가 못한 정밀도를 ~$1 (5 cheap fire) 에.
+
+**g3 정직 scope**: 이건 fwd path 정확성 + 근본원인 확정 — **100%
+closure 아님**. closure = d768·12L 1-step wall ≤437.9s 측정.
+잔여: ① bwd dev_view chain (wall all-or-nothing) ② 실 d768 wall
+측정. 단 근본원인 fix·GPU검증 → d768 fire 가 이제 진짜 정보
+(oracle-검증 fwd anchor 보유, blind 아님). 다음 = d768 fire #16
+(첫 step 완주 가능성 + wall baseline 측정 = 근본원인 fix end-to-end
+확인) → bwd chain.
