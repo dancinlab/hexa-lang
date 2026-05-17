@@ -218,3 +218,13 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   `virocapsid_c5_conformance`(109L) 가 quick port 가능 — 비-float
   구조 검증 게이트. **측정된 거리: T3 1/104 검증 + 캐노니컬 dumps
   + 16/16 synth + 3/4 real 패리티 자산 완비.**
+- 2026-05-18 `a826180` (hexa-bio) — T3 **+2 게이트 바이트-패리티**:
+  공유 `_hexa_bridge/module/json_schema_validator.hexa`(draft-07
+  subset; `re.search`→`grep -E`, deep_eq for const/enum, format
+  date-time ERE) + `_hexa_bridge/selftest/virocapsid_c5_conformance.
+  hexa`. `.py` 와 **stdout 완전 일치**(4 cell PASS, T=1/3/4/1,
+  y_closed[-1] ∈ {0.860,0.850,0.860,0.870}, k_constants Python-repr
+  형식, lock_metadata 라인, summary 5/5) + exit 0. 런타임 빌트인
+  `json_parse` 활용; printf `%.3f`/Python repr list 형식 hand-roll.
+  잔여 잡음 LANDSCAPE.md(타인) 미혼입. **측정된 거리: T3 2/104
+  검증 + 공유 validator lib + 캐노니컬 dumps 자산.**
