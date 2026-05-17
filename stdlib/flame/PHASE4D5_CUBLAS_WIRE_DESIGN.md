@@ -46,28 +46,53 @@ Three integration layers:
 - `hexa_farr_to_device` / `hexa_farr_from_device` (H2D/D2H)
 - Auto-residence transition (FARR_HOST → FARR_MIRRORED → FARR_DEVICE)
 
-### Layer 2 — flame A2 primitives use cuBLAS-routed matmul
-- Modify `tool/flame_phase4b3_matmul_primitives.c`:
-  - 4 fwd shape primitives currently inline 3-nested-loop matmul
-  - Replace inner_matmul with `hexa_farr_matmul(W_buf_v, d_out_v, d_in_v,
-    xbt_v, T_v)` call (HexaVal API, already cuBLAS-wired post Layer 1)
-- Similarly for 4 bwd grad_accum primitives
-- Trade-off: per-matmul cuBLAS overhead vs naive-loop overhead. At
-  d=768·12L scale, cuBLAS Dgemm wins by 100×+. At d=32·3L scale,
-  cuBLAS overhead exceeds naive loop — keep naive at small scale.
+### Layer 2 — flame A2 primitives use cuBLAS-routed matmul  ✅ LANDED (2026-05-17)
+- Modified `tool/flame_phase4b3_matmul_primitives.c` — all 8 primitives
+  (4 fwd `proj_batch` + 4 bwd `grad_accum`) now call a shared
+  `flame_proj_matmul_dispatch()` instead of the bare inline loop.
+- GPU path `flame_proj_gpu_matmul()` (under `#ifdef HEXA_CUDA`) bridges the
+  stack-buffer primitive ABI to the HexaVal farr API:
+  - allocates host farrs for A, B (`hexa_farr_zeros`), re-fetches `.buf`
+    after each alloc (use-after-realloc hazard — same as runtime.c
+    `hexa_farr_matmul`), uploads, calls `hexa_farr_matmul_gpu`, copies C
+    back, frees the temporaries.
+  - on any alloc/dispatch error → falls back to the CPU inline loop
+    (no fake PASS).
+- On the no-CUDA Mac build the GPU branch is `#ifdef`-compiled out — small
+  shapes are the only path, so byte-eq is preserved by construction.
+- Trade-off note (unchanged): per-matmul cuBLAS overhead vs naive-loop.
+  At d=768·12L scale cuBLAS Dgemm wins; at d=32·3L scale naive wins —
+  hence Layer 3 threshold below.
 
-### Layer 3 — dim-aware dispatch (small d uses naive, large d uses cuBLAS)
-- Primitive 가 dim threshold check (예: `if (d * d_in > 8192) cuBLAS else naive`)
-- d=32·3L config (d_out·d_in = 1024 ~ 4096): naive (current path, A2 SHIPPED)
-- d=768·12L config (d_out·d_in = 768·768 = 589824): cuBLAS path
-- Threshold tuned via benchmark (Phase 4-D-5-2 sub-step)
+### Layer 3 — dim-aware dispatch (small d uses naive, large d uses cuBLAS)  ✅ LANDED (2026-05-17)
+- `flame_proj_matmul_dispatch()` checks `M·K > FLAME_MATMUL_GPU_THRESHOLD`
+  (default 8192). Above → `flame_proj_gpu_matmul` (cuBLAS); at/below →
+  `flame_proj_inline_matmul` (CPU).
+- Threshold = **8192**, chosen by config separation (not benchmark — no
+  fire budget this cycle):
+  - d=32·3L config — largest A2 shape M·K = 2048 (d_out=64·d_in=32 fwd,
+    d_out=32·d_in=64 fwd). 8192 clears it by 4× → all 8 shapes stay CPU.
+  - d=768·12L config — M·K = 768·768 = 589824, ~72× above the threshold
+    → routes to cuBLAS Dgemm.
+  - The two configs are separated by ~288×, so the threshold choice is
+    unambiguous; a benchmark-tuned value is only meaningful for an
+    intermediate config (none in scope).
+- Verification (Mac, $0):
+  - F-RFC040-MAC-BUILD-PRESERVED — `clang -O2` no-CUDA + `clang -O2
+    -DHEXA_CUDA` both compile clean (object code; `_hx_cuda_farr_matmul_gpu`
+    is the only unresolved extern, satisfied by runtime_cuda.c on a CUDA host).
+  - F-RFC047-A2-PATHB-FULL-BYTE-EQ — numeric unit test: all 8 d=32·3L
+    shapes byte-identical between `flame_proj_matmul_dispatch` and the
+    original `flame_proj_inline_matmul` (M·K ∈ {256…2048}, all CPU).
+  - F-RFC040-CUBLAS-BYTE-EQ — deferred to the d=768·12L re-fire
+    (GPU path only activates at large dim; not measurable on no-CUDA Mac).
 
 ## Sub-phase breakdown (5-7 cycles autonomous + 1-2 cycles cost-bearing)
 
 | sub-phase | what | effort | cost | falsifier |
 |---|---|---|---|---|
 | 4-D-5-1 | Layer 1 RFC 040 GPU body impl (runtime.c) | 2-3 cycles | $0 (local) | builds with -DHEXA_CUDA on CUDA host (remote build) |
-| 4-D-5-2 | Layer 2 A2 primitives cuBLAS-route + Layer 3 threshold benchmark | 1-2 cycles | $0 (local d=32 falsifier preserved) | F-RFC047-A2-PATHB-FULL-BYTE-EQ unchanged at small scale; new F-RFC040-CUBLAS-BYTE-EQ at d=768 |
+| 4-D-5-2 | Layer 2 A2 primitives cuBLAS-route + Layer 3 dim-aware dispatch ✅ LANDED 2026-05-17 (threshold=8192 by config-separation, not benchmark) | 1-2 cycles | $0 (local d=32 falsifier preserved) | F-RFC047-A2-PATHB-FULL-BYTE-EQ unchanged at small scale (8/8 byte-id PASS); new F-RFC040-CUBLAS-BYTE-EQ deferred to d=768 re-fire |
 | 4-D-5-3 | flame_d768_12L_corpus_test rebuild + smoke (HEXA_CUDA build path) | 1 cycle | $0 (build verify only, run skipped on M-Mac) | compile + link PASS with -DHEXA_CUDA on remote |
 | 4-D-5-4 | **Phase 4-D-4-second fire** — CUDA-enabled binary on A100 | 1 cycle | **$5-20** | F-RFC046-EAGER-PYTORCH-MATCH wall ≤437.9s |
 | 4-D-5-5 | RFC 046 ship (results + RFC update) | 1 cycle | $0 | docs only |
