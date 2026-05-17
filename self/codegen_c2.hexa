@@ -894,10 +894,32 @@ fn codegen_c2(ast) {
         _mhi = _mhi + 1
     }
 
+    // fn-name dedup (first-wins). module_loader can splice two files
+    // that both define the same fn name (e.g. stdlib/core/math.hexa's
+    // `fn euler_phi(n)` vs compiler/atlas/symbolic/congruence_chain_engine
+    // .hexa's `pub fn euler_phi(n: int) -> int` — same name, different
+    // signatures). Without this dedup the C output has two `HexaVal
+    // euler_phi(...)` definitions and clang errors with "redefinition of
+    // 'euler_phi'". First-wins matches the existing thunk policy
+    // (line 3118) and promote_to_atlas (compiler/discover/promote.hexa:382).
+    let mut _fn_emit_seen = []
     let mut i = 0
     while i < len(ast) {
         let k = ast[i].kind
         if k == "FnDecl" {
+            // dedup: skip duplicate FnDecl with the same name (first-wins).
+            let _fn_name = ast[i].name
+            let mut _fes_i = 0
+            let mut _fes_dup = false
+            while _fes_i < len(_fn_emit_seen) {
+                if _fn_emit_seen[_fes_i] == _fn_name { _fes_dup = true }
+                _fes_i = _fes_i + 1
+            }
+            if _fes_dup {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen.push(_fn_name)
             if ast[i].name == "main" { has_user_main = true }
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
@@ -926,7 +948,19 @@ fn codegen_c2(ast) {
             fwd_parts.push(ib.forward)
             fn_parts.push(ib.fn_code)
         } else if k == "PureFnDecl" {
-            // Treat pure fn same as regular fn
+            // Treat pure fn same as regular fn (with same first-wins dedup).
+            let _pfn_name = ast[i].name
+            let mut _pfes_i = 0
+            let mut _pfes_dup = false
+            while _pfes_i < len(_fn_emit_seen) {
+                if _fn_emit_seen[_pfes_i] == _pfn_name { _pfes_dup = true }
+                _pfes_i = _pfes_i + 1
+            }
+            if _pfes_dup {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen.push(_pfn_name)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "AsyncFnDecl" {
@@ -935,6 +969,18 @@ fn codegen_c2(ast) {
             // keyword is annotation-only at codegen time. await-site
             // unwrap is handled by gen2_expr Await branch + runtime
             // hexa_await_unwrap (RFC-022 §4.2).
+            let _afn_name = ast[i].name
+            let mut _afes_i = 0
+            let mut _afes_dup = false
+            while _afes_i < len(_fn_emit_seen) {
+                if _fn_emit_seen[_afes_i] == _afn_name { _afes_dup = true }
+                _afes_i = _afes_i + 1
+            }
+            if _afes_dup {
+                i = i + 1
+                continue
+            }
+            _fn_emit_seen.push(_afn_name)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ComptimeConst" || k == "ConstStmt" {
