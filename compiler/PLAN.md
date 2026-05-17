@@ -517,3 +517,24 @@ hxc_roundtrip 분리됨) + env-resource 2(`repo_taxonomy_audit` rc137 OOM ·
 가 frontend 실행 + asm header emit 까지 가나 per-function emit loop 이 **함수 body 0개**
 생성 (smoke → 4-line header only vs ap1 정상 28-line `_main`). 타임아웃/atlas 의존 아님.
 #24 가 atlas-load 에서 ap2 를 먼저 죽여 가려져 있던 것. 별도 cycle.
+
+---
+
+### 진행 로그 — atlas-verifier 3-MISMATCH 클러스터 read-only 증상 triage (cycle h18, 다음 cycle 포인터)
+
+`/tmp/ap24` (clean main + 9223fe4a) vs hexa-build oracle, 잔존 3 MISMATCH 의 stdout diff
+(read-only, codegen 미수정 — #25 agent territory 와 비충돌):
+
+- `atlas_doctrine`: ap `external_entity_audit detects 1 violation` / `fails (pass=false)`
+  → oracle `RESULT: PASS`. aprime 가 존재하지 않는 violation 1건 검출.
+- `atlas_tecsl_verify`: ap `A top::s8_mu_eq_sigma_squarefree_tecsl [🔴 FALSIFIED]`
+  → oracle `[🔵 SUPPORTED-IDENTITY]`. verifier predicate 진리값 반전.
+- `atlas_wave3`: ap `falsifier_wellformed_audit FAIL — 4 nonconforming / 3 violations
+  across 4 @? nodes` → oracle `RESULT: PASS`. node-scan predicate over-report.
+
+**공통 동근 (가설):** atlas-node scan loop 내 **predicate/boolean 평가가 aprime_cc
+codegen 에서 wrong truth-value** 산출 (crash 아닌 wrong-value). 비교연산자 / bool-coercion
+/ struct-field-bool lowering 후보. 이전 "struct-array field-access" 클래스의 wrong-value
+변종 가능성. #25(ap2 empty-fn-body) 종결 후 별도 cycle 에서 minimal repro
+(verifier scan + struct-field-bool predicate) → codegen_c2 oracle diff 로 isolate 권장.
+gate ① 잔여 실-aprime gap 의 거의 전부가 이 한 클러스터.
