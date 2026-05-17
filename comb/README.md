@@ -1,6 +1,18 @@
 # comb/ — n=6 non-von-Neumann · non-quantum compute architecture
 
-> 상태: **EXPLORATION (일단 저장 — 축 미확정)** · 2026-05-18
+> **궁극 골:** degree-6 육각 이진-타일 spatial PIM fabric이 modern node에서
+> degree-4 mesh를 실제 워크로드로 이긴다는 것을 hexa-native 사이클정확 시뮬
+> + tapeout-ready RTL로 *입증하거나 동일 엄밀도로 반증*한다 (T2). 입증 시
+> 입증 시 물리-실현 *설계*는 **별도 repo `~/core/hexa-arch` 의 chip 도메인**
+> (외부 EDA — gem5-Garnet·Yosys·OpenROAD·Verilator·ngspice·SKY130 — 을 *그쪽*이
+> 흡수)을 **사용**해 산출. comb 는 소비자이지 EDA 흡수 주체 아님
+> (hexa-native · 실제 fab/FPGA 비목표; T3 = 설계만).
+>
+> 현 단계: **정초 완료** (RFC 057 + falsifier F1–F5 + 딥리서치 2건) →
+> 다음 = T1 hex NoC 사이클 시뮬 (F1/F2, modern node).
+>
+> 상태: **DRAFT** · 2026-05-18 · RFC 057 확정 · 4축 전개 + 딥리서치 2건 완료
+> (B = backbone 정리앵커 · C = motivation radix-중립 · A = DE-SCOPED WALL).
 > SSOT label. flame(`stdlib/flame/`) · forge(`self/forge/`) 와 형제 레벨의
 > 독립 아키텍처 R&D 트랙. 루트 직속 배치 (stdlib 도 GPU 런타임도 아님).
 

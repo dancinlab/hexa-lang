@@ -24,6 +24,15 @@
   outcome = "B = backbone (Hales 2001 정리) · C = motivation (memory wall, radix-중립) · A = DE-SCOPED WALL"
   ~> "EXPLORATION 미선택 상태 supersede"
 
+@D comb_ultimate := "궁극 최종골 (T2 + T3 design-only)" :: decision [d=2026-05-18 active]
+  tier_t1 = "ANSWERED — F1–F5 를 modern-node hex axial NoC 사이클 시뮬로 전수 판정 (이김/죽음)"
+  tier_t2 = "PROVEN — hexa-native 사이클정확 시뮬 + tapeout-ready RTL 로 degree-6 hex 이진-타일 spatial PIM > degree-4 mesh 실워크로드 입증 OR 동일 엄밀도 반증"
+  tier_t3 = "DESIGN-ONLY (설계만) — comb 물리-실현 설계를 별도 standalone repo `~/core/hexa-arch` 의 chip 도메인을 *사용*해 산출. 외부 EDA 흡수(gem5-Garnet·Yosys·OpenROAD·Verilator·ngspice·SKY130·Chisel)는 hexa-arch 책임. comb = 소비자, 흡수 주체 아님. 실제 fab/FPGA = 비(非)목표."
+  decouple = "hexa-arch ≠ comb. EDA 외부흡수 = ~/core/hexa-arch (standalone repo, commit c812ac6, HANDOFF.md 자기완결). comb = chip 도메인 소비자. T1 NoC sim 도 hexa-arch[chip] 경유 (comb 직접 흡수 X)."
+  guard = "T3 종착 = hexa-native 설계 산출물. 칩 fab over-reach 금지 (g5 hexa-native-only) · over-claim 금지 (g1·g2)."
+  ssot = "root GOAL.md ③ (north-star SSOT) · comb/RFC.md §6 (gated plan T1→T2→T3)"
+  ~> "founding 골(RFC 057+falsifier 정초) → '현 단계'로 강등; 본 궁극골이 north-star"
+
 @N comb_evidence := "딥리서치 교차검증 결론" :: note [d=2026-05-18 active]
   finding = "n=6 정리-최적은 B축(육각 위상) 1개뿐. A축 radix 는 b=3 에 열위 (반증). C축 radix-중립."
   negative = "상용 degree-6 실리콘 0건 (Cerebras·SambaNova·Tenstorrent·Groq·Loihi·NorthPole·SpiNNaker 전부 degree-3/4). UC Davis VCL 65nm 2012 단 1측정, 13yr stale, 미productize."
@@ -32,7 +41,7 @@
 
 # §X — campaign artifact index (branch·SHA·path·RFC#)
 @N x_comb_artifacts := "comb/ 산출물 인덱스" :: note [d=2026-05-18 active]
-  branch = "rfc043-hexa-torch (uncommitted — 공유 worktree, 커밋 user gate)"
+  branch = "rfc043-hexa-torch (공유 worktree; comb/ 경로만 커밋 — 1차 c0e7aae7 + 궁극골 갱신 후속커밋)"
   readme = "comb/README.md — 1-pager · 3축 정직표"
   survey = "comb/research/SURVEY.md — 딥리서치 2건 통합 + primary sources"
   axis_b = "comb/axis_b_topology.md — backbone (DESIGN)"
@@ -40,4 +49,4 @@
   axis_c = "comb/axis_c_model.md — motivation (DESIGN)"
   rfc = "comb/RFC.md — 합본 DRAFT, RFC 057 (확정, 충돌0 above rfc_056), 5 falsifier (F1–F5)"
   plan = "comb/PLAN.md — 진행 로그 SSOT"
-  next_gate = "F1/F2 해소용 hex NoC 시뮬 (modern node) — user gate 대기"
+  next_gate = "T1 = F1/F2 해소용 hex axial NoC 사이클 시뮬 (degree-6 vs degree-4, modern node, Leighton B3 하한 대비) — user gate 대기"

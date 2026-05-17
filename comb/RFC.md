@@ -94,14 +94,21 @@ UC Davis VCL 65 nm 2012 (+2.9% tile / −21% area / −17% power / −19% dist) 
 the *only* prior measurement — 13 yr stale, small DSP, never productized;
 F1/F2 exist precisely because that silence is itself evidence of EDA cost.
 
-## 6. Plan (gated)
+## 6. Ultimate goal & gated plan (T1 → T2 → T3)
 
-1. **B sim** — hex axial NoC model, degree-6 vs degree-4, modern-node wire
-   model → resolve F1/F2 (no silicon; simulation + Leighton B3 bounds).
-2. **C model** — dataflow lowering feasibility study in hexa-lang compiler
-   (the real gate; separate RFC if pursued).
-3. **A** — no work; audit frozen as counter-evidence.
-4. Each step a user gate; record decisions in `comb/PLAN.md`.
+**Ultimate goal:** prove a degree-6 hexagonal *binary-tile* spatial PIM fabric
+beats a degree-4 mesh at a modern node on a real workload — or falsify it with
+equal rigor — then deliver the physical-realization *design* (not fab) as a
+hexa-native artifact.
+
+| Tier | Deliverable | Gate |
+|---|---|---|
+| T1 ANSWERED | hex axial NoC cycle-sim, degree-6 vs degree-4, modern-node wire model → resolve F1/F2 (sim only; Leighton B3 bounds). NoC sim obtained **via the `~/core/hexa-arch` chip domain** (separate repo; it absorbs BookSim2 / gem5-Garnet) — comb consumes, does not absorb | user |
+| T2 PROVEN | hexa-native cycle-accurate simulator + tapeout-ready RTL; degree-6 > degree-4 on a real workload, OR equal-rigor falsification | user |
+| T3 DESIGN-ONLY | comb's physical-realization *design* produced by **using the `~/core/hexa-arch` chip domain** (separate standalone repo — *it* absorbs the external EDA stack: gem5-Garnet/BookSim2 · Yosys · OpenROAD/OpenLane2 · Verilator/SymbiYosys/OpenSTA · ngspice · SKY130/SG13G2 · Chisel/Amaranth). comb is a **consumer, NOT the EDA absorber**. **Actual fab/FPGA is a non-goal.** | user |
+
+C-axis dataflow lowering = separate RFC if pursued. A-axis = no work (frozen
+counter-evidence). Each tier a user gate; decisions logged in `comb/PLAN.md`.
 
 ## 7. Honesty summary (governance closure)
 
@@ -109,3 +116,8 @@ F1/F2 exist precisely because that silence is itself evidence of EDA cost.
 - Every B claim carries the least-perimeter≠least-latency + EDA-cost caveats.
 - No over-claim: this is a *topology* contribution with one stale measurement
   and five live falsifiers, not a paradigm claim. Lattice = tool (g1/g2).
+- T3 scope guard: comb *consumes* the **`~/core/hexa-arch` chip domain**
+  (separate repo) for design realization — comb never absorbs EDA nor
+  fabricates a chip. Keeps comb focused on n=6 topology; stays hexa-native (g5).
+- hexa-arch decoupling: all EDA absorption (gem5-Garnet/Yosys/OpenROAD/…)
+  lives in `~/core/hexa-arch`, not comb. comb = consumer only. No over-claim.

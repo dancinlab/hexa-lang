@@ -1,10 +1,11 @@
 # GOAL — hexa-lang 의 한 문장 (도메인별)
 
-> hexa-lang 은 동시에 두 north-star 를 굴린다 (격자가 아닌 실-목표 기준; `LATTICE_POLICY.md`).
+> hexa-lang 은 동시에 세 north-star 를 굴린다 (격자가 아닌 실-목표 기준; `LATTICE_POLICY.md`).
 > 한 파일에 **모두 보관** — 각 도메인 진척·측정값 SSOT 는 해당 섹션의 cross-link 참조.
 >
 > - **① flame+forge NN 스택** — hexa 컴파일러-only NN 학습 스택이 PyTorch 보다 빠르게 (측정)
 > - **② 인터프리터 폐기 · self-host** — 모든 `.hexa` 가 인터프리터 없이 네이티브 컴파일·실행
+> - **③ comb n=6 fabric** — degree-6 육각 이진 spatial PIM 이 degree-4 mesh 보다 우월한지 입증/반증 (sim+RTL); 설계는 별도 repo `~/core/hexa-arch`[chip] 소비
 
 ═══════════════════════════════════════════════════════════════════════
 
@@ -50,13 +51,13 @@ flame (hexa compiler-only NN stdlib)
 
 - compiler-only / no PyTorch: ✅ flame hexa compiler-only
 - hexa-native: ✅ flame hexa-src · forge C/CUDA (RFC 055 hexa→PTX designed)
-- GPU: 🔄 substrate verified (12 kernel byte-eq A100) · trainer GPU-ENGAGED (fire #8: 25% util, d2h fixed) **but per-op H2D/D2H 지배 → step 1 > 600s**
+- GPU: 🔄 substrate verified + **RFC 056 residence API LANDED** (`1f077af1`, A100 clean build, resident 459→727 MiB) — 그러나 A2 primitive 이 아직 resident buffer 를 operate-on 안 함 (flame Phase 4-D-9 대기) → step 1 > 600s
 - measured: ✅ 매 fire 정직 · **d=32·3L 3.23× wall MEASURED** · d=768·12L wall 아직 (no completed step)
-- **d768 faster than PyTorch**: ❌ 미달 — true persistent residency 부재
+- **d768 faster than PyTorch**: ❌ 미달 — true persistent residency 부재 (측정 입증)
 
-진척: fire #5 (0 step, GPU 0%) → #7 (step 1 진입, d2h bug) → #8 (step 1, GPU 25%, d2h FIXED) → Phase 4-D-8 (`aa6d70ba` redundant pre-op H2D elision, byte-eq-exact, non-cuBLAS H2D ~절반) → **fire #9 in flight** (halved-H2D wall 실측). 단조 진행, 매 fire 가 구체 blocker 하나씩 제거.
+진척: #5 (0 step) → #8 (step1, 581MiB, d2h fixed) → #9 (`wall=601`, halving H2D 가 step-1 못 옮김 → **구조적 round-trip + CPU-glue bound** 측정 확정) → **#10 (RFC 056 Phase 1 API landed, A100 `nvcc -DHEXA_CUDA` clean build, resident 459→727 MiB monotone)**. 단조 진행, 매 fire 가 구체 blocker 하나씩 제거/해결.
 
-> 식별된 genuine architecture blocker: **device-sub-view residence API** — forge kernel 이 `(base_id, offset, len)` device triple + H2D-skip + D2H-defer 를 수용 (11/11 byte-eq oracle 보존). primitive-discipline 변경 아닌 multi-cycle RFC scope (Phase 4-D-8 honest verdict). 이 GOAL 은 north-star — 달성 주장 아님, 측정된 거리 명시.
+> RFC 056 (device-sub-view residence API) **Phase 1 LANDED** (`1f077af1`: state machine + H2D-skip + D2H-defer + dev-view + pin; F-RFC056-D32-BYTEEQ ✅ max|Δ|=0.0). fire #10: substrate API + §6.3 pin anchor 동작 (727 MiB resident) 하나 WALL FAIL — **RFC 056 §8.2 pre-registered caveat 그대로**: A2 primitive 이 resident buffer 를 operate-on 하도록 restructure (dev-view slice + 비-matmul → verified Phase B kernel) = **flame Phase 4-D-9**, 이 API 에 gated (이제 gate 충족). 남은 2 gated step: ① flame Phase 4-D-9 ② F-RFC056-BYTEEQ-PRESERVE 12-kernel GPU oracle empirical. 이 GOAL 은 north-star — 달성 주장 아님, 측정된 거리 명시 (design-first 아님 — 매 step fire 측정으로 justify).
 
 ---
 
@@ -128,6 +129,61 @@ RFC 034 autograd (✅) · 040 device-farr (✅)        ← 언어 표현력 (dow
 
 > 이 GOAL 은 north-star — 달성 주장 아님, 측정된 거리 명시. self-host fixpoint·gate 측정값의 SSOT 는 `compiler/PLAN.md` 진행 로그. 인터프리터는 이미 사용 금지(메모리 directive: `hexa run` 금지, 검증은 compiled path) 이나 *소스 삭제*는 별개 — 정직히 미실행으로 기록.
 
+═══════════════════════════════════════════════════════════════════════
+
+# GOAL ③ — comb (n=6 육각 fabric) 의 한 문장
+
+```
+/goal degree-6 육각 이진-타일 spatial PIM fabric 이 modern node 에서 degree-4 mesh 를 실제 워크로드로 이긴다는 것을 hexa-native 사이클정확 시뮬 + tapeout-ready RTL 로 입증하거나 동일 엄밀도로 반증한다 (T2); 입증 시 물리-실현 설계를 별도 standalone repo ~/core/hexa-arch 의 chip 도메인(외부 EDA 흡수는 그쪽 책임)을 사용해 산출 — comb 는 소비자, 실제 fab/FPGA 는 비목표 (T3=설계만)
+```
+
+> **한 문장 (canonical)**: degree-6 육각 **이진-타일** spatial PIM fabric 이 modern node 에서 degree-4 mesh 를 **실제 워크로드로 이긴다**는 것을 **hexa-native 사이클정확 시뮬레이터 + tapeout-ready RTL** 로 **입증하거나 동일 엄밀도로 반증**(T2)하고, 입증 시 물리-실현 *설계*를 **별도 standalone repo `~/core/hexa-arch` 의 chip 도메인**(외부 EDA — gem5-Garnet·Yosys·OpenROAD·Verilator·ngspice·SKY130 — 흡수는 *hexa-arch* 책임)을 **사용**해 산출한다 — comb 는 **소비자이지 EDA 흡수 주체 아님**, **실제 fab/FPGA 제작은 비(非)목표** (T3 = 설계만).
+
+---
+
+## 무엇이 아닌가 (NOT)
+
+- 패러다임 선언 아님 — *topology* 기여 1개 + falsifier 5개 (RFC 057). over-claim 금지 (g1·g2)
+- 다치(multi-valued)논리 아님 — A축 DE-SCOPED WALL (radix economy·noise·EDA 3중 HARD_WALL)
+- 실제 칩 fab/FPGA 아님 — T3 은 hexa stdlib+CLI **설계 산출물**까지 (hexa-native, g5)
+- design-first 아님 — F1–F5 측정·반증으로 결정 (sim 우선; 상용 degree-6 실리콘 0건 = EDA-cost 신호)
+- comb 가 EDA 흡수 아님 — 외부 EDA 흡수는 **별도 repo `~/core/hexa-arch`** 책임; comb 는 그 chip 도메인 **소비자**일 뿐
+- 빅뱅 아님 — hexa-arch 도 NoC 사이클sim(BookSim2/gem5-Garnet) **1개만** 먼저; 전체 RTL→GDSII 후속 (comb T1→T3 가 소비)
+
+## 무엇인가 (IS)
+
+3-tier 단일 north-star (RFC 057 §6 = gated plan SSOT):
+
+1. **T1 ANSWERED** — F1–F5 를 modern-node hex axial NoC 사이클 시뮬로 전수 판정 (이김/죽음)
+2. **T2 PROVEN** — hexa-native 사이클정확 시뮬 + tapeout-ready RTL 로 degree-6 > degree-4 입증 OR 동일 엄밀도 반증
+3. **T3 DESIGN-ONLY** — 물리-실현 설계를 별도 repo `~/core/hexa-arch` 의 chip 도메인(외부 EDA 흡수는 그쪽)을 *사용*해 산출; comb=소비자; 실제 fab/FPGA 비목표
+
+## 측정된 거리 (달성 주장 아님, g3)
+
+- ✅ 정초 완료: RFC 057 + falsifier F1–F5 + 딥리서치 2건 (commit `c0e7aae7`)
+- ⏳ T1 미착수 (0%) — 다음 = F1/F2 (degree-6 vs degree-4 @ modern node)
+- ⏳ T2 / T3 미착수
+- 정직 앵커: 상용 degree-6 실리콘 0건 · 측정 단 1건 (UC Davis 65nm 2012, 13yr stale, 미productize)
+
+## RESUME (복사-붙여넣기로 이어서)
+
+새 세션에 아래를 그대로 붙여넣으면 이어집니다:
+
+```
+comb (RFC 057, n=6 육각 fabric) 이어서. SSOT: comb/{README,RFC,PLAN,COMB.tape,
+research/SURVEY} + root GOAL.md ③. 현 상태: 정초 완료 (commit c0e7aae7+), T1
+미착수. 다음 = RFC 057 §6 T1 — F1/F2 해소용 hex axial NoC 사이클 시뮬
+(degree-6 vs degree-4, modern-node wire model, Leighton B3 하한 대비; sim only,
+no silicon). NoC sim 은 별도 standalone repo ~/core/hexa-arch 의 chip
+도메인 경유 (거기가 BookSim2/gem5-Garnet 흡수; ~/core/hexa-arch/HANDOFF.md
+자기완결). 거버넌스: g1·g2 격자=도구, 이진-타일 고정, 다치논리 금지(A=WALL),
+모든 B 주장에 least-perimeter≠least-latency + EDA-cost caveat. T3 =
+~/core/hexa-arch[chip] 을 *사용*해 설계 산출 (comb=소비자, EDA 흡수는
+hexa-arch; design-only, fab 비목표).
+```
+
+> GOAL ③ 한 문장은 stable (north-star). 진척·측정값 SSOT = `comb/PLAN.md` 진행 로그 — 본 섹션은 "왜" 의 SSOT.
+
 ---
 
 ## cross-link
@@ -137,5 +193,9 @@ RFC 034 autograd (✅) · 040 device-farr (✅)        ← 언어 표현력 (dow
 - `ROADMAP.md` — R3–R7 phased plan (R7 = 인터프리터 실삭제)
 - `HEXA-NATIVE-ONLY.md` — no LLVM · no C-transpile · self-hosted 정책
 - `tool/build_aprime.sh` — aprime_cc 5-stage 부트스트랩 recipe (smoke `exit(6*7)==42`)
+- `comb/RFC.md` — ③ comb RFC 057 (T1→T2→T3 gated plan · falsifier F1–F5)
+- `comb/PLAN.md` — ③ comb 진척·측정값 SSOT (자체 도메인 SSOT, g_plan_consolidation 예외)
+- `comb/research/SURVEY.md` — ③ 딥리서치 2건 통합 (n=6 정리-최적 = B축 1개뿐, 출처)
+- `~/core/hexa-arch` — ③ 가 *사용*하는 별도 standalone repo (chip 도메인이 외부 EDA 흡수; `HANDOFF.md` 자기완결, commit c812ac6). EDA 흡수는 거기, comb 는 소비자
 
 > GOAL 한 문장은 stable (north-star). 진척·측정값은 `compiler/PLAN.md` 가 SSOT — 본 파일은 "왜" 의 SSOT.
