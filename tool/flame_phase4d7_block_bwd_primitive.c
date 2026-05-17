@@ -439,6 +439,14 @@ HexaVal hexa_farr_silu_grad_gpu(HexaVal x_v, HexaVal n_v);
 HexaVal hexa_farr_mul_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);
 HexaVal hexa_farr_rmsnorm_bwd_rows_gpu(HexaVal x_v, HexaVal dxn_v, HexaVal r_v, HexaVal c_v);
 HexaVal hexa_farr_rope_bwd_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v, HexaVal T_v, HexaVal nh_v, HexaVal hd_v);
+// RFC 056 §6.2-6.5 residence API (host shims in runtime.c; no-CUDA = the
+// CPU-copy/inert fallbacks → d=32·3L _cpu path byte-eq by construction,
+// F-RFC056-D32-BYTEEQ). Symmetric with the fwd primitive's §6.5 chain.
+HexaVal hexa_farr_dev_view(HexaVal base_v, HexaVal off_v, HexaVal len_v);
+HexaVal hexa_farr_set_out_disposition(HexaVal d_v);
+#ifndef HEXA_FORGE_OUT_DEVICE_KEEP
+#define HEXA_FORGE_OUT_DEVICE_KEEP 1
+#endif
 
 // ── Phase 4-D-8: redundant pre-op H2D elision (byte-eq-exact) ────────────
 // Identical rationale to flame_phase4d7_block_fwd_primitive.c: every
@@ -583,11 +591,28 @@ static void flame_block_generic_bwd_primitive_gpu(
         int sg_id = (int)sg_v.i, silu_id = (int)silu_v.i;
         if (sg_id >= 0 && silu_id >= 0) {
             // da = ds ⊙ b ⊙ silu_grad(a)   ;   db = ds ⊙ silu(a)
+            // RFC 056 §6.4/§6.5 resident chain: dsb = ds⊙b is consumed
+            // ONLY by the next forge mul (da = dsb⊙sg). Keep dsb on the
+            // device (FORGE_OUT_DEVICE_KEEP — no D2H) and feed da's mul a
+            // dev_view of it. The view path (runtime_cuda.c:173-177) skips
+            // H2D unconditionally (ignores dirty_host) → byte-safe even
+            // though _d2h_out set dsb.dirty_host=1. Restore HOST_NOW so
+            // da's result D2Hs for the host copy into da_all (read by the
+            // cuBLAS dWg grad_accum, a host reader). No-CUDA: dev_view =
+            // a CPU copy of dsb, mul = CPU → identical numerics
+            // (F-RFC056-D32-BYTEEQ holds; d=32 is the _cpu path anyway).
+            int sw_prev_disp = (int)hexa_farr_set_out_disposition(
+                hexa_int(HEXA_FORGE_OUT_DEVICE_KEEP)).i;
             HexaVal dsb_v = hexa_farr_mul_gpu(hexa_int(ds_all_id), hexa_int(b_id),
                                               hexa_int((int64_t)T*h));
             int dsb_id = (int)dsb_v.i;
+            (void)hexa_farr_set_out_disposition(hexa_int(sw_prev_disp));
             if (dsb_id >= 0) {
-                HexaVal da_v = hexa_farr_mul_gpu(hexa_int(dsb_id), hexa_int(sg_id),
+                HexaVal dsbv_v = hexa_farr_dev_view(hexa_int(dsb_id),
+                                     hexa_int(0), hexa_int((int64_t)T*h));
+                int dsbv_id = (int)dsbv_v.i;
+                int da_lhs = (dsbv_id >= 0) ? dsbv_id : dsb_id;
+                HexaVal da_v = hexa_farr_mul_gpu(hexa_int(da_lhs), hexa_int(sg_id),
                                                  hexa_int((int64_t)T*h));
                 int da_id = (int)da_v.i;
                 if (da_id >= 0) {
@@ -596,6 +621,7 @@ static void flame_block_generic_bwd_primitive_gpu(
                     for (int p = 0; p < T*h; p++) da_all[p] = da[p];
                     hexa_farr_free(da_v);
                 }
+                if (dsbv_id >= 0) hexa_farr_free(dsbv_v);
                 hexa_farr_free(dsb_v);
             }
             HexaVal db_v = hexa_farr_mul_gpu(hexa_int(ds_all_id), hexa_int(silu_id),

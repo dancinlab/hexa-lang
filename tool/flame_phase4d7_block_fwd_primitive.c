@@ -363,6 +363,50 @@ HexaVal hexa_farr_unpin_device(HexaVal h_v);
 HexaVal hexa_farr_dev_view(HexaVal base_v, HexaVal off_v, HexaVal len_v);
 HexaVal hexa_farr_set_out_disposition(HexaVal d_v);
 
+// ════════════════════════════════════════════════════════════════════════
+// flame Phase 4-D-9 — A2 resident-dataflow rewire (RFC 056 §6.5 consumer)
+// ════════════════════════════════════════════════════════════════════════
+// fire #9 isolated the d768·12L wall as STRUCTURAL per-op H2D round-trip +
+// CPU glue (PHASE4D7_FIRE9_ANALYSIS.md §3); RFC 056 Phase 1 (`1f077af1`)
+// landed the substrate residence API; this is the consumer-side §6.5 work.
+//
+// ── The byte-safe resident-chaining mechanism (substrate-as-verified) ──
+// RFC 056 §6.1 H2D-skip (runtime_cuda.c:182-195): a forge `_gpu` op whose
+// input farr is loc∈{DEVICE,MIRRORED} && !dirty_host && a live device slot
+// of matching len SKIPs the cudaMemcpy H2D — the device bytes already
+// equal what the copy would write (authoritative path produced them, host
+// untouched since). Provably byte-eq (F-RFC056-BYTEEQ-PRESERVE max|Δ|=0).
+//
+// A forge op output under the DEFAULT disposition (FORGE_OUT_HOST_NOW)
+// leaves its fresh farr at loc=FARR_MIRRORED, dirty_host=0, with the
+// device slot live (runtime_cuda.c:620-624). Therefore: if that EXACT
+// farr-id is passed straight to the NEXT forge op WITHOUT any host-side
+// write to its buffer in between, the next op's _h2d hits the §6.1 skip —
+// the (dominant, activation-slab-sized) re-upload is elided. This needs
+// NO substrate edit and NO FORGE_OUT_DEVICE_KEEP.
+//
+// HONEST substrate constraint (g3): FORGE_OUT_DEVICE_KEEP additionally
+// skips the D2H but `_d2h_out` then sets dirty_host=1 (runtime_cuda.c:608)
+// — which DEFEATS the §6.1 skip on the very next op (it requires
+// !dirty_host) → that op would re-upload the STALE host buffer (wrong
+// bytes, not just slow). So DEVICE_KEEP by-id chaining is NOT byte-safe
+// with the verified-oracle substrate as-is; the byte-safe lever is
+// id-chaining under the DEFAULT disposition (re-upload elided, the
+// smaller output-sized D2H retained). This is the precise scope verdict.
+//
+// What this rewire lands (byte-safe, no substrate touch):
+//   • SwiGLU fwd: silu_gpu → mul_gpu chained by farr-id (silu output
+//     stays resident for the Hadamard; its re-upload elided).
+//   • RMSNorm fwd: rmsnorm_rows_gpu → mul_gpu(γ) — the normalized-rows
+//     intermediate xn is consumed by-id with no host write between, so
+//     its re-upload is already §6.1-elided; the γ-broadcast and the
+//     stash reads do not dirty it.
+// d=32·3L is unaffected (d ≤ FLAME_GPU_RESIDENT_THRESHOLD → the _cpu
+// path; this whole TU region is #ifndef FLAME_BLOCK_PRIM_STANDALONE +
+// the GPU body is dim-gated) → F-RFC056-D32-BYTEEQ byte-eq by
+// construction. No-CUDA Mac: every forge `_gpu` is the CPU oracle and
+// the disposition register is inert (runtime.c) → identical numerics.
+
 // ── Phase 4-D-8: redundant pre-op H2D elision (byte-eq-exact) ────────────
 // Every scratch farr below is built host-side and then immediately passed
 // to a forge `*_gpu` op. The forge substrate (self/cuda/runtime_cuda.c)
@@ -852,11 +896,34 @@ static void flame_block_generic_fwd_primitive_gpu(
         }
         hexa_farr_to_device(a_v);
         hexa_farr_to_device(b_v);
+        // RFC 056 §6.4/§6.5 resident chain: keep silu's output on the
+        // device (FORGE_OUT_DEVICE_KEEP → no D2H), then feed the Hadamard
+        // mul a dev_view of it. The view path in runtime_cuda.c:173-177
+        // SKIPs H2D unconditionally for a view (s->view_base>=0) — it does
+        // NOT consult dirty_host, so this is byte-safe even though
+        // _d2h_out set dirty_host=1 on the deferred silu output (the
+        // documented substrate constraint that defeats raw by-id
+        // DEVICE_KEEP chaining; the view path is the byte-safe escape:
+        // device bytes ARE silu's authoritative output, zero host
+        // involvement). Restore HOST_NOW before mul so its result D2Hs
+        // for the host copy into Bc[oSwS] (consumed by the cuBLAS WD
+        // proj, a host reader). Removes one full silu→mul round-trip
+        // (D2H of sa + re-H2D of sa) — fire #9 structural bound.
+        int sw_prev_disp = (int)hexa_farr_set_out_disposition(
+            hexa_int(HEXA_FORGE_OUT_DEVICE_KEEP)).i;
         HexaVal sa_v = hexa_farr_silu_gpu(hexa_int(a_id), hexa_int((int64_t)T * h));
         int sa_id = (int)sa_v.i;
+        (void)hexa_farr_set_out_disposition(hexa_int(sw_prev_disp));
         double* Bc = _hx_farr_table[Bc_id].buf;
         if (sa_id >= 0) {
-            HexaVal s_v = hexa_farr_mul_gpu(hexa_int(sa_id), hexa_int(b_id),
+            // dev_view over the device-resident silu output (no host copy,
+            // no re-upload). No-CUDA: dev_view returns a real CPU copy of
+            // sa (logically byte-eq) — identical numerics on Mac.
+            HexaVal sav_v = hexa_farr_dev_view(hexa_int(sa_id), hexa_int(0),
+                                               hexa_int((int64_t)T * h));
+            int sav_id = (int)sav_v.i;
+            int mul_lhs = (sav_id >= 0) ? sav_id : sa_id;
+            HexaVal s_v = hexa_farr_mul_gpu(hexa_int(mul_lhs), hexa_int(b_id),
                                             hexa_int((int64_t)T * h));
             int s_id = (int)s_v.i;
             Bc = _hx_farr_table[Bc_id].buf;
@@ -869,6 +936,7 @@ static void flame_block_generic_fwd_primitive_gpu(
                 double* bv = _hx_farr_table[b_id].buf;
                 for (int p = 0; p < T * h; p++) Bc[oSwS + p] = sa[p] * bv[p];
             }
+            if (sav_id >= 0) hexa_farr_free(sav_v);
             hexa_farr_free(sa_v);
         } else {  // silu dispatch failed — CPU silu⊙
             for (int p = 0; p < T * h; p++) {
