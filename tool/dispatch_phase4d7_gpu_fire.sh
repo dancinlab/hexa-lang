@@ -93,8 +93,8 @@ echo ""
 # ── 1) Search cheapest A100/H100/H200 ─────────────────────────────────
 echo "[1/9] Searching A100/H100/H200 offers (≤\$10/hr, cuda≥12.4, disk≥30) ..."
 OFFER_JSON=$($VASTAI search offers \
-    'gpu_name in [A100,A100_SXM4,A100_PCIE,A100X,H100_SXM,H100_PCIE,H100_NVL,H100,H200] num_gpus=1 rentable=true dph_total<10.0 cuda_max_good>=12.4 disk_space>30 reliability>0.97 inet_down>200' \
-    -o dph_total --raw 2>&1)
+    'gpu_name in [A100,A100_SXM4,A100_PCIE,A100X,H100_SXM,H100_PCIE,H100_NVL,H100,H200] num_gpus=1 rentable=true dph_total<10.0 cuda_max_good>=12.4 disk_space>30 reliability>0.985 inet_down>200' \
+    -o 'reliability-' --raw 2>&1)
 OFFER_PARSED=$(echo "$OFFER_JSON" | python3 -c "
 import json,sys
 try: d=json.load(sys.stdin)
@@ -243,42 +243,32 @@ $SSH_CMD "cd $REMOTE_WORK && \
     echo '=== PRE-FIRE nvidia-smi ===' ; \
     nvidia-smi --query-gpu=name,memory.used,utilization.gpu --format=csv,noheader > nvidia_smi_pre.csv ; \
     cat nvidia_smi_pre.csv ; \
-    echo '=== FIRE: launch trainer + nvidia-smi monitor (parallel) ===' ; \
+    echo '=== FIRE: nohup-DETACHED launch (SSH-drop immune — FIRE7 §1 method) ===' ; \
     if [ \"\$BUILD_LINK_RC\" = '0' ]; then \
-        (while [ -f trainer.pid ] || [ ! -f trainer.done ]; do \
-            nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader >> nvidia_smi_during.csv ; \
-            sleep 1 ; \
-        done) & \
-        SMI_PID=\$! ; \
-        START_NS=\$(date +%s%N) ; \
-        echo \"trainer_start_utc=\$(date -u +%FT%TZ)\" > trainer_meta.txt ; \
-        timeout ${WALL_BUDGET_SEC}s ./trainer > trainer.out 2> trainer.err & \
-        TRAINER_PID=\$! ; \
-        echo \$TRAINER_PID > trainer.pid ; \
-        wait \$TRAINER_PID ; \
-        TRAINER_RC=\$? ; \
-        END_NS=\$(date +%s%N) ; \
-        WALL_NS=\$((END_NS - START_NS)) ; \
-        WALL_S=\$(echo \"scale=3; \$WALL_NS / 1000000000\" | bc) ; \
-        echo \"trainer_end_utc=\$(date -u +%FT%TZ)\" >> trainer_meta.txt ; \
-        echo \"trainer_rc=\$TRAINER_RC\" >> trainer_meta.txt ; \
-        echo \"wall_seconds=\$WALL_S\" >> trainer_meta.txt ; \
-        rm -f trainer.pid ; \
-        touch trainer.done ; \
-        wait \$SMI_PID 2>/dev/null || true ; \
-        echo \"=== TRAINER DONE: rc=\$TRAINER_RC wall=\${WALL_S}s ===\" ; \
-        echo '=== trainer.out HEAD ===' ; head -30 trainer.out ; \
-        echo '=== trainer.out TAIL ===' ; tail -30 trainer.out ; \
-        if [ -s trainer.err ]; then echo '=== trainer.err ===' ; tail -20 trainer.err ; fi ; \
+        rm -f trainer.done trainer.out trainer.err trainer_meta.txt nvidia_smi_during.csv ; \
+        nohup bash -c '(while [ ! -f trainer.done ]; do nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader >> nvidia_smi_during.csv; sleep 2; done) & SMI=\$!; S=\$(date +%s); timeout ${WALL_BUDGET_SEC} ./trainer > trainer.out 2> trainer.err; R=\$?; E=\$(date +%s); echo trainer_rc=\$R > trainer_meta.txt; echo wall_seconds=\$((E-S)) >> trainer_meta.txt; touch trainer.done; kill \$SMI 2>/dev/null' >/dev/null 2>&1 & disown ; \
+        sleep 3 ; \
+        echo \"trainer launched detached: pid=\$(pgrep -f '[t]imeout ${WALL_BUDGET_SEC}' | head -1)\" ; \
     else \
         echo 'BUILD FAILED — skipping fire' ; \
-        echo 'wall_seconds=0' > trainer_meta.txt ; \
-        echo 'trainer_rc=-1' >> trainer_meta.txt ; \
+        echo 'trainer_rc=-1' > trainer_meta.txt ; \
+        echo 'wall_seconds=0' >> trainer_meta.txt ; \
+        touch trainer.done ; \
     fi ; \
-    echo '=== POST-FIRE nvidia-smi ===' ; \
-    nvidia-smi --query-gpu=name,memory.used,utilization.gpu --format=csv,noheader > nvidia_smi_post.csv ; \
-    cat nvidia_smi_post.csv ; \
     echo \"=== SUMMARY === BUILD_CUDA_RC=\$BUILD_CUDA_RC BUILD_TRAINER_RC=\$BUILD_TRAINER_RC BUILD_LINK_RC=\$BUILD_LINK_RC\"" 2>&1 | tee dispatch.log
+
+# ── 6.5) POLL until trainer.done (short SSH calls — each survives SSH drop) ──
+echo "[6.5/9] Poll detached trainer until done (max $((WALL_BUDGET_SEC + 180))s) ..."
+POLL_DEADLINE=$(( $(date +%s) + WALL_BUDGET_SEC + 180 ))
+POLL_SSH="ssh -i $VAST_SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -p $SSH_PORT root@$SSH_HOST"
+while [ "$(date +%s)" -lt "$POLL_DEADLINE" ]; do
+    DONE=$($POLL_SSH "cd $REMOTE_WORK && cat trainer.done 2>/dev/null && echo Y || ( [ -f trainer.done ] && echo Y )" 2>/dev/null | tail -1)
+    if [ "$DONE" = "Y" ]; then echo "  trainer.done detected"; break; fi
+    STEPLINE=$($POLL_SSH "cd $REMOTE_WORK && tail -1 trainer.out 2>/dev/null" 2>/dev/null | tail -1)
+    echo "  ... polling ($(( (POLL_DEADLINE - $(date +%s)) ))s left) last: ${STEPLINE:-<no output yet>}"
+    sleep 30
+done
+$POLL_SSH "cd $REMOTE_WORK && nvidia-smi --query-gpu=name,memory.used,utilization.gpu --format=csv,noheader > nvidia_smi_post.csv; echo '=== meta ==='; cat trainer_meta.txt 2>/dev/null; echo '=== out HEAD ==='; head -30 trainer.out 2>/dev/null; echo '=== out TAIL ==='; tail -20 trainer.out 2>/dev/null; echo '=== err TAIL ==='; tail -15 trainer.err 2>/dev/null" 2>&1 | tee -a dispatch.log
 
 # ── 7) Pull artifacts with retry ──────────────────────────────────────
 echo "[7/9] Pull artifacts ..."
