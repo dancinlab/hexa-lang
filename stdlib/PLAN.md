@@ -490,3 +490,26 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   = 별도 집중 세션. **깊은-context 추측성 runtime.c 패치 금지** —
   공유 런타임은 검증된 19 + hexa-matter 26 게이트 전부가 의존하므로
   회귀 위험. 국소화 결과만 인계, 포팅은 언블록 클래스로 계속.
+- 2026-05-18 — **정정·돌파: 진짜 원인 = 갭 #2(not #4), 상류 수정·
+  registry-class 언블록 (측정, g3)**. 최소 재현으로 갭#4 가설 **반증**:
+  9000 균일 json_parse 무결함; registry 행 7065 는 **단독 파싱서도
+  실패**(누적 arena 아님 = 결정론적 content 버그). 근원: 7065 행에
+  `"log10_bf": -Infinity`(CPython json.dumps 가 비유한 float 을
+  Infinity/-Infinity/NaN 으로 출력·json.loads 는 수용). hexa
+  `_jp_parse_number` 가 `-` 만 소비→`Infinity` 잔류→`_jp_parse_object`
+  가 `I` 보고 조기 break→이후 **전 키 유실**(top-level `schema` 포함
+  =가짜 `?`). ⟹ **갭 #2 였음, 갭 #4 아님 — loop-arena 천장 가설
+  전면 철회**. 상류 수정: `_jp_parse_value` 에 3 비유한 리터럴 처리
+  (number 분기 앞), valid-JSON 경로 불변=회귀 거의 0. macOS canonical
+  runtime `2679353b`, ubu-1 in-place 동형 패치. 검증: 행 7065 단독
+  has_schema=true; registry_consistency_audit **byte-parity PARITY-OK
+  (covered=7122)** → 백아웃 복원(`f8a30e9`), 포트 버그 1건 동시수정
+  (`sort_str` 가 `let mut u=a` 별칭 → 인자배열 in-place 정렬이 평행
+  배열 unc_cnt desync; fresh-array 복사로 수정 `281be11`). **회귀
+  스윕 0**: nanobot_l6_l7·ribozyme_a1_2·virocapsid_c5·atlas_atom_
+  tier·tape_lattice_cohort 5종 json_parse 포트 전부 PARITY-OK 유지.
+  **T3 = 20/127**. **registry-class / 대량-N json_parse 게이트군
+  BLOCKED 해제** — 직전 "갭#4 측정천장·별도세션 필요" 결론은 오진,
+  철회. 컴파일-포트 규율 #4 추가: 평행배열 있는 함수-인자 배열을
+  in-place 정렬/변형 금지(hexa 배열=참조형). 잔여 ~107, registry-
+  class 포함 전부 파이프라인 ready (갭#2 제거로 진짜 천장 없음).
