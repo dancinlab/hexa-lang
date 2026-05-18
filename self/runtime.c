@@ -22,8 +22,8 @@
 #include <regex.h>      // G3-REGEX 2026-05-06: POSIX ERE regcomp/regexec
 #include <sys/mman.h>   // RFC 025 (2026-05-12): mmap-backed safetensors load
 extern char **environ; // posix_spawnp inherits parent env explicitly
+#include <execinfo.h>  // backtrace()/backtrace_symbols_fd() — glibc + macOS; must stay outside __APPLE__ or Linux clang errors on implicit decls
 #if defined(__APPLE__)
-#include <execinfo.h>
 #include <mach/mach.h>
 #include <mach/task.h>
 #include <mach/task_info.h>
@@ -6876,6 +6876,12 @@ HexaVal hexa_char_code(HexaVal s, HexaVal idx) {
 HexaVal hexa_from_char_code(HexaVal n);
 static HexaVal chr;
 
+// chr-byte (RFC chr-byte-vs-codepoint-asymmetry, 2026-05-17):
+// byte-level length-1 string (raw N & 0xFF) — mirrors ord(substring(s,i,1))
+// byte read semantics. The `chr` builtin lowers to this; `from_char_code`
+// retains its codepoint→UTF-8 path for JSON \uXXXX decoding and similar.
+HexaVal hexa_chr_byte(HexaVal n);
+
 // RFC 030 (2026-05-12): bytes_to_str_raw([int]) — see implementation
 // below near hexa_from_char_code. Declared here so it's reachable as
 // a bare C identifier from `hexa_call1(bytes_to_str_raw, arr)` emitted
@@ -8113,6 +8119,31 @@ HexaVal hexa_from_char_code(HexaVal n) {
     return hexa_str_own(out);
 }
 
+// chr-byte (RFC chr-byte-vs-codepoint-asymmetry, 2026-05-17) —
+// byte-level `chr(N)`: length-1 string with the single raw byte `N & 0xFF`.
+//
+// Why: `ord(substring(s, i, 1))` returns the byte at position i (byte-level
+// read), so the inverse `chr(N)` must also be byte-level. The earlier
+// `chr` lowering went through `hexa_from_char_code` which encodes N as a
+// Unicode codepoint via UTF-8 — `chr(240)` produced `\xC3\xB0` (2 bytes,
+// U+00F0) instead of the raw byte `\xF0`. That asymmetry silently broke
+// any code synthesizing binary bytes via `chr(N)` (URL decoding, PNG
+// header construction, emoji prefix search, etc.).
+//
+// `hexa_from_char_code` keeps its codepoint→UTF-8 behaviour for the JSON
+// \uXXXX decoder and other true-codepoint callers; user-facing `chr`
+// now lowers here instead.
+//
+// NUL-safe: hexa_strbuf_alloc prepends a length header so the length-1
+// string with byte 0x00 is well-formed under HX_STRLEN.
+HexaVal hexa_chr_byte(HexaVal n) {
+    int64_t code = HX_IS_INT(n) ? HX_INT(n) : (int64_t)_hexa_f(n);
+    char* buf = hexa_strbuf_alloc((size_t)1);
+    if (!buf) return hexa_str("");
+    buf[0] = (char)(code & 0xFF);
+    return (HexaVal){.tag=TAG_STR, .s=buf};
+}
+
 // RFC 030 — `bytes_to_str_raw([int]) -> string`
 //
 // Wrap a hexa int array (each ∈ 0..255) as a hexa string whose underlying
@@ -8198,13 +8229,40 @@ HexaVal hexa_bytes_to_str_raw(HexaVal arr) {
 //  (callers should pass non-negative indices into 0..len).
 // ═══════════════════════════════════════════════════════════
 
+/* anima RFC 040 (2026-05-16): farr GPU/CUDA backend Phase A.
+ *   FarrLoc residence descriptor + dirty flags + (optional) device pointer.
+ *   The default build (no `-DHEXA_CUDA`) leaves loc=FARR_HOST,d_buf=NULL,
+ *   dirty_host=dirty_dev=0 for every farr handle — byte-identical to the
+ *   pre-RFC-040 CPU path. With `-DHEXA_CUDA` the same fields gain a real
+ *   device-pointer slot, wired (Phase 4-D-5-1, 2026-05-17) to the cuBLAS
+ *   Dgemm + cudaMalloc/cudaMemcpy bodies in self/cuda/runtime_cuda.c. */
+typedef enum {
+    FARR_HOST     = 0,  /* host memory only (default — RFC 025 behaviour) */
+    FARR_DEVICE   = 1,  /* device memory only (host buf may be NULL) */
+    FARR_MIRRORED = 2   /* both host and device buffers valid + in-sync */
+} FarrLoc;
+
 typedef struct {
-    double* buf;
-    int64_t len;
+    double*  buf;        /* host pointer — RFC 025 (NULL if device-only) */
+    int64_t  len;        /* element count (shared by host and device buf) */
+    void*    d_buf;      /* CUDA device pointer — NULL if host-only (RFC 040) */
+    int      loc;        /* FarrLoc — current residence (RFC 040) */
+    int      pinned;     /* 1 if farr_pin'd (do not auto-evict) (RFC 040) */
+    int      dirty_host; /* host buf stale vs device → needs D2H (RFC 040) */
+    int      dirty_dev;  /* device buf stale vs host → needs H2D (RFC 040) */
 } HexaFarrEntry;
 
+/* RFC 040 Phase D: under -DHEXA_CUDA the farr table + count must be
+ * visible to the runtime_cuda.c TU (cuBLAS Dgemm reads host buf/len for
+ * H2D/D2H). Non-static export under HEXA_CUDA only — the no-CUDA build
+ * keeps them `static` (byte-identical, zero ABI surface change). */
+#ifdef HEXA_CUDA
+HexaFarrEntry*        _hx_farr_table     = NULL;
+int64_t               _hx_farr_count     = 0;
+#else
 static HexaFarrEntry* _hx_farr_table     = NULL;
 static int64_t        _hx_farr_count     = 0;
+#endif
 static int64_t        _hx_farr_capacity  = 0;
 static int64_t*       _hx_farr_freelist  = NULL;
 static int64_t        _hx_farr_freelist_n = 0;
@@ -8247,6 +8305,13 @@ HexaVal hexa_farr_zeros(HexaVal n_v) {
     }
     _hx_farr_table[id].buf = buf;
     _hx_farr_table[id].len = n;
+    /* RFC 040 Phase A: initialize residence descriptor to HOST default —
+     * byte-identical to pre-040 behaviour for every existing farr. */
+    _hx_farr_table[id].d_buf      = NULL;
+    _hx_farr_table[id].loc        = FARR_HOST;
+    _hx_farr_table[id].pinned     = 0;
+    _hx_farr_table[id].dirty_host = 0;
+    _hx_farr_table[id].dirty_dev  = 0;
     return hexa_int(id);
 }
 
@@ -8285,6 +8350,32 @@ HexaVal hexa_farr_free(HexaVal h_v) {
     if (id < 0 || id >= _hx_farr_count) return hexa_void();
     HexaFarrEntry* e = &_hx_farr_table[id];
     if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
+    /* RFC 040 Phase A (2026-05-17 Phase 4-D-5-1 wired): also free device
+     * buffer if present, reset residence. In the no-CUDA build d_buf is
+     * always NULL. Under -DHEXA_CUDA we delegate to
+     * `_hx_cuda_farr_device_free` in self/cuda/runtime_cuda.c — it calls
+     * `cudaFree` on the mirror-table device pointer + zeros the slot, and
+     * also resets the HexaFarrEntry fields (d_buf/loc/dirty_*).
+     * Resetting the descriptor on the no-CUDA path keeps freelist slots
+     * hygienic when reused by a later `hexa_farr_zeros`. */
+#ifdef HEXA_CUDA
+    /* Forward decl — body in self/cuda/runtime_cuda.c (linked under
+     * -DHEXA_CUDA only). Matches the Phase A decl at line ~10741. */
+    extern int _hx_cuda_farr_device_free(int64_t farr_id);
+    if (e->d_buf) {
+        /* RFC 040 Phase A WIRED (Phase 4-D-5-1): real cudaFree via cuBLAS
+         * runtime mirror table. Returns 1 ok / -1 err. Ignore rc — best
+         * effort, slot already invalidated below. */
+        (void)_hx_cuda_farr_device_free(id);
+        e->d_buf = NULL;
+    }
+#else
+    e->d_buf = NULL;
+#endif
+    e->loc        = FARR_HOST;
+    e->pinned     = 0;
+    e->dirty_host = 0;
+    e->dirty_dev  = 0;
     // Push id onto freelist for reuse.
     if (_hx_farr_freelist_n >= _hx_farr_freelist_cap) {
         int64_t new_cap = _hx_farr_freelist_cap < 16 ? 16 : _hx_farr_freelist_cap * 2;
@@ -9847,6 +9938,27 @@ HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
     const double* A = ae->buf;
     const double* B = be->buf;
     double* C = ce->buf;
+#ifdef HEXA_CUDA
+    /* gap(d) generic-path forge routing: the GENERIC ag_tape path's
+     * ag_linear -> nn_linear_fwd -> farr_matmul lands here. FIRE1/FIRE2
+     * (2026-05-18, A100) measured the d768·12L generic trainer
+     * CPU-bound (0 steps/900s, GPU ~0%) because this builtin had no
+     * GPU dispatch — only RoPE was forge-wired. Dim-gate large GEMMs
+     * to the verified cuBLAS path (_hx_cuda_farr_matmul_gpu, the same
+     * dispatch the hand-fused Phase 4-D-9 trainer used to clear
+     * F-RFC046-WALL). Threshold mirrors flame_phase4b3 (8192): the
+     * 19 ag_tape byte-eq oracles are tiny (M*K, K*N << 8192) so they
+     * stay on the CPU ikj path and remain bit-exact (gap(b) intact);
+     * only d768-class shapes (M*K=786432, K*N up to 2.36M) route to
+     * cuBLAS. Hexa source unchanged (g_flame_api_fixed). On any GPU
+     * error -> fall through to the CPU loop (safe). HEXA_CUDA-only:
+     * the no-CUDA Mac/oracle build is byte-identical (inert). */
+    if ((M * K) > 8192 || (K * N) > 8192) {
+        int grc = _hx_cuda_farr_matmul_gpu(a_id, M, K, b_id, N, c_id);
+        if (grc == 0) return c_handle;
+        /* grc != 0: GPU path failed — fall through to CPU ikj. */
+    }
+#endif
     // ikj loop — streaming B + C, A_ik hoisted out of j.
     for (int64_t i = 0; i < M; i++) {
         const double* Ai = A + i * K;
@@ -10660,6 +10772,1271 @@ HexaVal hexa_phi_spatial(HexaVal st_v, HexaVal nc_v, HexaVal dim_v,
     double sp = total - min_part;
     if (sp < 0.0) sp = 0.0;
     return hexa_float(sp / denom);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// anima RFC 040 (2026-05-16): farr GPU/CUDA backend — Phase A scaffolding.
+//
+// Scaffolding only. The HexaFarrEntry residence descriptor (FarrLoc /
+// d_buf / dirty_host / dirty_dev) lives in the table struct (top of
+// the farr section); the device-management + GPU compute builtins are
+// declared in runtime.h. THIS BLOCK provides their *bodies*.
+//
+// The default build has NO `-DHEXA_CUDA` defined. Every body below
+// then takes the CPU-fallback branch:
+//   • cuda_available() → 0
+//   • cuda_device_count() → 0
+//   • farr_to_device / farr_to_host / farr_pin → no-op success
+//   • farr_device_free → no-op success
+//   • farr_matmul_gpu → routes to RFC 032 hexa_farr_matmul (the CPU
+//     oracle). This makes the GPU dispatcher safe-to-call on Mac —
+//     callers get the bit-exact CPU result with the same -1-on-error
+//     contract, the equivalence harness PASSES, and nothing changes
+//     for the byte-identical no-CUDA build.
+//
+// With `-DHEXA_CUDA` defined, the same bodies route to the real cuBLAS
+// Dgemm + cudaMalloc/cudaMemcpy path in self/cuda/runtime_cuda.c
+// (LANDED 2026-05-17, Phase 4-D-5-1 wiring scaffold). Phase A surface
+// wired:
+//   • hexa_cuda_available     → _hx_cuda_runtime_available
+//   • hexa_cuda_device_count  → _hx_cuda_device_count_impl
+//   • hexa_farr_to_device     → _hx_cuda_farr_to_device   (H2D)
+//   • hexa_farr_to_host       → _hx_cuda_farr_to_host     (D2H)
+//   • hexa_farr_device_free   → _hx_cuda_farr_device_free (cudaFree)
+//   • hexa_farr_matmul_gpu    → _hx_cuda_farr_matmul_gpu  (cuBLAS Dgemm)
+//   • hexa_farr_free (line 8307) → _hx_cuda_farr_device_free (cudaFree-on-free)
+// Phase B / B2 GPU bodies (softmax_rows, rmsnorm_rows, add, scale,
+// matmul_t, outer, mul, silu, silu_grad, rmsnorm_bwd_rows, adamw_step)
+// remain TODO[cuda] stubs returning -1 — honest no-fake-PASS per
+// AGENTS.tape g3 / RFC 040 §"Honest caveats". Their CUDA bodies
+// (`__global__` kernels + warp-shuffle reductions) are the next-cycle
+// deliverable; see stdlib/flame/PHASE4D5_1_WIRING_NOTES.md.
+//
+// Phase A falsifier surface (tmp_rfc040_smoke.hexa):
+//   F-RFC040-AVAIL              cuda_available()==0 on Mac (graceful)
+//   F-RFC040-STRUCT-NOREGRESS   existing CPU farr_matmul unchanged
+//   F-RFC040-DISPATCH-FALLBACK  farr_matmul_gpu == farr_matmul (CPU)
+//   F-RFC040-DETERMINISM        re-eval byte-identical
+//   F-RFC040-CUDA-BLOCKER-DOC   honest carve-out (CUDA kernels = next cycle)
+// ═══════════════════════════════════════════════════════════════════
+
+#ifdef HEXA_CUDA
+/* Forward decls for the GPU compilation unit (TODO[cuda] — bodies live
+ * in a separate .cu file linked in by the CUDA build). NOT defined in
+ * the no-CUDA build, so the `#ifndef HEXA_CUDA` fallbacks below are
+ * the entire compiled surface today. */
+extern int  _hx_cuda_runtime_available(void);
+extern int  _hx_cuda_device_count_impl(void);
+extern int  _hx_cuda_farr_to_device(int64_t farr_id);
+extern int  _hx_cuda_farr_to_host(int64_t farr_id);
+extern int  _hx_cuda_farr_device_free(int64_t farr_id);
+extern int  _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
+                                     int64_t b_id, int64_t N,
+                                     int64_t c_id);
+/* RFC 056 Phase 1 — residence contract + sub-view API. */
+extern int  _hx_cuda_set_out_disposition(int d);
+extern int  _hx_cuda_farr_dev_view(int64_t base_id, int64_t offset,
+                                    int64_t len, int64_t view_id);
+extern int  _hx_cuda_farr_pin_device(int64_t farr_id);
+extern int  _hx_cuda_farr_unpin_device(int64_t farr_id);
+#endif
+
+/* RFC 056 §6.4 disposition constants — exposed to flame's A2 primitive
+ * (host C, no flame public API change — g_flame_api_fixed). */
+#define HEXA_FORGE_OUT_HOST_NOW    0
+#define HEXA_FORGE_OUT_DEVICE_KEEP 1
+
+// cuda_available() -> int. 1 if a CUDA device + toolkit are detected at
+// runtime, else 0. Coherent with cuda_device_count(): one implies the
+// other > 0.
+HexaVal hexa_cuda_available(void) {
+#ifdef HEXA_CUDA
+    /* RFC 040 Phase A real impl (2026-05-16): probe via runtime_cuda.c TU. */
+    return hexa_int(_hx_cuda_runtime_available());
+#else
+    return hexa_int(0);
+#endif
+}
+
+// cuda_device_count() -> int. Number of visible GPUs (0 if none / no
+// CUDA toolkit). Returns 0 on the no-CUDA build always.
+HexaVal hexa_cuda_device_count(void) {
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_device_count_impl());
+#else
+    return hexa_int(0);
+#endif
+}
+
+// farr_to_device(id) -> int. Ensure d_buf is resident + current.
+// CPU-fallback path: every farr is loc=FARR_HOST already; the call is a
+// no-op success (return 1). This keeps caller code valid on Mac — a
+// d_train5 hot-loop `let _ = farr_to_device(W)` becomes inert when no
+// GPU is available, instead of failing the call.
+// Returns: 1 ok / 0 invalid handle / -1 GPU op failed.
+HexaVal hexa_farr_to_device(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(0);
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    if (!e->buf && e->loc == FARR_HOST) return hexa_int(0);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_to_device(id));
+#else
+    /* No-CUDA path: farr already host-resident; nothing to transfer.
+     * The dispatcher contract: caller continues to use the same
+     * handle, math runs on CPU. */
+    return hexa_int(1);
+#endif
+}
+
+// farr_to_host(id) -> int. Ensure host buf is current (D2H if device-
+// resident and dirty). CPU-fallback path: no-op success.
+HexaVal hexa_farr_to_host(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(0);
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    if (!e->buf && e->loc == FARR_HOST) return hexa_int(0);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_to_host(id));
+#else
+    return hexa_int(1);
+#endif
+}
+
+// farr_pin(id) -> int. Mark farr resident-on-device, do not auto-evict
+// (weights stay across all steps). CPU-fallback: records pinned flag
+// only (no actual residence change, since no device exists).
+HexaVal hexa_farr_pin(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(0);
+    HexaFarrEntry* e = &_hx_farr_table[id];
+    e->pinned = 1;
+    return hexa_int(1);
+}
+
+// ── RFC 056 Phase 1 — device residence contract + sub-view API ──────
+//
+// All four are no-op-safe on the no-CUDA Mac build (return success / a
+// CPU-equivalent handle) so flame's A2 primitive stays callable without
+// a GPU — exactly the RFC 040 dispatcher contract + §8.3 backward-safe.
+
+// farr_set_out_disposition(d) -> int (previous disposition).
+//   d = 1 (FORGE_OUT_DEVICE_KEEP): the *next* forge `_gpu` op defers its
+//       D2H — output stays device-resident for the following GPU op.
+//   d = 0 (FORGE_OUT_HOST_NOW, DEFAULT): D2H now (== pre-RFC-056).
+// No-CUDA: inert (returns 0); every op is CPU so disposition is moot.
+HexaVal hexa_farr_set_out_disposition(HexaVal d_v) {
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_set_out_disposition((int)hexa_as_num(d_v)));
+#else
+    (void)d_v;
+    return hexa_int(0);
+#endif
+}
+
+// farr_dev_view(base, offset, len) -> int view_farr_id (-1 on error).
+// RFC 056 §6.2 non-owning device sub-view: view.d_buf = base.d_buf +
+// offset*8, shares base residence. The caller must device-pin `base`
+// first. A fresh host handle is allocated to carry the view id (its
+// host buf is unused — device bytes are the base's). Out-of-range →
+// the view handle is freed and -1 returned (no UB; F-RFC056-VIEW-SAFETY).
+// No-CUDA fallback: returns a real CPU farr that is a *copy* of the
+// slice (byte-eq with the resident path's logical contents — the only
+// correct answer without a device), so flame code stays valid on Mac.
+HexaVal hexa_farr_dev_view(HexaVal base_v, HexaVal off_v, HexaVal len_v) {
+    int64_t base_id = hexa_as_num(base_v);
+    int64_t offset  = hexa_as_num(off_v);
+    int64_t len     = hexa_as_num(len_v);
+    if (base_id < 0 || base_id >= _hx_farr_count) return hexa_int(-1);
+    if (offset < 0 || len <= 0) return hexa_int(-1);
+    HexaFarrEntry* be = &_hx_farr_table[base_id];
+    if (offset + len > be->len) return hexa_int(-1);
+    HexaVal vh = hexa_farr_zeros(hexa_int(len));
+    int64_t view_id = hexa_as_num(vh);
+    if (view_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    if (_hx_cuda_farr_dev_view(base_id, offset, len, view_id) != 0) {
+        (void)hexa_farr_free(hexa_int(view_id));
+        return hexa_int(-1);
+    }
+    return hexa_int(view_id);
+#else
+    /* No-CUDA: materialise the slice as a real CPU farr (copy). This is
+     * byte-eq with what the resident device view logically holds — the
+     * only correct CPU answer; keeps flame valid on Mac. RE-FETCH be
+     * after hexa_farr_zeros (table may have realloc'd). */
+    be = &_hx_farr_table[base_id];
+    HexaFarrEntry* ve = &_hx_farr_table[view_id];
+    if (be->buf && ve->buf) {
+        for (int64_t i = 0; i < len; i++) ve->buf[i] = be->buf[offset + i];
+    }
+    return hexa_int(view_id);
+#endif
+}
+
+// farr_pin_device(id) -> int (1 ok / -1 err). RFC 056 §6.3: force the
+// farr device-resident (H2D once) + mark non-evictable. No-CUDA: just
+// records the pinned flag (== hexa_farr_pin; no device exists).
+HexaVal hexa_farr_pin_device(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_pin_device(id));
+#else
+    _hx_farr_table[id].pinned = 1;
+    return hexa_int(1);
+#endif
+}
+
+// farr_unpin_device(id) -> int. RFC 056 §6.3: clear the pin; D2H if the
+// device copy is dirty. No-CUDA: clears the flag (no device).
+HexaVal hexa_farr_unpin_device(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_unpin_device(id));
+#else
+    _hx_farr_table[id].pinned = 0;
+    return hexa_int(1);
+#endif
+}
+
+// farr_device_free(id) -> int. Free d_buf, keep host buf. CPU-fallback:
+// no-op success (d_buf is always NULL on no-CUDA).
+HexaVal hexa_farr_device_free(HexaVal h_v) {
+    int64_t id = hexa_as_num(h_v);
+    if (id < 0 || id >= _hx_farr_count) return hexa_int(0);
+    HexaFarrEntry* e = &_hx_farr_table[id];
+#ifdef HEXA_CUDA
+    (void)e;
+    return hexa_int(_hx_cuda_farr_device_free(id));
+#else
+    (void)e;
+    return hexa_int(1);
+#endif
+}
+
+// farr_matmul_gpu(A, Ar, Ac, B, Bc) -> int. ABI-identical to the RFC 032
+// CPU farr_matmul: same shape contract (A is M×K, B is K×N, output is
+// M×N), same -1-on-error return, same packed-double representation.
+// On the no-CUDA build: routes directly to hexa_farr_matmul — the CPU
+// oracle is the only correct numeric answer, and the dispatcher remains
+// safely callable. On the HEXA_CUDA build: enforces device-residency
+// and runs cuBLAS Dgemm via _hx_cuda_farr_matmul_gpu in
+// self/cuda/runtime_cuda.c (LANDED — Phase 4-D-5-1 wire-up; fp64 strict
+// Dgemm, no Tensor Core flip; row-major mapped via C^T = B^T · A^T).
+HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                             HexaVal b_v, HexaVal bc_v) {
+#ifdef HEXA_CUDA
+    /* RFC 040 Phase A real impl (2026-05-16): cuBLAS Dgemm path via
+     * runtime_cuda.c TU. Shape: A is M×K row-major, B is K×N row-major,
+     * C is M×N row-major.
+     *   M = ar (rows of A); K = ac (cols of A = rows of B); N = bc (cols of B).
+     * Allocate a fresh host C farr (len M·N); the runtime_cuda.c TU
+     * uploads A,B H2D (idempotent), runs Dgemm device-side, copies C
+     * D2H so the host caller sees the result.
+     * Returns C farr_id (≥0) on success, -1 on error. */
+    int64_t M = hexa_as_num(ar_v);
+    int64_t K = hexa_as_num(ac_v);
+    int64_t N = hexa_as_num(bc_v);
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t b_id = hexa_as_num(b_v);
+    if (M <= 0 || K <= 0 || N <= 0) return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count) return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal c_h = hexa_farr_zeros(hexa_int(M * N));
+    int64_t c_id = hexa_as_num(c_h);
+    if (c_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_matmul_gpu(a_id, M, K, b_id, N, c_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(c_id);
+#else
+    /* No-CUDA build: dispatcher routes to the RFC 032 CPU op. This is
+     * the equivalence harness's POSITIVE branch — proves the dispatcher
+     * wires correctly and the math contract is preserved. */
+    return hexa_farr_matmul(a_v, ar_v, ac_v, b_v, bc_v);
+#endif
+}
+
+// ── Callable shims (≤4-arg `hexa_callN(<carrier>,…)` + 5-arg bare) ─────
+// hexa_v2 codegen's generic fallback lowers `cuda_available()` etc. to
+// `hexa_call0(cuda_available)` (and 1-arg → `hexa_call1(name, ...)`),
+// which needs a visible HexaVal carrier with that exact identifier.
+// `farr_matmul_gpu` (5-arg, past the hexa_callN ceiling) gets a bare-
+// function direct C call, which the static-inline wrapper below
+// satisfies. Same dispatch contract as RFC 032 farr_matmul + RFC 034
+// ad_matmul + RFC 035 adamw_step_mixed.
+HexaVal cuda_available;
+HexaVal cuda_device_count;
+HexaVal farr_to_device;
+HexaVal farr_to_host;
+HexaVal farr_pin;
+HexaVal farr_device_free;
+/* RFC 056 Phase 1 carriers (≤4-arg → hexa_callN dispatch). */
+HexaVal farr_set_out_disposition;
+HexaVal farr_dev_view;
+HexaVal farr_pin_device;
+HexaVal farr_unpin_device;
+static inline HexaVal farr_matmul_gpu_impl(HexaVal a, HexaVal ar, HexaVal ac,
+                                           HexaVal b, HexaVal bc) {
+    return hexa_farr_matmul_gpu(a, ar, ac, b, bc);
+}
+HexaVal farr_matmul_gpu(HexaVal a, HexaVal ar, HexaVal ac,
+                        HexaVal b, HexaVal bc) {
+    return farr_matmul_gpu_impl(a, ar, ac, b, bc);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// anima RFC 040 Phase B (2026-05-16): remaining farr GPU/CUDA ops —
+// scaffolding only (Mac, no CUDA hardware needed).
+//
+// Same `#ifdef HEXA_CUDA` / `#ifndef HEXA_CUDA` dispatch pattern as
+// Phase A. Each `*_gpu` op on the no-CUDA build routes to a SMALL
+// new CPU helper (no pre-existing farr equivalent for these row/
+// elementwise ops in the runtime today). On the HEXA_CUDA build the
+// bodies are TODO[cuda] stubs returning -1 (honest no-fake-PASS, per
+// AGENTS.tape g3). Real GPU `__global__` kernels = next-cycle
+// deliverable on a CUDA host (vast.ai/runpod).
+//
+// Ops landed in Phase B (per RFC 040 §"Hot-path op survey" subset):
+//   farr_softmax_rows_gpu   row-wise numerically-stable softmax
+//   farr_rmsnorm_rows_gpu   row-wise RMSNorm (mean(x²) + eps)
+//   farr_add_gpu            elementwise C = A + B
+//   farr_scale_gpu          elementwise Y = α · X
+//
+// Falsifier surface (tmp_rfc040_phaseB_smoke.hexa):
+//   F-RFC040B-SOFTMAX-EQ    softmax_gpu == CPU helper (byte-equal)
+//   F-RFC040B-RMSNORM-EQ    rmsnorm_gpu == CPU helper (byte-equal)
+//   F-RFC040B-ADD-EQ        add_gpu == elementwise A+B (byte-equal)
+//   F-RFC040B-SCALE-EQ      scale_gpu == α·X (byte-equal)
+//   F-RFC040B-DETERMINISM   re-run byte-identical for each op
+//   F-RFC040B-CUDA-BLOCKER  honest carve-out (CUDA kernels = next cycle)
+// ═══════════════════════════════════════════════════════════════════
+
+#ifdef HEXA_CUDA
+/* Forward decls for the Phase B GPU compilation unit (TODO[cuda] —
+ * bodies live in the same .cu file as Phase A on the CUDA host build).
+ * NOT defined in the no-CUDA build. */
+extern int  _hx_cuda_farr_softmax_rows_gpu(int64_t x_id, int64_t R,
+                                           int64_t C, int64_t out_id);
+extern int  _hx_cuda_farr_rmsnorm_rows_gpu(int64_t x_id, int64_t R,
+                                           int64_t C, double eps,
+                                           int64_t out_id);
+extern int  _hx_cuda_farr_add_gpu(int64_t a_id, int64_t b_id,
+                                  int64_t n, int64_t out_id);
+extern int  _hx_cuda_farr_scale_gpu(int64_t x_id, double alpha,
+                                    int64_t n, int64_t out_id);
+#endif
+
+// ── CPU helpers (Phase B no-CUDA fallback path). ──────────────────
+// These are SMALL NEW helpers — there is no pre-existing single-op
+// farr_softmax / farr_rmsnorm / farr_add / farr_scale in the runtime
+// today (the ad_softmax_cross_entropy op fuses softmax+CE+grad; it is
+// loss-coupled and unsuited as a row-softmax-only kernel). Each helper
+// (a) allocates a fresh output farr via hexa_farr_zeros, (b) re-fetches
+// entry pointers post-alloc (per the RFC 032 use-after-realloc guard at
+// line 9580), (c) computes the math in-place in the output buffer.
+
+// _hx_farr_softmax_rows_cpu(x, R, C) -> new farr_id. Numerically-stable
+// row-softmax (subtract row max before exp). -1 on err.
+static int64_t _hx_farr_softmax_rows_cpu(int64_t x_id, int64_t R, int64_t C) {
+    if (x_id < 0 || x_id >= _hx_farr_count) return -1;
+    if (R <= 0 || C <= 0)                    return -1;
+    HexaFarrEntry* xe = &_hx_farr_table[x_id];
+    if (!xe->buf || xe->len < R * C)         return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    /* hexa_farr_zeros may realloc _hx_farr_table — re-fetch pointers. */
+    xe = &_hx_farr_table[x_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!xe->buf || !oe->buf || oe->len < R * C) return -1;
+    const double* X = xe->buf;
+    double*       Y = oe->buf;
+    for (int64_t r = 0; r < R; r++) {
+        const double* xr = X + r * C;
+        double*       yr = Y + r * C;
+        double zmax = xr[0];
+        for (int64_t j = 1; j < C; j++) if (xr[j] > zmax) zmax = xr[j];
+        double s = 0.0;
+        for (int64_t j = 0; j < C; j++) {
+            double e = exp(xr[j] - zmax);
+            yr[j] = e;
+            s += e;
+        }
+        double inv = (s > 0.0) ? (1.0 / s) : 0.0;
+        for (int64_t j = 0; j < C; j++) yr[j] *= inv;
+    }
+    return out_id;
+}
+
+// _hx_farr_rmsnorm_rows_cpu(x, R, C, eps) -> new farr_id.
+// RMSNorm row-wise: y[r,j] = x[r,j] / sqrt(mean_j(x[r,j]^2) + eps).
+// -1 on err. Matches d_train3_lib c3_rmsnorm_fwd math (without the
+// per-channel gain — that lives outside this kernel, so this is the
+// inv-rms-only primitive — consistent with PLAN.md §9 "RMSNorm
+// reduction primitive").
+static int64_t _hx_farr_rmsnorm_rows_cpu(int64_t x_id, int64_t R, int64_t C,
+                                         double eps) {
+    if (x_id < 0 || x_id >= _hx_farr_count) return -1;
+    if (R <= 0 || C <= 0)                    return -1;
+    if (!(eps >= 0.0))                       return -1;   /* rejects NaN + negative */
+    HexaFarrEntry* xe = &_hx_farr_table[x_id];
+    if (!xe->buf || xe->len < R * C)         return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    xe = &_hx_farr_table[x_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!xe->buf || !oe->buf || oe->len < R * C) return -1;
+    const double* X = xe->buf;
+    double*       Y = oe->buf;
+    double inv_C = 1.0 / (double)C;
+    for (int64_t r = 0; r < R; r++) {
+        const double* xr = X + r * C;
+        double*       yr = Y + r * C;
+        double ms = 0.0;
+        for (int64_t j = 0; j < C; j++) ms += xr[j] * xr[j];
+        ms *= inv_C;
+        double inv = 1.0 / sqrt(ms + eps);
+        for (int64_t j = 0; j < C; j++) yr[j] = xr[j] * inv;
+    }
+    return out_id;
+}
+
+// _hx_farr_add_cpu(a, b, n) -> new farr_id. C = A + B, length n. -1 err.
+static int64_t _hx_farr_add_cpu(int64_t a_id, int64_t b_id, int64_t n) {
+    if (a_id < 0 || a_id >= _hx_farr_count) return -1;
+    if (b_id < 0 || b_id >= _hx_farr_count) return -1;
+    if (n <= 0)                              return -1;
+    HexaFarrEntry* ae = &_hx_farr_table[a_id];
+    HexaFarrEntry* be = &_hx_farr_table[b_id];
+    if (!ae->buf || !be->buf)                return -1;
+    if (ae->len < n || be->len < n)          return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    ae = &_hx_farr_table[a_id];
+    be = &_hx_farr_table[b_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!ae->buf || !be->buf || !oe->buf || oe->len < n) return -1;
+    const double* A = ae->buf;
+    const double* B = be->buf;
+    double*       O = oe->buf;
+    for (int64_t i = 0; i < n; i++) O[i] = A[i] + B[i];
+    return out_id;
+}
+
+// _hx_farr_scale_cpu(x, alpha, n) -> new farr_id. Y = α·X, length n. -1 err.
+static int64_t _hx_farr_scale_cpu(int64_t x_id, double alpha, int64_t n) {
+    if (x_id < 0 || x_id >= _hx_farr_count) return -1;
+    if (n <= 0)                              return -1;
+    HexaFarrEntry* xe = &_hx_farr_table[x_id];
+    if (!xe->buf || xe->len < n)             return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    xe = &_hx_farr_table[x_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!xe->buf || !oe->buf || oe->len < n) return -1;
+    const double* X = xe->buf;
+    double*       Y = oe->buf;
+    for (int64_t i = 0; i < n; i++) Y[i] = alpha * X[i];
+    return out_id;
+}
+
+// farr_softmax_rows_gpu(x, R, C) -> int new farr_id (row-softmax).
+// On no-CUDA: routes to _hx_farr_softmax_rows_cpu (the CPU oracle).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_softmax_rows_gpu in self/cuda/runtime_cuda.c (LANDED —
+// block-per-row warp-shuffle row-max + exp-sum reduction, byte-eq
+// verified Phase 4-D-5-3 11/11 PASS on A100). Pre-allocates output via
+// hexa_farr_zeros (Phase A matmul precedent) so the substrate's
+// _ensure_dev_alloc_out can find the host entry + grow its g_slots.
+HexaVal hexa_farr_softmax_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v) {
+    int64_t x_id = hexa_as_num(x_v);
+    int64_t R    = hexa_as_num(r_v);
+    int64_t C    = hexa_as_num(c_v);
+#ifdef HEXA_CUDA
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_softmax_rows_gpu(x_id, R, C, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_softmax_rows_cpu(x_id, R, C));
+#endif
+}
+
+// farr_rmsnorm_rows_gpu(x, R, C, eps) -> int new farr_id (row-RMSNorm).
+// On no-CUDA: routes to _hx_farr_rmsnorm_rows_cpu.
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_rmsnorm_rows_gpu — block-per-row warp-shuffle Σx²,
+// rsqrt + broadcast multiply (gain-free; per-channel γ multiplied by
+// the caller via farr_mul_gpu). Byte-eq verified Phase 4-D-5-3.
+HexaVal hexa_farr_rmsnorm_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v,
+                                   HexaVal eps_v) {
+    int64_t x_id = hexa_as_num(x_v);
+    int64_t R    = hexa_as_num(r_v);
+    int64_t C    = hexa_as_num(c_v);
+    double  eps  = __hx_to_double(eps_v);
+#ifdef HEXA_CUDA
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (!(eps >= 0.0))    return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_rmsnorm_rows_gpu(x_id, R, C, eps, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_rmsnorm_rows_cpu(x_id, R, C, eps));
+#endif
+}
+
+// farr_add_gpu(a, b, n) -> int new farr_id (elementwise sum).
+// On no-CUDA: routes to _hx_farr_add_cpu.
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_add_gpu — 1-D grid-stride kernel, byte-eq Phase 4-D-5-3.
+HexaVal hexa_farr_add_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v) {
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t b_id = hexa_as_num(b_v);
+    int64_t n    = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    if (n <= 0) return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count) return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_add_gpu(a_id, b_id, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_add_cpu(a_id, b_id, n));
+#endif
+}
+
+// farr_scale_gpu(x, alpha, n) -> int new farr_id (Y = α·X).
+// On no-CUDA: routes to _hx_farr_scale_cpu.
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_scale_gpu — 1-D grid-stride kernel, byte-eq Phase 4-D-5-3.
+HexaVal hexa_farr_scale_gpu(HexaVal x_v, HexaVal alpha_v, HexaVal n_v) {
+    int64_t x_id = hexa_as_num(x_v);
+    double  alpha = __hx_to_double(alpha_v);
+    int64_t n    = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    if (n <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_scale_gpu(x_id, alpha, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_scale_cpu(x_id, alpha, n));
+#endif
+}
+
+// ── Phase B carriers (3-arg / 4-arg → hexa_callN dispatch). ───────
+// All 4 ops fit within the hexa_callN ceiling (≤4-arg), so each gets a
+// HexaVal carrier registered via hexa_fn_new at init time (see the
+// init block below for the registration calls).
+HexaVal farr_softmax_rows_gpu;
+HexaVal farr_rmsnorm_rows_gpu;
+HexaVal farr_add_gpu;
+HexaVal farr_scale_gpu;
+
+// ═══════════════════════════════════════════════════════════════════
+// anima RFC 040 Phase B2 (2026-05-16): d_train5 hot-path completion —
+// the remaining DOMINANT-FLOP farr ops the Phase E refactor of
+// HEXAD/D/d_train5_lib.hexa needs so every c3_*/d5_* boxed op has a
+// matching `farr_*_gpu` primitive (clean swap target). Scaffolding
+// only (Mac, no CUDA) — same `#ifdef HEXA_CUDA` (TODO[cuda] stub
+// returns -1) / `#ifndef HEXA_CUDA` (verified CPU helper) dispatch as
+// Phase A/B. RFC 032 use-after-realloc guard carried verbatim
+// (re-fetch _hx_farr_table entry pointers after every hexa_farr_zeros).
+//
+// d_train5 op-audit → ops landed here (the dominant-FLOP missing set):
+//   farr_matmul_t_gpu       Mᵀ·u   (c3_matvec_t — dX / dr / dzT vjp)
+//   farr_outer_gpu          u⊗v    (c3_outer    — dW / dWg / dWh grad)
+//   farr_mul_gpu            A⊙B    (SwiGLU s=silu(a)⊙b, dq'⊙cos etc.)
+//   farr_silu_gpu           silu(x)=x·σ(x)        (SwiGLU activation)
+//   farr_silu_grad_gpu      σ(x)·(1+x·(1−σ(x)))   (SwiGLU bwd)
+//   farr_rmsnorm_bwd_rows_gpu  exact RMSNorm vjp dy→dx (c3_rmsnorm_bwd
+//                              dx-branch; per-channel gain handled by
+//                              caller via farr_mul_gpu — this is the
+//                              inv-rms vjp core, mirrors the fwd-kernel
+//                              gain-free split of Phase B rmsnorm_rows)
+//   farr_adamw_step_gpu     decoupled-wd AdamW in-place (dt2_adamw_step)
+//
+// CPU helpers verified vs the trusted boxed c3_*/dt2_* reference in
+// tmp_rfc040_phaseB2_smoke.hexa (each op's no-CUDA dispatcher proven
+// ≡ a hexa-side oracle that replays the exact c3_*/dt2_* formula).
+//
+// Honestly deferred (low FLOP / memory-bound — NOT dominant): RoPE
+// scalar trig rotate (d5_rope_*), embedding gather + scatter-add
+// (d5_forward / d5_grad tied-embed). Named for a follow-on cycle.
+// ═══════════════════════════════════════════════════════════════════
+
+#ifdef HEXA_CUDA
+/* Forward decls for the Phase B2 GPU TU (TODO[cuda] — bodies on the
+ * CUDA host build only). NOT defined in the no-CUDA build. */
+extern int  _hx_cuda_farr_matmul_t_gpu(int64_t m_id, int64_t R, int64_t C,
+                                        int64_t u_id, int64_t out_id);
+extern int  _hx_cuda_farr_outer_gpu(int64_t u_id, int64_t v_id,
+                                     int64_t R, int64_t C, int64_t out_id);
+extern int  _hx_cuda_farr_mul_gpu(int64_t a_id, int64_t b_id,
+                                   int64_t n, int64_t out_id);
+extern int  _hx_cuda_farr_silu_gpu(int64_t x_id, int64_t n, int64_t out_id);
+extern int  _hx_cuda_farr_silu_grad_gpu(int64_t x_id, int64_t n,
+                                         int64_t out_id);
+extern int  _hx_cuda_farr_rmsnorm_bwd_rows_gpu(int64_t x_id, int64_t dxn_id,
+                                                int64_t R, int64_t C,
+                                                int64_t out_id);
+extern int  _hx_cuda_farr_adamw_step_gpu(int64_t w_id, int64_t m_id,
+                                          int64_t v_id, int64_t g_id,
+                                          int64_t n, double lr, double b1,
+                                          double b2, double eps, double wd,
+                                          int64_t step_t, int64_t out_id);
+extern int  _hx_cuda_farr_rope_gpu(int64_t t_id, int64_t cos_id,
+                                    int64_t sin_id, int64_t T,
+                                    int64_t nheads, int64_t hd,
+                                    int64_t out_id);
+extern int  _hx_cuda_farr_rope_bwd_gpu(int64_t t_id, int64_t cos_id,
+                                        int64_t sin_id, int64_t T,
+                                        int64_t nheads, int64_t hd,
+                                        int64_t out_id);
+extern int  _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id,
+                                                int64_t dst_id,
+                                                int64_t rows, int64_t cols,
+                                                int64_t dst_off);
+#endif
+
+// ── CPU helpers (Phase B2 no-CUDA fallback). Each: (a) validate ids,
+//    (b) hexa_farr_zeros output, (c) RE-FETCH entry ptrs post-alloc
+//    (RFC 032 use-after-realloc guard), (d) compute. ────────────────
+
+// _hx_farr_matmul_t_cpu(M, R, C, u) -> new farr_id [C]. Mᵀ·u where M is
+// row-major [R·C], u is [R]. out[k] = Σ_r M[r·C+k]·u[r]. Mirrors
+// d_train3_lib c3_matvec_t EXACTLY (same r-outer / k-inner accumulation
+// order → bit-identical on no-CUDA). -1 on err.
+static int64_t _hx_farr_matmul_t_cpu(int64_t m_id, int64_t R, int64_t C,
+                                     int64_t u_id) {
+    if (m_id < 0 || m_id >= _hx_farr_count) return -1;
+    if (u_id < 0 || u_id >= _hx_farr_count) return -1;
+    if (R <= 0 || C <= 0)                   return -1;
+    HexaFarrEntry* me = &_hx_farr_table[m_id];
+    HexaFarrEntry* ue = &_hx_farr_table[u_id];
+    if (!me->buf || !ue->buf)               return -1;
+    if (me->len < R * C || ue->len < R)     return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(C));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    me = &_hx_farr_table[m_id];
+    ue = &_hx_farr_table[u_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!me->buf || !ue->buf || !oe->buf || oe->len < C) return -1;
+    const double* M = me->buf;
+    const double* U = ue->buf;
+    double*       O = oe->buf;
+    for (int64_t k = 0; k < C; k++) O[k] = 0.0;
+    for (int64_t r = 0; r < R; r++) {
+        const double* mr = M + r * C;
+        double ur = U[r];
+        for (int64_t k = 0; k < C; k++) O[k] += mr[k] * ur;
+    }
+    return out_id;
+}
+
+// _hx_farr_outer_cpu(u, v, R, C) -> new farr_id [R·C]. out[r·C+c] =
+// u[r]·v[c]. Mirrors c3_outer EXACTLY. -1 on err.
+static int64_t _hx_farr_outer_cpu(int64_t u_id, int64_t v_id,
+                                  int64_t R, int64_t C) {
+    if (u_id < 0 || u_id >= _hx_farr_count) return -1;
+    if (v_id < 0 || v_id >= _hx_farr_count) return -1;
+    if (R <= 0 || C <= 0)                   return -1;
+    HexaFarrEntry* ue = &_hx_farr_table[u_id];
+    HexaFarrEntry* ve = &_hx_farr_table[v_id];
+    if (!ue->buf || !ve->buf)               return -1;
+    if (ue->len < R || ve->len < C)         return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    ue = &_hx_farr_table[u_id];
+    ve = &_hx_farr_table[v_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!ue->buf || !ve->buf || !oe->buf || oe->len < R * C) return -1;
+    const double* U = ue->buf;
+    const double* V = ve->buf;
+    double*       O = oe->buf;
+    for (int64_t r = 0; r < R; r++) {
+        double ur = U[r];
+        double* orow = O + r * C;
+        for (int64_t c = 0; c < C; c++) orow[c] = ur * V[c];
+    }
+    return out_id;
+}
+
+// _hx_farr_mul_cpu(a, b, n) -> new farr_id. C = A⊙B (Hadamard). -1 err.
+static int64_t _hx_farr_mul_cpu(int64_t a_id, int64_t b_id, int64_t n) {
+    if (a_id < 0 || a_id >= _hx_farr_count) return -1;
+    if (b_id < 0 || b_id >= _hx_farr_count) return -1;
+    if (n <= 0)                              return -1;
+    HexaFarrEntry* ae = &_hx_farr_table[a_id];
+    HexaFarrEntry* be = &_hx_farr_table[b_id];
+    if (!ae->buf || !be->buf)                return -1;
+    if (ae->len < n || be->len < n)          return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    ae = &_hx_farr_table[a_id];
+    be = &_hx_farr_table[b_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!ae->buf || !be->buf || !oe->buf || oe->len < n) return -1;
+    const double* A = ae->buf;
+    const double* B = be->buf;
+    double*       O = oe->buf;
+    for (int64_t i = 0; i < n; i++) O[i] = A[i] * B[i];
+    return out_id;
+}
+
+// silu(x) = x · σ(x), σ(x) = 1/(1+exp(-x)). Mirrors c3_sigmoid/c3_silu.
+static inline double _hx_sigmoid_d(double x) { return 1.0 / (1.0 + exp(-x)); }
+
+// _hx_farr_silu_cpu(x, n) -> new farr_id. y[i] = silu(x[i]). -1 err.
+static int64_t _hx_farr_silu_cpu(int64_t x_id, int64_t n) {
+    if (x_id < 0 || x_id >= _hx_farr_count) return -1;
+    if (n <= 0)                              return -1;
+    HexaFarrEntry* xe = &_hx_farr_table[x_id];
+    if (!xe->buf || xe->len < n)             return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    xe = &_hx_farr_table[x_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!xe->buf || !oe->buf || oe->len < n) return -1;
+    const double* X = xe->buf;
+    double*       Y = oe->buf;
+    for (int64_t i = 0; i < n; i++) Y[i] = X[i] * _hx_sigmoid_d(X[i]);
+    return out_id;
+}
+
+// _hx_farr_silu_grad_cpu(x, n) -> new farr_id.
+// silu'(x) = σ(x)·(1 + x·(1−σ(x))). Mirrors c3_silu_grad EXACTLY. -1 err.
+static int64_t _hx_farr_silu_grad_cpu(int64_t x_id, int64_t n) {
+    if (x_id < 0 || x_id >= _hx_farr_count) return -1;
+    if (n <= 0)                              return -1;
+    HexaFarrEntry* xe = &_hx_farr_table[x_id];
+    if (!xe->buf || xe->len < n)             return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    xe = &_hx_farr_table[x_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!xe->buf || !oe->buf || oe->len < n) return -1;
+    const double* X = xe->buf;
+    double*       Y = oe->buf;
+    for (int64_t i = 0; i < n; i++) {
+        double s = _hx_sigmoid_d(X[i]);
+        Y[i] = s * (1.0 + X[i] * (1.0 - s));
+    }
+    return out_id;
+}
+
+// _hx_farr_rmsnorm_bwd_rows_cpu(x, dxn, R, C) -> new farr_id [R·C].
+// The EXACT RMSNorm vjp dx-branch (per row), inv-rms recomputed from x
+// (eps=1e-6, matches c3_rmsnorm_fwd) so the kernel is self-contained
+// (caller supplies dxn = dy⊙g; the per-channel-gain split mirrors the
+// Phase B fwd rmsnorm_rows gain-free convention):
+//   inv  = (mean_j(x²)+ε)^(−1/2)
+//   dot  = Σ_k dxn_k·x_k
+//   dx_i = inv·dxn_i − (inv³·x_i/C)·dot
+// Mirrors d_train3_lib c3_rmsnorm_bwd dx formula EXACTLY. -1 err.
+static int64_t _hx_farr_rmsnorm_bwd_rows_cpu(int64_t x_id, int64_t dxn_id,
+                                             int64_t R, int64_t C) {
+    if (x_id < 0   || x_id >= _hx_farr_count)   return -1;
+    if (dxn_id < 0 || dxn_id >= _hx_farr_count) return -1;
+    if (R <= 0 || C <= 0)                       return -1;
+    HexaFarrEntry* xe = &_hx_farr_table[x_id];
+    HexaFarrEntry* de = &_hx_farr_table[dxn_id];
+    if (!xe->buf || !de->buf)                   return -1;
+    if (xe->len < R * C || de->len < R * C)     return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    xe = &_hx_farr_table[x_id];
+    de = &_hx_farr_table[dxn_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!xe->buf || !de->buf || !oe->buf || oe->len < R * C) return -1;
+    const double* X   = xe->buf;
+    const double* DXN = de->buf;
+    double*       O   = oe->buf;
+    double inv_C = 1.0 / (double)C;
+    for (int64_t r = 0; r < R; r++) {
+        const double* xr  = X   + r * C;
+        const double* dxr = DXN + r * C;
+        double*       orr = O   + r * C;
+        double ms = 0.0;
+        for (int64_t j = 0; j < C; j++) ms += xr[j] * xr[j];
+        ms *= inv_C;
+        double inv  = 1.0 / sqrt(ms + 1e-6);
+        double dot  = 0.0;
+        for (int64_t k = 0; k < C; k++) dot += dxr[k] * xr[k];
+        double coef = (inv * inv * inv) * inv_C;
+        for (int64_t i = 0; i < C; i++)
+            orr[i] = inv * dxr[i] - coef * xr[i] * dot;
+    }
+    return out_id;
+}
+
+// _hx_farr_rope_cpu(t_id, cos, sin, T, nheads, hd, is_bwd) -> new
+// farr_id [T·nheads·hd]. Rotary position embedding (RFC 041 Phase B
+// completion). Consumes PRECOMPUTED cos/sin tables [T·hd] — does NOT
+// recompute angles. Mirrors flame decoder_block_lib.hexa §3 (fwd) /
+// §3rev (bwd); CPU reference tool/flame_phase4d6_block_{fwd,bwd}_
+// primitive.c. Tensor T_buf row-major [T·nheads·hd], row for (t,hh)
+// at (t·nheads+hh)·hd; cos/sin [T·hd] indexed bse+c, bse=t·hd.
+//   fwd:  rh_c = (c<half)? -x[row+half+c] : x[row+c-half]
+//         out  = x[row+c]·cos[bse+c] + rh_c·sin[bse+c]
+//   bwd:  gs   = (c<half)?  dx[row+half+c]·sin[bse+half+c]
+//                        : -dx[row+c-half]·sin[bse+c-half]
+//         out  = dx[row+c]·cos[bse+c] + gs
+// Pure per-element (out depends only on row elements c and c±half) —
+// the GPU kernel reads from a separate input buffer so it is byte-eq.
+// -1 err.
+//
+// FP_CONTRACT OFF: the byte-eq oracle (flame_ag_tape_test Test 9)
+// pins this against the verified hexa primitive nn_rope_apply_fwd,
+// which codegens through opaque farr_get() calls and is therefore
+// NOT FMA-contracted (2 roundings for a*b+c*d). Raw double[] here
+// lets clang contract a*b+c*d into one fma() (1 rounding) → a
+// ~1e-17 mismatch that fails the leaf-op max|Δ|=0 bar. Disabling
+// contraction for this kernel only makes the CPU fallback conform
+// to the reference's rounding, restoring exact byte-eq without
+// de-optimizing the rest of the runtime.
+#pragma STDC FP_CONTRACT OFF
+static int64_t _hx_farr_rope_cpu(int64_t t_id, int64_t cos_id,
+                                 int64_t sin_id, int64_t T,
+                                 int64_t nheads, int64_t hd,
+                                 int is_bwd) {
+    if (t_id < 0   || t_id >= _hx_farr_count)   return -1;
+    if (cos_id < 0 || cos_id >= _hx_farr_count) return -1;
+    if (sin_id < 0 || sin_id >= _hx_farr_count) return -1;
+    if (T <= 0 || nheads <= 0 || hd <= 0)       return -1;
+    if ((hd & 1) != 0)                          return -1;
+    int64_t total = T * nheads * hd;
+    HexaFarrEntry* te = &_hx_farr_table[t_id];
+    HexaFarrEntry* ce = &_hx_farr_table[cos_id];
+    HexaFarrEntry* se = &_hx_farr_table[sin_id];
+    if (!te->buf || !ce->buf || !se->buf)       return -1;
+    if (te->len < total)                        return -1;
+    if (ce->len < T * hd || se->len < T * hd)   return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(total));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    te = &_hx_farr_table[t_id];
+    ce = &_hx_farr_table[cos_id];
+    se = &_hx_farr_table[sin_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!te->buf || !ce->buf || !se->buf || !oe->buf) return -1;
+    if (oe->len < total)                        return -1;
+    const double* X   = te->buf;
+    const double* COS = ce->buf;
+    const double* SIN = se->buf;
+    double*       O   = oe->buf;
+    int64_t half = hd / 2;
+    for (int64_t t = 0; t < T; t++) {
+        int64_t bse = t * hd;
+        for (int64_t hh = 0; hh < nheads; hh++) {
+            int64_t row = (t * nheads + hh) * hd;
+            for (int64_t c = 0; c < hd; c++) {
+                if (is_bwd) {
+                    double gs = (c < half)
+                        ? (X[row + half + c] * SIN[bse + half + c])
+                        : (0.0 - X[row + c - half] * SIN[bse + c - half]);
+                    O[row + c] = X[row + c] * COS[bse + c] + gs;
+                } else {
+                    double rh_c = (c < half)
+                        ? (0.0 - X[row + half + c])
+                        : X[row + c - half];
+                    O[row + c] = X[row + c] * COS[bse + c]
+                               + rh_c * SIN[bse + c];
+                }
+            }
+        }
+    }
+    return out_id;
+}
+#pragma STDC FP_CONTRACT DEFAULT
+
+// _hx_farr_adamw_step_cpu(...) -> new farr_id [n] = updated W. m,v
+// updated IN PLACE on their farr buffers (matches the AdamW state
+// contract — the optimizer owns m/v across steps). Decoupled weight
+// decay. Mirrors d_train2_lib dt2_adamw_step EXACTLY (same β^t via
+// repeated mul, same c1/c2 bias-correction, same update form). The
+// √ uses libm sqrt (the boxed dt_sqrt is a 24-iter Newton converging
+// to the same double — verified ≡ in the smoke). -1 err.
+static int64_t _hx_farr_adamw_step_cpu(int64_t w_id, int64_t m_id,
+                                       int64_t v_id, int64_t g_id,
+                                       int64_t n, double lr, double b1,
+                                       double b2, double eps, double wd,
+                                       int64_t step_t) {
+    if (w_id < 0 || w_id >= _hx_farr_count) return -1;
+    if (m_id < 0 || m_id >= _hx_farr_count) return -1;
+    if (v_id < 0 || v_id >= _hx_farr_count) return -1;
+    if (g_id < 0 || g_id >= _hx_farr_count) return -1;
+    if (n <= 0 || step_t < 1)               return -1;
+    HexaFarrEntry* we = &_hx_farr_table[w_id];
+    HexaFarrEntry* me = &_hx_farr_table[m_id];
+    HexaFarrEntry* ve = &_hx_farr_table[v_id];
+    HexaFarrEntry* ge = &_hx_farr_table[g_id];
+    if (!we->buf || !me->buf || !ve->buf || !ge->buf) return -1;
+    if (we->len < n || me->len < n || ve->len < n || ge->len < n) return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    /* re-fetch ALL entry pointers post-alloc (RFC 032 guard). */
+    we = &_hx_farr_table[w_id];
+    me = &_hx_farr_table[m_id];
+    ve = &_hx_farr_table[v_id];
+    ge = &_hx_farr_table[g_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!we->buf || !me->buf || !ve->buf || !ge->buf || !oe->buf
+        || oe->len < n) return -1;
+    double* W = we->buf;
+    double* Mm = me->buf;
+    double* Vv = ve->buf;
+    const double* G = ge->buf;
+    double* O = oe->buf;
+    double b1t = 1.0, b2t = 1.0;
+    for (int64_t e = 0; e < step_t; e++) { b1t *= b1; b2t *= b2; }
+    double c1 = 1.0 - b1t;
+    double c2 = 1.0 - b2t;
+    for (int64_t i = 0; i < n; i++) {
+        double g  = G[i];
+        double mi = b1 * Mm[i] + (1.0 - b1) * g;
+        double vi = b2 * Vv[i] + (1.0 - b2) * g * g;
+        double mhat = mi / c1;
+        double vhat = vi / c2;
+        double denom = sqrt(vhat) + eps;
+        double wi = W[i] - lr * wd * W[i] - lr * mhat / denom;
+        Mm[i] = mi;       /* m,v updated in place (optimizer state) */
+        Vv[i] = vi;
+        O[i]  = wi;       /* fresh W returned as a new farr */
+    }
+    return out_id;
+}
+
+// ── Phase B2 dispatchers ────────────────────────────────────────────
+
+// farr_matmul_t_gpu(M, R, C, u) -> int new farr_id [C] (Mᵀ·u).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_matmul_t_gpu (cuBLAS Dgemv CUBLAS_OP_T or tiled
+// transpose-GEMM, byte-eq Phase 4-D-5-3).
+HexaVal hexa_farr_matmul_t_gpu(HexaVal m_v, HexaVal r_v, HexaVal c_v,
+                               HexaVal u_v) {
+    int64_t m_id = hexa_as_num(m_v);
+    int64_t R    = hexa_as_num(r_v);
+    int64_t C    = hexa_as_num(c_v);
+    int64_t u_id = hexa_as_num(u_v);
+#ifdef HEXA_CUDA
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (m_id < 0 || m_id >= _hx_farr_count) return hexa_int(-1);
+    if (u_id < 0 || u_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(C));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_matmul_t_gpu(m_id, R, C, u_id, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_matmul_t_cpu(m_id, R, C, u_id));
+#endif
+}
+
+// farr_outer_gpu(u, v, R, C) -> int new farr_id [R·C] (u⊗v).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_outer_gpu (cublasDger rank-1 or 2-D grid, byte-eq
+// Phase 4-D-5-3).
+HexaVal hexa_farr_outer_gpu(HexaVal u_v, HexaVal v_v, HexaVal r_v,
+                            HexaVal c_v) {
+    int64_t u_id = hexa_as_num(u_v);
+    int64_t v_id = hexa_as_num(v_v);
+    int64_t R    = hexa_as_num(r_v);
+    int64_t C    = hexa_as_num(c_v);
+#ifdef HEXA_CUDA
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (u_id < 0 || u_id >= _hx_farr_count) return hexa_int(-1);
+    if (v_id < 0 || v_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_outer_gpu(u_id, v_id, R, C, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_outer_cpu(u_id, v_id, R, C));
+#endif
+}
+
+// farr_mul_gpu(a, b, n) -> int new farr_id (elementwise A⊙B).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_mul_gpu (1-D grid-stride, byte-eq Phase 4-D-5-3).
+HexaVal hexa_farr_mul_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v) {
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t b_id = hexa_as_num(b_v);
+    int64_t n    = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    if (n <= 0) return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count) return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_mul_gpu(a_id, b_id, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_mul_cpu(a_id, b_id, n));
+#endif
+}
+
+// farr_silu_gpu(x, n) -> int new farr_id (y = silu(x)).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_silu_gpu (1-D grid-stride, σ via __expf, byte-eq
+// Phase 4-D-5-3).
+HexaVal hexa_farr_silu_gpu(HexaVal x_v, HexaVal n_v) {
+    int64_t x_id = hexa_as_num(x_v);
+    int64_t n    = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    if (n <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_silu_gpu(x_id, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_silu_cpu(x_id, n));
+#endif
+}
+
+// farr_silu_grad_gpu(x, n) -> int new farr_id (silu'(x)).
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_silu_grad_gpu (1-D grid-stride, byte-eq Phase 4-D-5-3).
+HexaVal hexa_farr_silu_grad_gpu(HexaVal x_v, HexaVal n_v) {
+    int64_t x_id = hexa_as_num(x_v);
+    int64_t n    = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    if (n <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_silu_grad_gpu(x_id, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_silu_grad_cpu(x_id, n));
+#endif
+}
+
+// farr_rmsnorm_bwd_rows_gpu(x, dxn, R, C) -> int new farr_id [R·C].
+// On HEXA_CUDA: wired (Phase 4-D-5-4 step 1, 2026-05-17) to
+// _hx_cuda_farr_rmsnorm_bwd_rows_gpu (block-per-row two warp-shuffle
+// reductions Σx² + Σdxn·x, then broadcast vjp, byte-eq Phase 4-D-5-3).
+HexaVal hexa_farr_rmsnorm_bwd_rows_gpu(HexaVal x_v, HexaVal dxn_v,
+                                       HexaVal r_v, HexaVal c_v) {
+    int64_t x_id   = hexa_as_num(x_v);
+    int64_t dxn_id = hexa_as_num(dxn_v);
+    int64_t R      = hexa_as_num(r_v);
+    int64_t C      = hexa_as_num(c_v);
+#ifdef HEXA_CUDA
+    if (R <= 0 || C <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count) return hexa_int(-1);
+    if (dxn_id < 0 || dxn_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(R * C));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_rmsnorm_bwd_rows_gpu(x_id, dxn_id, R, C, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_rmsnorm_bwd_rows_cpu(x_id, dxn_id, R, C));
+#endif
+}
+
+// farr_adamw_step_gpu(W,m,v,g,n,lr,b1,b2,eps,wd,step_t) -> int new
+// farr_id (updated W; m,v updated in place). 11-arg → past the
+// hexa_callN ceiling, so it gets a bare direct-C entry point (same
+// pattern as RFC 035 adamw_step_mixed / RFC 032 farr_matmul).
+HexaVal hexa_farr_adamw_step_gpu(HexaVal w_v, HexaVal m_v, HexaVal v_v,
+                                 HexaVal g_v, HexaVal n_v, HexaVal lr_v,
+                                 HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                 HexaVal wd_v, HexaVal step_v) {
+    int64_t w_id = hexa_as_num(w_v);
+    int64_t m_id = hexa_as_num(m_v);
+    int64_t v_id = hexa_as_num(v_v);
+    int64_t g_id = hexa_as_num(g_v);
+    int64_t n    = hexa_as_num(n_v);
+    double  lr   = __hx_to_double(lr_v);
+    double  b1   = __hx_to_double(b1_v);
+    double  b2   = __hx_to_double(b2_v);
+    double  eps  = __hx_to_double(eps_v);
+    double  wd   = __hx_to_double(wd_v);
+    int64_t step_t = hexa_as_num(step_v);
+#ifdef HEXA_CUDA
+    /* Phase 4-D-5-4 step 1 wire (2026-05-17): fused 1-D grid-stride
+     * AdamW kernel; substrate H2Ds W/m/v/g, runs the kernel D2D, then
+     * D2Hs updated W to out_id AND D2Hs m,v back to their host buffers
+     * to preserve the optimizer-state contract (CPU oracle mutates m,v
+     * in place — see self/cuda/runtime_cuda.c line 730+). Byte-eq
+     * verified Phase 4-D-5-3 11/11 PASS. */
+    if (n <= 0 || step_t < 1) return hexa_int(-1);
+    if (w_id < 0 || w_id >= _hx_farr_count) return hexa_int(-1);
+    if (m_id < 0 || m_id >= _hx_farr_count) return hexa_int(-1);
+    if (v_id < 0 || v_id >= _hx_farr_count) return hexa_int(-1);
+    if (g_id < 0 || g_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_adamw_step_gpu(w_id, m_id, v_id, g_id, n,
+                                          lr, b1, b2, eps, wd, step_t,
+                                          out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_adamw_step_cpu(w_id, m_id, v_id, g_id, n,
+                                            lr, b1, b2, eps, wd, step_t));
+#endif
+}
+
+// ── Phase B2 carriers + bare entry points ───────────────────────────
+// ≤4-arg ops get HexaVal carriers (hexa_fn_new at init). The 11-arg
+// adamw_step gets a bare `HexaVal farr_adamw_step_gpu(...)` C symbol
+// (direct call past the hexa_callN ceiling — RFC 032/035 pattern).
+HexaVal farr_matmul_t_gpu;
+HexaVal farr_outer_gpu;
+HexaVal farr_mul_gpu;
+HexaVal farr_silu_gpu;
+HexaVal farr_silu_grad_gpu;
+HexaVal farr_rmsnorm_bwd_rows_gpu;
+HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
+                            HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                            HexaVal eps, HexaVal wd, HexaVal step_t) {
+    return hexa_farr_adamw_step_gpu(w, m, v, g, n, lr, b1, b2, eps, wd,
+                                    step_t);
+}
+
+// farr_rope_gpu(t, cos, sin, T, nheads, hd) -> int new farr_id
+// [T·nheads·hd]. Rotary position embedding forward. 6-arg → past the
+// 4-arg hexa_callN ceiling, so it gets a bare direct-C entry point
+// (same pattern as farr_adamw_step_gpu). On HEXA_CUDA: wired to
+// _hx_cuda_farr_rope_gpu (1-D grid-stride per-element kernel, byte-eq
+// — F-RFC041-ROPE-EXACT |Δ|=0, no reduction). No-CUDA: CPU fallback.
+HexaVal hexa_farr_rope_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v,
+                           HexaVal T_v, HexaVal nh_v, HexaVal hd_v) {
+    int64_t t_id   = hexa_as_num(t_v);
+    int64_t cos_id = hexa_as_num(cos_v);
+    int64_t sin_id = hexa_as_num(sin_v);
+    int64_t T      = hexa_as_num(T_v);
+    int64_t nheads = hexa_as_num(nh_v);
+    int64_t hd     = hexa_as_num(hd_v);
+#ifdef HEXA_CUDA
+    if (T <= 0 || nheads <= 0 || hd <= 0) return hexa_int(-1);
+    if (t_id < 0   || t_id >= _hx_farr_count)   return hexa_int(-1);
+    if (cos_id < 0 || cos_id >= _hx_farr_count) return hexa_int(-1);
+    if (sin_id < 0 || sin_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(T * nheads * hd));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_rope_gpu(t_id, cos_id, sin_id, T, nheads, hd,
+                                    out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_rope_cpu(t_id, cos_id, sin_id, T, nheads,
+                                      hd, 0));
+#endif
+}
+
+// farr_rope_bwd_gpu(t, cos, sin, T, nheads, hd) -> int new farr_id.
+// Rotary position embedding backward (inverse rotation — transpose of
+// the fwd rotation matrix). On HEXA_CUDA: _hx_cuda_farr_rope_bwd_gpu
+// (byte-eq — F-RFC041-ROPE-BWD-EXACT |Δ|=0). No-CUDA: CPU fallback.
+HexaVal hexa_farr_rope_bwd_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v,
+                               HexaVal T_v, HexaVal nh_v, HexaVal hd_v) {
+    int64_t t_id   = hexa_as_num(t_v);
+    int64_t cos_id = hexa_as_num(cos_v);
+    int64_t sin_id = hexa_as_num(sin_v);
+    int64_t T      = hexa_as_num(T_v);
+    int64_t nheads = hexa_as_num(nh_v);
+    int64_t hd     = hexa_as_num(hd_v);
+#ifdef HEXA_CUDA
+    if (T <= 0 || nheads <= 0 || hd <= 0) return hexa_int(-1);
+    if (t_id < 0   || t_id >= _hx_farr_count)   return hexa_int(-1);
+    if (cos_id < 0 || cos_id >= _hx_farr_count) return hexa_int(-1);
+    if (sin_id < 0 || sin_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(T * nheads * hd));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_rope_bwd_gpu(t_id, cos_id, sin_id, T, nheads,
+                                        hd, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_rope_cpu(t_id, cos_id, sin_id, T, nheads,
+                                      hd, 1));
+#endif
+}
+
+// farr_transpose_scatter_gpu(src, dst, rows, cols, dst_off) -> int rc.
+// RFC 058 §5.2 — device transpose-scatter: fill the [dst_off,
+// dst_off+rows*cols) slab of dst with the transpose of src
+// (dst[dst_off+c*rows+r] = src[r*cols+c]). Unlike the other _gpu
+// entry points this does NOT allocate a new farr — dst is a caller-
+// owned buffer (the Bc accumulator) populated slab-by-slab. Returns
+// 0 ok / -1 err. On HEXA_CUDA the forge kernel runs and dst is left
+// device-authoritative (RFC 056 §6.1); on the no-CUDA build it
+// returns -1 (the flame consumer dim-gates this call inside
+// #ifdef HEXA_CUDA, so the no-CUDA path is never reached — the d=32
+// host transpose loop stays, RFC 058 §5.4).
+HexaVal hexa_farr_transpose_scatter_gpu(HexaVal src_v, HexaVal dst_v,
+                                        HexaVal rows_v, HexaVal cols_v,
+                                        HexaVal dst_off_v) {
+    int64_t src_id  = hexa_as_num(src_v);
+    int64_t dst_id  = hexa_as_num(dst_v);
+    int64_t rows    = hexa_as_num(rows_v);
+    int64_t cols    = hexa_as_num(cols_v);
+    int64_t dst_off = hexa_as_num(dst_off_v);
+#ifdef HEXA_CUDA
+    if (rows <= 0 || cols <= 0 || dst_off < 0) return hexa_int(-1);
+    if (src_id < 0 || src_id >= _hx_farr_count) return hexa_int(-1);
+    if (dst_id < 0 || dst_id >= _hx_farr_count) return hexa_int(-1);
+    int rc = _hx_cuda_farr_transpose_scatter_gpu(src_id, dst_id,
+                                                 rows, cols, dst_off);
+    return hexa_int(rc);
+#else
+    (void)src_id; (void)dst_id; (void)rows; (void)cols; (void)dst_off;
+    return hexa_int(-1);
+#endif
+}
+
+// 6-arg bare direct-C entry points (past the hexa_callN ceiling).
+HexaVal farr_rope_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                      HexaVal T, HexaVal nh, HexaVal hd) {
+    return hexa_farr_rope_gpu(t, cos, sin, T, nh, hd);
+}
+HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                          HexaVal T, HexaVal nh, HexaVal hd) {
+    return hexa_farr_rope_bwd_gpu(t, cos, sin, T, nh, hd);
 }
 
 // ── A1 (2026-05-10): per-phase arena reset side channel ─────────
@@ -11579,18 +12956,66 @@ static HexaVal _jp_parse_string(const char* s, size_t n, size_t* pi) {
                 case 't':  out = '\t'; break;
                 case 'b':  out = '\b'; break;
                 case 'f':  out = '\f'; break;
-                case 'u':
-                    // Raw passthrough (no unicode expansion) — write literal
-                    // \uXXXX as the 6 bytes so round-trip is lossless.
+                case 'u': {
+                    // RFC 8259 §7: decode \uXXXX → the Unicode scalar, with
+                    // UTF-16 surrogate-pair recombination for astral code
+                    // points, then UTF-8 encode. (Was a raw 6-byte passthrough
+                    // — non-conformant; see inbox/patches/
+                    // json-parse-uXXXX-raw-passthrough.md. json_stringify emits
+                    // bytes >= 0x20 as-is so the standard decoded round-trip is
+                    // preserved.)
                     if (*pi + 5 < n) {
-                        if (len + 6 >= cap) { cap = (cap + 6) * 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return hexa_str(""); } buf = nb; }
-                        memcpy(buf + len, s + *pi, 6);
-                        len += 6;
-                        *pi += 6;
-                        continue;
+                        unsigned int cp = 0; int hexok = 1;
+                        for (int k = 0; k < 4; k++) {
+                            char h = s[*pi + 2 + k]; unsigned int v;
+                            if (h >= '0' && h <= '9')      v = (unsigned int)(h - '0');
+                            else if (h >= 'a' && h <= 'f') v = (unsigned int)(10 + h - 'a');
+                            else if (h >= 'A' && h <= 'F') v = (unsigned int)(10 + h - 'A');
+                            else { hexok = 0; break; }
+                            cp = (cp << 4) | v;
+                        }
+                        if (hexok) {
+                            size_t adv = 6;
+                            if (cp >= 0xD800 && cp <= 0xDBFF && *pi + 11 < n
+                                && s[*pi + 6] == '\\' && s[*pi + 7] == 'u') {
+                                unsigned int lo = 0; int ok2 = 1;
+                                for (int k = 0; k < 4; k++) {
+                                    char h = s[*pi + 8 + k]; unsigned int v;
+                                    if (h >= '0' && h <= '9')      v = (unsigned int)(h - '0');
+                                    else if (h >= 'a' && h <= 'f') v = (unsigned int)(10 + h - 'a');
+                                    else if (h >= 'A' && h <= 'F') v = (unsigned int)(10 + h - 'A');
+                                    else { ok2 = 0; break; }
+                                    lo = (lo << 4) | v;
+                                }
+                                if (ok2 && lo >= 0xDC00 && lo <= 0xDFFF) {
+                                    cp = 0x10000u + ((cp - 0xD800u) << 10) + (lo - 0xDC00u);
+                                    adv = 12;
+                                }
+                            }
+                            char u8[4]; int un;
+                            if (cp < 0x80u) { u8[0] = (char)cp; un = 1; }
+                            else if (cp < 0x800u) {
+                                u8[0] = (char)(0xC0u | (cp >> 6));
+                                u8[1] = (char)(0x80u | (cp & 0x3Fu)); un = 2;
+                            } else if (cp < 0x10000u) {
+                                u8[0] = (char)(0xE0u | (cp >> 12));
+                                u8[1] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+                                u8[2] = (char)(0x80u | (cp & 0x3Fu)); un = 3;
+                            } else {
+                                u8[0] = (char)(0xF0u | (cp >> 18));
+                                u8[1] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+                                u8[2] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+                                u8[3] = (char)(0x80u | (cp & 0x3Fu)); un = 4;
+                            }
+                            if (len + (size_t)un >= cap) { while (len + (size_t)un >= cap) cap *= 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return hexa_str(""); } buf = nb; }
+                            for (int k = 0; k < un; k++) buf[len++] = u8[k];
+                            *pi += adv;
+                            continue;
+                        }
                     }
                     out = 'u';
                     break;
+                }
                 default:   out = e; break;
             }
             if (len + 1 >= cap) { cap *= 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return hexa_str(""); } buf = nb; }
@@ -12237,6 +13662,39 @@ static void _hexa_init_fn_shims(void) {
     // anima RFC 036-draft (2026-05-16): phi_rs MI/Φ byte-equal carriers.
     phi_mi_pair                     = hexa_fn_new((void*)hexa_phi_mi_pair,                     4);
     phi_spatial                     = hexa_fn_new((void*)hexa_phi_spatial,                     4);
+    // anima RFC 040 (2026-05-16): farr GPU/CUDA Phase A scaffolding —
+    // 0/1-arg device-management carriers. The 5-arg farr_matmul_gpu uses
+    // a static-inline wrapper (direct C call past the hexa_callN ceiling,
+    // same pattern as RFC 032 farr_matmul + RFC 034 ad_matmul).
+    cuda_available                  = hexa_fn_new((void*)hexa_cuda_available,                  0);
+    cuda_device_count               = hexa_fn_new((void*)hexa_cuda_device_count,               0);
+    farr_to_device                  = hexa_fn_new((void*)hexa_farr_to_device,                  1);
+    farr_to_host                    = hexa_fn_new((void*)hexa_farr_to_host,                    1);
+    farr_pin                        = hexa_fn_new((void*)hexa_farr_pin,                        1);
+    farr_device_free                = hexa_fn_new((void*)hexa_farr_device_free,                1);
+    /* RFC 056 Phase 1 — residence contract + sub-view API. */
+    farr_set_out_disposition        = hexa_fn_new((void*)hexa_farr_set_out_disposition,        1);
+    farr_dev_view                   = hexa_fn_new((void*)hexa_farr_dev_view,                   3);
+    farr_pin_device                 = hexa_fn_new((void*)hexa_farr_pin_device,                 1);
+    farr_unpin_device               = hexa_fn_new((void*)hexa_farr_unpin_device,               1);
+    // anima RFC 040 Phase B (2026-05-16): row-softmax / row-RMSNorm /
+    // elementwise add+scale GPU dispatcher carriers. All ≤4-arg so they
+    // route through hexa_callN; on no-CUDA they call the small CPU
+    // helpers in the Phase B block above (byte-equal oracle).
+    farr_softmax_rows_gpu           = hexa_fn_new((void*)hexa_farr_softmax_rows_gpu,           3);
+    farr_rmsnorm_rows_gpu           = hexa_fn_new((void*)hexa_farr_rmsnorm_rows_gpu,           4);
+    farr_add_gpu                    = hexa_fn_new((void*)hexa_farr_add_gpu,                    3);
+    farr_scale_gpu                  = hexa_fn_new((void*)hexa_farr_scale_gpu,                  3);
+    // anima RFC 040 Phase B2 (2026-05-16): d_train5 hot-path completion —
+    // matmul_t / outer / mul / silu / silu_grad / rmsnorm_bwd (≤4-arg
+    // carriers). farr_adamw_step_gpu (11-arg) = bare direct-C entry,
+    // NOT registered here (RFC 032/035 pattern).
+    farr_matmul_t_gpu               = hexa_fn_new((void*)hexa_farr_matmul_t_gpu,               4);
+    farr_outer_gpu                  = hexa_fn_new((void*)hexa_farr_outer_gpu,                  4);
+    farr_mul_gpu                    = hexa_fn_new((void*)hexa_farr_mul_gpu,                    3);
+    farr_silu_gpu                   = hexa_fn_new((void*)hexa_farr_silu_gpu,                   2);
+    farr_silu_grad_gpu              = hexa_fn_new((void*)hexa_farr_silu_grad_gpu,              2);
+    farr_rmsnorm_bwd_rows_gpu       = hexa_fn_new((void*)hexa_farr_rmsnorm_bwd_rows_gpu,       4);
     // RFC 035 (2026-05-13): 3/4-arg NM-step builtins routed through hexa_callN.
     farr_simplex_centroid           = hexa_fn_new((void*)hexa_farr_simplex_centroid,           4);
     farr_simplex_get                = hexa_fn_new((void*)hexa_farr_simplex_get,                4);

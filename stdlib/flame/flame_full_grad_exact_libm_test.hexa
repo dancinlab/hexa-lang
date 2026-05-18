@@ -1,0 +1,122 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// flame_full_grad_exact_libm_test.hexa — full d=32·3L config GRAD-EXACT
+// using libm-based central-diff (RFC 045 Phase 3-I source 2 falsification
+// multi-probe verification).
+//
+// Phase 3-C verified GRAD-EXACT at TOY config (T=3, d=8, V=8) via 10
+// probes (max rel 2.66e-08). Phase 3-I source isolation verified single
+// probe (L0.Wg[5]) at FULL d=32·3L config via libm-fd at 1.85e-12 abs.
+//
+// This test extends to 8 probes covering all weight types at full
+// config: tok_emb, gF, block[0].{g1, Wq, Wo, Wg}, block[1].{Wu, Wd},
+// block[2].g2. If all probes show fd_libm ≈ analytic at ε² order, the
+// 'nn_decoder_grad is correct at full config' conclusion is established
+// broadly, not anecdotally.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/decoder_lib"
+use "stdlib/flame/decoder_block_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/train_lib"
+
+fn _abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+println("=== flame full-config GRAD-EXACT libm-fd multi-probe suite ===")
+
+let T = 16
+let d = 32
+let nh = 4
+let nkv = 2
+let h = 64
+let V = 256
+let n_layer = 3
+let hd = d / nh
+
+let path = "/Users/ghost/core/anima/training/corpus_consciousness_v1.jsonl"
+let bytes_arr = read_file_bytes(path)
+let ids = t_zeros(T)
+let mut p = 0
+while p < T { t_set(ids, p, to_float(bytes_arr[p])); p = p + 1 }
+let target_t = bytes_arr[T]
+
+let m_size = m_total(d, nh, nkv, h, V, n_layer)
+let M = t_zeros(m_size)
+nn_decoder_init(M, 42, T, d, nh, nkv, h, V, n_layer)
+let cos_tab = t_zeros(T * hd); let sin_tab = t_zeros(T * hd)
+nn_rope_build_tables(T, hd, cos_tab, sin_tab)
+let Mc = t_zeros(mc_total(T, d, nh, nkv, h, V, n_layer))
+let Mg = t_zeros(m_size)
+
+// compute analytic once
+nn_decoder_fwd(ids, M, Mc, cos_tab, sin_tab, T, d, nh, nkv, h, V, n_layer)
+nn_decoder_grad(ids, target_t, M, Mc, Mg, cos_tab, sin_tab,
+                T, d, nh, nkv, h, V, n_layer)
+
+// 8 probe sites (full config)
+let oTemb = m_off_tok_emb(d, nh, nkv, h, V, n_layer)
+let oGF = m_off_gF(d, nh, nkv, h, V, n_layer)
+let b0 = m_off_block(0, d, nh, nkv, h, V, n_layer)
+let b1 = m_off_block(1, d, nh, nkv, h, V, n_layer)
+let b2 = m_off_block(2, d, nh, nkv, h, V, n_layer)
+
+let probes = t_zeros(8)
+t_set(probes, 0, to_float(oTemb + 50 * d + 7))   // tok_emb[id=50, feat=7]
+t_set(probes, 1, to_float(oGF + 3))               // gF[3]
+t_set(probes, 2, to_float(b0 + bp_off_g1(d, nh, nkv, h) + 5))
+t_set(probes, 3, to_float(b0 + bp_off_Wq(d, nh, nkv, h) + 10))
+t_set(probes, 4, to_float(b0 + bp_off_Wo(d, nh, nkv, h) + 25))
+t_set(probes, 5, to_float(b0 + bp_off_Wg(d, nh, nkv, h) + 5))
+t_set(probes, 6, to_float(b1 + bp_off_Wu(d, nh, nkv, h) + 17))
+t_set(probes, 7, to_float(b2 + bp_off_Wd(d, nh, nkv, h) + 11))
+
+let probe_names = t_zeros(8)  // (unused; names below in print)
+let eps = 0.0001
+
+let mut max_abs = 0.0
+let mut max_rel = 0.0
+let mut k = 0
+while k < 8 {
+    let probe_idx = to_int(t_get(probes, k))
+    let analytic = t_get(Mg, probe_idx)
+    let orig = t_get(M, probe_idx)
+    t_set(M, probe_idx, orig + eps)
+    nn_decoder_fwd(ids, M, Mc, cos_tab, sin_tab, T, d, nh, nkv, h, V, n_layer)
+    let ce_plus = nn_decoder_ce_loss_libm(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+    t_set(M, probe_idx, orig - eps)
+    nn_decoder_fwd(ids, M, Mc, cos_tab, sin_tab, T, d, nh, nkv, h, V, n_layer)
+    let ce_minus = nn_decoder_ce_loss_libm(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+    t_set(M, probe_idx, orig)
+    let fd = (ce_plus - ce_minus) / (2.0 * eps)
+    let abs_d = _abs(analytic - fd)
+    let denom = if _abs(analytic) > 0.001 { _abs(analytic) } else { 0.001 }
+    let rel = abs_d / denom
+    if abs_d > max_abs { max_abs = abs_d }
+    if rel > max_rel { max_rel = rel }
+    print("  probe "); print(k); print(": idx="); print(probe_idx)
+    print(" analytic="); print(analytic)
+    print(" fd_libm="); print(fd)
+    print(" |Δ|="); print(abs_d)
+    print(" rel="); println(rel)
+    k = k + 1
+}
+
+println("")
+print("  Summary: 8 probes (tok_emb · gF · block[0]{g1,Wq,Wo,Wg} · block[1].Wu · block[2].Wd)")
+println("")
+print("    max |Δ| abs = "); println(max_abs)
+print("    max rel     = "); println(max_rel)
+println("")
+if max_rel < 0.0001 {
+    println("  PASS — flame nn_decoder_grad correct at full d=32·3L config across 8 probes (libm-fd byte-eq within central-diff truncation). Phase 3-C GRAD-EXACT scope extended to full config.")
+} else {
+    print("  FAIL — max rel = "); print(max_rel); println(" exceeds 1e-4 threshold")
+}
+
+let _ = t_free(ids); let _ = t_free(M); let _ = t_free(Mc); let _ = t_free(Mg)
+let _ = t_free(cos_tab); let _ = t_free(sin_tab); let _ = t_free(probes)
+let _ = t_free(probe_names)

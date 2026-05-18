@@ -1,0 +1,261 @@
+// ════════════════════════════════════════════════════════════════════════
+// tool/flame_phase4b_scan.hexa — flame Phase 4-B-1 detect-only scaffold (RFC 047)
+//
+// Scans a .hexa source for `nn_decoder_block_fwd` / `nn_decoder_block_bwd`
+// call sites, extracts the last 5 args (T, d, nh, nkv, h) as TEXT, and
+// classifies each as literal-tuple / variable-tuple / mixed-tuple.
+// NO emit, NO source transform. RFC 047 §39+§54+§144.
+//
+// Usage: hexa run tool/flame_phase4b_scan.hexa <source.hexa>
+// ════════════════════════════════════════════════════════════════════════
+
+let argv = args()
+// `hexa run` invocation: argv[0]=interp, argv[1]=this script, argv[2..]=user args.
+if len(argv) < 3 {
+    println("usage: hexa run tool/flame_phase4b_scan.hexa <source.hexa>")
+    println("       Phase 4-B-1 detect-only scaffold (RFC 047)")
+    exit(1)
+}
+
+let src_path = argv[2]
+let src = read_file(src_path)
+if len(src) == 0 {
+    println("error: cannot read " + src_path)
+    exit(1)
+}
+
+println("=== flame Phase 4-B-1 scaffold scan (RFC 047) — " + src_path + " ===")
+
+let mut total_sites = 0
+let mut literal_tuple_count = 0
+let mut variable_tuple_count = 0
+let mut mixed_tuple_count = 0
+
+// substring index_of with start offset — built up from .substring() since
+// the runtime's str.index_of(needle) does not accept a start arg.
+fn idx_of_from(haystack, needle, start) {
+    let n = len(haystack)
+    let m = len(needle)
+    if m == 0 { return start }
+    if start < 0 { return -1 }
+    let limit = n - m
+    let mut i = start
+    while i <= limit {
+        let slice = haystack.substring(i, i + m)
+        if slice == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// paren-balance helper to gather a possibly multi-line call expression.
+// Returns the inner text from open-paren (exclusive) up to matching close.
+fn gather_call_balanced(text, start_idx) {
+    let n = len(text)
+    let mut depth = 1
+    let mut i = start_idx
+    let mut out = ""
+    while i < n {
+        let ch = text.substring(i, i + 1)
+        if ch == "(" {
+            depth = depth + 1
+        }
+        if ch == ")" {
+            depth = depth - 1
+            if depth == 0 { return out }
+        }
+        out = out + ch
+        i = i + 1
+    }
+    return ""
+}
+
+// comma-split with paren/bracket/brace depth tracking.
+fn split_args_balanced(arg_text) {
+    let mut out = []
+    let mut buf = ""
+    let mut depth = 0
+    let mut i = 0
+    let n = len(arg_text)
+    while i < n {
+        let ch = arg_text.substring(i, i + 1)
+        if ch == "(" { depth = depth + 1; buf = buf + ch }
+        else if ch == "[" { depth = depth + 1; buf = buf + ch }
+        else if ch == "{" { depth = depth + 1; buf = buf + ch }
+        else if ch == ")" { depth = depth - 1; buf = buf + ch }
+        else if ch == "]" { depth = depth - 1; buf = buf + ch }
+        else if ch == "}" { depth = depth - 1; buf = buf + ch }
+        else if ch == "," {
+            if depth == 0 {
+                out.push(buf.trim())
+                buf = ""
+            } else {
+                buf = buf + ch
+            }
+        } else {
+            buf = buf + ch
+        }
+        i = i + 1
+    }
+    if len(buf.trim()) > 0 { out.push(buf.trim()) }
+    return out
+}
+
+fn is_integer_literal(s) {
+    let t = s.trim()
+    let nt = len(t)
+    if nt == 0 { return false }
+    let digits = "0123456789"
+    let mut i = 0
+    if t.substring(0, 1) == "-" {
+        if nt == 1 { return false }
+        i = 1
+    }
+    while i < nt {
+        let ch = t.substring(i, i + 1)
+        if !digits.contains(ch) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// djb2 hash — deterministic. Mask to 31 bits to stay positive in any
+// signed-int representation. ord(substring()) is the canonical hexa-lang
+// idiom for char→int (chars()[i] returns 1-char string, not ASCII int).
+fn djb2(s) {
+    let mut h = 5381
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let cc = ord(s.substring(i, i + 1))
+        h = ((h * 33) + cc) & 2147483647
+        i = i + 1
+    }
+    return h
+}
+
+fn djb2_hex(n) {
+    if n == 0 { return "0" }
+    let mut x = n
+    let hex_chars = "0123456789abcdef"
+    let mut out = ""
+    while x > 0 {
+        let nyb = x & 15
+        out = hex_chars.substring(nyb, nyb + 1) + out
+        x = x >> 4
+    }
+    return out
+}
+
+fn dims_hash_of(T, d, nh, nkv, h) {
+    return djb2("T=" + T + ",d=" + d + ",nh=" + nh + ",nkv=" + nkv + ",h=" + h)
+}
+
+fn line_of_offset(text, off) {
+    let mut ln = 1
+    let mut i = 0
+    while i < off {
+        if text.substring(i, i + 1) == "\n" { ln = ln + 1 }
+        i = i + 1
+    }
+    return ln
+}
+
+fn classify(n_lit) {
+    if n_lit == 5 { return "literal-tuple" }
+    if n_lit == 0 { return "variable-tuple" }
+    return "mixed-tuple"
+}
+
+fn one_if(b) {
+    if b { return 1 }
+    return 0
+}
+
+fn scan_calls_for(needle, kind) {
+    let mut start = 0
+    let n = len(src)
+    while start < n {
+        let pos = idx_of_from(src, needle, start)
+        if pos < 0 { return }
+        // skip when "//" appears earlier on the same line (comment) OR when
+        // "fn " precedes the name on the same line (this is the fn DECL not
+        // a call site).
+        let mut ls = pos
+        while ls > 0 {
+            if src.substring(ls - 1, ls) == "\n" { break }
+            ls = ls - 1
+        }
+        let prefix = src.substring(ls, pos)
+        if prefix.contains("//") {
+            start = pos + len(needle)
+            continue
+        }
+        if prefix.contains("fn ") {
+            start = pos + len(needle)
+            continue
+        }
+        // word-boundary check on the left — disallow alnum or underscore.
+        if pos > 0 {
+            let bc = ord(src.substring(pos - 1, pos))
+            let is_digit = (bc >= 48) && (bc <= 57)
+            let is_upper = (bc >= 65) && (bc <= 90)
+            let is_lower = (bc >= 97) && (bc <= 122)
+            let is_under = bc == 95
+            if is_digit || is_upper || is_lower || is_under {
+                start = pos + len(needle)
+                continue
+            }
+        }
+        let open_idx = pos + len(needle)
+        let inner = gather_call_balanced(src, open_idx)
+        if len(inner) == 0 {
+            start = open_idx
+            continue
+        }
+        let args_list = split_args_balanced(inner)
+        let na = len(args_list)
+        let mut expected = 10
+        if kind == "bwd" { expected = 13 }
+        let line_n = line_of_offset(src, pos)
+        if na != expected {
+            println("  " + src_path + ":" + to_string(line_n) + "  fn=" + kind + "  SKIP arity=" + to_string(na) + " expected=" + to_string(expected))
+            start = open_idx + len(inner)
+            continue
+        }
+        total_sites = total_sites + 1
+        let T = args_list[na - 5]
+        let d = args_list[na - 4]
+        let nh = args_list[na - 3]
+        let nkv = args_list[na - 2]
+        let h = args_list[na - 1]
+        let n_lit = one_if(is_integer_literal(T)) + one_if(is_integer_literal(d)) + one_if(is_integer_literal(nh)) + one_if(is_integer_literal(nkv)) + one_if(is_integer_literal(h))
+        let klass = classify(n_lit)
+        if klass == "literal-tuple" { literal_tuple_count = literal_tuple_count + 1 }
+        else if klass == "variable-tuple" { variable_tuple_count = variable_tuple_count + 1 }
+        else { mixed_tuple_count = mixed_tuple_count + 1 }
+        let dims_str = "(T=" + T + ", d=" + d + ", nh=" + nh + ", nkv=" + nkv + ", h=" + h + ")"
+        let mut tail = ""
+        if klass == "literal-tuple" {
+            tail = "  dims_hash=0x" + djb2_hex(dims_hash_of(T, d, nh, nkv, h))
+        }
+        println("  " + src_path + ":" + to_string(line_n) + "  fn=" + kind + "  dims=" + dims_str + "  classification=" + klass + tail)
+        start = open_idx + len(inner)
+    }
+}
+
+scan_calls_for("nn_decoder_block_fwd(", "fwd")
+scan_calls_for("nn_decoder_block_bwd(", "bwd")
+
+println("")
+println("=== flame Phase 4-B-1 scaffold summary ===")
+println("  total call sites detected   : " + to_string(total_sites))
+println("  literal-tuple (specializable): " + to_string(literal_tuple_count))
+println("  variable-tuple (fallback)   : " + to_string(variable_tuple_count))
+println("  mixed-tuple (fallback)      : " + to_string(mixed_tuple_count))
+if literal_tuple_count > 0 {
+    println("PASS  F-RFC047-SCAFFOLD-DETECT  ≥1 literal-tuple call site detected (specializable)")
+} else {
+    println("INFO  F-RFC047-SCAFFOLD-DETECT  no literal-tuple call site (all variable/mixed → fallback path)")
+}
+println("=== end of Phase 4-B-1 detect-only scaffold (RFC 047 §144) ===")

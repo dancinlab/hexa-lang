@@ -17,6 +17,8 @@
 
 > **한 문장 (canonical)**: hexa 로 쓴 컴파일러-only NN 학습 스택 **flame** 이, 자체 GPU substrate **forge** 를 통해 d=768·12L 트랜스포머를 **PyTorch 보다 빠르게** 학습시킨다 — 매 단계 **진짜 측정**(byte-eq falsifier)으로 증명하면서.
 
+> **합격선 (F-RFC046-WALL)**: d=768·12L **1 step wall ≤ 437.9s** (PyTorch eager 336.85s 의 1.3×). 이 수치를 측정으로 통과해야 GOAL 달성 — wall(초)이 유일 합격선이며 GPU util/resident 는 진단 보조 지표일 뿐.
+
 ---
 
 ## 무엇이 아닌가 (NOT)

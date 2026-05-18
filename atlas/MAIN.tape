@@ -22,8 +22,47 @@
 
 # ─── §0 TL;DR ────────────────────────────────────────────────────────
 
-@N tldr := "verdict-aggregate-2026-05-15-phase-3-cycle-032-ledger-consistency-CIgate-cumulative-118" :: summary [d=2026-05-15 active]
+@N tldr := "verdict-aggregate-2026-05-16-phase-3-cycle-039-sim-universe-6module-absorption-cumulative-139" :: summary [d=2026-05-16 active]
   body <<~EOF
+    cycle_039 LANDED — sim-universe 6-module absorption (§3 PHYS +8 🔵):
+      Absorbed the strongest closed-form / identity atom(s) from the six
+      sim-universe modules that previously had NO atlas atoms:
+      ssh-topology ×2 (bulk gap Δ=2|v−w|; quantized winding W=(1+sign(w−v))/2,
+      n_zero=2W) · hofstadter ×2 (#bands=q for φ=p/q; φ=1/2 edge ±2√2) ·
+      dqpt-loschmidt ×1 (TFIM DQPT cusp t*₀=π/4) · multipolar-prethermal ×1
+      (RMD universal exponent α(n)=2n+1) · surface-code ×1 (Gottesman-Knill
+      GF(2) syndrome == symplectic tableau, exhaustive) · wdw-minisuperspace
+      ×1 (canonical algebra A²c²=1, ω₂²=2ω₁², H_late=(2/3)ω₂). 8 inbox
+      submissions (≥5 pre-registered falsifiers + real-limit DOI/arXiv
+      anchor + sim-universe binary+sentinel witness each). New verifiers:
+      phys.hexa +6 Stage-1 🔵 SUPPORTED-IDENTITY (ssh ×2, hofstadter q-bands,
+      multipolar α, surface-code GF(2), wdw algebra), transcendental.hexa
+      +2 Stage-2 🔵 SUPPORTED-FORMAL (hofstadter 2√2, dqpt π/4). atlas-verify
+      CI gate 139/139 PASS · ledger live=139 vs declared=139 (CONSISTENT —
+      LEDGER_DECLARED_COUNT + phase_2_cumulative_count both 131→139). inbox
+      .md kept as provenance trail (b3883c29 pattern). f_atlas_lattice_
+      external: n=6/σ(6)/τ(6)/φ(6) play NO role in any of the 8 physics
+      derivations (hop/flux/coupling/multipolar-order/distance/oscillator
+      params — observation-only).
+
+    cycle_038 LANDED — sim-universe absorption reviewer-merge (§3 PHYS +14):
+      Reviewer-merged the 10 reviewer-pending atlas/inbox/ submissions
+      (6 from 23231fca + 4 from b3883c29) + 4 new this cycle
+      (z2-gauge-prethermal ×2 + preheating-analog ×2) into MAIN.tape §3 PHYS.
+      13 verifier-backed 🔵 + 1 honest 🟡 (mbs-revival central revival —
+      Strang-Trotter 2^N recompute out of scope, sim-universe selftest
+      sentinel is the carrier). New verifiers: phys.hexa +2
+      (s3_z2gauge_gauss_law_exact 🔵 SUPPORTED-IDENTITY,
+      s3_preheating_gaussian_purity_det_sigma 🔵 SUPPORTED-IDENTITY),
+      transcendental.hexa +2 (s3_z2gauge_floquet_half_step_exact,
+      s3_preheating_bogoliubov_canonical_commutator — both 🔵
+      SUPPORTED-FORMAL). atlas-verify CI gate 131/131 PASS · ledger
+      live=131 vs declared=131 (CONSISTENT — LEDGER_DECLARED_COUNT +
+      phase_2_cumulative_count both 118→131; the 9 prior sim-universe
+      inbox verifiers from 23231fca/e6be45cd/b3883c29 were live but
+      un-ledgered until this reviewer-merge). f_atlas_lattice_external:
+      n=6/σ(6)/τ(6) play NO role in any of the 14 physics derivations.
+
     Phase 2 cycle 003 LANDED — §10 BRIDGES first closure + §1 master_identity geometric:
       Total atlas entries (compiler/atlas/embedded.gen.hexa): ~410
       Explicit verdict in this file: ~60 (anchor seed + Phase 2 cycle 001/002/003)
@@ -39,7 +78,7 @@
         s10_137_from_sigma_tau        🟡 → 🔵 (T1-23 — arithmetic identity ONLY, α correspondence UNVERIFIED)
         s10_master_identity_24        🔵 (NT↔TOP — σ·φ=n·τ=J₂=4!=24)
 
-    Cumulative Phase 2+3 (cycle 001-031): 118/118 PASS · 118 entries verified (99 🔵 closed: 61 SUPPORTED-IDENTITY + 38 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 18 falsifier-robust batteries · 90 falsifiers 0 fired).
+    Cumulative Phase 2+3 (cycle 001-039): 139/139 PASS · 139 entries verified (cycle_039 +8 verifier-backed 🔵 sim-universe absorptions — 6 modules previously without atlas atoms: ssh-topology ×2, hofstadter ×2, dqpt-loschmidt ×1, multipolar-prethermal ×1, surface-code ×1, wdw-minisuperspace ×1; 120 🔵 closed = 71 SUPPORTED-IDENTITY + 49 SUPPORTED-FORMAL · 1 🟠 AT-RISK §5 BIO · 1 🟡 SUPPORTED-BY-CITATION sim-universe carry (s3_mbs_holevo_central_revival) · 18 falsifier-robust batteries · 90 falsifiers 0 fired).
 
     cycle 032 — CI gate ledger-consistency check (self-verifying closure 강화):
       test/atlas_verify_smoke.hexa 에 ledger drift 탐지 추가 — live verifier
@@ -1100,6 +1139,288 @@
   honest_c3 = "MEASURED SM parameter — no first-principles SM derivation; GUT prediction sin²θ_W ≈ 3/8 at unification scale runs to ≈ 0.23 at M_Z, but unification scale not experimentally established. Scheme-dependent: 5 PDG-tabulated values differ by amounts much larger than any single-scheme uncertainty; atlas entry quoting 'sin²θ_W = 0.2312' without scheme is ambiguous. f_atlas_lattice_external (STRICTEST in §3): atlas MUST NOT derive from n=6, σ(6), τ(6), φ(6), J₂(6) — any apparent coincidence is OBSERVATION-ONLY. Cap at 🟡 per g_external_calc_forbidden literature exception; no hexa-native verifier can 'compute' sin²θ_W."
   provenance = "atlas/inbox/phys-pdg-2024-weinberg-angle.md (2026-05-16 research session) — primary-source anchor via direct visual reading of PDG 2024 Section 10 PDF (pages 1–10)"
 
+# ─── sim-universe absorption (cycles 23231fca + b3883c29 + cycle_038) ──
+# Reviewer-merge of the 10 reviewer-pending atlas/inbox/ submissions
+# (6 from 23231fca, 4 from b3883c29) + 4 new this cycle (z2-gauge-prethermal
+# + preheating-analog). Each is a closed-form identity / structural
+# invariant extracted from a sim-universe module selftest; 13 are
+# verifier-backed 🔵 (g_self_verify satisfied — hexa-native verifier
+# recomputes the closed form), 1 (mbs-revival central revival) is the
+# honest 🟡 SUPPORTED-BY-CITATION carry (atlas-side Strang-Trotter 2^N
+# recompute out of scope; sim-universe binary selftest sentinel is the
+# numerical proof carrier). f_atlas_lattice_external respected: n=6 /
+# σ(6) / τ(6) / φ(6) play NO role in any of these physics derivations.
+
+@D s3_supremacy_xeb_wl_rational := "Morvan 2024 weak-link XEB_wl = 33/32 (ℚ-exact)" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_038 hexa-native PASS — pure-ℚ adjudication)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Morvan et al. 2024 random-circuit-sampling weak-link cross-entropy benchmarking XEB_wl = (2 + λ^(d/T))·F^d / λ^(d/T) at (d=12, T=4, λ=1/4, F=1): 4^(d/T)=4^3=64; 32·(2+64)=2112 == 33·64=2112 ⇒ XEB_wl = 33/32 (pure integer/rational, no floating point). sim-universe supremacy-frontier selftest invariant."
+  stage = "Stage 1 — symbolic identity (hexa-native ℚ adjudication)"
+  anchor = "[Shannon — cross-entropy benchmarking is a relative-entropy fidelity proxy] + [compiler invariant — exact ℚ arithmetic, no tolerance]"
+  cite = "A. Morvan et al., 'Phase transitions in random circuit sampling', Nature 634, 328 (2024) / arXiv:2304.11119 + sim-universe @X x_morvan_rcs + Phase 2 verifier"
+  honest_c3 = "Closed ℚ identity for the weak-link XEB model ONLY; NOT a claim that the sim reproduces the full 67-qubit hardware RCS phase transition (the sim is the small-n exact instrument). f_atlas_lattice_external: n=6 lattice plays NO role — d, T, λ, F are circuit parameters."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_supremacy_xeb_wl_rational"
+  provenance = "atlas/inbox/supremacy-xeb-weak-link-rational-closed.md (sim-universe absorption 23231fca; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
+@D s3_supremacy_kappa_c_log2_T4 := "Morvan 2024 weak-link critical noise κ_c(T)=(4/T)·ln2" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle_038 hexa-native libm PASS)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Morvan 2024 weak-link critical noise κ_c(T) = (4/T)·log 2; at T=4: κ_c = log 2 = 0.69314718055994531 to libm precision, |err| < 1e-12 vs reference. sim-universe supremacy-frontier selftest invariant."
+  stage = "Stage 2 — numerical (hexa-native libm log)"
+  anchor = "[Shannon — ln 2 = one bit] + [compiler invariant — libm log determinism]"
+  cite = "A. Morvan et al., Nature 634, 328 (2024) / arXiv:2304.11119 + sim-universe @X x_morvan_rcs + Phase 2 verifier"
+  honest_c3 = "log-2 closed form for the weak-link RCS phase boundary ONLY; the full phase-transition location on hardware is noise-model-dependent. f_atlas_lattice_external: n=6 plays NO role."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_supremacy_kappa_c_log2_T4"
+  provenance = "atlas/inbox/supremacy-kappa-c-critical-noise.md (sim-universe absorption 23231fca; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_qdarwin_touil_isf_classical_limit := "Touil 2022 quantum-Darwinism I(S:F_N)=2 bits (classical limit)" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_038 hexa-native PASS — ℤ-exact)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Touil et al. 2022 PRL 128 010401 closed-form mutual information I(S:F_N) at the classical limit (|s_k|²=0 ∀k, p=q=1/2): λ_full=λ_f=1/2 (mixed), λ_fbar=1 (empty range, pure) → h₂(1/2)+h₂(1/2)−h₂(1) = 1+1−0 = 2 bits (ℤ-exact). Perfectly distinguishable env records ⇒ 2 bits classical info about a binary system. sim-universe quantum-darwinism Route B at |s|²→0."
+  stage = "Stage 1 — symbolic identity (hexa-native ℤ adjudication)"
+  anchor = "[Shannon — h₂(1/2)=1 bit, h₂(1)=0] + [Holevo bound]"
+  cite = "A. Touil, B. Yan, D. Girolami, S. Deffner, W. H. Zurek, PRL 128, 010401 (2022) + sim-universe @X x_zhu_qdarwin + Phase 2 verifier"
+  honest_c3 = "Classical-limit (|s|²→0) closed form ONLY; the full quantum-Darwinism redundancy plateau at finite |s|² is the module's numerical regime. f_atlas_lattice_external: n=6 plays NO role."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_qdarwin_touil_isf_classical_limit"
+  provenance = "atlas/inbox/qdarwin-touil-2022-route-AB-six-decimal-identity.md (sim-universe absorption 23231fca + e6be45cd verifier; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
+@D s3_caqm_elze_perm_order_2S16 := "Elze 2024 ontological-CA Û permutation order = 8 (2S=16)" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_038 hexa-native PASS — ℤ-exact cycle structure)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Elze IJQI 22 2450013 (2024) ontological cellular-automaton Û on 2S=16 sites, built by the exact 3-phase swap algorithm (odd-pair · even-pair · periodic closing) mirroring ca-qm.hexa::_build_perm; cycle structure = two 8-cycles → multiplicative order lcm(8,8) = 8. Matches ca-qm Engine A selftest `perm-order=8`."
+  stage = "Stage 1 — symbolic identity (hexa-native permutation cycle decomposition)"
+  anchor = "[compiler invariant — finite-permutation multiplicative order is ℤ-exact (lcm of cycle lengths)]"
+  cite = "H.-T. Elze, Int. J. Quantum Inf. 22, 2450013 (2024) ('cogwheel'/CA quantum mechanics; 't Hooft Nucl. Phys. B 342, 471) + sim-universe @X x_elze + Phase 2 verifier"
+  honest_c3 = "Permutation-order is a ℤ-exact CA fact; the Elze ontological-CA ↔ quantum-mechanics correspondence itself is the cited interpretive claim, NOT re-derived here. f_atlas_lattice_external: 2S=16, not n=6."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_caqm_elze_perm_order_2S16"
+  provenance = "atlas/inbox/ca-qm-elze-revival-period-equals-perm-order.md (sim-universe absorption 23231fca + e6be45cd verifier; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
+@D s3_caqm_elze_cogwheel_E1 := "Elze 2024 cogwheel ladder E_k = 2πk/(2S·T); E_1 = π/8" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle_038 hexa-native libm PASS)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Elze 2024 IJQI 22 2450013 Eq. HamiltonianFin energy ladder E_k = 2π·k/(2S·T); at (k=1, 2S=16, T=1): E_1 = π/8 = 0.39269908169872414 to libm precision, |err| < 1e-15. sim-universe ca-qm selftest invariant."
+  stage = "Stage 2 — numerical (hexa-native libm π)"
+  anchor = "[ℏ — quantised energy ladder] + [compiler invariant — π/8 libm determinism]"
+  cite = "H.-T. Elze, Int. J. Quantum Inf. 22, 2450013 (2024); 't Hooft, Nucl. Phys. B 342, 471 (1990) + sim-universe @X x_elze + Phase 2 verifier"
+  honest_c3 = "Closed-form ladder spacing ONLY (π/8 at the stated quantum numbers); the cogwheel ontological interpretation is the cited claim. f_atlas_lattice_external: 2S=16, not n=6."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_caqm_elze_cogwheel_E1"
+  provenance = "atlas/inbox/ca-qm-elze-Ek-cogwheel-ladder-closed-form.md (sim-universe absorption 23231fca + 7dec53d4 verifier; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_caqm_sca_strang_trig_identity := "van Berkel 2025 SCA 2×2 block unitarity ← cos²+sin²=1" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle_038 hexa-native libm PASS)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: van Berkel et al. Quantum 9, 1811 (2025) Schrödinger-CA 2×2 block C=[[c,−is],[−is,c]] with c=cos(θ/2), s=sin(θ/2) at θ=0.130900 (ca-qm Engine B selftest θ): c²+s²=1, |c²+s²−1| < 1e-15 → C†C=I → Strang split U=U₁·U₀ unitary → norm conserved exactly (Engine B norm_drift=0)."
+  stage = "Stage 2 — numerical (hexa-native libm cos/sin; Pythagorean identity)"
+  anchor = "[compiler invariant — unitarity ⇒ ℓ² norm conservation] + [cos²+sin²=1 Pythagorean identity]"
+  cite = "D. van Berkel et al., Quantum 9, 1811 (2025) (Schrödinger cellular automaton) + sim-universe @X x_vberkel_sca + Phase 2 verifier"
+  honest_c3 = "Per-block unitarity identity ONLY; the full SCA ↔ Schrödinger correspondence is the cited claim. f_atlas_lattice_external: θ is a rotation angle, not σ(6)/τ(6)."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_caqm_sca_strang_trig_identity"
+  provenance = "atlas/inbox/ca-qm-sca-strang-split-norm-conservation.md (sim-universe absorption 23231fca + e6be45cd verifier; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_mbs_holevo_xc0_ln2 := "Xiang 2024 PXP-Rydberg central-site Holevo X_c(0) = ln 2" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle_038 hexa-native libm PASS)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Xiang et al. 2024 (arXiv:2410.15455) PXP-Rydberg quantum-information collapse-and-revival; at t=0 the central-site reduced density matrices ρ_c=|↓⟩⟨↓|, ρ'_c=|↑⟩⟨↑| are pure (S=0), their equal mixture is I/2 (S=ln 2) ⇒ Holevo X_c(0) = ln 2 − 0 = log(2) = 0.69314718055994531, |err| < 1e-12. One bit of central-site classical distinguishability. sim-universe mbs-revival selftest invariant."
+  stage = "Stage 2 — numerical (hexa-native libm log)"
+  anchor = "[Holevo bound — Probl. Peredachi Inf. 9(3) 3 (1973)] + [Shannon — ln 2 = one bit]"
+  cite = "X. Xiang et al., 'Observation of quantum information collapse-and-revival in a Rydberg atom array', arXiv:2410.15455 (2024) + sim-universe @X x_xiang_mbs + Phase 2 verifier"
+  honest_c3 = "t=0 closed form ONLY (ln 2); the dip-then-revive trajectory is the separate 🟡 carry (s3_mbs_holevo_central_revival). f_atlas_lattice_external: n=6 plays NO role."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_mbs_holevo_xc0_ln2"
+  provenance = "atlas/inbox/mbs-revival-holevo-initial-ln2.md (sim-universe absorption b3883c29; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_mbs_holevo_central_revival := "Xiang 2024 central-site Holevo dip-then-revive (headline structure)" :: verdict [d=2026-05-16 active]
+  status = "🟡 SUPPORTED-BY-CITATION"
+  axis = "§3 PHYS"
+  evidence = "Paper headline (Fig. 4b/c): the central-site Holevo information dips then revives — X_c(T_rev/2)=0.011 → X_c(T_rev)=0.646 at N=8 strict-PXP. This is a STRUCTURE (not a closed-form value); the numerical witness is the sim-universe mbs-revival binary selftest sentinel (`Ftrev=0.796511 norm_drift=0.000000`). An atlas-side recompute would require a Strang-Trotter 2^N PXP engine inside compiler/atlas/verify/ — out of scope per atlas/inbox/README.md (g5 hexa-native-only → 🟡 carry exception)."
+  stage = "Stage 1 — literature anchor + sim-universe binary sentinel (no atlas-side recompute)"
+  anchor = "[Holevo bound] + [compiler invariant — sim-universe compiled selftest sentinel as numerical proof carrier]"
+  cite = "X. Xiang et al., arXiv:2410.15455 (2024) + sim-universe @X x_xiang_mbs / @D g11"
+  honest_c3 = "🟡 by design: the dip-then-revive value pair is carried by the sim-universe selftest sentinel, NOT recomputed hexa-native in atlas (Strang-Trotter 2^N engine out of scope). NOT upgraded to 🔵 — honest g5 carry exception. f_atlas_lattice_external: n=6 plays NO role."
+  provenance = "atlas/inbox/mbs-revival-holevo-central-revival.md (sim-universe absorption b3883c29; ≥6 falsifiers pre-registered; honest 🟡 — no hexa-native verifier)"
+
+@D s3_dtc_subharmonic_fsp_thermal := "Bao 2025 DTC subharmonic-ratio FSP > 5× thermal (TC signature)" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle_038 hexa-native PASS — inequality structure)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Bao et al. 2025 (arXiv:2510.24059) kicked-Ising Floquet model; structural signature of time-crystalline order — subharmonic FFT peak at ω=π/T satisfies sub_ratio_FSP(λ₁=0.1)=5.026529 ≥ 5 (threshold floor) AND > sub_ratio_thermal(λ₁=1.2)=1.454044 (regime ordering), contrast ratio 3.46 > 3. sim-universe fock-prethermal-dtc N=8 40-cycle selftest invariant (sentinel sub_peak=5.026529)."
+  stage = "Stage 2 — numerical (hexa-native inequality adjudication on selftest values)"
+  anchor = "[compiler invariant — the Floquet trajectory + FFT is recomputed in the sim-universe binary; the atlas verifier closes the literal inequality structure]"
+  cite = "Z. Bao et al., 'Fock-space prethermal discrete time crystal', arXiv:2510.24059 (2025) + sim-universe @X x_bao_dtc + Phase 2 verifier"
+  honest_c3 = "The inequality STRUCTURE is closed hexa-native; the FFT/Floquet trajectory itself lives in the sim-universe compiled binary (not re-run inside atlas). f_atlas_lattice_external: λ₁ is a perturbation strength, not σ(6)."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_dtc_subharmonic_fsp_thermal"
+  provenance = "atlas/inbox/dtc-subharmonic-fsp-vs-thermal-ratio.md (sim-universe absorption b3883c29; ≥7 falsifiers pre-registered)"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_dtc_bond_phase_unitarity := "Bao 2025 exp(−iJσᶻσᶻ) bond unitarity ← cos²(J)+sin²(J)=1" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle_038 hexa-native libm PASS)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Bao et al. 2025 kicked-Ising Floquet U_F (main.tex L189) bond term exp(−iJσᶻ_iσᶻ_{i+1}) is diagonal in the computational basis with eigenvalues exp(±iJ); per-bond unitarity = cos²(J)+sin²(J)=1 at paper J=1 and off-paper J∈{0.5,0.7,1.5,2.0}, max |err| < 1e-15. Load-bearing identity behind the dtc module's Trotter-free `norm_drift=0.000000` selftest invariant."
+  stage = "Stage 2 — numerical (hexa-native libm cos/sin; Pythagorean identity)"
+  anchor = "[compiler invariant — diagonal-phase unitarity ⇒ norm preservation] + [Pauli 1927: σᶻ Hermitian ±1 ⇒ exp(−iJσᶻσᶻ) unit-modulus eigenvalues]"
+  cite = "Z. Bao et al., arXiv:2510.24059 (2025) + sim-universe @X x_bao_dtc + Phase 2 verifier"
+  honest_c3 = "Per-bond unit-modulus identity ONLY (not the full Floquet unitarity, which composes this with single-qubit rotations + R^y sandwich). f_atlas_lattice_external: J is a coupling, not σ(6)."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_dtc_bond_phase_unitarity"
+  provenance = "atlas/inbox/dtc-bond-ising-diag-phase-unitarity.md (sim-universe absorption b3883c29; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_z2gauge_gauss_law_exact := "Hayata-Hidaka 2024 Z₂ LGT [U_F,G(x)]=0 ⇒ ⟨G(x)⟩(t)≡+1" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_038 hexa-native PASS — ℤ-exact ±1 stabilizer)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Hayata & Hidaka 2024 (Phys. Rev. D 110, 114503 / arXiv:2408.10079) (1+1)D Z₂ LGT Floquet circuit; the 4-qubit Gauss-law stabilizer G(x)=−X_g·Z_1·Z_2·X_g commutes with U_F by construction. On the paper §IIB physical state Z_1Z_2(singlet)=−1, X_g(|+⟩ link)=+1 ⇒ G=−(+1)(−1)(+1)=+1 (ℤ-exact ±1). [U_F,G(x)]=0 ⇒ ⟨G(x)⟩(t)≡+1 every Floquet step — the clean target the paper's hardware Gauss-law violation diverges from (well-defined 1/⟨G⟩ denominator). sim-universe z2-gauge-prethermal selftest (max_t |⟨G⟩−1|=0)."
+  stage = "Stage 1 — symbolic identity (hexa-native ℤ-exact Pauli-eigenvalue)"
+  anchor = "[Gauss's law / Noether 1918 — local gauge invariance ⇒ conserved local charge] + [compiler invariant — Pauli string P²=𝟙 ⇒ eigenvalues ∈ {+1,−1}]"
+  cite = "T. Hayata & Y. Hidaka, Phys. Rev. D 110, 114503 (2024) / arXiv:2408.10079 + sim-universe @X x_hayata_z2lgt / @D g13 + Phase 2 verifier"
+  honest_c3 = "The EXACT-conservation identity for the CLEAN unitary sim ONLY — NOT the paper's hardware-measured Gauss-law violation ⟨G⟩_raw<1 (T1/T2 decoherence + gate/readout error, not modelled). f_atlas_lattice_external: n=6 plays NO role."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_z2gauge_gauss_law_exact"
+  provenance = "atlas/inbox/z2gauge-gauss-law-exact-invariance.md (sim-universe absorption cycle_038; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
+@D s3_z2gauge_floquet_half_step_exact := "Hayata-Hidaka 2024 Z₂ LGT half-step exact (no Trotter error)" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle_038 hexa-native libm PASS)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Hayata & Hidaka 2024 Z₂ LGT Floquet half-step — within each half-step terms act on pairwise-disjoint qubit sets ⇒ commute ⇒ exp(A+B)=exp(A)exp(B) EXACT (BCH with [A,B]=0; no Trotter error within the half-step). Per-rotation norm-preservation = cos²θ+sin²θ=1 at paper rotation angles (θ_f=1.0, θ_g=−1.0, θ_gf=0.5 at dt=1,K=m=1) + off-paper {0.25,0.7,1.4}, max |err| < 1e-15. Load-bearing identity behind `norm_drift=0.000000`."
+  stage = "Stage 2 — numerical (hexa-native libm cos/sin; BCH with [A,B]=0 + Pythagorean identity)"
+  anchor = "[Baker-Campbell-Hausdorff — [A,B]=0 ⇒ e^{A+B}=e^A e^B exactly] + [compiler invariant — unit-determinant rotation ⇒ norm preservation]"
+  cite = "T. Hayata & Y. Hidaka, Phys. Rev. D 110, 114503 (2024) / arXiv:2408.10079 + sim-universe @X x_hayata_z2lgt / @D g13 + Phase 2 verifier"
+  honest_c3 = "WITHIN-half-step exactness ONLY; the physical [H_f+H_g,H_gf]≠0 commutator IS the Floquet circuit (faithfully kept, not an error). NOT a claim of reproducing the paper's N=13/N=39 hardware. f_atlas_lattice_external: θ is a rotation angle."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_z2gauge_floquet_half_step_exact"
+  provenance = "atlas/inbox/z2gauge-floquet-half-step-exactness.md (sim-universe absorption cycle_038; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_preheating_bogoliubov_canonical_commutator := "Gondret 2025 BdG Wronskian |u|²−|v|²≡1 conserved" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle_038 hexa-native libm PASS — algebraic + RK4)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Gondret et al. 2025 (Phys. Rev. Lett. 135, 240603 / arXiv:2506.22024) cold-atom analog of cosmological preheating; the canonical-commutator-preserving real BdG RHS (SSOT module _bdg_rhs sign convention) conserves W=|u|²−|v|²=1: (a) algebraic dW/dt at a non-trivial sample = 0 (<1e-12 — ω-terms cancel pairwise, g-terms cancel per module derivation); (b) RK4 discrete flow (vacuum seed, 400 steps dt=0.005) W_final=1, |W−1|=1.78e-15 (<1e-6 module band). Wronskian = first integral of the linear BdG ODE (bosonic-Bogoliubov [â,â†]=1)."
+  stage = "Stage 2 — numerical (hexa-native libm; algebraic identity + embedded RK4 integration)"
+  anchor = "[Bogoliubov 1947 / canonical commutator [â,â†]=1 — unitarity of the squeezing transform] + [compiler invariant — RK4 conserves a quadratic first integral of a linear ODE]"
+  cite = "M. Gondret et al., Phys. Rev. Lett. 135, 240603 (2025) / arXiv:2506.22024 + sim-universe @X x_gondret_preheating / @D g14 + Phase 2 verifier"
+  honest_c3 = "Linear-Bogoliubov (Gaussian) regime conservation ONLY; the paper's late-time nonlinear regime (Fig.3 t>3ms — depletion, mode-mode coupling, decoherence) is OUTSIDE the linear theory by construction. @F f1: cosmological framing is *analog* (no space-expansion). f_atlas_lattice_external: k-mode index, not n=6."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_preheating_bogoliubov_canonical_commutator"
+  provenance = "atlas/inbox/preheating-bogoliubov-canonical-commutator.md (sim-universe absorption cycle_038; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_preheating_gaussian_purity_det_sigma := "Gondret 2025 pure vacuum-seeded TMSV det σ = 1/16" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_038 hexa-native PASS — exact dyadic ℚ)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Gondret et al. 2025 (Phys. Rev. Lett. 135, 240603 / arXiv:2506.22024) pure vacuum-seeded two-mode squeezed state has det σ = (|u|²−|v|²)⁴/16 = W⁴/16; with the canonical commutator W=1 ⇒ det σ = 1/16 = 0.0625 (exact dyadic ℚ), squeezing-INDEPENDENT (symplectic-volume invariant) — verified over |v|²∈{0,1,4,9,25}. A thermal seed n_th=1 gives W=3 → det σ=81/16 ≠ 1/16 (mixed-state distinguished). sim-universe preheating-analog selftest (det σ=0.062500)."
+  stage = "Stage 1 — symbolic identity (hexa-native exact ℚ; symplectic-volume invariant)"
+  anchor = "[Heisenberg uncertainty / symplectic minimum — pure 2-mode Gaussian saturates det σ = (1/2)⁴ at ħ=1] + [Simon 2000 / Adesso-Illuminati 2007 TMSV purity]"
+  cite = "M. Gondret et al., Phys. Rev. Lett. 135, 240603 (2025) / arXiv:2506.22024 + sim-universe @X x_gondret_preheating / @D g14 + Phase 2 verifier"
+  honest_c3 = "Pure vacuum-seeded (n_th=0) case ONLY; the paper's measured n_th=0.18(8) makes the experimental state weakly mixed (det σ>1/16). Late-time nonlinear regime breaks Gaussianity entirely (OUTSIDE linear theory). f_atlas_lattice_external: mode count, not n=6."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_preheating_gaussian_purity_det_sigma"
+  provenance = "atlas/inbox/preheating-gaussian-purity-det-sigma.md (sim-universe absorption cycle_038; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
+# ─── sim-universe absorption cont. (cycle_039 — 6 modules ×8 atoms) ─────
+# ssh-topology ×2 · hofstadter ×2 · dqpt-loschmidt ×1 ·
+# multipolar-prethermal ×1 · surface-code ×1 · wdw-minisuperspace ×1.
+# All 8 verifier-backed 🔵 (6 Stage 1 IDENTITY + 2 Stage 2 FORMAL);
+# the six modules previously had NO atlas atoms. f_atlas_lattice_external
+# respected: n=6 / σ(6) / τ(6) / φ(6) play NO role (hop/flux/coupling/
+# multipolar-order/distance/oscillator parameters — observation-only).
+
+@D s3_ssh_bulk_gap_2absvw := "SSH 1979 bulk gap Δ = 2|v−w| (closed form, gap closes at v=w)" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_039 hexa-native PASS — ℤ-exact band-edge identity)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Su-Schrieffer-Heeger 1979 (PRL 42 1698) / Asbóth-Oroszlány-Pályi 2016 (Springer LNP 919 Ch.1 Eq.1.16) dimerized chain bulk band E(k)=±√(v²+w²+2vw cos k); at the gap-min momentum cos k=−1, |E(π)|²=(v−w)² exactly ⇒ Δ²=4(v−w)²=4|v−w|² (ℤ-exact, no transcendental). Sweep (v,w)∈[0,5]² 36 pairs 0 violations; band-max cos k=+1 → (v+w)² (momentum distinguished); gap closure Δ=0 ⟺ v=w (6/6 exact, the topological phase transition). sim-universe ssh-topology selftest (Δ_cf=1.200000, |2|E(π)|−Δ|=0.000000)."
+  stage = "Stage 1 — symbolic identity (hexa-native ℤ adjudication)"
+  anchor = "[compiler invariant — √((v−w)²)=|v−w| is exact ℚ at the band-edge momentum, no float tolerance] + [SSH PRL 42 1698 / Asbóth LNP 919 bulk band]"
+  cite = "W. P. Su, J. R. Schrieffer, A. J. Heeger, Phys. Rev. Lett. 42, 1698 (1979) / Asbóth-Oroszlány-Pályi, Springer LNP 919 (2016) + sim-universe @X x_ssh_1979 / @X x_asboth_tinotes / @D g17 + Phase 2 verifier"
+  honest_c3 = "Bulk (periodic-chain) closed-form gap of the IDEALIZED single-particle SSH model ONLY; NOT the open-chain edge-mode hybridization (~ (v/w)^L, the separate winding atom), NOT interacting/many-body SSH, NOT real polyacetylene / cold-atom / photonic realizations (@D g17). f_atlas_lattice_external: v,w are hops, not σ(6)/τ(6)."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_ssh_bulk_gap_2absvw"
+  provenance = "atlas/inbox/ssh-topology-bulk-gap-2-abs-v-minus-w.md (sim-universe absorption cycle_039; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
+@D s3_ssh_winding_sign_wv := "SSH winding W=(1+sign(w−v))/2 ∈ {0,1}; n_zero=2W" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_039 hexa-native PASS — ℤ-exact quantized invariant)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: SSH 1979 / Asbóth 2016 §1.3-1.5 — d(k)=(v+w cos k, w sin k) winding about origin = chiral-symmetry invariant W=(1+sign(w−v))/2 ∈ {0,1} (1=topological w>v, 0=trivial w<v); bulk-boundary correspondence n_zero=2·W (2 protected zero-energy edge modes topo / 0 trivial). Sweep (v,w)∈[0,5]² v≠w 30 pairs 0 violations (W integer-quantized, W=1 ⟺ w>v, n_zero=2W; v=w excluded — winding ill-defined at gap closure)."
+  stage = "Stage 1 — symbolic identity (hexa-native ℤ — sign / integer quantization)"
+  anchor = "[compiler invariant — sign(w−v)∈{−1,0,+1}, W=(1+sign)/2∈{0,1} exact ℤ] + [Zak 1989 PRL 62 2747 — symmetry-quantized Berry/Zak phase γ=πW]"
+  cite = "W. P. Su, J. R. Schrieffer, A. J. Heeger, Phys. Rev. Lett. 42, 1698 (1979); J. Zak, Phys. Rev. Lett. 62, 2747 (1989) + sim-universe @X x_ssh_1979 / @X x_asboth_tinotes / @D g17 + Phase 2 verifier"
+  honest_c3 = "Quantized winding integer + bulk-boundary count of the IDEALIZED single-particle SSH model; finite-N edge modes hybridize (~ (v/w)^L, exp-small but NONZERO — count exact, energies not literally zero; @D g17 stated not faked). NOT interacting SSH, NOT a real material/experimental realization. f_atlas_lattice_external: v,w are hops, not n=6."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_ssh_winding_sign_wv"
+  provenance = "atlas/inbox/ssh-topology-winding-integer-sign-w-minus-v.md (sim-universe absorption cycle_039; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
+@D s3_hofstadter_q_bands_phi_pq := "Hofstadter #magnetic sub-bands = q for φ=p/q (lowest terms)" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_039 hexa-native PASS — ℤ-exact combinatorial invariant)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Hofstadter 1976 (PRB 14 2239 Fig.1) / Harper 1955 — rational flux φ=p/q closes the Harper eq. on a q×q matrix ⇒ exactly q magnetic sub-bands (q−1 gaps; central gap closed for even q; E↔−E bipartite-symmetric). Test set 8 (p,q) incl. non-coprime (2/4→2, 2/6→3, 3/9→3 reduced by gcd), 0 violations (#bands ≡ q/gcd(p,q)); TKNN 1982 Diophantine r=q·s_r+p·t_r |t_r|≤q/2 — every gap carries an integer Chern label (solvable ⟺ gcd(p,q)=1, extended-Euclid exact). sim-universe hofstadter selftest (#bands=q, E↔−E)."
+  stage = "Stage 1 — symbolic identity (hexa-native ℤ — gcd reduction + Diophantine)"
+  anchor = "[compiler invariant — band count q/gcd(p,q) is exact ℤ; the Diophantine has an integer solution iff gcd(p,q)=1] + [TKNN PRL 49 405 1982 — integer Hall/Chern gap labelling]"
+  cite = "D. R. Hofstadter, Phys. Rev. B 14, 2239 (1976); Thouless-Kohmoto-Nightingale-den Nijs, Phys. Rev. Lett. 49, 405 (1982) + sim-universe @X x_hofstadter_1976 / @X x_tknn_1982 / @D g18 + Phase 2 verifier"
+  honest_c3 = "Exact band-count combinatorial identity at RATIONAL φ=p/q of the IDEALIZED single-particle Harper-Hofstadter model; an irrational flux is never represented exactly (approached by rational approximants → zero-measure Cantor spectrum, the separate bandwidth-collapse witness, @D g18). NOT interacting electrons / disorder / a real material. f_atlas_lattice_external: p,q are flux integers, not σ(6)/τ(6)."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_hofstadter_q_bands_phi_pq"
+  provenance = "atlas/inbox/hofstadter-exactly-q-bands-at-phi-p-over-q.md (sim-universe absorption cycle_039; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
+@D s3_hofstadter_phi_half_2sqrt2 := "Hofstadter φ=1/2 outer band edge E = ±2√2 (closed form)" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle_039 hexa-native libm PASS)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Hofstadter 1976 (PRB 14 2239) at φ=1/2 (p=1,q=2) the 2×2 Harper matrix has E=±√(4cos²k_y+2+2cos2k_x); band extrema (k_y=0, 2k_x=0) ⇒ 4+2+2=8 ⇒ |E|_max=√8=2√2=2.8284271247461903 (libm sqrt, |err|=0 < 1e-12); (2√2)²−8 = 1.78e-15 (exact algebraic); generic k_y=π/2 edge = 2.0 < 2√2 (extremal momentum distinguished); E=0 in spectrum (even-q central degeneracy). sim-universe hofstadter selftest (φ=1/2 |E|_max vs 2√2 < 1e-9)."
+  stage = "Stage 2 — numerical (hexa-native libm sqrt)"
+  anchor = "[compiler invariant — (2√2)²=8 exact algebraic; libm sqrt deterministic |err|<1e-12] + [TKNN PRL 49 405 — the φ=1/2 two-band Chern structure]"
+  cite = "D. R. Hofstadter, Phys. Rev. B 14, 2239 (1976); Harper, Proc. Phys. Soc. A 68, 874 (1955) + sim-universe @X x_hofstadter_1976 / @X x_tknn_1982 / @D g18 + Phase 2 verifier"
+  honest_c3 = "Exact closed-form outer band edge ±2√2 at the SINGLE rational flux φ=1/2 ONLY; NOT the full fractal butterfly (exact dense ED at general p/q, not closed-form), NOT irrational flux (@D g18). f_atlas_lattice_external: φ=1/2 is a flux fraction, not σ(6)/τ(6)."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_hofstadter_phi_half_2sqrt2"
+  provenance = "atlas/inbox/hofstadter-phi-half-band-edge-2-sqrt-2.md (sim-universe absorption cycle_039; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_dqpt_tfim_critical_time_pi4 := "Heyl-Polkovnikov-Kehrein 2013 TFIM DQPT cusp t*₀ = π/4" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-FORMAL (Phase 2 cycle_039 hexa-native libm PASS)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Heyl-Polkovnikov-Kehrein 2013 (PRL 110 135704 / arXiv:1206.2505) TFIM quench across g_c=1; analytic-limit selftest quench g₀→∞,g₁→0: cos k*=(1+g₀g₁)/(g₀+g₁)→0 ⇒ k*=π/2; ε_{g₁=0}(k*)=2√(1)=2; t*=π/ε=π/2; t*₀=t*·½ = π/4 = 0.7853981633974483 (libm π, |err|=0 < 1e-12); ladder t*_n=t*(n+½) → t*₁=3π/4, t*₂=5π/4; control g₀=0.4→g₁=0.8 both<1: cos k*=1.1>1 ⇒ NO real k* ⇒ NO DQPT (smooth λ_∞). sim-universe dqpt-loschmidt selftest invariant."
+  stage = "Stage 2 — numerical (hexa-native libm π / sqrt)"
+  anchor = "[compiler invariant — cos(π/2)=0, ε_{g=0}=2 exact at the analytic limit; libm π deterministic |err|<1e-12] + [Pfeuty 1970 Ann. Phys. 57 79 — TFIM free-fermion dispersion ε_g(k)]"
+  cite = "M. Heyl, A. Polkovnikov, S. Kehrein, Phys. Rev. Lett. 110, 135704 (2013) / arXiv:1206.2505 + sim-universe @X x_heyl_dqpt / @D g19 + Phase 2 verifier"
+  honest_c3 = "Closed-form fundamental DQPT critical time π/4 for the INTEGRABLE TFIM in the analytic limit; the non-analyticity is sharp ONLY in the N→∞ closed form (Route B) — finite-N exact-2^N Route A has rounded near-kinks (@D g19 stated not faked, 2^N wall N≲24). NOT a non-integrable model's thermodynamic limit, NOT decoherent. f_atlas_lattice_external: g₀,g₁ are transverse fields, not n=6."
+  verifier = "compiler/atlas/verify/transcendental.hexa::verify_s3_dqpt_tfim_critical_time_pi4"
+  provenance = "atlas/inbox/dqpt-loschmidt-tfim-critical-time-pi-over-4.md (sim-universe absorption cycle_039; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/transcendental.hexa
+
+@D s3_multipolar_alpha_2n_plus_1 := "Liu 2025 RMD universal lifetime exponent α(n) = 2n+1" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_039 hexa-native PASS — integer identity 1,3,5,…)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Liu et al. 2025 (Nature 650 79-85 / arXiv:2503.21553) random-multipolar-driving prethermalization; universal lifetime-scaling exponent τ∼(1/T)^α with α(n)=2n+1 (n=0 monopolar/white, 1 dipolar, 2 quadrupolar → 1,3,5). n∈[0,6] 7 orders 0 violations (α≡2n+1, odd, strictly +2 step; FGR power-count: Thue-Morse-class filter |W_n(x)|²=∏4sin²(2^{k-1}x/2)∝x^{2n} (n factors ~x²) + 1 per-period T power ≡ 2n+1). Contrasts the EXPONENTIAL τ∼e^{1/T} of periodic Floquet. sim-universe multipolar-prethermal selftest (recovered α=1.000/2.991/4.949 — finite-N estimates of the integer law)."
+  stage = "Stage 1 — symbolic identity (hexa-native ℤ — FGR power-counting)"
+  anchor = "[Fermi golden rule — leading small-T power of a x^{2n} spectral filter × one T (rate normalization) = T^{2n+1} exactly] + [compiler invariant — 2n+1 exact ℤ for integer n]"
+  cite = "Yu Liu et al., Nature 650, 79-85 (2026) / arXiv:2503.21553 (Zhao-Bhatt 2021 / Mori 2021 multipolar filter) + sim-universe @X x_liu_multipolar / @D g15 + Phase 2 verifier"
+  honest_c3 = "The UNIVERSAL dimensionless scaling EXPONENT α(n)=2n+1 ONLY (via the paper's own exact-FGR derivation: exact diag of Ĥ_eff + the closed-form |W_n|²∝x^{2n} filter). The ABSOLUTE prethermal lifetimes / volume-law saturation are finite-N truncated artifacts — NOT claimed (@D g15). NOT decoherent, NOT the 78-qubit lab device, NOT the thermodynamic limit (ceiling N≲20-22). f_atlas_lattice_external: n is the multipolar order, not the n=6 lattice."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_multipolar_alpha_2n_plus_1"
+  provenance = "atlas/inbox/multipolar-prethermal-alpha-n-equals-2n-plus-1.md (sim-universe absorption cycle_039; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
+@D s3_surface_code_gf2_tableau_syndrome := "Acharya 2024 Gottesman-Knill GF(2) syndrome == symplectic tableau" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_039 hexa-native PASS — exhaustive GF(2) ℤ-exact)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Acharya et al. 2024 (Nature 638 920-926 / arXiv:2408.13687) surface-code memory is Clifford+Pauli-noise+Pauli-measurement ⇒ exactly classically simulable (Gottesman-Knill) via the binary symplectic tableau (Aaronson-Gottesman 2004 PRA 70 052328). Structural identity: symplectic-tableau syndrome (S·e mod 2) == classical adjacent-parity (e_j⊕e_{j+1}) — EXHAUSTIVE over all weight-1 + weight-2 X errors, d∈{3,5,7}: 240 GF(2) checks 0 mismatches (mod-2 exact; two-adjacent flip → even-parity syndrome 0 not integer 2; O(n)-bit tableau, NO 2^d state vector). sim-universe surface-code selftest (tableau witness d=3,5,7 GF(2)==symplectic OK)."
+  stage = "Stage 1 — symbolic identity (hexa-native GF(2) / mod-2 exhaustive adjudication)"
+  anchor = "[Gottesman-Knill theorem — Clifford+Pauli is poly-time classically simulable via the binary symplectic tableau] + [compiler invariant — GF(2) mod-2 arithmetic exact, zero tolerance over an exhaustive finite error set]"
+  cite = "R. Acharya et al., Nature 638, 920-926 (2025) / arXiv:2408.13687; Aaronson-Gottesman, Phys. Rev. A 70, 052328 (2004) + sim-universe @X x_acharya_surfacecode / @D g16 + Phase 2 verifier"
+  honest_c3 = "Exact GF(2) tableau == classical-syndrome structural identity (the Gottesman-Knill witness) — a DELIBERATELY DIFFERENT exact technique (poly tableau / classical syndrome Markov chain, NOT a 2^N state vector). Does NOT model coherent/leakage/crosstalk as quantum amplitudes (paper folds them into effective Pauli rates, @D g16), NOT the Willow hardware budget device-by-device. The Acharya Λ-suppression is a SEPARATE Monte-Carlo result on top. f_atlas_lattice_external: d is the code distance, not σ(6)/τ(6)."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_surface_code_gf2_tableau_syndrome"
+  provenance = "atlas/inbox/surface-code-gottesman-knill-gf2-syndrome-identity.md (sim-universe absorption cycle_039; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
+@D s3_wdw_canonical_algebra := "Basilakos 2025 WDW canonical algebra A²c²=1, ω₂²=2ω₁², H_late=(2/3)ω₂" :: verdict [d=2026-05-16 active phase-2-closed]
+  status = "🔵 SUPPORTED-IDENTITY (Phase 2 cycle_039 hexa-native PASS — exact ℚ canonical-map algebra)"
+  axis = "§3 PHYS"
+  evidence = "Phase 2 verifier: Basilakos-Kouniatalis-Saridakis-Tzerefos 2025 (arXiv:2512.18818 / PLB 2026) WDW minisuperspace; the canonical map (Eq.xydef) → 2D hyperbolic oscillator ONLY for A²=8/3, c²=3/8 (Eq.Ac_values): (1) closure A²·c²=1 exact ℚ (8·3==3·8); (2) ω₁²=Λ/A², ω₂²=2Λ/A² ⇒ ω₂²/ω₁²=2 ⇒ ω₂=√2 ω₁, Λ and A² cancel identically (verified over 5 (Λ,A²) — Λ/A²-independent); (3) late-time de-Sitter H_late=(2/3)ω₂ from α∝(y²)^{1/3}, y²∝e^{2ω₂τ} (exponent 2·(1/3)=2/3 exact ℚ). 0 violations. sim-universe wdw-minisuperspace selftest (A²=2.666667 c²=0.375 ω₂=√2·ω₁; H_late≈(2/3)ω₂, dev 0.32%)."
+  stage = "Stage 1 — symbolic identity (hexa-native exact ℚ; canonical-transformation closure)"
+  anchor = "[compiler invariant — A²c²=1 and ω₂²/ω₁²=2 and the 2/3 de-Sitter exponent are exact ℚ (Λ, A² cancel identically), zero tolerance] + [DeWitt 1967 PR 160 1113 — the Wheeler-DeWitt constrained Hamiltonian]"
+  cite = "S. Basilakos, A. Kouniatalis, E. N. Saridakis, N. Tzerefos, Phys. Lett. B (2026) / arXiv:2512.18818; DeWitt, Phys. Rev. 160, 1113 (1967) + sim-universe @X x_basilakos_wdw / @D g20 + Phase 2 verifier"
+  honest_c3 = "Exact canonical-transformation algebra of the minisuperspace TRUNCATION ONLY — minisuperspace freezes ALL inhomogeneous/perturbative modes by hand (NOT canonical quantum gravity); the exact solvability is a property of the SPECIAL Basilakos potential (A²=8/3,c²=3/8), NOT generic; the Bohmian reading of the de-Sitter limit (3) is ONE interpretation, flagged not privileged (@D g20, mirrors ca-qm @D g9); the ΛCDM/de-Sitter match is a toy-sector property, NOT a data fit (@F f1: cosmological framing is THEME, not derivation). f_atlas_lattice_external: A,c,ω are oscillator parameters, not σ(6)/τ(6)."
+  verifier = "compiler/atlas/verify/phys.hexa::verify_s3_wdw_canonical_algebra"
+  provenance = "atlas/inbox/wdw-minisuperspace-canonical-algebra-A2c2-omega-ratio.md (sim-universe absorption cycle_039; ≥6 falsifiers pre-registered)"
+  |> compiler/atlas/verify/phys.hexa
+
 # ═══════════════════════════════════════════════════════════════════════
 # §4 CHEM — periodic table · materials · neurotransmitter
 # ═══════════════════════════════════════════════════════════════════════
@@ -1681,7 +2002,7 @@
 @N s11_closed_inventory := "🔵 CLOSED INVENTORY (cross-domain)" :: section [d=2026-05-15 active]
   default_tier = "🔵 SUPPORTED-IDENTITY OR 🔵 SUPPORTED-FORMAL OR 🔵 FALSIFIED-FORMAL"
   scope = "hexa-native verifier 가 closed (Stage 1 symbolic OR Stage 2 deterministic) 처리한 entries — cross-domain at-a-glance"
-  phase_2_cumulative_count = 118
+  phase_2_cumulative_count = 139
   phase_2_cumulative_inventory <<~EOF
     Phase 2 cumulative (cycle 001 + 002 + 003 + 004, 2026-05-15) — 24/24 PASS · 24 entries 🔵 SUPPORTED-IDENTITY:
 

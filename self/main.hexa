@@ -87,7 +87,7 @@ fn cmd_help() {
     println("  atlas promote --staging <f.n6>          Write to live (* register/pr = stub)")
     println("  atlas-verify [--domain D] [--tier N]     Verdict ledger — 86 entries Stage 1+2+3 hexa-native")
     println("  calc <engine> [args]                    TECS-L calculators (nstate/vortex/n6/perfect/congruence/gamma0)")
-    println("  verify <id> | --expr <fn> <n> <v>       Verify claim: atlas+calc → tier (🔵/🟡/🟠/⚪)")
+    println("  verify <id> | --expr <fn> <n> <v>       Claim ↔ atlas+calc reproduction match → trust tier (🔵/🟡/🟠/⚪)")
     println("    e.g. hexa atlas lookup P n            → @P n = 6 :: foundation [11*]")
     println("    e.g. hexa verify sigma                → 🔵 SUPPORTED-FORMAL (calc divisor_sum(6)=12)")
     println("    e.g. hexa atlas-verify --domain math  → §2 MATH verifiers PASS/FAIL + |err|")
@@ -100,10 +100,12 @@ fn cmd_help() {
     println("    e.g. hexa pure-check src/math.hexa    → JSON: {version,source:\"ast\",pure_fns:[...]}")
     println("")
     println("MATH VERIFIERS  (3, deterministic — no atlas write)")
-    println("  honesty <file>                          BT-AI2 honesty audit (16-domain router)")
-    println("  absolute --seed \"...\"                   Mk.VIII Δ₀-absolute Σ₁/Π₁ classifier")
+    println("  ─ classifiers, NOT a claim↔atlas check like `verify`: each assigns a")
+    println("    different property (honesty / arithmetical-hierarchy tier / self-ref fixpoint)")
+    println("  honesty <file>                          BT-AI2 honesty audit (16-domain router) — fake-pass/fake-fail detector")
+    println("  absolute --seed \"...\"                   Mk.VIII Δ₀-absolute Σ₁/Π₁ arithmetical-hierarchy classifier")
     println("  meta-closure [--seed \"...\"]             Mk.IX self-ref fixpoint (H1+H2+H3)")
-    println("    e.g. hexa absolute --seed \"sigma(6)=12\"  → grade [10*]→[11*] verdict")
+    println("    e.g. hexa absolute --seed \"forall n: n+0=n\"  → Π₁ arithmetical → grade [10*]→[11*]")
     println("")
     println("MATH DISCOVERY  (3 generators, γ no-write)")
     println("  smash --seed \"...\" [--depth N]          Blowup 9-phase singularity drill")
@@ -129,7 +131,7 @@ fn cmd_help() {
     println("")
     println("  drill variants  (12, each composes drill with a different orchestration pattern):")
     println("    omega       Apex preset (drill+chain+batch auto-dispatch — nexus's \"main entry\")")
-    println("    kick        alias → drill                    (ω-cycle ≡ drill apex)")
+    println("    kick        the ω-cycle (drill→…→resonance staged verb chain — same cycle as omega)")
     println("    surge       omega + cross-seed variants")
     println("    dream       iterations × drill              (dream-mode seed evolution)")
     println("    swarm       population × generations         (evolutionary)")
@@ -856,6 +858,34 @@ fn os_clang_ldflags() {
     return base
 }
 
+// ── anima RFC 040 Phase D — HEXA_CUDA real-cuBLAS link gate ───
+// When env HEXA_CUDA=1 AND a runtime_cuda.c sits next to runtime.c,
+// the native build adds `-DHEXA_CUDA <runtime_cuda.c> -lcublas -lcudart`
+// so farr_matmul_gpu routes to the real cuBLAS Dgemm body (the
+// `#ifdef HEXA_CUDA` extern surface already lives in self/runtime.c).
+// No-op (empty string) unless HEXA_CUDA=1 — every existing build is
+// byte-identical. CUDA include/lib auto-probed under common paths.
+fn cuda_build_cflags(self_dir) {
+    if env("HEXA_CUDA") != "1" { return "" }
+    if !file_exists(self_dir + "/runtime_cuda.c") { return "" }
+    let mut inc = "/usr/local/cuda/include"
+    if !file_exists(inc + "/cublas_v2.h") {
+        if file_exists("/usr/include/cublas_v2.h") { inc = "/usr/include" }
+    }
+    return "-DHEXA_CUDA -I" + inc + " "
+}
+fn cuda_build_ldflags(self_dir) {
+    if env("HEXA_CUDA") != "1" { return "" }
+    if !file_exists(self_dir + "/runtime_cuda.c") { return "" }
+    let mut lib = "/usr/local/cuda/lib64"
+    if !file_exists(lib + "/libcudart.so") {
+        if file_exists("/usr/lib/x86_64-linux-gnu/libcudart.so") {
+            lib = "/usr/lib/x86_64-linux-gnu"
+        }
+    }
+    return " '" + self_dir + "/runtime_cuda.c' -L" + lib + " -lcublas -lcudart"
+}
+
 // ── B20 / roadmap 55 Phase 1 — strict-FP clang flags ─────────
 // codegen_c2 emits `/* HEXA_STRICT_FP_TU: 1 */` at the top of generated
 // C when the translation unit contains any @strict_fp fn. Detect the
@@ -1044,7 +1074,7 @@ fn _absorbed_script(verb) {
     if verb == "qmirror"          { return "compiler/hw_probes/qmirror.hexa" }
     if verb == "akida"            { return "compiler/hw_probes/akida.hexa" }
     if verb == "qrng"             { return "compiler/hw_probes/qrng.hexa" }
-    if verb == "kick"             { return "compiler/drill/drill.hexa" }   // alias: kick → drill (ω-cycle ≡ drill apex)
+    if verb == "kick"             { return "compiler/omega/omega.hexa" }   // kick = omega = the ω-cycle (drill→…→resonance staged verb chain) — both verbs name the same cycle; same entry point
     if verb == "codata"           { return "compiler/bridges/codata.hexa" }
     if verb == "oeis"             { return "compiler/bridges/oeis.hexa" }
     if verb == "arxiv"            { return "compiler/bridges/arxiv.hexa" }
@@ -1978,7 +2008,7 @@ fn cmd_build(src, out, c_only, target) {
     let __runtime_c = __self_dir + "/runtime.c"
     let mut compile = ""
     if len(target) == 0 {
-        compile = "clang -O2 " + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        compile = "clang -O2 " + os_clang_cflags() + cuda_build_cflags(__self_dir) + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + os_clang_ldflags() + cuda_build_ldflags(__self_dir) + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {

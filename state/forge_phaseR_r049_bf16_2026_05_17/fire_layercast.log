@@ -1,0 +1,27 @@
+[R049LC] device 0: name=NVIDIA A100-PCIE-40GB cc=8.0
+[R049LC] === M=64 K=768 N=3072 ===
+[R049LC]   mixed-type cublasGemmEx UNSUPPORTED (status 15) — using fallback upcast path
+[R049LC]   FP32_ref=0.0504 ms · LayerCast(fallback)=0.0641 ms
+[R049LC]   max|Δ|=8.454e-05 · max_rel=2.190e+02 · mean_rel=1.401e-02 · weight_mem_ratio=0.5000
+[R049LC]   DIVERGE≤5%=PASS
+[R049LC] === M=128 K=4096 N=11008 ===
+[R049LC]   FP32_ref=0.9940 ms · LayerCast(fallback)=1.2368 ms
+[R049LC]   max|Δ|=2.234e-04 · max_rel=4.156e+02 · mean_rel=1.312e-02 · weight_mem_ratio=0.5000
+[R049LC]   DIVERGE≤5%=PASS
+[R049LC] === M=128 K=4096 N=4096 ===
+[R049LC]   FP32_ref=0.3832 ms · LayerCast(fallback)=0.4820 ms
+[R049LC]   max|Δ|=2.076e-04 · max_rel=1.271e+02 · mean_rel=1.201e-02 · weight_mem_ratio=0.5000
+[R049LC]   DIVERGE≤5%=PASS
+[R049LC] === M=128 K=11008 N=4096 ===
+[R049LC]   FP32_ref=0.9765 ms · LayerCast(fallback)=1.2130 ms
+[R049LC]   max|Δ|=3.536e-04 · max_rel=7.797e+02 · mean_rel=1.512e-02 · weight_mem_ratio=0.5000
+[R049LC]   DIVERGE≤5%=PASS
+
+[R049LC] === SUMMARY ===
+  M=64 K=768 N=3072: fp32=0.0504 lc=0.0641 max|Δ|=8.454e-05 mean_rel=1.401e-02 diverge=PASS
+  M=128 K=4096 N=11008: fp32=0.9940 lc=1.2368 max|Δ|=2.234e-04 mean_rel=1.312e-02 diverge=PASS
+  M=128 K=4096 N=4096: fp32=0.3832 lc=0.4820 max|Δ|=2.076e-04 mean_rel=1.201e-02 diverge=PASS
+  M=128 K=11008 N=4096: fp32=0.9765 lc=1.2130 max|Δ|=3.536e-04 mean_rel=1.512e-02 diverge=PASS
+
+Note: Pod was destroyed by automated dispatch script lifecycle before result_layercast.json could be pulled. This log is the verbatim stdout capture from the manual on-pod re-fire (build_layercast bug fixed: 0x1ayercas7ULL → 0x1abcdcab7ULL).
+Build was clean: nvcc -O3 -std=c++17 -arch=sm_80, BUILD_RC=0, FIRE_RC=0, RESULT_JSON_OK (on-pod). State JSON was reconstructed from this stdout into result_layercast.json (numerically identical).

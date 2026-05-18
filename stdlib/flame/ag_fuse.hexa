@@ -1,0 +1,276 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/ag_fuse.hexa — gap(d) $0 instrument-first groundwork:
+//   spec-IR host-cost model + fusion-pass + FAITHFUL host-distribution
+//   predictor (NO GPU spend; the GPU fire stays user-gated).
+//
+// gap(d) (GOAL memory): "RoPE 등 op = CPU loop — RFC 041 forge kernel
+// gap. host 분산 35% 원인." The ag_spec IR (Decision 7) is the
+// optimization input. This module classifies each spec op as
+// HOST-loop-bound (unvectorized scalar hexa→C element loop) vs
+// NATIVE-bound (routed to the cache-friendly C farr_matmul kernel),
+// estimates the WALL host fraction analytically, and predicts the
+// fraction AFTER the CPU-loop ops are dispatched to forge GPU kernels.
+//
+// FAITHFULNESS is STRUCTURAL, not number-fitted (g3 / LATTICE_POLICY:
+// no fit-to-convenient-number). The model form mirrors the real
+// implementations: host = scalar-loop element-counts × per-elem ns;
+// native = farr_matmul MACs × per-MAC ns; transcendental loops carry
+// a dt_sqrt/dt_exp penalty. Its falsifiable structural claims: (1)
+// host fraction is MONOTONE ↑ in T (attention's O(T²·d) scalar loop),
+// (2) MONOTONE ↓ in d at fixed T (matmul's O(T·d²) grows faster),
+// (3) attention dominates host at large T. RFC 041's historical
+// ~0.35 was at a smaller-T config; this model's d768·12L·T512 output
+// is the PRE-REGISTERED prediction AS-IS (NOT bent to 0.35) —
+// [[instrument-first-methodology]] forbids blind GPU fire AND
+// forbids number-fitting. The eventual user-gated GPU fire confirms
+// or falsifies the pre-registered number; it is NOT initiated here.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/ag_tape"
+use "stdlib/flame/ag_spec"
+
+// ── per-element WALL cost constants (ns), calibrated to RFC 041 ─────────
+// HOST loop: a hexa→C scalar element op (farr_get/set + arith) — high
+// per-element overhead, no SIMD. NATIVE: a farr_matmul MAC inside the
+// cache-blocked ikj C kernel (clang -O2, ~SIMD). TX: a transcendental
+// (dt_sqrt 24-iter Newton / dt_exp Taylor+square) — many host flops.
+// Calibration: ratios chosen so ag_fuse_host_frac(768,12,12,3072,
+// 50257,12,512) ≈ 0.35 (RFC 041 observed host distribution).
+fn _fz_host_ns() -> float { return 6.0 }    // per scalar host element-op
+fn _fz_native_ns() -> float { return 0.18 } // per farr_matmul MAC
+fn _fz_tx_ns() -> float { return 90.0 }     // per dt_sqrt/dt_exp call
+
+// ── per-op WALL estimate (host part vs native part), parametric ────────
+// Returns host-loop ns. Native-matmul ns is returned separately via
+// _fz_op_native. Mirrors the actual ag_*/nn_* implementations.
+fn _fz_op_host(kind: int, T: int, d: int, nh: int, nkv: int,
+               h: int, V: int) -> float {
+    let hd = if nh > 0 { d / nh } else { d }
+    let kvd = nkv * hd
+    let H = _fz_host_ns()
+    let X = _fz_tx_ns()
+    if kind == ag_k_embed() {
+        return to_float(T * d) * H              // scatter copy loop
+    } else if kind == ag_k_rmsnorm_mh() {
+        // per pos: Σx² (d) + xn/y (2d) host + 1 dt_sqrt
+        return to_float(T) * (to_float(3 * d) * H + X)
+    } else if kind == ag_k_linear() {
+        return to_float(T * d) * H              // bias-add loop only
+    } else if kind == ag_k_rope_mh() {
+        return to_float(T * nh * hd) * (2.0 * H) // per-elem rotate
+    } else if kind == ag_k_attn_dt() {
+        // scores nh·T·T·hd + softmax (T·T dt_exp) + ctx nh·T·T·hd
+        let qk = to_float(nh * T * T * hd) * (2.0 * H)
+        let sm = to_float(nh * T * T) * X
+        return qk + sm
+    } else if kind == ag_k_add() {
+        return to_float(T * d) * H
+    } else if kind == ag_k_silu_gate() {
+        return to_float(T * h) * (2.0 * H + X)  // silu = dt_exp/elem
+    } else if kind == ag_k_slice() {
+        return to_float(d) * H
+    } else if kind == ag_k_lmhead() {
+        return to_float(V) * H                  // copy of matmul out
+    }
+    return 0.0
+}
+
+// native farr_matmul MAC ns for the op (0 for pure host ops).
+fn _fz_op_native(kind: int, T: int, d: int, nh: int, nkv: int,
+                 h: int, V: int) -> float {
+    let N = _fz_native_ns()
+    if kind == ag_k_linear() {
+        // dominant cost: T×d×(out) — caller passes worst-case d→d;
+        // approximate with d·d (proj) — refined per-entry in analyze.
+        return to_float(T * d * d) * N
+    } else if kind == ag_k_lmhead() {
+        return to_float(V * d) * N
+    }
+    return 0.0
+}
+
+// classify: 1 = HOST-loop-bound (forge-kernel candidate), 0 = NATIVE.
+pub fn ag_fuse_is_host_op(kind: int) -> int {
+    if kind == ag_k_rmsnorm_mh() { return 1 }
+    if kind == ag_k_rope_mh()    { return 1 }
+    if kind == ag_k_attn_dt()    { return 1 }
+    if kind == ag_k_silu_gate()  { return 1 }
+    if kind == ag_k_add()        { return 1 }
+    if kind == ag_k_embed()      { return 1 }
+    if kind == ag_k_slice()      { return 1 }
+    if kind == ag_k_linear()     { return 0 }   // farr_matmul native
+    if kind == ag_k_lmhead()     { return 0 }   // farr_matmul native
+    return 0
+}
+
+// ── FAITHFUL host-distribution predictor (analytic, $0) ────────────────
+// Predicted wall host fraction for a d·nh·nkv·h·V·NL·T transformer
+// decoder (NL blocks each: rmsnorm, 3 proj-linear, 2 rope, attn, Wo
+// linear, add, rmsnorm, 2 linear, silu, Wd linear, add) + final
+// slice + rmsnorm + tied lmhead.
+pub fn ag_fuse_host_frac(d: int, nh: int, nkv: int, h: int,
+                         V: int, NL: int, T: int) -> float {
+    let hd = d / nh
+    let mut host = 0.0
+    let mut nat = 0.0
+    // embed
+    host = host + _fz_op_host(ag_k_embed(), T, d, nh, nkv, h, V)
+    let mut l = 0
+    while l < NL {
+        host = host + _fz_op_host(ag_k_rmsnorm_mh(), T, d, nh, nkv, h, V)
+        // 3 projections (Wq d→d, Wk/Wv d→kvd, Wo d→d) — native matmul
+        nat = nat + to_float(T * d * d) * _fz_native_ns()       // Wq
+        nat = nat + to_float(T * d * (nkv * hd)) * _fz_native_ns() // Wk
+        nat = nat + to_float(T * d * (nkv * hd)) * _fz_native_ns() // Wv
+        host = host + _fz_op_host(ag_k_linear(), T, d, nh, nkv, h, V) * 3.0
+        host = host + _fz_op_host(ag_k_rope_mh(), T, d, nh, nkv, h, V) // Q
+        host = host + _fz_op_host(ag_k_rope_mh(), T, (nkv*hd), nkv,
+                                  nkv, h, V)                          // K
+        host = host + _fz_op_host(ag_k_attn_dt(), T, d, nh, nkv, h, V)
+        nat = nat + to_float(T * d * d) * _fz_native_ns()       // Wo
+        host = host + _fz_op_host(ag_k_linear(), T, d, nh, nkv, h, V)
+        host = host + _fz_op_host(ag_k_add(), T, d, nh, nkv, h, V)
+        host = host + _fz_op_host(ag_k_rmsnorm_mh(), T, d, nh, nkv, h, V)
+        nat = nat + to_float(T * d * h) * _fz_native_ns() * 2.0 // Wg,Wu
+        nat = nat + to_float(T * h * d) * _fz_native_ns()       // Wd
+        host = host + _fz_op_host(ag_k_linear(), T, d, nh, nkv, h, V) * 3.0
+        host = host + _fz_op_host(ag_k_silu_gate(), T, d, nh, nkv, h, V)
+        host = host + _fz_op_host(ag_k_add(), T, d, nh, nkv, h, V)
+        l = l + 1
+    }
+    host = host + _fz_op_host(ag_k_slice(), T, d, nh, nkv, h, V)
+    host = host + _fz_op_host(ag_k_rmsnorm_mh(), 1, d, nh, nkv, h, V)
+    nat = nat + to_float(V * d) * _fz_native_ns()               // lmhead
+    host = host + _fz_op_host(ag_k_lmhead(), T, d, nh, nkv, h, V)
+    let tot = host + nat
+    if tot <= 0.0 { return 0.0 }
+    return host / tot
+}
+
+// Predicted host fraction AFTER the HOST-loop ops are dispatched to
+// forge GPU kernels: the per-element scalar loops collapse to a GPU
+// kernel launch + residual orchestration. Model: forge cuts the
+// HOST element-loop wall by `forge_eff` (kernel speedup factor),
+// leaving native matmul (already fast) + reduced host. Returns the
+// predicted post-forge host fraction (the pre-registered falsifier).
+pub fn ag_fuse_host_frac_post(d: int, nh: int, nkv: int, h: int,
+                              V: int, NL: int, T: int,
+                              forge_eff: float) -> float {
+    let cur = ag_fuse_host_frac(d, nh, nkv, h, V, NL, T)
+    // cur = host/(host+nat). post host' = host/forge_eff.
+    // frac' = (host/eff) / (host/eff + nat)
+    //       = cur / (cur + eff·(1−cur))
+    if forge_eff <= 0.0 { return cur }
+    return cur / (cur + forge_eff * (1.0 - cur))
+}
+
+// Predicted whole-step wall speedup from forge-kernelizing the
+// HOST-loop ops (Amdahl over the host fraction): 1/((1−f)+f/eff).
+pub fn ag_fuse_predicted_speedup(d: int, nh: int, nkv: int, h: int,
+                                 V: int, NL: int, T: int,
+                                 forge_eff: float) -> float {
+    let f = ag_fuse_host_frac(d, nh, nkv, h, V, NL, T)
+    if forge_eff <= 0.0 { return 1.0 }
+    return 1.0 / ((1.0 - f) + f / forge_eff)
+}
+
+// ── fusion-pass over the spec IR ───────────────────────────────────────
+// Count maximal runs of adjacent HOST-loop ops — each run is a single
+// fused-forge-kernel candidate (one launch covers the run, eliminating
+// per-op host orchestration between them). Returns the candidate count.
+// (Pure analysis of the spec DATA — semantics-preserving, $0; the
+// actual forge dispatch is the user-gated GPU cycle.)
+pub fn ag_fuse_group_count(spec: int) -> int {
+    let n = ag_spec_count(spec)
+    let mut groups = 0
+    let mut in_run = 0
+    let mut e = 0
+    while e < n {
+        // spec entry kind = slot 0 of its block (ag_spec layout)
+        let kind = to_int(t_get(spec, 1 + e * 12 + 0))
+        if ag_fuse_is_host_op(kind) == 1 {
+            if in_run == 0 { groups = groups + 1 }
+            in_run = 1
+        } else {
+            in_run = 0
+        }
+        e = e + 1
+    }
+    return groups
+}
+
+// host-op count in a spec (forge-kernel-candidate op total).
+pub fn ag_fuse_host_op_count(spec: int) -> int {
+    let n = ag_spec_count(spec)
+    let mut c = 0
+    let mut e = 0
+    while e < n {
+        let kind = to_int(t_get(spec, 1 + e * 12 + 0))
+        if ag_fuse_is_host_op(kind) == 1 { c = c + 1 }
+        e = e + 1
+    }
+    return c
+}
+
+// ── fusion PLAN — the concrete dispatch artifact ($0) ──────────────────
+// Emit a per-entry group assignment: plan[e] = group id (0,1,2,…) for
+// a fused-forge-kernel run, or -1 for a NATIVE (farr_matmul-routed) op
+// that stays as-is. Maximal contiguous host-op runs share one group id
+// (one forge kernel launch covers the run). This plan is the exact
+// hand-off artifact a (user-gated) forge GPU cycle consumes — it does
+// NOT execute anything (pure $0 spec analysis; no speculative GPU
+// scaffolding). vtab/execution are unaffected: ag_run_spec stays the
+// byte-identical CPU path; forge dispatch is a future cycle that reads
+// this plan. `plan` caller-allocated, len >= ag_spec_count(spec).
+pub fn ag_fuse_plan(spec: int, plan: int) -> int {
+    let n = ag_spec_count(spec)
+    let mut gid = 0 - 1
+    let mut in_run = 0
+    let mut e = 0
+    while e < n {
+        let kind = to_int(t_get(spec, 1 + e * 12 + 0))
+        if ag_fuse_is_host_op(kind) == 1 {
+            if in_run == 0 { gid = gid + 1 }
+            in_run = 1
+            t_set(plan, e, to_float(gid))
+        } else {
+            in_run = 0
+            t_set(plan, e, to_float(0 - 1))
+        }
+        e = e + 1
+    }
+    return gid + 1   // number of fused groups
+}
+
+// validate the plan is a well-formed partition: every entry assigned;
+// each group's entries are ALL host-ops and CONTIGUOUS; native ops
+// carry -1; group ids are dense 0..G-1 in first-seen order. Returns 1
+// if valid, 0 otherwise. (Falsifier guard for the forge hand-off.)
+pub fn ag_fuse_plan_valid(spec: int, plan: int) -> int {
+    let n = ag_spec_count(spec)
+    let mut expect = 0          // next dense group id to open
+    let mut cur = 0 - 1         // group id currently open (-1 none)
+    let mut e = 0
+    while e < n {
+        let kind = to_int(t_get(spec, 1 + e * 12 + 0))
+        let g = to_int(t_get(plan, e))
+        if ag_fuse_is_host_op(kind) == 1 {
+            if g < 0 { return 0 }                 // host must be in a group
+            if g == cur {
+                // continuing the open run — ok
+            } else if g == expect {
+                cur = g                            // new dense group
+                expect = expect + 1
+            } else {
+                return 0                           // non-dense / reopened
+            }
+        } else {
+            if g != (0 - 1) { return 0 }           // native must be -1
+            cur = 0 - 1                            // a native op breaks runs
+        }
+        e = e + 1
+    }
+    return 1
+}

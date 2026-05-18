@@ -1,0 +1,981 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/ag_tape.hexa — flame Phase 2 generic autograd tape
+//   (RFC 043 Decision 2: C-무수정 + hexa-side tape; see design.md)
+//
+// RFC 034's C tape (self/runtime.c hexa_ad_*) is matmul/CE-hardcoded.
+// To make autograd general over the verified nn_lib layer vjps WITHOUT
+// touching the C runtime ABI (preserving RFC 034's 9/9 PASS oracle, g3
+// minimal blast-radius), the generic tape lives here in hexa stdlib.
+// `hexa build`-compiled → zero interpreter cost (RFC 042/043 directive).
+//
+// Mechanism: each ag_<layer> wrapper calls the verified nn_lib
+// functional fwd, allocates+saves the bwd state, appends a node.
+// ag_backward walks nodes latest→first, dispatches the matching
+// verified nn_lib bwd with the saved state, and THREADS each op's
+// input-grad into the previous op's upstream-grad (reverse-mode chain).
+// The closed vjp math is NOT reimplemented — nn_lib (byte-eq verified
+// in flame_nn_test) is reused verbatim. Pure plumbing; the oracle
+// (flame_ag_tape_test) proves the plumbing is byte-exact.
+//
+// Tape layout (hexa-native, farr-backed parallel record) — node v3:
+//   header: slot[0]=op count   slot[1]=final input-grad farr id
+//   op n at base = HDR + n·SLOTS :
+//     base+0      = kind (AG_K_*)
+//     base+1..8   = 8 input/state farr-id slots (per-kind)
+//     base+9..12  = 4 dims (per-kind)
+//     base+13..18 = 6 param-grad farr ids (filled by backward)
+//     base+19..21 = 3 input-grad farr ids (igrad0 = chain link;
+//                    igrad1/2 used by multi-input layers, e.g. attn)
+//   ids stored as floats (to_float/to_int round-trip — the idiom
+//   nn_embedding_fwd uses for token ids in a farr).
+//
+// Per-kind slot map (ids 1..8 / dims 9..12 / pgrad 13.. / igrad 19..):
+//   RMSNORM : ids[x,g,y,xn,inv]      dims[d]        pg[dg]   ig[dx]
+//   LINEAR  : ids[x,W,b,y]           dims[B,D,C]    pg[dW,db] ig[dx]
+//   ROPE    : ids[q,cos,sin,q_out]   dims[p,hd]     -        ig[dq]
+//   LMHEAD  : ids[temb,zT,logits]    dims[V,d]      pg[dtemb] ig[dzT]
+//   SWIGLU  : ids[r,Wg,Wu,Wd,a,b,s,o] dims[d,h]
+//                                    pg[dWg,dWu,dWd] ig[dr]
+//   EMBED   : ids[idsf,table,X]      dims[T,d]      pg[dtable] (input
+//             layer — consumes cur_dy as dX, no chain-out igrad)
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/flame_math"
+
+// ── op kinds ────────────────────────────────────────────────────────────
+pub fn ag_k_rmsnorm() -> int { return 1 }
+pub fn ag_k_linear()  -> int { return 2 }
+pub fn ag_k_rope()    -> int { return 3 }
+pub fn ag_k_lmhead()  -> int { return 4 }
+pub fn ag_k_swiglu()  -> int { return 5 }
+pub fn ag_k_embed()   -> int { return 6 }
+pub fn ag_k_attn()    -> int { return 7 }   // GQA attention core (Q,K,V→ctx)
+pub fn ag_k_add()     -> int { return 8 }   // residual: out = a + b (elem)
+pub fn ag_k_rope_mh() -> int { return 9 }   // multi-head RoPE [T·nheads·hd]
+pub fn ag_k_slice()   -> int { return 10 }  // out = X[off : off+len] gather
+pub fn ag_k_silu_gate() -> int { return 11 } // s = silu(a) * b (SwiGLU)
+pub fn ag_k_rmsnorm_mh() -> int { return 12 } // per-pos RMSNorm [T·d]
+                                              // (dt_sqrt — decoder path)
+pub fn ag_k_attn_dt() -> int { return 13 }    // GQA attn, dt_sqrt scale
+                                              // + dt_exp softmax (decoder)
+
+// ── tape geometry (node v3) ─────────────────────────────────────────────
+// header v2: [0]=op count, [1]=final-input-grad (legacy/chain path),
+// [2]=reg_tids farr id, [3]=reg_gids farr id (per-tensor grad registry,
+// Decision 3). reg_tids[0]=reg count; reg_tids[1+i]=tensor farr-id;
+// reg_gids[1+i]=accumulated grad farr-id for that tensor.
+fn _ag_hdr()   -> int { return 4 }
+fn _ag_slots() -> int { return 22 }   // kind + 8 ids + 4 dims + 6 pg + 3 ig
+fn _ag_regcap() -> int { return 256 } // max distinct tensors in a tape
+
+pub fn ag_t_begin(max_ops: int) -> int {
+    let t = t_zeros(_ag_hdr() + max_ops * _ag_slots())
+    t_set(t, 0, 0.0)
+    t_set(t, 1, to_float(0 - 1))
+    let rt = t_zeros(1 + _ag_regcap())
+    let rg = t_zeros(1 + _ag_regcap())
+    t_set(rt, 0, 0.0)
+    t_set(t, 2, to_float(rt))
+    t_set(t, 3, to_float(rg))
+    return t
+}
+
+pub fn ag_t_end(tape: int) {
+    t_free(to_int(t_get(tape, 2)))
+    t_free(to_int(t_get(tape, 3)))
+    t_free(tape)
+}
+
+// ── per-tensor grad registry (Decision 3) ───────────────────────────────
+fn _ag_reg_find(tape: int, tid: int) -> int {
+    let rt = to_int(t_get(tape, 2))
+    let n = to_int(t_get(rt, 0))
+    let mut i = 0
+    while i < n {
+        if to_int(t_get(rt, 1 + i)) == tid { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// grad farr id for tensor `tid`; allocates a zeroed len-farr on first
+// touch and registers it. Accumulating reverse-mode slot.
+fn _ag_reg_grad(tape: int, tid: int, len: int) -> int {
+    let idx = _ag_reg_find(tape, tid)
+    let rg = to_int(t_get(tape, 3))
+    if idx >= 0 { return to_int(t_get(rg, 1 + idx)) }
+    let rt = to_int(t_get(tape, 2))
+    let n = to_int(t_get(rt, 0))
+    let g = t_zeros(len)
+    t_set(rt, 1 + n, to_float(tid))
+    t_set(rg, 1 + n, to_float(g))
+    t_set(rt, 0, to_float(n + 1))
+    return g
+}
+
+// grad[tid] += src[0..len)
+fn _ag_reg_acc(tape: int, tid: int, src: int, len: int) {
+    let g = _ag_reg_grad(tape, tid, len)
+    let mut i = 0
+    while i < len {
+        t_set(g, i, t_get(g, i) + t_get(src, i))
+        i = i + 1
+    }
+}
+
+// public: accumulated grad farr id for any tensor (param or activation).
+pub fn ag_grad(tape: int, tid: int) -> int {
+    let idx = _ag_reg_find(tape, tid)
+    if idx < 0 { return 0 - 1 }
+    return to_int(t_get(to_int(t_get(tape, 3)), 1 + idx))
+}
+
+pub fn ag_t_count(tape: int) -> int { return to_int(t_get(tape, 0)) }
+
+fn _ag_base(op: int) -> int { return _ag_hdr() + op * _ag_slots() }
+
+fn _ag_set(tape: int, op: int, s: int, v: int) {
+    t_set(tape, _ag_base(op) + s, to_float(v))
+}
+fn _ag_get(tape: int, op: int, s: int) -> int {
+    return to_int(t_get(tape, _ag_base(op) + s))
+}
+
+// append a node: 8 ids (1..8) + 4 dims (9..12). pgrad/igrad (13..21)
+// init -1. returns op index.
+fn _ag_push(tape: int, kind: int,
+            i0: int, i1: int, i2: int, i3: int,
+            i4: int, i5: int, i6: int, i7: int,
+            d0: int, d1: int, d2: int, d3: int) -> int {
+    let n = to_int(t_get(tape, 0))
+    _ag_set(tape, n, 0, kind)
+    _ag_set(tape, n, 1, i0)
+    _ag_set(tape, n, 2, i1)
+    _ag_set(tape, n, 3, i2)
+    _ag_set(tape, n, 4, i3)
+    _ag_set(tape, n, 5, i4)
+    _ag_set(tape, n, 6, i5)
+    _ag_set(tape, n, 7, i6)
+    _ag_set(tape, n, 8, i7)
+    _ag_set(tape, n, 9, d0)
+    _ag_set(tape, n, 10, d1)
+    _ag_set(tape, n, 11, d2)
+    _ag_set(tape, n, 12, d3)
+    let mut s = 13
+    while s < _ag_slots() {
+        _ag_set(tape, n, s, 0 - 1)
+        s = s + 1
+    }
+    t_set(tape, 0, to_float(n + 1))
+    return n
+}
+
+// ── layer record wrappers ───────────────────────────────────────────────
+pub fn ag_rmsnorm(tape: int, x: int, g: int, d: int) -> int {
+    let y   = t_zeros(d)
+    let xn  = t_zeros(d)
+    let inv = t_zeros(1)
+    nn_rmsnorm_fwd(x, g, y, xn, inv, d)
+    let _ = _ag_push(tape, ag_k_rmsnorm(), x, g, y, xn, inv, 0 - 1,
+                     0 - 1, 0 - 1, d, 0, 0, 0)
+    return y
+}
+
+pub fn ag_linear(tape: int, x: int, W: int, b: int,
+                 B: int, D: int, C: int) -> int {
+    let y = nn_linear_fwd(x, W, b, B, D, C)
+    let _ = _ag_push(tape, ag_k_linear(), x, W, b, y, 0 - 1, 0 - 1,
+                     0 - 1, 0 - 1, B, D, C, 0)
+    return y
+}
+
+pub fn ag_rope(tape: int, q: int, cos_tab: int, sin_tab: int,
+               p: int, hd: int) -> int {
+    let q_out = t_zeros(hd)
+    nn_rope_apply_fwd(q, cos_tab, sin_tab, q_out, p, hd)
+    let _ = _ag_push(tape, ag_k_rope(), q, cos_tab, sin_tab, q_out,
+                     0 - 1, 0 - 1, 0 - 1, 0 - 1, p, hd, 0, 0)
+    return q_out
+}
+
+pub fn ag_lmhead(tape: int, temb: int, zT: int, V: int, d: int) -> int {
+    let logits = t_zeros(V)
+    nn_lm_head_fwd(temb, zT, logits, V, d)
+    let _ = _ag_push(tape, ag_k_lmhead(), temb, zT, logits, 0 - 1,
+                     0 - 1, 0 - 1, 0 - 1, 0 - 1, V, d, 0, 0)
+    return logits
+}
+
+// o = SwiGLU(r) ; r[d] Wg/Wu[h·d] Wd[d·h] → o[d]. tape owns a/b/s/o.
+pub fn ag_swiglu(tape: int, r: int, Wg: int, Wu: int, Wd: int,
+                 d: int, h: int) -> int {
+    let a = t_zeros(h)
+    let b = t_zeros(h)
+    let s = t_zeros(h)
+    let o = t_zeros(d)
+    nn_swiglu_fwd(r, Wg, Wu, Wd, a, b, s, o, d, h)
+    let _ = _ag_push(tape, ag_k_swiglu(), r, Wg, Wu, Wd, a, b, s, o,
+                     d, h, 0, 0)
+    return o
+}
+
+// X = Embedding(idsf, table) ; idsf[T] (float-encoded token ids),
+// table[V·d] → X[T·d]. Input layer: bwd scatters dX into dtable
+// (param); no chain-out (ids has no gradient). tape owns X.
+pub fn ag_embed(tape: int, idsf: int, table: int,
+                T: int, d: int) -> int {
+    let X = t_zeros(T * d)
+    nn_embedding_fwd(idsf, table, X, T, d)
+    let _ = _ag_push(tape, ag_k_embed(), idsf, table, X, 0 - 1,
+                     0 - 1, 0 - 1, 0 - 1, 0 - 1, T, d, 0, 0)
+    return X
+}
+
+// ctx = GQA-attn-core(Q,K,V) ; Q[T·nh·hd] K/V[T·nkv·hd] → ctx[T·nh·hd].
+// tape owns P (nh·T·T) and ctx. ids[Q,K,V,P,ctx] dims[T,nh,nkv,hd].
+pub fn ag_attn(tape: int, Q: int, K: int, V: int,
+               T: int, nh: int, nkv: int, hd: int) -> int {
+    let dctx_len = T * nh * hd
+    let P   = t_zeros(nh * T * T)
+    let ctx = t_zeros(dctx_len)
+    nn_attn_core_fwd(Q, K, V, P, ctx, T, nh, nkv, hd)
+    let _ = _ag_push(tape, ag_k_attn(), Q, K, V, P, ctx, 0 - 1,
+                     0 - 1, 0 - 1, T, nh, nkv, hd)
+    return ctx
+}
+
+// GQA attention with the DECODER BLOCK's exact transcendental path:
+// scale = 1/dt_sqrt(hd) (NOT libm sqrt) and a stable softmax using
+// dt_exp (NOT libm exp). Algorithm/layout identical to nn_attn_core
+// (P[(hh·T+i)·T+j], ctx[i·d+hh·hd+c], causal L=i+1) — only the two
+// transcendentals match the block, closing byte-eq hazards #2/#3.
+fn _ag_attn_dt_fwd(Q: int, K: int, V: int, P: int, ctx: int,
+                   T: int, nh: int, nkv: int, hd: int) {
+    let n_rep = nh / nkv
+    let d = nh * hd
+    let scale = 1.0 / dt_sqrt(to_float(hd))
+    let srow = t_zeros(T)
+    let mut hh = 0
+    while hh < nh {
+        let kvh = hh / n_rep
+        let mut i = 0
+        while i < T {
+            let L = i + 1
+            let mut j = 0
+            while j < L {
+                let mut dot = 0.0
+                let mut c = 0
+                while c < hd {
+                    dot = dot + t_get(Q, (i * nh + hh) * hd + c)
+                              * t_get(K, (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                t_set(srow, j, dot * scale)
+                j = j + 1
+            }
+            // stable softmax — max over 0..L, dt_exp(x−max), normalize
+            let mut mx = t_get(srow, 0)
+            let mut jm = 1
+            while jm < L {
+                if t_get(srow, jm) > mx { mx = t_get(srow, jm) }
+                jm = jm + 1
+            }
+            let mut tot = 0.0
+            let mut je = 0
+            while je < L {
+                let e = dt_exp(t_get(srow, je) - mx)
+                t_set(P, (hh * T + i) * T + je, e)
+                tot = tot + e
+                je = je + 1
+            }
+            let mut jn = 0
+            while jn < L {
+                let cur = t_get(P, (hh * T + i) * T + jn)
+                t_set(P, (hh * T + i) * T + jn, cur / tot)
+                jn = jn + 1
+            }
+            let mut c2 = 0
+            while c2 < hd {
+                let mut acc = 0.0
+                let mut jj = 0
+                while jj < L {
+                    acc = acc + t_get(P, (hh * T + i) * T + jj)
+                              * t_get(V, (jj * nkv + kvh) * hd + c2)
+                    jj = jj + 1
+                }
+                t_set(ctx, i * d + hh * hd + c2, acc)
+                c2 = c2 + 1
+            }
+            i = i + 1
+        }
+        hh = hh + 1
+    }
+    t_free(srow)
+}
+
+// dt-scale attention bwd (block lines 678-748 / nn_attn_core_bwd
+// algebra; scale = 1/dt_sqrt(hd); no exp — P is the cached fwd
+// softmax). dQ/dK/dV are caller-zeroed accumulators.
+fn _ag_attn_dt_bwd(Q: int, K: int, V: int, P: int, dctx: int,
+                   dQ: int, dK: int, dV: int,
+                   T: int, nh: int, nkv: int, hd: int) {
+    let n_rep = nh / nkv
+    let d = nh * hd
+    let scale = 1.0 / dt_sqrt(to_float(hd))
+    let dP_row = t_zeros(T)
+    let mut hh = 0
+    while hh < nh {
+        let kvh = hh / n_rep
+        let mut i = 0
+        while i < T {
+            let L = i + 1
+            let mut j = 0
+            while j < L {
+                let mut acc = 0.0
+                let mut c = 0
+                while c < hd {
+                    acc = acc + t_get(dctx, i * d + hh * hd + c)
+                              * t_get(V, (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                t_set(dP_row, j, acc)
+                j = j + 1
+            }
+            let mut sdot = 0.0
+            let mut j2 = 0
+            while j2 < L {
+                sdot = sdot + t_get(P, (hh * T + i) * T + j2)
+                            * t_get(dP_row, j2)
+                j2 = j2 + 1
+            }
+            let mut j3 = 0
+            while j3 < L {
+                let pij = t_get(P, (hh * T + i) * T + j3)
+                let mut c = 0
+                while c < hd {
+                    let dv_idx = (j3 * nkv + kvh) * hd + c
+                    t_set(dV, dv_idx, t_get(dV, dv_idx)
+                          + pij * t_get(dctx, i * d + hh * hd + c))
+                    c = c + 1
+                }
+                j3 = j3 + 1
+            }
+            let mut j4 = 0
+            while j4 < L {
+                let dS = t_get(P, (hh * T + i) * T + j4)
+                       * (t_get(dP_row, j4) - sdot) * scale
+                let mut c2 = 0
+                while c2 < hd {
+                    let dq_idx = (i * nh + hh) * hd + c2
+                    let dk_idx = (j4 * nkv + kvh) * hd + c2
+                    t_set(dQ, dq_idx, t_get(dQ, dq_idx)
+                          + dS * t_get(K, (j4 * nkv + kvh) * hd + c2))
+                    t_set(dK, dk_idx, t_get(dK, dk_idx)
+                          + dS * t_get(Q, (i * nh + hh) * hd + c2))
+                    c2 = c2 + 1
+                }
+                j4 = j4 + 1
+            }
+            i = i + 1
+        }
+        hh = hh + 1
+    }
+    t_free(dP_row)
+}
+
+// ctx = dt-scale GQA-attn(Q,K,V). Same node shape as ag_attn.
+pub fn ag_attn_dt(tape: int, Q: int, K: int, V: int,
+                  T: int, nh: int, nkv: int, hd: int) -> int {
+    let dctx_len = T * nh * hd
+    let P   = t_zeros(nh * T * T)
+    let ctx = t_zeros(dctx_len)
+    _ag_attn_dt_fwd(Q, K, V, P, ctx, T, nh, nkv, hd)
+    let _ = _ag_push(tape, ag_k_attn_dt(), Q, K, V, P, ctx, 0 - 1,
+                     0 - 1, 0 - 1, T, nh, nkv, hd)
+    return ctx
+}
+
+// out = a + b (element-wise, len). Residual / skip-connection adder.
+// bwd: d_out flows unchanged to BOTH a and b (registry accumulates the
+// fan-out automatically). ids[a,b,out] dims[len].
+pub fn ag_add(tape: int, a: int, b: int, len: int) -> int {
+    let out = t_zeros(len)
+    let mut i = 0
+    while i < len {
+        t_set(out, i, t_get(a, i) + t_get(b, i))
+        i = i + 1
+    }
+    let _ = _ag_push(tape, ag_k_add(), a, b, out, 0 - 1, 0 - 1, 0 - 1,
+                     0 - 1, 0 - 1, len, 0, 0, 0)
+    return out
+}
+
+// Per-position RMSNorm over X[T·d] (one normalize per d-row, shared
+// gain g[d]). fwd uses dt_sqrt (24-iter Newton) to be byte-eq with the
+// decoder block's rmsnorm — NOT nn_rmsnorm_fwd's libm _nn_sqrt path
+// (the two sqrt impls differ in the last ULP; the single-vector
+// ag_rmsnorm is byte-eq vs nn_rmsnorm but NOT vs the dt_sqrt decoder).
+// bwd is inv-based (no sqrt) so the verified nn_rmsnorm_bwd is reused
+// per row with the dt_sqrt-derived inv → byte-eq. ids[x,g,y,xn,inv]
+// (inv = per-pos T-len) dims[T,d]. eps matches block/nn (1e-6).
+pub fn ag_rmsnorm_mh(tape: int, x: int, g: int, T: int, d: int) -> int {
+    let y   = t_zeros(T * d)
+    let xn  = t_zeros(T * d)
+    let inv = t_zeros(T)
+    let eps = 0.000001
+    let mut i = 0
+    while i < T {
+        let mut ms = 0.0
+        let mut c = 0
+        while c < d {
+            let xv = t_get(x, i * d + c)
+            ms = ms + xv * xv
+            c = c + 1
+        }
+        ms = ms / to_float(d)
+        let iv = 1.0 / dt_sqrt(ms + eps)
+        t_set(inv, i, iv)
+        let mut c2 = 0
+        while c2 < d {
+            let xni = t_get(x, i * d + c2) * iv
+            t_set(xn, i * d + c2, xni)
+            t_set(y, i * d + c2, t_get(g, c2) * xni)
+            c2 = c2 + 1
+        }
+        i = i + 1
+    }
+    let _ = _ag_push(tape, ag_k_rmsnorm_mh(), x, g, y, xn, inv, 0 - 1,
+                     0 - 1, 0 - 1, T, d, 0, 0)
+    return y
+}
+
+// Multi-head RoPE over q[T·nheads·hd]. Each (t,head) row is rotated by
+// the verified single-row nn_rope_apply_fwd with p=t (cos/sin are the
+// full [T·hd] tables, indexed bse=t·hd inside the primitive). Row is
+// copied into a hd-scratch (the primitive reads offset-0) — byte-eq
+// with the decoder block's per-head q_scratch RoPE. ids[q,cos,sin,
+// q_out] dims[T,nheads,hd]. One node; replay loops nn_rope_apply_bwd.
+// gap(d) FORGE-WIRED (Decision 9): the whole [T·nheads·hd] tensor is
+// rotated by ONE `farr_rope_gpu` builtin call — RFC 041 Phase B
+// __global__ kernel on a CUDA build (the gap(d) host→GPU wall
+// offload), or the BYTE-IDENTICAL `_hx_farr_rope_cpu` fallback on a
+// no-CUDA build. Reachable from `hexa build` WITHOUT a transpiler
+// bootstrap rebuild: the committed hexa_v2 codegen emits the bare
+// `farr_rope_gpu(...)`, which links to runtime.c's bare wrapper via
+// the runtime.h prototype (mirrors farr_matmul_gpu). CPU-fallback
+// formula == the prior nn_rope_apply per-row loop → Tests 9/13/14/17
+// re-verify byte-eq unchanged at $0 locally.
+pub fn ag_rope_mh(tape: int, q: int, cos_tab: int, sin_tab: int,
+                  T: int, nheads: int, hd: int) -> int {
+    let q_out = farr_rope_gpu(q, cos_tab, sin_tab, T, nheads, hd)
+    let _ = _ag_push(tape, ag_k_rope_mh(), q, cos_tab, sin_tab, q_out,
+                     0 - 1, 0 - 1, 0 - 1, 0 - 1, T, nheads, hd, 0)
+    return q_out
+}
+
+// SwiGLU gate: s = silu(a) * b, element-wise [len]. silu(x)=x·σ(x),
+// σ via dt_exp — byte-eq with the decoder block's _db_sigmoid/_db_silu.
+// bwd: ds → da[k]=ds·b·silu'(a), db[k]=ds·silu(a) (block lines 590-591).
+// ids[a,b,s] dims[len].
+fn _ag_sigmoid(x: float) -> float { return 1.0 / (1.0 + dt_exp(0.0 - x)) }
+fn _ag_silu(x: float) -> float { return x * _ag_sigmoid(x) }
+fn _ag_silu_grad(x: float) -> float {
+    let sg = _ag_sigmoid(x)
+    return sg + x * sg * (1.0 - sg)
+}
+pub fn ag_silu_gate(tape: int, a: int, b: int, len: int) -> int {
+    let s = t_zeros(len)
+    let mut i = 0
+    while i < len {
+        t_set(s, i, _ag_silu(t_get(a, i)) * t_get(b, i))
+        i = i + 1
+    }
+    let _ = _ag_push(tape, ag_k_silu_gate(), a, b, s, 0 - 1, 0 - 1,
+                     0 - 1, 0 - 1, 0 - 1, len, 0, 0, 0)
+    return s
+}
+
+// out[len] = X[off : off+len]. Last-position gather (zr = X[(T-1)·d:]).
+// bwd: d_out scatters into grad[X] at [off:off+len], rest zero — the
+// registry zero-allocates the full X-len grad on first touch, so we
+// add d_out only at the slice window. ids[X,out] dims[off,len,Xlen].
+pub fn ag_slice(tape: int, X: int, off: int, len: int, Xlen: int) -> int {
+    let out = t_zeros(len)
+    let mut i = 0
+    while i < len {
+        t_set(out, i, t_get(X, off + i))
+        i = i + 1
+    }
+    let _ = _ag_push(tape, ag_k_slice(), X, out, 0 - 1, 0 - 1, 0 - 1,
+                     0 - 1, 0 - 1, 0 - 1, off, len, Xlen, 0)
+    return out
+}
+
+// ── reverse pass (per-tensor grad registry — Decision 3) ────────────────
+// out_tid = tensor id of the final op's output (loss-seed target).
+// seed = grad w.r.t. that tensor. Walks ops latest→first; each op's
+// output-grad is looked up in the registry by its output tensor id,
+// its bwd is dispatched, and the resulting input/param grads are
+// ACCUMULATED into the registry keyed by tensor id (handles linear
+// chains, attention fan-in, and param reuse uniformly). Read any
+// accumulated grad afterwards via ag_grad(tape, tensor_id).
+pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
+    let n = to_int(t_get(tape, 0))
+    if n <= 0 { return }
+    // seed: grad[out_tid] = seed (acc into fresh zero == set).
+    _ag_reg_acc(tape, out_tid, seed, t_len(seed))
+    let mut op = n - 1
+    while op >= 0 {
+        let kind = _ag_get(tape, op, 0)
+        if kind == ag_k_rmsnorm() {
+            let x = _ag_get(tape, op, 1)
+            let g = _ag_get(tape, op, 2)
+            let y = _ag_get(tape, op, 3)
+            let xn = _ag_get(tape, op, 4)
+            let inv_id = _ag_get(tape, op, 5)
+            let d = _ag_get(tape, op, 9)
+            let og = _ag_reg_grad(tape, y, d)
+            let dx = t_zeros(d)
+            let dg = t_zeros(d)
+            nn_rmsnorm_bwd(x, g, xn, t_get(inv_id, 0), og, dx, dg, d)
+            _ag_reg_acc(tape, x, dx, d)
+            _ag_reg_acc(tape, g, dg, d)
+            t_free(dx)
+            t_free(dg)
+        } else if kind == ag_k_linear() {
+            let x = _ag_get(tape, op, 1)
+            let W = _ag_get(tape, op, 2)
+            let bb = _ag_get(tape, op, 3)
+            let y = _ag_get(tape, op, 4)
+            let B = _ag_get(tape, op, 9)
+            let D = _ag_get(tape, op, 10)
+            let C = _ag_get(tape, op, 11)
+            let og = _ag_reg_grad(tape, y, B * C)
+            let dW = t_zeros(D * C)
+            let dx = t_zeros(B * D)
+            let db = t_zeros(C)
+            nn_linear_bwd(x, W, og, dW, dx, db, B, D, C)
+            _ag_reg_acc(tape, x, dx, B * D)
+            _ag_reg_acc(tape, W, dW, D * C)
+            _ag_reg_acc(tape, bb, db, C)
+            t_free(dW)
+            t_free(dx)
+            t_free(db)
+        } else if kind == ag_k_rope() {
+            let q = _ag_get(tape, op, 1)
+            let cs = _ag_get(tape, op, 2)
+            let sn = _ag_get(tape, op, 3)
+            let qo = _ag_get(tape, op, 4)
+            let p = _ag_get(tape, op, 9)
+            let hd = _ag_get(tape, op, 10)
+            let og = _ag_reg_grad(tape, qo, hd)
+            let dq = t_zeros(hd)
+            nn_rope_apply_bwd(og, cs, sn, dq, p, hd)
+            _ag_reg_acc(tape, q, dq, hd)
+            t_free(dq)
+        } else if kind == ag_k_lmhead() {
+            let temb = _ag_get(tape, op, 1)
+            let zT = _ag_get(tape, op, 2)
+            let lg = _ag_get(tape, op, 3)
+            let V = _ag_get(tape, op, 9)
+            let d = _ag_get(tape, op, 10)
+            let og = _ag_reg_grad(tape, lg, V)
+            let dtemb = t_zeros(V * d)
+            let dzT = t_zeros(d)
+            nn_lm_head_bwd(temb, zT, og, dtemb, dzT, V, d)
+            _ag_reg_acc(tape, temb, dtemb, V * d)
+            _ag_reg_acc(tape, zT, dzT, d)
+            t_free(dtemb)
+            t_free(dzT)
+        } else if kind == ag_k_swiglu() {
+            let r = _ag_get(tape, op, 1)
+            let Wg = _ag_get(tape, op, 2)
+            let Wu = _ag_get(tape, op, 3)
+            let Wd = _ag_get(tape, op, 4)
+            let av = _ag_get(tape, op, 5)
+            let bv = _ag_get(tape, op, 6)
+            let sv = _ag_get(tape, op, 7)
+            let o = _ag_get(tape, op, 8)
+            let d = _ag_get(tape, op, 9)
+            let h = _ag_get(tape, op, 10)
+            let og = _ag_reg_grad(tape, o, d)
+            let dr = t_zeros(d)
+            let dWg = t_zeros(h * d)
+            let dWu = t_zeros(h * d)
+            let dWd = t_zeros(d * h)
+            nn_swiglu_bwd(r, Wg, Wu, Wd, av, bv, sv, og,
+                          dr, dWg, dWu, dWd, d, h)
+            _ag_reg_acc(tape, r, dr, d)
+            _ag_reg_acc(tape, Wg, dWg, h * d)
+            _ag_reg_acc(tape, Wu, dWu, h * d)
+            _ag_reg_acc(tape, Wd, dWd, d * h)
+            t_free(dr)
+            t_free(dWg)
+            t_free(dWu)
+            t_free(dWd)
+        } else if kind == ag_k_embed() {
+            let idsf = _ag_get(tape, op, 1)
+            let table = _ag_get(tape, op, 2)
+            let X = _ag_get(tape, op, 3)
+            let T = _ag_get(tape, op, 9)
+            let d = _ag_get(tape, op, 10)
+            let og = _ag_reg_grad(tape, X, T * d)
+            let tl = t_len(table)
+            let dtable = t_zeros(tl)
+            nn_embedding_bwd_scatter(og, idsf, dtable, T, d)
+            _ag_reg_acc(tape, table, dtable, tl)
+            t_free(dtable)
+        } else if kind == ag_k_attn() {
+            let Q = _ag_get(tape, op, 1)
+            let K = _ag_get(tape, op, 2)
+            let Vv = _ag_get(tape, op, 3)
+            let P = _ag_get(tape, op, 4)
+            let ctx = _ag_get(tape, op, 5)
+            let T = _ag_get(tape, op, 9)
+            let nh = _ag_get(tape, op, 10)
+            let nkv = _ag_get(tape, op, 11)
+            let hd = _ag_get(tape, op, 12)
+            let qlen = T * nh * hd
+            let kvlen = T * nkv * hd
+            let og = _ag_reg_grad(tape, ctx, qlen)
+            let dQ = t_zeros(qlen)
+            let dK = t_zeros(kvlen)
+            let dV = t_zeros(kvlen)
+            nn_attn_core_bwd(Q, K, Vv, P, og, dQ, dK, dV,
+                             T, nh, nkv, hd)
+            _ag_reg_acc(tape, Q, dQ, qlen)
+            _ag_reg_acc(tape, K, dK, kvlen)
+            _ag_reg_acc(tape, Vv, dV, kvlen)
+            t_free(dQ)
+            t_free(dK)
+            t_free(dV)
+        } else if kind == ag_k_attn_dt() {
+            let Q = _ag_get(tape, op, 1)
+            let K = _ag_get(tape, op, 2)
+            let Vv = _ag_get(tape, op, 3)
+            let P = _ag_get(tape, op, 4)
+            let ctx = _ag_get(tape, op, 5)
+            let T = _ag_get(tape, op, 9)
+            let nh = _ag_get(tape, op, 10)
+            let nkv = _ag_get(tape, op, 11)
+            let hd = _ag_get(tape, op, 12)
+            let qlen = T * nh * hd
+            let kvlen = T * nkv * hd
+            let og = _ag_reg_grad(tape, ctx, qlen)
+            let dQ = t_zeros(qlen)
+            let dK = t_zeros(kvlen)
+            let dV = t_zeros(kvlen)
+            _ag_attn_dt_bwd(Q, K, Vv, P, og, dQ, dK, dV,
+                            T, nh, nkv, hd)
+            _ag_reg_acc(tape, Q, dQ, qlen)
+            _ag_reg_acc(tape, K, dK, kvlen)
+            _ag_reg_acc(tape, Vv, dV, kvlen)
+            t_free(dQ)
+            t_free(dK)
+            t_free(dV)
+        } else if kind == ag_k_add() {
+            let a = _ag_get(tape, op, 1)
+            let b = _ag_get(tape, op, 2)
+            let out = _ag_get(tape, op, 3)
+            let len = _ag_get(tape, op, 9)
+            let og = _ag_reg_grad(tape, out, len)
+            _ag_reg_acc(tape, a, og, len)
+            _ag_reg_acc(tape, b, og, len)
+        } else if kind == ag_k_rope_mh() {
+            let q = _ag_get(tape, op, 1)
+            let cs = _ag_get(tape, op, 2)
+            let sn = _ag_get(tape, op, 3)
+            let qo = _ag_get(tape, op, 4)
+            let T = _ag_get(tape, op, 9)
+            let nheads = _ag_get(tape, op, 10)
+            let hd = _ag_get(tape, op, 11)
+            let qlen = T * nheads * hd
+            let og = _ag_reg_grad(tape, qo, qlen)
+            // gap(d) FORGE-WIRED: one farr_rope_bwd_gpu call (RFC 041
+            // kernel on CUDA / byte-identical _hx_farr_rope_cpu is_bwd
+            // fallback otherwise) — same no-rebuild link path as fwd.
+            let dq = farr_rope_bwd_gpu(og, cs, sn, T, nheads, hd)
+            _ag_reg_acc(tape, q, dq, qlen)
+            t_free(dq)
+        } else if kind == ag_k_slice() {
+            let X = _ag_get(tape, op, 1)
+            let out = _ag_get(tape, op, 2)
+            let off = _ag_get(tape, op, 9)
+            let len = _ag_get(tape, op, 10)
+            let Xlen = _ag_get(tape, op, 11)
+            let og = _ag_reg_grad(tape, out, len)
+            let gX = _ag_reg_grad(tape, X, Xlen)
+            let mut i = 0
+            while i < len {
+                t_set(gX, off + i, t_get(gX, off + i) + t_get(og, i))
+                i = i + 1
+            }
+        } else if kind == ag_k_silu_gate() {
+            let a = _ag_get(tape, op, 1)
+            let b = _ag_get(tape, op, 2)
+            let s = _ag_get(tape, op, 3)
+            let len = _ag_get(tape, op, 9)
+            let og = _ag_reg_grad(tape, s, len)
+            let da = t_zeros(len)
+            let db = t_zeros(len)
+            let mut i = 0
+            while i < len {
+                let av = t_get(a, i)
+                let dsk = t_get(og, i)
+                t_set(da, i, dsk * t_get(b, i) * _ag_silu_grad(av))
+                t_set(db, i, dsk * _ag_silu(av))
+                i = i + 1
+            }
+            _ag_reg_acc(tape, a, da, len)
+            _ag_reg_acc(tape, b, db, len)
+            t_free(da)
+            t_free(db)
+        } else if kind == ag_k_rmsnorm_mh() {
+            let x = _ag_get(tape, op, 1)
+            let g = _ag_get(tape, op, 2)
+            let y = _ag_get(tape, op, 3)
+            let xn = _ag_get(tape, op, 4)
+            let inv = _ag_get(tape, op, 5)
+            let T = _ag_get(tape, op, 9)
+            let d = _ag_get(tape, op, 10)
+            let og = _ag_reg_grad(tape, y, T * d)
+            let dxF = t_zeros(T * d)
+            let dgA = t_zeros(d)
+            let xr = t_zeros(d)
+            let xnr = t_zeros(d)
+            let dyr = t_zeros(d)
+            let dxr = t_zeros(d)
+            let dgr = t_zeros(d)
+            let mut i = 0
+            while i < T {
+                let mut c = 0
+                while c < d {
+                    t_set(xr, c, t_get(x, i * d + c))
+                    t_set(xnr, c, t_get(xn, i * d + c))
+                    t_set(dyr, c, t_get(og, i * d + c))
+                    c = c + 1
+                }
+                nn_rmsnorm_bwd(xr, g, xnr, t_get(inv, i), dyr, dxr, dgr, d)
+                let mut c2 = 0
+                while c2 < d {
+                    t_set(dxF, i * d + c2, t_get(dxr, c2))
+                    t_set(dgA, c2, t_get(dgA, c2) + t_get(dgr, c2))
+                    c2 = c2 + 1
+                }
+                i = i + 1
+            }
+            _ag_reg_acc(tape, x, dxF, T * d)
+            _ag_reg_acc(tape, g, dgA, d)
+            t_free(dxF)
+            t_free(dgA)
+            t_free(xr)
+            t_free(xnr)
+            t_free(dyr)
+            t_free(dxr)
+            t_free(dgr)
+        }
+        op = op - 1
+    }
+}
+
+// ── reverse pass (legacy single-cur_dy chain — sub-step 1/2 oracles) ─────
+pub fn ag_backward(tape: int, dy_seed: int) {
+    let n = to_int(t_get(tape, 0))
+    if n <= 0 { return }
+    let mut cur_dy = dy_seed
+    let mut op = n - 1
+    while op >= 0 {
+        let kind = _ag_get(tape, op, 0)
+        if kind == ag_k_rmsnorm() {
+            let x = _ag_get(tape, op, 1)
+            let g = _ag_get(tape, op, 2)
+            let xn = _ag_get(tape, op, 4)
+            let inv_id = _ag_get(tape, op, 5)
+            let d = _ag_get(tape, op, 9)
+            let dx = t_zeros(d)
+            let dg = t_zeros(d)
+            nn_rmsnorm_bwd(x, g, xn, t_get(inv_id, 0), cur_dy, dx, dg, d)
+            _ag_set(tape, op, 13, dg)
+            _ag_set(tape, op, 19, dx)
+            cur_dy = dx
+        } else if kind == ag_k_linear() {
+            let x = _ag_get(tape, op, 1)
+            let W = _ag_get(tape, op, 2)
+            let B = _ag_get(tape, op, 9)
+            let D = _ag_get(tape, op, 10)
+            let C = _ag_get(tape, op, 11)
+            let dW = t_zeros(D * C)
+            let dx = t_zeros(B * D)
+            let db = t_zeros(C)
+            nn_linear_bwd(x, W, cur_dy, dW, dx, db, B, D, C)
+            _ag_set(tape, op, 13, dW)
+            _ag_set(tape, op, 14, db)
+            _ag_set(tape, op, 19, dx)
+            cur_dy = dx
+        } else if kind == ag_k_rope() {
+            let cs = _ag_get(tape, op, 2)
+            let sn = _ag_get(tape, op, 3)
+            let p = _ag_get(tape, op, 9)
+            let hd = _ag_get(tape, op, 10)
+            let dq = t_zeros(hd)
+            nn_rope_apply_bwd(cur_dy, cs, sn, dq, p, hd)
+            _ag_set(tape, op, 19, dq)
+            cur_dy = dq
+        } else if kind == ag_k_lmhead() {
+            let temb = _ag_get(tape, op, 1)
+            let zT = _ag_get(tape, op, 2)
+            let V = _ag_get(tape, op, 9)
+            let d = _ag_get(tape, op, 10)
+            let dtemb = t_zeros(V * d)
+            let dzT = t_zeros(d)
+            nn_lm_head_bwd(temb, zT, cur_dy, dtemb, dzT, V, d)
+            _ag_set(tape, op, 13, dtemb)
+            _ag_set(tape, op, 19, dzT)
+            cur_dy = dzT
+        } else if kind == ag_k_swiglu() {
+            let r = _ag_get(tape, op, 1)
+            let Wg = _ag_get(tape, op, 2)
+            let Wu = _ag_get(tape, op, 3)
+            let Wd = _ag_get(tape, op, 4)
+            let av = _ag_get(tape, op, 5)
+            let bv = _ag_get(tape, op, 6)
+            let sv = _ag_get(tape, op, 7)
+            let d = _ag_get(tape, op, 9)
+            let h = _ag_get(tape, op, 10)
+            let dr = t_zeros(d)
+            let dWg = t_zeros(h * d)
+            let dWu = t_zeros(h * d)
+            let dWd = t_zeros(d * h)
+            nn_swiglu_bwd(r, Wg, Wu, Wd, av, bv, sv, cur_dy,
+                          dr, dWg, dWu, dWd, d, h)
+            _ag_set(tape, op, 13, dWg)
+            _ag_set(tape, op, 14, dWu)
+            _ag_set(tape, op, 15, dWd)
+            _ag_set(tape, op, 19, dr)
+            cur_dy = dr
+        } else if kind == ag_k_embed() {
+            let idsf = _ag_get(tape, op, 1)
+            let table = _ag_get(tape, op, 2)
+            let T = _ag_get(tape, op, 9)
+            let d = _ag_get(tape, op, 10)
+            // V from table length / d ; nn_embedding_bwd_scatter only
+            // needs dtable sized like `table`. Read table len via a
+            // d-stride scatter (caller-zeroed). We size dtable to the
+            // table farr's length using a probe: alloc V·d where V is
+            // recovered from the table id's farr length.
+            let dtable = t_zeros(_ag_table_len(table))
+            nn_embedding_bwd_scatter(cur_dy, idsf, dtable, T, d)
+            _ag_set(tape, op, 13, dtable)
+            // input layer: no chain-out (ids carries no gradient).
+        }
+        op = op - 1
+    }
+    t_set(tape, 1, to_float(cur_dy))
+}
+
+// table farr length (V·d). tensor_lib farr-id length probe.
+fn _ag_table_len(table: int) -> int {
+    return t_len(table)
+}
+
+// ── grad accessors ──────────────────────────────────────────────────────
+pub fn ag_param_grad(tape: int, op: int, which: int) -> int {
+    return _ag_get(tape, op, 13 + which)
+}
+pub fn ag_input_grad_op(tape: int, op: int) -> int {
+    return _ag_get(tape, op, 19)
+}
+pub fn ag_input_grad(tape: int) -> int {
+    return to_int(t_get(tape, 1))
+}
+
+// ── single-op RMSNorm convenience (sub-step 1 oracle compat) ─────────────
+pub fn ag_backward_rmsnorm_single(tape: int, dy_seed: int,
+                                  dx_out: int, dg_out: int) {
+    let n = to_int(t_get(tape, 0))
+    if n != 1 { return }
+    if _ag_get(tape, 0, 0) != ag_k_rmsnorm() { return }
+    let x = _ag_get(tape, 0, 1)
+    let g = _ag_get(tape, 0, 2)
+    let xn = _ag_get(tape, 0, 4)
+    let inv_id = _ag_get(tape, 0, 5)
+    let d = _ag_get(tape, 0, 9)
+    nn_rmsnorm_bwd(x, g, xn, t_get(inv_id, 0), dy_seed, dx_out, dg_out, d)
+}
+
+// ── teardown ────────────────────────────────────────────────────────────
+pub fn ag_t_free_state(tape: int) {
+    let n = to_int(t_get(tape, 0))
+    let mut op = 0
+    while op < n {
+        let kind = _ag_get(tape, op, 0)
+        if kind == ag_k_rmsnorm() {
+            t_free(_ag_get(tape, op, 3))   // y
+            t_free(_ag_get(tape, op, 4))   // xn
+            t_free(_ag_get(tape, op, 5))   // inv
+        } else if kind == ag_k_linear() {
+            t_free(_ag_get(tape, op, 4))   // y
+        } else if kind == ag_k_rope() {
+            t_free(_ag_get(tape, op, 4))   // q_out
+        } else if kind == ag_k_lmhead() {
+            t_free(_ag_get(tape, op, 3))   // logits
+        } else if kind == ag_k_swiglu() {
+            t_free(_ag_get(tape, op, 5))   // a
+            t_free(_ag_get(tape, op, 6))   // b
+            t_free(_ag_get(tape, op, 7))   // s
+            t_free(_ag_get(tape, op, 8))   // o
+        } else if kind == ag_k_embed() {
+            t_free(_ag_get(tape, op, 3))   // X
+        } else if kind == ag_k_attn() {
+            t_free(_ag_get(tape, op, 4))   // P
+            t_free(_ag_get(tape, op, 5))   // ctx
+        } else if kind == ag_k_attn_dt() {
+            t_free(_ag_get(tape, op, 4))   // P
+            t_free(_ag_get(tape, op, 5))   // ctx
+        } else if kind == ag_k_add() {
+            t_free(_ag_get(tape, op, 3))   // out
+        } else if kind == ag_k_rope_mh() {
+            t_free(_ag_get(tape, op, 4))   // q_out
+        } else if kind == ag_k_slice() {
+            t_free(_ag_get(tape, op, 2))   // out
+        } else if kind == ag_k_silu_gate() {
+            t_free(_ag_get(tape, op, 3))   // s
+        } else if kind == ag_k_rmsnorm_mh() {
+            t_free(_ag_get(tape, op, 3))   // y
+            t_free(_ag_get(tape, op, 4))   // xn
+            t_free(_ag_get(tape, op, 5))   // inv
+        }
+        op = op + 1
+    }
+}
+
+// free every per-tensor registry grad farr (Decision 3 path).
+pub fn ag_t_free_reg(tape: int) {
+    let rt = to_int(t_get(tape, 2))
+    let rg = to_int(t_get(tape, 3))
+    let n = to_int(t_get(rt, 0))
+    let mut i = 0
+    while i < n {
+        let gid = to_int(t_get(rg, 1 + i))
+        if gid >= 0 { t_free(gid) }
+        i = i + 1
+    }
+    t_set(rt, 0, 0.0)
+}
+
+pub fn ag_t_free_grads(tape: int) {
+    let n = to_int(t_get(tape, 0))
+    let mut op = 0
+    while op < n {
+        let mut s = 13
+        while s < _ag_slots() {
+            let gid = _ag_get(tape, op, s)
+            if gid >= 0 { t_free(gid) }
+            s = s + 1
+        }
+        op = op + 1
+    }
+}

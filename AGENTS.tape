@@ -46,6 +46,29 @@
 @V := "tape" :: spec [active]
   version = "1.2"
 
+@X hexa_verify := "hexa verify — verification via hexa CLI only" :: guide [active]
+  tldr = "Any correctness / purity / grade / identity claim → verify with `hexa <verb>` or `hexa run <verifier>.hexa` (e.g. `hexa run tool/atlas_verify.hexa`) and paste the verdict VERBATIM. NEVER cite sympy / PyPhi / Wolfram / Mathematica output as evidence."
+  detail = "~/core/atlas/VERIFY.tape"
+
+@X wilson_pool := "wilson pool — resource utilization" :: guide [active]
+  tldr = "Heavy / deterministic work (build · drill · probe · compile · test-sweep · GPU fire) → do NOT serialize on localhost; route to the host pool: `wilson pool list` then `wilson pool on <host> <cmd>`, or a ToolUse `\"host\"` field. Empty roster = degrade-to-local, fine."
+  detail = "~/core/atlas/POOL.tape"
+
+# ─── §0 PROJECT-WIDE NN STACK (2026-05-16) — 인지 우선 ────────────────
+# hexa-lang 의 NN 학습 스택은 두 컴포넌트로 구성. 어느 작업이 어느 쪽에
+# 속하는지 즉시 식별 가능하도록 최상단 고정.
+
+@N nn_stack := "flame + forge — hexa-lang NN training stack (한 쌍)" :: note [d=2026-05-16 active]
+  flame = "★ stdlib/flame/ — hexa-native compiler-only PyTorch-equiv NN stdlib (Tensor + autograd + nn + optim + train_step). 언어=hexa 소스. SSOT: stdlib/flame/{README.md, PLAN.md, FLAME.tape}. 설계: RFC 043."
+  forge = "★ self/forge/ — GPU compute substrate (device-farr + cuBLAS Dgemm + .cu kernels). 언어=C/CUDA runtime. SSOT: self/forge/{README.md, PLAN.md, FORGE.tape}. 코드 실거주: self/runtime.c GPU 부분 + self/cuda/ (label-only, 이동 0). 설계: RFC 040 + 041."
+  relation = "flame:forge :: torch:ATen. flame 이 forge 를 compiled builtin (hexa_farr_*_gpu, hexa_cuda_*) 으로 호출. flame=hexa / forge=C/CUDA 레이어 분리는 디렉토리로 강제 (g_forge_substrate_role · g_flame_compiler_only)."
+  status = "DESIGN+SCAFFOLD+PARADIGM 2026-05-17. flame Phase 1 LANDED (tensor_lib + autograd_lib 3/3 PASS compiled-native). forge Phase R 4 cost-bearing GPU fire (D/B/C/A, H100/H200 SXM vast.ai, $1.35 total) measurement-anchored: PARADIGM.md PUBLISH (dual-mechanism × regime-tiered: A dispatch-elimination 6× small/2.24× mid + B/C memory-fusion ceilings + D' within-run det FREE) + RFC 044 draft (14 falsifier · 5 Stage 1 PASS + 9 Stage 2 pre-reg). Stage 2 = A→B→C 순 user gate."
+  rfc_chain = "RFC 034 (autograd ✅ landed) · 040 (device-farr + cuBLAS ✅ landed) · 041 (.cu kernels → Phase 2.B substrate 흡수) · 042 (SUBSUMED by 043) · 043 (flame design SSOT) · 044 (forge regime-tiered substrate, Phase R anchored)"
+  preservation = "캠페인 산출물 전수 보존: stdlib/flame/FLAME.tape §X (primary index, branch·SHA·path·RFC#) + self/forge/FORGE.tape §X (substrate-specific 보완 + x_paradigm_ssot + x_phaseR_fires). 복제 X — 참조만 (g3 drift-avoidance). Phase R 산출 = state/forge_phaseR_{d,b,c,a}_2026_05_17/."
+  cross_repo = "consumed by dancinlab/anima HEXAD (verified ConsciousDecoderV2 arch + .py interim track; cross-repo evidence anima 잔류, hexa-lang 은 참조만)"
+  not_what = "둘 다 별도 repo 아님 (hexa-first · toolchain ABI lockstep). hexa-src→PTX GPU codegen 백엔드는 forge 스코프 밖 (미래 별도 RFC)."
+  @> README.md
+
 # ─── §1 Identity ─────────────────────────────────────────────────────
 
 @I id001 := "hexa-lang" :: identity-claim [d=2026-05-14 active]
@@ -76,6 +99,8 @@
   LIMIT_BREAKTHROUGH.md -> "project-specific limits + breakthrough audit"
   TAPE-AUDIT.md -> "tape v1.x adoption ledger for this repo"
   inbox/patches/ -> "external-contributed patch markdowns (one concept per file)"
+  stdlib/flame/ -> "★ NN training stdlib (hexa source, compiler-only PyTorch-equiv) — README · PLAN · FLAME.tape. RFC 043. see §0 nn_stack."
+  self/forge/ -> "★ GPU compute substrate SSOT label (cuBLAS + .cu kernels live in self/runtime.c + self/cuda/) — README · PLAN · FORGE.tape. RFC 040+041. see §0 nn_stack."
   stdlib/qrng/ -> "★ Quantum RNG — 9 backends T0..T3 + NIST SP 800-22 audit. RFC 044 absorption of ~/core/qrng (헌법 v2 룰 4 reference impl). see §0 qrng_stack."
   stdlib/sim_universe/ -> "★ Sim-Universe — virtual-universe runtime (26 modules · ~32k LoC · τ-clock + multiverse + qpu_bridge + 16 experiments). RFC 046 absorption of ~/core/sim-universe. see §0 sim_universe_stack."
   stdlib/quantum/ -> "★ Quantum Mirror — ≤30-qubit laptop-grade substrate (38 module dirs · 62k LoC · Aer-compat state-vector kernel + 27 algorithms + chemistry_vqe). RFC 045 absorption of ~/core/qmirror. see §0 qmirror_stack."
@@ -196,35 +221,13 @@
   authority = "[@x_hxc_spec]"
   @> AGENTS.md
 
-@D g_qrng_audit_required := "qrng audit on T1/T3 paths" :: governance [required d=2026-05-16 active]
-  rule = "Any code path in stdlib/qrng/ returning live quantum entropy (tier >= T1) MUST be exercisable through qrng_audited_bytes() with NIST SP 800-22 tier-1+ audit."
-  apply = "Skipping audit on T1/T3 backends is a release blocker."
-  authority = "NIST SP 800-22 Rev. 1a · https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-22r1a.pdf"
-  source = "qrng AGENTS.tape g1 (migrated 2026-05-16 RFC 044)"
-  @> AGENTS.md
-
-@D g_qrng_honest_vendor := "qrng vendor classification honesty" :: governance [required d=2026-05-16 active]
-  rule = "QrngSourceMeta.is_quantum follows vendor self-classification; honest-caveat ships in module docstring + meta.message."
-  examples = "nist_beacon.is_quantum=0 (mixed entropy HSM + RNGs); hardware_qrng.is_quantum=1 (IDQ/ESP32 vendor assertion, independent NIST validation NOT performed)."
-  source = "qrng AGENTS.tape g2 (migrated 2026-05-16 RFC 044)"
-  @> AGENTS.md
-
-@D g_qrng_provider_only := "qrng = provider-side only" :: governance [required deny:write d=2026-05-16 active]
-  rule = "stdlib/qrng/ returns raw bytes + provenance only. No HMAC-DRBG / NIST SP 800-90A construction belongs here."
-  why = "Amplification is consumer concern (qmirror amplifier · hexa-bio). Provider/consumer boundary deliberate; zero code overlap, struct-shape compat by convention."
-  source = "qrng AGENTS.tape g3 (migrated 2026-05-16 RFC 044)"
-  @> AGENTS.md
-
-@D g_sim_universe_honest_scope := "sim-universe honest scope" :: governance [required d=2026-05-16 active]
-  rule = "Each stdlib/sim_universe/experiments/<name>/ module MUST declare its 'honest scope' in module docstring + README — what it IS (exact ED, closed-form, etc.) and what it is NOT (decoherent, lab device, L→∞ limit, lattice QCD, full SM)."
-  examples = "fvd: EXACT 2ᴺ unitary N≤24, NOT lab; supremacy: calibrates XEB ruler at n≲24, NOT a sim-vs-reality claim; surface-code: Gottesman-Knill polynomial tableau, NOT 2ᴺ state vector."
-  source = "sim-universe AGENTS.tape g1/g7 (migrated 2026-05-16 RFC 046)"
-  @> AGENTS.md
-
-@D g_sim_universe_qrng_consumer := "sim-universe → stdlib/qrng dependency" :: governance [required d=2026-05-16 active]
-  rule = "stdlib/sim_universe/ouroboros_qrng/ consumes stdlib/qrng/ (RFC 044) — no own provider implementation. 4-tier ANU fallback (paid → keyed → legacy → urandom) is qrng's responsibility."
-  why = "Provider/consumer boundary preserved across the absorption series. ouroboros_qrng is an entropy-consumer (perturbation pipeline), not a provider."
-  source = "RFC 044 + RFC 046 cross-link 2026-05-16"
+@D g_inbox_dual_track := "inbox-patches process both interp + compiled until interp retires" :: governance [required d=2026-05-17 active]
+  rule = "When applying an inbox/patches/ patch that changes a language-level semantic (builtins · operators · runtime intrinsics · type coercions), the fix MUST land on BOTH the interpreter path (self/hexa_full.hexa eval/dispatch) AND the compiled path (self/codegen_c2.hexa lowering + self/runtime.c implementation). Single-side fixes are forbidden until interp retirement (R3-R6) completes."
+  why = "interp ↔ compiled divergence silently breaks downstream consumers — same .hexa source produces different bytes under `hexa run` vs `hexa build`. Concrete case: chr-byte-vs-codepoint-asymmetry (2026-05-17) where patch author assumed compiled chr() was byte-level but BOTH paths produced 8-byte codepoint-UTF8; required dual-side fix (runtime.c add hexa_chr_byte + codegen_c2.hexa rewire + hexa_full.hexa interp handler). cost-routing violation if `wilson test` (compiled) passes while interp tape_driver diverges."
+  applies-to = "any inbox patch where compiler_impact mentions interp/eval OR codegen/runtime OR a user-facing builtin. Documentation-only and stdlib-only patches are exempt."
+  sunset = "drops to [recommended] once interp retirement finishes (memory: interp-retire R3-R6 state 2026-05-17, aprime_cc-direct 27/60 = 45%; full closure planned)."
+  verification = "build /tmp/diag.hexa with HEXA_MAC_BUILD_OK=1 + `hexa run /tmp/diag.hexa` → byte-identical stdout for the touched semantic."
+  authority = "feedback memory: interp-retire R3-R6 state; inbox triage 2026-05-17 (commit 8389f040)"
   @> AGENTS.md
 
 @D g_qmirror_envelope := "qmirror ≤30-qubit envelope" :: governance [required d=2026-05-16 active]

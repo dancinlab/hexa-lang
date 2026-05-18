@@ -4443,7 +4443,13 @@ fn gen2_expr(node) {
                 if name == "read_lines"     { return "rt_read_lines(" + a0 + ")" }
                 if name == "from_char_code" { return "hexa_from_char_code(" + a0 + ")" }
                 if name == "ord"            { return "hexa_char_code(" + a0 + ", hexa_int(0))" }
-                if name == "chr"            { return "hexa_from_char_code(" + a0 + ")" }
+                // chr-byte-fix 2026-05-17 (RFC chr-byte-vs-codepoint-asymmetry):
+                // chr lowers to byte-level `hexa_chr_byte` (1 byte N & 0xFF),
+                // mirroring `ord(substring(s,i,1))` byte read. Previously emitted
+                // `hexa_from_char_code` (codepoint→UTF-8) which silently broke
+                // byte-synthesis callers (URL decode, PNG header, emoji prefix).
+                // `from_char_code` retains codepoint behaviour for JSON \uXXXX.
+                if name == "chr"            { return "hexa_chr_byte(" + a0 + ")" }
                 // RFC 030 (2026-05-12): bytes_to_str_raw([int]) — raw byte
                 // concatenation, no UTF-8 codepoint re-encoding. Unblocks
                 // byte_tokenizer.hexa → string round-trip for Korean / emoji.
@@ -4734,6 +4740,17 @@ fn gen2_expr(node) {
                 }
                 if name == "farr_apply_single_farr" {
                     return "hexa_farr_apply_single_farr(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
+                // RFC 041 Phase B forge GPU kernels (gap(d), Decision 9):
+                // compiled-path wiring (interp had these since Phase B;
+                // flame uses `hexa build` so the codegen must map them).
+                // CUDA build → __global__ kernel; else byte-identical
+                // _hx_farr_rope_cpu fallback.
+                if name == "farr_rope_gpu" {
+                    return "hexa_farr_rope_gpu(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
+                if name == "farr_rope_bwd_gpu" {
+                    return "hexa_farr_rope_bwd_gpu(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
                 }
             }
             if len(node.args) == 7 {

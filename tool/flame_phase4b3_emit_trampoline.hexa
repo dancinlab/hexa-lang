@@ -1,0 +1,376 @@
+// ════════════════════════════════════════════════════════════════════════
+// tool/flame_phase4b3_emit_trampoline.hexa — Phase 4-B-3-2-first emit
+//
+// Generates a .c snippet with trampoline bodies for every
+// literal-tuple (T,d,nh,nkv,h) call pattern found in the IPCP-rewritten
+// source. The snippet is intended to be concatenated to the hexa_v2-
+// emitted .c (single-TU inline pattern: `#include "runtime.c"` at
+// file top makes HexaVal + hexa_int visible in scope).
+//
+// Trampoline body (fallback form — no perf gain yet, byte-eq automatic):
+//   - args: int <id> (farr_id primitive)
+//   - body: box each id via hexa_int, call existing HexaVal fn
+//
+// Real boxing-elim comes in Phase 4-B-3-2-third when the body is
+// rewritten to direct farr_table dereferences + leaf fn specializations.
+//
+// Usage:
+//   hexa run tool/flame_phase4b3_emit_trampoline.hexa <ipcp.hexa> [<out.c>]
+//
+// Falsifier (this commit):
+//   F-RFC047-EMIT-TRAMPOLINE-COMPILES — output .c snippet appended
+//     to the IPCP .c file compiles via clang -c without errors
+//   F-RFC047-EMIT-TRAMPOLINE-LINKS    — full binary builds (clang -O2
+//     with all libs) without symbol resolution errors
+// ════════════════════════════════════════════════════════════════════════
+
+let argv = args()
+if len(argv) < 3 {
+    println("usage: hexa run tool/flame_phase4b3_emit_trampoline.hexa <ipcp.hexa> [<out.c>]")
+    exit(1)
+}
+
+let src_path = argv[2]
+let mut out_path = "build/artifacts/flame_phase4b3_trampoline.c"
+if len(argv) >= 4 { out_path = argv[3] }
+// optional: --decls writes forward declarations to a separate .h-like file
+// (for insertion near top of single-TU concatenated .c)
+let mut decls_path = ""
+if len(argv) >= 5 { decls_path = argv[4] }
+
+let src = read_file(src_path)
+if len(src) == 0 {
+    println("error: cannot read " + src_path)
+    exit(1)
+}
+
+println("=== flame Phase 4-B-3-2-first trampoline emit (RFC 047) ===")
+println("  input  : " + src_path)
+println("  output : " + out_path)
+
+// ── reuse Phase 4-B-1 scaffold's detection + Phase 4-B-3-1 emit ──────
+//
+// Mirror the implementation in tool/flame_phase4b3_emit_skeleton.hexa
+// but emit trampoline body instead of stub.
+
+fn idx_of_from(haystack, needle, start) {
+    let n = len(haystack)
+    let m = len(needle)
+    if m == 0 { return start }
+    if start < 0 { return -1 }
+    let limit = n - m
+    let mut i = start
+    while i <= limit {
+        if haystack.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn gather_call_balanced(text, start_idx) {
+    let n = len(text)
+    let mut depth = 1
+    let mut i = start_idx
+    let mut out = ""
+    while i < n {
+        let ch = text.substring(i, i + 1)
+        if ch == "(" { depth = depth + 1 }
+        if ch == ")" {
+            depth = depth - 1
+            if depth == 0 { return out }
+        }
+        out = out + ch
+        i = i + 1
+    }
+    return ""
+}
+
+fn split_args_balanced(arg_text) {
+    let mut out = []
+    let mut buf = ""
+    let mut depth = 0
+    let mut i = 0
+    let n = len(arg_text)
+    while i < n {
+        let ch = arg_text.substring(i, i + 1)
+        if ch == "(" { depth = depth + 1; buf = buf + ch }
+        else if ch == "[" { depth = depth + 1; buf = buf + ch }
+        else if ch == "{" { depth = depth + 1; buf = buf + ch }
+        else if ch == ")" { depth = depth - 1; buf = buf + ch }
+        else if ch == "]" { depth = depth - 1; buf = buf + ch }
+        else if ch == "}" { depth = depth - 1; buf = buf + ch }
+        else if ch == "," {
+            if depth == 0 { out.push(buf.trim()); buf = "" }
+            else { buf = buf + ch }
+        } else { buf = buf + ch }
+        i = i + 1
+    }
+    if len(buf.trim()) > 0 { out.push(buf.trim()) }
+    return out
+}
+
+fn is_id_char(c) {
+    let oc = ord(c)
+    if oc >= 48 && oc <= 57 { return true }
+    if oc >= 65 && oc <= 90 { return true }
+    if oc >= 97 && oc <= 122 { return true }
+    if oc == 95 { return true }
+    return false
+}
+
+fn is_integer_literal(s) {
+    let t = s.trim()
+    let nt = len(t)
+    if nt == 0 { return false }
+    let digits = "0123456789"
+    let mut i = 0
+    if t.substring(0, 1) == "-" {
+        if nt == 1 { return false }
+        i = 1
+    }
+    while i < nt {
+        let ch = t.substring(i, i + 1)
+        if !digits.contains(ch) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+let mut unique_keys = []
+let mut unique_kinds = []
+let mut unique_dims = []
+
+fn already_seen(key) {
+    let mut i = 0
+    while i < len(unique_keys) {
+        if unique_keys[i] == key { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn scan_calls(needle, kind, expected_arity) {
+    let mut start = 0
+    let n = len(src)
+    while start < n {
+        let pos = idx_of_from(src, needle, start)
+        if pos < 0 { return }
+        let mut ls = pos
+        while ls > 0 {
+            if src.substring(ls - 1, ls) == "\n" { break }
+            ls = ls - 1
+        }
+        let prefix = src.substring(ls, pos)
+        if prefix.contains("//") { start = pos + len(needle); continue }
+        if prefix.contains("fn ") { start = pos + len(needle); continue }
+        if pos > 0 {
+            let bc = src.substring(pos - 1, pos)
+            if is_id_char(bc) { start = pos + len(needle); continue }
+        }
+        let open_idx = pos + len(needle)
+        let inner = gather_call_balanced(src, open_idx)
+        if len(inner) == 0 { start = open_idx; continue }
+        let args_list = split_args_balanced(inner)
+        let na = len(args_list)
+        if na != expected_arity { start = open_idx + len(inner); continue }
+        let T = args_list[na - 5]
+        let d = args_list[na - 4]
+        let nh = args_list[na - 3]
+        let nkv = args_list[na - 2]
+        let h = args_list[na - 1]
+        let all_lit = is_integer_literal(T) && is_integer_literal(d) && is_integer_literal(nh) && is_integer_literal(nkv) && is_integer_literal(h)
+        if !all_lit { start = open_idx + len(inner); continue }
+        let key = kind + ":" + T + "," + d + "," + nh + "," + nkv + "," + h
+        if !already_seen(key) {
+            unique_keys.push(key)
+            unique_kinds.push(kind)
+            unique_dims.push(T + "," + d + "," + nh + "," + nkv + "," + h)
+        }
+        start = open_idx + len(inner)
+    }
+}
+
+scan_calls("nn_decoder_block_fwd(", "fwd", 10)
+scan_calls("nn_decoder_block_bwd(", "bwd", 13)
+
+println("  unique literal-tuple call patterns: " + to_string(len(unique_keys)))
+if len(unique_keys) == 0 {
+    println("FAIL  no literal-tuple call sites — input must be IPCP-rewritten")
+    exit(2)
+}
+
+// ── emit .c snippet ──────────────────────────────────────────────────
+
+let mut out = ""
+out = out + "// ═══════════════════════════════════════════════════════════════════════════\n"
+out = out + "// flame_phase4b3_trampoline.c — Phase 4-B-3-2-first auto-generated trampolines\n"
+out = out + "//\n"
+out = out + "// Generated by tool/flame_phase4b3_emit_trampoline.hexa from " + src_path + "\n"
+out = out + "//\n"
+out = out + "// Intended to be CONCATENATED to the hexa_v2-emitted .c file before clang.\n"
+out = out + "// Single-TU inline pattern (#include \"runtime.c\" at TU head) makes HexaVal,\n"
+out = out + "// hexa_int, nn_decoder_block_fwd, nn_decoder_block_bwd all in scope here.\n"
+out = out + "//\n"
+out = out + "// Body form (fallback, no perf gain yet):\n"
+out = out + "//   box each int farr_id via hexa_int(), call the HexaVal fn.\n"
+out = out + "//   Real boxing-elim comes in Phase 4-B-3-2-third when body is rewritten\n"
+out = out + "//   to direct farr_table dereferences + leaf fn specializations.\n"
+out = out + "// ═══════════════════════════════════════════════════════════════════════════\n"
+out = out + "\n"
+
+let mut i = 0
+while i < len(unique_keys) {
+    let kind = unique_kinds[i]
+    let dims_csv = unique_dims[i]
+    let parts = dims_csv.split(",")
+    let T = parts[0]
+    let d = parts[1]
+    let nh = parts[2]
+    let nkv = parts[3]
+    let h = parts[4]
+    let fn_name = "flame_block_T" + T + "_d" + d + "_nh" + nh + "_nkv" + nkv + "_h" + h + "_" + kind
+    out = out + "// ── " + kind + " trampoline ──\n"
+    if kind == "fwd" {
+        out = out + "static inline void " + fn_name + "(\n"
+        out = out + "    int X_id, int Bp_id, int Bc_id,\n"
+        out = out + "    int cos_id, int sin_id\n"
+        out = out + ") {\n"
+        out = out + "    nn_decoder_block_fwd(\n"
+        out = out + "        hexa_int(X_id), hexa_int(Bp_id), hexa_int(Bc_id),\n"
+        out = out + "        hexa_int(cos_id), hexa_int(sin_id),\n"
+        out = out + "        hexa_int(" + T + "), hexa_int(" + d + "), hexa_int(" + nh + "),\n"
+        out = out + "        hexa_int(" + nkv + "), hexa_int(" + h + ")\n"
+        out = out + "    );\n"
+        out = out + "}\n"
+    } else {
+        out = out + "static inline void " + fn_name + "(\n"
+        out = out + "    int X_id, int Bp_id, int Bc_id,\n"
+        out = out + "    int dXout_id, int dX_out_id, int Bg_id,\n"
+        out = out + "    int cos_id, int sin_id\n"
+        out = out + ") {\n"
+        out = out + "    nn_decoder_block_bwd(\n"
+        out = out + "        hexa_int(X_id), hexa_int(Bp_id), hexa_int(Bc_id),\n"
+        out = out + "        hexa_int(dXout_id), hexa_int(dX_out_id), hexa_int(Bg_id),\n"
+        out = out + "        hexa_int(cos_id), hexa_int(sin_id),\n"
+        out = out + "        hexa_int(" + T + "), hexa_int(" + d + "), hexa_int(" + nh + "),\n"
+        out = out + "        hexa_int(" + nkv + "), hexa_int(" + h + ")\n"
+        out = out + "    );\n"
+        out = out + "}\n"
+    }
+    out = out + "\n"
+    println("  emitted: " + fn_name)
+    i = i + 1
+}
+
+// ── append leaf primitive specializations (Phase 4-B-3-2-third-1+) ──
+//
+// Currently emits ONE leaf primitive: flame_rmsnorm_d<d>_fwd_primitive,
+// keyed off the literal-tuple's d dimension. More leaves come in
+// subsequent sub-phases (per PHASE4B3_LEAF_PRIORITY.md leaf order).
+//
+// The primitive is `static inline` + reads `_hx_farr_table[id].buf`
+// directly — no HexaVal, no farr_get/set fn dispatch. Visible to
+// any code in the same TU (single-TU inline pattern guarantees
+// _hx_farr_table is in scope from `#include "runtime.c"`).
+
+let mut emitted_d_set = []
+fn d_already_emitted(d_val) {
+    let mut i = 0
+    while i < len(emitted_d_set) {
+        if emitted_d_set[i] == d_val { return true }
+        i = i + 1
+    }
+    return false
+}
+
+let mut leaf_count = 0
+let mut k = 0
+while k < len(unique_dims) {
+    let parts = unique_dims[k].split(",")
+    let d_val = parts[1]
+    if !d_already_emitted(d_val) {
+        emitted_d_set.push(d_val)
+        let fn_name = "flame_rmsnorm_d" + d_val + "_fwd_primitive"
+        out = out + "// ── rmsnorm leaf primitive (Phase 4-B-3-2-third-1) ──\n"
+        out = out + "// algorithm: same as nn_rmsnorm_fwd (stdlib/flame/nn_lib.hexa:146)\n"
+        out = out + "// algorithm: same as ref_rmsnorm_fwd (stdlib/flame/flame_nn_test.hexa:117)\n"
+        out = out + "// Σx² + 1/sqrt + per-element scale; libm sqrt — byte-eq with hexa wrapper.\n"
+        out = out + "static inline void " + fn_name + "(\n"
+        out = out + "    int x_id, int g_id, int y_id, int xn_id, int inv_id\n"
+        out = out + ") {\n"
+        out = out + "    double* x   = _hx_farr_table[x_id].buf;\n"
+        out = out + "    double* g   = _hx_farr_table[g_id].buf;\n"
+        out = out + "    double* y   = _hx_farr_table[y_id].buf;\n"
+        out = out + "    double* xn  = _hx_farr_table[xn_id].buf;\n"
+        out = out + "    double* inv = _hx_farr_table[inv_id].buf;\n"
+        out = out + "    const double eps = 1e-6;\n"
+        out = out + "    double ms = 0.0;\n"
+        out = out + "    for (int i = 0; i < " + d_val + "; i++) {\n"
+        out = out + "        ms += x[i] * x[i];\n"
+        out = out + "    }\n"
+        out = out + "    ms /= (double)" + d_val + ";\n"
+        out = out + "    double iv = 1.0 / sqrt(ms + eps);\n"
+        out = out + "    inv[0] = iv;\n"
+        out = out + "    for (int j = 0; j < " + d_val + "; j++) {\n"
+        out = out + "        double xni = x[j] * iv;\n"
+        out = out + "        xn[j] = xni;\n"
+        out = out + "        y[j]  = g[j] * xni;\n"
+        out = out + "    }\n"
+        out = out + "}\n"
+        out = out + "\n"
+        leaf_count = leaf_count + 1
+        println("  emitted leaf: " + fn_name)
+    }
+    k = k + 1
+}
+
+write_file(out_path, out)
+println("PASS  F-RFC047-EMIT-TRAMPOLINE-SHIPS  " + to_string(len(unique_keys)) + " trampolines + " + to_string(leaf_count) + " leaf primitives emitted → " + out_path)
+
+if len(decls_path) > 0 {
+    // Emit forward declarations file (for insertion near top of single-TU concat)
+    let mut decls = ""
+    decls = decls + "// Phase 4-B-3-2 trampoline forward declarations\n"
+    decls = decls + "// Auto-generated by tool/flame_phase4b3_emit_trampoline.hexa --decls\n"
+    decls = decls + "\n"
+    let mut j = 0
+    while j < len(unique_keys) {
+        let kind = unique_kinds[j]
+        let dims_csv = unique_dims[j]
+        let parts = dims_csv.split(",")
+        let T = parts[0]
+        let d = parts[1]
+        let nh = parts[2]
+        let nkv = parts[3]
+        let h = parts[4]
+        let fn_name = "flame_block_T" + T + "_d" + d + "_nh" + nh + "_nkv" + nkv + "_h" + h + "_" + kind
+        if kind == "fwd" {
+            decls = decls + "static inline void " + fn_name + "(int X_id, int Bp_id, int Bc_id, int cos_id, int sin_id);\n"
+        } else {
+            decls = decls + "static inline void " + fn_name + "(int X_id, int Bp_id, int Bc_id, int dXout_id, int dX_out_id, int Bg_id, int cos_id, int sin_id);\n"
+        }
+        j = j + 1
+    }
+    // leaf primitive decls (one per unique d value)
+    let mut emitted_d_set2 = []
+    let mut k2 = 0
+    while k2 < len(unique_dims) {
+        let parts2 = unique_dims[k2].split(",")
+        let d_val2 = parts2[1]
+        let mut seen = false
+        let mut e2 = 0
+        while e2 < len(emitted_d_set2) {
+            if emitted_d_set2[e2] == d_val2 { seen = true }
+            e2 = e2 + 1
+        }
+        if !seen {
+            emitted_d_set2.push(d_val2)
+            decls = decls + "static inline void flame_rmsnorm_d" + d_val2 + "_fwd_primitive(int x_id, int g_id, int y_id, int xn_id, int inv_id);\n"
+        }
+        k2 = k2 + 1
+    }
+    write_file(decls_path, decls)
+    println("PASS  F-RFC047-EMIT-TRAMPOLINE-DECLS  " + to_string(len(unique_keys)) + " decls emitted → " + decls_path)
+}
+
+println("=== end of Phase 4-B-3-2-first trampoline emit ===")

@@ -1,0 +1,215 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_rfc040_smoke.hexa — anima RFC 040 farr GPU/CUDA backend Phase A
+//                          scaffolding equivalence smoke (Mac, no CUDA).
+//
+// Builtins (self/runtime.c, anima RFC 040 block):
+//   cuda_available / cuda_device_count / farr_to_device / farr_to_host
+//   / farr_pin / farr_device_free / farr_matmul_gpu
+//
+// Reference: inbox/rfc_drafts_2026_05_12/rfc_040_farr_gpu_cuda_backend.md
+//            §"Phase A — farr_matmul GPU + equivalence harness"
+// Oracle:    RFC 032 farr_matmul (CPU `ikj` triple-loop; bit-exact).
+//
+// HONEST CARVE-OUT (AGENTS.tape g3 — no over-claim):
+//   This smoke runs on Mac (no CUDA toolkit, no CUDA device). It proves
+//   the Phase A SCAFFOLDING is byte-clean: the device-farr struct
+//   extension does not regress the existing CPU `farr_matmul` numeric
+//   result, the `farr_matmul_gpu` dispatcher routes correctly to the CPU
+//   oracle on the no-CUDA build, and the device-management builtins
+//   (cuda_available / farr_to_device / farr_pin / etc.) take the
+//   CPU-fallback branch without crashing. The actual CUDA kernels
+//   (cuBLAS Dgemm + custom __global__) are a NAMED BLOCKER (RFC 040
+//   §"Phase A" body = TODO[cuda] stubs returning -1 on a HEXA_CUDA
+//   build) — to be implemented + falsifier-verified on a CUDA host
+//   in the next cycle. The FFI-blocker-style honesty gate F-RFC040-
+//   CUDA-BLOCKER-DOC documents this (same pattern as RFC 036
+//   F-RFC036-FFI-BLOCKER-DOCUMENTED).
+//
+// Acceptance — gated on the COMPILED native binary
+//             (hexa build … && ./bin):
+//
+//   1 F-RFC040-AVAIL             — cuda_available() == 0 on no-CUDA
+//                                    build (graceful fallback gate); the
+//                                    device-count is also 0 → coherent.
+//   2 F-RFC040-STRUCT-NOREGRESS  — RFC 032 farr_matmul CPU result is
+//                                    byte-identical to a known oracle
+//                                    after the HexaFarrEntry residence-
+//                                    descriptor extension (residue init
+//                                    must not perturb the math).
+//   3 F-RFC040-DISPATCH-FALLBACK — farr_matmul_gpu(A,B) result is
+//                                    byte-equal to farr_matmul(A,B): the
+//                                    dispatcher routes correctly on the
+//                                    no-CUDA build. Same handle ABI
+//                                    (`-1`-on-error contract preserved).
+//   4 F-RFC040-DETERMINISM       — three back-to-back farr_matmul_gpu
+//                                    invocations produce byte-identical
+//                                    results (no hidden state).
+//   5 F-RFC040-CUDA-BLOCKER-DOC  — honest carve-out asserted: this build
+//                                    is NO-CUDA, the device-mgmt fns
+//                                    take the CPU-fallback branch (1 ok
+//                                    on a valid handle), real CUDA
+//                                    kernels are the NEXT cycle on a
+//                                    CUDA host. This is an HONESTY gate,
+//                                    not a CUDA PASS.
+//
+// 5/5 PASS → RFC 040 Phase A scaffolding landable; real CUDA kernels +
+// cuBLAS link = next-cycle deliverable on a CUDA host.
+// ════════════════════════════════════════════════════════════════════════
+
+fn abs_d(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn max_abs_diff(c1: int, c2: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = abs_d(farr_get(c1, i) - farr_get(c2, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+fn main() {
+    let mut pass = 0
+    let total = 5
+
+    // ── Falsifier 1: F-RFC040-AVAIL ─────────────────────────────────
+    // No-CUDA build: cuda_available() == 0 AND cuda_device_count() == 0.
+    // Coherent: AVAIL=0 ⇒ COUNT=0 (a CUDA-less build cannot report any
+    // visible GPU). This is the graceful-fallback gate.
+    let avail = cuda_available()
+    let count = cuda_device_count()
+    if avail == 0 && count == 0 {
+        println("PASS  F-RFC040-AVAIL  cuda_available=" + to_string(avail) + " cuda_device_count=" + to_string(count) + " (no-CUDA build, coherent)")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC040-AVAIL  avail=" + to_string(avail) + " count=" + to_string(count) + " (expected 0/0 on no-CUDA Mac build)")
+    }
+
+    // ── Falsifier 2: F-RFC040-STRUCT-NOREGRESS ──────────────────────
+    // The HexaFarrEntry residence-descriptor extension (4 new fields:
+    // d_buf, loc, pinned, dirty_*) must NOT perturb the CPU farr_matmul
+    // numeric path. Verify with a small 2x3 @ 3x2 = 2x2 known-result
+    // matmul whose exact integer-valued output is independently
+    // computable (no fp tolerance needed — these inputs round to
+    // integers exactly).
+    //
+    //   A = [[1, 2, 3],
+    //        [4, 5, 6]]    (2x3)
+    //   B = [[1, 0],
+    //        [0, 1],
+    //        [1, 1]]       (3x2)
+    //   C = A @ B
+    //     = [[1+0+3,  0+2+3],
+    //        [4+0+6,  0+5+6]]
+    //     = [[4, 5],
+    //        [10, 11]]
+    let A = farr_zeros(6)
+    let _a0 = farr_set(A, 0, 1.0)
+    let _a1 = farr_set(A, 1, 2.0)
+    let _a2 = farr_set(A, 2, 3.0)
+    let _a3 = farr_set(A, 3, 4.0)
+    let _a4 = farr_set(A, 4, 5.0)
+    let _a5 = farr_set(A, 5, 6.0)
+    let B = farr_zeros(6)
+    let _b0 = farr_set(B, 0, 1.0)
+    let _b1 = farr_set(B, 1, 0.0)
+    let _b2 = farr_set(B, 2, 0.0)
+    let _b3 = farr_set(B, 3, 1.0)
+    let _b4 = farr_set(B, 4, 1.0)
+    let _b5 = farr_set(B, 5, 1.0)
+    let C_cpu = farr_matmul(A, 2, 3, B, 2)
+    let c00 = farr_get(C_cpu, 0)
+    let c01 = farr_get(C_cpu, 1)
+    let c10 = farr_get(C_cpu, 2)
+    let c11 = farr_get(C_cpu, 3)
+    let oracle_err = abs_d(c00 - 4.0) + abs_d(c01 - 5.0) + abs_d(c10 - 10.0) + abs_d(c11 - 11.0)
+    if oracle_err == 0.0 {
+        println("PASS  F-RFC040-STRUCT-NOREGRESS  farr_matmul CPU = [[4,5],[10,11]] (err=0.0 — exact); residence-descriptor extension did not perturb the math")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC040-STRUCT-NOREGRESS  C=[[" + to_string(c00) + "," + to_string(c01) + "],[" + to_string(c10) + "," + to_string(c11) + "]] err=" + to_string(oracle_err))
+    }
+
+    // ── Falsifier 3: F-RFC040-DISPATCH-FALLBACK ─────────────────────
+    // farr_matmul_gpu on a no-CUDA build MUST route to the CPU oracle
+    // and return byte-identical bytes. Same handle ABI: returns int
+    // farr_id (≥ 0), len == M*N, every element bit-equal to the CPU
+    // result on the same inputs.
+    let C_gpu = farr_matmul_gpu(A, 2, 3, B, 2)
+    if C_gpu < 0 {
+        println("FAIL  F-RFC040-DISPATCH-FALLBACK  farr_matmul_gpu returned " + to_string(C_gpu) + " (expected ≥0 on no-CUDA fallback)")
+    } else {
+        let len_gpu = farr_len(C_gpu)
+        let diff = max_abs_diff(C_cpu, C_gpu, 4)
+        if len_gpu == 4 && diff == 0.0 {
+            println("PASS  F-RFC040-DISPATCH-FALLBACK  farr_matmul_gpu = farr_matmul (byte-equal, max|Δ|=0.0, len=" + to_string(len_gpu) + ")")
+            pass = pass + 1
+        } else {
+            println("FAIL  F-RFC040-DISPATCH-FALLBACK  len=" + to_string(len_gpu) + " max|Δ|=" + to_string(diff) + " (expected len=4, Δ=0)")
+        }
+    }
+
+    // ── Falsifier 4: F-RFC040-DETERMINISM ───────────────────────────
+    // Three back-to-back invocations of the GPU-dispatch path produce
+    // byte-identical results. No hidden state, no run-to-run drift.
+    let C_gpu_2 = farr_matmul_gpu(A, 2, 3, B, 2)
+    let C_gpu_3 = farr_matmul_gpu(A, 2, 3, B, 2)
+    let d12 = max_abs_diff(C_gpu, C_gpu_2, 4)
+    let d23 = max_abs_diff(C_gpu_2, C_gpu_3, 4)
+    if d12 == 0.0 && d23 == 0.0 {
+        println("PASS  F-RFC040-DETERMINISM  3x farr_matmul_gpu byte-identical (Δ_12=0.0, Δ_23=0.0)")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC040-DETERMINISM  Δ_12=" + to_string(d12) + " Δ_23=" + to_string(d23))
+    }
+    let _f1 = farr_free(C_gpu)
+    let _f2 = farr_free(C_gpu_2)
+    let _f3 = farr_free(C_gpu_3)
+    let _fc = farr_free(C_cpu)
+
+    // ── Falsifier 5: F-RFC040-CUDA-BLOCKER-DOC (honesty gate) ───────
+    // This is NOT a CUDA PASS. It asserts:
+    //   (a) the build is NO-CUDA (cuda_available()==0, established
+    //       in F-RFC040-AVAIL above — re-checked here),
+    //   (b) the device-management builtins take the CPU-fallback
+    //       branch on a valid handle: farr_to_device / farr_to_host /
+    //       farr_pin / farr_device_free all return 1 (no-op success).
+    //   (c) a constant asserts that real CUDA kernels (cuBLAS Dgemm,
+    //       custom __global__) are NOT bound in this scaffolding
+    //       cycle — to be implemented + falsifier-verified on a CUDA
+    //       host in the next cycle (rfc_040.md §"Phase A" deliverable).
+    //
+    // The carve-out tracks the RFC 036 F-RFC036-FFI-BLOCKER-DOCUMENTED
+    // pattern: fails LOUDLY if a future edit silently pretends CUDA is
+    // bound when it is not.
+    let to_dev = farr_to_device(A)
+    let to_hst = farr_to_host(A)
+    let pinned = farr_pin(A)
+    let dev_free = farr_device_free(A)
+    let cuda_kernels_bound = 0      // 0 = real CUDA kernels NOT bound
+                                     //     (Phase A scaffolding cycle —
+                                     //     kernels are TODO[cuda] stubs
+                                     //     returning -1 on HEXA_CUDA build,
+                                     //     CPU fallback on no-CUDA build)
+    if avail == 0 && to_dev == 1 && to_hst == 1 && pinned == 1 && dev_free == 1 && cuda_kernels_bound == 0 {
+        println("PASS  F-RFC040-CUDA-BLOCKER-DOC  no-CUDA build, fallback paths return 1 (to_device/to_host/pin/device_free), real CUDA kernels NOT bound (next-cycle deliverable on CUDA host) — honest scaffolding, NOT a CUDA PASS")
+        pass = pass + 1
+    } else {
+        println("FAIL  F-RFC040-CUDA-BLOCKER-DOC  over-claim guard tripped: avail=" + to_string(avail) + " to_dev=" + to_string(to_dev) + " to_hst=" + to_string(to_hst) + " pin=" + to_string(pinned) + " dev_free=" + to_string(dev_free) + " kernels_bound=" + to_string(cuda_kernels_bound) + " (cuda_kernels_bound MUST stay 0 until a CUDA-host build verifies real kernels)")
+    }
+    let _fA = farr_free(A)
+    let _fB = farr_free(B)
+
+    println("")
+    println("=== RFC040 smoke: " + to_string(pass) + "/" + to_string(total) + " PASS ===")
+    if pass == total {
+        println("PASS — anima RFC 040 Phase A scaffolding byte-clean (compiled, no-CUDA Mac); real CUDA kernels = named blocker, next-cycle deliverable on CUDA host")
+    } else {
+        println("FAIL — RFC 040 Phase A smoke incomplete")
+    }
+}

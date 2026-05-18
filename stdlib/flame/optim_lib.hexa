@@ -1,0 +1,29 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/optim_lib.hexa — flame Phase 3-A (RFC 043)
+//
+// Optimizer thin wrapper over RFC 034 `adamw_step` builtin.
+//   AdamW (Loshchilov 2017): W ← W − lr · (m̂/(√v̂ + ε) + wd · W)
+//     m ← β₁ m + (1−β₁) g  ;  v ← β₂ v + (1−β₂) g²
+//     m̂ = m/(1−β₁ᵗ)        ;  v̂ = v/(1−β₂ᵗ)
+//   in-place on (W, m, v); t = 1-based step.
+//
+// 본 함수는 ag_adamw_step (autograd_lib) 와 같은 builtin 을 호출하지만
+// namespace 가 다른 의미: ag_* 는 reverse-mode autograd 위에서 optimizer
+// 가 한 step 을 적용 (parameter update); opt_* 는 모든 gradient
+// 계산이 끝난 후 caller-driven optimizer 단계 (Phase 3-C 의 train_step
+// 에서 호출). 같은 numerics — 다른 호출 의도.
+//
+// 검증 oracle (이미 Phase 1 + RFC 034 5/5 PASS 에 의해 transitive):
+//   F-RFC043-OPTIM-EQ : opt_adamw_step 의 trajectory 가 ag_adamw_step
+//                       과 byte-equal (동일 builtin), 따라서 RFC 034
+//                       smoke 의 검증 결과 byte-equal 자동 상속.
+//
+// API 표면 RFC 043 §Surface 의 opt_adamw_step 와 동일.
+// ════════════════════════════════════════════════════════════════════════
+
+pub fn opt_adamw_step(W: int, gW: int, m: int, v: int, n: int,
+                     lr: float, b1: float, b2: float, eps: float,
+                     wd: float, t: int) {
+    adamw_step(W, gW, m, v, n, lr, b1, b2, eps, wd, t)
+}

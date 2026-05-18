@@ -1,0 +1,188 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_decoder_test.hexa — flame Phase 3-C selftest
+//
+// Falsifiers:
+//   F-RFC043-DECODER-DET         두 fwd logits byte-identical
+//   F-RFC043-DECODER-GRAD-EXACT  full-model central-diff vs analytic
+//                                ∂L/∂θ. L = CE. multi-probe across
+//                                tok_emb / gF / multiple blocks /
+//                                multiple weight matrices.
+//                                campaign F-D-PORT-5b 등가
+//                                (head→tied→finalnorm→block-stack→
+//                                 embed 의 FULL composed reverse).
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/decoder_block_lib"
+use "stdlib/flame/decoder_lib"
+
+fn _dec_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _dec_loss_from_fwd(ids: int, M: int, cos: int, sin: int, target_t: int,
+                      T: int, d: int, nh: int, nkv: int, h: int,
+                      V: int, n_layer: int) -> float {
+    let mc_size = mc_total(T, d, nh, nkv, h, V, n_layer)
+    let Mc = t_zeros(mc_size)
+    nn_decoder_fwd(ids, M, Mc, cos, sin, T, d, nh, nkv, h, V, n_layer)
+    let L = nn_decoder_ce_loss(Mc, target_t, T, d, nh, nkv, h, V, n_layer)
+    let _ = t_free(Mc)
+    return L
+}
+
+// ── F-RFC043-DECODER-DET ─────────────────────────────────────────────
+fn check_decoder_det() -> float {
+    let T = 3
+    let d = 8
+    let nh = 2
+    let nkv = 1
+    let h = 12
+    let V = 8
+    let n_layer = 2
+    let hd = d / nh
+
+    let ids = t_zeros(T)
+    t_set(ids, 0, 3.0); t_set(ids, 1, 5.0); t_set(ids, 2, 1.0)
+
+    let m_size = m_total(d, nh, nkv, h, V, n_layer)
+    let M = t_zeros(m_size); t_fill_lcg(M, m_size, 7777, 0.1)
+
+    let cos = t_zeros(T * hd); let sin = t_zeros(T * hd)
+    nn_rope_build_tables(T, hd, cos, sin)
+
+    let mc_size = mc_total(T, d, nh, nkv, h, V, n_layer)
+    let Mc1 = t_zeros(mc_size); let Mc2 = t_zeros(mc_size)
+    nn_decoder_fwd(ids, M, Mc1, cos, sin, T, d, nh, nkv, h, V, n_layer)
+    nn_decoder_fwd(ids, M, Mc2, cos, sin, T, d, nh, nkv, h, V, n_layer)
+
+    let oLogits = mc_off_logits(T, d, nh, nkv, h, V, n_layer)
+    let mut m = 0.0
+    let mut i = 0
+    while i < V {
+        let dv = _dec_abs(t_get(Mc1, oLogits + i) - t_get(Mc2, oLogits + i))
+        if dv > m { m = dv }
+        i = i + 1
+    }
+    let _ = t_free(ids); let _ = t_free(M); let _ = t_free(cos); let _ = t_free(sin)
+    let _ = t_free(Mc1); let _ = t_free(Mc2)
+    return m
+}
+
+// ── F-RFC043-DECODER-GRAD-EXACT ──────────────────────────────────────
+fn check_decoder_grad_exact() -> int {
+    let T = 3
+    let d = 8
+    let nh = 2
+    let nkv = 1
+    let h = 12
+    let V = 8
+    let n_layer = 2
+    let hd = d / nh
+    let target_t = 4
+
+    let ids = t_zeros(T)
+    t_set(ids, 0, 3.0); t_set(ids, 1, 5.0); t_set(ids, 2, 1.0)
+
+    let m_size = m_total(d, nh, nkv, h, V, n_layer)
+    let M = t_zeros(m_size); t_fill_lcg(M, m_size, 7777, 0.1)
+
+    let cos = t_zeros(T * hd); let sin = t_zeros(T * hd)
+    nn_rope_build_tables(T, hd, cos, sin)
+
+    // analytic gradient
+    let mc_size = mc_total(T, d, nh, nkv, h, V, n_layer)
+    let Mc = t_zeros(mc_size)
+    nn_decoder_fwd(ids, M, Mc, cos, sin, T, d, nh, nkv, h, V, n_layer)
+    let Mg = t_zeros(m_size)
+    nn_decoder_grad(ids, target_t, M, Mc, Mg, cos, sin,
+                    T, d, nh, nkv, h, V, n_layer)
+
+    // probe sites: spread across tok_emb, gF, both blocks, all weight kinds.
+    let oTemb = m_off_tok_emb(d, nh, nkv, h, V, n_layer)
+    let oGF = m_off_gF(d, nh, nkv, h, V, n_layer)
+    let b0 = m_off_block(0, d, nh, nkv, h, V, n_layer)
+    let b1 = m_off_block(1, d, nh, nkv, h, V, n_layer)
+
+    let probes = t_zeros(10)
+    t_set(probes, 0, to_float(oTemb + 3 * d + 2))    // tok_emb[id=3, feat=2]
+    t_set(probes, 1, to_float(oTemb + 5 * d + 5))    // tok_emb[id=5, feat=5]
+    t_set(probes, 2, to_float(oGF + 4))              // gF[4]
+    t_set(probes, 3, to_float(b0 + bp_off_g1(d, nh, nkv, h) + 1))
+    t_set(probes, 4, to_float(b0 + bp_off_Wq(d, nh, nkv, h) + 17))
+    t_set(probes, 5, to_float(b0 + bp_off_Wo(d, nh, nkv, h) + 23))
+    t_set(probes, 6, to_float(b0 + bp_off_Wg(d, nh, nkv, h) + 31))
+    t_set(probes, 7, to_float(b1 + bp_off_Wq(d, nh, nkv, h) + 7))
+    t_set(probes, 8, to_float(b1 + bp_off_Wu(d, nh, nkv, h) + 13))
+    t_set(probes, 9, to_float(b1 + bp_off_Wd(d, nh, nkv, h) + 5))
+
+    let eps = 0.0001
+    let mut max_rel = 0.0
+    let mut k = 0
+    while k < 10 {
+        let probe_idx = to_int(t_get(probes, k))
+        let analytic = t_get(Mg, probe_idx)
+        let orig = t_get(M, probe_idx)
+        t_set(M, probe_idx, orig + eps)
+        let L_plus = _dec_loss_from_fwd(ids, M, cos, sin, target_t,
+                                        T, d, nh, nkv, h, V, n_layer)
+        t_set(M, probe_idx, orig - eps)
+        let L_minus = _dec_loss_from_fwd(ids, M, cos, sin, target_t,
+                                         T, d, nh, nkv, h, V, n_layer)
+        t_set(M, probe_idx, orig)
+        let fd = (L_plus - L_minus) / (2.0 * eps)
+        let denom = if _dec_abs(analytic) > 0.01 { _dec_abs(analytic) } else { 0.01 }
+        let rel = _dec_abs(analytic - fd) / denom
+        if rel > max_rel { max_rel = rel }
+        k = k + 1
+    }
+
+    let _ = t_free(ids); let _ = t_free(M); let _ = t_free(cos); let _ = t_free(sin)
+    let _ = t_free(Mc); let _ = t_free(Mg)
+    let _ = t_free(probes)
+
+    let out = t_zeros(1)
+    t_set(out, 0, max_rel)
+    return out
+}
+
+// ── entrypoint ─────────────────────────────────────────────────────────
+println("=== flame Phase 3-C selftest (decoder_lib: full model fwd+bwd, compiled-native) ===")
+
+let mut pass = 0
+let total = 2
+
+let det_dev = check_decoder_det()
+if det_dev == 0.0 {
+    println("PASS  F-RFC043-DECODER-DET         two fwd logits byte-identical (max|Δ| = 0.0; compiler-only determinism preserved across full model composition)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-DECODER-DET         dev = "); print(det_dev); println("")
+}
+
+let ge = check_decoder_grad_exact()
+let ge_max_rel = t_get(ge, 0)
+let _ = t_free(ge)
+if ge_max_rel < 0.001 {
+    print("PASS  F-RFC043-DECODER-GRAD-EXACT  10 probes (tok_emb·gF·block[0]{g1,Wq,Wo,Wg}·block[1]{Wq,Wu,Wd}) max|analytic − fd|/scale = ")
+    print(ge_max_rel)
+    println(" < 1e-3 (FULL composed reverse: head→tied→finalnorm→block-stack→RoPE→GQA→embed; campaign F-D-PORT-5b 등가)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC043-DECODER-GRAD-EXACT  max rel = "); print(ge_max_rel); println(" (>1e-3)")
+}
+
+println("")
+print("=== flame Phase 3-C: ")
+print(pass)
+print("/")
+print(total)
+println(" PASS ===")
+if pass == total {
+    println("PASS — flame decoder_lib (full n_layer ConsciousDecoderV2 composition) GRAD-EXACT at multi-probe; head→tied→finalnorm→block-stack→embed reverse verified closed-form. Phase 3-D (train_lib + 80-step trajectory) next.")
+} else {
+    println("FAIL — flame Phase 3-C not landable")
+}

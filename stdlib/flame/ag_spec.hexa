@@ -1,0 +1,154 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/ag_spec.hexa — flame declarative model-spec IR (RFC 043
+//   Decision 7: gap(e) model DSL = declarative spec = optimization IR;
+//   see design.md Decision 7, user gate 2026-05-18).
+//
+// A model is DATA: an array of layer-spec entries. ag_run_spec walks
+// the spec and dispatches the verified ag_* tape recorders (ag_tape.hexa
+// — 15/15 byte-eq + gap(c) shape-generic). Because the model is a spec
+// (not opaque forward code), a future hexa-native pass can fuse adjacent
+// entries / dispatch fused ops to forge GPU kernels / reorder WITHOUT
+// changing user code — the spec IS the optimization IR (gap(e)↔gap(d)).
+//
+// Arbitrary DAG: each entry's inputs reference prior entry outputs (ref
+// >= 0 → vtab[ref]) or external inputs (ref < 0 → ext[(-ref)-1]).
+// Params reference a ptab tensor-id table (pK >= 0 → ptab[pK], -1 none).
+//
+// Spec layout (farr, ids as float via to_float/to_int — ag_tape idiom):
+//   slot[0] = entry count
+//   entry e at HDR + e·SLOTS :
+//     +0 kind (ag_k_*)   +1..3 in0,in1,in2   +4..7 p0,p1,p2,p3
+//     +8..11 d0,d1,d2,d3
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/ag_tape"
+
+fn _as_hdr()   -> int { return 1 }
+fn _as_slots() -> int { return 12 }
+
+pub fn ag_spec_begin(max_entries: int) -> int {
+    let s = t_zeros(_as_hdr() + max_entries * _as_slots())
+    t_set(s, 0, 0.0)
+    return s
+}
+
+pub fn ag_spec_free(spec: int) { t_free(spec) }
+pub fn ag_spec_count(spec: int) -> int { return to_int(t_get(spec, 0)) }
+
+fn _as_base(e: int) -> int { return _as_hdr() + e * _as_slots() }
+
+// append an entry; returns its index (use as an input ref downstream).
+pub fn ag_spec_add(spec: int, kind: int,
+                   in0: int, in1: int, in2: int,
+                   p0: int, p1: int, p2: int, p3: int,
+                   d0: int, d1: int, d2: int, d3: int) -> int {
+    let e = to_int(t_get(spec, 0))
+    let b = _as_base(e)
+    t_set(spec, b + 0, to_float(kind))
+    t_set(spec, b + 1, to_float(in0))
+    t_set(spec, b + 2, to_float(in1))
+    t_set(spec, b + 3, to_float(in2))
+    t_set(spec, b + 4, to_float(p0))
+    t_set(spec, b + 5, to_float(p1))
+    t_set(spec, b + 6, to_float(p2))
+    t_set(spec, b + 7, to_float(p3))
+    t_set(spec, b + 8, to_float(d0))
+    t_set(spec, b + 9, to_float(d1))
+    t_set(spec, b + 10, to_float(d2))
+    t_set(spec, b + 11, to_float(d3))
+    t_set(spec, 0, to_float(e + 1))
+    return e
+}
+
+// resolve an input ref: >=0 → vtab[ref] (prior entry output);
+// <0 → ext[(-ref)-1] (external input tensor-id).
+fn _as_res(ref: int, vtab: int, ext: int) -> int {
+    if ref >= 0 { return to_int(t_get(vtab, ref)) }
+    return to_int(t_get(ext, (0 - ref) - 1))
+}
+
+fn _as_param(spec: int, b: int, slot: int, ptab: int) -> int {
+    let pr = to_int(t_get(spec, b + slot))
+    if pr < 0 { return 0 - 1 }
+    return to_int(t_get(ptab, pr))
+}
+
+// Walk the spec, recording each op onto `tape` via the verified ag_*
+// wrappers. `ext` = external-input tensor-id table, `ptab` = param
+// tensor-id table, `vtab` = caller-allocated (len >= entry count);
+// vtab[e] receives entry e's output tensor-id. Returns the LAST
+// entry's output tensor-id (the model output, e.g. logits).
+//
+// Op input/param/dim conventions (mirror ag_tape signatures):
+//   EMBED     in0=idsf            p0=table          d0=T d1=d
+//   RMSNORM_MH in0=x              p0=g              d0=T d1=d
+//   LINEAR    in0=x               p0=W p1=b         d0=B d1=D d2=C
+//   ROPE_MH   in0=q in1=cos in2=sin                 d0=T d1=nheads d2=hd
+//   ATTN_DT   in0=Q in1=K in2=V                     d0=T d1=nh d2=nkv d3=hd
+//   ADD       in0=a in1=b                           d0=len
+//   SILU_GATE in0=a in1=b                           d0=len
+//   SLICE     in0=X                                 d0=off d1=len d2=Xlen
+//   LMHEAD    in0=zT             p0=temb            d0=V d1=d
+pub fn ag_run_spec(tape: int, spec: int, ext: int,
+                   ptab: int, vtab: int) -> int {
+    let n = to_int(t_get(spec, 0))
+    let mut last = 0 - 1
+    let mut e = 0
+    while e < n {
+        let b = _as_base(e)
+        let kind = to_int(t_get(spec, b + 0))
+        let i0r = to_int(t_get(spec, b + 1))
+        let i1r = to_int(t_get(spec, b + 2))
+        let i2r = to_int(t_get(spec, b + 3))
+        let d0 = to_int(t_get(spec, b + 8))
+        let d1 = to_int(t_get(spec, b + 9))
+        let d2 = to_int(t_get(spec, b + 10))
+        let d3 = to_int(t_get(spec, b + 11))
+        let mut out = 0 - 1
+        if kind == ag_k_embed() {
+            let idsf = _as_res(i0r, vtab, ext)
+            let tbl = _as_param(spec, b, 4, ptab)
+            out = ag_embed(tape, idsf, tbl, d0, d1)
+        } else if kind == ag_k_rmsnorm_mh() {
+            let x = _as_res(i0r, vtab, ext)
+            let g = _as_param(spec, b, 4, ptab)
+            out = ag_rmsnorm_mh(tape, x, g, d0, d1)
+        } else if kind == ag_k_linear() {
+            let x = _as_res(i0r, vtab, ext)
+            let W = _as_param(spec, b, 4, ptab)
+            let bb = _as_param(spec, b, 5, ptab)
+            out = ag_linear(tape, x, W, bb, d0, d1, d2)
+        } else if kind == ag_k_rope_mh() {
+            let q = _as_res(i0r, vtab, ext)
+            let cs = _as_res(i1r, vtab, ext)
+            let sn = _as_res(i2r, vtab, ext)
+            out = ag_rope_mh(tape, q, cs, sn, d0, d1, d2)
+        } else if kind == ag_k_attn_dt() {
+            let Q = _as_res(i0r, vtab, ext)
+            let K = _as_res(i1r, vtab, ext)
+            let Vv = _as_res(i2r, vtab, ext)
+            out = ag_attn_dt(tape, Q, K, Vv, d0, d1, d2, d3)
+        } else if kind == ag_k_add() {
+            let a = _as_res(i0r, vtab, ext)
+            let bv = _as_res(i1r, vtab, ext)
+            out = ag_add(tape, a, bv, d0)
+        } else if kind == ag_k_silu_gate() {
+            let a = _as_res(i0r, vtab, ext)
+            let bv = _as_res(i1r, vtab, ext)
+            out = ag_silu_gate(tape, a, bv, d0)
+        } else if kind == ag_k_slice() {
+            let X = _as_res(i0r, vtab, ext)
+            out = ag_slice(tape, X, d0, d1, d2)
+        } else if kind == ag_k_lmhead() {
+            let zT = _as_res(i0r, vtab, ext)
+            let temb = _as_param(spec, b, 4, ptab)
+            out = ag_lmhead(tape, temb, zT, d0, d1)
+        }
+        t_set(vtab, e, to_float(out))
+        last = out
+        e = e + 1
+    }
+    return last
+}
