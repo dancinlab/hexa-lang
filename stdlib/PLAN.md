@@ -596,3 +596,11 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   에 bad-escape 없어 2>&1==stdout 였음 — 일관). autac 회귀 0
   재확인. `6014a43` PARITY-OK(stdout). 잔여 ~102, json-sim 레시피
   템플릿화로 가속(autac→lytac 2nd, 동형 구조).
+- 2026-05-19 — **T3 +1: 26/127** `molecular_glue_sim` (3rd json-sim,
+  1차 PARITY-OK). 협동성 ternary partition `Z=1+g+e+α·g·e` 닫힌식·
+  path-independent; glue-signature heuristic; 4행 패널 × 7 기준.
+  exact .py 산술 → compact JSON → json_parse → py_json2 indent=2;
+  패널은 sim-recipe(α 등 %.0f). `67625f0` STDOUT PARITY-OK 1발.
+  json-sim 레시피가 동형-아닌 변형(autac/lytac 의 단순 occupancy 가
+  아닌 partition function)에도 1발 적용됨 — 레시피 일반성 실증.
+  잔여 ~101, 4대 enabler·5 규율·통합 레시피 보유.
