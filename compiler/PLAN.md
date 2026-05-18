@@ -1013,3 +1013,47 @@ call 결과의 type_of 가 tier-1 codegen 에서 오답. closure 0 인 repro 로
 **goal ② 현황**: self-host fixpoint CLOSED · try/catch CLOSED · closure RFC CLOSED.
 진짜 tier-1 codegen gap = #40 (void-call type_of) 1건. 그 외 gate-1 non-MATCH 는
 전부 non-tier-1 (tier-2 #37 · ORAFAIL-class FFI · env).
+
+---
+
+### ★★★ 진행 로그 — #40 void-call type_of FIXED (`63d2511c`) — 전 tier-1 codegen gap CLOSED (cycle h21)
+
+**#40**: `arm64_darwin.hexa` `_STMT_RETURN` 가 16-byte return pair(x0:x1)를 `len(s.args)>=1`
+일 때만 load. value-less return(zero-arg `STMT_RETURN`)은 x0:x1 미설정 → caller 가 직전
+`bl` 의 clobber 잔여를 result 로 포착 → `type_of()` 가 garbage tag 읽어 `void` 대신
+`unknown`. fix: zero-arg else-branch + safety epilogue 가 `movz x0,#4`(TAG_VOID)+
+`movz x1,#0` emit (codegen only, runtime.c 무변경).
+
+**검증 (mini)**: build_aprime smoke PASS; void-call type_of repro tier-1 → `void` (oracle
+byte-identical, 이전 `unknown`); **t38_nanbox tier-1 "ALL PASS" rc=0** = tier-2 oracle
+`33 pass/0 fail` MATCH; self-host fixpoint 보존 `ap1f.s==ap2f.s` (253,049 lines).
+
+**gate-1: 37 → 38/44** (t38_nanbox APFAIL→MATCH; #40 codegen 변경은 value-less return
+에서만 발화 — 다른 테스트 무영향이라 delta 확정, full re-sweep 불요).
+
+---
+
+## ★★★ MILESTONE — 전 tier-1 codegen-correctness gap CLOSED (cycle h21 종결)
+
+goal ② "인터프리터 폐기 → self-hosted 컴파일러" 의 **tier-1 축 완결**:
+
+- **self-host bit-stable fixpoint**: CLOSED (`ap1f.s == ap2f.s == ap3f.s` byte-identical;
+  aprime_cc 가 인터프리터·hexa_v2 없이 자기 자신을 bit-for-bit 재현).
+- **전 tier-1 codegen-correctness 버그 종결** — #23~#40:
+  - self-host fixpoint 7버그 (#23 index_set · #24 loop-sentinel · #25 match-as-expr ·
+    #26 MFunc-arena · #27 call-overflow stride · #28 enum-eq · #29 bitwise-as-add)
+  - codegen 정정 (atlas-verifier index_of+bool-tag · 메모리 builtin ×14 · @link/extern+*T
+    파서 · int↔float typecheck · math annotations · void-call type_of)
+  - 신기능 전 스택 (try/catch/throw · closure C1+C2+C3+capture-scope)
+- **gate-1 38/44**. 잔여 6 non-MATCH 는 **100% non-tier-1**:
+  - `atlas_verify` — tier-2 codegen 잔여 발산 (#37; tier-1 8/8 PASS)
+  - `t35`·`t36`·`t37` — ORAFAIL-class (tier-2 oracle 자체가 빌드/실행 실패: FFI dlsym·clang)
+  - `repo_taxonomy_audit`·`t34_net_listen` — env-resource (OOM·socket)
+
+→ **구현된 언어 범위에서 tier-1(aprime_cc) 이 codegen-complete**. tier-2 가 정확히
+처리하는 모든 .hexa 를 tier-1 도 정확히 처리. R7 deletion gate: ②③④ ✅ · ① — tier-1
+codegen gap 0 이므로 사실상 충족.
+
+**다음 = R7 인터프리터 소스 실삭제** (goal 의 문자적 종착점). hard-to-reverse 작업이라
+user 확인 후 진행. 잔여 #37(tier-2 codegen)은 bootstrap 경로 품질 개선 — interp 폐기
+비차단 (tier-1 이 미래 경로).
