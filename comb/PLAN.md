@@ -169,3 +169,37 @@
   다음 = (a) `T1A_analytical.md` §8 매핑표로 §3 부등식 우변 변수
   채우기 (b) rfc_001 §9 open Q 결판 대기 — pair verdict 가 PASS/FAIL
   로 굳을 때까지 RFC 057 F1/F2 closed-status 보류.
+- 2026-05-18 — **T3 P&R 전환: macOS → ubu-2 Docker (ORFS)**. macOS 로컬
+  OpenROAD 빌드 dead-end (부하·pool-routing 충돌 + 3 macOS 패치 후에도
+  74%·71% 지점 반복 실패). ubu-2 (Linux x86_64, 12 코어, 387GB free,
+  docker + passwordless sudo) 로 전환. `docker pull openroad/orfs:latest`
+  성공 (이미지 자체에 OpenROAD + yosys + SKY130 PDK 번들 — 빌드 0, 패치 0).
+- 2026-05-18 — **comb ORFS 디자인 디렉토리 git 정착**: `comb/rtl/orfs/
+  sky130hd/router_d{4,6}/{router_*.v, constraint.sdc, config.mk}` —
+  sv2v-flat Verilog 2005 RTL + SDC + ORFS config. ubu-2 git fetch 가
+  pack-delta 깨져서 `git clone --depth=1 --branch rfc043-hexa-torch` 로
+  /tmp/hexa_comb 우회. 28 commits 푸시 (commit `e420c7db` 까지 + flat
+  v2k 추가 commit + ORFS 디자인 dir commit).
+- 2026-05-18 — **ORFS 1차 run: read_sdc 실패** (commit context).
+  yosys synth PASS (router_d6 → SKY130 cells), OpenROAD link_design OK,
+  `Error: invalid command name "remove_from_collection"` — OpenSTA 가
+  Synopsys 전용 명령 미지원.
+- 2026-05-18 — **ORFS 2차 run: CTS hold-buffer 폭발 (b9whqcpkk)**. SDC
+  를 OpenROAD 호환으로 1차 정정했으나 *근본 단위 버그* 발견:
+  `create_clock -period 1000.0` 가 의도(1 GHz=1000ps)와 달리 liberty
+  time_unit=1ns 라서 **1 MHz** 로 해석 + `set_clock_uncertainty 50.0`
+  = **50 ns** uncertainty → 모든 짧은 reg-to-reg 경로가 -48 ns hold
+  위반 → 2913 hold buffer 삽입 후 `RSZ-0060 max buffer count reached`
+  CTS 실패. 진척: synth→floorplan→place 완주, CTS 에서 정지.
+- 2026-05-18 — **SDC 단위 버그 fix (commit pending)**: 4 SDC 파일
+  (router_d{4,6}.sdc + orfs/sky130hd/router_d{4,6}/constraint.sdc) 전부
+  ns-정확본으로 교체. period 5.0 ns (200 MHz, SKY130 130nm 현실 타겟),
+  uncertainty 0.25 ns (250 ps), io_delay 1.0 ns. `remove_from_collection`
+  · `set_driving_cell` · `set_load` 제거 — OpenSTA-호환 최소형.
+- 2026-05-18 — **ubu-2 인프라 다운 (현재)**: 2차 ORFS run 도중 ubu-2 ssh
+  banner-exchange timeout 진입 (ubu-1 도 동시 timeout). b9whqcpkk task
+  출력 0 byte · 완료 통지 없음. 가능성: (a) ORFS detailed-route 의 메모리
+  부하 → 박스 hang/OOM, (b) 네트워크 공통 이슈. 원격 호스트 reachability
+  는 comb 측에서 fix 불가 — **사용자 측 박스 점검·재부팅 대기**.
+  SDC fix push 후 ubu-2 복구 시 `git clone --depth=1` 한 번이면 fresh
+  SDC 로 ORFS 재실행 가능 (T3 재가동 1-step).

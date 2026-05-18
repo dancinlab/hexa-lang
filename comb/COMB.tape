@@ -61,7 +61,11 @@
   t2_pdk_synth = "comb/rtl/pdk_synthesis.md — 🎉 cross-PDK + SKY130 ASIC mapping. FPGA Xilinx 1.37× + Lattice ECP5 1.41× + **SKY130 ASIC sky130_fd_sc_hd 1.516×** (d4=61762.99 μm², d6=93608.53 μm²). F1 verdict robust under measured ASIC area: hex 33% lat win, 29% energy win at t_r6=152. cross-over t_r6=276 → 1.8× margin. SKY130 .lib 12.8MB cloned from efabless mirror."
   decouple_refine = "comb 가 안 하는 것 = 외부 EDA *흡수* (BookSim2/Yosys/OpenROAD/SKY130 — hexa-arch). comb 가 하는 것 = 자체 graph/non-contention 모델 측정."
   next_gate = "(a) RTL 스텁 (hexa→Verilog emitter, comb-side, T2 RTL 측면) (b) T1-B-full = hexa-arch[chip] BookSim2 흡수 (congestion·real-workload 측정)"
-  t2_openroad_install = "🎉 OpenROAD cmake CONFIGURED 2026-05-18. deps: brew(13) + source(LEMON-coin 1.3.1, CUDD 3.0.0). make -j4 background (PID 25059, ~30-60min). 완료 시 P&R + GDSII 가능 → T3 'hexa-arch 절대 의존' 가정 무너짐."
+  t2_openroad_install = "🎉 OpenROAD cmake CONFIGURED 2026-05-18. deps: brew(13) + source(LEMON-coin 1.3.1, CUDD 3.0.0). macOS 빌드 74%/71% 반복 dead-end (Boost+LEMON C++20+zstd) → ABANDONED in favor of ubu-2 Docker."
+  t3_orfs_path = "ubu-2 (Linux x86_64) Docker ORFS 로 전환. `docker pull openroad/orfs:latest` 성공 (이미지에 OpenROAD+yosys+SKY130 PDK 번들 — 빌드 0/패치 0). comb/rtl/orfs/sky130hd/router_d{4,6}/{router_*.v, constraint.sdc, config.mk} = self-contained 디자인 dir, git 정착."
+  t3_orfs_attempt = "1차 run: read_sdc 실패 (`remove_from_collection` OpenSTA 미지원). 2차 run: SDC ns-단위 버그 발견 — `-period 1000.0` 가 1MHz, `set_clock_uncertainty 50.0` 가 50ns 로 해석 → -48ns hold 위반 → CTS RSZ-0060 max buffer reached. synth→floorplan→place 완주, CTS 정지."
+  t3_sdc_fix = "SDC 4파일 ns-정확본 교체 (router_d{4,6}.sdc + orfs/sky130hd/router_d{4,6}/constraint.sdc). period 5.0ns(200MHz)·uncertainty 0.25ns·io_delay 1.0ns. remove_from_collection/set_driving_cell/set_load 제거 — OpenSTA 최소형."
+  t3_blocked = "ubu-2 ssh banner-exchange timeout (현재). 2차 ORFS run 도중 진입. b9whqcpkk task 0byte 출력·완료 통지 없음. 원격 호스트 reachability comb-fix 불가 — 사용자 측 박스 점검·재부팅 대기. 복구 시 fresh `git clone --depth=1 rfc043-hexa-torch` 한 번이면 fix-SDC 자동 적용."
 
 # ─── external citations (typed-interface contracts comb consumes) ────
 
