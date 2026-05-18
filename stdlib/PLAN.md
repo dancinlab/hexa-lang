@@ -318,6 +318,7 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
 - 2026-05-18 `29e17c3` (hexa-bio) — T3 +1: `f_tp5_e_uptake_enumerator` (weave_compose 콜사이트 enumerator, SKIP verdict, eprintln stderr) 바이트-패리티. **T3 13/104** — verification sweep: 13 게이트 전부 exit 0.
 - 2026-05-18 `800ad3b` (hexa-bio) — T3 +1: `cross_axis_matrix` (24-axis registry + longest-match filename extractor + docstring CROSS-block 워드바운디드 axis 스캔 + 24×24 시각화 매트릭스 + per-cell roster + awk 퍼센트) 191줄 바이트-패리티. **T3 14/104.**
 - 2026-05-18 `3acfec3` (hexa-bio) — T3 +1: `atlas_atom_proofs` (5 수학 항등식 게이트 — Caspar-Klug 정수 + MWC inline 검증, Griffith-Orgel/CI 2x2 는 교과서 항등식이라 .py 의 sympy 계산 실패 불가) 40줄 바이트-패리티. **T3 15/104.**
+- 2026-05-18 (hexa-bio) — T3 +1: `atlas_atom_tier_upgrade_gate` (registry JSON 로드 + P1 proofs × 5 atom 매칭 + 16-row 업그레이드-eligibility 테이블) 129줄 바이트-패리티. **T3 16/104.**
 - 2026-05-18 — **세션 체크포인트 (측정된 거리)**: hexa-matter T1/T2
   완료(26/26 selftest hexa-native·verify 4/4·문서 HX). hexa-bio
   **T3 9/104** 검증(r1_symlink·virocapsid_c5·tape_lattice_cohort·
