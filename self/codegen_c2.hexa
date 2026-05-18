@@ -6441,11 +6441,67 @@ fn _is_known_float(node) {
 // Covers: FloatLit, float BinOp (recursive), Ident that is already known-float,
 // UnaryOp - on float. Mixed int+float promotes to float (C semantics).
 // decreases node — structural
+// Unambiguously-float-returning math builtins. Recognising them in
+// `_is_float_init_expr` lets `let X = lgamma(...) + ...` register X as
+// known-float so the cross-module collision-guard in
+// _is_known_int_name fires — without this, the atlas-verify
+// transcendental `let lhs = lgamma(1/6)+lgamma(5/6)-2*lgamma(0.5)`
+// stays unregistered while a different module's
+// `let lhs = sigma(n)*euler_phi(n)` pollutes the global known-int set,
+// and the BinOp fast-path mis-emits HX_INT(lhs)-HX_INT(rhs) on float
+// operands (parity-gate atlas root: 5 verdict FALSIFY).
+fn _is_float_returning_call(name) {
+    if type_of(name) != "string" { return false }
+    if name == "lgamma"   { return true }
+    if name == "tgamma"   { return true }
+    if name == "log"      { return true }
+    if name == "log2"     { return true }
+    if name == "log10"    { return true }
+    if name == "log1p"    { return true }
+    if name == "exp"      { return true }
+    if name == "exp2"     { return true }
+    if name == "expm1"    { return true }
+    if name == "sqrt"     { return true }
+    if name == "cbrt"     { return true }
+    if name == "hypot"    { return true }
+    if name == "pow"      { return true }
+    if name == "sin"      { return true }
+    if name == "cos"      { return true }
+    if name == "tan"      { return true }
+    if name == "asin"     { return true }
+    if name == "acos"     { return true }
+    if name == "atan"     { return true }
+    if name == "atan2"    { return true }
+    if name == "sinh"     { return true }
+    if name == "cosh"     { return true }
+    if name == "tanh"     { return true }
+    if name == "asinh"    { return true }
+    if name == "acosh"    { return true }
+    if name == "atanh"    { return true }
+    if name == "erf"      { return true }
+    if name == "erfc"     { return true }
+    if name == "_abs_f"   { return true }
+    if name == "_ln2"     { return true }
+    if name == "_log2_f"  { return true }
+    if name == "_sqrt_f"  { return true }
+    if name == "_pi_const" { return true }
+    if name == "hexa_to_float" { return true }
+    return false
+}
+
 fn _is_float_init_expr(node) {
     if type_of(node) == "string" { return false }
     let k = node.kind
     if k == "FloatLit" { return true }
     if k == "Ident" { return _is_known_float_name(node.name) }
+    // 2026-05-19 atlas root-cause fix: a Call to an unambiguously-
+    // float-returning math builtin makes the result float-init.
+    if k == "Call" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" {
+            return _is_float_returning_call(node.left.name)
+        }
+        return false
+    }
     if k == "BinOp" {
         let op = node.op
         if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
