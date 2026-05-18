@@ -244,6 +244,18 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   본 트랙 범위 외(상류 runtime 트랙 별도). 영향: registry-iteration
   스케일 게이트는 deferred. **누적 측정된 거리: T3 3/104 + 두 상류
   이슈 정밀 핀.**
+- 2026-05-18 `bd72fd3 23f8f16` (hexa-bio) — T3 **+2 게이트** + 셋째
+  공유 모듈: `_hexa_bridge/module/ribozyme_mfe_nussinov.hexa` (Nussinov
+  1978 O(n³) DP, 2D array + 결정적 트레이스백) + `_hexa_bridge/selftest/
+  ribozyme_mfe_nussinov.hexa` (자체-self-check, n=73 tRNA 포함 14줄
+  바이트-패리티, 2.76s) + `_hexa_bridge/selftest/ribozyme_a1_3_nussinov_
+  determinism_stress.hexa` (10-input determinism + 구조 invariants).
+  발견: hexa `len()` 바이트-카운트 vs Python 캐릭터-카운트 — `:>4`/`:>5`
+  로 multibyte ✓/✗ 정렬 시 명시적 공백 패딩 필요 (LESSONS §5.HX
+  byte-index 경고 재확인). `a1_1`/`a1_2` 는 추가 공유모듈 의존
+  (`ribozyme_kinetics_simulation` 270L · `_off_target_screen` 384L) →
+  별도 dep-layer 배치로 분리. **누적 측정된 거리: T3 9/104** + 3 공유
+  모듈(validator·lint·nussinov) + json_dumps_canonical (T4 자산).
 - 2026-05-18 `fdb4ca3 2aa5c47 95ef1a9 ba470f6` (hexa-bio) — T3
   **+4 pure-data 게이트** 일괄 바이트-패리티:
   - `compute_substrate_routing` (61L stdout, unicode 아이콘 ✅⏳🔬○)
