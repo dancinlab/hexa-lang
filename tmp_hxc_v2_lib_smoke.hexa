@@ -1,0 +1,106 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// tmp_hxc_v2_lib_smoke.hexa — HXC v2 downstream library API smoke
+//
+// Verifies inbox/patches/hxc-v2-no-downstream-library-api.md resolution.
+// Exercises self/stdlib/hxc_v2_lib.hexa from a downstream-style call site
+// (no CLI subprocess, no interp dependency, no atlas-schema coupling).
+//
+// Falsifiers:
+//   F-LIB-STR-RT       hxc_v2_decode(hxc_v2_encode(s))    == s            (≥CC2_MIN_BYTES text)
+//   F-LIB-STR-PT       hxc_v2_decode(hxc_v2_encode(tiny)) == tiny         (<CC2_MIN_BYTES passthrough)
+//   F-LIB-STR-IDEMP    hxc_v2_encode(hxc_v2_encode(s))    == hxc_v2_encode(s)
+//   F-LIB-REC-RT       hxc_v2_decode_records(hxc_v2_encode_records(rows)) deep-eq rows
+//   F-LIB-REC-EMPTY    hxc_v2_decode_records(hxc_v2_encode_records([]))   == []
+//   F-LIB-REC-ESC      cell containing `|` and `\` survives round-trip byte-eq
+// ════════════════════════════════════════════════════════════════════════
+
+use "self/stdlib/hxc_v2_lib"
+
+fn _rep(seed: string, target: i64) -> string {
+    let mut out = ""
+    if len(seed) == 0 { return out }
+    while len(out) < target { out = out + seed }
+    return out
+}
+
+fn _check(label: string, ok: bool) -> i64 {
+    if ok {
+        println("PASS  " + label)
+        return 0
+    }
+    println("FAIL  " + label)
+    return 1
+}
+
+fn _rows_eq(a: array, b: array) -> bool {
+    if len(a) != len(b) { return false }
+    let mut i: i64 = 0
+    while i < len(a) {
+        let ra = a[i]
+        let rb = b[i]
+        if len(ra) != len(rb) { return false }
+        let mut j: i64 = 0
+        while j < len(ra) {
+            if ra[j] != rb[j] { return false }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn main() {
+    let mut fails: i64 = 0
+
+    // F-LIB-STR-RT — >=CC2_MIN_BYTES so the chain actually engages.
+    let seed = "the quick brown fox jumps over the lazy dog. composite chain v2. "
+    let big = _rep(seed, 512)
+    let enc = hxc_v2_encode(big)
+    let dec = hxc_v2_decode(enc)
+    fails = fails + _check("F-LIB-STR-RT  string round-trip byte-eq (n=" + to_string(len(big)) + ")", dec == big)
+
+    // F-LIB-STR-PT — short input passes through identity (cc2 D2 short-circuit).
+    let tiny = "abc"
+    let enc_tiny = hxc_v2_encode(tiny)
+    let dec_tiny = hxc_v2_decode(enc_tiny)
+    fails = fails + _check("F-LIB-STR-PT  tiny passthrough round-trip", dec_tiny == tiny)
+
+    // F-LIB-STR-IDEMP — encode-of-encode idempotent (header short-circuit).
+    let enc2 = hxc_v2_encode(enc)
+    fails = fails + _check("F-LIB-STR-IDEMP encode(encode(s)) == encode(s)", enc2 == enc)
+
+    // F-LIB-REC-RT — non-trivial rows with mixed cells (ascii + utf-8).
+    let rows = [
+        ["id", "kind", "payload"],
+        ["w001", "witness", "ts=2026-05-19 phase=v2-lib-smoke"],
+        ["w002", "witness", "안녕 — composite chain"],
+        ["w003", "audit", _rep("ledger-entry; ", 80)]
+    ]
+    let blob = hxc_v2_encode_records(rows)
+    let rt = hxc_v2_decode_records(blob)
+    fails = fails + _check("F-LIB-REC-RT  records round-trip deep-eq (rows=" + to_string(len(rows)) + ")", _rows_eq(rt, rows))
+
+    // F-LIB-REC-EMPTY — empty input.
+    let blob_e = hxc_v2_encode_records([])
+    let rt_e = hxc_v2_decode_records(blob_e)
+    fails = fails + _check("F-LIB-REC-EMPTY empty rows in/out", len(rt_e) == 0)
+
+    // F-LIB-REC-ESC — cell payload containing `|` and `\` must round-trip.
+    let rows_esc = [
+        ["a|b", "c\\d"],
+        ["plain", "with\\|both"],
+        // Tail row: enough bytes to push above CC2_MIN_BYTES.
+        [_rep("xy|z\\", 32), _rep("payload \\| ", 40)]
+    ]
+    let blob_esc = hxc_v2_encode_records(rows_esc)
+    let rt_esc = hxc_v2_decode_records(blob_esc)
+    fails = fails + _check("F-LIB-REC-ESC pipe+backslash escape round-trip", _rows_eq(rt_esc, rows_esc))
+
+    if fails == 0 {
+        println("__HXC_V2_LIB_SMOKE__ PASS (6/6)")
+        exit(0)
+    }
+    println("__HXC_V2_LIB_SMOKE__ FAIL (" + to_string(fails) + "/6)")
+    exit(1)
+}
