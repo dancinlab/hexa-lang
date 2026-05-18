@@ -676,9 +676,47 @@ no-CUDA Mac build 19/19 ALL PASS post-edit**); d768-class
 (M*K=786432·K*N≤2.36M) 만 cuBLAS. hexa source 불변
 (g_flame_api_fixed), no-CUDA build byte-identical (#ifdef inert).
 
-**FIRE3** (matmul GPU-routed) 진행 예정 — 정상 pod 에서 generic
-경로가 GPU engage + step 완료 → F-RFC046-AGTAPE-WALL 실측.
-g3: FIRE3 측정 전 wall 주장 0.
+**측정 결과 (FIRE3, 2026-05-18, A100_SXM4 $0.60, preflight OK,
+matmul GPU-routed):**
+- preflight OK · build clean · trainer.err **empty** · wall
+  trainer_rc=124 timeout 900s · 0 micro-step · GPU util max
+  **3%** (FIRE2 ~0% → 3%: cuBLAS dim-gate **engaged**, 측정확인).
+- 그런데도 step 0/900s. ⇒ **3-fire + 2-oracle 로 근인 완전
+  격리 (소거법)**:
+  - RoPE 커널? NO — GPU byte-eq PASS (oracle).
+  - matmul CPU? NO — dim-gate 후 util 0→3% (cuBLAS engage 측정).
+  - pod-dud? NO — preflight OK, err clean.
+  - ∴ 잔여 = **generic per-op tape 의 host orchestration +
+    per-op H2D/D2H transfer overhead** @ d768·12L. 매 ag_linear
+    = host t_zeros(거대버퍼) + agt_wT_slice([d·d]/[d·h] 전치
+    hexa 루프) + alloc + H2D a,b + Dgemm + D2H c + _ag_push,
+    ×7matmul ×12L ×(fwd+bwd) ×4win. device residency 無 →
+    transfer/orchestration 가 wall 지배.
+
+**이것은 GOAL.md 가 이미 명시한 genuine architecture blocker**:
+"per-op H2D/D2H 지배 → step 1 > 600s ... device-sub-view
+residence API ... primitive-discipline 변경 아닌 **multi-cycle
+RFC scope** (Phase 4-D-8 honest verdict)" = RFC 056. hand-fused
+Phase 4-D-9 가 wall 통과한 이유 = device-resident fused
+primitive (per-op tape 아님). 신규 surprise 아님 — 기존 문서화된
+multi-cycle 항목으로 측정수렴.
+
+**gap(d) 정직 terminus (3-fire MEASURED, over-claim 0):**
+- forge RoPE 커널 GPU byte-eq = ✅ **MEASURED-CLOSED** (gap(d)
+  의 *명명 범위* "RoPE CPU loop → forge kernel" 종결).
+- generic CUDA build + matmul forge-route = ✅ MEASURED 작동
+  (util 0→3%, 19/19 byte-eq intact).
+- generic d768·12L wall ≤437.9s = ❌ **MEASURED-FALSIFIED
+  as-wired**. 근인 = device-residency 부재 (RFC 056, GOAL.md
+  기존 multi-cycle 항목). per-op 동일 config 추가 fire 는 동일
+  wall 재현 = 정보 0 (instrument-first: 근인 격리됨, 추가 fire
+  중단이 정직). 잔여 = RFC 056 multi-cycle device-sub-view
+  residence (user 결정사항 — 본 세션 단일수정 범위 아님).
+
+**커밋**: RoPE GPU fix `b73269ea` · preflight `d1476829` ·
+matmul dim-gate `54980357` · 본 terminus 기록 후속.
+non-gated (user "비용신경쓰지말고 모두 fire" 승인 + 측정이
+방향 강제). FIRE 비용 총 ~$3 (oracle ~$0.30 + d768 ×3 ~$2.x).
 
 **커밋**: GPU fix `b73269ea` (rfc043-flame-camp). non-gated
 (user 명시 fire 승인 + 측정이 단일 g3 방향 강제).

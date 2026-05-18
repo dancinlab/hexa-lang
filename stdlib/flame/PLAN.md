@@ -1587,12 +1587,25 @@ A100, ~$0.30 falsify+fix+confirm 총):**
   cuBLAS, 실패시 CPU fallthrough). 19 oracle tiny→CPU 잔류
   bit-exact (no-CUDA Mac 19/19 ALL PASS 재검증); d768 만 cuBLAS.
   hexa source 불변·no-CUDA byte-identical.
-- FIRE3 (matmul GPU-routed) 진행 예정 — F-RFC046-AGTAPE-WALL 실측.
+- FIRE3 (matmul GPU-routed, A100_SXM4, preflight OK, err clean):
+  trainer_rc=124 timeout 900s, 0 step, **GPU util 3%** (FIRE2
+  ~0%→3%: cuBLAS dim-gate engage 측정확인). step 0/900s 인데도.
 
-**gap(d) 현재 (측정 기반)**: forge RoPE 커널 GPU byte-eq ✅
-MEASURED (PASS A100) · generic CUDA build ✅ clean · generic
-d768 wall: FIRE1 pod-dud → FIRE2 유효=CPU-bound (matmul
-not GPU-routed, 소스확정) → matmul dim-gate FIX → FIRE3 실측
-대기. gap(d) 명명범위 ("RoPE CPU loop→forge") = GPU byte-eq
-MEASURED-closed; generic 전체 GPU wall = matmul forge-route
-후 FIRE3 측정만 잔여 (g3: 측정 전 주장 0).
+**gap(d) 정직 terminus (3-fire MEASURED, g3 over-claim 0):**
+3-fire + 2-oracle 소거법으로 근인 완전격리:
+- RoPE 커널 byte-eq: ✅ **MEASURED-CLOSED** (oracle PASS, A100;
+  falsify 4.4e-16 → __dmul_rn fix → 0). gap(d) **명명범위
+  ("RoPE CPU loop→forge kernel") 종결**.
+- generic CUDA build + matmul forge-route: ✅ MEASURED 작동
+  (util 0→3%, 19/19 byte-eq intact).
+- generic d768·12L wall ≤437.9s: ❌ **MEASURED-FALSIFIED
+  as-wired** (FIRE1 pod-dud / FIRE2 matmul-CPU / FIRE3
+  matmul-cuBLAS-still-0-step). 소거 후 근인 = **generic
+  per-op tape 의 host orchestration + per-op H2D/D2H overhead**
+  (device residency 無) = **GOAL.md 기존 multi-cycle RFC 056
+  device-sub-view residence 항목** (신규 아님, 측정수렴).
+  per-op 동일 config 추가 fire = 정보 0 (instrument-first:
+  근인 격리됨 → 추가 fire 중단이 정직). 잔여 = RFC 056
+  multi-cycle (user 결정 — 단일수정 범위 아님). hand-fused
+  Phase 4-D-9 가 wall 통과한 이유 = device-resident fused
+  primitive (per-op tape 아님) — 그게 generic 화의 진짜 비용.
