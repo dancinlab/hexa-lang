@@ -1000,7 +1000,13 @@ fn run_lsp() {
 }
 
 // ── Script entry ──────────────────────────────────────────
-// When this file is executed by interp (e.g. `hexa lsp` forwards to
-// `build/hexa_interp self/lsp.hexa`), enter the LSP loop immediately.
-// Safe to top-level since run_lsp() reads stdin and returns only on EOF/exit.
-run_lsp()
+// R7 track B cycle 10 (2026-05-18): module-level `run_lsp()` wrapped in
+// `fn main()` for compiled-binary entry (bin/hexa-lsp). Interp `hexa run`
+// auto-invokes main() too, so dual-path behavior preserved. The dispatcher
+// (self/main.hexa lsp branch) exec_replace()s into the binary so stdin/
+// stdout are fully inherited — LSP JSON-RPC needs unbuffered bidirectional
+// streaming, incompatible with the exec()-buffered spawn used by other
+// track B verbs.
+fn main() {
+    run_lsp()
+}

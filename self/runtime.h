@@ -187,6 +187,8 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args);     /* runtime.c:5231 */
 HexaVal hexa_char_code(HexaVal s, HexaVal idx);       /* runtime.c:6519 */
 HexaVal rt_str_to_upper(HexaVal s);                   /* runtime.c:5390 */
 HexaVal rt_str_trim(HexaVal s);                       /* runtime.c:5347 */
+HexaVal rt_str_trim_start(HexaVal s);                 /* runtime.c:6969 */
+HexaVal rt_str_trim_end(HexaVal s);                   /* runtime.c:6976 */
 int     rt_str_starts_with(HexaVal s, HexaVal prefix); /* runtime.c:3766 */
 
 /* file I/O */
@@ -236,6 +238,7 @@ HexaVal hexa_abs(HexaVal v);                                            /* runti
 /* container indexing */
 HexaVal hexa_index_get(HexaVal container, HexaVal key); /* runtime.c:2643 */
 HexaVal hexa_array_pop(HexaVal arr);                    /* runtime.c:3878 */
+HexaVal hexa_array_truncate(HexaVal arr, HexaVal new_len_v); /* runtime.c:2041 */
 
 /* map predicates */
 int     hexa_map_contains_key(HexaVal m, const char* key); /* runtime.c:2452 */
@@ -261,6 +264,10 @@ HexaVal hexa_str_substr(HexaVal s, HexaVal start, HexaVal len); /* runtime.c:749
 HexaVal hexa_input(HexaVal prompt);                   /* runtime.c:7616 — line-input prompt */
 HexaVal hexa_read_stdin(void);                        /* runtime.c:9962 — full-stdin slurp */
 HexaVal hexa_exec_with_status(HexaVal cmd);           /* runtime.c:4281 — exec returning {rc, stdout, stderr} */
+HexaVal hexa_exec_replace(HexaVal cmd);               /* runtime.c:4639 — execvp("/bin/sh","-c",cmd); no return on success (R7 lsp) */
+HexaVal hexa_http_get(HexaVal url);                   /* runtime.c:11463 — HTTP GET (R7 Phase 4 bridges: oeis/arxiv/gw/…) */
+HexaVal rt_delete_file(HexaVal path);                 /* runtime.c:10940 — unlink path (R7 Phase 3: compiler/molt) */
+HexaVal hexa_list_dir(HexaVal path);                  /* runtime.c — ls -1 shellout → [entries] (R7: compiler/atlas/merger, atlas_cli) */
 HexaVal hexa_timestamp(void);                         /* runtime.c:9877 — UNIX millis */
 HexaVal hexa_from_char_code(HexaVal n);               /* runtime.c:7668 — int → 1-char string */
 HexaVal hexa_sleep_ms(HexaVal ms);                    /* runtime.c:10000 — non-blocking-ish sleep */

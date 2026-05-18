@@ -84,7 +84,7 @@ fn _forge_real_drill_active() -> bool {
     return env("HEXA_VARIANT_REAL_DRILL") == "1"
 }
 
-fn _drill_round_shim(seed: string, depth: i64, fast: bool) -> string {
+fn _forge_drill_round_shim(seed: string, depth: i64, fast: bool) -> string {
     if _forge_real_drill_active() {
         let mut opts = drill_default_opts()
         opts.quiet = true
@@ -157,7 +157,7 @@ pub fn forge_run(seed_flag: string, max_rounds_flag: string) -> ForgeResult {
     let mut round: i64 = 0
     while round < max_rounds {
         round = round + 1
-        let out = _drill_round_shim(synthesized, skin_depth, skin_fast)
+        let out = _forge_drill_round_shim(synthesized, skin_depth, skin_fast)
         let signal = reign_extract_signal(out)
         eprintln("HEXA_FORGE {\"event\":\"round\",\"round\":" + to_string(round) + ",\"signal\":\"" + signal + "\"}")
     }

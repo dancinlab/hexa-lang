@@ -1,0 +1,341 @@
+#!hexa strict
+// qmirror/engine_aer/module/qasm3_lex.hexa
+//
+// OpenQASM 3.0 lexer (Phase 2 of the Aer absorption plan,
+// docs/aer_hexa_absorption_plan_2026_05_12.md). Tokenizes a QASM3 source
+// string into a `[Token]`.
+//
+// Token kinds emitted (subset enforced by plan §2 A5 gateset):
+//   KW       — reserved keyword (OPENQASM, include, qubit, qreg, bit, creg,
+//              measure, barrier, if, gate, let, def, defcal, ctrl, inv,
+//              gphase, pi)
+//   IDENT    — non-keyword identifier (gate name, register name, ...)
+//   INT      — decimal integer literal
+//   FLOAT    — decimal float literal (may include exponent)
+//   STR      — double-quoted string literal (include "stdgates.inc";)
+//   LPAREN / RPAREN / LBRACK / RBRACK / LBRACE / RBRACE
+//   COMMA / SEMI / AT
+//   OP       — one of: + - * / = == != > < (assignment / arithmetic)
+//   EOF      — end of input
+//
+// Skipped: whitespace, // line comments, /* block comments */, NEWLINE
+// (we collapse to whitespace; line numbers are tracked separately on the
+// Token).
+//
+// Negative numbers: the unary `-` is emitted as an OP token; the parser
+// in qasm3_parse.hexa handles it inside parameter expression parsing.
+
+struct Token {
+    kind:  str,
+    value: str,
+    line:  int
+}
+
+struct LexResult {
+    tokens: [Token],
+    error:  str   // empty if ok
+}
+
+// ─── character classifiers (string-based; hexa has no char type) ──────
+
+fn _qx_is_digit(c: str) -> int {
+    if c == "0" { return 1 }
+    if c == "1" { return 1 }
+    if c == "2" { return 1 }
+    if c == "3" { return 1 }
+    if c == "4" { return 1 }
+    if c == "5" { return 1 }
+    if c == "6" { return 1 }
+    if c == "7" { return 1 }
+    if c == "8" { return 1 }
+    if c == "9" { return 1 }
+    return 0
+}
+
+fn _qx_is_alpha(c: str) -> int {
+    if c == "_" { return 1 }
+    if c == "a" || c == "b" || c == "c" || c == "d" || c == "e" || c == "f" { return 1 }
+    if c == "g" || c == "h" || c == "i" || c == "j" || c == "k" || c == "l" { return 1 }
+    if c == "m" || c == "n" || c == "o" || c == "p" || c == "q" || c == "r" { return 1 }
+    if c == "s" || c == "t" || c == "u" || c == "v" || c == "w" || c == "x" { return 1 }
+    if c == "y" || c == "z" { return 1 }
+    if c == "A" || c == "B" || c == "C" || c == "D" || c == "E" || c == "F" { return 1 }
+    if c == "G" || c == "H" || c == "I" || c == "J" || c == "K" || c == "L" { return 1 }
+    if c == "M" || c == "N" || c == "O" || c == "P" || c == "Q" || c == "R" { return 1 }
+    if c == "S" || c == "T" || c == "U" || c == "V" || c == "W" || c == "X" { return 1 }
+    if c == "Y" || c == "Z" { return 1 }
+    return 0
+}
+
+fn _qx_is_alnum(c: str) -> int {
+    if _qx_is_alpha(c) == 1 { return 1 }
+    if _qx_is_digit(c) == 1 { return 1 }
+    return 0
+}
+
+fn _qx_is_ws(c: str) -> int {
+    if c == " " { return 1 }
+    if c == "\t" { return 1 }
+    if c == "\r" { return 1 }
+    return 0
+}
+
+// Known QASM3 keywords. Anything outside this set is IDENT.
+// (Gate names like h, cx, rx, etc. are IDENTs.)
+fn _qx_is_keyword(s: str) -> int {
+    if s == "OPENQASM" { return 1 }
+    if s == "include" { return 1 }
+    if s == "qubit" { return 1 }
+    if s == "qreg" { return 1 }
+    if s == "bit" { return 1 }
+    if s == "creg" { return 1 }
+    if s == "measure" { return 1 }
+    if s == "barrier" { return 1 }
+    if s == "if" { return 1 }
+    if s == "else" { return 1 }
+    if s == "gate" { return 1 }
+    if s == "let" { return 1 }
+    if s == "def" { return 1 }
+    if s == "defcal" { return 1 }
+    if s == "ctrl" { return 1 }
+    if s == "inv" { return 1 }
+    if s == "gphase" { return 1 }
+    if s == "pi" { return 1 }
+    if s == "reset" { return 1 }
+    if s == "input" { return 1 }
+    if s == "output" { return 1 }
+    if s == "const" { return 1 }
+    if s == "for" { return 1 }
+    if s == "while" { return 1 }
+    if s == "return" { return 1 }
+    return 0
+}
+
+fn _qx_mk_tok(kind: str, value: str, line: int) -> Token {
+    return Token { kind: kind, value: value, line: line }
+}
+
+// Lex a QASM3 source string. Returns LexResult { tokens, error }.
+// Tokens always end with a single EOF token. `error` is empty on success;
+// non-empty error implies tokens may be truncated.
+fn qasm3_lex(src: str) -> LexResult {
+    let n = len(src)
+    let mut tokens = []
+    let mut i = 0
+    let mut line = 1
+    let mut err = ""
+
+    while i < n {
+        let c = src.substring(i, i + 1)
+
+        // newline
+        if c == "\n" {
+            line = line + 1
+            i = i + 1
+            continue
+        }
+
+        // whitespace
+        if _qx_is_ws(c) == 1 {
+            i = i + 1
+            continue
+        }
+
+        // line comment // ...
+        if c == "/" && i + 1 < n && src.substring(i + 1, i + 2) == "/" {
+            // consume until newline
+            while i < n && src.substring(i, i + 1) != "\n" {
+                i = i + 1
+            }
+            continue
+        }
+
+        // block comment /* ... */
+        if c == "/" && i + 1 < n && src.substring(i + 1, i + 2) == "*" {
+            i = i + 2
+            while i + 1 < n {
+                let a = src.substring(i, i + 1)
+                let b = src.substring(i + 1, i + 2)
+                if a == "*" && b == "/" {
+                    i = i + 2
+                    break
+                }
+                if a == "\n" { line = line + 1 }
+                i = i + 1
+            }
+            continue
+        }
+
+        // string literal "..."  (used by include "stdgates.inc";)
+        if c == "\"" {
+            let start = i + 1
+            let mut j = start
+            while j < n && src.substring(j, j + 1) != "\"" {
+                if src.substring(j, j + 1) == "\n" { line = line + 1 }
+                j = j + 1
+            }
+            if j > n - 1 {
+                err = "qasm3_lex: unterminated string at line " + str(line)
+                tokens = tokens.push(_qx_mk_tok("EOF", "", line))
+                return LexResult { tokens: tokens, error: err }
+            }
+            let val = src.substring(start, j)
+            tokens = tokens.push(_qx_mk_tok("STR", val, line))
+            i = j + 1
+            continue
+        }
+
+        // punctuation singletons
+        if c == "(" { tokens = tokens.push(_qx_mk_tok("LPAREN", "(", line)); i = i + 1; continue }
+        if c == ")" { tokens = tokens.push(_qx_mk_tok("RPAREN", ")", line)); i = i + 1; continue }
+        if c == "[" { tokens = tokens.push(_qx_mk_tok("LBRACK", "[", line)); i = i + 1; continue }
+        if c == "]" { tokens = tokens.push(_qx_mk_tok("RBRACK", "]", line)); i = i + 1; continue }
+        if c == "{" { tokens = tokens.push(_qx_mk_tok("LBRACE", "{", line)); i = i + 1; continue }
+        if c == "}" { tokens = tokens.push(_qx_mk_tok("RBRACE", "}", line)); i = i + 1; continue }
+        if c == "," { tokens = tokens.push(_qx_mk_tok("COMMA", ",", line)); i = i + 1; continue }
+        if c == ";" { tokens = tokens.push(_qx_mk_tok("SEMI", ";", line)); i = i + 1; continue }
+        if c == "@" { tokens = tokens.push(_qx_mk_tok("AT", "@", line)); i = i + 1; continue }
+
+        // operators
+        if c == "+" || c == "-" || c == "*" || c == "/" {
+            tokens = tokens.push(_qx_mk_tok("OP", c, line))
+            i = i + 1
+            continue
+        }
+        if c == "=" {
+            if i + 1 < n && src.substring(i + 1, i + 2) == "=" {
+                tokens = tokens.push(_qx_mk_tok("OP", "==", line))
+                i = i + 2
+                continue
+            }
+            tokens = tokens.push(_qx_mk_tok("OP", "=", line))
+            i = i + 1
+            continue
+        }
+        if c == "!" {
+            if i + 1 < n && src.substring(i + 1, i + 2) == "=" {
+                tokens = tokens.push(_qx_mk_tok("OP", "!=", line))
+                i = i + 2
+                continue
+            }
+            err = "qasm3_lex: stray '!' at line " + str(line)
+            tokens = tokens.push(_qx_mk_tok("EOF", "", line))
+            return LexResult { tokens: tokens, error: err }
+        }
+        if c == "<" || c == ">" {
+            tokens = tokens.push(_qx_mk_tok("OP", c, line))
+            i = i + 1
+            continue
+        }
+
+        // identifier / keyword: [A-Za-z_][A-Za-z0-9_]*
+        if _qx_is_alpha(c) == 1 {
+            let start = i
+            i = i + 1
+            while i < n && _qx_is_alnum(src.substring(i, i + 1)) == 1 {
+                i = i + 1
+            }
+            let word = src.substring(start, i)
+            if _qx_is_keyword(word) == 1 {
+                tokens = tokens.push(_qx_mk_tok("KW", word, line))
+            } else {
+                tokens = tokens.push(_qx_mk_tok("IDENT", word, line))
+            }
+            continue
+        }
+
+        // number: INT or FLOAT
+        // Accepts: 123, 3.14, .5, 1e-3, 2.5E+10
+        if _qx_is_digit(c) == 1 || (c == "." && i + 1 < n && _qx_is_digit(src.substring(i + 1, i + 2)) == 1) {
+            let start = i
+            let mut is_float = 0
+            // integer part
+            while i < n && _qx_is_digit(src.substring(i, i + 1)) == 1 {
+                i = i + 1
+            }
+            // fractional part
+            if i < n && src.substring(i, i + 1) == "." {
+                is_float = 1
+                i = i + 1
+                while i < n && _qx_is_digit(src.substring(i, i + 1)) == 1 {
+                    i = i + 1
+                }
+            }
+            // exponent part
+            if i < n {
+                let ec = src.substring(i, i + 1)
+                if ec == "e" || ec == "E" {
+                    is_float = 1
+                    i = i + 1
+                    if i < n {
+                        let sgn = src.substring(i, i + 1)
+                        if sgn == "+" || sgn == "-" { i = i + 1 }
+                    }
+                    while i < n && _qx_is_digit(src.substring(i, i + 1)) == 1 {
+                        i = i + 1
+                    }
+                }
+            }
+            let num = src.substring(start, i)
+            if is_float == 1 {
+                tokens = tokens.push(_qx_mk_tok("FLOAT", num, line))
+            } else {
+                tokens = tokens.push(_qx_mk_tok("INT", num, line))
+            }
+            continue
+        }
+
+        // unknown character
+        err = "qasm3_lex: unexpected character '" + c + "' at line " + str(line)
+        tokens = tokens.push(_qx_mk_tok("EOF", "", line))
+        return LexResult { tokens: tokens, error: err }
+    }
+
+    tokens = tokens.push(_qx_mk_tok("EOF", "", line))
+    return LexResult { tokens: tokens, error: "" }
+}
+
+// ── self-check (run via `hexa run qasm3_lex.hexa`) ────────────────────
+
+fn _qx_dump(toks: [Token]) -> str {
+    let mut s = ""
+    let mut i = 0
+    while i < len(toks) {
+        if i > 0 { s = s + " " }
+        s = s + toks[i].kind + ":" + toks[i].value
+        i = i + 1
+    }
+    return s
+}
+
+fn _qx_selftest() -> int {
+    let src = "OPENQASM 3.0;\ninclude \"stdgates.inc\";\nqubit[2] q;\nh q[0];\ncx q[0], q[1];\nry(-3.14) q[0];\n// comment\n/* block */\nry(pi/4) q[1];"
+    let r = qasm3_lex(src)
+    if len(r.error) > 0 {
+        println("[qmirror/qasm3_lex] selftest LEX_ERROR: " + r.error)
+        return 0
+    }
+    let dump = _qx_dump(r.tokens)
+    // sanity check first 3 tokens
+    let toks = r.tokens
+    if toks[0].kind != "KW" { return 0 }
+    if toks[0].value != "OPENQASM" { return 0 }
+    if toks[1].kind != "FLOAT" { return 0 }   // 3.0 is float
+    if toks[1].value != "3.0" { return 0 }
+    if toks[2].kind != "SEMI" { return 0 }
+    if toks[3].kind != "KW" || toks[3].value != "include" { return 0 }
+    if toks[4].kind != "STR" || toks[4].value != "stdgates.inc" { return 0 }
+    if toks[6].kind != "KW" || toks[6].value != "qubit" { return 0 }
+    if toks[7].kind != "LBRACK" { return 0 }
+    if toks[8].kind != "INT" || toks[8].value != "2" { return 0 }
+    println("[qmirror/qasm3_lex] tokens (first 20): " + dump.substring(0, if len(dump) < 200 { len(dump) } else { 200 }))
+    return 1
+}
+
+fn main() {
+    if _qx_selftest() == 1 {
+        println("[qmirror/qasm3_lex] selftest PASS")
+    } else {
+        println("[qmirror/qasm3_lex] selftest FAIL")
+    }
+}

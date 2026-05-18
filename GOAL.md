@@ -1,10 +1,11 @@
 # GOAL — hexa-lang 의 한 문장 (도메인별)
 
-> hexa-lang 은 동시에 두 north-star 를 굴린다 (격자가 아닌 실-목표 기준; `LATTICE_POLICY.md`).
+> hexa-lang 은 동시에 세 north-star 를 굴린다 (격자가 아닌 실-목표 기준; `LATTICE_POLICY.md`).
 > 한 파일에 **모두 보관** — 각 도메인 진척·측정값 SSOT 는 해당 섹션의 cross-link 참조.
 >
 > - **① flame+forge NN 스택** — hexa 컴파일러-only NN 학습 스택이 PyTorch 보다 빠르게 (측정)
 > - **② 인터프리터 폐기 · self-host** — 모든 `.hexa` 가 인터프리터 없이 네이티브 컴파일·실행
+> - **③ comb n=6 fabric** — degree-6 육각 이진 spatial PIM 이 degree-4 mesh 보다 우월한지 입증/반증 (sim+RTL); 설계는 별도 repo `~/core/hexa-arch`[chip] 소비
 
 ═══════════════════════════════════════════════════════════════════════
 
@@ -115,20 +116,48 @@ RFC 034 autograd (✅) · 040 device-farr (✅)        ← 언어 표현력 (dow
 
 ## 현재 정직한 위치 (g3 — over-claim 금지)
 
-**목표 미도달.** self-host fixpoint 미달 — codegen-correctness 버그 3개 중 2개 종결, 1개 잔존.
+**self-host 축 + 전 tier-1 codegen-correctness 축 + R7 Phase 1/2 (option B) CLOSED.**
+bit-stable self-host fixpoint 도달, tier-1(aprime_cc) 이 구현된 언어 범위에서 codegen-
+complete, 인터프리터는 user-facing surface 에서 deprecation-signal 활성. **인터프리터
+소스 자체의 일괄 삭제는 track B (16+ absorbed-verb sub-binary 재라우팅)** 완료 후
+multi-cycle housekeeping — functionality 손실 0 으로 점진 sunset.
 
-| # | self-host 버그 | 상태 | main |
-|---|----------------|------|------|
-| #23 | `index_set` 반환값 drop → stale array header | ✅ FIXED | `cceb0351` |
-| #24 | `_patch_loop_sentinels` sibling-loop continue mis-bind | ✅ FIXED | `9223fe4a` |
-| #25 | ap2 per-function emit loop 이 함수 body 0개 생성 | ⏳ 격리·진행 중 | — |
+tier-1 codegen-correctness 버그 #23~#40 누적 종결 (self-host 7 + 정정 6 + 신기능 전스택):
 
-- **gate ①**: 33/44 MATCH (aprime_cc tier-1 ≡ hexa-build tier-2 oracle). frontend-CGFAIL 6 + env-resource 2 제외 시 effective ≈ 33/36 (92%).
-- **잔여 실-aprime gap**: 3 atlas-verifier MISMATCH 한 클러스터로 수렴 (`doctrine`·`tecsl_verify`·`wave3` — verifier scan predicate 의 wrong truth-value, codegen bool-coercion 후보).
-- **ap2 도달선**: real 6.4 MB atlas 15952 nodes 로드 크래시 0 + frontend/atlas-load/lex/parse/bind 통과 (이전엔 atlas-load 즉사) → 마지막 블로커 = #25 (emit loop).
-- **인터프리터 삭제**: 미실행 — gate ①~④ 전부 close + #25 종결 후. 현재는 `폐기예정` 거버넌스 표시만 (`@D g_interp_deprecated`).
+| 군 | 항목 | main |
+|---|------|------|
+| self-host fixpoint 7 | #23 index_set · #24 loop-sentinel · #25 match-as-expr · #26 MFunc-arena · #27 call-overflow stride · #28 enum-eq · #29 bitwise-as-add | …`93ee4ecf` |
+| codegen 정정 | atlas-verifier(index_of+bool-tag) · 메모리 builtin ×14 · @link/extern+*T 파서 · int↔float typecheck · math annotations · void-call type_of | …`63d2511c` |
+| 신기능 전스택 | try/catch/throw · closure C1+C2+C3+capture-scope | `8f45d3d3`·`c5c3e9f8`·`f4f1225e` |
 
-> 이 GOAL 은 north-star — 달성 주장 아님, 측정된 거리 명시. self-host fixpoint·gate 측정값의 SSOT 는 `compiler/PLAN.md` 진행 로그. 인터프리터는 이미 사용 금지(메모리 directive: `hexa run` 금지, 검증은 compiled path) 이나 *소스 삭제*는 별개 — 정직히 미실행으로 기록.
+- **★ BIT-STABLE SELF-HOST FIXPOINT**: `ap1f → flat → ap2f → flat → ap3f`,
+  `ap1f.s == ap2f.s == ap3f.s` byte-identical. aprime_cc 가 인터프리터·hexa_v2 없이
+  자기 자신을 bit-for-bit 재현 (전 cycle 보존 재검증, 최신 253,049 lines).
+- **gate ① 38/44**. 잔여 6 non-MATCH 는 **100% non-tier-1**:
+  - `atlas_verify` — tier-2 codegen 잔여 발산 (tier-1 8/8 PASS; 별도 작업)
+  - `t35`·`t36`·`t37` — ORAFAIL-class (tier-2 oracle 자체가 빌드/실행 실패: FFI dlsym·clang)
+  - `repo_taxonomy_audit`·`t34_net_listen` — env-resource (OOM·socket)
+  → tier-2 가 정확히 처리하는 모든 .hexa 를 tier-1 도 정확히 처리. **tier-1 codegen
+    gap = 0.**
+- **R7 deletion gate**: ②(CLI compiled) ③(atlas SIGSEGV) ④(module_loader interp-free)
+  ✅ · ①(coverage ≥ interp) — tier-1 codegen gap 0 이므로 사실상 충족.
+- **R7 Phase 1** (`db5635b7`) — interp 소스 vs 부트스트랩 entanglement map 작성. source-
+  level clean 분리 확인, runtime-level 16+ absorbed-verb 위임 발견.
+- **R7 Phase 2 option B** (`bd8c3d85`) LANDED — `cmd_run_user_direct()` 신설, user-direct
+  surface (`hexa run <file>` CLI + `hexa://run` URL) 에 stderr deprecation warning emit
+  (`HEXA_INTERP_QUIET=1` 로 silence 가능), 16+ absorbed-verb 는 그대로 (functionality
+  손실 0). `@D g_interp_deprecated` 룰 갱신 (option B 채택 명시). build_aprime smoke +
+  self-host fixpoint 보존 (mini 검증, 253,049 lines).
+- **track B (sunset 잔여, multi-cycle housekeeping)**: 16+ absorbed-verb (`lsp`/`test`/
+  `bench`/`check`/`qrng`/`sim-universe`/`qmirror`/`batch`/…) 의 sub-binary 화 +
+  main.hexa 재라우팅. 완료 후 인터프리터 소스 일괄 삭제 → `g_interp_deprecated` 룰 폐기
+  → R7 종결. 별도 multi-cycle.
+
+> 이 GOAL 은 north-star — self-host 축 + tier-1 codegen-correctness 축 + R7 Phase 1/2
+> (option B) 모두 측정으로 CLOSED (fixpoint byte-identical · gate ① 38/44 잔여 전부
+> non-tier-1 · user-facing interp signal LANDED). 잔여 = track B 의 sub-binary 재라우팅
+> housekeeping (functionality 손실 0 으로 점진), 별도 multi-cycle. 측정값 SSOT 는
+> `compiler/PLAN.md`.
 
 ---
 
@@ -139,5 +168,76 @@ RFC 034 autograd (✅) · 040 device-farr (✅)        ← 언어 표현력 (dow
 - `ROADMAP.md` — R3–R7 phased plan (R7 = 인터프리터 실삭제)
 - `HEXA-NATIVE-ONLY.md` — no LLVM · no C-transpile · self-hosted 정책
 - `tool/build_aprime.sh` — aprime_cc 5-stage 부트스트랩 recipe (smoke `exit(6*7)==42`)
+
+> GOAL 한 문장은 stable (north-star). 진척·측정값은 `compiler/PLAN.md` 가 SSOT — 본 파일은 "왜" 의 SSOT.
+
+═══════════════════════════════════════════════════════════════════════
+
+# GOAL ③ — comb (n=6 육각 fabric) 의 한 문장
+
+```
+/goal degree-6 육각 이진-타일 spatial PIM fabric 이 modern node 에서 degree-4 mesh 를 실제 워크로드로 이긴다는 것을 hexa-native 사이클정확 시뮬 + tapeout-ready RTL 로 입증하거나 동일 엄밀도로 반증한다 (T2); 입증 시 물리-실현 설계를 별도 standalone repo ~/core/hexa-arch 의 chip 도메인(외부 EDA 흡수는 그쪽 책임)을 사용해 산출 — comb 는 소비자, 실제 fab/FPGA 는 비목표 (T3=설계만)
+```
+
+> **한 문장 (canonical)**: degree-6 육각 **이진-타일** spatial PIM fabric 이 modern node 에서 degree-4 mesh 를 **실제 워크로드로 이긴다**는 것을 **hexa-native 사이클정확 시뮬레이터 + tapeout-ready RTL** 로 **입증하거나 동일 엄밀도로 반증**(T2)하고, 입증 시 물리-실현 *설계*를 **별도 standalone repo `~/core/hexa-arch` 의 chip 도메인**(외부 EDA — gem5-Garnet·Yosys·OpenROAD·Verilator·ngspice·SKY130 — 흡수는 *hexa-arch* 책임)을 **사용**해 산출한다 — comb 는 **소비자이지 EDA 흡수 주체 아님**, **실제 fab/FPGA 제작은 비(非)목표** (T3 = 설계만).
+
+---
+
+## 무엇이 아닌가 (NOT)
+
+- 패러다임 선언 아님 — *topology* 기여 1개 + falsifier 5개 (RFC 057). over-claim 금지 (g1·g2)
+- 다치(multi-valued)논리 아님 — A축 DE-SCOPED WALL (radix economy·noise·EDA 3중 HARD_WALL)
+- 실제 칩 fab/FPGA 아님 — T3 은 hexa stdlib+CLI **설계 산출물**까지 (hexa-native, g5)
+- design-first 아님 — F1–F5 측정·반증으로 결정 (sim 우선; 상용 degree-6 실리콘 0건 = EDA-cost 신호)
+- comb 가 EDA 흡수 아님 — 외부 EDA 흡수는 **별도 repo `~/core/hexa-arch`** 책임; comb 는 그 chip 도메인 **소비자**일 뿐
+- 빅뱅 아님 — hexa-arch 도 NoC 사이클sim(BookSim2/gem5-Garnet) **1개만** 먼저; 전체 RTL→GDSII 후속 (comb T1→T3 가 소비)
+
+## 무엇인가 (IS)
+
+3-tier 단일 north-star (RFC 057 §6 = gated plan SSOT):
+
+1. **T1 ANSWERED** — F1–F5 를 modern-node hex axial NoC 사이클 시뮬로 전수 판정 (이김/죽음)
+2. **T2 PROVEN** — hexa-native 사이클정확 시뮬 + tapeout-ready RTL 로 degree-6 > degree-4 입증 OR 동일 엄밀도 반증
+3. **T3 DESIGN-ONLY** — 물리-실현 설계를 별도 repo `~/core/hexa-arch` 의 chip 도메인(외부 EDA 흡수는 그쪽)을 *사용*해 산출; comb=소비자; 실제 fab/FPGA 비목표
+
+## 측정된 거리 (달성 주장 아님, g3)
+
+- ✅ 정초 완료: RFC 057 + falsifier F1–F5 + 딥리서치 2건 (commit `c0e7aae7`)
+- ⏳ T1 미착수 (0%) — 다음 = F1/F2 (degree-6 vs degree-4 @ modern node)
+- ⏳ T2 / T3 미착수
+- 정직 앵커: 상용 degree-6 실리콘 0건 · 측정 단 1건 (UC Davis 65nm 2012, 13yr stale, 미productize)
+
+## RESUME (복사-붙여넣기로 이어서)
+
+새 세션에 아래를 그대로 붙여넣으면 이어집니다:
+
+```
+comb (RFC 057, n=6 육각 fabric) 이어서. SSOT: comb/{README,RFC,PLAN,COMB.tape,
+research/SURVEY} + root GOAL.md ③. 현 상태: 정초 완료 (commit c0e7aae7+), T1
+미착수. 다음 = RFC 057 §6 T1 — F1/F2 해소용 hex axial NoC 사이클 시뮬
+(degree-6 vs degree-4, modern-node wire model, Leighton B3 하한 대비; sim only,
+no silicon). NoC sim 은 별도 standalone repo ~/core/hexa-arch 의 chip
+도메인 경유 (거기가 BookSim2/gem5-Garnet 흡수; ~/core/hexa-arch/HANDOFF.md
+자기완결). 거버넌스: g1·g2 격자=도구, 이진-타일 고정, 다치논리 금지(A=WALL),
+모든 B 주장에 least-perimeter≠least-latency + EDA-cost caveat. T3 =
+~/core/hexa-arch[chip] 을 *사용*해 설계 산출 (comb=소비자, EDA 흡수는
+hexa-arch; design-only, fab 비목표).
+```
+
+> GOAL ③ 한 문장은 stable (north-star). 진척·측정값 SSOT = `comb/PLAN.md` 진행 로그 — 본 섹션은 "왜" 의 SSOT.
+
+---
+
+## cross-link
+
+- `AGENTS.tape` — `@D g_interp_deprecated` (R7 4-gate spec) · `@D g5 hexa-native-only` · `@D g_plan_consolidation` (PLAN 단일 SSOT)
+- `compiler/PLAN.md` — compile cycle 진행 로그 SSOT (self-host fixpoint·gate ① 측정값의 거리 기록)
+- `ROADMAP.md` — R3–R7 phased plan (R7 = 인터프리터 실삭제)
+- `HEXA-NATIVE-ONLY.md` — no LLVM · no C-transpile · self-hosted 정책
+- `tool/build_aprime.sh` — aprime_cc 5-stage 부트스트랩 recipe (smoke `exit(6*7)==42`)
+- `comb/RFC.md` — ③ comb RFC 057 (T1→T2→T3 gated plan · falsifier F1–F5)
+- `comb/PLAN.md` — ③ comb 진척·측정값 SSOT (자체 도메인 SSOT, g_plan_consolidation 예외)
+- `comb/research/SURVEY.md` — ③ 딥리서치 2건 통합 (n=6 정리-최적 = B축 1개뿐, 출처)
+- `~/core/hexa-arch` — ③ 가 *사용*하는 별도 standalone repo (chip 도메인이 외부 EDA 흡수; `HANDOFF.md` 자기완결, commit c812ac6). EDA 흡수는 거기, comb 는 소비자
 
 > GOAL 한 문장은 stable (north-star). 진척·측정값은 `compiler/PLAN.md` 가 SSOT — 본 파일은 "왜" 의 SSOT.

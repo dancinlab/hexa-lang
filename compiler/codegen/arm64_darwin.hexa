@@ -44,6 +44,8 @@ let _STMT_ASSIGN   = "assign"
 let _STMT_BINOP    = "binop"
 let _STMT_UNOP     = "unop"
 let _STMT_CALL     = "call"
+// RFC closure C3 — local mirror of mir.hexa STMT_CALL_INDIRECT.
+let _STMT_CALL_INDIRECT = "call_indirect"
 let _STMT_RETURN   = "return"
 let _STMT_BR       = "br"
 let _STMT_BR_COND  = "br_cond"
@@ -290,18 +292,58 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
         if iv.starts[k] >= 0 { order.push(k) }
         k = k + 1
     }
-    let mut a = 1
-    while a < len(order) {
-        let key = order[a]
-        let key_start = iv.starts[key]
-        let mut b = a - 1
-        while b >= 0 && iv.starts[order[b]] > key_start {
-            order[b + 1] = order[b]
-            b = b - 1
-        }
-        order[b + 1] = key
-        a = a + 1
+    // Self-host perf — sort `order` ascending by `iv.starts`. The prior
+    // insertion sort was O(order²); on a large function (e.g. the 1209-
+    // line _lower_hexpr in the compiler's own lower pass) order grows to
+    // thousands of intervals, so O(N²) here is the dominant cost of a
+    // multi-minute stage-1 self-compile. `iv.starts` values are `pos`
+    // indices — dense, non-negative, bounded by the instruction count —
+    // so a counting sort is O(N + maxStart) and STABLE (preserves the
+    // first-seen order of equal-start intervals, identical to the strict-
+    // `>` insertion sort it replaces). [@cite alg/sort/counting-sort]
+    let mut max_start = 0
+    let mut ms = 0
+    while ms < len(order) {
+        let sv = iv.starts[order[ms]]
+        if sv > max_start { max_start = sv }
+        ms = ms + 1
     }
+    let mut cnt: [i64] = []
+    let mut ci = 0
+    while ci <= max_start {
+        cnt.push(0)
+        ci = ci + 1
+    }
+    let mut cp = 0
+    while cp < len(order) {
+        let sv2 = iv.starts[order[cp]]
+        cnt[sv2] = cnt[sv2] + 1
+        cp = cp + 1
+    }
+    // prefix sum → bucket start offsets
+    let mut acc = 0
+    let mut cp2 = 0
+    while cp2 <= max_start {
+        let c = cnt[cp2]
+        cnt[cp2] = acc
+        acc = acc + c
+        cp2 = cp2 + 1
+    }
+    let mut sorted: [i64] = []
+    let mut sp = 0
+    while sp < len(order) {
+        sorted.push(0)
+        sp = sp + 1
+    }
+    let mut cp3 = 0
+    while cp3 < len(order) {
+        let elem = order[cp3]
+        let sv3 = iv.starts[elem]
+        sorted[cnt[sv3]] = elem
+        cnt[sv3] = cnt[sv3] + 1
+        cp3 = cp3 + 1
+    }
+    order = sorted
 
     let mut map_ids: [i64] = []
     let mut map_regs: [string] = []
@@ -330,6 +372,25 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
     let mut active_idx: [i64] = []
     let mut next_slot: i64 = 0
 
+    // Self-host perf — precompute `is_param[k]` (k = interval index)
+    // once. The expire/spill loops below test "is this interval a
+    // param" per active interval per `order` step; the inline
+    // `while pp < len(mf.params)` scan made that O(order·active·P).
+    // One O(N + params) pre-pass collapses it to an O(1) array read.
+    // [@cite alg/regalloc/linear-scan]
+    let mut is_param: [i64] = []
+    let mut ip = 0
+    while ip < n {
+        is_param.push(0)
+        ip = ip + 1
+    }
+    let mut ipp = 0
+    while ipp < len(mf.params) {
+        let pidx = _arm_index_of(iv.ids, mf.params[ipp].id)
+        if pidx >= 0 { is_param[pidx] = 1 }
+        ipp = ipp + 1
+    }
+
     let mut s = 0
     while s < len(order) {
         let cur = order[s]
@@ -341,13 +402,7 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
             let ai = active_idx[e]
             if iv.ends[ai] < cur_start {
                 let was = map_regs[ai]
-                let mut is_param = false
-                let mut pp = 0
-                while pp < len(mf.params) {
-                    if mf.params[pp].id == iv.ids[ai] { is_param = true }
-                    pp = pp + 1
-                }
-                if !is_param && len(was) > 0 && map_slots[ai] < 0 {
+                if is_param[ai] == 0 && len(was) > 0 && map_slots[ai] < 0 {
                     pool.push(was)
                 }
             } else {
@@ -405,13 +460,7 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
             let mut victim_pos = len(active_idx) - 1
             while victim_pos >= 0 {
                 let v = active_idx[victim_pos]
-                let mut is_param = false
-                let mut pp = 0
-                while pp < len(mf.params) {
-                    if mf.params[pp].id == iv.ids[v] { is_param = true }
-                    pp = pp + 1
-                }
-                if !is_param { break }
+                if is_param[v] == 0 { break }
                 victim_pos = victim_pos - 1
             }
 
@@ -421,7 +470,18 @@ fn _arm64_assign_regs(mf: MFunc) -> ArmAllocResult {
                 map_slots[cur] = -1
                 map_regs[v] = ""
                 map_slots[v] = next_slot
-                next_slot = next_slot + 8
+                // HexaVal is a 16-byte (tag+union) pair stored via
+                // stp/ldp — a spill slot MUST be 16B. The victim-spill
+                // path advanced next_slot by only 8, so every slot
+                // allocated after a victim-spill overlapped the high
+                // 8 bytes of its predecessor. With enough spills the
+                // offsets wrapped and aliased low-frame slots: a 24-
+                // element [Node] array literal stored element 7+ into
+                // slots that collided with early temps, so NODES[7..]
+                // read garbage (TAG_MAP with junk map_ptr) → SIGSEGV
+                // in hexa_map_get. Matches the +16 used at the other
+                // two slot-allocation sites (lines ~448, ~468).
+                next_slot = next_slot + 16
                 let mut na: [i64] = []
                 let mut t = 0
                 while t < len(active_idx) {
@@ -580,6 +640,9 @@ fn _arm64_op_for_operand_st(o: Operand, st: ArmStrTab) -> LOperand {
     if o.kind == "const_int" {
         return _arm64_op_imm(o.int_val)
     }
+    if o.kind == "const_bool" {
+        return _arm64_op_imm(o.int_val)
+    }
     if o.kind == "global" {
         return _arm64_op_label("g" + to_string(o.global_id))
     }
@@ -698,11 +761,47 @@ fn _arm64_max_call_overflow(mf: MFunc) -> i64 {
                     if overflow > max_overflow { max_overflow = overflow }
                 }
             }
+            // RFC closure C3 — indirect call: args[0] is the callee, the
+            // remaining args[1..] are call arguments. The runtime env-first
+            // ABI puts the env in pair 0, so the outgoing pair count is
+            // 1 (env) + (len(args) - 1) call args = len(args). Pairs 5+
+            // overflow to the caller stack region, same as STMT_CALL.
+            if s.kind == _STMT_CALL_INDIRECT {
+                let n = len(s.args)
+                if n > 4 {
+                    let overflow = n - 4
+                    if overflow > max_overflow { max_overflow = overflow }
+                }
+            }
             si = si + 1
         }
         bi = bi + 1
     }
     return max_overflow
+}
+
+// Cycle h20 — try/catch jmp_buf region sizing.
+// Each STMT_TRY_SETJMP in the function gets its own 192-byte jmp_buf
+// slot in the function frame (Darwin arm64 jmp_buf is 192 bytes — see
+// /usr/include/setjmp.h: 14*8 bytes for _JBLEN ints + 192-byte align).
+// The slots live ABOVE the SSA-spill region: jmp_buf[i] is at
+//   [sp, #(call_overflow_bytes + spill_frame + i * 192)]
+// after `sub sp, total_frame`. Codegen walks STMT_TRY_SETJMP statements
+// in iteration order and assigns slot indices monotonically.
+let _ARM64_JMP_BUF_BYTES = 192
+fn _arm64_count_try_setjmp(mf: MFunc) -> i64 {
+    let mut n = 0
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            if blk.stmts[si].kind == "try_setjmp" { n = n + 1 }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return n
 }
 
 // ── Statement lowering (C6 — RegMap-aware) ───────────────────
@@ -811,6 +910,10 @@ fn _arm64_op_resolve(o: Operand, st: ArmStrTab, rm: RegMap,
         if o.int_val > 4095 { return _arm64_op_reg(scratch) }
         return _arm64_op_imm(o.int_val)
     }
+    if o.kind == "const_bool" {
+        // payload 0/1 — always immediate-representable.
+        return _arm64_op_imm(o.int_val)
+    }
     // global / const_str: address already materialized into `scratch`
     // by _arm64_op_rm (adrp+add). Return the register, not the label —
     // emitting the bare label is invalid ARM64.
@@ -916,6 +1019,18 @@ fn _hv_load(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
                          _arm64_op_label("#4"), "hv const_void: TAG_VOID"))
         out.push(_arm64_instr2("movz", _arm64_op_reg(hi),
                          _arm64_op_label("#0"), "hv const_void payload"))
+        return out
+    }
+    if o.kind == "const_bool" {
+        // `true`/`false` literal — TAG_BOOL=2, payload 0/1. literal_bool
+        // used to lower to const_int (TAG_INT), so a literal bool never
+        // compared equal under hexa_eq to the TAG_BOOL produced by
+        // `==` / `!=` / a comparison (hexa_eq returns false on tag
+        // mismatch). Mirrors codegen_c2.hexa `true` -> hexa_bool(1).
+        out.push(_arm64_instr2("movz", _arm64_op_reg(lo),
+                         _arm64_op_label("#2"), "hv const_bool: TAG_BOOL"))
+        out.push(_arm64_instr2("movz", _arm64_op_reg(hi),
+                         _arm64_op_label("#" + to_string(o.int_val)), "hv const_bool payload"))
         return out
     }
     if o.kind == "const_str" {
@@ -1052,13 +1167,26 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "char_code"     { return "hexa_char_code" }
     if name == "lgamma"        { return "hexa_math_lgamma" }
     if name == "env"           { return "hexa_env_var" }
+    if name == "env_var"       { return "hexa_env_var" }
+    // `now()` — interp alias for `timestamp()` (UNIX-millis). R5 triage.
+    if name == "now"           { return "hexa_timestamp" }
+    // `.find(needle)` method — generic substring/element search.
+    // hir_to_mir lowers `recv.find(x)` to STMT_CALL op="find"
+    // args=[recv,x]; runtime hexa_find_poly (runtime.c:7007) dispatches
+    // on the receiver shape. R5 CGFAIL triage (repo_taxonomy_audit).
+    if name == "find"          { return "hexa_find_poly" }
     if name == "file_size"     { return "rt_file_size" }
     if name == "chars"         { return "hexa_str_chars" }
     if name == "eprintln"      { return "hexa_eprintln" }
     if name == "exit"          { return "hexa_exit" }
     if name == "exec"          { return "hexa_exec" }
     if name == "file_exists"   { return "rt_file_exists" }
-    if name == "index_of"      { return "hexa_array_index_of" }
+    // NOTE: index_of is handled by a dedicated arg-count-aware
+    // STMT_CALL branch (string method -> hexa_str_index_of /
+    // hexa_str_index_of_from, int-boxed). The old
+    // hexa_array_index_of map returned -1 for every string
+    // receiver -- a wrong-value miscompile that silently
+    // flipped atlas-verifier predicates.
     if name == "join"          { return "hexa_str_join" }
     if name == "push"          { return "hexa_array_push" }
     if name == "pop"           { return "hexa_array_pop" }
@@ -1122,6 +1250,26 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "write_file"    { return "rt_write_file" }
     if name == "sha256"        { return "hexa_sha256" }
     if name == "sha256_file"   { return "hexa_sha256_file" }
+    // Low-level memory / pointer builtins — name -> runtime symbol.
+    // Authoritative mapping mirrored from self/codegen_c2.hexa §G5/B3.
+    // All take/return HexaVal pairs so the generic STMT_CALL emit path
+    // (arg pairs into x0:x1/x2:x3/x4:x5, bl, x0:x1 → dst) lowers them
+    // verbatim — no special branch, no ret-box. `free_raw` is the
+    // 1-arg alias of hexa_ptr_free (size arg ignored by the runtime).
+    if name == "alloc_raw"     { return "hexa_ptr_alloc" }
+    if name == "free_raw"      { return "hexa_ptr_free" }
+    if name == "write_f32"     { return "hexa_ptr_write_f32" }
+    if name == "write_i32"     { return "hexa_ptr_write_i32" }
+    if name == "write_i64"     { return "hexa_ptr_write" }
+    if name == "deref_f32"     { return "hexa_ptr_read_f32" }
+    if name == "deref_i32"     { return "hexa_ptr_read_i32" }
+    if name == "ptr_write_f32" { return "hexa_ptr_write_f32" }
+    if name == "ptr_write_i32" { return "hexa_ptr_write_i32" }
+    if name == "ptr_write"     { return "hexa_ptr_write" }      // untyped 64-bit — mirror tier-2 codegen_c2
+    if name == "ptr_read"      { return "hexa_ptr_read" }       // untyped 64-bit — mirror tier-2 codegen_c2
+    if name == "ptr_read_f32"  { return "hexa_ptr_read_f32" }
+    if name == "ptr_read_f64"  { return "hexa_ptr_read_f64" }
+    if name == "ptr_read_i32"  { return "hexa_ptr_read_i32" }
     if name == "println"       { return "hexa_println" }
     if name == "len"           { return "hexa_len" }            // → int (box)
     if name == "contains"      { return "hexa_str_contains" }   // → int (box bool)
@@ -1143,8 +1291,13 @@ fn _builtin_ret_box(name: string) -> string {
     return ""
 }
 
+// Cycle h20: extra params try_buf_bytes (total fn jmp_buf region size)
+// and try_slot_idx (this statement's slot index in 0..try_count).
+// try_slot_idx is meaningful only for STMT_TRY_SETJMP / STMT_TRY_POP;
+// other kinds ignore it.
 fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
-                    st: ArmStrTab, rm: RegMap, spill_frame: i64) -> [LInstr] {
+                    st: ArmStrTab, rm: RegMap, spill_frame: i64,
+                    try_buf_bytes: i64, try_slot_idx: i64) -> [LInstr] {
     let mut buf = out
     if s.kind == _STMT_ASSIGN {
         // array_lit constructor (mirror of x86_64_linux.hexa 269bb61d;
@@ -1207,6 +1360,38 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
             return buf
         }
+        // RFC closure C3 — closure-value construction. hir_to_mir lowers a
+        // closure-expression site to STMT_ASSIGN op="closure_new" with
+        //   args = [env_array, lambda_name_str, arity_int]
+        // and emits the synthetic `__hexa_lambda_<N>` MFunc separately.
+        // Runtime ABI: hexa_closure_new(void* fn_ptr, int arity,
+        // HexaVal env_arr) — fn_ptr in x0, arity (C int) in w1, env HexaVal
+        // pair in x2:x3, returns the TAG_CLOSURE HexaVal in x0:x1. The
+        // fn pointer is the address of the lifted lambda symbol (adrp/add);
+        // mirrors self/codegen_c2.hexa::gen2_lambda_expr's
+        // `hexa_closure_new((void*)&__hexa_lambda_N, arity, env)`.
+        if s.op == "closure_new" && len(s.args) >= 3 {
+            let lam_sym = s.args[1].str_val
+            let arity = s.args[2].int_val
+            // x0 = &__hexa_lambda_N  (PC-relative; symbol mangled by _fmt_label)
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x0"),
+                             _arm64_op_label(lam_sym + "@PAGE"),
+                             "closure_new: lambda fn-ptr page"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x0"),
+                             _arm64_op_reg("x0"),
+                             _arm64_op_label(lam_sym + "@PAGEOFF"),
+                             "closure_new: lambda fn-ptr off"))
+            // w1 = arity (C int)
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#" + to_string(arity)),
+                             "closure_new: arity"))
+            // x2:x3 = env array HexaVal
+            buf = _hv_load(buf, s.args[0], st, rm, "x2", "x3")
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_closure_new"),
+                             "closure_new: build TAG_CLOSURE"))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
         // array/map subscript: base[idx]. hir_to_mir lowers `a[i]` to
         // STMT_ASSIGN op="index" args=[base, idx]; without a dedicated
         // branch the fall-through below would just copy `base` into
@@ -1225,14 +1410,46 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // index_set: `arr[i] = v` / `map[k] = v`. The hir_to_mir
         // assign branch lowers index-lhs assignments to STMT_ASSIGN
         // op="index_set" with args = [container, key, value]; no dst
-        // local is consumed (the store is the side effect). Three
-        // HexaVal pair args fit in x0..x5 (AAPCS64); no overflow.
+        // local is consumed. Three HexaVal pair args fit in x0..x5
+        // (AAPCS64); no overflow.
+        //
+        // CORRECTNESS: hexa_index_set RETURNS the (possibly new)
+        // container HexaVal — it is NOT a pure side effect. The
+        // proven C reference path (codegen_c2) emits
+        // `container = hexa_index_set(container, key, value)`. The
+        // arm64 path previously dropped the return, so a container
+        // built by `let mut a = []` + push (e.g. hxc_loader.hexa
+        // `dense`) kept a STALE array header in its slot; after the
+        // runtime's arena dirty-slot / heapify relocated the backing
+        // on a later allocation, `_build_node(dense)` received a
+        // dangling/garbage array → non-deterministic "container is
+        // not an array (tag=<garbage>)" — the last aprime_cc
+        // self-host fixpoint blocker (interp-retirement #18). Mirror
+        // hexa_array_push: store the result back into the container
+        // lvalue when it is a storable local/global Operand.
         if s.op == "index_set" && len(s.args) >= 3 {
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // container
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // key
             buf = _hv_load(buf, s.args[2], st, rm, "x4", "x5")  // value
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_index_set"),
                              "index_set: hexa_index_set"))
+            let cont = s.args[0]
+            if cont.kind == "local" {
+                buf = _hv_store(buf, rm, cont.local_id, "x0", "x1")
+            } else if cont.kind == "global" {
+                let gl = "g" + to_string(cont.global_id)
+                buf.push(_arm64_instr2("adrp", _arm64_op_reg("x15"),
+                                 _arm64_op_label(gl + "@PAGE"),
+                                 "index_set: container global page (store-back)"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x15"),
+                                 _arm64_op_reg("x15"),
+                                 _arm64_op_label(gl + "@PAGEOFF"),
+                                 "index_set: container global off (store-back)"))
+                buf.push(_arm64_instr3("stp", _arm64_op_reg("x0"),
+                                 _arm64_op_reg("x1"),
+                                 _arm64_op_label("[x15]"),
+                                 "index_set: store-back into global " + gl))
+            }
             return buf
         }
         if len(s.args) >= 1 {
@@ -1292,8 +1509,34 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
                 return buf
             }
-            // bitwise / unknown — rare in compiler self-source. Approximate
-            // via hexa_add (correctness follow-up if it surfaces at run).
+            // Bitwise int ops & | ^ << >> — codegen_c2-authoritative:
+            //   hexa_int(HX_INT(l) <op> HX_INT(r))   (codegen_c2.hexa:3412)
+            // HexaVal pair = (lo=tag, hi=payload); for TAG_INT the int
+            // value lives in hi. Operate directly on the payload regs:
+            // a->x0:x1, b->x2:x3 => result payload = x1 <op> x3, tag=0.
+            // #29 fix: the prior catch-all routed & | ^ through
+            // hexa_add_slow ("approx"), so `h & MASK` ran as `h + MASK`
+            // — _path_hash produced unmasked djb2 values, making the
+            // self-built (ap2) compiler emit garbage enum __tag immediates.
+            if _is_bit_and(s.op) || _is_bit_or(s.op) || _is_bit_xor(s.op)
+               || s.op == "<<" || s.op == ">>" || s.op == "shl" || s.op == "shr" {
+                let mut bw = "and"
+                if _is_bit_or(s.op)  { bw = "orr" }
+                if _is_bit_xor(s.op) { bw = "eor" }
+                if s.op == "<<" || s.op == "shl" { bw = "lsl" }
+                if s.op == ">>" || s.op == "shr" { bw = "asr" }
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+                buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
+                buf.push(_arm64_instr3(bw, _arm64_op_reg("x1"),
+                                 _arm64_op_reg("x1"), _arm64_op_reg("x3"),
+                                 "bitwise " + s.op + ": payload"))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "bitwise: TAG_INT"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                return buf
+            }
+            // unknown binop — rare; approximate via hexa_add (follow-up
+            // if it surfaces at run).
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_add_slow"),
@@ -1321,6 +1564,54 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              _arm64_op_reg("w0"), "has_key: zext"))
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
                              "has_key: box bool"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // index_of(recv, sub[, start]) special: `.index_of` is a STRING
+        // method (byte offset of first occurrence, or -1). The old
+        // _builtin_runtime_sym map routed it to hexa_array_index_of,
+        // which returns -1 for every string receiver -- a wrong-VALUE
+        // miscompile that silently flipped atlas-verifier predicates
+        // (audit scans doing `raw.index_of(token) >= 0`). Mirrors
+        // codegen_c2.hexa gen2_method_builtin: 2-arg form ->
+        // hexa_str_index_of_from, 1-arg form -> hexa_str_index_of;
+        // both return a C int64_t that must be boxed into a HexaVal.
+        if s.op == "index_of" && len(s.args) >= 2 {
+            let iof_sym = if len(s.args) >= 3 { "hexa_str_index_of_from" } else { "hexa_str_index_of" }
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")
+            if len(s.args) >= 3 {
+                buf = _hv_load(buf, s.args[2], st, rm, "x4", "x5")
+            }
+            buf.push(_arm64_instr1("bl", _arm64_op_label(iof_sym),
+                             "index_of: str index_of"))
+            buf.push(_arm64_instr2("sxtw", _arm64_op_reg("x0"),
+                             _arm64_op_reg("w0"), "index_of: sign-ext"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_int"),
+                             "index_of: box to HexaVal"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // ord(s) — first-codepoint code. codegen_c2.hexa:4301 lowers it
+        // to hexa_char_code(s, hexa_int(0)); the constant index-0 arg is
+        // synthesised here as a TAG_INT 0 pair in x2:x3 (the runtime
+        // returns a HexaVal int directly -- no ret-box). 1-arg builtin.
+        if s.op == "ord" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // string recv
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x2"),
+                             _arm64_op_label("#0"), "ord: TAG_INT for index arg"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x3"),
+                             _arm64_op_label("#0"), "ord: index 0 payload"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_char_code"),
+                             "ord: hexa_char_code(s, 0)"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // ptr_from_int(x) — identity. codegen_c2.hexa:4126 returns the
+        // arg verbatim (the int already encodes the address under
+        // TAG_INT). No call: load arg -> x0:x1, store to dst.
+        if s.op == "ptr_from_int" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
@@ -1375,13 +1666,95 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         }
         return buf
     }
+    // RFC closure C3 — indirect call through a closure VALUE.
+    //
+    // hir_to_mir lowers a call whose callee is a closure value (a
+    // let/param-bound TAG_CLOSURE, or a closure-expression invoked in
+    // place) to STMT_CALL_INDIRECT with args[0] = callee value and
+    // args[1..] = the call arguments. We replicate the runtime
+    // `hexa_callN` static-inline dispatch (self/runtime.c:1147+) directly
+    // in asm — those helpers are `static inline` so the direct-asm path
+    // cannot `bl` them; the closure layout is small enough to inline.
+    //
+    // HexaVal is a 16B pair (x_lo = tag, x_hi = payload). For a
+    // TAG_CLOSURE the payload is `HexaClo*` (runtime.h:68):
+    //   struct HexaClo { void* fn_ptr; int arity; HexaVal* env_box; }
+    //   → fn_ptr @0, arity @8, env_box @16.
+    // Dispatch ABI is env-first: the lifted `__hexa_lambda_N` takes
+    // (__env, a1..aN), so we put `*env_box` (the env array HexaVal) in
+    // pair 0 (x0:x1) and the call args in pairs 1.. (x2:x3, x4:x5,
+    // x6:x7); pair 5+ overflow to [sp,#…] (C7 region). Every closure
+    // value reaching here is TAG_CLOSURE (hir_to_mir's `closure_new`
+    // always emits hexa_closure_new — even non-capturing closures get an
+    // empty env), so no TAG_FN branch is needed.
+    if s.kind == _STMT_CALL_INDIRECT && len(s.args) >= 1 {
+        // 1. callee value → x9:x10 ; x10 = HexaClo* payload.
+        buf = _hv_load(buf, s.args[0], st, rm, "x9", "x10")
+        // 2. fn_ptr = [clo_ptr + 0] → x13 (survives the arg loads, which
+        //    only scratch x14/x15).
+        buf.push(_arm64_instr2("ldr", _arm64_op_reg("x13"),
+                         _arm64_op_mem("x10", 0),
+                         "call_indirect: fn_ptr = clo->fn_ptr"))
+        // 3. env_box = [clo_ptr + 16] → x12.
+        buf.push(_arm64_instr2("ldr", _arm64_op_reg("x12"),
+                         _arm64_op_mem("x10", 16),
+                         "call_indirect: env_box = clo->env_box"))
+        // 4. call args a1.. → pairs x2:x3, x4:x5, x6:x7, then stack.
+        //    arg i (1-based over s.args) lands in outgoing pair i:
+        //      pair 1 = x2:x3, pair 2 = x4:x5, pair 3 = x6:x7,
+        //      pair 4+ = [sp, #(pair-4)*16]   (env occupies pair 0).
+        let arg_n = len(s.args)
+        let mut ai = 1
+        while ai < arg_n {
+            if ai < 4 {
+                let lo = "x" + to_string(ai * 2)
+                let hi = "x" + to_string(ai * 2 + 1)
+                buf = _hv_load(buf, s.args[ai], st, rm, lo, hi)
+            } else {
+                buf = _hv_load(buf, s.args[ai], st, rm, "x9", "x10")
+                let off = (ai - 4) * 16
+                buf = _hv_at(buf, off, "x15")
+                buf.push(_arm64_instr3("stp", _arm64_op_reg("x9"),
+                                 _arm64_op_reg("x10"), _hv_memb(off, "x15"),
+                                 "call_indirect: stack arg " + to_string(ai)))
+            }
+            ai = ai + 1
+        }
+        // 5. env HexaVal = *env_box → x0:x1 (pair 0). Done LAST so the
+        //    arg loads above can't clobber it.
+        buf.push(_arm64_instr2("ldr", _arm64_op_reg("x0"),
+                         _arm64_op_mem("x12", 0),
+                         "call_indirect: env tag = env_box->tag"))
+        buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                         _arm64_op_mem("x12", 8),
+                         "call_indirect: env payload = env_box->payload"))
+        // 6. indirect branch-with-link through the lifted fn pointer.
+        buf.push(_arm64_instr1("blr", _arm64_op_reg("x13"),
+                         "call_indirect: blr closure fn_ptr"))
+        // 7. result HexaVal x0:x1 → dst slot.
+        if s.dst.id >= 0 {
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+        }
+        return buf
+    }
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // AAPCS64 16B return = x0:x1
+        } else {
+            // #40 — value-less return must hand back a real TAG_VOID
+            // HexaVal (x0:x1), not stale call-clobbered registers.
+            // Mirrors tier-2 `return hexa_void();` (codegen_c2.hexa) and
+            // the const_void load above (TAG_VOID=4, payload 0). Without
+            // this, `type_of(returns_void())` reads a garbage tag.
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#4"), "ret void: TAG_VOID"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#0"), "ret void: payload 0"))
         }
-        // C7 — epilogue frees spill_frame + call-overflow region (both
-        // allocated in a single prologue sub; see _arm64_lower_func).
-        let epilogue_total = spill_frame + rm.call_overflow_bytes
+        // C7 + cycle h20 — epilogue frees spill_frame + call-overflow
+        // region + try-jmp_buf region (all allocated in a single
+        // prologue sub; see _arm64_lower_func).
+        let epilogue_total = spill_frame + rm.call_overflow_bytes + try_buf_bytes
         if epilogue_total > 0 {
             buf = _hv_sp_adj(buf, "add", epilogue_total, "x15")
         }
@@ -1393,6 +1766,77 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     if s.kind == _STMT_BR {
         let lab = _arm64_block_label(modhash, fname, s.target_block)
         buf.push(_arm64_instr1("b", _arm64_op_label(lab), "branch"))
+        return buf
+    }
+    // ── Cycle h20 — try/catch/throw runtime hooks ────────────
+    //
+    // jmp_buf slot[i] lives at:
+    //   [sp, #(call_overflow_bytes + spill_frame + i * 192)]
+    // after the prologue `sub sp, total_frame`.
+    if s.kind == "try_setjmp" {
+        // Compute &jbuf[slot] -> x0, call _setjmp, branch on w0!=0 to catch.
+        // On first call setjmp returns 0; push jbuf onto try-stack, then
+        // fall through to the try-body (target_block).
+        // On longjmp-resumed setjmp returns 1; branch to target_block_else.
+        let off = rm.call_overflow_bytes + spill_frame + try_slot_idx * 192
+        buf = _hv_at(buf, off, "x15")
+        // x15 now holds (sp + off / 16) * 16; _hv_at builds the immediate
+        // offset via the scratch — use the helper that yields a register
+        // form: `add x15, sp, #off`.
+        buf.push(_arm64_instr3("add", _arm64_op_reg("x0"),
+                         _arm64_op_reg("sp"),
+                         _arm64_op_label("#" + to_string(off)),
+                         "try_setjmp: &jbuf[" + to_string(try_slot_idx) + "]"))
+        // libc setjmp — Mach-O sym is `_setjmp` (auto-prefixed by _fmt_label).
+        // We pass the C name; _fmt_label injects the Darwin `_` prefix.
+        buf.push(_arm64_instr1("bl", _arm64_op_label("setjmp"),
+                         "try_setjmp: call libc _setjmp"))
+        // Branch to catch on nonzero return. cbnz uses w0 (the C int).
+        let catch_lab = _arm64_block_label(modhash, fname, s.target_block_else)
+        buf.push(_arm64_instr2("cbnz", _arm64_op_reg("w0"),
+                         _arm64_op_label(catch_lab),
+                         "try_setjmp: rc!=0 -> catch"))
+        // First-call path: push jbuf into runtime try-stack.
+        buf.push(_arm64_instr3("add", _arm64_op_reg("x0"),
+                         _arm64_op_reg("sp"),
+                         _arm64_op_label("#" + to_string(off)),
+                         "try_setjmp: &jbuf for push"))
+        buf.push(_arm64_instr1("bl", _arm64_op_label("__hexa_try_push"),
+                         "try_setjmp: register jbuf"))
+        // Fall-through into try-body via explicit branch.
+        let try_lab = _arm64_block_label(modhash, fname, s.target_block)
+        buf.push(_arm64_instr1("b", _arm64_op_label(try_lab),
+                         "try_setjmp: enter try body"))
+        return buf
+    }
+    if s.kind == "try_pop" {
+        // Normal exit out of try-body — pop the runtime try-stack frame.
+        // The fall-through `b after_id` is emitted as a separate STMT_BR.
+        buf.push(_arm64_instr1("bl", _arm64_op_label("__hexa_try_pop"),
+                         "try_pop: drop jbuf from try-stack"))
+        return buf
+    }
+    if s.kind == "try_last_err" {
+        // Catch-block entry — fetch __hexa_last_error() into dst HexaVal.
+        // The runtime function returns the HexaVal in x0:x1.
+        buf.push(_arm64_instr1("bl", _arm64_op_label("__hexa_last_error"),
+                         "try_last_err: HexaVal __hexa_last_error()"))
+        if s.dst.id >= 0 {
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+        }
+        return buf
+    }
+    if s.kind == "throw" {
+        // Materialize args[0] HexaVal into x0:x1; call hexa_throw (longjmps
+        // to the most-recently-pushed try frame, or exits if none).
+        if len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+        }
+        buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_throw"),
+                         "throw: hexa_throw(err)"))
+        // hexa_throw never returns (longjmp or exit). No need to emit
+        // a fall-through branch — the lowering set has_returned=true so
+        // hir_to_mir already terminated the block.
         return buf
     }
     if s.kind == _STMT_BR_COND {
@@ -1489,6 +1933,24 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
 fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     let mut instrs = []
 
+    // #26 self-host fixpoint — forced-copy the MFunc identity fields up
+    // front, before the block-emit loop. `mf.name` / `mf.def_line` are
+    // read repeatedly (block-def label, every per-stmt `_emit_arm64_stmt`
+    // call, the final LFunc literal). Each `_emit_arm64_stmt` returns a
+    // TAG_ARRAY routed through `__hexa_fn_arena_return` → the fn-arena
+    // rewinds; an arena-resident `mf` map's string storage is then
+    // invalidated, so a *later* `mf.name` read returns TAG_VOID and
+    // `mf.blocks` / `mf.def_line` become map-misses. Self-compiled ap2
+    // showed exactly this: first block label correct (`__L…_main_bb0`)
+    // but `.globl void` + "map key 'name'/'blocks'/'def_line' not found".
+    // Snapshotting once (string via the F6 forced-copy substring idiom,
+    // see _arm64_strtab_lookup P0b / _collect_strs P0a / _lower_fn P0c-2)
+    // gives every downstream read an arena-independent handle. ap1 (heap,
+    // single-read paths) is byte-identical; only the repeated cross-
+    // arena-boundary reads in this fn change source.
+    let fn_name = mf.name.substring(0, len(mf.name))
+    let fn_def_line = mf.def_line
+
     // C6 — run linear-scan regalloc up front so the prologue can size
     // the spill frame and the body can resolve operands through the
     // assigned RegMap.
@@ -1499,10 +1961,30 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     // bytes (16-aligned). Reused by every call site in this fn so we
     // don't sub/add sp mid-frame. SSA spill offsets are shifted above
     // this region via rm.call_overflow_bytes (see _arm_spill_offset).
+    //
+    // #27 self-host fixpoint — STRIDE FIX. `max_overflow` is a count of
+    // overflow ARGS (n - 4, see _arm64_max_call_overflow). Each overflow
+    // arg is a 16-byte HexaVal occupying a full register PAIR, and the
+    // C7 call-site emit writes arg i at `[sp, #(i-4)*16]` (16-byte
+    // stride, see "C7: stack arg" below). The reserved region must
+    // therefore be `max_overflow * 16` bytes. The previous `* 8` sized
+    // it for an 8-byte scalar stride — exactly HALF — so the SSA/param
+    // spill region was shifted up by only half the overflow span. A
+    // saved ingress param (e.g. `module` at [sp,#16] in
+    // _collect_item_types) then aliased the outgoing "stack arg 5" slot
+    // (`(5-4)*16 = 16`): the call's 6th arg overwrote the caller's own
+    // first parameter HexaVal (tag flipped MAP→STR), surfacing as
+    // `map key 'items'/'children'/... not found` + a 1032-wide spurious
+    // HX2001 cascade when the self-hosted compiler (ap2) compiled the
+    // full compiler. ap1 (hexa_v2 C path) computes frames correctly so
+    // the bug was masked until the asm codegen self-hosted. Same value-
+    // across-call-boundary class as #25/#26, distinct site (frame sizer,
+    // not arena runtime). 16-aligned already (max_overflow*16 is a
+    // multiple of 16); the round kept for defensive clarity.
     let max_overflow = _arm64_max_call_overflow(mf)
     let mut call_overflow_bytes = 0
     if max_overflow > 0 {
-        call_overflow_bytes = ((max_overflow * 8 + 15) / 16) * 16
+        call_overflow_bytes = ((max_overflow * 16 + 15) / 16) * 16
     }
     let rm = RegMap {
         ids: alloc.map.ids,
@@ -1510,7 +1992,11 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         slots: alloc.map.slots,
         call_overflow_bytes: call_overflow_bytes
     }
-    let total_frame = spill_frame + call_overflow_bytes
+    // Cycle h20 — reserve jmp_buf region above the spill area. Each try
+    // gets one 192-byte slot (16-aligned by construction).
+    let try_count = _arm64_count_try_setjmp(mf)
+    let try_buf_bytes = try_count * _ARM64_JMP_BUF_BYTES
+    let total_frame = spill_frame + call_overflow_bytes + try_buf_bytes
 
     // Prologue
     instrs.push(_arm64_instr3(
@@ -1521,6 +2007,22 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         "prologue: save fp/lr"
     ))
     instrs.push(_arm64_instr2("mov", _arm64_op_reg("x29"), _arm64_op_reg("sp"), "prologue: set fp"))
+
+    // Entry argv wiring. `_main` is the C-ABI process entry (Darwin
+    // `_start` → `main(argc, argv, envp)`): x0=argc, x1=argv on entry.
+    // The hexa `fn main()` takes no params, so x0/x1 are otherwise
+    // unused — but `args()` / `hexa_args()` need them stashed. hexa_v2's
+    // C path emits `int main(argc,argv){ hexa_set_args(argc,argv); … }`;
+    // the direct-asm path must do the same or every aprime_cc-built
+    // program sees an empty argv (self-host blocker — the 2nd-gen
+    // compiler reported "missing SOURCE.hexa" for every invocation).
+    // Insert `bl _hexa_set_args` here, before the frame `sub` and any
+    // body code clobbers x0/x1. stp/mov above do not touch x0/x1; bl's
+    // x30 clobber is safe (lr already saved, dead until epilogue).
+    if fn_name == "main" {
+        instrs.push(_arm64_instr1("bl", _arm64_op_label("hexa_set_args"),
+                         "entry: wire argc/argv -> hexa_set_args"))
+    }
 
     // Spill-frame allocation (after fp/lr save). Covers both the SSA
     // spill region (top) and the outgoing-call overflow region (bottom).
@@ -1559,14 +2061,44 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         p = p + 1
     }
 
+    // #26 — snapshot the block list once. `mf.blocks` is otherwise
+    // re-read every loop trip across the `_emit_arm64_stmt` arena-return
+    // boundary (same hazard as fn_name/fn_def_line above): an arena-
+    // resident `mf` map invalidated by the rewind makes `mf.blocks` a
+    // map-miss (len 0) after the first statement, truncating the body.
+    let mf_blocks = mf.blocks
+    let mut _try_idx = 0
     let mut bi = 0
-    while bi < len(mf.blocks) {
-        let blk = mf.blocks[bi]
-        instrs.push(_arm64_instr0("label", _arm64_block_label(modhash, mf.name, blk.id)))
+    while bi < len(mf_blocks) {
+        let blk = mf_blocks[bi]
+        instrs.push(_arm64_instr0("label", _arm64_block_label(modhash, fn_name, blk.id)))
         let mut si = 0
         while si < len(blk.stmts) {
-            instrs = _emit_arm64_stmt(instrs, modhash, mf.name,
-                                      blk.stmts[si], st, rm, spill_frame)
+            // #18 codegen-perf — per-statement delta accumulation. The
+            // prior `instrs = _emit_arm64_stmt(instrs,…)` re-returned the
+            // whole growing `instrs` array every statement; the runtime's
+            // fn-arena return path (__hexa_fn_arena_return → hexa_val_
+            // heapify) deep-walks every element of a returned TAG_ARRAY,
+            // so threading the accumulator cost Σ O(len instrs) = O(N²)
+            // on a large single function. Pass a FRESH `[]` so each call
+            // returns only that statement's instructions (~5 elems →
+            // O(1) heapify), then append the delta into `instrs`. `instrs`
+            // itself is heapified just once, when _arm64_lower_func
+            // returns its LFunc — O(total). Byte-identical: same instrs in
+            // the same order, only the accumulation cadence changed.
+            // Cycle h20: assign monotonic slot indices to STMT_TRY_SETJMP
+            // / STMT_TRY_POP pairs so each try has its own jmp_buf slot.
+            // STMT_TRY_POP uses the SETJMP's slot, so we don't bump on POP.
+            let cur_try_idx = _try_idx
+            if blk.stmts[si].kind == "try_setjmp" { _try_idx = _try_idx + 1 }
+            let delta = _emit_arm64_stmt([], modhash, fn_name,
+                                         blk.stmts[si], st, rm, spill_frame,
+                                         try_buf_bytes, cur_try_idx)
+            let mut _di = 0
+            while _di < len(delta) {
+                instrs.push(delta[_di])
+                _di = _di + 1
+            }
             si = si + 1
         }
         bi = bi + 1
@@ -1578,15 +2110,22 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         let last = instrs[len(instrs) - 1]
         if last.op == "ret" {
             return LFunc {
-                name: mf.name,
+                name: fn_name,
                 target: "arm64-apple-darwin",
                 instrs: instrs,
                 frame_size: 16 + total_frame,
                 callee_saved: [],
-                def_line: mf.def_line
+                def_line: fn_def_line
             }
         }
     }
+    // #40 — fall-through epilogue also hands back a real TAG_VOID HexaVal
+    // (x0:x1), matching the value-less STMT_RETURN path above; a function
+    // reaching here without an explicit return yields void.
+    instrs.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                        _arm64_op_label("#4"), "ret void: TAG_VOID"))
+    instrs.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                        _arm64_op_label("#0"), "ret void: payload 0"))
     if total_frame > 0 {
         instrs = _hv_sp_adj(instrs, "add", total_frame, "x15")
     }
@@ -1595,12 +2134,12 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     instrs.push(_arm64_instr0("ret", "return"))
 
     return LFunc {
-        name: mf.name,
+        name: fn_name,
         target: "arm64-apple-darwin",
         instrs: instrs,
         frame_size: 16 + total_frame,
         callee_saved: [],
-        def_line: mf.def_line
+        def_line: fn_def_line
     }
 }
 

@@ -293,11 +293,15 @@ fn _decode_one() -> array {
             codepoint = (codepoint * 64) | (nb & 63)
             i = i + 1
         }
-        // Emit ch as chr(codepoint) — hexa chr() converts codepoint to
-        // UTF-8 encoding. Don't bytewise-concat the raw bytes (that
-        // would double-encode since chr(byte) is itself UTF-8 of byte
-        // value as codepoint, producing 4 bytes for a 2-byte sequence).
-        return ["key", codepoint, 0, 0, 0, chr(codepoint)]
+        // Emit ch as from_char_code(codepoint) — UTF-8 encodes the full
+        // codepoint into the corresponding 2/3/4-byte UTF-8 sequence.
+        // (chr(cp) was wrong here: per RFC chr-byte-vs-codepoint-asymmetry
+        // (2026-05-17, codegen_c2.hexa:4302), `chr` truncates to a single
+        // byte `cp & 0xFF` — the byte-synthesis contract used by URL
+        // decode / PNG header / emoji prefix. For codepoint→UTF-8 (this
+        // path + modifyOtherKeys below), the canonical builtin is
+        // `from_char_code`. The decoder predated the RFC split.)
+        return ["key", codepoint, 0, 0, 0, from_char_code(codepoint)]
     }
 
     // Other control bytes (0x00, 0x1B handled above, 0x1C..0x1F)
@@ -474,7 +478,17 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
             if _mok_code == 13 { return ["key", -1, _mok_ctrl, _mok_alt, _mok_shift, ""] }   // Enter
             if _mok_code == 9  { return ["key", -2, _mok_ctrl, _mok_alt, _mok_shift, ""] }   // Tab
             if _mok_code == 8 || _mok_code == 127 { return ["key", -3, _mok_ctrl, _mok_alt, _mok_shift, ""] }   // Backspace
-            if _mok_code >= 32 && _mok_code < 127 { return ["key", _mok_code, _mok_ctrl, _mok_alt, _mok_shift, chr(_mok_code)] }
+            // Printable: ASCII *and* non-ASCII (Hangul / CJK / emoji). At
+            // modifyOtherKeys level 2 the terminal reformats every printable
+            // keypress as CSI 27;<mod>;<codepoint>~, so the codepoint can be
+            // any Unicode scalar — not just ASCII. Emit ch via from_char_code
+            // (not chr — chr truncates to cp & 0xFF per RFC chr-byte-vs-
+            // codepoint-asymmetry; see L296 for the full discussion). 1114112
+            // = U+110000, one past the highest valid Unicode scalar. Capping
+            // at 127 here silently dropped all non-Latin input.
+            // (inbox/patches/modifyotherkeys-non-ascii-decoder-gap.md +
+            //  inbox/patches/input-decoder-chr-vs-from_char_code.md)
+            if _mok_code >= 32 && _mok_code < 1114112 { return ["key", _mok_code, _mok_ctrl, _mok_alt, _mok_shift, from_char_code(_mok_code)] }
             return ["err", "csi-modifyotherkeys-unsupported-code"]
         }
         if n == 1  { return ["key", -20, _ctrl_f, _alt_f, _shift_f, ""] }   // home (CSI 1 ~ — screen-256color / linux / rxvt)

@@ -1,0 +1,26 @@
+11. Printing statistics.
+
+=== router_d6 ===
+
+        +----------Local Count, excluding submodules.
+        | 
+     4772 wires
+    53482 wire bits
+      145 public wires
+     4940 public wire bits
+       10 ports
+      938 port bits
+    21790 cells
+     3482   $_AND_
+     2264   $_DFFE_PP_
+    12181   $_MUX_
+      569   $_NOT_
+     2458   $_OR_
+       24   $_SDFFE_PP0P_
+        7   $_SDFF_PP0_
+      805   $_XOR_
+
+Warnings: 1 unique messages, 1 total
+End of script. Logfile hash: a1f15844d3, time: 18.53s, user: 18.36s, system: 0.66s, MEM: 1247.30 MB peak
+Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 21.0.0 -fPIC -O3)
+Time spent: 33% 91x opt_expr (6 sec), 28% 1x techmap (5 sec), ...

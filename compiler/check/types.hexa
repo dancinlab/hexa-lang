@@ -245,7 +245,10 @@ fn _types_is_lit_int(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -276,7 +279,10 @@ fn _types_is_lit_float(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -307,7 +313,10 @@ fn _types_is_lit_string(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -338,7 +347,10 @@ fn _is_lit_bool(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -369,7 +381,10 @@ fn _is_lit_char(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -400,7 +415,10 @@ fn _types_is_ident(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -431,7 +449,10 @@ fn _is_atlas(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -462,7 +483,10 @@ fn _types_is_call(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -493,7 +517,10 @@ fn _types_is_binop(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -524,7 +551,10 @@ fn _types_is_unop(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -555,7 +585,10 @@ fn _types_is_block(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -586,7 +619,10 @@ fn _types_is_if(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -617,7 +653,10 @@ fn _types_is_while(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -648,7 +687,10 @@ fn _types_is_return(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -679,7 +721,10 @@ fn _types_is_let(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -710,7 +755,10 @@ fn _types_is_assign(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -741,7 +789,45 @@ fn _is_match_expr(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// RFC C1 — closure-expression probe.
+fn _types_is_closure(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Closure -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -810,7 +896,7 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
         if n == "f32" { return _types_t_f32() }
         if n == "f64" || n == "Float" || n == "float" || n == "Real" { return _types_t_f64() }
         if n == "bool" || n == "Bool" { return _types_t_bool() }
-        if n == "string" || n == "String" { return _types_t_string() }
+        if n == "string" || n == "String" || n == "str" { return _types_t_string() }
         if n == "char" || n == "Char" { return _types_t_char() }
         if n == "unit" || n == "Unit" || n == "()" || n == "void" || n == "Void" { return _types_t_unit() }
         // u8/u16/u32/u64 — deferred: stage0 backend has no unsigned
@@ -1372,6 +1458,38 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         return _check_match(e, env, ctx, out)
     }
 
+    if _types_is_closure(e.kind) {
+        // RFC C1 — closure-expression. children = [param_0..param_{n-1},
+        // body_block]; e.text = decimal param count. The param children are
+        // Ident nodes carrying NAMES, not free-variable references — they
+        // must NOT be _infer_expr'd (that would HX2002/lookup-fail on the
+        // param name). Bind (compiler/check/bind.hexa) is the pass that
+        // scopes param names into the body; here we only walk the body to
+        // surface inner type errors, then hand back a `fn` type so callers
+        // (e.g. `f(21)` where `let f = fn(x){...}`) see a function value.
+        //
+        // C1 type representation: a bare `fn`-kinded Type with empty
+        // args/ret. The tier-1 type system has no per-param / return-type
+        // closure inference yet — that is C2 scope. `fn` with empty
+        // args/ret is the narrowest representation that (a) reuses the
+        // existing `t.kind == "fn"` callee check at _types_check_call, so a
+        // closure call is not mis-flagged as "calling a non-fn", and (b)
+        // carries no false param/return type claims.
+        // body block is the LAST child (children[param_count]); no need to
+        // parse e.text — use len-1 directly.
+        if len(e.children) > 0 {
+            let _bt = _infer_expr(e.children[len(e.children) - 1], env, ctx, out)
+        }
+        return Type {
+            kind: "fn",
+            def: _types_miss_def_id(),
+            args: [],
+            ret: [],
+            domain: "",
+            unit: ""
+        }
+    }
+
     // Field / Index / StructLit / EnumPath / Wildcard — STUB v1.
     // Walk children for inner errors; return unknown so outer sites that
     // gate on equality tolerate (per _types_equal).
@@ -1438,15 +1556,28 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
         if op == "+" && (lt.kind == "string" || rt.kind == "string") {
             return _types_t_string()
         }
-        // Both sides must be numeric AND of the same kind.
+        // Both sides numeric. Mixed int/float is a LEGAL implicit widening
+        // — tier-2 (self/runtime.c hexa_add/sub/mul) dispatches the mixed
+        // case to `hexa_float(__hx_to_double(a) OP __hx_to_double(b))`,
+        // i.e. int operand is widened to f64 and the result is f64. Match
+        // that policy EXACTLY here: int OP int → int, float OP float →
+        // float, mixed int/float → float (no HX3001). Only genuine
+        // non-coercible numeric mismatches still raise HX3001.
         if _types_is_numeric(lt) && _types_is_numeric(rt) {
-            if !_types_equal(lt, rt) {
+            let mixed_int_float =
+                (_is_integer_kind(lt) && _is_float_kind(rt)) ||
+                (_is_float_kind(lt) && _is_integer_kind(rt))
+            if !_types_equal(lt, rt) && !mixed_int_float {
                 _emit_hx3001(lt, rt, e.span, out)
             }
             // S4: integer / integer narrows the ℝ domain → HX4001 (Warning).
             if op == "/" && _is_integer_kind(lt) && _is_integer_kind(rt) {
                 _emit_hx4001(e.span, out)
             }
+            // Mixed int/float yields f64 (int operand widened, per tier-2's
+            // __hx_to_double path) so the inferred type propagates correctly
+            // into the enclosing let/return/arg context.
+            if mixed_int_float { return _types_t_f64() }
             return lt
         }
         // Mismatch (one or both non-numeric) — treat as type-mismatch with
@@ -1494,6 +1625,12 @@ fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type 
 // selector as an unresolved free name (that was the stage-2 self-compile
 // `.push(...)`-class HX2001 flood, ~870 of 1307).
 fn _is_builtin_method(name: string) -> bool {
+    // R5 CGFAIL triage — full method-builtin set mirrored from the proven
+    // legacy receiver dispatch self/codegen_c2.hexa::gen2_method_builtin
+    // (90 names). The prior list had only 31; the missing ~59 (notably
+    // `find`/`count`/`map`/`filter`/`fold`/`lines`/`slice`/… ) surfaced
+    // as HX2001 callee-misses when used in `recv.<m>(…)` form — the
+    // repo_taxonomy_audit `ln.find("]")` CGFAIL class.
     return match name {
         "push" -> true, "append" -> true, "len" -> true, "chars" -> true,
         "contains" -> true, "join" -> true, "to_upper" -> true, "to_lower" -> true,
@@ -1505,6 +1642,25 @@ fn _is_builtin_method(name: string) -> bool {
         "has_key" -> true, "has" -> true, "remove" -> true, "get" -> true,
         "set" -> true, "pop" -> true, "shift" -> true, "reverse" -> true,
         "sort" -> true, "sort_by" -> true,
+        "all" -> true, "any" -> true, "byte_at" -> true, "bytes" -> true,
+        "center" -> true, "char_at" -> true, "chunk" -> true, "count" -> true,
+        "drop" -> true, "entries" -> true, "enumerate" -> true, "fill" -> true,
+        "filter" -> true, "filter_keys" -> true, "find" -> true,
+        "flat_map" -> true, "flatten" -> true, "fold" -> true,
+        "for_each" -> true, "frequencies" -> true, "from_array" -> true,
+        "group_by" -> true, "interleave" -> true, "invert" -> true,
+        "is_empty" -> true, "lines" -> true, "map" -> true,
+        "map_values" -> true, "max" -> true, "mean" -> true, "merge" -> true,
+        "min" -> true, "pad_end" -> true, "pad_left" -> true,
+        "pad_right" -> true, "pad_start" -> true, "parse_float" -> true,
+        "parse_int" -> true, "partition" -> true, "product" -> true,
+        "push_nostat" -> true, "rotate" -> true, "sample" -> true,
+        "scan" -> true, "slice" -> true, "slice_fast" -> true,
+        "substr" -> true, "sum" -> true, "swap" -> true, "take" -> true,
+        "to_array" -> true, "to_bool" -> true, "to_float" -> true,
+        "to_int" -> true, "to_string" -> true, "trim_end" -> true,
+        "trim_start" -> true, "truncate" -> true, "unique" -> true,
+        "window" -> true, "zip" -> true,
         _ -> false,
     }
 }

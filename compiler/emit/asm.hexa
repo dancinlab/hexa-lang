@@ -338,12 +338,21 @@ fn _emit_func(target: string, f: LFunc) -> string {
     if f.def_line > 0 {
         out = out + "    .loc 1 " + to_string(f.def_line) + " 0\n"
     }
+    // Self-host perf — the per-instruction `out = out + …` left-fold
+    // re-copied the whole accumulator on every instruction: O(I²) bytes
+    // on a function with I instructions. A large function (e.g. the
+    // compiler's own 1209-line _lower_hexpr) emits thousands of
+    // instructions, so this fold dominated stage-1 self-compile time.
+    // Collect fragments in an array, join once — O(I), byte-identical
+    // to the left-fold. Mirrors the F4 `parts`/`join` idiom already
+    // used by emit_asm at module scope. [@cite alg/string/rope-join]
+    let mut iparts: [string] = [out]
     let mut i = 0
     while i < len(f.instrs) {
-        out = out + _fmt_instr(target, f.instrs[i]) + "\n"
+        iparts.push(_fmt_instr(target, f.instrs[i]) + "\n")
         i = i + 1
     }
-    return out
+    return iparts.join("")
 }
 
 // ── Public API ──────────────────────────────────────────────

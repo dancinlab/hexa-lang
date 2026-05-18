@@ -634,6 +634,29 @@ if stream_mode && target == "arm64-apple-darwin" {
     let mut _lk = 0
     while _lk < len(_lr_d) { diags.push(_lr_d[_lk]); _lk = _lk + 1 }
 
+    // Render the HIR→MIR diagnostics and abort before codegen if any are
+    // fatal. The pre-codegen `_has_errors` gate at the top of this file
+    // ran BEFORE lower_hir, so HX1101/HX1102/HX1103/HX1104 (emitted only
+    // during HIR→MIR) would otherwise reach codegen and produce a wrong
+    // or empty binary instead of failing visibly. Closure-expression
+    // codegen deferral (HX1104, RFC C1) relies on this abort: a closure
+    // program must STOP here with the accurate "closure codegen not yet
+    // implemented" message, not silently emit asm.
+    if len(_lr_d) > 0 {
+        let mut _lrd_only: array = []
+        let mut _lj = 0
+        while _lj < len(_lr_d) { _lrd_only.push(_lr_d[_lj]); _lj = _lj + 1 }
+        _render_all(_lrd_only, error_format)
+        if _has_errors(_lrd_only) {
+            if ignore_errors {
+                eprintln("hexa-compiler: " + to_string(len(_lr_d)) + " HIR->MIR diagnostic(s); --ignore-errors set, proceeding to codegen")
+            } else {
+                eprintln("hexa-compiler: " + to_string(len(_lr_d)) + " HIR->MIR diagnostic(s); aborting before codegen")
+                exit(1)
+            }
+        }
+    }
+
     // Phase boundary 4: HIR→MIR done. `hmodule` still bound but unread by
     // later phases; arena scratch built during hir_to_mir (block label
     // concat, MIR debug strings) reclaimable.

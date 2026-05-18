@@ -32,10 +32,31 @@
 
 use "compiler/atlas/parser"
 use "compiler/atlas/merger"
-use "compiler/atlas/embedded.gen"
 use "compiler/atlas/overlay"
 use "compiler/atlas/prefix_index"
 use "compiler/atlas/hxc_loader"     // Path Y — HXC sidecar fast path
+
+// R7 track B (2026-05-18): `use "compiler/atlas/embedded.gen"` severed.
+// The module_loader cycle-safety fix made atlas_cli flatten succeed, but
+// the resulting 5 MB flat (embedded.gen's 7451 AtlasNode const literals)
+// then SIGKILLs the hexa_v2 transpile — the very "const-literal load"
+// cost the dist/atlas.hxc sidecar was built to avoid (see Path Y note
+// below + tool/atlas_build_hxc.hexa, which text-reads embedded.gen to
+// dodge exactly this). The compiled atlas binary serves from
+// dist/atlas.hxc (tracked, canonical, 6.4 MB — build_aprime: "loaded
+// 15952 nodes from hxc"); the embedded.gen const arrays were only the
+// no-sidecar fallback. This file's own L18-31 design note explicitly
+// sanctions the empty-array surface ("swap in a stub embedded.gen.hexa
+// with empty arrays — the surface here stays the same"). embedded.gen.hexa
+// remains untouched on disk as the TEXT SSOT for atlas_build_hxc.
+// ATLAS_HASH / ATLAS_SOURCE_COUNT are small metadata the HXC path's
+// AtlasIndex still carries — declared locally (frozen-embed values;
+// compiler/drill/accumulation_test.hexa keeps its own `use embedded.gen`
+// for the drift-pin assertion, unaffected). No-sidecar fallback now
+// returns an empty index + a regenerate hint instead of OOM-transpiling
+// 5 MB of consts.
+let ATLAS_HASH: string = "663698a06bc6f967fa2855a77bc4e399aae465dda5ca948b3c7352dbf98ce7fb"
+let ATLAS_SOURCE_COUNT: i64 = 410
 
 // --- drift-detection placeholders (Phase A4+) ------------------------------
 //
@@ -77,30 +98,24 @@ pub fn static_atlas() -> AtlasIndex {
         println("atlas: loaded " + to_string(len(hxc_nodes)) + " nodes from hxc")
         return _bucket_by_kind(hxc_nodes)
     }
-    println("atlas: loaded " + to_string(_count_rodata()) + " nodes from source")
-
-    // type: AtlasIndex
-    // Stage1 punch list Gap 11 — verified, all 13 AtlasIndex fields are
-    // literal-initialized here so the type checker round-trips this const
-    // through `_collect_item_types` cleanly when compiler/ self-loads. The
-    // two arrays (`duplicates`, `skipped_oversize`) are intentionally empty
-    // in the static path — those signals are merger-time only and were
-    // resolved at compiler-build time.
-    //
-    // Wave-1 extension (2026-05-13): the 5 new per-kind arrays (F/R/S/X/Q)
-    // are wired in. The frozen rodata embed currently has empty F/R/S/X/Q
-    // arrays since the n6 source corpus is unavailable for regen; overlay
-    // contributions to those kinds are read via the runtime overlay path.
+    // R7 track B (2026-05-18): no-sidecar fallback. Previously returned
+    // the 4.9 MB ATLAS_*_NODES const arrays from embedded.gen.hexa; that
+    // `use` is now severed (see top-of-file note) so this returns an
+    // empty index + an honest regenerate hint. Unreachable in practice —
+    // dist/atlas.hxc is tracked + canonical (Path Y above always taken).
+    eprintln("atlas: dist/atlas.hxc sidecar missing/empty — serving EMPTY index")
+    eprintln("atlas: regenerate via `hexa run tool/atlas_build_hxc.hexa`")
+    eprintln("atlas: (embedded.gen.hexa remains the text SSOT for that tool)")
     return AtlasIndex {
-        p_nodes: ATLAS_P_NODES,
-        c_nodes: ATLAS_C_NODES,
-        l_nodes: ATLAS_L_NODES,
-        e_nodes: ATLAS_E_NODES,
-        f_nodes: ATLAS_F_NODES,
-        r_nodes: ATLAS_R_NODES,
-        s_nodes: ATLAS_S_NODES,
-        x_nodes: ATLAS_X_NODES,
-        q_nodes: ATLAS_Q_NODES,
+        p_nodes: [],
+        c_nodes: [],
+        l_nodes: [],
+        e_nodes: [],
+        f_nodes: [],
+        r_nodes: [],
+        s_nodes: [],
+        x_nodes: [],
+        q_nodes: [],
         hash: ATLAS_HASH,
         source_count: ATLAS_SOURCE_COUNT,
         duplicates: [],
@@ -152,9 +167,9 @@ fn _bucket_by_kind(nodes: array) -> AtlasIndex {
 }
 
 fn _count_rodata() -> i64 {
-    return len(ATLAS_P_NODES) + len(ATLAS_C_NODES) + len(ATLAS_L_NODES) +
-           len(ATLAS_E_NODES) + len(ATLAS_F_NODES) + len(ATLAS_R_NODES) +
-           len(ATLAS_S_NODES) + len(ATLAS_X_NODES) + len(ATLAS_Q_NODES)
+    // R7 track B: embedded.gen const arrays no longer `use`d here; the
+    // rodata fallback is empty (dist/atlas.hxc is the live SSOT).
+    return 0
 }
 
 // lookup_static — same signature as merger.hexa::lookup. Linear scan

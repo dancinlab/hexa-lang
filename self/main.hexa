@@ -73,6 +73,11 @@ fn cmd_help() {
     println("                preheating|multipolar|surface-code|ssh|hofstadter|dqpt|wdw]")
     println("                                          virtual-universe runtime (26 modules, RFC 046)")
     println("    e.g. hexa sim-universe status         module inventory + tier table")
+    println("  qmirror [status|selftest|chsh|iit|qrng|rqaoa|ctx|dynghz|vqd|stab-ext|")
+    println("           overlap-vqe|sre|lg|pseudo-tel|rpe|sym-shadow|hardy|page-curve|")
+    println("           qdrift|cdr|wigner|qfi|shallow|gme-steer|mabk|mirror-bench]")
+    println("                                          quantum mirror substrate (38 modules, RFC 045)")
+    println("    e.g. hexa qmirror chsh                CHSH Bell test (Tsirelson-class S)")
     println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
@@ -344,7 +349,10 @@ fn cmd_url(url) {
             args_list.push(hexa_url_decode(args_raw[ai]))
             ai = ai + 1
         }
-        cmd_run(file, args_list)
+        // R7 option B — user-direct invocation (hexa:// URL) routes
+        // through the deprecation-warning helper. URL action has no
+        // --vm flag, so want_vm=false.
+        cmd_run_user_direct(file, args_list, false)
     } else if action == "install" {
         let pkg = hexa_url_query_get(query, "pkg")
         if pkg == "" {
@@ -1140,10 +1148,79 @@ fn dispatch_absorbed(verb, ab_args) {
         let r = exec(cmd)
         if len(r) > 0 { println(r) }
     } else {
-        // .hexa module — cmd_run dispatch. Note: most absorbed modules are
-        // libraries without a fn main(); invoking them via the CLI surface
-        // requires a per-module entry shim, tracked as a separate follow-up.
-        cmd_run(script, ab_args)
+        // .hexa module dispatch.
+        //
+        // R7 track B (2026-05-18, Phase 3/4 batch): prefer a standalone
+        // compiled bin/hexa-absorbed-<verb> binary (built by
+        // tool/build_absorbed_binaries.sh) over the legacy cmd_run interp
+        // path. Same spawn-and-exit pattern as the named-verb cycles:
+        // shq-quote args, exec with __HEXA_SHIM_RC__ marker, propagate
+        // exit code. Falls back to cmd_run when the binary is absent
+        // (transitional — modules that don't yet compile cleanly, e.g.
+        // network-bridge deps or the atlas-memory cluster, keep working
+        // via interp until their own follow-up).
+        let mut abin = ""
+        if len(__inst) > 0 {
+            let inst_abin = __inst + "/bin/hexa-absorbed-" + verb
+            if file_exists(inst_abin) { abin = inst_abin }
+        }
+        if len(abin) == 0 && file_exists("bin/hexa-absorbed-" + verb) {
+            abin = "bin/hexa-absorbed-" + verb
+        }
+        if len(abin) > 0 {
+            let cli_q = shq(abin)
+            // R7 track B (2026-05-18): force HEXA_VAL_ARENA=0 for absorbed
+            // sub-binaries. The discovery-engine family (drill/kick/omega/
+            // chain/…) churns heavy struct/map sets through round_run; the
+            // default-ON bump arena (S7-B) reclaims a block whose backing a
+            // map HexaVal still references → hexa_map_get_ic_slow derefs a
+            // stale HX_MAP_TBL ptr → SIGSEGV on certain seeds (verified:
+            // lldb frame#0 hexa_map_get_ic_slow, EXC_BAD_ACCESS). Arena=0
+            // (heap alloc, no reclaim aliasing) is byte-eq for working
+            // seeds (seed A total=687 ON≡OFF) and makes segfaulting seeds
+            // run deterministically (seed B total=683 ×2). These are
+            // short-lived verb CLIs — the arena's only benefit (multi-GB
+            // self-compile RSS) is irrelevant here; correctness wins. The
+            // deep runtime root-fix (arena-escape heapify / IC ptr revalidation)
+            // is fixpoint-critical (aprime_cc/hexa_v2 map-IC) → tracked
+            // separately; this is the sound integration-layer fix.
+            let mut cmd = "HEXA_VAL_ARENA=0 " + cli_q
+            let mut ai = 0
+            while ai < len(ab_args) {
+                let q = shq(ab_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut sj = len(out) - mlen
+            while sj >= 0 {
+                if out.substring(sj, sj + mlen) == marker {
+                    midx = sj
+                    sj = -1
+                } else {
+                    sj = sj - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            cmd_run(script, ab_args)
+        }
     }
 }
 
@@ -1588,6 +1665,34 @@ fn resolve_interp() {
     return ""
 }
 
+// interp-retirement R7 gate #4: prefer a COMPILED module_loader binary so the
+// `hexa build` flatten step runs interp-free. Probes (in order) $HEXA_MODULE_LOADER
+// env override, <install>/build/hexa_module_loader, ./build/hexa_module_loader,
+// $HEXA_LANG/build/hexa_module_loader. Returns "" when no compiled binary exists
+// (caller then falls back to resolve_module_loader() + interp). Built via
+// tool/build_hexa_cli.sh.
+fn resolve_module_loader_compiled() {
+    let env_ml = exec("printf '%s' \"$HEXA_MODULE_LOADER\"")
+    if len(env_ml) > 0 {
+        let env_chk = exec("test -x '" + env_ml + "' && printf yes || printf no")
+        if env_chk == "yes" { return env_ml }
+    }
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 {
+        let inst_ml = inst + "/build/hexa_module_loader"
+        let inst_chk = exec("test -x '" + inst_ml + "' && printf yes || printf no")
+        if inst_chk == "yes" { return inst_ml }
+    }
+    let cwd_chk = exec("test -x './build/hexa_module_loader' && printf yes || printf no")
+    if cwd_chk == "yes" { return "./build/hexa_module_loader" }
+    let home_ml = exec("printf '%s' \"$HEXA_LANG/build/hexa_module_loader\"")
+    if len(home_ml) > 0 {
+        let home_chk = exec("test -x '" + home_ml + "' && printf yes || printf no")
+        if home_chk == "yes" { return home_ml }
+    }
+    return ""
+}
+
 fn resolve_module_loader() {
     let inst = install_dir_from_argv0()
     if len(inst) > 0 {
@@ -1788,13 +1893,20 @@ fn cmd_build(src, out, c_only, target) {
     let __has_use_dir = __src_probe.contains("\nuse \"") || __src_probe.starts_with("use \"")
     let __has_imp_dir = __src_probe.contains("\nimport \"") || __src_probe.starts_with("import \"")
     if __has_use_dir || __has_imp_dir {
-        let __interp = resolve_interp()
-        let __ml = resolve_module_loader()
-        if len(__interp) > 0 && len(__ml) > 0 {
+        // R7 gate #4: prefer the COMPILED module_loader binary (interp-free
+        // flatten). Fall back to interp + module_loader.hexa source only when
+        // no compiled binary is installed.
+        let __ml_compiled = resolve_module_loader_compiled()
+        let __interp = if len(__ml_compiled) > 0 { "" } else { resolve_interp() }
+        let __ml = if len(__ml_compiled) > 0 { __ml_compiled } else { resolve_module_loader() }
+        let __ml_ok = len(__ml_compiled) > 0 || (len(__interp) > 0 && len(__ml) > 0)
+        if __ml_ok {
             let __expanded = runtime_tmpname("hexa_build_expanded") + ".hexa"
             // orpheus O-002 / F-013: pass install dir to module_loader (see
             // module_loader_env_prefix) so stdlib/* resolves env-free.
-            let __preproc = module_loader_env_prefix() + "'" + __interp + "' '" + __ml + "' '" + src + "' '" + __expanded + "' 2>&1"
+            // compiled path: `<ml_bin> <src> <out>`; interp path: `<interp> <ml.hexa> <src> <out>`.
+            let __ml_invoke = if len(__ml_compiled) > 0 { "'" + __ml_compiled + "'" } else { "'" + __interp + "' '" + __ml + "'" }
+            let __preproc = module_loader_env_prefix() + __ml_invoke + " '" + src + "' '" + __expanded + "' 2>&1"
             println("  [flat] module_loader → " + __expanded)
             let __pair = exec_with_status(__preproc)
             let __pout = __pair[0]
@@ -2157,6 +2269,30 @@ fn cmd_run_dispatch(file, extra_args, want_vm) {
     cmd_run_vm_mode = want_vm
     cmd_run(file, extra_args)
     cmd_run_vm_mode = false
+}
+
+// R7 — option B (interp deprecation, source preserved).
+// `hexa run <file>` and the hexa://run URL action are USER-DIRECT
+// invocations of the tree-walking interpreter; emit a stderr
+// deprecation warning before delegating to cmd_run_dispatch. The 16+
+// absorbed-verb sites (lsp / test / check / qrng / batch / …) keep
+// calling cmd_run directly — they are internal infrastructure, not
+// surfaces a user is asked to type, so they are silent until track B
+// (sub-binary re-targeting) lands and they can be migrated. The
+// warning is silenced by HEXA_INTERP_QUIET=1 for CI and downstream
+// consumers still on the interp path. Functionality is preserved
+// (loss = 0); only the user-visible signal that `hexa run` is on the
+// retirement track is added. See AGENTS.tape @D g_interp_deprecated
+// and compiler/PLAN.md "R7 Phase 1 entanglement map" for the full
+// rationale + Phase 2 split.
+fn cmd_run_user_direct(file, extra_args, want_vm) {
+    if env_var("HEXA_INTERP_QUIET") != "1" {
+        eprintln("hexa: warning — `hexa run` (tree-walking interpreter) is deprecated and on the retirement track (R7).")
+        eprintln("hexa:   prefer the native path: `hexa build " + file + "` then run the produced binary,")
+        eprintln("hexa:   or use bin/hexa-run-native (auto-fallback to compiled paths).")
+        eprintln("hexa:   silence: set HEXA_INTERP_QUIET=1.")
+    }
+    cmd_run_dispatch(file, extra_args, want_vm)
 }
 
 fn cmd_run(file, extra_args) {
@@ -3026,7 +3162,14 @@ if len(av) < 3 {
                 cmd_help()
             } else {
                 cmd_run_no_sentinel_mode = want_no_sentinel
-                cmd_run_dispatch(file_arg, run_args, want_vm)
+                // R7 option B — top-level `hexa run <file>` is a user-
+                // direct invocation: route via cmd_run_user_direct so
+                // the stderr deprecation warning fires (silenceable
+                // via HEXA_INTERP_QUIET=1). All 16+ absorbed-verb
+                // sites (lsp / test / check / qrng / batch / …) still
+                // call cmd_run / cmd_run_dispatch directly — they are
+                // internal infrastructure and migrate in track B.
+                cmd_run_user_direct(file_arg, run_args, want_vm)
                 cmd_run_no_sentinel_mode = false
             }
         }
@@ -3099,8 +3242,29 @@ if len(av) < 3 {
         }
     } else if sub == "lsp" || sub == "--lsp" {
         // LSP server entry — editors/vscode/extension.js spawns `hexa --lsp`.
-        // Forward to interp interpreter running self/lsp.hexa (run_lsp loop).
-        // cmd_run handles interp locate + stdin fd 3 plumbing + rc propagation.
+        //
+        // R7 track B (2026-05-18, cycle 10): preferred path = standalone
+        // compiled bin/hexa-lsp binary. Unlike other track B verbs which
+        // use exec()-buffered spawn, LSP needs unbuffered bidirectional
+        // stdin/stdout streaming (JSON-RPC). exec_replace() replaces this
+        // process image with the binary so editor pipes are inherited
+        // verbatim — no popen buffering, no __HEXA_RC sentinel interleave.
+        // Falls back to legacy cmd_run() when the binary is absent.
+        let __inst_lsp = install_dir_from_argv0()
+        let mut lsp_bin = ""
+        if len(__inst_lsp) > 0 {
+            let inst_bin = __inst_lsp + "/bin/hexa-lsp"
+            if file_exists(inst_bin) { lsp_bin = inst_bin }
+        }
+        if len(lsp_bin) == 0 && file_exists("bin/hexa-lsp") {
+            lsp_bin = "bin/hexa-lsp"
+        }
+        if len(lsp_bin) > 0 {
+            // exec_replace does not return on success — process becomes
+            // the LSP binary with stdin/stdout/stderr fully inherited.
+            let _ = exec_replace(shq(lsp_bin))
+            // Only reached if execvp failed — fall through to cmd_run.
+        }
         cmd_run("self/lsp.hexa", [])
     } else if sub == "build" {
         if len(av) < 4 {
@@ -3145,27 +3309,81 @@ if len(av) < 3 {
         // T3 Phase A: AST-based @invariant DSL checker.
         // self/invariant_check.hexa 가 interp 에서 실행되며 file 인자를
         // 받아 @invariant 블록을 추출 + predicate 검증한다.
+        //
+        // R7 track B (2026-05-18, cycle 6): preferred path = standalone
+        // compiled bin/hexa-check binary. invariant_check.hexa main_check →
+        // main rename + module-level call removal.
         if len(av) < 4 {
             println("error: 'check' requires <file>")
             cmd_help()
             exit(1)
         } else {
-            // resolve absolute path to invariant_check.hexa via install_dir
             let __inst_c = install_dir_from_argv0()
-            let mut chk_script = ""
-            if len(__inst_c) > 0 {
-                chk_script = __inst_c + "/self/invariant_check.hexa"
-            } else {
-                chk_script = "self/invariant_check.hexa"
-            }
             let chk_args = [av[3]]
-            cmd_run(chk_script, chk_args)
+            let mut chk_bin = ""
+            if len(__inst_c) > 0 {
+                let inst_bin = __inst_c + "/bin/hexa-check"
+                if file_exists(inst_bin) { chk_bin = inst_bin }
+            }
+            if len(chk_bin) == 0 && file_exists("bin/hexa-check") {
+                chk_bin = "bin/hexa-check"
+            }
+            if len(chk_bin) > 0 {
+                let cli_q = shq(chk_bin)
+                let mut cmd = cli_q
+                let mut ai = 0
+                while ai < len(chk_args) {
+                    let q = shq(chk_args[ai])
+                    cmd = cmd + " " + q
+                    ai = ai + 1
+                }
+                let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+                let marker = "__HEXA_SHIM_RC__="
+                let mlen = len(marker)
+                let mut midx = -1
+                let mut sj = len(out) - mlen
+                while sj >= 0 {
+                    if out.substring(sj, sj + mlen) == marker {
+                        midx = sj
+                        sj = -1
+                    } else {
+                        sj = sj - 1
+                    }
+                }
+                if midx >= 0 {
+                    let body = out.substring(0, midx)
+                    let rc_str = out.substring(midx + mlen, len(out))
+                    print(body)
+                    let mut rs = rc_str
+                    let rsl = len(rs)
+                    if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                        rs = rs.substring(0, rsl - 1)
+                    }
+                    let rc = parse_int_str(rs)
+                    if rc != 0 { exit(rc) }
+                } else {
+                    print(out)
+                }
+            } else {
+                let mut chk_script = ""
+                if len(__inst_c) > 0 {
+                    chk_script = __inst_c + "/self/invariant_check.hexa"
+                } else {
+                    chk_script = "self/invariant_check.hexa"
+                }
+                cmd_run(chk_script, chk_args)
+            }
         }
     } else if sub == "convergence" {
         // convergence: source-embedded convergence metadata → JSON dump.
         // 3 formats: A) block @convergence-start/end  B) single-line comment  C) @convergence(...) attr
         // self/convergence_scan.hexa 가 파일을 스캔하고 블록을 추출 → JSON 출력.
         // 하위 명령: dump <file> / dump-meta <file>
+        //
+        // R7 track B (2026-05-18, cycle 4): preferred path = standalone
+        // compiled bin/hexa-convergence binary. cs_main → main renamed in
+        // source so single fn main entry serves both spawn and interp
+        // auto-invoke. Falls back to legacy cmd_run() when binary absent.
         if len(av) < 5 {
             println("error: 'convergence' requires <subcmd> <file>")
             println("usage: hexa convergence dump <file>")
@@ -3173,53 +3391,155 @@ if len(av) < 3 {
             exit(1)
         } else {
             let __inst_cv = install_dir_from_argv0()
-            let mut cv_script = ""
-            if len(__inst_cv) > 0 {
-                cv_script = __inst_cv + "/self/convergence_scan.hexa"
-            } else {
-                cv_script = "self/convergence_scan.hexa"
-            }
-            // av[3] = subcmd (dump | dump-meta), av[4] = file
             let mut cv_args = [av[3], av[4]]
             let mut cvi = 5
             while cvi < len(av) {
                 cv_args.push(av[cvi])
                 cvi = cvi + 1
             }
-            cmd_run(cv_script, cv_args)
+            let mut cv_bin = ""
+            if len(__inst_cv) > 0 {
+                let inst_bin = __inst_cv + "/bin/hexa-convergence"
+                if file_exists(inst_bin) { cv_bin = inst_bin }
+            }
+            if len(cv_bin) == 0 && file_exists("bin/hexa-convergence") {
+                cv_bin = "bin/hexa-convergence"
+            }
+            if len(cv_bin) > 0 {
+                let cli_q = shq(cv_bin)
+                let mut cmd = cli_q
+                let mut ai = 0
+                while ai < len(cv_args) {
+                    let q = shq(cv_args[ai])
+                    cmd = cmd + " " + q
+                    ai = ai + 1
+                }
+                let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+                let marker = "__HEXA_SHIM_RC__="
+                let mlen = len(marker)
+                let mut midx = -1
+                let mut sj = len(out) - mlen
+                while sj >= 0 {
+                    if out.substring(sj, sj + mlen) == marker {
+                        midx = sj
+                        sj = -1
+                    } else {
+                        sj = sj - 1
+                    }
+                }
+                if midx >= 0 {
+                    let body = out.substring(0, midx)
+                    let rc_str = out.substring(midx + mlen, len(out))
+                    print(body)
+                    let mut rs = rc_str
+                    let rsl = len(rs)
+                    if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                        rs = rs.substring(0, rsl - 1)
+                    }
+                    let rc = parse_int_str(rs)
+                    if rc != 0 { exit(rc) }
+                } else {
+                    print(out)
+                }
+            } else {
+                let mut cv_script = ""
+                if len(__inst_cv) > 0 {
+                    cv_script = __inst_cv + "/self/convergence_scan.hexa"
+                } else {
+                    cv_script = "self/convergence_scan.hexa"
+                }
+                cmd_run(cv_script, cv_args)
+            }
         }
     } else if sub == "test" {
         // P1 (2026-04-18): native @test 러너.
         // self/test_runner.hexa 가 대상 파일을 스캔하고 @test fn 을 수집·실행.
         // anima --selftest 관행은 러너가 자동 fallback 으로 유지 (additive).
         // 경로 해석: install_dir → cwd 순서로 존재하는 것 선택 (worktree 지원).
+        //
+        // R7 track B (2026-05-18, cycle 5): preferred path = standalone
+        // compiled bin/hexa-test binary. test_runner.hexa was reshaped:
+        // module-level entry block wrapped in `fn main()` so compiled
+        // binary entry works; interp `hexa run` auto-invokes main() too.
         if len(av) < 4 {
             println("error: 'test' requires <file>")
             println("usage: hexa test <file.hexa> [--filter NAME] [--verbose] [--selftest-only]")
             exit(2)
         } else {
             let __inst_t = install_dir_from_argv0()
-            let mut test_script = "self/test_runner.hexa"
-            if len(__inst_t) > 0 {
-                let inst_path = __inst_t + "/self/test_runner.hexa"
-                if file_exists(inst_path) {
-                    test_script = inst_path
-                } else if !file_exists(test_script) {
-                    // install_dir 에 없고 cwd 에도 없으면 $HEXA_LANG 시도.
-                    let hl = env_var("HEXA_LANG")
-                    if len(hl) > 0 {
-                        let hl_path = hl + "/self/test_runner.hexa"
-                        if file_exists(hl_path) { test_script = hl_path }
-                    }
-                }
-            }
             let mut test_args = []
             let mut ti = 3
             while ti < len(av) {
                 test_args.push(av[ti])
                 ti = ti + 1
             }
-            cmd_run(test_script, test_args)
+            let mut test_bin = ""
+            if len(__inst_t) > 0 {
+                let inst_bin = __inst_t + "/bin/hexa-test"
+                if file_exists(inst_bin) { test_bin = inst_bin }
+            }
+            if len(test_bin) == 0 && file_exists("bin/hexa-test") {
+                test_bin = "bin/hexa-test"
+            }
+            if len(test_bin) == 0 {
+                let hl = env_var("HEXA_LANG")
+                if len(hl) > 0 {
+                    let hl_bin = hl + "/bin/hexa-test"
+                    if file_exists(hl_bin) { test_bin = hl_bin }
+                }
+            }
+            if len(test_bin) > 0 {
+                let cli_q = shq(test_bin)
+                let mut cmd = cli_q
+                let mut ai = 0
+                while ai < len(test_args) {
+                    let q = shq(test_args[ai])
+                    cmd = cmd + " " + q
+                    ai = ai + 1
+                }
+                let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+                let marker = "__HEXA_SHIM_RC__="
+                let mlen = len(marker)
+                let mut midx = -1
+                let mut sj = len(out) - mlen
+                while sj >= 0 {
+                    if out.substring(sj, sj + mlen) == marker {
+                        midx = sj
+                        sj = -1
+                    } else {
+                        sj = sj - 1
+                    }
+                }
+                if midx >= 0 {
+                    let body = out.substring(0, midx)
+                    let rc_str = out.substring(midx + mlen, len(out))
+                    print(body)
+                    let mut rs = rc_str
+                    let rsl = len(rs)
+                    if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                        rs = rs.substring(0, rsl - 1)
+                    }
+                    let rc = parse_int_str(rs)
+                    if rc != 0 { exit(rc) }
+                } else {
+                    print(out)
+                }
+            } else {
+                let mut test_script = "self/test_runner.hexa"
+                if len(__inst_t) > 0 {
+                    let inst_path = __inst_t + "/self/test_runner.hexa"
+                    if file_exists(inst_path) {
+                        test_script = inst_path
+                    } else if !file_exists(test_script) {
+                        let hl = env_var("HEXA_LANG")
+                        if len(hl) > 0 {
+                            let hl_path = hl + "/self/test_runner.hexa"
+                            if file_exists(hl_path) { test_script = hl_path }
+                        }
+                    }
+                }
+                cmd_run(test_script, test_args)
+            }
         }
     } else if sub == "tape" {
         // L2: native .tape v1.2 reader (inlined, C-compiled — no cmd_run).
@@ -3240,26 +3560,18 @@ if len(av) < 3 {
             exit(hxc_dump(av[3]))
         }
     } else if sub == "init" {
-        // scaffold <dir>/project.hexa via tool/init_project.hexa
-        // check/convergence 와 같은 패턴: install_dir 로 절대경로 해석 후 cmd_run 위임.
-        if len(av) < 4 {
-            println("error: 'init' requires <target-dir>")
-            cmd_help()
-            exit(1)
-        } else {
-            let __inst_i = install_dir_from_argv0()
-            let mut init_script = "tool/init_project.hexa"
-            if len(__inst_i) > 0 {
-                init_script = __inst_i + "/tool/init_project.hexa"
-            }
-            let mut init_args = []
-            let mut ii = 3
-            while ii < len(av) {
-                init_args.push(av[ii])
-                ii = ii + 1
-            }
-            cmd_run(init_script, init_args)
-        }
+        // R7 track B (2026-05-18): the scaffolder tool/init_project.hexa
+        // does NOT exist in-tree — the prior `cmd_run(init_script, …)`
+        // dereferenced a missing file, so `hexa init` never functioned via
+        // interp either. Removing the cmd_run call site (R7 interp-dep
+        // drain) and emitting an honest "not implemented" instead of a
+        // cryptic loader failure. If a project scaffolder lands later it
+        // should be a standalone bin/hexa-init binary (track B pattern),
+        // not a cmd_run target.
+        println("error: `hexa init` is not implemented in this build")
+        println("  (the project scaffolder tool/init_project.hexa is absent;")
+        println("   scaffold a project.hexa manually, or file an inbox patch)")
+        exit(1)
     } else if sub == "url" {
         if len(av) < 4 {
             println("error: hexa url requires URL argument (e.g. 'hexa://run?file=/path/script.hexa')")
@@ -3273,91 +3585,419 @@ if len(av) < 3 {
         // ⚪ SPECULATION-FENCED). Cross-project rubric: atlas g_self_verify +
         // TECS-L n6-replication Tier1/2/3 + anima HEXAD g_verdict_tier_blue +
         // hexa-bio AXIS speculation-fence. NOT just a registry (cf. `hexa atlas`).
+        // R7 track B (2026-05-18, cycle 8): preferred path = standalone
+        // compiled bin/hexa-verify binary built by `hexa build
+        // tool/verify_cli.hexa`. cross-directory `compiler/atlas/*` use
+        // resolved by patched module_loader (cycle 7 ml_canon_path).
         let __inst_v = install_dir_from_argv0()
-        let mut verify_script = "tool/verify_cli.hexa"
-        if len(__inst_v) > 0 {
-            let inst_path_v = __inst_v + "/tool/verify_cli.hexa"
-            if file_exists(inst_path_v) { verify_script = inst_path_v }
-        }
         let mut verify_args = []
         let mut vi = 3
         while vi < len(av) {
             verify_args.push(av[vi])
             vi = vi + 1
         }
-        cmd_run(verify_script, verify_args)
+        let mut verify_bin = ""
+        if len(__inst_v) > 0 {
+            let inst_bin = __inst_v + "/bin/hexa-verify"
+            if file_exists(inst_bin) { verify_bin = inst_bin }
+        }
+        if len(verify_bin) == 0 && file_exists("bin/hexa-verify") {
+            verify_bin = "bin/hexa-verify"
+        }
+        if len(verify_bin) > 0 {
+            let cli_q = shq(verify_bin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(verify_args) {
+                let q = shq(verify_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut sj = len(out) - mlen
+            while sj >= 0 {
+                if out.substring(sj, sj + mlen) == marker {
+                    midx = sj
+                    sj = -1
+                } else {
+                    sj = sj - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut verify_script = "tool/verify_cli.hexa"
+            if len(__inst_v) > 0 {
+                let inst_path_v = __inst_v + "/tool/verify_cli.hexa"
+                if file_exists(inst_path_v) { verify_script = inst_path_v }
+            }
+            cmd_run(verify_script, verify_args)
+        }
     } else if sub == "calc" {
         // TECS-L calculators absorbed hexa-native (compiler/atlas/symbolic/*).
         // Single CLI surface (NOT one file per calculator); algorithms shared
         // with compiler/atlas/verify/* so verdict-gating and `hexa calc` use
         // one hexa-native impl (g_self_verify). Zero fs I/O, zero nexus dep.
+        //
+        // R7 track B (2026-05-18, cycle 9): preferred path = standalone
+        // compiled bin/hexa-calc binary. Same as verify (cycle 8) — depends
+        // on cycle 7 module_loader patch for cross-directory use flatten.
         let __inst_c = install_dir_from_argv0()
-        let mut calc_script = "tool/calc_cli.hexa"
-        if len(__inst_c) > 0 {
-            let inst_path_c = __inst_c + "/tool/calc_cli.hexa"
-            if file_exists(inst_path_c) { calc_script = inst_path_c }
-        }
         let mut calc_args = []
         let mut ci = 3
         while ci < len(av) {
             calc_args.push(av[ci])
             ci = ci + 1
         }
-        cmd_run(calc_script, calc_args)
+        let mut calc_bin = ""
+        if len(__inst_c) > 0 {
+            let inst_bin = __inst_c + "/bin/hexa-calc"
+            if file_exists(inst_bin) { calc_bin = inst_bin }
+        }
+        if len(calc_bin) == 0 && file_exists("bin/hexa-calc") {
+            calc_bin = "bin/hexa-calc"
+        }
+        if len(calc_bin) > 0 {
+            let cli_q = shq(calc_bin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(calc_args) {
+                let q = shq(calc_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut sj = len(out) - mlen
+            while sj >= 0 {
+                if out.substring(sj, sj + mlen) == marker {
+                    midx = sj
+                    sj = -1
+                } else {
+                    sj = sj - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut calc_script = "tool/calc_cli.hexa"
+            if len(__inst_c) > 0 {
+                let inst_path_c = __inst_c + "/tool/calc_cli.hexa"
+                if file_exists(inst_path_c) { calc_script = inst_path_c }
+            }
+            cmd_run(calc_script, calc_args)
+        }
     } else if sub == "atlas" {
         // ATLAS_N6_RETIREMENT_PLAN.md §0b Phase 2: hexa-native atlas surface.
         // tool/atlas_cli.hexa reads the embedded static_atlas() — zero fs I/O,
         // zero nexus dependency. Supersedes the prior nexus-cli proxy path
         // for "atlas" (the other subs — smash/free/etc — still proxy).
+        // R7 track B (2026-05-18): preferred path = standalone compiled
+        // bin/hexa-atlas. The module_loader cycle-safe DFS fix
+        // (static_index↔prefix_index 2-cycle was ping-ponging 60k× →
+        // OOM) + embedded.gen sever (dist/atlas.hxc is the canonical
+        // runtime SSOT) + list_dir codegen mapping unblocked the build.
+        // cmd_run fallback retained when binary absent.
         let __inst_a = install_dir_from_argv0()
-        let mut atlas_script = "tool/atlas_cli.hexa"
-        if len(__inst_a) > 0 {
-            let inst_path = __inst_a + "/tool/atlas_cli.hexa"
-            if file_exists(inst_path) { atlas_script = inst_path }
-        }
         let mut atlas_args = []
         let mut ai = 3
         while ai < len(av) {
             atlas_args.push(av[ai])
             ai = ai + 1
         }
-        cmd_run(atlas_script, atlas_args)
+        let mut atlas_bin = ""
+        if len(__inst_a) > 0 {
+            let inst_bin = __inst_a + "/bin/hexa-atlas"
+            if file_exists(inst_bin) { atlas_bin = inst_bin }
+        }
+        if len(atlas_bin) == 0 && file_exists("bin/hexa-atlas") {
+            atlas_bin = "bin/hexa-atlas"
+        }
+        if len(atlas_bin) > 0 {
+            let cli_q = shq(atlas_bin)
+            let mut cmd = cli_q
+            let mut aj = 0
+            while aj < len(atlas_args) {
+                let q = shq(atlas_args[aj])
+                cmd = cmd + " " + q
+                aj = aj + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut sj = len(out) - mlen
+            while sj >= 0 {
+                if out.substring(sj, sj + mlen) == marker {
+                    midx = sj
+                    sj = -1
+                } else {
+                    sj = sj - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut atlas_script = "tool/atlas_cli.hexa"
+            if len(__inst_a) > 0 {
+                let inst_path = __inst_a + "/tool/atlas_cli.hexa"
+                if file_exists(inst_path) { atlas_script = inst_path }
+            }
+            cmd_run(atlas_script, atlas_args)
+        }
     } else if sub == "qrng" {
         // RFC 044 — stdlib/qrng dispatch.
         // stdlib/qrng/qrng.hexa parses argv subcommand (status/collect/selftest/
         // chain/meta/--help/--version) and dispatches to library functions.
-        // No separate CLI binary — single-file dispatcher in stdlib.
+        //
+        // R7 track B (2026-05-18): preferred path = standalone compiled
+        // bin/hexa-qrng binary built by `hexa build stdlib/qrng/qrng.hexa`.
+        // Spawn-and-exit dispatch with shim rc marker (mirrors argv0 shim
+        // pattern) — output buffered then forwarded, exit code propagated.
+        // Falls back to legacy cmd_run() on the .hexa source when the binary
+        // is absent (transitional; pinned by g_inbox_dual_track until interp
+        // retire R7 completes).
         let __inst_q = install_dir_from_argv0()
-        let mut qrng_script = "stdlib/qrng/qrng.hexa"
-        if len(__inst_q) > 0 {
-            let inst_path = __inst_q + "/stdlib/qrng/qrng.hexa"
-            if file_exists(inst_path) { qrng_script = inst_path }
-        }
         let mut qrng_args = []
         let mut qi = 3
         while qi < len(av) {
             qrng_args.push(av[qi])
             qi = qi + 1
         }
-        cmd_run(qrng_script, qrng_args)
+        let mut qrng_bin = ""
+        if len(__inst_q) > 0 {
+            let inst_bin = __inst_q + "/bin/hexa-qrng"
+            if file_exists(inst_bin) { qrng_bin = inst_bin }
+        }
+        if len(qrng_bin) == 0 && file_exists("bin/hexa-qrng") {
+            qrng_bin = "bin/hexa-qrng"
+        }
+        if len(qrng_bin) > 0 {
+            let cli_q = shq(qrng_bin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(qrng_args) {
+                let q = shq(qrng_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut si = len(out) - mlen
+            while si >= 0 {
+                if out.substring(si, si + mlen) == marker {
+                    midx = si
+                    si = -1
+                } else {
+                    si = si - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut qrng_script = "stdlib/qrng/qrng.hexa"
+            if len(__inst_q) > 0 {
+                let inst_path = __inst_q + "/stdlib/qrng/qrng.hexa"
+                if file_exists(inst_path) { qrng_script = inst_path }
+            }
+            cmd_run(qrng_script, qrng_args)
+        }
     } else if sub == "sim-universe" {
         // RFC 046 — stdlib/sim_universe dispatch.
         // stdlib/sim_universe/sim_universe.hexa parses argv subcommand
         // (status/selftest/anu/multiverse/qpu/qrng/bostrom/godel/fvd/stark/...)
         // RFC 046-A landed substrate code; RFC 046-B landed 15 experiments.
+        //
+        // R7 track B (2026-05-18, cycle 3): preferred path = standalone
+        // compiled bin/hexa-sim-universe binary built by `hexa build
+        // stdlib/sim_universe/sim_universe.hexa`. Same spawn-and-exit
+        // pattern as qrng/qmirror (cycles 1/2). Falls back to legacy
+        // cmd_run() when binary is absent.
         let __inst_s = install_dir_from_argv0()
-        let mut su_script = "stdlib/sim_universe/sim_universe.hexa"
-        if len(__inst_s) > 0 {
-            let inst_path = __inst_s + "/stdlib/sim_universe/sim_universe.hexa"
-            if file_exists(inst_path) { su_script = inst_path }
-        }
         let mut su_args = []
         let mut si = 3
         while si < len(av) {
             su_args.push(av[si])
             si = si + 1
         }
-        cmd_run(su_script, su_args)
+        let mut su_bin = ""
+        if len(__inst_s) > 0 {
+            let inst_bin = __inst_s + "/bin/hexa-sim-universe"
+            if file_exists(inst_bin) { su_bin = inst_bin }
+        }
+        if len(su_bin) == 0 && file_exists("bin/hexa-sim-universe") {
+            su_bin = "bin/hexa-sim-universe"
+        }
+        if len(su_bin) > 0 {
+            let cli_q = shq(su_bin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(su_args) {
+                let q = shq(su_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut sj = len(out) - mlen
+            while sj >= 0 {
+                if out.substring(sj, sj + mlen) == marker {
+                    midx = sj
+                    sj = -1
+                } else {
+                    sj = sj - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut su_script = "stdlib/sim_universe/sim_universe.hexa"
+            if len(__inst_s) > 0 {
+                let inst_path = __inst_s + "/stdlib/sim_universe/sim_universe.hexa"
+                if file_exists(inst_path) { su_script = inst_path }
+            }
+            cmd_run(su_script, su_args)
+        }
+    } else if sub == "qmirror" {
+        // RFC 045 — stdlib/quantum dispatch.
+        // stdlib/quantum/quantum.hexa parses argv subcommand (status/selftest/
+        // chsh/iit/qrng/rqaoa/ctx/.../mirror-bench) and invokes the matching
+        // module via subprocess. 38 module dirs, 62k LoC, all parse-clean.
+        //
+        // R7 track B (2026-05-18, cycle 2): preferred path = standalone
+        // compiled bin/hexa-qmirror binary built by `hexa build
+        // stdlib/quantum/quantum.hexa`. Same spawn-and-exit pattern as
+        // qrng (cycle 1). Falls back to legacy cmd_run() on the .hexa
+        // source when the binary is absent (transitional;
+        // g_inbox_dual_track until R7 source deletion).
+        let __inst_qm = install_dir_from_argv0()
+        let mut qm_args = []
+        let mut qmi = 3
+        while qmi < len(av) {
+            qm_args.push(av[qmi])
+            qmi = qmi + 1
+        }
+        let mut qm_bin = ""
+        if len(__inst_qm) > 0 {
+            let inst_bin = __inst_qm + "/bin/hexa-qmirror"
+            if file_exists(inst_bin) { qm_bin = inst_bin }
+        }
+        if len(qm_bin) == 0 && file_exists("bin/hexa-qmirror") {
+            qm_bin = "bin/hexa-qmirror"
+        }
+        if len(qm_bin) > 0 {
+            let cli_q = shq(qm_bin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(qm_args) {
+                let q = shq(qm_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut si = len(out) - mlen
+            while si >= 0 {
+                if out.substring(si, si + mlen) == marker {
+                    midx = si
+                    si = -1
+                } else {
+                    si = si - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut qm_script = "stdlib/quantum/quantum.hexa"
+            if len(__inst_qm) > 0 {
+                let inst_path = __inst_qm + "/stdlib/quantum/quantum.hexa"
+                if file_exists(inst_path) { qm_script = inst_path }
+            }
+            cmd_run(qm_script, qm_args)
+        }
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //

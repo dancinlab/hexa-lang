@@ -1,0 +1,40 @@
+Warning: Cell type 'sky130_fd_sc_hd__a41oi_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__a31oi_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o22ai_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o31a_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o31ai_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__nor4_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__a2111oi_0' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__nor4b_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__a211oi_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o32ai_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__a221o_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__lpflow_inputiso1p_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__a222oi_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__and4_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__a31o_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o41ai_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__a2bb2oi_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__nand3b_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o311ai_0' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__a211o_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o221ai_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__xor3_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__nand4bb_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__nand4b_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o2111ai_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o2bb2ai_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o22a_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o221a_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__o311a_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__a2111o_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__or4b_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__nor4bb_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__edfxtp_1' not recognised! Ignoring.
+Warning: Cell type 'sky130_fd_sc_hd__dfxtp_1' not recognised! Ignoring.
+No timing paths found.
+
+Warnings: 69 unique messages, 69 total
+End of script. Logfile hash: 6f9c07eac1, time: 14.86s, user: 11.89s, system: 0.38s, MEM: 1267.97 MB peak
+Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 21.0.0 -fPIC -O3)
+Time spent: 26% 1x techmap (4 sec), 23% 100x opt_expr (3 sec), 22% 2x abc (3 sec), ...

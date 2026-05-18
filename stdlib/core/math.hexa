@@ -5,23 +5,23 @@
 //
 // n=6 수학 유틸리티
 
-pub fn abs(x) {
+pub fn abs(x) -> int {
     if x < 0 { -x } else { x }
 }
 
-pub fn max(a, b) {
+pub fn max(a, b) -> int {
     if a > b { a } else { b }
 }
 
-pub fn min(a, b) {
+pub fn min(a, b) -> int {
     if a < b { a } else { b }
 }
 
-pub fn clamp(x, lo, hi) {
+pub fn clamp(x, lo, hi) -> int {
     if x < lo { lo } else if x > hi { hi } else { x }
 }
 
-pub fn gcd(a, b) {
+pub fn gcd(a, b) -> int {
     let x = abs(a)
     let y = abs(b)
     while y != 0 {
@@ -32,11 +32,11 @@ pub fn gcd(a, b) {
     x
 }
 
-pub fn lcm(a, b) {
+pub fn lcm(a, b) -> int {
     if a == 0 || b == 0 { 0 } else { abs(a * b) / gcd(a, b) }
 }
 
-pub fn pow(base, exp) {
+pub fn pow(base, exp) -> int {
     let result = 1
     let i = 0
     while i < exp {
@@ -46,7 +46,7 @@ pub fn pow(base, exp) {
     result
 }
 
-pub fn factorial(n) {
+pub fn factorial(n) -> int {
     let result = 1
     let i = 2
     while i <= n {
@@ -56,7 +56,7 @@ pub fn factorial(n) {
     result
 }
 
-pub fn is_prime(n) {
+pub fn is_prime(n) -> bool {
     if n < 2 { return false }
     if n < 4 { return true }
     if n % 2 == 0 || n % 3 == 0 { return false }
@@ -69,7 +69,7 @@ pub fn is_prime(n) {
 }
 
 // n=6 number theory
-pub fn sigma(n) {
+pub fn sigma(n) -> int {
     let sum = 0
     let i = 1
     while i <= n {
@@ -79,7 +79,7 @@ pub fn sigma(n) {
     sum
 }
 
-pub fn euler_phi(n) {
+pub fn euler_phi(n) -> int {
     if n == 1 { return 1 }
     let count = 0
     let i = 1
@@ -90,7 +90,7 @@ pub fn euler_phi(n) {
     count
 }
 
-pub fn tau(n) {
+pub fn tau(n) -> int {
     let count = 0
     let i = 1
     while i <= n {
@@ -100,7 +100,7 @@ pub fn tau(n) {
     count
 }
 
-pub fn sopfr(n) {
+pub fn sopfr(n) -> int {
     let sum = 0
     let x = n
     let d = 2
@@ -116,7 +116,7 @@ pub fn sopfr(n) {
     sum
 }
 
-pub fn fib(n) {
+pub fn fib(n) -> int {
     let a = 0
     let b = 1
     let i = 0

@@ -85,6 +85,9 @@ fn keyword_kind(word: string) -> TokenKind {
     if word == "as" { return TokenKind::KwAs }
     if word == "true" { return TokenKind::KwTrue }
     if word == "false" { return TokenKind::KwFalse }
+    if word == "try" { return TokenKind::KwTry }
+    if word == "catch" { return TokenKind::KwCatch }
+    if word == "throw" { return TokenKind::KwThrow }
     return TokenKind::Ident
 }
 
@@ -142,6 +145,34 @@ pub fn lex(source: string, file: string) -> [Token] {
                     pos = pos + 1
                     col = col + 1
                 }
+            }
+        } else if ch == '#' {
+            // `#` handling — mirrors self/hexa_full.hexa lexer:
+            //   `#{`  -> HashLBrace token (hash-map literal opener)
+            //   `#!`  -> shebang / directive line — skip to end of line
+            //   `#`   -> standalone hash — skip the single char
+            // The native compiler previously had no `#` token at all, so any
+            // .hexa file using `#{...}` failed to compile (CGFAIL). Two-char
+            // maximal munch: `#{` is emitted as one token so the parser's
+            // primary-expression production can branch on it directly.
+            let start_col = col
+            if pos + 1 < n && chars[pos + 1] == '{' {
+                tokens.push(mk_tok(TokenKind::HashLBrace, "#{",
+                                   mk_span(file, line, start_col, 2)))
+                pos = pos + 2
+                col = col + 2
+            } else if pos + 1 < n && chars[pos + 1] == '!' {
+                // shebang / `#!`-directive line — skip to end of line
+                pos = pos + 2
+                col = col + 2
+                while pos < n && chars[pos] != '\n' {
+                    pos = pos + 1
+                    col = col + 1
+                }
+            } else {
+                // standalone `#` — skip one char
+                pos = pos + 1
+                col = col + 1
             }
         } else if is_atlas_kind_ch(ch) && pos + 1 < n && chars[pos + 1] == '[' {
             // P[id] / C[id] / L[id] / E[id] atlas refs (RFC-017)

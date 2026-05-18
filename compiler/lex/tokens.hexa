@@ -29,6 +29,7 @@ pub enum TokenKind {
     RParen,
     LBrace,
     RBrace,
+    HashLBrace,    // #{ — hash-map literal opener (#{ "k": v, ... })
     LBracket,
     RBracket,
     Char,          // 'c' / '\n' / etc. — A1.5
@@ -88,6 +89,9 @@ pub enum TokenKind {
     KwAs,
     KwTrue,
     KwFalse,
+    KwTry,         // try { ... } catch e { ... } — A1.6 (cycle h20)
+    KwCatch,       // catch e { ... } / catch(e) { ... }
+    KwThrow,       // throw <expr>
 
     // Atlas tokens (RFC-017)
     PNode,         // P[id]

@@ -1103,7 +1103,12 @@ typedef struct HexaValStruct {
 // ── C3 Closure helpers ───────────────────────────────────
 // Build a closure value. Captured values are provided as an already-built
 // TAG_ARRAY HexaVal; we heap-box it so the closure remains valid after copies.
-static inline HexaVal hexa_closure_new(void* fn_ptr, int arity, HexaVal env_arr) {
+// NOTE: extern (not `static inline`) — the aprime_cc separate-compilation path
+// links test programs against a standalone runtime.o, and closure codegen
+// emits `bl _hexa_closure_new`; an internal-linkage definition is invisible
+// across that TU boundary. The runtime.h copy stays `static inline` for
+// header-only includers (no conflict — runtime.c does not include runtime.h).
+HexaVal hexa_closure_new(void* fn_ptr, int arity, HexaVal env_arr) {
     HexaVal v = {.tag=TAG_CLOSURE};
     HX_SET_CLO_PTR_D(v, (HexaClo*)calloc(1, sizeof(HexaClo)));
     HX_SET_CLO_PTR(v, fn_ptr);
@@ -5122,7 +5127,37 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
             }
             return hexa_bool(1);
         }
-        case TAG_MAP: return hexa_bool(HX_MAP_TBL(a) == HX_MAP_TBL(b));
+        case TAG_MAP: {
+            if (HX_MAP_TBL(a) == HX_MAP_TBL(b)) return hexa_bool(1);
+            // #28 — enum value equality. The native (aprime_cc) lowering
+            // represents an enum variant as a map { "__tag": hash, "__pN": … }
+            // (compiler/lower/hir_to_mir.hexa enum_path → struct_lit). Two
+            // separately constructed enum maps for the same variant must
+            // compare equal, mirroring the match-arm `__tag` discriminant
+            // test. Plain maps / structs ("__type__"-keyed, or no marker)
+            // keep pointer-identity semantics — unchanged. Scoped strictly
+            // to "__tag"-bearing maps so struct / dict `==` is untouched.
+            if (hexa_map_contains_key(a, "__tag") && hexa_map_contains_key(b, "__tag")) {
+                HexaVal ta = hexa_map_get(a, "__tag");
+                HexaVal tb = hexa_map_get(b, "__tag");
+                if (!hexa_truthy(hexa_eq(ta, tb))) return hexa_bool(0);
+                // Same variant ⇒ same payload arity. Compare each "__pN"
+                // payload structurally until the first absent slot.
+                for (int __pi = 0; ; __pi++) {
+                    char __pk[24];
+                    snprintf(__pk, sizeof(__pk), "__p%d", __pi);
+                    int ha = hexa_map_contains_key(a, __pk);
+                    int hb = hexa_map_contains_key(b, __pk);
+                    if (!ha && !hb) break;
+                    if (ha != hb) return hexa_bool(0);
+                    if (!hexa_truthy(hexa_eq(hexa_map_get(a, __pk),
+                                             hexa_map_get(b, __pk))))
+                        return hexa_bool(0);
+                }
+                return hexa_bool(1);
+            }
+            return hexa_bool(0);
+        }
         // TAG_FN: compare underlying C function pointer (descriptor indirection
         // may differ for two separately-constructed wrappers of the same fn).
         case TAG_FN:
@@ -12250,6 +12285,39 @@ HexaVal rt_delete_file(HexaVal path) {
     if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_void();
     (void)unlink(HX_STR(path));
     return hexa_void();
+}
+
+// R7 track B (2026-05-18): compiled-path `list_dir(path)`. Byte-parity
+// with the interp impl (self/hexa_full.hexa:14347) — `ls -1 '<path>'
+// 2>/dev/null`, split on '\n', array of entries; empty/err → []. Single-
+// quote-escape the path (same shellout-shape limitation: entries with
+// '\n' lost — inherent, matches interp). Needed by
+// compiler/atlas/merger.hexa::list_dir for the atlas_cli binary.
+HexaVal hexa_list_dir(HexaVal path) {
+    if (!HX_IS_STR(path) || !HX_STR(path) || !HX_STR(path)[0]) return hexa_array_new();
+    const char* p = HX_STR(path);
+    size_t pl = strlen(p), cap = pl * 4 + 32, n = 0;
+    char* cmd = (char*)malloc(cap);
+    const char* pre = "ls -1 '";
+    memcpy(cmd, pre, strlen(pre)); n = strlen(pre);
+    for (size_t i = 0; i < pl; i++) {
+        if (p[i] == '\'') { memcpy(cmd + n, "'\\''", 4); n += 4; }
+        else cmd[n++] = p[i];
+    }
+    const char* post = "' 2>/dev/null";
+    memcpy(cmd + n, post, strlen(post)); n += strlen(post); cmd[n] = 0;
+    FILE* fp = popen(cmd, "r");
+    free(cmd);
+    if (!fp) return hexa_array_new();
+    HexaVal arr = hexa_array_new();
+    char* line = NULL; size_t lcap = 0; ssize_t got;
+    while ((got = getline(&line, &lcap, fp)) >= 0) {
+        while (got > 0 && (line[got-1] == '\n' || line[got-1] == '\r')) line[--got] = 0;
+        if (got > 0) arr = hexa_array_push(arr, hexa_str(line));
+    }
+    if (line) free(line);
+    pclose(fp);
+    return arr;
 }
 
 HexaVal rt_append_file(HexaVal path, HexaVal content) {
