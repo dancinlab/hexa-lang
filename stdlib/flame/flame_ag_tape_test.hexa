@@ -242,6 +242,88 @@ fn _agt_decoder_step(M: int, MgOut: int, idsf: int, target: int,
     return gn2
 }
 
+// Run one shape config: identical init, NSTEP steps of
+// nn_decoder_train_step (ref) vs _agt_decoder_step + opt_adamw_step
+// (ag). Returns max( max|Δ gn2| over steps , max|Δ M| after NSTEP ).
+// Proves the ag_tape decoder + train loop is shape-generic.
+fn _agt_sweep_cfg(d: int, nh: int, nkv: int, h: int, V: int,
+                  NL: int, T: int, NSTEP: int) -> float {
+    let mtot = m_total(d, nh, nkv, h, V, NL)
+    let mctot = mc_total(T, d, nh, nkv, h, V, NL)
+    let hd = d / nh
+    let Mr = t_zeros(mtot)
+    let Ma = t_zeros(mtot)
+    let mut i = 0
+    while i < mtot {
+        let vv = to_float((i * 11) % 19 - 9) * 0.018 + 0.005
+        t_set(Mr, i, vv)
+        t_set(Ma, i, vv)
+        i = i + 1
+    }
+    let oGF = m_off_gF(d, nh, nkv, h, V, NL)
+    let mut gf = 0
+    while gf < d {
+        let gv = 1.0 + to_float(gf % 3 - 1) * 0.02
+        t_set(Mr, oGF + gf, gv)
+        t_set(Ma, oGF + gf, gv)
+        gf = gf + 1
+    }
+    let mut lg = 0
+    while lg < NL {
+        let mob = m_off_block(lg, d, nh, nkv, h, V, NL)
+        let mut g = 0
+        while g < d {
+            let v1 = 1.0 + to_float(g % 3 - 1) * 0.02
+            let v2 = 1.0 + to_float(g % 4 - 2) * 0.015
+            t_set(Mr, mob + bp_off_g1(d, nh, nkv, h) + g, v1)
+            t_set(Ma, mob + bp_off_g1(d, nh, nkv, h) + g, v1)
+            t_set(Mr, mob + bp_off_g2(d, nh, nkv, h) + g, v2)
+            t_set(Ma, mob + bp_off_g2(d, nh, nkv, h) + g, v2)
+            g = g + 1
+        }
+        lg = lg + 1
+    }
+    let idsf = t_zeros(T)
+    let mut ti = 0
+    while ti < T {
+        t_set(idsf, ti, to_float((ti * 2 + 1) % V))
+        ti = ti + 1
+    }
+    let target = (V - 1) / 2
+    let cosT = t_zeros(T * hd)
+    let sinT = t_zeros(T * hd)
+    nn_rope_build_tables(T, hd, cosT, sinT)
+    let Mc = t_zeros(mctot)
+    let Mgr = t_zeros(mtot)
+    let Mmr = t_zeros(mtot)
+    let Mvr = t_zeros(mtot)
+    let Mga = t_zeros(mtot)
+    let Mma = t_zeros(mtot)
+    let Mva = t_zeros(mtot)
+    let lr = 0.01
+    let b1 = 0.9
+    let b2 = 0.999
+    let ep = 0.00000001
+    let wd = 0.0
+    let mut worst = 0.0
+    let mut st = 1
+    while st <= NSTEP {
+        let gr = nn_decoder_train_step(idsf, target, Mr, Mc, Mgr,
+            Mmr, Mvr, cosT, sinT, T, d, nh, nkv, h, V, NL,
+            lr, b1, b2, ep, wd, st)
+        let ga = _agt_decoder_step(Ma, Mga, idsf, target, cosT,
+            sinT, T, d, nh, nkv, h, V, NL)
+        opt_adamw_step(Ma, Mga, Mma, Mva, mtot, lr, b1, b2, ep,
+                       wd, st)
+        let dg = agt_abs(gr - ga)
+        if dg > worst { worst = dg }
+        st = st + 1
+    }
+    let dM = agt_maxdiff(Mr, Ma, mtot)
+    if dM > worst { worst = dM }
+    return worst
+}
+
 fn agt_abs(x: float) -> float {
     if x < 0.0 { return 0.0 - x }
     return x
@@ -1532,12 +1614,42 @@ if e_gn2 == 0.0 && e_M == 0.0 {
     println("FAIL  F-RFC043-AGTAPE-TRAINSTEP-EQ (divergence >1e-9)")
 }
 
+// ── Test 16: gap(c) SHAPE-GENERIC config sweep ──────────────────────────
+// The ag_tape decoder + train loop must be shape-generic, not tied to
+// one config. Sweep a matrix varying d, GQA ratio nh:nkv (incl. MHA
+// nkv=nh), n_layer, vocab, seq, hidden — each runs the full N-step
+// train_step oracle vs nn_decoder_train_step. Decision 6 bar (gn2 +
+// M ≤ machine-eps over N AdamW) must hold for ALL.
+// Falsifier F-RFC043-AGTAPE-SHAPEGEN-EQ.
+println("-- Test 16: gap(c) shape-generic config sweep  --")
+let sw_tol = 0.000000001  // 1e-9 (N-step AdamW machine-eps accum)
+// cfg: d  nh nkv h  V NL T  (hd=d/nh must be even; nh%nkv==0)
+let c1 = _agt_sweep_cfg(4, 2, 1, 8,  5, 2, 2, 3)  // GQA 2:1, 2L
+let c2 = _agt_sweep_cfg(8, 4, 2, 16, 7, 1, 3, 3)  // GQA 2:1, bigV T3
+let c3 = _agt_sweep_cfg(6, 3, 3, 12, 4, 2, 2, 3)  // MHA (nkv=nh) 2L
+let c4 = _agt_sweep_cfg(8, 2, 1, 8,  6, 3, 4, 3)  // hd4 deep 3L T4
+let c5 = _agt_sweep_cfg(8, 2, 2, 8,  5, 1, 2, 3)  // hd4 MHA 1L
+print("  C1[d4,GQA2:1,2L]="); print(c1)
+print(" C2[d8,GQA2:1]="); println(c2)
+print("  C3[d6,MHA,2L]="); print(c3)
+print(" C4[d8,hd4,3L]="); print(c4)
+print(" C5[d8,MHA]="); println(c5)
+let t16ok = c1 < sw_tol && c2 < sw_tol && c3 < sw_tol
+   && c4 < sw_tol && c5 < sw_tol
+if t16ok {
+    println("PASS  F-RFC043-AGTAPE-SHAPEGEN-EQ (5/5 configs <=1e-9 —")
+    println("  ag_tape decoder+train_step is shape-generic; gap(c) ✓)")
+} else {
+    println("FAIL  F-RFC043-AGTAPE-SHAPEGEN-EQ (a config diverged >1e-9)")
+}
+
 if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok && t8ok
-   && t9ok && t10ok && t11ok && t12ok && t13ok && t14ok && t15ok {
-    println("ALL PASS  ag_tape — 12/12 leaf vjp byte-identical; single")
-    println("  block FWD byte-eq 0; full n_layer END-TO-END machine-eps")
-    println("  (tied tok_emb fan-in); RFC 043 train_step N-step AdamW")
-    println("  e2e <=1e-9. gap(b) autograd automation CLOSED.")
+   && t9ok && t10ok && t11ok && t12ok && t13ok && t14ok && t15ok
+   && t16ok {
+    println("ALL PASS  ag_tape — 12/12 leaf byte-eq; single-block FWD")
+    println("  byte-eq 0; full n_layer e2e machine-eps; train_step")
+    println("  N-step AdamW; 5/5 shape-generic configs. gap(b) CLOSED,")
+    println("  gap(c) shape-generic VERIFIED.")
 } else {
     println("ALL FAIL  ag_tape regression")
 }
