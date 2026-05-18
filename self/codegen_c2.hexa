@@ -4568,6 +4568,7 @@ fn gen2_expr(node) {
                 if name == "setenv"         { return "hexa_setenv(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "atan2"          { return cg_math_sym("atan2") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "str_char_at"    { return cg_string_sym("str_char_at") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                if name == "char_at"        { return cg_string_sym("str_char_at") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "pow"            { return cg_math_sym("pow") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "min"            { return cg_math_sym("min") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "max"            { return cg_math_sym("max") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
@@ -4770,12 +4771,20 @@ fn gen2_expr(node) {
                 }
             }
             let nargs = len(node.args)
-            if nargs == 0 { return "hexa_call0(" + name + ")" }
-            if nargs == 1 { return "hexa_call1(" + name + ", " + arg_strs[0] + ")" }
-            if nargs == 2 { return "hexa_call2(" + name + ", " + arg_strs.join(", ") + ")" }
-            if nargs == 3 { return "hexa_call3(" + name + ", " + arg_strs.join(", ") + ")" }
-            if nargs == 4 { return "hexa_call4(" + name + ", " + arg_strs.join(", ") + ")" }
-            return name + "(" + arg_strs.join(", ") + ")"
+            // Reserved-name callee must match its mangled declaration:
+            // `let double = |x| …` is declared `u_double` (double is a C
+            // type keyword, _hexa_name_is_reserved). The bare-call
+            // fallthrough emitted `hexa_call1(double, …)` (un-mangled) →
+            // C "expected expression". _hexa_mangle_ident is a no-op for
+            // non-reserved names, so only reserved-name closures/fns
+            // change (parity gap L3 — t43_closures_hof).
+            let cn = _hexa_mangle_ident(name)
+            if nargs == 0 { return "hexa_call0(" + cn + ")" }
+            if nargs == 1 { return "hexa_call1(" + cn + ", " + arg_strs[0] + ")" }
+            if nargs == 2 { return "hexa_call2(" + cn + ", " + arg_strs.join(", ") + ")" }
+            if nargs == 3 { return "hexa_call3(" + cn + ", " + arg_strs.join(", ") + ")" }
+            if nargs == 4 { return "hexa_call4(" + cn + ", " + arg_strs.join(", ") + ")" }
+            return cn + "(" + arg_strs.join(", ") + ")"
         }
         // Method call: obj.method(args)
         if type_of(callee) != "string" && callee.kind == "Field" {
