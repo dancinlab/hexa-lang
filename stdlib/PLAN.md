@@ -421,3 +421,20 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   잔여 ~88 미포팅 게이트 = 본 파이프라인으로 이관 가능하나 게이트별
   byte-parity 작성 필요(대규모 · g3 깊은-context 품질저하 회피 위해
   fresh-context 단계 권장). 프레임워크·파이프라인은 완성·증명됨.
+- 2026-05-18 — **T3 +1 net-new: 17/127 (측정확인, g3)**.
+  `ribozyme_reaction_coordinate_quotient` — 기존 16 외 첫 신규 포트.
+  G26-RB-2 branch-lock 검증을 **실제 군론 연산으로 충실 이관**(S₄,
+  cube body-diagonal 위 octahedral O = gen A/B, closure BFS,
+  is_group, regular action, monotone Hamiltonian path, master
+  identity). 순수 결정론 정수 — float/network/time/random 0. perm=
+  int array, set=「a,b,c,d」키. ubu-1 컴파일러-백엔드 byte-parity
+  측정확인. hexa-bio `01ae3ef`(macOS canonical, 미푸시). git-bundle
+  증분 전송 흐름 확립(신규 파일은 `git add` 선행 필수).
+  잔여 클린-후보 triage(sp=0 fl=0): nanobot_l6_l7_contract_test(124)
+  · registry_consistency_audit(168) · ribozyme_a1_2(266) ·
+  rna_modality_comparison_smn2_cross(458) · schema_const_audit(526).
+  단 nanobot_l6_l7 등은 Python-repr 다수(`!r` 단따옴표·`sorted()`
+  list-repr·set-repr·bool/float `str`·`or 'none'`) → repr-무거운
+  포트는 깊은-context 에서 미세 byte 불일치 위험(측정 게이트가
+  잡지만 품질저하). g3: 지속가능 페이스로 검증된 +1 씩, 가짜 일괄
+  금지. 측정 천장 아님 — 작업량(잔여 ~110, 파이프라인 ready).
