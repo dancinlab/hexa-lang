@@ -2,8 +2,13 @@
 
 ## 1. Status / Date / Priority / Severity
 
-- **Status**: design-draft (2026-05-19) — DESIGN ONLY, no implementation, no fire.
-- **Date**: 2026-05-19
+- **Status**: **falsifiers RESOLVED — 100% closure (2026-05-19)**. All 3
+  pre-registered falsifiers measured: 1 PASS, 2 measured-KILL. Headline
+  verdict: at FP64, a new paradigm does NOT break past CUDA's
+  kernel-per-op model — measured-falsified. Measurement SSOT =
+  `state/forge_rfc060_2026_05_19/RFC060_FALSIFIER_RESULTS.md`. Closure
+  detail in §13 below.
+- **Date**: 2026-05-19 (drafted + closed same day)
 - **Priority**: P1 (carries the 2026-05-19 user goal — *"new paradigm 으로
   CUDA 성능·자원·속도 돌파 — 100% closure"*. forge's Phase R closed the
   *CUDA-paradigm* question; this RFC opens the *new-paradigm* question the
@@ -261,3 +266,44 @@ Phase 6 endgame):
 Steps A and B are $0 and can run immediately. Step C is one Phase-R-unit
 fire. Step D is gated on C. "100% closure" = all of A/B/C resolved
 (pass-and-proceed or measured-kill).
+
+## 13. Closure — measured 2026-05-19
+
+All 3 falsifiers resolved the day RFC 060 was drafted. Measurement SSOT:
+`state/forge_rfc060_2026_05_19/RFC060_FALSIFIER_RESULTS.md` +
+`result.json` (gitignored local trail, Phase-R convention). Harnesses:
+`tool/forge_rfc060b_poly_feasible.c`,
+`self/cuda/experiments/rfc060_megakernel_fwd.cu`,
+`tool/dispatch_rfc060_megakernel_fire.sh`.
+
+| Falsifier | Cost | Verdict |
+|---|---|---|
+| F-RFC060-VERIFIED-CHAIN | $0 paper | **KILL → downgrade** — rmsnorm kernel = 6-rewrite chain; 4/6 exact bit-equal, 2/6 (reduction strip-mine + block-tree) reassociate the FP sum → not bit-equal. "fully verified bit-equal codegen" falsified; method survives as "verified skeleton + TOL-bounded reassociation." |
+| F-RFC060-POLY-FEASIBLE | $0 isl | **PASS** — isl computed a valid affine schedule for the transformer-block FFN+RMSNorm nest in 0.0114 s (88× under the 1 s gate), and even fused normalize into matmul-1. Whole-step polyhedral scheduling is feasible. |
+| F-RFC060-MEGAKERNEL-WALL | 2 A100 fires | **KILL (FP64)** — fixed-prototype clean fire (A100 80GB, max\|Δ\| 1.6e-14): mega-kernel forward **1.8× (small) / 4.4× (medium) SLOWER** than the kernel-per-op stream. |
+
+**Headline verdict — measured.** At the **FP64** substrate forge runs
+today, the genuinely-new paradigm (mega-kernel execution model) does
+**not** break past CUDA's kernel-per-op model — it is decisively
+*slower*. Root cause, corroborated by the clean `mm_cublas_ms`
+diagnostic + forge's own Phase R C-V3 measurement: a whole-forward
+mega-kernel must replace every cuBLAS Dgemm with an in-kernel GEMM, and
+no in-kernel FP64 GEMM (naive tiled here; even hand-WMMA at 41-43% in
+Phase R) matches cuBLAS — so the matmul-throughput regression dominates
+the launch + HBM-roundtrip savings.
+
+This is the §8.2 pre-registered outcome: every measured mega-kernel win
+in the literature (Mirage MPK, Stanford megakernels — 1.5-2.5×) is
+**BF16 Tensor Core inference**, where in-kernel GEMM *is* competitive.
+
+**Where the paradigm IS viable (the closure points here)**: RFC 060 ∩
+RFC 049 — a **BF16-Tensor-Core mega-kernel**. forge's Phase R already
+validated BF16 as "the wall path" (9.67× FP64 cuBLAS at Llama-7B FFN,
+`PARADIGM.md` §1); the mega-kernel literature is BF16; the union is the
+measured-gated next RFC. RFC 060's FP64 kill is not a dead end — it is
+the measurement narrowing the search to the BF16 substrate.
+
+**g3**: no paradigm adopted on design. The mega-kernel paradigm is
+measured-killed at FP64 and measured-deferred to the BF16 substrate.
+The verified-rewrite method is retained in honest downgraded form. The
+polyhedral direction is measured-feasible. 100% closure = all resolved.

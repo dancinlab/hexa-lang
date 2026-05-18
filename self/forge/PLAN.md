@@ -237,6 +237,16 @@ mandatory (`g_blue_closed_mandate`).
 
 (append-only)
 
+### 2026-05-19 — RFC 060 falsifier 측정 — 100% closure (mega-kernel FP64 KILL, poly PASS, verified-chain downgrade)
+
+RFC 060 의 3 falsifier 를 정초 당일 전부 측정 (user goal: "new paradigm 으로 CUDA 성능·자원·속도 돌파 — 100% closure measured"). 측정 SSOT = `state/forge_rfc060_2026_05_19/RFC060_FALSIFIER_RESULTS.md` (gitignored, Phase-R convention).
+
+- **F-RFC060-POLY-FEASIBLE — PASS** ($0, isl). `tool/forge_rfc060b_poly_feasible.c` — transformer-block FFN+RMSNorm loop nest (5 statement) 의 affine schedule 을 libisl 이 0.0114s 에 계산 (gate <1s, 88× 여유), normalize 를 matmul-1 에 fuse 까지. whole-step polyhedral 은 feasible — 장기 연구방향 생존.
+- **F-RFC060-VERIFIED-CHAIN — KILL → downgrade** ($0 paper). `_hx_k_rmsnorm_rows` 를 sequential reference 에서 6-rewrite chain 으로 분해 — 4/6 (fission·row-parallel·scalar-hoist·elementwise) exact bit-equal, 2/6 (reduction strip-mine·block-tree) 는 FP reduction 재결합 → bit-equal 아님. "fully verified bit-equal codegen" FALSIFIED. method 는 "verified skeleton + TOL-bounded reassociation" 형태로 downgrade 생존.
+- **F-RFC060-MEGAKERNEL-WALL — KILL (FP64)** (2 A100 fire). `rfc060_megakernel_fwd.cu` — transformer block forward, kernel-stream(cuBLAS) vs single persistent mega-kernel(in-kernel tiled GEMM). fire 1 (A100-SXM4-40GB) 이 attention S-block Bs-tile 인덱싱 버그 노출 (max|Δ| 0.19-2.9) → 수정 (`cf181933`) → fire 2 (A100 80GB PCIe) clean: max|Δ| 1.6e-14, mega **1.8× (small) / 4.4× (medium) 느림**. 원인 (clean diagnostic `mm_cublas_ms` 입증): mega-kernel 은 cuBLAS Dgemm 을 in-kernel GEMM 으로 대체해야 하고 FP64 in-kernel GEMM 은 cuBLAS 추월 불가 (Phase R C-V3 hand-WMMA 41-43% 와 정합) — matmul 회귀가 launch/HBM 절감을 압도.
+
+**측정 headline**: FP64 substrate 에서 mega-kernel 패러다임은 CUDA kernel-per-op 모델을 돌파하지 못함 — measured-FALSIFIED. RFC 060 §8.2 사전등록 예측 그대로 (literature mega-kernel win 은 전부 BF16 Tensor Core). closure 가 가리키는 곳 = **RFC 060 ∩ RFC 049 — BF16-TC mega-kernel** (forge Phase R 이 BF16 을 "wall path" 로 이미 검증, 9.67× FP64 cuBLAS). FP64 kill 은 막다른 길 아니라 BF16 substrate 로 탐색을 좁힌 측정. 100% closure = 3 falsifier 전부 측정-resolved (1 pass, 2 measured-kill — g3 §8.6: measured-kill 도 closure).
+
 ### 2026-05-19 — RFC 060 정초: new compute paradigm 조사 (CUDA kernel-per-op 모델 돌파) — directive 갭 해소
 
 사용자 goal 2026-05-19: *"new paradigm 으로 CUDA 성능·자원·속도 돌파 — 100% closure (measured)"*. forge 의 Phase R 은 *CUDA-paradigm* 질문 (NVIDIA GPU 를 어떻게 잘 쓰나) 을 측정으로 닫았지만, 원 directive 2026-05-16 의 *new-paradigm* 절반 (kernel-per-op 모델 자체를 벗어나는 실행 모델) 은 미이행 상태였음 — `PARADIGM_RESEARCH.md` 가 그 directive 를 자칭하면서 §1-§8 본문은 100% NVIDIA-실리콘 SW 전략만 조사. g3 정직성 갭.

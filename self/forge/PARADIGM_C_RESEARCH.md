@@ -278,6 +278,30 @@ Both #1 and #2 carry a cheap kill-test (§9). Per g3, RFC 060 pre-
 registers the falsifiers; the paradigm is *adopted only if the fires
 pass*. No paradigm is declared here.
 
+### MEASURED (2026-05-19, all 3 falsifiers resolved — 100% closure)
+
+The falsifiers fired the same day. SSOT:
+`state/forge_rfc060_2026_05_19/RFC060_FALSIFIER_RESULTS.md`.
+
+- **F-RFC060-POLY-FEASIBLE — PASS** (isl, 0.0114 s). Whole-step
+  polyhedral scheduling of a transformer block is feasible.
+- **F-RFC060-VERIFIED-CHAIN — KILL → downgrade**. The rmsnorm kernel
+  decomposes into 6 rewrites; 2 (FP-reduction reassociation) are not
+  bit-equal. "Fully verified bit-equal codegen" falsified; method
+  retained as "verified skeleton + TOL-bounded reassociation."
+- **F-RFC060-MEGAKERNEL-WALL — KILL at FP64** (2 A100 fires, clean
+  run max|Δ| 1.6e-14). The mega-kernel transformer forward is
+  **1.8-4.4× SLOWER** than the kernel-per-op stream. Cause: the
+  mega-kernel must replace cuBLAS Dgemm with an in-kernel GEMM, and no
+  in-kernel FP64 GEMM matches cuBLAS — the matmul regression dominates.
+
+**Measured headline**: at FP64, the mega-kernel paradigm does NOT beat
+CUDA's kernel-per-op model. Per §8 (this file) + RFC 060 §8.2, this is
+the expected outcome — every literature mega-kernel win is BF16 Tensor
+Core. The closure points to **RFC 060 ∩ RFC 049 — a BF16-TC
+mega-kernel** as the measured-gated next step. The FP64 kill narrows
+the search; it does not end it.
+
 ---
 
 ## 12. Sources
